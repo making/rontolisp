@@ -1,0 +1,159 @@
+# 79 refusals
+/org/postgresql/jdbc/PgConnection.java:117: the class java.lang.invoke.MethodHandle is not supported by the experimental Java subset yet
+  in org.postgresql.jdbc.PgConnection.<clinit>
+/org/postgresql/jdbc/TimestampUtils.java:75: the class java.util.TimeZone is not supported by the experimental Java subset yet
+  in org.postgresql.jdbc.TimestampUtils.<clinit>
+/org/postgresql/jdbc/TimestampUtils.java:139: the class java.util.GregorianCalendar is not supported by the experimental Java subset yet
+  in org.postgresql.jdbc.TimestampUtils.<init>(boolean,org.postgresql.core.Provider)
+/org/postgresql/jdbcurlresolver/PgServiceConfParser.java:107: System.getenv() is not supported by the experimental Java subset yet
+  in org.postgresql.jdbcurlresolver.PgServiceConfParser.findPgServiceConfResourceName()
+/org/postgresql/jdbcurlresolver/PgServiceConfParser.java:132: System.getenv() is not supported by the experimental Java subset yet
+  in org.postgresql.jdbcurlresolver.PgServiceConfParser.findPgServiceConfResourceName()
+/org/postgresql/jdbcurlresolver/PgPassParser.java:120: System.getenv() is not supported by the experimental Java subset yet
+  in org.postgresql.jdbcurlresolver.PgPassParser.findPgPasswordResourceName()
+/org/postgresql/core/ServerVersion.java:131: the class java.text.NumberFormat is not supported by the experimental Java subset yet
+  in org.postgresql.core.ServerVersion.parseServerVersionStr(String)
+/org/postgresql/gss/MakeGSS.java:44: the class java.lang.invoke.MethodHandle is not supported by the experimental Java subset yet
+  in org.postgresql.gss.MakeGSS.<clinit>
+/org/postgresql/gss/MakeGSS.java:141: the class javax.security.auth.Subject is not supported by the experimental Java subset yet
+  in org.postgresql.gss.MakeGSS.authenticate(boolean,org.postgresql.core.PGStream,String,String,char[],String,String,boolean,boolean,boolean,boolean)
+/org/postgresql/ssl/MakeSSL.java:37: the class javax.net.ssl.SSLSocketFactory is not supported by the experimental Java subset yet
+  in org.postgresql.ssl.MakeSSL.convert(org.postgresql.core.PGStream,java.util.Properties)
+/org/postgresql/core/v3/ConnectionFactoryImpl.java:518: the class java.util.TimeZone is not supported by the experimental Java subset yet
+  in org.postgresql.core.v3.ConnectionFactoryImpl.createPostgresTimeZone()
+/org/postgresql/jdbc/TimestampUtils.java:1877: the class java.util.TimeZone is not supported by the experimental Java subset yet
+  in org.postgresql.jdbc.TimestampUtils.parseBackendTimeZone(String)
+/org/postgresql/jdbc/TimestampUtils.java:1882: the class java.util.TimeZone is not supported by the experimental Java subset yet
+  in org.postgresql.jdbc.TimestampUtils.parseBackendTimeZone(String)
+/org/postgresql/util/internal/JvmHeapAccess.java:24: the class java.lang.management.ManagementFactory is not supported by the experimental Java subset yet
+  in org.postgresql.util.internal.JvmHeapAccess.maxHeapBytes()
+/org/postgresql/core/v3/ScramAuthenticator.java:115: the class javax.net.ssl.SSLSocket is not supported by the experimental Java subset yet
+  in org.postgresql.core.v3.ScramAuthenticator.getChannelBindingData(org.postgresql.core.PGStream,org.postgresql.core.v3.ChannelBinding)
+/org/postgresql/jdbc/PgResultSet.java:4474: the class java.util.TimeZone is not supported by the experimental Java subset yet
+  in org.postgresql.jdbc.PgResultSet.getTimestampUtils()
+/org/postgresql/jdbc/TimestampUtils.java:1148: the class java.util.TimeZone is not supported by the experimental Java subset yet
+  in org.postgresql.jdbc.TimestampUtils.withClientOffsetSameInstant(java.time.OffsetTime)
+/org/postgresql/jdbc/TimestampUtils.java:1207: the class java.util.TimeZone is not supported by the experimental Java subset yet
+  in org.postgresql.jdbc.TimestampUtils.withClientOffsetSameInstant(java.time.OffsetDateTime)
+/org/postgresql/jdbc/PgResultSet.java:618: the class java.util.TimeZone is not supported by the experimental Java subset yet
+  in org.postgresql.jdbc.PgResultSet.getTimestamp(int,java.util.Calendar)
+/org/postgresql/jdbc/PgResultSet.java:622: Calendar.getTimeZone() is not supported by the experimental Java subset yet
+  in org.postgresql.jdbc.PgResultSet.getTimestamp(int,java.util.Calendar)
+/org/postgresql/jdbc/PgResultSet.java:628: the class java.util.TimeZone is not supported by the experimental Java subset yet
+  in org.postgresql.jdbc.PgResultSet.getTimestamp(int,java.util.Calendar)
+/org/postgresql/jdbc/PgResultSet.java:535: the class java.util.TimeZone is not supported by the experimental Java subset yet
+  in org.postgresql.jdbc.PgResultSet.getDate(int,java.util.Calendar)
+/org/postgresql/jdbc/PgResultSet.java:569: the class java.util.TimeZone is not supported by the experimental Java subset yet
+  in org.postgresql.jdbc.PgResultSet.getTime(int,java.util.Calendar)
+/org/postgresql/jdbc/PgResultSet.java:4467: Calendar.getTimeZone() is not supported by the experimental Java subset yet
+  in org.postgresql.jdbc.PgResultSet.getDefaultCalendar()
+/org/postgresql/jdbc/TimestampUtils.java:462: Calendar.ERA is not supported by the experimental Java subset yet
+  in org.postgresql.jdbc.TimestampUtils.toTimestamp(java.util.Calendar,byte[])
+/org/postgresql/jdbc/TimestampUtils.java:463: Calendar.YEAR is not supported by the experimental Java subset yet
+  in org.postgresql.jdbc.TimestampUtils.toTimestamp(java.util.Calendar,byte[])
+/org/postgresql/jdbc/TimestampUtils.java:464: Calendar.MONTH is not supported by the experimental Java subset yet
+  in org.postgresql.jdbc.TimestampUtils.toTimestamp(java.util.Calendar,byte[])
+/org/postgresql/jdbc/TimestampUtils.java:465: Calendar.DAY_OF_MONTH is not supported by the experimental Java subset yet
+  in org.postgresql.jdbc.TimestampUtils.toTimestamp(java.util.Calendar,byte[])
+/org/postgresql/jdbc/TimestampUtils.java:466: Calendar.HOUR_OF_DAY is not supported by the experimental Java subset yet
+  in org.postgresql.jdbc.TimestampUtils.toTimestamp(java.util.Calendar,byte[])
+/org/postgresql/jdbc/TimestampUtils.java:467: Calendar.MINUTE is not supported by the experimental Java subset yet
+  in org.postgresql.jdbc.TimestampUtils.toTimestamp(java.util.Calendar,byte[])
+/org/postgresql/jdbc/TimestampUtils.java:468: Calendar.SECOND is not supported by the experimental Java subset yet
+  in org.postgresql.jdbc.TimestampUtils.toTimestamp(java.util.Calendar,byte[])
+/org/postgresql/jdbc/TimestampUtils.java:469: Calendar.MILLISECOND is not supported by the experimental Java subset yet
+  in org.postgresql.jdbc.TimestampUtils.toTimestamp(java.util.Calendar,byte[])
+/org/postgresql/jdbc/TimestampUtils.java:471: Calendar.getTimeInMillis() is not supported by the experimental Java subset yet
+  in org.postgresql.jdbc.TimestampUtils.toTimestamp(java.util.Calendar,byte[])
+/org/postgresql/jdbc/TimestampUtils.java:725: Calendar.ERA is not supported by the experimental Java subset yet
+  in org.postgresql.jdbc.TimestampUtils.toTime(java.util.Calendar,byte[])
+/org/postgresql/jdbc/TimestampUtils.java:726: Calendar.YEAR is not supported by the experimental Java subset yet
+  in org.postgresql.jdbc.TimestampUtils.toTime(java.util.Calendar,byte[])
+/org/postgresql/jdbc/TimestampUtils.java:727: Calendar.MONTH is not supported by the experimental Java subset yet
+  in org.postgresql.jdbc.TimestampUtils.toTime(java.util.Calendar,byte[])
+/org/postgresql/jdbc/TimestampUtils.java:728: Calendar.DAY_OF_MONTH is not supported by the experimental Java subset yet
+  in org.postgresql.jdbc.TimestampUtils.toTime(java.util.Calendar,byte[])
+/org/postgresql/jdbc/TimestampUtils.java:732: Calendar.ERA is not supported by the experimental Java subset yet
+  in org.postgresql.jdbc.TimestampUtils.toTime(java.util.Calendar,byte[])
+/org/postgresql/jdbc/TimestampUtils.java:733: Calendar.YEAR is not supported by the experimental Java subset yet
+  in org.postgresql.jdbc.TimestampUtils.toTime(java.util.Calendar,byte[])
+/org/postgresql/jdbc/TimestampUtils.java:734: Calendar.MONTH is not supported by the experimental Java subset yet
+  in org.postgresql.jdbc.TimestampUtils.toTime(java.util.Calendar,byte[])
+/org/postgresql/jdbc/TimestampUtils.java:735: Calendar.DAY_OF_MONTH is not supported by the experimental Java subset yet
+  in org.postgresql.jdbc.TimestampUtils.toTime(java.util.Calendar,byte[])
+/org/postgresql/jdbc/TimestampUtils.java:737: Calendar.HOUR_OF_DAY is not supported by the experimental Java subset yet
+  in org.postgresql.jdbc.TimestampUtils.toTime(java.util.Calendar,byte[])
+/org/postgresql/jdbc/TimestampUtils.java:738: Calendar.MINUTE is not supported by the experimental Java subset yet
+  in org.postgresql.jdbc.TimestampUtils.toTime(java.util.Calendar,byte[])
+/org/postgresql/jdbc/TimestampUtils.java:739: Calendar.SECOND is not supported by the experimental Java subset yet
+  in org.postgresql.jdbc.TimestampUtils.toTime(java.util.Calendar,byte[])
+/org/postgresql/jdbc/TimestampUtils.java:740: Calendar.MILLISECOND is not supported by the experimental Java subset yet
+  in org.postgresql.jdbc.TimestampUtils.toTime(java.util.Calendar,byte[])
+/org/postgresql/jdbc/TimestampUtils.java:742: Calendar.getTimeInMillis() is not supported by the experimental Java subset yet
+  in org.postgresql.jdbc.TimestampUtils.toTime(java.util.Calendar,byte[])
+/org/postgresql/jdbc/TimestampUtils.java:743: the class java.util.GregorianCalendar is not supported by the experimental Java subset yet
+  in org.postgresql.jdbc.TimestampUtils.toTime(java.util.Calendar,byte[])
+/org/postgresql/jdbc/TimestampUtils.java:749: Calendar.getTimeZone() is not supported by the experimental Java subset yet
+  in org.postgresql.jdbc.TimestampUtils.toTime(java.util.Calendar,byte[])
+/org/postgresql/jdbc/TimestampUtils.java:775: Calendar.getInstance() is not supported by the experimental Java subset yet
+  in org.postgresql.jdbc.TimestampUtils.toDate(java.util.Calendar,byte[])
+/org/postgresql/jdbc/TimestampUtils.java:784: Calendar.ERA is not supported by the experimental Java subset yet
+  in org.postgresql.jdbc.TimestampUtils.toDate(java.util.Calendar,byte[])
+/org/postgresql/jdbc/TimestampUtils.java:785: Calendar.YEAR is not supported by the experimental Java subset yet
+  in org.postgresql.jdbc.TimestampUtils.toDate(java.util.Calendar,byte[])
+/org/postgresql/jdbc/TimestampUtils.java:786: Calendar.MONTH is not supported by the experimental Java subset yet
+  in org.postgresql.jdbc.TimestampUtils.toDate(java.util.Calendar,byte[])
+/org/postgresql/jdbc/TimestampUtils.java:787: Calendar.DAY_OF_MONTH is not supported by the experimental Java subset yet
+  in org.postgresql.jdbc.TimestampUtils.toDate(java.util.Calendar,byte[])
+/org/postgresql/jdbc/TimestampUtils.java:788: Calendar.HOUR_OF_DAY is not supported by the experimental Java subset yet
+  in org.postgresql.jdbc.TimestampUtils.toDate(java.util.Calendar,byte[])
+/org/postgresql/jdbc/TimestampUtils.java:789: Calendar.MINUTE is not supported by the experimental Java subset yet
+  in org.postgresql.jdbc.TimestampUtils.toDate(java.util.Calendar,byte[])
+/org/postgresql/jdbc/TimestampUtils.java:790: Calendar.SECOND is not supported by the experimental Java subset yet
+  in org.postgresql.jdbc.TimestampUtils.toDate(java.util.Calendar,byte[])
+/org/postgresql/jdbc/TimestampUtils.java:791: Calendar.MILLISECOND is not supported by the experimental Java subset yet
+  in org.postgresql.jdbc.TimestampUtils.toDate(java.util.Calendar,byte[])
+/org/postgresql/jdbc/TimestampUtils.java:793: Calendar.getTimeInMillis() is not supported by the experimental Java subset yet
+  in org.postgresql.jdbc.TimestampUtils.toDate(java.util.Calendar,byte[])
+/org/postgresql/jdbc/TimestampUtils.java:797: Calendar.clear() is not supported by the experimental Java subset yet
+  in org.postgresql.jdbc.TimestampUtils.toDate(java.util.Calendar,byte[])
+/org/postgresql/jdbc/TimestampUtils.java:799: Calendar.YEAR is not supported by the experimental Java subset yet
+  in org.postgresql.jdbc.TimestampUtils.toDate(java.util.Calendar,byte[])
+/org/postgresql/jdbc/TimestampUtils.java:800: Calendar.DAY_OF_MONTH is not supported by the experimental Java subset yet
+  in org.postgresql.jdbc.TimestampUtils.toDate(java.util.Calendar,byte[])
+/org/postgresql/jdbc/TimestampUtils.java:801: Calendar.MONTH is not supported by the experimental Java subset yet
+  in org.postgresql.jdbc.TimestampUtils.toDate(java.util.Calendar,byte[])
+/org/postgresql/jdbc/TimestampUtils.java:802: Calendar.ERA is not supported by the experimental Java subset yet
+  in org.postgresql.jdbc.TimestampUtils.toDate(java.util.Calendar,byte[])
+/org/postgresql/jdbc/TimestampUtils.java:804: Calendar.getTimeInMillis() is not supported by the experimental Java subset yet
+  in org.postgresql.jdbc.TimestampUtils.toDate(java.util.Calendar,byte[])
+/org/postgresql/jdbc/TimestampUtils.java:847: Calendar.setTimeZone(TimeZone) is not supported by the experimental Java subset yet
+  in org.postgresql.jdbc.TimestampUtils.getSharedCalendar(java.util.TimeZone)
+/org/postgresql/jdbc/TimestampUtils.java:359: the class java.util.GregorianCalendar is not supported by the experimental Java subset yet
+  in org.postgresql.jdbc.TimestampUtils.parseBackendTimestamp(byte[])
+/org/postgresql/jdbc/TimestampUtils.java:362: the class java.util.GregorianCalendar is not supported by the experimental Java subset yet
+  in org.postgresql.jdbc.TimestampUtils.parseBackendTimestamp(byte[])
+/org/postgresql/jdbc/TimestampUtils.java:165: the class java.util.TimeZone is not supported by the experimental Java subset yet
+  in org.postgresql.jdbc.TimestampUtils.getCalendar(java.time.ZoneOffset)
+/org/postgresql/jdbc/TimestampUtils.java:832: the class java.util.TimeZone is not supported by the experimental Java subset yet
+  in org.postgresql.jdbc.TimestampUtils.setupCalendar(java.util.Calendar)
+/org/postgresql/jdbc/TimestampUtils.java:392: the class java.util.GregorianCalendar is not supported by the experimental Java subset yet
+  in org.postgresql.jdbc.TimestampUtils.parseDate(byte[])
+/org/postgresql/jdbc/TimestampUtils.java:1346: the class java.util.TimeZone is not supported by the experimental Java subset yet
+  in org.postgresql.jdbc.TimestampUtils.getDefaultTz()
+/org/postgresql/jdbc/TimestampUtils.java:1355: the class java.util.TimeZone is not supported by the experimental Java subset yet
+  in org.postgresql.jdbc.TimestampUtils.getDefaultTz()
+/org/postgresql/jdbc/TimestampUtils.java:173: the class java.util.GregorianCalendar is not supported by the experimental Java subset yet
+  in org.postgresql.jdbc.TimestampUtils.ParsedTimestamp.<init>()
+/org/postgresql/jdbc/ArrayDecoding.java:102: the class java.lang.reflect.Array is not supported by the experimental Java subset yet
+  in org.postgresql.jdbc.ArrayDecoding.AbstractObjectStringArrayDecoder.createArray(int)
+/org/postgresql/jdbc/ArrayDecoding.java:110: the class java.lang.reflect.Array is not supported by the experimental Java subset yet
+  in org.postgresql.jdbc.ArrayDecoding.AbstractObjectStringArrayDecoder.createMultiDimensionalArray(int[])
+/org/postgresql/jdbc/ArrayEncoding.java:176: the class java.lang.reflect.Array is not supported by the experimental Java subset yet
+  in org.postgresql.jdbc.ArrayEncoding.AbstractArrayEncoder.countNulls(Object)
+/org/postgresql/jdbc/ArrayEncoding.java:178: the class java.lang.reflect.Array is not supported by the experimental Java subset yet
+  in org.postgresql.jdbc.ArrayEncoding.AbstractArrayEncoder.countNulls(Object)
+/org/postgresql/jdbc/ArrayEncoding.java:1244: the class java.lang.reflect.Array is not supported by the experimental Java subset yet
+  in org.postgresql.jdbc.ArrayEncoding.RecursiveArrayEncoder.arrayString(StringBuilder,Object,char,int)
+/org/postgresql/jdbc/ArrayEncoding.java:1248: the class java.lang.reflect.Array is not supported by the experimental Java subset yet
+  in org.postgresql.jdbc.ArrayEncoding.RecursiveArrayEncoder.arrayString(StringBuilder,Object,char,int)

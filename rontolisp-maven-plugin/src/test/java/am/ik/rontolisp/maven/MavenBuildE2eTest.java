@@ -1,0 +1,747 @@
+package am.ik.rontolisp.maven;
+
+import java.io.BufferedReader;
+import java.io.File;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.jar.JarEntry;
+import java.util.jar.JarFile;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import java.util.stream.Stream;
+
+import am.ik.yavi.core.Validator;
+import org.apache.catalina.startup.Tomcat;
+import org.jspecify.annotations.Nullable;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
+
+/**
+ * The half {@link LispSourceSetTest} cannot reach: that a REAL Maven build, with the
+ * plugin declared in a pom and nothing else configured, runs the goal early enough for
+ * {@code src/main/java} to compile against the classes it writes, and that
+ * {@code maven-jar-plugin} then packages the Lisp and Java classes into one jar.
+ * <p>
+ * The phase binding is the whole point of the test. Maven injects the default lifecycle
+ * bindings ahead of a POM-declared plugin, so a goal bound to {@code compile} would run
+ * after javac and the Java source would not compile; {@code process-sources} is the only
+ * ordering declaration order cannot break, and only a real build can say so. The
+ * {@code wasm} goal's legs need {@code wasmtime} on PATH.
+ * <p>
+ * Opt-in ({@code -Drontolisp.plugin.e2e=true}), because it shells out to Maven and needs
+ * this plugin -- and the rontolisp it embeds -- already installed. Every shelled-out
+ * build runs on the Maven running this test and the local repository it uses (the
+ * module's surefire configuration passes both), never an {@code mvn} found on PATH: a
+ * machine's Maven moves on its own schedule, and its default bindings with it.
+ *
+ * <pre>
+ * ./mvnw install -DskipTests
+ * ./mvnw -f rontolisp-maven-plugin/pom.xml install -DskipTests
+ * ./mvnw -f rontolisp-maven-plugin/pom.xml -Drontolisp.plugin.e2e=true test
+ * </pre>
+ */
+class MavenBuildE2eTest {
+
+	@TempDir
+	Path project;
+
+	@Test
+	void aRealBuildCompilesTheLispBeforeTheJavaAndJarsBoth() throws Exception {
+		Ready ready = assumeReady();
+		writeProject(ready.version(), ready.lifecyclePlugins());
+		run(this.project, ready.maven("-o", "-q", "package"));
+
+		Path jar = this.project.resolve("target/consumer-1.0.0.jar");
+		assertThat(jar).exists();
+		// One jar, both languages -- and the handle class the export hands out. The
+		// unexported helper is spliced into the kernel, so it is no class of its own.
+		assertThat(entries(jar)).contains("com/example/Kernels.class", "app/App.class",
+				"am/ik/rontolisp/runtime/RontoFloatArray.class");
+		assertThat(entries(jar)).noneMatch(entry -> entry.contains("scale-helpers"));
+		assertThat(run(this.project, List.of(javaExecutable().toString(), "-cp", jar.toString(), "app.App")).lines()
+			.toList()).containsExactly("12.0", "5.0");
+
+		// And the second build compiles nothing, because nothing is stale; the rove
+		// suite of src/test/lisp runs on the interpreter at test, as the test goal runs
+		// it, and a failed test fails the build by its name.
+		assertThat(run(this.project, ready.maven("-o", "package"))).contains("Nothing to compile")
+			.contains("rontolisp test on the interpreter: src/test/lisp/com/example/scale-test.lisp")
+			.contains("All 1 test passed");
+		Path test = this.project.resolve("src/test/lisp/com/example/scale-test.lisp");
+		Files.writeString(test, Files.readString(test).replace("6", "7"));
+		ProcessResult failed = runAllowingFailure(this.project, ready.maven("-o", "test"));
+		assertThat(failed.status()).isNotZero();
+		assertThat(failed.output()).contains("rontolisp test on the interpreter: failed: SCALE-BY-DOUBLES");
+	}
+
+	private void writeProject(String version, Map<String, String> plugins) throws Exception {
+		Path kernels = this.project.resolve("src/main/lisp/com/example/Kernels.lisp");
+		Files.createDirectories(kernels.getParent());
+		Files.writeString(kernels, """
+				(load "scale-helpers.lisp")
+
+				(defvar *scale* 2.0)
+
+				(defun scaled-sum (a b)
+				  (scale-by *scale* (+ a b)))
+
+				(defun norm2 (x)
+				  (sqrt (vec:dot x x)))
+
+				(rontolisp:jvm-export 'scaled-sum :params '(:float :float) :returns :float)
+				(rontolisp:jvm-export 'norm2 :params '(:float-vector) :returns :float)
+				""");
+		// Ordinary Lisp beside the kernels: no export, a name no class could carry, and
+		// the build has to be fine with both -- a source set is Lisp, not a pile of
+		// exports.
+		Files.writeString(this.project.resolve("src/main/lisp/com/example/scale-helpers.lisp"), """
+				(defun scale-by (scale x)
+				  (* scale x))
+				""");
+		// A rove suite of the helper, which the test goal runs.
+		Path test = this.project.resolve("src/test/lisp/com/example/scale-test.lisp");
+		Files.createDirectories(test.getParent());
+		Files.writeString(test, """
+				(defpackage #:scale-test
+				  (:use #:cl #:rove))
+				(in-package #:scale-test)
+
+				(load (merge-pathnames "../../../../main/lisp/com/example/scale-helpers.lisp" *load-truename*))
+
+				(deftest scale-by-doubles
+				  (ok (= (scale-by 2 3) 6)))
+				""");
+		Path app = this.project.resolve("src/main/java/app/App.java");
+		Files.createDirectories(app.getParent());
+		Files.writeString(app, """
+				package app;
+
+				import am.ik.rontolisp.runtime.RontoFloatArray;
+				import com.example.Kernels;
+
+				public class App {
+					public static void main(String[] args) {
+						System.out.println(Kernels.scaledSum(2.5, 3.5));
+						System.out.println(Kernels.norm2(RontoFloatArray.of(new double[] { 3.0, 4.0 })));
+					}
+				}
+				""");
+		// The source-set plugin needs no dependency, source-directory declaration, or
+		// jar configuration. Every lifecycle plugin this `package` binds is declared with
+		// the version this module's own build pins, so the offline build resolves only
+		// what the seeding `install` executed in full. Neither a Maven's default bindings
+		// (3.9.16 moved maven-jar-plugin from 3.4.1 to 3.5.0, 3.10.0 to 3.5.1) nor the
+		// newest version the local repository holds will do: an online build that only
+		// computed a lifecycle -- the failing-build legs below -- leaves a plugin's jar
+		// without its dependencies.
+		Files.writeString(this.project.resolve("pom.xml"),
+				"""
+						<project xmlns="http://maven.apache.org/POM/4.0.0">
+						  <modelVersion>4.0.0</modelVersion>
+						  <groupId>app</groupId>
+						  <artifactId>consumer</artifactId>
+						  <version>1.0.0</version>
+						  <properties>
+						    <maven.compiler.release>%d</maven.compiler.release>
+						    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+						  </properties>
+						  <build>
+						    <plugins>
+						      <plugin>
+						        <groupId>org.apache.maven.plugins</groupId>
+						        <artifactId>maven-resources-plugin</artifactId>
+						        <version>%s</version>
+						      </plugin>
+						      <plugin>
+						        <groupId>org.apache.maven.plugins</groupId>
+						        <artifactId>maven-jar-plugin</artifactId>
+						        <version>%s</version>
+						      </plugin>
+						      <plugin>
+						        <groupId>org.apache.maven.plugins</groupId>
+						        <artifactId>maven-surefire-plugin</artifactId>
+						        <version>%s</version>
+						      </plugin>
+						      <plugin>
+						        <groupId>org.apache.maven.plugins</groupId>
+						        <artifactId>maven-compiler-plugin</artifactId>
+						        <version>%s</version>
+						      </plugin>
+						      <plugin>
+						        <groupId>am.ik.rontolisp</groupId>
+						        <artifactId>rontolisp-maven-plugin</artifactId>
+						        <version>%s</version>
+						        <executions>
+						          <execution>
+						            <goals><goal>compile</goal><goal>test</goal></goals>
+						          </execution>
+						        </executions>
+						      </plugin>
+						    </plugins>
+						  </build>
+						</project>
+						""".formatted(Runtime.version().feature(), plugins.get("maven-resources-plugin"),
+						plugins.get("maven-jar-plugin"), plugins.get("maven-surefire-plugin"),
+						plugins.get("maven-compiler-plugin"), version));
+	}
+
+	/**
+	 * The {@code wasm} goal: {@code src/main/java} -- two packages, a record, a thread, a
+	 * record checked with YAVI, a filtered resource of {@code src/main/resources} --
+	 * builds with javac as ever and, at {@code package}, to a Preview 1 module and a
+	 * component, each printing what {@code java} prints from javac's classes. YAVI is
+	 * read from the sources jar of the project's dependency. A changed resource rebuilds.
+	 * A dependency with no sources jar is a warning, and a class of it the program names
+	 * is refused by name at its position.
+	 */
+	@Test
+	void aJavaProgramBuildsToWasmThatPrintsWhatTheJdkPrints() throws Exception {
+		Ready ready = assumeReady();
+		String wasmtime = "wasmtime";
+		assumeTrue(runAllowingFailure(this.project, List.of(wasmtime, "--version")).status() == 0,
+				"wasmtime is not on PATH");
+		String yavi = System.getProperty("rontolisp.plugin.e2e.yavi");
+		assumeTrue(yavi != null, "rontolisp.plugin.e2e.yavi is unset");
+		writeJavaProject(ready.version(), ready.lifecyclePlugins(), yavi);
+		run(this.project, ready.maven("-o", "-q", "package"));
+
+		String expected = run(this.project, List.of(javaExecutable().toString(), "-cp",
+				this.project.resolve("target/classes") + File.pathSeparator + jarOf(Validator.class), "app.Main"));
+		assertThat(expected).contains("total 1850")
+			.contains("shop v1.0.0")
+			.contains("The size of \"item\" must be less than or equal to 5. The given size is 9");
+		assertThat(run(this.project, List.of(wasmtime, "run", "target/javaapp-1.0.0.wasm"))).isEqualTo(expected);
+		assertThat(run(this.project, List.of(wasmtime, "run", "target/javaapp-component.wasm"))).isEqualTo(expected);
+		assertThat(run(this.project, ready.maven("-o", "package"))).contains("target/javaapp-1.0.0.wasm is up to date")
+			.contains("target/javaapp-component.wasm is up to date");
+
+		Files.writeString(this.project.resolve("src/main/resources/app.properties"),
+				"name=shop v${project.version}!\n");
+		run(this.project, ready.maven("-o", "-q", "package"));
+		assertThat(run(this.project, List.of(wasmtime, "run", "target/javaapp-1.0.0.wasm"))).contains("shop v1.0.0!");
+
+		Files.writeString(this.project.resolve("src/main/java/app/Main.java"), """
+				package app;
+
+				import org.jspecify.annotations.Nullable;
+
+				public class Main {
+				    public static void main(String[] args) {
+				        @Nullable String name = args.length > 0 ? args[0] : null;
+				        System.out.println(name);
+				    }
+				}
+				""");
+		ProcessResult refused = runAllowingFailure(this.project, ready.maven("-o", "package"));
+		assertThat(refused.status()).isNotZero();
+		assertThat(refused.output()).contains("[WARNING] no sources jar for e2e:annotations:jar:1.0.0")
+			.contains("app/Main.java:7:9: cannot find symbol: class Nullable");
+	}
+
+	private void writeJavaProject(String version, Map<String, String> plugins, String yavi) throws Exception {
+		Path main = this.project.resolve("src/main/java/app/Main.java");
+		Files.createDirectories(main.getParent());
+		Files.writeString(main, """
+				package app;
+
+				import am.ik.yavi.builder.ValidatorBuilder;
+				import am.ik.yavi.core.Validator;
+				import app.model.Order;
+				import java.io.IOException;
+				import java.nio.charset.StandardCharsets;
+				import java.util.List;
+
+				public class Main {
+				    static final Validator<Order> validator = ValidatorBuilder.<Order>of()
+				        .constraint(Order::item, "item", c -> c.notBlank().lessThanOrEqual(5))
+				        .build();
+
+				    public static void main(String[] args) throws InterruptedException, IOException {
+				        System.out.print(new String(Main.class.getResourceAsStream("/app.properties").readAllBytes(),
+				            StandardCharsets.UTF_8));
+				        List<Order> orders = List.of(new Order("tea", 3, 250), new Order("cake", 2, 400),
+				            new Order("chocolate", 1, 300));
+				        int[] total = new int[1];
+				        Thread worker = new Thread(() -> {
+				            for (Order order : orders) {
+				                total[0] += order.amount();
+				            }
+				        });
+				        worker.start();
+				        worker.join();
+				        orders.forEach(System.out::println);
+				        System.out.println("total " + total[0]);
+				        for (Order order : orders) {
+				            validator.validate(order).forEach(violation -> System.out.println(violation.message()));
+				        }
+				    }
+				}
+				""");
+		Path properties = this.project.resolve("src/main/resources/app.properties");
+		Files.createDirectories(properties.getParent());
+		Files.writeString(properties, "name=shop v${project.version}\n");
+		Path order = this.project.resolve("src/main/java/app/model/Order.java");
+		Files.createDirectories(order.getParent());
+		Files.writeString(order, """
+				package app.model;
+
+				public record Order(String item, int quantity, int unitPrice) {
+				    public int amount() {
+				        return quantity * unitPrice;
+				    }
+				}
+				""");
+		// YAVI and its sources jar are in the local repository because this module's own
+		// build depends on both. The refusal leg's dependency is jspecify's jar under
+		// coordinates no repository has: javac compiles against it, and no machine finds
+		// a sources jar for it.
+		Files.writeString(this.project.resolve("pom.xml"),
+				"""
+						<project xmlns="http://maven.apache.org/POM/4.0.0">
+						  <modelVersion>4.0.0</modelVersion>
+						  <groupId>app</groupId>
+						  <artifactId>javaapp</artifactId>
+						  <version>1.0.0</version>
+						  <properties>
+						    <maven.compiler.release>%d</maven.compiler.release>
+						    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+						  </properties>
+						  <dependencies>
+						    <dependency>
+						      <groupId>am.ik.yavi</groupId>
+						      <artifactId>yavi</artifactId>
+						      <version>%s</version>
+						    </dependency>
+						    <dependency>
+						      <groupId>e2e</groupId>
+						      <artifactId>annotations</artifactId>
+						      <version>1.0.0</version>
+						      <scope>system</scope>
+						      <systemPath>%s</systemPath>
+						    </dependency>
+						  </dependencies>
+						  <build>
+						    <resources>
+						      <resource>
+						        <directory>src/main/resources</directory>
+						        <filtering>true</filtering>
+						      </resource>
+						    </resources>
+						    <plugins>
+						      <plugin>
+						        <groupId>org.apache.maven.plugins</groupId>
+						        <artifactId>maven-resources-plugin</artifactId>
+						        <version>%s</version>
+						      </plugin>
+						      <plugin>
+						        <groupId>org.apache.maven.plugins</groupId>
+						        <artifactId>maven-jar-plugin</artifactId>
+						        <version>%s</version>
+						      </plugin>
+						      <plugin>
+						        <groupId>org.apache.maven.plugins</groupId>
+						        <artifactId>maven-surefire-plugin</artifactId>
+						        <version>%s</version>
+						      </plugin>
+						      <plugin>
+						        <groupId>org.apache.maven.plugins</groupId>
+						        <artifactId>maven-compiler-plugin</artifactId>
+						        <version>%s</version>
+						      </plugin>
+						      <plugin>
+						        <groupId>am.ik.rontolisp</groupId>
+						        <artifactId>rontolisp-maven-plugin</artifactId>
+						        <version>%s</version>
+						        <configuration>
+						          <mainClass>app.Main</mainClass>
+						        </configuration>
+						        <executions>
+						          <execution>
+						            <id>preview1</id>
+						            <goals><goal>wasm</goal></goals>
+						          </execution>
+						          <execution>
+						            <id>component</id>
+						            <goals><goal>wasm</goal></goals>
+						            <configuration>
+						              <component>true</component>
+						              <outputFile>${project.build.directory}/javaapp-component.wasm</outputFile>
+						            </configuration>
+						          </execution>
+						        </executions>
+						      </plugin>
+						    </plugins>
+						  </build>
+						</project>
+						""".formatted(Runtime.version().feature(), yavi, jarOf(Nullable.class),
+						plugins.get("maven-resources-plugin"), plugins.get("maven-jar-plugin"),
+						plugins.get("maven-surefire-plugin"), plugins.get("maven-compiler-plugin"), version));
+	}
+
+	/**
+	 * An example of the checkout, {@code examples/java/guestbook} -- a war on a module of
+	 * this repository and a library -- builds with {@code mvn package} as its README
+	 * says: a war a servlet container serves and a component {@code wasmtime serve}
+	 * serves, answering alike. The module is installed from the checkout first and the
+	 * build takes no SNAPSHOT update, so the component is compiled from this checkout's
+	 * sources of it, not the last deployed ones.
+	 */
+	@Test
+	void anExampleOfTheCheckoutBuildsToAWarAndAComponentThatAnswerAlike() throws Exception {
+		Ready ready = assumeReady();
+		assumeTrue(runAllowingFailure(this.project, List.of("wasmtime", "--version")).status() == 0,
+				"wasmtime is not on PATH");
+		String checkout = System.getProperty("rontolisp.plugin.e2e.checkout");
+		assumeTrue(checkout != null, "rontolisp.plugin.e2e.checkout is unset");
+		Path module = copyTree(Path.of(checkout, "servlet-httpserver"), this.project.resolve("servlet-httpserver"));
+		run(module, ready.maven("-q", "install", "-DskipTests", "-Dmaven.javadoc.skip=true"));
+		Path guestbook = copyTree(Path.of(checkout, "examples", "java", "guestbook"),
+				this.project.resolve("guestbook"));
+		run(guestbook, ready.maven("-q", "-nsu", "-Drontolisp.version=" + ready.version(), "package"));
+
+		Path war = guestbook.resolve("target/guestbook.war");
+		assertThat(entries(war)).contains("WEB-INF/classes/guestbook/Guestbook.class")
+			.anyMatch(entry -> entry.startsWith("WEB-INF/lib/tiny-json-"))
+			.noneMatch(entry -> entry.contains("servlet-httpserver") || entry.contains("servlet-api"));
+		String path = "/guestbook/api/entries";
+		String onTomcat;
+		Tomcat tomcat = new Tomcat();
+		Path base = this.project.resolve("tomcat-base");
+		Files.createDirectories(base.resolve("webapps"));
+		tomcat.setBaseDir(base.toAbsolutePath().toString());
+		tomcat.setPort(0);
+		tomcat.getConnector();
+		// the context path servlet-httpserver serves it under in main
+		tomcat.addWebapp("/guestbook", war.toAbsolutePath().toString());
+		tomcat.start();
+		try {
+			onTomcat = get(tomcat.getConnector().getLocalPort(), path);
+		}
+		finally {
+			tomcat.stop();
+			tomcat.destroy();
+		}
+		assertThat(onTomcat).contains("Hello from the guestbook!");
+
+		Process served = new ProcessBuilder("wasmtime", "serve", "--addr", "127.0.0.1:0", "target/guestbook.wasm")
+			.directory(guestbook.toFile())
+			.redirectErrorStream(true)
+			.start();
+		try {
+			BufferedReader output = served.inputReader(StandardCharsets.UTF_8);
+			Integer port = null;
+			for (String line; port == null && (line = output.readLine()) != null;) {
+				Matcher serving = Pattern.compile("Serving HTTP on http://127\\.0\\.0\\.1:(\\d+)/").matcher(line);
+				port = serving.find() ? Integer.valueOf(serving.group(1)) : null;
+			}
+			assertThat(port).as("the port wasmtime serve says").isNotNull();
+			assertThat(get(Objects.requireNonNull(port), path)).isEqualTo(onTomcat);
+		}
+		finally {
+			served.destroy();
+			served.waitFor();
+		}
+	}
+
+	/**
+	 * An example of the checkout with no main class,
+	 * {@code examples/java/rust-calls-java}, builds as its README says: its test calls
+	 * the exported method under a JDK and, through the {@code test} goal, on the
+	 * interpreter, and the {@code wasm} goal compiles the class {@code @WitExport} marks,
+	 * found with no {@code <mainClass>}, to a component exporting the world -- which
+	 * answers {@code wasmtime run --invoke} and has no {@code run} to start. The
+	 * {@code test} goal runs the test files of the tree as one program on each backend
+	 * asked for, fails the build naming a failed test of each, and is skipped with
+	 * surefire.
+	 */
+	@Test
+	void anExampleWithNoMainClassBuildsToTheComponentOfItsWorld() throws Exception {
+		Ready ready = assumeReady();
+		assumeTrue(runAllowingFailure(this.project, List.of("wasmtime", "--version")).status() == 0,
+				"wasmtime is not on PATH");
+		String checkout = System.getProperty("rontolisp.plugin.e2e.checkout");
+		assumeTrue(checkout != null, "rontolisp.plugin.e2e.checkout is unset");
+		Path api = copyTree(Path.of(checkout, "rontolisp-java-api"), this.project.resolve("rontolisp-java-api"));
+		run(api, ready.maven("-q", "install", "-DskipTests", "-Dmaven.javadoc.skip=true"));
+		Path example = copyTree(Path.of(checkout, "examples", "java", "rust-calls-java"),
+				this.project.resolve("rust-calls-java"));
+		String built = run(example, ready.maven("-nsu", "-Drontolisp.version=" + ready.version(), "package"));
+		assertThat(built).contains("Tests run: 1, Failures: 0")
+			.contains("rontolisp test on the interpreter: 1 file of src/test/java")
+			.contains("Tests run: 1, Failures: 0, Errors: 0, Skipped: 0 -- in com.example.vowels.CounterTest")
+			.contains("Compiled the @WitExport classes of");
+		assertThat(run(example,
+				List.of("wasmtime", "run", "--invoke", "vowel-count(\"hello world\")", "target/rust-calls-java.wasm")))
+			.isEqualTo("3\n");
+		assertThat(runAllowingFailure(example, List.of("wasmtime", "run", "target/rust-calls-java.wasm")).status())
+			.isNotZero();
+
+		Path other = example.resolve("src/test/java/com/example/other/OtherTest.java");
+		Files.createDirectories(other.getParent());
+		Files.writeString(other, """
+				package com.example.other;
+
+				import com.example.vowels.Counter;
+				import org.junit.jupiter.api.Test;
+
+				import static org.assertj.core.api.Assertions.assertThat;
+
+				class OtherTest {
+
+				    @Test
+				    void countsTwice() {
+				        assertThat(Counter.vowelCount("a")).isEqualTo(2);
+				    }
+
+				}
+				""");
+		ProcessResult failed = runAllowingFailure(example, ready.maven("-o", "-Drontolisp.version=" + ready.version(),
+				"-Dmaven.test.failure.ignore=true", "-Drontolisp.backends=interpreter,jvm,wasm,component", "test"));
+		assertThat(failed.status()).isNotZero();
+		assertThat(failed.output())
+			.contains("Running com.example.vowels.CounterTest", "Running com.example.other.OtherTest")
+			.contains("rontolisp test on the interpreter: failed: com.example.other.OtherTest.countsTwice",
+					"rontolisp test on the JVM: failed: com.example.other.OtherTest.countsTwice",
+					"rontolisp test on WASM Preview 1: failed: com.example.other.OtherTest.countsTwice",
+					"rontolisp test on the WASI 0.3 component: failed: com.example.other.OtherTest.countsTwice");
+		assertThat(run(example, ready.maven("-o", "-Drontolisp.version=" + ready.version(), "-DskipTests", "test")))
+			.contains("Tests are skipped (rontolisp test)");
+	}
+
+	private static String get(int port, String path) throws Exception {
+		HttpResponse<String> response = HttpClient.newHttpClient()
+			.send(HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + port + path)).build(),
+					HttpResponse.BodyHandlers.ofString());
+		assertThat(response.statusCode()).isEqualTo(200);
+		return response.body();
+	}
+
+	/** Copies a directory but its {@code target}, into a new one. */
+	private static Path copyTree(Path from, Path to) throws Exception {
+		try (Stream<Path> files = Files.walk(from)) {
+			for (Path file : files.filter(file -> !from.relativize(file).startsWith("target")).toList()) {
+				Path copy = to.resolve(from.relativize(file).toString());
+				if (Files.isDirectory(file)) {
+					Files.createDirectories(copy);
+				}
+				else {
+					Files.copy(file, copy);
+				}
+			}
+		}
+		return to;
+	}
+
+	/** The jar a class of this test's class path was loaded from. */
+	private static Path jarOf(Class<?> type) throws Exception {
+		return Path.of(type.getProtectionDomain().getCodeSource().getLocation().toURI());
+	}
+
+	/**
+	 * The war leg: {@code <packaging>war</packaging>}, a {@code provided}
+	 * jakarta.servlet-api and one execution's {@code <servlet>true</servlet>} is a
+	 * deployable war with no further configuration -- verified by deploying it,
+	 * UNMODIFIED, into an embedded Tomcat and driving it.
+	 */
+	@Test
+	void aWarProjectPackagesAWarThatServesOnTomcat() throws Exception {
+		Ready ready = assumeReady();
+		writeWarProject(ready.version(), "war", true);
+		run(this.project, ready.maven("-q", "package"));
+
+		Path war = this.project.resolve("target/warconsumer-1.0.0.war");
+		assertThat(war).exists();
+		// No web.xml, no file naming the program class -- only the class files
+		// maven-war-plugin copied from target/classes on its own, plus the one-line
+		// service declaration this goal wrote there.
+		assertThat(entries(war)).contains("WEB-INF/classes/App.class",
+				"WEB-INF/classes/am/ik/rontolisp/runtime/RontoHttpServer.class",
+				"WEB-INF/classes/am/ik/rontolisp/runtime/RontoHttpServlet.class",
+				"WEB-INF/classes/am/ik/rontolisp/runtime/RontoHttpServletInitializer.class",
+				"WEB-INF/classes/META-INF/services/jakarta.servlet.ServletContainerInitializer");
+		assertThat(entries(war)).noneMatch(entry -> entry.equals("WEB-INF/web.xml"));
+
+		Tomcat tomcat = new Tomcat();
+		Path base = Files.createDirectories(this.project.resolve("tomcat-base"));
+		Files.createDirectories(base.resolve("webapps"));
+		tomcat.setBaseDir(base.toAbsolutePath().toString());
+		tomcat.setPort(0);
+		tomcat.getConnector();
+		tomcat.addWebapp("", war.toAbsolutePath().toString());
+		tomcat.start();
+		try {
+			int port = tomcat.getConnector().getLocalPort();
+			HttpResponse<String> response = HttpClient.newHttpClient()
+				.send(HttpRequest.newBuilder(URI.create("http://localhost:" + port + "/")).build(),
+						HttpResponse.BodyHandlers.ofString());
+			assertThat(response.statusCode()).isEqualTo(200);
+			assertThat(response.body()).isEqualTo("hello from the war");
+		}
+		finally {
+			tomcat.stop();
+			tomcat.destroy();
+		}
+	}
+
+	@Test
+	void aWarPackagingWithoutTheServletFlagFailsNamingWhichIsMissing() throws Exception {
+		Ready ready = assumeReady();
+		writeWarProject(ready.version(), "war", false);
+
+		ProcessResult result = runAllowingFailure(this.project, ready.maven("package"));
+		assertThat(result.status()).isNotZero();
+		assertThat(result.output()).contains("rontolisp.servlet").contains("packaging");
+	}
+
+	@Test
+	void theServletFlagWithoutWarPackagingFailsNamingWhichIsMissing() throws Exception {
+		Ready ready = assumeReady();
+		writeWarProject(ready.version(), "jar", true);
+
+		ProcessResult result = runAllowingFailure(this.project, ready.maven("package"));
+		assertThat(result.status()).isNotZero();
+		assertThat(result.output()).contains("rontolisp.servlet").contains("<packaging>war</packaging>");
+	}
+
+	private void writeWarProject(String version, String packaging, boolean servlet) throws Exception {
+		Path app = this.project.resolve("src/main/lisp/App.lisp");
+		Files.createDirectories(app.getParent());
+		Files.writeString(app, """
+				(defun handle (env)
+				  (declare (ignore env))
+				  (list 200 '(:content-type "text/plain") (list "hello from the war")))
+
+				(rontolisp:http-handler 'handle)
+				""");
+		Files.writeString(this.project.resolve("pom.xml"), """
+				<project xmlns="http://maven.apache.org/POM/4.0.0">
+				  <modelVersion>4.0.0</modelVersion>
+				  <groupId>app</groupId>
+				  <artifactId>warconsumer</artifactId>
+				  <version>1.0.0</version>
+				  <packaging>%s</packaging>
+				  <properties>
+				    <maven.compiler.release>%d</maven.compiler.release>
+				    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+				  </properties>
+				  <dependencies>
+				    <dependency>
+				      <groupId>jakarta.servlet</groupId>
+				      <artifactId>jakarta.servlet-api</artifactId>
+				      <version>6.0.0</version>
+				      <scope>provided</scope>
+				    </dependency>
+				  </dependencies>
+				  <build>
+				    <plugins>
+				      <plugin>
+				        <groupId>org.apache.maven.plugins</groupId>
+				        <artifactId>maven-war-plugin</artifactId>
+				        <version>3.5.1</version>
+				        <configuration>
+				          <failOnMissingWebXml>false</failOnMissingWebXml>
+				        </configuration>
+				      </plugin>
+				      <plugin>
+				        <groupId>am.ik.rontolisp</groupId>
+				        <artifactId>rontolisp-maven-plugin</artifactId>
+				        <version>%s</version>
+				        <executions>
+				          <execution>
+				            <goals><goal>compile</goal></goals>
+				            <configuration>
+				              <servlet>%s</servlet>
+				            </configuration>
+				          </execution>
+				        </executions>
+				      </plugin>
+				    </plugins>
+				  </build>
+				</project>
+				""".formatted(packaging, Runtime.version().feature(), version, servlet));
+	}
+
+	private Ready assumeReady() {
+		assumeTrue("true".equals(System.getProperty("rontolisp.plugin.e2e")),
+				"the Maven build E2E is opt-in (it shells out to Maven): pass -Drontolisp.plugin.e2e=true");
+		String version = System.getProperty("rontolisp.plugin.version");
+		String mavenHome = System.getProperty("rontolisp.plugin.e2e.maven.home");
+		String localRepository = System.getProperty("rontolisp.plugin.e2e.local.repository");
+		assumeTrue(version != null && mavenHome != null && localRepository != null,
+				"run through this module's pom, whose surefire configuration names the plugin version,"
+						+ " the Maven and the local repository");
+		Path maven = Path.of(mavenHome, "bin", "mvn");
+		assumeTrue(Files.isExecutable(maven), "no Maven executable at " + maven);
+		Path installed = Path.of(localRepository, "am", "ik", "rontolisp", "rontolisp-maven-plugin", version,
+				"rontolisp-maven-plugin-" + version + ".jar");
+		assumeTrue(Files.isRegularFile(installed),
+				"the plugin is not in the local repository: run `./mvnw -f rontolisp-maven-plugin/pom.xml install`");
+		Map<String, String> lifecyclePlugins = new LinkedHashMap<>();
+		for (String artifactId : List.of("maven-resources-plugin", "maven-jar-plugin", "maven-surefire-plugin",
+				"maven-compiler-plugin")) {
+			String pinned = System.getProperty("rontolisp.plugin.e2e." + artifactId);
+			assumeTrue(pinned != null, "rontolisp.plugin.e2e." + artifactId + " is unset");
+			lifecyclePlugins.put(artifactId, pinned);
+		}
+		return new Ready(maven, Path.of(localRepository), version, lifecyclePlugins);
+	}
+
+	/**
+	 * The Maven running this test, the local repository it uses, this plugin's version,
+	 * and the version this module's build pins for each lifecycle plugin the offline
+	 * fixture declares, keyed by artifact id.
+	 */
+	private record Ready(Path mavenExecutable, Path localRepository, String version,
+			Map<String, String> lifecyclePlugins) {
+
+		List<String> maven(String... arguments) {
+			List<String> command = new ArrayList<>();
+			command.add(this.mavenExecutable.toString());
+			command.add("-Dmaven.repo.local=" + this.localRepository);
+			command.addAll(List.of(arguments));
+			return command;
+		}
+
+	}
+
+	private record ProcessResult(int status, String output) {
+	}
+
+	private static List<String> entries(Path jar) throws Exception {
+		try (JarFile file = new JarFile(jar.toFile())) {
+			return file.stream().map(JarEntry::getName).toList();
+		}
+	}
+
+	private static Path javaExecutable() {
+		return Path.of(System.getProperty("java.home"), "bin", "java");
+	}
+
+	private static String run(Path directory, List<String> command) throws Exception {
+		ProcessResult result = runAllowingFailure(directory, command);
+		assertThat(result.status()).describedAs("%s exited %d:%n%s", command, result.status(), result.output())
+			.isZero();
+		return result.output();
+	}
+
+	private static ProcessResult runAllowingFailure(Path directory, List<String> command) throws Exception {
+		Process process = new ProcessBuilder(command).directory(directory.toFile()).redirectErrorStream(true).start();
+		String output = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+		int status = process.waitFor();
+		return new ProcessResult(status, output);
+	}
+
+}

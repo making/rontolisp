@@ -1,0 +1,199 @@
+package am.ik.rontolisp.eval;
+
+import java.lang.reflect.Method;
+import java.net.URL;
+import java.net.URLClassLoader;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Set;
+
+import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.codegen.jvm.JvmLispCompiler;
+import am.ik.rontolisp.compiler.OptimizeLevel;
+import am.ik.rontolisp.reader.Features;
+import am.ik.rontolisp.reader.LispReader;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+/**
+ * The compile-path splice PLACEMENT {@link GrayStreamsLibrary} owns: the Gray protocol
+ * definitions must precede every form that subclasses them, no matter which pass put
+ * either there.
+ *
+ * <p>
+ * The collision this pins is the real one from the Clack ecosystem: a program that loads
+ * a Gray shim (which splices the protocol at the shim's own splice site, mid-program) AND
+ * serves a buffered {@code :raw-body} (whose {@code http-request-body-stream} class
+ * {@link HttpServerLibrary} prepends at index 0) had its subclass ahead of its base class
+ * and failed to compile. It needs no container and no network, unlike the ecosystem-level
+ * {@code LackEcosystemE2eTest}, which is why it lives here.
+ */
+class GrayStreamsLibraryTest {
+
+	@TempDir
+	Path tempDir;
+
+	/**
+	 * The program half of the collision: the buffered {@code :raw-body} stream, read back
+	 * both ways through the Gray dispatch.
+	 */
+	private static final String BODY_STREAM_PROGRAM = """
+			(let ((s (rontolisp::%http-body-stream "hi")))
+			  (print (read-byte s))
+			  (print (read-char s)))
+			""";
+
+	private static final String BODY_STREAM_EXPECTED = """
+			104
+			#\\i
+			""";
+
+	@Test
+	void grayProtocolIsHoistedAboveTheServerLibrarysSubclass() throws Exception {
+		// The shim splice lands the protocol MID-program (ShimLibraries prepends
+		// protocolForms() to the shim's own forms, at wherever the quickload sat).
+		List<LispVal> program = new ArrayList<>();
+		program.addAll(LispReader.readAllFromString("(defvar *anchor* 1)"));
+		program.addAll(ShimLibraries.forms("trivial-gray-streams", Features.INTERPRETER));
+		program.addAll(LispReader.readAllFromString(BODY_STREAM_PROGRAM));
+		assertThat(compileAndRun(process(program))).isEqualToNormalizingWhitespace(BODY_STREAM_EXPECTED);
+	}
+
+	/**
+	 * The no-shim path stays exactly as it was: nothing defines the protocol, so it is
+	 * prepended as one block at the very front and no form moves.
+	 */
+	@Test
+	void programWithoutAGrayShimKeepsTheProtocolSpliceAtTheFront() throws Exception {
+		List<LispVal> program = new ArrayList<>(LispReader.readAllFromString(BODY_STREAM_PROGRAM));
+		List<LispVal> processed = process(program);
+		List<LispVal> protocol = GrayStreamsLibrary.protocolForms();
+		assertThat(processed.subList(0, protocol.size())).isEqualTo(protocol);
+		assertThat(compileAndRun(processed)).isEqualToNormalizingWhitespace(BODY_STREAM_EXPECTED);
+	}
+
+	/**
+	 * A stream operator the program takes as a function value has no call site to
+	 * rewrite, so the pass splices the dispatch helpers its Gray wrapper calls -- every
+	 * one of them a gray.lisp defun.
+	 */
+	@Test
+	void aStreamOperatorTakenAsAValueSplicesItsDispatchHelpers() {
+		List<String> operators = am.ik.rontolisp.compiler.BuiltinFunctionWrappers.names()
+			.stream()
+			.filter(op -> !am.ik.rontolisp.compiler.BuiltinFunctionWrappers.grayDispatchHelpers(op).isEmpty())
+			.sorted()
+			.toList();
+		assertThat(operators).contains("WRITE-STRING", "READ-BYTE", "FILE-POSITION");
+		for (String op : operators) {
+			List<LispVal> processed = GrayStreamsLibrary.process(LispReader.readAllFromString(
+					"(defclass c (rontolisp:fundamental-character-output-stream) ()) (print #'" + op + ")"));
+			List<String> defuns = processed.stream().map(LispVal::print).filter(f -> f.startsWith("(DEFUN ")).toList();
+			for (String helper : am.ik.rontolisp.compiler.BuiltinFunctionWrappers.grayDispatchHelpers(op)) {
+				assertThat(defuns).as(op).anyMatch(f -> f.startsWith("(DEFUN " + helper + " "));
+			}
+		}
+	}
+
+	/**
+	 * A protocol program carries gray.lisp's {@code clear-input} in place of the
+	 * prelude's, which it tells by their shared lambda list, and keeps a {@code defun} of
+	 * its own.
+	 */
+	@Test
+	void aProtocolProgramReplacesThePreludesClearInputOnly() {
+		String protocol = "(defclass c (rontolisp:fundamental-character-input-stream) ())";
+		List<LispVal> program = new ArrayList<>(LispReader.readAllFromString(protocol));
+		program.addAll(LispPreludeLibrary.formsFor("CLEAR-INPUT"));
+		assertThat(GrayStreamsLibrary.process(program)
+			.stream()
+			.map(LispVal::print)
+			.filter(form -> form.startsWith("(DEFUN CLEAR-INPUT "))).singleElement()
+			.satisfies(form -> assertThat(form).contains("RONTOLISP:STREAM-CLEAR-INPUT"));
+		String own = "(defun clear-input (s) s)";
+		assertThat(GrayStreamsLibrary.process(LispReader.readAllFromString(protocol + own))
+			.stream()
+			.map(LispVal::print)
+			.filter(form -> form.startsWith("(DEFUN CLEAR-INPUT "))).containsExactly("(DEFUN CLEAR-INPUT (S) S)");
+	}
+
+	/**
+	 * A stream-less read or print reaches a Gray instance only through the current value
+	 * of the standard stream, which a program that never binds the variable cannot
+	 * change: its stream-less calls are left exactly as written. So is a list where no
+	 * form goes -- a {@code dolist} variable, a {@code case} key, a {@code let} variable
+	 * named like a stream operator -- which read as a call made {@code read-line} an
+	 * unbound variable on every compiled backend.
+	 */
+	@Test
+	void aProgramBindingNoStandardStreamKeepsItsStreamlessCallsAndItsNonCalls() {
+		String user = "(defun f (l k) (princ \"x\") (format t \"~a\" 1) (read-char) (peek-char)"
+				+ " (dolist (read-line l) (print read-line)) (case k (close 1)) (let ((write-string l)) write-string))";
+		List<LispVal> processed = GrayStreamsLibrary.process(LispReader
+			.readAllFromString("(defclass c (rontolisp:fundamental-character-output-stream) ()) " + user));
+		assertThat(processed.get(processed.size() - 1).print())
+			.isEqualTo(LispReader.readAllFromString(user).get(0).print());
+	}
+
+	/**
+	 * Each standard stream the program binds routes the stream-less calls of ITS family
+	 * through the dispatch helpers; the other family keeps its calls.
+	 */
+	@Test
+	void bindingAStandardStreamRoutesOnlyItsOwnFamily() {
+		List<LispVal> processed = GrayStreamsLibrary
+			.process(LispReader.readAllFromString("(defclass c (rontolisp:fundamental-character-output-stream) ()) "
+					+ "(defun f () (let ((*standard-output* (make-instance 'c))) (princ \"x\") (read-char)))"));
+		String f = processed.get(processed.size() - 1).print();
+		assertThat(f).contains("(RONTOLISP::%GRAY-PRINC-DISPATCH \"x\" NIL)").contains("(READ-CHAR)");
+		// A fragment of a host carrying the protocol and the unread-char pushback binds
+		// neither stream itself, yet a Gray instance or a parked character the host made
+		// may reach any of its calls: both families route, the reads reach the pushback,
+		// and the protocol and the pushback stay the host's (cli/JvmRunTimeLowering).
+		LinkedDefinitions host = new LinkedDefinitions(Set.of("RONTOLISP::%UNREAD-CHAR-TAKE"), Set.of(),
+				Set.of("RONTOLISP:FUNDAMENTAL-STREAM"));
+		List<LispVal> fragment = UnreadCharLibrary.process(GrayStreamsLibrary
+			.process(LispReader.readAllFromString("(defun f () (princ \"x\") (read-char))"), host), host);
+		assertThat(fragment.get(fragment.size() - 1).print()).contains("(RONTOLISP::%GRAY-PRINC-DISPATCH \"x\" NIL)")
+			.contains("(RONTOLISP::%GRAY-READ-CHAR-DISPATCH ")
+			.doesNotContain("(READ-CHAR)");
+		assertThat(fragment.stream().map(LispVal::print))
+			.anyMatch(form -> form.startsWith("(DEFUN RONTOLISP::%GRAY-READ-CHAR-DISPATCH ")
+					&& form.contains("(RONTOLISP::%UNREAD-READ-CHAR "));
+		assertThat(fragment).doesNotContainAnyElementsOf(GrayStreamsLibrary.protocolForms());
+	}
+
+	// The CLI pipeline's two splices, in its order: the server value model first, then
+	// the Gray placement + call-site rewrite.
+	private static List<LispVal> process(List<LispVal> program) {
+		return GrayStreamsLibrary.process(HttpServerLibrary.process(program, true));
+	}
+
+	private String compileAndRun(List<LispVal> program) throws Exception {
+		byte[] classBytes = JvmLispCompiler.builder()
+			.className("GrayPlacement")
+			.optimize(OptimizeLevel.NONE)
+			.build()
+			.compile(LispPreludeLibrary.process(program));
+		Files.write(this.tempDir.resolve("GrayPlacement.class"), classBytes);
+		java.io.ByteArrayOutputStream captured = new java.io.ByteArrayOutputStream();
+		java.io.PrintStream original = System.out;
+		try (URLClassLoader loader = new URLClassLoader(new URL[] { this.tempDir.toUri().toURL() },
+				ClassLoader.getSystemClassLoader())) {
+			Method main = loader.loadClass("GrayPlacement").getMethod("main", String[].class);
+			System.setOut(new java.io.PrintStream(captured, true, java.nio.charset.StandardCharsets.UTF_8));
+			try {
+				main.invoke(null, (Object) new String[0]);
+			}
+			finally {
+				System.setOut(original);
+			}
+		}
+		return captured.toString(java.nio.charset.StandardCharsets.UTF_8);
+	}
+
+}

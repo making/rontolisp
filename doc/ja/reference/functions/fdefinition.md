@@ -1,0 +1,27 @@
+# fdefinition
+
+`(fdefinition function-name)`
+
+関数名の関数値を返します。関数名はシンボル ([`symbol-function`](symbol-function.md) と同じ) か、`(defun (setf name) ...)` が定義する関数を指す `(setf name)` リストです。未定義の名前は `undefined-function` を通知し、その `cell-error-name` はリストも含めて名前そのものです。
+
+クォートされたシンボルリテラル (`(fdefinition 'car)`) はコンパイラではコンパイル時に解決されます。実行時に計算されたシンボルはコンパイル済み名前レジストリを通じて遅延解決され、同じ関数値を返します — [`symbol-function`](symbol-function.md) と同じで、相違点はありません。クォートされた `(setf name)` リストは全バックエンドで `#'(setf name)` と同じです。実行時に組み立てたリストも受け付けます。コンパイルバックエンドでは、計算されたシンボルがプログラム中に綴られていれば解決されるのと同じく、place のシンボルがプログラム中に綴られていればその関数が解決されます。
+
+```lisp
+(funcall (fdefinition 'car) '(1 2 3)) ; => 1
+```
+
+```lisp
+(defun (setf fd-first) (value list) (setf (car list) value))
+(let ((l (list 1 2)))
+  (funcall (fdefinition '(setf fd-first)) 9 l)
+  l) ; => (9 2)
+```
+
+```lisp
+(defun (setf fd-second) (value list) (setf (cadr list) value))
+(let ((l (list 1 2)))
+  (funcall (fdefinition (list 'setf 'fd-second)) 9 l)
+  l) ; => (1 9)
+```
+
+`fdefinition` は [`symbol-function`](symbol-function.md) と同じ `setf` の place です: `(setf (fdefinition 'name) fn)` は `fn` をそのシンボルのグローバルな関数定義としてインストールし、`(setf (fdefinition '(setf name)) fn)` は `(setf name)` 関数をインストールします。クォートした名前に書き込むと、書き込みより前にコンパイルされたコードからの参照も含め、その名前へのすべての参照が全バックエンドで `fn` を呼びます。名前は実行時に組み立てたもの (`(list 'setf p)`、`(intern s)`) でもかまいません: そうした書き込み (または `eval` の `defun`) だけが束縛する名前の直接呼び出し、`setf` の place、`#'name`、`fboundp` は、全バックエンドで実行時にその名前を引きます。`defun` でも定義している名前に、実行時に組み立てた名前、`eval`、`load` 経由で書き込んだ場合も、その名前の次の `defun` フォームを実行するまで、すべての参照が新しい定義を呼びます。データを評価しないプログラムでは、名前はプログラムの値が綴るもの(クォートしたシンボル、`intern` があれば文字列)である必要があります。計算した文字列から組み立てた名前が届くのは、実行時に計算した名前経由の呼び出しだけです。

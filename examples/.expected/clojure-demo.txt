@@ -1,0 +1,16 @@
+hello, clojure on rontolisp!
+3628800
+6765
+84
+9
+[:a :b vec]
+3
+true false true true
+:fallback
+x+y=15
+42
+2
+3
+[1 2 3]
+true
+true

@@ -1,0 +1,15 @@
+# 7 refusals
+/org/postgresql/jdbcurlresolver/PgServiceConfParser.java:107: System.getenv() is not supported by the experimental Java subset yet
+  in org.postgresql.jdbcurlresolver.PgServiceConfParser.findPgServiceConfResourceName()
+/org/postgresql/jdbcurlresolver/PgServiceConfParser.java:132: System.getenv() is not supported by the experimental Java subset yet
+  in org.postgresql.jdbcurlresolver.PgServiceConfParser.findPgServiceConfResourceName()
+/org/postgresql/jdbcurlresolver/PgPassParser.java:120: System.getenv() is not supported by the experimental Java subset yet
+  in org.postgresql.jdbcurlresolver.PgPassParser.findPgPasswordResourceName()
+/org/postgresql/util/internal/JvmHeapAccess.java:24: MemoryMXBean.getHeapMemoryUsage() is not supported by the experimental Java subset yet
+  in org.postgresql.util.internal.JvmHeapAccess.maxHeapBytes()
+/org/postgresql/ssl/BaseX509KeyManager.java:148: Files.getPosixFilePermissions(Path) is not supported by the experimental Java subset yet
+  in org.postgresql.ssl.BaseX509KeyManager.validatePosixPermissions(java.nio.file.Path)
+/org/postgresql/ssl/BaseX509KeyManager.java:217: Files.getFileAttributeView(Path,Class<AclFileAttributeView>) is not supported by the experimental Java subset yet
+  in org.postgresql.ssl.BaseX509KeyManager.validateWindowsAclPermissions(java.nio.file.Path)
+/org/postgresql/ssl/BaseX509KeyManager.java:177: Files.getAttribute(Path,String) is not supported by the experimental Java subset yet
+  in org.postgresql.ssl.BaseX509KeyManager.isFileOwnedByRoot(java.nio.file.Path)

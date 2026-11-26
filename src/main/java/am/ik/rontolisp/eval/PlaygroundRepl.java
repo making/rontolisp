@@ -1,0 +1,301 @@
+package am.ik.rontolisp.eval;
+
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.PrintStream;
+import java.nio.charset.StandardCharsets;
+import java.util.EnumMap;
+import java.util.List;
+import java.util.Map;
+
+import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.reader.Features;
+import org.jspecify.annotations.Nullable;
+
+/**
+ * The browser's interpreter: the playground's REPL and the documentation site's Run
+ * cells, in the language picked for it. It lives here rather than beside the {@code @JS}
+ * bootstrap in {@code src/web/java} so the JVM test suite runs exactly what the browser
+ * runs -- {@code DocExamplesTest} checks the {@code scheme}, {@code clojure} and
+ * {@code starlark} fences through it.
+ *
+ * <p>
+ * Every buffer is read through {@link SourceSession}, one per language over the one
+ * evaluator, so switching the pick keeps every definition and a Scheme or Starlark
+ * session keeps what its earlier buffers defined ({@code .kb/scheme-frontend.md},
+ * {@code .kb/starlark-frontend.md}, "A session").
+ *
+ * <p>
+ * Three ways to run a buffer, each returning the text a page shows:
+ * <ul>
+ * <li>{@link #eval}: the REPL and the Common Lisp Run cells. Only the LAST form's values
+ * are echoed, unlike the CLI REPL (every form): a Run cell's block is a setup plus an
+ * expression whose FINAL value is the annotated one.</li>
+ * <li>{@link #run}: a whole program, read as a file is, standard output only -- a
+ * {@code scheme}, {@code clojure} or {@code starlark} fence on the documentation
+ * site.</li>
+ * <li>{@link #transcript}: every form echoed after its own output, as the CLI REPL does
+ * on a pipe -- a {@code scheme} fence carrying {@code ; =>} annotations.</li>
+ * </ul>
+ * A failure propagates as the evaluator's exception, whose message is the report; an
+ * {@code exit} ends the buffer and keeps what it printed.
+ *
+ * <p>
+ * The browser has one stack, and the interpreter cannot suspend a thread on it: there a
+ * whole Java program that starts threads is run by {@link OneStack} instead -- compiled
+ * for the target whose threads take turns ({@code .kb/java-frontend.md}, "In the
+ * browser").
+ */
+public final class PlaygroundRepl {
+
+	/**
+	 * What runs a whole program whose threads the interpreter cannot run on a host with
+	 * one stack.
+	 */
+	@FunctionalInterface
+	public interface OneStack {
+
+		/**
+		 * Runs a program.
+		 * @param source the program text
+		 * @return what the page shows for it
+		 */
+		String run(String source);
+
+	}
+
+	private static final String THREADS_REFUSED = "a thread is started only by a whole program in the browser: "
+			+ "a buffer of this session runs on the page's one stack, where no thread can wait for another "
+			+ "(put the code in a main method and run the program)";
+
+	private static final String FILES_REFUSED = "a file is read or written only outside the browser: "
+			+ "the page has no file system (run the program with rontolisp on a host)";
+
+	/**
+	 * What the page's sources are read against: every language's default, and as the
+	 * source tree of a Java program, which the page reads from no file, the uploaded
+	 * files by the names they were uploaded by -- a class the program names is read from
+	 * the upload its qualified name spells ({@code geo/Place.java}), as a source launcher
+	 * reads a file beside the one it starts at.
+	 */
+	public static final SourceStandards STANDARDS = SourceStandards.DEFAULT.withJavaSourceTree("");
+
+	private final ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+
+	private final PrintStream out = new PrintStream(this.buffer, true, StandardCharsets.UTF_8);
+
+	private final LispEvaluator evaluator;
+
+	private final SourceLoader loader;
+
+	private final @Nullable OneStack oneStack;
+
+	private final Map<SourceLanguage, SourceSession> sessions = new EnumMap<>(SourceLanguage.class);
+
+	private SourceLanguage language = SourceLanguage.COMMON_LISP;
+
+	/**
+	 * An interpreter whose standard input is empty.
+	 * @param loader where {@code load}, {@code include} and a WIT directive read files
+	 */
+	public PlaygroundRepl(SourceLoader loader) {
+		this(loader, "");
+	}
+
+	/**
+	 * An interpreter reading {@code stdin} as its standard input.
+	 * @param loader where {@code load}, {@code include} and a WIT directive read files
+	 * @param stdin the whole standard input
+	 */
+	public PlaygroundRepl(SourceLoader loader, String stdin) {
+		this(loader, stdin, null);
+	}
+
+	/**
+	 * An interpreter of a host that may have one stack.
+	 * @param loader where {@code load}, {@code include} and a WIT directive read files
+	 * @param stdin the whole standard input
+	 * @param oneStack what runs a program that starts threads where the host has one
+	 * stack, or {@code null} on a host with threads
+	 */
+	public PlaygroundRepl(SourceLoader loader, String stdin, @Nullable OneStack oneStack) {
+		this.oneStack = oneStack;
+		this.evaluator = new LispEvaluator(this.out, new ByteArrayInputStream(stdin.getBytes(StandardCharsets.UTF_8)));
+		this.evaluator.setSourceLoader(loader);
+		this.loader = loader;
+	}
+
+	/**
+	 * Where what the page shows is collected. A host hands it what else belongs on the
+	 * page in the order it was written: the browser its standard error, which a warning
+	 * about a program and the report of what a Java program left uncaught go to.
+	 * @return the stream a run's output is read back from
+	 */
+	public PrintStream page() {
+		return this.out;
+	}
+
+	/**
+	 * Picks the language the next buffers are read in.
+	 * @param language the language
+	 * @return this interpreter
+	 */
+	public PlaygroundRepl pick(SourceLanguage language) {
+		this.language = language;
+		return this;
+	}
+
+	/**
+	 * The picked language.
+	 * @return the language buffers are read in
+	 */
+	public SourceLanguage language() {
+		return this.language;
+	}
+
+	/**
+	 * Evaluates a buffer, echoing the last form's values one per line after what the
+	 * buffer printed ({@code (floor 10 3)} echoes {@code 3} then {@code 1}); a form with
+	 * no value to show (a Scheme definition, an effect) echoes nothing.
+	 * @param source the typed text
+	 * @return the output, then the echo
+	 */
+	public String eval(String source) {
+		this.buffer.reset();
+		SourceSession session = session();
+		try {
+			List<SourceSession.Step> steps = session.read(source, this.evaluator.sourceFeatures());
+			List<LispVal> values = List.of();
+			for (int s = 0; s < steps.size(); s++) {
+				values = evalStep(steps.get(s), s == steps.size() - 1, source);
+			}
+			this.out.flush();
+			StringBuilder shown = new StringBuilder(output());
+			boolean first = true;
+			for (LispVal value : values) {
+				String echoed = session.echo(value, this.evaluator);
+				if (echoed != null) {
+					shown.append(first ? "" : "\n").append(echoed);
+					first = false;
+				}
+			}
+			return shown.toString();
+		}
+		catch (LispExitSignal exit) {
+			return output();
+		}
+	}
+
+	/**
+	 * Runs a whole program, read the way a file in the picked language is read.
+	 * @param source the program text
+	 * @return what the program printed
+	 */
+	public String run(String source) {
+		this.buffer.reset();
+		try {
+			boolean markers = SourceLanguage.usesReadEvalMarkers(source);
+			List<LispVal> forms = this.language.read(source, this.evaluator.sourceFeatures(), null, STANDARDS,
+					this.loader);
+			refuseFiles(forms);
+			if (this.oneStack != null && this.language == SourceLanguage.JAVA && JavaLibrary.startsThreads(forms)) {
+				// what reading the program wrote on the page -- its warnings -- comes
+				// first
+				return output() + this.oneStack.run(source);
+			}
+			for (LispVal form : forms) {
+				this.evaluator.eval(markers ? this.evaluator.resolveReadTimeEvalInCode(form) : form);
+			}
+		}
+		catch (LispExitSignal exit) {
+			// (exit) ends the program; what it printed before is its output.
+		}
+		return output();
+	}
+
+	/**
+	 * Evaluates a buffer the way the CLI REPL does on a pipe: each form's values, one per
+	 * line, right after that form's own output, starting on a fresh line.
+	 * @param source the typed text
+	 * @return the transcript
+	 */
+	public String transcript(String source) {
+		this.buffer.reset();
+		SourceSession session = session();
+		try {
+			for (SourceSession.Step step : session.read(source, this.evaluator.sourceFeatures())) {
+				List<LispVal> values = evalStep(step, true, source);
+				freshLine();
+				for (LispVal value : values) {
+					String echoed = session.echo(value, this.evaluator);
+					if (echoed != null) {
+						this.out.println(echoed);
+					}
+				}
+			}
+		}
+		catch (LispExitSignal exit) {
+			// (exit) ends the buffer; what it printed before is its output.
+		}
+		return output();
+	}
+
+	// Runs one step's forms; answers its last form's values when the step is echoed.
+	// Each form's #. markers resolve just before it runs, as the CLI REPL does.
+	private List<LispVal> evalStep(SourceSession.Step step, boolean echo, String source) {
+		boolean markers = SourceLanguage.usesReadEvalMarkers(source);
+		List<LispVal> values = List.of();
+		// A buffer of a Java session runs on the interpreter, which on one stack cannot
+		// leave a thread waiting: a thread is a whole program's there (run).
+		boolean threadless = this.oneStack != null && this.language == SourceLanguage.JAVA;
+		refuseFiles(step.forms());
+		if (threadless) {
+			this.evaluator.refuseThreads(THREADS_REFUSED);
+		}
+		try {
+			for (int i = 0; i < step.forms().size(); i++) {
+				LispVal form = step.forms().get(i);
+				LispVal expr = markers ? this.evaluator.resolveReadTimeEvalInCode(form) : form;
+				if (echo && step.echoes() && i == step.forms().size() - 1) {
+					values = this.evaluator.evalValues(expr);
+				}
+				else {
+					this.evaluator.eval(expr);
+				}
+			}
+		}
+		finally {
+			if (threadless) {
+				this.evaluator.refuseThreads(null);
+			}
+		}
+		return values;
+	}
+
+	// A Java program that reaches a file is refused before it runs where the host is the
+	// browser's, whose page has no file system: its interpreter would answer every file
+	// missing, which no program can tell from a file that is.
+	private void refuseFiles(List<LispVal> forms) {
+		if (this.oneStack != null && this.language == SourceLanguage.JAVA && JavaLibrary.reachesFiles(forms)) {
+			throw new LispEvalException(FILES_REFUSED);
+		}
+	}
+
+	private SourceSession session() {
+		return this.sessions.computeIfAbsent(this.language, picked -> {
+			SourceSession session = new SourceSession(picked, STANDARDS, this.loader);
+			session.attach(this.evaluator);
+			return session;
+		});
+	}
+
+	private void freshLine() {
+		this.evaluator.eval(SourceLanguage.COMMON_LISP.read("(fresh-line)", Features.INTERPRETER, null).get(0));
+	}
+
+	private String output() {
+		this.out.flush();
+		return this.buffer.toString(StandardCharsets.UTF_8);
+	}
+
+}

@@ -1,0 +1,44 @@
+package am.ik.rontolisp.codegen.jvm;
+
+import java.util.List;
+
+import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispVal;
+
+/**
+ * Compiles the {@code prin1} built-in function. Same as print but without newline.
+ */
+final class JvmPrin1Compiler {
+
+	private JvmPrin1Compiler() {
+	}
+
+	static void compile(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		List<LispVal> args = cons.toList();
+		// prin1 returns its argument (CL semantics); stash the object so it can be left
+		// on
+		// the stack after printing, not nil.
+		int objSlot = ctx.allocTemp();
+		// The destination, under CL's stream designator rule: an explicit stream, or --
+		// for an omitted argument AND for an explicit nil -- the current
+		// *standard-output* (JvmStringStreamCompiler.streamArg).
+		LispVal stream = JvmStringStreamCompiler.streamArg(ctx, args.size() > 2 ? args.get(2) : null);
+		if (stream != null) {
+			// (prin1 value stream): render, then route through _writeStr.
+			JvmExprCompiler.compileExpr(args.get(1), ctx, className);
+			ctx.body.astore(objSlot).aload(objSlot).invokestatic(ctx.lispToString);
+			JvmExprCompiler.compileExpr(stream, ctx, className);
+			JvmStringStreamCompiler.emitWriteStr(ctx, className);
+			ctx.body.aload(objSlot);
+			return;
+		}
+		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
+		ctx.body.astore(objSlot).aload(objSlot).invokestatic(ctx.lispToString);
+		int slot = ctx.allocTemp();
+		ctx.body.astore(slot).getstatic(ctx.systemOut).aload(slot);
+		ctx.body.invokevirtual(ctx.printStr);
+		JvmFreshLineCompiler.emitTrackLocal(ctx, className, slot);
+		ctx.body.aload(objSlot);
+	}
+
+}

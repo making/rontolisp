@@ -1,0 +1,305 @@
+package am.ik.rontolisp.eval;
+
+import java.util.ArrayList;
+import java.util.List;
+
+import org.jspecify.annotations.Nullable;
+
+import am.ik.rontolisp.LispString;
+import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.clojure.ClojureMacroEvaluator;
+import am.ik.rontolisp.clojure.ClojureSession;
+import am.ik.rontolisp.clojure.ClojureTopLevel;
+import am.ik.rontolisp.java.JavaSession;
+import am.ik.rontolisp.java.JavaTopLevel;
+import am.ik.rontolisp.reader.Features;
+import am.ik.rontolisp.reader.LispReadException;
+import am.ik.rontolisp.reader.LispReader;
+import am.ik.rontolisp.scheme.Scheme;
+import am.ik.rontolisp.scheme.SchemeSession;
+import am.ik.rontolisp.scheme.SchemeTopLevel;
+import am.ik.rontolisp.starlark.Starlark;
+import am.ik.rontolisp.starlark.StarlarkSession;
+import am.ik.rontolisp.starlark.StarlarkTopLevel;
+
+/**
+ * The source-language seam for a consumer that has no file and reads one buffer at a time
+ * -- the CLI REPL, a playground. Everything such a consumer must ask the LANGUAGE rather
+ * than assume is here: whether the typed text is complete, what it lowers to and which of
+ * its values are worth showing, how a value is written back, and what the prompt says.
+ *
+ * <p>
+ * It is a session, not a function, because a language may need to remember what earlier
+ * buffers defined: Scheme's lowering decides how a name is called from what defined it
+ * ({@code .kb/scheme-frontend.md}, "A session"), Starlark's resolves a name against the
+ * globals bound so far ({@code .kb/starlark-frontend.md}, "A session"), Java's lowers the
+ * declarations of every buffer so far again ({@code .kb/java-frontend.md}, "A session").
+ * Common Lisp keeps nothing here; its state is the evaluator's.
+ */
+public final class SourceSession {
+
+	/**
+	 * One top-level form of a buffer, as core forms.
+	 *
+	 * @param forms what to evaluate, in order; the value of the LAST one is the form's
+	 * @param echoes whether that value is worth showing (a Scheme definition has none)
+	 */
+	public record Step(List<LispVal> forms, boolean echoes) {
+	}
+
+	// The Scheme echo: a closure over the value rather than a form quoting it, which the
+	// resolver would walk -- forever, on a cyclic value. It skips the unspecified object
+	// an effect answers, NIL standing for "nothing to show".
+	private static final String ECHO = "(lambda (x) (if (eq x rontolisp::%scheme-unspecified) nil"
+			+ " (with-output-to-string (*standard-output*) (rontolisp::%scheme-write x))))";
+
+	// The Clojure echo: the same closure shape, through the Clojure printer (readable,
+	// so strings echo quoted and chars as \a). The library answers the string itself,
+	// so no with-output-to-string is needed here either.
+	private static final String CLOJURE_ECHO = "(lambda (x) (rontolisp::%clojure-str-of x \"nil\" t))";
+
+	// The Starlark echo: repr, and nothing for None, as a Python prompt shows.
+	private static final String STARLARK_ECHO = "(lambda (x) (if (eq x :none) nil (rontolisp::%starlark-b-repr x)))";
+
+	private final SourceLanguage language;
+
+	private final @Nullable SchemeSession scheme;
+
+	private final @Nullable ClojureSession clojure;
+
+	private final @Nullable StarlarkSession starlark;
+
+	private final @Nullable JavaSession java;
+
+	private final @Nullable ClojureMacroEvaluator clojureMacros;
+
+	/**
+	 * Whether a Common Lisp {@code t} or {@code nil} token is {@code cl}'s constant in
+	 * the package a buffer is read in: the attached evaluator's current one
+	 * ({@link #attach}); {@code null} before, reading every one as {@code cl}'s.
+	 */
+	private java.util.function.@Nullable Predicate<String> clTOrNil;
+
+	/**
+	 * Starts a session read against every language's default standard.
+	 * @param language the language typed at the prompt
+	 */
+	public SourceSession(SourceLanguage language) {
+		this(language, SourceStandards.DEFAULT);
+	}
+
+	/**
+	 * Starts a session.
+	 * @param language the language typed at the prompt
+	 * @param standards what the typed text is read against ({@code --scheme-standard})
+	 */
+	public SourceSession(SourceLanguage language, SourceStandards standards) {
+		this(language, standards, null);
+	}
+
+	/**
+	 * Starts a session whose typed text may name files (a Scheme {@code include}, a
+	 * {@code define-library} file), relative to the working directory.
+	 * @param language the language typed at the prompt
+	 * @param standards what the typed text is read against ({@code --scheme-standard})
+	 * @param loader where named files are read from, or {@code null} for none
+	 */
+	public SourceSession(SourceLanguage language, SourceStandards standards, @Nullable SourceLoader loader) {
+		this.language = language;
+		// a session reads no other file of a source tree, as a program given with -e, but
+		// the libraries on its source path
+		this.java = language == SourceLanguage.JAVA ? new JavaSession(SourceLanguage.javaFiles(loader, standards),
+				new JavaHostBoundary(loader, false, false, false, false, null)) : null;
+		this.scheme = language == SourceLanguage.SCHEME
+				? Scheme.session(standards.scheme(), SourceLanguage.schemeFiles(loader)) : null;
+		this.clojure = language == SourceLanguage.CLOJURE
+				? am.ik.rontolisp.clojure.Clojure.session(SourceLanguage.clojureFiles(loader, standards)) : null;
+		this.starlark = language == SourceLanguage.STARLARK
+				? Starlark.session(standards.starlark(), SourceLanguage.starlarkFiles(loader)) : null;
+		// One macro-time evaluator per session, built lazily on the first expansion,
+		// so a macro defined in one buffer expands in a later one.
+		this.clojureMacros = this.clojure == null ? null
+				: loader == null ? ClojureMacroTime.create() : ClojureMacroTime.create(loader.javaClassLoader());
+		if (this.clojure != null) {
+			this.clojure.setMacroEvaluator(this.clojureMacros);
+			this.clojure.setBoundary(ClojureHostBoundary.INSTANCE);
+		}
+	}
+
+	/**
+	 * Binds the session to the evaluator its inputs run on: a Clojure session's lowering
+	 * answers the lowering verbs its inputs reach as they run ({@code eval}, a computed
+	 * {@code resolve} or {@code require} ...), like one more input in the namespace
+	 * {@code *ns*} holds ({@link LispEvaluator#setClojureRunTime}); a Common Lisp buffer
+	 * is read in the evaluator's current package.
+	 * @param evaluator the evaluator
+	 */
+	public void attach(LispEvaluator evaluator) {
+		if (this.clojure != null) {
+			evaluator.setClojureRunTime(this.clojure.runTime());
+		}
+		if (this.language == SourceLanguage.COMMON_LISP) {
+			this.clTOrNil = evaluator.packageResolver()::readsClTOrNil;
+		}
+	}
+
+	/**
+	 * The Clojure session behind a Clojure seam, null for another language.
+	 * @return the session
+	 */
+	@Nullable ClojureSession clojureSession() {
+		return this.clojure;
+	}
+
+	/**
+	 * Whether the accumulated input can be read now, or the next line continues it.
+	 * @param buffer the text typed so far
+	 * @return {@code false} when a form is still open
+	 */
+	public boolean isComplete(String buffer) {
+		if (this.scheme != null) {
+			return SchemeSession.isComplete(buffer);
+		}
+		if (this.clojure != null) {
+			return ClojureSession.isComplete(buffer);
+		}
+		if (this.starlark != null) {
+			return StarlarkSession.isComplete(buffer);
+		}
+		if (this.java != null) {
+			return JavaSession.isComplete(buffer);
+		}
+		return isBalanced(buffer);
+	}
+
+	/**
+	 * Reads a complete buffer into core forms. A Common Lisp buffer textually containing
+	 * {@code #.} comes back with its markers unresolved, exactly as
+	 * {@link SourceLanguage#read} answers it: the caller resolves each form's just before
+	 * it runs ({@link SourceLanguage#usesReadEvalMarkers}).
+	 * @param buffer the typed text
+	 * @param features the active reader features
+	 * @return the top-level forms, in order
+	 */
+	public List<Step> read(String buffer, Features features) {
+		List<Step> steps = new ArrayList<>();
+		if (this.scheme != null) {
+			for (SchemeTopLevel topLevel : this.scheme.read(buffer)) {
+				steps.add(new Step(topLevel.forms(), topLevel.echoes()));
+			}
+			return steps;
+		}
+		if (this.clojure != null) {
+			for (ClojureTopLevel topLevel : this.clojure.read(buffer)) {
+				steps.add(new Step(topLevel.forms(), topLevel.echoes()));
+			}
+			return steps;
+		}
+		if (this.starlark != null) {
+			for (StarlarkTopLevel topLevel : this.starlark.read(buffer)) {
+				steps.add(new Step(topLevel.forms(), topLevel.echoes()));
+			}
+			return steps;
+		}
+		if (this.java != null) {
+			for (JavaTopLevel topLevel : this.java.read(buffer)) {
+				steps.add(new Step(topLevel.forms(), topLevel.echoes()));
+			}
+			return steps;
+		}
+		LispReader.ReadPrefix read = this.language.readUntilError(buffer, features, null, SourceStandards.DEFAULT, null,
+				this.clTOrNil);
+		LispReadException error = read.error();
+		if (error != null) {
+			throw error;
+		}
+		for (LispVal form : read.forms()) {
+			steps.add(new Step(List.of(form), true));
+		}
+		return steps;
+	}
+
+	/**
+	 * The prompt for a fresh form. Common Lisp names the CURRENT package, read fresh
+	 * every time, because which package a bare symbol interns into is otherwise
+	 * invisible; the other languages have no package to show and name themselves.
+	 * @param evaluator the session's evaluator
+	 * @return the prompt, trailing space included
+	 */
+	public String prompt(LispEvaluator evaluator) {
+		if (this.scheme != null) {
+			return "scheme> ";
+		}
+		if (this.clojure != null) {
+			return "clojure> ";
+		}
+		if (this.starlark != null) {
+			return "starlark> ";
+		}
+		if (this.java != null) {
+			return "java> ";
+		}
+		return evaluator.currentPackageName() + "> ";
+	}
+
+	/**
+	 * Writes a value the way the language's own {@code write} would: {@code prin1}
+	 * through the {@code print-object} route for Common Lisp, the Scheme printer
+	 * ({@code #t}, {@code #f}, {@code ()}, case-sensitive symbols) for Scheme, the
+	 * Clojure printer ({@code [...]}, {@code {...}}, {@code #{...}}, demangled symbols)
+	 * for Clojure, {@code repr} for Starlark, the {@code label ==> value} text a Java
+	 * step made by its value's static type -- or nothing, for the unspecified object a
+	 * Scheme effect answers, Starlark's {@code None} and a {@code void} Java expression.
+	 * @param value the value to show
+	 * @param evaluator the session's evaluator
+	 * @return the text, or {@code null} when the value is not shown
+	 */
+	public @Nullable String echo(LispVal value, LispEvaluator evaluator) {
+		if (this.java != null) {
+			return value instanceof LispString shown ? shown.value() : null;
+		}
+		if (this.scheme == null && this.clojure == null && this.starlark == null) {
+			return evaluator.prin1ToStringRouted(value);
+		}
+		try {
+			LispVal echoed = evaluator.printThrough(
+					this.clojure != null ? CLOJURE_ECHO : this.starlark != null ? STARLARK_ECHO : ECHO, value);
+			return echoed instanceof LispString written ? written.value() : null;
+		}
+		catch (RuntimeException ex) {
+			// An echo must never turn a computed value into an error.
+			return value.print();
+		}
+	}
+
+	// Common Lisp's continuation rule: parentheses outside strings, a backslash escaping
+	// the next character inside one.
+	private static boolean isBalanced(String input) {
+		int depth = 0;
+		boolean inString = false;
+		for (int i = 0; i < input.length(); i++) {
+			char c = input.charAt(i);
+			if (inString) {
+				if (c == '\\' && i + 1 < input.length()) {
+					i++;
+				}
+				else if (c == '"') {
+					inString = false;
+				}
+			}
+			else {
+				if (c == '"') {
+					inString = true;
+				}
+				else if (c == '(') {
+					depth++;
+				}
+				else if (c == ')') {
+					depth--;
+				}
+			}
+		}
+		return depth <= 0 && !inString;
+	}
+
+}

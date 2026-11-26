@@ -1,0 +1,418 @@
+# The printer entry points and the pretty-printer subset
+
+**Invariant: every CL printer-control variable EXISTS and holds the value the printer actually
+behaves as, and the pretty-printing operators produce the text a wide enough line holds —
+identically on the interpreter, JVM and both WASM GC backends.** None change LAYOUT: no rontolisp
+stream has a column, nothing wraps. Text-changing: `*print-escape*`/`*print-readably*` (which
+conversion runs), `*print-pretty*` (mandatory break), and the seven the `%print-cased` walk honors
+(`*print-case*`, `*print-length*`, `*print-level*`, `*print-gensym*`, `*print-base*`,
+`*print-radix*`, `*package*`). esrap is the only loadable library using any of it.
+
+## What is real
+- `write` (`LispPreludeLibrary` defun): keywords are BINDINGS of the control variables around one
+  print. `:escape`/`:readably` pick `prin1-to-string` vs `princ-to-string`;
+  `:case :length :level :gensym :base :radix` -> `%print-cased`; `:pretty :circle :array` + the
+  three widths inert.
+- `write-to-string`: same keywords as a Pass-2 `let` lowering
+  (`LispMacroExpander.expandWriteToStringKeywords`). **No `with-output-to-string`** — it flips the
+  WASM exception-handling gate (`.kb/format.md`). Wired into `LispEvaluator.evalConsRareOperator`,
+  the first-class wrapper and both `ExprCompiler`s. `#'write-to-string` as a VALUE takes the
+  keywords too (2026-09-27): on the compile paths its wrapper hands a runtime tail to the prelude
+  `%write-to-string-keyed`, which judges it with the call position's report and binds all fifteen
+  variables. That defun names every variable, so splicing it routes the program (`defvar`s +
+  renderer, like `write`): it is spliced only for a program spelling the designator somewhere
+  other than an exactly-one-argument position (`(funcall #'f x)`, `(mapcar #'f l)` and siblings
+  over one list, `(map 'list #'f s)` -- `LispPreludeLibrary.mayPassMoreThanOneArgument`), and the
+  wrapper takes the keyed shape exactly where it is spliced (`BuiltinFunctionWrappers
+  .HELPER_WRAPPERS`); `(mapcar #'write-to-string ...)` and every
+  program without the designator are byte-identical.
+- `pprint`: fresh line, `write` with `:escape t :pretty t`, no values.
+- `copy-pprint-dispatch` / `set-pprint-dispatch` / `pprint-dispatch`: real entries, `typep`
+  matching, priority order. A table is a one-element LIST so `set-pprint-dispatch` can `rplaca` one
+  handed to it (esrap's idiom); `pprint-dispatch` -> `#'%pprint-dispatch-default`, else nil.
+- `pprint-logical-block`: `LispMacroExpander.expandPprintLogicalBlock` in `CL_MACROS`, wired into
+  evaluator + both compilers + `FreeVarAnalyzer`; an ATOM prints with `write` and skips the body.
+  The compilers build that call after the prelude splice, so a block whose object may be an atom selects
+  `write` and roots it in the pruner (`LispMacroExpander.mayPprintLogicalBlockOfAnAtom`,
+  `LispPreludeLibrary.referencedBySurfaceForm`, `SYNTHESIZED_ENTRIES`), and the program pays for the
+  renderer below like any `write` user. An object spelled as a list (`nil`, `'(...)`, lisp-namespace's
+  `print-object`) expands without the arm and pays nothing. ci-spec
+  `pprint-logical-block-of-an-atom-in-a-program-not-naming-write`, standalone because the concatenated
+  corpus names `write`.
+- `pprint-pop` / `pprint-exit-if-list-exhausted` (`expandPprintPop`, SBCL's order; 2026-11-05, fset's
+  printers): over the block's `__plb_object`, `__plb_count`, `__plb_stream` and `(block __plb_block ...)`,
+  which every block now binds, a nested block's shadowing the outer's. Atom rest: `. ` + `write`, leave;
+  `*print-length*` out: `...`, leave. `withPprintOperatorsExpanded` replaces a call the body spells when the
+  block expands, because the capture analyses read the block through its expansion, and a closure may
+  mutate the variables. Only the interpreter meets a call a user macro makes (the `LispEvaluator` arms; a
+  compile path expanded the macro before the block). A closure may cross the exit (`do-set`'s body), and
+  `CrossLambdaExitLowering` runs before the compilers expand a block, so it expands one spelling either
+  operator (`spellsPprintExit`). `write` is selected for a program naming `pprint-pop`, which also defines
+  `*print-length*`. ci-spec `pprint-pop-and-the-exit-take-the-list-of-their-block`, SBCL's answers.
+  `*print-level*` and `*print-circle*` are not consulted by the block.
+- `pprint-newline :mandatory` and `~:@_`: real breaks, gated on `*print-pretty*`.
+- `~<...~>` / `~<...~:>` (`.kb/format.md`): SECTION rules real.
+
+## One shared renderer: `%print-cased`
+`LispPreludeLibrary` defun (`%print-case-fold` beside it): interpreter and all three compiled
+backends run the SAME recursive renderer. It walks the VALUE, not rendered text — only symbol
+spellings are cased; leaves are the RAW `%princ-to-string`/`%prin1-to-string`, taken directly by
+the "every default" (`:upcase`/nil/nil/t/10/nil) fast path, so a routed program is byte-identical
+to an unrouted one. Covers `princ` `prin1` `print` `princ-to-string` `prin1-to-string`
+`write-to-string` `write` (+ `%princ-piece`/`%prin1-piece`), `~A`/`~S`. Text identical to SBCL
+2.2.9 on four backends.
+
+- Gate = the program MENTIONS a control variable (`LispMacroExpander.usesPrintControls`,
+  `PRINT_CONTROL_VARS`). The same scan gives the `defvar` (`injectMvSpillGlobal`), roots the
+  prelude splice (`LispPreludeLibrary.referencedBySurfaceForm`, `LibraryDefunPruner`) and flips
+  `Ctx.printControls`; naming none => BYTE-IDENTICAL output. Interpreter gates on the CURRENT VALUE
+  (`LispEvaluator.printControlsInEffect`).
+- Under a package the gate is whether a `prin1` is in reach (`reachesPrin1FromTheSurface`). A literal
+  control is read: `(format x "~a")`, `(error "text ~a" y)`, `(warn ...)` and `(signal ...)` with no `~s`, `~w`, `~/` or
+  `~?` do not count, and a `handler-case` clause's head is a type, not a call (`controlReachesPrin1`,
+  `LispMacroExpanderTest.printsUnderAPackageIsThePackageGateOfThePrinter`). Before 2026-11-05 any mention of those
+  names counted, so a `~a` log under a package carried the renderer, 8.5KB, and a call of it per piece. ci-spec
+  `a-format-of-tilde-a-under-a-package-spells-no-qualifier` runs the raw conversions on all four.
+- It also flips for every `write` user (prelude `write` binds all fifteen variables): the compilers
+  scan the SPLICED program, so `LispPreludeLibrary.process`'s selection fixpoint asks
+  `referencedBySurfaceForm` for `%print-cased` over each PULLED entry's forms too — the only entry
+  that does. Large `.wasm` growth then (the Unicode case-fold tables alone).
+- Sits UNDER the `print-object` route (one `expandPrintObjectHook` seam rewrites both).
+- Pure-builtin fold stands down for `princ-to-string`/`prin1-to-string`/`%princ-piece`/
+  `%prin1-piece`: `nil`/`t` are SYMBOLS (`.kb/pure-builtin-fold.md`).
+- `:capitalize` != `string-capitalize` (CLHS 22.1.3.3 converts only UPPERCASE): first character AS
+  IT STANDS, rest downcased — `foo-BAR` -> `foo-Bar`, `*FOO*` -> `*Foo*`, `A1B2-C3` -> `A1b2-C3`.
+  `:downcase` IS `string-downcase`.
+- Heavy leaves gate on a variable being NAMED: `%pc-fold`/`%pc-radixed` lower to
+  `%print-case-fold`/`%print-radixed` only then (`Ctx.printControlVariables` =
+  `mentionsPrintControlVariable`, decided BEFORE `expandTopLevelDefinitions` injects the defvars).
+- `*print-length*` n: first n then ` ...`, only when the unprinted rest is a CONS — `(1 2 . 3)`
+  under 2 keeps its dotted tail; 0 -> `(...)`/`#(...)`. `*print-level*` n: list/vector AT depth n
+  prints `#` (top level 0; atoms never truncate). `'x`/`#'x` is TRANSPARENT to the level but still
+  opens a cycle-guard frame, so the walk carries TWO counters, `%pc-depth` (256-frame cap) and
+  `%pc-lvl`. `*print-gensym*` nil strips `#:` under prin1. `*print-base*`: integers and ratios in
+  upper-case digits (floats keep their text). `*print-radix*` t: `#b`/`#o`/`#x`, trailing `.` for a
+  base-10 INTEGER, `#<base>r` otherwise.
+- Both walks carry length+level in lockstep — `%pc-walk` and generated `%pos-walk`
+  (`LispMacroExpander.PRINT_OBJECT_CONS_ARM`/`PRINT_OBJECT_VECTOR_ARM`); gensym and base/radix are
+  leaf facts in `%pc-walk` alone. `%pos-walk` reads both variables UNCONDITIONALLY — one cons arm
+  to keep in step, not two.
+
+**An instance is walked** (2026-11-05, `%pc-instance`, the twin of `%pos-instance`, `.kb/clos.md`): its
+type name and slot keys are cased, its slots count against `*print-length*` (`#S(I :A 1 ...)`), it is a
+level for `*print-level*`, and its values are the walk's own. Text as SBCL 2.2.9 prints it. Only `#<...>`
+having slots at all, and `:|A|` under a `*print-base*` reading `A` as a digit, differ. ci-spec
+`instances-follow-the-printer-controls-in-a-program-with-no-method`.
+
+**Known gap (all seven):** a symbol inside a hash table, array of rank != 1 or packed float vector is
+neither cased nor truncated. `%print-object-str`'s walk (`.kb/clos.md`) has the SAME guard and gap — read
+them together. A structure goes through one of the two: a program with a `print-object` route and a
+print control holds both, and its `%print-object-leaf` hands `%pc-walk` only atoms. Also inert: `*print-array*` nil,
+`*print-circle*` t, `~@W`.
+
+## Quote/function abbreviation and `|...|` symbol escaping
+**Invariant:** a two-element list headed by `quote`/`function` prints `'x`/`#'x` (CLHS 22.1.3.7,
+unconditional); three or more elements, or an improper tail, print in full. A symbol whose name is
+empty, not upcase-invariant, holds a character the reader rejects in a bare token, or would not read
+as a symbol (below), or holds a colon (a package marker to a bare re-read, CLHS 2.3.5: `|a:b|`,
+`P::|b:c|`, `:|k:w|`, `#:|u:v|`), prints `|...|`-framed under `prin1` with embedded `|`/`\` doubled; `princ` never
+escapes. Abbreviation applies under BOTH
+`prin1` and `princ` (ECL behavior); the two gate independently.
+
+- Five copies of the shape check: `LispCons.render` (inline inside the same `RenderCycleGuard`
+  section a normal list opens), `_consToString` (`JvmRuntimeBuilder.buildConsToStringBody`, shared
+  with `_consToDisplayString`), `emitPrintConsList` (`WasmRuntimeBuilder`, shared by
+  `FUNC_PRINT_VAL`/`FUNC_PRINC_VAL`), plus `%pc-walk`/`%pos-walk` by hand.
+- The escape lives in `LispSymbol.print()` (`needsEscape`/`escape`): a keyword's `:`, an uninterned
+  symbol's `#:` and a `pkg:`/`pkg::` qualifier stay verbatim — only the trailing MEMBER text is
+  tested. Compiled twins `_symEsc` (`JvmRuntimeBuilder.buildSymEscBody`) and `_sym_esc_gc`
+  (`WasmStringRuntimeBuilder.buildSymEscGcBody`, `FUNC_SYM_ESC_GC`), called only from the
+  bare-symbol arm, never the princ arms.
+- The lowercase check is ASCII `a`-`z` only on the three compiled renderers, not the interpreter's
+  `Character.toUpperCase(char)` fold (the general fold would need `WasmCaseFoldRuntimeBuilder`'s
+  range table reachable from EVERY symbol-printing program). **Narrow gap:** a symbol whose only
+  non-constituent characters are non-ASCII lowercase letters prints unescaped on all four backends
+  and mis-reads — matched everywhere, not a divergence.
+- **A name a bare token would not read as a symbol** (`LispSymbol.readsAsNoSymbol`, inline in the two
+  compiled twins): dots alone, or CLHS 2.3.1.1's potential number -- digits, signs, `/`, `.`, `^`, `_`
+  and letters no two of which are adjacent, a digit, beginning with neither a letter nor `/`, not ending
+  in a sign. `|10|`, `|1E5|`, `|1/2/3|`, `|...|`; `1+`, `E1`, `1AB`, `%1` stay bare. 45 names agree with
+  SBCL 2.2.9 on all four (ci-spec `prin1-escapes-a-name-that-reads-as-no-symbol`), and the rule costs
+  the bytes of those two functions in every program printing a symbol. Limit: the digits are decimal,
+  where SBCL also escapes `FF` under `*print-base*` 16 (the twins read no variable). `(read-from-string
+  (prin1-to-string (intern "10")))` reads the symbol back on all four (`.kb/read-load-streams.md`,
+  "Escapes").
+- The empty name: `||`, `#:||`, `:||` and `P::||` come out of the twins' empty-member arm. `cl-user`'s has
+  the spelling of its own `.kb/symbol-runtime-api.md`, "The empty name", describes, as has a `cl-user`
+  name holding a colon, and the twins print both as bare (`LispSymbol.framedClUserMember`: `_symEsc` drops
+  the `CL-USER::` prefix, `_sym_esc_gc` skips it where the string table can hold such a name,
+  `StringTable.holdsFramedClUserName`).
+- The member princ and `symbol-name` answer is what follows the first colon and a second right behind it
+  (`_lispToDisplayString`, `FUNC_PRINC_VAL`'s symbol arm, `LispSymbol.memberName`), so a member keeps its
+  colons; both took what follows the LAST colon until 2026-11-06.
+- `%print-case-fold` converts only what stands ahead of the first `|`: the escaped member is never
+  recased (`|Foo|` under `:downcase`, `pkg::|1E5|`). Until 2026-11-05 it folded the whole text.
+- Non-constituent set (space, tab, newline, CR, form feed, `(`, `)`, `'`, `"`, `;`, `,`, `` ` ``,
+  `|`, `\`) is enumerated identically in `LispSymbol.isBareConstituent`, `buildSymEscBody` and
+  `SYM_ESC_FORBIDDEN` — change one, change all three. The colon is in the two compiled lists and in
+  `LispSymbol.needsEscape` beside `isBareConstituent` (a constituent, but a package marker).
+- **Trap:** `type-of`/`%symbol-home` read a `%class-`/`%struct-` tag off
+  `(prin1-to-string designator)` by substring match; an unqualified tag round-trips as
+  `"|%struct-PT|"` and breaks it. Fixed by prelude `%unescaped-symbol-text`
+  (`LispNames.UNESCAPED_SYMBOL_TEXT_INTERNAL`), peeling exactly one leading/trailing `|`;
+  `print-unreadable-object :type t` (`LispMacroExpander.typeNameOf`) INLINES the identical peel.
+  **Re-evaluate the trio together** if the escaping rule changes shape. `%symbol-home` answers `cl-user`
+  for a text a bar opens before peeling: the peel made `|a:b|` the qualified `a:b`.
+- `LispVal.print()` is reused by ~100 tests as an AST-dump convenience.
+
+## The package qualifier follows `*package*` accessibility
+**Invariant:** `prin1` (and `print`, `prin1-to-string`, `write-to-string`, `~S`, escaping `write`)
+spells a qualifier only when the symbol is NOT accessible in the current `*package*` (CLHS
+22.1.3.3.1); `princ`/`~A` never spell one.
+
+- **Interpreter trap (2026-11-01)**: the print-object renderer is ONE generated defun pair
+  (`ensurePrintObjectRuntimeLoaded`), so a print in progress -- expanded for the `%print-cased`
+  leaf because the package is not the pristine `cl-user` -- used to run the RAW leaf a print
+  nested in its argument under a `*package*` rebound to `cl-user` had regenerated, and spelled
+  every symbol qualified (contextl's `map-symbol` does exactly that with
+  `with-standard-io-syntax`). Once generated for a control, the pair now keeps the
+  `%print-cased` leaf, which takes the raw conversion itself under the defaults. ci-spec
+  `print-object-nested`.
+- Rides `%print-cased` as the seventh control: the `prin1` symbol leaf goes through
+  `%pc-unqualified`, which parses the qualifier off the canonical `PKG:NAME` and asks
+  `%symbol-print-bare-p`. Interpreter: LIVE registry (`PackageResolver.printsBare`,
+  `resolveUnqualified` in quoted-data mode). Compile paths:
+  `LispMacroExpander.expandSymbolPrintBareP` lowers onto a `SymbolPrintTable` baked from the
+  resolver's FINAL registry (`PackageResolver.symbolPrintTable`, in both `Ctx`s beside
+  `packageTable`).
+- Table = rule + corrections. Rule: home is `(%princ-to-string *package*)`, or the current package
+  uses the home and the colon is single. Divergences for symbols OCCURRING in the program bake per
+  package into `extra` (`:import-from`, re-export, late `export`) and `excluded` (`:shadow`, an
+  earlier used package exporting the same name, `unexport`); a run-time intern follows the rule
+  alone. A bare spelling has its own lists, below.
+- Gate: `LispMacroExpander.printsUnderAPackage` — a top-level `in-package` leaving `cl-user`, or
+  any other mention of `*package*`. The prelude pulls the renderer for such a program only when a
+  `prin1`-style conversion is in reach from the surface (`reachesPrin1FromTheSurface`). **Keying
+  the route on the renderer being DEFINED matters:** a program the splice passed over must keep raw
+  spellings, not call an absent renderer. Interpreter: `printControlsInEffect` is true outside
+  pristine `cl-user` (`PackageResolver.currentPackageIsPristineClUser`); `princ` always takes the
+  raw conversion. A program never leaving `cl-user` is byte-identical.
+- Two bugs found alongside: a computed `(string x)` went through the routed `%princ-piece` on both
+  compile paths, so `(string 'foo)` under `:downcase` answered `"foo"` —
+  `strictStringDesignatorForm` now takes raw `%princ-to-string`; and a `write-to-string` keyword
+  that was a program's ONLY binding of a printer variable failed the JVM compile because
+  `SpecialVarCollector` never saw the Pass-2 `let`, which it now walks.
+- **An instance's type name is a symbol under `prin1`** (2026-11-04, `%pc-instance-text`, the walk's
+  instance leaf): `#<K>`, `#S(K :A 1)` in `K`'s package, `#<PKG::K>` outside it, as SBCL prints them
+  (no `{address}`; a raw `#<NAME :SLOT value>` otherwise). The name comes off the raw text, so it
+  reaches `%symbol-print-bare-p` as a STRING: the compile paths' correction lists hold only symbols and
+  answer no, leaving the rule, so a class imported into the current package keeps its qualifier there
+  while the interpreter's live answer drops it. prove's own suite matches `#<MY-CONDITION` against this.
+  ci-spec `instance-type-name-follows-the-current-package`.
+- A qualifier it keeps is the current package's nickname for the home when it has one (`%pc-qualifier`,
+  `.kb/packages.md`, "Package-local nicknames").
+- **A bare spelling gets a qualifier where the package reads that name as another symbol** (i30,
+  2026-11-04, SBCL 2.2.9 checked): `COMMON-LISP:CAR` under a package using no `cl` or shadowing `car`,
+  `COMMON-LISP-USER::FOO` outside `cl-user`. Two different symbols no longer print alike. The names are
+  the standard's, not this implementation's `cl`/`cl-user`, and `package-name` and `package-nicknames`
+  answer them too (`.kb/packages.md`, "Nicknames"). `%pc-unqualified` asks `%symbol-print-prefix`;
+  the prefix goes through `%pc-qualifier`, so a local nickname of `cl` prints `C:CAR`.
+  Interpreter: `PackageResolver.bareSymbolPrefix`, `printsBare`'s bare arm, the same resolution question.
+  `nil`, `t` and the 93 names `cl` exports without implementing are no `isClSymbol` names: the bare arm
+  answers them for a package using `cl`, so `cl:find-method` prints bare there although a read of
+  `find-method` is the package's own (`.kb/packages.md`, "The `cl` external list").
+- The compile path's half of the table (`noClPackages`, `clUserSymbols`, `bareExtra`, `bareExcluded`,
+  lowered by `LispMacroExpander.expandSymbolPrintPrefix`) is rule + corrections like the qualified half.
+  Rule: a name in `clUserSymbols` is qualified outside `cl-user`; any other prints bare, except a
+  standard name under a package of `noClPackages`, the eight lambda-list keywords and `quote` excepted
+  (`PackageRegistry.readsClInEveryPackage`). Corrections are asked of `printsBare` for the names that
+  can differ: what the program can print, a standard name the package imports or shadows, and every
+  standard name for a package using no `cl` with a non-empty use list.
+  - `clUserSymbols` holds what the printer can meet: bare names in QUOTED data and the names of
+    `defstruct`/`defclass`/`define-condition` (an instance's type name reaches it as a string, so these
+    lists are strings compared by `string=`). A walk of every position was not taken: a spliced prelude's
+    local variables are bare `cl-user` symbols too, and they would all travel.
+  - `noClPackages` is by majority: a package re-exporting most standard names (`closer-common-lisp`,
+    `clim-lisp`) reads as `cl`, and what it misses is `bareExcluded`.
+  - `%standard-name-p` tells a standard name from a run-time read's bare `FOO` under such a package:
+    `injectPrintStandardNames` splices its 7.4 K table only into a program that defines a package
+    in `noClPackages` or enters a built-in one at top level. Without it the arm answers bare, as before.
+- **What a compile path still prints bare:** a `cl-user` symbol interned under a computed name that no
+  form spells, under any package. Its name is all there is, and no intern table says it was `cl-user`'s.
+  The interpreter's answer is exact. `'nil` read under a package using no `cl` is `cl`'s `nil` on every
+  backend (the reader folds it ahead of the resolver), so it prints `COMMON-LISP:NIL` where SBCL prints
+  the package's own `NIL`.
+- **`print-unreadable-object :type t` follows the package** (2026-11-05, all four backends):
+  `%pc-type-name` lowers, where a control can be in effect (`Ctx.printControls`, the interpreter's
+  `printControlsInEffect`), to `%pc-unqualified` over the peeled text under `prin1` and `%pc-fold` under both,
+  so a `cl-user` class prints `#<COMMON-LISP-USER::HF-C>` under another package and a class of the current
+  package `#<D>`, as SBCL prints them. Elsewhere it is the text. The tag itself never takes a prefix
+  (`bareSymbolPrefix`); with one the peel found nothing, and the interpreter printed
+  `#<COMMON-LISP-USER::|%class-GEOM:SOLID|>` under a `cl-user` that uses a package.
+- **A printed qualifier reads back:** the compiled run-time readers drop `CL`, `COMMON-LISP`, `CL-USER`
+  and `COMMON-LISP-USER` qualifiers at the token (`JvmReadRuntimeBuilder.buildClassify`,
+  `WasmReadRuntimeBuilder.emitDropStandardQualifier`), one colon or two. Until then `(read-from-string
+  "cl:car")` was a symbol `CL:CAR` that was not `eq` to `car`.
+- `type-of` answers the type's own symbol under any package: the interpreter's one-argument `intern` homed
+  a bare `%struct-`/`%class-` name in the current package, a symbol `eq` to nothing the program spelled.
+  `%home-spelling` qualifies it for that `intern` by `cl-user`, and is the text itself on the compile
+  paths. It wraps the `intern` argument and does not replace the `intern`: the wasm `_intern` runtime
+  gate, `RuntimeNameProducers` and `PACKAGE_ERROR_SITES` all key on that name, and a replacement that
+  answered the first two still left nine programs with `no layout was baked for %class-PACKAGE-ERROR`.
+- Pinned by ci-spec `a-bare-symbol-prints-qualified-where-the-package-reads-another`,
+  `PackageResolverTest#{aBareSymbolPrintsTheQualifierOfItsHomeWhereThePackageReadsAnother,symbolPrintTableCarriesTheCorrectionsForTheSymbolsTheProgramSpells}`.
+
+## A cyclic value prints finitely instead of overflowing the stack
+**Invariant: no default renderer runs without bound on a cycle.** One mechanism
+(`RenderCycleGuard`), two disciplines:
+
+- Render path + depth cap: an instance, cons chain or array (general OR packed) opens ONE frame. A
+  value already on the current path prints `#` in both escape modes, as does a frame opening past
+  **256** (`RenderCycleGuard.MAX_RENDER_DEPTH`). The check is IDENTITY along the current path — not
+  equality, not "rendered before" — so every finite rendering under 256 frames is byte-identical to
+  before.
+- Floyd over the cdr chain: a cdr cycle is an OutOfMemoryError, not a StackOverflowError, so the
+  path guard cannot see it. The chain is walked ITERATIVELY with the cycle detected up front; the
+  SECOND arrival at the cycle-start cell prints as the improper tail `" . #"` — `(1 . #)` for
+  `(setf (cdr x) x)`.
+
+Four implementations: interpreter `RenderCycleGuard` (ThreadLocal path array) from
+`LispInstance.render`, `LispCons.render` (+ `cycleStart`), `LispArray.render`,
+`LispFloatArray`/`LispIntVector.print`; JVM `_renderPath`/`_renderDepth` statics in EVERY class
+(`JvmRuntimeBuilder.emitRenderGuardEnter`/`ExitAndReturn` + the Floyd prewalk in
+`buildConsToStringBody`); both WASM backends two module globals after the hash/equalp counters,
+unconditional; and the two Lisp walks, which thread path and depth as arguments and pre-scan with
+Floyd (`%pos-chain-stop`/`%pc-chain-stop`), same text byte for byte, on a path SEPARATE from the
+raw renderers' — so only a mixed nest past 256 frames renders differently routed vs unrouted.
+
+The guard is unconditional; every artifact pays a small fixed size. It sits UNDER the
+`print-object` route. `*print-circle*` proper (`#1=`/`#1#`) is unimplemented — the finite `#`
+cutoff is deliberately label-free.
+
+## What a stream with no column cannot do
+**Every conditional line break is a no-op** — `pprint-newline` `:linear`/`:fill`/`:miser`,
+`~_`/`~:_`/`~@_`, `pprint-indent`, `pprint-tab`, `~i`. Each needs the stream's column; a rontolisp
+stream keeps one bit, whether it is at a line start (`.kb/standard-output-redirect.md`, "A stream's
+line start"), and `format`'s `~t` and an inner `~&` only approximate the column by scanning the string
+built SO FAR. So `*print-right-margin*`, `*print-miser-width*` and `*print-lines*` are accepted and
+ignored, and a justification never pads to `:mincol`. **Re-evaluate when a stream gains a column**: a
+count where that bit is kept, in the write paths that keep it, and `pprint-newline` and the `~_` family
+become one shared "does the rest fit" test.
+
+**The ordinary printing operators do NOT consult `*print-pprint-dispatch*`.** `princ`/`prin1`/
+`print`/`~A`/`~S` are a per-backend primitive on the hottest path; the one hook above them,
+`%print-object-str` (`.kb/clos.md`), is gated on the program defining a method. A dispatch entry
+fires only where the program calls the entry function itself, as esrap does. Re-evaluate with the
+column: both want the same seam.
+
+**`char-name` answers nil for a graphic character**, which is CL; SBCL additionally returns the
+Unicode NAME — the only difference between esrap's parse-error report here and on SBCL.
+`name-char` (a prelude defun, 2026-10-31) inverts exactly what `char-name` answers, plus
+`Linefeed`/`Nul`, so no Unicode name either: before it existed, cl-unicode's
+`character-named` compiled `name-char` as an undefined `CL-UNICODE::NAME-CHAR`. ci-spec
+`lite-builtins-residue`.
+
+## The printer-control variables
+`LispMacroExpander.PRINTER_MODE_VARS` is the single table: name -> global value. The interpreter
+seeds it in `Environment.createGlobal` plus `LispEvaluator`'s special-variable set (they are BOUND,
+not merely read). Compile paths get a top-level `(defvar name value)` from `injectMvSpillGlobal`
+per variable the program MENTIONS — run after `expandTopLevelDefinitions`; "mentions" includes a
+`write-to-string` keyword binding it (`LispMacroExpander.mentionsPrinterVariable`).
+
+| variable | value | honored? |
+| --- | --- | --- |
+| `*print-escape*` | `t` | yes — picks prin1 vs princ; the `print-object` route binds it |
+| `*print-readably*` | `nil` | yes — forces escaping, overrides length/level/gensym, signals `print-not-readable` (below) |
+| `*print-pretty*` | `t` | yes — gates the MANDATORY line break |
+| `*print-circle*` | `nil` | no labels — the guard prints a cycle as `#`/`" . #"` |
+| `*print-right-margin*` / `*print-miser-width*` / `*print-lines*` | `nil` | no (no column) |
+| `*print-length*` / `*print-level*` | `nil` | yes |
+| `*print-base*` | `10` | yes — integers and ratios re-spelled |
+| `*print-radix*` | `nil` | yes — `#x`/`#b`/`#o`/`#Nr`/trailing `.` |
+| `*print-case*` | `:upcase` | yes |
+| `*print-gensym*` | `t` | yes — nil drops `#:` under prin1 |
+| `*print-array*` | `t` | the value IS the behavior |
+| `*print-pprint-dispatch*` | a fresh empty table | entries and lookup, but see above |
+
+Every default is what the printer ACTUALLY does, so a program that only READS one sees the truth;
+binding an inert one to a non-default value is what has no effect. The four standard STREAM
+variables (`*trace-output*`, `*debug-io*`, `*query-io*`, `*terminal-io*`) ride the same table with
+the `t` designator `*standard-output*` holds — esrap's rule tracing formats to `*trace-output*`
+from inside a closure, and a captured free variable must be a declared global.
+`*read-eval*`, `*read-suppress*`, `*read-base*` and `*read-default-float-format*` ride it too, each
+special on all four since 2026-11-05 (the float format was a `setq`-seeded global, so a `let` of it
+was lexical, and `*read-base*` did not exist).
+
+## `with-standard-io-syntax`
+**Invariant: the body sees CLHS 23.1.2's table on all four backends** (2026-11-05, SBCL 2.2.9 agrees on
+ci-spec `with-standard-io-syntax-binds-the-standard-table`; quri's `*print-base*` pins made
+`quri-test` `All 6 files passed`).
+
+- One table, `LispMacroExpander.STANDARD_IO_VALUES`: only `*print-pretty*` nil, `*print-readably*` t,
+  `*read-default-float-format*` `single-float` and a fresh `*readtable*` differ from the globals.
+- The interpreter's `let` binds all of it. **A compile arm binds only the program's specials**
+  (`expandWithStandardIoSyntax(cons, ctx.specialVars)`): a name nothing mentions has no defvar and
+  nothing reads it, the printer included, so a program naming no control variable keeps its
+  `(let ((*package* :cl-user)) ...)`, its bytes and no case-fold tables. The renderer naming
+  `*print-readably*` is a mention, so a routed program binds it.
+- `*print-readably*` on: `prin1` ignores `*print-length*`/`*print-level*` and keeps `#:`
+  (`%print-cased`, `%print-object-str` as a binding at the entry, not a test in each walk); `princ`
+  binds it nil around a `print-object` method (`printObjectCall`, for a program naming the variable);
+  `write`, a `write-to-string` keyword and a one-argument `write-to-string`
+  (`expandWriteToStringConversion`; `(let ((*print-escape* nil)) (write-to-string "a"))` printed
+  the quotes until then) take `prin1` when it or `*print-escape*` is on.
+- Inert under it: `*read-default-float-format*` (`1.5d0` prints `1.5`, SBCL `1.5d0`).
+
+## `print-not-readable`
+**Invariant: under `*print-readably*` and `prin1`, a value with no readable syntax signals, at any depth, on
+all four** (2026-11-05, SBCL 2.2.9 agrees on ci-spec `print-readably-signals-print-not-readable` but for the
+spelling of a table with entries). Consumer: serapeum's `same-literal-p`, where any two lambdas answered true.
+
+- **Where it signals.** `%pc-readable-leaf` (the walk's leaf: raw text starting `#<`),
+  `%pc-readable-instance` (a frame spelled `#<`, in `%pc-instance` and `%pos-instance`, before the method-less
+  text is built) and `print-unreadable-object` (before its body, whichever way `*print-escape*` stands).
+  `%pc-not-readable` is the one `error` call. A method on the value is asked first, as SBCL's is.
+- **`%print-cased`'s raw arm stays the fast path**: `%pc-readable-raw` takes the raw text and walks only when it
+  holds `#<` (the `%pc-walk` concatenation is O(n^2), a big list holding none pays nothing). A string's or a
+  symbol's `#<` then comes back from the walk unchanged; a pathname's does not start the text.
+- **A gate like `expandPrintCasedLeaf`'s.** `error` and the class reach `printsConditionReports` and
+  `mayCreateInstance`, so only a program that can get there carries them: `printsReadably` is a mention of
+  `*print-readably*`, `with-standard-io-syntax` or `:readably` outside the renderer and the `write` family, with an
+  operator in `READABLE_SURFACE_OPERATORS` (the signalling ones are out: their message binds it nil). It selects
+  the four roots (`%pc-not-readable` and the three above, `LispPreludeLibrary`, `LibraryDefunPruner`). The
+  leaves `%pc-raw`, `%pc-leaf`, `%pc-instance-check` and `%pc-without-readably` lower on
+  `ctx.functions.containsKey(%pc-not-readable)` (`expandPrintReadableLeaf`), so splice and lowering cannot
+  disagree; off, the print is what it was. `usesPrintControls` counts the defun, which routes a program naming
+  the variable alone without the case-fold tables (`mentionsPrintControlVariable` still gates those).
+  Interpreter: `printControlsInEffect` is true while the variable is, and the leaves are functions calling the defuns.
+- **Messages bind it nil** (`%pc-without-readably`): `error`, `warn`, `signal`, `cerror`, `assert`, `check-type` render
+  under `princ`. Around `formatMessagePieces`, the object arm's
+  `FormatRenderer.call`, a `warn`'s inlined report and the body of `%condition-report-str`, which covers a
+  report printed by `~A` and an uncaught one. A handler still sees the variable as bound: only the text is wrapped.
+  The let appears in Pass 2, so `SpecialVarCollector` counts the `%pc-not-readable` defun as a binding (a program
+  may name the variable only in data; the JVM then refused the let, ci-spec `print-readably-named-only-in-data`).
+  The readable roots are not `PULLED_SURFACE_ENTRIES`: `macro-function`'s table of standard names is no mention.
+- **A hash table prints** as SBCL's does, `#.(MAKE-HASH-TABLE :TEST (QUOTE EQ))`, `:TEST` left out for `eql`, and
+  signals under a nil `*read-eval*` (`%pc-readable-table`). With entries SBCL calls `SB-IMPL::%STUFF-HASH-TABLE`;
+  here `#.(LET ((H ...)) (SETF (GETHASH (QUOTE k) H) (QUOTE v)) ... H)`, which reads on SBCL and on the interpreter
+  (`.kb/reader-features.md`: compiled readers refuse `#.`). `:SIZE` is not kept. `(QUOTE EQ)` is SBCL's spelling under a
+  nil `*print-pretty*`; it writes `'EQ` under `(let ((*print-readably* t)) ...)`.
+- **An array of rank other than 1 is re-spelled** only when its raw text holds `#<` (`%pc-readable-rows`), so a
+  method and a table in it apply; the raw renderer does not walk it. Elements and table entries go through
+  `prin1-to-string`, the program's own route. A table or array holding itself signals (`%pc-readable-path`);
+  SBCL does not finish.
+- **Not signalled, by the value model**: a package is a keyword and `*standard-output*` is `t`, both readable text.
+  **Signalled where SBCL prints**: a random state (`#S(RANDOM-STATE ...)` there). A cons cycle still prints `#`.
+
+## Tests
+`LispEvaluatorTest.evalWriteAndPprintDispatch`/`evalPprintLogicalBlock`/`evalPrintCase`/
+`evalPrintLengthLevelGensymBaseAndRadix`/`evalWriteAndWriteToStringKeywords`/
+`evalPrintDropsTheQualifierOfAnAccessibleSymbol`/`evalPrintOfACyclicConsIsFinite`;
+`PackageResolverTest`; `JvmLispCompilerTest.compileAndRunPrintCase`/`compileAndRunPrintControls`/
+`compileAndRunStringOfASymbolIsNotFoldedByPrintCase`/
+`compileAndRunWriteToStringKeywordAloneBindsThePrinterVariable`/
+`compileAndRunPrintOfACyclicConsIsFinite`; `WasmLispCompilerIntegrationTest.printCase`/
+`printControls`/`printDropsTheQualifierOfAnAccessibleSymbol`/`printOfACyclicConsIsFinite` and
+their component twins; ci-spec `print-case`, `print-length-level-gensym-base-radix`,
+`symbol-print-accessibility`, `backquote-quoted-splice`, `print-cyclic-instance-graph`,
+`print-cyclic-cons`, `esrap-enablement-language-group`; `EsrapE2eTest`, `RoveE2eTest`.

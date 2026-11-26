@@ -1,0 +1,3496 @@
+package am.ik.rontolisp.eval;
+
+import java.io.OutputStream;
+import java.io.PrintStream;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Set;
+
+import am.ik.rontolisp.ClosRegistry;
+import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.SourceProvenance;
+import am.ik.rontolisp.macro.CompiledTemplates;
+import am.ik.rontolisp.macro.LispMacroExpander;
+import am.ik.rontolisp.macro.MethodCombinations;
+import am.ik.rontolisp.macro.MopEvalCapture;
+import am.ik.rontolisp.LispNames;
+import am.ik.rontolisp.LispNil;
+import am.ik.rontolisp.LispPackage;
+import am.ik.rontolisp.LispString;
+import am.ik.rontolisp.LispSymbol;
+import am.ik.rontolisp.LispTrees;
+import am.ik.rontolisp.LispTrue;
+import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.PackageRegistry;
+import am.ik.rontolisp.PackageResolver;
+import am.ik.rontolisp.compiler.CompileWarnings;
+import am.ik.rontolisp.compiler.OperatorFunctions;
+import am.ik.rontolisp.compiler.SplicedComponentGroups;
+import am.ik.rontolisp.reader.FeaturePushes;
+import am.ik.rontolisp.reader.Features;
+import am.ik.rontolisp.reader.LispReader;
+import org.jspecify.annotations.Nullable;
+
+/**
+ * Compile-path expansion of user macros defined with {@code defmacro}. Runs in the CLI
+ * before the JVM/WASM compilers (after {@link am.ik.rontolisp.cli.LoadInliner} splices
+ * {@code load}ed files), mirroring how the compilers never see {@code load}: each
+ * top-level {@code (defmacro ...)} is evaluated into an internal {@link LispEvaluator}
+ * (which runs the macro bodies at compile time) and removed from the program, and every
+ * macro call in the remaining forms is fully expanded. The backends therefore compile
+ * only ordinary forms and need no macro support of their own. Top-level {@code defun}s
+ * are also registered into the macro-time evaluator (registration only, no body runs) so
+ * a macro body can call helper functions defined in the same program. The interpreter
+ * does not use this pass; it expands user macros natively at evaluation time.
+ */
+public final class UserMacroExpander {
+
+	/**
+	 * The head of the placeholder a form a reader macro function read stands under until
+	 * its turn ({@link Session#readAgain}); only {@link #expand} makes and meets one.
+	 */
+	private static final String REREAD_MARKER = "%READ-AGAIN";
+
+	/**
+	 * A form a reader macro function read in the read-time image, and where.
+	 *
+	 * @param form the form as that read answered it
+	 * @param origin where it was read
+	 */
+	private record Reread(LispVal form, ReaderMacroReads.Origin origin) {
+	}
+
+	private UserMacroExpander() {
+	}
+
+	/**
+	 * Expands user macros in the program and removes the {@code defmacro} forms. Returns
+	 * the program unchanged when it defines no macros.
+	 * @param program the top-level forms
+	 * @return the program with macro definitions consumed and macro calls expanded
+	 */
+	public static List<LispVal> expand(List<LispVal> program) {
+		return expand(program, null);
+	}
+
+	/**
+	 * Expands user macros like {@link #expand(List)}, reading the forms in front of
+	 * {@code programHead} -- the libraries a compile path spliced before the program --
+	 * as implementation source, whose names no package records.
+	 * @param program the top-level forms
+	 * @param programHead the program's own first form before any splice, or null
+	 * @return the program with macro definitions consumed and macro calls expanded
+	 */
+	public static List<LispVal> expand(List<LispVal> program, @Nullable LispVal programHead) {
+		return expand(program, programHead, Features.INTERPRETER);
+	}
+
+	/**
+	 * Expands user macros like {@link #expand(List, LispVal)}, with what the command line
+	 * declared in the macro-time {@code *features*}, as on the interpreter.
+	 * @param program the top-level forms
+	 * @param programHead the program's own first form before any splice, or null
+	 * @param features the feature set the program was read with
+	 * @return the program with macro definitions consumed and macro calls expanded
+	 */
+	public static List<LispVal> expand(List<LispVal> program, @Nullable LispVal programHead, Features features) {
+		// Splice top-level (progn ...)/(eval-when ...) first so a defmacro nested in
+		// the (eval-when (:compile-toplevel ...) (defmacro ...)) idiom is seen (and
+		// nested defuns become top-level for the compilers' Pass 1). The members an
+		// eval-when evaluates at compile time are remembered: the macro-time evaluator
+		// runs them too (Session#accept).
+		Set<LispVal> compileTime = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+		List<LispVal> asRead = program;
+		program = LispMacroExpander.flattenTopLevel(program, compileTime);
+		// Also activate for macroexpand/macroexpand-1 calls: their literal quoted
+		// arguments are folded to the expansion here, even when no macro is defined.
+		// Read-eval markers ((%read-eval datum), the shape the marker-mode reader wraps
+		// #. in) also activate the pass: they resolve against the macro-time evaluator
+		// per top-level form, mirroring the interpreter's loadFile timing.
+		// A program that can ask what a package holds activates it for that evaluator's
+		// reader, which leaves what it read for the compilers (.kb/packages.md, "What a
+		// program read"). So does an eval-when evaluating a member at compile time, as
+		// compile-file does: what it makes -- a package -- is there for the forms after
+		// it.
+		boolean asksWhatWasRead = LispPreludeLibrary.asksWhatWasRead(program);
+		if (compileTime.isEmpty() && program.stream().noneMatch(form -> isOperator(form, LispNames.DEFMACRO))
+				&& program.stream().noneMatch(form -> isOperator(form, LispNames.DEFINE_COMPILER_MACRO))
+				&& program.stream().noneMatch(form -> isOperator(form, LispNames.DEFINE_MODIFY_MACRO))
+				&& program.stream().noneMatch(form -> isOperator(form, LispNames.DEFINE_METHOD_COMBINATION))
+				&& program.stream().noneMatch(form -> isOperator(form, LispNames.DEFINE_SETF_EXPANDER))
+				&& program.stream().noneMatch(form -> isOperator(form, LispNames.DEFSETF))
+				&& program.stream().noneMatch(UserMacroExpander::writesMacroFunction)
+				&& !LispMacroExpander.usesRuntimeSetfCompilerMacroFunction(program)
+				&& program.stream().noneMatch(UserMacroExpander::usesMacroexpand)
+				&& program.stream().noneMatch(UserMacroExpander::usesMacrolet)
+				&& program.stream().noneMatch(form -> isOperator(form, LispNames.SYMBOL_MACROLET))
+				&& program.stream().noneMatch(UserMacroExpander::usesDefineSymbolMacro)
+				&& program.stream().noneMatch(UserMacroExpander::usesReadEvalMarker)
+				&& program.stream().noneMatch(UserMacroExpander::isParameterizedDeftype)
+				&& program.stream().noneMatch(UserMacroExpander::holdsMetaclassDefclass) && !asksWhatWasRead) {
+			return program;
+		}
+		Session session = new Session(false, features);
+		// The walk resolves a flattened form at a time: one program to the labels in it.
+		session.macroEval.holdResolverDatumCopies();
+		// The forms in front of the program's own first form are the libraries the
+		// compile path spliced there: implementation source, read without recording.
+		session.programHead = programHead;
+		session.implementationPrefix = programHead != null && program.stream().anyMatch(form -> form == programHead);
+		// A form of the program's own that a reader macro function read in the
+		// read-time image is read again here, at its turn, and stands whole until then:
+		// the flatten would have split what the read answered (ReaderMacroReads).
+		java.util.Map<LispVal, Reread> rereads = new java.util.IdentityHashMap<>();
+		if (ReaderMacroReads.any()) {
+			List<LispVal> marked = new ArrayList<>(asRead.size());
+			for (LispVal form : asRead) {
+				ReaderMacroReads.Origin origin = ReaderMacroReads.originOf(form);
+				if (origin == null) {
+					marked.add(form);
+					continue;
+				}
+				LispCons marker = new LispCons(new LispSymbol(REREAD_MARKER), LispNil.INSTANCE);
+				rereads.put(marker, new Reread(form, origin));
+				marked.add(marker);
+			}
+			ReaderMacroReads.clear();
+			if (!rereads.isEmpty()) {
+				compileTime.clear();
+				program = LispMacroExpander.flattenTopLevel(marked, compileTime);
+			}
+		}
+		for (LispVal rawForm : program) {
+			Reread reread = rereads.get(rawForm);
+			if (reread != null) {
+				session.acceptTopLevel(session.readAgain(reread));
+				continue;
+			}
+			session.accept(rawForm, compileTime.contains(rawForm));
+		}
+		List<LispVal> expanded = session.finish();
+		// What the last forms' code did to the packages, for the baked tables.
+		session.emitPackages();
+		LispVal readSymbols = asksWhatWasRead ? session.macroEval.readSymbolsMarker() : null;
+		if (readSymbols != null) {
+			expanded.add(readSymbols);
+		}
+		return expanded;
+	}
+
+	/**
+	 * One run of this pass, a top-level form at a time: the macro-time evaluator and what
+	 * the forms so far left in it. {@link #expand} runs a whole program through one. The
+	 * compile path's read runs each form through a SHALLOW one as it reads it
+	 * ({@link ReadTimeImage}), because the readtable the evaluator holds after a form is
+	 * the one the next form reads with ({@code .kb/readtables.md}): the same processing,
+	 * so the readtable is the one this pass's own evaluator will hold at that form, minus
+	 * what only the emitted program needs -- a shallow session expands a form's top-level
+	 * macro calls only (what CLHS 3.2.3.1 processes), emits nothing and prints nothing --
+	 * and plus a spliced system's defvars, which it evaluates where this pass parks them.
+	 */
+	static final class Session {
+
+		private final boolean shallow;
+
+		final LispEvaluator macroEval = new LispEvaluator(new PrintStream(OutputStream.nullOutputStream()));
+
+		/**
+		 * What this run's {@code #.} markers evaluated to: the forms here are flattened,
+		 * and a label's one value may span two of them.
+		 */
+		private final java.util.Map<LispVal, LispVal> readTimeValues = new java.util.IdentityHashMap<>();
+
+		// A :metaclass defclass evaluated below runs the class-definition protocol in the
+		// macro-time evaluator; a build-dao-methods-style (compile nil `(lambda ()
+		// ,code))
+		// inside a finalize-inheritance hook is intercepted there and its folded method
+		// definitions land here (see MopEvalCapture), to be spliced after the defclass as
+		// top-level forms the compilers expand statically.
+		private final List<LispVal> mopSplice = new ArrayList<>();
+
+		// Every other definition the macro-time evaluator compiles lands here as a
+		// registration form (CompiledTemplates); what a form's REPLAY compiled is
+		// emitted before the form, so the compiled program's compile answers the same
+		// definition with compiled code. One registration per pattern.
+		private final List<LispVal> templateCaptures = new ArrayList<>();
+
+		private final Set<String> templateKeys = new java.util.HashSet<>();
+
+		// The emitted program. A form joins it through emit, which hands over first what
+		// code did to the packages; only finish's tables, written once the forms are in,
+		// add to it directly.
+		private final List<LispVal> result = new ArrayList<>();
+
+		// Every top-level form as this pass RESOLVED it (canonical spellings), whatever
+		// spelling `result` keeps: the compound specifiers headed by a parameterized
+		// deftype are found in these (emitDeftypeInstances).
+		private final List<LispVal> canonicalForms = new ArrayList<>();
+
+		// The program's global symbol macros so far, by resolved name:
+		// define-symbol-macro is a COMPILE-TIME fact here (the backends have no
+		// symbol-macro table at run time), so the definition is dropped and each form
+		// emitted after it is substituted through it (see emitted). A reference in an
+		// earlier form does not see it, the file-compilation order CL guarantees.
+		private final java.util.Map<String, LispVal> symbolMacros = new java.util.LinkedHashMap<>();
+
+		// Nesting depth of the (%begin-system "NAME") / (%end-system) provenance
+		// brackets LoadInliner puts around every spliced ASDF system. Inside them the
+		// pass REPLAYS plain top-level forms into the macro-time evaluator (see
+		// replayLibraryTopLevel): in CL, compiling a file requires its DEPENDENCY
+		// systems loaded into the compiling image -- fully executed, registries built
+		// -- and the macro-time evaluator is that image here. trivia registers its
+		// vector matchers with plain top-level set-vector-matcher CALLS whose effect a
+		// later match expansion reads; without the replay the pattern lookup misses
+		// and the expander degrades to its structure-pattern fallback. User-file forms
+		// (depth 0) keep compile-file semantics: only definitions register, and what an
+		// eval-when evaluates at compile time runs; nothing else does.
+		private int systemDepth;
+
+		// The open (%asdf-component ...) brackets, innermost last: each holds the
+		// systemDepth to restore when it closes. A component whose load-op leaves it
+		// unread
+		// (a test file) is no part of the loaded system: real ASDF never runs its forms
+		// while it loads the system, so here they keep compile-file semantics, as a
+		// user file's do, and systemDepth is 0 inside it.
+		private final java.util.Deque<Integer> openComponents = new java.util.ArrayDeque<>();
+
+		// The program's own first form, as CompileFrontend saw it before any library
+		// splice (the entry file's (%begin-file ...) marker when there is one), or null.
+		@Nullable private LispVal programHead;
+
+		// Whether the forms accepted so far precede programHead: the libraries
+		// CompileFrontend spliced in front of the program. Their
+		// names are implementation names, so the macro-time resolver records none of
+		// them -- a bare lexical of theirs (http-server.lisp's OK) read into cl-user
+		// would shadow the symbol a later (use-package :rove) lends.
+		private boolean implementationPrefix;
+
+		// The open (%begin-file P T ...) / (%end-file) load-context brackets LoadInliner
+		// puts around every spliced file, innermost last, so the closing marker knows
+		// whether it has a binding to undo: each holds whether the file binds *features*
+		// too. The values themselves live in the macro-time evaluator's dynamic bindings,
+		// which restore the enclosing file's for free.
+		private final java.util.Deque<Boolean> openFiles = new java.util.ArrayDeque<>();
+
+		// The macro-time registry's packages when last looked at, and the count of its
+		// modifications then: a package registered anew between two looks was made or
+		// changed either by a directive this pass resolved, which the compilers' resolver
+		// consumes as well, or by code the macro-time evaluator ran -- make-package, a
+		// computed export -- which only this pass saw (changedByCode, until emit hands
+		// them over).
+		private long seenModifications;
+
+		private final java.util.Map<String, LispPackage> seenPackages = new java.util.HashMap<>();
+
+		private final Set<String> changedByCode = new java.util.TreeSet<>();
+
+		/**
+		 * A session.
+		 * @param shallow whether it expands top-level macro calls only and emits and
+		 * prints nothing ({@link ReadTimeImage})
+		 */
+		Session(boolean shallow, Features features) {
+			this.shallow = shallow;
+			this.macroEval.setDeclaredFeatures(features.declaredNames());
+			this.macroEval.setMopEvalSpliceSink(this.mopSplice);
+			this.macroEval.setCompiledTemplateSink(this.templateCaptures);
+			this.seenModifications = this.macroEval.packageResolver().packageModifications();
+			this.seenPackages.putAll(this.macroEval.packageResolver().packageRecords());
+			if (!shallow) {
+				this.macroEval.packageResolver().notingImportedReadSymbols();
+			}
+		}
+
+		/**
+		 * Takes note of the packages made or changed since the last look: by a directive
+		 * this pass resolved, or else by code the macro-time evaluator ran.
+		 * @param directive whether what ran since is a directive's resolution
+		 */
+		private void notePackages(boolean directive) {
+			PackageResolver resolver = this.macroEval.packageResolver();
+			if (this.shallow || resolver.packageModifications() == this.seenModifications) {
+				return;
+			}
+			java.util.Map<String, LispPackage> packages = resolver.packageRecords();
+			packages.forEach((name, pkg) -> {
+				if (this.seenPackages.put(name, pkg) != pkg && !directive) {
+					this.changedByCode.add(name);
+				}
+			});
+			this.seenPackages.keySet().retainAll(packages.keySet());
+			this.changedByCode.retainAll(packages.keySet());
+			this.seenModifications = resolver.packageModifications();
+		}
+
+		/**
+		 * Runs what the macro-time resolver left of a package directive when it could not
+		 * consume it -- a computed {@code export}, still a call -- where the compile
+		 * image runs a form of its position: at compile time in a compile-time
+		 * {@code eval-when} ({@link #evalAtCompileTime}), and in a system the compile
+		 * loads ({@link #replayLibraryTopLevel}). A consumed directive left a value, not
+		 * a directive.
+		 * @param resolved the directive as the macro-time resolver answered it
+		 * @param compileTime whether an {@code eval-when} evaluates it at compile time
+		 */
+		private void runUnconsumedDirective(LispVal resolved, boolean compileTime) {
+			if (!isPackageDirective(resolved)) {
+				return;
+			}
+			if (compileTime) {
+				evalAtCompileTime(resolved);
+			}
+			else if (this.systemDepth > 0) {
+				replayLibraryTopLevel(resolved);
+			}
+		}
+
+		/**
+		 * Resolves a top-level form through the macro-time resolver, where a package
+		 * directive takes effect: what it makes, the compilers' resolver makes from the
+		 * emitted form too.
+		 * @param implementation whether the form is implementation source
+		 * ({@link #implementationPrefix})
+		 */
+		private LispVal resolveTopLevel(LispVal form, boolean implementation) {
+			notePackages(false);
+			LispVal resolved = implementation ? this.macroEval.resolveImplementationPackages(form)
+					: this.macroEval.resolvePackages(form);
+			notePackages(true);
+			return resolved;
+		}
+
+		/**
+		 * Adds the next top-level form to the program, behind what the code the
+		 * macro-time evaluator ran did to its packages since the last one: the
+		 * {@code (%image-packages ...)} marker of each package it made or changed, as it
+		 * holds them now ({@code .kb/packages.md}, "The compile image's packages"). The
+		 * form may name a package the code made while expanding it. Behind it, the
+		 * members an import clause of the form took that only this evaluator read
+		 * ({@link PackageResolver#importedReadSymbolsMarker}).
+		 * @param form the form
+		 */
+		private void emit(LispVal form) {
+			emitPackages();
+			this.result.add(form);
+		}
+
+		/** Adds the markers {@link #emit} puts in front of a form, when there are any. */
+		void emitPackages() {
+			notePackages(false);
+			PackageResolver resolver = this.macroEval.packageResolver();
+			if (!this.changedByCode.isEmpty()) {
+				LispVal marker = resolver.imagePackagesMarker(this.changedByCode);
+				this.changedByCode.clear();
+				if (marker != null) {
+					this.result.add(marker);
+				}
+			}
+			LispVal imported = resolver.importedReadSymbolsMarker();
+			if (imported != null) {
+				this.result.add(imported);
+			}
+		}
+
+		/**
+		 * Processes a top-level form the way {@link #expand} processes one of the forms
+		 * it flattened: a {@code progn}/{@code eval-when} is spliced first.
+		 * @param form the top-level form
+		 */
+		void acceptTopLevel(LispVal form) {
+			Set<LispVal> compileTime = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+			for (LispVal member : LispMacroExpander.flattenTopLevel(List.of(form), compileTime)) {
+				accept(member, compileTime.contains(member));
+				// The read-time image runs a computed push onto *features* whatever its
+				// situations, as a literal one announces whatever its situations
+				// (FeaturePushes), so the forms below read on all four as they do where
+				// load runs it.
+				if (this.shallow && !compileTime.contains(member) && FeaturePushes.computesAPush(member)) {
+					this.macroEval.evalResolved(this.macroEval.resolvePackages(member));
+				}
+			}
+		}
+
+		/**
+		 * Reads again, in this evaluator and at its turn, a form a reader macro function
+		 * read in the read-time image, so this evaluator holds what the read leaves
+		 * behind -- coalton's global environment after a {@code coalton-toplevel} -- for
+		 * the macros of the forms after it ({@link ReaderMacroReads}). The image's read
+		 * stands when this one does not read the same text the same way, no reader macro
+		 * function running or the read ending elsewhere: a readtable this pass holds
+		 * otherwise (a spliced system's {@code defvar} the image evaluated and this pass
+		 * parks) must not change the program.
+		 * @param reread the form and where it was read
+		 * @return the form this read answers, or the image's
+		 */
+		LispVal readAgain(Reread reread) {
+			ReaderMacroReads.Origin origin = reread.origin();
+			int[] calls = { 0 };
+			am.ik.rontolisp.reader.ReadSyntax syntax = this.macroEval.currentReadSyntax(result -> {
+				calls[0]++;
+				return ReadTimeImage.compilable(result);
+			});
+			if (syntax == null) {
+				return reread.form();
+			}
+			try {
+				SourceLanguage.Forms forms = SourceLanguage
+					.readFormsFrom(origin.source(), origin.features(), origin.file(), origin.start())
+					.readingTOrNil(this.macroEval.packageResolver()::readsClTOrNil);
+				LispVal form = forms.next(syntax);
+				return form != null && calls[0] > 0 && forms.position() == origin.end() ? form : reread.form();
+			}
+			catch (RuntimeException ex) {
+				return reread.form();
+			}
+		}
+
+		/**
+		 * Processes one flattened top-level form.
+		 * @param rawForm the form as read
+		 * @param compileTime whether an {@code eval-when} around it evaluates it at
+		 * compile time, which the macro-time evaluator then does (CLHS 3.2.3.1)
+		 */
+		void accept(LispVal rawForm, boolean compileTime) {
+			LispEvaluator macroEval = this.macroEval;
+			// The fallback position for anything in this iteration that fails outside
+			// expandAll's own hook (a defmacro whose registration signals, a package
+			// directive naming a package that does not exist).
+			SourceProvenance.enterTopLevelForm(rawForm);
+			if (rawForm == this.programHead) {
+				this.implementationPrefix = false;
+			}
+			if (isProvenanceMarker(rawForm, LispNames.BEGIN_SYSTEM)) {
+				this.systemDepth++;
+			}
+			else if (isProvenanceMarker(rawForm, LispNames.END_SYSTEM)) {
+				this.systemDepth = Math.max(0, this.systemDepth - 1);
+			}
+			else if (SplicedComponentGroups.isComponentOpen(rawForm)) {
+				this.openComponents.addLast(this.systemDepth);
+				if (SplicedComponentGroups.isDeferredComponentMarker(rawForm)) {
+					this.systemDepth = 0;
+				}
+			}
+			else if (SplicedComponentGroups.isComponentClose(rawForm) && !this.openComponents.isEmpty()) {
+				this.systemDepth = this.openComponents.removeLast();
+			}
+			// The load context of the spliced file the following forms came from.
+			// Establishing it HERE is the point: the bracket lowers to top-level
+			// (setq *load-pathname* ...) STATEMENTS, which run long after a #. datum of
+			// the same file has been resolved -- so without this a #. reading
+			// *load-truename* answered nil on both compile paths while the interpreter,
+			// which binds the pair around its read, answered the path
+			// (.kb/load-inliner.md). The values are the ones the bracket carries, so the
+			// read-time and run-time answers agree by construction. No unwind protection:
+			// the macro-time evaluator dies with a failed compile, and the bracket is
+			// balanced by construction (LoadInliner emits both halves or neither).
+			// *readtable* is bound with them, as load binds it: an in-readtable inside
+			// the file is the file's (.kb/readtables.md).
+			LispVal[] loadContext = LispMacroExpander.loadContextValues(rawForm);
+			if (loadContext != null && loadContext[0] instanceof LispString pathname
+					&& loadContext[1] instanceof LispString truename) {
+				macroEval.pushLoadContext(pathname.value(), truename.value());
+				macroEval.pushReadtableBinding();
+				// What an :around-compile hook added around the file: a macro asks here
+				// (coalton's parser), where the hook's own binding, in the build image,
+				// cannot reach it.
+				List<String> hookFeatures = LispMacroExpander.loadContextFeatures(rawForm);
+				if (!hookFeatures.isEmpty()) {
+					macroEval.pushFeaturesBinding(hookFeatures);
+				}
+				this.openFiles.addLast(!hookFeatures.isEmpty());
+			}
+			else if (isProvenanceMarker(rawForm, LispNames.END_FILE) && !this.openFiles.isEmpty()) {
+				if (this.openFiles.removeLast()) {
+					macroEval.popFeaturesBinding();
+				}
+				macroEval.popReadtableBinding();
+				macroEval.popLoadContext();
+			}
+			// Resolve #. markers first (before package resolution, like the interpreter
+			// resolves them just before its top-level form evaluates): each datum runs in
+			// the macro-time evaluator, so it sees the defuns/defvars registered by the
+			// preceding forms.
+			LispVal form = usesReadEvalMarker(rawForm)
+					? macroEval.resolveReadTimeEvalInCode(rawForm, this.readTimeValues) : rawForm;
+			// What the markers made is the form as CL reads it, and only now can it be
+			// seen to be a progn or eval-when: its members are top-level forms, like
+			// those of one spelled out, which were flattened before this loop.
+			if (form != rawForm) {
+				Set<LispVal> memberCompileTime = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+				List<LispVal> whole = List.of(form);
+				List<LispVal> members = LispMacroExpander.flattenTopLevel(whole, memberCompileTime, compileTime);
+				if (members != whole) {
+					for (LispVal member : members) {
+						accept(member, memberCompileTime.contains(member));
+					}
+					return;
+				}
+			}
+			// A package directive updates the macro evaluator's resolver state (so a
+			// defmacro under (in-package P) registers its canonical qualified name and
+			// its template symbols resolve against P) and is kept verbatim for the
+			// compilers' own resolution pass (which tracks the same state itself).
+			if (isPackageDirective(form)) {
+				// One the resolver could not consume -- a computed export -- is a call,
+				// which the compile image runs where it runs any other form of the
+				// position: at compile time in a compile-time eval-when, and in a system
+				// it loads.
+				runUnconsumedDirective(resolveTopLevel(form, false), compileTime);
+				emit(form);
+				return;
+			}
+			// Resolve through the same resolver so macro CALL SITES match the
+			// canonical registered names (a defmacro under (in-package P) registers
+			// P-qualified).
+			LispVal resolved = resolveTopLevel(form, this.implementationPrefix);
+			if (isOperator(resolved, LispNames.DEFMACRO)) {
+				macroEval.evalResolved(resolved);
+				LispVal ownSymbol = ownSymbolMarker(form, resolved);
+				if (ownSymbol != null) {
+					emit(ownSymbol);
+				}
+				return;
+			}
+			if (isOperator(resolved, LispNames.DEFINE_COMPILER_MACRO)) {
+				// Register the hint and drop the form: a compiler macro rewrites CALL
+				// SITES here (see expandAll), and the backends have no table to consult
+				// at runtime. Registration cannot fail the compile -- an unsupported
+				// definition is simply not registered.
+				macroEval.evalResolved(resolved);
+				return;
+			}
+			if (isOperator(resolved, LispNames.DEFINE_MODIFY_MACRO)) {
+				// Lower to a defmacro and register it in the macro evaluator, then drop
+				// the
+				// form: the generated macro is expanded at its call sites like any other
+				// user macro (the compilers never see define-modify-macro).
+				macroEval.evalResolved(LispMacroExpander.expandDefineModifyMacro((LispCons) resolved));
+				return;
+			}
+			if (isOperator(resolved, LispNames.DEFTYPE) && resolved instanceof LispCons deftype) {
+				// A PARAMETERIZED deftype is folded here, the one pass with an evaluator:
+				// its body runs with each parameter defaulted (to * unless the lambda
+				// list says otherwise) and the result replaces the form as the equivalent
+				// zero-parameter deftype -- the shape the compilers' own registry pass
+				// understands, so a bare use of the type name (ironclad's
+				// simple-octet-vector in an etypecase) resolves on every backend.
+				LispVal folded = macroEval.foldDeftype(deftype);
+				if (folded != null && deftype.toList().get(1) instanceof LispSymbol typeName) {
+					emit(requalifyShadowedClNames(properList(List.of(new LispSymbol(LispNames.DEFTYPE), typeName,
+							LispNil.INSTANCE, properList(List.of(new LispSymbol(LispNames.QUOTE), folded)))),
+							macroEval));
+					return;
+				}
+				emit(form);
+				return;
+			}
+			if (isOperator(resolved, LispNames.DEFINE_SETF_EXPANDER) || isOperator(resolved, LispNames.DEFSETF)) {
+				// Register the user setf expansion in the macro evaluator, then drop the
+				// form: a (setf (place ...) v) call site is rewritten through it below
+				// (the compilers cannot run the expander, and treat the definition as a
+				// no-op anyway).
+				macroEval.evalResolved(resolved);
+				return;
+			}
+			// A pax:defsection AUTOEXPORTS its entries (PackageResolver consumes them on
+			// the resolve above), but the expansion below reduces the form to a defvar,
+			// so the COMPILERS' own resolver pass would never see the section again and
+			// its registry would miss the exports -- a later single-colon spelling
+			// (trivial-utf-8:string-to-utf-8-bytes, uuid's whole surface) then fails
+			// "not external". Emit the residue as a literal top-level (export '(...)),
+			// which that pass consumes in the section's place.
+			LispVal defsectionExport = paxDefsectionExportForm(form);
+			if (defsectionExport != null) {
+				emit(defsectionExport);
+			}
+			LispVal expanded = expand(resolved);
+			// A macro may expand into the (rontolisp:async (defun ...)) wrapper; rewrite
+			// it here so the definition scanners downstream (WitExportInliner, the
+			// library pruner) see the canonical async-defun/async-lambda forms, exactly
+			// as they would for code the CLI rewrote before macro expansion.
+			expanded = LispMacroExpander.rewriteAsyncSugarForm(expanded);
+			expanded = topLevelLocallyAsProgn(expanded);
+			// (fboundp 'name) over a name the macro-time evaluator has DEFINED AS A
+			// MACRO is a compile-time t: macros do not exist in the compiled program,
+			// so the runtime probe would answer nil and take the wrong branch. cffi's
+			// functions.lisp guards its fallback %foreign-funcall-varargs defmacro
+			// exactly this way -- (eval-when (...) (unless (fboundp '...) (defmacro
+			// ...))) -- and the fold is what lets the kept load-toplevel member
+			// collapse instead of calling DEFMACRO at run time.
+			expanded = foldMacroFboundp(expanded, macroEval);
+			// (define-symbol-macro name expansion), possibly wrapped in the
+			// progn/eval-when a macro built around it (cffi's defcvar emits exactly
+			// that): register it, drop it, and refuse a nested one the way a nested
+			// defmacro is refused.
+			LispVal harvested = harvestSymbolMacros(expanded, this.symbolMacros, macroEval);
+			if (harvested == null) {
+				return;
+			}
+			expanded = harvested;
+			// A macro expanded into a macro definition -- bare, or nested inside the
+			// progn/eval-when it built around it: consume it as well.
+			expanded = stripDefmacroDefinitions(expanded, macroEval);
+			if (expanded == null) {
+				return;
+			}
+			if (!this.shallow) {
+				this.canonicalForms.add(expanded);
+			}
+			// CLHS 3.2.3.1: the members of a top-level progn are top-level forms. Both
+			// resolvers consume a package directive only at top level, so a progn a
+			// macro expanded into that holds one -- cl-annot's @export is
+			// (progn (export 'x) (defun x ...)) -- is processed member by member, and
+			// the forms after it resolve against the package state it leaves.
+			List<LispVal> members = expanded == resolved ? null : prognMembersWithPackageDirective(expanded);
+			if (members != null) {
+				for (LispVal member : members) {
+					acceptExpansionMember(member, compileTime);
+				}
+				return;
+			}
+			// So are those of a progn a macro or a symbol-macrolet left around an
+			// eval-when, spliced as the source's are: what the eval-when evaluates at
+			// compile time runs now, for the macros after it.
+			if (expanded != resolved && holdsEvalWhenMember(expanded)) {
+				Set<LispVal> evaluated = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+				for (LispVal member : LispMacroExpander.flattenTopLevel(List.of(expanded), evaluated, compileTime)) {
+					acceptExpansionMember(member, evaluated.contains(member));
+				}
+				return;
+			}
+			acceptExpansion(form, resolved, expanded, compileTime, false);
+		}
+
+		private void acceptExpansionMember(LispVal member, boolean compileTime) {
+			if (isPackageDirective(member)) {
+				runUnconsumedDirective(resolveTopLevel(member, false), compileTime);
+				if (!this.shallow) {
+					emit(requalifyShadowedClNames(member, this.macroEval));
+				}
+			}
+			else {
+				acceptExpansion(member, member, member, compileTime, true);
+			}
+		}
+
+		/**
+		 * The rest of {@link #accept} for one expanded top-level form: the compile-file
+		 * situations of an expanded eval-when, the macro-time replay, and the emitted
+		 * spelling.
+		 * @param member whether the form is a member of a progn a macro expanded into,
+		 * which has no original spelling to keep
+		 */
+		private void acceptExpansion(LispVal form, LispVal resolved, LispVal expanded, boolean compileTime,
+				boolean member) {
+			LispEvaluator macroEval = this.macroEval;
+			// Only what the replay below compiles runs again in the program: a compile
+			// call a macro's expander made has run its course.
+			this.templateCaptures.clear();
+			if (isOperator(expanded, LispNames.EVAL_WHEN)) {
+				// A macro EXPANDED into an eval-when (source-level top-level eval-whens
+				// were flattened before the loop): honor the compile-file situations.
+				// :compile-toplevel replays every member into the macro-time evaluator
+				// -- lisp-namespace's define-namespace and trivia's defoptimizer build
+				// their symbol->function registries this way, and a later match
+				// expansion READS them at macro time -- and :load-toplevel keeps the
+				// member in the program. A defmacro member is consumed here like a
+				// top-level one. The form's own compile-time-too mode carries in: a
+				// (defreadtable ...) -- (eval-when (:load-toplevel :execute) ...) -- in
+				// an
+				// eval-when that evaluates at compile time defines its readtable then.
+				processExpandedEvalWhen((LispCons) expanded, compileTime);
+				return;
+			}
+			if (this.systemDepth > 0) {
+				replayLibraryTopLevel(expanded);
+			}
+			else if (compileTime) {
+				// A source-level eval-when evaluates this member at compile time: run it
+				// in the macro-time evaluator as well, a defvar's value included, so what
+				// it installs -- a readtable above all -- is there for the forms after
+				// it.
+				evalAtCompileTime(expanded);
+			}
+			else {
+				registerMacroTimeDefinitions(expanded, macroEval);
+			}
+			// A :metaclass defclass just ran in the macro-time evaluator, where a user
+			// initialize-instance :around may have INJECTED direct superclasses (mito's
+			// dao-table-class pushes dao-class + the auto-pk/timestamp mixins). The
+			// compile paths register the class statically from the FORM, so emit the
+			// widened spelling the driver-built metaobject actually holds -- layout,
+			// ancestors, dispatch and constructor then match the interpreter. The
+			// runtime driver call re-runs the :around, whose own contains-checks make
+			// the injection idempotent over the widened list.
+			expanded = widenMetaclassDefclasses(expanded, macroEval);
+			if (this.systemDepth == 0 && !compileTime && isPureConfigSetf(expanded, macroEval)) {
+				// A top-level (setf (PLACE ...) V) whose (defun (setf PLACE) ...) writer
+				// is
+				// a PURE CONFIGURATION SETTER -- its body only assigns special/global
+				// variables via side-effect-free computation, and V is itself pure -- is
+				// replayed into the macro-time evaluator, so a macro that reads the
+				// underlying global at macro-EXPANSION time (e.g. cl-who's
+				// with-html-output
+				// reading *html-mode*) observes the mutation as a compile-time constant.
+				// The
+				// form stays in the program so the runtime global tracks it too. The
+				// purity walk is conservative (deny by default), so an impure writer or
+				// value is never double-run at compile time.
+				macroEval.evalResolved(expanded);
+			}
+			// A form the walk did not touch keeps its ORIGINAL spelling: the resolved
+			// canonical form is not always re-resolvable by the compilers' own pass
+			// (a cl: symbol canonicalizes to a bare name, which a package that does not
+			// use cl reads as its own). An emitted expansion conversely must survive
+			// that pass: a bare canonical CL name the current package SHADOWS would
+			// re-resolve to the shadowing package's own symbol, so it is re-spelled
+			// explicitly cl:-qualified (cl-ppcre's defconstant macro expands to
+			// cl:defconstant under a package shadowing defconstant).
+			// The walk is identity-preserving (see rebuild), so an untouched form is the
+			// SAME object and needs no printing to recognize; the print comparison stays
+			// for a walk that rebuilt an equal form (a macro that expands to itself). A
+			// form that mentions a symbol macro cannot keep it either: the definition
+			// registered the resolved name, which the original spelling need not be (a
+			// bare SM under (in-package P), registered P::SM).
+			emitCompiledTemplates();
+			if (!this.shallow) {
+				boolean untouched = !member && (expanded == resolved || expanded.print().equals(resolved.print()));
+				emit(untouched && !mentionsSymbolMacro(expanded) ? form : emitted(expanded));
+			}
+			// Drain the definition-time method constructions the form's macro-time
+			// evaluation captured (a :metaclass defclass whose finalize-inheritance hook
+			// ran a build-dao-methods-style compile): the folded forms join the program
+			// right after the defclass, so at run time the driver call has completed --
+			// and registered the metaobject -- before they evaluate. Their macro-time
+			// evaluation was skipped (the sink swallows it), so they walk through
+			// expandAll like any generated expansion.
+			if (!this.mopSplice.isEmpty()) {
+				for (LispVal spliced : new ArrayList<>(this.mopSplice)) {
+					LispVal splicedExpansion = expand(spliced);
+					if (!this.shallow) {
+						emit(emitted(splicedExpansion));
+					}
+				}
+				this.mopSplice.clear();
+			}
+		}
+
+		/**
+		 * The program the forms processed so far make, once the last one is in.
+		 * @return the program with macro definitions consumed and macro calls expanded
+		 */
+		List<LispVal> finish() {
+			LispEvaluator macroEval = this.macroEval;
+			List<LispVal> result = this.result;
+			// CLHS 3.2.4.4, over the WHOLE emitted program: a literal object a macro
+			// spliced into its expansion (cffi's parsed foreign type, in every defcfun
+			// body) is dumped through its own make-load-form method rather than by
+			// structure. Done here rather than per form, because a form reaches `result`
+			// by several routes (an expanded eval-when's kept members, a defsection
+			// residue) and every one of them can carry such an object; and done in this
+			// pass at all because it is the last one holding an evaluator to ask -- the
+			// quote compilers see only the creation form. See LoadFormSubstituter and
+			// .kb/make-load-form.md.
+			for (int i = 0; i < result.size(); i++) {
+				// The failing position is the form being dumped: a method that signals,
+				// or an object whose creation form reaches itself, has no source of its
+				// own.
+				SourceProvenance.enterTopLevelForm(result.get(i));
+				result.set(i, LoadFormSubstituter.substitute(result.get(i), macroEval));
+			}
+			emitPackages();
+			emitMacroGeneratedDeftypes(macroEval, result);
+			emitDeftypeInstances(macroEval, this.canonicalForms, result);
+			emitMacroFunctionTable(macroEval, result);
+			emitCompilerMacroFunctionTable(macroEval, result);
+			return result;
+		}
+
+		/**
+		 * A resolved form as the program holds it. The symbol macros are substituted
+		 * first: an expansion was resolved where it was defined, so a bare CL name in it
+		 * must survive the compilers' resolver in the package of the form it lands in.
+		 */
+		private LispVal emitted(LispVal form) {
+			LispVal substituted = form;
+			if (mentionsSymbolMacro(form)) {
+				substituted = LispMacroExpander.substituteGlobalSymbolMacros(form, this.symbolMacros);
+				if (form instanceof LispCons cons) {
+					substituted = SourceProvenance.inherit(cons, substituted);
+				}
+			}
+			return requalifyShadowedClNames(substituted, this.macroEval);
+		}
+
+		private boolean mentionsSymbolMacro(LispVal form) {
+			if (this.symbolMacros.isEmpty()) {
+				return false;
+			}
+			while (form instanceof LispCons cons) {
+				if (mentionsSymbolMacro(cons.car())) {
+					return true;
+				}
+				form = cons.cdr();
+			}
+			return form instanceof LispSymbol sym && this.symbolMacros.containsKey(sym.name());
+		}
+
+		// The whole walk, or -- shallow -- the top-level macro calls only.
+		private LispVal expand(LispVal form) {
+			return this.shallow ? expandTopLevel(form, this.macroEval) : expandCompiling(form, this.macroEval);
+		}
+
+		/**
+		 * Processes an {@code (eval-when (situations) member...)} produced by a macro
+		 * expansion with compile-file semantics: {@code :compile-toplevel} (or old-style
+		 * {@code compile}) replays every member into the macro-time evaluator -- the
+		 * whole member, not just definitions, because registry-building side effects like
+		 * lisp-namespace's {@code (setf (gethash ...))} are exactly what the situation
+		 * asks for -- and {@code :load-toplevel} (or {@code load}) keeps the member in
+		 * the program. A member that is itself an eval-when recurses; a defmacro member
+		 * is consumed. A member the macro-time evaluator cannot run is skipped with a
+		 * warning instead of failing the compile (the lazy-defvar precedent): expansions
+		 * reading the state it would have built fail later, plain runtime uses are
+		 * unaffected. {@code :execute} evaluates at compile time too inside
+		 * compile-time-too processing (CLHS 3.2.3.1); inside a spliced system, which is
+		 * LOADED into the compiling image, a {@code :load-toplevel} or {@code :execute}
+		 * member is replayed like the system's plain forms.
+		 * @param compileTimeToo whether the form is processed in compile-time-too mode
+		 */
+		private void processExpandedEvalWhen(LispCons evalWhen, boolean compileTimeToo) {
+			LispEvaluator macroEval = this.macroEval;
+			List<LispVal> parts = evalWhen.toList();
+			boolean compileTime = false;
+			boolean loadTime = false;
+			boolean execute = false;
+			if (parts.size() >= 2 && parts.get(1) instanceof LispCons situations && situations.isProperList()) {
+				for (LispVal situation : situations.toList()) {
+					String name = situation instanceof LispSymbol sym ? member(sym.name()) : "";
+					compileTime = compileTime || ":COMPILE-TOPLEVEL".equals(name) || "COMPILE".equals(name);
+					loadTime = loadTime || ":LOAD-TOPLEVEL".equals(name) || "LOAD".equals(name);
+					execute = execute || ":EXECUTE".equals(name) || "EVAL".equals(name);
+				}
+			}
+			boolean evaluated = compileTime || execute && compileTimeToo;
+			boolean replayed = !evaluated && this.systemDepth > 0 && (loadTime || execute);
+			List<LispVal> members = new ArrayList<>();
+			for (int i = 2; i < parts.size(); i++) {
+				if (isOperator(parts.get(i), LispNames.PROGN) && ((LispCons) parts.get(i)).isProperList()) {
+					flattenProgn((LispCons) parts.get(i), members);
+				}
+				else {
+					members.add(parts.get(i));
+				}
+			}
+			for (LispVal member : members) {
+				if (isOperator(member, LispNames.EVAL_WHEN) && member instanceof LispCons nested) {
+					processExpandedEvalWhen(nested, evaluated);
+					continue;
+				}
+				if (isOperator(member, LispNames.DEFMACRO)) {
+					macroEval.evalResolved(member);
+					continue;
+				}
+				// A directive kept at top level makes its package for the compilers'
+				// resolver too: it is no package only this pass saw.
+				boolean keptDirective = loadTime && isPackageDirective(member);
+				if (keptDirective) {
+					notePackages(false);
+				}
+				if (evaluated) {
+					evalAtCompileTime(member);
+				}
+				else if (replayed) {
+					replayLibraryTopLevel(member);
+				}
+				else {
+					registerMacroTimeDefinitions(member, macroEval);
+				}
+				if (keptDirective) {
+					notePackages(true);
+				}
+				if (loadTime) {
+					emitCompiledTemplates();
+				}
+				this.templateCaptures.clear();
+				if (loadTime && !this.shallow) {
+					emit(emitted(foldMacroFboundp(member, macroEval)));
+				}
+			}
+		}
+
+		/**
+		 * Emits the registrations of the definitions the replay just compiled
+		 * ({@link #templateCaptures}), each pattern once, ahead of the form whose replay
+		 * compiled them: at run time that form compiles them again.
+		 */
+		private void emitCompiledTemplates() {
+			List<LispVal> captured = List.copyOf(this.templateCaptures);
+			this.templateCaptures.clear();
+			for (LispVal registration : captured) {
+				if (!this.shallow && this.templateKeys.add(CompiledTemplates.key(registration))) {
+					emit(emitted(expand(registration)));
+				}
+			}
+			// What expanding them compiled ran at expansion time only.
+			this.templateCaptures.clear();
+		}
+
+		/**
+		 * Evaluates a form an {@code eval-when} evaluates at compile time in the
+		 * macro-time evaluator. A form the evaluator cannot run is skipped with a warning
+		 * instead of failing the compile (the lazy-defvar precedent): expansions reading
+		 * the state it would have built fail later, plain runtime uses are unaffected.
+		 */
+		private void evalAtCompileTime(LispVal form) {
+			// What a define-method-combination this pass ran left for the backend's
+			// registry (stripDefmacroDefinitions): the combination is registered here
+			// already, and the marker names no function.
+			if (isOperator(form, MethodCombinations.MARKER)) {
+				return;
+			}
+			try {
+				this.macroEval.evalResolved(form);
+			}
+			catch (RuntimeException ex) {
+				warn("WARNING: eval-when (:compile-toplevel) form failed at compile time: " + ex.getMessage());
+			}
+		}
+
+		/**
+		 * Replays a top-level form of a SPLICED SYSTEM into the macro-time evaluator: in
+		 * CL, the systems a file depends on are LOADED into the compiling image before
+		 * the file compiles, so their registry-building top-level calls have already run
+		 * when macro expansion reads the registries (trivia's set-vector-matcher pattern
+		 * table). The defvar family keeps the lazy registration (the value expression
+		 * runs only if an expansion reads the global, see
+		 * {@link #registerMacroTimeDefinitions}); atoms and quoted data have no effect to
+		 * replay; everything else evaluates, and a form the macro-time evaluator cannot
+		 * run is skipped with a warning instead of failing the compile -- expansions
+		 * reading the state it would have built fail later, plain runtime uses are
+		 * unaffected. Output the replay writes is discarded (the macro evaluator prints
+		 * to a null stream), and the form stays in the program either way.
+		 */
+		private void replayLibraryTopLevel(LispVal form) {
+			// A method-combination marker has nothing to replay (evalAtCompileTime).
+			if (!(form instanceof LispCons cons) || !(cons.car() instanceof LispSymbol op)
+					|| LispNames.QUOTE.equals(op.name()) || isOperator(form, MethodCombinations.MARKER)) {
+				return;
+			}
+			if (isOperator(form, LispNames.PROGN) && cons.isProperList()) {
+				for (LispVal member : cons.toList().subList(1, cons.toList().size())) {
+					replayLibraryTopLevel(member);
+				}
+				return;
+			}
+			// A shallow session evaluates a defvar as loading the system does: parked,
+			// the
+			// value form's own effect never happens -- cl-syntax's defsyntax is
+			// (defvar NAME (defreadtable NAME ...)), and the readtable a later
+			// use-syntax finds by name is that effect.
+			if (!this.shallow && (isOperator(form, LispNames.DEFVAR) || isOperator(form, LispNames.DEFPARAMETER)
+					|| isOperator(form, LispNames.DEFCONSTANT))) {
+				this.macroEval.registerLazyGlobal(form);
+				return;
+			}
+			try {
+				this.macroEval.evalResolved(form);
+			}
+			catch (RuntimeException ex) {
+				warn("WARNING: library top-level form failed at compile time (skipped): " + ex.getMessage());
+			}
+		}
+
+		// A diagnostic of the macro-time evaluation; a shallow session's forms are
+		// processed again by the pass that reports.
+		private void warn(String line) {
+			if (!this.shallow) {
+				System.err.println(line);
+			}
+		}
+
+	}
+
+	/**
+	 * Expands a top-level form's own macro calls and nothing inside them -- the part of
+	 * the walk a top-level form's compile-time effect depends on (CLHS 3.2.3.1): a macro
+	 * call at the top is expanded until it is not one, and so is each member of a
+	 * {@code progn}, {@code locally} or {@code eval-when} it became.
+	 */
+	private static LispVal expandTopLevel(LispVal form, LispEvaluator macroEval) {
+		form = expandMacroCall(form, macroEval);
+		if (!(form instanceof LispCons cons) || !cons.isProperList() || !(cons.car() instanceof LispSymbol head)) {
+			return form;
+		}
+		int from = topLevelMembersFrom(head);
+		return from < 0 ? form : expandTopLevelMembers(cons, cons.toList(), from, macroEval, false);
+	}
+
+	// A macro call expanded until it is not one; any other form unchanged.
+	static LispVal expandMacroCall(LispVal form, LispEvaluator macroEval) {
+		while (form instanceof LispCons cons && cons.car() instanceof LispSymbol sym
+				&& isMacroInWalk(sym.name(), macroEval)) {
+			form = foldNativeExpansion(SourceProvenance.inherit(cons, macroEval.expandUserMacro(cons)));
+		}
+		return form;
+	}
+
+	// Where the members of a top-level form headed by this operator start, or -1 for an
+	// operator that has none.
+	private static int topLevelMembersFrom(LispSymbol head) {
+		String name = memberName(head.name());
+		return LispNames.PROGN.equals(name) || LispNames.LOCALLY.equals(name) ? 1
+				: LispNames.EVAL_WHEN.equals(name) ? 2 : -1;
+	}
+
+	/**
+	 * Expands the members of a top-level form in order, each a top-level form itself
+	 * (CLHS 3.2.3.1): what one defines is there for the macro calls of the next, as it is
+	 * for the interpreter, so {@code (progn (defmacro m ...) (m))} a macro expanded into
+	 * reaches {@code m}.
+	 * @param from the index of the first member
+	 * @param whole whether to walk a member whole, or only its top-level macro calls
+	 * @return the form, without the members that only defined something
+	 */
+	private static LispVal expandTopLevelMembers(LispCons cons, List<LispVal> parts, int from, LispEvaluator macroEval,
+			boolean whole) {
+		List<LispVal> expanded = new ArrayList<>(parts.subList(0, from));
+		for (int i = from; i < parts.size(); i++) {
+			LispVal member = expandTopLevelMember(parts.get(i), macroEval, whole);
+			if (member != null) {
+				expanded.add(member);
+			}
+		}
+		return LispCons.rebuiltList(cons, expanded);
+	}
+
+	@Nullable private static LispVal expandTopLevelMember(LispVal form, LispEvaluator macroEval, boolean whole) {
+		LispVal member = whole ? expandAll(form, macroEval, true) : expandTopLevel(form, macroEval);
+		if (isOperator(member, LispNames.DEFINE_SYMBOL_MACRO)) {
+			// The Session harvests it for the substitution; a macro in the next member
+			// reads it through its &environment.
+			macroEval.evalResolved(member);
+			return member;
+		}
+		return stripDefmacroDefinitions(member, macroEval);
+	}
+
+	/**
+	 * The native form behind {@code macroexpand-1}'s answer for a natively-run CL macro
+	 * ({@code LispMacroExpander.foldNativeExpansion}), keeping the position; any other
+	 * form unchanged.
+	 */
+	private static LispVal foldNativeExpansion(LispVal form) {
+		LispVal folded = LispMacroExpander.foldNativeExpansion(form);
+		return folded == null ? form : SourceProvenance.inherit((LispCons) form, folded);
+	}
+
+	/**
+	 * Appends the program's own {@code compiler-macro-function} when the program names
+	 * the function and defines a compiler macro: the compile path expanded every compiler
+	 * macro away, so the answer is a NAME test against the names this pass registered,
+	 * answering the {@code %macro-expander-stub} {@code macro-function} answers. In a
+	 * program that runs a {@code (setf compiler-macro-function)}, what that wrote is read
+	 * first. The prelude definition (nil for every name) is suppressed by this one;
+	 * spelling as {@link #emitMacroFunctionTable}.
+	 */
+	private static void emitCompilerMacroFunctionTable(LispEvaluator macroEval, List<LispVal> result) {
+		List<String> names = macroEval.compilerMacroNames();
+		boolean writes = LispMacroExpander.usesRuntimeSetfCompilerMacroFunction(result);
+		if ((names.isEmpty() && !writes)
+				|| result.stream().noneMatch(form -> mentions(form, LispNames.COMPILER_MACRO_FUNCTION))
+				|| result.stream().anyMatch(form -> definesFunction(form, LispNames.COMPILER_MACRO_FUNCTION))) {
+			return;
+		}
+		StringBuilder table = new StringBuilder();
+		for (String name : names) {
+			table.append(table.isEmpty() ? "" : " ")
+				.append(PackageRegistry.splitQualified(name) == null ? LispNames.CL_USER_PKG + "::" + name : name);
+		}
+		String lookup = "(if (member name '(" + table + ")) #'" + LispNames.MACRO_EXPANDER_STUB + " nil)";
+		for (LispVal form : LispReader.readAllFromString(
+				"(defun " + LispNames.COMPILER_MACRO_FUNCTION + " (name &optional environment) "
+						+ (writes ? "(let ((written (assoc name " + LispNames.COMPILER_MACRO_FUNCTION_WRITES
+								+ "))) (if written (cdr written) " + lookup + "))" : lookup)
+						+ ")",
+				Features.INTERPRETER)) {
+			result.add(requalifyShadowedClNames(form, macroEval));
+		}
+	}
+
+	/** Whether the form names {@code name} anywhere (a call, {@code #'} it). */
+	private static boolean mentions(LispVal form, String name) {
+		while (form instanceof LispCons cons) {
+			if (mentions(cons.car(), name)) {
+				return true;
+			}
+			form = cons.cdr();
+		}
+		return form instanceof LispSymbol sym && name.equals(member(sym.name()));
+	}
+
+	/** Whether the top-level form is the program's OWN defun of {@code name}. */
+	private static boolean definesFunction(LispVal form, String name) {
+		return isOperator(form, LispNames.DEFUN) && form instanceof LispCons cons && cons.cdr() instanceof LispCons rest
+				&& rest.car() instanceof LispSymbol defined && name.equals(member(defined.name()));
+	}
+
+	/**
+	 * Appends the program's own {@code macro-function}, when it asks the question at all:
+	 * a compiled program has no macro table left, so the answer is a NAME test, and only
+	 * this pass knows which names the program's {@code defmacro}s claimed. The prelude
+	 * definition (the built-in table alone) is suppressed by the presence of this one
+	 * ({@code LispPreludeLibrary.process} skips an entry the program defines itself); the
+	 * shared {@code %macro-fn} it delegates to carries the built-in half.
+	 *
+	 * <p>
+	 * A surviving {@code macroexpand}/{@code macroexpand-1} call counts as asking too:
+	 * the prelude bodies of those two consult {@code macro-function} to decide between
+	 * answering the form unchanged and signalling, so without the program's own names
+	 * they would answer a USER macro call with silence where the built-ins signal. (Only
+	 * a COMPUTED argument survives -- a literal one was folded to its expansion above --
+	 * which is exactly the case those bodies serve.) So does a site that can reach
+	 * {@code %operator-function} ({@link OperatorFunctions#reached}), which asks
+	 * {@code macro-function} whether a name {@code fboundp} or {@code symbol-function}
+	 * was handed is a macro.
+	 *
+	 * <p>
+	 * Appended, not prepended, and every unqualified name is spelled
+	 * {@code cl-user::name}: the backends resolve the program a second time, and this
+	 * form has to survive it unchanged. At the END every {@code defpackage} has been
+	 * seen, so a qualified name resolves; and {@code cl-user::x} canonicalizes back to
+	 * bare {@code X} under ANY current package, where a bare {@code x} would be
+	 * re-qualified into the trailing {@code in-package}'s package and stop matching the
+	 * table key.
+	 */
+	private static void emitMacroFunctionTable(LispEvaluator macroEval, List<LispVal> result) {
+		List<String> macroNames = macroEval.userMacroNames();
+		boolean writes = LispMacroExpander.usesRuntimeSetfMacroFunction(result);
+		if ((macroNames.isEmpty() && !writes)
+				|| result.stream().noneMatch(UserMacroExpander::usesMacroIntrospection)
+						&& !OperatorFunctions.reached(result)
+				|| result.stream().anyMatch(UserMacroExpander::definesMacroFunction)) {
+			return;
+		}
+		StringBuilder table = new StringBuilder();
+		for (String name : macroNames) {
+			table.append(table.isEmpty() ? "" : " ")
+				.append(PackageRegistry.splitQualified(name) == null ? LispNames.CL_USER_PKG + "::" + name : name);
+		}
+		String lookup = "(" + LispNames.MACRO_FN_INTERNAL + " symbol '(" + table + "))";
+		StringBuilder source = new StringBuilder("(defun " + LispNames.MACRO_FUNCTION
+				+ " (symbol &optional environment) " + (writes ? "(let ((written (assoc symbol "
+						+ LispNames.MACRO_FUNCTION_WRITES + "))) (if written (cdr written) " + lookup + "))" : lookup)
+				+ ")");
+		if (writes) {
+			// A function the program wrote exists, so these two can run it.
+			if (result.stream().anyMatch(form -> mentions(form, LispNames.MACROEXPAND_1))
+					&& result.stream().noneMatch(form -> definesFunction(form, LispNames.MACROEXPAND_1))) {
+				source.append(MACROEXPAND_1_WITH_WRITES);
+			}
+			if (result.stream().anyMatch(form -> mentions(form, LispNames.MACROEXPAND))
+					&& result.stream().noneMatch(form -> definesFunction(form, LispNames.MACROEXPAND))) {
+				source.append(MACROEXPAND_WITH_WRITES);
+			}
+		}
+		for (LispVal form : LispReader.readAllFromString(source.toString(), Features.INTERPRETER)) {
+			result.add(requalifyShadowedClNames(form, macroEval));
+		}
+	}
+
+	/** The prelude's {@code macroexpand-1}, for a program writing macro functions. */
+	private static final String MACROEXPAND_1_WITH_WRITES = """
+			(defun macroexpand-1 (form &optional environment)
+			  (let ((written (if (consp form) (assoc (car form) %macro-function-writes%) nil)))
+			    (cond (written (values (funcall (cdr written) form environment) t))
+			          ((and (consp form) (macro-function (car form)))
+			           (error "macroexpand-1: a compiled program cannot expand a macro at run time"))
+			          (t (values form nil)))))
+			""";
+
+	/** The prelude's {@code macroexpand}, for a program writing macro functions. */
+	private static final String MACROEXPAND_WITH_WRITES = """
+			(defun macroexpand (form &optional environment)
+			  (let ((written (if (consp form) (assoc (car form) %macro-function-writes%) nil)))
+			    (cond (written (values (macroexpand (funcall (cdr written) form environment) environment) t))
+			          ((and (consp form) (macro-function (car form)))
+			           (error "macroexpand: a compiled program cannot expand a macro at run time"))
+			          (t (values form nil)))))
+			""";
+
+	/**
+	 * Whether the form names one of the run-time macro-table readers anywhere (a call,
+	 * {@code #'} it) -- they share the one answer, so they share the trigger. Among them
+	 * is {@code compile}, whose runtime asks {@code macro-function} of a name.
+	 */
+	private static boolean usesMacroIntrospection(LispVal form) {
+		while (form instanceof LispCons cons) {
+			if (usesMacroIntrospection(cons.car())) {
+				return true;
+			}
+			form = cons.cdr();
+		}
+		if (form instanceof LispSymbol sym) {
+			String name = member(sym.name());
+			return LispNames.MACRO_FUNCTION.equals(name) || LispNames.MACROEXPAND.equals(name)
+					|| LispNames.MACROEXPAND_1.equals(name) || LispNames.COMPILE.equals(name);
+		}
+		return false;
+	}
+
+	/** Whether the top-level form is the program's OWN {@code macro-function} defun. */
+	private static boolean definesMacroFunction(LispVal form) {
+		return isOperator(form, LispNames.DEFUN) && form instanceof LispCons cons && cons.cdr() instanceof LispCons rest
+				&& rest.car() instanceof LispSymbol name && LispNames.MACRO_FUNCTION.equals(member(name.name()));
+	}
+
+	/**
+	 * Re-emits, as the zero-parameter {@code (deftype name () 'spec)} shape the
+	 * compilers' registry pass understands, every {@code deftype} the macro-time
+	 * evaluator learned that is NOT already a top-level {@code deftype} in the program.
+	 * The ones that are not are the macro-GENERATED ones: alexandria defines its whole
+	 * {@code positive-integer} / {@code array-index} family from one {@code macrolet}, so
+	 * nothing in the emitted program names them -- and a {@code typecase} clause using
+	 * one (esrap's lookahead expression kinds) failed the COMPILE while the interpreter,
+	 * which evaluates the macrolet and reaches evalDeftype, resolved it.
+	 */
+	private static void emitMacroGeneratedDeftypes(LispEvaluator macroEval, List<LispVal> result) {
+		java.util.Set<String> alreadyEmitted = new java.util.HashSet<>();
+		for (LispVal form : result) {
+			if (isOperator(form, LispNames.DEFTYPE) && form instanceof LispCons cons && cons.isProperList()
+					&& cons.toList().size() >= 2 && cons.toList().get(1) instanceof LispSymbol name) {
+				alreadyEmitted.add(name.name());
+			}
+		}
+		for (String name : macroEval.deftypeNames()) {
+			LispVal expansion = macroEval.findDeftype(name);
+			if (expansion != null && alreadyEmitted.add(name)) {
+				result
+					.add(requalifyShadowedClNames(
+							properList(List.of(new LispSymbol(LispNames.DEFTYPE), new LispSymbol(name),
+									LispNil.INSTANCE, properList(List.of(new LispSymbol(LispNames.QUOTE), expansion)))),
+							macroEval));
+			}
+		}
+	}
+
+	/**
+	 * Appends one {@code (declaim (%deftype-instance 'spec 'expansion))} per compound
+	 * specifier headed by a parameterized {@code deftype} that the program spells --
+	 * {@code (proper-list integer)} -- with the expansion this pass's evaluator computes
+	 * by running the deftype's body over the arguments. The compilers have no evaluator,
+	 * so this record is how a compound use reaches them; their definition walk registers
+	 * it ({@code ClosRegistry.registerDeftypeInstance}). The walk covers every resolved
+	 * form but the deftypes themselves (a parameterized body is a template, not a use),
+	 * every registered deftype's expansion, and each expansion it computes, which can
+	 * spell a further instance ({@code (association-list k v)} expands to a
+	 * {@code proper-list} one).
+	 *
+	 * <p>
+	 * The record is appended at the END of the program, where the compilers' resolver
+	 * reads it under whatever package the program last selected, so every bare symbol is
+	 * spelled {@code common-lisp-user::} -- the package whose view a bare canonical
+	 * spelling denotes ({@link #contextFreeSpelling}).
+	 */
+	private static void emitDeftypeInstances(LispEvaluator macroEval, List<LispVal> canonicalForms,
+			List<LispVal> result) {
+		if (!macroEval.definesParameterizedDeftypes()) {
+			return;
+		}
+		java.util.ArrayDeque<LispVal> pending = new java.util.ArrayDeque<>();
+		for (LispVal form : canonicalForms) {
+			pending.add(form);
+		}
+		for (String name : macroEval.deftypeNames()) {
+			LispVal expansion = macroEval.findDeftype(name);
+			if (expansion != null) {
+				pending.add(expansion);
+			}
+		}
+		Set<String> seen = new java.util.HashSet<>();
+		while (!pending.isEmpty()) {
+			if (!(pending.pop() instanceof LispCons cons) || isOperator(cons, LispNames.DEFTYPE)) {
+				continue;
+			}
+			if (cons.car() instanceof LispSymbol head && cons.isProperList()
+					&& macroEval.namesParameterizedDeftype(head.name()) && seen.add(cons.print())) {
+				LispVal expansion = macroEval.expandDeftypeSpecifier(cons);
+				if (expansion != null) {
+					result.add(requalifyShadowedClNames(LispMacroExpander.deftypeInstanceDeclamation(
+							(LispCons) contextFreeSpelling(cons), contextFreeSpelling(expansion)), macroEval));
+					pending.push(expansion);
+				}
+			}
+			LispVal cur = cons;
+			while (cur instanceof LispCons cell) {
+				pending.push(cell.car());
+				cur = cell.cdr();
+			}
+		}
+	}
+
+	/**
+	 * The datum with every bare non-keyword symbol spelled {@code common-lisp-user::}: a
+	 * bare canonical spelling names a {@code cl} or {@code cl-user} symbol, and
+	 * {@code cl-user}'s view resolves both to that same canonical spelling from under any
+	 * package.
+	 */
+	private static LispVal contextFreeSpelling(LispVal datum) {
+		if (datum instanceof LispSymbol sym) {
+			String name = sym.name();
+			return name.startsWith(":") || name.startsWith("#") || PackageRegistry.splitQualified(name) != null ? sym
+					: new LispSymbol(LispNames.CL_USER_PKG + "::" + name);
+		}
+		if (datum instanceof LispCons cons) {
+			return new LispCons(contextFreeSpelling(cons.car()), contextFreeSpelling(cons.cdr()));
+		}
+		return datum;
+	}
+
+	/**
+	 * Re-spells every symbol of an expansion that the compilers' resolution pass would
+	 * read as some other symbol in the resolver's current package, recursively through
+	 * the form ({@link PackageResolver#emittedSpelling}). A canonical bare name is
+	 * {@code cl}'s or {@code cl-user}'s, and the package may read it as one it shadows, a
+	 * {@code cl} extension name it has come to own ({@code (defmacro while ...)}), its
+	 * own where it uses no {@code cl} -- only a {@code cl} symbol the expansion resolved
+	 * from a {@code cl:} spelling, or before the package took the name, is spelled bare
+	 * there -- or, for a {@code cl-user} symbol a macro of that package names, its own
+	 * symbol of the name. A qualifier may be a nickname of the package's own. A quoted
+	 * datum is walked too, since the compilers' resolution pass resolves its symbols as
+	 * well; an {@code %unspelled-quote} datum is not.
+	 */
+	static LispVal requalifyShadowedClNames(LispVal form, LispEvaluator macroEval) {
+		return LispTrees.rebuildSpine(form, node -> switch (node) {
+			case LispSymbol sym -> {
+				String emitted = macroEval.emittedSpelling(sym);
+				yield emitted.equals(sym.name()) ? sym : new LispSymbol(emitted);
+			}
+			case LispCons cons when cons.car() instanceof LispSymbol op && LispNames.isQuote(op.name())
+					&& !LispNames.QUOTE.equals(op.name()) ->
+				cons;
+			case LispCons cons -> null;
+			default -> node;
+		}, car -> requalifyShadowedClNames(car, macroEval),
+				// Identity-preserving (.kb/source-positions.md): nearly every cell comes
+				// back unchanged, and copying them all dropped the source position of
+				// every
+				// form a macro call sat in -- the whole defun around it.
+				(cell, car, cdr) -> car == cell.car() && cdr == cell.cdr() ? cell
+						: SourceProvenance.inherit(cell, new LispCons(car, cdr)));
+	}
+
+	/**
+	 * Folds {@code (fboundp 'name)} to {@code t} where {@code name} is a user macro the
+	 * macro-time evaluator has defined by this point, and collapses the
+	 * {@code if}/{@code when}/{@code unless}/{@code not} whose test the fold decided. A
+	 * macro is {@code fboundp} in CL and in the interpreter, but it does not exist in the
+	 * compiled program at all, so only a compile-time answer can be the right one. Only
+	 * the {@code t} direction is decided: a name that is not a macro may still be a
+	 * function, which stays a runtime question.
+	 *
+	 * <p>
+	 * A literal {@code (symbol-function 'name)} / {@code (fdefinition 'name)} of a
+	 * special operator or a macro, user or built-in, becomes
+	 * {@code (%operator-function 'name)} the same way: the backends see no definition of
+	 * such a name.
+	 */
+	private static LispVal foldMacroFboundp(LispVal form, LispEvaluator macroEval) {
+		return LispTrees.rebuildSpine(form, node -> foldedMacroFboundpNode(node, macroEval),
+				car -> foldMacroFboundp(car, macroEval), (cell, car, cdr) -> {
+					if (car == cell.car() && cdr == cell.cdr()) {
+						return cell;
+					}
+					LispCons rebuilt = new LispCons(car, cdr);
+					LispVal collapsed = collapseDecidedTest(rebuilt);
+					return SourceProvenance.inherit(cell, collapsed != null ? collapsed : rebuilt);
+				});
+	}
+
+	/**
+	 * What a node {@link #foldMacroFboundp} does not walk into becomes -- an atom and a
+	 * quoted datum stay, a decided {@code (fboundp 'name)} is {@code t} -- or
+	 * {@code null} for an ordinary cell.
+	 */
+	private static @Nullable LispVal foldedMacroFboundpNode(LispVal form, LispEvaluator macroEval) {
+		if (!(form instanceof LispCons cons)) {
+			return form;
+		}
+		if (cons.car() instanceof LispSymbol head && LispNames.isQuote(head.name())) {
+			return form;
+		}
+		if (cons.car() instanceof LispSymbol op && LispNames.FBOUNDP.equals(memberName(op.name()))
+				&& cons.cdr() instanceof LispCons argCell && argCell.cdr() instanceof LispNil
+				&& argCell.car() instanceof LispCons quote && quote.car() instanceof LispSymbol q
+				&& LispNames.QUOTE.equals(q.name()) && quote.cdr() instanceof LispCons quotedCell
+				&& quotedCell.car() instanceof LispSymbol probed && macroEval.isUserMacro(probed.name())) {
+			return SourceProvenance.inherit(cons, LispTrue.INSTANCE);
+		}
+		if (cons.car() instanceof LispSymbol op
+				&& (LispNames.SYMBOL_FUNCTION.equals(memberName(op.name()))
+						|| LispNames.FDEFINITION.equals(memberName(op.name())))
+				&& cons.cdr() instanceof LispCons argCell && argCell.cdr() instanceof LispNil
+				&& argCell.car() instanceof LispCons quote && quote.car() instanceof LispSymbol q
+				&& LispNames.QUOTE.equals(q.name()) && quote.cdr() instanceof LispCons quotedCell
+				&& quotedCell.car() instanceof LispSymbol named && isOperatorName(named.name(), macroEval)) {
+			return SourceProvenance.inherit(cons, OperatorFunctions.call(argCell.car()));
+		}
+		return null;
+	}
+
+	/**
+	 * Whether {@code macro-function} or {@code special-operator-p} answers for the
+	 * canonical name on the compile paths: a macro of the program, a built-in one, or an
+	 * ANSI special operator.
+	 */
+	private static boolean isOperatorName(String name, LispEvaluator macroEval) {
+		return macroEval.isUserMacro(name) || PackageRegistry.ansiSpecialOperatorNames().contains(name)
+				|| PackageRegistry.runtimeMacroNames().contains(name);
+	}
+
+	/**
+	 * Collapses {@code (if t a b)} / {@code (when t body...)} / {@code (unless t
+	 * body...)} / {@code (not t)} whose test {@link #foldMacroFboundp} just decided;
+	 * {@code null} when there is nothing to collapse. The
+	 * {@code compiler/CompileTimeBoundp} rule, scoped to what the macro fold produces.
+	 */
+	private static @org.jspecify.annotations.Nullable LispVal collapseDecidedTest(LispCons cons) {
+		if (!(cons.car() instanceof LispSymbol head) || !cons.isProperList()) {
+			return null;
+		}
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 2 || !(parts.get(1) instanceof LispTrue)) {
+			return null;
+		}
+		return switch (memberName(head.name())) {
+			case LispNames.IF -> parts.size() != 3 && parts.size() != 4 ? null : parts.get(2);
+			case LispNames.WHEN -> parts.size() == 2 ? LispNil.INSTANCE : parts.size() == 3 ? parts.get(2)
+					: new LispCons(new LispSymbol(LispNames.PROGN), properListTail(parts, 2));
+			case LispNames.UNLESS -> LispNil.INSTANCE;
+			case LispNames.NOT -> parts.size() != 2 ? null : LispNil.INSTANCE;
+			default -> null;
+		};
+	}
+
+	private static LispVal properListTail(List<LispVal> parts, int from) {
+		LispVal tail = LispNil.INSTANCE;
+		for (int i = parts.size() - 1; i >= from; i--) {
+			tail = new LispCons(parts.get(i), tail);
+		}
+		return tail;
+	}
+
+	private static String memberName(String name) {
+		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(name);
+		return qn == null ? name : qn.member();
+	}
+
+	private static boolean isOperator(LispVal form, String name) {
+		return form instanceof LispCons cons && cons.car() instanceof LispSymbol sym
+				&& LispMacroExpander.spellsClName(sym.name(), name);
+	}
+
+	/**
+	 * Whether any place of a {@code setf} form is a registered user setf-expander place.
+	 */
+	private static boolean hasUserSetfPlace(LispCons setf, LispEvaluator macroEval) {
+		List<LispVal> parts = setf.toList();
+		for (int i = 1; i + 1 < parts.size(); i += 2) {
+			if (parts.get(i) instanceof LispCons place && place.car() instanceof LispSymbol acc
+					&& macroEval.hasSetfExpander(acc.name())) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Registers a top-level definition into the macro-time evaluator so later macro
+	 * bodies (and later defparameter value expressions) can use it: a {@code defun} (no
+	 * body execution), the CLOS definitions (constructor/accessor/method defuns plus the
+	 * generic's dispatcher -- cl-who's process-tag chain calls a generic at expansion
+	 * time), and {@code defvar}/{@code defparameter}/{@code defconstant} (so an
+	 * expansion-time function can READ the global -- cl-who's tree-to-commands chain
+	 * reads {@code *html-mode*} and friends). A top-level {@code progn} is walked member
+	 * by member (a macrolet whose body defines defuns expands into one, and the compilers
+	 * flatten it the same way), evaluating ONLY the definition members. Every form stays
+	 * in the program for the compilers' own splice.
+	 * <p>
+	 * The defvar family is registered LAZILY (see
+	 * {@link LispEvaluator#registerLazyGlobal}): the name is proclaimed special at once
+	 * but its value expression runs only if an expansion actually reads the global. A
+	 * library that builds its tables in a top-level {@code defvar} therefore builds them
+	 * once, in the compiled program, instead of once here and once again at run time. A
+	 * value expression that cannot evaluate at macro time (e.g. it needs runtime-only
+	 * state) is skipped with a warning instead of failing the compile -- macros reading
+	 * that global would fail later, plain runtime uses are unaffected.
+	 */
+	private static void registerMacroTimeDefinitions(LispVal form, LispEvaluator macroEval) {
+		if (isOperator(form, LispNames.PROGN) && form instanceof LispCons progn && progn.isProperList()) {
+			for (LispVal member : progn.toList().subList(1, progn.toList().size())) {
+				registerMacroTimeDefinitions(member, macroEval);
+			}
+			return;
+		}
+		// A top-level (let/let* (...) definition...) wraps definitions in a shared
+		// lexical environment (s-sql's register-sql-operators closes each
+		// expand-sql-op method over its make-expander expander). Replaying the WHOLE
+		// let gives the macro-time definitions the same closure. Gated on every body
+		// form being a definition, so an unrelated top-level side effect is never
+		// double-run; the binding inits do run here as well as at run time, the same
+		// scaffolding-only assumption the definition replay itself makes.
+		if ((isOperator(form, LispNames.LET) || isOperator(form, LispNames.LET_STAR)) && form instanceof LispCons let
+				&& let.isProperList()) {
+			List<LispVal> parts = let.toList();
+			boolean allDefinitions = parts.size() >= 3;
+			for (int i = 2; i < parts.size(); i++) {
+				if (!isDefinitionForm(parts.get(i))) {
+					allDefinitions = false;
+					break;
+				}
+			}
+			if (allDefinitions) {
+				replayDefinition(form, macroEval);
+			}
+			else {
+				replayNestedMetaclassDefclasses(form, macroEval);
+			}
+			return;
+		}
+		if (isDefinitionForm(form)) {
+			replayDefinition(form, macroEval);
+			return;
+		}
+		if (isStaticCompilerMacroWrite(form)) {
+			// Installs the compiler macro for the call sites after it, as a
+			// define-compiler-macro does; the form stays, so compiler-macro-function
+			// answers the function at run time. A compiler macro is a hint: one that
+			// cannot be installed here is not honoured.
+			try {
+				macroEval.evalResolved(form);
+			}
+			catch (RuntimeException ex) {
+				// left uninstalled
+			}
+			return;
+		}
+		if (isOperator(form, LispNames.DEFVAR) || isOperator(form, LispNames.DEFPARAMETER)
+				|| isOperator(form, LispNames.DEFCONSTANT)) {
+			macroEval.registerLazyGlobal(form);
+			return;
+		}
+		replayNestedMetaclassDefclasses(form, macroEval);
+	}
+
+	/** A provenance-marker form, matched by member name in any package spelling. */
+	private static boolean isProvenanceMarker(LispVal form, String marker) {
+		return form instanceof LispCons cons && cons.car() instanceof LispSymbol sym
+				&& marker.equals(member(sym.name()));
+	}
+
+	/**
+	 * Replays a definition into the macro-time evaluator. A method or generic function
+	 * whose lambda list is not congruent with its generic's (CLHS 7.6.4) is refused with
+	 * a program-error where the form runs; the compiled program signals that same refusal
+	 * at the same form, so here it only leaves the definition out instead of failing the
+	 * compile.
+	 */
+	private static void replayDefinition(LispVal form, LispEvaluator macroEval) {
+		try {
+			macroEval.evalResolved(form);
+		}
+		catch (LispEvalException ex) {
+			if (!ClosRegistry.PROGRAM_ERROR_CLASS_NAME.equals(ex.conditionClassName())
+					|| !(MopEvalCapture.definesMethods(form) || isOperator(form, LispNames.DEFGENERIC))) {
+				throw ex;
+			}
+		}
+	}
+
+	/**
+	 * Whether the form is {@code (setf (compiler-macro-function 'name) value)} whose
+	 * value evaluating has no side effect: a {@code lambda}, a {@code #'} of a name or a
+	 * lambda, or nil.
+	 */
+	private static boolean isStaticCompilerMacroWrite(LispVal form) {
+		if (!isOperator(form, LispNames.SETF) || !(form instanceof LispCons cons) || !cons.isProperList()) {
+			return false;
+		}
+		List<LispVal> parts = cons.toList();
+		if (parts.size() != 3 || !isOperator(parts.get(1), LispNames.COMPILER_MACRO_FUNCTION)
+				|| !(parts.get(1) instanceof LispCons place) || !place.isProperList() || place.toList().size() != 2
+				|| !(place.toList().get(1) instanceof LispCons quoted && isOperator(quoted, LispNames.QUOTE)
+						&& quoted.cdr() instanceof LispCons quotedTail && quotedTail.car() instanceof LispSymbol)) {
+			return false;
+		}
+		LispVal value = parts.get(2);
+		return value instanceof LispNil || isOperator(value, LispNames.LAMBDA) || (isOperator(value, LispNames.FUNCTION)
+				&& value instanceof LispCons function && function.cdr() instanceof LispCons functionTail
+				&& (functionTail.car() instanceof LispSymbol || isOperator(functionTail.car(), LispNames.LAMBDA)));
+	}
+
+	/** A definition form the macro-time evaluator replays; see the caller above. */
+	private static boolean isDefinitionForm(LispVal form) {
+		return isOperator(form, LispNames.DEFUN) || isOperator(form, LispNames.DEFCLASS)
+				|| isOperator(form, LispNames.DEFGENERIC) || isOperator(form, LispNames.DEFMETHOD)
+				|| isOperator(form, LispNames.DEFINE_CONDITION) || isOperator(form, LispNames.DEFSTRUCT);
+	}
+
+	/**
+	 * The {@code (export '(entries...))} residue of a literal top-level
+	 * {@code (pax:defsection NAME ...)} -- every body list whose head is a non-keyword
+	 * symbol names an entry, the same rule
+	 * {@code PackageResolver.consumeDefsectionExports} applies -- or null when the form
+	 * is not a pax defsection (the qualifier is required, like the resolver's own
+	 * {@code isMglPaxOperator} test) or has no entries. The names keep their source
+	 * spelling; the consuming resolver member-strips them itself.
+	 */
+	@org.jspecify.annotations.Nullable
+	private static LispVal paxDefsectionExportForm(LispVal form) {
+		if (!(form instanceof LispCons cons) || !cons.isProperList() || !(cons.car() instanceof LispSymbol op)) {
+			return null;
+		}
+		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(op.name());
+		if (qn == null || !"DEFSECTION".equals(qn.member().toUpperCase(java.util.Locale.ROOT))) {
+			return null;
+		}
+		String pkg = qn.pkg().toUpperCase(java.util.Locale.ROOT);
+		if (!"MGL-PAX".equals(pkg) && !"PAX".equals(pkg)) {
+			return null;
+		}
+		List<LispVal> entries = new ArrayList<>();
+		List<LispVal> parts = cons.toList();
+		for (LispVal part : parts.subList(Math.min(2, parts.size()), parts.size())) {
+			if (part instanceof LispCons entry && entry.car() instanceof LispSymbol entrySym && !entrySym.isKeyword()) {
+				entries.add(entrySym);
+			}
+		}
+		if (entries.isEmpty()) {
+			return null;
+		}
+		return properList(List.of(new LispSymbol(LispNames.EXPORT),
+				properList(List.of(new LispSymbol(LispNames.QUOTE), properList(entries)))));
+	}
+
+	/**
+	 * Rewrites every {@code :metaclass} defclass in the form -- a bare one, a member of a
+	 * {@code progn} a macro expanded into, or one below a conditional or a loop
+	 * ({@code .kb/clos.md}, "A class defined below the top level") -- onto the
+	 * direct-superclass list its driver-built metaobject holds in the macro-time
+	 * evaluator ({@link LispEvaluator#widenedMetaclassDefclassOrNull}); forms without an
+	 * injection come back identical.
+	 */
+	private static LispVal widenMetaclassDefclasses(LispVal form, LispEvaluator macroEval) {
+		if (isOperator(form, LispNames.DEFCLASS) && form instanceof LispCons defclass) {
+			LispCons widened = macroEval.widenedMetaclassDefclassOrNull(defclass);
+			return widened != null ? widened : form;
+		}
+		if (!(form instanceof LispCons cons) || isOperator(form, LispNames.QUOTE) || !cons.isProperList()
+				|| !holdsMetaclassDefclass(form)) {
+			return form;
+		}
+		List<LispVal> parts = cons.toList();
+		List<LispVal> out = new ArrayList<>(parts.size());
+		boolean changed = false;
+		for (LispVal member : parts) {
+			LispVal widened = widenMetaclassDefclasses(member, macroEval);
+			changed = changed || widened != member;
+			out.add(widened);
+		}
+		return changed ? SourceProvenance.inherit(cons, properList(out)) : form;
+	}
+
+	/**
+	 * Whether a {@code :metaclass} defclass stands anywhere in the form outside quoted
+	 * data.
+	 */
+	private static boolean holdsMetaclassDefclass(LispVal form) {
+		if (!(form instanceof LispCons cons) || isOperator(form, LispNames.QUOTE)) {
+			return false;
+		}
+		if (isMetaclassDefclass(form)) {
+			return true;
+		}
+		for (LispVal cell = cons; cell instanceof LispCons c; cell = c.cdr()) {
+			if (holdsMetaclassDefclass(c.car())) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Replays each {@code :metaclass} defclass below a top-level form that is no
+	 * definition into the macro-time evaluator, in order, so the compile paths register
+	 * the class from what its metaclass protocol makes of it, as a top-level one's
+	 * ({@link #widenMetaclassDefclasses}): contextl's {@code deflayer} in a {@code loop}
+	 * gains its {@code standard-layer-object} superclass there. A definition that cannot
+	 * run here keeps the form as written.
+	 */
+	private static void replayNestedMetaclassDefclasses(LispVal form, LispEvaluator macroEval) {
+		if (!(form instanceof LispCons cons) || isOperator(form, LispNames.QUOTE)) {
+			return;
+		}
+		if (isMetaclassDefclass(form)) {
+			try {
+				macroEval.evalResolved(form);
+			}
+			catch (RuntimeException ex) {
+				// The static registration takes the form as written.
+			}
+			return;
+		}
+		for (LispVal cell = cons; cell instanceof LispCons c; cell = c.cdr()) {
+			replayNestedMetaclassDefclasses(c.car(), macroEval);
+		}
+	}
+
+	/**
+	 * Whether the top-level form is a {@code defclass} carrying {@code (:metaclass M)} --
+	 * which activates the pass even without a defmacro: the class-definition protocol
+	 * must run in the macro-time evaluator so a {@code build-dao-methods}-style
+	 * {@code compile} inside a {@code finalize-inheritance} hook is intercepted and its
+	 * method definitions spliced (see {@code MopEvalCapture}).
+	 */
+	private static boolean isMetaclassDefclass(LispVal form) {
+		return isOperator(form, LispNames.DEFCLASS) && form instanceof LispCons cons && cons.isProperList()
+				&& LispMacroExpander.defclassUsesMetaclass(cons);
+	}
+
+	/** Whether the form contains a {@code %read-eval} marker symbol anywhere. */
+	private static boolean holdsReadEvalMarker(LispVal datum) {
+		return LispTrees.anyDatumNode(datum, node -> node instanceof LispSymbol sym
+				&& (LispNames.READ_EVAL.equals(sym.name()) || LispNames.READ_EVAL_TEMPLATE.equals(sym.name())));
+	}
+
+	private static boolean usesReadEvalMarker(LispVal form) {
+		while (true) {
+			switch (form) {
+				case LispSymbol sym -> {
+					return LispNames.READ_EVAL.equals(sym.name()) || LispNames.READ_EVAL_TEMPLATE.equals(sym.name());
+				}
+				case LispCons cons -> {
+					if (usesReadEvalMarker(cons.car())) {
+						return true;
+					}
+					form = cons.cdr();
+				}
+				case am.ik.rontolisp.LispCircularLiteral literal -> {
+					return holdsReadEvalMarker(literal.datum());
+				}
+				case am.ik.rontolisp.LispArray array -> {
+					return holdsReadEvalMarker(array);
+				}
+				case am.ik.rontolisp.LispStructLiteral literal -> {
+					return holdsReadEvalMarker(literal);
+				}
+				default -> {
+					return false;
+				}
+			}
+		}
+	}
+
+	// --- Pure-config-setter detection ------------------------------------------------
+	//
+	// rontolisp expands ALL macros at compile time, so a macro that reads a global at
+	// macro-EXPANSION time (cl-who's with-html-output reads *html-mode*) cannot see a
+	// runtime (setf (place) ...). The fix is to REPLAY such a top-level setf into the
+	// macro-time evaluator -- but only when doing so cannot double-run an external side
+	// effect. The walk below is a static purity judgment that replaces the old
+	// library-specific data file (macro-time-setf-places.txt): a setf is replayed iff its
+	// (defun (setf PLACE) ...) writer is a pure configuration setter and its value is
+	// pure.
+
+	// A top-level (setf (PLACE args...) VALUE) is a replayable pure config setter when:
+	// the
+	// value and any place args are pure expressions, and the user-defined (setf PLACE)
+	// writer's body only assigns special/global variables via side-effect-free
+	// computation.
+	// The bar is asymmetric -- deny by default -- so an impure writer/value is never
+	// replayed (a false positive would double-run side effects at compile time); a false
+	// negative merely fails to propagate a config change to expansion time.
+	private static boolean isPureConfigSetf(LispVal form, LispEvaluator macroEval) {
+		if (!(form instanceof LispCons cons) || !(cons.car() instanceof LispSymbol op)
+				|| !LispNames.SETF.equals(member(op.name())) || !(cons.cdr() instanceof LispCons rest)
+				|| !(rest.car() instanceof LispCons place) || !(place.car() instanceof LispSymbol placeOp)
+				|| !(rest.cdr() instanceof LispCons valTail) || !(valTail.cdr() instanceof LispNil)) {
+			// Only the single place/value shape (setf (PLACE args...) VALUE) is handled;
+			// a
+			// multi-pair setf or a non-accessor place is left for runtime only.
+			return false;
+		}
+		// The value written and any subforms of the place are evaluated on replay, so
+		// they
+		// must be pure (no side effect, no mutation).
+		if (!isPure(valTail.car(), false, macroEval)) {
+			return false;
+		}
+		for (LispVal arg : cdrList(place)) {
+			if (!isPure(arg, false, macroEval)) {
+				return false;
+			}
+		}
+		// The (setf PLACE) writer must be a user-defined pure config setter: no writer (a
+		// built-in place or none) is not replayable.
+		List<LispVal> body = macroEval.setfWriterBody(placeOp.name());
+		if (body == null) {
+			return false;
+		}
+		for (LispVal bodyForm : body) {
+			if (!isPure(bodyForm, true, macroEval)) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	// Whether FORM is a side-effect-free expression. With allowSpecialMutation, a
+	// setq/setf of a special/global variable is permitted (the config-setter body);
+	// otherwise any assignment is impure. Deny by default: an operator outside the pure
+	// allow-list (I/O, destructive ops, incf/push, funcall/apply, error, an unknown or
+	// user function, ...) makes the form impure.
+	private static boolean isPure(LispVal form, boolean allowSpecialMutation, LispEvaluator macroEval) {
+		if (!(form instanceof LispCons cons)) {
+			// A number/string/character/keyword literal, nil/t, or a variable read.
+			return true;
+		}
+		if (!cons.isProperList() || !(cons.car() instanceof LispSymbol op)) {
+			// A dotted datum, or a computed operator ((lambda ...) / ((f) ...)): reject.
+			return false;
+		}
+		List<LispVal> parts = cons.toList();
+		return switch (member(op.name())) {
+			case LispNames.QUOTE, LispNames.UNSPELLED_QUOTE -> true; // quoted literal
+																		// data
+			case LispNames.BLOCK -> {
+				// (block name body...): the name is data, the body is expressions --
+				// every defun body is now block-wrapped (named return-from), so the
+				// purity walk must see through the wrapper.
+				if (parts.size() < 2) {
+					yield false;
+				}
+				for (int i = 2; i < parts.size(); i++) {
+					if (!isPure(parts.get(i), allowSpecialMutation, macroEval)) {
+						yield false;
+					}
+				}
+				yield true;
+			}
+			case LispNames.SETQ -> allowSpecialMutation && isPureAssignment(parts, macroEval);
+			case LispNames.SETF -> allowSpecialMutation && isPureAssignment(parts, macroEval);
+			case LispNames.LET, LispNames.LET_STAR -> isPureLet(parts, allowSpecialMutation, macroEval);
+			case LispNames.COND -> isPureCond(parts, allowSpecialMutation, macroEval);
+			case LispNames.CASE, LispNames.ECASE, LispNames.CCASE, LispNames.TYPECASE, LispNames.ETYPECASE,
+					LispNames.CTYPECASE ->
+				isPureCase(parts, allowSpecialMutation, macroEval);
+			case LispNames.THE ->
+				// (the type value): the type is data; only the value is evaluated.
+				parts.size() >= 3 && isPure(parts.get(2), allowSpecialMutation, macroEval);
+			default -> {
+				if (!PURE_OPERATORS.contains(member(op.name()))) {
+					yield false;
+				}
+				// A pure control form / pure builtin: every argument is an expression.
+				for (int i = 1; i < parts.size(); i++) {
+					if (!isPure(parts.get(i), allowSpecialMutation, macroEval)) {
+						yield false;
+					}
+				}
+				yield true;
+			}
+		};
+	}
+
+	// (setq v1 e1 ...) / (setf p1 e1 ...): every target must be a special/global variable
+	// symbol (a non-symbol place is a data-structure mutation; a lexical/unknown target
+	// is
+	// not config state), and every value must be pure.
+	private static boolean isPureAssignment(List<LispVal> parts, LispEvaluator macroEval) {
+		if (parts.size() < 3 || (parts.size() - 1) % 2 != 0) {
+			return false;
+		}
+		for (int i = 1; i < parts.size(); i += 2) {
+			if (!(parts.get(i) instanceof LispSymbol target) || !macroEval.isGlobalOrSpecialVariable(target.name())
+					|| !isPure(parts.get(i + 1), true, macroEval)) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	// (let/let* (bindings) body...): bound NAMES are new lexicals (skipped); each init
+	// and
+	// body form is an expression.
+	private static boolean isPureLet(List<LispVal> parts, boolean allowSpecialMutation, LispEvaluator macroEval) {
+		if (parts.size() < 2) {
+			return false;
+		}
+		if (parts.get(1) instanceof LispCons bindings) {
+			if (!bindings.isProperList()) {
+				return false;
+			}
+			for (LispVal binding : bindings.toList()) {
+				if (binding instanceof LispSymbol) {
+					continue; // (let (x) ...): bound to nil
+				}
+				if (!(binding instanceof LispCons pair) || !pair.isProperList()) {
+					return false;
+				}
+				List<LispVal> pairParts = pair.toList();
+				for (int i = 1; i < pairParts.size(); i++) {
+					if (!isPure(pairParts.get(i), allowSpecialMutation, macroEval)) {
+						return false;
+					}
+				}
+			}
+		}
+		else if (!(parts.get(1) instanceof LispNil)) {
+			return false;
+		}
+		for (int i = 2; i < parts.size(); i++) {
+			if (!isPure(parts.get(i), allowSpecialMutation, macroEval)) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	// (cond (test body...)...): every subform of every clause is an expression.
+	private static boolean isPureCond(List<LispVal> parts, boolean allowSpecialMutation, LispEvaluator macroEval) {
+		for (int i = 1; i < parts.size(); i++) {
+			if (parts.get(i) instanceof LispNil) {
+				continue;
+			}
+			if (!(parts.get(i) instanceof LispCons clause) || !clause.isProperList()) {
+				return false;
+			}
+			for (LispVal f : clause.toList()) {
+				if (!isPure(f, allowSpecialMutation, macroEval)) {
+					return false;
+				}
+			}
+		}
+		return true;
+	}
+
+	// (case/ecase/... keyform (keys body...)...): the keyform and clause bodies are
+	// expressions; the keys are unevaluated data (skipped).
+	private static boolean isPureCase(List<LispVal> parts, boolean allowSpecialMutation, LispEvaluator macroEval) {
+		if (parts.size() < 2 || !isPure(parts.get(1), allowSpecialMutation, macroEval)) {
+			return false;
+		}
+		for (int i = 2; i < parts.size(); i++) {
+			if (parts.get(i) instanceof LispNil) {
+				continue;
+			}
+			if (!(parts.get(i) instanceof LispCons clause) || !clause.isProperList()) {
+				return false;
+			}
+			List<LispVal> clauseParts = clause.toList();
+			for (int j = 1; j < clauseParts.size(); j++) {
+				if (!isPure(clauseParts.get(j), allowSpecialMutation, macroEval)) {
+					return false;
+				}
+			}
+		}
+		return true;
+	}
+
+	private static List<LispVal> cdrList(LispCons cons) {
+		return cons.cdr() instanceof LispCons rest && rest.isProperList() ? rest.toList() : List.of();
+	}
+
+	private static String member(String name) {
+		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(name);
+		return qn == null ? name : qn.member();
+	}
+
+	// Operators whose every argument is an expression AND which have no side effect: pure
+	// control forms and side-effect-free builtins (arithmetic, comparison, logic, type
+	// predicates, and non-destructive constructors/readers). An operator absent from this
+	// set (and from the structural cases in isPure) is treated as impure. Deliberately
+	// EXCLUDES anything that mutates or does I/O: print/format, rplaca/rplacd, aset,
+	// push/pop/incf/decf, nconc/nreverse/sort/delete, funcall/apply, error, file/stream
+	// ops.
+	private static final Set<String> PURE_OPERATORS = Set.of("if", "when", "unless", "and", "or", "not", "progn",
+			"prog1", "prog2", "values", "identity", "+", "-", "*", "/", "1+", "1-", "mod", "rem", "abs", "min", "max",
+			"expt", "sqrt", "isqrt", "gcd", "lcm", "floor", "ceiling", "round", "truncate", "float", "signum", "=",
+			"/=", "<", ">", "<=", ">=", "eq", "eql", "equal", "equalp", "char=", "char<", "char>", "char<=", "char>=",
+			"string=", "string<", "string>", "string<=", "string>=", "string-equal", "null", "atom", "consp", "listp",
+			"symbolp", "keywordp", "stringp", "numberp", "integerp", "floatp", "characterp", "functionp", "zerop",
+			"plusp", "minusp", "evenp", "oddp", "endp", "car", "cdr", "caar", "cadr", "cdar", "cddr", "caddr", "first",
+			"second", "third", "fourth", "rest", "last", "nth", "nthcdr", "elt", "length", "list", "list*", "cons",
+			"reverse", "append", "member", "assoc", "getf", "position", "find", "string", "symbol-name", "char-code",
+			"char-int", "code-char");
+
+	// in-package/defpackage in any package spelling ((cl:in-package ...) included) --
+	// the resolver consumes these, so they must be recognized BEFORE resolution to be
+	// kept verbatim for the compilers.
+	/**
+	 * The {@code (%own-symbol "NAME")} marker ({@link LispNames#OWN_SYMBOL}) for a
+	 * consumed {@code defmacro} whose unqualified {@code cl} extension name resolved to
+	 * another package's symbol: the compilers' resolution pass never sees the definition,
+	 * and without the marker it would keep reading the name as {@code cl}'s. Null for any
+	 * other definition.
+	 */
+	private static @Nullable LispVal ownSymbolMarker(LispVal form, LispVal resolved) {
+		if (!(form instanceof LispCons cons) || !(cons.cdr() instanceof LispCons nameCell)
+				|| !(nameCell.car() instanceof LispSymbol name) || !PackageRegistry.isClExtensionName(name.name())
+				|| !(resolved instanceof LispCons out) || !(out.cdr() instanceof LispCons outNameCell)
+				|| !(outNameCell.car() instanceof LispSymbol outName) || outName.name().equals(name.name())) {
+			return null;
+		}
+		return properList(List.of(new LispSymbol(LispNames.OWN_SYMBOL), new LispString(name.name())));
+	}
+
+	private static boolean isPackageDirective(LispVal form) {
+		if (!(form instanceof LispCons cons) || !(cons.car() instanceof LispSymbol sym)) {
+			return false;
+		}
+		String name = sym.name();
+		int colon = name.lastIndexOf(':');
+		String member = colon >= 0 ? name.substring(colon + 1) : name;
+		// A package's own nicknames change how the forms after them read. A computed
+		// call is an ordinary call, whose arguments this pass walks.
+		if (LispNames.ADD_PACKAGE_LOCAL_NICKNAME.equals(member)
+				|| LispNames.REMOVE_PACKAGE_LOCAL_NICKNAME.equals(member)) {
+			return PackageResolver.hasLiteralDesignators(cons);
+		}
+		// The %push-package/%pop-package markers LoadInliner brackets a loaded file with
+		// are package directives too: the macro evaluator's resolver must track their
+		// save/restore so a defmacro after a load resolves in the caller's package, and
+		// they are kept verbatim for the compilers' own resolution pass.
+		if (LispNames.SHADOWING_IMPORT.equals(member)) {
+			return PackageResolver.hasLiteralImportArguments(cons);
+		}
+		return LispNames.IN_PACKAGE.equals(member) || LispNames.DEFPACKAGE.equals(member)
+				|| LispNames.USE_PACKAGE.equals(member) || LispNames.UNUSE_PACKAGE.equals(member)
+				|| LispNames.EXPORT.equals(member) || LispNames.UNEXPORT.equals(member)
+				|| LispNames.IMPORT.equals(member) || LispNames.PUSH_PACKAGE.equals(member)
+				|| LispNames.POP_PACKAGE.equals(member);
+	}
+
+	/**
+	 * The members of a {@code progn}, nested ones flattened, when one of them is a
+	 * package directive, or a package directive itself as its one member; null for any
+	 * other form.
+	 */
+	private static @Nullable List<LispVal> prognMembersWithPackageDirective(LispVal form) {
+		if (isPackageDirective(form)) {
+			return List.of(form);
+		}
+		if (!isOperator(form, LispNames.PROGN) || !((LispCons) form).isProperList()) {
+			return null;
+		}
+		List<LispVal> members = new ArrayList<>();
+		flattenProgn((LispCons) form, members);
+		return members.stream().anyMatch(UserMacroExpander::isPackageDirective) ? members : null;
+	}
+
+	private static boolean holdsEvalWhenMember(LispVal form) {
+		if (!isOperator(form, LispNames.PROGN) || !((LispCons) form).isProperList()) {
+			return false;
+		}
+		List<LispVal> members = new ArrayList<>();
+		flattenProgn((LispCons) form, members);
+		return members.stream().anyMatch(member -> isOperator(member, LispNames.EVAL_WHEN));
+	}
+
+	private static void flattenProgn(LispCons progn, List<LispVal> into) {
+		for (LispVal member = progn.cdr(); member instanceof LispCons cell; member = cell.cdr()) {
+			if (isOperator(cell.car(), LispNames.PROGN) && ((LispCons) cell.car()).isProperList()) {
+				flattenProgn((LispCons) cell.car(), into);
+			}
+			else {
+				into.add(cell.car());
+			}
+		}
+	}
+
+	private static boolean usesMacroexpand(LispVal form) {
+		while (form instanceof LispCons cons) {
+			if (isOperator(cons, LispNames.MACROEXPAND) || isOperator(cons, LispNames.MACROEXPAND_1)) {
+				return true;
+			}
+			if (usesMacroexpand(cons.car())) {
+				return true;
+			}
+			form = cons.cdr();
+		}
+		return false;
+	}
+
+	// A macrolet anywhere (top level or nested in a body) forces the pass to run so its
+	// local macros are expanded away; the compilers have no macrolet support of their
+	// own.
+	/**
+	 * Whether the top-level form is a {@code deftype} with a non-empty lambda list -- the
+	 * shape folded into a zero-parameter deftype by the loop above, which also activates
+	 * the pass.
+	 */
+	private static boolean isParameterizedDeftype(LispVal form) {
+		return isOperator(form, LispNames.DEFTYPE) && form instanceof LispCons cons && cons.isProperList()
+				&& cons.toList().size() >= 4 && cons.toList().get(2) instanceof LispCons;
+	}
+
+	/**
+	 * Registers every {@code (define-symbol-macro name expansion)} the form carries at
+	 * top level -- directly, or through the {@code progn}/{@code eval-when} nesting a
+	 * macro built around it -- and returns the form with those definitions REMOVED. The
+	 * compiled program has no symbol-macro table, so the definition cannot survive; its
+	 * only effect is on the substitution below. The definition is also replayed into the
+	 * macro-time evaluator, so a macro body that reads the name at expansion time sees
+	 * the same expansion the emitted code gets.
+	 *
+	 * <p>
+	 * A definition that is NOT top level (inside a {@code let}, a {@code defun} body) is
+	 * an error rather than a silent no-op: the reference it means to serve is elsewhere
+	 * in the program, and nothing here could scope the substitution to its body.
+	 * @param form the expanded top-level form
+	 * @param into the definitions, by resolved name, to add to
+	 * @param macroEval the macro-time evaluator
+	 * @return the form with the definitions removed, or {@code null} when the form WAS
+	 * the definition
+	 */
+	@Nullable private static LispVal harvestSymbolMacros(LispVal form, java.util.Map<String, LispVal> into,
+			LispEvaluator macroEval) {
+		LispVal stripped = stripSymbolMacroDefinitions(form, into, macroEval);
+		if (nestedDefineSymbolMacro(stripped)) {
+			throw new IllegalArgumentException(
+					LispNames.DEFINE_SYMBOL_MACRO + " must be a top-level form: " + form.print());
+		}
+		return stripped;
+	}
+
+	/**
+	 * Consumes every macro definition of a top-level form -- a {@code defmacro} a macro
+	 * EXPANSION produced or a {@code (setf (macro-function ...) ...)}, bare or nested in
+	 * the {@code progn}/{@code eval-when} a macro wrapped around it -- into the
+	 * macro-time evaluator, the only macro table the compile paths have, and removes it
+	 * from the form; null when nothing is left to emit.
+	 *
+	 * <p>
+	 * A {@code progn} at top level processes its members as top-level forms (CLHS
+	 * 3.2.3.1), so a macro that defines a macro alongside something else is an ordinary
+	 * shape, not an edge case: let-plus's {@code define-let+-expansion} expands to
+	 * {@code (progn (defmacro NAME ...) (defmethod let+-expansion-for-list ...))}, which
+	 * is what every {@code let+} form in array-operations resolves through. Macros do not
+	 * exist in a compiled program, so a definition left in place compiles to a call of
+	 * the undefined function {@code DEFMACRO} -- and the macro it should have defined is
+	 * missing from expansion time as well, so its call sites compile to their own
+	 * call-time errors.
+	 * @param form the expanded top-level form
+	 * @param macroEval the macro-time evaluator the definitions are replayed into
+	 * @return the form without its macro definitions, or null when it was only those
+	 */
+	@Nullable private static LispVal stripDefmacroDefinitions(LispVal form, LispEvaluator macroEval) {
+		if (!(form instanceof LispCons cons) || !cons.isProperList() || !(cons.car() instanceof LispSymbol head)) {
+			return form;
+		}
+		String name = memberName(head.name());
+		if (LispNames.DEFINE_METHOD_COMBINATION.equals(name)) {
+			// It runs here, where dispatchers run its function; the backend's registry
+			// takes the function from what is left of the form.
+			macroEval.evalResolved(cons);
+			return macroEval.methodCombinationMarker(cons);
+		}
+		if (LispNames.DEFMACRO.equals(name) || isExpansionTimeDefinition(cons)) {
+			macroEval.evalResolved(isOperator(cons, LispNames.DEFINE_MODIFY_MACRO)
+					? LispMacroExpander.expandDefineModifyMacro(cons) : cons);
+			return null;
+		}
+		if (LispMacroExpander.isSetfMacroFunctionForm(cons)) {
+			if (cons.toList().size() > 3) {
+				return stripDefmacroDefinitions(LispMacroExpander.splitSetfPairs(cons), macroEval);
+			}
+			replayMacroDefinitions(cons, macroEval);
+			return null;
+		}
+		// A top-level (let/let* (...) (defmacro ...)) defines a macro CLOSED OVER the
+		// bindings -- anaphora's (with-unique-names (s-indicator current-s-indicator)
+		// (defmacro symbolic ...)), the shape every let-plus and array-operations form
+		// resolves through. Replaying the whole let gives the macro-time definition the
+		// same closure, and the binding inits (gensym calls here) run once, at macro
+		// time. Gated on the body being macro definitions only -- plus a quoted value,
+		// which has no effect at top level -- so an unrelated top-level side effect is
+		// never swallowed. A flet/labels around the macros is the same shape over local
+		// functions: fiveam's def-special-environment expands to
+		// (flet () (defmacro ...) ... 'name).
+		if (LispNames.LET.equals(name) || LispNames.LET_STAR.equals(name) || LispNames.FLET.equals(name)
+				|| LispNames.LABELS.equals(name)) {
+			if (!bodyOnlyDefinesMacros(cons.toList())) {
+				return form;
+			}
+			replayMacroDefinitions(cons, macroEval);
+			return null;
+		}
+		if (!LispNames.PROGN.equals(name) && !LispNames.EVAL_WHEN.equals(name)) {
+			return form;
+		}
+		// eval-when keeps its situation list in place; progn has no header member.
+		int firstMember = LispNames.EVAL_WHEN.equals(name) ? 2 : 1;
+		List<LispVal> parts = cons.toList();
+		List<LispVal> kept = new ArrayList<>(parts.subList(0, Math.min(firstMember, parts.size())));
+		boolean changed = false;
+		for (int i = firstMember; i < parts.size(); i++) {
+			LispVal member = stripDefmacroDefinitions(parts.get(i), macroEval);
+			changed = changed || member != parts.get(i);
+			if (member != null) {
+				kept.add(member);
+			}
+		}
+		if (!changed && parts.size() > firstMember) {
+			return form;
+		}
+		return kept.size() > firstMember ? properList(kept) : null;
+	}
+
+	/**
+	 * A macro's expansion with each {@code locally} in a top-level position as the
+	 * {@code progn} it is there (CLHS 3.2.3.1): its members are top-level forms, its
+	 * declarations no-ops downstream, as {@code flattenTopLevel} treats one the source
+	 * wrote. hu.dwim.def's {@code (def macro ...)} expands to
+	 * {@code (locally (declare ...) (defmacro ...))}.
+	 */
+	private static LispVal topLevelLocallyAsProgn(LispVal form) {
+		if (!(form instanceof LispCons cons) || !cons.isProperList() || !(cons.car() instanceof LispSymbol head)) {
+			return form;
+		}
+		String name = memberName(head.name());
+		boolean locally = LispNames.LOCALLY.equals(name);
+		boolean evalWhen = LispNames.EVAL_WHEN.equals(name);
+		if (!locally && !evalWhen && !LispNames.PROGN.equals(name)) {
+			return form;
+		}
+		List<LispVal> parts = cons.toList();
+		int firstMember = evalWhen ? 2 : 1;
+		List<LispVal> members = new ArrayList<>(parts.subList(0, Math.min(firstMember, parts.size())));
+		boolean changed = locally;
+		if (locally) {
+			members.set(0, new LispSymbol(LispNames.PROGN));
+		}
+		for (int i = firstMember; i < parts.size(); i++) {
+			if (locally && isOperator(parts.get(i), LispNames.DECLARE)) {
+				continue;
+			}
+			LispVal member = topLevelLocallyAsProgn(parts.get(i));
+			changed = changed || member != parts.get(i);
+			members.add(member);
+		}
+		return changed ? SourceProvenance.inherit(cons, properList(members)) : form;
+	}
+
+	// What only rewrites call sites and places here, so it does not exist in the
+	// program. nibbles' define-storer expands to (progn (defun ...) (defsetf ...)).
+	private static boolean isExpansionTimeDefinition(LispVal form) {
+		return isOperator(form, LispNames.DEFINE_COMPILER_MACRO) || isOperator(form, LispNames.DEFINE_MODIFY_MACRO)
+				|| isOperator(form, LispNames.DEFINE_METHOD_COMBINATION)
+				|| isOperator(form, LispNames.DEFINE_SETF_EXPANDER) || isOperator(form, LispNames.DEFSETF);
+	}
+
+	private static boolean isMacroDefinition(LispVal form) {
+		return isOperator(form, LispNames.DEFMACRO) || isExpansionTimeDefinition(form)
+				|| (LispMacroExpander.isSetfMacroFunctionForm(form) && ((LispCons) form).toList().size() == 3);
+	}
+
+	// Whether the body of a let or flet is macro definitions and nothing else that has an
+	// effect: the form is consumed whole, closures and all.
+	private static boolean bodyOnlyDefinesMacros(List<LispVal> binderParts) {
+		if (binderParts.size() < 3 || !isMacroDefinition(binderParts.get(2))) {
+			return false;
+		}
+		for (int i = 3; i < binderParts.size(); i++) {
+			if (!isMacroDefinition(binderParts.get(i)) && !isOperator(binderParts.get(i), LispNames.QUOTE)) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	/**
+	 * Rebuilds a let or flet around its bound part, walking the body. At top level a body
+	 * of macro definitions stays as it is, because {@link #stripDefmacroDefinitions}
+	 * replays the form and the macro-time evaluator expands it as it runs; any other body
+	 * is ordinary code, a {@code (setf (macro-function ...))} in it included.
+	 */
+	private static LispVal rebuildBinder(LispCons cons, List<LispVal> parts, LispVal bound, LispEvaluator macroEval,
+			boolean topLevel) {
+		if (!topLevel) {
+			return rebuild(cons, parts, 2, macroEval, bound);
+		}
+		List<LispVal> expanded = new ArrayList<>(parts);
+		for (int i = 2; i < expanded.size(); i++) {
+			if (expanded.get(i) instanceof LispCons member) {
+				// What expandAll keeps track of: the macro call is where a warning or a
+				// failure of its expansion is placed.
+				LispCons enclosing = SourceProvenance.enterForm(member);
+				try {
+					expanded.set(i, expandMacroCall(member, macroEval));
+				}
+				catch (RuntimeException ex) {
+					throw SourceProvenance.noteFailure(member, ex);
+				}
+				finally {
+					SourceProvenance.leaveForm(enclosing);
+				}
+			}
+		}
+		if (!bodyOnlyDefinesMacros(expanded)) {
+			return rebuild(cons, expanded, 2, macroEval, bound);
+		}
+		expanded.set(1, bound);
+		return LispCons.rebuiltList(cons, expanded);
+	}
+
+	/**
+	 * Replays a form that defines macros into the macro-time evaluator. A failure fails
+	 * the compile, naming the form: unlike the replay of a registry-building call, which
+	 * is skipped with a warning, the form is dropped and no run of the program can make
+	 * up for it, so every call site of its macro would compile to an undefined function.
+	 */
+	private static void replayMacroDefinitions(LispCons form, LispEvaluator macroEval) {
+		try {
+			macroEval.evalResolved(form);
+		}
+		catch (LispEvalException ex) {
+			throw new LispEvalException("cannot evaluate at compile time: " + form.print() + ": " + ex.getMessage());
+		}
+	}
+
+	/**
+	 * The removal half of {@link #harvestSymbolMacros}, recursing through
+	 * progn/eval-when.
+	 */
+	@Nullable private static LispVal stripSymbolMacroDefinitions(LispVal form, java.util.Map<String, LispVal> into,
+			LispEvaluator macroEval) {
+		if (!(form instanceof LispCons cons) || !cons.isProperList() || !(cons.car() instanceof LispSymbol head)) {
+			return form;
+		}
+		String name = memberName(head.name());
+		if (LispNames.DEFINE_SYMBOL_MACRO.equals(name)) {
+			LispSymbol defined = LispMacroExpander.defineSymbolMacroName(cons);
+			into.put(defined.name(), cons.toList().get(2));
+			macroEval.evalResolved(cons);
+			return null;
+		}
+		if (!LispNames.PROGN.equals(name) && !LispNames.EVAL_WHEN.equals(name)) {
+			return form;
+		}
+		// eval-when keeps its situation list in place; progn has no header member.
+		int firstMember = LispNames.EVAL_WHEN.equals(name) ? 2 : 1;
+		List<LispVal> parts = cons.toList();
+		List<LispVal> kept = new ArrayList<>(parts.subList(0, Math.min(firstMember, parts.size())));
+		boolean changed = false;
+		for (int i = firstMember; i < parts.size(); i++) {
+			LispVal member = stripSymbolMacroDefinitions(parts.get(i), into, macroEval);
+			changed = changed || member != parts.get(i);
+			if (member != null) {
+				kept.add(member);
+			}
+		}
+		return changed ? properList(kept) : form;
+	}
+
+	/**
+	 * Whether a {@code define-symbol-macro} form survives anywhere the compilers would
+	 * reach -- quoted data and the definition bodies that never run
+	 * ({@code defmacro}/{@code macrolet} templates) do not count.
+	 */
+	private static boolean nestedDefineSymbolMacro(@Nullable LispVal form) {
+		if (!(form instanceof LispCons cons) || !cons.isProperList()) {
+			return false;
+		}
+		if (cons.car() instanceof LispSymbol head) {
+			String name = memberName(head.name());
+			if (LispNames.DEFINE_SYMBOL_MACRO.equals(name)) {
+				return true;
+			}
+			if (LispNames.isQuote(name) || LispNames.DEFMACRO.equals(name) || LispNames.MACROLET.equals(name)) {
+				return false;
+			}
+			if (LispNames.CASE.equals(name) || LispNames.ECASE.equals(name) || LispNames.CCASE.equals(name)) {
+				// A clause's keys are data: only the key form and the clause bodies run.
+				List<LispVal> parts = cons.toList();
+				if (parts.size() > 1 && nestedDefineSymbolMacro(parts.get(1))) {
+					return true;
+				}
+				for (LispVal clause : parts.subList(Math.min(2, parts.size()), parts.size())) {
+					if (clause instanceof LispCons body
+							&& nestedDefineSymbolMacro(new LispCons(new LispSymbol(LispNames.PROGN), body.cdr()))) {
+						return true;
+					}
+				}
+				return false;
+			}
+		}
+		for (LispVal part : cons.toList()) {
+			if (nestedDefineSymbolMacro(part)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/** Whether the form mentions {@code define-symbol-macro} anywhere. */
+	private static boolean usesDefineSymbolMacro(LispVal form) {
+		while (true) {
+			switch (form) {
+				case LispSymbol sym -> {
+					return LispNames.DEFINE_SYMBOL_MACRO.equals(memberName(sym.name()));
+				}
+				case LispCons cons -> {
+					if (usesDefineSymbolMacro(cons.car())) {
+						return true;
+					}
+					form = cons.cdr();
+				}
+				default -> {
+					return false;
+				}
+			}
+		}
+	}
+
+	// A (setf (macro-function ...) ...) anywhere: what closes over one at top level is
+	// consumed by this pass, and its value form walks with the code around it elsewhere.
+	private static boolean writesMacroFunction(LispVal form) {
+		while (form instanceof LispCons cons) {
+			if (LispMacroExpander.isSetfMacroFunctionForm(cons) || writesMacroFunction(cons.car())) {
+				return true;
+			}
+			form = cons.cdr();
+		}
+		return false;
+	}
+
+	private static boolean usesMacrolet(LispVal form) {
+		while (form instanceof LispCons cons) {
+			if (isOperator(cons, LispNames.MACROLET)) {
+				return true;
+			}
+			if (usesMacrolet(cons.car())) {
+				return true;
+			}
+			form = cons.cdr();
+		}
+		return false;
+	}
+
+	/**
+	 * Recursively expands every user macro call in the form. The walk is aware of the
+	 * special-form shapes whose subforms are not expressions (binding lists, parameter
+	 * lists, case keys), so a macro name reused there is left alone.
+	 */
+	static LispVal expandAll(LispVal form, LispEvaluator macroEval) {
+		return expandAll(form, macroEval, false);
+	}
+
+	private static LispVal expandAll(LispVal form, LispEvaluator macroEval, boolean topLevel) {
+		// The innermost located form the walk is in: a warning a macro signals while it
+		// expands is placed -- and judged for --warnings-as-errors -- there, the macro
+		// call itself when it was read, the located form around it when a macro built it.
+		LispCons enclosing = form instanceof LispCons cons ? SourceProvenance.enterForm(cons) : null;
+		try {
+			return expandAllLocated(form, macroEval, topLevel);
+		}
+		catch (RuntimeException ex) {
+			// A macro body that signals, or a malformed call the expansion casts and
+			// fails on, has no position of its own: the exception comes from the
+			// macro-time evaluator, whose forms were built by the macro. The innermost
+			// frame here that IS a read cons names the call site.
+			throw SourceProvenance.noteFailure(form, ex);
+		}
+		finally {
+			if (form instanceof LispCons) {
+				SourceProvenance.leaveForm(enclosing);
+			}
+		}
+	}
+
+	/**
+	 * {@link #expandAll} for a top-level form of the program being compiled: a warning
+	 * that reaches its report while the form's macros expand -- no handler muffled it --
+	 * is a compile-time warning at the enclosing located form rather than a line on
+	 * {@code *error-output*}, so {@code --warnings-as-errors} counts it by the rule every
+	 * compiler warning follows (the program's own source counts, a library's does not). A
+	 * {@code style-warning} is reported there too and never counts, as in SBCL's
+	 * {@code compile-file}.
+	 */
+	private static LispVal expandCompiling(LispVal form, LispEvaluator macroEval) {
+		return macroEval.reportingWarningsTo(UserMacroExpander::reportMacroTimeWarning,
+				() -> expandAll(form, macroEval, true));
+	}
+
+	private static void reportMacroTimeWarning(String text, boolean styleWarning) {
+		if (styleWarning) {
+			CompileWarnings.styleWarning(null, text);
+		}
+		else {
+			CompileWarnings.warn(null, text);
+		}
+	}
+
+	private static LispVal expandAllLocated(LispVal form, LispEvaluator macroEval, boolean topLevel) {
+		// Expand head-position user macros repeatedly; the expansion may itself be a
+		// macro call (or an atom, which needs no further walking).
+		while (form instanceof LispCons cons && cons.car() instanceof LispSymbol sym
+				&& isMacroInWalk(sym.name(), macroEval)) {
+			// The expansion stands where the call stood: it keeps the call's position
+			// (.kb/source-positions.md, "Phase 2"), so code a macro built still reports
+			// the line of the call that built it.
+			form = SourceProvenance.inherit(cons, macroEval.expandUserMacro(cons));
+		}
+		// What a walker emitted for a natively-run CL macro (macroexpand-1's answer)
+		// becomes the native form again before any pass looks for the native head.
+		form = foldNativeExpansion(form);
+		// Then the operator's compiler macro, at most ONCE: the standard shape rewrites a
+		// call into a call of the SAME function with a better argument (cl-ppcre's
+		// literal regex becomes a load-time-value scanner), so re-applying would either
+		// spin or depend on the macro declining the second time. Declining is signalled
+		// by returning the form itself; a user macro of the same name has already won
+		// above, as CL requires.
+		if (form instanceof LispCons call && call.car() instanceof LispSymbol op && call.isProperList()
+				&& macroEval.hasCompilerMacro(op.name()) && !macroEval.shadowedMacros().contains(op.name())) {
+			LispVal expansion = macroEval.expandCompilerMacro(call);
+			if (expansion != form) {
+				form = SourceProvenance.inherit(call, expansion);
+				while (form instanceof LispCons cons && cons.car() instanceof LispSymbol sym
+						&& isMacroInWalk(sym.name(), macroEval)) {
+					form = SourceProvenance.inherit(cons, macroEval.expandUserMacro(cons));
+				}
+			}
+		}
+		if (!(form instanceof LispCons cons)) {
+			return form;
+		}
+		if (cons.car() instanceof LispSymbol sym) {
+			if (LispNames.isQuote(sym.name()) || LispNames.DEFMACRO.equals(sym.name())
+					|| LispNames.DECLARE.equals(sym.name()) || LispNames.DECLAIM.equals(sym.name())
+					|| isExpansionTimeDefinition(cons)) {
+				// A declaration's type specifier is no call, whatever macro shares its
+				// name
+				// (serapeum's ->).
+				return form;
+			}
+			if (!cons.isProperList()) {
+				// An improper list is never a call form; the legitimate appearances
+				// are data patterns (a loop destructuring pattern like
+				// (value . remaining)) whose elements are plain variables.
+				return form;
+			}
+			if (LispNames.LOCALLY.equals(sym.name())) {
+				macroEval.markNotinlineCalls(cons);
+			}
+			List<LispVal> parts = cons.toList();
+			if (!macroEval.symbolMacroScope().isEmpty()) {
+				LispVal scoped = expandBinderOfSymbolMacroName(cons, parts, sym.name(), macroEval);
+				if (scoped != null) {
+					return scoped;
+				}
+			}
+			int members = topLevel ? topLevelMembersFrom(sym) : -1;
+			if (members >= 0) {
+				return expandTopLevelMembers(cons, parts, members, macroEval, true);
+			}
+			switch (sym.name()) {
+				case LispNames.LET, LispNames.LET_STAR:
+					return rebuildBinder(cons, parts, expandBindings(parts.get(1), macroEval), macroEval, topLevel);
+				case LispNames.DO, LispNames.DO_STAR:
+					// (let ((name init)...) body...) / (do ((var init step)...) (end
+					// result...) body...): binding names stay, init/step/end/result and
+					// the body are expressions.
+					return rebuild(cons, parts, 2, macroEval, expandBindings(parts.get(1), macroEval));
+				case LispNames.LAMBDA:
+					return rebuild(cons, parts, 2, macroEval, expandLambdaList(parts.get(1), false, macroEval));
+				case LispNames.DEFUN:
+					return rebuild(cons, parts, 3, macroEval, parts.get(1),
+							expandLambdaList(parts.get(2), false, macroEval));
+				case LispNames.DEFMETHOD: {
+					// (defmethod name [qualifier] (params...) body...): the name,
+					// optional
+					// qualifier, and lambda list (specializers included) stay, the body
+					// is
+					// expressions. A malformed form is left for the expansion to report.
+					if (parts.size() < 3) {
+						return form;
+					}
+					// Atoms after the name are qualifiers, so the lambda list (and body)
+					// shift past them.
+					int llIndex = am.ik.rontolisp.macro.MethodCombinations.methodLambdaListIndex(parts);
+					if (parts.size() <= llIndex) {
+						return form;
+					}
+					LispVal[] kept = new LispVal[llIndex];
+					for (int k = 1; k <= llIndex; k++) {
+						kept[k - 1] = parts.get(k);
+					}
+					kept[llIndex - 1] = expandLambdaList(parts.get(llIndex), false, macroEval);
+					return rebuild(cons, parts, llIndex + 1, macroEval, kept);
+				}
+				case LispNames.DEFGENERIC: {
+					// (defgeneric name (params...) options...): names, lambda lists, and
+					// options are data, EXCEPT an inline (:method ...) clause's body,
+					// which is expressions -- a macrolet-local macro called there (jzon's
+					// %coerced-fields-slots) must expand away like a defmethod body.
+					List<LispVal> newParts = new ArrayList<>(parts);
+					for (int i = 3; i < parts.size(); i++) {
+						if (parts.get(i) instanceof LispCons opt && opt.isProperList()
+								&& opt.car() instanceof LispSymbol key && ":METHOD".equals(key.name())) {
+							List<LispVal> mp = opt.toList();
+							// (:method [qualifier] (lambda-list) body...)
+							int llIndex = mp.size() > 1 && mp.get(1) instanceof LispSymbol ? 2 : 1;
+							if (mp.size() > llIndex + 1) {
+								List<LispVal> newMethod = new ArrayList<>(mp.subList(0, llIndex + 1));
+								newMethod.set(llIndex, expandLambdaList(mp.get(llIndex), false, macroEval));
+								for (int j = llIndex + 1; j < mp.size(); j++) {
+									newMethod.add(expandAll(mp.get(j), macroEval));
+								}
+								newParts.set(i, properList(newMethod));
+							}
+						}
+					}
+					return properList(newParts);
+				}
+				case LispNames.DEFCLASS: {
+					// (defclass name (super) ((slot options...)...) options...): names
+					// and options stay, only :initform values are expressions.
+					if (parts.size() < 4 || !(parts.get(3) instanceof LispCons slotsCons)) {
+						return form;
+					}
+					List<LispVal> newParts = new ArrayList<>(parts);
+					newParts.set(3, expandSlotInitforms(slotsCons, macroEval));
+					return properList(newParts);
+				}
+				case LispNames.DEFINE_CONDITION: {
+					// (define-condition name (super) ((slot options...)...) options...):
+					// the slots as defclass's, a slot named like a macro included; an
+					// option holds expressions, the :report lambda among them.
+					if (parts.size() < 4 || !(parts.get(3) instanceof LispCons slotsCons)) {
+						return form;
+					}
+					List<LispVal> newParts = new ArrayList<>(parts);
+					newParts.set(3, expandSlotInitforms(slotsCons, macroEval));
+					for (int i = 4; i < parts.size(); i++) {
+						newParts.set(i, expandAll(parts.get(i), macroEval));
+					}
+					return properList(newParts);
+				}
+				case LispNames.DEFSTRUCT: {
+					// (defstruct name (slot default)...): the struct and slot names stay,
+					// only slot defaults are expressions.
+					List<LispVal> newParts = new ArrayList<>();
+					newParts.add(parts.get(0));
+					newParts.add(parts.get(1));
+					for (int i = 2; i < parts.size(); i++) {
+						if (parts.get(i) instanceof LispCons slotCons) {
+							List<LispVal> slotParts = slotCons.toList();
+							List<LispVal> newSlot = new ArrayList<>();
+							newSlot.add(slotParts.get(0));
+							for (int j = 1; j < slotParts.size(); j++) {
+								newSlot.add(expandAll(slotParts.get(j), macroEval));
+							}
+							newParts.add(properList(newSlot));
+						}
+						else {
+							newParts.add(parts.get(i));
+						}
+					}
+					return properList(newParts);
+				}
+				case LispNames.FLET, LispNames.LABELS: {
+					// (flet ((name lambda-list body...)...) body...): the definition
+					// names and lambda lists stay, definition bodies and the body are
+					// expressions.
+					if (parts.size() < 2) {
+						return form; // malformed; the expansion reports it
+					}
+					if (!(parts.get(1) instanceof LispCons defsCons)) {
+						return rebuild(cons, parts, 2, macroEval, parts.get(1));
+					}
+					List<LispVal> newDefs = new ArrayList<>();
+					java.util.Map<String, LispVal> scope = macroEval.symbolMacroScope();
+					// A local function shadows a macro of its name in the body, and for
+					// labels in the definitions too.
+					java.util.Set<String> shadowed = macroEval.shadowedMacros();
+					java.util.Set<String> inner = withShadowedMacros(shadowed, defsCons, macroEval);
+					macroEval.shadowedMacros(LispNames.LABELS.equals(sym.name()) ? inner : shadowed);
+					try {
+						for (LispVal def : defsCons.toList()) {
+							if (def instanceof LispCons defCons && defCons.isProperList()
+									&& defCons.toList().size() >= 2) {
+								List<LispVal> dp = defCons.toList();
+								List<LispVal> newDef = new ArrayList<>();
+								newDef.add(dp.get(0));
+								macroEval.symbolMacroScope(symbolMacrosWithoutParameters(scope, dp.get(1)));
+								try {
+									newDef.add(expandLambdaList(dp.get(1), false, macroEval));
+									for (int i = 2; i < dp.size(); i++) {
+										newDef.add(expandAll(dp.get(i), macroEval));
+									}
+								}
+								finally {
+									macroEval.symbolMacroScope(scope);
+								}
+								newDefs.add(properList(newDef));
+							}
+							else {
+								newDefs.add(def);
+							}
+						}
+						macroEval.shadowedMacros(inner);
+						return rebuildBinder(cons, parts, properList(newDefs), macroEval, topLevel);
+					}
+					finally {
+						macroEval.shadowedMacros(shadowed);
+					}
+				}
+				case LispNames.MACROLET: {
+					// (macrolet ((name lambda-list body...)...) body...): register the
+					// local macros for the extent of the body walk, expand the body with
+					// them active, and drop the macrolet (its definitions are consumed
+					// here,
+					// like defmacro). Lexically correct: the locals are removed again
+					// after
+					// the body, so they do not leak to sibling forms.
+					if (parts.size() < 2 || !(parts.get(1) instanceof LispCons || parts.get(1) instanceof LispNil)) {
+						return form; // malformed; leave for the interpreter/compiler to
+										// report
+					}
+					return expandMacrolet(parts, macroEval, topLevel);
+				}
+				case LispNames.SYMBOL_MACROLET: {
+					// (symbol-macrolet ((name expansion)...) body...): the binding names
+					// stay; the expansion forms and the body are expressions -- user
+					// macros
+					// inside BOTH must be gone before the backends run the substitution
+					// (the compilers have no macro table to expand a call the
+					// substitution
+					// splices in). A macro in either sees the names through its
+					// &environment. At top level the body's forms are top-level forms
+					// (CLHS 3.2.3.1): the substitution runs here, leaving the progn the
+					// flattening splices.
+					if (parts.size() < 2) {
+						return form; // malformed; the expansion reports it
+					}
+					java.util.Map<String, LispVal> outer = macroEval.symbolMacroScope();
+					macroEval.symbolMacroScope(symbolMacrosWith(outer, parts.get(1)));
+					// An expansion naming a user setf place is that place to a setf of
+					// the name, its expander taking precedence over its macro (CLHS
+					// 5.1.2.7): it stays as written, the substitution runs here, and what
+					// the body became is walked again -- anaphora's slet, whose IT is
+					// an internal-symbol-macrolet place.
+					boolean placesAsWritten = bindsUserSetfPlace(parts.get(1), macroEval);
+					LispVal substituted;
+					try {
+						LispVal bindings = placesAsWritten ? parts.get(1) : expandBindings(parts.get(1), macroEval);
+						if (!topLevel && !placesAsWritten) {
+							return rebuild(cons, parts, 2, macroEval, bindings);
+						}
+						List<LispVal> bound = new ArrayList<>(parts);
+						bound.set(1, bindings);
+						LispVal walked = topLevel ? expandTopLevelMembers(cons, bound, 2, macroEval, true)
+								: rebuild(cons, bound, 2, macroEval, bindings);
+						substituted = SourceProvenance.inherit(cons,
+								LispMacroExpander.expandSymbolMacrolet((LispCons) walked));
+						if (!placesAsWritten) {
+							return substituted;
+						}
+					}
+					finally {
+						macroEval.symbolMacroScope(outer);
+					}
+					return expandAll(substituted, macroEval, topLevel);
+				}
+				case LispNames.EVAL_WHEN: {
+					// The situation list is data, a member named like a macro included.
+					// One at top level took its members above.
+					return parts.size() < 2 ? form : rebuild(cons, parts, 2, macroEval, parts.get(1));
+				}
+				case LispNames.MULTIPLE_VALUE_BIND: {
+					// (multiple-value-bind (vars...) values-form body...): the variable
+					// list stays, the values form and the body are expressions.
+					if (parts.size() < 2) {
+						return form; // malformed; the expansion reports it
+					}
+					return rebuild(cons, parts, 2, macroEval, parts.get(1));
+				}
+				case LispNames.MULTIPLE_VALUE_SETQ: {
+					// (multiple-value-setq (vars...) values-form): the variable list
+					// stays,
+					// the values form is an expression.
+					if (parts.size() < 2) {
+						return form; // malformed; the expansion reports it
+					}
+					return rebuild(cons, parts, 2, macroEval, parts.get(1));
+				}
+				case LispNames.DESTRUCTURING_BIND: {
+					// (destructuring-bind pattern form body...): the pattern's names
+					// stay (like a lambda list), its defaults, the form and the body are
+					// expressions.
+					if (parts.size() < 2) {
+						return form; // malformed; the expansion reports it
+					}
+					return rebuild(cons, parts, 2, macroEval, expandLambdaList(parts.get(1), true, macroEval));
+				}
+				case LispNames.LOOP: {
+					// (loop clause...): clause keywords and expressions are walked, but a
+					// destructuring pattern is data -- an improper or cons-headed element
+					// (`for ((x . y) . rest) on args`) must survive verbatim, where the
+					// generic walk would reject it as a call form, and so must a list in
+					// a
+					// variable or type position, whose head may name a macro:
+					// parenscript's
+					// `for (var p) = ...` beside its own (defmacro var ...).
+					List<LispVal> newParts = new ArrayList<>();
+					newParts.add(parts.get(0));
+					for (int i = 1; i < parts.size(); i++) {
+						LispVal part = parts.get(i);
+						boolean pattern = part instanceof LispCons pc
+								&& (!pc.isProperList() || !(pc.car() instanceof LispSymbol)
+										|| LispMacroExpander.isLoopDataKeyword(parts.get(i - 1)));
+						newParts.add(pattern ? part : expandAll(part, macroEval));
+					}
+					return properList(newParts);
+				}
+				case LispNames.DOLIST, LispNames.DOTIMES: {
+					// (dolist (var listform result) body...): var stays.
+					LispVal spec = parts.get(1);
+					if (spec instanceof LispCons specCons) {
+						List<LispVal> specParts = specCons.toList();
+						List<LispVal> newSpec = new ArrayList<>();
+						newSpec.add(specParts.get(0));
+						for (int i = 1; i < specParts.size(); i++) {
+							newSpec.add(expandAll(specParts.get(i), macroEval));
+						}
+						spec = properList(newSpec);
+					}
+					return rebuild(cons, parts, 2, macroEval, spec);
+				}
+				case LispNames.WITH_OPEN_FILE, LispNames.WITH_OPEN_STREAM, LispNames.WITH_OUTPUT_TO_STRING,
+						LispNames.WITH_INPUT_FROM_STRING, LispNames.DO_SYMBOLS, LispNames.DO_EXTERNAL_SYMBOLS,
+						LispNames.DO_ALL_SYMBOLS, LispNames.WITH_HASH_TABLE_ITERATOR, LispNames.WITH_PACKAGE_ITERATOR,
+						LispNames.WITH_SIMPLE_RESTART, LispNames.PPRINT_LOGICAL_BLOCK:
+					// (operator (name form...) body...): the name (a variable, a
+					// restart's) stays, its forms and the body are expressions -- the
+					// spec is no call of a macro named like the variable.
+					return expandSpecForm(cons, parts, 1, macroEval);
+				case LispNames.PRINT_UNREADABLE_OBJECT, LispNames.WITH_MUTEX_QUALIFIED,
+						LispNames.WITH_LOCK_HELD_QUALIFIED, LispNames.WITH_RECURSIVE_LOCK_HELD_QUALIFIED:
+					// (print-unreadable-object (object stream &key ...) body...): every
+					// element of the spec is an expression, its head included -- an
+					// object form named like a function with a compiler macro is a
+					// variable, not that call (petalisp's range printer).
+					return expandSpecForm(cons, parts, 0, macroEval);
+				case LispNames.WITH_SLOTS, LispNames.WITH_ACCESSORS, LispNames.THE:
+					// (with-slots (entry...) instance body...), (the type form):
+					// the entries and the type are data.
+					return parts.size() < 2 ? form : rebuild(cons, parts, 2, macroEval, parts.get(1));
+				case LispNames.HANDLER_CASE, LispNames.RESTART_CASE:
+					// (handler-case form (type ([var]) body...)...): a clause's type (a
+					// restart's name) and lambda list are data, its body expressions.
+					return expandClauses(cons, parts, 2, macroEval);
+				case LispNames.HANDLER_BIND, LispNames.RESTART_BIND: {
+					// (handler-bind ((type handler)...) body...): a binding's type (a
+					// restart's name) is data, the rest of it expressions.
+					if (parts.size() < 2 || !(parts.get(1) instanceof LispCons bindings) || !bindings.isProperList()) {
+						return rebuild(cons, parts, 1, macroEval);
+					}
+					List<LispVal> newBindings = new ArrayList<>();
+					for (LispVal binding : bindings.toList()) {
+						newBindings.add(expandClause(binding, 1, macroEval));
+					}
+					return rebuild(cons, parts, 2, macroEval, LispCons.rebuiltList(bindings, newBindings));
+				}
+				case LispNames.MACROEXPAND, LispNames.MACROEXPAND_1: {
+					// Fold a literal quoted argument to its expansion at compile time
+					// (the only form the compilers can support: the macro table does not
+					// exist at runtime). A computed argument is left as-is and reaches
+					// the prelude identity defun, which answers it unchanged with
+					// expanded-p nil. The optional second argument is CL's
+					// macro-expansion environment: at run time it is nil whatever the
+					// form spells, so the fold applies to both call shapes -- but for a
+					// symbol read through a computed environment, whose answer is the
+					// environment's (a helper a macro hands its &environment to), and
+					// which the prelude defun answers unchanged at run time.
+					if ((parts.size() == 2 || parts.size() == 3) && parts.get(1) instanceof LispCons quoted
+							&& quoted.car() instanceof LispSymbol qs && LispNames.QUOTE.equals(qs.name())
+							&& quoted.cdr() instanceof LispCons quotedCdr && !(quotedCdr.car() instanceof LispSymbol
+									&& parts.size() == 3 && !(parts.get(2) instanceof LispNil))) {
+						LispVal target = quotedCdr.car();
+						LispVal expanded = LispNames.MACROEXPAND.equals(sym.name()) ? macroEval.macroexpand(target)
+								: macroEval.macroexpand1(target);
+						// CL's expanded-p rides along as a literal second value (both
+						// expanders answer the SAME reference when nothing expanded), so
+						// the fold answers what the interpreter answers -- and a literal
+						// values form is exactly what a consumer's lowering recognizes.
+						return properList(List.of(new LispSymbol(LispNames.VALUES),
+								properList(List.of(new LispSymbol(LispNames.QUOTE), expanded)),
+								expanded == target ? LispNil.INSTANCE : LispTrue.INSTANCE));
+					}
+					return rebuild(cons, parts, 1, macroEval);
+				}
+				case LispNames.CASE, LispNames.ECASE, LispNames.CCASE, LispNames.TYPECASE, LispNames.ETYPECASE,
+						LispNames.CTYPECASE: {
+					// (case keyform (keys body...)...): keys are unevaluated data.
+					List<LispVal> newParts = new ArrayList<>();
+					newParts.add(parts.get(0));
+					newParts.add(expandAll(parts.get(1), macroEval));
+					for (int i = 2; i < parts.size(); i++) {
+						if (parts.get(i) instanceof LispCons clause) {
+							List<LispVal> clauseParts = clause.toList();
+							List<LispVal> newClause = new ArrayList<>();
+							newClause.add(clauseParts.get(0));
+							for (int j = 1; j < clauseParts.size(); j++) {
+								newClause.add(expandAll(clauseParts.get(j), macroEval));
+							}
+							newParts.add(LispCons.rebuiltList(clause, newClause));
+						}
+						else {
+							newParts.add(parts.get(i));
+						}
+					}
+					return LispCons.rebuiltList(cons, newParts);
+				}
+				case LispNames.SETF: {
+					if (LispMacroExpander.isSetfMacroFunctionForm(cons)) {
+						// A write at top level is a macro definition, not an expression:
+						// leave it verbatim for stripDefmacroDefinitions and for the
+						// macro-time evaluator, which expands its value as it runs.
+						// Anywhere else the program runs it, and the macro-time evaluator
+						// only if the form replays (a compile-time eval-when), so its
+						// subforms are expressions of the code around them, and so are
+						// the
+						// other pairs of a setf.
+						if (parts.size() > 3) {
+							return expandAll(LispMacroExpander.splitSetfPairs(cons), macroEval, topLevel);
+						}
+						return topLevel ? cons : rebuild(cons, parts, 1, macroEval);
+					}
+					if (hasUserSetfPlace(cons, macroEval)) {
+						// The place's accessor may ALSO carry a compiler macro, and
+						// walking first would rewrite the place into a call of another
+						// name -- the user setf expander, which is keyed on the accessor
+						// name, would then miss it and the place reach the compilers
+						// unwritable (cffi's mem-ref: an open-coding compiler macro AND a
+						// define-setf-expander on the same name). Expand the setf first
+						// and walk its expansion, which is no longer a setf of that
+						// place.
+						return expandAll(macroEval.expandSetfMaybeUserExpander(cons), macroEval);
+					}
+					// Otherwise walk the subforms first: a place that only BECOMES a user
+					// setf-expander place through macro expansion is caught below.
+					LispVal walked = rebuild(cons, parts, 1, macroEval);
+					if (walked instanceof LispCons wc && hasUserSetfPlace(wc, macroEval)) {
+						return macroEval.expandSetfMaybeUserExpander(wc);
+					}
+					return walked;
+				}
+				case LispNames.INCF, LispNames.DECF, LispNames.PUSH, LispNames.PUSHNEW, LispNames.POP: {
+					// Over a user setf place, the expansion through the place's setf
+					// expansion, which reads it by the access form (the compilers have no
+					// expander to ask); an ordinary place is left for the compiler's own.
+					LispVal userPlace = macroEval.expandModifyUserPlace(cons);
+					return userPlace != null ? expandAll(userPlace, macroEval) : rebuild(cons, parts, 1, macroEval);
+				}
+				default:
+					// Every other operator: the head stays, all arguments are walked.
+					return rebuild(cons, parts, 1, macroEval);
+			}
+		}
+		// Non-symbol head, e.g. ((lambda (x) ...) arg...): walk every element.
+		requireProperCallForm(cons);
+		List<LispVal> parts = cons.toList();
+		List<LispVal> newParts = new ArrayList<>();
+		for (LispVal part : parts) {
+			newParts.add(expandAll(part, macroEval));
+		}
+		return LispCons.rebuiltList(cons, newParts);
+	}
+
+	/**
+	 * Walks a form binding a variable named like a symbol macro in scope, so a macro's
+	 * {@code &environment} no longer sees that name inside the binder's scope. The same
+	 * binders and the same scoping as the substitution walk
+	 * ({@code LispMacroExpander.substituteSymbolMacros}), which rewrites what this one
+	 * only has to let a macro read; everything else about each form is the ordinary walk
+	 * of {@link #expandAllLocated}.
+	 * @return the walked form, or null when the form binds no such name and the ordinary
+	 * walk applies as it is
+	 */
+	@Nullable private static LispVal expandBinderOfSymbolMacroName(LispCons cons, List<LispVal> parts, String operator,
+			LispEvaluator macroEval) {
+		java.util.Map<String, LispVal> scope = macroEval.symbolMacroScope();
+		try {
+			switch (operator) {
+				case LispNames.LET, LispNames.LET_STAR, LispNames.DO, LispNames.DO_STAR:
+					return parts.size() < 2 ? null : expandBindingsBinder(cons, parts, operator, scope, macroEval);
+				case LispNames.LAMBDA, LispNames.ASYNC_LAMBDA:
+					return parts.size() < 2 ? null : expandAgainWithoutParameters(cons, parts.get(1), scope, macroEval);
+				case LispNames.DEFUN, LispNames.ASYNC_DEFUN:
+					return parts.size() < 3 ? null : expandAgainWithoutParameters(cons, parts.get(2), scope, macroEval);
+				case LispNames.DEFMETHOD: {
+					int llIndex = am.ik.rontolisp.macro.MethodCombinations.methodLambdaListIndex(parts);
+					return parts.size() <= llIndex ? null
+							: expandAgainWithoutParameters(cons, parts.get(llIndex), scope, macroEval);
+				}
+				case LispNames.DOLIST, LispNames.DOTIMES, LispNames.WITH_OPEN_FILE, LispNames.WITH_OPEN_STREAM,
+						LispNames.WITH_OUTPUT_TO_STRING, LispNames.WITH_INPUT_FROM_STRING: {
+					// (operator (var form...) body...): the forms are outer scope, but
+					// for
+					// dolist/dotimes's result, which sees the variable.
+					if (parts.size() < 2 || !(parts.get(1) instanceof LispCons spec) || !spec.isProperList()
+							|| !(spec.car() instanceof LispSymbol var) || !scope.containsKey(var.name())) {
+						return null;
+					}
+					java.util.Map<String, LispVal> inner = LispMacroExpander.symbolMacrosWithoutAll(scope,
+							java.util.Set.of(var.name()));
+					boolean resultInScope = LispNames.DOLIST.equals(operator) || LispNames.DOTIMES.equals(operator);
+					List<LispVal> specParts = spec.toList();
+					List<LispVal> newSpec = new ArrayList<>();
+					newSpec.add(var);
+					for (int i = 1; i < specParts.size(); i++) {
+						macroEval.symbolMacroScope(resultInScope && i > 1 ? inner : scope);
+						newSpec.add(expandAll(specParts.get(i), macroEval));
+					}
+					macroEval.symbolMacroScope(inner);
+					return rebuild(cons, parts, 2, macroEval, LispCons.rebuiltList(spec, newSpec));
+				}
+				case LispNames.MULTIPLE_VALUE_BIND, LispNames.WITH_SLOTS, LispNames.WITH_ACCESSORS,
+						LispNames.DESTRUCTURING_BIND: {
+					// (operator names form body...): the form is outer scope.
+					if (parts.size() < 3) {
+						return null;
+					}
+					boolean pattern = LispNames.DESTRUCTURING_BIND.equals(operator);
+					java.util.Set<String> names = new java.util.HashSet<>();
+					if (pattern) {
+						LispMacroExpander.collectPatternNames(parts.get(1), names);
+					}
+					else {
+						LispMacroExpander.collectLambdaListNames(parts.get(1), names);
+					}
+					java.util.Map<String, LispVal> inner = LispMacroExpander.symbolMacrosWithoutAll(scope, names);
+					if (inner == scope) {
+						return null;
+					}
+					LispVal form = expandAll(parts.get(2), macroEval);
+					macroEval.symbolMacroScope(inner);
+					LispVal names1 = pattern ? expandLambdaList(parts.get(1), true, macroEval) : parts.get(1);
+					return rebuild(cons, parts, 3, macroEval, names1, form);
+				}
+				case LispNames.HANDLER_CASE, LispNames.RESTART_CASE: {
+					// (operator form (type (var) body...)...): the form is outer scope, a
+					// clause's names its own.
+					List<LispVal> out = new ArrayList<>();
+					out.add(parts.get(0));
+					boolean binds = false;
+					for (int i = 2; i < parts.size() && !binds; i++) {
+						binds = symbolMacrosWithoutClauseNames(scope, parts.get(i)) != scope;
+					}
+					if (!binds) {
+						return null;
+					}
+					for (int i = 1; i < parts.size(); i++) {
+						java.util.Map<String, LispVal> inner = i < 2 ? scope
+								: symbolMacrosWithoutClauseNames(scope, parts.get(i));
+						if (inner == scope) {
+							out.add(expandAll(parts.get(i), macroEval));
+						}
+						else {
+							LispCons clause = (LispCons) parts.get(i);
+							List<LispVal> clauseParts = clause.toList();
+							macroEval.symbolMacroScope(inner);
+							out.add(rebuild(clause, clauseParts, 2, macroEval, clauseParts.get(1)));
+							macroEval.symbolMacroScope(scope);
+						}
+					}
+					return LispCons.rebuiltList(cons, out);
+				}
+				case LispNames.LOOP:
+					// Its binders have no stable surface shape, as for the substitution.
+					return expandAll(LispMacroExpander.expandLoop(cons), macroEval);
+				case LispNames.PROG:
+					return expandAll(LispMacroExpander.expandProg(cons, false), macroEval);
+				case LispNames.PROG_STAR:
+					return expandAll(LispMacroExpander.expandProg(cons, true), macroEval);
+				default:
+					return null;
+			}
+		}
+		finally {
+			macroEval.symbolMacroScope(scope);
+		}
+	}
+
+	/**
+	 * A {@code let}/{@code let*}/{@code do}/{@code do*} binding a symbol macro's name:
+	 * each init sees the scope before the binding form ({@code let}) or the names bound
+	 * before it (the sequential ones), a step and the body see every name.
+	 */
+	@Nullable private static LispVal expandBindingsBinder(LispCons cons, List<LispVal> parts, String operator,
+			java.util.Map<String, LispVal> scope, LispEvaluator macroEval) {
+		if (!(parts.get(1) instanceof LispCons bindings) || !bindings.isProperList()) {
+			return null;
+		}
+		java.util.Set<String> names = new java.util.HashSet<>();
+		for (LispVal binding : bindings.toList()) {
+			names.add(bindingName(binding));
+		}
+		java.util.Map<String, LispVal> inner = LispMacroExpander.symbolMacrosWithoutAll(scope, names);
+		if (inner == scope) {
+			return null;
+		}
+		boolean sequential = LispNames.LET_STAR.equals(operator) || LispNames.DO_STAR.equals(operator);
+		java.util.Map<String, LispVal> initScope = scope;
+		List<LispVal> newBindings = new ArrayList<>();
+		for (LispVal binding : bindings.toList()) {
+			if (binding instanceof LispCons bindingCons && bindingCons.isProperList()) {
+				List<LispVal> pair = bindingCons.toList();
+				List<LispVal> newPair = new ArrayList<>();
+				newPair.add(pair.get(0));
+				for (int i = 1; i < pair.size(); i++) {
+					macroEval.symbolMacroScope(i == 1 ? initScope : inner);
+					newPair.add(expandAll(pair.get(i), macroEval));
+				}
+				newBindings.add(LispCons.rebuiltList(bindingCons, newPair));
+			}
+			else {
+				newBindings.add(binding);
+			}
+			if (sequential) {
+				initScope = LispMacroExpander.symbolMacrosWithoutAll(initScope, java.util.Set.of(bindingName(binding)));
+			}
+		}
+		macroEval.symbolMacroScope(inner);
+		return rebuild(cons, parts, 2, macroEval, LispCons.rebuiltList(bindings, newBindings));
+	}
+
+	/** The variable a {@code let}/{@code do} binding binds; empty when malformed. */
+	private static String bindingName(LispVal binding) {
+		LispVal name = binding instanceof LispCons pair ? pair.car() : binding;
+		return name instanceof LispSymbol symbol ? symbol.name() : "";
+	}
+
+	/**
+	 * The ordinary walk of a function-like form, in the scope its parameters leave: the
+	 * walk comes back here, finds nothing left to shadow and takes its ordinary case.
+	 */
+	@Nullable private static LispVal expandAgainWithoutParameters(LispCons cons, LispVal lambdaList,
+			java.util.Map<String, LispVal> scope, LispEvaluator macroEval) {
+		java.util.Map<String, LispVal> inner = symbolMacrosWithoutParameters(scope, lambdaList);
+		if (inner == scope) {
+			return null;
+		}
+		macroEval.symbolMacroScope(inner);
+		return expandAllLocated(cons, macroEval, false);
+	}
+
+	private static java.util.Map<String, LispVal> symbolMacrosWithoutParameters(java.util.Map<String, LispVal> scope,
+			LispVal lambdaList) {
+		if (scope.isEmpty()) {
+			return scope;
+		}
+		java.util.Set<String> names = new java.util.HashSet<>();
+		LispMacroExpander.collectLambdaListNames(lambdaList, names);
+		return LispMacroExpander.symbolMacrosWithoutAll(scope, names);
+	}
+
+	private static java.util.Map<String, LispVal> symbolMacrosWithoutClauseNames(java.util.Map<String, LispVal> scope,
+			LispVal clause) {
+		return clause instanceof LispCons cons && cons.isProperList() && cons.toList().size() >= 2
+				? symbolMacrosWithoutParameters(scope, cons.toList().get(1)) : scope;
+	}
+
+	/**
+	 * The scope inside a {@code symbol-macrolet}: its bindings over the outer ones, each
+	 * expansion the very object the binding holds (a macro may write into it). A
+	 * malformed entry is left for the expansion to report.
+	 */
+	private static java.util.Map<String, LispVal> symbolMacrosWith(java.util.Map<String, LispVal> outer,
+			LispVal bindings) {
+		java.util.Map<String, LispVal> inner = new java.util.LinkedHashMap<>(outer);
+		if (bindings instanceof LispCons bindingsCons && bindingsCons.isProperList()) {
+			for (LispVal entry : bindingsCons.toList()) {
+				if (entry instanceof LispCons pair && pair.isProperList() && pair.toList().size() == 2
+						&& pair.car() instanceof LispSymbol name) {
+					inner.put(name.name(), pair.toList().get(1));
+				}
+			}
+		}
+		return inner;
+	}
+
+	// Expands a macrolet: installs each local macro into the macro-time evaluator, walks
+	// the body with them active (so calls to the locals expand), restores the previous
+	// bindings, and returns the expanded body as a (progn ...) so the macrolet wrapper is
+	// dropped. The compilers never see macrolet; the interpreter handles it natively. Its
+	// body at top level is top-level forms (CLHS 3.2.3.1).
+	private static LispVal expandMacrolet(List<LispVal> parts, LispEvaluator macroEval, boolean topLevel) {
+		return macroEval.withLocalMacros(() -> expandMacroletBody(parts, macroEval, topLevel));
+	}
+
+	private static LispVal expandMacroletBody(List<LispVal> parts, LispEvaluator macroEval, boolean topLevel) {
+		List<LispVal> defs = parts.get(1) instanceof LispCons defsCons ? defsCons.toList() : List.of();
+		java.util.LinkedHashMap<String, Object> saved = new java.util.LinkedHashMap<>();
+		for (LispVal def : defs) {
+			if (def instanceof LispCons defCons && defCons.isProperList()) {
+				List<LispVal> dp = defCons.toList();
+				if (dp.size() >= 2 && dp.get(0) instanceof LispSymbol name) {
+					Object previous = macroEval.pushLocalMacro(name, dp.get(1), dp.subList(2, dp.size()));
+					// Only remember the binding present before this macrolet (a duplicate
+					// name pushed twice must still restore to the outermost prior value).
+					if (!saved.containsKey(name.name())) {
+						saved.put(name.name(), previous);
+					}
+				}
+			}
+		}
+		// A local macro shadows the local function of its name in turn.
+		java.util.Set<String> shadowed = macroEval.shadowedMacros();
+		if (!shadowed.isEmpty()) {
+			java.util.Set<String> inner = new java.util.HashSet<>(shadowed);
+			inner.removeAll(saved.keySet());
+			macroEval.shadowedMacros(inner);
+		}
+		try {
+			List<LispVal> body = new ArrayList<>();
+			body.add(new LispSymbol(LispNames.PROGN));
+			for (int i = 2; i < parts.size(); i++) {
+				LispVal member = topLevel ? expandTopLevelMember(parts.get(i), macroEval, true)
+						: expandAll(parts.get(i), macroEval);
+				if (member != null) {
+					body.add(member);
+				}
+			}
+			if (body.size() == 1) {
+				return parts.size() > 2 ? properList(body) : LispNil.INSTANCE;
+			}
+			if (body.size() == 2) {
+				return body.get(1);
+			}
+			return properList(body);
+		}
+		finally {
+			macroEval.shadowedMacros(shadowed);
+			for (java.util.Map.Entry<String, Object> entry : saved.entrySet()) {
+				macroEval.popLocalMacro(entry.getKey(), entry.getValue());
+			}
+		}
+	}
+
+	// Whether the walk expands a call of this name: a macro no local function shadows.
+	private static boolean isMacroInWalk(String name, LispEvaluator macroEval) {
+		return macroEval.isUserMacro(name) && !macroEval.shadowedMacros().contains(name);
+	}
+
+	// The shadowed macros plus those the flet/labels definitions name, the same set when
+	// they name none: a compiler macro counts, and a (setf name) writer shadows nothing.
+	private static java.util.Set<String> withShadowedMacros(java.util.Set<String> shadowed, LispCons defs,
+			LispEvaluator macroEval) {
+		java.util.Set<String> names = null;
+		for (LispVal def : defs.toList()) {
+			if (def instanceof LispCons defCons && defCons.car() instanceof LispSymbol sym
+					&& (macroEval.isUserMacro(sym.name()) || macroEval.hasCompilerMacro(sym.name()))) {
+				names = names != null ? names : new java.util.HashSet<>(shadowed);
+				names.add(sym.name());
+			}
+		}
+		return names != null ? names : shadowed;
+	}
+
+	// A dotted tail is only meaningful as data (inside quote); rebuilding a call form
+	// through toList() would silently drop it, so reject it here instead.
+	private static void requireProperCallForm(LispCons cons) {
+		if (!cons.isProperList()) {
+			throw new LispEvalException("Improper list in call position: " + cons.print());
+		}
+	}
+
+	// Rebuilds a form keeping parts[0] and the given fixed subforms verbatim, walking
+	// parts[from..] as expressions. Identity-preserving: a form containing no macro call
+	// is handed back as `original`, so its SourceProvenance position -- and the position
+	// of every subform of the defun that merely CONTAINS a macro call somewhere -- is not
+	// erased by the walk (LispCons.rebuilt).
+	private static LispVal rebuild(LispCons original, List<LispVal> parts, int from, LispEvaluator macroEval,
+			LispVal... fixed) {
+		List<LispVal> newParts = new ArrayList<>();
+		newParts.add(parts.get(0));
+		newParts.addAll(List.of(fixed));
+		for (int i = from; i < parts.size(); i++) {
+			newParts.add(expandAll(parts.get(i), macroEval));
+		}
+		return LispCons.rebuiltList(original, newParts);
+	}
+
+	/**
+	 * Expands {@code (operator (data... form...) body...)}: the spec's first {@code keep}
+	 * elements are data, the rest of it and the body expressions. A malformed spec is
+	 * left for the expansion to report.
+	 */
+	private static LispVal expandSpecForm(LispCons cons, List<LispVal> parts, int keep, LispEvaluator macroEval) {
+		if (parts.size() < 2 || !(parts.get(1) instanceof LispCons)) {
+			return cons;
+		}
+		return rebuild(cons, parts, 2, macroEval, expandClause(parts.get(1), keep, macroEval));
+	}
+
+	/**
+	 * Expands {@code (operator form clause...)} whose clauses each start with
+	 * {@code keep} elements of data ({@code handler-case}'s type and lambda list).
+	 */
+	private static LispVal expandClauses(LispCons cons, List<LispVal> parts, int keep, LispEvaluator macroEval) {
+		List<LispVal> newParts = new ArrayList<>(parts.size());
+		newParts.add(parts.get(0));
+		if (parts.size() > 1) {
+			newParts.add(expandAll(parts.get(1), macroEval));
+		}
+		for (int i = 2; i < parts.size(); i++) {
+			newParts.add(expandClause(parts.get(i), keep, macroEval));
+		}
+		return LispCons.rebuiltList(cons, newParts);
+	}
+
+	/**
+	 * A list whose first {@code keep} elements are data and whose rest are expressions;
+	 * anything that is not a proper list is data.
+	 */
+	private static LispVal expandClause(LispVal clause, int keep, LispEvaluator macroEval) {
+		if (!(clause instanceof LispCons cons) || !cons.isProperList()) {
+			return clause;
+		}
+		List<LispVal> parts = cons.toList();
+		List<LispVal> newParts = new ArrayList<>(parts);
+		for (int i = keep; i < parts.size(); i++) {
+			newParts.set(i, expandAll(parts.get(i), macroEval));
+		}
+		return LispCons.rebuiltList(cons, newParts);
+	}
+
+	/**
+	 * Expands the {@code :initform} values of a {@code defclass} or
+	 * {@code define-condition} slot list, the one place in it holding expressions.
+	 */
+	private static LispVal expandSlotInitforms(LispCons slots, LispEvaluator macroEval) {
+		List<LispVal> newSlots = new ArrayList<>();
+		for (LispVal slot : slots.toList()) {
+			if (slot instanceof LispCons slotCons && slotCons.isProperList()) {
+				List<LispVal> slotParts = slotCons.toList();
+				List<LispVal> newSlot = new ArrayList<>();
+				newSlot.add(slotParts.get(0));
+				for (int i = 1; i < slotParts.size(); i += 2) {
+					newSlot.add(slotParts.get(i));
+					if (i + 1 < slotParts.size()) {
+						boolean initform = slotParts.get(i) instanceof LispSymbol key && ":INITFORM".equals(key.name());
+						newSlot.add(initform ? expandAll(slotParts.get(i + 1), macroEval) : slotParts.get(i + 1));
+					}
+				}
+				newSlots.add(properList(newSlot));
+			}
+			else {
+				newSlots.add(slot);
+			}
+		}
+		return properList(newSlots);
+	}
+
+	/**
+	 * Expands the default forms of a lambda list -- an {@code &optional}/{@code &key}/
+	 * {@code &aux} entry's second element -- keeping every name, a specializer and a
+	 * supplied-p variable. The same object when nothing expanded.
+	 * @param lambdaList the lambda list
+	 * @param destructuring whether a list in a required position is a nested pattern
+	 * (walked the same way) rather than a defmethod's {@code (var specializer)}
+	 * @param macroEval the macro-time evaluator
+	 * @return the lambda list with its defaults expanded
+	 */
+	private static LispVal expandLambdaList(LispVal lambdaList, boolean destructuring, LispEvaluator macroEval) {
+		if (!(lambdaList instanceof LispCons listCons)) {
+			return lambdaList;
+		}
+		List<LispVal> out = new ArrayList<>();
+		boolean defaults = false;
+		boolean changed = false;
+		LispVal cell = listCons;
+		for (; cell instanceof LispCons c; cell = c.cdr()) {
+			LispVal element = c.car();
+			LispVal next = element;
+			if (element instanceof LispSymbol sym && sym.isLambdaListKeyword()) {
+				defaults = LispNames.LAMBDA_OPTIONAL.equals(sym.name()) || LispNames.LAMBDA_KEY.equals(sym.name())
+						|| LispNames.LAMBDA_AUX.equals(sym.name());
+			}
+			else if (element instanceof LispCons entry && entry.isProperList()) {
+				if (defaults) {
+					List<LispVal> newEntry = entry.toList();
+					if (destructuring) {
+						newEntry.set(0, expandLambdaList(newEntry.get(0), true, macroEval));
+					}
+					if (newEntry.size() >= 2) {
+						newEntry.set(1, expandAll(newEntry.get(1), macroEval));
+					}
+					next = LispCons.rebuiltList(entry, newEntry);
+				}
+				else if (destructuring) {
+					next = expandLambdaList(entry, true, macroEval);
+				}
+			}
+			changed |= next != element;
+			out.add(next);
+		}
+		if (!changed) {
+			return lambdaList;
+		}
+		// A dotted tail (destructuring's (a . rest)) is a name and stays.
+		LispVal result = cell;
+		for (int i = out.size() - 1; i >= 0; i--) {
+			result = new LispCons(out.get(i), result);
+		}
+		return result;
+	}
+
+	// Whether a symbol-macrolet binding's expansion is a form whose operator has a user
+	// setf expander.
+	private static boolean bindsUserSetfPlace(LispVal bindings, LispEvaluator macroEval) {
+		for (LispVal cursor = bindings; cursor instanceof LispCons cell; cursor = cell.cdr()) {
+			if (cell.car() instanceof LispCons binding && binding.cdr() instanceof LispCons expansion
+					&& expansion.car() instanceof LispCons place && place.car() instanceof LispSymbol operator
+					&& macroEval.hasSetfExpander(operator.name())) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	// Expands the init/step forms of a let/do binding list, keeping the bound names.
+	private static LispVal expandBindings(LispVal bindings, LispEvaluator macroEval) {
+		if (!(bindings instanceof LispCons bindingsCons)) {
+			return bindings;
+		}
+		List<LispVal> newBindings = new ArrayList<>();
+		for (LispVal binding : bindingsCons.toList()) {
+			if (binding instanceof LispCons bindingCons) {
+				List<LispVal> pair = bindingCons.toList();
+				List<LispVal> newPair = new ArrayList<>();
+				newPair.add(pair.get(0));
+				for (int i = 1; i < pair.size(); i++) {
+					newPair.add(expandAll(pair.get(i), macroEval));
+				}
+				newBindings.add(LispCons.rebuiltList(bindingCons, newPair));
+			}
+			else {
+				newBindings.add(binding);
+			}
+		}
+		return LispCons.rebuiltList(bindingsCons, newBindings);
+	}
+
+	private static LispVal properList(List<LispVal> elements) {
+		LispVal result = LispNil.INSTANCE;
+		for (int i = elements.size() - 1; i >= 0; i--) {
+			result = new LispCons(elements.get(i), result);
+		}
+		return result;
+	}
+
+}

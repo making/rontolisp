@@ -1,0 +1,178 @@
+# `replace` / `fill` / `map-into` are shared callees, not per-site code
+
+**Invariant 1: no `replace`, `fill` or `map-into` site emits its runtime dispatch inline when the
+program carries the matching helper. The program carries each of them once.**
+
+**Invariant 2: the shared `replace` / `fill` runtime is TWO functions -- the wide dispatch and its
+`%arrayp` arm -- and a site whose DESTINATION is provably an array calls the arm directly.** A
+program with no unproven site leaves the wide dispatch without a caller for the shaker.
+
+Same lesson as `.kb/subseq-runtime.md` (direct precedent; read its mechanics first, this file
+records only the deltas), `.kb/seq-conversion-runtime.md`, `.kb/string-write-runtime.md`,
+`.kb/format.md`'s `%fixed-decimal`: a per-site expansion past a few hundred bytes becomes a callee.
+Marginal cost of one more site, wasm-GC `--optimize=size`: a few tens of bytes, for
+`replace`, `map-into` and `fill` alike.
+
+## The lowering
+Builders in `LispMacroExpander`, each the body its `expand*` used to inline:
+`replaceRuntimeWrapper()` -> `(%replace-runtime seq1 seq2 start1 end1 start2 end2)`;
+`fillRuntimeWrapper()` -> `(%fill-runtime seq item start end)`;
+`mapIntoRuntimeWrapper(n)` -> `(%map-into-runtime-<n> result fn s0 ... s<n-1>)`;
+`replaceArrayRuntimeWrapper()` / `fillArrayRuntimeWrapper()` for the `%arrayp` arms.
+
+- **The bounds are PARAMETERS**, so ONE call-site shape serves every keyword combination. An end
+  is nil for "the length" (`(or end (length seq))` in the helper); a start is always a value --
+  the site passes 0 when the keyword is absent and the given form as written otherwise. Argument
+  order is the canonical keyword order (the inline `let*` order), so evaluation order is
+  unchanged.
+- **A site that SPELLS a bound checks it, the helper never does**: `(let* (<the arguments, in
+  the site's order>) (%check-sequence s 'fill) (%check-bounds s start end) <the same call>)`,
+  each spelled pair of `replace` against its own sequence (`.kb/sequence-bounding-keywords.md`,
+  "Every bound is checked once") -- a negative, non-integer or out-of-range bound or a start past
+  its end is `subseq`'s `type-error` before anything is written. Inside a helper the check
+  would ride every unbounded site too and change its bytes. Before 2026-10-05 only a nil start
+  was refused (the helper's arithmetic tripped on it); every other bad bound wrote nothing or
+  part of the range.
+- **`map-into` gets one helper per SOURCE-SEQUENCE COUNT**, not one taking a list: its loop body is
+  a `funcall` of exactly that many arguments, and a list would need `apply` and the spread
+  dispatcher. Count read off the call shape (`sequenceOpRuntimeWrappers`), capped at 8
+  (`MAX_MAP_INTO_SOURCES`).
+- Routing is per site at the compilers' `REPLACE`/`FILL`/`MAP_INTO` cases, on
+  `ctx.functions.containsKey(<helper name>)`, so an under-predicting gate costs sharing, never
+  correctness.
+
+## Injection
+- **The BACKEND's**, in the same loop that adds `BuiltinFunctionWrappers` (`JvmLispCompiler` /
+  `WasmLispCompiler`): the `#'replace`/`#'fill` wrapper bodies are sites of their own and do not
+  exist until the backend generates them.
+- **Before the `%subseq-runtime` injection, and scanned by it** -- the bodies call `subseq`.
+- The three OPERATORS are gated APART; `replace` and `fill` each inject a PAIR, because which of
+  the two a site can reach is a compile-time fact the pre-expansion scan cannot see.
+- **The two backends gate differently** (same asymmetry as `%subseq-runtime`): wasm injects on the
+  name scan alone, the JVM additionally requires `programUsesAnyArrayOp` (mis-firing the array gate
+  costs a large slice of class). With the JVM gate off, every site keeps its inline lowering.
+- The interpreter never sees this: `replace`/`fill` are native built-ins.
+
+## The bulk-copy arm
+`%replace-runtime-array`'s element loop is fronted by `(%replace-bulk dst src s1 s2 n)`
+(`LispNames.REPLACE_BULK`, emitted ONLY in the narrow helper's body by `replaceDispatch` and in
+`subseq`'s general-array arm, `.kb/subseq-runtime.md`): true =
+the n elements moved in one engine-level copy, nil = nothing happened and the loop runs.
+`WasmArrayCompiler.compileReplaceBulk` fires only for DISTINCT packed integer vectors of the SAME
+width with in-bounds non-negative i31 bounds, then one `array.copy`; it declines everything else so
+the loop keeps owning the error shape. **Two distinct general vectors move the same way**
+(`emitGeneralBulkCopy`, 2026-11-16): both cells name storage of their own (rank 1, no view:
+`CELL_STORAGE_FIELD`, `.kb/adjustable-arrays.md`), the destination's marker (`meta.cdr.cdr`) is 0 --
+it remembers no element type and is no character vector, whose stores check their value -- and both
+ranges lie within the storage, as the loop's own accesses must. The loop was `_idx_ref`,
+`_arr_check_rank` and `_arr_set` an element, 56 ns: ten rounds of `list(xs)` and `ys.extend(xs)`
+over 1,200,000 elements 1.36 -> 0.39 s (a Starlark list's `replace`, CPython 0.22), two thirds of
+the samples in the three helpers before. It is handed the DETACHED source (below), so a
+self-overlapping copy reaches it as two distinct vectors. **The JVM moves two distinct general
+vectors too** (`_bulkCopy`, `JvmBulkRuntimeBuilder`, 2026-11-16; `.kb/bulk-primitives.md`, "JVM"):
+boxed into a plain boxed vector (a header of length 3: it remembers no element type) a `get` and a
+`set` an element, unboxed into it a `Long` an element, unboxed into unboxed one `System.arraycopy`
+of the `long[]`; a boxed source into an unboxed destination declines (a store may have to widen
+it), as do a view, a character vector, another rank and a range outside the storage. `list(xs)`
+and `ys.extend(xs)` of 1,200,000 elements were 6% of `methods.star`'s samples in the loop and are
+4.5% in the arm, two calls the interpreter runs.
+
+## Self-overlapping `replace`
+CLHS: when seq1 and seq2 are one object and the regions overlap, the result is as if the whole
+source region were copied first. A forward element copy is already that when `start1 <= start2`;
+only `start1 > start2` reads elements it has overwritten (`#(1 1 1 1 5)` for
+`(replace v v :start1 1 :end2 3)` on every backend until 2026-09-19). `replaceDispatch`'s
+`sourceDetached` wraps both destructive arms (array, list) in
+`(let* ((src (if (and (eq r1 r2) (< s2 s1)) (subseq r2 s2 (+ s2 n)) r2)) (o (if (eq src r2) s2 0))) ...)`
+and they read through `src`/`o` -- a copy rather than a backward walk because a list source cannot
+be walked backward. The string rebuild arm reads with `subseq` and never needed it.
+The interpreter's native `replace` reads the region into an array first under the same condition
+(its string path, `LispString.replaceInPlace`, was already right). The `#'replace` / `#'fill`
+wrappers forward their bounding keywords (`BuiltinFunctionWrappers.boundingKeywords`); they took
+two arguments only.
+
+## The arms
+- **`replace` into a LIST** used to fall through to the immutable-string rebuild (JVM
+  `ClassCastException`, WASM printing `"(1)(9 9)(4 5)"`, and `(setf (subseq l ...))` a silent
+  no-op). Dispatch is now `%arrayp` -> element store, else `listp` -> a `nthcdr`/`rplaca` cursor
+  walk, else the string rebuild.
+- **A LIST source is walked with a cursor, not indexed with `elt`** (every `elt` was an `nth` walk
+  from the head: quadratic), with a `(null cell)` stop. A range the source lacks no longer
+  reaches it: `(replace <array> '(1 2) :end2 4)` is refused up front on every backend, where the
+  compile paths copied what there was and stopped and the interpreter signalled `sequence-ref`
+  from the missing element. The `search`/`mismatch` prelude bodies took the same cursor but could
+  NOT take the same stop (`.kb/seq-coerce-runtime.md`); theirs falls back to the `elt` call,
+  which is why theirs grew where this one shrank.
+- The list DESTINATION arm's SOURCE read likewise falls back rather than stopping:
+  `(if (consp c) (prog1 (car c) (setq c (cdr c))) (elt r2 (+ vs2 k)))`, seeded
+  `(nthcdr start2 source)` only when the source is `listp` and `start2` a non-negative integer.
+- **The INTERPRETER had the mirror defect**: `Environment`'s `replace` read
+  `sequenceRef(source, start2 + k)` per element. One `Environment.SequenceSourceCursor` serves all
+  three destination arms, monotonic, re-seeding if a caller reads backwards, keeping `sequenceRef`
+  for every non-list representation. A list too short for the range is refused before it runs
+  (`Environment.checkBoundingIndices`, a dotted tail counting its conses).
+
+## Narrowing the arms to the ones a site can reach
+`%replace-runtime-array` / `%fill-runtime-array` hold the `%arrayp` arm; the wide helper's array
+arm is a CALL to it, so the pair holds ONE copy of the copy loop.
+`LispMacroExpander.sequenceOpRuntimeWrappers` answers them as a PAIR. Routing is per SITE, not a
+narrowed single helper, because the `#'replace` wrapper body is itself a site taking whatever it is
+handed -- a whole-program scan covering it would keep every arm in every program.
+
+**Soundness.** The gate answers ONE question -- *can this value be a list or an immutable string?*
+-- and narrows only on a definite no (`WasmArrayCompiler.provesArrayValue`). Three sources, each
+already trusted at the same site for array EMISSION (`.kb/declarations-type-checks.md`):
+1. a pinned non-`STRING` representation kind (`arrayKindOfExpr`: a `declare (type ...)`, a
+   `defstruct` slot `:type`, a `(the ...)` wrap, a `let` init with a chosen representation);
+2. `Ctx.arrayLocals` -- a `let`-bound name whose init proves the WEAKER fact and which the body
+   never reassigns;
+3. a `make-array` call right at the site.
+
+Source 2 exists because the weak fact is not the kind:
+`(make-array (* 2 (length output)) :element-type '(unsigned-byte 8))` has no compile-time KIND but
+is `%arrayp` either way. `initExprPin` must keep refusing it (a wrong rank is a wrong accessor);
+`provesArrayValue` must not. `Ctx.arrayLocals` is scoped/shadowed/restored beside
+`Ctx.declaredArrays` in `WasmLetCompiler`. `makeArrayBuildsArrayValue` is conservative in the three
+shapes `compileMake` can route to a string: a CHARACTER element type, an element type spelled as a
+bare symbol, and `:displaced-to`.
+
+A WRONG answer is possible only via source 1 and only through a false declaration (UB in CL); it
+lands on `%row-major-aset`, whose general lane casts, so a list or string TRAPS deterministically --
+never silent wrong data.
+
+**wasm-GC only**: both backends inject the pair, but `DeclaredArrayTypes` has no JVM consumer, so
+`JvmExprCompiler` passes `arrayHelperTarget` false at every site. When the JVM adopts
+`DeclaredArrayTypes`, give its `REPLACE`/`FILL` cases the same third argument -- nothing else moves.
+
+**`map-into` was deliberately left wide** (its arms are `elt` reads and a runtime-dispatching
+`(setf (elt ...))` store); no measured artifact carries a live `%map-into-runtime-<n>`. Its
+LOWERING carries a cursor per source and one for the result (`mapIntoDispatch`), and
+`BuiltinFunctionWrappers.mapIntoWrapper` carries the same result cursor -- its store was
+`(setf (elt r i) v)`, an O(i) head-walk into a list destination.
+
+## Pinning tests
+- `LispMacroExpanderTest.aDestructiveSequenceOperatorSiteIsOneCallWhenTheProgramCarriesTheSharedDispatch`,
+  `.theSharedSequenceOpDispatchesAnswerTheSameThingAsTheInlinedOnes`,
+  `.theSequenceOpRuntimeGateInjectsOnlyTheHelpersThatWouldHaveACaller`.
+- `WasmLispCompilerTest.aDestructiveSequenceOperatorSiteDoesNotCarryItsOwnCopyOfTheSharedRuntime`
+  (marginal byte budgets),
+  `.aProvenArrayDestinationLeavesTheSharedRuntimesNonArrayArmsWithoutACaller`.
+- Behavior: ci-spec `replace-into-a-list`, `sequence-op-runtime-arm-routing`,
+  `replace-overlapping-regions-of-one-sequence`, `replace-of-overlapping-regions-of-one-sequence`
+  (and `LispEvaluatorTest#replaceOfOverlappingRegionsOfOneSequence`);
+  `JvmLispCompilerTest.compileAndRunReplaceIntoAList`,
+  `WasmLispCompilerIntegrationTest.replaceIntoAList` / `.sequenceOpRuntimeArmRouting`.
+- Source cursors:
+  `LispEvaluatorTest.replaceReadsAListSourceThroughACursorRatherThanIndexingItFromTheHead` (every
+  destination arm, a self-aliased `replace`, a 2,000-element source, and the three
+  `sequence-ref: index N out of range` signals a silent stop would have erased);
+  `JvmLispCompilerTest.compileAndRunAListIntoAListReplaceReadsItsSourceWithACursor`.
+
+## Related
+The spread dispatcher (12,156 B on zlib) was turned on by
+`WasmArityBundler.spreadOverArityFuncalls` rewriting an over-wide `funcall` to
+`(apply f (list ...))`. **The arity ceiling is now derived, not fixed at 10**: a site 11..14
+arguments wide gets its own per-arity dispatcher APPENDED after the fixed block so no existing
+index moves (`MAX_CALLABLE_ARITY` is an index origin, `.kb/wasm-callable-arity.md`).
+`%SEQ-INT-VECTOR`, `%SEQ-TO-LIST` and `%SUBSEQ-RUNTIME` are whole-representation bodies but NOT
+this shape -- see `.kb/seq-conversion-runtime.md`, `.kb/concatenate-result-families.md`.

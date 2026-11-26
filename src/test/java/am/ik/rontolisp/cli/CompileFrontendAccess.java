@@ -1,0 +1,455 @@
+package am.ik.rontolisp.cli;
+
+import java.io.FileNotFoundException;
+import java.nio.file.Path;
+import java.util.List;
+
+import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.compiler.JavaClassLookup;
+import am.ik.rontolisp.eval.DistClient;
+import am.ik.rontolisp.eval.SourceStandards;
+import am.ik.rontolisp.reader.Features;
+import org.jspecify.annotations.Nullable;
+
+/**
+ * The compile path's front end as a TEST runs it: one door onto {@link CompileFrontend},
+ * for the tests that need the program the CLI would hand a backend rather than a program
+ * of their own making.
+ *
+ * <p>
+ * <b>Why this class exists.</b> Every caller here used to spell the pass pipeline out by
+ * hand, and every copy fell behind. The corpus guards
+ * ({@code JvmDeadMethodEliminationCorpusTest}, {@code WasmTreeShakerCorpusTest}) were
+ * eight passes short when a {@code tokenizer:} case joined the corpus and went red, and
+ * ten short when that was fixed -- plus {@link am.ik.rontolisp.eval.VecLibrary} applied
+ * in a DIFFERENT POSITION, which no census of pass names could have caught. The
+ * {@code asdf:load-system} library E2Es ({@code AsdfLibraryE2eSupport},
+ * {@code JvmLibraryMethodSizeTest}) carried a third and a fourth copy, stopped at six
+ * passes: the coverage for compiling a real third-party tree was compiling a program no
+ * user could build. A fifth survived all of that unnoticed --
+ * {@code JvmOsrBackedgeCorpusTest}, found on 2026-09-19 still building its own corpus,
+ * eleven splices behind and printing ten {@code TOKENIZER:... is undefined} warnings to
+ * the console on every green run -- verbatim the shape of the corpus guards' failure.
+ * <b>A copy announces itself in the console output of a PASSING test, so the census that
+ * finds one is a grep for the pass names, not a reading of what each guard claims.</b>
+ * The order now lives once, in {@link CompileFrontend#expand}, and every test reaches it
+ * through here.
+ *
+ * <p>
+ * This class lives in the {@code am.ik.rontolisp.cli} package so that
+ * {@link CompileFrontend} and its {@code Result} stay package-private: the fix is to stop
+ * duplicating an order, not to widen the CLI's API for a test.
+ *
+ * <p>
+ * The one thing the front end does NOT settle for a caller is the source loader, which is
+ * exactly what separates the two methods below: {@link #corpus} passes a loader that
+ * THROWS, which is how the guards assert the catalogue never comes to depend on a file on
+ * disk, while {@link #withSystemPath} reads the real filesystem because resolving an
+ * {@code .asd} is the point of it.
+ */
+public final class CompileFrontendAccess {
+
+	private CompileFrontendAccess() {
+	}
+
+	/**
+	 * What the front end produced: the program a backend compiles, and the feature set it
+	 * was read with -- which a backend re-reads to seed the compiled program's run-time
+	 * {@code *features*}, so a {@code (member :F *features*)} and the {@code #+F} beside
+	 * it cannot disagree.
+	 *
+	 * @param forms the expanded, spliced and pruned top-level forms
+	 * @param features the feature set the program was read with
+	 */
+	public record Program(List<LispVal> forms, Features features) {
+	}
+
+	/**
+	 * Reads, load-inlines and expands the corpus exactly as the CLI would for this
+	 * target, with a source loader that refuses to read a file.
+	 * @param source the corpus program text
+	 * @param features the target feature set ({@code Features.JVM} /
+	 * {@code Features.WASM})
+	 * @param wasm whether the target is a {@code .wasm} output
+	 * @param noWasi {@code --no-wasi}; the WASM guard compiles both ways
+	 * @return the expanded, spliced and pruned top-level forms
+	 */
+	public static List<LispVal> corpus(String source, Features features, boolean wasm, boolean noWasi) {
+		// The read is the CLI's (LoadInliner.inlineSource): #. in the corpus rides the
+		// marker read (resolved in UserMacroExpander), and a case that installs a
+		// readtable at compile time is read with it, so neither decision can drift
+		// from the production read. LoadInliner splices the built-in ASDF shim systems
+		// the corpus load-systems (bordeaux-threads' bt2 case), exactly like the CLI.
+		// The loader throws: see the class comment -- the corpus must reference no
+		// filesystem source.
+		List<LispVal> loaded = LoadInliner.inlineSource(source, path -> {
+			throw new FileNotFoundException(path);
+		}, null, List.of(), features, DistClient.createDefault(), SourceStandards.DEFAULT, null);
+		return CompileFrontend
+			.expand(new CompileFrontend.Loaded(loaded, features),
+					CompileFrontend.Options.builder().wasm(wasm).noWasi(noWasi).build())
+			.program();
+	}
+
+	/**
+	 * Reads and expands a WASM program whose relative paths (a
+	 * {@code rontolisp:wit-import}'s {@code .wit}) resolve against a directory on disk,
+	 * for whichever of the two core-module backends {@code noGc} names.
+	 * @param source the program text
+	 * @param baseDir the directory relative paths resolve against
+	 * @param noGc {@code --no-gc}
+	 * @return the expanded, spliced and pruned top-level forms
+	 */
+	public static List<LispVal> wasmReactor(String source, String baseDir, boolean noGc) {
+		return CompileFrontend
+			.run(CompileFrontend.Request.builder()
+				.source(source)
+				.options(CompileFrontend.Options.builder().baseDir(baseDir).wasm(true).noWasi(true).noGc(noGc).build())
+				.build())
+			.program();
+	}
+
+	/**
+	 * Reads and expands a Common Lisp program as a {@code --no-wasi} reactor whose
+	 * sockets are its host's ({@code --host-sockets}).
+	 * @param source the program text
+	 * @return the expanded, spliced and pruned top-level forms
+	 */
+	public static List<LispVal> wasmReactorWithHostSockets(String source) {
+		return CompileFrontend
+			.run(CompileFrontend.Request.builder()
+				.source(source)
+				.options(CompileFrontend.Options.builder().wasm(true).noWasi(true).hostSockets(true).build())
+				.build())
+			.program();
+	}
+
+	/**
+	 * Compiles a source text read from a file as a {@code --no-wasi} reactor, through the
+	 * whole front end, the way the CLI does for that entry file: the extension picks the
+	 * language, and what it requires is found beside it.
+	 * @param source the program text
+	 * @param entryFile the path the text was read from
+	 * @return the expanded, spliced and pruned top-level forms
+	 */
+	public static List<LispVal> wasmReactorFile(String source, String entryFile) {
+		return CompileFrontend
+			.run(CompileFrontend.Request.builder()
+				.source(source)
+				.entryFile(entryFile)
+				.options(CompileFrontend.Options.builder()
+					.baseDir(java.util.Objects.requireNonNull(Path.of(entryFile).toAbsolutePath().getParent())
+						.toString())
+					.wasm(true)
+					.noWasi(true)
+					.build())
+				.build())
+			.program();
+	}
+
+	/**
+	 * Reads and expands a {@code --no-gc --component} program whose relative paths (a
+	 * {@code rontolisp:wit-import}'s {@code .wit}) resolve against a directory on disk:
+	 * the {@code WASM_NO_GC_COMPONENT} lowering, with WASI kept (a printing program gets
+	 * the print micro-adapter, not the {@code --no-wasi} sink).
+	 * @param source the program text
+	 * @param baseDir the directory relative paths resolve against
+	 * @return the expanded, spliced and pruned top-level forms
+	 */
+	public static List<LispVal> noGcComponent(String source, String baseDir) {
+		return CompileFrontend.run(CompileFrontend.Request.builder()
+			.source(source)
+			.options(CompileFrontend.Options.builder().baseDir(baseDir).wasm(true).component(true).noGc(true).build())
+			.build()).program();
+	}
+
+	/**
+	 * Compiles a source text through the WHOLE front end the CLI runs -- the read (with
+	 * the target's own feature set), the {@code (load ...)} and ASDF inlining over the
+	 * real filesystem, and the pass pipeline -- for a test that hands a library E2E's
+	 * exercise to a backend.
+	 * @param source the program text
+	 * @param systemPath the ASDF system search path ({@code --system-path}): the
+	 * directories holding the {@code .asd} files
+	 * @param wasm whether the target is a {@code .wasm} output
+	 * @param component {@code --component}
+	 * @return the expanded program and the feature set it was read with
+	 */
+	public static Program withSystemPath(String source, List<String> systemPath, boolean wasm, boolean component) {
+		// DistClient.createDefault mirrors the CLI's default (Quicklisp, cached under
+		// ~/.rontolisp) and touches neither network nor disk unless the program actually
+		// ql:quickloads something -- a vendored system resolves against systemPath.
+		CompileFrontend.Result result = CompileFrontend.run(CompileFrontend.Request.builder()
+			.source(source)
+			.systemPath(systemPath)
+			.dists(DistClient.createDefault(List.of()))
+			.options(CompileFrontend.Options.builder().wasm(wasm).component(component).build())
+			.build());
+		return new Program(result.program(), result.features());
+	}
+
+	/**
+	 * Compiles a SCHEME source text through the whole front end, the way the CLI does for
+	 * a {@code .scm} entry file: the read goes through the source-language seam, and the
+	 * run-time helpers are spliced by the pass pipeline like any other library.
+	 * @param source the Scheme program text
+	 * @param wasm whether the target is a {@code .wasm} output
+	 * @param component {@code --component}
+	 * @return the expanded program and the feature set it was read with
+	 */
+	public static Program scheme(String source, boolean wasm, boolean component) {
+		return scheme(source, wasm, component, "rontolisp");
+	}
+
+	/**
+	 * {@link #scheme(String, boolean, boolean)} read against a {@code --scheme-standard}.
+	 * @param source the Scheme program text
+	 * @param wasm whether the target is a {@code .wasm} output
+	 * @param component {@code --component}
+	 * @param standard the {@code --scheme-standard} value
+	 * @return the expanded program and the feature set it was read with
+	 */
+	public static Program scheme(String source, boolean wasm, boolean component, String standard) {
+		return scheme(source, null, wasm, component, standard);
+	}
+
+	/**
+	 * {@link #scheme(String, boolean, boolean, String)} read from a file, which what the
+	 * program includes and imports is found beside.
+	 * @param source the Scheme program text
+	 * @param entryFile the path the text was read from, or {@code null}
+	 * @param wasm whether the target is a {@code .wasm} output
+	 * @param component {@code --component}
+	 * @param standard the {@code --scheme-standard} value
+	 * @return the expanded program and the feature set it was read with
+	 */
+	public static Program scheme(String source, @Nullable String entryFile, boolean wasm, boolean component,
+			String standard) {
+		CompileFrontend.Result result = CompileFrontend.run(CompileFrontend.Request.builder()
+			.source(source)
+			.entryFile(entryFile)
+			.sourceLanguage("scheme")
+			.standards(SourceStandards.parse(standard))
+			// The CLI resolves a relative load/include against the entry file's
+			// directory; a test naming an entry file gets the same rule.
+			.options(CompileFrontend.Options.builder()
+				.wasm(wasm)
+				.component(component)
+				.baseDir(entryFile == null ? null
+						: java.util.Objects
+							.requireNonNullElse(Path.of(entryFile).toAbsolutePath().getParent(),
+									Path.of(entryFile).toAbsolutePath())
+							.toString())
+				.build())
+			.build());
+		return new Program(result.program(), result.features());
+	}
+
+	/**
+	 * Compiles a CLOJURE source text through the whole front end, the way the CLI does
+	 * for a {@code .clj} entry file.
+	 * @param source the Clojure program text
+	 * @param wasm whether the target is a {@code .wasm} output
+	 * @param component {@code --component}
+	 * @return the expanded program and the feature set it was read with
+	 */
+	public static Program clojure(String source, boolean wasm, boolean component) {
+		return clojure(source, null, wasm, component);
+	}
+
+	/**
+	 * {@link #clojure(String, boolean, boolean)} read from a file.
+	 * @param source the Clojure program text
+	 * @param entryFile the path the text was read from, or {@code null}
+	 * @param wasm whether the target is a {@code .wasm} output
+	 * @param component {@code --component}
+	 * @return the expanded program and the feature set it was read with
+	 */
+	public static Program clojure(String source, @Nullable String entryFile, boolean wasm, boolean component) {
+		CompileFrontend.Result result = CompileFrontend.run(CompileFrontend.Request.builder()
+			.source(source)
+			.entryFile(entryFile)
+			.sourceLanguage("clojure")
+			.options(CompileFrontend.Options.builder().wasm(wasm).component(component).build())
+			.build());
+		return new Program(result.program(), result.features());
+	}
+
+	/**
+	 * Compiles a STARLARK source text through the whole front end, the way the CLI does
+	 * for a {@code .star} entry file.
+	 * @param source the Starlark program text
+	 * @param wasm whether the target is a {@code .wasm} output
+	 * @param component {@code --component}
+	 * @param standard the {@code --starlark-standard} value, or {@code null} for the
+	 * default
+	 * @return the expanded program and the feature set it was read with
+	 */
+	public static Program starlark(String source, boolean wasm, boolean component, @Nullable String standard) {
+		CompileFrontend.Result result = CompileFrontend.run(CompileFrontend.Request.builder()
+			.source(source)
+			.sourceLanguage("starlark")
+			.standards(SourceStandards.parse(null, standard))
+			.options(CompileFrontend.Options.builder().wasm(wasm).component(component).build())
+			.build());
+		return new Program(result.program(), result.features());
+	}
+
+	/**
+	 * Compiles a source text read from a file through the whole front end, the way the
+	 * CLI does for that entry file: its extension picks the language, and what it loads
+	 * is found beside it, each file in the language its own extension picks.
+	 * @param source the program text
+	 * @param entryFile the path the text was read from
+	 * @param wasm whether the target is a {@code .wasm} output
+	 * @param component {@code --component}
+	 * @param starlarkStandard the {@code --starlark-standard} value, or {@code null} for
+	 * the default
+	 * @return the expanded program and the feature set it was read with
+	 */
+	public static Program file(String source, String entryFile, boolean wasm, boolean component,
+			@Nullable String starlarkStandard) {
+		return file(source, entryFile, wasm, component, SourceStandards.parse(null, starlarkStandard));
+	}
+
+	/**
+	 * {@link #file(String, String, boolean, boolean, String)} with the standards the
+	 * program's files are read against given whole.
+	 * @param source the program text
+	 * @param entryFile the path the text was read from
+	 * @param wasm whether the target is a {@code .wasm} output
+	 * @param component {@code --component}
+	 * @param standards what each language is read against
+	 * @return the expanded program and the feature set it was read with
+	 */
+	public static Program file(String source, String entryFile, boolean wasm, boolean component,
+			SourceStandards standards) {
+		return file(source, entryFile, wasm, component, standards, false);
+	}
+
+	/**
+	 * {@link #file(String, String, boolean, boolean, SourceStandards)} under
+	 * {@code --wasi-logging}.
+	 * @param source the program text
+	 * @param entryFile the path the text was read from
+	 * @param wasm whether the target is a {@code .wasm} output
+	 * @param component {@code --component}
+	 * @param standards what each language is read against
+	 * @param wasiLogging {@code --wasi-logging}
+	 * @return the expanded program and the feature set it was read with
+	 */
+	public static Program file(String source, String entryFile, boolean wasm, boolean component,
+			SourceStandards standards, boolean wasiLogging) {
+		CompileFrontend.Result result = CompileFrontend.run(CompileFrontend.Request.builder()
+			.source(source)
+			.entryFile(entryFile)
+			.standards(standards)
+			.options(CompileFrontend.Options.builder()
+				.wasm(wasm)
+				.component(component)
+				.wasiLogging(wasiLogging)
+				.baseDir(java.util.Objects.requireNonNull(Path.of(entryFile).toAbsolutePath().getParent()).toString())
+				.build())
+			.build());
+		return new Program(result.program(), result.features());
+	}
+
+	/**
+	 * Expands forms a test has read and lowered itself -- a front end's read, wrapped by
+	 * the test -- through the pass pipeline, as {@code run} expands the forms the read of
+	 * a non-Lisp entry file answers.
+	 * @param forms the lowered top-level forms
+	 * @param wasm whether the target is a {@code .wasm} output
+	 * @param component {@code --component}
+	 * @return the expanded program and the feature set of its target
+	 */
+	public static Program lowered(List<LispVal> forms, boolean wasm, boolean component) {
+		Features features = wasm ? Features.WASM : Features.JVM;
+		if (wasm && component) {
+			features = features.with(List.of(Features.COMPONENT));
+		}
+		CompileFrontend.Result result = CompileFrontend.expand(new CompileFrontend.Loaded(forms, features),
+				CompileFrontend.Options.builder().wasm(wasm).component(component).build());
+		return new Program(result.program(), result.features());
+	}
+
+	/**
+	 * The JVM backend half alone over a program {@link #lowered} expanded.
+	 * @param className the class to emit
+	 * @param program the expanded program
+	 * @return the emitted class
+	 */
+	public static JvmSourceCompiler.Result jvmClass(String className, Program program) {
+		return new JvmSourceCompiler(className).compileProgram(program.forms(), program.features());
+	}
+
+	/**
+	 * A Clojure entry file through the whole front end the way the CLI compiles it, the
+	 * classes its host forms name those of a Java class path: described by reflection
+	 * through a loader over it, as on a JVM, or by {@code classFiles}, as a native image
+	 * reads them ({@code JavaClassPath.classFiles}).
+	 * @param entryFile the program file
+	 * @param javaClassPath the program's Java class path ({@code --java-classpath})
+	 * @param classFiles the classes to lower against instead of reflecting, or
+	 * {@code null}
+	 * @return the expanded program and the feature set it was read with
+	 * @throws java.io.IOException when the file cannot be read
+	 */
+	public static Program clojureFile(Path entryFile, List<Path> javaClassPath, @Nullable JavaClassLookup classFiles)
+			throws java.io.IOException {
+		return clojureFile(entryFile, javaClassPath, classFiles, false, false);
+	}
+
+	/**
+	 * {@link #clojureFile(Path, List, JavaClassLookup)} for a target.
+	 * @param entryFile the program file
+	 * @param javaClassPath the program's Java class path ({@code --java-classpath})
+	 * @param classFiles the classes to lower against instead of reflecting, or
+	 * {@code null}
+	 * @param wasm whether the target is a {@code .wasm} output
+	 * @param component {@code --component}
+	 * @return the expanded program and the feature set it was read with
+	 * @throws java.io.IOException when the file cannot be read
+	 */
+	public static Program clojureFile(Path entryFile, List<Path> javaClassPath, @Nullable JavaClassLookup classFiles,
+			boolean wasm, boolean component) throws java.io.IOException {
+		Path file = entryFile.toAbsolutePath();
+		String source = java.nio.file.Files.readString(file);
+		try (JavaClassPath classPath = JavaClassPath.of(javaClassPath)) {
+			CompileFrontend.Result result = CompileFrontend.run(CompileFrontend.Request.builder()
+				.source(source)
+				.entryFile(file.toString())
+				.javaClassLoader(classPath.classLoader())
+				.javaClassLookup(classFiles)
+				.javaClassPath(classPath::add)
+				.options(CompileFrontend.Options.builder()
+					.wasm(wasm)
+					.component(component)
+					.baseDir(java.util.Objects.requireNonNull(file.getParent()).toString())
+					.build())
+				.build());
+			return new Program(result.program(), result.features());
+		}
+	}
+
+	/**
+	 * A Common Lisp source text read from a file, through the whole front end the way the
+	 * CLI does for a {@code .lisp} entry file: what its {@code (load ...)} forms name is
+	 * found beside {@code baseDir}, in whatever language each file's extension picks.
+	 * @param source the Common Lisp program text
+	 * @param entryFile the path the text was read from
+	 * @param baseDir the directory relative loads resolve against
+	 * @param wasm whether the target is a {@code .wasm} output
+	 * @param component {@code --component}
+	 * @return the expanded program and the feature set it was read with
+	 */
+	public static Program commonLisp(String source, String entryFile, String baseDir, boolean wasm, boolean component) {
+		CompileFrontend.Result result = CompileFrontend.run(CompileFrontend.Request.builder()
+			.source(source)
+			.entryFile(entryFile)
+			.options(CompileFrontend.Options.builder().wasm(wasm).component(component).baseDir(baseDir).build())
+			.build());
+		return new Program(result.program(), result.features());
+	}
+
+}

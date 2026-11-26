@@ -1,0 +1,778 @@
+package am.ik.rontolisp;
+
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.FileNotFoundException;
+import java.io.IOException;
+import java.io.OutputStream;
+import java.io.PrintStream;
+import java.io.UncheckedIOException;
+import java.net.InetSocketAddress;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import java.util.stream.Stream;
+
+import com.sun.net.httpserver.HttpServer;
+import am.ik.rontolisp.eval.LispEvaluator;
+import am.ik.rontolisp.eval.LispExitSignal;
+import am.ik.rontolisp.eval.PlaygroundRepl;
+import am.ik.rontolisp.eval.SourceLanguage;
+import am.ik.rontolisp.eval.SourceLoader;
+import am.ik.rontolisp.eval.SourceSession;
+import am.ik.rontolisp.eval.SourceStandards;
+import am.ik.rontolisp.reader.Features;
+import am.ik.rontolisp.reader.LispReader;
+import org.jspecify.annotations.Nullable;
+import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.DynamicTest;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.TestFactory;
+import org.junit.jupiter.api.condition.DisabledIfSystemProperty;
+import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.fail;
+
+/**
+ * Verifies the runnable Lisp examples in the documentation site sources under
+ * {@code doc/<lang>}. This replaces the former {@code ReadmeExamplesTest}: instead of
+ * hard-coded snippets mirroring the README, it parses every Markdown page and exercises
+ * the examples that actually ship on the site.
+ *
+ * <p>
+ * Convention (shared with {@code RunnableBlockTransformer} in the docgen tool):
+ * <ul>
+ * <li>A <code>```lisp</code> fenced block is an evaluable program. Every such block must
+ * run on the interpreter without throwing.</li>
+ * <li>When a <code>```lisp</code> block is immediately followed by a plain
+ * (no-info-string, {@code text} or {@code output}) fenced block, that block is the
+ * program's expected standard output, which is asserted exactly.</li>
+ * <li>A form annotated with <code>; =&gt; value</code> -- trailing on its own line, or on
+ * the comment line just below it -- has its printed value asserted. This holds on EVERY
+ * page, guide and reference alike: a shown result no test re-measures is a number that
+ * drifts.</li>
+ * <li>A <code>```scheme</code> (or <code>```clojure</code>) block is a WHOLE program for
+ * the experimental Scheme / Clojure front end (it is lowered a file at a time, so it
+ * shares nothing with its neighbours): it must run, and a plain block right after it is
+ * its asserted standard output. On the site it is a Run cell running the same thing
+ * ({@code PlaygroundRepl}). Such a block with a <code>; =&gt;</code> annotation is
+ * instead read by a REPL session of its own, form by form, and each annotation is
+ * compared with what that REPL echoes for its form: the language's {@code write} text,
+ * nothing for a definition or an effect, several values joined by {@code ", "}. An
+ * {@code exit} ends the block's program, keeping what it printed.</li>
+ * <li>A <code>```java</code> block on a page under <code>java/</code> is a WHOLE program
+ * for the experimental subset of the Java language -- a compact source file, or classes
+ * the first of which has the <code>main</code> --, its standard output asserted by the
+ * plain block after it. Anywhere else it is host code and is not run.</li>
+ * <li>A <code>```starlark</code> block is a WHOLE program for the experimental Starlark
+ * front end, on a fresh evaluator: it must run, and a plain block right after it is its
+ * asserted standard output, and no annotation. On the site it is a Run cell running the
+ * same thing.</li>
+ * <li>A <code>```stdin</code> block is the standard input of the <code>```scheme</code> /
+ * <code>```clojure</code> block right after it (every other block reads an empty
+ * input).</li>
+ * <li>A <code>```scheme</code> block whose first line is <code>; file: NAME</code> is
+ * also the file {@code NAME} for the Scheme blocks after it on the page -- what they
+ * {@code include}, the {@code define-library} files they import -- and is not run.</li>
+ * <li>REPL transcripts (<code>```console</code>) and shell blocks (<code>```bash</code>)
+ * are static and not executed, and are where an example that cannot run headless (stdin,
+ * files, a form that signals) belongs.</li>
+ * </ul>
+ *
+ * <p>
+ * Examples on the same page share one evaluator (a definition in an earlier block is
+ * visible to later ones), matching the in-browser behavior of the documentation runnable
+ * cells. Cross-backend (JVM/WASM/component) parity is covered separately by
+ * {@code CiSpecE2eTest} and {@code ci-spec.yaml}.
+ *
+ * <p>
+ * Run with {@code -Drontolisp.doc.fix=true} to instead rewrite the shown results
+ * ({@code ; => ...} annotations and stdout output blocks) of every page in every language
+ * tree to the actual evaluated values -- a maintenance helper that keeps the shown
+ * results exact. The normal verification factory is disabled in that mode.
+ */
+class DocExamplesTest {
+
+	// Both language trees are verified: the pages are the same file set with the same
+	// code fences (only prose is translated), so a result that drifts drifts in both.
+	private static final List<Path> DOC_ROOTS = List.of(Path.of("doc", "en"), Path.of("doc", "ja"));
+
+	private static final String ARROW = "; =>";
+
+	// The rontolisp:fetch examples document a public URL (e.g.
+	// https://httpbin.ik.am/get), but the test must not reach the network: it serves the
+	// requests from a local JDK HttpServer and rewrites the URL's ORIGIN (scheme + host)
+	// in the example to point at it before evaluating. Only the origin is replaced, so
+	// the path still reaches the stub -- an example whose shown result depends on which
+	// endpoint it asked for (httpbin's /status/NNN) stays exact. The documented origin is
+	// intentionally left as-is on the page -- this is the one place the executed example
+	// diverges from what the page shows.
+	private static @Nullable HttpServer fetchServer;
+
+	private static final Pattern STATUS_PATH = Pattern.compile("/status/(\\d{3})");
+
+	private static synchronized String localFetchOrigin() {
+		HttpServer server = fetchServer;
+		if (server == null) {
+			try {
+				server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+				server.createContext("/", exchange -> {
+					// httpbin's /status/NNN answers with that status and no body;
+					// everything else answers a small JSON document.
+					Matcher status = STATUS_PATH.matcher(exchange.getRequestURI().getPath());
+					if (status.matches()) {
+						exchange.sendResponseHeaders(Integer.parseInt(status.group(1)), -1);
+						exchange.close();
+						return;
+					}
+					byte[] body = "{\"ok\":true}".getBytes(StandardCharsets.UTF_8);
+					// httpbin's /gzip answers its document gzip-compressed
+					if ("/gzip".equals(exchange.getRequestURI().getPath())) {
+						body = am.ik.rontolisp.testsupport.InflateCases.gzip(body);
+						exchange.getResponseHeaders().add("Content-Encoding", "gzip");
+					}
+					exchange.getResponseHeaders().add("Content-Type", "application/json");
+					exchange.sendResponseHeaders(200, body.length);
+					try (OutputStream os = exchange.getResponseBody()) {
+						os.write(body);
+					}
+				});
+				server.start();
+				fetchServer = server;
+			}
+			catch (IOException ex) {
+				throw new UncheckedIOException(ex);
+			}
+		}
+		return "http://127.0.0.1:" + server.getAddress().getPort();
+	}
+
+	@AfterAll
+	static void stopFetchServer() {
+		if (fetchServer != null) {
+			fetchServer.stop(0);
+			fetchServer = null;
+		}
+	}
+
+	/**
+	 * If an example uses {@code rontolisp:fetch} -- or Clojure's
+	 * {@code rontolisp.http-client} and {@code rontolisp.http-urls}, which go through it;
+	 * a Clojure example reading a URL it spells says so in a comment naming fetch; or the
+	 * Java subset's {@code java.net.http} client, which goes through it too -- rewrites
+	 * the origin of its http(s) URL string literals to the local test server (keeping the
+	 * path) so evaluation stays offline; otherwise returns the source unchanged. A Java
+	 * example that serves ({@code jdk.httpserver}) asks its own server, on the port it
+	 * was given, and is left as it is.
+	 */
+	private static String rewriteFetchUrls(String source) {
+		if (!source.contains("rontolisp:fetch") && !source.contains("rontolisp.http-client")
+				&& !source.contains("rontolisp.http-urls") && !source.contains("java.net.http")) {
+			return source;
+		}
+		if (source.contains("jdk.httpserver")) {
+			return source;
+		}
+		return source.replaceAll("(?<=\")https?://[^\"/]*", Matcher.quoteReplacement(localFetchOrigin()));
+	}
+
+	@TestFactory
+	@DisabledIfSystemProperty(named = "rontolisp.doc.fix", matches = "true")
+	Stream<DynamicTest> documentationExamples() throws IOException {
+		List<DynamicTest> tests = new ArrayList<>();
+		for (Path root : DOC_ROOTS) {
+			assertThat(Files.isDirectory(root)).as("documentation source directory %s exists", root).isTrue();
+			for (Path md : markdownPages(root)) {
+				tests.add(DynamicTest.dynamicTest(root.getFileName() + "/" + root.relativize(md), () -> checkPage(md)));
+			}
+		}
+		assertThat(tests).as("at least one Markdown page is present").isNotEmpty();
+		return tests.stream();
+	}
+
+	private static List<Path> markdownPages(Path root) throws IOException {
+		try (Stream<Path> paths = Files.walk(root)) {
+			return paths.filter(p -> p.toString().endsWith(".md")).sorted().toList();
+		}
+	}
+
+	private void checkPage(Path markdown) throws IOException {
+		checkMarkdown(Files.readString(markdown, StandardCharsets.UTF_8), markdown.toString());
+	}
+
+	/**
+	 * The {@code ; =>} check of a Scheme block is live: a wrong annotation fails the
+	 * page, exactly as it does in a {@code lisp} block. So is the output block after a
+	 * Starlark program.
+	 */
+	@Test
+	void aWrongSchemeAnnotationOrStarlarkOutputFailsThePage() {
+		String right = """
+				```scheme
+				(define (f x) (* x 2))
+				(f 21) ; => 42
+				(list #t "s" #\\a) ; => (#t "s" #\\a)
+				(values 1 2) ; => 1, 2
+				```
+
+				```starlark
+				def f(x):
+				    return x * 2
+				print(f(21), "; => is no annotation here")
+				```
+
+				```
+				42 ; => is no annotation here
+				```
+
+				```java
+				int twice(int x) {
+				    return x * 2;
+				}
+
+				void main() {
+				    IO.println(twice(21) + " ; => is no annotation here either");
+				}
+				```
+
+				```
+				42 ; => is no annotation here either
+				```
+				""";
+		checkMarkdown(right, "java/right.md");
+		assertThatThrownBy(() -> checkMarkdown(right.replace("=> 42", "=> 43"), "wrong.md"))
+			.isInstanceOf(AssertionError.class)
+			.hasMessageContaining("43");
+		assertThatThrownBy(() -> checkMarkdown(right.replace("42 ;", "43 ;"), "wrong.md"))
+			.isInstanceOf(AssertionError.class)
+			.hasMessageContaining("43 ;");
+		assertThatThrownBy(() -> checkMarkdown(right.replace("either\n```\n", "neither\n```\n"), "java/wrong.md"))
+			.isInstanceOf(AssertionError.class)
+			.hasMessageContaining("neither");
+	}
+
+	/**
+	 * A {@code stdin} block feeds the Scheme block after it, and {@code exit} ends it.
+	 */
+	@Test
+	void aStdinBlockFeedsTheSchemeBlockAfterIt() {
+		checkMarkdown("""
+				```stdin
+				hello
+				```
+
+				```scheme
+				(read-line) ; => "hello"
+				(read-line) ; => #<eof>
+				```
+
+				```scheme
+				(display "before") (newline)
+				(exit 3)
+				(display "after")
+				```
+
+				```
+				before
+				```
+				""", "stdin.md");
+	}
+
+	private void checkMarkdown(String text, String markdown) {
+		List<Block> blocks = parseFencedBlocks(text);
+
+		ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(buffer, true, StandardCharsets.UTF_8));
+
+		String stdin = "";
+		Map<String, String> files = new HashMap<>();
+		for (int i = 0; i < blocks.size(); i++) {
+			Block block = blocks.get(i);
+			if (block.isStdin()) {
+				stdin = block.content();
+				continue;
+			}
+			String blockStdin = stdin;
+			stdin = "";
+			boolean java = block.isJava() && isJavaSubsetPage(markdown);
+			if (block.isScheme() || block.isClojure() || block.isStarlark() || java) {
+				SourceLanguage language = block.isScheme() ? SourceLanguage.SCHEME : block.isClojure()
+						? SourceLanguage.CLOJURE : block.isStarlark() ? SourceLanguage.STARLARK : SourceLanguage.JAVA;
+				boolean program = block.isStarlark() || java;
+				if (!program && noteFile(block.content(), files)) {
+					continue;
+				}
+				String actual;
+				if (!program && block.content().contains(ARROW)) {
+					SchemeRun run = runSession(language, block.content(), blockStdin, markdown, files);
+					for (int f = 0; f < run.forms().size(); f++) {
+						String source = String.join("\n", run.forms().get(f));
+						String annotation = lastArrowAnnotation(source);
+						if (!annotation.isEmpty()) {
+							assertThat(run.shown().get(f)).as("`; =>` result in %s:%n%s", markdown, source)
+								.isEqualTo(annotation);
+						}
+					}
+					actual = run.stdout();
+				}
+				else {
+					actual = runProgram(language, java ? rewriteFetchUrls(block.content()) : block.content(),
+							blockStdin, markdown, files);
+				}
+				Block expected = (i + 1 < blocks.size()) ? blocks.get(i + 1) : null;
+				if (expected != null && expected.isExpectedOutput()) {
+					assertThat(actual)
+						.as("output of %s example in %s:%n%s", language.name().toLowerCase(), markdown, block.content())
+						.isEqualTo(expected.content().strip());
+				}
+				continue;
+			}
+			if (!block.isLisp()) {
+				continue;
+			}
+			buffer.reset();
+			for (List<String> form : splitForms(block.content())) {
+				String source = String.join("\n", form);
+				LispVal last = LispNil.INSTANCE;
+				try {
+					for (LispVal expr : LispReader.readAllFromString(rewriteFetchUrls(source))) {
+						last = evaluator.eval(expr);
+					}
+				}
+				catch (RuntimeException ex) {
+					fail("Example in %s failed to evaluate:%n%s%n-> %s".formatted(markdown, source, ex), ex);
+				}
+				String annotation = lastArrowAnnotation(source);
+				if (!annotation.isEmpty()) {
+					assertThat(last.print()).as("`; =>` result in %s:%n%s", markdown, source).isEqualTo(annotation);
+				}
+			}
+			String actual = buffer.toString(StandardCharsets.UTF_8).strip();
+
+			Block expected = (i + 1 < blocks.size()) ? blocks.get(i + 1) : null;
+			if (expected != null && expected.isExpectedOutput()) {
+				assertThat(actual).as("output of example in %s:%n%s", markdown, block.content())
+					.isEqualTo(expected.content().strip());
+			}
+		}
+	}
+
+	// A Scheme or Clojure example is a whole program on a fresh evaluator: the front end
+	// decides defun-or-variable per FILE, so a block cannot lean on an earlier one. It
+	// runs through what the site's Run cell runs (PlaygroundRepl.run).
+	static String runProgram(SourceLanguage language, String source, String stdin, String page,
+			Map<String, String> files) {
+		try {
+			return new PlaygroundRepl(pageFiles(files), stdin).pick(language).run(source).strip();
+		}
+		catch (RuntimeException ex) {
+			return fail("%s example in %s failed to evaluate:%n%s%n-> %s".formatted(language.name().toLowerCase(), page,
+					source, ex), ex);
+		}
+	}
+
+	// A java block is a program of the subset only on the subset's own pages: anywhere
+	// else it is host code for the JVM backend's interop, which nothing here runs.
+	private static boolean isJavaSubsetPage(String page) {
+		return ("/" + page.replace('\\', '/')).contains("/java/");
+	}
+
+	private static final Pattern FILE_BLOCK = Pattern.compile("\\A;+ file: (\\S+)");
+
+	// A Scheme block that names itself a file becomes one for the blocks after it,
+	// instead of a program.
+	private static boolean noteFile(String content, Map<String, String> files) {
+		Matcher file = FILE_BLOCK.matcher(content);
+		if (!file.lookingAt()) {
+			return false;
+		}
+		files.put(file.group(1), content);
+		return true;
+	}
+
+	// The page's file blocks as the files a Scheme example reads.
+	private static SourceLoader pageFiles(Map<String, String> files) {
+		return path -> {
+			String text = files.get(path);
+			if (text == null) {
+				throw new FileNotFoundException(path);
+			}
+			return text;
+		};
+	}
+
+	private static LispEvaluator schemeEvaluator(ByteArrayOutputStream out, String stdin) {
+		return new LispEvaluator(new PrintStream(out, true, StandardCharsets.UTF_8),
+				new ByteArrayInputStream(stdin.getBytes(StandardCharsets.UTF_8)));
+	}
+
+	/**
+	 * An annotated Scheme block, run the way a REPL runs it.
+	 *
+	 * @param forms the block's lines, one group per top-level form (its trailing comment
+	 * lines included)
+	 * @param shown per group, what the REPL echoes for its last form: {@code ""} when it
+	 * echoes nothing, several values joined by {@code ", "}
+	 * @param stdout everything the block printed
+	 */
+	record SchemeRun(List<List<String>> forms, List<String> shown, String stdout) {
+	}
+
+	/**
+	 * Runs an annotated Scheme block through a REPL session of its own, on a fresh
+	 * evaluator, and records what the REPL echoes for every top-level form -- the text a
+	 * {@code ; =>} annotation states. An {@code exit} ends the block: the forms after it
+	 * show nothing.
+	 */
+	static SchemeRun runSession(SourceLanguage language, String content, String stdin, String page,
+			Map<String, String> files) {
+		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		LispEvaluator evaluator = schemeEvaluator(out, stdin);
+		SourceSession session = new SourceSession(language, SourceStandards.DEFAULT, pageFiles(files));
+		List<List<String>> forms = splitSchemeForms(session, content);
+		List<String> shown = new ArrayList<>();
+		boolean exited = false;
+		for (List<String> form : forms) {
+			String source = String.join("\n", form);
+			if (exited) {
+				shown.add("");
+				continue;
+			}
+			List<String> echoes = new ArrayList<>();
+			try {
+				for (SourceSession.Step step : session.read(source, Features.INTERPRETER)) {
+					echoes.clear();
+					List<LispVal> values = List.of();
+					for (int i = 0; i < step.forms().size(); i++) {
+						if (step.echoes() && i == step.forms().size() - 1) {
+							values = evaluator.evalValues(step.forms().get(i));
+						}
+						else {
+							evaluator.eval(step.forms().get(i));
+						}
+					}
+					for (LispVal value : values) {
+						String echoed = session.echo(value, evaluator);
+						if (echoed != null) {
+							echoes.add(echoed);
+						}
+					}
+				}
+			}
+			catch (LispExitSignal exit) {
+				exited = true;
+				echoes.clear();
+			}
+			catch (RuntimeException ex) {
+				fail("Scheme example in %s failed to evaluate:%n%s%n-> %s".formatted(page, source, ex), ex);
+			}
+			shown.add(String.join(", ", echoes));
+		}
+		return new SchemeRun(forms, shown, out.toString(StandardCharsets.UTF_8).strip());
+	}
+
+	/**
+	 * {@link #splitForms} for a Scheme block: the language's own reader says when a group
+	 * is complete, since {@code #t}, {@code #\(} and {@code #|...|#} mean something else
+	 * to Common Lisp's.
+	 */
+	static List<List<String>> splitSchemeForms(SourceSession session, String content) {
+		List<List<String>> forms = new ArrayList<>();
+		List<String> current = new ArrayList<>();
+		boolean complete = false;
+		for (String line : content.split("\n", -1)) {
+			if (complete && !isCommentOrBlank(line)) {
+				forms.add(current);
+				current = new ArrayList<>();
+				complete = false;
+			}
+			current.add(line);
+			complete = complete || (!isCommentOrBlank(line) && session.isComplete(String.join("\n", current)));
+		}
+		if (current.stream().anyMatch(line -> !isCommentOrBlank(line))) {
+			forms.add(current);
+		}
+		return forms;
+	}
+
+	/**
+	 * Maintenance helper: rewrites every documentation page in every language tree so the
+	 * shown results exactly match the interpreter. Enabled only with
+	 * {@code -Drontolisp.doc.fix=true}.
+	 */
+	@Test
+	@EnabledIfSystemProperty(named = "rontolisp.doc.fix", matches = "true")
+	void fixShownResults() throws IOException {
+		List<String> failures = new ArrayList<>();
+		List<Path> pages = new ArrayList<>();
+		for (Path root : DOC_ROOTS) {
+			pages.addAll(markdownPages(root));
+		}
+		int fixed = 0;
+		for (Path page : pages) {
+			try {
+				Files.writeString(page, fixPage(Files.readString(page, StandardCharsets.UTF_8), page),
+						StandardCharsets.UTF_8);
+				fixed++;
+			}
+			catch (RuntimeException ex) {
+				failures.add(ex.getMessage());
+			}
+		}
+		System.out.println("Fixed shown results in " + fixed + " pages");
+		if (!failures.isEmpty()) {
+			fail("Non-runnable examples (%d):%n%s".formatted(failures.size(), String.join("\n---\n", failures)));
+		}
+	}
+
+	/** Rewrites one page's {@code ; =>} annotations and stdout output blocks. */
+	private String fixPage(String markdown, Path page) {
+		String[] lines = markdown.split("\n", -1);
+		StringBuilder out = new StringBuilder();
+		ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(buffer, true, StandardCharsets.UTF_8));
+		String pendingStdout = null; // stdout of the previous lisp block, awaiting an
+										// output fence
+		String stdin = "";
+		Map<String, String> files = new HashMap<>();
+
+		int i = 0;
+		while (i < lines.length) {
+			String line = lines[i];
+			if (line.stripLeading().startsWith("```")) {
+				String info = line.strip().substring(3).trim();
+				int j = i + 1;
+				while (j < lines.length && !lines[j].stripLeading().startsWith("```")) {
+					j++;
+				}
+				List<String> content = new ArrayList<>(List.of(lines).subList(i + 1, Math.min(j, lines.length)));
+				String closing = (j < lines.length) ? lines[j] : "```";
+
+				if (info.equals("lisp")) {
+					buffer.reset();
+					List<String> rewritten = new ArrayList<>();
+					for (List<String> form : splitForms(String.join("\n", content))) {
+						String source = String.join("\n", form);
+						LispVal last = LispNil.INSTANCE;
+						try {
+							// Evaluate with fetch URLs rewritten to the local server, but
+							// keep the page source unchanged so the fix helper rewrites
+							// only the shown result, not the documented URL.
+							for (LispVal expr : LispReader.readAllFromString(rewriteFetchUrls(source))) {
+								last = evaluator.eval(expr);
+							}
+						}
+						catch (RuntimeException ex) {
+							throw new IllegalStateException("Example in " + page + " failed:\n" + source, ex);
+						}
+						rewritten.addAll(rewriteArrow(form, last.print()));
+					}
+					content = rewritten;
+					pendingStdout = buffer.toString(StandardCharsets.UTF_8).strip();
+				}
+				else if (info.equals("scheme") || info.equals("clojure")) {
+					SourceLanguage language = info.equals("scheme") ? SourceLanguage.SCHEME : SourceLanguage.CLOJURE;
+					String source = String.join("\n", content);
+					if (noteFile(source, files)) {
+						pendingStdout = null;
+					}
+					else if (source.contains(ARROW)) {
+						SchemeRun run = runSession(language, source, stdin, page.toString(), files);
+						List<String> rewritten = new ArrayList<>();
+						for (int f = 0; f < run.forms().size(); f++) {
+							rewritten.addAll(rewriteArrow(run.forms().get(f), run.shown().get(f)));
+						}
+						content = rewritten;
+						pendingStdout = run.stdout();
+					}
+					else {
+						// a client example's URL reaches the local server, as a lisp
+						// block's fetch does; the page keeps the documented one
+						pendingStdout = runProgram(language, rewriteFetchUrls(source), stdin, page.toString(), files);
+					}
+				}
+				else if (info.equals("starlark") || (info.equals("java") && isJavaSubsetPage(page.toString()))) {
+					pendingStdout = runProgram(info.equals("java") ? SourceLanguage.JAVA : SourceLanguage.STARLARK,
+							rewriteFetchUrls(String.join("\n", content)), stdin, page.toString(), files);
+				}
+				else if (isOutputInfo(info) && pendingStdout != null) {
+					content = pendingStdout.isEmpty() ? List.of()
+							: new ArrayList<>(List.of(pendingStdout.split("\n", -1)));
+					pendingStdout = null;
+				}
+				else {
+					pendingStdout = null;
+				}
+				stdin = info.equals("stdin") ? String.join("\n", content) + "\n" : "";
+
+				out.append(line).append('\n');
+				for (String c : content) {
+					out.append(c).append('\n');
+				}
+				out.append(closing).append('\n');
+				i = j + 1;
+			}
+			else {
+				if (!line.isBlank()) {
+					pendingStdout = null;
+				}
+				out.append(line).append('\n');
+				i++;
+			}
+		}
+		// split("\n", -1) yields a trailing empty element for the final newline; the
+		// loop already re-appended a newline per emitted line, so drop the extra.
+		if (out.length() > 0 && out.charAt(out.length() - 1) == '\n') {
+			out.setLength(out.length() - 1);
+		}
+		return out.toString();
+	}
+
+	/**
+	 * Splits a <code>```lisp</code> block into one group of lines per top-level form, so
+	 * every form's own {@code ; =>} annotation can be checked (and rewritten) against
+	 * that form's value rather than only the block's last one.
+	 *
+	 * <p>
+	 * A group grows until the accumulated text reads as at least one complete form, then
+	 * keeps absorbing the comment and blank lines that follow it -- the annotation of a
+	 * long result is written on the line below its form, and it belongs to that form.
+	 * Reading is side-effect free, so re-reading the growing prefix is safe.
+	 */
+	static List<List<String>> splitForms(String content) {
+		List<List<String>> forms = new ArrayList<>();
+		List<String> current = new ArrayList<>();
+		boolean complete = false;
+		for (String line : content.split("\n", -1)) {
+			if (complete && !isCommentOrBlank(line)) {
+				forms.add(current);
+				current = new ArrayList<>();
+				complete = false;
+			}
+			current.add(line);
+			complete = complete || readsCompletely(String.join("\n", current));
+		}
+		if (current.stream().anyMatch(line -> !isCommentOrBlank(line))) {
+			forms.add(current);
+		}
+		return forms;
+	}
+
+	private static boolean isCommentOrBlank(String line) {
+		String stripped = line.strip();
+		return stripped.isEmpty() || stripped.startsWith(";");
+	}
+
+	/** Whether {@code source} reads as at least one complete form. */
+	private static boolean readsCompletely(String source) {
+		try {
+			return !LispReader.readAllFromString(source).isEmpty();
+		}
+		catch (RuntimeException ex) {
+			return false;
+		}
+	}
+
+	/** Replaces the text after the last {@code ; =>} on its line with {@code value}. */
+	static List<String> rewriteArrow(List<String> content, String value) {
+		int target = -1;
+		for (int k = content.size() - 1; k >= 0; k--) {
+			if (content.get(k).contains(ARROW)) {
+				target = k;
+				break;
+			}
+		}
+		if (target < 0) {
+			return content;
+		}
+		List<String> result = new ArrayList<>(content);
+		String line = result.get(target);
+		int idx = line.lastIndexOf(ARROW);
+		result.set(target, line.substring(0, idx) + ARROW + " " + value);
+		return result;
+	}
+
+	/** Returns the text after the last {@code ; =>} annotation, or {@code ""} if none. */
+	static String lastArrowAnnotation(String content) {
+		int idx = content.lastIndexOf(ARROW);
+		if (idx < 0) {
+			return "";
+		}
+		String rest = content.substring(idx + ARROW.length());
+		int newline = rest.indexOf('\n');
+		if (newline >= 0) {
+			rest = rest.substring(0, newline);
+		}
+		return rest.strip();
+	}
+
+	private static boolean isOutputInfo(String info) {
+		return info.isEmpty() || info.equals("text") || info.equals("output");
+	}
+
+	/** Splits Markdown into fenced code blocks (info string + raw content). */
+	static List<Block> parseFencedBlocks(String markdown) {
+		List<Block> blocks = new ArrayList<>();
+		String[] lines = markdown.split("\n", -1);
+		int i = 0;
+		while (i < lines.length) {
+			String line = lines[i];
+			if (line.startsWith("```")) {
+				String info = line.substring(3).trim();
+				StringBuilder content = new StringBuilder();
+				i++;
+				while (i < lines.length && !lines[i].startsWith("```")) {
+					content.append(lines[i]).append('\n');
+					i++;
+				}
+				blocks.add(new Block(info, content.toString()));
+				i++; // skip the closing fence
+			}
+			else {
+				i++;
+			}
+		}
+		return blocks;
+	}
+
+	/** A fenced code block: its info string (language) and raw content. */
+	record Block(String info, String content) {
+
+		boolean isLisp() {
+			return this.info.equals("lisp");
+		}
+
+		boolean isScheme() {
+			return this.info.equals("scheme");
+		}
+
+		boolean isClojure() {
+			return this.info.equals("clojure");
+		}
+
+		boolean isStarlark() {
+			return this.info.equals("starlark");
+		}
+
+		boolean isJava() {
+			return this.info.equals("java");
+		}
+
+		boolean isStdin() {
+			return this.info.equals("stdin");
+		}
+
+		boolean isExpectedOutput() {
+			return this.info.isEmpty() || this.info.equals("text") || this.info.equals("output");
+		}
+	}
+
+}

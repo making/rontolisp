@@ -1,0 +1,134 @@
+name: lispresen native executables
+
+# Builds lispresen as a native executable (`cli.lisp --native`) on each release platform,
+# requires each to render examples/intro.lisp to the golden HTML and PNG, and publishes them
+# on a prerelease of their own, `lispresen-<version>`. rontolisp is not built here: each
+# platform compiles with the rontolisp binary the `<version>` release holds at that moment
+# (ci.yaml publishes it; it carries that platform's --native pair, .kb/native-output.md).
+on:
+  push:
+    branches:
+    - develop
+    paths:
+    - lispresen/**
+    - .github/workflows/lispresen.yaml
+    - .github/scripts/move-snapshot-tag.sh
+  workflow_dispatch: {}
+
+# One run at a time, never cancelled: a run cancelled while uploading would leave the
+# release with an asset missing. A newer push waits and then publishes over this one.
+concurrency:
+  group: lispresen-release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      is_snapshot: ${{ steps.version.outputs.is_snapshot }}
+    steps:
+    - uses: actions/checkout@v7
+    - name: Read the version
+      id: version
+      run: |
+        set -euo pipefail
+        VERSION=$(python3 -c 'import xml.etree.ElementTree as E; print(E.parse("pom.xml").getroot().find("{http://maven.apache.org/POM/4.0.0}version").text)')
+        if [[ "$VERSION" == *-SNAPSHOT ]]; then
+          IS_SNAPSHOT=true
+        else
+          IS_SNAPSHOT=false
+        fi
+        echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+        echo "is_snapshot=$IS_SNAPSHOT" >> "$GITHUB_OUTPUT"
+  build:
+    needs: version
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+        - { os: ubuntu-latest, name: linux-amd64 }
+        - { os: ubuntu-24.04-arm, name: linux-arm64 }
+        - { os: macos-latest, name: darwin-arm64 }
+    runs-on: ${{ matrix.os }}
+    steps:
+    # The default shallow checkout is enough: building reads the commit from .git/HEAD and
+    # the ref it names (lispresen/src/build.lisp), never the history.
+    - uses: actions/checkout@v7
+    - name: Download rontolisp
+      env:
+        URL: https://github.com/${{ github.repository }}/releases/download/${{ needs.version.outputs.version }}/rontolisp-${{ matrix.name }}
+      run: |
+        set -euo pipefail
+        curl -fsSL -o "$RUNNER_TEMP/rontolisp" "$URL"
+        chmod +x "$RUNNER_TEMP/rontolisp"
+        "$RUNNER_TEMP/rontolisp" -v
+    - name: Build lispresen
+      run: |
+        "$RUNNER_TEMP/rontolisp" lispresen/cli.lisp --native -o "lispresen-${{ matrix.name }}"
+        ls -l "lispresen-${{ matrix.name }}"
+        "./lispresen-${{ matrix.name }}" --version
+    # The same check lispresen/check.sh makes of every backend: the deck renders to
+    # examples/intro.html and intro.png byte for byte, with no diagnostic; --version prints
+    # the pom.xml version and this commit (github.sha, checked out); the starter deck
+    # renders with no diagnostic; serve answers the page, its version and its image
+    # (the runner's HTTP server). The golden files come from develop's rontolisp; a
+    # published rontolisp older than a change lispresen depends on fails here and
+    # publishes nothing, until a later run.
+    - name: Check the executable
+      run: lispresen/check.sh --exe "$PWD/lispresen-${{ matrix.name }}"
+    - name: Upload the executable
+      uses: actions/upload-artifact@v7
+      with:
+        name: lispresen-${{ matrix.name }}
+        path: lispresen-${{ matrix.name }}
+  release:
+    needs: [version, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      # move-snapshot-tag.sh dispatches a run of the tip when a workflow change overtook this one
+      actions: write
+    env:
+      TAG: lispresen-${{ needs.version.outputs.version }}
+    steps:
+    - uses: actions/checkout@v7
+      with:
+        sparse-checkout: .github/scripts
+    - name: Download the executables
+      uses: actions/download-artifact@v8
+      with:
+        pattern: lispresen-*
+        path: artifacts
+        merge-multiple: true
+    # The same in-place update as ci.yaml's release job, on a tag of lispresen's own so
+    # the two never touch each other's release: move the tag and let the action below
+    # overwrite the assets. Do NOT delete and recreate the release (`gh release delete
+    # --cleanup-tag`): a failed create then leaves the install commands in
+    # lispresen/README.md pointing at nothing (ci.yaml, "Move the snapshot tag"). The
+    # script publishes nothing from a run a workflow change overtook, as there.
+    - name: Move the snapshot tag to this commit
+      id: tag
+      if: needs.version.outputs.is_snapshot == 'true'
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: .github/scripts/move-snapshot-tag.sh "$TAG"
+    # make_latest: false, so a lispresen release never takes "Latest" from rontolisp's.
+    - name: Create release
+      if: steps.tag.outputs.publish != 'false'
+      uses: softprops/action-gh-release@v3
+      with:
+        tag_name: ${{ env.TAG }}
+        target_commitish: ${{ github.sha }}
+        prerelease: ${{ needs.version.outputs.is_snapshot }}
+        make_latest: false
+        name: ${{ needs.version.outputs.is_snapshot == 'true' && format('lispresen {0} (snapshot)', needs.version.outputs.version) || format('lispresen {0}', needs.version.outputs.version) }}
+        body: |
+          lispresen as a native executable, built from ${{ github.sha }}; see [lispresen/README.md](https://github.com/${{ github.repository }}/blob/${{ github.sha }}/lispresen/README.md#install).
+        files: |
+          artifacts/lispresen-linux-amd64
+          artifacts/lispresen-linux-arm64
+          artifacts/lispresen-darwin-arm64

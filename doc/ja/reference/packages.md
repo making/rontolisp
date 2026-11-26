@@ -1,0 +1,274 @@
+# パッケージ
+
+rontolispには、一連の組み込みパッケージと[`defpackage` によるユーザー定義パッケージ](#user-defined-packages-defpackage)を持つ小さな名前空間(パッケージ)システムがあります:
+
+- **`cl`** — 標準パッケージ。すべての組み込み関数、マクロ、特殊形式、および `*package*` 変数がここに属します。
+- **`cl-user`** — デフォルトの作業パッケージ。`cl` を *使用* するため、標準シンボルを修飾なしで利用できます。プログラム開始時のカレントパッケージです。ユーザ定義はここに置かれます。
+- **`rontolisp`** — 実装固有のシンボルのためのパッケージ。`rl` は組み込みのニックネームです。`cl` を **使用しません**。`version` 関数を所有します。
+- **`linalg`** — numpy スタイルのベクトル・行列演算(`linalg:zeros`、`linalg:matmul`、`linalg:solve` など)。Lisp ソースで一度だけ実装され、すべてのバックエンドで利用できます。`la` は組み込みのニックネームです。`cl` を **使用しません**。[ベクトルと行列ガイド](../guides/linear-algebra.md)を参照してください。
+- **`torch`** — `linalg` カーネル上の、逆方向自動微分、`nn` スタイルのモジュール層、オプティマイザ、学習ループの補助を備えた PyTorch スタイルのテンソル (`torch:tensor`、`torch:matmul`、`torch:backward`、`torch:linear`、`torch:cross-entropy-loss`、`torch:adam`、`torch:step` など)。Lisp ソースで一度だけ実装され、すべてのバックエンドで利用できます。`cl` を **使用しません**。[ニューラルネットワークガイド](../guides/neural-networks.md)を参照してください。
+- **`geom`** — `linalg` カーネル上のソリッドモデリング: 剛体変換、シーングラフ、三角形メッシュをキャッシュする境界表現の立体 (`geom:box`、`geom:cylinder`、`geom:attach`、`geom:mesh`、`geom:volume` など)。`linalg` と同様に Lisp ソースで一度だけ実装され、初回使用時に読み込まれます。`linalg` 以外に依存しないので、すべてのバックエンドで利用できます。`cl` を **使用しません**。[ソリッドモデリングガイド](../guides/solid-modeling.md)を参照してください。
+- **`java`** — リフレクションによる Java 連携。JVM インタプリタ (`java -jar rontolisp.jar`) でのみ使え、コンパイラやネイティブバイナリでは使えません。`cl` を **使用しません**。`new`、`call`、`static`、`field`、`proxy` を所有します。[Java 連携ガイド](../guides/java-interop.md)を参照してください。
+- **`objc`** — Foreign Function API による Objective-C ランタイムと AppKit へのバインディング。macOS 専用で、インタプリタ (`java -jar rontolisp.jar` と `rontolisp` ネイティブバイナリ)、コンパイル済み `.class` / `.jar`、Apple シリコン向けの `--native` 実行ファイルで使え、`.wasm` では使えません。`cl` を **使用しません**。LispWorks 8.1 の Objective-C インターフェースの名前 (`invoke`、`invoke-bool`、`invoke-into`、`retain`、`release`、`define-objc-class`、`define-objc-method` など)、ブロック (`make-objc-block`、`with-objc-block` など)、コンディション `objc-exception` と `ns-error`、そして独自の `on-main`、`data`、`bytes`、`objectp` を所有します。隣の `cocoa` は Foundation の構造体と通知のオブザーバを、`fli` は LispWorks の外部言語インターフェースのうちマニュアルの例が使う部分 (`define-foreign-function`、外部オブジェクト、ポインタ) を持ちます。[macOS GUI ガイド](../guides/objc-appkit.md)を参照してください。
+- **`appkit`** — `objc` の上の Cocoa ウィジェット層 (`appkit:window`、`appkit:label`、`appkit:button`、...)。`linalg` と同様に Lisp ソースで一度だけ実装され、初回使用時に読み込まれます。`cl` を **使用しません**。同じガイドを参照してください。
+- **`metal`** — `objc` の上に載る、`appkit` ウィンドウ上の Metal 描画サーフェス (`metal:attach`、`metal:library`、`metal:pipeline`、`metal:buffer`、`metal:frame`、`metal:run` など)。どの Metal プログラムも同じように書くレイヤ、デバイス、コマンドキュー、レンダーパスをまとめています。Lisp ソースで一度だけ実装され初回使用時に読み込まれます。`objc` と同じく macOS 専用で、単独で成立します (`geom` や `scene` は不要)。`cl` を **使用しません**。同じガイドを参照してください。
+- **`scene`** — `metal` の上に載る `geom` ソリッドの 3D ビューア (`scene:viewer`、`scene:add`、`scene:fit`、`scene:camera`、`scene:animate` など)。軌道回転・パン・ドリーのカメラ、地面グリッド、座標軸、アニメーションフックを備え、フレーム中に三角形単位の処理を行いません。Lisp ソースで一度だけ実装され初回使用時に読み込まれます。`metal` と同じく macOS 専用です。`cl` を **使用しません**。[ソリッドモデリングガイド](../guides/solid-modeling.md)を参照してください。
+- **`asdf`** — ASDF の限定的な API 互換サブセット(システム定義): `defsystem` と `load-system`。`cl` を **使用しません**。[システムガイド](../guides/asdf-systems.md)を参照してください。
+- **`ql`** — Quicklisp の限定的な API 互換サブセット: `quickload` は本物の Quicklisp ディストリビューションからシステムをダウンロードし、`asdf` サブセットを経由してロードします。`update-dist` は dist の index を更新します。`quicklisp` は組み込みのニックネームです。`cl` を **使用しません**。[システムガイド](../guides/asdf-systems.md#downloading-with-quickload)を参照してください。
+- **`ql-dist`** — Quicklisp のディストリビューション管理パッケージ。プログラムが書くメンバーは `install-dist` の 1 つで、Quicklisp 形式の別のディストリビューション ([Ultralisp](https://ultralisp.org/) や任意の distinfo URL) を `ql:quickload` の検索対象に加えます。`cl` を **使用しません**。[システムガイド](../guides/asdf-systems.md#adding-a-dist-ultralisp)を参照してください。
+- **`uiop`** — ASDF の移植性レイヤ。15 個のサブパッケージ (`uiop/os`、`uiop/pathname` など) として登録され、`uiop` がそれらを再エクスポートするので、メンバのどちらの綴りも同じシンボルを指します。`cl` を **use しません**。[uiop パッケージ](uiop.md) を参照してください。
+- **`usocket`** — `rontolisp:tcp-*` ソケット組み込みの上に載った [usocket](https://github.com/usocket/usocket) 互換シム(`usocket:socket-connect`、`usocket:socket-listen` など)。Lisp ソースで一度だけ実装され、組み込み ASDF システム `"usocket"` としても登録されています。`cl` を **使用しません**。[TCPソケットガイド](../guides/tcp-sockets.md#the-usocket-compatible-shim)を参照してください。
+
+シンボルはパッケージ修飾子で参照できます: `package:symbol`(例: `cl:car`、`rontolisp:version`)はパッケージの
+external(export 済み)シンボルに届き、`package::symbol` は internal を含む任意のシンボルに届きます —
+Common Lisp と同じシングル/ダブルコロンの区別です([external シンボルと internal シンボル](#external-and-internal-symbols)を参照)。`*package*`
+はカレントパッケージを保持し(`find-package` が返すパッケージキーワードなので `(eq *package* (find-package ...))` が成り立ちます)、`(in-package name)`
+はそれを切り替えます(名前はキーワード、シンボル、または文字列です: `:rontolisp`、`rontolisp`、`"rontolisp"`)。Common Lisp と同様に `*package*` はフォームの実行時に読まれる動的変数です: 関数は呼び出し時点のカレントパッケージを読み、`(let ((*package* ...)) ...)` はその範囲で束縛し、`with-standard-io-syntax` は `cl-user` に束縛し、`setq` で代入できます。標準の Common Lisp 名
+`common-lisp` と `common-lisp-user` は `cl` と `cl-user` の組み込み **ニックネーム** なので、ポータブルな
+`(:use #:common-lisp)` clause や `common-lisp:car` の参照も解決されます。短縮名 `rl` と `la` は `rontolisp` と `linalg`
+の、`quicklisp` は `ql` の組み込みニックネームです。ユーザーパッケージは `defpackage` の
+`:nicknames` clause で独自のニックネームを登録できます。`keyword:foo` と `keyword::foo` はキーワード `:foo` として読まれます。
+
+```lisp
+(print *package*)              ; => :CL-USER
+(print (rontolisp:version))    ; そのビルド自身のバージョン plist
+(print (gethash "n" (rl:json-parse "{\"n\": 41}")))  ; => 41
+(print (la:to-list (la:from-list '(1 2 3))))        ; => (1.0 2.0 3.0)
+```
+
+[`rontolisp:version`](functions/rontolisp-version.md) は `rontolisp --version` と同じ情報を、プロパティリスト `(:version "0.1.0-SNAPSHOT" :build-timestamp "..." :git-commit "..." :git-branch "...")` として返します。タイムスタンプとリビジョンは実行中のビルドに由来するため、ここでは固定の結果を示していません。
+
+`rontolisp` パッケージは `cl` を使用しないため、その中では標準シンボルを `cl:` で修飾する必要がありますが、(所有している)`version` は修飾なしで利用できます:
+
+```console
+(in-package rontolisp)
+(cl:print (version))           ; the rontolisp package owns version
+(cl:print (cl:car '(1 2)))     ; standard symbols need the cl: prefix here
+```
+
+`cl` を使用しないパッケージでは、接頭辞のない標準名は ANSI Common Lisp と同じくそのパッケージの普通のシンボルです。仮引数、変数、`loop` のキーワード、そのパッケージ自身の定義のいずれにもなれます。そのパッケージが定義していない名前を呼び出すと `undefined-function` が通知され、レポートは意図されたと思われる綴りを示します。インタプリタはレポートの下に、コンパイルは警告の中に示します:
+
+```console
+Unhandled condition: The function RONTOLISP::CAR is undefined
+  at app.lisp:2
+  (use CL:CAR)
+```
+
+`t` と `nil` も例外ではありません。そのようなパッケージで `cl` のものになるのは、パッケージがそれを import しているか、それを export するパッケージを使用している場合だけで、それ以外ではそのパッケージ自身のシンボル(または使用するパッケージが export するもの。coalton の `Nil` など)です。`()`、`cl:t`、`cl:nil` はどこでも `cl` のものです。コンパイルパスはフォームをその前のフォームの実行より先に読むため、`defpackage` フォームではなくマクロが定義したパッケージでは `cl` のものとして読みます。
+
+デフォルトパッケージ `cl-user` は空で `cl` を使用するため、通常のプログラムでは修飾子は不要です。
+
+## external シンボルと internal シンボル
+
+Common Lisp と同様、各パッケージは external(export 済み)シンボルと
+internal シンボルを区別し、2 つの修飾子の綴りで届く範囲が異なります:
+
+- `package:symbol`(シングルコロン)は **external** シンボルのみを参照します。
+- `package::symbol`(ダブルコロン)は internal を含むパッケージの **任意の**
+  シンボルを参照します。
+
+組み込みパッケージはドキュメント化された API 全体を export しています:
+標準の `cl` シンボルはすべて external で、本マニュアルに載っている
+`rontolisp`・`java` の関数もすべて external です(そのためダブルコロンが
+*必須* になることはありませんが、`rontolisp::version` も受け付けられ、
+`rontolisp:version` と同じ意味になります)。internal シンボルは `%`
+プレフィックス規約に従います — 例えば
+[`rontolisp:json-parse`](functions/rontolisp-json-parse.md) の背後にある
+固定引数ヘルパー `rontolisp::%json-parse` — これらは実装詳細であり、予告なく
+変わることがあります。`cl-user` は Common Lisp の `COMMON-LISP-USER`
+パッケージと同じく何も export しないため、まれに `cl-user` のシンボルに
+修飾子が必要な場合は `cl-user::name` と書きます。
+
+external でないシンボルへのシングルコロンでの参照は read/コンパイル時に
+エラーになります:
+
+```console
+CL-USER> (rontolisp:%json-parse "1")
+Error: The symbol %json-parse is not external in the rontolisp package (use rontolisp::%json-parse)
+```
+
+パッケージの export セットは定義時に決まり — 組み込みパッケージはドキュメント化
+された API を、ユーザー定義パッケージは `(:export ...)` clause の内容を export
+します — その後は [`export`](functions/export.md)/[`unexport`](functions/unexport.md)
+で調整できます。`(in-package rontolisp)` が有効な間に定義されたシンボルは
+`rontolisp` パッケージに internal シンボルとして intern されるため、他の
+パッケージからはダブルコロンで参照する必要があります。
+
+export が変えるのはシンボルに*到達できる*修飾子であって、どのシンボルであるかは
+変わりません。そのため `export` は公開する定義の前でも後でも構いません。Common
+Lisp との相違が1点あります: 最初に名前が現れた後で export されたシンボルは、アクセスできないパッケージから
+*表示*時にダブルコロンのままになります — ここでは修飾子は表示時に計算されるので
+はなくシンボルに保持されているためです — が、どちらの綴りも同じシンボルを指します。
+
+修飾子を印字するかどうかは Common Lisp のアクセス可能性の規則に従います:
+`prin1`/`print`（および `~S`）は、現在の `*package*` からアクセスできるシンボル —
+そのパッケージ自身のシンボル、`:use` を通じて継承した external シンボル、import
+したシンボル — には修飾子を付けず、それ以外は `pkg:name` / `pkg::name` と
+印字します。`princ`/`~A` は修飾子を印字しません。したがって下の `helper` は
+`(in-package :mypkg)` の下では `HELPER`、`cl-user` からは `MYPKG::HELPER` と
+印字されます。標準シンボルは、その名前を別のシンボルとして読むパッケージからは
+`COMMON-LISP:name` と、`cl-user` のシンボルは `cl-user` の外からは
+`COMMON-LISP-USER::name` と印字されます。コンパイルパスには未対応が1点あります:
+計算された名前で intern した `cl-user` のシンボルのうちプログラムのどのフォームにも
+現れないものは、修飾子なしで印字されます。
+
+## ユーザー定義パッケージ(defpackage)
+
+新しいパッケージは [`defpackage`](special-forms/defpackage.md) で定義します:
+
+```lisp
+(defpackage :mypkg (:use :cl) (:export :greet))
+(in-package :mypkg)
+(defun greet (name) (concatenate 'string "hello, " name))
+(defun helper () 42)                  ; not exported: internal
+(in-package :cl-user)
+(print (mypkg:greet "world"))         ; => "hello, world"
+(print (mypkg::helper))               ; => 42
+```
+
+`in-package` と同様に、`defpackage` は **read/コンパイル時に消費されるリテラルな
+トップレベルディレクティブ** であり、パッケージは使用より前に、ソース順に
+定義されます。サポートされる clause は `(:use package...)`、
+`(:export symbol...)`、`(:nicknames name...)`、
+`(:import-from package symbol...)`、`(:shadowing-import-from package symbol...)`、
+`(:shadow symbol...)`、`(:intern symbol...)`、
+`(:local-nicknames (nick actual)...)`、および受理されるが
+無視される `(:documentation "...")`/`(:size n)` です。名前と clause の引数は
+キーワード、裸のシンボル、文字列、文字(`#\H` は `"H"` を指します)、または
+uninterned シンボル(`#:name`、
+ポータブルな defpackage の慣用形)です。`:shadow` された名前はパッケージ内では
+常にそのパッケージ自身のシンボルに解決され、`cl`(や使用パッケージ)の同名
+シンボルには決して解決されません — これによりライブラリは独自の
+`digit-char-p` や `defconstant` を定義できます。`:intern` は export せずに
+パッケージが所有する名前を追加します — ただし使用先パッケージがその名前を
+export している場合は、Common Lisp と同様にそのシンボルを継承します。
+それ以外の clause、まだ存在しない
+パッケージの使用はエラーです。`:size` と `:documentation` はそれぞれ一度だけ
+指定できます。`:shadow`、`:shadowing-import-from`、`:import-from`、`:intern` に
+与える名前は互いに素でなければならず、`:intern` と `:export` も同様です
+(違反は `program-error`)。import 元パッケージにない名前の import は
+`package-error` で、その `continue` restart は名前を import 元に intern します。
+パッケージのテーブルには Common Lisp ならインターンされている名前が欠けうる
+(コンパイル済みバックエンドは読まれただけのシンボルを記録せず、どのバックエンドも
+`defstruct` が導出する名前を記録しない)ため、この検査は
+`defpackage`/`make-package` で作られ、まだどのソースも読み込まれていない
+パッケージに限られます。実行時に走る `defpackage`(関数本体の中、または `eval`
+経由)はこれらを handler が捕捉できるコンディションとしてシグナルし、
+トップレベルのものは read/コンパイル時に失敗します。
+既に存在するパッケージを名前に指定した `defpackage` は、そのパッケージを
+変更します(Common Lisp のルール) — clause は既存の内容にマージされ、これに
+より rontolisp が既に seed 済みのパッケージをライブラリ側が宣言できます。
+`:local-nicknames` だけは定義ごとにすべて指定し直すもので、この clause のない
+定義のパッケージはローカルニックネームを持ちません。
+他のパッケージの nickname を名前に指定した場合は依然としてエラーです。
+
+- `:use` は、使用するパッケージの **external** シンボルを修飾なしで見えるように
+  します(Common Lisp と同様) — 使用先パッケージの internal シンボルには
+  依然としてダブルコロンが必要です。`:use` clause がなければ何も継承されない
+  (SBCL と同様)ため、`cl` シンボルには `cl:` プレフィックスが必要になります。
+  通常のパッケージでは `(:use :cl)`(ポータブルには `(:use #:common-lisp)`)と
+  書いてください。複数の使用先パッケージが
+  同じ名前を export している場合、`:use` 順で最初のパッケージが優先されます
+  (Common Lisp はコンフリクトをシグナルします)。
+- `:export` はパッケージの external シンボルを宣言します。後から intern される
+  シンボル(`(in-package name)` の下で定義され `:export` clause に含まれない
+  `defun` や自由変数)は、組み込みパッケージとまったく同様に internal です。
+  パッケージが定義せずに継承している名前 — `cl` 経由の標準名
+  (`(:use :cl) (:export #:car)`)や使用先パッケージの export — は再エクスポート
+  されます: `mypkg:car` は `cl` の `car` であり、`mypkg` を use するパッケージは
+  `cl` を use していなくてもそのシンボルを継承します。
+- `:nicknames` は、正規名が解決されるすべての場所(修飾子、`in-package`、`:use`
+  など)で解決される別名を登録します。既存のパッケージやニックネームと衝突する
+  ニックネームはエラーです — 組み込みニックネーム(`common-lisp`、
+  `common-lisp-user`、`rl`、`la`、`quicklisp`)も組み込みパッケージ名と同様に
+  予約されています。
+- `:local-nicknames` は、そのパッケージが別のパッケージを呼ぶための自分専用の
+  名前を定義します: そのパッケージがカレントのとき、`nick:symbol` は
+  `actual:symbol` として読まれ、パッケージ指示子 `nick` は `actual` を指し、
+  `actual` のシンボルは `nick:symbol` と印字されます。他のパッケージからは
+  見えないので、別のパッケージやニックネームと同じ名前(`bt`、`uiop`)でもよく、
+  そのパッケージの中ではニックネームが優先します。`defpackage` の外では
+  [`uiop:add-package-local-nickname`](functions/uiop-add-package-local-nickname.md)
+  で同じことができます。
+- `:import-from` は、パッケージ全体を use せずに、1 つのパッケージの指定シンボル
+  だけを修飾なしで見えるようにします。解決はテキストベースです: import された
+  名前はソースパッケージの正規表記に解決されるため、import して re-export した
+  シンボルの `mypkg:name` は元の定義を参照します。
+
+[`use-package`](functions/use-package.md) は `:use` clause の実行時版で、
+`in-package` と同じ読み込み/コンパイル時のルールに従います: リテラルな
+トップレベルの `(use-package :mypkg)` は、それ以降のフォームに対して現在の
+パッケージの use リストを広げます(すべてのバックエンドで動作します)。
+
+[`unuse-package`](functions/unuse-package.md) はその逆操作で、
+[`export`](functions/export.md)、[`unexport`](functions/unexport.md)、
+[`import`](functions/import.md) も同じルールに従います。
+[`make-package`](functions/make-package.md)
+はこの読込/compile
+時層の隣にある実行時層です: 空パッケージを作成し(名前は大文字化、`:use`
+項目は既知のパッケージでなければなりません)、
+[`rename-package`](functions/rename-package.md) が改名し、
+[`delete-package`](functions/delete-package.md)
+が削除します。失敗は捕捉可能な `package-error`
+を signal します。読込/compile
+時パッケージは実行時に不変です -- 改名も削除も signal
+します。`defpackage` の成果物がどちらの層に入るかは、誰が解決したかで決まります:
+**コンパイル済み**プログラムは綴りを焼き込むためその成果物は読込/compile 時層、
+**インタープリタ**は生きたレジストリに対して解決するため実行時層に入り、改名も
+削除もできます。(トップレベルでない)他のフォームの中の `defpackage` は、その
+フォームが実行されたときに実行時層へパッケージを登録します -- インタープリタは
+これをサポートし、登録先のレジストリを持たないコンパイル済みバックエンドは
+拒否します。
+
+プログラムのコンパイル中に走るコード(コンパイル時に評価される `eval-when`、
+マクロ本体、プログラムがロードするシステム)は、パッケージを作ったり
+(`make-package`)、変えたり(計算したリストの `export`)できます。コンパイル済み
+プログラムはそれ以降のフォームを、そのコードが残したパッケージに対して読み、
+そのパッケージを `defpackage` の成果物と同じく読込/compile 時層に持ちます。
+そのようなパッケージに対するプログラム自身の `make-package` は、最初に実行された
+ときにそのパッケージを返し、2 回目は既存のパッケージと同じく signal します。
+
+パッケージは**メンバーテーブル**を持ちます。[`intern`](functions/intern.md)、
+[`export`](functions/export.md)、[`import`](functions/import.md)、
+[`shadowing-import`](functions/shadowing-import.md)、[`shadow`](functions/shadow.md)
+がそこに入れたものと、[`unintern`](functions/unintern.md) が取り除いたものです。
+[`find-symbol`](functions/find-symbol.md) はインターン前の名前には `nil` を、
+インターン後にはそのシンボル(と `:internal` / `:external` / `:inherited`
+のステータス)を返し、`use-package` はエクスポートされたメンバーを継承させ、
+[`do-symbols`](macros/do-symbols.md) / [`with-package-iterator`](macros/with-package-iterator.md)
+はテーブルと use リストが持ち込むものを、それぞれコードが綴るとおりの綴りで
+走査します。Common Lisp と同じく、シンボルは読まれた時点でインターンされます:
+ソースがパッケージの下で読んだ名前は、それを読んだフォーム以降記録され、
+その下で行われた定義も数えます(`defun` はインターンです)。インタープリタでは
+すべてのパッケージのテーブルが生きています。コンパイル済みバックエンドでは、
+プログラムが `make-package` で作ったパッケージのテーブルは生きており、
+読込/compile 時パッケージは凍結されていて(変更系の操作はそこでは何も
+変えずに `t` を返します)、読まれただけのシンボルを含みません --
+コンパイル中に実行されるマクロ本体からは見えます。
+
+パッケージは読み込み/コンパイル時に(ソース順で)解決されるため、`in-package`
+はトップレベルのディレクティブです: ソース中のシンボルがどのパッケージに属するかは、その上にある `in-package` で決まり、実行時の `*package*` への `setq` では決まりません(コンパイル出力ではファイル全体が実行前に解決されます。インタプリタはトップレベルフォームに到達するたびに解決するため、そこでは実行時の代入が後続のフォームに影響します)。トップレベルでない `in-package`(関数本体の中など)はこの代入にあたり、実行時に有効になります。コンパイル出力では、実行時に読み込まれたファイルのパッケージディレクティブは処理されません。`rontolisp`
+パッケージの関数(`version` ...)は第一級の値として利用できません(`mapcar`/`funcall`
+に渡せません)。また `cl` を使用しないパッケージ内では、`cl`
+シンボル名をローカル変数としてシャドウしてはいけません。
+
+## rontolisp パッケージの拡張
+
+`rontolisp` パッケージが所有するシンボルは **実装固有であり、Common Lispの一部ではありません**。`rontolisp:`
+修飾子で参照する(または `(in-package rontolisp)`
+の後に修飾なしで使用する)必要があります。`version` に加え、このパッケージは
+`rontolisp:fetch` (future を返す) と、`rontolisp:await` (解決)、
+`rontolisp:futurep` (型述語) を通じて非同期の外向きHTTPを提供し、さらに
+[`rontolisp:json-parse`](functions/rontolisp-json-parse.md) /
+[`rontolisp:json-stringify`](functions/rontolisp-json-stringify.md)
+によるJSON変換(JavaScriptの `JSON.parse`/`JSON.stringify` 相当)を提供します。これらはすべて
+[関数](functions/rontolisp.md)
+リファレンスに独自のページを持ち、完全な
+[`rontolisp:fetch`](functions/rontolisp-fetch.md) /
+[`rontolisp:await`](special-forms/rontolisp-await.md) /
+[`rontolisp:futurep`](functions/rontolisp-futurep.md) ドキュメントも含まれます。
+
+このパッケージのメンバーのうち2つは関数でもマクロでもなく、read 時リテラルです:
+`rontolisp:current-file` と `rontolisp:current-line` で、リーダがそのシンボルの位置に置換します。`in-package`
+ディレクティブの解釈より前に解決されるため、これらは上記の規則の例外で、常に修飾付きで書く必要があります。
+[ソース位置リテラル](data-types.md#source-position-literals-rontolispcurrent-file-rontolispcurrent-line)を参照してください。

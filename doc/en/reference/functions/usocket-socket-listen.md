@@ -1,0 +1,32 @@
+# usocket:socket-listen
+
+`(usocket:socket-listen host port &key reuse-address backlog element-type)`
+
+Binds a listening TCP socket on `host` and `port` and returns a listener --
+the usocket-compatible wrapper over
+[`rontolisp:tcp-listen`](rontolisp-tcp-listen.md) (note the flipped argument
+order: usocket passes the host first). A `host` of `usocket:*wildcard-host*`
+(`"0.0.0.0"`) or `nil` listens on all interfaces; a `port` of
+`usocket:*auto-port*` (`0`) picks a free ephemeral port, which
+`usocket:get-local-port` reads back. The keyword arguments are accepted for
+compatibility and ignored (the backlog is the runtime default).
+
+```lisp
+(let* ((listener (usocket:socket-listen usocket:*wildcard-host* usocket:*auto-port*))
+       (port (usocket:get-local-port listener)))
+  (usocket:socket-close listener)
+  (> port 0)) ; => T
+```
+
+Accept connections with [`usocket:socket-accept`](usocket-socket-accept.md).
+
+## Backend support
+
+- **Interpreter** and **JVM**: full support.
+- **WASM**: component mode only; a failed bind signals `usocket:socket-error`
+  (`tcp-listen: cannot listen on H:P`, without the host's reason). A plain
+  Preview 1 `.wasm` signals at the call.
+- **Native executable** (`--native`): full support, as on the interpreter and
+  the JVM -- a failed bind signals `usocket:socket-error`
+  ([TCP sockets in a native executable](../../compiling/native.md#tcp-sockets)).
+- **Browser playground**: not supported.

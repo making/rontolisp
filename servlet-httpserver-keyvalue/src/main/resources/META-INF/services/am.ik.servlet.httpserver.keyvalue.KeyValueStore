@@ -1,0 +1,3 @@
+# A store in memory where no host provides wasi:keyvalue: a JDK, and rontolisp's
+# interpreter and JVM. A WebAssembly component consults none of this file.
+am.ik.servlet.httpserver.keyvalue.MemoryKeyValueStore

@@ -1,0 +1,230 @@
+package am.ik.rontolisp.compiler;
+
+import java.util.Set;
+
+import org.jspecify.annotations.Nullable;
+
+/**
+ * What is known about a {@code java:} argument or receiver before it is evaluated
+ * ({@link JavaSiteResolver#typeOf}): the finite set of {@link JavaKind}s its value can
+ * have, an upper bound on the class of the host object it is, or nothing.
+ */
+public sealed interface JavaStaticType {
+
+	/** Nothing is known: any value, a list, or one the bridge never marshals. */
+	JavaStaticType UNKNOWN = new Unknown();
+
+	/**
+	 * The value has one of these kinds -- a literal, the result of {@code java:new}, a
+	 * Java primitive, {@code String} or final class answered by a resolved member.
+	 *
+	 * @param kinds the possible kinds, at least one
+	 */
+	record Kinds(Set<JavaKind> kinds) implements JavaStaticType {
+
+		/**
+		 * @param kinds the possible kinds
+		 */
+		public Kinds {
+			kinds = Set.copyOf(kinds);
+		}
+
+	}
+
+	/**
+	 * The value is {@code nil} or a host object whose class is {@code type} or a subclass
+	 * of it -- the declared type of a resolved member, or a
+	 * {@code (the (java:object "C") x)} / {@code (declare (type (java:object "C") x))}.
+	 * The class is known only up to a subclass, so the value's kind is not: it types a
+	 * receiver (the members a call resolves against), and an argument only of a
+	 * dispatched site, where the kind is read when the call runs.
+	 *
+	 * @param type the upper bound
+	 */
+	record Bounded(JavaType type) implements JavaStaticType {
+	}
+
+	/** See {@link #UNKNOWN}. */
+	record Unknown() implements JavaStaticType {
+	}
+
+	/**
+	 * The type a {@code java:call} on such a value resolves its method against.
+	 * @return the class, or {@code null} when the value is not known to be a host object
+	 */
+	default @Nullable JavaType receiverClass() {
+		if (this instanceof Bounded bounded) {
+			return bounded.type();
+		}
+		if (this instanceof Kinds kinds) {
+			JavaType host = null;
+			for (JavaKind kind : kinds.kinds()) {
+				if (kind instanceof JavaType type) {
+					if (host != null) {
+						return null;
+					}
+					// A java:reify / java:proxy object is called through its interface;
+					// one of
+					// several interfaces by its class when the call runs.
+					if (type instanceof JavaImplementationType implementation) {
+						host = implementation.single();
+						if (host == null) {
+							return null;
+						}
+					}
+					else {
+						host = type;
+					}
+				}
+				else if (kind != JavaKind.Lisp.NIL) {
+					return null;
+				}
+			}
+			return host;
+		}
+		return null;
+	}
+
+	/**
+	 * The type of a value a member declared as returning {@code type} answers, once the
+	 * bridge unmarshalled it: {@code void} is {@code nil}, {@code boolean} is {@code t}
+	 * or {@code nil}, a primitive number or character its kind, a box or {@code String}
+	 * the same or {@code nil}; a {@code BigInteger} or a subclass of it an integer
+	 * (fixnum or bignum) or {@code nil}; an array (a list) and a supertype of a box, of
+	 * {@code String}, of {@code BigInteger} or of an array ({@code Object},
+	 * {@code Number}, {@code CharSequence}, ...) -- whose value may have become any of
+	 * those -- nothing; a final class exactly that class or {@code nil}; any other class
+	 * a {@link Bounded bound}. A class a compiled program cannot name
+	 * ({@link JavaType#isLinkable()}) is nothing: a site resolves only through classes it
+	 * can be compiled against.
+	 * @param type the declared type
+	 * @param lookup where the boxes and {@code String} are found
+	 * @return the static type of the unmarshalled value
+	 */
+	static JavaStaticType ofDeclared(JavaType type, JavaClassLookup lookup) {
+		return ofDeclared(type, lookup, false);
+	}
+
+	/**
+	 * {@link #ofDeclared(JavaType, JavaClassLookup)} at a site whose Java {@code false}
+	 * comes back as {@code |false|} when {@code javaFalse} ({@link JavaMarkers}): a
+	 * {@code boolean} is {@code t} or {@code |false|}, a {@code Boolean} either or
+	 * {@code nil}.
+	 * @param type the declared type
+	 * @param lookup where the boxes and {@code String} are found
+	 * @param javaFalse whether the site ends in {@code :java-false}
+	 * @return the static type of the unmarshalled value
+	 */
+	static JavaStaticType ofDeclared(JavaType type, JavaClassLookup lookup, boolean javaFalse) {
+		JavaKind.Lisp nil = JavaKind.Lisp.NIL;
+		switch (type.name()) {
+			case "void" -> {
+				return new Kinds(Set.of(nil));
+			}
+			case "boolean" -> {
+				return new Kinds(Set.of(JavaKind.Lisp.T, javaFalse ? JavaKind.Lisp.FALSE : nil));
+			}
+			case "java.lang.Boolean" -> {
+				return new Kinds(
+						javaFalse ? Set.of(JavaKind.Lisp.T, JavaKind.Lisp.FALSE, nil) : Set.of(JavaKind.Lisp.T, nil));
+			}
+			case "byte", "short", "int", "long" -> {
+				return new Kinds(Set.of(JavaKind.Lisp.INTEGER));
+			}
+			case "java.lang.Byte", "java.lang.Short", "java.lang.Integer", "java.lang.Long" -> {
+				return new Kinds(Set.of(JavaKind.Lisp.INTEGER, nil));
+			}
+			case "float", "double" -> {
+				return new Kinds(Set.of(JavaKind.Lisp.FLOAT));
+			}
+			case "java.lang.Float", "java.lang.Double" -> {
+				return new Kinds(Set.of(JavaKind.Lisp.FLOAT, nil));
+			}
+			case "char" -> {
+				return new Kinds(Set.of(JavaKind.Lisp.CHAR));
+			}
+			case "java.lang.Character" -> {
+				return new Kinds(Set.of(JavaKind.Lisp.CHAR, nil));
+			}
+			case "java.lang.String" -> {
+				return new Kinds(Set.of(JavaKind.Lisp.STRING, JavaKind.Lisp.STRING_1, nil));
+			}
+			default -> {
+			}
+		}
+		if (isBigInteger(type, lookup)) {
+			return new Kinds(Set.of(JavaKind.Lisp.INTEGER, JavaKind.Lisp.BIGNUM, nil));
+		}
+		if (type.isArray() || type.isPrimitive() || !type.isLinkable() || becomesLisp(type, lookup)) {
+			return UNKNOWN;
+		}
+		return type.isFinal() ? new Kinds(Set.of(type, nil)) : new Bounded(type);
+	}
+
+	/**
+	 * The type of the object {@code (java:new "C" ...)} answers: exactly {@code C}, or
+	 * the Lisp value an instance of a box, of {@code String} or of {@code BigInteger}
+	 * unmarshals to (nothing for a class a compiled program cannot name).
+	 * @param type the constructed class
+	 * @param lookup where the boxes and {@code String} are found
+	 * @return the static type of the unmarshalled instance
+	 */
+	static JavaStaticType ofConstructed(JavaType type, JavaClassLookup lookup) {
+		return ofConstructed(type, lookup, false);
+	}
+
+	/**
+	 * {@link #ofConstructed(JavaType, JavaClassLookup)} at a site ending in
+	 * {@code :java-false} when {@code javaFalse}: a {@code Boolean} is {@code t} or
+	 * {@code |false|}.
+	 * @param type the constructed class
+	 * @param lookup where the boxes and {@code String} are found
+	 * @param javaFalse whether the site ends in {@code :java-false}
+	 * @return the static type of the unmarshalled instance
+	 */
+	static JavaStaticType ofConstructed(JavaType type, JavaClassLookup lookup, boolean javaFalse) {
+		return switch (type.name()) {
+			case "java.lang.Boolean" ->
+				new Kinds(Set.of(JavaKind.Lisp.T, javaFalse ? JavaKind.Lisp.FALSE : JavaKind.Lisp.NIL));
+			case "java.lang.Byte", "java.lang.Short", "java.lang.Integer", "java.lang.Long" ->
+				new Kinds(Set.of(JavaKind.Lisp.INTEGER));
+			case "java.lang.Float", "java.lang.Double" -> new Kinds(Set.of(JavaKind.Lisp.FLOAT));
+			case "java.lang.Character" -> new Kinds(Set.of(JavaKind.Lisp.CHAR));
+			case "java.lang.String" -> new Kinds(Set.of(JavaKind.Lisp.STRING, JavaKind.Lisp.STRING_1));
+			default -> {
+				if (isBigInteger(type, lookup)) {
+					yield new Kinds(Set.of(JavaKind.Lisp.INTEGER, JavaKind.Lisp.BIGNUM));
+				}
+				yield !type.isLinkable() || becomesLisp(type, lookup) ? UNKNOWN : new Kinds(Set.of(type));
+			}
+		};
+	}
+
+	// BigInteger or a subclass: every instance unmarshals to a Lisp integer.
+	private static boolean isBigInteger(JavaType type, JavaClassLookup lookup) {
+		JavaType bignum = lookup.find("java.math.BigInteger");
+		return bignum != null && bignum.isAssignableFrom(type);
+	}
+
+	/**
+	 * Whether a value of this type may be unmarshalled into something other than a host
+	 * object: it is a supertype of a box, of {@code String}, of {@code BigInteger} (a
+	 * Lisp integer) or of an array, or a subclass of {@code BigInteger}.
+	 * @param type the declared or constructed type
+	 * @param lookup where the boxes and {@code String} are found
+	 * @return whether the unmarshalled value may be a Lisp value
+	 */
+	static boolean becomesLisp(JavaType type, JavaClassLookup lookup) {
+		for (String name : new String[] { "java.lang.Boolean", "java.lang.Byte", "java.lang.Short", "java.lang.Integer",
+				"java.lang.Long", "java.lang.Float", "java.lang.Double", "java.lang.Character", "java.lang.String",
+				"java.math.BigInteger", "[I" }) {
+			JavaType unmarshalled = lookup.find(name);
+			if (unmarshalled != null && type.isAssignableFrom(unmarshalled)) {
+				return true;
+			}
+		}
+		JavaType bignum = lookup.find("java.math.BigInteger");
+		return bignum != null && bignum.isAssignableFrom(type);
+	}
+
+}

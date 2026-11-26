@@ -1,0 +1,166 @@
+# Packed integer vectors ((unsigned-byte 8|16|32) rank-1 arrays)
+
+**Invariant: `(make-array n :element-type '(unsigned-byte 8|16|32))` -- rank 1, no fill
+pointer / adjustability / displacement, LITERAL element type -- builds a PACKED unsigned
+integer vector with identical element semantics on every backend: a store MASKS to the
+element width, a read widens UNSIGNED, a non-integer store is a type error
+(interpreter/JVM signal, WASM traps).** Any other combination keeps the general boxed
+representation, which still REMEMBERS the element type ([array-literals.md](array-literals.md)).
+Rank-n falls back for every specialized type except packed floats; CHARACTER degrades the same.
+
+Scheme's bytevectors are the 8-bit pack ([scheme-frontend.md](scheme-frontend.md), "Bytevectors").
+
+## Representation
+- Interpreter `LispIntVector`: `int width` + the storage AT the width -- `byte[]` (8),
+  `short[]` (16), `int[]` (32), read back widened unsigned; `octets()`/`shorts()`/`ints()` are
+  the LIVE arrays, `wrapOctets(byte[])` takes one over uncopied (an HTTP body, a request
+  body, a digest), `LispIntVector.copy` is one `System.arraycopy` between equal widths
+  (`replace`/`fill` between packed vectors, `PackedBuffer`'s `read-sequence`/`write-sequence`).
+- JVM: at width 8 the bare `byte[]` of the octets, nothing else in it -- Java's own array
+  (below); at 16/32 a `long[]{16|32, e0, ...}`, the width in slot 0 and the elements from slot 1.
+  `JvmIntArrayRuntimeBuilder` `_ivAref1`/`_ivAset1`/`_ivDims`/`_ivLength`/
+  `_ivToGeneral`/`_ivElementType`/`_ivMake`/`_ivRequireGeneral` carry both arms, gated on
+  `Ctx.usesIntArray` (gate off = byte-identical build); dispatch chains iv -> fv -> general.
+  A `java:` form ending in `:octets` -- a call or field read, or a `java:reify` / `java:proxy` /
+  `java:subclass` -- turns the gate on (`JvmLispCompiler.programAsksJavaForOctets`): the octet
+  vector its `byte[]` answer, or one Java hands its functions, becomes is made by the `java:`
+  runtime, not by a scanned `make-array`, and printed `#<java [B>` without the `_iv*` arms
+  (`.kb/java-interop.md`, "Markers").
+  The `%array-alike` allocator is NOT in this tier: it is the general group's `_arrayAlike`
+  ([subseq-runtime.md](subseq-runtime.md)).
+- **The JVM's octet vector IS the `byte[]` Java holds** (since 2026-10-10, f25), as the
+  interpreter's `LispIntVector.octets()` is: a `byte[]` a `java:` call answers at `:octets`, or
+  hands a function, is the vector with no copy, a `:bytes` view hands Java the vector's own array,
+  and the runtime classes take and answer octets as they are (`RontoFetch`'s request body and
+  reply chunks, `RontoHttpClack.bodyOctets` -- the request body uncopied -- and `toResponse`
+  (copied, as the interpreter copies), `RontoInflate`, `JvmObjcPrimitivesTemplate`), so
+  `_iv_of_bytes` and every copy behind the width are gone ([java-interop.md](java-interop.md),
+  "Markers", "Handles and views"). Every reader indexes from 0 and counts `arr.length`; the
+  displaced views' 1-based data index reads `b[idx - 1]`.
+- A `byte[]` is ALWAYS an octet vector: the quantized matrix, a `byte[]` too until 2026-10-10,
+  is a holder of its own (`runtime/RontoQuantizedMatrix`, [quantized-matrix.md](quantized-matrix.md)),
+  so `JvmIntArrayRuntimeBuilder.Octets` / `emitOctetTestOnStack` are an `instanceof`. From
+  2026-09-26 until then the vector was `byte[]{8, e0, ...}` -- the width in slot 0, as a `long[]`
+  vector's -- because that slot told it from the matrix's format code; every door taking either
+  read it (one that forgot read a header as data without a word), and Java could only ever be
+  handed a copy of the octets. Pinned by
+  `JvmQuantizedMatrixTest.anOctetVectorAndAQuantizedMatrixAreToldApartWhereBothCanExist` (an
+  octet vector spelling a matrix header among them).
+- wasm-GC: the BARE `TYPE_I8ARR`/`TYPE_I16ARR`/`TYPE_I32ARR`, `(array (mut i8|i16|i32))`,
+  types 57-59 in ONE rec group (keeping i32 structurally distinct from `TYPE_LIMBS` under GC
+  canonicalization); no wrapper, no dims, `ref.test` discriminates width. `TYPE_IV_SET` (60)
+  is `_iv_set`'s signature; `IARR_TYPE_LAST` shifts the `--simd`/async/instance blocks past
+  all four, `FUNC_IV_SET` follows `FUNC_FX_REM` inside `FX_FUNC_LAST`. `--no-gc`: no arrays.
+- **An octet is one byte on every backend** since 2026-09-26; the JVM still spends 8 bytes an
+  element at widths 16/32 (the `int[]` a `(unsigned-byte 32)` pack would take is the character
+  box). Until then interpreter and JVM spent 8 bytes an element at every width (the width was a
+  discriminator, not a packing scheme), which is what a large `read-all` showed in live heap
+  ([fetch-http.md](fetch-http.md), "Throughput").
+
+## Two hand-written width lists (audited 2026-09-05, `.todo/683`)
+The float umbrella's exhaustive-switch net has no analogue here: `LispIntVector` is NOT
+sealed -- ONE final class carrying the width as a field -- and `(unsigned-byte N)` is parsed
+from the SPECIFIER, not resolved from permit names, so there is no `permits` clause for a
+reflective reachability test to enumerate (contrast [vec.md](vec.md), "Asking a packed array
+its width"). The widths therefore live in exactly two lists, and their failure modes differ:
+- `LispNames.unsignedByteWidth` PARSES 8/16/32 and answers 0 for anything else -- an unlisted
+  width silently degrades to the general boxed array (the `.todo/683` shape).
+- `LispIntVector.zeros`/`of` ACCEPT 8/16/32 and throw otherwise -- an unsupported width at the
+  allocation is loud at least (a new width also needs its storage arm in every switch there).
+Adding an integer width means editing BOTH; `PackedFloatReachabilityTest`'s last two tests
+pin both directions as they stand (every listed width builds and answers its specifier;
+`(unsigned-byte 64)` degrades silently while the allocation refuses it).
+
+## "Literal" includes a `deftype` alias of one
+`LispMacroExpander.resolveElementTypeAlias(spec, closRegistry)` is the one resolver: strips
+the compile paths' quote, follows alias chains (16 hops, terminating `(deftype a () 'a)`),
+returns its argument UNCHANGED otherwise so an alias-free program stays byte-identical. Sites:
+`Environment.makeArrayBuiltin(closRegistry)` (re-registered by `LispEvaluator` with the LIVE
+registry, the `concatenateBuiltin` arrangement); `JvmArrayCompiler.compileMake` plus the gates
+`JvmLispCompiler.makeArrayIsPackedInt`/`makeArrayIsPackedFloat`; `WasmArrayCompiler`'s
+`compileMake`/`packedIntElementWidth`, which accepts the bare list as well as the wrapper.
+- **Trap: a gate that misses the alias omits `_iv*`/`_fv*` and silently takes the general path.**
+- Deliberately unresolved: a RUN-time designator
+  (`LispMacroExpander.lowerRuntimeElementTypeMakeArray`) and `open`'s `:element-type`
+  (`isBinaryElementTypeLiteral`). Pinned by ci-spec `make-array-element-type-deftype-alias`.
+
+## Shared semantics
+- A masked store returns the value AS STORED; a `TYPE_BIGINT`-tier store contributes its LOW
+  32 bits everywhere; an out-of-range index is the access's `type-error` naming its bound
+  (`.kb/error-handling.md`, "An out-of-range subscript"; wasm-GC outside EH mode traps).
+- `typep` for `(simple-array (unsigned-byte 8) (*))` tests `%arrayp` AND
+  `(equal (array-element-type x) '(unsigned-byte N))`, dimensions unchecked -- so a general
+  `#(...)` is never a `(vector (unsigned-byte 8))` (s-sql's `sql-escape` dispatches on it).
+- `subseq`/`copy-seq` are TYPE-PRESERVING via `%array-alike` (`LispNames.ARRAY_ALIKE`, in
+  `CL_INTERNALS`); `replace` mask-stores element-wise, a self-overlapping region read out first
+  (fixed on every backend 2026-09-19, `.todo/872`); `coerce`/`concatenate`/`map` pack when the
+  RESULT TYPE asks ([concatenate-result-families.md](concatenate-result-families.md));
+  `reverse`, `remove`, `map 'vector` and printing return GENERAL everywhere, the interpreter's
+  `seqResult` deliberately rebuilding general to match the compilers.
+  **This covers every packed width on every backend, including a fill-pointer /
+  adjustable packed vector** (a general array that only REMEMBERS a packed element type,
+  [adjustable-arrays.md](adjustable-arrays.md)) and a displaced view whose chain ends on
+  a packed target: the interpreter's `subseq` general-array arm and `%array-alike` consult
+  `LispArray.elementTypeCode` (`Environment.packedCopyForElementType`; `subseq` gained a
+  `LispFloatArray` arm it never had -- it THREW on any packed float array before,
+  2026-09-06), and both compilers' `%array-alike` are keyed on the element type the
+  source ANSWERS rather than its runtime class ([subseq-runtime.md](subseq-runtime.md)).
+  Before that (until 2026-09-06) the JVM's `_ivAlike` tested only the `long[]` marker and
+  a float-only program did not emit it at all, and wasm's dispatch tested only the three
+  packed integer types, so a packed float subseq, or any adjustable packed vector's, came
+  back a plain simple-vector on those two backends. Pinned by ci-spec
+  `subseq-of-an-adjustable-packed-vector` with ONE `expected:` block.
+- Fill-pointer / `adjust-array` / displacement MUTATORS error (`requireGeneralArray` /
+  `_ivRequireGeneral`); the read-only probes are an UNPINNED divergence (`nil`/`0` on the
+  interpreter, error on JVM, trap on wasm) -- keep out of ci-spec. A packed vector IS a valid
+  `:displaced-to` target ([adjustable-arrays.md](adjustable-arrays.md)); the view stays general
+  but its elements mask. `equal`/`eql` are identity only.
+
+## The reader literal
+`#N@(...)` ([reader-features.md](reader-features.md)) reads packed for N in {8, 16, 32}
+(elements masked), plain `#(...)` otherwise: `Token.IntVectorOpen`, `LispReader.readIntVector`,
+baked by `WasmQuoteCompiler.compileIntVectorLiteral` / `JvmQuoteCompiler.compileLiteralIntVector`.
+`PureBuiltinFolder` is a second producer ([pure-builtin-fold.md](pure-builtin-fold.md)).
+
+**A packed literal of 16 elements or more goes into static data at the element width and the
+site becomes a copy loop over it: `w/8` bytes an element plus a fixed ~45.** Below 16,
+`array.new_default` + one `array.set` per non-zero element. The array is still allocated and
+filled at the SITE, so each evaluation yields a fresh, independently mutable vector. Traps:
+- Bytes go through `StringTable.appendShakeableBlob` -- the ONE active data segment, 4-byte
+  aligned, registered as a `DroppableDataRange` so `--optimize` cuts a dead table. NOT
+  `array.new_data`: that needs a passive segment and a datacount section, and `WasmTreeShaker`
+  throws on the opcode on purpose (`scanGc`).
+- The segment base is an explicit `i32.const`, not the load's memarg offset: the shaker's
+  droppable-range probe reads `i32.const`s and skips memargs.
+- The loop counter is an i64 scratch local, so an ASYNC resume body falls back to `array.set`s.
+
+## Unboxed fast paths (wasm-GC)
+Machinery: [wasm-int-fusion.md](wasm-int-fusion.md).
+- `(aref a i)` in a fused tree is an `ArefLeaf`: the array evaluates once into a scratch local
+  and the index is an operand of the tree, the fast path guards `testIntVector` + i31 index and
+  reads `array.get_u` -> raw i64 (no `_int_new`), any other shape bailing to
+  `WasmArrayCompiler.emitAref1FromSlots` from the SAME array.
+- `(setf (aref packed i) <integer tree>)` compiles the value RAW
+  (`WasmIntFusionCompiler.tryCompileRaw`) and stores through `_iv_set`; in statement position
+  (`WasmExprCompiler.compileForEffect`) the value is never materialized, so the hot-loop store
+  allocates NOTHING.
+- Fused-call defun inlining: a uniquely-defined fixed-arity defun whose single body expression
+  is a closed integer-op tree over its parameters (whitelist
+  `+ - * mod rem logand logior logxor lognot ash 1+ 1- ldb byte aref`;
+  `WasmIntFusionCompiler.isInlinableDefun` -> `Ctx.inlinableDefuns`, NEVER under `--dynamic`)
+  is spliced into fused trees at direct call sites; a parameter used more than once is demoted
+  to a shared once-evaluated leaf, leaf registration happening at classify time in source order
+  to preserve argument evaluation order. An asyncMode `rontolisp:async-defun` is excluded even
+  when its rewritten plain defun qualifies textually ([async-await.md](async-await.md)).
+
+## The heap-type encoding landmine
+`WasmWriter.writeHeapType` treated any value >= 0x40 as an abstract heap-type code, so
+`ref.test`/`ref.cast`/`ref.null` of type indices 64+ produced "invalid heap type" modules. The
+boundary is now 0x60 (the abstract range starts at `exn` 0x69), so indices up to 95 encode
+correctly. **Trigger: if such a target ever reaches index 96, split the int-parameter
+disambiguation into `writeAbstractHeapType`/`writeTypeIndex`.**
+
+## Tests
+- `packedIntVector*` in `LispEvaluatorTest` / `JvmLispCompilerTest` /
+  `WasmLispCompilerIntegrationTest`; ci-spec `packed-integer-vectors`;
+  `WasmLispCompilerTest.aLiteralLookupTableCostsItsOwnBytesAndNotThreeTimesThem`.

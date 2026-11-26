@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <parent><groupId>test.snap</groupId><artifactId>parent</artifactId><version>1.0-SNAPSHOT</version></parent>
+  <groupId>test.snap</groupId>
+  <artifactId>child</artifactId>
+  <version>1</version>
+</project>

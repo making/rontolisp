@@ -1,0 +1,27 @@
+# macroexpand-1
+
+`(macroexpand-1 form)`
+
+Expands `form` once when its operator is a user macro (defined with [`defmacro`](../special-forms/defmacro.md)) or a built-in macro, and returns the form unchanged otherwise. Only the top-level operator is expanded; subforms are left alone. It expands exactly the operators [`macro-function`](macro-function.md) answers non-nil for: `(return 1)` expands to `(RETURN-FROM NIL 1)`, while `(typep x 'integer)` -- a function call -- comes back unchanged. `handler-case` and the definers rontolisp runs as special forms expand to internal forms that run as the original wherever a code walker emits them: `(handler-case f (error (c) c))` is `(%HANDLER-CASE F 'ERROR #'(LAMBDA (C) C))`, `(defun f (x) x)` is `(%DEFUN 'F #'(LAMBDA (X) (BLOCK F X)))`, and `defmacro`, `defvar`, `defparameter`, `defconstant`, `defclass`, `defgeneric`, `defmethod`, `defstruct`, `defsetf`, `defpackage`, `define-symbol-macro` and `in-package` are `(%DEFINITION 'form)`.
+
+The second value is Common Lisp's `expanded-p` flag: `(multiple-value-list (macroexpand-1 '(unless c x)))` is `((IF C NIL X) T)`. A symbol naming a symbol macro expands to its expansion, the very object the binding holds, so a macro may write into it for a later macro to read. The environment argument is nil or what a macro's `&environment` parameter holds: the latter sees the [`symbol-macrolet`](../macros/symbol-macrolet.md) names in scope at that macro's call, the former only [`define-symbol-macro`](../special-forms/define-symbol-macro.md) names. A `macrolet` macro is found through either.
+
+On the compilation path only a LITERAL quoted argument expands: the CLI folds the call to its expansion at compile time. A computed argument reaches a compiled program, which has no macro table left, so it answers the form unchanged with `expanded-p` nil — unless the form IS a macro call, which signals `macroexpand-1: a compiled program cannot expand a macro at run time`. That is the same answer [`macro-function`](macro-function.md)'s stub gives there, and it is what makes the usual "expand until it stops expanding" loop terminate on every backend.
+
+What a built-in iteration macro expands to is standard operators a code walker reads: `dolist`, `dotimes`, `do`, `do*`, `loop` and `prog` answer `block` and `tagbody`. `*macroexpand-hook*` calls the expander it is given, for an expander that calls through it; the expansions here do not consult it.
+
+```lisp
+(macroexpand-1 '(unless c x)) ; => (IF C NIL X)
+```
+
+```lisp
+(defmacro my-when (test &body body)
+  `(if ,test (progn ,@body) nil))
+(macroexpand-1 '(my-when (> 2 1) 'a 'b)) ; => (IF (> 2 1) (PROGN 'A 'B) NIL)
+```
+
+A non-macro form is returned as-is:
+
+```lisp
+(macroexpand-1 '(+ 1 2)) ; => (+ 1 2)
+```

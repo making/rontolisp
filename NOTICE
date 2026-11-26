@@ -1,0 +1,26 @@
+rontolisp
+Copyright 2026 Toshiaki Maki
+
+Licensed under the Apache License, Version 2.0 (LICENSE).
+
+Java is a registered trademark of Oracle and/or its affiliates; OpenJDK is a trademark of
+Oracle America, Inc. Spring is a trademark of Broadcom Inc. and/or its subsidiaries. Apache
+Maven is a trademark of The Apache Software Foundation. Cloudflare Workers is a trademark of
+Cloudflare, Inc. Google App Engine is a trademark of Google LLC. macOS is a trademark of Apple
+Inc. Envoy and wasmCloud are trademarks of The Linux Foundation. PostgreSQL is a registered
+trademark of the PostgreSQL Community Association of Canada. Other names used in rontolisp and its
+documentation, such as Clojure, WebAssembly and GraalVM, may be trademarks of their respective
+owners. rontolisp is not affiliated with, endorsed by or sponsored by any of these owners.
+
+rontolisp contains code and data from other projects, under their own licences;
+THIRD-PARTY-NOTICES.txt lists each of them, the files that hold it and its licence text.
+The attribution notices of the Apache-2.0 works among them:
+
+Apache Maven
+Copyright 2001-2026 The Apache Software Foundation
+
+Maven Artifact Resolver
+Copyright 2010-2026 The Apache Software Foundation
+
+This product includes software developed at
+The Apache Software Foundation (http://www.apache.org/).

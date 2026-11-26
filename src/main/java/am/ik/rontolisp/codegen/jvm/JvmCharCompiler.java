@@ -1,0 +1,499 @@
+package am.ik.rontolisp.codegen.jvm;
+
+import java.lang.classfile.Opcode;
+import java.util.List;
+
+import am.ik.jvm.MethodCode;
+import am.ik.rontolisp.LispChar;
+import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispInteger;
+import am.ik.rontolisp.LispNames;
+import am.ik.rontolisp.LispSymbol;
+import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.compiler.OperandTypes;
+import am.ik.rontolisp.compiler.StreamOperandChecks;
+import am.ik.rontolisp.macro.LispMacroExpander;
+import org.jspecify.annotations.Nullable;
+
+/**
+ * Compiles the character built-ins. A CHARACTER on the JVM compile path is a length-1
+ * {@code int[]} whose sole element is the Unicode code point -- a wider representation
+ * than the old {@code java.lang.Character} 16-bit box, so a supplementary code point like
+ * {@code #\U+1F600} carries its full 21-bit value through {@code code-char},
+ * {@code char-code}, {@code char-upcase}/{@code char-downcase}, {@code (string ch)} and
+ * every printer. The type discriminator is {@code instanceof int[]}: functions
+ * ({@code Object[]}), ratios ({@code BigInteger[]}), packed float arrays
+ * ({@code double[]} / {@code float[]}) all pick different array classes.
+ *
+ * <p>
+ * Strings are UTF-16 buffers with surrounding double quotes; a Lisp CHARACTER index is a
+ * CODE POINT index, translated by {@link JvmStringIndexRuntimeBuilder}'s {@code _cpoff},
+ * so the same astral glyph reads back as one indexed character on {@code (char s i)} /
+ * {@code (aref s i)} / {@code (subseq s a b)}.
+ */
+final class JvmCharCompiler {
+
+	private JvmCharCompiler() {
+	}
+
+	/**
+	 * {@code (char string index)} / {@code (schar string index)}: the code point at
+	 * index, via ONE {@code _charRef} call ({@link JvmStringIndexRuntimeBuilder}). A
+	 * mutable character vector reads its element there (an O(1) {@code _rmGet}, never a
+	 * rendered string); an immutable string translates the CHARACTER position to a UTF-16
+	 * code-unit offset via {@code _cpoff} so a supplementary code point counts as one
+	 * indexed character.
+	 */
+	static void compileChar(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		List<LispVal> args = cons.toList();
+		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
+		JvmExprCompiler.compileExpr(args.get(2), ctx, className);
+		// An index that is no integer is CHAR's / SCHAR's type-error, named by the
+		// operator's wrapper (JvmOperandTypeRuntime).
+		ctx.body.invokestatic(ctx.numOp(JvmOperandTypeRuntime.CK_IDX));
+		JvmEmitHelper.unboxLong(ctx);
+		ctx.body.l2i();
+		// A string that is no string is CHAR's / SCHAR's type-error too: _charRef throws
+		// the unnamed report, the operator's wrapper names it.
+		ctx.body.invokestatic(ctx.wrapForOperator(JvmStringIndexRuntimeBuilder.CHARREF_METHOD,
+				JvmStringIndexRuntimeBuilder.CHARREF_DESC, JvmEmitHelper.selfMethod(ctx, className,
+						JvmStringIndexRuntimeBuilder.CHARREF_METHOD, JvmStringIndexRuntimeBuilder.CHARREF_DESC)));
+		JvmEmitHelper.boxCodePoint(ctx);
+	}
+
+	/**
+	 * Compiles {@code (%check-string x 'op)}: {@code x}, left on the stack when it is a
+	 * string (the shared {@code _pStringp} test) and otherwise {@code op}'s
+	 * {@code STRING} type-error ({@link #emitSiteTypeError}).
+	 */
+	static void compileCheckString(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		JvmExprCompiler.compileExpr(cons.toList().get(1), ctx, className);
+		ctx.body.dup();
+		JvmEmitHelper.emitSharedCall(ctx, className, "_pStringp", 1,
+				helper -> JvmStringpCompiler.emitStringpCheck(helper, 0));
+		emitSiteTypeError(cons, ctx, className, Opcode.IFNONNULL, OperandTypes.Kind.STRING);
+	}
+
+	/**
+	 * Compiles {@code (%check-character x 'op)}: {@code x}, left on the stack when it is
+	 * a character ({@code int[]}) and otherwise {@code op}'s {@code CHARACTER} type-error
+	 * ({@link #emitSiteTypeError}).
+	 */
+	static void compileCheckCharacter(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		JvmExprCompiler.compileExpr(cons.toList().get(1), ctx, className);
+		ctx.body.dup().instanceOf(JvmEmitHelper.charArrayClass(ctx));
+		emitSiteTypeError(cons, ctx, className, Opcode.IFNE, OperandTypes.Kind.CHARACTER);
+	}
+
+	/**
+	 * Compiles {@code (%operand-type-error x 'op 'kind)}: {@code kind}'s report of
+	 * {@code x}, {@code _teRaw} named by {@code _opTypeErr} after {@code op} (unnamed
+	 * when it is no named operator), thrown here. Nothing follows the throw: the form
+	 * never answers, as {@code %error} never does. In {@code %check-sequence-runtime}'s
+	 * body the operator is a run-time token instead, the reported name as a string or nil
+	 * ({@link #compileCheckSequence}), and the rename happens only when it is a name.
+	 */
+	static void compileOperandTypeError(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		LispMacroExpander.OperandTypeErrorForm form = LispMacroExpander.OperandTypeErrorForm.of(cons);
+		LispVal operatorForm = form.operatorForm();
+		int tokenSlot = -1;
+		if (operatorForm != null) {
+			JvmExprCompiler.compileExpr(operatorForm, ctx, className);
+			tokenSlot = ctx.allocTemp();
+			ctx.body.astore(tokenSlot);
+		}
+		JvmExprCompiler.compileExpr(cons.toList().get(1), ctx, className);
+		LispCons compoundType = form.compoundType();
+		if (compoundType != null) {
+			// A compound type is the report's own, printed and carried as it is: _teOf,
+			// whose report the rename below keeps verbatim.
+			emitTypeValue(compoundType, ctx);
+			ctx.body.invokestatic(JvmEmitHelper.selfMethod(ctx, className, JvmOperandTypeRuntime.TE_OF,
+					JvmOperandTypeRuntime.TE_OF_DESC));
+		}
+		else {
+			JvmEmitHelper.compileUnspelledLiteral(
+					OperandTypes.Kind.named(java.util.Objects.requireNonNull(form.kind())).typeName(), ctx);
+			ctx.body.invokestatic(JvmEmitHelper.selfMethod(ctx, className, JvmOperandTypeRuntime.TE_RAW,
+					JvmOperandTypeRuntime.TE_RAW_DESC));
+		}
+		if (tokenSlot >= 0) {
+			// nil: the raw report, thrown as it is; a name: renamed, then thrown.
+			ctx.body.aload(tokenSlot);
+			MethodCode.Label named = ctx.body.newLabel();
+			ctx.body.ifnonnull(named);
+			ctx.body.athrow();
+			ctx.body.labelBinding(named);
+			ctx.body.aload(tokenSlot).checkcast(ctx.stringClass);
+			emitOpTypeErr(ctx, className, OperandTypes.FUNNEL_TYPE);
+			ctx.body.athrow();
+			return;
+		}
+		String operator = OperandTypes.reportedOperator(form.operator());
+		if (operator != null) {
+			JvmEmitHelper.compileUnspelledLiteral(operator, ctx);
+			// The report names the operator's own type, as its wrappers do: the
+			// funnel-typed rename reads a NUMBER kind as REAL, so a NUMBER operator
+			// ((+ x)'s one-argument check) passes its type, and every other keeps the
+			// funnel-typed rename, whose kind is the type it names.
+			boolean numberTyped = OperandTypes.Kind.NUMBER.name().equals(OperandTypes.operatorType(operator));
+			emitOpTypeErr(ctx, className, numberTyped ? OperandTypes.Kind.NUMBER.name() : OperandTypes.FUNNEL_TYPE);
+		}
+		ctx.body.athrow();
+	}
+
+	// Pushes a compound type as the Lisp value it spells: a symbol its name (unspelled,
+	// as the kinds are), an integer a Long, a list a chain of Object[2] conses.
+	private static void emitTypeValue(LispVal type, JvmLispCompiler.Ctx ctx) {
+		if (type instanceof LispCons list) {
+			List<LispVal> elements = list.toList();
+			for (LispVal element : elements) {
+				ctx.body.iconst_2().anewarray(ctx.objectClass).dup().iconst_0();
+				emitTypeValue(element, ctx);
+				ctx.body.aastore().dup().iconst_1();
+			}
+			ctx.body.aconst_null();
+			for (int i = 0; i < elements.size(); i++) {
+				ctx.body.aastore();
+			}
+		}
+		else if (type instanceof LispSymbol symbol) {
+			JvmEmitHelper.compileUnspelledLiteral(symbol.name(), ctx);
+		}
+		else if (type instanceof LispInteger n) {
+			JvmEmitHelper.compileLong(n.value(), ctx);
+		}
+		else {
+			throw new IllegalArgumentException("not a type: " + type.print());
+		}
+	}
+
+	// With the raw report and the operator's name on the stack: the rename under the
+	// operator's type (FUNNEL_TYPE: the report's own kind).
+	private static void emitOpTypeErr(JvmLispCompiler.Ctx ctx, String className, String type) {
+		JvmEmitHelper.compileUnspelledLiteral(type, ctx);
+		ctx.body.invokestatic(JvmEmitHelper.selfMethod(ctx, className, JvmOperandTypeRuntime.OP_TYPE_ERR,
+				JvmOperandTypeRuntime.OP_TYPE_ERR_DESC));
+	}
+
+	/**
+	 * Compiles {@code (%check-sequence x 'op)}: a direct call of the program's shared
+	 * {@code %check-sequence-runtime} with the operator's token -- the name the report
+	 * gives it as an unspelled string, or null -- and the inline check when the program
+	 * carries no such defun. The token is no quoted symbol: a quoted function name keeps
+	 * that function's #' wrapper from the shaker.
+	 */
+	static void compileCheckSequence(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		JvmLispCompiler.FunctionInfo helper = ctx.functions.get(LispNames.CHECK_SEQUENCE_RUNTIME);
+		if (helper == null) {
+			JvmExprCompiler.compileExpr(LispMacroExpander.checkSequenceInline(cons), ctx, className);
+			return;
+		}
+		String reported = OperandTypes.reportedOperator(LispMacroExpander.checkSequenceOperator(cons));
+		LispVal value = cons.toList().get(1);
+		JvmPhysicalArgs.emit(ctx, className, helper,
+				List.of(() -> JvmExprCompiler.compileExpr(value, ctx, className), () -> {
+					if (reported == null) {
+						ctx.body.aconst_null();
+					}
+					else {
+						JvmEmitHelper.compileUnspelledLiteral(reported, ctx);
+					}
+				}));
+		JvmTailBounce.emitDirectCall(helper, null, ctx, className);
+	}
+
+	/**
+	 * Compiles {@code (%check-stream x 'op designator-p)}: a call to the shared
+	 * {@code %check-stream-runtime} with the operator's name as its token, as
+	 * {@link #compileCheckSequence} does -- and, where a stream can be a value, what the
+	 * operator needs of it -- and the value alone in a class that holds no such defun.
+	 */
+	static void compileCheckStream(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		List<LispVal> parts = cons.toList();
+		JvmLispCompiler.FunctionInfo helper = ctx.functions.get(LispNames.CHECK_STREAM_RUNTIME);
+		if (helper == null) {
+			JvmExprCompiler.compileExpr(parts.get(1), ctx, className);
+			return;
+		}
+		String operator = LispMacroExpander.checkListOperator(cons);
+		List<Runnable> args = new java.util.ArrayList<>(
+				List.of(() -> JvmExprCompiler.compileExpr(parts.get(1), ctx, className),
+						() -> JvmEmitHelper.compileUnspelledLiteral(operator, ctx),
+						() -> JvmExprCompiler.compileExpr(parts.get(3), ctx, className)));
+		if (ctx.usesStreamValues) {
+			args.add(() -> JvmExprCompiler.compileExpr(StreamOperandChecks.neededAbilities(operator), ctx, className));
+		}
+		JvmPhysicalArgs.emit(ctx, className, helper, args);
+		JvmTailBounce.emitDirectCall(helper, null, ctx, className);
+	}
+
+	/**
+	 * Emits a check's miss over the value under its test's result: {@code ifPass} skips
+	 * it, else {@code kind}'s report of the value -- {@code _teRaw} named by
+	 * {@code _opTypeErr} after the check's operator, unnamed without one -- thrown here.
+	 * Only a string store checks this way, so the site carries the throw rather than a
+	 * wrapper.
+	 */
+	private static void emitSiteTypeError(LispCons cons, JvmLispCompiler.Ctx ctx, String className, Opcode ifPass,
+			OperandTypes.Kind kind) {
+		MethodCode.Label pass = ctx.body.newLabel();
+		ctx.body.branch(ifPass, pass);
+		JvmEmitHelper.compileUnspelledLiteral(kind.name(), ctx);
+		ctx.body.invokestatic(JvmEmitHelper.selfMethod(ctx, className, JvmOperandTypeRuntime.TE_RAW,
+				JvmOperandTypeRuntime.TE_RAW_DESC));
+		String operator = LispMacroExpander.checkOperator(cons);
+		if (operator != null) {
+			JvmEmitHelper.compileUnspelledLiteral(operator, ctx);
+			JvmEmitHelper.compileUnspelledLiteral(OperandTypes.FUNNEL_TYPE, ctx);
+			ctx.body.invokestatic(JvmEmitHelper.selfMethod(ctx, className, JvmOperandTypeRuntime.OP_TYPE_ERR,
+					JvmOperandTypeRuntime.OP_TYPE_ERR_DESC));
+		}
+		ctx.body.athrow();
+		ctx.body.labelBinding(pass);
+	}
+
+	/**
+	 * Compiles {@code (%check-index x 'op)}: {@code x} through {@code _ckIdx} under
+	 * {@code op}'s wrapper -- unnamed when {@code op} is nil.
+	 */
+	static void compileCheckIndex(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		JvmExprCompiler.compileExpr(cons.toList().get(1), ctx, className);
+		@Nullable String outer = ctx.operator;
+		ctx.operator = LispMacroExpander.checkOperator(cons);
+		try {
+			ctx.body.invokestatic(ctx.numOp(JvmOperandTypeRuntime.CK_IDX));
+		}
+		finally {
+			ctx.operator = outer;
+		}
+	}
+
+	/** {@code (char-code ch)}: the code point as an integer. */
+	static void compileCharCode(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		pushCheckedCode(cons.toList().get(1), ctx, className, false);
+		ctx.body.i2l();
+		JvmEmitHelper.boxLong(ctx);
+	}
+
+	/**
+	 * {@code (char-int ch)}: the same code point {@code char-code} answers -- with no
+	 * implementation-defined attributes beyond it, char-int has nothing else to encode.
+	 */
+	static void compileCharInt(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		pushCheckedCode(cons.toList().get(1), ctx, className, false);
+		ctx.body.i2l();
+		JvmEmitHelper.boxLong(ctx);
+	}
+
+	/** {@code (code-char n)}: the character with the given code point. */
+	static void compileCodeChar(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		List<LispVal> args = cons.toList();
+		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
+		JvmEmitHelper.unboxLong(ctx);
+		ctx.body.l2i();
+		JvmEmitHelper.boxCodePoint(ctx);
+	}
+
+	/**
+	 * {@code (char-upcase ch)}. Full-Unicode fold via {@code Character.toUpperCase(int)}.
+	 */
+	static void compileUpcase(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		compileCaseFold(cons, ctx, className, "toUpperCase");
+	}
+
+	/**
+	 * {@code (char-downcase ch)}. Full-Unicode fold via
+	 * {@code Character.toLowerCase(int)}.
+	 */
+	static void compileDowncase(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		compileCaseFold(cons, ctx, className, "toLowerCase");
+	}
+
+	private static void compileCaseFold(LispCons cons, JvmLispCompiler.Ctx ctx, String className, String method) {
+		pushCheckedCode(cons.toList().get(1), ctx, className, false);
+		// Character.toUpperCase(int)/toLowerCase(int) take a code point and return a code
+		// point; a mapping that would expand to multiple code units lives on the String
+		// overload, so this is the right level for a single-character fold.
+		ctx.body.invokestatic(JvmEmitHelper.characterMethod(ctx, method, "(I)I"));
+		JvmEmitHelper.boxCodePoint(ctx);
+	}
+
+	/** {@code (characterp x)}: {@code instanceof int[]}. */
+	static void compileCharacterp(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		List<LispVal> args = cons.toList();
+		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
+		ctx.body.instanceOf(JvmEmitHelper.charArrayClass(ctx));
+		JvmEmitHelper.emitBoolFromInt(ctx);
+	}
+
+	/** {@code (alpha-char-p ch)}: {@code Character.isLetter(int)} on the code point. */
+	static void compileAlphaCharP(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		pushCheckedCode(cons.toList().get(1), ctx, className, false);
+		ctx.body.invokestatic(JvmEmitHelper.characterMethod(ctx, "isLetter", "(I)Z"));
+		JvmEmitHelper.emitBoolFromInt(ctx);
+	}
+
+	/**
+	 * {@code (lower-case-p ch)}: whether upcasing changes the code point, as the
+	 * interpreter's built-in answers.
+	 */
+	static void compileLowerCaseP(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		compileCaseTest(cons, ctx, className, "toUpperCase");
+	}
+
+	/**
+	 * {@code (upper-case-p ch)}: whether downcasing changes the code point, as the
+	 * interpreter's built-in answers.
+	 */
+	static void compileUpperCaseP(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		compileCaseTest(cons, ctx, className, "toLowerCase");
+	}
+
+	// The checked code point against its fold through method: t when they differ.
+	private static void compileCaseTest(LispCons cons, JvmLispCompiler.Ctx ctx, String className, String method) {
+		List<LispVal> args = cons.toList();
+		if (args.size() != 2) {
+			throw new IllegalArgumentException(((LispSymbol) cons.car()).name() + " expects exactly one argument");
+		}
+		pushCheckedCode(args.get(1), ctx, className, false);
+		ctx.body.dup().invokestatic(JvmEmitHelper.characterMethod(ctx, method, "(I)I"));
+		ctx.body.isub();
+		JvmEmitHelper.emitBoolFromInt(ctx);
+	}
+
+	private static boolean isRadix(long value) {
+		return value >= OperandTypes.RADIX_MIN && value <= OperandTypes.RADIX_MAX;
+	}
+
+	/** {@code (digit-char-p ch [radix])}: the digit weight, or nil. */
+	static void compileDigitCharP(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		List<LispVal> args = cons.toList();
+		pushCheckedCode(args.get(1), ctx, className, false);
+		if (args.size() < 3) {
+			JvmEmitHelper.emitIntConst(ctx, 10);
+		}
+		else if (args.get(2) instanceof LispInteger radix && isRadix(radix.value())) {
+			JvmEmitHelper.emitIntConst(ctx, (int) radix.value());
+		}
+		else {
+			// A radix that is no integer in 2..36 is DIGIT-CHAR-P's (INTEGER 2 36)
+			// type-error.
+			JvmExprCompiler.compileExpr(args.get(2), ctx, className);
+			ctx.body.invokestatic(ctx.numOp(JvmOperandTypeRuntime.CK_RADIX));
+		}
+		ctx.body.invokestatic(JvmEmitHelper.characterMethod(ctx, "digit", "(II)I"));
+		// weight on stack: if weight < 0 return nil, else Long.valueOf(weight)
+		ctx.body.dup();
+		MethodCode.Label ifNotDigit = ctx.body.newLabel();
+		ctx.body.iflt(ifNotDigit);
+		ctx.body.i2l();
+		JvmEmitHelper.boxLong(ctx);
+		MethodCode.Label gotoEnd = ctx.body.newLabel();
+		ctx.body.goto_(gotoEnd);
+		ctx.body.labelBinding(ifNotDigit);
+		ctx.body.pop(); // discard the -1
+		ctx.body.aconst_null();
+		ctx.body.labelBinding(gotoEnd);
+	}
+
+	/** {@code (char= ...)} variadic equality. */
+	static void compileEq(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		compileChain(cons, ctx, className, Opcode.IF_ICMPNE, false, false);
+	}
+
+	/** {@code (char< ...)} variadic strictly-increasing comparison. */
+	static void compileLt(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		compileChain(cons, ctx, className, Opcode.IF_ICMPGE, false, false);
+	}
+
+	/** {@code (char<= ...)} variadic non-decreasing comparison. */
+	static void compileLe(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		compileChain(cons, ctx, className, Opcode.IF_ICMPGT, false, false);
+	}
+
+	/** {@code (char> ...)} variadic strictly-decreasing comparison. */
+	static void compileGt(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		compileChain(cons, ctx, className, Opcode.IF_ICMPLE, false, false);
+	}
+
+	/** {@code (char>= ...)} variadic non-increasing comparison. */
+	static void compileGe(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		compileChain(cons, ctx, className, Opcode.IF_ICMPLT, false, false);
+	}
+
+	/** {@code (char/= ...)}: every PAIR of arguments distinct, not just adjacent ones. */
+	static void compileNe(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		compileChain(cons, ctx, className, Opcode.IF_ICMPEQ, false, true);
+	}
+
+	/** {@code (char-equal ...)}: {@code char=} over the downcased code points. */
+	static void compileEqual(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		compileChain(cons, ctx, className, Opcode.IF_ICMPNE, true, false);
+	}
+
+	// Emits a variadic character comparison: true only when every compared pair --
+	// adjacent ones, or all of them with allPairs -- satisfies the relation. failOpcode
+	// is the branch to the nil result when a pair fails it. Every argument is evaluated
+	// and checked before any pair is compared, the lone argument of a one-argument call
+	// included, so a non-character is the comparison's CHARACTER type-error wherever it
+	// stands (.kb/error-handling.md, "One argument is still checked").
+	private static void compileChain(LispCons cons, JvmLispCompiler.Ctx ctx, String className, Opcode failOpcode,
+			boolean fold, boolean allPairs) {
+		List<LispVal> args = cons.toList();
+		int n = args.size() - 1;
+		if (n < 1) {
+			throw new IllegalArgumentException(((LispSymbol) cons.car()).name() + " expects at least one argument");
+		}
+		if (n == 1) {
+			pushCheckedCode(args.get(1), ctx, className, fold);
+			ctx.body.pop();
+			JvmEmitHelper.compileTrue(ctx);
+			return;
+		}
+		MethodCode.Label fail = ctx.body.newLabel();
+		if (n == 2) {
+			pushCheckedCode(args.get(1), ctx, className, fold);
+			pushCheckedCode(args.get(2), ctx, className, fold);
+			ctx.body.branch(failOpcode, fail);
+		}
+		else {
+			int[] codes = new int[n];
+			for (int i = 0; i < n; i++) {
+				pushCheckedCode(args.get(i + 1), ctx, className, fold);
+				codes[i] = ctx.allocTemp();
+				ctx.body.istore(codes[i]);
+			}
+			for (int i = 0; i + 1 < n; i++) {
+				for (int j = i + 1; j < (allPairs ? n : i + 2); j++) {
+					ctx.body.iload(codes[i]).iload(codes[j]);
+					ctx.body.branch(failOpcode, fail);
+				}
+			}
+		}
+		JvmEmitHelper.compileTrue(ctx);
+		MethodCode.Label gotoEnd = ctx.body.newLabel();
+		ctx.body.goto_(gotoEnd);
+		ctx.body.labelBinding(fail);
+		ctx.body.aconst_null();
+		ctx.body.labelBinding(gotoEnd);
+	}
+
+	// Pushes the int code point of a character built-in's argument -- downcased with
+	// fold -- a literal's as the constant it is; any other through _ckChr, under the
+	// operator's wrapper, so a non-character is its named type-error rather than a
+	// failed cast.
+	private static void pushCheckedCode(LispVal arg, JvmLispCompiler.Ctx ctx, String className, boolean fold) {
+		if (arg instanceof LispChar c) {
+			JvmEmitHelper.emitIntConst(ctx, fold ? Character.toLowerCase(c.codePoint()) : c.codePoint());
+			return;
+		}
+		JvmExprCompiler.compileExpr(arg, ctx, className);
+		ctx.body.invokestatic(ctx.numOp(JvmOperandTypeRuntime.CK_CHR));
+		JvmEmitHelper.unboxCodePoint(ctx);
+		if (fold) {
+			ctx.body.invokestatic(JvmEmitHelper.characterMethod(ctx, "toLowerCase", "(I)I"));
+		}
+	}
+
+}

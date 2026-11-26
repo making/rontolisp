@@ -1,0 +1,1 @@
+<project><modelVersion>4.0.0</modelVersion><groupId>test.xml</groupId><artifactId>no-decl</artifactId><version>1</version><dependencies><dependency><groupId>test.lib</groupId><artifactId>a</artifactId><version>1</version></dependency></dependencies></project>

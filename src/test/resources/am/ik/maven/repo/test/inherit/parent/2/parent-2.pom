@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <parent><groupId>test.inherit</groupId><artifactId>grandparent</artifactId><version>1</version></parent>
+  <groupId>test.inherit</groupId>
+  <artifactId>parent</artifactId>
+  <version>2</version>
+  <packaging>pom</packaging>
+  <properties>
+    <lib.version>1.1</lib.version>
+    <parent.only>p</parent.only>
+  </properties>
+  <dependencies>
+      <dependency><groupId>test.lib</groupId><artifactId>p-dep</artifactId><version>${project.version}</version></dependency>
+      <dependency><groupId>test.lib</groupId><artifactId>dup</artifactId><version>1.0</version><scope>test</scope></dependency>
+      <dependency><groupId>test.lib</groupId><artifactId>p-only</artifactId><version>${parent.only}</version></dependency>
+  </dependencies>
+  <dependencyManagement>
+    <dependencies>
+      <dependency><groupId>test.lib</groupId><artifactId>managed-a</artifactId><version>2.1</version></dependency>
+    </dependencies>
+  </dependencyManagement>
+</project>

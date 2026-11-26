@@ -1,0 +1,85 @@
+# REPL
+
+ファイル引数なしで `rontolisp` を実行すると、対話的な read-eval-print
+ループ（REPL）が起動します。1 つずつ式を読み込み、ツリーウォークインタプリタで
+評価して結果を表示します。言語を試すのに最も手早い方法です。
+
+```bash
+rontolisp
+```
+
+```
+CL-USER> (+ 1 2)
+3
+CL-USER> (* 3 (+ 4 5))
+27
+CL-USER> (defun fact (n) (if (= n 0) 1 (* n (fact (- n 1)))))
+FACT
+CL-USER> (fact 10)
+3628800
+CL-USER> (quit)
+```
+
+各トップレベルフォームは完成するとすぐに評価され、その値がエコーバックされます。
+定義は入力をまたいで保持されます。あるプロンプトで入力した `defun`、`defvar`、`setq`
+は以降のすべてのプロンプトで参照できるため、セッション内で段階的に状態を構築できます。
+同じ REPL は SLIME を通じて Emacs からも使えます: [SWANK (SLIME、SLY、Lem)](swank.md)。
+
+プロンプトには[現在のパッケージ](../reference/packages.md)の名前が出ます。
+Common Lisp の REPL が `CL-USER>` と表示するのと同じものです。行ごとに読み直されるため、
+あるプロンプトで入力した `(in-package ...)` は次のプロンプトに反映されます。
+裸のシンボルがどのパッケージに読み込まれるかが見えないままにならない、ということです。
+
+```console
+CL-USER> (defpackage :app (:use :cl))
+APP
+CL-USER> (in-package :app)
+:APP
+APP> (defun greet () "hi")
+APP::GREET
+APP> (in-package :cl-user)
+:CL-USER
+CL-USER> (app::greet)
+"hi"
+```
+
+[多値](../reference/functions/values.md)を返すフォームは、すべての値を
+1 行ずつエコーバックします。`floor` の商と剰余、`gethash` の値と存在フラグなどです。
+`(values)` は値を 1 つも返さないため、何も表示されません。
+
+```console
+CL-USER> (floor 10 3)
+3
+1
+CL-USER> (gethash 'b (make-hash-table))
+NIL
+NIL
+CL-USER> (values 1 2 3)
+1
+2
+3
+CL-USER> (values)
+CL-USER>
+```
+
+プロンプトは複数行入力を受け付けます。式の括弧が閉じていない場合、REPL は括弧が
+閉じるまで読み込みを続け、それから評価します。また、行編集、上下の矢印キーによる
+履歴ナビゲーション、Ctrl-C による現在の入力のキャンセルもサポートします。
+終了するには `(quit)` と入力するか Ctrl-D を押します。
+
+入力を打ち込む代わりにパイプで与えると、REPL はスクリプト実行器になります。プロンプトは出さず、
+値とプログラム自身の出力だけを書き、エラーは標準エラーへ報告し、失敗したフォームがあれば
+入力の終わりでステータス 1 で終了します。`(uiop:quit code)` はその場でそのステータスで終了します。
+
+```console
+$ printf '(+ 1 2)\n(car 1)\n(* 2 3)\n' | rontolisp 2>/dev/null; echo "exit=$?"
+3
+6
+exit=1
+```
+
+ここで簡単な式を試してみてください。
+
+```lisp
+(let ((x 10) (y 20)) (+ x y)) ; => 30
+```

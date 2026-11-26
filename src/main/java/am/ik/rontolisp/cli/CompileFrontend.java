@@ -1,0 +1,1086 @@
+package am.ik.rontolisp.cli;
+
+import java.util.List;
+import java.util.Objects;
+
+import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.compiler.CompileTimeBoundp;
+import am.ik.rontolisp.compiler.EvalReferences;
+import am.ik.rontolisp.compiler.CurrentPackageIntern;
+import am.ik.rontolisp.compiler.HostBoundary;
+import am.ik.rontolisp.compiler.JavaClassLookup;
+import am.ik.rontolisp.compiler.WitExportDirective;
+import am.ik.rontolisp.eval.AppKitLibrary;
+import am.ik.rontolisp.eval.DistClient;
+import am.ik.rontolisp.eval.EnvironmentLibrary;
+import am.ik.rontolisp.eval.ExitLibrary;
+import am.ik.rontolisp.eval.LoggingLibrary;
+import am.ik.rontolisp.eval.FfiInterop;
+import am.ik.rontolisp.eval.CheckpointLibrary;
+import am.ik.rontolisp.eval.ClojureLibrary;
+import am.ik.rontolisp.eval.ClojureProgramLowering;
+import am.ik.rontolisp.eval.GeomLibrary;
+import am.ik.rontolisp.eval.GgufLibrary;
+import am.ik.rontolisp.eval.GrayStreamsLibrary;
+import am.ik.rontolisp.eval.HostFetchLibrary;
+import am.ik.rontolisp.eval.HostTimerLibrary;
+import am.ik.rontolisp.eval.LocalNicknameRead;
+import am.ik.rontolisp.eval.HttpLibrary;
+import am.ik.rontolisp.eval.HttpReactorInliner;
+import am.ik.rontolisp.eval.HttpReactorLibrary;
+import am.ik.rontolisp.eval.HttpServeLibrary;
+import am.ik.rontolisp.eval.HttpServerLibrary;
+import am.ik.rontolisp.eval.InflateLibrary;
+import am.ik.rontolisp.eval.LocalTimeLibrary;
+import am.ik.rontolisp.eval.JsonLibrary;
+import am.ik.rontolisp.eval.SafetensorsLibrary;
+import am.ik.rontolisp.eval.LibraryDefunPruner;
+import am.ik.rontolisp.eval.LinalgLibrary;
+import am.ik.rontolisp.eval.LinkedDefinitions;
+import am.ik.rontolisp.eval.LispPreludeLibrary;
+import am.ik.rontolisp.eval.MetalLibrary;
+import am.ik.rontolisp.eval.ObjcLibrary;
+import am.ik.rontolisp.eval.ObjcNativeLibrary;
+import am.ik.rontolisp.eval.SceneLibrary;
+import am.ik.rontolisp.eval.RegexLibrary;
+import am.ik.rontolisp.eval.SchemeLibrary;
+import am.ik.rontolisp.eval.SocketsLibrary;
+import am.ik.rontolisp.eval.SourceLanguage;
+import am.ik.rontolisp.eval.SourceStandards;
+import am.ik.rontolisp.eval.SourceLoader;
+import am.ik.rontolisp.eval.JavaLibrary;
+import am.ik.rontolisp.eval.StarlarkLibrary;
+import am.ik.rontolisp.eval.StdinLibrary;
+import am.ik.rontolisp.eval.TlsLibrary;
+import am.ik.rontolisp.eval.TokenizersLibrary;
+import am.ik.rontolisp.eval.TorchLibrary;
+import am.ik.rontolisp.eval.UnicodeNormalizationLibrary;
+import am.ik.rontolisp.eval.UnreadCharLibrary;
+import am.ik.rontolisp.eval.UriLibrary;
+import am.ik.rontolisp.eval.UrlLibrary;
+import am.ik.rontolisp.eval.UserMacroExpander;
+import am.ik.rontolisp.eval.UsocketLibrary;
+import am.ik.rontolisp.eval.VecLibrary;
+import am.ik.rontolisp.eval.WaitForLibrary;
+import am.ik.rontolisp.eval.WitExportInliner;
+import am.ik.rontolisp.eval.WitImportInliner;
+import am.ik.rontolisp.eval.WitLibrary;
+import am.ik.rontolisp.macro.LispMacroExpander;
+import am.ik.rontolisp.reader.Features;
+import org.jspecify.annotations.Nullable;
+
+/**
+ * The compile path's shared FRONT END: everything between the source text and the point
+ * where a backend takes over -- the read (with the target's feature set), the
+ * {@code (load ...)} inlining, user-macro expansion, the whole library splice chain, the
+ * WIT directive lowerings, the compile-time {@code boundp} fold and the library
+ * tree-shaker.
+ * <p>
+ * It is one class rather than a stretch of {@link RontoLispCli} because the passes are
+ * ORDER-CRITICAL and are needed by more than one caller: the CLI's four backends, and
+ * {@link JvmSourceCompiler}, through which an embedder (the Maven plugin) compiles a
+ * library without a command line. Splitting it per backend would duplicate the ordering,
+ * which is exactly the thing that must not drift.
+ */
+final class CompileFrontend {
+
+	private CompileFrontend() {
+	}
+
+	/**
+	 * What the front end hands the backend: the fully expanded program, plus the two
+	 * facts about it a backend re-reads and the feature set it was read with.
+	 *
+	 * @param program the expanded, spliced and pruned top-level forms
+	 * @param serve whether the program is a {@code rontolisp:http-handler} component
+	 * @param witWorld whether the program declared a {@code rontolisp:wit-export} world
+	 * @param reactor whether such a world makes the program a reactor ({@code :reactor
+	 * t}): its exports are its entry points
+	 * @param features the feature set the program was read with
+	 * @param runTimeImage what a JVM class carries to lower the program again as it runs
+	 * ({@link RunTimeImage#encode()}), or {@code null} for a program that does not
+	 * @param lowered whether the program is, or holds, a lowered language's, written for
+	 * Common Lisp rather than for the scalar backend's dialect, which compiles it exact
+	 * ({@code NoGcWasmCompiler.Builder#exact}); asked of a {@code --no-gc} compile alone
+	 */
+	record Result(List<LispVal> program, boolean serve, boolean witWorld, boolean reactor, Features features,
+			@Nullable String runTimeImage, boolean lowered) {
+
+		Result(List<LispVal> program, boolean serve, boolean witWorld, boolean reactor, Features features,
+				boolean lowered) {
+			this(program, serve, witWorld, reactor, features, null, lowered);
+		}
+
+		/**
+		 * This result for a program a JVM class lowers again as it runs.
+		 * @param image the encoded run-time image
+		 * @return the result
+		 */
+		Result lowersAtRunTime(String image) {
+			return new Result(this.program, this.serve, this.witWorld, this.reactor, this.features, image,
+					this.lowered);
+		}
+
+		/**
+		 * This result for a program whose entry source is a lowered language's.
+		 * @return the result
+		 */
+		Result ofLoweredSource() {
+			return new Result(this.program, this.serve, this.witWorld, this.reactor, this.features, this.runTimeImage,
+					true);
+		}
+
+	}
+
+	/**
+	 * What the front end reads: the entry source and where its {@code (load ...)}s and
+	 * ASDF systems come from, plus the {@link Options} the whole pipeline runs under.
+	 *
+	 * @param source the program text
+	 * @param entryFile the path the text was read from, for diagnostics and, for a Common
+	 * Lisp program, its {@code *load-pathname*} / {@code *load-truename*}
+	 * @param sourceLanguage the {@code --source-language} override naming the entry
+	 * source's language, or {@code null} to pick it from the entry file's extension
+	 * @param standards what every source file is read against ({@code --scheme-standard})
+	 * @param systemPath the ASDF system search path
+	 * @param dists the Quicklisp-format distributions
+	 * @param declaredFeatures the read-time features the user declared
+	 * ({@code --feature})
+	 * @param options the target and pass options
+	 * @param javaClassLoader the program's Java class loader, whose classes a Clojure
+	 * host form lowers against ({@link SourceLoader#javaClassLoader()})
+	 * @param javaClassLookup the classes a Clojure host form lowers against where this
+	 * process cannot reflect that loader's classes as a JVM does (a native image), or
+	 * {@code null} to reflect ({@link SourceLoader#javaClassLookup()})
+	 * @param javaClassPath where the jars a Clojure program's dependencies bring join the
+	 * program's Java class path -- the one that loader reads
+	 * ({@link SourceLoader#addJavaClassPath})
+	 */
+	record Request(String source, @Nullable String entryFile, @Nullable String sourceLanguage,
+			SourceStandards standards, List<String> systemPath, DistClient dists, List<String> declaredFeatures,
+			Options options, ClassLoader javaClassLoader, @Nullable JavaClassLookup javaClassLookup,
+			SourceLoader.JavaClassPathSink javaClassPath) {
+
+		static Builder builder() {
+			return new Builder();
+		}
+
+		static final class Builder {
+
+			private @Nullable String source;
+
+			private @Nullable String entryFile;
+
+			private @Nullable String sourceLanguage;
+
+			private SourceStandards standards = SourceStandards.DEFAULT;
+
+			private List<String> systemPath = List.of();
+
+			private @Nullable DistClient dists;
+
+			private List<String> declaredFeatures = List.of();
+
+			private @Nullable Options options;
+
+			private ClassLoader javaClassLoader = SourceLoader.fileSystem().javaClassLoader();
+
+			private @Nullable JavaClassLookup javaClassLookup;
+
+			private SourceLoader.JavaClassPathSink javaClassPath = SourceLoader.JavaClassPathSink.NONE;
+
+			private Builder() {
+			}
+
+			Builder javaClassLoader(ClassLoader javaClassLoader) {
+				this.javaClassLoader = javaClassLoader;
+				return this;
+			}
+
+			Builder javaClassLookup(@Nullable JavaClassLookup javaClassLookup) {
+				this.javaClassLookup = javaClassLookup;
+				return this;
+			}
+
+			Builder javaClassPath(SourceLoader.JavaClassPathSink javaClassPath) {
+				this.javaClassPath = javaClassPath;
+				return this;
+			}
+
+			Builder source(String source) {
+				this.source = source;
+				return this;
+			}
+
+			Builder entryFile(@Nullable String entryFile) {
+				this.entryFile = entryFile;
+				return this;
+			}
+
+			Builder sourceLanguage(@Nullable String sourceLanguage) {
+				this.sourceLanguage = sourceLanguage;
+				return this;
+			}
+
+			Builder standards(SourceStandards standards) {
+				this.standards = standards;
+				return this;
+			}
+
+			Builder systemPath(List<String> systemPath) {
+				this.systemPath = systemPath;
+				return this;
+			}
+
+			Builder dists(DistClient dists) {
+				this.dists = dists;
+				return this;
+			}
+
+			Builder declaredFeatures(List<String> declaredFeatures) {
+				this.declaredFeatures = declaredFeatures;
+				return this;
+			}
+
+			Builder options(Options options) {
+				this.options = options;
+				return this;
+			}
+
+			/**
+			 * Builds the request. {@code dists} defaults to the CLI's default
+			 * distribution client, which touches neither network nor disk unless the
+			 * program quickloads something.
+			 * @return the request
+			 */
+			Request build() {
+				return new Request(Objects.requireNonNull(this.source, "source is required"), this.entryFile,
+						this.sourceLanguage, this.standards, this.systemPath,
+						this.dists != null ? this.dists : DistClient.createDefault(List.of()), this.declaredFeatures,
+						Objects.requireNonNull(this.options, "options is required"), this.javaClassLoader,
+						this.javaClassLookup, this.javaClassPath);
+			}
+
+		}
+
+	}
+
+	/**
+	 * The target and the command-line switches the pass pipeline reads. Every flag
+	 * defaults to off and the host boundary to {@link HostBoundary#ENVELOPE}.
+	 *
+	 * @param baseDir the directory relative paths resolve against
+	 * @param wasm whether the target is a {@code .wasm} output
+	 * @param servlet whether the target is a {@code .war} output (JVM servlet mode)
+	 * @param dynamic {@code --dynamic}
+	 * @param component {@code --component}
+	 * @param noWasi {@code --no-wasi}
+	 * @param noGc {@code --no-gc}
+	 * @param hostFetch {@code --host-fetch}
+	 * @param hostSockets {@code --host-sockets}
+	 * @param hostTimer {@code --host-timer}
+	 * @param wasiLogging {@code --wasi-logging}
+	 * @param hostBoundary {@code --host-boundary}
+	 * @param reentrant {@code --reentrant}
+	 * @param noPrune {@code --no-prune}
+	 * @param nativePlatform {@code --native}'s target platform ({@link NativeTarget}), or
+	 * {@code null} for every other output: the wasm-GC module is the payload of a native
+	 * executable, whose runner answers the {@code rlhttp} imports of a fetch on every
+	 * platform and the {@code rlobjc} imports on {@link NativeTarget#OBJC_PLATFORM}
+	 * @param loader where the pipeline reads the files a program names (a WIT world): the
+	 * filesystem, or the browser playground's uploaded files
+	 */
+	record Options(@Nullable String baseDir, boolean wasm, boolean servlet, boolean dynamic, boolean component,
+			boolean noWasi, boolean noGc, boolean hostFetch, boolean hostSockets, boolean hostTimer,
+			boolean wasiLogging, HostBoundary hostBoundary, boolean reentrant, boolean noPrune,
+			@Nullable String nativePlatform, SourceLoader loader) {
+
+		/**
+		 * Whether the module is a native executable's -- the WASI command module a runner
+		 * hosts, which is what its imports need (no reactor, no component, no scalar
+		 * backend: the CLI refuses those beside {@code --native}).
+		 * @return whether the runner's imports are answered
+		 */
+		boolean runnerHosted() {
+			return this.nativePlatform != null && this.wasm && !this.noGc && !this.component && !this.noWasi;
+		}
+
+		static Builder builder() {
+			return new Builder();
+		}
+
+		static final class Builder {
+
+			private @Nullable String baseDir;
+
+			private boolean wasm;
+
+			private boolean servlet;
+
+			private boolean dynamic;
+
+			private boolean component;
+
+			private boolean noWasi;
+
+			private boolean noGc;
+
+			private boolean hostFetch;
+
+			private boolean hostSockets;
+
+			private boolean hostTimer;
+
+			private boolean wasiLogging;
+
+			private @Nullable HostBoundary hostBoundary;
+
+			private boolean reentrant;
+
+			private boolean noPrune;
+
+			private @Nullable String nativePlatform;
+
+			private @Nullable SourceLoader loader;
+
+			private Builder() {
+			}
+
+			Builder baseDir(@Nullable String baseDir) {
+				this.baseDir = baseDir;
+				return this;
+			}
+
+			Builder wasm(boolean wasm) {
+				this.wasm = wasm;
+				return this;
+			}
+
+			Builder servlet(boolean servlet) {
+				this.servlet = servlet;
+				return this;
+			}
+
+			Builder dynamic(boolean dynamic) {
+				this.dynamic = dynamic;
+				return this;
+			}
+
+			Builder component(boolean component) {
+				this.component = component;
+				return this;
+			}
+
+			Builder noWasi(boolean noWasi) {
+				this.noWasi = noWasi;
+				return this;
+			}
+
+			Builder noGc(boolean noGc) {
+				this.noGc = noGc;
+				return this;
+			}
+
+			Builder hostFetch(boolean hostFetch) {
+				this.hostFetch = hostFetch;
+				return this;
+			}
+
+			Builder hostSockets(boolean hostSockets) {
+				this.hostSockets = hostSockets;
+				return this;
+			}
+
+			Builder hostTimer(boolean hostTimer) {
+				this.hostTimer = hostTimer;
+				return this;
+			}
+
+			Builder wasiLogging(boolean wasiLogging) {
+				this.wasiLogging = wasiLogging;
+				return this;
+			}
+
+			/**
+			 * Sets the host boundary.
+			 * @param hostBoundary {@code --host-boundary}, or {@code null} for the
+			 * default
+			 * @return this builder
+			 */
+			Builder hostBoundary(@Nullable HostBoundary hostBoundary) {
+				this.hostBoundary = hostBoundary;
+				return this;
+			}
+
+			Builder reentrant(boolean reentrant) {
+				this.reentrant = reentrant;
+				return this;
+			}
+
+			Builder noPrune(boolean noPrune) {
+				this.noPrune = noPrune;
+				return this;
+			}
+
+			/**
+			 * Sets the {@code --native} target platform.
+			 * @param nativePlatform the platform, or {@code null} for a non-native output
+			 * @return this builder
+			 */
+			Builder nativePlatform(@Nullable String nativePlatform) {
+				this.nativePlatform = nativePlatform;
+				return this;
+			}
+
+			/**
+			 * Sets where the pipeline reads the files a program names.
+			 * @param loader the loader; the filesystem when never set
+			 * @return this builder
+			 */
+			Builder loader(SourceLoader loader) {
+				this.loader = loader;
+				return this;
+			}
+
+			Options build() {
+				return new Options(this.baseDir, this.wasm, this.servlet, this.dynamic, this.component, this.noWasi,
+						this.noGc, this.hostFetch, this.hostSockets, this.hostTimer, this.wasiLogging,
+						this.hostBoundary != null ? this.hostBoundary : HostBoundary.ENVELOPE, this.reentrant,
+						this.noPrune, this.nativePlatform,
+						this.loader != null ? this.loader : SourceLoader.fileSystem());
+			}
+
+		}
+
+	}
+
+	/**
+	 * The read, load-inlined top-level forms {@link #expand} starts from, with the
+	 * feature set and the standards they were read with.
+	 *
+	 * @param forms the top-level forms
+	 * @param features the feature set the forms were read with
+	 * @param standards the standards the forms were read against: a Scheme program's
+	 * run-time {@code eval} table follows them
+	 * @param lowersAtRunTime whether the forms are a Clojure program a JVM class lowers
+	 * again as it runs ({@link RunTimeImage}): it takes the whole run-time library, every
+	 * arm of it, and the class lowers its lowering verbs instead of refusing them
+	 * @param linked for the forms one lowering verb lowered to as such a class runs (a
+	 * FRAGMENT, {@link JvmRunTimeLowering}), what the classes it links against define: it
+	 * takes only the library definitions they lack, and its stream call sites take the
+	 * host's shapes; {@code null} for a whole program
+	 */
+	record Loaded(List<LispVal> forms, Features features, SourceStandards standards, boolean lowersAtRunTime,
+			@Nullable LinkedDefinitions linked) {
+
+		/**
+		 * Forms read against every language's default standard.
+		 * @param forms the top-level forms
+		 * @param features the feature set the forms were read with
+		 */
+		Loaded(List<LispVal> forms, Features features) {
+			this(forms, features, SourceStandards.DEFAULT);
+		}
+
+		/**
+		 * Forms that do not lower as the program runs.
+		 * @param forms the top-level forms
+		 * @param features the feature set the forms were read with
+		 * @param standards what the forms were read against
+		 */
+		Loaded(List<LispVal> forms, Features features, SourceStandards standards) {
+			this(forms, features, standards, false, null);
+		}
+
+	}
+
+	/**
+	 * Runs the front end.
+	 * @param request the source and the options to run it under
+	 * @return the expanded program and what a backend needs to know about it
+	 */
+	static Result run(Request request) {
+		Options options = request.options();
+		String entryFile = request.entryFile();
+		boolean wasm = options.wasm();
+		boolean component = options.component();
+		boolean noWasi = options.noWasi();
+		boolean noGc = options.noGc();
+		HostBoundary boundary = options.hostBoundary();
+		// Inline top-level (load "path") forms at compile time: the compilers collect
+		// defuns in a static pass that a runtime load cannot feed, so a program split
+		// across files (a console driver loading a rendering-free core) would otherwise
+		// fail to compile. The interpreter loads at runtime instead, so this is
+		// compile-path only.
+		// Expand user macros (defmacro) after inlining: the definitions are consumed
+		// and every call site is fully expanded by the macro-time interpreter, so the
+		// compilers see only ordinary forms. The interpreter path expands natively at
+		// evaluation time instead.
+		// Then splice the Lisp-source JSON library when the program references
+		// rontolisp:json-parse / rontolisp:json-stringify, rewriting the call sites
+		// to the fixed-arity helpers, the Lisp-source linalg library when the
+		// program references the linalg package, and the Lisp-source URL library
+		// when the program references rontolisp:url-* / query-param* (the
+		// interpreter path instead loads the libraries lazily inside LispEvaluator).
+		// The whole frontend reads with the target backend's feature set, so
+		// #+rontolisp-jvm / #+rontolisp-wasm conditionals select per-backend code --
+		// and #+rontolisp-reactor selects reactor-mode code: the
+		// clack-handler-rontolisp shim's run picks the http-handler directive or the
+		// %http-reactor marker with it. Reactor mode is --no-wasi (a Preview 1 module
+		// with no WASI imports, or -- with --component -- a reactor component that
+		// imports nothing) or --no-gc (a pure-compute reactor with or without the
+		// component wrap).
+		boolean reactor = noWasi || noGc;
+		// And a .war output reads with #+rontolisp-servlet active: the reactor
+		// precedent, a target-describing feature rather than an internal compiler flag,
+		// because the clack-handler-rontolisp shim branches on features and on nothing
+		// else (.kb/clack.md).
+		Features features = wasm ? (reactor ? Features.WASM_REACTOR : Features.WASM)
+				: (options.servlet() ? Features.JVM_SERVLET : Features.JVM);
+		// And #+rontolisp-component selects code for the COMPONENT BOUNDARY, which is a
+		// different boundary rather than a different backend: a component's host
+		// functions cross the canonical ABI, so the core-module directives
+		// (rontolisp:wasm-import / a :bytes type) are refused there and a source that
+		// wants one needs a way to say "not on this target" -- the reactor features
+		// above cannot, since a reactor component carries them too. Additive, like every
+		// other target-describing feature.
+		if (component && wasm) {
+			features = features.with(List.of(Features.COMPONENT));
+		}
+		// And #+rontolisp-body-imports selects the code a HAND-WRITTEN reactor needs only
+		// where the :bytes body imports really exist: the --no-wasi wasm-GC core module,
+		// built with the streaming boundary. It follows the FLAG, which is what no
+		// combination of target features could do -- and it says the thing itself, where
+		// the guard it replaces spelled out the targets that cannot carry the imports and
+		// quietly got --no-gc wrong.
+		if (wasm && noWasi && !component && !noGc && boundary.bodiesOutOfBand()) {
+			features = features.with(List.of(Features.BODY_IMPORTS));
+		}
+		// And #+rontolisp-native selects code for the RUNNER a --native executable's
+		// wasm-GC module runs inside: the module is the same Preview 1 build as ever
+		// (WASM as is), but the runner around it answers imports Preview 1 lacks --
+		// rontolisp:fetch through rlrun-net, and objc:/appkit:/metal:/scene: through
+		// rlobjc on macos-aarch64 -- so a source that wants "fetch on native, fall back
+		// on Preview 1" needs a way to tell the two apart. Additive, like every other
+		// target-describing feature; OS/architecture stay off *features* on purpose
+		// (.kb/reader-features.md).
+		if (options.runnerHosted()) {
+			features = features.with(List.of(Features.NATIVE));
+		}
+		// And #+rontolisp-wasi-logging names a build that hands a program's log records
+		// to its host's log: a component then imports wasi:logging/logging, which a host
+		// without it cannot instantiate, and a --no-wasi module the same through the
+		// canonical ABI, which its glue answers on the console -- so it follows the flag
+		// (--wasi-logging) alone.
+		if (options.wasiLogging() && wasm && !noGc && (component || noWasi)) {
+			features = features.with(List.of(Features.WASI_LOGGING));
+		}
+		// And #+rontolisp-host-sockets names a --no-wasi core module whose sockets are
+		// its host's (--host-sockets): the socket provider is read in its host's shape
+		// and the Java run time lets a thread wait for a socket among the others, which
+		// a reactor that imports nothing has no socket to do with.
+		if (hostSockets(options)) {
+			features = features.with(List.of(Features.HOST_SOCKETS));
+		}
+		// And #+rontolisp-host-timer names a --no-wasi wasm-GC core module whose host
+		// waits for it (--host-timer): a Java program's threads wait for a time, and a
+		// request for another, through the host instead of ending the instance. It
+		// follows the flag alone, as the two above do.
+		if (options.hostTimer() && wasm && noWasi && !component && !noGc) {
+			features = features.with(List.of(Features.HOST_TIMER));
+		}
+		// And LAST, whatever the user declared with --feature: names a portable library's
+		// #+ chain expects from the HOST implementation and no rontolisp target could
+		// answer for (RontoLispCli.declaredFeatures). It goes on top of the target set
+		// rather than into it, because the target features describe the build and the
+		// build -- not the command line -- decides those; the flag refuses to name one.
+		// Everything downstream reads with the result, including the (load ...) inlining
+		// and the ASDF components below, and the compiled program's run-time *features*
+		// is seeded from it (WasmLispCompiler.runtimeFeatures / JvmLispCompiler).
+		features = features.with(request.declaredFeatures());
+		// (rontolisp:wit-import "kv.wit" :interface "..."): bind a WIT interface's
+		// functions. Unlike wit-export this runs BEFORE UserMacroExpander, because the
+		// names it binds live in a package the WIT names -- the (defpackage kv ...) it
+		// synthesizes must exist before any pass resolves a kv:get call site, and the
+		// macro expander resolves every top-level form through its own PackageResolver.
+		// It
+		// needs nothing macro expansion produces: a wit-import is checked against a WIT
+		// file, not against the program.
+		// #. read-time eval on the compile path: the marker read wraps each datum in a
+		// (%read-eval datum) marker that UserMacroExpander later resolves against the
+		// macro-time evaluator, per top-level form (the interpreter's loadFile timing).
+		// The read itself is the source-language seam's: the entry file's language
+		// (its extension, or the CLI override), read with the target's features.
+		SourceLanguage language = SourceLanguage.forFile(entryFile, request.sourceLanguage());
+		if (language == SourceLanguage.SCHEME && noGc) {
+			// Every Scheme program needs what the scalar backend does not have: the
+			// lowering's first form binds the false value, and a list is a cons.
+			throw new IllegalArgumentException("Cannot compile: a Scheme program needs the GC backend -- --no-gc has"
+					+ " no cons cell, no symbol and no closure (drop --no-gc)");
+		}
+		if (language == SourceLanguage.CLOJURE && noGc) {
+			// Like Scheme: the lowering emits conses, symbols and closures.
+			throw new IllegalArgumentException("Cannot compile: a Clojure program needs the GC backend -- --no-gc has"
+					+ " no cons cell, no symbol and no closure (drop --no-gc)");
+		}
+		if (language == SourceLanguage.STARLARK && noGc) {
+			// Every value but a number is a structure, a string or a hash table there.
+			throw new IllegalArgumentException("Cannot compile: a Starlark program needs the GC backend -- --no-gc"
+					+ " has no structure, no hash table and no closure (drop --no-gc)");
+		}
+		if (language == SourceLanguage.JAVA && noGc && component) {
+			// A Java component's exports are a WIT world, whose uncaught report the
+			// scalar backend has no condition to write (.kb/java-frontend.md, "A
+			// reactor on --no-gc").
+			throw new IllegalArgumentException("Cannot compile: a Java program compiles --no-gc to a core module,"
+					+ " whose exports are the public static methods of a class with no main -- not to a component"
+					+ " (drop --component, or --no-gc)");
+		}
+		SourceLoader files = SourceLoader.fileSystem(request.javaClassLoader(), request.javaClassLookup(),
+				request.javaClassPath());
+		if (language == SourceLanguage.COMMON_LISP) {
+			// A Common Lisp entry file is the file being loaded, so its forms run inside
+			// its own load context (LoadInliner brackets it, the interpreter binds it).
+			// The read is the inliner's, a form at a time: once a file can change how
+			// source reads, each form reads with the readtable the compile-time
+			// evaluation of the forms before it left (.kb/readtables.md).
+			List<LispVal> loaded = LoadInliner.inlineSource(request.source(), files, options.baseDir(),
+					request.systemPath(), features, request.dists(), request.standards(), entryFile);
+			return expand(new Loaded(loaded, features, request.standards(), false, null), options);
+		}
+		List<LispVal> read;
+		RunTimeImage image = null;
+		if (language == SourceLanguage.CLOJURE && !wasm) {
+			// A JVM class lowers a Clojure program's lowering verbs over computed
+			// arguments as it runs: it reads the program again then, through every file
+			// answer this read got (RunTimeImage), so the lowering it rebuilds names the
+			// functions and globals it holds (JvmRunTimeLowering), from where this read's
+			// open passes began.
+			RunTimeImage.Recording recording = new RunTimeImage.Recording(files);
+			ClojureProgramLowering clojure = ClojureProgramLowering.read(request.source(), features, entryFile,
+					request.standards(), recording, null);
+			read = clojure.forms();
+			if (clojure.lowersAtRunTime()) {
+				image = recording.image(request.source(), entryFile, request.standards(), clojure.decisions());
+			}
+		}
+		else {
+			read = language.read(request.source(), features, entryFile, request.standards(), files);
+		}
+		// The other languages have no *load-truename* to answer.
+		List<LispVal> loaded = LoadInliner.inline(read, files, options.baseDir(), request.systemPath(), features,
+				request.dists(), request.standards(), null);
+		Result result = expand(new Loaded(loaded, features, request.standards(), image != null, null), options)
+			.ofLoweredSource();
+		return image == null ? result : result.lowersAtRunTime(image.encode());
+	}
+
+	// Whether the module's sockets are its host's: --host-sockets on a --no-wasi wasm-GC
+	// core module (the command line refuses the flag anywhere else).
+	private static boolean hostSockets(Options options) {
+		return options.hostSockets() && options.wasm() && options.noWasi() && !options.noGc() && !options.component();
+	}
+
+	/**
+	 * The pass pipeline: everything between the read and the backend, in the one order
+	 * that is correct.
+	 * <p>
+	 * <b>This method exists to have exactly one copy of that order.</b> The corpus guards
+	 * ({@code JvmDeadMethodEliminationCorpusTest}, {@code WasmTreeShakerCorpusTest})
+	 * compile the whole {@code ci-spec.yaml} catalogue and claim to decode "exactly the
+	 * class the real CLI emits", so they have to run this pipeline rather than restate it
+	 * -- and they did restate it, and drifted: on 2026-09-03 a {@code tokenizer:} case
+	 * joined the corpus and went red because their copies had never gained
+	 * {@link am.ik.rontolisp.eval.TokenizersLibrary}, which was one of EIGHT passes they
+	 * were missing. Membership is not the whole hazard either: a copy that applies every
+	 * pass in a different ORDER is wrong in a way no census can see (theirs ran
+	 * {@link am.ik.rontolisp.eval.VecLibrary} ahead of the Gray-streams, usocket and
+	 * unread-char rewrites instead of after them, so a {@code vec:} reference any of
+	 * those three introduces was spliced by the CLI and missed by both guards). Hence a
+	 * method and not an exported list of libraries for a caller to fold: the order
+	 * travels with the code, or it is duplicated again.
+	 * <p>
+	 * The read and the {@code (load ...)} inlining stay in {@link #run} above, because a
+	 * caller may legitimately want its own source loader -- the corpus guards pass one
+	 * that THROWS, which is how they assert the catalogue never comes to depend on a file
+	 * on disk.
+	 * @param input the read, load-inlined top-level forms and their feature set
+	 * @param options the target and pass options
+	 * @return the expanded program and what a backend needs to know about it
+	 */
+	static Result expand(Loaded input, Options options) {
+		List<LispVal> loaded = input.forms();
+		Features features = input.features();
+		String baseDir = options.baseDir();
+		boolean wasm = options.wasm();
+		boolean dynamic = options.dynamic();
+		boolean component = options.component();
+		boolean noWasi = options.noWasi();
+		boolean noGc = options.noGc();
+		boolean hostFetch = options.hostFetch();
+		HostBoundary boundary = options.hostBoundary();
+		boolean reentrant = options.reentrant();
+		boolean noPrune = options.noPrune();
+		WitExportDirective.Backend witBackend = witBackend(wasm, noGc, component);
+		// A package's own nicknames read first of all, what a reader does: every pass
+		// below that scans the program for a package's name sees that name, and none
+		// takes a package's nickname for the package of that name elsewhere.
+		loaded = LocalNicknameRead.read(loaded);
+		// Expand the (rontolisp:async (defun ...)) wrapper before anything scans for
+		// definitions: HttpLibrary's handler reachability, WitExportInliner's defun
+		// checks and the library pruner all recognize async-defun, never the sugar.
+		loaded = LispMacroExpander.rewriteAsyncSugar(loaded);
+		// The program's own first form: every library spliced below goes in front of it,
+		// and UserMacroExpander reads that prefix as implementation source.
+		LispVal programHead = loaded.isEmpty() ? null : loaded.get(0);
+		// "Serve on this target's native transport" (http-serve.lisp), read with the
+		// target's features: the clack-handler-rontolisp shim's run and the Clojure
+		// ring.adapter.rontolisp/run-server both call it. FIRST, because each leg is
+		// what a later pass reads -- the http-handler directive (HttpHandlerInliner,
+		// HttpLibrary, the :raw-body scan), the reactor marker (HttpReactorInliner).
+		// A --native module is Preview 1, which has no incoming TCP: the runner serves
+		// (http-serve.lisp's #+rontolisp-native leg), so the http-handler DIRECTIVE
+		// becomes a call of that leg here, before the splice below reads the program.
+		if (options.runnerHosted()) {
+			loaded = HttpReactorInliner.lowerHttpHandlerForRunner(loaded);
+		}
+		loaded = HttpServeLibrary.process(loaded, features);
+		// objc:, appkit:, metal: and scene: have no lowering for a .wasm and never will
+		// (no WASM runtime offers a foreign function API, AppKit or Metal); the JVM
+		// backend carries the binding as an embedded blob (JvmObjcRuntimeBuilder), and a
+		// --native output's runner answers the rlobjc imports ObjcNativeLibrary splices
+		// below. Refuse every other WASM output here, after load inlining, so a (load
+		// ...)-ed file is caught too and the error names the reference rather than an
+		// undefined function somewhere inside a spliced library.
+		boolean objcHost = options.runnerHosted() && NativeTarget.OBJC_PLATFORM.equals(options.nativePlatform());
+		String objcReference = wasm && !objcHost ? AppKitLibrary.firstObjcReference(loaded) : null;
+		if (objcReference != null) {
+			throw new IllegalArgumentException("Cannot compile: " + objcReference
+					+ " -- the objc:, cocoa:, fli:, appkit:, metal: and scene: packages run on the interpreter (java -jar, or "
+					+ "the rontolisp binary), in a compiled .class or .jar and in a --native executable for macos-aarch64, "
+					+ "not in a .wasm");
+		}
+		// ffi: has no WASM lowering and never will either (no foreign function API in
+		// any WASM runtime); refused the same way, after load inlining, so the error
+		// names the reference.
+		String ffiReference = wasm ? FfiInterop.firstFfiReference(loaded) : null;
+		if (ffiReference != null) {
+			throw new IllegalArgumentException("Cannot compile: " + ffiReference
+					+ " -- the ffi: package runs on the interpreter (java -jar, or the rontolisp binary) "
+					+ "and in a compiled .class or .jar, not in a .wasm");
+		}
+		// Under --component the inliner also prunes the interface members the program
+		// never references -- the core tree shaker cannot do that job even under
+		// --optimize, because a WIT member costs a component-level import declaration and
+		// a canon lower, not just a core function; --no-prune / --dynamic disable that,
+		// like the library defun pruner.
+		// A --no-wasi wasm-GC core module's host is the generated glue, which lifts the
+		// canonical ABI itself: an interface the flat set does not carry is imported
+		// there as a component's core module imports it.
+		loaded = WitImportInliner.inline(loaded, baseDir, witBackend, options.loader(), !dynamic && !noPrune,
+				wasm && noWasi && !noGc && !component);
+		// The --no-wasi (wasm-GC) reactor legs, BEFORE the serve-mode switch below reads
+		// the program: a reactor owns no socket, so the rontolisp:http-handler directive
+		// lowers to the host-driven transport (the same leg clack:clackup takes there),
+		// which is also what lets the same http-handler source compile as a Worker; and
+		// under --host-fetch, rontolisp:fetch gets the env.fetch lowering spliced when
+		// the program fetches (before UserMacroExpander, so JsonLibrary and the prelude
+		// pick up the splice's own call sites).
+		if (wasm && noWasi && !noGc) {
+			loaded = HttpReactorInliner.lowerHttpHandler(loaded);
+			if (hostFetch) {
+				loaded = HostFetchLibrary.process(loaded, boundary, reentrant);
+			}
+		}
+		// The third fetch transport, in the same position for the same reason: a
+		// --native output keeps WASI Preview 1, and its runner -- not a host, not
+		// wasi:http -- answers fetch's rlhttp imports (HostFetchLibrary's runner shape).
+		if (options.runnerHosted()) {
+			loaded = HostFetchLibrary.processForRunner(loaded);
+		}
+		// Both rontolisp:fetch AND rontolisp:http-handler on the --component path are ONE
+		// Lisp-source library (http.lisp) over a wit-imported wasi:http@0.3.0 surface,
+		// spliced HERE -- right after WitImportInliner, which http.lisp's own wit-import
+		// directives are lowered against (HttpLibrary does that itself), and before
+		// UserMacroExpander, which its cond/handler-case bodies need. The splice's member
+		// filter follows the reachable half, so a fetch-only program binds no serve
+		// member and vice versa. The interpreter/JVM keep java.net.http / HttpServer;
+		// Preview 1 has neither.
+		boolean serve = component && HttpHandlerInliner.usesHttpHandler(loaded);
+		// --no-wasi under --component asks for a component that imports NOTHING, and
+		// the wasi:*-binding library splices below exist precisely to give a component
+		// its WASI surface (http.lisp / wait.lisp / sockets.lisp / stdin.lisp /
+		// environment.lisp are each the wit-imported wasi:* surface of their
+		// primitives). ONE decision here gates all five: they see the Preview 1
+		// backend, whose primitives already honor the --no-wasi contract (the fd_write
+		// sink discards output, the rest trap or signal at call time;
+		// .kb/wasm-export-no-wasi.md). wit-import/wit-export lowering keeps the real
+		// backend -- a USER wit-import under --no-wasi is rejected by the compiler,
+		// with a message naming both sides.
+		WitExportDirective.Backend spliceBackend = component && noWasi ? WitExportDirective.Backend.WASM_GC
+				: witBackend;
+		// serve + rontolisp:wit-export is an error (a serve component's only export is
+		// wasi:http/handler); the check fires below on the macro-expanded program.
+		// Splicing http.lisp's %serve-handle wasm-export first would surface as a
+		// DIFFERENT error (wit-export forbids a hand-written wasm-export beside it), so
+		// gate the serve half off when a wit-export world is present and let the clearer
+		// guard win.
+		boolean serveGlue = serve && !WitExportInliner.usesWitExport(loaded);
+		// The :raw-body mode must be read BEFORE HttpLibrary rewrites the directive
+		// away (the wasm path drops it); it decides both the synthesized
+		// %serve-request-body in there and the splice filter below.
+		boolean bufferBody = HttpLibrary.usesBufferedBody(loaded);
+		loaded = HttpLibrary.process(loaded, spliceBackend, serveGlue);
+		// The host-driven reactor's counterpart of that splice: a Clack handler
+		// backend whose run stores the app and leaves a rontolisp::%http-reactor
+		// marker (the clack-handler-reactor shim always; the clack-handler-rontolisp
+		// shim under #+rontolisp-reactor) gets the marker
+		// lowered to nil and the wasm-export of a bridge to its dispatcher
+		// synthesized -- so a Worker source is (clack:clackup #'app :server
+		// :rontolisp) and nothing else. A no-op on the interpreter and the JVM (the
+		// shims do not even read the marker there).
+		loaded = HttpReactorInliner.process(loaded, witBackend, noWasi, boundary, reentrant);
+		// The shared reactor machinery behind BOTH handler backends
+		// (http-reactor.lisp: the one app store, the JSON envelope over
+		// %http-make-env / %http-normalize-response): spliced for EVERY backend
+		// whenever the program references it -- the synthesized bridge above does,
+		// and so do the backends' run/handle/dispatch. Before HttpServerLibrary,
+		// whose entry points the machinery calls; JsonLibrary later picks up its
+		// json-parse / json-stringify call sites.
+		loaded = HttpReactorLibrary.process(loaded);
+		// The server-side HTTP value model (http-server.lisp): the Clack environment a
+		// handler receives and the Clack response it returns, written once in rontolisp
+		// so every backend agrees by construction. Spliced for EVERY backend (unlike
+		// http.lisp, which is the --component transport) whenever the program serves,
+		// and BEFORE GrayStreamsLibrary below, whose call-site rewrite the library's
+		// bivalent :raw-body stream depends on. A default-mode (:raw-body :stream)
+		// program gets the library without its buffered-body half.
+		loaded = HttpServerLibrary.process(loaded, bufferBody);
+		// rontolisp:wait-for on the --component path is the wait.lisp shim over a
+		// wit-imported wasi:clocks/monotonic-clock@0.3.0 (a pending future the
+		// scheduler settles). Spliced like http.lisp; a no-op elsewhere (the
+		// interpreter/JVM keep their CompletableFuture timer, Preview 1 keeps the
+		// compile error).
+		loaded = WaitForLibrary.process(loaded, spliceBackend);
+		// The CLIENT tls built-ins (tls-connect / tls-upgrade) on the --component path
+		// are the tls.lisp library over a wit-imported wasi:tls@0.3.0-draft. It rides
+		// sockets.lisp's entry table, so it must splice BEFORE SocketsLibrary: the
+		// spliced forms reference rontolisp:tcp-connect, which fires the sockets
+		// trigger for a program that only names tls. A no-op elsewhere (the
+		// interpreter/JVM keep SSLSocket, Preview 1 keeps the compile error; the
+		// tls-listen family is a compile error on every WASM target -- the wasi:tls
+		// proposal has no server interface).
+		loaded = TlsLibrary.process(loaded, spliceBackend);
+		// The rontolisp:tcp-* built-ins on the --component path are the sockets.lisp
+		// library over a wit-imported wasi:sockets/types@0.3.0 (this splice replaced
+		// the hand-written sockets adapter), and on a --native module the
+		// runner-sockets.lisp library over the runner's rltcp imports -- the same
+		// dispatch layer over the other host. Spliced like http.lisp; a no-op
+		// elsewhere (the interpreter/JVM keep java.net.Socket, a plain Preview 1
+		// module keeps the call-time error). The trigger includes any usocket:
+		// reference: the usocket shim rides tcp-*, and its own splice runs later in
+		// this pipeline.
+		loaded = SocketsLibrary.process(loaded, spliceBackend, options.runnerHosted(), hostSockets(options));
+		// Component stdin over wit-imported wasi:cli/stdin@0.3.0 (stdin.lisp), bound
+		// FROM the fixed import block. Two shapes: the %stdin-*-or-raw-f helpers
+		// sockets.lisp's dispatchers fall through to (a serve program gets the
+		// raw-passthrough stub -- its service world has no stdin), and the full
+		// dispatch splice for an ASYNC stdin-reading program, whose async-context
+		// reads then promote to awaits. A non-async stdin program is left on the
+		// preview1 adapter's stdin branch, byte-identical. Must run AFTER
+		// SocketsLibrary (it keys on sockets.lisp's dispatchers being present).
+		loaded = StdinLibrary.process(loaded, spliceBackend, serve);
+		// The WIT runtime (wit.lisp: the provider registry, rontolisp:wit-provide and the
+		// rontolisp:wit-error condition -- the provider MECHANISM, and no provider for
+		// any
+		// concrete interface) backs the %wit-call bodies the inliner just synthesized for
+		// the interpreter/JVM boundary. On the WASM backends it splices nothing: there
+		// the
+		// bindings ARE rontolisp:wasm-import directives and the host is the provider.
+		// GrayStreamsLibrary.process rewrites write-string/write-char call sites onto
+		// the Gray dispatch helpers when the program uses the protocol (and splices
+		// gray.lisp if no load already did), so a CLOS instance stream reaches the
+		// generics in compiled programs like it does on the interpreter.
+		// UnreadCharLibrary.process splices the handle-side pushback of unread-char and
+		// rewrites the character-read call sites onto it. LAST of the four, so a call
+		// site any of them introduced -- a Gray dispatch helper's handle FALLBACK above
+		// all -- reaches the cell too; a program that never names unread-char is
+		// returned unchanged.
+		// TorchLibrary runs BEFORE LinalgLibrary so the linalg: references inside the
+		// spliced torch definitions pull the linalg library in too, and GeomLibrary
+		// (solid modeling over the same kernels) sits beside it for the same reason.
+		// AppKitLibrary splices appkit.lisp (the widget layer over objc) the same way,
+		// its objc defining macros expanded, so a JVM class compiled from an appkit:
+		// program carries the widgets and, through objc.lisp's primitive calls, gates
+		// the embedded binding on.
+		// The macOS three run in DEPENDENCY order, innermost first: SceneLibrary (the
+		// 3-D viewer) before MetalLibrary (the drawing surface it is written over)
+		// before GeomLibrary/LinalgLibrary (the model and the kernels both reach for)
+		// and before AppKitLibrary (metal:run's clock is appkit:timer).
+		// JsonLibrary runs AFTER GeomLibrary (geom:read-gltf parses its JSON chunk
+		// through rontolisp:json-parse, so the splice introduces the reference) and
+		// still after the HTTP passes above, whose handlers it also rewrites. A wasm-GC
+		// target gets its entry points over the backend's native codec.
+		// The checkpoint readers run FIRST of all: SafetensorsLibrary (the reader)
+		// before CheckpointLibrary (the staging it is written over), and both before
+		// JsonLibrary and the prelude, which supply the json-parse and
+		// %octets-to-string / widen-float-bits the spliced definitions reach for.
+		// GgufLibrary sits with them: the same checkpoint staging is what it reads a
+		// tensor body with, so CheckpointLibrary has to run OUTSIDE it to pick the
+		// references its spliced definitions introduce.
+		// TokenizersLibrary is innermost and has no place in that order at all: it
+		// reaches for nothing but cl, and nothing any other pass splices reaches for it.
+		// SchemeLibrary sits beside it for the same reason -- only a lowered Scheme
+		// program
+		// names a rontolisp::%scheme- helper -- and INSIDE the prelude, which supplies
+		// the
+		// string comparisons the helpers are written over. ClojureLibrary sits beside
+		// SchemeLibrary for the same reason -- only a lowered Clojure program names a
+		// rontolisp::%clojure- helper -- and StarlarkLibrary beside both, for the
+		// rontolisp::%starlark- helpers of a lowered Starlark program, and JavaLibrary
+		// for the rontolisp::%java- helpers of a lowered Java program.
+		// ObjcLibrary (objc and cocoa, objc.lisp) right OUTSIDE AppKitLibrary: a library
+		// written over objc is seen too. Its defining
+		// macros (define-objc-class and the rest, objc-macros.lisp) go in front of
+		// user-macro expansion instead (ObjcLibrary.withMacros): that expansion runs
+		// before any library is spliced.
+		// The lowered languages' run-time libraries first: a Clojure one strips the arms
+		// of a value only the host makes when the target has none (wasm), and a program
+		// a JVM class lowers again as it runs takes every arm and its lowering hand-off.
+		// InflateLibrary right OUTSIDE ClojureLibrary: the decoder of a compressed reply
+		// is named only by clojure.lisp's HTTP client, and a wasm target compiles the
+		// Lisp one (the interpreter and the JVM have runtime/RontoInflate); inside the
+		// prelude, which supplies what the decoder is written over.
+		// A one-argument intern / find-symbol of the user program reads *package*
+		// (CurrentPackageIntern): right after user-macro expansion, before any library
+		// splice, whose own one-argument interns take a canonical spelling verbatim.
+		// What the forms a compiled eval runs can reach, ahead of the splices: a
+		// wrapper's
+		// body reaches the prelude. Not on --no-gc, which has no eval runtime.
+		List<LispVal> expanded = CurrentPackageIntern
+			.rewrite(UserMacroExpander.expand(ObjcLibrary.withMacros(loaded), programHead, features));
+		// RegexLibrary right OUTSIDE the front ends' libraries too: the engine is named
+		// only by clojure.lisp and java.lisp. UriLibrary beside it: java.net.URI's rules
+		// are named only by clojure.lisp and a lowered Java program.
+		// UnicodeNormalizationLibrary beside them: the normalization forms are named
+		// only by a lowered Java program.
+		List<LispVal> languages = InflateLibrary
+			.process(
+					UnicodeNormalizationLibrary
+						.process(
+								UriLibrary
+									.process(
+											RegexLibrary
+												.process(
+														ClojureLibrary.process(
+																SchemeLibrary.process(
+																		StarlarkLibrary.process(JavaLibrary.process(
+																				noGc ? expanded
+																						: EvalReferences
+																							.process(expanded),
+																				features)),
+																		features, input.standards()),
+																!wasm, input.lowersAtRunTime(), input.linked())))),
+					witBackend);
+		List<LispVal> macos = ObjcLibrary.process(AppKitLibrary.process(JsonLibrary.process(
+				LinalgLibrary.process(GeomLibrary
+					.process(MetalLibrary.process(SceneLibrary.process(TorchLibrary.process(CheckpointLibrary.process(
+							SafetensorsLibrary.process(GgufLibrary.process(TokenizersLibrary.process(languages))))))))),
+				spliceBackend)));
+		// ObjcNativeLibrary right OUTSIDE ObjcLibrary: the primitive layer of a --native
+		// output, needed by the primitive calls the macOS splices above introduce.
+		// LocalTimeLibrary right INSIDE the prelude: the WASM targets' local time zone is
+		// named only through the prelude's universal time codec, so it keys on the
+		// codec's surface names, and the prelude then supplies what the zone reader is
+		// written over.
+		List<LispVal> zoned = LocalTimeLibrary.process(UrlLibrary.process(ObjcNativeLibrary.process(macos, objcHost)),
+				spliceBackend, noWasi, options.runnerHosted());
+		List<LispVal> program = UnreadCharLibrary.process(
+				WitLibrary.process(UsocketLibrary
+					.process(GrayStreamsLibrary.process(LispPreludeLibrary.process(zoned, features), input.linked()))),
+				input.linked());
+		// uiop:getenv on the --component path is environment.lisp over a wit-imported
+		// wasi:cli/environment@0.3.0 -- bound FROM the fixed import block on the base /
+		// sockets variants and as an appended user import under serve, whose service
+		// world declares no environment interface. Spliced like the libraries above; a
+		// no-op elsewhere (the interpreter/JVM keep System.getenv, Preview 1 keeps the
+		// host-filled environ buffer scan). It runs AFTER the whole splice chain (and
+		// after user-macro expansion) because a getenv call any of them introduces has
+		// to be seen too: the prelude's uiop:default-temporary-directory reads TMPDIR,
+		// and with this pass upstream of the splice a smart-buffer program failed the
+		// component compile with "compiled without EnvironmentLibrary.process".
+		program = EnvironmentLibrary.process(program, spliceBackend);
+		// A Java program's records go to the host's log under --wasi-logging:
+		// logging.lisp over wit-imported wasi:logging/logging (--component, an appended
+		// user import, as exit.lisp's below). Beside the environment splice for the same
+		// reason, and a no-op wherever nothing reaches %host-log.
+		program = LoggingLibrary.process(program, spliceBackend, features);
+		// Splice the Lisp-source vec library (the scalar reference over the packed
+		// double-float array type) when the program references the vec package. The
+		// --no-gc scalar WASM backend is the exception: it has no general array type and
+		// lowers the whole vec: surface to native fixed-width WASM SIMD itself
+		// (NoGcWasmCompiler), so it must NOT get the splice.
+		if (!(wasm && noGc)) {
+			program = VecLibrary.process(program);
+		}
+		// (rontolisp:wit-export "world.wit"): check the program against the WIT world it
+		// claims to implement and expand the directive into the rontolisp:wasm-export
+		// directives the world declares -- the backends see nothing new. It runs here
+		// because every defun (including a load-spliced or macro-produced one) is now a
+		// literal top-level form, and because the synthesized directives must still count
+		// as pruning roots below.
+		boolean witWorld = WitExportInliner.usesWitExport(program);
+		boolean reactor = WitExportInliner.usesReactor(program);
+		program = WitExportInliner.inline(program, baseDir, witBackend, options.loader());
+		// Decide the (boundp 'name) probes whose answer the top-level order already fixes
+		// (compiler/CompileTimeBoundp), and collapse the guards they were testing. It has
+		// to happen BEFORE the tree-shaker below, not just inside the compilers: the
+		// portable (unless (boundp '+k+) (defconstant +k+ v)) is what keeps a library's
+		// constants from being top-level definers, and an unreachable one the shaker
+		// cannot see stays in the artifact. Packages are still unresolved here, so only
+		// the "unbound" direction is decided; the compilers run the pass again once the
+		// spellings are canonical.
+		program = CompileTimeBoundp.fold(program, dynamic, false);
+		// Drop spliced library definitions unreachable from the user program (the AST
+		// tree-shaker; see LibraryDefunPruner). Skipped under --dynamic (late binding
+		// can resolve any name at runtime) and --no-prune (the explicit escape hatch) --
+		// but the ASDF provenance markers the pruner reads are dropped either way, so
+		// those two flags emit the artifact they emitted before the markers existed.
+		program = (!dynamic && !noPrune) ? LibraryDefunPruner.prune(program)
+				: LibraryDefunPruner.stripSystemMarkers(program);
+		// uiop:quit on the WASM backends is exit.lisp over wasi_snapshot_preview1's
+		// proc_exit (Preview 1) / wit-imported wasi:cli/exit@0.3.0 (--component, an
+		// appended user import: the fixed block does not declare that interface), and a
+		// no-op elsewhere (the interpreter raises its exit signal, the JVM emits
+		// System.exit). AFTER the pruner: a quit a spliced library holds and the program
+		// never calls -- java.lisp's System.exit and thread ends, named under every Java
+		// program -- imports nothing, and a reactor is refused only a quit it reaches.
+		program = ExitLibrary.process(program, spliceBackend, features);
+		// --host-timer: the host's waits, imported where what is left waits -- a sleep, a
+		// Java server's request idling -- after the pruner, as the exit is: java.lisp
+		// names the idle in every Java program, and a program of no server reaches none.
+		if (features.contains(Features.HOST_TIMER)) {
+			program = HostTimerLibrary.process(program);
+		}
+		// A program holding a lowered Java program's run time is one, whatever its entry
+		// language; the scalar backend alone asks.
+		return new Result(program, serve, witWorld, reactor, features, noGc && JavaLibrary.runs(program));
+	}
+
+	// The backend a rontolisp:wit-export world is checked against: only the WASM backends
+	// impose the export boundary's backend-specific rules (s64 needs --no-gc, an async
+	// func cannot be lifted by the --no-gc reactor). Compiling to a .class checks the
+	// contract but exports nothing, like the interpreter. wit-export treats WASM_GC and
+	// WASM_COMPONENT identically; wit-import lowers them differently (Preview 1 core
+	// imports vs the canonical-ABI lower).
+	private static WitExportDirective.Backend witBackend(boolean wasm, boolean noGc, boolean component) {
+		if (!wasm) {
+			return WitExportDirective.Backend.OTHER;
+		}
+		if (noGc) {
+			return component ? WitExportDirective.Backend.WASM_NO_GC_COMPONENT : WitExportDirective.Backend.WASM_NO_GC;
+		}
+		return component ? WitExportDirective.Backend.WASM_COMPONENT : WitExportDirective.Backend.WASM_GC;
+	}
+
+}

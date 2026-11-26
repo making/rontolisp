@@ -1,0 +1,612 @@
+package am.ik.rontolisp.cli;
+
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.PrintStream;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.function.Function;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipInputStream;
+
+import am.ik.maven.MavenResolver;
+import am.ik.maven.MavenSettings;
+import am.ik.maven.RemoteRepository;
+import am.ik.maven.RepositoryPolicy;
+import am.ik.rontolisp.testsupport.JavaLibraryJar;
+import am.ik.rontolisp.testsupport.ThreadStdio;
+import org.jspecify.annotations.Nullable;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.api.parallel.Execution;
+import org.junit.jupiter.api.parallel.ExecutionMode;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+/**
+ * A program's Java class path from the command line: {@code --java-classpath} entries and
+ * {@code --java-dep} coordinates reach the interpreter's class loading, a JVM compile's
+ * resolution and what a compiled jar or war runs with.
+ */
+@Execution(ExecutionMode.CONCURRENT)
+class JavaClassPathCliTest {
+
+	@TempDir
+	Path tempDir;
+
+	private String runCli(String... args) {
+		return runCli((MavenResolver) null, args);
+	}
+
+	private String runCli(@Nullable MavenResolver resolver, String... args) {
+		return runCli(resolver != null ? repositories -> resolver : null, args);
+	}
+
+	private String runCli(@Nullable Function<List<RemoteRepository>, MavenResolver> resolver, String... args) {
+		return runCli(resolver != null ? (repositories, update) -> resolver.apply(repositories) : null, args);
+	}
+
+	private String runCli(@Nullable JavaDependencyResolver resolver, String... args) {
+		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		RontoLispCli cli = new RontoLispCli(new ByteArrayInputStream(new byte[0]), new PrintStream(out));
+		if (resolver != null) {
+			cli.javaDependencyResolver(resolver);
+		}
+		cli.run(args);
+		return out.toString(StandardCharsets.UTF_8);
+	}
+
+	// print's leading newline and trailing space, gone.
+	private static String printed(String output) {
+		return String.join("\n", output.strip().lines().map(String::strip).toList());
+	}
+
+	private Path program(String name, String source) throws Exception {
+		Path program = this.tempDir.resolve(name);
+		Files.writeString(program, source);
+		return program;
+	}
+
+	private static String run(String... command) throws Exception {
+		List<String> line = new java.util.ArrayList<>();
+		line.add(Path.of(System.getProperty("java.home"), "bin", "java").toString());
+		line.addAll(List.of(command));
+		Process process = new ProcessBuilder(line).redirectErrorStream(true).start();
+		String output = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+		assertThat(process.waitFor()).describedAs("%s said:%n%s", line, output).isZero();
+		return output;
+	}
+
+	private static Map<String, byte[]> entries(Path archive) throws Exception {
+		Map<String, byte[]> entries = new LinkedHashMap<>();
+		try (ZipInputStream zip = new ZipInputStream(Files.newInputStream(archive))) {
+			for (ZipEntry entry = zip.getNextEntry(); entry != null; entry = zip.getNextEntry()) {
+				entries.put(entry.getName(), zip.readAllBytes());
+			}
+		}
+		return entries;
+	}
+
+	@Test
+	void theInterpreterLoadsClassesFromTheJavaClassPath() throws Exception {
+		Path jar = JavaLibraryJar.build(this.tempDir);
+		Path program = program("prog.lisp", JavaLibraryJar.LIBRARY_PROGRAM);
+		assertThat(printed(runCli(program.toString(), "--java-classpath", jar.toString())))
+			.isEqualTo(JavaLibraryJar.LIBRARY_OUTPUT);
+	}
+
+	@Test
+	void aClassFileOutputResolvesAgainstTheClassPathAndRunsWithIt() throws Exception {
+		Path jar = JavaLibraryJar.build(this.tempDir);
+		Path program = program("prog.lisp", JavaLibraryJar.LIBRARY_PROGRAM);
+		Path out = Files.createDirectories(this.tempDir.resolve("out"));
+		runCli(program.toString(), "-o", out.resolve("Prog.class").toString(), "--java-classpath", jar.toString());
+		assertThat(printed(run("-cp", out + java.io.File.pathSeparator + jar, "Prog")))
+			.isEqualTo(JavaLibraryJar.LIBRARY_OUTPUT);
+	}
+
+	@Test
+	void aProgramJarCarriesItsClassPathBesideItAndNamesItInItsManifest() throws Exception {
+		Path jar = JavaLibraryJar.build(this.tempDir);
+		Path program = program("prog.lisp", JavaLibraryJar.LIBRARY_PROGRAM);
+		Path output = this.tempDir.resolve("dist/my-app.jar");
+		runCli(program.toString(), "-o", output.toString(), "--java-classpath", jar.toString());
+		Path copied = this.tempDir.resolve("dist/my-app-lib/fixture-lib.jar");
+		assertThat(copied).hasSameBinaryContentAs(jar);
+		String manifest = new String(entries(output).get("META-INF/MANIFEST.MF"), StandardCharsets.UTF_8);
+		assertThat(manifest).contains("Class-Path: my-app-lib/fixture-lib.jar");
+		// The library's own location is gone from the picture: only the copy is read.
+		Files.delete(jar);
+		assertThat(printed(run("-jar", output.toString()))).isEqualTo(JavaLibraryJar.LIBRARY_OUTPUT);
+	}
+
+	@Test
+	void aWarCarriesItsClassPathInWebInfLib() throws Exception {
+		Path jar = JavaLibraryJar.build(this.tempDir);
+		Path program = program("app.lisp", """
+				(defun handle (env)
+				  (list 200 '(:content-type "text/plain") (list (java:field "fixture.lib.Greeter" "NAME"))))
+				(rontolisp:http-handler 'handle)
+				""");
+		Path war = this.tempDir.resolve("app.war");
+		runCli(program.toString(), "-o", war.toString(), "--java-classpath", jar.toString());
+		assertThat(entries(war).get("WEB-INF/lib/fixture-lib.jar")).isEqualTo(Files.readAllBytes(jar));
+	}
+
+	@Test
+	void coordinatesResolveNearestWinsAndReachTheInterpreterTheJarAndThePom() throws Exception {
+		MavenResolver resolver = fixtureResolver();
+		Path program = program("prog.lisp",
+				"(print (java:static \"fixture.app.App\" \"hello\"))\n" + JavaLibraryJar.LIBRARY_PROGRAM);
+		String expected = "\"app\"\n" + JavaLibraryJar.LIBRARY_OUTPUT;
+		// fixture-app depends on fixture-lib 0.9, which has no jar: the requested 1.0 is
+		// nearer, so 0.9 is never fetched.
+		String[] coordinates = { "--java-dep", "test.fixture:fixture-app:1.0", "--java-dep",
+				"test.fixture:fixture-lib:1.0" };
+		assertThat(printed(runCli(resolver, concat(new String[] { program.toString() }, coordinates))))
+			.isEqualTo(expected);
+		Path output = this.tempDir.resolve("prog.jar");
+		runCli(resolver, concat(new String[] { program.toString(), "-o", output.toString(), "--maven-coordinates",
+				"com.acme:prog:1.0", "--emit-pom" }, coordinates));
+		String manifest = new String(entries(output).get("META-INF/MANIFEST.MF"), StandardCharsets.UTF_8);
+		assertThat(manifest.replace("\r\n ", ""))
+			.contains("Class-Path: prog-lib/fixture-app-1.0.jar prog-lib/fixture-lib-1.0.jar");
+		assertThat(printed(run("-jar", output.toString()))).isEqualTo(expected);
+		String pom = Files.readString(this.tempDir.resolve("prog.pom"));
+		assertThat(pom).contains("<artifactId>fixture-app</artifactId>")
+			.contains("<artifactId>fixture-lib</artifactId>")
+			.doesNotContain("<dependencies/>");
+		assertThat(new String(entries(output).get("META-INF/maven/com.acme/prog/pom.xml"), StandardCharsets.UTF_8))
+			.isEqualTo(pom);
+	}
+
+	@Test
+	void repositoriesGivenSearchAfterCentralInTheOrderGiven() throws Exception {
+		// Central is not reachable from a test: the factory sees the list the CLI built
+		// and searches what follows it.
+		List<List<RemoteRepository>> seen = new java.util.ArrayList<>();
+		Path repo = fixtureRepository();
+		Function<List<RemoteRepository>, MavenResolver> factory = repositories -> {
+			seen.add(repositories);
+			return MavenResolver.builder()
+				.localRepository(this.tempDir.resolve("local"))
+				.repositories(repositories.subList(1, repositories.size()))
+				.systemProperties(Map.of())
+				.build();
+		};
+		Path program = program("prog.lisp",
+				"(print (java:static \"fixture.app.App\" \"hello\"))\n" + JavaLibraryJar.LIBRARY_PROGRAM);
+		String url = repo.toUri().toString();
+		assertThat(printed(runCli(factory, program.toString(), "--java-dep", "test.fixture:fixture-app:1.0",
+				"--java-dep", "test.fixture:fixture-lib:1.0", "--java-repository",
+				"empty=" + this.tempDir.resolve("nothing").toUri(), "--java-snapshots", "--java-repository", url)))
+			.isEqualTo("\"app\"\n" + JavaLibraryJar.LIBRARY_OUTPUT);
+		assertThat(seen).hasSize(1);
+		assertThat(seen.get(0)).extracting(RemoteRepository::id)
+			.containsExactly("central", "empty", "java-repository-2", "central-snapshots");
+		assertThat(seen.get(0).get(2).url()).isEqualTo(url);
+		// --java-snapshots is Central's snapshot repository, after the ones given
+		assertThat(seen.get(0).get(3)).isEqualTo(
+				new RemoteRepository("central-snapshots", "https://central.sonatype.com/repository/maven-snapshots/"));
+	}
+
+	@Test
+	void updateSnapshotsAsksTheRepositoryAgainForASnapshotItHasRedeployed() throws Exception {
+		Path repo = this.tempDir.resolve("snapshots");
+		Path local = this.tempDir.resolve("local-snapshots");
+		// the real resolver over a file: repository and an empty local one; Central is
+		// out of reach, so the list is searched after it
+		JavaDependencyResolver real = (repositories, update) -> JavaClassPath
+			.mavenResolver(repositories.subList(1, repositories.size()), MavenSettings.none(), local, update);
+		Path program = program("prog.lisp", "(print (java:field \"fixture.lib.Greeter\" \"NAME\"))\n");
+		String[] args = { program.toString(), "--java-dep", "test.fixture:fixture-lib:1.0-SNAPSHOT",
+				"--java-repository", "snapshots=" + repo.toUri() };
+		String[] updating = concat(args, new String[] { "--java-update-snapshots" });
+		deploySnapshot(repo, "1", "20240101.000000");
+		assertThat(printed(runCli(real, args))).isEqualTo("\"v1\"");
+		deploySnapshot(repo, "2", "20240202.000000");
+		// the metadata the first run saved is under its repository's daily policy: the
+		// redeployed build is not seen without the flag, and is with it
+		assertThat(printed(runCli(real, args))).isEqualTo("\"v1\"");
+		assertThat(printed(runCli(real, updating))).isEqualTo("\"v2\"");
+	}
+
+	// fixture-lib 1.0-SNAPSHOT as one build of a repository: its NAME is "v" + build.
+	private void deploySnapshot(Path repo, String build, String timestamp) throws Exception {
+		Path jar = JavaLibraryJar.build(Files.createDirectories(this.tempDir.resolve("snapshot-build-" + build)),
+				"fixture-lib.jar",
+				Map.of("fixture/lib/Greeter.java",
+						"package fixture.lib; public class Greeter { public static final String NAME = \"v" + build
+								+ "\"; }"));
+		String value = "1.0-" + timestamp + "-" + build;
+		Path dir = Files.createDirectories(repo.resolve("test/fixture/fixture-lib/1.0-SNAPSHOT"));
+		write(dir.resolve("fixture-lib-" + value + ".jar"), Files.readAllBytes(jar));
+		write(dir.resolve("fixture-lib-" + value + ".pom"), """
+				<project xmlns="http://maven.apache.org/POM/4.0.0">
+				  <modelVersion>4.0.0</modelVersion>
+				  <groupId>test.fixture</groupId>
+				  <artifactId>fixture-lib</artifactId>
+				  <version>1.0-SNAPSHOT</version>
+				</project>
+				""".getBytes(StandardCharsets.UTF_8));
+		write(dir.resolve("maven-metadata.xml"),
+				("""
+						<metadata><groupId>test.fixture</groupId><artifactId>fixture-lib</artifactId><version>1.0-SNAPSHOT</version>
+						<versioning><snapshot><timestamp>%s</timestamp><buildNumber>%s</buildNumber></snapshot>
+						<lastUpdated>%s</lastUpdated>
+						<snapshotVersions>
+						<snapshotVersion><extension>jar</extension><value>%s</value><updated>%s</updated></snapshotVersion>
+						<snapshotVersion><extension>pom</extension><value>%s</value><updated>%s</updated></snapshotVersion>
+						</snapshotVersions></versioning></metadata>
+						"""
+					.formatted(timestamp, build, timestamp.replace(".", ""), value, timestamp.replace(".", ""), value,
+							timestamp.replace(".", "")))
+					.getBytes(StandardCharsets.UTF_8));
+	}
+
+	@Test
+	void anIdNamedCentralReplacesCentralsUrl() {
+		List<RemoteRepository> all = JavaClassPath
+			.repositories(List.of(new RemoteRepository("central", "https://mirror.example/maven2/"),
+					new RemoteRepository("clojars", RemoteRepository.CLOJARS.url())));
+		assertThat(all).extracting(RemoteRepository::id).containsExactly("central", "clojars");
+		assertThat(all.get(0).url()).isEqualTo("https://mirror.example/maven2/");
+		// Maven's super POM declares Central without snapshots: a SNAPSHOT is never asked
+		// of it, though a repository given (or redefining the id) serves them
+		assertThat(JavaClassPath.repositories(List.of()))
+			.containsExactly(RemoteRepository.CENTRAL.withSnapshots(RepositoryPolicy.DISABLED));
+		assertThat(all.get(0).snapshots()).isEqualTo(RepositoryPolicy.DEFAULT);
+	}
+
+	@Test
+	void aRepositoryUrlWithAnEqualsSignAndNoIdKeepsItsUrl() throws Exception {
+		Path program = program("prog.lisp", "(print 1)\n");
+		List<List<RemoteRepository>> seen = new java.util.ArrayList<>();
+		String url = "https://repo.example/maven?x=1";
+		assertThatThrownBy(() -> runCli(repositories -> {
+			seen.add(repositories);
+			throw new IllegalStateException("stop");
+		}, program.toString(), "--java-dep", "a:b:1", "--java-repository", url))
+			.isInstanceOf(IllegalStateException.class);
+		assertThat(seen.get(0).get(1)).isEqualTo(new RemoteRepository("java-repository-1", url));
+	}
+
+	@Test
+	void aMalformedRepositoryIsRefusedByName() throws Exception {
+		Path program = program("prog.lisp", "(print 1)\n");
+		assertThatThrownBy(
+				() -> runCli(program.toString(), "--java-dep", "a:b:1", "--java-repository", "ftp://host/repo"))
+			.isInstanceOf(IllegalArgumentException.class)
+			.hasMessageContaining("--java-repository")
+			.hasMessageContaining("ftp://host/repo");
+		assertThatThrownBy(() -> runCli(program.toString(), "--java-dep", "a:b:1", "--java-repository", "x=file:/a",
+				"--java-repository", "x=file:/b"))
+			.isInstanceOf(IllegalArgumentException.class)
+			.hasMessageContaining("'x' is given twice");
+		assertThatThrownBy(() -> runCli(program.toString(), "--java-dep", "a:b:1", "--java-snapshots",
+				"--java-repository", "central-snapshots=file:/a"))
+			.isInstanceOf(IllegalArgumentException.class)
+			.hasMessageContaining("--java-snapshots")
+			.hasMessageContaining("'central-snapshots'");
+		assertThatThrownBy(() -> runCli(program.toString(), "--java-repository", "file:/a"))
+			.isInstanceOf(IllegalArgumentException.class)
+			.hasMessageContaining("need a --java-dep");
+		assertThatThrownBy(() -> runCli(program.toString(), "--java-snapshots"))
+			.isInstanceOf(IllegalArgumentException.class)
+			.hasMessageContaining("need a --java-dep");
+	}
+
+	@Test
+	void aLibraryJarNamesItsCoordinatesAndCarriesNoClassPath() throws Exception {
+		MavenResolver resolver = fixtureResolver();
+		Path program = program("lib.lisp", """
+				(defun twice (x) (java:static "fixture.lib.Greeter" "twice" x))
+				(rontolisp:jvm-export 'twice :params '(:s32) :returns :s32)
+				""");
+		Path output = this.tempDir.resolve("lib.jar");
+		runCli(resolver, program.toString(), "-o", output.toString(), "--no-main", "--class-name", "com.acme.Lib",
+				"--maven-coordinates", "com.acme:lib:1.0", "--java-dep", "test.fixture:fixture-lib:1.0");
+		Map<String, byte[]> entries = entries(output);
+		assertThat(new String(entries.get("META-INF/MANIFEST.MF"), StandardCharsets.UTF_8))
+			.doesNotContain("Class-Path");
+		assertThat(new String(entries.get("META-INF/maven/com.acme/lib/pom.xml"), StandardCharsets.UTF_8))
+			.contains("<groupId>test.fixture</groupId>")
+			.contains("<artifactId>fixture-lib</artifactId>");
+		assertThat(this.tempDir.resolve("lib-lib")).doesNotExist();
+	}
+
+	@Test
+	void aClojureProgramLowersAgainstItsClassPath() throws Exception {
+		Path jar = JavaLibraryJar.build(this.tempDir);
+		// (Greeter/version) is a static call only where the lowering sees the class: a
+		// class it cannot see reads a field of that name.
+		Path program = program("prog.clj", """
+				(println (fixture.lib.Greeter/version))
+				(println (fixture.lib.Greeter/twice 21))
+				(println (.greet (fixture.lib.Greeter. "clj")))
+				(println fixture.lib.Greeter/NAME)
+				""");
+		String expected = "1.0\n42\nhello, clj\nfixture";
+		assertThat(printed(runCli(program.toString(), "--java-classpath", jar.toString()))).isEqualTo(expected);
+		Path output = this.tempDir.resolve("clj.jar");
+		runCli(program.toString(), "-o", output.toString(), "--java-classpath", jar.toString());
+		assertThat(printed(run("-jar", output.toString()))).isEqualTo(expected);
+	}
+
+	@Test
+	void aMissingClassPathEntryIsRefusedByName() throws Exception {
+		Path program = program("prog.lisp", "(print 1)\n");
+		Path missing = this.tempDir.resolve("missing.jar");
+		assertThatThrownBy(() -> runCli(program.toString(), "--java-classpath", missing.toString()))
+			.isInstanceOf(IllegalArgumentException.class)
+			.hasMessageContaining("--java-classpath")
+			.hasMessageContaining(missing.toString());
+	}
+
+	@Test
+	void theClassPathNeedsAJvmOutputWhenCompiling() throws Exception {
+		Path jar = JavaLibraryJar.build(this.tempDir);
+		Path program = program("prog.lisp", "(print 1)\n");
+		assertThatThrownBy(() -> runCli(program.toString(), "-o", this.tempDir.resolve("p.wasm").toString(),
+				"--java-classpath", jar.toString()))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("--java-classpath");
+		assertThatThrownBy(() -> runCli(program.toString(), "--java-release", "21"))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("--java-release");
+	}
+
+	@Test
+	void aMalformedCoordinateFailsBeforeAnythingRuns() throws Exception {
+		Path program = program("prog.lisp", "(print 1)\n");
+		assertThatThrownBy(() -> runCli(program.toString(), "--java-dep", "not-a-coordinate"))
+			.isInstanceOf(IllegalArgumentException.class)
+			.hasMessageContaining("--java-dep");
+	}
+
+	// The source path is no class path: a library of a Java program is its SOURCE, from a
+	// directory, a jar or the sources jar of Maven coordinates, compiled with the
+	// program on every backend.
+	@Test
+	void aJavaProgramCompilesItsLibrariesFromTheSourcePath() throws Exception {
+		MavenResolver resolver = fixtureResolver();
+		Path program = program("Greets.java", """
+				public class Greets {
+				    public static void main(String[] args) {
+				        // a name under a directory of the source path is resolved by the file system:
+				        // a last '.' after a file is no path, a '..' is made canonical first
+				        ClassLoader loader = Greets.class.getClassLoader();
+				        System.out.println(fixture.app.App.hello() + " " + local.Words.twice("a") + " "
+				                + (loader.getResource("local/note.txt/.") != null) + " "
+				                + (loader.getResource("local/note.txt/..") != null) + " "
+				                + (loader.getResource("local/.") != null) + " "
+				                + (loader.getResource("local/note.txt/") != null) + " "
+				                + (loader.getResource(args.length > 9 ? "" : "local/note.txt/.") != null) + " "
+				                + (loader.getResource(args.length > 9 ? "" : "local/.") != null));
+				    }
+				}
+				""");
+		Path root = this.tempDir.resolve("src-root");
+		Files.writeString(Files.createDirectories(root.resolve("local")).resolve("Words.java"),
+				"package local; public class Words { public static String twice(String s) { return s + s; } }");
+		Files.writeString(root.resolve("local").resolve("note.txt"), "note");
+		// fixture-app's sources jar is read; what it depends on ships none and is told,
+		// since nothing of it is reached
+		String[] sourcePath = { "--java-source-path", root.toString(), "--java-source-dep",
+				"test.fixture:fixture-app:1.0" };
+		ByteArrayOutputStream warned = new ByteArrayOutputStream();
+		try (ThreadStdio.Scope _ = ThreadStdio.err(warned)) {
+			assertThat(runCli(resolver, concat(new String[] { program.toString() }, sourcePath)))
+				.isEqualTo("app aa false true true true false true\n");
+		}
+		assertThat(warned.toString(StandardCharsets.UTF_8))
+			.contains("warning: --java-source-dep: no sources jar for test.fixture:fixture-lib:jar:0.9");
+		// a program given with -e and a session have no source tree, but the source path
+		try (ThreadStdio.Scope _ = ThreadStdio.err(warned)) {
+			assertThat(runCli(resolver,
+					concat(new String[] { "-e",
+							"void main() { IO.println(fixture.app.App.hello() + local.Words.twice(\"e\")); }",
+							"--source-language", "java" }, sourcePath)))
+				.isEqualTo("appee\n");
+			ByteArrayOutputStream session = new ByteArrayOutputStream();
+			RontoLispCli repl = new RontoLispCli(
+					new ByteArrayInputStream(
+							"fixture.app.App.hello() + local.Words.twice(\"s\")\n".getBytes(StandardCharsets.UTF_8)),
+					new PrintStream(session));
+			repl.javaDependencyResolver(repositories -> resolver);
+			repl.run(concat(new String[] { "--source-language", "java" }, sourcePath));
+			assertThat(session.toString(StandardCharsets.UTF_8)).contains("$1 ==> \"appss\"");
+		}
+		// nothing of it is carried beside a compiled program, a .wasm included
+		Path module = this.tempDir.resolve("greets.wasm");
+		Path jar = this.tempDir.resolve("greets.jar");
+		try (ThreadStdio.Scope _ = ThreadStdio.err(warned)) {
+			runCli(resolver, concat(new String[] { program.toString(), "-o", module.toString() }, sourcePath));
+			runCli(resolver, concat(new String[] { program.toString(), "-o", jar.toString() }, sourcePath));
+		}
+		assertThat(module).isNotEmptyFile();
+		assertThat(this.tempDir.resolve("greets-lib")).doesNotExist();
+		assertThat(run("-jar", jar.toString())).isEqualTo("app aa false true true true false true\n");
+		// reflection over a library's classes is what reachability metadata declares: the
+		// root's own (META-INF/native-image), and with --java-metadata-repository the
+		// shared repository's for a library a coordinate resolved, but for its entries
+		// naming a class of the JDK; a member naming a class the subset lacks is the
+		// NoClassDefFoundError a JDK's reflection throws where its class path lacks one
+		Files.writeString(root.resolve("local").resolve("Plugin.java"), """
+				package local;
+				public class Plugin {
+				    public String greet() { return "plugin greets"; }
+				    public String other() { return "other"; }
+				    public java.text.SimpleDateFormat format() { return null; }
+				}
+				""");
+		Files.writeString(Files.createDirectories(root.resolve("META-INF/native-image/local/local"))
+			.resolve("reachability-metadata.json"), """
+					{ "reflection": [ { "type": "local.Plugin",
+					  "methods": [ { "name": "greet", "parameterTypes": [] } ] } ] }
+					""");
+		Path declared = program("Declared.java", """
+				public class Declared {
+				    static String named(String name) {
+				        StringBuilder built = new StringBuilder();
+				        for (char c : name.toCharArray()) {
+				            built.append(c);
+				        }
+				        return built.toString();
+				    }
+
+				    static String tried(java.util.concurrent.Callable<Object> call) {
+				        try {
+				            return String.valueOf(call.call());
+				        }
+				        catch (Throwable ex) {
+				            return ex.getClass().getSimpleName() + ": " + ex.getMessage();
+				        }
+				    }
+
+				    public static void main(String[] args) throws Exception {
+				        Class<?> plugin = Class.forName(named("local.Plugin"));
+				        Object made = plugin.getDeclaredConstructor().newInstance();
+				        System.out.println(tried(() -> plugin.getMethod(named("greet")).invoke(made)));
+				        System.out.println(tried(() -> plugin.getMethod(named("other")).invoke(made)));
+				        System.out.println(tried(() -> plugin.getMethod(named("format"))));
+				        System.out.println(tried(() -> Class.forName(named("local.Words"))));
+				        System.out.println(tried(() -> Class.forName(named("fixture.app.App")).getMethod(named("hello"))
+				            .invoke(null)));
+				        System.out.println(tried(() -> String.class.getMethod(named("isBlank")).invoke(" ")));
+				    }
+				}
+				""");
+		Path repository = Files.createDirectories(this.tempDir.resolve("metadata/test.fixture/fixture-app/1"));
+		Files.writeString(repository.resolveSibling("index.json"), """
+				[ { "latest": true, "metadata-version": "1", "tested-versions": [ "0.5" ] } ]
+				""");
+		Files.writeString(repository.resolve("reachability-metadata.json"), """
+				{ "reflection": [
+				  { "type": "fixture.app.App", "methods": [ { "name": "hello", "parameterTypes": [] } ] },
+				  { "type": "java.lang.String", "methods": [ { "name": "isBlank", "parameterTypes": [] } ] } ] }
+				""");
+		String refused = "UnsupportedOperationException: invoke of %s is not supported by the experimental Java subset"
+				+ " where the program uses it only by reflection";
+		String lacked = "NoClassDefFoundError: the class java.text.SimpleDateFormat is not supported by the"
+				+ " experimental Java subset yet";
+		ByteArrayOutputStream told = new ByteArrayOutputStream();
+		try (ThreadStdio.Scope _ = ThreadStdio.err(told)) {
+			assertThat(runCli(resolver, concat(new String[] { declared.toString() }, sourcePath)).lines())
+				.containsExactly("plugin greets", refused.formatted("local.Plugin.other()"), lacked,
+						"ClassNotFoundException: local.Words", "ClassNotFoundException: fixture.app.App",
+						refused.formatted("java.lang.String.isBlank()"));
+			assertThat(runCli(resolver,
+					concat(new String[] { declared.toString(), "--java-metadata-repository",
+							this.tempDir.resolve("metadata").toString() }, sourcePath))
+				.lines()).containsExactly("plugin greets", refused.formatted("local.Plugin.other()"), lacked,
+						"ClassNotFoundException: local.Words", "app", refused.formatted("java.lang.String.isBlank()"));
+		}
+		assertThat(told.toString(StandardCharsets.UTF_8)).contains("local/Plugin.java:5:39: the class "
+				+ "java.text.SimpleDateFormat is not supported by the experimental Java subset yet; where it runs, "
+				+ "it throws java.lang.NoClassDefFoundError");
+		assertThatThrownBy(() -> runCli(declared.toString(), "--java-metadata-repository", "1.0"))
+			.isInstanceOf(IllegalArgumentException.class)
+			.hasMessageContaining("--java-metadata-repository is read for the libraries --java-source-dep resolves");
+		// metadata that is no JSON is refused where it stops being JSON
+		Path written = root.resolve("META-INF/native-image/local/local/reachability-metadata.json");
+		Files.writeString(written, "{ \"reflection\": [ { \"type\": \"local.Plugin\" ]\n}\n");
+		assertThatThrownBy(() -> runCli(resolver, concat(new String[] { declared.toString() }, sourcePath)))
+			.hasMessageContaining(
+					written + ":1:44: reachability metadata " + written + " is no JSON: ',' or '}' expected");
+		// a library named that ships no sources is refused, as an entry that is not there
+		assertThatThrownBy(
+				() -> runCli(resolver, program.toString(), "--java-source-dep", "test.fixture:fixture-lib:1.0"))
+			.isInstanceOf(IllegalArgumentException.class)
+			.hasMessageContaining("--java-source-dep: test.fixture:fixture-lib:jar:1.0 has no sources jar");
+		Path missing = this.tempDir.resolve("missing-sources.jar");
+		assertThatThrownBy(() -> runCli(program.toString(), "--java-source-path", missing.toString()))
+			.isInstanceOf(IllegalArgumentException.class)
+			.hasMessageContaining("--java-source-path")
+			.hasMessageContaining(missing.toString());
+	}
+
+	private static String[] concat(String[] first, String[] second) {
+		String[] all = java.util.Arrays.copyOf(first, first.length + second.length);
+		System.arraycopy(second, 0, all, first.length, second.length);
+		return all;
+	}
+
+	/**
+	 * A {@code file:} repository: {@code fixture-app:1.0} (a class of its own) depending
+	 * on {@code fixture-lib:0.9}, whose jar is absent, and {@code fixture-lib:1.0}, the
+	 * library jar.
+	 */
+	private MavenResolver fixtureResolver() throws Exception {
+		Path repo = fixtureRepository();
+		return MavenResolver.builder()
+			.localRepository(this.tempDir.resolve("local"))
+			.repositories(List.of(new RemoteRepository("fixture", repo.toUri().toString())))
+			.systemProperties(Map.of())
+			.build();
+	}
+
+	private Path fixtureRepository() throws Exception {
+		Path repo = this.tempDir.resolve("repo");
+		Path libJar = JavaLibraryJar.build(Files.createDirectories(this.tempDir.resolve("build-lib")));
+		Path appJar = JavaLibraryJar.build(Files.createDirectories(this.tempDir.resolve("build-app")), "app.jar",
+				Map.of("fixture/app/App.java", """
+						package fixture.app;
+
+						public class App {
+							public static String hello() { return "app"; }
+						}
+						"""));
+		publish(repo, "fixture-lib", "1.0", "", libJar);
+		publish(repo, "fixture-lib", "0.9", "", null);
+		// the sources jar a Java program of the subset compiles the library from
+		Path sources = this.tempDir.resolve("build-app/app-sources.jar");
+		try (java.util.zip.ZipOutputStream zip = new java.util.zip.ZipOutputStream(Files.newOutputStream(sources))) {
+			zip.putNextEntry(new ZipEntry("fixture/app/App.java"));
+			zip.write("package fixture.app; public class App { public static String hello() { return \"app\"; } }"
+				.getBytes(StandardCharsets.UTF_8));
+			zip.closeEntry();
+		}
+		write(Files.createDirectories(repo.resolve("test/fixture/fixture-app/1.0"))
+			.resolve("fixture-app-1.0-sources.jar"), Files.readAllBytes(sources));
+		publish(repo, "fixture-app", "1.0",
+				"""
+						<dependencies>
+						  <dependency><groupId>test.fixture</groupId><artifactId>fixture-lib</artifactId><version>0.9</version></dependency>
+						</dependencies>
+						""",
+				appJar);
+		return repo;
+	}
+
+	private static void publish(Path repo, String artifactId, String version, String dependencies, @Nullable Path jar)
+			throws Exception {
+		Path dir = Files.createDirectories(repo.resolve("test/fixture/" + artifactId + "/" + version));
+		String base = artifactId + "-" + version;
+		write(dir.resolve(base + ".pom"), ("""
+				<project xmlns="http://maven.apache.org/POM/4.0.0">
+				  <modelVersion>4.0.0</modelVersion>
+				  <groupId>test.fixture</groupId>
+				  <artifactId>%s</artifactId>
+				  <version>%s</version>
+				  %s
+				</project>
+				""".formatted(artifactId, version, dependencies)).getBytes(StandardCharsets.UTF_8));
+		if (jar != null) {
+			write(dir.resolve(base + ".jar"), Files.readAllBytes(jar));
+		}
+	}
+
+	// A file and its .sha1, as a repository publishes them.
+	private static void write(Path file, byte[] bytes) throws Exception {
+		Files.write(file, bytes);
+		Files.writeString(file.resolveSibling(file.getFileName() + ".sha1"),
+				java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-1").digest(bytes)));
+	}
+
+}

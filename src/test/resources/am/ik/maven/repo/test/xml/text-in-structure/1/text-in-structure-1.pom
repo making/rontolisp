@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion> junk
+  <groupId>test.xml</groupId>
+  <artifactId>text-in-structure</artifactId>
+  <version>1</version>
+  <dependencies>
+    <dependency>text<groupId>test.lib</groupId><artifactId>a</artifactId><version>1</version>more</dependency>
+  </dependencies>
+</project>

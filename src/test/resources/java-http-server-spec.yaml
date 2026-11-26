@@ -1,0 +1,2546 @@
+# The corpus of the experimental Java subset's HTTP server, com.sun.net.httpserver
+# (FetchSpecE2eTest#javaHttpServer): each program is a Java file started under the JDK
+# running the test and on every transport a served application has -- the interpreter,
+# the JVM, a --native output, a --component under `wasmtime serve`, its network
+# granted, and a --no-wasi reactor (`reactor`) a host calls for each request: node,
+# through the glue --emit-js-glue writes, as a Cloudflare Worker's runtime does --
+# and asked the same requests in turn. @PORT@ stands for the port a leg binds (0: the program tells
+# the one it got), @ORIGIN@ for the test's local origin and @LEG@ for the leg's name. Written here; nothing is copied or translated from a JDK or its tests
+# (.kb/java-frontend-provenance.md).
+#
+# `tcp` marks a program whose handlers open sockets: @PEER@ is the port of the test's own
+# TCP peer on the loopback, which answers a connection's lines (`echo TEXT`, `later
+# MILLIS`, `octets`, `big COUNT`, `bye`; nothing to any other), and @HELD@ the port of a
+# listener whose queue is full, which a connect waits on. Its component leg is granted the
+# network (`-S cli=y -S inherit-network=y`), and its reactor leg is compiled with
+# --host-sockets, the host's connect() one over node:net.
+#
+# A request's `expected` is what a JDK 25 answers -- the status, the fields `show`
+# names, the body -- and the JDK leg checks that it still is. `deviates` holds, by leg,
+# what a leg answers instead (each a difference doc/*/java/deviations.md states), and
+# `skip` the legs a request is not sent on, with the reason; `unanswered` is how many
+# seconds a leg waits for an answer it is not to give. `log` is what the program
+# prints on lines starting "| ", in order: not read on the component leg, where the
+# host starts the program as often as it likes, and read on the reactor leg once it has
+# as many lines, since that host goes on after its last answer; `logDeviates` holds, by
+# leg, what a leg logs instead. `reactorReports` are lines the reactor leg's host has on
+# its standard error: the glue's report of a request that failed, and the program's
+# reports of what ended an instance, which reach the host through --host-output.
+#
+# A program may be an example instead of a source (`example`, a path under examples/;
+# the other .java files of its directory are written beside it),
+# which binds the port of its PORT environment variable, says it on the line
+# `listening` matches, and is ended once asked when it is `endless`; `unshown` are the
+# lines of a body left out, by pattern. `sourcePath` (directories of the repository) and
+# `sourceDep` (Maven coordinates) are the libraries a program uses: read as source on every
+# leg, the coordinates' sources jars; compiled by javac onto the JDK leg's class path, beside
+# the coordinates' jars. An example in a Maven project's src/main/java declares neither:
+# its pom's dependencies are both (ExampleProject). `compiled` has the JDK leg compile the program too and start its
+# class: a library that looks for the program's classes on the class path finds none of a
+# source launcher's. `skip` holds, by leg, the legs a program is not run on, with the
+# reason. `keyvalue` marks a program keeping its state in wasi:keyvalue@0.2.0-draft2: its
+# component leg runs on sluice-wicket-runtime-wasi, the binary -Drontolisp.wicket names
+# (skipped without it; wasmtime 51 links the first draft only), the store in a file of the
+# leg's -- a host that runs each request in an instance of its own --; its reactor leg's host
+# hands the glue a namespace shaped like Workers KV, under JSPI (skipped where node has none).
+# `hostTimer` marks a program whose threads wait for a time, or a request for another: its
+# reactor leg is compiled --host-timer, the waits in its host through JSPI (skipped where
+# node has none).
+programs:
+  - name: server
+    file: Server.java
+    hostTimer: true
+    source: |
+      import com.sun.net.httpserver.Authenticator;
+      import com.sun.net.httpserver.BasicAuthenticator;
+      import com.sun.net.httpserver.Filter;
+      import com.sun.net.httpserver.Headers;
+      import com.sun.net.httpserver.HttpContext;
+      import com.sun.net.httpserver.HttpExchange;
+      import com.sun.net.httpserver.HttpHandler;
+      import com.sun.net.httpserver.HttpHandlers;
+      import com.sun.net.httpserver.HttpPrincipal;
+      import com.sun.net.httpserver.HttpServer;
+      import java.io.IOException;
+      import java.io.InputStream;
+      import java.io.OutputStream;
+      import java.net.InetAddress;
+      import java.net.InetSocketAddress;
+      import java.net.URI;
+      import java.net.http.HttpClient;
+      import java.net.http.HttpRequest;
+      import java.net.http.HttpResponse;
+      import java.nio.charset.StandardCharsets;
+      import java.util.ArrayList;
+      import java.util.Arrays;
+      import java.util.List;
+      import java.util.concurrent.CountDownLatch;
+      import java.util.concurrent.ExecutorService;
+      import java.util.concurrent.Executors;
+      import java.util.concurrent.TimeUnit;
+      import java.util.concurrent.atomic.AtomicInteger;
+
+      public class Server {
+
+          static final String ORIGIN = "@ORIGIN@";
+
+          static final Object LOCK = new Object();
+
+          // A handler that logs after its response is out holds ORDER from before the response
+          // to its last line: the client sends its next request on the response, and the next
+          // handler, on another thread of the executor, would log first.
+          static final Object ORDER = new Object();
+
+          static int count;
+
+          static int counting;
+
+          static int most;
+
+          static final Thread MAIN = Thread.currentThread();
+
+          static final CountDownLatch STOPPED = new CountDownLatch(1);
+
+          static final CountDownLatch RELEASED = new CountDownLatch(1);
+
+          static final List<String> TRAIL = new ArrayList<>();
+
+          static class Around extends Filter {
+
+              final String name;
+
+              Around(String name) {
+                  this.name = name;
+              }
+
+              public void doFilter(HttpExchange exchange, Chain chain) throws IOException {
+                  exchange.getResponseHeaders().add("X-Trail", name);
+                  TRAIL.add(name + " in");
+                  synchronized (ORDER) {
+                      chain.doFilter(exchange);
+                      System.out.println("| the filter " + name + " after its chain: " + TRAIL);
+                  }
+              }
+
+              public String description() {
+                  return "around " + name;
+              }
+          }
+
+          static BasicAuthenticator basic(String realm) {
+              return new BasicAuthenticator(realm) {
+                  public boolean checkCredentials(String username, String password) {
+                      System.out.println("| credentials: [" + username + "] [" + password + "]");
+                      return username.equals("user") && password.equals("pass:word");
+                  }
+              };
+          }
+
+          interface Attempt {
+              Object run() throws Exception;
+          }
+
+          static String attempt(Attempt attempt) {
+              try {
+                  return String.valueOf(attempt.run());
+              }
+              catch (Exception e) {
+                  return e.toString();
+              }
+          }
+
+          static void log(String what, Attempt attempt) {
+              System.out.println("| " + what + ": " + attempt(attempt));
+          }
+
+          static void text(HttpExchange exchange, int status, String text) throws IOException {
+              byte[] body = text.getBytes(StandardCharsets.UTF_8);
+              exchange.getResponseHeaders().set("Content-Type", "text/plain; charset=utf-8");
+              exchange.sendResponseHeaders(status, body.length);
+              try (OutputStream out = exchange.getResponseBody()) {
+                  out.write(body);
+              }
+          }
+
+          static void where(HttpExchange exchange) throws IOException {
+              text(exchange, 200, "context " + exchange.getHttpContext().getPath() + " uri " + exchange.getRequestURI());
+          }
+
+          static void request(HttpExchange exchange) throws IOException {
+              synchronized (ORDER) {
+                  answer(exchange);
+              }
+          }
+
+          static void answer(HttpExchange exchange) throws IOException {
+              URI uri = exchange.getRequestURI();
+              Headers asked = exchange.getRequestHeaders();
+              StringBuilder seen = new StringBuilder();
+              seen.append("method ").append(exchange.getRequestMethod()).append('\n');
+              seen.append("uri ").append(uri).append('\n');
+              seen.append("path ").append(uri.getPath()).append(" raw ").append(uri.getRawPath()).append('\n');
+              seen.append("query ").append(uri.getQuery()).append(" raw ").append(uri.getRawQuery()).append('\n');
+              seen.append("protocol ").append(exchange.getProtocol()).append('\n');
+              seen.append("code ").append(exchange.getResponseCode()).append('\n');
+              seen.append("length ").append(attempt(() -> {
+                  exchange.sendResponseHeaders(200, -2);
+                  return "sent";
+              })).append('\n');
+              seen.append("field ").append(asked.get("x-probe")).append(' ').append(asked.getFirst("X-PROBE")).append(' ')
+                  .append(asked.containsKey("x-Probe")).append(' ').append(asked.containsKey("X-probe")).append('\n');
+              seen.append("no field ").append(asked.get("nope")).append(' ').append(asked.getFirst("nope")).append('\n');
+              seen.append("type ").append(asked.getFirst("content-type")).append('\n');
+              seen.append("fixed ").append(attempt(() -> {
+                  asked.add("x-new", "1");
+                  return "added";
+              })).append('\n');
+              InputStream in = exchange.getRequestBody();
+              int first = in.read();
+              byte[] rest = in.readAllBytes();
+              seen.append("body ").append(first).append(' ').append(new String(rest, StandardCharsets.UTF_8)).append(' ')
+                  .append(in.read()).append(' ').append(in.available()).append('\n');
+              Headers answered = exchange.getResponseHeaders();
+              answered.add("x-multi", "one");
+              answered.add("X-Multi", "two");
+              answered.set("x-single", "old");
+              answered.set("X-SINGLE", "new");
+              seen.append("answered ").append(answered.get("X-MULTI")).append(' ').append(answered.getFirst("x-single"))
+                  .append(' ').append(answered.containsKey("X-multi")).append('\n');
+              text(exchange, 201, seen.toString());
+              log("code after the head", () -> exchange.getResponseCode());
+              log("a head sent twice", () -> {
+                  exchange.sendResponseHeaders(200, -1);
+                  return "sent";
+              });
+              log("a write after the close", () -> {
+                  exchange.getResponseBody().write(1);
+                  return "written";
+              });
+          }
+
+          static void echo(HttpExchange exchange) throws IOException {
+              synchronized (ORDER) {
+                  repeat(exchange);
+              }
+          }
+
+          static void repeat(HttpExchange exchange) throws IOException {
+              byte[] body = exchange.getRequestBody().readAllBytes();
+              exchange.getResponseHeaders().add("Content-Type", "application/octet-stream");
+              exchange.sendResponseHeaders(200, body.length == 0 ? -1 : body.length);
+              OutputStream out = exchange.getResponseBody();
+              if (body.length > 0) {
+                  log("too many octets", () -> {
+                      out.write(new byte[body.length + 1]);
+                      return "written";
+                  });
+                  out.write(body, 0, 1);
+                  out.write(body, 1, body.length - 1);
+              }
+              else {
+                  log("an octet of no body", () -> {
+                      out.write(1);
+                      return "written";
+                  });
+              }
+              exchange.close();
+              log("the request body after the close", () -> exchange.getRequestBody().read());
+          }
+
+          static void chunked(HttpExchange exchange) throws IOException {
+              String early = attempt(() -> {
+                  exchange.getResponseBody().write('?');
+                  return "written";
+              });
+              exchange.getResponseHeaders().add("X-Early", early);
+              exchange.sendResponseHeaders(200, 0);
+              OutputStream out = exchange.getResponseBody();
+              out.write("first-".getBytes(StandardCharsets.UTF_8));
+              out.flush();
+              out.write('s');
+              out.write("xecondx".getBytes(StandardCharsets.UTF_8), 1, 5);
+              out.close();
+              out.close();
+          }
+
+          static void stream(HttpExchange exchange) throws IOException {
+              exchange.sendResponseHeaders(200, 0);
+              OutputStream out = exchange.getResponseBody();
+              out.write("first|".getBytes(StandardCharsets.UTF_8));
+              out.flush();
+              String told = attempt(() -> HttpClient.newHttpClient()
+                  .send(HttpRequest.newBuilder(URI.create(ORIGIN + "/seen?stream-@LEG@")).build(),
+                          HttpResponse.BodyHandlers.ofString())
+                  .body());
+              out.write(told.getBytes(StandardCharsets.UTF_8));
+              out.close();
+          }
+
+          static void count(HttpExchange exchange) throws IOException {
+              synchronized (LOCK) {
+                  counting++;
+                  most = Math.max(most, counting);
+              }
+              for (int i = 0; i < 2000; i++) {
+                  synchronized (LOCK) {
+                      int now = count;
+                      count = now + 1;
+                  }
+              }
+              synchronized (LOCK) {
+                  counting--;
+              }
+              text(exchange, 200, "counted");
+          }
+
+          // The handler writes a chunk and waits, an hour at most, for the request that
+          // lets it go on: two requests are in hand at once, and one ends the other's wait.
+          static void held(HttpExchange exchange) throws IOException {
+              exchange.sendResponseHeaders(200, 0);
+              OutputStream out = exchange.getResponseBody();
+              out.write("held|".getBytes(StandardCharsets.UTF_8));
+              out.flush();
+              String ended;
+              try {
+                  ended = RELEASED.await(1, TimeUnit.HOURS) ? "released" : "never released";
+              }
+              catch (InterruptedException e) {
+                  ended = e.toString();
+              }
+              out.write(ended.getBytes(StandardCharsets.UTF_8));
+              out.close();
+          }
+
+          // The handler waits for a thread it starts, which answers the exchange.
+          static void worker(HttpExchange exchange) throws IOException {
+              Thread worker = new Thread(() -> {
+                  try {
+                      text(exchange, 200, "answered by " + Thread.currentThread().getName());
+                  }
+                  catch (IOException e) {
+                      System.out.println("| the worker: " + e);
+                  }
+              }, "worker");
+              worker.start();
+              try {
+                  worker.join();
+              }
+              catch (InterruptedException e) {
+                  System.out.println("| the handler: " + e);
+              }
+          }
+
+          static void filters(HttpServer server) {
+              HttpContext filtered = server.createContext("/filtered", exchange -> {
+                  TRAIL.add("handler");
+                  text(exchange, 200, "trail " + TRAIL + " attribute " + exchange.getAttribute("seen") + " added "
+                          + exchange.getRequestHeaders().get("x-added") + " probe " + exchange.getRequestHeaders().get("X-Probe")
+                          + " fixed " + attempt(() -> {
+                              exchange.getRequestHeaders().add("a", "b");
+                              return "added";
+                          }));
+              });
+              log("no filters", () -> filtered.getFilters());
+              Filter before = Filter.beforeHandler("before it", exchange -> {
+                  TRAIL.add("before");
+                  exchange.setAttribute("seen", "yes");
+              });
+              Filter after = Filter.afterHandler("after it", exchange -> TRAIL.add("after " + exchange.getResponseCode()));
+              Filter adapt = Filter.adaptRequest("adapt it", request -> request.with("X-Added", List.of("one", "two"))
+                  .with("X-Probe", List.of("not instead")));
+              filtered.getFilters().add(new Around("a"));
+              filtered.getFilters().add(before);
+              filtered.getFilters().add(after);
+              filtered.getFilters().add(adapt);
+              filtered.getFilters().add(new Around("b"));
+              log("the filters", () -> filtered.getFilters().size() + " " + before.description() + ", " + after.description()
+                      + ", " + adapt.description());
+              log("a filter of no description", () -> Filter.beforeHandler(null, exchange -> {
+              }));
+              log("a filter of no operation", () -> Filter.adaptRequest("adapt", null));
+              HttpContext blocked = server.createContext("/blocked", exchange -> text(exchange, 200, "reached"));
+              blocked.getFilters().add(new Filter() {
+                  public void doFilter(HttpExchange exchange, Chain chain) throws IOException {
+                      synchronized (ORDER) {
+                          if (exchange.getRequestURI().getQuery() == null) {
+                              text(exchange, 403, "stopped by the filter");
+                              return;
+                          }
+                          chain.doFilter(exchange);
+                          log("a chain run again", () -> {
+                              chain.doFilter(exchange);
+                              return "ran";
+                          });
+                      }
+                  }
+
+                  public String description() {
+                      return "blocks";
+                  }
+              });
+          }
+
+          static void handlers(HttpServer server) {
+              log("a status of two digits", () -> HttpHandlers.of(99, null, null));
+              log("no fields", () -> HttpHandlers.of(200, null, "body"));
+              log("no test", () -> HttpHandlers.handleOrElse(null, exchange -> {
+              }, exchange -> {
+              }));
+              Headers canned = new Headers();
+              canned.add("X-Canned", "yes");
+              HttpHandler of = HttpHandlers.of(203, canned, "canned h\u00e9llo");
+              canned.add("X-Late", "late");
+              server.createContext("/canned", of);
+              server.createContext("/either", HttpHandlers.handleOrElse(request -> request.getRequestMethod().equals("GET"),
+                      exchange -> text(exchange, 200, "a get"), HttpHandlers.of(405, Headers.of("Allow", "GET"), "")));
+          }
+
+          static void authenticators(HttpServer server) {
+              HttpContext basic = server.createContext("/basic", exchange -> {
+                  HttpPrincipal principal = exchange.getPrincipal();
+                  text(exchange, 200, "principal " + principal + " name " + principal.getName() + " user "
+                          + principal.getUsername() + " realm " + principal.getRealm() + " equal "
+                          + principal.equals(new HttpPrincipal("user", "the realm")) + " "
+                          + principal.equals(new HttpPrincipal("user", "another")) + " "
+                          + (principal.hashCode() == new HttpPrincipal("user", "the realm").hashCode()));
+              });
+              BasicAuthenticator authenticator = basic("the realm");
+              log("no authenticator", () -> basic.getAuthenticator());
+              log("an authenticator set", () -> basic.setAuthenticator(authenticator));
+              log("an authenticator set again", () -> basic.setAuthenticator(authenticator) == authenticator);
+              log("the authenticator", () -> (basic.getAuthenticator() == authenticator) + " " + authenticator.getRealm());
+              log("an empty realm", () -> basic(""));
+              log("a quote in a realm", () -> basic("a\"b"));
+              log("a quote after a backslash", () -> basic("a\\\"b").getRealm());
+              log("a realm ending in a backslash", () -> basic("a\\"));
+              log("a control in a realm", () -> attempt(() -> basic("a\tb")).replace('\t', '_'));
+              log("a character past 0xff in a realm", () -> basic("\u0100").getRealm().length());
+              log("no charset", () -> new BasicAuthenticator("realm", null) {
+                  public boolean checkCredentials(String username, String password) {
+                      return true;
+                  }
+              });
+              HttpContext latin = server.createContext("/latin", exchange -> text(exchange, 200, "principal " + exchange.getPrincipal()));
+              latin.setAuthenticator(new BasicAuthenticator("a\\\"b", StandardCharsets.ISO_8859_1) {
+                  public boolean checkCredentials(String username, String password) {
+                      return true;
+                  }
+              });
+              HttpContext custom = server.createContext("/custom", exchange -> text(exchange, 200, "principal " + exchange.getPrincipal()));
+              custom.getFilters()
+                  .add(Filter.beforeHandler("ahead", exchange -> exchange.getResponseHeaders()
+                      .add("X-Ahead", "the filter saw " + exchange.getPrincipal())));
+              custom.setAuthenticator(new Authenticator() {
+                  public Result authenticate(HttpExchange exchange) {
+                      String how = String.valueOf(exchange.getRequestURI().getQuery());
+                      if (how.equals("fail")) {
+                          return new Failure(403);
+                      }
+                      if (how.equals("retry")) {
+                          exchange.getResponseHeaders().add("X-Retry", "again");
+                          return new Retry(407);
+                      }
+                      return new Success(new HttpPrincipal("who", "where"));
+                  }
+              });
+              log("the results", () -> new Authenticator.Failure(403).getResponseCode() + " "
+                      + new Authenticator.Retry(407).getResponseCode() + " "
+                      + new Authenticator.Success(new HttpPrincipal("u", "r")).getPrincipal());
+              log("a principal of no name", () -> new HttpPrincipal(null, "r"));
+          }
+
+          public static void main(String[] args) throws Exception {
+              HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", @PORT@), 0);
+              log("no executor", () -> server.getExecutor());
+              log("a path with no slash", () -> server.createContext("hello", Server::where));
+              log("no path", () -> server.createContext(null, Server::where));
+              log("no handler", () -> server.createContext("/none", null));
+              HttpContext hello = server.createContext("/hello", exchange -> text(exchange, 200, "hello"));
+              log("a context", () -> hello.getPath() + " " + (hello.getServer() == server) + " " + hello.getAttributes()
+                      + " " + (hello.getHandler() != null));
+              log("a path twice", () -> server.createContext("/hello", Server::where));
+              log("a context that is not there", () -> {
+                  server.removeContext("/gone");
+                  return "removed";
+              });
+              server.createContext("/gone", Server::where);
+              server.removeContext("/gone");
+              server.createContext("/a", Server::where);
+              server.createContext("/a/b", Server::where);
+              server.createContext("/unhandled");
+              server.createContext("/request", Server::request);
+              server.createContext("/echo", Server::echo);
+              server.createContext("/nothing", exchange -> {
+                  exchange.getResponseHeaders().add("X-Nothing", "here");
+                  exchange.sendResponseHeaders(204, -1);
+                  exchange.close();
+              });
+              server.createContext("/chunked", Server::chunked);
+              server.createContext("/stream", Server::stream);
+              server.createContext("/count", Server::count);
+              server.createContext("/counted", exchange -> text(exchange, 200,
+                  "count " + count + " within the pool's bound " + (most >= 1 && most <= 4)));
+              server.createContext("/thread", exchange -> text(exchange, 200,
+                  "the thread main ran on " + (Thread.currentThread() == MAIN) + ", the executor's "
+                          + Thread.currentThread().getName().startsWith("handler-")));
+              server.createContext("/worker", Server::worker);
+              server.createContext("/held", Server::held);
+              server.createContext("/release", exchange -> {
+                  RELEASED.countDown();
+                  text(exchange, 200, "released");
+              });
+              server.createContext("/anonymous", exchange -> text(exchange, 200, "principal " + exchange.getPrincipal()));
+              filters(server);
+              handlers(server);
+              authenticators(server);
+          server.createContext("/peer", exchange -> text(exchange, 200,
+                      exchange.getRemoteAddress().getAddress().getHostAddress() + " "
+                              + (exchange.getRemoteAddress().getPort() > 0) + " "
+                              + exchange.getLocalAddress().getAddress().getHostAddress() + " "
+                              + (exchange.getLocalAddress().getPort() == server.getAddress().getPort())));
+              server.createContext("/short", exchange -> {
+                  exchange.sendResponseHeaders(200, 5);
+                  OutputStream out = exchange.getResponseBody();
+                  out.write('a');
+                  log("a body cut short", () -> {
+                      out.close();
+                      return "closed";
+                  });
+              });
+              server.createContext("/throws", exchange -> {
+                  throw new IllegalStateException("no answer");
+              });
+              server.createContext("/committed", exchange -> {
+                  exchange.sendResponseHeaders(200, 0);
+                  OutputStream out = exchange.getResponseBody();
+                  out.write("sent".getBytes(StandardCharsets.UTF_8));
+                  out.flush();
+                  throw new IOException("after the head");
+              });
+              server.createContext("/silent", exchange -> {
+              });
+              server.createContext("/stop", exchange -> {
+                  text(exchange, 200, "bye");
+                  long before = System.nanoTime();
+                  server.stop(1);
+                  log("a stop by a handler waits its delay", () -> System.nanoTime() - before >= 900000000L);
+                  STOPPED.countDown();
+              });
+              log("a negative delay", () -> {
+                  server.stop(-1);
+                  return "stopped";
+              });
+              AtomicInteger made = new AtomicInteger();
+              ExecutorService pool = Executors.newFixedThreadPool(4,
+                      task -> new Thread(task, "handler-" + made.incrementAndGet()));
+              server.setExecutor(pool);
+              log("an executor", () -> server.getExecutor() == pool);
+              server.start();
+              log("started twice", () -> {
+                  server.start();
+                  return "started";
+              });
+              log("an executor once started", () -> {
+                  server.setExecutor(null);
+                  return "set";
+              });
+              log("bound twice", () -> {
+                  server.bind(new InetSocketAddress("127.0.0.1", 0), 0);
+                  return "bound";
+              });
+              log("the address", () -> server.getAddress().getHostString() + " " + (server.getAddress().getPort() > 0));
+              log("a server with a context", () -> {
+                  HttpServer.create(null, 0, "/", null);
+                  return "made";
+              });
+              log("an address in numbers", () -> InetAddress.getByName("1.2.3") + " "
+                      + InetAddress.getByName("65536").getHostAddress() + " " + InetAddress.getByName("") + " "
+                      + InetAddress.getByName(null) + " " + Arrays.toString(InetAddress.getByName("10.1.2.200").getAddress())
+                      + " " + InetAddress.getByAddress("h", new byte[] { 10, 1, 2, 3 }) + " "
+                      + new InetSocketAddress("01.2.3.4", 80));
+              log("numbers that are no address", () -> attempt(() -> InetAddress.getByName("1.2.3.256"))
+                  .startsWith("java.net.UnknownHostException: 1.2.3.256: ") + " "
+                      + attempt(() -> InetAddress.getByAddress(new byte[3])));
+              System.out.println("listening " + server.getAddress().getPort());
+              // the program's own thread waits while the server serves
+              STOPPED.await();
+              pool.shutdown();
+              log("main went on once the server stopped", () -> "it did");
+          }
+      }
+    log: |
+      | no executor: null
+      | a path with no slash: java.lang.IllegalArgumentException: Illegal value for path or protocol
+      | no path: java.lang.NullPointerException: null handler, or path parameter
+      | no handler: java.lang.NullPointerException: null handler, or path parameter
+      | a context: /hello true {} true
+      | a path twice: java.lang.IllegalArgumentException: cannot add context to list
+      | a context that is not there: java.lang.IllegalArgumentException: cannot remove element from list
+      | no filters: []
+      | the filters: 5 before it, after it, adapt it
+      | a filter of no description: java.lang.NullPointerException
+      | a filter of no operation: java.lang.NullPointerException
+      | a status of two digits: java.lang.IllegalArgumentException: statusCode must be 3-digit: 99
+      | no fields: java.lang.NullPointerException
+      | no test: java.lang.NullPointerException
+      | no authenticator: null
+      | an authenticator set: null
+      | an authenticator set again: true
+      | the authenticator: true the realm
+      | an empty realm: java.lang.IllegalArgumentException: realm must not be empty
+      | a quote in a realm: java.lang.IllegalArgumentException: realm invalid: a"b
+      | a quote after a backslash: a\"b
+      | a realm ending in a backslash: java.lang.IllegalArgumentException: realm invalid: a\
+      | a control in a realm: java.lang.IllegalArgumentException: realm invalid: a_b
+      | a character past 0xff in a realm: java.lang.IllegalArgumentException: realm invalid: Ā
+      | no charset: java.lang.NullPointerException
+      | the results: 403 407 r:u
+      | a principal of no name: java.lang.NullPointerException
+      | a negative delay: java.lang.IllegalArgumentException: negative delay parameter
+      | an executor: true
+      | started twice: java.lang.IllegalStateException: server in wrong state
+      | an executor once started: java.lang.IllegalStateException: server already started
+      | bound twice: java.net.BindException: HttpServer already bound
+      | the address: 127.0.0.1 true
+      | a server with a context: java.lang.NullPointerException
+      | an address in numbers: /1.2.0.3 0.1.0.0 localhost/127.0.0.1 localhost/127.0.0.1 [10, 1, 2, -56] h/10.1.2.3 /1.2.3.4:80
+      | numbers that are no address: true java.net.UnknownHostException: addr is of illegal length
+      | code after the head: 201
+      | a head sent twice: java.io.IOException: headers already sent
+      | a write after the close: java.io.IOException: stream closed
+      | too many octets: java.io.IOException: too many bytes to write to stream
+      | the request body after the close: java.io.IOException: Stream is closed
+      | an octet of no body: java.io.IOException: stream closed
+      | the request body after the close: java.io.IOException: Stream is closed
+      | the filter b after its chain: [a in, before, b in, handler]
+      | the filter a after its chain: [a in, before, b in, handler, after 200]
+      | a chain run again: java.io.IOException: headers already sent
+      | credentials: [user] [pass:word]
+      | credentials: [user] []
+      | a body cut short: java.io.IOException: insufficient bytes written to stream
+      | a stop by a handler waits its delay: true
+      | main went on once the server stopped: it did
+    # the reactor binds no port; its stop by a handler waits its delay after the call
+    # answered, in a call the host still has in hand (/short's), and cuts those calls:
+    # main goes on in none
+    logDeviates:
+      reactor: |
+        | no executor: null
+        | a path with no slash: java.lang.IllegalArgumentException: Illegal value for path or protocol
+        | no path: java.lang.NullPointerException: null handler, or path parameter
+        | no handler: java.lang.NullPointerException: null handler, or path parameter
+        | a context: /hello true {} true
+        | a path twice: java.lang.IllegalArgumentException: cannot add context to list
+        | a context that is not there: java.lang.IllegalArgumentException: cannot remove element from list
+        | no filters: []
+        | the filters: 5 before it, after it, adapt it
+        | a filter of no description: java.lang.NullPointerException
+        | a filter of no operation: java.lang.NullPointerException
+        | a status of two digits: java.lang.IllegalArgumentException: statusCode must be 3-digit: 99
+        | no fields: java.lang.NullPointerException
+        | no test: java.lang.NullPointerException
+        | no authenticator: null
+        | an authenticator set: null
+        | an authenticator set again: true
+        | the authenticator: true the realm
+        | an empty realm: java.lang.IllegalArgumentException: realm must not be empty
+        | a quote in a realm: java.lang.IllegalArgumentException: realm invalid: a"b
+        | a quote after a backslash: a\"b
+        | a realm ending in a backslash: java.lang.IllegalArgumentException: realm invalid: a\
+        | a control in a realm: java.lang.IllegalArgumentException: realm invalid: a_b
+        | a character past 0xff in a realm: java.lang.IllegalArgumentException: realm invalid: Ā
+        | no charset: java.lang.NullPointerException
+        | the results: 403 407 r:u
+        | a principal of no name: java.lang.NullPointerException
+        | a negative delay: java.lang.IllegalArgumentException: negative delay parameter
+        | an executor: true
+        | started twice: java.lang.IllegalStateException: server in wrong state
+        | an executor once started: java.lang.IllegalStateException: server already started
+        | bound twice: java.net.BindException: HttpServer already bound
+        | the address: 127.0.0.1 false
+        | a server with a context: java.lang.NullPointerException
+        | an address in numbers: /1.2.0.3 0.1.0.0 localhost/127.0.0.1 localhost/127.0.0.1 [10, 1, 2, -56] h/10.1.2.3 /1.2.3.4:80
+        | numbers that are no address: true java.net.UnknownHostException: addr is of illegal length
+        | code after the head: 201
+        | a head sent twice: java.io.IOException: headers already sent
+        | a write after the close: java.io.IOException: stream closed
+        | too many octets: java.io.IOException: too many bytes to write to stream
+        | the request body after the close: java.io.IOException: Stream is closed
+        | an octet of no body: java.io.IOException: stream closed
+        | the request body after the close: java.io.IOException: Stream is closed
+        | the filter b after its chain: [a in, before, b in, handler]
+        | the filter a after its chain: [a in, before, b in, handler, after 200]
+        | a chain run again: java.io.IOException: headers already sent
+        | credentials: [user] [pass:word]
+        | credentials: [user] []
+        | a body cut short: java.io.IOException: insufficient bytes written to stream
+        | a stop by a handler waits its delay: true
+    reactorReports:
+      - "HTTP-HANDLER: handler failed: java.io.IOException: after the head"
+      - "HTTP-HANDLER: handler failed: the server stopped with the exchange in hand"
+    requests:
+      - name: a-body-of-a-length-told
+        request: GET /hello
+        show: [content-type]
+        expected: |
+          200
+          content-type: text/plain; charset=utf-8
+          hello
+      - name: the-longest-context-a-path-starts-with
+        request: GET /a/b/c?q=1
+        expected: |
+          200
+          context /a/b uri /a/b/c?q=1
+      - name: a-context-is-a-prefix-of-the-path-not-a-segment
+        request: GET /ab
+        expected: |
+          200
+          context /a uri /ab
+      - name: a-context-is-found-by-the-decoded-path
+        request: GET /a%2Fb
+        expected: |
+          200
+          context /a/b uri /a%2Fb
+      - name: a-path-of-no-context
+        request: GET /nowhere
+        show: [content-type]
+        expected: |
+          404
+          content-type: text/html
+          <h1>404 Not Found</h1>No context found for request
+      - name: a-context-removed
+        request: GET /gone
+        expected: |
+          404
+          <h1>404 Not Found</h1>No context found for request
+      - name: a-context-with-no-handler
+        request: GET /unhandled
+        expected: |
+          500
+          <h1>500 Internal Server Error</h1>No handler for context
+      - name: the-request-as-a-handler-reads-it-and-fields-both-ways
+        request: POST /request/x%20y?q=a%20b&r=%C3%A9
+        headers: {X-Probe: p1, Content-Type: text/plain}
+        body: "héllo"
+        show: [x-multi, x-single, content-type]
+        expected: |
+          201
+          x-multi: one
+          x-multi: two
+          x-single: new
+          content-type: text/plain; charset=utf-8
+          method POST
+          uri /request/x%20y?q=a%20b&r=%C3%A9
+          path /request/x y raw /request/x%20y
+          query q=a b&r=é raw q=a%20b&r=%C3%A9
+          protocol HTTP/1.1
+          code -1
+          length java.lang.IllegalArgumentException: Content-Length: -2
+          field [p1] p1 true true
+          no field null null
+          type text/plain
+          fixed java.lang.UnsupportedOperationException: unsupported operation
+          body 104 éllo -1 0
+          answered [one, two] new true
+        # the fetch standard's Headers joins a field sent twice (Set-Cookie apart)
+        deviates:
+          reactor: |
+            201
+            x-multi: one, two
+            x-single: new
+            content-type: text/plain; charset=utf-8
+            method POST
+            uri /request/x%20y?q=a%20b&r=%C3%A9
+            path /request/x y raw /request/x%20y
+            query q=a b&r=é raw q=a%20b&r=%C3%A9
+            protocol HTTP/1.1
+            code -1
+            length java.lang.IllegalArgumentException: Content-Length: -2
+            field [p1] p1 true true
+            no field null null
+            type text/plain
+            fixed java.lang.UnsupportedOperationException: unsupported operation
+            body 104 éllo -1 0
+            answered [one, two] new true
+      - name: octets-both-ways
+        request: POST /echo
+        hex: fffe4100807f
+        show: [content-type]
+        expected: |
+          200
+          content-type: application/octet-stream
+          fffe4100807f
+      - name: no-body-either-way
+        request: GET /echo
+        expected: |
+          200
+      - name: a-status-with-no-body
+        request: GET /nothing
+        show: [x-nothing]
+        expected: |
+          204
+          x-nothing: here
+      - name: a-body-in-chunks
+        request: GET /chunked
+        show: [x-early]
+        expected: |
+          200
+          x-early: java.io.IOException: response headers not sent yet
+          first-second
+      - name: a-head-request
+        request: HEAD /hello
+        show: [content-type]
+        expected: |
+          200
+          content-type: text/plain; charset=utf-8
+      - name: a-handler-runs-on-a-thread-of-the-executor
+        request: GET /thread
+        expected: |
+          200
+          the thread main ran on false, the executor's true
+      - name: a-handler-waits-for-a-thread-that-answers
+        request: GET /worker
+        expected: |
+          200
+          answered by worker
+      # /held writes "held|" and waits for /release, which is asked while /held is in
+      # hand: where a chunk is on its way when its write returns, once the test has
+      # read that chunk -- the handler is waiting then --, elsewhere beside it.
+      - name: a-request-that-waits-is-ended-by-another
+        request: GET /held
+        first: "held|"
+        meanwhile: GET /release
+        expected: |
+          200
+          held|released
+      - name: the-two-ends-of-the-connection
+        request: GET /peer
+        skip:
+          component: wasi:http tells a handler neither the peer nor the port it is served on
+          reactor: a host's Request tells a handler neither the peer nor the port it is served on
+        expected: |
+          200
+          127.0.0.1 true 127.0.0.1 true
+      # /stream writes "first|", then asks the origin whether the test has read it yet
+      # and writes the answer: "seen" only where a chunk is on its way when its write
+      # returns. The origin waits for the test's reader, briefly on a leg said to
+      # deviate.
+      - name: a-chunk-is-on-its-way-when-its-write-returns
+        request: GET /stream
+        first: "first|"
+        expected: |
+          200
+          first|seen
+        deviates:
+          interpreter: |
+            200
+            first|unseen
+          jvm: |
+            200
+            first|unseen
+          native: |
+            200
+            first|unseen
+          reactor: |
+            200
+            first|unseen
+      - name: handlers-at-once-under-an-executor
+        request: GET /count
+        times: 16
+        expected: |
+          200
+          counted
+      - name: what-the-handlers-counted-under-one-lock
+        request: GET /counted
+        skip:
+          component: the host starts an instance for the requests it likes, and each counts its own
+        expected: |
+          200
+          count 32000 within the pool's bound true
+      - name: filters-around-a-handler-in-their-order
+        request: GET /filtered
+        headers: {X-Probe: p1}
+        show: [x-trail]
+        expected: |
+          200
+          x-trail: a
+          x-trail: b
+          trail [a in, before, b in, handler] attribute yes added [one, two] probe [p1] fixed java.lang.UnsupportedOperationException: unsupported operation
+        deviates:
+          reactor: |
+            200
+            x-trail: a, b
+            trail [a in, before, b in, handler] attribute yes added [one, two] probe [p1] fixed java.lang.UnsupportedOperationException: unsupported operation
+      - name: a-filter-that-answers-itself
+        request: GET /blocked
+        expected: |
+          403
+          stopped by the filter
+      - name: a-filter-that-runs-its-chain
+        request: GET /blocked?through
+        expected: |
+          200
+          reached
+      - name: a-handler-of-a-response-told-ahead
+        request: POST /canned
+        body: "abc"
+        show: [x-canned, x-late]
+        expected: |
+          203
+          x-canned: yes
+          canned héllo
+      - name: a-handler-by-a-test-of-the-request
+        request: GET /either
+        expected: |
+          200
+          a get
+      - name: the-other-handler
+        request: POST /either
+        body: "x"
+        show: [allow]
+        expected: |
+          405
+          allow: GET
+      - name: no-credentials-are-asked-for
+        request: GET /basic
+        show: [www-authenticate]
+        expected: |
+          401
+          www-authenticate: Basic realm="the realm", charset="UTF-8"
+      - name: credentials-a-colon-in-the-password
+        request: GET /basic
+        headers: {Authorization: "basic dXNlcjpwYXNzOndvcmQ"}
+        expected: |
+          200
+          principal the realm:user name the realm:user user user realm the realm equal true false true
+      - name: credentials-refused-are-asked-for-again
+        request: GET /basic
+        headers: {Authorization: "Basic dXNlcjo="}
+        show: [www-authenticate]
+        expected: |
+          401
+          www-authenticate: Basic realm="the realm", charset="UTF-8"
+      - name: another-scheme-is-refused
+        request: GET /basic
+        headers: {Authorization: "Bearer abc"}
+        show: [www-authenticate]
+        expected: |
+          401
+      - name: credentials-in-another-charset
+        request: GET /latin
+        headers: {Authorization: "Basic /HNlcjpw5HNz"}
+        expected: |
+          200
+          principal a\"b:üser
+      - name: a-realm-as-it-is-quoted
+        request: GET /latin
+        show: [www-authenticate]
+        expected: |
+          401
+          www-authenticate: Basic realm="a\"b"
+      - name: an-authenticator-after-the-filters
+        request: GET /custom
+        show: [x-ahead]
+        expected: |
+          200
+          x-ahead: the filter saw null
+          principal where:who
+      - name: an-authenticator-that-refuses
+        request: GET /custom?fail
+        show: [x-ahead]
+        expected: |
+          403
+          x-ahead: the filter saw null
+      - name: an-authenticator-that-asks-again
+        request: GET /custom?retry
+        show: [x-retry]
+        expected: |
+          407
+          x-retry: again
+      - name: no-authenticator-no-principal
+        request: GET /anonymous
+        expected: |
+          200
+          principal null
+      # The handler returns with its exchange open, which outlives it as a JDK's does:
+      # nothing answers it until the server stops.
+      - name: a-body-cut-short
+        request: POST /short
+        unanswered: 3
+        expected: |
+          (no response)
+      - name: a-handler-that-throws
+        request: POST /throws
+        expected: |
+          (no response)
+        deviates:
+          interpreter: "500"
+          jvm: "500"
+          native: "500"
+          component: "500"
+          reactor: "500"
+      # the head and "sent" are out on a JDK, which closes the connection with no last
+      # chunk, and on the component, whose body ends short; where the body goes whole
+      # nothing is out yet, and the transport answers the failure as an application's:
+      # one plain 500, the exception's text on standard error alone (the reactor's: its
+      # host's, reactorReports)
+      - name: a-handler-that-throws-after-the-head
+        request: GET /committed
+        show: [content-type]
+        expected: |
+          (no response)
+        deviates:
+          interpreter: |
+            500
+            content-type: text/plain
+            Internal Server Error
+          jvm: |
+            500
+            content-type: text/plain
+            Internal Server Error
+          native: |
+            500
+            content-type: text/plain
+            Internal Server Error
+          reactor: |
+            500
+            content-type: text/plain
+            Internal Server Error
+      - name: a-handler-that-answers-nothing
+        request: POST /silent
+        unanswered: 3
+        expected: |
+          (no response)
+      - name: a-stop-by-a-handler-answers-the-request-in-hand
+        request: GET /stop
+        expected: |
+          200
+          bye
+  # examples/java/httpbin: the five echo endpoints, a wrong method and a path of
+  # none. The fields the client and the transports add on their own are left out --
+  # Host, which wasi:http does not hand a handler, and the client's User-Agent -- so
+  # the field before them keeps its comma.
+  - name: httpbin
+    file: httpbin/Httpbin.java
+    example: java/httpbin/src/main/java/httpbin/Httpbin.java
+    endless: true
+    listening: "^Listening on http://localhost:(\\d+)/$"
+    unshown: ['^    "Host": ', '^    "User-agent": ']
+    requests:
+      - name: get-with-a-query
+        request: GET /get?b=two&a=1&a=x%20y&c+d=%C3%A9&empty=&flag
+        headers: {X-Probe: "one, two"}
+        show: [content-type]
+        expected: |
+          200
+          content-type: application/json
+          {
+            "args": {
+              "a": ["1", "x y"],
+              "b": "two",
+              "c d": "é",
+              "empty": "",
+              "flag": ""
+            },
+            "headers": {
+              "Content-length": "0",
+              "X-probe": "one, two"
+            },
+            "method": "GET",
+            "path": "/get"
+          }
+      - name: json-comes-back-as-it-came
+        request: POST /post
+        headers: {Content-Type: application/json}
+        body: '{"name": "rontolisp", "n": 1.50e3, "s": "\u00e9\n"}'
+        expected: |
+          200
+          {
+            "args": {},
+            "data": "{\"name\": \"rontolisp\", \"n\": 1.50e3, \"s\": \"\\u00e9\\n\"}",
+            "headers": {
+              "Content-length": "51",
+              "Content-type": "application/json",
+            },
+            "json": {"name": "rontolisp", "n": 1.50e3, "s": "\u00e9\n"},
+            "method": "POST",
+            "path": "/post"
+          }
+      - name: a-body-that-is-no-json
+        request: PUT /put?q=1
+        headers: {Content-Type: "text/plain; charset=utf-8"}
+        body: "h\u00e9llo \"q\" \\ \t{"
+        expected: |
+          200
+          {
+            "args": {
+              "q": "1"
+            },
+            "data": "héllo \"q\" \\ \t{",
+            "headers": {
+              "Content-length": "15",
+              "Content-type": "text/plain; charset=utf-8",
+            },
+            "json": null,
+            "method": "PUT",
+            "path": "/put"
+          }
+      - name: json-over-lines-between-blanks
+        request: PATCH /patch
+        body: "\n  [1, -0.5e-3,\n   {\"a\": [true, false, null], \"\": {}}]\n"
+        expected: |
+          200
+          {
+            "args": {},
+            "data": "\n  [1, -0.5e-3,\n   {\"a\": [true, false, null], \"\": {}}]\n",
+            "headers": {
+              "Content-length": "55",
+            },
+            "json": [1, -0.5e-3,
+             {"a": [true, false, null], "": {}}],
+            "method": "PATCH",
+            "path": "/patch"
+          }
+      - name: no-body
+        request: DELETE /delete
+        expected: |
+          200
+          {
+            "args": {},
+            "data": "",
+            "headers": {
+              "Content-length": "0",
+            },
+            "json": null,
+            "method": "DELETE",
+            "path": "/delete"
+          }
+      - name: a-wrong-method
+        request: GET /post
+        show: [allow, content-type]
+        expected: |
+          405
+          allow: POST
+          content-type: application/json
+          {
+            "allowed": "POST",
+            "error": "method not allowed"
+          }
+      - name: a-path-of-no-endpoint
+        request: POST /get/more
+        expected: |
+          404
+          {
+            "error": "not found",
+            "path": "/get/more"
+          }
+  # A Servlet application on the container of servlet-httpserver/ (.kb/servlet-httpserver.md),
+  # read as source with the API's sources jar: the JDK leg runs the container javac
+  # compiled. Its builder registers the listeners, a filter on every path and a servlet
+  # that are lambdas, servlets mapped by an exact path, a
+  # prefix and an extension; a form, a forward and an include, the 405 page of the API's
+  # message bundle, OPTIONS (which asks the servlet's class the methods it declares), the
+  # error page of an exception, a response committed by its buffer, a request's cookies
+  # and a cookie of the response, and the parts of a multipart body, kept in memory where there is no java.io.tmpdir. The files of
+  # servlet-resources/ under META-INF/resources are the application's resources, which the
+  # default servlet serves: on the JDK leg of a directory of the class path, on the others
+  # compiled into the program. A query's parameter and sendError's message are the
+  # guestbook's, below.
+  - name: servlet
+    file: Servlets.java
+    hostTimer: true
+    sourcePath: [servlet-httpserver/src/main/java, src/test/resources/servlet-resources]
+    sourceDep: [jakarta.servlet:jakarta.servlet-api:6.1.0]
+    unshown: ['^Host: ', '^User-agent: ']
+    source: |
+      import java.io.IOException;
+      import java.io.InputStream;
+      import java.io.PrintWriter;
+      import java.io.UncheckedIOException;
+      import java.net.InetSocketAddress;
+      import java.nio.charset.StandardCharsets;
+      import java.time.Duration;
+      import java.util.Collections;
+      import java.util.concurrent.ArrayBlockingQueue;
+      import java.util.concurrent.BlockingQueue;
+      import java.util.concurrent.CountDownLatch;
+      import java.util.concurrent.TimeUnit;
+
+      import am.ik.servlet.httpserver.ServletHttpServer;
+      import jakarta.servlet.AsyncContext;
+      import jakarta.servlet.AsyncEvent;
+      import jakarta.servlet.AsyncListener;
+      import jakarta.servlet.DispatcherType;
+      import jakarta.servlet.MultipartConfigElement;
+      import jakarta.servlet.ReadListener;
+      import jakarta.servlet.RequestDispatcher;
+      import jakarta.servlet.ServletContext;
+      import jakarta.servlet.ServletContextEvent;
+      import jakarta.servlet.ServletContextListener;
+      import jakarta.servlet.ServletException;
+      import jakarta.servlet.ServletInputStream;
+      import jakarta.servlet.http.Cookie;
+      import jakarta.servlet.http.HttpServlet;
+      import jakarta.servlet.http.HttpServletRequest;
+      import jakarta.servlet.http.HttpServletResponse;
+      import jakarta.servlet.http.HttpSession;
+      import jakarta.servlet.http.HttpSessionEvent;
+      import jakarta.servlet.http.HttpSessionListener;
+      import jakarta.servlet.http.Part;
+
+      public class Servlets {
+
+          static final CountDownLatch STOPPED = new CountDownLatch(1);
+
+          // not log: a servlet's simple name log is GenericServlet.log, the context's
+          static synchronized void note(String line) {
+              System.out.println("| " + line);
+          }
+
+          static class Hello extends HttpServlet {
+
+              @Override
+              public void init() {
+                  note("init " + getServletName());
+              }
+
+              @Override
+              protected void doGet(HttpServletRequest request, HttpServletResponse response) throws IOException {
+                  String name = request.getParameter("name");
+                  response.setContentType("text/plain");
+                  response.getWriter().println("Hello, " + (name == null ? "world" : name) + "!");
+              }
+
+              @Override
+              protected void doPost(HttpServletRequest request, HttpServletResponse response) throws IOException {
+                  response.setContentType("text/plain;charset=UTF-8");
+                  PrintWriter out = response.getWriter();
+                  for (String name : Collections.list(request.getParameterNames())) {
+                      out.println(name + " = " + String.join(", ", request.getParameterValues(name)));
+                  }
+              }
+
+              @Override
+              public void destroy() {
+                  note("destroy " + getServletName());
+              }
+
+          }
+
+          static class Show extends HttpServlet {
+
+              @Override
+              protected void doGet(HttpServletRequest request, HttpServletResponse response) throws IOException {
+                  response.setContentType("text/plain");
+                  PrintWriter out = response.getWriter();
+                  out.println(request.getMethod() + " " + request.getRequestURI() + " query " + request.getQueryString());
+                  out.println("context " + request.getContextPath() + " servlet " + request.getServletPath() + " info "
+                          + request.getPathInfo());
+                  out.println("custom " + request.getHeader("X-Custom") + " filtered " + request.getAttribute("filtered"));
+                  out.println("mapping " + request.getHttpServletMapping().getMappingMatch() + " "
+                          + request.getHttpServletMapping().getPattern());
+              }
+
+          }
+
+          static class Dispatch extends HttpServlet {
+
+              @Override
+              protected void doGet(HttpServletRequest request, HttpServletResponse response)
+                      throws IOException, ServletException {
+                  if (request.getPathInfo().equals("/forward")) {
+                      request.getRequestDispatcher("/hello?name=forwarded").forward(request, response);
+                      return;
+                  }
+                  response.setContentType("text/plain");
+                  PrintWriter out = response.getWriter();
+                  out.println("before");
+                  request.getRequestDispatcher("/hello?name=included").include(request, response);
+                  out.println("after");
+              }
+
+          }
+
+          static class Answers extends HttpServlet {
+
+              @Override
+              protected void doGet(HttpServletRequest request, HttpServletResponse response)
+                      throws IOException, ServletException {
+                  switch (request.getPathInfo()) {
+                      case "/redirect" -> response.sendRedirect("../hello?name=redirected");
+                      case "/thrown" -> throw new ServletException("no answer");
+                      // the error pages the server is given answer these two
+                      case "/gone" -> response.sendError(HttpServletResponse.SC_GONE, "gone away");
+                      case "/refused" -> throw new IllegalStateException("refused");
+                      case "/committed" -> {
+                          response.setBufferSize(16);
+                          response.setContentType("text/plain");
+                          PrintWriter out = response.getWriter();
+                          out.print("a line longer than the buffer\n");
+                          out.println("committed " + response.isCommitted());
+                      }
+                      // the request's cookies, and one sent back, a copy of it changed
+                      case "/cookies" -> {
+                          Cookie seen = new Cookie("seen", "yes");
+                          seen.setPath("/app/answers/cookies");
+                          seen.setHttpOnly(true);
+                          Cookie copy = (Cookie) seen.clone();
+                          copy.setValue("copied");
+                          copy.setAttribute("SameSite", "Strict");
+                          response.addCookie(seen);
+                          response.setContentType("text/plain");
+                          PrintWriter out = response.getWriter();
+                          for (Cookie cookie : request.getCookies()) {
+                              out.println(cookie.getName() + "=" + cookie.getValue());
+                          }
+                          out.println(seen.getValue() + " " + copy.getValue() + " " + seen.getAttribute("SameSite") + " "
+                                  + copy.isHttpOnly());
+                          // and its languages, the preferred first
+                          StringBuilder languages = new StringBuilder(request.getLocale().toString());
+                          for (java.util.Locale each : Collections.list(request.getLocales())) {
+                              languages.append(' ').append(each.toLanguageTag());
+                          }
+                          out.println(languages);
+                      }
+                      default -> response.setStatus(HttpServletResponse.SC_NO_CONTENT);
+                  }
+              }
+
+          }
+
+          static class Visits extends HttpServlet {
+
+              @Override
+              protected void doGet(HttpServletRequest request, HttpServletResponse response) throws IOException {
+                  response.setContentType("text/plain");
+                  PrintWriter out = response.getWriter();
+                  String asked = request.getPathInfo();
+                  if ("/end".equals(asked)) {
+                      request.getSession().invalidate();
+                      out.println("ended " + request.getSession(false));
+                      return;
+                  }
+                  HttpSession session = request.getSession();
+                  Integer visits = (Integer) session.getAttribute("visits");
+                  if ("/renew".equals(asked)) {
+                      String before = session.getId();
+                      String after = request.changeSessionId();
+                      out.println("renewed " + !after.equals(before) + " " + after.length() + " after " + visits + " visits");
+                      return;
+                  }
+                  visits = visits == null ? 1 : visits + 1;
+                  session.setAttribute("visits", visits);
+                  out.println("visit " + visits + " new " + session.isNew() + " cookie "
+                          + request.isRequestedSessionIdFromCookie());
+              }
+
+          }
+
+          static class Visitors implements HttpSessionListener {
+
+              @Override
+              public void sessionCreated(HttpSessionEvent event) {
+                  note("session created");
+              }
+
+              @Override
+              public void sessionDestroyed(HttpSessionEvent event) {
+                  note("session destroyed after " + event.getSession().getAttribute("visits") + " visits");
+              }
+
+          }
+
+          // asynchronous: the request is completed after its servlet returned
+          static class Later extends HttpServlet {
+
+              static final BlockingQueue<AsyncContext> HELD = new ArrayBlockingQueue<>(1);
+
+              static void answer(AsyncContext async, String line) {
+                  try {
+                      async.getResponse().getWriter().println(line);
+                  }
+                  catch (IOException ex) {
+                      throw new UncheckedIOException(ex);
+                  }
+              }
+
+              // notes what an asynchronous cycle hears before its response goes out
+              static AsyncListener noting() {
+                  return new AsyncListener() {
+                      @Override
+                      public void onComplete(AsyncEvent event) {
+                      }
+
+                      @Override
+                      public void onTimeout(AsyncEvent event) {
+                          note("async timeout");
+                          answer(event.getAsyncContext(), "timed out");
+                          event.getAsyncContext().complete();
+                      }
+
+                      @Override
+                      public void onError(AsyncEvent event) {
+                          note("async error " + event.getThrowable().getMessage());
+                      }
+
+                      @Override
+                      public void onStartAsync(AsyncEvent event) {
+                      }
+                  };
+              }
+
+              @Override
+              protected void doGet(HttpServletRequest request, HttpServletResponse response)
+                      throws IOException, ServletException {
+                  response.setContentType("text/plain");
+                  switch (request.getPathInfo()) {
+                      case "/start" -> {
+                          AsyncContext async = request.startAsync();
+                          Thread caller = Thread.currentThread();
+                          async.start(() -> {
+                              answer(async, "completed by a task, on another thread " + (Thread.currentThread() != caller));
+                              async.complete();
+                          });
+                      }
+                      case "/dispatch" -> {
+                          AsyncContext async = request.startAsync();
+                          async.start(() -> async.dispatch("/hello?name=dispatched"));
+                      }
+                      case "/held" -> {
+                          response.getWriter().print("held|");
+                          response.flushBuffer();
+                          HELD.add(request.startAsync());
+                      }
+                      case "/release" -> {
+                          AsyncContext held;
+                          try {
+                              held = HELD.poll(30, TimeUnit.SECONDS);
+                          }
+                          catch (InterruptedException ex) {
+                              throw new ServletException(ex);
+                          }
+                          answer(held, "released");
+                          held.complete();
+                          response.getWriter().println("release");
+                      }
+                      case "/timeout" -> {
+                          AsyncContext async = request.startAsync();
+                          async.setTimeout(100);
+                          async.addListener(noting());
+                      }
+                      default -> {
+                          request.startAsync().addListener(noting());
+                          throw new ServletException("thrown while asynchronous");
+                      }
+                  }
+              }
+
+              // echoes the body through a read listener
+              @Override
+              protected void doPost(HttpServletRequest request, HttpServletResponse response) throws IOException {
+                  response.setContentType("text/plain");
+                  AsyncContext async = request.startAsync();
+                  ServletInputStream in = request.getInputStream();
+                  StringBuilder read = new StringBuilder();
+                  in.setReadListener(new ReadListener() {
+                      @Override
+                      public void onDataAvailable() throws IOException {
+                          byte[] chunk = new byte[4];
+                          while (in.isReady() && !in.isFinished()) {
+                              int count = in.read(chunk);
+                              if (count < 0) {
+                                  break;
+                              }
+                              read.append(new String(chunk, 0, count, StandardCharsets.US_ASCII));
+                          }
+                      }
+
+                      @Override
+                      public void onAllDataRead() {
+                          answer(async, "echo " + read + " finished " + in.isFinished());
+                          async.complete();
+                      }
+
+                      @Override
+                      public void onError(Throwable t) {
+                          note("read error " + t);
+                      }
+                  });
+              }
+
+          }
+
+          // the parts of a multipart body: a part past the threshold of 16 octets is in a
+          // file of java.io.tmpdir under a JDK; a compiled program has no such directory,
+          // and keeps every part in memory
+          static class Upload extends HttpServlet {
+
+              @Override
+              protected void doPost(HttpServletRequest request, HttpServletResponse response)
+                      throws IOException, ServletException {
+                  response.setContentType("text/plain;charset=UTF-8");
+                  PrintWriter out = response.getWriter();
+                  try {
+                      for (Part part : request.getParts()) {
+                          out.println(part.getName() + " " + part.getSubmittedFileName() + " " + part.getContentType()
+                                  + " " + part.getSize() + " "
+                                  + new String(part.getInputStream().readAllBytes(), StandardCharsets.UTF_8));
+                      }
+                      out.println("title = " + request.getParameter("title"));
+                  }
+                  catch (IllegalStateException ex) {
+                      out.println("refused: " + ex.getMessage());
+                  }
+              }
+
+          }
+
+          // what the context answers of the application's resources
+          static class Listing extends HttpServlet {
+
+              @Override
+              protected void doGet(HttpServletRequest request, HttpServletResponse response) throws IOException {
+                  response.setContentType("text/plain");
+                  PrintWriter out = response.getWriter();
+                  ServletContext context = getServletContext();
+                  out.println("paths " + context.getResourcePaths("/") + " " + context.getResourcePaths("/css"));
+                  try (InputStream in = context.getResourceAsStream("/notes.txt")) {
+                      out.println("stream " + new String(in.readNBytes(5), StandardCharsets.US_ASCII) + " "
+                              + context.getResourceAsStream("/css") + " " + context.getResourceAsStream("/WEB-INF/none"));
+                  }
+                  out.println("found " + (context.getResource("/css/site.css") != null) + " "
+                          + context.getResource("/missing") + " " + context.getRealPath("/notes.txt"));
+              }
+
+          }
+
+          static class Life implements ServletContextListener {
+
+              @Override
+              public void contextInitialized(ServletContextEvent event) {
+                  note("context " + event.getServletContext().getContextPath() + " initialized, its own event's source "
+                          + (event.getSource() == event.getServletContext()));
+              }
+
+              @Override
+              public void contextDestroyed(ServletContextEvent event) {
+                  note("context " + event.getServletContext().getContextPath() + " destroyed");
+              }
+
+          }
+
+          public static void main(String[] args) throws Exception {
+              ServletHttpServer server = ServletHttpServer.builder()
+                  .address(new InetSocketAddress("127.0.0.1", @PORT@))
+                  .contextPath("/app")
+                  .listener(new Life())
+                  .listener(new Visitors())
+                  // a filter that is a lambda of the request and the response of HTTP
+                  .filter("mark", (request, response, chain) -> {
+                      response.setHeader("X-Filtered", "yes");
+                      request.setAttribute("filtered", "by mark");
+                      chain.doFilter(request, response);
+                  }, filter -> filter.urlPatterns("/*")
+                      .dispatcherTypes(DispatcherType.REQUEST, DispatcherType.ASYNC)
+                      .asyncSupported())
+                  .servlet("hello", new Hello(), servlet -> servlet.urlPatterns("/hello"))
+                  .servlet("show", new Show(), servlet -> servlet.urlPatterns("/show/*", "*.do"))
+                  .servlet("dispatch", new Dispatch(), servlet -> servlet.urlPatterns("/dispatch/*"))
+                  .servlet("answers", new Answers(), servlet -> servlet.urlPatterns("/answers/*"))
+                  .servlet("visits", new Visits(), servlet -> servlet.urlPatterns("/visits/*"))
+                  .servlet("listing", new Listing(), servlet -> servlet.urlPatterns("/listing"))
+                  // parts of 64 octets at most, in a file past 16
+                  .servlet("upload", new Upload(), servlet -> servlet.urlPatterns("/upload")
+                      .multipartConfig(new MultipartConfigElement("", 64, -1, 16)))
+                  .servlet("later", new Later(), servlet -> servlet.urlPatterns("/later/*").asyncSupported())
+                  // an error page: an ERROR dispatch, the error told by the request's attributes
+                  .servlet("oops", (request, response) -> {
+                      response.setContentType("text/plain");
+                      Object type = request.getAttribute(RequestDispatcher.ERROR_EXCEPTION_TYPE);
+                      response.getWriter().println(request.getDispatcherType() + " " + response.getStatus() + " "
+                              + request.getAttribute(RequestDispatcher.ERROR_STATUS_CODE) + " "
+                              + request.getAttribute(RequestDispatcher.ERROR_MESSAGE) + " "
+                              + (type == null ? null : ((Class<?>) type).getName()) + " "
+                              + request.getAttribute(RequestDispatcher.ERROR_REQUEST_URI) + " "
+                              + request.getAttribute(RequestDispatcher.ERROR_SERVLET_NAME));
+                  }, servlet -> servlet.urlPatterns("/oops"))
+                  .errorPage(HttpServletResponse.SC_GONE, "/oops")
+                  .errorPage(IllegalStateException.class, "/oops")
+                  // a servlet that is a lambda: what answers its requests
+                  .servlet("stop", (request, response) -> {
+                      response.setContentType("text/plain");
+                      response.getWriter().println("bye");
+                      STOPPED.countDown();
+                  }, servlet -> servlet.urlPatterns("/stop"))
+                  .start();
+              System.out.println("listening " + server.port());
+              // the program's own thread waits while the server serves
+              STOPPED.await();
+              server.stop(Duration.ofSeconds(5));
+              note("stopped");
+          }
+
+      }
+    log: |
+      | context /app initialized, its own event's source true
+      | init hello
+      | session created
+      | session destroyed after 3 visits
+      | session created
+      | async timeout
+      | async error thrown while asynchronous
+      | session destroyed after 1 visits
+      | destroy hello
+      | context /app destroyed
+      | stopped
+    # the threads go on while the reactor's host has a request in hand: after the last
+    # answer, the program's stop goes on nowhere
+    logDeviates:
+      reactor: |
+        | context /app initialized, its own event's source true
+        | init hello
+        | session created
+        | session destroyed after 3 visits
+        | session created
+        | async timeout
+        | async error thrown while asynchronous
+    reactorReports:
+      - "a request failed: jakarta.servlet.ServletException: no answer"
+    requests:
+      - name: a-servlet-answers-a-text
+        request: GET /app/hello
+        show: [content-type, x-filtered]
+        expected: |
+          200
+          content-type: text/plain;charset=ISO-8859-1
+          x-filtered: yes
+          Hello, world!
+      - name: the-parameters-of-a-form
+        request: POST /app/hello
+        headers: {Content-Type: application/x-www-form-urlencoded}
+        body: name=form&tag=a&tag=b
+        show: [content-type]
+        expected: |
+          200
+          content-type: text/plain;charset=UTF-8
+          name = form
+          tag = a, b
+      - name: a-method-the-servlet-has-no-body-for-is-the-api-s-message
+        request: PUT /app/hello
+        show: [content-type]
+        expected: |
+          405
+          content-type: text/html;charset=UTF-8
+          <!doctype html><html><head><title>405 Method Not Allowed</title></head><body><h1>405 Method Not Allowed</h1><p>HTTP method PUT is not supported by this URL</p></body></html>
+      - name: options-names-the-methods-the-servlet-s-class-declares
+        request: OPTIONS /app/hello
+        show: [allow]
+        expected: |
+          200
+          allow: GET, HEAD, POST, TRACE, OPTIONS
+      - name: a-head-has-no-body
+        request: HEAD /app/hello
+        show: [content-type]
+        expected: |
+          200
+          content-type: text/plain;charset=ISO-8859-1
+      # the body's lines end in CR LF, as a message/http does
+      - name: trace-echoes-the-request
+        request: TRACE /app/show/x
+        headers: {X-Custom: traced}
+        show: [content-type]
+        expected: "200\ncontent-type: message/http\nTRACE /app/show/x HTTP/1.1\r\nX-custom: traced\r\nContent-length: 0\r\n"
+        skip:
+          reactor: the fetch standard's Request takes no TRACE, so the host never calls the program for one
+      - name: a-prefix-mapping-and-the-request-s-paths
+        request: GET /app/show/a/b?q=1&r=2
+        headers: {X-Custom: custom}
+        expected: |
+          200
+          GET /app/show/a/b query q=1&r=2
+          context /app servlet /show info /a/b
+          custom custom filtered by mark
+          mapping PATH /show/*
+      - name: an-extension-mapping
+        request: GET /app/page.do
+        expected: |
+          200
+          GET /app/page.do query null
+          context /app servlet /page.do info null
+          custom null filtered by mark
+          mapping EXTENSION *.do
+      - name: a-forward
+        request: GET /app/dispatch/forward
+        expected: |
+          200
+          Hello, forwarded!
+      - name: an-include
+        request: GET /app/dispatch/include
+        expected: |
+          200
+          before
+          Hello, included!
+          after
+      - name: a-redirect
+        request: GET /app/answers/redirect
+        show: [location]
+        expected: |
+          302
+          location: ../hello?name=redirected
+      - name: what-a-servlet-throws-is-a-500
+        request: GET /app/answers/thrown
+        expected: |
+          500
+          <!doctype html><html><head><title>500 Internal Server Error</title></head><body><h1>500 Internal Server Error</h1></body></html>
+      - name: an-error-page-answers-a-status
+        request: GET /app/answers/gone
+        show: [x-filtered]
+        expected: |
+          410
+          x-filtered: yes
+          ERROR 410 410 gone away null /app/answers/gone answers
+      - name: an-error-page-answers-an-exception-s-type
+        request: GET /app/answers/refused
+        expected: |
+          500
+          ERROR 500 500 refused java.lang.IllegalStateException /app/answers/refused answers
+      - name: a-response-its-buffer-committed
+        request: GET /app/answers/committed
+        expected: |
+          200
+          a line longer than the buffer
+          committed true
+      - name: no-content
+        request: GET /app/answers/none
+        show: [x-filtered]
+        expected: |
+          204
+          x-filtered: yes
+      - name: the-cookies-and-the-languages-of-a-request-and-a-cookie-of-the-response
+        request: GET /app/answers/cookies
+        headers: {Cookie: "a=1; b=two", Accept-Language: "de-CH-1996, fr;q=0.8, sr-Latn-RS;q=0.9, *;q=0.5, i-klingon;q=0.1"}
+        show: [set-cookie]
+        expected: |
+          200
+          set-cookie: seen=yes; HttpOnly; Path=/app/answers/cookies
+          a=1
+          b=two
+          yes copied null true
+          de_CH_1996 de-CH-1996 sr-Latn-RS fr tlh
+      - name: the-context-root-without-its-slash
+        request: GET /app
+        show: [location]
+        expected: |
+          302
+          location: /app/
+      - name: a-path-no-servlet-is-mapped-to
+        request: GET /app/nothing
+        expected: |
+          404
+          <!doctype html><html><head><title>404 Not Found</title></head><body><h1>404 Not Found</h1></body></html>
+      # The client keeps the cookies it is sent, as a browser does: the session's id
+      # comes back with each request. On the component leg the requests reach one
+      # instance, whose memory the sessions are in.
+      - name: a-session-is-made
+        request: GET /app/visits
+        expected: |
+          200
+          visit 1 new true cookie false
+      - name: the-session-is-found-by-its-cookie
+        request: GET /app/visits
+        expected: |
+          200
+          visit 2 new false cookie true
+      - name: a-session-takes-a-new-id
+        request: GET /app/visits/renew
+        expected: |
+          200
+          renewed true 32 after 2 visits
+      - name: the-new-id-finds-the-session
+        request: GET /app/visits
+        expected: |
+          200
+          visit 3 new false cookie true
+      - name: an-invalidated-session-is-gone
+        request: GET /app/visits/end
+        expected: |
+          200
+          ended null
+      - name: the-next-session-is-new
+        request: GET /app/visits
+        expected: |
+          200
+          visit 1 new true cookie true
+      # Asynchronous requests: the thread the request was dispatched on waits until it is
+      # complete, so every transport answers it as a JDK does.
+      - name: a-task-of-the-asynchronous-context-completes-the-request
+        request: GET /app/later/start
+        expected: |
+          200
+          completed by a task, on another thread true
+      - name: an-asynchronous-dispatch-reaches-another-servlet
+        request: GET /app/later/dispatch
+        show: [x-filtered]
+        expected: |
+          200
+          x-filtered: yes
+          Hello, dispatched!
+      # /later/held writes "held|", starts an asynchronous cycle and leaves its context to
+      # /later/release, asked while /later/held is in hand.
+      - name: an-asynchronous-request-is-completed-by-another-request
+        request: GET /app/later/held
+        first: "held|"
+        meanwhile: GET /app/later/release
+        expected: |
+          200
+          held|released
+      - name: a-listener-answers-the-timeout
+        request: GET /app/later/timeout
+        expected: |
+          200
+          timed out
+      - name: what-is-thrown-while-asynchronous-is-a-500
+        request: GET /app/later/thrown
+        expected: |
+          500
+          <!doctype html><html><head><title>500 Internal Server Error</title></head><body><h1>500 Internal Server Error</h1></body></html>
+      - name: a-read-listener-reads-the-body
+        request: POST /app/later/echo
+        body: hello, world
+        expected: |
+          200
+          echo hello, world finished true
+      - name: the-parts-of-a-multipart-body
+        request: POST /app/upload
+        headers: {Content-Type: multipart/form-data; boundary=XyZ}
+        body: "preamble\r\n--XyZ\r\nContent-Disposition: form-data; name=\"title\"\r\n\r\nあ note\r\n--XyZ\r\nContent-Disposition: form-data; name=\"f\"; filename=\"note.txt\"\r\nContent-Type: text/plain\r\n\r\na file of more than sixteen octets\r\n--XyZ--\r\n"
+        expected: |
+          200
+          title null null 8 あ note
+          f note.txt text/plain 34 a file of more than sixteen octets
+          title = あ note
+      - name: a-part-past-its-limit-is-refused
+        request: POST /app/upload
+        headers: {Content-Type: multipart/form-data; boundary=XyZ}
+        body: "--XyZ\r\nContent-Disposition: form-data; name=\"f\"; filename=\"big.txt\"\r\n\r\nxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\r\n--XyZ--\r\n"
+        expected: |
+          200
+          refused: the part f is longer than 64 octets
+      # The default servlet: the application's resources, under META-INF/resources of what
+      # the program was compiled with or of the class path. Their time is the file's on the
+      # JDK leg and when the server was made on the others, so the field is not shown.
+      - name: the-context-root-is-its-welcome-file
+        request: GET /app/
+        show: [content-type, accept-ranges, x-filtered]
+        expected: |
+          200
+          content-type: text/html
+          accept-ranges: bytes
+          x-filtered: yes
+          <!doctype html>
+          <title>Servlets</title>
+          <link rel="stylesheet" href="css/site.css">
+          <h1>Served by the default servlet</h1>
+      - name: a-file-by-its-media-type
+        request: GET /app/css/site.css
+        show: [content-type]
+        expected: |
+          200
+          content-type: text/css
+          h1 { color: teal }
+      - name: a-directory-without-its-slash-is-redirected
+        request: GET /app/css?q=1
+        show: [location]
+        expected: |
+          302
+          location: /app/css/?q=1
+      - name: a-directory-with-no-welcome-file-is-not-found
+        request: GET /app/docs/
+        expected: |
+          404
+          <!doctype html><html><head><title>404 Not Found</title></head><body><h1>404 Not Found</h1></body></html>
+      - name: a-head-of-a-file
+        request: HEAD /app/notes.txt
+        show: [content-type, accept-ranges]
+        expected: |
+          200
+          content-type: text/plain
+          accept-ranges: bytes
+      - name: a-range-of-a-file
+        request: GET /app/notes.txt
+        headers: {Range: bytes=-4}
+        show: [content-range]
+        expected: |
+          206
+          content-range: bytes 23-26/27
+          xyz
+      - name: a-range-past-the-end
+        request: GET /app/notes.txt
+        headers: {Range: bytes=27-}
+        show: [content-range]
+        expected: |
+          416
+          content-range: bytes */27
+          <!doctype html><html><head><title>416 Range Not Satisfiable</title></head><body><h1>416 Range Not Satisfiable</h1></body></html>
+      - name: a-file-not-modified-since
+        request: GET /app/notes.txt
+        headers: {If-Modified-Since: 'Sun, 06 Nov 2094 08:49:37 GMT'}
+        expected: |
+          304
+      - name: meta-inf-is-not-served
+        request: GET /app/META-INF/resources/notes.txt
+        expected: |
+          404
+          <!doctype html><html><head><title>404 Not Found</title></head><body><h1>404 Not Found</h1></body></html>
+      - name: a-method-the-default-servlet-does-not-take
+        request: POST /app/notes.txt
+        show: [allow]
+        expected: |
+          405
+          allow: GET, HEAD, OPTIONS
+          <!doctype html><html><head><title>405 Method Not Allowed</title></head><body><h1>405 Method Not Allowed</h1></body></html>
+      - name: what-the-context-answers-of-its-resources
+        request: GET /app/listing
+        expected: |
+          200
+          paths [/css/, /docs/, /index.html, /notes.txt] [/css/site.css]
+          stream abcde null null
+          found true null null
+      - name: a-servlet-counts-the-stop-down
+        request: GET /app/stop
+        expected: |
+          200
+          bye
+  # examples/java/guestbook: a Servlet application on the same container, read as it stands.
+  # Nothing is registered: the container finds the filter, the three servlets and the
+  # listener by their annotations -- on the JDK leg among the classes javac wrote
+  # (`compiled`), on the others among the classes the program was compiled with. A form
+  # signs the book, which the page and the JSON API then show.
+  - name: guestbook
+    file: guestbook/Guestbook.java
+    example: java/guestbook/src/main/java/guestbook/Guestbook.java
+    compiled: true
+    endless: true
+    listening: "^Listening on http://localhost:(\\d+)/guestbook/$"
+    requests:
+      - name: the-context-root-redirects-to-the-page
+        request: GET /guestbook/
+        show: [location]
+        expected: |
+          302
+          location: /guestbook/entries
+      - name: the-page
+        request: GET /guestbook/entries
+        show: [content-type, x-content-type-options]
+        expected: |
+          200
+          content-type: text/html;charset=UTF-8
+          x-content-type-options: nosniff
+          <!doctype html>
+          <title>Guestbook</title>
+          <h1>Guestbook</h1>
+          <ul>
+          <li><b>rontolisp</b>: Hello from the guestbook!</li>
+          </ul>
+          <form method="post" action="entries">
+          <input name="name" placeholder="Name"> <input name="message" placeholder="Message">
+          <button>Sign</button>
+          </form>
+      - name: a-form-signs-the-book
+        request: POST /guestbook/entries
+        headers: {Content-Type: application/x-www-form-urlencoded}
+        body: name=Ann&message=+Hi+%3Cthere%3E+%C3%A9
+        show: [location]
+        expected: |
+          302
+          location: entries
+      - name: a-blank-message-is-a-400
+        request: POST /guestbook/entries
+        headers: {Content-Type: application/x-www-form-urlencoded}
+        body: name=Ann&message=+
+        expected: |
+          400
+          <!doctype html><html><head><title>400 Bad Request</title></head><body><h1>400 Bad Request</h1><p>a name and a message, please</p></body></html>
+      - name: the-page-shows-the-entry
+        request: GET /guestbook/entries
+        expected: |
+          200
+          <!doctype html>
+          <title>Guestbook</title>
+          <h1>Guestbook</h1>
+          <ul>
+          <li><b>rontolisp</b>: Hello from the guestbook!</li>
+          <li><b>Ann</b>: Hi &lt;there&gt; é</li>
+          </ul>
+          <form method="post" action="entries">
+          <input name="name" placeholder="Name" value="Ann"> <input name="message" placeholder="Message">
+          <button>Sign</button>
+          </form>
+      - name: the-api-lists-the-entries
+        request: GET /guestbook/api/entries
+        show: [content-type]
+        expected: |
+          200
+          content-type: application/json;charset=UTF-8
+          [{"id":1,"name":"rontolisp","message":"Hello from the guestbook!"},{"id":2,"name":"Ann","message":"Hi <there> é"}]
+      - name: a-query-parameter-keeps-one-author-s
+        request: GET /guestbook/api/entries?name=Ann
+        expected: |
+          200
+          [{"id":2,"name":"Ann","message":"Hi <there> é"}]
+      - name: one-entry
+        request: GET /guestbook/api/entries/2
+        expected: |
+          200
+          {"id":2,"name":"Ann","message":"Hi <there> é"}
+      - name: no-such-entry-is-a-404
+        request: GET /guestbook/api/entries/x
+        expected: |
+          404
+          <!doctype html><html><head><title>404 Not Found</title></head><body><h1>404 Not Found</h1><p>no entry x</p></body></html>
+      - name: the-api-has-no-delete
+        request: DELETE /guestbook/api/entries
+        expected: |
+          405
+          <!doctype html><html><head><title>405 Method Not Allowed</title></head><body><h1>405 Method Not Allowed</h1><p>Http method DELETE is not supported by this URL</p></body></html>
+  - name: mvcfn
+    file: com/example/Application.java
+    example: java/mvcfn/src/main/java/com/example/Application.java
+    endless: true
+    listening: "^Listening on http://localhost:(\\d+)/$"
+    requests:
+      - name: the-greeting
+        request: GET /
+        show: [content-type]
+        expected: |
+          200
+          content-type: text/plain;charset=ISO-8859-1
+          Hello World!
+      - name: the-tasks
+        request: GET /tasks
+        show: [content-type]
+        expected: |
+          200
+          content-type: application/json
+          [{"id":1,"title":"Write the routes","done":false}]
+      - name: a-json-body-makes-a-task
+        request: POST /tasks
+        headers: {Content-Type: application/json}
+        body: '{"title": " Compile it to wasm é ", "ignored": [1, 2.5, null]}'
+        show: [content-type, location]
+        expected: |
+          201
+          content-type: application/json
+          location: /tasks/2
+          {"id":2,"title":"Compile it to wasm é","done":false}
+      - name: a-blank-title-is-the-error-handler-s-400
+        request: POST /tasks
+        headers: {Content-Type: application/json}
+        body: '{"title": ""}'
+        show: [content-type]
+        expected: |
+          400
+          content-type: application/json
+          {"error":"a title, please","path":"/tasks"}
+      - name: a-body-that-is-no-json-is-a-400
+        request: POST /tasks
+        headers: {Content-Type: application/json}
+        body: '{"title": '
+        expected: |
+          400
+          <!doctype html><html><head><title>400 Bad Request</title></head><body><h1>400 Bad Request</h1></body></html>
+      - name: a-body-of-another-type-has-no-route
+        request: POST /tasks
+        headers: {Content-Type: application/x-www-form-urlencoded}
+        body: title=x
+        expected: |
+          404
+          <!doctype html><html><head><title>404 Not Found</title></head><body><h1>404 Not Found</h1><p>No endpoint POST /tasks.</p></body></html>
+      - name: a-put-changes-a-task
+        request: PUT /tasks/2
+        headers: {Content-Type: application/json}
+        body: '{"done": true}'
+        expected: |
+          200
+          {"id":2,"title":"Compile it to wasm é","done":true}
+      - name: a-query-parameter-keeps-the-done-ones
+        request: GET /tasks?done=true
+        expected: |
+          200
+          [{"id":2,"title":"Compile it to wasm é","done":true}]
+      - name: one-task-by-its-path-variable
+        request: GET /tasks/1
+        expected: |
+          200
+          {"id":1,"title":"Write the routes","done":false}
+      - name: no-such-task-is-the-exception-s-404
+        request: GET /tasks/9
+        expected: |
+          404
+          <!doctype html><html><head><title>404 Not Found</title></head><body><h1>404 Not Found</h1><p>no task 9</p></body></html>
+      - name: an-id-that-is-no-number-is-the-error-handler-s-400
+        request: GET /tasks/x
+        expected: |
+          400
+          {"error":"no number: x","path":"/tasks/x"}
+      - name: a-delete-answers-no-content
+        request: DELETE /tasks/1
+        expected: |
+          204
+      - name: the-tasks-left
+        request: GET /tasks
+        expected: |
+          200
+          [{"id":2,"title":"Compile it to wasm é","done":true}]
+      - name: a-path-with-no-route
+        request: GET /tasks/1/more
+        expected: |
+          404
+          <!doctype html><html><head><title>404 Not Found</title></head><body><h1>404 Not Found</h1><p>No endpoint GET /tasks/1/more.</p></body></html>
+  - name: hello-servlet
+    file: HelloServlet.java
+    example: java/hello-servlet/src/main/java/HelloServlet.java
+    endless: true
+    listening: "^Listening on http://localhost:(\\d+)/$"
+    requests:
+      - name: the-greeting
+        request: GET /
+        expected: |
+          200
+          Hello World!
+  - name: hello-mvcfn
+    file: HelloMvcfn.java
+    example: java/hello-mvcfn/src/main/java/HelloMvcfn.java
+    endless: true
+    listening: "^Listening on http://localhost:(\\d+)/$"
+    requests:
+      - name: the-greeting
+        request: GET /
+        show: [content-type]
+        expected: |
+          200
+          content-type: text/plain;charset=ISO-8859-1
+          Hello World!
+  - name: keyvalue-sessions
+    file: KeyValueSessions.java
+    endless: true
+    sourcePath: [servlet-httpserver/src/main/java, servlet-httpserver-keyvalue/src/main/java,
+      servlet-httpserver-keyvalue/src/main/resources, rontolisp-java-api/src/main/java]
+    sourceDep: [jakarta.servlet:jakarta.servlet-api:6.1.0]
+    skip:
+      native: a native executable imports no WIT interface, and the program is refused at its WIT line
+    keyvalue: true
+    source: |
+      import java.io.IOException;
+      import java.io.PrintWriter;
+      import java.net.InetSocketAddress;
+      import java.util.ArrayList;
+      import java.util.Arrays;
+      import java.util.Collections;
+      import java.util.LinkedHashMap;
+      import java.util.LinkedHashSet;
+      import java.util.List;
+      import java.util.Map;
+
+      import am.ik.servlet.httpserver.ServletHttpServer;
+      import jakarta.servlet.http.HttpServlet;
+      import jakarta.servlet.http.HttpServletRequest;
+      import jakarta.servlet.http.HttpServletResponse;
+      import jakarta.servlet.http.HttpSession;
+
+      // Sessions in wasi:keyvalue: servlet-httpserver-keyvalue on the source path is the
+      // store the server finds; the program names none.
+      public class KeyValueSessions {
+
+          static class Session extends HttpServlet {
+
+              @Override
+              protected void doGet(HttpServletRequest request, HttpServletResponse response) throws IOException {
+                  response.setContentType("text/plain;charset=UTF-8");
+                  PrintWriter out = response.getWriter();
+                  String asked = request.getPathInfo();
+                  if (asked.equals("/invalidate")) {
+                      request.getSession().invalidate();
+                      out.println("invalidated");
+                      return;
+                  }
+                  HttpSession session = request.getSession();
+                  if (asked.equals("/count")) {
+                      Integer n = (Integer) session.getAttribute("n");
+                      session.setAttribute("n", n == null ? 1 : n + 1);
+                      out.println("n " + session.getAttribute("n") + " new " + session.isNew());
+                  }
+                  else if (asked.equals("/set")) {
+                      List<Object> list = new ArrayList<>(Arrays.asList("x", null, 2));
+                      Map<Object, Object> map = new LinkedHashMap<>();
+                      map.put("k", List.of(1L, 2.5));
+                      map.put(7, "v");
+                      session.setAttribute("text", "é ü 😀");
+                      session.setAttribute("yes", true);
+                      session.setAttribute("char", 'q');
+                      session.setAttribute("byte", (byte) -56);
+                      session.setAttribute("short", (short) 300);
+                      session.setAttribute("long", 1L << 40);
+                      session.setAttribute("float", 1.5f);
+                      session.setAttribute("double", -0.25);
+                      session.setAttribute("octets", new byte[] { 0, -1, 127 });
+                      session.setAttribute("list", list);
+                      session.setAttribute("set", new LinkedHashSet<>(List.of("b", "a")));
+                      session.setAttribute("map", map);
+                      out.println("set");
+                  }
+                  else if (asked.equals("/get")) {
+                      List<String> names = Collections.list(session.getAttributeNames());
+                      Collections.sort(names);
+                      for (String name : names) {
+                          Object value = session.getAttribute(name);
+                          out.println(name + " " + value.getClass().getSimpleName() + " "
+                                  + (value instanceof byte[] ? Arrays.toString((byte[]) value) : value));
+                      }
+                  }
+                  else if (asked.equals("/refused")) {
+                      try {
+                          session.setAttribute("n", new Object());
+                      }
+                      catch (IllegalArgumentException ex) {
+                          out.println(ex.getMessage());
+                      }
+                      out.println("n " + session.getAttribute("n"));
+                  }
+              }
+
+          }
+
+          public static void main(String[] args) throws Exception {
+              ServletHttpServer server = ServletHttpServer.builder()
+                  .address(new InetSocketAddress("127.0.0.1", @PORT@))
+                  .servlet("session", new Session(), servlet -> servlet.urlPatterns("/session/*"))
+                  .start();
+              System.out.println("listening " + server.port());
+          }
+
+      }
+    requests:
+      - name: a-session-is-made
+        request: GET /session/count
+        expected: |
+          200
+          n 1 new true
+      - name: and-found-by-the-next-request
+        request: GET /session/count
+        expected: |
+          200
+          n 2 new false
+      - name: a-value-of-every-kind-kept
+        request: GET /session/set
+        expected: |
+          200
+          set
+      - name: is-read-back-as-it-was-set
+        request: GET /session/get
+        expected: |
+          200
+          byte Byte -56
+          char Character q
+          double Double -0.25
+          float Float 1.5
+          list ArrayList [x, null, 2]
+          long Long 1099511627776
+          map LinkedHashMap {k=[1, 2.5], 7=v}
+          n Integer 2
+          octets byte[] [0, -1, 127]
+          set LinkedHashSet [b, a]
+          short Short 300
+          text String é ü 😀
+          yes Boolean true
+      - name: a-value-it-cannot-keep-is-refused
+        request: GET /session/refused
+        expected: |
+          200
+          the session attribute n is a java.lang.Object, which a session in a key-value store cannot hold: it holds a String, a Boolean, a Character, a Byte, a Short, an Integer, a Long, a Float, a Double, a byte[], and a List, a Set or a Map of them
+          n 2
+      - name: an-invalidated-session-is-gone
+        request: GET /session/invalidate
+        expected: |
+          200
+          invalidated
+      - name: and-the-next-request-makes-another
+        request: GET /session/count
+        expected: |
+          200
+          n 1 new true
+  # A handler's own sockets, to the test's peer: a connection made, written to and read
+  # in one request -- a JDBC connection's shape -- on every leg; under a host that calls
+  # the program for each request (the reactor: a Cloudflare Worker's connect()) a socket
+  # is waited for suspended in the host, only connects, and ends with its request.
+  - name: peers
+    file: Peers.java
+    endless: true
+    tcp: true
+    source: |
+      import com.sun.net.httpserver.HttpExchange;
+      import com.sun.net.httpserver.HttpServer;
+      import java.io.DataInputStream;
+      import java.io.IOException;
+      import java.io.InputStream;
+      import java.io.OutputStream;
+      import java.net.InetAddress;
+      import java.net.InetSocketAddress;
+      import java.net.ServerSocket;
+      import java.net.Socket;
+      import java.net.SocketTimeoutException;
+      import java.nio.charset.StandardCharsets;
+
+      public class Peers {
+
+          static final int PEER = Integer.parseInt("@PEER@");
+
+          // a listener whose queue is full: a connect to it waits
+          static final int HELD = Integer.parseInt("@HELD@");
+
+          static Socket kept;
+
+          interface Asked {
+              String run() throws Exception;
+          }
+
+          static void answer(HttpExchange exchange, Asked asked) throws IOException {
+              String said;
+              try {
+                  said = asked.run();
+              }
+              catch (Exception e) {
+                  said = e.toString();
+              }
+              byte[] body = said.getBytes(StandardCharsets.UTF_8);
+              exchange.sendResponseHeaders(200, body.length);
+              try (OutputStream out = exchange.getResponseBody()) {
+                  out.write(body);
+              }
+          }
+
+          static Socket peer() throws IOException {
+              return new Socket("127.0.0.1", PEER);
+          }
+
+          static void say(Socket socket, String line) throws IOException {
+              socket.getOutputStream().write((line + "\n").getBytes(StandardCharsets.UTF_8));
+          }
+
+          // the next line, an octet at a time: nothing past it is taken
+          static String line(Socket socket) throws IOException {
+              InputStream in = socket.getInputStream();
+              byte[] octets = new byte[256];
+              int count = 0;
+              int octet;
+              while ((octet = in.read()) >= 0 && octet != '\n') {
+                  octets[count++] = (byte) octet;
+              }
+              return octet < 0 && count == 0 ? null : new String(octets, 0, count, StandardCharsets.UTF_8);
+          }
+
+          public static void main(String[] args) throws IOException {
+              HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", @PORT@), 0);
+              server.createContext("/echo", exchange -> answer(exchange, () -> {
+                  try (Socket socket = peer()) {
+                      say(socket, "echo héllo");
+                      return line(socket) + " " + socket.isConnected() + " " + (socket.getPort() == PEER) + " "
+                              + socket.getInetAddress();
+                  }
+              }));
+              server.createContext("/octets", exchange -> answer(exchange, () -> {
+                  try (Socket socket = peer()) {
+                      say(socket, "octets");
+                      byte[] all = new byte[256];
+                      new DataInputStream(socket.getInputStream()).readFully(all);
+                      int sum = 0;
+                      for (byte octet : all) {
+                          sum += octet & 0xff;
+                      }
+                      return all.length + " " + sum + " " + all[0] + " " + all[128] + " " + all[255];
+                  }
+              }));
+              // more than a read takes at once, to the peer's end
+              server.createContext("/big", exchange -> answer(exchange, () -> {
+                  try (Socket socket = peer()) {
+                      say(socket, "big 300000");
+                      InputStream in = socket.getInputStream();
+                      byte[] some = new byte[8192];
+                      long total = 0;
+                      long sum = 0;
+                      int count;
+                      while ((count = in.read(some)) > 0) {
+                          total += count;
+                          for (int i = 0; i < count; i++) {
+                              sum += some[i] & 0xff;
+                          }
+                      }
+                      return total + " " + sum + " " + in.read();
+                  }
+              }));
+              // a read past its deadline, after which the socket reads on
+              server.createContext("/deadline", exchange -> answer(exchange, () -> {
+                  try (Socket socket = peer()) {
+                      socket.setSoTimeout(200);
+                      say(socket, "quiet");
+                      try {
+                          return "read " + line(socket);
+                      }
+                      catch (SocketTimeoutException e) {
+                          socket.setSoTimeout(0);
+                          say(socket, "echo after");
+                          return e + " then " + line(socket);
+                      }
+                  }
+              }));
+              // a reply that comes within the deadline
+              server.createContext("/later", exchange -> answer(exchange, () -> {
+                  try (Socket socket = peer()) {
+                      socket.setSoTimeout(30000);
+                      say(socket, "later 100");
+                      return line(socket);
+                  }
+              }));
+              // one thread reads what another writes for
+              server.createContext("/threads", exchange -> answer(exchange, () -> {
+                  try (Socket socket = peer()) {
+                      String[] read = new String[1];
+                      Thread reader = new Thread(() -> {
+                          try {
+                              read[0] = line(socket);
+                          }
+                          catch (IOException e) {
+                              read[0] = e.toString();
+                          }
+                      });
+                      reader.start();
+                      Thread.yield();
+                      say(socket, "echo from the writer");
+                      reader.join();
+                      return read[0];
+                  }
+              }));
+              server.createContext("/half", exchange -> answer(exchange, () -> {
+                  try (Socket socket = peer()) {
+                      say(socket, "echo one");
+                      socket.shutdownOutput();
+                      return line(socket) + " " + line(socket) + " " + socket.isOutputShutdown();
+                  }
+              }));
+              server.createContext("/refused", exchange -> answer(exchange, () -> {
+                  try (Socket socket = new Socket("127.0.0.1", 0)) {
+                      return "connected";
+                  }
+                  catch (IOException e) {
+                      return "an IOException";
+                  }
+              }));
+              server.createContext("/limit", exchange -> answer(exchange, () -> {
+                  Socket socket = new Socket();
+                  try {
+                      socket.connect(new InetSocketAddress("127.0.0.1", HELD), 300);
+                      return "connected";
+                  }
+                  catch (IOException e) {
+                      return e + " " + socket.isClosed();
+                  }
+              }));
+              // a socket one request made, used by the next
+              server.createContext("/kept", exchange -> answer(exchange, () -> {
+                  if (kept == null) {
+                      kept = peer();
+                      say(kept, "echo first");
+                      return "made " + line(kept);
+                  }
+                  try {
+                      say(kept, "echo again");
+                      return "kept " + line(kept);
+                  }
+                  finally {
+                      kept.close();
+                      kept = null;
+                  }
+              }));
+              server.createContext("/listen", exchange -> answer(exchange, () -> {
+                  try (ServerSocket listener = new ServerSocket(0, 50, InetAddress.getByName("127.0.0.1"))) {
+                      return "listening " + listener.isBound();
+                  }
+              }));
+              server.start();
+              System.out.println("listening " + server.getAddress().getPort());
+          }
+
+      }
+    requests:
+      - name: a-line-written-and-its-reply-read
+        request: GET /echo
+        expected: |
+          200
+          héllo true true /127.0.0.1
+      - name: every-octet-as-it-is
+        request: GET /octets
+        expected: |
+          200
+          256 32640 0 -128 -1
+      - name: more-than-a-read-takes-to-the-peer-s-end
+        request: GET /big
+        expected: |
+          200
+          300000 37494610 -1
+      - name: a-read-past-its-deadline-and-the-next
+        request: GET /deadline
+        expected: |
+          200
+          java.net.SocketTimeoutException: Read timed out then after
+      - name: a-reply-within-the-deadline
+        request: GET /later
+        expected: |
+          200
+          late
+      - name: a-thread-reads-what-another-writes-for
+        request: GET /threads
+        expected: |
+          200
+          from the writer
+      - name: the-output-ended-and-the-peer-s-end-read
+        request: GET /half
+        expected: |
+          200
+          one null true
+      - name: a-connect-nothing-takes
+        request: GET /refused
+        expected: |
+          200
+          an IOException
+      - name: a-connect-past-its-limit
+        request: GET /limit
+        expected: |
+          200
+          java.net.SocketTimeoutException: Connect timed out true
+      - name: a-socket-made
+        request: GET /kept
+        expected: |
+          200
+          made first
+      # a Worker's socket ends with the request that opened it
+      - name: and-used-by-the-next-request
+        request: GET /kept
+        skip:
+          component: the host starts an instance for the requests it likes, and each keeps its own
+        expected: |
+          200
+          kept again
+        deviates:
+          reactor: |
+            200
+            java.net.SocketException: Socket closed: the request that opened it has ended
+      # the host of a reactor only connects
+      - name: a-listener
+        request: GET /listen
+        expected: |
+          200
+          listening true
+        deviates:
+          reactor: |
+            200
+            java.net.BindException: the host of a --no-wasi module only connects (--host-sockets)

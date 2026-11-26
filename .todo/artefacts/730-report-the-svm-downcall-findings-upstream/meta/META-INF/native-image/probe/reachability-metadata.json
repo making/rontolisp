@@ -1,0 +1,16 @@
+{
+  "foreign": {
+    "downcalls": [
+      {"returnType": "jint", "parameterTypes": ["void*"]},
+      {"returnType": "jint", "parameterTypes": ["void*"], "options": {"critical": {"allowHeapAccess": true}}},
+      {"returnType": "jint", "parameterTypes": ["jint"]},
+      {"returnType": "jint", "parameterTypes": ["jint"], "options": {"critical": {"allowHeapAccess": false}}},
+      {"returnType": "jint", "parameterTypes": []},
+      {"returnType": "jint", "parameterTypes": ["jlong", "void*", "jlong"]},
+      {"returnType": "jint", "parameterTypes": ["void*", "jint", "jint", "jint", "jint", "jint", "jint", "jint", "void*", "void*", "void*"]},
+      {"returnType": "void", "parameterTypes": ["jint", "jint", "jint", "jint", "jdouble", "void*", "jint", "void*", "jint", "jdouble", "void*", "jint"], "options": {"critical": {"allowHeapAccess": true}}},
+      {"returnType": "void", "parameterTypes": ["jint", "jint", "jint", "jint", "jint", "jint", "jdouble", "void*", "jint", "void*", "jint", "jdouble", "void*", "jint"], "options": {"critical": {"allowHeapAccess": true}}},
+      {"returnType": "void", "parameterTypes": ["jint", "jint", "jint", "jint", "jint", "jint", "jdouble", "void*", "jint", "void*", "jint", "jdouble", "void*", "jint"]}
+    ]
+  }
+}

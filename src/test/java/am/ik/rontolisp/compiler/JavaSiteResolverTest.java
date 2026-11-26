@@ -1,0 +1,586 @@
+package am.ik.rontolisp.compiler;
+
+import java.util.List;
+
+import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.reader.LispReader;
+import org.junit.jupiter.api.Test;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+/**
+ * The static half of the one {@code java:} resolution model: which sites resolve before
+ * they run, to which member, and why the others do not. The run-time half is the same
+ * rule ({@link JavaOverloads}); a site resolves only when every kind its arguments can
+ * have selects the same member, so resolving early never changes the member -- except
+ * through a receiver typed by an upper bound, which resolves among the bound's methods.
+ */
+class JavaSiteResolverTest {
+
+	private final JavaSiteResolver resolver = new JavaSiteResolver(ReflectiveJavaClasses.instance());
+
+	private JavaSite resolve(String site) {
+		return this.resolver.resolve((LispCons) LispReader.readAllFromString(site).get(0));
+	}
+
+	private String member(String site) {
+		JavaSite resolution = resolve(site);
+		assertThat(resolution.reason()).as(site).isNull();
+		return resolution.staticClass() + " " + resolution.designator() + (resolution.packed() ? " packed" : "");
+	}
+
+	@Test
+	void literalArgumentsSelectByTheirKinds() {
+		assertThat(member("(java:static \"java.lang.Math\" \"max\" 3 7)")).isEqualTo("java.lang.Math max(long,long)");
+		// A mixed pair matches nothing, as the oracle's reflector refuses it: left to run
+		// time, where it is the oracle's no-matching-method refusal.
+		assertThat(resolve("(java:static \"java.lang.Math\" \"max\" 3 7.5)").reason())
+			.isEqualTo("no method of java.lang.Math accepts arguments of kinds integer, float");
+		assertThat(member("(java:static \"java.lang.Math\" \"sqrt\" 16)")).isEqualTo("java.lang.Math sqrt(double)");
+		assertThat(member("(java:static \"java.lang.Character\" \"toString\" #\\a)"))
+			.isEqualTo("java.lang.Character toString(char)");
+	}
+
+	// A bignum is a BigInteger or a supertype of one; a fixnum reaches no BigInteger
+	// parameter (as the oracle's reflector refuses one). A BigInteger answer is an
+	// integer of either kind, spelled (java:object "java.math.BigInteger"). A call
+	// with a single candidate of its arity still resolves, converting with the
+	// oracle's checked casts.
+	@Test
+	void bignumsAndBigIntegerParametersResolve() {
+		assertThat(member("(java:static \"java.lang.String\" \"valueOf\" 1267650600228229401496703205376)"))
+			.isEqualTo("java.lang.String valueOf(java.lang.Object)");
+		assertThat(member("(java:new \"java.math.BigDecimal\" 1267650600228229401496703205376)"))
+			.isEqualTo("java.math.BigDecimal java.math.BigDecimal(java.math.BigInteger)");
+		assertThat(resolve("(java:new \"java.math.BigDecimal\" 5 2)").reason())
+			.isEqualTo("no constructor of java.math.BigDecimal accepts arguments of kinds integer, integer");
+		assertThat(member("(java:new \"java.math.BigDecimal\" 5)"))
+			.isEqualTo("java.math.BigDecimal java.math.BigDecimal(long)");
+		assertThat(member("(java:static \"java.lang.Math\" \"sqrt\" 1267650600228229401496703205376)"))
+			.isEqualTo("java.lang.Math sqrt(double)");
+		JavaStaticType whole = this.resolver.typeOf(
+				LispReader.readAllFromString("(java:call (java:new \"java.math.BigDecimal\" \"2.5\") \"toBigInteger\")")
+					.get(0));
+		assertThat(whole).isEqualTo(new JavaStaticType.Kinds(
+				java.util.Set.of(JavaKind.Lisp.INTEGER, JavaKind.Lisp.BIGNUM, JavaKind.Lisp.NIL)));
+		assertThat(java.util.Objects.requireNonNull(this.resolver.specOf(whole)).print())
+			.isEqualTo("(JAVA:OBJECT \"java.math.BigInteger\")");
+	}
+
+	// A trailing :functional is no argument: the site resolves as without it, and says
+	// so.
+	@Test
+	void aTrailingFunctionalMarkerIsSetAside() {
+		assertThat(member("(java:static \"java.lang.Math\" \"max\" 3 7 :functional)"))
+			.isEqualTo("java.lang.Math max(long,long)");
+		assertThat(resolve("(java:static \"java.lang.Math\" \"max\" 3 7 :functional)").functional()).isTrue();
+		assertThat(resolve("(java:static \"java.lang.Math\" \"max\" 3 7)").functional()).isFalse();
+		assertThat(member("(java:new \"java.lang.Thread\" (lambda () nil) :functional)"))
+			.isEqualTo("java.lang.Thread java.lang.Thread(java.lang.Runnable)");
+		JavaSite call = resolve("(java:call x \"run\" :functional)");
+		assertThat(call.functional()).isTrue();
+		assertThat(call.reason()).isEqualTo("the receiver's class is not known");
+		// a field read ends in the markers too, after its name
+		JavaSite field = resolve("(java:field \"java.lang.Integer\" \"MAX_VALUE\" :functional)");
+		assertThat(field.functional()).isTrue();
+		assertThat(field.reason()).isNull();
+	}
+
+	// A function argument takes a functional interface before any other: TreeSet's
+	// Comparator constructor, not its Collection or SortedSet one -- what a Java lambda
+	// picks -- while an interface of several methods still takes one where it is all
+	// there is.
+	@Test
+	void aFunctionTakesAFunctionalInterfaceFirst() {
+		assertThat(member("(java:new \"java.util.TreeSet\" (lambda (a b) t))"))
+			.isEqualTo("java.util.TreeSet java.util.TreeSet(java.util.Comparator)");
+		assertThat(member("(java:new \"java.util.PriorityQueue\" (lambda (a b) t))"))
+			.isEqualTo("java.util.PriorityQueue java.util.PriorityQueue(java.util.Comparator)");
+		assertThat(member("(java:new \"java.util.ArrayList\" (lambda () nil))"))
+			.isEqualTo("java.util.ArrayList java.util.ArrayList(java.util.Collection)");
+		// Callable before Runnable: a function answers a value, which submit keeps
+		assertThat(member(SUBMIT + "\"submit\" (lambda () 42))"))
+			.isEqualTo("java.util.concurrent.ExecutorService submit(java.util.concurrent.Callable)");
+	}
+
+	private static final String SUBMIT = "(java:call (the (java:object \"java.util.concurrent.ExecutorService\") e) ";
+
+	// :java-false is no argument either, before or after :functional: it makes a boolean
+	// answer t or |false| (a Boolean one nil too), so a site taking such an answer
+	// resolves as on t and |false|. Unmarked, the answer is t or nil, as before.
+	@Test
+	void aTrailingJavaFalseMarkerTypesABooleanAnswerAsTOrFalse() {
+		JavaStaticType trueOrFalse = new JavaStaticType.Kinds(java.util.Set.of(JavaKind.Lisp.T, JavaKind.Lisp.FALSE));
+		JavaStaticType boxed = new JavaStaticType.Kinds(
+				java.util.Set.of(JavaKind.Lisp.T, JavaKind.Lisp.FALSE, JavaKind.Lisp.NIL));
+		JavaSite empty = resolve("(java:call (java:new \"java.util.ArrayList\") \"isEmpty\" :java-false)");
+		assertThat(empty.javaFalse()).isTrue();
+		assertThat(empty.functional()).isFalse();
+		assertThat(empty.result()).isEqualTo(trueOrFalse);
+		assertThat(resolve("(java:call (java:new \"java.util.ArrayList\") \"isEmpty\")").result())
+			.isEqualTo(new JavaStaticType.Kinds(java.util.Set.of(JavaKind.Lisp.T, JavaKind.Lisp.NIL)));
+		assertThat(resolve("(java:static \"java.lang.Boolean\" \"valueOf\" \"x\" :java-false)").result())
+			.isEqualTo(boxed);
+		assertThat(resolve("(java:field \"java.lang.Boolean\" \"FALSE\" :java-false)").result()).isEqualTo(boxed);
+		assertThat(resolve("(java:new \"java.lang.Boolean\" \"x\" :java-false)").result()).isEqualTo(trueOrFalse);
+		for (String ending : List.of(":java-false :functional", ":functional :java-false")) {
+			JavaSite both = resolve("(java:static \"java.util.Objects\" \"equals\" 1 2 " + ending + ")");
+			assertThat(both.markers()).as(ending).isEqualTo(new JavaMarkers(true, true, false));
+			assertThat(both.designator()).as(ending).isEqualTo("equals(java.lang.Object,java.lang.Object)");
+		}
+		assertThat(member("(java:static \"java.lang.Boolean\" \"toString\""
+				+ " (java:call (java:new \"java.util.ArrayList\") \"isEmpty\" :java-false))"))
+			.isEqualTo("java.lang.Boolean toString(boolean)");
+	}
+
+	// :through and the function after it are no arguments, in any place among the other
+	// markers: the site resolves as without them and carries the name of the function a
+	// literal #'name names; any other function form leaves the site to run time, which
+	// calls the value it evaluates to.
+	@Test
+	void aTrailingThroughAndItsFunctionAreSetAside() {
+		for (String ending : List.of(":functional :through #'hook :java-false",
+				":through #'hook :functional :java-false", ":functional :java-false :through #'hook")) {
+			JavaSite site = resolve("(java:static \"java.util.Objects\" \"equals\" 1 2 " + ending + ")");
+			assertThat(site.resolved()).as(ending).isTrue();
+			assertThat(site.markers()).as(ending).isEqualTo(new JavaMarkers(true, true, false, "HOOK", true));
+			assertThat(site.designator()).as(ending).isEqualTo("equals(java.lang.Object,java.lang.Object)");
+		}
+		JavaSite computed = resolve("(java:static \"java.util.Objects\" \"equals\" 1 2 :through hook)");
+		assertThat(computed.resolved()).isFalse();
+		assertThat(computed.reason()).isEqualTo(JavaMarkers.THROUGH_COMPUTED);
+		List<LispVal> parts = ((LispCons) LispReader.readAllFromString("(f 1 :through #'g :octets)").get(0)).toList();
+		assertThat(JavaMarkers.count(parts, 1)).isEqualTo(3);
+		assertThat(JavaMarkers.throughFunction(parts, 1)).isEqualTo(parts.get(3));
+		assertThat(JavaMarkers.of(parts, 1).throughComputed()).isFalse();
+		// a :through that ends the parts names no function: it is no marker
+		List<LispVal> bare = ((LispCons) LispReader.readAllFromString("(f 1 :through)").get(0)).toList();
+		assertThat(JavaMarkers.count(bare, 1)).isZero();
+		assertThat(JavaMarkers.throughFunction(bare, 1)).isNull();
+	}
+
+	// A site ending in :through tells the function it names whether it chose its member
+	// before it ran -- resolved to one member, or dispatched over its only overload, as
+	// Clojure's compiler resolves a call -- where a dispatch among several, a site left
+	// to
+	// run time and a form with no :through say nothing.
+	@Test
+	void aSiteTellsItsThroughWhetherItChoseItsMemberFirst() {
+		assertThat(resolve("(java:call (the (java:object \"java.util.ArrayList\") l) \"removeIf\" g"
+				+ " :functional :through #'hook)")
+			.markers()
+			.resolved()).isTrue();
+		JavaSite several = resolve("(java:static \"java.lang.String\" \"valueOf\" x :functional :through #'hook)");
+		assertThat(several.dispatched()).isTrue();
+		assertThat(several.markers().resolved()).isFalse();
+		JavaSite unknown = resolve("(java:call l \"removeIf\" g :functional :through #'hook)");
+		assertThat(unknown.resolved()).isFalse();
+		assertThat(unknown.markers().resolved()).isFalse();
+		assertThat(resolve("(java:static \"java.util.Objects\" \"equals\" 1 2 :functional)").markers())
+			.isEqualTo(new JavaMarkers(true, false, false));
+	}
+
+	// A function value where java.lang.Object is expected costs after every interface it
+	// implements and before any other, so StringBuilder.append(Object) takes it, not
+	// append(CharSequence): the object a function is
+	// (JavaImplementations.functionObject).
+	@Test
+	void aFunctionWhereAnObjectIsExpectedResolvesToTheObjectOverload() {
+		assertThat(resolve("(java:call (java:new \"java.lang.StringBuilder\") \"append\" (lambda () 1))").designator())
+			.isEqualTo("append(java.lang.Object)");
+		assertThat(resolve("(java:new \"java.util.TreeSet\" (lambda (a b) 0))").designator())
+			.isEqualTo("java.util.TreeSet(java.util.Comparator)");
+		assertThat(resolve("(java:call (java:new \"java.util.ArrayList\") \"add\" (lambda () 1))").designator())
+			.isEqualTo("add(java.lang.Object)");
+	}
+
+	// The quoted symbol |false| is Java's false: the boolean overload for a primitive, a
+	// Boolean where a reference is expected -- a site resolves on it as on t.
+	@Test
+	void aQuotedFalseSymbolResolvesAsJavasFalse() {
+		assertThat(member("(java:static \"java.lang.Boolean\" \"toString\" '|false|)"))
+			.isEqualTo("java.lang.Boolean toString(boolean)");
+		assertThat(member("(java:static \"java.lang.String\" \"valueOf\" '|false|)"))
+			.isEqualTo(member("(java:static \"java.lang.String\" \"valueOf\" t)"));
+		// a java:subclass ending in :functional counts its constructor arguments without
+		// it
+		assertThat(JavaImplementations.resolve((LispCons) LispReader.readAllFromString(
+				"(java:subclass \"java.lang.Thread\" '() '() (lambda () nil) (lambda (this m &rest a) nil) :functional)")
+			.get(0), ReflectiveJavaClasses.instance()).resolved()).isTrue();
+	}
+
+	@Test
+	void aVarargsTailIsPackedExactlyAsAtRunTime() {
+		assertThat(member("(java:static \"java.lang.String\" \"format\" \"%s-%s\" 1 \"x\")"))
+			.isEqualTo("java.lang.String format(java.lang.String,[Ljava.lang.Object;) packed");
+		assertThat(member("(java:static \"java.util.List\" \"of\")")).isEqualTo("java.util.List of()");
+	}
+
+	@Test
+	void aParameterTagNarrowsTheCandidates() {
+		assertThat(member("(java:static \"java.lang.Math\" \"max(long,long)\" 3 7)"))
+			.isEqualTo("java.lang.Math max(long,long)");
+		assertThat(member("(java:static \"java.lang.Math\" \"max(long,_)\" 3 7)"))
+			.isEqualTo("java.lang.Math max(long,long)");
+		assertThat(member("(java:new \"java.lang.StringBuilder(int)\" 16)"))
+			.isEqualTo("java.lang.StringBuilder java.lang.StringBuilder(int)");
+		// An unqualified tag type is java.lang's; an array is written with [].
+		assertThat(member("(java:static \"java.lang.String\" \"valueOf(Object)\" 5)"))
+			.isEqualTo("java.lang.String valueOf(java.lang.Object)");
+		assertThat(resolve("(java:static \"java.lang.Math\" \"max(String,_)\" 3 7)").reason())
+			.contains("no public static method max matching max(java.lang.String,_)");
+		assertThat(resolve("(java:static \"java.lang.Math\" \"max(long\" 3 7)").reason())
+			.contains("malformed parameter tag");
+		// An argument hint (a Clojure :tag) keeps the candidates whose parameter its
+		// class
+		// is assignable to, every candidate when it keeps none, as the oracle's compiler
+		// falls back to reflection.
+		assertThat(member(SUBMIT + "\"submit(^java.lang.Runnable)\" (lambda () 42))"))
+			.isEqualTo("java.util.concurrent.ExecutorService submit(java.lang.Runnable)");
+		assertThat(member(SUBMIT + "\"submit(^java.lang.String)\" (lambda () 42))"))
+			.isEqualTo("java.util.concurrent.ExecutorService submit(java.util.concurrent.Callable)");
+		assertThat(member(SUBMIT + "\"submit(^java.lang.Runnable,_)\" (lambda () 42) 1)"))
+			.isEqualTo("java.util.concurrent.ExecutorService submit(java.lang.Runnable,java.lang.Object)");
+	}
+
+	@Test
+	void theConstructedClassTypesTheReceiver() {
+		assertThat(member("(java:call (java:new \"java.lang.StringBuilder\") \"append\" \"x\")"))
+			.isEqualTo("java.lang.StringBuilder append(java.lang.String)");
+		assertThat(member("(java:call (java:new \"java.lang.StringBuilder\") \"append\" 42)"))
+			.isEqualTo("java.lang.StringBuilder append(long)");
+		// The declared return type of a resolved member types the next receiver: the
+		// covariant StringBuilder append, never the bridge returning its superclass.
+		assertThat(
+				member("(java:call (java:call (java:new \"java.lang.StringBuilder\") \"append\" \"x\") \"reverse\")"))
+			.isEqualTo("java.lang.StringBuilder reverse()");
+		assertThat(member("(java:call (java:call (java:new \"java.util.HashMap\") \"keySet\") \"size\")"))
+			.isEqualTo("java.util.Set size()");
+	}
+
+	// A Lisp value is called as the object it converts to for an Object parameter: a
+	// receiver whose kinds all convert to one class resolves among that class's methods;
+	// an integer's box depends on its value, so it is left to run time.
+	@Test
+	void aLispValueReceiverResolvesAsTheClassItConvertsTo() {
+		assertThat(member("(java:call \"abc\" \"codePointAt\" 0)")).isEqualTo("java.lang.String codePointAt(int)");
+		assertThat(member("(java:call (java:call \"ab\" \"toUpperCase\") \"length\")"))
+			.isEqualTo("java.lang.String length()");
+		assertThat(member("(java:call (the (java:object \"java.lang.String\") x) \"isBlank\")"))
+			.isEqualTo("java.lang.String isBlank()");
+		assertThat(member("(java:call 1.5 \"isNaN\")")).isEqualTo("java.lang.Double isNaN()");
+		assertThat(member("(java:call #\\a \"charValue\")")).isEqualTo("java.lang.Character charValue()");
+		assertThat(member("(java:call 100000000000000000000 \"bitLength\")"))
+			.isEqualTo("java.math.BigInteger bitLength()");
+		assertThat(member("(java:call t \"booleanValue\")")).isEqualTo("java.lang.Boolean booleanValue()");
+		assertThat(resolve("(java:call 42 \"toString\")").reason()).isEqualTo("the receiver's class is not known");
+		assertThat(resolve("(java:call nil \"toString\")").reason()).isEqualTo("the receiver's class is not known");
+	}
+
+	// The documented difference: a receiver typed by an upper bound resolves among the
+	// bound's methods, so ArrayList's added remove(int) is not a candidate.
+	@Test
+	void anUpperBoundReceiverResolvesAmongTheBoundsMethods() {
+		assertThat(member("(java:call (the (java:object \"java.util.Collection\") x) \"remove\" 1)"))
+			.isEqualTo("java.util.Collection remove(java.lang.Object)");
+		assertThat(member("(java:call (java:new \"java.util.ArrayList\") \"remove\" 1)"))
+			.isEqualTo("java.util.ArrayList remove(int)");
+	}
+
+	@Test
+	void anArgumentResolvesOnlyWhenEveryKindItCanHaveAgrees() {
+		// A String result may be nil, and nil matches only reference parameters now (as
+		// the oracle's reflector matches null): no single member, a dispatch among the
+		// overloads one of its kinds selects.
+		JavaSite site = resolve("(java:call (java:new \"java.lang.StringBuilder\") \"append\""
+				+ " (java:call (java:new \"java.lang.StringBuilder\") \"toString\"))");
+		assertThat(site.dispatched()).isTrue();
+		assertThat(site.executable()).isNull();
+		assertThat(overloads(site))
+			.contains("append(java.lang.String)", "append(java.lang.Object)", "append(java.lang.CharSequence)",
+					"append([C)", "append(java.lang.StringBuffer)")
+			.doesNotContain("append(int)", "append(long)", "append(double)", "append(boolean)", "append(char)",
+					"append(float)");
+		assertThat(site.arguments()).containsExactly(
+				new JavaSite.Argument(List.of(JavaKind.Lisp.NIL, JavaKind.Lisp.STRING, JavaKind.Lisp.STRING_1), null));
+		// An int result is always an integer, which takes the long overload (as the
+		// oracle's compiler takes it for a long).
+		assertThat(member("(java:call (java:new \"java.lang.StringBuilder\") \"append\""
+				+ " (java:call (java:new \"java.lang.StringBuilder\") \"length\"))"))
+			.isEqualTo("java.lang.StringBuilder append(long)");
+		// A CharSequence may be a Lisp string: nothing is known of the argument.
+		assertThat(resolve("(java:call (java:new \"java.lang.StringBuilder\") \"append\""
+				+ " (the (java:object \"java.lang.CharSequence\") x))")
+			.arguments()).containsExactly(JavaSite.Argument.open(null, null));
+	}
+
+	private static List<String> overloads(JavaSite site) {
+		return site.overloads()
+			.stream()
+			.map(o -> JavaOverloads.fullDesignator(o.executable(), o.executable().name()) + (o.packed() ? "*" : ""))
+			.toList();
+	}
+
+	// A site whose class is known but whose argument kinds are not dispatches among that
+	// class's overloads -- the static class's, never the run-time class's -- in the order
+	// a cost tie is broken by. What it counts on for each argument is checked when it
+	// runs: known kinds, or nil or an instance of a bound, or anything.
+	@Test
+	void aSiteOfUnknownArgumentKindsDispatchesAmongTheClasssOverloads() {
+		JavaSite site = resolve("(java:static \"java.lang.Math\" \"max\" x y)");
+		assertThat(site.resolved()).isTrue();
+		assertThat(site.dispatched()).isTrue();
+		assertThat(site.staticClass()).isEqualTo("java.lang.Math");
+		assertThat(site.designator()).isEqualTo("max");
+		assertThat(overloads(site)).containsExactly("max(double,double)", "max(float,float)", "max(int,int)",
+				"max(long,long)");
+		assertThat(site.arguments()).containsExactly(JavaSite.Argument.open(null, null),
+				JavaSite.Argument.open(null, null));
+		// The overloads answer different types: nothing is known of the value.
+		assertThat(site.result()).isEqualTo(JavaStaticType.UNKNOWN);
+		// The receiver's declared class decides the candidates; one candidate of the
+		// arity resolves however the argument converts, as the oracle's compiler calls
+		// one directly.
+		JavaSite remove = resolve("(java:call (the (java:object \"java.util.Collection\") c) \"remove\" x)");
+		assertThat(remove.resolved()).isTrue();
+		assertThat(remove.dispatched()).isFalse();
+		assertThat(JavaOverloads.fullDesignator(java.util.Objects.requireNonNull(remove.executable()), "remove"))
+			.isEqualTo("remove(java.lang.Object)");
+		assertThat(remove.result())
+			.isEqualTo(new JavaStaticType.Kinds(java.util.Set.of(JavaKind.Lisp.T, JavaKind.Lisp.NIL)));
+		// A bounded argument is nil or an object of its class.
+		JavaSite bounded = resolve("(java:call (java:new \"java.util.ArrayList\") \"addAll\""
+				+ " (the (java:object \"java.util.Collection\") c))");
+		assertThat(bounded.resolved()).isTrue();
+		assertThat(bounded.dispatched()).isFalse();
+		assertThat(bounded.arguments())
+			.containsExactly(JavaSite.Argument.open("java.util.Collection", "java.util.Collection"));
+		assertThat(bounded.arguments().get(0).expected()).isEqualTo("a java.util.Collection");
+		// A varargs method is a candidate packed too.
+		assertThat(overloads(resolve("(java:static \"java.lang.String\" \"format\" \"%s\" x)"))).containsExactly(
+				"format(java.lang.String,[Ljava.lang.Object;)", "format(java.lang.String,[Ljava.lang.Object;)*");
+		// A constructor dispatches too.
+		assertThat(overloads(resolve("(java:new \"java.lang.StringBuilder\" x)"))).containsExactly("<init>(int)",
+				"<init>(java.lang.CharSequence)", "<init>(java.lang.String)");
+		// An overload no value an argument can have is accepted by is no candidate; with
+		// none left the site is resolved when it runs, from the run-time class.
+		assertThat(resolve("(java:static \"java.lang.Math\" \"max\" \"a\" x)").reason())
+			.isEqualTo("no method of java.lang.Math accepts arguments of these types");
+	}
+
+	// The dispatch chooses what the run-time rule chooses: over every candidate set of a
+	// corpus of JDK classes and every combination of argument kinds, the first cheapest
+	// of the ranked overloads is the overload select() picks.
+	@Test
+	void theRankedOrderChoosesWhatSelectChooses() {
+		ReflectiveJavaClasses classes = ReflectiveJavaClasses.instance();
+		List<JavaKind> kinds = new java.util.ArrayList<>(List.of(JavaKind.Lisp.values()));
+		for (String host : List.of("java.lang.StringBuilder", "java.util.ArrayList", "java.lang.Object",
+				"java.util.Locale")) {
+			kinds.add(java.util.Objects.requireNonNull(classes.find(host)));
+		}
+		int checked = 0;
+		for (String className : List.of("java.lang.Math", "java.lang.String", "java.lang.StringBuilder",
+				"java.util.Arrays", "java.lang.Integer", "java.lang.Character", "java.util.Collections",
+				"java.util.Objects", "java.util.ArrayList", "java.io.PrintStream")) {
+			ReflectiveJavaClasses.Type type = java.util.Objects.requireNonNull(classes.find(className));
+			java.util.Set<String> names = new java.util.TreeSet<>();
+			for (java.lang.reflect.Method method : type.type().getMethods()) {
+				names.add(method.getName());
+			}
+			for (String name : names) {
+				List<? extends JavaExecutable> candidates = type.methods(name);
+				for (int argc = 0; argc <= 2; argc++) {
+					List<JavaOverloads.Overload> ranked = JavaOverloads.ranked(candidates, argc);
+					int combinations = (int) Math.pow(kinds.size(), argc);
+					for (int n = 0; n < combinations; n++) {
+						JavaKind[] combination = new JavaKind[argc];
+						for (int i = 0, rest = n; i < argc; i++, rest /= kinds.size()) {
+							combination[i] = kinds.get(rest % kinds.size());
+						}
+						JavaOverloads.ArgumentCost cost = (i, target) -> JavaOverloads.kindCost(combination[i], target,
+								classes);
+						JavaOverloads.Overload selected = JavaOverloads.select(candidates, argc, cost);
+						JavaOverloads.Overload dispatched = JavaOverloads.selectRanked(ranked, argc, cost);
+						if (selected == null) {
+							assertThat(dispatched).as(className + "." + name).isNull();
+						}
+						else {
+							assertThat(dispatched).as(className + "." + name).isNotNull();
+							assertThat(selected.sameAs(dispatched)).as(className + "." + name).isTrue();
+							checked++;
+						}
+					}
+				}
+			}
+		}
+		assertThat(checked).isGreaterThan(1000);
+	}
+
+	@Test
+	void whatIsNotKnownIsLeftToRunTime() {
+		assertThat(resolve("(java:call x \"length\")").reason()).isEqualTo("the receiver's class is not known");
+		assertThat(resolve("(java:static cls \"max\" 1 2)").reason())
+			.isEqualTo("the class name is not a literal string");
+		assertThat(resolve("(java:static \"no.such.Class\" \"m\")").reason())
+			.isEqualTo("class no.such.Class is not found");
+		assertThat(resolve("(java:static \"java.lang.Math\" \"noSuchMethod\" 1)").reason())
+			.isEqualTo("class java.lang.Math has no public static method noSuchMethod");
+		// A method whose declared type is Object answers any value: nothing is known.
+		assertThat(resolve("(java:call (the (java:object \"java.util.List\") x) \"get\" 0)").result())
+			.isEqualTo(JavaStaticType.UNKNOWN);
+	}
+
+	@Test
+	void fieldsResolveToo() {
+		assertThat(member("(java:field \"java.lang.Integer\" \"MAX_VALUE\")")).isEqualTo("java.lang.Integer MAX_VALUE");
+		assertThat(member("(java:field (java:new \"java.awt.Point\" 3 4) \"y\")")).isEqualTo("java.awt.Point y");
+		assertThat(resolve("(java:field \"java.lang.Integer\" \"NO_SUCH\")").reason())
+			.isEqualTo("class java.lang.Integer has no public field NO_SUCH");
+	}
+
+	@Test
+	void theStaticTypeOfAResolvedValue() {
+		assertThat(resolve("(java:static \"java.lang.Math\" \"max\" 3 7)").result())
+			.isEqualTo(new JavaStaticType.Kinds(java.util.Set.of(JavaKind.Lisp.INTEGER)));
+		assertThat(resolve("(java:call (java:new \"java.util.ArrayList\") \"add\" 42)").result())
+			.isEqualTo(new JavaStaticType.Kinds(java.util.Set.of(JavaKind.Lisp.T, JavaKind.Lisp.NIL)));
+		assertThat(resolve("(java:new \"java.lang.String\" \"x\")").result())
+			.isEqualTo(new JavaStaticType.Kinds(java.util.Set.of(JavaKind.Lisp.STRING, JavaKind.Lisp.STRING_1)));
+	}
+
+	// java:static calls a static method: an instance method of the name, which could
+	// only fail without a receiver, is no candidate.
+	@Test
+	void aStaticCallChoosesAmongTheStaticMethods() {
+		assertThat(resolve("(java:static \"java.lang.String\" \"length\")").reason())
+			.isEqualTo("class java.lang.String has no public static method length");
+		assertThat(member("(java:static \"java.lang.Integer\" \"toString\" 5)"))
+			.isEqualTo("java.lang.Integer toString(int)");
+		// java:call keeps both: a static method is called through an instance as Java
+		// allows.
+		assertThat(member("(java:call (java:new \"java.lang.StringBuilder\") \"length\")"))
+			.isEqualTo("java.lang.StringBuilder length()");
+	}
+
+	// A site resolves only when a compiled program could call it directly: nothing is
+	// constructed from an abstract class or an interface, a class name reads a static
+	// field, and every class the call names must be public.
+	@Test
+	void aSiteResolvesOnlyWhenItCanBeCalledDirectly() {
+		assertThat(resolve("(java:new \"java.io.InputStream\")").reason())
+			.isEqualTo("class java.io.InputStream is abstract");
+		assertThat(resolve("(java:new \"java.lang.Runnable\")").reason())
+			.isEqualTo("class java.lang.Runnable is an interface");
+		assertThat(resolve("(java:field \"java.awt.Point\" \"x\")").reason())
+			.isEqualTo("field java.awt.Point.x is not static");
+		assertThat(resolve("(java:field (java:new \"java.awt.Point\") \"x\" 1)").reason())
+			.isEqualTo("a field write is resolved when it runs");
+		assertThat(resolve("(java:new \"" + Hidden.class.getName() + "\")").reason())
+			.isEqualTo("class " + Hidden.class.getName() + " is not public");
+		assertThat(resolve("(java:static \"java.lang.AbstractStringBuilder\" \"m\")").reason())
+			.isEqualTo("class java.lang.AbstractStringBuilder is not accessible");
+		// A value of a class no compiled program can name has no kind to check.
+		assertThat(this.resolver
+			.typeOf(LispReader.readAllFromString("(the (java:object \"" + Hidden.class.getName() + "\") x)").get(0)))
+			.isEqualTo(JavaStaticType.UNKNOWN);
+	}
+
+	// What a resolved site counted on for each argument: the kinds, in a fixed order,
+	// and the class a declaration named -- what a value of another kind is reported
+	// against.
+	@Test
+	void aResolvedSiteRecordsWhatItCountedOnForEachArgument() {
+		JavaSite site = resolve(
+				"(java:static \"java.lang.Integer\" \"parseInt\"" + " (the (java:object \"java.lang.String\") s) 16)");
+		assertThat(site.designator()).isEqualTo("parseInt(java.lang.String,int)");
+		assertThat(site.arguments()).containsExactly(
+				new JavaSite.Argument(List.of(JavaKind.Lisp.NIL, JavaKind.Lisp.STRING, JavaKind.Lisp.STRING_1),
+						"java.lang.String"),
+				new JavaSite.Argument(List.of(JavaKind.Lisp.INTEGER), null));
+		assertThat(site.arguments().get(0).expected()).isEqualTo("a java.lang.String");
+		assertThat(site.arguments().get(1).expected()).isEqualTo("an integer");
+		assertThat(new JavaSite.Argument(List.of(JavaKind.Lisp.NIL, JavaKind.Lisp.STRING, JavaKind.Lisp.STRING_1), null)
+			.expected()).isEqualTo("nil or a string");
+		// A primitive declaration reads as its kinds.
+		assertThat(new JavaSite.Argument(List.of(JavaKind.Lisp.INTEGER), "int").expected()).isEqualTo("an integer");
+		assertThat(JavaSiteResolver.declaredClass(LispReader
+			.readAllFromString("(the fixnum (the (java:object \"java.lang.Integer\") (the (java:object \"C\") x)))")
+			.get(0))).isEqualTo("java.lang.Integer");
+	}
+
+	/** A class-path class that is not public: reflection can call it, bytecode cannot. */
+	static final class Hidden {
+
+		public Hidden() {
+		}
+
+	}
+
+	@Test
+	void tagTypesAreSpelledAsClassGetNameSpellsThem() {
+		assertThat(JavaOverloads.parseMember("f(int,long[],String...,java.util.Map$Entry,_,[D)").tag())
+			.isEqualTo(List.of("int", "[J", "[Ljava.lang.String;", "java.util.Map$Entry", "_", "[D"));
+		assertThat(JavaOverloads.parseMember("f()").tag()).isEqualTo(List.of());
+		assertThat(JavaOverloads.parseMember("f").tag()).isNull();
+		assertThat(JavaOverloads.parseMember("f(^java.util.concurrent.Callable,_)"))
+			.isEqualTo(new JavaOverloads.Member("f", null, List.of("java.util.concurrent.Callable", "_")));
+		assertThat(JavaOverloads.parseMember("f(^java.util.concurrent.Callable,_)").designator())
+			.isEqualTo("f(^java.util.concurrent.Callable,_)");
+		assertThatThrownBy(() -> JavaOverloads.parseMember("f(^java.lang.String,int)"))
+			.isInstanceOf(IllegalArgumentException.class);
+		assertThatThrownBy(() -> JavaOverloads.parseMember("f(int,)")).isInstanceOf(IllegalArgumentException.class);
+		assertThatThrownBy(() -> JavaOverloads.parseMember("f)")).isInstanceOf(IllegalArgumentException.class);
+	}
+
+	@Test
+	void sitesAreFoundOutsideQuotedData() {
+		List<LispCons> sites = JavaSiteResolver.sitesIn(
+				LispReader.readAllFromString("(defun f (x) (java:call (java:new \"C\") \"m\") '(java:call x \"m\"))")
+					.get(0));
+		assertThat(sites).extracting(LispCons::print)
+			.containsExactly("(JAVA:CALL (JAVA:NEW \"C\") \"m\")", "(JAVA:NEW \"C\")");
+	}
+
+	// What JavaDeclarations writes for a variable's inferred type reads back as that
+	// type, or as the narrowest declared type covering it -- never a narrower one.
+	@Test
+	void aStaticTypeIsSpelledAsASpecifierThatReadsItBack() {
+		for (String form : List.of("3", "2.5", "\"abc\"", "\"a\"", "#\\a", "nil", "t",
+				"(java:new \"java.lang.StringBuilder\")", "(java:new \"java.util.ArrayList\")",
+				"(java:call (java:new \"java.lang.StringBuilder\") \"reverse\")",
+				"(java:call (java:new \"java.lang.StringBuilder\") \"length\")",
+				"(java:call (java:new \"java.lang.StringBuilder\") \"toString\")",
+				"(java:static \"java.lang.Integer\" \"valueOf\" 3)",
+				"(the (java:object \"java.util.Collection\") x)")) {
+			JavaStaticType type = this.resolver.typeOf(LispReader.readAllFromString(form).get(0));
+			am.ik.rontolisp.LispVal spec = this.resolver.specOf(type);
+			assertThat(spec).as(form).isNotNull();
+			JavaStaticType read = this.resolver.typeOfSpec(spec);
+			if (type instanceof JavaStaticType.Kinds kinds) {
+				assertThat(read).as(form)
+					.isInstanceOfSatisfying(JavaStaticType.Kinds.class,
+							r -> assertThat(r.kinds()).containsAll(kinds.kinds()));
+			}
+			else {
+				assertThat(read).as(form).isEqualTo(type);
+			}
+		}
+		assertThat(spelled("(java:new \"java.lang.StringBuilder\")"))
+			.isEqualTo("(JAVA:OBJECT \"java.lang.StringBuilder\" :EXACT)");
+		assertThat(spelled("3")).isEqualTo("(JAVA:OBJECT \"int\")");
+		assertThat(spelled("(java:static \"java.lang.Integer\" \"valueOf\" 3)"))
+			.isEqualTo("(JAVA:OBJECT \"java.lang.Long\")");
+		// A function value has no java:object spelling: the variable stays untyped.
+		assertThat(spelled("(lambda () 1)")).isNull();
+	}
+
+	private @org.jspecify.annotations.Nullable String spelled(String form) {
+		am.ik.rontolisp.LispVal spec = this.resolver
+			.specOf(this.resolver.typeOf(LispReader.readAllFromString(form).get(0)));
+		return spec == null ? null : spec.print();
+	}
+
+}

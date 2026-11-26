@@ -1,0 +1,15 @@
+package example:textkit;
+
+/// A text emphasizer, implemented in Rust. `shout` uppercases the text and adds
+/// an exclamation mark.
+interface casing {
+  shout: func(text: string) -> string;
+}
+
+/// The Rust component's world: it EXPORTS the `casing` interface, and imports
+/// nothing -- it needs nothing from anyone. This is the whole "Java calls Rust"
+/// service. The component is the one ../../wit/lisp-calls-rust/rust-shouter
+/// builds; both programs share this interface.
+world emphasizer {
+  export casing;
+}

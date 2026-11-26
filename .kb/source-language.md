@@ -1,0 +1,233 @@
+# The source-language seam (`SourceLanguage`, eval pkg)
+
+A language is something that PRODUCES core forms and then joins the existing pipeline:
+`source text --[ language: read + lower ]--> List<LispVal>` (the de-facto IR the
+`reader`/`macro`/`compiler`/`codegen`/`eval` packages share) `-> CompileFrontend.expand`
+on the compile path, `LispEvaluator` on the interpreter. One type owns "source text
+-> forms" (`eval/SourceLanguage.read`, which also owns the `#.` marker decision via
+`usesReadEvalMarkers`), and one method picks the language (`forFile`: the file's
+extension, with the `--source-language` CLI override winning for the entry source).
+`read` is `readUntilError` plus a throw: the forms before the first read error and that
+error. The interpreter's `load` and its entry file read Common Lisp form at a time instead
+(`readForms`), each form with the readtable the forms before it left
+(`.kb/readtables.md`, `.kb/read-load-streams.md`), and so does the compile path's
+`LoadInliner` for every Common Lisp file, the entry included (`inlineSource`), with the
+readtable the compile-time evaluator holds.
+
+The pick is PER FILE: a `(load ...)`ed file is read in the language ITS extension
+names, so one program may mix languages file by file (`LoadInliner.spliceFile` on the
+compile path, `LispEvaluator.loadFile` on the interpreter). The entry source's
+language is its extension or the override (`CompileFrontend.run`,
+`RontoLispCli.interpret`, `JvmSourceCompiler.sourceLanguage` for embedders). The REPL
+has no file: its language is the override, else the default. The browser playground's
+language is its page's pick ("The browser" below); its compile buttons keep the error-mode read
+(`readStrict`) because their reduced frontend has no marker-resolution pass.
+
+## Reading without a file: `SourceSession`
+
+A consumer that reads one buffer at a time asks the LANGUAGE four things, through
+`eval/SourceSession` (one per REPL): `isComplete` (continue the line or read now), `read`
+(core forms per top-level form, plus whether its value is worth echoing), `print` (the
+language's own `write`) and `prompt` (`CL-USER> ` follows the current package, `scheme> `
+has none, nor `clojure> `/`starlark> `). It is a session because a language may carry
+state between buffers; Scheme does (`.kb/scheme-frontend.md`, "A session"), Starlark too
+(the globals and modules of earlier buffers, `.kb/starlark-frontend.md`, "A session"),
+Common Lisp keeps none here. Two consumers:
+`cli/ReplBuffer` (both CLI REPL drivers) and `eval/PlaygroundRepl` (the browser).
+
+## The browser (`eval/PlaygroundRepl`, 2026-09-19, `.todo/893`)
+
+The playground's REPL and the doc site's Run cells, in the language picked by
+`rontoSetLanguage` (`"lisp"`, `"scheme"`, `"clojure"`, `"starlark"`, `"java"`; `parse` names). In the main tree, not beside the
+`@JS` bootstrap (`src/web/java/.../RontoPlayground`, now a thin adapter), so the JVM suite
+runs what the browser runs (`PlaygroundReplTest`, and `DocExamplesTest.runScheme`).
+
+- One evaluator, one `SourceSession` per language made on first use: switching keeps every
+  definition, and a Scheme session keeps what its earlier buffers defined. The pick switches
+  the reader, not the names: Scheme's `(|TWICE| 21)` reaches `s%TWICE`, not the Common Lisp
+  `twice` (measured 2026-09-19).
+- `eval` echoes the LAST step's values only (`Step.echoes` of that step), not
+  `ReplBuffer`'s every-form loop: a Common Lisp Run cell is a setup plus an expression whose
+  FINAL value is the annotated one. Echo text is `SourceSession.echo` (the print-object
+  route for Common Lisp, as the CLI REPL; it was `print()` before).
+- `run` (a whole program read as a file) and `transcript` (every form echoed after a fresh
+  line, the piped CLI REPL) run on a FRESH instance with the cell's stdin: the doc site's
+  Scheme, Clojure and Starlark cells (`.kb/documentation-site.md`).
+- The compile buttons read the pick through `readStrict(source, features, loader)`; its
+  Scheme arm reads the uploaded files an `include` / `define-library` names, its Starlark
+  arm the modules a `load` names. What they read goes through `CompileFrontend.expand`
+  itself (`cli/PlaygroundFrontend` under `src/web/java`, the uploaded files as
+  `Options.loader`), so a module the page compiles is the CLI's byte for byte (measured
+  2026-11-19 on a sample of each language; a Java program's as `Main.java`). Until then the
+  page kept a reduced copy of the chain (`.kb/architecture.md`, "Package rules").
+- A host with one stack hands `PlaygroundRepl` a `OneStack`: `run` gives it a Java program
+  that starts threads, and a Java session step starts none (`.kb/java-frontend.md`, "In
+  the browser"). `page()` is the stream a run's text is read back from; the browser makes
+  it `System.err` for the call, so standard error shows in the order written.
+- JS calls exported with `Function` / `BiFunction` only; a three-argument call is avoided by
+  making the language a pick rather than a parameter.
+
+**How strictly a language is read is program-wide, not per file**, and travels with the
+seam: `eval/SourceStandards` (the `--scheme-standard` value, `scheme/SchemeStandard`, the
+`--starlark-standard` value, `starlark/StarlarkStandard`, and
+the directory of the user-level Clojure `deps.edn`, which only `RontoLispCli` locates from
+the environment, the `deps.edn` aliases `-A`/`-M`/`-X` select, and the source path of a
+Java program, `--java-source-path` / `--java-source-dep`, `.kb/java-frontend.md`, "A
+library from the source path") is handed to every read of user source -- `read(source,
+features, file, standards)`, `SourceSession(language, standards)`, `LoadInliner`,
+`LispEvaluator.setSourceStandards` for run-time `load` -- and to
+`CompileFrontend.Loaded`, whose `SchemeLibrary` splice generates `eval`'s table from it.
+A wrapper in `eval` rather than the enum itself, so `cli` names no `scheme` type. The
+three-argument `read` means the default and is for the sites that read no user source
+or have no option to honor (the playground).
+
+**The files a source names travel with the read too**: the five-argument
+`read(source, features, file, standards, loader)` hands a Scheme read the `SourceLoader`
+its site already reads through (`SourceLanguage.schemeFiles` adapts it, resolving against
+the naming file's directory like `load`), for `include` and `define-library` files
+(`.kb/scheme-frontend.md`, "Libraries and include"); `SourceSession` takes one the same
+way. A Clojure read gets the same loader through `SourceLanguage.clojureFiles`, for the
+project namespaces a `require` loads, the `deps.edn` files, a dependency's directory and a
+jar read in place (`SourceLoader.listArchive`, whose default, like every probe's, answers
+"none" for a loader that is not a filesystem) (`.kb/clojure-frontend.md`, "deps.edn"), and
+the WIT files `rontolisp.wit` reads, described through `eval/ClojureHostBoundary`, the
+`ClojureBoundary` the seam passes beside the loader (`.kb/clojure-frontend.md`, "Host
+boundary"). A Starlark read gets it through `SourceLanguage.starlarkFiles`, for the modules
+its `load` statements name (`.kb/starlark-frontend.md`, "Modules"). A Java read gets it through
+`SourceLanguage.javaFiles`, for the classes of its source tree (`.kb/java-frontend.md`, "A
+program of several files"). A read with no loader
+names no file. A Common Lisp read ignores it.
+
+The entry-language override is validated where it is parsed (an unknown name fails
+fast); loaded files always pick by extension, so the override never leaks into them.
+`isSourceFile` answers the `rontolisp test` question (a missing `foo.lisp` is an error,
+a missing `foo` is a system to look up); `fileNameForModule` / `defaultExtension`
+spell the `require` default mapping and the package-inferred sub-system file in one
+place. `FormatCommand` does NOT consult the seam: the formatter is Common Lisp only
+until a language brings its own.
+
+NOT user source, so NOT through the seam (pinned by `SourceLanguageSeamTest`, next to
+`PackageCycleTest`): library source shipped in the jar -- or a form the implementation
+synthesizes itself -- which is Common Lisp whatever the user's language is (every
+`*Library` splice, `ShimLibraries`, `UiopLibrary`, the four `macro` readers; the built-in
+Ring and clojure.jar namespaces are Clojure, read by the Clojure lowering's own namespace
+loader, after the seam);
+`Environment`'s runtime `read`/`read-from-string` of DATA; `AsdfSystems`' `.asd`
+metadata (tolerant `#.`-skipping read) and leading-`defpackage` scans;
+`cli.CompileTimePathnameFolder`'s compile-time fold of a constant string embedded in a
+form (the `read-from-string` hidden behind `eval`). A further
+language extends `forFile` (and `isSourceFile`) and lowers to the same core forms;
+what else it needs to own (error positions, a formatter) is decided when it asks for it,
+by adding a method to the seam; what a REPL needs is `SourceSession`'s four.
+
+## The second language: `SCHEME` (experimental)
+
+`.scm`, or `--source-language scheme` (`scm`). `read` hands the text to
+`am.ik.rontolisp.scheme.Scheme.read` -- reader, desugaring and lowering to core forms in
+one step, with no `#.` and no reader features -- and everything downstream is unchanged
+(`.kb/scheme-frontend.md`). `CompileFrontend.run` refuses the entry language under
+`--no-gc`. `defaultExtension()` is per language; `fileNameForModule` and the
+package-inferred sub-system file stay Common Lisp.
+
+## The third language: `CLOJURE` (experimental)
+
+`.clj` and `.cljc` (`CLOJURE_COMMON_EXTENSION`, whose reader conditionals read), or `--source-language clojure` (`clj`). `read` hands the text to
+`am.ik.rontolisp.clojure.Clojure.read` -- a case-sensitive reader plus a lowering to
+core forms in one step, with no `#.` and none of the Common Lisp reader features (a `.cljc` file has its own, `.kb/clojure-frontend.md`) -- and everything
+downstream is unchanged (`.kb/clojure-frontend.md`). `CompileFrontend.run` refuses the
+entry language under `--no-gc`, like Scheme. `defaultExtension()` is per language;
+`fileNameForModule` and the package-inferred sub-system file stay Common Lisp.
+
+## The fourth language: `STARLARK` (experimental)
+
+`.star`, or `--source-language starlark` (`star`). `read` hands the text to
+`am.ik.rontolisp.starlark.Starlark.read` -- the reader, static name resolution and the
+lowering to core forms in one step, with no `#.` and no reader features, the modules its
+`load` statements name read through the loader, against `SourceStandards.starlark()` --
+and everything downstream is unchanged (`.kb/starlark-frontend.md`). `CompileFrontend.run` refuses the entry language under
+`--no-gc`. Its `SourceSession` reads a buffer at a time as one file's run, a blank line
+ending a block (`.kb/starlark-frontend.md`, "A session"); `-e` and a file are whole
+programs and read through `read`.
+
+## The fifth language: `JAVA` (experimental)
+
+`.java`, or `--source-language java`: a subset of the Java language. `read` hands the text to
+`am.ik.rontolisp.java.Java.read` -- the reader, the class table, static typing and the lowering
+to core forms in one step, with no `#.` and no reader features; the file name picks the class a
+program starts at (`.kb/java-frontend.md`). `CompileFrontend.run` refuses the entry language
+under `--no-gc`. A program is a whole file and the files of its source tree it names, or `-e`
+with one file; a file `load` reads (`readLoaded`, both paths) may have no `main` and then runs
+nothing. Its `SourceSession` is `java/JavaSession` (prompt `java> `, the playground's pick):
+every buffer lowers the earlier ones' declarations again (`.kb/java-frontend.md`, "A
+session"). `isSourceFile` answers true for `.java`; `rontolisp test` and `format` refuse one,
+the Maven plugin compiles `.lisp` only (`.kb/java-frontend.md`, "The tools").
+
+## The run-time libraries' name gate (2026-10-23)
+
+The front ends' run-time libraries (`scheme.lisp`, `clojure.lisp`, and since 2026-11-15
+`starlark.lisp`, whose gate is the member prefix `%STARLARK-` and the one public name
+`rontolisp:starlark-call`, and since 2026-11-17 `java.lisp`, gate `%JAVA-`) and the
+regular-expression engine two of them share (`regex.lisp` with `regex-unicode.lisp`, gate
+`%REGEX-`, since 2026-11-18, `.kb/regex-engine.md`; `uri.lisp`, gate `%URI-`, since 2026-11-18, asked right after it; and `unicode-normalization.lisp` with its tables, gate `%UNORM-`, since 2026-11-19, asked after that, `.kb/unicode-normalization.md`) are Common Lisp loaded on demand, and the question "is this name one of yours" is asked about names of
+EVERY program:
+
+- The interpreter: `LispEvaluator.resolveFunction`, for a name the global environment
+  does not bind yet, asks after the wrappers and special operators, in order: keyword
+  helpers, linalg, objc, appkit, geom, checkpoint, safetensors, metal, scene, torch,
+  tokenizer, gguf, vec, url, `SchemeLibrary.isSchemeFunction`,
+  `StarlarkLibrary.isStarlarkFunction`, `JavaLibrary.isJavaFunction`,
+  `RegexLibrary.isRegexFunction`, `ClojureLibrary.isClojureFunction`, usocket, wit,
+  the prelude (one defun at a time),
+  uiop, asdf, the generated slot/struct helpers. The name sets are disjoint (packages,
+  `%scheme-`/`%clojure-` helpers), so the order decides only which gates a name pays
+  for, never which definition it gets. A whole Clojure program splices its library
+  ahead of itself instead (`clojureProgram`).
+- The compile path: both `process` passes ask for every symbol of the program, and
+  `LibraryDefunPruner` asks for every top-level definition (`.kb/library-defun-pruning.md`).
+
+Until 2026-10-23 the two checks built their name sets from the whole library on the
+first question, whatever the name: `scheme.lisp` read plus its generated run-time table,
+`clojure.lisp` plus the case mapping and its Unicode tables (now `regex-unicode.lisp`). A
+Common Lisp program
+paid it on its first prelude call (`equalp`, `string<`, `read-sequence`) or its first
+undefined function; JFR of `-e '(print (equalp "a" "A"))'` had 34 of 37 samples under the
+two checks. Now `mayDefine(name)` answers from the spelling first -- Scheme: the member
+starts `%SCHEME-`; Clojure: the member starts `%CLOJURE-`, or the name starts `c%clojure.`
+(`clojure.test`'s `*testing-vars*`) -- and only a name it admits reads the library.
+Building a set throws `IllegalStateException` when the library defines a name its gate
+refuses, so a definition outside the spelling fails the first test that loads the
+library instead of silently never loading.
+
+Measured 2026-10-23, Apple M4 Max, Java 25.0.3, `java -jar` of the exec jar, min of 7 runs:
+
+| command | before | after |
+|---|---|---|
+| `-e '(print 1)'` | 0.193 s | 0.199 s |
+| `-e '(print (equalp "a" "A"))'` | 0.604 s | 0.207 s |
+| `-e '(print (string< "a" "b"))'` | 0.611 s | 0.209 s |
+| `read-sequence` into a string | 0.614 s | 0.219 s |
+| `(handler-case (no-such-fn 1) (undefined-function () ...))` | 0.703 s | 0.253 s (a plain `handler-case` of `error`: 0.248 s) |
+| `p.lisp -o P.class` (`equalp`, min of 5) | 0.909 s | 0.487 s |
+| `p.lisp -o p.wasm` | 0.984 s | 0.574 s |
+
+Scheme and Clojure examples (`examples/scheme/*.scm`, seven `examples/clojure` files) and
+four `examples/console` programs print the same and compile to byte-identical `.class` and
+`.wasm` either way. Pin: `SchemeLibraryTest#aCommonLispProgramReadsNoFrontEndsLibrary`
+loads the classes afresh in a loader that records resource reads (the JVM's other tests
+fill the static caches), runs a Common Lisp program through the interpreter and the
+compile front end, and asserts no front end's library was read -- then that
+`#'rontolisp::%scheme-acos` reads `scheme.lisp`, `#'rontolisp::%starlark-truth`
+`starlark.lisp` and `#'rontolisp::%java-throw` `java.lisp`. Rejected: resolving the prelude first (an undefined name still pays,
+and the order was never the cause); asking only after a `.scm`/`.clj` file was read (state
+in the evaluator, while a REPL, a `load` from Common Lisp and Scheme `eval` reach the
+helpers by other paths); a build-time name index (a generated table to keep in sync, where
+the spelling already is one).
+
+## Tests
+
+`SourceLanguageSeamTest` (no class outside the seam reads user source through
+`LispReader` directly; no stale exemptions), `SourceLanguageTest` (each language claims its
+extension and reads through the seam), `RontoLispCliTest` (the `repl...` and
+`theSchemeRepl...` transcripts, the `.clj` pick, the `clojure>` and `starlark>` REPL
+transcripts),
+`JvmSourceCompilerTest`.

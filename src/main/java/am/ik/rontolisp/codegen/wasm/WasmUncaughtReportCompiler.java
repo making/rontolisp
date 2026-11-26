@@ -1,0 +1,260 @@
+package am.ik.rontolisp.codegen.wasm;
+
+import java.util.List;
+
+import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispNames;
+import am.ik.rontolisp.LispNil;
+import am.ik.rontolisp.LispString;
+import am.ik.rontolisp.LispSymbol;
+import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.compiler.UncaughtReport;
+import am.ik.wasm.Instruction;
+import am.ik.wasm.Type;
+
+import org.jspecify.annotations.Nullable;
+
+/**
+ * The entry function's EH-mode landing pad: a condition nobody caught writes
+ * {@link UncaughtReport#PREFIX} plus its report to file descriptor 2 and only then traps.
+ *
+ * <p>
+ * <b>What this replaces.</b> {@link WasmEmitHelper#emitCatchAllPrologue} wraps an entry
+ * body in {@code block} + {@code try_table (catch_all)} whose landing is a single
+ * {@code unreachable} -- so the payload the throw carried, message and all, was on the
+ * stack at the catch and dropped. The user's whole output for a failed cl-postgres
+ * connect was {@code wasm trap: wasm 'unreachable' instruction executed}. Here the
+ * $lisp-cond tag gets its own catch, which pushes that payload into a
+ * {@code block (result (ref null eq))}, and the landing renders it before falling into
+ * the same {@code unreachable}: the process still exits as a trap, which is the exit
+ * class every host and every test already expects.
+ *
+ * <p>
+ * <b>Entry functions and export wrappers.</b> {@code _start} / {@code run} is where a
+ * PROGRAM ends; an export wrapper is a host call, which reports what it left uncaught the
+ * same way before its trap ({@link #emitExportEpilogue}), as a Rust component's panic
+ * prints its message before its own: the trap alone is what a host's log shows. A served
+ * handler's failure is the serve loop's, so serve's wrappers keep
+ * {@link WasmEmitHelper}'s catch_all-only landing.
+ *
+ * <p>
+ * <b>Outside EH mode nothing changes.</b> {@code %error} is then a bare
+ * {@code unreachable} that evaluates none of its arguments and the module has no tag
+ * section at all, so there is no payload to read and no landing to read it in. Reporting
+ * there would mean turning EH mode on for every program (122 KB -> 176 KB on a two-line
+ * toy) to buy an error path most programs never take -- and would give up the
+ * byte-identity guarantee a program without a catching form has today. Only
+ * {@code --report-locations} asks for it there, and gets EH mode with it
+ * ({@code SignalMessages.ENTRY_REPORT}). See {@code .kb/error-handling.md}.
+ */
+final class WasmUncaughtReportCompiler {
+
+	private WasmUncaughtReportCompiler() {
+	}
+
+	/**
+	 * Whether an entry function carries this landing pad, given the module's EH mode --
+	 * and with it, whether the compiled program can WRITE file descriptor 2 whatever its
+	 * source spells.
+	 *
+	 * <p>
+	 * The pad is a producer of the reserved {@code *error-output*} handle that the
+	 * compiler SYNTHESIZES ({@link #reportForm} builds a {@code %warn} call during pass
+	 * 2), so the source scan that answers the same question for the user's own text --
+	 * {@code WasmComponentBuilder.Narrowing}'s {@code reachesStandardError}, which under
+	 * {@code --optimize} decides whether the component keeps {@code wasi:cli/stderr} and
+	 * the adapter its fd 2 arm -- cannot see it. Both the emission and the narrowing read
+	 * THIS predicate so they cannot drift apart again: a program whose report the
+	 * narrowing did not expect would trap exactly where it is supposed to diagnose
+	 * ({@code .kb/standard-output-redirect.md}).
+	 * @param ehMode whether the module is in EH mode
+	 * @return whether the entry function gets the reporting landing pad
+	 */
+	static boolean emittedFor(boolean ehMode) {
+		return ehMode;
+	}
+
+	/**
+	 * Opens the reporting wrapper of an entry function: {@code block $trap} +
+	 * {@code block $cond (result (ref null eq))} + {@code try_table (catch $lisp-cond
+	 * $cond) (catch_all $trap)}. Catch labels are resolved without the try_table's own
+	 * label, so 0 is {@code $cond} and 1 is {@code $trap}. The body compiled next runs
+	 * inside the try_table and leaves through a {@code return}, so no result blocktype is
+	 * needed whatever the function's signature.
+	 * @param ctx the compilation context (its wasmCtrlDepth is raised by three)
+	 */
+	static void emitPrologue(WasmLispCompiler.Ctx ctx) {
+		ctx.writer.write(Instruction.BLOCK, WasmLispCompiler.BLOCKTYPE_EMPTY);
+		ctx.writer.write(Instruction.BLOCK);
+		ctx.writer.writeRefType(true, Type.EQ.code());
+		ctx.writer.write(Instruction.TRY_TABLE, WasmLispCompiler.BLOCKTYPE_EMPTY);
+		ctx.writer.writeUnsignedLeb128(2);
+		ctx.writer.write(Instruction.CATCH);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TAG_LISP_COND);
+		ctx.writer.writeUnsignedLeb128(0);
+		ctx.writer.write(Instruction.CATCH_ALL);
+		ctx.writer.writeUnsignedLeb128(1);
+		ctx.wasmCtrlDepth += 3;
+	}
+
+	/**
+	 * Closes the structure opened by {@link #emitPrologue}: the normal {@code return},
+	 * the two {@code end}s, the report over the caught payload, and the
+	 * {@code unreachable} both landings share. The caller still writes the function's own
+	 * final {@code end}.
+	 * @param ctx the compilation context
+	 * @param reporter the program's own report of what nothing caught, or {@code null}
+	 * for {@link UncaughtReport#PREFIX} and the trap
+	 */
+	static void emitEpilogue(WasmLispCompiler.Ctx ctx, UncaughtReport.@Nullable Reporter reporter) {
+		ctx.writer.write(Instruction.RETURN);
+		ctx.writer.write(Instruction.END); // try_table
+		ctx.wasmCtrlDepth--;
+		// The try_table's own end restores a REACHABLE, empty stack, while block $cond
+		// owes an eqref -- so say what the return above already made true: nothing falls
+		// out of the try_table. Only the catch reaches the block's end, with the payload.
+		ctx.writer.write(Instruction.UNREACHABLE);
+		ctx.wasmCtrlDepth--;
+		ctx.writer.write(Instruction.END); // block $cond -- the payload is on the stack
+		emitReport(ctx, reporter, true);
+		ctx.writer.write(Instruction.UNREACHABLE);
+		ctx.wasmCtrlDepth--;
+		ctx.writer.write(Instruction.END); // block $trap
+		ctx.writer.write(Instruction.UNREACHABLE);
+	}
+
+	/**
+	 * Closes an export wrapper's structure opened by {@link #emitPrologue}: as
+	 * {@link #emitEpilogue}, but the report falls through to the catch_all landing, so
+	 * {@code landing} runs on both ways out before the shared {@code unreachable}, and
+	 * the program's {@code after} form is not evaluated: it ends a program, and a host
+	 * call ends as a trap.
+	 * @param ctx the compilation context
+	 * @param reporter the program's own report of what nothing caught, or {@code null}
+	 * for {@link UncaughtReport#PREFIX}
+	 * @param landing what both landings run ahead of the trap
+	 */
+	static void emitExportEpilogue(WasmLispCompiler.Ctx ctx, UncaughtReport.@Nullable Reporter reporter,
+			Runnable landing) {
+		ctx.writer.write(Instruction.RETURN);
+		ctx.writer.write(Instruction.END); // try_table
+		ctx.wasmCtrlDepth--;
+		ctx.writer.write(Instruction.UNREACHABLE);
+		ctx.wasmCtrlDepth--;
+		ctx.writer.write(Instruction.END); // block $cond -- the payload is on the stack
+		emitReport(ctx, reporter, false);
+		ctx.wasmCtrlDepth--;
+		ctx.writer.write(Instruction.END); // block $trap
+		landing.run();
+		ctx.writer.write(Instruction.UNREACHABLE);
+	}
+
+	/**
+	 * Consumes the {@code $lisp-cond} payload cons on the stack and writes one line to
+	 * the current {@code *error-output*}.
+	 *
+	 * <p>
+	 * The payload is {@code (condition-instance . message-string)}
+	 * ({@link WasmErrorCompiler}), and which half carries the text depends on the signal:
+	 * a typed {@code %error-cond} puts a real instance in the car and, in the cdr, nil or
+	 * the site-built text of a class that reports nothing; a plain {@code %error} puts
+	 * nil in the car and its message in the cdr. Both are read here through
+	 * pseudo-locals, the {@code __hc_cond$<slot>} trick {@code WasmHandlerCaseCompiler}
+	 * uses, so the whole line is an ordinary Lisp form: the instance renders through
+	 * {@code %signal-text} -- ONE call site for the whole program, which is what lets the
+	 * per-signal message renders stay deleted ({@code .kb/error-handling.md}) -- and a
+	 * plain message is already the rendered text. {@code after} says whether the
+	 * reporter's {@code after} form follows the lines.
+	 */
+	private static void emitReport(WasmLispCompiler.Ctx ctx, UncaughtReport.@Nullable Reporter reporter,
+			boolean after) {
+		int payloadSlot = ctx.allocTemp();
+		int condSlot = ctx.allocTemp();
+		int msgSlot = ctx.allocTemp();
+		ctx.writer.write(Instruction.SET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(payloadSlot);
+		emitPayloadHalf(ctx, payloadSlot, 0, condSlot);
+		emitPayloadHalf(ctx, payloadSlot, 1, msgSlot);
+		if (ctx.restartMode) {
+			// A payload saying the handler-bind handlers ran holds (nil . message) there.
+			WasmErrorCompiler.emitUnwrapMessage(ctx, msgSlot);
+		}
+		String condVar = "__uc_cond$" + condSlot;
+		String msgVar = "__uc_msg$" + msgSlot;
+		ctx.locals.put(condVar, condSlot);
+		ctx.locals.put(msgVar, msgSlot);
+		try {
+			WasmExprCompiler.compileExpr(reportForm(new LispSymbol(condVar), new LispSymbol(msgVar), ctx, reporter),
+					ctx);
+		}
+		finally {
+			ctx.locals.remove(condVar);
+			ctx.locals.remove(msgVar);
+		}
+		// %warn answers nil; the landing pad has no value.
+		ctx.writer.write(Instruction.DROP);
+		// --report-locations: where it happened, under the report.
+		WasmUncaughtLocations.emitReportLines(ctx, payloadSlot);
+		if (reporter != null && after) {
+			// What the program does once its line is written: where that lets go on,
+			// the trap below ends the program as it ends any other.
+			WasmExprCompiler.compileExpr(reporter.after(), ctx);
+			ctx.writer.write(Instruction.DROP);
+		}
+	}
+
+	/** Stores {@code (car payload)} (field 0) or {@code (cdr payload)} (field 1). */
+	private static void emitPayloadHalf(WasmLispCompiler.Ctx ctx, int payloadSlot, int field, int intoSlot) {
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(payloadSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.writeUnsignedLeb128(field);
+		ctx.writer.write(Instruction.SET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(intoSlot);
+	}
+
+	/**
+	 * {@code (%warn (%string-concat "Unhandled condition: " text))}, where {@code text}
+	 * is {@code %signal-text} of an instance, over what its site carried
+	 * ({@link WasmErrorCompiler#compileCond}), and a plain {@code %error}'s message
+	 * otherwise. Every EH-mode signal carries its message
+	 * ({@code WasmLispCompiler.UncaughtReportUnforeseen}), so a nil one is the message's
+	 * VALUE and prints as {@code NIL}.
+	 *
+	 * <p>
+	 * The {@code %signal-text} arm is emitted only when the program HAS that defun:
+	 * without a condition class there is no typed signal either, so the car is always nil
+	 * and the arm would be dead code that drags the whole report machinery in.
+	 */
+	private static LispVal reportForm(LispSymbol condVar, LispSymbol msgVar, WasmLispCompiler.Ctx ctx,
+			UncaughtReport.@Nullable Reporter reporter) {
+		// A message is a string, a character vector or nil, and %string-concat takes only
+		// the first two: a nil message renders as princ writes it, which is what the
+		// interpreter and the JVM print.
+		LispVal message = list(new LispSymbol(LispNames.IF), msgVar, msgVar, new LispString("NIL"));
+		LispVal text = message;
+		if (ctx.closRegistry.routesConditionReports()) {
+			// (if cond (%signal-text cond msg) message)
+			text = list(new LispSymbol(LispNames.IF), condVar,
+					list(new LispSymbol(LispNames.SIGNAL_TEXT_INTERNAL), condVar, msgVar), message);
+		}
+		if (reporter != null) {
+			// The program's own line, of the instance the payload carries and the text.
+			return list(new LispSymbol(LispNames.WARN_INTERNAL), reporter.lineForm(condVar, text));
+		}
+		return list(new LispSymbol(LispNames.WARN_INTERNAL),
+				list(new LispSymbol(LispNames.STRING_CONCAT), new LispString(UncaughtReport.PREFIX), text));
+	}
+
+	private static LispVal list(LispVal... items) {
+		LispVal result = LispNil.INSTANCE;
+		for (int i = items.length - 1; i >= 0; i--) {
+			result = new LispCons(items[i], result);
+		}
+		return result;
+	}
+
+}

@@ -1,0 +1,12 @@
+# classpath test.resolve:rt:1@runtime test.resolve:mid:1@provided test.resolve:scopes:1@test test.resolve:cycle:1 test.resolve:opt-parent:1?
+classpath test.resolve:rt:jar::1
+classpath test.resolve:y:jar::1
+classpath test.resolve:y-child:jar::1
+classpath test.resolve:cycle:jar::1
+classpath test.resolve:cy-a:jar::1
+classpath test.resolve:cy-b:jar::1
+classpath test.resolve:cy-c:jar::1
+classpath test.resolve:opt-parent:jar::1
+classpath test.resolve:opt-child:jar::1
+classpath test.resolve:opt-grandchild:jar::1
+classpath test.resolve:z:jar::1

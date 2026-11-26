@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{title}}｜栞</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Zen+Old+Mincho:wght@400;600;700;900&family=Klee+One:wght@400;600&display=swap">
+  <link rel="stylesheet" href="{{stylesheet}}">
+  <script src="https://unpkg.com/htmx.org@4.0.1/dist/htmx.min.js" integrity="sha384-Qp9rdC8H7EqOoX+nR0P3RPG2Noji+qdwJlGpfzwQJsfOpp3sGwIdSP9xO3+UlEhn" crossorigin="anonymous" defer></script>
+  <script src="{{script}}" defer></script>
+</head>
+{{! htmx 4 inherits nothing implicitly: :inherited hands hx-boost down to
+    every link and form. A boosted response swaps in whatever its status --
+    a 422 form with its errors, a 404 page -- so no status needs configuring. }}
+<body hx-boost:inherited="true">
+  <a class="skip" href="#main">本文へ移動</a>
+  <header class="masthead">
+    <a class="brand" href="/"><span class="seal" aria-hidden="true">栞</span><span class="brand-name">Shiori</span></a>
+    <nav class="nav" aria-label="メイン">
+      <a href="/" {{#navHome}}aria-current="page"{{/navHome}}>ホーム</a>
+      <a href="/books" {{#navLibrary}}aria-current="page"{{/navLibrary}}>本棚</a>
+    </nav>
+    <form class="masthead-search" action="/books" method="get" role="search">
+      <input type="search" name="q" placeholder="書名・著者・タグ" aria-label="本棚を検索">
+    </form>
+    <a class="button primary" href="/books/new" {{#navNew}}aria-current="page"{{/navNew}}>本を登録</a>
+  </header>
+
+  <main id="main" class="main">
+    {{#flash}}<div hidden data-flash="{{flash}}"></div>{{/flash}}
+    {{! Each page inherits this layout and fills the content block. }}
+    {{$content}}{{/content}}
+  </main>
+
+  <footer class="colophon">
+    <p>栞は Java で書かれ、rontolisp の上で動いています。本の記録は PostgreSQL（jdbc-postgresql）に、画面は jmustache と htmx で、道案内は WebMvc.fn（webmvc-fn-lite）で、入力の検証は YAVI で。</p>
+  </footer>
+  <div id="toasts" class="toasts" role="status" aria-live="polite"></div>
+  <dialog class="alert" id="request-error" aria-labelledby="request-error-title">
+    <form method="dialog">
+      <h2 id="request-error-title">通信できませんでした</h2>
+      <p class="alert-message"></p>
+      <p class="alert-kept" hidden>入力した内容はそのまま残っています。</p>
+      <div class="alert-actions">
+        <button class="button primary" value="retry" autofocus>もう一度試す</button>
+        <button class="button" value="close">閉じる</button>
+      </div>
+    </form>
+  </dialog>
+</body>
+</html>

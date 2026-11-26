@@ -1,0 +1,17 @@
+{{<layout}}
+{{$title}}{{title}}{{/title}}
+{{$content}}
+{{#flash}}
+<p class="flash">{{.}}</p>
+{{/flash}}
+<h1>{{title}}</h1>
+<ol>
+  {{#books}}
+  {{>book}}
+  {{/books}}
+</ol>
+{{^books}}
+<p>No books yet.</p>
+{{/books}}
+{{/content}}
+{{/layout}}

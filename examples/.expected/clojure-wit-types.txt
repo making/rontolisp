@@ -1,0 +1,9 @@
+{:carrier :post, :cents 740, :days 3}
+{:carrier :courier, :cents 1770, :days 1}
+{:carrier :post, :cents 660, :days 3}
+{:carrier :pickup, :cents 120, :days nil}
+[quote of example:shipping/rates@0.1.0 answered its error arm [:out-of-stock cake]]
+[quote of example:shipping/rates@0.1.0 answered its error arm :unreachable]
+paid 1240 cents
+declined: card declined
+[500 400]

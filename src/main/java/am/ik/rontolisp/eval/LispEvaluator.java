@@ -1,0 +1,21374 @@
+package am.ik.rontolisp.eval;
+
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.PrintStream;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.IdentityHashMap;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
+import java.util.function.BiConsumer;
+import java.util.function.Consumer;
+import java.util.function.Supplier;
+
+import am.ik.rontolisp.ClosRegistry;
+import am.ik.rontolisp.DispatchChain;
+import am.ik.rontolisp.LambdaLists;
+import am.ik.rontolisp.LispBigInteger;
+import am.ik.rontolisp.LispCircularLiteral;
+import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispComplex;
+import am.ik.rontolisp.LispDouble;
+import am.ik.rontolisp.LispEquality;
+import am.ik.rontolisp.LispFunction;
+import am.ik.rontolisp.LispArray;
+import am.ik.rontolisp.LispFloatArray;
+import am.ik.rontolisp.LispHashTable;
+import am.ik.rontolisp.LispChar;
+import am.ik.rontolisp.LispInstance;
+import am.ik.rontolisp.LispInteger;
+import am.ik.rontolisp.LispIntVector;
+import am.ik.rontolisp.LispJavaObject;
+import am.ik.rontolisp.LispLayout;
+import am.ik.rontolisp.LispLambda;
+import am.ik.rontolisp.macro.CompiledTemplates;
+import am.ik.rontolisp.macro.DynamicClasses;
+import am.ik.rontolisp.macro.FormatRenderer;
+import am.ik.rontolisp.macro.GenericFunctions;
+import am.ik.rontolisp.macro.LispMacroExpander;
+import am.ik.rontolisp.macro.MethodCombinations;
+import am.ik.rontolisp.macro.MopEvalCapture;
+import am.ik.rontolisp.macro.MopProtocol;
+import am.ik.rontolisp.LispNames;
+import am.ik.rontolisp.LispPackageException;
+import am.ik.rontolisp.LispFuture;
+import am.ik.rontolisp.LocatedCons;
+import am.ik.rontolisp.LispThread;
+import am.ik.rontolisp.LispNil;
+import am.ik.rontolisp.LispStream;
+import am.ik.rontolisp.LispRatio;
+import am.ik.rontolisp.LispString;
+import am.ik.rontolisp.LispStructLiteral;
+import am.ik.rontolisp.StructLiteralFolder;
+import am.ik.rontolisp.LispSymbol;
+import am.ik.rontolisp.LispTrees;
+import am.ik.rontolisp.PackageRegistry;
+import am.ik.rontolisp.UiopExports;
+import am.ik.rontolisp.PackageResolver;
+import am.ik.rontolisp.SpecialDeclarations;
+import am.ik.rontolisp.LispTrue;
+import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.macro.SlotProtocol;
+import am.ik.rontolisp.macro.SpecialVarCollector;
+import am.ik.rontolisp.compiler.BuiltinCallArity;
+import am.ik.rontolisp.compiler.BuiltinFunctionWrappers;
+import am.ik.rontolisp.compiler.ShadowedBuiltins;
+import am.ik.rontolisp.compiler.StreamOperandChecks;
+import am.ik.rontolisp.compiler.UncaughtReport;
+import am.ik.rontolisp.compiler.ClackEnv;
+import am.ik.rontolisp.compiler.ConcatenateForms;
+import am.ik.rontolisp.compiler.WitExportDirective;
+import am.ik.rontolisp.compiler.WitImportDirective;
+import am.ik.rontolisp.compiler.WitSource;
+import am.ik.rontolisp.compiler.OperandTypes;
+import am.ik.rontolisp.clojure.Clojure;
+import am.ik.rontolisp.clojure.ClojureRunTime;
+import am.ik.rontolisp.clojure.ClojureTopLevel;
+import am.ik.rontolisp.reader.Features;
+import am.ik.rontolisp.reader.LispReadException;
+import am.ik.rontolisp.reader.LispReader;
+import am.ik.rontolisp.reader.ReadSyntax;
+import am.ik.rontolisp.runtime.RontoHttpClack;
+import am.ik.rontolisp.compiler.HandlerCaseClauses;
+import am.ik.rontolisp.runtime.RontoHttpServer;
+import org.jspecify.annotations.Nullable;
+
+/**
+ * Tree-walking interpreter for Lisp expressions.
+ */
+public final class LispEvaluator {
+
+	/**
+	 * Names that are special operators or macros and therefore have no function value:
+	 * {@code (function name)} / {@code #'name} on these is an error, mirroring Common
+	 * Lisp. Function-like macros (1+, zerop, ...) are excluded because they are also
+	 * registered as functions in the global environment.
+	 */
+	private static final java.util.Set<String> SPECIAL_OPERATORS = PackageRegistry.specialOperatorNames();
+
+	/**
+	 * The "this operator is not mine" answer of {@link #evalConsRareOperator}, compared
+	 * by identity. A freshly built symbol that appears in no AST and is returned by no
+	 * evaluation, so it can never collide with a real value.
+	 */
+	private static final LispVal UNHANDLED = new LispSymbol("%unhandled-operator%");
+
+	/**
+	 * What {@link #rareOperatorExpansion} and {@link #evalConsRareOperator} answer for an
+	 * operator no arm of theirs names -- unlike {@code null} and {@link #UNHANDLED},
+	 * which an arm answers when it declines one call -- so a call they leave alone may be
+	 * remembered as an ordinary one ({@link CallNote}). Compared by identity, like
+	 * {@link #UNHANDLED}.
+	 */
+	private static final LispVal NO_OPERATOR_ARM = new LispSymbol("%no-operator-arm%");
+
+	/**
+	 * The publishing functions of the multiple-value built-ins
+	 * ({@link #installValuePublishingFunctions}).
+	 */
+	private final Set<LispFunction> publishingBuiltins = java.util.Collections
+		.newSetFromMap(new java.util.IdentityHashMap<>());
+
+	private final Environment globalEnv;
+
+	// The image's reader: a symbol source reads is a member of its package from then on
+	// (find-symbol, the enumerations), on the interpreter and in the compile paths'
+	// macro-time evaluator alike.
+	private final PackageResolver packageResolver = new PackageResolver().recordingReadSymbols();
+
+	/**
+	 * Serializes every lazy load of a Lisp-source library / generated runtime into the
+	 * global environment, and every read of the flag that guards one. The evaluator is
+	 * SHARED across concurrently served requests (one virtual thread per request, see
+	 * {@link RontoHttpServer}), and the flags are set before the definitions are
+	 * installed -- so without this a request arriving mid-load skips the loader and then
+	 * fails to resolve the very function that is being defined. Reentrant: loading a
+	 * library evaluates its forms, which resolve further names through the same gates.
+	 */
+	private final Object libraryLoadLock = new Object();
+
+	private boolean jsonLibraryLoaded = false;
+
+	private boolean linalgLibraryLoaded = false;
+
+	private boolean appkitLibraryLoaded = false;
+
+	private boolean geomLibraryLoaded = false;
+
+	private boolean checkpointLibraryLoaded = false;
+
+	private boolean safetensorsLibraryLoaded = false;
+
+	/**
+	 * Whether {@link GeomKernels} is installed over the geom.lisp defuns when the library
+	 * loads. On for every program; the one caller that turns it OFF is the test that
+	 * compares the two paths element for element, which needs the defuns as the oracle.
+	 */
+	private boolean geomKernels = true;
+
+	private boolean metalLibraryLoaded = false;
+
+	// The new objc base and cocoa (objc.lisp), loaded on the first resolution of one of
+	// their names or the first mention of one of their types.
+	private boolean objcLibraryLoaded = false;
+
+	private boolean sceneLibraryLoaded = false;
+
+	private boolean torchLibraryLoaded = false;
+
+	private boolean tokenizersLibraryLoaded = false;
+
+	private boolean ggufLibraryLoaded = false;
+
+	private boolean vecLibraryLoaded = false;
+
+	private boolean ironcladNativeInstalled = false;
+
+	private boolean simd = false;
+
+	private boolean blas = false;
+
+	private boolean gpu = false;
+
+	private boolean parallel = false;
+
+	private final java.util.Set<String> loadedPreludeNames = new java.util.HashSet<>();
+
+	// The function object each loaded LispPreludeLibrary entry installed. A native fast
+	// arm over a prelude operator (search/mismatch, SequenceScanFast) serves ONLY while
+	// the name still resolves to this exact object, so a user redefinition -- which the
+	// lazy loader already honours by never loading the prelude entry over it -- takes the
+	// call back whole rather than half. Concurrent because a served request may resolve a
+	// name while another thread is loading one (the libraryLoadLock covers the load, not
+	// this read).
+	private final java.util.Map<String, LispVal> preludeDefinitions = new java.util.concurrent.ConcurrentHashMap<>();
+
+	// The uiop definitions already evaluated into the global environment, keyed by their
+	// home-package spelling. uiop is 429 externals of which a program touches a handful,
+	// so it loads ONE name at a time (the loadedPreludeNames pattern) rather than whole.
+	private final java.util.Set<String> loadedUiopNames = new java.util.HashSet<>();
+
+	// Whether the GENERATED restart runtime (the two stack globals plus
+	// %run-handlers/find-restart/invoke-restart/...) has been evaluated into the
+	// global environment. Doubles as the signal-hook gate: before the first
+	// restart-system form no handler can be established, so error/warn/signal keep
+	// their historical expansions until then (the interpreter re-expands per
+	// evaluation, so later signals pick the hook up).
+	private boolean restartRuntimeLoaded = false;
+
+	// The label every warn expansion puts in front of its report.
+	private static final String WARNING_LABEL = "WARNING: ";
+
+	// Where a warning that reaches its report goes instead of *error-output* while a
+	// macro expands on the compile path, or an editor's compile request runs
+	// (reportingWarningsTo): the report's text and whether it is a style-warning. Per
+	// thread; unset everywhere else.
+	private final ThreadLocal<@Nullable BiConsumer<String, Boolean>> macroTimeWarnings = new ThreadLocal<>();
+
+	// The form this thread last ran in a top-level position (evalAtTopLevel): the arms
+	// of the operator tables that make a top-level form of one ask it.
+	private final ThreadLocal<@Nullable LispCons> topLevelForm = new ThreadLocal<>();
+
+	// Whether the runtime format renderer (FormatRenderer.defuns(), the same forms the
+	// compile path injects) has been evaluated into the global environment. The
+	// interpreter cannot inject a top-level defun the way expandTopLevelDefinitions does,
+	// so the renderer is loaded on the first resolution of one of its names -- which is
+	// what a runtime-control (format ...) call and #'format both go through.
+	private boolean formatRendererLoaded = false;
+
+	// The registry shape (class count, report count) the loaded %condition-report-str
+	// was generated from, or -1 before the first load. The renderer PARTITIONS the
+	// registry, so a define-condition evaluated later makes it stale -- unlike the
+	// compile path, where the registry is complete before the renderer is emitted.
+	private int conditionReportRuntimeStamp = -1;
+
+	// The routing shape (the print-object tag set, whether conditions report, whether
+	// a printer-control variable is off its default) the loaded %print-object-str /
+	// %print-object-leaf pair was
+	// generated from, or -1 before the first load. The pair is RE-generated whenever that
+	// moves, which is what lets a defmethod print-object evaluated after the first print
+	// still take effect -- the compile path emits it once because its registry is
+	// complete.
+	private int printObjectRuntimeStamp = -1;
+
+	// Whether the print-object runtime was ever generated for a printer control in
+	// effect:
+	// from then on it keeps the %print-cased leaf (ensurePrintObjectRuntimeLoaded).
+	private boolean printObjectRuntimeControls;
+
+	// Forms already verified against the rontolisp:await placement rules, by identity:
+	// a lambda form evaluated repeatedly (a closure created in a loop) is walked once.
+	private final java.util.Set<LispVal> awaitCheckedForms = java.util.Collections
+		.synchronizedSet(java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>()));
+
+	// Runs the shared rontolisp:await placement check once per form identity: await is
+	// legal only inside async-defun/async-lambda bodies and at top level, so a plain
+	// defun/lambda body must not contain one (LispAsync recognizes the %async-run thunk
+	// the async lowerings synthesize). A validated form's %async-run thunk lambdas are
+	// pre-approved: when the surrounding form was legal, the thunk's awaits were checked
+	// in async context, so evaluating the bare thunk as a lambda form later (which is
+	// how %async-run receives it) must not re-check it as a plain lambda.
+	private void checkAwaitPlacement(LispCons cons) {
+		if (!this.awaitCheckedForms.add(cons)) {
+			return;
+		}
+		try {
+			am.ik.rontolisp.macro.LispAsync.check(cons, false);
+		}
+		catch (IllegalArgumentException ex) {
+			throw new LispEvalException(java.util.Objects.requireNonNullElse(ex.getMessage(),
+					am.ik.rontolisp.macro.LispAsync.AWAIT_PLACEMENT_MESSAGE));
+		}
+		preapproveAsyncRunThunks(cons);
+	}
+
+	private void preapproveAsyncRunThunks(LispVal form) {
+		if (!(form instanceof LispCons cons) || !cons.isProperList()) {
+			return;
+		}
+		List<LispVal> parts = cons.toList();
+		if (cons.car() instanceof LispSymbol sym) {
+			if (LispNames.QUOTE.equals(sym.name())) {
+				return;
+			}
+			if (LispNames.ASYNC_RUN_QUALIFIED.equals(sym.name()) && parts.size() == 2
+					&& parts.get(1) instanceof LispCons thunk) {
+				this.awaitCheckedForms.add(thunk);
+			}
+		}
+		for (LispVal part : parts) {
+			preapproveAsyncRunThunks(part);
+		}
+	}
+
+	private boolean urlLibraryLoaded = false;
+
+	private boolean schemeLibraryLoaded = false;
+
+	private boolean starlarkLibraryLoaded = false;
+
+	private boolean javaLibraryLoaded = false;
+
+	private boolean regexLibraryLoaded;
+
+	private boolean uriLibraryLoaded;
+
+	private boolean normalizationLibraryLoaded;
+
+	private boolean clojureLibraryLoaded = false;
+
+	/** Whether the Clojure library came from {@link #clojureProgram}, stripped. */
+	private boolean clojureLibraryStripped = false;
+
+	/**
+	 * The lowering a Clojure program or session keeps for its run, which the run-time
+	 * library's lowering verbs over computed arguments reach
+	 * ({@link #setClojureRunTime}); null where none runs.
+	 */
+	private @Nullable ClojureRunTime clojureRunTime;
+
+	/**
+	 * How many threads an interrupt is pending for ({@link #interrupt}), read at every
+	 * function call and loop step: the evaluation a request names stops at its next one,
+	 * and every other pays one volatile read while none is pending.
+	 */
+	private final java.util.concurrent.atomic.AtomicInteger pendingInterrupts = new java.util.concurrent.atomic.AtomicInteger();
+
+	/**
+	 * The threads an interrupt is pending for, looked up without a lock: a thread that
+	 * never takes a step again (blocked where no interrupt wakes it) slows no other.
+	 */
+	private final Set<Thread> interruptedThreads = java.util.concurrent.ConcurrentHashMap.newKeySet();
+
+	/** The threads among {@link #interruptedThreads} to signal rather than stop. */
+	private final Set<Thread> signalledInterrupts = java.util.concurrent.ConcurrentHashMap.newKeySet();
+
+	/**
+	 * The threads the program started ({@code make-thread}, an async body) that have not
+	 * ended, under {@link #interruptedThreads}'s monitor: what the program's end stops
+	 * ({@link #stopThreads}).
+	 */
+	private final Set<Thread> programThreads = new HashSet<>();
+
+	/**
+	 * Whether the program has ended ({@link #stopThreads}), under
+	 * {@link #interruptedThreads}'s monitor: its threads stop as a process's end stops
+	 * them, and none starts.
+	 */
+	private volatile boolean programEnded;
+
+	/** The process status SIGINT ends a process with: 128 + its number. */
+	private static final int SIGINT_STATUS = 130;
+
+	/** See {@link #onInterruptHandler}; null once told or where nothing listens. */
+	private volatile @Nullable Runnable interruptHandlerListener;
+
+	/**
+	 * Whether a debugger can be installed on a thread ({@link #enableDebugging}): every
+	 * function call keeps a frame on its thread's stack, and an error is offered to the
+	 * thread's debugger at its signal point. Written once, before any thread a debugger
+	 * serves starts, so a call pays one plain field read while it is off: a program that
+	 * starts no server never turns it on, and a thread already running may go on without
+	 * frames, as it has no debugger.
+	 */
+	private boolean debugging;
+
+	/** Each thread's call stack top, while frames are kept ({@link #debugging}). */
+	private final ThreadLocal<@Nullable CallFrame[]> frameTops = ThreadLocal.withInitial(() -> new CallFrame[1]);
+
+	/** Each thread's debugger, where one is installed ({@link #withDebugger}). */
+	private final ThreadLocal<@Nullable Debugger> debuggers = new ThreadLocal<>();
+
+	/**
+	 * How many debugger levels run on each thread: an evaluation inside one is nested in
+	 * another the debugger stopped, whose catches and blocks a throw or an exit may still
+	 * reach ({@link #nestedInDebugger}).
+	 */
+	private final ThreadLocal<int[]> debuggerLevels = ThreadLocal.withInitial(() -> new int[1]);
+
+	/**
+	 * The catch tags Java code established around the evaluations on each thread
+	 * ({@link #catchingOutside}): a debugger's own restarts.
+	 */
+	private final ThreadLocal<List<LispVal>> outerCatches = ThreadLocal.withInitial(ArrayList::new);
+
+	private boolean usocketLibraryLoaded = false;
+
+	private boolean witLibraryLoaded = false;
+
+	/**
+	 * User macros defined with {@code defmacro}, keyed by name. A macro call is expanded
+	 * (the body evaluated with the unevaluated argument forms bound) and the expansion is
+	 * evaluated in its place. Concurrent: an editor's request defines a macro on one
+	 * thread while another runs code that expands macros.
+	 */
+	private final java.util.Map<String, UserMacro> userMacros = new java.util.concurrent.ConcurrentHashMap<>();
+
+	/**
+	 * What a {@code defun}, {@code defmacro} or {@code defgeneric} wrote down, keyed by
+	 * the name it defined: the lambda list as written (a {@link LispLambda} keeps only
+	 * its desugared shape), the documentation string and the file and line a
+	 * {@link LocatedCons} carried, for an editor's argument list, description and
+	 * {@code M-.} ({@link CommonLispSwank}). {@code documentation} itself answers nil on
+	 * every backend, so nothing a program reads changes.
+	 *
+	 * @param operator the defining operator's name ({@code DEFUN}, {@code DEFMACRO} or
+	 * {@code DEFGENERIC})
+	 * @param lambdaList the lambda list, as written
+	 * @param documentation the documentation string, or null
+	 * @param file the file the definition was read from, or null
+	 * @param line the 1-based line its form starts on, 0 without a file
+	 */
+	record Definition(String operator, LispVal lambdaList, @Nullable String documentation, @Nullable String file,
+			int line) {
+	}
+
+	private final java.util.Map<String, Definition> definitions = new java.util.concurrent.ConcurrentHashMap<>();
+
+	/**
+	 * Global symbol macros defined with {@code define-symbol-macro}, keyed by name. A
+	 * reference to one of these names in a VALUE position evaluates the expansion, and a
+	 * {@code setq}/{@code setf} of it writes through the expansion as a place -- the name
+	 * is not a variable, so {@code symbol-value} never sees it. The table is consulted
+	 * only after the ordinary lexical/global lookup has come up empty, which keeps every
+	 * variable read that is not a symbol macro off this path entirely (the compile paths
+	 * hold the same table in {@code UserMacroExpander} and substitute statically).
+	 */
+	private final java.util.Map<String, LispVal> globalSymbolMacros = new java.util.HashMap<>();
+
+	/**
+	 * Compiler macros defined with {@code define-compiler-macro}, keyed by name. Unlike a
+	 * {@code defmacro} these coexist with an ordinary function of the same name, so they
+	 * live in their own table: {@link #isUserMacro} must not see them, or the function
+	 * would be shadowed outright.
+	 */
+	private final java.util.Map<String, UserMacro> compilerMacros = new java.util.HashMap<>();
+
+	/**
+	 * The symbol macros in scope where {@link UserMacroExpander#expandAll} is walking on
+	 * this thread, null outside a scope it narrowed or extended -- when the only ones are
+	 * {@link #globalSymbolMacros}. A macro's {@code &environment} parameter reads it; a
+	 * macro body runs without one, in the null lexical environment it has in CL.
+	 */
+	private final ThreadLocal<java.util.Map<String, LispVal>> symbolMacroWalkScope = new ThreadLocal<>();
+
+	/**
+	 * The macros a local function shadows where {@link UserMacroExpander#expandAll} is
+	 * walking on this thread, null where there are none. Like
+	 * {@link #symbolMacroWalkScope}, a macro body runs without it.
+	 */
+	private final ThreadLocal<java.util.Set<String>> shadowedMacroWalkScope = new ThreadLocal<>();
+
+	/**
+	 * Memo of {@link #expandUserMacro}, keyed by the CALL SITE's cons identity. CL
+	 * expands a macro call once, when the code containing it is processed; the
+	 * interpreter used to re-expand on EVERY evaluation, so a macro call in a loop body
+	 * re-interpreted the whole macro body per iteration -- and every memo below missed
+	 * too, because each iteration handed them a freshly consed expansion. Expanding once
+	 * per source occurrence is what the compile path ({@link UserMacroExpander}) already
+	 * does, so the memo moves the interpreter TOWARD cross-backend identity: a macro body
+	 * that reads a global while expanding now freezes the first answer everywhere alike.
+	 * An entry holds while its macro is still the name's, so a redefined {@code defmacro}
+	 * or a {@code macrolet} entering or leaving scope changes what that macro's call
+	 * sites mean and no other's; the walk of a whole form holds while the table is as it
+	 * was ({@link #expandedPerSite}).
+	 * <p>
+	 * Never locked across an expansion: a macro call is ordinary Lisp and so is reachable
+	 * from a served request, which is one virtual thread per request
+	 * ({@code .kb/concurrent-served-requests.md}). Two threads racing on the same call
+	 * site both expand and the last write wins -- each expansion is self-consistent, so
+	 * that is a wasted expansion, not a wrong answer.
+	 */
+	private final FormMemo<SiteExpansion> userMacroExpansions = new FormMemo<>();
+
+	/**
+	 * A memoized expansion of a form that depends on the macro table.
+	 *
+	 * @param expansion the expansion
+	 * @param macro the macro that made it, or null for the walk of a whole form
+	 * @param epoch the {@link #macroTableEpoch} a walk was made under
+	 */
+	private record SiteExpansion(LispVal expansion, @Nullable UserMacro macro, int epoch) {
+	}
+
+	/**
+	 * Moves on each change of what the program's macros are ({@link #putUserMacro},
+	 * {@link #removeUserMacro}). The bindings a walk makes for the extent of a
+	 * {@code macrolet} body it expands ({@link #pushLocalMacro}) are not one: what the
+	 * walk answers already holds wherever it is reached.
+	 */
+	private volatile int macroTableEpoch;
+
+	/**
+	 * How many walks of a {@code macrolet} body are under way ({@link #withLocalMacros}):
+	 * a form evaluated meanwhile (a macro's own function, called by that walk) must not
+	 * keep what it made of their local macros.
+	 */
+	private volatile int localMacroDepth;
+
+	/**
+	 * Memo of the BUILT-IN macro arms' expansions ({@link #evalBuiltinMacro}), keyed by
+	 * the call site's cons identity, exactly like {@link #userMacroExpansions} above: the
+	 * interpreter used to re-expand {@code cond}/{@code do}/{@code when}/{@code incf} and
+	 * a hundred more on EVERY evaluation -- 15% of run-time samples in one profile
+	 * ({@code .kb/interpreter-expansion-memo.md}) -- where the three compile backends
+	 * expand once at compile time. Only an arm whose expander is a pure function of the
+	 * form (nothing but the cons and compile-time-constant flags;
+	 * {@code LispMacroExpander} holds no mutable static state) may go through this memo
+	 * -- the arms whose expansion reads evaluator state
+	 * ({@code error}/{@code warn}/{@code signal}/{@code cerror} and the
+	 * {@code restartRuntimeLoaded} gate, the {@code closRegistry} consumers, {@code setf}
+	 * and its user expanders, the print family's per-call {@code print-object} routing,
+	 * {@code flet}/{@code labels}/{@code symbol-macrolet} and the live user-macro table)
+	 * stay re-expanded per evaluation. The full enumeration and the stated semantic
+	 * change (a form REWRITTEN between evaluations keeps its first expansion):
+	 * {@code .kb/interpreter-expansion-memo.md}. Built-in operators cannot be shadowed or
+	 * redefined, so unlike {@link #userMacroExpansions} nothing ever invalidates this
+	 * map.
+	 */
+	private final FormMemo<BuiltinExpansion> builtinMacroExpansions = new FormMemo<>();
+
+	/**
+	 * Memo of the {@code setf} arm's expansions, keyed by the form's cons identity, each
+	 * held while the {@link #placeEpoch} it was made under is current
+	 * ({@link #setfExpansion}).
+	 */
+	private final FormMemo<PlaceExpansion> placeExpansions = new FormMemo<>();
+
+	/**
+	 * Memo of {@link #expandCompilerMacro}, keyed by the CALL SITE's cons identity: a
+	 * compiler macro is a compile-time hint, so applying it once per source occurrence
+	 * (rather than once per evaluation) is both the point of the optimization and what
+	 * makes the {@code load-time-value} memo below hit -- the cached expansion is one
+	 * object, so its {@code load-time-value} occurrence is one object too.
+	 */
+	private final FormMemo<LispVal> compilerMacroExpansions = new FormMemo<>();
+
+	/**
+	 * What {@link #evalCons} worked out about a call of a name, kept on the head symbol
+	 * ({@link LispSymbol#evaluatorNote}): that no operator arm, macro or compiler macro
+	 * claims the name, and which cell of the global function namespace it names. A call
+	 * whose head carries a current note skips straight to its arguments
+	 * ({@code .kb/interpreter-expansion-memo.md}, "The call-site note"). The note names
+	 * its cell by index and its evaluator by a token, so a symbol another evaluator also
+	 * runs (a form of a parse cache shared by every evaluator) pins neither.
+	 *
+	 * @param owner the {@link #noteOwner} of the evaluator that made it
+	 * @param epoch the {@link #callSiteEpoch} it was made under
+	 * @param cell the {@link FunctionCell#index} of the name's binding
+	 * @param shape the argument counts the name's built-in shape accepts, when it has one
+	 * ({@link #wrongCountCall}): a call with another count is classified again
+	 * @param form the call that made it, compared by identity: that call skips its length
+	 * walk and the operator tables too, any other call of the name only the latter
+	 * @param length that call's length, operator included
+	 */
+	private record CallNote(Object owner, int epoch, int cell, BuiltinCallArity.@Nullable Shape shape, LispCons form,
+			int length) {
+	}
+
+	/** This evaluator's identity on the notes it leaves on symbols ({@link CallNote}). */
+	private final Object noteOwner = new Object();
+
+	/**
+	 * Moves on each change of a table a call's classification reads: the user macros
+	 * (local macros a walk binds included), the compiler macros and the built-ins a
+	 * program defined a method on. A {@link CallNote} made under another epoch is
+	 * classified again.
+	 */
+	private volatile int callSiteEpoch;
+
+	/** What {@link #bumpCallSiteEpoch} holds while it moves the epoch. */
+	private final Object callSiteEpochLock = new Object();
+
+	/**
+	 * Moves {@link #callSiteEpoch}: every change of a table it covers takes a new value.
+	 */
+	private void bumpCallSiteEpoch() {
+		synchronized (this.callSiteEpochLock) {
+			this.callSiteEpoch++;
+		}
+	}
+
+	// ------------------------------------------------------------------------------------
+	// What a compiled body reads of the evaluator (BodyCompiler,
+	// .kb/interpreter-compiled-bodies.md)
+
+	/**
+	 * How many calls of a lambda run its body by walking before it is compiled: the walk
+	 * leaves what a compile reads -- a call's classification, a macro call's expansion, a
+	 * lambda's shape -- on the forms it ran.
+	 * {@code -Drontolisp.interpreter.compile-after} sets it: 1 compiles every body at its
+	 * first call, which runs a test suite's programs compiled; 0 compiles none.
+	 */
+	private static final int COMPILE_AFTER_CALLS = Integer.getInteger("rontolisp.interpreter.compile-after", 2);
+
+	/** What a lambda's slot holds once a compile of its body was refused. */
+	private static final Object NOT_COMPILED = new Object();
+
+	/**
+	 * Moves each time the evaluator rewrites a function body in place
+	 * ({@link #relowerProducerTail}): a body compiled before it compiles again.
+	 */
+	private volatile int bodyRewriteEpoch;
+
+	/**
+	 * The compiled body a call of a lambda runs, compiling it once it has been called
+	 * {@link #COMPILE_AFTER_CALLS} times; null while it is walked. Never while a debugger
+	 * may ask for the call frames, which only the walk keeps.
+	 * @param lambda the function called
+	 * @return the compiled body, or null
+	 */
+	@Nullable CompiledBody compiledBody(LispLambda lambda) {
+		if (this.debugging) {
+			return null;
+		}
+		am.ik.rontolisp.BodyCode slot = lambda.code();
+		Object code = slot.code();
+		if (code instanceof CompiledBody body) {
+			if (body.compiledFor(this, this.bodyRewriteEpoch)) {
+				return body;
+			}
+			if (body.evaluator() != this) {
+				return null;
+			}
+		}
+		else if (code == NOT_COMPILED || COMPILE_AFTER_CALLS <= 0 || slot.countCall() < COMPILE_AFTER_CALLS) {
+			return null;
+		}
+		CompiledBody body = BodyCompiler.compile(this, lambda,
+				code instanceof BodyCompiler.Enclosed enclosed ? enclosed : null, this.bodyRewriteEpoch);
+		slot.code(body != null ? body : NOT_COMPILED);
+		return body;
+	}
+
+	/** The {@link #callSiteEpoch}: a compiled call checks it is still what it was. */
+	int callSiteEpoch() {
+		return this.callSiteEpoch;
+	}
+
+	/**
+	 * The {@link #methodedEpoch}: a compiled built-in macro arm's expansion checks it is
+	 * still what it was.
+	 */
+	int methodedEpoch() {
+		return this.methodedEpoch;
+	}
+
+	/** The proclaimed specials' epoch: a compiled binding checks it is still lexical. */
+	int specialEpoch() {
+		return this.specialVars.epoch();
+	}
+
+	/**
+	 * Whether a name is proclaimed special.
+	 * @param name the variable's name
+	 * @return whether it is
+	 */
+	boolean isProclaimedSpecial(String name) {
+		return this.specialVars.contains(name);
+	}
+
+	/**
+	 * Binds a special variable dynamically for a binding form's extent, as
+	 * {@link #evalLetIn} does: a standard stream variable refuses a value that is no
+	 * stream.
+	 * @param name the variable's name
+	 * @param value its value
+	 */
+	void bindDynamic(String name, LispVal value) {
+		checkStandardStreamValue(name, value);
+		this.dynamicBindings.push(name, value);
+	}
+
+	/**
+	 * Undoes the innermost dynamic binding of a name ({@link #bindDynamic}).
+	 * @param name the variable's name
+	 */
+	void unbindDynamic(String name) {
+		this.dynamicBindings.pop(name);
+	}
+
+	/**
+	 * Swaps the current package for a {@code (let ((*package* X)) ...)}'s extent, as
+	 * {@link #evalLetIn} does.
+	 * @param value the bound value
+	 * @return the package to restore, or null when the value designates none
+	 */
+	@Nullable String rebindPackage(LispVal value) {
+		return rebindCurrentPackage(value);
+	}
+
+	/**
+	 * Restores the package a {@link #rebindPackage} swapped out.
+	 * @param saved its name
+	 */
+	void restorePackage(String saved) {
+		this.packageResolver.setCurrentPackage(saved);
+	}
+
+	/**
+	 * Whether a name {@link #noteCall} once found an ordinary call still is one: the
+	 * tables of its classification that move ({@link #callSiteEpoch}) do not claim it.
+	 * The rest of the classification is a function of the name.
+	 * @param name the operator's name
+	 * @return whether its calls are ordinary calls
+	 */
+	boolean stillOrdinaryCall(String name) {
+		return !methoded(name) && !this.userMacros.containsKey(name)
+				&& (this.compilerMacros.isEmpty() || !this.compilerMacros.containsKey(name));
+	}
+
+	/**
+	 * Whether a built-in a program defined a method on is named: its calls go to the
+	 * dispatcher ({@link #methodedExpandedBuiltins}).
+	 * @param name the operator's name
+	 * @return whether it is methoded
+	 */
+	boolean methoded(String name) {
+		Set<String> methoded = this.methodedExpandedBuiltins;
+		return methoded != NO_METHODED_BUILTINS && methoded.contains(name);
+	}
+
+	/**
+	 * The expansion a form's head notes for that very form under the current epoch
+	 * ({@link ExpansionNote}), or null.
+	 * @param form the macro call
+	 * @return the note, or null
+	 */
+	@Nullable ExpansionNote currentExpansionNote(LispCons form) {
+		return form.car() instanceof LispSymbol head && head.evaluatorNote() instanceof ExpansionNote note
+				&& note.form() == form && note.owner() == this.noteOwner && note.epoch() == this.callSiteEpoch ? note
+						: null;
+	}
+
+	/**
+	 * The macro a name is bound to, as the identity a compiled macro call checks.
+	 * @param name the macro's name
+	 * @return the macro, or null
+	 */
+	@Nullable Object userMacro(String name) {
+		return this.userMacros.get(name);
+	}
+
+	/**
+	 * A walk's expansion of a form -- a {@code flet}, a {@code labels}, a slot macro --
+	 * while it holds ({@link #expandedPerSite}), or null.
+	 * @param form the form
+	 * @return the expansion, or null
+	 */
+	@Nullable LispVal heldWalkExpansion(LispCons form) {
+		SiteExpansion cached = this.userMacroExpansions.get(form);
+		return cached != null && cached.macro() == null && walkExpansionsHold(cached.epoch()) ? cached.expansion()
+				: null;
+	}
+
+	/** The {@link #macroTableEpoch} a walk's expansion was made under. */
+	int macroTableEpoch() {
+		return this.macroTableEpoch;
+	}
+
+	/**
+	 * Whether walk expansions made under a macro table epoch still hold.
+	 * @param epoch the epoch
+	 * @return whether they do
+	 */
+	boolean walkExpansionsHold(int epoch) {
+		return this.localMacroDepth == 0 && this.macroTableEpoch == epoch;
+	}
+
+	/**
+	 * The shape and slot every closure of a {@code lambda} form gets, once a closure of
+	 * it was made ({@link #evalLambdaForm}), or null.
+	 * @param form the lambda form
+	 * @return the site, or null
+	 */
+	@Nullable LambdaSite lambdaSite(LispCons form) {
+		return this.lambdaShapes.get(form);
+	}
+
+	/**
+	 * Whether a {@code define-symbol-macro} has run: a {@code setq} of a name no lexical
+	 * binding answers may then write through an expansion.
+	 */
+	boolean globalSymbolMacrosDefined() {
+		return !this.globalSymbolMacros.isEmpty();
+	}
+
+	/**
+	 * The place a {@code setq} of a name writes through, as {@link #evalSetq} finds it: a
+	 * global symbol macro's expansion where no binding of the name is in sight; else
+	 * null.
+	 * @param name the variable's name
+	 * @param env the scope of the assignment
+	 * @return the expansion, or null
+	 */
+	@Nullable LispVal symbolMacroPlace(String name, Environment env) {
+		return !this.globalSymbolMacros.isEmpty() && env.lookupOrNull(name) == null ? this.globalSymbolMacros.get(name)
+				: null;
+	}
+
+	/**
+	 * A {@code setq}'s assignment through a global symbol macro, as {@link #evalSetq}
+	 * makes it: the expansion's {@code setf}, which evaluates the value form. The form is
+	 * made once per value form and place ({@link #symbolMacroAssignments}), so its site
+	 * keeps its expansion ({@link #setfExpansion}).
+	 * @param place the expansion
+	 * @param valueForm the value form
+	 * @param env the scope of the assignment
+	 * @return the value
+	 */
+	LispVal assignSymbolMacro(LispVal place, LispVal valueForm, Environment env) {
+		LispCons form = this.symbolMacroAssignments.get(valueForm);
+		if (form == null || ((LispCons) form.cdr()).car() != place) {
+			form = (LispCons) consList(List.of(new LispSymbol(LispNames.SETF), place, valueForm));
+			this.symbolMacroAssignments.put(valueForm, form);
+		}
+		return eval(form, env);
+	}
+
+	/**
+	 * The {@code setf} forms {@link #assignSymbolMacro} made, by value form: each holds
+	 * while its place is the symbol macro's expansion it was made of.
+	 */
+	private final FormMemo<LispCons> symbolMacroAssignments = new FormMemo<>();
+
+	/** The {@code funcall} built-in, which a call of a closure is absorbed through. */
+	@Nullable LispFunction funcallBuiltin() {
+		return this.funcallBuiltin;
+	}
+
+	/** The {@code apply} built-in, which a call of a closure is absorbed through. */
+	@Nullable LispFunction applyBuiltin() {
+		return this.applyBuiltin;
+	}
+
+	/** The {@code %async-run} built-in, which a frame runs naming its function. */
+	@Nullable LispFunction asyncRunBuiltin() {
+		return this.asyncRunBuiltin;
+	}
+
+	/**
+	 * {@code %async-run} as {@link #evalCons}'s frame runs it: the thunk on its own
+	 * thread, named after the function whose body the frame entered.
+	 * @param args the thunk, alone
+	 * @param frameLambda the function whose body the frame entered last, or null
+	 * @return the future, one value
+	 */
+	LispVal runAsyncInFrame(List<LispVal> args, @Nullable LispLambda frameLambda) {
+		try {
+			String asyncName = frameLambda == null ? null : frameLambda.name();
+			return singleValue(runAsync(args, asyncName == null ? null : UncaughtReport.functionName(asyncName)));
+		}
+		catch (LispEvalException e) {
+			throw withHandlerBindHandlersRun(e);
+		}
+	}
+
+	/**
+	 * Memo of {@link #settledLambdaTail}, keyed by the tail form's cons identity. Nothing
+	 * invalidates it: a lowered tail's value is the shared wrapper a later
+	 * {@code defmethod} on the producer rewrites in place ({@link #producerTailSites}).
+	 */
+	private final FormMemo<LispVal> lambdaTailSettlements = new FormMemo<>();
+
+	/**
+	 * Memo of evaluated {@code (load-time-value ...)} occurrences, keyed by cons identity
+	 * -- CL's "evaluated once" for interpreted code. Holds a one-element list so a
+	 * {@code nil} result still counts as computed.
+	 */
+	private final FormMemo<List<LispVal>> loadTimeValues = new FormMemo<>();
+
+	/**
+	 * A user macro: required parameters, an optional {@code &rest}/{@code &body}
+	 * parameter, the body forms, the environment captured at definition time, and the
+	 * {@code &environment} parameter when it has one. A macro a
+	 * {@code (setf macro-function)} installed has none of those: it is the function,
+	 * called with the whole form and an environment.
+	 */
+	private record UserMacro(List<LispSymbol> required, @Nullable LispSymbol rest, List<LispVal> body, Environment env,
+			String definitionPackage, @Nullable LispSymbol environment, @Nullable LispVal expander) {
+
+		UserMacro(List<LispSymbol> required, @Nullable LispSymbol rest, List<LispVal> body, Environment env,
+				String definitionPackage) {
+			this(required, rest, body, env, definitionPackage, null, null);
+		}
+
+		UserMacro withEnvironment(LispSymbol parameter) {
+			return new UserMacro(this.required, this.rest, this.body, this.env, this.definitionPackage, parameter,
+					this.expander);
+		}
+
+	}
+
+	/**
+	 * What an {@code &environment} parameter holds where a symbol macro is in scope (nil
+	 * elsewhere): the name -> expansion table {@code macroexpand} answers from. The
+	 * expansions are the objects the bindings hold, never copies: a macro may write into
+	 * one for a later macro to read (3bz's {@code state-machine}).
+	 */
+	private record SymbolMacroEnvironment(java.util.Map<String, LispVal> macros) {
+	}
+
+	private SourceLoader sourceLoader = SourceLoader.fileSystem();
+
+	/**
+	 * The directories against which relative {@code load} paths resolve, innermost last
+	 * (the directory of the file currently being loaded). Seeded by
+	 * {@link #setLoadBaseDir} with the entry file's directory; each runtime {@code load}
+	 * pushes the loaded file's directory so a nested {@code load} resolves relative to
+	 * that file. The empty string means "no base directory" (working-directory-relative);
+	 * it is never {@code null} because {@link java.util.ArrayDeque} forbids null
+	 * elements.
+	 */
+	private final java.util.Deque<String> loadDirStack = new java.util.ArrayDeque<>();
+
+	/**
+	 * The modules marked loaded by {@code provide}: a {@code require} of a member is a
+	 * no-op. This is CL's {@code *modules*}, and the VARIABLE is the authority rather
+	 * than a Java set beside it -- a program may push onto {@code *modules*} itself
+	 * (esrap's editor-support reads it to decide whether swank is present), and then a
+	 * {@code require} must see that. Kept in the global environment, so REPL state
+	 * persists across inputs like the resolver's current package.
+	 */
+	private java.util.List<String> providedModules() {
+		List<String> names = new java.util.ArrayList<>();
+		LispVal modules = this.globalEnv.lookupOrNull(LispNames.MODULES_VAR);
+		while (modules instanceof LispCons cons) {
+			if (cons.car() instanceof LispString name) {
+				names.add(name.value());
+			}
+			else if (cons.car() instanceof LispSymbol name) {
+				names.add(name.name());
+			}
+			modules = cons.cdr();
+		}
+		return names;
+	}
+
+	/**
+	 * The systems registered by {@code asdf:defsystem} (evaluated inline or read out of a
+	 * {@code NAME.asd} file), by name. Kept per evaluator like the provided-module set --
+	 * a compile path's BUILD image shares the compile path's own ({@link #buildImage}).
+	 */
+	private java.util.Map<String, AsdfSystems.LispSystem> asdfSystems = new java.util.LinkedHashMap<>();
+
+	/**
+	 * "Package P lives in system S", merged from the {@code register-system-packages}
+	 * forms of every {@code .asd} read so far. Read when a package-inferred system turns
+	 * a component file's {@code defpackage} dependency into a system name.
+	 */
+	private java.util.Map<String, String> asdfSystemPackages = new java.util.HashMap<>();
+
+	/**
+	 * What a compile path's program has loaded, which this BUILD image has not
+	 * ({@link #classResolver}); empty on every other evaluator.
+	 */
+	private java.util.Collection<String> programSystems = List.of();
+
+	/**
+	 * What a compile path has spliced so far, which its READ-TIME image answers as loaded
+	 * ({@link #answerSystemsFrom}); empty on every other evaluator.
+	 */
+	private java.util.Collection<String> splicedSystems = List.of();
+
+	/**
+	 * The {@code .asd} loads open on this evaluator, innermost last: a {@code .asd} that
+	 * loads a system can make the loader read that system's {@code .asd} too.
+	 */
+	private final java.util.Deque<AsdLoadScope> asdLoads = new java.util.ArrayDeque<>();
+
+	/**
+	 * The systems already loaded by {@code asdf:load-system} (loading again is a no-op).
+	 * Insertion-ordered so {@code asdf:registered-systems} answers deterministically.
+	 */
+	private final java.util.Set<String> loadedSystems = new java.util.LinkedHashSet<>();
+
+	/**
+	 * The systems the program asked for, in the order their loads finished: what a dumped
+	 * image loads again ({@code uiop:dump-image}). {@code asdf:clear-system} only makes
+	 * ASDF forget a system; its code stays in the image, so nothing leaves this.
+	 */
+	private final java.util.Set<String> imageSystems = new java.util.LinkedHashSet<>();
+
+	/** The directories of every loaded system's {@code .asd}, where a dump finds them. */
+	private final java.util.Set<String> imageAsdDirs = new java.util.LinkedHashSet<>();
+
+	/** The loaded systems no {@code .asd} file defines, which a dump cannot find. */
+	private final java.util.Set<String> imageInlineSystems = new java.util.LinkedHashSet<>();
+
+	/** The {@code --feature} names, which a dumped image is read with too. */
+	private List<String> declaredFeatureNames = List.of();
+
+	/**
+	 * What compiles a dumped image: the command line's ({@link #setImageBuilder}), none
+	 * for an embedded evaluator.
+	 */
+	@Nullable private volatile ImageBuilder imageBuilder;
+
+	/** Whether the asdf runtime (asdf.lisp -- the component metaobjects) is loaded. */
+	private boolean asdfRuntimeLoaded;
+
+	/** The {@code .asd} files loading now, which a search must not load again. */
+	private final Set<String> asdFilesLoading = new java.util.HashSet<>();
+
+	/** The system whose dependency the next {@link #loadSystemNow} is, if any. */
+	@Nullable private String requiringSystem;
+
+	private static final String CENTRAL_REGISTRY = PackageRegistry.qualify(LispNames.ASDF_PKG, "*CENTRAL-REGISTRY*");
+
+	/** The systems currently being loaded, for {@code :depends-on} cycle detection. */
+	private final java.util.Deque<String> loadingSystems = new java.util.ArrayDeque<>();
+
+	/**
+	 * Extra directories searched for {@code NAME.asd} files by {@code asdf:load-system},
+	 * after the directory of the loading file (the CLI threads {@code --system-path} and
+	 * {@code RONTOLISP_SOURCE_REGISTRY} here).
+	 */
+	private List<String> systemPath = List.of();
+
+	/** The directories a {@code ql:quickload} download brought in. */
+	private final List<String> distDirs = new java.util.ArrayList<>();
+
+	/**
+	 * The READ-TIME feature set every source this evaluator reads is read with:
+	 * {@link Features#INTERPRETER}, widened by whatever the user declared on the command
+	 * line ({@code --feature}, {@link #setDeclaredFeatures}). An ASDF system's own
+	 * {@code :rontolisp-features} widens it once more, for that system's component files
+	 * only. See {@code .kb/reader-features.md}.
+	 */
+	private Features features = Features.INTERPRETER;
+
+	/**
+	 * What every source this evaluator reads is read against
+	 * ({@link #setSourceStandards}).
+	 */
+	private SourceStandards sourceStandards = SourceStandards.DEFAULT;
+
+	/**
+	 * The program's own argument vector, argv0 first -- what {@code %host-argv} answers
+	 * and therefore what the {@code uiop/image} command-line family reads. Empty by
+	 * default: an EMBEDDED run (the tests, the browser playground) has no command line of
+	 * its own, and upstream's answer for an implementation it cannot ask is nil too. The
+	 * CLI threads the input file plus everything after the {@code --} separator here.
+	 */
+	private List<String> commandLineArguments = List.of();
+
+	/**
+	 * The environment {@code %host-getenv} and {@code %host-environ} read: the process's
+	 * own unless a caller supplies one ({@link #setEnvironmentVariables}).
+	 */
+	private Map<String, String> environmentVariables = System.getenv();
+
+	/**
+	 * The dist downloader behind {@code ql:quickload} / {@code ql-dist:install-dist}:
+	 * created lazily on first use (so a program that never calls either touches no
+	 * network/cache), or injected by the CLI ({@code --dist}) resp. a test via
+	 * {@link #setDistClient}.
+	 */
+	@Nullable private DistClient distClient;
+
+	/**
+	 * How many {@code ql:quickload} calls are loading right now: while one is, a system
+	 * no search directory holds is downloaded where it is first needed
+	 * ({@link #locateAsd}).
+	 */
+	private int quickloadDepth;
+
+	/**
+	 * The SWANK server {@code swank:create-server} starts on this evaluator: the command
+	 * line's ({@link #setSwankHost}), none for an embedded evaluator.
+	 */
+	@Nullable private volatile SwankHost swankHost;
+
+	/**
+	 * What records the definitions and uses of the code a {@code load} runs, while a
+	 * SWANK server serves this evaluator ({@link #recordLoadsTo}); null otherwise, so a
+	 * load pays one read.
+	 */
+	@Nullable private volatile LoadRecorder loadRecorder;
+
+	/**
+	 * What sees the forms of every Common Lisp file a {@code load} runs: an editor's
+	 * record of definitions and uses ({@code M-.}, {@code xref}).
+	 */
+	interface LoadRecorder {
+
+		/**
+		 * Records what a loaded file's forms that ran define and use.
+		 * @param file the file's true name
+		 * @param code its text
+		 * @param read the forms read from it, in order, as read
+		 * @param resolved the first of them, as many as ran, as resolved
+		 */
+		void recordLoaded(String file, String code, List<LispVal> read, List<LispVal> resolved);
+
+	}
+
+	/**
+	 * {@code defstruct} accessor names to their 1-based slot position, accumulated by
+	 * {@link LispMacroExpander#expandDefstruct} so {@code setf} can treat accessor calls
+	 * as places. Kept per evaluator, like the user macro table; its writes move
+	 * {@link #placeEpoch}.
+	 */
+	private final CountedMap<String, Integer> structAccessors = new CountedMap<>();
+
+	/**
+	 * User-defined {@code setf} expansions by accessor name, from
+	 * {@code define-setf-expander}/{@code defsetf}. Consulted when {@code setf} (and the
+	 * modify macros) see a place {@code (accessor ...)} whose head is registered here;
+	 * the place is expanded through {@link #expandUserSetfExpanderPlace}. Kept per
+	 * evaluator like the struct accessor and CLOS registries, so the compile-path
+	 * macro-time evaluator ({@code UserMacroExpander}) reuses the same machinery. Its
+	 * writes move {@link #placeEpoch}.
+	 */
+	private final CountedMap<String, UserSetf> setfExpanders = new CountedMap<>();
+
+	/** A registered user {@code setf} expansion for one accessor. */
+	private sealed interface UserSetf permits SetfExpanderForm, DefsetfShort, DefsetfLong {
+
+	}
+
+	/**
+	 * A {@code define-setf-expander}: its parameter lambda list (already stripped of
+	 * {@code &environment}) and body; the optional environment variable is bound to nil.
+	 */
+	private record SetfExpanderForm(LispVal lambdaList, java.util.List<LispVal> body,
+			@org.jspecify.annotations.Nullable String envVar) implements UserSetf {
+	}
+
+	/**
+	 * A {@code defsetf} short form: {@code (setf (access a...) v)} ->
+	 * {@code (update a... v)}.
+	 */
+	private record DefsetfShort(String updateFn) implements UserSetf {
+	}
+
+	/**
+	 * A {@code defsetf} long form: the access lambda list, the store-value variable list,
+	 * and the body evaluated at expansion time to yield the store form.
+	 */
+	private record DefsetfLong(java.util.List<LispVal> argParams, java.util.List<LispVal> storeParams,
+			java.util.List<LispVal> body) implements UserSetf {
+	}
+
+	/**
+	 * Counter for the temporaries generated by user setf expansions / get-setf-expansion.
+	 */
+	private final java.util.concurrent.atomic.AtomicInteger setfTempCounter = new java.util.concurrent.atomic.AtomicInteger();
+
+	/**
+	 * The names proclaimed <em>special</em> (dynamic binding) by
+	 * {@code defvar}/{@code defparameter}/{@code defconstant} and
+	 * {@code (declaim (special ...))}/{@code (proclaim '(special ...))}, accumulated as
+	 * top-level forms are evaluated. A {@code let}/{@code let*}/{@code progv} of one of
+	 * these names establishes a thread-scoped dynamic binding ({@link #dynamicBindings})
+	 * rather than a lexical binding; variable reads and {@code setq} consult it.
+	 * Concurrent because HTTP-handler requests read it from separate virtual threads
+	 * (they only ever read it -- specials are declared by top-level forms before serving
+	 * begins). It counts its changes, so a symbol's {@link SpecialNote} holds until the
+	 * next proclamation.
+	 */
+	private final CountedNames specialVars = new CountedNames();
+
+	/**
+	 * What {@link #isSpecial} found for a symbol's name, kept on the symbol
+	 * ({@link LispSymbol#evaluatorNote}) like a {@link CallNote}: whether the name was
+	 * proclaimed special as of an {@link CountedNames#epoch} of {@link #specialVars}.
+	 *
+	 * @param owner the {@link #noteOwner} of the evaluator that made it
+	 * @param epoch the epoch it was made under
+	 * @param special whether the name is proclaimed special
+	 */
+	private record SpecialNote(Object owner, int epoch, boolean special) {
+	}
+
+	/**
+	 * The two {@link SpecialNote}s of the current epoch, answer false and answer true,
+	 * shared by every symbol so a note costs no allocation.
+	 */
+	private volatile SpecialNote[] specialNotes = { new SpecialNote(this.noteOwner, -1, false),
+			new SpecialNote(this.noteOwner, -1, true) };
+
+	/**
+	 * Whether a variable's name is proclaimed special, by the symbol's note while no
+	 * proclamation has happened since it was made.
+	 * @param symbol the variable
+	 * @return whether its name is in {@link #specialVars}
+	 */
+	boolean isSpecial(LispSymbol symbol) {
+		int epoch = this.specialVars.epoch();
+		if (symbol.evaluatorNote() instanceof SpecialNote note && note.owner() == this.noteOwner
+				&& note.epoch() == epoch) {
+			return note.special();
+		}
+		boolean special = this.specialVars.contains(symbol.name());
+		SpecialNote[] notes = this.specialNotes;
+		if (notes[0].epoch() != epoch) {
+			notes = new SpecialNote[] { new SpecialNote(this.noteOwner, epoch, false),
+					new SpecialNote(this.noteOwner, epoch, true) };
+			this.specialNotes = notes;
+		}
+		if (mayNote(symbol)) {
+			symbol.evaluatorNote(notes[special ? 1 : 0]);
+		}
+		return special;
+	}
+
+	/**
+	 * The names a LOCAL {@code (declare (special ...))} has named so far, recorded as
+	 * each binding form reads its declarations. Such a name is special only where a
+	 * declaration covers it ({@link Environment#SPECIAL}); elsewhere a binding of it is
+	 * lexical. A free reference to one with no lexical binding in sight reads an active
+	 * dynamic binding before the global -- an undefined variable, which CL
+	 * implementations treat as special -- so only these names (and any, once
+	 * {@code progv} has run) ever consult the dynamic store on a lexical miss. Concurrent
+	 * for the same reason as {@link #specialVars}.
+	 */
+	private final java.util.Set<String> localSpecials = java.util.concurrent.ConcurrentHashMap.newKeySet();
+
+	{
+		// Seeded: *print-escape* is proclaimed special without a defvar in user code,
+		// because the print-object route BINDS it around the method call so a method can
+		// tell prin1 from princ. *print-readably* joins it: with-standard-io-syntax binds
+		// it, and a program may too.
+		this.specialVars.add(LispNames.PRINT_ESCAPE_VAR);
+		this.specialVars.add(LispNames.PRINT_READABLY_VAR);
+		// The pretty-printer control variables join them: `write` BINDS all of them
+		// around one print (CL's own definition of its keywords), and esrap rebinds
+		// *print-pprint-dispatch* around its result printer.
+		this.specialVars.add(LispNames.PRINT_PRETTY_VAR);
+		this.specialVars.add(LispNames.PRINT_CIRCLE_VAR);
+		this.specialVars.add(LispNames.PRINT_RIGHT_MARGIN_VAR);
+		this.specialVars.add(LispNames.PRINT_MISER_WIDTH_VAR);
+		this.specialVars.add(LispNames.PRINT_LINES_VAR);
+		this.specialVars.add(LispNames.PRINT_PPRINT_DISPATCH_VAR);
+		this.specialVars.add(LispNames.PRINT_LENGTH_VAR);
+		this.specialVars.add(LispNames.PRINT_LEVEL_VAR);
+		this.specialVars.add(LispNames.PRINT_BASE_VAR);
+		this.specialVars.add(LispNames.PRINT_RADIX_VAR);
+		this.specialVars.add(LispNames.PRINT_CASE_VAR);
+		this.specialVars.add(LispNames.PRINT_ARRAY_VAR);
+		this.specialVars.add(LispNames.PRINT_GENSYM_VAR);
+		this.specialVars.add(LispNames.TRACE_OUTPUT_VAR);
+		this.specialVars.add(LispNames.DEBUG_IO_VAR);
+		this.specialVars.add(LispNames.QUERY_IO_VAR);
+		this.specialVars.add(LispNames.TERMINAL_IO_VAR);
+		// The three stream specials too: the scan over each top-level form cannot see a
+		// binding only a macro's expansion holds (prove's is-print over
+		// with-output-to-string), and bound lexically it captures nothing. The compile
+		// paths collect after expansion.
+		this.specialVars.add(LispNames.STANDARD_OUTPUT_VAR);
+		this.specialVars.add(LispNames.STANDARD_INPUT_VAR);
+		this.specialVars.add(LispNames.ERROR_OUTPUT_VAR);
+		// *read-eval* joins them: (let ((*read-eval* nil)) (read ...)) must bind
+		// dynamically for the #. check in resolveReadTimeEval to see it.
+		this.specialVars.add(LispNames.READ_EVAL_VAR);
+		// *read-suppress* joins them for the same reason: the suppressed read is always
+		// spelled (let ((*read-suppress* t)) (read ...)), which is a dynamic binding or
+		// nothing.
+		this.specialVars.add(LispNames.READ_SUPPRESS_VAR);
+		// The other two reader variables with-standard-io-syntax binds: a function
+		// called in its body reads the binding.
+		this.specialVars.add(LispNames.READ_BASE_VAR);
+		this.specialVars.add(LispNames.READ_DEFAULT_FLOAT_FORMAT);
+		// *readtable* joins them: load binds it around a file, and a reader macro's own
+		// read runs under a (let ((*readtable* ...)) ...) of its library's.
+		this.specialVars.add(LispNames.READTABLE_VAR);
+		// *default-pathname-defaults* joins them: a portable program binds it around a
+		// block of path work ((let ((*default-pathname-defaults* d)) ...)), which is a
+		// dynamic binding or nothing.
+		this.specialVars.add(LispNames.DEFAULT_PATHNAME_DEFAULTS_VAR);
+		// *features* joins them for the same reason, and it is the one the COMPILE
+		// PATHS force: they seed the variable with a defvar (LispMacroExpander), which
+		// proclaims it special, so a (let ((*features* ...)) ...) around a call to
+		// uiop:featurep -- whose &optional default reads the variable, exactly what
+		// upstream's parameter list invites -- binds dynamically there. Without this
+		// the interpreter would bind it lexically and answer differently.
+		this.specialVars.add(LispNames.FEATURES_VAR);
+		// The load-report switches join them: a portable loader binds them around a load
+		// ((let ((*load-verbose* nil)) (load f))), which is a dynamic binding or nothing.
+		// The compile paths get the same proclamation from the injected defvar.
+		this.specialVars.add(LispNames.LOAD_VERBOSE_VAR);
+		this.specialVars.add(LispNames.LOAD_PRINT_VAR);
+		this.specialVars.add(LispNames.DEBUGGER_HOOK_VAR);
+		this.specialVars.add(LispNames.COMPILE_VERBOSE_VAR);
+		this.specialVars.add(LispNames.COMPILE_PRINT_VAR);
+		// java:*warn-on-reflection*: a program binds it around the code it wants reports
+		// for, as in Clojure.
+		this.specialVars.add(LispNames.JAVA_WARN_ON_REFLECTION_QUALIFIED);
+	}
+
+	/**
+	 * The thread-scoped dynamic bindings of special variables (see
+	 * {@link DynamicBindings}).
+	 */
+	private final DynamicBindings dynamicBindings = new DynamicBindings();
+
+	/** The {@code funcall} built-in, which {@code evalCons} recognizes by identity. */
+	private @Nullable LispFunction funcallBuiltin;
+
+	/**
+	 * The {@code java:new} / {@code java:call} / {@code java:static} / {@code java:field}
+	 * built-ins by qualified name: {@link #evalJavaSite} takes a call site over only
+	 * while its operator is still the built-in.
+	 */
+	private final java.util.Map<String, LispFunction> javaBuiltins = new java.util.HashMap<>();
+
+	/**
+	 * How each {@code java:} call site resolves ({@code compiler.JavaSiteResolver}),
+	 * keyed by the site's cons identity: resolved on the first evaluation (or when a
+	 * top-level form is loaded under {@code java:*warn-on-reflection*}) and remembered,
+	 * like the expansion memos -- the resolution is a pure function of the site form and
+	 * the classes.
+	 */
+	private final FormMemo<am.ik.rontolisp.compiler.JavaSite> javaSites = new FormMemo<>();
+
+	// The classes java: names resolve to: the source loader's Java class loader
+	// (setSourceLoader), over which the sites below were resolved.
+	private volatile am.ik.rontolisp.compiler.ReflectiveJavaClasses javaClasses = am.ik.rontolisp.compiler.ReflectiveJavaClasses
+		.instance();
+
+	/**
+	 * Applies a Lisp callable for the java: bridge (proxies, auto-proxied arguments), and
+	 * names the classes a class name resolves to.
+	 */
+	private final JavaInterop.Caller javaCaller = new JavaInterop.Caller() {
+		@Override
+		public LispVal call(LispVal function, List<LispVal> args) {
+			return applyGlobally(function, args);
+		}
+
+		@Override
+		public am.ik.rontolisp.compiler.ReflectiveJavaClasses classes() {
+			return LispEvaluator.this.javaClasses;
+		}
+	};
+
+	/**
+	 * The {@code apply} built-in, kept so {@link #evalCons} can recognize an
+	 * {@code (apply closure ...)} call and apply the closure in its own frame, as it does
+	 * a {@code (funcall closure ...)}.
+	 */
+	private @Nullable LispFunction applyBuiltin;
+
+	/**
+	 * The {@code %async-run} built-in, kept so {@link #evalCons} can run an async body
+	 * knowing the async function it belongs to ({@link #runAsync}).
+	 */
+	private @Nullable LispFunction asyncRunBuiltin;
+
+	/**
+	 * True once any {@code progv} has run. {@code progv} can dynamically bind a symbol
+	 * that was never declared special, so once it is in play the variable-read fast path
+	 * must consult {@link #dynamicBindings} even for names absent from
+	 * {@link #specialVars}. Set-once, never cleared.
+	 */
+	private volatile boolean progvUsed = false;
+
+	/**
+	 * The CLOS registry (classes, generics, slot positions) behind
+	 * {@code defclass}/{@code defgeneric}/{@code defmethod}/{@code make-instance}/
+	 * {@code slot-value}. Kept per evaluator, like the struct accessor registry.
+	 */
+	private final ClosRegistry closRegistry = new ClosRegistry();
+
+	/**
+	 * The {@code deftype} names this evaluator has registered, in registration order --
+	 * including the macro-GENERATED ones, which is why the compile path's
+	 * {@code UserMacroExpander} reads them back out (see
+	 * {@code emitMacroGeneratedDeftypes}).
+	 * @return the registered deftype names
+	 */
+	public java.util.Set<String> deftypeNames() {
+		return this.closRegistry.deftypeNames();
+	}
+
+	/**
+	 * The registered expansion of a {@code deftype} name, or null.
+	 * @param name the deftype name
+	 * @return the literal type specifier it expands to
+	 */
+	public @Nullable LispVal findDeftype(String name) {
+		return this.closRegistry.findDeftype(name);
+	}
+
+	/**
+	 * The parameterized {@code deftype} forms this evaluator has seen, keyed by the
+	 * normalized type name: what a compound specifier headed by one expands through.
+	 */
+	private final Map<String, LispCons> parameterizedDeftypes = new java.util.LinkedHashMap<>();
+
+	/**
+	 * Whether the specifier head names a parameterized {@code deftype} this evaluator has
+	 * seen.
+	 * @param name the head symbol's name
+	 * @return true when a compound specifier with that head expands here
+	 */
+	public boolean namesParameterizedDeftype(String name) {
+		return parameterizedDeftype(name) != null;
+	}
+
+	/**
+	 * Whether this evaluator has seen any parameterized {@code deftype}.
+	 * @return true when at least one is defined
+	 */
+	public boolean definesParameterizedDeftypes() {
+		return !this.parameterizedDeftypes.isEmpty();
+	}
+
+	private @Nullable LispCons parameterizedDeftype(String name) {
+		LispCons exact = this.parameterizedDeftypes.get(ClosRegistry.normalize(name));
+		if (exact != null) {
+			return exact;
+		}
+		if (PackageRegistry.splitQualified(name) instanceof PackageRegistry.QualifiedName qn) {
+			return this.parameterizedDeftypes.get(qn.member());
+		}
+		return null;
+	}
+
+	/**
+	 * Expands a compound type specifier headed by a parameterized {@code deftype}: the
+	 * body runs with the lambda list bound to the specifier's arguments, an
+	 * {@code &optional} or {@code &key} parameter with no init-form defaulting to the
+	 * symbol {@code *} (CLHS deftype).
+	 * @param specifier the compound specifier
+	 * @return the type specifier it denotes, or null when its head names no parameterized
+	 * deftype or the body fails on these arguments
+	 */
+	public @Nullable LispVal expandDeftypeSpecifier(LispCons specifier) {
+		if (!(specifier.car() instanceof LispSymbol head) || !specifier.isProperList()) {
+			return null;
+		}
+		LispCons deftype = parameterizedDeftype(head.name());
+		if (deftype == null) {
+			return null;
+		}
+		List<LispVal> parts = deftype.toList();
+		LispVal quotedStar = consListOf(List.of(new LispSymbol(LispNames.QUOTE), new LispSymbol("*")));
+		List<LispVal> lambdaList = new ArrayList<>();
+		boolean defaulted = false;
+		LispVal cur = parts.get(2);
+		while (cur instanceof LispCons c) {
+			LispVal item = c.car();
+			cur = c.cdr();
+			if (item instanceof LispSymbol marker && marker.isLambdaListKeyword()) {
+				if (LispNames.LAMBDA_ENVIRONMENT.equals(marker.name()) && cur instanceof LispCons skipped) {
+					cur = skipped.cdr();
+					continue;
+				}
+				defaulted = LispNames.LAMBDA_OPTIONAL.equals(marker.name())
+						|| LispNames.LAMBDA_KEY.equals(marker.name());
+				lambdaList.add(item);
+			}
+			else if (defaulted && item instanceof LispSymbol param) {
+				lambdaList.add(consListOf(List.of(param, quotedStar)));
+			}
+			else if (defaulted && item instanceof LispCons param && param.cdr() instanceof LispNil) {
+				lambdaList.add(consListOf(List.of(param.car(), quotedStar)));
+			}
+			else {
+				lambdaList.add(item);
+			}
+		}
+		List<LispVal> lambda = new ArrayList<>();
+		lambda.add(new LispSymbol(LispNames.LAMBDA));
+		lambda.add(lambdaList.isEmpty() ? LispNil.INSTANCE : consListOf(lambdaList));
+		lambda.addAll(parts.subList(3, parts.size()));
+		LispVal call = consListOf(List.of(new LispSymbol(LispNames.APPLY),
+				consListOf(List.of(new LispSymbol(LispNames.FUNCTION), consListOf(lambda))),
+				consListOf(List.of(new LispSymbol(LispNames.QUOTE), specifier.cdr()))));
+		try {
+			LispVal spec = withoutDebugger(() -> eval(call, this.globalEnv));
+			return spec instanceof LispSymbol || spec instanceof LispCons || spec instanceof LispNil
+					|| spec instanceof LispTrue ? spec : null;
+		}
+		catch (RuntimeException bodyRefusesTheArguments) {
+			return null;
+		}
+	}
+
+	/**
+	 * Generic-function name -&gt; the internal name the Java-backed built-in it shadows
+	 * was stashed under, for the generics whose name a program defined a method on. The
+	 * stash happens EXACTLY ONCE per name and every later dispatcher regeneration (there
+	 * is one per {@code defmethod}) reuses it: re-probing the binding would find the
+	 * dispatcher where the built-in was and silently drop the default method, and
+	 * re-stashing what it found would make the dispatcher's own fall-through recurse
+	 * forever. See {@link #builtinDefaultMethodFor}.
+	 */
+	private final Map<String, String> builtinDefaultMethods = new HashMap<>();
+
+	/** The initial {@link #methodedExpandedBuiltins}, compared by identity. */
+	private static final Set<String> NO_METHODED_BUILTINS = Set.of();
+
+	/**
+	 * The subset of {@link #builtinDefaultMethods}' names the compile paths dispatch too
+	 * ({@link ShadowedBuiltins#loweredBuiltinFunctions()}): a call of one of these goes
+	 * straight to the global binding -- the dispatcher -- in {@link #evalCons}, ahead of
+	 * the operator tables that would otherwise expand it without ever reading the binding
+	 * ({@code (byte-size x)} into {@code (car x)}). Replaced, never mutated, so the
+	 * per-call read needs no lock; {@link #NO_METHODED_BUILTINS} until a program methods
+	 * such a name, which the call path tests by identity.
+	 */
+	private volatile Set<String> methodedExpandedBuiltins = NO_METHODED_BUILTINS;
+
+	/**
+	 * The methoded names among {@link #methodedExpandedBuiltins} that the multiple-value
+	 * lowerings recognize as syntactic producers
+	 * ({@link LispMacroExpander#isSyntacticMultipleValueProducerName}), each mapped to
+	 * the alias its dispatcher is also bound under
+	 * ({@link LispMacroExpander#shadowedDispatcherName}). A form reaching a lowering is
+	 * renamed onto the alias first ({@link #dispatchingMethodedProducers}) -- the compile
+	 * paths' {@code ShadowedBuiltins} rename, applied where the interpreter lowers -- so
+	 * {@code (floor x)} in a tail or under {@code multiple-value-bind} is a call of the
+	 * dispatcher, not the built-in's quotient-and-remainder expansion. Replaced, never
+	 * mutated; empty in every program that methods no such name.
+	 */
+	private volatile Map<String, String> methodedProducerDispatch = Map.of();
+
+	/**
+	 * Moves each time {@link #methodedExpandedBuiltins} or
+	 * {@link #methodedProducerDispatch} changes: all a built-in macro arm's expansion of
+	 * a form depends on but the form, so a compiled expansion holds while it stands
+	 * ({@code CompiledForms.Expansion}).
+	 */
+	private volatile int methodedEpoch;
+
+	/**
+	 * The dispatcher each generic function's name last got ({@code defineDispatcher}):
+	 * what a {@code #'name} taken from a generic calls, whatever the name is bound to by
+	 * then.
+	 */
+	private final Map<String, LispVal> genericDispatchers = new java.util.concurrent.ConcurrentHashMap<>();
+
+	/**
+	 * The names {@code fmakunbound} retired: what would come back without a binding, a
+	 * catalog wrapper or a library function loaded on first use, stays undefined. A later
+	 * binding is found ahead of this.
+	 */
+	private final Set<String> retiredFunctions = java.util.concurrent.ConcurrentHashMap.newKeySet();
+
+	/** The one late-bound function value of each generic ({@link #functionValue}). */
+	private final Map<String, LispFunction> genericFunctionValues = new java.util.concurrent.ConcurrentHashMap<>();
+
+	/**
+	 * The one function value of each special operator and macro
+	 * ({@link #symbolFunction}).
+	 */
+	private final Map<String, LispFunction> operatorFunctions = new java.util.concurrent.ConcurrentHashMap<>();
+
+	/**
+	 * Every function-body tail a multiple-value producer was lowered into when its
+	 * function was DEFINED ({@code evalDefun}, {@link #settledLambdaTail}): the lowering
+	 * spells the built-in's values by name, so a {@code defmethod} on the producer that
+	 * comes later would be invisible to that body. When a producer gets its first method
+	 * ({@link #defineDispatcher}), {@link #relowerProducerTails} rewrites each live one
+	 * in place over the renamed form. Guarded by itself.
+	 */
+	private final List<ProducerTailSite> producerTailSites = new ArrayList<>();
+
+	/** The {@link #producerTailSites} size at which the next registration purges. */
+	private int producerTailSitePurgeAt = PRODUCER_TAIL_SITE_MIN_PURGE;
+
+	private static final int PRODUCER_TAIL_SITE_MIN_PURGE = 64;
+
+	/**
+	 * A lowered producer tail: the form a function body holds, rewritten in place when
+	 * the methoded producer set grows.
+	 *
+	 * @param holder the cons the function body holds -- a {@code defun}'s
+	 * {@code (block name ...)} form, or a lambda tail's {@code (progn settled)} wrapper
+	 * -- weakly, so a site dies with its function
+	 * @param raw the tail as written, before any rename or lowering
+	 * @param wrapped whether {@code holder} is a {@code progn} wrapper (its settled form
+	 * is its sole body form) rather than the settled form itself
+	 */
+	private record ProducerTailSite(java.lang.ref.WeakReference<LispCons> holder, LispVal raw, boolean wrapped) {
+	}
+
+	/**
+	 * The {@code compile} built-in's capture target when this evaluator is a compile
+	 * path's MACRO-TIME evaluator: {@code UserMacroExpander} attaches a list here, and an
+	 * intercepted definition-time method construction (see {@link MopEvalCapture}) is
+	 * recorded into it instead of evaluated, to be spliced into the program as top-level
+	 * forms. Null on a live interpreter, which evaluates the capture in place.
+	 */
+	@Nullable private List<LispVal> mopEvalSpliceSink;
+
+	/**
+	 * Where the {@code compile} built-in records a registration form for every other
+	 * definition it compiles when this evaluator is a compile path's MACRO-TIME evaluator
+	 * ({@link CompiledTemplates}): the compiled program's {@code compile} answers that
+	 * definition with compiled code. Null on a live interpreter.
+	 */
+	@Nullable private List<LispVal> compiledTemplateSink;
+
+	/**
+	 * The program's output stream, wrapped so expansion-time output can be silenced; see
+	 * {@link MutablePrintStream}.
+	 */
+	private final MutablePrintStream out;
+
+	/**
+	 * The streams the evaluator was given, unwrapped: {@code %terminal-p} asks the host
+	 * about descriptor 0 or 1 only while they are the process's own, never for a capture.
+	 */
+	private final PrintStream givenOut;
+
+	@Nullable private final InputStream givenIn;
+
+	/**
+	 * Create a new evaluator with the given output stream.
+	 * @param out the output stream for print operations
+	 */
+	public LispEvaluator(PrintStream out) {
+		this.out = new MutablePrintStream(out);
+		this.givenOut = out;
+		this.givenIn = null;
+		this.globalEnv = Environment.createGlobal(this.out);
+		registerEval();
+	}
+
+	/**
+	 * Create a new evaluator with the given output and input streams.
+	 * @param out the output stream for print operations
+	 * @param in the input stream for read operations
+	 */
+	public LispEvaluator(PrintStream out, InputStream in) {
+		this.out = new MutablePrintStream(out);
+		this.givenOut = out;
+		this.givenIn = in;
+		this.globalEnv = Environment.createGlobal(this.out, in);
+		registerEval();
+	}
+
+	/**
+	 * The evaluator's output stream with a mute switch. Only one thing uses it: a
+	 * compiler-macro body runs at EXPANSION time, and its diagnostics (cl-utilities'
+	 * {@code partition} compiler macros {@code warn} before declining) are a property of
+	 * the expansion, not program output. The compile path already swallows them -- the
+	 * macro-time evaluator there writes to a null stream -- so muting here is what keeps
+	 * the interpreter's output identical to the compiled backends'. The switch is the
+	 * expanding thread's: another thread printing meanwhile is program output.
+	 *
+	 * <p>
+	 * {@code PrintStream} funnels every {@code print}/{@code println} through its own
+	 * {@code write(byte[], int, int)}, so overriding the two write methods covers the
+	 * whole surface.
+	 */
+	private static final class MutablePrintStream extends PrintStream {
+
+		private final ThreadLocal<@Nullable Boolean> muted = new ThreadLocal<>();
+
+		private MutablePrintStream(PrintStream delegate) {
+			super(delegate, true);
+		}
+
+		private boolean muted() {
+			return this.muted.get() != null;
+		}
+
+		private void muted(boolean muted) {
+			if (muted) {
+				this.muted.set(Boolean.TRUE);
+			}
+			else {
+				this.muted.remove();
+			}
+		}
+
+		@Override
+		public void write(int b) {
+			if (!muted()) {
+				super.write(b);
+			}
+		}
+
+		@Override
+		public void write(byte[] buf, int off, int len) {
+			if (!muted()) {
+				super.write(buf, off, len);
+			}
+		}
+
+	}
+
+	/**
+	 * Why {@code rontolisp:make-thread} starts no thread for now, or {@code null} when it
+	 * does. A host with one stack sets it around what cannot run there as its threads run
+	 * elsewhere: the browser's Java session ({@link PlaygroundRepl}).
+	 */
+	private volatile @Nullable String threadsRefused;
+
+	/**
+	 * Makes {@code rontolisp:make-thread} signal instead of starting a thread, or start
+	 * threads again.
+	 * @param reason the condition's text, or {@code null} to start threads again
+	 */
+	void refuseThreads(@Nullable String reason) {
+		this.threadsRefused = reason;
+	}
+
+	/**
+	 * Sets the loader used to resolve {@code (load "path")} source text. Defaults to the
+	 * local filesystem; environments without a filesystem (e.g. the browser playground)
+	 * can install an in-memory loader.
+	 * @param loader the source loader
+	 */
+	public void setSourceLoader(SourceLoader loader) {
+		this.sourceLoader = java.util.Objects.requireNonNull(loader);
+		ClassLoader classes = loader.javaClassLoader();
+		if (classes != this.javaClasses.loader()) {
+			this.javaClasses = am.ik.rontolisp.compiler.ReflectiveJavaClasses.over(classes);
+			// a site resolved against other classes is resolved again
+			this.javaSites.clear();
+			synchronized (this) {
+				this.javaDeclarations = null;
+			}
+		}
+	}
+
+	/**
+	 * The loader {@code load} reads through -- and what a Scheme entry program's
+	 * {@code include} and library files are read through, so both name files alike.
+	 * @return the source loader
+	 */
+	public SourceLoader sourceLoader() {
+		return this.sourceLoader;
+	}
+
+	/**
+	 * Sets the base directory against which a top-level relative {@code load} path
+	 * resolves -- normally the directory of the entry file being interpreted, so that a
+	 * program run from anywhere can {@code (load "sibling.lisp")} its companions (like
+	 * Common Lisp's {@code *load-pathname*}). Pass {@code null} (the REPL / stdin
+	 * default) to keep top-level loads working-directory-relative.
+	 * @param dir the entry file's directory, or {@code null} for
+	 * working-directory-relative
+	 */
+	public void setLoadBaseDir(@Nullable String dir) {
+		this.loadDirStack.clear();
+		this.loadDirStack.addLast(dir == null ? "" : dir);
+	}
+
+	/**
+	 * Attaches the {@code compile} built-in's capture target -- see
+	 * {@link #mopEvalSpliceSink}. {@code UserMacroExpander} sets this on the macro-time
+	 * evaluator so a definition-time method construction intercepted during macro-time
+	 * evaluation is recorded for splicing instead of evaluated here.
+	 * @param sink the list intercepted top-level forms are appended to
+	 */
+	public void setMopEvalSpliceSink(List<LispVal> sink) {
+		this.mopEvalSpliceSink = sink;
+	}
+
+	/**
+	 * Attaches the {@code compile} built-in's template target -- see
+	 * {@link #compiledTemplateSink}.
+	 * @param sink the list registration forms are appended to
+	 */
+	public void setCompiledTemplateSink(List<LispVal> sink) {
+		this.compiledTemplateSink = sink;
+	}
+
+	/** The package-stripped member of a possibly qualified name. */
+	private static String memberName(String name) {
+		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(name);
+		return qn == null ? name : qn.member();
+	}
+
+	/**
+	 * Sets the extra directories searched for {@code NAME.asd} files by
+	 * {@code asdf:load-system}, after the directory of the loading file. The CLI threads
+	 * the {@code --system-path} option and the {@code RONTOLISP_SOURCE_REGISTRY}
+	 * environment variable here.
+	 * @param systemPath the directories to search, in order
+	 */
+	public void setSystemPath(List<String> systemPath) {
+		this.systemPath = List.copyOf(systemPath);
+	}
+
+	/**
+	 * Widens the read-time feature set by the names the USER declared ({@code --feature}
+	 * on the command line), and seeds the run-time {@code *features*} list with the same
+	 * names so a {@code (member :F *features*)} and the {@code #+F} beside it cannot
+	 * disagree.
+	 * <p>
+	 * It reaches the entry program, every file it {@code load}s and every ASDF component
+	 * loaded under it -- the source the USER brought. It deliberately does NOT reach the
+	 * sources rontolisp itself ships (the prelude, the Lisp-source libraries, the
+	 * {@code BuiltinSystems} shims): those are read with the backend's own constant,
+	 * because a claim the user makes about a third-party library must not rewrite our own
+	 * conditionals underneath it.
+	 * @param names the declared feature names, without the leading colon
+	 */
+	public void setDeclaredFeatures(List<String> names) {
+		if (names.isEmpty()) {
+			return;
+		}
+		this.declaredFeatureNames = List.copyOf(names);
+		this.features = Features.INTERPRETER.with(names);
+		this.globalEnv.define(LispNames.FEATURES_VAR, Environment.featureKeywordList(this.features.names()));
+	}
+
+	/**
+	 * Sets the standard each language's source is read against
+	 * ({@code --scheme-standard}): every file this evaluator {@code load}s, and the
+	 * run-time table behind Scheme's {@code eval}. Set before the program runs.
+	 * @param standards the standards
+	 */
+	public void setSourceStandards(SourceStandards standards) {
+		this.sourceStandards = standards;
+	}
+
+	/**
+	 * The standards in force, for a caller that reads a source on this evaluator's behalf
+	 * (the CLI reads the entry program itself).
+	 * @return the standards
+	 */
+	public SourceStandards sourceStandards() {
+		return this.sourceStandards;
+	}
+
+	/**
+	 * The read-time feature set in force, for a caller that reads a source on this
+	 * evaluator's behalf (the CLI reads the entry program itself).
+	 * @return the feature set
+	 */
+	public Features features() {
+		return this.features;
+	}
+
+	/**
+	 * The feature set a read of source starts from now: {@link #features()} widened by
+	 * what {@code *features*} holds beyond it -- what the forms run so far pushed, in any
+	 * file. Common Lisp reads each form with {@code *features*} as it stands then, so a
+	 * push in one loaded file decides the {@code #+} of the next
+	 * ({@code .kb/reader-features.md}). Additive, as every widening is: a name taken off
+	 * the list stays in the set.
+	 * @return the feature set
+	 */
+	public Features sourceFeatures() {
+		return sourceFeatures(this.features);
+	}
+
+	private Features sourceFeatures(Features features) {
+		List<String> pushed = featuresAddedSince(printedFeatures(Environment.featureKeywordList(features.names())));
+		return pushed.isEmpty() ? features : features.with(pushed);
+	}
+
+	/**
+	 * The current package's name, UPCASED as Common Lisp prints it -- the value of
+	 * {@code *package*} named rather than printed. The REPL prompt reads it before every
+	 * line so that an {@code (in-package ...)} typed at one prompt is visible at the
+	 * next, the way {@code CL-USER>} names the package in any Common Lisp REPL.
+	 * @return the current package name, upcased
+	 */
+	public String currentPackageName() {
+		return this.packageResolver.currentPackageName().toUpperCase(java.util.Locale.ROOT);
+	}
+
+	/**
+	 * Reads one REPL line through the shared standard input reader -- the same
+	 * {@code BufferedReader} the read family uses, so a piped session's look-ahead lives
+	 * in exactly one place and a {@code (read)} inside the session sees what was typed
+	 * next.
+	 * @return the line without its terminator, or {@code null} at end of input
+	 * @throws java.io.IOException if the read fails
+	 */
+	public @Nullable String readReplLine() throws java.io.IOException {
+		return this.globalEnv.readReplLine();
+	}
+
+	/**
+	 * Flushes every output stream the program left open, as a process's end does on the
+	 * other backends (the wasm ones write through; the JVM backend flushes its stream
+	 * table on the way out). The caller that owns the program's end calls it -- the CLI
+	 * once the entry file has run, however it stopped -- because an embedded evaluator
+	 * cannot tell its last form from the next.
+	 */
+	public void flushOpenStreams() {
+		this.globalEnv.flushOpenStreams();
+	}
+
+	/**
+	 * Sets the program's argument vector, argv0 first -- the value the {@code uiop/image}
+	 * command-line family reads ({@code (uiop:command-line-arguments)} is its rest,
+	 * {@code (uiop:argv0)} its first). The CLI threads the input file and the arguments
+	 * after the {@code --} separator here; an embedded run leaves it empty.
+	 * @param arguments the argument vector, argv0 first
+	 */
+	public void setCommandLineArguments(List<String> arguments) {
+		this.commandLineArguments = List.copyOf(arguments);
+	}
+
+	/**
+	 * Sets the environment the program reads ({@code uiop:getenv}, Scheme's
+	 * {@code get-environment-variable(s)}); the process's own when never called. A
+	 * program cannot write it: a {@code (setf (uiop:getenv ...))} is an overlay in the
+	 * program, on every backend.
+	 * @param variables the variables by name
+	 */
+	public void setEnvironmentVariables(Map<String, String> variables) {
+		this.environmentVariables = Map.copyOf(variables);
+	}
+
+	/**
+	 * Enables the opt-in {@code --simd} acceleration of the {@code vec:} kernels: when
+	 * the vec library is loaded, its seven vectorizable defuns are overridden with the
+	 * {@code jdk.incubator.vector} natives of {@link VecSimd}. Off by default -- the
+	 * scalar {@code vec.lisp} reference is the cross-backend byte-identity oracle. The
+	 * caller must have checked {@link VecSimd#available()}; enabling it on a runtime
+	 * without the incubator module would fail at the first {@code vec:} call.
+	 * @param simd whether to vectorize the vec: kernels
+	 */
+	public void setSimd(boolean simd) {
+		this.simd = simd;
+	}
+
+	/**
+	 * Suppresses {@link GeomKernels}, so {@code geom:read-obj}, {@code geom:mesh} and
+	 * {@code geom:wireframe} run as the {@code geom.lisp} defuns alone. There is no flag
+	 * behind this and no reason for a program to ask for it: the natives answer what the
+	 * defuns answer, bit for bit. It exists so the test that PROVES that has an oracle to
+	 * compare against.
+	 * @param enabled whether to install the geom natives on the next geom load
+	 */
+	void setGeomKernels(boolean enabled) {
+		this.geomKernels = enabled;
+	}
+
+	/**
+	 * Enables the opt-in {@code --blas} acceleration of the {@code linalg:} matrix
+	 * product: when the linalg library is loaded, {@code linalg:dot} is overridden with
+	 * the {@code gemm} / {@code gemv} of a tuned CBLAS found in the operating system
+	 * ({@link LinalgBlas}). Off by default, and orthogonal to {@link #setSimd}: with both
+	 * on, a product the library declines falls through to the Vector API kernel. The
+	 * caller must have checked {@link LinalgBlas#available()}.
+	 * @param blas whether to route the linalg: matrix product to a tuned CBLAS
+	 */
+	public void setBlas(boolean blas) {
+		this.blas = blas;
+	}
+
+	/**
+	 * Enables the opt-in {@code --gpu} acceleration of the {@code linalg:} matrix
+	 * product: when the linalg library is loaded, {@code linalg:dot} is overridden with a
+	 * device product ({@link LinalgGpu}). Off by default, and orthogonal to
+	 * {@link #setSimd} and {@link #setBlas}: it is installed LAST of the three, so a
+	 * product the device declines -- and at the shapes rontolisp examples run today that
+	 * is nearly all of them -- falls through to the tuned CBLAS if one was asked for,
+	 * then to the Vector API kernel, then to the scalar defun. The caller must have
+	 * checked {@link LinalgGpu#available()}. {@code vec:matvec} is overridden the same
+	 * way when the vec library loads ({@link LinalgGpu#installVec}).
+	 * @param gpu whether to route the linalg: matrix product to a GPU
+	 */
+	public void setGpu(boolean gpu) {
+		this.gpu = gpu;
+	}
+
+	/**
+	 * Enables the opt-in {@code --parallel} row split of the {@code --simd} matrix
+	 * products: {@code vec:matvec} / {@code vec:matvec-into}, {@code linalg:dot}'s matrix
+	 * cases and the stacked {@code linalg:matmul} run over a row range per thread
+	 * ({@link SimdParallel}) when a call is worth it. A modifier of {@link #setSimd} --
+	 * without it nothing is intercepted and the flag is inert -- and bit-identical to it:
+	 * the rows are independent chains, so which thread runs which row cannot change a
+	 * result. The reductions are never split.
+	 * @param parallel whether to split the matrix products across threads
+	 */
+	public void setParallel(boolean parallel) {
+		this.parallel = parallel;
+	}
+
+	/**
+	 * Installs the dist downloader used by {@code ql:quickload} and
+	 * {@code ql-dist:install-dist}. The CLI passes one carrying the {@code --dist} /
+	 * {@code RONTOLISP_DISTS} dists; a test injects one with an in-memory
+	 * {@link am.ik.artifact.Downloader} and a temporary cache directory. Left
+	 * {@code null} otherwise, where the default client ({@link DistClient#createDefault})
+	 * is created on first use.
+	 * @param client the dist client
+	 */
+	public void setDistClient(DistClient client) {
+		this.distClient = client;
+	}
+
+	/**
+	 * Installs the SWANK server the program's {@code swank:create-server} starts on this
+	 * evaluator ({@code rontolisp::%swank-*}); the command line installs its own before
+	 * the program runs.
+	 * @param host the host
+	 */
+	public void setSwankHost(SwankHost host) {
+		this.swankHost = host;
+	}
+
+	/**
+	 * Installs what compiles the image the program dumps ({@code uiop:dump-image}, which
+	 * {@code asdf:make} of a {@code program-op} system reaches); the command line
+	 * installs its own before the program runs.
+	 * @param builder the builder
+	 */
+	public void setImageBuilder(ImageBuilder builder) {
+		this.imageBuilder = builder;
+	}
+
+	/**
+	 * Hands every Common Lisp file a {@code load} runs from now on to an editor's record
+	 * of definitions and uses ({@code M-.}, {@code xref}), each form as resolved, once
+	 * the file's forms ran.
+	 * @param recorder the record
+	 */
+	void recordLoadsTo(LoadRecorder recorder) {
+		this.loadRecorder = recorder;
+	}
+
+	/**
+	 * Defines {@code rontolisp::%function-lambda-list}, trivial-arguments'
+	 * {@code arglist} here ({@code eval/TrivialArgumentsForms}): the lambda list a
+	 * {@code defun}, {@code defmacro} or {@code defgeneric} this evaluator ran wrote,
+	 * SBCL's for a standard operator, the desugared one of an anonymous function, else
+	 * {@code :unknown}. The compile paths' prelude answers {@code :unknown}: a compiled
+	 * function keeps no lambda list.
+	 */
+	private void registerFunctionLambdaList() {
+		String name = LispNames.FUNCTION_LAMBDA_LIST_INTERNAL_QUALIFIED;
+		this.globalEnv.defineFunction(name, new LispFunction(name, args -> {
+			if (args.size() != 1) {
+				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+						LispNames.FUNCTION_LAMBDA_LIST_INTERNAL + " expects 1 argument, got " + args.size());
+			}
+			LispVal answer = functionLambdaList(args.get(0));
+			return answer != null ? answer : new LispSymbol(":UNKNOWN");
+		}));
+	}
+
+	/**
+	 * Defines {@code rontolisp::%macroexpand-all}, trivial-macroexpand-all's
+	 * {@code macroexpand-all} here ({@code eval/TrivialMacroexpandAllForms}): the form
+	 * with every macro in it expanded by this evaluator's macros
+	 * ({@link MacroexpandAll}), the symbol macros of the {@code &environment} given as
+	 * the second argument (nil: the global ones) in scope, and the two {@code t}s SBCL's
+	 * arm answers beside it. The compile paths' prelude answers the form unexpanded and
+	 * two nils: a compiled program keeps no macro table, while a macro calling it as the
+	 * compile runs is answered by the compile-time evaluator, this one.
+	 */
+	private void registerMacroexpandAll() {
+		String name = LispNames.MACROEXPAND_ALL_INTERNAL_QUALIFIED;
+		this.globalEnv.defineFunction(name, new LispFunction(name, args -> {
+			if (args.isEmpty() || args.size() > 2) {
+				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+						LispNames.MACROEXPAND_ALL_INTERNAL + " expects 1 or 2 arguments, got " + args.size());
+			}
+			LispVal environment = args.size() > 1 ? args.get(1) : LispNil.INSTANCE;
+			LispVal expansion = MacroexpandAll.expand(args.get(0), this, symbolMacrosOf(environment));
+			this.globalEnv
+				.publishSpill(new LispCons(LispTrue.INSTANCE, new LispCons(LispTrue.INSTANCE, LispNil.INSTANCE)));
+			return expansion;
+		}, true));
+	}
+
+	private @Nullable LispVal functionLambdaList(LispVal designator) {
+		String name = switch (designator) {
+			case LispSymbol symbol -> symbol.name();
+			case LispLambda lambda -> lambda.name();
+			case LispFunction function -> function.name();
+			default -> null;
+		};
+		if (name != null) {
+			Definition written = definition(name);
+			if (written != null) {
+				return written.lambdaList();
+			}
+			if (PackageRegistry.isClMemberName(name)) {
+				LispVal standard = CommonLispSwank.standardArglist(name);
+				if (standard != null) {
+					return standard;
+				}
+			}
+		}
+		if (designator instanceof LispLambda lambda && lambda.name() == null) {
+			List<LispVal> params = new ArrayList<>(lambda.params());
+			if (lambda.rest() != null) {
+				params.add(new LispSymbol(LispNames.LAMBDA_REST));
+				params.add(Objects.requireNonNull(lambda.rest()));
+			}
+			return consListOf(params);
+		}
+		return null;
+	}
+
+	/**
+	 * Defines {@code rontolisp::%swank-listen}, {@code %swank-serve} and
+	 * {@code %swank-stop}, the interpreter's half of the {@code swank} shim, over the
+	 * installed {@link SwankHost}.
+	 */
+	private void registerSwankHost() {
+		String listenName = PackageRegistry.qualifyInternal(LispNames.RONTOLISP_PKG, LispNames.SWANK_LISTEN);
+		this.globalEnv.defineFunction(listenName, new LispFunction(listenName, args -> {
+			if (args.size() != 2 || !(args.get(0) instanceof LispInteger port)) {
+				throw new LispEvalException(LispNames.SWANK_LISTEN + " expects (port interface), got " + args);
+			}
+			String host = args.get(1) instanceof LispString name ? name.value() : null;
+			try {
+				return new LispInteger(requireSwankHost().listen(host, (int) port.value()));
+			}
+			catch (IOException ex) {
+				throw new LispEvalException(
+						"swank:create-server cannot listen on port " + port.value() + ": " + ex.getMessage());
+			}
+		}));
+		String serveName = PackageRegistry.qualifyInternal(LispNames.RONTOLISP_PKG, LispNames.SWANK_SERVE);
+		this.globalEnv.defineFunction(serveName, new LispFunction(serveName, args -> {
+			if (args.size() != 2 || !(args.get(0) instanceof LispInteger port)) {
+				throw new LispEvalException(LispNames.SWANK_SERVE + " expects (port dont-close), got " + args);
+			}
+			try {
+				requireSwankHost().serve((int) port.value(), !(args.get(1) instanceof LispNil));
+			}
+			catch (IOException ex) {
+				throw new LispEvalException(
+						"swank:create-server cannot accept on port " + port.value() + ": " + ex.getMessage());
+			}
+			return LispNil.INSTANCE;
+		}));
+		String stopName = PackageRegistry.qualifyInternal(LispNames.RONTOLISP_PKG, LispNames.SWANK_STOP);
+		this.globalEnv.defineFunction(stopName, new LispFunction(stopName, args -> {
+			if (args.size() != 1 || !(args.get(0) instanceof LispInteger port)) {
+				throw new LispEvalException(LispNames.SWANK_STOP + " expects a port, got " + args);
+			}
+			SwankHost host = this.swankHost;
+			return host != null && host.stop((int) port.value()) ? LispTrue.INSTANCE : LispNil.INSTANCE;
+		}));
+	}
+
+	private SwankHost requireSwankHost() {
+		SwankHost host = this.swankHost;
+		if (host == null) {
+			throw new LispEvalException("swank:create-server is not supported here: this evaluator has no SWANK"
+					+ " server; the rontolisp command line's interpreter serves one");
+		}
+		return host;
+	}
+
+	/**
+	 * Returns the dist client, creating the default one (Quicklisp only) on first use.
+	 * @return the dist client
+	 */
+	private DistClient distClient() {
+		if (this.distClient == null) {
+			this.distClient = DistClient.createDefault();
+		}
+		return this.distClient;
+	}
+
+	private void registerEval() {
+		// A Gray base class named as data before anything loaded gray.lisp --
+		// (find-class 'rontolisp:fundamental-stream), a subtypep or typep specifier --
+		// loads it at the lookup, as the compile paths splice it for any program naming
+		// one.
+		this.closRegistry.classMissLoader(name -> {
+			if (!GrayStreamsLibrary.namesBaseClass(name)) {
+				return false;
+			}
+			ensureGrayStreamsLoaded();
+			return true;
+		});
+		// The stream-argument-less print family resolves its destination through the
+		// current -- dynamic-first -- value of *standard-output*, so a
+		// (let ((*standard-output* stream)) ...) redirects it (the t default keeps the
+		// process standard output). Environment holds no dynamic store, so the read is
+		// layered on here.
+		this.globalEnv.setDefaultOutput(this::currentStandardOutput);
+		// warn resolves its destination through the current value of *error-output* (the
+		// seeded handle 2 = the process standard error unless the program rebound it),
+		// so (let ((*error-output* s)) (warn ...)) captures the report.
+		this.globalEnv.setDefaultError(this::currentErrorOutput);
+		// The same rule on the input side: the stream-argument-less read family resolves
+		// its source through the current value of *standard-input*.
+		this.globalEnv.setDefaultInput(this::currentStandardInput);
+		// The runtime readers return DATA, and a #S(...) datum must be the instance it
+		// denotes exactly as a source literal is. Environment holds no registry, so the
+		// fold is layered on here, where this evaluator's registry is in scope; wrapping
+		// the function BINDING (rather than the call sites) also keeps
+		// #'read-from-string folding. read is not wrapped: it is prelude rontolisp whose
+		// whole parse goes through read-from-string, so it inherits the fold.
+		foldStructLiteralsOf(LispNames.READ_FROM_STRING);
+		// #. read-time eval for the runtime readers: with the resolver installed,
+		// read/read-from-string read a #.-bearing datum in marker mode and this evaluator
+		// substitutes each datum's value in place (Environment.readRuntimeDatum). Without
+		// it (a bare Environment) the error-mode read signals, matching the compiled
+		// backends' embedded readers.
+		this.globalEnv.setReadTimeEvalResolver(this::resolveReadTimeEval);
+		// Symbol interning for the runtime readers: a token is homed in the package
+		// current WHEN it is read, as CL's reader interns in *package* -- a macro that
+		// reads a name at expansion time (cl-pdf's AFM parser) expands inside its
+		// defining package (expandMacroCall), and the caller's package is current again
+		// by the time the expansion runs.
+		this.globalEnv.setReadSymbolHome(this.packageResolver::readSpelling);
+		// *read-suppress* for the runtime readers: the built-in holds the global
+		// environment, so the dynamic binding a (let ((*read-suppress* t)) ...) makes is
+		// visible only from here.
+		this.globalEnv.setReadSuppressQuery(() -> {
+			LispVal suppress = currentSpecialValue(LispNames.READ_SUPPRESS_VAR);
+			return suppress != null && !(suppress instanceof LispNil);
+		});
+		// *features* for the runtime readers, the same way and for the same reason: CL's
+		// #+/#- test the LIVE list, so a (push :x *features*) -- or the
+		// (let ((*features* '(:x))) ...) a test writes -- decides the guards of every
+		// read that follows it. The read-time set cannot answer for that; it was fixed
+		// when the frontend read this source.
+		this.globalEnv.setReadFeaturesQuery(this::currentReadFeatures);
+		// *readtable* for the runtime readers, for the same reason: the readtable a
+		// read honors is the one current WHEN it reads (.kb/readtables.md).
+		this.globalEnv.setReadSyntaxQuery(this::currentReadSyntax);
+		// and the backquote depth a running reader macro function was called at, which a
+		// read-from-string it makes starts inside
+		this.globalEnv.setTemplateDepthQuery(() -> this.readerMacroTemplateDepth);
+		// a sleep an interrupt woke asks whether a debugger went on with the evaluation
+		this.globalEnv.setInterruptResumed(this::resumeAfterInterrupt);
+		this.closRegistry.ensureInteractiveInterruptSeeded();
+		this.closRegistry.ensureClosedStreamErrorSeeded();
+		this.globalEnv.defineFunction(LispNames.EVAL, new LispFunction(LispNames.EVAL, args -> {
+			if (args.size() != 1) {
+				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+						LispNames.EVAL + " expects 1 argument, got " + args.size());
+			}
+			// (eval '(defpackage ...)) makes the form top-level, but it runs at run
+			// time under the caller's handlers: register it the way a nested
+			// defpackage does, so its clause errors are catchable conditions.
+			if (args.get(0) instanceof LispCons form && form.car() instanceof LispSymbol head
+					&& LispNames.DEFPACKAGE.equals(LispSymbol.memberName(head.name()))) {
+				return registerRuntimeDefpackage(form);
+			}
+			return evalDatum(args.get(0), true);
+		}, true));
+		// compile answers the name, or with no name the function, and neither failure
+		// value: nothing here warns.
+		this.globalEnv.defineFunction(LispNames.COMPILE, new LispFunction(LispNames.COMPILE, args -> {
+			Environment.requireCallShape(LispNames.COMPILE, args);
+			LispVal answer = args.size() == 1 ? compileCurrentDefinition(args.get(0))
+					: compileDefinition(args.get(0), args.get(1));
+			this.globalEnv
+				.publishSpill(new LispCons(LispNil.INSTANCE, new LispCons(LispNil.INSTANCE, LispNil.INSTANCE)));
+			return answer;
+		}, true));
+		// macroexpand-1/macroexpand live on the evaluator (not Environment) because they
+		// need the user macro table. On the compile path, calls with a literal quoted
+		// argument are folded to their expansion by UserMacroExpander.
+		// The optional second argument is CL's macro-expansion environment: nil, or what
+		// an &environment parameter was bound to (SymbolMacroEnvironment).
+		this.globalEnv.defineFunction(LispNames.MACROEXPAND_1, new LispFunction(LispNames.MACROEXPAND_1, args -> {
+			if (args.isEmpty() || args.size() > 2) {
+				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+						LispNames.MACROEXPAND_1 + " expects 1 or 2 arguments, got " + args.size());
+			}
+			return expandedWithFlag(args.get(0),
+					macroexpand1(args.get(0), args.size() == 2 ? args.get(1) : LispNil.INSTANCE));
+		}, true));
+		this.globalEnv.defineFunction(LispNames.MACROEXPAND, new LispFunction(LispNames.MACROEXPAND, args -> {
+			if (args.isEmpty() || args.size() > 2) {
+				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+						LispNames.MACROEXPAND + " expects 1 or 2 arguments, got " + args.size());
+			}
+			return expandedWithFlag(args.get(0),
+					macroexpand(args.get(0), args.size() == 2 ? args.get(1) : LispNil.INSTANCE));
+		}, true));
+		// macro-function: the expander of a macro NAME, or nil for a function, a special
+		// operator and an unknown name -- what a caller asking "can I apply this" reads.
+		// It lives here (not in the prelude, which serves the compiled backends) because
+		// the answer is the macro table this evaluator holds: a user defmacro, a macrolet
+		// body's local macro, and the built-in expander LispMacroExpander dispatches on.
+		// The returned function is the real single-step expander, callable as
+		// (funcall f form env) like CL's, env reaching the macro's &environment.
+		this.globalEnv.defineFunction(LispNames.MACRO_FUNCTION, new LispFunction(LispNames.MACRO_FUNCTION, args -> {
+			if (args.isEmpty() || args.size() > 2) {
+				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+						LispNames.MACRO_FUNCTION + " expects 1 or 2 arguments, got " + args.size());
+			}
+			if (!(args.get(0) instanceof LispSymbol sym) || !isMacroName(sym.name())) {
+				return LispNil.INSTANCE;
+			}
+			String name = sym.name();
+			UserMacro macro = this.userMacros.get(name);
+			if (macro != null && macro.expander() != null) {
+				return macro.expander();
+			}
+			return new LispFunction(LispNames.MACRO_FUNCTION + " " + name, callArgs -> {
+				// CLHS 3.2.1: a macro function takes EXACTLY two arguments (the form and
+				// the environment) -- not "1 or 2" like macro-function itself, which
+				// merely accepts an optional environment for the LOOKUP. SBCL 2.2.9
+				// signals a program-error for 0, 1 or 4 arguments here.
+				if (callArgs.size() != 2) {
+					throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+							"a macro function expects 2 arguments, got " + callArgs.size());
+				}
+				// A user macro's function is the one it had when asked, whatever the name
+				// holds by the time it runs: stored back under that name, it must not
+				// expand through itself.
+				LispVal form = macroCallForm(name, callArgs.get(0));
+				return macro != null && form instanceof LispCons call
+						? inSymbolMacroEnvironment(callArgs.get(1), () -> expandMacroCall(name, macro, call, null))
+						: macroexpand1(form, callArgs.get(1));
+			});
+		}));
+		// compiler-macro-function: macro-function's twin over the define-compiler-macro
+		// table -- the expander (funcall f form env), or nil when the name has none; the
+		// function a (setf compiler-macro-function) installed, itself.
+		this.globalEnv.defineFunction(LispNames.COMPILER_MACRO_FUNCTION,
+				new LispFunction(LispNames.COMPILER_MACRO_FUNCTION, args -> {
+					if (args.isEmpty() || args.size() > 2) {
+						throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+								LispNames.COMPILER_MACRO_FUNCTION + " expects 1 or 2 arguments, got " + args.size());
+					}
+					UserMacro registered = args.get(0) instanceof LispSymbol sym ? this.compilerMacros.get(sym.name())
+							: null;
+					if (registered == null) {
+						return LispNil.INSTANCE;
+					}
+					LispVal written = registered.expander();
+					if (written != null) {
+						return written;
+					}
+					String name = ((LispSymbol) args.get(0)).name();
+					return new LispFunction(LispNames.COMPILER_MACRO_FUNCTION + " " + name, callArgs -> {
+						if (callArgs.size() != 2) {
+							throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+									"a compiler macro function expects 2 arguments, got " + callArgs.size());
+						}
+						// The macro it had when asked, as macro-function's: a wrapper a
+						// later setf installs around this function must not reach itself.
+						if (!(macroCallForm(name, callArgs.get(0)) instanceof LispCons form)) {
+							return callArgs.get(0);
+						}
+						return inSymbolMacroEnvironment(callArgs.get(1),
+								() -> expandMacroCall(name, registered, form, null));
+					});
+				}));
+		this.globalEnv.defineFunction(LispNames.SET_COMPILER_MACRO_FUNCTION,
+				new LispFunction(LispNames.SET_COMPILER_MACRO_FUNCTION, args -> {
+					if (args.size() != 2) {
+						throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+								LispNames.SET_COMPILER_MACRO_FUNCTION + " expects 2 arguments, got " + args.size());
+					}
+					return writeCompilerMacroFunction(args.get(0), args.get(1));
+				}));
+		this.globalEnv.defineFunction(LispNames.SYMBOL_FUNCTION, new LispFunction(LispNames.SYMBOL_FUNCTION, args -> {
+			if (args.size() != 1) {
+				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+						LispNames.SYMBOL_FUNCTION + " expects 1 argument, got " + args.size());
+			}
+			String name = standardSymbolName(args.get(0));
+			if (name == null) {
+				throw new LispEvalException(
+						LispNames.SYMBOL_FUNCTION + " expects a symbol, got " + args.get(0).print());
+			}
+			return symbolFunction(name);
+		}));
+		// fdefinition = symbol-function, which also takes a (setf name) function name.
+		this.globalEnv.defineFunction(LispNames.FDEFINITION, new LispFunction(LispNames.FDEFINITION, args -> {
+			if (args.size() != 1) {
+				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+						LispNames.FDEFINITION + " expects 1 argument, got " + args.size());
+			}
+			String name = functionName(args.get(0));
+			if (name == null) {
+				throw new LispEvalException(LispNames.FDEFINITION + " expects a symbol, got " + args.get(0).print());
+			}
+			return symbolFunction(name);
+		}));
+		// concatenate re-registered WITH the class registry, so a result-type designator
+		// naming a user deftype (fast-http's simple-byte-vector) resolves through its
+		// registered expansion to the family -- the same resolution the compile paths
+		// get from ConcatenateForms.resultSpec(designator, closRegistry).
+		this.globalEnv.defineFunction(LispNames.CONCATENATE, Environment.concatenateBuiltin(this.closRegistry));
+		// make-array for the same reason: an :element-type naming a user deftype
+		// (salza2's octet) must select the representation its expansion designates --
+		// a packed (unsigned-byte 8) vector, not a general array of nil.
+		this.globalEnv.defineFunction(LispNames.MAKE_ARRAY, Environment.makeArrayBuiltin(this.closRegistry));
+		// subtypep over the built-in type lattice + the CLOS class registry. A single
+		// primary value: t when sub is known to be a subtype of super, nil otherwise.
+		this.globalEnv.defineFunction(LispNames.SUBTYPEP, new LispFunction(LispNames.SUBTYPEP, args -> {
+			Environment.requireCallShape(LispNames.SUBTYPEP, args);
+			if (this.closRegistry.isDynamicClassMetaobject(args.get(0))
+					|| this.closRegistry.isDynamicClassMetaobject(args.get(1))) {
+				// A class made at run time answers through its precedence list; its
+				// name (nil for an anonymous one) designates nothing the lattice knows.
+				return callDynamicClassesRuntime("%DYNAMIC-SUBTYPEP", args.get(0), args.get(1));
+			}
+			return subtypep(args.get(0), args.get(1)) ? LispTrue.INSTANCE : LispNil.INSTANCE;
+		}));
+		// subtypep's SECOND value, emitted beside the primary by the multiple-value
+		// lowering of a subtypep producer (LispMacroExpander.lowerMvProducer). Its own
+		// built-in rather than a flag on the one above: the two are separate reads over
+		// the same argument temps on every backend.
+		this.globalEnv.defineFunction(LispNames.SUBTYPEP_VALID, new LispFunction(LispNames.SUBTYPEP_VALID, args -> {
+			if (args.size() < 2) {
+				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+						LispNames.SUBTYPEP_VALID + " expects 2 arguments, got " + args.size());
+			}
+			return subtypepValid(args.get(0), args.get(1)) ? LispTrue.INSTANCE : LispNil.INSTANCE;
+		}));
+		// The instance primitives. Every struct/class/condition instance is built, read,
+		// written and type-tested through these; nothing else may touch the slot
+		// storage, which is what keeps the value model swappable behind one seam.
+		this.globalEnv.defineFunction(LispNames.OBJ_NEW, new LispFunction(LispNames.OBJ_NEW, args -> {
+			if (args.isEmpty() || !(args.get(0) instanceof LispSymbol tag)) {
+				throw new LispEvalException(LispNames.OBJ_NEW + " expects an instance tag symbol");
+			}
+			LispLayout layout = this.closRegistry.findLayoutByTag(tag.name());
+			if (layout == null) {
+				throw new LispEvalException(LispNames.OBJ_NEW + ": unknown instance type " + tag.name());
+			}
+			// capacity, not slotCount: a change-class target's ancestors reserve room
+			// for the wider layout, and a type keeping machinery beside its declared
+			// slots (LispLayout.SYNONYM_STREAM's reader closure) is handed that cell as
+			// an ordinary trailing argument (LispLayout.capacity).
+			LispVal[] slots = new LispVal[layout.capacity()];
+			for (int i = 0; i < slots.length; i++) {
+				slots[i] = i + 1 < args.size() ? args.get(i + 1) : LispNil.INSTANCE;
+			}
+			return trackInstance(new LispInstance(layout, slots));
+		}));
+		this.globalEnv.defineFunction(LispNames.OBJ_BECOME, new LispFunction(LispNames.OBJ_BECOME, args -> {
+			if (args.size() != 2 || !(args.get(1) instanceof LispSymbol tag)) {
+				throw new LispEvalException(LispNames.OBJ_BECOME + " expects (obj 'tag), got " + args.size());
+			}
+			LispInstance inst = requireInstance(LispNames.OBJ_BECOME, args);
+			LispLayout layout = this.closRegistry.findLayoutByTag(tag.name());
+			if (layout == null) {
+				throw new LispEvalException(LispNames.OBJ_BECOME + ": unknown instance type " + tag.name());
+			}
+			inst.becomeLayout(layout);
+			return inst;
+		}));
+		this.globalEnv.defineFunction(LispNames.OBJ_REF, new LispFunction(LispNames.OBJ_REF, args -> {
+			LispInstance inst = requireInstance(LispNames.OBJ_REF, args);
+			return inst.slot(requireSlotIndex(LispNames.OBJ_REF, inst, args));
+		}));
+		this.globalEnv.defineFunction(LispNames.OBJ_SET, new LispFunction(LispNames.OBJ_SET, args -> {
+			if (args.size() != 3) {
+				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+						LispNames.OBJ_SET + " expects 3 arguments, got " + args.size());
+			}
+			LispInstance inst = requireInstance(LispNames.OBJ_SET, args);
+			inst.setSlot(requireSlotIndex(LispNames.OBJ_SET, inst, args), args.get(2));
+			return args.get(2);
+		}));
+		this.globalEnv.defineFunction(LispNames.OBJ_IS, new LispFunction(LispNames.OBJ_IS, args -> {
+			if (args.isEmpty() || !(args.get(0) instanceof LispInstance inst)) {
+				return LispNil.INSTANCE;
+			}
+			for (int i = 1; i < args.size(); i++) {
+				if (args.get(i) instanceof LispSymbol tag && inst.hasTag(tag.name())) {
+					return LispTrue.INSTANCE;
+				}
+			}
+			return LispNil.INSTANCE;
+		}));
+		this.globalEnv.defineFunction(LispNames.OBJ_TAG, new LispFunction(LispNames.OBJ_TAG, args -> {
+			requireSingleArg(LispNames.OBJ_TAG, args);
+			return args.get(0) instanceof LispInstance inst ? new LispSymbol(inst.layout().tag()) : LispNil.INSTANCE;
+		}));
+		this.globalEnv.defineFunction(LispNames.OBJ_P, new LispFunction(LispNames.OBJ_P, args -> {
+			requireSingleArg(LispNames.OBJ_P, args);
+			return args.get(0) instanceof LispInstance ? LispTrue.INSTANCE : LispNil.INSTANCE;
+		}));
+		this.globalEnv.defineFunction(LispNames.PRIN1_KEEPING_FLOAT_SPELLING_INTERNAL_QUALIFIED,
+				new LispFunction(LispNames.PRIN1_KEEPING_FLOAT_SPELLING_INTERNAL_QUALIFIED, args -> {
+					requireSingleArg(LispNames.PRIN1_KEEPING_FLOAT_SPELLING_INTERNAL, args);
+					return am.ik.rontolisp.FloatText.keepingDoubleSpelling(
+							() -> apply(resolveFunction(LispNames.PRIN1_TO_STRING), args, this.globalEnv));
+				}));
+		this.globalEnv.defineFunction(LispNames.EQUALP, new LispFunction(LispNames.EQUALP, args -> {
+			if (args.size() != 2) {
+				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME, ClosRegistry
+					.arityMessage(BuiltinFunctionWrappers.arityOperator(LispNames.EQUALP), 2, false, args.size()));
+			}
+			return equalp(args.get(0), args.get(1)) ? LispTrue.INSTANCE : LispNil.INSTANCE;
+		}));
+		this.globalEnv.defineFunction(LispNames.OBJ_SLOTS, new LispFunction(LispNames.OBJ_SLOTS, args -> {
+			requireSingleArg(LispNames.OBJ_SLOTS, args);
+			if (!(args.get(0) instanceof LispInstance inst)) {
+				return LispNil.INSTANCE;
+			}
+			LispVal list = LispNil.INSTANCE;
+			for (int i = inst.slotCount() - 1; i >= 0; i--) {
+				list = new LispCons(inst.slot(i), list);
+			}
+			return list;
+		}));
+		this.globalEnv.defineFunction(LispNames.OBJ_PRINT_FRAME, new LispFunction(LispNames.OBJ_PRINT_FRAME, args -> {
+			requireSingleArg(LispNames.OBJ_PRINT_FRAME, args);
+			if (!(args.get(0) instanceof LispInstance inst) || inst.layout().kind() == LispLayout.Kind.PATHNAME
+					|| inst.layout().kind() == LispLayout.Kind.OPAQUE) {
+				return LispNil.INSTANCE;
+			}
+			LispVal list = LispNil.INSTANCE;
+			for (int i = inst.slotCount() - 1; i >= 0; i--) {
+				list = new LispCons(new LispString(inst.layout().slotNames().get(i)), list);
+			}
+			list = new LispCons(new LispString(inst.layout().printName()), list);
+			return new LispCons(inst.layout().kind() == LispLayout.Kind.CLASS ? LispTrue.INSTANCE : LispNil.INSTANCE,
+					list);
+		}));
+		this.globalEnv.defineFunction(LispNames.CLASS_OF, new LispFunction(LispNames.CLASS_OF, args -> {
+			requireSingleArg(LispNames.CLASS_OF, args);
+			// The class METAOBJECT of any value: the memoized standard-class instance
+			// find-class answers for an instance's type, or the built-in class
+			// metaobject of everything else -- (eq (class-of x) (find-class name))
+			// holds. The old tag/type-name view lives on as %class-designator.
+			LispVal v = args.get(0);
+			if (v instanceof LispInstance inst) {
+				if (ClosRegistry.DYNAMIC_OBJECT_TAG.equals(inst.layout().tag())) {
+					// An instance of a class made at run time carries its class.
+					return inst.slot(0);
+				}
+				// A built-in stream answers its standard class, before its layout's
+				// (the composites are prelude classes, the rest layout-only).
+				String streamClass = ClosRegistry.streamClassName(inst);
+				if (streamClass != null) {
+					return java.util.Objects.requireNonNull(this.closRegistry.builtinClassMetaobject(streamClass));
+				}
+				String valueClass = ClosRegistry.VALUE_LAYOUT_CLASS_NAMES.get(inst.layout().tag());
+				if (valueClass != null) {
+					return java.util.Objects.requireNonNull(this.closRegistry.builtinClassMetaobject(valueClass));
+				}
+				LispVal metaobject = this.closRegistry.classMetaobject(inst.layout().tag());
+				if (metaobject != null) {
+					return metaobject;
+				}
+				// A layout-only internal type (the unbound marker); T is the one class
+				// that covers everything.
+				return java.util.Objects.requireNonNull(this.closRegistry.builtinClassMetaobject("T"));
+			}
+			// classOfTypeName only yields members of BUILTIN_CLASS_NAMES, so the answer
+			// is never null.
+			return java.util.Objects.requireNonNull(
+					this.closRegistry.builtinClassMetaobject(classOfTypeName(v).toUpperCase(java.util.Locale.ROOT)));
+		}));
+		this.globalEnv.defineFunction(LispNames.CLASS_DESIGNATOR_INTERNAL,
+				new LispFunction(LispNames.CLASS_DESIGNATOR_INTERNAL, args -> {
+					requireSingleArg(LispNames.CLASS_DESIGNATOR_INTERNAL, args);
+					// The light view class-of had before the metaobject migration: the
+					// instance-tag symbol of a struct/CLOS instance, or a built-in type
+					// name (printed uppercase like every symbol under the reader's
+					// upcase premise; the compile backends return INTEGER/STRING/...
+					// too).
+					LispVal v = args.get(0);
+					if (v instanceof LispInstance inst) {
+						// A built-in stream designates its standard class, not its
+						// internal layout.
+						String streamClass = ClosRegistry.streamClassName(inst);
+						return new LispSymbol(streamClass != null ? streamClass : inst.layout().tag());
+					}
+					return new LispSymbol(builtinTypeName(v).toUpperCase(java.util.Locale.ROOT));
+				}));
+		this.globalEnv.defineFunction(LispNames.FIND_CLASS, new LispFunction(LispNames.FIND_CLASS, args -> {
+			// (find-class symbol &optional (errorp t) environment) -- a registered class
+			// answers with its memoized metaobject (eq-stable across calls), anything
+			// else signals unless errorp is nil. Defined here, ahead of the prelude's
+			// always-nil stub, because the answer needs the class registry.
+			if (args.isEmpty() || args.size() > 3) {
+				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+						LispNames.FIND_CLASS + " expects 1 to 3 arguments, got " + args.size());
+			}
+			boolean errorp = args.size() < 2 || !(args.get(1) instanceof LispNil);
+			LispVal override = args.get(0) instanceof LispSymbol named
+					? this.closRegistry.findClassOverride(named.name()) : null;
+			if (override != null && !(override instanceof LispNil)) {
+				return override;
+			}
+			if (override == null && args.get(0) instanceof LispSymbol sym) {
+				this.closRegistry.ensureMopClassesSeededFor(sym.name());
+				LispVal metaobject = this.closRegistry.classMetaobject(sym.name());
+				if (metaobject == null) {
+					// The built-in classes (integer, string, ..., t) exist too, so
+					// (eq (class-of 42) (find-class 'integer)) holds.
+					metaobject = this.closRegistry.builtinClassMetaobject(sym.name());
+				}
+				if (metaobject != null) {
+					return metaobject;
+				}
+			}
+			else if (args.get(0) instanceof LispTrue) {
+				// (find-class t) -- T the class of everything; the reader yields the
+				// boolean, not a symbol.
+				return java.util.Objects.requireNonNull(this.closRegistry.builtinClassMetaobject("T"));
+			}
+			if (errorp) {
+				throw new LispEvalException(LispNames.FIND_CLASS + ": there is no class named "
+						+ (args.get(0) instanceof LispSymbol s ? s.name() : args.get(0).print()));
+			}
+			return LispNil.INSTANCE;
+		}));
+		// The generic-function protocol's operators load its runtime at the first call;
+		// its definitions replace these.
+		for (String name : GenericFunctions.ENTRY_NAMES) {
+			this.globalEnv.defineFunction(name, new LispFunction(name, args -> {
+				ensureGfProtocolLoaded();
+				return apply(resolveFunction(name), args, this.globalEnv);
+			}));
+		}
+		// The slot-access protocol's generics likewise.
+		for (String name : SlotProtocol.ENTRY_NAMES) {
+			this.globalEnv.defineFunction(name, new LispFunction(name, args -> {
+				ensureSlotProtocolLoaded();
+				return apply(resolveFunction(name), args, this.globalEnv);
+			}));
+		}
+		// (setf (find-class name) class): find-class answers class for name from now on,
+		// nil forgetting it (contextl's layer-makunbound); see LispNames.SET_FIND_CLASS.
+		this.globalEnv.defineFunction(LispNames.SET_FIND_CLASS, new LispFunction(LispNames.SET_FIND_CLASS, args -> {
+			if (args.size() != 2 || !(args.get(0) instanceof LispSymbol name)) {
+				throw new LispEvalException("(setf " + LispNames.FIND_CLASS + ") expects a class name and a class, got "
+						+ args.stream().map(LispVal::print).toList());
+			}
+			LispVal value = args.get(1);
+			if (!(value instanceof LispNil) && !this.closRegistry.isClassMetaobject(value)) {
+				throw new LispEvalException("(setf " + LispNames.FIND_CLASS + "): not a class: " + value.print());
+			}
+			this.closRegistry.setFindClassOverride(name.name(), value);
+			return value;
+		}));
+		this.globalEnv.defineFunction(LispNames.ALLOCATE_INSTANCE,
+				new LispFunction(LispNames.ALLOCATE_INSTANCE, args -> {
+					// (allocate-instance class &rest initargs) -- an instance with EVERY
+					// slot unbound: no initforms, no initialize-instance (dao-from-fields
+					// fills the slots by setf slot-value afterwards). The initargs are
+					// accepted and ignored, per CL: they are for methods on it, which the
+					// static subset has none of. The class may be a metaobject (the
+					// find-class/class-of answer) or a class name; only registered CLOS
+					// classes allocate -- a built-in or struct class signals, like CL's
+					// built-in-class behavior.
+					if (args.isEmpty()) {
+						throw new LispEvalException(LispNames.ALLOCATE_INSTANCE + " expects a class, got 0 arguments");
+					}
+					LispVal designator = args.get(0);
+					if (this.closRegistry.isDynamicClassMetaobject(designator)) {
+						// A class made at run time: no layout of its own, so its
+						// instance carries the class (dynamic-classes.lisp).
+						return callDynamicClassesRuntime("%DYNAMIC-ALLOCATE", designator);
+					}
+					if (designator instanceof LispInstance inst && this.closRegistry.isClassMetaobject(inst)) {
+						designator = inst.slot(0);
+					}
+					LispLayout layout = designator instanceof LispSymbol sym
+							? this.closRegistry.findClassLayout(sym.name()) : null;
+					if (layout == null) {
+						throw new LispEvalException(LispNames.ALLOCATE_INSTANCE + ": not an allocatable class: "
+								+ (designator instanceof LispSymbol s ? s.name() : args.get(0).print()));
+					}
+					if (designator instanceof LispSymbol waiting && this.closRegistry.isUnfinalized(waiting.name())) {
+						throw new LispEvalException(ClosRegistry.unfinalizedClassMessage(waiting.name()));
+					}
+					LispLayout unbound = java.util.Objects
+						.requireNonNull(this.closRegistry.findLayoutByTag(ClosRegistry.UNBOUND_TAG));
+					LispVal[] slots = new LispVal[layout.capacity()];
+					for (int i = 0; i < slots.length; i++) {
+						slots[i] = i < layout.slotCount() ? new LispInstance(unbound, new LispVal[0])
+								: LispNil.INSTANCE;
+					}
+					return trackInstance(new LispInstance(layout, slots));
+				}));
+		// (make-instances-obsolete class): the instances of the class and its subclasses
+		// are updated when the class definition in progress completes (CLHS 4.3.6; the
+		// standard allows any time up to their next slot access), or now outside one.
+		this.globalEnv.defineFunction(LispNames.MAKE_INSTANCES_OBSOLETE,
+				new LispFunction(LispNames.MAKE_INSTANCES_OBSOLETE, args -> {
+					if (args.size() != 1) {
+						throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+								LispNames.MAKE_INSTANCES_OBSOLETE + " expects 1 argument, got " + args.size());
+					}
+					LispVal designator = args.get(0);
+					LispVal metaobject = designator instanceof LispSymbol sym
+							? this.closRegistry.classMetaobject(sym.name()) : designator;
+					if (metaobject instanceof LispInstance classMetaobject) {
+						this.obsoleteClasses.add(classMetaobject);
+						if (this.classDefinitionDepth == 0) {
+							updateObsoleteInstances();
+						}
+					}
+					return designator;
+				}));
+		// (%mop-make-instance designator initargs...) -- the metaclass protocol's
+		// runtime-class make-instance: the designator (a class metaobject or a name
+		// symbol) picks the class at RUN time, which the static make-instance expansion
+		// cannot. Re-enters the ordinary make-instance evaluation with every argument
+		// quote-wrapped, so the constructor semantics and the initialization-generic
+		// hooks stay the single implementation. The same body doubles as the function
+		// value of make-instance itself (the (apply #'make-instance class args) idiom
+		// of postmodern's make-dao); the literal-call path never consults it.
+		java.util.function.Function<List<LispVal>, LispVal> runtimeMakeInstance = args -> {
+			if (args.isEmpty()) {
+				throw new LispEvalException(
+						LispNames.MOP_MAKE_INSTANCE + " expects a class designator, got 0 arguments");
+			}
+			LispVal designator = args.get(0);
+			if (designator instanceof LispInstance inst && this.closRegistry.isClassMetaobject(inst)) {
+				designator = inst.slot(0);
+			}
+			if (!(designator instanceof LispSymbol classSym)) {
+				throw new LispEvalException(
+						LispNames.MOP_MAKE_INSTANCE + " expects a class designator, got " + args.get(0).print());
+			}
+			LispVal call = LispNil.INSTANCE;
+			for (int i = args.size() - 1; i >= 1; i--) {
+				call = new LispCons(quoteForm(args.get(i)), call);
+			}
+			call = new LispCons(new LispSymbol(LispNames.SYSTEM_MAKE_INSTANCE),
+					new LispCons(quoteForm(classSym), call));
+			return eval(call, this.globalEnv);
+		};
+		this.globalEnv.defineFunction(LispNames.MOP_MAKE_INSTANCE,
+				new LispFunction(LispNames.MOP_MAKE_INSTANCE, runtimeMakeInstance::apply));
+		this.globalEnv.defineFunction(LispNames.MAKE_INSTANCE,
+				new LispFunction(LispNames.MAKE_INSTANCE, runtimeMakeInstance::apply));
+		// The plist dispatches the #'make-condition / #'change-class catalog wrappers
+		// call (the compile paths generate them as defuns): the literal call, every
+		// argument quoted, evaluated like the runtime make-instance above.
+		// A type naming no condition class is a type-error, the literal call's: only a
+		// symbol reaches it through the quote, any other value would come back here.
+		this.globalEnv.defineFunction(LispNames.MAKE_CONDITION_RUNTIME,
+				new LispFunction(LispNames.MAKE_CONDITION_RUNTIME, args -> {
+					if (!(args.get(0) instanceof LispSymbol)) {
+						return eval(LispMacroExpander.designatorTypeErrorForm(args.get(0)), this.globalEnv);
+					}
+					return evalQuotedPlistCall(LispNames.MAKE_CONDITION, args.subList(0, 1), args.get(1));
+				}));
+		// The designator resolves here, as resolveChangeClassDesignator resolves a
+		// computed one: anything but a symbol (nil included) would re-enter this
+		// dispatch.
+		this.globalEnv.defineFunction(LispNames.CHANGE_CLASS_RUNTIME,
+				new LispFunction(LispNames.CHANGE_CLASS_RUNTIME, args -> {
+					LispVal designator = args.get(1);
+					if (designator instanceof LispInstance meta && meta.slotCount() > 0
+							&& this.closRegistry.isClassMetaobject(meta)) {
+						designator = meta.slot(0);
+					}
+					if (!(designator instanceof LispSymbol)) {
+						throw new LispEvalException(
+								LispNames.CHANGE_CLASS + " expects a class designator, got " + designator.print());
+					}
+					return evalQuotedPlistCall(LispNames.CHANGE_CLASS, List.of(args.get(0), designator), args.get(2));
+				}));
+		this.globalEnv.defineFunction(LispNames.SLOT_VALUE_SET_RUNTIME,
+				new LispFunction(LispNames.SLOT_VALUE_SET_RUNTIME, args -> {
+					// (%slot-value-set-runtime obj name value) -- what the shared setf
+					// expansion emits for a runtime slot name (the compile paths generate
+					// a dispatch defun of the same name); resolves natively like the
+					// runtime-name slot-value read.
+					if (args.size() != 3) {
+						throw new LispEvalException(LispNames.SLOT_VALUE_SET_RUNTIME + " expects (obj name value), got "
+								+ args.size() + " arguments");
+					}
+					SlotRef slot = instanceSlotRef(args.get(0), args.get(1));
+					if (slot == null) {
+						throw new LispEvalException(LispNames.SLOT_VALUE + ": unknown slot " + args.get(1).print()
+								+ " on " + args.get(0).print());
+					}
+					slot.write(args.get(2));
+					return args.get(2);
+				}));
+		this.globalEnv.defineFunction(LispNames.MOP_FILL_SLOTS, new LispFunction(LispNames.MOP_FILL_SLOTS, args -> {
+			if (args.size() == 3 && isSlotProtocolInstance(args.get(0))) {
+				// An instance of a :metaclass class fills through the slot-access
+				// protocol.
+				return apply(resolveFunction(LispNames.SLOT_PROTOCOL_FILL), args, this.globalEnv);
+			}
+			// (%mop-fill-slots obj initargs slot-names) -- the system
+			// shared-initialize method's fill (the synthesized default and the
+			// primaries of mop-protocol.lisp call it): store each supplied initarg
+			// into its slot (leftmost wins), then each still-unbound slot the
+			// slot-names select (t every slot, a list those it names) its initform
+			// (CLHS 7.1.4). Registry-backed, so it stays correct as classes are
+			// defined; the compile paths generate a per-class dispatch defun of the
+			// same name.
+			if (args.size() != 3 || !(args.get(0) instanceof LispInstance obj)) {
+				throw new LispEvalException(LispNames.MOP_FILL_SLOTS + " expects (instance initargs slot-names)");
+			}
+			ClosRegistry.ClassInfo info = this.closRegistry.findClass(obj.layout().printName());
+			if (info == null) {
+				// Not a registered class (a struct instance through a user
+				// reinitialize-instance, say): no fill, like the generated dispatch's
+				// fall-through -- the shared-initialize default still answers the
+				// instance.
+				return obj;
+			}
+			LispVal slotNames = args.get(2);
+			java.util.List<ClosRegistry.SlotSpec> slots = info.slots();
+			for (int i = 0; i < slots.size() && i < obj.slotCount(); i++) {
+				ClosRegistry.SlotSpec slot = slots.get(i);
+				// Only a DECLARED :initarg fills from the initargs, per CL -- see the
+				// generated twin in LispMacroExpander.
+				LispVal supplied = slot.initargSupplied() ? leftmostInitargValue(args.get(1), slot) : null;
+				if (supplied != null) {
+					if (slot.sharedCellVar() != null) {
+						// A class-allocated slot: the initarg fills the shared cell.
+						this.globalEnv.set(slot.sharedCellVar(), supplied);
+					}
+					obj.setSlot(i, supplied);
+				}
+				else if (slot.initformSupplied() && selectsSlot(slotNames, slot) && isUnboundMarker(obj.slot(i))) {
+					obj.setSlot(i, eval(slot.initform(), this.globalEnv));
+				}
+			}
+			return obj;
+		}));
+		this.globalEnv.defineFunction(LispNames.CLASS_DIRECT_SUBCLASSES_INTERNAL,
+				new LispFunction(LispNames.CLASS_DIRECT_SUBCLASSES_INTERNAL, args -> {
+					// (%class-direct-subclasses designator) -- the registered classes
+					// whose direct superclasses contain the designated class, as
+					// metaobjects (driver-built instances answer through the memo). The
+					// shim's closer-mop:class-direct-subclasses rides it; the compile
+					// paths generate a dispatch defun over the static registry.
+					requireSingleArg(LispNames.CLASS_DIRECT_SUBCLASSES_INTERNAL, args);
+					LispVal designator = args.get(0);
+					if (designator instanceof LispInstance inst && this.closRegistry.isClassMetaobject(inst)) {
+						designator = inst.slot(0);
+					}
+					if (!(designator instanceof LispSymbol sym)) {
+						return LispNil.INSTANCE;
+					}
+					ClosRegistry.ClassInfo target = this.closRegistry.findClass(sym.name());
+					if (target == null) {
+						return LispNil.INSTANCE;
+					}
+					java.util.List<LispVal> subs = new java.util.ArrayList<>();
+					for (String subName : this.closRegistry.directSubclassNames(target.name())) {
+						LispVal metaobject = this.closRegistry.classMetaobject(subName);
+						if (metaobject != null) {
+							subs.add(metaobject);
+						}
+					}
+					LispVal result = LispNil.INSTANCE;
+					for (int i = subs.size() - 1; i >= 0; i--) {
+						result = new LispCons(subs.get(i), result);
+					}
+					return result;
+				}));
+		this.globalEnv.defineFunction(LispNames.CLASS_DEFAULT_INITARGS_INTERNAL,
+				new LispFunction(LispNames.CLASS_DEFAULT_INITARGS_INTERNAL, args -> {
+					// (%class-default-initargs designator) -- AMOP's canonicalized
+					// (initarg form function) list of the class and its superclasses.
+					requireSingleArg(LispNames.CLASS_DEFAULT_INITARGS_INTERNAL, args);
+					LispVal designator = args.get(0);
+					if (designator instanceof LispInstance inst && this.closRegistry.isClassMetaobject(inst)) {
+						designator = inst.slot(0);
+					}
+					ClosRegistry.ClassInfo info = designator instanceof LispSymbol sym
+							? this.closRegistry.findClass(sym.name()) : null;
+					if (info == null) {
+						return LispNil.INSTANCE;
+					}
+					java.util.List<LispVal> rows = new java.util.ArrayList<>();
+					this.closRegistry.defaultInitargs(info).forEach((initarg, form) -> {
+						LispVal thunk = eval(
+								new LispCons(new LispSymbol(LispNames.LAMBDA),
+										new LispCons(LispNil.INSTANCE, new LispCons(form, LispNil.INSTANCE))),
+								this.globalEnv);
+						rows.add(valueList(List.of(new LispSymbol(initarg), form, thunk)));
+					});
+					return valueList(rows);
+				}));
+		this.globalEnv.defineFunction(MethodCombinations.QUALIFIERS_MATCH,
+				new LispFunction(MethodCombinations.QUALIFIERS_MATCH,
+						args -> MethodCombinations.qualifiersMatch(args.get(0), args.get(1)) ? LispTrue.INSTANCE
+								: LispNil.INSTANCE));
+		this.globalEnv.defineFunction(LispNames.REGISTER_CLASS_METAOBJECT,
+				new LispFunction(LispNames.REGISTER_CLASS_METAOBJECT, args -> {
+					// (%register-class-metaobject name metaobject) -- primes the registry
+					// memo, so find-class/class-of answer the driver-built metaclass
+					// instance instead of materializing the plain standard-class view.
+					if (args.size() != 2 || !(args.get(0) instanceof LispSymbol nameSym)
+							|| !(args.get(1) instanceof LispInstance metaobject)) {
+						throw new LispEvalException(
+								LispNames.REGISTER_CLASS_METAOBJECT + " expects a class name and a metaobject");
+					}
+					this.closRegistry.registerClassMetaobject(nameSym.name(), metaobject);
+					return metaobject;
+				}));
+		this.globalEnv.defineFunction(LispNames.CLASS_SLOT_DEFS_INTERNAL,
+				new LispFunction(LispNames.CLASS_SLOT_DEFS_INTERNAL, args -> {
+					requireSingleArg(LispNames.CLASS_SLOT_DEFS_INTERNAL, args);
+					// ((slot-name declared-type) ...) for the type's full slot list; nil
+					// for anything that is not a registered class or struct designator. A
+					// class METAOBJECT designates through its name slot (what class-of
+					// hands a slot-walking serializer since the metaobject migration).
+					LispVal designator = args.get(0);
+					if (designator instanceof LispInstance inst && this.closRegistry.isClassMetaobject(inst)) {
+						designator = inst.slot(0);
+					}
+					if (!(designator instanceof LispSymbol sym)) {
+						return LispNil.INSTANCE;
+					}
+					List<ClosRegistry.SlotDef> defs = this.closRegistry.slotDefs(sym.name());
+					if (defs == null) {
+						return LispNil.INSTANCE;
+					}
+					LispVal result = LispNil.INSTANCE;
+					for (int i = defs.size() - 1; i >= 0; i--) {
+						LispVal pair = new LispCons(new LispSymbol(defs.get(i).name()),
+								new LispCons(new LispSymbol(defs.get(i).type()), LispNil.INSTANCE));
+						result = new LispCons(pair, result);
+					}
+					return result;
+				}));
+		this.globalEnv.defineFunction(LispNames.SIMPLE_CONDITION_FORMAT_CONTROL,
+				new LispFunction(LispNames.SIMPLE_CONDITION_FORMAT_CONTROL, args -> {
+					requireSingleArg(LispNames.SIMPLE_CONDITION_FORMAT_CONTROL, args);
+					return conditionSlotValue(args.get(0), "format-control");
+				}));
+		this.globalEnv.defineFunction(LispNames.SIMPLE_CONDITION_FORMAT_ARGUMENTS,
+				new LispFunction(LispNames.SIMPLE_CONDITION_FORMAT_ARGUMENTS, args -> {
+					requireSingleArg(LispNames.SIMPLE_CONDITION_FORMAT_ARGUMENTS, args);
+					return conditionSlotValue(args.get(0), "format-arguments");
+				}));
+		this.globalEnv.defineFunction(LispNames.SLOT_BOUNDP, new LispFunction(LispNames.SLOT_BOUNDP, args -> {
+			if (args.size() != 2) {
+				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+						LispNames.SLOT_BOUNDP + " expects 2 arguments, got " + args.size());
+			}
+			if (isSlotProtocolInstance(args.get(0))) {
+				return apply(resolveFunction(LispNames.SLOT_PROTOCOL_BOUNDP), args, this.globalEnv);
+			}
+			// Bound = the type declares the slot AND it does not hold the unbound
+			// marker (a slot written with no :initform, or emptied by
+			// slot-makunbound, holds one).
+			SlotRef slot = instanceSlotRef(args.get(0), args.get(1));
+			return slot != null && !isUnboundMarker(slot.read()) ? LispTrue.INSTANCE : LispNil.INSTANCE;
+		}));
+		// The runtime-slot-name dispatch pair the compile paths generate as defuns:
+		// the shared setf/with-slots expansions emit calls to them for an AMBIGUOUS
+		// literal slot name too (they are outlined), and those expansions serve
+		// the interpreter as well -- here they are the registry-backed reads/writes.
+		this.globalEnv.defineFunction(LispNames.SLOT_VALUE_RUNTIME,
+				new LispFunction(LispNames.SLOT_VALUE_RUNTIME, args -> {
+					if (args.size() != 2) {
+						throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+								LispNames.SLOT_VALUE_RUNTIME + " expects 2 arguments, got " + args.size());
+					}
+					SlotRef slot = instanceSlotRef(args.get(0), args.get(1));
+					if (slot == null) {
+						throw new LispEvalException(LispNames.SLOT_VALUE + ": unknown slot " + args.get(1).print()
+								+ " on " + args.get(0).print());
+					}
+					return slot.read();
+				}));
+		this.globalEnv.defineFunction(LispNames.SLOT_VALUE_SET_RUNTIME,
+				new LispFunction(LispNames.SLOT_VALUE_SET_RUNTIME, args -> {
+					if (args.size() != 3) {
+						throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+								LispNames.SLOT_VALUE_SET_RUNTIME + " expects 3 arguments, got " + args.size());
+					}
+					SlotRef slot = instanceSlotRef(args.get(0), args.get(1));
+					if (slot == null) {
+						throw new LispEvalException(LispNames.SLOT_VALUE + ": unknown slot " + args.get(1).print()
+								+ " on " + args.get(0).print());
+					}
+					slot.write(args.get(2));
+					return args.get(2);
+				}));
+		this.globalEnv.defineFunction(LispNames.SLOT_EXISTS_P, new LispFunction(LispNames.SLOT_EXISTS_P, args -> {
+			if (args.size() != 2) {
+				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+						LispNames.SLOT_EXISTS_P + " expects 2 arguments, got " + args.size());
+			}
+			// Exists = the value is an instance whose layout declares the slot; an
+			// unbound slot exists (slot-boundp is the boundness test).
+			return instanceSlotRef(args.get(0), args.get(1)) != null ? LispTrue.INSTANCE : LispNil.INSTANCE;
+		}));
+		// Gray-stream dispatch: write-string (and write-char, which lowers to it)
+		// handed an INSTANCE as its stream calls rontolisp's own Gray protocol
+		// (eval.GrayStreamsLibrary) instead of the handle-based built-in, so a user
+		// output-stream class receives the writes. Portability layers
+		// (trivial-gray-streams) adapt onto that protocol through their shim system;
+		// the core knows no third-party name.
+		LispVal baseWriteString = this.globalEnv.lookupFunction(LispNames.WRITE_STRING);
+		this.globalEnv.defineFunction(LispNames.WRITE_STRING, new LispFunction(LispNames.WRITE_STRING, rawArgs -> {
+			List<LispVal> args = resolveDesignatorArg(rawArgs, 1, false);
+			if (args.size() >= 2 && dispatchesToGray(args.get(1))) {
+				// A spelled :start / :end goes through the bounds-checking helper; either
+				// way the generic sees integer bounds. Anything else in the tail keeps
+				// today's leniency.
+				List<LispVal> forwarded = new java.util.ArrayList<>(List.of(args.get(0), args.get(1)));
+				List<LispVal> bounds = grayStreamBounds(args, 2);
+				forwarded.addAll(bounds);
+				return applyGrayDispatch(
+						bounds.isEmpty() ? GRAY_WRITE_STRING_DISPATCH : GRAY_WRITE_STRING_BOUNDS_DISPATCH, forwarded);
+			}
+			return apply(baseWriteString, args, this.globalEnv);
+		}));
+		// Read-side and file-position Gray dispatch: the stream-taking built-ins
+		// handed an INSTANCE delegate to the rontolisp::%gray-*-dispatch helpers of
+		// gray.lisp, so the eof-error-p/eof-value contract and the :eof translation
+		// live in ONE place shared with the compile path's call-site rewrites
+		// (GrayStreamsLibrary.process). The helpers' non-instance fallbacks call the
+		// wrapped built-ins again, which is one extra hop and no recursion (the wrap
+		// routes non-instances straight to the base function).
+		LispVal baseReadByte = this.globalEnv.lookupFunction(LispNames.READ_BYTE);
+		this.globalEnv.defineFunction(LispNames.READ_BYTE, new LispFunction(LispNames.READ_BYTE, rawArgs -> {
+			List<LispVal> args = resolveStreamArg(rawArgs, 0);
+			if (!args.isEmpty() && dispatchesToGray(args.get(0))) {
+				return applyGrayDispatch(GRAY_READ_BYTE_DISPATCH,
+						List.of(args.get(0), args.size() >= 2 ? args.get(1) : LispTrue.INSTANCE,
+								args.size() >= 3 ? args.get(2) : LispNil.INSTANCE));
+			}
+			return apply(baseReadByte, args, this.globalEnv);
+		}));
+		LispVal baseReadChar = this.globalEnv.lookupFunction(LispNames.READ_CHAR);
+		this.globalEnv.defineFunction(LispNames.READ_CHAR, new LispFunction(LispNames.READ_CHAR, rawArgs -> {
+			List<LispVal> args = resolveDesignatorArg(rawArgs, 0, true);
+			if (!args.isEmpty() && dispatchesToGray(args.get(0))) {
+				return applyGrayDispatch(GRAY_READ_CHAR_DISPATCH,
+						List.of(args.get(0), args.size() >= 2 ? args.get(1) : LispTrue.INSTANCE,
+								args.size() >= 3 ? args.get(2) : LispNil.INSTANCE));
+			}
+			return apply(baseReadChar, args, this.globalEnv);
+		}));
+		LispVal baseReadLine = this.globalEnv.lookupFunction(LispNames.READ_LINE);
+		this.globalEnv.defineFunction(LispNames.READ_LINE, new LispFunction(LispNames.READ_LINE, rawArgs -> {
+			List<LispVal> args = resolveDesignatorArg(rawArgs, 0, true);
+			if (!args.isEmpty() && dispatchesToGray(args.get(0))) {
+				// eof-error-p defaults to NIL, the read-line lite convention the
+				// handle-based built-in documents.
+				return applyGrayDispatch(GRAY_READ_LINE_DISPATCH,
+						List.of(args.get(0), args.size() >= 2 ? args.get(1) : LispNil.INSTANCE,
+								args.size() >= 3 ? args.get(2) : LispNil.INSTANCE));
+			}
+			return apply(baseReadLine, args, this.globalEnv);
+		}));
+		// %read-line-pair, the read under a read-line producer's multiple-value lowering:
+		// a Gray instance answers through the same dispatch, whose values are the
+		// stream-read-line method's -- (line . missing-newline-p), nil at end of file.
+		LispVal baseReadLinePair = this.globalEnv.lookupFunction(LispNames.READ_LINE_PAIR_INTERNAL);
+		this.globalEnv.defineFunction(LispNames.READ_LINE_PAIR_INTERNAL,
+				new LispFunction(LispNames.READ_LINE_PAIR_INTERNAL, rawArgs -> {
+					List<LispVal> args = resolveDesignatorArg(rawArgs, 0, true);
+					if (!args.isEmpty() && dispatchesToGray(args.get(0))) {
+						LispVal atEnd = new LispCons(LispNil.INSTANCE, LispNil.INSTANCE);
+						this.globalEnv.clearSpill();
+						LispVal line = applyGrayDispatch(GRAY_READ_LINE_DISPATCH,
+								List.of(args.get(0), LispNil.INSTANCE, atEnd));
+						List<LispVal> more = spilledValues(this.globalEnv.spill());
+						this.globalEnv.clearSpill();
+						return line == atEnd ? LispNil.INSTANCE
+								: new LispCons(line, more.isEmpty() ? LispNil.INSTANCE : more.getFirst());
+					}
+					return apply(baseReadLinePair, args, this.globalEnv);
+				}));
+		LispVal baseReadCharNoHang = this.globalEnv.lookupFunction(LispNames.READ_CHAR_NO_HANG);
+		this.globalEnv.defineFunction(LispNames.READ_CHAR_NO_HANG,
+				new LispFunction(LispNames.READ_CHAR_NO_HANG, rawArgs -> {
+					List<LispVal> args = resolveDesignatorArg(rawArgs, 0, true);
+					if (!args.isEmpty() && dispatchesToGray(args.get(0))) {
+						return applyGrayDispatch(GRAY_READ_CHAR_NO_HANG_DISPATCH,
+								List.of(args.get(0), args.size() >= 2 ? args.get(1) : LispTrue.INSTANCE,
+										args.size() >= 3 ? args.get(2) : LispNil.INSTANCE));
+					}
+					return apply(baseReadCharNoHang, args, this.globalEnv);
+				}));
+		// peek-char's stream is argument ONE (the peek-type precedes it), and the
+		// peek-type travels into the helper: the skipping forms are looped there, over
+		// stream-peek-char and the protocol's pushback, rather than by the built-in's own
+		// %peek-char loop, which cannot see an instance.
+		LispVal basePeekChar = this.globalEnv.lookupFunction(LispNames.PEEK_CHAR);
+		this.globalEnv.defineFunction(LispNames.PEEK_CHAR, new LispFunction(LispNames.PEEK_CHAR, rawArgs -> {
+			List<LispVal> args = resolveDesignatorArg(rawArgs, 1, true);
+			if (args.size() >= 2 && dispatchesToGray(args.get(1))) {
+				return applyGrayDispatch(GRAY_PEEK_CHAR_DISPATCH,
+						List.of(args.get(0), args.get(1), args.size() >= 3 ? args.get(2) : LispTrue.INSTANCE,
+								args.size() >= 4 ? args.get(3) : LispNil.INSTANCE));
+			}
+			return apply(basePeekChar, args, this.globalEnv);
+		}));
+		LispVal baseUnreadChar = this.globalEnv.lookupFunction(LispNames.UNREAD_CHAR);
+		this.globalEnv.defineFunction(LispNames.UNREAD_CHAR, new LispFunction(LispNames.UNREAD_CHAR, rawArgs -> {
+			List<LispVal> args = resolveDesignatorArg(rawArgs, 1, true);
+			if (args.size() == 2 && dispatchesToGray(args.get(1))) {
+				return applyGrayDispatch(GRAY_UNREAD_CHAR_DISPATCH, List.of(args.get(0), args.get(1)));
+			}
+			return apply(baseUnreadChar, args, this.globalEnv);
+		}));
+		// open-stream-p / stream-element-type: the close rule, applied to the other two
+		// operators CL spells as plain functions a stream class may own with a defmethod
+		// of its own (dexador's decoding-stream defines both). The Gray default answers
+		// only while the program registers no generic for the name, which is exactly the
+		// condition GrayStreamsLibrary.OWNABLE_OPERATORS checks on the compile path.
+		wrapGrayOwnableOperator(LispNames.OPEN_STREAM_P, GRAY_OPEN_STREAM_P_DISPATCH);
+		// input-stream-p / output-stream-p answer the DIRECTION a Gray instance was
+		// built with -- a typep against the two direction base classes, not a predicate
+		// generic per class. Ownable like the other three: a class may define a method
+		// on either name, and the Gray default steps aside for it.
+		wrapGrayOwnableOperator(LispNames.INPUT_STREAM_P, GRAY_INPUT_STREAM_P_DISPATCH);
+		wrapGrayOwnableOperator(LispNames.OUTPUT_STREAM_P, GRAY_OUTPUT_STREAM_P_DISPATCH);
+		wrapGrayOwnableOperator(LispNames.STREAM_ELEMENT_TYPE, GRAY_STREAM_ELEMENT_TYPE_DISPATCH);
+		// streamp: a Gray stream IS a stream in Common Lisp. The interpreter has no
+		// lowering for the call form -- it is this function value, so the registry's
+		// descendant tags are read when the argument has been evaluated. A lowering
+		// would bake them before the argument runs, and the argument may be what loads
+		// the class (the composite-stream constructors' prelude classes load on their
+		// first call).
+		LispVal baseStreamp = this.globalEnv.lookupFunction(LispNames.STREAMP);
+		this.globalEnv.defineFunction(LispNames.STREAMP, new LispFunction(LispNames.STREAMP, args -> {
+			if (args.size() == 1 && isGrayStreamInstance(args.get(0))) {
+				return LispTrue.INSTANCE;
+			}
+			return apply(baseStreamp, args, this.globalEnv);
+		}));
+		LispVal baseWriteByte = this.globalEnv.lookupFunction(LispNames.WRITE_BYTE);
+		this.globalEnv.defineFunction(LispNames.WRITE_BYTE, new LispFunction(LispNames.WRITE_BYTE, rawArgs -> {
+			List<LispVal> args = resolveStreamArg(rawArgs, 1);
+			if (args.size() == 2 && dispatchesToGray(args.get(1))) {
+				return applyGrayDispatch(GRAY_WRITE_BYTE_DISPATCH, List.of(args.get(0), args.get(1)));
+			}
+			return apply(baseWriteByte, args, this.globalEnv);
+		}));
+		LispVal baseListen = this.globalEnv.lookupFunction(LispNames.LISTEN);
+		this.globalEnv.defineFunction(LispNames.LISTEN, new LispFunction(LispNames.LISTEN, rawArgs -> {
+			List<LispVal> args = resolveDesignatorArg(rawArgs, 0, true);
+			if (args.size() == 1 && dispatchesToGray(args.get(0))) {
+				return applyGrayDispatch(GRAY_LISTEN_DISPATCH, List.of(args.get(0)));
+			}
+			return apply(baseListen, args, this.globalEnv);
+		}));
+		LispVal baseFilePosition = this.globalEnv.lookupFunction(LispNames.FILE_POSITION);
+		this.globalEnv.defineFunction(LispNames.FILE_POSITION, new LispFunction(LispNames.FILE_POSITION, rawArgs -> {
+			// Before any layer below answers: the base answers NIL without a stream, and
+			// a surplus would reach the set path, which drops a parked unread-char.
+			Environment.requireCallShape(LispNames.FILE_POSITION, rawArgs);
+			List<LispVal> args = resolveStreamArg(rawArgs, 0);
+			if (!args.isEmpty() && dispatchesToGray(args.get(0))) {
+				if (args.size() == 1) {
+					return applyGrayDispatch(GRAY_FILE_POSITION_DISPATCH, List.of(args.get(0)));
+				}
+				if (args.size() == 2) {
+					return applyGrayDispatch(GRAY_FILE_POSITION_SET_DISPATCH, List.of(args.get(0), args.get(1)));
+				}
+			}
+			return apply(baseFilePosition, args, this.globalEnv);
+		}));
+		// file-length: a broadcast stream answers for its last component (or 0 with
+		// none) through the shared helper; anything else reaches the base built-in.
+		LispVal baseFileLength = this.globalEnv.lookupFunction(LispNames.FILE_LENGTH);
+		this.globalEnv.defineFunction(LispNames.FILE_LENGTH, new LispFunction(LispNames.FILE_LENGTH, rawArgs -> {
+			List<LispVal> args = resolveStreamArg(rawArgs, 0);
+			if (!args.isEmpty() && dispatchesToGray(args.get(0))) {
+				return applyGrayDispatch(GrayStreamsLibrary.BROADCAST_FILE_LENGTH_DISPATCH, List.of(args.get(0)));
+			}
+			return apply(baseFileLength, args, this.globalEnv);
+		}));
+		// The line-oriented and print-family output operators: the same
+		// instance test, the same helpers the compile-path rewrite targets. Without
+		// these, exactly the two write generics reached a Gray instance and everything
+		// else -- terpri, fresh-line, write-line, princ/prin1/print,
+		// force-output/finish-output/clear-output -- signalled "not an output stream" on
+		// the interpreter and wrote PAST the instance on the compile paths.
+		wrapGrayOutputOperator(LispNames.TERPRI, 0, GRAY_TERPRI_DISPATCH);
+		wrapGrayOutputOperator(LispNames.FRESH_LINE, 0, GRAY_FRESH_LINE_DISPATCH);
+		wrapGrayOutputOperator(LispNames.FORCE_OUTPUT, 0, GRAY_FORCE_OUTPUT_DISPATCH);
+		wrapGrayOutputOperator(LispNames.FINISH_OUTPUT, 0, GRAY_FINISH_OUTPUT_DISPATCH);
+		wrapGrayOutputOperator(LispNames.CLEAR_OUTPUT, 0, GRAY_CLEAR_OUTPUT_DISPATCH);
+		// write-line: the Gray dispatch must survive a keyword tail -- a spelled bound is
+		// checked and forwarded by the bounds helper, like write-string's. The stream
+		// sits at index 1, or there is none when the second argument is a keyword (or
+		// absent); anything else reaches the base built-in, which owns the bounds and
+		// the errors.
+		LispVal baseWriteLine = this.globalEnv.lookupFunction(LispNames.WRITE_LINE);
+		this.globalEnv.defineFunction(LispNames.WRITE_LINE, new LispFunction(LispNames.WRITE_LINE, rawArgs -> {
+			List<LispVal> args = resolveDesignatorArg(rawArgs, 1, false);
+			if (args.size() > 1 && !(args.get(1) instanceof LispSymbol kw && kw.name().startsWith(":"))
+					&& dispatchesToGray(args.get(1))) {
+				List<LispVal> forwarded = new java.util.ArrayList<>(List.of(args.get(0), args.get(1)));
+				List<LispVal> bounds = grayStreamBounds(args, 2);
+				forwarded.addAll(bounds);
+				return applyGrayDispatch(bounds.isEmpty() ? GRAY_WRITE_LINE_DISPATCH : GRAY_WRITE_LINE_BOUNDS_DISPATCH,
+						forwarded);
+			}
+			return apply(baseWriteLine, args, this.globalEnv);
+		}));
+		wrapGrayOutputOperator(LispNames.PRINC, 1, GRAY_PRINC_DISPATCH);
+		wrapGrayOutputOperator(LispNames.PRIN1, 1, GRAY_PRIN1_DISPATCH);
+		wrapGrayOutputOperator(LispNames.PRINT, 1, GRAY_PRINT_DISPATCH);
+		// warn's report goes to the current *error-output*, which may be a Gray instance
+		// -- mito silences a statement with (let ((*error-output*
+		// (make-broadcast-stream)))
+		// ...), and a broadcast stream is one -- so it takes the write-line dispatch like
+		// any other write to the stream; the handle-based %warn signalled "not an output
+		// stream" there.
+		LispVal baseWarn = this.globalEnv.lookupFunction(LispNames.WARN_INTERNAL);
+		this.globalEnv.defineFunction(LispNames.WARN_INTERNAL, new LispFunction(LispNames.WARN_INTERNAL, rawArgs -> {
+			// The designator the interpreter's expansion adds names what was signalled
+			// (LispMacroExpander.expandWarnWithDesignator); only the macro-time report
+			// reads it, so the write below sees the message alone.
+			List<LispVal> args = rawArgs.size() == 2 ? rawArgs.subList(0, 1) : rawArgs;
+			BiConsumer<String, Boolean> macroTimeSink = this.macroTimeWarnings.get();
+			if (macroTimeSink != null && args.size() == 1) {
+				String message = args.get(0) instanceof LispString s ? s.value() : args.get(0).display();
+				String text = message.startsWith(WARNING_LABEL) ? message.substring(WARNING_LABEL.length()) : message;
+				macroTimeSink.accept(text, rawArgs.size() == 2 && designatesStyleWarning(rawArgs.get(1)));
+				return LispNil.INSTANCE;
+			}
+			LispVal destination = currentErrorOutput();
+			if (args.size() == 1 && destination != null) {
+				destination = resolveStreamArg(List.of(args.get(0), destination), 1).get(1);
+				if (dispatchesToGray(destination)) {
+					LispVal message = args.get(0) instanceof LispString ? args.get(0)
+							: new LispString(args.get(0).display());
+					applyGrayDispatch(GRAY_WRITE_LINE_DISPATCH, List.of(message, destination));
+					return LispNil.INSTANCE;
+				}
+			}
+			return apply(baseWarn, args, this.globalEnv);
+		}));
+		// *print-case* as a FIRST-CLASS value: (mapcar #'princ-to-string names) under a
+		// :downcase binding never reaches the operator seam in evalConsRareOperator, so
+		// the case route has to sit in the function value too -- the compile paths get it
+		// for free (a #'-reference compiles to a wrapper defun whose body IS the operator
+		// form, which the seam rewrites). Wrapped AFTER the Gray wrappers, so the
+		// no-case path still reaches them and the rewritten write-string is Gray-aware.
+		for (String printer : List.of(LispNames.PRINC, LispNames.PRIN1, LispNames.PRINT, LispNames.PRINC_TO_STRING,
+				LispNames.PRIN1_TO_STRING, LispNames.WRITE_TO_STRING)) {
+			wrapPrintCaseOperator(printer);
+		}
+		// close is the one operator a program can legitimately own: CL spells a stream's
+		// close as a method on CLOSE ITSELF, and a defmethod on a built-in name already
+		// dispatches on every backend (.kb/clos.md) -- fast-io's stream classes do
+		// exactly that. The Gray default therefore stands down as soon as the program
+		// registers a close generic, which is the same condition the compile-path rewrite
+		// checks, so the two seams agree. Deliberately NOT synonym-resolved either:
+		// closing a synonym stream closes the SYNONYM, not the stream it forwards to
+		// (CLHS 21.1.3), which the built-in already answers t for -- and the helper's
+		// instance arm answers the same. An OPEN stream is an instance too and is the one
+		// kind that must NOT take the Gray arm -- it is what close really has work to do
+		// for -- so it goes to the built-in by tag. The :abort tail is accepted and
+		// ignored, like the built-in's.
+		LispVal baseClose = this.globalEnv.lookupFunction(LispNames.CLOSE);
+		this.globalEnv.defineFunction(LispNames.CLOSE, new LispFunction(LispNames.CLOSE, args -> {
+			boolean closeable = args.size() == 1 || (args.size() == 3 && args.get(1) instanceof LispSymbol kw
+					&& LispNames.ABORT_KEYWORD.equals(kw.name()));
+			if (closeable && dispatchesToGray(args.get(0)) && this.closRegistry.findGeneric(LispNames.CLOSE) == null) {
+				return applyGrayDispatch(GRAY_CLOSE_DISPATCH, List.of(args.get(0)));
+			}
+			return apply(baseClose, args, this.globalEnv);
+		}));
+		// %probe-file: mediated by the SourceLoader rather than java.nio.file.Files, so a
+		// host without a filesystem (the browser playground's in-memory loader) answers
+		// from whatever IT can load. Working-directory-relative like open, not resolved
+		// against the load stack. String-in/string-out: the path itself for a file, in
+		// directory form (one trailing /) for a directory, nil for nothing -- and for a
+		// file spelled with a trailing /, which names no file on the WASM hosts either
+		// (Path.of drops the separator, so the rule is spelled here). The public
+		// probe-file is prelude Lisp that resolves the links first and wraps the answer
+		// in a pathname value.
+		this.globalEnv.defineFunction(LispNames.PROBE_FILE_INTERNAL,
+				new LispFunction(LispNames.PROBE_FILE_INTERNAL, args -> {
+					if (args.size() != 1) {
+						throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+								LispNames.PROBE_FILE_INTERNAL + " expects 1 argument, got " + args.size());
+					}
+					if (!(args.get(0) instanceof LispString path)) {
+						throw new LispEvalException(LispNames.PROBE_FILE_INTERNAL + " expects a string pathname");
+					}
+					// The namestring as given; probe-file resolves its links first.
+					String p = path.value();
+					if (!this.sourceLoader.exists(p)) {
+						return LispNil.INSTANCE;
+					}
+					boolean slashed = p.endsWith("/");
+					if (!this.sourceLoader.isDirectory(p)) {
+						return slashed ? LispNil.INSTANCE : path;
+					}
+					return slashed ? path : new LispString(p + "/");
+				}));
+		// %read-link: the same SourceLoader mediation as %probe-file,
+		// string-in/string-out:
+		// the target a symbolic link holds, nil for anything that is no link. The walk
+		// that resolves a whole path over it is the prelude %real-path.
+		this.globalEnv.defineFunction(LispNames.READ_LINK_INTERNAL,
+				new LispFunction(LispNames.READ_LINK_INTERNAL, args -> {
+					if (args.size() != 1) {
+						throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+								LispNames.READ_LINK_INTERNAL + " expects 1 argument, got " + args.size());
+					}
+					if (!(args.get(0) instanceof LispString path)) {
+						throw new LispEvalException(LispNames.READ_LINK_INTERNAL + " expects a string pathname");
+					}
+					String target = this.sourceLoader.readLink(path.value());
+					return target == null ? LispNil.INSTANCE : new LispString(target);
+				}));
+		// %make-link: makes a symbolic link holding a target as given, t, or nil where
+		// the host made none.
+		this.globalEnv.defineFunction(LispNames.MAKE_LINK_INTERNAL,
+				new LispFunction(LispNames.MAKE_LINK_INTERNAL, args -> {
+					if (args.size() != 2) {
+						throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+								LispNames.MAKE_LINK_INTERNAL + " expects 2 arguments, got " + args.size());
+					}
+					if (!(args.get(0) instanceof LispString target) || !(args.get(1) instanceof LispString path)) {
+						throw new LispEvalException(LispNames.MAKE_LINK_INTERNAL + " expects two strings");
+					}
+					return this.sourceLoader.makeLink(target.value(), path.value()) ? LispTrue.INSTANCE
+							: LispNil.INSTANCE;
+				}));
+		// %file-stat: the same SourceLoader mediation, what the host's stat (or lstat)
+		// says of a path -- (type size modified accessed made mode), or the fixnum of why
+		// it cannot say. The Java subset's files ask it (rontolisp.internal.Disk).
+		this.globalEnv.defineFunction(LispNames.FILE_STAT_INTERNAL,
+				new LispFunction(LispNames.FILE_STAT_INTERNAL, args -> {
+					if (args.size() != 2) {
+						throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+								LispNames.FILE_STAT_INTERNAL + " expects 2 arguments, got " + args.size());
+					}
+					if (!(args.get(0) instanceof LispString path)) {
+						throw new LispEvalException(LispNames.FILE_STAT_INTERNAL + " expects a string pathname");
+					}
+					SourceLoader.FileStat stat = this.sourceLoader.stat(path.value(), args.get(1) != LispNil.INSTANCE);
+					if (stat.type() == 0) {
+						return new LispInteger(stat.refusal());
+					}
+					Long made = stat.made();
+					Integer mode = stat.mode();
+					return valueList(List.of(new LispInteger(stat.type()), new LispInteger(stat.size()),
+							new LispInteger(stat.modified()), new LispInteger(stat.accessed()),
+							made == null ? LispNil.INSTANCE : new LispInteger(made),
+							mode == null ? LispNil.INSTANCE : new LispInteger(mode)));
+				}));
+		// %file-set-times: gives a path its times of last access and last writing, each
+		// in nanoseconds or nil to leave it; 0, or %file-stat's fixnum of why not.
+		this.globalEnv.defineFunction(LispNames.FILE_SET_TIMES_INTERNAL,
+				new LispFunction(LispNames.FILE_SET_TIMES_INTERNAL, args -> {
+					if (args.size() != 4) {
+						throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+								LispNames.FILE_SET_TIMES_INTERNAL + " expects 4 arguments, got " + args.size());
+					}
+					if (!(args.get(0) instanceof LispString path)) {
+						throw new LispEvalException(LispNames.FILE_SET_TIMES_INTERNAL + " expects a string pathname");
+					}
+					return new LispInteger(this.sourceLoader.setTimes(path.value(), args.get(1) != LispNil.INSTANCE,
+							nanosecondsOrNull(args.get(2)), nanosecondsOrNull(args.get(3))));
+				}));
+		// %file-access, %file-space, %file-set-mode and %file-make: what a host with
+		// permission bits answers beside its stat (runtime/RontoFileModes, through the
+		// SourceLoader). The Java subset's files ask them; no WASI host has them.
+		this.globalEnv.defineFunction(LispNames.FILE_ACCESS_INTERNAL,
+				new LispFunction(LispNames.FILE_ACCESS_INTERNAL, args -> {
+					String path = filePrimitivePath(LispNames.FILE_ACCESS_INTERNAL, args, 2);
+					return this.sourceLoader.access(path, fileFixnum(LispNames.FILE_ACCESS_INTERNAL, args.get(1)))
+							? LispTrue.INSTANCE : LispNil.INSTANCE;
+				}));
+		this.globalEnv.defineFunction(LispNames.FILE_SPACE_INTERNAL,
+				new LispFunction(LispNames.FILE_SPACE_INTERNAL, args -> {
+					String path = filePrimitivePath(LispNames.FILE_SPACE_INTERNAL, args, 2);
+					return new LispInteger(
+							this.sourceLoader.space(path, fileFixnum(LispNames.FILE_SPACE_INTERNAL, args.get(1))));
+				}));
+		this.globalEnv.defineFunction(LispNames.FILE_SET_MODE_INTERNAL,
+				new LispFunction(LispNames.FILE_SET_MODE_INTERNAL, args -> {
+					String path = filePrimitivePath(LispNames.FILE_SET_MODE_INTERNAL, args, 2);
+					return new LispInteger(
+							this.sourceLoader.setMode(path, fileFixnum(LispNames.FILE_SET_MODE_INTERNAL, args.get(1))));
+				}));
+		this.globalEnv.defineFunction(LispNames.FILE_MAKE_INTERNAL,
+				new LispFunction(LispNames.FILE_MAKE_INTERNAL, args -> {
+					String path = filePrimitivePath(LispNames.FILE_MAKE_INTERNAL, args, 3);
+					return new LispInteger(this.sourceLoader.make(path,
+							fileFixnum(LispNames.FILE_MAKE_INTERNAL, args.get(1)), args.get(2) != LispNil.INSTANCE));
+				}));
+		// %terminal-p: whether a process standard stream is a terminal (isatty through
+		// RontoTerminal). Standard output and input count only while the evaluator
+		// writes and reads the process's own, so a captured run is never a terminal;
+		// standard error is always the process's (Environment writes System.err).
+		this.globalEnv.defineFunction(LispNames.TERMINAL_P_INTERNAL,
+				new LispFunction(LispNames.TERMINAL_P_INTERNAL, args -> {
+					if (args.size() != 1) {
+						throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+								LispNames.TERMINAL_P_INTERNAL + " expects 1 argument, got " + args.size());
+					}
+					if (!(args.get(0) instanceof LispInteger fd)) {
+						return LispNil.INSTANCE;
+					}
+					long n = fd.value();
+					boolean own = (n == 0) ? this.givenIn == System.in
+							: (n == 1) ? this.givenOut == System.out : n == 2;
+					return own && am.ik.rontolisp.runtime.RontoTerminal.isTerminal((int) n) ? LispTrue.INSTANCE
+							: LispNil.INSTANCE;
+				}));
+		// %host-getcwd: the working-directory namestring the SourceLoader resolves a
+		// relative path against (user.dir for the filesystem loader), nil where it has
+		// none -- an in-memory loader, as WASI programs have preopened directories and no
+		// current one. uiop:getcwd turns the nil into its not-implemented-error, and the
+		// truename family keeps a relative answer relative over it.
+		this.globalEnv.defineFunction(LispNames.HOST_GETCWD, new LispFunction(LispNames.HOST_GETCWD, args -> {
+			if (!args.isEmpty()) {
+				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+						LispNames.HOST_GETCWD + " expects no arguments, got " + args.size());
+			}
+			String cwd = this.sourceLoader.workingDirectory();
+			return cwd == null ? LispNil.INSTANCE : new LispString(cwd);
+		}));
+		// file-write-date: the same SourceLoader mediation as %probe-file, for the same
+		// reason -- a host without a filesystem has no modification times and answers the
+		// nil Common Lisp already prescribes for "cannot be determined".
+		this.globalEnv.defineFunction(LispNames.FILE_WRITE_DATE, new LispFunction(LispNames.FILE_WRITE_DATE, args -> {
+			if (args.size() != 1) {
+				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+						LispNames.FILE_WRITE_DATE + " expects 1 argument, got " + args.size());
+			}
+			String path = PathnameOps.designatorNamestring(args.get(0));
+			if (path == null) {
+				throw new LispEvalException(LispNames.FILE_WRITE_DATE + " expects a pathname designator");
+			}
+			Long universal = this.sourceLoader.writeDate(path);
+			return universal == null ? LispNil.INSTANCE : new LispInteger(universal);
+		}));
+		// %list-directory: the one directory-LISTING primitive, mediated by the same
+		// SourceLoader as probe-file so a host without a filesystem simply says nil.
+		// Answers (t . names) for a readable directory -- the leading t is what tells
+		// an EMPTY directory from a missing one -- and nil otherwise; everything
+		// user-facing (directory, uiop:directory-exists-p / directory-files /
+		// subdirectories / collect-sub*directories) is Lisp source over it, in
+		// LispPreludeLibrary, so no listing rule can drift between backends.
+		this.globalEnv.defineFunction(LispNames.LIST_DIRECTORY, new LispFunction(LispNames.LIST_DIRECTORY, args -> {
+			if (args.size() != 1) {
+				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+						LispNames.LIST_DIRECTORY + " expects 1 argument, got " + args.size());
+			}
+			if (!(args.get(0) instanceof LispString path)) {
+				throw new LispEvalException(LispNames.LIST_DIRECTORY + " expects a string pathname");
+			}
+			List<String> entries = this.sourceLoader.listDirectory(path.value());
+			if (entries == null) {
+				return LispNil.INSTANCE;
+			}
+			LispVal names = LispNil.INSTANCE;
+			for (int i = entries.size() - 1; i >= 0; i--) {
+				names = new LispCons(new LispString(entries.get(i)), names);
+			}
+			return new LispCons(LispTrue.INSTANCE, names);
+		}));
+		// %host-argv: the program's own argument vector as a list of strings, argv0
+		// first. It lives HERE rather than in Environment because the value is state the
+		// caller supplies (setCommandLineArguments) -- an embedded run has no command
+		// line and answers nil. The five public uiop/image names are Lisp over it
+		// (uiop-image.lisp), so command-line-arguments is (rest (%host-argv)) on all four
+		// backends.
+		this.globalEnv.defineFunction(LispNames.HOST_ARGV, new LispFunction(LispNames.HOST_ARGV, args -> {
+			if (!args.isEmpty()) {
+				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+						LispNames.HOST_ARGV + " expects no arguments, got " + args.size());
+			}
+			LispVal argv = LispNil.INSTANCE;
+			for (int i = this.commandLineArguments.size() - 1; i >= 0; i--) {
+				argv = new LispCons(new LispString(this.commandLineArguments.get(i)), argv);
+			}
+			return argv;
+		}));
+		// %host-getenv: the HOST's value for an environment variable as a string, or nil
+		// if unset. The public uiop:getenv is Lisp over this (uiop-os.lisp), consulting
+		// the (setf (uiop:getenv ...)) override map first -- no host lets a process
+		// rewrite its own environment, so the write is an overlay on every backend.
+		// Reading one is spelled uiop:getenv and only that: Common Lisp has no getenv,
+		// and uiop's is the portable spelling every implementation-independent library
+		// already uses. It lives HERE, beside %host-environ, for the reason %host-argv
+		// does: the environment is state the caller may supply.
+		String getenvName = LispNames.HOST_GETENV;
+		this.globalEnv.defineFunction(getenvName, new LispFunction(getenvName, args -> {
+			if (args.size() != 1) {
+				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+						ClosRegistry.arityMessage(getenvName, 1, false, args.size()));
+			}
+			if (!(args.get(0) instanceof LispString name)) {
+				throw new LispEvalException(getenvName + " expects a string, got: " + args.get(0).print());
+			}
+			String value = this.environmentVariables.get(name.value());
+			return value == null ? LispNil.INSTANCE : new LispString(value);
+		}));
+		// %host-environ: the whole environment as "NAME=value" strings, the one shape
+		// every backend can list (get-environment-variables splits them).
+		this.globalEnv.defineFunction(LispNames.HOST_ENVIRON, new LispFunction(LispNames.HOST_ENVIRON, args -> {
+			if (!args.isEmpty()) {
+				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+						ClosRegistry.arityMessage(LispNames.HOST_ENVIRON, 0, false, args.size()));
+			}
+			LispVal entries = LispNil.INSTANCE;
+			for (Map.Entry<String, String> entry : this.environmentVariables.entrySet()) {
+				entries = new LispCons(new LispString(entry.getKey() + "=" + entry.getValue()), entries);
+			}
+			return entries;
+		}));
+		// The run-time half of the package-local nicknames, under the uiop functions of
+		// uiop-package.lisp. The compile paths define the same three over the program's
+		// own table (LispMacroExpander.injectLocalNicknames).
+		this.globalEnv.defineFunction(LispNames.LOCAL_NICKNAME_ADD_INTERNAL,
+				new LispFunction(LispNames.LOCAL_NICKNAME_ADD_INTERNAL, args -> {
+					try {
+						return packageKeyword(this.packageResolver.addLocalNickname(
+								packageDesignator(LispNames.LOCAL_NICKNAME_ADD_INTERNAL, args.get(0)),
+								packageDesignator(LispNames.LOCAL_NICKNAME_ADD_INTERNAL, args.get(1)),
+								packageDesignator(LispNames.LOCAL_NICKNAME_ADD_INTERNAL, args.get(2))));
+					}
+					catch (am.ik.rontolisp.RuntimePackageException ex) {
+						return signalPackageError(java.util.Objects.requireNonNullElse(ex.getMessage(),
+								LispNames.ADD_PACKAGE_LOCAL_NICKNAME), ex.designator());
+					}
+				}));
+		this.globalEnv.defineFunction(LispNames.LOCAL_NICKNAME_REMOVE_INTERNAL,
+				new LispFunction(LispNames.LOCAL_NICKNAME_REMOVE_INTERNAL, args -> {
+					try {
+						return this.packageResolver.removeLocalNickname(
+								packageDesignator(LispNames.LOCAL_NICKNAME_REMOVE_INTERNAL, args.get(0)),
+								packageDesignator(LispNames.LOCAL_NICKNAME_REMOVE_INTERNAL, args.get(1)))
+										? LispTrue.INSTANCE : LispNil.INSTANCE;
+					}
+					catch (am.ik.rontolisp.RuntimePackageException ex) {
+						return signalPackageError(java.util.Objects.requireNonNullElse(ex.getMessage(),
+								LispNames.REMOVE_PACKAGE_LOCAL_NICKNAME), ex.designator());
+					}
+				}));
+		this.globalEnv.defineFunction(LispNames.PACKAGE_LOCAL_NICKNAMES_INTERNAL,
+				new LispFunction(LispNames.PACKAGE_LOCAL_NICKNAMES_INTERNAL, args -> {
+					List<LispVal> rows = new ArrayList<>();
+					try {
+						this.packageResolver
+							.localNicknames(packageDesignator(LispNames.PACKAGE_LOCAL_NICKNAMES_INTERNAL, args.get(0)))
+							.forEach((nickname, target) -> rows
+								.add(new LispCons(new LispString(nickname), packageKeyword(target))));
+					}
+					catch (am.ik.rontolisp.RuntimePackageException ex) {
+						return signalPackageError(java.util.Objects.requireNonNullElse(ex.getMessage(),
+								LispNames.PACKAGE_LOCAL_NICKNAMES), ex.designator());
+					}
+					LispVal out = LispNil.INSTANCE;
+					for (int i = rows.size() - 1; i >= 0; i--) {
+						out = new LispCons(rows.get(i), out);
+					}
+					return out;
+				}));
+		// use-package: a literal top-level call is consumed by the PackageResolver (so it
+		// works on every backend); this runtime binding serves the computed calls only
+		// the
+		// interpreter can run -- and, resolving against the very same resolver, it takes
+		// effect for the forms read after it, as it does in Common Lisp.
+		this.globalEnv.defineFunction(LispNames.USE_PACKAGE, new LispFunction(LispNames.USE_PACKAGE, args -> {
+			if (args.isEmpty() || args.size() > 2) {
+				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+						LispNames.USE_PACKAGE + " expects 1 or 2 arguments, got " + args.size());
+			}
+			List<String> used = new ArrayList<>();
+			// A designator or a LIST of designators, like CL.
+			if (args.get(0) instanceof LispCons list) {
+				for (LispVal element : list.toList()) {
+					used.add(packageNameDesignator(LispNames.USE_PACKAGE, element));
+				}
+			}
+			else if (!(args.get(0) instanceof LispNil)) {
+				used.add(packageNameDesignator(LispNames.USE_PACKAGE, args.get(0)));
+			}
+			String target = args.size() == 2 ? packageNameDesignator(LispNames.USE_PACKAGE, args.get(1))
+					: this.packageResolver.currentPackageName();
+			this.packageResolver.usePackage(used, target);
+			return LispTrue.INSTANCE;
+		}));
+		// unuse-package: the inverse, with the same literal/computed split. The ANSI
+		// package chapter's own safely-delete-package helper drives it -- it unuses a
+		// package from every package that uses it before deleting it -- so the runtime
+		// binding carries most of the traffic.
+		this.globalEnv.defineFunction(LispNames.UNUSE_PACKAGE, new LispFunction(LispNames.UNUSE_PACKAGE, args -> {
+			if (args.isEmpty() || args.size() > 2) {
+				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+						LispNames.UNUSE_PACKAGE + " expects 1 or 2 arguments, got " + args.size());
+			}
+			List<String> used = new ArrayList<>();
+			if (args.get(0) instanceof LispCons list) {
+				for (LispVal element : list.toList()) {
+					used.add(packageNameDesignator(LispNames.UNUSE_PACKAGE, element));
+				}
+			}
+			else if (!(args.get(0) instanceof LispNil)) {
+				used.add(packageNameDesignator(LispNames.UNUSE_PACKAGE, args.get(0)));
+			}
+			String target = args.size() == 2 ? packageNameDesignator(LispNames.UNUSE_PACKAGE, args.get(1))
+					: this.packageResolver.currentPackageName();
+			this.packageResolver.unusePackage(used, target);
+			return LispTrue.INSTANCE;
+		}));
+		// export/unexport: the same split as use-package -- a literal top-level call is
+		// consumed by the PackageResolver (so it works on every backend), and these
+		// runtime bindings serve the computed calls only the interpreter can run,
+		// resolving against the very same resolver so they take effect for the forms read
+		// after them.
+		for (String name : List.of(LispNames.EXPORT, LispNames.UNEXPORT)) {
+			boolean export = LispNames.EXPORT.equals(name);
+			this.globalEnv.defineFunction(name, new LispFunction(name, args -> {
+				if (args.isEmpty() || args.size() > 2) {
+					throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+							name + " expects 1 or 2 arguments, got " + args.size());
+				}
+				String target = args.size() == 2 ? packageNameDesignator(name, args.get(1))
+						: this.packageResolver.currentPackageName();
+				// A symbol or a LIST of symbols, like CL; a symbol homed elsewhere must
+				// be accessible in the target, and a name conflict signals, both as a
+				// catchable package-error.
+				try {
+					this.packageResolver.exportSymbols(symbolSpellings(name, args.get(0), target), target, export);
+				}
+				catch (am.ik.rontolisp.RuntimePackageException ex) {
+					return signalPackageError(java.util.Objects.requireNonNullElse(ex.getMessage(), name),
+							ex.designator());
+				}
+				return LispTrue.INSTANCE;
+			}));
+		}
+		this.globalEnv.defineFunction(LispNames.SLOT_MAKUNBOUND, new LispFunction(LispNames.SLOT_MAKUNBOUND, args -> {
+			if (args.size() != 2) {
+				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+						LispNames.SLOT_MAKUNBOUND + " expects 2 arguments, got " + args.size());
+			}
+			if (isSlotProtocolInstance(args.get(0))) {
+				return apply(resolveFunction(LispNames.SLOT_PROTOCOL_MAKUNBOUND), args, this.globalEnv);
+			}
+			SlotRef slot = instanceSlotRef(args.get(0), args.get(1));
+			if (slot == null) {
+				throw new LispEvalException(LispNames.SLOT_MAKUNBOUND + ": no such slot " + args.get(1).print());
+			}
+			slot.write(unboundMarkerValue());
+			return args.get(0);
+		}));
+		// boundp/symbol-value read the GLOBAL variable namespace only (like CL, where
+		// symbol-value never sees lexical bindings); they live on the evaluator because
+		// they capture the global environment. fboundp and find-symbol additionally need
+		// the user macro table.
+		this.globalEnv.defineFunction(LispNames.BOUNDP, new LispFunction(LispNames.BOUNDP, args -> {
+			requireSingleArg(LispNames.BOUNDP, args);
+			return switch (args.get(0)) {
+				case LispTrue ignored -> LispTrue.INSTANCE;
+				case LispNil ignored -> LispTrue.INSTANCE;
+				case LispSymbol sym -> sym.isKeyword() || LispNames.PACKAGE_VAR.equals(sym.name())
+						|| (this.dynamicBindings.isBound(sym.name()) ? this.dynamicBindings.get(sym.name()) != null
+								: this.globalEnv.hasBinding(sym.name())) ? LispTrue.INSTANCE : LispNil.INSTANCE;
+				default ->
+					throw new LispEvalException(LispNames.BOUNDP + " expects a symbol, got " + args.get(0).print());
+			};
+		}));
+		this.globalEnv.defineFunction(LispNames.SYMBOL_VALUE, new LispFunction(LispNames.SYMBOL_VALUE, args -> {
+			requireSingleArg(LispNames.SYMBOL_VALUE, args);
+			return switch (args.get(0)) {
+				case LispTrue t -> t;
+				case LispNil nil -> nil;
+				case LispSymbol sym -> {
+					if (sym.isKeyword()) {
+						yield sym;
+					}
+					if (LispNames.PACKAGE_VAR.equals(sym.name())) {
+						yield currentPackageValue();
+					}
+					LispVal value = this.dynamicBindings.isBound(sym.name()) ? this.dynamicBindings.get(sym.name())
+							: this.globalEnv.lookupOrNull(sym.name());
+					if (value == null) {
+						throw CellErrorException.unboundVariable(sym.name());
+					}
+					yield value;
+				}
+				default -> throw new LispEvalException(
+						LispNames.SYMBOL_VALUE + " expects a symbol, got " + args.get(0).print());
+			};
+		}));
+		// set: the computed-name counterpart of setq -- it assigns the CURRENT dynamic
+		// binding when one is active (a let, a parameter or a progv made it, declared
+		// or not), and otherwise the global, creating the binding when the name is
+		// unbound (what a run-time evaluator defines program globals through).
+		this.globalEnv.defineFunction(LispNames.SET, new LispFunction(LispNames.SET, args -> {
+			if (args.size() != 2) {
+				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+						LispNames.SET + " expects 2 arguments, got " + args.size());
+			}
+			if (!(args.get(0) instanceof LispSymbol sym)) {
+				throw new LispEvalException(LispNames.SET + " expects a symbol, got " + args.get(0).print());
+			}
+			if (sym.isKeyword() || "NIL".equals(sym.name()) || "T".equals(sym.name())) {
+				throw new LispEvalException(LispNames.SET + " cannot set " + args.get(0).print());
+			}
+			if (LispNames.PACKAGE_VAR.equals(sym.name())) {
+				assignCurrentPackage(args.get(1));
+			}
+			else if (this.dynamicBindings.isBound(sym.name())) {
+				this.dynamicBindings.setCurrent(sym.name(), args.get(1));
+			}
+			else {
+				this.globalEnv.define(sym.name(), args.get(1));
+			}
+			return args.get(1);
+		}));
+		// (make-synonym-stream 'sym): the synonym-stream VALUE -- an instance of the
+		// fixed LispLayout.SYNONYM_STREAM layout holding the symbol, plus (in the cell
+		// reserved beside it) a reader closure answering that variable's CURRENT value.
+		// Every stream-designator resolution calls that reader, which is what makes the
+		// forwarding per-operation and dynamic-binding aware. The compiled backends
+		// build the same value from a compiled (lambda () sym) --
+		// LispMacroExpander.expandMakeSynonymStream.
+		this.globalEnv.defineFunction(LispNames.MAKE_SYNONYM_STREAM,
+				new LispFunction(LispNames.MAKE_SYNONYM_STREAM, args -> {
+					requireSingleArg(LispNames.MAKE_SYNONYM_STREAM, args);
+					if (!(args.get(0) instanceof LispSymbol sym) || sym.isKeyword()) {
+						throw new LispEvalException(
+								LispNames.MAKE_SYNONYM_STREAM + " expects a symbol, got " + args.get(0).print());
+					}
+					LispFunction reader = new LispFunction(LispNames.STREAM_TARGET,
+							ignored -> symbolValueOf(sym.name()));
+					return new LispInstance(LispLayout.SYNONYM_STREAM, new LispVal[] { sym, reader });
+				}));
+		// fboundp is t for anything callable or expandable: functions, user macros, and
+		// the built-in macros/special forms (CL: fboundp is true of macros and special
+		// operators too).
+		this.globalEnv.defineFunction(LispNames.FBOUNDP, new LispFunction(LispNames.FBOUNDP, args -> {
+			requireSingleArg(LispNames.FBOUNDP, args);
+			if (args.get(0) instanceof LispNil || args.get(0) instanceof LispTrue) {
+				// nil and t ARE symbols in CL and name no function -- trivia level2
+				// probes
+				// (fboundp (find-symbol ...)) whose argument is nil on a miss.
+				return LispNil.INSTANCE;
+			}
+			String name = functionName(args.get(0));
+			if (name == null) {
+				throw new LispEvalException(LispNames.FBOUNDP + " expects a symbol, got " + args.get(0).print());
+			}
+			return fbound(name) ? LispTrue.INSTANCE : LispNil.INSTANCE;
+		}));
+		// fmakunbound: drop the global function binding AND any user macro of the same
+		// name, so the name is undefined again for every later reference (fboundp, a
+		// call, funcall through the symbol). Built-in macros and special operators are
+		// part of the language, not of the image's function namespace, so removing them
+		// is not attempted -- fboundp keeps answering t for those. The name is returned,
+		// like CL. postmodern's deallocate-prepared-statement retires the functions
+		// defprepared generated this way.
+		this.globalEnv.defineFunction(LispNames.FMAKUNBOUND, new LispFunction(LispNames.FMAKUNBOUND, args -> {
+			requireSingleArg(LispNames.FMAKUNBOUND, args);
+			String name = functionName(args.get(0));
+			if (name == null || args.get(0) instanceof LispNil || args.get(0) instanceof LispTrue) {
+				throw new LispEvalException(LispNames.FMAKUNBOUND + " expects a symbol, got " + args.get(0).print());
+			}
+			this.globalEnv.undefineFunction(name);
+			removeUserMacro(name);
+			this.retiredFunctions.add(name);
+			return args.get(0);
+		}));
+		// makunbound: set's unbinding twin -- the CURRENT dynamic binding loses its value
+		// when one is active (the global comes back with the binding's exit), otherwise
+		// the global value is dropped. boundp then answers nil and a read signals the
+		// unbound-variable. Answers the symbol.
+		this.globalEnv.defineFunction(LispNames.MAKUNBOUND, new LispFunction(LispNames.MAKUNBOUND, args -> {
+			requireSingleArg(LispNames.MAKUNBOUND, args);
+			if (!(args.get(0) instanceof LispSymbol sym)) {
+				throw new LispEvalException(LispNames.MAKUNBOUND + " expects a symbol, got " + args.get(0).print());
+			}
+			if (sym.isKeyword() || sym.name().isEmpty() || LispNames.PACKAGE_VAR.equals(sym.name())) {
+				throw new LispEvalException(LispNames.MAKUNBOUND + " cannot make " + sym.print() + " unbound");
+			}
+			if (this.dynamicBindings.isBound(sym.name())) {
+				this.dynamicBindings.unbindCurrent(sym.name());
+			}
+			else {
+				this.globalEnv.undefine(sym.name());
+			}
+			return sym;
+		}));
+		// (setf (symbol-function 'f) fn) / (setf (fdefinition 'f) fn) lower here:
+		// install fn as f's global function binding -- fmakunbound's write-side twin,
+		// so a same-named user macro stops shadowing the new definition -- and return
+		// fn, the setf value.
+		this.globalEnv.defineFunction(LispNames.SET_SYMBOL_FUNCTION_INTERNAL,
+				new LispFunction(LispNames.SET_SYMBOL_FUNCTION_INTERNAL, args -> {
+					String name = args.size() == 2 && !(args.get(0) instanceof LispNil)
+							&& !(args.get(0) instanceof LispTrue) ? functionName(args.get(0)) : null;
+					if (name == null) {
+						throw new LispEvalException("(setf symbol-function) expects a symbol name, got "
+								+ (args.isEmpty() ? "nothing" : args.get(0).print()));
+					}
+					this.globalEnv.defineFunction(name, args.get(1));
+					removeUserMacro(name);
+					return args.get(1);
+				}));
+		// The run-time typep dispatch expands a designator headed by a parameterized
+		// deftype through this before it reads the head (expandRuntimeTypep); a chain
+		// of such heads expands to its end, bounded like an alias chain.
+		this.globalEnv.defineFunction(LispNames.DEFTYPE_EXPAND_INTERNAL,
+				new LispFunction(LispNames.DEFTYPE_EXPAND_INTERNAL, args -> {
+					requireSingleArg(LispNames.DEFTYPE_EXPAND_INTERNAL, args);
+					LispVal spec = args.get(0);
+					for (int hop = 0; hop < 16 && spec instanceof LispCons compound; hop++) {
+						LispVal expansion = expandDeftypeSpecifier(compound);
+						if (expansion == null) {
+							break;
+						}
+						spec = expansion;
+					}
+					return spec;
+				}));
+		// The compile paths' setf-only-alias forwarder body reads the binding through
+		// this primitive; the interpreter serves it against the live environment so
+		// one program means the same thing on every backend.
+		this.globalEnv.defineFunction(LispNames.FENV_FUNCTION_INTERNAL,
+				new LispFunction(LispNames.FENV_FUNCTION_INTERNAL, args -> {
+					requireSingleArg(LispNames.FENV_FUNCTION_INTERNAL, args);
+					if (!(args.get(0) instanceof LispSymbol sym)) {
+						throw new LispEvalException(
+								LispNames.FENV_FUNCTION_INTERNAL + " expects a symbol, got " + args.get(0).print());
+					}
+					LispVal fn = this.globalEnv.lookupFunctionOrNull(sym.name());
+					if (fn == null) {
+						throw CellErrorException.undefinedFunction(sym.name());
+					}
+					return fn;
+				}));
+		// The compile paths' run-time (setf place) function-name helpers
+		// (compiler.RuntimeFunctionNames) call these two; the interpreter maps the list
+		// itself (functionName), and serves them so a program means the same thing here.
+		this.globalEnv.defineFunction(LispNames.SETF_FUNCTION_SYMBOL_INTERNAL,
+				new LispFunction(LispNames.SETF_FUNCTION_SYMBOL_INTERNAL, args -> {
+					requireSingleArg(LispNames.SETF_FUNCTION_SYMBOL_INTERNAL, args);
+					if (!(args.get(0) instanceof LispSymbol place)) {
+						throw new LispEvalException(LispNames.SETF_FUNCTION_SYMBOL_INTERNAL + " expects a symbol, got "
+								+ args.get(0).print());
+					}
+					return new LispSymbol(LispMacroExpander.setfFunctionName(place.name()));
+				}));
+		this.globalEnv.defineFunction(LispNames.UNDEFINED_SETF_FUNCTION_INTERNAL,
+				new LispFunction(LispNames.UNDEFINED_SETF_FUNCTION_INTERNAL, args -> {
+					requireSingleArg(LispNames.UNDEFINED_SETF_FUNCTION_INTERNAL, args);
+					if (!(args.get(0) instanceof LispSymbol place)) {
+						throw new LispEvalException(LispNames.UNDEFINED_SETF_FUNCTION_INTERNAL
+								+ " expects a symbol, got " + args.get(0).print());
+					}
+					throw CellErrorException.undefinedFunction(LispMacroExpander.setfFunctionName(place.name()));
+				}));
+		// find-symbol never creates: the symbol comes back only when the package makes
+		// the name accessible -- a present member (the package's member table, or a
+		// definition made under it: a definition IS an interning), an inherited export
+		// of a used package, a standard name, a keyword. The compilers fold a literal
+		// call against their compile-time view (cl symbols + user defuns).
+		this.globalEnv.defineFunction(LispNames.FIND_SYMBOL, new LispFunction(LispNames.FIND_SYMBOL, args -> {
+			PackageResolver.Accessible found = findSymbolAccessible(args);
+			return found == null ? LispNil.INSTANCE : symbolOfSpelling(found.spelling());
+		}));
+		// The SECOND value of find-symbol/intern, lowered beside the primary one by a
+		// multiple-value consumer: the status half of the very same lookup, so the two
+		// answer nil on exactly the same names -- CL's invariant, and the reason this is
+		// one function rather than a status flag threaded through the spill.
+		this.globalEnv.defineFunction(LispNames.FIND_SYMBOL_STATUS,
+				new LispFunction(LispNames.FIND_SYMBOL_STATUS, args -> {
+					PackageResolver.Accessible found = findSymbolAccessible(args);
+					return found == null ? LispNil.INSTANCE : new LispSymbol(found.status());
+				}));
+		// intern overrides the package-blind Environment converter: a bare name is
+		// interned into the CURRENT package (the resolver's in-package state), so a
+		// macro-time (intern (concatenate ...)) under (in-package p) names the same
+		// function as a literal defun in that file -- and a name the package did not
+		// provide is RECORDED as its member, so find-symbol answers it from then on. The
+		// (intern name :keyword) form keeps the Environment behavior.
+		this.globalEnv.defineFunction(LispNames.INTERN, new LispFunction(LispNames.INTERN, args -> {
+			if (args.size() == 2) {
+				if (LispMacroExpander.isKeywordPackageDesignator(args.get(1))) {
+					if (!(args.get(0) instanceof LispString str)) {
+						throw new LispEvalException(LispNames.INTERN + " expects a string, got " + args.get(0).print());
+					}
+					return new LispSymbol(":" + str.value());
+				}
+				// A general package designator (string / symbol / find-package keyword):
+				// intern into that package through the resolver, so the spelling agrees
+				// with what a literal defun in that package would have produced
+				// (alexandria's ensure-symbol/format-symbol).
+				if (!(args.get(0) instanceof LispString str)) {
+					throw new LispEvalException(LispNames.INTERN + " expects a string, got " + args.get(0).print());
+				}
+				String designator = packageDesignator(LispNames.INTERN, args.get(1));
+				if (this.packageResolver.findPackageName(designator) == null) {
+					// CLHS: a designator naming no package is an error a handler
+					// catches -- not the resolver's read-time failure.
+					return signalPackageError("No such package: " + designator, designator);
+				}
+				return symbolOfSpelling(this.packageResolver.internSpellingIn(designator, str.value(), true));
+			}
+			requireSingleArg(LispNames.INTERN, args);
+			if (!(args.get(0) instanceof LispString str)) {
+				throw new LispEvalException(LispNames.INTERN + " expects a string, got " + args.get(0).print());
+			}
+			return symbolOfSpelling(this.packageResolver.internSpelling(str.value(), true));
+		}));
+		// shadow / shadowing-import / unintern / package-shadowing-symbols: the
+		// member-table operators, over the LIVE registry like intern. The compiled
+		// backends serve the same four from prelude defuns over the %runtime-packages%
+		// member table (a read/compile-time package is frozen there).
+		this.globalEnv.defineFunction(LispNames.SHADOW, new LispFunction(LispNames.SHADOW, args -> {
+			if (args.isEmpty() || args.size() > 2) {
+				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+						LispNames.SHADOW + " expects 1 or 2 arguments, got " + args.size());
+			}
+			List<String> names = new ArrayList<>();
+			// A string designator or a LIST of them, like CL.
+			if (args.get(0) instanceof LispCons list) {
+				for (LispVal element : list.toList()) {
+					names.add(packageNameDesignator(LispNames.SHADOW, element));
+				}
+			}
+			else if (!(args.get(0) instanceof LispNil)) {
+				names.add(packageNameDesignator(LispNames.SHADOW, args.get(0)));
+			}
+			String target = args.size() == 2 ? packageDesignator(LispNames.SHADOW, args.get(1))
+					: this.packageResolver.currentPackageName();
+			if (this.packageResolver.findPackageName(target) == null) {
+				return signalNoSuchPackage(LispNames.SHADOW, target);
+			}
+			this.packageResolver.shadowSymbols(names, packageName(LispNames.SHADOW, target));
+			return LispTrue.INSTANCE;
+		}));
+		this.globalEnv.defineFunction(LispNames.SHADOWING_IMPORT, new LispFunction(LispNames.SHADOWING_IMPORT, args -> {
+			if (args.isEmpty() || args.size() > 2) {
+				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+						LispNames.SHADOWING_IMPORT + " expects 1 or 2 arguments, got " + args.size());
+			}
+			String target = args.size() == 2 ? packageDesignator(LispNames.SHADOWING_IMPORT, args.get(1))
+					: this.packageResolver.currentPackageName();
+			if (this.packageResolver.findPackageName(target) == null) {
+				return signalNoSuchPackage(LispNames.SHADOWING_IMPORT, target);
+			}
+			target = packageName(LispNames.SHADOWING_IMPORT, target);
+			try {
+				this.packageResolver
+					.shadowingImportSymbols(symbolSpellings(LispNames.SHADOWING_IMPORT, args.get(0), target), target);
+			}
+			catch (am.ik.rontolisp.RuntimePackageException ex) {
+				return signalPackageError(
+						java.util.Objects.requireNonNullElse(ex.getMessage(), LispNames.SHADOWING_IMPORT),
+						ex.designator());
+			}
+			return LispTrue.INSTANCE;
+		}));
+		this.globalEnv.defineFunction(LispNames.UNINTERN, new LispFunction(LispNames.UNINTERN, args -> {
+			if (args.isEmpty() || args.size() > 2) {
+				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+						LispNames.UNINTERN + " expects 1 or 2 arguments, got " + args.size());
+			}
+			String target = args.size() == 2 ? packageDesignator(LispNames.UNINTERN, args.get(1))
+					: this.packageResolver.currentPackageName();
+			if (this.packageResolver.findPackageName(target) == null) {
+				return signalNoSuchPackage(LispNames.UNINTERN, target);
+			}
+			target = packageName(LispNames.UNINTERN, target);
+			String spelling = symbolSpelling(LispNames.UNINTERN, args.get(0), target);
+			try {
+				return this.packageResolver.uninternSymbol(spelling, target) ? LispTrue.INSTANCE : LispNil.INSTANCE;
+			}
+			catch (am.ik.rontolisp.RuntimePackageException ex) {
+				return signalPackageError(java.util.Objects.requireNonNullElse(ex.getMessage(), LispNames.UNINTERN),
+						ex.designator());
+			}
+		}));
+		this.globalEnv.defineFunction(LispNames.PACKAGE_SHADOWING_SYMBOLS,
+				new LispFunction(LispNames.PACKAGE_SHADOWING_SYMBOLS, args -> {
+					requireSingleArg(LispNames.PACKAGE_SHADOWING_SYMBOLS, args);
+					String designator = packageDesignator(LispNames.PACKAGE_SHADOWING_SYMBOLS, args.get(0));
+					List<String> spellings = this.packageResolver
+						.shadowingSymbols(packageName(LispNames.PACKAGE_SHADOWING_SYMBOLS, designator));
+					LispVal out = LispNil.INSTANCE;
+					for (int i = spellings.size() - 1; i >= 0; i--) {
+						out = new LispCons(symbolOfSpelling(spellings.get(i)), out);
+					}
+					return out;
+				}));
+		// %package-iterator-entries: the (symbol status package) triples behind
+		// with-package-iterator, over the LIVE registry (the same walk as do-symbols).
+		// Overrides the backend-neutral prelude defun, which reads the baked table
+		// plus the runtime member table instead (the %do-symbols-list precedent).
+		this.globalEnv.defineFunction(LispNames.PACKAGE_ITERATOR_ENTRIES_INTERNAL,
+				new LispFunction(LispNames.PACKAGE_ITERATOR_ENTRIES_INTERNAL, args -> {
+					if (args.size() != 2) {
+						throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+								LispNames.PACKAGE_ITERATOR_ENTRIES_INTERNAL + " expects 2 arguments, got "
+										+ args.size());
+					}
+					List<LispVal> packages = args.get(0) instanceof LispCons list ? list.toList()
+							: args.get(0) instanceof LispNil ? List.of() : List.of(args.get(0));
+					java.util.Set<String> types = new java.util.HashSet<>();
+					if (args.get(1) instanceof LispCons typeList) {
+						for (LispVal type : typeList.toList()) {
+							types.add(type.print());
+						}
+					}
+					List<LispVal> entries = new ArrayList<>();
+					for (LispVal designator : packages) {
+						String name = packageName(LispNames.WITH_PACKAGE_ITERATOR,
+								packageDesignator(LispNames.WITH_PACKAGE_ITERATOR, designator));
+						LispSymbol pkg = packageKeyword(name);
+						for (PackageResolver.Accessible entry : this.packageResolver.accessibleEntries(name)) {
+							if (types.contains(entry.status())) {
+								entries.add(valueList(List.of(symbolOfSpelling(entry.spelling()),
+										new LispSymbol(entry.status()), pkg)));
+							}
+						}
+					}
+					return valueList(entries);
+				}));
+		// find-package: rontolisp has no package objects, so a "package" at runtime is
+		// the UPCASED canonical package name as a keyword -- eq-comparable by name, and
+		// upcased so the compile paths' spelling (which comes from reader-upcased
+		// literals) agrees. Returns nil for an unknown package, like CL.
+		this.globalEnv.defineFunction(LispNames.FIND_PACKAGE, new LispFunction(LispNames.FIND_PACKAGE, args -> {
+			requireSingleArg(LispNames.FIND_PACKAGE, args);
+			String found = this.packageResolver.findPackageName(packageDesignator(LispNames.FIND_PACKAGE, args.get(0)));
+			return found == null ? LispNil.INSTANCE : packageKeyword(found);
+		}));
+		// The qualifier a symbol the printer does not print bare keeps: the current
+		// package's own nickname for its home, when it has one (.kb/packages.md).
+		this.globalEnv.defineFunction(LispNames.PRINT_CASED_QUALIFIER_INTERNAL,
+				new LispFunction(LispNames.PRINT_CASED_QUALIFIER_INTERNAL, args -> {
+					if (args.size() != 2 || !(args.get(0) instanceof LispString text)
+							|| !(args.get(1) instanceof LispInteger colon)) {
+						throw new LispEvalException(
+								LispNames.PRINT_CASED_QUALIFIER_INTERNAL + " expects text and an index");
+					}
+					return new LispString(this.packageResolver.printedQualifier(text.value(), (int) colon.value()));
+				}));
+		// The printer's accessibility question (CLHS 22.1.3.3.1, .kb/pretty-printer.md):
+		// whether a package-qualified symbol prints without its qualifier in the
+		// current package, over the LIVE registry; the compile paths lower the same
+		// call onto a table baked from the final registry. The package spelling and the
+		// external flag the prelude caller parsed are what the baked lowering reads;
+		// the live answer needs only the symbol.
+		this.globalEnv.defineFunction(LispNames.SYMBOL_PRINT_BARE_P_INTERNAL,
+				new LispFunction(LispNames.SYMBOL_PRINT_BARE_P_INTERNAL, args -> {
+					if (args.size() != 3) {
+						throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+								LispNames.SYMBOL_PRINT_BARE_P_INTERNAL + " expects 3 arguments, got " + args.size());
+					}
+					// A string is the spelling of an instance's type name.
+					String spelling = args.get(0) instanceof LispSymbol sym ? sym.name()
+							: args.get(0) instanceof LispString text ? text.value() : null;
+					return spelling != null && this.packageResolver.printsBare(spelling) ? LispTrue.INSTANCE
+							: LispNil.INSTANCE;
+				}));
+		this.globalEnv.defineFunction(LispNames.HOME_SPELLING_INTERNAL,
+				new LispFunction(LispNames.HOME_SPELLING_INTERNAL, args -> {
+					requireSingleArg(LispNames.HOME_SPELLING_INTERNAL, args);
+					if (!(args.get(0) instanceof LispString text)) {
+						throw new LispEvalException(
+								LispNames.HOME_SPELLING_INTERNAL + " expects a string, got " + args.get(0).print());
+					}
+					return text.value().contains(":") ? text
+							: new LispString(PackageRegistry.qualifyInternal(LispNames.CL_USER_PKG, text.value()));
+				}));
+		// The same question of a symbol spelled bare, answering what it prints in front
+		// of its name.
+		this.globalEnv.defineFunction(LispNames.SYMBOL_PRINT_PREFIX_INTERNAL,
+				new LispFunction(LispNames.SYMBOL_PRINT_PREFIX_INTERNAL, args -> {
+					requireSingleArg(LispNames.SYMBOL_PRINT_PREFIX_INTERNAL, args);
+					String spelling = switch (args.get(0)) {
+						case LispSymbol sym -> sym.name();
+						case LispString text -> text.value();
+						case LispNil ignored -> "NIL";
+						case LispTrue ignored -> "T";
+						default -> null;
+					};
+					String prefix = spelling == null ? null : this.packageResolver.bareSymbolPrefix(spelling);
+					return prefix == null ? LispNil.INSTANCE : new LispString(prefix);
+				}));
+		// The walk's two leaf primitives: the interpreter loads the prelude lazily, so
+		// they simply call the leaf (the compile paths lower them to the leaf or to the
+		// bare text, LispMacroExpander.expandPrintCasedLeaf).
+		this.globalEnv.defineFunction(LispNames.PRINT_CASED_FOLD_LEAF_INTERNAL,
+				new LispFunction(LispNames.PRINT_CASED_FOLD_LEAF_INTERNAL, args -> {
+					requireSingleArg(LispNames.PRINT_CASED_FOLD_LEAF_INTERNAL, args);
+					return eval(new LispCons(new LispSymbol(LispNames.PRINT_CASE_FOLD_INTERNAL),
+							new LispCons(quoteValue(args.get(0)), LispNil.INSTANCE)), this.globalEnv);
+				}));
+		this.globalEnv.defineFunction(LispNames.PRINT_CASED_RADIXED_LEAF_INTERNAL,
+				new LispFunction(LispNames.PRINT_CASED_RADIXED_LEAF_INTERNAL, args -> {
+					requireSingleArg(LispNames.PRINT_CASED_RADIXED_LEAF_INTERNAL, args);
+					return eval(new LispCons(new LispSymbol(LispNames.PRINT_RADIXED_INTERNAL),
+							new LispCons(quoteValue(args.get(0)), LispNil.INSTANCE)), this.globalEnv);
+				}));
+		// The readable leaves, likewise: the prelude defun behind each.
+		java.util.Map
+			.of(LispNames.PRINT_CASED_RAW_LEAF_INTERNAL, LispNames.PRINT_READABLE_RAW_INTERNAL,
+					LispNames.PRINT_CASED_TEXT_LEAF_INTERNAL, LispNames.PRINT_READABLE_LEAF_INTERNAL,
+					LispNames.PRINT_CASED_INSTANCE_CHECK_INTERNAL, LispNames.PRINT_READABLE_INSTANCE_INTERNAL)
+			.forEach((leaf, defun) -> this.globalEnv.defineFunction(leaf, new LispFunction(leaf, args -> {
+				LispVal arguments = LispNil.INSTANCE;
+				for (int i = args.size() - 1; i >= 0; i--) {
+					arguments = new LispCons(quoteValue(args.get(i)), arguments);
+				}
+				return eval(new LispCons(new LispSymbol(defun), arguments), this.globalEnv);
+			})));
+		this.globalEnv.defineFunction(LispNames.PRINT_OBJECT_DEFAULT_INTERNAL,
+				new LispFunction(LispNames.PRINT_OBJECT_DEFAULT_INTERNAL, args -> {
+					requireSingleArg(LispNames.PRINT_OBJECT_DEFAULT_INTERNAL, args);
+					// A direct call can be this program's first use of the printer.
+					ensurePrintObjectRuntimeLoaded(printControlsInEffect());
+					return eval(LispMacroExpander.expandPrintObjectDefault(quoteValue(args.get(0)), true),
+							this.globalEnv);
+				}));
+		this.globalEnv.defineFunction(LispNames.PRINT_CASED_TYPE_NAME_INTERNAL,
+				new LispFunction(LispNames.PRINT_CASED_TYPE_NAME_INTERNAL, args -> {
+					requireSingleArg(LispNames.PRINT_CASED_TYPE_NAME_INTERNAL, args);
+					return printControlsInEffect()
+							? eval(LispMacroExpander.expandPrintedTypeName(quoteValue(args.get(0)), true),
+									this.globalEnv)
+							: args.get(0);
+				}));
+		// The package half of %print-cased's fast path: under the pristine cl-user no
+		// qualified symbol is accessible, so the raw conversion is exact.
+		this.globalEnv.defineFunction(LispNames.PRINT_PACKAGE_RAW_P_INTERNAL,
+				new LispFunction(LispNames.PRINT_PACKAGE_RAW_P_INTERNAL, args -> {
+					if (!args.isEmpty()) {
+						throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+								LispNames.PRINT_PACKAGE_RAW_P_INTERNAL + " expects 0 arguments, got " + args.size());
+					}
+					return this.packageResolver.currentPackageIsPristineClUser() ? LispTrue.INSTANCE : LispNil.INSTANCE;
+				}));
+		// list-all-packages / package-use-list / package-used-by-list: the registry
+		// queries, over the LIVE registry (so a package created after this program was
+		// read counts). A "package" is its upcased canonical name as a keyword, so the
+		// listings are lists of those. The compile paths answer the same three from the
+		// use table baked in at compile time (LispMacroExpander.expandPackageQuery).
+		this.globalEnv.defineFunction(LispNames.LIST_ALL_PACKAGES,
+				new LispFunction(LispNames.LIST_ALL_PACKAGES, args -> {
+					if (!args.isEmpty()) {
+						throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+								LispNames.LIST_ALL_PACKAGES + " expects 0 arguments, got " + args.size());
+					}
+					return packageKeywordList(this.packageResolver.runtimePackageUseTable().keySet());
+				}));
+		this.globalEnv.defineFunction(LispNames.PACKAGE_USE_LIST, new LispFunction(LispNames.PACKAGE_USE_LIST, args -> {
+			requireSingleArg(LispNames.PACKAGE_USE_LIST, args);
+			return packageKeywordList(packageUseEntry(LispNames.PACKAGE_USE_LIST,
+					packageDesignator(LispNames.PACKAGE_USE_LIST, args.get(0))));
+		}));
+		this.globalEnv.defineFunction(LispNames.PACKAGE_USED_BY_LIST,
+				new LispFunction(LispNames.PACKAGE_USED_BY_LIST, args -> {
+					requireSingleArg(LispNames.PACKAGE_USED_BY_LIST, args);
+					String name = packageName(LispNames.PACKAGE_USED_BY_LIST,
+							packageDesignator(LispNames.PACKAGE_USED_BY_LIST, args.get(0)));
+					List<String> users = new ArrayList<>();
+					this.packageResolver.runtimePackageUseTable().forEach((pkg, used) -> {
+						if (used.contains(name)) {
+							users.add(pkg);
+						}
+					});
+					return packageKeywordList(users);
+				}));
+		// make-package / delete-package / rename-package / package-nicknames: the
+		// runtime-tier package API over the LIVE registry (so a package created here is
+		// visible to the forms evaluated after it). The compiled backends serve the
+		// same operators from prelude defuns over the baked table plus the
+		// %runtime-packages% table; failures signal a catchable package-error on all
+		// four backends, carrying the offending designator in its package slot.
+		this.globalEnv.defineFunction(LispNames.MAKE_PACKAGE, new LispFunction(LispNames.MAKE_PACKAGE, args -> {
+			if (args.isEmpty()) {
+				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+						LispNames.MAKE_PACKAGE + " expects a package name");
+			}
+			String name = packageDesignator(LispNames.MAKE_PACKAGE, args.get(0));
+			List<String> use = new ArrayList<>();
+			List<String> nicknames = new ArrayList<>();
+			for (int i = 1; i < args.size(); i += 2) {
+				if (i + 1 >= args.size() || !(args.get(i) instanceof LispSymbol key) || !key.isKeyword()) {
+					throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+							LispNames.MAKE_PACKAGE + " expects :use / :nicknames keyword arguments");
+				}
+				List<String> values = designatorList(LispNames.MAKE_PACKAGE, args.get(i + 1));
+				if (LispNames.USE_KEYWORD.equals(key.name())) {
+					use.addAll(values);
+				}
+				else if (LispNames.NICKNAMES_KEYWORD.equals(key.name())) {
+					nicknames.addAll(values);
+				}
+				else {
+					throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+							LispNames.MAKE_PACKAGE + " does not accept " + key.name());
+				}
+			}
+			try {
+				return packageKeyword(this.packageResolver.createRuntimePackage(name, use, nicknames));
+			}
+			catch (am.ik.rontolisp.RuntimePackageException ex) {
+				return signalPackageError(java.util.Objects.requireNonNullElse(ex.getMessage(), LispNames.MAKE_PACKAGE),
+						ex.designator());
+			}
+		}));
+		this.globalEnv.defineFunction(LispNames.DELETE_PACKAGE, new LispFunction(LispNames.DELETE_PACKAGE, args -> {
+			requireSingleArg(LispNames.DELETE_PACKAGE, args);
+			String designator = packageDesignator(LispNames.DELETE_PACKAGE, args.get(0));
+			try {
+				this.packageResolver.deleteRuntimePackage(designator);
+				return LispTrue.INSTANCE;
+			}
+			catch (am.ik.rontolisp.RuntimePackageException ex) {
+				return signalPackageError(
+						java.util.Objects.requireNonNullElse(ex.getMessage(), LispNames.DELETE_PACKAGE),
+						ex.designator());
+			}
+		}));
+		this.globalEnv.defineFunction(LispNames.RENAME_PACKAGE, new LispFunction(LispNames.RENAME_PACKAGE, args -> {
+			if (args.size() < 2 || args.size() > 3) {
+				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+						LispNames.RENAME_PACKAGE + " expects a package, a new name and optional new nicknames");
+			}
+			String designator = packageDesignator(LispNames.RENAME_PACKAGE, args.get(0));
+			String newName = packageDesignator(LispNames.RENAME_PACKAGE, args.get(1));
+			List<String> newNicknames = args.size() == 3 ? designatorList(LispNames.RENAME_PACKAGE, args.get(2))
+					: List.of();
+			try {
+				return packageKeyword(this.packageResolver.renameRuntimePackage(designator, newName, newNicknames));
+			}
+			catch (am.ik.rontolisp.RuntimePackageException ex) {
+				return signalPackageError(
+						java.util.Objects.requireNonNullElse(ex.getMessage(), LispNames.RENAME_PACKAGE),
+						ex.designator());
+			}
+		}));
+		this.globalEnv.defineFunction(LispNames.PACKAGE_NICKNAMES,
+				new LispFunction(LispNames.PACKAGE_NICKNAMES, args -> {
+					requireSingleArg(LispNames.PACKAGE_NICKNAMES, args);
+					String designator = packageDesignator(LispNames.PACKAGE_NICKNAMES, args.get(0));
+					try {
+						List<String> nicknames = this.packageResolver.standardPackageNicknames(designator);
+						LispVal out = LispNil.INSTANCE;
+						for (int i = nicknames.size() - 1; i >= 0; i--) {
+							out = new LispCons(new LispString(nicknames.get(i)), out);
+						}
+						return out;
+					}
+					catch (am.ik.rontolisp.RuntimePackageException ex) {
+						return signalPackageError(
+								java.util.Objects.requireNonNullElse(ex.getMessage(), LispNames.PACKAGE_NICKNAMES),
+								ex.designator());
+					}
+				}));
+		// %do-symbols-list: the universe list behind the find-all-symbols /
+		// apropos-list prelude defuns (which call it directly) on the interpreter --
+		// over the LIVE registry, like evalDoSymbols. Overrides the backend-neutral
+		// prelude defun, which reads the compiled backends' injected %baked-packages%
+		// table instead (the symbol-package precedent).
+		this.globalEnv.defineFunction(LispNames.DO_SYMBOLS_LIST_INTERNAL,
+				new LispFunction(LispNames.DO_SYMBOLS_LIST_INTERNAL, args -> {
+					if (args.size() != 3) {
+						throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+								LispNames.DO_SYMBOLS_LIST_INTERNAL + " expects 3 arguments, got " + args.size());
+					}
+					String operator = args.get(2) instanceof LispString op ? op.value() : LispNames.DO_SYMBOLS;
+					String designator = packageDesignator(operator, args.get(0));
+					boolean externalOnly = !(args.get(1) instanceof LispNil);
+					if (this.packageResolver.findPackageName(designator) == null) {
+						// The same computed-control signal the prelude helper emits,
+						// so the message matches on every backend.
+						LispVal control = new LispCons(new LispSymbol(LispNames.CONCATENATE), new LispCons(
+								quoteValue(new LispString(operator + ": no package named ~A")), LispNil.INSTANCE));
+						LispVal form = new LispCons(new LispSymbol(LispNames.ERROR),
+								new LispCons(control, new LispCons(quoteValue(args.get(0)), LispNil.INSTANCE)));
+						return eval(form, this.globalEnv);
+					}
+					List<LispSymbol> symbols = externalOnly ? this.packageResolver.externalSymbols(designator)
+							: this.packageResolver.accessibleSymbols(designator);
+					LispVal out = LispNil.INSTANCE;
+					for (int i = symbols.size() - 1; i >= 0; i--) {
+						out = new LispCons(symbolOfSpelling(symbols.get(i).name()), out);
+					}
+					return out;
+				}));
+		// %package-spelling-normalize: the spelling code uses for an enumerated
+		// symbol, over the LIVE registry (a re-export redirect resolved to its home
+		// through memberSpelling, anything else unchanged). Overrides the
+		// backend-neutral prelude defun, which reads the baked import redirects
+		// instead (the symbol-package precedent).
+		this.globalEnv.defineFunction(LispNames.PACKAGE_SPELLING_NORMALIZE_INTERNAL,
+				new LispFunction(LispNames.PACKAGE_SPELLING_NORMALIZE_INTERNAL, args -> {
+					requireSingleArg(LispNames.PACKAGE_SPELLING_NORMALIZE_INTERNAL, args);
+					if (args.get(0) instanceof LispTrue || args.get(0) instanceof LispNil) {
+						// t and nil are their own canonical spellings.
+						return args.get(0);
+					}
+					if (!(args.get(0) instanceof LispSymbol sym)) {
+						throw new LispEvalException(LispNames.PACKAGE_SPELLING_NORMALIZE_INTERNAL
+								+ " expects a symbol, got " + args.get(0).print());
+					}
+					String spelling = sym.name();
+					if (spelling.startsWith("#:") || spelling.startsWith(":")) {
+						return sym;
+					}
+					PackageRegistry.QualifiedName qualified = PackageRegistry.splitQualified(spelling);
+					if (qualified == null || qualified.internal()) {
+						return sym;
+					}
+					String home = this.packageResolver.findGlobalPackageName(qualified.pkg());
+					if (home == null) {
+						return sym;
+					}
+					String normalized = this.packageResolver.memberSpelling(home, qualified.member());
+					return normalized == null ? sym : new LispSymbol(normalized);
+				}));
+		// import: the same split as use-package/export -- a literal top-level call is
+		// consumed by the PackageResolver (so it works on every backend), and this
+		// runtime binding serves the computed calls only the interpreter can run,
+		// resolving against the very same resolver so it takes effect for the forms read
+		// after it.
+		this.globalEnv.defineFunction(LispNames.IMPORT, new LispFunction(LispNames.IMPORT, args -> {
+			if (args.isEmpty() || args.size() > 2) {
+				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+						LispNames.IMPORT + " expects 1 or 2 arguments, got " + args.size());
+			}
+			String target = args.size() == 2 ? packageNameDesignator(LispNames.IMPORT, args.get(1))
+					: this.packageResolver.currentPackageName();
+			// A symbol or a LIST of symbols, like CL; a different symbol of the same
+			// name already present in the target is a name conflict (package-error).
+			try {
+				this.packageResolver.importSymbols(symbolSpellings(LispNames.IMPORT, args.get(0), target), target);
+			}
+			catch (am.ik.rontolisp.RuntimePackageException ex) {
+				return signalPackageError(java.util.Objects.requireNonNullElse(ex.getMessage(), LispNames.IMPORT),
+						ex.designator());
+			}
+			return LispTrue.INSTANCE;
+		}));
+		// symbol-package: the same keyword shape find-package yields, so the two are
+		// eq-comparable (ironclad's massage-symbol pattern); nil for an uninterned (#:)
+		// symbol. Overrides the backend-neutral prelude defun, which cannot tell cl
+		// from cl-user without the registry.
+		this.globalEnv.defineFunction(LispNames.SYMBOL_PACKAGE, new LispFunction(LispNames.SYMBOL_PACKAGE, args -> {
+			requireSingleArg(LispNames.SYMBOL_PACKAGE, args);
+			String name = switch (args.get(0)) {
+				case LispSymbol sym -> sym.name();
+				case LispTrue ignored -> "T";
+				case LispNil ignored -> "NIL";
+				default -> throw new LispEvalException(
+						LispNames.SYMBOL_PACKAGE + " expects a symbol, got " + args.get(0).print());
+			};
+			String pkg = this.packageResolver.symbolPackageName(name);
+			return pkg == null ? LispNil.INSTANCE : packageKeyword(pkg);
+		}));
+		// error / signal / warn are real CL functions (cl-base64 signals via
+		// (apply #'error args)), so they get function values that rebuild the literal
+		// call from the evaluated arguments and re-enter the evaluator -- identical
+		// semantics to the lowered form, condition-designator protocol included. A
+		// keyword, string, or other self-evaluating argument stays literal (the
+		// designator matchers read them from the form); symbols and lists are quoted.
+		for (String opName : List.of(LispNames.ERROR, LispNames.SIGNAL, LispNames.WARN)) {
+			this.globalEnv.defineFunction(opName,
+					new LispFunction(opName, args -> eval(rebuildSignalForm(opName, args), this.globalEnv)));
+		}
+		// format is a lowered operator in call position, but also a real CL function
+		// (jzon's condition reports run (apply #'format stream control args)). The
+		// control string is a RUNTIME value here, so the function value renders it with
+		// the shared runtime renderer -- the very code the compiled #'format wrapper
+		// calls, so a control string reaching format through a function value renders
+		// identically on all four backends. The destination's dispatch is the prelude's,
+		// the one a format call with a computed destination takes.
+		this.globalEnv.defineFunction(LispNames.FORMAT, new LispFunction(LispNames.FORMAT, args -> {
+			if (args.size() < 2) {
+				throw new LispEvalException(LispNames.FORMAT + " expects a destination and a control string");
+			}
+			LispVal rendered = eval(
+					FormatRenderer.call(quotedValue(args.get(1)), quotedValue(valueList(args.subList(2, args.size())))),
+					this.globalEnv);
+			LispVal startsFresh = new LispCons(new LispSymbol(LispNames.FMT_STARTS_FRESH),
+					new LispCons(quotedValue(args.get(1)), LispNil.INSTANCE));
+			return eval(
+					new LispCons(new LispSymbol(LispNames.FORMAT_WRITE_INTERNAL),
+							new LispCons(quotedValue(args.get(0)),
+									new LispCons(quotedValue(rendered), new LispCons(startsFresh, LispNil.INSTANCE)))),
+					this.globalEnv);
+		}));
+		installStreamOperandChecks();
+		this.globalEnv.defineFunction(LispNames.CERROR, new LispFunction(LispNames.CERROR, args -> {
+			if (args.size() < 2) {
+				throw new LispEvalException(LispNames.CERROR + " expects a continue format control and a datum");
+			}
+			return eval(rebuildSignalForm(LispNames.CERROR, args), this.globalEnv);
+		}));
+		this.funcallBuiltin = new LispFunction(LispNames.FUNCALL, args -> {
+			if (args.isEmpty()) {
+				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+						ClosRegistry.arityMessage(LispNames.FUNCALL, 1, true, 0));
+			}
+			return apply(args.get(0), args.subList(1, args.size()), this.globalEnv);
+		}, true);
+		this.globalEnv.defineFunction(LispNames.FUNCALL, this.funcallBuiltin);
+		// %async-run (the async-defun/async-lambda lowering primitive) lives here rather
+		// than in Environment because running the body thunk needs the evaluator's
+		// apply. rontolisp:await itself is a special form (evalCons), not a function.
+		// evalCons calls runAsync itself when the call is in a lambda's body, so the
+		// condition trace can name the async function; this function value is what any
+		// other route (funcall, apply) reaches.
+		String asyncRunName = LispNames.ASYNC_RUN_QUALIFIED;
+		this.asyncRunBuiltin = new LispFunction(asyncRunName, args -> runAsync(args, null));
+		this.globalEnv.defineFunction(asyncRunName, this.asyncRunBuiltin);
+		// %future-force: the FUNCTION spelling of await's resolve, for synchronous
+		// boundaries (the http-reactor transport resolving a future-valued application
+		// answer). A function, not a special form, so the lexical await-placement rule
+		// does not apply; a non-future passes through, and a future's values come back
+		// as await's do (the compile paths compile it to the same resolve).
+		String futureForceName = LispNames.FUTURE_FORCE_QUALIFIED;
+		this.globalEnv.defineFunction(futureForceName, new LispFunction(futureForceName, args -> {
+			if (args.size() != 1) {
+				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+						LispNames.FUTURE_FORCE_INTERNAL + " expects 1 argument, got " + args.size());
+			}
+			return awaitValues(args.get(0));
+		}, true));
+		// %future-settled-p: whether a future has settled, without waiting (t for a
+		// non-future, which an await answers at once).
+		String futureSettledName = LispNames.FUTURE_SETTLED_QUALIFIED;
+		this.globalEnv.defineFunction(futureSettledName, new LispFunction(futureSettledName, args -> {
+			if (args.size() != 1) {
+				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+						LispNames.FUTURE_SETTLED_INTERNAL + " expects 1 argument, got " + args.size());
+			}
+			return !(args.get(0) instanceof LispFuture future) || future.future().isDone() ? LispTrue.INSTANCE
+					: LispNil.INSTANCE;
+		}, true));
+		// %stream-new: the from-thunk stream constructor every backend shares -- a read
+		// thunk, a close thunk and a drained flag is all a stream IS. Here rather than in
+		// Environment for the %async-run reason: pulling a chunk means APPLYING a Lisp
+		// function. The resolve is the evaluator's too, so LispStream never sees a future
+		// -- a thunk that answers one (an async-lambda, a suspending host import on the
+		// WASM tiers) settles here, at the read, exactly where the WASM tiers resolve it.
+		String streamNewName = LispNames.STREAM_NEW_INTERNAL_QUALIFIED;
+		this.globalEnv.defineFunction(streamNewName, new LispFunction(streamNewName, args -> {
+			if (args.size() != 2) {
+				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+						LispNames.STREAM_NEW_INTERNAL + " expects 2 arguments, got " + args.size());
+			}
+			LispVal readFn = args.get(0);
+			LispVal closeFn = args.get(1);
+			return LispStream.pull(() -> awaitValue(apply(readFn, List.of(), this.globalEnv)),
+					() -> apply(closeFn, List.of(), this.globalEnv));
+		}));
+		// The thread primitives live here rather than in Environment because running the
+		// spawned function needs the evaluator's apply (the %async-run precedent). The
+		// handle is opaque (LispThread; the JVM backend hands out a marker-headed array
+		// instead, and the WASM backends have none). The optional bindings alist of
+		// (symbol . value) pairs is established as dynamic bindings in the NEW thread
+		// only: DynamicBindings is thread-scoped, so the spawned thread inherits no
+		// bindings from its spawner and its own pushes die with it -- no pop is needed.
+		String makeThreadName = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.MAKE_THREAD);
+		this.globalEnv.defineFunction(makeThreadName, new LispFunction(makeThreadName, args -> {
+			if (args.isEmpty() || args.size() > 3) {
+				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+						LispNames.MAKE_THREAD + " expects 1 to 3 arguments, got " + args.size());
+			}
+			String refused = this.threadsRefused;
+			if (refused != null) {
+				throw new LispEvalException(refused);
+			}
+			LispVal fn = args.get(0);
+			List<String> bindingNames = new ArrayList<>();
+			List<LispVal> bindingValues = new ArrayList<>();
+			if (args.size() >= 2) {
+				LispVal cur = args.get(1);
+				while (cur instanceof LispCons cons) {
+					if (!(cons.car() instanceof LispCons pair) || !(pair.car() instanceof LispSymbol sym)) {
+						throw new LispEvalException(LispNames.MAKE_THREAD
+								+ " expects an alist of (symbol . value) bindings, got " + args.get(1).print());
+					}
+					bindingNames.add(sym.name());
+					bindingValues.add(pair.cdr());
+					cur = cons.cdr();
+				}
+				if (!(cur instanceof LispNil)) {
+					throw new LispEvalException(LispNames.MAKE_THREAD
+							+ " expects an alist of (symbol . value) bindings, got " + args.get(1).print());
+				}
+			}
+			if (!bindingNames.isEmpty()) {
+				// Like progv, a bound name need not be proclaimed special, so reads must
+				// consult the dynamic store even when specialVars is empty.
+				this.progvUsed = true;
+			}
+			String spawnerPackage = this.packageResolver.currentPackageName();
+			return AsyncRuntime.spawnThread(() -> {
+				try {
+					for (int i = 0; i < bindingNames.size(); i++) {
+						this.dynamicBindings.push(bindingNames.get(i), bindingValues.get(i));
+					}
+					return withOwnPackage(spawnerPackage, () -> apply(fn, List.of(), this.globalEnv));
+				}
+				finally {
+					programThreadEnded();
+				}
+			}, args.size() == 3 ? args.get(2) : LispNil.INSTANCE, this::programThreadStarting);
+		}));
+		String joinThreadName = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.JOIN_THREAD);
+		this.globalEnv.defineFunction(joinThreadName, new LispFunction(joinThreadName, args -> {
+			LispThread thread = requireThread(LispNames.JOIN_THREAD, args);
+			try {
+				LispVal value = thread.result().join();
+				// Also wait for the thread itself to die, so thread-alive-p answers nil
+				// deterministically after a join (the result settles inside the body,
+				// a beat before the thread's teardown). The playground ran the body on
+				// this
+				// very thread, which no join would see die.
+				if (thread.thread() != Thread.currentThread()) {
+					thread.thread().join();
+				}
+				return value;
+			}
+			catch (InterruptedException ex) {
+				if (resumeAfterInterrupt()) {
+					return thread.result().join();
+				}
+				Thread.currentThread().interrupt();
+				throw new LispEvalException(LispNames.JOIN_THREAD + ": interrupted while joining the thread");
+			}
+			catch (java.util.concurrent.CompletionException ex) {
+				// Re-signal what the thread died on: the original condition-carrying
+				// runtime exception, so handler-case in the joiner dispatches by type.
+				if (ex.getCause() instanceof RuntimeException cause) {
+					throw cause;
+				}
+				throw new LispEvalException(LispNames.JOIN_THREAD + ": the thread died: " + ex.getCause());
+			}
+		}));
+		String threadpName = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.THREADP);
+		this.globalEnv.defineFunction(threadpName, new LispFunction(threadpName, args -> {
+			if (args.size() != 1) {
+				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+						LispNames.THREADP + " expects 1 argument, got " + args.size());
+			}
+			return args.get(0) instanceof LispThread ? LispTrue.INSTANCE : LispNil.INSTANCE;
+		}));
+		String threadAlivePName = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.THREAD_ALIVE_P);
+		this.globalEnv.defineFunction(threadAlivePName, new LispFunction(threadAlivePName, args -> {
+			LispThread thread = requireThread(LispNames.THREAD_ALIVE_P, args);
+			return thread.thread().isAlive() ? LispTrue.INSTANCE : LispNil.INSTANCE;
+		}));
+		String destroyThreadName = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.DESTROY_THREAD);
+		this.globalEnv.defineFunction(destroyThreadName, new LispFunction(destroyThreadName, args -> {
+			LispThread thread = requireThread(LispNames.DESTROY_THREAD, args);
+			thread.thread().interrupt();
+			return thread;
+		}));
+		// %thread-name: the name make-thread was given (nil for none, and for a thread
+		// it did not spawn) -- bordeaux-threads:thread-name.
+		String threadNameName = LispNames.THREAD_NAME_INTERNAL_QUALIFIED;
+		this.globalEnv.defineFunction(threadNameName,
+				new LispFunction(threadNameName, args -> requireThread(LispNames.THREAD_NAME, args).name()));
+		String currentThreadName = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.CURRENT_THREAD);
+		this.globalEnv.defineFunction(currentThreadName, new LispFunction(currentThreadName, args -> {
+			if (!args.isEmpty()) {
+				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+						LispNames.CURRENT_THREAD + " expects no arguments, got " + args.size());
+			}
+			return AsyncRuntime.currentThreadHandle();
+		}));
+		// http-handler lives here rather than in Environment because serving a request
+		// applies the handler function, which needs the evaluator's apply. It runs a
+		// blocking embedded HTTP server; the handler receives a CLACK ENVIRONMENT plist
+		// and returns a CLACK RESPONSE, (status headers [body]) -- the shape is declared
+		// once, in http-server.lisp, for every backend. When compiled with --component
+		// the same directive instead exports wasi:http/handler (see the WASM compiler).
+		String httpHandlerName = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.HTTP_HANDLER);
+		this.globalEnv.defineFunction(httpHandlerName, new LispFunction(httpHandlerName, args -> {
+			if (args.isEmpty() || args.size() > 4) {
+				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+						LispNames.HTTP_HANDLER + " expects 1 to 4 arguments, got " + args.size());
+			}
+			int port = 8080;
+			if (args.size() >= 2 && !(args.get(1) instanceof LispSymbol)) {
+				if (!(args.get(1) instanceof LispInteger portArg)) {
+					throw new LispEvalException(
+							LispNames.HTTP_HANDLER + " expects an integer port, got: " + args.get(1).print());
+				}
+				port = (int) portArg.value();
+			}
+			boolean bufferBody = httpHandlerBufferBody(args);
+			final LispVal handler = args.get(0);
+			ensureHttpServerLoaded();
+			try {
+				String servingPackage = this.packageResolver.currentPackageName();
+				RontoHttpServer.serve(port, request -> withOwnPackage(servingPackage,
+						() -> invokeHttpHandler(handler, request, bufferBody)));
+			}
+			catch (RontoHttpServer.ServerException ex) {
+				// The server lives in the TRAVELLING runtime package, which carries no
+				// rontolisp import and so cannot raise a Lisp error itself; the
+				// interpreter is where its failure becomes one and handler-case can see
+				// it.
+				throw new LispEvalException(ex.reason());
+			}
+			return LispNil.INSTANCE; // serve() blocks forever; unreachable in practice
+		}));
+		// The stoppable HTTP server seam behind the clack-handler-rontolisp shim
+		// (internal rontolisp::%http-server-*): start takes a FUNCTION VALUE (unlike
+		// the directive's quoted name), binds address:port and returns an opaque
+		// handle; join blocks until stop (or the acceptor thread's interrupt -- the
+		// clack :use-thread t stop path); stop is idempotent. Registered here like
+		// http-handler because serving applies the handler via the evaluator.
+		String httpServerStartName = PackageRegistry.qualifyInternal(LispNames.RONTOLISP_PKG,
+				LispNames.HTTP_SERVER_START);
+		this.globalEnv.defineFunction(httpServerStartName, new LispFunction(httpServerStartName, args -> {
+			if (args.size() < 3 || args.size() > 5) {
+				throw new LispEvalException(LispNames.HTTP_SERVER_START
+						+ " expects (handler port address [:raw-body mode]), got " + args.size());
+			}
+			boolean bufferBody = httpHandlerBufferBody(args);
+			final LispVal handler = args.get(0);
+			if (!(args.get(1) instanceof LispInteger portArg)) {
+				throw new LispEvalException(
+						LispNames.HTTP_SERVER_START + " expects an integer port, got: " + args.get(1).print());
+			}
+			// "" is the wildcard: the server takes anything that is not a non-empty
+			// string that way, which is also how compiled bytecode's nil (a real null)
+			// arrives there.
+			String address = switch (args.get(2)) {
+				case LispString str -> str.value();
+				case LispNil ignored -> "";
+				default -> throw new LispEvalException(LispNames.HTTP_SERVER_START
+						+ " expects a string (or nil) address, got: " + args.get(2).print());
+			};
+			ensureHttpServerLoaded();
+			final long handle;
+			String servingPackage = this.packageResolver.currentPackageName();
+			try {
+				handle = RontoHttpServer.startServer((int) portArg.value(), address,
+						request -> withOwnPackage(servingPackage,
+								() -> invokeHttpHandler(handler, request, bufferBody)));
+			}
+			catch (RontoHttpServer.ServerException ex) {
+				throw new LispEvalException(ex.reason());
+			}
+			return new LispInteger(handle);
+		}));
+		String httpServerJoinName = PackageRegistry.qualifyInternal(LispNames.RONTOLISP_PKG,
+				LispNames.HTTP_SERVER_JOIN);
+		this.globalEnv.defineFunction(httpServerJoinName, new LispFunction(httpServerJoinName, args -> {
+			RontoHttpServer.joinServer(requireHttpServerHandle(LispNames.HTTP_SERVER_JOIN, args));
+			return LispNil.INSTANCE;
+		}));
+		String httpServerStopName = PackageRegistry.qualifyInternal(LispNames.RONTOLISP_PKG,
+				LispNames.HTTP_SERVER_STOP);
+		this.globalEnv.defineFunction(httpServerStopName, new LispFunction(httpServerStopName, args -> {
+			// an optional second argument drains: the caller has answered every request
+			// it took, so what is open is a response still being written
+			boolean drain = args.size() == 2 && isTruthy(args.get(1));
+			RontoHttpServer.stopServer(
+					requireHttpServerHandle(LispNames.HTTP_SERVER_STOP, args.size() == 2 ? args.subList(0, 1) : args),
+					drain);
+			return LispNil.INSTANCE;
+		}));
+		String httpServerPortName = PackageRegistry.qualifyInternal(LispNames.RONTOLISP_PKG,
+				LispNames.HTTP_SERVER_PORT);
+		this.globalEnv.defineFunction(httpServerPortName, new LispFunction(httpServerPortName, args -> {
+			return new LispInteger(
+					RontoHttpServer.serverPort(requireHttpServerHandle(LispNames.HTTP_SERVER_PORT, args)));
+		}));
+		// An exchange the application answers itself, from any thread (the two-step
+		// serve of http-serve.lisp): taken on the thread that dispatches it, then its
+		// head,
+		// its octets and its end, which writes the response whole and closes the
+		// exchange.
+		String httpServerTakeName = PackageRegistry.qualifyInternal(LispNames.RONTOLISP_PKG,
+				LispNames.HTTP_SERVER_TAKE);
+		this.globalEnv.defineFunction(httpServerTakeName,
+				new LispFunction(httpServerTakeName, args -> new LispJavaObject(RontoHttpServer.take())));
+		String httpServerHeadName = PackageRegistry.qualifyInternal(LispNames.RONTOLISP_PKG,
+				LispNames.HTTP_SERVER_HEAD);
+		this.globalEnv.defineFunction(httpServerHeadName, new LispFunction(httpServerHeadName, args -> {
+			if (args.size() != 3 || !(args.get(1) instanceof LispInteger status)) {
+				throw new LispEvalException(LispNames.HTTP_SERVER_HEAD + " expects (reply status fields)");
+			}
+			RontoHttpServer.head(httpServerReply(LispNames.HTTP_SERVER_HEAD, args), (int) status.value(),
+					responseHeaders(args.get(2)));
+			return LispNil.INSTANCE;
+		}));
+		String httpServerWriteName = PackageRegistry.qualifyInternal(LispNames.RONTOLISP_PKG,
+				LispNames.HTTP_SERVER_WRITE);
+		this.globalEnv.defineFunction(httpServerWriteName, new LispFunction(httpServerWriteName, args -> {
+			if (args.size() != 2 || !(args.get(1) instanceof LispIntVector octets)) {
+				throw new LispEvalException(LispNames.HTTP_SERVER_WRITE + " expects (reply octets)");
+			}
+			RontoHttpServer.write(httpServerReply(LispNames.HTTP_SERVER_WRITE, args), octetsBytes(octets));
+			return LispNil.INSTANCE;
+		}));
+		String httpServerFinishName = PackageRegistry.qualifyInternal(LispNames.RONTOLISP_PKG,
+				LispNames.HTTP_SERVER_FINISH);
+		this.globalEnv.defineFunction(httpServerFinishName, new LispFunction(httpServerFinishName, args -> {
+			if (args.size() != 2) {
+				throw new LispEvalException(LispNames.HTTP_SERVER_FINISH + " expects (reply failed)");
+			}
+			RontoHttpServer.finish(httpServerReply(LispNames.HTTP_SERVER_FINISH, args), isTruthy(args.get(1)));
+			return LispNil.INSTANCE;
+		}));
+		registerSwankHost();
+		registerFunctionLambdaList();
+		registerMacroexpandAll();
+		// The JSON functions live here because they dispatch to the Lisp-source
+		// library (JsonLibrary), evaluated into the global environment on first use.
+		String jsonParseName = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.JSON_PARSE);
+		this.globalEnv.defineFunction(jsonParseName, new LispFunction(jsonParseName, args -> {
+			if (args.size() != 1) {
+				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+						LispNames.JSON_PARSE + " expects 1 argument, got " + args.size());
+			}
+			return applyJsonHelper(JsonLibrary.HELPER_PARSE, List.of(args.get(0)));
+		}));
+		String jsonStringifyName = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.JSON_STRINGIFY);
+		this.globalEnv.defineFunction(jsonStringifyName, new LispFunction(jsonStringifyName, args -> {
+			if (args.size() != 1) {
+				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+						LispNames.JSON_STRINGIFY + " expects 1 argument, got " + args.size());
+			}
+			return applyJsonHelper(JsonLibrary.HELPER_STRINGIFY, List.of(args.get(0)));
+		}));
+		// json-span and json-value: the document, then the path's segments, as one list.
+		// They pass on the helper's values (passesValues).
+		for (String member : new String[] { LispNames.JSON_SPAN, LispNames.JSON_VALUE }) {
+			String name = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, member);
+			String helper = member.equals(LispNames.JSON_SPAN) ? JsonLibrary.HELPER_SPAN : JsonLibrary.HELPER_VALUE;
+			this.globalEnv.defineFunction(name, new LispFunction(name, args -> {
+				if (args.isEmpty()) {
+					throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+							Objects.requireNonNull(BuiltinCallArity.wrongCountMessage(name, 0)));
+				}
+				LispVal path = LispNil.INSTANCE;
+				for (int i = args.size() - 1; i >= 1; i--) {
+					path = new LispCons(args.get(i), path);
+				}
+				return applyJsonHelper(helper, List.of(args.get(0), path));
+			}, true));
+		}
+		this.globalEnv.defineFunction(LispNames.MAPCAR, new LispFunction(LispNames.MAPCAR,
+				args -> mapValues(LispNames.MAPCAR, args.get(0), requireMapLists(LispNames.MAPCAR, args), false)));
+		this.globalEnv.defineFunction(LispNames.MAPC, new LispFunction(LispNames.MAPC,
+				args -> mapForEffect(LispNames.MAPC, args.get(0), requireMapLists(LispNames.MAPC, args), false)));
+		// maplist/mapcon/mapl are macro-expanded in call position (evalCons), but a
+		// first-class #'maplist has to resolve to something: without these the value path
+		// answered "The function MAPLIST is undefined" while both compile backends
+		// happily wrapped it.
+		this.globalEnv.defineFunction(LispNames.MAPLIST, new LispFunction(LispNames.MAPLIST,
+				args -> mapValues(LispNames.MAPLIST, args.get(0), requireMapLists(LispNames.MAPLIST, args), true)));
+		this.globalEnv.defineFunction(LispNames.MAPCON, new LispFunction(LispNames.MAPCON,
+				args -> mapcanValues(LispNames.MAPCON, args.get(0), requireMapLists(LispNames.MAPCON, args), true)));
+		this.globalEnv.defineFunction(LispNames.MAPL, new LispFunction(LispNames.MAPL,
+				args -> mapForEffect(LispNames.MAPL, args.get(0), requireMapLists(LispNames.MAPL, args), true)));
+		this.globalEnv.defineFunction(LispNames.MAPHASH, new LispFunction(LispNames.MAPHASH, args -> {
+			if (args.size() != 2) {
+				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+						LispNames.MAPHASH + " expects 2 arguments, got " + args.size());
+			}
+			if (!(args.get(1) instanceof LispHashTable table)) {
+				throw Environment.accessorTypeError(LispNames.MAPHASH, args.get(1), OperandTypes.Kind.HASH_TABLE);
+			}
+			for (LispHashTable.Entry entry : new ArrayList<>(table.entries())) {
+				apply(args.get(0), List.of(entry.key(), entry.value()), this.globalEnv);
+			}
+			return LispNil.INSTANCE;
+		}));
+		this.globalEnv.defineFunction(LispNames.REDUCE, new LispFunction(LispNames.REDUCE, args -> {
+			// (reduce fn seq) or (reduce fn seq :initial-value init); a string sequence
+			// folds over a list of its characters (Environment.seqAsList).
+			if (args.size() < 2) {
+				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+						ClosRegistry.arityMessage(LispNames.REDUCE, 2, true, args.size()));
+			}
+			if (args.size() == 2) {
+				LispVal list = Environment.seqAsList(args.get(1));
+				if (!(list instanceof LispCons first)) {
+					// CL: an empty sequence with no :initial-value calls the function
+					// with
+					// ZERO arguments and returns that -- (reduce #'append '()) is nil,
+					// not
+					// an error. The compile paths get the same rule from the shared
+					// LispMacroExpander.expandReduce guard.
+					return apply(args.get(0), List.of(), this.globalEnv);
+				}
+				return reduceValues(args.get(0), first.car(), first.cdr());
+			}
+			if (args.size() == 4 && args.get(2) instanceof LispSymbol kw
+					&& LispNames.INITIAL_VALUE_KEYWORD.equals(kw.name())) {
+				return reduceValues(args.get(0), args.get(3), Environment.seqAsList(args.get(1)));
+			}
+			if (args.size() % 2 == 0) {
+				// #'reduce with :key/:from-end/:start/:end: the call position lowers
+				// those
+				// (LispMacroExpander.expandReduce), so evaluate the same call over the
+				// values, quoted -- (funcall #'reduce f l :from-end t) answers what
+				// (reduce f l :from-end t) does.
+				LispVal tail = LispNil.INSTANCE;
+				for (int i = args.size() - 1; i >= 0; i--) {
+					tail = new LispCons(i >= 2 && i % 2 == 0 ? args.get(i) : quoteValue(args.get(i)), tail);
+				}
+				LispCons form = new LispCons(new LispSymbol(LispNames.REDUCE), tail);
+				if (LispMacroExpander.expandReduce(form) != null) {
+					return eval(form, this.globalEnv);
+				}
+			}
+			throw new LispEvalException(
+					LispNames.REDUCE + " expects (reduce fn list) or (reduce fn list :initial-value init)");
+		}));
+		this.globalEnv.defineFunction(LispNames.EVERY, new LispFunction(LispNames.EVERY,
+				args -> everyValues(args.get(0), predicateSequences(LispNames.EVERY, args))));
+		this.globalEnv.defineFunction(LispNames.SOME, new LispFunction(LispNames.SOME,
+				args -> someValues(args.get(0), predicateSequences(LispNames.SOME, args))));
+		// The find family IS the position family's scan with the matching ELEMENT as
+		// the answer, so both share one runtime and take the same keyword set.
+		this.globalEnv.defineFunction(LispNames.FIND, new LispFunction(LispNames.FIND,
+				args -> positionScanValues(LispNames.FIND, args, PositionScanMode.ITEM, true)));
+		this.globalEnv.defineFunction(LispNames.FIND_IF, new LispFunction(LispNames.FIND_IF,
+				args -> positionScanValues(LispNames.FIND_IF, args, PositionScanMode.PREDICATE, true)));
+		this.globalEnv.defineFunction(LispNames.FIND_IF_NOT, new LispFunction(LispNames.FIND_IF_NOT,
+				args -> positionScanValues(LispNames.FIND_IF_NOT, args, PositionScanMode.PREDICATE_NOT, true)));
+		// The position family is registered here (not in Environment) so the
+		// :test/:test-not/:key designators can be applied through the evaluator; the
+		// full keyword set (:start/:end/:from-end too) is parsed at runtime so
+		// first-class use through apply works (e.g. cl-utilities' split-sequence does
+		// (apply #'position delimiter seq :end right other-keys)). The call position
+		// routes through the shared macro expansion instead.
+		this.globalEnv.defineFunction(LispNames.POSITION, new LispFunction(LispNames.POSITION,
+				args -> positionScanValues(LispNames.POSITION, args, PositionScanMode.ITEM, false)));
+		this.globalEnv.defineFunction(LispNames.POSITION_IF, new LispFunction(LispNames.POSITION_IF,
+				args -> positionScanValues(LispNames.POSITION_IF, args, PositionScanMode.PREDICATE, false)));
+		this.globalEnv.defineFunction(LispNames.POSITION_IF_NOT, new LispFunction(LispNames.POSITION_IF_NOT,
+				args -> positionScanValues(LispNames.POSITION_IF_NOT, args, PositionScanMode.PREDICATE_NOT, false)));
+		// count/count-if and the whole remove/substitute family run one shared scan
+		// (sequenceScanValues) -- the runtime twin of the expander's, so a first-class
+		// #'remove and a (remove ...) call form take the same keywords and decide the
+		// same way. They are registered HERE, not in Environment, because the :test and
+		// :key designators are applied through the evaluator.
+		this.globalEnv.defineFunction(LispNames.COUNT, new LispFunction(LispNames.COUNT,
+				args -> sequenceScanValues(LispNames.COUNT, args, SeqScanMode.ITEM, SeqScanAction.COUNT, false)));
+		this.globalEnv.defineFunction(LispNames.COUNT_IF,
+				new LispFunction(LispNames.COUNT_IF, args -> sequenceScanValues(LispNames.COUNT_IF, args,
+						SeqScanMode.PREDICATE, SeqScanAction.COUNT, false)));
+		this.globalEnv.defineFunction(LispNames.REMOVE, new LispFunction(LispNames.REMOVE,
+				args -> sequenceScanValues(LispNames.REMOVE, args, SeqScanMode.ITEM, SeqScanAction.REMOVE, false)));
+		this.globalEnv.defineFunction(LispNames.DELETE, new LispFunction(LispNames.DELETE,
+				args -> sequenceScanValues(LispNames.DELETE, args, SeqScanMode.ITEM, SeqScanAction.REMOVE, true)));
+		this.globalEnv.defineFunction(LispNames.SUBSTITUTE,
+				new LispFunction(LispNames.SUBSTITUTE, args -> sequenceScanValues(LispNames.SUBSTITUTE, args,
+						SeqScanMode.ITEM, SeqScanAction.SUBSTITUTE, false)));
+		this.globalEnv.defineFunction(LispNames.NSUBSTITUTE,
+				new LispFunction(LispNames.NSUBSTITUTE, args -> sequenceScanValues(LispNames.NSUBSTITUTE, args,
+						SeqScanMode.ITEM, SeqScanAction.SUBSTITUTE, true)));
+		// The five set operations are registered HERE, not in Environment, for the same
+		// reason the position and sequence-scan families are: the :test / :test-not /
+		// :key designators are applied through the evaluator. setOperationValues is the
+		// runtime twin of expandUnion / expandIntersection / expandSetDifference /
+		// expandAdjoin / expandSubsetp -- same membership rule, same result order -- so
+		// (apply #'set-difference x y :test f) and (set-difference x y :test f) agree.
+		this.globalEnv.defineFunction(LispNames.UNION,
+				new LispFunction(LispNames.UNION, args -> setOperationValues(LispNames.UNION, SetOp.UNION, args)));
+		this.globalEnv.defineFunction(LispNames.INTERSECTION, new LispFunction(LispNames.INTERSECTION,
+				args -> setOperationValues(LispNames.INTERSECTION, SetOp.INTERSECTION, args)));
+		this.globalEnv.defineFunction(LispNames.SET_DIFFERENCE, new LispFunction(LispNames.SET_DIFFERENCE,
+				args -> setOperationValues(LispNames.SET_DIFFERENCE, SetOp.DIFFERENCE, args)));
+		this.globalEnv.defineFunction(LispNames.ADJOIN,
+				new LispFunction(LispNames.ADJOIN, args -> setOperationValues(LispNames.ADJOIN, SetOp.ADJOIN, args)));
+		this.globalEnv.defineFunction(LispNames.SUBSETP, new LispFunction(LispNames.SUBSETP,
+				args -> setOperationValues(LispNames.SUBSETP, SetOp.SUBSETP, args)));
+		// The -if spellings take :key (and only :key -- the predicate IS the test), so
+		// the arity is "at least 2" and the tail is validated by the same rule the
+		// expansion applies to a call form.
+		this.globalEnv.defineFunction(LispNames.MEMBER_IF, new LispFunction(LispNames.MEMBER_IF, args -> {
+			if (args.size() < 2) {
+				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+						LispNames.MEMBER_IF + " expects at least 2 arguments, got " + args.size());
+			}
+			requireKeyKeyword(LispNames.MEMBER_IF, args, 2);
+			return memberIfValues(args.get(0), args.get(1), presentKeyword(args, 2, LispNames.KEY_KEYWORD));
+		}));
+		this.globalEnv.defineFunction(LispNames.MEMBER, new LispFunction(LispNames.MEMBER, args -> {
+			if (args.size() < 2) {
+				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+						LispNames.MEMBER + " expects at least 2 arguments, got " + args.size());
+			}
+			// (member item list) compares with eql; (member item list :test fn) applies
+			// fn
+			// as (funcall fn item element), and :key applies a selector to each element
+			// before the test. The default eql designator keeps the historic behavior of
+			// the eql-based scan.
+			requireTestKeyKeywords(LispNames.MEMBER, args, 2);
+			RuntimeTest test = runtimeTest(args, 2);
+			LispVal keyFn = presentKeyword(args, 2, LispNames.KEY_KEYWORD);
+			LispVal item = args.get(0);
+			LispVal cur = args.get(1);
+			while (cur instanceof LispCons cell) {
+				LispVal elem = (keyFn == null) ? cell.car() : apply(keyFn, List.of(cell.car()), this.globalEnv);
+				if (testMatches(test, item, elem)) {
+					return cell;
+				}
+				cur = cell.cdr();
+			}
+			return Environment.requireListArgument(LispNames.MEMBER, cur);
+		}));
+		this.globalEnv.defineFunction(LispNames.ASSOC_IF, new LispFunction(LispNames.ASSOC_IF, args -> {
+			if (args.size() < 2) {
+				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+						LispNames.ASSOC_IF + " expects at least 2 arguments, got " + args.size());
+			}
+			requireKeyKeyword(LispNames.ASSOC_IF, args, 2);
+			return assocIfValues(args.get(0), args.get(1), presentKeyword(args, 2, LispNames.KEY_KEYWORD));
+		}));
+		this.globalEnv.defineFunction(LispNames.RASSOC_IF, new LispFunction(LispNames.RASSOC_IF, args -> {
+			if (args.size() < 2) {
+				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+						LispNames.RASSOC_IF + " expects at least 2 arguments, got " + args.size());
+			}
+			requireKeyKeyword(LispNames.RASSOC_IF, args, 2);
+			return rassocIfValues(args.get(0), args.get(1), presentKeyword(args, 2, LispNames.KEY_KEYWORD));
+		}));
+		this.globalEnv.defineFunction(LispNames.ASSOC, new LispFunction(LispNames.ASSOC, args -> {
+			if (args.size() < 2) {
+				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+						LispNames.ASSOC + " expects at least 2 arguments, got " + args.size());
+			}
+			// (assoc key alist) compares with eql; (assoc key alist :test fn) applies fn
+			// as (funcall fn key (car pair)), and :key applies a selector to each pair's
+			// car before the test, mirroring member.
+			requireTestKeyKeywords(LispNames.ASSOC, args, 2);
+			RuntimeTest test = runtimeTest(args, 2);
+			LispVal keyFn = presentKeyword(args, 2, LispNames.KEY_KEYWORD);
+			LispVal key = args.get(0);
+			LispVal cur = args.get(1);
+			while (cur instanceof LispCons cell) {
+				if (cell.car() instanceof LispCons pair) {
+					LispVal elem = (keyFn == null) ? pair.car() : apply(keyFn, List.of(pair.car()), this.globalEnv);
+					if (testMatches(test, key, elem)) {
+						return pair;
+					}
+				}
+				cur = cell.cdr();
+			}
+			return Environment.requireListArgument(LispNames.ASSOC, cur);
+		}));
+		this.globalEnv.defineFunction(LispNames.RASSOC, new LispFunction(LispNames.RASSOC, args -> {
+			if (args.size() < 2) {
+				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+						LispNames.RASSOC + " expects at least 2 arguments, got " + args.size());
+			}
+			// The mirror of assoc: matches each pair's cdr instead of its car.
+			requireTestKeyKeywords(LispNames.RASSOC, args, 2);
+			RuntimeTest test = runtimeTest(args, 2);
+			LispVal keyFn = presentKeyword(args, 2, LispNames.KEY_KEYWORD);
+			LispVal value = args.get(0);
+			LispVal cur = args.get(1);
+			while (cur instanceof LispCons cell) {
+				if (cell.car() instanceof LispCons pair) {
+					LispVal elem = (keyFn == null) ? pair.cdr() : apply(keyFn, List.of(pair.cdr()), this.globalEnv);
+					if (testMatches(test, value, elem)) {
+						return pair;
+					}
+				}
+				cur = cell.cdr();
+			}
+			return Environment.requireListArgument(LispNames.RASSOC, cur);
+		}));
+		this.globalEnv.defineFunction(LispNames.REMOVE_IF,
+				new LispFunction(LispNames.REMOVE_IF, args -> sequenceScanValues(LispNames.REMOVE_IF, args,
+						SeqScanMode.PREDICATE, SeqScanAction.REMOVE, false)));
+		this.globalEnv.defineFunction(LispNames.REMOVE_IF_NOT,
+				new LispFunction(LispNames.REMOVE_IF_NOT, args -> sequenceScanValues(LispNames.REMOVE_IF_NOT, args,
+						SeqScanMode.PREDICATE_NOT, SeqScanAction.REMOVE, false)));
+		// substitute-if/-if-not and their destructive n- twins: like substitute, but the
+		// element is selected by a predicate instead of an eql comparison. Registered
+		// here
+		// rather than in Environment because they call back into apply (the :key selector
+		// and the predicate itself).
+		this.globalEnv.defineFunction(LispNames.SUBSTITUTE_IF,
+				new LispFunction(LispNames.SUBSTITUTE_IF, args -> sequenceScanValues(LispNames.SUBSTITUTE_IF, args,
+						SeqScanMode.PREDICATE, SeqScanAction.SUBSTITUTE, false)));
+		this.globalEnv.defineFunction(LispNames.SUBSTITUTE_IF_NOT,
+				new LispFunction(LispNames.SUBSTITUTE_IF_NOT, args -> sequenceScanValues(LispNames.SUBSTITUTE_IF_NOT,
+						args, SeqScanMode.PREDICATE_NOT, SeqScanAction.SUBSTITUTE, false)));
+		this.globalEnv.defineFunction(LispNames.NSUBSTITUTE_IF,
+				new LispFunction(LispNames.NSUBSTITUTE_IF, args -> sequenceScanValues(LispNames.NSUBSTITUTE_IF, args,
+						SeqScanMode.PREDICATE, SeqScanAction.SUBSTITUTE, true)));
+		this.globalEnv.defineFunction(LispNames.NSUBSTITUTE_IF_NOT,
+				new LispFunction(LispNames.NSUBSTITUTE_IF_NOT, args -> sequenceScanValues(LispNames.NSUBSTITUTE_IF_NOT,
+						args, SeqScanMode.PREDICATE_NOT, SeqScanAction.SUBSTITUTE, true)));
+		// delete-if/delete-if-not are the destructive variants of
+		// remove-if/remove-if-not:
+		// splice out matching cells in place (Common Lisp semantics; use the return
+		// value).
+		this.globalEnv.defineFunction(LispNames.DELETE_IF,
+				new LispFunction(LispNames.DELETE_IF, args -> sequenceScanValues(LispNames.DELETE_IF, args,
+						SeqScanMode.PREDICATE, SeqScanAction.REMOVE, true)));
+		this.globalEnv.defineFunction(LispNames.DELETE_IF_NOT,
+				new LispFunction(LispNames.DELETE_IF_NOT, args -> sequenceScanValues(LispNames.DELETE_IF_NOT, args,
+						SeqScanMode.PREDICATE_NOT, SeqScanAction.REMOVE, true)));
+		// remove-duplicates/delete-duplicates take the same 17.2.1 keywords with a
+		// DIFFERENT meaning for the window, so they have their own runtime twin of the
+		// expansion (removeDuplicatesValues) -- registered here, not in Environment,
+		// because the :test/:test-not/:key designators are applied through the
+		// evaluator. Both spellings share it: delete-duplicates' contract lets the
+		// caller use only the RESULT, which is what the expansion relies on too.
+		for (String dedupName : List.of(LispNames.REMOVE_DUPLICATES, LispNames.DELETE_DUPLICATES)) {
+			this.globalEnv.defineFunction(dedupName,
+					new LispFunction(dedupName, args -> removeDuplicatesValues(dedupName, args)));
+		}
+		this.globalEnv.defineFunction(LispNames.MAPCAN, new LispFunction(LispNames.MAPCAN,
+				args -> mapcanValues(LispNames.MAPCAN, args.get(0), requireMapLists(LispNames.MAPCAN, args), false)));
+		this.globalEnv.defineFunction(LispNames.SORT, new LispFunction(LispNames.SORT, args -> {
+			if (args.size() < 2) {
+				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+						LispNames.SORT + " expects at least 2 arguments, got " + args.size());
+			}
+			if (args.size() > 2) {
+				// A :key routes through stable-sort, as the call position does
+				// (LispMacroExpander.expandSortWithKey).
+				requireKeyKeyword(LispNames.SORT, args, 2);
+				return stableSortValues(args);
+			}
+			// A string/vector argument sorts as a list of its elements and is written
+			// back into its own storage (Common Lisp sequences; this keeps a
+			// fill-pointered/adjustable argument's fill pointer, adjustable flag and
+			// identity, matching every implementation that sorts a vector in place).
+			return Environment.seqResultDestructive(args.get(0),
+					sortValues(Environment.seqAsList(args.get(0)), args.get(1)));
+		}));
+		// stable-sort is registered here (not in Environment) so the predicate and :key
+		// designators can be applied through the evaluator, like member/assoc. A Java
+		// list sort is stable; the result is always a fresh list, matching the shared
+		// macro expansion the call position routes through.
+		this.globalEnv.defineFunction(LispNames.STABLE_SORT, new LispFunction(LispNames.STABLE_SORT, args -> {
+			if (args.size() < 2) {
+				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+						LispNames.STABLE_SORT + " expects at least 2 arguments, got " + args.size());
+			}
+			requireKeyKeyword(LispNames.STABLE_SORT, args, 2);
+			return stableSortValues(args);
+		}));
+		this.applyBuiltin = new LispFunction(LispNames.APPLY, args -> {
+			if (args.size() < 2) {
+				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+						LispNames.APPLY + " expects at least 2 arguments, got " + args.size());
+			}
+			return applyValues(args);
+		}, true);
+		this.globalEnv.defineFunction(LispNames.APPLY, this.applyBuiltin);
+		this.globalEnv.defineFunction(LispNames.LOAD, new LispFunction(LispNames.LOAD, args -> {
+			if (args.isEmpty() || args.size() % 2 == 0) {
+				throw new LispEvalException(LispNames.LOAD + " expects a pathname and :option value pairs, got "
+						+ args.size() + " arguments");
+			}
+			String path = PathnameOps.designatorNamestring(args.get(0));
+			if (path == null) {
+				throw new LispEvalException(LispNames.LOAD + " expects a pathname designator");
+			}
+			// CL's keyword options. :verbose and :print ask for progress output this
+			// load does not produce and :external-format for a decoder that does not
+			// exist (every backend reads UTF-8), so those three are accepted and
+			// ignored; :if-does-not-exist is real. The compile paths lower the same
+			// four in LispMacroExpander.lowerLoadOptions -- keep the two in step.
+			boolean errorIfMissing = true;
+			for (int i = 1; i < args.size(); i += 2) {
+				if (!(args.get(i) instanceof LispSymbol key) || !key.name().startsWith(":")) {
+					throw new LispEvalException(LispNames.LOAD + " expects :option value pairs");
+				}
+				switch (key.name()) {
+					case ":VERBOSE", ":PRINT", ":EXTERNAL-FORMAT" -> {
+					}
+					case ":IF-DOES-NOT-EXIST" -> errorIfMissing = isTruthy(args.get(i + 1));
+					default -> throw new LispEvalException(LispNames.LOAD + ": unsupported option " + key.name());
+				}
+			}
+			if (!errorIfMissing && !sourceReadable(path)) {
+				return LispNil.INSTANCE;
+			}
+			loadFile(LispNames.LOAD, path, null, this.features, args.get(0));
+			return LispTrue.INSTANCE;
+		}));
+		this.globalEnv.defineFunction(LispNames.PROVIDE, new LispFunction(LispNames.PROVIDE, args -> {
+			if (args.size() != 1) {
+				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+						LispNames.PROVIDE + " expects 1 argument, got " + args.size());
+			}
+			String name = moduleDesignator(LispNames.PROVIDE, args.get(0));
+			// A duplicate provide is a no-op, like Common Lisp. Module names go onto
+			// *modules* as STRINGS, which is what CL specifies and what a (member "X"
+			// *modules* :test #'string=) probe expects.
+			if (!providedModules().contains(name)) {
+				this.globalEnv.set(LispNames.MODULES_VAR,
+						new LispCons(new LispString(name), this.globalEnv.lookup(LispNames.MODULES_VAR)));
+			}
+			return new LispSymbol(name);
+		}));
+		this.globalEnv.defineFunction(LispNames.REQUIRE, new LispFunction(LispNames.REQUIRE, args -> {
+			if (args.size() != 1 && args.size() != 2) {
+				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+						LispNames.REQUIRE + " expects 1 or 2 arguments, got " + args.size());
+			}
+			String name = moduleDesignator(LispNames.REQUIRE, args.get(0));
+			if (!providedModules().contains(name) && !AsdfSystems.isImplementationModule(name)) {
+				String path;
+				if (args.size() == 2) {
+					if (!(args.get(1) instanceof LispString str)) {
+						throw new LispEvalException(
+								LispNames.REQUIRE + " expects a string file path, got " + args.get(1).print());
+					}
+					path = str.value();
+				}
+				else {
+					// Downcased like ASDF's coerce-name (see LoadInliner): the spelling
+					// lives in the source-language seam, beside the extension.
+					path = SourceLanguage.fileNameForModule(name);
+				}
+				// The required file is expected to (provide name) itself, which marks
+				// the module; requiring loads the file either way (like Common Lisp).
+				loadFile(LispNames.REQUIRE, path);
+			}
+			return new LispSymbol(name);
+		}));
+		// asdf:load-system lives here, next to load/require, because it drives the same
+		// loadFile machinery and the per-evaluator system registry. Unlike the compile
+		// path (LoadInliner), the runtime function accepts a computed system name.
+		String loadSystemName = PackageRegistry.qualify(LispNames.ASDF_PKG, LispNames.LOAD_SYSTEM);
+		this.globalEnv.defineFunction(loadSystemName, new LispFunction(loadSystemName, args -> {
+			if (args.isEmpty()) {
+				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+						LispNames.ASDF_LOAD_SYSTEM + " expects 1 argument, got " + args.size());
+			}
+			// Keyword options are accepted and ignored, like the compile path's --
+			// a library that loads a system at run time spells the call that way
+			// (lack's find-package-or-load passes :verbose nil).
+			ignoreLoadOptions(LispNames.ASDF_LOAD_SYSTEM, args.subList(1, args.size()));
+			String name = asdfDesignator(LispNames.ASDF_LOAD_SYSTEM, args.get(0));
+			loadSystem(name);
+			return new LispSymbol(name);
+		}));
+		// The runtime component metaobjects (asdf.lisp / AsdfRuntimeLibrary) define
+		// asdf:find-system, the component readers, registered-systems,
+		// system-source-directory, system-relative-pathname and component-pathname in
+		// Lisp source shared with the compile paths; the interpreter's halves of the
+		// per-backend seam are these two primitives over the LIVE per-evaluator
+		// registry, which loadSystem populates before invoking a system's component
+		// files -- so find-system is guaranteed to hit for the system currently
+		// loading. A built-in shim system is findable even before it is loaded:
+		// lack's find-package-or-load probes (asdf:find-system name nil) and loads on
+		// a hit -- the route by which (clackup app :server :rontolisp) pulls in the
+		// clack-handler-rontolisp backend at run time.
+		String systemRecordName = "%ASDF-SYSTEM-RECORD";
+		this.globalEnv.defineFunction(systemRecordName, new LispFunction(systemRecordName, args -> {
+			if (args.size() != 1 || !(args.get(0) instanceof LispString key)) {
+				throw new LispEvalException(systemRecordName + " expects a system name string");
+			}
+			AsdfSystems.LispSystem system = this.asdfSystems.get(key.value());
+			boolean loaded = this.loadedSystems.contains(key.value()) || this.splicedSystems.contains(key.value());
+			if (system != null) {
+				return AsdfRuntimeLibrary.recordFor(system, loaded);
+			}
+			if (BuiltinSystems.isBuiltin(key.value())) {
+				return AsdfRuntimeLibrary.builtinRecord(loaded);
+			}
+			return LispNil.INSTANCE;
+		}));
+		String systemNamesName = "%ASDF-SYSTEM-NAMES";
+		this.globalEnv.defineFunction(systemNamesName, new LispFunction(systemNamesName, args -> {
+			if (!args.isEmpty()) {
+				throw new LispEvalException(systemNamesName + " expects no arguments");
+			}
+			// Declared systems in registration order, then any loaded built-in shims
+			// the registry does not list.
+			java.util.List<LispVal> names = new java.util.ArrayList<>();
+			for (String registered : this.asdfSystems.keySet()) {
+				names.add(new LispString(registered));
+			}
+			java.util.Set<String> loaded = new java.util.LinkedHashSet<>(this.loadedSystems);
+			loaded.addAll(this.splicedSystems);
+			for (String loadedName : loaded) {
+				if (!this.asdfSystems.containsKey(loadedName) && BuiltinSystems.isBuiltin(loadedName)) {
+					names.add(new LispString(loadedName));
+				}
+			}
+			LispVal tail = LispNil.INSTANCE;
+			for (int i = names.size() - 1; i >= 0; i--) {
+				tail = new LispCons(names.get(i), tail);
+			}
+			return tail;
+		}));
+		// The interpreter's halves of the operation protocol's seams (asdf.lisp defines
+		// asdf:perform, asdf:operate and asdf:test-system over them): loading one
+		// component, and the test-op wiring a system's .asd recorded.
+		// And what moves the registry: a find-system search, clear-system, load-asd.
+		String searchPathName = "%ASDF-SEARCH-PATH";
+		this.globalEnv.defineFunction(searchPathName, new LispFunction(searchPathName, args -> {
+			LispVal dirs = LispNil.INSTANCE;
+			List<String> path = searchPathDirs(true);
+			for (int i = path.size() - 1; i >= 0; i--) {
+				dirs = new LispCons(new LispString(path.get(i)), dirs);
+			}
+			return dirs;
+		}));
+		String searchPathLocateName = "%ASDF-SEARCH-PATH-LOCATE";
+		this.globalEnv.defineFunction(searchPathLocateName, new LispFunction(searchPathLocateName, args -> {
+			if (args.size() != 2 || !(args.get(0) instanceof LispString key)) {
+				throw new LispEvalException(searchPathLocateName + " expects a system name string and a flag");
+			}
+			try {
+				return new LispString(
+						AsdfSystems.locate(key.value(), searchPathDirs(isTruthy(args.get(1))), this.sourceLoader)
+							.path());
+			}
+			catch (AsdfSystems.SystemNotFoundException ex) {
+				return LispNil.INSTANCE;
+			}
+		}));
+		String inferSystemName = "%ASDF-INFER-SYSTEM";
+		this.globalEnv.defineFunction(inferSystemName, new LispFunction(inferSystemName, args -> {
+			if (args.size() != 1 || !(args.get(0) instanceof LispString key)) {
+				throw new LispEvalException(inferSystemName + " expects a system name string");
+			}
+			return inferSystem(key.value());
+		}));
+		String noteFoundSystemName = "%ASDF-NOTE-FOUND-SYSTEM";
+		this.globalEnv.defineFunction(noteFoundSystemName, new LispFunction(noteFoundSystemName, args -> {
+			if (args.size() != 1 || !(args.get(0) instanceof LispString key)) {
+				throw new LispEvalException(noteFoundSystemName + " expects a system name string");
+			}
+			this.asdfSystems.computeIfAbsent(key.value(), this::emptySystem);
+			return LispNil.INSTANCE;
+		}));
+		String locateSystemName = "%ASDF-LOCATE-SYSTEM";
+		this.globalEnv.defineFunction(locateSystemName, new LispFunction(locateSystemName, args -> {
+			if (args.size() != 1 || !(args.get(0) instanceof LispString key)) {
+				throw new LispEvalException(locateSystemName + " expects a system name string");
+			}
+			return locateSystem(key.value());
+		}));
+		String clearSystemName = "%ASDF-CLEAR-SYSTEM";
+		this.globalEnv.defineFunction(clearSystemName, new LispFunction(clearSystemName, args -> {
+			if (args.size() != 1 || !(args.get(0) instanceof LispString key)) {
+				throw new LispEvalException(clearSystemName + " expects a system name string");
+			}
+			this.asdfSystems.remove(key.value());
+			this.loadedSystems.remove(key.value());
+			return LispNil.INSTANCE;
+		}));
+		String loadAsdName = "%ASDF-LOAD-ASD";
+		this.globalEnv.defineFunction(loadAsdName, new LispFunction(loadAsdName, args -> {
+			if (args.size() != 1 || !(args.get(0) instanceof LispString path)) {
+				throw new LispEvalException(loadAsdName + " expects a namestring");
+			}
+			return loadAsdFile(path.value());
+		}));
+		// The interpreter's dump (uiop:dump-image), a compile of the image through the
+		// command line's builder, and the check asdf's image ops make before any of
+		// their build runs. The compile paths' halves refuse: a compiled program has no
+		// compiler (AsdfRuntimeLibrary's seam, uiop-image.lisp).
+		String checkImageBuildName = "%ASDF-CHECK-IMAGE-BUILD";
+		this.globalEnv.defineFunction(checkImageBuildName, new LispFunction(checkImageBuildName, args -> {
+			if (args.size() != 2 || !(args.get(1) instanceof LispString system)) {
+				throw new LispEvalException(checkImageBuildName + " expects an operation and a system name");
+			}
+			if (this.imageBuilder == null) {
+				throw new LispEvalException("ASDF:OPERATE: " + args.get(0).print() + " on " + system.value()
+						+ " dumps an image, which the rontolisp command line compiles, and this evaluator was not"
+						+ " started by it: run rontolisp build " + system.value());
+			}
+			return LispNil.INSTANCE;
+		}));
+		String dumpImageName = LispNames.DUMP_IMAGE_PRIMITIVE;
+		this.globalEnv.defineFunction(dumpImageName, new LispFunction(dumpImageName, args -> {
+			if (args.size() != 3 || !(args.get(0) instanceof LispString file)) {
+				throw new LispEvalException(dumpImageName + " expects a namestring, a flag and a function");
+			}
+			return dumpImage(file.value(), isTruthy(args.get(1)), args.get(2));
+		}));
+		String loadComponentName = "%ASDF-LOAD-COMPONENT";
+		this.globalEnv.defineFunction(loadComponentName, new LispFunction(loadComponentName, args -> {
+			if (args.size() != 2 || !(args.get(0) instanceof LispString system)
+					|| !(args.get(1) instanceof LispInteger index)) {
+				throw new LispEvalException(loadComponentName + " expects a system name and a component index");
+			}
+			loadComponent(system.value(), (int) index.value());
+			return LispTrue.INSTANCE;
+		}));
+		String testOpEdgesName = "%ASDF-TEST-OP-EDGES";
+		this.globalEnv.defineFunction(testOpEdgesName, new LispFunction(testOpEdgesName, args -> {
+			if (args.size() != 1 || !(args.get(0) instanceof LispString key)) {
+				throw new LispEvalException(testOpEdgesName + " expects a system name string");
+			}
+			AsdfSystems.LispSystem system = this.asdfSystems.get(key.value());
+			java.util.List<LispVal> edges = new java.util.ArrayList<>();
+			if (system != null) {
+				for (String edge : system.testOpEdges()) {
+					edges.add(new LispString(edge));
+				}
+			}
+			return consList(edges);
+		}));
+		// The recorded :perform (test-op (o c) BODY): the LAST parameter is the
+		// component, every earlier one the operation (fukamachi's .asd shape:
+		// :perform (test-op (op c) (symbol-call :rove :run c))).
+		String recordedTestOpName = "%ASDF-RUN-RECORDED-TEST-OP";
+		this.globalEnv.defineFunction(recordedTestOpName, new LispFunction(recordedTestOpName, args -> {
+			if (args.size() != 3 || !(args.get(0) instanceof LispString key)) {
+				throw new LispEvalException(
+						recordedTestOpName + " expects a system name, an operation and a component");
+			}
+			AsdfSystems.LispSystem system = this.asdfSystems.get(key.value());
+			AsdfSystems.TestOp testOp = system == null ? null : system.testOp();
+			if (testOp == null) {
+				return LispNil.INSTANCE;
+			}
+			java.util.List<LispVal> lambda = new java.util.ArrayList<>();
+			lambda.add(new LispSymbol(LispNames.LAMBDA));
+			lambda.add(consList(testOp.params()));
+			lambda.addAll(testOp.body());
+			java.util.List<LispVal> callArgs = new java.util.ArrayList<>();
+			for (int i = 0; i < testOp.params().size(); i++) {
+				callArgs.add(i == testOp.params().size() - 1 ? args.get(2) : args.get(1));
+			}
+			return applyGlobally(eval(consList(lambda), this.globalEnv), callArgs);
+		}));
+		// merge-pathnames* / file-exists-p / native-namestring used to be Java built-ins
+		// here. They are Lisp source now (uiop-pathname.lisp, uiop-filesystem.lisp),
+		// which
+		// is what gives them to the JVM and both WASM backends as well: merge-pathnames*
+		// with non-literal arguments was "The function UIOP:MERGE-PATHNAMES* is
+		// undefined"
+		// on all three. The interpreter lazy-loads them like any other uiop definition.
+		// uiop:get-pathname-defaults retired its Java built-in the same way: it is
+		// Lisp source in uiop-filesystem.lisp now, reading the
+		// *default-pathname-defaults* special instead of answering the literal ""
+		// that predated it.
+		// uiop:symbol-call -- real UIOP's late-binding call: look NAME up in PACKAGE at
+		// run time and apply it to the remaining arguments. The interpreter can do this
+		// for real (the resolver knows every package's members and the global function
+		// table is live); the compile backends have no runtime name-to-function table,
+		// so there the call lowers to the generic uiop call-time error instead. lack's
+		// find-package-or-load reaches it only on the quicklisp branch, which rontolisp
+		// never takes (:quicklisp is not in *features*, so the asdf branch runs).
+		String symbolCallName = UiopExports.qualified(LispNames.SYMBOL_CALL);
+		this.globalEnv.defineFunction(symbolCallName, new LispFunction(symbolCallName, args -> {
+			if (args.size() < 2) {
+				throw new LispEvalException(LispNames.UIOP_SYMBOL_CALL + " expects (package name &rest args), got "
+						+ args.size() + " arguments");
+			}
+			String designator = packageDesignator(LispNames.UIOP_SYMBOL_CALL, args.get(0));
+			String member = packageDesignator(LispNames.UIOP_SYMBOL_CALL, args.get(1));
+			if (this.packageResolver.findPackageName(designator) == null) {
+				throw new LispEvalException(LispNames.UIOP_SYMBOL_CALL + ": package " + designator + " does not exist");
+			}
+			// find-symbol* semantics: an absent name is an error, not nil -- the caller
+			// is about to apply it.
+			String spelling = this.packageResolver.memberSpelling(designator, member);
+			if (spelling == null) {
+				throw new LispEvalException(
+						LispNames.UIOP_SYMBOL_CALL + ": symbol " + member + " is not present in package " + designator);
+			}
+			return apply(resolveFunction(spelling), args.subList(2, args.size()), this.globalEnv);
+		}, true));
+		// ql:quickload = auto-download (real Quicklisp dist) + asdf:load-system. It
+		// accepts a single system name or a list of names, downloads each (with its
+		// dependencies) into the cache, adds the extracted .asd directories to the search
+		// path, and then loads through the same asdf machinery. Returns the list of
+		// loaded
+		// system names, like real quickload.
+		String quickloadName = PackageRegistry.qualify(LispNames.QL_PKG, LispNames.QUICKLOAD);
+		this.globalEnv.defineFunction(quickloadName, new LispFunction(quickloadName, args -> {
+			if (args.isEmpty()) {
+				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+						LispNames.QL_QUICKLOAD + " expects 1 argument, got " + args.size());
+			}
+			// (ql:quickload "x" :silent t) -- the options are ignored, see load-system.
+			ignoreLoadOptions(LispNames.QL_QUICKLOAD, args.subList(1, args.size()));
+			List<LispVal> designators = args.get(0) instanceof LispCons list && list.isProperList() ? list.toList()
+					: List.of(args.get(0));
+			List<LispVal> loaded = new java.util.ArrayList<>();
+			for (LispVal designator : designators) {
+				String name = AsdfSystems.designator(LispNames.QL_QUICKLOAD, designator);
+				quickload(name);
+				loaded.add(new LispSymbol(name));
+			}
+			LispVal result = LispNil.INSTANCE;
+			for (int i = loaded.size() - 1; i >= 0; i--) {
+				result = new LispCons(loaded.get(i), result);
+			}
+			return result;
+		}));
+		// ql-dist:install-dist adds a Quicklisp-format distribution -- Ultralisp, or any
+		// distinfo URL -- to the dists quickload downloads from, searched after the ones
+		// already installed. Returns the dist name, and installing twice is a no-op.
+		String installDistName = PackageRegistry.qualify(LispNames.QL_DIST_PKG, LispNames.INSTALL_DIST);
+		this.globalEnv.defineFunction(installDistName, new LispFunction(installDistName, args -> {
+			if (args.isEmpty()) {
+				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+						LispNames.QL_DIST_INSTALL_DIST + " expects 1 argument, got 0");
+			}
+			// (ql-dist:install-dist "..." :prompt nil) -- real Quicklisp asks before it
+			// downloads; nothing here prompts, so the options are ignored like
+			// quickload's.
+			ignoreLoadOptions(LispNames.QL_DIST_INSTALL_DIST, args.subList(1, args.size()));
+			String spec = AsdfSystems.designator(LispNames.QL_DIST_INSTALL_DIST, args.get(0));
+			try {
+				return new LispString(distClient().installDist(spec));
+			}
+			catch (IllegalArgumentException ex) {
+				throw new LispEvalException(LispNames.QL_DIST_INSTALL_DIST + ": " + ex.getMessage());
+			}
+		}));
+		// ql:update-dist drops a dist's cached indexes: the next quickload re-reads
+		// systems.txt/releases.txt and so sees the releases published since.
+		String updateDistName = PackageRegistry.qualify(LispNames.QL_PKG, LispNames.UPDATE_DIST);
+		this.globalEnv.defineFunction(updateDistName, new LispFunction(updateDistName, args -> {
+			if (args.isEmpty()) {
+				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+						LispNames.QL_UPDATE_DIST + " expects 1 argument, got 0");
+			}
+			ignoreLoadOptions(LispNames.QL_UPDATE_DIST, args.subList(1, args.size()));
+			String name = AsdfSystems.designator(LispNames.QL_UPDATE_DIST, args.get(0));
+			try {
+				distClient().updateDist(name);
+			}
+			catch (IOException ex) {
+				throw new LispEvalException(LispNames.QL_UPDATE_DIST + ": " + ex.getMessage());
+			}
+			return new LispString(name);
+		}));
+		installValuePublishingFunctions();
+		registerJava();
+		registerObjc();
+		registerFfi();
+	}
+
+	/**
+	 * Makes the FUNCTION objects of the multiple-value built-ins the syntactic tier
+	 * recognizes in call position -- {@code gethash}, {@code find-symbol},
+	 * {@code intern}, {@code subtypep}, {@code read-from-string} and
+	 * {@code array-displacement} -- answer their second value too, as the floor family's
+	 * does: a {@code funcall}, an {@code apply}, a variable or a {@code mapcar} reaches
+	 * the function, which publishes the value the companion built-in the lowering reads
+	 * it through computes ({@code LispMacroExpander.lowerMvProducer}). A call reaches it
+	 * too: a consumer or a function tail has lowered the producers it can see, and a
+	 * macro's expansion or a non-tail exit from a block is one it cannot. Runs last,
+	 * after {@link #foldStructLiteralsOf} wrapped {@code read-from-string}.
+	 */
+	private void installValuePublishingFunctions() {
+		LispVal absent = new LispSymbol("%gethash-absent%");
+		LispFunction gethash = registeredBuiltin(LispNames.GETHASH);
+		installValuePublishing(gethash, new LispFunction(LispNames.GETHASH, args -> {
+			if (args.size() != 2 && args.size() != 3) {
+				return gethash.body().apply(args);
+			}
+			LispVal found = gethash.body().apply(List.of(args.get(0), args.get(1), absent));
+			boolean present = found != absent;
+			this.globalEnv.publishSpill(new LispCons(present ? LispTrue.INSTANCE : LispNil.INSTANCE, LispNil.INSTANCE));
+			return present ? found : args.size() == 3 ? args.get(2) : LispNil.INSTANCE;
+		}, true));
+		publishSecondValue(LispNames.FIND_SYMBOL, LispNames.FIND_SYMBOL_STATUS);
+		publishSecondValue(LispNames.INTERN, LispNames.FIND_SYMBOL_STATUS, true);
+		publishSecondValue(LispNames.SUBTYPEP, LispNames.SUBTYPEP_VALID);
+		// read-from-string given more than the string is the prelude defun, which
+		// answers both values itself -- as the call position does
+		// (rareOperatorExpansion).
+		LispFunction readFromString = registeredBuiltin(LispNames.READ_FROM_STRING);
+		LispFunction readFromStringEnd = registeredBuiltin(LispNames.READ_FROM_STRING_END);
+		installValuePublishing(readFromString, new LispFunction(LispNames.READ_FROM_STRING, args -> {
+			if (args.size() > 1) {
+				return apply(resolveFunction(LispNames.READ_FROM_STRING_FULL_INTERNAL), args, this.globalEnv);
+			}
+			LispVal value = readFromString.body().apply(args);
+			this.globalEnv.publishSpill(new LispCons(readFromStringEnd.body().apply(args), LispNil.INSTANCE));
+			return value;
+		}, true));
+		publishSecondValue(LispNames.ARRAY_DISPLACEMENT, LispNames.ARRAY_DISP_OFFSET);
+		// read-line's missing-newline-p, off the one read %read-line-pair makes -- the
+		// lowering's own read -- with read-line's eof parameters applied on top.
+		LispFunction readLine = registeredBuiltin(LispNames.READ_LINE);
+		LispFunction readLinePair = registeredBuiltin(LispNames.READ_LINE_PAIR_INTERNAL);
+		installValuePublishing(readLine, new LispFunction(LispNames.READ_LINE, args -> {
+			if (args.size() > 4) {
+				return readLine.body().apply(args);
+			}
+			LispVal pair = readLinePair.body().apply(args.isEmpty() ? List.of() : List.of(args.getFirst()));
+			if (pair instanceof LispCons line) {
+				this.globalEnv.publishSpill(new LispCons(line.cdr(), LispNil.INSTANCE));
+				return line.car();
+			}
+			if (args.size() >= 2 && args.get(1) != LispNil.INSTANCE
+					&& !(args.get(1) instanceof LispSymbol sym && "NIL".equals(sym.name()))) {
+				throw Environment.endOfFile(args.getFirst() instanceof LispNil ? LispTrue.INSTANCE : args.getFirst());
+			}
+			this.globalEnv.publishSpill(new LispCons(LispTrue.INSTANCE, LispNil.INSTANCE));
+			return args.size() >= 3 ? args.get(2) : LispNil.INSTANCE;
+		}, true));
+	}
+
+	/**
+	 * Rebinds {@code name} to a function that answers the one-value built-in's value and
+	 * publishes {@code secondName}'s answer over the same arguments as the second value.
+	 */
+	private void publishSecondValue(String name, String secondName) {
+		publishSecondValue(name, secondName, false);
+	}
+
+	/**
+	 * As {@link #publishSecondValue(String, String)}, computing the second value BEFORE
+	 * the primary when {@code secondFirst} is set: {@code intern}'s status is the
+	 * accessibility the name had before the intern (nil for a fresh name, CL's answer),
+	 * and the intern itself records the name.
+	 */
+	private void publishSecondValue(String name, String secondName, boolean secondFirst) {
+		LispFunction primary = registeredBuiltin(name);
+		LispFunction second = registeredBuiltin(secondName);
+		installValuePublishing(primary, new LispFunction(name, args -> {
+			if (secondFirst) {
+				LispVal status = second.body().apply(args);
+				LispVal value = primary.body().apply(args);
+				this.globalEnv.publishSpill(new LispCons(status, LispNil.INSTANCE));
+				return value;
+			}
+			LispVal value = primary.body().apply(args);
+			this.globalEnv.publishSpill(new LispCons(second.body().apply(args), LispNil.INSTANCE));
+			return value;
+		}, true));
+	}
+
+	/** Binds the publishing function and records the one-value built-in behind it. */
+	private void installValuePublishing(LispFunction primary, LispFunction publishing) {
+		this.globalEnv.defineFunction(publishing.name(), publishing);
+		this.publishingBuiltins.add(publishing);
+	}
+
+	/** The registered built-in {@code name}. */
+	private LispFunction registeredBuiltin(String name) {
+		if (!(this.globalEnv.lookupFunctionOrNull(name) instanceof LispFunction builtin)) {
+			throw new IllegalStateException(name + " must be registered");
+		}
+		return builtin;
+	}
+
+	// Registers the interpreter's primitive layer of the `objc` package (eval/ObjcInterop
+	// over am.ik.objc, the foreign-function binding to the Objective-C runtime; the
+	// vocabulary is objc.lisp, loaded on first use). Registered here beside java: for the
+	// same reason -- a callback (a button's action) applies a user function and so needs
+	// the evaluator's apply. Unlike java: it needs no reflection, so it works in the
+	// native binary.
+	private void registerObjc() {
+		ObjcInterop.registerPrimitives(this.globalEnv,
+				(function, callArgs) -> apply(function, callArgs, this.globalEnv));
+	}
+
+	// Registers the interpreter side of the `ffi` package (eval/FfiInterop over
+	// am.ik.ffi, the foreign-function binding to plain C -- the primitives CFFI's
+	// backend stands on). Registered here beside objc: for the same reason -- a callback
+	// C calls applies a user function and so needs the evaluator's apply. No reflection,
+	// so it works in the native binary; both WASM backends refuse it (CompileFrontend).
+	private void registerFfi() {
+		FfiInterop.register(this.globalEnv, (function, callArgs) -> apply(function, callArgs, this.globalEnv));
+	}
+
+	/**
+	 * Reads and evaluates every top-level form of the given file in the global
+	 * environment, the shared machinery behind {@code load} and {@code require}. A
+	 * relative path resolves against the directory of the file doing the load (the top of
+	 * {@code loadDirStack}), so a program run from any working directory can
+	 * {@code (load "sibling.lisp")} its companions, matching the compile-time include.
+	 * Forms route through the top-level entry so package directives in the loaded file
+	 * are processed; the loaded file's directory is pushed so a nested load resolves
+	 * relative to it.
+	 */
+	/**
+	 * Whether the source at {@code rawPath} can be read from where the current load
+	 * resolves it -- the {@code :if-does-not-exist} probe of {@code load}. It is the
+	 * interpreter's rendering of the {@code probe-file} guard the compile paths lower to,
+	 * so an unreadable file (not merely a missing one) answers false on both.
+	 */
+	private boolean sourceReadable(String rawPath) {
+		try {
+			this.sourceLoader.load(SourceLoader.resolve(this.loadDirStack.peekLast(), rawPath));
+			return true;
+		}
+		catch (IOException ex) {
+			return false;
+		}
+	}
+
+	private void loadFile(String operator, String rawPath) {
+		loadFile(operator, rawPath, null);
+	}
+
+	/**
+	 * Loads one file. When it is a COMPONENT of an ASDF system, that system's name is
+	 * given too, so {@link ShimLibraries#rewriteComponentSource} can rewrite forms of the
+	 * real source (uax-15's table building); the base directory the component and the
+	 * bundled data files resolve against is the system's, already on the load-dir stack.
+	 */
+	private void loadFile(String operator, String rawPath, @Nullable String systemName) {
+		loadFile(operator, rawPath, systemName, this.features);
+	}
+
+	/**
+	 * Loads one file with an explicit feature set. Only an ASDF component passes anything
+	 * but {@link Features#INTERPRETER}: a system that declares
+	 * {@code :rontolisp-features} has its own components read with the interpreter's
+	 * features WIDENED by that declaration (see {@code AsdfSystems.LispSystem#features}).
+	 */
+	private void loadFile(String operator, String rawPath, @Nullable String systemName, Features features) {
+		loadFile(operator, rawPath, systemName, features, null);
+	}
+
+	/**
+	 * Loads one file, as {@link #loadFile(String, String, String, Features)} does; a
+	 * {@code load} call passes the designator it was given, which a file it cannot read
+	 * reports: the {@code file-error} carries it and the text is the compile paths'
+	 * ({@code LispMacroExpander.expandLoadFileErrorSignal}).
+	 */
+	private void loadFile(String operator, String rawPath, @Nullable String systemName, Features features,
+			@Nullable LispVal designator) {
+		String baseDir = this.loadDirStack.peekLast();
+		String resolved = SourceLoader.resolve(baseDir, rawPath);
+		String source;
+		try {
+			source = this.sourceLoader.load(resolved);
+		}
+		catch (IOException ex) {
+			// CLHS load: a missing file under the default :if-does-not-exist t is a
+			// FILE-ERROR, so a handler naming the type catches it (the scheme front
+			// end's file-error? included).
+			if (designator != null) {
+				String message = LispMacroExpander.LOAD_FAILURE_PREFIX + rawPath;
+				throw new LispEvalException(message,
+						ClosRegistry.newFileErrorCondition(designator, new LispString(message)));
+			}
+			String message = operator + ": cannot read file " + resolved + ": " + ex.getMessage();
+			throw new LispEvalException(message,
+					ClosRegistry.newFileErrorCondition(new LispString(resolved), new LispString(message)));
+		}
+		if (systemName != null) {
+			source = ShimLibraries.rewriteComponentSource(systemName, rawPath, source, baseDir, this.sourceLoader);
+		}
+		String childDir = SourceLoader.parentDir(resolved);
+		this.loadDirStack.addLast(childDir == null ? "" : childDir);
+		// Bind the current package around the loaded file so an internal (in-package ...)
+		// is scoped to the load and does not leak to the caller, like Common Lisp binding
+		// *package* for the duration of load.
+		this.packageResolver.pushPackage();
+		// *load-pathname* / *load-truename* for the duration of the file, so a library
+		// that locates a data directory relative to its own source finds it. Bound
+		// dynamically (not assigned) so a nested load restores the outer file's values.
+		// A COMPONENT is loaded by its resolved path -- that is what real ASDF hands
+		// load, and it is what makes *load-pathname* equal asdf:component-pathname, the
+		// correlation rove's file-to-package map is built on. A plain load keeps the
+		// spelling it was called with, like CL. The truename is what truename answers
+		// for the file -- absolute, links resolved -- so a path merged onto it names
+		// the same file wherever the load runs from (LoadInliner splices the same).
+		this.specialVars.add(LispNames.LOAD_PATHNAME_VAR);
+		this.specialVars.add(LispNames.LOAD_TRUENAME_VAR);
+		this.dynamicBindings.push(LispNames.LOAD_PATHNAME_VAR, new LispString(systemName != null ? resolved : rawPath));
+		this.dynamicBindings.push(LispNames.LOAD_TRUENAME_VAR,
+				new LispString(this.sourceLoader.canonicalPath(resolved)));
+		// *readtable* too (CLHS load): an in-readtable inside the file is the file's.
+		LispVal readtable = currentSpecialValue(LispNames.READTABLE_VAR);
+		this.dynamicBindings.push(LispNames.READTABLE_VAR, readtable == null ? LispNil.INSTANCE : readtable);
+		try {
+			// Only a file that textually contains #. pays for the marker read + the
+			// per-form substitution walk; every other file keeps the plain read.
+			// The resolved path rides along so a reader error inside a loaded file names
+			// that file and line, exactly like the compile path's LoadInliner splice.
+			// Both the read and the #. question are the source-language seam's, picked
+			// by THIS file's extension, so one program may mix languages file by file.
+			// CL's load reads a form and evaluates it before reading the next, so the
+			// forms in front of a malformed one run and the read error is signalled
+			// after them, catchable like any other condition.
+			SourceLanguage language = SourceLanguage.forFile(resolved, null);
+			if (language == SourceLanguage.CLOJURE) {
+				requireWholeClojureLibrary("load of " + resolved);
+			}
+			boolean markers = SourceLanguage.usesReadEvalMarkers(source);
+			if (language == SourceLanguage.COMMON_LISP) {
+				// Form at a time: each form is read with the readtable the forms before
+				// it left (.kb/readtables.md), and with the *features* they left -- the
+				// pushes of this file and of every file loaded before it.
+				loadForms(SourceLanguage.readForms(source, sourceFeatures(features), resolved)
+					.readingTOrNil(this.packageResolver::readsClTOrNil), resolved, source, markers);
+				return;
+			}
+			LispReader.ReadPrefix read = language.readLoaded(source, features, resolved, this.sourceStandards,
+					this.sourceLoader);
+			for (LispVal form : read.forms()) {
+				eval(markers ? resolveReadTimeEvalInCode(form) : form);
+			}
+			LispReadException error = read.error();
+			if (error != null) {
+				throw loadReadError(error);
+			}
+		}
+		finally {
+			this.dynamicBindings.pop(LispNames.READTABLE_VAR);
+			this.dynamicBindings.pop(LispNames.LOAD_TRUENAME_VAR);
+			this.dynamicBindings.pop(LispNames.LOAD_PATHNAME_VAR);
+			this.packageResolver.popPackage();
+			this.loadDirStack.removeLast();
+		}
+	}
+
+	/**
+	 * Reads and runs a loaded Common Lisp file's forms one at a time, each read with the
+	 * readtable current when the read reaches it ({@code .kb/readtables.md}). A read
+	 * error is signalled after the forms before it ran, as a catchable
+	 * {@code end-of-file} / {@code reader-error}. With a record of definitions and uses
+	 * installed, the forms that ran, as resolved, are handed to it -- also when one of
+	 * them fails.
+	 */
+	private void loadForms(SourceLanguage.Forms forms, String file, String source, boolean markers) {
+		LoadRecorder recorder = this.loadRecorder;
+		List<LispVal> read = new ArrayList<>();
+		List<LispVal> resolved = new ArrayList<>();
+		Set<String> featuresAtOpen = printedFeatures(currentFeatures());
+		try {
+			while (true) {
+				LispVal form;
+				try {
+					form = forms.next(sourceReadSyntax(), featuresAddedSince(featuresAtOpen));
+				}
+				catch (LispReadException error) {
+					throw loadReadError(error);
+				}
+				if (form == null) {
+					return;
+				}
+				LispVal ready = markers ? resolveReadTimeEvalInCode(form) : form;
+				if (recorder == null) {
+					eval(ready);
+				}
+				else {
+					read.add(form);
+					evalTopLevel(ready, resolved::add);
+				}
+			}
+		}
+		finally {
+			if (recorder != null) {
+				recorder.recordLoaded(this.sourceLoader.canonicalPath(file), source, read, resolved);
+			}
+		}
+	}
+
+	/**
+	 * Reads and runs a program's Common Lisp entry source one form at a time, each read
+	 * with the readtable current when the read reaches it -- the same discipline as
+	 * {@code load} ({@code .kb/readtables.md}). A read error propagates as it is, after
+	 * the forms before it ran.
+	 * @param source the program text
+	 * @param file the entry file, or {@code null}
+	 */
+	public void evalSource(String source, @Nullable String file) {
+		boolean markers = SourceLanguage.usesReadEvalMarkers(source);
+		SourceLanguage.Forms forms = SourceLanguage.readForms(source, sourceFeatures(), file)
+			.readingTOrNil(this.packageResolver::readsClTOrNil);
+		Set<String> featuresAtOpen = printedFeatures(currentFeatures());
+		for (LispVal form = forms.next(sourceReadSyntax()); form != null; form = forms.next(sourceReadSyntax(),
+				featuresAddedSince(featuresAtOpen))) {
+			eval(markers ? resolveReadTimeEvalInCode(form) : form);
+		}
+	}
+
+	/**
+	 * The syntax the reader reads with now: the current -- dynamic binding first --
+	 * {@code *readtable*} and {@code *read-base*}, or {@code null} while they read as the
+	 * standard readtable in base 10 ({@code .kb/readtables.md}).
+	 * @return the syntax
+	 */
+	@Nullable ReadSyntax currentReadSyntax() {
+		return ReadtableSyntax.of(currentSpecialValue(LispNames.READTABLE_VAR),
+				currentSpecialValue(LispNames.READ_BASE_VAR), this::callReaderMacro);
+	}
+
+	/**
+	 * {@link #currentReadSyntax()} for a read whose forms are COMPILED rather than run
+	 * here -- the compile path's ({@code ReadTimeImage}): a reader macro function still
+	 * runs in this evaluator, and {@code check} judges what it answered before the value
+	 * becomes part of a form. A function that signals is a read error at its character,
+	 * as the compile reports it.
+	 * @param check answers the call's result, or throws {@link ReadSyntax.Refusal}
+	 * @return the syntax, or {@code null} for the standard one
+	 */
+	@Nullable ReadSyntax currentReadSyntax(java.util.function.UnaryOperator<ReadSyntax.Result> check) {
+		return ReadtableSyntax.of(currentSpecialValue(LispNames.READTABLE_VAR),
+				currentSpecialValue(LispNames.READ_BASE_VAR), (function, input, offset, arguments, templateDepth) -> {
+					ReadSyntax.Result result;
+					try {
+						result = callReaderMacro(function, input, offset, arguments, templateDepth);
+					}
+					catch (ReadSyntax.Refusal refusal) {
+						throw refusal;
+					}
+					catch (RuntimeException ex) {
+						throw new ReadSyntax.Refusal("the reader macro function signalled: " + ex.getMessage(), ex);
+					}
+					return check.apply(respelledForResolver(result));
+				});
+	}
+
+	/**
+	 * {@link #currentReadSyntax()} for a read of SOURCE, whose form goes through the
+	 * package resolver before it runs, as a run-time {@code read}'s datum does not.
+	 * @return the syntax, or {@code null} for the standard one
+	 */
+	private @Nullable ReadSyntax sourceReadSyntax() {
+		return ReadtableSyntax.of(currentSpecialValue(LispNames.READTABLE_VAR),
+				currentSpecialValue(LispNames.READ_BASE_VAR),
+				(function, input, offset, arguments, templateDepth) -> respelledForResolver(
+						callReaderMacro(function, input, offset, arguments, templateDepth)));
+	}
+
+	/**
+	 * A reader macro function answers symbols, and the form it lands in is resolved as
+	 * spelled: a bare {@code cl} name must survive that in a package using no {@code cl}
+	 * (coalton's readtable reads {@code cl:declaim} through eclector, in a package using
+	 * only coalton).
+	 */
+	private ReadSyntax.Result respelledForResolver(ReadSyntax.Result result) {
+		LispVal value = result.value();
+		return value == null ? result
+				: new ReadSyntax.Result(UserMacroExpander.requalifyShadowedClNames(value, this), result.end());
+	}
+
+	/**
+	 * How many backquote templates enclose the macro character whose reader macro
+	 * function is running ({@link #callReaderMacro}): a {@code read} it makes starts
+	 * inside them ({@link #readWithSyntax}), as CL's backquote depth is dynamic.
+	 */
+	private int readerMacroTemplateDepth;
+
+	/**
+	 * Calls a reader macro function over the text being read: a string input stream
+	 * positioned where the macro character left the text is its first argument, and where
+	 * the function left that stream is where the read goes on.
+	 */
+	private ReadSyntax.Result callReaderMacro(LispVal function, String input, int offset, List<LispVal> arguments,
+			int templateDepth) {
+		StringStreamTable table = this.globalEnv.stringStreams();
+		LispVal stream = table.open(input, offset);
+		int enclosingDepth = this.readerMacroTemplateDepth;
+		this.readerMacroTemplateDepth = templateDepth;
+		try {
+			List<LispVal> args = new ArrayList<>(arguments.size() + 1);
+			args.add(stream);
+			args.addAll(arguments);
+			this.globalEnv.clearSpill();
+			List<LispVal> values = consumeValues(apply(function, args, this.globalEnv));
+			am.ik.rontolisp.runtime.RontoStringInputStream reader = table.reader(stream);
+			int end = reader == null ? offset : table.logicalOffset(stream, reader);
+			return new ReadSyntax.Result(values.isEmpty() ? null : values.get(0), end);
+		}
+		finally {
+			this.readerMacroTemplateDepth = enclosingDepth;
+			table.close(stream);
+		}
+	}
+
+	/**
+	 * Serves a {@code read} or {@code read-delimited-list} call off a STRING stream under
+	 * a non-standard readtable ({@code .kb/readtables.md}): the text is read in place
+	 * through the reader, which honors the readtable -- the prelude's scanner, which
+	 * delimits a datum by the standard syntax, cannot. Any other call -- the standard
+	 * readtable, another stream -- answers {@code null} and runs the prelude defun.
+	 * {@link LispNames#RT_READ_AS_INTERNAL} is a standard macro function's read: the
+	 * character at the stream reads by the standard function its second argument names,
+	 * not by the function the readtable holds for it, which may be the caller.
+	 * @param name {@link LispNames#READ}, {@link LispNames#READ_PRESERVING_WHITESPACE},
+	 * {@link LispNames#READ_DELIMITED_LIST} or {@link LispNames#RT_READ_AS_INTERNAL}
+	 * @param args the evaluated arguments
+	 * @return the call's value, or {@code null} to decline
+	 */
+	private @Nullable LispVal readWithSyntax(String name, List<LispVal> args) {
+		ReadSyntax syntax = currentReadSyntax();
+		if (syntax == null) {
+			return null;
+		}
+		boolean delimited = LispNames.READ_DELIMITED_LIST.equals(name);
+		boolean standardAs = LispNames.RT_READ_AS_INTERNAL.equals(name);
+		int streamIndex = delimited ? 1 : 0;
+		LispVal designator = args.size() > streamIndex ? args.get(streamIndex) : LispNil.INSTANCE;
+		if (designator instanceof LispNil) {
+			LispVal input = currentSpecialValue(LispNames.STANDARD_INPUT_VAR);
+			designator = input == null ? LispNil.INSTANCE : input;
+		}
+		StringStreamTable table = this.globalEnv.stringStreams();
+		am.ik.rontolisp.runtime.RontoStringInputStream reader = table.reader(designator);
+		if (reader == null || delimited && !(args.get(0) instanceof LispChar)
+				|| standardAs && !(args.size() > 1 && args.get(1) instanceof LispChar)) {
+			return null;
+		}
+		String text = reader.text();
+		boolean markers = SourceLanguage.usesReadEvalMarkers(text);
+		LispReader.Forms forms = LispReader
+			.forms(text, currentReadFeatures(), markers, null, this::resolveReadTimeEval,
+					table.logicalOffset(designator, reader), false)
+			.homingSymbols(this.packageResolver::readSpelling)
+			.withinTemplates(this.readerMacroTemplateDepth);
+		if (standardAs) {
+			forms.readingFirstAs(((LispChar) args.get(1)).codePoint());
+		}
+		try {
+			if (delimited) {
+				List<LispVal> items = forms.nextDelimited(syntax, ((LispChar) args.get(0)).codePoint());
+				table.moveTo(designator, reader, forms.position());
+				LispVal list = LispNil.INSTANCE;
+				for (int i = items.size() - 1; i >= 0; i--) {
+					LispVal item = items.get(i);
+					list = new LispCons(markers ? resolveReadTimeEval(item) : item, list);
+				}
+				return list;
+			}
+			LispVal datum = forms.next(syntax);
+			int end = forms.position();
+			if (datum == null) {
+				table.moveTo(designator, reader, end);
+				if (!standardAs && args.size() > 1 && args.get(1) instanceof LispNil) {
+					return args.size() > 2 ? args.get(2) : LispNil.INSTANCE;
+				}
+				throw new LispEvalException(ClosRegistry.END_OF_FILE_MESSAGE,
+						ClosRegistry.newEndOfFileCondition(designator));
+			}
+			// CLHS 23.2: the whitespace character that ends the datum is consumed.
+			if (!LispNames.READ_PRESERVING_WHITESPACE.equals(name) && !standardAs && end < text.length()
+					&& Character.isWhitespace(text.charAt(end))) {
+				end++;
+			}
+			table.moveTo(designator, reader, end);
+			return StructLiteralFolder.fold(markers ? resolveReadTimeEval(datum) : datum, this.closRegistry);
+		}
+		catch (LispReadException e) {
+			table.moveTo(designator, reader, forms.position());
+			String message = String.valueOf(e.getMessage());
+			throw new LispEvalException(message, e.isEndOfFile() ? ClosRegistry.newEndOfFileCondition(designator)
+					: ClosRegistry.newReaderErrorCondition(new LispString(e.reason()), designator));
+		}
+	}
+
+	/**
+	 * Evaluates a {@code read}, {@code read-preserving-whitespace} or
+	 * {@code read-delimited-list} call: the prelude defun, with the readtable-honoring
+	 * read of a string stream in front of it ({@link #readWithSyntax}) -- the
+	 * {@link #evalSequenceScan} shape, serving the call only while the name still
+	 * resolves to the prelude's own definition.
+	 */
+	private LispVal evalReadCall(LispCons cons, Environment env, String name) {
+		LispVal function = resolveFunction(name);
+		List<LispVal> args = evalArgs(cons, env);
+		if (function == this.preludeDefinitions.get(name)) {
+			LispVal read = readWithSyntax(name, args);
+			if (read != null) {
+				return read;
+			}
+		}
+		return apply(function, args, env);
+	}
+
+	/**
+	 * The condition a read error in a loaded file signals: {@code end-of-file} for text a
+	 * form ends inside of, {@code reader-error} otherwise (CLHS 23.1, as the runtime
+	 * {@code read} family classifies). The condition reports the reader's bare message --
+	 * what the compiled backends' {@code load} reports -- while the exception keeps the
+	 * {@code file:line:column:} prefix, so an uncaught one still names the bad spot.
+	 * @param error the read error
+	 * @return the catchable exception
+	 */
+	private static LispEvalException loadReadError(LispReadException error) {
+		String message = String.valueOf(error.getMessage());
+		return new LispEvalException(message, error.isEndOfFile() ? ClosRegistry.newEndOfFileCondition()
+				: ClosRegistry.newReaderErrorCondition(new LispString(error.reason()), LispNil.INSTANCE));
+	}
+
+	/**
+	 * Binds {@code *load-pathname*} / {@code *load-truename*} for a file whose forms this
+	 * evaluator is about to process -- the same push {@link #loadFile} does around a file
+	 * it reads, exposed for the COMPILE path, where the file was already read and spliced
+	 * by {@code LoadInliner} and only its {@code (%begin-file P T)} bracket is left.
+	 * {@code UserMacroExpander} calls this as it crosses that bracket, so a {@code #.}
+	 * datum it resolves against this evaluator -- and a spliced system's replayed
+	 * top-level form -- sees the load context the interpreter would have established, and
+	 * the compiled program's run-time value (the assignments the bracket lowers to)
+	 * agrees with it by construction. The command line calls it too, around the entry
+	 * file it reads itself.
+	 * @param pathname the {@code *load-pathname*} value (the spelling {@code load} was
+	 * called with; a component's resolved path)
+	 * @param truename the {@code *load-truename*} value (the path it resolved to)
+	 */
+	public void pushLoadContext(String pathname, String truename) {
+		this.specialVars.add(LispNames.LOAD_PATHNAME_VAR);
+		this.specialVars.add(LispNames.LOAD_TRUENAME_VAR);
+		this.dynamicBindings.push(LispNames.LOAD_PATHNAME_VAR, new LispString(pathname));
+		this.dynamicBindings.push(LispNames.LOAD_TRUENAME_VAR, new LispString(truename));
+	}
+
+	/**
+	 * Undoes one {@link #pushLoadContext}, restoring the enclosing file's values (nil
+	 * outside every file).
+	 */
+	public void popLoadContext() {
+		this.dynamicBindings.pop(LispNames.LOAD_TRUENAME_VAR);
+		this.dynamicBindings.pop(LispNames.LOAD_PATHNAME_VAR);
+	}
+
+	/**
+	 * Binds {@code *readtable*} to its current value for a file whose forms this
+	 * evaluator is about to process -- the binding {@link #loadFile} makes around a file
+	 * it reads (CLHS {@code load}), for the compile path's macro-time pass, which crosses
+	 * a spliced file's {@code (%begin-file P T)} bracket instead: an {@code in-readtable}
+	 * inside the file is the file's ({@code .kb/readtables.md}).
+	 */
+	void pushReadtableBinding() {
+		LispVal readtable = currentSpecialValue(LispNames.READTABLE_VAR);
+		this.dynamicBindings.push(LispNames.READTABLE_VAR, readtable == null ? LispNil.INSTANCE : readtable);
+	}
+
+	/** Undoes one {@link #pushReadtableBinding}. */
+	void popReadtableBinding() {
+		this.dynamicBindings.pop(LispNames.READTABLE_VAR);
+	}
+
+	/**
+	 * Binds {@code *features*} to its current value plus the given names, for a file
+	 * whose forms this evaluator is about to process under an {@code :around-compile}
+	 * hook that ran elsewhere ({@link #callAroundCompile}).
+	 * @param names the feature names, without the leading colon
+	 */
+	void pushFeaturesBinding(List<String> names) {
+		LispVal features = currentFeatures();
+		for (int i = names.size() - 1; i >= 0; i--) {
+			features = new LispCons(new LispSymbol(":" + names.get(i).toUpperCase(java.util.Locale.ROOT)), features);
+		}
+		this.dynamicBindings.push(LispNames.FEATURES_VAR, features);
+	}
+
+	/** Undoes one {@link #pushFeaturesBinding}. */
+	void popFeaturesBinding() {
+		this.dynamicBindings.pop(LispNames.FEATURES_VAR);
+	}
+
+	/**
+	 * Replaces every {@code (%read-eval datum)} marker in a form with the value of
+	 * evaluating the datum in the global environment -- the {@code #.} read-time-eval
+	 * semantics. The value is substituted raw (not quoted), matching CL: a
+	 * self-evaluating value (number, character, string, array) is a literal in any
+	 * context, while a symbol/list value placed in code position is evaluated as code,
+	 * exactly as a real read-time substitution would behave. Called on each top-level
+	 * form just before it is evaluated, so a marker sees all preceding definitions of the
+	 * same file.
+	 */
+	/**
+	 * Whether {@code sub} names a subtype of {@code super} -- delegates to the shared
+	 * lattice + class-registry walk the compilers fold at compile time.
+	 */
+	private boolean subtypep(LispVal subV, LispVal superV) {
+		seedMopClassesForTypeSpecifier(subV);
+		seedMopClassesForTypeSpecifier(superV);
+		return LispMacroExpander.subtypep(subV, superV, this.closRegistry);
+	}
+
+	/**
+	 * CL's second value of {@code subtypep} -- whether the answer is a decision -- over
+	 * the same lattice the primary comes from.
+	 */
+	private boolean subtypepValid(LispVal subV, LispVal superV) {
+		seedMopClassesForTypeSpecifier(subV);
+		seedMopClassesForTypeSpecifier(superV);
+		return LispMacroExpander.subtypepValid(subV, superV, this.closRegistry);
+	}
+
+	/**
+	 * The {@code typep} half of {@link #seedMopClassesForTypeSpecifier}: unwraps the
+	 * quoted specifier of a {@code (typep value 'spec)} FORM (unlike {@code subtypep},
+	 * whose arguments reach the built-in as values) and seeds from it.
+	 */
+	private void seedMopClassesForTypepForm(LispCons cons) {
+		if (!cons.isProperList()) {
+			return;
+		}
+		List<LispVal> parts = cons.toList();
+		if (parts.size() == 3 && parts.get(2) instanceof LispCons quoted && quoted.car() instanceof LispSymbol head
+				&& LispNames.QUOTE.equals(plainName(head.name())) && quoted.cdr() instanceof LispCons specCell) {
+			seedMopClassesForTypeSpecifier(specCell.car());
+		}
+	}
+
+	/**
+	 * Registers the MOP base classes when a {@code typep}/{@code subtypep} type specifier
+	 * names one of them, so {@code (typep x 'class)} answers even when this is the
+	 * program's first MOP surface (the registry seeds lazily, and the interpreter expands
+	 * the test BEFORE the {@code find-class} call in its own argument runs). Walks
+	 * compound specifiers, and stops at a quote so an {@code (eql ...)} / {@code (member
+	 * ...)} datum cannot trigger it.
+	 */
+	private void seedMopClassesForTypeSpecifier(LispVal specifier) {
+		while (true) {
+			switch (specifier) {
+				case LispSymbol sym -> this.closRegistry.ensureMopClassesSeededFor(sym.name());
+				case LispCons cons -> {
+					if (!(cons.car() instanceof LispSymbol head) || !LispNames.QUOTE.equals(plainName(head.name()))) {
+						seedMopClassesForTypeSpecifier(cons.car());
+						specifier = cons.cdr();
+						continue;
+					}
+				}
+				default -> {
+				}
+			}
+			return;
+		}
+	}
+
+	/** The package-stripped member name of a possibly qualified symbol name. */
+	private static String plainName(String name) {
+		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(name);
+		return qn == null ? name : qn.member();
+	}
+
+	/**
+	 * The package name a runtime designator value denotes: a string, or a symbol whose
+	 * {@code #:}/{@code :} prefix is stripped ({@code '#:jzon} and {@code :jzon} both
+	 * name the package {@code jzon}).
+	 */
+	private static String packageNameDesignator(String operator, LispVal designator) {
+		return switch (designator) {
+			case LispString str -> str.value();
+			case LispSymbol sym -> sym.name().startsWith("#:") ? sym.name().substring(2)
+					: sym.name().startsWith(":") ? sym.name().substring(1) : sym.name();
+			// CLHS glossary: a STRING DESIGNATOR is a character, a symbol or a string,
+			// and a package designator is a string designator (or a package). #\G names
+			// the package "G", and t/nil are the symbols named "T"/"NIL".
+			case LispChar ch -> ch.display();
+			case LispTrue ignored -> "T";
+			case LispNil ignored -> "NIL";
+			default ->
+				throw new LispEvalException(operator + " expects a package designator, got " + designator.print());
+		};
+	}
+
+	/**
+	 * The built-in type name of a runtime value (the {@code %class-designator} view; the
+	 * result set is {@code ClosRegistry.BUILTIN_CLASS_NAMES}).
+	 */
+	private static String builtinTypeName(LispVal v) {
+		return switch (v) {
+			case LispInteger ignored -> "integer";
+			case LispBigInteger ignored -> "integer";
+			case LispRatio ignored -> "ratio";
+			case LispDouble ignored -> "float";
+			case LispComplex ignored -> "complex";
+			case LispString ignored -> "string";
+			case LispChar ignored -> "character";
+			case LispTrue ignored -> "boolean";
+			case LispNil ignored -> "null";
+			case LispSymbol s -> s.isKeyword() ? "keyword" : "symbol";
+			case LispCons ignored -> "cons";
+			case LispHashTable ignored -> "hash-table";
+			case am.ik.rontolisp.LispQuantizedMatrix ignored -> "quantized-matrix";
+			case LispFunction ignored -> "function";
+			default -> "t";
+		};
+	}
+
+	/**
+	 * The built-in class name {@code class-of} answers for a non-instance value: the
+	 * {@code %class-designator} view narrowed over ARRAYS, which that view answers
+	 * {@code t} for. A string is left to {@code builtinTypeName} (the narrower
+	 * {@code string}); every other array is a {@code vector} at rank 1 and an
+	 * {@code array} above or below it. The result set is
+	 * {@code ClosRegistry.BUILTIN_CLASS_NAMES}, which
+	 * {@code LispMacroExpander.expandClassOf} reproduces on the compile paths.
+	 */
+	private static String classOfTypeName(LispVal v) {
+		return switch (v) {
+			case LispArray array when array.dimensions().length == 1
+					&& array.elementTypeCode() == am.ik.rontolisp.ArrayElementTypes.BIT ->
+				"bit-vector";
+			case LispArray array -> array.dimensions().length == 1 ? "vector" : "array";
+			case LispFloatArray array -> array.rank() == 1 ? "vector" : "array";
+			case LispIntVector ignored -> "vector";
+			default -> builtinTypeName(v);
+		};
+	}
+
+	/**
+	 * The non-local transfer a {@code (go tag)} throws; the enclosing {@code tagbody}
+	 * whose label set contains the tag catches it and resumes at that label.
+	 */
+	static final class GoSignal extends RuntimeException {
+
+		private final String tag;
+
+		GoSignal(String tag) {
+			super(null, null, false, false);
+			this.tag = tag;
+		}
+
+		/** The key of the tag it jumps to ({@link #goTagKey}). */
+		String tag() {
+			return this.tag;
+		}
+
+	}
+
+	/**
+	 * Evaluates {@code (tagbody {tag | form}...)}: symbols and integers are go-tag
+	 * labels, everything else evaluates in order for effect. A {@code (go tag)} in a
+	 * statement's tail is answered by {@link #evalTagbodyStatement} without a throw; one
+	 * thrown anywhere else inside (dynamically) resumes at that label; falling off the
+	 * end returns nil. The compilers support the lexical subset only: a compiled
+	 * {@code go} must target a lexically enclosing tagbody in the same function.
+	 */
+	private LispVal evalTagbody(LispCons cons, Environment env, @Nullable Environment exitTo) {
+		List<LispVal> body = cons.cdr() instanceof LispCons items ? items.toList() : List.of();
+		TagbodyLabels labels = TagbodyLabels.of(body);
+		@org.jspecify.annotations.Nullable
+		String[] keys = labels.keys();
+		// A tagbody with labels is a dynamic extent to an exit's value form: a go in it
+		// (jonathan's (return-from read-number ...) reaching proc-parse's (go :eof))
+		// must find this tagbody, so the form is not handed to the frame below.
+		Environment statementExitTo = exitTo != null
+				&& java.util.Arrays.stream(keys).noneMatch(java.util.Objects::nonNull) ? exitTo : null;
+		int pc = 0;
+		while (pc < keys.length) {
+			if (keys[pc] != null) {
+				pc++;
+				continue;
+			}
+			pollInterrupt();
+			try {
+				int jump = evalTagbodyStatement(body.get(pc), env, labels, statementExitTo);
+				pc = jump == NO_JUMP ? pc + 1 : jump + 1;
+			}
+			catch (GoSignal go) {
+				int target = labels.indexOf(go.tag);
+				if (target == NO_JUMP) {
+					// Not one of ours: an outer tagbody owns the tag.
+					throw go;
+				}
+				pc = target + 1;
+			}
+		}
+		return LispNil.INSTANCE;
+	}
+
+	/**
+	 * A tagbody's labels: the {@link #goTagKey} of every body item, null for a statement.
+	 * A tagbody holds a handful of labels, so a scan beats building a map per entry. Also
+	 * the source of the JUMP TOKENS a statement's tail answers with: a {@code (go L)}
+	 * that {@link #evalCons}'s loop reaches in the tail of a statement of this tagbody
+	 * answers {@link #jump} of L's index instead of throwing, and {@link #jumpIndex}
+	 * reads the index back. A token is an integer object private to this activation, told
+	 * apart by IDENTITY, so no value a program can compute equals one; it never reaches a
+	 * program, since a tail's value is the statement's value and a statement's value goes
+	 * nowhere but {@link #evalTagbody}.
+	 */
+	static final class TagbodyLabels {
+
+		private final @org.jspecify.annotations.Nullable String[] keys;
+
+		private @org.jspecify.annotations.Nullable LispVal @org.jspecify.annotations.Nullable [] jumps;
+
+		private TagbodyLabels(@org.jspecify.annotations.Nullable String[] keys) {
+			this.keys = keys;
+		}
+
+		/** The labels of a tagbody's body items. */
+		static TagbodyLabels of(List<LispVal> body) {
+			@org.jspecify.annotations.Nullable
+			String[] keys = new String[body.size()];
+			for (int i = 0; i < keys.length; i++) {
+				keys[i] = goTagKey(body.get(i));
+			}
+			return new TagbodyLabels(keys);
+		}
+
+		/**
+		 * One activation's labels over keys worked out once: a compiled
+		 * {@code tagbody}'s, whose jump tokens must be its activation's own.
+		 * @param keys the {@link #goTagKey} of every body item, never written
+		 * @return the labels
+		 */
+		static TagbodyLabels ofKeys(@org.jspecify.annotations.Nullable String[] keys) {
+			return new TagbodyLabels(keys);
+		}
+
+		@org.jspecify.annotations.Nullable
+		String[] keys() {
+			return this.keys;
+		}
+
+		/**
+		 * The body index of the label {@code key} (the last one if repeated), or
+		 * {@link #NO_JUMP}.
+		 */
+		int indexOf(String key) {
+			for (int i = this.keys.length - 1; i >= 0; i--) {
+				if (key.equals(this.keys[i])) {
+					return i;
+				}
+			}
+			return NO_JUMP;
+		}
+
+		/**
+		 * The token a statement tail answers to resume after the label at {@code index}.
+		 */
+		LispVal jump(int index) {
+			if (this.jumps == null) {
+				this.jumps = new LispVal[this.keys.length];
+			}
+			LispVal token = this.jumps[index];
+			if (token == null) {
+				token = new LispInteger(index);
+				this.jumps[index] = token;
+			}
+			return token;
+		}
+
+		/**
+		 * The label index a statement's value asks to resume after, or {@link #NO_JUMP}
+		 * for an ordinary value.
+		 */
+		int jumpIndex(LispVal value) {
+			if (this.jumps != null && value instanceof LispInteger) {
+				for (int i = 0; i < this.jumps.length; i++) {
+					if (this.jumps[i] == value) {
+						return i;
+					}
+				}
+			}
+			return NO_JUMP;
+		}
+
+	}
+
+	/**
+	 * What {@link #evalTagbodyStatement} answers when the statement completed normally.
+	 */
+	static final int NO_JUMP = -1;
+
+	/**
+	 * What a compiled statement answers when it exits to a block of the frame below it
+	 * ({@code CompiledForm#statement}'s {@code deferTo}): the exit waits in the thread's
+	 * register ({@link Environment#takeExit}) for the frame, whose tail its value form
+	 * is. A statement the walk runs throws the exit instead ({@link BlockTailExit}).
+	 */
+	static final int EXITED = -2;
+
+	/**
+	 * Evaluates one tagbody statement for effect and answers the body index of the label
+	 * a {@code go} in its TAIL jumps to, or {@link #NO_JUMP}. The statement runs through
+	 * {@link #evalCons}'s loop with the tagbody's labels, so a {@code (go L)} in any tail
+	 * context the loop follows -- an {@code if} arm, the last form of a {@code progn}, a
+	 * {@code let}, a block or a called function's body, a macro's expansion -- whose tag
+	 * is one of {@code labels} is answered, not thrown; the loop never enters another
+	 * tagbody, so this is the innermost one either way. Every other {@code go} (not in a
+	 * tail, a tag of an outer tagbody, one from a closure) is still a {@code GoSignal}.
+	 * @param form the statement
+	 * @param env its environment
+	 * @param labels the tagbody's labels
+	 * @return the label index to resume after, or {@link #NO_JUMP}
+	 */
+	int evalTagbodyStatement(LispVal form, Environment env, TagbodyLabels labels, @Nullable Environment exitTo) {
+		if (!(form instanceof LispCons cons)) {
+			evalAtom(form, env);
+			return NO_JUMP;
+		}
+		return labels.jumpIndex(evalCons(cons, env, labels, exitTo));
+	}
+
+	/**
+	 * The key a {@code go} tag has in a tagbody's label table -- a symbol by its plain
+	 * name, an integer by its digits (CLHS 5.3) -- or null when it is neither.
+	 */
+	@org.jspecify.annotations.Nullable
+	static String goTagKey(@org.jspecify.annotations.Nullable LispVal tag) {
+		if (tag instanceof LispSymbol tagSym) {
+			return plainName(tagSym.name());
+		}
+		if (tag instanceof LispInteger tagInt) {
+			return String.valueOf(tagInt.value());
+		}
+		return null;
+	}
+
+	/**
+	 * Resolves a {@code change-class} whose class argument is COMPUTED (upstream ASDF's
+	 * {@code (change-class ret class)}) into the literal-name form the shared expansion
+	 * takes: the instance and the designator evaluate here, in CL's left-to-right order
+	 * (the instance value is self-evaluating, so re-evaluating the rebuilt form is
+	 * effect-free), and a class-metaobject designator continues as its name. A form whose
+	 * class argument is already a literal quoted symbol passes through untouched.
+	 */
+	private LispCons resolveChangeClassDesignator(LispCons cons, Environment env) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 3) {
+			return cons;
+		}
+		if (parts.get(2) instanceof LispCons q && q.car() instanceof LispSymbol qs
+				&& LispNames.QUOTE.equals(qs.name())) {
+			return cons;
+		}
+		LispVal instance = eval(parts.get(1), env);
+		LispVal designator = eval(parts.get(2), env);
+		if (designator instanceof LispInstance meta && meta.slotCount() > 0
+				&& this.closRegistry.isClassMetaobject(meta)) {
+			designator = meta.slot(0);
+		}
+		if (!(designator instanceof LispSymbol nameSym)) {
+			throw new LispEvalException(
+					LispNames.CHANGE_CLASS + " expects a class designator, got " + designator.print());
+		}
+		List<LispVal> rebuilt = new java.util.ArrayList<>();
+		rebuilt.add(parts.get(0));
+		rebuilt.add(instance);
+		rebuilt.add(new LispCons(new LispSymbol(LispNames.QUOTE), new LispCons(nameSym, LispNil.INSTANCE)));
+		rebuilt.addAll(parts.subList(3, parts.size()));
+		return (LispCons) LispCons.rebuiltList(cons, rebuilt);
+	}
+
+	/**
+	 * Evaluates {@code (slot-value obj slot)}. A literal quoted slot name goes through
+	 * the shared macro expansion (positional {@code nth}, compile-path parity); a
+	 * computed name -- a variable or expression, e.g. a serializer walking
+	 * {@code %class-slot-defs} results as data -- resolves the slot at runtime by base
+	 * name, and checks it is bound like the compile paths' {@code %slot-read} wrap.
+	 */
+	private LispVal evalSlotValue(LispCons cons, Environment env) {
+		List<LispVal> parts = cons.toList();
+		boolean literalName = parts.size() == 3 && parts.get(2) instanceof LispCons q
+				&& q.car() instanceof LispSymbol qs && LispNames.QUOTE.equals(qs.name());
+		// Under the slot-access protocol a computed name takes the shared expansion too,
+		// which routes an instance of a :metaclass class through slot-value-using-class.
+		if (parts.size() == 3 && !literalName && !this.closRegistry.slotProtocol()) {
+			LispVal instance = eval(parts.get(1), env);
+			LispVal slotName = eval(parts.get(2), env);
+			SlotRef slot = instanceSlotRef(instance, slotName);
+			if (slot == null) {
+				throw new LispEvalException(
+						LispNames.SLOT_VALUE + ": unknown slot " + slotName.print() + " on " + instance.print());
+			}
+			// Boundness-checked like a literal name's read: an unbound slot reaches
+			// slot-unbound.
+			return apply(resolveFunction(LispNames.SLOT_READ_INTERNAL), List.of(slot.read(), instance, slotName),
+					this.globalEnv);
+		}
+		return eval(LispMacroExpander.expandSlotValue(cons, this.closRegistry), env);
+	}
+
+	/** The value of a condition instance's slot by base name ({@code nil} if absent). */
+	private LispVal conditionSlotValue(LispVal instance, String baseName) {
+		SlotRef slot = instanceSlotRef(instance, new LispSymbol(baseName));
+		return slot == null ? LispNil.INSTANCE : slot.read();
+	}
+
+	/** A readable/writable slot location: an instance slot or a shared class cell. */
+	private sealed interface SlotRef permits InstanceSlotRef, CellSlotRef {
+
+		LispVal read();
+
+		void write(LispVal value);
+
+	}
+
+	/** An instance together with the 0-based index of one of its slots. */
+	private record InstanceSlotRef(LispInstance instance, int index) implements SlotRef {
+
+		@Override
+		public LispVal read() {
+			return this.instance.slot(this.index);
+		}
+
+		@Override
+		public void write(LispVal value) {
+			this.instance.setSlot(this.index, value);
+		}
+
+	}
+
+	/**
+	 * The shared global cell of a {@code :allocation :class} slot -- reads and writes go
+	 * to the {@code defvar}'d cell variable, never to the instance mirror.
+	 */
+	private record CellSlotRef(Environment env, String cellVar) implements SlotRef {
+
+		@Override
+		public LispVal read() {
+			return this.env.lookup(this.cellVar);
+		}
+
+		@Override
+		public void write(LispVal value) {
+			this.env.set(this.cellVar, value);
+		}
+
+	}
+
+	/**
+	 * Whether a value is the slot-unbound marker -- one layout-tag compare, the same test
+	 * the compiled backends' {@code %obj-is} performs.
+	 */
+	private static boolean isUnboundMarker(LispVal value) {
+		return value instanceof LispInstance instance && instance.hasTag(ClosRegistry.UNBOUND_TAG);
+	}
+
+	/**
+	 * Whether a {@code shared-initialize} slot-names argument selects the slot for its
+	 * initform (CLHS 7.1.4): {@code t} every slot, a list the slots it names (by base
+	 * name, as every slot lookup here), nil none.
+	 */
+	private static boolean selectsSlot(LispVal slotNames, ClosRegistry.SlotSpec slot) {
+		if (!(slotNames instanceof LispCons)) {
+			return !(slotNames instanceof LispNil);
+		}
+		for (LispVal cursor = slotNames; cursor instanceof LispCons cell; cursor = cell.cdr()) {
+			if (cell.car() instanceof LispSymbol name && plainName(name.name()).equalsIgnoreCase(slot.baseName())) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/** A fresh slot-unbound marker instance (what {@code slot-makunbound} stores). */
+	private LispVal unboundMarkerValue() {
+		LispLayout layout = this.closRegistry.findLayoutByTag(ClosRegistry.UNBOUND_TAG);
+		return LispInstance.ofNilSlots(java.util.Objects.requireNonNull(layout));
+	}
+
+	/**
+	 * The slot of an instance named by a (runtime) symbol, or null when the value is not
+	 * an instance or its layout has no slot of that name. The layout rides on the value,
+	 * so this resolves a {@code defstruct} instance as readily as a CLOS one.
+	 */
+	private @Nullable SlotRef instanceSlotRef(LispVal instance, LispVal slotName) {
+		if (!(instance instanceof LispInstance inst) || !(slotName instanceof LispSymbol slotSym)) {
+			return null;
+		}
+		String base = plainName(slotSym.name());
+		// A :allocation :class slot answers its shared cell, never the instance
+		// mirror -- the registry's effective spec (inherited or re-declared) names the
+		// cell the instance's own class shares.
+		String tag = inst.layout().tag();
+		if (tag.startsWith(LispLayout.CLASS_TAG_PREFIX)) {
+			ClosRegistry.ClassInfo info = this.closRegistry
+				.findClass(tag.substring(LispLayout.CLASS_TAG_PREFIX.length()));
+			if (info != null) {
+				for (ClosRegistry.SlotSpec spec : info.slots()) {
+					if (spec.baseName().equalsIgnoreCase(base) && spec.sharedCellVar() != null) {
+						return new CellSlotRef(this.globalEnv, spec.sharedCellVar());
+					}
+				}
+			}
+		}
+		List<String> slotNames = inst.layout().slotNames();
+		for (int i = 0; i < slotNames.size(); i++) {
+			// Case-insensitive: a Java-side caller (conditionSlotValue passes the
+			// built-in "format-control"/"format-arguments") spells the slot lowercase,
+			// while an upcase-read condition registers its slots upcased -- the same
+			// reconciliation LispMacroExpander.expandConditionSlotReader makes.
+			if (slotNames.get(i).equalsIgnoreCase(base)) {
+				return new InstanceSlotRef(inst, i);
+			}
+		}
+		return null;
+	}
+
+	/**
+	 * Resolves every {@code (%read-eval datum)} marker in the form (the shape
+	 * {@link am.ik.rontolisp.reader.LispReader#readAllWithReadEvalMarkers} wraps a
+	 * {@code #.} datum in): each datum is evaluated against the global environment and
+	 * its value substituted in place, recursively. Unchanged subtrees keep their
+	 * identity. Also used by the compile path ({@code UserMacroExpander}), where this
+	 * evaluator is the macro-time interpreter.
+	 * @param form a top-level form possibly carrying read-eval markers
+	 * @return the form with every marker replaced by its datum's value
+	 */
+	/**
+	 * Replaces every {@code #S(NAME :SLOT value ...)} literal in the form with the
+	 * instance it denotes, against this evaluator's registry -- the interpreter's half of
+	 * the read-time construction Common Lisp performs inside its reader (the compile
+	 * path's half runs per form inside
+	 * {@link LispMacroExpander#expandTopLevelDefinitions}). Called at the top-level
+	 * entries only, so a literal sees the {@code defstruct} of every PRECEDING top-level
+	 * form and of no later one, which is the ordering CL's form-at-a-time load gives.
+	 * @param form a top-level form possibly carrying struct literals
+	 * @return the form with every literal replaced by its instance
+	 */
+	public LispVal resolveStructLiterals(LispVal form) {
+		return StructLiteralFolder.fold(form, this.closRegistry);
+	}
+
+	/**
+	 * Rebinds a runtime reader built-in ({@code read} / {@code read-from-string}) to
+	 * itself plus a struct-literal fold, so a {@code #S(...)} datum read at run time is
+	 * the instance it denotes and never the unresolved carrier. Rebinding the FUNCTION
+	 * rather than the call sites keeps {@code #'read-from-string} and every library that
+	 * funcalls it folding too.
+	 */
+	private void foldStructLiteralsOf(String name) {
+		if (!(this.globalEnv.lookupFunctionOrNull(name) instanceof LispFunction raw)) {
+			return;
+		}
+		this.globalEnv.defineFunction(name, new LispFunction(name, args -> {
+			LispVal value;
+			try {
+				value = raw.body().apply(args);
+			}
+			catch (am.ik.rontolisp.reader.LispReadException e) {
+				// A runtime read error is a catchable condition: input that ran out
+				// mid-datum is end-of-file, a bad token is reader-error (CLHS 23.1).
+				// Without this conversion a bad datum handed to read/read-from-string
+				// would blow through handler-case as a raw Java exception. The
+				// compiled backends' emitted readers signal a catchable simple-error
+				// for the same input instead (.kb/read-load-streams.md).
+				throw e.isEndOfFile() ? readEndOfFile(args) : readError(String.valueOf(e.getMessage()), args);
+			}
+			catch (IllegalArgumentException e) {
+				throw new LispEvalException(String.valueOf(e.getMessage()));
+			}
+			catch (LispEvalException e) {
+				// The #. resolver's *read-eval*-nil refusal arrives typed as
+				// reader-error but streamless; give it the stream like any other
+				// runtime-read failure. Anything else passes through untouched.
+				if (e.condition() == null && ClosRegistry.READER_ERROR_CLASS_NAME.equals(e.conditionClassName())) {
+					throw readError(String.valueOf(e.getMessage()), args);
+				}
+				throw e;
+			}
+			try {
+				return StructLiteralFolder.fold(value, this.closRegistry);
+			}
+			catch (IllegalArgumentException e) {
+				// A #S(...) the fold refuses (unknown type, bad slot) is a
+				// reader-error like any other malformed runtime datum.
+				throw readError(String.valueOf(e.getMessage()), args);
+			}
+		}));
+	}
+
+	/**
+	 * The {@code reader-error} condition for a malformed runtime-read datum, carrying the
+	 * frontend's message and a string-input stream over the offending text (what
+	 * {@code stream-error-stream} reads back).
+	 * @param message the frontend's message
+	 * @param args the {@code read-from-string} call's arguments
+	 */
+	private LispEvalException readError(String message, List<LispVal> args) {
+		return new LispEvalException(message,
+				ClosRegistry.newReaderErrorCondition(new LispString(message), readErrorStream(args)));
+	}
+
+	/**
+	 * The {@code end-of-file} condition for a runtime read that ran out of input,
+	 * carrying a string-input stream over the offending text.
+	 * @param args the {@code read-from-string} call's arguments
+	 */
+	private LispEvalException readEndOfFile(List<LispVal> args) {
+		return new LispEvalException(ClosRegistry.END_OF_FILE_MESSAGE,
+				ClosRegistry.newEndOfFileCondition(readErrorStream(args)));
+	}
+
+	/**
+	 * A string-input stream value over the text a runtime read failed on -- the
+	 * {@code stream} slot of its condition. Built through the
+	 * {@code make-string-input-stream} built-in, so the value is exactly what user code
+	 * holding such a stream holds.
+	 * @param args the {@code read-from-string} call's arguments
+	 */
+	private LispVal readErrorStream(List<LispVal> args) {
+		if (!args.isEmpty() && args.get(0) instanceof LispString text && this.globalEnv
+			.lookupFunctionOrNull(LispNames.MAKE_STRING_INPUT_STREAM_INTERNAL) instanceof LispFunction make) {
+			return make.body().apply(List.of(text));
+		}
+		return LispNil.INSTANCE;
+	}
+
+	/**
+	 * Signals when the current -- dynamic-first -- value of {@code *read-eval*} is nil:
+	 * CLHS forbids reading {@code #.} then. Checked at marker RESOLUTION rather than at
+	 * read, which is the same instant for the runtime read built-ins and, for the
+	 * form-at-a-time load/compile paths, lets a top-level {@code (setq *read-eval* nil)}
+	 * disable {@code #.} in every later form -- CL's one-form-at-a-time timing.
+	 */
+	private void requireReadEvalEnabled() {
+		LispVal value = (!this.specialVars.isEmpty() || this.progvUsed)
+				&& this.dynamicBindings.isBound(LispNames.READ_EVAL_VAR)
+						? this.dynamicBindings.get(LispNames.READ_EVAL_VAR)
+						: this.globalEnv.lookupOrNull(LispNames.READ_EVAL_VAR);
+		if (value instanceof LispNil) {
+			// A reader-error (not a plain error): the runtime read's fold gives it
+			// the offending stream on the way out.
+			throw LispEvalException.ofClass(ClosRegistry.READER_ERROR_CLASS_NAME,
+					"cannot read #. while *read-eval* is nil");
+		}
+	}
+
+	/**
+	 * Replaces the reader's {@code #.} markers in an already-read form by the value of
+	 * the marked datum, rebuilding only the conses that actually change. The reader
+	 * leaves the marker in place instead of evaluating it, because read-time evaluation
+	 * needs an evaluator; this is where it happens. This entry substitutes every value
+	 * RAW -- the runtime {@code read} family's contract, where the whole form is data.
+	 * @param form the form as read
+	 * @return the form with every read-time-eval marker resolved
+	 */
+	public LispVal resolveReadTimeEval(LispVal form) {
+		return resolveReadTimeEval(form, false, new IdentityHashMap<>());
+	}
+
+	/**
+	 * Like {@link #resolveReadTimeEval(LispVal)} but for a form about to be EVALUATED
+	 * (the load/compile pipelines): a marker in an evaluated position splices a SYMBOL
+	 * value QUOTED, so the value stands for the object it renders -- sxql's
+	 * {@code (intern name #.*package*)} splices the package value, which rontolisp
+	 * renders as a plain symbol where CL's package object would self-evaluate. Every
+	 * other value splices raw like CL's object splice: notably a CONS value in code
+	 * position IS code (fast-http's {@code #.`(eval-when ...)} defconstant generator). A
+	 * marker inside a {@code (quote ...)} datum or a {@code defpackage} form splices raw
+	 * (data), and a marker inside backquote construction code arrives as the reader's
+	 * renamed TEMPLATE variant, which always splices quoted.
+	 * @param form the form as read
+	 * @return the form with every read-time-eval marker resolved
+	 */
+	public LispVal resolveReadTimeEvalInCode(LispVal form) {
+		return resolveReadTimeEvalInCode(form, new IdentityHashMap<>());
+	}
+
+	/**
+	 * {@link #resolveReadTimeEvalInCode(LispVal)} for one of the forms that were a single
+	 * form as read: a label on a {@code #.} names one value, evaluated once.
+	 * @param form the form as read
+	 * @param values what the markers resolved so far evaluated to, by identity
+	 * @return the form with every read-time-eval marker resolved
+	 */
+	LispVal resolveReadTimeEvalInCode(LispVal form, Map<LispVal, LispVal> values) {
+		// A #. value is a datum the read never saw, and may hold a circle.
+		return LispTrees.shieldProgramForm(resolveReadTimeEval(form, true, values));
+	}
+
+	private LispVal resolveReadTimeEval(LispVal form, boolean inCode, Map<LispVal, LispVal> values) {
+		if (inCode && form instanceof LispCons call && isMarker(call.car(), LispNames.READ_EVAL)) {
+			// A marker in a call's OPERATOR position is not evaluated, so its value
+			// splices raw: ironclad tiger.lisp's (#.+tiger-block-copy-fn+ block ...)
+			// names the function, where a quoted symbol would be no call at all.
+			LispVal head = resolveReadTimeEval(call.car(), false, values);
+			LispVal rest = resolveReadTimeEvalSpine(call.cdr(), true, values);
+			return head == call.car() && rest == call.cdr() ? form : new LispCons(head, rest);
+		}
+		return resolveReadTimeEvalSpine(form, inCode, values);
+	}
+
+	/**
+	 * {@link #resolveReadTimeEval(LispVal, boolean)} over a list's cells without the
+	 * operator-position rule: {@code form} is a TAIL, so its first element is an
+	 * argument.
+	 */
+	private LispVal resolveReadTimeEvalSpine(LispVal form, boolean inCode, Map<LispVal, LispVal> values) {
+		return LispTrees.rebuildSpine(form, node -> resolvedReadTimeEvalNode(node, inCode, values),
+				car -> resolveReadTimeEval(car, inCode, values));
+	}
+
+	/**
+	 * What a node {@link #resolveReadTimeEval} does not walk into becomes -- an atom
+	 * stays, a marker is its value, a quoted datum and a {@code defpackage}'s clauses are
+	 * resolved as data -- or {@code null} for an ordinary cell.
+	 */
+	private @Nullable LispVal resolvedReadTimeEvalNode(LispVal form, boolean inCode, Map<LispVal, LispVal> values) {
+		if (form instanceof LispCircularLiteral literal) {
+			LispVal resolved = resolvedReadTimeEvalData(literal.datum(), values);
+			return (resolved == literal.datum()) ? form : new LispCircularLiteral(resolved);
+		}
+		if (form instanceof LispArray || form instanceof LispStructLiteral) {
+			return resolvedReadTimeEvalData(form, values);
+		}
+		if (!(form instanceof LispCons cons)) {
+			return form;
+		}
+		if (cons.car() instanceof LispCons element && isMarker(element, LispNames.READ_TIME_FEATURE)) {
+			// A deferred #+#. guard as a list element: the guarded datum splices in, or
+			// the element is dropped.
+			LispVal rest = resolveReadTimeEvalSpine(cons.cdr(), inCode, values);
+			LispVal guarded = readTimeFeatureChoice(element, inCode, values);
+			return guarded == null ? rest : new LispCons(guarded, rest);
+		}
+		if (isMarker(cons, LispNames.READ_TIME_FEATURE)) {
+			// The whole form is the guard (a top-level #+#.): a dropped form is nil.
+			return Objects.requireNonNullElse(readTimeFeatureChoice(cons, inCode, values), LispNil.INSTANCE);
+		}
+		if (isMarker(cons, LispNames.READ_TIME_FEATURE_TEMPLATE)) {
+			// Inside backquote construction code the marker is a spliced segment.
+			return Objects.requireNonNullElse(readTimeFeatureChoice(cons, true, values), LispNil.INSTANCE);
+		}
+		if (cons.car() instanceof LispSymbol head && LispNames.READ_EVAL.equals(head.name())
+				&& cons.cdr() instanceof LispCons datumCons && datumCons.cdr() instanceof LispNil) {
+			requireReadEvalEnabled();
+			LispVal value = readTimeValue(cons, datumCons.car(), values);
+			// ONLY a symbol value quotes: rontolisp renders a package object as a
+			// symbol, and quoting keeps it the OBJECT it is in CL (where a package
+			// self-evaluates). A cons value stays raw exactly like CL -- the spliced
+			// list IS code (fast-http's #.`(eval-when ... (defconstant ...))
+			// generator relies on it), and a caller wanting list DATA spells '#.
+			// there as it must in CL.
+			if (inCode && value instanceof LispSymbol sym && !sym.name().startsWith(":")) {
+				return new LispCons(new LispSymbol(LispNames.QUOTE), new LispCons(value, LispNil.INSTANCE));
+			}
+			return value;
+		}
+		if (cons.car() instanceof LispSymbol head && LispNames.READ_EVAL_TEMPLATE.equals(head.name())
+				&& cons.cdr() instanceof LispCons datumCons && datumCons.cdr() instanceof LispNil) {
+			// A marker inside backquote construction code (the reader's renamed
+			// variant): the value is template DATA, so it substitutes quoted --
+			// evaluating the construction code embeds the value itself.
+			requireReadEvalEnabled();
+			LispVal value = readTimeValue(cons, datumCons.car(), values);
+			return new LispCons(new LispSymbol(LispNames.QUOTE), new LispCons(value, LispNil.INSTANCE));
+		}
+		if (inCode && cons.car() instanceof LispSymbol op && LispNames.QUOTE.equals(op.name())
+				&& cons.cdr() instanceof LispCons datumCell && datumCell.cdr() instanceof LispNil) {
+			// The well-formed (quote DATUM) shape: the datum is data, so a marker
+			// inside it splices raw.
+			LispVal datum = resolveReadTimeEval(datumCell.car(), false, values);
+			if (datum == datumCell.car()) {
+				return form;
+			}
+			return new LispCons(cons.car(), new LispCons(datum, LispNil.INSTANCE));
+		}
+		if (inCode && cons.car() instanceof LispSymbol dataOp
+				&& LispNames.DEFPACKAGE.equals(LispSymbol.memberName(dataOp.name()))) {
+			// defpackage's clauses are unevaluated data: alexandria-2 splices its
+			// re-export list as (:export . #.(let ...)).
+			LispVal rest = resolveReadTimeEval(cons.cdr(), false, values);
+			if (rest == cons.cdr()) {
+				return form;
+			}
+			return new LispCons(cons.car(), rest);
+		}
+		return null;
+	}
+
+	/**
+	 * Resolves the markers of a literal, a graph no spine walk goes through: an array, a
+	 * {@code #S} literal, the circle wrapped where it was read. It is data, so a value
+	 * splices raw.
+	 */
+	private LispVal resolvedReadTimeEvalData(LispVal datum, Map<LispVal, LispVal> values) {
+		return LispTrees.replaceDatumNodes(datum,
+				cell -> (isMarker(cell, LispNames.READ_EVAL) || isMarker(cell, LispNames.READ_EVAL_TEMPLATE))
+						? resolvedReadTimeEvalNode(cell, false, values) : null,
+				values);
+	}
+
+	/**
+	 * What a marker evaluates to: once, however many places a {@code #n=} label on it
+	 * spells it in, CL's reader reading the {@code #.} once.
+	 */
+	private LispVal readTimeValue(LispCons marker, LispVal datum, Map<LispVal, LispVal> values) {
+		LispVal known = values.get(marker);
+		if (known != null) {
+			return known;
+		}
+		// The datum itself is always evaluated, so nested markers are in code.
+		LispVal value = evalReadTimeDatum(resolveReadTimeEval(datum, true, values));
+		values.put(marker, value);
+		return value;
+	}
+
+	/**
+	 * Decides a {@code %read-time-feature} marker (or its template variant): its feature
+	 * expression's {@code #.} values put in place and the result tested against the
+	 * feature set the read used, as a {@code #+}/{@code #-} would have.
+	 * @return the guarded datum, resolved, when the guard holds; {@code null} when it
+	 * fails or nested guards left no datum
+	 */
+	private @Nullable LispVal readTimeFeatureChoice(LispCons marker, boolean inCode, Map<LispVal, LispVal> values) {
+		List<LispVal> parts = marker.toList();
+		if (parts.size() < 4 || parts.size() > 5 || !(parts.get(1) instanceof LispString sign)
+				|| !(parts.get(2) instanceof LispCons || parts.get(2) instanceof LispNil)) {
+			throw new LispEvalException("malformed " + LispNames.READ_TIME_FEATURE + " marker: " + marker.print());
+		}
+		requireReadEvalEnabled();
+		List<String> spelling = new ArrayList<>();
+		if (parts.get(2) instanceof LispCons set) {
+			for (LispVal name : set.toList()) {
+				spelling.add(((LispString) name).value());
+			}
+		}
+		LispVal expr = resolveReadTimeEval(parts.get(3), false, values);
+		boolean holds;
+		try {
+			holds = Features.decode(spelling).isEnabled(expr) != "-".equals(sign.value());
+		}
+		catch (LispReadException ex) {
+			throw new LispEvalException("#" + sign.value() + "#.: " + ex.getMessage());
+		}
+		if (!holds || parts.size() < 5) {
+			return null;
+		}
+		LispVal guarded = parts.get(4);
+		if (isMarker(guarded, LispNames.READ_EVAL_UNREADABLE) && guarded instanceof LispCons raw
+				&& raw.cdr() instanceof LispCons text && text.car() instanceof LispString source) {
+			throw new LispEvalException("#" + sign.value() + "#.: the guard holds, but the form behind it could not"
+					+ " be read: " + source.value());
+		}
+		return resolveReadTimeEval(guarded, inCode, values);
+	}
+
+	private static boolean isMarker(LispVal form, String name) {
+		return form instanceof LispCons cons && cons.car() instanceof LispSymbol head && name.equals(head.name());
+	}
+
+	/**
+	 * Loads the named system: dependency systems first (recursively), then the component
+	 * files in their {@code :depends-on}/{@code :serial} order, each through
+	 * {@link #loadFile}. An already-loaded system is a no-op. An unknown system is
+	 * located as {@code NAME.asd} in the directory of the loading file and then on the
+	 * {@link #setSystemPath system path}, and loaded into this image
+	 * ({@link AsdfSystems#loadAsd}), as the compile-time {@code LoadInliner} pass loads
+	 * it into its build image.
+	 */
+	/**
+	 * Implements {@code ql:quickload}: downloads the named system (and its transitive
+	 * dependencies) from the installed dists into the local cache, adds the extracted
+	 * {@code .asd} directories to the system search path, and then loads it through
+	 * {@link #loadSystem} -- so quickload is {@code asdf:load-system} with an
+	 * auto-download step in front.
+	 */
+	private void quickload(String name) {
+		// A built-in system ("usocket") is satisfied by the embedded library: no
+		// download, no cache, no DistClient.
+		if (BuiltinSystems.isBuiltin(name)) {
+			loadSystem(name);
+			return;
+		}
+		downloadQuicklisp(name);
+		this.quickloadDepth++;
+		try {
+			loadSystem(name);
+		}
+		finally {
+			this.quickloadDepth--;
+		}
+	}
+
+	/**
+	 * Downloads the named system and its index-listed dependencies and adds their
+	 * {@code .asd} directories to the system path.
+	 * @return the directories the download contributed
+	 */
+	private List<String> downloadQuicklisp(String name) {
+		List<String> asdDirs;
+		try {
+			asdDirs = distClient().ensureAvailable(name);
+		}
+		catch (IOException ex) {
+			throw new LispEvalException(LispNames.QL_QUICKLOAD + ": " + ex.getMessage());
+		}
+		for (String dir : asdDirs) {
+			if (!this.distDirs.contains(dir)) {
+				this.distDirs.add(dir);
+			}
+		}
+		return asdDirs;
+	}
+
+	/**
+	 * Locates a system's {@code .asd}; under {@code ql:quickload}, one the search does
+	 * not find is downloaded first. Quicklisp's index lists a dependency by its PRIMARY
+	 * name only (cl-smtp's {@code frugal-uuid/non-frugal} is indexed as
+	 * {@code frugal-uuid}), so the download in front of the load misses what a secondary
+	 * system needs ({@code ironclad/prngs}); Quicklisp's client installs such a system
+	 * when ASDF reports it missing, and this is that step.
+	 * @return the file, or {@code null} when the search registered the system itself
+	 */
+	private AsdfSystems.@Nullable LocatedAsd locateAsd(String name) {
+		AsdfSystems.LocatedAsd asd = searchSystemDefinition(name);
+		if (asd == null && !this.asdfSystems.containsKey(name) && this.quickloadDepth > 0) {
+			downloadQuicklisp(name);
+			asd = searchSystemDefinition(name);
+		}
+		if (asd == null && !this.asdfSystems.containsKey(name)) {
+			throw AsdfSystems.notFound(name, triedPaths(name));
+		}
+		return asd;
+	}
+
+	/**
+	 * Walks {@code asdf:*system-definition-search-functions*}.
+	 * @return the file a function found, or {@code null} when none did or one answered a
+	 * system, which is registered by then
+	 */
+	private AsdfSystems.@Nullable LocatedAsd searchSystemDefinition(String name) {
+		ensureAsdfRuntimeLoaded();
+		LispVal found = applyGlobally(this.globalEnv.lookupFunction("%ASDF-SEARCH-FILE"),
+				List.of(new LispString(name)));
+		if (!(found instanceof LispString path)) {
+			return null;
+		}
+		AsdfSystems.LocatedAsd asd = AsdfSystems.readAsd(path.value(), this.sourceLoader);
+		if (asd == null) {
+			throw new LispEvalException(
+					"The search for system '" + name + "' found " + path.value() + ", which cannot be read");
+		}
+		return asd;
+	}
+
+	/** The {@code .asd} paths a failed search reports having looked at. */
+	private List<String> triedPaths(String name) {
+		String fileName = AsdfSystems.primarySystemName(name) + ".asd";
+		List<String> tried = new java.util.ArrayList<>();
+		for (String dir : centralRegistryDirs()) {
+			tried.add(SourceLoader.resolve(dir, fileName));
+		}
+		for (String dir : searchPathDirs(true)) {
+			tried.add(SourceLoader.resolve(dir, fileName));
+		}
+		return tried.stream().distinct().toList();
+	}
+
+	/**
+	 * What the source registry inherits on the interpreter, which is probed at each
+	 * search: the directory of the file asking and the system path. What a download
+	 * brought in counts whatever a configuration says, as Quicklisp's own search function
+	 * does.
+	 */
+	private List<String> searchPathDirs(boolean inherits) {
+		List<String> dirs = new java.util.ArrayList<>();
+		if (inherits) {
+			String baseDir = this.loadDirStack.peekLast();
+			dirs.add(baseDir == null ? "" : baseDir);
+			dirs.addAll(this.systemPath);
+		}
+		dirs.addAll(this.distDirs);
+		return dirs;
+	}
+
+	/**
+	 * Whether the search finds {@code name}, looking from {@code baseDir} first: the
+	 * answer to a {@code :weakly-depends-on}.
+	 */
+	private boolean searchFinds(String name, String baseDir) {
+		this.loadDirStack.addLast(baseDir);
+		try {
+			return searchSystemDefinition(name) != null || this.asdfSystems.containsKey(name);
+		}
+		finally {
+			this.loadDirStack.removeLast();
+		}
+	}
+
+	/**
+	 * Reads a source registry configuration without keeping it: a compile path's literal
+	 * call, the program's own, answered from this build image.
+	 * @param parameter the configuration, what {@code initialize-source-registry} takes
+	 * @param pathname the file holding the call, or {@code null} outside every file
+	 * @param truename its resolved path
+	 * @return what the configuration found
+	 */
+	public AsdfSystems.SourceRegistry readSourceRegistry(LispVal parameter, @Nullable String pathname,
+			@Nullable String truename) {
+		ensureAsdfRuntimeLoaded();
+		this.specialVars.add(LispNames.LOAD_PATHNAME_VAR);
+		this.specialVars.add(LispNames.LOAD_TRUENAME_VAR);
+		this.dynamicBindings.push(LispNames.LOAD_PATHNAME_VAR,
+				pathname == null ? LispNil.INSTANCE : new LispString(pathname));
+		this.dynamicBindings.push(LispNames.LOAD_TRUENAME_VAR,
+				truename == null ? LispNil.INSTANCE : new LispString(truename));
+		try {
+			List<LispVal> found = ((LispCons) applyGlobally(this.globalEnv.lookupFunction("%ASDF-READ-SOURCE-REGISTRY"),
+					List.of(parameter)))
+				.toList();
+			return new AsdfSystems.SourceRegistry(registryFiles(found.get(0)), isTruthy(found.get(1)),
+					registryFiles(found.get(2)));
+		}
+		finally {
+			this.dynamicBindings.pop(LispNames.LOAD_TRUENAME_VAR);
+			this.dynamicBindings.pop(LispNames.LOAD_PATHNAME_VAR);
+		}
+	}
+
+	private static Map<String, String> registryFiles(LispVal alist) {
+		Map<String, String> files = new java.util.TreeMap<>();
+		for (LispVal cell = alist; cell instanceof LispCons cons; cell = cons.cdr()) {
+			LispCons entry = (LispCons) cons.car();
+			files.put(((LispString) entry.car()).value(), ((LispString) entry.cdr()).value());
+		}
+		return files;
+	}
+
+	/**
+	 * Checks the trailing keyword options of a runtime {@code asdf:load-system} /
+	 * {@code ql:quickload} call, which are accepted and ignored
+	 * ({@link AsdfSystems#checkIgnoredLoadOptions}), rethrowing the shape error as a Lisp
+	 * condition so a program's {@code handler-case} can see it.
+	 */
+	private static void ignoreLoadOptions(String context, List<LispVal> options) {
+		try {
+			AsdfSystems.checkIgnoredLoadOptions(context, options);
+		}
+		catch (IllegalStateException ex) {
+			throw new LispEvalException(Objects.requireNonNullElse(ex.getMessage(), context));
+		}
+	}
+
+	/**
+	 * Evaluates the asdf runtime (asdf.lisp -- the component metaobject classes,
+	 * find-system and the readers, {@code AsdfRuntimeLibrary}) into the global
+	 * environment once. Triggered lazily: on the resolution of a name it defines
+	 * (function or the {@code asdf:*user-cache*} variable), on any
+	 * {@code defsystem}/{@code load-system}/{@code quickload}/{@code test-system}, and on
+	 * a class-resolving form ({@code defmethod}/{@code typep}/{@code typecase}/
+	 * {@code make-instance}/{@code defclass}) that mentions one of the component class
+	 * names -- so a specializer like {@code (system asdf:system)} resolves even before
+	 * any system machinery ran.
+	 */
+	private void ensureAsdfRuntimeLoaded() {
+		synchronized (this.libraryLoadLock) {
+			if (this.asdfRuntimeLoaded) {
+				return;
+			}
+			this.asdfRuntimeLoaded = true;
+			for (LispVal form : AsdfRuntimeLibrary.interpreterForms()) {
+				eval(form, this.globalEnv);
+			}
+		}
+	}
+
+	/**
+	 * The class-mention half of the lazy trigger: seeds the asdf classes when the form
+	 * mentions one of them anywhere ({@code AsdfRuntimeLibrary.mentionsComponentClass}).
+	 * Cheap after the first load (one boolean).
+	 */
+	private void ensureAsdfClassesFor(LispVal form) {
+		if (!this.asdfRuntimeLoaded && AsdfRuntimeLibrary.mentionsComponentClass(form)) {
+			ensureAsdfRuntimeLoaded();
+		}
+	}
+
+	/**
+	 * The handler half of the lazy trigger: a handler's type test is built from the
+	 * classes known when the form is expanded, so an ASDF condition it names has to exist
+	 * before its body loads anything.
+	 */
+	private void ensureAsdfConditionsFor(LispCons form) {
+		if (!this.asdfRuntimeLoaded && AsdfRuntimeLibrary.handlesAsdfCondition(form)) {
+			ensureAsdfRuntimeLoaded();
+		}
+	}
+
+	/**
+	 * What {@code asdf:*central-registry*} names, as directories. Each entry is evaluated
+	 * and its value is a pathname designator, as real ASDF's search takes it, so a
+	 * program may push {@code '*default-pathname-defaults*}.
+	 */
+	private List<String> centralRegistryDirs() {
+		if (!this.asdfRuntimeLoaded) {
+			return List.of();
+		}
+		LispVal registry = currentSpecialValue(CENTRAL_REGISTRY);
+		List<String> dirs = new java.util.ArrayList<>();
+		for (LispVal cell = registry; cell instanceof LispCons cons; cell = cons.cdr()) {
+			String dir = PathnameOps.designatorNamestring(eval(cons.car(), this.globalEnv));
+			if (dir != null) {
+				dirs.add(dir);
+			}
+		}
+		return dirs;
+	}
+
+	/**
+	 * {@code asdf:find-system} of a system nothing has registered: searches like a load,
+	 * downloading nothing, and registers what the {@code .asd} defines. A file already
+	 * loading asks about itself: it has not defined the system yet.
+	 * @return nil: the caller reads the registry
+	 */
+	private LispVal locateSystem(String name) {
+		if (ShimLibraries.refusalReason(name) != null) {
+			return LispNil.INSTANCE;
+		}
+		String primary = AsdfSystems.primarySystemName(name);
+		if (!this.asdfSystems.containsKey(primary)) {
+			AsdfSystems.LocatedAsd asd = searchSystemDefinition(name);
+			if (asd != null && !this.asdfSystems.containsKey(name)) {
+				if (this.asdFilesLoading.contains(asd.path())) {
+					return LispNil.INSTANCE;
+				}
+				AsdLoadScope scope = this.asdLoads.peekLast();
+				if (scope != null && scope.isOwnForm()) {
+					scope.loadOutsideTheFile(() -> loadAsdDefinitions(primary, asd,
+							defined -> this.asdfSystems.putIfAbsent(defined.name(), defined)));
+				}
+				else {
+					loadAsdDefinitions(primary, asd, defined -> this.asdfSystems.putIfAbsent(defined.name(), defined));
+				}
+			}
+		}
+		inferSystem(name);
+		return LispNil.INSTANCE;
+	}
+
+	/**
+	 * Answers whether {@code name} is registered, deriving a file of a package-inferred
+	 * system if it has to.
+	 * @return nil when no file of the primary system answers the name
+	 */
+	private LispVal inferSystem(String name) {
+		if (!this.asdfSystems.containsKey(name) && name.indexOf('/') >= 0) {
+			try {
+				AsdfSystems.inferPackageInferredSystems(name, this.asdfSystems, this.asdfSystemPackages,
+						this.sourceLoader, this.features);
+			}
+			catch (IllegalStateException ex) {
+				// The name points at no file of the primary system: nothing defines it.
+				return LispNil.INSTANCE;
+			}
+		}
+		return this.asdfSystems.containsKey(name) ? LispTrue.INSTANCE : LispNil.INSTANCE;
+	}
+
+	/**
+	 * The record of a system a search function answered as an object: it has no files.
+	 */
+	private AsdfSystems.LispSystem emptySystem(String name) {
+		return AsdfSystems.parseDefsystem(new LispCons(new LispSymbol(LispNames.ASDF_DEFSYSTEM),
+				new LispCons(new LispString(name), LispNil.INSTANCE)), "", this.features);
+	}
+
+	/**
+	 * {@code asdf:load-asd}: loads the definitions of one file, replacing what the
+	 * registry holds under their names.
+	 * @return the names defined, nil for a file that cannot be read: it defines nothing
+	 */
+	private LispVal loadAsdFile(String path) {
+		String baseDir = this.loadDirStack.peekLast();
+		AsdfSystems.LocatedAsd asd = AsdfSystems.readAsd(SourceLoader.resolve(baseDir, path), this.sourceLoader);
+		if (asd == null) {
+			return LispNil.INSTANCE;
+		}
+		List<LispVal> defined = new java.util.ArrayList<>();
+		String name = asd.path().substring(asd.path().lastIndexOf('/') + 1).replaceFirst("\\.asd$", "");
+		loadAsdDefinitions(name, asd, system -> {
+			this.asdfSystems.put(system.name(), system);
+			defined.add(new LispString(system.name()));
+		});
+		return consList(defined);
+	}
+
+	/**
+	 * Loads a {@code .asd} into this image -- the program's own, as real ASDF loads it
+	 * into the image that then loads the system -- under real ASDF's handler, so an error
+	 * while the file loads is a {@code load-system-definition-error}.
+	 */
+	private void loadAsdDefinitions(String name, AsdfSystems.LocatedAsd asd,
+			java.util.function.Consumer<AsdfSystems.LispSystem> register) {
+		ensureAsdfRuntimeLoaded();
+		boolean added = this.asdFilesLoading.add(asd.path());
+		try {
+			LispFunction thunk = new LispFunction("%ASDF-LOAD-DEFINITION", args -> {
+				AsdfSystems.loadAsd(asd.source(), asd.path(), this.features, this.asdfSystemPackages, asdImage(),
+						register);
+				return LispNil.INSTANCE;
+			});
+			applyGlobally(this.globalEnv.lookupFunction("%ASDF-CALL-LOADING-DEFINITION"),
+					List.of(new LispString(name), new LispString(asd.path()), thunk));
+		}
+		finally {
+			if (added) {
+				this.asdFilesLoading.remove(asd.path());
+			}
+		}
+	}
+
+	/**
+	 * Signals what real ASDF signals for a system no {@code .asd} defines:
+	 * {@code missing-dependency} when a system depends on it, else
+	 * {@code missing-component}.
+	 */
+	private LispVal signalMissingSystem(String name, @Nullable String requiredBy, String detail) {
+		return applyGlobally(this.globalEnv.lookupFunction("%ASDF-SIGNAL-MISSING"), List.of(new LispString(name),
+				requiredBy == null ? LispNil.INSTANCE : new LispString(requiredBy), new LispString(detail)));
+	}
+
+	/**
+	 * The type-mention half of the uiop lazy trigger: a quoted uiop type name in a
+	 * {@code typep}/{@code typecase} form is not a function or variable resolution, so
+	 * nothing would load the deftype behind it (the compile paths splice it from the
+	 * quoted occurrence, but the interpreter only loads functions, variables and the
+	 * condition/class set). Loads every library definition the form names -- usually just
+	 * the deftype, through the same idempotent {@link #loadUiopDefinition} the call
+	 * positions use. Both spellings count: the form may reach here unresolved.
+	 */
+	private void ensureUiopTypesFor(LispVal form) {
+		for (String name : uiopNamesMentioned(form)) {
+			loadUiopDefinition(name);
+		}
+	}
+
+	private static java.util.List<String> uiopNamesMentioned(LispVal form) {
+		java.util.List<String> names = new java.util.ArrayList<>();
+		collectUiopNames(form, names);
+		return names;
+	}
+
+	// The spine is a LOOP, not a recursion: this runs on the typecase arm at whatever
+	// depth the program has already reached, so a frame per list element would spend
+	// the stack a deeply recursive program still needs (cl-mustache's spec suite
+	// renders its templates ~800 KiB of stack down). Only NESTING recurses, which a
+	// source form bounds the way the reader does.
+	private static void collectUiopNames(LispVal form, java.util.List<String> names) {
+		for (LispVal val = form;;) {
+			switch (val) {
+				case LispSymbol sym -> {
+					String name = sym.name();
+					if (UiopLibrary.definesName(name)) {
+						names.add(name);
+					}
+					else {
+						PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(name);
+						if (qn != null && UiopExports.isUiopFamily(qn.pkg())) {
+							String homePackage = UiopExports.homePackage(qn.member());
+							if (homePackage != null) {
+								String home = homePackage + ":" + qn.member();
+								if (UiopLibrary.definesName(home)) {
+									names.add(home);
+								}
+							}
+						}
+					}
+				}
+				case LispCons cons -> {
+					collectUiopNames(cons.car(), names);
+					val = cons.cdr();
+					continue;
+				}
+				default -> {
+				}
+			}
+			return;
+		}
+	}
+
+	/**
+	 * Evaluates the {@code geom} library (geom.lisp -- solid modeling over linalg,
+	 * {@code GeomLibrary}) into the global environment once, then installs
+	 * {@link GeomKernels} over the three members a model FILE spends its load time in.
+	 *
+	 * <p>
+	 * The natives are not opt-in the way {@code --simd} is: each one is the defun's own
+	 * arithmetic transcribed and declines to the defun for anything it does not cover, so
+	 * there is no input on which enabling them changes an answer -- only inputs on which
+	 * they answer it two orders of magnitude sooner.
+	 */
+	private void ensureGeomLoaded() {
+		synchronized (this.libraryLoadLock) {
+			if (this.geomLibraryLoaded) {
+				return;
+			}
+			this.geomLibraryLoaded = true;
+			for (LispVal form : GeomLibrary.forms()) {
+				eval(form, this.globalEnv);
+			}
+			if (this.geomKernels) {
+				GeomKernels.install(this.globalEnv, this);
+			}
+		}
+	}
+
+	/** Evaluates the {@code checkpoint} library ({@code CheckpointLibrary}) once. */
+	private void ensureCheckpointLoaded() {
+		synchronized (this.libraryLoadLock) {
+			if (this.checkpointLibraryLoaded) {
+				return;
+			}
+			this.checkpointLibraryLoaded = true;
+			for (LispVal form : CheckpointLibrary.forms()) {
+				eval(form, this.globalEnv);
+			}
+		}
+	}
+
+	/** Evaluates the {@code safetensors} library ({@code SafetensorsLibrary}) once. */
+	private void ensureSafetensorsLoaded() {
+		synchronized (this.libraryLoadLock) {
+			if (this.safetensorsLibraryLoaded) {
+				return;
+			}
+			this.safetensorsLibraryLoaded = true;
+			for (LispVal form : SafetensorsLibrary.forms()) {
+				eval(form, this.globalEnv);
+			}
+		}
+	}
+
+	/**
+	 * Evaluates the new {@code objc} base and {@code cocoa} ({@code objc.lisp},
+	 * {@code ObjcLibrary}) into the global environment once.
+	 */
+	private void ensureObjcLoaded() {
+		synchronized (this.libraryLoadLock) {
+			if (this.objcLibraryLoaded) {
+				return;
+			}
+			this.objcLibraryLoaded = true;
+			for (LispVal form : ObjcLibrary.allForms()) {
+				eval(form, this.globalEnv);
+			}
+		}
+	}
+
+	/**
+	 * The type-mention half of the objc base's lazy trigger: a {@code typep}, a
+	 * {@code typecase} clause or a method specializer may name
+	 * {@code objc:objc-object-pointer} before any function of the library is resolved.
+	 */
+	private void ensureObjcTypesFor(LispVal form) {
+		if (!this.objcLibraryLoaded && ObjcLibrary.mentionsType(form)) {
+			ensureObjcLoaded();
+		}
+	}
+
+	/**
+	 * Evaluates the {@code metal} library (metal.lisp -- a Metal drawing surface over the
+	 * {@code objc:} verbs, {@code MetalLibrary}) into the global environment once.
+	 */
+	private void ensureMetalLoaded() {
+		synchronized (this.libraryLoadLock) {
+			if (this.metalLibraryLoaded) {
+				return;
+			}
+			this.metalLibraryLoaded = true;
+			for (LispVal form : MetalLibrary.forms()) {
+				eval(form, this.globalEnv);
+			}
+		}
+	}
+
+	/**
+	 * The class-mention half of geom's lazy trigger, the {@link #ensureAsdfClassesFor}
+	 * twin: a {@code defmethod} specializer, a {@code typep}, a {@code typecase} clause,
+	 * a {@code make-instance} or a {@code defclass} superclass may name
+	 * {@code geom:solid} before any geom FUNCTION has been resolved, and without this it
+	 * would see no such class. Cheap after the first load (one boolean).
+	 */
+	private void ensureGeomClassesFor(LispVal form) {
+		if (!this.geomLibraryLoaded && GeomLibrary.mentionsGeomClass(form)) {
+			ensureGeomLoaded();
+		}
+	}
+
+	/**
+	 * A runtime system designator that also accepts the component METAOBJECT
+	 * {@code asdf:find-system} answers (rove passes the object straight back into
+	 * {@code load-system}), of a class loaded code defines too (prove's
+	 * {@code run-test-system}): a component instance answers its name, anything else goes
+	 * through {@link AsdfSystems#designator}.
+	 */
+	private String asdfDesignator(String context, LispVal val) {
+		if (val instanceof am.ik.rontolisp.LispInstance inst
+				&& inst.layout().kind() == am.ik.rontolisp.LispLayout.Kind.CLASS) {
+			ClosRegistry.ClassInfo info = this.closRegistry.findClass(inst.layout().printName());
+			if (info != null && info.ancestors().contains(asdfClassKey("COMPONENT"))
+					&& applyGlobally(
+							this.globalEnv
+								.lookupFunction(PackageRegistry.qualify(LispNames.ASDF_PKG, "COMPONENT-NAME")),
+							List.of(val)) instanceof LispString name) {
+				return name.value();
+			}
+		}
+		return AsdfSystems.designator(context, val);
+	}
+
+	/**
+	 * Performs one action of the operation protocol through {@code asdf.lisp}'s driver
+	 * ({@code %asdf-perform-component} / {@code %asdf-perform-system}), so the methods a
+	 * library added to {@code asdf:perform} run around it.
+	 */
+	private void performAsdf(String driver, String system, LispVal argument) {
+		eval(consList(java.util.List.of(new LispSymbol(driver), new LispString(system), argument)), this.globalEnv);
+	}
+
+	/**
+	 * Loads one component of a parsed system -- what the primary {@code asdf:perform}
+	 * method for {@code load-op} on a {@code cl-source-file} does here: the substituted
+	 * leaf module's forms, or the file read with the system's features and against its
+	 * base directory. Self-contained, so a program that performs load-op on a component
+	 * itself reloads it the same way.
+	 */
+	private void loadComponent(String name, int index) {
+		AsdfSystems.LispSystem system = this.asdfSystems.get(name);
+		if (system == null || index < 0 || index >= system.files().size()) {
+			throw new LispEvalException("ASDF:PERFORM: no component " + index + " in system '" + name + "'");
+		}
+		String file = system.files().get(index);
+		// A class loaded code defines may compile another file than the component's own
+		// -- cffi-grovel's generated Lisp, which its build action wrote -- and that is
+		// the file a load reads here, where compiling is loading.
+		String generated = system.loadedClasses().components().containsKey(file) ? componentSource(name, index) : null;
+		String read = generated != null ? generated : file;
+		LispVal hook = system.aroundCompile().get(file);
+		if (hook == null) {
+			loadComponent(system, read, List.of());
+		}
+		else {
+			callAroundCompile("system " + name + " component " + file, hook, system.defsystemDependsOn(),
+					added -> loadComponent(system, read, added));
+		}
+	}
+
+	/**
+	 * The file a load of a planned component reads when its compile-op compiles another
+	 * than its own ({@code %asdf-component-source}), or {@code null}.
+	 */
+	private @Nullable String componentSource(String system, int index) {
+		LispVal source = applyGlobally(this.globalEnv.lookupFunction("%ASDF-COMPONENT-SOURCE"),
+				List.of(new LispString(system), new LispInteger(index)));
+		return source instanceof LispString path ? path.value() : null;
+	}
+
+	/**
+	 * What a compile path splices for a planned component of a class loaded code defines,
+	 * asked of this evaluator as its build image: when the class adds build actions or
+	 * compiles another file than the component's own, the system is loaded here first --
+	 * the image that performs them has loaded everything before them, as in real ASDF
+	 * (cffi-grovel reads a grovel file in the package an earlier component defined, with
+	 * the types an earlier grovel file did) -- and the file its compile-op compiles is
+	 * answered when it is not the component's own.
+	 * @param system the system being spliced
+	 * @param index the component's place in its fixed plan
+	 * @return the generated file to splice, or {@code null} for the component's own
+	 */
+	public @Nullable String buildComponentSource(String system, int index) {
+		ensureAsdfRuntimeLoaded();
+		LispVal builds = applyGlobally(this.globalEnv.lookupFunction("%ASDF-COMPONENT-BUILDS-P"),
+				List.of(new LispString(system), new LispInteger(index)));
+		if (!isTruthy(builds)) {
+			return null;
+		}
+		loadSystem(system);
+		return componentSource(system, index);
+	}
+
+	private void loadComponent(AsdfSystems.LispSystem system, String file, List<String> hookFeatures) {
+		String name = system.name();
+		this.loadDirStack.addLast(system.baseDir());
+		try {
+			List<LispVal> leafShim = ShimLibraries.leafModuleForms(name, file, system.baseDir(), this.sourceLoader);
+			if (leafShim != null) {
+				// A substituted leaf module: evaluate the shim forms through the package
+				// resolver (the defpackage must register before the dependent components
+				// resolve), like the replaced file would. Bracketed exactly as loadFile
+				// brackets a real component, so a shim that selects a package with
+				// (in-package ...) -- the cffi backend does, being a near-verbatim
+				// analogue of upstream's own implementation file -- confines it to
+				// itself.
+				this.packageResolver.pushPackage();
+				try {
+					for (LispVal form : leafShim) {
+						eval(form);
+					}
+				}
+				finally {
+					this.packageResolver.popPackage();
+				}
+				return;
+			}
+			// A system that declares :rontolisp-features has its own component files
+			// read with the interpreter's features widened by that declaration -- the
+			// static encoding of the eval-when *features* push a real .asd would do. What
+			// an :around-compile hook added holds for the read as well.
+			loadFile(LispNames.ASDF_LOAD_SYSTEM, file, name, this.features.with(system.features()).with(hookFeatures));
+		}
+		finally {
+			this.loadDirStack.removeLast();
+		}
+	}
+
+	/**
+	 * Calls a component's {@code :around-compile} hook with a thunk that loads the
+	 * component ({@code uiop:call-around-hook}). The thunk takes and ignores
+	 * {@code compile-file}'s flags, and a hook that never calls it fails like the compile
+	 * that produced no output in ASDF.
+	 * <p>
+	 * This evaluator is where the hook runs on every backend: the program's own on the
+	 * interpreter, the compile path's build image otherwise, where {@code body} reads the
+	 * component into the program. So what {@code body} is handed is the part of the
+	 * hook's dynamic state a read made here can take: the features {@code *features*}
+	 * holds in the thunk beyond those it held at the call.
+	 * @param component the system and component, for errors
+	 * @param hook the {@link AsdfSystems.LispSystem#aroundCompile} entry
+	 * @param definers the systems a hook NAMING a function may need for it, which are
+	 * loaded here: the {@code :defsystem-depends-on} of the system, loaded already on the
+	 * interpreter and only spliced into the program on a compile path
+	 * @param body loads the component, given the feature names the hook added
+	 */
+	public void callAroundCompile(String component, LispVal hook, List<String> definers,
+			java.util.function.Consumer<List<String>> body) {
+		LispVal function = aroundCompileFunction(component, hook, definers);
+		Set<String> before = printedFeatures(currentFeatures());
+		boolean[] called = { false };
+		applyGlobal(function, List.of(new LispFunction("AROUND-COMPILE-THUNK", args -> {
+			called[0] = true;
+			body.accept(featuresAddedSince(before));
+			return LispTrue.INSTANCE;
+		})));
+		if (!called[0]) {
+			throw new LispEvalException(":around-compile hook of " + component + " never called its thunk");
+		}
+	}
+
+	/**
+	 * The function an {@code :around-compile} value designates
+	 * ({@code uiop:ensure-function}): a function, a symbol naming one, a lambda
+	 * expression, {@code (FN ARG...)} calling {@code FN} with the arguments first, or a
+	 * string reading in {@code cl} as a name or a lambda expression.
+	 */
+	private LispVal aroundCompileFunction(String component, LispVal hook, List<String> definers) {
+		if (hook instanceof LispFunction || hook instanceof LispLambda) {
+			return hook;
+		}
+		if (hook instanceof LispCons call && !AsdfSystems.isLambdaExpression(call)) {
+			LispVal function = aroundCompileFunction(component, call.car(), definers);
+			List<LispVal> given = call.cdr() instanceof LispCons rest ? rest.toList() : List.of();
+			return new LispFunction("AROUND-COMPILE-HOOK", args -> {
+				List<LispVal> all = new ArrayList<>(given);
+				all.addAll(args);
+				return applyGlobal(function, all);
+			});
+		}
+		if (!(hook instanceof LispSymbol) && !(hook instanceof LispString) && !(hook instanceof LispCons)) {
+			throw new LispEvalException(":around-compile hook of " + component + " is no function: " + hook.print());
+		}
+		if (!(hook instanceof LispCons)) {
+			for (String definer : definers) {
+				loadSystem(definer);
+			}
+		}
+		this.packageResolver.pushPackage();
+		try {
+			LispVal form = hook;
+			if (hook instanceof LispString) {
+				this.packageResolver.setCurrentPackage("CL");
+				form = eval(clCall(LispNames.READ_FROM_STRING, hook));
+			}
+			return eval(clCall(LispNames.FUNCTION, form));
+		}
+		finally {
+			this.packageResolver.popPackage();
+		}
+	}
+
+	private static LispVal clCall(String operator, LispVal argument) {
+		return new LispCons(new LispSymbol(PackageRegistry.qualify("CL", operator)),
+				new LispCons(argument, LispNil.INSTANCE));
+	}
+
+	private void loadSystem(String name) {
+		AsdLoadScope asd = this.asdLoads.peekLast();
+		if (asd != null && asd.isOwnForm()) {
+			// A .asd's own form loads a system: real ASDF loads it into the image while
+			// it reads the file, ahead of every system the file defines after the call.
+			asd.noteLoaded(name);
+			if (!this.loadedSystems.contains(name)) {
+				asd.loadOutsideTheFile(() -> loadSystemNow(name));
+			}
+			return;
+		}
+		loadSystemNow(name);
+	}
+
+	private void loadSystemNow(String name) {
+		// Whose dependency this is, only for this very load: a file of the system that
+		// loads another system is not depending on it.
+		String requiredBy = this.requiringSystem;
+		this.requiringSystem = null;
+		if (this.loadedSystems.contains(name)) {
+			return;
+		}
+		// What a dumped image loads again: the systems the program asked for while no
+		// other one was loading (ImageDump).
+		boolean requested = requiredBy == null && this.loadingSystems.isEmpty();
+		// The component metaobject classes must exist before any system's own forms
+		// evaluate: a loaded file may defmethod on asdf:system (rove's run-system).
+		ensureAsdfRuntimeLoaded();
+		if (this.loadingSystems.contains(name)) {
+			throw LispEvalException.ofClass(PackageRegistry.qualify(LispNames.ASDF_PKG, "CIRCULAR-DEPENDENCY"),
+					"Circular system :depends-on detected: " + String.join(" -> ", this.loadingSystems) + " -> "
+							+ name);
+		}
+		String refusal = ShimLibraries.refusalReason(name);
+		if (refusal != null) {
+			throw new LispEvalException("Cannot load system '" + name + "': " + refusal);
+		}
+		String conflict = ShimLibraries.conflictingSystem(name);
+		if (conflict != null && this.loadedSystems.contains(conflict)) {
+			throw new LispEvalException("Cannot load system '" + name + "': it defines the same packages as '"
+					+ conflict + "', which is already loaded -- load one of the two, not both");
+		}
+		if (BuiltinSystems.isBuiltin(name)) {
+			// A system rontolisp provides itself (e.g. "usocket" or a dependency shim):
+			// evaluate the embedded library instead of locating a NAME.asd. Its own
+			// built-in :depends-on edges come first, exactly like a third-party
+			// system's (flexi-streams needs the Gray protocol trivial-gray-streams
+			// splices before its vector-stream defclass runs).
+			for (String dependency : BuiltinSystems.dependencies(name)) {
+				loadSystem(dependency);
+			}
+			if (LispNames.USOCKET_PKG.equals(name)) {
+				ensureUsocketLoaded();
+			}
+			else if (!this.loadedSystems.contains(name)) {
+				if (LispNames.CLOSER_MOP_PKG.equalsIgnoreCase(name)) {
+					// The shim's classp is (typep x 'class): the MOP base classes
+					// must be registered before that type test expands.
+					this.closRegistry.ensureMopClassesSeeded();
+				}
+				for (LispVal form : BuiltinSystems.forms(name, Features.INTERPRETER)) {
+					// Through the package resolver (the leaf-module rule): a shim that
+					// carries its own defpackage (clack-handler-rontolisp) must register
+					// it, and for the canonical-shape shims resolution is an identity.
+					eval(form);
+				}
+			}
+			this.loadedSystems.add(name);
+			noteImageSystem(name, requested, null, false);
+			return;
+		}
+		AsdfSystems.LispSystem located = this.asdfSystems.get(name);
+		if (located == null) {
+			AsdfSystems.LocatedAsd asd = null;
+			try {
+				asd = locateAsd(name);
+			}
+			catch (AsdfSystems.SystemNotFoundException ex) {
+				signalMissingSystem(name, requiredBy, ex.detail());
+				return;
+			}
+			located = this.asdfSystems.get(name);
+			if (located == null && asd != null) {
+				// Each system the .asd defines is registered the moment it is defined.
+				// .asd forms read upcased like all source; AsdfSystems matches clause
+				// keywords case-insensitively and coerce-names (downcases) system
+				// designators.
+				loadAsdDefinitions(AsdfSystems.primarySystemName(name), asd,
+						defined -> this.asdfSystems.putIfAbsent(defined.name(), defined));
+				located = this.asdfSystems.get(name);
+				if (located == null) {
+					// A NAME/SUB of a :package-inferred-system: the .asd declares no
+					// components, so the name is answered from the file it points at.
+					AsdfSystems.inferPackageInferredSystems(name, this.asdfSystems, this.asdfSystemPackages,
+							this.sourceLoader, this.features);
+					located = this.asdfSystems.get(name);
+				}
+				if (located == null) {
+					throw new LispEvalException(asd.path() + " does not define system '" + name + "'");
+				}
+			}
+			if (located == null) {
+				throw new LispEvalException("The search for system '" + name + "' registered no system");
+			}
+		}
+		String systemDir = located.baseDir();
+		AsdfSystems.LispSystem system = AsdfSystems.resolveWeakDependencies(located, this.asdfSystems,
+				weakName -> searchFinds(weakName, systemDir));
+		this.loadingSystems.addLast(name);
+		// A dependency's .asd lookup resolves against the system's base directory, not
+		// the caller's.
+		this.loadDirStack.addLast(system.baseDir());
+		try {
+			// :defsystem-depends-on first: real ASDF loads those while the .asd is READ,
+			// so they precede the system's own dependencies (they are not sideway
+			// dependencies of it -- component-sideway-dependencies never lists them).
+			for (String dependency : system.defsystemDependsOn()) {
+				this.requiringSystem = name;
+				loadSystem(dependency);
+			}
+			for (String dependency : system.dependsOn()) {
+				this.requiringSystem = name;
+				loadSystem(dependency);
+			}
+			// Real ASDF's action order for a source tree, each action an asdf:perform
+			// call (asdf.lisp): the system's prepare-op, then prepare-op, compile-op and
+			// load-op on every component file in load order -- load-op's primary method
+			// is loadComponent -- then the system's compile-op and load-op.
+			performAsdf("%ASDF-PERFORM-SYSTEM", name, new LispSymbol(":BEFORE"));
+			for (int i = 0; i < system.files().size(); i++) {
+				performAsdf("%ASDF-PERFORM-COMPONENT", name, new LispInteger(i));
+			}
+			performAsdf("%ASDF-PERFORM-SYSTEM", name, new LispSymbol(":AFTER"));
+		}
+		finally {
+			this.loadDirStack.removeLast();
+			this.loadingSystems.removeLast();
+		}
+		this.loadedSystems.add(name);
+		noteImageSystem(name, requested, system.metadata().sourceFile(), !system.files().isEmpty());
+		installIroncladNative();
+	}
+
+	/**
+	 * Records a system whose code is now in this image, which {@code asdf:clear-system}
+	 * does not take out again: a dumped image loads the requested ones, finding them
+	 * where their {@code .asd} files were.
+	 * @param name the system
+	 * @param requested whether the program asked for it rather than a system for it
+	 * @param sourceFile its {@code .asd}, {@code null} for a built-in system or one no
+	 * file defines
+	 * @param loadsFiles whether loading it read a component file
+	 */
+	private void noteImageSystem(String name, boolean requested, @Nullable String sourceFile, boolean loadsFiles) {
+		if (requested) {
+			this.imageSystems.add(name);
+		}
+		if (sourceFile != null) {
+			String dir = SourceLoader.parentDir(sourceFile);
+			this.imageAsdDirs.add(dir == null ? "" : dir);
+		}
+		else if (loadsFiles) {
+			this.imageInlineSystems.add(name);
+		}
+	}
+
+	/**
+	 * {@code uiop:dump-image} on the interpreter: the checks, then upstream's protocol
+	 * around the dump ({@code protocol}: the postlude, the dump hooks, the two flags),
+	 * then the image's program ({@link ImageDump}) compiled by the command line's builder
+	 * into {@code file}.
+	 * @param file the artifact's namestring
+	 * @param executable whether the image is an executable
+	 * @param protocol the function running upstream's protocol
+	 * @return nil
+	 */
+	private LispVal dumpImage(String file, boolean executable, LispVal protocol) {
+		ImageBuilder builder = this.imageBuilder;
+		if (builder == null || !executable) {
+			// uiop's own condition, as the compiled programs signal it.
+			return applyGlobally(resolveFunction(UiopExports.qualified("NOT-IMPLEMENTED-ERROR")),
+					List.of(new LispString(UiopExports.qualified("DUMP-IMAGE")), new LispString(builder == null
+							? "an image is dumped by compiling it, which the rontolisp command line does, and this"
+									+ " evaluator was not started by it"
+							: "an image that is no executable is a heap a Lisp starts from, which no backend has:"
+									+ " dump an executable (:executable t, what asdf:program-op does)")));
+		}
+		if (!this.imageInlineSystems.isEmpty()) {
+			throw new LispEvalException("UIOP:DUMP-IMAGE: the dumped program loads its systems from their .asd"
+					+ " files, and no file defines " + String.join(", ", this.imageInlineSystems)
+					+ ": move the defsystem into its NAME.asd");
+		}
+		applyGlobally(protocol, List.of());
+		LispVal entryPoint = eval(new LispSymbol(UiopExports.qualified("*IMAGE-ENTRY-POINT*")), this.globalEnv);
+		if (entryPoint instanceof LispString) {
+			// ensure-function reads a string in the image, which has the package.
+			entryPoint = applyGlobally(resolveFunction(UiopExports.qualified("ENSURE-FUNCTION")), List.of(entryPoint));
+		}
+		LispVal prelude = eval(new LispSymbol(UiopExports.qualified("*IMAGE-PRELUDE*")), this.globalEnv);
+		String source = ImageDump.program(List.copyOf(this.imageSystems), entryPoint, prelude, executable,
+				this.globalEnv::lookupFunctionOrNull);
+		Set<String> path = new java.util.LinkedHashSet<>(this.imageAsdDirs);
+		path.addAll(this.systemPath);
+		path.addAll(this.distDirs);
+		builder.build(new ImageBuilder.Image(source, file, List.copyOf(path), this.declaredFeatureNames));
+		return LispNil.INSTANCE;
+	}
+
+	/**
+	 * Replaces ironclad's {@code pbkdf2-derive-key} with the native kernel once the
+	 * system that defines it has finished loading -- keyed on the definition, not on a
+	 * system name, so it fires whether the caller asked for the {@code ironclad}
+	 * aggregate or only for {@code ironclad/kdf/pkcs5}. Interpreter only, and always on:
+	 * the kernel computes the same spec-defined bytes ({@link IroncladNative}).
+	 */
+	private void installIroncladNative() {
+		if (this.ironcladNativeInstalled
+				|| this.globalEnv.lookupFunctionOrNull(IroncladNative.PBKDF2_DERIVE_KEY) == null) {
+			return;
+		}
+		this.ironcladNativeInstalled = true;
+		IroncladNative.install(this.globalEnv, this);
+	}
+
+	/**
+	 * Evaluates an {@code (asdf:defsystem NAME ...)} special form: the options are plain
+	 * data (never evaluated), so the form is parsed like a {@code .asd} entry and the
+	 * system registered for a later {@code asdf:load-system}. Component paths resolve
+	 * against the directory of the source being loaded. One a {@code .asd} file's own
+	 * form evaluates -- inside a {@code when}, out of a macro -- is that file's, recorded
+	 * by its load like the ones the file holds at top level.
+	 */
+	private LispVal evalDefsystem(LispCons cons) {
+		ensureAsdfRuntimeLoaded();
+		AsdLoadScope asd = this.asdLoads.peekLast();
+		if (asd != null && asd.isOwnForm()) {
+			return new LispSymbol(asd.defineNested(cons).name());
+		}
+		String baseDir = this.loadDirStack.peekLast();
+		AsdfSystems.LispSystem system = AsdfSystems.parseDefsystem(cons, baseDir == null ? "" : baseDir, this.features,
+				classResolver());
+		this.asdfSystems.put(system.name(), system);
+		return new LispSymbol(system.name());
+	}
+
+	/**
+	 * This evaluator as the image a {@code .asd} file is loaded into
+	 * ({@link AsdfSystems#loadAsd}).
+	 * @return the image
+	 */
+	public AsdfSystems.AsdImage asdImage() {
+		return AsdLoadScope::new;
+	}
+
+	/**
+	 * This evaluator as what answers about a class a definition names: real ASDF's
+	 * {@code class-for-type} over the classes live here, once the definition's
+	 * {@code :defsystem-depends-on} has loaded. A compile path's build image has also
+	 * loaded nothing the program spliced before the definition, though the program's
+	 * image has, so a class still missing is looked for there
+	 * ({@link #setProgramSystems}).
+	 * @return the resolver
+	 */
+	public AsdfSystems.ClassResolver classResolver() {
+		return (designator, definers, ownClasses) -> {
+			ensureAsdfRuntimeLoaded();
+			for (String definer : definers) {
+				loadSystem(definer);
+			}
+			AsdfSystems.LiveClass found = liveClass(designator, ownClasses);
+			for (String spliced : List.copyOf(this.programSystems)) {
+				if (found != null) {
+					break;
+				}
+				try {
+					loadSystem(spliced);
+				}
+				catch (LispEvalException | IllegalStateException ex) {
+					// It is here only in case it defines the class, and what the
+					// definition
+					// fails on then is the class it names.
+					continue;
+				}
+				found = liveClass(designator, ownClasses);
+			}
+			return found;
+		};
+	}
+
+	/**
+	 * Names the systems a compile path's program has loaded by the time this build image
+	 * answers about a class.
+	 * @param systems the compile path's loaded systems, in order, shared
+	 */
+	public void setProgramSystems(java.util.Collection<String> systems) {
+		this.programSystems = systems;
+	}
+
+	/**
+	 * Makes this evaluator, a compile path's READ-TIME image, answer about systems from
+	 * that compile path's live registry, as its build image does: what it has registered
+	 * and, as loaded, what it has spliced so far -- the image replays every spliced form.
+	 * The macro-time pass answers from the same registry, baked into the program
+	 * ({@link AsdfRuntimeLibrary}), so a compile-time {@code (asdf:find-system ...)} the
+	 * read depends on answers what that pass will (coalton's eclector version probe).
+	 * @param systems the compile path's registered systems, shared
+	 * @param systemPackages its {@code register-system-packages} map, shared
+	 * @param spliced the systems it has spliced so far, shared
+	 */
+	void answerSystemsFrom(java.util.Map<String, AsdfSystems.LispSystem> systems,
+			java.util.Map<String, String> systemPackages, java.util.Collection<String> spliced) {
+		this.asdfSystems = systems;
+		this.asdfSystemPackages = systemPackages;
+		this.splicedSystems = spliced;
+	}
+
+	/**
+	 * Makes a {@code .asd}'s load in this build image download what it does not find, as
+	 * the compile path's own search does while a {@code ql:quickload} splices.
+	 * @param dists the compile path's dist client
+	 * @param quickloading whether a {@code ql:quickload} is splicing
+	 */
+	public void setQuickloading(DistClient dists, boolean quickloading) {
+		this.distClient = dists;
+		this.quickloadDepth = quickloading ? 1 : 0;
+	}
+
+	/**
+	 * Asks the image about a class a definition names ({@code %asdf-class-facts}, the
+	 * image half of {@code AsdfRuntimeLibrary}); the designator is homed where the
+	 * definition reads it.
+	 */
+	private AsdfSystems.@Nullable LiveClass liveClass(LispVal designator, Set<String> ownClasses) {
+		LispVal homed = eval(clCall(LispNames.QUOTE, designator));
+		LispVal facts = applyGlobally(this.globalEnv.lookupFunction("%ASDF-CLASS-FACTS"), List.of(homed));
+		if (!(facts instanceof LispCons answer)) {
+			return null;
+		}
+		List<LispVal> items = answer.toList();
+		String name = ((LispSymbol) items.get(0)).name();
+		String programClass = programClass(name, ownClasses);
+		boolean lispSource = isTruthy(items.get(5));
+		return new AsdfSystems.LiveClass(programClass, AsdfRuntimeLibrary.isPlainClass(programClass),
+				isTruthy(items.get(1)), isTruthy(items.get(2)), isTruthy(items.get(3)), isTruthy(items.get(4)),
+				lispSource, lispSource && leavesFileUnread(name),
+				items.get(6) instanceof LispString type ? type.value() : null,
+				items.get(7) instanceof LispSymbol defaultClass ? defaultClass : null,
+				isTruthy(items.get(8)) ? items.get(9) : null);
+	}
+
+	/**
+	 * The class an instance is made of in the program: the named one, or its nearest
+	 * superclass when the {@code .asd} itself defined it, which only the image has.
+	 */
+	private String programClass(String name, Set<String> ownClasses) {
+		String current = name;
+		while (ownClasses.contains(memberName(current))) {
+			ClosRegistry.ClassInfo info = this.closRegistry.findClass(current);
+			if (info == null || info.superclasses().isEmpty()) {
+				break;
+			}
+			current = info.superclasses().get(0);
+		}
+		return current;
+	}
+
+	/**
+	 * Whether a {@code cl-source-file} class has a primary {@code perform} method of its
+	 * own for {@code load-op}, more specific than the one that loads the file. One
+	 * specialized on an ancestor of {@code load-op} does not count: the first argument
+	 * outranks the second, so ASDF's own method still comes first.
+	 */
+	private boolean leavesFileUnread(String className) {
+		ClosRegistry.ClassInfo info = this.closRegistry.findClass(className);
+		ClosRegistry.GenericInfo perform = this.closRegistry
+			.findGeneric(PackageRegistry.qualify(LispNames.ASDF_PKG, LispNames.PERFORM));
+		if (info == null || perform == null) {
+			return false;
+		}
+		List<String> cpl = info.cpl().stream().map(ClosRegistry::normalize).toList();
+		int loads = cpl.indexOf(asdfClassKey("CL-SOURCE-FILE"));
+		String loadOp = asdfClassKey(LispNames.LOAD_OP);
+		for (ClosRegistry.MethodInfo method : perform.methods().values()) {
+			if (method.isPrimary() && method.specializers().size() == 2
+					&& method.specializers().get(0).name() instanceof String first
+					&& loadOp.equals(ClosRegistry.normalize(first))
+					&& method.specializers().get(1).name() instanceof String second) {
+				int at = cpl.indexOf(ClosRegistry.normalize(second));
+				if (at >= 0 && at < loads) {
+					return true;
+				}
+			}
+		}
+		return false;
+	}
+
+	/** The registry key of a class of ASDF's. */
+	private static String asdfClassKey(String member) {
+		return ClosRegistry.normalize(PackageRegistry.qualify(LispNames.ASDF_PKG, member));
+	}
+
+	/**
+	 * A compile path's BUILD image: the evaluator its {@code .asd} files are loaded into
+	 * at compile time, whose state never reaches the program. It shares the compile
+	 * path's registry, so a {@code find-system} in a file sees what the compile path
+	 * registered and a system a file loads is registered where the compile path splices
+	 * it from; it reads every source with the TARGET's features and starts
+	 * {@code *features*} at the target's list, so a {@code .asd} decides for the program
+	 * it is compiled into, not for this interpreter.
+	 * @param out where the files' output goes (a {@code warn} goes to the error output)
+	 * @param target the compile target's reader features
+	 * @param loader the loader the compile path reads through
+	 * @param systems the compile path's system registry, shared
+	 * @param systemPackages the compile path's package-to-system map, shared
+	 * @return the image
+	 */
+	public static LispEvaluator buildImage(PrintStream out, Features target, SourceLoader loader,
+			java.util.Map<String, AsdfSystems.LispSystem> systems, java.util.Map<String, String> systemPackages) {
+		LispEvaluator image = new LispEvaluator(out);
+		image.setSourceLoader(loader);
+		image.asdfSystems = systems;
+		image.asdfSystemPackages = systemPackages;
+		image.features = target;
+		image.globalEnv.define(LispNames.FEATURES_VAR, Environment.featureKeywordList(target.names()));
+		return image;
+	}
+
+	/**
+	 * Defines {@code asdf-user}, the package real ASDF loads a {@code .asd} in: it uses
+	 * {@code cl}, {@code asdf} and {@code uiop}. Here {@code asdf:*user-cache*} and
+	 * {@code uiop:*user-cache*} are two symbols (real ASDF's are one), so asdf's shadows.
+	 * Defined on the first {@code .asd} an image loads.
+	 */
+	private void ensureAsdfUserPackage() {
+		if (this.packageResolver.findPackageName(LispNames.ASDF_USER_PKG) == null) {
+			eval(consList(List.of(new LispSymbol(PackageRegistry.qualify("CL", LispNames.DEFPACKAGE)),
+					new LispSymbol("#:" + LispNames.ASDF_USER_PKG),
+					consList(List.of(new LispSymbol(":USE"), new LispSymbol("#:CL"),
+							new LispSymbol("#:" + LispNames.ASDF_PKG), new LispSymbol("#:UIOP"))))));
+		}
+	}
+
+	/** The current value of {@code *features*}, dynamic binding first. */
+	LispVal currentFeatures() {
+		LispVal value = currentSpecialValue(LispNames.FEATURES_VAR);
+		return value == null ? LispNil.INSTANCE : value;
+	}
+
+	static Set<String> printedFeatures(LispVal features) {
+		Set<String> printed = new HashSet<>();
+		for (LispVal cell = features; cell instanceof LispCons cons; cell = cons.cdr()) {
+			printed.add(cons.car().print());
+		}
+		return printed;
+	}
+
+	/**
+	 * The feature names {@code *features*} holds beyond {@code before}
+	 * ({@link #printedFeatures}), oldest first, downcased as {@code Features} spells
+	 * them.
+	 */
+	List<String> featuresAddedSince(Set<String> before) {
+		List<String> added = new ArrayList<>();
+		for (LispVal cell = currentFeatures(); cell instanceof LispCons cons; cell = cons.cdr()) {
+			if (cons.car() instanceof LispSymbol feature && !before.contains(feature.print())) {
+				String name = feature.isKeyword() ? feature.name().substring(1) : feature.name();
+				String spelled = name.toLowerCase(java.util.Locale.ROOT);
+				if (!added.contains(spelled)) {
+					added.add(0, spelled);
+				}
+			}
+		}
+		return added;
+	}
+
+	/**
+	 * One {@code .asd} file being loaded into this evaluator ({@link #asdImage}): the
+	 * bindings it runs under, the features it has pushed, and the systems its own forms
+	 * loaded. Opened and closed by {@link AsdfSystems#loadAsd}, innermost last on
+	 * {@link #asdLoads}.
+	 */
+	private final class AsdLoadScope implements AsdfSystems.AsdLoad {
+
+		private final java.util.function.Function<LispVal, AsdfSystems.LispSystem> nestedDefsystems;
+
+		/**
+		 * The depth of {@link #loadingSystems} when the file opened: a
+		 * {@code load-system} or {@code defsystem} evaluated at this depth is one of the
+		 * file's OWN forms, not a form of a system it loads.
+		 */
+		private final int depth;
+
+		/** The printed elements of {@code *features*} when the file opened. */
+		private final Set<String> featuresAtOpen;
+
+		/** The package current when the file opened. */
+		private final String packageAtOpen;
+
+		private final List<String> loaded = new ArrayList<>();
+
+		/**
+		 * Whether a system the file asked for is loading ({@link #loadOutsideTheFile}).
+		 */
+		private boolean loadingForTheFile;
+
+		AsdLoadScope(String asdPath, java.util.function.Function<LispVal, AsdfSystems.LispSystem> nestedDefsystems) {
+			// A .asd is an ASDF program: its forms name ASDF's classes and functions.
+			ensureAsdfRuntimeLoaded();
+			ensureAsdfUserPackage();
+			this.nestedDefsystems = nestedDefsystems;
+			this.depth = LispEvaluator.this.loadingSystems.size();
+			this.packageAtOpen = LispEvaluator.this.packageResolver.currentPackageName();
+			String truename = LispEvaluator.this.sourceLoader.canonicalPath(asdPath);
+			LispVal features = currentFeatures();
+			this.featuresAtOpen = printedFeatures(features);
+			// Nothing below throws, so close() undoes exactly what is pushed here.
+			// Relative to the file, like a loaded source: a (load "x") in it, and the
+			// first search directory of a system it loads.
+			String dir = SourceLoader.parentDir(asdPath);
+			LispEvaluator.this.loadDirStack.addLast(dir == null ? "" : dir);
+			LispEvaluator.this.packageResolver.pushPackage();
+			LispEvaluator.this.packageResolver.setCurrentPackage(LispNames.ASDF_USER_PKG);
+			LispEvaluator.this.specialVars.add(LispNames.LOAD_PATHNAME_VAR);
+			LispEvaluator.this.specialVars.add(LispNames.LOAD_TRUENAME_VAR);
+			LispEvaluator.this.dynamicBindings.push(LispNames.LOAD_PATHNAME_VAR, new LispString(asdPath));
+			LispEvaluator.this.dynamicBindings.push(LispNames.LOAD_TRUENAME_VAR, new LispString(truename));
+			LispEvaluator.this.dynamicBindings.push(LispNames.FEATURES_VAR, features);
+			LispEvaluator.this.asdLoads.addLast(this);
+		}
+
+		/**
+		 * Whether the form being evaluated is the file's own -- not one of a system it
+		 * loads (see {@link #depth}), nor of a {@code .asd} that load reads.
+		 */
+		boolean isOwnForm() {
+			return LispEvaluator.this.asdLoads.peekLast() == this && !this.loadingForTheFile
+					&& LispEvaluator.this.loadingSystems.size() == this.depth;
+		}
+
+		void noteLoaded(String name) {
+			if (!this.loaded.contains(name)) {
+				this.loaded.add(name);
+			}
+		}
+
+		/**
+		 * Loads a system the file asked for OUTSIDE the file's bindings, as the plan the
+		 * compile paths splice it from loads it: in the package that was current when the
+		 * file opened -- not the file's own, which only the image has (SBCL reads a
+		 * component without an {@code in-package} in the {@code .asd}'s package) -- and
+		 * with what that system pushes onto {@code *features*} the image's, as from any
+		 * load, so it stays when the file is done. The file sees the pushes too, from
+		 * then on.
+		 */
+		void loadOutsideTheFile(Runnable load) {
+			LispVal bound = currentFeatures();
+			String filePackage = LispEvaluator.this.packageResolver.currentPackageName();
+			LispEvaluator.this.dynamicBindings.pop(LispNames.FEATURES_VAR);
+			LispEvaluator.this.packageResolver.setCurrentPackage(this.packageAtOpen);
+			LispVal before = currentFeatures();
+			this.loadingForTheFile = true;
+			try {
+				load.run();
+			}
+			finally {
+				this.loadingForTheFile = false;
+				LispEvaluator.this.packageResolver.setCurrentPackage(filePackage);
+				Set<String> had = new HashSet<>();
+				for (LispVal cell = before; cell instanceof LispCons cons; cell = cons.cdr()) {
+					had.add(cons.car().print());
+				}
+				List<LispVal> added = new ArrayList<>();
+				for (LispVal cell = currentFeatures(); cell instanceof LispCons cons; cell = cons.cdr()) {
+					if (!had.contains(cons.car().print())) {
+						added.add(cons.car());
+					}
+				}
+				LispVal rebound = bound;
+				for (int i = added.size() - 1; i >= 0; i--) {
+					rebound = new LispCons(added.get(i), rebound);
+				}
+				LispEvaluator.this.dynamicBindings.push(LispNames.FEATURES_VAR, rebound);
+			}
+		}
+
+		AsdfSystems.LispSystem defineNested(LispCons form) {
+			return this.nestedDefsystems.apply(form);
+		}
+
+		@Override
+		public void eval(LispVal form) {
+			LispEvaluator.this.eval(resolveReadTimeEvalInCode(form));
+		}
+
+		@Override
+		public LispVal readEval(LispVal datum) {
+			return evalReadTimeDatum(resolveReadTimeEvalInCode(datum));
+		}
+
+		@Override
+		public List<String> pushedFeatures() {
+			return featuresAddedSince(this.featuresAtOpen);
+		}
+
+		@Override
+		public List<String> takeLoadedSystems() {
+			List<String> taken = List.copyOf(this.loaded);
+			this.loaded.clear();
+			return taken;
+		}
+
+		@Override
+		public AsdfSystems.@Nullable LiveClass resolve(LispVal designator, List<String> definers,
+				Set<String> ownClasses) {
+			return classResolver().resolve(designator, definers, ownClasses);
+		}
+
+		@Override
+		public void close() {
+			LispEvaluator.this.asdLoads.removeLastOccurrence(this);
+			LispEvaluator.this.dynamicBindings.pop(LispNames.FEATURES_VAR);
+			LispEvaluator.this.dynamicBindings.pop(LispNames.LOAD_TRUENAME_VAR);
+			LispEvaluator.this.dynamicBindings.pop(LispNames.LOAD_PATHNAME_VAR);
+			LispEvaluator.this.packageResolver.popPackage();
+			LispEvaluator.this.loadDirStack.removeLast();
+		}
+
+	}
+
+	/**
+	 * Parses a runtime module-name designator: a symbol (a keyword {@code :util} or a
+	 * quoted symbol evaluating to {@code util}) or a string.
+	 */
+	private static String moduleDesignator(String operator, LispVal designator) {
+		return switch (designator) {
+			case LispSymbol sym -> sym.isKeyword() ? sym.name().substring(1) : sym.name();
+			case LispString str -> str.value();
+			default -> throw new LispEvalException(
+					operator + " expects a module name (symbol or string), got " + designator.print());
+		};
+	}
+
+	// Registers the interpreter side of the `java` interop package (a reflection
+	// bridge). Registered here, alongside eval/load, because java:proxy applies a user
+	// callback and so needs the evaluator's apply. The reflection needs runtime
+	// metadata a native image lacks, so interpreting `java:` works only under
+	// `java -jar rontolisp.jar`; the JVM compiler supports the same functions via its
+	// embedded bridge (codegen.jvm.JavaBridgeTemplate), the WASM backend rejects them.
+	private void registerJava() {
+		JavaInterop.Caller caller = this.javaCaller;
+		this.globalEnv.define(LispNames.JAVA_WARN_ON_REFLECTION_QUALIFIED, LispNil.INSTANCE);
+		// What a member that throws is signalled as (JavaInterop.fail, synthesized at the
+		// landing that catches it).
+		this.closRegistry.ensureJavaExceptionSeeded();
+		String jnew = PackageRegistry.qualify(LispNames.JAVA_PKG, LispNames.JAVA_NEW);
+		this.globalEnv.defineFunction(jnew, javaBuiltin(jnew, args -> {
+			if (args.isEmpty() || !(args.get(0) instanceof LispString cls)) {
+				throw new LispEvalException(jnew + " expects a class-name string, got "
+						+ (args.isEmpty() ? "no arguments" : args.get(0).print()));
+			}
+			return JavaInterop.newInstance(cls.value(), args.subList(1, args.size()), caller);
+		}));
+		String jcall = PackageRegistry.qualify(LispNames.JAVA_PKG, LispNames.JAVA_CALL);
+		this.globalEnv.defineFunction(jcall, javaBuiltin(jcall, args -> {
+			if (args.size() < 2 || !(args.get(1) instanceof LispString method)) {
+				throw new LispEvalException(jcall + " expects (java:call object \"method\" args...)");
+			}
+			return JavaInterop.callInstance(args.get(0), method.value(), args.subList(2, args.size()), caller);
+		}));
+		String jstatic = PackageRegistry.qualify(LispNames.JAVA_PKG, LispNames.JAVA_STATIC);
+		this.globalEnv.defineFunction(jstatic, javaBuiltin(jstatic, args -> {
+			if (args.size() < 2 || !(args.get(0) instanceof LispString cls)
+					|| !(args.get(1) instanceof LispString method)) {
+				throw new LispEvalException(jstatic + " expects (java:static \"class\" \"method\" args...)");
+			}
+			return JavaInterop.callStatic(cls.value(), method.value(), args.subList(2, args.size()), caller);
+		}));
+		String jfield = PackageRegistry.qualify(LispNames.JAVA_PKG, LispNames.JAVA_FIELD);
+		this.globalEnv.defineFunction(jfield, javaBuiltin(jfield, all -> {
+			// The markers ending the call (compiler/JavaMarkers): :java-false answers a
+			// false field as |false|. A value after the name writes the field.
+			int markers = am.ik.rontolisp.compiler.JavaMarkers.count(all, 2);
+			List<LispVal> args = all.subList(0, all.size() - markers);
+			if ((args.size() != 2 && args.size() != 3) || !(args.get(1) instanceof LispString field)) {
+				throw new LispEvalException(jfield + " expects (java:field class-or-object \"field\" [value])");
+			}
+			return JavaInterop.field(args.get(0), field.value(), args.size() == 3 ? args.get(2) : null,
+					JavaInterop.withMarkers(caller, all, 2));
+		}));
+		String jproxy = PackageRegistry.qualify(LispNames.JAVA_PKG, LispNames.JAVA_PROXY);
+		this.globalEnv.defineFunction(jproxy, new LispFunction(jproxy, all -> {
+			// The markers ending the call, after the callable: :java-false hands the
+			// callable Java's false as |false|, :octets a byte[] as an octet vector.
+			int markers = am.ik.rontolisp.compiler.JavaMarkers.count(all, 2);
+			List<LispVal> args = all.subList(0, all.size() - markers);
+			if (args.size() < 2) {
+				throw new LispEvalException(am.ik.rontolisp.compiler.JavaImplementations.PROXY_USAGE);
+			}
+			List<String> interfaces = new ArrayList<>();
+			for (LispVal name : args.subList(0, args.size() - 1)) {
+				if (!(name instanceof LispString iface)) {
+					throw new LispEvalException(am.ik.rontolisp.compiler.JavaImplementations.PROXY_USAGE);
+				}
+				interfaces.add(iface.value());
+			}
+			return JavaInterop.proxy(interfaces, args.get(args.size() - 1), JavaInterop.withMarkers(caller, all, 2));
+		}));
+		String jreify = PackageRegistry.qualify(LispNames.JAVA_PKG, LispNames.JAVA_REIFY);
+		this.globalEnv.defineFunction(jreify, new LispFunction(jreify, args -> JavaInterop.reify(args, caller)));
+		String jsubclass = PackageRegistry.qualify(LispNames.JAVA_PKG, LispNames.JAVA_SUBCLASS);
+		this.globalEnv.defineFunction(jsubclass,
+				new LispFunction(jsubclass, args -> JavaInterop.subclass(args, caller)));
+		String jhandle = PackageRegistry.qualify(LispNames.JAVA_PKG, LispNames.JAVA_HANDLE);
+		this.globalEnv.defineFunction(jhandle, new LispFunction(jhandle, args -> JavaInterop.handle(args, caller)));
+		String jview = PackageRegistry.qualify(LispNames.JAVA_PKG, LispNames.JAVA_VIEW);
+		this.globalEnv.defineFunction(jview, new LispFunction(jview, args -> JavaInterop.view(args, caller)));
+	}
+
+	/**
+	 * Sets {@code java:*warn-on-reflection*} (the CLI's {@code --warn-java-reflection}):
+	 * while it is true, each {@code java:} call site that cannot be resolved before it
+	 * runs is reported on standard error when its top-level form is loaded.
+	 * @param warn whether to report
+	 */
+	public void setWarnOnJavaReflection(boolean warn) {
+		this.globalEnv.define(LispNames.JAVA_WARN_ON_REFLECTION_QUALIFIED, warn ? LispTrue.INSTANCE : LispNil.INSTANCE);
+	}
+
+	private LispVal applyGlobally(LispVal function, List<LispVal> args) {
+		return apply(function, args, this.globalEnv);
+	}
+
+	private LispFunction javaBuiltin(String name, java.util.function.Function<List<LispVal>, LispVal> body) {
+		LispFunction function = new LispFunction(name, body);
+		this.javaBuiltins.put(name, function);
+		return function;
+	}
+
+	/**
+	 * Evaluates a {@code java:new} / {@code java:call} / {@code java:static} /
+	 * {@code java:field} call site. The site is resolved once ({@link #javaSite}); a
+	 * resolved one runs its resolved member ({@link JavaInterop#invokeResolved}), as a
+	 * compiled program's direct call does, and an unresolved one as the ordinary call of
+	 * the built-in, which resolves at run time. Answers {@link #UNHANDLED} (before
+	 * evaluating anything) when the operator is no longer the built-in, so a redefinition
+	 * is called like any function.
+	 */
+	private LispVal evalJavaSite(LispCons cons, Environment env, String name) {
+		LispFunction builtin = this.javaBuiltins.get(name);
+		int length = cons.properLength();
+		if (builtin == null || length < 0 || this.globalEnv.lookupFunctionOrNull(name) != builtin) {
+			return UNHANDLED;
+		}
+		am.ik.rontolisp.compiler.JavaSite site = javaSite(cons);
+		List<LispVal> args = evalArgs(cons, env, length - 1);
+		if (!site.resolved()) {
+			return apply(builtin, args, env);
+		}
+		JavaInterop.Caller caller = this.javaCaller;
+		if (site.markers().any()) {
+			// The arguments end in the markers the resolution set aside.
+			int first = am.ik.rontolisp.compiler.JavaSiteResolver.firstArgument(site.operator()) - 1;
+			caller = JavaInterop.withMarkers(caller, site.markers(),
+					am.ik.rontolisp.compiler.JavaMarkers.throughFunction(args, first));
+			args = args.subList(0, args.size() - am.ik.rontolisp.compiler.JavaMarkers.count(args, first));
+		}
+		LispVal result = switch (site.operator()) {
+			case NEW -> JavaInterop.invokeResolved(site, null, args.subList(1, args.size()), caller);
+			case STATIC -> JavaInterop.invokeResolved(site, null, args.subList(2, args.size()), caller);
+			case CALL -> JavaInterop.invokeResolved(site, args.get(0), args.subList(2, args.size()), caller);
+			// The FORM says static or instance: a class-name literal reads a static
+			// field, any other first argument is the object -- whatever it evaluates to.
+			case FIELD -> JavaInterop.invokeResolved(site,
+					((LispCons) cons.cdr()).car() instanceof LispString ? null : args.get(0), List.of(), caller);
+		};
+		return singleValue(result);
+	}
+
+	/**
+	 * How a {@code java:} site resolves, from the memo or resolved now -- and, while
+	 * {@code java:*warn-on-reflection*} is true, reported when it is left to run time.
+	 */
+	private am.ik.rontolisp.compiler.JavaSite javaSite(LispCons cons) {
+		return javaSite(cons, "");
+	}
+
+	private am.ik.rontolisp.compiler.JavaSite javaSite(LispCons cons, String location) {
+		am.ik.rontolisp.compiler.JavaSite cached = this.javaSites.get(cons);
+		if (cached != null) {
+			return cached;
+		}
+		// Outside the monitor: resolving loads classes.
+		am.ik.rontolisp.compiler.JavaSite site = new am.ik.rontolisp.compiler.JavaSiteResolver(this.javaClasses)
+			.resolve(cons);
+		if (!site.resolved()
+				&& !(currentSpecialValue(LispNames.JAVA_WARN_ON_REFLECTION_QUALIFIED) instanceof LispNil)) {
+			System.err.println(
+					location + "warning: " + am.ik.rontolisp.compiler.JavaSiteResolver.reflectionWarning(cons, site));
+		}
+		this.javaSites.put(cons, site);
+		return site;
+	}
+
+	// The program's java: declarations, fed every top-level form in order (created on
+	// the first form: it carries the proclamations seen so far).
+	private am.ik.rontolisp.compiler.@Nullable JavaDeclarations javaDeclarations;
+
+	private synchronized am.ik.rontolisp.compiler.JavaDeclarations javaDeclarations() {
+		am.ik.rontolisp.compiler.JavaDeclarations declarations = this.javaDeclarations;
+		if (declarations == null) {
+			declarations = new am.ik.rontolisp.compiler.JavaDeclarations(this.javaClasses);
+			this.javaDeclarations = declarations;
+		}
+		return declarations;
+	}
+
+	/**
+	 * Prepares a top-level form's {@code java:} sites before it runs: the host types the
+	 * form's text gives its variables -- declared, inferred from a {@code let}
+	 * initializer, proclaimed by an earlier form -- are lowered onto the sites they type
+	 * ({@code compiler.JavaDeclarations}, the same pass the JVM compiler runs), and under
+	 * {@code java:*warn-on-reflection*} every site the form shows is resolved now, so
+	 * what cannot be resolved is reported when the code is loaded, not when it first
+	 * runs.
+	 */
+	private LispVal prepareJavaSites(LispVal form) {
+		if (this.javaBuiltins.isEmpty() || !(form instanceof LispCons)) {
+			return form;
+		}
+		// User macros are expanded only to learn what they bind, and not into the
+		// expansion memo: the form has not run yet, so state an earlier part of it sets
+		// is not there, and the evaluator must expand at its own time.
+		LispVal lowered = javaDeclarations().lower(form, call -> {
+			if (!(call.car() instanceof LispSymbol op)) {
+				return null;
+			}
+			UserMacro macro = this.userMacros.get(op.name());
+			return macro == null ? null : expandMacroCall(op.name(), macro, call, null);
+		});
+		if (!(currentSpecialValue(LispNames.JAVA_WARN_ON_REFLECTION_QUALIFIED) instanceof LispNil)) {
+			// A form read from a file carries its first line: the report names the
+			// top-level form a site is in.
+			String location = form instanceof am.ik.rontolisp.LocatedCons located
+					? located.file() + ":" + located.line() + ": " : "";
+			for (LispCons site : am.ik.rontolisp.compiler.JavaSiteResolver.sitesIn(lowered)) {
+				javaSite(site, location);
+			}
+			// A java:reify / java:proxy a compiled program implements by reflection too.
+			for (LispCons implementationForm : am.ik.rontolisp.compiler.JavaImplementations.formsIn(lowered)) {
+				am.ik.rontolisp.compiler.JavaImplementation implementation = am.ik.rontolisp.compiler.JavaImplementations
+					.resolve(implementationForm, this.javaClasses);
+				if (!implementation.resolved()) {
+					System.err.println(location + "warning: " + am.ik.rontolisp.compiler.JavaImplementations
+						.reflectionWarning(implementationForm, implementation));
+				}
+			}
+			// ... and the object a function is, which a compiled program makes by
+			// reflection when its :through is computed.
+			for (LispCons handle : am.ik.rontolisp.compiler.JavaImplementations.functionHandlesIn(lowered)) {
+				String reason = am.ik.rontolisp.compiler.JavaImplementations.functionHandleReason(handle);
+				if (reason != null) {
+					System.err.println(location + "warning: "
+							+ am.ik.rontolisp.compiler.JavaImplementations.functionHandleWarning(reason));
+				}
+			}
+		}
+		return lowered;
+	}
+
+	/**
+	 * Evaluate an expression in the global environment.
+	 * @param expr the expression to evaluate
+	 * @return the result
+	 */
+	public LispVal eval(LispVal expr) {
+		return evalTopLevel(expr, null);
+	}
+
+	/**
+	 * Evaluates a top-level form, handing the form as resolved to {@code resolvedForm}
+	 * before it runs: an editor's compile request checks the calls it makes
+	 * ({@link CommonLispSwank}).
+	 * @param expr the expression to evaluate
+	 * @param resolvedForm what sees the resolved form, or null
+	 * @return the result
+	 */
+	LispVal evalTopLevel(LispVal expr, @Nullable Consumer<LispVal> resolvedForm) {
+		return evalSourceForm(expr, resolvedForm, true);
+	}
+
+	/**
+	 * Evaluates what a {@code #.} read: source, as a top-level form is, in the position
+	 * {@code eval} runs a form, which is no top level.
+	 */
+	private LispVal evalReadTimeDatum(LispVal datum) {
+		return evalSourceForm(datum, null, false);
+	}
+
+	private LispVal evalSourceForm(LispVal expr, @Nullable Consumer<LispVal> resolvedForm, boolean topLevel) {
+		List<LispVal> members = membersAroundInPackage(expr);
+		if (members != null) {
+			// One read form hands on one resolved form: the load recorder pairs them.
+			List<LispVal> resolvedMembers = new ArrayList<>(List.of(new LispSymbol(LispNames.PROGN)));
+			try {
+				LispVal value = LispNil.INSTANCE;
+				for (LispVal member : members) {
+					value = evalSourceForm(member, resolvedMembers::add, topLevel);
+				}
+				return value;
+			}
+			finally {
+				if (resolvedForm != null) {
+					resolvedForm.accept(consList(resolvedMembers));
+				}
+			}
+		}
+		// Resolve packages at the top-level entry only; nested evaluation and macro
+		// expansion operate on the already-resolved canonical form.
+		LispVal resolved = prepareJavaSites(resolveStructLiterals(this.packageResolver.resolve(expr)));
+		if (resolvedForm != null) {
+			resolvedForm.accept(resolved);
+		}
+		// Register the form's special proclamations BEFORE evaluating it, so a defvar
+		// makes the bindings of its name in the same form dynamic. A local
+		// (declare (special x)) is no proclamation: the binding form it heads reads it
+		// (declaredSpecials).
+		SpecialVarCollector.collectForm(resolved, this.specialVars);
+		try {
+			return topLevel ? evalAtTopLevel(resolved, this.globalEnv) : eval(resolved, this.globalEnv);
+		}
+		catch (BlockReturnSignal signal) {
+			// A named return-from whose block was never established (or whose exit
+			// extent already ended) surfaces as an ordinary error, not a raw signal.
+			if (nestedInDebugger()) {
+				throw signal;
+			}
+			throw new LispEvalException(LispNames.RETURN_FROM + ": no enclosing block named " + signal.name());
+		}
+		catch (GoSignal signal) {
+			if (nestedInDebugger()) {
+				throw signal;
+			}
+			throw new LispEvalException(LispNames.GO + ": no enclosing tagbody holds the tag " + signal.tag);
+		}
+		catch (ThrowSignal signal) {
+			if (nestedInDebugger() || caughtOutside(signal)) {
+				throw signal;
+			}
+			throw new LispEvalException(unmatchedThrowMessage(signal));
+		}
+	}
+
+	/**
+	 * The members of a top-level {@code progn} or {@code eval-when} holding a literal
+	 * {@code in-package}, or null for any other form. Such a form is taken member by
+	 * member (CLHS 3.2.3.1), so the members after the directive resolve against the
+	 * package it selects, as on the compile paths, which splice every such form.
+	 */
+	private static @Nullable List<LispVal> membersAroundInPackage(LispVal form) {
+		List<LispVal> whole = List.of(form);
+		List<LispVal> members = LispMacroExpander.flattenTopLevel(whole);
+		if (members == whole) {
+			return null;
+		}
+		for (LispVal member : members) {
+			if (member instanceof LispCons cons && cons.car() instanceof LispSymbol head
+					&& LispMacroExpander.spellsClName(head.name(), LispNames.IN_PACKAGE)) {
+				return members;
+			}
+		}
+		return null;
+	}
+
+	/**
+	 * Evaluates a top-level form as a MULTIPLE-VALUE consumer: returns every value the
+	 * form produced, which is what a CL REPL echoes one value per line. {@code (floor 10
+	 * 3)} yields the quotient AND the remainder, {@code (values)} yields no value at all,
+	 * and an ordinary form yields exactly its single value.
+	 * <p>
+	 * The two producer routes of the multiple-value tier are both covered: a SYNTACTIC
+	 * producer (a literal {@code values}, the {@code floor} family with a divisor,
+	 * {@code gethash}, {@code array-displacement}) is echoed through
+	 * {@code multiple-value-list}, since its extra values only exist inside a consumer's
+	 * expansion; every other form is evaluated with the {@code %mv-spill} channel cleared
+	 * first and its extra values read back from the channel afterwards, which is how a
+	 * user function's tail {@code (values ...)} reaches the echo. The form is NOT wrapped
+	 * in that case: an ordinary {@link #eval(LispVal)} runs, so a top-level definition
+	 * form still evaluates at top level.
+	 * @param expr the top-level form
+	 * @return the form's values, primary first (empty for {@code (values)})
+	 */
+	public List<LispVal> evalValues(LispVal expr) {
+		return evalValues(expr, null);
+	}
+
+	/**
+	 * Evaluates a top-level form as {@link #evalValues(LispVal)} does, handing the form
+	 * as resolved to {@code resolvedForm} before it runs: an editor's REPL records what
+	 * its input defines and uses ({@link CommonLispSwank}).
+	 * @param expr the top-level form
+	 * @param resolvedForm what sees the resolved form, or null
+	 * @return the form's values, primary first (empty for {@code (values)})
+	 */
+	List<LispVal> evalValues(LispVal expr, @Nullable Consumer<LispVal> resolvedForm) {
+		List<LispVal> members = membersAroundInPackage(expr);
+		if (members != null) {
+			List<LispVal> values = List.of(LispNil.INSTANCE);
+			for (LispVal member : members) {
+				values = evalValues(member, resolvedForm);
+			}
+			return values;
+		}
+		// Resolution is not idempotent under a :shadow package (see evalResolved), so the
+		// form is resolved once here and evaluated through evalResolved.
+		LispVal resolved = this.packageResolver.resolve(expr);
+		if (resolvedForm != null) {
+			resolvedForm.accept(resolved);
+		}
+		if (LispMacroExpander.isSyntacticMultipleValueProducer(resolved)) {
+			LispVal capture = new LispCons(new LispSymbol(LispNames.MULTIPLE_VALUE_LIST),
+					new LispCons(resolved, LispNil.INSTANCE));
+			return spilledValues(evalResolved(capture));
+		}
+		this.globalEnv.clearSpill();
+		LispVal primary = evalResolved(resolved);
+		return consumeValues(primary);
+	}
+
+	/**
+	 * Reads the values a form just produced off the {@code %mv-spill} channel, clearing
+	 * it: the primary first, then what the channel holds -- nothing when the form
+	 * answered no value at all ({@code LispMacroExpander.MV_ZERO_VALUES}), where the
+	 * primary is only the nil {@code values} answers for want of one.
+	 * @param primary what the form answered
+	 * @return the form's values, primary first (empty for {@code (values)})
+	 */
+	private List<LispVal> consumeValues(LispVal primary) {
+		LispVal spill = this.globalEnv.spill();
+		// The values have been consumed: leave no leftovers for the next form's echo.
+		this.globalEnv.clearSpill();
+		if (spill == LispMacroExpander.MV_ZERO_VALUES) {
+			return List.of();
+		}
+		List<LispVal> values = new ArrayList<>();
+		values.add(primary);
+		values.addAll(spilledValues(spill));
+		return values;
+	}
+
+	/**
+	 * Asks the evaluation running on a thread to stop: at its next function call or loop
+	 * step it throws {@link LispInterruptSignal}, which no handler catches and every
+	 * {@code unwind-protect} cleanup runs for. The thread is interrupted too, so a call
+	 * blocked in a sleep or a wait wakes. What an nREPL {@code interrupt} does. A thread
+	 * with a debugger enters it there instead ({@link Debugger#interrupted}), as SWANK's
+	 * interrupt does.
+	 * @param thread the thread
+	 */
+	public void interrupt(Thread thread) {
+		synchronized (this.interruptedThreads) {
+			if (this.interruptedThreads.add(thread)) {
+				this.pendingInterrupts.incrementAndGet();
+			}
+			thread.interrupt();
+		}
+	}
+
+	/**
+	 * Ends the program's threads, as a process's end ends them: what a runner owning the
+	 * evaluator for one whole program calls where that program's process would end. Every
+	 * thread the program started ({@code make-thread}, an async body) and that is still
+	 * running stops at its next function call or loop step, running no cleanup, as a
+	 * {@code uiop:quit} stops the thread it is called on ({@link LispExitSignal}); a call
+	 * blocked in a sleep, a wait or a {@code mutex-acquire} wakes. No thread starts
+	 * afterwards. A REPL's buffer or a session's input is no program's end: a thread it
+	 * started outlives it.
+	 * @return the threads asked to stop, which a caller may join
+	 */
+	public List<Thread> stopThreads() {
+		synchronized (this.interruptedThreads) {
+			this.programEnded = true;
+			List<Thread> running = List.copyOf(this.programThreads);
+			for (Thread thread : running) {
+				interrupt(thread);
+			}
+			return running;
+		}
+	}
+
+	/** Whether a thread is one the program started and the program has ended. */
+	private boolean endedProgramThread(Thread thread) {
+		if (!this.programEnded) {
+			return false;
+		}
+		synchronized (this.interruptedThreads) {
+			return this.programThreads.contains(thread);
+		}
+	}
+
+	/** Records a thread the program starts, or refuses it once the program has ended. */
+	private void programThreadStarting(Thread thread) {
+		synchronized (this.interruptedThreads) {
+			if (this.programEnded) {
+				throw new LispEvalException("the program has ended: no thread starts");
+			}
+			this.programThreads.add(thread);
+		}
+	}
+
+	/**
+	 * Forgets the calling thread of the program as it ends, with an interrupt still
+	 * pending for it ({@link #stopThreads} asked it after its last step).
+	 */
+	private void programThreadEnded() {
+		Thread thread = Thread.currentThread();
+		synchronized (this.interruptedThreads) {
+			if (this.programThreads.remove(thread) && this.interruptedThreads.remove(thread)) {
+				this.pendingInterrupts.decrementAndGet();
+				this.signalledInterrupts.remove(thread);
+			}
+		}
+	}
+
+	/**
+	 * Asks the evaluation running on a thread to signal
+	 * {@code rontolisp:interactive-interrupt} at its next function call or loop step, as
+	 * SBCL signals SIGINT. Past a handler that declines, the process ends with SIGINT's
+	 * status. The thread is interrupted too, so a sleep or a wait wakes.
+	 * @param thread the thread
+	 * @return false when an earlier request has not been reached yet: the thread is
+	 * blocked in a call that does not wake
+	 */
+	public boolean signalInterrupt(Thread thread) {
+		synchronized (this.interruptedThreads) {
+			this.signalledInterrupts.add(thread);
+			if (!this.interruptedThreads.add(thread)) {
+				return false;
+			}
+			this.pendingInterrupts.incrementAndGet();
+			thread.interrupt();
+			return true;
+		}
+	}
+
+	/**
+	 * Runs a listener the first time a {@code handler-case} or {@code handler-bind}
+	 * clause names {@code rontolisp:interactive-interrupt}: what asks SIGINT to be
+	 * signalled, on the thread establishing the handler. A program without one keeps the
+	 * host's own SIGINT, which ends the process wherever it is blocked.
+	 * @param listener the listener
+	 */
+	public void onInterruptHandler(Runnable listener) {
+		this.interruptHandlerListener = listener;
+	}
+
+	/** Tells the listener when one of the clauses names the interrupt condition. */
+	private void noteInterruptHandler(LispVal clauses) {
+		Runnable listener = this.interruptHandlerListener;
+		if (listener == null) {
+			return;
+		}
+		for (LispVal rest = clauses; rest instanceof LispCons cell; rest = cell.cdr()) {
+			if (cell.car() instanceof LispCons clause && LispMacroExpander.namesInterruptCondition(clause.car())) {
+				this.interruptHandlerListener = null;
+				listener.run();
+				return;
+			}
+		}
+	}
+
+	/**
+	 * Drops an interrupt still pending for the calling thread -- one that came after its
+	 * evaluation took its last step -- and the thread's interrupt status with it.
+	 */
+	public void clearInterrupt() {
+		synchronized (this.interruptedThreads) {
+			if (this.interruptedThreads.remove(Thread.currentThread())) {
+				this.pendingInterrupts.decrementAndGet();
+			}
+			Thread.interrupted();
+		}
+	}
+
+	/**
+	 * Runs the body with each special variable bound on the calling thread, as a
+	 * {@code let} of it binds, and writes back into the map the value each holds when the
+	 * body ends, also when it throws: the bindings a session keeps between the inputs it
+	 * runs on a thread of its own (an nREPL session's {@code *ns*}, {@code *1} ...). Each
+	 * name is proclaimed special, so a reference reads the binding -- a standard
+	 * stream's, {@code *error-output*}, too -- and must have a global value already.
+	 * @param bindings each special's name and value, updated with its value at the end
+	 * @param body the body
+	 */
+	public void withThreadBindings(Map<String, LispVal> bindings, Runnable body) {
+		List<String> names = List.copyOf(bindings.keySet());
+		for (String name : names) {
+			this.specialVars.add(name);
+			this.dynamicBindings.push(name, Objects.requireNonNull(bindings.get(name)));
+		}
+		try {
+			body.run();
+		}
+		finally {
+			for (String name : names) {
+				LispVal value = this.dynamicBindings.isBound(name) ? this.dynamicBindings.get(name) : null;
+				if (value != null) {
+					bindings.put(name, value);
+				}
+				this.dynamicBindings.pop(name);
+			}
+		}
+	}
+
+	/**
+	 * A character stream over a Java sink or source, as a stream value the print and read
+	 * families take: a {@code Writer} is an output stream, a {@code Reader} an input one.
+	 * What an nREPL session binds {@code *out*} and {@code *err*} to.
+	 * @param entry the sink or source
+	 * @return the stream value
+	 */
+	public LispVal openJavaStream(java.io.Closeable entry) {
+		return Environment.streamValue(this.globalEnv.openJavaStream(entry), LispLayout.Kinds.FILE);
+	}
+
+	/**
+	 * Removes a stream {@link #openJavaStream} answered from the stream table, leaving
+	 * its sink or source open.
+	 * @param stream the stream value
+	 */
+	public void closeJavaStream(LispVal stream) {
+		if (stream instanceof LispInstance instance && instance.slot(0) instanceof LispInteger handle) {
+			this.globalEnv.closeJavaStream(handle.value());
+		}
+	}
+
+	/** Stops the calling thread's evaluation where an interrupt is pending for it. */
+	void pollInterrupt() {
+		if (this.pendingInterrupts.get() != 0) {
+			stopIfInterrupted();
+		}
+	}
+
+	private void stopIfInterrupted() {
+		if (!this.interruptedThreads.contains(Thread.currentThread())) {
+			return;
+		}
+		// The lock waits for the requester's interrupt, or it would outlive the request
+		// and wake the next blocked call. The status only woke a blocked call: the
+		// cleanups on the way out may block.
+		synchronized (this.interruptedThreads) {
+			this.interruptedThreads.remove(Thread.currentThread());
+			this.pendingInterrupts.decrementAndGet();
+			Thread.interrupted();
+		}
+		if (endedProgramThread(Thread.currentThread())) {
+			// the program's end: the thread ends where it stands, as a process's end
+			// ends it
+			throw new LispExitSignal(0);
+		}
+		if (this.signalledInterrupts.remove(Thread.currentThread())) {
+			eval(new LispCons(new LispSymbol(LispNames.SIGNAL), new LispCons(
+					new LispCons(new LispSymbol(LispNames.QUOTE),
+							new LispCons(new LispSymbol(LispNames.INTERACTIVE_INTERRUPT_QUALIFIED), LispNil.INSTANCE)),
+					LispNil.INSTANCE)), this.globalEnv);
+			throw new LispExitSignal(SIGINT_STATUS);
+		}
+		Debugger debugger = this.debugging ? this.debuggers.get() : null;
+		if (debugger != null) {
+			int[] levels = this.debuggerLevels.get();
+			levels[0]++;
+			try {
+				if (debugger.interrupted()) {
+					return;
+				}
+			}
+			finally {
+				levels[0]--;
+			}
+		}
+		throw new LispInterruptSignal();
+	}
+
+	// ------------------------------------------------------------------------------------
+	// The debugger seam (SWANK's SLDB, .kb/swank.md)
+
+	/**
+	 * Whether the calling thread evaluates inside a debugger level, nested in an
+	 * evaluation the debugger stopped: a {@code throw} or a {@code return-from} no catch
+	 * or block of this evaluation takes goes on to that one, as it would on SBCL, rather
+	 * than being the unmatched exit an outermost evaluation reports.
+	 */
+	private boolean nestedInDebugger() {
+		return this.debugging && this.debuggerLevels.get()[0] > 0;
+	}
+
+	/**
+	 * Whether the calling thread has a debugger: every frame an error leaves is then its
+	 * signal point until one offers it, so its handlers run, and the debugger meets it,
+	 * before anything it unwinds -- not only at a built-in's seam.
+	 */
+	boolean debuggerHere() {
+		return this.debugging && this.debuggers.get() != null;
+	}
+
+	/**
+	 * Runs the body with a catch tag Java code takes established around it: a
+	 * {@code throw} to it -- the invocation of a restart a debugger established -- leaves
+	 * every evaluation inside for that code.
+	 * @param <T> what the body answers
+	 * @param tag the tag
+	 * @param body the body
+	 * @return what it answered
+	 */
+	<T extends @Nullable Object> T catchingOutside(LispVal tag, Supplier<T> body) {
+		List<LispVal> tags = this.outerCatches.get();
+		tags.add(tag);
+		try {
+			return body.get();
+		}
+		finally {
+			tags.removeLast();
+		}
+	}
+
+	/** Whether Java code around the evaluation takes a throw's tag. */
+	private boolean caughtOutside(ThrowSignal signal) {
+		if (this.debugging) {
+			for (LispVal tag : this.outerCatches.get()) {
+				if (tag == signal.tag()) {
+					return true;
+				}
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Stops the calling thread where an interrupt is pending for it, as its next function
+	 * call would: what a wait an interrupt woke checks.
+	 */
+	void checkInterrupt() {
+		pollInterrupt();
+	}
+
+	/**
+	 * For a blocked call an interrupt woke: whether the interrupt was this evaluator's,
+	 * on a thread with a debugger, and the debugger went on with the evaluation -- the
+	 * call then waits out the rest. Without a debugger nothing is taken: the call fails
+	 * as before and the evaluation stops at its next step.
+	 * @return whether the call goes on
+	 */
+	private boolean resumeAfterInterrupt() {
+		Thread thread = Thread.currentThread();
+		if (!this.interruptedThreads.contains(thread) || (!this.signalledInterrupts.contains(thread)
+				&& (!this.debugging || this.debuggers.get() == null) && !endedProgramThread(thread))) {
+			return false;
+		}
+		stopIfInterrupted();
+		return true;
+	}
+
+	/**
+	 * Whether a Java exception is the interpreter's transfer of control -- a
+	 * {@code throw} (a restart's invocation among them), a {@code return-from}, a
+	 * {@code go}, a debugger's transfer to a frame -- rather than a condition: what a
+	 * frame it leaves lets pass.
+	 * @param ex the exception
+	 * @return whether it transfers control
+	 */
+	static boolean isControlTransfer(RuntimeException ex) {
+		return ex instanceof ThrowSignal || ex instanceof BlockReturnSignal || ex instanceof BlockTailExit
+				|| ex instanceof GoSignal || ex instanceof FrameSignal;
+	}
+
+	/**
+	 * Runs the body with the calling thread's {@code handler-case} clauses out of reach:
+	 * what a debugger level evaluates is caught by no handler of the evaluation it
+	 * stopped.
+	 * @param body the body
+	 */
+	void withHandlerCasesIsolated(Runnable body) {
+		ArrayDeque<List<LispVal>> outer = this.handlerCaseTypes.get();
+		this.handlerCaseTypes.set(new ArrayDeque<>());
+		try {
+			body.run();
+		}
+		finally {
+			this.handlerCaseTypes.set(outer);
+		}
+	}
+
+	/**
+	 * A {@code simple-error} reporting a text, as {@code (make-condition 'simple-error
+	 * :format-control text)} makes one.
+	 * @param text the report
+	 * @return the condition
+	 */
+	LispVal simpleError(String text) {
+		return synthesizeCondition(new LispEvalException(text));
+	}
+
+	/**
+	 * Lets a thread install a debugger ({@link #withDebugger}): loads the restart
+	 * runtime, so every restart a program establishes sits on its thread's restart stack
+	 * and every signal runs the handlers before anything unwinds, and keeps each thread's
+	 * call frames. Called before any thread a debugger serves starts.
+	 */
+	void enableDebugging() {
+		ensureRestartRuntimeLoaded();
+		this.debugging = true;
+	}
+
+	/**
+	 * Runs the body with a debugger installed on the calling thread, or with none.
+	 * @param <T> what the body answers
+	 * @param debugger the debugger, or null for none
+	 * @param body the body
+	 * @return what it answered
+	 */
+	<T extends @Nullable Object> T withDebugger(@Nullable Debugger debugger, Supplier<T> body) {
+		Debugger previous = this.debuggers.get();
+		this.debuggers.set(debugger);
+		try {
+			return body.get();
+		}
+		finally {
+			this.debuggers.set(previous);
+		}
+	}
+
+	/**
+	 * Runs the body with no debugger on the calling thread: Java code that catches what
+	 * the body signals, as a {@code handler-case} would, so no debugger may stop it.
+	 * @param <T> what the body answers
+	 * @param body the body
+	 * @return what it answered
+	 */
+	<T extends @Nullable Object> T withoutDebugger(Supplier<T> body) {
+		return this.debugging ? withDebugger(null, body) : body.get();
+	}
+
+	/**
+	 * Runs the body under a marker frame on the calling thread's stack.
+	 * @param <T> what the body answers
+	 * @param call the call the frame shows
+	 * @param body the body
+	 * @return what it answered
+	 */
+	<T extends @Nullable Object> T withFrame(LispVal call, Supplier<T> body) {
+		if (!this.debugging) {
+			return body.get();
+		}
+		CallFrame frame = CallFrame.mark(this.frameTops.get(), call);
+		try {
+			return body.get();
+		}
+		finally {
+			frame.exit();
+		}
+	}
+
+	/**
+	 * The calling thread's innermost frame.
+	 * @return the frame, or null for none
+	 */
+	@Nullable CallFrame topFrame() {
+		return this.frameTops.get()[0];
+	}
+
+	/**
+	 * A special variable's value on the calling thread: its dynamic binding, else its
+	 * global value.
+	 * @param name the variable's name
+	 * @return the value, or null when it has none
+	 */
+	@Nullable LispVal specialValue(String name) {
+		return currentSpecialValue(name);
+	}
+
+	/**
+	 * A special variable's dynamic binding on the calling thread.
+	 * @param name the variable's name
+	 * @return its value, or null when the thread does not bind it
+	 */
+	@Nullable LispVal threadBinding(String name) {
+		return this.dynamicBindings.isBound(name) ? this.dynamicBindings.get(name) : null;
+	}
+
+	/**
+	 * Assigns a special variable on the calling thread: its dynamic binding, else its
+	 * global value.
+	 * @param name the variable's name
+	 * @param value the value
+	 */
+	void setSpecialValue(String name, LispVal value) {
+		if (this.dynamicBindings.isBound(name)) {
+			this.dynamicBindings.setCurrent(name, value);
+		}
+		else {
+			this.globalEnv.set(name, value);
+		}
+	}
+
+	/**
+	 * Evaluates a form in a scope, as a debugger evaluates in a frame, answering its
+	 * values.
+	 * @param form the form, read in the calling thread's package
+	 * @param env the scope
+	 * @return the values, primary first (empty for none)
+	 */
+	List<LispVal> evalValuesIn(LispVal form, Environment env) {
+		LispVal resolved = this.packageResolver.resolve(form);
+		if (LispMacroExpander.isSyntacticMultipleValueProducer(resolved)) {
+			return spilledValues(eval(new LispCons(new LispSymbol(LispNames.MULTIPLE_VALUE_LIST),
+					new LispCons(resolved, LispNil.INSTANCE)), env));
+		}
+		this.globalEnv.clearSpill();
+		return consumeValues(eval(resolved, env));
+	}
+
+	/**
+	 * Where an error a built-in raised, or one a frame is leaving, is signalled: runs the
+	 * {@code handler-bind} handlers ({@link #withHandlerBindHandlersRun}), then, while
+	 * debugging, offers it to the thread's debugger ({@link #offerDebugger}).
+	 * @param e the error
+	 * @param env the scope it was signalled in
+	 * @param builtIn the built-in that raised it, or null
+	 * @param args the built-in's arguments
+	 * @return the error to throw on
+	 */
+	private LispEvalException signalPoint(LispEvalException e, Environment env, @Nullable LispFunction builtIn,
+			List<LispVal> args) {
+		LispEvalException walked = withHandlerBindHandlersRun(e);
+		if (this.debugging) {
+			offerDebugger(walked, env, builtIn == null ? null : operatorCall(builtIn, args));
+		}
+		return walked;
+	}
+
+	LispEvalException signalPoint(LispEvalException e, Environment env, @Nullable LispFunction builtIn) {
+		return signalPoint(e, env, builtIn, List.of());
+	}
+
+	/**
+	 * The signal point of an error a top-level evaluation is leaving: what no frame of it
+	 * signalled (a variable the form is) runs its handlers and meets the debugger here.
+	 * @param e the error
+	 * @return the error to throw on
+	 */
+	LispEvalException atSignalPoint(LispEvalException e) {
+		return signalPoint(e, this.globalEnv, null);
+	}
+
+	/**
+	 * Offers an error to the calling thread's debugger, once, when no
+	 * {@code handler-case} takes it: CL's {@code invoke-debugger} for an error its
+	 * handlers declined. The debugger runs here, before anything unwinds, and leaves by a
+	 * restart's transfer of control; when it declines, the error goes on unwinding.
+	 * @param e the error, its handlers run
+	 * @param env the scope it was signalled in, or null
+	 * @param operatorCall the call of the built-in that raised it, or null
+	 */
+	private void offerDebugger(LispEvalException e, @Nullable Environment env, @Nullable LispVal operatorCall) {
+		Debugger debugger = this.debuggers.get();
+		if (debugger == null || e.offerDebugger()) {
+			return;
+		}
+		LispVal condition = e.condition() != null ? e.condition() : synthesizeCondition(e);
+		// a clause type's own failure is the handler-case's to report, not a debugger's
+		if (withoutDebugger(() -> anyHandlerCaseMatches(condition))) {
+			return;
+		}
+		String message = e.getMessage();
+		// an interrupt that woke the call failing here is answered by this debugger: it
+		// is not left to stop an evaluation the debugger runs
+		clearInterrupt();
+		int[] levels = this.debuggerLevels.get();
+		levels[0]++;
+		try {
+			debugger.debug(condition, message == null ? "" : message, env,
+					operatorCall == null ? null : CallFrame.operator(topFrame(), operatorCall));
+		}
+		finally {
+			levels[0]--;
+		}
+	}
+
+	/**
+	 * The call of a built-in an error was raised in, as a frame shows it, or null for one
+	 * no frame shows: an internal primitive, or a signalling operator, whose caller is
+	 * where the error happened.
+	 */
+	private static @Nullable LispVal operatorCall(LispFunction builtIn, List<LispVal> args) {
+		String name = builtIn.name();
+		if (name.startsWith("%") || SIGNALLING_OPERATORS.contains(name)) {
+			return null;
+		}
+		LispVal call = LispNil.INSTANCE;
+		for (int i = args.size() - 1; i >= 0; i--) {
+			call = new LispCons(args.get(i), call);
+		}
+		return new LispCons(new LispSymbol(name), call);
+	}
+
+	/**
+	 * The operators whose own frame a debugger leaves out, as SWANK leaves out ERROR's.
+	 */
+	private static final Set<String> SIGNALLING_OPERATORS = Set.of(LispNames.ERROR, LispNames.CERROR, LispNames.SIGNAL,
+			LispNames.WARN);
+
+	/**
+	 * Captures the evaluator's control state -- the stacks every binding form pushes
+	 * before its body and pops in a {@code finally} -- so a caller that survives a
+	 * {@link StackOverflowError} can put it back. The overflow does unwind through those
+	 * {@code finally} blocks, but the deepest ones run with no stack left and can
+	 * overflow again before they restore anything: a special stays bound, a {@code load}
+	 * leaves its package current. A caller about to go on evaluating (a REPL prompt)
+	 * takes a state before the form and {@link ControlState#restore restores} it after
+	 * the overflow.
+	 * @return the state now
+	 */
+	public ControlState controlState() {
+		return new ControlState(this.dynamicBindings.depths(), this.handlerCaseTypes.get().size(),
+				this.packageResolver.packageStackDepth(), this.packageResolver.currentPackageName(),
+				this.loadDirStack.size(), this.loadingSystems.size(), this.out.muted(),
+				this.debugging ? topFrame() : null);
+	}
+
+	/**
+	 * The control state {@link #controlState} captured. Nothing a program ASSIGNED is in
+	 * it: a {@code setq} that ran before the overflow stays, as it would after any error.
+	 */
+	public final class ControlState {
+
+		private final Map<String, Integer> bindingDepths;
+
+		private final int handlerCaseFrames;
+
+		private final int packageStackDepth;
+
+		private final String currentPackage;
+
+		private final int loadDirDepth;
+
+		private final int loadingSystemsDepth;
+
+		private final boolean muted;
+
+		private final @Nullable CallFrame topFrame;
+
+		private ControlState(Map<String, Integer> bindingDepths, int handlerCaseFrames, int packageStackDepth,
+				String currentPackage, int loadDirDepth, int loadingSystemsDepth, boolean muted,
+				@Nullable CallFrame topFrame) {
+			this.bindingDepths = bindingDepths;
+			this.handlerCaseFrames = handlerCaseFrames;
+			this.packageStackDepth = packageStackDepth;
+			this.currentPackage = currentPackage;
+			this.loadDirDepth = loadDirDepth;
+			this.loadingSystemsDepth = loadingSystemsDepth;
+			this.muted = muted;
+			this.topFrame = topFrame;
+		}
+
+		/** Puts the evaluator's control stacks back to this state. */
+		public void restore() {
+			LispEvaluator evaluator = LispEvaluator.this;
+			evaluator.dynamicBindings.truncateTo(this.bindingDepths);
+			ArrayDeque<List<LispVal>> frames = evaluator.handlerCaseTypes.get();
+			while (frames.size() > this.handlerCaseFrames) {
+				frames.removeLast();
+			}
+			evaluator.packageResolver.restorePackageState(this.packageStackDepth, this.currentPackage);
+			while (evaluator.loadDirStack.size() > this.loadDirDepth) {
+				evaluator.loadDirStack.removeLast();
+			}
+			while (evaluator.loadingSystems.size() > this.loadingSystemsDepth) {
+				evaluator.loadingSystems.removeLast();
+			}
+			evaluator.out.muted(this.muted);
+			if (evaluator.debugging) {
+				evaluator.frameTops.get()[0] = this.topFrame;
+			}
+		}
+
+	}
+
+	/**
+	 * Renders a value the way {@code prin1} would: through the {@code print-object} route
+	 * when this evaluation has turned it on (a {@code defmethod print-object}, a
+	 * condition in reach, a non-default printer-control variable), else the raw readable
+	 * rendering. The REPL echoes results through this, so a value whose class carries a
+	 * {@code print-object} method -- a {@code geom:solid}, a torch tensor -- echoes as
+	 * the method prints it, exactly as the printing operators would. An unrouted
+	 * evaluation takes {@code value.print()} directly, so the everyday echo is unchanged;
+	 * a failure inside the routed rendering falls back to it too, because an echo must
+	 * never turn a computed value into an error.
+	 * @param value the value to render
+	 * @return the prin1 text
+	 */
+	public String prin1ToStringRouted(LispVal value) {
+		boolean routed = !LispMacroExpander.printObjectTags(this.closRegistry).isEmpty()
+				|| this.closRegistry.routesConditionReports() || printControlsInEffect();
+		if (!routed) {
+			return value.print();
+		}
+		try {
+			// the rendering's failure is caught below: no debugger stops it
+			return withoutDebugger(
+					() -> printThrough("(lambda (x) (prin1-to-string x))", value)) instanceof LispString rendered
+							? rendered.value() : value.print();
+		}
+		catch (RuntimeException ex) {
+			return value.print();
+		}
+	}
+
+	/**
+	 * Calls a printer written as a one-argument lambda on a value the program computed.
+	 * The value is handed to the closure as an ARGUMENT, never quoted into a form: a
+	 * top-level form is walked by the package resolver first, and that walk never ends on
+	 * a cyclic value. The printer is the implementation's own helper, read in
+	 * {@code cl-user} and interning nothing ({@link #evalHelper}).
+	 * @param printer the source of a {@code (lambda (x) ...)} answering the text
+	 * @param value the value to print
+	 * @return what the printer answered
+	 */
+	LispVal printThrough(String printer, LispVal value) {
+		LispVal closure = evalHelper(SourceLanguage.COMMON_LISP.read(printer, Features.INTERPRETER, null).get(0));
+		return applyGlobal(closure, List.of(value));
+	}
+
+	/**
+	 * Evaluates a top-level form of the implementation's own -- a helper evaluated on the
+	 * program's behalf, never the program's source -- resolved in {@code cl-user}
+	 * whatever package is current, and interning nothing: its names are not symbols the
+	 * program read ({@code PackageResolver.resolveHelper}).
+	 * @param form the helper form
+	 * @return its value
+	 */
+	LispVal evalHelper(LispVal form) {
+		return evalResolved(this.packageResolver.resolveHelper(form));
+	}
+
+	/** The elements of a value list (nil -- no values -- included). */
+	private static List<LispVal> spilledValues(LispVal list) {
+		return list instanceof LispCons cons ? cons.toList() : List.of();
+	}
+
+	/** The error a {@code throw} with no matching {@code catch} surfaces as. */
+	private static String unmatchedThrowMessage(ThrowSignal signal) {
+		return LispNames.THROW + ": no enclosing catch for tag " + signal.tag().print();
+	}
+
+	/**
+	 * Resolves a top-level form through this evaluator's package resolver without
+	 * evaluating it. An {@code in-package}/{@code defpackage} directive updates the
+	 * resolver state as a side effect. Used by {@code UserMacroExpander} so
+	 * package-qualified macro definitions and their call sites match canonically.
+	 * @param form the top-level form
+	 * @return the resolved form
+	 */
+	public LispVal resolvePackages(LispVal form) {
+		return this.packageResolver.resolve(form);
+	}
+
+	/**
+	 * Has every later {@link #resolvePackages} read one program
+	 * ({@link PackageResolver#holdDatumCopies}).
+	 */
+	void holdResolverDatumCopies() {
+		this.packageResolver.holdDatumCopies();
+	}
+
+	/**
+	 * The spelling a resolved symbol takes in a form the compilers' own resolution pass
+	 * reads again ({@link PackageResolver#emittedSpelling}).
+	 * @param symbol the resolved symbol
+	 * @return the spelling to emit
+	 */
+	public String emittedSpelling(LispSymbol symbol) {
+		return this.packageResolver.emittedSpelling(symbol);
+	}
+
+	/**
+	 * What this evaluator's reader recorded, for the compilers' resolution pass
+	 * ({@link PackageResolver#readSymbolsMarker}).
+	 * @return the marker, or null when nothing was recorded
+	 */
+	public @Nullable LispVal readSymbolsMarker() {
+		return this.packageResolver.readSymbolsMarker();
+	}
+
+	/**
+	 * Resolves an implementation form against the current package state, recording
+	 * nothing it reads (see {@link PackageResolver#resolveUnrecorded}).
+	 * @param form the form to resolve
+	 * @return the resolved form
+	 */
+	public LispVal resolveImplementationPackages(LispVal form) {
+		return this.packageResolver.resolveUnrecorded(form);
+	}
+
+	/**
+	 * Loads the Clojure library for a WHOLE lowered Clojure program -- every form this
+	 * evaluator will run -- and answers the forms to evaluate in its place: the compile
+	 * path's strip ({@link ClojureLibrary#splice}), so neither the library nor the
+	 * program tests for a kind of value the program can never make (a {@code str} of a
+	 * number passes no io, stream, instant, ... test). The library loaded on first use
+	 * instead keeps every arm, for whatever a session or a {@code load} reads next; this
+	 * one cannot take a later Clojure program, which {@link #requireWholeClojureLibrary}
+	 * refuses. A program naming no library function, or one evaluated after the library
+	 * was loaded, is answered unchanged.
+	 * @param program the lowered forms of the whole program
+	 * @return the forms to evaluate, in order
+	 */
+	public List<LispVal> clojureProgram(List<LispVal> program) {
+		requireWholeClojureLibrary("a second Clojure program");
+		if (this.clojureLibraryLoaded) {
+			return program;
+		}
+		ClojureLibrary.Splice splice = ClojureLibrary.splice(program, true);
+		if (!splice.library().isEmpty()) {
+			this.clojureLibraryLoaded = true;
+			this.clojureLibraryStripped = true;
+			for (LispVal form : splice.library()) {
+				evalResolved(form);
+			}
+		}
+		return splice.program();
+	}
+
+	/**
+	 * {@link #clojureProgram(List)} for a program lowered with the lowering it keeps for
+	 * its run: one whose run-time code reaches a lowering verb over computed arguments --
+	 * {@code eval}, a computed {@code resolve}, {@code require} or {@code load-string} --
+	 * takes the whole library, since what it lowers as it runs may make a value of any
+	 * kind, and its lowering answers those verbs ({@link #setClojureRunTime}). Any other
+	 * program takes the strip.
+	 * @param program the lowered program
+	 * @return the forms to evaluate, in order
+	 */
+	public List<LispVal> clojureProgram(Clojure.Program program) {
+		ClojureRunTime runTime = program.runTime();
+		if (runTime == null) {
+			return clojureProgram(program.forms());
+		}
+		requireWholeClojureLibrary("a second Clojure program");
+		setClojureRunTime(runTime);
+		loadClojureLibrary();
+		return program.forms();
+	}
+
+	/**
+	 * Hands the run-time library's lowering verbs over computed arguments
+	 * ({@code %clojure-lower-at-run-time}, which refuses where no lowering runs) to the
+	 * lowering a Clojure program or session keeps for its run: the call lowers in the
+	 * namespace {@code *ns*} holds and its forms evaluate here, the last value the
+	 * call's, like the oracle's {@code eval}.
+	 * @param runTime the lowering
+	 */
+	public void setClojureRunTime(ClojureRunTime runTime) {
+		this.clojureRunTime = runTime;
+		if (this.clojureLibraryLoaded) {
+			installClojureRunTime();
+		}
+	}
+
+	/** The Clojure library, every arm of it, then the run-time lowering if one runs. */
+	private void loadClojureLibrary() {
+		if (this.clojureLibraryLoaded) {
+			return;
+		}
+		this.clojureLibraryLoaded = true;
+		// evalResolved, like the Scheme library: the shape is the same (canonical
+		// rontolisp:: helpers over bare cl names)
+		for (LispVal form : ClojureLibrary.forms()) {
+			evalResolved(form);
+		}
+		if (this.clojureRunTime != null) {
+			installClojureRunTime();
+		}
+	}
+
+	/** The run-time library's function every lowering verb at run time reaches. */
+	private static final String LOWER_AT_RUN_TIME = "RONTOLISP::%CLOJURE-LOWER-AT-RUN-TIME";
+
+	/** The run-time library's preparation of a verb's arguments as forms. */
+	private static final LispSymbol RUN_TIME_ARGUMENTS = new LispSymbol("RONTOLISP::%CLOJURE-RUN-TIME-ARGUMENTS");
+
+	/** The run-time library's metadata of a value. */
+	private static final LispSymbol CLOJURE_META = new LispSymbol("RONTOLISP::%CLOJURE-META");
+
+	/** The special {@code *ns*} lowers to. */
+	private static final String CLOJURE_NS = "RONTOLISP::%CLOJURE-NS";
+
+	/** The classes a lowering failure at run time is thrown as, the oracle's. */
+	private static final LispVal COMPILER_EXCEPTION = consList(
+			List.of(LispString.literal("clojure.lang.Compiler$CompilerException"),
+					LispString.literal("java.lang.RuntimeException"), LispString.literal("java.lang.Exception"),
+					LispString.literal("java.lang.Throwable")));
+
+	private void installClojureRunTime() {
+		this.globalEnv.defineFunction(LOWER_AT_RUN_TIME,
+				new LispFunction(LOWER_AT_RUN_TIME, args -> lowerClojureAtRunTime(args.get(0), args.get(1))));
+	}
+
+	/**
+	 * One lowering verb at run time: its arguments as forms, the call lowered in the
+	 * namespace {@code *ns*} holds, its forms evaluated in order; the value of the call's
+	 * own entry answers. A call that does not lower throws the oracle's
+	 * {@code Compiler$CompilerException} with the lowering's words.
+	 */
+	private LispVal lowerClojureAtRunTime(LispVal verbValue, LispVal argsValue) {
+		ClojureRunTime runTime = this.clojureRunTime;
+		if (runTime == null || !(verbValue instanceof LispString verb)) {
+			throw new LispEvalException(LOWER_AT_RUN_TIME + ": no lowering runs here");
+		}
+		LispVal prepared = applyGlobal(RUN_TIME_ARGUMENTS, List.of(verbValue, argsValue));
+		List<LispVal> args = prepared instanceof LispCons cons ? cons.toList() : List.of();
+		List<ClojureTopLevel> lowered;
+		try {
+			lowered = runTime.lower(verb.value(), args, currentClojureNamespace(), new ClojureRunTime.Host() {
+				@Override
+				public @Nullable List<LispVal> metasOf(List<LispVal> values) {
+					return clojureMetasOf(values);
+				}
+
+				@Override
+				public LispVal constant(LispVal value) {
+					LispFunction thunk = new LispFunction("clojure-constant", ignored -> value);
+					return consList(List.of(new LispSymbol(LispNames.FUNCALL),
+							consList(List.of(new LispSymbol(LispNames.QUOTE), thunk))));
+				}
+			});
+		}
+		catch (LispReadException ex) {
+			String message = ex.getMessage() == null ? ex.toString() : ex.getMessage();
+			return applyGlobal(new LispSymbol("RONTOLISP::%CLOJURE-REFUSE"),
+					List.of(COMPILER_EXCEPTION, LispString.literal(message)));
+		}
+		LispVal value = LispNil.INSTANCE;
+		for (ClojureTopLevel top : lowered) {
+			LispVal last = LispNil.INSTANCE;
+			for (LispVal form : top.forms()) {
+				last = eval(form);
+			}
+			if (top.echoes()) {
+				value = last;
+			}
+		}
+		return value;
+	}
+
+	/**
+	 * The name of the namespace the Clojure {@code *ns*} holds on the calling thread,
+	 * {@code user} where it holds none.
+	 * @return the namespace's name
+	 */
+	public String currentClojureNamespace() {
+		LispVal ns = currentSpecialValue(CLOJURE_NS);
+		if (ns instanceof LispCons cons && cons.cdr() instanceof LispCons rest
+				&& rest.car() instanceof LispString name) {
+			return name.value();
+		}
+		return "user";
+	}
+
+	/** The run-time library's metadata of each value, in order. */
+	private @Nullable List<LispVal> clojureMetasOf(List<LispVal> values) {
+		List<LispVal> metas = new ArrayList<>();
+		for (LispVal value : values) {
+			metas.add(applyGlobal(CLOJURE_META, List.of(value)));
+		}
+		return metas;
+	}
+
+	/**
+	 * Refuses Clojure source arriving after {@link #clojureProgram} loaded a library
+	 * without the arms of the families that program makes no value of: what the new
+	 * source makes may need them. A Clojure program reaches here only through its own
+	 * lowering, which keeps the whole library ({@link #clojureProgram(Clojure.Program)}).
+	 */
+	private void requireWholeClojureLibrary(String what) {
+		if (this.clojureLibraryStripped) {
+			throw new IllegalStateException(
+					what + " cannot run where a whole Clojure program loaded the library without its unused arms");
+		}
+	}
+
+	/**
+	 * Evaluates a top-level form that was ALREADY resolved through
+	 * {@link #resolvePackages} -- the {@code UserMacroExpander} pipeline, which resolves
+	 * each form itself so macro call sites match the canonical registered names. Skipping
+	 * the second resolution that {@link #eval(LispVal)} would apply matters: resolution
+	 * is not idempotent under a {@code :shadow} package, where a shadowed CL name's
+	 * canonical BARE spelling re-resolves to the shadowing package's own symbol
+	 * (re-resolving cl-ppcre's {@code defconstant} macro turned its {@code
+	 * cl:defconstant} template head back into the shadowed macro's name -- a
+	 * self-recursive macro that expanded forever).
+	 * @param expr the resolved top-level form
+	 * @return the result
+	 */
+	public LispVal evalResolved(LispVal expr) {
+		return evalResolved(expr, true);
+	}
+
+	private LispVal evalResolved(LispVal expr, boolean topLevel) {
+		expr = prepareJavaSites(resolveStructLiterals(expr));
+		SpecialVarCollector.collectForm(expr, this.specialVars);
+		try {
+			return topLevel ? evalAtTopLevel(expr, this.globalEnv) : eval(expr, this.globalEnv);
+		}
+		catch (BlockReturnSignal signal) {
+			if (nestedInDebugger()) {
+				throw signal;
+			}
+			throw new LispEvalException(LispNames.RETURN_FROM + ": no enclosing block named " + signal.name());
+		}
+		catch (GoSignal signal) {
+			if (nestedInDebugger()) {
+				throw signal;
+			}
+			throw new LispEvalException(LispNames.GO + ": no enclosing tagbody holds the tag " + signal.tag);
+		}
+		catch (ThrowSignal signal) {
+			if (nestedInDebugger() || caughtOutside(signal)) {
+				throw signal;
+			}
+			throw new LispEvalException(unmatchedThrowMessage(signal));
+		}
+	}
+
+	/**
+	 * Evaluates a form the program holds as data -- what {@code eval} and {@code compile}
+	 * are handed -- rather than source just read: its symbols are symbols already, so the
+	 * current package does not read them again ({@link PackageResolver#resolveDatum}).
+	 * @param datum the form
+	 * @return the result
+	 */
+	private LispVal evalDatum(LispVal datum) {
+		return evalDatum(datum, false);
+	}
+
+	private LispVal evalDatum(LispVal datum, boolean tail) {
+		LispVal resolved;
+		try {
+			resolved = this.packageResolver.resolveDatum(datum);
+		}
+		catch (LispPackageException ex) {
+			// A symbol read at run time naming no package: this runs under the caller's
+			// handlers, so it is the condition CL names, never the end of the program.
+			String message = String.valueOf(ex.getMessage());
+			return signalPackageError(message,
+					message.startsWith(NO_SUCH_PACKAGE) ? message.substring(NO_SUCH_PACKAGE.length()) : "");
+		}
+		return evalResolved(
+				tail ? LispMacroExpander.spillEscapingMvProducers(dispatchingMethodedProducers(resolved)) : resolved,
+				false);
+	}
+
+	/**
+	 * Registers an already-resolved top-level
+	 * {@code defvar}/{@code defparameter}/{@code defconstant} into this evaluator WITHOUT
+	 * running its value expression: the expression is parked as a thunk in the global
+	 * environment and evaluated only if something READS the variable -- which, in the
+	 * {@code UserMacroExpander} pipeline this serves, means only if a macro body reads
+	 * the global at expansion time. Everything else about the definition is eager: the
+	 * name is proclaimed special immediately, and {@code defvar}'s idempotence still sees
+	 * a pending expression as bound.
+	 * <p>
+	 * The distinction is the whole compile-time cost of a library that builds tables at
+	 * load time: those value expressions are for the RUNTIME program, which compiles and
+	 * runs them itself, so evaluating them here as well was pure duplicated work. Only a
+	 * global that an expansion actually consults has to exist at macro time.
+	 * <p>
+	 * A value expression that fails to evaluate leaves the name unbound with a warning
+	 * (the same outcome as evaluating it eagerly and catching), reported at the point of
+	 * the read rather than at the definition.
+	 * @param expr the resolved top-level definition form
+	 */
+	public void registerLazyGlobal(LispVal expr) {
+		LispVal form = resolveStructLiterals(expr);
+		SpecialVarCollector.collectForm(form, this.specialVars);
+		if (!(form instanceof LispCons cons) || !(cons.car() instanceof LispSymbol op) || !cons.isProperList()) {
+			return;
+		}
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 2 || !(parts.get(1) instanceof LispSymbol name)) {
+			return;
+		}
+		this.specialVars.add(name.name());
+		// (defvar name) with no value form leaves the name unbound; defvar assigns only
+		// when unbound, defparameter/defconstant always (re)assign.
+		boolean force = !LispNames.DEFVAR.equals(op.name());
+		if (parts.size() <= 2 || (!force && this.globalEnv.isBound(name.name()))) {
+			return;
+		}
+		LispVal valueForm = parts.get(2);
+		// The expression runs later, under whatever in-package state the expander has
+		// reached by then, so the package current AT THE DEFINITION is captured and
+		// restored around the run: an init form calling (intern ...) must home its symbol
+		// into the package it was written in, exactly as evaluating it here would have.
+		String definingPackage = this.packageResolver.currentPackageName();
+		this.globalEnv.defineLazy(name.name(), () -> {
+			String savedPackage = this.packageResolver.currentPackageName();
+			this.packageResolver.setCurrentPackage(definingPackage);
+			try {
+				return withoutDebugger(() -> eval(valueForm, this.globalEnv));
+			}
+			catch (RuntimeException ex) {
+				System.err.println("warning: skipping macro-time evaluation of " + op.print() + " " + name.print()
+						+ ": " + ex.getMessage());
+				return null;
+			}
+			finally {
+				this.packageResolver.setCurrentPackage(savedPackage);
+			}
+		});
+	}
+
+	/**
+	 * Registers a global whose value form runs only when something reads it -- the
+	 * Clojure front end's macro-time {@code def} roots ({@code ClojureMacroTime}). Unlike
+	 * {@link #registerLazyGlobal}, a value form that fails propagates to the read, where
+	 * the expansion reading it reports it. A value form reading the name itself
+	 * ({@code (def x (inc x))}, an {@code alter-var-root}) reads the root it supersedes,
+	 * forced only then.
+	 * @param name the global's name
+	 * @param valueForm the unresolved value form
+	 * @param special whether the name is proclaimed special
+	 * @param once whether a name already bound (or pending) keeps its value
+	 */
+	public void defineLazyGlobal(String name, LispVal valueForm, boolean special, boolean once) {
+		if (special) {
+			this.specialVars.add(name);
+		}
+		if (once && this.globalEnv.isBound(name)) {
+			return;
+		}
+		Supplier<@Nullable LispVal> previous = this.globalEnv.rootOf(name);
+		this.globalEnv.defineLazy(name, () -> {
+			LispVal old = previous == null ? null : previous.get();
+			if (old != null) {
+				this.globalEnv.set(name, old);
+			}
+			return eval(valueForm);
+		});
+	}
+
+	/**
+	 * Runs a form in a top-level position (CLHS 3.2.3.1). The members of a {@code progn},
+	 * {@code locally} or {@code eval-when}, and what a macro call or a {@code macrolet}
+	 * or {@code symbol-macrolet} body becomes ({@link #topLevelForm}), are in one too.
+	 * What runs here stands for both a program's compile and its load, so every situation
+	 * of an {@code eval-when} runs its body; {@link #eval(LispVal, Environment)} is at no
+	 * top level, where only {@code :execute} does.
+	 * @param form the form
+	 * @param env the environment
+	 * @return the value of the form, the last member's for one with members
+	 */
+	private LispVal evalAtTopLevel(LispVal form, Environment env) {
+		if (!(form instanceof LispCons cons)) {
+			return eval(form, env);
+		}
+		List<LispVal> members = cons.isProperList() ? topLevelMembers(cons) : null;
+		if (members == null) {
+			this.topLevelForm.set(cons);
+			return eval(cons, env);
+		}
+		LispVal value = singleValue(LispNil.INSTANCE);
+		for (LispVal member : members) {
+			value = evalAtTopLevel(member, env);
+		}
+		return value;
+	}
+
+	/**
+	 * The members of a form whose body stays at top level, its declarations no-ops among
+	 * them as on the compile paths, or null for any other form and a malformed one.
+	 */
+	private static @Nullable List<LispVal> topLevelMembers(LispCons cons) {
+		if (!(cons.car() instanceof LispSymbol head)) {
+			return null;
+		}
+		return switch (head.name()) {
+			case LispNames.PROGN, LispNames.LOCALLY -> cons.toList().subList(1, cons.toList().size());
+			case LispNames.EVAL_WHEN -> LispMacroExpander.evalWhenMembers(cons);
+			default -> {
+				LispVal wrapped = LispMacroExpander.topLevelWrapperExpansion(cons);
+				yield wrapped == null ? null : List.of(wrapped);
+			}
+		};
+	}
+
+	/**
+	 * Evaluate an expression in the given environment.
+	 * @param expr the expression to evaluate
+	 * @param env the lexical environment
+	 * @return the result
+	 */
+	public LispVal eval(LispVal expr, Environment env) {
+		if (expr instanceof LispCons cons) {
+			return evalCons(cons, env, null, null);
+		}
+		return evalAtom(expr, env);
+	}
+
+	/**
+	 * Evaluates a statement whose value is discarded and which runs, with nothing in
+	 * between that opens a dynamic extent, inside the frame owning {@code exitTo}: an
+	 * exit from it to a block of that frame may hand its value form over unevaluated
+	 * ({@link BlockTailExit}).
+	 * @param form the statement
+	 * @param env its environment
+	 * @param exitTo the owner of the blocks of the enclosing frame, or null
+	 */
+	void evalStatement(LispVal form, Environment env, @Nullable Environment exitTo) {
+		if (form instanceof LispCons cons) {
+			evalCons(cons, env, null, exitTo);
+		}
+		else {
+			evalAtom(form, env);
+		}
+	}
+
+	/**
+	 * Evaluates a form whose value is the value of the frame owning {@code exitTo}, in a
+	 * frame of its own: an exit from its tail to a block of that frame hands its value
+	 * form over unevaluated ({@link BlockTailExit}), as the tail of that frame would.
+	 * What a compiled frame ({@link CompiledFrames}) runs a form the walk takes in.
+	 * @param form the form
+	 * @param env its environment
+	 * @param exitTo the owner of the frame's blocks
+	 * @return the value
+	 */
+	LispVal evalForFrame(LispVal form, Environment env, @Nullable Environment exitTo) {
+		return form instanceof LispCons cons ? evalCons(cons, env, null, exitTo) : evalAtom(form, env);
+	}
+
+	/**
+	 * Evaluates a form that is not a cons: a variable reference or a self-evaluating
+	 * object. The tail of {@link #evalCons}'s loop ends here when the form that replaced
+	 * the current one is an atom.
+	 * @param expr the atom
+	 * @param env the lexical environment
+	 * @return the value
+	 */
+	LispVal evalAtom(LispVal expr, Environment env) {
+		if (expr instanceof LispSymbol sym) {
+			return singleValue(evalSymbolRef(sym, env));
+		}
+		return switch (expr) {
+			case LispSymbol sym -> singleValue(evalSymbolRef(sym, env));
+			// An array literal is a CONSTRUCTOR, not a constant: each evaluation answers
+			// a fresh, independently mutable array, which is what both compile backends
+			// already emit at the site (LiteralArrays).
+			case LispArray a -> singleValue(LiteralArrays.materialize(a));
+			case LispFloatArray fa -> singleValue(LiteralArrays.materialize(fa));
+			case am.ik.rontolisp.LispIntVector iv -> singleValue(LiteralArrays.materialize(iv));
+			// A #S(...) literal the top-level fold did not reach (one produced by a
+			// runtime read, say) is folded here, so evaluating it always yields the
+			// instance rather than a carrier leaking into user data.
+			case LispStructLiteral literal -> singleValue(StructLiteralFolder.fold(literal, this.closRegistry));
+			case am.ik.rontolisp.LispCircularLiteral literal -> singleValue(LiteralArrays.materialize(literal.datum()));
+			// Every other value -- a number, a string, a character, nil and t, a
+			// function or closure, a stream, an instance, a quantized matrix a
+			// macro-time form handed back -- is self-evaluating.
+			default -> singleValue(expr);
+		};
+	}
+
+	/**
+	 * Marks the value just produced as ONE value: clears the {@code %mv-spill} channel --
+	 * the interpreter's value-count register ({@code Environment.clearSpill}) -- and
+	 * answers the value. Every primitive step that is not a publish or a call of user
+	 * code goes through here or through {@link #evalArgs}/{@link #apply}: an atom, a
+	 * literal, a constructing special form ({@code quote}, {@code setq}, a definer, a
+	 * loop's nil), a built-in's return. A form that merely passes a sub-form's value on
+	 * ({@code if}, {@code let}, {@code progn}, a block, a user function's body) leaves
+	 * the channel to that sub-form, which is how a {@code (values ...)} tail reaches the
+	 * consumer behind any number of returns while a {@code values} whose value went into
+	 * a variable, an argument or a discarded position never does (.kb/multiple-values.md,
+	 * "The interpreter's value-count register").
+	 * @param value the value produced
+	 * @return {@code value}
+	 */
+	private LispVal singleValue(LispVal value) {
+		this.globalEnv.clearSpill();
+		return value;
+	}
+
+	/**
+	 * The evaluation seam ({@link #evalCons}'s frame): a raw Java failure escaping the
+	 * evaluation of a form -- where no built-in seam ({@link #apply}) caught it first --
+	 * becomes a condition the program can handle, classified where it is DETECTED: an
+	 * {@code IllegalArgumentException} or an {@code IndexOutOfBoundsException} is how the
+	 * macro expander and the special forms report a malformed form, so it is a
+	 * {@code program-error} (CLHS 3.5.1); a cast, an arithmetic failure or a negative
+	 * size takes {@link #rawFailureConditionClass}'s rule, as at the built-in seam. The
+	 * innermost frame converts, so the message is the one closest to the failure. An
+	 * {@code UnsupportedOperationException} (a rontolisp limitation, not a program error)
+	 * and anything else stay raw: catching a limitation would let a program run on past
+	 * what this implementation cannot do.
+	 */
+	static LispEvalException rawEvaluationFailure(String className, RuntimeException raw) {
+		String message = raw instanceof ClassCastException ? ClosRegistry.TYPE_ERROR_MESSAGE : raw.getMessage();
+		if (message == null || message.isBlank()) {
+			message = raw.getClass().getSimpleName();
+		}
+		LispEvalException wrapped = LispEvalException.ofClass(className, message);
+		wrapped.initCause(raw);
+		return wrapped;
+	}
+
+	/**
+	 * Whether both variables that pick the {@code prin1} conversion are off, which makes
+	 * a one-argument {@code write-to-string} the {@code princ} conversion.
+	 */
+	private boolean princConversionInEffect() {
+		return currentSpecialValue(LispNames.PRINT_ESCAPE_VAR) instanceof LispNil
+				&& currentSpecialValue(LispNames.PRINT_READABLY_VAR) instanceof LispNil;
+	}
+
+	/**
+	 * Whether a printer-control variable ({@code LispMacroExpander.PRINT_CONTROL_VARS})
+	 * currently holds a non-default value -- {@code *print-case*} other than
+	 * {@code :upcase}, a non-nil {@code *print-length*} / {@code *print-level*} /
+	 * {@code *print-radix*} / {@code *print-readably*}, a nil {@code *print-gensym*}, a
+	 * {@code *print-base*} other than 10 -- i.e. whether a printing operator has to route
+	 * through the {@code %print-cased} renderer. Read dynamic-first, like any special:
+	 * the value a {@code let} binding established on this thread wins over the global
+	 * default. This is the interpreter's twin of the compile paths' "the program mentions
+	 * the variable" scan; the two agree because the renderer re-reads the variables
+	 * itself.
+	 * @return true when the printer must apply a printer-control variable
+	 */
+	private boolean printControlsInEffect() {
+		// *package* is the seventh control (CLHS 22.1.3.3.1): outside the pristine
+		// cl-user a qualified symbol may be accessible and print bare, which only the
+		// %print-cased walk decides (LispMacroExpander.printsUnderAPackage is the
+		// compile paths' twin).
+		if (!this.packageResolver.currentPackageIsPristineClUser()) {
+			return true;
+		}
+		// *print-readably* is one for the signal, which only the renderer's leaves raise.
+		if (!(currentSpecialValue(LispNames.PRINT_READABLY_VAR) instanceof LispNil)) {
+			return true;
+		}
+		LispVal printControls = currentSpecialValue(LispNames.PRINT_CASE_VAR);
+		if (printControls instanceof LispSymbol mode && !LispNames.PRINT_CASE_UPCASE.equals(mode.name())) {
+			return true;
+		}
+		if (!(currentSpecialValue(LispNames.PRINT_LENGTH_VAR) instanceof LispNil)
+				|| !(currentSpecialValue(LispNames.PRINT_LEVEL_VAR) instanceof LispNil)
+				|| !(currentSpecialValue(LispNames.PRINT_RADIX_VAR) instanceof LispNil)
+				|| currentSpecialValue(LispNames.PRINT_GENSYM_VAR) instanceof LispNil) {
+			return true;
+		}
+		return !(currentSpecialValue(LispNames.PRINT_BASE_VAR) instanceof LispInteger base && base.value() == 10);
+	}
+
+	/**
+	 * The feature set the runtime {@code read} / {@code read-from-string} test their
+	 * {@code #+}/{@code #-} guards against: the live {@code *features*} list, entry by
+	 * entry, as each symbol prints. Keeping the printed spelling is what preserves the
+	 * keyword distinction CL's own comparison makes -- an unqualified {@code #+X} asks
+	 * about the KEYWORD {@code :X} (the feature expression is read with {@code *package*}
+	 * bound to {@code KEYWORD}, CLHS 24.1.2.1.1) and so does not match a
+	 * {@code *features*} entry that is a symbol in some other package. A value that is
+	 * not a list of symbols leaves the static set in place rather than signalling: a
+	 * reader must not be the thing that reports a malformed {@code *features*}.
+	 */
+	private am.ik.rontolisp.reader.Features currentReadFeatures() {
+		LispVal features = currentSpecialValue(LispNames.FEATURES_VAR);
+		if (!(features instanceof LispCons cons) || !cons.isProperList()) {
+			return features instanceof LispNil ? am.ik.rontolisp.reader.Features.ofRuntimeList(List.of())
+					: am.ik.rontolisp.reader.Features.INTERPRETER;
+		}
+		List<String> names = new ArrayList<>();
+		for (LispVal entry : cons.toList()) {
+			if (entry instanceof LispSymbol symbol) {
+				names.add(symbol.name());
+			}
+		}
+		return am.ik.rontolisp.reader.Features.ofRuntimeList(names);
+	}
+
+	/**
+	 * The current value of a standard special variable -- the printer controls, the
+	 * reader controls -- dynamic binding first, global default behind it.
+	 */
+	private @Nullable LispVal currentSpecialValue(String name) {
+		return this.dynamicBindings.isBound(name) ? this.dynamicBindings.get(name) : this.globalEnv.lookupOrNull(name);
+	}
+
+	/**
+	 * Evaluates a bare symbol reference. Keywords self-evaluate. A proclaimed special
+	 * reads its active dynamic binding (dynamic extent, visible across function calls),
+	 * else its global -- it is never bound lexically, so no closure holds a copy of it.
+	 * Any other name reads its innermost lexical binding; where none is in sight, or a
+	 * local special declaration is the innermost thing naming it
+	 * ({@link Environment#SPECIAL}), an active dynamic binding of it (a declared one, or
+	 * {@code progv}'s), and the global behind that. Only a name a local declaration has
+	 * named, or any name once {@code progv} has run, can have such a binding, so an
+	 * ordinary lexical or global read never reaches the thread-local store.
+	 */
+	LispVal evalSymbolRef(LispSymbol sym, Environment env) {
+		if (sym.isKeyword()) {
+			return sym;
+		}
+		String name = sym.name();
+		if (LispNames.PACKAGE_VAR.equals(name)) {
+			return currentPackageValue();
+		}
+		if (isSpecial(sym)) {
+			return freeValue(sym, env, true);
+		}
+		// The commonest read, a lexical binding, in a method small enough to inline.
+		LispVal value = env.lookupLexical(name);
+		return value != null && value != Environment.SPECIAL ? value : freeValue(sym, env, false);
+	}
+
+	/**
+	 * {@link #evalSymbolRef} of a name no lexical binding answers: a proclaimed special's
+	 * active dynamic binding or global, a free name's dynamic binding (a local
+	 * declaration, {@code progv}) or global, a global symbol macro, a lazily loaded
+	 * library's variable.
+	 * @param sym the variable
+	 * @param env the environment of the reference
+	 * @param special whether the name is proclaimed special
+	 * @return the value
+	 */
+	private LispVal freeValue(LispSymbol sym, Environment env, boolean special) {
+		String name = sym.name();
+		LispVal value;
+		if (special) {
+			if (this.dynamicBindings.isBound(name)) {
+				return dynamicValue(name);
+			}
+			value = env.lookupOrNull(name);
+			if (value == Environment.SPECIAL) {
+				// A local declaration of a name proclaimed only afterwards.
+				value = env.root().lookupOrNull(name);
+			}
+		}
+		else {
+			if ((this.progvUsed || this.localSpecials.contains(name)) && this.dynamicBindings.isBound(name)) {
+				return dynamicValue(name);
+			}
+			value = env.root().lookupOrNull(name);
+		}
+		if (value == null && !this.globalSymbolMacros.isEmpty()) {
+			// define-symbol-macro: the name is not a variable, so it only ever reaches
+			// here with nothing bound. Evaluating the expansion in the CURRENT
+			// environment is the whole semantics (cffi's defcvar reads a C global
+			// through a generated accessor call).
+			LispVal expansion = this.globalSymbolMacros.get(name);
+			if (expansion != null) {
+				return eval(expansion, env);
+			}
+		}
+		if (value == null && !this.usocketLibraryLoaded && UsocketLibrary.isUsocketQualified(name)) {
+			// The usocket library also exports variables (usocket:*wildcard-host*), so a
+			// program whose FIRST usocket reference is a variable read must trigger the
+			// same lazy load as a function resolution.
+			ensureUsocketLoaded();
+			value = this.globalEnv.lookupOrNull(name);
+		}
+		if (value == null && !this.objcLibraryLoaded && ObjcLibrary.definesName(name)) {
+			// cocoa:ns-not-found is a constant, so a variable read loads the library too.
+			ensureObjcLoaded();
+			value = this.globalEnv.lookupOrNull(name);
+		}
+		if (value == null && !this.metalLibraryLoaded && MetalLibrary.isMetalQualified(name)) {
+			// The metal library exports CONSTANTS (metal:+triangle+, metal:+line+, the
+			// cull and compare modes), and a program may well read one before it calls
+			// any metal function -- so a variable read triggers the lazy load too.
+			ensureMetalLoaded();
+			value = this.globalEnv.lookupOrNull(name);
+		}
+		if (value == null && UiopLibrary.definesName(name)) {
+			// uiop exports variables too (49 of them), so the same lazy load has to be
+			// reachable from a variable read.
+			loadUiopDefinition(name);
+			value = this.globalEnv.lookupOrNull(name);
+		}
+		if (value == null && !this.asdfRuntimeLoaded && AsdfRuntimeLibrary.definesName(name)) {
+			// asdf:*central-registry* is a variable, so the asdf runtime's lazy load must
+			// be reachable from a variable read too.
+			ensureAsdfRuntimeLoaded();
+			value = this.globalEnv.lookupOrNull(name);
+		}
+		if (value == null) {
+			throw CellErrorException.unboundVariable(name);
+		}
+		return value;
+	}
+
+	/**
+	 * Evaluates ONE uiop definition ({@code eval.UiopLibrary}) into the global
+	 * environment, once -- with two things pulled in around it, both because a CLASS
+	 * cannot be lazy the way a function can. Every uiop condition and class goes in first
+	 * whatever the name is ({@code UiopLibrary.conditionAndClassNames}): a quoted
+	 * condition name is not a function resolution, so nothing would trigger its own load,
+	 * and a handler's type test is built from the class tags known when the
+	 * {@code handler-bind} was expanded, so a class first registered while the body runs
+	 * is invisible to the handler meant to catch it. And the name's whole
+	 * {@code UiopLibrary.closureOf} closure goes in with it, which is exactly what the
+	 * compile paths splice.
+	 * @param name the home-qualified uiop name
+	 * @return its global function binding, or {@code null} when the definition binds a
+	 * variable rather than a function
+	 */
+	@Nullable private LispVal loadUiopDefinition(String name) {
+		synchronized (this.libraryLoadLock) {
+			for (String conditionName : UiopLibrary.conditionAndClassNames()) {
+				if (this.loadedUiopNames.add(conditionName)) {
+					for (LispVal form : UiopLibrary.formsFor(conditionName)) {
+						eval(form, this.globalEnv);
+					}
+				}
+			}
+			// The CLOSURE, not just this name: a definition may reach another one it
+			// never calls (style-warn signals a quoted condition name), and the compile
+			// paths splice exactly this set -- loading less here is how the interpreter
+			// ends up with a condition class the other three backends have.
+			for (String reachable : UiopLibrary.closureOf(name)) {
+				if (this.loadedUiopNames.add(reachable)) {
+					for (LispVal form : UiopLibrary.formsFor(reachable)) {
+						eval(form, this.globalEnv);
+					}
+				}
+			}
+			return this.globalEnv.lookupFunctionOrNull(name);
+		}
+	}
+
+	/**
+	 * Evaluates the usocket library definitions ({@code usocket.lisp}) into the global
+	 * environment once; shared by the function/variable lazy-load hooks and the built-in
+	 * ASDF system {@code "usocket"} ({@code asdf:load-system}/{@code ql:quickload}).
+	 */
+	/**
+	 * Evaluates the torch library definitions ({@code torch.lisp}) into the global
+	 * environment once; shared by the function lazy-load hook in {@code resolveFunction}
+	 * and the {@code torch:no-grad} macro case (whose expansion dynamically rebinds
+	 * {@code torch::*grad-enabled*}, so the {@code defparameter} must exist -- and be
+	 * declared special -- BEFORE the {@code let} binds it).
+	 */
+	private void ensureTorchLoaded() {
+		synchronized (this.libraryLoadLock) {
+			if (this.torchLibraryLoaded) {
+				return;
+			}
+			this.torchLibraryLoaded = true;
+			for (LispVal form : TorchLibrary.forms()) {
+				eval(form, this.globalEnv);
+			}
+		}
+	}
+
+	/**
+	 * Whether the form spells a {@code torch:}/{@code torch::} qualified symbol anywhere
+	 * -- the trigger for pre-loading the library in the printing-operator case, where the
+	 * routing decision precedes the argument evaluation that would otherwise load it.
+	 * @param form the form to scan
+	 * @return whether a torch-qualified symbol occurs in it
+	 */
+	private static boolean referencesTorch(LispVal form) {
+		while (true) {
+			switch (form) {
+				case LispSymbol sym -> {
+					return TorchLibrary.isTorchQualified(sym.name());
+				}
+				case LispCons cons -> {
+					if (referencesTorch(cons.car())) {
+						return true;
+					}
+					form = cons.cdr();
+				}
+				default -> {
+					return false;
+				}
+			}
+		}
+	}
+
+	/**
+	 * The {@code geom} twin of {@link #referencesTorch}: {@code geom.lisp} carries
+	 * {@code print-object} methods on {@code geom:node}/{@code geom:solid}, so the first
+	 * {@code (print (geom:box ...))} of a session must load the library BEFORE the
+	 * routing decision, not during the argument evaluation after it.
+	 * @param form the form to scan
+	 * @return whether a geom-qualified symbol occurs in it
+	 */
+	private static boolean referencesGeom(LispVal form) {
+		while (true) {
+			switch (form) {
+				case LispSymbol sym -> {
+					return GeomLibrary.isGeomQualified(sym.name());
+				}
+				case LispCons cons -> {
+					if (referencesGeom(cons.car())) {
+						return true;
+					}
+					form = cons.cdr();
+				}
+				default -> {
+					return false;
+				}
+			}
+		}
+	}
+
+	private void ensureUsocketLoaded() {
+		synchronized (this.libraryLoadLock) {
+			if (this.usocketLibraryLoaded) {
+				return;
+			}
+			this.usocketLibraryLoaded = true;
+			for (LispVal form : UsocketLibrary.forms()) {
+				eval(form, this.globalEnv);
+			}
+		}
+	}
+
+	private boolean grayStreamsLoaded;
+
+	private boolean httpServerLoaded;
+
+	private boolean httpReactorLoaded;
+
+	private boolean httpServeLoaded;
+
+	private static final String GRAY_READ_BYTE_DISPATCH = GrayStreamsLibrary.READ_BYTE_DISPATCH;
+
+	private static final String GRAY_READ_CHAR_DISPATCH = GrayStreamsLibrary.READ_CHAR_DISPATCH;
+
+	private static final String GRAY_READ_LINE_DISPATCH = GrayStreamsLibrary.READ_LINE_DISPATCH;
+
+	private static final String GRAY_WRITE_BYTE_DISPATCH = GrayStreamsLibrary.WRITE_BYTE_DISPATCH;
+
+	private static final String GRAY_LISTEN_DISPATCH = GrayStreamsLibrary.LISTEN_DISPATCH;
+
+	private static final String GRAY_FILE_POSITION_DISPATCH = GrayStreamsLibrary.FILE_POSITION_DISPATCH;
+
+	private static final String GRAY_FILE_POSITION_SET_DISPATCH = GrayStreamsLibrary.FILE_POSITION_SET_DISPATCH;
+
+	private static final String GRAY_READ_SEQUENCE_DISPATCH = GrayStreamsLibrary.READ_SEQUENCE_DISPATCH;
+
+	private static final String GRAY_WRITE_SEQUENCE_DISPATCH = GrayStreamsLibrary.WRITE_SEQUENCE_DISPATCH;
+
+	private static final String GRAY_TERPRI_DISPATCH = GrayStreamsLibrary.TERPRI_DISPATCH;
+
+	private static final String GRAY_FRESH_LINE_DISPATCH = GrayStreamsLibrary.FRESH_LINE_DISPATCH;
+
+	private static final String GRAY_WRITE_LINE_DISPATCH = GrayStreamsLibrary.WRITE_LINE_DISPATCH;
+
+	private static final String GRAY_WRITE_LINE_BOUNDS_DISPATCH = GrayStreamsLibrary.WRITE_LINE_BOUNDS_DISPATCH;
+
+	private static final String GRAY_WRITE_STRING_DISPATCH = GrayStreamsLibrary.WRITE_STRING_DISPATCH;
+
+	private static final String GRAY_WRITE_STRING_BOUNDS_DISPATCH = GrayStreamsLibrary.WRITE_STRING_BOUNDS_DISPATCH;
+
+	private static final String GRAY_FORCE_OUTPUT_DISPATCH = GrayStreamsLibrary.FORCE_OUTPUT_DISPATCH;
+
+	private static final String GRAY_FINISH_OUTPUT_DISPATCH = GrayStreamsLibrary.FINISH_OUTPUT_DISPATCH;
+
+	private static final String GRAY_CLEAR_OUTPUT_DISPATCH = GrayStreamsLibrary.CLEAR_OUTPUT_DISPATCH;
+
+	private static final String GRAY_PRINC_DISPATCH = GrayStreamsLibrary.PRINC_DISPATCH;
+
+	private static final String GRAY_PRIN1_DISPATCH = GrayStreamsLibrary.PRIN1_DISPATCH;
+
+	private static final String GRAY_PRINT_DISPATCH = GrayStreamsLibrary.PRINT_DISPATCH;
+
+	private static final String GRAY_CLOSE_DISPATCH = GrayStreamsLibrary.CLOSE_DISPATCH;
+
+	private static final String GRAY_WRITE_CHAR_DISPATCH = GrayStreamsLibrary.WRITE_CHAR_DISPATCH;
+
+	private static final String GRAY_READ_CHAR_NO_HANG_DISPATCH = GrayStreamsLibrary.READ_CHAR_NO_HANG_DISPATCH;
+
+	private static final String GRAY_PEEK_CHAR_DISPATCH = GrayStreamsLibrary.PEEK_CHAR_DISPATCH;
+
+	private static final String GRAY_UNREAD_CHAR_DISPATCH = GrayStreamsLibrary.UNREAD_CHAR_DISPATCH;
+
+	private static final String GRAY_OPEN_STREAM_P_DISPATCH = GrayStreamsLibrary.OPEN_STREAM_P_DISPATCH;
+
+	private static final String GRAY_INPUT_STREAM_P_DISPATCH = GrayStreamsLibrary.INPUT_STREAM_P_DISPATCH;
+
+	private static final String GRAY_OUTPUT_STREAM_P_DISPATCH = GrayStreamsLibrary.OUTPUT_STREAM_P_DISPATCH;
+
+	private static final String GRAY_STREAM_ELEMENT_TYPE_DISPATCH = GrayStreamsLibrary.STREAM_ELEMENT_TYPE_DISPATCH;
+
+	/**
+	 * Wraps one stream-taking output built-in so a CLOS-instance stream at
+	 * {@code streamIndex} routes to the given {@code rontolisp::%gray-*-dispatch} helper
+	 * of gray.lisp and everything else reaches the built-in unchanged. The helpers hold
+	 * the one copy of the instance test and the fallback, shared verbatim with the
+	 * compile path's call-site rewrite ({@code GrayStreamsLibrary.process}); the fallback
+	 * re-enters this wrap once, which terminates because a non-instance goes straight to
+	 * the base function.
+	 * @param name the built-in's name
+	 * @param streamIndex the argument position holding the stream
+	 * @param helperName the dispatch helper to apply
+	 */
+	private void wrapGrayOutputOperator(String name, int streamIndex, String helperName) {
+		LispVal base = this.globalEnv.lookupFunction(name);
+		this.globalEnv.defineFunction(name, new LispFunction(name, rawArgs -> {
+			List<LispVal> args = resolveDesignatorArg(rawArgs, streamIndex, false);
+			if (args.size() == streamIndex + 1 && dispatchesToGray(args.get(streamIndex))) {
+				List<LispVal> forwarded = streamIndex == 0 ? List.of(args.get(0)) : List.of(args.get(0), args.get(1));
+				return applyGrayDispatch(helperName, forwarded);
+			}
+			return apply(base, args, this.globalEnv);
+		}));
+	}
+
+	/**
+	 * Wraps one of the unary stream queries a program may OWN -- {@code open-stream-p} /
+	 * {@code stream-element-type}, the two that join {@code close} in
+	 * {@code GrayStreamsLibrary.OWNABLE_OPERATORS} -- so a CLOS-instance stream gets the
+	 * Gray default answer while the program registers no generic for the name. A program
+	 * that defines its own method takes the name over outright (the shadowed-built-in
+	 * machinery, {@code .kb/clos.md}), and the compile path stands down on exactly the
+	 * same condition.
+	 * @param name the built-in's name
+	 * @param helperName the dispatch helper to apply
+	 */
+	private void wrapGrayOwnableOperator(String name, String helperName) {
+		LispVal base = this.globalEnv.lookupFunction(name);
+		this.globalEnv.defineFunction(name, new LispFunction(name, rawArgs -> {
+			List<LispVal> args = resolveStreamArg(rawArgs, 0);
+			if (args.size() == 1 && dispatchesToGray(args.get(0)) && this.closRegistry.findGeneric(name) == null) {
+				return applyGrayDispatch(helperName, List.of(args.get(0)));
+			}
+			return apply(base, args, this.globalEnv);
+		}));
+	}
+
+	/**
+	 * Whether the value is an instance of a class that subclasses
+	 * {@code rontolisp:fundamental-stream} -- i.e. a Gray stream, which {@code streamp}
+	 * and {@code (typep x 'stream)} must both answer t for.
+	 * @param value the value to test
+	 * @return true when the value is a Gray stream instance
+	 */
+	private boolean isGrayStreamInstance(LispVal value) {
+		return value instanceof LispInstance inst
+				&& this.closRegistry.descendantTags(LispMacroExpander.GRAY_FUNDAMENTAL_STREAM_CLASS)
+					.contains(inst.layout().tag());
+	}
+
+	/**
+	 * The interpreter's half of {@code compiler.StreamOperandChecks}: a stream operator
+	 * refuses an argument that is no stream, outermost, ahead of the Gray dispatch, which
+	 * would take any instance for one. The operators the evaluator lowers before any
+	 * function is called check at their own seam.
+	 */
+	private void installStreamOperandChecks() {
+		StreamOperandChecks.designatorByOperator().forEach((name, designator) -> {
+			LispVal base = this.globalEnv.lookupFunctionOrNull(name);
+			if (base == null) {
+				return;
+			}
+			int index = StreamOperandChecks.streamArgument(name);
+			this.globalEnv.defineFunction(name, new LispFunction(name, args -> {
+				if (args.size() > index && !(LispNames.FORMAT.equals(name) && hasFillPointer(args.get(index)))) {
+					checkStreamOperand(args.get(index), name, designator);
+				}
+				if (designator && readsStandardStream(args, index, name)) {
+					checkStreamOperand(standardStreamValue(StreamOperandChecks.standardStreamOf(name)), name, true);
+				}
+				return apply(base, args, this.globalEnv);
+			}));
+		});
+		// The read under a read-line producer's multiple-value lowering.
+		LispVal basePair = this.globalEnv.lookupFunction(LispNames.READ_LINE_PAIR_INTERNAL);
+		this.globalEnv.defineFunction(LispNames.READ_LINE_PAIR_INTERNAL,
+				new LispFunction(LispNames.READ_LINE_PAIR_INTERNAL, args -> {
+					if (!args.isEmpty()) {
+						checkStreamOperand(args.get(0), LispNames.READ_LINE, true);
+					}
+					if (readsStandardStream(args, 0, LispNames.READ_LINE)) {
+						checkStreamOperand(standardStreamValue(LispNames.STANDARD_INPUT_VAR), LispNames.READ_LINE,
+								true);
+					}
+					return apply(basePair, args, this.globalEnv);
+				}));
+		this.globalEnv.defineFunction(LispNames.CHECK_STREAM_INTERNAL,
+				new LispFunction(LispNames.CHECK_STREAM_INTERNAL, args -> {
+					checkStreamOperand(args.get(0), args.get(1) instanceof LispSymbol op ? op.name() : null,
+							args.get(2) != LispNil.INSTANCE);
+					return args.get(0);
+				}));
+	}
+
+	// What a call's stream position spells where it writes to or reads from a standard
+	// stream variable, whose value may have been closed since it was bound.
+	private static boolean readsStandardStream(List<LispVal> args, int index, String operator) {
+		if (args.size() <= index) {
+			return true;
+		}
+		LispVal stream = args.get(index);
+		return stream instanceof LispNil || (stream instanceof LispSymbol keyword && keyword.name().startsWith(":"))
+				|| (stream instanceof LispTrue && LispNames.FORMAT.equals(operator));
+	}
+
+	private LispVal standardStreamValue(String variable) {
+		LispVal value = this.dynamicBindings.isBound(variable) ? this.dynamicBindings.get(variable)
+				: this.globalEnv.lookupOrNull(variable);
+		return value == null ? LispTrue.INSTANCE : value;
+	}
+
+	private static boolean hasFillPointer(LispVal value) {
+		return value instanceof LispString string && string.fillPointer() >= 0;
+	}
+
+	// What a stream operator takes: a stream, t, and where nil designates a standard
+	// stream, nil. A keyword is what a stream-less keyword call spells at that position,
+	// which the built-in reads.
+	private void checkStreamOperand(LispVal value, @Nullable String operator, boolean designator) {
+		boolean stream = value instanceof LispTrue || (designator && value instanceof LispNil)
+				|| (value instanceof LispSymbol symbol && symbol.name().startsWith(":"))
+				|| Environment.isStreamValue(value) || Environment.isSynonymStream(value)
+				|| isGrayStreamInstance(value);
+		if (!stream) {
+			throw operator == null ? OperandTypeException.of(value, OperandTypes.Kind.STREAM)
+					: OperandTypeException.of(value, OperandTypes.Kind.STREAM, operator);
+		}
+		Integer needed = StreamOperandChecks.neededAbilityBits(operator);
+		LispVal target = needed == null ? value : Environment.synonymTarget(value);
+		if (needed != null && target instanceof LispInstance instance && Environment.isStreamValue(instance)) {
+			if (apply(this.globalEnv.lookupFunction(LispNames.OPEN_STREAM_P_RAW_INTERNAL), List.of(instance),
+					this.globalEnv) == LispNil.INSTANCE) {
+				throw new LispEvalException(ClosRegistry.CLOSED_STREAM_MESSAGE,
+						ClosRegistry.newClosedStreamCondition(instance));
+			}
+			if (instance.slot(LispLayout.STREAM_ABILITY_CELL) instanceof LispInteger held
+					&& (held.value() & needed) != needed) {
+				throw OperandTypeException.notOfType(
+						instance, List.of("SATISFIES", (needed & LispLayout.Abilities.INPUT) != 0
+								? LispNames.INPUT_STREAM_P : LispNames.OUTPUT_STREAM_P),
+						Objects.requireNonNull(operator));
+			}
+		}
+	}
+
+	// A standard stream variable's binding or assignment: when SBCL's declared type
+	// refuses a value that is no stream, so no stream-less operator meets one.
+	private void checkStandardStreamValue(String name, LispVal value) {
+		if (StreamOperandChecks.isStandardStreamVariable(name)) {
+			checkStreamOperand(value, name, false);
+		}
+	}
+
+	/**
+	 * Wraps a printing operator's FUNCTION VALUE so a {@code #'}-reference honors
+	 * {@code *print-case*} exactly as the operator form does: while the variable holds a
+	 * converting value the call is rebuilt as the source form it would have been (its
+	 * evaluated arguments quoted in place) and handed to the SAME expansion the operator
+	 * seam uses, so no second rendering rule can drift from it. With the variable at
+	 * {@code :upcase} -- the default, and every program that never binds it -- the
+	 * wrapped built-in runs unchanged.
+	 * @param name the operator name
+	 */
+	private void wrapPrintCaseOperator(String name) {
+		LispVal base = this.globalEnv.lookupFunction(name);
+		this.globalEnv.defineFunction(name, new LispFunction(name, args -> {
+			if (LispNames.WRITE_TO_STRING.equals(name) && args.size() > 1) {
+				// A keyword tail: rebuild the call with its keywords in place (the
+				// lowering matches them syntactically) and its values quoted, then take
+				// the same lowering the operator form takes.
+				LispVal tail = LispNil.INSTANCE;
+				for (int i = args.size() - 1; i >= 1; i--) {
+					tail = new LispCons(i % 2 == 1 ? args.get(i) : quoteValue(args.get(i)), tail);
+				}
+				LispVal form = new LispCons(new LispSymbol(name), new LispCons(quoteValue(args.get(0)), tail));
+				return eval(LispMacroExpander.expandWriteToStringKeywords((LispCons) form), this.globalEnv);
+			}
+			if (LispNames.WRITE_TO_STRING.equals(name) && args.size() == 1 && princConversionInEffect()) {
+				return eval(new LispCons(new LispSymbol(LispNames.PRINC_TO_STRING), quotedArguments(args)),
+						this.globalEnv);
+			}
+			if (!args.isEmpty() && args.size() <= 2 && printControlsInEffect()) {
+				LispVal form = new LispCons(new LispSymbol(name), quotedArguments(args));
+				ensurePrintObjectRuntimeLoadedIfRouted(true);
+				LispVal hooked = LispMacroExpander.expandPrintObjectHook((LispCons) form, this.closRegistry, true);
+				if (hooked != null) {
+					return eval(hooked, this.globalEnv);
+				}
+			}
+			return apply(base, args, this.globalEnv);
+		}));
+	}
+
+	/** The evaluated arguments as a quoted argument LIST, ready to re-evaluate. */
+	private static LispVal quotedArguments(List<LispVal> args) {
+		LispVal list = LispNil.INSTANCE;
+		for (int i = args.size() - 1; i >= 0; i--) {
+			list = new LispCons(quoteValue(args.get(i)), list);
+		}
+		return list;
+	}
+
+	/**
+	 * Applies a {@code rontolisp::%gray-*-dispatch} helper of gray.lisp (loading it on
+	 * first use). The helpers hold the instance test, the :eof translation and the
+	 * fallback to the handle built-in, shared verbatim with the compile path.
+	 */
+	private LispVal applyGrayDispatch(String helperName, List<LispVal> args) {
+		ensureGrayStreamsLoaded();
+		LispVal helper = resolveFunction(LispNames.RONTOLISP_PKG + "::" + helperName);
+		return apply(helper, args, this.globalEnv);
+	}
+
+	/**
+	 * Evaluates {@code (read-sequence seq stream ...)} / {@code (write-sequence seq
+	 * stream ...)}: the sequence and stream arguments are evaluated once (in the macro
+	 * expansion's order), and an INSTANCE stream routes to the Gray sequence dispatch
+	 * helper so {@code rontolisp:stream-read-sequence}/{@code -write-sequence} methods
+	 * are honored like on the compile path. Anything else re-enters the shared macro
+	 * expansion with the two evaluated values quoted in place (no double evaluation); the
+	 * {@code :start}/{@code :end} value expressions stay unevaluated and keep their
+	 * position.
+	 */
+	private LispVal evalSequenceWithGrayDispatch(LispCons cons, Environment env, boolean read) {
+		java.util.List<LispVal> parts = cons.toList();
+		if (parts.size() < 3) {
+			// Let the expansion signal the arity error.
+			return eval(read ? LispMacroExpander.expandReadSequence(cons) : LispMacroExpander.expandWriteSequence(cons),
+					env);
+		}
+		LispVal seq = eval(parts.get(1), env);
+		// The synonym resolved but an open stream value KEPT: the expansion reads its
+		// kind to tell a character stream (LispMacroExpander.CharacterStreams).
+		LispVal given = eval(parts.get(2), env);
+		checkStreamOperand(given, read ? LispNames.READ_SEQUENCE : LispNames.WRITE_SEQUENCE, true);
+		LispVal stream = Environment.synonymTarget(given);
+		if (stream instanceof LispInstance inst && !inst.hasTag(am.ik.rontolisp.LispLayout.STREAM_TAG)) {
+			// The first occurrence of a keyword counts (CLHS 3.4.1.4), as in the
+			// expansion.
+			LispVal start = null;
+			LispVal end = null;
+			for (int i = 3; i + 1 < parts.size(); i += 2) {
+				if (parts.get(i) instanceof LispSymbol kw) {
+					if (":START".equals(kw.name()) && start == null) {
+						start = eval(parts.get(i + 1), env);
+					}
+					else if (":END".equals(kw.name()) && end == null) {
+						end = eval(parts.get(i + 1), env);
+					}
+				}
+			}
+			// A Gray stream bypasses the shared expansion below, so the bounds check
+			// runs here instead -- the same defun, over the same evaluated values.
+			LispVal grayCheckEnd = end == null ? LispNil.INSTANCE : end;
+			LispVal grayCheckCall = new LispCons(new LispSymbol(LispNames.CHECK_SEQUENCE_BOUNDS_INTERNAL),
+					new LispCons(quoteValue(seq), new LispCons(quoteValue(start == null ? new LispInteger(0) : start),
+							new LispCons(quoteValue(grayCheckEnd), LispNil.INSTANCE))));
+			eval(grayCheckCall, env);
+			return applyGrayDispatch(read ? GRAY_READ_SEQUENCE_DISPATCH : GRAY_WRITE_SEQUENCE_DISPATCH, List.of(seq,
+					stream, start == null ? new LispInteger(0) : start, end == null ? LispNil.INSTANCE : end));
+		}
+		java.util.List<LispVal> rebuilt = new java.util.ArrayList<>();
+		rebuilt.add(parts.get(0));
+		rebuilt.add(quoteValue(seq));
+		rebuilt.add(quoteValue(stream));
+		rebuilt.addAll(parts.subList(3, parts.size()));
+		LispVal tail = LispNil.INSTANCE;
+		for (int i = rebuilt.size() - 1; i >= 0; i--) {
+			tail = new LispCons(rebuilt.get(i), tail);
+		}
+		LispCons rebuiltCons = (LispCons) tail;
+		return eval(read ? LispMacroExpander.expandReadSequence(rebuiltCons)
+				: LispMacroExpander.expandWriteSequence(rebuiltCons), env);
+	}
+
+	/**
+	 * Evaluates {@code (write-char char stream)}: {@code write-char} is a macro expansion
+	 * ({@code write-string} of the one-character string), not a function, so its Gray
+	 * dispatch is intercepted here the way {@code read-sequence}/{@code write-sequence}
+	 * are. An INSTANCE stream routes to the write-char dispatch helper, which reaches
+	 * {@code rontolisp:stream-write-char} -- the one method full Gray requires, and the
+	 * only writer a class that defines just it has. Anything else re-enters the shared
+	 * expansion with the two evaluated values QUOTED in place (no double evaluation).
+	 */
+	private LispVal evalWriteCharWithGrayDispatch(LispCons cons, Environment env) {
+		java.util.List<LispVal> parts = cons.toList();
+		if (parts.size() != 2 && parts.size() != 3) {
+			// Let the expansion signal the arity errors.
+			return eval(LispMacroExpander.expandWriteChar(cons), env);
+		}
+		LispVal ch = eval(parts.get(1), env);
+		LispVal given = parts.size() == 3 ? eval(parts.get(2), env) : LispNil.INSTANCE;
+		checkStreamOperand(given, LispNames.WRITE_CHAR, true);
+		LispVal stream = Environment.streamTarget(given);
+		// A stream-less or nil stream writes to the current *standard-output*, which may
+		// hold a Gray instance.
+		LispVal target = stream instanceof LispNil ? Environment.streamTargetOrNull(currentStandardOutput()) : stream;
+		if (target instanceof LispInstance) {
+			return applyGrayDispatch(GRAY_WRITE_CHAR_DISPATCH, List.of(ch, target));
+		}
+		LispVal rest = parts.size() == 3 ? new LispCons(quoteValue(given), LispNil.INSTANCE) : LispNil.INSTANCE;
+		LispCons rebuilt = new LispCons(parts.get(0), new LispCons(quoteValue(ch), rest));
+		return eval(LispMacroExpander.expandWriteChar(rebuilt), env);
+	}
+
+	private static LispVal quoteValue(LispVal value) {
+		return new LispCons(new LispSymbol(LispNames.QUOTE), new LispCons(value, LispNil.INSTANCE));
+	}
+
+	/**
+	 * The {@code :raw-body} mode of an {@code (rontolisp:http-handler handler [port]
+	 * [:raw-body :buffered])} call: {@code true} for the buffered, synchronously readable
+	 * body a Clack application needs, {@code false} (the default) for rontolisp's
+	 * asynchronous request stream.
+	 * @param args the directive arguments
+	 * @return whether the buffered body was asked for
+	 */
+	static boolean httpHandlerBufferBody(List<LispVal> args) {
+		for (int i = 0; i + 1 < args.size(); i++) {
+			if (args.get(i) instanceof LispSymbol key && key.isKeyword()
+					&& LispNames.RAW_BODY_KEYWORD.equalsIgnoreCase(key.name())) {
+				if (!(args.get(i + 1) instanceof LispSymbol mode) || !mode.isKeyword()
+						|| !(LispNames.BUFFERED_KEYWORD.equalsIgnoreCase(mode.name())
+								|| LispNames.STREAM_KEYWORD.equalsIgnoreCase(mode.name()))) {
+					throw new LispEvalException(LispNames.HTTP_HANDLER
+							+ " :raw-body expects :stream or :buffered, got: " + args.get(i + 1).print());
+				}
+				return LispNames.BUFFERED_KEYWORD.equalsIgnoreCase(mode.name());
+			}
+		}
+		return false;
+	}
+
+	private void ensureHttpServerLoaded() {
+		synchronized (this.libraryLoadLock) {
+			if (this.httpServerLoaded) {
+				return;
+			}
+			this.httpServerLoaded = true;
+			// The server library defines a Gray stream class, so the protocol has to be
+			// in place first. Both loads are EAGER, at server-start time: a served
+			// request runs on its own virtual thread, and a lazy first-request load
+			// races every other in-flight request (.kb/concurrent-served-requests.md).
+			ensureGrayStreamsLoaded();
+			for (LispVal form : HttpServerLibrary.forms()) {
+				eval(form, this.globalEnv);
+			}
+		}
+	}
+
+	/**
+	 * Evaluates the host-driven-reactor transport ({@code http-reactor.lisp}) into the
+	 * global environment once, on the first {@code rontolisp::%http-reactor-*} function
+	 * lookup -- a Clack handler backend's {@code run}/{@code handle}/{@code dispatch}
+	 * delegating there. Its bodies call {@code %http-make-env} and friends, which the
+	 * {@code RONTOLISP::%HTTP-} hook loads on their own first call.
+	 */
+	private void ensureHttpReactorLoaded() {
+		synchronized (this.libraryLoadLock) {
+			if (this.httpReactorLoaded) {
+				return;
+			}
+			this.httpReactorLoaded = true;
+			for (LispVal form : HttpReactorLibrary.forms()) {
+				eval(form, this.globalEnv);
+			}
+		}
+	}
+
+	/**
+	 * Evaluates rontolisp's Gray-stream protocol ({@code gray.lisp}) once: on the first
+	 * write to a CLOS-instance stream, before a definition on a protocol generic, or on a
+	 * class lookup that misses a Gray base class name (the registry's class-miss loader:
+	 * a {@code defclass} superclass, a specializer, {@code find-class}, a type
+	 * specifier).
+	 */
+	private void ensureGrayStreamsLoaded() {
+		synchronized (this.libraryLoadLock) {
+			if (this.grayStreamsLoaded) {
+				return;
+			}
+			this.grayStreamsLoaded = true;
+			for (LispVal form : GrayStreamsLibrary.forms()) {
+				eval(form, this.globalEnv);
+			}
+			for (String owned : List.copyOf(this.closRegistry.generics().keySet())) {
+				installGrayOwnableDefault(owned);
+			}
+		}
+	}
+
+	/** The owned stream operators whose Gray default method is installed. */
+	private final Set<String> grayOwnableDefaults = new HashSet<>();
+
+	/**
+	 * Installs the Gray default method of an operator the program owns
+	 * ({@code GrayStreamsLibrary.OWNABLE_DEFAULT_METHODS}) once both halves exist: the
+	 * protocol is loaded and the program has a generic on the name. Called from both
+	 * sides, since either can come first; the compile path splices the same method.
+	 * @param genericName the generic-function name
+	 */
+	private void installGrayOwnableDefault(String genericName) {
+		if (!this.grayStreamsLoaded || this.grayOwnableDefaults.contains(genericName)) {
+			return;
+		}
+		LispVal method = GrayStreamsLibrary.ownableDefaultMethod(genericName);
+		if (method != null) {
+			this.grayOwnableDefaults.add(genericName);
+			eval(method, this.globalEnv);
+		}
+	}
+
+	/**
+	 * The value of the leftmost pair of the initarg plist whose key is one of the slot's
+	 * initargs (compared by spelling), or null when absent -- absent and supplied-nil
+	 * must stay distinguishable for the {@code %mop-fill-slots} fill.
+	 */
+	private static @Nullable LispVal leftmostInitargValue(LispVal plist, ClosRegistry.SlotSpec slot) {
+		LispVal cursor = plist;
+		while (cursor instanceof LispCons pair) {
+			if (pair.car() instanceof LispSymbol key && slot.acceptsInitarg(key.name())
+					&& pair.cdr() instanceof LispCons valueCell) {
+				return valueCell.car();
+			}
+			cursor = pair.cdr() instanceof LispCons rest ? rest.cdr() : LispNil.INSTANCE;
+		}
+		return null;
+	}
+
+	private boolean mopProtocolLoaded;
+
+	/**
+	 * Evaluates the metaclass protocol once, on the first {@code :metaclass} defclass:
+	 * the MOP base-class seeding, the seeded classes' keyword constructors (their
+	 * defclass never ran, so {@code %mop-make-instance} could not dispatch to them
+	 * otherwise), and the {@code MopProtocol} default methods plus the
+	 * {@code %ensure-class-with-metaclass} driver. User protocol methods defined BEFORE
+	 * this point (postmodern's hooks precede its first DAO class) auto-created their
+	 * generics; the defaults merge into them like any later defmethod.
+	 */
+	private void ensureMopProtocolLoaded() {
+		synchronized (this.libraryLoadLock) {
+			if (this.mopProtocolLoaded) {
+				return;
+			}
+			this.mopProtocolLoaded = true;
+			this.closRegistry.ensureMopClassesSeeded();
+			// The chain-fill construction of metaobject instances (expandMakeInstance)
+			// is valid from here on: the protocol's shared-initialize fill primaries
+			// are about to be defined.
+			this.closRegistry.setMopProtocolActive();
+			for (LispVal form : LispMacroExpander.seededMopConstructorDefuns(this.closRegistry)) {
+				eval(form, this.globalEnv);
+			}
+			for (LispVal form : MopProtocol.forms()) {
+				eval(form, this.globalEnv);
+			}
+			// The interpreter's (re)finalization hook, (%mop-class-finalized class
+			// previous): the class precedence lists the run-time dispatch memoized are
+			// computed afresh; a redefinition updates the instances in evalDefclass. The
+			// compile paths generate their own
+			// (LispMacroExpander.mopClassFinalizedDefun).
+			this.globalEnv.defineFunction(MOP_CLASS_FINALIZED, new LispFunction(MOP_CLASS_FINALIZED, args -> {
+				if (this.closRegistry.dynamicClasses()) {
+					eval(new LispCons(new LispSymbol(LispNames.SETQ), new LispCons(new LispSymbol(DYNAMIC_CPLS),
+							new LispCons(LispNil.INSTANCE, LispNil.INSTANCE))), this.globalEnv);
+				}
+				return LispNil.INSTANCE;
+			}));
+			// A forward-referenced class defined at last, in place. The compile paths
+			// generate a no-op (LispMacroExpander, beside mopClassFinalizedDefun).
+			this.globalEnv.defineFunction(MOP_CHANGE_METACLASS,
+					new LispFunction(MOP_CHANGE_METACLASS, args -> evalQuotedPlistCall(LispNames.CHANGE_CLASS,
+							List.of(args.get(0), args.get(1)), LispNil.INSTANCE)));
+		}
+	}
+
+	/** The (re)finalization hook mop-protocol.lisp's finalize-inheritance calls. */
+	private static final String MOP_CLASS_FINALIZED = "%MOP-CLASS-FINALIZED";
+
+	/** The hook generic-functions.lisp's compute-applicable-methods asks. */
+	private static final String GF_STATIC_METHODS = "%GF-STATIC-METHODS";
+
+	/** The hook mop-protocol.lisp's ensure-class-using-class changes a metaclass by. */
+	private static final String MOP_CHANGE_METACLASS = "%MOP-CHANGE-METACLASS";
+
+	/** dynamic-classes.lisp's memo of the class precedence lists. */
+	private static final String DYNAMIC_CPLS = "%DYNAMIC-CPLS%";
+
+	/**
+	 * Calls one function of the runtime of classes made at run time
+	 * ({@code DynamicClasses}), loading it first.
+	 * @param name the function's name
+	 * @param args the argument values
+	 * @return the function's value
+	 */
+	private LispVal callDynamicClassesRuntime(String name, LispVal... args) {
+		ensureDynamicClassesLoaded();
+		LispVal call = LispNil.INSTANCE;
+		for (int i = args.length - 1; i >= 0; i--) {
+			call = new LispCons(quoteValue(args[i]), call);
+		}
+		return eval(new LispCons(new LispSymbol(name), call), this.globalEnv);
+	}
+
+	/**
+	 * Loads the slot-access protocol runtime ({@code SlotProtocol}) once, at the first
+	 * method a program defines on one of its generics or call of one: from then on the
+	 * slot forms and the accessors of a {@code :metaclass} class route an instance of
+	 * such a class through {@code slot-value-using-class} and its siblings.
+	 */
+	private void ensureSlotProtocolLoaded() {
+		synchronized (this.libraryLoadLock) {
+			if (this.closRegistry.slotProtocol()) {
+				return;
+			}
+			this.closRegistry.enableSlotProtocol();
+			// The loading stubs go first: a stub left bound would be stashed as a default
+			// method.
+			for (String name : SlotProtocol.ENTRY_NAMES) {
+				this.globalEnv.undefineFunction(name);
+			}
+			for (LispVal form : SlotProtocol.forms()) {
+				eval(form, this.globalEnv);
+			}
+		}
+	}
+
+	/**
+	 * Whether the slot-access protocol routes this value: the runtime is loaded and the
+	 * value is an instance of a class defined with a {@code :metaclass}.
+	 */
+	private boolean isSlotProtocolInstance(LispVal value) {
+		return this.closRegistry.slotProtocol() && value instanceof LispInstance
+				&& isTruthy(apply(resolveFunction(LispNames.SLOT_PROTOCOL_INSTANCE_P), List.of(value), this.globalEnv));
+	}
+
+	/**
+	 * Loads the runtime of classes made at run time once, on the first such class a
+	 * program meets: registers the dynamic-object layout, evaluates
+	 * {@code DynamicClasses}' forms, and regenerates every dispatcher with a class
+	 * specializer so it carries the arm consulting a dynamic instance's precedence list
+	 * (later dispatchers get it as they are generated).
+	 */
+	/**
+	 * The live instances of the classes defined with a {@code :metaclass}, by instance
+	 * tag: what a redefinition of such a class -- or a {@code make-instances-obsolete} of
+	 * it -- updates (CLHS 4.3.6). Held weakly; cleared references are dropped as the
+	 * lists are walked or grow. Guarded by itself: a program's threads make instances.
+	 */
+	private final Map<String, List<java.lang.ref.WeakReference<LispInstance>>> trackedInstances = new HashMap<>();
+
+	/** The class metaobjects made obsolete since the last update of their instances. */
+	private final List<LispInstance> obsoleteClasses = new ArrayList<>();
+
+	/** The tags whose layout a class redefinition replaced since the last update. */
+	private final Set<String> redefinedLayouts = new HashSet<>();
+
+	/** How many class definitions are in progress (a defclass inside a driver hook). */
+	private int classDefinitionDepth;
+
+	/**
+	 * Records an instance of a class defined with a {@code :metaclass}, the only ones a
+	 * class redefinition here updates.
+	 * @param instance the new instance
+	 * @return the instance
+	 */
+	private LispInstance trackInstance(LispInstance instance) {
+		if (this.closRegistry.hasMetaclassedClasses()) {
+			String className = LispLayout.printNameOfTag(instance.layout().tag());
+			if (className != null && this.closRegistry.isMetaclassed(className)) {
+				synchronized (this.trackedInstances) {
+					List<java.lang.ref.WeakReference<LispInstance>> live = this.trackedInstances
+						.computeIfAbsent(instance.layout().tag(), tag -> new ArrayList<>());
+					if (live.size() >= 64 && Integer.bitCount(live.size()) == 1) {
+						live.removeIf(ref -> ref.get() == null);
+					}
+					live.add(new java.lang.ref.WeakReference<>(instance));
+				}
+			}
+		}
+		return instance;
+	}
+
+	/**
+	 * Updates the instances a class redefinition made obsolete (CLHS 4.3.6): an instance
+	 * whose class's layout was replaced takes the new one -- a slot of the same name
+	 * keeps its value, an added slot starts unbound, a discarded one's value goes to the
+	 * property list -- and every instance of a class made obsolete or inheriting from one
+	 * (contextl's partial classes keep their slots in anonymous superclasses) is handed
+	 * to {@code update-instance-for-redefined-class}, whose system method calls
+	 * {@code shared-initialize} on the added slots (contextl turns a slot made special
+	 * into a special symbol there).
+	 */
+	private void updateObsoleteInstances() {
+		if (this.obsoleteClasses.isEmpty() && this.redefinedLayouts.isEmpty()) {
+			return;
+		}
+		List<LispInstance> obsolete = List.copyOf(this.obsoleteClasses);
+		Set<String> redefined = Set.copyOf(this.redefinedLayouts);
+		this.obsoleteClasses.clear();
+		this.redefinedLayouts.clear();
+		LispLayout unboundLayout = java.util.Objects
+			.requireNonNull(this.closRegistry.findLayoutByTag(ClosRegistry.UNBOUND_TAG));
+		List<Map.Entry<String, List<java.lang.ref.WeakReference<LispInstance>>>> entries;
+		synchronized (this.trackedInstances) {
+			entries = List.copyOf(this.trackedInstances.entrySet());
+		}
+		for (Map.Entry<String, List<java.lang.ref.WeakReference<LispInstance>>> entry : entries) {
+			String tag = entry.getKey();
+			LispLayout current = this.closRegistry.findLayoutByTag(tag);
+			String className = LispLayout.printNameOfTag(tag);
+			LispInstance classMetaobject = className == null ? null : this.closRegistry.classMetaobject(className);
+			boolean madeObsolete = classMetaobject != null && obsolete.stream()
+				.anyMatch(c -> inheritsFrom(classMetaobject, c,
+						java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>())));
+			if (current == null || (!madeObsolete && !redefined.contains(tag))) {
+				continue;
+			}
+			List<java.lang.ref.WeakReference<LispInstance>> live;
+			synchronized (this.trackedInstances) {
+				entry.getValue().removeIf(ref -> ref.get() == null);
+				live = List.copyOf(entry.getValue());
+			}
+			for (java.lang.ref.WeakReference<LispInstance> ref : live) {
+				LispInstance instance = ref.get();
+				// An instance made since the redefinition already has the new layout.
+				if (instance != null && (madeObsolete || instance.layout() != current)) {
+					updateObsoleteInstance(instance, current, unboundLayout);
+				}
+			}
+		}
+	}
+
+	/** Whether a class metaobject is {@code target} or inherits from it. */
+	private static boolean inheritsFrom(LispInstance classMetaobject, LispInstance target, Set<LispInstance> seen) {
+		if (classMetaobject == target) {
+			return true;
+		}
+		if (!seen.add(classMetaobject)) {
+			return false;
+		}
+		int supersAt = classMetaobject.layout().slotNames().indexOf("DIRECT-SUPERCLASSES");
+		LispVal supers = supersAt < 0 ? LispNil.INSTANCE : classMetaobject.slot(supersAt);
+		while (supers instanceof LispCons cons) {
+			if (cons.car() instanceof LispInstance superMetaobject && inheritsFrom(superMetaobject, target, seen)) {
+				return true;
+			}
+			supers = cons.cdr();
+		}
+		return false;
+	}
+
+	/** One instance's update; see {@link #updateObsoleteInstances}. */
+	private void updateObsoleteInstance(LispInstance instance, LispLayout current, LispLayout unboundLayout) {
+		List<String> oldNames = instance.layout().slotNames();
+		List<String> newNames = current.slotNames();
+		LispVal added = LispNil.INSTANCE;
+		LispVal discarded = LispNil.INSTANCE;
+		LispVal plist = LispNil.INSTANCE;
+		if (instance.layout() != current) {
+			LispVal[] declared = new LispVal[newNames.size()];
+			for (int i = newNames.size() - 1; i >= 0; i--) {
+				int old = oldNames.indexOf(newNames.get(i));
+				if (old >= 0) {
+					declared[i] = instance.slot(old);
+				}
+				else {
+					declared[i] = new LispInstance(unboundLayout, new LispVal[0]);
+					// CLHS 4.3.6.1: the added LOCAL slots; a shared one is the class's.
+					if (!isSharedSlot(current, i)) {
+						added = new LispCons(slotNameSymbol(current, i), added);
+					}
+				}
+			}
+			for (int i = oldNames.size() - 1; i >= 0; i--) {
+				if (!newNames.contains(oldNames.get(i))) {
+					LispSymbol name = slotNameSymbol(instance.layout(), i);
+					discarded = new LispCons(name, discarded);
+					LispVal value = instance.slot(i);
+					if (!(value instanceof LispInstance marker && marker.layout() == unboundLayout)) {
+						plist = new LispCons(name, new LispCons(value, plist));
+					}
+				}
+			}
+			instance.replaceStorage(current, declared);
+		}
+		apply(resolveFunction(LispNames.UPDATE_INSTANCE_FOR_REDEFINED_CLASS),
+				List.of(instance, added, discarded, plist), this.globalEnv);
+	}
+
+	/**
+	 * The symbol naming a layout's slot: the registered class's slot symbol (package and
+	 * all) when the class has one of that base name, the base name otherwise.
+	 */
+	private boolean isSharedSlot(LispLayout layout, int index) {
+		String baseName = layout.slotNames().get(index);
+		String className = LispLayout.printNameOfTag(layout.tag());
+		ClosRegistry.ClassInfo info = className == null ? null : this.closRegistry.findClass(className);
+		if (info != null) {
+			for (ClosRegistry.SlotSpec slot : info.slots()) {
+				if (slot.baseName().equals(baseName)) {
+					return slot.sharedCellVar() != null;
+				}
+			}
+		}
+		return false;
+	}
+
+	private LispSymbol slotNameSymbol(LispLayout layout, int index) {
+		String baseName = layout.slotNames().get(index);
+		String className = LispLayout.printNameOfTag(layout.tag());
+		ClosRegistry.ClassInfo info = className == null ? null : this.closRegistry.findClass(className);
+		if (info != null) {
+			for (ClosRegistry.SlotSpec slot : info.slots()) {
+				if (slot.baseName().equals(baseName)) {
+					return new LispSymbol(slot.name());
+				}
+			}
+		}
+		return new LispSymbol(baseName);
+	}
+
+	/**
+	 * The defmethod form with its body's user macros expanded when the body names
+	 * {@code call-next-method} or {@code next-method-p}: the method's expansion binds
+	 * them by rewriting their calls, and a macro can build such a call -- contextl's
+	 * figure-editor hands its {@code call-and-update} macro {@code call-next-method} by
+	 * name, and {@code with-inactive-layers} puts the call in a closure. The compile
+	 * paths expand every user macro before a method is registered.
+	 */
+	private LispCons withNextMethodMacrosExpanded(LispCons defmethod) {
+		if (!LispMacroExpander.defmethodMentionsNextMethod(defmethod)) {
+			return defmethod;
+		}
+		List<LispVal> parts = defmethod.toList();
+		int lambdaList = LispMacroExpander.defmethodLambdaListIndex(parts);
+		List<LispVal> expanded = new java.util.ArrayList<>(parts.subList(0, lambdaList + 1));
+		boolean changed = false;
+		for (LispVal form : parts.subList(lambdaList + 1, parts.size())) {
+			LispVal expansion = UserMacroExpander.expandAll(form, this);
+			changed = changed || expansion != form;
+			expanded.add(expansion);
+		}
+		if (!changed) {
+			return defmethod;
+		}
+		LispVal result = LispNil.INSTANCE;
+		for (int i = expanded.size() - 1; i >= 0; i--) {
+			result = new LispCons(expanded.get(i), result);
+		}
+		return (LispCons) result;
+	}
+
+	/** Whether an instance is a generic function metaobject of the protocol. */
+	private boolean isGenericFunctionMetaobject(LispInstance instance) {
+		if (!this.closRegistry.gfProtocol() || !instance.layout().funcallable()) {
+			return false;
+		}
+		String typeName = LispLayout.printNameOfTag(instance.layout().tag());
+		ClosRegistry.ClassInfo info = typeName == null ? null : this.closRegistry.findClass(typeName);
+		return info != null && info.ancestors().contains("GENERIC-FUNCTION");
+	}
+
+	/**
+	 * Loads the generic-function protocol runtime ({@code GenericFunctions}) once, at the
+	 * first use of one of its operators, a {@code defgeneric} naming its metaobject
+	 * classes or a method on {@code add-method}/{@code remove-method}: the method
+	 * metaobject classes are seeded with their constructors, the runtime of classes made
+	 * at run time it dispatches through is loaded, and every dispatcher is regenerated to
+	 * consult its generic's run-time methods.
+	 */
+	private void ensureGfProtocolLoaded() {
+		synchronized (this.libraryLoadLock) {
+			if (this.closRegistry.gfProtocol()) {
+				return;
+			}
+			this.closRegistry.enableGfProtocol();
+			for (LispVal form : LispMacroExpander.seededMopConstructorDefuns(this.closRegistry)) {
+				eval(form, this.globalEnv);
+			}
+			ensureDynamicClassesLoaded();
+			// The loading stubs go first: a stub left bound would be stashed as the
+			// built-in default method of add-method / remove-method.
+			for (String name : GenericFunctions.ENTRY_NAMES) {
+				this.globalEnv.undefineFunction(name);
+			}
+			for (LispVal form : GenericFunctions.forms()) {
+				eval(form, this.globalEnv);
+			}
+			// The methods only a dispatcher knows; the compile paths generate this
+			// (LispMacroExpander.staticMethodsForm).
+			this.globalEnv.defineFunction(GF_STATIC_METHODS, new LispFunction(GF_STATIC_METHODS, args -> {
+				String name = args.get(0) instanceof LispFunction function ? function.name()
+						: args.get(0) instanceof LispLambda lambda ? lambda.name()
+								: args.get(0) instanceof LispSymbol symbol ? symbol.name() : null;
+				ClosRegistry.GenericInfo generic = name == null ? null : this.closRegistry.findGeneric(name);
+				return generic == null ? LispNil.INSTANCE
+						: eval(LispMacroExpander.staticMethodsForm(generic, this.closRegistry), this.globalEnv);
+			}));
+			eval(LispMacroExpander.classKeyRanksForm(), this.globalEnv);
+			for (ClosRegistry.GenericInfo generic : List.copyOf(this.closRegistry.generics().values())) {
+				regenerateDispatcher(generic.name(), this.globalEnv);
+			}
+		}
+	}
+
+	private void ensureDynamicClassesLoaded() {
+		synchronized (this.libraryLoadLock) {
+			if (this.closRegistry.dynamicClasses()) {
+				return;
+			}
+			this.closRegistry.enableDynamicClasses();
+			for (LispVal form : DynamicClasses.forms()) {
+				eval(form, this.globalEnv);
+			}
+			for (ClosRegistry.GenericInfo generic : List.copyOf(this.closRegistry.generics().values())) {
+				if (generic.hasClassMethod()) {
+					regenerateDispatcher(generic.name(), this.globalEnv);
+				}
+			}
+		}
+	}
+
+	/**
+	 * Evaluates the WIT runtime ({@code wit.lisp}: the provider registry,
+	 * {@code rontolisp:wit-provide} and the {@code rontolisp:wit-error} condition -- the
+	 * provider mechanism, and no provider for any concrete interface) into the global
+	 * environment once. Triggered by a {@code rontolisp:wit-import} directive and by the
+	 * first resolution of one of the runtime's own names.
+	 */
+	private void ensureWitLoaded() {
+		synchronized (this.libraryLoadLock) {
+			if (this.witLibraryLoaded) {
+				return;
+			}
+			this.witLibraryLoaded = true;
+			for (LispVal form : WitLibrary.forms()) {
+				eval(form, this.globalEnv);
+			}
+		}
+	}
+
+	/**
+	 * Loads the WIT runtime when a condition form names one of its classes
+	 * ({@code rontolisp:wit-error}). A class name is a quoted DATUM, never a resolved
+	 * function name, so the trigger in the function-resolution path above cannot see it
+	 * -- and {@code error} would then expand against a {@link ClosRegistry} that has
+	 * never heard of the class and build a bogus condition whose payload reader answers
+	 * {@code :payload}. The compile path has no such gap (its pre-pass walks the AST,
+	 * quoted symbols included), so without this the interpreter DIVERGES from the JVM on
+	 * the same source.
+	 */
+	private void ensureWitLoadedForConditionClass(LispCons cons) {
+		if (WitLibrary.referencesWitRuntime(cons)) {
+			ensureWitLoaded();
+		}
+	}
+
+	private boolean uiopConditionClassesLoaded;
+
+	/**
+	 * Whether {@link #ensureUiopConditionClassesLoaded} is mid-flight. The report
+	 * renderer is rebuilt from the whole class table, so rebuilding it once per class
+	 * registered would be twenty passes for one answer; the outer call rebuilds once,
+	 * after the last class lands.
+	 */
+	private boolean loadingUiopConditionClasses;
+
+	/**
+	 * Registers every uiop condition and class
+	 * ({@code UiopLibrary.conditionAndClassNames} -- 19 {@code define-condition}s and one
+	 * {@code defclass}) the first time the program touches the condition system at all,
+	 * which is what {@link #ensureConditionReportRuntimeLoaded} marks.
+	 *
+	 * <p>
+	 * A CLASS cannot be lazy the way a function can. Two things go wrong if uiop's arrive
+	 * only when some uiop FUNCTION is first resolved: a handler's type test is built from
+	 * the class tags known at EXPANSION time, so a class registered while the body runs
+	 * is invisible to the handler that was meant to catch it; and a program that only
+	 * NAMES a uiop condition ({@code (make-condition 'uiop:simple-style-warning)}) never
+	 * resolves a uiop function at all. Both were cross-backend divergences --
+	 * {@code (handler-bind ((warning #'muffle-warning)) (uiop:style-warn "x"))} muffled
+	 * the warning on the JVM and both WASM backends, which splice every reachable uiop
+	 * definition before anything runs, and printed it here.
+	 *
+	 * <p>
+	 * Registering them on first condition-system use rather than in the constructor
+	 * confines the cost to programs that have conditions at all, and it introduces no
+	 * divergence of its own: a program can only observe a class it NAMES, and naming it
+	 * is exactly what makes the compile path splice its definition too
+	 * ({@code UiopLibrary.process} collects quoted symbols).
+	 */
+	private void ensureUiopConditionClassesLoaded() {
+		synchronized (this.libraryLoadLock) {
+			if (this.uiopConditionClassesLoaded) {
+				return;
+			}
+			// Set before evaluating: each define-condition below re-enters
+			// ensureConditionReportRuntimeLoaded, which is what called us.
+			this.uiopConditionClassesLoaded = true;
+			this.loadingUiopConditionClasses = true;
+			try {
+				for (String name : UiopLibrary.conditionAndClassNames()) {
+					if (this.loadedUiopNames.add(name)) {
+						for (LispVal form : UiopLibrary.formsFor(name)) {
+							eval(form, this.globalEnv);
+						}
+					}
+				}
+			}
+			finally {
+				this.loadingUiopConditionClasses = false;
+			}
+		}
+	}
+
+	/**
+	 * Evaluates a compound form: the interpreter's innermost method, and a LOOP. A form
+	 * in TAIL position of the current one -- the arm an {@code if} takes, the last form
+	 * of a {@code progn}, a {@code let} body or a block, a macro's expansion, the body of
+	 * a function a call applies -- REPLACES the current form (and environment) and the
+	 * loop goes round again, so a chain of tail calls runs in constant Java stack: a
+	 * proper tail call, with no bounce and no allocation per call
+	 * (.kb/interpreter-tail-calls.md). A form whose frame must outlive its value keeps it
+	 * by construction: {@code
+	 * handler-case}, {@code unwind-protect}, {@code catch}, {@code progv}, a {@code let}
+	 * binding a special, a lambda with a special parameter, a built-in call -- each is a
+	 * method of its own that evaluates its parts through {@link #eval} and returns.
+	 *
+	 * <p>
+	 * What the frame carries for the forms it absorbed: {@code owner}, the exit target of
+	 * every block entered in this frame (the first block's scope; a {@code return-from}
+	 * aimed at any of them ends the frame with the exit's value, since each of those
+	 * blocks IS the frame's continuation); {@code funcallSeam}, whether a
+	 * {@code (funcall closure ..)} or {@code (apply closure ..)} was absorbed, so what
+	 * the closure raises still runs the handler-bind handlers the built-in seam would
+	 * have run. With {@code labels} (a tagbody statement's, else null) a tail {@code (go
+	 * L)} to one of them answers the label's jump token instead of throwing
+	 * ({@link #evalTagbodyStatement}). With {@code exitTo} (a statement's whose value is
+	 * discarded inside the frame owning it, with no dynamic extent in between, else null)
+	 * an exit to a block of that frame hands its value form over unevaluated
+	 * ({@link BlockTailExit}), which that frame continues with as its tail; the frame
+	 * hands its own blocks' owner -- or {@code exitTo} while it has none -- to the
+	 * statements it runs itself, until it enters a function body.
+	 *
+	 * <p>
+	 * The operator table is split so that neither half crosses HotSpot's 8000-bytecode
+	 * HugeMethodLimit; see {@link #evalConsRareOperator} and
+	 * {@link #rareOperatorExpansion}. This is also the evaluation seam
+	 * ({@link #rawEvaluationFailure}): a raw Java failure escaping a form is classified
+	 * into a condition here.
+	 * @param cons the form
+	 * @param env its lexical environment
+	 * @param labels the labels of the tagbody whose statement's tail this is, or null
+	 * @param exitTo the owner of the blocks an exit's value form may be handed to, or
+	 * null
+	 * @return the value (a jump token when a statement's tail was a go)
+	 */
+	private LispVal evalCons(LispCons cons, Environment env, @Nullable TagbodyLabels labels,
+			@Nullable Environment exitTo) {
+		Environment owner = null;
+		Environment deferTo = exitTo;
+		boolean funcallSeam = false;
+		// Where a condition leaving this frame was (ConditionTrace): the innermost form
+		// read from a named file the loop has stepped onto and the program function its
+		// code is written in (the scope's Environment.lexicalFunction). A type test and
+		// two stores per step; read only when a condition escapes.
+		LocatedCons located = null;
+		String locatedIn = null;
+		LispLambda frameLambda = null;
+		// The thread's call-stack frame of the function this loop entered, while a
+		// debugger may ask for the stack (debugging); a tail call replaces its function.
+		CallFrame callFrame = null;
+		// What a debugger's transfer to callFrame answers in its place (FrameSignal).
+		Supplier<LispVal> resume = null;
+		LispVal result;
+		try {
+			frame: while (true) {
+				LispVal next;
+				if (cons instanceof LocatedCons here) {
+					located = here;
+					locatedIn = env.lexicalFunction();
+					if (this.debugging) {
+						// the source form the frame waits in, as a debugger shows it: a
+						// form a macro expansion made is never located
+						CallFrame at = callFrame != null ? callFrame : this.frameTops.get()[0];
+						if (at != null) {
+							at.at(here);
+						}
+					}
+				}
+				try {
+					dispatch: {
+						LispVal head = cons.car();
+						Object headNote = head instanceof LispSymbol noted ? noted.evaluatorNote() : null;
+						if (headNote instanceof ExpansionNote note && note.form() == cons
+								&& note.owner() == this.noteOwner && note.epoch() == this.callSiteEpoch
+								&& (!note.userMacro() || cons != this.topLevelForm.get())) {
+							// A macro call whose head notes its expansion
+							// (ExpansionNote).
+							next = note.expansion();
+							break dispatch;
+						}
+						// A call of a global function its head notes for this very form
+						// (CallNote): its length and its binding, as classified.
+						CallNote callNote = headNote instanceof CallNote note && note.form() == cons
+								&& note.owner() == this.noteOwner && note.epoch() == this.callSiteEpoch ? note : null;
+						FunctionCell.Binding called = callNote == null ? null
+								: this.globalEnv.functionCellAt(callNote.cell()).binding();
+						LispVal notedFunction = called == null ? null : called.value();
+						int properLength;
+						if (callNote != null && notedFunction != null) {
+							properLength = callNote.length();
+						}
+						else {
+							called = null;
+							// A dotted tail is only meaningful as data (inside quote); in
+							// call position it would otherwise be silently dropped by the
+							// toList() walks below. The walk also answers the argument
+							// count, so the fall-through function call below allocates
+							// its argument list exactly sized instead of walking again.
+							properLength = head instanceof LispSymbol qs && LispNames.QUOTE.equals(qs.name()) ? 1
+									: cons.properLength();
+							if (properLength < 0) {
+								throw new LispEvalException("Improper list in call position: " + cons.print());
+							}
+						}
+						LispVal function;
+						List<LispVal> args;
+						Set<String> methoded = this.methodedExpandedBuiltins;
+						if (notedFunction != null && called != null) {
+							function = notedFunction;
+							args = evalArgs(cons, env, properLength - 1);
+						}
+						else if (methoded != NO_METHODED_BUILTINS && head instanceof LispSymbol sym
+								&& methoded.contains(sym.name())) {
+							// A built-in the program defined a method on: its global
+							// binding is now the generic's dispatcher (the built-in its
+							// default method), so the call goes there rather than through
+							// the operator table's expansion, which would never consult
+							// it.
+							function = resolveFunction(sym.name());
+							args = evalArgs(cons, env, properLength - 1);
+						}
+						else if (head instanceof LispSymbol sym) {
+							boolean ordinaryCall = false;
+							switch (sym.name()) {
+								case LispNames.QUOTE:
+								case LispNames.UNSPELLED_QUOTE:
+									result = evalQuote(cons);
+									break frame;
+								case LispNames.IF: {
+									if (cons instanceof DispatchChain chain) {
+										next = dispatchChainArm(chain, env);
+										break dispatch;
+									}
+									if (properLength < 3) {
+										// The malformed shapes, reported as before.
+										result = evalIf(cons, env);
+										break frame;
+									}
+									LispCons rest = (LispCons) cons.cdr();
+									LispCons arms = (LispCons) rest.cdr();
+									if (isTruthy(eval(rest.car(), env))) {
+										next = arms.car();
+										break dispatch;
+									}
+									if (arms.cdr() instanceof LispCons elseCell) {
+										next = elseCell.car();
+										break dispatch;
+									}
+									result = singleValue(LispNil.INSTANCE);
+									break frame;
+								}
+								case LispNames.LET: {
+									Environment letEnv = lexicalLet(cons, env);
+									if (letEnv == null) {
+										// A special or *package* binding keeps its frame
+										// for the restore.
+										result = evalLetIn(cons, env, labels);
+										break frame;
+									}
+									next = evalAllButLast(((LispCons) cons.cdr()).cdr(), letEnv, owner, deferTo);
+									if (next == null) {
+										result = singleValue(LispNil.INSTANCE);
+										break frame;
+									}
+									env = letEnv;
+									break dispatch;
+								}
+								case LispNames.MAKE_INSTANCE:
+								case LispNames.SYSTEM_MAKE_INSTANCE:
+									if ((next = wrongCountCall(cons, sym.name(), properLength)) != null) {
+										break dispatch;
+									}
+									ensureAsdfClassesFor(cons);
+									ensureGeomClassesFor(cons);
+									ensureObjcTypesFor(cons);
+									next = LispMacroExpander.expandMakeInstance(cons, this.closRegistry);
+									break dispatch;
+								case LispNames.SLOT_VALUE:
+									if ((next = wrongCountCall(cons, sym.name(), properLength)) != null) {
+										break dispatch;
+									}
+									result = singleValue(evalSlotValue(cons, env));
+									break frame;
+								case LispNames.WITH_SLOTS:
+									next = expandSlotVariables(cons, env, LispMacroExpander::expandWithSlots);
+									break dispatch;
+								case LispNames.WITH_ACCESSORS:
+									next = expandSlotVariables(cons, env, LispMacroExpander::expandWithAccessors);
+									break dispatch;
+								case LispNames.FUNCTION:
+									result = singleValue(evalFunction(cons, env));
+									break frame;
+								case LispNames.PROGN: {
+									next = evalAllButLast(cons.cdr(), env, owner, deferTo);
+									if (next == null) {
+										result = singleValue(LispNil.INSTANCE);
+										break frame;
+									}
+									break dispatch;
+								}
+								case LispNames.SETQ:
+									result = evalSetq(cons, env);
+									break frame;
+								case LispNames.LAMBDA:
+									result = evalLambdaForm(cons, env);
+									break frame;
+								case LispNames.AWAIT_QUALIFIED:
+									result = evalAwait(cons, env);
+									break frame;
+								case LispNames.WHILE:
+									result = evalWhile(cons, env, owner, deferTo);
+									break frame;
+								case LispNames.COND:
+									next = builtinMacroExpansion(cons, LispMacroExpander::expandCond);
+									break dispatch;
+								case LispNames.CASE:
+									next = builtinMacroExpansion(cons, LispMacroExpander::expandCase);
+									break dispatch;
+								case LispNames.ECASE:
+									next = builtinMacroExpansion(cons, LispMacroExpander::expandEcase);
+									break dispatch;
+								case LispNames.ERROR:
+									if ((next = wrongCountCall(cons, sym.name(), properLength)) != null) {
+										break dispatch;
+									}
+									ensureWitLoadedForConditionClass(cons);
+									ensureConditionReportRuntimeLoaded();
+									// The signal hook (handler-bind handlers at the
+									// signal point) is on once the restart runtime is
+									// loaded: before the first restart-system form is
+									// evaluated no handler can be established, so the
+									// historical expansion is behavior-identical -- and
+									// the interpreter re-expands per evaluation, so later
+									// signals see the hook.
+									next = LispMacroExpander.expandError(cons, this.closRegistry, true,
+											this.restartRuntimeLoaded);
+									break dispatch;
+								case LispNames.CERROR:
+									if ((next = wrongCountCall(cons, sym.name(), properLength)) != null) {
+										break dispatch;
+									}
+									ensureConditionReportRuntimeLoaded();
+									next = LispMacroExpander.expandCerror(cons, this.closRegistry,
+											this.restartRuntimeLoaded);
+									break dispatch;
+								case LispNames.WARN:
+									if ((next = wrongCountCall(cons, sym.name(), properLength)) != null) {
+										break dispatch;
+									}
+									ensureWitLoadedForConditionClass(cons);
+									ensureConditionReportRuntimeLoaded();
+									next = LispMacroExpander.expandWarnWithDesignator(cons, this.closRegistry,
+											this.restartRuntimeLoaded);
+									break dispatch;
+								case LispNames.SIGNAL:
+									if ((next = wrongCountCall(cons, sym.name(), properLength)) != null) {
+										break dispatch;
+									}
+									ensureWitLoadedForConditionClass(cons);
+									ensureConditionReportRuntimeLoaded();
+									next = LispMacroExpander.expandSignalWithRuntimeType(cons, this.closRegistry,
+											this.restartRuntimeLoaded);
+									break dispatch;
+								case LispNames.HANDLER_CASE:
+									ensureWitLoadedForConditionClass(cons);
+									ensureAsdfConditionsFor(cons);
+									ensureConditionReportRuntimeLoaded();
+									if (cons.cdr() instanceof LispCons protectedForm) {
+										noteInterruptHandler(protectedForm.cdr());
+									}
+									result = evalHandlerCase(cons, env);
+									break frame;
+								case LispNames.HANDLER_BIND:
+									ensureWitLoadedForConditionClass(cons);
+									ensureAsdfConditionsFor(cons);
+									ensureConditionReportRuntimeLoaded();
+									ensureRestartRuntimeLoaded();
+									if (cons.cdr() instanceof LispCons bindings) {
+										noteInterruptHandler(bindings.car());
+									}
+									next = LispMacroExpander.expandHandlerBind(cons, this.closRegistry);
+									break dispatch;
+								case LispNames.IGNORE_ERRORS:
+									ensureConditionReportRuntimeLoaded();
+									next = builtinMacroExpansion(cons, LispMacroExpander::expandIgnoreErrors, false);
+									break dispatch;
+								case LispNames.STABLE_SORT:
+									next = builtinMacroExpansion(cons, LispMacroExpander::expandStableSort);
+									break dispatch;
+								case LispNames.COPY_SEQ:
+									next = builtinMacroExpansion(cons, LispMacroExpander::expandCopySeq);
+									break dispatch;
+								case LispNames.AND:
+									next = builtinMacroExpansion(cons, LispMacroExpander::expandAnd);
+									break dispatch;
+								case LispNames.OR:
+									next = builtinMacroExpansion(cons, LispMacroExpander::expandOr);
+									break dispatch;
+								case LispNames.WHEN:
+									next = builtinMacroExpansion(cons, LispMacroExpander::expandWhen);
+									break dispatch;
+								case LispNames.DOTIMES:
+									next = builtinMacroExpansion(cons, LispMacroExpander::expandDotimes);
+									break dispatch;
+								case LispNames.DO:
+									next = builtinMacroExpansion(cons, LispMacroExpander::expandDo);
+									break dispatch;
+								case LispNames.DO_STAR:
+									next = builtinMacroExpansion(cons, LispMacroExpander::expandDoStar);
+									break dispatch;
+								case LispNames.LOOP:
+									next = builtinMacroExpansion(cons, LispMacroExpander::expandLoop);
+									break dispatch;
+								case LispNames.BLOCK_INTERNAL:
+								case LispNames.BLOCK: {
+									// (%block body...) is the iteration macros' implicit
+									// nil block; (block name body...) the user's. Either
+									// runs in this frame, in a scope of its own that is
+									// the block's identity (or shares the frame's,
+									// below).
+									LispVal body = cons.cdr();
+									String name = NIL_BLOCK;
+									if (LispNames.BLOCK.equals(sym.name())) {
+										if (!(body instanceof LispCons nameCell)) {
+											throw new LispEvalException(LispNames.BLOCK + " expects a block name");
+										}
+										name = blockName(nameCell.car());
+										body = nameCell.cdr();
+									}
+									Environment blockEnv = new Environment(env);
+									if (owner == null) {
+										owner = blockEnv;
+									}
+									blockEnv.installBlock(name, owner);
+									next = evalAllButLast(body, blockEnv, owner, deferTo);
+									if (next == null) {
+										result = singleValue(LispNil.INSTANCE);
+										break frame;
+									}
+									env = blockEnv;
+									break dispatch;
+								}
+								case LispNames.GO: {
+									// In the tail of a tagbody statement, a go to one of
+									// that tagbody's labels is the statement's answer;
+									// any other go is the thrown signal of the second
+									// half of the table.
+									if (labels != null && properLength == 2) {
+										String key = goTagKey(((LispCons) cons.cdr()).car());
+										int target = key == null ? NO_JUMP : labels.indexOf(key);
+										if (target != NO_JUMP) {
+											result = labels.jump(target);
+											break frame;
+										}
+									}
+									break;
+								}
+								case LispNames.RETURN_FROM:
+									// An exit to a block this frame owns ends the frame
+									// with its value form's value: that form is the tail
+									// (exitsToFrame).
+									if (properLength == 3 && exitsToFrame(((LispCons) cons.cdr()).car(),
+											next = ((LispCons) ((LispCons) cons.cdr()).cdr()).car(), env, owner,
+											deferTo)) {
+										break dispatch;
+									}
+									result = evalReturnFrom(cons, env);
+									break frame;
+								case LispNames.CATCH:
+									result = evalCatch(cons, env);
+									break frame;
+								case LispNames.THROW:
+									result = evalThrow(cons, env);
+									break frame;
+								case LispNames.UNWIND_PROTECT:
+									result = evalUnwindProtect(cons, env);
+									break frame;
+								case LispNames.RETURN:
+									if (properLength == 2 && exitsToFrame(LispNil.INSTANCE,
+											next = ((LispCons) cons.cdr()).car(), env, owner, deferTo)) {
+										break dispatch;
+									}
+									throw blockExit(NIL_BLOCK, evalReturnValue(cons, env), env);
+								case LispNames.PROG1:
+									next = builtinMacroExpansion(cons, LispMacroExpander::expandProg1);
+									break dispatch;
+								case LispNames.UNLESS:
+									next = builtinMacroExpansion(cons, LispMacroExpander::expandUnless);
+									break dispatch;
+								case LispNames.ONE_PLUS:
+									next = builtinMacroExpansion(cons, LispMacroExpander::expandOnePlus);
+									break dispatch;
+								case LispNames.ONE_MINUS:
+									next = builtinMacroExpansion(cons, LispMacroExpander::expandOneMinus);
+									break dispatch;
+								case LispNames.ZEROP:
+									next = builtinMacroExpansion(cons, LispMacroExpander::expandZerop);
+									break dispatch;
+								case LispNames.PLUSP:
+									next = builtinMacroExpansion(cons, LispMacroExpander::expandPlusp);
+									break dispatch;
+								case LispNames.MINUSP:
+									next = builtinMacroExpansion(cons, LispMacroExpander::expandMinusp);
+									break dispatch;
+								case LispNames.EVENP:
+									next = builtinMacroExpansion(cons, LispMacroExpander::expandEvenp);
+									break dispatch;
+								case LispNames.ODDP:
+									next = builtinMacroExpansion(cons, LispMacroExpander::expandOddp);
+									break dispatch;
+								// The accessors below expand only a call of their own
+								// shape; any other count is the ordinary call, whose
+								// built-in reports it (FIRST expects 1 argument, got 2)
+								// where the expansion would drop the surplus or index
+								// past the form.
+								case LispNames.FIRST:
+									if (properLength != 2) {
+										break;
+									}
+									next = builtinMacroExpansion(cons, LispMacroExpander::expandFirst);
+									break dispatch;
+								case LispNames.REST:
+									if (properLength != 2) {
+										break;
+									}
+									next = builtinMacroExpansion(cons, LispMacroExpander::expandRest);
+									break dispatch;
+								case LispNames.NTH:
+									if (properLength != 3) {
+										break;
+									}
+									next = builtinMacroExpansion(cons, LispMacroExpander::expandNth);
+									break dispatch;
+								case LispNames.SECOND:
+									if (properLength != 2) {
+										break;
+									}
+									next = builtinMacroExpansion(cons, LispMacroExpander::expandSecond);
+									break dispatch;
+								case LispNames.THIRD:
+									if (properLength != 2) {
+										break;
+									}
+									next = builtinMacroExpansion(cons, LispMacroExpander::expandThird);
+									break dispatch;
+								case LispNames.FOURTH:
+									if (properLength != 2) {
+										break;
+									}
+									next = builtinMacroExpansion(cons, LispMacroExpander::expandFourth);
+									break dispatch;
+								case LispNames.SETF: {
+									// (setf (macro-function name) function) is a write to
+									// the MACRO table, which lives here and nowhere else
+									// --
+									// the shared expander cannot lower it to a runtime
+									// form, so it is carried out during evaluation
+									// instead
+									// of being expanded.
+									if (LispMacroExpander.isSetfMacroFunctionForm(cons)) {
+										if (properLength > 3) {
+											next = LispMacroExpander.splitSetfPairs(cons);
+											break dispatch;
+										}
+										result = singleValue(writeMacroFunction(cons, env));
+										break frame;
+									}
+									next = setfExpansion(cons, env);
+									break dispatch;
+								}
+								case LispNames.SCHAR_SET:
+									// Not a plain builtin call: a write through a place
+									// holding a string LITERAL rebinds that place instead
+									// of mutating the source constant, which the callee
+									// cannot do for itself.
+									result = evalScharSet(cons, env);
+									break frame;
+								case LispNames.PUSH:
+									next = modifyMacroExpansion(cons, LispMacroExpander::expandPush);
+									break dispatch;
+								case LispNames.POP:
+									next = modifyMacroExpansion(cons, LispMacroExpander::expandPop);
+									break dispatch;
+								case LispNames.LET_STAR:
+									next = builtinMacroExpansion(cons, LispMacroExpander::expandLetStar);
+									break dispatch;
+								case LispNames.DOLIST:
+									next = builtinMacroExpansion(cons, LispMacroExpander::expandDolist);
+									break dispatch;
+								case LispNames.INCF:
+									next = modifyMacroExpansion(cons, LispMacroExpander::expandIncf);
+									break dispatch;
+								case LispNames.DECF:
+									next = modifyMacroExpansion(cons, LispMacroExpander::expandDecf);
+									break dispatch;
+								case LispNames.FORMAT:
+									next = builtinMacroExpansion(cons, form -> {
+										LispCons through = StreamOperandChecks.formatThroughDestination(form);
+										return through != form ? through
+												: LispMacroExpander.expandFormat(StreamOperandChecks.checkedCall(form));
+									});
+									break dispatch;
+								case LispNames.WITH_OUTPUT_TO_STRING:
+									next = builtinMacroExpansion(cons, LispMacroExpander::expandWithOutputToString);
+									break dispatch;
+								case LispNames.WITH_INPUT_FROM_STRING:
+									next = builtinMacroExpansion(cons, LispMacroExpander::expandWithInputFromString);
+									break dispatch;
+								case LispNames.PUSHNEW:
+									next = modifyMacroExpansion(cons, LispMacroExpander::expandPushnew);
+									break dispatch;
+								case LispNames.OBJ_REF:
+								case LispNames.OBJ_SET: {
+									// A defstruct accessor's checked read / store carries
+									// a trailing FAILURE form, evaluated -- after the
+									// object and the value -- only when the object is no
+									// instance. Without it these are the plain functions
+									// below.
+									boolean read = LispNames.OBJ_REF.equals(sym.name());
+									if (properLength != (read ? 4 : 5)) {
+										break;
+									}
+									LispCons objectCell = (LispCons) cons.cdr();
+									LispCons indexCell = (LispCons) objectCell.cdr();
+									LispCons afterIndex = (LispCons) indexCell.cdr();
+									LispVal object = eval(objectCell.car(), env);
+									LispVal value = read ? LispNil.INSTANCE : eval(afterIndex.car(), env);
+									if (!(object instanceof LispInstance inst)) {
+										next = read ? afterIndex.car() : ((LispCons) afterIndex.cdr()).car();
+										break dispatch;
+									}
+									int slot = requireSlotIndex(sym.name(), inst, indexCell.car());
+									if (!read) {
+										inst.setSlot(slot, value);
+									}
+									result = singleValue(read ? inst.slot(slot) : value);
+									break frame;
+								}
+								default:
+									// No arm of this table names the operator.
+									ordinaryCall = true;
+							}
+							// A call of a global function its head's note vouches for
+							// (CallNote): straight to its arguments.
+							called = ordinaryCall ? notedBinding(sym, properLength) : null;
+							LispVal known = called == null ? null : called.value();
+							if (known != null) {
+								function = known;
+							}
+							else {
+								called = null;
+								int epoch = this.callSiteEpoch;
+								// Neither the tail-transparent expansions nor the value
+								// forms of the second half claimed the operator, then the
+								// ordinary call. A wrapped built-in called with a count
+								// its shape rules out signals before any lowering can
+								// drop the surplus or index past the form
+								// (compiler/BuiltinCallArity), as on the compiled
+								// backends.
+								if ((next = wrongCountCall(cons, sym.name(), properLength)) != null) {
+									break dispatch;
+								}
+								LispVal expansion = rareOperatorExpansion(cons, env, sym.name());
+								if (expansion != null && expansion != NO_OPERATOR_ARM) {
+									next = expansion;
+									break dispatch;
+								}
+								LispVal rare = evalConsRareOperator(cons, env, sym.name(), owner, deferTo);
+								if (rare != UNHANDLED && rare != NO_OPERATOR_ARM) {
+									result = rare;
+									break frame;
+								}
+								ordinaryCall &= expansion == NO_OPERATOR_ARM && rare == NO_OPERATOR_ARM;
+								if (LispNames.isCarCdrComposition(sym.name())) {
+									next = builtinMacroExpansion(cons, LispMacroExpander::expandCarCdrComposition);
+									break dispatch;
+								}
+								// The uiop MACROS -- but only for a package-qualified
+								// operator. A name with no colon cannot be a uiop member,
+								// and this path is the fall-through every ordinary call
+								// takes, so one indexOf here spares BOTH probes'
+								// splitQualified for (char s j) and (+ j 1) alike (4% of
+								// run-time samples in one profile,
+								// .kb/interpreter-expansion-memo.md).
+								if (sym.name().indexOf(':') > 0 && isUiopOperator(sym.name())) {
+									ordinaryCall = false;
+									// First the ones with a real expansion -- the one
+									// dispatcher both compilers and FreeVarAnalyzer also
+									// call, which is what makes the four backends agree
+									// by construction rather than by four parallel
+									// switch statements kept in step.
+									LispVal uiopMacro = LispMacroExpander.expandUiopMacro(cons, true);
+									if (uiopMacro != null) {
+										next = uiopMacro;
+										break dispatch;
+									}
+									// Then a uiop macro nothing implements yet: it lowers
+									// to not-implemented-error with its argument forms
+									// dropped -- the same expansion both compilers apply,
+									// so an unimplemented (uiop:with-input-file ...)
+									// signals here too rather than running its body
+									// first. The function-kind members are ordinary calls
+									// and fall through to the lazy load below.
+									LispVal uiopStub = LispMacroExpander.expandUnimplementedUiopMacro(cons);
+									if (uiopStub != null) {
+										next = uiopStub;
+										break dispatch;
+									}
+								}
+								// User macros defined with defmacro: expand (evaluating
+								// the macro body with the unevaluated argument forms
+								// bound) and evaluate the expansion. Checked after the
+								// built-in operators, so a user macro can never shadow
+								// them. The objc defining macros live in a lazily loaded
+								// library: load it before asking whether the call is a
+								// macro.
+								if (!this.objcLibraryLoaded && ObjcLibrary.definesMacro(sym.name())) {
+									ensureObjcLoaded();
+								}
+								if (this.userMacros.containsKey(sym.name())) {
+									if (cons == this.topLevelForm.get()) {
+										result = evalAtTopLevel(expandUserMacro(cons, env), env);
+										break frame;
+									}
+									next = expandUserMacro(cons, env);
+									if (this.userMacros.get(sym.name()) instanceof UserMacro macro
+											&& macro.environment() == null && macro.expander() == null
+											&& mayNote(sym)) {
+										// memoized per site whatever the scope: noted
+										sym.evaluatorNote(new ExpansionNote(this.noteOwner, epoch, cons, next, true));
+									}
+									break dispatch;
+								}
+								// Compiler macros: applied last, so a defmacro and every
+								// built-in operator still win, and memoized per call site
+								// so the expansion (and the load-time-value slot inside
+								// it) is built once for this occurrence.
+								if (!this.compilerMacros.isEmpty() && this.compilerMacros.containsKey(sym.name())) {
+									ordinaryCall = false;
+									LispVal compilerExpansion = expandCompilerMacro(cons, env);
+									if (compilerExpansion != cons) {
+										next = compilerExpansion;
+										break dispatch;
+									}
+								}
+								// Lisp-2: a symbol in call position is resolved in the
+								// function namespace only; variable bindings of the same
+								// name do not shadow it.
+								function = resolveFunction(sym.name());
+								if (ordinaryCall) {
+									noteCall(cons, sym, epoch, properLength, function);
+								}
+							}
+							args = evalArgs(cons, env, properLength - 1);
+						}
+						else {
+							// Non-symbol head: a lambda form such as ((lambda (x) x) 5)
+							function = eval(head, env);
+							args = evalArgs(cons, env, properLength - 1);
+						}
+						// (funcall closure ...) -- every call of a procedure held in a
+						// variable, which is what a Scheme session makes of each
+						// definition -- and (apply closure ...) apply the closure HERE
+						// instead of through the built-in, which is what makes a tail
+						// call through a value proper. The built-in's signal-point seam
+						// is kept for what the closure raises (funcallSeam).
+						call: while (true) {
+							LispLambda callee = (function == this.funcallBuiltin || function == this.applyBuiltin)
+									&& !args.isEmpty() ? closureCalled(args.get(0)) : null;
+							if (function == this.funcallBuiltin && callee != null) {
+								function = callee;
+								args = args.subList(1, args.size());
+								funcallSeam = true;
+							}
+							else if (function == this.applyBuiltin && args.size() >= 2 && callee != null) {
+								function = callee;
+								funcallSeam = true;
+								args = spreadApplyArguments(args);
+							}
+							else if (function == this.asyncRunBuiltin) {
+								// The async function whose body this thunk is, named from
+								// THIS frame: the body's own thread will never see the
+								// defun.
+								try {
+									String asyncName = frameLambda == null ? null : frameLambda.name();
+									result = singleValue(runAsync(args,
+											asyncName == null ? null : UncaughtReport.functionName(asyncName)));
+								}
+								catch (LispEvalException e) {
+									throw withHandlerBindHandlersRun(e);
+								}
+								break frame;
+							}
+							if (function instanceof LispLambda lambda) {
+								// every call of a closure, a tail call or a loop's recur
+								// included, is where an interrupted evaluation stops
+								pollInterrupt();
+								if (called != null && called.slotRead() != FunctionCell.NO_SLOT_READ
+										&& lambda == called.value() && args.size() == 1
+										&& args.get(0) instanceof LispInstance inst && !this.debugging) {
+									// A slot reader on an instance: the slot its body
+									// would
+									// read.
+									int cell = called.slotRead() < 0 ? inst.cellCount() + called.slotRead()
+											: called.slotRead();
+									if (cell >= 0 && cell < inst.cellCount()) {
+										result = singleValue(inst.slot(cell));
+										break frame;
+									}
+								}
+								// A compiled body runs in this frame up to its tail,
+								// which
+								// the frame then takes
+								// (.kb/interpreter-compiled-bodies.md).
+								CompiledBody compiled = compiledBody(lambda);
+								Environment callScope = compiled == null ? null : compiled.bind(lambda, args);
+								if (callScope != null) {
+									frameLambda = lambda;
+									deferTo = null;
+									if (owner == null) {
+										owner = callScope;
+									}
+									Object out = java.util.Objects.requireNonNull(compiled).run(callScope, owner);
+									if (out instanceof CompiledForm.TailCall tail) {
+										function = tail.function();
+										args = tail.args();
+										env = tail.env();
+										called = null;
+										located = tail.located() != null ? tail.located() : located;
+										locatedIn = tail.located() != null ? env.lexicalFunction() : locatedIn;
+										continue call;
+									}
+									if (out instanceof CompiledForm.TailForm tail) {
+										env = tail.env();
+										next = tail.form();
+										located = tail.located() != null ? tail.located() : located;
+										locatedIn = tail.located() != null ? env.lexicalFunction() : locatedIn;
+										break dispatch;
+									}
+									result = (LispVal) out;
+									break frame;
+								}
+								Environment lambdaEnv = lexicalLambdaScope(lambda, args,
+										called != null && lambda == called.value() ? called.declared() : null);
+								if (lambdaEnv != null) {
+									frameLambda = lambda;
+									if (this.debugging) {
+										callFrame = callFrame == null
+												? CallFrame.enter(this.frameTops.get(), lambda, args, lambdaEnv, env)
+												: callFrame.replaced(lambda, args, lambdaEnv);
+									}
+									// A function body is no statement of the frame that
+									// ran
+									// this one: an exit from it evaluates its value form
+									// here.
+									deferTo = null;
+									// The body runs in this frame.
+									List<LispVal> body = lambda.body();
+									if (body.size() == 1 && body.get(0) instanceof LispCons form
+											&& form.car() instanceof LispSymbol blockHead
+											&& LispNames.BLOCK.equals(blockHead.name())
+											&& form.cdr() instanceof LispCons nameCell) {
+										// A defun/defmethod body IS one block form. Its
+										// block
+										// runs in the call's own scope -- fresh, private
+										// to
+										// this activation, and covering exactly the
+										// block's
+										// lexical extent, so it can BE the block's
+										// identity:
+										// the commonest call still allocates one scope,
+										// not
+										// two.
+										if (owner == null) {
+											owner = lambdaEnv;
+										}
+										lambdaEnv.installBlock(blockName(nameCell.car()), owner);
+										next = evalAllButLast(nameCell.cdr(), lambdaEnv, owner, deferTo);
+										if (next == null) {
+											result = singleValue(LispNil.INSTANCE);
+											break frame;
+										}
+										env = lambdaEnv;
+										break dispatch;
+									}
+									int last = body.size() - 1;
+									if (last < 0) {
+										result = LispNil.INSTANCE;
+										break frame;
+									}
+									for (int i = 0; i < last; i++) {
+										eval(body.get(i), lambdaEnv);
+									}
+									env = lambdaEnv;
+									next = body.get(last);
+									break dispatch;
+								}
+							}
+							// A built-in, a lambda with a special parameter (apply pops
+							// its
+							// dynamic binding after the body), or a value that names no
+							// function.
+							result = apply(function, args, env);
+							break frame;
+						}
+					}
+				}
+				catch (BlockTailExit exit) {
+					// An exit to one of this frame's blocks from a statement below: its
+					// value form is this frame's tail.
+					if (exit.target() != owner) {
+						throw exit;
+					}
+					env = exit.env();
+					next = exit.form();
+				}
+				if (next instanceof LispCons nextCons) {
+					cons = nextCons;
+					continue;
+				}
+				result = evalAtom(next, env);
+				break;
+			}
+		}
+		catch (BlockReturnSignal signal) {
+			if (owner == null || signal.target() != owner) {
+				throw signal;
+			}
+			result = signal.value();
+		}
+		catch (FrameSignal signal) {
+			if (callFrame == null || signal.frame() != callFrame) {
+				throw signal;
+			}
+			result = LispNil.INSTANCE;
+			resume = signal.action();
+		}
+		catch (LispEvalException e) {
+			e.trace().passing(located, locatedIn);
+			throw funcallSeam || debuggerHere() ? signalPoint(e, env, null) : e;
+		}
+		catch (IllegalArgumentException | IndexOutOfBoundsException raw) {
+			LispEvalException failure = rawEvaluationFailure(ClosRegistry.PROGRAM_ERROR_CLASS_NAME, raw);
+			failure.trace().passing(located, locatedIn);
+			throw funcallSeam || debuggerHere() ? signalPoint(failure, env, null) : failure;
+		}
+		catch (ClassCastException | ArithmeticException | NegativeArraySizeException raw) {
+			LispEvalException failure = rawEvaluationFailure(rawFailureConditionClass(raw), raw);
+			failure.trace().passing(located, locatedIn);
+			throw funcallSeam || debuggerHere() ? signalPoint(failure, env, null) : failure;
+		}
+		finally {
+			if (callFrame != null) {
+				callFrame.exit();
+			}
+		}
+		return resume == null ? result : resume.get();
+	}
+
+	/**
+	 * Evaluates every form of a body but the last, for effect, and answers the last one
+	 * -- the form that replaces the current one in {@link #evalCons}'s loop -- or null
+	 * for an empty body.
+	 * @param body the body forms, a proper list
+	 * @param env the environment
+	 * @param owner the owner of the calling frame's blocks, or null
+	 * @param deferTo the owner the calling frame's exits may hand their value form to, or
+	 * null: the statements hand theirs to {@code owner}, or to this one while there is
+	 * none ({@link #evalStatement})
+	 * @return the last form, or null
+	 */
+	private @Nullable LispVal evalAllButLast(LispVal body, Environment env, @Nullable Environment owner,
+			@Nullable Environment deferTo) {
+		if (!(body instanceof LispCons cell)) {
+			return null;
+		}
+		Environment exitTo = owner != null ? owner : deferTo;
+		while (cell.cdr() instanceof LispCons rest) {
+			evalStatement(cell.car(), env, exitTo);
+			cell = rest;
+		}
+		return cell.car();
+	}
+
+	/**
+	 * The scope of a call of {@code lambda} on {@code args} whose every parameter binds
+	 * lexically -- the arguments checked against the lambda list and bound in a fresh
+	 * scope over the closure's, the names a free special declaration at the head of the
+	 * body names marked special there -- or {@code null} when a parameter is special
+	 * (proclaimed, or declared in the body): its dynamic binding must be popped when the
+	 * body ends, which {@link #apply} does in a frame of its own. This is the
+	 * tail-transparent call of {@link #evalCons}'s loop: the body runs in the caller's
+	 * frame.
+	 * @param lambda the function
+	 * @param args its arguments
+	 * @param known the names its body declares special when its global binding says
+	 * ({@link FunctionCell.Binding#declared}), else null to read them
+	 * @return the body's scope, or null
+	 */
+	private @Nullable Environment lexicalLambdaScope(LispLambda lambda, List<LispVal> args,
+			@Nullable Set<String> known) {
+		checkArity(lambda, args);
+		int required = lambda.params().size();
+		Set<String> declared;
+		if (known != null) {
+			declared = known;
+			recordLocalSpecials(known);
+		}
+		else {
+			declared = declaredSpecials(lambda.body(), true);
+		}
+		for (int i = 0; i < required; i++) {
+			LispSymbol param = lambda.params().get(i);
+			if (isSpecial(param) || declared.contains(param.name())) {
+				return null;
+			}
+		}
+		if (lambda.rest() != null && (isSpecial(lambda.rest()) || declared.contains(lambda.rest().name()))) {
+			return null;
+		}
+		Environment lambdaEnv = callScope(lambda, required + (lambda.rest() != null ? 1 : 0));
+		for (int i = 0; i < required; i++) {
+			lambdaEnv.define(lambda.params().get(i).name(), args.get(i));
+		}
+		if (lambda.rest() != null) {
+			LispVal restList = LispNil.INSTANCE;
+			for (int i = args.size() - 1; i >= required; i--) {
+				restList = new LispCons(args.get(i), restList);
+			}
+			lambdaEnv.define(lambda.rest().name(), restList);
+		}
+		markDeclaredSpecials(declared, lambdaEnv);
+		return lambdaEnv;
+	}
+
+	/**
+	 * A fresh scope for one call of {@code lambda}, under the scope it closed over. A
+	 * program function's own ({@link LispLambda#sourced}) starts its code
+	 * ({@link Environment#lexicalFunction}); any other lambda's code is the code of the
+	 * function it was written in, which its closure already says. So for the package its
+	 * code was read in ({@link Environment#lexicalPackage}).
+	 */
+	private static Environment callScope(LispLambda lambda) {
+		return callScope(lambda, 0);
+	}
+
+	/**
+	 * {@link #callScope(LispLambda)} with room for its bindings made up front.
+	 * @param lambda the function
+	 * @param bindings how many parameters the scope binds
+	 * @return the scope
+	 */
+	static Environment callScope(LispLambda lambda, int bindings) {
+		return scoped(lambda, new Environment((Environment) lambda.closure(), bindings));
+	}
+
+	/**
+	 * {@link #callScope(LispLambda)} with its names bound at once, as a compiled body
+	 * lays them out.
+	 * @param lambda the function
+	 * @param names the layout's names, shared and never written
+	 * @param values their values
+	 * @return the scope
+	 */
+	static Environment callScope(LispLambda lambda, String[] names, LispVal[] values) {
+		return scoped(lambda, new Environment((Environment) lambda.closure(), names, values));
+	}
+
+	private static Environment scoped(LispLambda lambda, Environment scope) {
+		if (lambda.sourced() && lambda.name() != null) {
+			scope.lexicalFunction(lambda.name());
+		}
+		if (lambda.readPackage() != null) {
+			scope.lexicalPackage(lambda.readPackage());
+		}
+		return scope;
+	}
+
+	/**
+	 * Signals the program-error of a call whose argument count the lambda list refuses,
+	 * naming the operator when the lambda is a built-in's
+	 * ({@link BuiltinFunctionWrappers#arityOperator}), in the words the lambda declares
+	 * when it declares its own ({@link am.ik.rontolisp.DeclaredArityReport}).
+	 */
+	static void checkArity(LispLambda lambda, List<LispVal> args) {
+		int required = lambda.params().size();
+		if (args.size() < required || (lambda.rest() == null && args.size() > required)) {
+			am.ik.rontolisp.DeclaredArityReport declared = am.ik.rontolisp.DeclaredArityReport.of(lambda.body());
+			throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+					declared != null ? declared.message(args.size())
+							: ClosRegistry.arityMessage(BuiltinFunctionWrappers.arityOperator(lambda.name()), required,
+									lambda.rest() != null, args.size()));
+		}
+	}
+
+	/**
+	 * The tail-transparent half of {@link #evalCons}'s second operator table: the
+	 * built-in macros whose expansion REPLACES the form in the loop -- most of them pure
+	 * functions of the form, memoized per call site ({@link #builtinMacroExpansion},
+	 * .kb/interpreter-expansion-memo.md), a few re-expanded per evaluation because they
+	 * read evaluator state (the class registry, the user-macro table, a printer hook).
+	 * Answers {@link #NO_OPERATOR_ARM} for an operator it does not claim and null for the
+	 * arms that decline a particular shape to the ordinary function call (a
+	 * {@code reduce} without {@code :from-end}, a {@code sort} without {@code :key}, a
+	 * print with no hook).
+	 *
+	 * <p>
+	 * The split from {@link #evalConsRareOperator} is by KIND, not by frequency: a value
+	 * form ends the frame, an expansion continues it, and the loop must know which. Keep
+	 * both halves clear of HotSpot's 8000-bytecode HugeMethodLimit;
+	 * {@code LispEvaluatorHotMethodSizeTest} fails the build if either crosses it.
+	 * {@link #evalCons}'s own switch keeps the arms a loop or method body plausibly runs;
+	 * a definer, a top-level directive or a rarely looped macro belongs here or in
+	 * {@link #evalConsRareOperator}, at the cost of one more switch miss. A form reaches
+	 * both after {@link #wrongCountCall}, so an arm need not judge the argument count
+	 * again.
+	 * @param cons the form being evaluated
+	 * @param env the environment
+	 * @param name the operator name
+	 * @return the form to evaluate in its place, null, or {@link #NO_OPERATOR_ARM}
+	 */
+	private @Nullable LispVal rareOperatorExpansion(LispCons cons, Environment env, String name) {
+		switch (name) {
+			case LispNames.HANDLER_CASE_INTERNAL, LispNames.DEFUN_INTERNAL, LispNames.DEFINITION_INTERNAL:
+				// macroexpand-1's answer for a natively-run CL macro, as a walker emits
+				// it
+				return builtinMacroExpansion(cons,
+						form -> java.util.Objects.requireNonNull(LispMacroExpander.foldNativeExpansion(form)));
+			case LispNames.CHANGE_CLASS:
+				return LispMacroExpander.expandChangeClass(resolveChangeClassDesignator(cons, env), this.closRegistry,
+						false);
+			case LispNames.ASYNC_QUALIFIED:
+				return builtinMacroExpansion(cons, LispMacroExpander::expandAsync);
+			case LispNames.ASYNC_DEFUN_QUALIFIED:
+				return builtinMacroExpansion(cons, LispMacroExpander::expandAsyncDefun);
+			case LispNames.ASYNC_LAMBDA_QUALIFIED:
+				return builtinMacroExpansion(cons, LispMacroExpander::expandAsyncLambda);
+			case LispNames.CCASE:
+				return builtinMacroExpansion(cons, LispMacroExpander::expandCcase);
+			case LispNames.RESTART_BIND:
+				ensureRestartRuntimeLoaded();
+				return builtinMacroExpansion(cons, LispMacroExpander::expandRestartBind, false);
+			case LispNames.WITH_SIMPLE_RESTART:
+				ensureRestartRuntimeLoaded();
+				return builtinMacroExpansion(cons, LispMacroExpander::expandWithSimpleRestart, false);
+			case LispNames.TIME:
+				return builtinMacroExpansion(cons, LispMacroExpander::expandTime);
+			case LispNames.FIFTH:
+				if (cons.properLength() != 2) {
+					break;
+				}
+				return builtinMacroExpansion(cons, LispMacroExpander::expandFifth);
+			case LispNames.SIXTH:
+				if (cons.properLength() != 2) {
+					break;
+				}
+				return builtinMacroExpansion(cons, LispMacroExpander::expandSixth);
+			case LispNames.SEVENTH:
+				if (cons.properLength() != 2) {
+					break;
+				}
+				return builtinMacroExpansion(cons, LispMacroExpander::expandSeventh);
+			case LispNames.EIGHTH:
+				if (cons.properLength() != 2) {
+					break;
+				}
+				return builtinMacroExpansion(cons, LispMacroExpander::expandEighth);
+			case LispNames.NINTH:
+				if (cons.properLength() != 2) {
+					break;
+				}
+				return builtinMacroExpansion(cons, LispMacroExpander::expandNinth);
+			case LispNames.TENTH:
+				if (cons.properLength() != 2) {
+					break;
+				}
+				return builtinMacroExpansion(cons, LispMacroExpander::expandTenth);
+			case LispNames.REMF:
+				return builtinMacroExpansion(cons, LispMacroExpander::expandRemf);
+			case LispNames.WITH_OPEN_FILE:
+				return builtinMacroExpansion(cons, LispMacroExpander::expandWithOpenFile);
+			case LispNames.PPRINT_LOGICAL_BLOCK:
+				return builtinMacroExpansion(cons, LispMacroExpander::expandPprintLogicalBlock);
+			case LispNames.PPRINT_POP:
+				return builtinMacroExpansion(cons, call -> LispMacroExpander.expandPprintPop());
+			case LispNames.PPRINT_EXIT_IF_LIST_EXHAUSTED:
+				return builtinMacroExpansion(cons, call -> LispMacroExpander.expandPprintExitIfListExhausted());
+			case LispNames.WITH_ARENA_QUALIFIED:
+				// A reclamation boundary for --no-gc; a real GC
+				// already reclaims, so the interpreter runs the body
+				// as a plain progn.
+				return builtinMacroExpansion(cons, LispMacroExpander::expandWithArena);
+			case LispNames.WITH_MUTEX_QUALIFIED:
+			case LispNames.WITH_LOCK_HELD_QUALIFIED:
+			case LispNames.WITH_RECURSIVE_LOCK_HELD_QUALIFIED:
+				// Acquire / body / release-on-every-exit;
+				// bordeaux-threads' with-lock-held is the same shape
+				// over the same primitives, and its recursive twin is
+				// the same again -- the shim's lock is reentrant.
+				return builtinMacroExpansion(cons, LispMacroExpander::expandWithMutex);
+			case LispNames.TORCH_NO_GRAD_QUALIFIED:
+				// The expansion let-binds torch::*grad-enabled*, so
+				// the library's defparameter must have declared it
+				// special BEFORE the let binds.
+				ensureTorchLoaded();
+				return builtinMacroExpansion(cons, LispMacroExpander::expandTorchNoGrad, false);
+			case LispNames.OBJC_WITH_AUTORELEASE_POOL_QUALIFIED:
+				return builtinMacroExpansion(cons, LispMacroExpander::expandObjcWithAutoreleasePool);
+			case LispNames.USOCKET_WITH_CLIENT_SOCKET_QUALIFIED:
+				return builtinMacroExpansion(cons, LispMacroExpander::expandUsocketWithClientSocket);
+			case LispNames.USOCKET_WITH_CONNECTED_SOCKET_QUALIFIED:
+			case LispNames.USOCKET_WITH_SERVER_SOCKET_QUALIFIED:
+				return builtinMacroExpansion(cons, LispMacroExpander::expandUsocketWithConnectedSocket);
+			case LispNames.USOCKET_WITH_SOCKET_LISTENER_QUALIFIED:
+				return builtinMacroExpansion(cons, LispMacroExpander::expandUsocketWithSocketListener);
+			case LispNames.USOCKET_GUARD_QUALIFIED:
+				return builtinMacroExpansion(cons, c -> LispMacroExpander.expandUsocketGuard(c, true));
+			case LispNames.DEFINE_MODIFY_MACRO:
+				return builtinMacroExpansion(cons, LispMacroExpander::expandDefineModifyMacro);
+			case LispNames.RESTART_CASE:
+				ensureRestartRuntimeLoaded();
+				return builtinMacroExpansion(cons, LispMacroExpander::expandRestartCase, false);
+			case LispNames.MAKE_CONDITION:
+				ensureConditionReportRuntimeLoaded();
+				return LispMacroExpander.expandMakeConditionWithRuntimeType(cons, this.closRegistry);
+			case LispNames.DOCUMENTATION:
+				return builtinMacroExpansion(cons, LispMacroExpander::expandDocumentation);
+			case LispNames.DECIMAL_PIECE_INTERNAL, LispNames.DECIMAL_PRINC_INTERNAL:
+				// ~D's leaves: the binding prelude defun only while a variable it
+				// binds is off its default, the plain conversion otherwise.
+				return LispMacroExpander.expandDecimalLeaf(cons,
+						!(currentSpecialValue(LispNames.PRINT_RADIX_VAR) instanceof LispNil)
+								|| !(currentSpecialValue(LispNames.PRINT_BASE_VAR) instanceof LispInteger base
+										&& base.value() == 10));
+			case LispNames.PRINT, LispNames.PRINC, LispNames.PRIN1, LispNames.PRINC_TO_STRING,
+					LispNames.PRIN1_TO_STRING, LispNames.WRITE_TO_STRING, LispNames.PRINC_PIECE_INTERNAL,
+					LispNames.PRIN1_PIECE_INTERNAL: {
+				// Routed through print-object only when the program defines a method on
+				// it, and through %print-cased only while a printer-control variable
+				// holds a non-default value; otherwise the ordinary Environment function
+				// runs, unchanged. The renderer is INLINED here rather than called as a
+				// generated defun: the interpreter re-expands per call, so it always sees
+				// the current method set (a defmethod may follow the first print). The
+				// control gate is the CURRENT VALUE rather than the compile paths'
+				// "the program mentions the variable" scan -- the interpreter has no
+				// whole-program pass to run one in -- and the two agree because
+				// %print-cased re-reads the variables itself.
+				LispCons checkedCall = StreamOperandChecks.checkedCall(cons);
+				if (checkedCall != cons) {
+					return checkedCall;
+				}
+				if (LispNames.WRITE_TO_STRING.equals(name) && cons.isProperList() && cons.toList().size() > 2) {
+					// A keyword tail binds the printer variables around the one-argument
+					// primitive, the same lowering both compilers take.
+					return LispMacroExpander.expandWriteToStringKeywords(cons);
+				}
+				if (LispNames.WRITE_TO_STRING.equals(name) && princConversionInEffect()) {
+					return new LispCons(new LispSymbol(LispNames.PRINC_TO_STRING), cons.cdr());
+				}
+				if (this.closRegistry.routesConditionReports()) {
+					// Already routing: only the freshness check, so a condition class
+					// defined between two prints renders through its report too.
+					ensureConditionReportRuntimeLoaded();
+				}
+				// The routing decision is taken BEFORE the argument is evaluated, and the
+				// torch library -- whose records carry (:print-object ...) methods -- is
+				// loaded lazily by that very evaluation. Without this the FIRST
+				// (print (torch:tensor ...)) of a session decides against a registry the
+				// method has not reached yet and renders the raw #S(...) form, while
+				// every
+				// later print routes. The same ordering seam as the torch:no-grad case
+				// above (.kb/torch.md); torch and geom are the only lazily loaded
+				// libraries that define a print-object method (geom's are on
+				// geom:node/geom:solid, .kb/geom.md) besides objc.lisp.
+				if (!this.torchLibraryLoaded && referencesTorch(cons)) {
+					ensureTorchLoaded();
+				}
+				if (!this.geomLibraryLoaded && referencesGeom(cons)) {
+					ensureGeomLoaded();
+				}
+				// objc.lisp's pointer types print through print-object methods too.
+				if (!this.objcLibraryLoaded && ObjcLibrary.references(java.util.List.of(cons))) {
+					ensureObjcLoaded();
+				}
+				boolean printControls = printControlsInEffect();
+				ensurePrintObjectRuntimeLoadedIfRouted(printControls);
+				LispVal hooked = LispMacroExpander.expandPrintObjectHook(cons, this.closRegistry, printControls);
+				if (hooked != null) {
+					return hooked;
+				}
+				break;
+			}
+			// complex is a real function now (Environment.registerComplex): no
+			// macro case here, so a call resolves to it like any other built-in.
+			// Both compilers route it through their complex implementations
+			// (JvmComplexCompiler, WasmComplexCompiler).
+			case LispNames.NE:
+				return builtinMacroExpansion(cons, LispMacroExpander::expandNumericNotEqual);
+			case LispNames.PARSE_INTEGER:
+				// The shared expansion carries the full keyword set and the second
+				// return value; the Environment function remains for first-class
+				// use (#'parse-integer).
+				return builtinMacroExpansion(cons, LispMacroExpander::expandParseInteger);
+			case LispNames.READ_FROM_STRING:
+				// More than the string is the prelude defun's whole lambda list, as on
+				// the compiled backends, while the name is still the built-in's; the
+				// one-argument call, and any call of a program's own definition, is an
+				// ordinary one.
+				if (cons.properLength() > 2 && resolveFunction(name) instanceof LispFunction bound
+						&& this.publishingBuiltins.contains(bound)) {
+					return builtinMacroExpansion(cons, LispMacroExpander::expandReadFromString, false);
+				}
+				return null;
+			// read has no case here and no Environment function: it is a prelude defun
+			// over read-char / unread-char / read-from-string (LispPreludeLibrary), so
+			// an ordinary function resolution loads it and #'read is that same defun.
+			case LispNames.MAKE_STRING:
+				return builtinMacroExpansion(cons, LispMacroExpander::expandMakeString);
+			case LispNames.WRITE_LINE:
+				// The shared bounds lowering carries :start / :end (the Environment
+				// function remains for the plain shape and for first-class use). No
+				// memo: the lowering mints fresh temps per call, and a bounded
+				// write-line is not hot enough to cache.
+				return LispMacroExpander.lowerWriteLineBounds(cons);
+			// REPLACE is intentionally NOT expanded here: the interpreter uses the
+			// destructive built-in (Environment) so a make-string buffer filled by
+			// successive replaces (cl-who's string-list-to-string) mutates in place.
+			// The compilers still expand it to a fresh concatenate (no runtime string
+			// mutation there; cl-who resolves it at macro-expansion time).
+			// CONSTANTP is not expanded here: the built-in function (Environment) reads
+			// the
+			// constants defined so far, which a memoized expansion would freeze.
+			case LispNames.SIMPLE_STRING_P:
+				return builtinMacroExpansion(cons, LispMacroExpander::expandSimpleStringP);
+			// make-broadcast-stream goes through the SAME expansion the compile paths
+			// use, so every broadcast stream -- with components or without -- is the
+			// Gray class on every backend from one definition. #'make-broadcast-stream
+			// is the catalog wrapper (BuiltinFunctionWrappers), which calls the same
+			// prelude entry.
+			case LispNames.MAKE_BROADCAST_STREAM:
+				return builtinMacroExpansion(cons, LispMacroExpander::expandMakeBroadcastStream);
+			case LispNames.PROG2:
+				return builtinMacroExpansion(cons, LispMacroExpander::expandProg2);
+			case LispNames.PSETQ:
+				return builtinMacroExpansion(cons, LispMacroExpander::expandPsetq);
+			case LispNames.PSETF:
+				return builtinMacroExpansion(cons, LispMacroExpander::expandPsetf);
+			case LispNames.TYPECASE:
+				ensureAsdfClassesFor(cons);
+				ensureGeomClassesFor(cons);
+				ensureObjcTypesFor(cons);
+				ensureUiopTypesFor(cons);
+				return LispMacroExpander.expandTypecase(cons, this.closRegistry);
+			case LispNames.ETYPECASE:
+				ensureAsdfClassesFor(cons);
+				ensureGeomClassesFor(cons);
+				ensureObjcTypesFor(cons);
+				ensureUiopTypesFor(cons);
+				return LispMacroExpander.expandEtypecase(cons, this.closRegistry);
+			case LispNames.CTYPECASE:
+				ensureAsdfClassesFor(cons);
+				ensureGeomClassesFor(cons);
+				ensureObjcTypesFor(cons);
+				ensureUiopTypesFor(cons);
+				return LispMacroExpander.expandCtypecase(cons, this.closRegistry);
+			case LispNames.CHECK_TYPE:
+				ensureAsdfClassesFor(cons);
+				ensureGeomClassesFor(cons);
+				ensureObjcTypesFor(cons);
+				ensureUiopTypesFor(cons);
+				return LispMacroExpander.expandCheckType(cons, this.closRegistry);
+			case LispNames.ASSERT:
+				return builtinMacroExpansion(cons, LispMacroExpander::expandAssert);
+			case LispNames.DECLARE:
+				return builtinMacroExpansion(cons, LispMacroExpander::expandDeclare);
+			case LispNames.DEFPACKAGE:
+				// A defpackage that is NOT a top-level form -- inside a defun body, an
+				// (eval-when ...), a macro expansion. The PackageResolver left it
+				// verbatim for exactly this moment: register it now, against the live
+				// registry, so the packages a helper function defines exist for
+				// everything evaluated after the call. resolve() is the whole
+				// registration (it is the same entry the top-level directive takes) and
+				// answers the package keyword the standard returns, which is exactly
+				// the "expansion" this form has. Its clause errors become the
+				// conditions CL names, which a handler around the form can catch.
+				return registerRuntimeDefpackage(cons);
+			case LispNames.IN_PACKAGE:
+				// Likewise: inside an (eval-when ...) or a macro expansion. It selects
+				// the
+				// package the forms after it resolve against, and expands to the
+				// assignment the top-level directive leaves.
+				try {
+					return this.packageResolver.resolve(cons);
+				}
+				catch (LispPackageException ex) {
+					return signalPackageError(String.valueOf(ex.getMessage()), cons.cdr() instanceof LispCons argument
+							? packageDesignator(LispNames.IN_PACKAGE, argument.car()) : "");
+				}
+			case LispNames.DECLAIM:
+				// (declaim (special ...)) proclaims specialness before the form
+				// collapses to nil; other declarations remain no-ops.
+				SpecialVarCollector.collectForm(cons, this.specialVars);
+				return builtinMacroExpansion(cons, LispMacroExpander::expandDeclaim, false);
+			case LispNames.PROCLAIM:
+				SpecialVarCollector.collectForm(cons, this.specialVars);
+				return builtinMacroExpansion(cons, LispMacroExpander::expandProclaim, false);
+			case LispNames.THE:
+				return builtinMacroExpansion(cons, LispMacroExpander::expandThe);
+			case LispNames.EVAL_WHEN:
+				return builtinMacroExpansion(cons, LispMacroExpander::expandEvalWhen);
+			case LispNames.FORMATTER:
+				return builtinMacroExpansion(cons, LispMacroExpander::expandFormatter);
+			case LispNames.WITH_COMPILATION_UNIT:
+				return builtinMacroExpansion(cons, LispMacroExpander::expandWithCompilationUnit);
+			case LispNames.LOCALLY:
+				markNotinlineCalls(cons);
+				return builtinMacroExpansion(cons, LispMacroExpander::expandLocally);
+			case LispNames.WITH_STANDARD_IO_SYNTAX:
+				return builtinMacroExpansion(cons, LispMacroExpander::expandWithStandardIoSyntax);
+			case LispNames.FLET:
+				return expandedPerSite(cons, () -> LispMacroExpander.expandFlet(preExpandLocalMacros(cons, env)));
+			case LispNames.LABELS:
+				return expandedPerSite(cons, () -> LispMacroExpander.expandLabels(preExpandLocalMacros(cons, env)));
+			case LispNames.MULTIPLE_VALUE_BIND:
+				return multipleValueConsumerExpansion(cons, LispMacroExpander::expandMultipleValueBind);
+			case LispNames.MULTIPLE_VALUE_LIST:
+			case LispNames.QUIET_MULTIPLE_VALUE_LIST_INTERNAL:
+				// %quiet-multiple-value-list is library source's multiple-value-list,
+				// and the interpreter always has the channel.
+				return multipleValueConsumerExpansion(cons, LispMacroExpander::expandMultipleValueList);
+			case LispNames.MULTIPLE_VALUE_CALL:
+				return multipleValueConsumerExpansion(cons, LispMacroExpander::expandMultipleValueCall);
+			case LispNames.NTH_VALUE:
+				return multipleValueConsumerExpansion(cons, LispMacroExpander::expandNthValue);
+			case LispNames.MULTIPLE_VALUE_SETQ:
+				return multipleValueConsumerExpansion(cons, LispMacroExpander::expandMultipleValueSetq);
+			case LispNames.MULTIPLE_VALUE_PROG1:
+				return multipleValueConsumerExpansion(cons, LispMacroExpander::expandMultipleValueProg1);
+			case LispNames.ROTATEF:
+				return builtinMacroExpansion(cons, LispMacroExpander::expandRotatef);
+			case LispNames.SHIFTF:
+				return builtinMacroExpansion(cons, LispMacroExpander::expandShiftf);
+			case LispNames.TYPEP:
+				seedMopClassesForTypepForm(cons);
+				ensureAsdfClassesFor(cons);
+				ensureGeomClassesFor(cons);
+				ensureObjcTypesFor(cons);
+				ensureUiopTypesFor(cons);
+				return LispMacroExpander.expandTypep(cons, this.closRegistry);
+			case LispNames.UPGRADED_COMPLEX_PART_TYPE:
+				return builtinMacroExpansion(cons, LispMacroExpander::expandUpgradedComplexPartType);
+			case LispNames.PRINT_UNREADABLE_OBJECT:
+				return builtinMacroExpansion(cons, c -> LispMacroExpander.expandPrintUnreadableObject(c, true));
+			case LispNames.PRINT_WITHOUT_READABLY_INTERNAL:
+				return builtinMacroExpansion(cons, c -> LispMacroExpander.expandPrintReadableLeaf(c, true));
+			case LispNames.WITH_OPEN_STREAM:
+				return builtinMacroExpansion(cons, c -> LispMacroExpander.expandWithOpenStream(c, true));
+			case LispNames.WITH_PACKAGE_ITERATOR:
+				return builtinMacroExpansion(cons, LispMacroExpander::expandWithPackageIterator);
+			case LispNames.WITH_HASH_TABLE_ITERATOR:
+				return builtinMacroExpansion(cons, LispMacroExpander::expandWithHashTableIterator);
+			case LispNames.DO_ALL_SYMBOLS:
+				return builtinMacroExpansion(cons, LispMacroExpander::expandDoAllSymbols);
+			case LispNames.PROG:
+				return builtinMacroExpansion(cons, c -> LispMacroExpander.expandProg(c, false));
+			case LispNames.PROG_STAR:
+				return builtinMacroExpansion(cons, c -> LispMacroExpander.expandProg(c, true));
+			case LispNames.SYMBOL_MACROLET:
+				// At top level its members are top-level forms: the rare table runs them.
+				return cons == this.topLevelForm.get() ? null : expandSymbolMacrolet(cons, env);
+			case LispNames.BYTE:
+				return builtinMacroExpansion(cons, LispMacroExpander::expandByte);
+			case LispNames.BYTE_SIZE:
+				return builtinMacroExpansion(cons, LispMacroExpander::expandByteSize);
+			case LispNames.BYTE_POSITION:
+				return builtinMacroExpansion(cons, LispMacroExpander::expandBytePosition);
+			case LispNames.LDB:
+				return builtinMacroExpansion(cons, LispMacroExpander::expandLdb);
+			case LispNames.MAKE_SEQUENCE:
+				return builtinMacroExpansion(cons, LispMacroExpander::expandMakeSequence);
+			case LispNames.DPB:
+				return builtinMacroExpansion(cons, LispMacroExpander::expandDpb);
+			case LispNames.DESTRUCTURING_BIND:
+				return builtinMacroExpansion(cons, LispMacroExpander::expandDestructuringBind);
+			case LispNames.FFLOOR:
+			case LispNames.FCEILING:
+			case LispNames.FROUND:
+			case LispNames.FTRUNCATE:
+				// (ffloor a [b]) -> (float (floor a [b])): the same exact quotient
+				// floor/ceiling/round/truncate already compute (the case above), with
+				// only the primary value floated. The remainder, reached only
+				// through a multiple-value consumer, is handled by
+				// LispMacroExpander#lowerMvProducer before this dispatch is ever
+				// reached.
+				return builtinMacroExpansion(cons, LispMacroExpander::expandFFamily);
+			case LispNames.LIST_STAR:
+				return builtinMacroExpansion(cons, LispMacroExpander::expandListStar);
+			case LispNames.ACONS:
+				return builtinMacroExpansion(cons, LispMacroExpander::expandAcons);
+			case LispNames.ELT:
+				return builtinMacroExpansion(cons, LispMacroExpander::expandElt);
+			case LispNames.VECTOR:
+				return builtinMacroExpansion(cons, LispMacroExpander::expandVector);
+			case LispNames.SVREF:
+				return builtinMacroExpansion(cons, LispMacroExpander::expandSvref);
+			case LispNames.ARRAY_RANK:
+				return builtinMacroExpansion(cons, LispMacroExpander::expandArrayRank);
+			case LispNames.ARRAY_DIMENSION:
+				return builtinMacroExpansion(cons, LispMacroExpander::expandArrayDimension);
+			case LispNames.ARRAY_TOTAL_SIZE:
+				return builtinMacroExpansion(cons, LispMacroExpander::expandArrayTotalSize);
+			case LispNames.ARRAY_ROW_MAJOR_INDEX:
+				return builtinMacroExpansion(cons, LispMacroExpander::expandArrayRowMajorIndex);
+			case LispNames.MAP_INTO:
+				return builtinMacroExpansion(cons, LispMacroExpander::expandMapInto);
+			case LispNames.RASSOC:
+				return builtinMacroExpansion(cons, LispMacroExpander::expandRassoc);
+			// The sequence/alist functions taking :test/:key evaluate through the
+			// shared macro expansion (like rassoc) so keyword handling matches the
+			// compilers exactly; the Environment/LispEvaluator registrations remain
+			// for first-class use (#'find etc.).
+			case LispNames.FIND:
+				return builtinMacroExpansion(cons, LispMacroExpander::expandFind);
+			case LispNames.FIND_IF:
+				return builtinMacroExpansion(cons, LispMacroExpander::expandFindIf);
+			case LispNames.FIND_IF_NOT:
+				return builtinMacroExpansion(cons, LispMacroExpander::expandFindIfNot);
+			case LispNames.POSITION:
+				return builtinMacroExpansion(cons, LispMacroExpander::expandPosition);
+			case LispNames.POSITION_IF:
+				return builtinMacroExpansion(cons, LispMacroExpander::expandPositionIf);
+			case LispNames.POSITION_IF_NOT:
+				return builtinMacroExpansion(cons, LispMacroExpander::expandPositionIfNot);
+			case LispNames.COMPLEMENT:
+				return builtinMacroExpansion(cons, LispMacroExpander::expandComplement);
+			case LispNames.COUNT:
+				return builtinMacroExpansion(cons, LispMacroExpander::expandCount);
+			case LispNames.REMOVE:
+				return builtinMacroExpansion(cons, LispMacroExpander::expandRemove);
+			case LispNames.DELETE:
+				return builtinMacroExpansion(cons, LispMacroExpander::expandDelete);
+			case LispNames.REMOVE_DUPLICATES:
+			case LispNames.DELETE_DUPLICATES:
+				return builtinMacroExpansion(cons, LispMacroExpander::expandRemoveDuplicates);
+			case LispNames.UNION:
+				return builtinMacroExpansion(cons, LispMacroExpander::expandUnion);
+			case LispNames.INTERSECTION:
+				return builtinMacroExpansion(cons, LispMacroExpander::expandIntersection);
+			case LispNames.SET_DIFFERENCE:
+				return builtinMacroExpansion(cons, LispMacroExpander::expandSetDifference);
+			case LispNames.ADJOIN:
+				return builtinMacroExpansion(cons, LispMacroExpander::expandAdjoin);
+			case LispNames.SUBSETP:
+				return builtinMacroExpansion(cons, LispMacroExpander::expandSubsetp);
+			case LispNames.SUBSTITUTE:
+				return builtinMacroExpansion(cons, LispMacroExpander::expandSubstitute);
+			case LispNames.NSUBSTITUTE:
+				return builtinMacroExpansion(cons, LispMacroExpander::expandNsubstitute);
+			case LispNames.SUBSTITUTE_IF:
+				return builtinMacroExpansion(cons, LispMacroExpander::expandSubstituteIf);
+			case LispNames.SUBSTITUTE_IF_NOT:
+				return builtinMacroExpansion(cons, LispMacroExpander::expandSubstituteIfNot);
+			case LispNames.NSUBSTITUTE_IF:
+				return builtinMacroExpansion(cons, LispMacroExpander::expandNsubstituteIf);
+			case LispNames.NSUBSTITUTE_IF_NOT:
+				return builtinMacroExpansion(cons, LispMacroExpander::expandNsubstituteIfNot);
+			case LispNames.REVAPPEND:
+				return builtinMacroExpansion(cons, LispMacroExpander::expandRevappend);
+			case LispNames.NRECONC:
+				return builtinMacroExpansion(cons, LispMacroExpander::expandNreconc);
+			case LispNames.MAP:
+				return builtinMacroExpansion(cons, (map) -> {
+					LispVal resolved = ConcatenateForms.resolvedMap(map, this.closRegistry);
+					return (resolved != map) ? resolved : LispMacroExpander.expandMap(map);
+				});
+			case LispNames.MAPLIST:
+				return builtinMacroExpansion(cons, LispMacroExpander::expandMaplist);
+			case LispNames.MAPCON:
+				return builtinMacroExpansion(cons, LispMacroExpander::expandMapcon);
+			case LispNames.MAPL:
+				return builtinMacroExpansion(cons, LispMacroExpander::expandMapl);
+			case LispNames.NOTANY:
+				return builtinMacroExpansion(cons, LispMacroExpander::expandNotany);
+			case LispNames.NOTEVERY:
+				return builtinMacroExpansion(cons, LispMacroExpander::expandNotevery);
+			case LispNames.REDUCE: {
+				// :from-end/:key lower to a plain reduce; other forms fall through to
+				// the native reduce builtin resolved below.
+				LispVal expandedReduce = LispMacroExpander.expandReduce(cons);
+				if (expandedReduce != null) {
+					return expandedReduce;
+				}
+				break;
+			}
+			case LispNames.SORT: {
+				// (sort seq pred :key ...) routes through stable-sort; a plain
+				// (sort seq pred) falls through to the native 2-argument builtin.
+				LispVal expandedSort = LispMacroExpander.expandSortWithKey(cons);
+				if (expandedSort != null) {
+					return expandedSort;
+				}
+				break;
+			}
+			default:
+				return NO_OPERATOR_ARM;
+		}
+		return null;
+	}
+
+	/**
+	 * The value half of {@link #evalCons}'s second operator table: the special forms,
+	 * definers and primitive calls that answer a VALUE (and so end the loop's frame),
+	 * answering {@link #NO_OPERATOR_ARM} for an operator it does not claim and
+	 * {@link #UNHANDLED} for the handful of arms that deliberately fall through to the
+	 * ordinary function call (a one-argument {@code floor}, a {@code coerce} to an
+	 * ordinary sequence type).
+	 *
+	 * <p>
+	 * The table is split for one reason: {@code evalCons} is the interpreter's innermost
+	 * method, and at 8209 bytecodes it sat just past HotSpot's {@code HugeMethodLimit}
+	 * (8000, enforced by the default {@code -XX:+DontCompileHugeMethods}), so it was
+	 * never JIT-compiled and every evaluated form ran through the bytecode interpreter --
+	 * worth 2.7x on an arithmetic-heavy workload. Keep every half clear of that limit
+	 * when adding operators; {@code LispEvaluatorHotMethodSizeTest} fails the build if
+	 * any crosses it.
+	 * @param cons the form being evaluated
+	 * @param env the environment
+	 * @param name the operator name
+	 * @param owner the owner of the calling frame's blocks, or null
+	 * @param deferTo the owner the calling frame's exits may hand their value form to, or
+	 * null ({@link #evalCons})
+	 * @return the value, {@link #UNHANDLED}, or {@link #NO_OPERATOR_ARM}
+	 */
+	private LispVal evalConsRareOperator(LispCons cons, Environment env, String name, @Nullable Environment owner,
+			@Nullable Environment deferTo) {
+		switch (name) {
+			case LispNames.PROGV:
+				return evalProgv(cons, env);
+			case LispNames.DEFUN:
+				return evalDefun(cons, env);
+			case LispNames.DEFMACRO:
+				return evalDefmacro(cons, env);
+			case LispNames.DEFSTRUCT:
+				return singleValue(evalDefstruct(cons, env));
+			case LispNames.DEFCLASS:
+				ensureAsdfClassesFor(cons);
+				ensureGeomClassesFor(cons);
+				ensureObjcTypesFor(cons);
+				return singleValue(evalDefclass(cons, env));
+			case LispNames.DEFGENERIC:
+				return singleValue(evalDefgeneric(cons, env));
+			case LispNames.DEFMETHOD:
+				ensureAsdfClassesFor(cons);
+				ensureGeomClassesFor(cons);
+				ensureObjcTypesFor(cons);
+				return singleValue(evalDefmethod(cons, env));
+			case LispNames.DEFVAR:
+				return evalDefvar(cons, env, false);
+			case LispNames.DEFPARAMETER:
+				return evalDefvar(cons, env, true);
+			case LispNames.DEFCONSTANT:
+				return evalDefconstant(cons, env);
+			case LispNames.ASDF_DEFSYSTEM:
+				// A special form: the system options are plain data,
+				// not evaluated.
+				return singleValue(evalDefsystem(cons));
+			case LispNames.SIGNAL_COND_INTERNAL:
+				return singleValue(evalSignalCond(cons, env));
+			case LispNames.ERROR_COND_INTERNAL:
+				return evalErrorCond(cons, env);
+			case LispNames.WIT_EXPORT_QUALIFIED:
+				return singleValue(evalWitExport(cons));
+			case LispNames.WIT_IMPORT_QUALIFIED:
+				return singleValue(evalWitImport(cons));
+			case LispNames.DEFTYPE:
+				return singleValue(evalDeftype(cons));
+			case LispNames.DEFINE_CONDITION: {
+				// A condition type is an ordinary CLOS-subset class;
+				// the :report form is registered for the
+				// error/signal/warn message building.
+				evalDefclass((LispCons) LispMacroExpander.defineConditionToDefclass(cons, this.closRegistry), env);
+				// The report renderer partitions the registry, so a
+				// new condition class makes the loaded one stale;
+				// rebuilding here keeps it in step.
+				ensureConditionReportRuntimeLoaded();
+				// CLHS define-condition answers the NAME (defclass the class).
+				return singleValue(cons.toList().get(1));
+			}
+			case LispNames.DEFINE_SETF_EXPANDER:
+				return singleValue(registerSetfExpander(cons));
+			case LispNames.DEFSETF:
+				return singleValue(registerDefsetf(cons));
+			case LispNames.DEFINE_COMPILER_MACRO:
+				return singleValue(evalDefineCompilerMacro(cons, env));
+			case LispNames.DEFINE_METHOD_COMBINATION:
+				return singleValue(evalDefineMethodCombination(cons));
+			case LispNames.MACROLET:
+				return evalMacrolet(cons, env, cons == this.topLevelForm.get());
+			case LispNames.SYMBOL_MACROLET:
+				return evalAtTopLevel(expandSymbolMacrolet(cons, env), env);
+			case LispNames.JAVA_NEW_QUALIFIED:
+			case LispNames.JAVA_CALL_QUALIFIED:
+			case LispNames.JAVA_STATIC_QUALIFIED:
+			case LispNames.JAVA_FIELD_QUALIFIED:
+				return evalJavaSite(cons, env, name);
+			case LispNames.HB_GUARD_INTERNAL:
+				return evalHbGuard(cons, env);
+			case LispNames.REPORTING_UNCAUGHT_INTERNAL:
+				return evalReportingUncaught(cons, env);
+			case LispNames.PROGRAM_ERROR_INTERNAL: {
+				// The lowered argument-shape rejection: a class-named error with no
+				// instance until a handler synthesizes one (LispEvalException.ofClass).
+				LispVal message = cons.cdr() instanceof LispCons rest ? eval(rest.car(), env) : LispNil.INSTANCE;
+				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+						message instanceof LispString s ? s.value() : message.display());
+			}
+			case LispNames.COMPILE_WARNING_INTERNAL:
+				return eval(cons.toList().get(2), env);
+			case LispNames.PARSE_ERROR_INTERNAL: {
+				// parse-integer's signal over a string that is no integer: the same
+				// class-named error the first-class built-in throws, its handler-bind
+				// handlers run here at the signal point as the built-in's are at the
+				// apply seam.
+				LispVal message = cons.cdr() instanceof LispCons rest ? eval(rest.car(), env) : LispNil.INSTANCE;
+				throw withHandlerBindHandlersRun(LispEvalException.ofClass(ClosRegistry.PARSE_ERROR_CLASS_NAME,
+						message instanceof LispString s ? s.value() : message.display()));
+			}
+			case LispNames.FILE_ERROR_INTERNAL: {
+				// (%file-error pathname message): the prelude file operations' signal, a
+				// file-error instance carrying the pathname as given.
+				List<LispVal> args = ((LispCons) cons.cdr()).toList();
+				LispVal pathname = eval(args.get(0), env);
+				LispVal message = eval(args.get(1), env);
+				String text = message instanceof LispString s ? s.value() : message.display();
+				throw new LispEvalException(text, ClosRegistry.newFileErrorCondition(pathname, new LispString(text)));
+			}
+			case LispNames.READ_SEQUENCE:
+				return singleValue(evalSequenceWithGrayDispatch(cons, env, true));
+			case LispNames.WRITE_SEQUENCE:
+				return singleValue(evalSequenceWithGrayDispatch(cons, env, false));
+			case LispNames.WRITE_CHAR:
+				return singleValue(evalWriteCharWithGrayDispatch(cons, env));
+			case LispNames.LOAD_TIME_VALUE:
+				return singleValue(evalLoadTimeValue(cons, env));
+			case LispNames.DO_EXTERNAL_SYMBOLS:
+			case LispNames.DO_SYMBOLS:
+				return evalDoSymbols(cons, env, name);
+			case LispNames.DEFINE_SYMBOL_MACRO:
+				return singleValue(evalDefineSymbolMacro(cons));
+			case LispNames.TAGBODY:
+				return singleValue(evalTagbody(cons, env, owner != null ? owner : deferTo));
+			case LispNames.GO: {
+				// A tag is a symbol or an integer (CLHS 5.3), keyed the way
+				// evalTagbody keys its label table.
+				String key = goTagKey((cons.cdr() instanceof LispCons tagCons) ? tagCons.car() : null);
+				if (key != null) {
+					throw new GoSignal(key);
+				}
+				throw new LispEvalException(LispNames.GO + " expects a tag: " + cons.print());
+			}
+			case LispNames.FLOOR:
+			case LispNames.CEILING:
+			case LispNames.ROUND:
+			case LispNames.TRUNCATE: {
+				// (floor a b), and the (floor (/ a b)) its lowering leaves behind: the
+				// quotient of the two operands, NOT of the double (/ a b) rounds them
+				// to. A float divides exactly here, so the quotient is the mathematical
+				// integer CLHS asks for at any magnitude -- a bignum past the long
+				// range, like every other numeric operator -- and the remainder beside
+				// it stays rem/mod (.kb/linalg-simd.md, "mod / rem and the floor
+				// family"). The one-argument
+				// form falls through to the ordinary built-in function.
+				LispVal[] operands = floorFamilyOperands(cons);
+				if (operands != null && cons.properLength() == 2) {
+					// (floor (/ a b)), one value: its remainder is that of the quotient.
+					return singleValue(evalFloorFamilyDivision(name, operands[0], operands[1], env));
+				}
+				// The FUNCTION publishes the remainder: a macro's expansion, or an exit
+				// a walk does not see, reaches a consumer from here.
+				break;
+			}
+			case LispNames.COERCE: {
+				// A packed (unsigned-byte 8|16|32) result type is the one designator
+				// expandCoerce cannot express (it collapses a compound spec to its head);
+				// the shared lowering answers the same %seq-int-vector call every backend
+				// uses (.kb/concatenate-result-families.md).
+				LispVal packed = ConcatenateForms.packedVectorCoerce(cons, this.closRegistry);
+				if (packed != null) {
+					return eval(packed, env);
+				}
+				return singleValue(evalSequenceCoerce(cons, env));
+			}
+			case LispNames.SEARCH:
+			case LispNames.MISMATCH:
+				// The ordinary function call, with a native scan in front of it: both are
+				// prelude defuns whose elt-per-element inner loop costs the interpreter
+				// ~2.5 us per element PAIR. The arm declines to this same call.
+				return singleValue(evalSequenceScan(cons, env, name));
+			case LispNames.READ:
+			case LispNames.READ_PRESERVING_WHITESPACE:
+			case LispNames.READ_DELIMITED_LIST:
+			case LispNames.RT_READ_AS_INTERNAL:
+				// The prelude defun, with the readtable-honoring read of a string stream
+				// in front of it (.kb/readtables.md). The arm declines to this same call.
+				return singleValue(evalReadCall(cons, env, name));
+			default:
+				return NO_OPERATOR_ARM;
+		}
+		return UNHANDLED;
+	}
+
+	/**
+	 * The dividend and divisor of a two-argument {@code floor}-family call, or of the
+	 * {@code (/ a b)} its single-value and multiple-value lowerings leave behind.
+	 * {@code null} for the plain one-argument form, which the built-in function answers.
+	 */
+	static LispVal @Nullable [] floorFamilyOperands(LispCons cons) {
+		if (!cons.isProperList()) {
+			return null;
+		}
+		List<LispVal> parts = cons.toList();
+		if (parts.size() == 3) {
+			return new LispVal[] { parts.get(1), parts.get(2) };
+		}
+		if (parts.size() == 2 && parts.get(1) instanceof LispCons inner && inner.isProperList()
+				&& inner.car() instanceof LispSymbol op && LispNames.DIV.equals(plainName(op.name()))) {
+			List<LispVal> divParts = inner.toList();
+			if (divParts.size() == 3) {
+				return new LispVal[] { divParts.get(1), divParts.get(2) };
+			}
+		}
+		return null;
+	}
+
+	/**
+	 * Evaluates a {@code floor}-family call over a dividend and a divisor. A float
+	 * operand takes the exact route ({@link ExactRounding}); everything else divides
+	 * first and rounds the quotient, which is exact already for integers and ratios.
+	 */
+	private LispVal evalFloorFamilyDivision(String name, LispVal dividendForm, LispVal divisorForm, Environment env) {
+		LispVal dividend = eval(dividendForm, env);
+		LispVal divisor = eval(divisorForm, env);
+		try {
+			LispVal exact = ExactRounding.quotient(dividend, divisor, ExactRounding.mode(name));
+			if (exact != null) {
+				return exact;
+			}
+			return Environment.roundToInteger(name, applyGlobalFunction(LispNames.DIV, dividend, divisor));
+		}
+		catch (OperandTypeException e) {
+			// The division is the rounding operator's own step (the compiled backends
+			// emit it as one helper call under that operator).
+			throw e.named(name);
+		}
+	}
+
+	/** Calls a global built-in on already-evaluated arguments. */
+	private LispVal applyGlobalFunction(String name, LispVal... args) {
+		if (this.globalEnv.lookupFunctionOrNull(name) instanceof LispFunction fn) {
+			return fn.body().apply(List.of(args));
+		}
+		throw new LispEvalException("Undefined function: " + name);
+	}
+
+	/**
+	 * The form a DIRECT call of a wrapped built-in evaluates in place of the call when
+	 * its argument count is one the operator's shape rules out: the arguments, then the
+	 * {@code program-error} every backend reports ({@link BuiltinCallArity}). A name the
+	 * program defines itself keeps its own call path, as on the compiled backends.
+	 * @param cons the call
+	 * @param name the operator's name
+	 * @param properLength the call form's length, operator included
+	 * @return the signalling form, or {@code null} when the count fits
+	 */
+	private @Nullable LispVal wrongCountCall(LispCons cons, String name, int properLength) {
+		BuiltinCallArity.Shape shape = BuiltinCallArity.of(name);
+		if (shape == null || properLength < 1 || shape.accepts(properLength - 1)
+				|| this.globalEnv.lookupFunctionOrNull(name) instanceof LispLambda) {
+			return null;
+		}
+		return BuiltinCallArity.wrongCountSignal(cons);
+	}
+
+	/**
+	 * Notes on a call's head that no operator arm, macro or compiler macro claimed its
+	 * name ({@link CallNote}), once the name resolved to its binding in the global
+	 * function namespace.
+	 * @param cons the call
+	 * @param head its head
+	 * @param epoch the {@link #callSiteEpoch} read before the call was classified
+	 * @param properLength the call's length, operator included
+	 * @param function the function the head resolved to
+	 */
+	private void noteCall(LispCons cons, LispSymbol head, int epoch, int properLength, LispVal function) {
+		FunctionCell cell = this.globalEnv.functionCell(head.name());
+		BuiltinCallArity.Shape shape = BuiltinCallArity.of(head.name());
+		if (cell != null && cell.value() == function && (shape == null || shape.accepts(properLength - 1))) {
+			cell.calledOrdinarily();
+			if (mayNote(head)) {
+				head.evaluatorNote(new CallNote(this.noteOwner, epoch, cell.index(), shape, cons, properLength));
+			}
+		}
+	}
+
+	/**
+	 * Whether a head symbol may take a new note for its form: not while it carries a
+	 * current {@link CallNote}, {@link ExpansionNote} or {@link LetNote} of this
+	 * evaluator's for another form. A symbol many forms share -- the reader's backquote
+	 * heads ({@code ReaderSymbols}) -- keeps its first site's, and every other site of it
+	 * asks the name's note or the memo, rather than each overwriting the next.
+	 * @param head the head symbol
+	 * @return whether its note is free to take
+	 */
+	private boolean mayNote(LispSymbol head) {
+		Object note = head.evaluatorNote();
+		int epoch = this.callSiteEpoch;
+		return !(note instanceof CallNote call && call.owner() == this.noteOwner && call.epoch() == epoch)
+				&& !(note instanceof ExpansionNote expansion && expansion.owner() == this.noteOwner
+						&& expansion.epoch() == epoch)
+				&& !(note instanceof LetNote let && let.owner() == this.noteOwner
+						&& let.epoch() == this.specialVars.epoch())
+				&& !(note instanceof PlaceNote place && place.owner() == this.noteOwner
+						&& place.epoch() == placeEpoch());
+	}
+
+	/**
+	 * The binding a call's head names when the head carries this evaluator's current
+	 * {@link CallNote} and the call's count is one the name's shape accepts.
+	 * @param head the call's head
+	 * @param properLength the call form's length, operator included
+	 * @return the binding, or null when the call is to be classified
+	 */
+	private FunctionCell.@Nullable Binding notedBinding(LispSymbol head, int properLength) {
+		return head.evaluatorNote() instanceof CallNote note && note.owner() == this.noteOwner
+				&& note.epoch() == this.callSiteEpoch
+				&& (note.shape() == null || note.shape().accepts(properLength - 1))
+						? this.globalEnv.functionCellAt(note.cell()).binding() : null;
+	}
+
+	/**
+	 * The expansion of a built-in macro form through {@link #builtinMacroExpansions}:
+	 * computed once per call site and re-evaluated thereafter, like a {@code defmacro}
+	 * call ({@link #expandUserMacro}) and like the compile backends. Callers may only
+	 * pass an expander that is a pure function of the form -- see the memo field's
+	 * contract and {@code .kb/interpreter-expansion-memo.md}. The expander runs outside
+	 * any lock (an expansion may recurse into the reader or another expansion); two
+	 * threads racing on one call site both expand and the last write wins, a wasted
+	 * expansion rather than a wrong answer. The EVALUATION -- the expansion replaces the
+	 * form in {@link #evalCons}'s loop -- is outside it too: the expansion is a whole
+	 * program, and a program can hand over to another thread (the macOS main thread, a
+	 * socket read) that then needs the memo itself.
+	 * @param cons the macro call form
+	 * @param expander the pure syntactic expansion of one built-in macro
+	 * @return the (memoized) expansion
+	 */
+	private LispVal builtinMacroExpansion(LispCons cons, java.util.function.Function<LispCons, LispVal> expander) {
+		return builtinMacroExpansion(cons, expander, true);
+	}
+
+	/**
+	 * The expansion of a read-modify-write macro ({@code incf}, {@code push}, ...): over
+	 * a user setf place, the one through the place's setf expansion
+	 * ({@link #expandModifyUserPlace}), kept per site like a {@code setf}'s
+	 * ({@link #placeEpoch}); over any other place, the built-in one.
+	 * @param cons the macro call form
+	 * @param expander the built-in expansion
+	 * @return the expansion
+	 */
+	private LispVal modifyMacroExpansion(LispCons cons, java.util.function.Function<LispCons, LispVal> expander) {
+		if (!this.setfExpanders.isEmpty()) {
+			int epoch = placeEpoch();
+			LispVal kept = memoizedSetfExpansion(cons, epoch);
+			if (kept != null) {
+				return kept;
+			}
+			LispVal userPlace = expandModifyUserPlace(cons);
+			if (userPlace != null) {
+				this.placeExpansions.put(cons, new PlaceExpansion(userPlace, epoch));
+				return userPlace;
+			}
+		}
+		return builtinMacroExpansion(cons, expander);
+	}
+
+	/**
+	 * {@link #builtinMacroExpansion(LispCons, java.util.function.Function)}, noting the
+	 * expansion on the form's head ({@link ExpansionNote}) unless the arm does more than
+	 * expand on every evaluation, which a call the note answers would skip.
+	 * @param cons the macro call form
+	 * @param expander the pure syntactic expansion of one built-in macro
+	 * @param noted whether the arm is the expansion alone
+	 * @return the (memoized) expansion
+	 */
+	private LispVal builtinMacroExpansion(LispCons cons, java.util.function.Function<LispCons, LispVal> expander,
+			boolean noted) {
+		return builtinMacroExpansion(cons, expander, noted, false);
+	}
+
+	/**
+	 * {@link #builtinMacroExpansion(LispCons, java.util.function.Function, boolean)}, for
+	 * an arm that takes the memo only while no multiple-value producer is methoded.
+	 * @param cons the macro call form
+	 * @param expander the pure syntactic expansion of one built-in macro
+	 * @param noted whether the arm is the expansion alone
+	 * @param producers whether the arm takes the memo only while
+	 * {@link #methodedProducerDispatch} is empty
+	 * @return the (memoized) expansion
+	 */
+	private LispVal builtinMacroExpansion(LispCons cons, java.util.function.Function<LispCons, LispVal> expander,
+			boolean noted, boolean producers) {
+		int epoch = this.callSiteEpoch;
+		BuiltinExpansion memo = this.builtinMacroExpansions.get(cons);
+		LispVal expansion;
+		if (memo == null) {
+			LispVal wrongCount = cons.car() instanceof LispSymbol head
+					? wrongCountCall(cons, head.name(), cons.properLength()) : null;
+			expansion = wrongCount != null ? wrongCount : expander.apply(cons);
+			this.builtinMacroExpansions.put(cons, new BuiltinExpansion(expansion, noted, producers));
+		}
+		else {
+			expansion = memo.expansion();
+		}
+		if (noted && cons.car() instanceof LispSymbol head && mayNote(head)) {
+			head.evaluatorNote(new ExpansionNote(this.noteOwner, epoch, cons, expansion, false));
+		}
+		return expansion;
+	}
+
+	/**
+	 * A built-in macro arm's memoized expansion of one form.
+	 *
+	 * @param expansion the expansion
+	 * @param expandsOnly whether the arm does nothing on each evaluation but expand
+	 * @param producers whether the arm takes it only while no multiple-value producer is
+	 * methoded
+	 */
+	record BuiltinExpansion(LispVal expansion, boolean expandsOnly, boolean producers) {
+	}
+
+	/**
+	 * The expansion a built-in macro arm that does nothing on each evaluation but expand
+	 * memoized for a form, while the arm takes it; null for any other form. A form's memo
+	 * holds whatever object its head is ({@link ExpansionNote} is per head object).
+	 * @param form the macro call
+	 * @return the expansion, or null
+	 */
+	@Nullable LispVal memoizedBuiltinExpansion(LispCons form) {
+		BuiltinExpansion memo = this.builtinMacroExpansions.get(form);
+		return memo != null && memo.expandsOnly() && (!memo.producers() || this.methodedProducerDispatch.isEmpty())
+				? memo.expansion() : null;
+	}
+
+	/**
+	 * A user macro call's memoized expansion while its macro is the name's and is one
+	 * whose calls the walk notes (no {@code &environment}, no installed expander); null
+	 * for any other form.
+	 * @param form the macro call
+	 * @param name the macro's name
+	 * @return the expansion, or null
+	 */
+	@Nullable LispVal memoizedUserExpansion(LispCons form, String name) {
+		UserMacro macro = this.userMacros.get(name);
+		if (macro == null || macro.environment() != null || macro.expander() != null) {
+			return null;
+		}
+		SiteExpansion cached = this.userMacroExpansions.get(form);
+		return cached != null && cached.macro() == macro ? cached.expansion() : null;
+	}
+
+	/**
+	 * A macro call's memoized expansion, kept on the call's head symbol
+	 * ({@link LispSymbol#evaluatorNote}) like a {@link CallNote}: {@link #evalCons}
+	 * answers a form whose head carries a current one with the expansion before it
+	 * classifies the operator, without a probe of the memo tables, whose entries miss the
+	 * cache on a big program ({@code .kb/interpreter-expansion-memo.md}, "The call-site
+	 * note"). Made only where the arm does nothing on each evaluation but expand, and
+	 * dropped by the {@link #callSiteEpoch} -- the macro tables, the methoded built-ins.
+	 *
+	 * @param owner the {@link #noteOwner} of the evaluator that made it
+	 * @param epoch the {@link #callSiteEpoch} it was made under
+	 * @param form the call, compared by identity: a head symbol two forms share notes one
+	 * @param expansion its expansion
+	 * @param userMacro whether a user macro expanded it, which a top-level form's call
+	 * evaluates as top-level forms instead
+	 */
+	record ExpansionNote(Object owner, int epoch, LispCons form, LispVal expansion, boolean userMacro) {
+	}
+
+	/**
+	 * {@code (rontolisp:wit-export "world.wit" :world name)}: the interpreter cannot
+	 * export anything, but it can still hold the program to the world's contract, so the
+	 * same mismatch a {@code --component} build would reject is caught by a plain
+	 * {@code rontolisp prog.lisp} run. The check therefore runs against the functions
+	 * defined <em>so far</em> -- put the directive at the end of the file (where the
+	 * scaffold puts it), after any {@code load} that defines the implementation.
+	 */
+	private LispVal evalWitExport(LispCons cons) {
+		WitExportDirective.Directive directive = WitExportDirective.parse(cons);
+		String resolved = SourceLoader.resolve(this.loadDirStack.peekLast(), directive.path());
+		WitSource source;
+		try {
+			source = WitFiles.read(this.sourceLoader, resolved);
+		}
+		catch (IOException ex) {
+			throw new LispEvalException(
+					LispNames.WIT_EXPORT_QUALIFIED + ": cannot read file " + resolved + ": " + ex.getMessage());
+		}
+		try {
+			WitExportDirective.lower(directive, source, this::exportedLambdaList, WitExportDirective.Backend.OTHER);
+		}
+		catch (UnsupportedOperationException ex) {
+			throw new LispEvalException(LispNames.WIT_EXPORT_QUALIFIED + ": " + ex.getMessage());
+		}
+		return LispNil.INSTANCE;
+	}
+
+	/**
+	 * {@code (rontolisp:wit-import "kv.wit" :interface "..." :package kv)}: binds the WIT
+	 * interface's functions as ordinary {@code defun}s dispatching through the
+	 * interface's provider ({@code rontolisp:wit-provide}, or a built-in one), and
+	 * defines the package that exports them. A special form, so the bindings exist for
+	 * the rest of the file -- put the directive at the top, before the code that calls
+	 * the interface.
+	 */
+	private LispVal evalWitImport(LispCons cons) {
+		WitImportDirective.Directive directive = WitImportDirective.parse(cons);
+		String resolved = SourceLoader.resolve(this.loadDirStack.peekLast(), directive.path());
+		WitSource source;
+		try {
+			source = WitFiles.read(this.sourceLoader, resolved);
+		}
+		catch (IOException ex) {
+			throw new LispEvalException(
+					LispNames.WIT_IMPORT_QUALIFIED + ": cannot read file " + resolved + ": " + ex.getMessage());
+		}
+		List<LispVal> bindings;
+		try {
+			// null drop filter: the interpreter binds a drop for every resource. It
+			// produces no artifact whose bytes have to stay identical, and a program may
+			// well reach a drop through funcall or eval.
+			bindings = WitImportDirective.lower(directive, source, WitExportDirective.Backend.OTHER, null, null);
+		}
+		catch (UnsupportedOperationException ex) {
+			throw new LispEvalException(LispNames.WIT_IMPORT_QUALIFIED + ": " + ex.getMessage());
+		}
+		ensureWitLoaded();
+		for (LispVal binding : bindings) {
+			// Through the resolver, so the synthesized (defpackage kv ...) registers and
+			// the kv:-qualified defun names that follow it resolve -- exactly what a
+			// hand-written defpackage in the source would do.
+			eval(this.packageResolver.resolve(binding), this.globalEnv);
+		}
+		return LispNil.INSTANCE;
+	}
+
+	// The lambda list of a global defun, in the shape WitExportDirective checks: the
+	// required parameters, plus a "&REST" marker when the function is variadic (an
+	// exported function must take required parameters only). A built-in (a LispFunction,
+	// not a LispLambda) is not a program-defined function, so it reads as undefined.
+	private @Nullable List<String> exportedLambdaList(String name) {
+		LispVal function = this.globalEnv.lookupFunctionOrNull(name);
+		if (!(function instanceof LispLambda lambda)) {
+			return null;
+		}
+		List<String> lambdaList = new ArrayList<>(lambda.params().size() + 1);
+		for (LispSymbol param : lambda.params()) {
+			lambdaList.add(param.name());
+		}
+		if (lambda.rest() != null) {
+			lambdaList.add("&REST");
+		}
+		return lambdaList;
+	}
+
+	private LispVal evalDefun(LispCons cons, Environment env) {
+		LispCons source = cons;
+		checkAwaitPlacement(cons);
+		if (treeContainsMacrolet(cons)) {
+			// A body carrying a macrolet is pre-expanded at DEFINITION time, like CL's
+			// compile-time expansion: the local macros' expander functions run under the
+			// defining package (a macro-time (intern ...) must home there, not in the
+			// caller's package -- ironclad's finalize-registers name synthesis), and the
+			// baked body no longer needs the local macros at call time.
+			LispVal expanded = UserMacroExpander.expandAll(cons, this);
+			if (expanded instanceof LispCons expandedCons) {
+				cons = expandedCons;
+			}
+		}
+		List<LispVal> parts = cons.toList();
+		LispVal nameForm = parts.get(1);
+		// (defun (setf name) ...): a setf-function. Install it under the mangled internal
+		// name %setf-name and register the place so (setf (name ...) v) dispatches to it.
+		LispSymbol setfPlace = LambdaLists.setfFunctionPlaceName(nameForm);
+		String funcName;
+		if (setfPlace != null) {
+			funcName = LispMacroExpander.setfFunctionName(setfPlace.name());
+			this.structAccessors.put(setfPlace.name(), LispMacroExpander.SETF_FUNCTION_MARKER);
+		}
+		else {
+			funcName = ((LispSymbol) nameForm).name();
+		}
+		// Native block/return-from: skip the lite name-dropping rewrite and instead
+		// wrap the body in a block named after the function, so (return-from name v)
+		// exits the function even from inside a do/loop (whose %block does not catch
+		// the named signal).
+		LambdaLists.Expanded expanded = LambdaLists.expand(parts.get(2), parts.subList(3, parts.size()), false,
+				setfPlace != null ? null : funcName);
+		LispSymbol blockNameSym = setfPlace != null ? setfPlace : (LispSymbol) nameForm;
+		List<LispVal> blockParts = new ArrayList<>();
+		blockParts.add(new LispSymbol(LispNames.BLOCK));
+		blockParts.add(blockNameSym);
+		blockParts.addAll(expanded.body());
+		LispVal blockForm = LispNil.INSTANCE;
+		for (int i = blockParts.size() - 1; i >= 0; i--) {
+			blockForm = new LispCons(blockParts.get(i), blockForm);
+		}
+		// A syntactic multiple-value producer (gethash/floor-family/find-symbol/
+		// intern/array-displacement) in the body's tail publishes through %mv-spill,
+		// so its secondary value survives the function return like a values tail
+		// does (defmethod bodies arrive here as defuns). The interpreter's spill
+		// global always exists, so no gate is needed; the compile paths run the same
+		// rewrite in LispMacroExpander.injectMvSpillGlobal. A lowered tail is registered
+		// so a later defmethod on the producer rewrites it (relowerProducerTails).
+		Map<String, String> dispatchers = this.methodedProducerDispatch;
+		LispVal rawBlockForm = blockForm;
+		LispVal renamedBlockForm = dispatchingMethodedProducers(blockForm, dispatchers);
+		blockForm = LispMacroExpander.spillEscapingMvProducers(renamedBlockForm);
+		if (blockForm != renamedBlockForm && blockForm instanceof LispCons holder) {
+			registerProducerTail(new ProducerTailSite(new java.lang.ref.WeakReference<>(holder), rawBlockForm, false),
+					dispatchers);
+		}
+		// defun installs into the global function namespace, capturing the current
+		// lexical environment, and returns the function name like Common Lisp.
+		// The funcName rides on the value so it prints #<function NAME>, the text both
+		// compiled backends answer from their function-name table (a defun's value is a
+		// lambda here, a funcId there -- the name is the one identity either keeps).
+		// Whether its body was read from a named file decides whether the uncaught
+		// report may name it (ConditionTrace): a library's function never does.
+		boolean sourced = LispTrees.anyCons(blockForm, form -> form instanceof LocatedCons);
+		this.globalEnv.defineFunction(funcName, new LispLambda(expanded.required(), expanded.rest(), List.of(blockForm),
+				env, funcName, sourced, readPackageOf(env)));
+		recordDefinition(funcName, source, parts);
+		return singleValue(nameForm);
+	}
+
+	/**
+	 * Writes down a definition's lambda list, documentation string and where it was read
+	 * ({@link #definitions}).
+	 * @param name the defined name
+	 * @param source the definition form as it reached the evaluator
+	 * @param parts the definition form: operator, name, lambda list, body
+	 */
+	private void recordDefinition(String name, LispCons source, List<LispVal> parts) {
+		if (parts.size() < 3) {
+			return;
+		}
+		String documentation = null;
+		for (int i = 3; i < parts.size() - 1; i++) {
+			LispVal form = parts.get(i);
+			if (form instanceof LispString doc) {
+				documentation = doc.value();
+				break;
+			}
+			if (!(form instanceof LispCons declaration && declaration.car() instanceof LispSymbol head
+					&& LispNames.DECLARE.equals(head.name()))) {
+				break;
+			}
+		}
+		this.definitions.put(name, definition(source, parts.get(2), documentation));
+	}
+
+	/**
+	 * Writes down the lambda list of a generic its first {@code defmethod} made: the
+	 * method's, as SBCL 2.2.9 derives it (CLHS 7.6.4) -- specializers dropped, an
+	 * {@code &optional} default and every supplied-p variable dropped (a defaulted
+	 * optional stays a one-element list), a {@code &key} parameter its variable or its
+	 * {@code ((keyword var))}, no {@code &aux}.
+	 * @param generic the generic's name
+	 * @param source the defmethod as written
+	 * @param method the defmethod, its name normalized
+	 */
+	private void recordImplicitGeneric(String generic, LispCons source, LispCons method) {
+		LispVal lambdaList = null;
+		for (LispVal part = method.cdr() instanceof LispCons rest ? rest.cdr()
+				: LispNil.INSTANCE; part instanceof LispCons cell; part = cell.cdr()) {
+			if (cell.car() instanceof LispCons || cell.car() instanceof LispNil) {
+				lambdaList = cell.car();
+				break;
+			}
+		}
+		if (lambdaList == null
+				|| !(lambdaList instanceof LispNil || lambdaList instanceof LispCons list && list.isProperList())) {
+			return;
+		}
+		List<LispVal> out = new ArrayList<>();
+		String section = null;
+		for (LispVal item : lambdaList instanceof LispCons list ? list.toList() : List.<LispVal>of()) {
+			if (item instanceof LispSymbol keyword && keyword.name().startsWith("&")) {
+				section = keyword.name();
+				if (!LispNames.LAMBDA_AUX.equals(section)) {
+					out.add(item);
+				}
+				continue;
+			}
+			if (LispNames.LAMBDA_AUX.equals(section)) {
+				continue;
+			}
+			if (section == null) {
+				out.add(item instanceof LispCons specialized ? specialized.car() : item);
+			}
+			else if (LispNames.LAMBDA_OPTIONAL.equals(section) && item instanceof LispCons entry) {
+				out.add(new LispCons(entry.car(), LispNil.INSTANCE));
+			}
+			else if (LispNames.LAMBDA_KEY.equals(section) && item instanceof LispCons entry) {
+				out.add(entry.car() instanceof LispCons ? new LispCons(entry.car(), LispNil.INSTANCE) : entry.car());
+			}
+			else {
+				out.add(item);
+			}
+		}
+		this.definitions.put(generic, definition(source, consListOf(out), null));
+	}
+
+	private static Definition definition(LispCons source, LispVal lambdaList, @Nullable String documentation) {
+		String operator = source.car() instanceof LispSymbol head ? LispSymbol.memberName(head.name()) : "DEFUN";
+		return source instanceof LocatedCons located && located.line() >= 1
+				? new Definition(operator, lambdaList, documentation, located.file(), located.line())
+				: new Definition(operator, lambdaList, documentation, null, 0);
+	}
+
+	/**
+	 * What the definition of a name wrote down, or null when no {@code defun},
+	 * {@code defmacro} or {@code defgeneric} this evaluator ran defined it.
+	 * @param name the canonical name
+	 * @return the definition
+	 */
+	@Nullable Definition definition(String name) {
+		return this.definitions.get(name);
+	}
+
+	private LispVal evalDefstruct(LispCons written, Environment env) {
+		// The form may be a macro's expansion, which no resolution saw with this package
+		// current. A body keeps the package it was read in, wherever it is called from.
+		String sitePackage = env.lexicalPackage();
+		LispCons cons = this.packageResolver.defstructInternedIn(written,
+				sitePackage != null ? sitePackage : this.packageResolver.currentPackageName());
+		String writtenName = cons.toList().get(1) instanceof LispCons header ? headerStructName(header)
+				: symbolNameOf(cons.toList().get(1));
+		boolean newStruct = writtenName != null && this.closRegistry.findStructTag(writtenName) == null;
+		// Expand into the generated defuns (constructor, predicate, copier, accessors)
+		// and evaluate each; the accessor registry makes them setf-able places.
+		for (LispVal form : LispMacroExpander.expandDefstruct(cons, this.structAccessors, this.closRegistry,
+				this.packageResolver::internedSpelling)) {
+			eval(form, env);
+			// A writable slot's accessor has its (setf accessor) function too. The
+			// compile path emits it only for a program that takes it; here it costs a
+			// binding, and defining it now keeps fboundp and fmakunbound exact.
+			if (form instanceof LispCons defun && defun.car() instanceof LispSymbol head
+					&& LispNames.DEFUN.equals(head.name()) && defun.cdr() instanceof LispCons rest
+					&& rest.car() instanceof LispSymbol accessor && LispMacroExpander.structWriterDefun(accessor.name(),
+							this.structAccessors, this.closRegistry) instanceof LispVal writer) {
+				eval(writer, env);
+			}
+		}
+		// A struct predicate bakes the descendant tags known when it was generated, so
+		// this (:include parent) definition has just widened every ancestor's tag set:
+		// redefine their predicates against the registry as it now stands, which is what
+		// makes (parent-p child) true even though the parent's defstruct came first.
+		String structName = cons.toList().get(1) instanceof LispCons header ? headerStructName(header)
+				: symbolNameOf(cons.toList().get(1));
+		if (structName != null) {
+			for (String ancestor : this.closRegistry.structAncestorNames(structName)) {
+				String predicateName = this.closRegistry.structPredicates().get(ancestor);
+				if (predicateName != null && !ancestor.equals(ClosRegistry.normalize(structName))) {
+					eval(LispMacroExpander.structPredicateDefun(ancestor, predicateName, this.closRegistry), env);
+				}
+			}
+		}
+		// Regenerate the dispatchers that test struct specializers (the struct-side
+		// twin of evalDefclass's regeneration): this struct may have widened a
+		// struct specializer's descendant tag set or the structure-object
+		// enumeration (sxql defines convert-for-sql's structure-object method in
+		// operator.lisp and the clause structs it must catch in clause.lisp).
+		// Every one when the struct was known before, as its ancestors may have changed,
+		// only those it can reach when it is new.
+		for (ClosRegistry.GenericInfo generic : this.closRegistry.generics().values()) {
+			if (newStruct && structName != null ? generic.dispatchesOverNewStruct(structName, this.closRegistry)
+					: generic.hasStructMethod(this.closRegistry)) {
+				regenerateDispatcher(generic.name(), env);
+			}
+		}
+		// defstruct returns the structure name, like Common Lisp.
+		return cons.toList().get(1);
+	}
+
+	private @Nullable String headerStructName(LispCons header) {
+		return symbolNameOf(header.car());
+	}
+
+	private @Nullable String symbolNameOf(LispVal form) {
+		return (form instanceof LispSymbol sym) ? sym.name() : null;
+	}
+
+	/**
+	 * Where each class waiting for a superclass was defined: its initforms close over
+	 * that environment once the last superclass finalizes it.
+	 */
+	private final Map<String, Environment> waitingClassEnvs = new HashMap<>();
+
+	private LispVal evalDefclass(LispCons cons, Environment env) {
+		// A redefinition replaces the class's layout; the instances it made obsolete are
+		// updated once the definition (and any class definition its hooks run) is done.
+		String definedName = cons.toList().size() > 1 && cons.toList().get(1) instanceof LispSymbol nameSym
+				? nameSym.name() : null;
+		LispLayout layoutBefore = definedName == null ? null : this.closRegistry.findClassLayout(definedName);
+		this.classDefinitionDepth++;
+		LispVal defined;
+		try {
+			defined = evalDefclassDefinition(cons, env);
+			LispLayout layoutAfter = definedName == null ? null : this.closRegistry.findClassLayout(definedName);
+			if (layoutBefore != null && layoutAfter != null
+					&& !layoutBefore.slotNames().equals(layoutAfter.slotNames())) {
+				this.redefinedLayouts.add(layoutAfter.tag());
+			}
+			if (definedName != null && this.closRegistry.isUnfinalized(definedName)) {
+				this.waitingClassEnvs.put(ClosRegistry.normalize(definedName), env);
+			}
+			// A class that waited for this one is defined now, where it was written.
+			for (LispCons finalizable = this.closRegistry
+				.nextFinalizableClass(); finalizable != null; finalizable = this.closRegistry.nextFinalizableClass()) {
+				String waitingName = ((LispSymbol) finalizable.toList().get(1)).name();
+				Environment waitingEnv = this.waitingClassEnvs.remove(ClosRegistry.normalize(waitingName));
+				evalDefclass(finalizable, waitingEnv != null ? waitingEnv : env);
+			}
+		}
+		finally {
+			this.classDefinitionDepth--;
+		}
+		if (this.classDefinitionDepth == 0) {
+			updateObsoleteInstances();
+		}
+		return defined;
+	}
+
+	private LispVal evalDefclassDefinition(LispCons cons, Environment env) {
+		// A defclass extending a seeded MOP base class (a metaclass definition, a
+		// slot-definition subclass) needs the seeding before the superclass lookup; one
+		// carrying (:metaclass M) additionally loads the metaclass protocol, whose
+		// driver the expansion below calls as its last generated form.
+		if (LispMacroExpander.defclassNamesMopBaseSuperclass(cons)) {
+			this.closRegistry.ensureMopClassesSeeded();
+		}
+		String newClassName = cons.toList().size() > 1 && cons.toList().get(1) instanceof LispSymbol written
+				&& this.closRegistry.findClass(written.name()) == null ? written.name() : null;
+		// A funcallable MOP class named as the metaclass or a superclass registers
+		// first, so the protocol below loads with its constructor.
+		int classesBefore = this.closRegistry.classes().size();
+		LispMacroExpander.seedMopClassesNamedBy(cons, this.closRegistry);
+		if (this.closRegistry.classes().size() != classesBefore) {
+			// What this class's metaclass protocol is about to call dispatches over the
+			// classes seeded just now: the first funcallable-standard-class instance is a
+			// standard-class one to shared-initialize.
+			regenerateClassDispatchers(env);
+		}
+		LispCons registered = cons;
+		String movedFrom = null;
+		if (LispMacroExpander.defclassUsesMetaclass(cons)) {
+			ensureMopProtocolLoaded();
+			if (cons.toList().get(1) instanceof LispSymbol defined) {
+				movedFrom = this.closRegistry.classMovedTo(defined.name());
+				newClassName = movedFrom == null ? newClassName : null;
+			}
+			// A REdefinition starts from what the previous driver-built metaobject knew
+			// about slot allocations: the static side below is registered before this
+			// definition's driver runs, and its hooks may write a class-allocated slot
+			// (contextl's singleton :reinitialize t), which must reach the shared cell.
+			LispInstance previous = cons.toList().get(1) instanceof LispSymbol defined
+					? this.closRegistry.memoizedClassMetaobject(defined.name()) : null;
+			LispCons carried = previous == null ? null : LispMacroExpander.withPreviousSlotAllocations(cons, previous);
+			if (carried != null) {
+				registered = carried;
+			}
+		}
+		// Expand into the generated defuns (constructor, readers/accessors) and
+		// evaluate each, then regenerate the dispatchers that test class specializers:
+		// the new class may extend one of their descendant tag sets.
+		LispVal driverMetaobject = null;
+		for (LispVal form : LispMacroExpander.expandDefclass(registered, this.closRegistry, this.structAccessors)) {
+			if (movedFrom != null && cons.toList().get(1) instanceof LispSymbol defined) {
+				this.closRegistry.moveDescendants(movedFrom, defined.name());
+				movedFrom = null;
+			}
+			LispVal value = eval(form, env);
+			if (isEnsureClassDriverCall(form)) {
+				driverMetaobject = value;
+			}
+		}
+		// A user initialize-instance :around may have INJECTED direct superclasses the
+		// static registration never saw (mito's dao-table-class pushes dao-class and the
+		// auto-pk/timestamp mixins). The driver-built metaobject is the truth, per AMOP;
+		// reconcile the static side -- layout, ancestors (typep/dispatch), constructor,
+		// accessors -- by re-registering the class with the metaobject's superclass
+		// list. The driver call itself is NOT re-run (its :arounds are user code).
+		if (driverMetaobject instanceof LispInstance metaobject) {
+			LispCons widened = LispMacroExpander.widenDefclassToMetaobjectSupers(cons, metaobject, this.closRegistry);
+			if (widened == null && registered != cons) {
+				// The carried allocations no longer hold: back to the form as written.
+				widened = cons;
+			}
+			if (widened != null) {
+				for (LispVal form : LispMacroExpander.expandDefclass(widened, this.closRegistry,
+						this.structAccessors)) {
+					if (!isEnsureClassDriverCall(form)) {
+						eval(form, env);
+					}
+				}
+				// The static re-registration invalidated the find-class memo; the
+				// driver-built metaobject stays the class's canonical view.
+				if (cons.toList().get(1) instanceof LispSymbol nameSym) {
+					this.closRegistry.registerClassMetaobject(nameSym.name(), metaobject);
+				}
+				// A slot the driver made class-allocated (contextl's singleton layer
+				// slots) has its shared cell only now: what finalization stored into the
+				// prototype's instance slot -- contextl's special-class :after shifts a
+				// class-allocated special slot's value into a special symbol -- missed
+				// the cell, so finalization runs again over the layout it now has. The
+				// compile paths emit the widened form, so their cell exists before the
+				// driver runs.
+				if (LispMacroExpander.widensSlotAllocations(registered, widened)) {
+					apply(resolveFunction(CLOSER_MOP_FINALIZE_INHERITANCE), List.of(metaobject), this.globalEnv);
+				}
+			}
+		}
+		// Every dispatcher when the class was known before, as its ancestors may have
+		// changed, only those it can reach when it is new.
+		ClosRegistry.ClassInfo newClass = newClassName == null ? null : this.closRegistry.findClass(newClassName);
+		for (ClosRegistry.GenericInfo generic : List.copyOf(this.closRegistry.generics().values())) {
+			if (newClass == null ? generic.hasClassMethod() : generic.dispatchesOverNewClass(newClass)) {
+				defineDispatcher(generic.name(), env);
+			}
+		}
+		// CLHS: defclass answers the class object, find-class's (lisp-binary binds a
+		// defparameter to it and hands it to moptilities' slot-names).
+		LispVal name = cons.toList().get(1);
+		if (name instanceof LispSymbol defined) {
+			// A class defined again after (setf (find-class name) nil) is found again.
+			this.closRegistry.clearFindClassOverride(defined.name());
+		}
+		LispVal metaobject = name instanceof LispSymbol sym ? this.closRegistry.classMetaobject(sym.name()) : null;
+		return metaobject != null ? metaobject : name;
+	}
+
+	private void regenerateClassDispatchers(Environment env) {
+		for (ClosRegistry.GenericInfo generic : List.copyOf(this.closRegistry.generics().values())) {
+			if (generic.hasClassMethod()) {
+				regenerateDispatcher(generic.name(), env);
+			}
+		}
+	}
+
+	/**
+	 * Regenerates a generic function's dispatcher for a change that is no definition of
+	 * the generic, a class or a struct its tests read: a name the program replaced or
+	 * retired since keeps what it has, and what a {@code #'name} taken from the generic
+	 * calls is the new dispatcher ({@link #genericDispatchers}).
+	 * @param genericName the generic-function name
+	 * @param env the environment to evaluate the dispatcher defun in
+	 */
+	private void regenerateDispatcher(String genericName, Environment env) {
+		LispVal dispatcher = this.genericDispatchers.get(genericName);
+		LispVal current = this.globalEnv.lookupFunctionOrNull(genericName);
+		if (dispatcher == null || current == dispatcher) {
+			defineDispatcher(genericName, env);
+			return;
+		}
+		this.globalEnv.defineFunction(genericName, dispatcher);
+		defineDispatcher(genericName, env);
+		if (current == null) {
+			this.globalEnv.undefineFunction(genericName);
+		}
+		else {
+			this.globalEnv.defineFunction(genericName, current);
+		}
+	}
+
+	/**
+	 * The metaclass protocol's {@code finalize-inheritance} generic, as it is defined.
+	 */
+	private static final String CLOSER_MOP_FINALIZE_INHERITANCE = "CLOSER-MOP:" + LispNames.FINALIZE_INHERITANCE;
+
+	/**
+	 * Whether the generated form is the metaclass-protocol driver call
+	 * ({@code %ensure-class-with-metaclass}) an {@code expandDefclass} of a
+	 * {@code :metaclass} defclass ends with.
+	 */
+	private static boolean isEnsureClassDriverCall(LispVal form) {
+		return form instanceof LispCons cons && cons.car() instanceof LispSymbol op
+				&& LispNames.ENSURE_CLASS_WITH_METACLASS.equals(plainName(op.name()));
+	}
+
+	/**
+	 * The macro-time-evaluator half of the injected-superclass reconciliation (see
+	 * {@code evalDefclass}): after this evaluator ran a {@code :metaclass} defclass, the
+	 * registered metaobject carries the direct superclasses a user
+	 * {@code initialize-instance :around} injected. The compile paths re-register the
+	 * class statically from the FORM, so {@code UserMacroExpander} asks here for the
+	 * widened spelling to emit instead; null when nothing was injected (or the form is
+	 * not a {@code :metaclass} defclass).
+	 * @param defclass the defclass form as the compile pipeline will see it
+	 * @return the widened defclass form, or null
+	 */
+	@Nullable public LispCons widenedMetaclassDefclassOrNull(LispCons defclass) {
+		if (!LispMacroExpander.defclassUsesMetaclass(defclass)) {
+			return null;
+		}
+		List<LispVal> parts = defclass.toList();
+		if (parts.size() < 2 || !(parts.get(1) instanceof LispSymbol nameSym)) {
+			return null;
+		}
+		LispInstance metaobject = this.closRegistry.isUnfinalized(nameSym.name()) ? null
+				: this.closRegistry.classMetaobject(nameSym.name());
+		if (metaobject == null) {
+			return null;
+		}
+		return LispMacroExpander.widenDefclassToMetaobjectSupers(defclass, metaobject, this.closRegistry);
+	}
+
+	private LispVal evalDefgeneric(LispCons cons, Environment env) {
+		LispCons source = cons;
+		// A (defgeneric (setf name) ...) rides the %setf- writer-generic convention.
+		cons = LispMacroExpander.normalizeSetfMethodForm(cons, this.structAccessors);
+		ensureGrayProtocolDeclared(cons);
+		if (LispMacroExpander.declaresMetaobjectClasses(cons)) {
+			ensureGfProtocolLoaded();
+		}
+		java.util.List<LispVal> methodDefuns = new java.util.ArrayList<>();
+		String generic = LispMacroExpander.registerDefgeneric(cons, this.closRegistry, methodDefuns);
+		for (LispVal defun : methodDefuns) {
+			eval(defun, env);
+		}
+		defineDispatcher(generic, env);
+		if (this.closRegistry.gfProtocol()) {
+			for (LispVal form : LispMacroExpander.genericProtocolForms(this.closRegistry.findGeneric(generic),
+					source.toList().get(1), this.closRegistry)) {
+				eval(form, env);
+			}
+		}
+		List<LispVal> parts = cons.toList();
+		if (parts.size() > 2) {
+			// a defgeneric's documentation is an option, not a body string
+			String documentation = null;
+			for (LispVal option : parts.subList(3, parts.size())) {
+				if (option instanceof LispCons pair && pair.car() instanceof LispSymbol key
+						&& ":DOCUMENTATION".equals(key.name()) && pair.cdr() instanceof LispCons value
+						&& value.car() instanceof LispString doc) {
+					documentation = doc.value();
+				}
+			}
+			this.definitions.put(generic, definition(source, parts.get(2), documentation));
+		}
+		return parts.get(1);
+	}
+
+	/**
+	 * Loads gray.lisp before a definition on one of its protocol generics, as the compile
+	 * paths splice it ahead of any program naming one: the method is then checked against
+	 * the generic's declared lambda list, never against one it established itself.
+	 */
+	private void ensureGrayProtocolDeclared(LispCons definition) {
+		if (!this.grayStreamsLoaded && definition.cdr() instanceof LispCons rest
+				&& rest.car() instanceof LispSymbol name && GrayStreamsLibrary.isProtocolGeneric(name.name())) {
+			ensureGrayStreamsLoaded();
+		}
+	}
+
+	private LispVal evalDefmethod(LispCons cons, Environment env) {
+		LispCons written = cons;
+		// A (defmethod (setf name) ...) rides the %setf- writer-generic convention, so
+		// it merges with any defclass :accessor writer methods on the same place.
+		cons = LispMacroExpander.normalizeSetfMethodForm(cons, this.structAccessors);
+		cons = withNextMethodMacrosExpanded(cons);
+		ensureGrayProtocolDeclared(cons);
+		if (SlotProtocol.isProtocolGenericName(cons.toList().get(1))) {
+			ensureSlotProtocolLoaded();
+		}
+		if (GenericFunctions.isMethodSetGenericName(cons.toList().get(1))) {
+			// A method on add-method / remove-method joins the protocol's own.
+			ensureGfProtocolLoaded();
+		}
+		ClosRegistry.GenericInfo before = this.closRegistry.findGeneric(((LispSymbol) cons.toList().get(1)).name());
+		if (before != null) {
+			before.methodDefined(null, LispNil.INSTANCE);
+		}
+		// Evaluate the generated method-body defun, then redefine the dispatcher so it
+		// sees the new method (calls by name always dispatch through the fresh one; a
+		// #'name captured earlier keeps the previous dispatcher).
+		eval(LispMacroExpander.expandDefmethod(cons, this.closRegistry), env);
+		String generic = ((LispSymbol) cons.toList().get(1)).name();
+		defineDispatcher(generic, env);
+		if (!this.definitions.containsKey(generic)) {
+			recordImplicitGeneric(generic, written, cons);
+		}
+		if (this.closRegistry.gfProtocol()) {
+			// A method on a generic whose defgeneric named its metaobject classes
+			// reaches add-method as a metaobject.
+			LispVal added = LispMacroExpander.staticMethodAdded(cons, this.closRegistry);
+			if (added != null) {
+				eval(added, env);
+			}
+		}
+		// The expansion may have REGISTERED a further generic (the
+		// instance-initialization protocol's shared-initialize) whose dispatcher does not
+		// exist yet; define any such dispatcher too.
+		for (ClosRegistry.GenericInfo info : this.closRegistry.generics().values()) {
+			if (this.globalEnv.lookupFunctionOrNull(info.name()) == null
+					&& !this.retiredFunctions.contains(info.name())) {
+				defineDispatcher(info.name(), env);
+			}
+		}
+		return cons.toList().get(1);
+	}
+
+	/**
+	 * Removes one method of a generic function and reinstalls its dispatcher: an editor
+	 * inspector's {@code [remove method]} ({@link SwankInspector}). There is no method
+	 * metaobject for {@code remove-method} to take (its prelude definition signals).
+	 * @param generic the generic function's name
+	 * @param key the method's key in {@link ClosRegistry.GenericInfo#methods()}
+	 */
+	void removeMethod(String generic, String key) {
+		ClosRegistry.GenericInfo info = this.closRegistry.findGeneric(generic);
+		if (info == null || info.methods().remove(key) == null) {
+			return;
+		}
+		info.methodShapes().remove(key);
+		info.inlineMethodKeys().remove(key);
+		defineDispatcher(info.name(), this.globalEnv);
+	}
+
+	/**
+	 * Installs (or reinstalls) a generic function's dispatcher defun, stashing the
+	 * Java-backed built-in of the same name first so it survives as the generic's default
+	 * method.
+	 * @param genericName the generic-function name
+	 * @param env the environment to evaluate the dispatcher defun in
+	 */
+	private void defineDispatcher(String genericName, Environment env) {
+		// The dispatcher's last-resort signal is a call of the shared
+		// %no-applicable-method defun (one AST shape on every backend), so define it --
+		// and seed the condition class its typed signal names -- before the first
+		// dispatcher that may reach it.
+		if (this.globalEnv.lookupFunctionOrNull(LispNames.NO_APPLICABLE_METHOD_RUNTIME) == null) {
+			this.closRegistry.ensureNoApplicableErrorSeeded();
+			eval(LispMacroExpander.noApplicableMethodDefun(), env);
+		}
+		boolean producerWasMethoded = this.methodedProducerDispatch.containsKey(genericName);
+		String fallback = builtinDefaultMethodFor(genericName);
+		LispVal previous = this.globalEnv.lookupFunctionOrNull(genericName);
+		// The dispatcher is a defun whose lambda list is the dispatch's: the generic
+		// keeps
+		// the one its definition wrote.
+		Definition written = this.definitions.get(genericName);
+		eval(DispatchChain.memoizing(LispMacroExpander.generateDispatcher(genericName, this.closRegistry, fallback)),
+				env);
+		if (written != null) {
+			this.definitions.put(genericName, written);
+		}
+		else {
+			this.definitions.remove(genericName);
+		}
+		if (previous instanceof LispInstance metaobject && isGenericFunctionMetaobject(metaobject)) {
+			// The name answers its generic function METAOBJECT (the generic-function
+			// protocol bound it): the metaobject stays the name's function and calls the
+			// new dispatcher.
+			LispVal dispatcher = this.globalEnv.lookupFunctionOrNull(genericName);
+			int staticSlot = metaobject.layout().slotNames().indexOf("%STATIC");
+			if (dispatcher != null && staticSlot >= 0) {
+				metaobject.setSlot(staticSlot, dispatcher);
+				this.globalEnv.defineFunction(genericName, metaobject);
+			}
+		}
+		installGrayOwnableDefault(genericName);
+		LispVal installed = this.globalEnv.lookupFunctionOrNull(genericName);
+		if (installed != null) {
+			this.genericDispatchers.put(genericName, installed);
+		}
+		String alias = this.methodedProducerDispatch.get(genericName);
+		if (alias != null) {
+			LispVal dispatcher = this.globalEnv.lookupFunctionOrNull(genericName);
+			if (dispatcher != null) {
+				this.globalEnv.defineFunction(alias, dispatcher);
+			}
+			if (!producerWasMethoded) {
+				// The alias is bound: the tails lowered before this first method can
+				// now call it.
+				relowerProducerTails();
+			}
+		}
+	}
+
+	/**
+	 * {@code equalp} here: the definition the compile paths splice
+	 * ({@link LispPreludeLibrary}), arm for arm, over the same operators. A predicate a
+	 * library tests with for every lookup is too hot to interpret (coalton's
+	 * substitutions compare type variables with it, 20% of its typechecker while it was
+	 * Lisp).
+	 */
+	private boolean equalp(LispVal a, LispVal b) {
+		LispVal left = a;
+		LispVal right = b;
+		while (left instanceof LispCons leftCons && right instanceof LispCons rightCons) {
+			if (!equalp(leftCons.car(), rightCons.car())) {
+				return false;
+			}
+			left = leftCons.cdr();
+			right = rightCons.cdr();
+		}
+		if (left instanceof LispInteger leftInteger && right instanceof LispInteger rightInteger) {
+			return leftInteger.value() == rightInteger.value();
+		}
+		if (isNumberValue(left) && isNumberValue(right)) {
+			return isTruthy(apply(resolveFunction(LispNames.EQ), List.of(left, right), this.globalEnv));
+		}
+		if (left instanceof LispString && right instanceof LispString) {
+			return isTruthy(apply(resolveFunction(LispNames.STRING_EQUAL), List.of(left, right), this.globalEnv));
+		}
+		if (left instanceof LispChar leftChar && right instanceof LispChar rightChar) {
+			return Character.toLowerCase(leftChar.codePoint()) == Character.toLowerCase(rightChar.codePoint());
+		}
+		if (left instanceof LispInstance leftInstance && right instanceof LispInstance rightInstance) {
+			if (LispEquality.eql(left, right)) {
+				return true;
+			}
+			if (!leftInstance.layout().tag().equals(rightInstance.layout().tag())
+					|| leftInstance.slotCount() != rightInstance.slotCount()) {
+				return false;
+			}
+			for (int i = 0; i < leftInstance.slotCount(); i++) {
+				if (!equalp(leftInstance.slot(i), rightInstance.slot(i))) {
+					return false;
+				}
+			}
+			return true;
+		}
+		if (isArrayValue(left) && isArrayValue(right)) {
+			return arraysEqualp(left, right);
+		}
+		return isTruthy(apply(resolveFunction(LispNames.EQUAL), List.of(left, right), this.globalEnv));
+	}
+
+	private static boolean isNumberValue(LispVal value) {
+		return value instanceof LispInteger || value instanceof LispBigInteger || value instanceof LispRatio
+				|| value instanceof LispDouble || value instanceof LispComplex;
+	}
+
+	private static boolean isArrayValue(LispVal value) {
+		return value instanceof LispArray || value instanceof LispFloatArray || value instanceof LispIntVector;
+	}
+
+	private boolean arraysEqualp(LispVal a, LispVal b) {
+		LispVal rankA = callOperator(LispNames.ARRAY_RANK, a);
+		LispVal rankB = callOperator(LispNames.ARRAY_RANK, b);
+		boolean vectors = rankA.equals(new LispInteger(1)) && rankB.equals(new LispInteger(1));
+		boolean sameShape = vectors ? callOperator(LispNames.LENGTH, a).equals(callOperator(LispNames.LENGTH, b))
+				: LispEquality.equal(callOperator(LispNames.ARRAY_DIMENSIONS, a),
+						callOperator(LispNames.ARRAY_DIMENSIONS, b));
+		if (!sameShape) {
+			return false;
+		}
+		LispVal count = callOperator(rankA.equals(new LispInteger(1)) ? LispNames.LENGTH : LispNames.ARRAY_TOTAL_SIZE,
+				a);
+		LispVal rowMajorAref = resolveFunction(LispNames.ROW_MAJOR_AREF);
+		for (long i = 0; i < ((LispInteger) count).value(); i++) {
+			LispInteger index = new LispInteger(i);
+			if (!equalp(apply(rowMajorAref, List.of(a, index), this.globalEnv),
+					apply(rowMajorAref, List.of(b, index), this.globalEnv))) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	private LispVal callOperator(String name, LispVal argument) {
+		return apply(resolveFunction(name), List.of(argument), this.globalEnv);
+	}
+
+	/**
+	 * The arm of a generic's dispatcher a call takes: what the shapes of its arguments
+	 * left to test ({@link DispatchChain.Selection}) in place of the walk down the chain.
+	 * @param chain the chain
+	 * @param env the call's environment
+	 * @return the form that replaces the chain in {@link #evalCons}'s loop
+	 */
+	LispVal dispatchChainArm(DispatchChain chain, Environment env) {
+		LispSymbol[] keys = chain.keys();
+		Object found = chain.root();
+		for (int i = 0; i < keys.length && found != null; i++) {
+			found = ((DispatchChain.Shapes) found).get(DispatchChain.shapeOf(evalSymbolRef(keys[i], env)));
+		}
+		DispatchChain.Selection selection = found != null ? (DispatchChain.Selection) found
+				: firstChainSelection(chain, env);
+		LispVal[] tests = selection.tests();
+		for (int i = 0; i < tests.length; i++) {
+			if (isTruthy(eval(tests[i], env))) {
+				return selection.arms()[i];
+			}
+		}
+		return selection.last();
+	}
+
+	DispatchChain.Selection firstChainSelection(DispatchChain chain, Environment env) {
+		LispSymbol[] keys = chain.keys();
+		Object[] shapes = new Object[keys.length];
+		for (int i = 0; i < keys.length; i++) {
+			shapes[i] = DispatchChain.shapeOf(evalSymbolRef(keys[i], env));
+		}
+		return chain.select(shapes, test -> isTruthy(eval(test, env)));
+	}
+
+	/**
+	 * The form with its calls of methoded multiple-value producers renamed onto their
+	 * dispatcher aliases ({@link #methodedProducerDispatch}); the form itself when the
+	 * program methods none. Applied to what a multiple-value lowering is about to read.
+	 * @param form the form a lowering will see
+	 * @return the form to hand it
+	 */
+	private LispVal dispatchingMethodedProducers(LispVal form) {
+		return dispatchingMethodedProducers(form, this.methodedProducerDispatch);
+	}
+
+	private static LispVal dispatchingMethodedProducers(LispVal form, Map<String, String> dispatchers) {
+		return dispatchers.isEmpty() ? form : ShadowedBuiltins.renameCallSites(form, dispatchers);
+	}
+
+	/**
+	 * Records a lowered producer tail ({@link #producerTailSites}). A site settled under
+	 * a methoded set that has grown since -- a {@code defmethod} ran between the lowering
+	 * and this registration -- is rewritten at once, so no interleaving leaves it on the
+	 * built-in's lowering.
+	 * @param site the site
+	 * @param settledUnder the {@link #methodedProducerDispatch} its form was settled
+	 * under
+	 */
+	private void registerProducerTail(ProducerTailSite site, Map<String, String> settledUnder) {
+		synchronized (this.producerTailSites) {
+			if (this.producerTailSites.size() >= this.producerTailSitePurgeAt) {
+				this.producerTailSites.removeIf(s -> s.holder().get() == null);
+				this.producerTailSitePurgeAt = Math.max(PRODUCER_TAIL_SITE_MIN_PURGE,
+						this.producerTailSites.size() * 2);
+			}
+			this.producerTailSites.add(site);
+			if (this.methodedProducerDispatch != settledUnder) {
+				relowerProducerTail(site);
+			}
+		}
+	}
+
+	/**
+	 * Rewrites every live lowered producer tail over the current
+	 * {@link #methodedProducerDispatch}: called once per producer name, when it gets its
+	 * first method and its dispatcher alias is bound, so a function defined before that
+	 * {@code defmethod} calls the dispatcher from its tail as one defined after it does.
+	 * The compile paths need none of this: they rename the whole program before lowering.
+	 */
+	private void relowerProducerTails() {
+		synchronized (this.producerTailSites) {
+			this.producerTailSites.removeIf(s -> s.holder().get() == null);
+			for (ProducerTailSite site : this.producerTailSites) {
+				relowerProducerTail(site);
+			}
+		}
+	}
+
+	private void relowerProducerTail(ProducerTailSite site) {
+		LispCons holder = site.holder().get();
+		if (holder == null) {
+			return;
+		}
+		LispVal settled = LispMacroExpander.spillEscapingMvProducers(dispatchingMethodedProducers(site.raw()));
+		if (site.wrapped()) {
+			holder.setCdr(new LispCons(settled, LispNil.INSTANCE));
+		}
+		else if (settled instanceof LispCons settledCons) {
+			// The (block name ...) a defun's body holds: its head and name are the raw
+			// form's, so only the forms after them change.
+			holder.setCar(settledCons.car());
+			holder.setCdr(settledCons.cdr());
+		}
+		// A body compiled from the old form compiles again. The epoch moves after the
+		// rewrite, so a compile under the new epoch reads the new form.
+		this.bodyRewriteEpoch++;
+	}
+
+	/**
+	 * A multiple-value consumer's expansion: memoized per call site
+	 * ({@link #builtinMacroExpansion}) while the program methods no producer, re-expanded
+	 * over the renamed form once it does -- the expansion then depends on
+	 * {@link #methodedProducerDispatch}, which a later {@code defmethod} can grow, and an
+	 * expansion memoized before that would keep the built-in's lowering.
+	 * @param cons the consumer form
+	 * @param expander its expansion
+	 * @return the expansion
+	 */
+	private LispVal multipleValueConsumerExpansion(LispCons cons,
+			java.util.function.Function<LispCons, LispVal> expander) {
+		if (this.methodedProducerDispatch.isEmpty()) {
+			return builtinMacroExpansion(cons, expander, true, true);
+		}
+		return expander.apply((LispCons) dispatchingMethodedProducers(cons));
+	}
+
+	/**
+	 * Stashes the built-in a generic function's dispatcher is about to shadow, so the
+	 * dispatcher's fall-through can call it: a program methoding a CL built-in name
+	 * (fast-io's {@code close}/{@code open-stream-p}/... methods on its stream classes)
+	 * must not lose the built-in behavior for every other argument -- in CL these are
+	 * generic functions whose standard methods a user method joins rather than replaces.
+	 *
+	 * <p>
+	 * A Java-backed built-in is a {@link LispFunction}; a user {@code defun} (a prelude
+	 * or library definition included) is a {@code LispLambda} and is deliberately left to
+	 * be shadowed, as is a name that is not defined yet. A HIT is memoized because the
+	 * dispatcher is regenerated on every {@code defmethod}: the second pass would
+	 * otherwise find nothing to stash and drop the default method. A MISS needs no memo
+	 * -- a dispatcher is itself a {@code LispLambda}, so re-probing a shadowed name keeps
+	 * answering null.
+	 * @param genericName the generic-function name
+	 * @return the internal name the built-in is stashed under, or null when the name has
+	 * no built-in to preserve
+	 */
+	private @Nullable String builtinDefaultMethodFor(String genericName) {
+		String stashed = this.builtinDefaultMethods.get(genericName);
+		if (stashed != null) {
+			return stashed;
+		}
+		if (!(this.globalEnv.lookupFunctionOrNull(genericName) instanceof LispFunction builtin)) {
+			return null;
+		}
+		String internal = LispMacroExpander.builtinDefaultMethodName(genericName);
+		this.globalEnv.defineFunction(internal, builtin);
+		this.builtinDefaultMethods.put(genericName, internal);
+		if (ShadowedBuiltins.loweredBuiltinFunctions().contains(genericName)) {
+			Set<String> methoded = new HashSet<>(this.methodedExpandedBuiltins);
+			methoded.add(genericName);
+			this.methodedExpandedBuiltins = Set.copyOf(methoded);
+			if (LispMacroExpander.isSyntacticMultipleValueProducerName(genericName)) {
+				Map<String, String> producers = new HashMap<>(this.methodedProducerDispatch);
+				producers.put(genericName, LispMacroExpander.shadowedDispatcherName(genericName));
+				this.methodedProducerDispatch = Map.copyOf(producers);
+			}
+			this.methodedEpoch++;
+			bumpCallSiteEpoch();
+		}
+		return internal;
+	}
+
+	/**
+	 * Evaluates {@code (do-external-symbols (var package [result]) body...)} and its
+	 * {@code do-symbols} sibling: iterates the designated package's symbols (canonically
+	 * spelled, in sorted order -- the registry records exports from {@code defpackage},
+	 * so this is the real listing, unlike the empty {@code with-package-iterator} lite).
+	 * The result form is evaluated with the variable bound to nil, per CL.
+	 * @param cons the form
+	 * @param env the environment
+	 * @param operator the operator name, which also selects the symbol source:
+	 * {@code do-external-symbols} takes the exports, {@code do-symbols} everything
+	 * accessible
+	 * @return the result form's value, or nil
+	 */
+	private LispVal evalDoSymbols(LispCons cons, Environment env, String operator) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 2 || !(parts.get(1) instanceof LispCons specCons) || specCons.toList().isEmpty()
+				|| !(specCons.toList().get(0) instanceof LispSymbol var)) {
+			throw new LispEvalException(operator + " expects ((var package [result]) body...): " + cons.print());
+		}
+		List<LispVal> spec = specCons.toList();
+		String designator = spec.size() >= 2 ? packageDesignator(operator, eval(spec.get(1), env))
+				: this.packageResolver.currentPackageName();
+		List<LispSymbol> symbols = LispNames.DO_SYMBOLS.equals(operator)
+				? this.packageResolver.accessibleSymbols(designator) : this.packageResolver.externalSymbols(designator);
+		// The implicit nil block every iteration macro establishes: a (return ...)
+		// in the body exits the whole form, skipping the result form.
+		Environment blockEnv = new Environment(env);
+		blockEnv.installBlock(NIL_BLOCK);
+		try {
+			for (LispSymbol sym : symbols) {
+				Environment iterEnv = new Environment(blockEnv);
+				iterEnv.define(var.name(), symbolOfSpelling(sym.name()));
+				for (LispVal bodyForm : parts.subList(2, parts.size())) {
+					eval(bodyForm, iterEnv);
+				}
+			}
+		}
+		catch (BlockReturnSignal signal) {
+			if (signal.target() == blockEnv) {
+				return signal.value();
+			}
+			throw signal;
+		}
+		if (spec.size() >= 3) {
+			Environment resultEnv = new Environment(blockEnv);
+			resultEnv.define(var.name(), LispNil.INSTANCE);
+			return eval(spec.get(2), resultEnv);
+		}
+		return singleValue(LispNil.INSTANCE);
+	}
+
+	/**
+	 * Internal rest parameter binding the whole unevaluated argument list of a macro
+	 * whose lambda list needs destructuring (see {@link #evalDefmacro}).
+	 */
+	private static final String MACRO_ARGS_VAR = "__macro_args";
+
+	/** The variable a macro's body finds its whole call form in ({@code &whole}). */
+	private static final String MACRO_WHOLE_VAR = "__macro_whole";
+
+	private LispVal evalDefmacro(LispCons cons, Environment env) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 3 || !(parts.get(1) instanceof LispSymbol name)) {
+			throw new LispEvalException(LispNames.DEFMACRO + " expects (defmacro name (params...) body...)");
+		}
+		if (PackageRegistry.isClSymbol(name.name())) {
+			throw new LispEvalException(LispNames.DEFMACRO + " cannot redefine the standard operator " + name.name());
+		}
+		putUserMacro(name.name(),
+				makeUserMacro(LispNames.DEFMACRO, name, parts.get(2), parts.subList(3, parts.size()), env));
+		recordDefinition(name.name(), cons, parts);
+		return singleValue(name);
+	}
+
+	/**
+	 * Registers a {@code (define-symbol-macro name expansion)}: from here on a reference
+	 * to {@code name} in a value position evaluates {@code expansion}, and a
+	 * {@code setq}/{@code setf} of it writes through {@code expansion} as a place. The
+	 * expansion form is stored UNEVALUATED -- it is code, re-evaluated at every
+	 * reference.
+	 * @param cons the define-symbol-macro form
+	 * @return the defined name
+	 */
+	private LispVal evalDefineSymbolMacro(LispCons cons) {
+		LispSymbol name = LispMacroExpander.defineSymbolMacroName(cons);
+		if (PackageRegistry.isClSymbol(name.name())) {
+			throw new LispEvalException(
+					LispNames.DEFINE_SYMBOL_MACRO + " cannot redefine the standard operator " + name.name());
+		}
+		this.globalSymbolMacros.put(name.name(), cons.toList().get(2));
+		return name;
+	}
+
+	/**
+	 * Registers a {@code define-compiler-macro}. A compiler macro is a HINT: CL lets an
+	 * implementation ignore one entirely, so every shape rontolisp cannot carry -- a
+	 * {@code (setf name)} function designator, a standard operator (which the shared
+	 * expander lowers on every backend before a compiler macro could see it), a lambda
+	 * list the macro machinery rejects -- is silently not registered rather than an
+	 * error.
+	 * @param cons the {@code (define-compiler-macro name (params...) body...)} form
+	 * @param env the defining environment
+	 * @return the name, like {@code defmacro}
+	 */
+	private LispVal evalDefineCompilerMacro(LispCons cons, Environment env) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 3 || !(parts.get(1) instanceof LispSymbol name) || PackageRegistry.isClSymbol(name.name())) {
+			return parts.size() >= 2 ? parts.get(1) : LispNil.INSTANCE;
+		}
+		try {
+			this.compilerMacros.put(name.name(), makeUserMacro(LispNames.DEFINE_COMPILER_MACRO, name, parts.get(2),
+					parts.subList(3, parts.size()), env));
+		}
+		catch (RuntimeException ex) {
+			this.compilerMacros.remove(name.name());
+		}
+		this.compilerMacroExpansions.clear();
+		bumpCallSiteEpoch();
+		return name;
+	}
+
+	/**
+	 * Whether a compiler macro is defined for the operator name.
+	 * @param name the canonical operator name
+	 * @return {@code true} when {@link #expandCompilerMacro} may rewrite a call to it
+	 */
+	public boolean hasCompilerMacro(String name) {
+		return this.compilerMacros.containsKey(name);
+	}
+
+	/**
+	 * Applies the call form's compiler macro ONCE, memoized by call-site identity.
+	 * Returns {@code form} itself -- the caller's signal to stop -- when the macro
+	 * declines, when its body signals, or when none is defined.
+	 *
+	 * <p>
+	 * Both escape hatches are load-bearing. The universal decline idiom is "return the
+	 * {@code &whole} parameter", and that parameter is a FRESHLY consed copy of the call,
+	 * so the comparison has to be on printed shape; an identity test would take the
+	 * expansion as progress and re-expand forever. And a body that signals (ironclad's
+	 * {@code make-digest} reaches for package objects at expansion time) must not fail
+	 * the program: CLHS explicitly permits ignoring a compiler macro, so a hint that
+	 * cannot be honoured is simply not honoured.
+	 * @param form the call form; its operator must be a symbol
+	 * @return the expansion, or {@code form} when the macro does not apply
+	 */
+	public LispVal expandCompilerMacro(LispCons form) {
+		return expandCompilerMacro(form, null);
+	}
+
+	private LispVal expandCompilerMacro(LispCons form, @Nullable Environment site) {
+		if (form.car() instanceof LispSymbol op && expandsPerScope(this.compilerMacros.get(op.name()))) {
+			return computeCompilerMacroExpansion(form, site);
+		}
+		LispVal cached = this.compilerMacroExpansions.get(form);
+		if (cached != null) {
+			return cached;
+		}
+		LispVal expansion = computeCompilerMacroExpansion(form, site);
+		this.compilerMacroExpansions.put(form, expansion);
+		return expansion;
+	}
+
+	/**
+	 * Records the calls a {@code (locally (declare (notinline f ...)) body...)} makes of
+	 * a function with a compiler macro, which then expands none of them (CLHS 3.2.2.1.3).
+	 * spinneret's {@code html} compiler macro expands to such a {@code locally} around a
+	 * call of {@code html}; expanding that call again never ended. A local function of
+	 * the name inside the body is not told apart, nor is a global {@code declaim}.
+	 * @param locally the {@code locally} form
+	 */
+	void markNotinlineCalls(LispCons locally) {
+		if (this.compilerMacros.isEmpty()) {
+			return;
+		}
+		Set<String> names = new HashSet<>();
+		LispVal body = locally.cdr();
+		for (; body instanceof LispCons cell && cell.car() instanceof LispCons declaration
+				&& declaration.car() instanceof LispSymbol head
+				&& LispNames.DECLARE.equals(head.name()); body = cell.cdr()) {
+			for (LispVal spec = declaration.cdr(); spec instanceof LispCons specCell; spec = specCell.cdr()) {
+				if (specCell.car() instanceof LispCons clause && clause.car() instanceof LispSymbol kind
+						&& LispNames.NOTINLINE.equals(kind.name())) {
+					for (LispVal item = clause.cdr(); item instanceof LispCons itemCell; item = itemCell.cdr()) {
+						if (itemCell.car() instanceof LispSymbol fn && this.compilerMacros.containsKey(fn.name())) {
+							names.add(fn.name());
+						}
+					}
+				}
+			}
+		}
+		if (!names.isEmpty()) {
+			markCalls(body, names);
+		}
+	}
+
+	private void markCalls(LispVal form, Set<String> names) {
+		if (!(form instanceof LispCons cons)) {
+			return;
+		}
+		if (cons.car() instanceof LispSymbol head) {
+			if (LispNames.isQuote(head.name())) {
+				return;
+			}
+			if (names.contains(head.name())) {
+				this.notinlineCalls.add(cons);
+			}
+		}
+		for (LispVal cursor = cons; cursor instanceof LispCons cell; cursor = cell.cdr()) {
+			markCalls(cell.car(), names);
+		}
+	}
+
+	/** The calls {@link #markNotinlineCalls} recorded, by identity. */
+	private final Set<LispCons> notinlineCalls = java.util.Collections
+		.synchronizedSet(java.util.Collections.newSetFromMap(new IdentityHashMap<>()));
+
+	private LispVal computeCompilerMacroExpansion(LispCons form, @Nullable Environment site) {
+		if (!(form.car() instanceof LispSymbol op) || this.notinlineCalls.contains(form)) {
+			return form;
+		}
+		UserMacro macro = this.compilerMacros.get(op.name());
+		if (macro == null) {
+			return form;
+		}
+		boolean savedMute = this.out.muted();
+		this.out.muted(true);
+		try {
+			LispVal expansion = withoutDebugger(() -> expandMacroCall(op.name(), macro, form, site));
+			return expansion.print().equals(form.print()) ? form : expansion;
+		}
+		catch (RuntimeException | StackOverflowError ex) {
+			return form;
+		}
+		finally {
+			this.out.muted(savedMute);
+		}
+	}
+
+	/**
+	 * Evaluates {@code (load-time-value form [read-only-p])} at most once per source
+	 * occurrence, memoized by the form's cons identity -- CL's contract for interpreted
+	 * code, and the same one {@code LispMacroExpander.hoistLoadTimeValues} gives the
+	 * compile path with a synthesized global. The memo holds a one-element list so a
+	 * {@code nil} result still counts as computed.
+	 */
+	private LispVal evalLoadTimeValue(LispCons cons, Environment env) {
+		List<LispVal> computed = this.loadTimeValues.get(cons);
+		if (computed != null) {
+			return computed.get(0);
+		}
+		LispVal value = eval(LispMacroExpander.expandLoadTimeValue(cons), env);
+		this.loadTimeValues.put(cons, List.of(value));
+		return value;
+	}
+
+	/**
+	 * Builds a {@link UserMacro} record from a {@code (name lambda-list body...)}
+	 * definition, shared by {@link #evalDefmacro} and {@link #evalMacrolet}. A native
+	 * "required + &rest/&body" lambda list is stored directly; any extended shape is
+	 * wrapped in a {@code destructuring-bind} over an internal rest parameter (validated
+	 * eagerly by a dry-run expansion) so both macro-expansion consumers destructure
+	 * identically. An {@code &environment} parameter (legal anywhere at the top level of
+	 * a macro lambda list) is stripped first; {@link #expandMacroCall} binds it.
+	 */
+	private static boolean spellsReturnFrom(List<LispVal> forms, LispSymbol name) {
+		for (LispVal form : forms) {
+			if (spellsReturnFrom(form, name)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private static boolean spellsReturnFrom(LispVal form, LispSymbol name) {
+		if (form instanceof LispCons head && head.car() instanceof LispSymbol operator
+				&& LispNames.RETURN_FROM.equals(operator.name()) && head.cdr() instanceof LispCons rest
+				&& rest.car() instanceof LispSymbol target && target.name().equals(name.name())) {
+			return true;
+		}
+		LispVal cursor = form;
+		while (cursor instanceof LispCons cons) {
+			if (spellsReturnFrom(cons.car(), name)) {
+				return true;
+			}
+			cursor = cons.cdr();
+		}
+		return false;
+	}
+
+	private UserMacro makeUserMacro(String op, LispSymbol name, LispVal paramForm, List<LispVal> body,
+			Environment env) {
+		List<LispVal> paramList = paramForm instanceof LispCons paramCons ? paramCons.toList() : List.of();
+		int envIndex = -1;
+		for (int i = 0; i < paramList.size(); i++) {
+			if (paramList.get(i) instanceof LispSymbol sym && LispNames.LAMBDA_ENVIRONMENT.equals(sym.name())) {
+				envIndex = i;
+				break;
+			}
+		}
+		if (envIndex >= 0) {
+			if (envIndex + 1 >= paramList.size() || !(paramList.get(envIndex + 1) instanceof LispSymbol envVar)
+					|| envVar.isLambdaListKeyword()) {
+				throw new LispEvalException(op + " " + name.name() + ": " + LispNames.LAMBDA_ENVIRONMENT
+						+ " must be followed by exactly one parameter symbol");
+			}
+			List<LispVal> stripped = new ArrayList<>(paramList);
+			stripped.remove(envIndex + 1);
+			stripped.remove(envIndex);
+			LispVal strippedForm = LispNil.INSTANCE;
+			for (int i = stripped.size() - 1; i >= 0; i--) {
+				strippedForm = new LispCons(stripped.get(i), strippedForm);
+			}
+			return makeUserMacro(op, name, strippedForm, body, env).withEnvironment(envVar);
+		}
+		// The body's implicit block, only for a body that leaves it: a block is a catch
+		// per expansion.
+		if (spellsReturnFrom(body, name)) {
+			List<LispVal> block = new ArrayList<>();
+			block.add(new LispSymbol(LispNames.BLOCK));
+			block.add(name);
+			block.addAll(body);
+			LispVal blockForm = LispNil.INSTANCE;
+			for (int i = block.size() - 1; i >= 0; i--) {
+				blockForm = new LispCons(block.get(i), blockForm);
+			}
+			body = List.of(blockForm);
+		}
+		// &whole var (first element, per CL; after the &environment strip so the two
+		// compose): bind var to the whole macro call form, the form itself
+		// (MACRO_WHOLE_VAR, so a declining expander answers it eq), and destructure the
+		// REMAINING pattern over the argument list as usual.
+		if (!paramList.isEmpty() && paramList.get(0) instanceof LispSymbol wholeKw
+				&& LispNames.LAMBDA_WHOLE.equals(wholeKw.name())) {
+			if (paramList.size() < 2 || !(paramList.get(1) instanceof LispSymbol wholeVar)
+					|| wholeVar.isLambdaListKeyword()) {
+				throw new LispEvalException(op + " " + name.name() + ": " + LispNames.LAMBDA_WHOLE
+						+ " must be followed by exactly one parameter symbol");
+			}
+			List<LispVal> stripped = paramList.subList(2, paramList.size());
+			LispVal strippedForm = LispNil.INSTANCE;
+			for (int i = stripped.size() - 1; i >= 0; i--) {
+				strippedForm = new LispCons(stripped.get(i), strippedForm);
+			}
+			LispSymbol argsVar = new LispSymbol(MACRO_ARGS_VAR);
+			LispVal wholeForm = new LispSymbol(MACRO_WHOLE_VAR);
+			List<LispVal> letParts = new ArrayList<>();
+			letParts.add(new LispSymbol(LispNames.LET));
+			letParts
+				.add(new LispCons(new LispCons(wholeVar, new LispCons(wholeForm, LispNil.INSTANCE)), LispNil.INSTANCE));
+			letParts.addAll(body);
+			LispVal letForm = LispNil.INSTANCE;
+			for (int i = letParts.size() - 1; i >= 0; i--) {
+				letForm = new LispCons(letParts.get(i), letForm);
+			}
+			List<LispVal> dbParts = new ArrayList<>();
+			dbParts.add(new LispSymbol(LispNames.DESTRUCTURING_BIND));
+			dbParts.add(strippedForm);
+			dbParts.add(argsVar);
+			dbParts.add(letForm);
+			LispVal wrapped = LispNil.INSTANCE;
+			for (int i = dbParts.size() - 1; i >= 0; i--) {
+				wrapped = new LispCons(dbParts.get(i), wrapped);
+			}
+			try {
+				LispMacroExpander.expandDestructuringBind((LispCons) wrapped);
+			}
+			catch (IllegalArgumentException ex) {
+				throw new LispEvalException(op + " " + name.name() + ": " + ex.getMessage());
+			}
+			return new UserMacro(List.of(), argsVar, List.of(wrapped), env, this.packageResolver.currentPackageName());
+		}
+		if (!isSimpleMacroLambdaList(paramList)) {
+			LispSymbol argsVar = new LispSymbol(MACRO_ARGS_VAR);
+			List<LispVal> dbParts = new ArrayList<>();
+			dbParts.add(new LispSymbol(LispNames.DESTRUCTURING_BIND));
+			dbParts.add(paramForm);
+			dbParts.add(argsVar);
+			dbParts.addAll(body);
+			LispVal wrapped = LispNil.INSTANCE;
+			for (int i = dbParts.size() - 1; i >= 0; i--) {
+				wrapped = new LispCons(dbParts.get(i), wrapped);
+			}
+			try {
+				// Dry-run the expansion to validate the lambda list at definition time
+				// (&whole/&environment and malformed specs signal here, not at first
+				// use).
+				LispMacroExpander.expandDestructuringBind((LispCons) wrapped);
+			}
+			catch (IllegalArgumentException ex) {
+				throw new LispEvalException(op + " " + name.name() + ": " + ex.getMessage());
+			}
+			return new UserMacro(List.of(), argsVar, List.of(wrapped), env, this.packageResolver.currentPackageName());
+		}
+		List<LispSymbol> required = new ArrayList<>();
+		LispSymbol rest = null;
+		for (int i = 0; i < paramList.size(); i++) {
+			LispSymbol param = (LispSymbol) paramList.get(i);
+			if (LispNames.LAMBDA_REST.equals(param.name()) || LispNames.LAMBDA_BODY.equals(param.name())) {
+				rest = (LispSymbol) paramList.get(i + 1);
+				break;
+			}
+			required.add(param);
+		}
+		return new UserMacro(required, rest, body, env, this.packageResolver.currentPackageName());
+	}
+
+	/**
+	 * Evaluates {@code (macrolet ((name lambda-list body...)...) body...)}: each local
+	 * macro is installed into the user-macro table for the dynamic extent of the body
+	 * evaluation (shadowing any outer macro of the same name, restored afterwards) and
+	 * the body is evaluated with the local macros active. Local macros are defined in the
+	 * global environment (CL's null lexical environment for macro functions), so their
+	 * bodies see global helpers but not the surrounding runtime bindings. Lite scoping
+	 * caveat: because the table is global for the extent, a function called from the body
+	 * that happens to reference a local macro name would also see it (same pre-existing
+	 * interpreter limitation as {@code flet}/{@code labels}); the compile path
+	 * (UserMacroExpander) is lexically correct.
+	 * @param topLevel whether the form is in a top-level position
+	 */
+	private LispVal evalMacrolet(LispCons cons, Environment env, boolean topLevel) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 2 || !(parts.get(1) instanceof LispCons || parts.get(1) instanceof LispNil)) {
+			throw new LispEvalException(LispNames.MACROLET + " expects a definition list");
+		}
+		List<LispVal> defs = parts.get(1) instanceof LispCons defsCons ? defsCons.toList() : List.of();
+		java.util.Map<String, UserMacro> saved = new java.util.HashMap<>();
+		java.util.Set<String> added = new java.util.HashSet<>();
+		for (LispVal def : defs) {
+			if (!(def instanceof LispCons defCons) || !defCons.isProperList() || defCons.toList().size() < 2
+					|| !(defCons.toList().get(0) instanceof LispSymbol name)) {
+				throw new LispEvalException(LispNames.MACROLET + " definition must be (name lambda-list body...)");
+			}
+			List<LispVal> dp = defCons.toList();
+			UserMacro macro = makeUserMacro(LispNames.MACROLET, name, dp.get(1), dp.subList(2, dp.size()),
+					this.globalEnv);
+			if (!added.contains(name.name()) && this.userMacros.containsKey(name.name())) {
+				saved.put(name.name(), this.userMacros.get(name.name()));
+			}
+			putUserMacro(name.name(), macro);
+			added.add(name.name());
+		}
+		try {
+			LispVal result = LispNil.INSTANCE;
+			for (LispVal bodyForm : parts.subList(2, parts.size())) {
+				result = evalMacroletForm(bodyForm, env, topLevel);
+			}
+			return result;
+		}
+		finally {
+			for (String n : added) {
+				if (saved.containsKey(n)) {
+					putUserMacro(n, saved.get(n));
+				}
+				else {
+					removeUserMacro(n);
+				}
+			}
+		}
+	}
+
+	/**
+	 * Keeps the function of a {@code define-method-combination}. A dispatcher runs it for
+	 * each of its branches ({@code macro/MethodCombinations.java}): over method objects,
+	 * as the form's body expects, whose places in the answer become the names of their
+	 * method-body defuns, and with the answer's macros expanded here, as a compile path
+	 * generates its dispatchers past its macro-time pass.
+	 */
+	private LispVal evalDefineMethodCombination(LispCons cons) {
+		if (!(cons.cdr() instanceof LispCons rest) || !(rest.car() instanceof LispSymbol name)) {
+			throw new LispEvalException(LispNames.DEFINE_METHOD_COMBINATION + " expects a name: " + cons.print());
+		}
+		LispVal function = eval(MethodCombinations.expanderLambda(cons), this.globalEnv);
+		this.closRegistry.registerMethodCombination(name.name(),
+				new LispFunction(name.name(), args -> effectiveMethodForm(function, args)));
+		return name;
+	}
+
+	private LispVal effectiveMethodForm(LispVal function, List<LispVal> args) {
+		java.util.Map<LispVal, LispVal> defuns = new java.util.IdentityHashMap<>();
+		List<LispVal> methods = new java.util.ArrayList<>();
+		for (LispVal entry : ((LispCons) args.get(2)).toList()) {
+			LispCons pair = (LispCons) entry;
+			LispVal method = this.closRegistry.methodObject(pair.cdr());
+			defuns.put(method, pair.car());
+			methods.add(new LispCons(method, pair.cdr()));
+		}
+		LispVal form = apply(function, List.of(args.get(0), args.get(1), valueList(methods), args.get(3)),
+				this.globalEnv);
+		return UserMacroExpander.expandAll(MethodCombinations.replaced(form, defuns), this);
+	}
+
+	/**
+	 * What the macro-time pass leaves of a {@code define-method-combination} it ran.
+	 * @param cons the form
+	 * @return the form for the backend's registry ({@link MethodCombinations#MARKER})
+	 */
+	LispVal methodCombinationMarker(LispCons cons) {
+		LispVal name = ((LispCons) cons.cdr()).car();
+		return consList(
+				List.of(new LispSymbol(MethodCombinations.MARKER), quotedValue(name), quotedValue(java.util.Objects
+					.requireNonNull(this.closRegistry.findMethodCombination(((LispSymbol) name).name())))));
+	}
+
+	/**
+	 * Evaluates a form of a {@code macrolet} body: a macro call is expanded until it is
+	 * not one, and the members of the {@code progn}, {@code eval-when} or {@code locally}
+	 * it became run in order, each expanded once the one before it has run (McCLIM's
+	 * {@code define} of a presentation type and then its methods, whose macro reads the
+	 * type). Anything else is pre-expanded with the local macros active BEFORE
+	 * evaluating: a form that only CAPTURES code (a defun/defgeneric method body) must
+	 * bake the expansion in now -- by the time the captured body runs, the local macros
+	 * are gone and the call would resolve as an undefined function (jzon's
+	 * {@code %coerced-fields-slots} inside its {@code coerced-fields} defgeneric).
+	 * @param topLevel whether the {@code macrolet} is in a top-level position, which its
+	 * body keeps (CLHS 3.2.3.1) and an {@code eval-when} there asks
+	 */
+	private LispVal evalMacroletForm(LispVal form, Environment env, boolean topLevel) {
+		LispVal expanded = inSitePackage(env, () -> UserMacroExpander.expandMacroCall(form, this));
+		if (expanded instanceof LispCons cons && cons.isProperList() && cons.car() instanceof LispSymbol head) {
+			switch (memberName(head.name())) {
+				case LispNames.PROGN:
+					return evalMacroletMembers(cons.toList().subList(1, cons.toList().size()), env, topLevel);
+				case LispNames.EVAL_WHEN:
+					if (topLevel) {
+						List<LispVal> members = LispMacroExpander.evalWhenMembers(cons);
+						return members == null ? eval(cons, env) : evalMacroletMembers(members, env, true);
+					}
+					return evalMacroletForm(LispMacroExpander.expandEvalWhen(cons), env, false);
+				case LispNames.LOCALLY:
+					return topLevel ? evalMacroletMembers(cons.toList().subList(1, cons.toList().size()), env, true)
+							: evalMacroletForm(LispMacroExpander.expandLocally(cons), env, false);
+				case LispNames.MACROLET:
+					return evalMacrolet(cons, env, topLevel);
+				case LispNames.SYMBOL_MACROLET:
+					if (topLevel) {
+						return evalMacroletForm(expandSymbolMacrolet(cons, env), env, true);
+					}
+					break;
+				default:
+					LispVal wrapped = topLevel ? LispMacroExpander.topLevelWrapperExpansion(cons) : null;
+					if (wrapped != null) {
+						return evalMacroletForm(wrapped, env, true);
+					}
+			}
+		}
+		return eval(expandAllAtSite(expanded, env), env);
+	}
+
+	private LispVal evalMacroletMembers(List<LispVal> members, Environment env, boolean topLevel) {
+		LispVal result = LispNil.INSTANCE;
+		for (LispVal member : members) {
+			result = evalMacroletForm(member, env, topLevel);
+		}
+		return result;
+	}
+
+	/**
+	 * Returns whether the macro lambda list is the native shape (required symbols plus an
+	 * optional trailing {@code &rest}/{@code &body} pair). Anything else -- a nested
+	 * pattern, {@code &optional}/{@code &key}/..., a non-symbol -- takes the
+	 * destructuring path.
+	 */
+	private static boolean isSimpleMacroLambdaList(List<LispVal> paramList) {
+		for (int i = 0; i < paramList.size(); i++) {
+			if (!(paramList.get(i) instanceof LispSymbol param)) {
+				return false;
+			}
+			if (param.isLambdaListKeyword()) {
+				return (LispNames.LAMBDA_REST.equals(param.name()) || LispNames.LAMBDA_BODY.equals(param.name()))
+						&& i + 2 == paramList.size() && paramList.get(i + 1) instanceof LispSymbol restParam
+						&& !restParam.isLambdaListKeyword();
+			}
+		}
+		return true;
+	}
+
+	/**
+	 * Installs a user macro: its call sites expand again, and so does a walk of any form
+	 * that may name it.
+	 * @param name the macro name
+	 * @param macro the macro
+	 */
+	private void putUserMacro(String name, UserMacro macro) {
+		this.userMacros.put(name, macro);
+		this.macroTableEpoch++;
+		bumpCallSiteEpoch();
+	}
+
+	/**
+	 * Drops a user macro.
+	 * @param name the macro name
+	 */
+	private void removeUserMacro(String name) {
+		if (this.userMacros.remove(name) != null) {
+			this.macroTableEpoch++;
+			bumpCallSiteEpoch();
+		}
+	}
+
+	/**
+	 * Runs {@code body} with every warning that reaches its report -- no handler muffled
+	 * it -- handed to {@code sink} instead of written to {@code *error-output*}: the
+	 * report's text (without the {@code WARNING: } label) and whether the condition is a
+	 * {@code style-warning}. The compile path's macro-time evaluator reports a warning a
+	 * macro signals while it expands this way, as a compile-time warning
+	 * ({@code UserMacroExpander}), and an editor's compile request its notes
+	 * ({@link CommonLispSwank}); the enclosing sink is restored afterwards. The sink is
+	 * the calling thread's: another thread's warnings still print.
+	 * @param <T> what the body produces
+	 * @param sink where the reports go
+	 * @param body the evaluation to run
+	 * @return what the body produced
+	 */
+	<T> T reportingWarningsTo(BiConsumer<String, Boolean> sink, java.util.function.Supplier<T> body) {
+		BiConsumer<String, Boolean> previous = this.macroTimeWarnings.get();
+		this.macroTimeWarnings.set(sink);
+		try {
+			return body.get();
+		}
+		finally {
+			this.macroTimeWarnings.set(previous);
+		}
+	}
+
+	/**
+	 * Whether a {@code %warn} designator
+	 * ({@link LispMacroExpander#expandWarnWithDesignator}) names a {@code style-warning}:
+	 * a class-name symbol by {@code subtypep}, a condition instance by {@code typep}; nil
+	 * or a string is a {@code simple-warning}.
+	 */
+	private boolean designatesStyleWarning(LispVal designator) {
+		LispSymbol styleWarning = new LispSymbol(ClosRegistry.STYLE_WARNING_CLASS_NAME);
+		if (designator instanceof LispNil || designator instanceof LispString) {
+			return false;
+		}
+		if (designator instanceof LispSymbol) {
+			return subtypep(designator, styleWarning);
+		}
+		LispVal test = new LispCons(new LispSymbol(LispNames.TYPEP),
+				new LispCons(quotedValue(designator), new LispCons(quotedValue(styleWarning), LispNil.INSTANCE)));
+		return !(eval(test, this.globalEnv) instanceof LispNil);
+	}
+
+	/**
+	 * Returns whether the given name is a user macro defined with {@code defmacro}.
+	 * @param name the operator name
+	 * @return {@code true} if a user macro of that name is defined
+	 */
+	public boolean isUserMacro(String name) {
+		return this.userMacros.containsKey(name);
+	}
+
+	/**
+	 * Returns the names of every user macro this evaluator holds, sorted -- the macro
+	 * table {@code UserMacroExpander} bakes into a compiled program so its
+	 * {@code macro-function} answers for the program's own macros too.
+	 * @return the sorted user macro names
+	 */
+	public List<String> userMacroNames() {
+		return this.userMacros.keySet().stream().sorted().toList();
+	}
+
+	/**
+	 * Returns the names {@code define-compiler-macro} registered, sorted -- the table
+	 * {@code UserMacroExpander} bakes into a compiled program for
+	 * {@code compiler-macro-function}.
+	 * @return the sorted compiler macro names
+	 */
+	public List<String> compilerMacroNames() {
+		return this.compilerMacros.keySet().stream().sorted().toList();
+	}
+
+	/**
+	 * Carries out a one-pair {@code (setf (macro-function name) function)}: the name and
+	 * the value evaluate here, and the function is the macro's expander from now on, also
+	 * for the compile paths, whose macro table is this evaluator's
+	 * ({@link UserMacroExpander}).
+	 * @param cons the setf form
+	 * @param env the environment the form evaluates in
+	 * @return the value the setf answers
+	 */
+	private LispVal writeMacroFunction(LispCons cons, Environment env) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() != 3 || ((LispCons) parts.get(1)).toList().size() < 2) {
+			throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+					"setf " + LispNames.MACRO_FUNCTION + " expects a name and a function: " + cons.print());
+		}
+		String alias = LispMacroExpander.macroFunctionArgumentName(parts.get(1));
+		String target = LispMacroExpander.macroFunctionArgumentName(parts.get(2));
+		if (alias != null && target != null) {
+			return aliasMacroFunction(alias, target);
+		}
+		LispVal name = eval(((LispCons) parts.get(1)).toList().get(1), env);
+		LispVal expander = eval(parts.get(2), env);
+		if (!(name instanceof LispSymbol sym)) {
+			throw LispEvalException.ofClass(ClosRegistry.TYPE_ERROR_CLASS_NAME,
+					"setf " + LispNames.MACRO_FUNCTION + " expects a symbol, got " + name.print());
+		}
+		if (!(expander instanceof LispFunction || expander instanceof LispLambda
+				|| (expander instanceof LispInstance instance && instance.layout().funcallable()))) {
+			throw LispEvalException.ofClass(ClosRegistry.TYPE_ERROR_CLASS_NAME,
+					"setf " + LispNames.MACRO_FUNCTION + " expects a function, got " + expander.print());
+		}
+		if (PackageRegistry.isClSymbol(sym.name())) {
+			throw new LispEvalException(
+					"setf " + LispNames.MACRO_FUNCTION + " cannot redefine the standard operator " + sym.name());
+		}
+		putUserMacro(sym.name(), new UserMacro(List.of(), null, List.of(), this.globalEnv,
+				this.packageResolver.currentPackageName(), null, expander));
+		return expander;
+	}
+
+	/**
+	 * Carries out {@code (setf (compiler-macro-function name) function)}: the function is
+	 * the name's compiler macro from now on, applied to later call sites like a
+	 * {@code define-compiler-macro}'s, and nil removes it. A {@code (setf name)} function
+	 * name and a standard operator are accepted and not registered, as
+	 * {@link #evalDefineCompilerMacro} leaves them.
+	 * @param name the function name
+	 * @param function the compiler macro function, or nil
+	 * @return the function, what the setf answers
+	 */
+	private LispVal writeCompilerMacroFunction(LispVal name, LispVal function) {
+		boolean setfName = name instanceof LispCons cons && cons.car() instanceof LispSymbol op
+				&& LispNames.SETF.equals(op.name()) && cons.cdr() instanceof LispCons tail
+				&& tail.car() instanceof LispSymbol && tail.cdr() instanceof LispNil;
+		if (!(name instanceof LispSymbol) && !setfName) {
+			throw LispEvalException.ofClass(ClosRegistry.TYPE_ERROR_CLASS_NAME,
+					"setf " + LispNames.COMPILER_MACRO_FUNCTION + " expects a function name, got " + name.print());
+		}
+		if (!(function instanceof LispNil || function instanceof LispFunction || function instanceof LispLambda
+				|| (function instanceof LispInstance instance && instance.layout().funcallable()))) {
+			throw LispEvalException.ofClass(ClosRegistry.TYPE_ERROR_CLASS_NAME, "setf "
+					+ LispNames.COMPILER_MACRO_FUNCTION + " expects a function or nil, got " + function.print());
+		}
+		if (name instanceof LispSymbol sym && !PackageRegistry.isClSymbol(sym.name())) {
+			if (function instanceof LispNil) {
+				this.compilerMacros.remove(sym.name());
+			}
+			else {
+				this.compilerMacros.put(sym.name(), new UserMacro(List.of(), null, List.of(), this.globalEnv,
+						this.packageResolver.currentPackageName(), null, function));
+			}
+			// A call site expanded through the old definition expands again.
+			this.compilerMacroExpansions.clear();
+			bumpCallSiteEpoch();
+		}
+		return function;
+	}
+
+	/**
+	 * Carries out {@code (setf (macro-function 'new) (macro-function 'existing))} -- a
+	 * macro ALIAS, the shape lisp-namespace uses to give {@code namespace-let} the short
+	 * name {@code nslet}. The new name is bound to the SAME expander, so the two names
+	 * expand identically forever after (a later redefinition of either name replaces only
+	 * that name's entry, as in CL, where the alias captured the function object). Unlike
+	 * a function value it may name a macro across packages and a built-in macro, which
+	 * has no expander object to share.
+	 * @param alias the new name
+	 * @param target the existing macro's name
+	 * @return the function the new name now answers, what a setf of it answers
+	 */
+	private LispVal aliasMacroFunction(String alias, String target) {
+		java.util.Map.Entry<String, UserMacro> macro = lookupUserMacro(target);
+		if (macro != null) {
+			putUserMacro(alias, macro.getValue());
+		}
+		else if (PackageRegistry.runtimeMacroNames().contains(target)) {
+			// A built-in macro has no expander object to share; the alias rewrites its
+			// call into the target's (rutils' (abbr :+ incf)).
+			LispSymbol args = new LispSymbol("__alias_args");
+			LispVal quoted = new LispCons(new LispSymbol(LispNames.QUOTE),
+					new LispCons(new LispSymbol(target), LispNil.INSTANCE));
+			LispVal body = new LispCons(new LispSymbol(LispNames.CONS),
+					new LispCons(quoted, new LispCons(args, LispNil.INSTANCE)));
+			LispVal params = new LispCons(new LispSymbol(LispNames.LAMBDA_REST), new LispCons(args, LispNil.INSTANCE));
+			putUserMacro(alias,
+					makeUserMacro(LispNames.DEFMACRO, new LispSymbol(alias), params, List.of(body), this.globalEnv));
+		}
+		else {
+			throw new LispEvalException("setf " + LispNames.MACRO_FUNCTION + ": " + target
+					+ " is not a macro (only a macro can be aliased)");
+		}
+		return apply(this.globalEnv.lookupFunction(LispNames.MACRO_FUNCTION), List.of(new LispSymbol(alias)),
+				this.globalEnv);
+	}
+
+	/**
+	 * Looks a user macro up with the package tolerance a QUOTED name needs: quoted
+	 * symbols are not package-resolved, so {@code 'namespace-let} must still find the
+	 * {@code lispn::namespace-let} the {@code defmacro} registered (and vice versa).
+	 * Exact spelling first, then the qualified spelling's member, then a UNIQUE member
+	 * match -- the same ladder {@link #lookupSetfExpander} walks.
+	 */
+	private java.util.Map.@Nullable Entry<String, UserMacro> lookupUserMacro(String name) {
+		UserMacro exact = this.userMacros.get(name);
+		if (exact != null) {
+			return java.util.Map.entry(name, exact);
+		}
+		if (PackageRegistry.splitQualified(name) instanceof PackageRegistry.QualifiedName qn) {
+			UserMacro byMember = this.userMacros.get(qn.member());
+			if (byMember != null) {
+				return java.util.Map.entry(qn.member(), byMember);
+			}
+		}
+		java.util.Map.Entry<String, UserMacro> found = null;
+		for (var entry : this.userMacros.entrySet()) {
+			if (PackageRegistry.splitQualified(entry.getKey()) instanceof PackageRegistry.QualifiedName eqn
+					&& eqn.member().equals(name)) {
+				if (found != null) {
+					return null;
+				}
+				found = java.util.Map.entry(entry.getKey(), entry.getValue());
+			}
+		}
+		return found;
+	}
+
+	/**
+	 * Returns the body forms of the {@code (setf PLACE)} writer function installed by
+	 * {@code (defun (setf PLACE) ...)}, or {@code null} if no such user-defined writer is
+	 * registered. The compile-path macro expander ({@link UserMacroExpander}) uses this
+	 * to judge whether a top-level {@code (setf (PLACE ...) V)} is a pure configuration
+	 * setter safe to replay into this macro-time evaluator.
+	 * @param place the resolved place name
+	 * @return the writer's body forms, or {@code null}
+	 */
+	public @Nullable List<LispVal> setfWriterBody(String place) {
+		return this.globalEnv
+			.lookupFunctionOrNull(LispMacroExpander.setfFunctionName(place)) instanceof LispLambda lambda
+					? lambda.body() : null;
+	}
+
+	/**
+	 * Returns whether {@code name} designates a special variable (proclaimed by
+	 * {@code defvar}/{@code defparameter}/{@code defconstant} or a {@code special}
+	 * declaration) or an otherwise-bound global variable. Used to confirm that a
+	 * candidate config setter mutates global configuration state rather than a lexical or
+	 * a data structure.
+	 * @param name the resolved variable name
+	 * @return {@code true} if the name is a special or bound global variable
+	 */
+	public boolean isGlobalOrSpecialVariable(String name) {
+		return this.specialVars.contains(name) || this.globalEnv.isBound(name);
+	}
+
+	/**
+	 * Installs a lexical (macrolet) local macro into the user-macro table for the compile
+	 * path ({@link am.ik.rontolisp.eval.UserMacroExpander} expands macrolet bodies by
+	 * temporarily registering the locals here). The macro is defined in the global
+	 * environment, matching {@link #evalMacrolet}. Returns the previously bound macro (or
+	 * {@code null}) as an opaque token for {@link #popLocalMacro} to restore.
+	 * @param name the local macro name
+	 * @param paramForm the macro lambda list
+	 * @param body the macro body forms
+	 * @return the previous binding token (may be {@code null})
+	 */
+	public @Nullable Object pushLocalMacro(LispSymbol name, LispVal paramForm, List<LispVal> body) {
+		UserMacro previous = this.userMacros.get(name.name());
+		this.userMacros.put(name.name(), makeUserMacro(LispNames.MACROLET, name, paramForm, body, this.globalEnv));
+		bumpCallSiteEpoch();
+		return previous;
+	}
+
+	/**
+	 * Runs a walk of a {@code macrolet} body with its local macros bound: a form
+	 * evaluated meanwhile keeps nothing it made of them ({@link #localMacroDepth}).
+	 * @param <T> what the walk answers
+	 * @param walk the walk, which binds and restores the local macros itself
+	 * @return what it answered
+	 */
+	<T> T withLocalMacros(java.util.function.Supplier<T> walk) {
+		this.localMacroDepth++;
+		try {
+			return walk.get();
+		}
+		finally {
+			this.localMacroDepth--;
+		}
+	}
+
+	/**
+	 * Restores a user-macro binding saved by {@link #pushLocalMacro}. A {@code null}
+	 * token means the name was unbound before and is removed again.
+	 * @param name the local macro name
+	 * @param previous the token returned by {@link #pushLocalMacro}
+	 */
+	public void popLocalMacro(String name, @Nullable Object previous) {
+		if (previous instanceof UserMacro macro) {
+			this.userMacros.put(name, macro);
+		}
+		else {
+			this.userMacros.remove(name);
+		}
+		bumpCallSiteEpoch();
+	}
+
+	/**
+	 * Expands user-macro calls sitting in the place positions of a {@code setf} form
+	 * (arguments 1, 3, 5, ...) until each place is no longer a user-macro call, so a
+	 * {@code defmacro}-defined accessor is a valid setf place (CL's macroexpanding setf,
+	 * limited to user macros; the compile path gets this for free from
+	 * {@link UserMacroExpander} expanding the whole tree first). A macro whose name also
+	 * has a user setf expander stays: the expander writes the place.
+	 * @param cons the setf form
+	 * @param env the scope the setf form runs in
+	 * @return the setf form with macro places expanded, and whether a macro expanded per
+	 * scope ({@link #expandsPerScope})
+	 */
+	private MacroPlaces expandUserMacroPlaces(LispCons cons, Environment env) {
+		List<LispVal> parts = cons.toList();
+		boolean changed = false;
+		boolean perScope = false;
+		for (int i = 1; i + 1 < parts.size(); i += 2) {
+			LispVal place = parts.get(i);
+			// A user setf expander of the operator comes before its macro (CLHS 5.1.2.7).
+			while (place instanceof LispCons placeCons && placeCons.car() instanceof LispSymbol placeSym
+					&& this.userMacros.get(placeSym.name()) instanceof UserMacro macro
+					&& lookupSetfExpander(placeSym.name()) == null) {
+				perScope |= expandsPerScope(macro);
+				place = expandUserMacro(placeCons, env);
+				changed = true;
+			}
+			parts.set(i, place);
+		}
+		if (!changed) {
+			return new MacroPlaces(cons, false);
+		}
+		LispVal rebuilt = LispNil.INSTANCE;
+		for (int i = parts.size() - 1; i >= 0; i--) {
+			rebuilt = new LispCons(parts.get(i), rebuilt);
+		}
+		return new MacroPlaces((LispCons) rebuilt, perScope);
+	}
+
+	/**
+	 * A {@code setf} form with its user-macro places expanded.
+	 *
+	 * @param form the form
+	 * @param perScope whether a place's macro expanded per scope, so the form's expansion
+	 * is not kept for the site
+	 */
+	private record MacroPlaces(LispCons form, boolean perScope) {
+	}
+
+	/**
+	 * The {@code setf} arm's expansion of a form, made once per site and kept while
+	 * nothing it read has moved ({@link #placeEpoch}): on the form's head
+	 * ({@link PlaceNote}), else in {@link #placeExpansions}. A prelude-provided
+	 * {@code (setf PLACE)} writer (the {@code (defun (setf get) ...)} beside the
+	 * {@code get} defun) registers its place only when the prelude entry loads, so the
+	 * first expansion of a site triggers that load the same way a function call would.
+	 * Expanded at each evaluation instead: a place that writes the class table as it
+	 * expands ({@code (setf (find-class 'alias) ...)}) and one a macro expands per scope.
+	 * @param cons the setf form
+	 * @param env the scope the setf form runs in
+	 * @return the expansion
+	 */
+	private LispVal setfExpansion(LispCons cons, Environment env) {
+		int epoch = placeEpoch();
+		LispVal kept = memoizedSetfExpansion(cons, epoch);
+		if (kept != null) {
+			return kept;
+		}
+		ensurePreludeSetfPlacesLoaded(cons);
+		MacroPlaces placed = expandUserMacroPlaces(cons, env);
+		LispVal expansion = expandSetfMaybeUserExpander(placed.form());
+		if (placed.perScope() || LispMacroExpander.isSetfFindClassForm(placed.form())) {
+			return expansion;
+		}
+		this.placeExpansions.put(cons, new PlaceExpansion(expansion, epoch));
+		if (cons.car() instanceof LispSymbol head && mayNote(head)) {
+			head.evaluatorNote(new PlaceNote(this.noteOwner, epoch, cons, expansion));
+		}
+		return expansion;
+	}
+
+	/**
+	 * A {@code setf} form's expansion kept for it under {@code epoch}
+	 * ({@link #setfExpansion}), or null.
+	 * @param form the setf form
+	 * @param epoch the current {@link #placeEpoch}
+	 * @return the expansion, or null
+	 */
+	@Nullable LispVal memoizedSetfExpansion(LispCons form, int epoch) {
+		if (form.car() instanceof LispSymbol head && head.evaluatorNote() instanceof PlaceNote note
+				&& note.form() == form && note.owner() == this.noteOwner && note.epoch() == epoch) {
+			return note.expansion();
+		}
+		PlaceExpansion memo = this.placeExpansions.get(form);
+		return memo != null && memo.epoch() == epoch ? memo.expansion() : null;
+	}
+
+	/**
+	 * The stamp of everything a {@code setf} expansion reads besides its form: the user
+	 * macros a place may call ({@link #callSiteEpoch}), the setf expanders, the struct
+	 * accessors and setf functions ({@link #structAccessors}), and the class registry's
+	 * classes, layouts and slot switches ({@link ClosRegistry#placeVersion}). Each part
+	 * only grows, so the sum is what it was only while none of them moved.
+	 * @return the stamp
+	 */
+	int placeEpoch() {
+		return this.callSiteEpoch + this.setfExpanders.epoch() + this.structAccessors.epoch()
+				+ this.closRegistry.placeVersion();
+	}
+
+	/**
+	 * A {@code setf} form's expansion and the {@link #placeEpoch} it was made under.
+	 *
+	 * @param expansion the expansion
+	 * @param epoch the stamp
+	 */
+	private record PlaceExpansion(LispVal expansion, int epoch) {
+	}
+
+	/**
+	 * A {@code setf} form's expansion kept on its head symbol, like an
+	 * {@link ExpansionNote} but held by the {@link #placeEpoch} rather than the
+	 * {@link #callSiteEpoch}.
+	 *
+	 * @param owner the {@link #noteOwner} of the evaluator that made it
+	 * @param epoch the {@link #placeEpoch} it was made under
+	 * @param form the setf form, compared by identity
+	 * @param expansion its expansion
+	 */
+	private record PlaceNote(Object owner, int epoch, LispCons form, LispVal expansion) {
+	}
+
+	/**
+	 * Registers a {@code (define-setf-expander name lambda-list body...)}: the lambda
+	 * list (with {@code &environment} stripped, its variable bound to nil in the body)
+	 * and body become the expander that {@link #setfExpansionFiveValues} runs to produce
+	 * the five setf-expansion values.
+	 * @param cons the define-setf-expander form
+	 * @return the accessor name symbol
+	 */
+	private LispVal registerSetfExpander(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 3 || !(parts.get(1) instanceof LispSymbol nameSym)) {
+			throw new LispEvalException(
+					LispNames.DEFINE_SETF_EXPANDER + " expects a name and lambda list: " + cons.print());
+		}
+		List<LispVal> llItems = parts.get(2) instanceof LispCons llCons ? llCons.toList() : List.of();
+		String envVar = null;
+		List<LispVal> cleaned = new ArrayList<>();
+		for (int i = 0; i < llItems.size(); i++) {
+			if (llItems.get(i) instanceof LispSymbol s && "&ENVIRONMENT".equals(s.name())) {
+				if (i + 1 < llItems.size() && llItems.get(i + 1) instanceof LispSymbol e) {
+					envVar = e.name();
+				}
+				i++;
+				continue;
+			}
+			cleaned.add(llItems.get(i));
+		}
+		this.setfExpanders.put(nameSym.name(),
+				new SetfExpanderForm(consList(cleaned), new ArrayList<>(parts.subList(3, parts.size())), envVar));
+		return nameSym;
+	}
+
+	/**
+	 * Registers a {@code defsetf} short form {@code (defsetf access update [doc])} or
+	 * long form {@code (defsetf access (lambda-list) (store-vars) body...)}.
+	 * @param cons the defsetf form
+	 * @return the accessor name symbol
+	 */
+	private LispVal registerDefsetf(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 3 || !(parts.get(1) instanceof LispSymbol nameSym)) {
+			throw new LispEvalException(LispNames.DEFSETF + " expects an accessor name: " + cons.print());
+		}
+		if (parts.get(2) instanceof LispSymbol updateSym) {
+			// Short form: (setf (access a...) v) -> (update a... v).
+			this.setfExpanders.put(nameSym.name(), new DefsetfShort(updateSym.name()));
+			return nameSym;
+		}
+		if (parts.size() >= 5 && (parts.get(2) instanceof LispCons || parts.get(2) instanceof LispNil)
+				&& (parts.get(3) instanceof LispCons || parts.get(3) instanceof LispNil)) {
+			List<LispVal> argParams = parts.get(2) instanceof LispCons c ? c.toList() : List.of();
+			List<LispVal> storeParams = parts.get(3) instanceof LispCons c ? c.toList() : List.of();
+			this.setfExpanders.put(nameSym.name(),
+					new DefsetfLong(argParams, storeParams, new ArrayList<>(parts.subList(4, parts.size()))));
+			return nameSym;
+		}
+		throw new LispEvalException(LispNames.DEFSETF + " unsupported form: " + cons.print());
+	}
+
+	/**
+	 * Whether {@code name} (or its package-stripped member) is a registered setf-expander
+	 * accessor. Used by the compile-path macro expander to decide whether a setf place is
+	 * a user place.
+	 * @param name the accessor name as spelled at the call site
+	 * @return true when a user setf expansion is registered for it
+	 */
+	public boolean hasSetfExpander(String name) {
+		return lookupSetfExpander(name) != null;
+	}
+
+	@org.jspecify.annotations.Nullable
+	private UserSetf lookupSetfExpander(String name) {
+		UserSetf exact = this.setfExpanders.get(name);
+		if (exact != null) {
+			return exact;
+		}
+		if (PackageRegistry.splitQualified(name) instanceof PackageRegistry.QualifiedName qn) {
+			UserSetf byMember = this.setfExpanders.get(qn.member());
+			if (byMember != null) {
+				return byMember;
+			}
+		}
+		for (var entry : this.setfExpanders.entrySet()) {
+			if (PackageRegistry.splitQualified(entry.getKey()) instanceof PackageRegistry.QualifiedName eqn
+					&& eqn.member().equals(name)) {
+				return entry.getValue();
+			}
+		}
+		return null;
+	}
+
+	/**
+	 * Rewrites a {@code setf} whose place is a registered user expander into primitive
+	 * forms; any other setf falls through to the shared static {@code expandSetf}.
+	 * Multiple place/value pairs expand independently. Public so the compile-path
+	 * macro-time evaluator reuses it.
+	 * @param cons the setf form
+	 * @return the expanded form
+	 */
+	public LispVal expandSetfMaybeUserExpander(LispCons cons) {
+		ensureUiopSetfPlaceLoaded(cons);
+		ensureUsocketSetfPlaceLoaded(cons);
+		if (this.setfExpanders.isEmpty()) {
+			return LispMacroExpander.expandSetf(cons, this.structAccessors, this.closRegistry);
+		}
+		List<LispVal> parts = cons.toList();
+		if (parts.size() > 3 && parts.size() % 2 == 1) {
+			List<LispVal> forms = new ArrayList<>();
+			for (int i = 1; i + 1 < parts.size(); i += 2) {
+				forms.add(expandSetfMaybeUserExpander(
+						(LispCons) consList(List.of(new LispSymbol(LispNames.SETF), parts.get(i), parts.get(i + 1)))));
+			}
+			List<LispVal> progn = new ArrayList<>();
+			progn.add(new LispSymbol(LispNames.PROGN));
+			progn.addAll(forms);
+			return consList(progn);
+		}
+		if (parts.size() == 3 && parts.get(1) instanceof LispCons place && place.car() instanceof LispSymbol accessor
+				&& lookupSetfExpander(accessor.name()) != null) {
+			return expandUserSetfPlace(place, parts.get(2));
+		}
+		return LispMacroExpander.expandSetf(cons, this.structAccessors, this.closRegistry);
+	}
+
+	/**
+	 * Loads the uiop definition of a {@code setf} PLACE before the form is expanded --
+	 * the third trigger of the interpreter's lazy load, beside the function and the
+	 * variable lookup. A uiop member's writer is a {@code (defun (setf name) ...)} in the
+	 * same definition group as its reader ({@code eval.UiopLibrary}), and what registers
+	 * the place is EVALUATING that defun; a program whose first touch of the member is
+	 * the write ({@code (setf (uiop:getenv k) v)} -- rove's {@code with-local-envs})
+	 * would otherwise expand against an empty registry and fail with "setf does not
+	 * support place", while the compile paths, which splice the definition ahead of the
+	 * program, handle it.
+	 * @param cons the setf form, whose place heads are inspected
+	 */
+	private void ensureUiopSetfPlaceLoaded(LispCons cons) {
+		if (!cons.isProperList()) {
+			return;
+		}
+		List<LispVal> parts = cons.toList();
+		for (int i = 1; i + 1 < parts.size(); i += 2) {
+			if (parts.get(i) instanceof LispCons place
+					&& LispMacroExpander.setfPlaceFunction(place) instanceof LispSymbol accessor
+					&& !this.structAccessors.containsKey(accessor.name()) && UiopLibrary.definesName(accessor.name())) {
+				loadUiopDefinition(accessor.name());
+			}
+		}
+	}
+
+	/**
+	 * The usocket twin of {@link #ensureUiopSetfPlaceLoaded}: the shim's
+	 * {@code (defun (setf usocket:socket-option) ...)} registers its place only when
+	 * {@code usocket.lisp} loads, and a program whose first usocket touch is the write
+	 * ({@code (setf (usocket:socket-option s :receive-timeout) n)} -- dexador's read
+	 * timeout) would otherwise expand against an empty registry.
+	 * @param cons the setf form, whose place heads are inspected
+	 */
+	private void ensureUsocketSetfPlaceLoaded(LispCons cons) {
+		if (this.usocketLibraryLoaded || !cons.isProperList()) {
+			return;
+		}
+		List<LispVal> parts = cons.toList();
+		for (int i = 1; i + 1 < parts.size(); i += 2) {
+			if (parts.get(i) instanceof LispCons place
+					&& LispMacroExpander.setfPlaceFunction(place) instanceof LispSymbol accessor
+					&& !this.structAccessors.containsKey(accessor.name())
+					&& UsocketLibrary.isUsocketQualified(accessor.name())) {
+				ensureUsocketLoaded();
+				return;
+			}
+		}
+	}
+
+	/**
+	 * Builds the primitive expansion of {@code (setf place value)} for a registered user
+	 * place: binds the expander's temps to their value forms and the store variable to
+	 * the new value, then evaluates the store form.
+	 */
+	private LispVal expandUserSetfPlace(LispCons place, LispVal value) {
+		UserSetf entry = java.util.Objects.requireNonNull(lookupSetfExpander(((LispSymbol) place.car()).name()));
+		List<LispVal> five = userPlaceFiveValues(place, entry);
+		List<LispVal> temps = asJavaList(five.get(0));
+		List<LispVal> values = asJavaList(five.get(1));
+		List<LispVal> stores = asJavaList(five.get(2));
+		LispVal storeForm = five.get(3);
+		List<LispVal> bindings = new ArrayList<>();
+		for (int i = 0; i < temps.size(); i++) {
+			bindings.add(consList(List.of(temps.get(i), i < values.size() ? values.get(i) : LispNil.INSTANCE)));
+		}
+		if (stores.size() <= 1) {
+			LispVal storeVar = stores.isEmpty() ? freshSetfTemp("new") : stores.get(0);
+			bindings.add(consList(List.of(storeVar, value)));
+			return letStarForm(bindings, List.of(storeForm));
+		}
+		// Multiple store variables: bind them from the value form's multiple values.
+		List<LispVal> mvb = new ArrayList<>();
+		mvb.add(new LispSymbol(LispNames.MULTIPLE_VALUE_BIND));
+		mvb.add(consList(stores));
+		mvb.add(value);
+		mvb.add(storeForm);
+		return letStarForm(bindings, List.of(consList(mvb)));
+	}
+
+	/**
+	 * The expansion of {@code incf}, {@code decf}, {@code push}, {@code pushnew} or
+	 * {@code pop} over a registered user place, through the place's setf expansion (CLHS
+	 * 5.1.3): the pushed item first, the temporaries bound to the place's subforms in
+	 * order, the store variable to the new value made from the ACCESS form, then the
+	 * store form. The built-in expansion reads the place by calling its operator, which
+	 * names no function where only the expander knows the place
+	 * ({@code define-setf-expander} alone, anaphora's {@code internal-symbol-macrolet}).
+	 * Public so the compile path's macro-time walk takes the same expansion.
+	 * @param form the macro call
+	 * @return the expansion, or {@code null} when the place is no user place
+	 */
+	public @Nullable LispVal expandModifyUserPlace(LispCons form) {
+		if (this.setfExpanders.isEmpty() || !form.isProperList() || !(form.car() instanceof LispSymbol head)) {
+			return null;
+		}
+		String operator = memberName(head.name());
+		boolean pushes = LispNames.PUSH.equals(operator) || LispNames.PUSHNEW.equals(operator);
+		List<LispVal> parts = form.toList();
+		int placeAt = pushes ? 2 : 1;
+		if (parts.size() <= placeAt || !(parts.get(placeAt) instanceof LispCons place)
+				|| !(place.car() instanceof LispSymbol accessor)) {
+			return null;
+		}
+		UserSetf entry = lookupSetfExpander(accessor.name());
+		if (entry == null) {
+			return null;
+		}
+		List<LispVal> five = userPlaceFiveValues(place, entry);
+		List<LispVal> temps = asJavaList(five.get(0));
+		List<LispVal> values = asJavaList(five.get(1));
+		List<LispVal> stores = asJavaList(five.get(2));
+		if (stores.isEmpty()) {
+			return null;
+		}
+		LispVal access = five.get(4);
+		List<LispVal> bindings = new ArrayList<>();
+		LispVal item = parts.get(1);
+		if (pushes) {
+			LispSymbol itemVar = freshSetfTemp("item");
+			bindings.add(consList(List.of(itemVar, item)));
+			item = itemVar;
+		}
+		for (int i = 0; i < temps.size(); i++) {
+			bindings.add(consList(List.of(temps.get(i), i < values.size() ? values.get(i) : LispNil.INSTANCE)));
+		}
+		LispVal storeForm = five.get(3);
+		LispVal newValue;
+		switch (operator) {
+			case LispNames.INCF,
+					LispNames.DECF ->
+				newValue = consList(
+						List.of(new LispSymbol(LispNames.INCF.equals(operator) ? LispNames.ADD : LispNames.SUB), access,
+								parts.size() > 2 ? parts.get(2) : new LispInteger(1)));
+			case LispNames.PUSH -> newValue = consList(List.of(new LispSymbol(LispNames.CONS), item, access));
+			case LispNames.PUSHNEW -> {
+				List<LispVal> adjoin = new ArrayList<>(List.of(new LispSymbol(LispNames.ADJOIN), item, access));
+				adjoin.addAll(parts.subList(3, parts.size()));
+				newValue = consList(adjoin);
+			}
+			case LispNames.POP -> {
+				LispSymbol old = freshSetfTemp("old");
+				bindings.add(consList(List.of(old, access)));
+				bindStores(bindings, stores, consList(List.of(new LispSymbol(LispNames.CDR), old)));
+				return letStarForm(bindings, List.of(consList(List.of(new LispSymbol(LispNames.PROG1),
+						consList(List.of(new LispSymbol(LispNames.CAR), old)), storeForm))));
+			}
+			default -> {
+				return null;
+			}
+		}
+		bindStores(bindings, stores, newValue);
+		return letStarForm(bindings, List.of(storeForm));
+	}
+
+	// The first store variable takes the new value and any other nil, as SBCL's incf
+	// binds them.
+	private static void bindStores(List<LispVal> bindings, List<LispVal> stores, LispVal newValue) {
+		bindings.add(consList(List.of(stores.get(0), newValue)));
+		for (LispVal store : stores.subList(1, stores.size())) {
+			bindings.add(consList(List.of(store, LispNil.INSTANCE)));
+		}
+	}
+
+	/**
+	 * The five setf-expansion values
+	 * ({@code [temps values stores store-form access-form]}, each a Lisp datum) of a
+	 * registered user place. A {@code define-setf-expander} place runs its expander; a
+	 * {@code defsetf} short/long place is expanded mechanically. The place head is always
+	 * a registered accessor (the only caller is {@link #expandUserSetfPlace});
+	 * {@code get-setf-expansion} on a plain symbol or a built-in place is handled by the
+	 * Lisp-prelude definition instead.
+	 */
+	private List<LispVal> userPlaceFiveValues(LispCons place, UserSetf entry) {
+		LispSymbol accessor = (LispSymbol) place.car();
+		List<LispVal> args = place.cdr() instanceof LispCons c ? c.toList() : List.of();
+		if (entry instanceof SetfExpanderForm exp) {
+			return callSetfExpander(exp, args);
+		}
+		List<LispVal> temps = new ArrayList<>();
+		for (int i = 0; i < args.size(); i++) {
+			temps.add(freshSetfTemp("arg"));
+		}
+		if (entry instanceof DefsetfShort shortForm) {
+			LispSymbol store = freshSetfTemp("new");
+			List<LispVal> update = new ArrayList<>();
+			update.add(new LispSymbol(shortForm.updateFn()));
+			update.addAll(temps);
+			update.add(store);
+			return List.of(consList(temps), consList(new ArrayList<>(args)), consList(List.of(store)), consList(update),
+					consList(prepend(accessor, temps)));
+		}
+		DefsetfLong lng = (DefsetfLong) entry;
+		List<LispVal> storeSyms = new ArrayList<>();
+		for (int i = 0; i < Math.max(1, lng.storeParams().size()); i++) {
+			storeSyms.add(freshSetfTemp("new"));
+		}
+		LispVal storeForm = evalDefsetfLongBody(lng, temps, storeSyms);
+		return List.of(consList(temps), consList(new ArrayList<>(args)), consList(storeSyms), storeForm,
+				consList(prepend(accessor, temps)));
+	}
+
+	/**
+	 * Runs a {@code define-setf-expander} body over the place-argument forms, returning
+	 * its five values as a Java list. The expander is rebuilt as a lambda and applied to
+	 * the quoted argument forms; {@code multiple-value-list} collects the five values.
+	 */
+	private List<LispVal> callSetfExpander(SetfExpanderForm exp, List<LispVal> args) {
+		List<LispVal> lambdaForm = new ArrayList<>();
+		lambdaForm.add(new LispSymbol(LispNames.LAMBDA));
+		lambdaForm.add(exp.lambdaList());
+		if (exp.envVar() != null) {
+			List<LispVal> letForm = new ArrayList<>();
+			letForm.add(new LispSymbol(LispNames.LET));
+			letForm.add(consList(List.of(consList(List.of(new LispSymbol(exp.envVar()), LispNil.INSTANCE)))));
+			letForm.addAll(exp.body());
+			lambdaForm.add(consList(letForm));
+		}
+		else {
+			lambdaForm.addAll(exp.body());
+		}
+		List<LispVal> call = new ArrayList<>();
+		call.add(consList(lambdaForm));
+		for (LispVal a : args) {
+			call.add(quoteForm(a));
+		}
+		LispVal mvl = consList(List.of(new LispSymbol(LispNames.MULTIPLE_VALUE_LIST), consList(call)));
+		List<LispVal> five = new ArrayList<>(asJavaList(eval(mvl, this.globalEnv)));
+		while (five.size() < 5) {
+			five.add(LispNil.INSTANCE);
+		}
+		return five;
+	}
+
+	/**
+	 * Evaluates a {@code defsetf} long-form body with its params bound to the temp
+	 * symbols.
+	 */
+	private LispVal evalDefsetfLongBody(DefsetfLong lng, List<LispVal> temps, List<LispVal> storeSyms) {
+		List<LispVal> params = new ArrayList<>();
+		for (LispVal p : lng.argParams()) {
+			if (p instanceof LispSymbol s && "&ENVIRONMENT".equals(s.name())) {
+				break;
+			}
+			params.add(p);
+		}
+		params.addAll(lng.storeParams());
+		List<LispVal> lambdaForm = new ArrayList<>();
+		lambdaForm.add(new LispSymbol(LispNames.LAMBDA));
+		lambdaForm.add(consList(params));
+		lambdaForm.addAll(lng.body());
+		List<LispVal> call = new ArrayList<>();
+		call.add(consList(lambdaForm));
+		for (int i = 0; i < params.size(); i++) {
+			LispVal arg = i < temps.size() ? temps.get(i) : storeSyms.get(i - temps.size());
+			call.add(quoteForm(arg));
+		}
+		return eval(consList(call), this.globalEnv);
+	}
+
+	private LispSymbol freshSetfTemp(String prefix) {
+		return new LispSymbol("__gse_" + prefix + this.setfTempCounter.incrementAndGet());
+	}
+
+	private static LispVal quoteForm(LispVal v) {
+		return consList(List.of(new LispSymbol(LispNames.QUOTE), v));
+	}
+
+	// (op 'arg... 'k1 'v1 ...): the fixed arguments, then the plist's elements, each
+	// quoted -- the keys keep the literal-initarg shape the expansions read.
+	private LispVal evalQuotedPlistCall(String op, List<LispVal> fixed, LispVal plist) {
+		List<LispVal> call = new ArrayList<>();
+		call.add(new LispSymbol(op));
+		for (LispVal arg : fixed) {
+			call.add(quoteForm(arg));
+		}
+		for (LispVal cur = plist; cur instanceof LispCons cell; cur = cell.cdr()) {
+			call.add(cell.car() instanceof LispSymbol key && key.isKeyword() ? key : quoteForm(cell.car()));
+		}
+		return eval(consList(call), this.globalEnv);
+	}
+
+	private LispVal letStarForm(List<LispVal> bindings, List<LispVal> body) {
+		List<LispVal> form = new ArrayList<>();
+		form.add(new LispSymbol(LispNames.LET_STAR));
+		form.add(bindings.isEmpty() ? LispNil.INSTANCE : consList(bindings));
+		form.addAll(body);
+		return consList(form);
+	}
+
+	private static List<LispVal> prepend(LispVal head, List<LispVal> tail) {
+		List<LispVal> out = new ArrayList<>();
+		out.add(head);
+		out.addAll(tail);
+		return out;
+	}
+
+	private static List<LispVal> asJavaList(LispVal v) {
+		if (v instanceof LispCons cons) {
+			return cons.toList();
+		}
+		if (v instanceof LispNil) {
+			return List.of();
+		}
+		return List.of(v);
+	}
+
+	private static LispVal consList(List<LispVal> items) {
+		LispVal result = LispNil.INSTANCE;
+		for (int i = items.size() - 1; i >= 0; i--) {
+			result = new LispCons(items.get(i), result);
+		}
+		return result;
+	}
+
+	/**
+	 * Expands a user macro call by one step: binds the unevaluated argument forms to the
+	 * macro parameters and evaluates the macro body, returning the expansion form. The
+	 * answer is memoized per call site ({@link #userMacroExpansions}), so a macro call
+	 * reached a million times is expanded once.
+	 * @param form the macro call form; its operator must be a defined user macro
+	 * @return the expansion
+	 */
+	public LispVal expandUserMacro(LispCons form) {
+		return expandUserMacro(form, null);
+	}
+
+	private LispVal expandUserMacro(LispCons form, @Nullable Environment site) {
+		if (form.car() instanceof LispSymbol op && this.userMacros.get(op.name()) instanceof UserMacro scoped
+				&& expandsPerScope(scoped)) {
+			return expandMacroCall(op.name(), scoped, form, site);
+		}
+		String name = ((LispSymbol) form.car()).name();
+		UserMacro macro = this.userMacros.get(name);
+		if (macro == null) {
+			throw new LispEvalException(name + " is not a user macro");
+		}
+		SiteExpansion cached = this.userMacroExpansions.get(form);
+		if (cached != null && cached.macro() == macro) {
+			return cached.expansion();
+		}
+		LispVal expansion = expandMacroCall(name, macro, form, site);
+		this.userMacroExpansions.put(form, new SiteExpansion(expansion, macro, 0));
+		return expansion;
+	}
+
+	/**
+	 * Runs one macro expansion: binds the unevaluated argument forms to the macro's
+	 * parameters and evaluates its body. Shared by {@code defmacro} expansion and
+	 * {@link #expandCompilerMacro}, which differ only in which table the macro came from.
+	 * @param site the environment the interpreter is expanding the call in, or
+	 * {@code null} when it is walking the form rather than running it
+	 */
+	private LispVal expandMacroCall(String name, UserMacro macro, LispCons form, @Nullable Environment site) {
+		LispVal exposedArgs = macro.expander() != null ? LispNil.INSTANCE : LispTrees.exposeCircles(form.cdr());
+		List<LispVal> args = exposedArgs instanceof LispCons argCons ? argCons.toList() : List.of();
+		if (args.size() < macro.required().size() || (macro.rest() == null && args.size() > macro.required().size())) {
+			throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+					"Macro " + name + " expects " + (macro.rest() == null ? String.valueOf(macro.required().size())
+							: "at least " + macro.required().size()) + " arguments, got " + args.size());
+		}
+		Environment macroEnv = new Environment(macro.env());
+		if (macro.expander() == null) {
+			macroEnv.define(MACRO_WHOLE_VAR, exposedArgs == form.cdr() ? form : new LispCons(form.car(), exposedArgs));
+		}
+		macroEnv.lexicalFunction(name);
+		if (macroEnv.lexicalPackage() == null) {
+			macroEnv.lexicalPackage(macro.definitionPackage());
+		}
+		// A macro parameter binds like a function's (bindParameter): dynamically when
+		// its name is proclaimed or declared special, lexically otherwise -- and a
+		// lexical one is what the body reads even while a dynamic binding of the name
+		// is active (cl-ppcre's case-insensitive-mode-p has a parameter named flags,
+		// expanded while flags is dynamically bound).
+		Set<String> declared = declaredSpecials(macro.body(), true);
+		List<String> dynamicParams = null;
+		for (int i = 0; i < macro.required().size(); i++) {
+			dynamicParams = bindParameter(macro.required().get(i).name(), args.get(i), declared, macroEnv,
+					dynamicParams);
+		}
+		if (macro.rest() != null) {
+			LispVal restList = LispNil.INSTANCE;
+			for (int i = args.size() - 1; i >= macro.required().size(); i--) {
+				restList = new LispCons(args.get(i), restList);
+			}
+			dynamicParams = bindParameter(macro.rest().name(), restList, declared, macroEnv, dynamicParams);
+		}
+		if (macro.environment() != null) {
+			dynamicParams = bindParameter(macro.environment().name(), environmentAt(site), declared, macroEnv,
+					dynamicParams);
+		}
+		markDeclaredSpecials(declared, macroEnv);
+		// Common Lisp expands a macro while COMPILING the calling file, so *package* is
+		// that file's. The interpreter expands lazily instead, at call time, and only a
+		// call site outside every function body still has its file's package current: one
+		// buried in a function body is expanded long after the file was read, with
+		// whatever package the caller happens to be in, so it gets the package the body
+		// was read in. let-plus's &structure interns an accessor name while its
+		// expansion is built, in the package of the function naming the let+; fast-http's
+		// callback-data does it through (alexandria:format-symbol t ...). A top-level
+		// call
+		// site keeps the current package (trivia's lispn:define-namespace).
+		String callerPackage = this.packageResolver.currentPackageName();
+		String sitePackage = site == null ? null : site.lexicalPackage();
+		String expansionPackage = sitePackage != null ? sitePackage : callerPackage;
+		boolean swapPackage = !callerPackage.equals(expansionPackage);
+		if (swapPackage) {
+			this.packageResolver.setCurrentPackage(expansionPackage);
+		}
+		LispVal expanderEnvironment = macro.expander() == null ? LispNil.INSTANCE : environmentAt(site);
+		java.util.Map<String, LispVal> callerScope = this.symbolMacroWalkScope.get();
+		if (callerScope != null) {
+			this.symbolMacroWalkScope.remove();
+		}
+		java.util.Set<String> callerShadowed = shadowedMacros();
+		shadowedMacros(java.util.Set.of());
+		try {
+			LispVal expansion = macro.expander() == null ? LispNil.INSTANCE
+					: applyGlobal(macro.expander(), List.of(LispTrees.exposeCircles(form), expanderEnvironment));
+			for (LispVal bodyExpr : macro.body()) {
+				expansion = eval(bodyExpr, macroEnv);
+			}
+			expansion = LispTrees.shieldCircles(expansion);
+			markExpansionConstants(expansion, new java.util.IdentityHashMap<>());
+			return expansion;
+		}
+		finally {
+			if (callerScope != null) {
+				this.symbolMacroWalkScope.set(callerScope);
+			}
+			shadowedMacros(callerShadowed);
+			if (swapPackage) {
+				this.packageResolver.setCurrentPackage(callerPackage);
+			}
+			if (dynamicParams != null) {
+				for (int i = dynamicParams.size() - 1; i >= 0; i--) {
+					this.dynamicBindings.pop(dynamicParams.get(i));
+				}
+			}
+		}
+	}
+
+	/**
+	 * Marks every string a macro built into its fresh expansion tree a source constant:
+	 * baked into the program exactly like a reader {@code "..."}, so separate expansions
+	 * with equal contents compare {@code eq} on the interpreter the way coalesced
+	 * literals do on the compiled backends (CLHS 3.2.4.4 permits either). Strings the
+	 * macro spliced from its input are already marked; marking them again is a no-op.
+	 * Guarded by identity because an expansion may close a cycle.
+	 * @param form the fresh expansion tree
+	 * @param seen the objects already visited
+	 */
+	private static void markExpansionConstants(LispVal form, java.util.IdentityHashMap<LispVal, Boolean> seen) {
+		if (!(form instanceof LispCons || form instanceof LispArray || form instanceof LispString)
+				|| seen.containsKey(form)) {
+			return;
+		}
+		seen.put(form, Boolean.TRUE);
+		if (form instanceof LispString string) {
+			string.markSourceLiteral();
+		}
+		else if (form instanceof LispCons cons) {
+			LispVal rest = cons;
+			while (rest instanceof LispCons cell) {
+				markExpansionConstants(cell.car(), seen);
+				rest = cell.cdr();
+			}
+			markExpansionConstants(rest, seen);
+		}
+		else if (form instanceof LispArray array) {
+			for (LispVal element : array.data()) {
+				markExpansionConstants(element, seen);
+			}
+		}
+	}
+
+	/**
+	 * Expands the top-level form once when its operator is a user macro or a built-in
+	 * macro ({@code macroexpand-1}). Subforms are not walked. Returns the form itself
+	 * (same reference) when the operator is not a macro, so callers can detect
+	 * non-expansion by identity. It expands exactly the names {@code macro-function}
+	 * claims ({@link #isMacroName}): a code walker trusts the one and calls the other, so
+	 * a CL function the expander happens to rewrite inline ({@code typep}) stays a call,
+	 * and a CL macro the evaluator runs natively ({@code return}) still expands.
+	 * @param form the form to expand
+	 * @return the expansion, or {@code form} unchanged
+	 */
+	public LispVal macroexpand1(LispVal form) {
+		return macroexpand1(form, LispNil.INSTANCE);
+	}
+
+	/**
+	 * {@link #macroexpand1(LispVal)} in the environment a macro's {@code &environment}
+	 * parameter holds: a symbol naming a symbol macro there answers the expansion object
+	 * itself, and a macro call sees it through its own {@code &environment}. The null
+	 * environment holds the global symbol macros only.
+	 * @param form the form to expand
+	 * @param environment nil or the value of an {@code &environment} parameter
+	 * @return the expansion, or {@code form} unchanged
+	 */
+	private LispVal macroexpand1(LispVal form, LispVal environment) {
+		if (form instanceof LispSymbol sym) {
+			LispVal expansion = symbolMacrosOf(environment).get(sym.name());
+			return expansion != null ? expansion : form;
+		}
+		if (form instanceof LispCons cons && cons.car() instanceof LispSymbol sym) {
+			if (isUserMacro(sym.name())) {
+				return inSymbolMacroEnvironment(environment, () -> expandUserMacro(cons));
+			}
+			if (!isMacroName(sym.name())) {
+				return form;
+			}
+			LispVal expanded = LispMacroExpander.expandSlotVariablesForWalker(cons);
+			if (expanded == null) {
+				expanded = LispMacroExpander.expandBuiltinMacro(cons);
+			}
+			if (expanded == null) {
+				expanded = LispMacroExpander.expandNativeMacro(cons);
+			}
+			if (expanded != null) {
+				return LispMacroExpander.withStandardIteration(expanded, cons);
+			}
+		}
+		return form;
+	}
+
+	/**
+	 * Repeats {@link #macroexpand1(LispVal)} on the top-level form until it stops
+	 * expanding ({@code macroexpand}).
+	 * @param form the form to expand
+	 * @return the full expansion of the top-level form
+	 */
+	public LispVal macroexpand(LispVal form) {
+		return macroexpand(form, LispNil.INSTANCE);
+	}
+
+	private LispVal macroexpand(LispVal form, LispVal environment) {
+		LispVal expanded = macroexpand1(form, environment);
+		while (expanded != form) {
+			form = expanded;
+			expanded = macroexpand1(form, environment);
+		}
+		return form;
+	}
+
+	/**
+	 * The symbol macros in scope at the form {@link UserMacroExpander#expandAll} is
+	 * walking.
+	 * @return the table, the global one outside a narrowed or extended scope; never to be
+	 * written
+	 */
+	java.util.Map<String, LispVal> symbolMacroScope() {
+		java.util.Map<String, LispVal> scope = this.symbolMacroWalkScope.get();
+		return scope != null ? scope : this.globalSymbolMacros;
+	}
+
+	/**
+	 * Sets what {@link #symbolMacroScope()} answers; the caller restores the previous
+	 * answer the same way.
+	 * @param scope the table
+	 */
+	void symbolMacroScope(java.util.Map<String, LispVal> scope) {
+		if (scope == this.globalSymbolMacros) {
+			this.symbolMacroWalkScope.remove();
+		}
+		else {
+			this.symbolMacroWalkScope.set(scope);
+		}
+	}
+
+	/**
+	 * The macros a local function shadows where {@link UserMacroExpander#expandAll} is
+	 * walking.
+	 * @return the names, empty outside the scope of such a function
+	 */
+	java.util.Set<String> shadowedMacros() {
+		java.util.Set<String> names = this.shadowedMacroWalkScope.get();
+		return names != null ? names : java.util.Set.of();
+	}
+
+	/**
+	 * Sets what {@link #shadowedMacros()} answers; the caller restores the previous
+	 * answer the same way.
+	 * @param names the names
+	 */
+	void shadowedMacros(java.util.Set<String> names) {
+		if (names.isEmpty()) {
+			this.shadowedMacroWalkScope.remove();
+		}
+		else {
+			this.shadowedMacroWalkScope.set(names);
+		}
+	}
+
+	/**
+	 * Whether a call of the macro must be expanded every time it is reached: its
+	 * {@code &environment}, or the environment argument of its function, reads the walk's
+	 * scope, which may differ between two walks over one cons a macro spliced twice, so
+	 * the per-call-site memos neither read nor keep its answer there.
+	 */
+	private boolean expandsPerScope(@Nullable UserMacro macro) {
+		return macro != null && (macro.environment() != null || macro.expander() != null)
+				&& this.symbolMacroWalkScope.get() != null;
+	}
+
+	/**
+	 * What a macro's {@code &environment} parameter is bound to: nil where no symbol
+	 * macro exists, so a program without any sees exactly nil. A binder may have shadowed
+	 * every name in scope while a global one exists: that is an empty table, not nil,
+	 * which would mean the global ones.
+	 * @param site the environment the interpreter is expanding the call in, whose lexical
+	 * variables shadow the global symbol macros; {@code null} when the walk's scope
+	 * already says what is shadowed
+	 */
+	private LispVal environmentAt(@Nullable Environment site) {
+		java.util.Map<String, LispVal> macros = symbolMacroScope();
+		if (macros.isEmpty() && this.globalSymbolMacros.isEmpty()) {
+			return LispNil.INSTANCE;
+		}
+		if (site != null) {
+			java.util.Set<String> shadowed = new java.util.HashSet<>();
+			for (String name : macros.keySet()) {
+				if (site.lookupOrNull(name) != null) {
+					shadowed.add(name);
+				}
+			}
+			macros = LispMacroExpander.symbolMacrosWithoutAll(macros, shadowed);
+		}
+		return new LispJavaObject(new SymbolMacroEnvironment(macros));
+	}
+
+	private java.util.Map<String, LispVal> symbolMacrosOf(LispVal environment) {
+		return environment instanceof LispJavaObject(Object ref) && ref instanceof SymbolMacroEnvironment given
+				? given.macros() : this.globalSymbolMacros;
+	}
+
+	/**
+	 * Runs an expansion with the macro's {@code &environment} seeing {@code environment}.
+	 */
+	private LispVal inSymbolMacroEnvironment(LispVal environment, java.util.function.Supplier<LispVal> expansion) {
+		java.util.Map<String, LispVal> caller = symbolMacroScope();
+		symbolMacroScope(symbolMacrosOf(environment));
+		try {
+			return expansion.get();
+		}
+		finally {
+			symbolMacroScope(caller);
+		}
+	}
+
+	/**
+	 * The expansion of a {@code with-slots} or {@code with-accessors} the interpreter is
+	 * about to run: a slot variable is a symbol macro, so it takes what
+	 * {@link #expandSymbolMacrolet} does.
+	 */
+	private LispVal expandSlotVariables(LispCons cons, Environment env,
+			java.util.function.Function<LispCons, LispVal> substitution) {
+		LispVal wrongCount = cons.car() instanceof LispSymbol head
+				? wrongCountCall(cons, head.name(), cons.properLength()) : null;
+		return wrongCount != null ? wrongCount : expandSymbolMacrolet(cons, env, substitution);
+	}
+
+	private LispVal expandSymbolMacrolet(LispCons cons, Environment env) {
+		return expandSymbolMacrolet(cons, env, LispMacroExpander::expandSymbolMacrolet);
+	}
+
+	/**
+	 * The expansion of a {@code symbol-macrolet} the interpreter is about to run: its
+	 * user macros expanded with the names in scope, then the substitution every backend
+	 * shares, once per call site like {@link #expandUserMacro}, whose memo drops with the
+	 * macro table the answer depends on.
+	 */
+	private LispVal expandSymbolMacrolet(LispCons cons, Environment env,
+			java.util.function.Function<LispCons, LispVal> substitution) {
+		return expandedPerSite(cons, () -> {
+			LispVal walked = expandAllAtSite(cons, env);
+			// A walk that substituted the names itself (an expansion that is a user setf
+			// place) answered the progn they became.
+			return walked instanceof LispCons form && form.car() == cons.car() ? substitution.apply(form) : walked;
+		});
+	}
+
+	/**
+	 * The expansion of a form that depends on the macro table, once per call site and
+	 * state of that table ({@link #macroTableEpoch}). A form evaluated while a walk has
+	 * local macros bound keeps nothing: what it made of them holds only there.
+	 */
+	private LispVal expandedPerSite(LispCons cons, java.util.function.Supplier<LispVal> expander) {
+		if (this.localMacroDepth > 0) {
+			return expander.get();
+		}
+		int epoch = this.macroTableEpoch;
+		SiteExpansion cached = this.userMacroExpansions.get(cons);
+		if (cached != null && cached.macro() == null && cached.epoch() == epoch) {
+			return cached.expansion();
+		}
+		LispVal expansion = expander.get();
+		this.userMacroExpansions.put(cons, new SiteExpansion(expansion, null, epoch));
+		return expansion;
+	}
+
+	/**
+	 * {@code (compile name)}: the name's current definition is already what compiling it
+	 * would answer, so only a name with no definition signals, as {@code fdefinition}
+	 * does. A macro's name has one.
+	 * @param name the function name
+	 * @return the name
+	 */
+	private LispVal compileCurrentDefinition(LispVal name) {
+		String functionName = functionName(name);
+		if (functionName == null) {
+			throw LispEvalException.ofClass(ClosRegistry.TYPE_ERROR_CLASS_NAME,
+					LispNames.COMPILE + " expects a function name, got " + name.print());
+		}
+		if (!isMacroName(functionName)) {
+			resolveFunction(functionName);
+		}
+		return name;
+	}
+
+	/**
+	 * {@code (compile name definition)}: with a name, installs the function under it and
+	 * answers the name, per CL; with nil, answers the function.
+	 * @param name the function name, or nil
+	 * @param definition a lambda expression or a function
+	 * @return the name, or the function
+	 */
+	private LispVal compileDefinition(LispVal name, LispVal definition) {
+		LispVal fn = definition instanceof LispFunction || definition instanceof LispLambda
+				|| (definition instanceof LispInstance instance && instance.layout().funcallable()) ? definition
+						: compileLambdaExpression(definition);
+		String functionName = name instanceof LispNil ? null : functionName(name);
+		if (functionName == null) {
+			return fn;
+		}
+		this.globalEnv.defineFunction(functionName, fn);
+		return name;
+	}
+
+	/**
+	 * Coerces a {@code (lambda ...)} definition to a function in the null lexical
+	 * environment. A no-argument definition that DEFINES METHODS over class metaobjects
+	 * -- postmodern's build-dao-methods
+	 * {@code (funcall (compile nil `(lambda () ,code)))} idiom -- is intercepted instead:
+	 * the metaobject literals fold to static references (MopEvalCapture) and the body is
+	 * either evaluated in place (live interpreter) or recorded through the splice sink
+	 * UserMacroExpander attaches so it joins the compiled program as top-level forms.
+	 */
+	private LispVal compileLambdaExpression(LispVal lambdaExpression) {
+		LispVal definition = MopEvalCapture.foldClassMetaobjects(lambdaExpression, this.closRegistry);
+		if (!(definition instanceof LispCons defCons) || !(defCons.car() instanceof LispSymbol head)
+				|| !LispNames.LAMBDA.equals(memberName(head.name())) || !defCons.isProperList()) {
+			throw new LispEvalException(
+					LispNames.COMPILE + " expects a (lambda ...) definition, got " + lambdaExpression.print());
+		}
+		List<LispVal> defParts = defCons.toList();
+		if (defParts.size() >= 2 && defParts.get(1) instanceof LispNil && MopEvalCapture.definesMethods(defCons)) {
+			// Definition-time method construction ("expand and splice"): the folded
+			// body forms are the definition's whole effect, so they run (or splice)
+			// as top-level forms and the returned function is a no-op.
+			List<LispVal> body = List.copyOf(defParts.subList(2, defParts.size()));
+			if (this.mopEvalSpliceSink != null) {
+				this.mopEvalSpliceSink.addAll(body);
+				return new LispFunction("compiled-definition", callArgs -> LispNil.INSTANCE);
+			}
+			return new LispFunction("compiled-definition", callArgs -> {
+				LispVal result = LispNil.INSTANCE;
+				for (LispVal bodyForm : body) {
+					result = evalDatum(bodyForm);
+				}
+				return result;
+			});
+		}
+		if (this.compiledTemplateSink != null) {
+			this.compiledTemplateSink.add(CompiledTemplates.registration(lambdaExpression));
+		}
+		return evalDatum(defCons);
+	}
+
+	/**
+	 * Publishes {@code macroexpand-1}/{@code macroexpand}'s {@code expanded-p} second
+	 * value and returns the primary. Both expanders answer the SAME reference when the
+	 * operator is not a macro, so identity decides the flag; it travels through the
+	 * {@code %mv-spill} channel (the {@code parse-integer} precedent), which is what
+	 * carries it across the call boundary into a consumer.
+	 * @param form the form that was handed in
+	 * @param expansion what the expander answered
+	 * @return the expansion
+	 */
+	private LispVal expandedWithFlag(LispVal form, LispVal expansion) {
+		this.globalEnv
+			.publishSpill(new LispCons(expansion == form ? LispNil.INSTANCE : LispTrue.INSTANCE, LispNil.INSTANCE));
+		return expansion;
+	}
+
+	/**
+	 * Whether the name has a macro function: a user {@code defmacro} (a {@code macrolet}
+	 * body's local macro and a {@code (setf macro-function)} alias register in the same
+	 * table) or a built-in operator with no function value outside
+	 * {@link PackageRegistry#namesWithoutMacroFunction()} -- the CL macros the expander
+	 * dispatches on, plus the ones rontolisp implements as special forms of its own.
+	 */
+	private boolean isMacroName(String name) {
+		return isUserMacro(name)
+				|| (SPECIAL_OPERATORS.contains(name) && !PackageRegistry.namesWithoutMacroFunction().contains(name));
+	}
+
+	/**
+	 * The form a macro function received, headed by the macro it belongs to. CL applies
+	 * the expander to the WHOLE form and the expander reads the car as data (only
+	 * {@code &whole} looks at it), so {@code (funcall (macro-function 'when) '(foo t 1))}
+	 * expands through {@code when} exactly as it does in CL.
+	 */
+	private static LispVal macroCallForm(String name, LispVal form) {
+		if (form instanceof LispCons cons && !(cons.car() instanceof LispSymbol head && head.name().equals(name))) {
+			return new LispCons(new LispSymbol(name), cons.cdr());
+		}
+		return form;
+	}
+
+	/**
+	 * {@code (defconstant name value)}: an ordinary forcing defvar, plus the value
+	 * recorded for {@code (eql name)} parameter specializers -- CLHS 7.6.2 evaluates an
+	 * eql specializer form when the method is defined, so a method naming a constant
+	 * dispatches on the constant's VALUE. Recorded from the EVALUATED value, which the
+	 * interpreter has and the compile-path walk (literal value forms only) does not.
+	 */
+	private LispVal evalDefconstant(LispCons cons, Environment env) {
+		LispVal name = evalDefvar(cons, env, true);
+		if (name instanceof LispSymbol sym && this.globalEnv.isBound(sym.name())) {
+			this.globalEnv.markConstant(sym.name());
+			LispMacroExpander.registerConstantValue(sym.name(), this.globalEnv.lookup(sym.name()), this.closRegistry);
+		}
+		return name;
+	}
+
+	private LispVal evalDefvar(LispCons cons, Environment env, boolean force) {
+		List<LispVal> parts = cons.toList();
+		LispSymbol name = (LispSymbol) parts.get(1);
+		// defvar/defparameter/defconstant proclaim the name special: a later
+		// let/let*/progv of it establishes a dynamic (not lexical) binding.
+		this.specialVars.add(name.name());
+		// defvar is idempotent (Common Lisp semantics): the initial value form is
+		// evaluated and bound in the global environment only if the variable is not
+		// already bound. (defvar name) with no value leaves it unbound. defparameter and
+		// defconstant pass force=true and always (re)assign the initial value. The global
+		// binding is the special's default value, seen whenever no dynamic binding is in
+		// effect. Inside a dynamic binding of the name both the test and the store reach
+		// that binding, as SBCL's do. Returns the variable name like Common Lisp.
+		if (parts.size() > 2) {
+			boolean bound = this.dynamicBindings.isBound(name.name()) ? this.dynamicBindings.get(name.name()) != null
+					: this.globalEnv.isBound(name.name());
+			if (force || !bound) {
+				LispVal value = eval(parts.get(2), env);
+				if (this.dynamicBindings.isBound(name.name())) {
+					this.dynamicBindings.setCurrent(name.name(), value);
+				}
+				else {
+					this.globalEnv.define(name.name(), value);
+				}
+			}
+		}
+		return singleValue(name);
+	}
+
+	private LispVal evalFunction(LispCons cons, Environment env) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() != 2) {
+			throw new LispEvalException(LispNames.FUNCTION + " expects exactly one argument");
+		}
+		LispVal designator = parts.get(1);
+		if (designator instanceof LispCons lambdaForm && lambdaForm.car() instanceof LispSymbol op
+				&& LispNames.LAMBDA.equals(op.name())) {
+			return evalLambdaForm(lambdaForm, env);
+		}
+		// #'(setf name): the writer function installed by (defun (setf name) ...).
+		LispSymbol setfPlace = LambdaLists.setfFunctionPlaceName(designator);
+		if (setfPlace != null) {
+			return functionValue(LispMacroExpander.setfFunctionName(setfPlace.name()));
+		}
+		if (designator instanceof LispSymbol sym) {
+			return functionValue(sym.name());
+		}
+		throw new LispEvalException(
+				LispNames.FUNCTION + " expects a function name or lambda expression, got " + designator.print());
+	}
+
+	/**
+	 * The closure a {@code funcall} or {@code apply} of a function value runs in
+	 * {@link #evalCons}'s frame: the value itself when it is one, the current dispatcher
+	 * when it is a generic function's value ({@link #genericFunctionValues}, which calls
+	 * nothing else) and one is installed, else null for the built-in to apply.
+	 * @param value the function value
+	 * @return the closure, or null
+	 */
+	@Nullable LispLambda closureCalled(LispVal value) {
+		if (value instanceof LispLambda lambda) {
+			return lambda;
+		}
+		if (value instanceof LispFunction function && this.genericFunctionValues.get(function.name()) == function
+				&& this.genericDispatchers.get(function.name()) instanceof LispLambda dispatcher) {
+			return dispatcher;
+		}
+		return null;
+	}
+
+	/**
+	 * The value of a name in the function namespace, as {@code #'name} and
+	 * {@code symbol-function} answer it. A GENERIC function's is late-bound: defmethod
+	 * REDEFINES the dispatcher under the name (evalDefmethod), so a captured snapshot
+	 * would silently miss every method a later-loaded system adds -- dbi stashes
+	 * #'disconnect in its connection pool at load time and dbd-postgres defines its
+	 * method afterwards. The wrapper resolves the CURRENT binding at call time (real CL
+	 * semantics: #'name IS the generic object methods join), and there is one per name,
+	 * so two references are {@code eq}. Non-generic names keep the direct value. It hands
+	 * on every value the dispatcher answers. What it resolves is the GENERIC's current
+	 * dispatcher, not the name: a (setf (fdefinition 'name) ...) wrapping a #'name taken
+	 * before it must still reach the generic, and a #'name taken after it is what the
+	 * setf stored.
+	 */
+	LispVal functionValue(String name) {
+		return functionValue(name, ClosRegistry.normalize(name));
+	}
+
+	/**
+	 * What {@code symbol-function} and {@code fdefinition} answer: for a special operator
+	 * or a macro -- the names {@code special-operator-p} and {@code macro-function}
+	 * answer for -- one function per name that signals {@code undefined-function} when
+	 * called (CLHS leaves its nature to the implementation; SBCL's is
+	 * {@code (:macro or)}), else {@link #functionValue}.
+	 * @param name the canonical name
+	 * @return the value
+	 */
+	private LispVal symbolFunction(String name) {
+		if (PackageRegistry.ansiSpecialOperatorNames().contains(name) || isMacroName(name)) {
+			return this.operatorFunctions.computeIfAbsent(name, operator -> new LispFunction(operator, args -> {
+				throw CellErrorException.undefinedFunction(operator);
+			}));
+		}
+		return functionValue(name);
+	}
+
+	/**
+	 * {@link #functionValue(String)} with the name's generic key made already.
+	 * @param name the function name
+	 * @param genericKey {@code ClosRegistry.normalize(name)}
+	 * @return the value
+	 */
+	LispVal functionValue(String name, String genericKey) {
+		if (this.closRegistry.findNormalizedGeneric(genericKey) != null) {
+			LispVal dispatcher = this.genericDispatchers.get(name);
+			if (dispatcher instanceof LispInstance metaobject && isGenericFunctionMetaobject(metaobject)) {
+				// Its metaobject calls the current dispatcher, and is what find-method
+				// and
+				// remove-method take.
+				return metaobject;
+			}
+			if (dispatcher == null || dispatcher == this.globalEnv.lookupFunctionOrNull(name)) {
+				return this.genericFunctionValues.computeIfAbsent(name, generic -> new LispFunction(generic, args -> {
+					LispVal current = this.genericDispatchers.get(generic);
+					return apply(current != null ? current : resolveFunction(generic), args, this.globalEnv);
+				}, true));
+			}
+		}
+		return resolveFunction(name);
+	}
+
+	/**
+	 * The runtime "package value" of a canonical package name: the upcased name as a
+	 * keyword. See {@code find-package}.
+	 */
+	private static LispSymbol packageKeyword(String canonicalName) {
+		LispSymbol known = PACKAGE_KEYWORDS.get(canonicalName);
+		if (known == null) {
+			known = new LispSymbol(":" + canonicalName.toUpperCase(java.util.Locale.ROOT));
+			if (PACKAGE_KEYWORDS.size() < PACKAGE_KEYWORD_LIMIT) {
+				PACKAGE_KEYWORDS.put(canonicalName, known);
+			}
+		}
+		return known;
+	}
+
+	/**
+	 * {@link #packageKeyword}'s answers by canonical name: {@code symbol-package} asks
+	 * one per call, and fset's {@code compare} asks two per pair of symbols. One per
+	 * package a program names; a program naming more than the limit builds the rest per
+	 * call.
+	 */
+	private static final java.util.concurrent.ConcurrentHashMap<String, LispSymbol> PACKAGE_KEYWORDS = new java.util.concurrent.ConcurrentHashMap<>();
+
+	private static final int PACKAGE_KEYWORD_LIMIT = 4096;
+
+	/** A list of package VALUES (the {@code find-package} keyword shape) from names. */
+	private static LispVal packageKeywordList(java.util.Collection<String> names) {
+		LispVal result = LispNil.INSTANCE;
+		List<String> reversed = new ArrayList<>(names);
+		java.util.Collections.reverse(reversed);
+		for (String name : reversed) {
+			result = new LispCons(packageKeyword(name), result);
+		}
+		return result;
+	}
+
+	/**
+	 * The UPCASED canonical name of a registered package, signalling like Common Lisp's
+	 * package-error when the designator names none.
+	 */
+	private String packageName(String operator, String designator) {
+		String found = this.packageResolver.findPackageName(designator);
+		if (found == null) {
+			throw new LispEvalException(operator + ": no package named " + designator);
+		}
+		return found.toUpperCase(java.util.Locale.ROOT);
+	}
+
+	/** The use list of a registered package, by canonical name. */
+	private List<String> packageUseEntry(String operator, String designator) {
+		List<String> used = this.packageResolver.runtimePackageUseTable().get(packageName(operator, designator));
+		return used == null ? List.of() : used;
+	}
+
+	/**
+	 * Coerces a runtime package designator -- a string, a keyword/symbol, or a package
+	 * value (which IS a keyword here, see {@code find-package}) -- to the bare package
+	 * name.
+	 */
+	private static String packageDesignator(String operator, LispVal val) {
+		return switch (val) {
+			case LispString str -> str.value();
+			// A symbol designates a package by its symbol-name -- the MEMBER part of a
+			// qualified spelling (CL: the qualifier says where the symbol lives, not
+			// what it names). A #.*package* splice re-resolved as quoted data arrives
+			// qualified (rte-pkg::rte-pkg) and still designates RTE-PKG.
+			case LispSymbol sym -> LispSymbol.memberName(sym.name());
+			// nil is the symbol named "NIL", so it designates a package by that name --
+			// which no image has, so (find-package nil) is nil rather than a type error.
+			case LispNil ignored -> "NIL";
+			// A CHARACTER is a string designator (CLHS glossary), hence a package
+			// designator: (find-package #\G) answers the package named "G". t is the
+			// symbol named "T", like nil above.
+			case LispChar ch -> ch.display();
+			case LispTrue ignored -> "T";
+			default -> throw new LispEvalException(operator + " expects a package designator, got " + val.print());
+		};
+	}
+
+	/**
+	 * A package designator or a list of them (the {@code :use} / {@code :nicknames}
+	 * values), coerced to bare package names.
+	 */
+	private static List<String> designatorList(String operator, LispVal val) {
+		if (val instanceof LispNil) {
+			return List.of();
+		}
+		if (val instanceof LispCons cons) {
+			List<String> out = new ArrayList<>();
+			for (LispVal element : cons.toList()) {
+				out.add(packageDesignator(operator, element));
+			}
+			return out;
+		}
+		return List.of(packageDesignator(operator, val));
+	}
+
+	/**
+	 * Registers a {@code defpackage} at RUN time -- one nested in code, or handed to
+	 * {@code eval} -- turning its clause errors into the conditions CL names: a
+	 * {@code program-error} for a malformed form, a {@code package-error} otherwise, and
+	 * for an import of a name the source package lacks a {@code package-error} with a
+	 * {@code continue} restart that interns the name there and tries again.
+	 * @param cons the {@code defpackage} form
+	 * @return the package keyword
+	 */
+	private LispVal registerRuntimeDefpackage(LispCons cons) {
+		while (true) {
+			try {
+				return this.packageResolver.resolve(cons);
+			}
+			catch (am.ik.rontolisp.DefpackageException ex) {
+				String message = java.util.Objects.requireNonNullElse(ex.getMessage(), LispNames.DEFPACKAGE);
+				if (ex.kind() == am.ik.rontolisp.DefpackageException.Kind.PROGRAM_ERROR) {
+					throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME, message);
+				}
+				String missing = ex.missingSymbol();
+				if (missing == null) {
+					return signalPackageError(message, ex.designator());
+				}
+				// The correctable case (SBCL's "INTERN it."): a CONTINUE restart that
+				// interns the name in the source package, after which the definition
+				// is tried again and finds it.
+				eval(packageErrorForm(message, ex.designator(), true), this.globalEnv);
+				this.packageResolver.internSpellingIn(ex.designator(), missing, true);
+			}
+		}
+	}
+
+	/**
+	 * Signals a catchable {@code package-error} carrying the reason in its message and
+	 * the offending designator (upcased, keyword-shaped like {@code find-package}
+	 * answers; nil for an empty designator, which designates no package anywhere) in its
+	 * {@code package} slot. Evaluates the same typed {@code (error 'package-error ...)}
+	 * form user code signals, so the message and the condition the handlers see are
+	 * identical to the compiled backends' prelude path; never returns normally.
+	 * @param message the reason text
+	 * @param designator the offending package designator as given
+	 * @return nothing (always throws)
+	 */
+	/**
+	 * The member-table operators' ({@code shadow} / {@code shadowing-import} /
+	 * {@code unintern}) answer to a designator naming no package: a catchable
+	 * {@code package-error} spelled as the compiled backends' {@code %runtime-package-op}
+	 * spells it.
+	 */
+	private LispVal signalNoSuchPackage(String operator, String designator) {
+		return signalPackageError(operator + ": no such package: " + designator, designator);
+	}
+
+	private static final String NO_SUCH_PACKAGE = "No such package: ";
+
+	private LispVal signalPackageError(String message, String designator) {
+		return eval(packageErrorForm(message, designator, false), this.globalEnv);
+	}
+
+	/**
+	 * The {@code (error 'package-error ...)} form {@link #signalPackageError} evaluates;
+	 * with {@code continuable} it is wrapped in a {@code restart-case} offering
+	 * {@code continue}, which returns normally.
+	 */
+	private LispVal packageErrorForm(String message, String designator, boolean continuable) {
+		List<LispVal> parts = new ArrayList<>();
+		parts.add(new LispSymbol(LispNames.ERROR));
+		parts.add(quoteValue(new LispSymbol(ClosRegistry.PACKAGE_ERROR_CLASS_NAME)));
+		parts.add(new LispSymbol(":PACKAGE"));
+		parts.add(designator.isEmpty() ? LispNil.INSTANCE
+				: quoteValue(packageKeyword(designator.toUpperCase(java.util.Locale.ROOT))));
+		parts.add(new LispSymbol(":FORMAT-CONTROL"));
+		parts.add(quoteValue(new LispString(ClosRegistry.textControl(message))));
+		if (continuable) {
+			LispVal form = LispNil.INSTANCE;
+			for (int i = parts.size() - 1; i >= 0; i--) {
+				form = new LispCons(parts.get(i), form);
+			}
+			parts.clear();
+			parts.add(new LispSymbol(LispNames.RESTART_CASE));
+			parts.add(form);
+			parts.add(new LispCons(new LispSymbol(LispNames.CONTINUE), new LispCons(LispNil.INSTANCE, new LispCons(
+					new LispSymbol(":REPORT"),
+					new LispCons(new LispString("INTERN it."), new LispCons(LispNil.INSTANCE, LispNil.INSTANCE))))));
+		}
+		LispVal form = LispNil.INSTANCE;
+		for (int i = parts.size() - 1; i >= 0; i--) {
+			form = new LispCons(parts.get(i), form);
+		}
+		return form;
+	}
+
+	private static void requireSingleArg(String name, List<LispVal> args) {
+		if (args.size() != 1) {
+			throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+					name + " expects 1 argument, got " + args.size());
+		}
+	}
+
+	/** The first argument of an instance primitive, which must be an instance. */
+	private static LispInstance requireInstance(String name, List<LispVal> args) {
+		if (args.isEmpty() || !(args.get(0) instanceof LispInstance inst)) {
+			throw new LispEvalException(
+					name + " expects an instance, got " + (args.isEmpty() ? "no arguments" : args.get(0).print()));
+		}
+		return inst;
+	}
+
+	/** The second argument of an instance primitive: a 0-based slot index in range. */
+	/**
+	 * The current value of the global (dynamic-first) variable a synonym stream names --
+	 * {@code symbol-value}'s rule, which is what the reader closure of an interpreter
+	 * synonym stream answers.
+	 * @param name the variable name
+	 * @return the current value
+	 */
+	private LispVal symbolValueOf(String name) {
+		if (LispNames.PACKAGE_VAR.equals(name)) {
+			return currentPackageValue();
+		}
+		if (this.dynamicBindings.isBound(name)) {
+			return dynamicValue(name);
+		}
+		LispVal value = this.globalEnv.lookupOrNull(name);
+		if (value == null) {
+			throw CellErrorException.unboundVariable(name);
+		}
+		return value;
+	}
+
+	/**
+	 * The value of the active dynamic binding of {@code name}, which the caller has seen
+	 * is bound: the {@code unbound-variable} naming it when the binding holds no value (a
+	 * symbol {@code progv} had no value for).
+	 */
+	private LispVal dynamicValue(String name) {
+		LispVal value = this.dynamicBindings.get(name);
+		if (value == null) {
+			throw CellErrorException.unboundVariable(name);
+		}
+		return value;
+	}
+
+	/**
+	 * The argument list with its stream argument resolved through a SYNONYM STREAM. Every
+	 * Gray-dispatching built-in wrap runs this first: a synonym stream is an instance
+	 * too, so without it the wrap would send the synonym itself to the Gray generic
+	 * instead of forwarding to what it names (which may in turn BE a Gray instance).
+	 * @param args the call arguments
+	 * @param index the position of the stream argument
+	 * @return the same list when nothing forwards, else a copy with the resolved
+	 * designator
+	 */
+	/**
+	 * The current -- dynamic-first -- value of {@code *error-output*}: the seeded handle
+	 * 2 (the process standard error) unless the program rebound it.
+	 */
+	private @Nullable LispVal currentErrorOutput() {
+		if ((!this.specialVars.isEmpty() || this.progvUsed)
+				&& this.dynamicBindings.isBound(LispNames.ERROR_OUTPUT_VAR)) {
+			return this.dynamicBindings.get(LispNames.ERROR_OUTPUT_VAR);
+		}
+		return this.globalEnv.lookupOrNull(LispNames.ERROR_OUTPUT_VAR);
+	}
+
+	/**
+	 * The current -- dynamic-first -- value of {@code *standard-output*}: the seeded
+	 * {@code t} unless the program rebound it.
+	 */
+	private @Nullable LispVal currentStandardOutput() {
+		if ((!this.specialVars.isEmpty() || this.progvUsed)
+				&& this.dynamicBindings.isBound(LispNames.STANDARD_OUTPUT_VAR)) {
+			return this.dynamicBindings.get(LispNames.STANDARD_OUTPUT_VAR);
+		}
+		return this.globalEnv.lookupOrNull(LispNames.STANDARD_OUTPUT_VAR);
+	}
+
+	/** The input twin of {@link #currentStandardOutput}. */
+	private @Nullable LispVal currentStandardInput() {
+		if ((!this.specialVars.isEmpty() || this.progvUsed)
+				&& this.dynamicBindings.isBound(LispNames.STANDARD_INPUT_VAR)) {
+			return this.dynamicBindings.get(LispNames.STANDARD_INPUT_VAR);
+		}
+		return this.globalEnv.lookupOrNull(LispNames.STANDARD_INPUT_VAR);
+	}
+
+	/**
+	 * {@link #resolveStreamArg} for an argument where nil designates a standard stream:
+	 * an omitted or nil stream is the current {@code *standard-input*} /
+	 * {@code *standard-output*}, and when that is a Gray instance it takes the argument's
+	 * place (an omitted optional before it padded with nil), so the wrap dispatches on
+	 * it. Anything else leaves the arguments as given for the built-in, which resolves
+	 * the designator itself.
+	 * @param args the call arguments
+	 * @param index the position of the stream argument
+	 * @param input whether nil designates {@code *standard-input*} rather than
+	 * {@code *standard-output*}
+	 * @return the arguments, with the standard stream in place when it is a Gray instance
+	 */
+	private List<LispVal> resolveDesignatorArg(List<LispVal> args, int index, boolean input) {
+		if (index < args.size() && !(args.get(index) instanceof LispNil)) {
+			return resolveStreamArg(args, index);
+		}
+		LispVal standard = input ? currentStandardInput() : currentStandardOutput();
+		if (standard == null) {
+			return args;
+		}
+		standard = Environment.synonymTarget(standard);
+		if (!dispatchesToGray(standard)) {
+			return args;
+		}
+		List<LispVal> resolved = new java.util.ArrayList<>(args);
+		while (resolved.size() < index) {
+			resolved.add(LispNil.INSTANCE);
+		}
+		if (index < resolved.size()) {
+			resolved.set(index, standard);
+		}
+		else {
+			resolved.add(standard);
+		}
+		return resolved;
+	}
+
+	private static List<LispVal> resolveStreamArg(List<LispVal> args, int index) {
+		if (index >= args.size() || !Environment.isSynonymStream(args.get(index))) {
+			return args;
+		}
+		List<LispVal> resolved = new java.util.ArrayList<>(args);
+		// The SYNONYM half only: the base built-ins resolve an open stream to its handle
+		// themselves, and the Gray arm below has to see the value to tell the two apart.
+		resolved.set(index, Environment.synonymTarget(args.get(index)));
+		return resolved;
+	}
+
+	/**
+	 * Whether a resolved stream argument goes to the Gray protocol rather than to the
+	 * handle-based built-in. Every stream is an instance now, so "is an instance" is no
+	 * longer the question: an OPEN stream ({@code LispLayout.STREAM}) is exactly the kind
+	 * the built-in owns.
+	 * @param value the resolved stream argument
+	 * @return true for a Gray (or synonym) instance, false for an open stream
+	 */
+	private static boolean dispatchesToGray(LispVal value) {
+		return value instanceof LispInstance && !Environment.isStreamValue(value);
+	}
+
+	/**
+	 * The first {@code :start} / {@code :end} values of a runtime keyword tail, for the
+	 * Gray dispatchers that check and forward bounds -- or the empty list when neither
+	 * appears, keeping the two-argument dispatch. Anything else in the tail keeps the
+	 * dispatchers' leniency (only the base built-ins validate).
+	 * @param args the call's argument values
+	 * @param from the index the keyword tail begins at
+	 * @return the argument suffix to append (start then end, as spelled), possibly empty
+	 */
+	private static List<LispVal> grayStreamBounds(List<LispVal> args, int from) {
+		LispVal start = null;
+		LispVal end = null;
+		for (int k = from; k + 1 < args.size(); k += 2) {
+			if (args.get(k) instanceof LispSymbol kw) {
+				if (":START".equals(kw.name()) && start == null) {
+					start = args.get(k + 1);
+				}
+				else if (":END".equals(kw.name()) && end == null) {
+					end = args.get(k + 1);
+				}
+			}
+		}
+		if (start == null && end == null) {
+			return List.of();
+		}
+		// A bound is forwarded as given -- a nil start included, which the helper's check
+		// refuses; an unspelled start is 0 and an unspelled end nil (the length).
+		return List.of(start == null ? new LispInteger(0) : start, end == null ? LispNil.INSTANCE : end);
+	}
+
+	private static int requireSlotIndex(String name, LispInstance inst, List<LispVal> args) {
+		return requireSlotIndex(name, inst, args.size() < 2 ? null : args.get(1));
+	}
+
+	static int requireSlotIndex(String name, LispInstance inst, @Nullable LispVal index) {
+		if (!(index instanceof LispInteger idx)) {
+			throw new LispEvalException(name + " expects a slot index");
+		}
+		long k = idx.value();
+		// The storage, not slotCount: the addressable cells of an instance are what its
+		// layout RESERVED, which the compile paths index without a check of their own. A
+		// negative index counts back from the end of the storage (LispLayout.TAIL_CELL).
+		long cell = k < 0 ? inst.cellCount() + k : k;
+		if (cell < 0 || cell >= inst.cellCount()) {
+			throw new LispEvalException(name + ": slot index " + k + " is outside " + inst.layout().tag());
+		}
+		return (int) cell;
+	}
+
+	/**
+	 * Rebuilds a literal {@code (error ...)}/{@code (signal ...)}/{@code (warn ...)}/
+	 * {@code (format ...)} call from already-evaluated arguments, for the function values
+	 * of those operators. Self-evaluating values (strings, numbers, keywords, characters)
+	 * stay literal so the designator matchers see the same shape a source-level call has;
+	 * anything else is quoted to survive re-evaluation.
+	 */
+	// (quote value) -- how an already-evaluated value is handed back to the evaluator.
+	private static LispVal quotedValue(LispVal value) {
+		return new LispCons(new LispSymbol(LispNames.QUOTE), new LispCons(value, LispNil.INSTANCE));
+	}
+
+	// A time %file-set-times is given: nanoseconds since 1970 as a long, nil (leave it)
+	// as
+	// null.
+	// The path a file primitive of ARITY arguments is given first.
+	private static String filePrimitivePath(String name, List<LispVal> args, int arity) {
+		if (args.size() != arity) {
+			throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+					name + " expects " + arity + " arguments, got " + args.size());
+		}
+		if (!(args.get(0) instanceof LispString path)) {
+			throw new LispEvalException(name + " expects a string pathname");
+		}
+		return path.value();
+	}
+
+	private static int fileFixnum(String name, LispVal value) {
+		if (!(value instanceof LispInteger n)) {
+			throw new LispEvalException(name + " expects a fixnum");
+		}
+		return (int) n.value();
+	}
+
+	private static @Nullable Long nanosecondsOrNull(LispVal time) {
+		if (time instanceof LispInteger n) {
+			return n.value();
+		}
+		if (time instanceof LispNil) {
+			return null;
+		}
+		throw new LispEvalException(LispNames.FILE_SET_TIMES_INTERNAL + " expects a time in nanoseconds or nil");
+	}
+
+	// The values as a Lisp list VALUE (not a form): the argument list %fmt-render walks.
+	private static LispVal valueList(List<LispVal> values) {
+		LispVal list = LispNil.INSTANCE;
+		for (int i = values.size() - 1; i >= 0; i--) {
+			list = new LispCons(values.get(i), list);
+		}
+		return list;
+	}
+
+	private static LispVal rebuildSignalForm(String opName, List<LispVal> args) {
+		LispVal form = LispNil.INSTANCE;
+		int datumIndex = LispNames.CERROR.equals(opName) ? 1 : 0;
+		for (int i = args.size() - 1; i >= 0; i--) {
+			LispVal a = args.get(i);
+			// A keyword datum stays quoted: unquoted it is a computed datum, a symbol,
+			// and would re-enter this function value.
+			boolean selfEvaluating = a instanceof LispString || a instanceof LispInteger || a instanceof LispBigInteger
+					|| a instanceof LispRatio || a instanceof LispDouble || a instanceof LispChar
+					|| a instanceof LispNil || a instanceof LispTrue
+					|| (i != datumIndex && a instanceof LispSymbol sym && sym.isKeyword());
+			LispVal wrapped = selfEvaluating ? a
+					: new LispCons(new LispSymbol(LispNames.QUOTE), new LispCons(a, LispNil.INSTANCE));
+			form = new LispCons(wrapped, form);
+		}
+		return new LispCons(new LispSymbol(opName), form);
+	}
+
+	/**
+	 * Whether a package-qualified operator name is in the uiop family, per name: every
+	 * qualified call that reaches the uiop probes asked it through two
+	 * {@link PackageRegistry#splitQualified} splits, about 5% of an interpreted
+	 * {@code objc.lisp} loop. The answer is a function of the name alone (built-in
+	 * nicknames only).
+	 */
+	private static final java.util.concurrent.ConcurrentHashMap<String, Boolean> UIOP_OPERATORS = new java.util.concurrent.ConcurrentHashMap<>();
+
+	private static boolean isUiopOperator(String name) {
+		Boolean known = UIOP_OPERATORS.get(name);
+		if (known == null) {
+			PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(name);
+			known = qn != null && UiopExports.isUiopFamily(qn.pkg());
+			UIOP_OPERATORS.put(name, known);
+		}
+		return known;
+	}
+
+	/**
+	 * A keyword helper of a desugared {@code &key} prologue
+	 * ({@link LambdaLists#runtimeDefun}) as a built-in: every keyword parameter of every
+	 * call runs one, and the interpreted loop of the Lisp body cost about 1 us each. The
+	 * Java scan answers only what it settles on a well-formed tail with no error;
+	 * anything else -- a malformed tail, a key the check must look further into, a signal
+	 * -- runs the Lisp body itself, so what a call answers or signals is still that
+	 * body's.
+	 * @param name {@link LispNames#LL_KEY_CELL} or {@link LispNames#LL_CHECK_KEYS}
+	 * @return the built-in
+	 */
+	private LispFunction keywordHelper(String name) {
+		LispCons defun = (LispCons) LambdaLists.runtimeDefun(name);
+		LispVal lambdaTail = ((LispCons) defun.cdr()).cdr();
+		LispVal body = evalLambdaForm(new LispCons(new LispSymbol(LispNames.LAMBDA), lambdaTail), this.globalEnv, name);
+		boolean keyCell = LispNames.LL_KEY_CELL.equals(name);
+		return new LispFunction(name, args -> {
+			LispVal answer = (args.size() != (keyCell ? 3 : 2)) ? null
+					: keyCell ? keyCell(args.get(0), args.get(1), args.get(2)) : checkKeys(args.get(0), args.get(1));
+			return answer != null ? answer : apply(body, args, this.globalEnv);
+		});
+	}
+
+	// (%ll-key-cell plist key upper): the cell whose car is KEY or UPPER, nil at the
+	// end; null where (cddr cur) would take the cdr of an atom.
+	private static @Nullable LispVal keyCell(LispVal plist, LispVal key, LispVal upper) {
+		boolean twin = !(upper instanceof LispNil);
+		LispVal cur = plist;
+		while (cur instanceof LispCons cell) {
+			LispVal indicator = cell.car();
+			if (LispEquality.eql(indicator, key) || (twin && LispEquality.eql(indicator, upper))) {
+				return cell;
+			}
+			if (cell.cdr() instanceof LispCons value) {
+				cur = value.cdr();
+			}
+			else if (cell.cdr() instanceof LispNil) {
+				return LispNil.INSTANCE;
+			}
+			else {
+				return null;
+			}
+		}
+		return LispNil.INSTANCE;
+	}
+
+	// (%ll-check-keys plist known): nil when every indicator is a known key or
+	// :allow-other-keys and has a value; null for anything the Lisp body must decide.
+	private static @Nullable LispVal checkKeys(LispVal plist, LispVal known) {
+		LispVal cur = plist;
+		while (cur instanceof LispCons cell) {
+			LispVal indicator = cell.car();
+			if (!(indicator instanceof LispSymbol sym && (isAllowOtherKeys(sym.name()) || memberEql(sym, known)))) {
+				return null;
+			}
+			if (!(cell.cdr() instanceof LispCons value)) {
+				return null;
+			}
+			cur = value.cdr();
+		}
+		return LispNil.INSTANCE;
+	}
+
+	// Both spellings, as the Lisp body tests them.
+	private static boolean isAllowOtherKeys(String name) {
+		return LispNames.ALLOW_OTHER_KEYS_KEYWORD.equals(name) || ":allow-other-keys".equals(name);
+	}
+
+	private static boolean memberEql(LispVal item, LispVal list) {
+		LispVal cur = list;
+		while (cur instanceof LispCons cell) {
+			if (LispEquality.eql(item, cell.car())) {
+				return true;
+			}
+			cur = cell.cdr();
+		}
+		return false;
+	}
+
+	/**
+	 * The spelling of a symbol-valued argument of the function-namespace operators:
+	 * {@code t} and {@code nil} are their own value types here, but symbols all the same.
+	 * @param value the argument
+	 * @return the symbol's name, or {@code null} when the value is not a symbol
+	 */
+	/**
+	 * The function-namespace name of a function name: a symbol's
+	 * ({@link #standardSymbolName}), or for a {@code (setf name)} list the internal name
+	 * its writer function is stored under ({@link LispMacroExpander#setfFunctionName}).
+	 * @param value the function name
+	 * @return the name, or null when the value is no function name
+	 */
+	private static @Nullable String functionName(LispVal value) {
+		LispSymbol setfPlace = LambdaLists.setfFunctionPlaceName(value);
+		return setfPlace != null ? LispMacroExpander.setfFunctionName(setfPlace.name()) : standardSymbolName(value);
+	}
+
+	private static @Nullable String standardSymbolName(LispVal value) {
+		return switch (value) {
+			case LispSymbol sym -> sym.name();
+			case LispTrue ignored -> "T";
+			case LispNil ignored -> "NIL";
+			default -> null;
+		};
+	}
+
+	/**
+	 * Resolves a function designator name against the global function namespace.
+	 * @param name the function name
+	 * @return the function value
+	 * @throws LispEvalException the {@code undefined-function} if the name is a special
+	 * operator or macro, or undefined: a macro or special operator has no function value,
+	 * which the compiled backends report the same way
+	 */
+	private LispVal resolveFunction(String name) {
+		// A registered function value wins over the macro/special-operator guard:
+		// some standard operators are BOTH lowered specially in call position and
+		// real functions (error/signal/warn -- CL functions that cl-base64 reaches
+		// via (apply #'error ...)).
+		LispVal fn = this.globalEnv.lookupFunctionOrNull(name);
+		if (fn != null) {
+			return fn;
+		}
+		if (this.userMacros.containsKey(name) || this.retiredFunctions.contains(name)) {
+			throw CellErrorException.undefinedFunction(name);
+		}
+		// A BuiltinFunctionWrappers entry IS the function value of a built-in that
+		// evalCons lowers in operator position but Environment never binds as a
+		// LispFunction (elt, coerce, vector, map, typep, /=, ...): the catalog is by
+		// construction "built-in FUNCTIONS every backend lowers in call position", so
+		// evaluating its lambda here answers exactly what the compile paths answer,
+		// from the same table -- rather than a second list of Java builtins that drifts
+		// from it. It runs BEFORE the special-operator guard for the same reason the
+		// lookup above does: a name with a wrapper is a function, whatever the operator
+		// table calls it (typep is the CL function rontolisp implements as a special
+		// form). The synthesized lambda cannot recurse: every wrapped operator has a
+		// real lowering, so its body never resolves back to this branch -- but for a
+		// built-in whose lowering IS its global binding, once fmakunbound dropped that,
+		// which the retired names above stop short of.
+		// The lambda carries the operator's name, as the compiled backends' injected
+		// wrapper defun does: it prints as #<function NAME> and its wrong-count
+		// program-error names the operator (checkArity, and the &optional surplus
+		// check its lambda list expands to).
+		LispVal wrapper = BuiltinFunctionWrappers.lambdaFor(name);
+		if (wrapper != null) {
+			LispVal value = evalLambdaForm((LispCons) wrapper, this.globalEnv, name);
+			return value instanceof LispLambda lambda ? new LispLambda(lambda.params(), lambda.rest(), lambda.body(),
+					lambda.closure(), name, false, lambda.readPackage()) : value;
+		}
+		if (SPECIAL_OPERATORS.contains(name)) {
+			throw CellErrorException.undefinedFunction(name);
+		}
+		LispVal loaded = loadFunction(name);
+		if (loaded != null) {
+			return loaded;
+		}
+		// Last resort, past every lazy load: a shared image function spelled from
+		// another package. The reader canonicalizes the symbol to pkg::member, while
+		// the function table keys the image-wide %-helpers cl does not own by their
+		// bare member -- a CL-USER spelling canonifies to bare and resolves, a
+		// foreign one must reach the same entry here, where the qualified lazy loads
+		// have all declined. The user defuns this fallback could shadow live
+		// under their own qualified keys, which the lookup at the top already missed.
+		// fbound does not take this step: a package's own symbol that only falls back
+		// to an image function is no definition of that symbol. Neither does a name cl
+		// owns: a package's own CAR (one that uses no cl, or shadows it) is not cl's.
+		PackageRegistry.QualifiedName qualified = PackageRegistry.splitQualified(name);
+		if (qualified != null && !PackageRegistry.isClSymbol(qualified.member())) {
+			LispVal bare = this.globalEnv.lookupFunctionOrNull(qualified.member());
+			if (bare != null) {
+				return bare;
+			}
+		}
+		throw CellErrorException.undefinedFunction(name);
+	}
+
+	/**
+	 * The function a name resolves to once the library that defines it is loaded: every
+	 * lazily loaded definition (the prelude defuns, the uiop and asdf runtimes, the
+	 * qualified libraries, the generated runtimes, the system generics) and the car/cdr
+	 * compositions. {@link #resolveFunction} and {@link #fbound} both ask it, so a name a
+	 * call reaches is a name {@code fboundp} answers t for.
+	 * @param name the function name
+	 * @return the loaded function, or null when no library defines the name
+	 */
+	private @Nullable LispVal loadFunction(String name) {
+		// Everything below LOADS something into the shared global environment, so it runs
+		// under the library lock: a concurrently served request must either see the load
+		// finished or wait for it, never fall through a gate whose flag is already set
+		// while the definitions it guards are still being evaluated.
+		synchronized (this.libraryLoadLock) {
+			// Another thread may have finished the load while this one waited.
+			LispVal loadedElsewhere = this.globalEnv.lookupFunctionOrNull(name);
+			if (loadedElsewhere != null) {
+				return loadedElsewhere;
+			}
+			// The keyword helpers a desugared &key prologue calls
+			// (LambdaLists.runtimeDefun):
+			// the ONE Lisp definition the compilers prepend to a program, evaluated here
+			// on
+			// the first call -- a lambda-creation-time expansion is what introduces the
+			// reference, so no earlier hook can see it coming.
+			if (LambdaLists.isRuntimeHelper(name)) {
+				LispFunction helper = keywordHelper(name);
+				this.globalEnv.defineFunction(name, helper);
+				return helper;
+			}
+			// The linalg package is a Lisp-source library (linalg.lisp): evaluate its
+			// definitions into the global environment the first time a linalg:-qualified
+			// function is resolved, then retry the lookup.
+			if (!this.linalgLibraryLoaded && LinalgLibrary.isLinalgQualified(name)) {
+				this.linalgLibraryLoaded = true;
+				for (LispVal form : LinalgLibrary.forms()) {
+					eval(form, this.globalEnv);
+				}
+				// Opt-in --simd: override the accelerated defuns just evaluated with the
+				// Vector API natives. Each native captures the defun it replaces and
+				// falls
+				// back to it for the inputs it does not handle (general arrays, mixed
+				// widths, shape errors), so linalg.lisp stays the single source of truth.
+				if (this.simd) {
+					LinalgSimd.install(this.globalEnv, this, this.parallel);
+				}
+				// Opt-in --blas, installed LAST so that what it declines to is the
+				// simd native when there is one and the scalar defun otherwise.
+				if (this.blas) {
+					LinalgBlas.install(this.globalEnv, this);
+				}
+				// Opt-in --gpu, installed after --blas so that the device is asked
+				// FIRST and what it declines to is the best CPU path this invocation
+				// enabled (.kb/gpu.md).
+				if (this.gpu) {
+					LinalgGpu.install(this.globalEnv, this);
+				}
+				LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);
+				if (loaded != null) {
+					return loaded;
+				}
+			}
+			// The appkit package is a Lisp-source library (appkit.lisp) over the objc:
+			// verbs: load it the same way on the first resolution of an appkit:-qualified
+			// function. Nothing here asks whether this machine has AppKit -- the objc:
+			// call inside the first widget signals if it does not.
+			// The new objc base (objc.lisp) and cocoa load the same way, on the first
+			// resolution of one of their names.
+			if (!this.objcLibraryLoaded && ObjcLibrary.definesName(name)) {
+				ensureObjcLoaded();
+				LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);
+				if (loaded != null) {
+					return loaded;
+				}
+			}
+			if (!this.appkitLibraryLoaded && AppKitLibrary.isAppkitQualified(name)) {
+				this.appkitLibraryLoaded = true;
+				for (LispVal form : AppKitLibrary.forms()) {
+					eval(form, this.globalEnv);
+				}
+				LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);
+				if (loaded != null) {
+					return loaded;
+				}
+			}
+			// The geom package is a Lisp-source library (geom.lisp) over linalg: solid
+			// modeling, loaded the same way on the first resolution of a geom:-qualified
+			// function. Unlike appkit it needs nothing of the host -- the linalg
+			// definitions its bodies call load through this same hook on their first
+			// call.
+			if (!this.geomLibraryLoaded && GeomLibrary.isGeomQualified(name)) {
+				ensureGeomLoaded();
+				LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);
+				if (loaded != null) {
+					return loaded;
+				}
+			}
+			// The checkpoint package (checkpoint.lisp: tensor staging shared by the
+			// checkpoint readers) and the safetensors package (safetensors.lisp, the
+			// reader over it) load the same way, on the first resolution of a qualified
+			// function; a reader's checkpoint: calls load the staging through this
+			// same hook on their first call.
+			if (!this.checkpointLibraryLoaded && CheckpointLibrary.isCheckpointQualified(name)) {
+				ensureCheckpointLoaded();
+				LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);
+				if (loaded != null) {
+					return loaded;
+				}
+			}
+			if (!this.safetensorsLibraryLoaded && SafetensorsLibrary.isSafetensorsQualified(name)) {
+				ensureSafetensorsLoaded();
+				LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);
+				if (loaded != null) {
+					return loaded;
+				}
+			}
+			// The metal package is a Lisp-source library (metal.lisp) over the objc:
+			// verbs: a Metal drawing surface on an appkit window, loaded the same way on
+			// the first resolution of a metal:-qualified function. Its appkit:timer
+			// clock loads the widget layer through this same hook on its first call.
+			if (!this.metalLibraryLoaded && MetalLibrary.isMetalQualified(name)) {
+				ensureMetalLoaded();
+				LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);
+				if (loaded != null) {
+					return loaded;
+				}
+			}
+			// The scene package is a Lisp-source library (scene.lisp) over geom and
+			// metal: the 3-D viewer, loaded the same way on the first resolution of a
+			// scene:-qualified function. Everything it stands on -- geom, metal, linalg,
+			// appkit -- loads through this same hook on first call.
+			if (!this.sceneLibraryLoaded && SceneLibrary.isSceneQualified(name)) {
+				this.sceneLibraryLoaded = true;
+				for (LispVal form : SceneLibrary.forms()) {
+					eval(form, this.globalEnv);
+				}
+				LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);
+				if (loaded != null) {
+					return loaded;
+				}
+			}
+			// The torch package is a Lisp-source library (torch.lisp) over linalg: load
+			// it the same way on the first resolution of a torch:-qualified function
+			// (the linalg definitions its bodies call load through this same hook on
+			// their first call).
+			if (!this.torchLibraryLoaded && TorchLibrary.isTorchQualified(name)) {
+				ensureTorchLoaded();
+				LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);
+				if (loaded != null) {
+					return loaded;
+				}
+			}
+			// The tokenizer package is a Lisp-source library (tokenizers.lisp): the BPE
+			// tokenizers a published language model ships with, over nothing but cl.
+			// Loaded the same way on the first resolution of a tokenizer:-qualified
+			// function.
+			if (!this.tokenizersLibraryLoaded && TokenizersLibrary.isTokenizerQualified(name)) {
+				this.tokenizersLibraryLoaded = true;
+				for (LispVal form : TokenizersLibrary.forms()) {
+					eval(form, this.globalEnv);
+				}
+				LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);
+				if (loaded != null) {
+					return loaded;
+				}
+			}
+			// The gguf package is a Lisp-source library (gguf.lisp): the reader for a
+			// GGUF checkpoint, over nothing but cl and ANSI CL file I/O. Loaded the same
+			// way on the first resolution of a gguf:-qualified function.
+			if (!this.ggufLibraryLoaded && GgufLibrary.isGgufQualified(name)) {
+				this.ggufLibraryLoaded = true;
+				for (LispVal form : GgufLibrary.forms()) {
+					eval(form, this.globalEnv);
+				}
+				LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);
+				if (loaded != null) {
+					return loaded;
+				}
+			}
+			// The vec package is a Lisp-source library (vec.lisp), the scalar reference
+			// over the packed double-float array type: load it the same way on the first
+			// resolution of a vec:-qualified function.
+			if (!this.vecLibraryLoaded && VecLibrary.isVecQualified(name)) {
+				this.vecLibraryLoaded = true;
+				for (LispVal form : VecLibrary.forms()) {
+					eval(form, this.globalEnv);
+				}
+				// Opt-in --simd: override the vectorizable defuns just evaluated with the
+				// Vector API natives. mean/norm keep their scalar bodies and pick the
+				// natives up through the global function namespace (Lisp-2).
+				if (this.simd) {
+					VecSimd.install(this.globalEnv, this, this.parallel);
+				}
+				// Opt-in --blas: vec:matvec / vec:matvec-into are a GEMV, so they are
+				// intercepted here on TOP of the lane kernel exactly as linalg:dot is on
+				// the hook above -- and here rather than there because the two libraries
+				// load independently (.kb/linalg-blas.md).
+				if (this.blas) {
+					LinalgBlas.installVec(this.globalEnv, this);
+				}
+				// Opt-in --gpu: vec:matvec is the one device member outside linalg:, and
+				// it is installed here, on TOP of the lane kernel, when THIS library
+				// loads -- the two libraries load independently, so it cannot ride on
+				// the linalg hook above (.kb/gpu.md). Installed after --blas, so the
+				// device is asked FIRST and declines to the best CPU path this
+				// invocation enabled.
+				if (this.gpu) {
+					LinalgGpu.installVec(this.globalEnv, this);
+				}
+				LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);
+				if (loaded != null) {
+					return loaded;
+				}
+			}
+			// The URL library (url.lisp) loads the same way on the first resolution of
+			// one
+			// of its public rontolisp: functions.
+			if (!this.urlLibraryLoaded && UrlLibrary.isUrlFunction(name)) {
+				this.urlLibraryLoaded = true;
+				for (LispVal form : UrlLibrary.forms()) {
+					eval(form, this.globalEnv);
+				}
+				LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);
+				if (loaded != null) {
+					return loaded;
+				}
+			}
+			// The run-time half of the experimental Scheme front end (scheme.lisp) loads
+			// the same way on the first resolution of a rontolisp::%scheme- helper, which
+			// only a lowered Scheme program names.
+			if (!this.schemeLibraryLoaded && SchemeLibrary.isSchemeFunction(name)) {
+				this.schemeLibraryLoaded = true;
+				// evalResolved, not the bare eval the neighbours use:
+				// %scheme-error-message
+				// rebinds *standard-output*, and only a form whose special bindings were
+				// registered (SpecialVarCollector) binds it DYNAMICALLY for its callees.
+				for (LispVal form : SchemeLibrary.forms(this.sourceStandards)) {
+					evalResolved(form);
+				}
+				LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);
+				if (loaded != null) {
+					return loaded;
+				}
+			}
+			// The run-time half of the experimental Starlark front end (starlark.lisp)
+			// loads the same way on the first resolution of a rontolisp::%starlark-
+			// helper, which only a lowered Starlark program names.
+			if (!this.starlarkLibraryLoaded && StarlarkLibrary.isStarlarkFunction(name)) {
+				this.starlarkLibraryLoaded = true;
+				for (LispVal form : StarlarkLibrary.forms()) {
+					evalResolved(form);
+				}
+				LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);
+				if (loaded != null) {
+					return loaded;
+				}
+			}
+			// The run-time half of the experimental Java front end (java.lisp) loads the
+			// same way on the first resolution of a rontolisp::%java- helper, which
+			// only a lowered Java program names.
+			if (!this.javaLibraryLoaded && JavaLibrary.isJavaFunction(name)) {
+				this.javaLibraryLoaded = true;
+				for (LispVal form : JavaLibrary.forms()) {
+					evalResolved(form);
+				}
+				// the digests' kernels in the place of java.lisp's "none here"
+				JavaDigestNative.install(this.globalEnv);
+				LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);
+				if (loaded != null) {
+					return loaded;
+				}
+			}
+			// The regular-expression engine the front ends share (regex.lisp) loads the
+			// same way on the first resolution of a rontolisp::%regex- function, which
+			// only a front end's run-time library names.
+			if (!this.regexLibraryLoaded && RegexLibrary.isRegexFunction(name)) {
+				this.regexLibraryLoaded = true;
+				for (LispVal form : RegexLibrary.forms()) {
+					evalResolved(form);
+				}
+				LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);
+				if (loaded != null) {
+					return loaded;
+				}
+			}
+			// java.net.URI's rules as the front ends share them (uri.lisp) load the same
+			// way on the first resolution of a rontolisp::%uri- function.
+			if (!this.uriLibraryLoaded && UriLibrary.isUriFunction(name)) {
+				this.uriLibraryLoaded = true;
+				for (LispVal form : UriLibrary.forms()) {
+					evalResolved(form);
+				}
+				LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);
+				if (loaded != null) {
+					return loaded;
+				}
+			}
+			// Unicode normalization as the front ends share it
+			// (unicode-normalization.lisp) loads the same way on the first resolution of
+			// a rontolisp::%unorm- function.
+			if (!this.normalizationLibraryLoaded && UnicodeNormalizationLibrary.isNormalizationFunction(name)) {
+				this.normalizationLibraryLoaded = true;
+				for (LispVal form : UnicodeNormalizationLibrary.forms()) {
+					evalResolved(form);
+				}
+				LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);
+				if (loaded != null) {
+					return loaded;
+				}
+			}
+			// The run-time half of the experimental Clojure front end (clojure.lisp)
+			// loads the same way on the first resolution of a rontolisp::%clojure-
+			// helper, which only a lowered Clojure program names.
+			if (!this.clojureLibraryLoaded && ClojureLibrary.isClojureFunction(name)) {
+				loadClojureLibrary();
+				LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);
+				if (loaded != null) {
+					return loaded;
+				}
+			}
+			// The usocket package (usocket.lisp, the usocket-compatible shim over the
+			// rontolisp:tcp-* built-ins) loads the same way on the first resolution of a
+			// usocket:-qualified function.
+			if (!this.usocketLibraryLoaded && UsocketLibrary.isUsocketQualified(name)) {
+				ensureUsocketLoaded();
+				LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);
+				if (loaded != null) {
+					return loaded;
+				}
+			}
+			// The WIT runtime (wit.lisp: the provider registry, rontolisp:wit-provide and
+			// the
+			// rontolisp:wit-error condition) loads on the first resolution of one of its
+			// names, so a program may bind a provider before the wit-import directive
+			// that
+			// uses it.
+			if (!this.witLibraryLoaded && WitLibrary.isWitRuntimeName(name)) {
+				ensureWitLoaded();
+				LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);
+				if (loaded != null) {
+					return loaded;
+				}
+			}
+			// equalp/string< are recursive rontolisp-source defuns (LispPreludeLibrary),
+			// loaded on first resolution like the linalg/url libraries.
+			if (LispPreludeLibrary.isPreludeFunction(name) && this.loadedPreludeNames.add(name)) {
+				LispVal loaded = loadPreludeDefinition(name);
+				if (loaded != null) {
+					return loaded;
+				}
+			}
+			// The uiop family (uiop-*.lisp plus the not-implemented-error stubs
+			// UiopLibrary synthesizes for every export nothing implements yet) loads the
+			// same way, one definition at a time.
+			if (UiopLibrary.definesName(name)) {
+				LispVal loaded = loadUiopDefinition(name);
+				if (loaded != null) {
+					return loaded;
+				}
+			}
+			// The asdf runtime (asdf.lisp: the component metaobject classes,
+			// find-system and the readers) loads whole on the first resolution of one
+			// of its names.
+			if (!this.asdfRuntimeLoaded && AsdfRuntimeLibrary.definesName(name)) {
+				ensureAsdfRuntimeLoaded();
+				LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);
+				if (loaded != null) {
+					return loaded;
+				}
+			}
+			// %slot-read / %slot-bound-p are the out-of-line halves of the
+			// boundness-checked
+			// slot reads. They are GENERATED, not written anywhere, so the compile path
+			// emits
+			// their defuns into the program and the interpreter defines them here, from
+			// the
+			// same AST.
+			if ((LispNames.SLOT_READ_INTERNAL.equals(name) || LispNames.SLOT_BOUND_P_INTERNAL.equals(name))
+					&& this.loadedPreludeNames.add(name)) {
+				for (LispVal form : LispMacroExpander.slotUnboundDefuns(true)) {
+					eval(form, this.globalEnv);
+				}
+				LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);
+				if (loaded != null) {
+					return loaded;
+				}
+			}
+			// %struct-type-error, every defstruct accessor's failure arm, is generated
+			// the
+			// same way.
+			if (LispNames.STRUCT_TYPE_ERROR_INTERNAL.equals(name) && this.loadedPreludeNames.add(name)) {
+				eval(LispMacroExpander.structTypeErrorDefun(true), this.globalEnv);
+				LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);
+				if (loaded != null) {
+					return loaded;
+				}
+			}
+			// The condition-report renderer is GENERATED like the slot helpers: a
+			// resolution
+			// that reaches it before any condition form ran loads the same defuns the
+			// compile path injects, rather than failing.
+			if (LispNames.CONDITION_REPORT_STR_INTERNAL.equals(name) || LispNames.FORMAT_CONDITION_INTERNAL.equals(name)
+					|| LispNames.SIGNAL_TEXT_INTERNAL.equals(name)) {
+				ensureConditionReportRuntimeLoaded();
+				LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);
+				if (loaded != null) {
+					return loaded;
+				}
+			}
+			// The restart runtime (find-restart/invoke-restart/... and %run-handlers) is
+			// GENERATED the same way: the compile path injects the defuns via
+			// expandTopLevelDefinitions, the interpreter evaluates the same AST on the
+			// first resolution of one of the names (or on the first restart-system form,
+			// see ensureRestartRuntimeLoaded).
+			if (!this.restartRuntimeLoaded && (LispMacroExpander.RESTART_RUNTIME_FUNCTION_NAMES.contains(name)
+					|| LispNames.RUN_HANDLERS_INTERNAL.equals(name))) {
+				ensureRestartRuntimeLoaded();
+				LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);
+				if (loaded != null) {
+					return loaded;
+				}
+			}
+			// The runtime format renderer is Lisp source the compile path injects as
+			// defuns; the interpreter evaluates the same forms on the first resolution of
+			// one of its names (a runtime-control format call, #'format, ~?, a condition
+			// report). The prefix test keeps an ordinary undefined name from parsing it.
+			if (!this.formatRendererLoaded && name.startsWith(FormatRenderer.NAME_PREFIX)
+					&& FormatRenderer.definesFunction(name)) {
+				ensureFormatRendererLoaded();
+				LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);
+				if (loaded != null) {
+					return loaded;
+				}
+			}
+			// The host-driven-reactor transport (http-reactor.lisp): a Clack handler
+			// backend's run/handle/dispatch delegate to it, so its first touch is
+			// always a function call. Before the broader %HTTP- hook below, which
+			// would answer the same prefix by loading http-server.lisp (and the Gray
+			// protocol with it) for nothing -- a reactor loads that model on the
+			// first %http-make-env call, not on the run that stores the app.
+			// The native-transport serve (http-serve.lisp) behind the
+			// clack-handler-rontolisp shim and ring.adapter.rontolisp: by exact name,
+			// ahead of the %HTTP- prefix hook below, which would answer the same prefix
+			// with http-server.lisp.
+			if (!this.httpServeLoaded && HttpServeLibrary.isServeFunction(name)) {
+				synchronized (this.libraryLoadLock) {
+					if (!this.httpServeLoaded) {
+						this.httpServeLoaded = true;
+						for (LispVal form : HttpServeLibrary.forms(Features.INTERPRETER)) {
+							eval(form, this.globalEnv);
+						}
+					}
+				}
+				LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);
+				if (loaded != null) {
+					return loaded;
+				}
+			}
+			if (!this.httpReactorLoaded && name.startsWith("RONTOLISP::%HTTP-REACTOR-")) {
+				ensureHttpReactorLoaded();
+				LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);
+				if (loaded != null) {
+					return loaded;
+				}
+			}
+			// The server-side HTTP value model (http-server.lisp) loads eagerly when a
+			// server starts; a program calling one of its functions DIRECTLY (the
+			// ci-spec shape cases exercise the environment builder and the response
+			// normalizer without serving) lazy-loads it here, the usocket/restart
+			// pattern. The prefix test keeps ordinary undefined names cheap.
+			if (!this.httpServerLoaded && name.startsWith("RONTOLISP::%HTTP-")) {
+				ensureHttpServerLoaded();
+				LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);
+				if (loaded != null) {
+					return loaded;
+				}
+			}
+			// An instance-initialization generic called with no user method anywhere
+			// (upstream ASDF's (apply 'reinitialize-instance system keys)): CL supplies
+			// the system default, so synthesize the generic with it -- the same
+			// machinery the first user defmethod on one of these names runs -- and
+			// define the dispatchers it registered.
+			if (LispMacroExpander.isCallableSystemGenericName(name) && this.closRegistry.findGeneric(name) == null) {
+				for (LispVal form : LispMacroExpander.synthesizeCalledSystemGeneric(name, this.closRegistry)) {
+					eval(form, this.globalEnv);
+				}
+				for (ClosRegistry.GenericInfo info : this.closRegistry.generics().values()) {
+					if (this.globalEnv.lookupFunctionOrNull(info.name()) == null) {
+						defineDispatcher(info.name(), this.globalEnv);
+					}
+				}
+				LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);
+				if (loaded != null) {
+					return loaded;
+				}
+			}
+			if (LispNames.isCarCdrComposition(name)) {
+				// Synthesize (lambda (x) (cadr x)) so car/cdr compositions are
+				// first-class.
+				LispSymbol param = new LispSymbol("x");
+				LispVal call = new LispCons(new LispSymbol(name), new LispCons(param, LispNil.INSTANCE));
+				return new LispLambda(List.of(param), List.of(call), this.globalEnv);
+			}
+			return null;
+		}
+	}
+
+	/**
+	 * Evaluates the generated condition-report runtime ({@code %condition-report-str} and
+	 * {@code %format-condition}) into the global environment, and re-evaluates it
+	 * whenever a later {@code define-condition} has changed the registry it partitions --
+	 * the compile path emits it once because {@code expandTopLevelDefinitions} runs with
+	 * a complete registry, which the interpreter never has. Called from the condition
+	 * forms (which is where the routing turns ON: before one of them runs, no condition
+	 * value can exist and every printing operator stays in its historical shape) and from
+	 * the printing operators once it is on.
+	 *
+	 * <p>
+	 * Also the one place uiop's condition CLASSES are registered
+	 * ({@link #ensureUiopConditionClassesLoaded}): "the program has conditions" is
+	 * exactly when they have to exist, and a class cannot be lazy the way a function can.
+	 */
+	private void ensureConditionReportRuntimeLoaded() {
+		synchronized (this.libraryLoadLock) {
+			ensureUiopConditionClassesLoaded();
+			if (this.loadingUiopConditionClasses) {
+				// Re-entered from one of those define-conditions: the outer call rebuilds
+				// the renderer once, when the whole group is registered.
+				return;
+			}
+			int stamp = this.closRegistry.classes().size() * 31 + this.closRegistry.conditionReports().size();
+			if (stamp == this.conditionReportRuntimeStamp) {
+				return;
+			}
+			this.conditionReportRuntimeStamp = stamp;
+			this.closRegistry.setRoutesConditionReports(true);
+			for (LispVal form : LispMacroExpander.conditionReportDefuns(this.closRegistry)) {
+				eval(form, this.globalEnv);
+			}
+		}
+	}
+
+	/**
+	 * Evaluates the generated print-object runtime ({@code %print-object-str} and
+	 * {@code %print-object-leaf}) into the global environment, and re-evaluates it
+	 * whenever the routing has moved -- a later {@code defmethod print-object}, a later
+	 * {@code define-condition}, or a printer-control variable entering or leaving its
+	 * non-default values. The compile path emits the pair once because
+	 * {@code expandTopLevelDefinitions} runs with a complete registry, which the
+	 * interpreter never has.
+	 *
+	 * <p>
+	 * A generated DEFUN rather than a body inlined at the print site (which is what this
+	 * was before nested rendering): the renderer walks a list/vector by recursing into
+	 * itself, and an inlined form cannot recurse.
+	 * <p>
+	 * Once generated for a printer control in effect, the pair keeps the
+	 * {@code %print-cased} leaf, which answers every state ({@code %print-cased} takes
+	 * the raw conversion itself under the defaults): a print expanded for that leaf -- in
+	 * a package other than the pristine {@code cl-user}, the seventh control -- may run
+	 * after a print nested in its argument under the defaults (a {@code *package*}
+	 * rebound to {@code cl-user}, contextl's {@code map-symbol}), and a raw leaf
+	 * regenerated there printed the outer print's symbols qualified.
+	 * @param printControls whether a printer-control variable currently holds a
+	 * non-default value
+	 */
+	private void ensurePrintObjectRuntimeLoaded(boolean printControls) {
+		synchronized (this.libraryLoadLock) {
+			boolean controls = printControls || this.printObjectRuntimeControls;
+			java.util.List<String> tags = LispMacroExpander.printObjectTags(this.closRegistry);
+			int stamp = tags.hashCode() * 4 + (this.closRegistry.routesConditionReports() ? 1 : 0) + (controls ? 2 : 0);
+			if (stamp == this.printObjectRuntimeStamp) {
+				return;
+			}
+			this.printObjectRuntimeStamp = stamp;
+			this.printObjectRuntimeControls = controls;
+			// The interpreter always emits the vector arm: the gate the compile paths use
+			// exists to keep the array runtime out of an array-free ARTIFACT, and there
+			// is no artifact here.
+			for (LispVal form : LispMacroExpander.printObjectStrDefuns(this.closRegistry, controls, true, true, true)) {
+				eval(form, this.globalEnv);
+			}
+		}
+	}
+
+	/**
+	 * {@link #ensurePrintObjectRuntimeLoaded} guarded by the gate that decides whether
+	 * the pair is generated at all: a program with no {@code print-object} method and no
+	 * condition in reach is rewritten straight onto {@code %print-cased} (or not at all),
+	 * and must not carry a renderer it never calls.
+	 * @param printControls whether a printer-control variable currently holds a
+	 * non-default value
+	 */
+	private void ensurePrintObjectRuntimeLoadedIfRouted(boolean printControls) {
+		if (!LispMacroExpander.printObjectTags(this.closRegistry).isEmpty()
+				|| this.closRegistry.routesConditionReports()) {
+			ensurePrintObjectRuntimeLoaded(printControls);
+		}
+	}
+
+	/**
+	 * Evaluates the runtime format renderer into the global environment, once per
+	 * evaluator. The forms are the ones {@code expandTopLevelDefinitions} injects on the
+	 * compile path, so the interpreter and every compiled backend render a runtime
+	 * control string with the same code.
+	 *
+	 * <p>
+	 * The {@code ~/name/} arm is loaded unconditionally, which the compile path does NOT
+	 * do: there the arm makes every function dispatchable and it is injected only for a
+	 * program whose control strings spell the directive ({@code .kb/format.md}). Nothing
+	 * is dead-code eliminated here, and the name resolves against a live symbol table, so
+	 * the interpreter has nothing to gain from the same narrowing.
+	 */
+	private void ensureFormatRendererLoaded() {
+		synchronized (this.libraryLoadLock) {
+			if (this.formatRendererLoaded) {
+				return;
+			}
+			this.formatRendererLoaded = true;
+			for (LispVal form : FormatRenderer.defuns()) {
+				eval(form, this.globalEnv);
+			}
+			for (LispVal form : FormatRenderer.functionDesignatorDefuns()) {
+				eval(form, this.globalEnv);
+			}
+		}
+	}
+
+	/**
+	 * Evaluates the generated restart-runtime forms (the two stack globals plus the
+	 * restart defuns) into the global environment, once per evaluator -- the
+	 * {@code slotUnboundDefuns} pattern. Called by the restart-system special-form cases
+	 * BEFORE their expansion is evaluated (the expansions read the stack globals) and by
+	 * {@code resolveFunction} on the first resolution of a restart-runtime function name.
+	 * A name the program already defined itself is skipped, so a user redefinition wins
+	 * like it does on the compile path.
+	 */
+	private void ensureRestartRuntimeLoaded() {
+		synchronized (this.libraryLoadLock) {
+			if (this.restartRuntimeLoaded) {
+				return;
+			}
+			this.restartRuntimeLoaded = true;
+			for (LispVal form : LispMacroExpander.restartRuntimeGlobalForms()) {
+				eval(form, this.globalEnv);
+			}
+			java.util.Set<String> userDefinedNames = new java.util.HashSet<>();
+			for (String name : LispMacroExpander.RESTART_RUNTIME_FUNCTION_NAMES) {
+				if (this.globalEnv.lookupFunctionOrNull(name) != null) {
+					userDefinedNames.add(name);
+				}
+			}
+			for (LispVal form : LispMacroExpander.restartRuntimeDefunForms(userDefinedNames)) {
+				eval(form, this.globalEnv);
+			}
+		}
+	}
+
+	private LispVal evalQuote(LispCons cons) {
+		LispCons rest = (LispCons) cons.cdr();
+		// Hands the datum back AS IS, and must: at run time a (quote <value>) form is
+		// also how a LIVE value is spliced back into a form for re-evaluation
+		// (quoteValue, four sites, one of them read-sequence's Gray-dispatch rebuild),
+		// so materializing an array here would hand a destructive operation a copy.
+		// This sharing is also the RULE, not a residual: both compile backends
+		// memoize a quoted datum to the same effect, so '#(1 2 3) is one
+		// shared constant everywhere while a bare #(1 2 3) is fresh everywhere --
+		// .kb/quoted-data.md.
+		return singleValue(am.ik.rontolisp.LispCircularLiteral.unwrapped(rest.car()));
+	}
+
+	/**
+	 * Evaluates one {@link LispPreludeLibrary} entry into the global environment and
+	 * records the function object it installed.
+	 *
+	 * <p>
+	 * The record is what lets a native fast arm tell the prelude's own definition from a
+	 * user's: {@link SequenceScanFast} serves a {@code search}/{@code mismatch} call only
+	 * while the name still resolves to the object this method saw, so a
+	 * {@code (defun search ...)} of the caller's own keeps the whole call, not the shapes
+	 * the arm happens to decline.
+	 * @param name the prelude entry to load; the caller has already claimed it in
+	 * {@code loadedPreludeNames}
+	 * @return the function the entry installed, or {@code null} when it defines no
+	 * function of that name (a {@code (setf PLACE)} writer)
+	 */
+	private @Nullable LispVal loadPreludeDefinition(String name) {
+		for (LispVal form : LispPreludeLibrary.formsFor(name)) {
+			eval(form, this.globalEnv);
+		}
+		LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);
+		if (loaded != null) {
+			this.preludeDefinitions.put(name, loaded);
+		}
+		return loaded;
+	}
+
+	/**
+	 * Evaluates a {@code search} or {@code mismatch} call: the ordinary function call,
+	 * with {@link SequenceScanFast}'s native scan in front of it.
+	 *
+	 * <p>
+	 * Both are Lisp-source prelude {@code defun}s on every backend, and both index their
+	 * operands with {@code elt} inside an interpreted loop -- 104 us for a five-character
+	 * needle in a 46-character string, against 0.9 us for the same source compiled. The
+	 * arm answers only the shapes it can prove identical and DECLINES the rest, which
+	 * then run the prelude body unchanged; see {@link SequenceScanFast} and
+	 * {@code .kb/seq-coerce-runtime.md}.
+	 *
+	 * <p>
+	 * The function is resolved and the arguments evaluated exactly as the ordinary call
+	 * path does, in that order, so a decline costs one array scan and changes nothing --
+	 * not the evaluation order, not the number of evaluations, not the error a bad
+	 * operand raises.
+	 * @param cons the call
+	 * @param env the evaluation environment
+	 * @param name {@link LispNames#SEARCH} or {@link LispNames#MISMATCH}
+	 * @return the operator's value
+	 */
+	private LispVal evalSequenceScan(LispCons cons, Environment env, String name) {
+		LispVal function = resolveFunction(name);
+		List<LispVal> args = evalArgs(cons, env);
+		if (function == this.preludeDefinitions.get(name)) {
+			LispVal fast = LispNames.SEARCH.equals(name) ? SequenceScanFast.search(args)
+					: SequenceScanFast.mismatch(args);
+			if (fast != null) {
+				return fast;
+			}
+		}
+		return apply(function, args, env);
+	}
+
+	/**
+	 * Loads the prelude entry of every {@code (setf (PLACE ...) v)} place head that is a
+	 * prelude function not yet loaded, so a prelude-provided {@code (defun (setf PLACE)
+	 * ...)} writer (the {@code get} entry) registers its place before the setf expansion
+	 * resolves it. A name this evaluator defines itself keeps its definition: its prelude
+	 * entry is the compile paths' ({@code compiler-macro-function}'s answers nil).
+	 */
+	private void ensurePreludeSetfPlacesLoaded(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		for (int i = 1; i + 1 < parts.size(); i += 2) {
+			if (parts.get(i) instanceof LispCons placeCons
+					&& LispMacroExpander.setfPlaceFunction(placeCons) instanceof LispSymbol head
+					&& LispPreludeLibrary.isPreludeFunction(head.name())
+					&& this.globalEnv.lookupFunctionOrNull(head.name()) == null
+					&& this.loadedPreludeNames.add(head.name())) {
+				loadPreludeDefinition(head.name());
+			}
+		}
+	}
+
+	/**
+	 * Evaluates a {@code deftype}: the zero-parameter quoted-literal shape registers
+	 * through the shared expander; a parameterized or computed one additionally evaluates
+	 * its body with every lambda-list parameter bound to its default (or {@code *}, CL's
+	 * unsupplied-deftype-argument value) and registers the resulting specifier -- the
+	 * bare-name use ironclad's {@code simple-octet-vector} sees in
+	 * {@code etypecase}/{@code check-type}. A body that genuinely needs its arguments (or
+	 * fails to evaluate) stays an unresolved specifier, as before.
+	 */
+	private LispVal evalDeftype(LispCons cons) {
+		foldDeftype(cons);
+		return LispNil.INSTANCE;
+	}
+
+	/**
+	 * Registers a {@code deftype}: the zero-parameter quoted-literal shape goes through
+	 * the shared expander; a parameterized or computed one additionally evaluates its
+	 * body with every lambda-list parameter bound to its default (or {@code *}, CL's
+	 * unsupplied-deftype-argument value) and registers the resulting specifier -- the
+	 * bare-name use ironclad's {@code simple-octet-vector} gets in
+	 * {@code etypecase}/{@code check-type}. A body that genuinely needs its arguments (or
+	 * fails to evaluate) stays an unresolved specifier, as before. Returns the folded
+	 * specifier so the compile-path pre-pass ({@code UserMacroExpander}) can emit the
+	 * equivalent zero-parameter deftype, which is the shape the compilers' own registry
+	 * pass understands.
+	 * @param cons the deftype form (canonical, package-resolved spelling)
+	 * @return the folded literal type specifier, or null when nothing was folded here
+	 */
+	@org.jspecify.annotations.Nullable
+	public LispVal foldDeftype(LispCons cons) {
+		LispMacroExpander.expandDeftype(cons, this.closRegistry);
+		List<LispVal> parts = cons.toList();
+		if (parts.size() >= 3 && parts.get(1) instanceof LispSymbol typeName) {
+			// A parameterized deftype is kept whole: a compound specifier headed by it
+			// expands by running the body over that specifier's arguments.
+			String key = ClosRegistry.normalize(typeName.name());
+			if (parts.get(2) instanceof LispCons) {
+				this.parameterizedDeftypes.put(key, cons);
+				this.closRegistry.setDeftypeExpander(this::expandDeftypeSpecifier);
+			}
+			else {
+				this.parameterizedDeftypes.remove(key);
+			}
+		}
+		if (parts.size() >= 4 && parts.get(1) instanceof LispSymbol nameSym
+				&& this.closRegistry.findDeftype(nameSym.name()) == null) {
+			LispVal quotedStar = consListOf(List.of(new LispSymbol(LispNames.QUOTE), new LispSymbol("*")));
+			List<LispVal> bindings = new java.util.ArrayList<>();
+			LispVal cur = parts.get(2);
+			while (cur instanceof LispCons c) {
+				LispVal item = c.car();
+				if (item instanceof LispSymbol p && !p.isLambdaListKeyword()) {
+					bindings.add(consListOf(List.of(p, quotedStar)));
+				}
+				else if (item instanceof LispCons pc && pc.car() instanceof LispSymbol p) {
+					List<LispVal> pcParts = pc.toList();
+					bindings.add(consListOf(List.of(p, pcParts.size() > 1 ? pcParts.get(1) : quotedStar)));
+				}
+				cur = c.cdr();
+			}
+			List<LispVal> body = new java.util.ArrayList<>(parts.subList(3, parts.size()));
+			if (body.size() > 1 && body.get(0) instanceof LispString) {
+				body.remove(0);
+			}
+			List<LispVal> letParts = new java.util.ArrayList<>();
+			letParts.add(new LispSymbol(LispNames.LET_STAR));
+			letParts.add(bindings.isEmpty() ? LispNil.INSTANCE : consListOf(bindings));
+			letParts.addAll(body);
+			try {
+				LispVal spec = withoutDebugger(() -> eval(consListOf(letParts), this.globalEnv));
+				if (spec instanceof LispSymbol || spec instanceof LispCons) {
+					this.closRegistry.registerDeftype(nameSym.name(), spec);
+					return spec;
+				}
+			}
+			catch (RuntimeException bodyNeedsArguments) {
+				// Left unresolved: typep/typecase of the name still errors, as before.
+			}
+		}
+		return null;
+	}
+
+	/**
+	 * Whether the program defines any {@code make-load-form} method at all -- the cheap
+	 * gate {@link LoadFormSubstituter} tests before walking a top-level form for literal
+	 * instances. Almost no program has one, and those pay nothing.
+	 * @return {@code true} when a {@code make-load-form} generic with at least one
+	 * specialized method is registered
+	 */
+	public boolean hasMakeLoadFormMethods() {
+		ClosRegistry.GenericInfo generic = this.closRegistry.findGeneric(LispNames.MAKE_LOAD_FORM);
+		return generic != null && generic.methods().values().stream().anyMatch(m -> !m.isDefault());
+	}
+
+	/**
+	 * The {@code make-load-form} values of a literal instance the compile path is about
+	 * to dump, or null when the program defines no method specialized on its type.
+	 *
+	 * <p>
+	 * Null is the ORDINARY answer: rontolisp's built-in default for an instance literal
+	 * is the structural dump the quote compilers implement (the CLHS
+	 * {@code structure-object} licence to answer a constructor form), which is also what
+	 * {@code make-load-form-saving-slots} spells, so a type nobody wrote a method for
+	 * keeps travelling exactly as before. A method REPLACES that default -- see
+	 * {@code .kb/make-load-form.md} and {@link LoadFormSubstituter}, the only caller.
+	 * @param instance the literal instance
+	 * @return the creation form and the optional init form, or null when no method
+	 * specializes on the instance's type
+	 */
+	@org.jspecify.annotations.Nullable
+	public List<LispVal> makeLoadFormValues(LispInstance instance) {
+		if (!hasMakeLoadFormMethodFor(instance)) {
+			return null;
+		}
+		LispVal call = consListOf(List.of(new LispSymbol(LispNames.MAKE_LOAD_FORM), instance));
+		this.globalEnv.clearSpill();
+		LispVal primary = evalResolved(call);
+		List<LispVal> values = consumeValues(primary);
+		// A method answering no value at all still names a creation form: nil.
+		return values.isEmpty() ? List.of(primary) : values;
+	}
+
+	/**
+	 * Whether some {@code make-load-form} method specializes on the instance's type or
+	 * one of its ancestors: the instance's tag is one the dispatcher's own specializer
+	 * test reads ({@code LispMacroExpander.singleSpecializerTest}), a class's and its
+	 * descendants' or a struct's and its {@code :include} descendants'. A name is no
+	 * identity: coalton's {@code Pathname} class is no class of a {@code cl:pathname},
+	 * which keeps the built-in dump. An unspecialized (default) method does not count: it
+	 * would answer every instance in the program, and the built-in structural dump is the
+	 * better answer for the ones nobody wrote a method for.
+	 */
+	private boolean hasMakeLoadFormMethodFor(LispInstance instance) {
+		ClosRegistry.GenericInfo generic = this.closRegistry.findGeneric(LispNames.MAKE_LOAD_FORM);
+		if (generic == null) {
+			return false;
+		}
+		String tag = instance.layout().tag();
+		for (ClosRegistry.MethodInfo method : generic.methods().values()) {
+			if (method.specializers().isEmpty()) {
+				continue;
+			}
+			ClosRegistry.Specializer first = method.specializers().get(0);
+			String name = first.name();
+			if (name != null
+					&& (first.kind() == ClosRegistry.SpecializerKind.CLASS
+							|| first.kind() == ClosRegistry.SpecializerKind.TYPE)
+					&& (this.closRegistry.descendantTags(name).contains(tag) || structTagsOf(name).contains(tag))) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * The tags of a struct type and its {@code :include} descendants, none for no struct.
+	 */
+	private List<String> structTagsOf(String name) {
+		List<String> tags = this.closRegistry.descendantStructTags(name);
+		String own = tags.isEmpty() ? this.closRegistry.findStructTag(name) : null;
+		return own == null ? tags : List.of(own);
+	}
+
+	/**
+	 * Pre-expands user macros (macrolet included) inside an {@code flet}/{@code labels}
+	 * form: the flet expansion rewrites its local-function CALL SITES textually, so a
+	 * call site that only appears after a macro expands (ironclad's {@code sha256-round}
+	 * calling the flet-bound {@code sigma1} through a macrolet, eclector's
+	 * {@code token-state-machine} calling the local it is handed) must be materialized
+	 * first or it misses the rewrite. A form naming no macro skips the walk.
+	 */
+	private LispCons preExpandLocalMacros(LispCons cons, Environment env) {
+		if (!treeHasHead(cons, name -> LispNames.MACROLET.equals(name) || isUserMacro(name))) {
+			return cons;
+		}
+		return expandAllAtSite(cons, env) instanceof LispCons expanded ? expanded : cons;
+	}
+
+	/**
+	 * {@link UserMacroExpander#expandAll} of a form the interpreter is about to run in
+	 * {@code env}. The walk expands the calls with no site, so it runs in the package the
+	 * code was read in, which {@link #expandMacroCall} gives a call it reaches in a
+	 * function: a {@code macrolet} a macro expanded to is walked when the function runs,
+	 * under whatever package its caller is in.
+	 */
+	private LispVal expandAllAtSite(LispVal form, Environment env) {
+		return inSitePackage(env, () -> UserMacroExpander.expandAll(form, this));
+	}
+
+	private LispVal inSitePackage(Environment env, java.util.function.Supplier<LispVal> expansion) {
+		String callerPackage = this.packageResolver.currentPackageName();
+		String sitePackage = env.lexicalPackage();
+		if (sitePackage == null || callerPackage.equals(sitePackage)) {
+			return expansion.get();
+		}
+		this.packageResolver.setCurrentPackage(sitePackage);
+		try {
+			return expansion.get();
+		}
+		finally {
+			this.packageResolver.setCurrentPackage(callerPackage);
+		}
+	}
+
+	private static boolean treeContainsMacrolet(LispVal form) {
+		return treeHasHead(form, LispNames.MACROLET::equals);
+	}
+
+	// Iterative on purpose: a Java-recursive walk adds a frame per cons visited, and this
+	// runs on an flet/labels entry -- inside a recursive Lisp function, that overhead
+	// compounds once per recursion level and can exhaust the JVM stack well before the
+	// interpreter's own recursion would (cl-mustache's recursive renderer hit this).
+	// An explicit, heap-backed stack keeps this check's own footprint at O(1) frames.
+	private static boolean treeHasHead(LispVal form, java.util.function.Predicate<String> head) {
+		ArrayDeque<LispVal> pending = new ArrayDeque<>();
+		pending.push(form);
+		while (!pending.isEmpty()) {
+			LispVal current = pending.pop();
+			if (!(current instanceof LispCons cons)) {
+				continue;
+			}
+			if (cons.car() instanceof LispSymbol sym && head.test(sym.name())) {
+				return true;
+			}
+			pending.push(cons.car());
+			pending.push(cons.cdr());
+		}
+		return false;
+	}
+
+	/** Builds a proper list from the given elements. */
+	private static LispVal consListOf(List<LispVal> elements) {
+		LispVal result = LispNil.INSTANCE;
+		for (int i = elements.size() - 1; i >= 0; i--) {
+			result = new LispCons(elements.get(i), result);
+		}
+		return result;
+	}
+
+	private LispVal evalIf(LispCons cons, Environment env) {
+		List<LispVal> parts = cons.toList();
+		LispVal condition = eval(parts.get(1), env);
+		if (isTruthy(condition)) {
+			return eval(parts.get(2), env);
+		}
+		if (parts.size() > 3) {
+			return eval(parts.get(3), env);
+		}
+		return singleValue(LispNil.INSTANCE);
+	}
+
+	/**
+	 * The scope of a {@code let} whose every binding is lexical, established -- the inits
+	 * evaluated in {@code env} (a {@code let} is parallel), the names defined in a fresh
+	 * scope, and the names a FREE special declaration at the head of its body names
+	 * marked special there ({@link #markDeclaredSpecials}) -- or {@code null}, with
+	 * nothing evaluated, when the form needs a frame of its own: a binding of a special
+	 * (a dynamic binding to pop) or of {@code *package*} (the resolver's package to
+	 * restore), or a shape the plain walk does not cover, all of which {@link #evalLetIn}
+	 * handles. This is the tail-transparent {@code let} of {@link #evalCons}'s loop: its
+	 * body runs in the caller's frame.
+	 * @param cons the let form
+	 * @param env the environment the form is evaluated in
+	 * @return the body's scope, or null
+	 */
+	private @Nullable Environment lexicalLet(LispCons cons, Environment env) {
+		LispVal bindings;
+		Set<String> declared;
+		if (cons.car() instanceof LispSymbol head && head.evaluatorNote() instanceof LetNote note && note.form() == cons
+				&& note.owner() == this.noteOwner && note.epoch() == this.specialVars.epoch()) {
+			// A let whose head notes its bindings are all lexical (LetNote).
+			bindings = note.bindings();
+			declared = note.declared();
+		}
+		else {
+			int epoch = this.specialVars.epoch();
+			if (!(cons.cdr() instanceof LispCons bindingsCell)) {
+				return null;
+			}
+			bindings = LispMacroExpander.normalizeBindingList(bindingsCell.car());
+			if (!(bindings instanceof LispNil) && !(bindings instanceof LispCons)) {
+				return null;
+			}
+			declared = declaredSpecials(bindingsCell.cdr(), false);
+			for (LispVal entry = bindings; entry instanceof LispCons cell; entry = cell.cdr()) {
+				if (!(cell.car() instanceof LispCons pair) || !(pair.car() instanceof LispSymbol name)
+						|| !(pair.cdr() instanceof LispCons)) {
+					return null;
+				}
+				if (LispNames.PACKAGE_VAR.equals(name.name()) || isSpecial(name) || declared.contains(name.name())) {
+					return null;
+				}
+			}
+			if (cons.car() instanceof LispSymbol head && mayNote(head)) {
+				head.evaluatorNote(new LetNote(this.noteOwner, epoch, cons, bindings, declared));
+			}
+		}
+		int count = 0;
+		for (LispVal entry = bindings; entry instanceof LispCons cell; entry = cell.cdr()) {
+			count++;
+		}
+		Environment letEnv = new Environment(env, count);
+		for (LispVal entry = bindings; entry instanceof LispCons cell; entry = cell.cdr()) {
+			LispCons pair = (LispCons) cell.car();
+			letEnv.define(((LispSymbol) pair.car()).name(), eval(((LispCons) pair.cdr()).car(), env));
+		}
+		markDeclaredSpecials(declared, letEnv);
+		return letEnv;
+	}
+
+	/**
+	 * What {@link #lexicalLet} found of a {@code let} form whose every binding is
+	 * lexical, kept on its head symbol ({@link LispSymbol#evaluatorNote}) like a
+	 * {@link CallNote}: the normalized binding list and the body's declared specials,
+	 * which hold for the form, and the lexical verdict, which holds until the next
+	 * proclamation ({@link CountedNames#epoch}).
+	 *
+	 * @param owner the {@link #noteOwner} of the evaluator that made it
+	 * @param epoch the {@link #specialVars} epoch it was made under
+	 * @param form the {@code let} form, compared by identity
+	 * @param bindings its binding list, each entry {@code (name init)}
+	 * @param declared the names its body declares special
+	 */
+	private record LetNote(Object owner, int epoch, LispCons form, LispVal bindings, Set<String> declared) {
+	}
+
+	/**
+	 * The names the special declarations at the head of a binding form's body declare
+	 * ({@link SpecialDeclarations}), recorded as names a local declaration has named:
+	 * from here on a free reference to one consults the dynamic store
+	 * ({@link #evalSymbolRef}). Empty for the commonest body, whose first form is no
+	 * declaration.
+	 * @param body the body forms, a cons chain
+	 * @param functionBody whether the body is a function's
+	 * @return the declared names
+	 */
+	private Set<String> declaredSpecials(LispVal body, boolean functionBody) {
+		Set<String> names = SpecialDeclarations.leading(body, functionBody);
+		recordLocalSpecials(names);
+		return names;
+	}
+
+	/** {@link #declaredSpecials(LispVal, boolean)} over a body held as a list. */
+	private Set<String> declaredSpecials(List<LispVal> body, boolean functionBody) {
+		Set<String> names = SpecialDeclarations.leading(body, functionBody);
+		recordLocalSpecials(names);
+		return names;
+	}
+
+	void recordLocalSpecials(Set<String> names) {
+		for (String name : names) {
+			if (!this.localSpecials.contains(name)) {
+				this.localSpecials.add(name);
+			}
+		}
+	}
+
+	/**
+	 * Marks every declared name not proclaimed special ({@link Environment#SPECIAL}) in
+	 * the scope a binding form's body runs in, unless the scope already binds it -- a
+	 * name the form binds lexically is no declared one. A name the form binds DYNAMICALLY
+	 * is marked by its caller, which pushed the binding. A reference in the body then
+	 * reads the dynamic binding even where a lexical binding of the name is visible
+	 * further out, and an inner binding of the name, which is lexical unless declared,
+	 * shadows the mark (CLHS 3.3.4).
+	 * @param declared the names the body's declarations declare special
+	 * @param scope the body's scope
+	 */
+	private void markDeclaredSpecials(Set<String> declared, Environment scope) {
+		for (String name : declared) {
+			if (!this.specialVars.contains(name) && !scope.isBound(name)) {
+				scope.define(name, Environment.SPECIAL);
+			}
+		}
+	}
+
+	/**
+	 * A {@code let} evaluated in a frame of its own, because a binding must be undone
+	 * when the body ends (a special, {@code *package*}) or because the form's shape is
+	 * not the plain one {@link #lexicalLet} covers -- so the last body form still runs
+	 * through {@link #evalCons}'s loop and, as a tagbody statement's tail
+	 * ({@code tagbodyLabels} non-null), still answers a tail {@code go}'s jump token
+	 * after the bindings are undone.
+	 */
+	private LispVal evalLetIn(LispCons cons, Environment env,
+			@org.jspecify.annotations.Nullable TagbodyLabels tagbodyLabels) {
+		List<LispVal> parts = cons.toList();
+		Environment letEnv = new Environment(env);
+		// parts.get(1) is the bindings list: ((x 1) (y 2)); a bare symbol entry is
+		// an init-less binding to nil.
+		LispVal bindings = LispMacroExpander.letBindingList(parts.get(1));
+		// A special name gets a thread-scoped dynamic binding instead of a lexical one;
+		// dynamicNames records those to pop on any exit (left null on the common
+		// all-lexical
+		// path so there is no per-let allocation or finally cost). A *package* binding
+		// is the resolver's current package swapped for the let's extent (see
+		// currentPackageValue); savedPackage is what the finally restores.
+		List<String> dynamicNames = null;
+		String savedPackage = null;
+		Set<String> declared = declaredSpecials(((LispCons) cons.cdr()).cdr(), false);
+		if (bindings instanceof LispCons bindingsCons) {
+			List<LispVal> bindingList = bindingsCons.toList();
+			// Evaluate ALL inits in the outer env first (parallel let -- a later init
+			// must not see an earlier binding in the same let), then establish the
+			// lexical and dynamic bindings. A binding is dynamic when its name is
+			// proclaimed special or a declaration at the head of the body names it
+			// (CLHS 3.3.4); a dynamic binding has no lexical twin, so a closure built in
+			// the body reads whatever binding is active when it runs, as in CL.
+			int n = bindingList.size();
+			String[] names = new String[n];
+			LispVal[] vals = new LispVal[n];
+			for (int i = 0; i < n; i++) {
+				List<LispVal> pair = ((LispCons) bindingList.get(i)).toList();
+				names[i] = ((LispSymbol) pair.get(0)).name();
+				vals[i] = eval(pair.get(1), env);
+				if (LispNames.PACKAGE_VAR.equals(names[i]) && savedPackage == null) {
+					savedPackage = rebindCurrentPackage(vals[i]);
+				}
+			}
+			for (int i = 0; i < n; i++) {
+				boolean proclaimed = this.specialVars.contains(names[i]);
+				if (proclaimed || declared.contains(names[i])) {
+					if (dynamicNames == null) {
+						dynamicNames = new java.util.ArrayList<>(2);
+					}
+					checkStandardStreamValue(names[i], vals[i]);
+					this.dynamicBindings.push(names[i], vals[i]);
+					dynamicNames.add(names[i]);
+					if (!proclaimed) {
+						letEnv.define(names[i], Environment.SPECIAL);
+					}
+				}
+				else {
+					letEnv.define(names[i], vals[i]);
+				}
+			}
+		}
+		markDeclaredSpecials(declared, letEnv);
+		try {
+			int last = parts.size() - 1;
+			for (int i = 2; i < last; i++) {
+				eval(parts.get(i), letEnv);
+			}
+			if (last < 2) {
+				return LispNil.INSTANCE;
+			}
+			LispVal tail = parts.get(last);
+			return tail instanceof LispCons tailCons ? evalCons(tailCons, letEnv, tagbodyLabels, null)
+					: evalAtom(tail, letEnv);
+		}
+		finally {
+			// Restore on ANY exit: normal return, a non-local exit (BlockReturnSignal),
+			// or
+			// an error unwind (LispEvalException) -- both are unchecked, so finally
+			// fires.
+			if (dynamicNames != null) {
+				for (int i = dynamicNames.size() - 1; i >= 0; i--) {
+					this.dynamicBindings.pop(dynamicNames.get(i));
+				}
+			}
+			if (savedPackage != null) {
+				this.packageResolver.setCurrentPackage(savedPackage);
+			}
+		}
+	}
+
+	/**
+	 * The runtime value of {@code *package*}: the resolver's current package as the
+	 * package keyword {@code find-package} answers. On the interpreter the variable IS
+	 * the resolver state -- one cell, read through here, written through by
+	 * {@link #assignCurrentPackage} -- so everything that consults "the current package"
+	 * (a 1-argument {@code intern}, {@code read}, a macro expansion) and the value the
+	 * program reads can never disagree. Common Lisp's {@code *package*} is dynamic: a
+	 * defun reads the package current when it is CALLED, which is exactly this, and a
+	 * {@code let} of it (rove's {@code run-suite-tests}) is a save/set/restore over the
+	 * same cell ({@link #rebindCurrentPackage}). Not thread-scoped, unlike the specials
+	 * in {@code DynamicBindings}: the resolver is one per evaluator.
+	 */
+	private LispVal currentPackageValue() {
+		return packageKeyword(this.packageResolver.currentPackageName());
+	}
+
+	/**
+	 * Assigns {@code *package*} ({@code setq}): the value must designate a registered
+	 * package -- a string, a symbol, or the package keyword -- else it signals, like
+	 * Common Lisp's type error on a non-package.
+	 */
+	private void assignCurrentPackage(LispVal value) {
+		String found = packageNameOf(value);
+		if (found == null) {
+			throw new LispEvalException(
+					LispNames.PACKAGE_VAR + " must be set to a package designator, got " + value.print());
+		}
+		this.packageResolver.setCurrentPackage(found);
+	}
+
+	/**
+	 * The runtime half of a {@code (let ((*package* X)) ...)} rebinding: swaps the
+	 * resolver's current package to the bound value for the let's extent -- so a called
+	 * function reads the bound package, and a macro-time {@code (intern ...)} homes where
+	 * CL would. Returns the saved package name, or null when the value is not a package
+	 * designator (the binding then has no effect).
+	 */
+	@org.jspecify.annotations.Nullable
+	private String rebindCurrentPackage(LispVal value) {
+		String found = packageNameOf(value);
+		if (found == null) {
+			return null;
+		}
+		String saved = this.packageResolver.currentPackageName();
+		this.packageResolver.setCurrentPackage(found);
+		return saved;
+	}
+
+	/** The registered package a runtime designator names, or null. */
+	@org.jspecify.annotations.Nullable
+	private String packageNameOf(LispVal value) {
+		String designator = switch (value) {
+			case LispString str -> str.value();
+			case LispSymbol sym -> LispSymbol.displayName(sym.name());
+			default -> null;
+		};
+		return designator == null ? null : this.packageResolver.findPackageName(designator);
+	}
+
+	/**
+	 * Evaluates {@code (progv symbols values body...)}: binds each symbol in the
+	 * runtime-computed {@code symbols} list dynamically to the corresponding value in
+	 * {@code values} -- a symbol past the end of a shorter values list is bound WITHOUT a
+	 * value, unbound for the extent as in CL -- restored on any exit. Unlike {@code let},
+	 * the bound symbols need not have been proclaimed special and are not permanently
+	 * marked special.
+	 */
+	private LispVal evalProgv(LispCons cons, Environment env) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 3) {
+			throw new LispEvalException(LispNames.PROGV + " expects a symbols list, a values list, and a body");
+		}
+		List<LispVal> symbols = properListElements(eval(parts.get(1), env), LispNames.PROGV);
+		List<LispVal> values = properListElements(eval(parts.get(2), env), LispNames.PROGV);
+		// From here on, variable reads must consult the dynamic store even for names that
+		// were never declared special (progv can bind an arbitrary symbol dynamically).
+		this.progvUsed = true;
+		List<String> pushed = new java.util.ArrayList<>(symbols.size());
+		try {
+			for (int i = 0; i < symbols.size(); i++) {
+				if (!(symbols.get(i) instanceof LispSymbol sym)) {
+					throw new LispEvalException(
+							LispNames.PROGV + " expects a list of symbols, got " + symbols.get(i).print());
+				}
+				if (i < values.size()) {
+					this.dynamicBindings.push(sym.name(), values.get(i));
+				}
+				else {
+					this.dynamicBindings.pushUnbound(sym.name());
+				}
+				pushed.add(sym.name());
+			}
+			LispVal result = LispNil.INSTANCE;
+			for (int i = 3; i < parts.size(); i++) {
+				result = eval(parts.get(i), env);
+			}
+			return result;
+		}
+		finally {
+			for (int i = pushed.size() - 1; i >= 0; i--) {
+				this.dynamicBindings.pop(pushed.get(i));
+			}
+		}
+	}
+
+	/** Returns the elements of a proper list value ({@code nil} or a cons chain). */
+	private static List<LispVal> properListElements(LispVal value, String operator) {
+		if (value instanceof LispNil) {
+			return List.of();
+		}
+		if (value instanceof LispCons cons) {
+			return cons.toList();
+		}
+		throw new LispEvalException(operator + " expects a list, got " + value.print());
+	}
+
+	private LispVal evalSetq(LispCons cons, Environment env) {
+		List<LispVal> parts = cons.toList();
+		if ((parts.size() - 1) % 2 != 0) {
+			throw new IllegalArgumentException("setq requires an even number of arguments");
+		}
+		LispVal value = LispNil.INSTANCE;
+		for (int i = 1; i < parts.size(); i += 2) {
+			LispSymbol name = (LispSymbol) parts.get(i);
+			String n = name.name();
+			if (!this.globalSymbolMacros.isEmpty() && env.lookupOrNull(n) == null
+					&& this.globalSymbolMacros.containsKey(n)) {
+				// define-symbol-macro: assigning the name assigns its expansion PLACE,
+				// so the value form is evaluated by the setf machinery, not here.
+				value = assignSymbolMacro(this.globalSymbolMacros.get(n), parts.get(i + 1), env);
+				continue;
+			}
+			value = eval(parts.get(i + 1), env);
+			assignVariable(n, value, env);
+		}
+		// An assignment answers ONE value however many the value form produced: a
+		// (setq x (f)) in a function's tail returns f's primary alone, as in CL.
+		return singleValue(value);
+	}
+
+	/**
+	 * Stores {@code value} into the variable {@code name}, the way {@code setq} does:
+	 * through the active dynamic binding of a special, into the resolver's current
+	 * package for {@code *package*}, and lexically otherwise.
+	 * @param name the variable name
+	 * @param value the value to store
+	 * @param env the lexical environment
+	 */
+	void assignVariable(String name, LispVal value, Environment env) {
+		if (LispNames.PACKAGE_VAR.equals(name)) {
+			// *package* IS the resolver's current package (see currentPackageValue):
+			// the assignment writes straight through -- into the active let binding
+			// when one is in extent (evalLet restores the saved package on exit),
+			// else permanently, which is what a top-level (in-package P) resolves to.
+			assignCurrentPackage(value);
+			return;
+		}
+		// The read rule of evalSymbolRef: a proclaimed special is assigned in its active
+		// dynamic binding, else its global; any other name in its innermost lexical
+		// binding, and where a special declaration or nothing lexical names it, in an
+		// active dynamic binding, else the global.
+		if (this.specialVars.contains(name)) {
+			checkStandardStreamValue(name, value);
+			if (this.dynamicBindings.isBound(name)) {
+				this.dynamicBindings.setCurrent(name, value);
+			}
+			else if (LispNames.HANDLER_CLUSTERS_VAR.equals(name) || LispNames.RESTART_CLUSTERS_VAR.equals(name)) {
+				// Never the global: every thread running the program's code, whatever
+				// started it, has stacks of its own, starting from the global's nil.
+				// Through one global a thread leaving its handler-bind restores what it
+				// saved over what another thread pushed since.
+				this.dynamicBindings.push(name, value);
+			}
+			else if (!env.setLexical(name, value)) {
+				env.root().set(name, value);
+			}
+			return;
+		}
+		if (env.setLexical(name, value)) {
+			return;
+		}
+		if ((this.progvUsed || this.localSpecials.contains(name)) && this.dynamicBindings.isBound(name)) {
+			this.dynamicBindings.setCurrent(name, value);
+		}
+		else {
+			env.root().set(name, value);
+		}
+	}
+
+	/**
+	 * Evaluates {@code (%schar-set place index char)} -- the indexed string write every
+	 * {@code (setf (schar|char|aref|elt ...) ...)} place lowers to.
+	 *
+	 * <p>
+	 * A string LITERAL is the source constant, shared by every evaluation of its form, so
+	 * writing into it would rewrite the program text. The compiled backends never do:
+	 * their {@code %schar-set-runtime} rebuilds the string and {@code setq}s it back into
+	 * the place, which is why that place must be a VARIABLE. This is the interpreter's
+	 * half of the same rule, so all four backends agree -- and it carries the same limit,
+	 * an alias taken before the write still sees the literal's own content
+	 * ({@code .kb/string-write-runtime.md}). Every other string is still written in
+	 * place, which is what a {@code make-string} buffer needs.
+	 * @param cons the %schar-set call
+	 * @param env the lexical environment
+	 * @return the character written
+	 */
+	private LispVal evalScharSet(LispCons cons, Environment env) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() != 4 && parts.size() != 5) {
+			throw new LispEvalException(LispNames.SCHAR_SET + " expects a string, an index and a character");
+		}
+		LispVal target = eval(parts.get(1), env);
+		LispVal index = eval(parts.get(2), env);
+		LispVal character = eval(parts.get(3), env);
+		Consumer<LispString> rebind = parts.get(1) instanceof LispSymbol place
+				? rebuilt -> assignVariable(place.name(), rebuilt, env) : null;
+		// The place head names the store a wrong-type string or subscript reports under.
+		return singleValue(Environment.scharSet(List.of(target, index, character), rebind,
+				LispMacroExpander.scharSetOperator(cons)));
+	}
+
+	private LispVal evalWhile(LispCons cons, Environment env, @Nullable Environment owner,
+			@Nullable Environment deferTo) {
+		List<LispVal> parts = cons.toList();
+		Environment exitTo = owner != null ? owner : deferTo;
+		LispVal test = parts.get(1);
+		while (isTruthy(eval(test, env))) {
+			pollInterrupt();
+			for (int i = 2; i < parts.size(); i++) {
+				evalStatement(parts.get(i), env, exitTo);
+			}
+		}
+		return singleValue(LispNil.INSTANCE);
+	}
+
+	/**
+	 * Runs a block body in a scope ALREADY marked as establishing it and being its own
+	 * exit target -- {@code apply} reuses a call's own scope for the block a
+	 * {@code defun} body is wrapped in. A block form in a tail position runs in
+	 * {@link #evalCons}'s frame instead, which catches the exits of every block it
+	 * entered. A block runs in a scope of its own, and that scope's exit target IS the
+	 * block's identity: a closure built inside the body captures it like any other
+	 * lexical, which is what makes {@code (return-from name v)} inside a callback exit
+	 * this activation rather than the innermost same-named block that is dynamically
+	 * active where the callback runs (a {@code handler-bind} handler runs deep inside the
+	 * signalling function's loops). An exit aimed at another block -- or at another
+	 * activation of this one -- propagates.
+	 * @param forms the block's body forms, a cons chain
+	 * @param blockEnv the scope establishing the block, i.e. its identity
+	 * @return the body's value, or the exiting value
+	 */
+	private LispVal runBlockIn(LispVal forms, Environment blockEnv) {
+		try {
+			if (!(forms instanceof LispCons)) {
+				return singleValue(LispNil.INSTANCE);
+			}
+			LispVal result = LispNil.INSTANCE;
+			for (LispVal rest = forms; rest instanceof LispCons cell; rest = cell.cdr()) {
+				result = eval(cell.car(), blockEnv);
+			}
+			return result;
+		}
+		catch (BlockReturnSignal signal) {
+			if (signal.target() == blockEnv) {
+				return signal.value();
+			}
+			throw signal;
+		}
+	}
+
+	/**
+	 * Evaluates {@code (return-from name [value])}: throws the non-local exit the
+	 * matching {@code block} activation catches. {@code (return-from nil v)} names the
+	 * nil block, which is what plain {@code return} and the iteration macros use.
+	 */
+	private LispVal evalReturnFrom(LispCons cons, Environment env) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 2 || parts.size() > 3) {
+			throw new LispEvalException(LispNames.RETURN_FROM + " expects (return-from name [value])");
+		}
+		LispVal value = parts.size() == 3 ? eval(parts.get(2), env) : singleValue(LispNil.INSTANCE);
+		throw blockExit(blockName(parts.get(1)), value, env);
+	}
+
+	/**
+	 * Whether an exit to the block {@code designator} names, from {@code env}, lands on a
+	 * block of the frame whose exit target is {@code owner} -- the frame's own
+	 * continuation, so the exit's value form may replace the frame
+	 * ({@code .kb/interpreter-tail-calls.md}). An invalid designator answers false and
+	 * keeps the exit's own error.
+	 */
+	static boolean exitsOwnedBlock(LispVal designator, Environment env, @Nullable Environment owner) {
+		return owner != null
+				&& (designator instanceof LispNil || designator instanceof LispSymbol sym && !sym.isKeyword())
+				&& env.findBlock(blockName(designator)) == owner;
+	}
+
+	/**
+	 * Whether an exit with value form {@code form} continues the current frame with that
+	 * form: its block is one the frame owns ({@link #exitsOwnedBlock}). One aimed at
+	 * {@code deferTo} -- the owner of a frame below, reached with no dynamic extent in
+	 * between -- hands the form to that frame instead ({@link BlockTailExit}), unless
+	 * this frame has entered a block of its own ({@link #defersExit}); any other answers
+	 * false and is evaluated and thrown as before.
+	 * @throws BlockTailExit when the exit's block is {@code deferTo}'s
+	 */
+	private static boolean exitsToFrame(LispVal designator, LispVal form, Environment env, @Nullable Environment owner,
+			@Nullable Environment deferTo) {
+		if (exitsOwnedBlock(designator, env, owner)) {
+			return true;
+		}
+		if (defersExit(designator, env, owner, deferTo)) {
+			throw new BlockTailExit(Objects.requireNonNull(deferTo), form, env);
+		}
+		return false;
+	}
+
+	/**
+	 * Whether an exit hands its value form to the frame below, {@code deferTo}: it is
+	 * aimed at a block of that frame and this frame owns no block. A block this frame
+	 * entered lies between the exit and its target, and the value form may exit it --
+	 * trivia's {@code (fail)} is a {@code (return-from clause nil)} inside the value form
+	 * of a {@code (return-from whole ...)} -- which, run in the frame below, would find
+	 * that block gone. Then the form runs here and the exit is thrown.
+	 * @param designator the exit's block designator
+	 * @param env the exit's environment
+	 * @param owner the current frame's owner, or null while it has entered no block
+	 * @param deferTo the owner of the frame below, or null
+	 * @return whether the exit is deferred
+	 */
+	static boolean defersExit(LispVal designator, Environment env, @Nullable Environment owner,
+			@Nullable Environment deferTo) {
+		return deferTo != null && owner == null && exitsOwnedBlock(designator, env, deferTo);
+	}
+
+	/**
+	 * The exit signal a {@code return}/{@code return-from} raises: the target block is
+	 * resolved LEXICALLY, up the scope chain of the exit site, exactly as the compiled
+	 * backends resolve it. A name no enclosing scope establishes is an error at the exit
+	 * site, and so is an exit whose block already returned -- the scope survives in the
+	 * closure, but nothing on the stack answers to it, so the signal reaches the
+	 * top-level entry and is reported there.
+	 * @param name the block name being exited
+	 * @param value the value the block should yield
+	 * @param env the scope the exit form is evaluated in
+	 * @return the signal to throw
+	 */
+	static RuntimeException blockExit(String name, LispVal value, Environment env) {
+		Environment target = env.findBlock(name);
+		if (target == null) {
+			return new LispEvalException(LispNames.RETURN_FROM + ": no enclosing block named " + name);
+		}
+		return new BlockReturnSignal(target, name, value);
+	}
+
+	/**
+	 * Evaluates {@code (catch tag body...)}: evaluates the tag ONCE, runs the body as an
+	 * implicit {@code progn} and yields its value -- unless a {@code throw} to an
+	 * {@code eq} tag fires within the body's dynamic extent, in which case the thrown
+	 * value becomes the form's value. A throw to a different tag propagates, so the
+	 * innermost matching catcher wins.
+	 */
+	private LispVal evalCatch(LispCons cons, Environment env) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 2) {
+			throw new LispEvalException(LispNames.CATCH + " expects (catch tag body...)");
+		}
+		LispVal tag = eval(parts.get(1), env);
+		// a debugger lists the catch in its frame, unless an expansion's own (a
+		// restart-case's tag variable)
+		CallFrame frame = this.debugging && !(parts.get(1) instanceof LispSymbol var && var.name().startsWith("__"))
+				? topFrame() : null;
+		if (frame != null) {
+			frame.pushCatch(tag);
+		}
+		try {
+			LispVal result = LispNil.INSTANCE;
+			for (int i = 2; i < parts.size(); i++) {
+				result = eval(parts.get(i), env);
+			}
+			return parts.size() > 2 ? result : singleValue(result);
+		}
+		catch (ThrowSignal signal) {
+			if (Environment.isEqStrict(signal.tag(), tag)) {
+				return signal.value();
+			}
+			throw signal;
+		}
+		finally {
+			if (frame != null) {
+				frame.popCatch();
+			}
+		}
+	}
+
+	/**
+	 * Evaluates {@code (throw tag [result])}: throws the dynamic non-local exit the
+	 * matching {@code catch} yields. CL requires the result form; it defaults to
+	 * {@code nil} here for symmetry with {@code return-from}.
+	 */
+	private LispVal evalThrow(LispCons cons, Environment env) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 2 || parts.size() > 3) {
+			throw new LispEvalException(LispNames.THROW + " expects (throw tag result)");
+		}
+		LispVal tag = eval(parts.get(1), env);
+		LispVal value = parts.size() == 3 ? eval(parts.get(2), env) : singleValue(LispNil.INSTANCE);
+		throw new ThrowSignal(tag, value);
+	}
+
+	/**
+	 * The name of the nil block: the one {@code (block nil ...)} establishes, the
+	 * iteration macros establish implicitly through {@code %block}, and a plain
+	 * {@code (return v)} exits. Making it an ordinary name is what lets one lexical
+	 * lookup serve every block.
+	 */
+	private static final String NIL_BLOCK = "NIL";
+
+	/**
+	 * The block name a designator form denotes; {@code nil} denotes {@link #NIL_BLOCK}. A
+	 * keyword names a block of its own: its name keeps the {@code :} marker.
+	 */
+	static String blockName(LispVal designator) {
+		if (designator instanceof LispNil) {
+			return NIL_BLOCK;
+		}
+		if (designator instanceof LispSymbol sym) {
+			return sym.name();
+		}
+		throw new LispEvalException(LispNames.BLOCK + ": block name must be a symbol, got " + designator.print());
+	}
+
+	/**
+	 * The clause type specifiers of every {@code handler-case} established on the current
+	 * thread of control, innermost last. {@code signal} raises its condition only when
+	 * some active clause TYPE actually matches it and falls through to nil otherwise --
+	 * the CL contract: an active handler-case for an unrelated type must not turn a
+	 * signal into an unwind (trivia level2's pattern expander signals its own
+	 * wildcard/guard-pattern conditions inside user handler-case bodies). Thread-scoped
+	 * for the same reason as {@link DynamicBindings}.
+	 */
+	private final ThreadLocal<ArrayDeque<List<LispVal>>> handlerCaseTypes = ThreadLocal.withInitial(ArrayDeque::new);
+
+	/**
+	 * Evaluates {@code (handler-case expr (type ([var]) body...)... [(:no-error ([var])
+	 * body...)])}: the expression runs with a handler established; an error signaled
+	 * during it ({@link LispEvalException}) is dispatched to the first clause whose
+	 * condition type matches the carried condition (a plain error synthesizes a
+	 * {@code simple-error} instance from the message) and rethrown when none does. The
+	 * {@code :no-error} clause (at most one variable -- the primary value, multiple
+	 * values being syntactic) runs on normal completion, outside the handler. A
+	 * {@code return}/{@code return-from} non-local exit ({@link BlockReturnSignal})
+	 * passes through uncaught.
+	 */
+	private LispVal evalHandlerCase(LispCons cons, Environment env) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 2) {
+			throw new LispEvalException(LispNames.HANDLER_CASE + " expects an expression");
+		}
+		List<LispVal> errorClauses = new ArrayList<>();
+		LispCons noErrorClause = null;
+		for (int i = 2; i < parts.size(); i++) {
+			if (!(parts.get(i) instanceof LispCons clause) || !(clause.cdr() instanceof LispCons)) {
+				throw new LispEvalException(
+						LispNames.HANDLER_CASE + " expects (type (var) body...) clauses: " + parts.get(i).print());
+			}
+			if (clause.car() instanceof LispSymbol head && ":NO-ERROR".equals(head.name())) {
+				noErrorClause = clause;
+			}
+			else {
+				errorClauses.add(clause);
+			}
+		}
+		LispVal value;
+		List<LispVal> allValues = List.of();
+		try {
+			List<LispVal> clauseTypes = new ArrayList<>(errorClauses.size());
+			for (LispVal clauseVal : errorClauses) {
+				clauseTypes.add(((LispCons) clauseVal).car());
+			}
+			ArrayDeque<List<LispVal>> frames = this.handlerCaseTypes.get();
+			frames.addLast(clauseTypes);
+			// In restart mode the clause types also go on the DYNAMIC handler stack, so
+			// %run-handlers stops at this handler-case instead of running an enclosing
+			// handler-bind's handler for a condition this form is nearer to.
+			LispVal protectedForm = LispMacroExpander.handlerCaseProtectedForm(parts.get(1), clauseTypes,
+					this.closRegistry, this.restartRuntimeLoaded);
+			try {
+				// :no-error is a multiple-value consumer. Clear the spill channel first
+				// so
+				// anything published before the protected form runs (a prior top-level
+				// values call) does not bleed in; capture the protected form's extras
+				// from %mv-spill, then clear the channel again so the clause body starts
+				// fresh. The same channel is what multiple-value-bind reads (see
+				// .kb/multiple-values.md).
+				//
+				// A syntactic producer (gethash, floor-family, find-symbol, intern,
+				// array-displacement) only emits its secondary values THROUGH its macro
+				// lowering -- a direct eval of (gethash k h) returns one value. Apply the
+				// compiler's tail-position rewrite (spillEscapingMvProducers) so the
+				// protected form publishes them to spill just as the compile path does.
+				this.globalEnv.clearSpill();
+				LispVal protectedForEval = LispMacroExpander
+					.spillEscapingMvProducers(dispatchingMethodedProducers(protectedForm));
+				value = eval(protectedForEval, env);
+				if (noErrorClause != null) {
+					allValues = consumeValues(value);
+				}
+				// Without a :no-error clause the form answers the protected form's
+				// values as they stand: the channel is left to the consumer behind it.
+			}
+			finally {
+				frames.removeLast();
+			}
+		}
+		catch (LispEvalException e) {
+			LispVal condition = e.condition() != null ? e.condition() : synthesizeCondition(e);
+			for (LispVal clauseVal : errorClauses) {
+				LispCons clause = (LispCons) clauseVal;
+				List<LispVal> clauseParts = clause.toList();
+				Environment clauseEnv = new Environment(env);
+				LispSymbol condTemp = new LispSymbol("__handler_case_cond");
+				clauseEnv.define(condTemp.name(), condition);
+				LispVal test = LispMacroExpander.makeHandlerTypeTest(condTemp, clauseParts.get(0), this.closRegistry);
+				if (eval(test, clauseEnv) == LispNil.INSTANCE) {
+					continue;
+				}
+				List<LispVal> bound = HandlerCaseClauses.letBound(clauseParts, this.specialVars, names -> false);
+				if (bound.get(1) instanceof LispCons varList && varList.car() instanceof LispSymbol var) {
+					clauseEnv.define(var.name(), condition);
+				}
+				LispVal result = LispNil.INSTANCE;
+				for (int i = 2; i < bound.size(); i++) {
+					result = eval(bound.get(i), clauseEnv);
+				}
+				return bound.size() > 2 ? result : singleValue(result);
+			}
+			throw e;
+		}
+		if (noErrorClause != null) {
+			List<LispVal> clauseParts = HandlerCaseClauses.letBound(noErrorClause.toList(), this.specialVars,
+					names -> false);
+			Environment clauseEnv = new Environment(env);
+			// Bind the protected form's full value list to the :no-error variable list,
+			// missing values as nil and surplus values dropped -- the same shape
+			// multiple-value-bind uses (.kb/multiple-values.md, "handler-case's :no-error
+			// clause is
+			// a multiple-value consumer"). The variable list here is the
+			// required-only shape; &optional/&rest/&key are not accepted in this
+			// backend (see .kb/multiple-values.md, "handler-case's :no-error clause is a
+			// multiple-value consumer").
+			if (clauseParts.get(1) instanceof LispCons varList) {
+				List<LispVal> varVals = varList.toList();
+				for (int i = 0; i < varVals.size(); i++) {
+					LispVal varVal = varVals.get(i);
+					if (!(varVal instanceof LispSymbol sym)) {
+						throw new LispEvalException(
+								LispNames.HANDLER_CASE + " :no-error variable must be a symbol: " + varVal.print());
+					}
+					clauseEnv.define(sym.name(), i < allValues.size() ? allValues.get(i) : LispNil.INSTANCE);
+				}
+			}
+			LispVal result = LispNil.INSTANCE;
+			for (int i = 2; i < clauseParts.size(); i++) {
+				result = eval(clauseParts.get(i), clauseEnv);
+			}
+			return clauseParts.size() > 2 ? result : singleValue(result);
+		}
+		return value;
+	}
+
+	/**
+	 * Builds the condition instance a {@code handler-case} / {@code handler-bind} landing
+	 * synthesizes for an error that was signaled without a condition object (a plain
+	 * {@code %error}, or a runtime failure inside a built-in). The class is the one the
+	 * failure NAMED at its throw site ({@link LispEvalException#ofClass}) -- so
+	 * {@code (car 1)} is caught by a {@code type-error} clause -- and
+	 * {@code simple-error} only when nothing named one, which is what a plain
+	 * {@code (error "text")} is.
+	 */
+	private LispVal synthesizeCondition(LispEvalException e) {
+		String message = e.getMessage();
+		LispVal messageVal = message == null ? LispNil.INSTANCE : new LispString(message);
+		String className = e.conditionClassName();
+		if (e instanceof OperandTypeException operand
+				&& this.closRegistry.newReportingCondition(ClosRegistry.TYPE_ERROR_CLASS_NAME, messageVal, java.util.Map
+					.of("DATUM", operand.datum(), "EXPECTED-TYPE", operand.expectedType())) instanceof LispVal c) {
+			return c;
+		}
+		// An unbound cell (an undefined function, an unbound variable): the condition
+		// names it.
+		if (e instanceof CellErrorException cell && className != null
+				&& this.closRegistry.newReportingCondition(className, messageVal,
+						java.util.Map.of("NAME", cellName(cell))) instanceof LispVal c) {
+			return c;
+		}
+		// A java: member that threw (JavaInterop.fail): the condition carries the
+		// throwable, the error's cause.
+		if (ClosRegistry.JAVA_EXCEPTION_CLASS_NAME.equals(className) && e.getCause() != null
+				&& this.closRegistry.newReportingCondition(ClosRegistry.JAVA_EXCEPTION_CLASS_NAME, messageVal,
+						java.util.Map.of(ClosRegistry.JAVA_EXCEPTION_CAUSE_SLOT,
+								JavaInterop.unmarshal(e.getCause()))) instanceof LispVal c) {
+			return c;
+		}
+		if (className != null && this.closRegistry.newReportingCondition(className, messageVal) instanceof LispVal c) {
+			return c;
+		}
+		LispLayout layout = java.util.Objects
+			.requireNonNull(this.closRegistry.findLayoutByTag(LispLayout.CLASS_TAG_PREFIX + "SIMPLE-ERROR"));
+		return new LispInstance(layout, new LispVal[] { ClosRegistry.textControl(messageVal), LispNil.INSTANCE });
+	}
+
+	/**
+	 * Evaluates the internal {@code (%hb-guard body)} landing pad the
+	 * {@code handler-bind} expansion wraps its body in. On this backend the built-in seam
+	 * in {@link #apply} already runs handlers at the signal point, so the pad only
+	 * catches what never crossed that seam (an undefined function, an internal
+	 * {@code %error} form evaluated directly); the error says when its handlers ran
+	 * ({@link LispEvalException#handlersRan}), which keeps the two from both firing for
+	 * one condition.
+	 */
+	private LispVal evalHbGuard(LispCons cons, Environment env) {
+		LispVal body = ((LispCons) cons.cdr()).car();
+		try {
+			return eval(body, env);
+		}
+		catch (LispEvalException e) {
+			throw withHandlerBindHandlersRun(e);
+		}
+	}
+
+	/**
+	 * {@code (%reporting-uncaught #'line after body...)}: the body, where a condition
+	 * nothing caught is reported by the program's own line -- the instance it carries
+	 * (nil for a plain error or a host failure) and its report text handed to
+	 * {@code line} -- with the location lines under it, and {@code after} evaluated then
+	 * ({@code compiler.UncaughtReport.Reporter}). A condition {@code after} lets go on
+	 * leaves as it came, for whoever runs the program to report.
+	 */
+	private LispVal evalReportingUncaught(LispCons cons, Environment env) {
+		UncaughtReport.Reporter reporter = UncaughtReport.reporterOf(cons);
+		try {
+			return eval(UncaughtReport.reportingBody(cons), env);
+		}
+		catch (LispEvalException e) {
+			String message = e.getMessage();
+			LispVal condition = e.condition();
+			LispVal function = eval(
+					new LispCons(new LispSymbol(LispNames.FUNCTION), new LispCons(reporter.line(), LispNil.INSTANCE)),
+					env);
+			LispVal line = apply(function, List.of(condition != null ? condition : LispNil.INSTANCE,
+					new LispString(message != null ? message : "NIL")), env);
+			LispVal warn = this.globalEnv.lookupFunction(LispNames.WARN_INTERNAL);
+			apply(warn, List.of(line), env);
+			for (String location : e.locationLines()) {
+				apply(warn, List.of(new LispString(location)), env);
+			}
+			eval(reporter.after(), env);
+			throw e;
+		}
+	}
+
+	/**
+	 * Runs the {@code handler-bind} cluster stack for the condition an escaping error
+	 * carries (synthesizing the {@code simple-error} of a plain error first), unless the
+	 * error says its handlers already ran ({@link LispEvalException#handlersRan}: the
+	 * signal hook's terminal, or the first seam it crossed -- the two never both fire for
+	 * one condition). Answers the exception to rethrow, saying the handlers ran: the
+	 * original when it already carried the instance, otherwise a replacement carrying it,
+	 * so an outer {@code handler-case} dispatches on the same instance the handlers saw.
+	 * Runs through the same {@code %run-handlers} defun the signal hook calls, so the
+	 * CLHS cluster rebinding applies; a handler that transfers control (a restart, a
+	 * {@code return-from}) throws its own signal out of here instead.
+	 */
+	private LispEvalException withHandlerBindHandlersRun(LispEvalException e) {
+		if (!this.restartRuntimeLoaded || e.handlersRan()) {
+			return e;
+		}
+		LispVal condition = e.condition() != null ? e.condition() : synthesizeCondition(e);
+		LispVal fn = this.globalEnv.lookupFunctionOrNull(LispNames.RUN_HANDLERS_INTERNAL);
+		if (fn != null) {
+			apply(fn, List.of(condition), this.globalEnv);
+		}
+		if (e.condition() == condition) {
+			return e.markHandlersRan();
+		}
+		String message = e.getMessage();
+		LispEvalException typed = new LispEvalException(message == null ? "" : message, condition);
+		typed.initCause(e);
+		return typed.continuing(e).markHandlersRan();
+	}
+
+	/**
+	 * The condition class a raw Java failure inside a built-in is signaled as. The rule
+	 * is the one the JVM backend emits at its handler landing pad -- a cast failure and
+	 * an out-of-range index are {@code type-error} (CLHS says so for {@code aref}), a
+	 * zero divisor is {@code division-by-zero} and any other arithmetic failure is its
+	 * parent {@code arithmetic-error} -- so a program catching {@code (car 1)} as a
+	 * {@code type-error} behaves the same interpreted and compiled. The two must be
+	 * changed together; they are pinned by the same-named cases in
+	 * {@code LispEvaluatorTest} and {@code JvmLispCompilerTest}.
+	 */
+	static String rawFailureConditionClass(RuntimeException raw) {
+		if (!(raw instanceof ArithmeticException)) {
+			return ClosRegistry.TYPE_ERROR_CLASS_NAME;
+		}
+		String message = raw.getMessage();
+		return message != null && message.contains(ClosRegistry.DIVISION_BY_ZERO_MESSAGE_TOKEN)
+				? ClosRegistry.DIVISION_BY_ZERO_CLASS_NAME : ClosRegistry.ARITHMETIC_ERROR_CLASS_NAME;
+	}
+
+	/**
+	 * The message a raw Java failure inside a built-in is wrapped with: the exception's
+	 * own message when it is self-describing (contains a letter, e.g. {@code "aref:
+	 * index out of bounds"}), else the built-in's name prefixes the bare payload
+	 * ({@code "make-array: -1"} for a {@code NegativeArraySizeException}). A CAST failure
+	 * is the exception: its host text names Java classes, so it reports
+	 * {@link ClosRegistry#TYPE_ERROR_MESSAGE} -- the same text the compiled backends
+	 * substitute.
+	 */
+	private static String builtinFailureMessage(String name, RuntimeException raw) {
+		if (raw instanceof ClassCastException) {
+			// The host's text for a cast failure names Java classes; the compiled
+			// backends replace it with the same constant at their landing pad.
+			return ClosRegistry.TYPE_ERROR_MESSAGE;
+		}
+		String message = raw.getMessage();
+		String prefix = name.toLowerCase(java.util.Locale.ROOT);
+		if (message == null || message.isBlank()) {
+			return prefix + " signalled " + raw.getClass().getSimpleName();
+		}
+		return message.chars().anyMatch(Character::isLetter) ? message : prefix + ": " + message;
+	}
+
+	/**
+	 * Evaluates the internal {@code (%signal-cond condition message)} primitive behind
+	 * {@code signal}: raises the condition as a {@link LispEvalException} when a
+	 * {@code handler-case} handler is established, and returns nil otherwise.
+	 */
+	private LispVal evalSignalCond(LispCons cons, Environment env) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() != 3 && parts.size() != 4) {
+			throw new LispEvalException(LispNames.SIGNAL_COND_INTERNAL + " expects a condition and a message");
+		}
+		LispVal condition = eval(parts.get(1), env);
+		LispVal message = conditionMessage(parts.get(2), env);
+		if (anyHandlerCaseMatches(condition)) {
+			throw raisedCondition(parts, condition, message);
+		}
+		return LispNil.INSTANCE;
+	}
+
+	/**
+	 * Evaluates {@code (%error-cond condition message)}, which signals an error carrying
+	 * a condition object (a CLOS-subset tagged-list instance) alongside the message.
+	 * Produced by the typed / condition-object error designator expansions.
+	 */
+	private LispVal evalErrorCond(LispCons cons, Environment env) {
+		List<LispVal> parts = cons.toList();
+		LispVal condition = eval(parts.get(1), env);
+		throw signalPoint(raisedCondition(parts, condition, conditionMessage(parts.get(2), env)), env, null);
+	}
+
+	/**
+	 * What a signal's message operand evaluates at the signal: all of it, or of a message
+	 * that is the condition's report ({@link LispMacroExpander#conditionReportFallback})
+	 * only the fallback. A report runs when the error's message is read: what it signals
+	 * or does must not replace the condition, or happen for one nothing prints.
+	 */
+	private LispVal conditionMessage(LispVal message, Environment env) {
+		LispVal fallback = LispMacroExpander.conditionReportFallback(message);
+		return eval(fallback != null ? fallback : message, env);
+	}
+
+	/**
+	 * The error a signal raises, saying the {@code handler-bind} handlers ran when the
+	 * signal hook's terminal says so.
+	 */
+	private LispEvalException raisedCondition(List<LispVal> parts, LispVal condition, LispVal message) {
+		LispEvalException raised = LispMacroExpander.conditionReportFallback(parts.get(2)) != null
+				? renderingCondition(condition, message) : new LispEvalException(
+						message instanceof am.ik.rontolisp.LispString s ? s.value() : message.display(), condition);
+		return LispMacroExpander.handlersRan(parts) ? raised.markHandlersRan() : raised;
+	}
+
+	private LispEvalException renderingCondition(LispVal condition, LispVal fallback) {
+		return LispEvalException.rendering(() -> {
+			LispVal text = apply(resolveFunction(LispNames.SIGNAL_TEXT_INTERNAL), List.of(condition, fallback),
+					this.globalEnv);
+			return text instanceof am.ik.rontolisp.LispString s ? s.value() : text.display();
+		}, condition);
+	}
+
+	/**
+	 * Whether the (canonical-spelling) name is defined in any global namespace --
+	 * function, macro, or variable. The find-symbol "a definition is an interning" probe:
+	 * a definition registers here, and only the runtime {@code intern} writes the package
+	 * registry's member table.
+	 */
+	boolean definedInImage(String name) {
+		return this.userMacros.containsKey(name) || this.globalEnv.lookupFunctionOrNull(name) != null
+				|| this.globalEnv.hasBinding(name);
+	}
+
+	/**
+	 * The one lookup behind {@code find-symbol} and its status value: the accessible
+	 * symbol of the (verbatim) name in the designated package -- the current one for the
+	 * one-argument form -- or null. A designator naming no package signals a
+	 * {@code package-error}, as {@code intern}'s does (libraries probing an OPTIONAL
+	 * system guard on {@code find-package} first, as postmodern's json-encoder does). The
+	 * image probe makes a defun (or a defstruct-GENERATED defun/defvar) under
+	 * {@code (in-package
+	 * pkg)} count as a member, so {@code (find-symbol "POINT-P" pkg)} finds a defstruct
+	 * predicate (trivia level2's predicatep).
+	 */
+	private PackageResolver.@Nullable Accessible findSymbolAccessible(List<LispVal> args) {
+		if (args.size() == 2) {
+			if (!(args.get(0) instanceof LispString str)) {
+				throw new LispEvalException(LispNames.FIND_SYMBOL + " expects a string, got " + args.get(0).print());
+			}
+			String designator = packageDesignator(LispNames.FIND_SYMBOL, args.get(1));
+			if (this.packageResolver.findPackageName(designator) == null) {
+				// CLHS: a designator naming no package (nil included) is an error a
+				// handler catches. signalPackageError does not return normally.
+				signalPackageError("No such package: " + designator, designator);
+				return null;
+			}
+			return this.packageResolver.accessible(designator, str.value(), this::definedInImage);
+		}
+		requireSingleArg(LispNames.FIND_SYMBOL, args);
+		if (!(args.get(0) instanceof LispString str)) {
+			throw new LispEvalException(LispNames.FIND_SYMBOL + " expects a string, got " + args.get(0).print());
+		}
+		// intern/find-symbol take the name verbatim under the uppercase-canonical
+		// model -- (find-symbol "car") is NIL, (find-symbol "CAR") names CAR. A
+		// ":"-prefixed name is a keyword spelling, kept for the programs that probe
+		// one this way.
+		String name = str.value();
+		if (!name.isEmpty() && name.charAt(0) == ':') {
+			return new PackageResolver.Accessible(name, LispNames.STATUS_EXTERNAL);
+		}
+		return this.packageResolver.accessible(this.packageResolver.currentPackageName(), name, this::definedInImage);
+	}
+
+	/**
+	 * The value a cell-error's {@code name} slot holds: the symbol of its spelling, or
+	 * the list {@code (setf place)} for an undefined {@code (setf place)} function.
+	 */
+	private static LispVal cellName(CellErrorException cell) {
+		String place = cell.setfPlace();
+		return place == null ? symbolOfSpelling(cell.spelling())
+				: new LispCons(new LispSymbol(LispNames.SETF), new LispCons(symbolOfSpelling(place), LispNil.INSTANCE));
+	}
+
+	/**
+	 * The value a canonical symbol spelling denotes: {@code t} and {@code nil} are the
+	 * singletons (a {@code LispSymbol} spelled {@code "T"} would print as {@code t} and
+	 * not be {@code eq} to it), everything else the symbol of that spelling. Every
+	 * operator that ANSWERS a symbol it looked up by name goes through this --
+	 * {@code find-symbol}, {@code intern}, the enumerations -- so
+	 * {@code (eq (find-symbol "T" :cl) t)} holds.
+	 */
+	private static LispVal symbolOfSpelling(String spelling) {
+		return switch (spelling) {
+			case "T" -> LispTrue.INSTANCE;
+			case "NIL" -> LispNil.INSTANCE;
+			default -> new LispSymbol(spelling);
+		};
+	}
+
+	/**
+	 * The stored spelling of a SYMBOL argument of the package operators ({@code export} /
+	 * {@code import} / {@code shadowing-import} / {@code unintern}): {@code t} and
+	 * {@code nil} are the standard symbols of those names, and a STRING -- not a symbol
+	 * in CL, accepted here for the programs that spell one -- names the target package's
+	 * own symbol.
+	 */
+	private static String symbolSpelling(String operator, LispVal val, String targetPackage) {
+		return switch (val) {
+			case LispSymbol sym -> sym.name();
+			case LispTrue ignored -> "T";
+			case LispNil ignored -> "NIL";
+			case LispString str -> LispNames.CL_USER_PKG.equalsIgnoreCase(targetPackage) ? str.value()
+					: PackageRegistry.qualifyInternal(targetPackage, str.value());
+			default -> throw new LispEvalException(operator + " expects a symbol, got " + val.print());
+		};
+	}
+
+	/**
+	 * The spellings of a symbol-or-list-of-symbols argument (see
+	 * {@link #symbolSpelling}); a bare {@code nil} is the empty list.
+	 */
+	private static List<String> symbolSpellings(String operator, LispVal val, String targetPackage) {
+		List<String> out = new ArrayList<>();
+		if (val instanceof LispCons list) {
+			for (LispVal element : list.toList()) {
+				out.add(symbolSpelling(operator, element, targetPackage));
+			}
+		}
+		else if (!(val instanceof LispNil)) {
+			out.add(symbolSpelling(operator, val, targetPackage));
+		}
+		return out;
+	}
+
+	/**
+	 * Whether any active {@code handler-case} clause type matches the condition -- the
+	 * same test {@link #evalHandlerCase} applies when catching, run at the SIGNAL point
+	 * so an unmatched signal can return nil without unwinding (CL: {@code signal} only
+	 * unwinds to a handler that will handle it).
+	 */
+	private boolean anyHandlerCaseMatches(LispVal condition) {
+		ArrayDeque<List<LispVal>> frames = this.handlerCaseTypes.get();
+		if (frames.isEmpty()) {
+			return false;
+		}
+		Environment testEnv = new Environment(this.globalEnv);
+		LispSymbol condTemp = new LispSymbol("__signal_cond");
+		testEnv.define(condTemp.name(), condition);
+		for (List<LispVal> clauseTypes : frames) {
+			for (LispVal typeSpec : clauseTypes) {
+				LispVal test = LispMacroExpander.makeHandlerTypeTest(condTemp, typeSpec, this.closRegistry);
+				if (eval(test, testEnv) != LispNil.INSTANCE) {
+					return true;
+				}
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Evaluates {@code (unwind-protect protected cleanup...)}: the cleanup forms run on
+	 * every exit from the protected form -- normal return, an error unwind
+	 * ({@link LispEvalException}) and a {@code return}/{@code return-from} non-local exit
+	 * ({@link BlockReturnSignal}). A cleanup form that itself signals replaces the
+	 * pending unwind (CL semantics: the newer exit wins), which is exactly what a Java
+	 * {@code finally} does.
+	 *
+	 * <p>
+	 * The cleanups run for effect: their values are discarded, and so is whatever they
+	 * left on the {@code %mv-spill} channel -- the whole form answers the protected
+	 * form's values, ALL of them (see {@link #runUnwindCleanups}).
+	 */
+	private LispVal evalUnwindProtect(LispCons cons, Environment env) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 2) {
+			throw new LispEvalException(LispNames.UNWIND_PROTECT + " expects a protected form");
+		}
+		LispVal result;
+		try {
+			result = eval(parts.get(1), env);
+		}
+		catch (LispExitSignal exit) {
+			// uiop:quit is the HOST's exit on every backend -- System.exit on the JVM,
+			// proc_exit / wasi:cli/exit on the two wasm ones -- and those end the process
+			// where they stand. Running a cleanup here would make the interpreter the one
+			// backend where something still happens after a quit.
+			throw exit;
+		}
+		catch (RuntimeException | Error ex) {
+			runUnwindCleanups(parts, env);
+			throw ex;
+		}
+		runUnwindCleanups(parts, env);
+		return result;
+	}
+
+	/**
+	 * Runs the cleanup forms of an {@code unwind-protect} with the {@code %mv-spill}
+	 * channel ({@link LispNames#MV_SPILL}) saved across them: a cleanup's values are
+	 * discarded, so the SECONDARY values the protected form published must survive it --
+	 * {@code (unwind-protect (values 1 2 3) (release))} answers 1, 2 and 3 however many
+	 * values {@code release} returns. Applies to the unwind path too, where the values of
+	 * a {@code return-from} in the protected form are already in flight.
+	 * @param parts the {@code unwind-protect} form's parts (the cleanups start at index
+	 * 2)
+	 * @param env the evaluation environment
+	 */
+	private void runUnwindCleanups(List<LispVal> parts, Environment env) {
+		if (parts.size() < 3) {
+			return;
+		}
+		LispVal spill = this.globalEnv.spill();
+		for (int i = 2; i < parts.size(); i++) {
+			eval(parts.get(i), env);
+		}
+		this.globalEnv.publishSpill(spill);
+	}
+
+	/** Evaluates the optional value of a {@code return} form, defaulting to nil. */
+	private LispVal evalReturnValue(LispCons cons, Environment env) {
+		List<LispVal> parts = cons.toList();
+		return parts.size() > 1 ? eval(parts.get(1), env) : singleValue(LispNil.INSTANCE);
+	}
+
+	private LispVal evalLambdaForm(LispCons cons, Environment env) {
+		return evalLambdaForm(cons, env, null);
+	}
+
+	/**
+	 * A {@code lambda} form's closure; a function name, when it has one, rides into its
+	 * {@code &optional} surplus check
+	 * ({@link LambdaLists#expand(LispVal, List, boolean, String)}).
+	 */
+	private LispVal evalLambdaForm(LispCons cons, Environment env, @Nullable String functionName) {
+		LambdaSite site = functionName == null ? this.lambdaShapes.get(cons) : null;
+		if (site == null) {
+			site = new LambdaSite(lambdaShape(cons, functionName), new am.ik.rontolisp.BodyCode());
+			if (functionName == null) {
+				this.lambdaShapes.put(cons, site);
+			}
+		}
+		return singleValue(closure(site, env));
+	}
+
+	/**
+	 * A closure of a lambda form over a scope.
+	 * @param site the form's shape and the slot its closures share
+	 * @param env the scope it closes over
+	 * @return the closure
+	 */
+	LispLambda closure(LambdaSite site, Environment env) {
+		LambdaLists.Expanded shape = site.shape();
+		return new LispLambda(shape.required(), shape.rest(), shape.body(), env, null, false, readPackageOf(env),
+				site.code());
+	}
+
+	/**
+	 * What every closure of one {@code lambda} form shares: its shape, and the slot its
+	 * compiled body is kept in.
+	 *
+	 * @param shape the parameters and body ({@link #lambdaShape})
+	 * @param code the closures' slot
+	 */
+	record LambdaSite(LambdaLists.Expanded shape, am.ik.rontolisp.BodyCode code) {
+	}
+
+	/**
+	 * A {@code lambda} form's parameters and body as every closure of it has them:
+	 * checked against the {@code await} placement rules, its tail settled, its lambda
+	 * list desugared ({@link #evalLambdaForm}).
+	 */
+	private LambdaLists.Expanded lambdaShape(LispCons cons, @Nullable String functionName) {
+		checkAwaitPlacement(cons);
+		List<LispVal> parts = cons.toList();
+		// No lite return-from rewrite (and no block wrap): CL lambdas establish no
+		// block, so a (return-from f v) inside a lambda called within f's dynamic
+		// extent exits F -- the named signal propagates through the call.
+		List<LispVal> body = parts.subList(2, parts.size());
+		if (!body.isEmpty() && body.get(body.size() - 1) instanceof LispCons tail) {
+			// A syntactic multiple-value producer in the tail publishes its secondary
+			// value, as in a defun's (evalDefun); the compile paths run the same
+			// rewrite in LispMacroExpander.injectMvSpillGlobal.
+			LispVal settled = settledLambdaTail(tail);
+			if (settled != tail) {
+				List<LispVal> settledBody = new ArrayList<>(body);
+				settledBody.set(settledBody.size() - 1, settled);
+				body = settledBody;
+			}
+		}
+		return LambdaLists.expand(parts.get(1), body, false, functionName);
+	}
+
+	/**
+	 * {@link #lambdaShape}'s answers, by the {@code lambda} form's cons: a closure is
+	 * made on every evaluation of its form, from the same parameters and body. Nothing
+	 * invalidates it: the shape is a function of the form, its settled tail a wrapper a
+	 * later {@code defmethod} rewrites in place ({@link #settledLambdaTail}).
+	 */
+	private final FormMemo<LambdaSite> lambdaShapes = new FormMemo<>();
+
+	/**
+	 * What a lambda created in {@code env} records as {@link LispLambda#readPackage}: the
+	 * current package outside every function and macro body, where it is still the
+	 * file's; nothing inside one, whose scope already says.
+	 */
+	@Nullable String readPackageOf(Environment env) {
+		return env.lexicalPackage() == null ? this.packageResolver.currentPackageName() : null;
+	}
+
+	/**
+	 * {@link LispMacroExpander#spillEscapingMvProducers} of a lambda body's tail,
+	 * memoized by the tail's cons identity ({@link #lambdaTailSettlements}): a closure is
+	 * made on every evaluation of its {@code lambda} form, and a
+	 * {@code flet}/{@code labels} expansion rebuilds its lambdas each time around the
+	 * same body conses.
+	 */
+	private LispVal settledLambdaTail(LispCons tail) {
+		LispVal cached = this.lambdaTailSettlements.get(tail);
+		if (cached != null) {
+			return cached;
+		}
+		Map<String, String> dispatchers = this.methodedProducerDispatch;
+		LispVal renamed = dispatchingMethodedProducers(tail, dispatchers);
+		LispVal settled = LispMacroExpander.spillEscapingMvProducers(renamed);
+		if (settled != renamed) {
+			// A lowered producer: the closures share one (progn settled) wrapper, which
+			// a later defmethod on the producer rewrites in place (relowerProducerTails)
+			// -- a closure made before it must dispatch too.
+			LispCons holder = new LispCons(new LispSymbol(LispNames.PROGN), new LispCons(settled, LispNil.INSTANCE));
+			registerProducerTail(new ProducerTailSite(new java.lang.ref.WeakReference<>(holder), tail, true),
+					dispatchers);
+			settled = holder;
+		}
+		else {
+			// Nothing lowered, so no methoded set can lower anything here later either;
+			// a rename of a non-tail call only restates what evalCons does for a
+			// methoded name.
+			settled = renamed;
+		}
+		this.lambdaTailSettlements.put(tail, settled);
+		return settled;
+	}
+
+	// The map* family (mapcar/mapc/mapcan/maplist/mapl/mapcon) operates on lists; a
+	// non-list (e.g. a string) is the operator's LIST type-error rather than the empty
+	// list, which would hide a caller's mistake. nil is a valid empty list. For mapping
+	// over a string or vector, use the generic map.
+	private void requireList(String name, LispVal value) {
+		Environment.requireListArgument(name, value);
+	}
+
+	// Validates a map* family call's arguments -- a function designator plus at least one
+	// list, every one of which must be a list -- and returns just the lists. Every member
+	// of the family takes N lists in Common Lisp, so the arity check is a lower bound for
+	// all of them, not just mapcar.
+	private List<LispVal> requireMapLists(String name, List<LispVal> args) {
+		if (args.size() < 2) {
+			throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+					name + " expects at least 2 arguments, got " + args.size());
+		}
+		List<LispVal> lists = args.subList(1, args.size());
+		for (LispVal list : lists) {
+			requireList(name, list);
+		}
+		return lists;
+	}
+
+	// The shared walk behind the whole map* family: call the function once per position
+	// with one argument per list, stopping as soon as the SHORTEST list runs out (Common
+	// Lisp's termination rule). 'tails' passes the successive cdrs themselves
+	// (maplist/mapcon/mapl) instead of their cars (mapcar/mapc/mapcan); every member
+	// differs only in that axis and in what its caller does with the collected values,
+	// so one walker keeps the six in step -- they are the reference the compile backends
+	// are diffed against. With 'pieces' (mapcan/mapcon) every value must be a list, the
+	// operator's type-error as soon as one is not.
+	private List<LispVal> mapFamilyValues(String name, LispVal function, List<LispVal> lists, boolean tails) {
+		return mapFamilyValues(name, function, lists, tails, false);
+	}
+
+	private List<LispVal> mapFamilyValues(String name, LispVal function, List<LispVal> lists, boolean tails,
+			boolean pieces) {
+		List<LispVal> cursors = new ArrayList<>(lists);
+		List<LispVal> results = new ArrayList<>();
+		while (true) {
+			List<LispVal> callArgs = new ArrayList<>(cursors.size());
+			for (LispVal cursor : cursors) {
+				if (cursor instanceof LispCons cell) {
+					callArgs.add(tails ? cell : cell.car());
+				}
+				else {
+					// The walk's end: every cursor is a list, a dotted tail being the
+					// operator's type-error.
+					for (LispVal end : cursors) {
+						requireList(name, end);
+					}
+					return results;
+				}
+			}
+			for (int i = 0; i < cursors.size(); i++) {
+				cursors.set(i, ((LispCons) cursors.get(i)).cdr());
+			}
+			LispVal value = apply(function, callArgs, this.globalEnv);
+			if (pieces) {
+				requireList(name, value);
+			}
+			results.add(value);
+		}
+	}
+
+	// Collect the walk's values into a fresh list (mapcar / maplist).
+	private LispVal mapValues(String name, LispVal function, List<LispVal> lists, boolean tails) {
+		List<LispVal> results = mapFamilyValues(name, function, lists, tails);
+		LispVal result = LispNil.INSTANCE;
+		for (int i = results.size() - 1; i >= 0; i--) {
+			result = new LispCons(results.get(i), result);
+		}
+		return result;
+	}
+
+	// Apply the function for its side effects only and return the first list (Common Lisp
+	// mapc / mapl semantics).
+	private LispVal mapForEffect(String name, LispVal function, List<LispVal> lists, boolean tails) {
+		mapFamilyValues(name, function, lists, tails);
+		return lists.get(0);
+	}
+
+	// The argument sequences of an every/some call, each coerced to a list once. CL
+	// specifies (every predicate &rest sequences) with at least one sequence; the walk
+	// below stops as soon as the SHORTEST one runs out. This is the interpreter's
+	// reference implementation, which the compile backends' shared macro expansion
+	// (LispMacroExpander.expandEverySomeFamily) is diffed against.
+	private static List<LispVal> predicateSequences(String name, List<LispVal> args) {
+		if (args.size() < 2) {
+			throw new LispEvalException(
+					name + " expects at least 2 arguments (a predicate and one sequence), got " + args.size());
+		}
+		List<LispVal> lists = new ArrayList<>(args.size() - 1);
+		for (int i = 1; i < args.size(); i++) {
+			lists.add(Environment.seqAsList(args.get(i)));
+		}
+		return lists;
+	}
+
+	// The element tuple at the current position, or null once any cursor has run out.
+	// Advances every cursor past the returned tuple.
+	private static @Nullable List<LispVal> nextElementTuple(List<LispVal> cursors) {
+		List<LispVal> callArgs = new ArrayList<>(cursors.size());
+		for (LispVal cursor : cursors) {
+			if (!(cursor instanceof LispCons cell)) {
+				return null;
+			}
+			callArgs.add(cell.car());
+		}
+		for (int i = 0; i < cursors.size(); i++) {
+			cursors.set(i, ((LispCons) cursors.get(i)).cdr());
+		}
+		return callArgs;
+	}
+
+	// Return t when the predicate is non-nil for every element tuple, nil at the first
+	// failure (Common Lisp every semantics, over any number of sequences).
+	private LispVal everyValues(LispVal predicate, List<LispVal> lists) {
+		List<LispVal> cursors = new ArrayList<>(lists);
+		List<LispVal> callArgs;
+		while ((callArgs = nextElementTuple(cursors)) != null) {
+			if (!isTruthy(apply(predicate, callArgs, this.globalEnv))) {
+				return LispNil.INSTANCE;
+			}
+		}
+		return LispTrue.INSTANCE;
+	}
+
+	// Return the first non-nil predicate result, or nil when every element tuple fails
+	// (Common Lisp some semantics, over any number of sequences).
+	private LispVal someValues(LispVal predicate, List<LispVal> lists) {
+		List<LispVal> cursors = new ArrayList<>(lists);
+		List<LispVal> callArgs;
+		while ((callArgs = nextElementTuple(cursors)) != null) {
+			LispVal result = apply(predicate, callArgs, this.globalEnv);
+			if (isTruthy(result)) {
+				return result;
+			}
+		}
+		return LispNil.INSTANCE;
+	}
+
+	// Return the 0-based index of the first element satisfying the predicate
+	// (Common Lisp position-if), or nil. Like position but tests with the predicate.
+	/** The matching flavor of a runtime {@code position}-family scan. */
+	private enum PositionScanMode {
+
+		/**
+		 * {@code position}/{@code find}: the first argument is an item compared by
+		 * :test/:test-not.
+		 */
+		ITEM,
+		/** {@code position-if}/{@code find-if}: the first argument is a predicate. */
+		PREDICATE,
+		/**
+		 * {@code position-if-not}/{@code find-if-not}: the first argument is a negated
+		 * predicate.
+		 */
+		PREDICATE_NOT
+
+	}
+
+	// The runtime counterpart of LispMacroExpander.buildPositionScan for first-class
+	// use: a forward scan honoring :start/:end, where a :from-end match records the
+	// match and keeps scanning (the last match wins). :test/:test-not apply only to
+	// position/find (ITEM mode); a nil keyword value counts as absent, like the
+	// expansion -- except a nil :start, which is no bound: the bounds are checked as
+	// subseq checks a range, before the scan. elementResult selects the find family's
+	// answer (the matching element) over the position family's (its index) -- the two
+	// differ in nothing else.
+	private LispVal positionScanValues(String opName, List<LispVal> args, PositionScanMode mode,
+			boolean elementResult) {
+		if (args.size() < 2) {
+			throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+					opName + " expects at least 2 arguments, got " + args.size());
+		}
+		LispVal test = null;
+		LispVal testNot = null;
+		LispVal keyFn = null;
+		boolean fromEnd = false;
+		LispVal startValue = new LispInteger(0);
+		LispVal endValue = LispNil.INSTANCE;
+		List<String> allowed = mode == PositionScanMode.ITEM
+				? List.of(LispNames.TEST_KEYWORD, LispNames.TEST_NOT_KEYWORD, LispNames.KEY_KEYWORD,
+						LispNames.START_KEYWORD, LispNames.END_KEYWORD, LispNames.FROM_END_KEYWORD)
+				: List.of(LispNames.KEY_KEYWORD, LispNames.START_KEYWORD, LispNames.END_KEYWORD,
+						LispNames.FROM_END_KEYWORD);
+		requireKeywordTail(opName, args, 2, allowed);
+		for (int i = 2; i < args.size(); i += 2) {
+			if (!(args.get(i) instanceof LispSymbol kw)) {
+				// Admitted by :allow-other-keys t.
+				continue;
+			}
+			LispVal value = args.get(i + 1);
+			boolean absent = value instanceof LispNil;
+			switch (kw.name()) {
+				case LispNames.TEST_KEYWORD, LispNames.TEST_NOT_KEYWORD -> {
+					if (mode != PositionScanMode.ITEM) {
+						// Admitted by :allow-other-keys t (the predicate IS the test).
+						continue;
+					}
+					if (LispNames.TEST_KEYWORD.equals(kw.name())) {
+						test = absent ? null : value;
+					}
+					else {
+						testNot = absent ? null : value;
+					}
+				}
+				case LispNames.KEY_KEYWORD -> keyFn = absent ? null : value;
+				case LispNames.FROM_END_KEYWORD -> fromEnd = !absent;
+				case LispNames.START_KEYWORD -> startValue = value;
+				case LispNames.END_KEYWORD -> endValue = value;
+				default -> {
+					// :allow-other-keys itself, or a key it admitted.
+				}
+			}
+		}
+		LispVal item = args.get(0);
+		LispVal cur = Environment.seqAsList(args.get(1));
+		// The bounds lie inside the sequence, or subseq's type-error -- before any
+		// element reaches a designator.
+		Environment.checkBoundingIndices(args.get(1), startValue, endValue);
+		long start = Environment.requireIndex(opName, startValue);
+		Long end = endValue instanceof LispNil ? null : (long) Environment.requireIndex(opName, endValue);
+		long index = 0;
+		LispVal found = LispNil.INSTANCE;
+		while (cur instanceof LispCons cell && (end == null || index < end)) {
+			if (index >= start) {
+				LispVal elem = (keyFn == null) ? cell.car() : apply(keyFn, List.of(cell.car()), this.globalEnv);
+				boolean match = switch (mode) {
+					case ITEM -> testNot != null ? !isTruthy(apply(testNot, List.of(item, elem), this.globalEnv))
+							: isTruthy(apply(test != null ? test : new LispSymbol(LispNames.EQL), List.of(item, elem),
+									this.globalEnv));
+					case PREDICATE -> isTruthy(apply(item, List.of(elem), this.globalEnv));
+					case PREDICATE_NOT -> !isTruthy(apply(item, List.of(elem), this.globalEnv));
+				};
+				if (match) {
+					LispVal answer = elementResult ? cell.car() : new LispInteger(index);
+					if (!fromEnd) {
+						return answer;
+					}
+					found = answer;
+				}
+			}
+			index++;
+			cur = cell.cdr();
+		}
+		return found;
+	}
+
+	/**
+	 * Evaluates {@code (coerce value 'list|'string|'vector)} through a native converter
+	 * when the value's representation is one this arm can answer for, and through the
+	 * shared {@code expandCoerce} lowering otherwise.
+	 *
+	 * <p>
+	 * This is the declining-primitive shape ({@code .kb/binary-sequence-io.md}): the fast
+	 * arm answers or DECLINES, and a decline runs exactly the expansion that ran before,
+	 * over the value it has already evaluated (re-quoted, so the value form is evaluated
+	 * once either way). Nothing about the operator's contract moves -- an unsupported
+	 * result type, a rank-2 array, a non-character element on the way to a string all
+	 * fall through and signal what they always signalled.
+	 *
+	 * <p>
+	 * It matters far beyond {@code coerce} itself: every generic sequence expansion wraps
+	 * its scan in {@code (coerce seq 'list)} and its result in {@code (coerce res
+	 * 'string)} ({@code seqAsListForm} / {@code seqResultDispatchForm}), and the
+	 * expansion's own conversion is {@code (map 'list #'identity s)} -- a funcall of
+	 * {@code #'identity} per element, INTERPRETED. That was ~0.5 us per character, so
+	 * {@code (position #\Space <46-char string>)} spent 23.5 us of its 28.8 us building a
+	 * list it then stopped scanning at element 1. See {@code .kb/seq-coerce-runtime.md}.
+	 * @param cons the coerce expression
+	 * @param env the evaluation environment
+	 * @return the coerced value
+	 */
+	private LispVal evalSequenceCoerce(LispCons cons, Environment env) {
+		List<LispVal> parts = cons.toList();
+		String type = parts.size() == 3 ? coerceSequenceTypeName(parts.get(2)) : null;
+		if (type == null) {
+			// A COMPUTED result type: the registry rides along so a designator naming a
+			// user deftype resolves before the family dispatch reads its head.
+			return eval(LispMacroExpander.expandCoerce(cons, true, false, false, this.closRegistry, true, true), env);
+		}
+		LispVal value = eval(parts.get(1), env);
+		LispVal fast = coerceSequenceFast(value, type);
+		if (fast != null) {
+			return fast;
+		}
+		// Declined. The value is already evaluated, so the expansion runs over a quote
+		// of it rather than over the original form.
+		LispVal quoted = new LispCons(new LispSymbol(LispNames.QUOTE), new LispCons(value, LispNil.INSTANCE));
+		LispVal rebuilt = new LispCons(new LispSymbol(LispNames.COERCE),
+				new LispCons(quoted, new LispCons(parts.get(2), LispNil.INSTANCE)));
+		return eval(
+				LispMacroExpander.expandCoerce((LispCons) rebuilt, true, false, false, this.closRegistry, true, true),
+				env);
+	}
+
+	// The literal sequence result type a (coerce x 'type) form names, normalized the way
+	// expandCoerce normalizes it (the "simple"/"base" aliases collapse, a package
+	// qualifier is dropped), or null for anything else -- a computed designator, a
+	// compound spec, a float type, an unresolvable deftype name. Only LIST, STRING and
+	// VECTOR are answered, because those are the three the native converter serves.
+	private static @Nullable String coerceSequenceTypeName(LispVal typeForm) {
+		if (!(typeForm instanceof LispCons quote) || !(quote.car() instanceof LispSymbol head)
+				|| !LispNames.QUOTE.equals(head.name()) || !(quote.cdr() instanceof LispCons rest)
+				|| !(rest.cdr() instanceof LispNil) || !(rest.car() instanceof LispSymbol name)) {
+			return null;
+		}
+		PackageRegistry.QualifiedName qualified = PackageRegistry.splitQualified(name.name());
+		String member = qualified == null ? name.name() : qualified.member();
+		return switch (member) {
+			case "LIST" -> "LIST";
+			case "STRING", "BASE-STRING" -> "STRING";
+			// The SIMPLE- spellings are their own arm: "already of the result type"
+			// means a SIMPLE string there, so a fill-pointered character vector has to
+			// be rebuilt rather than answered (.kb/declarations-type-checks.md).
+			case "SIMPLE-STRING", "SIMPLE-BASE-STRING" -> "SIMPLE-STRING";
+			case "VECTOR", "SIMPLE-VECTOR" -> "VECTOR";
+			default -> null;
+		};
+	}
+
+	// The native conversion, or null when this arm declines and the shared expansion has
+	// to run. Each arm answers exactly what the matching expandCoerce body answers:
+	// 'list is (if (listp x) x (if (stringp x) <chars> <aref scan>)), 'string is
+	// (if (stringp x) x (map 'string #'identity <as list>)), and 'vector is
+	// (if (or (listp x) (stringp x)) <fill> x) -- the identity tail included, which is
+	// why the vector arm never declines.
+	private static @Nullable LispVal coerceSequenceFast(LispVal value, String requestedType) {
+		String type = requestedType;
+		if ("SIMPLE-STRING".equals(type)) {
+			if (value instanceof LispString str) {
+				// A simple string IS of the result type; any other string has to be
+				// rebuilt, which this arm declines to the shared expansion's copy-seq
+				// rather than keeping a second copy of.
+				return str.fillPointer() < 0 && !str.adjustable() && str.displacedTo() == null ? value : null;
+			}
+			type = "STRING";
+		}
+		if ("LIST".equals(type)) {
+			if (value instanceof LispCons || value instanceof LispNil) {
+				return value;
+			}
+			return sequenceElementsAsList(value);
+		}
+		if ("STRING".equals(type)) {
+			if (value instanceof LispString) {
+				return value;
+			}
+			LispVal elements = (value instanceof LispCons || value instanceof LispNil) ? value
+					: sequenceElementsAsList(value);
+			if (elements == null) {
+				return null;
+			}
+			StringBuilder sb = new StringBuilder();
+			for (LispVal cur = elements; cur instanceof LispCons cell; cur = cell.cdr()) {
+				if (!(cell.car() instanceof LispChar c)) {
+					// A non-character element is the expansion's error to raise.
+					return null;
+				}
+				sb.appendCodePoint(c.codePoint());
+			}
+			return new LispString(sb.toString());
+		}
+		if (!(value instanceof LispCons) && !(value instanceof LispNil) && !(value instanceof LispString)) {
+			// (coerce x 'vector) over a vector is the identity, exactly as
+			// coerceToVectorBody's vectorp arm is; anything else -- no sequence, or an
+			// array of rank 2 or more -- is the expansion's COERCE type-error to raise.
+			boolean vector = value instanceof LispIntVector
+					|| value instanceof LispArray arr && arr.dimensions().length == 1
+					|| value instanceof LispFloatArray packed && packed.rank() == 1;
+			return vector ? value : null;
+		}
+		LispVal elements = (value instanceof LispString) ? sequenceElementsAsList(value) : value;
+		if (elements == null) {
+			return null;
+		}
+		List<LispVal> flat = new ArrayList<>();
+		for (LispVal cur = elements; cur instanceof LispCons cell; cur = cell.cdr()) {
+			flat.add(cell.car());
+		}
+		LispVal[] data = flat.toArray(new LispVal[0]);
+		return new LispArray(new int[] { data.length }, data);
+	}
+
+	// The elements of a rank-1 non-list sequence as a fresh list, or null when the value
+	// is not a representation this arm serves (a rank-2 array, a hash table, a number).
+	// Element by element this is what (aref v i) over (length v) answers, and for a
+	// string what (map 'list #'identity s) answers -- one LispChar per CODE POINT.
+	private static @Nullable LispVal sequenceElementsAsList(LispVal value) {
+		if (value instanceof LispString str) {
+			LispVal result = LispNil.INSTANCE;
+			for (int i = str.codePointCount() - 1; i >= 0; i--) {
+				result = new LispCons(new LispChar(str.codePointAt(i)), result);
+			}
+			return result;
+		}
+		if (value instanceof LispArray arr && arr.dimensions().length == 1) {
+			LispVal result = LispNil.INSTANCE;
+			for (int i = arr.effectiveLength() - 1; i >= 0; i--) {
+				result = new LispCons(arr.readFlat(i), result);
+			}
+			return result;
+		}
+		if (value instanceof LispFloatArray packed && packed.rank() == 1) {
+			LispVal result = LispNil.INSTANCE;
+			for (int i = packed.totalSize() - 1; i >= 0; i--) {
+				result = new LispCons(packed.readFlat(i), result);
+			}
+			return result;
+		}
+		if (value instanceof LispIntVector vector) {
+			LispVal result = LispNil.INSTANCE;
+			for (int i = vector.length() - 1; i >= 0; i--) {
+				result = new LispCons(new LispInteger(vector.elementAt(i)), result);
+			}
+			return result;
+		}
+		return null;
+	}
+
+	// Return the tail of the list starting at the first element satisfying the predicate
+	// (Common Lisp member-if), or nil. Like find-if but yields the cons rather than the
+	// element.
+	private LispVal memberIfValues(LispVal predicate, LispVal list, @Nullable LispVal keyFn) {
+		while (list instanceof LispCons cell) {
+			if (isTruthy(apply(predicate, List.of(keyed(keyFn, cell.car())), this.globalEnv))) {
+				return cell;
+			}
+			list = cell.cdr();
+		}
+		return Environment.requireListArgument(LispNames.MEMBER_IF, list);
+	}
+
+	// The :key designator applied to one element, or the element itself when the
+	// designator is absent (or nil, which presentKeyword already reads as absent).
+	private LispVal keyed(@Nullable LispVal keyFn, LispVal element) {
+		return keyFn == null ? element : apply(keyFn, List.of(element), this.globalEnv);
+	}
+
+	/** The set operation a first-class {@link #setOperationValues} call names. */
+	private enum SetOp {
+
+		/** {@code union}: list-1 plus each element of list-2 not already present. */
+		UNION,
+		/** {@code intersection}: the elements of list-1 present in list-2. */
+		INTERSECTION,
+		/** {@code set-difference}: the elements of list-1 absent from list-2. */
+		DIFFERENCE,
+		/** {@code subsetp}: whether every element of list-1 is present in list-2. */
+		SUBSETP,
+		/** {@code adjoin}: list-2 with the item prepended unless it is present. */
+		ADJOIN
+
+	}
+
+	/**
+	 * The runtime twin of the set-operation expansions: one scan for all five, so a
+	 * first-class {@code #'union} takes the same
+	 * {@code :test}/{@code :test-not}/{@code :key} set as the call form and answers in
+	 * the same order.
+	 */
+	private LispVal setOperationValues(String name, SetOp op, List<LispVal> args) {
+		if (args.size() < 2) {
+			throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+					name + " expects at least 2 arguments, got " + args.size());
+		}
+		requireTestKeyKeywords(name, args, 2);
+		RuntimeTest test = runtimeTest(args, 2);
+		LispVal keyFn = presentKeyword(args, 2, LispNames.KEY_KEYWORD);
+		LispVal first = args.get(0);
+		LispVal second = args.get(1);
+		if (op == SetOp.ADJOIN) {
+			// CL keys BOTH sides of the comparison but conses the item UNKEYED.
+			return setMember(test, keyFn, keyed(keyFn, first), second) ? second : new LispCons(first, second);
+		}
+		if (op == SetOp.UNION) {
+			// The accumulator starts as list-1 and membership is looked for in it as it
+			// grows, exactly as expandUnion's do loop does.
+			LispVal accumulator = first;
+			LispVal cursor = second;
+			while (cursor instanceof LispCons cell) {
+				if (!setMember(test, keyFn, keyed(keyFn, cell.car()), accumulator)) {
+					accumulator = new LispCons(cell.car(), accumulator);
+				}
+				cursor = cell.cdr();
+			}
+			return accumulator;
+		}
+		LispVal accumulator = LispNil.INSTANCE;
+		LispVal cursor = first;
+		while (cursor instanceof LispCons cell) {
+			boolean present = setMember(test, keyFn, keyed(keyFn, cell.car()), second);
+			if (op == SetOp.SUBSETP) {
+				if (!present) {
+					return LispNil.INSTANCE;
+				}
+			}
+			else if (present == (op == SetOp.INTERSECTION)) {
+				accumulator = new LispCons(cell.car(), accumulator);
+			}
+			cursor = cell.cdr();
+		}
+		return op == SetOp.SUBSETP ? LispTrue.INSTANCE : accumulator;
+	}
+
+	// The membership test the five share: the ALREADY-KEYED probe against each element
+	// of the list, keyed the same way -- the inner (member ... :test :key) call every
+	// set expansion emits.
+	private boolean setMember(RuntimeTest test, @Nullable LispVal keyFn, LispVal probe, LispVal list) {
+		while (list instanceof LispCons cell) {
+			if (testMatches(test, probe, keyed(keyFn, cell.car()))) {
+				return true;
+			}
+			list = cell.cdr();
+		}
+		return false;
+	}
+
+	// Return the first pair whose car satisfies the predicate (Common Lisp assoc-if), or
+	// nil. Like assoc but tests with the predicate rather than eql.
+	private LispVal assocIfValues(LispVal predicate, LispVal alist, @Nullable LispVal keyFn) {
+		while (alist instanceof LispCons cell) {
+			if (cell.car() instanceof LispCons pair
+					&& isTruthy(apply(predicate, List.of(keyed(keyFn, pair.car())), this.globalEnv))) {
+				return pair;
+			}
+			alist = cell.cdr();
+		}
+		return Environment.requireListArgument(LispNames.ASSOC_IF, alist);
+	}
+
+	// Return the first pair whose cdr satisfies the predicate (Common Lisp rassoc-if), or
+	// nil. The mirror of assocIfValues.
+	private LispVal rassocIfValues(LispVal predicate, LispVal alist, @Nullable LispVal keyFn) {
+		while (alist instanceof LispCons cell) {
+			if (cell.car() instanceof LispCons pair
+					&& isTruthy(apply(predicate, List.of(keyed(keyFn, pair.cdr())), this.globalEnv))) {
+				return pair;
+			}
+			alist = cell.cdr();
+		}
+		return Environment.requireListArgument(LispNames.RASSOC_IF, alist);
+	}
+
+	// The -if family takes :key only (no :test -- the predicate IS the test), so its
+	// keyword tail gets its own validator rather than requireTestKeyKeywords.
+	private static void requireKeyKeyword(String name, List<LispVal> args, int start) {
+		requireKeywordTail(name, args, start, List.of(LispNames.KEY_KEYWORD));
+	}
+
+	/**
+	 * Signals the {@code program-error} a malformed keyword tail of a first-class call
+	 * deserves, through the SAME rule and text the expansion-time check applies to a call
+	 * form ({@code LispMacroExpander.keywordTailProblem}) -- including
+	 * {@code :allow-other-keys} suppression -- so {@code (funcall #'remove ...)} and
+	 * {@code (remove ...)} cannot disagree.
+	 */
+	private static void requireKeywordTail(String name, List<LispVal> args, int start, List<String> allowed) {
+		String problem = LispMacroExpander.keywordTailProblem(name, args, start, allowed);
+		if (problem != null) {
+			throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME, problem);
+		}
+	}
+
+	private LispVal reduceValues(LispVal function, LispVal accumulator, LispVal list) {
+		while (list instanceof LispCons cell) {
+			accumulator = apply(function, List.of(accumulator, cell.car()), this.globalEnv);
+			list = cell.cdr();
+		}
+		return accumulator;
+	}
+
+	// Apply the function and concatenate the resulting lists (Common Lisp mapcan / mapcon
+	// semantics; the concatenation is non-destructive append rather than nconc). A piece
+	// that is no list is the operator's type-error, as on the compile paths.
+	private LispVal mapcanValues(String name, LispVal function, List<LispVal> lists, boolean tails) {
+		List<LispVal> pieces = mapFamilyValues(name, function, lists, tails, true);
+		LispVal result = LispNil.INSTANCE;
+		for (int i = pieces.size() - 1; i >= 0; i--) {
+			result = appendTwo(pieces.get(i), result);
+		}
+		return result;
+	}
+
+	// Build a fresh list of the elements of 'a' followed by 'b' (the tail 'b' is shared).
+	private LispVal appendTwo(LispVal a, LispVal b) {
+		List<LispVal> elems = new ArrayList<>();
+		while (a instanceof LispCons cell) {
+			elems.add(cell.car());
+			a = cell.cdr();
+		}
+		LispVal result = b;
+		for (int i = elems.size() - 1; i >= 0; i--) {
+			result = new LispCons(elems.get(i), result);
+		}
+		return result;
+	}
+
+	// Sort a list ascending using the comparison predicate (Common Lisp sort semantics;
+	// the predicate is true when its first argument strictly precedes its second).
+	// A merge sort, arm for arm the one the compile paths call
+	// (LispMacroExpander.sortRuntimeWrapper): the same middle split -- the left half is
+	// the longer one on an odd length -- and the same one question per step,
+	// (pred right left), answering the left element unless that is true. So the four
+	// backends answer one permutation, and it is a stable one (.kb/sort.md). A fresh
+	// list is built: the argument's cells are left alone here, unlike the compile
+	// paths, which relink them.
+	private LispVal sortValues(LispVal list, LispVal predicate) {
+		List<LispVal> elems = new ArrayList<>();
+		LispVal cursor = list;
+		while (cursor instanceof LispCons cell) {
+			elems.add(cell.car());
+			cursor = cell.cdr();
+		}
+		LispVal[] values = elems.toArray(new LispVal[0]);
+		mergeSortRange(values, new LispVal[values.length], 0, values.length, predicate);
+		LispVal result = LispNil.INSTANCE;
+		for (int i = values.length - 1; i >= 0; i--) {
+			result = new LispCons(values[i], result);
+		}
+		return result;
+	}
+
+	// One merge sort level over values[from, to): sort both halves, then merge them
+	// through buffer and copy back.
+	private void mergeSortRange(LispVal[] values, LispVal[] buffer, int from, int to, LispVal predicate) {
+		int length = to - from;
+		if (length < 2) {
+			return;
+		}
+		int middle = from + (length + 1) / 2;
+		mergeSortRange(values, buffer, from, middle, predicate);
+		mergeSortRange(values, buffer, middle, to, predicate);
+		int left = from;
+		int right = middle;
+		int out = 0;
+		while (left < middle && right < to) {
+			if (isTruthy(apply(predicate, List.of(values[right], values[left]), this.globalEnv))) {
+				buffer[out++] = values[right++];
+			}
+			else {
+				buffer[out++] = values[left++];
+			}
+		}
+		while (left < middle) {
+			buffer[out++] = values[left++];
+		}
+		while (right < to) {
+			buffer[out++] = values[right++];
+		}
+		System.arraycopy(buffer, 0, values, from, length);
+	}
+
+	// stable-sort's decorate-sort-undecorate over (seq pred [:key fn]), the keyword tail
+	// already validated. A Java list sort is stable; a string/vector argument is written
+	// back into its own storage.
+	private LispVal stableSortValues(List<LispVal> args) {
+		LispVal keyArg = optionalKeywordArg(args, 2, LispNames.KEY_KEYWORD);
+		LispVal keyFn = keyArg instanceof LispNil ? null : keyArg;
+		LispVal pred = args.get(1);
+		List<LispVal[]> decorated = new java.util.ArrayList<>();
+		LispVal cur = Environment.seqAsList(args.get(0));
+		while (cur instanceof LispCons cell) {
+			LispVal keyVal = (keyFn == null) ? cell.car() : apply(keyFn, List.of(cell.car()), this.globalEnv);
+			decorated.add(new LispVal[] { keyVal, cell.car() });
+			cur = cell.cdr();
+		}
+		decorated.sort((x, y) -> {
+			if (isTruthy(apply(pred, List.of(x[0], y[0]), this.globalEnv))) {
+				return -1;
+			}
+			return isTruthy(apply(pred, List.of(y[0], x[0]), this.globalEnv)) ? 1 : 0;
+		});
+		LispVal result = LispNil.INSTANCE;
+		for (int i = decorated.size() - 1; i >= 0; i--) {
+			result = new LispCons(decorated.get(i)[1], result);
+		}
+		// A string/vector argument sorts as a list of its elements and is written
+		// back into its own storage, matching the SORT builtin above.
+		return Environment.seqResultDestructive(args.get(0), result);
+	}
+
+	// Apply a function to a spread argument list (Common Lisp apply semantics): the
+	// leading
+	// arguments are taken literally and the final argument must be a list whose elements
+	// are
+	// spread as the remaining arguments.
+	private LispVal applyValues(List<LispVal> args) {
+		return apply(args.get(0), spreadApplyArguments(args), this.globalEnv);
+	}
+
+	/**
+	 * The argument list of the call an {@code apply} makes: the arguments between the
+	 * function and the last one taken literally, the last one -- which must be a proper
+	 * list -- spread.
+	 * @param args the apply built-in's arguments, the function first
+	 * @return the arguments of the call
+	 */
+	static List<LispVal> spreadApplyArguments(List<LispVal> args) {
+		List<LispVal> callArgs = new ArrayList<>();
+		for (int i = 1; i < args.size() - 1; i++) {
+			callArgs.add(args.get(i));
+		}
+		LispVal tail = args.get(args.size() - 1);
+		while (tail instanceof LispCons cell) {
+			callArgs.add(cell.car());
+			tail = cell.cdr();
+		}
+		if (!(tail instanceof LispNil)) {
+			throw new LispEvalException(ClosRegistry.APPLY_IMPROPER_LIST_MESSAGE);
+		}
+		return callArgs;
+	}
+
+	private List<LispVal> evalArgs(LispCons cons, Environment env) {
+		return evalArgs(cons, env, 10);
+	}
+
+	// The count is a capacity hint (evalCons already walked the form to check
+	// properness, so it knows the exact size); the loop still stops at the chain's
+	// actual end, so a form rewritten mid-evaluation merely re-grows the list.
+	//
+	// An argument is a single-value context: whatever the argument forms left on the
+	// %mv-spill channel is cleared once every argument is in -- before the callee
+	// runs, which publishes its own. Without this, (list (f)) answered f's extras as
+	// the list's own to a consumer (the REPL echo above all). See singleValue.
+	private List<LispVal> evalArgs(LispCons cons, Environment env, int count) {
+		List<LispVal> args = new ArrayList<>(Math.max(count, 0));
+		LispVal rest = cons.cdr();
+		while (rest instanceof LispCons argCons) {
+			args.add(eval(argCons.car(), env));
+			rest = argCons.cdr();
+		}
+		this.globalEnv.clearSpill();
+		return args;
+	}
+
+	/**
+	 * {@code %async-run}: runs the thunk an async-defun/async-lambda lowering built on
+	 * its own virtual thread and answers the future. A condition escaping the thunk is
+	 * marked as having crossed the boundary ({@link ConditionTrace#crossedAsync}) before
+	 * the future stores it, since the frames that see it next -- the await's -- are
+	 * another function's.
+	 * @param args the thunk, alone
+	 * @param asyncFunction the async function's name, or null when unknown (an async
+	 * lambda, or a call through a function value)
+	 * @return the future
+	 */
+	private LispVal runAsync(List<LispVal> args, @Nullable String asyncFunction) {
+		if (args.size() != 1) {
+			throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+					LispNames.ASYNC_RUN + " expects 1 argument, got " + args.size());
+		}
+		// The body is code of no function: a condition in its own forms names none, the
+		// hop line names the async function (.kb/error-handling.md, "An uncaught
+		// condition reports ONE line").
+		LispVal thunk = args.get(0) instanceof LispLambda lambda ? asyncBody(lambda) : args.get(0);
+		// The body's values are captured where it completes: the channel holds its
+		// extra values the moment the thunk returns, on the thread that ran it, and
+		// they travel in the future -- the awaiter publishes them from there, never
+		// from the channel it shares with every other thread.
+		String spawnerPackage = this.packageResolver.currentPackageName();
+		Map<String, LispVal> callerStacks = new HashMap<>();
+		for (String stack : List.of(LispNames.HANDLER_CLUSTERS_VAR, LispNames.RESTART_CLUSTERS_VAR)) {
+			LispVal bound = threadBinding(stack);
+			if (bound != null) {
+				callerStacks.put(stack, bound);
+			}
+		}
+		ArrayDeque<List<LispVal>> callerHandlerCases = new ArrayDeque<>(this.handlerCaseTypes.get());
+		return AsyncRuntime.run(future -> {
+			LispVal primary;
+			try {
+				primary = withCallersHandlers(callerStacks, callerHandlerCases,
+						() -> withOwnPackage(spawnerPackage, () -> apply(thunk, List.of(), this.globalEnv)));
+			}
+			catch (LispEvalException e) {
+				e.trace().crossedAsync(asyncFunction, future.future());
+				throw e;
+			}
+			finally {
+				programThreadEnded();
+			}
+			future.settleExtras(this.globalEnv.spill());
+			return primary;
+		}, this::programThreadStarting);
+	}
+
+	/**
+	 * Runs an async body starting from what a signal reads on its caller's thread: the
+	 * handler and restart stacks and the armed {@code handler-case} clauses. The part of
+	 * the body before its first suspension is a call, as on the backends that run it on
+	 * the caller's stack; what the body pushes from here on is its own.
+	 */
+	private <T> T withCallersHandlers(Map<String, LispVal> stacks, ArrayDeque<List<LispVal>> handlerCases,
+			java.util.function.Supplier<T> body) {
+		ArrayDeque<List<LispVal>> outer = this.handlerCaseTypes.get();
+		this.handlerCaseTypes.set(handlerCases);
+		try {
+			if (stacks.isEmpty()) {
+				return body.get();
+			}
+			List<T> result = new ArrayList<>(1);
+			withThreadBindings(stacks, () -> result.add(body.get()));
+			return result.getFirst();
+		}
+		finally {
+			this.handlerCaseTypes.set(outer);
+		}
+	}
+
+	/**
+	 * Runs a thread's Lisp code under a current package of its own, starting from the one
+	 * its spawner had: a macro expanding at its first call moves the current package for
+	 * the expansion, and through the one shared state that move reaches what another
+	 * thread reads meanwhile, and two overlapping moves restore the wrong package for
+	 * good.
+	 */
+	private <T> T withOwnPackage(String pkg, java.util.function.Supplier<T> body) {
+		Object previous = this.packageResolver.bindThreadPackage(pkg);
+		try {
+			return body.get();
+		}
+		finally {
+			this.packageResolver.unbindThreadPackage(previous);
+		}
+	}
+
+	/**
+	 * An async lowering's thunk, run under a scope that starts code of no function
+	 * ({@link Environment#lexicalFunction}), so neither its forms nor the lambdas they
+	 * build name the function the async form was written in.
+	 */
+	private static LispLambda asyncBody(LispLambda thunk) {
+		Environment scope = new Environment((Environment) thunk.closure());
+		scope.lexicalFunction(null);
+		return new LispLambda(thunk.params(), thunk.rest(), thunk.body(), scope, thunk.name(), thunk.sourced(),
+				thunk.readPackage());
+	}
+
+	// The rontolisp:await special form: evaluates its one operand and resolves it.
+	private LispVal evalAwait(LispCons cons, Environment env) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() != 2) {
+			throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+					LispNames.AWAIT + " expects 1 argument, got " + (parts.size() - 1));
+		}
+		return awaitValues(eval(parts.get(1), env));
+	}
+
+	// awaitValue as a multiple-value producer (the await special form): answers the
+	// primary value and publishes the extra values the resolved future settled with --
+	// the last future of a flattened chain decides, a non-future operand is one value.
+	private LispVal awaitValues(LispVal v) {
+		LispVal extras = LispNil.INSTANCE;
+		while (v instanceof LispFuture future) {
+			v = joinFuture(future);
+			extras = future.extras();
+		}
+		this.globalEnv.publishSpill(extras);
+		return v;
+	}
+
+	// Resolves a value like JavaScript await: a future joins its computation (releasing
+	// the eager-start handoff first unless the program knows the future settled, so this
+	// is the async body's suspension point), re-signaling a stored error -- a
+	// Lisp-originated condition (LispEvalException) crosses intact so handler-case around
+	// the await catches it by type -- and flattening nested futures; a non-future passes
+	// through unchanged.
+	private LispVal awaitValue(LispVal v) {
+		while (v instanceof LispFuture future) {
+			v = joinFuture(future);
+		}
+		return v;
+	}
+
+	// One step of the resolve: joins one future's computation, unflattened.
+	private static LispVal joinFuture(LispFuture future) {
+		java.util.concurrent.CompletableFuture<LispVal> cf = future.future();
+		// Not whether it is done: a timer that fired before this await still ends the
+		// eager part, or the caller's progress would hang on how fast the timer was.
+		if (!future.knownSettled()) {
+			AsyncRuntime.releaseHandoffIfPending();
+		}
+		try {
+			return cf.join();
+		}
+		catch (java.util.concurrent.CompletionException ex) {
+			Throwable cause = java.util.Objects.requireNonNullElse(ex.getCause(), ex);
+			if (cause instanceof LispEvalException lispError) {
+				// This await is the one re-signalling it (ConditionTrace, "the await that
+				// re-signalled it").
+				lispError.trace().reawaited(cf);
+				throw lispError;
+			}
+			if (cause instanceof RuntimeException transfer && isControlTransfer(transfer)) {
+				// A handler's exit to a frame the awaiter is in.
+				throw transfer;
+			}
+			// a host failure with no message (the JDK client's ConnectException)
+			// reports its class, as the JVM backend's rethrown throwable does
+			throw new LispEvalException(java.util.Objects.requireNonNullElse(cause.getMessage(), cause.toString()));
+		}
+		finally {
+			// Resolved here, so an await of it again goes on, as it does on a component.
+			future.markKnownSettled();
+		}
+	}
+
+	// The single-argument thread-handle check shared by the thread primitives.
+	private static LispThread requireThread(String fn, List<LispVal> args) {
+		if (args.size() != 1) {
+			throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+					fn + " expects 1 argument, got " + args.size());
+		}
+		if (!(args.get(0) instanceof LispThread thread)) {
+			// The operator's type-error expecting (SATISFIES RONTOLISP:THREADP), the one
+			// the JVM signals too.
+			throw OperandTypeException.notOfType(args.get(0), OperandTypes.THREAD_TYPE, fn);
+		}
+		return thread;
+	}
+
+	// Adapts one incoming HTTP request to the Lisp handler: builds the request property
+	// list, applies the handler and reads the response property list back.
+	// The opaque %http-server-* handle: an integer index into RontoHttpServer's
+	// handle table (the socket/mutex handle convention).
+	private static long requireHttpServerHandle(String fn, List<LispVal> args) {
+		if (args.size() != 1 || !(args.get(0) instanceof LispInteger handle)) {
+			throw new LispEvalException(fn + " expects a server handle, got "
+					+ (args.size() == 1 ? args.get(0).print() : args.size() + " arguments"));
+		}
+		return handle.value();
+	}
+
+	// The reply %http-server-take answered: the first argument.
+	private static RontoHttpServer.Reply httpServerReply(String fn, List<LispVal> args) {
+		if (!(args.get(0) instanceof LispJavaObject(RontoHttpServer.Reply reply))) {
+			throw new LispEvalException(fn + " expects the reply of a taken exchange, got " + args.get(0).print());
+		}
+		return reply;
+	}
+
+	/**
+	 * Runs one served request through the SHARED server library: the transport facts go
+	 * over as a positional raw tuple, {@code rontolisp::%http-serve-request} builds the
+	 * Clack environment, applies the handler and normalizes its Clack response, and the
+	 * canonical {@code (status header-alist body-string)} triple comes back. Nothing
+	 * about the environment's or the response's shape is decided here -- that is the
+	 * point: the JVM backend and the WASI component hand the same tuple to the same
+	 * library.
+	 * @param handler the Lisp handler (a function value)
+	 * @param request the transport facts
+	 * @param bufferBody whether the handler asked for the buffered ({@code :raw-body
+	 * :buffered}, what Clack needs) request body rather than rontolisp's asynchronous
+	 * stream
+	 * @return the response to write back
+	 */
+	private RontoHttpServer.Response invokeHttpHandler(LispVal handler, RontoHttpServer.Request request,
+			boolean bufferBody) {
+		// :raw-body -- the default is rontolisp's asynchronous stream (one settled chunk;
+		// the server has already read the body), and :buffered is the Java-backed
+		// bivalent octet stream a Clack application reads with read-line / read-byte /
+		// file-position. The buffered form is a stream-table handle, so it is closed
+		// here, when the request ends -- upstream handlers never close :raw-body, and a
+		// long-running server must not grow its table per request. Only a request that
+		// HAS a body pays for it -- one whose head frames even an empty body is one
+		// (RontoHttpServer.Request#declaresBody), because a middleware reads :raw-body
+		// whenever :content-length is set.
+		long bodyHandle = -1;
+		final LispVal rawBody;
+		if (bufferBody) {
+			if (!request.declaresBody()) {
+				rawBody = LispNil.INSTANCE;
+			}
+			else {
+				bodyHandle = this.globalEnv.openHttpBodyStream(request.body());
+				rawBody = am.ik.rontolisp.compiler.StreamDesignators.streamValue(bodyHandle, LispLayout.Kinds.BODY);
+			}
+		}
+		else if (request.body().length == 0) {
+			LispStream empty = LispStream.open();
+			empty.close();
+			rawBody = empty;
+		}
+		else {
+			// One settled OCTET chunk: the request's bytes as they came, the shape every
+			// HTTP body stream has (a fetched reply's, too), so a handler relaying the
+			// body forwards it byte-exact and read-all decodes it.
+			rawBody = LispStream.settled(octetVector(request.body()));
+		}
+		try {
+			LispVal env = buildClackEnv(request, rawBody);
+			// An async-defun handler returns a future; each request runs on its own
+			// virtual thread, so awaiting it here is the natural per-request suspension.
+			return normalizeClackResponse(awaitValue(apply(handler, List.of(env), this.globalEnv)));
+		}
+		finally {
+			if (bodyHandle >= 0) {
+				// an exchange its application took is answered later, perhaps by another
+				// thread, which may read the body until then
+				long handle = bodyHandle;
+				RontoHttpServer.Reply taken = RontoHttpServer.taken();
+				if (taken != null) {
+					taken.whenEnded(() -> this.globalEnv.closeHttpBodyStream(handle));
+				}
+				else {
+					this.globalEnv.closeHttpBodyStream(bodyHandle);
+				}
+			}
+		}
+	}
+
+	/**
+	 * Builds the Clack environment for one served request. The KEY SET and its order are
+	 * {@link ClackEnv#FIELDS}; only the per-field value extraction is this backend's, so
+	 * an unmapped field fails loudly here -- the same drift guard every backend applies
+	 * to the same declaration. Package-private so the mounted script-name split -- which
+	 * no transport of THIS backend can produce (only the Servlet war mounts the
+	 * application) -- stays testable.
+	 */
+	LispVal buildClackEnv(RontoHttpServer.Request request, LispVal rawBody) {
+		String target = request.target();
+		int q = target.indexOf('?');
+		String path = q < 0 ? target : target.substring(0, q);
+		LispVal query = q < 0 ? LispNil.INSTANCE : new LispString(target.substring(q + 1));
+		// The mounted split: the RAW mount prefix comes off the target path BEFORE
+		// percent-decoding, and both halves come out decoded; a non-prefix scriptName
+		// degrades to the root-mounted split (same arithmetic as RontoHttpClack.buildEnv
+		// and %http-make-env -- the three constructions of one declared shape).
+		String script = request.scriptName();
+		String scriptName = "";
+		String pathInfo = path;
+		if (!script.isEmpty() && path.startsWith(script)) {
+			scriptName = RontoHttpClack.percentDecode(script);
+			pathInfo = path.substring(script.length());
+		}
+		// The header table: lowercased names, repeated headers joined with ", " in wire
+		// order (the Clack handler-backend rule), and never nil -- lack-request gethashes
+		// it unguarded.
+		LispHashTable headers = new LispHashTable();
+		for (RontoHttpServer.Header header : request.headers()) {
+			LispString name = new LispString(header.name().toLowerCase(Locale.ROOT));
+			LispVal seen = headers.get(name, LispNil.INSTANCE);
+			headers.put(name, new LispString(
+					seen instanceof LispString prev ? prev.value() + ", " + header.value() : header.value()));
+		}
+		String host = headerValue(headers, "host");
+		String contentLength = headerValue(headers, "content-length");
+		String serverName = request.localName();
+		long serverPort = request.localPort();
+		if (host != null) {
+			int colon = host.lastIndexOf(':');
+			String tail = colon < 0 ? "" : host.substring(colon + 1);
+			if (colon >= 0 && !tail.isEmpty() && tail.chars().allMatch(Character::isDigit)) {
+				serverName = host.substring(0, colon);
+				serverPort = Long.parseLong(tail);
+			}
+			else {
+				serverName = host;
+			}
+		}
+		List<LispVal> entries = new ArrayList<>(ClackEnv.FIELDS.size() * 2);
+		for (String field : ClackEnv.FIELDS) {
+			entries.add(new LispSymbol(field));
+			entries.add(switch (field) {
+				case ClackEnv.REQUEST_METHOD -> new LispSymbol(":" + request.method().toUpperCase(Locale.ROOT));
+				case ClackEnv.SCRIPT_NAME -> new LispString(scriptName);
+				case ClackEnv.PATH_INFO -> new LispString(RontoHttpClack.percentDecode(pathInfo));
+				case ClackEnv.QUERY_STRING -> query;
+				// "" is the transport's "unknown" (RontoHttpServer.Request carries no
+				// nulls -- the travelling package has no @Nullable to spell one with).
+				case ClackEnv.SERVER_NAME -> new LispString(serverName.isEmpty() ? "localhost" : serverName);
+				case ClackEnv.SERVER_PORT -> new LispInteger(serverPort == 0 ? 80 : serverPort);
+				case ClackEnv.SERVER_PROTOCOL -> new LispSymbol(":" + request.protocol().toUpperCase(Locale.ROOT));
+				case ClackEnv.REQUEST_URI -> new LispString(target);
+				case ClackEnv.URL_SCHEME -> new LispString(request.scheme());
+				case ClackEnv.REMOTE_ADDR ->
+					request.remoteAddr().isEmpty() ? LispNil.INSTANCE : new LispString(request.remoteAddr());
+				case ClackEnv.REMOTE_PORT ->
+					request.remotePort() == 0 ? LispNil.INSTANCE : new LispInteger(request.remotePort());
+				case ClackEnv.HEADERS -> headers;
+				case ClackEnv.CONTENT_TYPE -> {
+					String value = headerValue(headers, "content-type");
+					yield value == null ? LispNil.INSTANCE : new LispString(value);
+				}
+				case ClackEnv.CONTENT_LENGTH -> parseContentLength(contentLength);
+				case ClackEnv.RAW_BODY -> rawBody;
+				default -> throw new LispEvalException(
+						LispNames.HTTP_HANDLER + " has no extraction for environment field " + field);
+			});
+		}
+		return plist(entries.toArray(new LispVal[0]));
+	}
+
+	private static @Nullable String headerValue(LispHashTable headers, String name) {
+		return headers.get(new LispString(name), LispNil.INSTANCE) instanceof LispString value ? value.value() : null;
+	}
+
+	private static LispVal parseContentLength(@Nullable String value) {
+		if (value == null) {
+			return LispNil.INSTANCE;
+		}
+		int end = 0;
+		while (end < value.length() && Character.isDigit(value.charAt(end))) {
+			end++;
+		}
+		return end == 0 ? LispNil.INSTANCE : new LispInteger(Long.parseLong(value.substring(0, end)));
+	}
+
+	/**
+	 * Turns the Clack response a handler returned -- {@code (status headers)},
+	 * {@code (status headers body)} or the delayed {@code (lambda (responder) ...)} form
+	 * -- into the response this server writes.
+	 */
+	private RontoHttpServer.Response normalizeClackResponse(LispVal response) {
+		if (!(response instanceof LispCons res)) {
+			// Clack's DELAYED response: call it with a responder that captures the real
+			// response. Handed the head alone, (status headers), the responder answers
+			// the streaming WRITER: this transport sends a response whole, so the chunks
+			// are kept, and the body ends where the writer is closed or the delayed
+			// function returns (http-server.lisp's %http-normalize-streaming, arm for
+			// arm).
+			LispVal[] captured = new LispVal[1];
+			java.io.ByteArrayOutputStream written = new java.io.ByteArrayOutputStream();
+			boolean[] writing = new boolean[3];
+			LispVal responder = new LispFunction(LispNames.HTTP_HANDLER, args -> {
+				LispVal delivered = args.isEmpty() ? LispNil.INSTANCE : args.get(0);
+				if (captured[0] == null && delivered instanceof LispCons head && head.cdr() instanceof LispCons rest
+						&& rest.cdr() instanceof LispNil) {
+					captured[0] = delivered;
+					writing[0] = true;
+					return new LispFunction(LispNames.HTTP_HANDLER, call -> writeClackChunk(call, written, writing));
+				}
+				captured[0] = delivered;
+				return new LispFunction(LispNames.HTTP_HANDLER, ignored -> {
+					throw new LispEvalException(LispNames.HTTP_HANDLER + ": a response delivered whole has no writer");
+				});
+			});
+			apply(response, List.of(responder), this.globalEnv);
+			if (captured[0] == null) {
+				throw new LispEvalException(LispNames.HTTP_HANDLER + ": a delayed response delivered no response");
+			}
+			if (written.size() > 0 && captured[0] instanceof LispCons head) {
+				if (!(head.car() instanceof LispInteger status)) {
+					throw new LispEvalException(LispNames.HTTP_HANDLER
+							+ ": a handler must return (status headers) or (status headers body), got: "
+							+ captured[0].print());
+				}
+				return new RontoHttpServer.Response((int) status.value(), responseHeaders(second(head)),
+						written.toByteArray());
+			}
+			return normalizeClackResponse(captured[0]);
+		}
+		if (!(res.car() instanceof LispInteger status)) {
+			throw new LispEvalException(LispNames.HTTP_HANDLER
+					+ ": a handler must return (status headers) or (status headers body), got: " + response.print());
+		}
+		return new RontoHttpServer.Response((int) status.value(), responseHeaders(second(res)),
+				responseBody(third(res)));
+	}
+
+	// One call of Clack's streaming writer on a transport that sends a response whole:
+	// (chunk &key start end close), the chunk a string or octets, kept in WRITTEN. STATE
+	// is whether the writer is open, and whether it kept a string and octets -- a body
+	// mixing the two is refused as a stream's is.
+	private LispVal writeClackChunk(List<LispVal> call, java.io.ByteArrayOutputStream written, boolean[] state) {
+		LispVal chunk = call.isEmpty() ? LispNil.INSTANCE : call.get(0);
+		LispVal start = LispNil.INSTANCE;
+		LispVal end = LispNil.INSTANCE;
+		boolean close = false;
+		for (int i = 1; i + 1 < call.size(); i += 2) {
+			if (call.get(i) instanceof LispSymbol key) {
+				switch (key.name()) {
+					case ":START" -> start = call.get(i + 1);
+					case ":END" -> end = call.get(i + 1);
+					case ":CLOSE" -> close = !(call.get(i + 1) instanceof LispNil);
+					default -> {
+					}
+				}
+			}
+		}
+		if (state[0] && !(chunk instanceof LispNil)) {
+			LispVal part = chunk;
+			if (!(start instanceof LispNil) || !(end instanceof LispNil)) {
+				part = apply(resolveFunction("SUBSEQ"),
+						List.of(chunk, start instanceof LispNil ? new LispInteger(0) : start, end), this.globalEnv);
+			}
+			switch (part) {
+				case LispString text -> {
+					if (!text.value().isEmpty()) {
+						state[1] = true;
+						written.writeBytes(text.value().getBytes(StandardCharsets.UTF_8));
+					}
+				}
+				case LispIntVector octets -> {
+					if (octets.length() > 0) {
+						state[2] = true;
+						written.writeBytes(octetsBytes(octets));
+					}
+				}
+				default -> throw new LispEvalException(
+						LispNames.HTTP_HANDLER + ": a written response body must hold strings or octets");
+			}
+			if (state[1] && state[2]) {
+				throw new LispEvalException(
+						LispNames.HTTP_HANDLER + ": a written response body mixes string and octet chunks");
+			}
+		}
+		if (close) {
+			state[0] = false;
+		}
+		return LispNil.INSTANCE;
+	}
+
+	// The Clack response headers -- a keyword plist, or (widening, so a fetch result's
+	// :headers can be handed straight back) a dotted alist. Every pair becomes its own
+	// header line, which is what makes repeated :set-cookie correct by construction; the
+	// framing headers are dropped because the transport computes them from the body.
+	private static List<RontoHttpServer.Header> responseHeaders(LispVal headers) {
+		List<RontoHttpServer.Header> out = new ArrayList<>();
+		if (headers instanceof LispCons first && first.car() instanceof LispCons) {
+			for (LispVal cursor = headers; cursor instanceof LispCons cons; cursor = cons.cdr()) {
+				if (cons.car() instanceof LispCons pair) {
+					addResponseHeader(out, pair.car(), pair.cdr());
+				}
+			}
+			return out;
+		}
+		LispVal cursor = headers;
+		while (cursor instanceof LispCons key && key.cdr() instanceof LispCons value) {
+			addResponseHeader(out, key.car(), value.car());
+			cursor = value.cdr();
+		}
+		return out;
+	}
+
+	private static void addResponseHeader(List<RontoHttpServer.Header> out, LispVal key, LispVal value) {
+		String name = switch (key) {
+			case LispString str -> str.value();
+			case LispSymbol sym -> sym.isKeyword() ? sym.name().substring(1) : sym.name();
+			default -> null;
+		};
+		if (name == null) {
+			return;
+		}
+		name = name.toLowerCase(Locale.ROOT);
+		if ("content-length".equals(name) || "transfer-encoding".equals(name)) {
+			return;
+		}
+		out.add(new RontoHttpServer.Header(name,
+				value instanceof LispString str ? str.value() : Environment.displayString(value)));
+	}
+
+	// The Clack response body, as the OCTETS the transport puts on the wire. A BARE
+	// STRING is refused as Clack itself refuses it (lack's finalize-response wraps a
+	// string controller result in a list, so a bare string here is a malformed
+	// response); a PATHNAME body -- lack/app/file's file-serving form, a distinct value
+	// -- falls to the unsupported-type arm until the transport can serve a file.
+	private byte[] responseBody(LispVal body) {
+		switch (body) {
+			case LispNil ignored -> {
+				return EMPTY_BODY;
+			}
+			case LispString ignored -> throw new LispEvalException(LispNames.HTTP_HANDLER
+					+ ": a response body must be a list of strings, not a bare string -- wrap it, e.g. (list body)");
+			case LispCons parts -> {
+				StringBuilder out = new StringBuilder();
+				for (LispVal cursor = parts; cursor instanceof LispCons cons; cursor = cons.cdr()) {
+					switch (cons.car()) {
+						case LispString part -> out.append(part.value());
+						// A NIL element contributes the empty string, as upstream
+						// renders it: clack-handler-hunchentoot writes every chunk
+						// through flex:string-to-octets, which answers #() for NIL.
+						// A controller that returns nil reaches lack's
+						// finalize-response, which answers the body list (NIL).
+						case LispNil ignored -> {
+						}
+						default -> throw new LispEvalException(
+								LispNames.HTTP_HANDLER + ": a list response body must hold strings");
+					}
+				}
+				return out.toString().getBytes(StandardCharsets.UTF_8);
+			}
+			case LispStream stream -> {
+				// A proxied fetch body: drained here (buffered send). Its chunks are
+				// OCTET vectors (every HTTP body stream's shape) and go out as they are
+				// --
+				// what makes the relay byte-exact; a string chunk (a guest make-stream)
+				// is UTF-8 encoded.
+				java.io.ByteArrayOutputStream drained = new java.io.ByteArrayOutputStream();
+				LispVal chunk = awaitValue(stream.readFuture());
+				while (!(chunk instanceof LispNil)) {
+					switch (chunk) {
+						case LispIntVector octets -> drained.writeBytes(octetsBytes(octets));
+						case LispString chunkStr ->
+							drained.writeBytes(chunkStr.value().getBytes(StandardCharsets.UTF_8));
+						default -> throw new LispEvalException(
+								LispNames.HTTP_HANDLER + ": a stream response body must hold strings or octets");
+					}
+					chunk = awaitValue(stream.readFuture());
+				}
+				return drained.toByteArray();
+			}
+			default -> {
+				// The cold arms (an (unsigned-byte 8) vector today) live once, in the
+				// shared library, rather than four times over. %http-body-string hands
+				// the octets back UNFLATTENED -- only the transport knows whether it can
+				// write bytes -- and this one can: they go out as they are.
+				LispVal normalized = apply(resolveFunction(
+						PackageRegistry.qualifyInternal(LispNames.RONTOLISP_PKG, HttpServerLibrary.BODY_STRING)),
+						List.of(body), this.globalEnv);
+				return switch (normalized) {
+					case LispIntVector octets -> octetsBytes(octets);
+					case LispString str -> str.value().getBytes(StandardCharsets.UTF_8);
+					default -> EMPTY_BODY;
+				};
+			}
+		}
+	}
+
+	private static final byte[] EMPTY_BODY = new byte[0];
+
+	// Raw bytes -> the (unsigned-byte 8) vector a body stream answers them as. The
+	// request's bytes are this request's alone, so the vector takes them over uncopied.
+	private static LispIntVector octetVector(byte[] bytes) {
+		return LispIntVector.wrapOctets(bytes);
+	}
+
+	// An (unsigned-byte 8) response body -> the raw octets, a copy the program can no
+	// longer write. A wider vector narrows element by element, as a byte sink would.
+	private static byte[] octetsBytes(LispIntVector octets) {
+		if (octets.width() == 8) {
+			return octets.octets().clone();
+		}
+		byte[] out = new byte[octets.length()];
+		for (int i = 0; i < out.length; i++) {
+			out[i] = (byte) octets.elementAt(i);
+		}
+		return out;
+	}
+
+	private static LispVal second(LispCons cons) {
+		return cons.cdr() instanceof LispCons rest ? rest.car() : LispNil.INSTANCE;
+	}
+
+	private static LispVal third(LispCons cons) {
+		return cons.cdr() instanceof LispCons rest && rest.cdr() instanceof LispCons rest2 ? rest2.car()
+				: LispNil.INSTANCE;
+	}
+
+	// Builds a property list from alternating key/value LispVals.
+	private static LispVal plist(LispVal... elements) {
+		LispVal result = LispNil.INSTANCE;
+		for (int i = elements.length - 1; i >= 0; i--) {
+			result = new LispCons(elements[i], result);
+		}
+		return result;
+	}
+
+	// Returns the value of key in a property list, or nil if absent.
+	private static LispVal httpPlistGet(LispVal plist, String key) {
+		LispVal current = plist;
+		while (current instanceof LispCons cons && cons.cdr() instanceof LispCons valueCell) {
+			if (cons.car() instanceof LispSymbol sym && sym.name().equals(key)) {
+				return valueCell.car();
+			}
+			current = valueCell.cdr();
+		}
+		return LispNil.INSTANCE;
+	}
+
+	// Evaluates the Lisp-source JSON library into the global environment on first
+	// use, then applies the named fixed-arity helper.
+	private LispVal applyJsonHelper(String helperName, List<LispVal> args) {
+		synchronized (this.libraryLoadLock) {
+			if (!this.jsonLibraryLoaded) {
+				this.jsonLibraryLoaded = true;
+				for (LispVal form : JsonLibrary.portableForms()) {
+					eval(form, this.globalEnv);
+				}
+			}
+		}
+		return apply(resolveFunction(helperName), args, this.globalEnv);
+	}
+
+	/**
+	 * Whether a canonical name names a function, a macro or a special operator -- what
+	 * {@code fboundp} answers for its symbol.
+	 * @param name the canonical name
+	 * @return whether it is fbound
+	 */
+	boolean fbound(String name) {
+		// A catalog built-in (elt, make-broadcast-stream, ...) has no binding until its
+		// first #' resolution evaluates the wrapper (resolveFunction), and a library
+		// function (alphanumericp, equalp, uiop:split-string, ...) none until its first
+		// resolution loads it: each is a function all the same, so the probe loads what a
+		// call would.
+		return SPECIAL_OPERATORS.contains(name) || this.userMacros.containsKey(name)
+				|| this.globalEnv.lookupFunctionOrNull(name) != null || (!this.retiredFunctions.contains(name)
+						&& (BuiltinFunctionWrappers.names().contains(name) || loadFunction(name) != null));
+	}
+
+	/**
+	 * Whether a canonical name has a global value or a dynamic binding on the calling
+	 * thread -- what {@code boundp} answers for its symbol.
+	 * @param name the canonical name
+	 * @return whether it is bound
+	 */
+	boolean bound(String name) {
+		return name.startsWith(":") || LispNames.PACKAGE_VAR.equals(name) || (this.dynamicBindings.isBound(name)
+				? this.dynamicBindings.get(name) != null : this.globalEnv.hasBinding(name));
+	}
+
+	/**
+	 * Whether a canonical name is proclaimed special ({@code defvar},
+	 * {@code defparameter}, a {@code special} proclamation).
+	 * @param name the canonical name
+	 * @return whether it is special
+	 */
+	boolean isSpecialVariable(String name) {
+		return this.specialVars.contains(name);
+	}
+
+	/**
+	 * The resolver this evaluator reads every form through, for an editor's half that
+	 * names packages and symbols ({@link CommonLispSwank}).
+	 * @return the resolver
+	 */
+	PackageResolver packageResolver() {
+		return this.packageResolver;
+	}
+
+	/**
+	 * The global environment.
+	 * @return the environment
+	 */
+	Environment globalEnvironment() {
+		return this.globalEnv;
+	}
+
+	/**
+	 * The CLOS registry.
+	 * @return the registry
+	 */
+	ClosRegistry closRegistry() {
+		return this.closRegistry;
+	}
+
+	/**
+	 * Applies a function value against the global environment. The seam
+	 * {@link LinalgSimd}'s natives use to fall back to the scalar {@code linalg.lisp}
+	 * defun they replaced, for an input their lane loops do not handle.
+	 * @param function the function value (a lambda, a native, or a symbol designator)
+	 * @param args the evaluated arguments
+	 * @return the function's result
+	 */
+	LispVal applyGlobal(LispVal function, List<LispVal> args) {
+		return apply(function, args, this.globalEnv);
+	}
+
+	/**
+	 * What a built-in's failure reports: the program-error its DIRECT call reports
+	 * ({@link BuiltinCallArity#wrongCountMessage}) when the count is one its call shape
+	 * rules out -- whatever the Java body said, its own range ({@code 1 to 2}), a
+	 * description, an index out of bounds -- and the failure itself otherwise. A direct
+	 * call was judged before its body ran; a function value (funcall, apply, a mapping
+	 * function, a methoded built-in's dispatcher) is judged here, as the compiled
+	 * wrapper's lambda list judges it. Only on the way out, so the success path pays
+	 * nothing: no body answers a count its shape rules out
+	 * ({@code LispEvaluatorTest.everyBuiltinFunctionValueReportsAWrongCountWithItsCallShape}).
+	 * @param builtIn the built-in that failed
+	 * @param args its arguments
+	 * @param failure what its body raised
+	 * @return the condition to signal
+	 */
+	private static LispEvalException wrongCountOr(LispFunction builtIn, List<LispVal> args, LispEvalException failure) {
+		String wrongCount = BuiltinCallArity.wrongCountMessage(builtIn.name(), args.size());
+		return wrongCount == null ? failure
+				: LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME, wrongCount);
+	}
+
+	/**
+	 * The elements of a lambda body that is nothing but ONE named {@code block} form --
+	 * what {@code evalDefun} and {@code expandDefmethod} wrap every function body in --
+	 * or {@code null} for any other body. See the call site in {@link #apply}.
+	 * @param body the lambda's body forms
+	 * @return the block form's elements, or null
+	 */
+	/**
+	 * Binds one parameter of a function or a macro in its call scope: dynamically when
+	 * its name is proclaimed special or {@code declared} names it -- marking a declared
+	 * one special in the scope, so a reference reads the binding -- and lexically
+	 * otherwise.
+	 * @param name the parameter name
+	 * @param value the argument
+	 * @param declared the names the body's special declarations name
+	 * @param scope the call scope
+	 * @param dynamicParams the dynamic bindings made so far, or null for none
+	 * @return the dynamic bindings made, or null for none
+	 */
+	private @Nullable List<String> bindParameter(String name, LispVal value, Set<String> declared, Environment scope,
+			@Nullable List<String> dynamicParams) {
+		boolean proclaimed = this.specialVars.contains(name);
+		if (!proclaimed && !declared.contains(name)) {
+			scope.define(name, value);
+			return dynamicParams;
+		}
+		this.dynamicBindings.push(name, value);
+		if (!proclaimed) {
+			scope.define(name, Environment.SPECIAL);
+		}
+		List<String> pushed = dynamicParams == null ? new ArrayList<>(2) : dynamicParams;
+		pushed.add(name);
+		return pushed;
+	}
+
+	/**
+	 * The {@code (name forms...)} cell of a body that is one {@code block} form, or null.
+	 */
+	private static @Nullable LispCons soleBlockForm(List<LispVal> body) {
+		if (body.size() != 1 || !(body.get(0) instanceof LispCons form)
+				|| !(form.car() instanceof LispSymbol head && LispNames.BLOCK.equals(head.name()))) {
+			return null;
+		}
+		return form.cdr() instanceof LispCons nameCell ? nameCell : null;
+	}
+
+	LispVal apply(LispVal function, List<LispVal> args, Environment env) {
+		if (function instanceof LispSymbol sym) {
+			// A symbol is a function designator naming its global function (CL-style).
+			function = resolveFunction(sym.name());
+		}
+		if (function instanceof LispFunction builtIn) {
+			// The signal-point seam: an error a BUILT-IN raises runs the handler-bind
+			// cluster stack HERE, before unwinding (restarts established below the
+			// handler-bind are still active, unwind-protect cleanups have not run --
+			// the CL order). A raw Java failure (a bad index, a negative dimension, a
+			// cast) is wrapped into a LispEvalException first, so handler-case sees it
+			// too. Zero cost until an exception escapes, and zero beyond one boolean
+			// read while the restart runtime is not loaded (no handler can exist).
+			//
+			// A built-in's answer is ONE value unless the built-in itself publishes
+			// or passes values along (LispFunction.passesValues): a callback it ran --
+			// sort's predicate, mapcar's function, a print-object method -- may have
+			// published, and that publish must not travel out as the built-in's own
+			// values. So the channel is cleared after every other built-in returns
+			// (see singleValue).
+			try {
+				LispVal result = builtIn.body().apply(args);
+				if (!builtIn.passesValues()) {
+					this.globalEnv.clearSpill();
+				}
+				return result;
+			}
+			catch (OperandTypeException e) {
+				// A coercion funnel cannot know which operator it serves; the built-in
+				// whose body raised the error does (OperandTypes).
+				throw signalPoint(wrongCountOr(builtIn, args, e.named(builtIn.name())), env, builtIn, args);
+			}
+			catch (LispEvalException e) {
+				throw signalPoint(wrongCountOr(builtIn, args, e), env, builtIn, args);
+			}
+			catch (IndexOutOfBoundsException | NegativeArraySizeException | ArithmeticException
+					| ClassCastException raw) {
+				LispEvalException wrapped = LispEvalException.ofClass(rawFailureConditionClass(raw),
+						builtinFailureMessage(builtIn.name(), raw));
+				wrapped.initCause(raw);
+				throw signalPoint(wrongCountOr(builtIn, args, wrapped), env, builtIn, args);
+			}
+		}
+		if (function instanceof LispLambda lambda) {
+			// A compiled body binding its parameters lexically runs in a compiled frame.
+			CompiledBody compiled = compiledBody(lambda);
+			Environment callScope = compiled == null ? null : compiled.bind(lambda, args);
+			if (callScope != null) {
+				return CompiledFrames.run(this, java.util.Objects.requireNonNull(compiled), callScope);
+			}
+			return applyWalked(lambda, args, env);
+		}
+		if (function instanceof LispInstance instance && instance.funcallableFunction() instanceof LispVal installed
+				&& (installed instanceof LispFunction || installed instanceof LispLambda)) {
+			// A funcallable instance calls the function installed in it
+			// (closer-mop:set-funcallable-instance-function).
+			return apply(installed, args, env);
+		}
+		// Not a designator at all: CL's type-error. NIL and T ARE symbols, so each is the
+		// undefined-function the symbol arm above reports for any unbound name.
+		String standardName = standardSymbolName(function);
+		LispEvalException failure = standardName != null ? CellErrorException.undefinedFunction(standardName)
+				: LispEvalException.ofClass(ClosRegistry.TYPE_ERROR_CLASS_NAME,
+						ClosRegistry.NOT_A_FUNCTION_MESSAGE_PREFIX + function.print());
+		throw failure;
+	}
+
+	/**
+	 * Applies a closure by walking its body, in a frame of its own ({@link #apply}).
+	 * @param lambda the closure
+	 * @param args its arguments
+	 * @param env the scope of the call
+	 * @return the value
+	 */
+	LispVal applyWalked(LispLambda lambda, List<LispVal> args, Environment env) {
+		// The frame-keeping application: a call evalCons's loop did not absorb --
+		// through a built-in (mapcar, sort, the funcall of a non-closure), or a lambda
+		// with a special parameter, whose dynamic binding is popped below after the
+		// body. Its body's last form still runs through the loop, so tail calls INSIDE
+		// the body are proper; only this activation keeps a Java frame.
+		checkArity(lambda, args);
+		int required = lambda.params().size();
+		Environment lambdaEnv = callScope(lambda);
+		// A parameter whose name is proclaimed special, or declared special at the head
+		// of the body, binds DYNAMICALLY, as in CL -- and only so: a closure built in
+		// this body reads whatever binding is active when it runs.
+		Set<String> declared = declaredSpecials(lambda.body(), true);
+		List<String> dynamicParams = null;
+		for (int i = 0; i < required; i++) {
+			String paramName = lambda.params().get(i).name();
+			dynamicParams = bindParameter(paramName, args.get(i), declared, lambdaEnv, dynamicParams);
+		}
+		if (lambda.rest() != null) {
+			LispVal restList = LispNil.INSTANCE;
+			for (int i = args.size() - 1; i >= required; i--) {
+				restList = new LispCons(args.get(i), restList);
+			}
+			dynamicParams = bindParameter(lambda.rest().name(), restList, declared, lambdaEnv, dynamicParams);
+		}
+		markDeclaredSpecials(declared, lambdaEnv);
+		CallFrame callFrame = this.debugging ? CallFrame.enter(this.frameTops.get(), lambda, args, lambdaEnv, env)
+				: null;
+		Supplier<LispVal> resume;
+		try {
+			LispCons blockNameCell = soleBlockForm(lambda.body());
+			if (blockNameCell != null) {
+				// A defun/defmethod body IS one block form. Its block runs in the call's
+				// own scope -- fresh, private to this activation, and covering exactly
+				// the block's lexical extent, so it can BE the block's identity: the
+				// commonest call still allocates one scope, not two.
+				lambdaEnv.installBlock(blockName(blockNameCell.car()));
+				return runBlockIn(blockNameCell.cdr(), lambdaEnv);
+			}
+			LispVal result = LispNil.INSTANCE;
+			for (LispVal bodyExpr : lambda.body()) {
+				result = eval(bodyExpr, lambdaEnv);
+			}
+			return result;
+		}
+		catch (FrameSignal signal) {
+			if (callFrame == null || signal.frame() != callFrame) {
+				throw signal;
+			}
+			// answered once the frame and its bindings are off the stack
+			resume = signal.action();
+		}
+		finally {
+			if (callFrame != null) {
+				callFrame.exit();
+			}
+			if (dynamicParams != null) {
+				for (int i = dynamicParams.size() - 1; i >= 0; i--) {
+					this.dynamicBindings.pop(dynamicParams.get(i));
+				}
+			}
+		}
+		return resume.get();
+	}
+
+	// Scans a keyword/value argument tail starting at the given index for the named
+	// keyword, returning the value following the first match, or the fallback when
+	// absent.
+	private static LispVal keywordArg(List<LispVal> args, int start, String keyword, LispVal fallback) {
+		LispVal value = optionalKeywordArg(args, start, keyword);
+		return value != null ? value : fallback;
+	}
+
+	// Like keywordArg but returns null when the keyword is absent (for keywords with no
+	// default designator, such as :key).
+	private static @Nullable LispVal optionalKeywordArg(List<LispVal> args, int start, String keyword) {
+		for (int i = start; i + 1 < args.size(); i += 2) {
+			if (args.get(i) instanceof LispSymbol kw && keyword.equals(kw.name())) {
+				return args.get(i + 1);
+			}
+		}
+		return null;
+	}
+
+	/**
+	 * The {@code :test} / {@code :test-not} designator of a first-class sequence or alist
+	 * call, as ONE predicate: a {@code :test-not} designator's result is INVERTED.
+	 * Mirrors {@code LispMacroExpander.TestSpec}, so
+	 * {@code (apply #'member ... :test-not f)} decides the same way the compiled call
+	 * does.
+	 */
+	private record RuntimeTest(LispVal fn, boolean negated) {
+	}
+
+	private RuntimeTest runtimeTest(List<LispVal> args, int start) {
+		// A nil VALUE is the absent designator, the same reading the expansion gives a
+		// literal (remove 'a x :test nil): CL's default is eql either way.
+		LispVal test = presentKeyword(args, start, LispNames.TEST_KEYWORD);
+		if (test != null) {
+			return new RuntimeTest(test, false);
+		}
+		LispVal testNot = presentKeyword(args, start, LispNames.TEST_NOT_KEYWORD);
+		return testNot != null ? new RuntimeTest(testNot, true) : new RuntimeTest(new LispSymbol(LispNames.EQL), false);
+	}
+
+	private boolean testMatches(RuntimeTest test, LispVal a, LispVal b) {
+		return test.negated() != isTruthy(apply(test.fn(), List.of(a, b), this.globalEnv));
+	}
+
+	/** The match flavor of a first-class {@code remove}/{@code substitute}/count scan. */
+	private enum SeqScanMode {
+
+		/** The operand is an ITEM, compared by :test / :test-not. */
+		ITEM,
+		/** The operand is a PREDICATE ({@code remove-if}, {@code count-if}, ...). */
+		PREDICATE,
+		/** The operand is a NEGATED predicate (the {@code -if-not} spellings). */
+		PREDICATE_NOT
+
+	}
+
+	/** What a first-class scan does with the elements it accepts. */
+	private enum SeqScanAction {
+
+		/** {@code count} / {@code count-if}: answer how many there were. */
+		COUNT,
+		/** {@code remove} / {@code delete} and their -if spellings: drop them. */
+		REMOVE,
+		/** {@code substitute} / {@code nsubstitute} and theirs: replace them. */
+		SUBSTITUTE
+
+	}
+
+	/**
+	 * The runtime counterpart of the expander's bounded scan
+	 * ({@code LispMacroExpander.SeqScanScaffold}) for the whole
+	 * {@code count}/{@code remove}/{@code substitute} family, first-class use included:
+	 * one walk honoring {@code :test}/{@code :test-not}/{@code :key} and CLHS 17.2.1's
+	 * {@code :start}/{@code :end}/{@code :count}/{@code :from-end}, so
+	 * {@code (funcall #'remove x l :count 1)} decides exactly what {@code (remove x l
+	 * :count 1)} decides.
+	 *
+	 * <p>
+	 * {@code :from-end} reverses the order the elements are VISITED in, not merely which
+	 * matches a {@code :count} keeps: the {@code :test} and {@code :key} designators are
+	 * called in that order, which a side-effecting one sees (ANSI's count-list.9).
+	 * Elements outside {@code :start}/{@code :end}, and every element once the count is
+	 * spent, are never handed to a designator at all.
+	 *
+	 * <p>
+	 * A DESTRUCTIVE spelling over a list rewrites that list's own cons cells --
+	 * {@code rplaca} for the substitute family, a {@code rplacd} splice for
+	 * {@code delete}. The splice runs only when no bounding keyword was given, matching
+	 * what the compile paths do with a bounded {@code delete} (CLHS lets a destructive
+	 * operator answer a fresh sequence, and the caller must use the RESULT either way). A
+	 * DESTRUCTIVE substitute over a vector/string has no cons cells to rewrite, so ANSI's
+	 * "the argument itself changes" is served the {@code sort}/{@code nreverse} way
+	 * instead ({@code Environment.seqResultDestructive}): the freshly-built result is
+	 * written back into the argument's own storage. {@code delete} over a vector/string
+	 * is NOT the same answer -- it removes elements, so the result cannot be the
+	 * argument's own storage, and stays a fresh sequence.
+	 * @param name the operator, for the messages
+	 * @param args the evaluated arguments
+	 * @param mode how an element is matched
+	 * @param action what a matching element gets
+	 * @param destructive whether this is the {@code n-} / {@code delete} spelling
+	 * @return the operator's value
+	 */
+	private LispVal sequenceScanValues(String name, List<LispVal> args, SeqScanMode mode, SeqScanAction action,
+			boolean destructive) {
+		int seqIndex = action == SeqScanAction.SUBSTITUTE ? 2 : 1;
+		if (args.size() <= seqIndex) {
+			throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+					name + " expects at least " + (seqIndex + 1) + " arguments, got " + args.size());
+		}
+		int tail = seqIndex + 1;
+		List<String> allowed = new ArrayList<>();
+		if (mode == SeqScanMode.ITEM) {
+			allowed.add(LispNames.TEST_KEYWORD);
+			allowed.add(LispNames.TEST_NOT_KEYWORD);
+		}
+		allowed.add(LispNames.KEY_KEYWORD);
+		allowed.add(LispNames.START_KEYWORD);
+		allowed.add(LispNames.END_KEYWORD);
+		if (action != SeqScanAction.COUNT) {
+			allowed.add(LispNames.COUNT_KEYWORD);
+		}
+		allowed.add(LispNames.FROM_END_KEYWORD);
+		requireKeywordTail(name, args, tail, allowed);
+		LispVal keyFn = presentKeyword(args, tail, LispNames.KEY_KEYWORD);
+		LispVal startValue = optionalKeywordArg(args, tail, LispNames.START_KEYWORD);
+		LispVal endValue = presentKeyword(args, tail, LispNames.END_KEYWORD);
+		LispVal countValue = action == SeqScanAction.COUNT ? null : presentKeyword(args, tail, LispNames.COUNT_KEYWORD);
+		boolean fromEnd = presentKeyword(args, tail, LispNames.FROM_END_KEYWORD) != null;
+		// CLHS 17.2.1: a negative :count acts as zero, a nil one as no limit at all.
+		Long budget = countValue == null ? null : Math.max(0L, requireCount(name, countValue));
+		LispVal operand = args.get(seqIndex - 1);
+		LispVal original = args.get(seqIndex);
+		boolean listArgument = original instanceof LispCons || original instanceof LispNil;
+		List<LispVal> elements = new ArrayList<>();
+		List<LispCons> cells = new ArrayList<>();
+		for (LispVal cursor = Environment.seqAsList(original); cursor instanceof LispCons cell; cursor = cell.cdr()) {
+			elements.add(cell.car());
+			if (listArgument) {
+				cells.add(cell);
+			}
+		}
+		// The bounds lie inside the sequence, or subseq's type-error -- before any
+		// element reaches a designator.
+		long start = 0;
+		Long end = null;
+		if (startValue != null || endValue != null) {
+			LispVal givenStart = startValue == null ? new LispInteger(0) : startValue;
+			Environment.checkBoundingIndices(original, givenStart, endValue);
+			start = Environment.requireIndex(name, givenStart);
+			end = endValue == null ? null : (long) Environment.requireIndex(name, endValue);
+		}
+		int size = elements.size();
+		long last = end == null ? size : end;
+		boolean[] acted = new boolean[size];
+		RuntimeTest test = runtimeTest(args, tail);
+		int hits = 0;
+		for (int step = 0; step < size; step++) {
+			int index = fromEnd ? size - 1 - step : step;
+			if (index < start || index >= last) {
+				continue;
+			}
+			if (budget != null && budget <= 0) {
+				break;
+			}
+			LispVal element = elements.get(index);
+			LispVal probe = keyFn == null ? element : apply(keyFn, List.of(element), this.globalEnv);
+			boolean match = switch (mode) {
+				case ITEM -> testMatches(test, operand, probe);
+				case PREDICATE -> isTruthy(apply(operand, List.of(probe), this.globalEnv));
+				case PREDICATE_NOT -> !isTruthy(apply(operand, List.of(probe), this.globalEnv));
+			};
+			if (match) {
+				acted[index] = true;
+				hits++;
+				if (budget != null) {
+					budget--;
+				}
+			}
+		}
+		if (action == SeqScanAction.COUNT) {
+			return new LispInteger(hits);
+		}
+		if (destructive && listArgument && action == SeqScanAction.SUBSTITUTE) {
+			for (int i = 0; i < size; i++) {
+				if (acted[i]) {
+					cells.get(i).setCar(args.get(0));
+				}
+			}
+			return original;
+		}
+		if (destructive && listArgument && action == SeqScanAction.REMOVE && startValue == null && endValue == null
+				&& countValue == null && !fromEnd) {
+			// The splice: the surviving cons cells are rewired and reused, and the new
+			// head comes back (Common Lisp semantics -- use the return value).
+			LispCons head = null;
+			LispCons tip = null;
+			for (int i = 0; i < size; i++) {
+				if (acted[i]) {
+					continue;
+				}
+				LispCons cell = cells.get(i);
+				if (tip == null) {
+					head = cell;
+				}
+				else {
+					tip.setCdr(cell);
+				}
+				tip = cell;
+			}
+			if (tip != null) {
+				tip.setCdr(LispNil.INSTANCE);
+			}
+			return head == null ? LispNil.INSTANCE : head;
+		}
+		LispVal result = LispNil.INSTANCE;
+		for (int i = size - 1; i >= 0; i--) {
+			if (action == SeqScanAction.SUBSTITUTE) {
+				result = new LispCons(acted[i] ? args.get(0) : elements.get(i), result);
+			}
+			else if (!acted[i]) {
+				result = new LispCons(elements.get(i), result);
+			}
+		}
+		if (destructive && action == SeqScanAction.SUBSTITUTE) {
+			// Reaching here means listArgument was false (the list case returned above by
+			// rplaca-ing its own cons cells): a vector/string argument has no cons cells
+			// to rewrite, so ANSI's "the argument itself changes" is served by writing
+			// the
+			// freshly-built result back into the argument's own storage
+			// (seqResultDestructive, the sort/nreverse precedent) instead of answering it
+			// as a new sequence (the plain seqResult reuse once answered a fresh
+			// sequence here and left the argument unchanged).
+			return Environment.seqResultDestructive(original, result);
+		}
+		return Environment.seqResult(original, result);
+	}
+
+	/**
+	 * The runtime counterpart of {@code LispMacroExpander.expandRemoveDuplicates} for
+	 * {@code remove-duplicates} / {@code delete-duplicates} used as FUNCTION VALUES, so
+	 * {@code (apply #'remove-duplicates seq '(:test #'equal))} decides exactly what
+	 * {@code (remove-duplicates seq :test #'equal)} decides. The compile paths reach the
+	 * same agreement through {@code BuiltinFunctionWrappers.sequenceScanFamily}, which
+	 * feeds the runtime keywords back into the call-position expansion.
+	 *
+	 * <p>
+	 * These two are NOT the count/remove/substitute scan ({@link #sequenceScanValues}):
+	 * CLHS 17.2.1's window bounds which elements are CONSIDERED here, so an element
+	 * outside {@code :start}/{@code :end} is kept VERBATIM and never handed to a
+	 * designator, and {@code :from-end} picks which occurrence of a duplicate set
+	 * survives (the first instead of the last) rather than reversing the walk. The
+	 * duplicate is looked for by INDEX on the side of the element the direction picks --
+	 * {@code [i+1, end)} keeping the last, {@code [start, i)} keeping the first --
+	 * exactly as the expansion spells it (.kb/sequence-bounding-keywords.md).
+	 * @param name the operator, for the messages
+	 * @param args the evaluated arguments
+	 * @return the deduplicated sequence, in the argument's own representation
+	 */
+	private LispVal removeDuplicatesValues(String name, List<LispVal> args) {
+		if (args.isEmpty()) {
+			throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
+					name + " expects at least 1 argument, got 0");
+		}
+		requireKeywordTail(name, args, 1, List.of(LispNames.TEST_KEYWORD, LispNames.TEST_NOT_KEYWORD,
+				LispNames.KEY_KEYWORD, LispNames.START_KEYWORD, LispNames.END_KEYWORD, LispNames.FROM_END_KEYWORD));
+		LispVal keyFn = presentKeyword(args, 1, LispNames.KEY_KEYWORD);
+		LispVal startValue = optionalKeywordArg(args, 1, LispNames.START_KEYWORD);
+		LispVal endValue = presentKeyword(args, 1, LispNames.END_KEYWORD);
+		boolean keepFirst = presentKeyword(args, 1, LispNames.FROM_END_KEYWORD) != null;
+		RuntimeTest test = runtimeTest(args, 1);
+		LispVal original = args.get(0);
+		List<LispVal> elements = new ArrayList<>();
+		for (LispVal cursor = Environment.seqAsList(original); cursor instanceof LispCons cell; cursor = cell.cdr()) {
+			elements.add(cell.car());
+		}
+		// The window lies inside the sequence, or subseq's type-error -- before any
+		// element is compared.
+		LispVal givenStart = startValue == null ? new LispInteger(0) : startValue;
+		Environment.checkBoundingIndices(original, givenStart, endValue);
+		long start = Environment.requireIndex(name, givenStart);
+		Long end = endValue == null ? null : (long) Environment.requireIndex(name, endValue);
+		int size = elements.size();
+		long last = end == null ? size : end;
+		List<LispVal> kept = new ArrayList<>();
+		for (int i = 0; i < size; i++) {
+			LispVal element = elements.get(i);
+			if (i < start || i >= last) {
+				// Outside the window: kept verbatim, never compared.
+				kept.add(element);
+				continue;
+			}
+			LispVal probe = keyFn == null ? element : apply(keyFn, List.of(element), this.globalEnv);
+			long lower = keepFirst ? start : i + 1;
+			long upper = keepFirst ? i : last;
+			boolean duplicate = false;
+			for (long j = lower; j < upper; j++) {
+				LispVal candidate = elements.get((int) j);
+				LispVal other = keyFn == null ? candidate : apply(keyFn, List.of(candidate), this.globalEnv);
+				if (testMatches(test, probe, other)) {
+					duplicate = true;
+					break;
+				}
+			}
+			if (!duplicate) {
+				kept.add(element);
+			}
+		}
+		LispVal result = LispNil.INSTANCE;
+		for (int i = kept.size() - 1; i >= 0; i--) {
+			result = new LispCons(kept.get(i), result);
+		}
+		return Environment.seqResult(original, result);
+	}
+
+	// A keyword argument's value, or null when it is absent OR nil: CL's own default for
+	// the keywords this family reads through it is what a nil value asks for (:end nil
+	// is the whole sequence, :count nil is no limit, :key nil is identity), so the two
+	// spellings collapse here exactly as they do in the expansion. Not :start: a nil one
+	// is no bound, read with optionalKeywordArg and refused.
+	private static @Nullable LispVal presentKeyword(List<LispVal> args, int start, String keyword) {
+		LispVal value = optionalKeywordArg(args, start, keyword);
+		return value == null || value instanceof LispNil ? null : value;
+	}
+
+	// The :count argument as an integer; CLHS 17.2.1 reads a negative one as zero, which
+	// the caller clamps. Anything but an integer is the operator's INTEGER type-error
+	// over
+	// the value, as the expansion's check reports it; a bignum is a budget no list can
+	// spend.
+	private static long requireCount(String name, LispVal value) {
+		if (value instanceof LispInteger integer) {
+			return integer.value();
+		}
+		if (value instanceof LispBigInteger big) {
+			return big.value().signum() < 0 ? -1L : Long.MAX_VALUE;
+		}
+		throw OperandTypeException.of(value, OperandTypes.Kind.INTEGER, name);
+	}
+
+	// Validates the keyword tail of a sequence/alist call: keyword/value pairs only, and
+	// every keyword must be :test, :test-not or :key. Unsupported keywords (:from-end,
+	// :start, ...) are rejected loudly rather than silently ignored, mirroring the
+	// compile-time check in LispMacroExpander.
+	private static void requireTestKeyKeywords(String name, List<LispVal> args, int start) {
+		requireKeywordTail(name, args, start,
+				List.of(LispNames.TEST_KEYWORD, LispNames.TEST_NOT_KEYWORD, LispNames.KEY_KEYWORD));
+	}
+
+	private boolean isTruthy(LispVal val) {
+		return !(val instanceof LispNil);
+	}
+
+}

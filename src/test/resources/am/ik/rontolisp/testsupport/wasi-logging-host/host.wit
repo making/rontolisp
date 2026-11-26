@@ -1,0 +1,55 @@
+// A host of wasi:logging for a test: a component exporting the interface, each record
+// written as a line on the standard error through WASI 0.2, which wasmtime gives it.
+// JavaSpecE2eTest builds it from host.wat and composes a program's component with it.
+// The interfaces are the names and the types an implementation shares, written here
+// (wasi:logging states no licence; WASI's are under the W3C Community Contributor
+// License Agreement) with only the members the host uses.
+package rontolisp:logging-host;
+
+package wasi:io@0.2.0 {
+  interface error {
+    resource error;
+  }
+
+  interface streams {
+    use error.{error};
+
+    variant stream-error {
+      last-operation-failed(error),
+      closed,
+    }
+
+    resource output-stream {
+      blocking-write-and-flush: func(contents: list<u8>) -> result<_, stream-error>;
+    }
+  }
+}
+
+package wasi:cli@0.2.0 {
+  interface stderr {
+    use wasi:io/streams@0.2.0.{output-stream};
+
+    get-stderr: func() -> output-stream;
+  }
+}
+
+package wasi:logging@0.1.0-draft {
+  interface logging {
+    enum level {
+      trace,
+      debug,
+      info,
+      warn,
+      error,
+      critical,
+    }
+
+    log: func(level: level, context: string, message: string);
+  }
+}
+
+world host {
+  import wasi:cli/stderr@0.2.0;
+
+  export wasi:logging/logging@0.1.0-draft;
+}

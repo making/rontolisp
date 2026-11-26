@@ -1,0 +1,270 @@
+package am.ik.rontolisp.codegen.wasm;
+
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+
+import am.ik.rontolisp.LambdaLists;
+import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispNames;
+import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.compiler.DefinedCallArity;
+import am.ik.rontolisp.compiler.FreeVarAnalyzer;
+import am.ik.rontolisp.macro.LispMacroExpander;
+import am.ik.wasm.Instruction;
+import am.ik.wasm.Type;
+
+/**
+ * Compiles {@code lambda} expressions (both value creation and inline calls).
+ */
+final class WasmLambdaCompiler {
+
+	private WasmLambdaCompiler() {
+	}
+
+	/**
+	 * A {@code lambda} form's function, registered once while a leaf's body compiles
+	 * twice ({@link WasmLeafVersioning}): the second copy makes its closure over the same
+	 * function.
+	 *
+	 * @param funcId the function's funcId
+	 * @param freeVars the variables it captures, in capture order
+	 */
+	record Registration(int funcId, List<String> freeVars) {
+	}
+
+	/**
+	 * Compiles a lambda expression as a closure value.
+	 */
+	static void compileValue(LispCons cons, WasmLispCompiler.Ctx ctx) {
+		Registration registered = ctx.lambdaRegistrations == null ? null : ctx.lambdaRegistrations.get(cons);
+		if (registered != null) {
+			emitClosureValue(registered.funcId(), registered.freeVars(), ctx);
+			return;
+		}
+		List<LispVal> parts = cons.toList();
+		LambdaLists.NativeForm nf = LambdaLists.toNative(parts.get(1), parts.subList(2, parts.size()),
+				LambdaLists.MAX_PHYSICAL_PARAMS, ctx.specialVars);
+		List<String> paramNames = nf.paramNames();
+		// A lambda body's tail settles the multiple-value channel like a defun's does
+		// (LispMacroExpander.settleDefunTails ran over those before Pass 1): a
+		// single-valued tail clears what an argument or a non-tail form published,
+		// so a consumer behind a funcall reads the closure's own values and nothing
+		// older. Only in a program whose spill global exists.
+		List<LispVal> bodyExprs = ctx.globalIndices.containsKey(LispNames.MV_SPILL)
+				? LispMacroExpander.settleFunctionBody(nf.body()) : nf.body();
+
+		// Free variable analysis. A global, function or built-in name shadowed by a
+		// lexical binding visible at this lambda's creation site (an enclosing let
+		// variable, defun parameter, or an outer closure's capture) must be captured
+		// like any other free variable: Lisp-2 means a bare symbol is always a
+		// variable reference.
+		Set<String> enclosingLexicals = new HashSet<>(ctx.locals.keySet());
+		enclosingLexicals.addAll(ctx.captures.keySet());
+		LinkedHashSet<String> freeVars = FreeVarAnalyzer.findFreeVars(bodyExprs, new HashSet<>(paramNames),
+				ctx.functions.keySet(), ctx.globals, enclosingLexicals);
+
+		int funcId = ctx.nextFuncId[0]++;
+		if (ctx.injectedRuntimeBody) {
+			// Built by an injected wrapper body, so Pass 2c compiles it as one too
+			// (Ctx.injectedRuntimeLambdas).
+			ctx.injectedRuntimeLambdas.add(funcId);
+		}
+		String methodName = "_lambda_" + funcId;
+		int funcIndex = ctx.userFuncBase + ctx.numDefuns + ctx.lambdaDecls.size();
+		ctx.lambdaDecls.add(new WasmLispCompiler.LambdaInfo(funcId, methodName, paramNames, nf.variadic(),
+				nf.optionals(), bodyExprs, new ArrayList<>(freeVars), funcIndex, null));
+		WasmUncaughtLocations.registerLambda(funcId, cons, bodyExprs, ctx);
+		if (ctx.lambdaRegistrations != null) {
+			ctx.lambdaRegistrations.put(cons, new Registration(funcId, List.copyOf(freeVars)));
+		}
+
+		emitClosureValue(funcId, new ArrayList<>(freeVars), ctx);
+	}
+
+	/**
+	 * Emits a closure value {@code {funcId, env}} whose environment is the cons list of
+	 * the given captured variables' cells (shared with the async-lambda entry pair, see
+	 * {@code WasmAsyncEmit}).
+	 * @param funcId the callee's funcId
+	 * @param freeVarList the captured variable names, in capture order
+	 * @param ctx the compilation context
+	 */
+	static void emitClosureValue(int funcId, List<String> freeVarList, WasmLispCompiler.Ctx ctx) {
+		// The other place a funcId becomes a callable VALUE (see Ctx.valueFuncIds): a
+		// lambda is only ever reached through a dispatcher, so its case must stay --
+		// but only when some emitted body actually builds the closure.
+		ctx.noteFunctionValue(funcId);
+		// funcId
+		ctx.writer.write(Instruction.I32_CONST);
+		ctx.writer.writeSignedLeb128(funcId);
+
+		// Build env as cons list of cells for captured variables
+		if (freeVarList.isEmpty()) {
+			ctx.writer.write(Instruction.REF_NULL);
+			ctx.writer.writeHeapType(Type.EQ.code());
+		}
+		else {
+			// Build cons list right-to-left: (cons cell_0 (cons cell_1 ... null))
+			// First push null (end of list)
+			ctx.writer.write(Instruction.REF_NULL);
+			ctx.writer.writeHeapType(Type.EQ.code());
+			// Iterate free vars in reverse
+			for (int i = freeVarList.size() - 1; i >= 0; i--) {
+				String varName = freeVarList.get(i);
+				// Push the cell for this var
+				WasmEmitHelper.emitLoadVarCell(varName, ctx);
+				// Swap: we need (car=cell, cdr=rest) but stack is [rest, cell]
+				// Use a temp local
+				int tmpCdr = ctx.allocTemp();
+				int tmpCar = ctx.allocTemp();
+				ctx.writer.write(Instruction.SET_LOCAL);
+				ctx.writer.writeUnsignedLeb128(tmpCar);
+				ctx.writer.write(Instruction.SET_LOCAL);
+				ctx.writer.writeUnsignedLeb128(tmpCdr);
+				ctx.writer.write(Instruction.GET_LOCAL);
+				ctx.writer.writeUnsignedLeb128(tmpCar);
+				ctx.writer.write(Instruction.GET_LOCAL);
+				ctx.writer.writeUnsignedLeb128(tmpCdr);
+				// struct.new cons
+				WasmEmitHelper.emitNewCons(ctx);
+			}
+		}
+
+		// struct.new closure
+		WasmEmitHelper.emitNewClosure(ctx);
+	}
+
+	/**
+	 * Compiles an inline lambda call: {@code ((lambda (params) body) args)}. The body
+	 * runs in place and its last form's value is the call's, so in tail position that
+	 * form is too ({@code Ctx.tailPosition}); a parameter named like a special is bound
+	 * by a let around the whole body ({@code LambdaLists.toNative}), which keeps the
+	 * frame for its restore.
+	 * @param tail whether the call is in tail position
+	 */
+	static void compileCall(LispCons lambda, LispCons call, WasmLispCompiler.Ctx ctx, boolean tail) {
+		List<LispVal> lambdaParts = lambda.toList();
+		LambdaLists.NativeForm nf = LambdaLists.toNative(lambdaParts.get(1), lambdaParts.subList(2, lambdaParts.size()),
+				LambdaLists.MAX_PHYSICAL_PARAMS, ctx.specialVars);
+		List<String> paramNames = nf.paramNames();
+		// The body is a function body however it is called: its tail settles the
+		// multiple-value channel (see compileValue).
+		List<LispVal> bodyExprs = ctx.globalIndices.containsKey(LispNames.MV_SPILL)
+				? LispMacroExpander.settleFunctionBody(nf.body()) : nf.body();
+		List<LispVal> callArgs = call.toList();
+		int required = nf.required();
+		int positional = required + nf.optionals();
+		int supplied = callArgs.size() - 1;
+		// A count the lambda list rules out signals when the call runs, as a named
+		// function's direct call does (compiler/DefinedCallArity).
+		LispVal wrongCount = DefinedCallArity.wrongCountSignal(call, null, required, nf.variadic(),
+				am.ik.rontolisp.DeclaredArityReport.ofLambda(lambda));
+		if (wrongCount != null) {
+			WasmExprCompiler.compileExpr(wrongCount, ctx);
+			return;
+		}
+
+		Map<String, Integer> savedLocals = new HashMap<>(ctx.locals);
+		// The parameters are bound HERE, in the caller's frame, so this is a binder and
+		// it owes the same question every other binder asks: does a closure in the body
+		// read this name? One owner answers it -- FreeVarAnalyzer.findCapturedVars, the
+		// same call WasmLetCompiler and the lambda prologue make -- because the closure
+		// emitter decides capture from findFreeVars, and a binder that does not agree
+		// with it hands the closure a private snapshot cell instead of the binding
+		// (.kb/core-representation.md).
+		Set<String> capturedParams = FreeVarAnalyzer.findCapturedVars(bodyExprs, new HashSet<>(paramNames),
+				ctx.functions.keySet(), ctx.captureMemo);
+		capturedParams.addAll(WasmLandingPad.regionAssignedVars(bodyExprs, new HashSet<>(paramNames), ctx.regionMemo));
+		// What an outer binding of a parameter's name was -- a raw local, a declared
+		// range or array kind, a cell -- stops answering for the body.
+		WasmShadowedNames outer = WasmShadowedNames.shadow(paramNames, ctx);
+		ctx.boxedVars = new HashSet<>(ctx.boxedVars);
+
+		for (int i = 0; i < positional; i++) {
+			String name = paramNames.get(i);
+			if (i < supplied) {
+				WasmExprCompiler.compileExpr(callArgs.get(i + 1), ctx);
+			}
+			else {
+				// A physical optional the call does not pass binds the UNSUPPLIED marker
+				// the body's prologue tests (WasmPhysicalArgs).
+				WasmPhysicalArgs.emitUnsupplied(ctx);
+			}
+			if (capturedParams.contains(name)) {
+				WasmEmitHelper.emitNewCell(ctx);
+			}
+			int slot = ctx.allocLocal(name);
+			ctx.writer.write(Instruction.SET_LOCAL);
+			ctx.writer.writeUnsignedLeb128(slot);
+			bindName(name, capturedParams.contains(name), ctx);
+		}
+		if (nf.variadic()) {
+			// Evaluate the surplus arguments left to right into temps, then link them
+			// into a cons list bound to the rest parameter.
+			List<Integer> extraSlots = new ArrayList<>();
+			for (int i = positional; i < supplied; i++) {
+				WasmExprCompiler.compileExpr(callArgs.get(i + 1), ctx);
+				int s = ctx.allocTemp();
+				ctx.writer.write(Instruction.SET_LOCAL);
+				ctx.writer.writeUnsignedLeb128(s);
+				extraSlots.add(s);
+			}
+			String restName = paramNames.get(positional);
+			int restSlot = ctx.allocLocal(restName);
+			ctx.writer.write(Instruction.REF_NULL);
+			ctx.writer.writeHeapType(Type.EQ.code());
+			ctx.writer.write(Instruction.SET_LOCAL);
+			ctx.writer.writeUnsignedLeb128(restSlot);
+			for (int k = extraSlots.size() - 1; k >= 0; k--) {
+				ctx.writer.write(Instruction.GET_LOCAL);
+				ctx.writer.writeUnsignedLeb128(extraSlots.get(k));
+				ctx.writer.write(Instruction.GET_LOCAL);
+				ctx.writer.writeUnsignedLeb128(restSlot);
+				WasmEmitHelper.emitNewCons(ctx);
+				ctx.writer.write(Instruction.SET_LOCAL);
+				ctx.writer.writeUnsignedLeb128(restSlot);
+			}
+			if (capturedParams.contains(restName)) {
+				// The list is built in place, so the cell wraps the finished value
+				// rather than the build.
+				ctx.writer.write(Instruction.GET_LOCAL);
+				ctx.writer.writeUnsignedLeb128(restSlot);
+				WasmEmitHelper.emitNewCell(ctx);
+				ctx.writer.write(Instruction.SET_LOCAL);
+				ctx.writer.writeUnsignedLeb128(restSlot);
+			}
+			bindName(restName, capturedParams.contains(restName), ctx);
+		}
+
+		for (int i = 0; i < bodyExprs.size(); i++) {
+			if (i > 0) {
+				ctx.writer.write(Instruction.DROP);
+			}
+			ctx.tailPosition = tail && i == bodyExprs.size() - 1;
+			WasmExprCompiler.compileExpr(bodyExprs.get(i), ctx);
+		}
+
+		ctx.locals = savedLocals;
+		outer.restore(ctx);
+	}
+
+	/**
+	 * Records what representation a freshly bound name has, REPLACING whatever a shadowed
+	 * outer binding of the same name had: the set is keyed on names, so an outer boxed
+	 * binding would otherwise still answer for this one.
+	 */
+	private static void bindName(String name, boolean boxed, WasmLispCompiler.Ctx ctx) {
+		if (boxed) {
+			ctx.boxedVars.add(name);
+		}
+		else {
+			ctx.boxedVars.remove(name);
+		}
+	}
+
+}

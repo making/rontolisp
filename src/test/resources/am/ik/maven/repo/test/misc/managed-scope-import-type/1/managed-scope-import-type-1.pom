@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>test.misc</groupId>
+  <artifactId>managed-scope-import-type</artifactId>
+  <version>1</version>
+  <dependencyManagement>
+    <dependencies>
+      <dependency><groupId>test.mgmt</groupId><artifactId>bom-a</artifactId><version>1</version><type>pom</type><scope>IMPORT</scope></dependency>
+    </dependencies>
+  </dependencyManagement>
+  <dependencies>
+      <dependency><groupId>test.lib</groupId><artifactId>x</artifactId><version>1</version></dependency>
+  </dependencies>
+</project>

@@ -1,0 +1,1057 @@
+package am.ik.rontolisp.testsupport;
+
+/**
+ * The {@code java:} programs the interpreter's {@code JavaInteropTest} and the JVM
+ * backend's {@code JvmJavaInteropCompilerTest} both run, with the output both must print:
+ * one text, so the two cannot drift apart.
+ */
+public final class JavaInteropPrograms {
+
+	/**
+	 * Dispatched sites meeting every kind of argument; prints {@link #DISPATCH_OUTPUT}. A
+	 * mixed pair matches no overload (as the oracle's reflector refuses one); nil matches
+	 * only reference parameters (appending "null").
+	 */
+	public static final String DISPATCH_PROGRAM = """
+			(defun mx (x y) (java:static "java.lang.Math" "max" x y))
+			(defun val (x) (java:static "java.lang.String" "valueOf" x))
+			(defun two (a b) (java:static "java.lang.String" "format" "%s/%s" a b))
+			(defun mk (x) (java:call (java:new "java.lang.StringBuilder" x) "toString"))
+			(defun app (sb s)
+			  (declare (type (java:object "java.lang.StringBuilder") sb)
+			           (type (java:object "java.lang.String") s))
+			  (java:call sb "append" s))
+			(print (list (mx 1 2)))
+			(print (handler-case (mx 1 2.5) (error (e) (format nil "~a" e))))
+			(print (handler-case (mx #\\a 3) (error (e) (format nil "~a" e))))
+			(print (mapcar #'val (list 5 2.5 t #\\a "s" "str" (list #\\a #\\b) (vector #\\c #\\d))))
+			(print (handler-case (val nil) (error (e) (format nil "~a" e))))
+			(print (list (two 1 "x") (two (list 1 2) 2.5)))
+			(print (list (mk "ab") (mk 16) (val (make-string 2 :initial-element #\\x))))
+			(let ((sb (java:new "java.lang.StringBuilder")))
+			  (app sb "ab") (app sb "c")
+			  (print (java:call sb "toString"))
+			  (print (handler-case (app sb nil) (error (e) (format nil "~a" e)))))
+			""";
+
+	/**
+	 * Dispatched sites meeting sequences and functions: nested lists and vectors to an
+	 * {@code Object[]}, a fixnum vector to an {@code int[]}, a function value to an
+	 * interface (a proxy); prints {@link #SEQUENCE_DISPATCH_OUTPUT}.
+	 */
+	public static final String SEQUENCE_DISPATCH_PROGRAM = """
+			(defun deep (x) (java:static "java.util.Arrays" "deepToString" x))
+			(defun ts (x) (java:static "java.util.Arrays" "toString" x))
+			(defun each (l f)
+			  (declare (type (java:object "java.util.List") l))
+			  (java:call l "forEach" f))
+			(print (deep (list (list 1 2) (vector 3 "a") nil (make-string 1 :initial-element #\\y))))
+			(print (ts (make-array 3 :element-type 'fixnum :initial-contents '(1 2 3))))
+			(print (ts (vector 1.5 2)))
+			(each (java:static "java.util.List" "of" 1 2) (lambda (m x) (print (list m x))))
+			""";
+
+	/** What {@link #SEQUENCE_DISPATCH_PROGRAM} prints. */
+	public static final String SEQUENCE_DISPATCH_OUTPUT = """
+			"[[1, 2], [3, a], null, y]"
+			"[1, 2, 3]"
+			"[1.5, 2]"
+			("accept" 1)
+			("accept" 2)""";
+
+	/** What {@link #DISPATCH_PROGRAM} prints. */
+	public static final String DISPATCH_OUTPUT = """
+			(2)
+			"error calling java.lang.Math.max: java.lang.IllegalArgumentException: No matching method max found taking 2 args"
+			"error calling java.lang.Math.max: java.lang.IllegalArgumentException: No matching method max found taking 2 args"
+			("5" "2.5" "true" "a" "s" "str" "ab" "cd")
+			"error calling java.lang.String.valueOf: java.lang.NullPointerException: Cannot read the array length because \\"value\\" is null"
+			("1/x" "[1, 2]/2.5")
+			("ab" "" "xx")
+			"abc"
+			"error calling java.lang.StringBuilder.append: java.lang.NullPointerException: Cannot read the array length because \\"str\\" is null\"""";
+
+	/**
+	 * A dispatched call on a receiver declared a {@code Collection}: prints
+	 * {@code (T "[10, 20]")}.
+	 */
+	public static final String UPPER_BOUND_DISPATCH = """
+			(defun drop (c x)
+			  (declare (type (java:object "java.util.Collection") c))
+			  (java:call c "remove" x))
+			(let ((a (java:new "java.util.ArrayList")))
+			  (dolist (x (list 10 20 1)) (java:call a "add" x))
+			  (print (list (drop a 1) (java:call a "toString"))))
+			""";
+
+	/**
+	 * Lisp values where a host object is expected -- at a site left to run time
+	 * ({@code size}), a dispatched one ({@code shown}), receivers declared a
+	 * {@code Collection} / {@code Map}, a falsely declared argument -- and
+	 * {@code BigInteger} results: every Lisp value is refused and shown as {@code prin1}
+	 * shows it -- a float, bignum or fixnum receiver is called as its {@code Double},
+	 * {@code BigInteger} or {@code Integer}, which has no {@code size}, and a vector or
+	 * hash table argument converts to a fresh {@code List} or {@code Map} --, a host list
+	 * and map are called, and a {@code BigInteger} is a Lisp integer. Prints
+	 * {@link #HOST_OBJECT_OUTPUT}.
+	 */
+	public static final String HOST_OBJECT_PROGRAM = """
+			(defun row (thunk)
+			  (handler-case (prin1 (funcall thunk)) (error (e) (princ e)))
+			  (terpri))
+			(defun size (x) (java:call x "size"))
+			(defun sized (x)
+			  (declare (type (java:object "java.util.Collection") x))
+			  (java:call x "size"))
+			(defun entries (m)
+			  (declare (type (java:object "java.util.Map") m))
+			  (java:call m "size"))
+			(defun shown (x) (java:static "java.util.Objects" "toString" x))
+			(defun whole (x) (java:call x "toBigInteger"))
+			(dolist (x (list (list 1 2) 1.0e10 (expt 2 100) 1/3 (complex 1 2)
+			                 (make-array 2 :initial-element 0) (make-array 1 :fill-pointer 0)
+			                 (make-array 2 :element-type 'double-float :initial-element 1d0)
+			                 (make-hash-table)))
+			  (row (lambda () (size x)))
+			  (row (lambda () (shown x))))
+			(row (lambda () (sized (vector 1 2))))
+			(row (lambda () (entries (make-hash-table))))
+			(let ((l (java:new "java.util.ArrayList"))
+			      (m (java:new "java.util.LinkedHashMap")))
+			  (java:call l "add" 1)
+			  (java:call m "put" "k" 1)
+			  (row (lambda () (list (size l) (sized l) (size m) (entries m) (shown l) (shown m)))))
+			(row (lambda () (java:static "java.lang.String" "valueOf"
+			                                 (the (java:object "java.util.LinkedHashMap" :exact) (make-hash-table)))))
+			(let ((b (java:new "java.math.BigInteger" "123456789012345678901234567890"))
+			      (s (java:static "java.math.BigInteger" "valueOf" 5)))
+			  (row (lambda () (list b (+ b 1) s (eql s 5) (typep s 'fixnum)
+			                        (java:call (java:new "java.math.BigDecimal" "1.5") "toBigInteger")
+			                        (whole (java:new "java.math.BigDecimal" "2.5")))))
+			  (row (lambda () (size s))))
+			""";
+
+	/**
+	 * A host {@code ArrayList} (holding a value, and empty) and a host
+	 * {@code LinkedHashMap} beside a Lisp vector and hash table, through every type
+	 * predicate, {@code typecase}, a method dispatch, {@code type-of} and every printer
+	 * entry: a host collection is no Lisp array or table and prints {@code #<java C>}.
+	 * Prints {@link #HOST_COLLECTION_OUTPUT}.
+	 */
+	public static final String HOST_COLLECTION_PROGRAM = """
+			(defgeneric kind (x))
+			(defmethod kind ((x hash-table)) 'table)
+			(defmethod kind ((x vector)) 'vector)
+			(defmethod kind (x) 'other)
+			(let ((l (java:new "java.util.ArrayList"))
+			      (e (java:new "java.util.ArrayList"))
+			      (m (java:new "java.util.LinkedHashMap"))
+			      (v (vector 1 2))
+			      (h (make-hash-table)))
+			  (java:call l "add" 1)
+			  (java:call m "put" "k" 1)
+			  (setf (gethash 'k h) m)
+			  (dolist (x (list l e m v h))
+			    (print (list (hash-table-p x) (vectorp x) (arrayp x) (stringp x) (typep x 'simple-vector)
+			                 (typep x 'sequence) (typep x 'hash-table) (typep x '(vector t))
+			                 (typecase x (hash-table 'table) (vector 'vector) (t 'other))
+			                 (kind x) (type-of x))))
+			  (print l) (print e) (print m)
+			  (terpri) (prin1 l) (prin1 m) (princ l) (princ m)
+			  (print (format nil "~a ~s ~a ~s" l l m m))
+			  (print (list (prin1-to-string l) (princ-to-string m) (write-to-string e)))
+			  (print (list l m v h (gethash 'k h)))
+			  (print (vector l m v h)))
+			""";
+
+	/**
+	 * A host {@code ArrayList} holding {@code 1} and a host {@code LinkedHashMap} holding
+	 * {@code "k"} through every array and hash-table accessor, directly and as a function
+	 * value: each is refused with the interpreter's type-error ({@code ARRAY} or
+	 * {@code HASH-TABLE}, named after the accessor when that is a named operator, and
+	 * {@code LENGTH}'s {@code SEQUENCE} one for {@code length}), an argument after the
+	 * table is evaluated first, and the host map is left untouched. A Lisp table and
+	 * vector beside them still answer. Prints {@link #HOST_ACCESSOR_OUTPUT}.
+	 */
+	public static final String HOST_ACCESSOR_PROGRAM = """
+			(defun row (thunk)
+			  (handler-case (prin1 (funcall thunk))
+			    (type-error (e)
+			      (princ (list 'type-error (type-error-datum e) (type-error-expected-type e)))
+			      (princ " ")
+			      (princ e))
+			    (error (e) (princ e)))
+			  (terpri))
+			(let ((l (java:new "java.util.ArrayList"))
+			      (m (java:new "java.util.LinkedHashMap"))
+			      (v (make-array 2 :fill-pointer 1 :adjustable t :initial-element 7))
+			      (h (make-hash-table)))
+			  (java:call l "add" 1)
+			  (java:call m "put" "k" 1)
+			  (setf (gethash "k" h) 1)
+			  (row (lambda () (gethash "k" m)))
+			  (row (lambda () (gethash "k" m (progn (princ "default ") 0))))
+			  (row (lambda () (setf (gethash "z" m) (progn (princ "value ") 2))))
+			  (row (lambda () (remhash "k" m)))
+			  (row (lambda () (clrhash m)))
+			  (row (lambda () (hash-table-count m)))
+			  (row (lambda () (hash-table-size m)))
+			  (row (lambda () (hash-table-test m)))
+			  (row (lambda () (hash-table-rehash-size m)))
+			  (row (lambda () (hash-table-rehash-threshold m)))
+			  (row (lambda () (maphash (lambda (k x) (print (list k x))) m)))
+			  (row (lambda () (loop for k being the hash-keys of m collect k)))
+			  (row (lambda () (funcall #'gethash "k" m)))
+			  (row (lambda () (java:call m "toString")))
+			  (row (lambda () (length l)))
+			  (row (lambda () (funcall #'length l)))
+			  (row (lambda () (coerce l 'list)))
+			  (row (lambda () (elt l 0)))
+			  (row (lambda () (aref l 0)))
+			  (row (lambda () (svref l 0)))
+			  (row (lambda () (setf (aref l 0) 2)))
+			  (row (lambda () (row-major-aref l 0)))
+			  (row (lambda () (array-dimensions l)))
+			  (row (lambda () (array-rank l)))
+			  (row (lambda () (array-element-type l)))
+			  (row (lambda () (adjustable-array-p l)))
+			  (row (lambda () (array-has-fill-pointer-p l)))
+			  (row (lambda () (fill-pointer l)))
+			  (row (lambda () (vector-push 2 l)))
+			  (row (lambda () (vector-push-extend 2 l)))
+			  (row (lambda () (vector-pop l)))
+			  (row (lambda () (java:call l "toString")))
+			  (row (lambda () (list (gethash "k" h) (hash-table-count h) (hash-table-test h) (length v) (aref v 0)
+			                        (vector-push-extend 8 v) (fill-pointer v) (array-element-type v)))))
+			""";
+
+	/** What {@link #HOST_ACCESSOR_PROGRAM} prints. */
+	public static final String HOST_ACCESSOR_OUTPUT = """
+			(TYPE-ERROR #<java java.util.LinkedHashMap> HASH-TABLE) GETHASH: The value #<java java.util.LinkedHashMap> is not of type HASH-TABLE
+			default (TYPE-ERROR #<java java.util.LinkedHashMap> HASH-TABLE) GETHASH: The value #<java java.util.LinkedHashMap> is not of type HASH-TABLE
+			value (TYPE-ERROR #<java java.util.LinkedHashMap> HASH-TABLE) (SETF GETHASH): The value #<java java.util.LinkedHashMap> is not of type HASH-TABLE
+			(TYPE-ERROR #<java java.util.LinkedHashMap> HASH-TABLE) REMHASH: The value #<java java.util.LinkedHashMap> is not of type HASH-TABLE
+			(TYPE-ERROR #<java java.util.LinkedHashMap> HASH-TABLE) CLRHASH: The value #<java java.util.LinkedHashMap> is not of type HASH-TABLE
+			(TYPE-ERROR #<java java.util.LinkedHashMap> HASH-TABLE) HASH-TABLE-COUNT: The value #<java java.util.LinkedHashMap> is not of type HASH-TABLE
+			(TYPE-ERROR #<java java.util.LinkedHashMap> HASH-TABLE) HASH-TABLE-SIZE: The value #<java java.util.LinkedHashMap> is not of type HASH-TABLE
+			(TYPE-ERROR #<java java.util.LinkedHashMap> HASH-TABLE) HASH-TABLE-TEST: The value #<java java.util.LinkedHashMap> is not of type HASH-TABLE
+			(TYPE-ERROR #<java java.util.LinkedHashMap> HASH-TABLE) HASH-TABLE-REHASH-SIZE: The value #<java java.util.LinkedHashMap> is not of type HASH-TABLE
+			(TYPE-ERROR #<java java.util.LinkedHashMap> HASH-TABLE) HASH-TABLE-REHASH-THRESHOLD: The value #<java java.util.LinkedHashMap> is not of type HASH-TABLE
+			(TYPE-ERROR #<java java.util.LinkedHashMap> HASH-TABLE) MAPHASH: The value #<java java.util.LinkedHashMap> is not of type HASH-TABLE
+			(TYPE-ERROR #<java java.util.LinkedHashMap> HASH-TABLE) MAPHASH: The value #<java java.util.LinkedHashMap> is not of type HASH-TABLE
+			(TYPE-ERROR #<java java.util.LinkedHashMap> HASH-TABLE) GETHASH: The value #<java java.util.LinkedHashMap> is not of type HASH-TABLE
+			"{k=1}"
+			(TYPE-ERROR #<java java.util.ArrayList> SEQUENCE) LENGTH: The value #<java java.util.ArrayList> is not of type SEQUENCE
+			(TYPE-ERROR #<java java.util.ArrayList> SEQUENCE) LENGTH: The value #<java java.util.ArrayList> is not of type SEQUENCE
+			(TYPE-ERROR #<java java.util.ArrayList> SEQUENCE) COERCE: The value #<java java.util.ArrayList> is not of type SEQUENCE
+			(TYPE-ERROR #<java java.util.ArrayList> ARRAY) AREF: The value #<java java.util.ArrayList> is not of type ARRAY
+			(TYPE-ERROR #<java java.util.ArrayList> ARRAY) AREF: The value #<java java.util.ArrayList> is not of type ARRAY
+			(TYPE-ERROR #<java java.util.ArrayList> ARRAY) AREF: The value #<java java.util.ArrayList> is not of type ARRAY
+			(TYPE-ERROR #<java java.util.ArrayList> ARRAY) (SETF AREF): The value #<java java.util.ArrayList> is not of type ARRAY
+			(TYPE-ERROR #<java java.util.ArrayList> ARRAY) ROW-MAJOR-AREF: The value #<java java.util.ArrayList> is not of type ARRAY
+			(TYPE-ERROR #<java java.util.ArrayList> ARRAY) ARRAY-DIMENSIONS: The value #<java java.util.ArrayList> is not of type ARRAY
+			(TYPE-ERROR #<java java.util.ArrayList> ARRAY) ARRAY-DIMENSIONS: The value #<java java.util.ArrayList> is not of type ARRAY
+			(TYPE-ERROR #<java java.util.ArrayList> ARRAY) ARRAY-ELEMENT-TYPE: The value #<java java.util.ArrayList> is not of type ARRAY
+			(TYPE-ERROR #<java java.util.ArrayList> ARRAY) ADJUSTABLE-ARRAY-P: The value #<java java.util.ArrayList> is not of type ARRAY
+			(TYPE-ERROR #<java java.util.ArrayList> ARRAY) ARRAY-HAS-FILL-POINTER-P: The value #<java java.util.ArrayList> is not of type ARRAY
+			(TYPE-ERROR #<java java.util.ArrayList> ARRAY) FILL-POINTER: The value #<java java.util.ArrayList> is not of type ARRAY
+			(TYPE-ERROR #<java java.util.ArrayList> ARRAY) VECTOR-PUSH: The value #<java java.util.ArrayList> is not of type ARRAY
+			(TYPE-ERROR #<java java.util.ArrayList> ARRAY) VECTOR-PUSH-EXTEND: The value #<java java.util.ArrayList> is not of type ARRAY
+			(TYPE-ERROR #<java java.util.ArrayList> ARRAY) VECTOR-POP: The value #<java java.util.ArrayList> is not of type ARRAY
+			"[1]"
+			(1 1 EQUAL 1 7 1 2 T)""";
+
+	/** What {@link #HOST_COLLECTION_PROGRAM} prints. */
+	public static final String HOST_COLLECTION_OUTPUT = """
+			(NIL NIL NIL NIL NIL NIL NIL NIL OTHER OTHER T)
+			(NIL NIL NIL NIL NIL NIL NIL NIL OTHER OTHER T)
+			(NIL NIL NIL NIL NIL NIL NIL NIL OTHER OTHER T)
+			(NIL T T NIL T T NIL T VECTOR VECTOR (SIMPLE-VECTOR 2))
+			(T NIL NIL NIL NIL NIL T NIL TABLE TABLE HASH-TABLE)
+			#<java java.util.ArrayList>
+			#<java java.util.ArrayList>
+			#<java java.util.LinkedHashMap>
+
+			#<java java.util.ArrayList>#<java java.util.LinkedHashMap>#<java java.util.ArrayList>#<java java.util.LinkedHashMap>\
+			"#<java java.util.ArrayList> #<java java.util.ArrayList> #<java java.util.LinkedHashMap> #<java java.util.LinkedHashMap>"
+			("#<java java.util.ArrayList>" "#<java java.util.LinkedHashMap>" "#<java java.util.ArrayList>")
+			(#<java java.util.ArrayList> #<java java.util.LinkedHashMap> #(1 2) #<HASH-TABLE :TEST EQUAL :COUNT 1> #<java java.util.LinkedHashMap>)
+			#(#<java java.util.ArrayList> #<java java.util.LinkedHashMap> #(1 2) #<HASH-TABLE :TEST EQUAL :COUNT 1>)""";
+
+	/** What {@link #HOST_OBJECT_PROGRAM} prints. */
+	public static final String HOST_OBJECT_OUTPUT = """
+			java:call expects a java object as the first argument, got (1 2)
+			"[1, 2]"
+			error calling java.lang.Double.size: java.lang.IllegalArgumentException: No matching method size found taking 0 args for java.lang.Double
+			"1.0E10"
+			error calling java.math.BigInteger.size: java.lang.IllegalArgumentException: No matching method size found taking 0 args for java.math.BigInteger
+			"1267650600228229401496703205376"
+			java:call expects a java object as the first argument, got 1/3
+			error calling java.util.Objects.toString: java.lang.ClassCastException: class am.ik.rontolisp.LispRatio cannot be cast to class java.lang.Object
+			java:call expects a java object as the first argument, got #C(1 2)
+			error calling java.util.Objects.toString: java.lang.ClassCastException: class am.ik.rontolisp.LispComplex cannot be cast to class java.lang.Object
+			java:call expects a java object as the first argument, got #(0 0)
+			"[0, 0]"
+			java:call expects a java object as the first argument, got #()
+			"[]"
+			java:call expects a java object as the first argument, got #d(1.0 1.0)
+			"[1.0, 1.0]"
+			java:call expects a java object as the first argument, got #<HASH-TABLE :TEST EQUAL :COUNT 0>
+			"{}"
+			java:call expects a java object as the first argument, got #(1 2)
+			java:call expects a java object as the first argument, got #<HASH-TABLE :TEST EQUAL :COUNT 0>
+			(1 1 1 1 "[1]" "{k=1}")
+			java:static: argument 1 is not a java.util.LinkedHashMap, got #<HASH-TABLE :TEST EQUAL :COUNT 0>
+			(123456789012345678901234567890 123456789012345678901234567891 5 T T 1 2)
+			error calling java.lang.Integer.size: java.lang.IllegalArgumentException: No matching method size found taking 0 args for java.lang.Integer""";
+
+	/**
+	 * A Lisp value as a {@code java:call} receiver: called as the object it converts to
+	 * for an {@code Object} parameter -- a string a {@code String} (a mutable one too), a
+	 * fixnum its narrowest box, a float a {@code Double}, a bignum a {@code BigInteger},
+	 * a character a {@code Character}, {@code t} {@code Boolean.TRUE} -- at a site left
+	 * to run time ({@code call0}), a resolved one (a literal or declared {@code String}
+	 * receiver) and a receiver declared another class; {@code nil}, a symbol, a list and
+	 * a function are no receiver. Prints {@link #LISP_RECEIVER_OUTPUT}.
+	 */
+	public static final String LISP_RECEIVER_PROGRAM = """
+			(defun row (thunk)
+			  (handler-case (prin1 (funcall thunk)) (error (e) (princ e)))
+			  (terpri))
+			(defun call0 (x m) (java:call x m))
+			(defun len (x)
+			  (declare (type (java:object "java.lang.String") x))
+			  (java:call x "length"))
+			(defun sized (x)
+			  (declare (type (java:object "java.util.Collection") x))
+			  (java:call x "size"))
+			(row (lambda () (list (java:call "abc" "codePointAt" 0) (java:call "a" "compareTo" "b")
+			                      (call0 "abc" "length") (java:call "abc" "matches" "a.c"))))
+			(row (lambda () (list (call0 42 "toString") (call0 (expt 2 40) "toString") (call0 1.5 "isNaN")
+			                      (call0 (expt 2 100) "bitLength") (call0 #\\a "charValue") (call0 t "booleanValue"))))
+			(row (lambda () (list (java:call (call0 42 "getClass") "getSimpleName")
+			                      (java:call (call0 (expt 2 40) "getClass") "getSimpleName")
+			                      (java:call (call0 "s" "getClass") "getSimpleName"))))
+			(let ((s (concatenate 'string "a" "bc")))
+			  (row (lambda () (list (len s) (call0 s "length")
+			                        (java:call (the (java:object "java.lang.String") s) "codePointAt" 1)))))
+			(row (lambda () (len 5)))
+			(row (lambda () (len nil)))
+			(row (lambda () (sized "abc")))
+			(row (lambda () (java:call "abc" "noSuch")))
+			(dolist (x (list nil 'foo (list 1) #'car))
+			  (row (lambda () (call0 x "toString"))))
+			""";
+
+	/** What {@link #LISP_RECEIVER_PROGRAM} prints. */
+	public static final String LISP_RECEIVER_OUTPUT = """
+			(97 -1 3 T)
+			("42" "1099511627776" NIL 101 #\\a T)
+			("Integer" "Long" "String")
+			(3 3 98)
+			java:call: the receiver is not a java.lang.String, got 5
+			java:call expects a java object as the first argument, got NIL
+			java:call: the receiver is not a java.util.Collection, got "abc"
+			error calling java.lang.String.noSuch: java.lang.IllegalArgumentException: No matching method noSuch found taking 0 args for java.lang.String
+			java:call expects a java object as the first argument, got NIL
+			java:call expects a java object as the first argument, got FOO
+			java:call expects a java object as the first argument, got (1)
+			java:call expects a java object as the first argument, got #<function CAR>""";
+
+	/**
+	 * A run-time call with a single candidate of its arity and a kindless argument -- a
+	 * list, which no kind names: the one member is called however the argument converts,
+	 * as the oracle's reflector calls one directly. A hash table converts to the
+	 * {@code Map} (over the cost rule), nothing else does: a list where a {@code Map} or
+	 * a {@code String} is expected refuses with the oracle's {@code ClassCastException}.
+	 * At a site left to run time (an unknown receiver, the class in a variable: the
+	 * compiled program's bridge). Prints {@link #SINGLE_CANDIDATE_FORCED_OUTPUT}.
+	 */
+	public static final String SINGLE_CANDIDATE_FORCED_PROGRAM = """
+			(defun row (thunk)
+			  (handler-case (prin1 (funcall thunk)) (error (e) (princ e)))
+			  (terpri))
+			(defun putall0 (h m) (java:call h "putAll" m))
+			(defun parse1 (cls s) (java:static cls "parseInt" s))
+			(let ((h (java:new "java.util.HashMap")))
+			  (row (lambda () (let ((table (make-hash-table :test 'equal)))
+			                    (setf (gethash "k" table) 1)
+			                    (list (putall0 h table) (java:call h "size")))))
+			  (row (lambda () (putall0 h nil)))
+			  (row (lambda () (putall0 h '(1 2))))
+			  (row (lambda () (parse1 "java.lang.Integer" '(1)))))
+			""";
+
+	/** What {@link #SINGLE_CANDIDATE_FORCED_PROGRAM} prints. */
+	public static final String SINGLE_CANDIDATE_FORCED_OUTPUT = """
+			(NIL 1)
+			error calling java.util.HashMap.putAll: java.lang.NullPointerException: Cannot invoke "java.util.Map.size()" because "m" is null
+			error calling java.util.HashMap.putAll: java.lang.ClassCastException: class am.ik.rontolisp.LispCons cannot be cast to class java.util.Map
+			error calling java.lang.Integer.parseInt: java.lang.ClassCastException: class am.ik.rontolisp.LispCons cannot be cast to class java.lang.String""";
+
+	/**
+	 * The symbol {@code |false|} and hash tables as arguments, at a resolved site (a
+	 * quoted {@code |false|}), a dispatched one ({@code ts}, {@code bool}, {@code copy})
+	 * and one left to run time (the class name in a variable: the compiled program's
+	 * bridge): {@code |false|} is Java's false for a {@code boolean} and
+	 * {@code Boolean.FALSE} for a reference, where {@code nil} is {@code null}, a
+	 * receiver called as {@code Boolean.FALSE}, and what a callback answers for a
+	 * {@code boolean} or a {@code Boolean}; a hash table is a fresh {@code LinkedHashMap}
+	 * of its live entries in insertion order (an {@code equalp} table's keys as first
+	 * stored), element-wise, for a parameter one is assignable to, and nothing else.
+	 * Prints {@link #FALSE_AND_TABLE_OUTPUT}.
+	 */
+	public static final String FALSE_AND_TABLE_PROGRAM = """
+			(defvar *objects* "java.util.Objects")
+			(defvar *hash-map* "java.util.HashMap")
+			(defun row (thunk)
+			  (handler-case (prin1 (funcall thunk)) (error (e) (princ e)))
+			  (terpri))
+			(defun ts (x) (java:static "java.util.Objects" "toString" x))
+			(defun ts* (x) (java:static *objects* "toString" x))
+			(defun bool (x) (java:static "java.lang.Boolean" "toString" x))
+			(defun copy (x) (java:call (java:new "java.util.TreeMap" x) "toString"))
+			(defun copy* (x) (java:call (java:new *hash-map* x) "toString"))
+			(defun table (&rest kvs)
+			  (let ((h (make-hash-table :test 'equal)))
+			    (loop for (k v) on kvs by #'cddr do (setf (gethash k h) v))
+			    h))
+			(row (lambda () (list (java:static "java.lang.Boolean" "toString" '|false|) (bool '|false|) (bool t))))
+			;; nil unboxes to the oracle's NullPointerException where a boolean is expected.
+			(row (lambda () (bool nil)))
+			(row (lambda () (list (ts '|false|) (ts* '|false|) (ts nil) (ts* t))))
+			(row (lambda () (let ((l (java:new "java.util.ArrayList")))
+			                  (java:call l "add" '|false|)
+			                  (java:call l "add" nil)
+			                  (java:call l "add" (list t '|false|))
+			                  (java:call l "toString"))))
+			(row (lambda () (list (java:call '|false| "booleanValue") (java:call '|false| "equals" '|false|)
+			                      (java:call (java:call '|false| "getClass") "getSimpleName"))))
+			(row (lambda () (list (java:call (java:reify "java.util.function.Predicate" "test" (lambda (x) '|false|))
+			                                 "test" 1)
+			                      (java:call (java:reify "java.util.function.Function" "apply" (lambda (x) '|false|))
+			                                 "apply" 1)
+			                      (java:call (java:proxy "java.util.function.BooleanSupplier" (lambda (m) '|false|))
+			                                 "getAsBoolean"))))
+			(let ((h (table "b" 2 "a" '(1 "x") "gone" 0 "c" '|false|)))
+			  (remhash "gone" h)
+			  (row (lambda () (list (copy h) (copy* h) (ts h) (ts* h)))))
+			(let ((p (make-hash-table :test 'equalp)))
+			  (setf (gethash "Key" p) 1)
+			  (setf (gethash "KEY" p) 2)
+			  (row (lambda () (list (ts p) (ts* p)))))
+			(row (lambda () (ts (make-hash-table))))
+			(row (lambda () (copy (table 'sym 1))))
+			(row (lambda () (copy* (table "k" 'sym))))
+			(row (lambda () (java:static "java.lang.Math" "abs" (table "k" 1))))
+			(row (lambda () (ts 'other)))
+			""";
+
+	/** What {@link #FALSE_AND_TABLE_PROGRAM} prints. */
+	public static final String FALSE_AND_TABLE_OUTPUT = """
+			("false" "false" "true")
+			error calling java.lang.Boolean.toString: java.lang.NullPointerException: Cannot invoke "java.lang.Boolean.booleanValue()" because "x" is null
+			("false" "false" "null" "true")
+			"[false, null, [true, false]]"
+			(NIL T "Boolean")
+			(NIL NIL NIL)
+			("{a=[1, x], b=2, c=false}" "{a=[1, x], b=2, c=false}" "{b=2, a=[1, x], c=false}" "{b=2, a=[1, x], c=false}")
+			("{Key=2}" "{Key=2}")
+			"{}"
+			error constructing java.util.TreeMap: java.lang.IllegalArgumentException: No matching ctor found for class java.util.TreeMap
+			error constructing java.util.HashMap: java.lang.IllegalArgumentException: No matching ctor found for class java.util.HashMap
+			error calling java.lang.Math.abs: java.lang.IllegalArgumentException: No matching method abs found taking 1 args
+			error calling java.util.Objects.toString: java.lang.ClassCastException: class am.ik.rontolisp.LispSymbol cannot be cast to class java.lang.Object""";
+
+	/**
+	 * Calls ending in {@code :java-false}: Java's {@code false} comes back as
+	 * {@code |false|} -- an {@code Object} answer holding {@code Boolean.FALSE}, a
+	 * {@code boolean} one, an {@code Object[]} and a {@code boolean[]} answer's elements,
+	 * a static field -- at a resolved site (a typed receiver, a literal class), a
+	 * dispatched one ({@code eq2}'s unknown arguments) and one left to run time (an
+	 * unknown receiver, the class in a variable: the compiled program's bridge); the
+	 * unmarked calls beside them answer {@code nil}. Such a boolean answer is {@code t}
+	 * or {@code |false|} to the site taking it, which resolves on both. Prints
+	 * {@link #JAVA_FALSE_OUTPUT}.
+	 */
+	public static final String JAVA_FALSE_PROGRAM = """
+			(defvar *objects* "java.util.Objects")
+			(defvar *boolean* "java.lang.Boolean")
+			(defvar *array* "java.lang.reflect.Array")
+			(defun row (thunk)
+			  (handler-case (prin1 (funcall thunk)) (error (e) (princ e)))
+			  (terpri))
+			(defun get0 (l) (java:call l "get" 0 :java-false))
+			(defun typed-get0 (l)
+			  (declare (type (java:object "java.util.List") l))
+			  (java:call l "get" 0 :java-false))
+			(defun empty-p (l)
+			  (declare (type (java:object "java.util.List") l))
+			  (java:call l "isEmpty" :java-false))
+			(defun eq* (a b) (java:static *objects* "equals" a b :java-false))
+			(defun eq2 (a b) (java:static "java.util.Objects" "equals" a b :java-false))
+			(let ((l (java:new "java.util.ArrayList")))
+			  (java:call l "add" '|false|)
+			  (java:call l "add" t)
+			  (java:call l "add" nil)
+			  (row (lambda () (list (java:call l "get" 0 :java-false) (typed-get0 l) (get0 l) (java:call l "get" 0))))
+			  (row (lambda () (list (java:call l "toArray" :java-false) (java:call l "toArray"))))
+			  (row (lambda () (list (empty-p l) (empty-p (java:new "java.util.ArrayList")) (java:call l "isEmpty"))))
+			  (row (lambda () (list (eq* 1 2) (eq2 1 2) (eq2 1 1) (java:static "java.util.Objects" "equals" 1 2))))
+			  (row (lambda () (java:static "java.lang.Boolean" "toString" (java:call l "isEmpty" :java-false)))))
+			(row (lambda () (list (java:static "java.lang.reflect.Array" "newInstance" (java:field "java.lang.Boolean" "TYPE") 2
+			                        :java-false)
+			                      (java:static *array* "newInstance" (java:field "java.lang.Boolean" "TYPE") 1 :java-false)
+			                      (java:static "java.lang.reflect.Array" "newInstance" (java:field "java.lang.Boolean" "TYPE") 1))))
+			(row (lambda () (list (java:field "java.lang.Boolean" "FALSE" :java-false) (java:field *boolean* "FALSE" :java-false)
+			                      (java:field "java.lang.Boolean" "FALSE") (java:field *boolean* "TRUE" :java-false))))
+			(row (lambda () (list (java:static "java.lang.Boolean" "valueOf" "no" :java-false)
+			                      (java:static *boolean* "parseBoolean" "no" :java-false)
+			                      (java:static "java.lang.Boolean" "valueOf" "no"))))
+			""";
+
+	/** What {@link #JAVA_FALSE_PROGRAM} prints. */
+	public static final String JAVA_FALSE_OUTPUT = """
+			(|false| |false| |false| NIL)
+			(#(|false| T NIL) #(NIL T NIL))
+			(|false| T NIL)
+			(|false| |false| T NIL)
+			"false"
+			(#(|false| |false|) #(|false|) #(NIL))
+			(|false| |false| NIL T)
+			(|false| |false| NIL)""";
+
+	/**
+	 * {@code java:handle}: Java sees a handle as its text -- a {@code toString}, equal,
+	 * hashing and ordering by it in a {@code HashMap} and a {@code TreeSet} -- and hands
+	 * it back as the value it stands for at a resolved site (a typed receiver, a
+	 * {@code java:new} local), a dispatched one ({@code either}'s unknown arguments), one
+	 * left to run time (an unknown receiver, the class in a variable: the compiled
+	 * program's bridge), an array's elements and a callback's argument. A given hash is
+	 * its {@code hashCode} (a {@code HashSet}'s order; a bignum's low 32 bits), a given
+	 * order text what it sorts by; a text or order that is no string and a hash that is
+	 * no integer are refused. Prints {@link #JAVA_HANDLE_OUTPUT}.
+	 */
+	public static final String JAVA_HANDLE_PROGRAM = """
+			(defvar *objects* "java.util.Objects")
+			(defun row (thunk)
+			  (handler-case (prin1 (funcall thunk)) (error (e) (princ e)))
+			  (terpri))
+			(defun get0 (l) (java:call l "get" 0))
+			(defun typed-get0 (l)
+			  (declare (type (java:object "java.util.List") l))
+			  (java:call l "get" 0))
+			(defun either (a b) (java:static "java.util.Objects" "requireNonNullElse" a b))
+			(let ((a (java:handle 'apple "apple"))
+			      (b (java:handle '(b) "banana"))
+			      (l (java:new "java.util.ArrayList"))
+			      (m (java:new "java.util.HashMap"))
+			      (s (java:new "java.util.TreeSet")))
+			  (java:call l "add" b)
+			  (java:call l "add" a)
+			  (java:call m "put" a 1)
+			  (java:call s "add" b)
+			  (java:call s "add" a)
+			  (row (lambda () (list (java:call l "toString") (java:static "java.util.Objects" "toString" a)
+			                        (java:static *objects* "toString" b))))
+			  (row (lambda () (list (java:call m "containsKey" (java:handle 'other "apple"))
+			                        (java:call m "containsKey" (java:handle 'apple "pear"))
+			                        (java:call m "get" (java:handle nil "apple")))))
+			  (row (lambda () (list (java:call s "toString") (java:call s "first"))))
+			  (row (lambda () (list (typed-get0 l) (get0 l) (java:call l "get" 1) (java:static *objects* "requireNonNull" a)
+			                        (either nil b) (eq (java:call l "get" 1) 'apple))))
+			  (row (lambda () (java:call s "toArray")))
+			  (row (lambda () (let ((seen nil)) (java:call l "forEach" (lambda (x) (push x seen)) :functional) seen))))
+			(row (lambda () (let ((h (java:new "java.util.HashSet")))
+			                  (java:call h "add" (java:handle 'x "x" 3))
+			                  (java:call h "add" (java:handle 'y "y" (+ (expt 2 40) 1)))
+			                  (java:call h "add" (java:handle 'z "z" 2))
+			                  (list (java:call h "toString") (java:call (java:handle 'q "q" (expt 2 32)) "hashCode")))))
+			(row (lambda () (let ((s (java:new "java.util.TreeSet")))
+			                  (java:call s "add" (java:handle 'a "a" 0 "2"))
+			                  (java:call s "add" (java:handle 'b "b" 0 "1"))
+			                  (java:call s "toString"))))
+			(row (lambda () (java:handle 1 2)))
+			(row (lambda () (java:handle 1 "t" 1.5)))
+			(row (lambda () (java:handle 1 "t" 0 'x)))
+			""";
+
+	/** What {@link #JAVA_HANDLE_PROGRAM} prints. */
+	public static final String JAVA_HANDLE_OUTPUT = """
+			("[banana, apple]" "apple" "banana")
+			(T NIL 1)
+			("[apple, banana]" APPLE)
+			((B) (B) APPLE APPLE (B) T)
+			#(APPLE (B))
+			(APPLE (B))
+			("[y, z, x]" 0)
+			"[b, a]"
+			java:handle expects (java:handle value text [hash [order ["class"]]]), got 2
+			java:handle expects (java:handle value text [hash [order ["class"]]]), got 1.5
+			java:handle expects (java:handle value text [hash [order ["class"]]]), got X""";
+
+	/**
+	 * {@code java:view} and {@code java:handle}'s identity, class and order: a view is a
+	 * read-only Java collection of its items -- a List's {@code toString} its printer's
+	 * answer, the {@code List} contract's {@code equals} and {@code hashCode}, every
+	 * write an {@code UnsupportedOperationException} -- handed back as its value at a
+	 * resolved, a dispatched and a run-time site; where an array is expected a List view
+	 * is one of its items, after every way to pass it whole (packed into a varargs array,
+	 * the {@code Object} overload); a set or map view converts nowhere its class does not
+	 * fit; a vector view orders by its function, one without an order is no Comparable. A
+	 * handle with no text and hash is equal only to a handle of its very value and
+	 * spelled class@hash, a class splits equality and order (a {@code ClassCastException}
+	 * naming the classes), an order function compares by value against any object, and a
+	 * handle of a real number is a {@code Number}. Malformed calls are refused by name.
+	 * Prints {@link #JAVA_VIEW_OUTPUT}.
+	 */
+	public static final String JAVA_VIEW_PROGRAM = """
+			(defvar *objects* "java.util.Objects")
+			(defvar *arrays* "java.util.Arrays")
+			(defun row (thunk)
+			  (handler-case (prin1 (funcall thunk)) (error (e) (princ e)))
+			  (terpri))
+			(defun get0 (l) (java:call l "get" 0))
+			(defun either (a b) (java:static "java.util.Objects" "requireNonNullElse" a b))
+			(defun by-length (a b) (if (vectorp b) (- (length a) (length b)) nil))
+			(let* ((items (list 1 "two" 3.5))
+			       (v (java:view items items :list (lambda (x) (format nil "<~{~A~^ ~}>" x))))
+			       (w (java:view #(1 2) #(1 2) :vector nil #'by-length "my.Vec"))
+			       (s (java:view 'set '("a" "b" "a") :set))
+			       (m (java:view 'map '("k" 1 "j" 2) :map (lambda (x) (string-downcase (symbol-name x))))))
+			  ;; a List: its elements, its printer's toString, the List contract, read-only
+			  (row (lambda () (list (java:call v "size") (java:call v "get" 1) (java:call v "toString")
+			                        (java:static *objects* "toString" v) (java:call v "hashCode")
+			                        (java:call v "equals" (java:static "java.util.List" "of" 1 "two" 3.5)))))
+			  (row (lambda () (java:call v "add" 4)))
+			  ;; handed back as the value it stands for, from a resolved, a dispatched and a run-time site
+			  (row (lambda () (let ((l (java:new "java.util.ArrayList")))
+			                    (java:call l "add" v)
+			                    (list (eq (get0 l) items) (eq (either nil v) items) (eq (java:static *objects* "requireNonNull" v) items)))))
+			  ;; where an array is expected, a List view is one of its items -- after every way to pass it whole
+			  (row (lambda () (list (java:static "java.util.Arrays" "toString" v) (java:static *arrays* "toString" v)
+			                        (java:call (java:static "java.util.Arrays" "asList" v) "size")
+			                        (java:static "java.lang.String" "valueOf" (java:view '(#\\a #\\b) '(#\\a #\\b) :list)))))
+			  ;; a set and a map: the items' members and pairs, read-only, their own spelling without a printer
+			  (row (lambda () (list (java:call s "size") (java:call s "contains" "a") (java:call s "toString")
+			                        (java:call m "get" "j") (java:call m "containsKey" "q") (java:call m "toString")
+			                        (java:call (java:new "java.util.HashMap" m) "get" "k"))))
+			  (row (lambda () (java:call m "put" "z" 3)))
+			  (row (lambda () (java:static "java.util.Arrays" "toString" s)))
+			  ;; a vector view compares by its order; a list view is no Comparable
+			  (row (lambda () (let ((ts (java:new "java.util.TreeSet")))
+			                    (java:call ts "add" w)
+			                    (java:call ts "add" (java:view #(7) #(7) :vector nil #'by-length "my.Vec"))
+			                    (java:call ts "add" (java:view #(1 2 3) #(1 2 3) :vector nil #'by-length "my.Vec"))
+			                    (mapcar #'length (coerce (java:call ts "toArray") 'list)))))
+			  (row (lambda () (java:call w "compareTo" "x")))
+			  (row (lambda () (java:call (java:view #(1) #(1) :vector) "compareTo" w))))
+			;; a handle with no text is equal only to a handle of its very value, spelled class@hash
+			(let* ((cell (list 1))
+			       (a (java:handle cell nil nil nil "my.Cell"))
+			       (b (java:handle cell nil nil nil "my.Cell"))
+			       (c (java:handle (list 1) nil nil nil "my.Cell")))
+			  (row (lambda () (list (java:call a "equals" b) (java:call a "equals" c)
+			                        (= (java:call a "hashCode") (java:call b "hashCode"))
+			                        (string= "my.Cell@" (subseq (java:call a "toString") 0 8)))))
+			  (row (lambda () (java:call a "compareTo" b))))
+			;; a class splits equality and order; an order function compares by value; a real's handle is a Number
+			(row (lambda () (list (java:call (java:handle 'k ":a" 1 "a" "K") "equals" (java:handle 's ":a" 1 "a" "S"))
+			                      (java:call (java:handle 'k ":a" 1 "a" "K") "equals" (java:handle 'k2 ":a" 1 "b" "K"))
+			                      (java:call (java:handle 'k ":a" 1 "a" "K") "compareTo" (java:handle 'k2 ":b" 1 "b" "K")))))
+			(row (lambda () (java:call (java:handle 'k ":a" 1 "a" "K") "compareTo" (java:handle 's ":a" 1 "a" "S"))))
+			(row (lambda () (java:call (java:handle 'k ":a" 1 "a" "K") "compareTo" "plain")))
+			(defun by-value (r other) (if (realp other) (cond ((< r other) -1) ((> r other) 1) (t 0)) nil))
+			(let ((half (java:handle 1/2 "1/2" 3 #'by-value "my.Ratio"))
+			      (third (java:handle 1/3 "1/3" 2 #'by-value "my.Ratio")))
+			  (row (lambda () (list (java:call half "compareTo" third) (java:call half "compareTo" 1)
+			                        (java:call half "compareTo" 0.25) (java:static "java.util.Collections" "max" (list half third))
+			                        (java:call half "doubleValue") (java:call half "intValue")
+			                        (java:static "java.lang.String" "format" "%s" (java:handle 7 "seven")))))
+			  (row (lambda () (java:call half "compareTo" (java:handle 'x "x")))))
+			(row (lambda () (java:view 1 2 :tree)))
+			(row (lambda () (java:view 1 2 :list)))
+			(row (lambda () (java:view 1 '(1 2 3) :map)))
+			(row (lambda () (java:view 1 '(1) :list nil (lambda (a b) 0))))
+			(row (lambda () (java:view 1 (list 1/2) :list)))
+			(row (lambda () (java:view 1 (list (lambda () 1)) :list)))
+			(row (lambda () (java:handle 1 nil)))
+			(row (lambda () (java:handle 1 "t" 0 "o" 5)))
+			""";
+
+	/** What {@link #JAVA_VIEW_PROGRAM} prints. */
+	public static final String JAVA_VIEW_OUTPUT = """
+			(3 "two" "<1 two 3.5>" "<1 two 3.5>" 1078132564 T)
+			error calling am.ik.rontolisp.runtime.RontoJavaListView.add: java.lang.UnsupportedOperationException
+			(T T T)
+			("[1, two, 3.5]" "[1, two, 3.5]" 1 "[a, b]")
+			(2 T "[a, b]" 2 NIL "map" 1)
+			error calling am.ik.rontolisp.runtime.RontoJavaMapView.put: java.lang.UnsupportedOperationException
+			error calling java.util.Arrays.toString: java.lang.IllegalArgumentException: No matching method toString found taking 1 args
+			(1 2 3)
+			1
+			error calling am.ik.rontolisp.runtime.RontoJavaVectorView.compareTo: java.lang.ClassCastException: class am.ik.rontolisp.runtime.RontoJavaVectorView cannot be cast to class java.lang.Comparable
+			(T NIL T T)
+			error calling am.ik.rontolisp.runtime.RontoJavaHandle.compareTo: java.lang.ClassCastException: class my.Cell cannot be cast to class java.lang.Comparable
+			(NIL T -1)
+			error calling am.ik.rontolisp.runtime.RontoJavaHandle.compareTo: java.lang.ClassCastException: class S cannot be cast to class K
+			error calling am.ik.rontolisp.runtime.RontoJavaHandle.compareTo: java.lang.ClassCastException: class java.lang.String cannot be cast to class K
+			(1 -1 1 1/2 0.5 0 "seven")
+			error calling am.ik.rontolisp.runtime.RontoJavaNumberHandle.compareTo: java.lang.ClassCastException: class am.ik.rontolisp.runtime.RontoJavaHandle cannot be cast to class my.Ratio
+			java:view expects (java:view value items :list|:vector|:set|:map|:bytes [printer [order ["class"]]]), got :TREE
+			java:view expects (java:view value items :list|:vector|:set|:map|:bytes [printer [order ["class"]]]), got 2
+			java:view expects (java:view value items :list|:vector|:set|:map|:bytes [printer [order ["class"]]]), got (1 2 3)
+			java:view expects (java:view value items :list|:vector|:set|:map|:bytes [printer [order ["class"]]]), got #<lambda>
+			java:view: no Java value for 1/2
+			java: a function where java.lang.Object is expected needs a java:handle, got #<lambda>
+			java:handle expects (java:handle value text [hash [order ["class"]]]), got NIL
+			java:handle expects (java:handle value text [hash [order ["class"]]]), got 5""";
+
+	/**
+	 * {@code :octets}: a {@code byte[]} a call answers is an {@code (unsigned-byte 8)}
+	 * vector of its octets -- at a resolved site (a typed receiver), a dispatched one
+	 * ({@code either}'s unknown arguments) and one left to run time (an unknown receiver:
+	 * the compiled program's bridge), beside {@code :java-false} in either order, as an
+	 * {@code Object[]}'s element, empty -- and the unmarked call beside them a list of
+	 * signed bytes. The vector is Java's own array: what Java stores into it later, the
+	 * vector holds, two answers of one array are one vector, and a vector handed to Java
+	 * through a {@code :bytes} view comes back itself. Prints {@link #OCTETS_OUTPUT}.
+	 */
+	public static final String OCTETS_PROGRAM = """
+			(defun row (thunk)
+			  (handler-case (prin1 (funcall thunk)) (error (e) (princ e)))
+			  (terpri))
+			(defun octets (&rest xs)
+			  (let ((v (make-array (length xs) :element-type '(unsigned-byte 8))))
+			    (dotimes (i (length xs) v) (setf (aref v i) (nth i xs)))))
+			(defun bytes-of (o) (java:call o "toByteArray" :octets))
+			(defun typed-bytes (o)
+			  (declare (type (java:object "java.io.ByteArrayOutputStream") o))
+			  (java:call o "toByteArray" :octets))
+			(defun either (a b) (java:static "java.util.Objects" "requireNonNullElse" a b :octets))
+			(let ((o (java:new "java.io.ByteArrayOutputStream")))
+			  (java:call o "write" 65)
+			  (java:call o "write" 200)
+			  (row (lambda () (list (java:call o "toByteArray" :octets) (typed-bytes o) (bytes-of o)
+			                        (array-element-type (bytes-of o)))))
+			  (row (lambda () (java:call o "toByteArray")))
+			  (row (lambda () (list (java:call o "toByteArray" :java-false :octets)
+			                        (java:call o "toByteArray" :octets :java-false))))
+			  (row (lambda () (let ((l (java:new "java.util.ArrayList")))
+			                    (java:call l "add" (java:view 'b (octets 1 2) :bytes))
+			                    (java:call l "add" "x")
+			                    (list (java:call l "toArray" :octets) (java:call l "get" 0 :octets)
+			                          (java:call l "toArray")))))
+			  (row (lambda () (length (java:call (java:new "java.io.ByteArrayOutputStream") "toByteArray" :octets))))
+			  (row (lambda () (either nil (java:view 'b (octets 9) :bytes)))))
+			(row (lambda () (let* ((bb (java:static "java.nio.ByteBuffer" "allocate" 2))
+			                       (a (java:call bb "array" :octets)))
+			                  (java:call bb "put(byte)" 7)
+			                  a)))
+			(row (lambda () (let* ((bb (java:static "java.nio.ByteBuffer" "allocate" 2))
+			                       (v (octets 1 2))
+			                       (l (java:new "java.util.ArrayList")))
+			                  (java:call l "add" (java:view v v :bytes))
+			                  (list (eq (java:call bb "array" :octets) (java:call bb "array" :octets))
+			                        (eq v (java:call l "get" 0 :octets))
+			                        (eq v (aref (java:call l "toArray" :octets) 0))))))
+			""";
+
+	/** What {@link #OCTETS_PROGRAM} prints. */
+	public static final String OCTETS_OUTPUT = """
+			(#(65 200) #(65 200) #(65 200) (UNSIGNED-BYTE 8))
+			(65 -56)
+			(#(65 200) #(65 200))
+			(#(#(1 2) "x") #(1 2) #((1 2) "x"))
+			0
+			#(9)
+			#(7 0)
+			(T T T)""";
+
+	/**
+	 * {@code (java:view value octets :bytes)}: Java is handed the {@code byte[]} of the
+	 * octets wherever one fits -- a {@code byte[]}, an {@code Object} parameter -- and
+	 * nowhere else; what Java stores into it the vector holds, at a dispatched site
+	 * ({@code System.arraycopy}, {@code Random.nextBytes}) and one left to run time (an
+	 * unknown receiver, the class in a variable: the compiled program's bridge), a vector
+	 * handed twice one array to Java, and through a reference Java keeps
+	 * ({@code ByteBuffer.wrap}). A receiver is the array; items that are no octet vector
+	 * are refused. Prints {@link #BYTES_VIEW_OUTPUT}.
+	 */
+	public static final String BYTES_VIEW_PROGRAM = """
+			(defvar *objects* "java.util.Objects")
+			(defvar *system* "java.lang.System")
+			(defun row (thunk)
+			  (handler-case (prin1 (funcall thunk)) (error (e) (princ e)))
+			  (terpri))
+			(defun octets (&rest xs)
+			  (let ((v (make-array (length xs) :element-type '(unsigned-byte 8))))
+			    (dotimes (i (length xs) v) (setf (aref v i) (nth i xs)))))
+			(defun read-into (in buf) (java:call in "read" buf))
+			(let* ((b (octets 1 255 3))
+			       (v (java:view 'b b :bytes)))
+			  (row (lambda () (list (java:static "java.util.Arrays" "toString" v)
+			                        (subseq (java:static "java.util.Objects" "toString" v) 0 3)
+			                        (java:static "java.lang.reflect.Array" "getLength" v)
+			                        (java:call (java:call v "getClass") "getName"))))
+			  (row (lambda () (java:call (java:new "java.util.Random" 42) "nextBytes" v) b))
+			  (row (lambda () (java:static "java.lang.System" "arraycopy" (java:view 's (octets 7 8 9) :bytes) 0 v 0 2) b))
+			  (row (lambda () (java:static "java.lang.System" "arraycopy" v 0 v 1 2) b))
+			  (row (lambda () (java:static *system* "arraycopy" v 1 v 0 2) b))
+			  (row (lambda () (list (java:static "java.util.Objects" "equals" v v) (java:static *objects* "equals" v v)
+			                        (java:static *objects* "equals" v (java:view 'c (octets 8 8 8) :bytes)))))
+			  (row (lambda () (java:new "java.util.ArrayList" v))))
+			(let ((buf (octets 0 0 0 0 0 0)))
+			  (row (lambda () (list (read-into (java:new "java.io.StringBufferInputStream" "hello") (java:view 'buf buf :bytes))
+			                        buf))))
+			(let* ((b (octets 0 0 0 0))
+			       (bb (java:static "java.nio.ByteBuffer" "wrap" (java:view 'b b :bytes))))
+			  (row (lambda () (java:call bb "putInt" 42) b)))
+			(row (lambda () (java:view 'x (list 1 2) :bytes)))
+			(row (lambda () (java:view 'x (octets 1) :bytes nil (lambda (a b) 0))))
+			""";
+
+	/** What {@link #BYTES_VIEW_PROGRAM} prints. */
+	public static final String BYTES_VIEW_OUTPUT = """
+			("[1, -1, 3]" "[B@" 3 "[B")
+			#(53 157 65)
+			#(7 8 65)
+			#(7 7 8)
+			#(7 8 8)
+			(T T NIL)
+			error constructing java.util.ArrayList: java.lang.IllegalArgumentException: No matching ctor found for class java.util.ArrayList
+			(5 #(104 101 108 108 111 0))
+			#(0 0 0 42)
+			java:view expects (java:view value items :list|:vector|:set|:map|:bytes [printer [order ["class"]]]), got (1 2)
+			java:view expects (java:view value items :list|:vector|:set|:map|:bytes [printer [order ["class"]]]), got #<lambda>""";
+
+	/**
+	 * Specialized vectors and bignums as arguments, at a dispatched site ({@code ts},
+	 * {@code val}), at a site left to run time (the class name in a variable: the
+	 * compiled program's bridge) and at resolved ones: every rank-1 packed float and
+	 * integer vector converts element-wise like a general vector, a rank-2 one does not;
+	 * a bignum is a {@code BigInteger} (or a supertype of one), a fixnum reaches a
+	 * {@code BigInteger} parameter, a ratio and a bignum where a {@code double} is
+	 * expected match nothing. Prints {@link #SPECIALIZED_AND_BIGNUM_OUTPUT}.
+	 */
+	public static final String SPECIALIZED_AND_BIGNUM_PROGRAM = """
+			(defvar *arrays* "java.util.Arrays")
+			(defvar *string* "java.lang.String")
+			(defun ts (x) (java:static "java.util.Arrays" "toString" x))
+			(defun ts* (x) (java:static *arrays* "toString" x))
+			(defun val (x) (java:static "java.lang.String" "valueOf" x))
+			(defun val* (x) (java:static *string* "valueOf" x))
+			(defun row (thunk)
+			  (handler-case (prin1 (funcall thunk)) (error (e) (princ e)))
+			  (terpri))
+			(dolist (x (list (make-array 3 :element-type 'double-float :initial-contents '(1d0 2d0 3.5d0))
+			                 (make-array 2 :element-type 'single-float :initial-contents '(1.5 -2.0))
+			                 #f(6.0)
+			                 (make-array 2 :element-type 'bfloat16 :initial-contents '(1.5 -2.0))
+			                 (make-array 3 :element-type '(unsigned-byte 8) :initial-contents '(1 200 255))
+			                 (make-array 2 :element-type '(unsigned-byte 16) :initial-contents '(7 65535))
+			                 (make-array 2 :element-type '(unsigned-byte 32) :initial-contents '(9 65536))))
+			  (row (lambda () (list (ts x) (ts* x) (val x) (val* x)))))
+			(dolist (x (list (make-array '(2 2) :element-type 'double-float :initial-element 0d0)
+			                 (expt 2 100) (- (expt 2 64)) 1/3))
+			  (row (lambda () (ts x)))
+			  (row (lambda () (ts* x)))
+			  (row (lambda () (list (val x) (val* x)))))
+			(row (lambda () (java:call (java:new "java.math.BigDecimal" 5 2) "toString")))
+			(row (lambda () (java:call (java:new "java.math.BigDecimal" (expt 10 20) 3) "toString")))
+			(row (lambda () (java:static "java.lang.String" "valueOf" 1267650600228229401496703205376)))
+			(row (lambda () (java:static "java.util.Objects" "equals" (expt 2 100) (expt 2 100))))
+			(row (lambda () (+ 1 (java:call (java:new "java.math.BigDecimal" (expt 2 100) 0) "toBigInteger"))))
+			(row (lambda () (java:static "java.lang.Math" "sqrt" (expt 2 100))))
+			(row (lambda () (java:call (java:static "java.util.List" "of" (expt 2 100) 1) "toString")))
+			(row (lambda () (list (ts (list 1 (expt 2 100))) (ts* (vector (expt 2 100))))))
+			""";
+
+	/** What {@link #SPECIALIZED_AND_BIGNUM_PROGRAM} prints. */
+	public static final String SPECIALIZED_AND_BIGNUM_OUTPUT = """
+			("[1.0, 2.0, 3.5]" "[1.0, 2.0, 3.5]" "[1.0, 2.0, 3.5]" "[1.0, 2.0, 3.5]")
+			("[1.5, -2.0]" "[1.5, -2.0]" "[1.5, -2.0]" "[1.5, -2.0]")
+			("[6.0]" "[6.0]" "[6.0]" "[6.0]")
+			("[1.5, -2.0]" "[1.5, -2.0]" "[1.5, -2.0]" "[1.5, -2.0]")
+			("[1, 200, 255]" "[1, 200, 255]" "[1, 200, 255]" "[1, 200, 255]")
+			("[7, 65535]" "[7, 65535]" "[7, 65535]" "[7, 65535]")
+			("[9, 65536]" "[9, 65536]" "[9, 65536]" "[9, 65536]")
+			error calling java.util.Arrays.toString: java.lang.IllegalArgumentException: No matching method toString found taking 1 args
+			error calling java.util.Arrays.toString: java.lang.IllegalArgumentException: No matching method toString found taking 1 args
+			error calling java.lang.String.valueOf: java.lang.IllegalArgumentException: No matching method valueOf found taking 1 args
+			error calling java.util.Arrays.toString: java.lang.IllegalArgumentException: No matching method toString found taking 1 args
+			error calling java.util.Arrays.toString: java.lang.IllegalArgumentException: No matching method toString found taking 1 args
+			("1267650600228229401496703205376" "1267650600228229401496703205376")
+			error calling java.util.Arrays.toString: java.lang.IllegalArgumentException: No matching method toString found taking 1 args
+			error calling java.util.Arrays.toString: java.lang.IllegalArgumentException: No matching method toString found taking 1 args
+			("-18446744073709551616" "-18446744073709551616")
+			error calling java.util.Arrays.toString: java.lang.IllegalArgumentException: No matching method toString found taking 1 args
+			error calling java.util.Arrays.toString: java.lang.IllegalArgumentException: No matching method toString found taking 1 args
+			error calling java.lang.String.valueOf: java.lang.IllegalArgumentException: No matching method valueOf found taking 1 args
+			error constructing java.math.BigDecimal: java.lang.IllegalArgumentException: No matching ctor found for class java.math.BigDecimal
+			"100000000000000000.000"
+			"1267650600228229401496703205376"
+			T
+			1267650600228229401496703205377
+			1.125899906842624e15
+			"[1267650600228229401496703205376, 1]"
+			("[1, 1267650600228229401496703205376]" "[1267650600228229401496703205376]")""";
+
+	/**
+	 * {@code Object}'s methods called on a receiver whose static class is an interface --
+	 * one declared a {@code List}, which redeclares only {@code equals} and
+	 * {@code hashCode}, and a {@code java:reify} of {@code Runnable}, which redeclares
+	 * none: each site resolves before it runs (JLS 9.2). Prints
+	 * {@link #OBJECT_METHODS_ON_AN_INTERFACE_OUTPUT}.
+	 */
+	public static final String OBJECT_METHODS_ON_AN_INTERFACE = """
+			(defun shown (l)
+			  (declare (type (java:object "java.util.List") l))
+			  (list (java:call l "toString") (java:call l "hashCode") (java:call l "equals" l)
+			        (java:call (java:call l "getClass") "getName")))
+			(print (shown (java:static "java.util.List" "of" 1 2)))
+			(let ((r (java:reify "java.lang.Runnable" "run" (lambda () nil))))
+			  (print (list (java:call r "toString") (java:call r "equals" r)
+			               (eql (java:call r "hashCode") (java:call r "hashCode")))))
+			""";
+
+	/** What {@link #OBJECT_METHODS_ON_AN_INTERFACE} prints. */
+	public static final String OBJECT_METHODS_ON_AN_INTERFACE_OUTPUT = """
+			("[1, 2]" 994 T "java.util.ImmutableCollections$List12")
+			("#<java-reify java.lang.Runnable>" T T)""";
+
+	/**
+	 * {@code eq} and {@code eql} on host objects are identity -- two equal {@code File}s
+	 * are distinct, one object answered twice by a Java call is itself, and a
+	 * {@code java:reify} whose {@code equals} answers true is still neither {@code T} nor
+	 * {@code 1} and does not print as {@code T} -- through every surface that compares
+	 * with them: the sequence functions, {@code case}, {@code getf}/{@code remf},
+	 * {@code catch} tags and {@code eq}/{@code eql} hash tables, where a key mutated
+	 * after insertion keeps its bucket. {@code equal} asks {@code equals}, a host
+	 * collection included, and so does an {@code equal} table. Prints
+	 * {@link #HOST_IDENTITY_OUTPUT}.
+	 */
+	public static final String HOST_IDENTITY_PROGRAM = """
+			(let* ((f1 (java:new "java.io.File" "x"))
+			       (f2 (java:new "java.io.File" "x"))
+			       (holder (java:new "java.util.ArrayList"))
+			       (e1 (java:new "java.util.ArrayList"))
+			       (e2 (java:new "java.util.ArrayList"))
+			       (r (java:reify "java.lang.Runnable" "run" (lambda () nil) "equals" (lambda (o) t)))
+			       (s (java:new "java.util.HashSet"))
+			       (eqt (make-hash-table :test 'eq))
+			       (eqlt (make-hash-table :test 'eql))
+			       (equalt (make-hash-table :test 'equal))
+			       (plist (list f1 1 'k 2))
+			       (tail (list 'k 2 f1 1)))
+			  (java:call holder "add" f1)
+			  (print (list (eq f1 f2) (eql f1 f2) (eq f1 f1) (eq f1 (java:call holder "get" 0))
+			               (equal f1 f2) (equalp f1 f2)))
+			  (print (list (eq e1 e2) (eql e1 e2) (equal e1 e2)))
+			  (print (list (java:call r "equals" 1) (eq r t) (eq t r) (eql r 1) (equal r r)
+			               (string= (prin1-to-string r) "T") (string= (princ-to-string r) "T")))
+			  (print (list (member f2 (list f1)) (position f2 (list f1)) (assoc f2 (list (cons f1 1)))
+			               (find f2 (list f1)) (count f2 (list f1)) (length (remove-duplicates (list f1 f2)))
+			               (position f2 (list f1) :test #'equal) (case f1 (1 'one) (t 'other))))
+			  (print (list (getf plist f2) (getf plist f1) (progn (remf plist f2) (length plist))
+			               (progn (remf tail f2) (length tail))))
+			  (print (catch f1 (catch f2 (throw f1 :to-f1)) :caught-by-f2))
+			  (setf (gethash f1 eqt) 1 (gethash f1 eqlt) 2 (gethash f1 equalt) 3 (gethash e1 equalt) 4
+			        (gethash s eqt) 5)
+			  (java:call s "add" 1)
+			  (print (list (gethash f2 eqt) (gethash f1 eqt) (gethash f2 eqlt) (gethash f1 eqlt)
+			               (gethash f2 equalt) (gethash e2 equalt) (gethash s eqt))))
+			""";
+
+	/** What {@link #HOST_IDENTITY_PROGRAM} prints. */
+	public static final String HOST_IDENTITY_OUTPUT = """
+			(NIL NIL T T T T)
+			(NIL NIL T)
+			(T NIL NIL NIL T NIL NIL)
+			(NIL NIL NIL NIL 0 2 0 OTHER)
+			(NIL 1 4 4)
+			:TO-F1
+			(NIL 1 NIL 2 3 4 5)""";
+
+	/**
+	 * {@code equal} of a host object and a Lisp value asks the host object's
+	 * {@code equals} with the value as a Java method's {@code Object} parameter receives
+	 * it -- so the method sees the value itself, a string unframed, a mutable string
+	 * rendered, a character a {@code Character}, {@code nil} {@code null} -- and only
+	 * when the host object is on the left, as Clojure's {@code =} asks its left operand.
+	 * A value no {@code Object} parameter takes as one object (a symbol, a list, a
+	 * vector, a ratio, a function) is equal to no host object, and {@code equals} is not
+	 * asked. Prints {@link #HOST_EQUAL_LISP_VALUE_OUTPUT}.
+	 */
+	public static final String HOST_EQUAL_LISP_VALUE_PROGRAM = """
+			(let* ((seen nil)
+			       (r (java:reify "java.lang.Runnable" "run" (lambda () nil)
+			                      "equals" (lambda (o) (setq seen (cons o seen)) t)))
+			       (f (java:new "java.io.File" "x"))
+			       (s (make-array 1 :element-type 'character :initial-element #\\s :adjustable t
+			                        :fill-pointer 1)))
+			  (print (list (equal r 1) (equal r "s") (equal r nil) (equal r t) (equal r #\\a) (equal r 1.5)
+			               (equal r (expt 10 20)) (equal r s) (equalp r 2)))
+			  (print (reverse seen))
+			  (setq seen nil)
+			  (print (list (equal r 'sym) (equal r '(1)) (equal r (vector 1)) (equal r 1/2) (equal r #'car)
+			               (equal 1 r) (equal "s" r) (equal nil r) (equalp 2 r) seen))
+			  (print (list (equal f "x") (equal "x" f) (equal f (java:new "java.io.File" "x")))))
+			""";
+
+	/** What {@link #HOST_EQUAL_LISP_VALUE_PROGRAM} prints. */
+	public static final String HOST_EQUAL_LISP_VALUE_OUTPUT = """
+			(T T T T T T T T T)
+			(1 "s" NIL T #\\a 1.5 100000000000000000000 "s" 2)
+			(NIL NIL NIL NIL NIL NIL NIL NIL NIL NIL)
+			(NIL NIL T)""";
+
+	/**
+	 * A member that throws signals a {@code java:java-exception}, a {@code simple-error}
+	 * reporting the member and the throwable whose {@code java:java-exception-cause} is
+	 * what the member threw; a caught one passed to a member is that throwable again, at
+	 * a site resolved before it runs and at one left to run time alike, a method called
+	 * on one is the throwable's, and a condition of no Java exception is still no
+	 * argument. Prints {@link #HOST_EXCEPTION_OUTPUT}.
+	 */
+	public static final String HOST_EXCEPTION_PROGRAM = """
+			(defun parse (s) (java:static "java.lang.Integer" "parseInt" s))
+			(print (handler-case (parse "x")
+			         (java:java-exception (e)
+			           (list (typep e 'simple-error)
+			                 (java:call (java:java-exception-cause e) "getMessage")
+			                 (format nil "~a" e)))))
+			(print (handler-case (java:new "java.lang.StringBuilder" -1)
+			         (error (e) (java:call (java:call (java:java-exception-cause e) "getClass") "getName"))))
+			(print (handler-case (parse "x")
+			         (java:java-exception (e)
+			           (let ((wrapped (java:new "java.lang.RuntimeException" "wrapped" e)))
+			             (list (java:call (java:call wrapped "getCause") "getMessage")
+			                   (eq (java:call wrapped "getCause") (java:java-exception-cause e)))))))
+			(defvar *init-cause* "initCause")
+			(print (handler-case (parse "y")
+			         (java:java-exception (e)
+			           (let ((r (java:new "java.lang.RuntimeException" "r")))
+			             (java:call r *init-cause* e)
+			             (java:call (java:call r "getCause") "getMessage")))))
+			(print (handler-case (parse "z") (java:java-exception (e) (java:call e "getMessage"))))
+			(print (handler-case (java:new "java.lang.RuntimeException" "x"
+			                               (make-condition 'simple-error :format-control "s"))
+			         (error (e) (format nil "~a" e))))
+			(print (handler-case (java:java-exception-cause 5) (type-error () :type-error)))
+			""";
+
+	/** What {@link #HOST_EXCEPTION_PROGRAM} prints. */
+	public static final String HOST_EXCEPTION_OUTPUT = """
+			(T "For input string: \\"x\\"" "error calling java.lang.Integer.parseInt: java.lang.NumberFormatException: For input string: \\"x\\"")
+			"java.lang.NegativeArraySizeException"
+			("For input string: \\"x\\"" T)
+			"For input string: \\"y\\""
+			"For input string: \\"z\\""
+			"error constructing java.lang.RuntimeException: java.lang.ClassCastException: class am.ik.rontolisp.LispInstance cannot be cast to class java.lang.Throwable"
+			:TYPE-ERROR""";
+
+	private JavaInteropPrograms() {
+	}
+
+}

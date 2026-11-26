@@ -1,0 +1,21 @@
+{
+  "reflection": [
+    {
+      "type": "com.example.reflection.English",
+      "methods": [
+        { "name": "<init>", "parameterTypes": [ "java.lang.String" ] },
+        { "name": "greet", "parameterTypes": [] }
+      ]
+    },
+    {
+      "type": "com.example.reflection.Japanese",
+      "methods": [
+        { "name": "<init>", "parameterTypes": [ "java.lang.String" ] },
+        { "name": "greet", "parameterTypes": [] }
+      ]
+    }
+  ],
+  "resources": [
+    { "glob": "greetings.txt" }
+  ]
+}

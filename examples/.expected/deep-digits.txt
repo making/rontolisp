@@ -1,0 +1,13 @@
+network: 15 -> 16 (leaky relu) -> 16 (leaky relu) -> 10, 10 samples
+input batch shape (with bias): (10 16)
+
+epoch 100  loss (x1e6): 304141
+epoch 200  loss (x1e6): 167595
+epoch 300  loss (x1e6): 120492
+epoch 400  loss (x1e6): 102211
+epoch 500  loss (x1e6): 93017
+
+predictions on the training digits: (0 1 2 3 4 5 6 7 8 9)
+accuracy: 10/10
+
+predictions with one flipped pixel:  (8 1 2 3 4 5 6 7 2 9)

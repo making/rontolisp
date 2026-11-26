@@ -1,0 +1,30 @@
+# error
+
+`(error datum args...)`
+
+Signals an error, aborting execution unless an enclosing [`handler-case`](handler-case.md) catches it. The Common Lisp condition designators are supported:
+
+- `(error "control" args...)` — the control string uses the same directives as `format` (`~a`, `~s`, `~%`, ...); the remaining arguments fill them to build the message. The control may equally be computed (a variable, a slot read, a function call): a datum that is a string at runtime is a format control and the arguments after it are its format arguments, exactly as for a literal one.
+- `(error 'type :initarg value ...)` — constructs a condition instance of the named class (built-in or defined by [`define-condition`](define-condition.md)) and signals it. The message is the class's `:report` rendering -- its own, or the nearest ancestor's when it defines none -- and, for a class with no report anywhere but with the `simple-condition` family's slots, `format` applied to its `:format-control` over its `:format-arguments`. A class that reports nothing at all keeps the `Condition (type initargs...) was signalled.` shape. The message is exactly the text [`princ`](../functions/princ.md) writes for the same condition object (see [`define-condition`](define-condition.md)).
+- `(error obj)` — signals a pre-built condition object (e.g. from [`make-condition`](make-condition.md)); a value that turns out to be a string at runtime is signaled as the message it renders (see the first bullet), and one that turns out to be a symbol names the condition class, with the arguments after it as initargs.
+
+Whatever designates no condition is a `type-error` whose datum is it and whose expected type is `condition`: a symbol no condition class holds, quoted or computed, and a value that is no string, symbol or condition, `5` or a struct. A literal name the compile cannot find still compiles, and signals this when it runs. A function datum, a format control in the standard, signals as a string holding its printed self: it is not called.
+
+Every backend raises the condition so `handler-case` can dispatch on its type: the interpreter and JVM throw an exception carrying the message and the condition object, and the wasm-GC backends throw a WebAssembly exception when the program contains a catching form (`handler-case`/`ignore-errors`/`unwind-protect`) and trap otherwise. `#'error` IS a function value with the full designator protocol on every backend (`(apply #'error (list 'my-error :v x))` builds the typed condition). A compiled program finds a class named by a computed datum among those it spells as a symbol outside operator position, and, where it calls `intern`, `find-symbol`, `read`, `read-from-string`, `type-of` or `class-name`, among all its own.
+
+When nothing catches it, the condition reports itself as **one line on standard error** — `Unhandled condition: ` followed by the same text [`princ`](../functions/princ.md) writes for it — and the process exits non-zero. That line is identical on all four backends; what follows it is only the host's own note that the process died (the JVM's `Exception in thread "main" ...`, wasmtime's trap report). Setting the `RONTOLISP_DEBUG` environment variable to any value additionally prints the JVM stack trace, on the interpreter and on a compiled `.class`. The wasm-GC backends report only when the module carries the exception machinery — that is, when the program contains a catching form somewhere, as any program that loads a library does; without one the module traps with no message, which is what keeps a program that never signals from paying for the machinery. A function the module exports ([`rontolisp:wasm-export`](../functions/rontolisp-wasm-export.md), [`rontolisp:wit-export`](../functions/rontolisp-wit-export.md)) reports what a host's call leaves uncaught the same way before the call traps. A `--no-wasi` reactor has no standard error to write to at all, so there the report goes into its discarding output sink (see the [wasm-GC module guide](../../guides/wasm-gc-module.md#what-the-build-tells-you-before-you-run-it)).
+
+The interpreter and the JVM backend (a compiled `.class`, `.jar` or `.war`) add, under that line, the same lines saying where it happened: `at FILE:LINE in FUNCTION` names the innermost form of the program's files the condition passed through and the program's named function that form is written in (a form in a lambda belongs to the function the lambda is written in, whatever calls it; a library function is never the one named; a `(setf name)` function is named `(SETF NAME)`), and a condition that escaped an [`rontolisp:async-defun`](../special-forms/rontolisp-async-defun.md) body adds one `in NAME (async), awaited at FILE:LINE` line per `await` that rethrew it. The report line itself never changes, so what `handler-case` and `princ` see is unaffected. A program given with `-e` prints the report line alone, and so does a wasm-GC build unless it was compiled with [`--report-locations`](../../compiling/wasm.md#uncaught-condition-locations---report-locations).
+
+```console
+$ rontolisp app.lisp
+Unhandled condition: parse-integer: junk in string "x"
+  at app.lisp:5 in APP::PARSE
+```
+
+Because an uncaught `error` aborts execution it is shown here statically rather than as a runnable example:
+
+```console
+(error "bad value: ~a" x)
+(error 'type-error :datum x :expected-type 'integer)
+```

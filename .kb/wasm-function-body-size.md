@@ -1,0 +1,347 @@
+# WASM backend: no single function body may grow without bound
+
+Scope: the GC WASM backend (`codegen.wasm`), Preview 1 and `--component` alike (one
+`WasmLispCompiler.compile()`). `--no-gc` is unaffected
+([no-gc-scalar-wasm.md](no-gc-scalar-wasm.md)).
+
+## The invariant
+**The size of the largest emitted function body decides whether a program can be run at
+all.** A wasmtime cold compile (Cranelift) needs memory growing ~superlinearly (~1.8th
+power) in the size of ONE body; total module size and function count do not matter.
+wasmtime 47.0.2, 4-core Linux amd64: 9 KB body = 284 MB; 261 KB = 2.7 GB; 630 KB =
+15.1 GB; 850 KB = 25.8 GB / 36 s.
+
+Bound: **256 KiB**, pinned by `WasmToplevelChunkingTest`, guarded before the fact by
+`CiSpecE2eTest.requireRunnableModule` -- each WASM leg inspects the module it just
+compiled and refuses to hand wasmtime an over-large one, so the guard costs no extra
+compile and covers every leg of the backend x `--simd` matrix. Raise it only with fresh cold-cache measurements
+on the smallest CI runner, updating these numbers in the same change.
+
+- **Two bodies grow with the program**: the top level (with source length) and the
+  DISPATCH LADDER (with function COUNT). **A third grows with one definition: a DEFUN whose
+  body is one big form** -- fast-http's `parse-header-field-and-value`, a `match-i-case`
+  decision tree, came out at 748 KB (1,842 locals), and its native frame alone overflowed
+  wasmtime's default 512 KiB stack: `wasm trap: call stack exhausted` NINE frames deep
+  (between 512 KiB and 700 KiB of `-W max-wasm-stack` ran it). Every lack-request body parse
+  on WASM died there (2026-09-24). Bounded by outlining, below.
+- **Any body with a case per callable also grows with function count**: `_funcref`, until
+  2026-11-04 (below).
+- **The async top-level resume grew quadratically until 2026-11-04** ("Keeping the top level
+  bounded"): it spilled all of its locals at every suspend site, 442 locals and 194,297 bytes of
+  the corpus, ~10 more awaits from the bound.
+- **Bodies compiled at once add up**, so large ones side by side cost far more than one, under
+  the bound. A 7.6 MB component with 21 bodies of 165-203 KB next to each other (wasmtime 49, 4
+  CPUs, 2026-11-05): 7.15 GB at 4 threads (46 s), 4.52 GB at `MALLOC_ARENA_MAX=1` (63 s), 2.36 GB
+  at `RAYON_NUM_THREADS=2` (79 s), 2.11 GB at `-C parallel-compilation=n` (117 s). Its Preview 1
+  build kept 4.1 GB at 2 threads. Fixing what emitted them gave 0.71 GB at 4 threads
+  ([clos.md](clos.md), "`change-class`").
+- **The guard must measure the `--component` build separately** — an async top level
+  compiles as an entry+resume pair, so either build can be larger.
+  `WasmModuleInspector.largestFunctionBodySize` walks a component's embedded core modules.
+- Easy to miss: wasmtime's compilation cache is on by default (`~/.cache/wasmtime`, no
+  `--disable-cache` in 47 — delete the dir before each measurement); the failure is not an
+  error but a reclaimed 16 GB runner (`The runner has received a shutdown signal.`, no
+  stderr, zero exit, peers cancelled), and macOS runners survive the same corpus;
+  `ulimit -v` cannot bound it (wasmtime reserves 9-17 GB of address space).
+
+## Keeping a defun bounded
+`WasmLispCompiler.compile` runs the JVM backend's outlining loop: after Pass 2a every defun
+body over `FUNCTION_BODY_LIMIT_BYTES` (the 256 KiB bound) is reported, and the compile runs
+again with `AstOutliner` cutting it (`Budget(measured, 48 KiB)`, the target shrinking by 2/3
+down to a 16 KiB floor; a retry is asked for only at a target whose cut differs from the
+compiled one, `AstOutliner.Result.nextBudget`, as on the JVM). Same cut -- a flat `cond`'s
+clause list included -- and same position (before `CrossLambdaExitLowering`) as the JVM
+(`.kb/hot-path-method-size.md`); warnings buffer per attempt (`CompileWarnings`). The 748 KB
+function becomes pieces under 107 KB (the next body in that program); a 1.2 MB balanced
+decision tree, pieces of ~26 KB. Cost: one extra compile for a program that has such a defun
+(lack.lisp 14 s -> 31 s). **Gap:** there is no WASM tail-spine splitter (`JvmBodyOutliner`), so
+a defun that is one long RUN of statements stays whole. Pins
+`WasmToplevelChunkingTest#aDecisionTreeDefunIsNotEmittedAsOneFunctionBody`,
+`WasmLispCompilerIntegrationTest#anOutlinedDecisionTreeDefunStillAnswers`.
+
+## Keeping the top level bounded
+`WasmToplevelEmit.emit` (Pass 2b) closes a chunk once its body passes
+`CHUNK_TARGET_BYTES` (48 KiB) and calls it from `_start`; each chunk is an arity-0
+`LambdaInfo` called directly, never through the dispatch. The async top level
+(`--component` with any `async-defun`/`async-lambda`/`await`) reaches the same chunker via
+`WasmAsyncEmit.compileTopLevelChunkedProgn` with `guarded=true` (the resume's `$rt == 0`
+guard) — **cutting at the awaits bounds nothing**, since an await-free run is as long as
+the program; one `boxedVars` set is computed over the whole run so where it is cut cannot
+change how a variable is stored.
+
+What stays inline in the resume is the await-bearing statements, bounded twice:
+
+- **A suspend site spills only what can still be read after it** (`AsyncResume.deadSlots`, every
+  async body, not only the top level). `compileGuardedStatement` retires the locals a finished
+  statement allocated, and `emitAwait` its own future once landed. `Ctx.allocTemp` never recycles,
+  so those are read by that code alone, and a back edge reaching it rebinds them first. Stale
+  values left in the spill array are harmless: every local is a nullable eqref, and the array is a
+  GC root. Two exceptions stay spilled: a
+  `--report-locations` position local, which the first form needing it allocates
+  (`Frame.ownerSlot`), and a name still in `ctx.locals`. The prologue restores only the parameters
+  and what some site spilled (`spilledSlots`); one spill-array local serves every site; the closure
+  environment comes back from the frame, not the spill. A liveness pass over the bytes
+  (`WasmCarriedLocals`' kind) cannot find this: it does not know `$rt`, so every guarded binder
+  reads as a conditional write and every local as live at the prologue.
+- **Past `CHUNK_TARGET_BYTES` the top level continues in resumes of its own**
+  (`WasmAsyncEmit.compileTopLevelPieces`): body plus prologue measured before each await-bearing
+  statement. The first resume then only awaits the pieces in order, ~200 bytes each, so the stack
+  stays two resumes deep (a chain of pieces would be one frame per piece against wasmtime's 512
+  KiB). A cut waits for `readsChunkLocal`. Awaiting a piece adds no hop to a `--report-locations`
+  report: a condition past the cut reports as it does on the uncut shape. **Gap:** one statement is
+  not cut, so one top-level form holding hundreds of awaits stays whole.
+
+Measured 2026-11-04, corpus on `--component`: the resume 194,486 -> 23,642 bytes (the largest body
+is `_dispatch_9` now, 128,545), the module 15,683,080 -> 15,504,544. Per added top-level await
+~211 bytes, not ~6.5 KB. A thousand added awaits: pieces of 48,155 bytes and a 41,002-byte first
+resume. Pins `WasmToplevelChunkingTest#aLongAsyncToplevelIsNotEmittedAsOneFunctionBody`,
+`WasmLispCompilerIntegrationTest#componentTopLevelKeepsItsStateAcrossSuspensionsAndAcrossItsResumes`.
+
+Why cuts are safe:
+- `WasmLetCompiler` saves and restores `ctx.locals`; block/branch targets, `tagbody`/`go`,
+  `handler-case`/`unwind-protect` and special-binding scopes are balanced within one form;
+  every form's value is dropped and `_start` returns nothing.
+- **`GlobalVarCollector` collects assignments nested at any depth**, not only head
+  position, and is deliberately blind to lexical scope. Without this, one nested `setq`
+  anywhere would bind a chunk-local a later chunk cannot see.
+- **A cut waits while a chunk-bound name is still read later.** `WasmToplevelEmit` cuts
+  only where no name bound since the chunk opened occurs again in a later form -- every
+  non-quoted symbol counts as a read, so the check can only refuse a cut, never allow a
+  bad one. The previous backstop was a latch: the first allocating form disabled every
+  later cut, rebuilding the one unbounded body the chunker exists to prevent (.todo/455;
+  measured 2026-09-10, no reachable program trips it anymore -- every binder restores,
+  and every backend-time expansion that assigns is let-wrapped -- but one future escape
+  would have OOM-killed the runner again). A pinning form now only delays cuts past its
+  last reader, then cutting resumes.
+- `Ctx.definedGlobals` is SHARED by `WasmAsyncEmit.freshCtx`; a per-`Ctx` copy would let
+  two chunks initialise one name.
+- Chunks are registered during Pass 2b: Pass 2c picks up entries appended while it runs;
+  the function section (built later) will not.
+
+## Keeping a literal's build bounded
+A literal is built where it stands (`WasmQuoteCompiler`), so a body grows with its literal and a
+form holding many with their sum. Coalton's whole library (2026-11-06): its environment updates, a
+statement each in one `let`, and the unit of the types they share made bodies of 250 KB to 1 MB, and
+wasmtime held 76 GB for each of two modules. Since then:
+- a site's literal past `OUT_OF_LINE_NODES` (32 conses, elements and slots) and every unit
+  ([quoted-data.md](quoted-data.md)) are built by an arity-0 function the site calls when its
+  global is empty (`builderFunction`, registered like a top-level chunk);
+- a body that has built `BUILD_NODES_BUDGET` (2048) nodes, counted in `Ctx.quotedBuildNodes`, builds
+  the next aggregate in a function of its own: a subtree, the rest of a list past 2048 cells, the
+  rest of a named build's steps. A function inside a named build takes the bucket array of names,
+  and the steps' function also the storage array that carries each named array's and instance's
+  slots from its empty step to its filling.
+Coalton's first five files: largest quoted build 134 KB -> 41 KB, largest top-level chunk 250 KB ->
+57 KB, module 30.4 MB either way. **Gap:** one array literal's elements stay in one body. The JVM
+twin: [jvm-method-size-limits.md](jvm-method-size-limits.md), "Bodies bounded by construction". Pin:
+ci-spec `quoted-builds-larger-than-one-function-body`.
+
+## A chunk context inherits every module-wide field by construction
+**Every top-level form compiles in a context `WasmAsyncEmit.freshCtx` builds** (so does every
+async resume body), and that context is `Ctx.builder(proto)`: a builder seeded from the
+prototype with EVERY `Ctx.Builder` field, the writer and body stream excepted. Pinned
+reflectively by `CtxBuilderSeedTest` (a new `Builder` field is checked without editing it).
+Until 2026-10-04 `freshCtx` copied fields by hand, and each forgotten one made a top-level
+form answer differently than in a defun -- fixed one at a time nine times, then the last 20 at
+once. What those 20 were (classified 2026-10-04, `.todo/c77`):
+
+- Wrong at the top level (each pinned by a test that failed first): `usesProgv` (now
+  `symbolValueDynamicFirst`; a top-level `(let ((*x* 5)) (symbol-value '*x*))` read the
+  default; ci-spec
+  `top-level-forms-answer-like-defun-bodies`), `duplicatedDefunNames` (a top-level call of a
+  REDEFINED struct accessor trusted the slot `:type` and trapped; same case),
+  `reentrant`/`dynSlots`/`reentrantTaskGlobalIndex` (a top-level special binding under
+  `--reentrant` bound the shared global, so an export entered from inside it read the load
+  path's binding; `WasmReentrantE2eTest`), `litStageBytes` (a private holder: the widest
+  top-level literal `:string` site was not reserved, so it overran into the runtime intern
+  table; `WasmStringParamBoundaryE2eTest`), `reactorComponent` (a top-level clock read named
+  a hook the reactor component lacks; `WasmExportCompilerTest`), `warnedClRedefinitions` (a
+  `cl` redefinition warned once per context; `ClRedefinitionWarningsTest`).
+- `usesEval` was overridden rather than missed: `compileResume` set it false for every
+  async-defun/async-lambda body, so on the component a global such a body assigned never
+  reached `eval` (ci-spec case above). The parameter is gone; it is inherited.
+- Inherited with no observable change today: `inlinableDefuns` (top-level fused sites;
+  no corpus program has one), `injectedRuntimeDefunNames` (the charvec gate's compile-time
+  guard now covers the top level), `injectedRuntimeBody` (a resume body is the same body),
+  `p1Futures` (a top-level `%async-run` needs the internal spelling), and
+  `hostRefTypeIndex`/`park*FuncIndex`/`serveInitGlobalIndex`/`reentryGuardGlobalIndex`
+  (read by import/export wrappers only, still -1 when `_start` is built).
+- `bidirectionalStreams` was dead (nothing read the `Ctx` field) and is deleted.
+
+Size (2026-10-04, raw bytes, base ade639e75): every size-report row, every bench program
+(Preview 1 and component), every example's Preview 1, reactor and non-async component build
+is byte-identical. The only movers are async (`asyncMode`) components that use `eval` and
+assign a global inside an async body -- the `usesEval` mirror a plain defun already pays:
++634 (clack/ningle/tiny-routes) to +818 (dog-fetcher) raw, +52 to +244 gzip, 27 artifacts.
+
+## Keeping the dispatch ladder bounded
+The SPREAD dispatcher (`WasmRuntimeBuilder.buildDispatch(..., spread = true, ...)`, what
+`_apply` calls) is a `br_table` over EVERY callable, ~110 bytes per case, ~410 at its
+widest. Past `WasmRuntimeBuilder.DISPATCH_PAGE_BUDGET_BYTES` (128 KiB, half the bound) it
+is emitted as a TREE keyed on successive 8-bit digits of the funcId, ~256 cases per leaf,
+so **the body no longer depends on the function count** — one extra call per level.
+- **Pages are appended after EVERY other function**, so no index moves and a program
+  needing none is byte-for-byte unchanged (`.kb/wasm-callable-arity.md`).
+- **A page's signature is the dispatcher's own**, so no module gains a type entry: the
+  page re-reads the funcId off the closure in local 0.
+- **The gate is the emitted body's SIZE, not the callable count**, so the arity ladders on
+  the `funcall`/`mapcar`/`sort` hot path stay one call deep.
+- **A funcId is always in `[0, defuns + lambdas)`**: one counter hands them out, the
+  defuns first (index == funcId), then exactly one per lambda declaration.
+  `dispatchTargets` rejects anything else by that bound, because neither dispatcher shape
+  can survive a value from outside it — the flat one writes ONE `br_table` label per id
+  from 0 up to the largest (a `2^24` id alone is a 16 MB body), and the paged one reads
+  the id one 8-bit digit at a time.
+- **The flat shape is not built when its label count alone settles the gate.** A label is
+  at least a byte, so `maxFuncId >= DISPATCH_PAGE_BUDGET_BYTES` means an over-budget body
+  whatever the cases hold, and `levels == 1` cannot rescue it (that means
+  `maxFuncId < 256`). Emitting it anyway would allocate the array only to measure it.
+  Output is unchanged for every program either way. Since the selector may be a biased table
+  or a comparison chain (`.kb/optimize-dead-code-elimination.md`, "Sparse arity ladders"), the
+  early-out is conservative rather than exact: a sparse ladder past the gate would have been a
+  small chain, and is paged instead, which is always correct.
+- **The radix depth is counted from the bit length** (`WasmRuntimeBuilder.dispatchLevels`,
+  pinned by `WasmDispatchPagingTest`), never by shifting the id 8 more bits per round:
+  Java takes a shift distance mod 32, so the fourth round of such a loop shifts by 0,
+  reads the id straight back and spins forever on any id of `2^24` or more. That loop
+  cost one full `./mvnw test` two workers at 100% CPU for 2223 s each (2026-09-11,
+  aarch64 16 cores, the two `AsdfLibraryE2eSupport` WASM legs of `JoseTestSuiteE2eTest`,
+  which compile concurrently); an unreachable bound must fail, not hang.
+
+Measured 2026-09-11, jose + rove + cl-ppcre through `asdf:load-system`, the widest spread
+dispatcher any shipped test builds: 2453 defuns + 526 lambdas, maxFuncId 2978, 2975
+targets, 260777 bytes unpaged — over the 128 KiB gate, 1367 bytes under the 256 KiB bound,
+and two levels deep. So the id that once reached the fourth level was ~5600x the live
+value. **Where it came from was never established** (`.todo/770`, closed 2026-09-12 on the
+runs at the end of this section). Every funcId comes from
+`nextFuncId[0]++` and every increment registers a declaration, so `2^24` means one of two
+things and only one of them is catchable: either the counter ran ahead of the
+declarations, which the range check above names on a recurrence (it runs at the top of
+every `buildDispatch`, before any emission, on per-compile state, so each concurrent leg
+throws on its own thread), or the compile really built `2^24` declarations, which nothing
+catches because the bound scales with them. If the next occurrence throws nothing, it was
+the second, and the counts are what to print.
+
+**Not the shared parsed-library caches** (measured 2026-09-11, x86-64 Linux, 64 cores,
+JUnit parallelism 16 — the same numbers the failing machine ran). The suspect was one of
+the JVM-lived form caches growing under a pass that appended to the list it was handed
+rather than to a copy, which would make every later compile in that JVM bigger. Four
+measurements say no:
+
+- The front end is a pure function of its input across programs in one JVM. Seven
+  exercises — jose+rove+cl-ppcre, cl-ppcre, the built-in shims, trivia, uax-15, iterate,
+  a uiop/prelude program — x both WASM targets, expanded twice in sequence and then 16-way
+  concurrent for four rounds, give the same top-level form count, deep node count and
+  defun/lambda counts every time.
+- So does the BACKEND. Six of those x both targets, compiled to WASM 16-way concurrent in
+  one JVM for three rounds, are byte-identical to a sequential baseline (jose-tests:
+  5373879 bytes Preview 1, 5403188 component). The 66-compile check above repeated ONE
+  program, which cannot see a cache that a DIFFERENT program's splice chain grows.
+- Interpreting the same sources in the same JVM, interleaved with those compiles, does not
+  move the bytes either.
+- Nor does the JVM itself. `ImmutableCollections.SALT` salts the iteration order of every
+  `Set.copyOf`/`Map.copyOf` per JVM RUN — the reason `UiopLibrary.build` returns
+  `Collections.unmodifiableMap` over an insertion-ordered map instead — and both failing
+  legs shared one fork, so an unlucky salt would have hit both and no isolated run. It
+  does not reach the output: the jose program compiled by the CLI in 8 separate JVMs is
+  byte-identical eight times.
+- A read audit of every static form cache in `src/main/java` found no path that mutates
+  one. ~30 accessors nevertheless handed back the live `ArrayList` the reader produced,
+  protected only by caller discipline; they now hand back `List.copyOf` of it, so the
+  append is impossible rather than merely absent. `CompileIndependenceTest` pins the
+  observable half — the three conditions a repeat of one program cannot reach: a warm
+  JVM, different programs compiling at once, and the interpreter beside them.
+
+The frame is not in doubt, and neither is the value. Line 1973 is the level count in every
+revision from the last change to the file before the run (`ff55fa031`) through the run's
+own HEAD; every other loop in `buildDispatch` and everything it calls is bounded by
+`targets`, `leaves`, `levels`, `numCases`, `maxDigit` (<= 255) or `dispatchArgs`; the two
+that scale with the funcId (`emitDispatchCases`'s `br_table` label loop) are finite and run
+BEFORE the count, and at `2^24` they finish in about a second or die of memory rather than
+holding 100% CPU for 37 minutes. Nothing in the backend explains the value, either: the
+same two legs compiled 66 times 16-way concurrent in one JVM are byte-identical to a serial
+compile and report the same funcId every time, `codegen.wasm` holds no mutable static state
+at all, and the compile input is host-independent (`BuiltinSystems.announcedFeatures`
+withholds the trivial-features host half from both WASM targets). What the failing run had
+that an isolated one does not is ~239 other test classes compiling in the same JVM first —
+and the four measurements above are what is left of that lead: warming every cache with
+other programs, compiling them alongside, and interpreting them beside the compiles all
+leave the bytes identical. What has NOT been reproduced is the machine: aarch64, 16 cores,
+32 worker threads over them (here it is 32 over 64).
+
+**The machine ran it, 2026-09-12** -- macOS aarch64, 16 cores, Docker present,
+`forkCount=2`, JUnit parallelism 16, the failing box and the failing settings. FIVE full
+suites, no recurrence: two at `fae0bf14a` (242 classes, 10473 tests, 10-13 min each) and
+three in a worktree at `5946ae22f`, the tree that hung, carrying `1fc55d818`'s range check
+so that a corrupt id would name itself instead of spinning. Nothing threw and nothing
+stalled; a watchdog sampling `jstack` after four minutes without a new surefire report was
+armed on every run and never fired.
+
+Read that against two things the runs also measured:
+
+- **The configuration that hung is gone from `develop`.** `3fdf3fa78` replaced
+  `AsdfLibraryE2eSupport`'s hand-written six-pass copy with `CompileFrontendAccess`, so the
+  WASM legs now compile what the CLI front end builds, with `runtimeFeatures` set and the
+  component leg read under `#+rontolisp-component`. Repeating the suite on `develop` cannot
+  reach the old input at all -- the three worktree runs are the ones that did.
+- **A ladder completing says nothing about the id it carried.** In that revision the level
+  count ran only after an over-budget flat body, and every ladder body is far under the
+  gate, so a ladder returned BEFORE the count whatever its maxFuncId was. Probed on the
+  jose program in the worktree, one line per dispatcher: eleven arity ladders, 11506-64035
+  bytes, every one under the 131072-byte gate and an early return; only the spread
+  dispatcher reaches the count, at 260777 bytes (Preview 1) / 260863 (component). The
+  **arity-1 ladder carries the same maxFuncId as the spread dispatcher** -- 2978 and 2980
+  -- so "the ladders all completed, therefore the large id belonged to a callable only the
+  spread dispatcher carries" does not follow: a corrupt id anywhere would have been
+  invisible in the ladders and fatal only in the spread body. The current shape counts
+  levels, and so runs the range check, for EVERY dispatcher before it builds anything,
+  which is what makes those five runs a suite-wide tripwire rather than a jose-only one.
+
+So the value is not explained, and the two branches from here are unchanged -- except that
+nothing on the failing machine reproduces either of them, and a recurrence now throws with
+the counts instead of spinning.
+
+**The range check is a suite-wide tripwire, and that is why the item could be closed
+unexplained.** `buildDispatch` now counts levels from the funcId's bit length BEFORE it
+builds any body, so `dispatchTargets`'s `[0, defuns + lambdas)` check runs for EVERY
+dispatcher of every compile -- each arity ladder as well as the spread one, on per-compile
+state, so concurrent legs each throw on their own thread -- rather than only for a
+dispatcher whose flat body happened to clear the 128 KiB gate. A corrupt id can no longer
+hide in a ladder's early return the way the 2026-09-11 shape let it, and it can no longer
+spin whatever its size. `.todo/770` was closed on that record (2026-09-12, cancelled): what
+is left to learn needs an occurrence, and the check is what will name it -- funcId, bound,
+defun count, lambda count, arity and whether it is the spread dispatcher. If a recurrence
+instead throws NOTHING and still stalls, the population is what grew, and those same four
+numbers are what to take by hand.
+
+Ask of any new outlining path what the async top level failed: *is the piece it cuts
+bounded in BYTES, or only by where some syntactic marker falls?*
+
+## Keeping `_funcref` bounded
+`_funcref` (funcId -> canonical function-value box, in a module that uses `eval` or a computed
+function designator) was an `if` ladder, ~32 bytes per covered funcId, each case reading its own
+module global. At the corpus's 8,099 ids (2026-11-04, unnamed `_func_341` then): 262,860 bytes on
+the component, 261,672 on Preview 1, so `requireRunnableModule` refused both `--component` legs and
+~2,600 cases never ran. The JVM's `_funcrefs` was already a table.
+
+It is now one array indexed by funcId, allocated by its first call and held in one quoted-data
+global (`QuoteGlobals.funcBoxTableIndex`): 82 bytes at any function count, O(1) at run time, and the
+per-box globals are gone. A static `#'f` site in such a module calls it, so a static site and a
+computed one still answer one object; a module without `_funcref` keeps one global per box, with no
+body that grows. Pin: `WasmToplevelChunkingTest#noBodyGrowsWithTheProgramsCallableCount`.
+
+After it, same corpus: largest body 194,297 (component), 192,401 (component `--simd`), 123,212
+(Preview 1). All 1,331 cases match on both components. A cold `wasmtime run` of each peaks at
+7.4 GB RSS (wasmtime 49.0.0, 64 cores), well above the 2.7 GB for 261 KB in "The invariant"
+(wasmtime 47, 4 cores); these runs do not separate core count from wasmtime version or module size.
+51.0.0 changes neither (2026-11-22, the day's corpus, a cold `wasmtime compile -C cache=n` on
+64 cores): Preview 1 6.04 / 6.01 GB peak RSS on 49.0.0 / 51.0.0 (7.3 / 6.7 s), the component
+6.06 / 5.88 GB (6.7 / 7.0 s); the `.cwasm` is 2.3% smaller on 51.
+
+## Measuring
+`-Drontolisp.wasm.debug-func-sizes` (any value), twin of
+`rontolisp.jvm.debug-method-sizes`: one stderr line per SHIPPED function, largest first,
+`[func-size] <bytes>\t<final index>\t<name>`, plus a total. Post-shake code-entry bytes;
+lambdas and chunks as `_lambda_<id>`/`_toplevel_chunk_<id>`; a helper with no `FUNC_*` constant
+or label prints as `_func_<pre-shake index>`. Component path: the CORE
+module. `--no-gc` not covered.

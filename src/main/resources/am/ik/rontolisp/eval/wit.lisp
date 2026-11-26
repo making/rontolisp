@@ -1,0 +1,123 @@
+;;;; wit.lisp -- the runtime half of rontolisp:wit-import.
+;;;;
+;;;; A (rontolisp:wit-import "kv.wit" :interface "..." :package kv) directive
+;;;; lowers, on the interpreter and the JVM backend, into one ordinary defun
+;;;; per WIT function whose body is
+;;;;
+;;;;   (rontolisp::%wit-call "<interface>" "<member>" arg...)
+;;;;
+;;;; This file is what that call lands in: a registry of providers keyed by WIT
+;;;; interface id, and the condition a WIT result's error arm signals. It is
+;;;; written in rontolisp itself (the usocket.lisp / linalg.lisp pattern) so a
+;;;; single implementation serves both backends -- the WASM backends never see
+;;;; it, because there a wit-import lowers to rontolisp:wasm-import and the host
+;;;; supplies the functions.
+;;;;
+;;;; A provider is an ordinary Lisp callable taking the bound function's name
+;;;; (a string: the Lisp member name, e.g. "open" or "bucket-get") followed by
+;;;; that function's arguments. The error arm of a WIT result<T, E> is expressed
+;;;; by signaling rontolisp:wit-error with the mapped E payload -- the settled
+;;;; type mapping (.kb/wit.md): the ok arm is the value, the error arm is a
+;;;; condition, on every backend.
+;;;;
+;;;; This file deliberately ships NO provider for any concrete interface. The
+;;;; core knows about the provider MECHANISM; it does not know what
+;;;; wasi:keyvalue is. An implementation of a WIT interface is ordinary user
+;;;; code -- see examples/wit/keyvalue for an in-memory one, which is a plain
+;;;; Lisp file a program loads.
+
+(defvar rontolisp::*wit-providers* (make-hash-table :test #'equal))
+
+(define-condition rontolisp:wit-error (error)
+  ((payload :initarg :payload :initform nil :reader rontolisp:wit-error-payload)
+   (message :initarg :message
+            :initform "WIT call failed"
+            :reader rontolisp::%wit-error-message))
+  (:report (lambda (c s) (write-string (rontolisp::%wit-error-message c) s))))
+
+(defun rontolisp:wit-provide (interface provider)
+  ;; Bind the implementation of a wit-imported interface. The provider replaces
+  ;; any previous one, so a program can swap an in-memory store for a real one
+  ;; without touching the code that calls the interface.
+  (setf (gethash interface rontolisp::*wit-providers*) provider)
+  interface)
+
+(defun rontolisp::%wit-call (interface member &rest args)
+  (let ((provider (gethash interface rontolisp::*wit-providers*)))
+    (if (null provider)
+        (error 'rontolisp:wit-error
+               :payload interface
+               :message (concatenate 'string
+                         "No provider is bound for the WIT interface " interface
+                         " -- bind one with rontolisp:wit-provide"))
+        (apply provider member args))))
+
+;;; A list<T> argument (T other than u8) is a list or a vector: a binding passes
+;;; it through here, so the provider -- or the component's canonical array -- sees
+;;; one shape, a proper list, and anything else (a dotted list, a string, an atom)
+;;; signals type-error the program can handle, the same on every backend. The
+;;; descriptor is the quoted map of where in the parameter's WIT type a list<T>
+;;; sits (WitImportDirective.listDescriptor): (:list D), (:option D),
+;;; (:tuple D ...), (:record (:FIELD . D) ...), (:variant (:CASE . D) ...), nil
+;;; where none does.
+(defun rontolisp::%wit-coerce (value descriptor)
+  (let ((kind (car descriptor)))
+    (cond ((null descriptor) value)
+          ((eq kind :list)
+           (let ((items (rontolisp::%wit-proper-list value))
+                 (element (cadr descriptor)))
+             (if element
+                 (mapcar (lambda (item) (rontolisp::%wit-coerce item element))
+                         items)
+                 items)))
+          ((eq kind :option)
+           (if value (rontolisp::%wit-coerce value (cadr descriptor)) nil))
+          ((eq kind :tuple)
+           (let ((rest value) (out nil))
+             (dolist (element (cdr descriptor))
+               (push (rontolisp::%wit-coerce (car rest) element) out)
+               (setq rest (cdr rest)))
+             (nreverse out)))
+          ((eq kind :record)
+           (let ((rest value) (out nil))
+             (loop while (consp rest)
+                   do (push (car rest) out)
+                     (push (rontolisp::%wit-coerce (cadr rest)
+                            (cdr (assoc (car rest) (cdr descriptor)))) out)
+                     (setq rest (cddr rest)))
+             (nreverse out)))
+          ((consp value)
+           (cons (car value)
+                 (rontolisp::%wit-coerce (cdr value)
+                  (cdr (assoc (car value) (cdr descriptor))))))
+          (t value))))
+
+(defun rontolisp::%wit-proper-list (value)
+  (if (and (vectorp value) (not (stringp value)))
+      (coerce value 'list)
+      (let ((tail value))
+        (loop while (consp tail) do (setq tail (cdr tail)))
+        (if (null tail)
+            value
+            (error 'type-error
+                   :datum value
+                   :expected-type '(or list vector))))))
+
+(defun rontolisp::%wit-result (envelope)
+  ;; The WASM boundaries cannot signal across the host call, so a
+  ;; result-returning wit-imported function crosses as the envelope
+  ;; (:ok . value) / (:error . payload) and its public wrapper defun unwraps it
+  ;; here: the ok arm IS the value, the error arm signals rontolisp:wit-error
+  ;; exactly as an interpreter/JVM provider would have (the settled result
+  ;; mapping, a condition on every backend). The lift spells the envelope head
+  ;; UPCASED (:OK/:ERROR), matching the head this source reads under the
+  ;; reader's upcase premise.
+  (if (and (consp envelope) (eq (car envelope) :ok))
+      (cdr envelope)
+      (if (and (consp envelope) (eq (car envelope) :error))
+          (error 'rontolisp:wit-error
+                 :payload (cdr envelope)
+                 :message (concatenate 'string
+                                       "the WIT call answered its error arm: "
+                                       (%prin1-piece (cdr envelope))))
+          envelope)))

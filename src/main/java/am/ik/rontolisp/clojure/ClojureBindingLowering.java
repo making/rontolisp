@@ -1,0 +1,1778 @@
+package am.ik.rontolisp.clojure;
+
+import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.Deque;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import am.ik.rontolisp.DeclaredArityReport;
+import am.ik.rontolisp.LispChar;
+import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispHashTable;
+import am.ik.rontolisp.LispArray;
+import am.ik.rontolisp.LispDouble;
+import am.ik.rontolisp.LispInteger;
+import am.ik.rontolisp.LispNil;
+import am.ik.rontolisp.LispTrue;
+import am.ik.rontolisp.LispString;
+import am.ik.rontolisp.LispSymbol;
+import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.SourceLocation;
+import am.ik.rontolisp.reader.LispReadException;
+import org.jspecify.annotations.Nullable;
+
+/**
+ * Binding forms of the Clojure lowering: def/defn/fn/let/loop/letfn/recur and
+ * destructuring.
+ *
+ * <p>
+ * One slice of {@link ClojureLowering}: every method takes the hub as its first argument
+ * and re-enters it for subforms.
+ */
+final class ClojureBindingLowering {
+
+	private ClojureBindingLowering() {
+	}
+
+	/**
+	 * A {@code def} lowered for a namespace init: the setq statement, plus -- for a
+	 * {@code ^:dynamic} var, into {@code hoisted} -- the declaim and the binding-depth
+	 * counter, which stay top-level at the head where {@code SpecialVarCollector} and
+	 * {@code GlobalVarCollector} read them (a {@code defparameter} nested in the init
+	 * would proclaim nothing and hide the counter's store). A var whose metadata
+	 * evaluates something (a {@code :test} fn) adds the store of that metadata behind the
+	 * definition.
+	 * @param ctx the lowering
+	 * @param form the def datum (its position for the var's metadata)
+	 * @param items the def datum's items
+	 * @param hoisted where a dynamic var's top-level forms go, or null for the ordinary
+	 * top-level shape
+	 * @return the forms (the init statement, or the top-level shapes)
+	 */
+	static List<LispVal> defForms(ClojureLowering ctx, LispVal form, List<LispVal> items,
+			@Nullable List<LispVal> hoisted) {
+		Def def = defined(ctx, form, items, hoisted);
+		if (def.repoints().isEmpty()) {
+			return def.forms();
+		}
+		List<LispVal> forms = new ArrayList<>(def.forms());
+		forms.addAll(def.repoints());
+		return forms;
+	}
+
+	/**
+	 * A {@code def} lowered: its forms, the store answering the definition's value last,
+	 * and behind them the stores re-pointing the cells a defn's earlier calls name
+	 * ({@link ClojureLowering#repointsRedefinitions}).
+	 *
+	 * @param forms the definition's forms
+	 * @param repoints the stores re-pointing the earlier calls, run once the root is
+	 * stored
+	 */
+	private record Def(List<LispVal> forms, List<LispVal> repoints) {
+	}
+
+	private static Def defined(ClojureLowering ctx, LispVal form, List<LispVal> items,
+			@Nullable List<LispVal> hoisted) {
+		ClojureLowerUtil.isTrue(items.size() >= 2, "def takes a name and an optional value");
+		LispVal nameDatum = items.get(1);
+		String name = ctx.defName(nameDatum, "def");
+		boolean dynamic = ClojureLowerUtil.nameIsDynamic(nameDatum);
+		int at = 2;
+		LispString doc = null;
+		if (items.size() > at + 1 && items.get(at) instanceof LispString string) {
+			doc = string; // the docstring (only with a value behind it: a lone string is
+							// the value)
+			at++;
+		}
+		LispVal attrMap = null;
+		if (items.size() > at + 1 && isAttrMap(items.get(at))) {
+			attrMap = items.get(at); // the attr map (only with a value behind it: a lone
+										// map is the value)
+			at++;
+		}
+		ClojureLowerUtil.isTrue(items.size() == at || items.size() == at + 1, "def takes a name and an optional value");
+		// The value lowers against the OLD binding, so (def p (memoize p)) after a
+		// (defn p ...) captures the function cell (a FUNCTION) instead of reading
+		// the still-unbound value cell; only then does the name become a VARIABLE.
+		// A name with no binding yet is interned first, like the oracle's def, so a
+		// value naming its own var (a fn calling itself) lowers wherever the def
+		// stands: a macro's expansion or a body, which the pre-scan never reads.
+		ctx.preInternDef(name, ClojureLowerUtil.nameIsPrivate(nameDatum));
+		boolean valueless = items.size() == at;
+		LispVal value;
+		if (valueless) {
+			value = ClojureLowering.NIL_CONST;
+		}
+		else {
+			// a fn that IS the value takes the var's name in its arity refusal
+			LispVal outerForm = ctx.defValueForm;
+			String outerKey = ctx.defValueKey;
+			ctx.defValueForm = items.get(at);
+			ctx.defValueKey = ClojureLowering.varKey(ctx.currentNs, name);
+			try {
+				value = ctx.lower(items.get(at));
+			}
+			finally {
+				ctx.defValueForm = outerForm;
+				ctx.defValueKey = outerKey;
+			}
+		}
+		String key = ctx.intern(name, ClojureLowerUtil.nameIsPrivate(nameDatum));
+		ctx.globals.put(key, ClojureLowering.Kind.VARIABLE);
+		ctx.macros.remove(key); // a definition wins over the macro it shadows
+		if (!valueless) {
+			ctx.valuedAbove.add(key);
+		}
+		if (dynamic) {
+			ctx.dynamicVars.add(key);
+		}
+		boolean redef = ctx.redefinable(key, nameDatum);
+		ClojureDispatchLowering.recordClassDispatchFn(ctx, key, dynamic || redef,
+				items.size() == at + 1 ? items.get(at) : null);
+		if (ClojureLowerUtil.yieldsFun(value) && !redef) {
+			ctx.globalDirectFuns.add(key);
+		}
+		else {
+			ctx.globalDirectFuns.remove(key);
+		}
+		List<LispVal> metaStore = ClojureVarLowering.record(ctx, key, form, nameDatum, null, doc, attrMap, false,
+				false);
+		// ^:macro makes the var's root a macro function, like the oracle's metadata
+		List<LispVal> macroForms = ClojureLowerUtil.nameIsMacro(nameDatum) && !dynamic ? ClojureMacroLowering
+			.metadataMacro(ctx, key, ClojureLowering.varSym(key), ClojureLowering.Kind.VARIABLE) : List.of();
+		if (valueless) {
+			// the oracle's (def x) interns x and leaves a bound root alone; an
+			// unbound one holds the unbound root
+			List<LispVal> forms = new ArrayList<>(valuelessDefForms(ctx, key, dynamic, metaStore, hoisted));
+			forms.addAll(macroForms);
+			return new Def(forms, List.of());
+		}
+		List<LispVal> forms;
+		if (dynamic) {
+			// a dynamic var is a special: defparameter always sets it (like def)
+			// and proclaims it, so binding rebinds it with dynamic extent; the
+			// binding-depth counter beside it lets set! test at run time whether
+			// the var is thread-bound. Two top-level forms, so both keep their
+			// defparameter head for SpecialVarCollector. In a namespace init the
+			// setq runs at load time instead, and the declaim plus the counter
+			// ride top-level, where both collectors read them. The init is
+			// validated against the var's validator and the notify statement
+			// behind the store calls its watches, like the oracle's bindRoot; a
+			// program naming no watch verb folds both back (ClojureArms.Family.WATCH).
+			if (hoisted != null) {
+				hoisted.add(ClojureLowering.declaimSpecial(ClojureLowering.varSym(key),
+						ClojureLowering.boundDepthSym(key)));
+				hoisted.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("defparameter"),
+						ClojureLowering.boundDepthSym(key), new LispInteger(0)));
+				forms = new ArrayList<>(withMetaStore(
+						ClojureStateLowering.varStore(ctx, ClojureLowering.varSym(key), value, key), metaStore));
+			}
+			else {
+				forms = new ArrayList<>(List.of(
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("defparameter"), ClojureLowering.varSym(key),
+								ClojureStateLowering.validatedInit(value, key)),
+						ClojureStateLowering.varNotifyStored(key, ClojureLowering.varSym(key)),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("defparameter"), ClojureLowering.boundDepthSym(key),
+								new LispInteger(0))));
+				forms.addAll(0, metaStore);
+			}
+		}
+		else {
+			forms = new ArrayList<>(withMetaStore(
+					ClojureStateLowering.varStore(ctx, ClojureLowering.varSym(key), value, key), metaStore));
+		}
+		if (isFnLiteral(items.get(at))) {
+			// the class the oracle compiles a def'd fn literal to, which .getClass names
+			forms.add(ClojureValueMethodLowering.noteFnClass(ClojureLowering.varSym(key), key));
+		}
+		forms.addAll(macroForms);
+		List<LispVal> repoints = List.of();
+		if (ctx.repointsRedefinitions() && ctx.defnCounts.containsKey(key)) {
+			// the calls lowered while a defn held the var name its function cells: they
+			// reach the new root through the dispatcher, as the oracle's calls through
+			// the var do ((def f (memoize f)) memoizes a recursive f's own calls)
+			LispSymbol args = new LispSymbol("__clojure_args");
+			repoints = ctx.repointed(key,
+					ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
+							ClojureLowerUtil.list(ClojureLowering.AMPERSAND_REST, args),
+							ctx.callableApply(ClojureLowering.varSym(key), args)));
+		}
+		return new Def(forms, repoints);
+	}
+
+	/**
+	 * Whether a {@code def}'s value datum is a fn literal ({@code fn}, {@code fn*}, a
+	 * {@code #(...)}), whose function the oracle compiles to the var's own class.
+	 */
+	private static boolean isFnLiteral(LispVal valueDatum) {
+		List<LispVal> parts = ClojureLowerUtil.items(valueDatum);
+		return parts != null && !parts.isEmpty() && (ClojureLowerUtil.isSymbolNamed(parts.get(0), "fn")
+				|| ClojureLowerUtil.isSymbolNamed(parts.get(0), "fn*"));
+	}
+
+	/**
+	 * A value-less {@code def}: the unbound root where the var has none yet, and for a
+	 * {@code ^:dynamic} one the declaim and the binding-depth counter a valued one adds,
+	 * without a store of the root.
+	 */
+	private static List<LispVal> valuelessDefForms(ClojureLowering ctx, String key, boolean dynamic,
+			List<LispVal> metaStore, @Nullable List<LispVal> hoisted) {
+		LispVal root = ClojureVarLowering.unboundRoot(ctx, key);
+		List<LispVal> forms = new ArrayList<>(metaStore);
+		if (dynamic) {
+			List<LispVal> special = List.of(
+					ClojureLowering.declaimSpecial(ClojureLowering.varSym(key), ClojureLowering.boundDepthSym(key)),
+					ClojureLowerUtil.list(ClojureLowerUtil.sym("defparameter"), ClojureLowering.boundDepthSym(key),
+							new LispInteger(0)));
+			if (hoisted != null) {
+				hoisted.addAll(special);
+			}
+			else {
+				forms.addAll(special);
+			}
+		}
+		forms.add(root != null ? root : ClojureLowering.NIL_CONST);
+		return forms;
+	}
+
+	/**
+	 * The definition behind the store of its var's evaluated metadata, if any: the
+	 * definition stays last, so its value is still what the form answers (a session's
+	 * echo).
+	 */
+	private static List<LispVal> withMetaStore(LispVal definition, List<LispVal> metaStore) {
+		if (metaStore.isEmpty()) {
+			return List.of(definition);
+		}
+		List<LispVal> forms = new ArrayList<>(metaStore);
+		forms.add(definition);
+		return forms;
+	}
+
+	static LispVal def(ClojureLowering ctx, LispVal form, List<LispVal> items) {
+		Def def = defined(ctx, form, items, null);
+		List<LispVal> forms = def.forms();
+		if (!def.repoints().isEmpty()) {
+			// the definition still answers its value: the stores run behind it
+			List<LispVal> answered = new ArrayList<>();
+			answered.add(ClojureLowerUtil.sym("prog1"));
+			answered
+				.add(forms.size() == 1 ? forms.get(0) : ClojureLowerUtil.cons(ClojureLowerUtil.sym("progn"), forms));
+			answered.addAll(def.repoints());
+			forms = List.of(ClojureLowerUtil.list(answered));
+		}
+		if (ctx.nestedDefAnswersVar) {
+			forms = new ArrayList<>(forms);
+			forms.add(ClojureVarLowering.definedVar(ctx, ctx.defName(items.get(1), "def")));
+		}
+		if (forms.size() == 1) {
+			return forms.get(0);
+		}
+		// in a body: one progn, like a dynamic defn's defun plus defparameters
+		return ClojureLowerUtil.cons(ClojureLowerUtil.sym("progn"), forms);
+	}
+
+	/** Whether the datum is an attr map (its marker head), not a value. */
+	static boolean isAttrMap(LispVal datum) {
+		List<LispVal> parts = ClojureLowerUtil.items(datum);
+		return parts != null && !parts.isEmpty() && ClojureLowerUtil.isSymbolNamed(parts.get(0), "%hash-map");
+	}
+
+	/**
+	 * A used variadic clause's worker: the entry or {@code defun} taking the rest as an
+	 * ordinary parameter. A lone {@code %} no mangled identifier spells, so workers stay
+	 * apart from user definitions, like the multi-{@code defn} helpers.
+	 */
+	static String workerName(String callName) {
+		return callName + "%*";
+	}
+
+	/** The parameter shape of one parameter vector datum, without lowering anything. */
+	static ClojureLowering.ParamShape paramShape(LispVal paramVector) {
+		List<LispVal> names;
+		try {
+			names = ClojureLowerUtil.bindingItems(ClojureLowerUtil.stripMeta(paramVector), "a parameter vector");
+		}
+		catch (LispReadException ex) {
+			// malformed: the real pass reports the shape, so say nothing here
+			return new ClojureLowering.ParamShape(false, -1);
+		}
+		for (int i = 0; i < names.size(); i++) {
+			if (ClojureLowerUtil.isSymbolNamed(ClojureLowerUtil.stripMeta(names.get(i)), "&")) {
+				return new ClojureLowering.ParamShape(true, i);
+			}
+		}
+		return new ClojureLowering.ParamShape(false, names.size());
+	}
+
+	static boolean isVariadicParams(LispVal paramVector) {
+		return paramShape(paramVector).variadic();
+	}
+
+	/**
+	 * One labels entry for a used variadic clause's worker: the rest as an ordinary
+	 * parameter around the clause's prologue and body, so a {@code recur} assigns
+	 * exactly.
+	 */
+	static LispVal workerEntry(String worker, ClojureLowering.Clause clause) {
+		List<LispVal> params = new ArrayList<>(clause.params());
+		params.remove(ClojureLowering.AMPERSAND_REST);
+		return new LispCons(new LispSymbol(worker),
+				new LispCons(ClojureLowerUtil.list(params), ClojureLowerUtil.cons(clause.wrapped(), List.of())));
+	}
+
+	/** A direct call forwarding each parameter (the rest as one value) to the worker. */
+	static LispVal workerCall(String worker, ClojureLowering.Clause clause) {
+		List<LispVal> call = new ArrayList<>();
+		call.add(new LispSymbol(worker));
+		for (LispVal param : clause.params()) {
+			if (!ClojureLowering.AMPERSAND_REST.equals(param)) {
+				call.add(param);
+			}
+		}
+		return ClojureLowerUtil.list(call);
+	}
+
+	/**
+	 * One already-lowered lambda behind a {@code labels} head entry plus any worker
+	 * entries, answering the head: the shape a named {@code fn} always takes, an
+	 * anonymous one only when a {@code recur} reached it.
+	 */
+	static LispVal labelsWithHead(String headName, List<LispVal> workers, LispVal lambda) {
+		LispVal paramsAndBody = ((LispCons) lambda).cdr();
+		List<LispVal> entries = new ArrayList<>(workers);
+		entries.add(new LispCons(new LispSymbol(headName), paramsAndBody));
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("labels"), ClojureLowerUtil.list(entries),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), new LispSymbol(headName)));
+	}
+
+	/**
+	 * A used variadic stored-method lambda splits like every other {@code fn} shape: the
+	 * worker takes the rest as an ordinary parameter (the {@code recur} call assigns
+	 * exactly) while the {@code &rest} head answers normal calls (wrapping, like the
+	 * oracle); an unused variadic keeps its single shape. The body is the clause's
+	 * wrapped body, or the fields-bound one for an inline record body.
+	 */
+	static LispVal splitMethodLambda(ClojureLowering ctx, String fresh, String worker, ClojureLowering.Clause clause,
+			LispVal bodyForm) {
+		List<LispVal> workerParams = new ArrayList<>(clause.params());
+		workerParams.remove(ClojureLowering.AMPERSAND_REST);
+		LispVal entry = new LispCons(new LispSymbol(worker),
+				new LispCons(ClojureLowerUtil.list(workerParams), ClojureLowerUtil.cons(bodyForm, List.of())));
+		LispVal head = ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(clause.params()),
+				workerCall(worker, clause));
+		return labelsWithHead(fresh, List.of(entry), head);
+	}
+
+	/**
+	 * An inline method arity's body behind its recur loop when a {@code recur} reached
+	 * it: one {@code labels} entry over the parameters the {@code recur} passes -- every
+	 * one but the target, the rest an ordinary parameter so the {@code recur} assigns it
+	 * exactly -- called once with them, so the target (and the fields bound from it) stay
+	 * the method's own. The clause's wrapped body otherwise.
+	 */
+	static LispVal inlineRecurBody(String fresh, ClojureLowering.Clause clause, ClojureLowering.RecurTarget target) {
+		if (!target.used()) {
+			return clause.wrapped();
+		}
+		List<LispVal> params = new ArrayList<>(clause.params().subList(target.leading(), clause.params().size()));
+		params.remove(ClojureLowering.AMPERSAND_REST);
+		LispVal entry = new LispCons(new LispSymbol(fresh),
+				new LispCons(ClojureLowerUtil.list(params), ClojureLowerUtil.cons(clause.wrapped(), List.of())));
+		List<LispVal> call = new ArrayList<>();
+		call.add(new LispSymbol(fresh));
+		call.addAll(params);
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("labels"), ClojureLowerUtil.list(List.of(entry)),
+				ClojureLowerUtil.list(call));
+	}
+
+	static List<LispVal> defuns(ClojureLowering ctx, LispVal form, List<LispVal> items) {
+		int at = 2;
+		LispString doc = null;
+		if (items.size() > at && items.get(at) instanceof LispString string) {
+			doc = string; // the docstring
+			at++;
+		}
+		LispVal attrMap = null;
+		if (items.size() > at + 1 && isAttrMap(items.get(at))) {
+			attrMap = items.get(at); // the attr map (only with a value behind it: a lone
+										// map is the value)
+			at++;
+		}
+		ClojureLowerUtil.isTrue(items.size() > at + 1 || items.size() == at + 1 && items.get(at) instanceof LispCons,
+				"defn needs a parameter vector and a body");
+		String name = ClojureLowerUtil.plainName(items.get(1), "defn");
+		boolean dynamic = ClojureLowerUtil.nameIsDynamic(items.get(1));
+		String key = ctx.intern(name,
+				ClojureLowerUtil.isSymbolNamed(items.get(0), "defn-") || ClojureLowerUtil.nameIsPrivate(items.get(1)));
+		// a redefinable var (with-redefs, ^:redef) keeps its function in the value
+		// cell like a dynamic one, but calls it through the dispatcher: a with-redefs
+		// may store any IFn there, a map or a keyword too
+		boolean redef = ctx.redefinable(key, items.get(1));
+		ctx.globals.put(key, dynamic || redef ? ClojureLowering.Kind.VARIABLE : ClojureLowering.Kind.FUNCTION);
+		ctx.macros.remove(key); // a definition wins over the macro it shadows
+		if (dynamic) {
+			// a dynamic var is rebindable: the value cell holds the function
+			// (proclaimed special, so binding rebinds it with dynamic extent)
+			// while the function cell keeps the definition
+			ctx.dynamicVars.add(key);
+		}
+		if (redef) {
+			ctx.globalDirectFuns.remove(key);
+		}
+		else if (dynamic) {
+			ctx.globalDirectFuns.add(key);
+		}
+		// a redefined defn gets a fresh internal name per definition: the call
+		// sites below it call the newest, and a value position captures the
+		// definition current at that point. The first definition keeps the
+		// bare var symbol, so a single defn lowers exactly as before. Where the
+		// lowering re-points redefinitions, the calls lowered before it reach the
+		// new one too.
+		ClojureLowering.Definition defined = ctx.define(key);
+		int definition = defined.number();
+		LispSymbol fn = defined.fn();
+		String callName = fn.name();
+		List<LispVal> fnParts = new ArrayList<>();
+		fnParts.add(new LispSymbol("fn*")); // a special form: no program macro captures
+											// it
+		fnParts.addAll(items.subList(at, items.size()));
+		ClojureDispatchLowering.recordClassDispatchFn(ctx, key, dynamic || redef, ClojureLowerUtil.list(fnParts));
+		// the arities an export of the var may take ({:wasm/export ...},
+		// rontolisp.wasm/export, a world's label), and the export the definition's
+		// metadata declares, its spec held quoted so the metadata stays a constant
+		List<ClojureLowering.ParamShape> shapes = new ArrayList<>();
+		for (LispVal arglist : arglistsOf(items.subList(at, items.size()))) {
+			shapes.add(paramShape(arglist));
+		}
+		ctx.wasm.defnShapes.put(key, List.copyOf(shapes));
+		ClojureWasmLowering.DefnExport exported = ClojureWasmLowering.defnExport(ctx, name, items.get(1), attrMap,
+				form);
+		// recorded ahead of the body, so a #' of the name inside it sees this
+		// definition's metadata
+		List<LispVal> metaStore = ClojureVarLowering.record(ctx, key, form, exported.nameDatum(),
+				arglistsOf(items.subList(at, items.size())), doc, exported.attrMap(),
+				ClojureLowerUtil.isSymbolNamed(items.get(0), "defn-"), false);
+		List<LispVal> forms;
+		// the oracle's refusal names the var (my.app/f), and a fn inside it after it
+		ctx.fnNames.push(key);
+		try {
+			if (items.get(at) instanceof LispCons && !isVectorDatum(items.get(at))) {
+				forms = multiDefun(ctx, key, items.subList(at, items.size()), callName);
+			}
+			else {
+				boolean variadic = isVariadicParams(items.get(at));
+				String worker = workerName(callName);
+				ClojureLowering.RecurTarget target = new ClojureLowering.RecurTarget(variadic ? worker : callName,
+						true);
+				ClojureLowering.Clause clause = clause(ctx, items.get(at), items.subList(at + 1, items.size()), target);
+				if (target.used() && clause.variadic()) {
+					// a used variadic target splits like the multi-defn helpers: a
+					// worker defun taking the rest as an ordinary parameter (the recur
+					// call assigns exactly) plus the &rest head for normal calls
+					// (wrapping, like the oracle); an unused variadic keeps its shape
+					List<LispVal> workerParams = new ArrayList<>(clause.params());
+					workerParams.remove(ClojureLowering.AMPERSAND_REST);
+					forms = new ArrayList<>(List.of(
+							ClojureLowerUtil.list(ClojureLowerUtil.sym("defun"), new LispSymbol(worker),
+									ClojureLowerUtil.list(workerParams), clause.wrapped()),
+							ClojureLowerUtil.list(ClojureLowerUtil.sym("defun"), fn,
+									ClojureLowerUtil.list(clause.params()), arityDeclaration(key),
+									workerCall(worker, clause))));
+				}
+				else {
+					forms = new ArrayList<>(List.of(ClojureLowerUtil.list(ClojureLowerUtil.sym("defun"), fn,
+							ClojureLowerUtil.list(clause.params()), arityDeclaration(key), clause.wrapped())));
+				}
+			}
+		}
+		finally {
+			ctx.fnNames.pop();
+		}
+		if (dynamic) {
+			// the value cell carries the function for calls and value carries
+			// (a funcall of it, like a def'd function); recur and the
+			// arity-dispatch helpers stay direct calls to the function cell;
+			// the binding-depth counter beside it lets set! test at run time
+			// whether the var is thread-bound. A redefined dynamic defn installs
+			// its fresh function cell, so the value cell always holds the newest
+			forms.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("defparameter"), ClojureLowering.varSym(key),
+					ClojureStateLowering.validatedInit(ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), fn),
+							key)));
+			forms.add(ClojureStateLowering.varNotifyStored(key, ClojureLowering.varSym(key)));
+			forms.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("defparameter"), ClojureLowering.boundDepthSym(key),
+					new LispInteger(0)));
+		}
+		else if (redef) {
+			// the value cell every call reads, set where the definition stands,
+			// validating and notifying like the oracle's bindRoot
+			forms.add(ClojureStateLowering.varStore(ctx, ClojureLowering.varSym(key),
+					ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), fn), key));
+		}
+		else if (definition > 1) {
+			// no value cell: each definition is its own function, so the replaced
+			// root is the previous definition, still bound. The definition still
+			// validates and notifies behind the defuns, through a statement arm the
+			// strip drops.
+			forms.add(ClojureStateLowering.varDefnNotify(key,
+					ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), fn), ClojureLowerUtil
+						.list(ClojureLowerUtil.sym("function"), ClojureLowering.defnSym(key, definition - 1))));
+		}
+		else if (ctx.valuedAbove.contains(key)) {
+			// a first defn over a valued root (a def or defonce above it): the
+			// value cell still holds it, read where bound.
+			forms.add(
+					ClojureStateLowering.varDefnNotify(key, ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), fn),
+							ClojureStateLowering.guardedOldRead(ClojureLowering.varSym(key), key)));
+		}
+		else if (ctx.declaredAbove.contains(key)) {
+			// a first defn over a declared root: the unbound root.
+			forms.add(ClojureStateLowering.varDefnNotify(key,
+					ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), fn),
+					ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-UNBOUND"), LispString.literal(key))));
+		}
+		// validated and notified, the definition is what the earlier calls reach: the
+		// cells they name, and the value cell the calls lowered while a def held the
+		// var read
+		forms.addAll(defined.repoints());
+		if (!dynamic && !redef && (ctx.repointsRedefinitions() && ctx.valuedAbove.contains(key)
+				|| ctx.declaredRootReads.contains(key))) {
+			// so is the value cell a read lowered while a def held the var reads, or
+			// one while it was only declared (a defn a macro expands to, below its
+			// calls: datascript's defn+)
+			forms.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), ClojureLowering.varSym(key),
+					ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), fn)));
+		}
+		// the class the oracle compiles the function to, which .getClass names
+		forms.add(ClojureValueMethodLowering.noteFnClass(ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), fn),
+				key));
+		forms.addAll(0, metaStore); // ahead, so the definition still answers the form
+		forms.addAll(0, defined.declared());
+		return forms;
+	}
+
+	/** The parameter vectors of a {@code defn}'s single arity or of each clause. */
+	static List<LispVal> arglistsOf(List<LispVal> body) {
+		if (!(body.get(0) instanceof LispCons) || isVectorDatum(ClojureLowerUtil.stripMeta(body.get(0)))) {
+			return List.of(body.get(0));
+		}
+		List<LispVal> vectors = new ArrayList<>();
+		for (LispVal clause : body) {
+			List<LispVal> parts = ClojureLowerUtil.items(clause);
+			if (parts != null && !parts.isEmpty()) {
+				vectors.add(parts.get(0));
+			}
+		}
+		return vectors;
+	}
+
+	/**
+	 * Whether the datum is a `[...]` vector (its marker head, under any reader metadata),
+	 * not an arity clause.
+	 */
+	static boolean isVectorDatum(LispVal form) {
+		// reader metadata (a return hint, `^long [x]`) wraps the vector, never the clause
+		List<LispVal> parts = ClojureLowerUtil.items(ClojureLowerUtil.stripMeta(form));
+		return parts != null && !parts.isEmpty() && parts.get(0) == ClojureReader.VECTOR;
+	}
+
+	/**
+	 * A multi-arity {@code defn}: one {@code defun} per arity plus a dispatch
+	 * {@code defun} picking by argument count, the shape {@code case-lambda} takes. Each
+	 * clause keeps its own parameters (a variadic clause its {@code &rest}); the dispatch
+	 * hands each its arguments positionally. A name no identifier mangles to (a single
+	 * {@code %} outside the {@code :} escape) keeps the helpers apart from user
+	 * definitions. A {@code recur} in a clause body is checked against that clause's
+	 * arity and calls the clause's own helper -- a variadic one takes the rest as an
+	 * ordinary parameter, so the call assigns exactly -- never the dispatch: the oracle's
+	 * {@code recur} re-enters its own arity, and a direct self call is what a backend
+	 * runs in constant stack (the JVM's jump, {@code .kb/jvm-self-tail-calls.md}) where a
+	 * round trip through the dispatch was a mutual recursion of two functions. A count no
+	 * clause takes is the oracle's refusal naming the var key ({@link #arityRefusal}).
+	 */
+	static List<LispVal> multiDefun(ClojureLowering ctx, String key, List<LispVal> clauses, String callName) {
+		// the shapes first, without lowering: each clause recurs to its own helper
+		// (a variadic one's takes the rest as an ordinary parameter, so the recur
+		// call assigns exactly, where the dispatch's NTHCDR rest would wrap it in a
+		// list)
+		List<ClojureLowering.ParamShape> shapes = new ArrayList<>();
+		for (LispVal clauseDatum : clauses) {
+			List<LispVal> parts = ClojureLowerUtil.items(clauseDatum);
+			shapes.add(parts == null || parts.isEmpty() ? new ClojureLowering.ParamShape(false, -1)
+					: paramShape(parts.get(0)));
+		}
+		List<String> helperNames = new ArrayList<>();
+		List<ClojureLowering.RecurTarget> targets = new ArrayList<>();
+		for (ClojureLowering.ParamShape shape : shapes) {
+			String helperName = callName + "%" + (shape.variadic() ? "*" : shape.fixed());
+			helperNames.add(helperName);
+			targets.add(new ClojureLowering.RecurTarget(helperName, true));
+		}
+		List<ClojureLowering.Clause> parsed = arityClauses(ctx, clauses, "defn", targets::get);
+		List<LispVal> forms = new ArrayList<>();
+		LispVal args = ctx.freshTemp();
+		LispVal count = ctx.freshTemp();
+		List<LispVal> helpers = new ArrayList<>();
+		for (int i = 0; i < parsed.size(); i++) {
+			ClojureLowering.Clause clause = parsed.get(i);
+			LispSymbol helper = new LispSymbol(helperNames.get(i));
+			helpers.add(helper);
+			// the dispatch hands a variadic clause its rest pre-built as a list,
+			// so the helper takes it as an ordinary parameter, not &rest
+			List<LispVal> helperParams = new ArrayList<>(clause.params());
+			helperParams.remove(ClojureLowering.AMPERSAND_REST);
+			forms.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("defun"), helper, ClojureLowerUtil.list(helperParams),
+					clause.wrapped()));
+		}
+		List<LispVal> arms = new ArrayList<>();
+		for (int i = 0; i < parsed.size(); i++) {
+			ClojureLowering.Clause clause = parsed.get(i);
+			LispSymbol helper = (LispSymbol) helpers.get(i);
+			List<LispVal> call = new ArrayList<>();
+			call.add(helper);
+			for (int p = 0; p < clause.fixed(); p++) {
+				call.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("NTH"), new LispInteger(p), args));
+			}
+			if (clause.variadic()) {
+				call.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("NTHCDR"), new LispInteger(clause.fixed()), args));
+			}
+			LispVal test = clause.variadic()
+					? ClojureLowerUtil.list(ClojureLowerUtil.sym(">="), count, new LispInteger(clause.fixed()))
+					: ClojureLowerUtil.list(ClojureLowerUtil.sym("="), count, new LispInteger(clause.fixed()));
+			arms.add(ClojureLowerUtil.list(test, ClojureLowerUtil.list(call)));
+		}
+		arms.add(ClojureLowerUtil.list(ClojureLowering.TRUE_CONST, arityRefusal(count, key)));
+		forms.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("defun"), new LispSymbol(callName),
+				ClojureLowerUtil.list(List.of(ClojureLowering.AMPERSAND_REST, args)),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
+						ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(count,
+								ClojureLowerUtil.list(ClojureLowerUtil.sym("length"), args)))),
+						ClojureLowerUtil.cons(ClojureLowerUtil.sym("cond"), arms))));
+		return forms;
+	}
+
+	/**
+	 * The arity clauses of a multi-arity {@code defn} or {@code fn}, each a list of a
+	 * parameter vector and a body, with at most one variadic clause and one clause per
+	 * fixed arity. Each clause body lowers with its own recur target (a clause is its own
+	 * recur boundary, like the oracle: the count must match the enclosing clause, never
+	 * just any clause of the function).
+	 */
+	static List<ClojureLowering.Clause> arityClauses(ClojureLowering ctx, List<LispVal> clauses, String owner) {
+		return arityClauses(ctx, clauses, owner, i -> null);
+	}
+
+	static List<ClojureLowering.Clause> arityClauses(ClojureLowering ctx, List<LispVal> clauses, String owner,
+			java.util.function.IntFunction<ClojureLowering.RecurTarget> targets) {
+		ClojureLowerUtil.isTrue(!clauses.isEmpty(), owner + " needs a parameter vector and a body");
+		List<ClojureLowering.Clause> parsed = new ArrayList<>();
+		Set<Integer> fixed = new HashSet<>();
+		boolean variadic = false;
+		for (LispVal clauseDatum : clauses) {
+			List<LispVal> parts = ClojureLowerUtil.items(clauseDatum);
+			if (parts == null || parts.isEmpty()) {
+				throw new LispReadException(
+						owner + " arity clauses take a parameter vector and a body, not " + clauseDatum.print());
+			}
+			ClojureLowering.Clause clause = clause(ctx, parts.get(0), parts.subList(1, parts.size()),
+					targets.apply(parsed.size()));
+			if (clause.variadic()) {
+				ClojureLowerUtil.isTrue(!variadic, owner + " takes at most one variadic clause");
+				variadic = true;
+			}
+			else {
+				ClojureLowerUtil.isTrue(fixed.add(clause.fixed()),
+						owner + " has two clauses for arity " + clause.fixed());
+			}
+			parsed.add(clause);
+		}
+		return parsed;
+	}
+
+	/**
+	 * One lambda over a parameter vector and a not-yet-lowered body, the params scoped.
+	 * Destructured parameters travel as generated temporaries with a {@code let*}
+	 * prologue rebinding them to their patterns. With a recur target, the body lowers
+	 * with it pushed (its arity set from the parsed parameters first, so a {@code recur}
+	 * in the body checks against this clause), and the target records whether any
+	 * {@code recur} reached it.
+	 */
+	static ClojureLowering.Clause clause(ClojureLowering ctx, LispVal paramVector, List<LispVal> bodyForms) {
+		return clause(ctx, paramVector, bodyForms, null);
+	}
+
+	/**
+	 * One fn-shaped clause ({@code fn}, {@code defn}, {@code defmacro},
+	 * {@code defmethod}, a protocol extension's function):
+	 * {@link #clause(ClojureLowering, LispVal, List, ClojureLowering.RecurTarget, boolean)}
+	 * with its condition map applied.
+	 */
+	static ClojureLowering.Clause clause(ClojureLowering ctx, LispVal paramVector, List<LispVal> bodyForms,
+			ClojureLowering.@Nullable RecurTarget target) {
+		return clause(ctx, paramVector, bodyForms, target, true);
+	}
+
+	/**
+	 * The body of a fn-shaped clause with its condition map applied, the oracle's
+	 * {@code fn}: a map first in a body of more forms -- else the parameter vector's
+	 * metadata -- holds {@code :pre} and {@code :post} conditions. Each {@code :pre}
+	 * condition is a {@code clojure.core/assert} ahead of the body; with {@code :post}
+	 * the body's value is bound to {@code %}, each {@code :post} condition asserted, and
+	 * {@code %} answered (tools.cli's {@code compile-option-specs}). A body map without
+	 * either key is dropped all the same, like the oracle's.
+	 */
+	static List<LispVal> conditioned(LispVal paramVector, List<LispVal> bodyForms) {
+		LispVal conds = null;
+		List<LispVal> body = bodyForms;
+		if (bodyForms.size() > 1 && isMapDatum(bodyForms.get(0))) {
+			conds = bodyForms.get(0);
+			body = bodyForms.subList(1, bodyForms.size());
+		}
+		else {
+			conds = conditionMeta(paramVector);
+		}
+		if (conds == null) {
+			return bodyForms;
+		}
+		List<LispVal> pre = conditionsOf(conds, ":pre");
+		List<LispVal> post = conditionsOf(conds, ":post");
+		List<LispVal> out = new ArrayList<>();
+		for (LispVal condition : pre == null ? List.<LispVal>of() : pre) {
+			out.add(ClojureLowerUtil.list(new LispSymbol(ClojureCoreNames.PREFIX + "assert"), condition));
+		}
+		if (post == null) {
+			out.addAll(body);
+			return out;
+		}
+		LispSymbol result = new LispSymbol("%");
+		LispVal value = body.size() == 1 ? body.get(0)
+				: ClojureLowerUtil.cons(new LispSymbol("do"), body.isEmpty() ? List.of() : body);
+		List<LispVal> let = new ArrayList<>();
+		let.add(new LispSymbol(ClojureCoreNames.PREFIX + "let"));
+		let.add(ClojureLowerUtil.list(ClojureReader.VECTOR, result, value));
+		for (LispVal condition : post) {
+			let.add(ClojureLowerUtil.list(new LispSymbol(ClojureCoreNames.PREFIX + "assert"), condition));
+		}
+		let.add(result);
+		out.add(ClojureLowerUtil.list(let));
+		return out;
+	}
+
+	/** Whether a datum is a map literal ({@code (%hash-map ...)}). */
+	private static boolean isMapDatum(LispVal datum) {
+		List<LispVal> parts = ClojureLowerUtil.items(ClojureLowerUtil.stripMeta(datum));
+		return parts != null && !parts.isEmpty() && ClojureLowerUtil.isSymbolNamed(parts.get(0), "%hash-map");
+	}
+
+	/**
+	 * The map literal among a parameter vector's metadata ({@code ^{:pre [...]} [x]}), or
+	 * null.
+	 */
+	private static @Nullable LispVal conditionMeta(LispVal paramVector) {
+		LispVal datum = paramVector;
+		List<LispVal> parts = ClojureLowerUtil.items(datum);
+		while (parts != null && parts.size() == 3
+				&& ClojureLowerUtil.isSymbolNamed(parts.get(0), ClojureLowerUtil.READER_META)) {
+			if (isMapDatum(parts.get(2))) {
+				return parts.get(2);
+			}
+			datum = parts.get(1);
+			parts = ClojureLowerUtil.items(datum);
+		}
+		return null;
+	}
+
+	/**
+	 * The conditions a condition map holds under {@code :pre} or {@code :post}: the
+	 * members of its vector or list, or null when the key is absent or nil.
+	 */
+	private static @Nullable List<LispVal> conditionsOf(LispVal conds, String key) {
+		List<LispVal> entries = ClojureLowerUtil.items(ClojureLowerUtil.stripMeta(conds));
+		for (int i = 1; entries != null && i + 1 < entries.size(); i += 2) {
+			if (!ClojureLowerUtil.isSymbolNamed(entries.get(i), key)) {
+				continue;
+			}
+			LispVal value = ClojureLowerUtil.stripMeta(entries.get(i + 1));
+			if (ClojureLowerUtil.isSymbolNamed(value, "nil")) {
+				return null;
+			}
+			List<LispVal> members = ClojureLowerUtil.items(value);
+			if (members != null && !members.isEmpty() && members.get(0) == ClojureReader.VECTOR) {
+				return members.subList(1, members.size());
+			}
+			throw new LispReadException(
+					"a condition map's " + key + " takes a vector of conditions, not " + entries.get(i + 1).print());
+		}
+		return null;
+	}
+
+	static ClojureLowering.Clause clause(ClojureLowering ctx, LispVal paramVector, List<LispVal> bodyForms,
+			ClojureLowering.@Nullable RecurTarget target, boolean conditions) {
+		List<LispVal> forms = conditions ? conditioned(paramVector, bodyForms) : bodyForms;
+		// metadata on the vector (type hints like ^String) is dropped, like the
+		// rest: it never affects dispatch
+		List<LispVal> names = ClojureLowerUtil.bindingItems(ClojureLowerUtil.stripMeta(paramVector),
+				"a parameter vector");
+		Map<String, ClojureLowering.Kind> scope = new HashMap<>();
+		List<LispVal> params = new ArrayList<>();
+		List<LispVal> prologue = new ArrayList<>();
+		for (int i = 0; i < names.size(); i++) {
+			LispVal datum = ClojureLowerUtil.stripMeta(names.get(i));
+			if (ClojureLowerUtil.isSymbolNamed(datum, "&")) {
+				ClojureLowerUtil.isTrue(i + 1 < names.size(), "a & needs a rest name after it");
+				ClojureLowerUtil.isTrue(i + 2 == names.size(), "only one name may follow & in a parameter vector");
+				params.add(ClojureLowering.AMPERSAND_REST);
+				LispVal rest = ClojureLowerUtil.stripMeta(names.get(++i));
+				if (rest instanceof LispSymbol) {
+					String name = ClojureLowerUtil.plainName(rest, "a parameter vector");
+					scope.put(name, ClojureLowering.Kind.VARIABLE);
+					params.add(ctx.localSym(name));
+				}
+				else {
+					LispSymbol temp = ctx.freshTemp();
+					params.add(temp);
+					destructureInto(ctx, rest, temp, prologue, scope, "a parameter vector");
+				}
+				continue;
+			}
+			if (datum instanceof LispSymbol) {
+				String param = ClojureLowerUtil.plainName(datum, "a parameter vector");
+				scope.put(param, ClojureLowering.Kind.VARIABLE);
+				ctx.noteLocalHint(scope, param, names.get(i), null);
+				params.add(ctx.localSym(param));
+				continue;
+			}
+			LispSymbol temp = ctx.freshTemp();
+			params.add(temp);
+			destructureInto(ctx, datum, temp, prologue, scope, "a parameter vector");
+		}
+		LispVal body;
+		boolean variadic = params.contains(ClojureLowering.AMPERSAND_REST);
+		int fixed = variadic ? params.indexOf(ClojureLowering.AMPERSAND_REST) : params.size();
+		if (target == null) {
+			body = ctx.inScope(scope, () -> ctx.bodyOf(forms));
+		}
+		else {
+			target.setArity((variadic ? fixed + 1 : fixed) - target.leading(), variadic);
+			ctx.pushRecurTarget(target);
+			try {
+				body = ctx.inScope(scope, () -> ctx.bodyOfTail(forms));
+			}
+			finally {
+				ctx.recurTargets.pop();
+			}
+		}
+		return new ClojureLowering.Clause(List.copyOf(params), List.copyOf(prologue), body, variadic, fixed);
+	}
+
+	/**
+	 * A {@code fn}: a lambda, a named one a {@code labels} self-binding.
+	 * @param ctx the lowering
+	 * @param items the form's items
+	 * @param defined the var key of the {@code def} whose value this form is, whose name
+	 * the arity refusal then gives it, or null
+	 * @return the lowered form
+	 */
+	static LispVal fn(ClojureLowering ctx, List<LispVal> items, @Nullable String defined) {
+		int at = 1;
+		ClojureLowerUtil.isTrue(items.size() > at, "fn needs a parameter vector and a body");
+		String self = null;
+		// reader metadata (schema's `^:schema` on the name) wraps the symbol
+		if (ClojureLowerUtil.stripMeta(items.get(at)) instanceof LispSymbol) {
+			self = ClojureLowerUtil.plainName(items.get(at), "fn");
+			at++;
+		}
+		ClojureLowerUtil.isTrue(items.size() > at, "fn needs a parameter vector and a body");
+		String arityName = defined != null ? defined : arityName(ctx, self);
+		if (self == null) {
+			String fresh = ctx.freshRecurName();
+			ClojureLowering.SplitLambda split = singleOrMultiFn(ctx, items, at, "fn", fresh, arityName);
+			if (!split.used()) {
+				return split.lambda();
+			}
+			return labelsWithHead(fresh, split.workers(), split.lambda());
+		}
+		Map<String, ClojureLowering.Kind> scope = new HashMap<>();
+		scope.put(self, ClojureLowering.Kind.FUNCTION);
+		String name = self;
+		String callName = ctx.localSym(name).name();
+		int from = at;
+		return ctx.inScope(scope, () -> {
+			ClojureLowering.SplitLambda split = singleOrMultiFn(ctx, items, from, name, callName, arityName);
+			// a labels self-binding: calls lower directly and the labels
+			// expansion rewrites them to the local; the value is the local
+			return labelsWithHead(callName, split.workers(), split.lambda());
+		});
+	}
+
+	/**
+	 * The oracle's refusal of a wrong argument count opens with this, the count follows
+	 * ({@code clojure.lang.ArityException}'s message).
+	 */
+	static final String ARITY_PREFIX = "Wrong number of args (";
+
+	/** What follows the count in the oracle's refusal, the function's name after it. */
+	static final String ARITY_INFIX = ") passed to: ";
+
+	/**
+	 * The name a local {@code fn}'s arity refusal gives it: the enclosing function's (a
+	 * {@code defn}'s var, {@code my.app/f}), or the namespace outside any, then the
+	 * {@code fn}'s own name or {@code fn}. The oracle's is its class name demunged, which
+	 * adds what this cannot reproduce: a counter on each generated part
+	 * ({@code fn--177}), the {@code evalN} a top-level form compiles into, and the thunks
+	 * it wraps a {@code try} in.
+	 */
+	static String arityName(ClojureLowering ctx, @Nullable String self) {
+		String base = ctx.fnNames.isEmpty() ? ctx.currentNs : ctx.fnNames.peek();
+		return base + "/" + (self != null ? self : "fn");
+	}
+
+	/**
+	 * The declaration a single-arity function's body opens with, so the backends' own
+	 * count check refuses in the oracle's words
+	 * ({@code Wrong number of args (0) passed to: my.app/f}) on the refusal path only.
+	 */
+	static LispVal arityDeclaration(String arityName) {
+		return new DeclaredArityReport(ARITY_PREFIX, ARITY_INFIX + arityName).declaration();
+	}
+
+	/**
+	 * A multi-arity dispatch's refusal of a count no clause takes, in the oracle's words.
+	 */
+	static LispVal arityRefusal(LispVal count, String arityName) {
+		return ClojureLowerUtil.list(new LispSymbol(FN_ARITY_ERROR), count, LispString.literal(arityName));
+	}
+
+	/** The {@code clojure.lisp} worker {@link #arityRefusal} calls. */
+	static final String FN_ARITY_ERROR = "RONTOLISP::%CLOJURE-FN-ARITY-ERROR";
+
+	static ClojureLowering.SplitLambda singleOrMultiFn(ClojureLowering ctx, List<LispVal> items, int at, String owner,
+			String headName, String arityName) {
+		ctx.fnNames.push(arityName);
+		try {
+			return singleOrMultiFnNamed(ctx, items, at, owner, headName, arityName);
+		}
+		finally {
+			ctx.fnNames.pop();
+		}
+	}
+
+	private static ClojureLowering.SplitLambda singleOrMultiFnNamed(ClojureLowering ctx, List<LispVal> items, int at,
+			String owner, String headName, String arityName) {
+		String worker = workerName(headName);
+		if (items.get(at) instanceof LispCons && !isVectorDatum(items.get(at))) {
+			return multiFn(ctx, items.subList(at, items.size()), owner, headName, worker, arityName);
+		}
+		boolean variadic = isVariadicParams(items.get(at));
+		ClojureLowering.RecurTarget target = new ClojureLowering.RecurTarget(variadic ? worker : headName, true);
+		ClojureLowering.Clause clause = clause(ctx, items.get(at), items.subList(at + 1, items.size()), target);
+		if (target.used() && clause.variadic()) {
+			// a used variadic target splits: the worker takes the rest as an
+			// ordinary parameter (the recur call assigns exactly) while the
+			// &rest head answers normal calls (wrapping, like the oracle)
+			LispVal head = ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(clause.params()),
+					arityDeclaration(arityName), workerCall(worker, clause));
+			return new ClojureLowering.SplitLambda(head, List.of(workerEntry(worker, clause)), true);
+		}
+		return new ClojureLowering.SplitLambda(ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
+				ClojureLowerUtil.list(clause.params()), arityDeclaration(arityName), clause.wrapped()), List.of(),
+				target.used());
+	}
+
+	/**
+	 * A multi-arity {@code fn}: one {@code lambda} over {@code &rest} dispatching per
+	 * arity through {@code let*} argument bindings -- no local functions, so a clause
+	 * body closes over the outer scope like any lambda body. A {@code recur} in a fixed
+	 * clause body is checked against that clause's arity and calls the dispatch, which
+	 * routes by count back to the same clause (every fixed count names exactly one
+	 * clause, so the routing is exact except where a variadic clause listed before a
+	 * fixed one also matches the count); a {@code recur} in a used variadic clause calls
+	 * the worker instead, which takes the rest as an ordinary parameter.
+	 */
+	static ClojureLowering.SplitLambda multiFn(ClojureLowering ctx, List<LispVal> clauses, String owner,
+			String headName, String worker, String arityName) {
+		// the shapes first, without lowering: a used variadic clause recurs to its
+		// worker (which takes the rest as an ordinary parameter) while the dispatch
+		// arm hands it the rest pre-built; every fixed clause recurs through the
+		// dispatch, its own arm of this lambda
+		List<ClojureLowering.RecurTarget> made = new ArrayList<>();
+		for (LispVal clauseDatum : clauses) {
+			List<LispVal> parts = ClojureLowerUtil.items(clauseDatum);
+			boolean variadic = parts != null && !parts.isEmpty() && isVariadicParams(parts.get(0));
+			made.add(new ClojureLowering.RecurTarget(variadic ? worker : headName, true));
+		}
+		List<ClojureLowering.Clause> parsed = arityClauses(ctx, clauses, owner, made::get);
+		LispVal args = ctx.freshTemp();
+		LispVal count = ctx.freshTemp();
+		List<LispVal> arms = new ArrayList<>();
+		int split = -1;
+		for (int i = 0; i < parsed.size(); i++) {
+			ClojureLowering.Clause clause = parsed.get(i);
+			if (clause.variadic() && made.get(i).used()) {
+				List<LispVal> call = new ArrayList<>();
+				call.add(new LispSymbol(worker));
+				for (int p = 0; p < clause.fixed(); p++) {
+					call.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("NTH"), new LispInteger(p), args));
+				}
+				call.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("NTHCDR"), new LispInteger(clause.fixed()), args));
+				arms.add(ClojureLowerUtil.list(
+						ClojureLowerUtil.list(ClojureLowerUtil.sym(">="), count, new LispInteger(clause.fixed())),
+						ClojureLowerUtil.list(call)));
+				split = i;
+				continue;
+			}
+			List<LispVal> bindings = new ArrayList<>();
+			int position = 0;
+			boolean rest = false;
+			for (LispVal param : clause.params()) {
+				if (ClojureLowering.AMPERSAND_REST.equals(param)) {
+					rest = true;
+					continue;
+				}
+				bindings.add(ClojureLowerUtil.list(param, rest
+						? ClojureLowerUtil.list(ClojureLowerUtil.sym("NTHCDR"), new LispInteger(position), args)
+						: ClojureLowerUtil.list(ClojureLowerUtil.sym("NTH"), new LispInteger(position++), args)));
+			}
+			bindings.addAll(clause.prologue());
+			LispVal test = clause.variadic()
+					? ClojureLowerUtil.list(ClojureLowerUtil.sym(">="), count, new LispInteger(clause.fixed()))
+					: ClojureLowerUtil.list(ClojureLowerUtil.sym("="), count, new LispInteger(clause.fixed()));
+			arms.add(ClojureLowerUtil.list(test, ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"),
+					ClojureLowerUtil.list(bindings), clause.body())));
+		}
+		arms.add(ClojureLowerUtil.list(ClojureLowering.TRUE_CONST, arityRefusal(count, arityName)));
+		LispVal lambda = ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
+				ClojureLowerUtil.list(List.of(ClojureLowering.AMPERSAND_REST, args)),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
+						ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(count,
+								ClojureLowerUtil.list(ClojureLowerUtil.sym("length"), args)))),
+						ClojureLowerUtil.cons(ClojureLowerUtil.sym("cond"), arms)));
+		boolean used = made.stream().anyMatch(ClojureLowering.RecurTarget::used);
+		if (split >= 0) {
+			return new ClojureLowering.SplitLambda(lambda, List.of(workerEntry(worker, parsed.get(split))), used);
+		}
+		return new ClojureLowering.SplitLambda(lambda, List.of(), used);
+	}
+
+	static LispVal let(ClojureLowering ctx, List<LispVal> items) {
+		ClojureLowerUtil.isTrue(items.size() >= 3, "let needs a binding vector and a body");
+		List<LispVal> bindings = ClojureLowerUtil.bindingItems(items.get(1), "let");
+		ClojureLowerUtil.isTrue(bindings.size() % 2 == 0, "a let binding vector pairs a name with a value");
+		Map<String, ClojureLowering.Kind> scope = new HashMap<>();
+		ctx.scopes.add(scope); // let* : each value sees the bindings before it
+		ctx.directScopes.add(new HashSet<>());
+		LispVal form;
+		try {
+			List<LispVal> pairs = new ArrayList<>();
+			for (int i = 0; i < bindings.size(); i += 2) {
+				LispVal pattern = ClojureLowerUtil.stripMeta(bindings.get(i));
+				if (pattern instanceof LispSymbol) {
+					String name = ClojureLowerUtil.plainName(pattern, "let");
+					LispVal init = ctx.lower(bindings.get(i + 1));
+					pairs.add(ClojureLowerUtil.list(ctx.localSym(name), init));
+					// the init's hint is read before the name shadows an outer one
+					ctx.noteLocalHint(scope, name, bindings.get(i), bindings.get(i + 1));
+					scope.put(name, ClojureLowering.Kind.VARIABLE);
+					if (ClojureLowerUtil.yieldsFun(init)) {
+						ctx.markDirect(name);
+					}
+					noteHostClass(ctx, name, init);
+					continue;
+				}
+				LispSymbol temp = ctx.freshTemp();
+				pairs.add(ClojureLowerUtil.list(temp, ctx.lower(bindings.get(i + 1))));
+				Set<String> bound = new HashSet<>(scope.keySet());
+				destructureInto(ctx, pattern, temp, pairs, scope, "let");
+				forgetHostClasses(ctx, scope.keySet(), bound);
+			}
+			form = ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"), ClojureLowerUtil.list(pairs),
+					ctx.body(items, 2));
+		}
+		finally {
+			ctx.scopes.remove(ctx.scopes.size() - 1);
+			ctx.directScopes.remove(ctx.directScopes.size() - 1);
+			ctx.localHints.remove(scope);
+			forgetDeepHosts(ctx);
+		}
+		return form;
+	}
+
+	/**
+	 * A {@code let} binding's host class, when its lowered init is a construction literal
+	 * of a loadable class: the FQN the instance-call wrap consults; and whether it holds
+	 * a plain value at all -- a construction, a literal, a fn form
+	 * ({@code ClojureInteropLowering.isPlainForm}) -- which a host call hands Java as it
+	 * is. Anything else forgets the name, so rebinding the name hides the old record.
+	 */
+	static void noteHostClass(ClojureLowering ctx, String name, LispVal init) {
+		String fqn = ClojureInteropLowering.constructedClass(init);
+		if (fqn == null && !ClojureInteropLowering.isPlainForm(init)) {
+			ctx.hostClasses.remove(ctx.localSym(name).name());
+		}
+		else {
+			ctx.hostClasses.put(ctx.localSym(name).name(), new ClojureLowering.HostClass(fqn, name, ctx.scopes.size()));
+		}
+	}
+
+	/**
+	 * Forgets host classes for names a destructuring pattern just bound: pattern members
+	 * are collection members, never constructions.
+	 */
+	static void forgetHostClasses(ClojureLowering ctx, Set<String> now, Set<String> before) {
+		for (String key : now) {
+			if (!before.contains(key)) {
+				ctx.hostClasses.remove(ctx.localSym(key).name());
+			}
+		}
+	}
+
+	/**
+	 * Records an {@code if-let}/{@code when-let} binding the way {@code let} does: a
+	 * plain name takes the lowered init's construction class, a destructuring pattern
+	 * forgets its members (collection members, never constructions). The binding is
+	 * single-shot, so the depth-walk soundness carries over.
+	 */
+	static void noteOrForgetHost(ClojureLowering ctx, LispVal pattern, LispVal loweredInit, Set<String> now,
+			Set<String> before) {
+		LispVal stripped = ClojureLowerUtil.stripMeta(pattern);
+		if (stripped instanceof LispSymbol) {
+			noteHostClass(ctx, ClojureLowerUtil.plainName(stripped, "if-let"), loweredInit);
+		}
+		else {
+			forgetHostClasses(ctx, now, before);
+		}
+	}
+
+	/**
+	 * Drops host classes recorded below the current scope depth: their {@code let}
+	 * finished, so a later form must not see them.
+	 */
+	static void forgetDeepHosts(ClojureLowering ctx) {
+		int depth = ctx.scopes.size();
+		ctx.hostClasses.values().removeIf(held -> held.depth() > depth);
+	}
+
+	/**
+	 * A {@code recur} form lowered: a direct call to the innermost enclosing target (a
+	 * {@code loop}, a named or anonymous {@code fn}, a {@code defn} clause, a
+	 * {@code letfn} entry, or a {@code lazy-seq} body of arity 0), checked against that
+	 * target's arity. A {@code try} between the {@code recur} and its target is the
+	 * oracle's {@code Cannot recur across try} refusal, and a {@code recur} outside its
+	 * target body's tail position the oracle's {@code Can only recur from tail position}
+	 * refusal; both beat the arity check, like the oracle. Outside any target it stays a
+	 * refusal.
+	 */
+	static LispVal recurOf(ClojureLowering ctx, LispVal form, List<LispVal> items) {
+		if (ctx.recurTargets.isEmpty()) {
+			throw new LispReadException("recur outside loop");
+		}
+		ClojureLowering.RecurTarget target = ctx.recurTargets.peek();
+		if (ctx.tryDepth > target.depth()) {
+			throw new LispReadException("Cannot recur across try");
+		}
+		if (!ctx.tailPosition) {
+			throw new LispReadException("Can only recur from tail position");
+		}
+		int given = items.size() - 1;
+		if (target.checked() && given != target.arity()) {
+			throw new LispReadException(
+					"wrong number of arguments passed to recur: expected " + target.arity() + ", got " + given);
+		}
+		target.markUsed(form);
+		List<LispVal> out = new ArrayList<>();
+		out.add(new LispSymbol(target.callName()));
+		for (int i = 1; i < items.size(); i++) {
+			out.add(ctx.lower(items.get(i)));
+		}
+		return ClojureLowerUtil.list(out);
+	}
+
+	static LispVal loop(ClojureLowering ctx, List<LispVal> items) {
+		ClojureLowerUtil.isTrue(items.size() >= 3, "loop needs a binding vector and a body");
+		List<LispVal> bindings = ClojureLowerUtil.bindingItems(items.get(1), "loop");
+		ClojureLowerUtil.isTrue(bindings.size() % 2 == 0, "a loop binding vector pairs a name with a value");
+		String name = ClojureLowering.mangle("loop-") + ctx.counter++;
+		Map<String, ClojureLowering.Kind> scope = new HashMap<>();
+		List<LispVal> paramSyms = new ArrayList<>();
+		List<LispVal> inits = new ArrayList<>();
+		List<LispVal> prologue = new ArrayList<>();
+		ctx.scopes.add(scope); // let*-like: each init sees the bindings before it
+		ctx.directScopes.add(new HashSet<>());
+		try {
+			for (int i = 0; i < bindings.size(); i += 2) {
+				LispVal pattern = ClojureLowerUtil.stripMeta(bindings.get(i));
+				LispVal init = ctx.lower(bindings.get(i + 1));
+				if (pattern instanceof LispSymbol) {
+					String binding = ClojureLowerUtil.plainName(pattern, "loop");
+					paramSyms.add(ctx.localSym(binding));
+					inits.add(init);
+					scope.put(binding, ClojureLowering.Kind.VARIABLE);
+					if (ClojureLowerUtil.yieldsFun(init)) {
+						ctx.markDirect(binding);
+					}
+					continue;
+				}
+				LispSymbol temp = ctx.freshTemp();
+				paramSyms.add(temp);
+				inits.add(init);
+				destructureInto(ctx, pattern, temp, prologue, scope, "loop");
+			}
+			ClojureLowering.RecurTarget target = new ClojureLowering.RecurTarget(name, true);
+			target.setArity(paramSyms.size(), false);
+			ctx.pushRecurTarget(target);
+			try {
+				LispVal lambdaBody = prologue.isEmpty() ? ctx.bodyTail(items, 2) : ClojureLowerUtil
+					.list(ClojureLowerUtil.sym("let*"), ClojureLowerUtil.list(prologue), ctx.bodyTail(items, 2));
+				// a labels binding is a named function: (name (params...) body...)
+				LispVal binding = new LispCons(new LispSymbol(name),
+						new LispCons(ClojureLowerUtil.list(paramSyms), ClojureLowerUtil.cons(lambdaBody, List.of())));
+				// the self call wrapped in the sequential inits: labels parameters
+				// bind in parallel, but each init sees the bindings before it
+				LispVal self = new LispCons(new LispSymbol(name), ClojureLowerUtil.list(paramSyms));
+				if (paramSyms.isEmpty()) {
+					return ClojureLowerUtil.list(ClojureLowerUtil.sym("labels"), ClojureLowerUtil.list(binding), self);
+				}
+				List<LispVal> initPairs = new ArrayList<>();
+				for (int i = 0; i < paramSyms.size(); i++) {
+					initPairs.add(ClojureLowerUtil.list(paramSyms.get(i), inits.get(i)));
+				}
+				return ClojureLowerUtil.list(ClojureLowerUtil.sym("labels"), ClojureLowerUtil.list(binding),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"), ClojureLowerUtil.list(initPairs), self));
+			}
+			finally {
+				ctx.recurTargets.pop();
+			}
+		}
+		finally {
+			ctx.scopes.remove(ctx.scopes.size() - 1);
+			ctx.directScopes.remove(ctx.directScopes.size() - 1);
+		}
+	}
+
+	/**
+	 * {@code (letfn [(f [params] body...)+] body...)}: mutual local functions over one
+	 * {@code labels}, so every entry -- and the body -- calls every other directly, the
+	 * shape a named {@code fn} self-binding already uses. Every name is pre-scanned first
+	 * (the {@code defn} mutual-recursion precedent), so siblings call each other; each
+	 * entry then lowers like a named {@code fn} clause, with its own recur target pushing
+	 * while its body lowers. Parameters destructure like {@code fn} parameters, and an
+	 * entry's name is a function value (through {@code function}, like any other local
+	 * function). An empty binding vector is just the body.
+	 */
+	static LispVal letfn(ClojureLowering ctx, List<LispVal> items) {
+		ClojureLowerUtil.isTrue(items.size() >= 3, "letfn needs a binding vector and a body");
+		List<LispVal> specs = ClojureLowerUtil.bindingItems(items.get(1), "letfn");
+		if (specs.isEmpty()) {
+			return ctx.body(items, 2);
+		}
+		Map<String, ClojureLowering.Kind> scope = new HashMap<>();
+		List<List<LispVal>> fnspecs = new ArrayList<>();
+		for (LispVal spec : specs) {
+			List<LispVal> parts = ClojureLowerUtil.items(spec);
+			if (parts == null || parts.size() < 2) {
+				throw new LispReadException("a letfn binding takes a name and a function, not " + spec.print());
+			}
+			scope.put(ClojureLowerUtil.plainName(parts.get(0), "letfn"), ClojureLowering.Kind.FUNCTION);
+			fnspecs.add(parts);
+		}
+		return ctx.inScope(scope, () -> {
+			// a later entry shadows an earlier one with the same name, like the
+			// oracle (labels itself refuses a name twice)
+			// the functions are closures: inside a deftype method they copy the
+			// mutable fields they read at letfn entry, while the body keeps the
+			// fields themselves (see capturingMutableFields)
+			List<String> captured = ctx.visibleMutableFields();
+			Map<String, ClojureLowering.Kind> captureScope = new HashMap<>();
+			for (String name : captured) {
+				captureScope.put(name, ClojureLowering.Kind.VARIABLE);
+			}
+			Map<String, LispVal> bindings = new LinkedHashMap<>();
+			for (List<LispVal> parts : fnspecs) {
+				String fname = ClojureLowerUtil.plainName(parts.get(0), "letfn");
+				String callName = ctx.localSym(fname).name();
+				ClojureLowering.SplitLambda split = ctx.inScope(captureScope,
+						() -> singleOrMultiFn(ctx, parts, 1, fname, callName, arityName(ctx, fname)));
+				for (LispVal worker : split.workers()) {
+					LispVal key = ((LispCons) worker).car();
+					bindings.put(((LispSymbol) key).name(), worker);
+				}
+				bindings.put(callName, new LispCons(new LispSymbol(callName), ((LispCons) split.lambda()).cdr()));
+			}
+			LispVal functions = ClojureLowerUtil.list(new ArrayList<>(bindings.values()));
+			LispVal body = ctx.body(items, 2);
+			List<LispVal> copies = ctx.capturedBindings(captured, functions);
+			if (copies.isEmpty()) {
+				return ClojureLowerUtil.list(ClojureLowerUtil.sym("labels"), functions, body);
+			}
+			// the copies shadow the fields' symbol macros; the body re-establishes
+			// them over the same (field slot) pairs
+			return ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"), ClojureLowerUtil.list(copies),
+					ClojureLowerUtil.list(ClojureLowerUtil.sym("labels"), functions, ClojureLowerUtil
+						.list(ClojureLowerUtil.sym("symbol-macrolet"), ClojureLowerUtil.list(copies), body)));
+		});
+	}
+
+	/**
+	 * {@code (let* [name init ...] body...)}: the special form under {@code let}, which
+	 * binds names only -- the macro destructured before it -- each init seeing the names
+	 * before it, and answers nil with no body, like the oracle's.
+	 */
+	static LispVal letStar(ClojureLowering ctx, List<LispVal> items) {
+		specialBindings(items);
+		return let(ctx, withBody(items));
+	}
+
+	/**
+	 * {@code (loop* [name init ...] body...)}: the special form under {@code loop}, a
+	 * recur target over names only.
+	 */
+	static LispVal loopStar(ClojureLowering ctx, List<LispVal> items) {
+		specialBindings(items);
+		return loop(ctx, withBody(items));
+	}
+
+	/**
+	 * {@code (letfn* [name (fn name [params] body...) ...] body...)}: the special form
+	 * under {@code letfn}, every name in reach of every function and of the body. Each
+	 * init is a function form, as the oracle's compiler requires, here one named like its
+	 * binding or not named at all (the {@code letfn} macro's shape), which lowers as the
+	 * {@code letfn} entry {@code (name [params] body...)}.
+	 */
+	static LispVal letfnStar(ClojureLowering ctx, List<LispVal> items) {
+		List<LispVal> bindings = specialBindings(items);
+		List<LispVal> specs = new ArrayList<>();
+		specs.add(ClojureReader.VECTOR);
+		for (int i = 0; i < bindings.size(); i += 2) {
+			LispVal name = bindings.get(i);
+			String binding = ((LispSymbol) ClojureLowerUtil.stripMeta(name)).name();
+			List<LispVal> fn = ClojureLowerUtil.items(ClojureLowerUtil.stripMeta(bindings.get(i + 1)));
+			if (fn == null || fn.size() < 2 || !isFnHead(ClojureLowerUtil.stripMeta(fn.get(0)))) {
+				throw new LispReadException("letfn* binds a function form, not " + spelling(bindings.get(i + 1)));
+			}
+			int tail = 1;
+			if (ClojureLowerUtil.stripMeta(fn.get(1)) instanceof LispSymbol own) {
+				if (!own.name().equals(binding)) {
+					throw new LispReadException("letfn* binds " + binding + " to a function named " + own.name()
+							+ ": only a function named like its binding, or not named, is supported");
+				}
+				tail = 2;
+			}
+			List<LispVal> spec = new ArrayList<>();
+			spec.add(name);
+			spec.addAll(fn.subList(tail, fn.size()));
+			specs.add(ClojureLowerUtil.list(spec));
+		}
+		List<LispVal> letfn = new ArrayList<>(withBody(items));
+		letfn.set(0, new LispSymbol("letfn"));
+		letfn.set(1, ClojureLowerUtil.list(specs));
+		return letfn(ctx, letfn);
+	}
+
+	/** Whether a head names a function form: {@code fn*}, or {@code fn} bare or core. */
+	private static boolean isFnHead(LispVal head) {
+		return head instanceof LispSymbol s
+				&& (s.name().equals("fn*") || s.name().equals("fn") || s.name().equals(ClojureCoreNames.PREFIX + "fn"));
+	}
+
+	/**
+	 * The bindings of {@code let*}, {@code loop*} or {@code letfn*}: a vector of
+	 * unqualified names each followed by its init, any other shape refused with the
+	 * oracle's words.
+	 * @param items the form, head included
+	 * @return the bindings, names and inits alternating
+	 */
+	private static List<LispVal> specialBindings(List<LispVal> items) {
+		List<LispVal> vector = items.size() > 1 ? ClojureLowerUtil.items(ClojureLowerUtil.stripMeta(items.get(1)))
+				: null;
+		if (vector == null || vector.isEmpty() || vector.get(0) != ClojureReader.VECTOR) {
+			throw new LispReadException("Bad binding form, expected vector");
+		}
+		List<LispVal> bindings = vector.subList(1, vector.size());
+		if (bindings.size() % 2 != 0) {
+			throw new LispReadException("Bad binding form, expected matched symbol expression pairs");
+		}
+		for (int i = 0; i < bindings.size(); i += 2) {
+			if (!(ClojureLowerUtil.stripMeta(bindings.get(i)) instanceof LispSymbol name) || name.name().startsWith(":")
+					|| name.name().equals("&") || isLiteralName(name.name())) {
+				throw new LispReadException("Bad binding form, expected symbol, got: " + spelling(bindings.get(i)));
+			}
+			if (ClojureLowering.qualifierSlash(name.name()) > 0) {
+				throw new LispReadException("Can't let qualified name: " + name.name());
+			}
+		}
+		return bindings;
+	}
+
+	/** Whether a symbol datum is a literal ({@code nil}, {@code true}, {@code false}). */
+	private static boolean isLiteralName(String name) {
+		return name.equals("nil") || name.equals("true") || name.equals("false");
+	}
+
+	/** A special form's items with a nil body when it has none, which it then answers. */
+	private static List<LispVal> withBody(List<LispVal> items) {
+		if (items.size() > 2) {
+			return items;
+		}
+		List<LispVal> padded = new ArrayList<>(items);
+		padded.add(new LispSymbol("nil"));
+		return padded;
+	}
+
+	/** A datum as the oracle prints it in a refusal, or as read where that fails. */
+	private static String spelling(LispVal datum) {
+		String source = ClojureStringLowering.prSource(ClojureLowerUtil.stripMeta(datum));
+		return source != null ? source : datum.print();
+	}
+
+	/** The datum {@code (let [name init] body)}. */
+	static LispVal letDatum(String name, LispVal init, LispVal body) {
+		return ClojureLowerUtil.list(List.of(new LispSymbol(ClojureCoreNames.PREFIX + "let"),
+				new LispCons(ClojureReader.VECTOR, ClojureLowerUtil.list(List.of(new LispSymbol(name), init))), body));
+	}
+
+	/**
+	 * A function argument a spliced runtime worker funcalls: {@link #fnValue}, passed as
+	 * itself when it is a real function (a function form, or a variable bound to one),
+	 * else wrapped by {@link ClojureLowering#realFun}.
+	 */
+	static LispVal realFnValue(ClojureLowering ctx, LispVal form) {
+		LispVal fun = fnValue(ctx, form);
+		return holdsRealFun(ctx, form, fun) ? fun : ClojureLowering.realFun(fun);
+	}
+
+	/**
+	 * A function argument an inline loop invokes at its call site: the {@link #fnValue}
+	 * plus whether it always evaluates to a real function, so the loop funcalls it
+	 * without the IFn dispatcher.
+	 *
+	 * @param fun the lowered function form
+	 * @param real whether {@code fun} is always a real function
+	 */
+	record FnArg(LispVal fun, boolean real) {
+
+		/** A form that was lowered elsewhere: real only when it {@code yieldsFun}. */
+		static FnArg of(LispVal fun) {
+			return new FnArg(fun, ClojureLowerUtil.yieldsFun(fun));
+		}
+
+	}
+
+	/**
+	 * The {@link FnArg} of a function datum: its {@link #fnValue}, real when
+	 * {@link #holdsRealFun} -- decided here, from the datum, never from a lowered symbol.
+	 */
+	static FnArg fnArg(ClojureLowering ctx, LispVal form) {
+		LispVal fun = fnValue(ctx, form);
+		return new FnArg(fun, holdsRealFun(ctx, form, fun));
+	}
+
+	/**
+	 * Whether the {@link #fnValue} of the datum always evaluates to a real function: a
+	 * form that {@link ClojureLowerUtil#yieldsFun yields one}, or a variable bound to
+	 * one.
+	 * @param form the function datum
+	 * @param fun its {@link #fnValue}
+	 * @return whether it can be funcalled without the IFn dispatcher
+	 */
+	static boolean holdsRealFun(ClojureLowering ctx, LispVal form, LispVal fun) {
+		return ClojureLowerUtil.yieldsFun(fun)
+				|| form instanceof LispSymbol s && fun instanceof LispSymbol && ctx.isDirectVar(s.name());
+	}
+
+	/**
+	 * A function in argument position: a known defn, a local binding, a lambda, a
+	 * keyword.
+	 */
+	static LispVal fnValue(ClojureLowering ctx, LispVal form) {
+		if (form instanceof LispSymbol s && s.name().startsWith(":")) {
+			// no scope can bind a keyword (plainName refuses one), so this is data
+			return ClojureFnLowering.keywordFn(ctx, form);
+		}
+		if (form instanceof LispSymbol s && ctx.known(s.name())) {
+			if (ctx.isMacro(s.name())) {
+				throw new LispReadException(s.name() + " is a macro, not a function");
+			}
+			if (ctx.isFunction(s.name())) {
+				return ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), ctx.symOf(s.name()));
+			}
+			if (ctx.open && ctx.isDeclaredOnly(s.name())) {
+				return ClojureVarLowering.sessionDeclaredRoot(ctx.symOf(s.name()));
+			}
+			return ctx.symOf(s.name());
+		}
+		if (form instanceof LispSymbol s) {
+			LispVal predicate = ClojureFnLowering.predicateValue(ctx, s.name());
+			if (predicate != null) {
+				return ctx.sharedValue(s.name(), predicate);
+			}
+		}
+		if (form instanceof LispSymbol s) {
+			ClojureLowering.VarRef qualified = ClojureNamespaceLowering.resolveQualified(ctx, s.name());
+			if (qualified == null) {
+				qualified = ClojureNamespaceLowering.libraryRefer(ctx, s.name());
+			}
+			if (qualified != null) {
+				return ClojureNamespaceLowering.namespaceValue(ctx, qualified);
+			}
+		}
+		LispVal collection = ClojureSeqLowering.collectionValue(ctx, form);
+		if (collection != null) {
+			return collection;
+		}
+		return ctx.lower(form);
+	}
+
+	/**
+	 * One binding pattern destructured against an already-lowered init: flat
+	 * {@code (symbol init)} pairs appended to {@code pairs}, plain names registered in
+	 * {@code scope}. A plain symbol binds directly; a vector binds positionally through
+	 * the seq view ({@code &} the rest as a seq, {@code :as} the whole); a map binds
+	 * through the table-aware read ({@code :keys}/{@code :syms}/ {@code :strs}, explicit
+	 * locals, {@code :as}, {@code :or} defaults, whose keys name the locals they
+	 * default).
+	 */
+	static void destructureInto(ClojureLowering ctx, LispVal pattern, LispVal init, List<LispVal> pairs,
+			Map<String, ClojureLowering.Kind> scope, String what) {
+		// metadata on a pattern (type hints like ^String) is dropped, like the
+		// rest: it never affects dispatch
+		pattern = ClojureLowerUtil.stripMeta(pattern);
+		if (pattern instanceof LispSymbol) {
+			String name = ClojureLowerUtil.plainName(pattern, what);
+			scope.put(name, ClojureLowering.Kind.VARIABLE);
+			pairs.add(ClojureLowerUtil.list(ctx.localSym(name), init));
+			return;
+		}
+		List<LispVal> elements = ClojureLowerUtil.items(pattern);
+		if (elements != null && !elements.isEmpty() && elements.get(0) == ClojureReader.VECTOR) {
+			destructureVector(ctx, elements.subList(1, elements.size()), init, pairs, scope, what);
+			return;
+		}
+		if (elements != null && !elements.isEmpty() && ClojureLowerUtil.isSymbolNamed(elements.get(0), "%hash-map")) {
+			destructureMap(ctx, elements.subList(1, elements.size()), init, pairs, scope, what);
+			return;
+		}
+		throw new LispReadException(what + " needs a plain name or a vector or map pattern, not " + pattern.print());
+	}
+
+	/**
+	 * A vector pattern against an already-lowered init: each element binds positionally
+	 * and anything past the end is nil; {@code &} binds the rest as a seq, {@code :as}
+	 * the whole. Elements destructure recursively. The shape is the oracle's
+	 * {@code seq-binding-form}: positional patterns, then an optional {@code & rest},
+	 * then an optional {@code :as name}, which ends the pattern
+	 * ({@code [tag & content :as all]}). Like the oracle's {@code destructure}, a pattern
+	 * without {@code &} reads each element through {@code nth} (a map or a set refused),
+	 * and one with it through the seq view ({@code first} after each {@code next}), so it
+	 * takes any seqable: {@code [[k v] & ks]} over a map walks its entries (spec.alpha's
+	 * {@code map-spec-impl}).
+	 */
+	static void destructureVector(ClojureLowering ctx, List<LispVal> elements, LispVal init, List<LispVal> pairs,
+			Map<String, ClojureLowering.Kind> scope, String what) {
+		LispSymbol whole = ctx.freshTemp();
+		pairs.add(ClojureLowerUtil.list(whole, init));
+		boolean hasRest = false;
+		for (LispVal element : elements) {
+			hasRest |= ClojureLowerUtil.isSymbolNamed(element, "&");
+		}
+		int position = 0;
+		for (int i = 0; i < elements.size(); i++) {
+			LispVal element = elements.get(i);
+			if (ClojureLowerUtil.isSymbolNamed(element, ":as")) {
+				ClojureLowerUtil.isTrue(i + 1 < elements.size(), "a vector pattern :as needs a plain name after it");
+				ClojureLowerUtil.isTrue(i + 2 == elements.size(), "a vector pattern :as and its name end the pattern");
+				String name = ClojureLowerUtil.plainName(elements.get(++i), "a vector pattern :as");
+				scope.put(name, ClojureLowering.Kind.VARIABLE);
+				pairs.add(ClojureLowerUtil.list(ctx.localSym(name), whole));
+				continue;
+			}
+			if (ClojureLowerUtil.isSymbolNamed(element, "&")) {
+				ClojureLowerUtil.isTrue(i + 1 < elements.size(),
+						"a vector pattern & needs a single rest pattern after it");
+				ClojureLowerUtil.isTrue(
+						i + 2 == elements.size() || i + 2 < elements.size()
+								&& ClojureLowerUtil.isSymbolNamed(elements.get(i + 2), ":as"),
+						"a vector pattern & takes a single rest pattern after it");
+				destructureInto(ctx, elements.get(++i), dropView(ctx, whole, position), pairs, scope, what);
+				continue;
+			}
+			LispVal index = new LispInteger(position);
+			destructureInto(ctx, element,
+					hasRest ? ClojureSeqLowering.seqNthForm(whole, index)
+							: ClojureSeqLowering.nthForm(ctx, whole, index, ClojureLowering.NIL_CONST),
+					pairs, scope, what);
+			position++;
+		}
+	}
+
+	/**
+	 * The seq view past the first {@code n} items: the spliced {@code %clojure-nthnext},
+	 * the oracle's {@code next} after each position, stepping one realized level at a
+	 * time, so a lazy rest stays lazy (and an infinite input still binds).
+	 */
+	static LispVal dropView(ClojureLowering ctx, LispVal coll, int n) {
+		if (n == 0) {
+			return ClojureSeqLowering.seqForm(ctx, coll);
+		}
+		return ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-NTHNEXT"), coll, new LispInteger(n));
+	}
+
+	/**
+	 * A map pattern against an already-lowered init: every entry but the
+	 * {@code :keys}/{@code :syms}/{@code :strs}/{@code :as}/{@code :or} directives binds
+	 * its local through the table-aware read of its key expression, with the {@code :or}
+	 * default when present. A seq init reads as the map its keyword arguments stand for
+	 * ({@code %clojure-destructure-map}), so {@code & {:keys [a]}} takes {@code :a 1}
+	 * like the oracle's; {@code :as} binds that map.
+	 */
+	static void destructureMap(ClojureLowering ctx, List<LispVal> entries, LispVal init, List<LispVal> pairs,
+			Map<String, ClojureLowering.Kind> scope, String what) {
+		LispSymbol whole = ctx.freshTemp();
+		pairs.add(ClojureLowerUtil.list(whole,
+				ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-DESTRUCTURE-MAP"), init)));
+		Map<String, LispVal> defaults = new HashMap<>();
+		for (int i = 0; i + 1 < entries.size(); i += 2) {
+			if (!ClojureLowerUtil.isSymbolNamed(entries.get(i), ":or")) {
+				continue;
+			}
+			List<LispVal> orMap = ClojureLowerUtil.items(entries.get(i + 1));
+			if (orMap == null || orMap.isEmpty() || !ClojureLowerUtil.isSymbolNamed(orMap.get(0), "%hash-map")) {
+				throw new LispReadException(
+						"a map pattern :or takes a map of defaults, not " + entries.get(i + 1).print());
+			}
+			List<LispVal> orEntries = orMap.subList(1, orMap.size());
+			for (int j = 0; j + 1 < orEntries.size(); j += 2) {
+				LispVal defaultKey = orEntries.get(j);
+				ClojureLowerUtil.isTrue(defaultKey instanceof LispSymbol key && !key.name().startsWith(":"),
+						"a map pattern :or takes plain names for defaults, not " + defaultKey.print());
+				defaults.put(((LispSymbol) defaultKey).name(), orEntries.get(j + 1));
+			}
+		}
+		for (int i = 0; i + 1 < entries.size(); i += 2) {
+			LispVal head = entries.get(i);
+			LispVal arg = entries.get(i + 1);
+			if (ClojureLowerUtil.isSymbolNamed(head, ":or")) {
+				continue;
+			}
+			if (ClojureLowerUtil.isSymbolNamed(head, ":as")) {
+				String name = ClojureLowerUtil.plainName(arg, "a map pattern :as");
+				scope.put(name, ClojureLowering.Kind.VARIABLE);
+				pairs.add(ClojureLowerUtil.list(ctx.localSym(name), whole));
+				continue;
+			}
+			String directive = keysDirective(head);
+			if (directive != null) {
+				bindKeys(ctx, ((LispSymbol) head).name(), directive, directiveNamespace(ctx, (LispSymbol) head), arg,
+						whole, pairs, scope, defaults);
+				continue;
+			}
+			if (head instanceof LispSymbol) {
+				String name = ClojureLowerUtil.plainName(head, "a map pattern binding");
+				scope.put(name, ClojureLowering.Kind.VARIABLE);
+				pairs.add(ClojureLowerUtil.list(ctx.localSym(name),
+						ClojureCollectionLowering.getForm(ctx, whole, ctx.lower(arg), defaultFor(ctx, defaults, name),
+								ClojureCollectionLowering.supplied(defaults.containsKey(name)))));
+				continue;
+			}
+			// a nested pattern binds from the same read, without an :or default
+			destructureInto(ctx, head, ClojureCollectionLowering.getForm(ctx, whole, ctx.lower(arg),
+					ClojureLowering.NIL_CONST, ClojureCollectionLowering.supplied(false)), pairs, scope, what);
+		}
+	}
+
+	/**
+	 * The directive a map pattern key spells: {@code ":keys"}, {@code ":syms"} or
+	 * {@code ":strs"}, also as {@code :ns/keys}, {@code ::keys} and {@code ::alias/keys};
+	 * null for any other key.
+	 */
+	static @Nullable String keysDirective(LispVal head) {
+		if (!(head instanceof LispSymbol symbol) || !symbol.name().startsWith(":")) {
+			return null;
+		}
+		String name = symbol.name();
+		int slash = name.lastIndexOf('/');
+		String last = slash >= 0 ? name.substring(slash + 1) : name.substring(name.startsWith("::") ? 2 : 1);
+		return switch (last) {
+			case "keys", "syms", "strs" -> ":" + last;
+			default -> null;
+		};
+	}
+
+	/**
+	 * The namespace a qualified directive ({@code :ns/keys}, {@code ::keys},
+	 * {@code ::alias/keys}) qualifies its entries with; null for a plain one.
+	 */
+	private static @Nullable String directiveNamespace(ClojureLowering ctx, LispSymbol head) {
+		String name = head.name();
+		if (name.indexOf('/') < 0 && !name.startsWith("::")) {
+			return null;
+		}
+		String spelling = ClojureCollectionLowering.resolveKeywordSpelling(ctx, name);
+		String ns = spelling.substring(0, Math.max(0, spelling.lastIndexOf('/')));
+		ClojureLowerUtil.isTrue(!ns.isEmpty(), "a map pattern " + name + " needs a namespace");
+		return ns;
+	}
+
+	/**
+	 * One {@code :keys}/{@code :syms}/{@code :strs} directive: each entry binds its local
+	 * from the keyword, symbol or string key of that spelling. A {@code :keys} or
+	 * {@code :syms} entry may qualify, binding the short name, and a {@code :keys} entry
+	 * may be a keyword ({@code :a}, {@code :b/c}, {@code ::d}). A qualified directive
+	 * ({@code :ns/keys}, {@code ::keys}, {@code ::alias/keys}) reads each simple symbol
+	 * from {@code ns}; a qualified entry, a keyword entry and {@code :ns/strs} are
+	 * refused as the oracle's spec refuses them.
+	 */
+	static void bindKeys(ClojureLowering ctx, String spelled, String kind, @Nullable String ns, LispVal names,
+			LispVal whole, List<LispVal> pairs, Map<String, ClojureLowering.Kind> scope,
+			Map<String, LispVal> defaults) {
+		ClojureLowerUtil.isTrue(ns == null || !kind.equals(":strs"),
+				"a map pattern " + spelled + " is not a destructuring directive");
+		List<LispVal> elements = ClojureLowerUtil.items(names);
+		if (elements == null || elements.isEmpty() || elements.get(0) != ClojureReader.VECTOR) {
+			throw new LispReadException(
+					"a map pattern " + spelled + " takes a vector of plain names, not " + names.print());
+		}
+		for (LispVal entry : elements.subList(1, elements.size())) {
+			// a hint on an entry ({:keys [^String class]}) only types the local
+			LispVal element = ClojureLowerUtil.stripMeta(entry);
+			String refusal = "a map pattern " + spelled + " takes a vector of plain names, not " + element.print();
+			ClojureLowerUtil.isTrue(element instanceof LispSymbol && !((LispSymbol) element).name().equals("&"),
+					refusal);
+			String written = ((LispSymbol) element).name();
+			boolean keyword = written.startsWith(":");
+			ClojureLowerUtil.isTrue(!keyword || kind.equals(":keys") && ns == null, refusal);
+			String lookup = keyword ? ClojureCollectionLowering.resolveKeywordSpelling(ctx, written) : written;
+			String local = lookup;
+			if (!kind.equals(":strs") && lookup.lastIndexOf('/') >= 0) {
+				local = lookup.substring(lookup.lastIndexOf('/') + 1);
+				ClojureLowerUtil.isTrue(!local.isEmpty(), refusal);
+			}
+			if (ns != null) {
+				ClojureLowerUtil.isTrue(lookup.indexOf('/') < 0, refusal);
+				lookup = ns + "/" + local;
+			}
+			LispVal keyForm = switch (kind) {
+				case ":keys" -> ctx.lower(new LispSymbol(":" + lookup));
+				case ":syms" -> ctx.quote(ns != null ? new LispSymbol(lookup) : element);
+				default -> LispString.literal(local);
+			};
+			scope.put(local, ClojureLowering.Kind.VARIABLE);
+			pairs.add(ClojureLowerUtil.list(ctx.localSym(local),
+					ClojureCollectionLowering.getForm(ctx, whole, keyForm, defaultFor(ctx, defaults, local),
+							ClojureCollectionLowering.supplied(defaults.containsKey(local)))));
+		}
+	}
+
+	static LispVal defaultFor(ClojureLowering ctx, Map<String, LispVal> defaults, String name) {
+		LispVal found = defaults.get(name);
+		return found == null ? ClojureLowering.NIL_CONST : ctx.lower(found);
+	}
+
+	// Seq verbs: each over the seq view, strict lists, nil-for-empty
+
+}

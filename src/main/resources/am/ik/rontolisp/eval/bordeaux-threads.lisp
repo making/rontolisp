@@ -1,0 +1,481 @@
+;; The bordeaux-threads packages (v1, nickname bt; and bt2, nickname
+;; bordeaux-threads-2): the v1 API of bordeaux-threads 0.9 -- locks over the
+;; built-in rontolisp:*-mutex primitives, condition variables over the internal
+;; rontolisp::%condition-* primitives, semaphores over both, threads over the
+;; built-in rontolisp:make-thread primitives -- with the v2 names that mean the
+;; same, satisfying the built-in ASDF system "bordeaux-threads". Upstream is a per-implementation portability
+;; layer whose own .asd hard-errors on an unknown implementation, so it cannot
+;; support rontolisp from its side -- a shim is the only route. Written in
+;; canonical shape; both packages (and the cross-package import redirects that
+;; make each API's names resolve from the other package too) are seeded in
+;; PackageRegistry.
+;;
+;; with-lock-held is NOT here: it is a built-in LispMacroExpander expansion
+;; dispatched on its qualified name (the usocket:with-* pattern) onto
+;; acquire-lock / release-lock below, so the same acquire / body /
+;; release-on-unwind lowering serves every backend.
+;;
+;; Compatibility notes:
+;; - Thread creation is REAL on the interpreter and the JVM backend
+;;   (rontolisp:make-thread spawns a virtual thread; clack's handler.lisp is
+;;   the driving consumer). On the WASM backends -- single-threaded by
+;;   construction -- make-thread, join-thread and destroy-thread SIGNAL at call
+;;   time (never run inline: a shim that pretended to spawn would turn a
+;;   compile-time error into a silently sequential program), threadp answers
+;;   nil, and thread-alive-p signals its ordinary not-a-thread error (no thread
+;;   handle can exist there, so every argument is one the other backends signal
+;;   on too). current-thread, all-threads, thread-name and condition-wait signal
+;;   there as well (condition-wait could only wait forever); condition-notify
+;;   and condition-broadcast wake nobody, so a semaphore counts and a wait on a
+;;   positive count returns at once.
+;; - interrupt-thread and with-timeout SIGNAL on every backend, as upstream does
+;;   on an implementation without them: no backend can run code inside another
+;;   running thread. What cannot run signals bt2:not-implemented, upstream's
+;;   condition for it, with the reason as its report.
+;; - make-thread's :initial-bindings (and *default-special-bindings*) is an
+;;   alist of (symbol . form) pairs whose forms upstream evaluates in the new
+;;   thread. The shim supports quote forms and self-evaluating values -- whose
+;;   value is thread-independent, so where they are evaluated is unobservable
+;;   -- and signals on any other form (a variable-reference form would need the
+;;   new thread's dynamic environment). clack's bindings are exactly quotes and
+;;   already-evaluated stream values.
+;; - make-thread's :name rides the handle (thread-name); :trap-conditions is
+;;   accepted and ignored: an error that ends the thread is stored in the handle,
+;;   and join-thread signals bt2:abnormal-exit over it on every path here.
+;; - A bt thread is the native one (thread-native-thread answers it).
+;; - all-threads answers the thread that loaded the system and the live threads
+;;   make-thread spawned, not threads spawned by other means (a served request).
+;; - make-lock returns a REENTRANT lock, where upstream's is not (upstream's
+;;   make-recursive-lock is). That is a superset: a program that would deadlock
+;;   on a real bordeaux-threads merely proceeds here. A lock is a structure over
+;;   the mutex handle, so it has a class of its own (serapeum specializes a
+;;   method on (class-of (bt:make-recursive-lock))).
+;; - A lock keeps its name for lock-name, and lock-native-lock answers its mutex
+;;   handle. native-lock-p and native-recursive-lock-p signal: the handle is
+;;   opaque by design (an integer on the interpreter), so nothing can tell one.
+;; - acquire-lock's wait-p, :wait and :timeout are accepted and ignored: the
+;;   acquisition always blocks, so a (acquire-lock l nil) caller that expects an
+;;   immediate nil on contention instead waits (lparallel moves on where it
+;;   finds a lock taken; it waits here).
+
+(defparameter bordeaux-threads:*supports-threads-p*
+  ;; A claim libraries act on, so it is per-backend and not decoration: the
+  ;; interpreter and the JVM really spawn threads (make-thread, and one virtual
+  ;; thread per served request), while both WASM backends are single-threaded
+  ;; by construction.
+  #+rontolisp-wasm nil
+  #-rontolisp-wasm t)
+
+(defconstant bt2:+supports-threads-p+ #+rontolisp-wasm nil #-rontolisp-wasm t)
+
+;;; --- conditions --------------------------------------------------------------
+
+(define-condition bt2:bordeaux-threads-error (error) ())
+
+(define-condition bt2:not-implemented (bt2:bordeaux-threads-error) ())
+
+;; The shim's not-implemented: its report is the reason the operation cannot run.
+(define-condition bt2::not-supported (simple-error bt2:not-implemented) ())
+
+(defun bt2::signal-not-supported (reason)
+  (error 'bt2::not-supported
+         :format-control "~A"
+         :format-arguments (list reason)))
+
+;; What join-thread signals over the error that ended the thread.
+(define-condition bt2:abnormal-exit (bt2:bordeaux-threads-error)
+  ((exit-condition :initarg :condition :reader bt2:abnormal-exit-condition))
+  (:report
+   (lambda (condition stream)
+     (format stream "Thread exited with condition: ~A"
+             (bt2:abnormal-exit-condition condition)))))
+
+;;; --- locks -------------------------------------------------------------------
+
+(defstruct (bordeaux-threads:lock (:%intern-package "BORDEAUX-THREADS")
+            (:constructor bordeaux-threads::%make-lock (mutex name))
+            (:predicate bordeaux-threads:lock-p)
+            (:conc-name bordeaux-threads::%lock-) (:copier nil))
+  mutex
+  name)
+
+;; make-lock is already reentrant here, so a recursive lock IS a plain lock;
+;; the pair exists upstream only because ITS make-lock is not.
+(deftype bordeaux-threads:recursive-lock () 'bordeaux-threads:lock)
+
+;; &rest rather than &optional: the v1 spelling passes a positional name,
+;; the v2 spelling (bt2:make-lock :name "...") passes a keyword pair -- both
+;; resolve to this ONE symbol through the package import redirects.
+(defun bordeaux-threads:make-lock (&rest name)
+  (bordeaux-threads::%make-lock (rontolisp:make-mutex)
+   (if (eq (car name) :name) (car (cdr name)) (car name))))
+
+(defun bordeaux-threads:make-recursive-lock (&rest name)
+  (bordeaux-threads::%make-lock (rontolisp:make-mutex)
+   (if (eq (car name) :name) (car (cdr name)) (car name))))
+
+(defun bordeaux-threads:recursive-lock-p (object)
+  (bordeaux-threads:lock-p object))
+
+(defun bt2:lockp (object) (bordeaux-threads:lock-p object))
+
+(defun bt2:lock-name (lock) (bordeaux-threads::%lock-name lock))
+
+(defun bt2:lock-native-lock (lock) (bordeaux-threads::%lock-mutex lock))
+
+(defun bt2:native-lock-p (object)
+  (declare (ignore object))
+  (bt2::signal-not-supported
+   "bt2:native-lock-p is not supported: a rontolisp mutex handle is opaque by design, so nothing can tell one"))
+
+(defun bt2:native-recursive-lock-p (object) (bt2:native-lock-p object))
+
+(deftype bt2:native-lock () '(satisfies bt2:native-lock-p))
+
+(deftype bt2:native-recursive-lock () '(satisfies bt2:native-recursive-lock-p))
+
+;; &rest: the v1 spelling passes a positional wait-p, the v2 one :wait and
+;; :timeout. Both block (see the note above).
+(defun bordeaux-threads:acquire-lock (lock &rest options)
+  (declare (ignore options))
+  (rontolisp:mutex-acquire (bordeaux-threads::%lock-mutex lock))
+  t)
+
+(defun bordeaux-threads:release-lock (lock)
+  (rontolisp:mutex-release (bordeaux-threads::%lock-mutex lock))
+  t)
+
+(defun bordeaux-threads:acquire-recursive-lock (lock)
+  (bordeaux-threads:acquire-lock lock))
+
+(defun bordeaux-threads:release-recursive-lock (lock)
+  (bordeaux-threads:release-lock lock))
+
+;;; --- condition variables -------------------------------------------------------
+
+(defstruct (bt2:condition-variable (:%intern-package "BORDEAUX-THREADS")
+            (:constructor bordeaux-threads::%make-condition-variable (handle))
+            (:predicate bt2:condition-variable-p)
+            (:conc-name bordeaux-threads::%condition-variable-) (:copier nil))
+  handle)
+
+#-rontolisp-wasm
+(defun bordeaux-threads:make-condition-variable (&key name)
+  (bordeaux-threads::%make-condition-variable
+   (rontolisp::%condition-variable-new)))
+
+;; Releases LOCK (every hold), waits for a notify, takes LOCK back and answers
+;; t -- or nil once TIMEOUT seconds passed without one. A wakeup may be
+;; spurious, as upstream allows: a caller re-tests its predicate in a loop.
+#-rontolisp-wasm
+(defun bordeaux-threads:condition-wait (condition-variable lock &key timeout)
+  (rontolisp::%condition-wait
+   (bordeaux-threads::%condition-variable-handle condition-variable)
+   (bordeaux-threads::%lock-mutex lock)
+   (and timeout (max 0 (round (* timeout 1000000000))))))
+
+#-rontolisp-wasm
+(defun bordeaux-threads:condition-notify (condition-variable)
+  (rontolisp::%condition-notify
+   (bordeaux-threads::%condition-variable-handle condition-variable) nil))
+
+#-rontolisp-wasm
+(defun bordeaux-threads:condition-broadcast (condition-variable)
+  (rontolisp::%condition-notify
+   (bordeaux-threads::%condition-variable-handle condition-variable) t))
+
+#+rontolisp-wasm
+(defun bordeaux-threads:make-condition-variable (&key name)
+  (bordeaux-threads::%make-condition-variable nil))
+
+#+rontolisp-wasm
+(defun bordeaux-threads:condition-wait (condition-variable lock &key timeout)
+  (bt2::signal-not-supported
+   "bt:condition-wait: the WASM backends are single-threaded by construction; no other thread can notify"))
+
+#+rontolisp-wasm
+(defun bordeaux-threads:condition-notify (condition-variable) nil)
+
+#+rontolisp-wasm
+(defun bordeaux-threads:condition-broadcast (condition-variable) nil)
+
+;;; --- semaphores ----------------------------------------------------------------
+
+;; Upstream's own portable semaphore: a count under a lock, and a condition
+;; variable a waiter sleeps on while the count is zero.
+(defstruct (bordeaux-threads:semaphore (:%intern-package "BORDEAUX-THREADS")
+            (:constructor bordeaux-threads::%make-semaphore
+                          (name count lock condition-variable))
+            (:predicate bordeaux-threads:semaphore-p)
+            (:conc-name bordeaux-threads::%semaphore-) (:copier nil))
+  name
+  count
+  lock
+  condition-variable)
+
+(defun bt2:semaphorep (object) (bordeaux-threads:semaphore-p object))
+
+(defun bordeaux-threads:make-semaphore (&key name (count 0))
+  (bordeaux-threads::%make-semaphore name count (bordeaux-threads:make-lock)
+   (bordeaux-threads:make-condition-variable)))
+
+(defun bordeaux-threads:signal-semaphore (semaphore &key (count 1))
+  (bordeaux-threads:with-lock-held ((bordeaux-threads::%semaphore-lock
+                                     semaphore))
+    (incf (bordeaux-threads::%semaphore-count semaphore) count)
+    (loop repeat
+          count
+          do
+            (bordeaux-threads:condition-notify
+             (bordeaux-threads::%semaphore-condition-variable semaphore))))
+  nil)
+
+;; t once the count was decremented, nil when TIMEOUT seconds passed first.
+(defun bordeaux-threads:wait-on-semaphore (semaphore &key timeout)
+  (let ((deadline
+         (and timeout
+              (+ (get-internal-real-time)
+                 (* timeout internal-time-units-per-second))))
+        (lock (bordeaux-threads::%semaphore-lock semaphore))
+        (cv (bordeaux-threads::%semaphore-condition-variable semaphore)))
+    (bordeaux-threads:with-lock-held (lock)
+      (loop
+        (when (plusp (bordeaux-threads::%semaphore-count semaphore))
+          (decf (bordeaux-threads::%semaphore-count semaphore))
+          (return t))
+        (if deadline
+            (let ((remaining
+                   (/ (- deadline (get-internal-real-time))
+                      internal-time-units-per-second)))
+              (unless (plusp remaining) (return nil))
+              (bordeaux-threads:condition-wait cv lock :timeout remaining))
+            (bordeaux-threads:condition-wait cv lock))))))
+
+;;; --- atomic integers -----------------------------------------------------------
+
+;; bt2's counter: an unsigned 64-bit word that wraps, incremented, decremented and
+;; swapped atomically. One lock per counter guards it -- upstream's own arm for an
+;; implementation without a compare-and-swap of its own -- so each operation is atomic
+;; against the others on the interpreter and the JVM, and a WASM module, which runs one
+;; thread, takes the lock for nothing. The incf/decf answer the old value plus or minus
+;; the delta, unwrapped, as upstream's SBCL arm does; the swap answers t when it stored.
+(defstruct (bt2:atomic-integer (:%intern-package "BT2")
+            (:constructor bt2::%make-atomic-integer (value lock))
+            (:predicate bt2::atomic-integer-p)
+            (:conc-name bt2::%atomic-integer-) (:copier nil))
+  value
+  lock)
+
+(defun bt2:make-atomic-integer (&key (value 0))
+  (check-type value (unsigned-byte 64))
+  (bt2::%make-atomic-integer value (rontolisp:make-mutex)))
+
+(defun bt2:atomic-integer-value (atomic-integer)
+  (rontolisp:with-mutex ((bt2::%atomic-integer-lock atomic-integer))
+    (bt2::%atomic-integer-value atomic-integer)))
+
+(defun (setf bt2:atomic-integer-value) (new-value atomic-integer)
+  (rontolisp:with-mutex ((bt2::%atomic-integer-lock atomic-integer))
+    (setf (bt2::%atomic-integer-value atomic-integer) new-value)))
+
+(defun bt2:atomic-integer-incf (atomic-integer &optional (delta 1))
+  (rontolisp:with-mutex ((bt2::%atomic-integer-lock atomic-integer))
+    (let ((new (+ (bt2::%atomic-integer-value atomic-integer) delta)))
+      (setf (bt2::%atomic-integer-value atomic-integer) (ldb (byte 64 0) new))
+      new)))
+
+(defun bt2:atomic-integer-decf (atomic-integer &optional (delta 1))
+  (rontolisp:with-mutex ((bt2::%atomic-integer-lock atomic-integer))
+    (let ((new (- (bt2::%atomic-integer-value atomic-integer) delta)))
+      (setf (bt2::%atomic-integer-value atomic-integer) (ldb (byte 64 0) new))
+      new)))
+
+(defun bt2:atomic-integer-compare-and-swap (atomic-integer old new)
+  (rontolisp:with-mutex ((bt2::%atomic-integer-lock atomic-integer))
+    (when (= (bt2::%atomic-integer-value atomic-integer) old)
+      (setf (bt2::%atomic-integer-value atomic-integer) new)
+      t)))
+
+;;; --- threads -------------------------------------------------------------------
+
+(defvar bt2:*default-special-bindings* nil)
+
+(defun bt2::resolve-binding-value (form)
+  ;; One :initial-bindings value form -> its value. Quote forms and
+  ;; self-evaluating values only (see the compatibility note above); a symbol
+  ;; or any other compound form signals rather than binding the wrong value.
+  (cond ((and (consp form) (eq (car form) 'quote)) (car (cdr form)))
+        ((null form) nil)
+        ((eq form t) t)
+        ((keywordp form) form)
+        ((symbolp form)
+         (error "bt2:make-thread: unsupported :initial-bindings value form: ~A"
+                form))
+        ((consp form)
+         (error "bt2:make-thread: unsupported :initial-bindings value form: ~A"
+                form))
+        (t form)))
+
+;; The threads make-thread spawned, for all-threads: each spawn drops the dead
+;; ones, so the list holds the live threads plus those that died since the
+;; last spawn. The spawn and its registration share the lock, so a thread
+;; cannot be missed between the two.
+#-rontolisp-wasm (defvar bt2::*threads-lock* (rontolisp:make-mutex))
+#-rontolisp-wasm (defvar bt2::*threads* nil)
+#-rontolisp-wasm (defvar bt2::*main-thread* (rontolisp:current-thread))
+
+#-rontolisp-wasm
+(defun bt2:make-thread (function &key name
+                        (initial-bindings bt2:*default-special-bindings*)
+                        trap-conditions)
+  (let ((bindings
+         (mapcar (lambda (pair)
+                   (cons (car pair) (bt2::resolve-binding-value (cdr pair))))
+                 initial-bindings)))
+    (rontolisp:with-mutex (bt2::*threads-lock*)
+      (let ((thread (rontolisp:make-thread function bindings name)))
+        (setq bt2::*threads*
+              (cons thread
+                    (remove-if-not (lambda (th) (rontolisp:thread-alive-p th))
+                                   bt2::*threads*)))
+        thread))))
+
+#-rontolisp-wasm
+(defun bordeaux-threads:all-threads ()
+  (rontolisp:with-mutex (bt2::*threads-lock*)
+    (cons bt2::*main-thread*
+          (remove-if-not (lambda (th) (rontolisp:thread-alive-p th))
+                         bt2::*threads*))))
+
+;; The :name make-thread was given; nil for none, and for a thread it did not
+;; spawn.
+#-rontolisp-wasm
+(defun bordeaux-threads:thread-name (thread) (rontolisp::%thread-name thread))
+
+#-rontolisp-wasm
+(defun bordeaux-threads:thread-yield ()
+  (sleep 0)
+  nil)
+
+;; The thread function's values; an error that ended the thread is signaled as
+;; bt2:abnormal-exit over it, as upstream's join-thread does. A non-thread is the
+;; primitive's own type-error.
+#-rontolisp-wasm
+(defun bt2:join-thread (thread)
+  (if (rontolisp:threadp thread)
+      (handler-case (rontolisp:join-thread thread)
+        (error (condition) (error 'bt2:abnormal-exit :condition condition)))
+      (rontolisp:join-thread thread)))
+
+#-rontolisp-wasm (defun bt2:threadp (object) (rontolisp:threadp object))
+
+#-rontolisp-wasm
+(defun bt2:thread-alive-p (thread) (rontolisp:thread-alive-p thread))
+
+#-rontolisp-wasm
+(defun bt2:destroy-thread (thread) (rontolisp:destroy-thread thread))
+
+;; The calling thread's own handle, EQ-stable per thread (the primitive caches
+;; it in a ThreadLocal), so it can key an eq hash table -- dbi's per-thread
+;; connection cache (cache/thread.lisp's steal-cache-table) is the driving
+;; consumer. Works for the main thread and served requests too, not only
+;; make-thread spawns.
+#-rontolisp-wasm (defun bt2:current-thread () (rontolisp:current-thread))
+
+#+rontolisp-wasm
+(defun bt2:make-thread (function &key name initial-bindings trap-conditions)
+  (bt2::signal-not-supported
+   "bt2:make-thread: the WASM backends are single-threaded by construction; run without threads (clack:clackup takes :use-thread nil)"))
+
+#+rontolisp-wasm
+(defun bt2:join-thread (thread)
+  (bt2::signal-not-supported
+   "bt2:join-thread: the WASM backends are single-threaded by construction"))
+
+#+rontolisp-wasm (defun bt2:threadp (object) nil)
+
+#+rontolisp-wasm
+(defun bt2:thread-alive-p (thread)
+  ;; No thread handle can exist on this backend, so every argument is the same
+  ;; non-thread the interpreter and the JVM signal on -- the same type-error and
+  ;; report for every wasm-reachable input, not a divergence.
+  (error 'type-error
+   :datum thread
+   :expected-type '(satisfies rontolisp:threadp)
+   :format-control
+   "THREAD-ALIVE-P: The value ~S is not of type (SATISFIES RONTOLISP:THREADP)"
+   :format-arguments (list thread)))
+
+#+rontolisp-wasm
+(defun bt2:destroy-thread (thread)
+  (bt2::signal-not-supported
+   "bt2:destroy-thread: the WASM backends are single-threaded by construction"))
+
+;; Signals like the other wasm thread entry points. Nothing bundled reaches it:
+;; the dbi override .asd selects the single-threaded cache there (single.lisp,
+;; upstream's own choice for a threadless implementation), which never asks.
+#+rontolisp-wasm
+(defun bt2:current-thread ()
+  (bt2::signal-not-supported
+   "bt2:current-thread: the WASM backends are single-threaded by construction"))
+
+#+rontolisp-wasm
+(defun bordeaux-threads:all-threads ()
+  (bt2::signal-not-supported
+   "bt:all-threads: the WASM backends are single-threaded by construction"))
+
+#+rontolisp-wasm
+(defun bordeaux-threads:thread-name (thread)
+  ;; No thread handle exists here: thread-alive-p's report, for the same reason.
+  (error 'type-error
+   :datum thread
+   :expected-type '(satisfies rontolisp:threadp)
+   :format-control
+   "THREAD-NAME: The value ~S is not of type (SATISFIES RONTOLISP:THREADP)"
+   :format-arguments (list thread)))
+
+#+rontolisp-wasm (defun bordeaux-threads:thread-yield () nil)
+
+;;; --- the rest of the v1 export list ----------------------------------------------
+
+(deftype bordeaux-threads:thread () '(satisfies bt2:threadp))
+
+(defun bordeaux-threads:start-multiprocessing () nil)
+
+(defun bt2:thread-native-thread (thread) thread)
+
+(defun bordeaux-threads:interrupt-thread (thread function &rest args)
+  (bt2::signal-not-supported
+   "bt:interrupt-thread is not supported: no rontolisp backend can run a function inside another running thread"))
+
+(defun bt2:signal-in-thread (thread datum &rest args)
+  (apply #'bordeaux-threads:interrupt-thread thread #'signal datum args))
+
+(defun bt2:warn-in-thread (thread datum &rest args)
+  (apply #'bordeaux-threads:interrupt-thread thread #'warn datum args))
+
+(defun bt2:error-in-thread (thread datum &rest args)
+  (apply #'bordeaux-threads:interrupt-thread thread #'error datum args))
+
+(define-condition bordeaux-threads:timeout (serious-condition)
+  ((length :initform nil :initarg :length)))
+
+(defmacro bordeaux-threads:with-timeout ((timeout) &body body)
+  (declare (ignore body))
+  `(progn
+     ,timeout
+     (bt2::signal-not-supported
+      "bt:with-timeout is not supported: no rontolisp backend can interrupt a running body")))
+
+;; Upstream's alist of the standard I/O variables at their standard values, for
+;; :initial-bindings. Upstream's *package*, *readtable*, *random-state* and
+;; *print-pprint-dispatch* entries are forms evaluated in the new thread, which
+;; :initial-bindings does not support here.
+(defvar bordeaux-threads:*standard-io-bindings*
+  '((*print-array* . t) (*print-base* . 10) (*print-case* . :upcase)
+    (*print-circle* . nil) (*print-escape* . t) (*print-gensym* . t)
+    (*print-length* . nil) (*print-level* . nil) (*print-lines* . nil)
+    (*print-miser-width* . nil) (*print-pretty* . nil) (*print-radix* . nil)
+    (*print-readably* . t) (*print-right-margin* . nil) (*read-base* . 10)
+    (*read-default-float-format* . 'single-float) (*read-eval* . t)
+    (*read-suppress* . nil)))

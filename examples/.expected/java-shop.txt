@@ -1,0 +1,17 @@
+rejected: quantity must be positive (0)
+bob  list   81.21  pays   74.69  saved   6.52
+     1 x lamp @ 25.99 = 23.40
+     2 x desk kit @ 27.61 = 55.22
+cyd  list   69.80  pays   59.33  saved  10.47
+     20 x pad @ 3.49 = 59.33
+dee  list   56.78  pays   51.59  saved   5.19
+     4 x pen @ 1.20 = 4.80
+     2 x lamp @ 25.99 = 46.79
+ann  list   24.87  pays   17.71  saved   7.16
+     12 x pen @ 1.20 = 12.24
+     3 x pad @ 3.49 = 10.47
+office: 86.84
+home: 70.19
+bundle: 55.22
+garden: -
+revenue 203.32, a year of it 2439.84

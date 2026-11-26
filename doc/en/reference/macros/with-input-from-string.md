@@ -1,0 +1,38 @@
+# with-input-from-string
+
+`(with-input-from-string (stream string &key index start end) body...)`
+
+Binds `stream` to an input stream reading from `string`, evaluates the body forms, and returns the value of the last one. `read-line` consumes the string line by line and returns nil at the end; `read` parses one datum and leaves the stream just after it, so successive calls walk the string datum by datum and the rest of a line after the first datum is not lost. Works in all four backends.
+
+```lisp
+(with-input-from-string (s "(1 2 3)")
+  (read s)) ; => (1 2 3)
+```
+
+`:start` and `:end` bound the part of the string the stream reads. `:index` names a
+place that, when the body returns normally, receives the index in `string` of the first
+character the body did not read -- a character given back with `unread-char` counts as
+not read; a non-local exit leaves it untouched.
+
+```lisp
+(let ((i nil))
+  (list (with-input-from-string (s "abcdef" :index i :start 1 :end 5)
+          (read-char s)
+          (read-char s))
+        i)) ; => (#\c 3)
+```
+
+Naming the bound variable `*standard-input*` redirects the whole
+stream-argument-less read family for the extent of the body -- including inside
+called functions -- because `read-line`, `read-char`, `read` and `peek-char`
+read the current (dynamically bound) value of `*standard-input*` at call time.
+A `nil` stream argument is the same designator, so a reader forwarding its own
+optional argument follows the redirect too; only `t` always names the process
+standard input.
+
+```lisp
+(progn
+  (defun next-line (&optional stream) (read-line stream))
+  (with-input-from-string (*standard-input* "from the string")
+    (next-line))) ; => "from the string"
+```

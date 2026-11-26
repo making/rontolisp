@@ -1,0 +1,253 @@
+# サポートされない Common Lisp の機能
+
+rontolisp の Common Lisp フロントエンドは意図的に小さくした Common Lisp のサブセットで、
+すべてのバックエンド（インタプリタ、JVM、WASM）で同一に動作します。ランタイムのメタオブジェクト
+プロトコルなしで言語をそのままのバイトコードにコンパイルできるよう保つため、
+完全な Common Lisp の機能の多くが意図的に省かれています。
+
+このページでは **利用できない、または部分的にしか対応していないもの** だけを
+挙げます。**利用できる**ものについては、
+[言語リファレンス](../reference/special-forms.md)を参照してください。
+
+| 機能 | 状況 |
+| --- | --- |
+| リスタート | 利用可。デバッガ統合（`break`。`*debugger-hook*` は `invoke-debugger` からのみ）とコンディションとの関連付けはありません |
+| `&environment` | `defmacro` のラムダリストで受け付け、呼び出し位置でスコープにあるシンボルマクロを保持して `macroexpand` から読めます。`macrolet` のマクロはこれを介さず nil の環境でも見つかり、`with-slots`/`with-accessors` の名前は含まれません。`&whole` は `defmacro`・`destructuring-bind` の双方で動作します |
+| `loop`（拡張版） | 一部対応（後述） |
+| CLOS | 一部対応（静的サブセット + 定義時 MOP サブセット） |
+| `defstruct` の `:include` | 単一継承のみ。スロットのデフォルトを上書きする `(:include parent (slot default) ...)` は利用可能 |
+| `declare` / `declaim` / `proclaim` / `the` | 結果は変えない。WASM では配列の `type` 宣言が要素アクセサのエミットを誘導（モジュールが小さく速くなる）、それ以外では解析されるだけの no-op |
+| `typep` / `subtypep` / `coerce` | リテラル（クオートされた）型指定子のみ。`coerce` の結果型は `'list` / `'vector` / `'string`（または浮動小数点型） |
+| `concatenate` | `'list` / `'vector` / `'string` のシーケンス系統を構築 |
+| `make-package` / `rename-package` / `delete-package` / `unintern` / `shadow`（ランタイム） | `make-package`、`rename-package`、`delete-package`、`packagep`、`package-nicknames`、`find-all-symbols`、`do-all-symbols`、`apropos`/`apropos-list` は利用可能（後述の二層）。`shadow` / `shadowing-import` / `unintern` はパッケージのメンバーテーブルを変更する。コンパイル済みバックエンドでメンバーテーブルを持つのはプログラム自身が作ったパッケージだけ |
+| `eval-when` | トップレベルではフェーズの区別がなく、どの状況指定でも本体を実行する。それ以外の位置では CL と同じく `:execute` のときだけ実行する |
+| `#:name` | 普通のシンボルとして読まれ、gensym 的な新規性はない |
+| `*modules*` | コンパイルパスでは `nil`（`provide` はコンパイル時に消費される）。インタプリタでは provide されたモジュールを並べる |
+| 複素数 | `--no-gc` 以外のすべてのバックエンドで利用可（[数値タワー](#numeric-tower)） |
+| `--no-gc` での `catch` / `throw` / `unwind-protect` / 条件 | コンパイルエラー（他のバックエンドでは利用可能） |
+
+## 多値
+
+[`values`](../reference/functions/values.md) とその消費側は、ユーザ定義関数の
+多値も含めて利用できます。Common Lisp からの残る相違点は次のとおりです:
+
+- **末尾以外**の位置で `values` を呼んでから通常の値を返すプロデューサは
+  古い余剰値を残すことがあるため、`values` は結果位置で使ってください
+  （消費側は受け取った値をクリアするので、余剰値が残るのは何も消費しない
+  `values` 呼び出しだけです）。
+- `funcall #'values`（ファーストクラス値）はコンパイル済みプログラムでは
+  主値のみを返します。
+- 組み込みの `#'name` を渡した `multiple-value-call` はラッパーの固定
+  アリティのままです — それ以外の引数個数にはユーザ定義関数か `lambda` を
+  渡してください。
+- CL で副次値を持つ他の組み込み関数（比に対する `truncate` 系の剰余など）は
+  単一値のままです —
+  [`decode-universal-time`](../reference/functions/decode-universal-time.md) と
+  [`get-decoded-time`](../reference/functions/get-decoded-time.md) は 9 個の値すべてを、
+  [`find-symbol`](../reference/functions/find-symbol.md) と
+  [`intern`](../reference/functions/intern.md) はアクセス可能性ステータスを、
+  [`macroexpand-1`](../reference/functions/macroexpand-1.md) /
+  [`macroexpand`](../reference/functions/macroexpand.md) は `expanded-p` を、
+  [`subtypep`](../reference/functions/subtypep.md) は `valid-p` を、
+  [`read-from-string`](../reference/functions/read-from-string.md) は
+  停止インデックスを、[`read-line`](../reference/functions/read-line.md) は
+  `missing-newline-p` を返します。
+
+## 非局所脱出
+
+[`catch`](../reference/special-forms/catch.md) /
+[`throw`](../reference/special-forms/throw.md)、
+[`block`](../reference/macros/block.md) /
+[`return-from`](../reference/macros/return-from.md) と
+[`tagbody`](../reference/special-forms/tagbody.md) /
+[`go`](../reference/special-forms/go.md) は利用できますが、**コンパイル済み**
+バックエンドには 1 つの制限があります（インタプリタには影響しません）:
+
+- `go` はレキシカルに囲む `tagbody` のタグのみを対象にできます。インタプリタは
+  さらに関数呼び出しの境界を越える動的 `go`、つまり*呼び出し元*が確立したタグへの
+  ジャンプもサポートします。ネストした `lambda` の内側から囲む関数のタグへ
+  ジャンプする形 — [`handler-bind`](../reference/macros/handler-bind.md) の
+  ハンドラが `go` で保護対象のループを再開する形であり、quri の `:lenient` な
+  パーセントデコードがまさにこれです — は `lambda` をまたぐ `return-from` と
+  同じく下位変換されます: そのタグで `tagbody` に再入して実行を続ける
+  非局所脱出になります。
+
+`lambda` や `flet`/`labels` の関数をまたぐ `return-from` は Common Lisp と同じ
+ように振る舞います。`lambda` をまたぐ `return-from` と `go`、`catch`/`throw`、`unwind-protect`、
+条件の捕捉はいずれも例外処理モードでコンパイルされます。`--no-gc` では
+`catch`/`throw`、`unwind-protect` と条件系のフォームはコンパイルエラーに
+なります。
+
+## リスタート
+
+コンディションシステムはリスタート層まで揃っています:
+[`handler-bind`](../reference/macros/handler-bind.md) のハンドラは巻き戻しの
+前にシグナル点で実行され、[`restart-case`](../reference/macros/restart-case.md) /
+[`restart-bind`](../reference/macros/restart-bind.md) /
+[`with-simple-restart`](../reference/macros/with-simple-restart.md) が
+リスタートを確立し、[`find-restart`](../reference/functions/find-restart.md) /
+[`invoke-restart`](../reference/functions/invoke-restart.md) /
+[`compute-restarts`](../reference/functions/compute-restarts.md) /
+[`muffle-warning`](../reference/functions/muffle-warning.md) /
+[`abort`](../reference/functions/abort.md) /
+[`continue`](../reference/functions/continue.md) がそれらを駆動します。
+[`cerror`](../reference/macros/cerror.md) は継続可能です。欠けているのは
+プログラムの**対話的デバッガ**です: `break` は存在せず、`*debugger-hook*` を呼ぶのは
+[`invoke-debugger`](../reference/functions/invoke-debugger.md) だけです
+(デバッガを持つのは [`rontolisp --swank`](../getting-started/swank.md) だけで、その SLIME の
+デバッガがリスタートの `:report` を描画し、`:interactive` 関数を実行します)。
+またリスタートはコンディションと関連付けられません
+(`find-restart`/`compute-restarts` の省略可能なコンディション引数は無視されます)。
+[`check-type`](../reference/macros/check-type.md) /
+[`assert`](../reference/macros/assert.md) /
+[`ccase`](../reference/macros/ccase.md) は依然として `store-value` リスタートを
+提供せずにエラーを通知します。`--no-gc` ではリスタートフォームは主フォームへ
+退化します(そのバックエンドにはコンディションオブジェクトがありません)。
+wasm-GC バックエンドで捕捉できるのは**シグナルされた**コンディションのみです —
+ランタイムトラップは依然として中断させます。
+
+## `loop` マクロ
+
+拡張版 [`loop`](../reference/macros/loop.md) の限定的なサブセットが利用でき
+ます。対応している節はそのページに一覧があり、分配束縛、並行 `and`、アナフォリック
+な `it`、`loop-finish`、`thereis`/`always`/`never` も含まれます。対象外は
+`named`（およびそれが名付ける `return-from`）です。また、分配束縛のパターンは
+ラムダリストキーワードを解釈しません（`&optional` などはエラーにならず通常の変数と
+して束縛されます）。
+
+## 構造体とオブジェクト
+
+[`defstruct`](../reference/special-forms/defstruct.md) は `:include` による継承を
+単一継承の形でのみサポートします。スロットの上書きは利用可能です:
+`(:include parent (slot new-default) ...)` は継承したスロットのデフォルトを
+子のレイアウトでのみ差し替え、インデックスは継承したまま保つため、親のアクセサから
+そのまま読めます。インスタンスは標準の
+`#S(...)` 構文で印字され、`#S(...)`
+リテラルはインスタンスとして読み戻されます — ソース中でも、すべてのバックエンド
+のランタイム `read` / `read-from-string` を通しても（コンパイルされたリーダーは
+フロントエンドと同等で、`#.`、`#n=`/`#n#`、引数 1 つの `read-from-string` の `#+`/`#-` だけはシグナルします）。
+`(:print-object fn)` / `(:print-function fn)` オプションを持つ構造体は
+代わりにその関数を通して印字されます。どちらのオプションもサポートしています。
+
+CLOS は**静的なサブセット**です
+（[`defclass`](../reference/special-forms/defclass.md)、第 1 引数で
+ディスパッチする [`defgeneric`](../reference/special-forms/defgeneric.md) /
+[`defmethod`](../reference/special-forms/defmethod.md)、リテラルのクォートされた
+名前を取る [`make-instance`](../reference/macros/make-instance.md) と
+[`slot-value`](../reference/macros/slot-value.md)）。`:initform` なしで書かれた
+スロットは CL と同様に未束縛で始まります:
+[`slot-boundp`](../reference/macros/slot-boundp.md) がそれを報告し、
+[`slot-makunbound`](../reference/macros/slot-makunbound.md) が元に戻し、
+読み取りは `unbound-slot` をシグナルします。
+[`change-class`](../reference/macros/change-class.md) はインスタンスのクラスを
+その場で変更し（対象は実行時のシンボルやクラスメタオブジェクトでも可）、
+`initialize-instance` / `reinitialize-instance` / `shared-initialize` はユーザ
+メソッドなしでも呼び出せ、関数値にもなります — CL と同様、システムデフォルトが
+指定された initarg を格納し、インスタンスでない引数には no-applicable-method を
+シグナルします。
+**定義時 MOP サブセット**が入っています:
+[`find-class`](../reference/functions/find-class.md) と
+[`class-of`](../reference/functions/class-of.md) は実物の `standard-class`
+と `built-in-class` のメタオブジェクトを返し、
+[`allocate-instance`](../reference/functions/allocate-instance.md) が動作し、
+クラスオプション `(:metaclass M)` は定義時にクラス定義プロトコルを実行します
+（[`defclass`](../reference/special-forms/defclass.md) 参照）— これが postmodern
+の DAO 層を無改変でロードする仕組みです。多重継承も動作します
+（クラス優先順位リスト、スーパークラス間のスロットマージ）。対象外: 実行時のクラス構築
+（計算されたデータからの `ensure-class`、クラス再定義、
+`update-instance-for-different-class`）—
+コンパイルされたプログラムのクラスの集合はコンパイル時に固定されます。実行時に作った
+メソッドは [`add-method`](../reference/functions/add-method.md) で総称関数に加わります。
+
+## ユーザー定義パッケージ
+
+[`defpackage`](../reference/special-forms/defpackage.md) は `:use`、`:export`、
+`:nicknames`、`:import-from`、`:shadowing-import-from`、`:shadow`、`:intern`、`:local-nicknames` を
+サポートする read/コンパイル時ディレクティブです（`:documentation`/`:size` は
+受理されるが無視されます）。トップレベルでない `defpackage` は、それを囲む
+フォームが実行されたときにパッケージを登録します（インタープリタのみ）。
+`use-package`、
+[`unuse-package`](../reference/functions/unuse-package.md)、
+[`export`](../reference/functions/export.md)、`unexport`、
+[`import`](../reference/functions/import.md) は `in-package` と同じ読み込み/
+コンパイル時ディレクティブとして存在します: リテラルなトップレベル呼び出しは
+それ以降のフォームに対して全バックエンドで効果を持ち、実行時に計算される
+呼び出しはインタープリタのみで動作します -- ただし、プログラムのコンパイル中に
+走るもの(コンパイル時に評価される `eval-when`、プログラムがロードするシステム)は
+例外で、コンパイル済みプログラムはその効果のもとでそれ以降のフォームを読みます
+([パッケージ](../reference/packages.md))。実行時に作成するパッケージが第二層です:
+[`make-package`](../reference/functions/make-package.md)
+は空パッケージを作成します(名前は大文字化、`:use`
+項目は既知のパッケージでなければなりません)、
+[`rename-package`](../reference/functions/rename-package.md)
+は改名し(ニックネームを置換)、
+[`delete-package`](../reference/functions/delete-package.md)
+は削除します。失敗は捕捉可能な `package-error`
+を signal し、原因の指示子は
+[`package-error-package`](../reference/functions/package-error-package.md)
+で取り出せます。読込/compile
+時パッケージ(組込みと、コンパイルされたプログラムの `defpackage`
+の成果物)は実行時に不変です -- 改名も削除も signal
+します(コンパイル済みバックエンドがそれに解決しているため)。インタープリタでは
+`defpackage` の成果物は実行時層に入るため、他と同様に改名も削除もできます。問い合わせ系は両層に届きます:
+[`packagep`](../reference/functions/packagep.md)、
+[`package-nicknames`](../reference/functions/package-nicknames.md)、
+[`find-all-symbols`](../reference/functions/find-all-symbols.md)、
+[`do-all-symbols`](../reference/macros/do-all-symbols.md)、
+[`apropos`](../reference/functions/apropos.md) /
+[`apropos-list`](../reference/functions/apropos-list.md)。コンパイル済みバックエンドはコンパイル時に焼き込んだテーブルと、そのプログラム自身が作ったパッケージから答えます。
+[`shadow`](../reference/functions/shadow.md)、
+[`shadowing-import`](../reference/functions/shadowing-import.md)、
+[`unintern`](../reference/functions/unintern.md)
+はパッケージのメンバーテーブルを変更します。コンパイル済みバックエンドでは読込/compile
+時パッケージは凍結されているため、そこでは何も変えずに `t`（`unintern` は `nil`）を返します。
+問い合わせ系は本物です:
+[`find-package`](../reference/functions/find-package.md)、
+[`package-name`](../reference/functions/package-name.md)、
+[`list-all-packages`](../reference/functions/list-all-packages.md)、
+[`package-use-list`](../reference/functions/package-use-list.md)、
+[`package-used-by-list`](../reference/functions/package-used-by-list.md)、
+[`package-shadowing-symbols`](../reference/functions/package-shadowing-symbols.md)。
+コンパイル済みバックエンドはコンパイル時に焼き込まれたテーブルと、
+そのプログラム自身が作ったパッケージから答えます。
+複数の使用先パッケージが同じ名前を export している場合、
+コンフリクトをシグナルする代わりに `:use` 順で最初のパッケージが優先されます。
+
+## 動的（special）変数
+
+`let`/`let*`、[`progv`](../reference/special-forms/progv.md)、および special と
+同名のパラメータによる動的束縛はすべてのバックエンドでサポートされ、どの脱出でも
+直前の束縛に復元されます: 通常の復帰、束縛の外側のハンドラで捕捉されるエラー、
+`catch`/`throw`、`return`/`return-from`（`lambda`、`flet`、`labels` の関数からの
+ものを含む）、`go`、そして `go` や `return-from` で抜ける
+[`handler-bind`](../reference/macros/handler-bind.md) のハンドラです。`--no-gc`
+バックエンドはトップレベルの `defvar` を拒否します。
+
+## 数値タワー
+
+rontolisp は整数（任意精度の bignum を含む）、比（`1/3`）、倍精度浮動小数点数、
+複素数（`#C(1 2)`。部分は有理数か浮動小数点数）をサポートします。負の数の
+平方根は複素数の根を返します。
+
+```lisp
+(sqrt -1) ; => #C(0.0 1.0)
+```
+
+`--no-gc` バックエンドには複素数の表現がなく、複素数のリテラルや構築はコンパイル
+エラーになります。
+
+## その他の省略事項
+
+- ラムダリスト: funcall/apply 経由の呼び出しでは関数の物理パラメータは 10 個までです。
+- ユーザーマクロはコンパイル済みプログラムの実行時 `eval` では認識されず、
+  その `eval` がランタイムに構築する `lambda` はラムダリストキーワードを
+  解釈しません（[コンパイル済み eval の制限](eval-limitations.md)を参照）。
+- **プリティプリンタ**は、行が十分に広いものとしてのテキストを生成しますが、**レイアウト**は変えません。rontolisp のストリームは桁位置を持たないため、論理ブロックが折り返すことはなく、条件付き改行（`pprint-newline` の `:linear` / `:fill` / `:miser`、format の `~_` / `~:_` / `~@_` / `~i`）はすべて何もせず、`*print-right-margin*` / `*print-miser-width*` / `*print-lines*` は受理のみで無視されます。行を分けるのは `(pprint-newline :mandatory)` と `~:@_` だけです。その他の `*print-*` 変数はすべて存在し、プリンタが実際に行う動作そのものの値を保持します。既定値以外を束縛しても効果がないというだけです（`*print-escape*` / `*print-readably*` / `*print-pretty*` と `*print-case*` は例外で、実際に効きます）。`*print-case*` はプリンタが綴るシンボルの大小文字を変換しますが、構造体・CLOS インスタンス・ハッシュテーブル・階数が 1 以外の配列に入れ子になったシンボルは格納された綴りのままです（[リーダのケース](reader-case.md)）。通常の印字操作は `*print-pprint-dispatch*` を参照しません。エントリが効くのは、プログラム自身がエントリ関数を呼ぶ箇所です。
+- `.asd` ファイルでは、`defsystem` 内の `#.` はロード対象を決める箇所でだけ評価され、
+  無視されるメタデータ（`:long-description`、`:version` など）では評価されずに捨てられます。
+  トップレベルの `#.`（ASDF のバージョンガード）は読み飛ばされます。
+- 組み込みマクロの名前（`cond`、`case`、`when`、`setf`、`push` など）は
+  再定義できません。
+
+この一覧はすべてを網羅したものではありません。rontolisp は完全な標準ではなく、
+焦点を絞ったコアを実装しています。

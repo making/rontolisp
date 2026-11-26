@@ -1,0 +1,566 @@
+# システム (asdf)
+
+`asdf` パッケージは、Common Lisp のビルド機構である ASDF の**限定的な API 互換サブセット**を提供します:
+複数ファイルのプロジェクトを `NAME.asd` ファイルに
+[`asdf:defsystem`](../reference/functions/asdf-defsystem.md) で一度だけ記述すれば、
+[`asdf:load-system`](../reference/functions/asdf-load-system.md) がファイルを依存順に —
+すべてのバックエンドで — ロードします。本物の ASDF は移植されていません
+(CLOS、コンディションシステム、パスネーム API に依存しており、いずれもここには存在しません)。
+代わりに `.asd` ファイルは Lisp として実行され、その `defsystem` フォームはデータとして
+解析されます。サポートされる `defsystem` サブセットが `load`/`require` と同じ機構を
+駆動します。サブセット内に収まる `.asd` はそのまま動作します。
+
+| オペレータ | 用途 |
+|----------|---------|
+| [`asdf:defsystem`](../reference/functions/asdf-defsystem.md) | システムの定義: `:depends-on`、`:serial`、`:components` |
+| [`asdf:load-system`](../reference/functions/asdf-load-system.md) | システムのロード (依存が先、ファイルは順序どおり、冪等) |
+
+## プロジェクトの全体像
+
+```console
+app/
+  my-app.asd
+  package.lisp
+  main.lisp
+  run.lisp
+registry/base/
+  base.asd
+  base.lisp
+```
+
+```console
+;; app/my-app.asd
+(defsystem :my-app
+  :version "0.1.0"
+  :depends-on (:base)
+  :serial t
+  :components ((:file "package")
+               (:file "main")))
+
+;; app/package.lisp
+(defpackage :my-app (:use :cl) (:export :run))
+
+;; app/main.lisp
+(in-package :my-app)
+(defun run () (print (base:double 21)))
+
+;; app/run.lisp
+(asdf:load-system :my-app)
+(my-app:run)
+```
+
+エントリファイルを実行またはコンパイルします。同じディレクティブが 4 つのバックエンドすべてで動作します:
+
+```console
+rontolisp app/run.lisp --system-path registry/base                 # interpret
+rontolisp app/run.lisp --system-path registry/base -o Prog.class   # JVM
+rontolisp app/run.lisp --system-path registry/base -o app.wasm     # WASM
+```
+
+`my-app.asd` は `run.lisp` の隣で見つかり、依存システム `:base` は `--system-path`
+経由で見つかります。コンパイルパスではシステム全体 (依存が先) がコンパイル時にプログラムへ
+継ぎ足されます。コンパイル時 `load` インクルードとまったく同じ仕組みなので、JVM と WASM
+のコンパイラはすべての `defun` をネイティブに認識します。
+
+## システム探索パス
+
+`asdf:load-system` は [`asdf:*system-definition-search-functions*`](../reference/functions/asdf-system-definition-search-functions.md)
+の関数を呼びます。初期状態では `NAME.asd` を次の順で探します:
+
+1. [`asdf:*central-registry*`](../reference/functions/asdf-central-registry.md) のディレクトリ、
+2. [`asdf:initialize-source-registry`](../reference/functions/asdf-initialize-source-registry.md) で設定した場所、
+3. `load-system` を実行しているファイルのディレクトリ (`load` と同様)、
+4. `--system-path` で指定したディレクトリ (`PATH` のようにプラットフォームのパス区切り文字で複数連結可)、
+5. 環境変数 `RONTOLISP_SOURCE_REGISTRY` のディレクトリ (同じ形式)。
+
+最後の 3 つが継承する設定です。`:inherit-configuration` はこれらの位置を決め、
+`:ignore-inherited-configuration` はこれらを探索から外します。
+
+依存システムの `.asd` は、依存する側のシステムのディレクトリから探索が始まるため、
+1 つのレジストリディレクトリに並んだ兄弟システムは互いを見つけられます。
+
+## quickload でダウンロードする
+
+手動ダウンロードを省くには、[`ql:quickload`](../reference/functions/ql-quickload.md)
+を使います。システム (とその依存) を本物の
+[Quicklisp](https://www.quicklisp.org/) ディストリビューションから取得し、上記の
+仕組みでそのままロードします:
+
+```console
+$ rontolisp
+CL-USER> (ql:quickload "split-sequence")
+(split-sequence)
+CL-USER> (split-sequence:split-sequence #\, "a,b,c")
+("a" "b" "c")
+```
+
+ダウンロードは Quicklisp の dist メタデータ (依存解決の `systems.txt`、tarball URL の
+`releases.txt`) に基づきます。各リリースは展開され `~/.rontolisp/quicklisp/` 以下に
+キャッシュされる (`RONTOLISP_QUICKLISP_HOME` で変更可能) ため、2 回目以降の
+`quickload` はネットワーク I/O を行いません。インデックスは依存をプライマリシステム名
+でしか記録しないため、セカンダリシステムが必要とする依存 (cl-smtp の
+`frugal-uuid/non-frugal` が必要とする `ironclad/prngs`) は、Quicklisp 自身のクライアント
+と同じく、ロードが最初にそれを要求した時点でダウンロードされます。各 tarball は展開前に `releases.txt`
+の行が示すサイズと MD5 で検査され、一致しなければ `quickload` は失敗し、何も
+キャッシュされません。60 秒間データを送ってこないサーバーに対しては、待ち続けずに
+ダウンロードを失敗させます。ダウンロードはインタプリタ実行時または
+コンパイル時に (Java 側で) 行われ、コンパイル済みプログラムはソースを内包していて
+実行時にはフェッチしないので、`ql:quickload` は 4 バックエンドすべてで動作します。
+ロード自体は `asdf` サブセットを経由するため、同じ制約が当てはまります — ダウンロード
+できたライブラリでも、そのソースが下記のサポート範囲に収まっている場合にのみロード
+できます。
+
+## dist を追加する (Ultralisp)
+
+Quicklisp の dist 形式を話すディストリビューションは 1 つではなく、2 つ目として
+よく使われるのが [Ultralisp](https://ultralisp.org/) です (数分ごとに再構築される
+ため、公開されたその日にライブラリが入ります)。これは**オプトイン**で、プログラム
+からは本物の Quicklisp と同じ呼び出し
+[`ql-dist:install-dist`](../reference/functions/ql-dist-install-dist.md) で
+追加します:
+
+```console
+$ rontolisp
+CL-USER> (ql-dist:install-dist "http://dist.ultralisp.org/" :prompt nil)
+"ultralisp"
+CL-USER> (ql:quickload "circular-buffer")
+(circular-buffer)
+```
+
+フォームを書く場所がない起動 (`rontolisp test SYSTEM`、コンパイル対象のソースを
+書き換えられないビルドスクリプト) では、コマンドラインで指定します —
+`--dist ultralisp`、カンマ区切りで複数指定、または環境変数 `RONTOLISP_DISTS`。
+どちらの経路でも、Quicklisp 形式の distinfo の URL を直接指定できます。
+
+dist は**追加した順に、システム単位で**検索されます: `ql:quickload` は各システム
+(と各依存) を、それを列挙している最初の dist から取得します。したがって dist の追加は
+「Quicklisp にない名前が引けるようになる」だけで、他の取得元は変わりません。
+quicklisp は明示的に指定しない限り先頭に入るので、両方の dist にあるライブラリで
+Ultralisp 側を優先したい場合は `--dist ultralisp,quicklisp` と書きます。dist の
+index は、実際にその dist まで検索が到達したときにだけダウンロードされ、各 dist は
+自身の `~/.rontolisp/<dist>/` にキャッシュします (ベースは `RONTOLISP_DIST_HOME`、
+quicklisp については従来どおり `RONTOLISP_QUICKLISP_HOME` が優先)。index は一度
+取得すると永続的にキャッシュされるので、更新の速い dist を活かすには
+[`ql:update-dist`](../reference/functions/ql-update-dist.md) を使います:
+
+```console
+$ rontolisp -e '(ql:update-dist "ultralisp")'
+```
+
+それ以外は同じです。ダウンロードはインタプリタ実行時またはコンパイル時に行われる
+ので、追加した dist も 4 バックエンドすべてで同じように動作しますし、ダウンロード
+したライブラリが下記のサポート範囲に収まっている必要がある点も変わりません。
+
+## サポート範囲 (と非サポート)
+
+- `.asd` ファイルは **Lisp として実行されます**。フォームを 1 つずつ、`asdf-user`
+  パッケージ (`cl`、`asdf`、`uiop` を use します) で評価するので、条件付きの
+  `defpackage`、`warn`、`find-system` による存在確認 (登録済みのシステムと組み込み
+  システムを返し、ロードと同じく `.asd` も探します)、`defparameter`、計算して push する
+  フィーチャー、別システムの `asdf:load-system` が書けます。ロードされたシステムは、
+  ファイル内でその呼び出しより後に定義される全システムより先にロードされます。
+  コンパイルパスでは、ファイルはコンパイル時に専用のインタプリタで実行されるので、
+  プログラムに届くのはファイルが記述するシステムだけです。ファイルが通知したエラー
+  (`#-(or sbcl ...) (error ...)` のような処理系ガード) は、そのメッセージのまま
+  ロードを失敗させます。次の 4 種のフォームは実行せず、形で読み取ります:
+  - `defsystem` (裸または `asdf:` 修飾): オプションはデータです (後述)。
+  - `register-system-packages`: 「このパッケージはあのシステムにある」という対応を
+    記録します。package-inferred-system が `defpackage` の依存をシステム名に変換する
+    ときに参照されます。
+  - **コンポーネントクラス**の `defclass`: 各スーパークラスが ASDF のもの
+    (`cl-source-file`、`cl-source-file.cl`、`cl-source-file.lsp`、`static-file`、
+    `doc-file`、`html-file`) か、同じファイル内で先に宣言されたものであるクラスです。
+    宣言が決めるのは、そのクラスのコンポーネントがソースファイルを提供するか
+    (スーパークラスから継承) と、名前に付く拡張子 (これも継承。
+    `(type :initform "cl")` スロットか `source-file-type` メソッドで上書きできます)
+    の 2 点です。したがって `(defclass txt-file (doc-file) ())` は順序付け専用の
+    `:txt-file` を与え、`(defclass legacy-acl-source-file (cl-source-file.cl) ())` は
+    `NAME.cl` をロードする `:legacy-acl-source-file` を与えます。それ以外の
+    `defclass` は実行されます。
+  - `defmethod`: 無視されます。システムをロードする手順は固定で、ASDF の総称関数に
+    よって計算されないからです (ライブラリが自身のソースで定義したメソッドは
+    実行されます。後述)。ただし
+    `(defmethod source-file-type ((c CLASS) (s module)) "ext")` だけは例外で、
+    ファイル内のどこに書かれていてもそのクラスのファイル拡張子を設定します。
+
+  `progn` と、situation がロード時に成立する `eval-when` は開かれ、中のフォームにも
+  同じ規則が適用されます。situation が `(:compile-toplevel)` だけの `eval-when` は
+  読み飛ばされ (ASDF は `.asd` をロードするだけでコンパイルしません)、トップレベルの
+  `#.` (ASDF のバージョンガード) も読み飛ばされます。
+- `#+`/`#-` フィーチャ条件は動作し (ターゲットバックエンドのフィーチャーに対して
+  評価されます。
+  [データ型](../reference/data-types.md#comments-feature-conditionals-and-features)を参照)、
+  各フォームはそれより前のフォームを実行してから読まれるので、ファイルが push した
+  フィーチャーは、それより後の `#+`/`#-` の判定に使われます。push されたフィーチャー
+  はそのファイルの宣言です。push より後にファイルが定義する全システムで成立し
+  (`:if-feature` / `(:feature ...)` 句とコンポーネントファイルの読み取りの両方で、
+  各システムに `:rontolisp-features (:my-feature)` を書いたのと同じです)、
+  `*features*` には残りません (本物の ASDF では残ります)。そのため他のシステムには届かず、
+  `.asd` が読むフィーチャーは、どのシステムが先にロードされたかに左右されません。
+  依存システムには及びません (それぞれが自分で宣言します)。コンポーネントファイルでの push
+  は普通の push です: `*features*` に残り、その後に読まれるすべてのファイルがそれを見ます
+  ([データ型](../reference/data-types.md#comments-feature-conditionals-and-features)を参照)。ファイルが
+  `asdf:load-system` でロードするシステムは、ファイルの外からロードしたのと同じ
+  扱いになります: ファイルのロード開始時のパッケージで読まれ、そのシステムが push
+  したフィーチャーは残ります。
+- `defsystem` 内の `#.` リード時評価フォームは、その値が**使われる**場所で解決されます:
+  ロード対象を決める句では、ファイルを実行しているイメージで評価され
+  (`(:file #.*string-file*)` の慣用形は、その上の `defparameter` を読みます)、
+  評価に失敗するとファイルと句を名指しするエラーになります。無視されるメタデータ
+  (`:long-description`、`:version` など) では、評価されず、警告もなく
+  捨てられます。また `:depends-on` のエントリには
+  `(:feature EXPR DEP)` を書け (フィーチャ式が成立するときだけ依存が追加されます)、
+  `(:version NAME "1.2.3")` も書けます (素の依存として解決されます。バージョン制約は
+  検査されません — ここでは `:version` オプションは無視されるメタデータなので、
+  比較する相手がありません)。
+- `defsystem` はメタデータオプション (無視。ただし `:version` は
+  [`asdf:component-version`](../reference/functions/asdf-component-version.md) が
+  読み返します)、`:depends-on`、`:defsystem-depends-on` (本物の ASDF が `.asd` の
+  **読み込み中** にロードするシステム。同じ方法で検索され、`:depends-on` より先に
+  ロードされ、システムの依存にはなりません。ここに書かれた組み込みシムはこのシステムに
+  フィーチャーを宣言します — `("trivial-features")` はその句とコンポーネントファイルに
+  対して `:unix` と `:little-endian` を有効にします)、`:serial`、`:pathname`
+  (全コンポーネントに前置されるリテラルなディレクトリ。ソースが `src/` にあるシステムは
+  コンポーネント名を裸で書けます)、`:default-component-class` (裸の
+  `(:file "name")` エントリが取るクラス。システムにもモジュールにも書け、何も
+  指定しなければ ASDF の `cl-source-file` です。つまり
+  `:default-component-class cl-source-file.cl` は裸のエントリすべてを `NAME.cl` に
+  します)、そして `:file`/`:module`/`:static-file` エントリ、または スコープ内の
+  他のコンポーネントクラスを名指しするエントリ (`(:cl-source-file.cl "main")`、
+  `(:txt-file "readme")`。キーワードでもクラスのシンボルそのもの
+  `(txt-file "readme")` でも書けます) を持つ `:components` をサポートします。
+  コンポーネントには `:if-feature expr` を付けられます。フィーチャー式が成立しない
+  場合、そのコンポーネントのファイルは除外されますが (ライブラリが CLOS 専用
+  ファイルを `(:or :sbcl ...)` の後ろにゲートする方法)、依存順序内の位置は
+  維持されます。test-op 配線用のオプションは記録されます:
+  `:in-order-to ((test-op (test-op ...)))` と、`(test-op :after (o c) ...)` とも
+  書ける `:perform (test-op (o c) ...)` は
+  [`asdf:test-system`](../reference/functions/asdf-test-system.md) が駆動します
+  (本体中の `#.` はファイルを実行しているイメージで読みます。読めない `#.` と、
+  ほかの operation についての `:perform` は許容されて無視されます)。`:version` の値は文字列、
+  `.asd` ファイルが読む ASDF の `(:read-file-form ...)` と `(:read-file-line ...)`
+  の間接参照、それ以外の任意のリテラルフォーム (nil になります) で構いません。`:around-compile`、
+  `:encoding :utf-8`/`:default`、`:weakly-depends-on` は有効で、`program-op` 用の
+  オプション (`:entry-point`、`:build-operation`、`:build-pathname`) は `asdf:make` が
+  ビルドする実行ファイルを決めます
+  ([ASDF システムから実行ファイルをビルドする](../compiling/asdf-programs.md) を参照)。それ以外
+  (`:output-files` など) は句を名指しするエラーです。
+- `:class :package-inferred-system` をサポートします — ningle、rove、
+  array-operations が採用しているスタイルです。このクラスのシステムは
+  **`:components` を一切持ちません**: サブシステム名がシステムのディレクトリ配下の
+  ファイルパスになり (`my-lib/main` は `main.lisp`、`my-lib/util/text` は
+  `util/text.lisp`。システムが `:pathname` を持つ場合はいずれもその配下)、
+  そのファイル自身の **`defpackage`** が依存関係を表します — `:use`、`:mix`、
+  `:reexport`、`:use-reexport`、`:mix-reexport` が挙げる全パッケージと、
+  `:import-from` / `:shadowing-import-from` の第 1 引数です。パッケージ名は
+  システム名になります: `register-system-packages` フォームが宣言していれば
+  その名前、なければパッケージ名を小文字化したものです (`cl` などは除外されます)。
+  各ファイルは最初のパッケージ定義フォームまでしか読まれないので、`defpackage` の前に
+  よくある `(in-package #:cl-user)` ヘッダがあっても問題ありません。
+  `defpackage`/`uiop:define-package` が 1 つも無いファイルはエラーです。
+  `:components` も併記した package-inferred-system はエラーです。
+- **ロードしたコードが定義するクラス** は、そのクラスとして動作します。
+  `:defsystem-depends-on` のロード後に、`:class`、コンポーネント型、
+  `:default-component-class` を、その時点で存在するクラスから探します。キーワードは
+  `asdf` か現在のパッケージにある同名のシンボルを指し (prove-asdf が名前を import した
+  あとの `(:test-file "t1")`)、文字列は `asdf` の中で読み
+  (`:class "hu.dwim.asdf:hu.dwim.system"`)、それ以外のシンボルはクラス名そのものです。
+  インスタンスについて次のことをクラスが決めます:
+  - どのファイルを指すか: インスタンスに対する `source-file-type` の答えです。メソッド、
+    `(type :initform "coal")` スロット、`:type` の default-initarg のいずれでも指定できます。
+  - ローダーがファイルを読むか: `cl-source-file` のサブクラスは Lisp として読みます。
+    それ以外のクラスのファイル (`:lass-file`) は読まず、クラスのメソッドに任せます。
+  - `asdf:perform` が何をするか: `find-system` と `component-children` はこのクラスの
+    インスタンスを返すので、クラスのメソッドが実行されます。prove-asdf の `load-op` は
+    テストファイルを記憶するだけで、テストが求めたときに `load-source-op` が実行します。
+  - システムのクラスがコンポーネントに与えるもの: `default-component-class` スロットと、
+    default-initarg の `:around-compile` です。定義に書かれていれば定義が優先します。
+
+  システムのインスタンスは、本物の ASDF と同じく作成後に reinitialize されます。
+  定義の文法にないコンポーネントのオプションは initarg になります
+  (`(:lass-file "style" :output "style.css")`)。`.asd` 自身が定義するクラスのメソッドは、
+  ファイル内のほかのメソッドと同じく無視され、インスタンスはファイルの外にある最も近い
+  スーパークラスのものになります。
+
+  コンパイルパスでは、`.asd` を実行するコンパイル時のインタプリタでクラスを探し、
+  同じコードを `:defsystem-depends-on` のスプライスでプログラムにも取り込みます。
+  メソッドが実行されるのはプログラムの中です。そのため `compile-op` のメソッドは
+  プログラムの開始時に実行され、その時点でファイルを読める必要があります。`load-op` が
+  ファイルを読まないコンポーネントのフォームは、コンパイルされますがコンパイル時には
+  実行されず、`load-source-op` を perform するたびに実行されます。
+- 同じシステムの 2 回目のロードは no-op です。循環する `:depends-on` は検出して報告されます
+  — 2 つのサブシステムの `defpackage` が互いを指す形で書かれた循環も含みます。
+- コンパイルパスはリテラルなトップレベルの `(asdf:load-system NAME)` を要求します。
+  インタプリタは実行時に計算された名前も受け付けます。どちらも末尾のキーワード
+  オプション (`:verbose nil`、`:force t`、`:silent t`) を受理して無視します。
+  実在のライブラリは実行時にシステムをロードするときこれらを渡します。
+  コンパイルされたプログラムでネストした/計算された `load-system`/`ql:quickload` は、
+  システムがスプライス済みなら `nil` を返し、そうでなければエラーを通知します —
+  実行時には何もロードできません。
+- **コンポーネントメタオブジェクトは実行時に本物です。**
+  [`asdf:find-system`](../reference/functions/asdf-find-system.md) はシステムごとに
+  メモ化された CLOS インスタンス (呼び出し間で `eq`) を返します。クラスは本物です —
+  `asdf:component`、`asdf:child-component`/`asdf:parent-component`、
+  `asdf:module`、`asdf:system`、`asdf:package-inferred-system`、
+  `asdf:source-file`、`asdf:cl-source-file`、`asdf:static-file`、`asdf:doc-file` — ので、これらに
+  対する `typep`、`typecase`、`defmethod` の特定化子はすべてのバックエンドで
+  動作します。リーダー
+  [`asdf:component-name`](../reference/functions/asdf-component-name.md)、
+  [`asdf:component-version`](../reference/functions/asdf-component-version.md)
+  (宣言された `:version` 文字列)、
+  [`asdf:component-pathname`](../reference/functions/asdf-component-pathname.md)、
+  [`asdf:component-children`](../reference/functions/asdf-component-children.md)
+  (定義に書かれたインスタンスを定義順で返します。`:module` は自身の子を持つ
+  `asdf:module`、`:static-file` は `asdf:static-file` です)、
+  [`asdf:component-sideway-dependencies`](../reference/functions/asdf-component-sideway-dependencies.md)、
+  [`asdf:component-parent`](../reference/functions/asdf-component-parent.md)、
+  [`asdf:component-system`](../reference/functions/asdf-component-system.md)
+  がモデルをたどり、
+  [`asdf:registered-systems`](../reference/functions/asdf-registered-systems.md)
+  が登録済みの全名前を列挙します。`asdf:*user-cache*` は external で `nil` です
+  (fasl キャッシュはありません)。`asdf:asdf-version` は `"3.3.7"` を返します。これはこのサブセットが
+  従う API のリリースです (lisp-binary のように、バージョンが古ければ同梱の ASDF を
+  ロードする `.asd` はそれをロードしません)。これは rove のシステム駆動テストランナーが読む
+  コンポーネントモデルです。
+- **本物の ASDF がエクスポートする名前はすべてあります。** ASDF 3.3.1 の外部シンボル 230 個と
+  `asdf/*` パッケージのメンバーは、どのバックエンドでも読み込めます。実行されないコードでそれらの
+  名前を書いたファイルもロードできます。プログラムが実際に使うものは実装済みです。
+  [メタデータのリーダー](../reference/functions/asdf-system-description.md)、
+  [`asdf:oos`](../reference/functions/asdf-oos.md)、
+  [`asdf:load-asd`](../reference/functions/asdf-load-asd.md)、
+  [`asdf:clear-system`](../reference/functions/asdf-clear-system.md)、
+  [`asdf:map-systems`](../reference/functions/asdf-map-systems.md)、
+  [`asdf:find-component`](../reference/functions/asdf-find-component.md)、
+  `load-source-op`、スロット名、ロードが通知するコンディション (`missing-component`、
+  `missing-dependency`、`load-system-definition-error`) です。残りは本物の ASDF のクラスと総称関数を
+  空のまま置いたもので、呼び出すとその名前を示す `uiop:not-implemented-error` を通知します。
+  plan の一群もここに含まれます。
+- **operation プロトコルも本物です。** ロードを構成する各動作は、operation の
+  インスタンス (`asdf:prepare-op`・`asdf:compile-op`・`asdf:load-op`・`asdf:test-op`。
+  いずれも `asdf:operation`) とコンポーネントに対する
+  [`asdf:perform`](../reference/functions/asdf-perform.md) の呼び出しです。順序は、
+  システムの `prepare-op`、コンポーネントファイルごとにロード順で
+  `prepare-op`/`compile-op`/`load-op`、最後にシステムの `compile-op`/`load-op` です。
+  したがって、ライブラリが `perform` に定義したメソッドは、すべてのバックエンドで
+  コンポーネントのロードのたびにその周りで実行されます。fiveam のファイルローカルな
+  `*suite*` は、asdf-flv の `:around` メソッドによるものです。
+  [`asdf:operate`](../reference/functions/asdf-operate.md) は `load-op`
+  (`load-system`)、`test-op` (`test-system`)、`program-op` (インタプリタでの
+  システムの実行ファイル) を perform します。
+  `asdf:make-operation`、`asdf:input-files`、`asdf:output-files`、
+  `asdf:source-file-type`、`asdf:operation-done-p` は、ライブラリが定義するメソッドのために存在します。
+  `asdf/interface` と本物の ASDF の内部パッケージ (`asdf/component`、`asdf/action`
+  など) は、これらと同じシンボルを指します。
+- **`asdf:test-system` は記録された test-op 配線を実行します。**
+  [`asdf:test-system`](../reference/functions/asdf-test-system.md) はシステムを
+  ロードし、`:in-order-to` の test-op 連鎖をたどり、各システムに `test-op` を
+  perform します。そのデフォルトメソッドが、記録された `:perform (test-op (o c) ...)`
+  本体を、operation に `asdf:test-op` のインスタンス、component にシステム
+  メタオブジェクトを束縛して実行します。コンパイルパスではリテラルなトップレベルの
+  呼び出しがテストシステムもスプライスします。
+- **コンパイル時にシステムはツリーシェイキングされます。** ロードしたシステムが定義していても
+  プログラムから到達しない関数・変数・定数は — クォートされたシンボルや文字列リテラル全体も
+  含めてソース中の名前を辿った上で — `.class`/`.wasm` に含まれません。クラス・総称関数・
+  メソッド・コンディション・構造体も対象です(適用しうるインスタンスを到達可能なコードが
+  作れないメソッドも除かれます)。すべての定義を残すには `--no-prune`
+  (または `--dynamic`) を付けてコンパイルしてください。唯一の帰結については
+  [JVM へのコンパイル](../compiling/jvm.md) を参照してください。
+
+- **ロードコンテキスト変数は、全バックエンドでロード中のファイルを指します。**
+  ファイルのロード中、`*load-pathname*` は `load` が呼ばれたときのパスを、
+  `*load-truename*` はそのファイルの truename (シンボリックリンクを解決した絶対パス)
+  を保持します。ファイルが終わると外側のファイルの値に戻ります。実行・コンパイルする
+  プログラムファイル自身もロード中のファイルとして扱われるため、そのフォームは自分の
+  パスを見ます。標準入力や `-e` から読んだプログラムにはパスがなく、どのロードの外でも
+  どちらも `nil` です — トップレベルで読んでも、ロードが定義した関数をあとから呼んで
+  読んでも同じです。**コンポーネントは解決済みパスでロードされる**ため、
+  `*load-pathname*` は
+  [`asdf:component-pathname`](../reference/functions/asdf-component-pathname.md)
+  が返す値を保持します。これが、テストフレームワークがファイル内の定義とそれを所有する
+  システムを対応付けられる理由です。コンパイルバックエンドでも同じで、差し込まれた
+  ファイルのフォームは自分のロードコンテキストの下でコンパイルされます — そこでは
+  実行時に何もロードされないため、そうしなければ読む値がありません。
+  `*compile-file-pathname*` と `*compile-file-truename*` は常に `nil` です
+  (ここには `compile-file` が存在しません)。ライブラリは自分のソースの隣にある
+  データファイルを見つけるのに `(or *compile-file-truename* *load-truename*)`
+  という定型句を使います。**これは読み取り時にも働きます**: この定型句が通常書かれる
+  形である `#.` フォーム — ソースの読み取り中にファイルを読むもの — は、全バックエンド
+  で自分のファイルのロードコンテキストを見ます。ライブラリは隣に同梱したデータファイルを
+  そのまま焼き込めます。**実行時にファイルを読むフォームは、コンパイル済みプログラムの
+  起動時に**コンパイル時のパスから読みます。たとえば cxml の `catalog.dtd` がそうで、
+  cxml を含む `.wasm` にはそのディレクトリの事前オープンが必要です
+  (`wasmtime run --dir DIR::DIR`)。
+
+## 組み込みシムシステム
+
+Quicklisp ライブラリの中には、rontolisp 側を知り得ない実装ごとのポータビリティレイヤに依存するものがあります。rontolisp
+はそれらを**組み込み ASDF システム**として同梱します: `asdf:load-system`/`ql:quickload`
+(および実ライブラリの `:depends-on`) は、その名前をダウンロードせずバンドルされたシムに解決します。
+
+| システム | シムが提供するもの |
+|--------|------------------------|
+| `usocket` | `rontolisp:tcp-*` 上のソケット API ([TCP ガイド](tcp-sockets.md#the-usocket-compatible-shim)を参照) |
+| `trivial-gray-streams` | ポータブルな Gray ストリームのクラス/総称関数 (本物のパッケージが公開する名前すべて: バイナリ/入力クラスと `trivial-gray-stream-mixin` を含む基底クラス階層、読み書き/シーケンス総称関数、`stream-file-position` とその `(setf ...)` ライタ)。rontolisp 自身のプロトコル — ストリームを取る組み込みが CLOS インスタンスストリームに対してディスパッチする先 — へのアダプタ ([Gray ストリーム](gray-streams.md)を参照) |
+| `closer-mop` | 実クラスメタオブジェクト([`find-class`](../reference/functions/find-class.md) / [`class-of`](../reference/functions/class-of.md) の返り値)に対するクラスイントロスペクションのリーダー群: `classp`、`class-slots`、`slot-definition-name`/`-initargs`/`-initform`/`-type`/`-readers`/`-writers`/`-initfunction`/`-allocation`(`:class` か `:instance`)、`class-name`、`class-direct-superclasses`、`class-direct-slots`、`class-direct-subclasses`、`class-finalized-p`、`ensure-finalized`、`finalize-inheritance`(任意のクラス)、さらに `subclassp`、`class-prototype`(クラスごとに全スロット未束縛のインスタンス 1 つ。組み込みクラスではそのクラスの値。何度呼んでも同じオブジェクト)、`ensure-class`(インタプリタでは initarg どおりの `defclass`。コンパイルしたバックエンドではクラスの集合がコンパイル時に決まるため、未知の名前はシグナルします)、`required-args`、`extract-lambda-list`、`extract-specializer-names`、`class-default-initargs`(そのクラスとスーパークラスの `(initarg form function)`)、`slot-definition-location`(インスタンススロットの位置。実効スロット定義が持ち、クラス割り当てのスロットは `nil`)、`standard-instance-access` / `funcallable-standard-instance-access` とその `setf`(その位置のスロット。未束縛ならマーカーを返し、インスタンスのスロット数を超える位置は検査しません)、そしてスロットアクセスプロトコルの総称関数 `slot-value-using-class`(とその `setf`)、`slot-boundp-using-class`、`slot-makunbound-using-class`(`:metaclass` 付きクラスのインスタンスのスロット操作がこれらのメソッドを呼ぶ。[`defclass`](../reference/special-forms/defclass.md) を参照)。`class-slots` は `standard-effective-slot-definition` のインスタンスを、`class-direct-slots` は `standard-direct-slot-definition` のインスタンスを返す(writers を持つのは direct 側だけ)。どちらも `slot-definition` の `typep` であり、それぞれ `effective-slot-definition` / `direct-slot-definition` の `typep` でもある。構造体の `class-direct-slots` は `nil`。レガシーのタグシンボル指定子には従来通り `(name declared-type)` ペアを返す。funcallable インスタンスは 4 つのバックエンドすべてで動作する: `(:metaclass closer-mop:funcallable-standard-class)` のクラス(デフォルトのスーパークラスは `funcallable-standard-object`)のインスタンスは関数であり、`functionp` と `(typep x 'function)` は `t` を返し、`funcall`/`apply`/関数を受け取るあらゆる引数は `set-funcallable-instance-function` で設定した関数を呼ぶ(未設定のインスタンスを呼ぶと `type-error`)。パッケージは上流と同じく `cl` のメタオブジェクト名(`closer-mop:standard-object` は `cl:standard-object`)と、独自のメソッドのメタオブジェクトクラス `standard-accessor-method`、`standard-reader-method`、`standard-writer-method`、`eql-specializer`(specializer・型・スーパークラスとして使える。[`defmethod`](../reference/special-forms/defmethod.md) を参照)もエクスポートする。フラットな `closer-common-lisp` 再エクスポートパッケージ(ニックネーム `c2cl`: `cl` 全体にこれらを重ねたもので、衝突は closer-mop が優先)は常に登録済みのため、`(:use :closer-common-lisp)` するパッケージが動作する |
+| `flexi-streams` | `flexi-stream` ラッパクラス — ラップしたオクテットストリームに external format で文字入出力を与える Gray ストリーム (`make-flexi-stream`、`flexi-stream-stream`、`flexi-stream-external-format` とその `setf`、`:bound`) — に加え、インメモリ・オクテットストリームの対: `make-in-memory-input-stream` (ベクタまたはリスト) と `make-in-memory-output-stream` / `get-output-stream-sequence` (upstream と同じくストリームをリセットします)、`with-input-from-sequence` / `with-output-to-sequence`。external format は `make-external-format` で作り、`:utf-8`、`:iso-8859-1` (`:latin-1`)、`:us-ascii` に `:eol-style` (`:lf`、`:cr`、`:crlf`) を指定できます。それ以外の名前はエラーを通知し、format で符号化できない文字も `*substitution-char*` が未設定ならエラーを通知します。文字列関数と `make-flexi-stream` の既定は UTF-8 です (upstream は Latin-1)。ラッパへの `close` はラップ先のストリームを閉じません。[Gray Streams](gray-streams.md) を参照 |
+| `babel` | babel の 2 つの層それぞれにおける UTF-8 コーデック。日常的に使う層: `babel:string-to-octets` (`:start`/`:end`/`:errorp`/`:use-bom` 付き)/`octets-to-string`、`babel:concatenate-strings-to-octets`、`babel:string-size-in-octets`/`vector-size-in-chars` (`:max` も)、`babel:encodable-character-p`/`encodable-string-p`、`babel-encodings:*default-character-encoding*` (`:utf-8`。呼び出しの実行時に読む)、`babel:list-character-encodings`。その下のマッピング層は、オクテット列全体を一度に変換できずインクリメンタルにデコードするライブラリのためのものです: `babel-encodings:get-character-encoding`、`enc-max-units-per-char`、`babel:*string-vector-mappings*` に対する `lookup-mapping`、そこから得られる `code-point-counter` / `octet-counter` / `decoder` / `encoder`、`babel:unicode-char` 型、`with-simple-vector`/`with-checked-simple-vector`、その他の `enc-*` リーダ。`babel:make-external-format`/`ensure-external-format` はエンコーディングと改行スタイルを組にしますが、babel と同じくその改行スタイルを読むものはありません。不正な入力は babel 自身のコンディションをシグナルし (`babel:character-decoding-error` とその葉である `end-of-input-in-character`、`character-out-of-range`、`invalid-utf8-starter-byte`、`invalid-utf8-continuation-byte`、`overlong-utf8-sequence`。符号化側は `babel:character-encoding-error`)、`babel-encodings:*suppress-character-coding-errors*` (すべての `:errorp` のデフォルト値の由来) が真ならシグナルの代わりに代替文字を返します。ここではエンコーディングもマッピングもエンコーディング名そのものです: 本物の babel は 20,000 行のテーブルから 40 種類以上のコードページを生成しますが、rontolisp の文字モデルは 1 つだけ (文字は Unicode コードポイントそのもので、外部表現は UTF-8) なので、シムはそのコーデックだけを実装し、`:iso-8859-1` (`:latin-1`) と `:ascii` (`:us-ascii`) は表現できるオクテットの範囲でコードポイント同一視として扱い、**それ以外の `:encoding` はシグナルします** — 誤った符号化のバイト列を黙って返すよりも。**未実装**のものも、`defpackage` が読めるよう名前はすべて公開しています: 呼び出し側のアクセサ上にコーデックを生成する `instantiate-concrete-mappings` と、`#\uXXXX` リーダ構文 (`enable-sharp-backslash-syntax`、`set-sharp-backslash-syntax-in-readtable`) で、いずれも使うとシグナルします。`babel:external-format` はクラスではなく構造体です |
+| `float-features` | IEEE 754 のビットプリミティブの上の `single-float-bits`/`bits-single-float` と double、long の同等物 (インタプリタ + JVM。WASM の数値モデルは 64 ビットのビットパターンを運べません)。全浮動小数点型の無限大と NaN (double のものと同じ値)、`float-infinity-p`、`float-nan-p`、本体をそのまま実行する `with-float-traps-masked` と `with-rounding-mode` (4 バックエンドすべて)。`short-float-bits`/`bits-short-float` はシグナルします |
+| `bordeaux-threads` (ニックネーム `bt` と `bt2`) | bordeaux-threads 0.9 の v1 API と、同じ意味の `bt2` の名前。ロック — `make-lock`、`make-recursive-lock`、`acquire-lock`、`release-lock`、`with-lock-held`、それぞれの recursive 版、`lock-p` — は [`rontolisp:make-mutex`](../reference/functions/rontolisp-make-mutex.md) などの上に実装されています。ロックは `bt:lock` 型の構造体なので、メソッドを特化できます。条件変数 (`make-condition-variable`、`:timeout` 付きの `condition-wait`、`condition-notify`、`condition-broadcast`) とセマフォ (`make-semaphore`、`signal-semaphore`、`:timeout` 付きの `wait-on-semaphore`、`semaphore-p`) は本物です。スレッド — `make-thread` (`:name` と `:initial-bindings` 付き)、`join-thread`、`threadp`、`thread-alive-p`、`destroy-thread`、`current-thread`、`thread-name`、`all-threads`、`thread-yield` — は [`rontolisp:make-thread`](../reference/functions/rontolisp-make-thread.md) の上に実装されており、インタプリタと JVM では本物の仮想スレッドが生成されます。`bt2` のアトミックカウンタ (`make-atomic-integer`、`atomic-integer-value` とその `setf`、`atomic-integer-incf`、`atomic-integer-decf`、`atomic-integer-compare-and-swap`) は専用のロックで守られた 64 ビットのワードで、SBCL と同じ値を返します。`bt2` の残りの名前もあります: `lockp`、`lock-name` (`make-lock` のどちらの書き方でも名前を保持します)、`lock-native-lock` (ミューテックスのハンドル)、`semaphorep`、`condition-variable-p`、`thread-native-thread` (スレッドそのもの)、`+supports-threads-p+`、そしてコンディション `bordeaux-threads-error`、`not-implemented`、`abnormal-exit` です。`abnormal-exit` は、スレッドを終わらせたエラーを包んで `join-thread` が送出します。シングルスレッドの WASM バックエンドではスレッドの入口と `condition-wait` は呼び出し時に `bt2:not-implemented` を送出し、`condition-notify` は誰も起こさず、`bt:*supports-threads-p*` は `nil` です。上流との違い: `make-lock` は再入可能なロックを返します (したがって `make-recursive-lock` も同じ型を作ります)。`acquire-lock` の `wait-p`、`:wait`、`:timeout` は無視され、獲得は常にブロックします。`:initial-bindings` の値フォームは quote フォームか自己評価値に限られます (それ以外は新スレッドの動的環境が必要になるためエラーを送出します)。`all-threads` はメインスレッドと `make-thread` が生成した生存中のスレッドを返します。`interrupt-thread` (と `signal-in-thread`、`warn-in-thread`、`error-in-thread`) と `with-timeout` は、それらを持たない処理系での上流と同じく、全バックエンドで `bt2:not-implemented` を送出します。ミューテックスのハンドルは固有の型を持たないため、`native-lock-p` と `native-recursive-lock-p` も同様です |
+| `uiop` | ASDF の移植性レイヤ。15 個のサブパッケージと 429 個のエクスポートとして登録されています。実装済みのものは **[uiop パッケージ](../reference/uiop.md)** を参照してください。これ以外のエクスポートは解決はされ、操作名とともに `uiop:not-implemented-error` をシグナルするので、名前を挙げているだけのライブラリも読み込めます |
+| `swank` | `swank:create-server` と `swank:stop-server` だけを持ちます。インタプリタでは、`rontolisp --swank` と同じ [SWANK サーバ](../getting-started/swank.md#from-a-running-program)をプログラム自身のイメージ上で起動・停止します。コンパイルしたプログラムでは `create-server` はエラーを送出し、`stop-server` は `nil` を返します。本物の swank は SLIME のサーバ側であり、その `.asd` は処理系ごとにバックエンドファイルを 1 つ選び、rontolisp 用のものはありません -- シムがないと `(ql:quickload "clack")` は SLIME の tarball を取得してそこで失敗します |
+| `mgl-pax-bootstrap` | [mgl-pax](https://github.com/melisgl/mgl-pax) でドキュメント化されたライブラリをロードできるようにする、`mgl-pax` パッケージ (ニックネーム `pax`) のスタブです (uuid の依存である trivial-utf-8 がハード依存しています)。`pax:define-package` は `defpackage` として働き、`pax:defsection` はセクション名を `nil` の変数として定義し、**さらにセクションの `(シンボル ロケーティブ)` エントリを export します** — mgl-pax のドキュメント化されたデフォルトであり、この種のライブラリが公開 API を export する方法です。PAX-World 登録ヘルパーは `nil` を返す何もしない関数です。ドキュメントは生成されません |
+| `trivial-features` | 本家 trivial-features が CFFI で調べて行うフィーチャー宣言を、調査なしで提供します: `:defsystem-depends-on` (または `:depends-on`) にこの名前を書くと、依存する側のシステム自身の句とコンポーネントファイルに対して **`:unix`**、**`:little-endian`**、**`:64-bit`** が宣言され、ロード時にはそれらが `*features*` に push されるので、その後に読まれるすべてのファイルもそれらを見ます。`:unix` は、どのバックエンドでもファイル/パス/環境変数まわりが POSIX 形であり Windows ではないためです。`:little-endian` は、プログラムがマシンのレイアウトを見られる唯一の場所 (WASM のリニアメモリ、リアクタの `:bytes` 境界) が wasm 仕様でリトルエンディアンだからです。`:64-bit` は、どのバックエンドでも fixnum が64ビットであり、ポインタ相当の値はポインタが存在するところではすべて8バイトだからです — cffi の `types.lisp` はまさにこれを読んで `:size` の基底型を決めます。プログラムがビルドしたマシンの上で動くインタプリタと JVM では、そのマシンも名指しします: `:darwin` と `:bsd` または `:linux`、そして `:arm64` または `:x86-64` です ([CFFI ガイド](cffi.md)を参照)。WASM のプログラムは WASI の上で動くので、これらはどれも付きません。`:32-bit` が宣言されることはありません。本家の `.asd` はそもそもここではロードできません: 認識できない処理系に対して `(error "Sorry, your Lisp is not supported")` で終わるためです |
+| `trivial-garbage` (ニックネーム `tg`) | GC ファイナライザを正直な no-op として提供します: `tg:finalize` は何も登録せずオブジェクトを返し、`tg:cancel-finalization` は `nil` を返す no-op です。`tg:make-weak-hash-table` は**通常の**ハッシュテーブルを返し (`:weakness` と `:weakness-matters` は捨て、残りの引数は `make-hash-table` に渡します)、`tg:hash-table-weakness` は `nil` を返します: 弱参照は Common Lisp の内側からは観測できないため、違いはテーブルがより多くを保持することだけです。`tg:make-weak-pointer`、`tg:weak-pointer-p`、`tg:weak-pointer-value` も同じ扱いで、オブジェクトは回収されません。GC フックを公開するバックエンドは存在せず — そして Common Lisp はファイナライザの実行を何も保証しないため、準拠したコンシューマは実行されなくても動作しなければなりません。`dbd-postgres` (このシムのコンシューマ) への実際的な帰結: リークした prepared statement は接続が閉じるまで残ります。`dbi:disconnect` を明示的に呼んでください |
+| `cl+ssl` | あらゆる CL の HTTP クライアント (dexador、drakma など) が TLS に到達するために使うライブラリのクライアント側を、[`rontolisp:tls-upgrade`](../reference/functions/rontolisp-tls-upgrade.md) の上に提供します — 本物の cl+ssl は OpenSSL への CFFI バインディングで、ここではロードできません。`cl+ssl:make-ssl-client-stream` は接続済みストリームを `:hostname` (必須) に対して TLS へアップグレードします。`make-context :verify-mode` + `with-global-context` + `ssl-check-verify-p` が検証モードを運ぶため、クライアントの「insecure」ノブ (例: `dex:*not-verify-ssl*`) はプリミティブの `:insecure` に到達します。`ensure-initialized` は no-op です。裏付けのないものは受け取って無視するのではなく**エラーを通知**します: クライアント証明書 (`:key`/`:certificate`/`:password`、および `use-certificate-chain-file`) と `:verify-location` の CA パス — 代わりに `javax.net.ssl.trustStore` システムプロパティでトラストストアを指定してください。インタプリタ、JVM、WASM `--component` バックエンドで動きます (そこでは `tls-upgrade` が `wasi:tls@0.3.0-draft` の上で動き、実行フラグに `-S tls=y` を追加します。非 `nil` の insecure ノブはエラーを通知します — ドラフトには検証のオプトアウトがないため)。WASM Preview 1 (ネイティブ実行ファイルを含む) では `make-ssl-client-stream` が実行時にエラーを通知するため、`https://` の分岐を通らないクライアントはビルドできます |
+| `clack-handler-rontolisp` | [Clack](https://github.com/fukamachi/clack) のハンドラバックエンド: `run`/`stop` をエクスポートするパッケージ `clack.handler.rontolisp` で、Clack のアプリケーションプロトコルを rontolisp の組み込み HTTP サーバに橋渡しします。手動でロードすることはありません — `(clack:clackup app :server :rontolisp)` が実行時に名前で解決します (clack がパッケージ名から導出するドット区切りの綴り `clack.handler.rontolisp` でもこのシステムが応答します)。[Clack ガイド](clack.md)を参照 |
+| `clack-handler-reactor` | **ホスト駆動のリアクタ**向けの Clack ハンドラバックエンド: Cloudflare Worker、ブラウザページ、node や JVM への埋め込みなど、リクエストを既にホスト側でパースし、プログラムにソケットを渡す代わりにエクスポートされた関数を呼ぶホストのためのものです。パッケージ `clack.handler.reactor` は `run`/`stop` に加えて、その下にある `handle` (アプリケーションと JSON リクエスト文字列を受け取り JSON レスポンス文字列を返す) と `dispatch` (`clackup` が格納したアプリケーションに対する同じ操作) をエクスポートします。上のバックエンドと同じく、`(clack:clackup app :server :reactor)` がドット区切りの綴りも含めて解決します。[Clack ガイド](clack.md#driving-the-reactor-by-hand-clack-handler-reactor)を参照 |
+
+シムは意図的に薄く作られています: ロード可能なライブラリが実際に呼ぶものだけを満たし、上流の完全な
+API は提供しません。
+
+## 実際に何がロードできるか
+
+現在、以下の実世界のライブラリが無改変でロードできます。**バックエンド**列は
+それぞれの検証済み範囲を示します — 「4 つ全て」はインタプリタ、JVM、WASM
+Preview 1、`--component` を意味します。**特筆事項**列はロードの特色と、
+動作しないものをまとめています。
+
+| ライブラリ | バックエンド | 特筆事項 |
+|------------|--------------|----------|
+| [alexandria](https://gitlab.common-lisp.net/alexandria/alexandria) 1.0.1 | 4 つ全て | エコシステムで最も依存されているユーティリティライブラリを実物のソースからロードします。2 つのパッケージ (`alexandria`/`alexandria-1` と `alexandria-2`) の両方が動作し、以下の依存を持つライブラリはすべてこれを取り込みます。まだ無いプリミティブに依存するメンバーは動きません: `type=` (`subtypep` の第 2 返り値)。`format-symbol`/`ensure-symbol` と**シンボル**を渡した `ensure-function` はインタプリタでのみ動作します (コンパイルバックエンドでは誤った値ではなくエラー)。`shuffle`/`random-elt`/`gaussian-random` は各バックエンド固有のエントロピーを引くため、出力はバックエンド間で比較できません |
+| [split-sequence](https://github.com/sharplispers/split-sequence) v2.0.1 | 4 つ全て | 文字列とリストに対する API 全体。第 2 戻り値 (再開インデックス) も動作します。CLOS 専用の `extended-sequence.lisp` は `:if-feature (:or :sbcl :abcl)` でゲートされ自動的に除外されます |
+| [parse-number](https://github.com/sharplispers/parse-number) v1.8 | 4 つ全て | API 全体が整数・有理数・浮動小数点数・基数プレフィクス付きリテラル (`#xFF`、`#3r12`)・指数マーカーを扱い、`invalid-number` コンディションも意図した診断情報付きでシグナルされます |
+| [cl-who](https://edicl.github.io/cl-who/) v1.1.5 | 4 つ全て | (X)HTML 生成マクロ — `with-html-output(-to-string)` が属性・ネストしたタグ・ローカルな `str`/`esc`/`fmt`/`htm` 演算子を扱い、`:xml` と `:html5` はどちらも正しくレンダリングされます。**`:indent` (整形出力) は未対応**で、出力モードの切り替えは **`(setf (html-mode) :html5)`** を使います: cl-who はモードをマクロ展開時に読み取るため、`*html-mode*` の実行時 `let` 再束縛は反映されません |
+| [cl-mustache](https://github.com/kanru/cl-mustache) 0.12.3 | 4 つ全て | Mustache テンプレートレンダラを無改変でロードします — 文字列テンプレートとファイルテンプレートの両方に対する `render`/`render*`、一度だけパースして何度でも描画する `compile-template`、レンダラに名前を束縛する `define`、`:data`/`:partials` を取る `make-context`。コンテキストは alist、ハッシュテーブル、あるいはそれらの連鎖です。セクション、反転セクション、パーシャル、動的パーシャル名 (`{{>*name}}`)、ラムダセクションのいずれも描画できます。同梱の **194 ケースの mustache 仕様スイートは全バックエンドで 158/194 — SBCL が通すのと同一の集合**であり、残る 36 件は上流の制約です (null の補間、ドット名によるコンテキストフレームの追加、および cl-mustache が対象とする 1.1.2 仕様より後に追加された 26 ケースの継承モジュール全体)。`t/test-api.lisp` は 20/20 です。存在しないパーシャルは `use-value` リスタートを提供しつつ `partial-cant-be-found` を `signal` するため、これを処理する成果物は WASM 両バックエンドで EH モードでコンパイルされます |
+| [assoc-utils](https://github.com/fukamachi/assoc-utils) | 4 つ全て | Alist ユーティリティの API 全体 — `aget` (setf 可能)、alist/plist/ハッシュの相互変換、`remove-from-alist`/`delete-from-alistf`、`with-keys`、`alist-get`、`alist=`、`alistp` |
+| [cl-base64](https://github.com/darabi/cl-base64) v3.4 | 4 つ全て | Base64。文字列・`(unsigned-byte 8)` 配列・整数に対して動作し、`:columns` の折り返しと `:uri` アルファベットも扱います。不正な入力文字は `bad-base64-character` を通知しますが、その `:input`/`:position`/`:code` スロットを読めるのはインタプリタのみです (コンパイル系バックエンドは素のコンディションを通知し、同じ `handler-case` で捕捉できます) |
+| [md5](https://github.com/pmai/md5) v2.0.4 | 4 つ全て | MD5 (RFC 1321) — `md5sum-sequence`/`md5sum-string` とインクリメンタル API が、4 バックエンドすべてで RFC のテストベクタと一致します |
+| [chipz](https://github.com/froydnj/chipz) 0.8 | 4 つ全て | 展開 — `gzip`/`zlib`/`deflate` 形式に対する `chipz:decompress` (新しいベクタへ、渡したベクタへ、あるいは `make-dstate` による逐次処理)、および CRC32/Adler-32 のチェックサム API。inflate の状態機械は遷移のたびに `#'ローカル関数` を構造体スロットに格納する `labels` であり、脱出に `catch`/`throw` を使うため、コンパイル成果物は常に WASM 両バックエンドで EH モードになります。bzip2 も一緒にロードされますが (`decompress` の `typecase` が `bzip2-state` を名指しするため)、こちらは未検証です。[`size-report/programs/zlib`](https://github.com/making/rontolisp/tree/develop/size-report/programs/zlib) がこれを使っています |
+| [cl-fad](https://edicl.github.io/cl-fad/) 0.7.6 | 4 つ全て | 移植性のあるパス名ユーティリティ — `list-directory`、`file-exists-p`/`directory-exists-p`、`walk-directory`、`copy-file`、`delete-directory-and-files`、`pathname-as-directory`/`-as-file` の変換、`open-temporary`。処理系ごとの分岐はシステムの読み込み時に rontolisp の操作へ置き換わります。読み込みで `TEMPORARY-FILES` 論理ホスト (`/tmp/` または `$TMPDIR`) が定義され、そのテンプレートは `translate-logical-pathname` が変換します。`with-output-to-temporary-file` と `with-open-temporary-file` は `(pathname stream)` で止まります。ファイルストリームはまだこれに答えません |
+| [cl-ppcre](https://github.com/edicl/cl-ppcre) v2.1.2 | 4 つ全て | Perl 互換正規表現を実物のソースからロードします — `scan`、`scan-to-strings`、`split`、`regex-replace(-all)`、`all-matches`、`count-matches`、`do-scans`/`do-matches` 系マクロ、`register-groups-bind`、`quote-meta-chars`、パースツリー正規表現、`(?i)` などのインラインモディファイア |
+| [cl-unicode](https://edicl.github.io/cl-unicode/) 0.1.6 (cl-ppcre-unicode 込み) | 4 つ全て | Unicode 文字データベースをライブラリとして提供します — `general-category`、`script`、`code-block`、`unicode-name`、`character-named`、`property-test`、`has-binary-property`、大文字小文字・数値のマッピング、4 種類の正規化形式。加えて `cl-ppcre-unicode` のリゾルバが入るので、正規表現の `\\p{L}`、`\\p{Nd}` などのプロパティエスケープが使えます。cl-unicode が挙げる 8 つのコンポーネントのうち 3 つは**リリースに存在しません**。本来の ASDF は、同梱の UCD テキストを解析してそれらをソースの隣に書き出す別システムを走らせて生成します。rontolisp はそのビルド段階を自前で行い、同じファイルから同じテーブルをロード時に導出するので、`(ql:quickload "cl-unicode")` だけで済みます。テーブルは数 MB のデータで、1 つの `.class` が名前を持てる定数の数を超えるため、データ自身の印字表現を数百個の文字列リテラルに載せて運び、`read-from-string` で読み戻します。14 個の範囲テーブルはそれぞれ、そのプロパティが最初に問い合わされた時点で構築されます。コンパイル成果物は 5 MB 前後で、`(str:title-case "HELLO LISP!")` はどのバックエンドでも同じ答えを返します |
+| [str](https://github.com/vindarel/cl-str) 0.21 | 4 つ全て | 文字列ライブラリ — `title-case`/`camel-case`/`snake-case`/`kebab-case` をはじめとするケース変換一式（cl-change-case 経由）、`split`/`join`/`words`/`lines`、`trim`/`pad`/`shorten`、`starts-with-p`/`ends-with-p`/`containsp`、`replace-all`/`replace-using`、`remove-punctuation`、`lettersp`/`alphanump`/`digitp` の各述語。述語が Unicode 対応なのは cl-ppcre の `\\p{L}` エスケープを通るからで、そのため `str` は cl-unicode と、それに伴う数 MB の Unicode テーブルを引き込みます |
+| [com.inuoe.jzon](https://github.com/Zulu-Inuoe/jzon) v1.1.4 | 4 つ全て | README のウォークスルーを含む JSON のパースと文字列化 — ハッシュテーブル / ベクタのラウンドトリップ、`:key-fn`、Gray ストリームによる `:stream` ライタ、`jzon:writer`、CLOS インスタンスの文字列化。依存システムは上記の組み込みシムに解決されます。3 つの数値リーフコンポーネント (eisel-lemire の float リーダと Schubfach の float プリンタ) は rontolisp ネイティブの float 演算による組み込みシムに置き換わります — float の出力は rontolisp 自身の最短ラウンドトリップ 10 進表現で、すべてのバックエンドで同一です — 。極端な指数のパースは正確な丸めから数 ulp ずれることがあります (絶対値 22 以下の 10 進指数はちょうど 1 回の丸め)。WASM バックエンドでは通常の注意点 (非 ASCII `\u` エスケープ) が適用されます |
+| [yason](https://github.com/phmarek/yason) 0.8.3 | 4 つ全て | JSON のパーサ/エンコーダを無改変のソースから `(ql:quickload "yason")` でロードします — 文字列またはストリームからハッシュテーブル・alist・plist への `parse` (`:object-as`、`:object-key-fn`、`:json-arrays-as-vectors`、`:json-booleans-as-symbols`、`:json-nulls-as-keyword`)、ハッシュテーブル・リスト・ベクタ・文字列・数値の `encode`、`encode-alist`/`encode-plist` (シンボルのキーには `*symbol-key-encoder*` を指定)、そしてストリーミングエンコーダ: `with-output`/`with-output-to-string*` (`:indent t` を含む)、`with-object`/`with-array`、`encode-object-element(s)`/`encode-array-element(s)`、`with-object-element`、ユーザ定義の `encode-slots progn` メソッドを使う `encode-object`。依存は alexandria と組み込みの `trivial-gray-streams` です |
+| [ironclad](https://github.com/sharplispers/ironclad) v0.61 (ダイジェスト / HMAC / PBKDF2 / HKDF / SCRAM / RSA のスライス) | 4 つ全て | 実物のソースからロードし、公開されている FIPS 180-2・RFC 1321・RFC 4231・RFC 5869・RFC 7677 のテストベクタを再現します — PostgreSQL クライアントが認証に使う一連の流れ、SCRAM-SHA-256 のクライアントプルーフを端から端まで含みます。`ironclad` が提供するのは SHA-1、MD5、SHA-224/256/384/512 と、その上の MAC・KDF (`hmac`、`hmac-kdf`、`pbkdf2`、`pbkdf2-hash-password`) です。RSA スタックも実物で、`generate-key-pair`、`sign-message`/`verify-signature`、`encrypt-message`/`decrypt-message` が PSS/OAEP の有無どちらでも使えます。3 つを除く他のダイジェストはそれぞれのシステム名でロードできます — `ironclad/digest/adler32`、`blake2`、`blake2s`、`crc24`、`crc32`、`groestl`、`jh`、`md2`、`md4`、`ripemd-160`、`ripemd-128`、`sm3`、`streebog`、`tiger` (32 ビット版)、`tree-hash`、`whirlpool`。`ironclad/prngs` は OS ジェネレータを提供します。ロードされるのはこのスライスのみです (ironclad 自身の `.asd` は実行可能なプログラムのため、同梱の代替がスライスを宣言します): **暗号方式 (cipher)、AEAD モード、RSA 以外の公開鍵アルゴリズム (DSA、ElGamal、楕円曲線、ed25519)、ダイジェストの SHA-3・Kupyna・Skein は利用できず**、要求すると呼び出し時に通知されます。`prng.lisp` は `rontolisp:random-bytes` 上の OS エントロピー表面だけに絞られるため、ノンス・RSA 鍵生成・PSS のソルトはどのバックエンドでも暗号論的に強いものの、`:fortuna` とシードファイル操作はありません。PBKDF2 はインタプリタではネイティブカーネルで動くため — 結果のバイト列は同じで、およそ 3 桁高速です — パスワードハッシュや SCRAM 認証がインタプリタ側の性能に縛られることはありません |
+| [uax-15](https://github.com/sabracrolleton/uax-15) v0.1.3 | 4 つ全て | Unicode 正規化 (UAX #15) の 4 形式すべてを実物のソースからロードします。**`--system-path` には 3 ディレクトリが必要です** (uax-15、split-sequence、cl-ppcre を `:` で連結)。上流はロード時に同梱の 2.7 MB の Unicode テキストを解析してテーブルを構築します (インタプリタでは数分) が、rontolisp はコンパイル/ロード時に同じファイルから同じテーブルを導出し、各テーブルを最初に読まれた時点で構築します。正規化を計算する関数は上流のまま残るため、ロードはほぼ無償で、正規化しないプログラムは一切払いません。意図的な差は 1 点だけで、それは修正です: `(unicode-letter-p #\A)` は `T` を返します (実際のロードでは `NIL`。上流のループが `#+utf-32` を読むため)。`get-mapping` は全バックエンドで通知しますが、上流の時点で壊れており呼び出し元はどこにもありません |
+| [quri](https://github.com/fukamachi/quri) v0.7.0 | 4 つ全て | URI ライブラリを、実物のソースから `(ql:quickload "quri")` でロードします — スキーム別構造体へのパース、各アクセサ、`render-uri`、`merge-uris`、`uri-query-params`、パーセントエンコーディング、公開サフィックス API、アドレス述語。依存する `babel` は組み込みの UTF-8 シムに解決されるため UTF-8 以外の `:encoding` はシグナルし、実効 TLD テーブルは同梱の 152 KB のリストから最初の読み取り時に構築するため `(load-etld-data OTHER-FILE)` は `OTHER-FILE` ではなくそのリストを読みます。`:lenient` なパーセントデコードは不正なエスケープを `handler-bind` のハンドラからの `go` で読み飛ばしますが、コンパイルバックエンドはこれを非局所脱出へ低位化するため 4 つ全てで同じ結果になります。`--system-path` には alexandria・split-sequence・cl-utilities・idna が必要です |
+| [local-time](https://github.com/dlowe-net/local-time) v1.0.6 | 4 つすべて | 日付/時刻ライブラリを、実際のソースから `(ql:quickload "local-time")` でロードします: `encode-timestamp`/`decode-timestamp`、`now`/`today`、unix 時刻と universal time の相互変換、`parse-timestring`、同梱のフォーマット全て (ISO 8601、RFC 3339、RFC 1123、asctime、ISO 週日付) とカスタムフォーマットリストに対する `format-timestring`、比較関数群、`timestamp+`/`timestamp-`/`adjust-timestamp`/`timestamp-minimize-part`、ユリウス日の 2 つ、`print-object`。依存は組み込みの `uiop` だけです。**ホストにファイルシステムがあれば実際の TZif ゾーンファイルもロードできます** — `(local-time:define-timezone tokyo #p"/usr/share/zoneinfo/Asia/Tokyo" :load t)` — `*default-timezone*` を設定するロード時の `/etc/localtime` 読み込みも同様に動作し、ファイルを読めない場合は `+utc-zone+` にフォールバックします (`--dir` なしの WASM バックエンドがこれにあたります)。`directory` が入ったことで、**`reread-timezone-repository` も 4 バックエンドすべてで同梱の `zoneinfo/` ツリーを走査します**。`find-timezone-by-location-name` で `"Asia/Tokyo"` などが解決できます。既定のリポジトリはコンパイルバックエンドではもう `nil` になりません — フォルダがロード時の `(eval (read-from-string ...))` (ASDF にシステムのソースディレクトリを問い合わせる形) をリテラルに折りたたむためです — ただしそのリテラルはアーティファクトをコンパイルしたマシンのディレクトリなので、移植可能な JVM アーティファクトや `--dir` なしの WASM ビルドでは、引き続きリポジトリを明示的に渡してください (`(local-time:reread-timezone-repository :timezone-repository "zoneinfo/")`) |
+| [trivia](https://github.com/guicho271828/trivia) (`trivia.trivial` ルート) | 4 つ全て | Optima 互換のパターンマッチングを、実ソースから `(ql:quickload "trivia")` でロードします — `match`/`match*`/`ematch` (失敗は `match-error` を通知)、定数 / 変数 / `cons` / `list` / `list*` / `vector` パターン、`guard`、`or`/`and`/`not` パターン、`defpattern`、構造体パターン (キーワード形と conc-name 形)、クラスパターン (キーワードスロット形と `(class name (slot var))` 形)、`(type spec)` パターン。システム `trivia` は `trivia.trivial` — 拡張向けに上流自身が指定するベースシステム — にマップされるため、節は `:trivial` オプティマイザで実行されます: 意味論は同一で、balland2006 の節最適化 (`iterate` + `type-i` が必要) だけがありません。依存 (alexandria、lisp-namespace、closer-mop / trivial-cltl2 シム) も一緒にロードされます。インタプリタは評価のたびにマクロを再展開するため、ホットな `match` ループはコンパイル系バックエンド向きです |
+| [sxql](https://github.com/fukamachi/sxql) | 4 つ全て | SQL ジェネレータを、改変なしの実ソースから `(ql:quickload "sxql")` でロードします — `sxql:yield` は SQL 文字列とバインド値リストを多値で返し、全バックエンドでバイト同一 (同じソースの SBCL とも同一) です: `select` と `from`/`where` (`:and`/`:or`/`:in`/`:like` を含む)、`order-by` (`:desc`、`nulls`)、`limit`/`offset`、`left-join ... :on`、`set=` を使う `insert-into`、`update`、`delete-from`、カラムオプション付き `create-table` (mito の `deftable` が出力する形)、`drop-table`、`alter-table`。依存 (trivia の `trivia.trivial` ルート、alexandria、cl-package-locks — 最後のものは実質 no-op のロックライブラリ) も一緒にロードされます。マクロ中心のライブラリの常として、ホットなクエリ構築はコンパイル系バックエンド向きです (インタプリタは評価のたびにマクロを再展開します)。`yield` とステートメントビルダの解説は[O/R マッピングガイド](mito.md)にあります |
+| [esrap](https://github.com/scymtym/esrap) 0.19 | 4 つ全て | パックラット / PEG パーサを、改変なしの実ソースから `(ql:quickload "esrap")` で読み込みます。インライン式または名前付きルールに対する `esrap:parse`、`:lambda` / `:destructure` / `:text` 変換を伴う `defrule`、`add-rule` / `make-instance 'esrap:rule`、大文字小文字を区別しない `(~ "lit")` 終端、`and` / `or` / `not` / `*` / `+` / `?` の連結、意味述語（`(oddp decimal)`）、`:junk-allowed`、そして正確なパースエラー報告（`esrap:esrap-parse-error`。そのテキストは SBCL 独自の Unicode 文字名を除いて SBCL とバイト単位で一致します）が動作します。パーサは純粋な計算なので **Preview 1 WASM も対象**です（ソケット不要、追加フラグも不要）。依存する alexandria と trivial-with-current-source-form も一緒に読み込まれます。`esrap:trace-rule` は存在しない `break` を、swank のインデントフックは `set` を必要としますが、どちらも呼ばない限り到達しません |
+| [postmodern](https://github.com/marijnh/Postmodern) v1.33.12 (MOP ビルド) | インタプリタ、JVM、WASM コンポーネント | PostgreSQL スタック (s-sql を含む) を、無改変の上流ソースから `(ql:quickload "postmodern")` でロードします: `with-connection`/`connect` とコネクションプール、S-SQL フォームまたは文字列に対する `query`/`execute` (結果スタイルは全て)、`doquery`、`:reconnect`/`reset-prepared-statement` リスタート付きのプリペアドステートメント、トランザクションとセーブポイント、`execute-file`、`deftable`。`:postmodern-thread-safe` は ON なのでロックは実際に直列化します。**DAO 層が入っています**: ビルドは `:postmodern-use-mop` を ON にしており、`table.lisp` が静的メタオブジェクトサブセットの上で無改変のままロードされます — `:col-type`/`:keys`/`:table-name` を持つ `(defclass ... (:metaclass pomo:dao-class))`、`dao-table-definition`、`deftable` の `!dao-def`、`insert-dao`/`get-dao`/`update-dao`/`upsert-dao`/`delete-dao`/`save-dao`/`select-dao`/`query-dao`、`make-dao`。メタクラスプロトコルは定義時に実行されるため、DAO クラスはリテラルなオプションを持つトップレベルの `defclass` でなければならず (実行時データからのクラス構築はエラーを通知)、`finalize-inheritance` は初回使用時ではなくクラス定義時に即座に実行されます — 定義エラーが早く表面化するだけで、結果は変わりません。接続には cl-postgres のソケット層が必要なため **Preview 1 WASM は対象外**で、`--component` にはさらに `-S inherit-network=y` が必要です。s-sql の層だけ (`(ql:quickload "s-sql")`) はソケットを開かず、4 つ全てのバックエンドで同一の SQL を生成します |
+| [dexador](https://github.com/fukamachi/dexador) 0.9.15 | インタプリタ、JVM、WASM コンポーネント、ネイティブ実行ファイル(HTTP)。WASM Preview 1 はコンパイルのみ | HTTP クライアントを無改変ソースから `(ql:quickload "dexador")` でロードします。組み込みの `usocket` と `cl+ssl` シムの上で動き、[HTTP クライアントのガイド](dexador.md)で扱います。`get`/`post`/`head`/`put`/`patch`/`delete` がボディ、ステータス、ヘッダを 3 値で返し、フォーム、JSON、マルチパートのボディ、リダイレクト、gzip、クッキージャー、keep-alive のプール、`:want-stream`、`:read-timeout` が動きます。`https://` はインタプリタ、JVM、WASM コンポーネントで動き、ネイティブ実行ファイルでは `https://` のリクエストがエラーを通知します |
+| [clack](https://github.com/fukamachi/clack) v2.1.0 ([lack](https://github.com/fukamachi/lack) 同梱) | インタプリタ、JVM、WASM コンポーネント | Web アプリケーション環境を無改変の上流ソースから `(ql:quickload "clack")` でロードし、組み込みの `clack-handler-rontolisp` バックエンドで serve します — [Clack ガイド](clack.md)を参照。lack 側もロードされます: `lack:builder`、(ironclad スライス上の) `lack-util` の `generate-random-id`、そして `clackup` のデフォルト `:use-default-middlewares t` がエンドツーエンドで通すバックトレースミドルウェア。`clackup` のデフォルト `:use-thread t` はインタプリタと JVM でアクセプタを本物のスレッド ([`rontolisp:make-thread`](../reference/functions/rontolisp-make-thread.md)) で実行します。WASM コンポーネントは代わりに `wasmtime serve` の下で serve します (ソケットはホストが所有)。Preview 1 WASM は設計上着信 TCP を持たないため、`clackup` は呼び出し時にエラーを送出します |
+| [tiny-routes](https://github.com/jeko2000/tiny-routes) v0.1.1 | 4 つ全て | Clack アプリケーション向けのルーティング層を無改変のソースから `(ql:quickload "tiny-routes")` でロードします — `clack:clackup` とルートを持つアプリケーションの間を埋める部品です。`define-get`/`define-post`/`define-put`/`define-delete`/`define-any`/`define-route` と `define-routes`、cl-ppcre 上の `:id` 形式のパステンプレート (`:regex t` で正規表現も)、`path-parameter`、`with-request`/`with-path-parameters`、`wrap-request-body` (Clack の `:raw-body` ストリーム)・`wrap-query-parameters`・`wrap-request-predicate`/`-mapper`・レスポンス系ラッパを繋ぐ `pipe` コンビネータ、そして `ok`/`created`/`not-found`/… のコンストラクタ一式。姉妹システム `tiny-routes-middleware-cookie` もロードでき (`parse-cookie-header`、`write-set-cookie-header`、`wrap-request-cookies`、`wrap-response-cookies`)、cl-cookie・quri・local-time・proc-parse を引き込みます。ルーティング自体は純粋な計算なので**4 つ全てのバックエンドが対象**です。ルートを serve するには `clackup` が要るため Preview 1 は外れます — [Clack ガイド](clack.md)を参照。依存は cl-ppcre だけなので、ディスクからロードする場合 `--system-path` には 2 ディレクトリが必要です。テストシステムは fiveam を要求しますが、fiveam はロードできません。サイズ制約のあるコンパイル済みモジュール向けには ppcre 不要の**オプトイン** `tiny-routes/lite` があります — 直下の節を参照 |
+| [ningle](https://github.com/fukamachi/ningle) v0.3.0 | 4 つ全て | Clack 上の「超マイクロフレームワーク」を無改変のソースから `(ql:quickload "ningle")` でロードします — 2 つめのルーティング層であり、tiny-routes とは書き方の違いではなく本質的にモデルが異なります。アプリケーションは CLOS の**オブジェクト**で (`(make-instance 'ningle:app)`、`lack-component` の一種)、各ルートは `setf` で追加し (`(setf (ningle:route app "/x") controller)`)、コントローラは環境ではなくマッチした**パラメータ**を受け取り、関数でないコントローラはそのままレスポンスボディとして返されます。`:name` トークンと `*` スプラットのパステンプレート、`:regexp t` ルート、`:method`、`:accept` によるコンテントネゴシエーション、ユーザ定義の requirement (`(setf (ningle:requirement app :key) fn)`) — つまりパス以外の条件でルートを選べます — に加えて `ningle:*request*`/`*response*`/`*session*` スペシャル、`ningle:context` と `with-context-variables`、`ningle:next-route`、そして 404 をオーバーライドするメソッド `ningle:not-found`。ルータの [myway](https://github.com/fukamachi/myway) と myway の `map-set` も一緒にロードされ、ningle が毎リクエスト読む lack のリクエストチェーン一式 (http-body、fast-http、smart-buffer、circular-streams、quri、yason、trivial-mimes) も同様です — コンパイル済みモジュールが同じルートの tiny-routes 版より一桁大きいのはこれが理由で、**サイズ向けのオプトインはありません**: myway は全ルールを cl-ppcre のスキャナにコンパイルするため、正規表現エンジンが実際に到達可能です。ルーティング自体は純粋な計算なので**4 つ全てのバックエンドが対象**です。ルートを serve するには `clackup` が要るため Preview 1 は外れます — [Clack ガイド](clack.md)を参照 |
+| [cl-dbi](https://github.com/fukamachi/cl-dbi) 0.11.1 (`dbd-postgres` のみ) | インタプリタ、JVM、WASM コンポーネント | データベース非依存インターフェイスを無改変ソースから `(ql:quickload "dbd-postgres")` でロードします: `dbi:connect` (ドライバはロード済みシステム上で解決されます — コンパイルされたプログラムは実行時にシステムをロードできないため、プログラム自身に `ql:quickload` を含める必要があります)、`dbi:do-sql`、`dbi:prepare`/`execute`/`fetch`/`fetch-all`、`dbi:with-transaction` (commit と rollback)、`dbi:connect-cached`、`dbi:disconnect`。`:mysql` と `:sqlite3` ドライバは FFI を要するため存在しません。スレッド対応バックエンドではコネクションキャッシュはスレッド別です (`bt2` シムの実ロックと [`rontolisp:current-thread`](../reference/functions/rontolisp-current-thread.md) 上の `cache/thread.lisp`)。シングルスレッドの WASM バックエンドは upstream 自身のスレッドなしキャッシュを使います。依存の `trivial-garbage` は上記の no-op ファイナライザシムに解決されるので、`dbi:disconnect` を明示的に呼んでください。ソケット制約は postmodern と同じです: Preview 1 WASM は対象外、コンポーネントは `-S inherit-network=y` が必要です |
+| [mito](https://github.com/fukamachi/mito) 0.2.0 | インタプリタ、JVM、WASM コンポーネント | O/R マッパーを無改変ソースから `(ql:quickload "mito")` でロードします — **システム全体** (`mito-core` + `mito-migration` + `lack-middleware-mito`) が入ります。詳細は[O/R マッピングガイド](mito.md)を参照してください。DAO 層: `connect-toplevel`/`disconnect-toplevel`、`deftable` (静的メタオブジェクトプロトコル上の `dao-table-class` メタクラス — auto-pk `:serial` と `:uuid`、`record-timestamps-mixin` の `created-at`/`updated-at`)、`table-definition`、`ensure-table-exists`、`create-dao`/`insert-dao`/`save-dao`/`delete-dao`、`find-dao`、sxql 句付きの `select-dao`、`object-id`、`retrieve-by-sql`、`execute-sql`。マイグレーション層: `migration-expressions` と `migrate-table` によるクラスと実スキーマの差分は 3 バックエンドすべてで動作し、マイグレーション**ファイル**を扱う `generate-migrations` / `migrate` はインタプリタ + JVM です (WASM バックエンドはディレクトリ作成とファイル削除の呼び出しをインポートしていないため、呼び出し時にエラーになります)。`migrate` は生成された `.sql` を esrap で読み直し、アドバイザリロックは chipz の CRC32 だけを切り出したスライスに乗ります。PostgreSQL のみ (`dbd-postgres` を明示的に quickload する必要があります)。他のメタクラス利用ライブラリと同様、`deftable` はリテラルオプションのトップレベルフォームである必要があります。既知のギャップ (いずれもガイドに記載): `:conc-name` アクセサは生成されません (`slot-value` は動作します)。sxql の SQL 関数オペレータ — `(:count ...)`、したがって `mito:count-dao` — はインタプリタ限定です。次の 2 つは SBCL でも同一に失敗する上流の不具合であり、ギャップではありません: `:col-type` のない `:references` 単独、および `:initform` を持つ NOT NULL カラムの追加。依存の uuid もロードされます (v1/v4 の生成はバックエンド自身のエントロピーを使います)。`dissect` のスタック内省は no-op インターフェイスです。ソケット制約は cl-dbi と同じです: Preview 1 WASM は対象外、コンポーネントは `-S inherit-network=y` が必要です |
+| [rove](https://github.com/fukamachi/rove) v0.10.0 | 4 つ全て | テスティングフレームワークを無改変ソースから `(ql:quickload "rove")` でロードします。詳細は[テストガイド](testing.md)を参照してください — `deftest`/`testing`/`ok`/`ng`/`signals`/`outputs`/`expands`/`pass`/`fail`/`skip`/`failing`/`setup`/`teardown`/`defhook`/`diag` が `:spec` (デフォルト) と `:dot` レポーターで動作し、エントリポイントも一式動作します: `:package-inferred-system` と素の `defsystem` テストシステムの両方に対する `rove:run`、`run-test`/`run-tests`、テストファイル末尾の `run-suite`。エラーを送出したテスト本体は実行を終わらせず記録された失敗になります (WASM バックエンドでは生トラップ — `(car 1)`、`(/ 1 0)` — は依然として実行を終わらせます)。`rontolisp test TARGET` (あるいは自前ランナー内の `(uiop:quit (if (rove:run ...) 0 1))`) は、どのバックエンドでも結果を CI の終了コードにします。依存の dissect は実ソースからロードされますが、スタック内省は空なので失敗レポートにバックトレースは出ません。またアサーション記述内のシンボルは、SBCL が裸で印字するところをパッケージ修飾付きで印字します — 詳細と実行コマンドはガイドを参照してください |
+| [prove](https://github.com/fukamachi/prove) (Quicklisp 2020-02-18) | 4 つ全て | テスティングフレームワークを無改変ソースからロードします。`(asdf:test-system :prove-test)` は `:test-file` コンポーネントクラスを通じて prove 自身のテストを実行し、SBCL と同じ内容を印字します。`proc-parse-test`、`xsubseq-test`、`myway-test` なども同じように実行できます |
+| [jose](https://github.com/fukamachi/jose) | 4 つ全て | JSON Object Signing and Encryption (JWS/JWT) を無改変ソースから `(ql:quickload "jose")` でロードします — HS256/384/512、RS256/384/512、PS256/384/512、および署名なしの `none` に対する `encode`/`decode`/`inspect-token` と、登録済みクレームの検査 (`iat`/`nbf`/`exp`/`jti` および `:issuer`/`:audience`/`:subject` キーワード)。生成されるトークンは同一ソースでの SBCL とも、Python の `hmac`/`hashlib` ともバイト単位で一致します — HS256 のものは jose の README が掲載しているトークンそのものです。RSA 鍵は ironclad のオブジェクトなので、`ironclad:generate-key-pair :rsa` (あるいは同等のものを返す任意のパーサ) から供給できます。PS512 には 1040 ビット以上の法が必要ですが、これは ironclad 自身のアサーションであり本実装の制約ではありません。期限切れの `exp`、未来の `nbf`、署名検証の失敗はいずれも `cerror` 経由で通知されるため、`continue` する `handler-bind` を置けばそのままデコードできます — そしてこれらを処理するプログラムは WASM 両バックエンドで EH モードでコンパイルされます。上流自身の `jose/tests/jwt` スイートは `rontolisp test` で 4 バックエンドすべて green です。姉妹の `jose/tests/jws` はどの処理系でも実行できません — `(:use #:pem)` しており、`pem` は Quicklisp ディストリビューションに存在しないためです。Quicklisp キャッシュではなく vendored ソースからロードする場合、`--system-path` には**8 つのディレクトリ**が必要です: jose、cl-json、ironclad、cl-base64、split-sequence、assoc-utils、alexandria、trivial-utf-8 |
+| [cffi](https://cffi.common-lisp.dev/) | インタプリタ, JVM | Common Foreign Function Interface — エコシステムのCバインディングがすべて前提にしているライブラリ — を `(ql:quickload "cffi")` で本家のソースそのままロードします。[Cライブラリガイド](cffi.md)を参照。`defcfun`、`foreign-funcall`（可変長引数を含む）、`define-foreign-library`/`use-foreign-library`、`with-foreign-object` + `mem-ref`/`mem-aref`、`defctype`、`defcstruct` + `foreign-slot-value`、`defcallback`、`defcvar`、外部文字列まわり一式が動きます。構造体の**値渡し**は `cffi-libffi` なしで動きます — foreign function API が自分でレイアウトを組むためです。rontolisp が用意するのは `cffi-sys` バックエンド、`cffi.asd` の差し替え、`src/strings.lisp` の代替の3つで、残り11ファイルは本家のソースそのものです。grovel するバインディング(`cffi-grovel`)はマシン自身のCコンパイラを実行し、ない場合はそれを名指しして拒否されます([grovel](cffi.md#grovelling))。`cffi-libffi` は中途半端にロードせず**理由を述べて拒否**されます。`java -jar` と、ネイティブバイナリ（登録済みの呼び出しシェイプのグリッドに対して動き、グリッド外のシェイプは登録に必要なメタデータエントリをひとつ名指ししてシグナルします）と、バインディングをクラスの隣に持ち運ぶコンパイル済み `.class`/`.jar` で動きます。どちらの WASM バックエンドにも foreign function API はないため、そちらへのコンパイルは恒久的に拒否されます |
+| [uffi](http://uffi.b9.com/) | インタプリタ, JVM | `(ql:quickload "uffi")` は、cffi 上で同じ API とパッケージを提供する `cffi-uffi-compat` をロードします。cffi 自身の `uffi-compat/uffi.asd` と同じ定義で、本家のソースは読みません。対応バックエンドは cffi と同じです |
+| [clsql](http://clsql.kpe.io/) 6.4 | 4 つすべて(コア)、インタプリタ, JVM(`clsql-sqlite3`、`clsql-postgresql-socket3`) | SQL インターフェースです。実ソースから `(ql:quickload "clsql")` でロードし、リリースが処理系ごとに 1 つの MOP パッケージを指定している箇所は `closer-mop` の上で動きます。`connect`、`query`、`select`、`execute-command`、トランザクション、ソースファイル中の `[...]` リーダー構文、ビュークラス(`def-view-class`、`create-view-from-class`、`update-records-from-instance`、クラスの `select`、結合スロット)を提供し、SBCL と同じ SQL を生成します。データベース型にはバックエンドが必要です。`clsql-sqlite3` はシステムの `libsqlite3.so` をロードし、`clsql-postgresql-socket3` は cl-postgres でサーバーと通信します。`~/.clsql-init.lisp` は読みません。ここのハッシュテーブルは弱参照ではないため、データベースのキャッシュは初回使用時に `UNSAFE!` を警告します |
+| [with-user-abort](https://github.com/compufox/with-user-abort) 0.1 | 4 つ全て | `user-abort` コンディションは [`rontolisp:interactive-interrupt`](../reference/functions/rontolisp.md) を継承します。ライブラリの処理系別の分岐をこのコンディションに置き換えています。実際の Ctrl-C がハンドラに届くのはインタプリタと JVM で、WebAssembly プログラムはハンドラを実行せず終了します |
+| [vom](https://github.com/orthecreedence/vom) 0.1.4 | 4 つ全て | 小さなロギングライブラリ。`(ql:quickload "vom")` で無改変のソースから読み込みます — `config`、レベルごとのマクロ、`*log-stream*`、`*time-formatter*` |
+| [atomics](https://github.com/Shinmera/atomics) 1.0.0 | 4 つすべて | 無改変のソースに rontolisp 用の分岐を加えた compare-and-swap です。インタプリタと JVM では `car` と `cdr` への `cas` は本物の compare-and-swap です。それ以外の場所 (`svref`、`slot-value`、構造体のアクセサ、スペシャル変数) は 1 つのロックの中で比較と格納を行うため、他の `cas` に対してはアトミックですが、同じ場所への通常の `setf` に対してはアトミックではありません。`atomic-incf`、`atomic-decf`、`atomic-push`、`atomic-pop`、`atomic-update` はその上で再試行します。WASM バックエンドはシングルスレッドなので、単なる比較と格納です |
+| [fset](https://github.com/slburson/fset) 2.2.0 | 4 バックエンドすべて | 関数型のセット、マップ、シーケンス、バッグ、タプルを無改変のソースから `(ql:quickload "fset")` でロードします。印字形式も同じです。`with-lock` の `:wait? nil` は先へ進まずロックを待ちますが、遅れるのはタプルのキーの並べ替えだけです |
+| [sento](https://github.com/mdbergmann/cl-gserver) 3.4.2 | インタプリタ、JVM | アクター、エージェント、フューチャー、ルーターを無改変のソースから `(ql:quickload "sento")` でロードします。`.wasm` にもコンパイルできますが、ディスパッチャがスレッドなので `asys:make-actor-system` がエラーを通知します |
+| [clingon](https://github.com/dnaeon/clingon) 0.5.0 | 4 つ全て | コマンドライン解析 — `make-command`、`make-option`、`parse-command-line`、`print-usage`、`getopt`、`run`。with-user-abort を使うので、インタプリタでは Ctrl-C で `Received SIGINT, exiting.` を表示してステータス 130 で終了します |
+| [deploy](https://shinmera.com/docs/deploy/) 3.0.0 | インタプリタでビルドし、実行ファイルは JVM の jar、モジュール、ネイティブとして動く | `deploy-op` のシステムの `asdf:make`。ビルド時のフックはインタプリタで、boot と quit のフックは実行ファイルで走り、`deploy:data-directory` は実行ファイルのディレクトリです。[ASDF システムから実行ファイルをビルドする](../compiling/asdf-programs.md#deploy)を参照 |
+| [cl-reexport](https://github.com/takagi/cl-reexport) | 4 つ全て | パッケージと `:include` / `:exclude` がリテラルの `reexport-from` は、後続のフォームからその名前を読めるようにします。コンパイルパスでは、パッケージやリストを計算する呼び出しは通常の呼び出しになり、何も変更しません。コンパイル済みプログラムのパッケージは固定されているためです |
+| [iterate](https://gitlab.common-lisp.net/iterate/iterate) 1.6.0 | 4 つ全て | Jonathan Amsterdam の反復 DSL を無改変ソースから `(ql:quickload "iterate")` でロードします — `iter`/`iterate` と、数値ドライバ (`from`/`to`/`downto`/`below`/`by`)、シーケンスドライバ (`in`、`on`、`in-string`、`in-vector`、`in-hashtable`)、アキュムレータ (`into` の有無両方の `collect`/`collecting`、`sum`、`multiply`、`maximize`、`minimize`、`counting`、`always`、`thereis`、`appending`、`reducing`)、制御節 (`repeat`、`with`、`while`、`until`、`if-first-time`、`finally`)、および `(in outer ...)` で名前付きの外側へ渡すネストした `iter`。純粋な計算に対するマクロで依存もないため、**4 つのバックエンドすべて**で動きます。節の先頭は通常のシンボルなので、認識させるのは `iterate:` 修飾ではなく `(use-package :iterate)` です — SBCL と同じです |
+| [contextl](https://github.com/pcostanza/contextl) (Quicklisp 2024-10-12) | 4 つ全て | コンテキスト指向プログラミングを無改変ソースから `(ql:quickload "contextl")` でロードします(レイヤー GC を含む)。`contextl-user` でも `contextl` でも使えます — `deflayer`(スーパーレイヤーを含む)、`:in` レイヤー・修飾子・`call-next-method` を使う `define-layered-function`/`define-layered-method`、`with-active-layers`/`with-inactive-layers`、`ensure-active-layer`、`active-layers`、`layer-active-p`、`standard-layer-class` のサブクラスに対する `adjoin-layer-using-class`/`remove-layer-using-class` メソッド、contextl がクラス割り当てにする `deflayer` のスロット(contextl のグループ化レイヤーのように `find-layer` 経由で読む)、`special-class` のスペシャルスロットと `dletf`/`dreletf`・捕捉した動的環境、`adjoin-layer-using-class`/`remove-layer-using-class` に後から `define-layered-method` したときのレイヤーキャッシュの消去(その `defmethod` は [`add-method`](../reference/functions/add-method.md) に届きます)、`:reinitialize t` スロットの有無を変えたシングルトンクラスとレイヤーの再定義、`layer-makunbound`、`define-layered-class` のレイヤードアクセサ、`:in` でレイヤーを指定した再定義による部分クラス(スーパークラスとスロットを追加できます)、`slot-value-using-layer` で読む `:layered` スロット、後の定義が既存インスタンスに与えるスペシャルスロット。レイヤーを有効にするたびに匿名のレイヤークラスを実行時に作ります([`defclass`](../reference/special-forms/defclass.md) を参照)。既存インスタンスのスロットをスペシャルにするクラス再定義はインタプリタで動作します。コンパイルパスでは `eval` した再定義はクラスを定義しません |
+| [array-operations](https://lisp-stat.dev/docs/manuals/array-operations) 1.2.1 | 4 つ全て | Lisp-Stat の配列ライブラリを無改変ソースから `(ql:quickload "array-operations")` でロードします — `aops:generate`/`generate*`、`zeros`/`ones`/`rand`/`randn`/`linspace` とその `*`/`!` 版、`dims`/`size`/`rank`/`nrow`/`ncol`、`reshape`/`flatten`/`displace`/`subvec`/`sub`/`partition`/`split`/`combine`、`permute`/`each`/`margin`/`recycle`/`outer`/`turn`/`vectorize`、`most`/`best`/`argmax`/`argmin`/`vectorize-reduce`、`each-index`/`sum-index`/`reduce-index` マクロ。依存の let-plus と anaphora も一緒にロードされます。残る制限は 2 つで、どちらも rontolisp 側の一般的な穴です: 階数 0 の配列がないため `(aops:dims 1)` — スカラーに対する `as-array` — がエラーになり、`stack-rows`/`stack-cols` にスカラーを渡せません。また `type-of` は配列に対して `(simple-array single-float (4))` ではなく `t` を返すため、配列の型指定子を調べるコードは SBCL より得られる情報が少なくなります |
+| [cl-csv](https://github.com/AccelerationNet/cl-csv) 1.0.7 | 4 つ全て | 無改変ソースから `(ql:quickload "cl-csv")` で CSV を読み書きします — `read-csv` と `write-csv` (クォートされたフィールドを含む) は SBCL と同じ結果を印字します。`.asd` の冒頭は `find-package` で守られた `defpackage` ですが、`.asd` が Lisp として実行されるのでロードできます。コンパイルパスは、依存する `cl-interpol` のソースを named-readtables がコンパイル時に設定したリードテーブルで読みます([リードテーブル](readtables.md)) |
+| [McCLIM](https://mcclim.common-lisp.dev/) (Quicklisp 2026-01-01) | インタプリタ | 無改変ソースから `(ql:quickload "clim")` で CLIM 2 の実装を提供します — プレゼンテーション型、`present-to-string`、`accept-from-string`、コマンドテーブル、`define-application-frame`、領域、変換、テキストスタイル、Drei のバッファと Lisp 構文は SBCL と同じ答えを返します。ディスプレイサーバーが必要なものは実行していません |
+| [arnesi](https://github.com/AccelerationNet/arnesi) (Quicklisp 2025-06-22) | インタプリタ | 無改変ソースから `(ql:quickload "arnesi")` でユーティリティを提供します — `wrapping-standard` メソッド結合、`with-call/cc`、`defun/cc`、`defmethod/cc` は SBCL と同じ答えを返します。この処理系向けの MOP 移植層がないという警告を出します |
+| [djula](https://github.com/mmontone/djula) (Quicklisp 2026-01-01) | インタプリタ | 無改変ソースから `(ql:quickload "djula")` で Django 風のテンプレートを提供します — `{{ }}`、フィルター、`{% for %}`、`{% if %}` は SBCL と同じ結果を描画します |
+| [serapeum](https://github.com/ruricolist/serapeum) (Quicklisp 2026-01-01) | インタプリタ | 無改変ソースから `(ql:quickload "serapeum")` でユーティリティを提供します — `standard/context` メソッド結合、シーケンス、ハッシュテーブル、`nlet`、`op`、`~>`、`string-case`、`defunion`、`match-of` は SBCL と同じ答えを返します。例外は `pairhash` が作るテーブルです(ここでの[既定の `:test`](../reference/functions/make-hash-table.md) は `equal` です) |
+| [function-cache](https://github.com/AccelerationNet/function-cache) 1.0.3 | インタプリタ | 無改変ソースから `(ql:quickload "function-cache")` でメモ化関数を提供します — `defcached` は引数リストごとに一度だけ計算します。`.asd` の冒頭とコンパイルパスで止まる場所は cl-csv と同じです |
+| [parenscript](https://parenscript.common-lisp.dev/) (Quicklisp 2025-06-22) | インタプリタ | 無改変ソースから `(ql:quickload "parenscript")` で Lisp を JavaScript に変換します — `ps`/`ps*` は `chain`/`@`/`create`/`while` や DOM シンボルのパッケージを含め、SBCL と同じ JavaScript を印字します。コンパイルパスは parenscript 自身の `property-bindings` (`Cannot compile symbol reference: PARENSCRIPT:VAR`) で止まります |
+| [jonathan](https://github.com/Rudolph-Miller/jonathan) 0.1 | インタプリタ, JVM | 無改変ソースから `(ql:quickload "jonathan")` で JSON をエンコード・デコードします — `to-json` と `parse` (plist、alist、ハッシュテーブルの結果) は SBCL と同じ結果を印字します。`.wasm` は `Cannot compile symbol: *` で止まります |
+| [40ants-doc](https://github.com/40ants/doc) (Quicklisp 2026-01-01) | インタプリタ | 無改変ソースから `(ql:quickload "40ants-doc")` でドキュメントのセクションを定義します — `defsection` と `section-title` は SBCL と同じ答えを返し、`in-readtable` の下で pythonic-string-reader の `"""..."""` 文字列を読めます。コンパイルパスは serapeum (`internal-definitions.lisp`) で止まります |
+| [petalisp](https://github.com/marcoheisig/Petalisp) (Quicklisp 2026-01-01) | インタプリタ | 無改変ソースから `(ql:quickload "petalisp")` で遅延評価の並列配列計算を使えます — `lazy`、`lazy-reshape`、`lazy-fuse`、`lazy-overwrite`、`lazy-reduce`、`lazy-sort`、`lazy-multiple-value`、`transform`、`compute` は SBCL と同じ答えを返し、計算は petalisp 自身のネイティブバックエンドがワーカースレッド (ここでは仮想スレッド) の上で行います。バッファはアドレスで受け渡す static vector ではなく要素ごとに読み書きする通常の Lisp ベクタなので、依存の `static-vectors` は外しています。コンパイルパスは止まります。バックエンドが実行時に生成するカーネルは petalisp 自身のマクロを使うためコンパイル済みプログラムではコンパイルできず、`.wasm` は依存の cffi を受け付けません |
+
+### サイズ向けオプトイン: `tiny-routes/lite`
+
+`(ql:quickload "tiny-routes/lite")` は、同じ tiny-routes のソースツリーを 1
+コンポーネントだけ差し替えてロードします — upstream では cl-ppcre のスキャナ
+だった `path-template.lisp` を ppcre 不要のマッチャーに置き換え、`:cl-ppcre`
+依存もあわせて落とします。これが存在する理由は、ルーティングが正規表現
+エンジンを**生かしたまま**にするからです: ルートのテンプレートはルート
+*構築*時にスキャナへとコンパイルされるため、コンパイル済みモジュールでは
+どんな tree-shaking も cl-ppcre を除去できず、サイズ制限のあるターゲット
+ではそれがモジュールの大半を占めます —
+[ルーティング版 Worker の例](https://github.com/making/rontolisp/tree/develop/examples/cloudflare-workers/httpbin-tiny-routes)
+の計測では、フルシステムで 974,530 B raw、lite で 408,448 B。ルートも
+応答もリクエスト単位で同一です。
+
+この置換はテンプレートが*何にマッチするか*を決して変えません — フル
+システムと同一にマッチするか、ルート構築時に大きな音を立てて拒否するかの
+どちらかです:
+
+- **受理**: リテラル文字と `:name` トークンだけから成るテンプレート —
+  トークンは `:` の後に英字または `_`、以降は英数字・`_`・`-` が続くもの
+  で、テンプレート内のどこにでも置けます: `/users/:id`、`/files/v:version`、
+  `/pair/:a/:b`。このサブセット内では lite マッチャーはフルシステムの意味論
+  を正確に再現します。貪欲なバックトラッキングも、upstream の貪欲な
+  トークン*名*走査も含めてです (`/a/:x-:y` の最初のトークン名は `x-` に
+  なります)。2 つのエンジンはテストスイートがテンプレート単位でピン留め
+  しています。
+- **ルート構築時に拒否** (逃げ道を明示するエラー): 正規表現メタ文字 —
+  `.` `\` `[` `]` `(` `)` `{` `}` `|` `^` `$` `*` `+` `?` — を含む
+  テンプレートと、すべての `:regex t` テンプレート。(`:name` トークンを
+  含まないテンプレートは upstream でも正規表現にならず `string=` で比較
+  されるため、そこにメタ文字があっても両システムとも問題ありません。)
+
+素の `(ql:quickload "tiny-routes")` は手つかずのまま — cl-ppcre 込みの
+無改変ライブラリ — で、2 つのシステムを 1 つのプログラムにロードすることは
+どちらの順でも拒否されます (後からロードした側がマッチャーを黙って再定義
+してしまうため)。`tiny-routes/lite` は Quicklisp のインデックスには
+ありません。この名前は tiny-routes のリリースをダウンロードし、その
+`.asd` に対して解決されます。
+
+cl-ppcre のロードはこれまでで最大の機能バッチ — ローカル
+`(declare (special ...))`、ジェネリック化された CLOS スロットアクセサ、
+`initialize-instance :after`、`&environment` + `get-setf-expansion`、`psetf`、
+`(setf (subseq ...))`、`subst`/`search`/`copy-tree`、降順・大文字小文字非区別の
+文字比較 — を牽引しました。
+
+uax-15 のロードは 2 番目に大きなバッチ — ASDF/UIOP のパス名プリミティブの
+コンパイル時畳み込み、`with-open-file` で読む同梱データファイルの成果物への
+インライン化、`LOOP` マクロの節単位への書き換え、WASM GC 文字列の背後にある
+UTF-8 バイトモデル — を牽引しました。
+
+alexandria のバッチは、他のすべてのライブラリが受け継いだものです。依存を持つ
+ライブラリはすべて alexandria に依存しているからです:
+`defmacro`/`destructuring-bind` の `&whole`、`&rest`/`&body` の後の分配パターン
+(`if-let`)、`lambda-list-keywords`、`do-external-symbols`、パッケージ指定子付きの
+`intern`、ハッシュテーブルの内部情報リーダ
+(`hash-table-test`/`-size`/`-rehash-size`/`-rehash-threshold`)、`mismatch`、
+`arrayp`、`with-open-stream`、第一級の値としての `#'open` — さらに `mappend` の
+ために、複数リストを取る第一級の値としての `#'mapcar`。
+
+そのうち 16 ライブラリの実行可能なデモ — バックエンド別の実行コマンドと期待
+出力付き — は
+[`examples/asdf/`](https://github.com/making/rontolisp/tree/develop/examples/asdf)
+にあります。
+
+現時点でロードできるライブラリの目安は、おおよそ次の範囲に収まるものです:
+素の `defun`/`defmacro`/`defpackage` コード、`loop`、`values` を末尾に持つ
+関数への `multiple-value-bind`、サポート済みの型指定子による
+`check-type`/`etypecase`、宣言 (パース済み no-op、`deftype` を含む)、CLOS
+静的サブセット (単一ディスパッチの
+`defclass`/`defgeneric`/`defmethod`/`make-instance`/`slot-value`、および
+`(defun (setf name) ...)` setf 関数)、そして
+コンディションとリスタートのシステム
+(`define-condition`/`handler-case`/`handler-bind`/`restart-case`/
+`invoke-restart`)、`return-from` のイディオム、そして動的 (スペシャル) 変数束縛 (`defvar` の
+スペシャル変数に対する `let`/`let*`)。完全なメタオブジェクトプロトコルや
+対話的デバッガ (`break`、`*debugger-hook*`) の上に
+構築されたライブラリはまだロードできません
+([未対応のCL機能](missing-features.md)を参照)。それ以外の場合の実用は、
+**自分自身の**複数ファイル rontolisp プロジェクトの構成です — その `.asd` は
+本物の ASDF でも読めるものになります。

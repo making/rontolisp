@@ -1,0 +1,5 @@
+# resolve test.range:app:1
+test.range:app:jar::1 scope=compile optional=false
+  test.range:mid:jar::1 scope=compile optional=false
+    test.range:lib:jar::1.5 scope=compile optional=false range=[1.0,1.5]
+      test.range:leaf:jar::1 scope=compile optional=false

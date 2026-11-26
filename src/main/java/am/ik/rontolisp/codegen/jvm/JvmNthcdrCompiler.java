@@ -1,0 +1,40 @@
+package am.ik.rontolisp.codegen.jvm;
+
+import java.lang.classfile.constantpool.MethodRefEntry;
+import java.util.List;
+
+import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispVal;
+
+/**
+ * Compiles the {@code nthcdr} built-in function. It pushes the count and the list and
+ * calls the {@code _nthcdr} static runtime helper emitted by
+ * {@link JvmNthcdrRuntimeBuilder}, which walks {@code cdr} that many times.
+ *
+ * <p>
+ * The walk deliberately does NOT live here: an inline loop would put its backedge under
+ * the enclosing expression's pending operands, and HotSpot refuses to OSR-compile such a
+ * loop head at every tier ({@link JvmNthcdrRuntimeBuilder} has the detail). Every
+ * {@code nth} reaches this compiler too -- {@code (nth n l)} expands to
+ * {@code (car (nthcdr n l))}.
+ */
+final class JvmNthcdrCompiler {
+
+	private JvmNthcdrCompiler() {
+	}
+
+	static void compile(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		List<LispVal> args = cons.toList();
+		// Evaluate n -> Long, unbox to long, convert to int. Evaluated before the list,
+		// as the inline walk this replaced did.
+		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
+		ctx.body.invokestatic(ctx.numOp(JvmOperandTypeRuntime.CK_IDX));
+		JvmEmitHelper.unboxLong(ctx);
+		ctx.body.l2i();
+		JvmExprCompiler.compileExpr(args.get(2), ctx, className);
+		MethodRefEntry ref = ctx.cp.methodRef(ctx.cp.classEntry(className), JvmNthcdrRuntimeBuilder.METHOD,
+				JvmNthcdrRuntimeBuilder.DESC);
+		ctx.body.invokestatic(ref);
+	}
+
+}

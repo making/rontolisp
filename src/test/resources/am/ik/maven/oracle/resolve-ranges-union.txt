@@ -1,0 +1,4 @@
+# resolve test.range:union:1
+test.range:union:jar::1 scope=compile optional=false
+  test.range:lib:jar::2.0 scope=compile optional=false range=[1.0,1.0], [1.7,)
+warning missing test.range:lib:jar:1.7

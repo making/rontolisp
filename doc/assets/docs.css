@@ -1,0 +1,860 @@
+/* rontolisp documentation theme -- "Marginalia".
+   Print-book typography rendered in a dark reading surface: hairline rules
+   instead of filled boxes, a serif body face for prose, and a single
+   parchment accent reserved for the paren identity mark and the current-
+   section rule. */
+
+:root {
+	--paper:      #16181f;
+	--paper-2:    #12141c;
+	--paper-3:    #1c1f28;
+	--ink:        #dbdde5;
+	--ink-strong: #f0f2f8;
+	--muted:      #6a7085;
+	--muted-2:    #8c92a8;
+	--rule:       #24273a;
+	--rule-strong: #363b52;
+	--accent:     #d0b48e;
+	--signal:     #7aa2f7;
+	--signal-ok:  #9ece6a;
+	--signal-err: #f7768e;
+	--serif: "Iowan Old Style", "Charter", "Palatino Linotype", "Palatino", "Georgia", serif;
+	--sans:  -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", "Segoe UI", sans-serif;
+	--mono:  "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+	--sidebar-w: 250px;
+	--toc-w: 200px;
+	--topbar-h: 56px;
+	--content-max: 68ch;
+}
+
+* { box-sizing: border-box; }
+
+html { scroll-behavior: smooth; }
+
+body {
+	margin: 0;
+	background: var(--paper);
+	color: var(--ink);
+	font-family: var(--serif);
+	font-size: 16px;
+	line-height: 1.65;
+	-webkit-font-smoothing: antialiased;
+	-moz-osx-font-smoothing: grayscale;
+	text-rendering: optimizeLegibility;
+}
+
+a {
+	color: var(--ink);
+	text-decoration: underline;
+	text-decoration-color: var(--rule-strong);
+	text-decoration-thickness: 1px;
+	text-underline-offset: 3px;
+	transition: text-decoration-color 0.12s ease;
+}
+a:hover { text-decoration-color: var(--accent); }
+
+/* --- top bar --- */
+.topbar {
+	position: sticky;
+	top: 0;
+	z-index: 20;
+	height: var(--topbar-h);
+	display: flex;
+	align-items: center;
+	gap: 20px;
+	padding: 0 28px;
+	background: var(--paper);
+	border-bottom: 1px solid var(--rule);
+	font-family: var(--sans);
+}
+
+/* The (rontolisp) mark, treated like a book-cover title imprint. */
+.topbar .brand {
+	font-family: var(--serif);
+	font-weight: 600;
+	color: var(--ink);
+	font-size: 17px;
+	letter-spacing: 0.01em;
+	text-decoration: none;
+	display: inline-flex;
+	align-items: baseline;
+	gap: 0.5ch;
+}
+.topbar .brand:hover { text-decoration: none; }
+.topbar .brand .paren {
+	color: var(--accent);
+	font-weight: 500;
+	font-style: italic;
+}
+.topbar .brand::after {
+	content: "documentation";
+	margin-left: 10px;
+	font-family: var(--sans);
+	font-size: 10px;
+	letter-spacing: 0.18em;
+	text-transform: uppercase;
+	color: var(--muted);
+	font-weight: 500;
+	position: relative;
+	top: -1px;
+}
+
+/* Hamburger toggle (only visible on narrow screens). */
+.nav-toggle {
+	display: none;
+	flex-direction: column;
+	justify-content: center;
+	gap: 4px;
+	width: 34px;
+	height: 30px;
+	padding: 0 7px;
+	background: transparent;
+	color: var(--ink);
+	border: 1px solid var(--rule-strong);
+	border-radius: 3px;
+	cursor: pointer;
+}
+.nav-toggle:hover { border-color: var(--accent); }
+.nav-toggle-bar {
+	display: block;
+	height: 1.5px;
+	background: var(--ink);
+}
+
+.topnav {
+	margin-left: auto;
+	display: flex;
+	align-items: center;
+	gap: 22px;
+	font-size: 13px;
+}
+.topnav a {
+	color: var(--muted-2);
+	text-decoration: none;
+	letter-spacing: 0.01em;
+}
+.topnav a:hover { color: var(--ink); }
+
+.langswitch {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	font-family: var(--sans);
+	font-size: 12px;
+	letter-spacing: 0.04em;
+	text-transform: uppercase;
+}
+.langswitch .lang {
+	color: var(--muted);
+	text-decoration: none;
+}
+.langswitch .lang:hover { color: var(--ink); }
+.langswitch .lang.active {
+	color: var(--ink);
+	position: relative;
+}
+.langswitch .lang.active::after {
+	content: "";
+	display: block;
+	height: 1px;
+	background: var(--accent);
+	margin-top: 2px;
+}
+
+.reset-runtime {
+	background: transparent;
+	color: var(--muted-2);
+	border: 1px solid var(--rule-strong);
+	border-radius: 3px;
+	padding: 5px 11px;
+	font-size: 12px;
+	font-family: var(--sans);
+	letter-spacing: 0.01em;
+	cursor: pointer;
+	transition: border-color 0.12s ease, color 0.12s ease;
+}
+.reset-runtime:hover { border-color: var(--accent); color: var(--ink); }
+
+.runtime-status {
+	font-size: 11px;
+	font-family: var(--mono);
+	color: var(--muted);
+	letter-spacing: 0.02em;
+	min-width: 0;
+}
+.runtime-status[data-state="loading"] { color: var(--accent); }
+.runtime-status[data-state="ready"] { color: var(--signal-ok); }
+.runtime-status[data-state="error"] { color: var(--signal-err); }
+
+
+/* --- search --- */
+/* The topbar control. It carries its shortcut like a book's thumb index:
+   hairline border, no fill, the key hint in the muted mono face. */
+.search-open {
+	display: inline-flex;
+	align-items: center;
+	gap: 9px;
+	background: transparent;
+	color: var(--muted-2);
+	border: 1px solid var(--rule-strong);
+	border-radius: 3px;
+	padding: 5px 9px 5px 11px;
+	font-size: 12px;
+	font-family: var(--sans);
+	letter-spacing: 0.01em;
+	cursor: pointer;
+	transition: border-color 0.12s ease, color 0.12s ease;
+}
+.search-open:hover { border-color: var(--accent); color: var(--ink); }
+.search-open-key {
+	font-family: var(--mono);
+	font-size: 10px;
+	letter-spacing: 0.04em;
+	color: var(--muted);
+	border: 1px solid var(--rule);
+	border-radius: 2px;
+	padding: 1px 4px;
+}
+
+.search-overlay {
+	position: fixed;
+	inset: 0;
+	z-index: 50;
+	background: rgba(6, 7, 11, 0.7);
+	display: flex;
+	justify-content: center;
+	align-items: flex-start;
+	padding: 10vh 20px 20px;
+}
+.search-overlay[hidden] { display: none; }
+
+.search-panel {
+	width: min(760px, 100%);
+	max-height: 74vh;
+	display: flex;
+	flex-direction: column;
+	background: var(--paper-2);
+	border: 1px solid var(--rule-strong);
+	border-radius: 4px;
+	box-shadow: 0 24px 64px rgba(0, 0, 0, 0.55);
+	overflow: hidden;
+}
+
+.search-input {
+	width: 100%;
+	border: 0;
+	border-bottom: 1px solid var(--rule);
+	background: transparent;
+	color: var(--ink-strong);
+	font-family: var(--serif);
+	font-size: 19px;
+	line-height: 1.4;
+	padding: 18px 22px;
+	outline: none;
+}
+.search-input::placeholder { color: var(--muted); }
+
+.search-results {
+	overflow-y: auto;
+	padding: 6px 0;
+}
+
+.search-hit {
+	display: block;
+	padding: 10px 22px;
+	text-decoration: none;
+	color: var(--ink);
+	border-left: 2px solid transparent;
+}
+.search-hit:hover { text-decoration: none; }
+.search-hit.active {
+	background: var(--paper-3);
+	border-left-color: var(--accent);
+}
+.search-hit .hit-title {
+	display: block;
+	font-family: var(--mono);
+	font-size: 14px;
+	color: var(--ink-strong);
+}
+.search-hit .hit-label {
+	font-family: var(--sans);
+	font-size: 11px;
+	letter-spacing: 0.04em;
+	text-transform: uppercase;
+	color: var(--muted);
+	margin-left: 6px;
+}
+.search-hit .hit-crumb {
+	display: block;
+	font-family: var(--sans);
+	font-size: 11px;
+	letter-spacing: 0.04em;
+	text-transform: uppercase;
+	color: var(--muted);
+	margin-top: 2px;
+}
+.search-hit .hit-snippet {
+	display: -webkit-box;
+	font-size: 13.5px;
+	line-height: 1.5;
+	color: var(--muted-2);
+	margin-top: 4px;
+	overflow: hidden;
+	-webkit-line-clamp: 2;
+	line-clamp: 2;
+	-webkit-box-orient: vertical;
+}
+.search-hit mark {
+	background: transparent;
+	color: var(--accent);
+	font-weight: 600;
+}
+
+.search-empty {
+	padding: 22px;
+	color: var(--muted);
+	font-size: 14px;
+}
+
+.search-legend {
+	display: flex;
+	align-items: center;
+	gap: 18px;
+	padding: 9px 22px;
+	border-top: 1px solid var(--rule);
+	font-family: var(--sans);
+	font-size: 11px;
+	color: var(--muted);
+}
+.search-legend kbd {
+	font-family: var(--mono);
+	font-size: 10px;
+	border: 1px solid var(--rule-strong);
+	border-radius: 2px;
+	padding: 0 4px;
+	margin-right: 3px;
+	color: var(--muted-2);
+}
+.search-legend .search-note { margin-left: auto; color: var(--accent); }
+
+/* The page must not scroll behind the dialog. */
+body.search-open-body { overflow: hidden; }
+
+/* --- layout --- */
+.layout {
+	display: flex;
+	align-items: flex-start;
+	max-width: 1380px;
+	margin: 0 auto;
+}
+
+/* --- sidebar --- */
+.sidebar {
+	position: sticky;
+	top: var(--topbar-h);
+	align-self: flex-start;
+	width: var(--sidebar-w);
+	flex: 0 0 var(--sidebar-w);
+	height: calc(100vh - var(--topbar-h));
+	overflow-y: auto;
+	padding: 32px 18px 60px 28px;
+	border-right: 1px solid var(--rule);
+	font-family: var(--sans);
+}
+
+.nav-section { margin-bottom: 26px; }
+.nav-section-title {
+	font-size: 10px;
+	font-weight: 600;
+	text-transform: uppercase;
+	letter-spacing: 0.18em;
+	color: var(--muted);
+	padding: 0 8px 6px;
+	margin-bottom: 4px;
+	border-bottom: 1px solid var(--rule);
+}
+.sidebar ul { list-style: none; margin: 0; padding: 0; }
+.sidebar li { margin: 0; }
+.sidebar .nav-link {
+	display: block;
+	padding: 5px 8px 5px 10px;
+	color: var(--muted-2);
+	font-size: 13.5px;
+	line-height: 1.4;
+	text-decoration: none;
+	border-left: 2px solid transparent;
+	margin-left: -2px;
+}
+.sidebar .nav-link:hover {
+	color: var(--ink);
+	background: transparent;
+	text-decoration: none;
+}
+.sidebar .nav-link.active {
+	color: var(--ink);
+	border-left-color: var(--accent);
+	background: transparent;
+	font-weight: 500;
+}
+
+/* --- main content --- */
+.content {
+	flex: 1;
+	min-width: 0;
+	padding: 40px 56px 96px;
+	font-family: var(--serif);
+}
+
+.backlink {
+	display: inline-block;
+	margin-bottom: 24px;
+	font-family: var(--sans);
+	font-size: 12px;
+	letter-spacing: 0.06em;
+	text-transform: uppercase;
+	color: var(--muted);
+	text-decoration: none;
+}
+.backlink:hover { color: var(--accent); text-decoration: none; }
+
+/* --- right-hand "on this page" --- */
+.toc {
+	position: sticky;
+	top: var(--topbar-h);
+	align-self: flex-start;
+	width: var(--toc-w);
+	flex: 0 0 var(--toc-w);
+	max-height: calc(100vh - var(--topbar-h));
+	overflow-y: auto;
+	padding: 40px 24px 60px 8px;
+	font-family: var(--sans);
+	font-size: 12.5px;
+	border-left: 1px solid var(--rule);
+}
+.toc-title {
+	font-size: 10px;
+	font-weight: 600;
+	text-transform: uppercase;
+	letter-spacing: 0.18em;
+	color: var(--muted);
+	padding: 0 8px 6px;
+	margin-bottom: 6px;
+	border-bottom: 1px solid var(--rule);
+}
+.toc ul { list-style: none; margin: 0; padding: 0; }
+.toc li { margin: 0; }
+.toc a {
+	display: block;
+	padding: 3px 8px;
+	border-left: 2px solid transparent;
+	color: var(--muted-2);
+	text-decoration: none;
+	line-height: 1.4;
+	margin-left: -2px;
+}
+.toc a:hover { color: var(--ink); text-decoration: none; }
+.toc a.active {
+	color: var(--ink);
+	border-left-color: var(--accent);
+}
+.toc .toc-h3 a { padding-left: 20px; font-size: 11.5px; }
+.toc code {
+	font-family: var(--mono);
+	font-size: 0.92em;
+	color: inherit;
+}
+
+/* --- markdown content ---
+   The book measure belongs to the PROSE, not to the article: the article fills
+   the content column and each flowing child is capped at --content-max, so a
+   table -- a figure, not a paragraph -- keeps the whole column and its last
+   column stays on screen instead of scrolling out of a 68ch box. */
+.markdown { max-width: none; }
+.markdown > * { max-width: var(--content-max); }
+.markdown > table { max-width: none; }
+.markdown img { max-width: 100%; height: auto; }
+.markdown h1 {
+	font-family: var(--serif);
+	font-weight: 600;
+	font-size: 34px;
+	line-height: 1.15;
+	letter-spacing: -0.015em;
+	margin: 0 0 8px;
+	color: var(--ink-strong);
+}
+/* Small serif marker before H2 -- a book-style annotation instead of a full-width rule below. */
+.markdown h2 {
+	font-family: var(--serif);
+	font-weight: 600;
+	font-size: 22px;
+	line-height: 1.25;
+	letter-spacing: -0.01em;
+	margin: 52px 0 14px;
+	padding-top: 14px;
+	color: var(--ink-strong);
+	position: relative;
+}
+.markdown h2::before {
+	content: "";
+	position: absolute;
+	top: 0;
+	left: 0;
+	width: 36px;
+	height: 1px;
+	background: var(--accent);
+}
+.markdown h3 {
+	font-family: var(--serif);
+	font-weight: 600;
+	font-size: 17.5px;
+	margin: 34px 0 10px;
+	color: var(--ink-strong);
+	letter-spacing: -0.005em;
+}
+.markdown h4 {
+	font-family: var(--sans);
+	font-weight: 600;
+	font-size: 12px;
+	letter-spacing: 0.14em;
+	text-transform: uppercase;
+	margin: 26px 0 8px;
+	color: var(--muted-2);
+}
+.markdown p { margin: 12px 0; }
+.markdown ul, .markdown ol { padding-left: 22px; }
+.markdown li { margin: 5px 0; }
+.markdown ul li::marker { color: var(--muted); }
+.markdown strong { color: var(--ink-strong); font-weight: 600; }
+.markdown em { font-style: italic; color: var(--ink-strong); }
+.markdown hr {
+	border: none;
+	border-top: 1px solid var(--rule);
+	margin: 36px 0;
+}
+
+.markdown blockquote {
+	margin: 18px 0;
+	padding: 2px 0 2px 18px;
+	border-left: 2px solid var(--accent);
+	color: var(--muted-2);
+	font-style: italic;
+}
+.markdown blockquote p { margin: 6px 0; }
+
+/* Inline code -- quiet monospace, no colored bubble. */
+.markdown :not(pre) > code {
+	font-family: var(--mono);
+	font-size: 0.86em;
+	color: var(--ink-strong);
+	background: var(--paper-3);
+	padding: 1px 5px;
+	border-radius: 2px;
+	border: none;
+}
+
+/* Static code blocks. */
+.markdown pre {
+	background: var(--paper-2);
+	border: 1px solid var(--rule);
+	border-radius: 0;
+	padding: 16px 18px;
+	overflow-x: auto;
+	font-family: var(--mono);
+	font-size: 13px;
+	line-height: 1.6;
+	margin: 18px 0;
+}
+.markdown pre code {
+	font-family: var(--mono);
+	background: none;
+	border: none;
+	padding: 0;
+	color: var(--ink);
+	font-size: 13px;
+}
+
+/* Heading anchors. */
+.markdown a.anchor {
+	visibility: hidden;
+	margin-left: 8px;
+	color: var(--muted);
+	text-decoration: none;
+	font-weight: 400;
+}
+.markdown h1:hover a.anchor,
+.markdown h2:hover a.anchor,
+.markdown h3:hover a.anchor,
+.markdown h4:hover a.anchor { visibility: visible; }
+.markdown a.anchor:hover { color: var(--accent); }
+
+/* --- tables --- */
+.markdown table {
+	display: block;
+	width: 100%;
+	overflow-x: auto;
+	border-collapse: collapse;
+	margin: 20px 0;
+	font-family: var(--sans);
+	font-size: 13px;
+}
+.markdown th, .markdown td {
+	border: none;
+	border-bottom: 1px solid var(--rule);
+	padding: 9px 14px 9px 0;
+	text-align: left;
+	vertical-align: top;
+}
+.markdown th {
+	color: var(--muted);
+	font-weight: 600;
+	font-size: 10px;
+	text-transform: uppercase;
+	letter-spacing: 0.14em;
+	border-bottom: 1px solid var(--rule-strong);
+	background: transparent;
+}
+.markdown tr:nth-child(even) td { background: transparent; }
+/* Wrap only when the cell cannot hold the form on one line -- an example that
+   is too long yields, instead of pushing the last column off the table. */
+.markdown td code, .markdown th code {
+	white-space: normal;
+	overflow-wrap: anywhere;
+	background: transparent;
+	padding: 0;
+	color: var(--ink-strong);
+	font-size: 12.5px;
+}
+/* An operator name is the row's identity: never broken across lines. */
+.markdown a.fn-link code { white-space: nowrap; }
+
+/* An operator index table (Function | Example | Result -- the tables whose first
+   column is auto-linked) holds a few rows far wider than the rest, and the auto
+   layout hands them the column, squeezing the others. Pin the proportions so
+   every row reads the same: name, example, then the prose result takes the rest. */
+.markdown table:has(a.fn-link) th:nth-child(1) { width: 22%; }
+.markdown table:has(a.fn-link) th:nth-child(2) { width: 30%; }
+
+/* Function-name links in the Functions table. */
+.markdown a.fn-link {
+	text-decoration: none;
+	color: var(--ink-strong);
+}
+.markdown a.fn-link code { color: var(--ink-strong); cursor: pointer; }
+.markdown a.fn-link:hover code {
+	color: var(--accent);
+	text-decoration: none;
+}
+.markdown a.fn-link:hover { text-decoration: none; }
+
+/* --- runnable code cells ---
+   The identity mark for interactivity: a 2px accent stripe along the top
+   edge. Everything else stays quiet. */
+.code-cell {
+	margin: 20px 0;
+	border: 1px solid var(--rule);
+	border-top: 2px solid var(--accent);
+	border-radius: 0;
+	overflow: hidden;
+	background: var(--paper-2);
+}
+.cell-toolbar {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	padding: 8px 14px;
+	background: var(--paper-3);
+	border-bottom: 1px solid var(--rule);
+	font-family: var(--sans);
+}
+.cell-toolbar .run {
+	background: transparent;
+	color: var(--signal);
+	border: 1px solid var(--signal);
+	border-radius: 3px;
+	padding: 4px 14px;
+	font-family: var(--sans);
+	font-size: 11.5px;
+	font-weight: 600;
+	letter-spacing: 0.06em;
+	text-transform: uppercase;
+	cursor: pointer;
+	transition: background 0.12s ease, color 0.12s ease;
+}
+.cell-toolbar .run:hover {
+	background: var(--signal);
+	color: var(--paper);
+}
+.cell-toolbar .run.stop {
+	color: var(--signal-err);
+	border-color: var(--signal-err);
+}
+.cell-toolbar .run.stop:hover {
+	background: var(--signal-err);
+	color: var(--paper);
+}
+.cell-status {
+	font-family: var(--mono);
+	font-size: 11.5px;
+	color: var(--muted);
+	letter-spacing: 0.02em;
+}
+.cell-status.err { color: var(--signal-err); }
+
+textarea.cell-src {
+	display: block;
+	width: 100%;
+	border: none;
+	outline: none;
+	resize: vertical;
+	background: var(--paper-2);
+	color: var(--ink);
+	font-family: var(--mono);
+	font-size: 13px;
+	line-height: 1.6;
+	padding: 14px 18px;
+	tab-size: 2;
+	white-space: pre;
+	overflow-x: auto;
+}
+
+pre.cell-out {
+	margin: 0;
+	border: none;
+	border-top: 1px solid var(--rule);
+	border-radius: 0;
+	background: var(--paper-2);
+	color: var(--signal-ok);
+	padding: 12px 18px;
+	font-family: var(--mono);
+	font-size: 13px;
+	line-height: 1.55;
+	white-space: pre;
+	overflow-x: auto;
+}
+pre.cell-out.err { color: var(--signal-err); }
+
+/* --- copy buttons --- */
+.copy {
+	background: transparent;
+	color: var(--muted);
+	border: 1px solid var(--rule-strong);
+	border-radius: 3px;
+	padding: 3px 10px;
+	font-family: var(--sans);
+	font-size: 11px;
+	letter-spacing: 0.06em;
+	text-transform: uppercase;
+	cursor: pointer;
+	transition: color 0.12s ease, border-color 0.12s ease;
+}
+.copy:hover { color: var(--ink); border-color: var(--accent); }
+.copy.copied { color: var(--accent); border-color: var(--accent); }
+
+.cell-toolbar .copy { margin-left: auto; }
+
+.code-block { position: relative; }
+.code-block .copy {
+	position: absolute;
+	top: 10px;
+	right: 10px;
+	opacity: 0;
+	transition: opacity 0.12s ease;
+}
+.code-block:hover .copy,
+.code-block .copy:focus { opacity: 1; }
+
+/* --- prev / next --- */
+.prevnext {
+	display: flex;
+	justify-content: space-between;
+	align-items: stretch;
+	gap: 24px;
+	margin-top: 64px;
+	padding-top: 22px;
+	border-top: 1px solid var(--rule);
+	font-family: var(--sans);
+}
+.prevnext a {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	padding: 4px 0;
+	border: none;
+	border-radius: 0;
+	max-width: 48%;
+	text-decoration: none;
+	color: var(--ink);
+}
+.prevnext a:hover { color: var(--accent); text-decoration: none; }
+.prevnext a:hover .label { color: var(--accent); }
+.prevnext .next { text-align: right; margin-left: auto; }
+.prevnext .dir {
+	font-size: 10px;
+	letter-spacing: 0.16em;
+	text-transform: uppercase;
+	color: var(--muted);
+	font-weight: 600;
+}
+.prevnext .label {
+	font-family: var(--serif);
+	font-weight: 500;
+	font-size: 16px;
+	color: var(--ink);
+	transition: color 0.12s ease;
+}
+
+/* --- responsive --- */
+/* Drop the TOC first when space gets tight, then the sidebar. */
+@media (max-width: 1080px) {
+	.toc { display: none; }
+	.content { padding: 36px 44px 96px; }
+}
+@media (max-width: 800px) {
+	.nav-toggle { display: inline-flex; }
+	.topbar { padding: 0 16px; gap: 12px; }
+	.topbar .brand { font-size: 15px; }
+	.topbar .brand::after { display: none; }
+	.topnav { gap: 14px; margin-left: auto; }
+	/* Fold Playground / GitHub / Reset / runtime status behind the sidebar;
+	   the language switch is the only chrome that stays. */
+	.topnav > a[href*="playground"],
+	.topnav > a[href*="github"],
+	.reset-runtime,
+	.runtime-status { display: none; }
+	/* Search stays, shrunk to its label; the shortcut hint needs a keyboard. */
+	.search-open { padding: 5px 9px; }
+	.search-open-key { display: none; }
+	.search-overlay { padding: 6vh 12px 12px; }
+	.search-panel { max-height: 84vh; }
+	.search-input { font-size: 17px; padding: 15px 16px; }
+	.search-hit { padding: 10px 16px; }
+	.search-legend { padding: 8px 16px; gap: 12px; }
+	.langswitch { gap: 8px; font-size: 11px; }
+	.sidebar {
+		position: fixed;
+		top: var(--topbar-h);
+		left: 0;
+		height: calc(100vh - var(--topbar-h));
+		width: min(80vw, 300px);
+		flex: none;
+		background: var(--paper);
+		border-right: 1px solid var(--rule);
+		z-index: 30;
+		transform: translateX(-100%);
+		transition: transform 0.18s ease;
+	}
+	body.nav-open .sidebar { transform: translateX(0); }
+	.sidebar-backdrop {
+		position: fixed;
+		top: var(--topbar-h);
+		left: 0;
+		right: 0;
+		bottom: 0;
+		background: rgba(0, 0, 0, 0.55);
+		z-index: 25;
+	}
+	.content { padding: 28px 22px 80px; }
+	.markdown h1 { font-size: 28px; }
+	.markdown h2 { font-size: 20px; }
+}

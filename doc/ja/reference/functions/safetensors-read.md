@@ -1,0 +1,21 @@
+# safetensors:read
+
+`(safetensors:read path &key only element-type)`
+
+safetensors チェックポイントを、テンソル名 -> ファイルの形のパックされた浮動小数点配列（1 次元のテンソルはランク 1 のベクタ、それ以外はランク N のパック配列）のハッシュテーブル（`equal`、文字列キー）に読み込みます。`path` は `.safetensors` ファイル、`model.safetensors.index.json`（各シャードは 1 回だけ開き 1 回だけ歩きます）、またはそのどちらかを含むディレクトリです。`element-type` は `single-float`（既定）、`double-float`、またはインタプリタと JVM では `bfloat16` です（他のバックエンドはこの幅を名前を挙げて拒否します）。F32 テンソルはそのまま、F16 と BF16 は [`checkpoint`](checkpoint.md) のステージングを通して読み、それ以外の dtype はテンソル名と dtype を挙げたエラーになります。BF16 テンソルを `bfloat16` の宛先に読む場合だけは変換が一切なく、ファイルの 1 要素 2 バイトをそのまま 1 回で転送します。`only` は名前に対する述語で、拒否されたテンソルはステージングされず有界の読み取りで飛ばされます。マルチモーダルなチェックポイントのタワーや投機的ヘッドをディスクに残すのはこの方法です。
+
+```console
+CL-USER> (defparameter *w* (safetensors:read "TinyLlama-1.1B-Chat-v1.0"
+                                             :only (lambda (name) (search "layers.0." name))))
+*W*
+CL-USER> (hash-table-count *w*)
+9
+CL-USER> (array-dimensions (gethash "model.layers.0.self_attn.q_proj.weight" *w*))
+(2048 2048)
+CL-USER> (array-element-type (gethash "model.layers.0.input_layernorm.weight" *w*))
+SINGLE-FLOAT
+```
+
+## バックエンドのサポート
+
+ファイルシステムのあるすべてのバックエンド。インタプリタ、コンパイルされた `.class`/`.jar`、そして WASM の両バックエンドです。狭いのは `bfloat16` の宛先要素型で、これはインタプリタと JVM だけです（他のバックエンドはこの幅を名前を挙げて拒否します）。

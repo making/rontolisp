@@ -1,0 +1,231 @@
+package am.ik.rontolisp.eval;
+
+import java.util.List;
+import java.util.function.Supplier;
+
+import am.ik.rontolisp.ClosRegistry;
+import am.ik.rontolisp.LispVal;
+
+import org.jspecify.annotations.Nullable;
+
+/**
+ * Exception thrown during Lisp expression evaluation. When the error was signaled with a
+ * condition object (the typed {@code (error 'type ...)} / {@code (error obj)} designator
+ * forms), the CLOS-subset tagged-list instance rides along in {@link #condition()} so
+ * {@code handler-case} can dispatch on its type; a plain error carries {@code null} and
+ * the handler synthesizes a {@code simple-error} from the message.
+ */
+public class LispEvalException extends RuntimeException {
+
+	private final transient @Nullable LispVal condition;
+
+	/**
+	 * Renders the message when it is first read, then gone: a condition's report, which
+	 * runs program code a signal nothing prints must not run. Null for a message known at
+	 * the signal.
+	 */
+	private transient @Nullable Supplier<String> rendering;
+
+	/** What {@link #rendering} answered. */
+	private @Nullable String rendered;
+
+	/** The seeded condition class this error carries, or {@code null} for a plain one. */
+	private final @Nullable String conditionClassName;
+
+	/** Where this error has been while unwinding; built by the first frame it leaves. */
+	private transient @Nullable ConditionTrace trace;
+
+	/**
+	 * Whether the {@code handler-bind} handlers already ran for this error's condition --
+	 * at the signal point, or at the first seam or pad it crossed. Written by the thread
+	 * the error is raised on before it is thrown; an async body's error reaches its
+	 * awaiter through the future, which publishes it.
+	 */
+	private boolean handlersRan;
+
+	/**
+	 * Whether a debugger was offered this error at its signal point, so no frame it
+	 * unwinds through offers it again ({@link Debugger}).
+	 */
+	private boolean debuggerOffered;
+
+	/**
+	 * Create a new evaluation exception with the given message.
+	 * @param message the error message
+	 */
+	public LispEvalException(String message) {
+		this(message, null);
+	}
+
+	/**
+	 * Create a new evaluation exception a built-in raised, naming the CONDITION CLASS the
+	 * catching form should synthesize for it -- {@code type-error} for a bad {@code car},
+	 * {@code division-by-zero} for a zero divisor, and so on. The alternative (typing the
+	 * message at the catching end) would have every backend pattern-matching prose;
+	 * naming the class where the failure is DETECTED is the only place that actually
+	 * knows.
+	 * @param className the condition class name, e.g.
+	 * {@link ClosRegistry#TYPE_ERROR_CLASS_NAME}
+	 * @param message the error message
+	 * @return the exception to throw
+	 */
+	public static LispEvalException ofClass(String className, String message) {
+		return new LispEvalException(message, null, className);
+	}
+
+	/**
+	 * The signal of a division by an exact zero -- what {@code mod}/{@code rem} would
+	 * otherwise leave to the host's {@code ArithmeticException} and its own text.
+	 * @return the exception to throw
+	 */
+	public static LispEvalException divisionByZero() {
+		return ofClass(ClosRegistry.DIVISION_BY_ZERO_CLASS_NAME, ClosRegistry.DIVISION_BY_ZERO_MESSAGE);
+	}
+
+	/**
+	 * Create a new evaluation exception carrying a condition object.
+	 * @param message the error message
+	 * @param condition the condition instance (a tagged list), or null
+	 */
+	public LispEvalException(String message, @Nullable LispVal condition) {
+		this(message, condition, null);
+	}
+
+	LispEvalException(String message, @Nullable LispVal condition, @Nullable String conditionClassName) {
+		super(message);
+		this.condition = condition;
+		this.conditionClassName = conditionClassName;
+	}
+
+	/**
+	 * Create a new evaluation exception carrying a condition object whose message is its
+	 * report, rendered when {@link #getMessage()} first asks.
+	 * @param rendering what renders the message
+	 * @param condition the condition instance
+	 * @return the exception to throw
+	 */
+	static LispEvalException rendering(Supplier<String> rendering, LispVal condition) {
+		LispEvalException raised = new LispEvalException("", condition);
+		raised.rendering = rendering;
+		return raised;
+	}
+
+	@Override
+	public synchronized @Nullable String getMessage() {
+		Supplier<String> pending = this.rendering;
+		if (pending != null) {
+			this.rendering = null;
+			try {
+				this.rendered = pending.get();
+			}
+			catch (RuntimeException | StackOverflowError ex) {
+				// Past what %signal-text catches: a transfer of control to nowhere, or
+				// a report too deep to run. The report is what is unavailable, not the
+				// failure the error stands for.
+				this.rendered = "#<error printing a condition: " + ex + ">";
+			}
+		}
+		return this.rendered != null ? this.rendered : super.getMessage();
+	}
+
+	/**
+	 * The condition object signaled with this error, or null when the error was signaled
+	 * without one.
+	 * @return the condition instance or null
+	 */
+	public @Nullable LispVal condition() {
+		return this.condition;
+	}
+
+	/**
+	 * The condition class a catching form synthesizes an instance of when this error
+	 * carries no condition object, or null for the {@code simple-error} default.
+	 * @return the condition class name or null
+	 */
+	public @Nullable String conditionClassName() {
+		return this.conditionClassName;
+	}
+
+	/**
+	 * Whether the {@code handler-bind} handlers already ran for this error's condition,
+	 * so no seam or {@code %hb-guard} pad it crosses runs them again. The fact belongs to
+	 * this error alone: a condition signaled and handled while it is on its way out (in a
+	 * cleanup, in a report) cannot change it.
+	 * @return whether the handlers ran
+	 */
+	public boolean handlersRan() {
+		return this.handlersRan;
+	}
+
+	/**
+	 * Records that the {@code handler-bind} handlers ran for this error's condition.
+	 * @return this error, to be thrown
+	 */
+	LispEvalException markHandlersRan() {
+		this.handlersRan = true;
+		return this;
+	}
+
+	/**
+	 * Records that a debugger was offered this error, answering whether one was before.
+	 * @return whether it had been offered already
+	 */
+	boolean offerDebugger() {
+		boolean offered = this.debuggerOffered;
+		this.debuggerOffered = true;
+		return offered;
+	}
+
+	/**
+	 * Where this error has been while unwinding (see {@link ConditionTrace}), created on
+	 * first use. Frames on different threads (an async body, then its awaiter) reach it
+	 * one after the other, never at once: the await rethrows only after the body's thread
+	 * completed the future.
+	 * @return the trace
+	 */
+	synchronized ConditionTrace trace() {
+		ConditionTrace current = this.trace;
+		if (current == null) {
+			current = new ConditionTrace();
+			this.trace = current;
+		}
+		return current;
+	}
+
+	/**
+	 * Makes this error, raised in place of {@code original} for the same signal, continue
+	 * where {@code original} had been: the frames it already left noted the innermost
+	 * position, which the frames still to come must not overwrite.
+	 * @param original the error this one replaces
+	 * @return this error, to be thrown
+	 */
+	LispEvalException continuing(LispEvalException original) {
+		ConditionTrace earlier = original.trace();
+		synchronized (this) {
+			this.trace = earlier;
+		}
+		return this;
+	}
+
+	/**
+	 * The location lines an uncaught report prints under this error's report line --
+	 * where it was signaled, and every async boundary it crossed -- or none when nothing
+	 * is known.
+	 * @return the lines, without newlines
+	 */
+	public synchronized List<String> locationLines() {
+		return this.trace == null ? List.of() : this.trace.lines();
+	}
+
+	/**
+	 * What a report of this error adds for the person reading it, apart from the
+	 * condition's own text, which {@code princ} and a handler read
+	 * ({@code UncaughtReport.adviceLine}). The compile paths say the same in their
+	 * warning; a run of the interpreter has no compile to warn in.
+	 * @return the advice, or the empty string
+	 */
+	public String advice() {
+		return "";
+	}
+
+}

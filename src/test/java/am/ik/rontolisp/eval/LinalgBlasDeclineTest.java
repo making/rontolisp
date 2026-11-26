@@ -1,0 +1,144 @@
+package am.ik.rontolisp.eval;
+
+import java.io.ByteArrayOutputStream;
+import java.io.PrintStream;
+
+import am.ik.rontolisp.LispNil;
+import am.ik.rontolisp.NativeImageDowncalls;
+import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.reader.LispReader;
+import org.junit.jupiter.api.Test;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+/**
+ * What {@code --blas} must do on EVERY machine, including one with no tuned CBLAS: run
+ * the same programs to the same output. Unlike {@link LinalgBlasTest} nothing here is
+ * conditional -- this is the half of the feature that a machine which ignored the
+ * recommendation still gets, and it is the half that must never regress.
+ */
+class LinalgBlasDeclineTest {
+
+	private String eval(String input, boolean blas) {
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(new ByteArrayOutputStream()));
+		evaluator.setBlas(blas);
+		LispVal result = LispNil.INSTANCE;
+		for (LispVal expr : LispReader.readAllFromString(input)) {
+			result = evaluator.eval(expr);
+		}
+		return result.print();
+	}
+
+	@Test
+	void theFlagChangesNothingObservableAboutAnExactProduct() {
+		// True whether or not this machine has a library: with one the reordered
+		// reduction of exact integers lands on the same bits, without one the defun runs.
+		String product = """
+				(defparameter *a* (linalg:reshape (linalg:arange 1 65) '(8 8)))
+				(linalg:matmul *a* *a*)
+				""";
+		assertThat(eval(product, true)).isEqualTo(eval(product, false));
+	}
+
+	@Test
+	void availabilityIsAPropertyOfTheMachineAndIsAlwaysDescribed() {
+		// The CLI prints description() when the flag cannot be honoured, so it must say
+		// something either way rather than throw on a machine with no library at all.
+		assertThat(LinalgBlas.description()).isNotBlank();
+		assertThat(LinalgBlas.available()).isEqualTo(LinalgBlas.description().contains("("));
+	}
+
+	@Test
+	void theWorkThresholdIsOneNumberOnEveryRuntime() {
+		// The JVM's critical downcall costs ~30 ns and the native image's route (SVM's
+		// @InvokeCFunctionPointer, src/native/java) ~90 ns, both of which a scalar triple
+		// loop beats only below about 4x4x4. For two days the image carried its own pair
+		// (2^15 / 2^17) to pay for an interpreted FFM handle at 6-7 us a call; that route
+		// is gone from the image, and so is the pair -- one number, pinned here.
+		assertThat(LinalgBlasKernels.minWork()).isEqualTo(64);
+		assertThat(LinalgBlasKernels.worth(4, 4, 4)).isTrue();
+		assertThat(LinalgBlasKernels.worth(3, 4, 4)).isFalse();
+		assertThat(LinalgBlasKernels.worthGemv(8, 8)).isTrue();
+		assertThat(LinalgBlasKernels.worthGemv(7, 9)).isFalse();
+	}
+
+	@Test
+	void everyDowncallShapeIsRegisteredForTheNativeImage() {
+		// Binds the six handles against a lookup that finds everything -- they are made,
+		// never called -- so the shapes are recorded on a machine with no CBLAS too.
+		// They live in a file of their own, which a compiled --blas program carries too
+		// (JvmBlasTemplateNativeImageTest), so this binding must need nothing else.
+		LinalgBlasKernels.bind(NativeImageDowncalls.EVERYTHING);
+		assertThat(NativeImageDowncalls.missing(NativeImageDowncalls.BLAS, LinalgBlasKernels.signatures(),
+				LinalgBlasKernels.criticalSignatures()))
+			.as("CBLAS downcall shapes with no entry in the native-image metadata -- the binary refuses to bind "
+					+ "them, so --blas declines on a machine whose tuned library is right there")
+			.isEmpty();
+	}
+
+	@Test
+	void theThreadBarrierNoteIsEarnedByTheProgramShapeAndNotByTheFlag() {
+		// A threaded library is right for a large product (measured 6.2x on a 2.1 Gflop
+		// gemm) and wrong for a loop of small ones (6.8x the other way on a 166 Kflop
+		// gemv), so nothing about the flag or the machine decides this -- the calls do.
+		String library = "OpenBLAS", variable = "OPENBLAS_NUM_THREADS";
+		// Capped, and a library that will not say: today's silence, forever.
+		assertThat(LinalgBlasKernels.barrierNote(1, 1024, 64, library, variable)).isNull();
+		assertThat(LinalgBlasKernels.barrierNote(0, 1024, 64, library, variable)).isNull();
+		// A product big enough to pay for its own barrier is not counted and not warned
+		// about, however many of them there are.
+		assertThat(LinalgBlasKernels.barrierNote(64, 1L << 30, 64, library, variable)).isNull();
+		// A handful of short products is not a loop.
+		assertThat(LinalgBlasKernels.barrierNote(64, 1024, 63, library, variable)).isNull();
+		assertThat(LinalgBlasKernels.barrierNote(64, 1024, 64, library, variable)).contains(library, "64 threads",
+				variable + "=1");
+		// Said once: the 65th short product earns nothing, so a decode loop of thousands
+		// prints one line.
+		assertThat(LinalgBlasKernels.barrierNote(64, 1024, 65, library, variable)).isNull();
+	}
+
+	@Test
+	void theThreadCountIsAskedForOnceAndIsNeverNegative() {
+		// 0 on a machine with no library and on a tuned one that exports no query
+		// (Accelerate, BLIS), which is the case that must stay silent.
+		assertThat(LinalgBlasKernels.threads()).isNotNegative();
+	}
+
+	@Test
+	void theVecGemvRunsTheSameProgramToTheSameOutputWithOrWithoutALibrary() {
+		// Exact integers, so a machine WITH a tuned library lands on the same bits the
+		// scalar defun produces and a machine without one runs that defun.
+		String program = """
+				(defparameter *w* (make-array '(8 8) :element-type 'double-float :initial-element 0.0))
+				(dotimes (i 8) (dotimes (j 8) (setf (aref *w* i j) (float (+ (* i 8) j 1)))))
+				(defparameter *x* (vec:arange 8))
+				(list (vec:to-list (vec:matvec *w* *x*))
+				      (vec:to-list (vec:matvec-into (vec:zeros 8) *w* *x*)))
+				""";
+		assertThat(eval(program, true)).isEqualTo(eval(program, false));
+	}
+
+	@Test
+	void theWholeRestOfVecIsUntouched() {
+		String program = """
+				(defparameter *v* (vec:arange 16))
+				(list (vec:sum *v*) (vec:dot *v* *v*) (vec:norm *v*)
+				      (vec:to-list (vec:add *v* *v*)) (vec:to-list (vec:scale *v* 2.0))
+				      (vec:to-list (vec:relu (vec:sub *v* (vec:scale (vec:ones 16) 8.0)))))
+				""";
+		assertThat(eval(program, true)).isEqualTo(eval(program, false));
+	}
+
+	@Test
+	void theWholeRestOfLinalgIsUntouched() {
+		String program = """
+				(defparameter *a* (linalg:reshape (linalg:arange 1 17) '(4 4)))
+				(list (linalg:sum *a*) (linalg:trace *a*) (linalg:amax *a*)
+				      (linalg:to-list (linalg:transpose *a*))
+				      (linalg:to-list (linalg:add *a* *a*))
+				      (linalg:to-list (linalg:outer (linalg:arange 1 4) (linalg:arange 1 4))))
+				""";
+		assertThat(eval(program, true)).isEqualTo(eval(program, false));
+	}
+
+}

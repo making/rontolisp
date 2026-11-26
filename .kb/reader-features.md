@@ -1,0 +1,407 @@
+# Reader features (`#+`/`#-`, `*features*`, block comments, `#.`)
+
+Almost entirely frontend (`reader` package) -- no per-backend codegen. The exception is the
+RUN-TIME `*features*` variable: the reader decides its initial value, the backends hold it. The
+**runtime** readers emitted into compiled output know none of this, like backquote
+([[read-load-limitations]]).
+
+## `Features` (reader pkg)
+The active READ-time set, immutable for the duration of a read; the run-time `*features*` list is
+a separate ordinary special seeded from it.
+- Constants `INTERPRETER`/`JVM`/`WASM` = `rontolisp` + one backend feature
+  (`rontolisp-interpreter`/`-jvm`/`-wasm`) + `unicode`. `of(...)` for tests (no implicit `unicode`).
+- **`unicode`** is the portable spelling of "characters are code points, not octets"
+  ([[characters-code-points]]) and a CLAIM LIBRARIES ACT ON: cl-postgres'
+  `#+(or sb-unicode unicode ...)` picks `strings-utf-8` vs `strings-ascii`, whose branch announces
+  `client_encoding SQL_ASCII`. It is the only `#+unicode` site in the loadable corpus.
+- `contains()` is case-insensitive and strips `:`/`#:`. `isEnabled(LispVal)` evaluates a feature
+  expression (`and`/`or`/`not`, the operator by member name so `'(cl:and)` works; `LispNil` =
+  false, preserving the `#+nil` comment idiom).
+- **`common-lisp`** is in every base set since 2026-10-30. CLHS: `:common-lisp` is the language
+  FAMILY, `:ansi-cl` the conformance claim -- only the first is announced. Measured the same day
+  over the 158 cached Quicklisp systems: one library uses it, named-readtables, 13 sites in
+  `src/cruft.lisp`, all `#+ :common-lisp` portable fallbacks of `define-cruft` (without them every
+  body was empty and the load died in `(assert (not (null alternatives)))`); no `#-common-lisp`
+  anywhere. Pinned by ci-spec `reader-features-variable`.
+- **The ASDF family** (`asdf`, `asdf2`, `asdf3`, `asdf3.1`, `asdf3.2`, `asdf3.3`, `asdf-unicode`,
+  `Features.ASDF`) is in every base set since 2026-11-04: what SBCL 2.2.9's `(require :asdf)` pushes
+  (measured), and ASDF is always loaded here. Measured over the cached Quicklisp tree: hu.dwim.def.asd's
+  `(unless (or #+asdf3 (uiop:version<= ...)) (error ...))` stopped its load, fare-quasiquote.asd and
+  cffi-toolchain.asd have a `#-asdf3 (error ...)`, and prove picks `uiop:` over `asdf::` spellings
+  with it (without it two compile warnings naming undefined functions). `#+asdf` in usocket's real
+  source is not reached (the shim). Guards in the 197 cached releases, for the record: `#+asdf3` 14,
+  `#-asdf3` 13, `#+asdf` 12, `#-asdf` 9, `#+asdf3.1` 7, `#+asdf2` 2. What the features promise was
+  the question: a `#+asdf3` branch may reach a name this ASDF answers with a signalling stub, where
+  `#-asdf3` ran before. Checked: `prove:run` over a directory works with them, and trivial-mimes'
+  `#+(and unix asdf3)` `uiop:run-program` is reachable only where `:unix` is announced (it starts
+  `file` on the JVM family since 2026-11-07, `.kb/uiop.md`). Pinned by the same case, whose counts
+  went up by seven.
+
+## Target-shape features beside the backend one
+- `WASM_REACTOR` -> `rontolisp-reactor` (`--no-wasi` or `--no-gc`; [[clack]]).
+- `Features.COMPONENT` -> `rontolisp-component` under `--component`; NOT redundant with the
+  reactor feature (`--component --no-wasi` carries BOTH). Added in `RontoLispCli` beside the
+  reactor choice so it reaches every frontend read (shims and `.asd` component files included).
+- `Features.BODY_IMPORTS` -> `rontolisp-body-imports`, when a build declares the reactor's
+  `:bytes` body imports. First target-shape feature that follows a FLAG rather than the output
+  shape. **The rule it illustrates: name the thing the source is branching on, not the targets
+  that happen to lack it** -- a feature is additive (`with` cannot switch one off), so the
+  complement must be spellable as `#-NAME`. No Java reads it back, so only a source branching on
+  it can pin it.
+- `Features.JVM_SERVLET` -> `rontolisp-servlet` when `-o` ends in `.war`: a servlet container owns
+  the port ([[http-server]]). A feature and not an internal flag because
+  `clack-handler-rontolisp` branches on features and nothing else ([[clack]]).
+- `Features.NATIVE` -> `rontolisp-native`, added in `CompileFrontend.run` when
+  `options.runnerHosted()`. The module inside a `--native` output is the ordinary Preview 1
+  build (`Features.WASM` as is -- the CLI refuses
+  `--component`/`--no-wasi`/`--no-gc` beside `--native`), so nothing in the module says
+  "native"; the RUNNER around it answers imports P1 alone lacks (`rontolisp:fetch` through
+  `rlrun-net`, `objc:`/`appkit:`/`metal:`/`scene:` through `rlobjc` on `macos-aarch64`), and no
+  existing feature could tell the two apart. Additive, like every other target-describing
+  feature. Deliberately carries no OS/architecture name -- those would have to come from
+  `--native-target`, never the compile host's `os.name` (a cross build would lie), and they flip
+  `#+unix`/`#+darwin` branches in shipped libraries ([[uiop]]). Pinned by
+  `NativeFeatureTest` (native / Preview 1 / `--component` with a native platform named anyway).
+- Pinned by `RontoLispCliTest.aComponentBuildReadsTheSourceWithTheComponentFeature`,
+  `.theStreamingBoundaryReadsTheSourceWithTheBodyImportsFeature` (ONE source with a `#+`
+  declaration and a `#-` fallback, compiled three ways), and
+  `.theEnvelopeBoundaryBuildsAModuleWithNoBodyImports` beside it (a different claim: the MODULE's
+  imports).
+
+## Widening the set (`Features.with`, additive only)
+Three callers; nothing may switch a backend feature off and claim to be that backend.
+1. **Per-system**: an ASDF system's `:rontolisp-features (...)` in defsystem -- the static encoding
+   of a `.asd` that pushes onto `*features*` from an `eval-when`, which cannot reach the reads of
+   the system's COMPONENT FILES on its own. Each loader widens ITS OWN base set; a dependency keeps
+   the outer set. An upstream `.asd`'s own push lands in the same place: the file RUNS, form at a
+   time, and what it pushed before a `defsystem` is recorded on that system
+   (`AsdfSystems.loadAsd`, [[asdf]]). What it adds over `FeaturePushes` is CROSS-FILE reach:
+   `:if-feature`/`(:feature ...)` clauses and component reads ([[asdf]]). It also reaches SHIM
+   sources -- `ShimLibraries.forms` takes the target backend's features instead of hardcoding
+   INTERPRETER ([[mutexes]]).
+2. **USER (`--feature NAME`)**: `RontoLispCli.declaredFeatures` parses the repeatable,
+   comma-separated option; `CompileFrontend` applies it LAST, the interpreter in
+   `LispEvaluator.setDeclaredFeatures`, which also re-seeds the run-time `*features*`
+   (`Environment.featureKeywordList`) so `(member :F *features*)` and the `#+F` beside it cannot
+   disagree. **Two boundaries**: it REFUSES `rontolisp` and any `rontolisp-*` name (those describe
+   the build), and it reaches only the source the USER brought -- never the sources rontolisp ships
+   (`BuiltinSystems.forms`, `ShimLibraries`, the prelude, the Lisp-source libraries). Embedders:
+   `JvmSourceCompiler.features(...)`. Pinned by
+   `RontoLispCliTest.declaredFeaturesAreParsedLikeDistsAndRefuseTheBuildsOwnNames`,
+   `.aDeclaredFeatureReachesTheReadTheLoadedFileAndTheRuntimeFeaturesList`,
+   `.aDeclaredFeatureReachesTheCompiledBackendsToo`. On a compile path the macro-time evaluator holds the names too
+  (`Features.declaredNames`, `UserMacroExpander.Session`), so a macro's `(member :F *features*)` and a computed push answer
+  as on the interpreter; both answered "absent" until 2026-11-05. Only the declared names: its `*features*` otherwise stays
+  the interpreter's set, whatever the target.
+3. A source's own feature push -- `FeaturePushes`, below.
+
+## A RUNTIME read tests the live `*features*` (interpreter)
+The other direction, and the one the read-time set cannot supply: `read` / `read-from-string` run
+AFTER the frontend's one read, and CL says their `#+`/`#-` test `*features*` as it stands then --
+so a `(push :x *features*)` decides the guards of every read that follows it, and
+`(let ((*features* '(:a :x :b))) (read-from-string "#+X :good :bad"))` is `:good`.
+`Environment.setReadFeaturesQuery`, installed by `LispEvaluator` beside `setReadSuppressQuery` and
+for the same reason (the built-in holds the GLOBAL environment; a `let` binding is visible only
+from the evaluator), hands the reader `Features.ofRuntimeList` over the live list.
+- **The keyword distinction is kept, because CL's is.** A feature expression is read with
+  `*package*` bound to `KEYWORD` (CLHS 24.1.2.1.1), so unqualified `#+X` asks about `:X` and does
+  NOT match a `*features*` holding the plain symbol `X`, while `#+CL-TEST::X` asks about the symbol
+  and does. In a runtime set the names arrive as each symbol PRINTS (`":X"` vs `"X"`), which is the
+  only place the two are distinguishable -- a rontolisp symbol carries no package ([[.todo/156]]),
+  so `FOO::X` and `BAR::X` are one name. The static sets spell their names bare and compare with the
+  colon stripped; nothing else changes for them.
+- **The stop index follows the same branch.** `LispLexer.datumEnd` -- `read-from-string`'s second
+  value, and the whole answer of a suppressed read -- used to treat every `#+` as a FAILED guard and
+  walk on to the next form, so the index was right only when the guarded form happened to be last.
+  It now evaluates the guard: a holding guard makes the form behind it the datum and stops there.
+  **Inside a form a failed guard already covers, a nested guard is evaluated too** (SBCL reads and
+  tests the feature expression even under `*read-suppress*`): a holding one makes the form behind
+  it the skipped datum, a failing one yields none -- which still makes the `#+f #+f A B` idiom skip
+  both when `f` is absent. The lexer used to skip every nested conditional unevaluated, so
+  `#+nope #+rontolisp a b c` read `C` where SBCL's `#+nope #+sbcl a b c` reads `B`. One leniency
+  stays: a skip that consumed only failed guards ends quietly at `)` or end of input (SBCL: reader
+  error / `end-of-file`).
+- The ONE-ARGUMENT `read-from-string` is interpreter-only: the readers emitted into compiled output
+  know no `#+` at all. `read` and the multi-argument `read-from-string` resolve guards in the prelude
+  scanner on every backend ([[read-load-streams]], "`read` is PRELUDE RONTOLISP"). Pinned by
+  `LispEvaluatorTest.evalARuntimeReadTestsItsConditionalsAgainstTheLiveFeaturesList`,
+  `LispReaderTest.readFeatureConditionalStackedUnderAFailedGuardIsEvaluated`.
+
+## A feature expression computed by `#.` (`#+#.(cl:if ... '(and) '(or))`)
+fiveam (`run.lisp`), static-vectors, dissect, swank guard SBCL internals this way. The value of the
+`#.` is the feature expression; `readFeatureExpr` only takes the extent (`featureExprReadsEval`).
+- **With an evaluator at hand** (`LispLexer`'s `readTimeEval` hook: the runtime `read-from-string`
+  via `LispReader.readAllWithReadEvalMarkers(input, features, resolver)`, and `datumEnd(..., hook)`)
+  the guard is decided while lexing: the expression is re-read with `%read-eval` markers, the hook
+  (`LispEvaluator.resolveReadTimeEval`) substitutes, `Features.isEnabled` tests. The same applies to
+  a nested guard in a skip chain.
+- **A source read has no evaluator** (load, every compile path), so the lexer DEFERS:
+  `(%read-time-feature "+"|"-" (SET-SPELLING...) EXPR [FORM])` (`LispNames.READ_TIME_FEATURE`). The
+  set rides along as `Features.encode` strings because the consumer (the macro-time evaluator on the
+  compile paths) has a different set. FORM is the guarded datum lexed normally -- package lookup
+  happens at eval time, after the marker is gone, so `sb-ext:foo` in a dropped form is never looked
+  up; an unlexable FORM is `(%read-eval-unreadable "RAW")`, an error only if the guard holds.
+  `LispEvaluator.resolvedReadTimeEvalNode` resolves it next to `%read-eval`: as a list element it
+  SPLICES (the spine cell's car is the marker), as a whole top-level form a dropped guard is `nil`.
+  Because resolution is per top-level form, the guard sees earlier forms' definitions
+  (`eval-when` defparameter on the compile paths), like CL's form-at-a-time load.
+- In a backquote template `readTimeFeatureTemplate` turns it into the spliced element
+  `(%read-time-feature-template ... SEGMENT)`, resolved to `(list FORM-CODE)` / the `,@` form, or nil.
+  A guarded `,x` only parses as a template element, so `tryTokenizeGuardedForm` re-checks the tokens
+  wrapped in `` `( ) ``.
+- **Refused (read error)** where a marker cannot stand for "zero or one datum": behind a prefix
+  token (`'`, `#'`, `` ` ``, `,`, `,@`, `#n=`, `.`, `#L`, `#P`), inside a vector/array/struct/`#C`
+  literal (no marker walk enters them), in a nested backquote, and as a chain link of a raw skip
+  with no evaluator (`#+nope #+#.x a b`). ERROR mode (playground compile) refuses it like `#.`.
+- `.asd` reads: the marker contains `%read-eval`, so `AsdfSystems.containsReadEvalMarker` treats it
+  as an unresolvable `#.` (ignored in an option nothing reads, an error where it decides a load).
+- Not done: the prelude `read`/multi-arg `read-from-string` scanner (all backends) and the emitted
+  readers know no `#.` at all, so a computed guard there signals like any `#.`.
+- Pinned by ci-spec `reader-feature-conditionals` (all four backends: top-level drop, element
+  splice both ways, earlier-form visibility, `#.` nested in `(or ...)`, template splice) and
+  `LispEvaluatorTest.evalARuntimeReadTestsItsConditionalsAgainstTheLiveFeaturesList` (runtime read,
+  stop index, skip chain).
+
+## Threading
+`LispReader.readAllFromString(input, features)` (1-arg overload = INTERPRETER). Reading happens
+once at the frontend, so a compiled program's `#+` set is fixed at compile time.
+`RontoLispCli.compileToFile` picks `WASM` iff the output ends `.wasm`, else `JVM`; interpret/REPL
+use the default. `LoadInliner.Ctx` carries the features; the playground (`src/web/java`) passes
+JVM/WASM per compile entry point. `LispEvaluator` reads through its own `features` field, from
+which `loadFile`, `loadAsd`, `parseDefsystem`, `inferPackageInferredSystems` take it.
+
+## Lexer (`LispLexer`)
+New `#`-dispatch cases before `#\`/`#(`/radix: `#|...|#` (nesting, `skipBlockComment`), `#+`/`#-`
+(`readFeatureConditional`, feature expression via `readFeatureExpr`), `#.`. A **failing** guard
+skips the next datum at the RAW character level (`skipDatum`): strings/escapes, comments, `#\)`
+char literals, quote prefixes, `#(`/`#2A(` opens, nested `#+`/`#-`, `#.`. **This is the point: a
+skipped form may use syntax rontolisp cannot parse.**
+
+## `*features*` is a VARIABLE on every backend, never a read-time substitution
+`LispNames.FEATURES_VAR`, in `PackageRegistry.CL_VARIABLES`, seeded with the target's feature
+names as an ordinary special: the interpreter in `Environment.createGlobal`, the compile paths
+from `LispMacroExpander.injectMvSpillGlobal` (a `(defvar *features* '(...))` emitted only when the
+program mentions the name). The binding is DYNAMIC on every backend -- which the interpreter
+needed told (`LispEvaluator`'s `specialVars` seed). `RontoLispCli` hands the compilers the set it
+READ with (`Jvm`/`WasmLispCompiler.runtimeFeatures`, defaulted by
+`LispMacroExpander.backendFeatures`).
+
+**Trap the old design left**: read-time substitution is for CONSTANTS (`pi`,
+`array-dimension-limit`, `char-code-limit`, `lambda-list-keywords`). A name a program may bind or
+assign must survive to the backend as a NAME -- substituting `*features*` made every `push`/`setq`
+a silent no-op and, in a binding position, died with `LispCons cannot be cast to LispSymbol` in
+`FreeVarAnalyzer`. Watch for the workaround shape: `uiop-os.lisp` had renamed upstream's
+`(&optional (*features* *features*))` parameter to dodge it.
+
+`array-dimension-limit` IS substituted in `readSymbol` like `most-positive-fixnum`,
+backend-dependent: 2147483639 on interpreter/JVM, `2^30 - 1` on WASM (inside i31).
+
+## A source's own feature push IS visible to its own `#+` (`reader.FeaturePushes`)
+A top-level `(pushnew :F *features*)` / `(push ...)`, bare or inside an `eval-when`/`progn`,
+widens the set the file is read with. **The reader announces** rather than "load goes form at a
+time", because the reader is the ONE layer the interpreter and all three compile backends share.
+`LispReader.readAll` calls `FeaturePushes.widen` first, gated on the text containing `*features*`
+at all (the scan is a second, provenance-free parse, `LispReader.readAllForScan`) and looping to a
+fixpoint.
+- **A literal keyword push widens the WHOLE file** (a `#+` above the push sees it too). A cross-file
+  ANNOUNCEMENT -- what reaches a system's clauses, parsed before anything of it loads -- is a `.asd`'s,
+  ASDF `:rontolisp-features`, or a built-in system's (`trivial-features` -> `:unix`, `:little-endian`,
+  `:64-bit`, and the HOST `:darwin`+`:bsd` / `:linux`, `:arm64` / `:x86-64`, on JVM-family targets only)
+  -- one channel, three spellings ([[asdf]]). **The host names are in the ANNOUNCEMENT and not in the
+  base sets**, keeping a `Features` constant the same on every machine. How a push reaches the files
+  read after it: the last bullet below.
+- **A COMPUTED push decides the forms below it, positionally, on all four** (2026-11-05; the note here said
+  a compile backend could not, written before reading went form at a time). A push whose value or
+  firing the program computes runs before the next form is read: coalton's
+  `(eval-when (:compile-toplevel) (if (uiop:version< ...) (pushnew :eclector-pre-0-10-0 *features*) ...))`
+  picks the arm of its only `make-expression-result` method, and without it the method answered nil. The
+  interpreter's `loadForms`/`evalSource` hand the next read `featuresAddedSince` the file's open. A compile
+  path's `ReadTimeImage` does the same, and opens for a source holding such a push
+  (`FeaturePushes.computesAPush`, a walk of the scan; quoted data and a definition's body do not run). Its
+  `Session.acceptTopLevel` runs the push whatever its `eval-when` situations, as a literal one announces
+  whatever its situations, so the four agree; real `compile-file` would not run a bare one. An image
+  cannot run a form needing what a later pass splices, and that push stays unseen on a compile path --
+  but for ASDF's answers about systems, which the image takes from the compile path's registry since
+  2026-11-06 (coalton's eclector probe, [readtables.md](readtables.md), "The compile paths' read"). ci-spec
+  `reader-features-own-push-is-visible`.
+- **A push of either kind reaches every file read after it, on all four** (i82, 2026-11-06; until then
+  "same file only", and a run-time `(member :f *features*)` was true where the next file's `#+f` failed).
+  CL's `load` reads each form with `*features*` as it stands, so the next file starts from what the files
+  before it left. The interpreter: `LispEvaluator.sourceFeatures` -- the read set widened by what the live
+  `*features*` holds beyond it -- opens every source read (`loadFile`, `evalSource`, the REPL buffer, a
+  Swank request, the playground), and `featuresAddedSince` the file's open widens it per form as before.
+  A compile path: `LoadInliner.Reading.pushed()`, which a file's read opens with and widens with per
+  form -- the literal pushes of every form spliced so far (`FeaturePushes.announced`, followed in the
+  program's order, so a push AFTER a nested `load` does not reach that file) plus what the read-time
+  image ran (`ReadTimeImage.featuresPushed`, counted from the image's creation, no longer from the
+  file's open). **What does not take it**: a `.asd` read and the plan ([[asdf]], "The `.asd` read's
+  feature set"), the sources rontolisp ships (built-in systems' forms, leaf shims, the Lisp-source
+  libraries -- the `--feature` boundary), a `:rontolisp-features` declaration (stays per system: a
+  declaration, not a push), and a REMOVAL from the list (additive, as every widening). One consequence:
+  a built-in system's run-time push is a push like any other -- trivial-features' names reach every file
+  read after the shim loaded, a later dependency included, not only the system naming it. Consumer:
+  cl-environments 20250622, whose `walker/cl-environments.lisp` pushes `:cl-environments-full` and every
+  later walker file guards on it; it LOADS on the interpreter now (measured 2026-11-06), and since
+  2026-11-07 (`(setf compiler-macro-function)`, [compiler-macros.md](compiler-macros.md)) generic-cl
+  loads on the interpreter and cl-environments compiles and runs on the JVM; generic-cl runs on all
+  four since ([packages.md](packages.md), "The compile image's packages"). Pinned by `LoadContextE2eTest` (a component's push read by the next component
+  and by a later top-level load, a computed push read by the file loaded after it; four backends),
+  `LoadInlinerTest.aDefsystemDependsOnEntryIsSplicedAheadOfTheDependenciesAndAnnouncesItsFeatures`,
+  `RontoLispCliTest.replEvaluatesExpression`.
+
+Pinned by `LispReaderTest.readOwnFeaturePush*`,
+`JvmLispCompilerTest`/`WasmLispCompilerIntegrationTest`'s
+`*FeaturePushIsVisibleToTheSameSourcesConditionals` + `featuresIsAnOrdinarySpecialVariable`,
+`LispEvaluatorTest.evalFeaturesIsAnOrdinarySpecialVariableAndItsOwnPushIsRead`, ci-spec
+`reader-features-own-push-is-visible`.
+
+## `#.` -- three lexer modes
+- **Normal**: `LispReadException`. Only the playground COMPILE buttons still hit it.
+- **Marker** (`LispReader.readAllWithReadEvalMarkers`, `LispLexer.ReadEvalMode.MARKER`): wraps each
+  `#.` datum in a `(%read-eval datum)` cons, resolved per top-level form just before it runs.
+  Consumers: `LispEvaluator.loadFile`, `RontoLispCli.interpret`, both REPLs, the interpreter's
+  runtime `read` family (`Environment.readRuntimeDatum` + `setReadTimeEvalResolver`; a bare
+  `Environment` keeps the error-mode read, matching the compiled embedded readers), and the
+  COMPILE PATH (`compileToFile` + `LoadInliner.spliceFile` read with markers whenever the source
+  textually contains `#.`; `UserMacroExpander.expand` resolves them before package resolution, so
+  a datum sees preceding forms' defuns/defvars).
+- **Tolerant** (`ReadEvalMode.SKIP_UNREADABLE`; `readNextForm`/`scanForms`, used only by
+  `AsdfSystems.loadAsd`, and `readFirstForm`): same marker plus
+  `(%read-eval-unreadable "RAW TEXT")` (`LispNames.READ_EVAL_UNREADABLE`) for a datum it cannot
+  re-lex. **It prints nothing** -- the marker travels and `AsdfSystems` decides: silent in an
+  ignored option, hard error where the value would pick a dependency or a source file ([[asdf]]).
+
+Traps:
+- A datum in a SPLICED file sees that file's `*load-pathname*`/`*load-truename*` from
+  `LoadInliner`'s `%begin-file` bracket -- deferred resolution is why it must ([[load-inliner]]).
+  Such a read FORCES a `defvar`'s lazy value thunk ([[defmacro-backquote]]) -- the SECOND forcing
+  site, which cl-ppcre's ~200 `(declare #.*standard-optimize-settings*)` sites reach only this way.
+- A marker split into code position by a backquote template resolves through the `%read-eval`
+  identity (an Environment function; a 1-arg identity emit in the compilers).
+- **A form a marker completes is flattened after it resolves.** `(progn . #.x)` reads as
+  `(progn %read-eval x)`, a proper list, so `flattenTopLevel` leaves a form with `%read-eval` on
+  its own spine alone (`isSpliceableSpine`), and `Session.accept` flattens what any resolution
+  made: the members are top-level forms as if spelled out, with the enclosing `eval-when`'s
+  compile-time-too mode. That covers `#.'(progn (defmacro m ...) (m))` and `#.'(eval-when ...)`,
+  which went on as the expansion of a macro call (a member defmacro unseen by the next member, a
+  `:compile-toplevel`-only member dropped where a spelled-out one runs). Consumer:
+  concrete-syntax-tree's `declarations.lisp`. A `#+#.` guard after the dot is refused by the read.
+- `*read-eval*` (`LispNames.READ_EVAL_VAR`, `CL_VARIABLES`) is seeded `t`, proclaimed special, and
+  checked dynamically by `resolveReadTimeEval` before any marker evaluates. INTERPRETER only --
+  the compiled runtime readers signal on `#.` unconditionally ([[read-load-streams]]).
+- **A marker in a call's OPERATOR position splices RAW** (`resolveReadTimeEval`'s head check):
+  ironclad tiger.lisp's `(#.+tiger-block-copy-fn+ block ...)`. Quoted, the head was
+  `('FILL-BLOCK-UB8-LE ...)`, which the interpreter and the JVM ran anyway and WASM refused
+  (`Cannot compile`). Only a FORM's head: a list TAIL walks through `resolveReadTimeEvalSpine`, whose
+  first element is an argument.
+- **A marker value that is a SYMBOL in an evaluated position splices QUOTED**
+  (`resolveReadTimeEvalInCode`); plain `resolveReadTimeEval` substitutes RAW, the runtime `read`
+  family's contract. **Every other value splices raw, like CL's object splice** -- a CONS in code
+  position IS code; a caller wanting list DATA spells `'#.`. A marker inside a well-formed
+  `(quote DATUM)` splices raw, a whole `defpackage` form is data, and one inside backquote
+  construction arrives as the reader's renamed TEMPLATE variant, which always spliced quoted.
+  Downstream `eval` re-resolves, which is why `packageDesignator` takes a designator by its MEMBER
+  name (`LispSymbol.memberName`).
+- Pinned by `LispEvaluatorTest.evalRuntimeReadSharpDotEvaluates`,
+  `.evalReadEvalNilMakesSharpDotSignal`, `.evalSharpDotGeneratedDefconstants`,
+  `.loadSharpDotSymbolValueInCodePositionIsTheObject`;
+  `JvmLispCompilerTest.compileAndRunReadTimeEvalGeneratedDefconstants`;
+  `WasmLispCompilerIntegrationTest.readTimeEvalGeneratedDefconstants` (+ the operator position); ci-spec
+  `reader-sharp-dot-generated-defconstants` and the `#.` leg of `sxql-enablement-language-group`.
+
+## Other syntaxes
+- **`#P"..."`**: `Token.PathnameOpen`; `LispReader` builds a `LispInstance` over the fixed
+  `LispLayout.PATHNAME` ([[pathnames]]), self-evaluating. Only `#P` immediately followed by `"`
+  dispatches (`#PFOO` is a symbol).
+- **`#:foo`**: a plain symbol whose name KEEPS the `#:` prefix (an asdf/defpackage designator needs
+  the original name); `PackageResolver.resolveSymbol` passes it through, `designator` and
+  `AsdfSystems.designator`/`symbolName` strip it.
+- **`#N@(...)`** (ironclad) reads like `#(...)`, element width dropped. Native in `LispLexer`
+  whatever function the readtable holds for it, on both read paths
+  ([readtables.md](readtables.md)): a reader macro called inside a backquote template cannot
+  read the template's commas yet. Any other user dispatch character is honored on every
+  backend (the compile paths since h57, through the compile-time evaluator).
+- **`#L(...)` / `#nL(...)`** (iterate): a lambda with positional `!1`, `!2`, ... arguments; native
+  for the same reason (without it `#L!2` lexes as ONE symbol). Arity is the highest `!n` mentioned
+  unless `#nL` spells it out (a smaller count is a read error); a datum whose first element is a
+  cons other than a `lambda` call is a LIST of body forms. **Inside a backquote template the lambda
+  cannot be built as a datum**, so `LispReader.readSharpLTemplate` reads the datum RAW once for the
+  arity, rewinds, lets the template machinery build the body, and assembles
+  `(list 'function (list 'lambda '(!1) BODY-CODE))` around it; `readRawTemplate` has its own case
+  so a `#L` in a NESTED backquote goes through the CLtL2 path whole. Tests
+  `LispReaderTest.readSharpL*`, `LispEvaluatorTest.evalSharpLIsIteratesNumberedArgumentLambda`,
+  `*SharpLAndCommaDotAndWithHashTableIterator`, ci-spec `sharp-l-comma-dot-and-hash-table-iterator`.
+- **Symbol single-escapes** (parse-number) and **`|...|`** (jzon) keep the next character / the
+  whole run verbatim in the name. The compiled runtime readers know neither.
+  **A `:` in either is still read as a package marker** -- the token carries no record of which
+  characters were escaped -- so `\:` and `|:|` read as the keyword `:||` and `|a:b|` as `B`. The
+  fix needs a symbol model that carries escapes ([[.todo/156]]); 4 ANSI `SYNTAX.ESCAPED.*` tests
+  sit on it.
+- **`#b`/`#o`/`#x`/`#<n>R` read RATIONALS, not only integers** (CLHS 2.3.2.1): an optional sign,
+  digits in the radix, and an optional `/denominator` whose digits are in the SAME radix and carry
+  no sign of their own (`#b-10/11` is -2/3). `#<n>R` spells the radix as the dispatch's infix
+  argument and must name 2..36; `LispLexer.readRadixNumber` is the one scanner all four spellings
+  reach. A constituent character behind the digits invalidates the whole token rather than ending
+  a number early.
+- **A read failure is typed at the signal point.** `LispReadException` carries `isEndOfFile`:
+  input that ran out mid-datum (an unterminated string/list/comment/`|...|` escape, a prefix like
+  `#'` with nothing behind it, a trailing `\`) vs a bad token (a misplaced dot, an unknown
+  character name, `1/0`, `#:a:b`, `#<`). The interpreter's runtime `read` family converts the
+  first to an `end-of-file` condition and the second to a `reader-error` one
+  (`LispEvaluator.foldStructLiteralsOf`, both carrying the stream); an input holding no datum at
+  all is end of file too. The emitted readers keep signaling `simple-error`
+  ([[read-load-streams]]).
+- **`#n*` spells a length and fills by repeating the last bit** (CLHS 2.4.8.4): `#5*010` is
+  `0 1 0 0 0`, `#2*1` is `1 1`, `#0*` is empty. Zero bits with `n > 0` (`#1* X`), more bits than
+  `n` (`#2*011`) and a constituent behind the bits (`#*012`) are read errors, never a vector plus
+  a leftover -- the `requireRadixTokenEnd` rule. The fill is computed in the lexer, so the token
+  still reaches the reader as a plain bit string; only the interpreter/compile-frontend reads it
+  (the emitted readers know bare `#*` only).
+- **A token of only dots is not a symbol** (CLHS 2.3.1): `..`/`...` lex as dot tokens, so the
+  reader refuses them wherever a datum is expected; dots glued to other characters (`..a`) or to
+  escapes (`..||`) stay symbols. `#:` with an unescaped colon behind it (`#:a:b`) is a read error
+  (CLHS 2.4.8.5); `#:|a:b|` and `#:a\:b` stay symbols, and an uninterned `:`-named member prints
+  `#:|:|` so it reads back (`LispSymbol.print`). `#<` is never readable (CLHS 2.4.8).
+- **`#n=` / `#n#` reader labels are unbounded and may close a CIRCLE.** The label is kept as
+  DIGITS (`Token.LabelDef`), because CLHS 2.4.8.3 bounds neither the value nor the digit count --
+  an int label made `#123456789123456789=` a read error. The label is in scope INSIDE its own
+  datum: a placeholder cons stands for it while the datum is read and `LispReader.patchLabel`
+  replaces every reference by identity afterwards, so `#1=(A B . #1#)` is the circular list it
+  says; `patchLabel` enters a `#S(...)` too (`LispStructLiteral.setSlotValue`).
+  **A circle in program source becomes an atom at the read seam** (2026-11-05):
+  `SourceLanguage` runs `LispTrees.shieldProgramForm` over every form of a source holding `#<digits>=`,
+  and `LispCircularLiteral` wraps a quoted datum whole, an array or `#S` whole, and otherwise the first
+  cell on the circle. A grep finds ~320 helpers that walk a form, and those that go through quoted data
+  recurse on the car, so a circle overflowed them one by one (the interpreter's `referencesTorch` on
+  `(print ...)` first, before the quote compilers on the compile path);
+  behind the atom every pass walks a tree, and nothing new has to learn about circles. Only these see
+  inside: `PackageResolver` (`LispTrees.rewriteDatumSymbols`), `StructLiteralFolder`, `evalQuote` and
+  `evalAtom`, both quote compilers. A user macro's arguments are unwrapped and its expansion shielded
+  again (`LispEvaluator.expandMacroCall`), so a macro sees the datum and a macro-made circle compiles;
+  a `#.` value is shielded where its marker resolves (`resolveReadTimeEvalInCode`).
+  A marker inside the wrapper, an array or a `#S` is reached by `LispTrees.replaceDatumNodes`, since no
+  spine walk goes through those: `'#1=(#.(+ 1 2) #1#)` and `'#(#.(+ 1 2))` held `(%READ-EVAL (+ 1 2))` on
+  all four until 2026-11-05. A label on a `#.` names one value, evaluated once (`readTimeValue`; across a
+  flattened `progn` through `Session.readTimeValues`). The hidden names leave out a marker's head: a tail
+  of the list that began `%READ-EVAL` read as a marker and evaluated the next name, and the list's order
+  came from an identity hash, so it failed on some runs only (`The variable BACK is unbound`).
+  A pass that decides by the symbols a program names (library splice, defun prune) reads data too, so
+  the form becomes `(progn '(hidden-symbols...) form)`: without it `(funcall (car '#1=(vec:dot #1#)) ...)`
+  answered `VEC:DOT is undefined` on the compile backends. This replaced the read error for a label
+  closing a list into its own tail, so `'#1=(a b . #1#)` is an ordinary constant.
+  Sharing without a circle stays in the form: a tree walk ends on it. What reaches the constant:
+  [quoted-data.md](quoted-data.md), "A label's graph". Measured the same day against SBCL:
+  every shape in ci-spec `reader-label-sharing-and-circles-in-a-constant` answers alike on the four
+  backends, except a bare `#(...)`, a constructor here ([array-literals.md](array-literals.md)).
+- **In a backquote template a labelled datum is template** (2026-11-05, McCLIM's
+  `` `(letf ((#1=(cursor-visibility ,cursor) #1#) ...)) ``): `readRawTemplate` reads it (`readRawLabel`)
+  and sends the template down the CLtL2 path, each use of the label expanding the same raw datum.
+  Before, the label's datum went to `readExpr`: a comma in it was `Comma is illegal outside of
+  backquote`, and without one the single-level path left the datum unquoted, a form to evaluate. A
+  template holding itself has no expansion and is a read error. A template referencing a label
+  still open OUTSIDE it reads the placeholder (residual). ci-spec `backquote-quoted-splice`.
+
+## Tests
+ci-spec `reader-block-comments`, `reader-feature-conditionals`, `reader-per-backend-features`
+(first use of `expectedByBackend`), `reader-features-variable`. Unit: the feature-conditional
+block in `LispReaderTest`, `LoadInlinerTest.loadedFilesAreReadWithTheGivenFeatures`.

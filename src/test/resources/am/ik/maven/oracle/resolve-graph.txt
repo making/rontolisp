@@ -1,0 +1,20 @@
+# resolve test.graph:app:1
+test.graph:app:jar::1 scope=compile optional=false
+  test.graph:b:jar::1 scope=compile optional=false
+    test.graph:c:jar::2 scope=compile optional=false
+      test.graph:c-child:jar::2 scope=compile optional=false
+    test.graph:cycle-back:jar::1 scope=compile optional=false
+    test.reloc.new:old:jar::1 scope=compile optional=false relocations=[test.reloc:old:jar:1]
+      test.lib:after-reloc:jar::1 scope=compile optional=false
+    test.graph:x:jar::1 scope=compile optional=false
+      test.graph:x-child:jar::1 scope=compile optional=false
+  test.graph:f:jar::1 scope=runtime optional=false
+    test.graph:r1:jar::1 scope=runtime optional=false
+    test.graph:sys1:jar::1 scope=system optional=false
+    test.graph:gone:jar::1 scope=runtime optional=false
+    test.graph:weird:jar::1 scope=runtime optional=false
+  test.graph:excl-holder:jar::1 scope=compile optional=false exclusions=test.graph:gone
+    test.graph:keep:jar::1 scope=compile optional=false
+      test.graph:kept-child:jar::1 scope=compile optional=false
+    test.graph:wild:jar::1 scope=compile optional=false exclusions=*:*
+  test.graph:war-thing:war::1 scope=compile optional=false

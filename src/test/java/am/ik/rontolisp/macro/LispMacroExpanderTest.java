@@ -1,0 +1,1858 @@
+package am.ik.rontolisp.macro;
+
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
+import am.ik.rontolisp.ClosRegistry;
+import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispLayout;
+import am.ik.rontolisp.LispNames;
+import am.ik.rontolisp.LispString;
+import am.ik.rontolisp.LispSymbol;
+
+import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.reader.LispReader;
+import org.junit.jupiter.api.Test;
+
+import static java.util.Objects.requireNonNull;
+import static org.assertj.core.api.Assertions.assertThat;
+
+class LispMacroExpanderTest {
+
+	/**
+	 * The names appearing in the emitted {@code %subtypep-ancestor-table%}, in emission
+	 * order.
+	 */
+	private static List<String> ancestorTableNames(String source) {
+		List<LispVal> expanded = LispMacroExpander.expandTopLevelDefinitions(LispReader.readAllFromString(source),
+				new HashMap<>(), new ClosRegistry());
+		List<String> names = new ArrayList<>();
+		for (LispVal form : expanded) {
+			// Only the data forms -- the (defvar %SUBTYPEP-ANCESTOR-TABLE '(...)) and the
+			// (setq %SUBTYPEP-ANCESTOR-TABLE (append '(...) ...)) chunks. The dispatch
+			// defun also names the table, and carries counter-generated temporaries that
+			// legitimately renumber.
+			if (!(form instanceof LispCons cons) || !(cons.car() instanceof LispSymbol op)
+					|| !(LispNames.DEFVAR.equals(op.name()) || LispNames.SETQ.equals(op.name()))
+					|| !(cons.cdr() instanceof LispCons rest) || !(rest.car() instanceof LispSymbol var)
+					|| !LispNames.SUBTYPEP_ANCESTOR_TABLE.equals(var.name())) {
+				continue;
+			}
+			collectSymbols(rest.cdr(), names);
+		}
+		names.removeIf(name -> LispNames.QUOTE.equals(name) || LispNames.APPEND.equals(name)
+				|| LispNames.SUBTYPEP_ANCESTOR_TABLE.equals(name));
+		return names;
+	}
+
+	@Test
+	void aGenericKeepsOneMethodTableUnlessAnEarlierFormCanCallIt() {
+		String laterMethod = "(defmethod g ((x string)) 2) ";
+		// Nothing runs first, what runs first reaches no generic, or the method's class
+		// does not exist yet when the last earlier call runs.
+		assertThat(generationFlags("(defmethod g ((x integer)) 1) " + laterMethod + "(print (g 1))")).isEmpty();
+		assertThat(generationFlags("(defmethod g ((x integer)) 1) (defvar *x* (list 1)) " + laterMethod)).isEmpty();
+		assertThat(generationFlags("(defmethod g ((x integer)) 1) (print (g 1)) (defclass c () ()) "
+				+ "(defmethod g ((x c)) 2) (print (g (make-instance 'c)))"))
+			.isEmpty();
+		// A call by name, through a function, through an operator naming no generic.
+		assertThat(generationFlags("(defmethod g ((x integer)) 1) (print (g 1)) " + laterMethod))
+			.containsExactly("%G--gen0");
+		assertThat(generationFlags("(defun f (x) (g x)) (defmethod g ((x integer)) 1) (f 1) " + laterMethod))
+			.containsExactly("%G--gen0");
+		assertThat(generationFlags(
+				"(defclass c () ()) (make-instance 'c) (defmethod initialize-instance :after ((x c) &key) nil)"))
+			.containsExactly("%INITIALIZE-INSTANCE--gen0");
+		// The tables are one chain however many there are: each method, the redefined
+		// one's first body included, is in the dispatcher once.
+		String redefinitions = "(defmethod g ((x integer)) 1) (print (g 1)) (defmethod g ((x string)) 2) "
+				+ "(print (g 1)) (defmethod g ((x symbol)) 3) (print (g 1)) (defmethod g ((x integer)) 4)";
+		assertThat(generationFlags(redefinitions)).containsExactlyInAnyOrder("%G--gen0", "%G--gen1", "%G--gen2");
+		List<String> mentions = new ArrayList<>();
+		for (LispVal form : expanded(redefinitions)) {
+			if (form instanceof LispCons cons && cons.car() instanceof LispSymbol op
+					&& LispNames.DEFUN.equals(op.name()) && cons.cdr() instanceof LispCons rest
+					&& rest.car() instanceof LispSymbol name && "G".equals(name.name())) {
+				collectSymbols(rest.cdr(), mentions);
+			}
+		}
+		assertThat(mentions.stream().filter(name -> name.startsWith("%G--m"))).containsExactlyInAnyOrder("%G--m0",
+				"%G--m1", "%G--m2", "%G--m3");
+	}
+
+	private static List<LispVal> expanded(String source) {
+		return LispMacroExpander.expandTopLevelDefinitions(LispReader.readAllFromString(source), new HashMap<>(),
+				new ClosRegistry());
+	}
+
+	private static List<String> generationFlags(String source) {
+		List<String> flags = new ArrayList<>();
+		for (LispVal form : expanded(source)) {
+			if (form instanceof LispCons cons && cons.car() instanceof LispSymbol op
+					&& LispNames.DEFVAR.equals(op.name()) && cons.cdr() instanceof LispCons rest
+					&& rest.car() instanceof LispSymbol flag && flag.name().contains("--gen")) {
+				flags.add(flag.name());
+			}
+		}
+		return flags;
+	}
+
+	private static void collectSymbols(LispVal form, List<String> out) {
+		switch (form) {
+			case LispSymbol sym -> out.add(sym.name());
+			case LispCons cons -> {
+				collectSymbols(cons.car(), out);
+				collectSymbols(cons.cdr(), out);
+			}
+			default -> {
+			}
+		}
+	}
+
+	@Test
+	void aNonOperatorRestartNameDoesNotFlipRestartMode() {
+		// A tagbody tag, a let binding, or quoted data spelling a restart-runtime name is
+		// not a call: chipz's bzip2 decoder has a tagbody tag named CONTINUE, and the old
+		// spine-walking scan put every program that loads chipz into restart mode.
+		assertThat(LispMacroExpander
+			.usesRestartSystem(LispReader.readAllFromString("(defun f (x) (tagbody continue (go continue)))")))
+			.isFalse();
+		// NOTE a binding pair or clause head spelling a restart name -- e.g.
+		// (let ((continue 1)) ...) -- still over-approximates to true; that is the safe
+		// direction and not asserted here.
+		assertThat(LispMacroExpander.usesRestartSystem(LispReader.readAllFromString("(print '(abort continue))")))
+			.isFalse();
+		assertThat(LispMacroExpander.usesRestartSystem(LispReader.readAllFromString("(case x (:abort 1) (t 2))")))
+			.isFalse();
+	}
+
+	@Test
+	void aVariableNamedSetIsNoSetSite() {
+		// A let binding or a lambda-list entry of a variable named set (cl-ppcre's
+		// charset code) is no call: counting one made symbol-value read dynamic-first,
+		// at the price of the shared dispatch over the specials, in every program that
+		// loads cl-ppcre.
+		for (String source : List.of("(defun f (set) (list set))", "(defun f (set x) (list set x))",
+				"(let ((set (list 1)) (y 2)) (list set y))", "(lambda (&optional (set 1) (x 2)) (list set x))",
+				"(print '(set a b))")) {
+			assertThat(LispMacroExpander.programUsesSet(LispReader.readAllFromString(source))).as(source).isFalse();
+		}
+	}
+
+	@Test
+	void aSetCallOrASymbolValuePlaceWriteIsASetSite() {
+		for (String source : List.of("(set 'x 1)", "(defun f (n) (set n 2))", "(let ((y (set 'x 1))) y)",
+				"(defun f (set) (set set 1))", "(lambda (&optional (a (set 'x 1))) a)", "(setf (symbol-value 'x) 1)",
+				"(push 1 (symbol-value v))", "(pushnew 1 (symbol-value v) :test 'equal)", "(incf (symbol-value v))",
+				"(pop (symbol-value v))", "(rotatef (symbol-value a) (symbol-value b))",
+				"(psetf (symbol-value a) 1)")) {
+			assertThat(LispMacroExpander.programUsesSet(LispReader.readAllFromString(source))).as(source).isTrue();
+		}
+	}
+
+	@Test
+	void onlyAFunctionNamespaceWriteThroughAComputedNameCanBindANameTheCompileCannotSee() {
+		// The gate that makes a call of an undefined name read the function namespace:
+		// a quoted symbol or (setf name) list has its forwarder defun instead.
+		for (String source : List.of("(setf (symbol-function (intern \"F\")) #'car)",
+				"(defun f (n g) (setf (fdefinition n) g))", "(setf (fdefinition (list 'setf 'p)) #'car)",
+				"(let ((x 1)) (setf x 2 (symbol-function x) #'car))", "(psetf (fdefinition x) #'car)",
+				"(rotatef (symbol-function x) (fdefinition 'y))", "(shiftf (fdefinition x) #'car)")) {
+			assertThat(LispMacroExpander.writesComputedFunctionName(LispReader.readAllFromString(source))).as(source)
+				.isTrue();
+		}
+		for (String source : List.of("(setf (symbol-function 'f) #'car)", "(setf (fdefinition '(setf p)) #'car)",
+				"(print '(setf (fdefinition x) y))", "(fmakunbound (intern \"F\"))", "(setf (car x) 1)",
+				"(rotatef (fdefinition 'f) (symbol-function 'g))")) {
+			assertThat(LispMacroExpander.writesComputedFunctionName(LispReader.readAllFromString(source))).as(source)
+				.isFalse();
+		}
+	}
+
+	@Test
+	void anOperatorPositionRestartFormStillFlipsRestartMode() {
+		assertThat(LispMacroExpander.usesRestartSystem(LispReader.readAllFromString("(continue)"))).isTrue();
+		assertThat(LispMacroExpander.usesRestartSystem(LispReader.readAllFromString("(when t (abort c))"))).isTrue();
+		assertThat(LispMacroExpander
+			.usesRestartSystem(LispReader.readAllFromString("(restart-case (error \"x\") (retry () 1))"))).isTrue();
+		assertThat(LispMacroExpander.usesRestartSystem(LispReader.readAllFromString("(mapcar #'continue restarts)")))
+			.isTrue();
+		assertThat(LispMacroExpander
+			.usesRestartSystem(LispReader.readAllFromString("(handler-bind ((error #'ignore)) (f))"))).isTrue();
+	}
+
+	@Test
+	void needsSignalClauseMatchRequiresBothASignalAndACatchingForm() {
+		// The signal-point clause match (CLHS 9.1.4.1) is needed exactly when the
+		// program both signals and establishes a handler-case/ignore-errors; either
+		// half alone keeps the historical byte-identical emission.
+		assertThat(LispMacroExpander
+			.needsSignalClauseMatch(LispReader.readAllFromString("(handler-case (f) (error (e) 1))"))).isFalse();
+		assertThat(LispMacroExpander.needsSignalClauseMatch(LispReader.readAllFromString("(signal 'x)"))).isFalse();
+		assertThat(LispMacroExpander.needsSignalClauseMatch(
+				LispReader.readAllFromString("(defun f () (signal 'x)) (handler-case (f) (error (e) 1))")))
+			.isTrue();
+		assertThat(
+				LispMacroExpander.needsSignalClauseMatch(LispReader.readAllFromString("(ignore-errors (signal 'x))")))
+			.isTrue();
+		// A #'signal reference counts; quoted data does not (the operator-position
+		// discipline).
+		assertThat(LispMacroExpander.needsSignalClauseMatch(
+				LispReader.readAllFromString("(handler-case (funcall #'signal \"s\") (error (e) 1))")))
+			.isTrue();
+		assertThat(LispMacroExpander
+			.needsSignalClauseMatch(LispReader.readAllFromString("(handler-case (print '(signal x)) (error (e) 1))")))
+			.isFalse();
+		// A warn asks where a handler-case clause can hold the warning. Only a warning
+		// reaches the signal, so a clause of the error family, or ignore-errors, keeps
+		// the
+		// plain write whatever the datum.
+		for (String holding : List.of("(warn \"w\") (handler-case (f) (warning () 1))",
+				"(funcall #'warn \"w\") (handler-case (f) (condition () 1))",
+				"(warn \"w\") (handler-case (f) (my-error () 1))", "(warn \"w\") (handler-case (f) (t () 1))",
+				"(warn \"w\") (handler-case (f) ((or error warning) () 1))",
+				"(eval '(warn \"w\")) (handler-case (f) (warning () 1))", "(eval x) (handler-case (f) (error () 1))")) {
+			assertThat(LispMacroExpander.needsSignalClauseMatch(LispReader.readAllFromString(holding))).as(holding)
+				.isTrue();
+		}
+		for (String declining : List.of("(warn \"w\")", "(warn x)", "(warn \"w\") (handler-case (f) (error () 1))",
+				"(warn x) (handler-case (f) (error () 1))", "(warn 'simple-error) (ignore-errors (f))",
+				"(funcall #'warn x) (ignore-errors (f))", "(warn 'style-warning) (handler-case (f) (error () 1))",
+				"(warn (make-condition 'simple-warning)) (ignore-errors (f))",
+				"(warn \"w\") (handler-case (f) (type-error () 1) ((or error serious-condition) () 2))",
+				"(warn \"w\") (ignore-errors (f))", "(warn \"w\") (handler-case (f) (:no-error (v) v))",
+				"(handler-case (f) (warning () 1))", "(handler-case (print '(warn x)) (warning () 1))")) {
+			assertThat(LispMacroExpander.needsSignalClauseMatch(LispReader.readAllFromString(declining))).as(declining)
+				.isFalse();
+		}
+		// What the wasm-GC layout scan takes for the type-error of a literal signal.
+		ClosRegistry registry = new ClosRegistry();
+		for (String typeError : List.of("(warn 'simple-error)", "(warn (make-condition 'simple-error))",
+				"(error 'no-such-class)", "(signal 'no-such-class)", "(warn 'no-such-class)",
+				"(make-condition 'no-such-class)", "(cerror \"c\" 'no-such-class)")) {
+			assertThat(LispMacroExpander.signalCanSignalTypeError(LispReader.readAllFromString(typeError), registry))
+				.as(typeError)
+				.isTrue();
+		}
+		for (String signal : List.of("(warn \"w\")", "(warn 'style-warning)", "(warn (make-condition 'simple-warning))",
+				"(print '(warn 'simple-error))", "(warn x)", "(error 'simple-error)", "(funcall #'warn \"w\")")) {
+			assertThat(LispMacroExpander.signalCanSignalTypeError(LispReader.readAllFromString(signal), registry))
+				.as(signal)
+				.isFalse();
+		}
+	}
+
+	@Test
+	void aComputedDatumDispatchesOverTheClassesTheProgramCanName() {
+		// "defuns of the dispatch, helpers" per program: a helper per class a datum can
+		// hold, none for what the program only signals literally or only defines.
+		java.util.Map<String, List<Integer>> programs = new java.util.LinkedHashMap<>();
+		String defined = "(define-condition c (error) ()) ";
+		programs.put("(defun f (x) (error (format nil \"~a\" x)))", List.of(0, 0));
+		programs.put("(defun f (x) (error (concatenate 'string \"a\" x)))", List.of(0, 0));
+		programs.put("(defun f (m) (error m))", List.of(1, 0));
+		programs.put("(defun f (m) (error m)) (f 'parse-error)", List.of(1, 1));
+		programs.put("(defun f (m) (error m)) (handler-case (f \"x\") (type-error () 1))", List.of(1, 0));
+		programs.put("(defun f (m) (error m)) (funcall #'(lambda () (f 'parse-error)))", List.of(1, 1));
+		programs.put(defined + "(defun f (m) (error m))", List.of(1, 0));
+		programs.put(defined + "(defun f (m) (error m)) (error 'c)", List.of(1, 0));
+		programs.put(defined + "(defun f (m) (error m)) (f 'c)", List.of(1, 1));
+		programs.put(defined + "(defun f (m) (error m)) (f (intern \"C\"))", List.of(1, 1));
+		for (java.util.Map.Entry<String, List<Integer>> program : programs.entrySet()) {
+			List<String> defuns = LispMacroExpander
+				.expandTopLevelDefinitions(LispReader.readAllFromString(program.getKey()), new java.util.HashMap<>(),
+						new ClosRegistry())
+				.stream()
+				.filter(form -> form instanceof LispCons cons && cons.car() instanceof LispSymbol op
+						&& LispNames.DEFUN.equals(op.name()))
+				.map(form -> ((LispCons) ((LispCons) form).cdr()).car().print())
+				.toList();
+			assertThat(List.of(defuns.stream().filter(LispNames.ERROR_RUNTIME::equals).count(),
+					defuns.stream().filter(name -> name.startsWith("%ERROR-RT-")).count()))
+				.as(program.getKey())
+				.isEqualTo(program.getValue().stream().map(Integer::longValue).toList());
+		}
+		// A wasm-GC module outside exception-handling mode traps whatever the datum is.
+		assertThat(LispMacroExpander
+			.expandTopLevelDefinitions(LispReader.readAllFromString("(defun f (m) (error m))"),
+					new java.util.HashMap<>(), new ClosRegistry(), null, false, true)
+			.stream()
+			.noneMatch(form -> form.print().contains(LispNames.ERROR_RUNTIME))).isTrue();
+	}
+
+	@Test
+	void applyRuntimeIsNotNeededForLiteralTargetsAndNeededForComputedOnes() {
+		java.util.Set<String> wrappers = java.util.Set.of("+", "LIST");
+		// Literal #'defun-name / 'defun-name targets compile to direct calls.
+		assertThat(LispMacroExpander.needsApplyRuntime(
+				LispReader.readAllFromString("(defun f (&rest xs) xs) (apply #'f (list 1 2))"), wrappers))
+			.isFalse();
+		assertThat(LispMacroExpander
+			.needsApplyRuntime(LispReader.readAllFromString("(defun f (&rest xs) xs) (apply 'f (list 1 2))"), wrappers))
+			.isFalse();
+		// #'wrapper is injectable via the reference itself; 'wrapper is not.
+		assertThat(
+				LispMacroExpander.needsApplyRuntime(LispReader.readAllFromString("(apply #'+ (list 1 2))"), wrappers))
+			.isFalse();
+		assertThat(LispMacroExpander.needsApplyRuntime(LispReader.readAllFromString("(apply '+ (list 1 2))"), wrappers))
+			.isTrue();
+		// Computed designators, lambda designators and unknown names need _apply.
+		assertThat(LispMacroExpander
+			.needsApplyRuntime(LispReader.readAllFromString("(let ((f #'+)) (apply f (list 1 2)))"), wrappers))
+			.isTrue();
+		assertThat(LispMacroExpander
+			.needsApplyRuntime(LispReader.readAllFromString("(apply (lambda (a b) (+ a b)) (list 1 2))"), wrappers))
+			.isTrue();
+		assertThat(LispMacroExpander.needsApplyRuntime(LispReader.readAllFromString("(apply #'nosuch (list 1))"),
+				wrappers))
+			.isTrue();
+		// A flet/labels-bound name is a variable at the call site after the rewrite.
+		assertThat(LispMacroExpander.needsApplyRuntime(
+				LispReader.readAllFromString("(defun f (&rest xs) xs) (flet ((f (x) x)) (apply #'f (list 1)))"),
+				wrappers))
+			.isTrue();
+		// multiple-value-call spreads through apply: literal known target stays direct.
+		assertThat(LispMacroExpander
+			.needsApplyRuntime(LispReader.readAllFromString("(multiple-value-call #'list (values 1 2))"), wrappers))
+			.isFalse();
+		assertThat(LispMacroExpander
+			.needsApplyRuntime(LispReader.readAllFromString("(multiple-value-call f (values 1 2))"), wrappers))
+			.isTrue();
+		// Quoted data is not a call.
+		assertThat(LispMacroExpander.needsApplyRuntime(LispReader.readAllFromString("(print '(apply f x))"), wrappers))
+			.isFalse();
+	}
+
+	@Test
+	void labelsDropsALocalNoSurvivingReferenceNames() {
+		// After an upstream dead-branch prune deletes the only #'dead reference, the
+		// expansion must not still construct its closure -- and dead's own reference to
+		// deeper must not keep deeper either.
+		LispCons form = (LispCons) LispReader
+			.readAllFromString(
+					"(labels ((keep (x) (helper x)) (helper (x) x) (dead (x) (deeper x)) (deeper (x) x)) (keep 1))")
+			.get(0);
+		String expanded = LispMacroExpander.expandLabels(form).print();
+		assertThat(expanded).contains("_KEEP", "_HELPER").doesNotContain("_DEAD", "_DEEPER");
+	}
+
+	@Test
+	void labelsKeepsALocalReferencedOnlyAsAValue() {
+		LispCons form = (LispCons) LispReader.readAllFromString("(labels ((k (x) x)) (mapcar #'k (list 1)))").get(0);
+		assertThat(LispMacroExpander.expandLabels(form).print()).contains("_K ");
+	}
+
+	@Test
+	void aSelfRecursiveLabelsLocalNothingElseNamesIsDropped() {
+		LispCons form = (LispCons) LispReader.readAllFromString("(labels ((lonely (x) (lonely x))) 42)").get(0);
+		assertThat(LispMacroExpander.expandLabels(form).print()).doesNotContain("_LONELY");
+	}
+
+	@Test
+	void fletDropsAnUnreferencedLocal() {
+		LispCons form = (LispCons) LispReader.readAllFromString("(flet ((used (x) x) (unused (x) x)) (used 2))").get(0);
+		String expanded = LispMacroExpander.expandFlet(form).print();
+		assertThat(expanded).contains("_USED").doesNotContain("_UNUSED");
+	}
+
+	@Test
+	void theRuntimeSubtypepTableIsEmittedInLatticeDeclarationOrder() {
+		// A computed (subtypep a b) makes the compiler bake the whole type lattice as a
+		// data table. Its order must be a function of the PROGRAM, never of the JVM run:
+		// Map.of/Set.of randomize their iteration order once per process, so a lattice
+		// built from one emits a different (still correct) module on every compile and
+		// silently destroys byte-identity, this project's standard way of showing that a
+		// change leaves unrelated programs alone. The order below is the declaration
+		// order of LispMacroExpander.SUBTYPEP_PARENTS; asserting it fails loudly the day
+		// the table goes back to a salted collection.
+		List<String> names = ancestorTableNames("(defun st (a b) (subtypep a b)) (print (st 'fixnum 'integer))");
+		assertThat(names).isNotEmpty();
+		assertThat(names.stream().distinct().toList()).startsWith("FIXNUM", "INTEGER", "RATIONAL", "REAL", "NUMBER",
+				"BIGNUM");
+	}
+
+	// NOTE: only the assertion above can catch a salted collection. ImmutableCollections'
+	// SALT is constant for the lifetime of a process, so comparing two expansions inside
+	// one JVM (below) cannot see it -- that test guards the other failure mode, a
+	// compiler that accumulates state between compilations.
+	@Test
+	void theRuntimeSubtypepTableDoesNotDependOnWhatWasCompiledBefore() {
+		String source = "(defclass sh () ()) (defclass ci (sh) ()) (defun st (a b) (subtypep a b)) (print (st 'ci 'sh))";
+		assertThat(ancestorTableNames(source)).isEqualTo(ancestorTableNames(source));
+	}
+
+	@Test
+	void classOfTestsTheValueLayoutsInDeclarationOrder() {
+		// The same trap in class-of: its arms for the fixed value layouts came from a
+		// Map.of, so every compile of a program calling class-of emitted them in its own
+		// order (a clack Worker's five ASDF bodies differed between two builds). Each
+		// entry of ClosRegistry.VALUE_LAYOUT_CLASS_NAMES wraps the arms before it, so the
+		// last declared is tested first.
+		LispCons classOf = (LispCons) LispReader.readAllFromString("(class-of x)").get(0);
+		List<String> names = new ArrayList<>();
+		collectSymbols(LispMacroExpander.expandClassOf(classOf, true, false, false, new ClosRegistry()), names);
+		names.retainAll(List.of(LispLayout.PATHNAME_TAG, LispLayout.READTABLE_TAG, LispLayout.RANDOM_STATE_TAG));
+		assertThat(names).containsExactly(LispLayout.RANDOM_STATE_TAG, LispLayout.READTABLE_TAG,
+				LispLayout.PATHNAME_TAG);
+	}
+
+	@Test
+	void theRuntimeSubtypepTableAnswersEveryPairAsSubtypepDoes() {
+		// The table resolves each name of its universe once and asks the name arm about
+		// every pair; subtypep resolves both names per call. Every kind of name the
+		// universe holds is here: a class reached only by an AMBIGUOUS member (two
+		// packages), a unique member, an alias, an :include chain, deftypes (one
+		// circular) and the built-in lattice.
+		String source = """
+				(defclass pa::widget () ())
+				(defclass pb::widget () ())
+				(defclass pa::gadget (pa::widget) ())
+				(defclass pa::solo () ())
+				(setf (find-class 'pa::solo-alias) (find-class 'pa::solo))
+				(defstruct pa::base a)
+				(defstruct (pa::derived (:include pa::base)) b)
+				(deftype pa::either () '(or pa::base pa::gadget))
+				(deftype pa::small () '(integer 0 9))
+				(deftype pa::circle () 'pa::circle)
+				(defun st (a b) (subtypep a b))
+				(print (st 'pa::gadget 'pa::widget))
+				""";
+		ClosRegistry registry = new ClosRegistry();
+		List<LispVal> expanded = LispMacroExpander.expandTopLevelDefinitions(LispReader.readAllFromString(source),
+				new HashMap<>(), registry);
+		java.util.Map<String, List<String>> rows = new java.util.LinkedHashMap<>();
+		for (LispVal entry : ancestorTableEntries(expanded)) {
+			List<LispVal> parts = ((LispCons) entry).toList();
+			List<String> ancestors = parts.subList(1, parts.size()).stream().map(v -> ((LispSymbol) v).name()).toList();
+			for (LispVal sub : ((LispCons) parts.get(0)).toList()) {
+				rows.put(((LispSymbol) sub).name(), ancestors);
+			}
+		}
+		assertThat(rows.keySet()).contains("PA::WIDGET", "PB::WIDGET", "WIDGET", "GADGET", "PA::SOLO-ALIAS",
+				"SOLO-ALIAS", "PA::DERIVED", "BASE", "PA::EITHER", "PA::CIRCLE", "FIXNUM");
+		List<String> universe = List.copyOf(rows.keySet());
+		for (String name : universe) {
+			List<String> expected = universe.stream()
+				.filter(candidate -> LispMacroExpander.subtypep(new LispSymbol(name), new LispSymbol(candidate),
+						registry))
+				.toList();
+			assertThat(rows.get(name)).as(name).containsExactlyInAnyOrderElementsOf(expected);
+		}
+		assertThat(rows.get("GADGET")).contains("PA::WIDGET").doesNotContain("WIDGET", "PB::WIDGET");
+		assertThat(rows.get("PA::DERIVED")).contains("PA::BASE", "PA::EITHER", "STRUCTURE-OBJECT");
+		assertThat(rows.get("PA::CIRCLE")).containsExactlyInAnyOrder("PA::CIRCLE", "PA:CIRCLE");
+	}
+
+	/**
+	 * The entries of the emitted {@code %subtypep-ancestor-table%}, across its chunks.
+	 */
+	private static List<LispVal> ancestorTableEntries(List<LispVal> expanded) {
+		List<LispVal> entries = new ArrayList<>();
+		for (LispVal form : expanded) {
+			if (!(form instanceof LispCons cons) || !(cons.cdr() instanceof LispCons rest)
+					|| !(rest.car() instanceof LispSymbol var) || !LispNames.SUBTYPEP_ANCESTOR_TABLE.equals(var.name())
+					|| !(rest.cdr() instanceof LispCons valueCell)) {
+				continue;
+			}
+			LispVal value = valueCell.car();
+			if (cons.car() instanceof LispSymbol op && LispNames.SETQ.equals(op.name())) {
+				// (setq table (append 'chunk table))
+				value = ((LispCons) ((LispCons) value).cdr()).car();
+			}
+			if (cons.car() instanceof LispSymbol op
+					&& (LispNames.DEFVAR.equals(op.name()) || LispNames.SETQ.equals(op.name()))) {
+				entries.addAll(((LispCons) ((LispCons) ((LispCons) value).cdr()).car()).toList());
+			}
+		}
+		return entries;
+	}
+
+	private static String expandOne(String source) {
+		LispCons form = (LispCons) LispReader.readAllFromString(source).get(0);
+		return LispMacroExpander.expandFormat(form).print();
+	}
+
+	@Test
+	void aFormatExpansionNamesOnlyOperatorsClOwns() {
+		// GrayStreamsLibrary lowers (format t ...) BEFORE the package resolver, inside
+		// whatever package the call sits in. A name the expansion emits that cl does not
+		// own resolves into that package there (GSP-APP::%PRINC-PIECE) and is undefined.
+		// Allowed besides cl names: the arguments, keywords, and the __-prefixed
+		// temporaries, which resolve into the package consistently.
+		List<String> controls = List.of("\"~a ~s ~d ~x ~b ~o\"", "\"~5,2f ~e ~g ~$\"", "\"~r ~:r ~@r\"", "\"~c ~:c\"",
+				"\"~&~%~|~~~10t\"", "\"~:(~a~) ~@(~a~) ~(~a~) ~:@(~a~)\"", "\"~{~a~^, ~}\"", "\"~:{~a~}\"",
+				"\"~@{~a~}\"", "\"~[a~;b~] ~:[a~;b~] ~@[~a~]\"", "\"~? ~@?\"", "\"~2@*~a ~*~a\"", "\"~/fa/ ~<~a~>\"",
+				"\"~10a ~10@a ~,,'0d ~:d ~@d\"", "\"~p ~:p ~@p ~i ~_ ~w\"", "fctl");
+		List<String> foreign = new ArrayList<>();
+		for (String control : controls) {
+			LispCons form = (LispCons) LispReader
+				.readAllFromString("(format t " + control + " fa fb fc fd fe ff fg fh)")
+				.get(0);
+			collectForeignNames(LispMacroExpander.expandFormat(form), control, foreign);
+		}
+		assertThat(foreign).isEmpty();
+	}
+
+	private static void collectForeignNames(LispVal form, String control, List<String> out) {
+		if (form instanceof LispCons cons) {
+			collectForeignNames(cons.car(), control, out);
+			collectForeignNames(cons.cdr(), control, out);
+		}
+		else if (form instanceof LispSymbol sym && !sym.isKeyword() && !sym.name().startsWith("__")
+				&& !sym.name().matches("FCTL|F[A-H]") && !am.ik.rontolisp.PackageRegistry.isClSymbol(sym.name())) {
+			out.add(control + " -> " + sym.name());
+		}
+	}
+
+	@Test
+	void aFixedDecimalDirectiveIsOneCallAndNotAnInlinedScaleRoundSliceExpansion() {
+		// ~F and ~$ used to expand INLINE into eight ordinary forms -- scale by 10^d,
+		// `round` to a bignum-capable integer, `princ-to-string` it, then punch in a
+		// decimal point with `subseq` and `%string-concat` -- and every generic
+		// operation in that chain was emitted with its full numeric type ladder at
+		// every site. On the WASM GC backend one ~,15F cost 7,616 bytes of caller body
+		// and pulled in 22 runtime functions nothing else reached (.kb/format.md).
+		// If any of those names comes back into the lowering, the cost comes back too.
+		String fixed = expandOne("(format nil \"~,15F\" x)");
+		assertThat(fixed).contains("%FIXED-DECIMAL");
+		assertThat(fixed).doesNotContain("ROUND")
+			.doesNotContain("PRINC-TO-STRING")
+			.doesNotContain("SUBSEQ")
+			.doesNotContain("%STRING-CONCAT");
+		assertThat(expandOne("(format nil \"~,3$\" x)")).contains("%FIXED-DECIMAL").doesNotContain("ROUND");
+	}
+
+	@Test
+	void aFixedDecimalPieceGoesOutThroughWriteStringNotPrinc() {
+		// %fixed-decimal answers a string by construction, and `princ` of a value whose
+		// type the compiler cannot see has to keep the whole generic printer reachable
+		// -- on the WASM GC backend that is the float printer and several KB of
+		// runtime, in a program that no longer prints a float anywhere.
+		String out = expandOne("(format t \"pi = ~,15F~%\" x)");
+		assertThat(out).contains("WRITE-STRING").contains("%FIXED-DECIMAL");
+	}
+
+	@Test
+	void anExpanderBuiltStringPieceIsTheInternalConversionNotThePublicProducer() {
+		// The public princ-to-string / prin1-to-string are flipped producers: on the
+		// compile paths each call finishes with a mutable-result conversion. The
+		// expander builds its own string PIECES with the same rendering -- every ~a /
+		// ~s / ~d, map 'string's per-ELEMENT accumulator, a condition's default
+		// message -- and spelling those with the public name had measured 17-80% on the
+		// whole string-building family (.kb/string-write-runtime.md, "Allocated strings
+		// are mutable
+		// with identity"). The pieces name the internal %princ-piece / %prin1-piece
+		// instead; if
+		// a public name comes back into an expansion, that cost comes back with it.
+		String pieces = expandOne("(format nil \"~a ~s ~d ~c\" a b c d)");
+		assertThat(pieces).contains("%PRINC-PIECE").contains("%PRIN1-PIECE");
+		assertThat(pieces).doesNotContain("(PRINC-TO-STRING ").doesNotContain("(PRIN1-TO-STRING ");
+		String toStream = expandOne("(format t \"~a\" a)");
+		assertThat(toStream).doesNotContain("PRINC-TO-STRING");
+		LispCons map = (LispCons) LispReader.readAllFromString("(map 'string #'char-upcase s)").get(0);
+		String accumulator = LispMacroExpander.expandMap(map).print();
+		assertThat(accumulator).contains("%PRINC-PIECE").doesNotContain("PRINC-TO-STRING");
+	}
+
+	@Test
+	void aStringWriteSiteIsOneCallAndNotAnInlinedSubseqConcatRebuild() {
+		// A rank-1 array place may hold a string at run time, so (setf (aref v i) x)
+		// carries a string arm -- and that arm used to inline the whole rebuild: two
+		// subseqs (each an inline COPY LOOP on both compile paths), a `string` and two
+		// %string-concats, about 8 KB of wasm PER SITE. An array-only program paid it
+		// too: webgl-cube spent 203 of its 218 KB on 25 such sites. If any of those
+		// names comes back into the site, the cost comes back with it.
+		String site = LispMacroExpander
+			.expandScharSetFunctional((LispCons) LispReader.readAllFromString("(%schar-set s i c)").get(0))
+			.print();
+		assertThat(site).contains("%SCHAR-SET-RUNTIME");
+		assertThat(site).doesNotContain("SUBSEQ").doesNotContain("%STRING-CONCAT").doesNotContain("%ARRAYP");
+	}
+
+	@Test
+	void theStringWriteRuntimeIsInjectedForAnArrayPlaceAndOmittedWithoutOne() {
+		// The helper the site calls has to be THERE, and the scan that puts it there
+		// runs on the pre-expansion program (expression expansion happens per form much
+		// later and cannot add a top-level defun). Generous on purpose: any of the place
+		// heads that can grow a string arm carries it.
+		assertThat(injectsStringWriteRuntime("(defun f (v i) (setf (aref v i) #\\x))")).isTrue();
+		assertThat(injectsStringWriteRuntime("(defun f (s i) (setf (char s i) #\\x))")).isTrue();
+		assertThat(injectsStringWriteRuntime("(defun f (s i) (setf (elt s i) #\\x))")).isTrue();
+		assertThat(injectsStringWriteRuntime("(defun f (s i) (setf (row-major-aref s i) #\\x))")).isTrue();
+		assertThat(injectsStringWriteRuntime("(defun f (v) (car v))")).isFalse();
+	}
+
+	@Test
+	void aDefstructSlotWriterFunctionIsEmittedOnlyForAProgramThatTakesIt() {
+		// A place of the accessor stays the inline store; only a reference to the
+		// function itself makes the program carry its defun, and a read-only slot has
+		// none to carry.
+		String struct = "(defstruct sw a (b 0 :read-only t)) ";
+		assertThat(definedFunctionNames(struct + "(setf (sw-a (make-sw)) 1)"))
+			.noneMatch(name -> name.startsWith(LispMacroExpander.setfFunctionName("")));
+		assertThat(definedFunctionNames(struct + "(funcall #'(setf sw-a) 1 (make-sw)) (fboundp '(setf sw-b))"))
+			.contains(LispMacroExpander.setfFunctionName("SW-A"))
+			.doesNotContain(LispMacroExpander.setfFunctionName("SW-B"));
+	}
+
+	@Test
+	void aPlaceNoDefinitionMakesIsTheSetfFunctionCall() {
+		// CL looks the (setf name) function up when the form runs; a standard name no
+		// program may define stays a refusal.
+		LispCons place = (LispCons) LispReader.readAllFromString("(setf (foo x) y)").get(0);
+		assertThat(LispMacroExpander.expandSetf(place, new HashMap<>(), new ClosRegistry()).print())
+			.isEqualTo("(FUNCALL #'(SETF FOO) Y X)");
+		LispCons standard = (LispCons) LispReader.readAllFromString("(setf (length x) 1)").get(0);
+		org.assertj.core.api.Assertions
+			.assertThatThrownBy(() -> LispMacroExpander.expandSetf(standard, new HashMap<>(), new ClosRegistry()))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessage("setf does not support place: LENGTH");
+	}
+
+	@Test
+	void aSetfFunctionPlaceBindsItsArgumentsOnlyWhereTheOrderIsObservable() {
+		// CLHS 5.1.2.9: the arguments, then the value, then the function. A writer a
+		// definition makes is called directly, so only the arguments move ahead of the
+		// value; one looked up when the form runs moves behind the value too.
+		Map<String, Integer> writers = new HashMap<>();
+		writers.put("ACC", LispMacroExpander.SETF_FUNCTION_MARKER);
+		assertThat(expandedSetf("(setf (acc o) v)", writers)).isEqualTo("(FUNCALL #'|%setf-ACC| V O)");
+		assertThat(expandedSetf("(setf (acc o) 1)", writers)).isEqualTo("(FUNCALL #'|%setf-ACC| 1 O)");
+		assertThat(expandedSetf("(setf (acc (f)) 1)", writers)).isEqualTo("(FUNCALL #'|%setf-ACC| 1 (F))");
+		assertThat(expandedSetf("(setf (acc 1 :k) (g))", writers)).isEqualTo("(FUNCALL #'|%setf-ACC| (G) 1 :K)");
+		assertThat(expandedSetf("(setf (acc o) (g))", writers))
+			.isEqualTo("(LET* ((|__setf_arg1| O)) (FUNCALL #'|%setf-ACC| (G) |__setf_arg1|))");
+		assertThat(expandedSetf("(setf (acc o 2 (f)) x)", writers)).isEqualTo(
+				"(LET* ((|__setf_arg1| O) (|__setf_arg2| (F))) (FUNCALL #'|%setf-ACC| X |__setf_arg1| 2 |__setf_arg2|))");
+		assertThat(expandedSetf("(setf (foo x) y)", writers)).isEqualTo("(FUNCALL #'(SETF FOO) Y X)");
+		assertThat(expandedSetf("(setf (foo 1) (bar))", writers))
+			.isEqualTo("(LET* ((|__setf_arg1| (BAR))) (FUNCALL #'(SETF FOO) |__setf_arg1| 1))");
+		assertThat(expandedSetf("(setf (foo x) (bar))", writers)).isEqualTo(
+				"(LET* ((|__setf_arg1| X) (|__setf_arg2| (BAR))) (FUNCALL #'(SETF FOO) |__setf_arg2| |__setf_arg1|))");
+		assertThat(expandedSetf("(setf (foo |__setf_arg1|) (bar))", writers)).isEqualTo(
+				"(LET* ((|__setf_arg2| |__setf_arg1|) (|__setf_arg3| (BAR))) (FUNCALL #'(SETF FOO) |__setf_arg3| |__setf_arg2|))");
+		// CLHS 5.1.2.5: an apply place is the same call with the value ahead of the
+		// spread arguments.
+		assertThat(expandedSetf("(setf (apply #'acc args) v)", writers)).isEqualTo("(APPLY #'|%setf-ACC| V ARGS)");
+		assertThat(expandedSetf("(setf (apply #'acc o (f)) (g))", writers)).isEqualTo(
+				"(LET* ((|__setf_arg1| O) (|__setf_arg2| (F))) (APPLY #'|%setf-ACC| (G) |__setf_arg1| |__setf_arg2|))");
+		assertThat(expandedSetf("(setf (apply #'foo 1 '(2)) (bar))", writers))
+			.isEqualTo("(LET* ((|__setf_arg1| (BAR))) (APPLY #'(SETF FOO) |__setf_arg1| 1 '(2)))");
+		// What no (setf name) function can answer stays a refusal.
+		for (String place : List.of("(apply #'foo)", "(apply 'foo args)", "(apply #'(lambda (x) x) args)",
+				"(apply #'length args)")) {
+			org.assertj.core.api.Assertions.assertThatThrownBy(() -> expandedSetf("(setf " + place + " 1)", writers))
+				.isInstanceOf(UnsupportedOperationException.class)
+				.hasMessageStartingWith("setf does not support place: APPLY");
+		}
+		LispCons noFunctionValues = (LispCons) LispReader.readAllFromString("(setf (apply #'foo args) 1)").get(0);
+		org.assertj.core.api.Assertions.assertThatThrownBy(() -> LispMacroExpander.expandScalarSetf(noFunctionValues))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessage("setf does not support place: APPLY of FOO");
+	}
+
+	@Test
+	void aGethashPlaceKeepsAnEffectfulDefaultAheadOfTheValue() {
+		// The default is never stored but is a subform of the place: it runs between the
+		// table and the value. A constant or a read has no effect to keep.
+		Map<String, Integer> none = new HashMap<>();
+		assertThat(expandedSetf("(setf (gethash k h) v)", none)).isEqualTo("(%PUTHASH K H V)");
+		assertThat(expandedSetf("(setf (gethash k h 0) (f))", none)).isEqualTo("(%PUTHASH K H (F))");
+		assertThat(expandedSetf("(setf (gethash k h d) (f))", none)).isEqualTo("(%PUTHASH K H (F))");
+		assertThat(expandedSetf("(setf (gethash k h (g)) (f))", none)).isEqualTo("(%PUTHASH K H (PROGN (G) (F)))");
+	}
+
+	private static String expandedSetf(String source, Map<String, Integer> structAccessors) {
+		LispCons form = (LispCons) LispReader.readAllFromString(source).get(0);
+		return LispMacroExpander.expandSetf(form, structAccessors, new ClosRegistry()).print();
+	}
+
+	private static List<String> definedFunctionNames(String source) {
+		List<String> names = new ArrayList<>();
+		for (LispVal form : LispMacroExpander.expandTopLevelDefinitions(LispReader.readAllFromString(source),
+				new HashMap<>(), new ClosRegistry())) {
+			if (form instanceof LispCons cons && cons.car() instanceof LispSymbol op
+					&& LispNames.DEFUN.equals(op.name()) && cons.cdr() instanceof LispCons rest
+					&& rest.car() instanceof LispSymbol name) {
+				names.add(name.name());
+			}
+		}
+		return names;
+	}
+
+	private static boolean injectsStringWriteRuntime(String source) {
+		return LispMacroExpander
+			.expandTopLevelDefinitions(LispReader.readAllFromString(source), new HashMap<>(), new ClosRegistry())
+			.stream()
+			.anyMatch(form -> form instanceof LispCons cons && cons.cdr() instanceof LispCons rest
+					&& rest.car() instanceof LispSymbol name && LispNames.SCHAR_SET_RUNTIME.equals(name.name()));
+	}
+
+	@Test
+	void aSubseqSiteIsOneCallWhenTheProgramCarriesTheSharedDispatch() {
+		// The array arm of subseq is a %array-alike plus a dotimes copy loop whose body
+		// is
+		// an aref and a %aset -- each of those a multi-arm representation dispatch of its
+		// own, about 2.3 KB of wasm PER SITE, paid by string-only code too because
+		// nothing
+		// in (subseq s i j) says s is not a vector. If those names come back into the
+		// site, the cost comes back with it.
+		LispCons call = (LispCons) LispReader.readAllFromString("(subseq s i j)").get(0);
+		String shared = requireNonNull(LispMacroExpander.expandSubseqCompat(call, true, true)).print();
+		assertThat(shared).isEqualTo("(%SUBSEQ-RUNTIME S I J)");
+		// Without the helper the site keeps the pre-existing inline lowering, so a gate
+		// that under-predicts costs sharing and never correctness.
+		String inline = requireNonNull(LispMacroExpander.expandSubseqCompat(call, true, false)).print();
+		assertThat(inline).contains("%ARRAY-ALIKE").contains("%ASET").contains("%SUBSEQ-CORE");
+	}
+
+	@Test
+	void theSharedSubseqDispatchAnswersTheSameThingAsTheInlinedOne() {
+		// One body, two homes: the defun and the inline lowering are the same dispatch
+		// over the same three names, so routing a site to the helper cannot change what
+		// it answers. The defun's end is a PARAMETER, nil when the caller omitted it,
+		// which is what lets one call-site shape serve (subseq s i) and (subseq s i j).
+		String helper = LispMacroExpander.subseqRuntimeWrapper().print();
+		// The parameter names are spelled in lower case on purpose: the reader upcases,
+		// so a name in this shape cannot collide with anything the program can write.
+		assertThat(helper).startsWith("(SETQ %SUBSEQ-RUNTIME (LAMBDA (|%ssr_seq| |%ssr_start| |%ssr_end|)");
+		assertThat(helper).contains("STRINGP").contains("%ARRAYP").contains("%ARRAY-ALIKE").contains("%ASET");
+		assertThat(helper).contains("(%SUBSEQ-CORE |%ssr_seq| |%ssr_start| |%ssr_end|)");
+		// It must not call subseq itself, or the lowering would re-enter it forever.
+		assertThat(helper).doesNotContain("(SUBSEQ ");
+	}
+
+	@Test
+	void theGeneralArrayGateNamesTheOperatorsThatCanProduceOne() {
+		// The one list of "this program can hold an array", shared by the JVM backend's
+		// array-runtime gate and by the shared subseq helper's injection. A string-only
+		// program must stay off it: the helper's copy arm names aref/%aset, and turning
+		// the JVM array runtime on for a program with no array costs ~120 KB.
+		assertThat(usesGeneralArray("(defun f (n) (make-array n))")).isTrue();
+		assertThat(usesGeneralArray("(defun f (v i) (aref v i))")).isTrue();
+		assertThat(usesGeneralArray("(defun f (n) (make-string n))")).isTrue();
+		assertThat(usesGeneralArray("(defun f (x) (coerce x 'list))")).isTrue();
+		assertThat(usesGeneralArray("(print #(1 2 3))")).isTrue();
+		assertThat(usesGeneralArray("(defun f (s i j) (subseq s i j))")).isFalse();
+		assertThat(usesGeneralArray("(defun f (l) (car l))")).isFalse();
+	}
+
+	private static boolean usesGeneralArray(String source) {
+		return LispMacroExpander.programUsesGeneralArrayOp(LispReader.readAllFromString(source));
+	}
+
+	@Test
+	void aCoerceSiteIsOneCallWhenTheProgramCarriesTheSharedConversions() {
+		// Every generic sequence lowering (reverse / remove / position / count / sort /
+		// ...) wraps its scan in the string/vector dispatch whose arms are literal
+		// coerce forms, and each conversion inlines a whole map loop (the string
+		// builder drags the value printer too) -- 8-10 KB of wasm PER SITE. If those
+		// shapes come back into the site, the cost comes back with it.
+		LispCons toList = (LispCons) LispReader.readAllFromString("(coerce x 'list)").get(0);
+		assertThat(LispMacroExpander.expandCoerce(toList, true, true).print()).isEqualTo("(%SEQ-TO-LIST X)");
+		// The string site is the shared call plus the two forms that give a
+		// PROGRAM-written (coerce x 'string) its mutable identity: the argument passes
+		// through by identity when it already is a string (CLHS), and only the BUILT
+		// result carries the wrap. The map loop must still be gone.
+		LispCons toString = (LispCons) LispReader.readAllFromString("(coerce x 'string)").get(0);
+		String stringSite = LispMacroExpander.expandCoerce(toString, true, true).print();
+		assertThat(stringSite).contains("(%SEQ-TO-STRING ").contains("(%STR-FRESH ").doesNotContain("(MAP ");
+		LispCons toVector = (LispCons) LispReader.readAllFromString("(coerce x 'vector)").get(0);
+		assertThat(LispMacroExpander.expandCoerce(toVector, true, true).print()).isEqualTo("(%SEQ-TO-VECTOR X)");
+		// Without the trio the site keeps the pre-existing inline lowering, so a gate
+		// that under-predicts costs sharing and never correctness.
+		String inline = LispMacroExpander.expandCoerce(toList, true, false).print();
+		assertThat(inline).contains("(MAP ").doesNotContain("%SEQ-TO-LIST");
+		// A float result type is not a sequence conversion and never routes.
+		LispCons toFloat = (LispCons) LispReader.readAllFromString("(coerce x 'double-float)").get(0);
+		assertThat(LispMacroExpander.expandCoerce(toFloat, true, true).print()).doesNotContain("%SEQ-TO");
+		// A computed type dispatches at runtime over the same three helpers.
+		LispCons computed = (LispCons) LispReader.readAllFromString("(coerce x ty)").get(0);
+		assertThat(LispMacroExpander.expandCoerce(computed, true, true).print()).contains("(%SEQ-TO-LIST ")
+			.contains("(%SEQ-TO-STRING ")
+			.contains("(%SEQ-TO-VECTOR ");
+	}
+
+	@Test
+	void theSharedConversionsAnswerTheSameThingAsTheInlinedOnes() {
+		// One body, two homes each: the trio defuns carry the same conversion the
+		// inline lowering spells, so routing a site to them cannot change what it
+		// answers. None may contain a literal coerce, or compiling the helper would
+		// re-enter the routing forever.
+		List<LispVal> trio = LispMacroExpander.seqConversionWrappers();
+		assertThat(trio).hasSize(3);
+		String toList = trio.get(0).print();
+		// The parameter names are spelled in lower case on purpose: the reader upcases,
+		// so a name in this shape cannot collide with anything the program can write.
+		assertThat(toList).startsWith("(SETQ %SEQ-TO-LIST (LAMBDA (|%stl_x|)");
+		assertThat(toList).contains("LISTP").contains("STRINGP").contains("(MAP ");
+		String toString = trio.get(1).print();
+		assertThat(toString).startsWith("(SETQ %SEQ-TO-STRING (LAMBDA (|%sts_x|)");
+		assertThat(toString).contains("STRINGP").contains("(MAP ");
+		String toVector = trio.get(2).print();
+		assertThat(toVector).startsWith("(SETQ %SEQ-TO-VECTOR (LAMBDA (|%stv_x|)");
+		assertThat(toVector).contains("MAKE-ARRAY").contains("%ASET");
+		for (LispVal helper : trio) {
+			assertThat(helper.print()).doesNotContain("(COERCE ");
+		}
+	}
+
+	@Test
+	void theSeqConversionGateNamesTheOperatorsThatCanReachAConversion() {
+		// The injection gate for the trio: a program (or a generated wrapper body)
+		// naming any generic sequence operator can hold a conversion site.
+		// Over-predicting costs three unreachable defuns, which --optimize drops;
+		// under-predicting costs the module its sharing and never its correctness.
+		assertThat(usesSeqConversion("(defun f (x) (coerce x 'list))")).isTrue();
+		assertThat(usesSeqConversion("(defun f (x) (reverse x))")).isTrue();
+		assertThat(usesSeqConversion("(defun f (x) (position 1 x))")).isTrue();
+		assertThat(usesSeqConversion("(defun f (x) (sort x #'<))")).isTrue();
+		assertThat(usesSeqConversion("(defun f (x) (remove-duplicates x))")).isTrue();
+		// nreverse is an in-place cons-chain splice with no representation dispatch,
+		// and plain list operators reach no conversion at all.
+		assertThat(usesSeqConversion("(defun f (l) (nreverse l))")).isFalse();
+		assertThat(usesSeqConversion("(defun f (l) (car l))")).isFalse();
+	}
+
+	private static boolean usesSeqConversion(String source) {
+		return LispMacroExpander.programUsesSeqConversion(LispReader.readAllFromString(source));
+	}
+
+	@Test
+	void theSortRuntimeIsOneMergeSortEveryCompiledSortSiteCalls() {
+		// The site is a call when the program carries the helper, and keeps its
+		// backend's inline sort when it does not (.kb/sort.md). Only the plain
+		// two-argument shape routes: a :key call is rewritten to stable-sort first, and
+		// its inner sort is what reaches here.
+		LispCons site = (LispCons) LispReader.readAllFromString("(sort l #'<)").get(0);
+		LispVal routed = java.util.Objects.requireNonNull(LispMacroExpander.sortRuntimeCall(site, true));
+		assertThat(routed.print()).isEqualTo("(%SORT-RUNTIME L #'<)");
+		assertThat(LispMacroExpander.sortRuntimeCall(site, false)).isNull();
+		// The helper: (setq %sort-runtime (lambda (list predicate) ...)), and its body
+		// is a MERGE sort -- it splits the list, calls itself on both halves and relinks
+		// with rplacd. A quadratic sort has none of that (.kb/sort.md).
+		LispVal helper = LispMacroExpander.sortRuntimeWrapper();
+		assertThat(((LispSymbol) ((LispCons) ((LispCons) helper).cdr()).car()).name()).isEqualTo("%SORT-RUNTIME");
+		assertThat(helper.print()).contains("(%SORT-RUNTIME %SRT-LST %SRT-PRED)").contains("RPLACD");
+		// The gate: a program that sorts, or whose stable-sort expansion will, and one
+		// that does neither.
+		assertThat(usesSort("(defun f (l) (sort l #'<))")).isTrue();
+		assertThat(usesSort("(defun f (l) (stable-sort l #'< :key #'car))")).isTrue();
+		assertThat(usesSort("(defun f (l) (reverse l))")).isFalse();
+	}
+
+	private static boolean usesSort(String source) {
+		return LispMacroExpander.programUsesSort(LispReader.readAllFromString(source));
+	}
+
+	@Test
+	void aDestructiveSequenceOperatorSiteIsOneCallWhenTheProgramCarriesTheSharedDispatch() {
+		// replace / fill / map-into each inline a whole runtime dispatch -- a
+		// %row-major-aset copy loop, a list arm, an immutable-string rebuild made of
+		// three subseqs and a concatenate -- 3.8 KB / 1.7 KB / 1.9 KB of wasm PER SITE.
+		// chipz's update-window is four replaces and was 18 KB for thirty lines of Lisp.
+		// If those shapes come back into the site, the cost comes back with it.
+		LispCons plainReplace = (LispCons) LispReader.readAllFromString("(replace a b)").get(0);
+		assertThat(LispMacroExpander.expandReplace(plainReplace, true, true).print())
+			.isEqualTo("(%REPLACE-RUNTIME A B 0 NIL 0 NIL)");
+		LispCons plainFill = (LispCons) LispReader.readAllFromString("(fill a v)").get(0);
+		assertThat(LispMacroExpander.expandFill(plainFill, true).print()).isEqualTo("(%FILL-RUNTIME A V 0 NIL)");
+		// A spelled bound adds the one check of the bounds it spells, over the arguments
+		// bound in the order the site evaluates them, and the same call
+		// (.kb/sequence-bounding-keywords.md).
+		LispCons replace = (LispCons) LispReader.readAllFromString("(replace a b :start1 i :end2 j)").get(0);
+		assertThat(LispMacroExpander.expandReplace(replace, true, true).print())
+			.isEqualTo("(LET* ((|__rplc_1| A) (|__rplc_2| B) (|__rplc_s1| I) (|__rplc_e2| J))"
+					+ " (%CHECK-SEQUENCE |__rplc_1| 'REPLACE) (%CHECK-BOUNDS |__rplc_1| |__rplc_s1| NIL)"
+					+ " (%CHECK-SEQUENCE |__rplc_2| 'REPLACE) (%CHECK-BOUNDS |__rplc_2| 0 |__rplc_e2|)"
+					+ " (%REPLACE-RUNTIME |__rplc_1| |__rplc_2| |__rplc_s1| NIL 0 |__rplc_e2|))");
+		LispCons fill = (LispCons) LispReader.readAllFromString("(fill a v :start i)").get(0);
+		assertThat(LispMacroExpander.expandFill(fill, true).print())
+			.isEqualTo("(LET* ((|__fllc_s| A) (|__fllc_v| V) (|__fllc_a| I))"
+					+ " (%CHECK-SEQUENCE |__fllc_s| 'FILL) (%CHECK-BOUNDS |__fllc_s| |__fllc_a| NIL)"
+					+ " (%FILL-RUNTIME |__fllc_s| |__fllc_v| |__fllc_a| NIL))");
+		// map-into routes to the helper of its own SOURCE-SEQUENCE COUNT: the loop body
+		// is a funcall of exactly that many arguments, so one helper cannot serve two
+		// counts without an apply (and with it the spread dispatcher).
+		LispCons mapInto = (LispCons) LispReader.readAllFromString("(map-into r 'f x y)").get(0);
+		assertThat(LispMacroExpander.expandMapInto(mapInto, true).print()).isEqualTo("(%MAP-INTO-RUNTIME-2 R #'F X Y)");
+		// Without the helper each site keeps the pre-existing inline lowering, so a gate
+		// that under-predicts costs sharing and never correctness.
+		assertThat(LispMacroExpander.expandReplace(replace, true, false).print()).contains("%ROW-MAJOR-ASET")
+			.contains("(SUBSEQ ")
+			.doesNotContain("%REPLACE-RUNTIME");
+		assertThat(LispMacroExpander.expandFill(fill, false).print()).contains("%ROW-MAJOR-ASET")
+			.doesNotContain("%FILL-RUNTIME");
+		assertThat(LispMacroExpander.expandMapInto(mapInto, false).print()).contains("FUNCALL")
+			.doesNotContain("%MAP-INTO-RUNTIME");
+		// A site whose DESTINATION the backend has proved to be an array calls the
+		// array-arm-only helper instead, on the same call-site shape: it skips a %arrayp
+		// test whose answer is already known, and leaves the wide dispatch (the list
+		// rewrite, the immutable-string rebuild) reachable only from a site that needs
+		// it.
+		assertThat(LispMacroExpander.expandReplace(plainReplace, true, true, true).print())
+			.isEqualTo("(%REPLACE-RUNTIME-ARRAY A B 0 NIL 0 NIL)");
+		assertThat(LispMacroExpander.expandFill(plainFill, true, true).print())
+			.isEqualTo("(%FILL-RUNTIME-ARRAY A V 0 NIL)");
+		assertThat(LispMacroExpander.expandFill(fill, true, true).print())
+			.endsWith(" (%FILL-RUNTIME-ARRAY |__fllc_s| |__fllc_v| |__fllc_a| NIL))");
+	}
+
+	@Test
+	void theSharedSequenceOpDispatchesAnswerTheSameThingAsTheInlinedOnes() {
+		// One body, two homes each: the defun carries the same dispatch the inline
+		// lowering spells, so routing a site to it cannot change what it answers. The
+		// bounds are PARAMETERS -- an omitted end nil, an omitted start 0 -- which is
+		// what
+		// lets one call-site shape serve every keyword combination. A start is taken as
+		// given: a nil one is no bound, so no (or start 0) may read it as 0. None may
+		// call its
+		// own operator, or compiling the helper would re-enter the routing forever.
+		String replace = LispMacroExpander.replaceRuntimeWrapper().print();
+		// The parameter names are spelled in lower case on purpose: the reader upcases,
+		// so a name in this shape cannot collide with anything the program can write.
+		assertThat(replace)
+			.startsWith("(SETQ %REPLACE-RUNTIME (LAMBDA (|%rpr_1| |%rpr_2| |%rpr_s1| |%rpr_e1| |%rpr_s2| |%rpr_e2|)");
+		// All three destination arms live here: the list cons-cell rewrite, the
+		// immutable-string rebuild, and -- as a CALL, so the two helpers hold one copy
+		// of it between them -- the destructive element store.
+		assertThat(replace).contains("%ARRAYP")
+			.contains("LISTP")
+			.contains("RPLACA")
+			.contains("(OR |%rpr_e1| (LENGTH |__rpl_1|))")
+			.doesNotContain("(OR |%rpr_s1| 0)")
+			.contains("CONCATENATE")
+			.contains("(%REPLACE-RUNTIME-ARRAY |__rpl_1| |__rpl_2| |__rpl_s1| |__rpl_e1| |__rpl_s2| |__rpl_e2|)")
+			.doesNotContain("%ROW-MAJOR-ASET");
+		assertThat(replace).doesNotContain("(REPLACE ");
+		// The array arm on its own: the same bounds, defaulted the same way (so the wide
+		// helper may hand it either raw or already-defaulted ones), and no dispatch left.
+		String replaceArray = LispMacroExpander.replaceArrayRuntimeWrapper().print();
+		assertThat(replaceArray).startsWith(
+				"(SETQ %REPLACE-RUNTIME-ARRAY (LAMBDA (|%rpa_1| |%rpa_2| |%rpa_s1| |%rpa_e1| |%rpa_s2| |%rpa_e2|)");
+		assertThat(replaceArray).contains("%ROW-MAJOR-ASET")
+			.contains("(OR |%rpa_e1| (LENGTH |__rpl_1|))")
+			.doesNotContain("(OR |%rpa_s1| 0)")
+			.doesNotContain("%ARRAYP")
+			.doesNotContain("RPLACA")
+			.doesNotContain("CONCATENATE")
+			.doesNotContain("(REPLACE ");
+		// A LIST source is walked with a cursor, as the list DESTINATION arm is: an elt
+		// per element re-walks the list head, and elt is a whole representation dispatch
+		// where car is one field read.
+		assertThat(replaceArray).contains("NTHCDR").contains("(CAR |__rpl_sc|)").doesNotContain("(ELT ");
+		String fill = LispMacroExpander.fillRuntimeWrapper().print();
+		assertThat(fill).startsWith("(SETQ %FILL-RUNTIME (LAMBDA (|%flr_s| |%flr_v| |%flr_a| |%flr_b|)");
+		assertThat(fill).contains("%ARRAYP")
+			.contains("RPLACA")
+			.contains("(OR |%flr_b| (LENGTH |__fll_s|))")
+			.doesNotContain("(OR |%flr_a| 0)")
+			.contains("(%FILL-RUNTIME-ARRAY |__fll_s| |__fll_v| |__fll_a| |__fll_b|)")
+			.doesNotContain("%ROW-MAJOR-ASET");
+		assertThat(fill).doesNotContain("(FILL ");
+		String fillArray = LispMacroExpander.fillArrayRuntimeWrapper().print();
+		assertThat(fillArray).startsWith("(SETQ %FILL-RUNTIME-ARRAY (LAMBDA (|%fla_s| |%fla_v| |%fla_a| |%fla_b|)");
+		assertThat(fillArray).contains("%ROW-MAJOR-ASET")
+			.contains("(OR |%fla_b| (LENGTH |__fll_s|))")
+			.doesNotContain("(OR |%fla_a| 0)")
+			.doesNotContain("%ARRAYP")
+			.doesNotContain("RPLACA")
+			.doesNotContain("CONCATENATE")
+			.doesNotContain("(FILL ");
+		String mapInto = LispMacroExpander.mapIntoRuntimeWrapper(2).print();
+		assertThat(mapInto).startsWith("(SETQ %MAP-INTO-RUNTIME-2 (LAMBDA (|%mir_res| |%mir_fn| |%mir_s0| |%mir_s1|)");
+		assertThat(mapInto).contains("FUNCALL").contains("RPLACA");
+		assertThat(mapInto).doesNotContain("(MAP-INTO ");
+	}
+
+	@Test
+	void theSequenceOpRuntimeGateInjectsOnlyTheHelpersThatWouldHaveACaller() {
+		// The injection gate: one helper per operator the program (or a generated
+		// wrapper body) names, gated apart because the three are independent lowerings
+		// rather than three arms of one runtime dispatch. map-into answers one helper
+		// per source-sequence count in use.
+		// replace and fill each answer a PAIR: the wide dispatch and the array arm it
+		// calls. Which of them a site can reach is decided per site, long after this
+		// scan, so they travel together and the shaker drops whichever ends up without a
+		// caller.
+		assertThat(seqOpHelperNames("(defun f (a b) (replace a b))")).containsExactly("%REPLACE-RUNTIME",
+				"%REPLACE-RUNTIME-ARRAY");
+		assertThat(seqOpHelperNames("(defun f (a) (fill a 0))")).containsExactly("%FILL-RUNTIME",
+				"%FILL-RUNTIME-ARRAY");
+		assertThat(seqOpHelperNames("(defun f (r x y) (map-into r #'+ x y) (map-into r #'1+ x))"))
+			.containsExactly("%MAP-INTO-RUNTIME-1", "%MAP-INTO-RUNTIME-2");
+		assertThat(seqOpHelperNames("(defun f (l) (car l))")).isEmpty();
+		// The replace and fill bodies call subseq, so they must count toward the
+		// %subseq-runtime gate -- which is why a backend injects them BEFORE it and
+		// scans them (.kb/sequence-op-runtimes.md).
+		assertThat(LispMacroExpander.programUsesSubseq(
+				LispMacroExpander.sequenceOpRuntimeWrappers(LispReader.readAllFromString("(replace a b)"))))
+			.isTrue();
+	}
+
+	private static List<String> seqOpHelperNames(String source) {
+		return LispMacroExpander.sequenceOpRuntimeWrappers(LispReader.readAllFromString(source))
+			.stream()
+			.map(form -> ((LispSymbol) ((LispCons) ((LispCons) form).cdr()).car()).name())
+			.toList();
+	}
+
+	@Test
+	void theDispatcherLastResortIsOneCallOfTheSharedNoApplicableMethodSignal() {
+		// The last-resort error tail (condition construction plus the class-naming
+		// render) re-inlined per dispatcher costs over a kilobyte EACH across a
+		// library's synthesized slot accessors; a dispatcher instead calls the shared
+		// signal defun, carrying only the message's per-generic TAIL (its 22-byte head
+		// is one string per program, not one per generic), and expandTopLevelDefinitions
+		// appends that defun exactly once. The tail keeps the " on " separator so the
+		// literal cannot be read as a function-name designator by the dispatch gate.
+		String source = "(defclass box () ((v :accessor box-v))) (defgeneric poke (x))"
+				+ " (defmethod poke ((x box)) x)";
+		List<LispVal> expanded = LispMacroExpander.expandTopLevelDefinitions(LispReader.readAllFromString(source),
+				new HashMap<>(), new ClosRegistry());
+		String printed = expanded.stream().map(LispVal::print).reduce("", (a, b) -> a + "\n" + b);
+		assertThat(printed).contains("(%NO-APPLICABLE-METHOD \"POKE on \" X)")
+			.doesNotContain("\"No applicable method: POKE on \"")
+			.doesNotContain("\"POKE\"");
+		assertThat(expanded.stream().filter(LispMacroExpanderTest::isNoApplicableMethodDefun)).hasSize(1);
+		// A program without a generic in reach carries nothing.
+		List<LispVal> plain = LispMacroExpander.expandTopLevelDefinitions(
+				LispReader.readAllFromString("(defun f (x) x) (print (f 1))"), new HashMap<>(), new ClosRegistry());
+		assertThat(plain.stream().filter(LispMacroExpanderTest::isNoApplicableMethodDefun)).isEmpty();
+	}
+
+	private static boolean isNoApplicableMethodDefun(LispVal form) {
+		return form instanceof LispCons cons && cons.car() instanceof LispSymbol op && LispNames.DEFUN.equals(op.name())
+				&& cons.cdr() instanceof LispCons rest && rest.car() instanceof LispSymbol name
+				&& LispNames.NO_APPLICABLE_METHOD_RUNTIME.equals(name.name());
+	}
+
+	private static LispMacroExpander.ConditionNarrowing narrowingOf(String source) {
+		ClosRegistry registry = new ClosRegistry();
+		List<LispVal> expanded = LispMacroExpander.expandTopLevelDefinitions(LispReader.readAllFromString(source),
+				new HashMap<>(), registry);
+		return LispMacroExpander.conditionNarrowing(expanded, registry, false);
+	}
+
+	@Test
+	void conditionNarrowingCollectsLiteralTagsAndDeclinesTheRenderer() {
+		// Literal datums only: the constructible set is exactly what is named, plus the
+		// two families no site names but a landing pad can still build -- the
+		// synthesized simple-* three and the raw-failure classes -- and
+		// with no unrendered control in sight the runtime renderer is declined.
+		LispMacroExpander.ConditionNarrowing narrowing = narrowingOf("""
+				(define-condition my-error (error) ())
+				(handler-case (error 'my-error) (error (e) (princ e)))
+				(handler-case (error "plain ~a message" 1) (error (e) (princ e)))
+				(handler-case (let ((n 1)) (check-type n string)) (error (e) (princ e)))
+				""");
+		assertThat(narrowing.constructibleTags()).isNotNull()
+			.contains("%class-MY-ERROR", "%class-SIMPLE-ERROR", "%class-TYPE-ERROR", "%class-DIVISION-BY-ZERO",
+					"%class-SIMPLE-TYPE-ERROR")
+			.doesNotContain("%class-END-OF-FILE", "%class-UNBOUND-SLOT");
+		assertThat(narrowing.declineRenderer()).isTrue();
+		// A check-type signals its rendered text, so it alone gives no report a reader.
+		assertThat(LispMacroExpander.mayCreateConditions(
+				LispReader.readAllFromString("(defun f (x) (check-type x float) x) (print (f 1.0))"),
+				new ClosRegistry()))
+			.isFalse();
+	}
+
+	@Test
+	void theRendererFreeReportServesAControlWhoseOnlyDirectiveIsADoubledTilde() {
+		// A rendered message reaches format-control as its text control (every ~
+		// doubled), and %control-text -- the renderer-free arm -- undoubles it; so a
+		// literal control whose only directive is ~~ is served without the renderer,
+		// while any other directive still forces it.
+		assertThat(narrowingOf("""
+				(handler-case (error 'simple-error :format-control "a~~b") (error (e) (princ e)))
+				""").declineRenderer()).isTrue();
+		assertThat(narrowingOf("""
+				(handler-case (error 'simple-error :format-control "a~%b") (error (e) (princ e)))
+				""").declineRenderer()).isFalse();
+		assertThat(narrowingOf("""
+				(handler-case (error 'simple-error :format-control "a~") (error (e) (princ e)))
+				""").declineRenderer()).isFalse();
+		assertThat(LispMacroExpander.textControlForm(new LispString("a~b")).print()).isEqualTo("\"a~~b\"");
+		assertThat(LispMacroExpander.textControlForm(new LispSymbol("M")).print()).isEqualTo("(%TEXT-CONTROL M)");
+	}
+
+	@Test
+	void conditionNarrowingMarksProgramErrorConstructibleOnlyBehindALandingPad() {
+		// The %program-error lowering constructs the class during BODY compilation,
+		// after this scan, and only where a pad can observe it -- so a pad stands in
+		// for the tag exactly as it does for the raw-failure classes.
+		assertThat(narrowingOf("""
+				(defun boom () (error 'simple-error :format-control "x"))
+				(handler-case (boom) (error (e) (princ e)))
+				""").constructibleTags()).contains("%class-PROGRAM-ERROR");
+		assertThat(narrowingOf("""
+				(defun boom () (error 'simple-error :format-control "x"))
+				(boom)
+				""").constructibleTags()).isNotNull().doesNotContain("%class-PROGRAM-ERROR");
+	}
+
+	@Test
+	void restartModeNarrowsTheConditionReportRuntime() {
+		// A handler-bind puts the program into restart mode. Every construction restart
+		// mode adds is visible to the scan or always in the set: the signal hook's
+		// instances are the synthesized simple-* three, restart-mode cerror keeps its
+		// error datum, and the restart runtime's defuns are injected before the scan.
+		// So the report partition keeps only what the program can construct, and the
+		// runtime format renderer stays out.
+		List<LispVal> expanded = LispMacroExpander.expandTopLevelDefinitions(LispReader.readAllFromString("""
+				(defun main ()
+				  (handler-bind ((error (lambda (c) (format t "saw ~a~%" c))))
+				    (car 5)))
+				(print (ignore-errors (main)))
+				"""), new HashMap<>(), new ClosRegistry());
+		String report = expanded.stream()
+			.filter(form -> isDefunNamed(form, LispNames.CONDITION_REPORT_STR_INTERNAL))
+			.map(LispVal::print)
+			.findFirst()
+			.orElseThrow();
+		assertThat(report).contains("%class-TYPE-ERROR", "%class-SIMPLE-ERROR")
+			.doesNotContain("%class-END-OF-FILE", "%class-UNBOUND-SLOT", "%class-FILE-ERROR");
+		assertThat(expanded.stream().map(LispVal::print)).noneMatch(printed -> printed.contains(FormatRenderer.RENDER));
+	}
+
+	private static boolean isDefunNamed(LispVal form, String name) {
+		return form instanceof LispCons cons && cons.car() instanceof LispSymbol op && LispNames.DEFUN.equals(op.name())
+				&& cons.cdr() instanceof LispCons rest && rest.car() instanceof LispSymbol defined
+				&& name.equals(defined.name());
+	}
+
+	@Test
+	void establishesLandingPadReadsOperatorPositionOnly() {
+		assertThat(LispMacroExpander
+			.establishesLandingPad(LispReader.readAllFromString("(defun f () (ignore-errors (g)))"))).isTrue();
+		assertThat(LispMacroExpander
+			.establishesLandingPad(LispReader.readAllFromString("(defun f () (handler-bind ((error #'h)) (g)))")))
+			.isTrue();
+		assertThat(LispMacroExpander
+			.establishesLandingPad(LispReader.readAllFromString("(defun f () '(handler-case ignore-errors))")))
+			.isFalse();
+	}
+
+	@Test
+	void keywordTailProblemHonoursAllowOtherKeys() {
+		// CLHS 3.4.1.4.1.1: the LEFTMOST :allow-other-keys pair decides, a true value
+		// suppresses the check entirely, and the key itself is always accepted.
+		assertThat(problemOf("(remove 'a lst :bad t)"))
+			.isEqualTo("REMOVE expects keyword arguments :TEST/:TEST-NOT/:KEY, got: :BAD");
+		assertThat(problemOf("(remove 'a lst :key)")).isEqualTo("REMOVE expects a value after :KEY");
+		assertThat(problemOf("(remove 'a lst 'bad t)"))
+			.isEqualTo("REMOVE expects keyword arguments :TEST/:TEST-NOT/:KEY, got: 'BAD");
+		assertThat(problemOf("(remove 'a lst :bad t :allow-other-keys t)")).isNull();
+		assertThat(problemOf("(remove 'a lst :allow-other-keys t 'bad t)")).isNull();
+		assertThat(problemOf("(remove 'a lst :bad1 t :allow-other-keys t :bad2 t :allow-other-keys nil :bad3 t)"))
+			.isNull();
+		assertThat(problemOf("(remove 'a lst :allow-other-keys nil)")).isNull();
+		assertThat(problemOf("(remove 'a lst :allow-other-keys nil :bad t)"))
+			.isEqualTo("REMOVE expects keyword arguments :TEST/:TEST-NOT/:KEY, got: :BAD");
+		// An odd tail is malformed whatever :allow-other-keys says.
+		assertThat(problemOf("(remove 'a lst :allow-other-keys t :bad)"))
+			.isEqualTo("REMOVE expects a value after :BAD");
+	}
+
+	@Test
+	void aBoundedSequenceScanEmitsOnlyTheScaffoldingItsKeywordsAskFor() {
+		// CLHS 17.2.1's bounding keywords are lowered PIECEWISE: a call that spells none
+		// of them must expand to exactly the loop it always did -- no element index, no
+		// count budget, no reversed walk, no length -- so every existing call site keeps
+		// its size. The pieces then arrive one keyword at a time.
+		String plain = removeExpansionOf("(remove 'a lst)");
+		assertThat(plain).doesNotContain("|__remove_i|")
+			.doesNotContain("|__remove_left|")
+			.doesNotContain("(REVERSE ")
+			.doesNotContain("(LENGTH ")
+			.doesNotContain("%CHECK-BOUNDS");
+		String counted = removeExpansionOf("(remove 'a lst :count 2)");
+		assertThat(counted).contains("|__remove_left|")
+			.doesNotContain("|__remove_i|")
+			.doesNotContain("(REVERSE ")
+			.doesNotContain("(LENGTH ")
+			.doesNotContain("%CHECK-BOUNDS");
+		// :start/:end are an INDEX bound on the walk, never a (subseq ...) handed to it:
+		// the excluded elements must not reach the :test or :key designator, and a
+		// subsequence would have to be built before the first element was looked at.
+		// They are checked ONCE, before the walk, against the sequence as passed -- the
+		// dispatch's input, not the list it walks -- and the loop carries no check.
+		String bounded = removeExpansionOf("(remove 'a lst :start 1 :end 3)");
+		assertThat(bounded).contains("|__remove_i|")
+			.contains("(PROGN (%CHECK-BOUNDS |__seq_in| |__remove_sv| |__remove_ev|) (LET ((|__remove_lo| ")
+			.doesNotContain("(SUBSEQ ")
+			.doesNotContain("|__remove_left|")
+			.doesNotContain("(REVERSE ")
+			.doesNotContain("(LENGTH ");
+		assertThat(bounded.indexOf("%CHECK-BOUNDS")).isEqualTo(bounded.lastIndexOf("%CHECK-BOUNDS"));
+		// count binds its operand ahead of the sequence it walks, and the sequence as
+		// passed ahead of the list made of it, which is what the check reads.
+		assertThat(LispMacroExpander
+			.expandCount((LispCons) LispReader.readAllFromString("(count (f) (g) :start 1)").get(0))
+			.print()).startsWith("(LET ((|__count_item| (F))) (LET ((|__count_in| (G)))")
+			.contains("(%CHECK-BOUNDS |__count_in| |__count_sv| NIL)");
+		// The position family checks a spelled bound the same way, and only then.
+		assertThat(LispMacroExpander.expandPosition((LispCons) LispReader.readAllFromString("(position x s)").get(0))
+			.print()).doesNotContain("%CHECK-BOUNDS");
+		assertThat(LispMacroExpander
+			.expandPosition((LispCons) LispReader.readAllFromString("(position x s :start 1)").get(0))
+			.print()).contains("(PROGN (%CHECK-BOUNDS |__pos_lst| |__pos_startv| |__pos_endv|)");
+		// :from-end is served by reversing the walked list and running the SAME forward
+		// loop: the bounds are mapped into the reversed walk's own coordinates, and the
+		// closing nreverse becomes conditional instead of a second loop appearing.
+		String reversed = removeExpansionOf("(remove 'a lst :from-end t :count 1 :start 1)");
+		assertThat(reversed).contains("(REVERSE |__remove_seq|)")
+			.contains("(LENGTH |__remove_seq|)")
+			.contains("|__remove_left|")
+			.contains("|__remove_i|");
+	}
+
+	@Test
+	void aParseIntegerCallChecksASpelledBoundOnceAfterItsArguments() {
+		// A call spelling no bound carries no check, so it expands as it always did.
+		assertThat(parseIntegerExpansionOf("(parse-integer s)")).doesNotContain("%CHECK-BOUNDS");
+		assertThat(parseIntegerExpansionOf("(parse-integer s :radix 16 :junk-allowed t)"))
+			.doesNotContain("%CHECK-BOUNDS");
+		// A spelled bound is checked once, against the string as passed and the end as
+		// given, after every argument (the radix and junk-allowed forms too) has run.
+		String bounded = parseIntegerExpansionOf("(parse-integer s :start 1 :radix (r))");
+		assertThat(bounded).contains("(%CHECK-BOUNDS |__pi_s| |__pi_start| |__pi_endraw|)");
+		assertThat(bounded.indexOf("%CHECK-BOUNDS")).isEqualTo(bounded.lastIndexOf("%CHECK-BOUNDS"))
+			.isGreaterThan(bounded.indexOf("(R)"));
+		// The bindings take the keywords in the order start, end, radix, junk-allowed: a
+		// call spelling them so binds nothing more, any other order (or a repeated
+		// keyword) evaluates its values in the call's order first.
+		assertThat(parseIntegerExpansionOf("(parse-integer s :start (f) :end (g))"))
+			.startsWith("(LET ((|__pi_s| S)) (LET ((|__pi_start| (F))) (LET ((|__pi_endraw| (G)))");
+		String reordered = parseIntegerExpansionOf("(parse-integer s :end (g) :start (f))");
+		assertThat(reordered.indexOf("(G)")).isLessThan(reordered.indexOf("(F)"));
+		String repeated = parseIntegerExpansionOf("(parse-integer s :start (f) :start (h))");
+		assertThat(repeated).contains("(H)");
+		assertThat(repeated.indexOf("(F)")).isLessThan(repeated.indexOf("(H)"));
+	}
+
+	@Test
+	void aParseIntegerCallChecksARadixOnceBeforeTheBoundsAndTheScan() {
+		// A radix that is no integer in 2..36 is refused once, by the probe of a digit in
+		// it; a literal one inside the range, and no spelled radix, carry no probe.
+		assertThat(parseIntegerExpansionOf("(parse-integer s)")).doesNotContain("#\\0");
+		assertThat(parseIntegerExpansionOf("(parse-integer s :radix 16)")).doesNotContain("#\\0");
+		assertThat(parseIntegerExpansionOf("(parse-integer s :radix 37)")).contains("#\\0");
+		String probed = parseIntegerExpansionOf("(parse-integer s :start 1 :radix (r))");
+		assertThat(probed).contains("(DIGIT-CHAR-P #\\0 |__pi_radix|)");
+		assertThat(probed.indexOf("(DIGIT-CHAR-P #\\0")).isEqualTo(probed.lastIndexOf("(DIGIT-CHAR-P #\\0"))
+			.isLessThan(probed.indexOf("%CHECK-BOUNDS"));
+	}
+
+	@Test
+	void aBoundedStringEqualityCallRunsItsArgumentsInTheCallsOrder() {
+		// Variables and literals are cut in place, binding nothing.
+		assertThat(stringBoundsExpansionOf("(string= a \"xabc\" :start2 1 :end1 k)"))
+			.isEqualTo("(STRING= (SUBSEQ (STRING A) 0 K) (SUBSEQ \"xabc\" 1))");
+		// So is a computed form the lowering already runs in the call's order.
+		assertThat(stringBoundsExpansionOf("(string= (s1) b :start2 (st2))"))
+			.isEqualTo("(STRING= (S1) (SUBSEQ (STRING B) (ST2)))");
+		// A computed bound runs in the call's order, operands first, not beside its own
+		// operand -- a bare variable among them is read in its turn too.
+		assertThat(stringBoundsExpansionOf("(string= a (s2) :start1 (st1))")).startsWith("(LET ");
+		String reordered = stringBoundsExpansionOf("(string= (s1) (s2) :end1 (e1) :start1 (st1))");
+		assertThat(reordered).startsWith("(LET ");
+		assertThat(reordered.indexOf("(S1)")).isLessThan(reordered.indexOf("(S2)"));
+		assertThat(reordered.indexOf("(S2)")).isLessThan(reordered.indexOf("(E1)"));
+		assertThat(reordered.indexOf("(E1)")).isLessThan(reordered.indexOf("(ST1)"));
+		// A repeated keyword runs both values and uses the first; so does a literal one.
+		String repeated = stringBoundsExpansionOf("(string= \"abc\" \"abc\" :start1 (f) :start1 (h))");
+		assertThat(repeated.indexOf("(F)")).isLessThan(repeated.indexOf("(H)"));
+		assertThat(stringBoundsExpansionOf("(string= \"abc\" \"abc\" :start1 1 :start1 0)"))
+			.isEqualTo("(STRING= (SUBSEQ \"abc\" 1) \"abc\")");
+	}
+
+	private static String stringBoundsExpansionOf(String source) {
+		return LispMacroExpander.expandStringComparisonBounds((LispCons) LispReader.readAllFromString(source).get(0))
+			.print();
+	}
+
+	@Test
+	void aReadFromStringCallPassingMoreThanTheStringCallsThePreludeDefun() {
+		// The one-argument call stays the built-in (the multiple-value lowering pairs it
+		// with %read-from-string-end); any more, and the arguments go to the defun as
+		// written, for its lambda list to judge.
+		LispCons one = (LispCons) LispReader.readAllFromString("(read-from-string s)").get(0);
+		assertThat(LispMacroExpander.expandReadFromString(one)).isSameAs(one);
+		assertThat(LispMacroExpander
+			.expandReadFromString(
+					(LispCons) LispReader.readAllFromString("(read-from-string s nil (f) :start 1)").get(0))
+			.print()).isEqualTo("(%READ-FROM-STRING-FULL S NIL (F) :START 1)");
+	}
+
+	private static String parseIntegerExpansionOf(String source) {
+		return LispMacroExpander.expandParseInteger((LispCons) LispReader.readAllFromString(source).get(0)).print();
+	}
+
+	@Test
+	void aRemoveCallChecksAComputedCountOnceBeforeTheBounds() {
+		// No count, or one an integer or nil as written, carries no check.
+		assertThat(removeExpansionOf("(remove x l)")).doesNotContain("'INTEGER)");
+		assertThat(removeExpansionOf("(remove x l :count 2)")).doesNotContain("'INTEGER)");
+		assertThat(removeExpansionOf("(remove x l :count nil)")).doesNotContain("'INTEGER)");
+		// A computed count is refused once, under the operator's name, and before the
+		// bounds are checked.
+		String counted = removeExpansionOf("(remove x l :start 1 :count (n))");
+		assertThat(counted).contains("(%OPERAND-TYPE-ERROR |__remove_cv| 'REMOVE 'INTEGER)");
+		assertThat(counted.indexOf("'INTEGER)")).isEqualTo(counted.lastIndexOf("'INTEGER)"))
+			.isLessThan(counted.indexOf("%CHECK-BOUNDS"));
+	}
+
+	@Test
+	void aComputedSequenceDesignatorBindsOnceBeforeTheScan() {
+		// A LITERAL designator keeps being inlined into the loop body: evaluating it is
+		// not observable, and the compilers' function-designator normalization is what
+		// turns the #'name there into a direct call.
+		String literal = removeExpansionOf("(remove 'a lst :test #'eq :key #'car)");
+		assertThat(literal).contains("(FUNCALL #'EQ |__remove_item| (FUNCALL #'CAR (CAR |__remove_cur|)))")
+			.doesNotContain("|__remove_k");
+		// A COMPUTED one binds once, before the scan, in the order the call spells the
+		// keywords -- the loop body sees only the variable (CLHS 3.1.2.1.2.3). The
+		// sequence binds ahead of them, because the call spells it first.
+		String computed = removeExpansionOf("(remove 'a lst :key (mk) :test (mt))");
+		assertThat(computed).contains("(LET ((|__remove_a2| LST)) (LET ((|__remove_k3| (OR (MK) #'IDENTITY)))")
+			.contains("(LET ((|__remove_k5| (OR (MT) #'EQL)))")
+			.contains("(FUNCALL |__remove_k5| |__remove_item| (FUNCALL |__remove_k3| (CAR |__remove_cur|)))");
+		// ... and it appears exactly once, which is the whole point: it used to be
+		// evaluated per element.
+		assertThat(computed.indexOf("(MK)")).isEqualTo(computed.lastIndexOf("(MK)"));
+		assertThat(computed.indexOf("(MT)")).isEqualTo(computed.lastIndexOf("(MT)"));
+		// A computed :test-not binds as the COMPLEMENTED :test, so the match form is the
+		// same funcall either way, and a nil value is the absent designator.
+		assertThat(removeExpansionOf("(remove 'a lst :test-not (mt))")).contains(
+				"(LET ((|__remove_k3| (LET ((|__testnot_fn| (MT))) (IF |__testnot_fn| (LAMBDA (|__testnot_a| |__testnot_b|) (NOT (FUNCALL |__testnot_fn| |__testnot_a| |__testnot_b|))) #'EQL))))")
+			.contains("(FUNCALL |__remove_k3| |__remove_item| (CAR |__remove_cur|))");
+	}
+
+	@Test
+	void complementAnswersALambdaThatCoversEveryDesignatorArity() {
+		// The function form is evaluated once, into a let the lambda closes over.
+		String expansion = LispMacroExpander
+			.expandComplement((LispCons) LispReader.readAllFromString("(complement (mk))").get(0))
+			.print();
+		assertThat(expansion).startsWith("(LET ((|__complement_fn| (MK)))");
+		assertThat(expansion.indexOf("(MK)")).isEqualTo(expansion.lastIndexOf("(MK)"));
+		// &optional with supplied-p flags plus an &rest arm: a complemented :test-not
+		// runs once per element of the sequence being scanned, and a rest list would
+		// cons there -- so only the fourth-argument-and-beyond arm applies.
+		assertThat(expansion).contains(
+				"(LAMBDA (&OPTIONAL (|__complement_a0| NIL |__complement_p0|) (|__complement_a1| NIL |__complement_p1|) (|__complement_a2| NIL |__complement_p2|) &REST |__complement_more|)");
+		// One funcall arm per arity, the widest tested first -- an equality designator
+		// (two arguments) is the common one and used to be an arity error.
+		assertThat(expansion)
+			.contains("(IF |__complement_p2| (FUNCALL |__complement_fn| |__complement_a0| |__complement_a1| "
+					+ "|__complement_a2|)")
+			.contains("(IF |__complement_p1| (FUNCALL |__complement_fn| |__complement_a0| |__complement_a1|)")
+			.contains("(IF |__complement_p0| (FUNCALL |__complement_fn| |__complement_a0|)")
+			.contains("(FUNCALL |__complement_fn|)");
+		// The &rest arm applies past the fixed set -- the only APPLY in the expansion.
+		assertThat(expansion).contains("(IF |__complement_more| (APPLY |__complement_fn| |__complement_a0| "
+				+ "|__complement_a1| |__complement_a2| |__complement_more|)");
+		assertThat(expansion.indexOf("APPLY")).isEqualTo(expansion.lastIndexOf("APPLY"));
+		// A site whose arity is statically two spells the two, rather than paying the
+		// dispatch per element: the first-class remove/position wrappers and KeywordTail.
+		assertThat(LispMacroExpander.twoArgumentComplement(LispReader.readAllFromString("(mk)").get(0)).print())
+			.isEqualTo("(LET ((|__complement2_fn| (MK))) (LAMBDA (|__complement2_a| |__complement2_b|) "
+					+ "(NOT (FUNCALL |__complement2_fn| |__complement2_a| |__complement2_b|))))");
+	}
+
+	@Test
+	void aBoundedRemoveDuplicatesLooksForTheDuplicateInsideTheWindow() {
+		// The piecewise rule, here too: a call that spells no bound and a LITERAL
+		// direction keeps the member-over-the-tail loop it always expanded to -- no
+		// element index, no inner bounded scan.
+		String plain = dedupExpansionOf("(remove-duplicates lst)");
+		assertThat(plain).contains("(MEMBER (CAR |__rd_cur|) (CDR |__rd_cur|))")
+			.doesNotContain("|__rd_i|")
+			.doesNotContain("(POSITION ");
+		assertThat(dedupExpansionOf("(remove-duplicates lst :from-end t)"))
+			.contains("(MEMBER (CAR |__rd_cur|) |__rd_acc|)")
+			.doesNotContain("|__rd_i|");
+		// :start/:end bound which elements are CONSIDERED: one outside the window is
+		// kept verbatim (the guard's else arm accumulates instead of skipping) and the
+		// duplicate is looked for by INDEX inside the window, never in a (subseq ...) --
+		// the position family's own scan, expanded in place over [i+1, hi), its bounds
+		// the window's. The window is checked ONCE, against the sequence as passed; the
+		// inner scan, whose bounds lie inside it, checks nothing per element.
+		String bounded = dedupExpansionOf("(remove-duplicates lst :start 1 :end 3)");
+		assertThat(bounded).contains("(PROGN (%CHECK-BOUNDS |__seq_in| |__rd_sv| |__rd_ev|)")
+			.contains("(IF (AND (>= |__rd_i| |__rd_lo|) (IF |__rd_hi| (< |__rd_i| |__rd_hi|) T)) "
+					+ "(IF (LET ((|__pos_a1| (CAR |__rd_cur|))) (LET ((|__pos_a2| |__seq_lst|)) "
+					+ "(LET ((|__pos_k3| (+ |__rd_i| 1))) (LET ((|__pos_k5| |__rd_hi|))")
+			.contains("NIL (SETQ |__rd_acc| (CONS (CAR |__rd_cur|) |__rd_acc|))) "
+					+ "(SETQ |__rd_acc| (CONS (CAR |__rd_cur|) |__rd_acc|)))")
+			.doesNotContain("(SUBSEQ ")
+			.doesNotContain("(POSITION ");
+		assertThat(bounded.indexOf("%CHECK-BOUNDS")).isEqualTo(bounded.lastIndexOf("%CHECK-BOUNDS"));
+		// :from-end moves that window to the other side of the element, keeping the
+		// FIRST occurrence ...
+		assertThat(dedupExpansionOf("(remove-duplicates lst :start 1 :from-end t)"))
+			.contains("(LET ((|__pos_k3| |__rd_lo|)) (LET ((|__pos_k5| |__rd_i|))");
+		// ... so a COMPUTED direction is a branch over those two index bounds rather
+		// than over two loops, which is why it no longer has to be a literal.
+		assertThat(dedupExpansionOf("(remove-duplicates lst :from-end (f))"))
+			.contains("(LET ((|__pos_k3| (IF |__rd_dir| 0 (+ |__rd_i| 1)))) "
+					+ "(LET ((|__pos_k5| (IF |__rd_dir| |__rd_i| NIL)))")
+			.doesNotContain("%CHECK-BOUNDS");
+		// The :test-not pair forwards to the inner scan as it does to the inner member,
+		// and the :key is applied to the candidate before it (position's own :key covers
+		// the sequence side only).
+		assertThat(dedupExpansionOf("(remove-duplicates lst :end 3 :test-not #'eq :key #'car)"))
+			.contains("(LET ((|__pos_a1| (FUNCALL #'CAR (CAR |__rd_cur|))))")
+			.contains("(NOT (FUNCALL #'EQ |__pos_item| (FUNCALL #'CAR ");
+	}
+
+	@Test
+	void aCountedButlastEmitsTheLengthPassAndTheUncountedOneDoesNot() {
+		// butlast's optional count cannot bound the walk from the far end without a
+		// second cursor running n cells ahead, and n is allowed to be enormous (ANSI
+		// passes most-positive-fixnum + 1), so the counted spelling counts the conses
+		// first and subtracts. The UNCOUNTED spelling keeps its own one-pass loop --
+		// the piecewise rule of .kb/sequence-bounding-keywords.md, here too: a call that
+		// spells no count pays for none.
+		String plain = butlastExpansionOf("(butlast lst)");
+		assertThat(plain).doesNotContain("|__butlast_len|").doesNotContain("|__butlast_keep|");
+		String counted = butlastExpansionOf("(butlast lst 2)");
+		assertThat(counted).contains("|__butlast_len|").contains("|__butlast_keep|").contains("|__butlast_n|");
+	}
+
+	private static String butlastExpansionOf(String call) {
+		return LispMacroExpander.expandButlast((LispCons) LispReader.readAllFromString(call).get(0)).print();
+	}
+
+	private static String removeExpansionOf(String call) {
+		return LispMacroExpander.expandRemove((LispCons) LispReader.readAllFromString(call).get(0)).print();
+	}
+
+	private static String dedupExpansionOf(String call) {
+		return LispMacroExpander.expandRemoveDuplicates((LispCons) LispReader.readAllFromString(call).get(0)).print();
+	}
+
+	private static @org.jspecify.annotations.Nullable String problemOf(String call) {
+		LispCons cons = (LispCons) LispReader.readAllFromString(call).get(0);
+		return LispMacroExpander.keywordTailProblem("REMOVE", cons.toList(), 3,
+				List.of(LispNames.TEST_KEYWORD, LispNames.TEST_NOT_KEYWORD, LispNames.KEY_KEYWORD));
+	}
+
+	@Test
+	void anExplicitFormatControlInitargForcesTheRenderer() {
+		// An explicit :format-control initarg can carry directives into the slot, so
+		// the identity fast path is not enough and the renderer stays.
+		LispMacroExpander.ConditionNarrowing narrowing = narrowingOf("""
+				(handler-case (error 'simple-error :format-control "x ~a" :format-arguments (list 1))
+				  (error (e) (princ e)))
+				""");
+		assertThat(narrowing.constructibleTags()).isNotNull();
+		assertThat(narrowing.declineRenderer()).isFalse();
+	}
+
+	@Test
+	void aComputedDatumMakesTheConditionSetUnknowable() {
+		// (error datum) with a computed datum can name any condition class.
+		LispMacroExpander.ConditionNarrowing narrowing = narrowingOf("""
+				(defun boom (which) (error which))
+				(handler-case (boom 'end-of-file) (error (e) (princ e)))
+				""");
+		assertThat(narrowing.constructibleTags()).isNull();
+		assertThat(narrowing.declineRenderer()).isFalse();
+	}
+
+	@Test
+	void aDirectiveFreeLiteralFormatControlStillDeclinesTheRenderer() {
+		LispMacroExpander.ConditionNarrowing narrowing = narrowingOf("""
+				(handler-case (error 'simple-error :format-control "no directives here")
+				  (error (e) (princ e)))
+				""");
+		assertThat(narrowing.declineRenderer()).isTrue();
+	}
+
+	/** Whether the compile path routes condition reports for this program. */
+	private static boolean routesReports(String source) {
+		ClosRegistry registry = new ClosRegistry();
+		LispMacroExpander.expandTopLevelDefinitions(LispReader.readAllFromString(source), new HashMap<>(), registry);
+		return registry.routesConditionReports();
+	}
+
+	/**
+	 * The same answer under {@code lazyConditionMessages} (the wasm-GC backends, whose
+	 * signal path renders no message): the gate narrows to "can program code HOLD a
+	 * condition".
+	 */
+	private static boolean routesReportsLazy(String source) {
+		ClosRegistry registry = new ClosRegistry();
+		LispMacroExpander.expandTopLevelDefinitions(LispReader.readAllFromString(source), new HashMap<>(), registry,
+				null, false, true);
+		return registry.routesConditionReports();
+	}
+
+	@Test
+	void aThrowOnlyConstructionDoesNotRouteReportsWhereMessagesAreLazy() {
+		// A typed signal builds an instance only to THROW it: on a backend that never
+		// renders the signal message (an uncaught condition is a bare trap), nothing
+		// about the site is observable through the report machinery -- while the
+		// message-rendering backends keep routing for the eager signal text.
+		String typedSignal = "(define-condition zc (error) ()) (defun f () (error 'zc)) (print (f))";
+		assertThat(routesReportsLazy(typedSignal)).isFalse();
+		assertThat(routesReports(typedSignal)).isTrue();
+		// The keyword constructor define-condition splices returns its instance, but
+		// with no reference to it the instance cannot reach program hands.
+		assertThat(routesReportsLazy("(define-condition zc (error) ()) (print 1)")).isFalse();
+		// signal unwinds or answers nil; the instance is never held.
+		assertThat(routesReportsLazy("(define-condition zc (error) ()) (print (signal 'zc))")).isFalse();
+	}
+
+	@Test
+	void anUnreferencedConditionConstructorBuildsNothingToRender() {
+		// define-condition splices a keyword constructor; with nothing referencing it no
+		// instance of the class can exist, on the message-rendering backends too
+		assertThat(routesReports("(define-condition zc (error) ()) (print 1)")).isFalse();
+		assertThat(routesReports("(define-condition zc (error) ()) (print (make-instance 'zc))")).isTrue();
+	}
+
+	@Test
+	void aSignalOfItsOwnTextControlNeedsNoRenderer() {
+		// a format-control class signalled over the text control of a variable's
+		// message reports exactly that message, so signalling it renders nothing: the
+		// message is the variable, and only a held instance routes reports
+		String signal = "(define-condition zt (simple-error) ((ch :initarg :ch)))"
+				+ " (defun f (m) (error 'zt :ch 1 :format-control (%text-control m)))";
+		assertThat(routesReports(signal + " (f \"x\")")).isFalse();
+		assertThat(routesReports(signal + " (print (handler-case (f \"x\") (error (e) (princ-to-string e))))"))
+			.isTrue();
+		ClosRegistry registry = new ClosRegistry();
+		LispMacroExpander.expandTopLevelDefinitions(LispReader.readAllFromString(signal + " (f \"x\")"),
+				new HashMap<>(), registry);
+		LispCons call = (LispCons) LispReader.readAllFromString("(error 'zt :ch 1 :format-control (%text-control m))")
+			.get(0);
+		// the message the signal carries is the variable itself
+		assertThat(LispMacroExpander.expandError(call, registry).print()).endsWith(" M))");
+		// arguments, or a control the program spelled, keep the renderer's answer
+		assertThat(routesReports("(define-condition zt (simple-error) ()) (defun f (m)"
+				+ " (error 'zt :format-control (%text-control m) :format-arguments (list 1))) (f \"x\")"))
+			.isTrue();
+	}
+
+	@Test
+	void anEntryReportRendersEveryBuildableConditionButRoutesNoPrinterUnlessOneIsHeld() {
+		// The entry report reads every condition that escapes, so the renderer is in as
+		// soon as one can be built; a printing operator can only be handed one program
+		// code holds.
+		ClosRegistry thrown = entryReportRegistry("(define-condition zc (error) ()) (defun f () (error 'zc)) (f)");
+		assertThat(thrown.routesConditionReports()).isTrue();
+		assertThat(thrown.printsConditionReports()).isFalse();
+		ClosRegistry held = entryReportRegistry("(define-condition zc (error) ()) (print (make-condition 'zc))");
+		assertThat(held.routesConditionReports()).isTrue();
+		assertThat(held.printsConditionReports()).isTrue();
+	}
+
+	@Test
+	void aDeclinedRendererKeepsNoFunctionControlArmInAnyMode() {
+		// Every control is a directive-free literal, so none is a function: the arm that
+		// funcalls one -- a runtime designator -- is gone in every signal-messages mode,
+		// not only under ENTRY_REPORT.
+		String source = "(define-condition zc (error) ()) (defun f () (error 'zc)) (f)";
+		assertThat(formatConditionDefun(source, SignalMessages.ENTRY_REPORT)).doesNotContain("FUNCALL");
+		assertThat(formatConditionDefun(source, SignalMessages.RENDERED)).doesNotContain("FUNCALL");
+	}
+
+	@Test
+	void aForcedRendererKeepsTheFunctionControlArm() {
+		// An explicit :format-control initarg forces the renderer, so the control CAN be
+		// a
+		// function at run time and the arm must stay, in every mode.
+		String source = "(defun f (x) (error 'simple-error :format-control x)) (f (read))";
+		assertThat(formatConditionDefun(source, SignalMessages.ENTRY_REPORT)).contains("FUNCALL");
+		assertThat(formatConditionDefun(source, SignalMessages.RENDERED)).contains("FUNCALL");
+	}
+
+	private static ClosRegistry entryReportRegistry(String source) {
+		ClosRegistry registry = new ClosRegistry();
+		LispMacroExpander.expandTopLevelDefinitions(LispReader.readAllFromString(source), new HashMap<>(), registry,
+				null, false, SignalMessages.ENTRY_REPORT, null);
+		return registry;
+	}
+
+	private static String formatConditionDefun(String source, SignalMessages signalMessages) {
+		return LispMacroExpander
+			.expandTopLevelDefinitions(LispReader.readAllFromString(source), new HashMap<>(), new ClosRegistry(), null,
+					false, signalMessages, null)
+			.stream()
+			.filter(form -> form instanceof LispCons cons && cons.cdr() instanceof LispCons rest
+					&& rest.car() instanceof LispSymbol name && LispNames.FORMAT_CONDITION_INTERNAL.equals(name.name()))
+			.findFirst()
+			.map(LispVal::toString)
+			.orElseThrow();
+	}
+
+	@Test
+	void aHeldConditionStillRoutesReportsWhereMessagesAreLazy() {
+		// A handler-case clause that names its condition hands it to program code.
+		assertThat(routesReportsLazy("""
+				(define-condition zc (error) ())
+				(print (handler-case (error 'zc) (error (e) (princ-to-string e))))
+				""")).isTrue();
+		// make-condition returns the instance.
+		assertThat(routesReportsLazy("(define-condition zc (error) ()) (print (make-condition 'zc))")).isTrue();
+		// make-instance of a condition class reaches the spliced constructor.
+		assertThat(routesReportsLazy("(define-condition zc (error) ()) (print (make-instance 'zc))")).isTrue();
+		// A typed warn PRINTS a message that renders through the report machinery.
+		assertThat(routesReportsLazy("(define-condition zw (warning) ()) (warn 'zw)")).isTrue();
+	}
+
+	@Test
+	void aHandlerCaseThatNeverNamesItsConditionDoesNotRouteReports() {
+		// The handler prologue synthesizes a simple-error for ANY caught trap, so an
+		// instance really is built -- but with no clause naming it, nothing in the
+		// program can hand one to a printing operator, and the report renderer plus the
+		// string machinery it anchors are three quarters of a bare handler-case
+		// artifact.
+		assertThat(routesReports("(print (handler-case (+ 1 2) (error () 0)))")).isFalse();
+		// Bound but never mentioned is the same thing.
+		assertThat(routesReports("(print (handler-case (+ 1 2) (error (e) 0)))")).isFalse();
+		// :no-error binds the protected form's VALUES, never a condition.
+		assertThat(routesReports("(print (handler-case (+ 1 2) (error () 0) (:no-error (v) v)))")).isFalse();
+		// Mentioned: it can reach a print, so the routing stays.
+		assertThat(routesReports("(print (handler-case (+ 1 2) (error (e) (princ e))))")).isTrue();
+		// A clause head is a TYPE SPECIFIER, not a call -- reading (error (e) ...) as a
+		// signal site with initargs is what made every handler-case route.
+		assertThat(routesReports("(print (handler-case (+ 1 2) (error (e) (list e))))")).isTrue();
+		// A real condition source in the same program still routes.
+		assertThat(routesReports("""
+				(define-condition my-error (error) ())
+				(print (handler-case (error 'my-error) (error () 0)))
+				""")).isTrue();
+	}
+
+	@Test
+	void aHandlerBindHandlerThatCanSeeItsConditionRoutesReports() {
+		// Every handler-bind handler is CALLED with the instance, so a lambda whose body
+		// mentions its parameter holds it -- on the message-rendering backends and where
+		// messages are lazy alike.
+		String named = "(print (handler-bind ((error (lambda (c) (format t \"~a\" c)))) (car 5)))";
+		assertThat(routesReports(named)).isTrue();
+		assertThat(routesReportsLazy(named)).isTrue();
+		assertThat(routesReports("(print (handler-bind ((error #'(lambda (c) (princ c)))) (car 5)))")).isTrue();
+		// A named function (or any computed handler) can do anything with it.
+		assertThat(routesReports("(defun h (c) (princ c)) (print (handler-bind ((error #'h)) (car 5)))")).isTrue();
+		assertThat(routesReports("(print (handler-bind ((error 'h)) (car 5)))")).isTrue();
+		assertThat(routesReports("(print (handler-bind ((error (lambda (&rest r) (princ r)))) (car 5)))")).isTrue();
+		// A handler that never mentions its parameter cannot hand it to a printer.
+		assertThat(routesReports("(print (handler-bind ((error (lambda (c) (print 1)))) (car 5)))")).isFalse();
+		assertThat(routesReportsLazy("(print (handler-bind ((error (lambda (c) (print 1)))) (car 5)))")).isFalse();
+	}
+
+	@Test
+	void ignoreErrorsRoutesReportsOnlyWhereASecondValueCanBeRead() {
+		// (ignore-errors f) hands the condition back as its SECONDARY value, which
+		// travels through the %mv-spill global that only a consumer ever reads.
+		assertThat(routesReports("(print (ignore-errors (+ 1 2)))")).isFalse();
+		assertThat(routesReports("(multiple-value-bind (v c) (ignore-errors (+ 1 2)) (princ c))")).isTrue();
+		assertThat(routesReports("(print (nth-value 1 (ignore-errors (+ 1 2))))")).isTrue();
+	}
+
+	@Test
+	void printsUnderAPackageIsThePackageGateOfThePrinter() {
+		// A top-level in-package resolves to (setq *package* :P): one that leaves
+		// cl-user, or any other mention of the variable, means the printer must consult
+		// the current package (CLHS 22.1.3.3.1); assigning cl-user alone does not.
+		assertThat(LispMacroExpander.printsUnderAPackage(LispReader.readAllFromString("(setq *package* :APP)")))
+			.isTrue();
+		assertThat(LispMacroExpander.printsUnderAPackage(LispReader.readAllFromString("(print *package*)"))).isTrue();
+		assertThat(LispMacroExpander.printsUnderAPackage(LispReader.readAllFromString("(setq *package* :CL-USER)")))
+			.isFalse();
+		assertThat(LispMacroExpander.printsUnderAPackage(LispReader.readAllFromString("(print 'x)"))).isFalse();
+		// The renderer's own defuns read the variables they honor; they are not the
+		// program naming one.
+		assertThat(LispMacroExpander
+			.mentionsPrintControlVariable(LispReader.readAllFromString("(defun %print-cased (x) *print-case*)")))
+			.isFalse();
+		assertThat(LispMacroExpander
+			.mentionsPrintControlVariable(LispReader.readAllFromString("(let ((*print-case* :downcase)) 1)"))).isTrue();
+		// The route flips for a package program only once the renderer is spliced.
+		assertThat(LispMacroExpander.usesPrintControls(LispReader.readAllFromString("(setq *package* :APP)")))
+			.isFalse();
+		assertThat(LispMacroExpander
+			.usesPrintControls(LispReader.readAllFromString("(defun %print-cased (x e) x) (setq *package* :APP)")))
+			.isTrue();
+		// A control that is a literal says whether it can reach prin1, which is what the
+		// package gate has anything to change: an ~a never spells a qualifier.
+		for (String princOnly : List.of("(format nil \"~a ~10a ~:a ~@a ~d ~'sa ~~s\" x)", "(format t \"plain\")",
+				"(error \"text ~a\" x)", "(warn \"text\")", "(signal \"text\")",
+				"(handler-case (f) (error () 1) (warning (c) (format nil \"~a\" c)))")) {
+			assertThat(LispMacroExpander.reachesPrin1FromTheSurface(LispReader.readAllFromString(princOnly)))
+				.as(princOnly)
+				.isFalse();
+		}
+		for (String reaches : List.of("(format nil \"~s\" x)", "(format nil \"~:@s\" x)", "(format nil \"~2,3w\" x)",
+				"(format nil \"~/f/\" x)", "(format nil \"~?\" c x)", "(format nil c x)", "(apply #'format nil c x)",
+				"(error \"text ~s\" x)", "(error 'some-condition)", "(error c)", "(signal 'some-condition)",
+				"(handler-case (f) (error (c) (prin1 c)))", "(print x)")) {
+			assertThat(LispMacroExpander.reachesPrin1FromTheSurface(LispReader.readAllFromString(reaches))).as(reaches)
+				.isTrue();
+		}
+	}
+
+	@Test
+	void aLetBindingTOrNilIsRefusedForEveryBackend() {
+		// Every let binds its names through this one normalization -- the interpreter's
+		// and both compilers' -- and each of them used to take the constant for a symbol
+		// and die on the cast. An analysis walking the form normalizes and goes on, so
+		// the refusal comes from the let, where its position is.
+		for (String bindings : List.of("((t 1))", "(nil)", "((x 1) (nil 2))", "(a (t))")) {
+			org.assertj.core.api.Assertions
+				.assertThatThrownBy(() -> LispMacroExpander.letBindingList(LispReader.readFromString(bindings)))
+				.as(bindings)
+				.hasMessageEndingWith(" names a constant, and cannot be bound");
+			assertThat(LispMacroExpander.normalizeBindingList(LispReader.readFromString(bindings))).as(bindings)
+				.isNotNull();
+		}
+		assertThat(LispMacroExpander.letBindingList(LispReader.readFromString("(a (b 1))")).print())
+			.isEqualTo("((A NIL) (B 1))");
+	}
+
+	@Test
+	void onlyAProgramThatCanReadUnderAnotherPackageCarriesTheReadersHome() {
+		// A token of a program that stays in cl-user, which no package of its own can
+		// qualify, is its spelling: the reader asks nothing. Nor does a program that does
+		// not read.
+		for (String stays : List.of("(print (read-from-string \"foo\"))",
+				"(print (with-standard-io-syntax (read-from-string \"foo\")))", "(in-package :cl-user) (read)",
+				"(defpackage :rh-p (:use :cl)) (in-package :rh-p) (print 'foo)")) {
+			am.ik.rontolisp.PackageResolver resolver = new am.ik.rontolisp.PackageResolver();
+			List<LispVal> program = resolver.resolveProgram(LispReader.readAllFromString(stays));
+			assertThat(LispMacroExpander.injectReadHome(program, resolver)).as(stays).isSameAs(program);
+		}
+		for (String reads : List.of(
+				"(defpackage :rh-p (:use :cl)) (in-package :rh-p) (print (read-from-string \"foo\"))",
+				"(defpackage :rh-p (:use :cl)) (print (read-from-string \"rh-p::foo\"))",
+				"(print (let ((*package* (find-package :rontolisp))) (read-from-string \"foo\")))",
+				"(in-package :rontolisp) (cl:load (cl:concatenate 'cl:string \"a\" \".lisp\"))")) {
+			am.ik.rontolisp.PackageResolver resolver = new am.ik.rontolisp.PackageResolver();
+			List<LispVal> program = resolver.resolveProgram(LispReader.readAllFromString(reads));
+			assertThat(LispMacroExpander.injectReadHome(program, resolver).get(0).print()).as(reads)
+				.startsWith("(DEFUN %READ-HOME ");
+		}
+	}
+
+	@Test
+	void injectBakedAccessLeavesAProgramNoRowServesUnchanged() {
+		// The package a computed name is looked up in answers through cl or its own
+		// members only, and exports nothing -- every name it does not answer is built
+		// IBA-PLAIN::NAME -- and every name asked is a constant no standard name spells:
+		// nothing is injected, so the program stays byte-identical.
+		am.ik.rontolisp.PackageResolver resolver = new am.ik.rontolisp.PackageResolver();
+		List<LispVal> program = resolver.resolveProgram(LispReader.readAllFromString("""
+				(defpackage :iba-plain (:use :cl))
+				(print (intern (symbol-name :x) :iba-plain))
+				(print (multiple-value-list (find-symbol "IBA-Y")))
+				"""));
+		assertThat(LispMacroExpander.injectBakedAccess(program, BakedSymbolAccess.of(resolver))).isSameAs(program);
+	}
+
+	@Test
+	void injectBakedAccessCarriesTheStandardNamesForAComputedNameInAPackageThatUsesCl() {
+		// A computed name can be a standard one, which a package using cl inherits: the
+		// walk of the standard names joins the program, and no row does -- the package
+		// answers nothing else differently.
+		am.ik.rontolisp.PackageResolver resolver = new am.ik.rontolisp.PackageResolver();
+		List<LispVal> program = resolver.resolveProgram(LispReader.readAllFromString("""
+				(defpackage :iba-c (:use :cl))
+				(print (find-symbol (string-upcase "car") :iba-c))
+				"""));
+		List<LispVal> injected = LispMacroExpander.injectBakedAccess(program, BakedSymbolAccess.of(resolver));
+		assertThat(injected).hasSize(program.size() + 3);
+		assertThat(injected.get(2).print()).startsWith("(DEFUN %STANDARD-NAME-P ");
+	}
+
+	@Test
+	void aComputedDesignatorWithAComputedNameCarriesTheClUsers() {
+		// (string 'car) spells a standard name; a computed designator can name any
+		// program package or cl-user, so the ones using cl travel as keywords, every
+		// designator of each.
+		am.ik.rontolisp.PackageResolver resolver = new am.ik.rontolisp.PackageResolver();
+		List<LispVal> program = resolver.resolveProgram(LispReader.readAllFromString("""
+				(defpackage :iba-d (:use :cl) (:nicknames :iba-dn))
+				(defpackage :iba-e (:use))
+				(defun iba-g (p) (find-symbol (string 'car) p))
+				"""));
+		List<LispVal> injected = LispMacroExpander.injectBakedAccess(program, BakedSymbolAccess.of(resolver));
+		assertThat(injected).anySatisfy(form -> assertThat(form.print())
+			.isEqualTo("(DEFVAR %CL-USERS% '(:CL-USER :COMMON-LISP-USER :IBA-D :IBA-DN))"));
+		// ... and every designator of a program package, whose unanswered names the
+		// build spells PKG::NAME.
+		assertThat(injected).anySatisfy(form -> assertThat(form.print())
+			.isEqualTo("(DEFUN %PROGRAM-PACKAGE-P (%PPP-K) (MEMBER %PPP-K '(:IBA-D :IBA-DN :IBA-E)))"));
+	}
+
+	@Test
+	void aOneArgumentLookupWhoseStatusIsReadCarriesTheStandardNames() {
+		am.ik.rontolisp.PackageResolver resolver = new am.ik.rontolisp.PackageResolver();
+		List<LispVal> program = resolver.resolveProgram(
+				LispReader.readAllFromString("(print (multiple-value-list (intern (string-upcase \"list\"))))"));
+		List<LispVal> injected = LispMacroExpander.injectBakedAccess(program, BakedSymbolAccess.of(resolver));
+		assertThat(injected.get(2).print()).startsWith("(DEFUN %STANDARD-NAME-P ");
+	}
+
+	@Test
+	void theStandardNameTableAnswersExactlyTheNamesClExports() {
+		// The front-coded table, decoded on the interpreter and asked for every
+		// standard name and the near misses around each: one character more, one
+		// less, the last one moved up or down, lower case.
+		List<String> standard = am.ik.rontolisp.PackageRegistry.standardNames();
+		java.util.Set<String> probes = new java.util.TreeSet<>(standard);
+		probes.addAll(List.of("", "a", "`", "CAR`", "~", "ZZZZ", "&", "*", "CAAAAAR"));
+		for (String name : standard) {
+			String stem = name.substring(0, name.length() - 1);
+			char last = name.charAt(name.length() - 1);
+			probes.addAll(List.of(name + "X", name + "-", stem, stem + (char) (last + 1), stem + (char) (last - 1),
+					name.toLowerCase(java.util.Locale.ROOT), name + "a"));
+		}
+		StringBuilder call = new StringBuilder("(let ((hits nil)) (dolist (n '(");
+		probes.forEach(probe -> call.append(new LispString(probe).print()).append(' '));
+		call.append(")) (if (%standard-name-p n) (push n hits))) (nreverse hits))");
+		am.ik.rontolisp.eval.LispEvaluator evaluator = new am.ik.rontolisp.eval.LispEvaluator(
+				new java.io.PrintStream(new java.io.ByteArrayOutputStream()));
+		LispReader.readAllFromString(LispMacroExpander.standardNameDefinition()).forEach(evaluator::eval);
+		List<String> hits = new ArrayList<>();
+		for (LispVal hit = evaluator
+			.eval(LispReader.readFromString(call.toString())); hit instanceof LispCons cell; hit = cell.cdr()) {
+			hits.add(((LispString) cell.car()).value());
+		}
+		assertThat(hits).isEqualTo(probes.stream().filter(standard::contains).toList());
+	}
+
+	@Test
+	void injectBakedAccessServesAComputedLookupInAPackageThatUsesAnother() {
+		am.ik.rontolisp.PackageResolver resolver = new am.ik.rontolisp.PackageResolver();
+		List<LispVal> program = resolver.resolveProgram(LispReader.readAllFromString("""
+				(defpackage :iba-u (:use) (:export #:b1))
+				(defpackage :iba-all (:use :iba-u))
+				(print (find-symbol (string-upcase "b1") :iba-all))
+				"""));
+		List<LispVal> injected = LispMacroExpander.injectBakedAccess(program, BakedSymbolAccess.of(resolver));
+		assertThat(injected.get(0).print())
+			.startsWith("(DEFVAR %BAKED-ACCESS% '((\"IBA-U:\") NIL (:IBA-ALL \"\" (:IBA-U) \"\")");
+	}
+
+	@Test
+	void thePackageWalkNormalizerAloneCarriesNoRows() {
+		// The normalizer looks an enumerated symbol up in its own home, which no row
+		// answers differently: its computed site does not inject the rows.
+		am.ik.rontolisp.PackageResolver resolver = new am.ik.rontolisp.PackageResolver();
+		List<LispVal> program = resolver.resolveProgram(LispReader.readAllFromString("""
+				(defpackage :iba-u2 (:use) (:export #:b1))
+				(defpackage :iba-all2 (:use :iba-u2))
+				(defun %package-spelling-normalize (s h) (find-symbol (symbol-name s) h))
+				"""));
+		assertThat(LispMacroExpander.injectBakedAccess(program, BakedSymbolAccess.of(resolver))).isSameAs(program);
+	}
+
+}

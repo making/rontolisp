@@ -1,0 +1,23 @@
+webmvc-fn-lite
+Copyright 2026 Toshiaki Maki
+
+Licensed under the Apache License, Version 2.0 (LICENSE).
+
+This is not Spring Framework and not a product of its authors. It is a part of the
+functional endpoints of Spring MVC (WebMvc.fn) under the names and the signatures of Spring
+Framework's classes, so that an application written against it compiles against Spring
+Framework unchanged. Its classes were written for it, from the API and from what Spring
+Framework answers; each says in its header which class of Spring Framework it stands for.
+Spring Framework's notice:
+
+Spring Framework 7.1.0
+Copyright (c) 2002-2026 Broadcom Inc.
+
+This product is licensed to you under the Apache License, Version 2.0
+(the "License"). You may not use this product except in compliance with
+the License.
+
+This product may include a number of subcomponents with separate
+copyright notices and license terms. Your use of the source code for
+these subcomponents is subject to the terms and conditions of the
+subcomponent's license, as noted in the license.txt file.

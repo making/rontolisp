@@ -1,0 +1,223 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+		 xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+		 xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+	<modelVersion>4.0.0</modelVersion>
+
+	<!--
+		A servlet container on the JDK's own HTTP server (com.sun.net.httpserver),
+		written against the Jakarta Servlet 6.1 API.
+		It lives in this repository for now and is to become a repository of its own:
+		it depends on nothing of rontolisp, rontolisp depends on nothing of it, and it
+		is outside the root reactor. Built and tested separately:
+
+		  ../mvnw -f servlet-httpserver/pom.xml spring-javaformat:apply test
+	-->
+
+	<groupId>am.ik.servlet</groupId>
+	<artifactId>servlet-httpserver</artifactId>
+	<version>0.1.0-SNAPSHOT</version>
+	<packaging>jar</packaging>
+	<name>servlet-httpserver</name>
+	<description>A Servlet container on the JDK HTTP server (com.sun.net.httpserver)</description>
+	<url>https://github.com/making/rontolisp</url>
+
+	<licenses>
+		<license>
+			<name>Apache License, Version 2.0</name>
+			<url>http://www.apache.org/licenses/LICENSE-2.0.txt</url>
+			<distribution>repo</distribution>
+		</license>
+	</licenses>
+	<scm>
+		<url>https://github.com/making/rontolisp</url>
+		<connection>scm:git:git@github.com:making/rontolisp.git</connection>
+		<developerConnection>scm:git:git@github.com:making/rontolisp.git</developerConnection>
+	</scm>
+	<developers>
+		<developer>
+			<id>making</id>
+			<name>Toshiaki Maki</name>
+			<email>makingx@gmail.com</email>
+			<url>https://ik.am</url>
+		</developer>
+	</developers>
+
+	<properties>
+		<!-- Servlet 6.1's floor is 17; 21 for the virtual thread a request by default. -->
+		<maven.compiler.release>21</maven.compiler.release>
+		<project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+		<jakarta.servlet-api.version>6.1.0</jakarta.servlet-api.version>
+		<jspecify.version>1.0.0</jspecify.version>
+		<junit.version>6.0.3</junit.version>
+		<assertj.version>3.27.7</assertj.version>
+		<!-- The containers the same application is asked beside: test scope only. -->
+		<tomcat.version>11.0.27</tomcat.version>
+		<jetty.version>12.1.12</jetty.version>
+	</properties>
+
+	<dependencies>
+		<dependency>
+			<groupId>jakarta.servlet</groupId>
+			<artifactId>jakarta.servlet-api</artifactId>
+			<version>${jakarta.servlet-api.version}</version>
+		</dependency>
+		<!-- The nullness annotations: provided, as nothing reads them where the classes
+		     run (a JVM ignores an annotation whose class is absent). -->
+		<dependency>
+			<groupId>org.jspecify</groupId>
+			<artifactId>jspecify</artifactId>
+			<version>${jspecify.version}</version>
+			<scope>provided</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.junit.jupiter</groupId>
+			<artifactId>junit-jupiter</artifactId>
+			<version>${junit.version}</version>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.assertj</groupId>
+			<artifactId>assertj-core</artifactId>
+			<version>${assertj.version}</version>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.apache.tomcat.embed</groupId>
+			<artifactId>tomcat-embed-core</artifactId>
+			<version>${tomcat.version}</version>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.eclipse.jetty.ee11</groupId>
+			<artifactId>jetty-ee11-servlet</artifactId>
+			<version>${jetty.version}</version>
+			<scope>test</scope>
+		</dependency>
+		<!-- Jetty's discovery of annotated classes, which a web application of its own has. -->
+		<dependency>
+			<groupId>org.eclipse.jetty.ee11</groupId>
+			<artifactId>jetty-ee11-annotations</artifactId>
+			<version>${jetty.version}</version>
+			<scope>test</scope>
+		</dependency>
+	</dependencies>
+
+	<build>
+		<plugins>
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-compiler-plugin</artifactId>
+				<version>3.13.0</version>
+				<!-- a warning is an error, javac's and NullAway's (below) -->
+				<configuration>
+					<compilerArgs>
+						<arg>-Werror</arg>
+					</compilerArgs>
+				</configuration>
+			</plugin>
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-surefire-plugin</artifactId>
+				<version>3.5.2</version>
+			</plugin>
+			<!-- NullAway on Error Prone in the compile of the main sources: what may be null is
+			     @Nullable, every package @NullMarked (its package-info.java), a finding fails
+			     the build. -->
+			<plugin>
+				<groupId>am.ik.maven</groupId>
+				<artifactId>nullability-maven-plugin</artifactId>
+				<version>0.5.3</version>
+				<extensions>true</extensions>
+				<executions>
+					<execution>
+						<goals>
+							<goal>configure</goal>
+						</goals>
+					</execution>
+				</executions>
+			</plugin>
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-source-plugin</artifactId>
+				<version>3.3.1</version>
+				<executions>
+					<execution>
+						<id>attach-sources</id>
+						<goals>
+							<goal>jar-no-fork</goal>
+						</goals>
+					</execution>
+				</executions>
+			</plugin>
+			<!-- What Maven Central requires beside the jar: the sources (above) and the javadoc. -->
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-javadoc-plugin</artifactId>
+				<version>3.12.0</version>
+				<executions>
+					<execution>
+						<id>attach-javadocs</id>
+						<goals>
+							<goal>jar</goal>
+						</goals>
+					</execution>
+				</executions>
+			</plugin>
+			<!-- Same formatter, same version as the root project. -->
+			<plugin>
+				<groupId>io.spring.javaformat</groupId>
+				<artifactId>spring-javaformat-maven-plugin</artifactId>
+				<version>0.0.47</version>
+				<executions>
+					<execution>
+						<phase>validate</phase>
+						<goals>
+							<goal>validate</goal>
+						</goals>
+					</execution>
+				</executions>
+			</plugin>
+			<!-- `deploy` publishes to Maven Central: a SNAPSHOT to its snapshot repository, any
+			     other version as a release. The server id is the one the workflow's settings
+			     carry the Portal credentials under (.kb/session-workflow.md, "The deploy job"). -->
+			<plugin>
+				<groupId>org.sonatype.central</groupId>
+				<artifactId>central-publishing-maven-plugin</artifactId>
+				<version>0.11.0</version>
+				<extensions>true</extensions>
+				<configuration>
+					<publishingServerId>sonatype-central</publishingServerId>
+					<autoPublish>true</autoPublish>
+					<waitUntil>published</waitUntil>
+				</configuration>
+			</plugin>
+		</plugins>
+	</build>
+
+	<profiles>
+		<!-- The signatures Maven Central requires, made by the workflow's deploy job with the
+		     key it imports: -Psign deploy -Dgpg.passphrase=... -->
+		<profile>
+			<id>sign</id>
+			<build>
+				<plugins>
+					<plugin>
+						<groupId>org.apache.maven.plugins</groupId>
+						<artifactId>maven-gpg-plugin</artifactId>
+						<version>3.0.1</version>
+						<executions>
+							<execution>
+								<id>sign-artifacts</id>
+								<phase>verify</phase>
+								<goals>
+									<goal>sign</goal>
+								</goals>
+							</execution>
+						</executions>
+					</plugin>
+				</plugins>
+			</build>
+		</profile>
+	</profiles>
+</project>

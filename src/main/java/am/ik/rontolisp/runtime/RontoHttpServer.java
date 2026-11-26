@@ -1,0 +1,757 @@
+package am.ik.rontolisp.runtime;
+
+import java.io.IOException;
+import java.io.OutputStream;
+import java.net.InetSocketAddress;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
+
+import com.sun.net.httpserver.HttpExchange;
+import com.sun.net.httpserver.HttpServer;
+import com.sun.net.httpserver.HttpsExchange;
+
+/**
+ * Runs a blocking embedded HTTP server for the {@code rontolisp:http-handler} directive
+ * on the interpreter and JVM backends, using the JDK {@link HttpServer}. Each request is
+ * adapted to a backend-neutral {@link Request}, passed to a {@link Handler} (the compiled
+ * or interpreted Lisp handler function, wrapped by the caller), and the returned
+ * {@link Response} is written back. The same request/response shape mirrors
+ * {@code rontolisp:fetch} so one HTTP value model spans incoming and outgoing requests.
+ *
+ * <p>
+ * When the program is compiled to a WASI component ({@code --component}) this class is
+ * not used: the module instead exports {@code wasi:http/incoming-handler} so a host (e.g.
+ * {@code wasmtime serve}) drives the handler.
+ *
+ * <p>
+ * It lives in {@code runtime} rather than in {@code eval} because a compiled
+ * {@code http-handler} class CALLS it: the class files of this package travel with the
+ * compiled output ({@code .kb/jvm-export.md}), which is what makes such a program run on
+ * a bare {@code java -cp .} instead of needing the rontolisp jar on the classpath. That
+ * is also why it imports nothing of the project's: a rontolisp name would drag the
+ * interpreter along behind it. The one name it would want,
+ * {@code LispNames.HTTP_HANDLER}, is spelled out in {@link #WHERE}.
+ */
+public final class RontoHttpServer {
+
+	/**
+	 * The operator this server serves, for an error message --
+	 * {@code LispNames.HTTP_HANDLER} spelled out, because this package imports nothing.
+	 */
+	private static final String WHERE = "HTTP-HANDLER";
+
+	private RontoHttpServer() {
+	}
+
+	/**
+	 * A server-side failure this class raises -- today a bind that could not be made. It
+	 * is NOT {@code eval}'s {@code LispEvalException}: this package carries no rontolisp
+	 * import, so the interpreter catches this at its call sites and re-raises the Lisp
+	 * error, while a compiled program (which has no condition system around the bind)
+	 * lets it propagate as it did before.
+	 */
+	public static final class ServerException extends RuntimeException {
+
+		private final String reason;
+
+		/**
+		 * Creates the failure.
+		 * @param reason what went wrong
+		 */
+		public ServerException(String reason) {
+			super(reason);
+			this.reason = reason;
+		}
+
+		/**
+		 * What went wrong -- the same text {@code getMessage()} answers, but never
+		 * absent, so a caller can hand it straight to its own error constructor.
+		 * @return the reason
+		 */
+		public String reason() {
+			return this.reason;
+		}
+
+	}
+
+	/**
+	 * A single HTTP header (name and value).
+	 *
+	 * @param name the header name
+	 * @param value the header value
+	 */
+	public record Header(String name, String value) {
+	}
+
+	/**
+	 * The transport facts of one incoming HTTP request -- everything only this server can
+	 * know. It is NOT the value the handler sees: the shared {@code http-server.lisp}
+	 * library turns it into the Clack environment (splitting the target, percent-decoding
+	 * the path, building the header table, ...), so that shape is written once for every
+	 * backend instead of once here.
+	 *
+	 * @param method the HTTP method (e.g. {@code GET})
+	 * @param target the request target exactly as sent, query included and still
+	 * percent-encoded (e.g. {@code /get?a=1})
+	 * @param headers the request headers in wire order, duplicates kept
+	 * @param body the request body octets, exactly as received (empty if none) -- bytes,
+	 * not a string, so a binary body (a multipart file part) survives the trip into the
+	 * buffered {@code :raw-body}
+	 * @param protocol the HTTP version token (e.g. {@code HTTP/1.1})
+	 * @param scheme {@code http} or {@code https}
+	 * @param localName the address this server is bound to, or {@code ""} when unknown
+	 * @param localPort the port this server is bound to
+	 * @param remoteAddr the peer address, or {@code ""} when unknown
+	 * @param remotePort the peer port, or {@code 0} when unknown
+	 * @param scriptName the application's mount point as a RAW prefix of {@code target}
+	 * (still percent-encoded, the Servlet transport's context path + servlet path), or
+	 * {@code ""} on a root-mounted transport. Only the transport knows where it is
+	 * mounted, so the value enters here, with the other transport facts: the environment
+	 * build splits it into {@code :script-name} / {@code :path-info}
+	 */
+	public record Request(String method, String target, List<Header> headers, byte[] body, String protocol,
+			String scheme, String localName, int localPort, String remoteAddr, int remotePort, String scriptName) {
+
+		/**
+		 * Creates a request carrying only what a test needs, defaulting the transport
+		 * facts (HTTP/1.1 over http, no known peer).
+		 * @param method the HTTP method
+		 * @param target the request target as sent
+		 * @param headers the request headers
+		 * @param body the request body text (encoded as UTF-8)
+		 * @return the request
+		 */
+		public static Request of(String method, String target, List<Header> headers, String body) {
+			return new Request(method, target, headers, body.getBytes(StandardCharsets.UTF_8), "HTTP/1.1", "http", "",
+					0, "", 0, "");
+		}
+
+		/**
+		 * Returns the body octets decoded as UTF-8 -- what the default asynchronous
+		 * {@code :raw-body} stream carries.
+		 * @return the body as text
+		 */
+		public String bodyString() {
+			return new String(this.body, StandardCharsets.UTF_8);
+		}
+
+		/**
+		 * Whether the request has a body, possibly an empty one: octets arrived, or the
+		 * head frames one with a {@code Content-Length} or {@code Transfer-Encoding}
+		 * field (RFC 9112 section 6). The buffered {@code :raw-body} is a stream exactly
+		 * then, so a middleware that reads it because {@code :content-length} is set
+		 * (tiny-routes' {@code wrap-request-body}) always finds one;
+		 * {@code http-server.lisp}'s {@code %http-declared-body} is the same rule for the
+		 * transports written in Lisp.
+		 * @return whether the request has a body
+		 */
+		public boolean declaresBody() {
+			if (this.body.length > 0) {
+				return true;
+			}
+			for (Header header : this.headers) {
+				if (header.name().equalsIgnoreCase("content-length")
+						|| header.name().equalsIgnoreCase("transfer-encoding")) {
+					return true;
+				}
+			}
+			return false;
+		}
+
+	}
+
+	/**
+	 * The HTTP response the Lisp handler returns.
+	 *
+	 * @param status the HTTP status code
+	 * @param headers the response headers
+	 * @param body the response body octets, exactly as they go on the wire (empty if
+	 * none) -- bytes, not a string, so an {@code (unsigned-byte 8)} body survives the
+	 * trip out instead of being flattened to characters and re-encoded. The same shape
+	 * {@link Request} carries for the same reason.
+	 */
+	public record Response(int status, List<Header> headers, byte[] body) {
+
+		/**
+		 * Creates a response whose body is TEXT, encoded as UTF-8 -- the ordinary
+		 * string-body case.
+		 * @param status the HTTP status code
+		 * @param headers the response headers
+		 * @param body the response body text
+		 * @return the response
+		 */
+		public static Response of(int status, List<Header> headers, String body) {
+			return new Response(status, headers, body.getBytes(StandardCharsets.UTF_8));
+		}
+
+	}
+
+	/** Adapts an incoming {@link Request} to a {@link Response}. */
+	@FunctionalInterface
+	public interface Handler {
+
+		/**
+		 * Handles one incoming HTTP request.
+		 * @param request the incoming request
+		 * @return the response to write back
+		 */
+		Response handle(Request request);
+
+	}
+
+	/**
+	 * An exchange its application took to answer itself, from any thread and at any time
+	 * -- inside the handler or after it returned, as a JDK {@code HttpExchange} is
+	 * answered: what the Java subset's {@code com.sun.net.httpserver} serves through
+	 * ({@code .kb/java-frontend.md}). The head and the body are kept until the response
+	 * ends, then written whole, with their length, by the thread that ends it, which
+	 * closes the exchange: no thread waits for an exchange in hand. What the handler
+	 * returns is not written then.
+	 */
+	public static final class Reply {
+
+		private final HttpExchange exchange;
+
+		private boolean taken;
+
+		private int status;
+
+		private List<Header> headers = List.of();
+
+		private final java.io.ByteArrayOutputStream kept = new java.io.ByteArrayOutputStream();
+
+		private boolean ended;
+
+		/** What runs once the response ended: the request's own resources let go. */
+		private final List<Runnable> ending = new ArrayList<>();
+
+		Reply(HttpExchange exchange) {
+			this.exchange = exchange;
+		}
+
+		/**
+		 * Runs an action once the response ended -- at once where it has: what the
+		 * dispatch of a taken exchange holds for the application lives until then.
+		 * @param action the action
+		 */
+		public void whenEnded(Runnable action) {
+			synchronized (this) {
+				if (!this.ended) {
+					this.ending.add(action);
+					return;
+				}
+			}
+			action.run();
+		}
+
+		synchronized boolean taken() {
+			return this.taken;
+		}
+
+		synchronized void take() {
+			this.taken = true;
+		}
+
+		synchronized void head(int status, List<Header> headers) {
+			this.status = status;
+			this.headers = headers;
+		}
+
+		synchronized void write(byte[] octets) {
+			if (!this.ended) {
+				this.kept.writeBytes(octets);
+			}
+		}
+
+		/**
+		 * Ends the response: written whole, or, where the application failed, the 500 of
+		 * a failed handler. Once only; the exchange is closed after.
+		 */
+		synchronized void finish(boolean failed) {
+			if (this.ended) {
+				return;
+			}
+			this.ended = true;
+			Response response = failed
+					? Response.of(500, List.of(new Header("content-type", "text/plain")), "Internal Server Error")
+					: new Response(this.status, this.headers, this.kept.toByteArray());
+			try (this.exchange) {
+				writeResponse(this.exchange, response);
+			}
+			catch (IOException | RuntimeException ex) {
+				// the client is gone, or the server stopped: the exchange is closed all
+				// the same
+			}
+			for (Runnable action : this.ending) {
+				action.run();
+			}
+			this.ending.clear();
+		}
+
+	}
+
+	/**
+	 * The reply of the exchange the calling thread dispatches, where its application took
+	 * it.
+	 * @return the reply, or null
+	 */
+	// this package cannot import the annotation that would say so (it would travel with
+	// the class)
+	@SuppressWarnings("NullAway")
+	public static Reply taken() {
+		Reply reply = DISPATCHING.get();
+		return reply != null && reply.taken() ? reply : null;
+	}
+
+	/**
+	 * Takes the exchange the calling thread is dispatching: its application answers it
+	 * through the reply answered, and what its handler returns is not written.
+	 * @return the reply
+	 */
+	public static Reply take() {
+		Reply reply = DISPATCHING.get();
+		if (reply == null) {
+			throw new IllegalStateException(WHERE + ": no exchange is being dispatched on this thread");
+		}
+		reply.take();
+		return reply;
+	}
+
+	/**
+	 * The status and the fields of a reply's response, whose body follows.
+	 * @param reply a reply {@link #take} answered
+	 * @param status the HTTP status code
+	 * @param headers the fields
+	 */
+	public static void head(Object reply, int status, List<Header> headers) {
+		((Reply) reply).head(status, headers);
+	}
+
+	/**
+	 * Octets of a reply's body.
+	 * @param reply a reply {@link #take} answered
+	 * @param octets the octets
+	 */
+	public static void write(Object reply, byte[] octets) {
+		((Reply) reply).write(octets);
+	}
+
+	/**
+	 * Ends a reply's response: written whole, or the 500 of a failed handler, and the
+	 * exchange closed, on the calling thread.
+	 * @param reply a reply {@link #take} answered
+	 * @param failed whether the application failed before its response ended
+	 */
+	public static void finish(Object reply, boolean failed) {
+		((Reply) reply).finish(failed);
+	}
+
+	// Servers started in this process, tracked so tests can shut them all down.
+	private static final List<HttpServer> SERVERS = new CopyOnWriteArrayList<>();
+
+	// A stoppable server: the HttpServer plus the latch a joiner blocks on until the
+	// server is stopped. The Lisp-visible handle is an opaque integer index into
+	// HANDLES (the socket/mutex handle convention -- nothing portable may print or
+	// compare one), so the interpreter and the JVM backend share one representation
+	// (a boxed integer).
+	private record StoppableServer(HttpServer server, CountDownLatch stopped, AtomicBoolean stopping) {
+	}
+
+	private static final Map<Long, StoppableServer> HANDLES = new ConcurrentHashMap<>();
+
+	/** Set on a thread while it runs a handler of a stoppable server. */
+	private static final ThreadLocal<Boolean> IN_HANDLER = new ThreadLocal<>();
+
+	/** The reply of the exchange a thread is dispatching, while its handler runs. */
+	private static final ThreadLocal<Reply> DISPATCHING = new ThreadLocal<>();
+
+	private static final AtomicLong NEXT_HANDLE = new AtomicLong(1);
+
+	/**
+	 * System property naming the graceful-shutdown grace period in SECONDS -- how long a
+	 * terminating process lets requests already being served finish before their
+	 * connections are cut. {@code 0} cuts them at once (the pre-graceful behaviour).
+	 */
+	private static final String GRACE_PROPERTY = "rontolisp.http.shutdown-grace";
+
+	/** The environment variable behind {@link #GRACE_PROPERTY}, for a container. */
+	private static final String GRACE_ENV = "RONTOLISP_HTTP_SHUTDOWN_GRACE";
+
+	/**
+	 * The grace period when neither {@link #GRACE_PROPERTY} nor {@link #GRACE_ENV} says
+	 * otherwise: 30 seconds, under Kubernetes' default 30 s
+	 * {@code terminationGracePeriodSeconds}, so the drain finishes before the SIGKILL
+	 * that follows the SIGTERM.
+	 */
+	private static final int DEFAULT_GRACE_SECONDS = 30;
+
+	// Installed by the first server started in this process (registerServer).
+	private static final AtomicBoolean SHUTDOWN_HOOK_INSTALLED = new AtomicBoolean();
+
+	/**
+	 * Starts an embedded HTTP server bound to the given address and port and returns an
+	 * opaque handle for {@link #joinServer} / {@link #stopServer} -- the stoppable seam
+	 * behind the internal {@code rontolisp::%http-server-start} function (the
+	 * {@code clack-handler-rontolisp} backend's acceptor). Unlike the
+	 * {@code http-handler} directive's {@link #serve}, the server is per-handle stoppable
+	 * and binds the given address instead of the wildcard.
+	 * @param port the TCP port to bind (0 = ephemeral)
+	 * @param address the bind address (a hostname or IP literal); anything that is not a
+	 * non-empty string -- {@code ""} from the interpreter, {@code null} from compiled
+	 * bytecode, where nil IS null -- binds the wildcard address. A JVM-runtime
+	 * quote-wrapped string ({@code "\"host\""}) is accepted and unwrapped, so the
+	 * compiled backend can pass its string value rep as-is.
+	 * @param handler the request handler
+	 * @return the opaque server handle
+	 */
+	public static long startServer(int port, Object address, Handler handler) {
+		String bindAddress = null;
+		if (address instanceof String str && !str.isEmpty()) {
+			bindAddress = str.length() >= 2 && str.startsWith("\"") && str.endsWith("\"")
+					? str.substring(1, str.length() - 1) : str;
+		}
+		final HttpServer server;
+		try {
+			server = HttpServer.create(
+					bindAddress == null ? new InetSocketAddress(port) : new InetSocketAddress(bindAddress, port), 0);
+		}
+		catch (IOException ex) {
+			throw new ServerException(WHERE + ": failed to bind "
+					+ (bindAddress == null ? "port " + port : bindAddress + ":" + port) + ": " + ex.getMessage());
+		}
+		server.createContext("/", exchange -> {
+			IN_HANDLER.set(Boolean.TRUE);
+			try {
+				dispatch(exchange, handler);
+			}
+			finally {
+				IN_HANDLER.remove();
+			}
+		});
+		server.setExecutor(Executors.newVirtualThreadPerTaskExecutor());
+		server.start();
+		registerServer(server);
+		long handle = NEXT_HANDLE.getAndIncrement();
+		HANDLES.put(handle, new StoppableServer(server, new CountDownLatch(1), new AtomicBoolean()));
+		return handle;
+	}
+
+	/**
+	 * Returns the local port the given server is bound to (the ephemeral-port readback
+	 * for port 0), or {@code -1} for an unknown or already-stopped handle.
+	 * @param handle a handle returned by {@link #startServer}
+	 * @return the bound port, or {@code -1}
+	 */
+	public static long serverPort(long handle) {
+		StoppableServer stoppable = HANDLES.get(handle);
+		return stoppable == null ? -1 : stoppable.server().getAddress().getPort();
+	}
+
+	/**
+	 * Blocks the calling thread until the given server is stopped ({@link #stopServer})
+	 * or the thread is interrupted ({@code rontolisp:destroy-thread} on the acceptor
+	 * thread -- clack's {@code :use-thread t} stop path); both return normally, so a Lisp
+	 * {@code unwind-protect} around the join runs its cleanup in an orderly unwind. An
+	 * unknown or already-stopped handle returns immediately.
+	 * @param handle a handle returned by {@link #startServer}
+	 */
+	public static void joinServer(long handle) {
+		StoppableServer stoppable = HANDLES.get(handle);
+		if (stoppable == null) {
+			return;
+		}
+		try {
+			stoppable.stopped().await();
+		}
+		catch (InterruptedException ex) {
+			Thread.currentThread().interrupt();
+		}
+	}
+
+	/**
+	 * Stops the given server and releases its joiners. Idempotent: an unknown or
+	 * already-stopped handle is a no-op, so the acceptor's {@code unwind-protect}-cleanup
+	 * stop and an explicit {@code clack:stop} cannot double-fault. Called by a handler of
+	 * that server, it returns at once and the server stops once the requests in hand are
+	 * answered -- the caller's own among them.
+	 * @param handle a handle returned by {@link #startServer}
+	 */
+	public static void stopServer(long handle) {
+		stopServer(handle, false);
+	}
+
+	/**
+	 * Stops the given server as {@link #stopServer(long)} does, or, with {@code drain},
+	 * once the exchanges still open have ended. A drain is what a caller asks for that
+	 * knows every request the application took is answered -- the Java subset's
+	 * {@code HttpServer.stop} with none in its hand: an exchange still open is then one
+	 * whose response this class has yet to write (the application answers inside
+	 * {@link Handler#handle}, the write follows its return), which a stop that cut would
+	 * lose. The wait is bounded by the shutdown grace.
+	 * @param handle a handle returned by {@link #startServer}
+	 * @param drain whether the exchanges still open are let end first
+	 */
+	public static void stopServer(long handle, boolean drain) {
+		StoppableServer stoppable = HANDLES.get(handle);
+		if (stoppable == null || !stoppable.stopping().compareAndSet(false, true)) {
+			return;
+		}
+		Reply dispatching = DISPATCHING.get();
+		if (IN_HANDLER.get() == null || (!drain && dispatching != null && dispatching.taken())) {
+			// not in a handler; or in one whose application answers its exchange itself,
+			// asking for the exchanges in hand to be cut: what it answered went out as it
+			// ended
+			finishStop(handle, stoppable, drain ? Math.max(1, shutdownGraceSeconds()) : 0);
+			return;
+		}
+		// Called by a handler: its own request is in hand, and the response is written
+		// once the handler has returned, so a stop on this thread would close the
+		// connection under it. The listener closes on a thread of its own, which waits
+		// for the requests in hand (bounded by the shutdown grace) before the
+		// connections go; the handle stays joinable until then.
+		final int grace = Math.max(1, shutdownGraceSeconds());
+		Thread.ofPlatform().daemon().name("rontolisp-http-stop").start(() -> finishStop(handle, stoppable, grace));
+	}
+
+	private static void finishStop(long handle, StoppableServer stoppable, int delay) {
+		stoppable.server().stop(delay);
+		SERVERS.remove(stoppable.server());
+		HANDLES.remove(handle);
+		stoppable.stopped().countDown();
+	}
+
+	/**
+	 * Start an embedded HTTP server bound to the given port and return it immediately
+	 * (non-blocking). All request paths route to {@code handler}. Passing port 0 binds an
+	 * ephemeral port (readable via {@code server.getAddress().getPort()}); this is the
+	 * seam the tests use.
+	 * @param port the TCP port to bind (0 = ephemeral)
+	 * @param handler the request handler
+	 * @return the started server
+	 */
+	public static HttpServer start(int port, Handler handler) {
+		final HttpServer server;
+		try {
+			server = HttpServer.create(new InetSocketAddress(port), 0);
+		}
+		catch (IOException ex) {
+			throw new ServerException(WHERE + ": failed to bind port " + port + ": " + ex.getMessage());
+		}
+		server.createContext("/", exchange -> dispatch(exchange, handler));
+		// One virtual thread per request; virtual threads are always daemon, so leftover
+		// servers never keep the JVM alive.
+		server.setExecutor(Executors.newVirtualThreadPerTaskExecutor());
+		server.start();
+		registerServer(server);
+		return server;
+	}
+
+	/**
+	 * Start an embedded HTTP server and block the calling thread forever (serving until
+	 * the process is stopped, e.g. with Ctrl-C). This is what the
+	 * {@code rontolisp:http-handler} directive calls on the interpreter and JVM backends.
+	 * <p>
+	 * The termination signal that ends it drains first: the hook {@link #start} installed
+	 * closes the listener and lets in-flight requests finish
+	 * ({@link #shutdownGracefully}).
+	 * @param port the TCP port to bind
+	 * @param handler the request handler
+	 */
+	public static void serve(int port, Handler handler) {
+		start(port, handler);
+		try {
+			// Serve forever; the JVM exits on SIGINT regardless of this latch -- and the
+			// shutdown hook drains the server on the way out, so this thread never has to
+			// wake up to shut anything down.
+			new CountDownLatch(1).await();
+		}
+		catch (InterruptedException ex) {
+			Thread.currentThread().interrupt();
+		}
+	}
+
+	/**
+	 * Stops every server started in this process GRACEFULLY: each listening socket is
+	 * closed at once, so nothing new is accepted, and the requests already being served
+	 * are given up to {@code graceSeconds} to finish before their connections are cut.
+	 * The shutdown hook the first server of the process installs runs exactly this when
+	 * the process is asked to terminate (SIGTERM from a container or an orchestrator,
+	 * SIGINT from Ctrl-C), which is what makes a {@code java -jar app.jar} deployment of
+	 * a {@code rontolisp:http-handler} program safe to roll: without it the JVM halted
+	 * the instant the signal arrived and every in-flight response died as a connection
+	 * reset on the client.
+	 * <p>
+	 * It is NOT what an explicit {@code stopServer} does. A handler may stop its own
+	 * server (an application with a shutdown endpoint), and draining there would have the
+	 * stop wait on the very exchange that called it; a program that asks for a stop has
+	 * said what it wants, while a signal says only that the process is going away.
+	 * @param graceSeconds how long to let in-flight requests finish, {@code 0} to cut
+	 * them at once
+	 */
+	public static void shutdownGracefully(int graceSeconds) {
+		final List<HttpServer> live = List.copyOf(SERVERS);
+		if (live.isEmpty()) {
+			return;
+		}
+		SERVERS.removeAll(live);
+		// One thread per server rather than a loop: stop(delay) blocks until that
+		// server's in-flight exchanges have finished, so draining N of them in sequence
+		// would take N times the grace period and overrun the deadline the grace period
+		// was sized against. Plain daemon threads -- a shutdown hook cannot assume any
+		// executor of its own is still running.
+		final List<Thread> draining = new ArrayList<>();
+		for (HttpServer server : live) {
+			draining
+				.add(Thread.ofPlatform().daemon().name("rontolisp-http-drain").start(() -> server.stop(graceSeconds)));
+		}
+		for (Thread thread : draining) {
+			try {
+				thread.join();
+			}
+			catch (InterruptedException ex) {
+				Thread.currentThread().interrupt();
+				return;
+			}
+		}
+	}
+
+	/**
+	 * The graceful-shutdown grace period in seconds: the
+	 * {@code rontolisp.http.shutdown-grace} system property, else the
+	 * {@code RONTOLISP_HTTP_SHUTDOWN_GRACE} environment variable, else 30. A value that
+	 * is not a non-negative integer is ignored rather than fatal -- a misspelled
+	 * deployment variable must not stop a server from serving.
+	 * @return the grace period in seconds
+	 */
+	public static int shutdownGraceSeconds() {
+		String configured = System.getProperty(GRACE_PROPERTY);
+		if (configured == null || configured.isBlank()) {
+			configured = System.getenv(GRACE_ENV);
+		}
+		if (configured == null || configured.isBlank()) {
+			return DEFAULT_GRACE_SECONDS;
+		}
+		try {
+			final int seconds = Integer.parseInt(configured.trim());
+			return seconds < 0 ? DEFAULT_GRACE_SECONDS : seconds;
+		}
+		catch (NumberFormatException ex) {
+			return DEFAULT_GRACE_SECONDS;
+		}
+	}
+
+	// Tracks a started server and, on the first one, installs the shutdown hook that
+	// drains them all. Installing it lazily keeps a program that never serves free of
+	// the hook (and of this class's initialization order mattering).
+	private static void registerServer(HttpServer server) {
+		SERVERS.add(server);
+		if (!SHUTDOWN_HOOK_INSTALLED.compareAndSet(false, true)) {
+			return;
+		}
+		try {
+			Runtime.getRuntime()
+				.addShutdownHook(
+						new Thread(() -> shutdownGracefully(shutdownGraceSeconds()), "rontolisp-http-shutdown"));
+		}
+		catch (IllegalStateException ex) {
+			// Shutdown is already under way; there is nothing left to install it for.
+		}
+	}
+
+	/** Stops every server started in this process. Intended for tests only. */
+	public static void stopAllForTesting() {
+		for (HttpServer server : SERVERS) {
+			server.stop(0);
+		}
+		SERVERS.clear();
+		for (Long handle : HANDLES.keySet()) {
+			stopServer(handle);
+		}
+	}
+
+	// Reads the request, invokes the handler and writes the response. A handler that
+	// throws yields a 500 so a single bad request does not take the server down. An
+	// exchange the application took (take) is its own to answer: nothing is written or
+	// closed here, and the thread goes on.
+	private static void dispatch(HttpExchange exchange, Handler handler) throws IOException {
+		final Request request;
+		try {
+			request = readRequest(exchange);
+		}
+		catch (IOException ex) {
+			exchange.close();
+			throw ex;
+		}
+		Reply reply = new Reply(exchange);
+		Response response;
+		DISPATCHING.set(reply);
+		try {
+			response = handler.handle(request);
+		}
+		catch (RuntimeException ex) {
+			// A handler that dies must not take the server down -- but it must not
+			// vanish either: without this the only trace of a broken handler (or of a
+			// response the shared normalizer rejected) was a bare 500.
+			System.err.println(WHERE + ": handler failed: " + ex);
+			if (reply.taken()) {
+				reply.finish(true);
+				return;
+			}
+			response = Response.of(500, List.of(new Header("content-type", "text/plain")), "Internal Server Error");
+		}
+		finally {
+			DISPATCHING.remove();
+		}
+		if (reply.taken()) {
+			return;
+		}
+		try (exchange) {
+			writeResponse(exchange, response);
+		}
+	}
+
+	private static Request readRequest(HttpExchange exchange) throws IOException {
+		final String method = exchange.getRequestMethod();
+		final String target = exchange.getRequestURI().toString();
+		final List<Header> headers = new ArrayList<>();
+		for (Map.Entry<String, List<String>> entry : exchange.getRequestHeaders().entrySet()) {
+			for (String value : entry.getValue()) {
+				headers.add(new Header(entry.getKey(), value));
+			}
+		}
+		final byte[] body = exchange.getRequestBody().readAllBytes();
+		final InetSocketAddress local = exchange.getLocalAddress();
+		final InetSocketAddress remote = exchange.getRemoteAddress();
+		// scriptName "": this server owns its whole port, so the application is
+		// root-mounted by construction.
+		return new Request(method, target, headers, body, exchange.getProtocol(),
+				exchange instanceof HttpsExchange ? "https" : "http", local == null ? "" : local.getHostString(),
+				local == null ? 0 : local.getPort(),
+				remote == null || remote.getAddress() == null ? "" : remote.getAddress().getHostAddress(),
+				remote == null ? 0 : remote.getPort(), "");
+	}
+
+	private static void writeResponse(HttpExchange exchange, Response response) throws IOException {
+		for (Header header : response.headers()) {
+			exchange.getResponseHeaders().add(header.name(), header.value());
+		}
+		final byte[] body = response.body();
+		// A zero-length response must pass -1 (no body) to HttpServer, not 0.
+		final long contentLength = body.length == 0 ? -1 : body.length;
+		exchange.sendResponseHeaders(response.status(), contentLength);
+		if (body.length > 0) {
+			try (OutputStream out = exchange.getResponseBody()) {
+				out.write(body);
+			}
+		}
+	}
+
+}

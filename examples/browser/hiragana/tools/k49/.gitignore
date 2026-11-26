@@ -1,0 +1,3 @@
+# Downloaded dataset cache (Kuzushiji-49 .npz, ~80MB) -- not committed.
+data/
+__pycache__/

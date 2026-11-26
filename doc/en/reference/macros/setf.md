@@ -1,0 +1,30 @@
+# setf
+
+`(setf place value [place2 value2 ...])`
+
+Generalized assignment: stores `value` into the location named by `place` and returns the value. Beyond plain variables, the supported places are the list accessors `car`, `cdr`, `nth`, `first` through `fourth`, `rest`, and the `caXXXr` compositions, plus `elt` (a runtime list/string/vector dispatch: a list cell and a vector -- including a mutable buffer from [`make-string`](../functions/make-string.md) -- are written in place, while a string literal is rebuilt and rebound like [`(setf (char ...))`](../functions/char.md), so its place must be a **variable** and an alias made before the write still sees the old content), so you can mutate a specific slot of an existing structure in place. It expands into the appropriate primitive mutator (such as `rplaca`/`rplacd`). Place subforms are evaluated before the value, so the tail-collection idiom `(setf (cdr tail) (setf tail (list x)))` links the old tail.
+
+```lisp
+(let ((x (list 1 2 3))) (setf (second x) 99) x) ; => (1 99 3)
+```
+
+Multiple place/value pairs assign sequentially (each pair sees the effects of the previous ones), and the last value is returned:
+
+```lisp
+(let ((x (list 1 2 3))) (setf (car x) 9 (second x) 8) x) ; => (9 8 3)
+```
+
+`(setf (getf place indicator) value)` writes a property list: when the indicator already has a cell its VALUE cell is written in place (so an alias of the same list sees the update), otherwise the pair is consed onto the front and the result stored back through `place`. A third subform in the place is `getf`'s default and is ignored by the write.
+
+```lisp
+(let ((p (list :a 1))) (setf (getf p :b) 2) p) ; => (:B 2 :A 1)
+```
+
+Beyond the built-in places, a `defstruct` accessor, a CLOS `:accessor`, and a user-defined *setf-function* (`(defun (setf name) ...)`, or the generic `(defmethod (setf name) ...)` — see [defmethod](../special-forms/defmethod.md)) are also places: `(setf (name arg...) value)` calls the writer with the new value first, though the place's arguments are evaluated before the value, left to right. See [defun](../special-forms/defun.md) for setf-function definitions. A place whose operator nothing makes a place is the same call of the `(setf name)` function, looked up when the form runs, as in Common Lisp: the function may be defined later in the file or installed with `(setf (fdefinition '(setf name)) fn)`, and when there is none the form signals `undefined-function` naming `(setf name)` (the compilers warn at compile time). A standard Common Lisp name that is not a supported place, such as `(setf (length x) 3)`, is refused when the form is expanded (`setf does not support place: LENGTH`). `(setf (apply #'name arg...) value)` calls the same function through `apply`, the new value ahead of the spread arguments: `name` must be written `#'name`, and among the standard names `aref`, `svref`, `bit` and `sbit` are places this way. `(setf (symbol-function 'name) fn)` / `(setf (fdefinition 'name) fn)` install a global function definition (see [symbol-function](../functions/symbol-function.md)).
+
+```lisp
+(defvar *mode* :xml)
+(defun (setf my-mode) (m) (setq *mode* m))
+(setf (my-mode) :html5)
+*mode* ; => :HTML5
+```

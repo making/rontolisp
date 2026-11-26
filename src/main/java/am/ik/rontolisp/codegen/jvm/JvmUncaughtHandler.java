@@ -1,0 +1,801 @@
+package am.ik.rontolisp.codegen.jvm;
+
+import java.lang.classfile.constantpool.ClassEntry;
+import java.lang.classfile.constantpool.FieldRefEntry;
+import java.lang.classfile.constantpool.MethodRefEntry;
+import java.lang.classfile.constantpool.StringEntry;
+import java.lang.classfile.constantpool.Utf8Entry;
+import java.util.List;
+
+import am.ik.jvm.ConstantPool;
+import am.ik.jvm.MethodCode;
+import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispNames;
+import am.ik.rontolisp.LispNil;
+import am.ik.rontolisp.LispSymbol;
+import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.compiler.UncaughtReport;
+
+import org.jspecify.annotations.Nullable;
+
+/**
+ * The generated {@code main}'s last exception-table entry: a condition nobody caught
+ * prints {@link UncaughtReport#PREFIX} plus its report on standard error, instead of ten
+ * frames of mangled Lisp method names ({@code Fail.$pctERROR-RT-47}), and under it where
+ * it happened -- the same location lines the interpreter prints.
+ *
+ * <p>
+ * <b>It reports and RETHROWS -- with the stack trace emptied.</b> Not
+ * {@code System.exit(1)}, which would be one line shorter and is wrong: a compiled class
+ * is a value, and its {@code main} is invoked in-process (reflectively) by roughly a
+ * hundred assertions in this project's own JVM-backend tests and by anything else that
+ * embeds one. Killing the calling JVM to report an error is not a program's decision to
+ * make. Rethrowing keeps the exception observable and lets the launcher supply exit code
+ * 1; clearing the trace first is what keeps the default handler's echo to one line:
+ *
+ * <pre>
+ * Unhandled condition: boom: 42
+ *   at app.lisp:2
+ * Exception in thread "main" java.lang.RuntimeException: boom: 42
+ * </pre>
+ *
+ * The last line is the HOST saying the process died, the same role wasmtime's trap report
+ * plays on the two wasm backends -- where it runs to six lines. {@code RONTOLISP_DEBUG}
+ * keeps the full trace instead ({@link UncaughtReport#DEBUG_ENV}). <b>Re-evaluate if</b>
+ * that echo ever has to go: a class implementing {@code Thread.UncaughtExceptionHandler}
+ * and installing itself on the current thread removes it (a reflective caller never
+ * consults the handler, so the tests still see the throw), at the price of an interface,
+ * a constructor and a shaker root on every artifact -- and of having to re-implement the
+ * default trace for the {@code Error}s the catch below deliberately does not take.
+ *
+ * <p>
+ * <b>Where it happened is read off the stack trace.</b> Every method the program's own
+ * source compiled into carries a {@code LineNumberTable} whose numbers are
+ * {@link JvmSourceSites} ids, and {@code _where} ({@link #buildWhere}) walks the trace
+ * the exception filled in where it was created: the innermost frame of this class (or of
+ * one of its {@code $PartN} classes) at a located site is where it happened, and the
+ * first frame from there out whose site belongs to a named function says which function.
+ * A frame without a site -- a runtime helper, a library function spliced from the jar --
+ * is transparent, which is what reports a library function's failure at its caller's call
+ * site. Nothing runs until a condition escapes, and a class compiled with nothing located
+ * gets none of it.
+ *
+ * <p>
+ * <b>An async boundary is written INTO the trace.</b> An {@code async-defun} body runs on
+ * a virtual thread and {@code _await} rethrows its exception on the awaiting one, whose
+ * frames the exception never saw. So the body's thunk catches what escapes it and appends
+ * a frame of the made-up class {@link #ASYNC_FRAME_CLASS} ({@code /} is in no binary
+ * name, so no real frame can be mistaken for it) naming the async function
+ * ({@link #appendAsyncCrossing}, {@code _asyncCross}); an {@code _await} that rethrows it
+ * then puts back the trace the future stored and appends the awaiting thread's own frames
+ * ({@code _asyncAwaited}), so the hop names the await the condition escaped from -- a
+ * second await of a failed future after a handler caught the first, as the interpreter's
+ * trace rewinds to the boundary at each await. {@code _where} reads each such frame as a
+ * hop line. A trace the report empties never shows any of it; under
+ * {@code RONTOLISP_DEBUG} the printed trace is the async chain end to end.
+ *
+ * <p>
+ * {@code RuntimeException} is the whole catch, matching what {@code handler-case} takes
+ * on this backend ({@code .kb/error-handling.md}: the interpreter catches
+ * {@code LispEvalException} only, the JVM backend any {@code RuntimeException}, wasm-GC
+ * {@code $lisp-cond} throws only) -- so anything a handler-case COULD have caught reports
+ * the same way when nothing did. An {@code Error} still propagates untouched: a
+ * {@code StackOverflowError} is not a signaled condition and its trace is the diagnosis.
+ *
+ * <p>
+ * Appended LAST, after every {@code unwind-protect}/{@code handler-case} entry main may
+ * already carry, because the JVM dispatches an exception table in order: an inner handler
+ * must win. The region is the whole body, and the entry costs 8 bytes plus this handler's
+ * ~30 -- main is a list of {@code invokestatic} chunk calls, so neither the 64 KB method
+ * limit nor {@code maxStack} (floored at 64) is in reach.
+ */
+final class JvmUncaughtHandler {
+
+	/**
+	 * The class an async boundary's frame names. {@link StackTraceElement#getClassName()}
+	 * answers a binary name, which never contains a {@code /}.
+	 */
+	static final String ASYNC_FRAME_CLASS = "rontolisp/async";
+
+	/** An async boundary's frame before any {@code await} rethrew the exception. */
+	static final String ASYNC_CROSSED = "crossed";
+
+	/** An async boundary's frame once an {@code await} appended its own frames. */
+	static final String ASYNC_AWAITED = "awaited";
+
+	/** {@code _where(Throwable)}: prints the location lines. */
+	static final String WHERE_METHOD = "_where";
+
+	static final String WHERE_DESC = "(Ljava/lang/Throwable;)V";
+
+	/** {@code _asyncCross(Throwable, String)}: appends a crossed boundary. */
+	static final String ASYNC_CROSS_METHOD = "_asyncCross";
+
+	static final String ASYNC_CROSS_DESC = "(Ljava/lang/Throwable;Ljava/lang/String;)V";
+
+	/**
+	 * {@code _asyncAwaited(Throwable, StackTraceElement[])}: puts back the trace a future
+	 * stored and completes its boundary with the awaiter.
+	 */
+	static final String ASYNC_AWAITED_METHOD = "_asyncAwaited";
+
+	static final String ASYNC_AWAITED_DESC = "(Ljava/lang/Throwable;[Ljava/lang/StackTraceElement;)V";
+
+	// _where's locals.
+	private static final int EX = 0;
+
+	private static final int TRACE = 1;
+
+	private static final int TABLE = 2;
+
+	private static final int NAMES = 3;
+
+	private static final int COUNT = 4;
+
+	private static final int INDEX = 5;
+
+	private static final int LOCATION = 6;
+
+	private static final int FUNCTION = 7;
+
+	private static final int FRAME = 8;
+
+	private static final int FRAME_CLASS = 9;
+
+	private static final int SITE = 10;
+
+	private static final int SITE_BASE = 11;
+
+	private static final int HEAD = 12;
+
+	private static final int AWAITED = 13;
+
+	private JvmUncaughtHandler() {
+	}
+
+	/**
+	 * A generated runtime method.
+	 *
+	 * @param name its name
+	 * @param desc its descriptor
+	 * @param code the body, its handlers included
+	 */
+	record Built(Utf8Entry name, Utf8Entry desc, MethodCode code) {
+	}
+
+	/**
+	 * Mints what the handler references and takes its local slot, leaving the code for
+	 * {@link Prepared#append}. Split in two because whether the class reports locations
+	 * is known only once every body is compiled, while the handler's constant-pool
+	 * entries have always been minted right after main's own body: minting them here
+	 * keeps the pool -- and so the class -- of a program with nothing located exactly
+	 * what it was. Call once, after main's final {@code return}.
+	 * @param mainCtx the context holding the generated {@code main} body
+	 * @return the handler, ready to append
+	 */
+	static Prepared prepare(JvmLispCompiler.Ctx mainCtx) {
+		ConstantPool cp = mainCtx.cp;
+		int exSlot = mainCtx.allocTemp();
+		ClassEntry systemClass = cp.classEntry("java/lang/System");
+		ClassEntry throwableClass = cp.classEntry("java/lang/Throwable");
+		FieldRefEntry systemErr = cp.fieldRef(systemClass, "err", "Ljava/io/PrintStream;");
+		MethodRefEntry getMessage = method(cp, throwableClass, "getMessage", "()Ljava/lang/String;");
+		// String.valueOf(Object), not concat's argument directly: a RuntimeException
+		// raised by something other than %error may carry a null message, and
+		// "...".concat(null) would replace the report with a NullPointerException.
+		MethodRefEntry valueOf = method(cp, mainCtx.stringClass, "valueOf", "(Ljava/lang/Object;)Ljava/lang/String;");
+		MethodRefEntry concat = method(cp, mainCtx.stringClass, "concat", "(Ljava/lang/String;)Ljava/lang/String;");
+		MethodRefEntry getenv = method(cp, systemClass, "getenv", "(Ljava/lang/String;)Ljava/lang/String;");
+		MethodRefEntry setStackTrace = method(cp, throwableClass, "setStackTrace", "([Ljava/lang/StackTraceElement;)V");
+		ClassEntry stackTraceElement = cp.classEntry("java/lang/StackTraceElement");
+		StringEntry prefix = cp.stringEntry(UncaughtReport.PREFIX);
+		StringEntry debugEnv = cp.stringEntry(UncaughtReport.DEBUG_ENV);
+		ClassEntry runtimeException = cp.classEntry("java/lang/RuntimeException");
+		return new Prepared(mainCtx, exSlot, systemErr, getMessage, valueOf, concat, getenv, setStackTrace,
+				stackTraceElement, prefix, debugEnv, runtimeException);
+	}
+
+	/**
+	 * The handler with everything it references minted ({@link #prepare}).
+	 *
+	 * @param mainCtx the context holding the generated {@code main} body
+	 * @param exSlot the local the exception is kept in
+	 * @param systemErr {@code System.err}
+	 * @param getMessage {@code Throwable.getMessage}
+	 * @param valueOf {@code String.valueOf(Object)}
+	 * @param concat {@code String.concat}
+	 * @param getenv {@code System.getenv}
+	 * @param setStackTrace {@code Throwable.setStackTrace}
+	 * @param stackTraceElement the {@code StackTraceElement} class
+	 * @param prefix the report line's prefix
+	 * @param debugEnv {@link UncaughtReport#DEBUG_ENV}
+	 * @param runtimeException the {@code RuntimeException} class, the entry's catch type
+	 */
+	record Prepared(JvmLispCompiler.Ctx mainCtx, int exSlot, FieldRefEntry systemErr, MethodRefEntry getMessage,
+			MethodRefEntry valueOf, MethodRefEntry concat, MethodRefEntry getenv, MethodRefEntry setStackTrace,
+			ClassEntry stackTraceElement, StringEntry prefix, StringEntry debugEnv, ClassEntry runtimeException) {
+
+		/**
+		 * Appends the handler to main's code and the entry covering the body to its
+		 * exception table. Nothing may be emitted into main between {@link #prepare} and
+		 * this.
+		 * @param where {@code _where}, which prints the location lines after the report
+		 * line, or {@code null} when nothing in the class was located
+		 * @param reporter the program's own report of what nothing caught, or
+		 * {@code null} for {@link UncaughtReport#PREFIX} and the report
+		 * @param className the generated class
+		 */
+		void append(@Nullable MethodRefEntry where, UncaughtReport.@Nullable Reporter reporter, String className) {
+			appendHandler(this, where, reporter, className);
+		}
+
+	}
+
+	private static void appendHandler(Prepared p, @Nullable MethodRefEntry where,
+			UncaughtReport.@Nullable Reporter reporter, String className) {
+		JvmLispCompiler.Ctx mainCtx = p.mainCtx();
+		MethodCode code = mainCtx.body;
+		MethodCode.Label bodyEnd = code.newBoundLabel();
+		int exSlot = p.exSlot();
+		// The handler is entered with the exception as the sole operand.
+		mainCtx.stack.enterHandler();
+		code.astore(exSlot);
+		if (reporter != null) {
+			emitOwnLine(p, reporter, className);
+		}
+		else {
+			// System.err.println(PREFIX.concat(String.valueOf(ex.getMessage())))
+			code.getstatic(p.systemErr())
+				.ldc(p.prefix())
+				.aload(exSlot)
+				.invokevirtual(p.getMessage())
+				.invokestatic(p.valueOf())
+				.invokevirtual(p.concat())
+				.invokevirtual(mainCtx.printlnStr);
+		}
+		// _where(ex): the location lines, read off the trace before it is emptied.
+		if (where != null) {
+			code.aload(exSlot).invokestatic(where);
+		}
+		if (reporter != null) {
+			// What the program does once its line is written; where that lets go on,
+			// the condition leaves as any other.
+			JvmExprCompiler.compileExpr(reporter.after(), mainCtx, className);
+			code.pop();
+		}
+		// if (System.getenv("RONTOLISP_DEBUG") == null) ex.setStackTrace(new
+		// StackTraceElement[0]);
+		MethodCode.Label debugging = code.newLabel();
+		code.ldc(p.debugEnv()).invokestatic(p.getenv()).ifnonnull(debugging);
+		code.aload(exSlot).iconst_0().anewarray(p.stackTraceElement()).invokevirtual(p.setStackTrace());
+		code.labelBinding(debugging);
+		// The program ends here, so the output files it never closed get what they
+		// still buffer -- the same flush main's return and %host-exit do.
+		if (mainCtx.flushStreams != null) {
+			code.invokestatic(mainCtx.flushStreams);
+		}
+		// Rethrow: the launcher's exit code is 1 and its echo is now one line.
+		code.aload(exSlot).athrow();
+		code.exceptionCatch(mainCtx.bodyStart, bodyEnd, bodyEnd, p.runtimeException());
+	}
+
+	/**
+	 * Writes the program's own line ({@link UncaughtReport.Reporter}): the condition the
+	 * throwable was recorded with -- nil when no site of the class records one, or this
+	 * throwable carries none -- and its message as a string of the program ride
+	 * pseudo-locals, so the line and its write compile as ordinary forms.
+	 */
+	private static void emitOwnLine(Prepared p, UncaughtReport.Reporter reporter, String className) {
+		JvmLispCompiler.Ctx ctx = p.mainCtx();
+		MethodCode code = ctx.body;
+		JvmLispCompiler.ConditionChannel channel = ctx.conditionChannel;
+		int conditionSlot = ctx.allocTemp();
+		if (channel.condTake != null) {
+			code.aload(p.exSlot()).invokestatic(channel.condTake);
+			if (channel.condOf != null) {
+				code.invokestatic(channel.condOf);
+			}
+		}
+		else {
+			code.aconst_null();
+		}
+		code.astore(conditionSlot);
+		// "\"" + String.valueOf(ex.getMessage()) + "\"": the quote-framed string.
+		int textSlot = ctx.allocTemp();
+		JvmEmitHelper.compileStringLiteral("\"", ctx);
+		code.aload(p.exSlot()).invokevirtual(p.getMessage()).invokestatic(p.valueOf()).invokevirtual(p.concat());
+		JvmEmitHelper.compileStringLiteral("\"", ctx);
+		code.invokevirtual(p.concat()).astore(textSlot);
+		String conditionVar = "__uc_cond$" + conditionSlot;
+		String textVar = "__uc_text$" + textSlot;
+		ctx.locals.put(conditionVar, conditionSlot);
+		ctx.locals.put(textVar, textSlot);
+		try {
+			LispVal line = reporter.lineForm(new LispSymbol(conditionVar), new LispSymbol(textVar));
+			JvmExprCompiler.compileExpr(
+					new LispCons(new LispSymbol(LispNames.WARN_INTERNAL), new LispCons(line, LispNil.INSTANCE)), ctx,
+					className);
+		}
+		finally {
+			ctx.locals.remove(conditionVar);
+			ctx.locals.remove(textVar);
+		}
+		code.pop();
+	}
+
+	/**
+	 * Makes an async body's thunk record the boundary its condition is about to cross: a
+	 * last exception-table entry over the whole thunk that hands the exception to
+	 * {@code _asyncCross} with the boundary's head ({@link UncaughtReport#asyncHead}) and
+	 * rethrows it. Call once, after the thunk's final {@code areturn}. Last, so every
+	 * handler the body establishes itself dispatches first; a {@code RuntimeException}
+	 * only, as the uncaught report takes.
+	 * @param ctx the thunk's method
+	 * @param head the async function's head, fixed where {@code %async-run} was compiled
+	 * @param cross the {@code _asyncCross} reference
+	 */
+	static void appendAsyncCrossing(JvmLispCompiler.Ctx ctx, String head, MethodRefEntry cross) {
+		ConstantPool cp = ctx.cp;
+		MethodCode.Label bodyEnd = ctx.body.newBoundLabel();
+		int exSlot = ctx.allocTemp();
+		ctx.stack.enterHandler();
+		ctx.body.astore(exSlot).aload(exSlot);
+		// A Java string for the trace, never a value the program can hold.
+		JvmEmitHelper.compileUnspelledLiteral(head, ctx);
+		ctx.body.invokestatic(cross).aload(exSlot).athrow();
+		ctx.body.exceptionCatch(ctx.bodyStart, bodyEnd, bodyEnd, cp.classEntry("java/lang/RuntimeException"));
+	}
+
+	/**
+	 * Builds {@code _where(Throwable)V}: the location lines under the report, printed to
+	 * standard error. Segment 0 is the trace up to the first async boundary: its
+	 * innermost frame at a site gives {@code at FILE:LINE} and, from the same site, the
+	 * function the form is written in, {@code in FUNCTION}. Each boundary then gives one
+	 * {@code in NAME (async)} line, with {@code awaited at} the first site among the
+	 * frames the await appended. The whole body sits in a catch-all: the lines are a
+	 * courtesy, and nothing in them may mask the condition.
+	 * @param cp the class's pool
+	 * @param className the class's internal name
+	 * @param sites the compilation's site table, not empty
+	 * @param printlnStr {@code PrintStream.println(String)}
+	 * @return the method
+	 */
+	static Built buildWhere(ConstantPool cp, String className, JvmSourceSites sites, MethodRefEntry printlnStr) {
+		ClassEntry stringClass = cp.classEntry("java/lang/String");
+		ClassEntry throwableClass = cp.classEntry("java/lang/Throwable");
+		ClassEntry frameClass = cp.classEntry("java/lang/StackTraceElement");
+		ClassEntry systemClass = cp.classEntry("java/lang/System");
+		MethodRefEntry getStackTrace = method(cp, throwableClass, "getStackTrace", "()[Ljava/lang/StackTraceElement;");
+		MethodRefEntry concat = method(cp, stringClass, "concat", "(Ljava/lang/String;)Ljava/lang/String;");
+		MethodRefEntry split = method(cp, stringClass, "split", "(Ljava/lang/String;)[Ljava/lang/String;");
+		MethodRefEntry equals = method(cp, stringClass, "equals", "(Ljava/lang/Object;)Z");
+		MethodRefEntry startsWith = method(cp, stringClass, "startsWith", "(Ljava/lang/String;)Z");
+		MethodRefEntry charAt = method(cp, stringClass, "charAt", "(I)C");
+		MethodRefEntry length = method(cp, stringClass, "length", "()I");
+		MethodRefEntry valueOfInt = method(cp, stringClass, "valueOf", "(I)Ljava/lang/String;");
+		MethodRefEntry getClassName = method(cp, frameClass, "getClassName", "()Ljava/lang/String;");
+		MethodRefEntry getLineNumber = method(cp, frameClass, "getLineNumber", "()I");
+		MethodRefEntry getFileName = method(cp, frameClass, "getFileName", "()Ljava/lang/String;");
+		FieldRefEntry systemErr = cp.fieldRef(systemClass, "err", "Ljava/io/PrintStream;");
+		String self = className.replace('/', '.');
+		Strings s = new Strings(cp.stringEntry(self), cp.stringEntry(self + "$Part"), cp.stringEntry(ASYNC_FRAME_CLASS),
+				cp.stringEntry(":"));
+		Refs r = new Refs(concat, equals, startsWith, charAt, length, valueOfInt, getClassName, getLineNumber);
+
+		MethodCode a = new MethodCode();
+		MethodCode.Label start = a.newBoundLabel();
+		// trace = ex.getStackTrace()
+		a.aload(EX);
+		a.invokevirtual(getStackTrace);
+		a.astore(TRACE);
+		// table / names: the constants, concatenated back when one did not hold them
+		emitJoined(a, cp, sites.tableChunks(), concat);
+		a.astore(TABLE);
+		emitJoined(a, cp, sites.nameChunks(), concat);
+		a.ldc(cp.stringEntry(String.valueOf(JvmSourceSites.NAME_SEPARATOR)));
+		a.invokevirtual(split);
+		a.astore(NAMES);
+		a.aload(TRACE);
+		a.arraylength();
+		a.istore(COUNT);
+		a.loadConstant(0);
+		a.istore(INDEX);
+		a.loadConstant(0);
+		a.istore(LOCATION);
+		a.aconst_null();
+		a.astore(FUNCTION);
+
+		// Segment 0: the frames up to the first async boundary. The innermost frame at a
+		// site is the location, and the site's own function the one it is written in;
+		// the frames past it only lead to the boundary.
+		MethodCode.Label segmentLoop = a.newLabel();
+		MethodCode.Label segmentEnd = a.newLabel();
+		MethodCode.Label segmentNext = a.newLabel();
+		a.labelBinding(segmentLoop);
+		emitNextFrame(a, s, r, segmentEnd);
+		a.iload(LOCATION);
+		a.ifne(segmentNext);
+		emitSiteOf(a, s, r, segmentNext);
+		a.iload(SITE);
+		a.istore(LOCATION);
+		a.aload(TABLE);
+		a.iload(SITE_BASE);
+		a.loadConstant(2);
+		a.iadd();
+		a.invokevirtual(charAt);
+		a.istore(SITE);
+		a.iload(SITE);
+		a.ifeq(segmentNext);
+		a.aload(NAMES);
+		a.iload(SITE);
+		a.aaload();
+		a.astore(FUNCTION);
+		a.labelBinding(segmentNext);
+		a.iinc(INDEX, 1);
+		a.goto_(segmentLoop);
+		a.labelBinding(segmentEnd);
+
+		// " at FILE:LINE[ in FUNCTION]"
+		MethodCode.Label noLocation = a.newLabel();
+		a.iload(LOCATION);
+		a.ifeq(noLocation);
+		a.getstatic(systemErr);
+		a.ldc(cp.stringEntry(UncaughtReport.AT_PREFIX));
+		emitPosition(a, s, r, LOCATION);
+		MethodCode.Label noFunction = a.newLabel();
+		a.aload(FUNCTION);
+		a.ifnull(noFunction);
+		a.ldc(cp.stringEntry(UncaughtReport.IN_FUNCTION));
+		a.invokevirtual(concat);
+		a.aload(FUNCTION);
+		a.invokevirtual(concat);
+		a.labelBinding(noFunction);
+		a.invokevirtual(printlnStr);
+		a.labelBinding(noLocation);
+
+		// One line per async boundary: the frame names the head, the frames after it
+		// (up to the next boundary) are the awaiter's.
+		MethodCode.Label hopLoop = a.newLabel();
+		MethodCode.Label done = a.newLabel();
+		a.labelBinding(hopLoop);
+		a.iload(INDEX);
+		a.iload(COUNT);
+		a.if_icmpge(done);
+		a.aload(TRACE);
+		a.iload(INDEX);
+		a.aaload();
+		a.invokevirtual(getFileName);
+		a.astore(HEAD);
+		a.loadConstant(0);
+		a.istore(AWAITED);
+		a.iinc(INDEX, 1);
+		MethodCode.Label hopScan = a.newLabel();
+		MethodCode.Label hopEnd = a.newLabel();
+		MethodCode.Label hopNext = a.newLabel();
+		a.labelBinding(hopScan);
+		emitNextFrame(a, s, r, hopEnd);
+		a.iload(AWAITED);
+		a.ifne(hopNext);
+		emitSiteOf(a, s, r, hopNext);
+		a.iload(SITE);
+		a.istore(AWAITED);
+		a.labelBinding(hopNext);
+		a.iinc(INDEX, 1);
+		a.goto_(hopScan);
+		a.labelBinding(hopEnd);
+		// " in HEAD[, awaited at FILE:LINE]"
+		a.getstatic(systemErr);
+		a.ldc(cp.stringEntry(UncaughtReport.ASYNC_PREFIX));
+		a.aload(HEAD);
+		a.invokevirtual(concat);
+		MethodCode.Label notAwaited = a.newLabel();
+		a.iload(AWAITED);
+		a.ifeq(notAwaited);
+		a.ldc(cp.stringEntry(UncaughtReport.AWAITED_AT));
+		a.invokevirtual(concat);
+		emitPosition(a, s, r, AWAITED);
+		a.labelBinding(notAwaited);
+		a.invokevirtual(printlnStr);
+		a.goto_(hopLoop);
+		a.labelBinding(done);
+		MethodCode.Label end = a.newBoundLabel();
+		a.return_();
+		// catch (Throwable any): the report line is out already; stop here.
+		MethodCode.Label handler = a.newBoundLabel();
+		a.pop();
+		a.return_();
+		a.exceptionCatch(start, end, handler, null);
+		return new Built(cp.utf8Entry(WHERE_METHOD), cp.utf8Entry(WHERE_DESC), a);
+	}
+
+	/**
+	 * Builds {@code _asyncCross(Throwable, String)V}: appends an async boundary's frame,
+	 * crossed but not yet awaited, to the exception's trace.
+	 * @param cp the class's pool
+	 * @return the method
+	 */
+	static Built buildAsyncCross(ConstantPool cp) {
+		Frames f = new Frames(cp);
+		MethodCode a = new MethodCode();
+		// trace = t.getStackTrace(); out = Arrays.copyOf(trace, trace.length + 1)
+		a.aload(0);
+		a.invokevirtual(f.getStackTrace);
+		a.astore(2);
+		a.aload(2);
+		a.aload(2);
+		a.arraylength();
+		a.loadConstant(1);
+		a.iadd();
+		a.invokestatic(f.copyOf);
+		a.checkcast(f.frameArrayClass);
+		a.astore(3);
+		// out[trace.length] = new StackTraceElement(ASYNC_FRAME_CLASS, "crossed", head,
+		// -1)
+		a.aload(3);
+		a.aload(2);
+		a.arraylength();
+		emitBoundaryFrame(a, f, cp.stringEntry(ASYNC_CROSSED), () -> a.aload(1));
+		a.aastore();
+		a.aload(0);
+		a.aload(3);
+		a.invokevirtual(f.setStackTrace);
+		a.return_();
+		return new Built(cp.utf8Entry(ASYNC_CROSS_METHOD), cp.utf8Entry(ASYNC_CROSS_DESC), a);
+	}
+
+	/**
+	 * Builds {@code _asyncAwaited(Throwable, StackTraceElement[])V}: sets the exception's
+	 * trace back to the one its future stored -- ending in the boundary its body crossed,
+	 * whatever an earlier await of the same future appended since -- and, when it ends in
+	 * a boundary, marks it awaited and appends the current thread's frames, the await's,
+	 * after it.
+	 * @param cp the class's pool
+	 * @return the method
+	 */
+	static Built buildAsyncAwaited(ConstantPool cp) {
+		Frames f = new Frames(cp);
+		ClassEntry systemClass = cp.classEntry("java/lang/System");
+		MethodRefEntry arraycopy = method(cp, systemClass, "arraycopy", "(Ljava/lang/Object;ILjava/lang/Object;II)V");
+		MethodRefEntry throwableInit = method(cp, f.throwableClass, "<init>", "()V");
+		MethodRefEntry equals = method(cp, cp.classEntry("java/lang/String"), "equals", "(Ljava/lang/Object;)Z");
+		MethodCode a = new MethodCode();
+		MethodCode.Label skip = a.newLabel();
+		// t.setStackTrace(stored): an earlier await's frames are a caught signal's
+		a.aload(0);
+		a.aload(1);
+		a.invokevirtual(f.setStackTrace);
+		// trace = t.getStackTrace(); n = trace.length; if (n == 0) return
+		a.aload(0);
+		a.invokevirtual(f.getStackTrace);
+		a.astore(1);
+		a.aload(1);
+		a.arraylength();
+		a.istore(2);
+		a.iload(2);
+		a.ifeq(skip);
+		// last = trace[n - 1]; a crossed boundary?
+		a.aload(1);
+		a.iload(2);
+		a.loadConstant(1);
+		a.isub();
+		a.aaload();
+		a.astore(3);
+		a.ldc(cp.stringEntry(ASYNC_FRAME_CLASS));
+		a.aload(3);
+		a.invokevirtual(f.getClassName);
+		a.invokevirtual(equals);
+		a.ifeq(skip);
+		a.ldc(cp.stringEntry(ASYNC_CROSSED));
+		a.aload(3);
+		a.invokevirtual(f.getMethodName);
+		a.invokevirtual(equals);
+		a.ifeq(skip);
+		// here = new Throwable().getStackTrace()
+		a.new_(f.throwableClass);
+		a.dup();
+		a.invokespecial(throwableInit);
+		a.invokevirtual(f.getStackTrace);
+		a.astore(4);
+		// out = Arrays.copyOf(trace, n + here.length)
+		a.aload(1);
+		a.iload(2);
+		a.aload(4);
+		a.arraylength();
+		a.iadd();
+		a.invokestatic(f.copyOf);
+		a.checkcast(f.frameArrayClass);
+		a.astore(5);
+		// out[n - 1] = new StackTraceElement(ASYNC_FRAME_CLASS, "awaited", last.head, -1)
+		a.aload(5);
+		a.iload(2);
+		a.loadConstant(1);
+		a.isub();
+		emitBoundaryFrame(a, f, cp.stringEntry(ASYNC_AWAITED), () -> {
+			a.aload(3);
+			a.invokevirtual(f.getFileName);
+		});
+		a.aastore();
+		// System.arraycopy(here, 0, out, n, here.length); t.setStackTrace(out)
+		a.aload(4);
+		a.loadConstant(0);
+		a.aload(5);
+		a.iload(2);
+		a.aload(4);
+		a.arraylength();
+		a.invokestatic(arraycopy);
+		a.aload(0);
+		a.aload(5);
+		a.invokevirtual(f.setStackTrace);
+		a.labelBinding(skip);
+		a.return_();
+		return new Built(cp.utf8Entry(ASYNC_AWAITED_METHOD), cp.utf8Entry(ASYNC_AWAITED_DESC), a);
+	}
+
+	/** The string constants {@code _where} compares frames against. */
+	private record Strings(StringEntry self, StringEntry part, StringEntry boundary, StringEntry colon) {
+	}
+
+	/** The library methods {@code _where}'s repeated sequences call. */
+	private record Refs(MethodRefEntry concat, MethodRefEntry equals, MethodRefEntry startsWith, MethodRefEntry charAt,
+			MethodRefEntry length, MethodRefEntry valueOfInt, MethodRefEntry getClassName,
+			MethodRefEntry getLineNumber) {
+	}
+
+	/** The trace-editing references the two boundary helpers share. */
+	private static final class Frames {
+
+		final ClassEntry throwableClass;
+
+		final ClassEntry frameClass;
+
+		final ClassEntry frameArrayClass;
+
+		final MethodRefEntry getStackTrace;
+
+		final MethodRefEntry setStackTrace;
+
+		final MethodRefEntry copyOf;
+
+		final MethodRefEntry frameInit;
+
+		final MethodRefEntry getClassName;
+
+		final MethodRefEntry getMethodName;
+
+		final MethodRefEntry getFileName;
+
+		final StringEntry boundaryClass;
+
+		Frames(ConstantPool cp) {
+			this.throwableClass = cp.classEntry("java/lang/Throwable");
+			this.frameClass = cp.classEntry("java/lang/StackTraceElement");
+			this.frameArrayClass = cp.classEntry("[Ljava/lang/StackTraceElement;");
+			this.getStackTrace = method(cp, this.throwableClass, "getStackTrace", "()[Ljava/lang/StackTraceElement;");
+			this.setStackTrace = method(cp, this.throwableClass, "setStackTrace", "([Ljava/lang/StackTraceElement;)V");
+			this.copyOf = method(cp, cp.classEntry("java/util/Arrays"), "copyOf",
+					"([Ljava/lang/Object;I)[Ljava/lang/Object;");
+			this.frameInit = method(cp, this.frameClass, "<init>",
+					"(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;I)V");
+			this.getClassName = method(cp, this.frameClass, "getClassName", "()Ljava/lang/String;");
+			this.getMethodName = method(cp, this.frameClass, "getMethodName", "()Ljava/lang/String;");
+			this.getFileName = method(cp, this.frameClass, "getFileName", "()Ljava/lang/String;");
+			this.boundaryClass = cp.stringEntry(ASYNC_FRAME_CLASS);
+		}
+
+	}
+
+	/**
+	 * Pushes {@code new StackTraceElement(ASYNC_FRAME_CLASS, state, head, -1)}, the head
+	 * pushed by {@code head}.
+	 */
+	private static void emitBoundaryFrame(MethodCode a, Frames f, StringEntry state, Runnable head) {
+		a.new_(f.frameClass);
+		a.dup();
+		a.ldc(f.boundaryClass);
+		a.ldc(state);
+		head.run();
+		a.loadConstant(-1);
+		a.invokespecial(f.frameInit);
+	}
+
+	/**
+	 * Loads {@code trace[index]} into {@code FRAME} and its class into
+	 * {@code FRAME_CLASS}, jumping to {@code end} past the last frame or at an async
+	 * boundary.
+	 */
+	private static void emitNextFrame(MethodCode a, Strings s, Refs r, MethodCode.Label end) {
+		a.iload(INDEX);
+		a.iload(COUNT);
+		a.if_icmpge(end);
+		a.aload(TRACE);
+		a.iload(INDEX);
+		a.aaload();
+		a.astore(FRAME);
+		a.aload(FRAME);
+		a.invokevirtual(r.getClassName());
+		a.astore(FRAME_CLASS);
+		a.aload(FRAME_CLASS);
+		a.ldc(s.boundary());
+		a.invokevirtual(r.equals());
+		a.ifne(end);
+	}
+
+	/**
+	 * The site of {@code FRAME} into {@code SITE}, and its offset in the table into
+	 * {@code SITE_BASE}; jumps to {@code none} for a frame of another class, a frame with
+	 * no line, and a number past the table.
+	 */
+	private static void emitSiteOf(MethodCode a, Strings s, Refs r, MethodCode.Label none) {
+		MethodCode.Label ours = a.newLabel();
+		a.aload(FRAME_CLASS);
+		a.ldc(s.self());
+		a.invokevirtual(r.equals());
+		a.ifne(ours);
+		a.aload(FRAME_CLASS);
+		a.ldc(s.part());
+		a.invokevirtual(r.startsWith());
+		a.ifeq(none);
+		a.labelBinding(ours);
+		a.aload(FRAME);
+		a.invokevirtual(r.getLineNumber());
+		a.istore(SITE);
+		a.iload(SITE);
+		a.ifle(none);
+		// site k's three chars end at 3k
+		a.iload(SITE);
+		a.loadConstant(3);
+		a.imul();
+		a.aload(TABLE);
+		a.invokevirtual(r.length());
+		a.if_icmpgt(none);
+		a.iload(SITE);
+		a.loadConstant(1);
+		a.isub();
+		a.loadConstant(3);
+		a.imul();
+		a.istore(SITE_BASE);
+	}
+
+	/**
+	 * Appends {@code FILE:LINE} of the site in {@code siteLocal} to the string on top of
+	 * the stack.
+	 */
+	private static void emitPosition(MethodCode a, Strings s, Refs r, int siteLocal) {
+		a.iload(siteLocal);
+		a.loadConstant(1);
+		a.isub();
+		a.loadConstant(3);
+		a.imul();
+		a.istore(SITE_BASE);
+		a.aload(NAMES);
+		a.aload(TABLE);
+		a.iload(SITE_BASE);
+		a.invokevirtual(r.charAt());
+		a.aaload();
+		a.invokevirtual(r.concat());
+		a.ldc(s.colon());
+		a.invokevirtual(r.concat());
+		a.aload(TABLE);
+		a.iload(SITE_BASE);
+		a.loadConstant(1);
+		a.iadd();
+		a.invokevirtual(r.charAt());
+		a.invokestatic(r.valueOfInt());
+		a.invokevirtual(r.concat());
+	}
+
+	/** Pushes the concatenation of the chunks, each a string constant. */
+	private static void emitJoined(MethodCode a, ConstantPool cp, List<String> chunks, MethodRefEntry concat) {
+		for (int i = 0; i < chunks.size(); i++) {
+			a.ldc(cp.stringEntry(chunks.get(i)));
+			if (i > 0) {
+				a.invokevirtual(concat);
+			}
+		}
+	}
+
+	private static MethodRefEntry method(ConstantPool cp, ClassEntry owner, String name, String desc) {
+		return cp.methodRef(owner, name, desc);
+	}
+
+}

@@ -1,0 +1,723 @@
+# The cross-transport corpus of the Clojure HTTP client, rontolisp.http-client
+# (FetchSpecE2eTest#clojureHttpClient): the fetch-spec.yaml origin and legs -- the
+# interpreter and the JVM (the JDK's HttpClient), a --native output (the runner's rlhttp
+# host) and a --component under `wasmtime run -S http=y` (wasi:http) -- over one .clj
+# program per leg, cut back into cases at the end mark printed after each. @ORIGIN@ is
+# the origin's http://127.0.0.1:<port>.
+#
+# Every expected line was diffed against the oracle, clj 1.12.6 with
+# babashka.http-client 0.4.23 required as `http` against the same origin (2026-10-08),
+# and differs from it only where a comment says so: the response map has no :version
+# (no transport here reports one), and a transport failure is an IOException carrying
+# the transport's message (the oracle's ConnectException is one). The last cases read an
+# http: URL through clojure.java.io, whose transport is the same fetch
+# (rontolisp.http-urls), diffed against clj 1.12.6's own clojure.java.io.
+#
+# The origin's endpoints beyond fetch-spec.yaml's: /headers (the request's header
+# fields as {name=[values]}, sorted, without host, connection, content-length,
+# user-agent and transfer-encoding), /query (the raw query), /form ("<content-type>|<body>"),
+# /status/500, /status/308 (to /hello), /redirect-post and /redirect-307 (302 and 307 to
+# /echo), /redirect-303 (303 to the relative "echo"), /loop (302 to /loop?<n+1>, body
+# "hop <n>"), /no-location (302 without a Location), /redirect-https (302 to /hello
+# spelled https:), /lines (two lines of UTF-8 text), and
+# /lines' text compressed: /gzip, /gzip-upper (the coding spelled GZIP), /deflate (zlib),
+# /deflate-raw (raw DEFLATE under "deflate"), /gzip-twice (two members, "one " and "two"),
+# /gzip-404 ("missing" with a 404), /br (seven plain octets claiming br), and replies the
+# coding does not describe: /gzip-bad (plain text), /gzip-empty, /gzip-truncated (the last
+# twelve octets gone), /gzip-badcrc; /octets-echo (the request's content type, "|", and its
+# body in hex) and /multipart (a multipart body, one line a line: the oracle's boundary as
+# BOUNDARY, an octet that is no printable ASCII as <xx>); /held?<key> ("first line", then
+# "released" once /release?<key> has arrived, or "never released" 30 seconds later) and
+# /split (UTF-8 written in two parts, the first ending inside a sequence: "a" and an
+# emoji, "h" e9 "llo", e4 b8 "A", an encoded surrogate, each on a line, and a sequence the
+# reply ends inside). @SCRATCH@ is the leg's own directory, where a case writes the files
+# it sends; @LEG@ is the leg's name, which keeps a case's keys on the origin apart from the
+# other legs running it at once.
+cases:
+  - name: the-origin-and-the-client
+    source: |
+      (ns http-spec
+        (:require [rontolisp.http-client :as http]
+                  [clojure.java.io :as io]))
+      (def origin "@ORIGIN@")
+      (defn url [p] (str origin p))
+      (println (subs (url "/hello") 0 17))
+    expected: |
+      http://127.0.0.1:
+  - name: a-get-answers-the-response-map
+    source: |
+      (let [r (http/get (url "/hello"))]
+        (prn (:status r))
+        (prn (:body r))
+        (prn (get-in r [:headers "x-test"]))
+        (prn (= (url "/hello") (:uri r)))
+        ;; the oracle's map holds :version too (:http1.1)
+        (prn (sort (keys r))))
+    expected: |
+      200
+      "hello-from-fetch"
+      "ok"
+      true
+      (:body :headers :request :status :uri)
+  - name: header-names-are-strings-a-repeated-field-a-vector
+    source: |
+      (prn (sort (keys (:headers (http/get (url "/hello"))))))
+      (prn (get-in (http/get (url "/cookies")) [:headers "set-cookie"]))
+    expected: |
+      ("content-length" "date" "x-test")
+      ["a=1" "b=2"]
+  - name: request-headers-take-string-and-keyword-names
+    source: |
+      (prn (:body (http/get (url "/hello") {:headers {"X-Custom" "abc"}})))
+      (prn (:body (http/get (url "/hello") {:headers {:x-custom "abc"}})))
+      (prn (:body (http/get (url "/headers"))))
+      (prn (:body (http/get (url "/headers") {:headers {"x-many" ["1" "2"]}})))
+      (prn (:body (http/get (url "/headers") {:headers {:accept "text/plain" "Accept" "x/y"}})))
+    expected: |
+      "got-header"
+      "got-header"
+      "{accept=[*/*], accept-encoding=[gzip, deflate]}"
+      "{accept=[*/*], accept-encoding=[gzip, deflate], x-many=[1, 2]}"
+      "{accept=[x/y], accept-encoding=[gzip, deflate]}"
+  - name: the-verbs-send-their-methods-and-bodies
+    source: |
+      (prn (:body (http/post (url "/echo") {:body "héllo"})))
+      (prn (:body (http/put (url "/echo") {:body "x"})))
+      (prn (:body (http/patch (url "/echo") {:body "y"})))
+      (prn (:body (http/delete (url "/echo"))))
+      (let [r (http/head (url "/hello"))]
+        (prn [(:status r) (:body r) (get-in r [:headers "x-test"])]))
+    expected: |
+      "POST:héllo"
+      "PUT:x"
+      "PATCH:y"
+      "DELETE:"
+      [200 "" "ok"]
+  - name: request-takes-the-whole-options-map
+    source: |
+      (prn (:body (http/request {:method :post :uri (url "/echo") :body "r"})))
+      (prn (:body (http/request {:method :get :url (url "/hello")})))
+      (prn (:body (http/request {:request-method :post :uri (url "/echo") :body "rm"})))
+      (prn (:body (http/request {:uri (url "/echo")})))
+      (prn (:body (http/request {:method :options :uri (url "/echo")})))
+    expected: |
+      "POST:r"
+      "hello-from-fetch"
+      "POST:rm"
+      "GET:"
+      "OPTIONS:"
+  - name: query-params-are-appended-url-encoded
+    source: |
+      (prn (:body (http/get (url "/query") {:query-params {"b" ["x y" "z&"]}})))
+      (prn (:body (http/get (url "/query") {:query-params {:c 3}})))
+      (prn (:body (http/get (url "/query?q=0") {:query-params {"a" "1"}})))
+    expected: |
+      "b=x+y&b=z%26"
+      "c=3"
+      "q=0&a=1"
+  - name: form-params-become-a-urlencoded-body
+    source: |
+      (prn (:body (http/post (url "/form") {:form-params {"a" "1 2"}})))
+      (prn (:body (http/post (url "/form") {:form-params {:b ["x" "y"]}})))
+      (prn (:body (http/post (url "/form") {:form-params {"c" nil}})))
+      (prn (:body (http/post (url "/form") {:form-params {"a" "1"} :headers {:content-type "text/plain"}})))
+    expected: |
+      "application/x-www-form-urlencoded|a=1+2"
+      "application/x-www-form-urlencoded|b=%5B%22x%22+%22y%22%5D"
+      "application/x-www-form-urlencoded|c="
+      "text/plain|a=1"
+  - name: an-exceptional-status-throws-ex-info-over-the-response
+    source: |
+      (prn (try (http/get (url "/status/404"))
+                (catch clojure.lang.ExceptionInfo e
+                  [(ex-message e) (:status (ex-data e)) (:body (ex-data e))])))
+      (prn (try (http/get (url "/status/500"))
+                (catch Exception e (ex-message e))))
+      (prn (try (http/get (url "/status/404"))
+                (catch clojure.lang.ExceptionInfo e (sort (keys (ex-data e))))))
+    expected: |
+      ["Exceptional status code: 404" 404 "missing"]
+      "Exceptional status code: 500"
+      (:body :headers :request :status :uri)
+  - name: throw-false-answers-every-status
+    source: |
+      (let [r (http/get (url "/status/404") {:throw false})] (prn [(:status r) (:body r)]))
+      (prn (try (http/get (url "/status/404") {:throw nil}) (catch Exception e :thrown)))
+      (let [r (http/get (url "/status/204"))] (prn [(:status r) (:body r)]))
+    expected: |
+      [404 "missing"]
+      :thrown
+      [204 ""]
+  - name: redirects-are-followed-like-the-jdk-normal-policy
+    source: |
+      (defn hop [r] [(:status r) (:body r) (subs (:uri r) (count origin))])
+      (prn (hop (http/get (url "/redirect"))))
+      (prn (hop (http/get (url "/status/308"))))
+      (prn (:body (http/post (url "/redirect-post") {:body "data"})))
+      (prn (:body (http/post (url "/redirect-307") {:body "data"})))
+      (prn (:body (http/post (url "/redirect-303") {:body "data"})))
+      (prn (:body (http/put (url "/redirect-post") {:body "data"})))
+      (prn (hop (http/get (url "/loop"))))
+      (prn (try (http/get (url "/no-location")) (catch java.io.IOException e (ex-message e))))
+    expected: |
+      [200 "hello-from-fetch" "/hello"]
+      [200 "hello-from-fetch" "/hello"]
+      "GET:"
+      "POST:data"
+      "GET:"
+      "PUT:data"
+      [302 "hop 4" "/loop?4"]
+      "java.io.UncheckedIOException: java.io.IOException: Invalid redirection"
+  - name: the-body-decodes-as-utf-8-or-stays-a-stream
+    source: |
+      (prn (:body (http/get (url "/lines"))))
+      (prn (slurp (:body (http/get (url "/lines") {:as :stream}))))
+      (prn (vec (line-seq (io/reader (:body (http/get (url "/lines") {:as :stream}))))))
+      (prn (with-open [b (:body (http/get (url "/lines") {:as :stream}))] (count (slurp b))))
+    expected: |
+      "héllo, 世界\nsecond line\n"
+      "héllo, 世界\nsecond line\n"
+      ["héllo, 世界" "second line"]
+      22
+  - name: the-stream-body-is-an-input-stream
+    source: |
+      (let [b (:body (http/get (url "/octets") {:as :stream}))]
+        (prn [(instance? java.io.InputStream b) (instance? java.io.Reader b)])
+        (prn (loop [acc []] (let [x (.read b)] (if (neg? x) acc (recur (conj acc x)))))))
+      (let [b (:body (http/get (url "/lines") {:as :stream}))]
+        (prn [(.read b) (.skip b 2) (.read b)]))
+      (let [b (:body (http/get (url "/gzip") {:as :stream}))]
+        (prn [(.read b) (.read b) (instance? java.util.zip.GZIPInputStream b)]))
+      (prn (count (slurp (:body (http/get (url "/lines") {:as :stream})) :encoding "ISO-8859-1")))
+      (let [r (io/reader (:body (http/get (url "/lines") {:as :stream})))]
+        (prn [(.readLine r) (.readLine r) (.readLine r)]))
+    expected: |
+      [true false]
+      [255 254 65 0 128 127]
+      [104 2 108]
+      [104 195 true]
+      27
+      ["héllo, 世界" "second line" nil]
+  - name: a-closed-stream-body-refuses-a-read-in-its-classs-words
+    source: |
+      (doseq [p ["/lines" "/gzip"]]
+        (let [b (:body (http/get (url p) {:as :stream}))]
+          (.close b)
+          (prn (try (.read b) (catch java.io.IOException e (ex-message e))))
+          (prn (try (.available b) (catch java.io.IOException e (ex-message e))))
+          (prn (.close b))))
+    expected: |
+      "closed"
+      0
+      nil
+      "Stream closed"
+      "Stream closed"
+      nil
+  - name: the-stream-body-copies-octet-for-octet
+    source: |
+      (let [f (io/file "@SCRATCH@" "copy.bin")]
+        (io/copy (:body (http/get (url "/octets") {:as :stream})) f)
+        (prn (with-open [i (io/input-stream f)]
+               (loop [acc []] (let [x (.read i)] (if (neg? x) acc (recur (conj acc x))))))))
+      (let [f (io/file "@SCRATCH@" "big.bin")]
+        (with-open [o (io/output-stream f)]
+          (prn (.transferTo (:body (http/get (url "/big") {:as :stream})) o)))
+        (prn (.length f)))
+    expected: |
+      [255 254 65 0 128 127]
+      300000
+      300000
+  - name: the-body-is-a-byte-array-under-as-bytes
+    # :as :bytes answers the body's octets as they came, a byte array.
+    source: |
+      (let [b (:body (http/get (url "/octets") {:as :bytes}))] (prn (bytes? b) (vec b)))
+      (prn (String. (:body (http/get (url "/lines") {:as :bytes})) "UTF-8"))
+      (prn (alength (:body (http/get (url "/big") {:as :bytes}))))
+    expected: |
+      true [-1 -2 65 0 -128 127]
+      "héllo, 世界\nsecond line\n"
+      300000
+  - name: the-stream-body-reads-into-byte-arrays
+    # readNBytes and readAllBytes read until they have what they ask for, the
+    # reply's chunks as they arrive; read of an array, past the end, -1.
+    source: |
+      (let [b (:body (http/get (url "/octets") {:as :stream}))]
+        (prn (vec (.readNBytes b 2)) (vec (.readAllBytes b)) (.read b) (.read b (byte-array 2))))
+      (let [b (:body (http/get (url "/gzip") {:as :stream})) buf (byte-array 4)]
+        (prn (.readNBytes b buf 0 4) (String. buf "UTF-8") (count (.readAllBytes b)) (.readNBytes b buf 0 4)))
+      (prn (alength (.readAllBytes (:body (http/get (url "/big") {:as :stream})))))
+      (let [b (:body (http/get (url "/big") {:as :stream})) buf (byte-array 300001)]
+        (prn (.readNBytes b buf 0 300001) (aget buf 299999) (vec (.readNBytes b 5))))
+    expected: |
+      [-1 -2] [65 0 -128 127] -1 -1
+      4 "hél" 23 0
+      300000
+      300000 54 []
+  - name: a-byte-array-body-and-part-are-sent-as-they-are
+    # ->body-publisher's ofByteArray, and the multipart part io/input-stream opens
+    # over a byte array; a ByteArrayInputStream sends what it reads.
+    source: |
+      (println (:body (http/post (url "/multipart") {:multipart [{:name "bytes" :content (byte-array [-1 -2 65])}]})))
+      (println (:body (http/post (url "/octets-echo") {:body (byte-array [-1 -2 65 0 -128 127])})))
+      (println (:body (http/post (url "/octets-echo")
+                                 {:body (java.io.ByteArrayInputStream. (byte-array [-1 -2 65 0 -128 127]) 1 3)})))
+    expected: |
+      multipart/form-data; boundary=BOUNDARY
+      --BOUNDARY
+      Content-Disposition: form-data; name="bytes"
+      Content-Type: application/octet-stream
+      Content-Transfer-Encoding: binary
+
+      <ff><fe>A
+      --BOUNDARY--
+
+
+      null|fffe4100807f
+      null|fe4100
+  - name: an-async-request-answers-a-future-deref-reads
+    source: |
+      (let [f (http/get (url "/hello") {:async true})]
+        (prn [(future? f) (:status @f) (:body @f) (:status (deref f))]))
+      (prn @(http/get (url "/hello") {:async true :async-then (fn [r] (:status r))}))
+      (prn @(http/get (url "/hello") {:async true :async-then :body}))
+      (prn (:status (http/get (url "/hello") {:async-then (fn [r] :then)})))
+    expected: |
+      [true 200 "hello-from-fetch" 200]
+      200
+      "hello-from-fetch"
+      200
+  - name: the-future-verbs-and-a-timed-deref-read-the-async-answer
+    source: |
+      (let [f (http/get (url "/hello") {:async true})]
+        (prn [(:status (deref f 10000 :timeout)) (future-done? f) (future-cancelled? f) (future-cancel f)]))
+      (prn (try (realized? (http/get (url "/hello") {:async true})) (catch ClassCastException e :cast)))
+      (prn (try (deref (http/get (url "/hello") {:async true}) "x" :t) (catch ClassCastException e :cast)))
+    expected: |
+      [200 true false false]
+      :cast
+      :cast
+  - name: a-timed-deref-answers-its-default-while-the-reply-is-pending
+    skip:
+      native: a Preview 1 module runs an async body to its end at the call, so the reply is in by the deref
+    source: |
+      (let [f (http/get (url "/slow") {:async true})]
+        (prn (deref f 50 :timeout))
+        (prn (future-done? f))
+        (prn (:body @f))
+        (prn (future-done? f)))
+    expected: |
+      :timeout
+      false
+      "slow"
+      true
+  - name: an-async-failure-is-an-execution-exception-over-its-cause
+    source: |
+      (prn (try @(http/get (url "/status/404") {:async true})
+                (catch clojure.lang.ExceptionInfo e :caught-ex-info)
+                (catch java.util.concurrent.ExecutionException e
+                  [:execution (:status (ex-data (ex-cause e)))])))
+      (let [r @(http/get (url "/status/404") {:async true :async-catch (fn [m] m)})]
+        (prn [(sort (keys r)) (instance? java.util.concurrent.CompletionException (:ex r))
+              (instance? clojure.lang.ExceptionInfo (:ex-cause r)) (:ex-message r) (:status (:ex-data r))]))
+    expected: |
+      [:execution 404]
+      [(:ex :ex-cause :ex-data :ex-message :request) true true "Exceptional status code: 404" 404]
+  - name: a-transport-failure-is-an-io-exception
+    source: |
+      ;; the oracle's is a java.net.ConnectException, an IOException
+      (prn (try (http/get "http://127.0.0.1:1/refused") (catch java.io.IOException e :io)))
+      (prn (try @(http/get "http://127.0.0.1:1/refused" {:async true})
+                (catch java.util.concurrent.ExecutionException e
+                  (instance? java.io.IOException (ex-cause e)))))
+    expected: |
+      :io
+      true
+  - name: a-url-the-jdk-refuses-is-refused-at-the-call
+    source: |
+      (prn (try (http/get (str (url "/a b"))) (catch IllegalArgumentException e (subs (ex-message e) 0 32))))
+      (prn (try (http/get "example.com") (catch IllegalArgumentException e (ex-message e))))
+      (prn (try (http/get "ftp://example.com/x") (catch IllegalArgumentException e (ex-message e))))
+      (prn (try (http/get (url "/hello") {:headers {"Host" "x"}}) (catch IllegalArgumentException e (ex-message e))))
+      (prn (try (http/get (url "/hello") {:headers {"x-num" 5}}) (catch IllegalArgumentException e (ex-message e))))
+    expected: |
+      "Illegal character in path at ind"
+      "URI with undefined scheme"
+      "invalid URI scheme ftp"
+      "restricted header name: \"Host\""
+      "array element type mismatch"
+  - name: auth-and-accept-set-their-headers
+    source: |
+      (prn (:body (http/get (url "/headers") {:basic-auth ["user" "päss"]})))
+      (prn (:body (http/get (url "/headers") {:basic-auth {:user "u" :pass "p"}})))
+      (prn (:body (http/get (url "/headers") {:oauth-token "tok"})))
+      (prn (:body (http/get (url "/headers") {:accept :json})))
+      (prn (try (http/get (url "/headers") {:accept :xml}) (catch IllegalArgumentException e (ex-message e))))
+    expected: |
+      "{accept=[*/*], accept-encoding=[gzip, deflate], authorization=[Basic dXNlcjpww6Rzcw==]}"
+      "{accept=[*/*], accept-encoding=[gzip, deflate], authorization=[Basic dTpw]}"
+      "{accept=[*/*], accept-encoding=[gzip, deflate], authorization=[Bearer tok]}"
+      "{accept=[application/json], accept-encoding=[gzip, deflate]}"
+      "No matching clause: :xml"
+  - name: the-verbs-are-values-and-the-request-rides-the-response
+    source: |
+      (prn (mapv #(:status (% (url "/hello"))) [http/get http/head]))
+      (prn (:status (http/get (url "/hello") nil)))
+      (prn (:body (http/post (url "/echo") {:body nil})))
+      (prn (sort (keys (:request (http/get (url "/hello"))))))
+      (prn (:method (:request (http/get (url "/hello")))))
+      (prn (get-in (http/get (url "/hello") {:headers {"X-Custom" "abc"}}) [:request :headers "X-Custom"]))
+    expected: |
+      [200 200]
+      200
+      "POST:"
+      (:headers :method :uri)
+      :get
+      "abc"
+  - name: a-compressed-reply-is-read-through-its-coding
+    source: |
+      (prn (:body (http/get (url "/gzip"))))
+      (prn (get-in (http/get (url "/gzip")) [:headers "content-encoding"]))
+      (prn (:body (http/get (url "/gzip-upper"))))
+      (prn (:body (http/get (url "/deflate"))))
+      (prn (:body (http/get (url "/deflate-raw"))))
+      (prn (:body (http/get (url "/gzip-twice"))))
+      (prn (slurp (:body (http/get (url "/gzip") {:as :stream}))))
+      (prn (:body @(http/get (url "/deflate") {:async true})))
+      (prn (try (http/get (url "/gzip-404")) (catch clojure.lang.ExceptionInfo e (:body (ex-data e)))))
+      (prn (:body (http/get (url "/br"))))
+      (prn (:body (http/get (url "/headers") {:headers {"accept-encoding" "identity"}})))
+    expected: |
+      "héllo, 世界\nsecond line\n"
+      "gzip"
+      "héllo, 世界\nsecond line\n"
+      "héllo, 世界\nsecond line\n"
+      "héllo, 世界\nsecond line\n"
+      "one two"
+      "héllo, 世界\nsecond line\n"
+      "héllo, 世界\nsecond line\n"
+      "missing"
+      "brotli?"
+      "{accept=[*/*], accept-encoding=[identity]}"
+  - name: decompress-body-false-and-a-head-request-leave-the-coded-octets
+    source: |
+      (prn (int (first (:body (http/get (url "/gzip") {:decompress-body false})))))
+      (prn (:body (http/head (url "/gzip"))))
+    expected: |
+      31
+      ""
+  - name: a-reply-its-coding-does-not-describe-throws-what-java-util-zip-throws
+    source: |
+      (defn thrown [f]
+        (try (f)
+             (catch java.util.zip.ZipException e [:zip (ex-message e)])
+             (catch java.io.EOFException e [:eof (ex-message e)])))
+      (prn (thrown #(http/get (url "/gzip-bad"))))
+      (prn (thrown #(http/get (url "/gzip-empty"))))
+      (prn (thrown #(http/get (url "/gzip-truncated"))))
+      (prn (thrown #(http/get (url "/gzip-badcrc"))))
+      ;; a gzip header is read at the call, the data at the read
+      (prn (thrown #(http/get (url "/gzip-bad") {:as :stream})))
+      (prn (thrown #(slurp (:body (http/get (url "/gzip-truncated") {:as :stream})))))
+      (prn (try @(http/get (url "/gzip-bad") {:async true})
+                (catch java.util.concurrent.ExecutionException e
+                  [(instance? java.util.zip.ZipException (ex-cause e)) (instance? java.io.IOException (ex-cause e))])))
+    expected: |
+      [:zip "Not in GZIP format"]
+      [:eof nil]
+      [:eof "Unexpected end of ZLIB input stream"]
+      [:zip "Corrupt GZIP trailer"]
+      [:zip "Not in GZIP format"]
+      [:eof "Unexpected end of ZLIB input stream"]
+      [true true]
+  - name: a-file-an-input-stream-and-a-stream-body-are-sent-octet-for-octet
+    source: |
+      (let [f (io/file "@SCRATCH@" "body.bin")]
+        (with-open [o (io/output-stream f)] (doseq [b [255 254 65 0 128 127]] (.write o b)))
+        (println (:body (http/post (url "/octets-echo") {:body f})))
+        (println (:body (http/post (url "/octets-echo") {:body (io/input-stream f)}))))
+      (println (:body (http/post (url "/octets-echo") {:body (:body (http/get (url "/octets") {:as :stream}))})))
+      (println (:body (http/post (url "/octets-echo") {:body (:body (http/get (url "/gzip") {:as :stream}))})))
+      (println (:body (http/post (url "/octets-echo") {:body "é"})))
+      (prn (try (http/post (url "/octets-echo") {:body 42}) (catch clojure.lang.ExceptionInfo e (ex-message e))))
+      (prn (try (http/post (url "/octets-echo") {:body (io/reader (io/file "@SCRATCH@" "body.bin"))})
+                (catch clojure.lang.ExceptionInfo e (ex-message e))))
+      (prn (try (http/post (url "/octets-echo") {:body (io/file "@SCRATCH@" "missing")})
+                (catch java.io.FileNotFoundException e (clojure.string/replace (ex-message e) "@SCRATCH@" "DIR"))))
+    expected: |
+      null|fffe4100807f
+      null|fffe4100807f
+      null|fffe4100807f
+      null|68c3a96c6c6f2c20e4b896e7958c0a7365636f6e64206c696e650a
+      null|c3a9
+      "Don't know how to convert class java.lang.Longto body"
+      "Don't know how to convert class java.io.BufferedReaderto body"
+      "DIR/missing not found"
+  - name: a-multipart-body-is-the-oracles-octet-for-octet
+    source: |
+      (let [dir "@SCRATCH@"
+            text-file (io/file dir "part.txt")
+            bin-file (io/file dir "part.bin")
+            json-file (io/file dir "part.json")
+            noext (io/file dir "noext")]
+        (spit text-file "file content\n")
+        (with-open [o (io/output-stream bin-file)] (doseq [b [255 254 65 0 128 127]] (.write o b)))
+        (spit json-file "{\"a\":1}")
+        (spit noext "x")
+        (println (:body (http/post (url "/multipart")
+                                   {:multipart [{:name "title" :content "héllo"}
+                                                {:name "file" :content text-file}
+                                                {:name "bin" :content bin-file}
+                                                {:name "json" :content json-file}
+                                                {:name "noext" :content noext}
+                                                {:name "stream" :content (io/input-stream bin-file)}
+                                                {:name "named" :part-name "eggplant" :file-name "foo.txt"
+                                                 :content "Eggplants" :content-type "text/x-egg"}
+                                                {:name :kw-name :content "v"}
+                                                {:content "nameless"}]}))))
+      (println (:body (http/post (url "/multipart") {:multipart []})))
+      (println (:body (http/put (url "/multipart") {:multipart [{:name "a" :content "x"}]
+                                                    :headers {"content-type" "text/plain" :content-type "x/y"}
+                                                    :form-params {"f" "1"} :body "ignored"})))
+      (let [r (http/post (url "/multipart") {:multipart [{:name "a" :content "x"}]})
+            ct (get-in r [:request :headers "content-type"])]
+        (prn (sort (keys (:request r))))
+        (prn [(subs ct 0 30) (boolean (re-matches #"multipart/form-data; boundary=babashka_http_client_Boundary[0-9a-f-]{36}" ct))]))
+      (prn (try (http/post (url "/multipart") {:multipart [{:name "n" :content nil}]})
+                (catch IllegalArgumentException e (ex-message e))))
+      (prn (try (http/post (url "/multipart") {:multipart [{:name "n" :content 42}]})
+                (catch IllegalArgumentException e (ex-message e))))
+      (prn (try (http/post (url "/multipart") {:multipart {:name "map" :content "v"}})
+                (catch IllegalArgumentException e (ex-message e))))
+      (prn (try (http/post (url "/multipart") {:multipart [{:name "f" :content (io/file "@SCRATCH@" "missing")}]})
+                (catch java.io.FileNotFoundException e (clojure.string/replace (ex-message e) "@SCRATCH@" "DIR"))))
+    expected: |
+      multipart/form-data; boundary=BOUNDARY
+      --BOUNDARY
+      Content-Disposition: form-data; name="title"
+      Content-Type: text/plain; charset=UTF-8
+      Content-Transfer-Encoding: 8bit
+
+      h<c3><a9>llo
+      --BOUNDARY
+      Content-Disposition: form-data; name="file"; filename="part.txt"
+      Content-Type: text/plain
+      Content-Transfer-Encoding: binary
+
+      file content<0a>
+      --BOUNDARY
+      Content-Disposition: form-data; name="bin"; filename="part.bin"
+      Content-Type: application/octet-stream
+      Content-Transfer-Encoding: binary
+
+      <ff><fe>A<00><80><7f>
+      --BOUNDARY
+      Content-Disposition: form-data; name="json"; filename="part.json"
+      Content-Type: application/json
+      Content-Transfer-Encoding: binary
+
+      {"a":1}
+      --BOUNDARY
+      Content-Disposition: form-data; name="noext"; filename="noext"
+      Content-Type: application/octet-stream
+      Content-Transfer-Encoding: binary
+
+      x
+      --BOUNDARY
+      Content-Disposition: form-data; name="stream"
+      Content-Type: application/octet-stream
+      Content-Transfer-Encoding: binary
+
+      <ff><fe>A<00><80><7f>
+      --BOUNDARY
+      Content-Disposition: form-data; name="eggplant"; filename="foo.txt"
+      Content-Type: text/x-egg
+      Content-Transfer-Encoding: 8bit
+
+      Eggplants
+      --BOUNDARY
+      Content-Disposition: form-data; name=":kw-name"
+      Content-Type: text/plain; charset=UTF-8
+      Content-Transfer-Encoding: 8bit
+
+      v
+      --BOUNDARY
+      Content-Disposition: form-data; name="null"
+      Content-Type: text/plain; charset=UTF-8
+      Content-Transfer-Encoding: 8bit
+
+      nameless
+      --BOUNDARY--
+
+
+      multipart/form-data; boundary=BOUNDARY
+      --BOUNDARY--
+
+
+      multipart/form-data; boundary=BOUNDARY
+      --BOUNDARY
+      Content-Disposition: form-data; name="a"
+      Content-Type: text/plain; charset=UTF-8
+      Content-Transfer-Encoding: 8bit
+
+      x
+      --BOUNDARY--
+
+
+      (:body :headers :method :uri)
+      ["multipart/form-data; boundary=" true]
+      "Cannot open <nil> as an InputStream."
+      "Cannot open <42> as an InputStream."
+      "Cannot open <nil> as an InputStream."
+      "DIR/missing (No such file or directory)"
+  - name: what-no-transport-here-offers-is-refused-by-name
+    source: |
+      (prn (try (http/get (url "/hello") {:timeout 1000}) (catch UnsupportedOperationException e (ex-message e))))
+      (prn (try (http/get (url "/lines") {:as :json}) (catch IllegalArgumentException e (ex-message e))))
+    expected: |
+      "rontolisp.http-client: :timeout is not supported: rontolisp:fetch has no timeout yet"
+      "No matching clause: :json"
+  - name: clojure-java-io-reads-an-http-url-through-fetch
+    # clojure.java.io's reads of an http: URL (rontolisp.http-urls makes the program's
+    # fetch their transport) are java.net.HttpURLConnection's, diffed against clj
+    # 1.12.6's own clojure.java.io (2026-10-10): the body decoded by :encoding (UTF-8
+    # by default) whatever its charset, io/input-stream a BufferedInputStream over
+    # the stream openStream answers.
+    source: |
+      (require 'rontolisp.http-urls)
+      (prn (slurp (url "/lines")))
+      (prn (count (slurp (io/as-url (url "/lines")) :encoding "ISO-8859-1")))
+      (prn (vec (line-seq (io/reader (url "/lines")))))
+      (with-open [in (io/input-stream (url "/octets"))]
+        (prn [(instance? java.io.BufferedInputStream in)
+              (loop [acc []] (let [b (.read in)] (if (neg? b) acc (recur (conj acc b)))))]))
+      (with-open [in (.openStream (io/as-url (url "/octets")))]
+        (prn [(instance? java.io.BufferedInputStream in) (instance? java.io.FilterInputStream in)
+              (vec (.readAllBytes in))]))
+      (let [f (io/file "@SCRATCH@" "url.bin")]
+        (io/copy (io/input-stream (url "/big")) f)
+        (prn (.length f)))
+      (prn (slurp (url "/status/204")))
+    expected: |
+      "héllo, 世界\nsecond line\n"
+      27
+      ["héllo, 世界" "second line"]
+      [true [255 254 65 0 128 127]]
+      [false true [-1 -2 65 0 -128 127]]
+      300000
+      ""
+  - name: an-http-url-read-follows-and-refuses-what-http-url-connection-does
+    # a redirect to a URL of the same protocol is followed -- not a 308, not one to
+    # https -- the 20th refused; a status of 400 or more is refused, 404 and 410 as
+    # FileNotFoundException of the URL, any other naming its code, where the stream
+    # opens
+    source: |
+      (defn read-url [p]
+        (try (slurp (url p))
+             (catch java.io.FileNotFoundException e [:not-found (subs (ex-message e) (count origin))])
+             (catch java.net.ProtocolException e [:protocol (ex-message e)])
+             (catch java.io.IOException e [:io (clojure.string/replace (ex-message e) origin "")])))
+      (doseq [p ["/redirect" "/redirect-303" "/redirect-307" "/status/308" "/redirect-https"
+                 "/no-location" "/loop" "/status/404" "/status/500"]]
+        (prn (read-url p)))
+      (prn (try (io/input-stream (url "/status/404")) (catch java.io.FileNotFoundException e :not-found)))
+      (prn (try (.openStream (io/as-url (url "/status/500"))) (catch java.io.IOException e :io)))
+    expected: |
+      "hello-from-fetch"
+      "GET:"
+      "GET:"
+      "moved"
+      "moved"
+      "nowhere"
+      [:protocol "Server redirected too many times (20)"]
+      [:not-found "/status/404"]
+      [:io "Server returned HTTP response code: 500 for URL: /status/500"]
+      :not-found
+      :io
+  - name: an-http-url-stream-closes-and-fails-in-its-classs-words
+    # a transport failure is an IOException carrying the transport's message (the
+    # oracle's are a ConnectException and "Premature EOF", IOExceptions both)
+    source: |
+      (let [in (io/input-stream (url "/hello"))]
+        (.close in)
+        (prn (try (.read in) (catch java.io.IOException e (ex-message e)))))
+      (let [in (.openStream (io/as-url (url "/hello")))]
+        (.close in)
+        (prn (try (.read in) (catch java.io.IOException e (ex-message e))))
+        (prn (.available in)))
+      (prn (try (slurp "http://127.0.0.1:1/refused") (catch java.io.IOException e :io)))
+      (prn (try (slurp (url "/cut-short")) (catch java.io.IOException e :io)))
+      (prn (try (spit (url "/echo") "x") (catch IllegalArgumentException e (subs (ex-message e) 0 31))))
+    expected: |
+      "Stream closed"
+      "stream is closed"
+      0
+      :io
+      :io
+      "Can not write to non-file URL <"
+  - name: a-reader-over-a-streamed-reply-reads-as-it-arrives
+    # the oracle's BufferedReader over the response's InputStream: a line, a character,
+    # a datum is answered once it has arrived, and line-seq is lazy, so each read below
+    # answers while /held still holds the rest of its reply; the client's :as :stream
+    # body and an http: URL clojure.java.io reads (rontolisp.http-urls, required above)
+    source: |
+      (let [rdr (io/reader (:body (http/get (url "/held?@LEG@-reader") {:as :stream})))]
+        (prn [(instance? java.io.BufferedReader rdr) (.readLine rdr)])
+        (http/get (url "/release?@LEG@-reader"))
+        (prn [(.readLine rdr) (.readLine rdr)]))
+      (let [lines (line-seq (io/reader (:body (http/get (url "/held?@LEG@-lines") {:as :stream}))))]
+        (prn (first lines))
+        (http/get (url "/release?@LEG@-lines"))
+        (prn (vec (rest lines))))
+      (let [rdr (io/reader (url "/held?@LEG@-url"))]
+        (prn [(.read rdr) (.readLine rdr)])
+        (slurp (url "/release?@LEG@-url"))
+        (prn [(.readLine rdr) (.read rdr)]))
+      (let [rdr (java.io.PushbackReader. (io/reader (:body (http/get (url "/held?@LEG@-read") {:as :stream}))))]
+        (prn [(read rdr) (read rdr)])
+        (http/get (url "/release?@LEG@-read"))
+        (prn (read rdr)))
+      (let [rdr (io/reader (:body (http/get (url "/held?@LEG@-rest") {:as :stream})))]
+        (prn (.readLine rdr))
+        (http/get (url "/release?@LEG@-rest"))
+        (prn (slurp rdr)))
+      (let [rdr (io/reader (:body (http/get (url "/held?@LEG@-close") {:as :stream})))]
+        (prn (.readLine rdr))
+        (.close rdr)
+        (http/get (url "/release?@LEG@-close"))
+        (prn (try (.readLine rdr) (catch java.io.IOException e [:io (ex-message e)])))
+        (prn (try (.read rdr) (catch java.io.IOException e [:io (ex-message e)]))))
+    expected: |
+      [true "first line"]
+      ["released" nil]
+      "first line"
+      ["released"]
+      [102 "irst line"]
+      ["released" -1]
+      [first line]
+      released
+      "first line"
+      "released\n"
+      "first line"
+      [:io "Stream closed"]
+      [:io "Stream closed"]
+  - name: a-reply-is-text-in-the-oracles-decoding
+    # UTF-8 as the oracle's InputStreamReader decodes it, whichever way the text is read:
+    # a sequence the chunks cut is whole, each malformed sequence one U+FFFD (an encoded
+    # surrogate one, a sequence the reply ends inside one); ISO-8859-1 and US-ASCII one
+    # character an octet
+    source: |
+      (prn (vec (line-seq (io/reader (:body (http/get (url "/split") {:as :stream}))))))
+      (prn (slurp (:body (http/get (url "/split") {:as :stream}))))
+      (prn (:body (http/get (url "/split"))))
+      (prn (slurp (url "/split")))
+      (prn (mapv count (line-seq (io/reader (:body (http/get (url "/split") {:as :stream})) :encoding "ISO-8859-1"))))
+      (prn (mapv count (line-seq (io/reader (:body (http/get (url "/split") {:as :stream})) :encoding "US-ASCII"))))
+      (prn (slurp (:body (http/get (url "/split") {:as :stream})) :encoding "US-ASCII"))
+    expected: |
+      ["a😀" "h�llo" "�A" "�" "�"]
+      "a😀\nh�llo\n�A\n�\n�"
+      "a😀\nh�llo\n�A\n�\n�"
+      "a😀\nh�llo\n�A\n�\n�"
+      [5 5 3 3 2]
+      [5 5 3 3 2]
+      "a����\nh�llo\n��A\n���\n��"

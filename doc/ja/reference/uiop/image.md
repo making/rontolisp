@@ -1,0 +1,230 @@
+# uiop/image
+
+`uiop/image` は、プログラムがその「端」で行うことをまとめたものです。ステータス
+コードを付けてプロセスを終了する、誰も処理しなかったコンディションを報告する、
+イメージの復元時やダンプ時に走る処理を登録する、起動時のコマンドラインを読む。
+**30 個のエクスポートはすべて実装済みです。**
+
+どの名前も 2 通りの綴りで参照できます。`uiop:quit` と `uiop/image:quit` は同じ
+関数です（[uiop パッケージ](../uiop.md#sub-packages)）。
+
+ここでの 3 つの決定は rontolisp 独自のもので、いずれも欠落ではなく決定です。
+
+- **`uiop:quit` は 4 つのバックエンドすべてでホストの exit そのもの**であり、その
+  後には何も走りません。[終了する](#exiting)を参照してください。
+- **バックトレースはフレームを持ちません**。Lisp レベルの呼び出しスタックを保持
+  するバックエンドはないので、「このコンディションのバックトレース」の正直な表現
+  はコンディションそのものだけです。上流の UIOP 自身も、バックトレース API のない
+  処理系向けのフォールバックは同じ形をしています。
+- **イメージはプログラムです。** ヒープを保存できるバックエンドはないので、
+  インタプリタはイメージをコンパイルしてダンプし、コンパイル済みのプログラムは
+  復元されたイメージと同じように起動します。[イメージのダンプ](#dumping-an-image)を
+  参照してください。
+- **引数ベクタの形はどこでも同じ**で `(program-name user-arg ...)` です。インタプ
+  リタで動かすプログラムの引数は `--` セパレータの後ろに置きます。
+  [コマンドライン](#the-command-line)を参照してください。
+
+## 終了する
+
+| 関数 | 動作 |
+|------|------|
+| `uiop:quit` | 標準出力ストリームを finish-output したうえで、ステータスコード（既定は `0`）を付けてプロセスを終了する |
+| `uiop:die` | `format` メッセージを `*error-output*` に報告し、与えられたコードで終了する |
+| `uiop:shell-boolean-exit` | 引数が真なら `0`、`nil` なら `1` で終了する -- シェル流の真偽値 |
+
+```console
+$ cat quit.lisp
+(print :before)
+(uiop:quit 3)
+(print :after)
+$ rontolisp quit.lisp
+:BEFORE
+$ echo $?
+3
+```
+
+同じプログラムをクラス、Preview 1 モジュール、コンポーネントにコンパイルしても、
+同じ 1 行を印字して `3` で終了します。下にあるプリミティブは JVM では
+`System.exit`、WASM Preview 1 では `proc_exit`、`--component` では
+`wasi:cli/exit` の `exit-with-code` であり、インタプリタは CLI がプロセスコードに
+変換する終了シグナルを送出します。
+
+これが本物のホスト終了であることから 2 つの帰結があり、どちらもすべてのバック
+エンドで成り立ちます。
+
+- **その後には何も走りません**。`quit` を囲む `unwind-protect` のクリーンアップは
+  実行されません。プロセスは呼び出しのその場で終わります。
+- **コンディションではありません**。`handler-case`、`ignore-errors`、`catch` タグ
+  のいずれからも見えないので、ライブラリのエラー処理の内側にある `quit` もきちんと
+  終了します。
+
+ステータスコードは 8 ビットにマスクされます。POSIX ホストがどのみちそう扱い、
+`wasi:cli/exit` の `u8` が受け取るのもそれだからです。`(uiop:quit 300)` はどこでも
+`44` で終了し、あるバックエンドだけ 300 になることはありません。
+
+これに手を伸ばす典型的な理由は、テストランナーの終了コードです。
+
+```console
+$ cat run-tests.lisp
+(uiop:quit (if (rove:run :my-app/tests) 0 1))
+```
+
+`uiop:quit` は終了できるホストプロセスを必要とするので、`--no-wasi` と `--no-gc`
+では**コンパイル時に拒否されます**。これらが出力するのはホストが呼ぶエクスポート
+を入口とするリアクタであり、リアクタは終了ではなくエクスポートからの復帰をします。
+
+## 致命的コンディション
+
+*致命的コンディション*とは `serious-condition` のことです。型は `deftype` の別名
+なので、`typep` も `handler-bind` の節も同じように一致します。
+
+| 名前 | 動作 |
+|------|------|
+| `uiop:fatal-condition` | 型そのもの: `serious-condition` |
+| `uiop:fatal-condition-p` | `(typep c 'uiop:fatal-condition)` |
+| `uiop:handle-fatal-condition` | コンディションを `*error-output*` に報告し、ステータス `99` で `uiop:die` する |
+| `uiop:call-with-fatal-condition-handler` | そのハンドラを束縛してサンクを呼ぶ |
+| `uiop:with-fatal-condition-handler` | 上のマクロ版: `(uiop:with-fatal-condition-handler () body...)` |
+| `uiop:*lisp-interaction*` | `nil` |
+
+```lisp
+(list (uiop:fatal-condition-p (make-condition 'error))
+      (uiop:fatal-condition-p (make-condition 'warning))
+      (uiop:fatal-condition-p 42))   ; => (T NIL NIL)
+```
+
+`uiop:*lisp-interaction*` は、上流の既定が `t` であるのに対しここでは `nil` です。
+この変数は「これは対話的な Lisp 環境か、それともバッチ処理か」を問うものであり、
+rontolisp のどのバックエンドもプログラムを走らせて終わります。入るべきデバッガも、
+コンパイル済み成果物の下にある REPL もありません。この値があるからこそ
+`uiop:handle-fatal-condition` は、存在しない `invoke-debugger` を呼ぶのではなく
+報告して終了します。
+
+```console
+$ cat fatal.lisp
+(print :start)
+(uiop:with-fatal-condition-handler ()
+  (error "the sky is falling"))
+(print :unreachable)
+$ rontolisp fatal.lisp
+:START
+Fatal condition:
+the sky is falling
+the sky is falling
+the sky is falling
+$ echo $?
+99
+```
+
+コンディションが 3 回現れるのは上流が 3 回印字するからです（報告として 1 回、
+バックトレースと共に 1 回、`die` のメッセージとして 1 回）。ここでは真ん中の 1 回の
+上にフレームがないというだけです。
+
+## バックトレース
+
+| 関数 | 印字するもの |
+|------|--------------|
+| `uiop:raw-print-backtrace` | `:condition` 引数があればそれ |
+| `uiop:print-backtrace` | 同じものを `uiop:raw-print-backtrace` 経由で |
+| `uiop:print-condition-backtrace` | 引数のコンディションを `:stream`（既定は `*error-output*`）へ |
+
+```lisp
+(let ((report (with-output-to-string (s)
+                (uiop:print-condition-backtrace
+                 (make-condition 'simple-error :format-control "boom")
+                 :stream s))))
+  (string-right-trim (list #\Newline) report))   ; => "boom"
+```
+
+`:count` は受け取って無視します。制限すべきフレームがないからです。これに手を
+伸ばすライブラリは `lack-middleware-backtrace` で、そのエラー報告は
+`uiop/image:print-condition-backtrace` から始まります。ここではその報告は 1 行です。
+
+## イメージフック
+
+| 名前 | 動作 |
+|------|------|
+| `uiop:register-image-restore-hook` | `uiop:*image-restore-hook*` に関数を push する。第 2 引数が `nil` でない限り即座に呼ぶ |
+| `uiop:register-image-dump-hook` | `uiop:*image-dump-hook*` に関数を push する。第 2 引数が真のときだけ即座に呼ぶ |
+| `uiop:call-image-restore-hook` | 登録順に restore フックを呼ぶ |
+| `uiop:call-image-dump-hook` | dump フックを呼ぶ |
+| `uiop:*image-restore-hook*` / `uiop:*image-dump-hook*` | 2 つのリスト |
+| `uiop:*image-prelude*` / `uiop:*image-entry-point*` / `uiop:*image-postlude*` / `uiop:*image-dumped-p*` | `nil` |
+
+フックは**本物**です。ライブラリはロード中にフックへ登録することがあり、ダンプは
+dump フックを呼び、ダンプされたプログラムの起動は restore フックを呼びます。
+
+```lisp
+(defvar *log* nil)
+(uiop:register-image-restore-hook (lambda () (push :restored *log*)) nil)
+(uiop:call-image-restore-hook)
+*log*   ; => (:RESTORED)
+```
+
+`uiop:*image-dumped-p*` は、起動されたプログラムでは `nil`、イメージをダンプした
+プログラムでは `:executable` です。
+
+## イメージのダンプ
+
+| 関数 | 動作 |
+|------|------|
+| `uiop:dump-image` | rontolisp のコマンドラインが起動したインタプリタで `:executable t` を渡すと、postlude と dump フックを走らせたうえで、ファイル名が示す実行ファイルにイメージをコンパイルする。`:executable t` がないとき(どのバックエンドも起動できないヒープイメージ)、コンパイル済みのプログラム、コマンドラインのコンパイラを受け取っていない評価器では、フックを走らせる前に `uiop:not-implemented-error` |
+| `uiop:restore-image` | 上流の起動処理: restore フック、prelude、エントリーポイントの順に走らせ、`:lisp-interaction` が真でない限りエントリーポイントの最初の値を終了ステータスにする(真なら 0、`nil` なら 1)。`:lisp-interaction t` を渡さずに呼んだプログラムはそこで終わる |
+| `uiop:create-image` | `uiop:not-implemented-error` -- リンクすべき Lisp オブジェクトファイルがありません |
+
+rontolisp には保存できるヒープがないので、ダンプはコンパイルです: イメージがロード
+した各システムをターゲット向けに読み直し、その後に `uiop:*image-entry-point*` の
+`uiop:restore-image` を置きます。実行ファイルの種類はファイル名で決まります -- 拡張子
+なしはネイティブ実行ファイル、`.jar` は JVM のプログラム、`.wasm` はモジュールです。
+`program-op` のシステムの `asdf:make` が行うのはこれです。
+[ASDF システムから実行ファイルをビルドする](../../compiling/asdf-programs.md)を参照
+してください。
+
+## コマンドライン
+
+| 名前 | 返すもの |
+|------|----------|
+| `uiop:raw-command-line-arguments` | ベクタ全体。プログラム名に続いてユーザ引数 |
+| `uiop:command-line-arguments` | ユーザ引数 -- ベクタの rest（明示的に渡したベクタの rest でもよい） |
+| `uiop:argv0` | プログラム名 -- ベクタの first |
+| `uiop:*command-line-arguments*` | ユーザ引数。プログラムの実行前に初期化される |
+| `uiop:setup-command-line-arguments` | この変数をベクタから初期化し直す |
+
+```console
+$ cat args.lisp
+(print (uiop:argv0))
+(print (uiop:command-line-arguments))
+$ rontolisp args.lisp -- alpha beta
+"args.lisp"
+("alpha" "beta")
+```
+
+**`--` が rontolisp 自身のオプションの終わりであり、プログラムの引数の始まりです。**
+`--optimize` がコンパイラのフラグなのか、プログラムが受け取りたい引数なのかを他に
+区別する手段はありません。したがってインタプリタで動かすプログラムの引数は、常に
+セパレータの後ろに置きます。
+
+コンパイル済みの成果物にこの曖昧さはありません。ホストが渡すとおりに引数を受け
+取ります。
+
+```console
+$ rontolisp args.lisp -o Args.class --class-name Args && java Args alpha beta
+"Args"
+("alpha" "beta")
+$ rontolisp args.lisp -o args.wasm && wasmtime run args.wasm alpha beta
+"args.wasm"
+("alpha" "beta")
+```
+
+4 つのバックエンドすべてで形は同じです。だからこそ `uiop:command-line-arguments`
+はベクタの rest、`uiop:argv0` はその first と決められ、バックエンドごとの規則は
+要りません。異なるのはプログラム名だけで、それを知っているのはホストだけだからで
+す。インタプリタでは入力ファイル、JVM ではクラス名（`java` のコマンドラインに
+立っていたもの）またはそのクラスを読み込んだ jar のパス（`java -jar app.jar`）、
+WASM の両バックエンドではホストが `args[0]` に入れたもの（`wasmtime run` なら
+モジュールのパス）です。
+
+上流の UIOP がこの答えを返すのは実行可能形式としてダンプされたイメージのときだけ
+で、それ以外では処理系自身の引数を含んだままのベクタから `--` を探します。
+rontolisp は常に実行可能形式の側です。CLI がセパレータで自分で分割し、コンパイル
+済みの成果物は rontolisp のオプションを見ることがありません。

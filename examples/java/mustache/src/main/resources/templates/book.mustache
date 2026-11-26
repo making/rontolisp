@@ -1,0 +1,10 @@
+<li{{#finished}} class="done"{{/finished}}>
+  <b>{{title}}</b> by {{author}}
+  {{#pages}}
+  <span>{{read}} of {{pages}} pages{{#progress}}, {{.}}%{{/progress}}</span>
+  {{/pages}}
+  {{^pages}}
+  <span>pages unknown</span>
+  {{/pages}}
+  {{#tags}}<i>{{.}}</i>{{^-last}}, {{/-last}}{{/tags}}
+</li>

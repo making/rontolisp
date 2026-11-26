@@ -1,0 +1,526 @@
+package am.ik.rontolisp.eval;
+
+import java.io.IOException;
+import java.lang.reflect.Method;
+import java.net.ServerSocket;
+import java.net.URI;
+import java.net.URL;
+import java.net.URLClassLoader;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.time.Duration;
+
+import am.ik.rontolisp.codegen.jvm.JvmLispCompiler;
+import am.ik.rontolisp.compiler.OptimizeLevel;
+import am.ik.rontolisp.reader.LispReader;
+import am.ik.rontolisp.runtime.RontoHttpClack;
+import am.ik.rontolisp.runtime.RontoHttpServer;
+import am.ik.rontolisp.testsupport.OwnHandlerStacksPrograms;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+/**
+ * Tests for {@code rontolisp:http-handler} on the JVM backend: the compiled class
+ * implements {@link RontoHttpServer.Handler} and the directive serves requests through
+ * {@link RontoHttpServer#serve} using the same request/response property lists as the
+ * interpreter. Lives in this package so {@code stopAllForTesting} can shut the servers
+ * down.
+ */
+class HttpHandlerJvmTest {
+
+	@TempDir
+	Path tempDir;
+
+	@AfterEach
+	void shutDownServers() {
+		RontoHttpServer.stopAllForTesting();
+	}
+
+	@Test
+	@SuppressWarnings("NullAway") // buildEnv is called from bytecode, where nil IS null
+	void anUnknownPeerAndBindAddressStillReachTheEnvironmentAsNilAndLocalhost() {
+		// RontoHttpServer.Request spells "the transport does not know" as "", because the
+		// travelling package has no @Nullable to spell a null with -- so every consumer
+		// has to translate it back. Getting that wrong would put a bare "" in the
+		// environment where Clack requires nil (:remote-addr) or a host (:server-name).
+		Object env = RontoHttpClack.buildEnv(RontoHttpServer.Request.of("GET", "/", java.util.List.of(), ""), null);
+
+		assertThat(plistGet(env, ":REMOTE-ADDR")).isNull();
+		assertThat(plistGet(env, ":REMOTE-PORT")).isNull();
+		assertThat(plistGet(env, ":SERVER-NAME")).isEqualTo("\"localhost\"");
+	}
+
+	@Test
+	@SuppressWarnings("NullAway") // buildEnv is called from bytecode, where nil IS null
+	void aMountedRequestSplitsScriptNameAndPathInfo() {
+		// The Servlet transport is the one transport that mounts the application
+		// (context path + servlet path, both RAW -- still percent-encoded, so the
+		// prefix is strippable before decoding). :script-name gets the decoded mount
+		// point, :path-info the decoded remainder, :request-uri the full raw target --
+		// the Rack/PSGI split (.kb/http-server.md).
+		Object env = RontoHttpClack.buildEnv(mounted("/my%20app/caf%C3%A9?q=1", "/my%20app"), null);
+		assertThat(plistGet(env, ":SCRIPT-NAME")).isEqualTo("\"/my app\"");
+		assertThat(plistGet(env, ":PATH-INFO")).isEqualTo("\"/café\"");
+		assertThat(plistGet(env, ":REQUEST-URI")).isEqualTo("\"/my%20app/caf%C3%A9?q=1\"");
+
+		// The mount point itself: :path-info is "", not "/".
+		Object root = RontoHttpClack.buildEnv(mounted("/myapp", "/myapp"), null);
+		assertThat(plistGet(root, ":SCRIPT-NAME")).isEqualTo("\"/myapp\"");
+		assertThat(plistGet(root, ":PATH-INFO")).isEqualTo("\"\"");
+
+		// A scriptName that is not a prefix of the target degrades to the root-mounted
+		// split rather than signalling.
+		Object degraded = RontoHttpClack.buildEnv(mounted("/hello", "/other"), null);
+		assertThat(plistGet(degraded, ":SCRIPT-NAME")).isEqualTo("\"\"");
+		assertThat(plistGet(degraded, ":PATH-INFO")).isEqualTo("\"/hello\"");
+	}
+
+	private static RontoHttpServer.Request mounted(String target, String scriptName) {
+		return new RontoHttpServer.Request("GET", target, java.util.List.of(), new byte[0], "HTTP/1.1", "http", "", 0,
+				"", 0, scriptName);
+	}
+
+	// Walks the JVM runtime representation of a plist: an Object[2] cons chain.
+	private static Object plistGet(Object plist, String key) {
+		Object cursor = plist;
+		while (cursor instanceof Object[] cell) {
+			Object[] rest = (Object[]) cell[1];
+			if (key.equals(cell[0])) {
+				return rest[0];
+			}
+			cursor = rest[1];
+		}
+		throw new IllegalStateException("no " + key + " in the environment plist");
+	}
+
+	// A free TCP port (bound then released; a tiny race, acceptable for tests).
+	private static int freePort() throws IOException {
+		try (ServerSocket socket = new ServerSocket(0)) {
+			return socket.getLocalPort();
+		}
+	}
+
+	private static HttpResponse<String> get(int port, String path) throws Exception {
+		HttpClient client = HttpClient.newHttpClient();
+		HttpRequest request = HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + port + path)).GET().build();
+		return client.send(request, HttpResponse.BodyHandlers.ofString());
+	}
+
+	private static HttpResponse<String> post(int port, String path, String body) throws Exception {
+		HttpClient client = HttpClient.newHttpClient();
+		HttpRequest request = HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + port + path))
+			.POST(HttpRequest.BodyPublishers.ofString(body))
+			.build();
+		return client.send(request, HttpResponse.BodyHandlers.ofString());
+	}
+
+	private static HttpResponse<byte[]> getBytes(int port, String path) throws Exception {
+		HttpClient client = HttpClient.newHttpClient();
+		HttpRequest request = HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + port + path)).GET().build();
+		return client.send(request, HttpResponse.BodyHandlers.ofByteArray());
+	}
+
+	private static void waitForPort(int port) throws InterruptedException {
+		long deadline = System.nanoTime() + Duration.ofSeconds(5).toNanos();
+		while (System.nanoTime() < deadline) {
+			try (var socket = new java.net.Socket("127.0.0.1", port)) {
+				return;
+			}
+			catch (IOException ex) {
+				Thread.sleep(20);
+			}
+		}
+		throw new IllegalStateException("port " + port + " never opened");
+	}
+
+	// Compiles the program to a standalone class, then runs its main() on a daemon
+	// background thread (http-handler blocks in serve) and waits until the port is
+	// accepting connections.
+	private Class<?> compileAndServeInBackground(String program, int port) throws Exception {
+		return compileAndServeInBackground(program, port, OptimizeLevel.NONE);
+	}
+
+	private Class<?> compileAndServeInBackground(String program, int port, OptimizeLevel optimize) throws Exception {
+		JvmLispCompiler compiler = JvmLispCompiler.builder().className("TestHttpServe").optimize(optimize).build();
+		// mirror the CLI pipeline's splices: http-server.lisp (the shared server value
+		// model the injected handle() calls into), then the Gray call-site rewrite its
+		// buffered :raw-body stream needs, then the prelude for rontolisp:read-all
+		java.util.List<am.ik.rontolisp.LispVal> forms = LispReader.readAllFromString(program);
+		forms = HttpServerLibrary.process(forms, am.ik.rontolisp.compiler.ClackEnv.usesBufferedBody(forms));
+		forms = GrayStreamsLibrary.process(forms);
+		byte[] classBytes = compiler.compile(LispPreludeLibrary.process(forms));
+		Path classFile = this.tempDir.resolve("TestHttpServe.class");
+		Files.write(classFile, classBytes);
+		URLClassLoader loader = new URLClassLoader(new URL[] { this.tempDir.toUri().toURL() },
+				ClassLoader.getSystemClassLoader());
+		Class<?> clazz = loader.loadClass("TestHttpServe");
+		Method main = clazz.getMethod("main", String[].class);
+		Thread thread = new Thread(() -> {
+			try {
+				main.invoke(null, (Object) new String[0]);
+			}
+			catch (ReflectiveOperationException ex) {
+				throw new IllegalStateException(ex);
+			}
+		});
+		thread.setDaemon(true);
+		thread.start();
+		waitForPort(port);
+		return clazz;
+	}
+
+	@am.ik.rontolisp.testsupport.SocketTest
+	void aNativeExecutableServesTheDirectiveThroughItsRunner() throws Exception {
+		// The directive on a --native executable: its runner serves, and the default
+		// :raw-body is the asynchronous stream an async-defun handler drains with
+		// read-all, as on every other transport; an octet body goes out as it is. A
+		// handler that signals answers the interpreter's and the JVM's plain 500, its
+		// report on standard error alone.
+		int port = freePort();
+		Path source = this.tempDir.resolve("serve.lisp");
+		Files.writeString(source, """
+				(rontolisp:async-defun handle (env)
+				  (if (string= (getf env :path-info) "/boom") (error "secret detail"))
+				  (if (string= (getf env :path-info) "/octets")
+				      (let ((v (make-array 3 :element-type '(unsigned-byte 8))))
+				        (setf (aref v 0) 255)
+				        (setf (aref v 1) 254)
+				        (setf (aref v 2) 65)
+				        (list 200 (list :content-type "application/octet-stream") v))
+				      (let ((body (rontolisp:await (rontolisp:read-all (getf env :raw-body)))))
+				        (list 200 nil
+				              (list (if (eq (getf env :request-method) :POST) "POST" "?") ":" body
+				                    " " (format nil "~a" (getf env :remote-port)))))))
+				(rontolisp:http-handler 'handle %d)
+				""".formatted(port));
+		Path executable = this.tempDir.resolve("serve");
+		try {
+			new am.ik.rontolisp.cli.RontoLispCli(new java.io.ByteArrayInputStream(new byte[0]),
+					new java.io.PrintStream(new java.io.ByteArrayOutputStream(), true))
+				.run(new String[] { source.toString(), "--native", "-o", executable.toString() });
+		}
+		catch (UnsupportedOperationException ex) {
+			org.junit.jupiter.api.Assumptions.assumeTrue(
+					Boolean.getBoolean("rontolisp.native.required")
+							|| !String.valueOf(ex.getMessage()).contains("--native is not available for "),
+					ex.getMessage());
+			throw ex;
+		}
+		Process server = new ProcessBuilder(executable.toString()).redirectErrorStream(true)
+			.redirectOutput(this.tempDir.resolve("serve.log").toFile())
+			.start();
+		try {
+			waitForPort(port);
+			HttpResponse<String> echo = post(port, "/", "payload");
+			assertThat(echo.body()).as(Files.readString(this.tempDir.resolve("serve.log")))
+				.matches("POST:payload [1-9][0-9]*");
+			assertThat(getBytes(port, "/octets").body()).containsExactly(0xff, 0xfe, 0x41);
+			HttpResponse<String> failed = get(port, "/boom");
+			assertThat(failed.statusCode()).isEqualTo(500);
+			assertThat(failed.headers().firstValue("content-type")).hasValue("text/plain");
+			assertThat(failed.body()).isEqualTo("Internal Server Error");
+			assertThat(Files.readString(this.tempDir.resolve("serve.log")))
+				.contains("HTTP-HANDLER: handler failed: secret detail");
+		}
+		finally {
+			server.destroyForcibly().waitFor();
+		}
+	}
+
+	@Test
+	void compiledDirectiveServesClackEnvironment() throws Exception {
+		int port = freePort();
+		compileAndServeInBackground("""
+				(defun handle (env)
+				  (list 200 nil (list "path=" (getf env :path-info))))
+				(rontolisp:http-handler 'handle %d)
+				""".formatted(port), port);
+		HttpResponse<String> response = get(port, "/hello");
+		assertThat(response.statusCode()).isEqualTo(200);
+		assertThat(response.body()).isEqualTo("path=/hello");
+	}
+
+	@Test
+	void compiledDirectiveDecodesPathInfoAndServesBufferedRawBody() throws Exception {
+		// :raw-body :buffered on the JVM backend: the compiled %http-body-stream Gray
+		// instance, read through the compiled Gray dispatch -- read-line and read-byte
+		// share one cursor and file-position is a real byte index. An empty POST states
+		// Content-Length: 0 and gets an empty stream; a GET has no body and gets nil.
+		//
+		// The prefix makes the two defuns handle() calls take the value-tail depth: the
+		// ERROR and MAKE-INSTANCE wrappers the function values need tail-call
+		// %error-runtime, which enough condition classes make long enough to be
+		// outlined -- a call through a value. A unary call to either was a method the
+		// class did not declare (the tiny-routes application of ClackE2eTest).
+		StringBuilder conditions = new StringBuilder("(defpackage :conds (:use :cl))\n(in-package :conds)\n");
+		for (int i = 0; i < 45; i++) {
+			conditions.append("(define-condition c").append(i).append(" (error) ())\n");
+		}
+		conditions.append("""
+				(in-package :cl-user)
+				(defvar *signallers* (list #'error #'make-instance))
+				(print (handler-case (apply (car *signallers*) (list (read-from-string "conds::c3")))
+				         (error (e) (type-of e))))
+				""");
+		int port = freePort();
+		Class<?> served = compileAndServeInBackground(conditions + """
+				(defun handle (env)
+				  (let* ((s (getf env :raw-body))
+				         (line (if s (read-line s nil nil) "none"))
+				         (b (if s (read-byte s nil nil) 0))
+				         (pos (if s (file-position s) 0)))
+				    (list 200 nil
+				          (list (getf env :path-info) "/" (format nil "~a/~a/~a" line b pos)))))
+				(rontolisp:http-handler 'handle %d :raw-body :buffered)
+				""".formatted(port), port);
+		assertThat(post(port, "/a%20b", "first\nsecond").body()).isEqualTo("/a b/first/115/7");
+		assertThat(post(port, "/empty", "").body()).isEqualTo("/empty/NIL/NIL/0");
+		assertThat(get(port, "/plain").body()).isEqualTo("/plain/none/0/0");
+		for (String member : java.util.List.of("HTTP-BODY-STREAM", "HTTP-NORMALIZE-RESPONSE")) {
+			// RONTOLISP::%<member>, mangled; getDeclaredMethod throws when it is absent.
+			assertThat(served.getDeclaredMethod("RONTOLISP$colon$colon$pct" + member, Object.class, int.class))
+				.as("%s takes the depth, the shape this test exists for", member)
+				.isNotNull();
+		}
+	}
+
+	@Test
+	void compiledDirectiveSplitsPathInfoAndQueryString() throws Exception {
+		int port = freePort();
+		compileAndServeInBackground("""
+				(defun handle (env)
+				  (list 200 nil
+				        (list "path=" (getf env :path-info)
+				              " query=" (if (getf env :query-string) (getf env :query-string) "none"))))
+				(rontolisp:http-handler 'handle %d)
+				""".formatted(port), port);
+		assertThat(get(port, "/hello?a=1&b=two").body()).isEqualTo("path=/hello query=a=1&b=two");
+		assertThat(get(port, "/hello").body()).isEqualTo("path=/hello query=none");
+	}
+
+	@Test
+	void compiledDirectiveEchoesMethodAndBody() throws Exception {
+		// the request body is an asynchronous stream: an async-defun handler drains it
+		// with read-all and the injected handle() awaits the handler's future
+		int port = freePort();
+		compileAndServeInBackground("""
+				(rontolisp:async-defun handle (env)
+				  (let ((body (rontolisp:await (rontolisp:read-all (getf env :raw-body)))))
+				    (list 200 nil
+				          (list (if (eq (getf env :request-method) :POST) "POST" "?") ":" body))))
+				(rontolisp:http-handler 'handle %d)
+				""".formatted(port), port);
+		HttpResponse<String> response = post(port, "/", "payload");
+		assertThat(response.body()).isEqualTo("POST:payload");
+	}
+
+	@Test
+	void compiledDirectiveServesAnOctetBodyByteExactly() throws Exception {
+		// The JVM twin of HttpHandlerTest#directiveServesAnOctetBodyByteExactly: the
+		// octets reach toResponse as the long[]{width, e0, ...} the normalizer did not
+		// flatten, and go out unencoded. The RAW bytes are the assertion; the text
+		// spelling would pass on the double-encode.
+		int port = freePort();
+		compileAndServeInBackground(
+				HttpHandlerTest.OCTET_BODY_PROGRAM + "(rontolisp:http-handler 'handle %d)\n".formatted(port), port);
+		HttpResponse<byte[]> response = getBytes(port, "/");
+		assertThat(response.statusCode()).isEqualTo(200);
+		assertThat(response.body()).containsExactly(0xff, 0xfe, 0x41);
+	}
+
+	@Test
+	void compiledDirectiveRelaysAFetchedBodyByteExactlyAndReadAllStillDecodesIt() throws Exception {
+		// The JVM twin of HttpHandlerTest#directiveRelaysAFetchedBodyByteExactly...: the
+		// fetch takes the reply as byte[] and answers it as one long[] octet chunk, and
+		// _drain_body hands the octets to toResponse unencoded.
+		int upstream = HttpHandlerTest.startRelayUpstream();
+		int port = freePort();
+		compileAndServeInBackground(
+				HttpHandlerTest.RELAY_PROGRAM + "(rontolisp:http-handler 'handle %d)\n".formatted(port), port);
+		HttpResponse<byte[]> relayed = getBytes(port, "/relay?" + upstream);
+		assertThat(relayed.statusCode()).isEqualTo(200);
+		assertThat(relayed.headers().firstValue("content-type")).hasValue("image/jpeg");
+		assertThat(relayed.body()).containsExactly(HttpHandlerTest.RELAY_OCTETS);
+		assertThat(get(port, "/text?" + upstream).body()).isEqualTo("こんにちは");
+	}
+
+	@Test
+	void compiledDirectiveServesTheTwoElementBodylessResponse() throws Exception {
+		// lack's finalize-response answers (status headers) for a bodyless response.
+		int port = freePort();
+		compileAndServeInBackground("""
+				(defun handle (env) (list 204 nil))
+				(rontolisp:http-handler 'handle %d)
+				""".formatted(port), port);
+		HttpResponse<String> response = get(port, "/");
+		assertThat(response.statusCode()).isEqualTo(204);
+		assertThat(response.body()).isEmpty();
+	}
+
+	@Test
+	void compiledDirectiveServesABodyListHoldingNil() throws Exception {
+		// The compiled half of the same contract: lack's finalize-response answers a
+		// body LIST holding NIL for a controller that returned nil (every ningle 404),
+		// and a NIL chunk contributes the empty string.
+		int port = freePort();
+		compileAndServeInBackground("""
+				(defun handle (env)
+				  (if (string= (getf env :path-info) "/mixed")
+				      (list 200 nil (list "a" nil "b"))
+				      (list 404 nil (list nil))))
+				(rontolisp:http-handler 'handle %d)
+				""".formatted(port), port);
+		HttpResponse<String> missing = get(port, "/");
+		assertThat(missing.statusCode()).isEqualTo(404);
+		assertThat(missing.body()).isEmpty();
+		assertThat(get(port, "/mixed").body()).isEqualTo("ab");
+	}
+
+	@Test
+	void compiledDirectiveSurvivesOptimize() throws Exception {
+		// --optimize (the writer's shake) must keep handle(): RontoHttpServer invokes it
+		// through the Handler interface, an edge the call-graph shaker cannot see.
+		int port = freePort();
+		compileAndServeInBackground("""
+				(defun handle (env)
+				  (list 200 nil (list "opt=" (getf env :path-info))))
+				(rontolisp:http-handler 'handle %d)
+				""".formatted(port), port, OptimizeLevel.DEFAULT);
+		HttpResponse<String> response = get(port, "/x");
+		assertThat(response.statusCode()).isEqualTo(200);
+		assertThat(response.body()).isEqualTo("opt=/x");
+	}
+
+	@Test
+	void compiledDirectiveMarshalsRequestHeaders() throws Exception {
+		// The Clack :headers value is an equal hash table with LOWERCASED names,
+		// whatever casing the wire (or the JDK server's normalization) used.
+		int port = freePort();
+		compileAndServeInBackground("""
+				(defun handle (env)
+				  (list 200 nil
+				        (list (gethash "x-token" (getf env :headers)))))
+				(rontolisp:http-handler 'handle %d)
+				""".formatted(port), port);
+		HttpClient client = HttpClient.newHttpClient();
+		HttpRequest request = HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + port + "/"))
+			.header("X-Token", "secret42")
+			.GET()
+			.build();
+		HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+		assertThat(response.body()).isEqualTo("secret42");
+	}
+
+	@Test
+	void compiledDirectiveMarshalsResponseHeaders() throws Exception {
+		// Response headers are a keyword plist (Clack), with the dotted alist (a fetch
+		// result's :headers) accepted too -- exercise the plist form here.
+		int port = freePort();
+		compileAndServeInBackground("""
+				(defun handle (env)
+				  (list 200
+				        '(:content-type "text/plain" :x-custom "v1")
+				        (list "ok")))
+				(rontolisp:http-handler 'handle %d)
+				""".formatted(port), port);
+		HttpResponse<String> response = get(port, "/");
+		assertThat(response.statusCode()).isEqualTo(200);
+		assertThat(response.headers().firstValue("content-type")).hasValue("text/plain");
+		assertThat(response.headers().firstValue("x-custom")).hasValue("v1");
+		assertThat(response.body()).isEqualTo("ok");
+	}
+
+	@Test
+	void compiledDirectiveReturnsCustomStatusPerRequest() throws Exception {
+		int port = freePort();
+		compileAndServeInBackground("""
+				(defun handle (env)
+				  (if (equal (getf env :path-info) "/found")
+				      (list 200 nil (list "yes"))
+				      (list 404 nil (list "no"))))
+				(rontolisp:http-handler 'handle %d)
+				""".formatted(port), port);
+		assertThat(get(port, "/found").statusCode()).isEqualTo(200);
+		HttpResponse<String> notFound = get(port, "/missing");
+		assertThat(notFound.statusCode()).isEqualTo(404);
+		assertThat(notFound.body()).isEqualTo("no");
+	}
+
+	@Test
+	void concurrentRequestsEachSeeTheirOwnBindingOfASpecial() throws Exception {
+		// One virtual thread per request, so a special a handler binds is bound per
+		// request (.kb/dynamic-special-variables.md, "JVM"): requests released at once,
+		// each binding *request-path* to its own path and reading it back through a
+		// callee while the others do the same, never see another request's binding.
+		int port = freePort();
+		compileAndServeInBackground("""
+				(defvar *request-path* nil)
+				(defun request-path () *request-path*)
+				(defun handle (env)
+				  (let ((*request-path* (getf env :path-info)) (crossed nil))
+				    (dotimes (i 50000)
+				      (unless (eq (request-path) (getf env :path-info)) (setq crossed t)))
+				    (list 200 nil (list (if crossed "crossed" (request-path))))))
+				(rontolisp:http-handler 'handle %d)
+				""".formatted(port), port);
+		int requests = 16;
+		java.util.concurrent.CyclicBarrier together = new java.util.concurrent.CyclicBarrier(requests);
+		try (java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors
+			.newVirtualThreadPerTaskExecutor()) {
+			java.util.List<java.util.concurrent.Future<String>> answers = new java.util.ArrayList<>();
+			for (int i = 0; i < requests; i++) {
+				String path = "/r" + i;
+				answers.add(pool.submit(() -> {
+					together.await();
+					return get(port, path).body();
+				}));
+			}
+			for (int i = 0; i < requests; i++) {
+				assertThat(answers.get(i).get()).isEqualTo("/r" + i);
+			}
+		}
+	}
+
+	@Test
+	void aRequestsHandlersAreItsOwn() throws Exception {
+		// The handler stack was one static: a request leaving its handler-bind restored
+		// what it had saved over a handler another request pushed since, whose condition
+		// then found none.
+		int port = freePort();
+		compileAndServeInBackground(
+				OwnHandlerStacksPrograms.SERVED + "(rontolisp:http-handler 'handle %d)\n".formatted(port), port);
+		java.util.concurrent.CompletableFuture<HttpResponse<String>> first = java.util.concurrent.CompletableFuture
+			.supplyAsync(() -> {
+				try {
+					return get(port, "/first");
+				}
+				catch (Exception ex) {
+					throw new IllegalStateException(ex);
+				}
+			});
+		assertThat(get(port, "/second").body()).isEqualTo(OwnHandlerStacksPrograms.SERVED_OUTPUT);
+		assertThat(first.get().body()).isEqualTo("first");
+	}
+
+	@Test
+	void concurrentRequestsGetTheirOwnSocketHandle() throws Exception {
+		// One virtual thread per request means the generated class' _streams table is
+		// allocated from concurrently: a non-atomic slot reservation hands two requests
+		// the same handle, so one socket is dropped and the two conversations cross
+		// .
+		try (ServerSocket echo = StreamHandleConcurrencySupport.startEchoServer()) {
+			int port = freePort();
+			compileAndServeInBackground(StreamHandleConcurrencySupport.echoingHandlerProgram(echo.getLocalPort(), port),
+					port);
+			StreamHandleConcurrencySupport
+				.assertHandlesAreUnshared(StreamHandleConcurrencySupport.probeConcurrently(port));
+		}
+	}
+
+}

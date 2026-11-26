@@ -1,0 +1,159 @@
+package am.ik.rontolisp.eval;
+
+import java.util.ArrayDeque;
+import java.util.Deque;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.Objects;
+
+import am.ik.rontolisp.LispJavaObject;
+import am.ik.rontolisp.LispVal;
+import org.jspecify.annotations.Nullable;
+
+/**
+ * Thread-scoped dynamic (special) variable bindings for the interpreter.
+ *
+ * <p>
+ * Common Lisp special variables have <em>dynamic extent</em>:
+ * {@code (let ((*x* v)) body)} on a special {@code *x*} establishes a binding visible to
+ * every function called during {@code body} (not just lexically nested code), restored on
+ * any exit -- normal return, a non-local exit ({@code return}), or an error unwind. This
+ * class holds those bindings.
+ *
+ * <p>
+ * Bindings are <strong>per thread of control</strong>: the map lives in a
+ * {@link ThreadLocal}, so the HTTP handler server (one virtual thread per request,
+ * sharing the single global {@link Environment}) never lets one request's dynamic
+ * bindings leak into a concurrent request. The instance is owned by one
+ * {@link LispEvaluator}, so two independent evaluators sharing a thread do not collide
+ * either.
+ *
+ * <p>
+ * Each special name maps to a stack of values (top = current binding); nested
+ * {@code let}s push and pop, and {@code setq} of a bound special replaces the top. A name
+ * with an empty stack is not dynamically bound -- its value is the global default held in
+ * the evaluator's global environment (shallow-binding fallback), which is what the read
+ * path consults when {@link #isBound(String)} is false. A binding may hold NO value --
+ * what {@code progv} makes of a symbol it has no value for ({@link #pushUnbound}): the
+ * name is dynamically bound, so the global stays hidden, but {@link #get} answers null,
+ * which a read reports as the unbound variable and {@code boundp} as nil.
+ */
+final class DynamicBindings {
+
+	/**
+	 * What a binding without a value holds on its stack: no Lisp value is this object.
+	 */
+	private static final LispVal UNBOUND = new LispJavaObject(new Object());
+
+	private final ThreadLocal<Map<String, Deque<LispVal>>> stacks = ThreadLocal.withInitial(HashMap::new);
+
+	/**
+	 * Returns whether the given special name currently has a dynamic binding on this
+	 * thread.
+	 * @param name the variable name
+	 * @return {@code true} if a dynamic binding is in effect
+	 */
+	boolean isBound(String name) {
+		Deque<LispVal> stack = this.stacks.get().get(name);
+		return stack != null && !stack.isEmpty();
+	}
+
+	/**
+	 * Returns the current (innermost) dynamic value of a bound special. The caller must
+	 * have checked {@link #isBound(String)}.
+	 * @param name the variable name
+	 * @return the current dynamic value, or null when the innermost binding holds none
+	 */
+	@Nullable LispVal get(String name) {
+		Deque<LispVal> stack = Objects.requireNonNull(this.stacks.get().get(name), name);
+		LispVal value = Objects.requireNonNull(stack.peek(), name);
+		return value == UNBOUND ? null : value;
+	}
+
+	/**
+	 * Replaces the current (innermost) dynamic value of a bound special. The caller must
+	 * have checked {@link #isBound(String)}. Used by {@code setq}/{@code setf} of a
+	 * dynamically bound special.
+	 * @param name the variable name
+	 * @param value the new value
+	 */
+	void setCurrent(String name, LispVal value) {
+		Deque<LispVal> stack = Objects.requireNonNull(this.stacks.get().get(name), name);
+		stack.pop();
+		stack.push(value);
+	}
+
+	/**
+	 * Leaves the current (innermost) dynamic binding of a bound special without a value
+	 * -- {@code makunbound} inside a binding. The caller must have checked
+	 * {@link #isBound(String)}.
+	 * @param name the variable name
+	 */
+	void unbindCurrent(String name) {
+		setCurrent(name, UNBOUND);
+	}
+
+	/**
+	 * Establishes a new dynamic binding for a special (pushes onto its stack). Balanced
+	 * by a {@link #pop(String)} in a {@code finally} on the binding form's exit.
+	 * @param name the variable name
+	 * @param value the value to bind
+	 */
+	void push(String name, LispVal value) {
+		this.stacks.get().computeIfAbsent(name, k -> new ArrayDeque<>()).push(value);
+	}
+
+	/**
+	 * Establishes a dynamic binding WITHOUT a value: the name is unbound for its extent
+	 * ({@link #get} answers null) until an assignment gives the binding one. Balanced by
+	 * a {@link #pop(String)} like {@link #push}.
+	 * @param name the variable name
+	 */
+	void pushUnbound(String name) {
+		push(name, UNBOUND);
+	}
+
+	/**
+	 * The depth of every special's binding stack on this thread.
+	 * @return name to depth, a copy
+	 */
+	Map<String, Integer> depths() {
+		Map<String, Integer> depths = new HashMap<>();
+		this.stacks.get().forEach((name, stack) -> depths.put(name, stack.size()));
+		return depths;
+	}
+
+	/**
+	 * Drops every binding pushed since {@link #depths} answered: the outermost ones stay,
+	 * since a binding form only ever pushes above what was there when it started.
+	 * @param depths what {@link #depths} answered then
+	 */
+	void truncateTo(Map<String, Integer> depths) {
+		Map<String, Deque<LispVal>> map = this.stacks.get();
+		map.entrySet().removeIf(entry -> {
+			Deque<LispVal> stack = entry.getValue();
+			int keep = depths.getOrDefault(entry.getKey(), 0);
+			while (stack.size() > keep) {
+				stack.pop();
+			}
+			return stack.isEmpty();
+		});
+	}
+
+	/**
+	 * Removes the innermost dynamic binding for a special, restoring the previous one (or
+	 * the global default when the stack empties).
+	 * @param name the variable name
+	 */
+	void pop(String name) {
+		Map<String, Deque<LispVal>> map = this.stacks.get();
+		Deque<LispVal> stack = map.get(name);
+		if (stack != null) {
+			stack.pop();
+			if (stack.isEmpty()) {
+				map.remove(name);
+			}
+		}
+	}
+
+}

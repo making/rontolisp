@@ -1,0 +1,9 @@
+# classpath test.graph2:types:1 test.graph2:pom-agg:1 test.graph2:ear-thing:1 test.graph2:tj:1
+classpath test.graph2:types:jar::1
+classpath test.graph2:tj:jar:tests:1
+classpath test.graph2:pom-agg:jar::1
+classpath test.graph2:agg-child:jar::1
+classpath test.graph2:ear-thing:jar::1
+classpath test.graph2:ear-child:jar::1
+classpath test.graph2:tj:jar::1
+classpath test.graph2:tj-child:jar::1

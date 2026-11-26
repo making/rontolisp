@@ -1,0 +1,22 @@
+package example:vowels;
+
+/// A one-line description of a piece of text. Implemented in Rust, but the vowel
+/// count in it comes from a Lisp component.
+interface describe {
+  describe: func(text: string) -> string;
+}
+
+/// The Rust describer's world. It EXPORTS `describe` (the function a host, or
+/// another component, calls), and to do its job it IMPORTS `vowel-count` -- a
+/// plain function a Lisp component supplies. This is the "Rust calls Lisp" edge.
+world describer {
+  export describe;
+  import vowel-count: func(text: string) -> s32;
+}
+
+/// The Lisp counter's world. It EXPORTS `vowel-count` as a plain function --
+/// exactly the shape the Rust world above imports. `rontolisp:wit-export`
+/// implements plain function exports, so `vowel-count` is a bare world function.
+world counter {
+  export vowel-count: func(text: string) -> s32;
+}

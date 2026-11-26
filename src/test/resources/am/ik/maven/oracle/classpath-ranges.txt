@@ -1,0 +1,8 @@
+# classpath test.range:app:1 test.range:deep:1
+classpath test.range:app:jar::1
+classpath test.range:mid:jar::1
+classpath test.range:lib:jar::1.5
+classpath test.range:leaf:jar::1
+classpath test.range:deep:jar::1
+classpath test.range:mid2:jar::1
+warning missing test.range:lib:jar:1.7

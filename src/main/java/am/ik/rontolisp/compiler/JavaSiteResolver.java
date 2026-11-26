@@ -1,0 +1,971 @@
+package am.ik.rontolisp.compiler;
+
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
+
+import am.ik.rontolisp.LispBigInteger;
+import am.ik.rontolisp.LispChar;
+import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispDouble;
+import am.ik.rontolisp.LispInteger;
+import am.ik.rontolisp.LispNames;
+import am.ik.rontolisp.LispNil;
+import am.ik.rontolisp.LispString;
+import am.ik.rontolisp.LispSymbol;
+import am.ik.rontolisp.LispTrue;
+import am.ik.rontolisp.LispVal;
+import org.jspecify.annotations.Nullable;
+
+/**
+ * Resolves a {@code java:} call site before it runs -- the one resolution model the
+ * interpreter and the JVM compiler share, after Clojure's: a site whose receiver class
+ * and argument kinds are known from the program text calls exactly one member, chosen by
+ * the run-time rule ({@link JavaOverloads}) over what is known; a site whose class is
+ * known but whose argument kinds are not is a DISPATCH among that class's overloads,
+ * chosen by the same rule over the kinds the arguments have when it runs; any other site
+ * is left to run time, where that same rule sees the receiver's class and the argument
+ * kinds.
+ * <p>
+ * What is known about a subform, all of it LEXICAL ({@link #typeOf}): a literal's kind; a
+ * {@code (java:new "C" ...)} is exactly a {@code C}; a resolved member's value is what
+ * its declared type unmarshals to ({@link JavaStaticType#ofDeclared}); a
+ * {@code (the (java:object "C") x)} is what a {@code C} unmarshals to
+ * ({@code (java:object "C" :exact)}: what {@code java:new} answers); and a typed variable
+ * -- declared, inferred from its {@code let} initializer, proclaimed -- which
+ * {@link JavaDeclarations} has already turned into that {@code the} at each site. A
+ * declared type is trusted: a false one is a deterministic error where the value meets
+ * the member, never a different member.
+ * <p>
+ * The one place a resolved site chooses differently from run-time resolution: a receiver
+ * typed by an upper bound resolves among the bound's methods, so a run-time class that
+ * adds a public overload of the same name is not consulted
+ * ({@code Collection.remove(Object)} rather than {@code ArrayList.remove(int)}), exactly
+ * as a Java or a type-hinted Clojure call would -- whether the site resolves to one
+ * member or dispatches. Arguments never do: a site resolves to one member only when EVERY
+ * kind its arguments can have selects it, and a dispatch chooses by the kinds they have.
+ * <p>
+ * The result is a pure function of the site form and the lookup, so the interpreter
+ * (reflection) and the compiler (class files) resolve the same site the same way whenever
+ * the two lookups describe the same classes.
+ */
+public final class JavaSiteResolver {
+
+	/** The most argument-kind combinations a site is checked over. */
+	private static final int COMBINATION_LIMIT = 256;
+
+	private final JavaClassLookup lookup;
+
+	/**
+	 * @param lookup where classes are described
+	 */
+	public JavaSiteResolver(JavaClassLookup lookup) {
+		this.lookup = lookup;
+	}
+
+	/**
+	 * The operator of a {@code java:} site.
+	 * @param form a form
+	 * @return the operator, or {@code null} when the form is not a {@code java:new},
+	 * {@code java:call}, {@code java:static} or {@code java:field} call
+	 */
+	public static JavaSite.@Nullable Operator operatorOf(LispVal form) {
+		if (!(form instanceof LispCons cons) || !(cons.car() instanceof LispSymbol head)) {
+			return null;
+		}
+		return switch (head.name()) {
+			case LispNames.JAVA_NEW_QUALIFIED -> JavaSite.Operator.NEW;
+			case LispNames.JAVA_CALL_QUALIFIED -> JavaSite.Operator.CALL;
+			case LispNames.JAVA_STATIC_QUALIFIED -> JavaSite.Operator.STATIC;
+			case LispNames.JAVA_FIELD_QUALIFIED -> JavaSite.Operator.FIELD;
+			default -> null;
+		};
+	}
+
+	/**
+	 * The class a {@code (java:object "C")} or {@code (java:object "C" :exact)} type
+	 * specifier names.
+	 * @param spec a type specifier
+	 * @return the class name, or {@code null} when the specifier is not one
+	 */
+	public static @Nullable String javaObjectClass(LispVal spec) {
+		if (spec instanceof LispCons cons && cons.car() instanceof LispSymbol head
+				&& LispNames.JAVA_OBJECT_QUALIFIED.equals(head.name()) && cons.cdr() instanceof LispCons rest
+				&& rest.car() instanceof LispString className
+				&& (rest.cdr() instanceof LispNil || isExactMarker(rest.cdr()))) {
+			return className.value();
+		}
+		return null;
+	}
+
+	private static boolean isExactMarker(LispVal tail) {
+		return tail instanceof LispCons marker && marker.car() instanceof LispSymbol keyword
+				&& EXACT.equals(keyword.name()) && marker.cdr() instanceof LispNil;
+	}
+
+	/** The marker of {@code (java:object "C" :exact)}. */
+	private static final String EXACT = ":EXACT";
+
+	/**
+	 * The spellings {@link #specOf} chooses among for a set of Lisp kinds: each is what a
+	 * member declared with that type answers ({@link JavaStaticType#ofDeclared}).
+	 */
+	private static final List<String> KIND_SPELLINGS = List.of("void", "int", "double", "char", "java.lang.Long",
+			"java.lang.Double", "java.lang.Character", "boolean", "java.lang.String", "java.math.BigInteger");
+
+	/**
+	 * What a {@code java:object} type specifier says about a value.
+	 * {@code (java:object "C")} is what a member declared to answer a {@code C} answers
+	 * ({@link JavaStaticType#ofDeclared}: a subclass of {@code C} or {@code nil}, a
+	 * primitive's Lisp kind, ...); {@code (java:object "C" :exact)} is what
+	 * {@code (java:new "C" ...)} answers ({@link JavaStaticType#ofConstructed}) -- and of
+	 * an interface, whose instances are never exactly of it, what a {@code java:reify} or
+	 * {@code java:proxy} of it makes ({@link JavaImplementationType}).
+	 * @param spec a type specifier
+	 * @return its static type, or {@code null} when the specifier is not a
+	 * {@code java:object} one
+	 */
+	public @Nullable JavaStaticType typeOfSpec(LispVal spec) {
+		String className = javaObjectClass(spec);
+		if (className == null) {
+			return null;
+		}
+		JavaType type = this.lookup.find(className);
+		if (type == null) {
+			return JavaStaticType.UNKNOWN;
+		}
+		boolean exact = ((LispCons) ((LispCons) spec).cdr()).cdr() instanceof LispCons;
+		if (exact && type.isInterface()) {
+			// No object's class is exactly an interface: (java:object "I" :exact) is the
+			// object a java:reify / java:proxy of I makes (JavaImplementationType).
+			return type.isLinkable() ? kinds(this.lookup.implementationOf(type)) : JavaStaticType.UNKNOWN;
+		}
+		return exact ? JavaStaticType.ofConstructed(type, this.lookup) : JavaStaticType.ofDeclared(type, this.lookup);
+	}
+
+	/**
+	 * The {@code java:object} specifier that says the most {@link #typeOfSpec} can read
+	 * back of a static type -- the same type, or the narrowest one containing it: a bound
+	 * is {@code (java:object "C")}, one exact host class
+	 * {@code (java:object "C" :exact)}, a set of Lisp kinds (with at most one host class
+	 * that may be {@code nil}) the smallest declared type whose value covers the set, so
+	 * {@code {integer}} is {@code (java:object "int")}. A wider type resolves fewer sites
+	 * and never a different member (a site resolves only when every kind selects the same
+	 * one).
+	 * @param type a static type
+	 * @return the specifier, or {@code null} when nothing but {@code t} covers the type
+	 */
+	public @Nullable LispVal specOf(JavaStaticType type) {
+		if (type instanceof JavaStaticType.Bounded bounded) {
+			return javaObjectSpec(bounded.type().name(), false);
+		}
+		if (!(type instanceof JavaStaticType.Kinds known)) {
+			return null;
+		}
+		Set<JavaKind> kinds = known.kinds();
+		List<String> candidates = new ArrayList<>();
+		for (JavaKind kind : kinds) {
+			if (kind instanceof JavaImplementationType implementation) {
+				// What a java:reify / java:proxy of I makes: (java:object "I" :exact). No
+				// specifier spells a java:proxy of several interfaces.
+				JavaType single = implementation.single();
+				return kinds.size() == 1 && single != null ? javaObjectSpec(single.name(), true) : null;
+			}
+			if (kind instanceof JavaType host) {
+				if (kinds.size() == 1) {
+					return javaObjectSpec(host.name(), true);
+				}
+				candidates.add(host.name());
+			}
+		}
+		candidates.addAll(KIND_SPELLINGS);
+		String best = null;
+		int bestSize = Integer.MAX_VALUE;
+		for (String name : candidates) {
+			JavaType candidate = this.lookup.find(name);
+			if (candidate != null
+					&& JavaStaticType.ofDeclared(candidate, this.lookup) instanceof JavaStaticType.Kinds covering
+					&& covering.kinds().containsAll(kinds) && covering.kinds().size() < bestSize) {
+				best = name;
+				bestSize = covering.kinds().size();
+			}
+		}
+		return best == null ? null : javaObjectSpec(best, false);
+	}
+
+	/**
+	 * A fresh {@code (java:object "C")} or {@code (java:object "C" :exact)} specifier.
+	 * @param className the class name
+	 * @param exact whether the value is exactly a {@code C}
+	 * @return the specifier
+	 */
+	public static LispCons javaObjectSpec(String className, boolean exact) {
+		LispVal tail = exact ? new LispCons(new LispSymbol(EXACT), LispNil.INSTANCE) : LispNil.INSTANCE;
+		return new LispCons(new LispSymbol(LispNames.JAVA_OBJECT_QUALIFIED),
+				new LispCons(new LispString(className), tail));
+	}
+
+	/**
+	 * The class the outermost {@code (the (java:object "C") ...)} around a form names --
+	 * looking through any other {@code the}, as {@link #typeOf} does -- or {@code null}.
+	 * @param form an argument form
+	 * @return the class name, or {@code null} when no declaration types the form
+	 */
+	public static @Nullable String declaredClass(LispVal form) {
+		LispVal current = form;
+		while (current instanceof LispCons cons && cons.car() instanceof LispSymbol head
+				&& LispNames.THE.equals(head.name()) && cons.isProperList()) {
+			List<LispVal> parts = cons.toList();
+			if (parts.size() != 3) {
+				return null;
+			}
+			String className = javaObjectClass(parts.get(1));
+			if (className != null) {
+				return className;
+			}
+			current = parts.get(2);
+		}
+		return null;
+	}
+
+	/**
+	 * A site as a warning names it: the operator and its literal names.
+	 * @param site the site
+	 * @return e.g. {@code java:call "append"}
+	 */
+	public static String describe(LispCons site) {
+		JavaSite.Operator operator = operatorOf(site);
+		List<LispVal> parts = site.isProperList() ? site.toList() : List.of(site.car());
+		StringBuilder sb = new StringBuilder(
+				operator == null ? site.car().print() : "java:" + operator.name().toLowerCase(java.util.Locale.ROOT));
+		if (operator == JavaSite.Operator.STATIC) {
+			appendPart(sb, parts, 1);
+			appendPart(sb, parts, 2);
+		}
+		else if (operator == JavaSite.Operator.NEW) {
+			appendPart(sb, parts, 1);
+		}
+		else {
+			appendPart(sb, parts, 2);
+		}
+		return sb.toString();
+	}
+
+	/**
+	 * The report of a site left to run time, without a position prefix (each backend adds
+	 * its own).
+	 * @param site the site
+	 * @param resolution how it resolved
+	 * @return e.g. {@code java:call "length" is resolved by reflection at run time: the
+	 * receiver's class is not known}
+	 */
+	public static String reflectionWarning(LispCons site, JavaSite resolution) {
+		return describe(site) + " is resolved by reflection at run time: " + resolution.reason();
+	}
+
+	/**
+	 * The {@code java:} sites a form shows, outermost first, quoted data skipped: what
+	 * {@code --warn-java-reflection} reports on.
+	 * @param form a form
+	 * @return the sites, each once
+	 */
+	public static List<LispCons> sitesIn(LispVal form) {
+		List<LispCons> sites = new ArrayList<>();
+		collectSites(form, sites, new java.util.IdentityHashMap<>());
+		return sites;
+	}
+
+	private static void collectSites(LispVal form, List<LispCons> sites,
+			java.util.IdentityHashMap<LispCons, Boolean> seen) {
+		LispVal current = form;
+		boolean head = true;
+		while (current instanceof LispCons cons && seen.put(cons, Boolean.TRUE) == null) {
+			if (head) {
+				if (cons.car() instanceof LispSymbol sym && LispNames.isQuote(sym.name())) {
+					return;
+				}
+				if (operatorOf(cons) != null) {
+					sites.add(cons);
+				}
+				head = false;
+			}
+			if (cons.car() instanceof LispCons inner) {
+				collectSites(inner, sites, seen);
+			}
+			current = cons.cdr();
+		}
+	}
+
+	private static void appendPart(StringBuilder sb, List<LispVal> parts, int index) {
+		if (index < parts.size() && parts.get(index) instanceof LispString s) {
+			sb.append(' ').append(s.print());
+		}
+	}
+
+	/**
+	 * The index of a site's first argument -- where the markers it may end in
+	 * ({@link JavaMarkers}) can start: after the class name of a {@code java:new}, the
+	 * names of a {@code java:static}, the receiver and method of a {@code java:call}, the
+	 * object and field of a {@code java:field}.
+	 * @param operator the site's operator
+	 * @return the index in the form's elements, the operator first
+	 */
+	public static int firstArgument(JavaSite.Operator operator) {
+		return operator == JavaSite.Operator.NEW ? 2 : 3;
+	}
+
+	/**
+	 * Resolves a site. The markers it ends in ({@link JavaMarkers}) are set aside: they
+	 * are no arguments, and {@code :java-false} makes a boolean result {@code t} or
+	 * {@code |false|}
+	 * ({@link JavaStaticType#ofDeclared(JavaType, JavaClassLookup, boolean)}).
+	 * @param site a {@code java:new}, {@code java:call}, {@code java:static} or
+	 * {@code java:field} form
+	 * @return how it resolves
+	 * @throws IllegalArgumentException when the form is no such site
+	 */
+	public JavaSite resolve(LispCons site) {
+		JavaSite.Operator operator = operatorOf(site);
+		if (operator == null) {
+			throw new IllegalArgumentException("not a java: site: " + site.print());
+		}
+		if (!site.isProperList()) {
+			return JavaSite.unresolved(operator, JavaStaticType.UNKNOWN, "the form is malformed");
+		}
+		List<LispVal> parts = site.toList();
+		int first = firstArgument(operator);
+		JavaMarkers markers = JavaMarkers.of(parts, first);
+		parts = parts.subList(0, parts.size() - JavaMarkers.count(parts, first));
+		boolean javaFalse = markers.javaFalse();
+		if (markers.throughComputed()) {
+			// A compiled call names the function it calls a converted one through.
+			return JavaSite.unresolved(operator, JavaStaticType.UNKNOWN, JavaMarkers.THROUGH_COMPUTED);
+		}
+		try {
+			JavaSite resolved = switch (operator) {
+				case NEW -> resolveNew(parts, javaFalse);
+				case STATIC -> resolveStatic(parts, javaFalse);
+				case CALL -> resolveCall(parts, javaFalse);
+				case FIELD -> resolveField(parts, javaFalse);
+			};
+			return markers.any() ? resolved.withMarkers(markers.withResolved(choosesItsMemberFirst(resolved)))
+					: resolved;
+		}
+		catch (IllegalArgumentException ex) {
+			// A malformed parameter tag: the run-time path raises it.
+			return JavaSite.unresolved(operator, JavaStaticType.UNKNOWN, String.valueOf(ex.getMessage()));
+		}
+		catch (RuntimeException | LinkageError ex) {
+			// A class that cannot be inspected (a missing dependency, an unreadable class
+			// file): resolving early must never fail a program resolving at run time
+			// would not, so the site is left to run time, which reports what it meets.
+			return JavaSite.unresolved(operator, JavaStaticType.UNKNOWN, "the classes could not be inspected: " + ex);
+		}
+	}
+
+	/**
+	 * Whether a site chose the member it calls before it runs: resolved to one member, or
+	 * dispatched over its only overload -- the call Clojure's compiler resolves, its
+	 * reflector the others -- which a function the site converts is called with
+	 * ({@link JavaMarkers#resolved}).
+	 * @param site how the site resolved
+	 * @return whether its member is fixed before it runs
+	 */
+	static boolean choosesItsMemberFirst(JavaSite site) {
+		return site.resolved() && (site.executable() != null || site.overloads().size() == 1);
+	}
+
+	private JavaSite resolveNew(List<LispVal> parts, boolean javaFalse) {
+		JavaSite.Operator op = JavaSite.Operator.NEW;
+		if (parts.size() < 2 || !(parts.get(1) instanceof LispString designator)) {
+			return JavaSite.unresolved(op, JavaStaticType.UNKNOWN, "the class name is not a literal string");
+		}
+		JavaOverloads.Member member = JavaOverloads.parseMember(designator.value());
+		JavaType type = this.lookup.find(member.name());
+		if (type == null) {
+			return JavaSite.unresolved(op, JavaStaticType.UNKNOWN, "class " + member.name() + " is not found");
+		}
+		JavaStaticType result = JavaStaticType.ofConstructed(type, this.lookup, javaFalse);
+		String unlinkable = unlinkable("class ", type);
+		if (unlinkable != null) {
+			return JavaSite.unresolved(op, result, unlinkable);
+		}
+		if (type.isAbstract()) {
+			// A public constructor of an abstract class makes nothing: the run-time path
+			// reports what reflection reports.
+			return JavaSite.unresolved(op, result,
+					"class " + type.name() + " is " + (type.isInterface() ? "an interface" : "abstract"));
+		}
+		List<? extends JavaExecutable> candidates = JavaOverloads
+			.filterByHints(JavaOverloads.filterByTag(type.constructors(), member.tag()), member.hints(), this.lookup);
+		return select(op, type, member, designator.value(), candidates, parts.subList(2, parts.size()), result,
+				javaFalse);
+	}
+
+	private JavaSite resolveStatic(List<LispVal> parts, boolean javaFalse) {
+		JavaSite.Operator op = JavaSite.Operator.STATIC;
+		if (parts.size() < 3 || !(parts.get(1) instanceof LispString className)) {
+			return JavaSite.unresolved(op, JavaStaticType.UNKNOWN, "the class name is not a literal string");
+		}
+		if (!(parts.get(2) instanceof LispString methodName)) {
+			return JavaSite.unresolved(op, JavaStaticType.UNKNOWN, "the method name is not a literal string");
+		}
+		JavaType type = this.lookup.find(className.value());
+		if (type == null) {
+			return JavaSite.unresolved(op, JavaStaticType.UNKNOWN, "class " + className.value() + " is not found");
+		}
+		String unlinkable = unlinkable("class ", type);
+		if (unlinkable != null) {
+			return JavaSite.unresolved(op, JavaStaticType.UNKNOWN, unlinkable);
+		}
+		JavaOverloads.Member member = JavaOverloads.parseMember(methodName.value());
+		// java:static calls a static method: an instance method of the name is no
+		// candidate (the run-time rule, JavaOverloads.staticMethods).
+		List<? extends JavaExecutable> candidates = JavaOverloads.filterByHints(
+				JavaOverloads.filterByTag(JavaOverloads.staticMethods(type.methods(member.name())), member.tag()),
+				member.hints(), this.lookup);
+		return select(op, type, member, methodName.value(), candidates, parts.subList(3, parts.size()), null,
+				javaFalse);
+	}
+
+	private JavaSite resolveCall(List<LispVal> parts, boolean javaFalse) {
+		JavaSite.Operator op = JavaSite.Operator.CALL;
+		if (parts.size() < 3 || !(parts.get(2) instanceof LispString methodName)) {
+			return JavaSite.unresolved(op, JavaStaticType.UNKNOWN, "the method name is not a literal string");
+		}
+		JavaType type = callReceiverClass(typeOf(parts.get(1)));
+		if (type == null) {
+			return JavaSite.unresolved(op, JavaStaticType.UNKNOWN, "the receiver's class is not known");
+		}
+		String unlinkable = unlinkable("the receiver's class ", type);
+		if (unlinkable != null) {
+			return JavaSite.unresolved(op, JavaStaticType.UNKNOWN, unlinkable);
+		}
+		JavaOverloads.Member member = JavaOverloads.parseMember(methodName.value());
+		List<? extends JavaExecutable> candidates = JavaOverloads.filterByHints(
+				JavaOverloads.filterByTag(callableMethods(type, member.name()), member.tag()), member.hints(),
+				this.lookup);
+		return select(op, type, member, methodName.value(), candidates, parts.subList(3, parts.size()), null,
+				javaFalse);
+	}
+
+	/**
+	 * The class a {@code java:call} receiver of this static type is called as: a host
+	 * object's ({@link JavaStaticType#receiverClass()}), or the one class every Lisp kind
+	 * it can have is called as ({@link JavaOverloads#receiverClassName}) -- a string's
+	 * {@code String}; {@code nil} is refused when the call runs, as for a host object. An
+	 * integer's box depends on its value, so it leaves the class unknown.
+	 */
+	private @Nullable JavaType callReceiverClass(JavaStaticType type) {
+		JavaType host = type.receiverClass();
+		if (host != null || !(type instanceof JavaStaticType.Kinds known)) {
+			return host;
+		}
+		String name = null;
+		for (JavaKind kind : known.kinds()) {
+			if (kind == JavaKind.Lisp.NIL) {
+				continue;
+			}
+			String className = kind instanceof JavaKind.Lisp lisp ? JavaOverloads.receiverClassName(lisp) : null;
+			if (className == null || (name != null && !name.equals(className))) {
+				return null;
+			}
+			name = className;
+		}
+		return name == null ? null : this.lookup.find(name);
+	}
+
+	/**
+	 * The methods of this name a {@code java:call} on a receiver of this static class may
+	 * call: {@link JavaType#methods}, and of an interface also {@code Object}'s public
+	 * instance methods it does not redeclare. {@link Class#getMethods()} of an interface
+	 * lists none of those, yet they are its members (JLS 9.2) and an
+	 * {@code invokeinterface} of one links (JVMS 5.4.3.4) -- what javac emits for
+	 * {@code list.toString()}.
+	 */
+	private List<? extends JavaExecutable> callableMethods(JavaType type, String name) {
+		List<? extends JavaExecutable> declared = type.methods(name);
+		if (!type.isInterface()) {
+			return declared;
+		}
+		JavaType object = this.lookup.find("java.lang.Object");
+		if (object == null) {
+			return declared;
+		}
+		List<JavaExecutable> callable = new ArrayList<>(declared);
+		for (JavaExecutable inherited : object.methods(name)) {
+			if (!inherited.isStatic() && !redeclared(declared, inherited)) {
+				callable.add(inherited);
+			}
+		}
+		return callable;
+	}
+
+	private static boolean redeclared(List<? extends JavaExecutable> declared, JavaExecutable inherited) {
+		for (JavaExecutable method : declared) {
+			List<? extends JavaType> params = method.parameterTypes();
+			List<? extends JavaType> inheritedParams = inherited.parameterTypes();
+			if (params.size() != inheritedParams.size()) {
+				continue;
+			}
+			boolean same = true;
+			for (int i = 0; i < params.size() && same; i++) {
+				same = params.get(i).name().equals(inheritedParams.get(i).name());
+			}
+			if (same) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private JavaSite resolveField(List<LispVal> parts, boolean javaFalse) {
+		JavaSite.Operator op = JavaSite.Operator.FIELD;
+		if (parts.size() == 4) {
+			// A write: no direct site writes a field, so the run-time path does
+			// (eval/JavaInterop.field, the bridge's javaField).
+			return JavaSite.unresolved(op, JavaStaticType.UNKNOWN, FIELD_WRITE);
+		}
+		if (parts.size() != 3 || !(parts.get(2) instanceof LispString fieldName)) {
+			return JavaSite.unresolved(op, JavaStaticType.UNKNOWN, "the field name is not a literal string");
+		}
+		JavaType type;
+		if (parts.get(1) instanceof LispString className) {
+			type = this.lookup.find(className.value());
+			if (type == null) {
+				return JavaSite.unresolved(op, JavaStaticType.UNKNOWN, "class " + className.value() + " is not found");
+			}
+		}
+		else {
+			type = typeOf(parts.get(1)).receiverClass();
+			if (type == null) {
+				return JavaSite.unresolved(op, JavaStaticType.UNKNOWN, "the object's class is not known");
+			}
+		}
+		JavaField field = type.field(fieldName.value());
+		if (field == null) {
+			return JavaSite.unresolved(op, JavaStaticType.UNKNOWN,
+					"class " + type.name() + " has no public field " + fieldName.value());
+		}
+		if (!type.isLinkable() || !field.declaringClass().isAccessible()) {
+			return JavaSite.unresolved(op, JavaStaticType.UNKNOWN,
+					"field " + type.name() + "." + fieldName.value() + " is not accessible");
+		}
+		if (parts.get(1) instanceof LispString && !field.isStatic()) {
+			// A class name reads a static field; the run-time path says so.
+			return JavaSite.unresolved(op, JavaStaticType.UNKNOWN, notStatic(type.name(), fieldName.value()));
+		}
+		return new JavaSite(op, type.name(), fieldName.value(), null, field, false,
+				JavaStaticType.ofDeclared(field.type(), this.lookup, javaFalse), List.of(), null, List.of());
+	}
+
+	/** Why a {@code (java:field x "f" value)} write is resolved when it runs. */
+	static final String FIELD_WRITE = "a field write is resolved when it runs";
+
+	/**
+	 * The error a {@code (java:field "C" "f")} of an instance field raises when it runs,
+	 * and the reason such a site is not resolved before.
+	 * @param className the class
+	 * @param fieldName the field
+	 * @return the text
+	 */
+	public static String notStatic(String className, String fieldName) {
+		return "field " + className + "." + fieldName + " is not static";
+	}
+
+	/**
+	 * Why a compiled program could not name a class, or {@code null} when it can
+	 * ({@link JavaType#isLinkable()}).
+	 */
+	private static @Nullable String unlinkable(String what, JavaType type) {
+		if (!type.isAccessible()) {
+			return what + type.name() + " is not accessible";
+		}
+		if (!type.isPublic()) {
+			return what + type.name() + " is not public";
+		}
+		return null;
+	}
+
+	/**
+	 * The member every combination of the argument kinds selects; otherwise a dispatch
+	 * among the candidates, chosen when the site runs from the arguments' kinds -- the
+	 * static class's candidates, never the run-time class's; or why there is neither.
+	 * @param written the designator as the site writes it, which a dispatched call no
+	 * overload accepts is reported with
+	 * @param constructed the result type of a constructor site, or {@code null} for a
+	 * method site (whose result is its return type)
+	 * @param javaFalse whether the site ends in {@code :java-false}: a boolean return
+	 * type is {@code t} or {@code |false|}
+	 */
+	private JavaSite select(JavaSite.Operator op, JavaType type, JavaOverloads.Member member, String written,
+			List<? extends JavaExecutable> candidates, List<LispVal> args, @Nullable JavaStaticType constructed,
+			boolean javaFalse) {
+		JavaStaticType unresolvedResult = constructed != null ? constructed : JavaStaticType.UNKNOWN;
+		if (candidates.isEmpty()) {
+			String what = op == JavaSite.Operator.NEW ? "constructor"
+					: (op == JavaSite.Operator.STATIC ? "static method " : "method ") + member.name();
+			return JavaSite.unresolved(op, unresolvedResult, "class " + type.name() + " has no public " + what
+					+ (member.tag() != null ? " matching " + member.designator() : ""));
+		}
+		List<JavaStaticType> types = new ArrayList<>();
+		for (LispVal arg : args) {
+			types.add(typeOf(arg));
+		}
+		JavaOverloads.Overload single = singleMember(candidates, types);
+		if (single != null) {
+			JavaSite resolved = resolveTo(op, type, member, single, args, types, constructed, javaFalse);
+			if (resolved != null) {
+				return resolved;
+			}
+		}
+		// One candidate of the arity takes its arguments however they convert: the
+		// oracle's compiler calls one directly, refusing or coercing with its
+		// checked casts where the cost table matches nothing. A varargs executable
+		// whose packed shape also applies keeps the dispatch (packing is this
+		// language's own, and the oracle never packs).
+		JavaOverloads.Overload only = JavaOverloads.singleFixed(candidates, args.size());
+		if (only != null) {
+			JavaSite resolved = resolveToOpen(op, type, member, only, args, types, constructed, javaFalse);
+			if (resolved != null) {
+				return resolved;
+			}
+		}
+		// A dispatch: the overloads a value each argument can have may select, the
+		// arguments' promises kept.
+		List<JavaSite.Argument> arguments = new ArrayList<>();
+		for (int i = 0; i < args.size(); i++) {
+			arguments.add(argument(types.get(i), args.get(i)));
+		}
+		List<JavaOverloads.Overload> overloads = new ArrayList<>();
+		for (JavaOverloads.Overload overload : JavaOverloads.ranked(candidates, args.size())) {
+			if (viable(overload, arguments)) {
+				overloads.add(overload);
+			}
+		}
+		if (overloads.isEmpty()) {
+			String what = op == JavaSite.Operator.NEW ? "constructor" : "method";
+			String noMember = noMemberFor(candidates, types, what, type);
+			return JavaSite.unresolved(op, unresolvedResult, noMember != null ? noMember
+					: "no " + what + " of " + type.name() + " accepts arguments of these types");
+		}
+		for (JavaOverloads.Overload overload : overloads) {
+			for (JavaType parameter : overload.executable().parameterTypes()) {
+				String unlinkable = unlinkable("the parameter type ", parameter);
+				if (unlinkable != null) {
+					return JavaSite.unresolved(op, unresolvedResult, unlinkable);
+				}
+			}
+		}
+		JavaStaticType result = constructed != null ? constructed : commonResult(overloads, javaFalse);
+		return new JavaSite(op, type.name(), written, null, null, false, result, arguments, null, overloads);
+	}
+
+	/**
+	 * The one overload every combination of the argument kinds selects, or {@code null}
+	 * when an argument's kinds are not all known, there are too many combinations, two
+	 * combinations select different overloads, or one selects none.
+	 */
+	private JavaOverloads.@Nullable Overload singleMember(List<? extends JavaExecutable> candidates,
+			List<JavaStaticType> types) {
+		List<List<JavaKind>> kinds = sortedKinds(types);
+		if (kinds == null) {
+			return null;
+		}
+		JavaOverloads.Overload chosen = null;
+		JavaKind[] combination = new JavaKind[types.size()];
+		for (long n = 0, combinations = combinations(kinds); n < combinations; n++) {
+			fill(kinds, n, combination);
+			JavaOverloads.Overload overload = JavaOverloads.select(candidates, types.size(),
+					(i, target) -> JavaOverloads.kindCost(combination[i], target, this.lookup));
+			if (overload == null || (chosen != null && !chosen.sameAs(overload))) {
+				return null;
+			}
+			chosen = overload;
+		}
+		return chosen;
+	}
+
+	/**
+	 * Why no single member was chosen when some combination of known kinds selects none,
+	 * or {@code null} otherwise: the reason a site nothing can be dispatched to is left
+	 * to run time with.
+	 */
+	private @Nullable String noMemberFor(List<? extends JavaExecutable> candidates, List<JavaStaticType> types,
+			String what, JavaType type) {
+		List<List<JavaKind>> kinds = sortedKinds(types);
+		if (kinds == null) {
+			return null;
+		}
+		JavaKind[] combination = new JavaKind[types.size()];
+		for (long n = 0, combinations = combinations(kinds); n < combinations; n++) {
+			fill(kinds, n, combination);
+			if (JavaOverloads.select(candidates, types.size(),
+					(i, target) -> JavaOverloads.kindCost(combination[i], target, this.lookup)) == null) {
+				return "no " + what + " of " + type.name() + " accepts arguments of kinds "
+						+ describeKinds(combination);
+			}
+		}
+		return null;
+	}
+
+	// Each argument's kinds in a stable order (the combinations are enumerated the same
+	// way everywhere), or null when one is not a closed set or there are too many
+	// combinations.
+	private static @Nullable List<List<JavaKind>> sortedKinds(List<JavaStaticType> types) {
+		List<List<JavaKind>> kinds = new ArrayList<>();
+		long combinations = 1;
+		for (JavaStaticType type : types) {
+			if (!(type instanceof JavaStaticType.Kinds known)) {
+				return null;
+			}
+			List<JavaKind> sorted = sorted(known);
+			kinds.add(sorted);
+			combinations *= sorted.size();
+			if (combinations > COMBINATION_LIMIT) {
+				return null;
+			}
+		}
+		return kinds;
+	}
+
+	private static List<JavaKind> sorted(JavaStaticType.Kinds known) {
+		List<JavaKind> sorted = new ArrayList<>(known.kinds());
+		sorted.sort(java.util.Comparator.comparing(JavaSiteResolver::kindKey));
+		return sorted;
+	}
+
+	private static long combinations(List<List<JavaKind>> kinds) {
+		long combinations = 1;
+		for (List<JavaKind> k : kinds) {
+			combinations *= k.size();
+		}
+		return combinations;
+	}
+
+	private static void fill(List<List<JavaKind>> kinds, long n, JavaKind[] combination) {
+		long rest = n;
+		for (int i = kinds.size() - 1; i >= 0; i--) {
+			int size = kinds.get(i).size();
+			combination[i] = kinds.get(i).get((int) (rest % size));
+			rest /= size;
+		}
+	}
+
+	/**
+	 * A site resolved to one member, or {@code null} when a parameter type is not
+	 * linkable -- the dispatch then meets the same parameter and leaves the site to run
+	 * time.
+	 */
+	private @Nullable JavaSite resolveTo(JavaSite.Operator op, JavaType type, JavaOverloads.Member member,
+			JavaOverloads.Overload chosen, List<LispVal> args, List<JavaStaticType> types,
+			@Nullable JavaStaticType constructed, boolean javaFalse) {
+		List<JavaSite.Argument> arguments = new ArrayList<>();
+		for (int i = 0; i < args.size(); i++) {
+			arguments
+				.add(new JavaSite.Argument(sorted((JavaStaticType.Kinds) types.get(i)), declaredClass(args.get(i))));
+		}
+		return resolveTo(op, type, member, chosen, args.size(), constructed, javaFalse, arguments,
+				member.tag() != null);
+	}
+
+	/**
+	 * A site resolved to its only candidate of the arity, whatever its arguments' kinds:
+	 * the oracle's compiler calls one directly, converting with its checked casts. No
+	 * argument is checked against kinds the resolution never counted on; what the member
+	 * takes, a value it was not chosen for, refuses in conversion.
+	 */
+	private @Nullable JavaSite resolveToOpen(JavaSite.Operator op, JavaType type, JavaOverloads.Member member,
+			JavaOverloads.Overload chosen, List<LispVal> args, List<JavaStaticType> types,
+			@Nullable JavaStaticType constructed, boolean javaFalse) {
+		List<JavaSite.Argument> arguments = new ArrayList<>();
+		for (int i = 0; i < args.size(); i++) {
+			// Known kinds are checked when the site runs (a false declaration is an
+			// error here, never converted for a member it was not chosen for); what
+			// the member takes, a value of another kind, refuses in conversion.
+			arguments.add(argument(types.get(i), args.get(i)));
+		}
+		return resolveTo(op, type, member, chosen, args.size(), constructed, javaFalse, arguments,
+				member.tag() != null);
+	}
+
+	private @Nullable JavaSite resolveTo(JavaSite.Operator op, JavaType type, JavaOverloads.Member member,
+			JavaOverloads.Overload chosen, int argc, @Nullable JavaStaticType constructed, boolean javaFalse,
+			List<JavaSite.Argument> arguments, boolean unchecked) {
+		JavaExecutable executable = chosen.executable();
+		for (JavaType parameter : executable.parameterTypes()) {
+			if (unlinkable("the parameter type ", parameter) != null) {
+				return null;
+			}
+		}
+		String name = op == JavaSite.Operator.NEW ? type.name() : member.name();
+		JavaStaticType result = constructed != null ? constructed
+				: JavaStaticType.ofDeclared(executable.returnType(), this.lookup, javaFalse);
+		return new JavaSite(op, type.name(), JavaOverloads.fullDesignator(executable, name), executable, null,
+				chosen.packed(), result, arguments, null, List.of(), JavaMarkers.NONE, unchecked);
+	}
+
+	/** What a dispatched site counts on for an argument of this static type. */
+	private static JavaSite.Argument argument(JavaStaticType type, LispVal form) {
+		return switch (type) {
+			case JavaStaticType.Kinds known -> new JavaSite.Argument(sorted(known), declaredClass(form));
+			case JavaStaticType.Bounded bounded -> JavaSite.Argument.open(bounded.type().name(), declaredClass(form));
+			case JavaStaticType.Unknown ignored -> JavaSite.Argument.open(null, null);
+		};
+	}
+
+	/**
+	 * Whether a value an argument promises may make this overload match: an argument of
+	 * known kinds must have one this parameter accepts, a bounded one is {@code nil} or
+	 * an object, which only a reference or {@code boolean} parameter accepts. An overload
+	 * that fails this never matches, so leaving it out changes no choice.
+	 */
+	private boolean viable(JavaOverloads.Overload overload, List<JavaSite.Argument> arguments) {
+		for (int i = 0; i < arguments.size(); i++) {
+			JavaSite.Argument argument = arguments.get(i);
+			JavaType target = JavaOverloads.parameterAt(overload, i);
+			if (argument.known()) {
+				boolean any = false;
+				for (JavaKind kind : argument.kinds()) {
+					if (JavaOverloads.kindCost(kind, target, this.lookup) != JavaOverloads.NO_MATCH) {
+						any = true;
+						break;
+					}
+				}
+				if (!any) {
+					return false;
+				}
+			}
+			else if (argument.bound() != null && target.isPrimitive() && !"boolean".equals(target.name())) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	// The type of a dispatched call's value: what its overloads' one return type
+	// declares, or nothing when they declare several.
+	private JavaStaticType commonResult(List<JavaOverloads.Overload> overloads, boolean javaFalse) {
+		JavaType returnType = overloads.get(0).executable().returnType();
+		for (JavaOverloads.Overload overload : overloads) {
+			if (!overload.executable().returnType().name().equals(returnType.name())) {
+				return JavaStaticType.UNKNOWN;
+			}
+		}
+		return JavaStaticType.ofDeclared(returnType, this.lookup, javaFalse);
+	}
+
+	private static String kindKey(JavaKind kind) {
+		return kind instanceof JavaType type ? "~" + type.name() : ((JavaKind.Lisp) kind).name();
+	}
+
+	private static String describeKinds(JavaKind[] kinds) {
+		List<String> names = new ArrayList<>();
+		for (JavaKind kind : kinds) {
+			names.add(kind instanceof JavaType type ? type.name()
+					: ((JavaKind.Lisp) kind).name().toLowerCase(java.util.Locale.ROOT).replace('_', '-'));
+		}
+		return String.join(", ", names);
+	}
+
+	/**
+	 * What is known about a form's value before it is evaluated.
+	 * @param form a receiver or argument form
+	 * @return its static type
+	 */
+	public JavaStaticType typeOf(LispVal form) {
+		switch (form) {
+			case LispInteger ignored -> {
+				return kinds(JavaKind.Lisp.INTEGER);
+			}
+			case LispBigInteger ignored -> {
+				return kinds(JavaKind.Lisp.BIGNUM);
+			}
+			case LispDouble ignored -> {
+				return kinds(JavaKind.Lisp.FLOAT);
+			}
+			case LispString s -> {
+				return kinds(s.value().length() == 1 ? JavaKind.Lisp.STRING_1 : JavaKind.Lisp.STRING);
+			}
+			case LispChar c -> {
+				return kinds(Character.isBmpCodePoint(c.codePoint()) ? JavaKind.Lisp.CHAR
+						: JavaKind.Lisp.SUPPLEMENTARY_CHAR);
+			}
+			case LispNil ignored -> {
+				return kinds(JavaKind.Lisp.NIL);
+			}
+			case LispTrue ignored -> {
+				return kinds(JavaKind.Lisp.T);
+			}
+			case LispCons cons -> {
+				return typeOfForm(cons);
+			}
+			default -> {
+				return JavaStaticType.UNKNOWN;
+			}
+		}
+	}
+
+	private JavaStaticType typeOfForm(LispCons cons) {
+		if (operatorOf(cons) != null) {
+			return resolve(cons).result();
+		}
+		if (JavaImplementations.isImplementationForm(cons)) {
+			// A java:reify / java:proxy whose interface resolves makes an object of a
+			// class no program names, whose kind is the interface's implementation type;
+			// a java:subclass one of its superclass and extra interfaces.
+			JavaImplementation implementation = JavaImplementations.resolve(cons, this.lookup);
+			if (!implementation.resolved() || implementation.standsFor()) {
+				// one standing for a value implements runtime/RontoJavaValue too, a class
+				// no lookup of the program's sees: its class is read when it runs
+				return JavaStaticType.UNKNOWN;
+			}
+			if (implementation.superclass() != null) {
+				return kinds(this.lookup.subclassOf(implementation.superclass(), implementation.interfaces()));
+			}
+			return kinds(this.lookup.implementationOf(implementation.interfaces()));
+		}
+		if (!(cons.car() instanceof LispSymbol head) || !cons.isProperList()) {
+			return JavaStaticType.UNKNOWN;
+		}
+		List<LispVal> parts = cons.toList();
+		switch (head.name()) {
+			case LispNames.QUOTE -> {
+				if (parts.size() == 2) {
+					LispVal quoted = parts.get(1);
+					if (quoted instanceof LispInteger || quoted instanceof LispBigInteger
+							|| quoted instanceof LispDouble || quoted instanceof LispString
+							|| quoted instanceof LispChar || quoted instanceof LispNil || quoted instanceof LispTrue) {
+						return typeOf(quoted);
+					}
+					if (quoted instanceof LispSymbol symbol && LispNames.JAVA_FALSE.equals(symbol.name())) {
+						return kinds(JavaKind.Lisp.FALSE);
+					}
+				}
+				return JavaStaticType.UNKNOWN;
+			}
+			case LispNames.FUNCTION, LispNames.LAMBDA -> {
+				return kinds(JavaKind.Lisp.FUNCTION);
+			}
+			case LispNames.THE -> {
+				if (parts.size() != 3) {
+					return JavaStaticType.UNKNOWN;
+				}
+				JavaStaticType declared = typeOfSpec(parts.get(1));
+				// Any other type specifier says nothing the bridge's kinds depend on.
+				return declared != null ? declared : typeOf(parts.get(2));
+			}
+			default -> {
+				return JavaStaticType.UNKNOWN;
+			}
+		}
+	}
+
+	private static JavaStaticType kinds(JavaKind kind) {
+		Set<JavaKind> set = new HashSet<>();
+		set.add(kind);
+		return new JavaStaticType.Kinds(set);
+	}
+
+}

@@ -1,0 +1,292 @@
+package am.ik.rontolisp.compiler;
+
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Set;
+import java.util.regex.Pattern;
+
+import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispNames;
+import am.ik.rontolisp.LispNil;
+import am.ik.rontolisp.LispSymbol;
+import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.PackageRegistry;
+import am.ik.rontolisp.SourceProvenance;
+import am.ik.rontolisp.macro.LispMacroExpander;
+
+import org.jspecify.annotations.Nullable;
+
+/**
+ * Moves a top-level {@code defun} out of the compile-time function namespace when a
+ * {@code defun} somewhere else in the program REDEFINES the same name at run time.
+ * <p>
+ * Both compile backends resolve a call by NAME against the map Pass 1 builds, and a
+ * non-top-level {@code defun} is not in that map: it lowers to
+ * {@code (setq name (lambda ...))} and its call sites dispatch through the global
+ * VARIABLE instead ({@code LispMacroExpander.expandCallThroughFunctionValue}). When the
+ * same name also has a top-level {@code defun}, every call site found the compiled
+ * function first and the nested definition was written to a store nothing read -- so
+ * {@code (defun over () 'top)} plus a nested {@code (defun over () 'nested)} answered
+ * {@code TOP} after the redefinition where the interpreter and SBCL answer
+ * {@code NESTED}.
+ * <p>
+ * The fix is to give those names ONE resolution rule instead of two. For a name that has
+ * both spellings the top-level {@code defun} is renamed to an internal name and an
+ * assignment of its function value is left behind in its place:
+ *
+ * <pre>{@code
+ * (defun over () 'top)          ->  (defun %top-defun$over () 'top)
+ *                                   (setq over (function %top-defun$over))
+ * }</pre>
+ *
+ * The name is then a global variable and nothing else, so every mechanism that already
+ * serves a nested {@code defun} serves it too -- a call dispatches through the variable,
+ * {@code #'over} reads it, and the last assignment executed wins, which is the
+ * interpreter's answer. The assignment sits where the {@code defun} sat, so a top-level
+ * call BEFORE it is as undefined as it is in the interpreter.
+ * <p>
+ * A program with no such name is returned unchanged, so the rename costs an indirect call
+ * only where the two spellings actually meet.
+ */
+public final class NestedDefunRedefinition {
+
+	/**
+	 * Prefix of the internal name a redefined top-level {@code defun} is compiled under.
+	 * {@code %}-prefixed by the internal-helper convention; the {@code $} keeps it out of
+	 * reach of a name a program could spell for itself.
+	 */
+	private static final String INTERNAL_PREFIX = "%top-defun$";
+
+	/**
+	 * What follows the prefix in the internal name of a name's second or later top-level
+	 * {@code defun} ({@link #renameAndInstall}).
+	 */
+	private static final Pattern LATER_DEFINITION = Pattern.compile("^\\d+\\$\\$");
+
+	private NestedDefunRedefinition() {
+	}
+
+	/**
+	 * The name a program gave a function this pass renamed, or the name itself: what a
+	 * report about the function calls it by, since the program never spelled the internal
+	 * one.
+	 * @param name a defun's name after this pass
+	 * @return the name the program wrote
+	 */
+	public static String originalName(String name) {
+		return name.startsWith(INTERNAL_PREFIX)
+				? LATER_DEFINITION.matcher(name.substring(INTERNAL_PREFIX.length())).replaceFirst("") : name;
+	}
+
+	/**
+	 * Rewrites the program so a top-level {@code defun} whose name is redefined by a
+	 * non-top-level {@code defun} resolves through its global variable -- or, for a name
+	 * whose home is the run-time function namespace ({@link NestedDefunNamespace}),
+	 * through that namespace: the stand-in installs the renamed function there
+	 * ({@code %set-symbol-function}), and a {@code (setf (symbol-function 'n) ...)}
+	 * forwarder defun of the name is dropped, since the namespace already serves its call
+	 * sites and installing the forwarder would have it call itself.
+	 * @param program the whole program, after every pass that can introduce a top-level
+	 * defun of its own
+	 * @param namespaceHeld the nested-defun names whose home is the run-time function
+	 * namespace
+	 * @return the rewritten program, or the same list when no name has both spellings
+	 * @throws UnsupportedOperationException when such a name is ALSO declared a global
+	 * variable by a top-level {@code defvar}/{@code defparameter}/{@code defconstant} and
+	 * its function is held by that global -- the function value and the variable's value
+	 * would have to share one cell
+	 */
+	public static List<LispVal> rewrite(List<LispVal> program, Set<String> namespaceHeld) {
+		Set<String> nested = GlobalVarCollector.collectAllNestedDefunNames(program);
+		if (nested.isEmpty()) {
+			return program;
+		}
+		LinkedHashSet<String> redefined = new LinkedHashSet<>();
+		for (LispVal expr : program) {
+			String name = topLevelDefunName(expr);
+			if (name != null && nested.contains(name)) {
+				redefined.add(name);
+			}
+		}
+		if (redefined.isEmpty()) {
+			return program;
+		}
+		LinkedHashSet<String> variableHeld = new LinkedHashSet<>(redefined);
+		variableHeld.removeAll(namespaceHeld);
+		rejectVariableCollision(program, variableHeld);
+		rejectExportCollision(program, redefined, "redefined by a nested defun");
+		Set<String> forwarders = LispMacroExpander.symbolFunctionForwarderNames(program);
+		List<LispVal> rewritten = new ArrayList<>(program.size() + redefined.size());
+		for (LispVal expr : program) {
+			String name = topLevelDefunName(expr);
+			if (name == null || !redefined.contains(name)) {
+				rewritten.add(expr);
+				continue;
+			}
+			boolean inNamespace = namespaceHeld.contains(name);
+			if (inNamespace && forwarders.contains(name)) {
+				continue;
+			}
+			if (inNamespace) {
+				renameAndInstall((LispCons) expr, name, 1, rewritten, false);
+				continue;
+			}
+			LispCons defun = (LispCons) expr;
+			rewritten.add(renamed(defun, INTERNAL_PREFIX + name));
+			rewritten.add(SourceProvenance.inherit(defun, assignFunctionValue(name, INTERNAL_PREFIX + name)));
+		}
+		return rewritten;
+	}
+
+	/**
+	 * Adds to {@code out} the definition of an internal name a top-level {@code defun}
+	 * becomes, and the form that installs it as {@code name}'s function in the run-time
+	 * function namespace, where the {@code defun} stood.
+	 * @param defun the definition
+	 * @param name its name
+	 * @param ordinal which top-level definition of the name it is, from 1: each has a
+	 * name of its own, since each installs its own function when it runs
+	 * @param out the program being built
+	 * @param metaobject whether the name can hold a generic function metaobject, which
+	 * the installation then leaves there ({@link #unlessMetaobject})
+	 */
+	static void renameAndInstall(LispCons defun, String name, int ordinal, List<LispVal> out, boolean metaobject) {
+		out.add(renamed(defun, internalName(name, ordinal)));
+		out.add(install(defun, name, ordinal, metaobject));
+	}
+
+	/**
+	 * The form that installs a top-level definition {@link #renameAndInstall} renamed as
+	 * {@code name}'s function in the run-time function namespace.
+	 * @param at the form it stands for
+	 * @param name the function's name
+	 * @param ordinal which top-level definition of the name it installs, from 1
+	 * @param metaobject whether the name can hold a generic function metaobject
+	 * @return the form
+	 */
+	static LispVal install(LispCons at, String name, int ordinal, boolean metaobject) {
+		return SourceProvenance.inherit(at,
+				unlessMetaobject(name, installFunctionValue(name, internalName(name, ordinal)), metaobject));
+	}
+
+	/**
+	 * {@code form}, or -- for a name that can hold a generic function metaobject -- the
+	 * form unless it does: a metaobject stays the name's function across a definition of
+	 * its generic, and its dispatcher stays what it calls, as on the interpreter.
+	 * @param name the function's name
+	 * @param form what binds the name
+	 * @param metaobject whether the name can hold a metaobject
+	 * @return the form to run
+	 */
+	static LispVal unlessMetaobject(String name, LispVal form, boolean metaobject) {
+		if (!metaobject) {
+			return form;
+		}
+		LispVal quotedName = new LispCons(new LispSymbol(LispNames.QUOTE),
+				new LispCons(new LispSymbol(name), LispNil.INSTANCE));
+		LispVal installed = new LispCons(new LispSymbol(LispNames.GF_INSTALLED_P_INTERNAL),
+				new LispCons(quotedName, LispNil.INSTANCE));
+		return new LispCons(new LispSymbol(LispNames.IF),
+				new LispCons(installed, new LispCons(LispNil.INSTANCE, new LispCons(form, LispNil.INSTANCE))));
+	}
+
+	private static String internalName(String name, int ordinal) {
+		return INTERNAL_PREFIX + (ordinal > 1 ? ordinal + "$$" : "") + name;
+	}
+
+	private static LispVal renamed(LispCons defun, String internal) {
+		LispCons nameCell = (LispCons) defun.cdr();
+		return SourceProvenance.inherit(defun,
+				new LispCons(defun.car(), new LispCons(new LispSymbol(internal), nameCell.cdr())));
+	}
+
+	/**
+	 * A name whose function value now lives in a global variable AND whose variable value
+	 * a top-level declaration owns has nowhere to put the second one: the backends give a
+	 * name one cell (Lisp-2 is a compile-time distinction here, not a runtime one). It
+	 * used to be silently wrong in the other direction -- the redefinition was simply not
+	 * observed -- so say what is unsupported instead of picking one of the two values.
+	 */
+	private static void rejectVariableCollision(List<LispVal> program, Set<String> redefined) {
+		for (LispVal expr : program) {
+			if (!(expr instanceof LispCons cons) || !(cons.car() instanceof LispSymbol head)
+					|| !(cons.cdr() instanceof LispCons nameCell) || !(nameCell.car() instanceof LispSymbol name)) {
+				continue;
+			}
+			switch (head.name()) {
+				case LispNames.DEFVAR, LispNames.DEFPARAMETER, LispNames.DEFCONSTANT -> {
+					if (redefined.contains(name.name())) {
+						throw new UnsupportedOperationException(SourceProvenance.prefix(cons) + "the function "
+								+ name.name() + " is redefined by a nested defun, so its function value is held by "
+								+ "the global variable " + name.name() + " -- which " + head.name()
+								+ " also declares. Rename one of the two.");
+					}
+				}
+				default -> {
+				}
+			}
+		}
+	}
+
+	/**
+	 * An exported name binds ONE static definition -- the host calls the typed wrapper
+	 * beside the defun method, and there is no defun method once the name resolves
+	 * through a variable. Left alone the export directive would fail with "names an
+	 * unknown function (must be a top-level defun)" about a name that IS one, which is
+	 * exactly the kind of misdirection this item was closing.
+	 */
+	static void rejectExportCollision(List<LispVal> program, Set<String> redefined, String how) {
+		for (LispVal expr : program) {
+			if (!(expr instanceof LispCons cons) || !(cons.car() instanceof LispSymbol head)
+					|| !(cons.cdr() instanceof LispCons argCell)) {
+				continue;
+			}
+			PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(head.name());
+			if (qn == null || !LispNames.RONTOLISP_PKG.equals(qn.pkg())
+					|| !(LispNames.JVM_EXPORT.equals(qn.member()) || LispNames.WASM_EXPORT.equals(qn.member()))) {
+				continue;
+			}
+			if (argCell.car() instanceof LispCons quoted && quoted.car() instanceof LispSymbol quote
+					&& LispNames.QUOTE.equals(quote.name()) && quoted.cdr() instanceof LispCons nameCell
+					&& nameCell.car() instanceof LispSymbol name && redefined.contains(name.name())) {
+				throw new UnsupportedOperationException(SourceProvenance.prefix(cons) + "the function " + name.name()
+						+ " is exported (" + head.name() + ") and also " + how + ". An export binds "
+						+ "one static definition, which a redefinable name does not have. Rename one of the two.");
+			}
+		}
+	}
+
+	/** {@code (%set-symbol-function 'name (function internal))}. */
+	private static LispCons installFunctionValue(String name, String internal) {
+		LispVal functionForm = new LispCons(new LispSymbol(LispNames.FUNCTION),
+				new LispCons(new LispSymbol(internal), LispNil.INSTANCE));
+		LispVal quotedName = new LispCons(new LispSymbol(LispNames.QUOTE),
+				new LispCons(new LispSymbol(name), LispNil.INSTANCE));
+		return new LispCons(new LispSymbol(LispNames.SET_SYMBOL_FUNCTION_INTERNAL),
+				new LispCons(quotedName, new LispCons(functionForm, LispNil.INSTANCE)));
+	}
+
+	/** {@code (setq name (function internal))}. */
+	private static LispCons assignFunctionValue(String name, String internal) {
+		LispVal functionForm = new LispCons(new LispSymbol(LispNames.FUNCTION),
+				new LispCons(new LispSymbol(internal), LispNil.INSTANCE));
+		return new LispCons(new LispSymbol(LispNames.SETQ),
+				new LispCons(new LispSymbol(name), new LispCons(functionForm, LispNil.INSTANCE)));
+	}
+
+	/**
+	 * The name of a top-level {@code (defun name ...)}, or {@code null} when the form is
+	 * not one (a {@code #'(setf place)} writer's name is a cons, not a symbol, and stays
+	 * out of this).
+	 */
+	private static @Nullable String topLevelDefunName(LispVal expr) {
+		if (expr instanceof LispCons cons && cons.car() instanceof LispSymbol head
+				&& LispNames.DEFUN.equals(head.name()) && cons.cdr() instanceof LispCons nameCell
+				&& nameCell.car() instanceof LispSymbol name && nameCell.cdr() instanceof LispCons) {
+			return name.name();
+		}
+		return null;
+	}
+
+}

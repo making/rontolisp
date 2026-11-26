@@ -1,0 +1,37 @@
+package example:shipping@0.1.0;
+
+interface rates {
+  enum carrier { post, courier, pickup }
+
+  flags extras { gift-wrap, express, signature }
+
+  record address {
+    street: string,
+    city: string,
+  }
+
+  variant destination {
+    home(address),
+    locker(string),
+    store,
+  }
+
+  record offer {
+    carrier: carrier,
+    cents: u32,
+    days: option<u8>,
+  }
+
+  variant problem {
+    out-of-stock(string),
+    unreachable,
+  }
+
+  quote: func(sku: string, quantity: u32, to: destination, add: extras) -> result<offer, problem>;
+  settle: func(payment: result<u32, string>) -> string;
+  weights: func(lines: list<tuple<string, u32>>) -> list<u32>;
+}
+
+world shop {
+  import rates;
+}

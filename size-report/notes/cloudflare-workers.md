@@ -1,0 +1,79 @@
+## What is measured
+
+The Worker family compiles the real
+[`examples/cloudflare-workers/`](../../examples/cloudflare-workers) sources in
+place, plus two variants that exist only for the comparison: the two
+tiny-routes Workers rebuilt against the full `tiny-routes` system instead of
+`tiny-routes/lite`, which is what makes the price of the regex engine visible.
+
+The last four rows are Java server programs, compiled by the experimental subset
+of the Java language: `examples/java/http/Server.java` on the JDK's own
+`com.sun.net.httpserver`, and the three files the `hello-servlet-one-source`,
+`hello-mvcfn-one-source` and `hello-session-one-source` Workers deploy, with the
+libraries their `build.sh` names (the last keeps its sessions in Workers KV
+through `wasi:keyvalue`).
+
+## Reading the numbers
+
+**gzip is the number Cloudflare counts.** A Worker bundle is limited to 3 MB
+compressed on the free plan, so the table reports raw and gzipped sizes and the
+share of that limit. What a framework costs there is module size and isolate
+startup, not per-request time.
+
+**Raw and gzip do not always move together.** Removing DUPLICATE bytes -- a name
+interned twice, one sentence repeated per generic -- is worth its full weight
+raw and close to nothing compressed, because a compressor had already collapsed
+it; the offsets that shift as a result can even cost gzip a few hundred bytes
+back. So a row whose raw size drops while its gzip size ticks up is the expected
+shape of a data-section dedup, not a regression: what shrank is the module the
+engine loads and keeps in memory.
+
+**`httpbin-clack` and `httpbin-clack-one-source` are the same application.**
+They differ in the `:server` designator only -- `:reactor`, which is
+host-driven on every backend, against `:rontolisp`, which reads the compile
+target and takes its reactor shape under `--no-wasi`. The second row builds
+`examples/net/httpbin-clack.lisp` itself, the file that binds a socket when
+interpreted, so what the pair measures is that choosing the portable designator
+costs nothing in bytes.
+
+**`dog-fetcher` is `hello-tiny-routes` plus an outgoing request.** Its source
+calls the same `rontolisp:fetch` every backend answers, and `--host-fetch`
+lowers it onto ONE host import, so what separates the two rows is that lowering
+plus the JSON parsing of the upstream answer: a reactor's way out costs an
+import entry and a wrapper, not a transport of its own.
+
+**`dog-relay` is that boundary compiled `--reentrant`.** The flag buys
+overlapped calls on one instance, and what it costs in bytes is the per-call
+machinery it turns on -- the task record for dynamically bound specials, the
+park-block allocator, and the call id every body import now leads with. The row
+is here so that cost is a number that moves rather than a guess; the flag is
+never a size decision either way.
+
+**The two `btc-ticker` rows are the same source on the two host BOUNDARIES**, and
+they are here to keep anyone from selling that choice as a size decision. The
+first is `--host-boundary=envelope` (every body rides the JSON envelope; the
+module imports `env.fetch` and nothing else), the second the default streaming
+boundary (three more imports, carrying the request body, the response body and
+the reply's body as octets). They land within a rounding error of each other,
+and which way the difference falls is not stable across compiler changes. What
+the boundary really trades is host-side STATE -- four host functions and three
+cursors against none -- and how much of the host the build can therefore write
+for you; `examples/cloudflare-workers/btc-ticker/README.md` has that table.
+
+**The routing library is not what the ningle rows measure.** Both of them are an
+order of magnitude above their tiny-routes neighbours, and almost none of that
+is ningle or its router myway: ningle reads every request through the
+`lack-request` chain -- `http-body`, `fast-http`, `smart-buffer`,
+`circular-streams`, `yason`, `trivial-mimes`, `quri` -- which tiny-routes never
+touches because its request IS the Clack environment plist. There is also no
+lite row to pair them with, the way the tiny-routes rows have one: myway
+compiles every rule to a cl-ppcre scanner, so the regex engine is genuinely
+reachable and the tree-shaker is right to keep it.
+
+**The three Java server rows are layers of one stack.** Each answers a greeting; what
+grows from row to row is the library the program reaches: the JDK's server
+alone, then the Servlet container and the Servlet API on it, then a
+`DispatcherServlet` and WebMvc.fn's routing on that. A program holds what it
+reaches of a library, not all of it.
+
+What each compiler flag does: [`wasm-flags.md`](wasm-flags.md#flags).

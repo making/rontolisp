@@ -1,0 +1,13908 @@
+package am.ik.rontolisp;
+
+import org.jspecify.annotations.Nullable;
+
+/**
+ * Centralized constants for all special form and built-in function names. These constants
+ * are compile-time constants (static final String) and can be used in switch case labels.
+ */
+public final class LispNames {
+
+	// Special forms
+
+	/** The {@code quote} special form. */
+	public static final String QUOTE = "QUOTE";
+
+	/**
+	 * The internal {@code (%unspelled-quote name)} form: evaluates exactly like
+	 * {@code (quote name)} on every backend, but the compile backends do NOT record the
+	 * symbol's spelling as a program-spelled literal, so it never arms the
+	 * funcall-dispatch gate's name probes. It is the quote for a name the COMPILER
+	 * synthesizes into an expansion (a generated {@code :reader} body quoting its slot
+	 * name for the {@code unbound-slot} signal, a Clojure syntax-quote template's
+	 * qualified symbol) -- real data at run time, but not a designator the user wrote, so
+	 * it must not keep a same-named defun's registry row and ladder case alive. Every
+	 * walker that skips quoted data skips it too ({@link #isQuote}). The symbol rule twin
+	 * of "no generated string literal may spell a defun name exactly"
+	 * ({@code .kb/optimize-dead-code-elimination.md}). Never produced by the reader; user
+	 * code cannot reach it.
+	 */
+	public static final String UNSPELLED_QUOTE = "%UNSPELLED-QUOTE";
+
+	/**
+	 * Whether the operator is {@link #QUOTE} or {@link #UNSPELLED_QUOTE}: its argument is
+	 * data, never code. A walker that skips quoted data skips both, or it reads an
+	 * unspelled quote's datum as a variable reference.
+	 * @param name the operator's name
+	 * @return whether the form quotes its argument
+	 */
+	public static boolean isQuote(@Nullable String name) {
+		return QUOTE.equals(name) || UNSPELLED_QUOTE.equals(name);
+	}
+
+	/** The {@code if} special form. */
+	public static final String IF = "IF";
+
+	/** The {@code let} special form. */
+	public static final String LET = "LET";
+
+	/**
+	 * The {@code progv} special form: establishes dynamic bindings for a runtime-computed
+	 * list of symbols to a runtime-computed list of values, restored on exit. The
+	 * interpreter evaluates it natively; the compilers lower it to a loop over the
+	 * statically known special set ({@code LispMacroExpander.expandProgvForCompile})
+	 * whose per-name arms are the four internal operators below.
+	 */
+	public static final String PROGV = "PROGV";
+
+	/**
+	 * Internal (compile-path only): pushes a dynamic binding of a statically named
+	 * special -- {@code (%progv-dyn-bind NAME value)}, where {@code NAME} is a literal
+	 * symbol -- and answers the opaque previous binding state ({@code %progv-dyn-unbind}
+	 * takes it back). One arm of the name-dispatch chain
+	 * {@code LispMacroExpander.expandProgvForCompile} builds; never produced by the
+	 * reader.
+	 */
+	public static final String PROGV_DYN_BIND = "%PROGV-DYN-BIND";
+
+	/**
+	 * Internal (compile-path only): restores a dynamic binding pushed by
+	 * {@link #PROGV_DYN_BIND} -- {@code (%progv-dyn-unbind NAME prev)}.
+	 */
+	public static final String PROGV_DYN_UNBIND = "%PROGV-DYN-UNBIND";
+
+	/**
+	 * Internal (compile-path only): the value {@code progv} binds a symbol to when it has
+	 * no value for it -- {@code (%progv-unbound)}, the program's UNBOUND marker, which a
+	 * read of the variable signals the {@code unbound-variable} for; nil in a program
+	 * without one. A {@link #PROGV_DYN_BIND} arm whose special has no read check binds
+	 * nil in its place.
+	 */
+	public static final String PROGV_UNBOUND = "%PROGV-UNBOUND";
+
+	/**
+	 * Internal (compile-path only): reads the eval runtime's global environment mirror
+	 * ({@code _genv} / {@code GLOBAL_ENV}) as a Lisp assoc list, so the {@code progv}
+	 * lowering can maintain the mirror -- what {@code symbol-value}/{@code boundp}/
+	 * {@code eval} read -- in plain Lisp. Emitted only when the eval runtime is present.
+	 */
+	public static final String PROGV_GENV = "%PROGV-GENV";
+
+	/** Internal (compile-path only): writes the eval runtime's global env mirror. */
+	public static final String PROGV_GENV_SET = "%PROGV-GENV-SET";
+
+	/**
+	 * Internal (compile-path only): the raw runtime {@code symbol-value} emission (the
+	 * eval-mirror probe). {@code (symbol-value x)} of a program with specials compiles to
+	 * a dispatch over the special set whose fallback is this operator, so the dispatch
+	 * can delegate without recursing into itself.
+	 */
+	public static final String SYMBOL_VALUE_RAW = "%SYMBOL-VALUE-RAW";
+
+	/**
+	 * Internal (compile-path only): the shared {@code symbol-value} runtime a computed
+	 * name calls in a program with specials -- {@code (%symbol-value-dynamic name)}: the
+	 * read half of {@link #GLOBAL_ACCESS_RUNTIME}, falling to {@link #SYMBOL_VALUE_RAW}
+	 * for a name no special has.
+	 */
+	public static final String SYMBOL_VALUE_DYNAMIC = "%SYMBOL-VALUE-DYNAMIC";
+
+	/**
+	 * Internal (compile-path only): the raw runtime {@code boundp} emission (the
+	 * eval-mirror probe), the fallback arm of the dispatch {@code (boundp x)} compiles to
+	 * in a program that tracks a special's bound-ness in its variable
+	 * ({@link #GLOBAL_BOUNDP}).
+	 */
+	public static final String BOUNDP_RAW = "%BOUNDP-RAW";
+
+	/**
+	 * Internal (compile-path only): {@code (%global-boundp 'G)}, the bound-ness of the
+	 * literal global {@code G} read from its variable -- a special's active dynamic
+	 * binding, else the global, which holds the unbound marker until something assigns
+	 * it. Only for a global whose variable carries its bound-ness: a special the program
+	 * binds, probes and declares without a value
+	 * ({@code SpecialVarCollector.collectProbedValueless}), or, in a program without the
+	 * eval mirror, any global a literal {@code boundp} names and no definer gives a value
+	 * ({@code GlobalVarCollector.collectProbedUnbound}).
+	 */
+	public static final String GLOBAL_BOUNDP = "%GLOBAL-BOUNDP";
+
+	/**
+	 * Internal (compile-path only): the shared {@code boundp} runtime a computed name
+	 * calls in a program that tracks a special's bound-ness in its variable --
+	 * {@code (%boundp-dynamic name)}, a dispatch over those specials onto
+	 * {@link #GLOBAL_BOUNDP}, falling to {@link #BOUNDP_RAW}. Later segments are this
+	 * name suffixed {@code -1}, {@code -2}, ...
+	 */
+	public static final String BOUNDP_DYNAMIC = "%BOUNDP-DYNAMIC";
+
+	/**
+	 * Internal (compile-path only): {@code (%global-access name default store value)},
+	 * the one dispatch of a runtime name over the program's globals. With {@code store}
+	 * nil it reads: a special answers its variable -- the active dynamic binding, else
+	 * the global -- and any other name {@code default}. With {@code store} non-nil it
+	 * writes {@code value} to the global the name names as a non-lexical {@code setq}
+	 * does ({@link #GLOBAL_STORE_SET}). Called by {@link #SYMBOL_VALUE_DYNAMIC},
+	 * {@link #SET_GLOBAL_RUNTIME} and the eval runtime's variable lookup and assignment,
+	 * so a special has one home for every access by name. A program that reads only
+	 * carries the arms of its specials. Later segments are this name suffixed {@code -1},
+	 * {@code -2}, ...
+	 */
+	public static final String GLOBAL_ACCESS_RUNTIME = "%GLOBAL-ACCESS";
+
+	/**
+	 * The run-time table's dispatch over the built-in macros a compiled {@code eval} can
+	 * reach ({@code eval-macros.lisp}): {@code (op form env)} answers what the form
+	 * expands to, the form itself for a name no row holds.
+	 */
+	public static final String EVAL_EXPANSION = "%EVAL-EXPANSION";
+
+	/**
+	 * The dispatch over the places {@code _store} has no arm for: {@code (op args value)}
+	 * answers the form that assigns one, nil for a name no row holds.
+	 */
+	public static final String EVAL_PLACE_EXPANSION = "%EVAL-PLACE-EXPANSION";
+
+	/**
+	 * What an eval'd {@code let} binding a special evaluates instead:
+	 * {@code ((bindings . body))} answers the form, nil when the let binds none.
+	 */
+	public static final String EVAL_SPECIAL_LET = "%EVAL-SPECIAL-LET";
+
+	/**
+	 * Whether a name is special in the compiled program, generated from the final set.
+	 */
+	public static final String EVAL_COMPILED_SPECIAL_P = "%EVAL-COMPILED-SPECIAL-P";
+
+	/** The variable an eval'd {@code flet} or {@code labels} keeps its alist in. */
+	public static final String EVAL_LOCAL_FUNCTIONS = "%EVAL-FUNCTIONS";
+
+	/**
+	 * The table row of {@code flet}: its presence switches the local-function lookup on.
+	 */
+	public static final String EVAL_ROW_FLET = "%EVAL-ROW-FLET";
+
+	/**
+	 * The table row of {@code labels}: its presence switches the local-function lookup
+	 * on.
+	 */
+	public static final String EVAL_ROW_LABELS = "%EVAL-ROW-LABELS";
+
+	/** The variable an eval'd {@code macrolet} keeps its alist of expanders in. */
+	public static final String EVAL_LOCAL_MACROS = "%EVAL-MACROS";
+
+	/**
+	 * The table row of {@code macrolet}: its presence switches the local-macro lookup on.
+	 */
+	public static final String EVAL_ROW_MACROLET = "%EVAL-ROW-MACROLET";
+
+	/**
+	 * The head of the value a binding of an eval'd {@code symbol-macrolet} holds:
+	 * {@code (mark . expansion)}.
+	 */
+	public static final String EVAL_SYMBOL_MACRO = "%EVAL-SYMBOL-MACRO";
+
+	/**
+	 * The table row of {@code symbol-macrolet}: its presence makes a read and an
+	 * assignment of a lexical binding look for the mark.
+	 */
+	public static final String EVAL_ROW_SYMBOL_MACROLET = "%EVAL-ROW-SYMBOL-MACROLET";
+
+	/** The global alist of what an eval'd {@code define-symbol-macro} defined. */
+	public static final String EVAL_GLOBAL_SYMBOL_MACROS = "%EVAL-SYMBOL-MACROS%";
+
+	/**
+	 * The table row of {@code define-symbol-macro}: its presence makes a name no variable
+	 * answers look in that alist.
+	 */
+	public static final String EVAL_ROW_DEFINE_SYMBOL_MACRO = "%EVAL-ROW-DEFINE-SYMBOL-MACRO";
+
+	/**
+	 * What an eval'd assignment of a place no table row holds evaluates:
+	 * {@code (op args value)} answers the form that calls the {@code (setf name)}
+	 * function {@link #EVAL_SETF_FUNCTION} finds for the place, nil for a name none is
+	 * for.
+	 */
+	public static final String EVAL_SETF_FORM = "%EVAL-SETF-FORM";
+
+	/**
+	 * The dispatch over the program's {@code (setf name)} functions, generated from the
+	 * final set and cut into segments: {@code (op)} answers the one a place names, nil
+	 * for a name none is for.
+	 */
+	public static final String EVAL_SETF_FUNCTION = "%EVAL-SETF-FUNCTION";
+
+	/**
+	 * Internal (compile-path only): the shared runtime a {@code progv} site binds its
+	 * runtime symbols through -- {@code (%progv-bind symbols values)} binds each name and
+	 * answers the save list {@link #PROGV_UNBIND_RUNTIME} restores. Its per-name dispatch
+	 * over the special set is {@link #PROGV_BIND_NAME}.
+	 */
+	public static final String PROGV_BIND_RUNTIME = "%PROGV-BIND";
+
+	/**
+	 * Internal (compile-path only): {@code (%progv-unbind saved)}, the restore half of
+	 * {@link #PROGV_BIND_RUNTIME}; its per-name dispatch is {@link #PROGV_UNBIND_NAME}.
+	 */
+	public static final String PROGV_UNBIND_RUNTIME = "%PROGV-UNBIND";
+
+	/**
+	 * Internal (compile-path only): {@code (%progv-bind-name name value)}, the dispatch
+	 * of one runtime name over the special set onto its {@link #PROGV_DYN_BIND} arm,
+	 * answering the previous binding state (nil for a name in no arm). Later segments are
+	 * this name suffixed {@code -1}, {@code -2}, ...
+	 */
+	public static final String PROGV_BIND_NAME = "%PROGV-BIND-NAME";
+
+	/**
+	 * Internal (compile-path only): {@code (%progv-unbind-name name prev)}, the dispatch
+	 * onto the {@link #PROGV_DYN_UNBIND} arm. Segmented like {@link #PROGV_BIND_NAME}.
+	 */
+	public static final String PROGV_UNBIND_NAME = "%PROGV-UNBIND-NAME";
+
+	/**
+	 * Internal (compile-path only): {@code (%set-global name value)}, the shared runtime
+	 * a computed {@code set} site calls: {@link #SET_MIRROR}, then the store half of
+	 * {@link #GLOBAL_ACCESS_RUNTIME}.
+	 */
+	public static final String SET_GLOBAL_RUNTIME = "%SET-GLOBAL";
+
+	/**
+	 * Internal (compile-path only): {@code (%global-store-set NAME value)}, where
+	 * {@code NAME} is a literal symbol -- the store {@code setq} of the global makes
+	 * where it is not lexical: an active dynamic binding of a special when there is one
+	 * (JVM: the thread's {@code _d$} cell; WASM {@code --reentrant}: the task record's),
+	 * else the backing store (JVM: its {@code _g$} field; WASM: its module global, which
+	 * under shallow binding IS the active binding). Its value is unspecified: every site
+	 * discards it.
+	 */
+	public static final String GLOBAL_STORE_SET = "%GLOBAL-STORE-SET";
+
+	/**
+	 * Internal (compile-path only): {@code (%set-mirror name value)}, the checked half of
+	 * a computed {@code set} -- signals on a constant (nil, t, a keyword) or a
+	 * non-symbol, then writes the eval runtime's global env mirror, creating the binding.
+	 * Answers the value.
+	 */
+	public static final String SET_MIRROR = "%SET-MIRROR";
+
+	/**
+	 * Internal (compile-path only): {@code (%symbol-is x 'NAME)} -- whether {@code x} is
+	 * the symbol {@code NAME}, the name test of the dispatches over the special and
+	 * global sets: a string compare on the JVM, a string-table offset compare on WASM,
+	 * where an {@code equal} against a quoted symbol builds the symbol and calls the
+	 * structural walk. The quoted name is not a designator the program spelled.
+	 */
+	public static final String SYMBOL_IS = "%SYMBOL-IS";
+
+	/** The {@code progn} special form. */
+	public static final String PROGN = "PROGN";
+
+	/** The {@code setq} special form. */
+	public static final String SETQ = "SETQ";
+
+	/** The {@code lambda} special form. */
+	public static final String LAMBDA = "LAMBDA";
+
+	/** The {@code funcall} special form. */
+	public static final String FUNCALL = "FUNCALL";
+
+	/** The {@code function} special form ({@code #'name} reader syntax). */
+	public static final String FUNCTION = "FUNCTION";
+
+	/** The {@code symbol-function} built-in function. */
+	public static final String SYMBOL_FUNCTION = "SYMBOL-FUNCTION";
+
+	/** The {@code while} special form. */
+	public static final String WHILE = "WHILE";
+
+	// Arithmetic
+
+	/** The {@code +} built-in function. */
+	public static final String ADD = "+";
+
+	/** The {@code -} built-in function. */
+	public static final String SUB = "-";
+
+	/** The {@code *} built-in function. */
+	public static final String MUL = "*";
+
+	/** The {@code /} built-in function. */
+	public static final String DIV = "/";
+
+	/** The {@code mod} built-in function. */
+	public static final String MOD = "MOD";
+
+	/**
+	 * The REPL history variables ({@code *} {@code **} {@code ***}, {@code /} ...,
+	 * {@code +} ...): standard {@code cl} variables only a REPL sets, nil everywhere
+	 * else. The interpreter binds them globally and SWANK's listener sets them; a
+	 * compiled program reads nil from one it never assigns.
+	 */
+	public static final java.util.List<String> REPL_VARIABLES = java.util.List.of("*", "**", "***", "/", "//", "///",
+			"+", "++", "+++");
+
+	/** The {@code rem} built-in function. */
+	public static final String REM = "REM";
+
+	/** The {@code abs} built-in function. */
+	public static final String ABS = "ABS";
+
+	/** The {@code min} built-in function. */
+	public static final String MIN = "MIN";
+
+	/** The {@code max} built-in function. */
+	public static final String MAX = "MAX";
+
+	/** The {@code sqrt} built-in function. */
+	public static final String SQRT = "SQRT";
+
+	/** The {@code isqrt} built-in function. */
+	public static final String ISQRT = "ISQRT";
+
+	/** The {@code expt} built-in function. */
+	public static final String EXPT = "EXPT";
+
+	/** The {@code exp} built-in function. */
+	public static final String EXP = "EXP";
+
+	/** The {@code log} built-in function. */
+	public static final String LOG = "LOG";
+
+	/** The {@code random} built-in function. */
+	public static final String RANDOM = "RANDOM";
+
+	/** The {@code random-state-p} standard function, a prelude defun. */
+	public static final String RANDOM_STATE_P = "RANDOM-STATE-P";
+
+	/**
+	 * The {@code make-random-state} standard function, a prelude defun answering a fresh
+	 * random-state ({@link #RANDOM} ignores its optional state argument and draws from
+	 * the backend's own entropy), and nil is what a caller stores and later passes back
+	 * (uuid's {@code *uuid-random-state*} seeding).
+	 */
+	public static final String MAKE_RANDOM_STATE = "MAKE-RANDOM-STATE";
+
+	/**
+	 * The internal {@code %random-byte} primitive: one cryptographically strong random
+	 * byte (0-255). Unlike {@code random} (a plain PRNG on the interpreter/JVM) this
+	 * draws from the platform's cryptographic entropy source on every backend --
+	 * {@code SecureRandom} on the interpreter/JVM, the WASI {@code random_get} host
+	 * function (real host entropy in Preview 1, {@code wasi:random} under
+	 * {@code --component}) on WASM. {@code rontolisp:random-bytes} is the public API over
+	 * it.
+	 */
+	public static final String RANDOM_BYTE_INTERNAL = "%RANDOM-BYTE";
+
+	/**
+	 * The {@code rontolisp:random-bytes} function: a vector of {@code n}
+	 * cryptographically strong random bytes, built over {@link #RANDOM_BYTE_INTERNAL} in
+	 * the prelude.
+	 */
+	public static final String RANDOM_BYTES = "RANDOM-BYTES";
+
+	/** The {@code get-universal-time} built-in function. */
+	public static final String GET_UNIVERSAL_TIME = "GET-UNIVERSAL-TIME";
+
+	/**
+	 * The {@code encode-universal-time} prelude function (pure Gregorian calendar
+	 * arithmetic, one Lisp definition shared by every backend).
+	 */
+	public static final String ENCODE_UNIVERSAL_TIME = "ENCODE-UNIVERSAL-TIME";
+
+	/**
+	 * The {@code decode-universal-time} prelude function (the inverse split into the nine
+	 * decoded-time values).
+	 */
+	public static final String DECODE_UNIVERSAL_TIME = "DECODE-UNIVERSAL-TIME";
+
+	/**
+	 * The {@code get-decoded-time} prelude function: {@link #DECODE_UNIVERSAL_TIME} of
+	 * the current universal time in the local time zone.
+	 */
+	public static final String GET_DECODED_TIME = "GET-DECODED-TIME";
+
+	/**
+	 * The {@code %local-time-offset} internal primitive behind the local time zone of
+	 * {@link #DECODE_UNIVERSAL_TIME} / {@link #ENCODE_UNIVERSAL_TIME}: given Unix
+	 * seconds, the local zone's total offset EAST of UTC in seconds at that instant,
+	 * doubled, plus 1 when daylight saving time is in effect. The interpreter and the JVM
+	 * ask {@code java.time.ZoneId.systemDefault()}; the WASM backends splice a Lisp
+	 * definition ({@code eval/LocalTimeLibrary}).
+	 */
+	public static final String LOCAL_TIME_OFFSET = "%LOCAL-TIME-OFFSET";
+
+	/**
+	 * The {@code %local-zone} internal prelude function: {@link #LOCAL_TIME_OFFSET} of a
+	 * universal time, clamped to the range every backend's host can answer.
+	 */
+	public static final String LOCAL_ZONE_INTERNAL = "%LOCAL-ZONE";
+
+	/** The {@code get-internal-real-time} built-in function. */
+	public static final String GET_INTERNAL_REAL_TIME = "GET-INTERNAL-REAL-TIME";
+
+	/** The {@code get-internal-run-time} built-in function. */
+	public static final String GET_INTERNAL_RUN_TIME = "GET-INTERNAL-RUN-TIME";
+
+	/**
+	 * The {@code %nano-time} internal: the monotonic clock in nanoseconds, an integer on
+	 * every backend ({@code System.nanoTime} on the interpreter and the JVM, WASI's
+	 * monotonic {@code clock_time_get} on wasm). Its origin is arbitrary; only
+	 * differences mean anything. The Clojure front end's {@code System/nanoTime}.
+	 */
+	public static final String NANO_TIME = "%NANO-TIME";
+
+	/**
+	 * The {@code %unix-nano-time} internal: the wall clock in nanoseconds since the Unix
+	 * epoch, an integer on every backend ({@code Instant.now()} on the interpreter and
+	 * the JVM, WASI's realtime {@code clock_time_get} on wasm, the host cell under
+	 * {@code --no-wasi}). {@link #UNIX_TIME} is the public API over it.
+	 */
+	public static final String UNIX_NANO_TIME = "%UNIX-NANO-TIME";
+
+	/**
+	 * The {@code rontolisp:unix-time} function: the wall clock as two values, Unix
+	 * seconds and the nanoseconds within that second, built over {@link #UNIX_NANO_TIME}
+	 * in the prelude.
+	 */
+	public static final String UNIX_TIME = "UNIX-TIME";
+
+	/**
+	 * The {@code sleep} built-in function: block for the given number of seconds (a
+	 * non-negative real; sub-second values are rounded to whole milliseconds) and return
+	 * nil. The interpreter, the JVM and WASM Preview 1 wait through {@link #SLEEP_MS};
+	 * {@code --component} waits on a {@code wasi:clocks} timer and {@code --no-wasi}
+	 * signals (see {@code .kb/time-environment-builtins.md}).
+	 */
+	public static final String SLEEP = "SLEEP";
+
+	/**
+	 * The {@code %sleep-ms} internal primitive backing {@link #SLEEP} on the interpreter,
+	 * the JVM and WASM Preview 1: park the current thread (block in WASI
+	 * {@code poll_oneoff}) for a POSITIVE whole number of milliseconds. The non-positive
+	 * case is filtered out by the expansion, so the primitive itself never has to decide
+	 * what a zero or negative duration means.
+	 */
+	public static final String SLEEP_MS = "%SLEEP-MS";
+
+	/**
+	 * The {@code lisp-implementation-type} built-in: {@code "rontolisp"} on every
+	 * backend. The first half of the pair a portable library prints in a User-Agent or a
+	 * banner.
+	 */
+	public static final String LISP_IMPLEMENTATION_TYPE = "LISP-IMPLEMENTATION-TYPE";
+
+	/**
+	 * The {@code lisp-implementation-version} built-in: the project version, the same
+	 * string {@code rontolisp --version} and {@code (getf (rontolisp:version) :version)}
+	 * report. Baked into the prelude source from {@link Version}, so all four backends
+	 * answer the build that compiled them.
+	 */
+	public static final String LISP_IMPLEMENTATION_VERSION = "LISP-IMPLEMENTATION-VERSION";
+
+	/**
+	 * The {@code software-type} built-in: {@code "Unix"} on every backend -- the one
+	 * supporting-software claim rontolisp already makes everywhere
+	 * ({@code uiop:os-unix-p} is {@code t} outright and {@code uiop:operating-system} is
+	 * {@code :unix}), so the CL spelling and the uiop one cannot contradict each other.
+	 */
+	public static final String SOFTWARE_TYPE = "SOFTWARE-TYPE";
+
+	/**
+	 * The {@code software-version} built-in: {@code nil} on every backend. No backend can
+	 * name a version of the answer {@link #SOFTWARE_TYPE} gives -- a compiled artifact
+	 * carries no host, and WASI exposes none -- and {@code nil} is the answer CL
+	 * prescribes when no appropriate and relevant result can be supplied.
+	 */
+	public static final String SOFTWARE_VERSION = "SOFTWARE-VERSION";
+
+	/**
+	 * The {@code machine-type} built-in: the ABI the running artifact targets --
+	 * {@code "JVM"} on the interpreter and the JVM backend, {@code "WASM32"} on both WASM
+	 * backends -- over {@link #TARGET_MACHINE_TYPE}. Deliberately NOT the host CPU: a
+	 * class file and a wasm module are both CPU-independent, which is the same reason
+	 * {@code uiop:architecture} answers {@code :jvm} / {@code :wasm32}.
+	 */
+	public static final String MACHINE_TYPE = "MACHINE-TYPE";
+
+	/**
+	 * The {@code %target-machine-type} internal primitive behind {@link #MACHINE_TYPE}:
+	 * the ABI name as a string, a per-backend CONSTANT (no host is consulted). The
+	 * interpreter defines it, and both compilers lower it to the string literal for the
+	 * target they are emitting.
+	 */
+	public static final String TARGET_MACHINE_TYPE = "%TARGET-MACHINE-TYPE";
+
+	/**
+	 * The {@code machine-version} built-in: {@code nil} on every backend, for the reason
+	 * {@link #SOFTWARE_VERSION} is -- {@link #MACHINE_TYPE} names an ABI, and an ABI the
+	 * artifact targets has no version the program can read.
+	 */
+	public static final String MACHINE_VERSION = "MACHINE-VERSION";
+
+	/**
+	 * The {@code machine-instance} built-in: {@code nil} on every backend. No backend has
+	 * a host-identity primitive (WASI exposes no hostname at all), and a fabricated
+	 * {@code "localhost"} would be an answer rather than the absence of one -- which is
+	 * exactly what {@code uiop:hostname} already says.
+	 */
+	public static final String MACHINE_INSTANCE = "MACHINE-INSTANCE";
+
+	/**
+	 * The {@code short-site-name} built-in: {@code nil} on every backend. There is no
+	 * site database to read, and CL blesses {@code nil} for that.
+	 */
+	public static final String SHORT_SITE_NAME = "SHORT-SITE-NAME";
+
+	/**
+	 * The {@code long-site-name} built-in: {@code nil}, like {@link #SHORT_SITE_NAME}.
+	 */
+	public static final String LONG_SITE_NAME = "LONG-SITE-NAME";
+
+	/**
+	 * The {@code user-homedir-pathname} prelude function: the {@code HOME} the process
+	 * was started with, as a DIRECTORY pathname; nil when the variable is unset, which
+	 * CLHS allows and is the honest answer on a component given no environment.
+	 */
+	public static final String USER_HOMEDIR_PATHNAME = "USER-HOMEDIR-PATHNAME";
+
+	/**
+	 * The {@code copy-symbol} prelude function: a fresh uninterned symbol of the same
+	 * name, inheriting {@link #MAKE_SYMBOL}'s identity deviation (two uninterned symbols
+	 * of one name are eq -- a symbol IS its spelling and there is no intern table,
+	 * {@code .kb/symbol-runtime-api.md}).
+	 */
+	public static final String COPY_SYMBOL = "COPY-SYMBOL";
+
+	/**
+	 * The {@code invoke-debugger} prelude function: no backend has a debugger to enter
+	 * and CLHS says the call never returns, so it signals the condition unhandled.
+	 */
+	public static final String INVOKE_DEBUGGER = "INVOKE-DEBUGGER";
+
+	/**
+	 * The {@code remove-method} generic function of the generic-function protocol
+	 * ({@code macro/generic-functions.lisp}, {@code .kb/clos.md}).
+	 */
+	public static final String REMOVE_METHOD = "REMOVE-METHOD";
+
+	/**
+	 * The {@code add-method} generic function of the generic-function protocol
+	 * ({@code macro/generic-functions.lisp}): a method metaobject joins a generic.
+	 */
+	public static final String ADD_METHOD = "ADD-METHOD";
+
+	/** The {@code find-method} function of the generic-function protocol. */
+	public static final String FIND_METHOD = "FIND-METHOD";
+
+	/**
+	 * The {@code ensure-generic-function} function of the generic-function protocol: the
+	 * generic function METAOBJECT of a name.
+	 */
+	public static final String ENSURE_GENERIC_FUNCTION = "ENSURE-GENERIC-FUNCTION";
+
+	/** The {@code method-qualifiers} reader of the generic-function protocol. */
+	public static final String METHOD_QUALIFIERS = "METHOD-QUALIFIERS";
+
+	/**
+	 * {@code make-instances-obsolete}: the interpreter updates the existing instances of
+	 * the class (and its subclasses) when the class definition in progress completes; on
+	 * the compile paths, whose class tables are whole-program, no instance is ever
+	 * obsolete and the prelude function answers the class.
+	 */
+	public static final String MAKE_INSTANCES_OBSOLETE = "MAKE-INSTANCES-OBSOLETE";
+
+	/**
+	 * {@code update-instance-for-redefined-class}: the generic the interpreter calls on
+	 * an instance whose class was redefined, its system method calling
+	 * {@code shared-initialize} with the added slots.
+	 */
+	public static final String UPDATE_INSTANCE_FOR_REDEFINED_CLASS = "UPDATE-INSTANCE-FOR-REDEFINED-CLASS";
+
+	/**
+	 * The {@code compile-file} prelude function: exists and signals. There is no file
+	 * compiler -- a whole PROGRAM is compiled in one pass and a loaded file is spliced
+	 * into it -- which is the same reason {@link #COMPILE_FILE_PATHNAME_VAR} is
+	 * permanently nil.
+	 */
+	public static final String COMPILE_FILE = "COMPILE-FILE";
+
+	/** The {@code compile-file-pathname} prelude function, the sibling of the above. */
+	public static final String COMPILE_FILE_PATHNAME = "COMPILE-FILE-PATHNAME";
+
+	/** The {@code sin} built-in function. */
+	public static final String SIN = "SIN";
+
+	/** The {@code cos} built-in function. */
+	public static final String COS = "COS";
+
+	/** The {@code tan} built-in function. */
+	public static final String TAN = "TAN";
+
+	/** The {@code asin} built-in function. */
+	public static final String ASIN = "ASIN";
+
+	/** The {@code acos} built-in function. */
+	public static final String ACOS = "ACOS";
+
+	/** The {@code atan} built-in function. */
+	public static final String ATAN = "ATAN";
+
+	/** The {@code sinh} built-in function. */
+	public static final String SINH = "SINH";
+
+	/** The {@code cosh} built-in function. */
+	public static final String COSH = "COSH";
+
+	/** The {@code tanh} built-in function. */
+	public static final String TANH = "TANH";
+
+	/** The {@code cis} built-in function. */
+	public static final String CIS = "CIS";
+
+	/** The {@code asinh} built-in function. */
+	public static final String ASINH = "ASINH";
+
+	/** The {@code acosh} built-in function. */
+	public static final String ACOSH = "ACOSH";
+
+	/** The {@code atanh} built-in function. */
+	public static final String ATANH = "ATANH";
+
+	/** The {@code gcd} built-in function. */
+	public static final String GCD = "GCD";
+
+	/** The {@code lcm} built-in function. */
+	public static final String LCM = "LCM";
+
+	/** The {@code signum} built-in function. */
+	public static final String SIGNUM = "SIGNUM";
+
+	/** The {@code logand} built-in function (bitwise AND, variadic; identity -1). */
+	public static final String LOGAND = "LOGAND";
+
+	/**
+	 * The {@code logior} built-in function (bitwise inclusive OR, variadic; identity 0).
+	 */
+	public static final String LOGIOR = "LOGIOR";
+
+	/**
+	 * The {@code logxor} built-in function (bitwise exclusive OR, variadic; identity 0).
+	 */
+	public static final String LOGXOR = "LOGXOR";
+
+	/** The {@code lognot} built-in function (bitwise NOT, i.e. ones' complement). */
+	public static final String LOGNOT = "LOGNOT";
+
+	/** The {@code logandc1} built-in function ({@code (logand (lognot x) y)}). */
+	public static final String LOGANDC1 = "LOGANDC1";
+
+	/** The {@code logandc2} built-in function ({@code (logand x (lognot y))}). */
+	public static final String LOGANDC2 = "LOGANDC2";
+
+	/** The {@code logorc1} built-in function ({@code (logior (lognot x) y)}). */
+	public static final String LOGORC1 = "LOGORC1";
+
+	/** The {@code logorc2} built-in function ({@code (logior x (lognot y))}). */
+	public static final String LOGORC2 = "LOGORC2";
+
+	/** The {@code lognand} built-in function ({@code (lognot (logand x y))}). */
+	public static final String LOGNAND = "LOGNAND";
+
+	/** The {@code lognor} built-in function ({@code (lognot (logior x y))}). */
+	public static final String LOGNOR = "LOGNOR";
+
+	/**
+	 * The {@code logeqv} built-in function (bitwise equivalence, variadic; the left fold
+	 * of the two-argument {@code (lognot (logxor x y))}, {@code -1} of no arguments).
+	 */
+	public static final String LOGEQV = "LOGEQV";
+
+	/**
+	 * The {@code ash} built-in function (arithmetic shift; left when the count is
+	 * non-negative, right otherwise).
+	 */
+	public static final String ASH = "ASH";
+
+	/**
+	 * The {@code integer-length} built-in function (number of bits in the
+	 * two's-complement magnitude of the argument, excluding sign).
+	 */
+	public static final String INTEGER_LENGTH = "INTEGER-LENGTH";
+
+	/**
+	 * The {@code logbitp} built-in function (tests whether a given bit of the
+	 * two's-complement integer is set).
+	 */
+	public static final String LOGBITP = "LOGBITP";
+
+	/**
+	 * The {@code logtest} built-in function ({@code (not (zerop (logand x y)))}: tests
+	 * whether any bits are set in common between two integers).
+	 */
+	public static final String LOGTEST = "LOGTEST";
+
+	/**
+	 * The {@code logcount} prelude function (the number of 1 bits of a non-negative
+	 * integer, of 0 bits of a negative one -- the two's-complement population count).
+	 */
+	public static final String LOGCOUNT = "LOGCOUNT";
+
+	/**
+	 * The {@code boole} prelude function (the two-operand bit operation a {@code boole-*}
+	 * constant names).
+	 */
+	public static final String BOOLE = "BOOLE";
+
+	/**
+	 * The {@code byte} built-in (builds a byte specifier). Represented internally as a
+	 * two-element list {@code (size position)}.
+	 */
+	public static final String BYTE = "BYTE";
+
+	/** The {@code byte-size} built-in (the size of a byte specifier). */
+	public static final String BYTE_SIZE = "BYTE-SIZE";
+
+	/** The {@code byte-position} built-in (the position of a byte specifier). */
+	public static final String BYTE_POSITION = "BYTE-POSITION";
+
+	/**
+	 * The {@code ldb} built-in (load byte: extract the byte specifier's field from an
+	 * integer, right-justified).
+	 */
+	public static final String LDB = "LDB";
+
+	/**
+	 * The {@code dpb} built-in (deposit byte: replace the byte specifier's field of an
+	 * integer with the low bits of a new value).
+	 */
+	public static final String DPB = "DPB";
+
+	/**
+	 * The {@code deposit-field} built-in function: {@code (deposit-field newbyte
+	 * bytespec integer)} replaces the byte specifier's field of {@code integer} with
+	 * newbyte's bits AT that field (unlike {@code dpb}, which deposits newbyte's low
+	 * bits).
+	 */
+	public static final String DEPOSIT_FIELD = "DEPOSIT-FIELD";
+
+	/**
+	 * The {@code ldb-test} prelude function: {@code (ldb-test bytespec integer)} answers
+	 * whether any bit of the byte specifier's field is set -- {@code (not
+	 * (zerop (ldb bytespec integer)))}.
+	 */
+	public static final String LDB_TEST = "LDB-TEST";
+
+	// Comparison
+
+	/** The {@code =} built-in function. */
+	public static final String EQ = "=";
+
+	/** The {@code eq} built-in function (general equality). */
+	public static final String EQ_GENERAL = "EQ";
+
+	/** The {@code eql} built-in function (type-aware value equality). */
+	public static final String EQL = "EQL";
+
+	/** The {@code equal} built-in function (structural equality). */
+	public static final String EQUAL = "EQUAL";
+
+	/**
+	 * The {@code equalp} built-in function (like {@code equal} but strings/characters
+	 * compare case-insensitively and numbers by value). Implemented as a recursive
+	 * rontolisp-source {@code defun} shared by every backend (see {@code EqualpLibrary});
+	 * lite: arrays/hash-tables/structures fall back to {@code eql} rather than recursing.
+	 */
+	public static final String EQUALP = "EQUALP";
+
+	/** The {@code <} built-in function. */
+	public static final String LT = "<";
+
+	/** The {@code >} built-in function. */
+	public static final String GT = ">";
+
+	/** The {@code <=} built-in function. */
+	public static final String LE = "<=";
+
+	/** The {@code >=} built-in function. */
+	public static final String GE = ">=";
+
+	/**
+	 * The {@code /=} numeric not-equal operator. Expands to negated {@code =} tests (all
+	 * arguments pairwise different, like CL).
+	 */
+	public static final String NE = "/=";
+
+	// List operations
+
+	/** The {@code cons} built-in function. */
+	public static final String CONS = "CONS";
+
+	/** The {@code car} built-in function. */
+	public static final String CAR = "CAR";
+
+	/** The {@code cdr} built-in function. */
+	public static final String CDR = "CDR";
+
+	/** The {@code list} built-in function. */
+	public static final String LIST = "LIST";
+
+	/** The {@code append} built-in function. */
+	public static final String APPEND = "APPEND";
+
+	/** The {@code nthcdr} built-in function. */
+	public static final String NTHCDR = "NTHCDR";
+
+	/**
+	 * The {@code ldiff} standard function: a fresh list of the elements preceding
+	 * {@code object} in {@code list}, or a copy of the whole list (dotted tail included)
+	 * when {@code object} is not one of its tails. A prelude defun, so one definition
+	 * serves all four backends.
+	 */
+	public static final String LDIFF = "LDIFF";
+
+	/**
+	 * The {@code sublis} standard function: a fresh tree with every subtree matching an
+	 * alist key replaced by that entry's value, {@code :key} / {@code :test} /
+	 * {@code :test-not} honoured. A prelude defun; the destructive {@code nsublis} is
+	 * absent, as is {@code subst}.
+	 */
+	public static final String SUBLIS = "SUBLIS";
+
+	/**
+	 * The {@code nsublis} function (a prelude defun): {@link #SUBLIS} under its other
+	 * name; see {@link #NSUBST} for why the destructive spelling may answer the
+	 * non-destructive result.
+	 */
+	public static final String NSUBLIS = "NSUBLIS";
+
+	/**
+	 * The {@code gentemp} standard function (deprecated by CLHS, still used by iterate):
+	 * interns a fresh symbol named {@code prefix} plus a counter that no symbol of that
+	 * name already claims. Unlike {@link #GENSYM} the answer is INTERNED, which is the
+	 * whole point of the function. A prelude defun.
+	 */
+	public static final String GENTEMP = "GENTEMP";
+
+	/** The {@code length} built-in function. */
+	public static final String LENGTH = "LENGTH";
+
+	/** The {@code reverse} built-in function. */
+	public static final String REVERSE = "REVERSE";
+
+	/** The {@code member} built-in function. */
+	public static final String MEMBER = "MEMBER";
+
+	/**
+	 * The {@code find} built-in function (return the first element {@code eql} to the
+	 * given item, or nil).
+	 */
+	public static final String FIND = "FIND";
+
+	/**
+	 * The {@code find-if} built-in function (return the first element for which the
+	 * predicate is true, or nil).
+	 */
+	public static final String FIND_IF = "FIND-IF";
+
+	/**
+	 * The {@code find-if-not} built-in function (return the first element for which the
+	 * predicate is false, or nil).
+	 */
+	public static final String FIND_IF_NOT = "FIND-IF-NOT";
+
+	/**
+	 * The {@code member-if} built-in function (return the tail of the list starting at
+	 * the first element for which the predicate is true, or nil).
+	 */
+	public static final String MEMBER_IF = "MEMBER-IF";
+
+	/**
+	 * The {@code member-if-not} function (a prelude defun): the tail of the list starting
+	 * at the first element the predicate REJECTS, or nil. {@code member-if} over the
+	 * negated predicate, with the same {@code :key}; deprecated by CLHS, still billed by
+	 * the ANSI suite.
+	 */
+	public static final String MEMBER_IF_NOT = "MEMBER-IF-NOT";
+
+	/**
+	 * The {@code position} built-in function (return the 0-based index of the first
+	 * element {@code eql} to the given item, or nil).
+	 */
+	public static final String POSITION = "POSITION";
+
+	/**
+	 * The {@code position-if} built-in function (return the 0-based index of the first
+	 * element for which the predicate is true, or nil).
+	 */
+	public static final String POSITION_IF = "POSITION-IF";
+
+	/**
+	 * The {@code position-if-not} built-in function (return the 0-based index of the
+	 * first element for which the predicate is false, or nil).
+	 */
+	public static final String POSITION_IF_NOT = "POSITION-IF-NOT";
+
+	/**
+	 * The {@code complement} built-in (return a predicate answering the opposite of the
+	 * given one). Classified as a macro here: it expands to a wrapping lambda, so it is
+	 * not usable as {@code #'complement}.
+	 */
+	public static final String COMPLEMENT = "COMPLEMENT";
+
+	/**
+	 * The {@code constantly} built-in: a function of any arguments answering the one
+	 * value it was given. Prelude Lisp source, so unlike {@link #COMPLEMENT} it IS usable
+	 * as {@code #'constantly}. The idiomatic "accept everything" filter argument --
+	 * {@code uiop:collect-sub*directories} takes two of them.
+	 */
+	public static final String CONSTANTLY = "CONSTANTLY";
+
+	/**
+	 * The {@code count} built-in function (return the number of elements {@code eql} to
+	 * the given item).
+	 */
+	public static final String COUNT = "COUNT";
+
+	/**
+	 * The {@code count-if} built-in function (return the number of elements for which the
+	 * predicate is true).
+	 */
+	public static final String COUNT_IF = "COUNT-IF";
+
+	/**
+	 * The {@code count-if-not} function (a prelude defun): the number of elements the
+	 * predicate REJECTS. Takes the full CL keyword set
+	 * ({@code :key}/{@code :start}/{@code :end}/{@code :from-end}); {@code :from-end}
+	 * only reorders the predicate calls, which cannot change a count, so it is accepted
+	 * and the scan stays forward.
+	 */
+	public static final String COUNT_IF_NOT = "COUNT-IF-NOT";
+
+	/** The {@code assoc} built-in function. */
+	public static final String ASSOC = "ASSOC";
+
+	/**
+	 * The {@code assoc-if} built-in function (return the first pair whose car satisfies
+	 * the predicate, or nil).
+	 */
+	public static final String ASSOC_IF = "ASSOC-IF";
+
+	/**
+	 * The {@code assoc-if-not} function (a prelude defun): the first pair of an alist
+	 * whose car the predicate REJECTS, or nil -- {@link #ASSOC_IF} over the negated
+	 * predicate, with the same {@code :key}.
+	 */
+	public static final String ASSOC_IF_NOT = "ASSOC-IF-NOT";
+
+	/** The {@code last} built-in function. */
+	public static final String LAST = "LAST";
+
+	/**
+	 * The {@code butlast} built-in function (return a copy of the list without its last
+	 * element).
+	 */
+	public static final String BUTLAST = "BUTLAST";
+
+	/**
+	 * The {@code nbutlast} function (a prelude defun): the DESTRUCTIVE {@code butlast} --
+	 * the argument's own spine is cut with an {@code rplacd} and returned, so the answer
+	 * is {@code eq} to the argument whenever anything is left of it (nil otherwise, since
+	 * there is no cell to cut).
+	 */
+	public static final String NBUTLAST = "NBUTLAST";
+
+	/**
+	 * The {@code list-length} standard function (a prelude defun): the length of a proper
+	 * list, or nil for a CIRCULAR one -- which is the whole reason it is not
+	 * {@code length}. A dotted list or a non-list signals a {@code type-error}. The
+	 * tortoise/hare walk is what makes the circular answer possible in bounded time.
+	 */
+	public static final String LIST_LENGTH = "LIST-LENGTH";
+
+	/**
+	 * The {@code tailp} standard function (a prelude defun): whether {@code object} is
+	 * one of the tails of {@code list} -- {@code eq} against every cons of the spine and
+	 * {@code eql} against the dotted terminator, so {@code (tailp 'e '(a b . e))} is true
+	 * (X3J13's TAILP-NIL:T reading).
+	 */
+	public static final String TAILP = "TAILP";
+
+	/**
+	 * The {@code get-properties} standard function (a prelude defun): the first indicator
+	 * of {@code indicator-list} found in the property list, its value, and the TAIL of
+	 * the plist starting at that indicator -- three values, nil/nil/nil on a miss.
+	 */
+	public static final String GET_PROPERTIES = "GET-PROPERTIES";
+
+	/**
+	 * The {@code getf} built-in function (return the value following the indicator in a
+	 * property list, or nil). The partner of {@code remf}.
+	 */
+	public static final String GETF = "GETF";
+
+	/**
+	 * The {@code get} standard function (+ its {@code (setf get)} writer): symbol
+	 * property lists as prelude defuns over one global name-keyed alist store
+	 * ({@code %symbol-plists}) -- symbols have no identity cells to hang plists on
+	 * ({@code .kb/symbol-runtime-api.md}), so the store is program-global.
+	 */
+	public static final String GET = "GET";
+
+	/**
+	 * The {@code symbol-plist} standard function: the whole property list {@code get}
+	 * indexes into, read out of the same {@code %symbol-plists} store. Its own prelude
+	 * entry (and its own copy of the store's {@code defvar}, which is a no-op once bound)
+	 * so a program that reads plists without ever calling {@code get} still gets a table.
+	 */
+	public static final String SYMBOL_PLIST = "SYMBOL-PLIST";
+
+	/**
+	 * The {@code remprop} standard function: drops one indicator/value pair from a
+	 * symbol's property list in the same {@code %symbol-plists} store {@link #GET} and
+	 * {@link #SYMBOL_PLIST} share, answering true when the property was there. A prelude
+	 * defun, so one definition serves all four backends.
+	 */
+	public static final String REMPROP = "REMPROP";
+
+	/**
+	 * The {@code type-of} standard function, a prelude defun over
+	 * {@link #CLASS_DESIGNATOR_INTERNAL}: the type NAME of a struct/CLOS instance (the
+	 * designator is the instance TAG), else the built-in type name the designator
+	 * reports.
+	 */
+	public static final String TYPE_OF = "TYPE-OF";
+
+	/**
+	 * The {@code find-package} standard function. Rontolisp has no package objects: the
+	 * returned "package" is the canonical package name as a keyword, {@code eq}
+	 * -comparable by name with what {@link #SYMBOL_PACKAGE} yields; nil for an unknown
+	 * package.
+	 */
+	public static final String FIND_PACKAGE = "FIND-PACKAGE";
+
+	/**
+	 * The {@code symbol-package} standard function: the canonical name (same keyword
+	 * shape as {@link #FIND_PACKAGE}) of the package in a symbol's qualified spelling;
+	 * {@code keyword} for keywords, {@code cl}/{@code cl-user} for bare symbols, nil for
+	 * uninterned ({@code #:}) ones.
+	 */
+	public static final String SYMBOL_PACKAGE = "SYMBOL-PACKAGE";
+
+	/**
+	 * The {@code package-name} standard function: the name STRING of a package
+	 * designator, resolved through {@link #FIND_PACKAGE} (a "package" is its canonical
+	 * upcased name as a keyword, so the name is that keyword's string); an unknown
+	 * designator signals. A {@code LispPreludeLibrary} entry on every backend -- dbi's
+	 * {@code connection-driver-type} reads
+	 * {@code (package-name (symbol-package (type-of conn)))}.
+	 */
+	public static final String PACKAGE_NAME = "PACKAGE-NAME";
+
+	/**
+	 * The {@code package-use-list} standard function: the packages a package uses, as the
+	 * keywords {@link #FIND_PACKAGE} answers. The interpreter reads the live registry;
+	 * the compile paths answer from the use table baked in at compile time (see
+	 * {@code .kb/packages.md}).
+	 */
+	public static final String PACKAGE_USE_LIST = "PACKAGE-USE-LIST";
+
+	/**
+	 * The {@code package-used-by-list} standard function: the inverse of
+	 * {@link #PACKAGE_USE_LIST} -- every package whose use list names this one, over the
+	 * same table.
+	 */
+	public static final String PACKAGE_USED_BY_LIST = "PACKAGE-USED-BY-LIST";
+
+	/**
+	 * The {@code package-shadowing-symbols} standard function: always nil here, because
+	 * rontolisp has no symbol shadowing ({@code defpackage}'s {@code :shadow} records the
+	 * names for resolution but mints no shadowing symbol, and the runtime
+	 * {@code shadow}/{@code shadowing-import} are documented non-goals). The package
+	 * designator is still validated, so an unknown one signals like Common Lisp's.
+	 */
+	public static final String PACKAGE_SHADOWING_SYMBOLS = "PACKAGE-SHADOWING-SYMBOLS";
+
+	/**
+	 * The {@code make-package} standard function: creates a package at run time and
+	 * answers it (the upcased canonical name as a keyword, like {@link #FIND_PACKAGE}).
+	 * The runtime tier of the two-tier package model (see {@code .kb/packages.md}): the
+	 * name and nicknames are upcased like the reader would, {@code :use} entries must
+	 * name packages the read/compile-time registry already knows, and a collision with
+	 * any of those signals a {@code package-error}. The interpreter registers in its live
+	 * registry; the compiled backends record in the {@code %runtime-packages%} table
+	 * every package query consults first.
+	 */
+	public static final String MAKE_PACKAGE = "MAKE-PACKAGE";
+
+	/**
+	 * The {@code delete-package} standard function: removes a runtime-tier package (see
+	 * {@link #MAKE_PACKAGE}) and answers {@code t}. Deleting a read/compile-time package
+	 * (a built-in or a {@code defpackage} product) or a designator that names no package
+	 * signals a {@code package-error}, like Common Lisp's.
+	 */
+	public static final String DELETE_PACKAGE = "DELETE-PACKAGE";
+
+	/**
+	 * The {@code rename-package} standard function: renames a runtime-tier package (see
+	 * {@link #MAKE_PACKAGE}), replacing its nicknames with {@code new-nicknames}, and
+	 * answers the package under its new name. Renaming a read/compile-time package, an
+	 * unknown designator, or a new name (or nickname) that collides signals a
+	 * {@code package-error}.
+	 */
+	public static final String RENAME_PACKAGE = "RENAME-PACKAGE";
+
+	/**
+	 * The {@code packagep} standard function: {@code t} when the argument is a package
+	 * designator naming a registered package (read/compile-time or runtime-tier),
+	 * {@code nil} otherwise -- never a signal. A prelude defun over {@link #FIND_PACKAGE}
+	 * on every backend.
+	 */
+	public static final String PACKAGEP = "PACKAGEP";
+
+	/**
+	 * The {@code package-nicknames} standard function: the nickname STRINGS of a package
+	 * designator (empty when it has none). An unknown designator signals a
+	 * {@code package-error}. The interpreter reads its live registry; the compiled
+	 * backends read the baked table plus the {@code %runtime-packages%} table.
+	 */
+	public static final String PACKAGE_NICKNAMES = "PACKAGE-NICKNAMES";
+
+	/**
+	 * The {@code find-all-symbols} standard function: every distinct symbol whose name is
+	 * {@code string=} to the argument symbol's, accessible in the designated package (or,
+	 * by default, in any registered package). A prelude defun over {@link #DO_SYMBOLS}
+	 * and {@link #LIST_ALL_PACKAGES} on every backend; without an intern table the
+	 * universe is the registry's accessible symbols plus the image's definitions (the
+	 * same probe {@link #FIND_SYMBOL} uses).
+	 */
+	public static final String FIND_ALL_SYMBOLS = "FIND-ALL-SYMBOLS";
+
+	/**
+	 * The {@code apropos-list} standard function: the accessible symbols whose name
+	 * contains {@code string} as a substring (compared case-insensitively, as SBCL does),
+	 * in the designated package or, by default, in any registered package. A prelude
+	 * defun sharing {@link #FIND_ALL_SYMBOLS}' universe walk.
+	 */
+	public static final String APROPOS_LIST = "APROPOS-LIST";
+
+	/**
+	 * The {@code apropos} standard function: prints each {@link #APROPOS_LIST} match on
+	 * its own line and answers {@code nil}. A prelude defun on every backend.
+	 */
+	public static final String APROPOS = "APROPOS";
+
+	/**
+	 * The {@code package-error-package} standard function: the offending package
+	 * designator out of a {@code package-error} condition. A prelude defun reading the
+	 * {@code package} slot on every backend.
+	 */
+	public static final String PACKAGE_ERROR_PACKAGE = "PACKAGE-ERROR-PACKAGE";
+
+	/**
+	 * The mutable runtime-tier package table the compiled backends consult before their
+	 * baked tables: an alist of {@code (upcased-name use-list nicknames)} one entry per
+	 * {@link #MAKE_PACKAGE} product, maintained by the prelude {@code make-package} /
+	 * {@code delete-package} / {@code rename-package} defuns. The interpreter never binds
+	 * it (its natives mutate the live registry instead).
+	 */
+	public static final String RUNTIME_PACKAGES_INTERNAL = "%RUNTIME-PACKAGES%";
+
+	/**
+	 * The read/compile-time package table a compiled program carries when it can create,
+	 * rename, delete, enumerate or nickname packages at run time: one entry per
+	 * registered package -- the upcased name, the upcased use list, the nickname strings,
+	 * the canonically spelled accessible symbols and the external subset -- injected by
+	 * the backends after package resolution (they are the one place holding the final
+	 * registry). The interpreter never binds it (its natives read the live registry
+	 * instead).
+	 */
+	public static final String BAKED_PACKAGES_INTERNAL = "%BAKED-PACKAGES%";
+
+	/**
+	 * The {@code %do-symbols-list} universe helper behind the compiled {@code do-symbols}
+	 * / {@code do-external-symbols} lowerings (and the {@code find-all-symbols} /
+	 * {@code apropos-list} prelude defuns, which call it directly):
+	 * {@code (%do-symbols-list designator external-only-p)} answers the canonically
+	 * spelled symbols over the baked table plus the runtime table, signalling like the
+	 * interpreter when the designator names no package.
+	 */
+	public static final String DO_SYMBOLS_LIST_INTERNAL = "%DO-SYMBOLS-LIST";
+
+	/**
+	 * The {@code %baked-package-find} table probe behind the compiled
+	 * {@code make-package} / {@code delete-package} / {@code rename-package} /
+	 * {@code package-nicknames} prelude defuns: the {@code %baked-packages%} entry whose
+	 * name or nickname is the designator string, or nil.
+	 */
+	public static final String BAKED_PACKAGE_FIND_INTERNAL = "%BAKED-PACKAGE-FIND";
+
+	/**
+	 * The {@code %runtime-package-find} table probe: the {@code %do-symbols-list} and
+	 * mutation-defun half over the mutable {@code %runtime-packages%} table.
+	 */
+	public static final String RUNTIME_PACKAGE_FIND_INTERNAL = "%RUNTIME-PACKAGE-FIND";
+
+	/**
+	 * The {@code %package-symbols-where} universe walk behind {@code find-all-symbols}
+	 * and {@code apropos-list}: every distinct symbol over {@code %do-symbols-list} whose
+	 * name matches (exactly, or as a case-insensitive substring) in the designated
+	 * package, or in every package by default.
+	 */
+	public static final String PACKAGE_SYMBOLS_WHERE_INTERNAL = "%PACKAGE-SYMBOLS-WHERE";
+
+	/**
+	 * The {@code %package-spelling-normalize} probe behind
+	 * {@code %package-symbols-where}: the spelling code uses for an enumerated symbol --
+	 * a re-export redirect resolved to its home (a {@code cl} home reads bare), anything
+	 * else unchanged. The interpreter answers natively from the live registry; the
+	 * compiled backends read the baked import redirects.
+	 */
+	public static final String PACKAGE_SPELLING_NORMALIZE_INTERNAL = "%PACKAGE-SPELLING-NORMALIZE";
+
+	/**
+	 * The {@code %baked-import-redirect} probe: a member's recorded import home in the
+	 * {@code %baked-packages%} table, spelled at that home, or nil.
+	 */
+	public static final String BAKED_IMPORT_REDIRECT_INTERNAL = "%BAKED-IMPORT-REDIRECT";
+
+	/**
+	 * The {@code %split-packed} decoder behind {@code %do-symbols-list}: the baked
+	 * universe rows travel as one length-prefixed string per package
+	 * ({@code "3:CAR6:MAPCAR"}), not as thousands of quoted constants -- a quoted
+	 * constant per symbol would grow the top-level function body past the wasmtime bound
+	 * the corpus already approaches (`.kb/wasm-function-body-size.md`), while data
+	 * segments cost nothing. Answers the spelling list, nil for an empty row.
+	 */
+	public static final String SPLIT_PACKED_INTERNAL = "%SPLIT-PACKED";
+
+	/**
+	 * The {@code copy-readtable} standard function: a prelude defun over the
+	 * {@code LispLayout.READTABLE} value on every backend ({@code .kb/readtables.md}).
+	 */
+	public static final String COPY_READTABLE = "COPY-READTABLE";
+
+	/** The {@code set-dispatch-macro-character} standard function (prelude). */
+	public static final String SET_DISPATCH_MACRO_CHARACTER = "SET-DISPATCH-MACRO-CHARACTER";
+
+	/** The {@code get-dispatch-macro-character} standard function (prelude). */
+	public static final String GET_DISPATCH_MACRO_CHARACTER = "GET-DISPATCH-MACRO-CHARACTER";
+
+	/** The {@code make-dispatch-macro-character} standard function (prelude). */
+	public static final String MAKE_DISPATCH_MACRO_CHARACTER = "MAKE-DISPATCH-MACRO-CHARACTER";
+
+	/** The {@code set-macro-character} standard function (prelude). */
+	public static final String SET_MACRO_CHARACTER = "SET-MACRO-CHARACTER";
+
+	/** The {@code get-macro-character} standard function (prelude). */
+	public static final String GET_MACRO_CHARACTER = "GET-MACRO-CHARACTER";
+
+	/** The {@code set-syntax-from-char} standard function (prelude). */
+	public static final String SET_SYNTAX_FROM_CHAR = "SET-SYNTAX-FROM-CHAR";
+
+	/** The {@code readtablep} standard function (prelude). */
+	public static final String READTABLEP = "READTABLEP";
+
+	/**
+	 * The {@code read-delimited-list} standard function: a prelude defun over
+	 * {@code read}, which the interpreter serves natively for a string stream when the
+	 * current readtable is not the standard one ({@code .kb/readtables.md}).
+	 */
+	public static final String READ_DELIMITED_LIST = "READ-DELIMITED-LIST";
+
+	/**
+	 * The {@code read-preserving-whitespace} standard function: a prelude defun over the
+	 * same scan as {@code read}, leaving the terminating whitespace character in the
+	 * stream.
+	 */
+	public static final String READ_PRESERVING_WHITESPACE = "READ-PRESERVING-WHITESPACE";
+
+	/**
+	 * The {@code readtable-case} standard function and its {@code setf} place: the
+	 * readtable's slot 0 (prelude). The interpreter's reader converts a token's case by
+	 * it; the compile paths read source as {@code :upcase} ({@code .kb/readtables.md}).
+	 */
+	public static final String READTABLE_CASE = "READTABLE-CASE";
+
+	/**
+	 * The {@code *readtable*} standard variable, holding a readtable value
+	 * ({@code LispLayout.READTABLE}) on every backend.
+	 */
+	public static final String READTABLE_VAR = "*READTABLE*";
+
+	/**
+	 * SLIME's {@code swank:*readtable-alist*} member: the package-name to readtable alist
+	 * named-readtables' {@code in-readtable} pushes onto whenever a {@code swank} package
+	 * exists -- here it always does. Bound to nil on the interpreter.
+	 */
+	public static final String SWANK_READTABLE_ALIST = "*READTABLE-ALIST*";
+
+	/**
+	 * The prelude's readtable constructor: a fresh standard readtable, the value
+	 * {@code *readtable*} starts with.
+	 */
+	public static final String RT_MAKE_INTERNAL = "%RT-MAKE";
+
+	/**
+	 * The prelude's syntax entry of a character in a readtable (standard when absent).
+	 */
+	public static final String RT_ENTRY_INTERNAL = "%RT-ENTRY";
+
+	/** The prelude's standard syntax entry of a character. */
+	public static final String RT_STD_ENTRY_INTERNAL = "%RT-STD-ENTRY";
+
+	/** The prelude's memoized standard macro function of a standard macro character. */
+	public static final String RT_STD_FN_INTERNAL = "%RT-STD-FN";
+
+	/** The prelude's memoized standard dispatch table of {@code #}. */
+	public static final String RT_STD_SUBS_INTERNAL = "%RT-STD-SUBS";
+
+	/**
+	 * The prelude's reverse lookup: the standard character a macro function stands for.
+	 */
+	public static final String RT_STD_OF_INTERNAL = "%RT-STD-OF";
+
+	/** The prelude's reverse lookup over the standard {@code #} sub-functions. */
+	public static final String RT_STD_SUB_OF_INTERNAL = "%RT-STD-SUB-OF";
+
+	/** The body of every standard macro function: what calling one does. */
+	public static final String RT_CALL_STANDARD_INTERNAL = "%RT-CALL-STANDARD";
+
+	/**
+	 * The read a standard macro function makes: its own character read by its standard
+	 * function, the interpreter's string-stream read in front of it.
+	 */
+	public static final String RT_READ_AS_INTERNAL = "%RT-READ-AS";
+
+	/** The memoized dispatching function of a user dispatch macro character. */
+	public static final String RT_DISPATCHER_INTERNAL = "%RT-DISPATCHER";
+
+	/** A readtable entry made the readtable's own (copied out of the standard one). */
+	public static final String RT_OWN_ENTRY_INTERNAL = "%RT-OWN-ENTRY";
+
+	/** A fresh copy of a readtable entry (its dispatch table included). */
+	public static final String RT_COPY_ENTRY_INTERNAL = "%RT-COPY-ENTRY";
+
+	/** A readtable designator resolved: nil is the standard readtable. */
+	public static final String RT_DESIGNATOR_INTERNAL = "%RT-DESIGNATOR";
+
+	/** The memoized standard readtable, what a nil readtable designator denotes. */
+	public static final String RT_STANDARD_INTERNAL = "%RT-STANDARD";
+
+	/**
+	 * The macro characters of a readtable as named-readtables' iterator wants them:
+	 * {@code (char fn non-terminating-p dispatch-p sub-alist)} per character, the
+	 * standard ones included. What the named-readtables derived form iterates instead of
+	 * grovelling every code point ({@code .kb/readtables.md}).
+	 */
+	public static final String READTABLE_MACRO_ENTRIES_INTERNAL = "%READTABLE-MACRO-ENTRIES";
+
+	/**
+	 * The {@code *load-pathname*} standard variable: the path {@code load} was CALLED
+	 * with, as a rontolisp pathname (a string), or nil outside a load. Bound by the
+	 * interpreter's {@code load} / {@code asdf:load-system} / {@code ql:quickload} and by
+	 * the compile-time {@code LoadInliner} around each spliced file, so a library that
+	 * locates its own data files relative to its source -- local-time's zoneinfo
+	 * repository is the motivating one -- resolves identically on every backend.
+	 */
+	public static final String LOAD_PATHNAME_VAR = "*LOAD-PATHNAME*";
+
+	/**
+	 * The {@code *load-truename*} standard variable: the RESOLVED absolute path of the
+	 * file being loaded (nil outside a load). Rontolisp has no filesystem truename
+	 * machinery -- no symlink resolution -- so this is the path
+	 * {@link #LOAD_PATHNAME_VAR} resolves to against the enclosing load directory, which
+	 * is what a library uses it for.
+	 */
+	public static final String LOAD_TRUENAME_VAR = "*LOAD-TRUENAME*";
+
+	/**
+	 * The {@code *compile-file-pathname*} standard variable. Rontolisp has no FILE
+	 * compiler -- the compile backends compile a whole program, and a spliced library
+	 * file is LOADED into that program; the {@link #COMPILE_FILE} name exists and signals
+	 * -- so this is permanently nil on every backend, which is exactly its value in a
+	 * real CL that is loading source. Defined because the
+	 * {@code (or *compile-file-truename* *load-truename*)} idiom reads it.
+	 */
+	public static final String COMPILE_FILE_PATHNAME_VAR = "*COMPILE-FILE-PATHNAME*";
+
+	/**
+	 * The {@code *compile-file-truename*} standard variable -- permanently nil, for the
+	 * same reason as {@link #COMPILE_FILE_PATHNAME_VAR}.
+	 */
+	public static final String COMPILE_FILE_TRUENAME_VAR = "*COMPILE-FILE-TRUENAME*";
+
+	/**
+	 * The {@code *load-verbose*} standard variable: nil on every backend, which is what
+	 * {@code load} here actually does -- it prints no progress banner, and {@code load}'s
+	 * own {@code :verbose} keyword is accepted and ignored for the same reason. Defined
+	 * because the portable {@code (let ((*load-verbose* nil)) (load f))} idiom BINDS it,
+	 * and an unbound variable is a hard error there.
+	 */
+	public static final String LOAD_VERBOSE_VAR = "*LOAD-VERBOSE*";
+
+	/**
+	 * The {@code *load-print*} standard variable -- nil on every backend, for the same
+	 * reason as {@link #LOAD_VERBOSE_VAR}: nothing echoes the value of each loaded form.
+	 */
+	public static final String LOAD_PRINT_VAR = "*LOAD-PRINT*";
+
+	/**
+	 * The {@code *debugger-hook*} standard variable: nil until a program binds it, and
+	 * what {@code invoke-debugger} calls when it does.
+	 */
+	public static final String DEBUGGER_HOOK_VAR = "*DEBUGGER-HOOK*";
+
+	/**
+	 * The {@code *compile-verbose*} standard variable -- nil on every backend, for the
+	 * same reason as {@link #LOAD_VERBOSE_VAR}: there is no {@code compile-file} here to
+	 * announce anything. Portable sources READ it to decide whether to narrate a long
+	 * build step (cl-unicode's UCD pass is one), and an unbound variable is a hard error
+	 * there.
+	 */
+	public static final String COMPILE_VERBOSE_VAR = "*COMPILE-VERBOSE*";
+
+	/**
+	 * The {@code *compile-print*} standard variable -- nil on every backend, for the same
+	 * reason as {@link #COMPILE_VERBOSE_VAR}.
+	 */
+	public static final String COMPILE_PRINT_VAR = "*COMPILE-PRINT*";
+
+	/**
+	 * The {@code remove} built-in function (return a copy without items eql to the given
+	 * one).
+	 */
+	public static final String REMOVE = "REMOVE";
+
+	/**
+	 * The {@code remove-if} built-in function (return a copy without items satisfying a
+	 * predicate).
+	 */
+	public static final String REMOVE_IF = "REMOVE-IF";
+
+	/**
+	 * The {@code remove-if-not} built-in function (return a copy keeping only items
+	 * satisfying a predicate).
+	 */
+	public static final String REMOVE_IF_NOT = "REMOVE-IF-NOT";
+
+	/**
+	 * The {@code remove-duplicates} built-in function (return a copy of the list with
+	 * duplicate elements removed, keeping the last occurrence; elements compared with
+	 * {@code eql}).
+	 */
+	public static final String REMOVE_DUPLICATES = "REMOVE-DUPLICATES";
+
+	/**
+	 * The {@code delete-duplicates} built-in function: {@code remove-duplicates}'
+	 * would-be-destructive twin, rendered non-destructively (the caller must use the
+	 * result, so sharing the lowering is conforming).
+	 */
+	public static final String DELETE_DUPLICATES = "DELETE-DUPLICATES";
+
+	/**
+	 * The {@code delete} built-in function (destructive variant of {@code remove}:
+	 * splices out every element {@code eql} to the given one in place, reusing the
+	 * surviving cons cells; use the return value since the head may change).
+	 */
+	public static final String DELETE = "DELETE";
+
+	/**
+	 * The {@code delete-if} built-in function (destructive variant of {@code remove-if};
+	 * see {@link #DELETE}).
+	 */
+	public static final String DELETE_IF = "DELETE-IF";
+
+	/**
+	 * The {@code delete-if-not} built-in function (destructive variant of
+	 * {@code remove-if-not}; see {@link #DELETE}).
+	 */
+	public static final String DELETE_IF_NOT = "DELETE-IF-NOT";
+
+	/**
+	 * The {@code substitute} built-in function (return a copy of the list with each
+	 * element {@code eql} to the old item replaced by the new item).
+	 */
+	public static final String SUBSTITUTE = "SUBSTITUTE";
+
+	/**
+	 * The {@code nsubstitute} built-in function (destructive variant of
+	 * {@code substitute}: rewrites every {@code car} {@code eql} to the old item with the
+	 * new item in place and returns the mutated list).
+	 */
+	public static final String NSUBSTITUTE = "NSUBSTITUTE";
+
+	/**
+	 * The {@code substitute-if} built-in function (return a copy of the sequence with
+	 * each element satisfying the predicate replaced by the new item). Accepts
+	 * {@code :key} like {@link #SUBSTITUTE}; the selector applies to the scanned elements
+	 * only.
+	 */
+	public static final String SUBSTITUTE_IF = "SUBSTITUTE-IF";
+
+	/**
+	 * The {@code substitute-if-not} built-in function (the complement of
+	 * {@link #SUBSTITUTE_IF}: replaces the elements the predicate rejects).
+	 */
+	public static final String SUBSTITUTE_IF_NOT = "SUBSTITUTE-IF-NOT";
+
+	/**
+	 * The {@code nsubstitute-if} built-in function (destructive variant of
+	 * {@link #SUBSTITUTE_IF}; see {@link #NSUBSTITUTE}).
+	 */
+	public static final String NSUBSTITUTE_IF = "NSUBSTITUTE-IF";
+
+	/**
+	 * The {@code nsubstitute-if-not} built-in function (destructive variant of
+	 * {@link #SUBSTITUTE_IF_NOT}; see {@link #NSUBSTITUTE}).
+	 */
+	public static final String NSUBSTITUTE_IF_NOT = "NSUBSTITUTE-IF-NOT";
+
+	/**
+	 * The {@code subst} function (a prelude defun): non-destructive tree substitution of
+	 * {@code new} for every subtree/leaf matching {@code old} under {@code :test}
+	 * (default {@code eql}) and {@code :key}. Unchanged subtrees are shared, not copied.
+	 */
+	public static final String SUBST = "SUBST";
+
+	/**
+	 * The {@code %subst-walk} internal helper (a prelude defun): the ONE tree walk the
+	 * whole {@code subst} family rides. It takes the match as a FUNCTION of the subtree,
+	 * so {@code subst} passes the {@code :test}/{@code :key} comparison and the
+	 * {@code -if}/{@code -if-not} spellings pass the predicate; structure sharing (an
+	 * unchanged subtree comes back {@code eq}) is decided once, here.
+	 */
+	public static final String SUBST_WALK = "%SUBST-WALK";
+
+	/**
+	 * The {@code subst-if} function (a prelude defun): {@link #SUBST} with the match made
+	 * by a PREDICATE over the (optionally {@code :key}ed) subtree rather than by
+	 * {@code :test} against an item.
+	 */
+	public static final String SUBST_IF = "SUBST-IF";
+
+	/**
+	 * The {@code subst-if-not} function (a prelude defun): {@link #SUBST_IF} over the
+	 * negated predicate.
+	 */
+	public static final String SUBST_IF_NOT = "SUBST-IF-NOT";
+
+	/**
+	 * The {@code nsubst} function (a prelude defun): {@link #SUBST} under its other name.
+	 * CLHS permits the destructive spellings of the {@code subst} family to answer the
+	 * non-destructive result -- the promise is a licence, not an obligation -- and the
+	 * shared walk already shares every unchanged subtree.
+	 */
+	public static final String NSUBST = "NSUBST";
+
+	/**
+	 * The {@code nsubst-if} function (a prelude defun): {@link #SUBST_IF} under its other
+	 * name; see {@link #NSUBST}.
+	 */
+	public static final String NSUBST_IF = "NSUBST-IF";
+
+	/**
+	 * The {@code nsubst-if-not} function (a prelude defun): {@link #SUBST_IF_NOT} under
+	 * its other name; see {@link #NSUBST}.
+	 */
+	public static final String NSUBST_IF_NOT = "NSUBST-IF-NOT";
+
+	/**
+	 * The {@code copy-tree} function (a prelude defun): a deep copy of a cons tree (every
+	 * cons is fresh; non-cons leaves are shared).
+	 */
+	public static final String COPY_TREE = "COPY-TREE";
+
+	/**
+	 * The {@code tree-equal} function (a prelude defun): whether two cons trees have the
+	 * same shape and leaves matching under {@code :test} (default {@code eql}) or
+	 * {@code :test-not}. A cons only ever matches a cons, so the walk never compares a
+	 * leaf with a subtree; the CDR direction is a loop, so only the nesting depth (not
+	 * the length) bounds the stack.
+	 */
+	public static final String TREE_EQUAL = "TREE-EQUAL";
+
+	/**
+	 * The {@code search} function (a prelude defun): the position of the first (or with
+	 * {@code :from-end} the last) occurrence of one sequence inside another, or nil.
+	 * Supports {@code :start1}/{@code :end1}/{@code :start2}/{@code :end2}/{@code :test}
+	 * (default {@code eql})/{@code :key}/{@code :from-end}; a simple O(n*m) scan over
+	 * {@code elt}.
+	 */
+	public static final String SEARCH = "SEARCH";
+
+	/**
+	 * The {@code mismatch} prelude function: the index of the first mismatching element
+	 * of two (bounded) sequences, or nil when they match.
+	 */
+	public static final String MISMATCH = "MISMATCH";
+
+	/**
+	 * The {@code nconc} built-in function (destructively concatenate two lists).
+	 */
+	public static final String NCONC = "NCONC";
+
+	/**
+	 * The {@code sort} built-in function (destructively sort a list using a comparison
+	 * predicate).
+	 */
+	public static final String SORT = "SORT";
+
+	/**
+	 * The {@code stable-sort} built-in function (sort preserving the relative order of
+	 * elements the predicate considers equal; supports {@code :key}). Lite: expanded to a
+	 * decorate/{@code sort}/undecorate scan over the sequence as a list, so the result is
+	 * always a fresh list (a vector argument does not come back as a vector).
+	 */
+	public static final String STABLE_SORT = "STABLE-SORT";
+
+	/**
+	 * The {@code merge} function (a prelude defun): one sorted sequence built from two
+	 * sorted ones, stable (a tie takes from {@code sequence-1} first) and with the result
+	 * built to {@code result-type} through {@code coerce}, so the type specifier may be a
+	 * run-time value but is limited to the families {@code coerce} builds
+	 * ({@code list}/{@code vector}/{@code string}). Non-destructive here, which CL
+	 * permits a caller to rely on only for the result.
+	 */
+	public static final String MERGE = "MERGE";
+
+	/**
+	 * The {@code copy-seq} built-in function (returns a fresh copy of a sequence;
+	 * expanded to {@code (subseq seq 0)}).
+	 */
+	public static final String COPY_SEQ = "COPY-SEQ";
+
+	/** The {@code identity} built-in function (returns its argument unchanged). */
+	public static final String IDENTITY = "IDENTITY";
+
+	/** The {@code copy-list} built-in function (returns a shallow copy of a list). */
+	public static final String COPY_LIST = "COPY-LIST";
+
+	/**
+	 * The {@code copy-structure} built-in function (CLHS 18.3): a fresh instance of the
+	 * same layout, sharing the slot VALUES with the original -- the generic counterpart
+	 * of the {@code copy-<name>} copier {@code defstruct} generates for one known type.
+	 */
+	public static final String COPY_STRUCTURE = "COPY-STRUCTURE";
+
+	/**
+	 * The {@code nreverse} built-in function (destructively reverses a list by rewiring
+	 * each {@code cdr} and returning the former last cell as the new head; use the return
+	 * value).
+	 */
+	public static final String NREVERSE = "NREVERSE";
+
+	/**
+	 * The {@code make-list} built-in function (creates a list of n nil elements; the CL
+	 * {@code :initial-element} keyword is not supported).
+	 */
+	public static final String MAKE_LIST = "MAKE-LIST";
+
+	/**
+	 * The {@code make-sequence} macro (lowered onto {@code make-string}/
+	 * {@code make-list}/{@code make-array} by a literal-type expansion).
+	 */
+	public static final String MAKE_SEQUENCE = "MAKE-SEQUENCE";
+
+	/**
+	 * The {@code union} built-in function (set union of two lists, compared with
+	 * {@code eql}; CL {@code :test}/{@code :key} keywords are not supported).
+	 */
+	public static final String UNION = "UNION";
+
+	/**
+	 * The {@code intersection} built-in function (set intersection of two lists, compared
+	 * with {@code eql}).
+	 */
+	public static final String INTERSECTION = "INTERSECTION";
+
+	/**
+	 * The {@code set-difference} built-in function (elements of the first list not
+	 * present in the second, compared with {@code eql}).
+	 */
+	public static final String SET_DIFFERENCE = "SET-DIFFERENCE";
+
+	/**
+	 * The {@code set-exclusive-or} function (a prelude defun): the symmetric difference
+	 * of two lists -- the elements of either that have no match in the other, compared
+	 * with {@code :test} (default {@code eql}) or {@code :test-not} after {@code :key}.
+	 * The comparison is always made {@code (test list-1-element list-2-element)}, in both
+	 * scans.
+	 */
+	public static final String SET_EXCLUSIVE_OR = "SET-EXCLUSIVE-OR";
+
+	/**
+	 * The {@code nunion} function (a prelude defun): {@link #UNION} under its other name;
+	 * see {@link #NSUBST} for why the destructive spelling may answer the non-destructive
+	 * result.
+	 */
+	public static final String NUNION = "NUNION";
+
+	/**
+	 * The {@code nintersection} function (a prelude defun): {@link #INTERSECTION} under
+	 * its other name; see {@link #NSUBST}.
+	 */
+	public static final String NINTERSECTION = "NINTERSECTION";
+
+	/**
+	 * The {@code nset-difference} function (a prelude defun): {@link #SET_DIFFERENCE}
+	 * under its other name; see {@link #NSUBST}.
+	 */
+	public static final String NSET_DIFFERENCE = "NSET-DIFFERENCE";
+
+	/**
+	 * The {@code nset-exclusive-or} function (a prelude defun): {@link #SET_EXCLUSIVE_OR}
+	 * under its other name; see {@link #NSUBST}.
+	 */
+	public static final String NSET_EXCLUSIVE_OR = "NSET-EXCLUSIVE-OR";
+
+	/**
+	 * The {@code adjoin} built-in function (prepends an item to a list unless it is
+	 * already a member, compared with {@code eql}).
+	 */
+	public static final String ADJOIN = "ADJOIN";
+
+	/**
+	 * The {@code subsetp} built-in function (true when every element of the first list is
+	 * a member of the second, compared with {@code eql}; the {@code :test}/
+	 * {@code :test-not}/{@code :key} keywords are supported through the same macro
+	 * expansion as {@code union}/{@code intersection}/{@code set-difference}).
+	 */
+	public static final String SUBSETP = "SUBSETP";
+
+	/**
+	 * The {@code list*} built-in function (build a list whose final element is the last
+	 * argument used as the tail: {@code (list* a b c) -> (cons a (cons b c))}).
+	 */
+	public static final String LIST_STAR = "LIST*";
+
+	/**
+	 * The {@code acons} built-in function (prepend a {@code (key . value)} pair to an
+	 * association list: {@code (acons k v alist) -> (cons (cons k v) alist)}).
+	 */
+	public static final String ACONS = "ACONS";
+
+	/**
+	 * The {@code endp} built-in function (true at the end of a list; here a synonym for
+	 * {@code null}, the improper-list error of CL is relaxed).
+	 */
+	public static final String ENDP = "ENDP";
+
+	/**
+	 * The {@code elt} built-in function (0-based element access into a list, a string or
+	 * a vector; an index outside the sequence is a {@code type-error}).
+	 */
+	public static final String ELT = "ELT";
+
+	/**
+	 * The {@code %elt-cell} internal: {@code (%elt-cell list index)} answers the cons
+	 * holding the list's element at {@code index} -- the list arm of an {@code elt} read
+	 * and of its {@code setf} place. An index outside {@code [0, length)} is
+	 * {@code ELT}'s {@code type-error} whose expected type is {@code (INTEGER 0
+	 * (length))}, counted by the same walk that would have found the cell.
+	 */
+	public static final String ELT_CELL = "%ELT-CELL";
+
+	/**
+	 * The {@code rassoc} built-in function (return the first pair whose cdr is
+	 * {@code eql} to the given value, or nil).
+	 */
+	public static final String RASSOC = "RASSOC";
+
+	/**
+	 * The {@code rassoc-if} built-in function (the first pair of an alist whose CDR
+	 * satisfies the predicate, or nil) -- {@code rassoc}'s predicate form, the mirror of
+	 * {@link #ASSOC_IF}.
+	 */
+	public static final String RASSOC_IF = "RASSOC-IF";
+
+	/**
+	 * The {@code rassoc-if-not} function (a prelude defun): the first pair of an alist
+	 * whose CDR the predicate REJECTS, or nil -- {@link #RASSOC_IF} over the negated
+	 * predicate, with the same {@code :key}.
+	 */
+	public static final String RASSOC_IF_NOT = "RASSOC-IF-NOT";
+
+	/**
+	 * The {@code pairlis} built-in function (pair up a list of keys and a list of values
+	 * into an association list, prepended to an optional existing alist).
+	 */
+	public static final String PAIRLIS = "PAIRLIS";
+
+	/**
+	 * The {@code copy-alist} built-in function (copy an association list's spine and its
+	 * {@code (key . value)} pair cells; the keys and values themselves are shared).
+	 */
+	public static final String COPY_ALIST = "COPY-ALIST";
+
+	/**
+	 * The {@code revappend} built-in function (reverse the first list and append the
+	 * second: {@code (revappend x y) -> (append (reverse x) y)}).
+	 */
+	public static final String REVAPPEND = "REVAPPEND";
+
+	/**
+	 * The {@code nreconc} built-in function (destructive {@code revappend}: expands to
+	 * {@code (nconc (nreverse x) y)}, so the cons cells of {@code x} are reused; use the
+	 * return value).
+	 */
+	public static final String NRECONC = "NRECONC";
+
+	/**
+	 * The {@code maplist} built-in function (apply the function to successive cdrs of the
+	 * list and collect the results; single-list only).
+	 */
+	public static final String MAPLIST = "MAPLIST";
+
+	/**
+	 * The {@code mapcon} built-in function (apply the function to successive cdrs of the
+	 * list and concatenate the result lists; single-list only).
+	 */
+	public static final String MAPCON = "MAPCON";
+
+	/**
+	 * The {@code mapl} built-in function (apply the function to successive cdrs of the
+	 * list for its side effects and return the original list; single-list only).
+	 */
+	public static final String MAPL = "MAPL";
+
+	/** The {@code rplaca} built-in function. */
+	public static final String RPLACA = "RPLACA";
+
+	/** The {@code rplacd} built-in function. */
+	public static final String RPLACD = "RPLACD";
+
+	/** The {@code %remf-tail} built-in function. */
+	public static final String REMF_TAIL = "%REMF-TAIL";
+
+	// Hash tables
+
+	/** The {@code make-hash-table} built-in function. */
+	public static final String MAKE_HASH_TABLE = "MAKE-HASH-TABLE";
+
+	/**
+	 * The {@code %make-hash-table-by-test} prelude helper: the compiled backends pick a
+	 * table's test from the source, so a {@code make-hash-table} whose {@code :test} is
+	 * computed is lowered onto a call to this helper, which compares the value with the
+	 * four test symbols and function objects and makes the table through a literal
+	 * {@code :test} ({@code LispMacroExpander.lowerComputedTestMakeHashTable}). The
+	 * interpreter's {@code make-hash-table} reads the value directly.
+	 */
+	public static final String MAKE_HASH_TABLE_BY_TEST_INTERNAL = "%MAKE-HASH-TABLE-BY-TEST";
+
+	/** The {@code gethash} built-in function. */
+	public static final String GETHASH = "GETHASH";
+
+	/**
+	 * The {@code %puthash} internal built-in function. The target of the {@code gethash}
+	 * {@code setf} place: {@code (%puthash key table value)} stores and returns the
+	 * value.
+	 */
+	public static final String PUTHASH = "%PUTHASH";
+
+	/** The {@code remhash} built-in function. */
+	public static final String REMHASH = "REMHASH";
+
+	/** The {@code clrhash} built-in function. */
+	public static final String CLRHASH = "CLRHASH";
+
+	/**
+	 * The {@code hash-table-test} built-in function. Always answers {@code equal}: every
+	 * backend's table is keyed structurally, so that is the test the lookups actually
+	 * implement whatever {@code :test} the table was made with.
+	 */
+	public static final String HASH_TABLE_TEST = "HASH-TABLE-TEST";
+
+	/**
+	 * The {@code hash-table-size} built-in function. Lite: a rontolisp table has no
+	 * separate capacity, so the size IS the entry count.
+	 */
+	public static final String HASH_TABLE_SIZE = "HASH-TABLE-SIZE";
+
+	/**
+	 * The {@code hash-table-rehash-size} built-in function. Lite: growth is the host
+	 * map's business here, so the standard default (1.5) is reported.
+	 */
+	public static final String HASH_TABLE_REHASH_SIZE = "HASH-TABLE-REHASH-SIZE";
+
+	/**
+	 * The {@code hash-table-rehash-threshold} built-in function. Lite: reports the
+	 * standard default (1.0), like {@link #HASH_TABLE_REHASH_SIZE}.
+	 */
+	public static final String HASH_TABLE_REHASH_THRESHOLD = "HASH-TABLE-REHASH-THRESHOLD";
+
+	/** The {@code hash-table-count} built-in function. */
+	public static final String HASH_TABLE_COUNT = "HASH-TABLE-COUNT";
+
+	/** The {@code hash-table-p} predicate. */
+	public static final String HASH_TABLE_P = "HASH-TABLE-P";
+
+	/**
+	 * The {@code maphash} built-in function (apply a function to each key/value pair).
+	 */
+	public static final String MAPHASH = "MAPHASH";
+
+	/**
+	 * The {@code with-hash-table-iterator} standard macro: binds a local iterator
+	 * function that answers {@code (values more-p key value)} one entry per call. Expands
+	 * to a snapshot alist plus an {@code flet} over it ({@code LispMacroExpander}), so no
+	 * backend needs a hash cursor primitive; the snapshot is why a table mutated during
+	 * the walk is not seen, which CLHS leaves undefined anyway.
+	 */
+	public static final String WITH_HASH_TABLE_ITERATOR = "WITH-HASH-TABLE-ITERATOR";
+
+	// Arrays
+
+	/**
+	 * The {@code make-array} built-in function. Supports arrays of any rank {@code >= 0}
+	 * (a nil dimension list is the rank-0 array) and the {@code :initial-element}
+	 * keyword.
+	 */
+	public static final String MAKE_ARRAY = "MAKE-ARRAY";
+
+	/**
+	 * The {@code %make-array-et} prelude helper: {@code make-array} with the
+	 * {@code :element-type} taken as a RUNTIME VALUE, dispatching over the whole upgrade
+	 * space onto one literal {@code make-array} per
+	 * {@code am.ik.rontolisp.ArrayElementTypes} code.
+	 *
+	 * <p>
+	 * The compile backends have no runtime element type: every representation decision is
+	 * made from the literal at the call site. A designator held in a variable is
+	 * therefore lowered onto a call to this helper, which spells all seven cases out ONCE
+	 * per program instead of once per call site --
+	 * {@code LispMacroExpander.lowerRuntimeElementTypeMakeArray}, and
+	 * {@code .kb/array-literals.md} for the measurement that chose the helper over the
+	 * inline expansion. The interpreter never uses it: its {@code make-array} reads the
+	 * designator directly.
+	 */
+	public static final String MAKE_ARRAY_ET_INTERNAL = "%MAKE-ARRAY-ET";
+
+	/**
+	 * The {@code %make-array-et-fp} prelude helper: {@link #MAKE_ARRAY_ET_INTERNAL} for a
+	 * call site that also spells {@code :fill-pointer} / {@code :adjustable}.
+	 *
+	 * <p>
+	 * It is a SECOND helper rather than two more parameters on the first because those
+	 * keywords are exactly what makes every arm degrade to the general representation:
+	 * spelling them in the common helper would cost it the packed arrays it exists to
+	 * pick. Each helper is spliced on its own surface fact, so a program pays for the
+	 * shape it writes and no other.
+	 */
+	public static final String MAKE_ARRAY_ET_FP_INTERNAL = "%MAKE-ARRAY-ET-FP";
+
+	/**
+	 * The {@code %make-array-et-alias} resolver the compilers inject once per program
+	 * whose {@code make-array} takes a RUNTIME {@code :element-type}: a function from the
+	 * designator to the canonical spelling of the type it names, resolving the registered
+	 * {@code deftype} aliases and leaving every other designator alone.
+	 *
+	 * <p>
+	 * The compile backends resolve an alias at EXPANSION time, from the literal at the
+	 * call site, so a designator that arrives as a VALUE -- {@code et} bound to
+	 * {@code 'octet} -- was invisible to every recognizer and fell to the general arm.
+	 * The interpreter has always resolved it against the live registry; this defun is the
+	 * compile-path equivalent, and it is a defun (not an expansion at each call site) for
+	 * the reason {@link #MAKE_ARRAY_ET_INTERNAL} is: the alias set is program-wide, so
+	 * spelling it per site multiplies it by the site count.
+	 *
+	 * <p>
+	 * It carries ONLY the aliases naming one of the six specialized
+	 * {@code am.ik.rontolisp.ArrayElementTypes} codes -- the ones an arm can tell apart
+	 * from {@code t}. Carrying the rest is measurable and buys nothing
+	 * ({@code .kb/array-literals.md}).
+	 */
+	public static final String MAKE_ARRAY_ET_ALIAS_INTERNAL = "%MAKE-ARRAY-ET-ALIAS";
+
+	/** The {@code aref} built-in function (array element access). */
+	public static final String AREF = "AREF";
+
+	/**
+	 * The {@code %aset} internal built-in function. The target of the {@code aref}
+	 * {@code setf} place: {@code (%aset array subscript... value)} stores and returns the
+	 * value.
+	 */
+	public static final String ASET = "%ASET";
+
+	/**
+	 * The {@code %check-list} internal: {@code (%check-list x 'op)} answers {@code x}
+	 * when it is a list and otherwise signals {@code op}'s {@code LIST} type-error -- the
+	 * check a lowering makes on behalf of the operator it expands ({@code last},
+	 * {@code maplist}, {@code loop}'s {@code for-in} under {@code endp}).
+	 */
+	public static final String CHECK_LIST_INTERNAL = "%CHECK-LIST";
+
+	/**
+	 * The {@code %check-string} internal: {@code (%check-string x 'op)} answers {@code x}
+	 * when it is a string and otherwise signals {@code op}'s {@code STRING} type-error.
+	 * Compile path only: {@code %schar-set}'s functional expansion checks a
+	 * {@code (setf char)} / {@code (setf schar)} place's string with it.
+	 */
+	public static final String CHECK_STRING_INTERNAL = "%CHECK-STRING";
+
+	/**
+	 * The {@code %check-index} internal: {@code (%check-index x 'op)} answers {@code x}
+	 * when it is an integer and otherwise signals {@code op}'s {@code INTEGER} type-error
+	 * -- unnamed when {@code op} is nil. Compile path only, like
+	 * {@link #CHECK_STRING_INTERNAL}: the subscript of a string store.
+	 */
+	public static final String CHECK_INDEX_INTERNAL = "%CHECK-INDEX";
+
+	/**
+	 * The {@code %check-dimension} internal: {@code (%check-dimension x 'op)} answers
+	 * {@code x} when it is an integer in {@code [0, array-dimension-limit)} and otherwise
+	 * signals {@code op}'s {@code (INTEGER 0 (array-dimension-limit))} type-error, the
+	 * report a {@code make-array} dimension outside the limit gets. Compile path only:
+	 * {@code make-list}'s length.
+	 */
+	public static final String CHECK_DIMENSION_INTERNAL = "%CHECK-DIMENSION";
+
+	/**
+	 * The {@code %check-character} internal: {@code (%check-character x 'op)} answers
+	 * {@code x} when it is a character and otherwise signals {@code op}'s
+	 * {@code CHARACTER} type-error -- unnamed when {@code op} is nil. Compile path only,
+	 * like {@link #CHECK_STRING_INTERNAL}: the value of a string store.
+	 */
+	public static final String CHECK_CHARACTER_INTERNAL = "%CHECK-CHARACTER";
+
+	/**
+	 * The {@code %operand-type-error} internal: {@code (%operand-type-error x 'op 'kind)}
+	 * never returns -- it signals {@code op}'s type-error over {@code x}, naming
+	 * {@code kind} (an {@code OperandTypes.Kind}: {@code sequence}, {@code array},
+	 * {@code hash-table}); unnamed when {@code op} is nil. A lowering places it where its
+	 * own type dispatch has run out of arms, so the test is the dispatch's and the form
+	 * is only the signal.
+	 */
+	public static final String OPERAND_TYPE_ERROR_INTERNAL = "%OPERAND-TYPE-ERROR";
+
+	/**
+	 * The {@code %check-sequence} internal: {@code (%check-sequence x 'op)} answers
+	 * {@code x} when it is a sequence (a list or a vector) and otherwise signals
+	 * {@code op}'s {@code SEQUENCE} type-error -- unnamed when {@code op} is nil. A
+	 * compile path calls {@link #CHECK_SEQUENCE_RUNTIME} for it when the program carries
+	 * that defun.
+	 */
+	public static final String CHECK_SEQUENCE_INTERNAL = "%CHECK-SEQUENCE";
+
+	/**
+	 * The {@code %check-bounds} internal: {@code (%check-bounds seq start end)} answers
+	 * nil when {@code 0 <= start <= end <= (length seq)} -- a nil {@code end} meaning the
+	 * length -- and otherwise signals {@code subseq}'s bounds {@code type-error} over the
+	 * bounds as given (datum the refused bound, expected type its range, the report
+	 * {@code "SUBSEQ: invalid bounds S, E for KIND of length N"}). {@code seq} is a
+	 * sequence the caller has already checked; a list is walked only as far as the larger
+	 * bound, and counted whole only for a report. The sequence operators' lowerings call
+	 * it once, before their walk, whenever a bound was spelled
+	 * ({@code .kb/sequence-bounding-keywords.md}).
+	 */
+	public static final String CHECK_BOUNDS_INTERNAL = "%CHECK-BOUNDS";
+
+	/**
+	 * The shared defun a compiled {@code %check-sequence} site calls:
+	 * {@code (%check-sequence-runtime x token)}, the token the backend's own spelling of
+	 * the operator {@code %operand-type-error} names at run time.
+	 */
+	public static final String CHECK_SEQUENCE_RUNTIME = "%CHECK-SEQUENCE-RUNTIME";
+
+	/**
+	 * {@code (%check-stream x 'op designator-p)}: {@code x} when it is a stream,
+	 * {@code t} or, under a true {@code designator-p}, nil, else {@code op}'s
+	 * {@code STREAM} type-error ({@code compiler.StreamOperandChecks}).
+	 */
+	public static final String CHECK_STREAM_INTERNAL = "%CHECK-STREAM";
+
+	/**
+	 * The shared defun a compiled {@code %check-stream} site calls:
+	 * {@code (%check-stream-runtime x token designator-p)}, the token as
+	 * {@link #CHECK_SEQUENCE_RUNTIME}'s.
+	 */
+	public static final String CHECK_STREAM_RUNTIME = "%CHECK-STREAM-RUNTIME";
+
+	/**
+	 * {@code (%closed-stream-error stream)}: what {@link #CHECK_STREAM_RUNTIME} signals
+	 * on a closed stream, lowered like {@code %file-error}
+	 * ({@code LispMacroExpander.lowerClosedStreamError}). Only the helper spells it.
+	 */
+	public static final String CLOSED_STREAM_ERROR_INTERNAL = "%CLOSED-STREAM-ERROR";
+
+	/**
+	 * {@code (%abilities-hold-p held needed)}: whether two fixnums of ability bits
+	 * ({@code LispLayout.Abilities}) hold every bit needed, compiled inline so a stream
+	 * check brings no numeric tower. Only the compile paths' stream forms spell it.
+	 */
+	public static final String ABILITIES_HOLD_INTERNAL = "%ABILITIES-HOLD-P";
+
+	/**
+	 * {@code (%format-destination x)}: {@code format}'s check of a computed destination
+	 * in a program that can hold a string with a fill pointer, which it passes where
+	 * {@link #CHECK_STREAM_INTERNAL} refuses it ({@code compiler.StreamOperandChecks}).
+	 */
+	public static final String FORMAT_DESTINATION_INTERNAL = "%FORMAT-DESTINATION";
+
+	/**
+	 * {@code (%format-write destination text)}: what {@code format} does with its
+	 * rendered text at a {@link #FORMAT_DESTINATION_INTERNAL} destination.
+	 */
+	public static final String FORMAT_WRITE_INTERNAL = "%FORMAT-WRITE";
+
+	/**
+	 * The {@code row-major-aref} built-in function (flat row-major element access,
+	 * independent of rank); also a {@code setf} place.
+	 */
+	public static final String ROW_MAJOR_AREF = "ROW-MAJOR-AREF";
+
+	/**
+	 * The {@code %row-major-aset} internal built-in function. The target of the
+	 * {@code row-major-aref} {@code setf} place:
+	 * {@code (%row-major-aset array index value)} stores and returns the value.
+	 */
+	public static final String ROW_MAJOR_ASET = "%ROW-MAJOR-ASET";
+
+	/**
+	 * The {@code array-row-major-index} built-in function (the flat row-major index of
+	 * the given subscripts). Expanded by
+	 * {@link am.ik.rontolisp.macro.LispMacroExpander#expandArrayRowMajorIndex} into a
+	 * Horner fold over {@code array-dimensions}.
+	 */
+	public static final String ARRAY_ROW_MAJOR_INDEX = "ARRAY-ROW-MAJOR-INDEX";
+
+	/** The {@code :initial-element} keyword accepted by {@code make-array}. */
+	public static final String INITIAL_ELEMENT_KEYWORD = ":INITIAL-ELEMENT";
+
+	/** The {@code :initial-contents} keyword of {@code make-array}. */
+	public static final String INITIAL_CONTENTS_KEYWORD = ":INITIAL-CONTENTS";
+
+	/** The {@code :fill-pointer} keyword accepted by {@code make-array}. */
+	public static final String FILL_POINTER_KEYWORD = ":FILL-POINTER";
+
+	/** The {@code :adjustable} keyword accepted by {@code make-array}. */
+	public static final String ADJUSTABLE_KEYWORD = ":ADJUSTABLE";
+
+	/**
+	 * The {@code :displaced-to} keyword accepted by {@code make-array}: the built array
+	 * is a view sharing the target's storage. Cannot be combined with
+	 * {@code :fill-pointer}/{@code :adjustable}/{@code :initial-element} (lite
+	 * semantics).
+	 */
+	public static final String DISPLACED_TO_KEYWORD = ":DISPLACED-TO";
+
+	/** The {@code :displaced-index-offset} keyword accepted by {@code make-array}. */
+	public static final String DISPLACED_INDEX_OFFSET_KEYWORD = ":DISPLACED-INDEX-OFFSET";
+
+	/**
+	 * The {@code adjust-array} built-in function: resize an array preserving the elements
+	 * at common subscripts. Adjusts an {@code :adjustable} array in place (returning it),
+	 * otherwise returns a fresh array. Expanded by
+	 * {@link am.ik.rontolisp.macro.LispMacroExpander#expandAdjustArray} on the compile
+	 * path.
+	 */
+	public static final String ADJUST_ARRAY = "ADJUST-ARRAY";
+
+	/**
+	 * The {@code array-displacement} built-in function: the {@code :displaced-to} target
+	 * and offset as two values ({@code nil} and 0 for a non-displaced array). Expanded by
+	 * {@link am.ik.rontolisp.macro.LispMacroExpander#expandArrayDisplacement} on the
+	 * compile path.
+	 */
+	public static final String ARRAY_DISPLACEMENT = "ARRAY-DISPLACEMENT";
+
+	/**
+	 * The {@code %array-disp-target} internal built-in function: the displacement target
+	 * of an array, or {@code nil} (the primary value of {@code array-displacement}).
+	 */
+	public static final String ARRAY_DISP_TARGET = "%ARRAY-DISP-TARGET";
+
+	/**
+	 * The {@code %array-disp-offset} internal built-in function: the displacement offset
+	 * of an array, or 0 (the secondary value of {@code array-displacement}).
+	 */
+	public static final String ARRAY_DISP_OFFSET = "%ARRAY-DISP-OFFSET";
+
+	/**
+	 * The {@code %array-become} internal built-in function:
+	 * {@code (%array-become old new)} replaces {@code old}'s dimensions, fill pointer and
+	 * data with {@code new}'s in place and returns {@code old} (the in-place half of
+	 * {@code adjust-array} on an adjustable array).
+	 */
+	public static final String ARRAY_BECOME = "%ARRAY-BECOME";
+
+	/**
+	 * The {@code %array-become-displaced} internal built-in function:
+	 * {@code (%array-become-displaced array dims target offset fill-pointer)} turns
+	 * {@code array} (an {@code :adjustable} array) into a DISPLACED view over
+	 * {@code target} in place and returns it (the in-place half of {@code adjust-array}
+	 * with {@code :displaced-to} on an adjustable array, which keeps its identity like
+	 * any other adjustable adjustment).
+	 */
+	public static final String ARRAY_BECOME_DISPLACED = "%ARRAY-BECOME-DISPLACED";
+
+	/**
+	 * The {@code %array-undisplace} internal built-in function:
+	 * {@code (%array-undisplace array)} copies a DISPLACED array's current view contents
+	 * into storage of its own and drops the displacement, keeping its dimensions, fill
+	 * pointer and adjustable flag; returns {@code array} (a no-op, returned unchanged,
+	 * when it already owns its storage). Each backend already carries the body for
+	 * {@code vector-push-extend}'s growth ({@link am.ik.rontolisp.LispArray#undisplace()}
+	 * / {@link am.ik.rontolisp.LispString#undisplace()}, JVM {@code _arrayUndisplace},
+	 * wasm {@code _arr_undisplace}); {@code adjust-array}'s expansion calls it on a
+	 * displaced argument before rebuilding it, matching SBCL 2.2.9's un-displace-in-place
+	 * behavior.
+	 */
+	public static final String ARRAY_UNDISPLACE = "%ARRAY-UNDISPLACE";
+
+	/**
+	 * The {@code %array-default-element} internal built-in function: the element an
+	 * UNSUPPLIED slot of this array takes -- its remembered element type's own zero
+	 * ({@link ArrayElementTypes#defaultElement}), or {@code nil} when it remembers
+	 * nothing. The one answer to "what does a slot nobody wrote hold", asked wherever a
+	 * slot is OPENED after allocation: {@code adjust-array}'s expansion passes it as the
+	 * {@code :initial-element} it was not given, and the compile backends' own
+	 * {@code vector-push-extend} growth fills with it.
+	 */
+	public static final String ARRAY_DEFAULT_ELEMENT = "%ARRAY-DEFAULT-ELEMENT";
+
+	/**
+	 * {@code (%array-alike seq n)} allocates a fresh zero-filled rank-1 array of length
+	 * {@code n} with the SAME representation as {@code seq}: a packed integer vector
+	 * yields a packed vector of the same width, anything else a general (boxed) vector.
+	 * The {@code subseq} vector lowering allocates through it so a subsequence of a
+	 * packed vector stays packed on every backend.
+	 */
+	public static final String ARRAY_ALIKE = "%ARRAY-ALIKE";
+
+	/**
+	 * The {@code %array-adopt-element-type} internal built-in function:
+	 * {@code (%array-adopt-element-type new old)} makes the freshly built general array
+	 * {@code new} remember {@code old}'s element type and returns {@code new}. The
+	 * element type of an array is not changed by {@code adjust-array} (CLHS), and a
+	 * NON-adjustable adjustment answers a fresh array, so the expansion stamps the copy
+	 * with what the original remembered. Copying the remembered type is much cheaper than
+	 * asking the fresh {@code make-array} for a RUNTIME {@code :element-type}: the
+	 * backends store the type as one word each, so this reads and writes that word
+	 * instead of turning it back into a seven-arm allocator dispatch.
+	 */
+	public static final String ARRAY_ADOPT_ELEMENT_TYPE = "%ARRAY-ADOPT-ELEMENT-TYPE";
+
+	/**
+	 * The {@code %array-java-component} internal built-in function, the Clojure front
+	 * end's record of the Java array a vector stands for:
+	 * {@code (%array-java-component array)} answers the component type's Java name
+	 * ({@code "int"}, {@code "java.lang.Object"}) or nil for a vector that is no Java
+	 * array, and {@code (%array-java-component array name)} remembers {@code name} (nil
+	 * forgets it) and returns {@code array}. A {@code java:} member's argument reads it
+	 * to select the array type the value really is, so an {@code object-array} crosses as
+	 * {@code Object[]} rather than as the primitive array its elements would otherwise
+	 * choose. No wasm backend has a host, so there the stamp is a no-op.
+	 */
+	public static final String ARRAY_JAVA_COMPONENT = "%ARRAY-JAVA-COMPONENT";
+
+	/**
+	 * The {@code fill-pointer} built-in function (the fill pointer of a vector). Also a
+	 * {@code setf} place (target {@link #SET_FILL_POINTER}).
+	 */
+	public static final String FILL_POINTER = "FILL-POINTER";
+
+	/**
+	 * The {@code %set-fill-pointer} internal built-in function. The target of the
+	 * {@code fill-pointer} {@code setf} place: {@code (%set-fill-pointer vector value)}
+	 * stores and returns the value.
+	 */
+	public static final String SET_FILL_POINTER = "%SET-FILL-POINTER";
+
+	/** The {@code array-has-fill-pointer-p} built-in function. */
+	public static final String ARRAY_HAS_FILL_POINTER_P = "ARRAY-HAS-FILL-POINTER-P";
+
+	/**
+	 * The {@code array-element-type} built-in function. It answers the UPGRADED element
+	 * type -- see {@link ArrayElementTypes} for the closed space of answers, which a
+	 * general array remembers even where no specialized representation exists for the
+	 * type it was asked for.
+	 */
+	public static final String ARRAY_ELEMENT_TYPE = "ARRAY-ELEMENT-TYPE";
+
+	/** The {@code adjustable-array-p} built-in function. */
+	public static final String ADJUSTABLE_ARRAY_P = "ADJUSTABLE-ARRAY-P";
+
+	/**
+	 * The {@code vector-push} built-in function: store an element at the fill pointer and
+	 * increment it, returning the index used or {@code nil} when full.
+	 */
+	public static final String VECTOR_PUSH = "VECTOR-PUSH";
+
+	/**
+	 * The {@code vector-pop} built-in function: decrement the fill pointer and return the
+	 * element below it.
+	 */
+	public static final String VECTOR_POP = "VECTOR-POP";
+
+	/**
+	 * The {@code vector-push-extend} built-in function: like {@code vector-push} but
+	 * grows the vector when it is full.
+	 */
+	public static final String VECTOR_PUSH_EXTEND = "VECTOR-PUSH-EXTEND";
+
+	/**
+	 * The {@code vector} built-in function (build a fresh rank-1 array from the
+	 * arguments). Expanded by
+	 * {@link am.ik.rontolisp.macro.LispMacroExpander#expandVector} into
+	 * {@code make-array} + {@code %aset}.
+	 */
+	public static final String VECTOR = "VECTOR";
+
+	/**
+	 * The {@code svref} built-in function (simple-vector element access). Expanded by
+	 * {@link am.ik.rontolisp.macro.LispMacroExpander#expandSvref} into {@code aref}; also
+	 * a {@code setf} place.
+	 */
+	public static final String SVREF = "SVREF";
+
+	/**
+	 * The {@code array-dimensions} built-in function (the dimension sizes as a list). The
+	 * only array introspection primitive with per-backend support;
+	 * {@code array-rank}/{@code array-dimension}/{@code array-total-size} expand onto it.
+	 */
+	public static final String ARRAY_DIMENSIONS = "ARRAY-DIMENSIONS";
+
+	/** The {@code array-dimension} built-in function (one dimension size). */
+	public static final String ARRAY_DIMENSION = "ARRAY-DIMENSION";
+
+	/**
+	 * The {@code array-rank} built-in function (0 for a rank-0 array, 1 for vectors, 2
+	 * for matrices).
+	 */
+	public static final String ARRAY_RANK = "ARRAY-RANK";
+
+	/** The {@code array-total-size} built-in function (the element count). */
+	public static final String ARRAY_TOTAL_SIZE = "ARRAY-TOTAL-SIZE";
+
+	/**
+	 * The {@code coerce} built-in function. Supports the literal result types
+	 * {@code 'list}, {@code 'vector}, and {@code 'string}; expanded by
+	 * {@link am.ik.rontolisp.macro.LispMacroExpander#expandCoerce}.
+	 */
+	public static final String COERCE = "COERCE";
+
+	// Higher-order functions
+
+	/** The {@code mapcar} built-in function. */
+	public static final String MAPCAR = "MAPCAR";
+
+	/**
+	 * The {@code map} built-in function (map a function over arbitrary sequences,
+	 * building a result of a requested type: {@code 'list}, {@code 'string}, or nil for
+	 * effect).
+	 */
+	public static final String MAP = "MAP";
+
+	/**
+	 * The {@code map-into} built-in function (destructively store the results of applying
+	 * a function to successive elements of the argument sequences into the result
+	 * sequence).
+	 */
+	public static final String MAP_INTO = "MAP-INTO";
+
+	/** The {@code mapc} built-in function (apply for effect, return the list). */
+	public static final String MAPC = "MAPC";
+
+	/**
+	 * The {@code mapcan} built-in function (apply over a list and concatenate the result
+	 * lists).
+	 */
+	public static final String MAPCAN = "MAPCAN";
+
+	/**
+	 * The {@code apply} built-in function (apply a function to a spread argument list).
+	 */
+	public static final String APPLY = "APPLY";
+
+	/** The {@code reduce} built-in function. */
+	public static final String REDUCE = "REDUCE";
+
+	/**
+	 * The {@code every} built-in function (true if the predicate holds for every
+	 * element).
+	 */
+	public static final String EVERY = "EVERY";
+
+	/**
+	 * The {@code some} built-in function (the first non-nil predicate result, or nil).
+	 */
+	public static final String SOME = "SOME";
+
+	/**
+	 * The {@code notany} built-in function (true if the predicate holds for no element;
+	 * the complement of {@code some}).
+	 */
+	public static final String NOTANY = "NOTANY";
+
+	/**
+	 * The {@code notevery} built-in function (true if the predicate fails for some
+	 * element; the complement of {@code every}).
+	 */
+	public static final String NOTEVERY = "NOTEVERY";
+
+	// Macros
+
+	/** The {@code setf} macro. */
+	public static final String SETF = "SETF";
+
+	/** The {@code push} macro. */
+	public static final String PUSH = "PUSH";
+
+	/** The {@code pop} macro. */
+	public static final String POP = "POP";
+
+	/** The {@code remf} macro. */
+	public static final String REMF = "REMF";
+
+	/** The {@code let*} macro. */
+	public static final String LET_STAR = "LET*";
+
+	/** The {@code dolist} macro. */
+	public static final String DOLIST = "DOLIST";
+
+	/** The {@code incf} macro. */
+	public static final String INCF = "INCF";
+
+	/** The {@code decf} macro. */
+	public static final String DECF = "DECF";
+
+	/** The {@code format} macro. */
+	public static final String FORMAT = "FORMAT";
+
+	/** The {@code defun} macro. */
+	public static final String DEFUN = "DEFUN";
+
+	/**
+	 * The {@code defmacro} special form. User macros are expanded by the interpreter at
+	 * evaluation time and by a compile-time pass on the compilation path, so the JVM/WASM
+	 * backends never see a macro call.
+	 */
+	public static final String DEFMACRO = "DEFMACRO";
+
+	/**
+	 * The {@code defstruct} special form. Expanded into the defuns it generates
+	 * (constructor, predicate, copier, accessors) by
+	 * {@code LispMacroExpander.expandDefstruct}: the interpreter expands at evaluation
+	 * time, the compilers splice top-level forms before Pass 1.
+	 */
+	public static final String DEFSTRUCT = "DEFSTRUCT";
+
+	/**
+	 * The {@code defstruct} header option {@code PackageResolver} adds when the struct
+	 * name is a symbol of ANOTHER package (inherited, imported or written qualified):
+	 * {@code (:%intern-package "PKG")} names the package current at the form, where CL
+	 * interns the derived constructor, predicate, copier and accessor names. Without it
+	 * the derived names land in the struct name's own package. A bundled library, written
+	 * in {@code cl-user}, spells it to keep them in its own.
+	 */
+	public static final String DEFSTRUCT_INTERN_PACKAGE = ":%INTERN-PACKAGE";
+
+	/**
+	 * The {@code defclass} special form (static CLOS subset). Expanded into the defuns it
+	 * generates (keyword constructor, reader/accessor functions) by
+	 * {@code LispMacroExpander.expandDefclass}: the interpreter expands at evaluation
+	 * time, the compilers splice top-level forms before Pass 1.
+	 */
+	public static final String DEFCLASS = "DEFCLASS";
+
+	/**
+	 * The {@code defgeneric} special form (static CLOS subset). Registers a generic
+	 * function and defines its dispatcher defun (see
+	 * {@code LispMacroExpander.generateDispatcher}).
+	 */
+	public static final String DEFGENERIC = "DEFGENERIC";
+
+	/**
+	 * The {@code defmethod} special form (static CLOS subset). Registers a method
+	 * (optionally specialized on the FIRST parameter with an {@code eql} literal, a
+	 * {@code defclass} class, or a built-in type) and regenerates the generic's
+	 * dispatcher defun.
+	 */
+	public static final String DEFMETHOD = "DEFMETHOD";
+
+	/**
+	 * The {@code call-next-method} local operator (static CLOS subset, Stage 3). Valid
+	 * only inside a {@code defmethod} body; {@code LispMacroExpander.expandDefmethod}
+	 * rewrites it to a {@code funcall} of the method's next-method thunk, so it never
+	 * reaches the evaluator/compilers as a symbol.
+	 */
+	public static final String CALL_NEXT_METHOD = "CALL-NEXT-METHOD";
+
+	/**
+	 * The {@code next-method-p} local operator (static CLOS subset, Stage 3). Valid only
+	 * inside a {@code defmethod} body; rewritten by
+	 * {@code LispMacroExpander.expandDefmethod} to a nil-test of the next-method thunk.
+	 */
+	public static final String NEXT_METHOD_P = "NEXT-METHOD-P";
+
+	/**
+	 * The {@code make-instance} macro (static CLOS subset). Requires a literal quoted
+	 * class name; expands to the class's generated keyword constructor.
+	 */
+	public static final String MAKE_INSTANCE = "MAKE-INSTANCE";
+
+	/**
+	 * The {@code allocate-instance} function: an instance of the given class metaobject
+	 * (or class name) with EVERY slot unbound -- no initforms, no
+	 * {@code initialize-instance} -- the {@code dao-from-fields} idiom of filling slots
+	 * by {@code setf slot-value} afterwards. Extra initargs are accepted and ignored, per
+	 * CL (they are for methods on it, which the static subset has none of). Interpreter:
+	 * a registry-backed built-in beside {@code find-class}; compile paths: a generated
+	 * defun injected when referenced (see
+	 * {@code LispMacroExpander.allocateInstanceDefuns}).
+	 */
+	public static final String ALLOCATE_INSTANCE = "ALLOCATE-INSTANCE";
+
+	/**
+	 * The {@code compile} function. Interpreter (and the compile paths' macro-time
+	 * evaluator): coerces a literal {@code (lambda ...)} definition to a function in the
+	 * null lexical environment; a no-argument definition that DEFINES METHODS over class
+	 * metaobjects (postmodern's {@code build-dao-methods} {@code %eval} idiom) is instead
+	 * captured as top-level forms ("expand and splice", see {@code MopEvalCapture}).
+	 * Compiled programs get a generated runtime defun for the re-execution of the same
+	 * idiom (see {@code CompileRuntime}).
+	 */
+	public static final String COMPILE = "COMPILE";
+
+	/**
+	 * The compiled programs' registration of a precompiled {@link #COMPILE} definition
+	 * ({@code CompiledTemplates}): {@code (%register-compiled-template 'pattern factory)}
+	 * runs before the top-level form whose macro-time evaluation compiled the definition.
+	 */
+	public static final String REGISTER_COMPILED_TEMPLATE = "%REGISTER-COMPILED-TEMPLATE";
+
+	/**
+	 * A {@link #REGISTER_COMPILED_TEMPLATE} pattern's hole: matches any datum, which the
+	 * factory receives.
+	 */
+	public static final String TEMPLATE_HOLE = "%TEMPLATE-HOLE%";
+
+	/**
+	 * A {@link #REGISTER_COMPILED_TEMPLATE} pattern's uninterned symbol: matches any
+	 * uninterned symbol (a gensym is a fresh one on every run).
+	 */
+	public static final String TEMPLATE_GENSYM = "%TEMPLATE-GENSYM%";
+
+	/**
+	 * The {@code slot-value} macro (static CLOS subset). Requires a literal quoted slot
+	 * name; expands to the slot's {@code nth} position and is a {@code setf} place.
+	 */
+	public static final String SLOT_VALUE = "SLOT-VALUE";
+
+	/** The {@code &rest} lambda-list keyword. */
+	public static final String LAMBDA_REST = "&REST";
+
+	/**
+	 * The {@code &body} lambda-list keyword ({@code defmacro} alias for {@code &rest}).
+	 */
+	public static final String LAMBDA_BODY = "&BODY";
+
+	/** The {@code &optional} lambda-list keyword. */
+	public static final String LAMBDA_OPTIONAL = "&OPTIONAL";
+
+	/** The {@code &key} lambda-list keyword. */
+	public static final String LAMBDA_KEY = "&KEY";
+
+	/** The {@code &aux} lambda-list keyword. */
+	public static final String LAMBDA_AUX = "&AUX";
+
+	/** The {@code &allow-other-keys} lambda-list keyword. */
+	public static final String LAMBDA_ALLOW_OTHER_KEYS = "&ALLOW-OTHER-KEYS";
+
+	/**
+	 * The {@code &environment} lambda-list keyword, accepted in macro lambda lists only
+	 * (defmacro/macrolet). The parameter is stripped from the lambda list and bound by
+	 * the expansion itself: to nil where no symbol macro is in scope, otherwise to an
+	 * object {@code macroexpand} reads them from ({@code .kb/symbol-macrolet.md}).
+	 * Everything else taking an environment ({@code get-setf-expansion},
+	 * {@code constantp}) ignores it.
+	 */
+	public static final String LAMBDA_ENVIRONMENT = "&ENVIRONMENT";
+
+	/**
+	 * The {@code &whole} macro-lambda-list keyword: binds the whole macro call form
+	 * (defmacro) or the whole destructured list (destructuring-bind). Must be the first
+	 * element of the lambda list, per CL.
+	 */
+	public static final String LAMBDA_WHOLE = "&WHOLE";
+
+	/** The {@code :allow-other-keys} call-site keyword argument. */
+	public static final String ALLOW_OTHER_KEYS_KEYWORD = ":ALLOW-OTHER-KEYS";
+
+	/**
+	 * The {@code gensym} function. Returns a fresh symbol named
+	 * {@code #:<prefix><counter>} (default prefix {@code g}). rontolisp symbols are plain
+	 * strings, so the result is an ordinary symbol whose uniqueness rests on the
+	 * {@code #:} prefix and a monotonically increasing counter.
+	 */
+	public static final String GENSYM = "GENSYM";
+
+	/**
+	 * The {@code macroexpand-1} function. Expands the top-level form once when its
+	 * operator is a user macro or a built-in macro; returns the form unchanged otherwise.
+	 * The second value is CL's {@code expanded-p} flag.
+	 */
+	public static final String MACROEXPAND_1 = "MACROEXPAND-1";
+
+	/**
+	 * The {@code macroexpand} function. Repeats {@code macroexpand-1} to a fixpoint,
+	 * returning the same two values.
+	 */
+	public static final String MACROEXPAND = "MACROEXPAND";
+
+	/**
+	 * The {@code symbol-name} function. Returns the symbol's stored name verbatim (the
+	 * same spelling {@code princ} prints), so keywords keep their leading {@code :} and
+	 * rontolisp's case-preserving lowercase names are NOT upcased like in CL.
+	 */
+	public static final String SYMBOL_NAME = "SYMBOL-NAME";
+
+	/**
+	 * The {@code intern} function. Returns the symbol named by the argument string,
+	 * verbatim. rontolisp symbols compare by name, so there is no intern table; the
+	 * current package is ignored and a package argument is an error.
+	 */
+	public static final String INTERN = "INTERN";
+
+	/**
+	 * The {@code find-symbol} function. Like {@code intern} but never creates: returns
+	 * the symbol when the name is known (a {@code cl} symbol, a keyword, or a
+	 * user-defined function), nil otherwise.
+	 */
+	public static final String FIND_SYMBOL = "FIND-SYMBOL";
+
+	/**
+	 * The internal accessor behind the SECOND value of {@code find-symbol} and
+	 * {@code intern}: the accessibility status keyword ({@code :external},
+	 * {@code :internal}, {@code :inherited}) of a name in a package, or nil when the
+	 * package does not provide it. Takes the same arguments as {@code find-symbol}, and
+	 * answers non-nil exactly when {@code find-symbol} answers a symbol -- the two are
+	 * lowered side by side by a multiple-value consumer (the {@code %array-disp-target} /
+	 * {@code %array-disp-offset} pattern).
+	 */
+	public static final String FIND_SYMBOL_STATUS = "%FIND-SYMBOL-STATUS";
+
+	/**
+	 * The not-found default of a {@code gethash} multiple-value lowering: a
+	 * {@code gethash} that answers it found no entry. A constant internal symbol rather
+	 * than a fresh {@code (gensym)}, which advanced the gensym counter on every lookup --
+	 * visible to the program's next {@code gensym} -- and cost more than the lookup
+	 * itself.
+	 */
+	public static final String GETHASH_ABSENT = "%GETHASH-ABSENT";
+
+	/** The {@code :external} accessibility status keyword, spelled as it is stored. */
+	public static final String STATUS_EXTERNAL = ":EXTERNAL";
+
+	/** The {@code :internal} accessibility status keyword, spelled as it is stored. */
+	public static final String STATUS_INTERNAL = ":INTERNAL";
+
+	/** The {@code :inherited} accessibility status keyword, spelled as it is stored. */
+	public static final String STATUS_INHERITED = ":INHERITED";
+
+	/**
+	 * The {@code make-symbol} function. Returns a fresh uninterned symbol named
+	 * {@code #:<name>} (the same {@code #:} convention gensym uses).
+	 */
+	public static final String MAKE_SYMBOL = "MAKE-SYMBOL";
+
+	/** The {@code boundp} function. Whether a symbol names a bound global variable. */
+	public static final String BOUNDP = "BOUNDP";
+
+	/**
+	 * The {@code fboundp} function. Whether a symbol names a function, macro, or special
+	 * operator.
+	 */
+	public static final String FBOUNDP = "FBOUNDP";
+
+	/** The {@code symbol-value} function. The global variable value named by a symbol. */
+	public static final String SYMBOL_VALUE = "SYMBOL-VALUE";
+
+	/**
+	 * The {@code set} function. Sets the global variable value named by a symbol,
+	 * creating the binding when the name is unbound.
+	 */
+	public static final String SET = "SET";
+
+	/** The {@code defvar} special form. */
+	public static final String DEFVAR = "DEFVAR";
+
+	/** The {@code defparameter} special form (unconditional global assignment). */
+	public static final String DEFPARAMETER = "DEFPARAMETER";
+
+	/**
+	 * The {@code defconstant} special form. rontolisp does not enforce constancy; it
+	 * behaves like {@code defparameter}.
+	 */
+	public static final String DEFCONSTANT = "DEFCONSTANT";
+
+	/** The {@code cond} macro. */
+	public static final String COND = "COND";
+
+	/** The {@code case} macro. */
+	public static final String CASE = "CASE";
+
+	/** The {@code otherwise} default-clause designator recognized by {@code case}. */
+	public static final String OTHERWISE = "OTHERWISE";
+
+	/**
+	 * The {@code ecase} macro (exhaustive {@code case}; signals an error when no key
+	 * matches).
+	 */
+	public static final String ECASE = "ECASE";
+
+	/**
+	 * The {@code etypecase} macro (exhaustive {@code typecase}; signals an error when no
+	 * type matches).
+	 */
+	public static final String ETYPECASE = "ETYPECASE";
+
+	/**
+	 * The {@code ctypecase} macro. No {@code store-value} restart is established around
+	 * the unmatched-object error, so this behaves like {@code etypecase} (signals an
+	 * error when no type matches).
+	 */
+	public static final String CTYPECASE = "CTYPECASE";
+
+	/**
+	 * The {@code ccase} macro. No {@code store-value} restart is established around the
+	 * unmatched-key error, so this behaves like {@code ecase} (signals an error when no
+	 * key matches).
+	 */
+	public static final String CCASE = "CCASE";
+
+	/**
+	 * The {@code check-type} macro. Lite version: expands to a type test built from the
+	 * {@code typecase} predicate map (plus compound specifiers) and an {@code error} call
+	 * -- no restarts, no place re-storing.
+	 */
+	public static final String CHECK_TYPE = "CHECK-TYPE";
+
+	/**
+	 * The {@code assert} macro. Lite version: expands to {@code (unless test (error
+	 * ...))} -- the optional places list is ignored (no restarts).
+	 */
+	public static final String ASSERT = "ASSERT";
+
+	/**
+	 * The {@code declare} declaration marker. Parsed no-op: the whole form expands to
+	 * {@code nil} and its arguments are never evaluated or validated.
+	 */
+	public static final String DECLARE = "DECLARE";
+
+	/**
+	 * The {@code declaim} macro. Parsed no-op like {@link #DECLARE}.
+	 */
+	public static final String DECLAIM = "DECLAIM";
+
+	/**
+	 * The {@code proclaim} operator. Parsed no-op like {@link #DECLARE} (classified as a
+	 * macro here, not a function as in CL, so the argument is not evaluated either).
+	 */
+	public static final String PROCLAIM = "PROCLAIM";
+
+	/**
+	 * The {@code special} declaration identifier. A {@code (special ...)} clause inside a
+	 * top-level {@code declaim}/{@code proclaim} proclaims its variables special (dynamic
+	 * binding), collected by {@code SpecialVarCollector}. Not a callable symbol; only
+	 * meaningful inside a declaration specifier, so it is not registered as a cl symbol.
+	 */
+	public static final String SPECIAL = "SPECIAL";
+
+	/**
+	 * The {@code the} operator. Expands to its value form (identity; no type checking).
+	 */
+	public static final String THE = "THE";
+
+	/**
+	 * The {@code deftype} macro. Parsed no-op like {@link #DECLAIM}: the type name is NOT
+	 * registered, so it is only useful where the defined type is never used in a runtime
+	 * type test (e.g. inside {@code declaim ftype} declarations, themselves no-ops); a
+	 * later use in {@code check-type}/{@code typecase} fails naming the unsupported
+	 * specifier.
+	 */
+	public static final String DEFTYPE = "DEFTYPE";
+
+	/**
+	 * The {@code define-condition} macro. Expands into the equivalent {@code defclass}
+	 * over the CLOS static subset, so a condition type is an ordinary class registered in
+	 * the {@code ClosRegistry} (parent defaults to {@code condition}); its
+	 * {@code :report} is registered there too. Lite: single inheritance, and no restart
+	 * layer.
+	 */
+	public static final String DEFINE_CONDITION = "DEFINE-CONDITION";
+
+	/**
+	 * The {@code define-modify-macro} macro. Lowers to a {@code defmacro} that expands
+	 * {@code (name place args...)} into {@code (setf place (function place args...))}.
+	 * Lite: the place subforms may be evaluated more than once (no
+	 * {@code get-setf-expansion} single-evaluation protocol).
+	 */
+	public static final String DEFINE_MODIFY_MACRO = "DEFINE-MODIFY-MACRO";
+
+	/**
+	 * The {@code define-method-combination} macro: an evaluator keeps a function
+	 * computing effective method forms, and the form leaves nothing for run time.
+	 */
+	public static final String DEFINE_METHOD_COMBINATION = "DEFINE-METHOD-COMBINATION";
+
+	/**
+	 * {@code make-instance} of a literal class as the system does it, past the methods on
+	 * the generic: what the generic's default method evaluates on the interpreter.
+	 */
+	public static final String SYSTEM_MAKE_INSTANCE = "%SYSTEM-MAKE-INSTANCE";
+
+	/** What an effective method form calls a method with. */
+	public static final String CALL_METHOD = "CALL-METHOD";
+
+	/** What an effective method form makes a form a next method with. */
+	public static final String MAKE_METHOD = "MAKE-METHOD";
+
+	/** The {@code upgraded-array-element-type} standard function: a prelude defun. */
+	public static final String UPGRADED_ARRAY_ELEMENT_TYPE = "UPGRADED-ARRAY-ELEMENT-TYPE";
+
+	/**
+	 * The {@code compute-applicable-methods} generic of the generic-function protocol.
+	 */
+	public static final String COMPUTE_APPLICABLE_METHODS = "COMPUTE-APPLICABLE-METHODS";
+
+	/** The {@code invalid-method-error} standard function: a prelude defun. */
+	public static final String INVALID_METHOD_ERROR = "INVALID-METHOD-ERROR";
+
+	/** The {@code method-combination-error} standard function: a prelude defun. */
+	public static final String METHOD_COMBINATION_ERROR = "METHOD-COMBINATION-ERROR";
+
+	/**
+	 * The {@code define-setf-expander} macro. The five-value setf-expansion protocol
+	 * ({@code get-setf-expansion}/{@code &environment}) is supported: the interpreter's
+	 * {@code setfExpanders} registry and {@code UserMacroExpander} rewrite
+	 * {@code (setf/incf/decf (place ...) v)} for the newly defined place before the
+	 * compilers, so it works on all four backends. The expr-compiler case for this symbol
+	 * stays a nil no-op only because the rewrite already ran at macro-expansion time.
+	 */
+	public static final String DEFINE_SETF_EXPANDER = "DEFINE-SETF-EXPANDER";
+
+	/**
+	 * The {@code defsetf} macro (short and long forms). Registers a setf expansion for an
+	 * accessor: the short form {@code (defsetf access update)} makes
+	 * {@code (setf (access args...) v)} call {@code (update args... v)}; the long form
+	 * {@code (defsetf access (lambda-list) (store-vars) body...)} evaluates its body at
+	 * expansion time to produce the store form. Complements
+	 * {@link #DEFINE_SETF_EXPANDER}.
+	 */
+	public static final String DEFSETF = "DEFSETF";
+
+	/**
+	 * The {@code define-compiler-macro} macro. Parsed no-op returning nil, like
+	 * {@link #DECLAIM}/{@link #DEFTYPE}: a compiler macro is only an optimization hint,
+	 * so dropping it leaves the ordinary function definition authoritative (the
+	 * observable behavior is identical, only slower). The {@code &whole} parameter and
+	 * any body are ignored.
+	 */
+	public static final String DEFINE_COMPILER_MACRO = "DEFINE-COMPILER-MACRO";
+
+	/**
+	 * The {@code restart-case} macro. Establishes named restart records on the dynamic
+	 * restart stack for the extent of the primary form; an invoked restart transfers
+	 * control non-locally back to the restart-case frame and runs the clause body in its
+	 * lexical environment (so a {@code (go start)} clause body works). Expanded by
+	 * {@code LispMacroExpander.expandRestartCase} over {@code catch}/{@code throw};
+	 * {@code --no-gc} keeps the historical lite lowering to the primary form.
+	 */
+	public static final String RESTART_CASE = "RESTART-CASE";
+
+	/**
+	 * The {@code restart-bind} macro. Pushes restart records for its body's dynamic
+	 * extent WITHOUT the non-local exit of {@link #RESTART_CASE}: an invoked restart
+	 * calls the bound function at the invocation point (the CL semantics). The bound
+	 * functions receive the invocation arguments via {@code apply}.
+	 */
+	public static final String RESTART_BIND = "RESTART-BIND";
+
+	/**
+	 * The {@code with-simple-restart} macro. Sugar over {@link #RESTART_CASE}: the named
+	 * restart takes no arguments and returns {@code (values nil t)} from the
+	 * with-simple-restart form.
+	 */
+	public static final String WITH_SIMPLE_RESTART = "WITH-SIMPLE-RESTART";
+
+	/**
+	 * The {@code invoke-restart} function (restart-runtime defun). Accepts a restart name
+	 * (symbol or keyword) or a restart object from {@link #FIND_RESTART}, plus invocation
+	 * arguments; signals when no matching restart is active.
+	 */
+	public static final String INVOKE_RESTART = "INVOKE-RESTART";
+
+	/**
+	 * The {@code find-restart} function (restart-runtime defun). Returns the innermost
+	 * active restart record with the given name, or the identifier itself when it already
+	 * is a restart object, or nil. Lite: the optional condition argument is accepted and
+	 * ignored (no condition-restart association).
+	 */
+	public static final String FIND_RESTART = "FIND-RESTART";
+
+	/**
+	 * The {@code compute-restarts} function (restart-runtime defun): all active restart
+	 * records, innermost first. Lite: the optional condition argument is ignored.
+	 */
+	public static final String COMPUTE_RESTARTS = "COMPUTE-RESTARTS";
+
+	/** The {@code restart-name} accessor on a restart record (restart-runtime defun). */
+	public static final String RESTART_NAME = "RESTART-NAME";
+
+	/**
+	 * The {@code muffle-warning} function (restart-runtime defun): invokes the
+	 * {@code muffle-warning} restart every {@code warn} establishes in restart mode,
+	 * aborting the pending warning output.
+	 */
+	public static final String MUFFLE_WARNING = "MUFFLE-WARNING";
+
+	/**
+	 * The {@code abort} function (restart-runtime defun): invokes the innermost
+	 * {@code abort} restart, signalling when none is active (the CL contract).
+	 */
+	public static final String ABORT = "ABORT";
+
+	/**
+	 * The {@code continue} function (restart-runtime defun): invokes the innermost
+	 * {@code continue} restart (the one a restart-mode {@code cerror} establishes) and
+	 * returns nil when none is active.
+	 */
+	public static final String CONTINUE = "CONTINUE";
+
+	/**
+	 * The {@code use-value} function (restart-runtime defun): invokes the innermost
+	 * {@code use-value} restart with the given value, nil when none is active (the CL
+	 * contract). trivia level2's guard-lifting handler is the driving consumer.
+	 */
+	public static final String USE_VALUE = "USE-VALUE";
+
+	/**
+	 * The {@code store-value} function (restart-runtime defun): as {@link #USE_VALUE} for
+	 * the {@code store-value} restart (the CLHS sibling; added together).
+	 */
+	public static final String STORE_VALUE = "STORE-VALUE";
+
+	/**
+	 * The internal {@code %run-handlers} defun (restart runtime): walks the dynamic
+	 * {@code handler-bind} cluster stack at the SIGNAL POINT, before unwinding, calling
+	 * each matching handler with the condition; a handler that returns declines and the
+	 * search resumes with outer clusters. Inserted by the signal-designator expansions
+	 * before the {@code %error-cond}/{@code %signal-cond}/{@code %warn} terminal when the
+	 * program uses the restart system.
+	 */
+	public static final String RUN_HANDLERS_INTERNAL = "%RUN-HANDLERS";
+
+	/**
+	 * The internal {@code (%hb-guard body)} landing pad the {@code handler-bind}
+	 * expansion wraps its body in: a catch-any region that, for an escaping error whose
+	 * handlers did not run at the signal point (a raw built-in failure, an internal
+	 * {@code %error} with no signal hook), synthesizes the condition instance, runs the
+	 * {@code handler-bind} cluster stack, and rethrows carrying the instance and saying
+	 * its handlers ran. A throw that already says so -- a signal hook's terminal
+	 * ({@link #ERROR_COND_INTERNAL}'s third operand), a pad nearer the signal -- is
+	 * rethrown untouched.
+	 */
+	public static final String HB_GUARD_INTERNAL = "%HB-GUARD";
+
+	/**
+	 * The internal top-level form {@code (%reporting-uncaught #'line after body...)}:
+	 * {@code body} as a {@code progn}, where a condition nothing caught is reported by
+	 * the program's own line instead of {@code Unhandled condition: ...}. {@code line} is
+	 * called with the condition instance, or nil where the backend holds none (a plain
+	 * error's text, a host failure), and the condition's report text, and answers the
+	 * line to write to standard error; the location lines follow it as under any report,
+	 * and then {@code after} is evaluated -- a {@code (%host-exit 1)}, without which the
+	 * program ends as an uncaught condition ends it. No clause holds the condition, so no
+	 * signal site builds an instance for it ({@code compiler.UncaughtReport}).
+	 */
+	public static final String REPORTING_UNCAUGHT_INTERNAL = "%REPORTING-UNCAUGHT";
+
+	/**
+	 * The dynamic {@code handler-bind} cluster stack: a top-level global holding a list
+	 * of clusters, each a list of {@code (test-closure . handler-function)} entries.
+	 * Mutated with plain {@code setq} and restored through {@code unwind-protect} (never
+	 * {@code let}-rebound), so the compile-path special-binding restore holes do not
+	 * apply.
+	 */
+	public static final String HANDLER_CLUSTERS_VAR = "%HANDLER-CLUSTERS%";
+
+	/**
+	 * The dynamic restart stack: a top-level global holding a list of clusters, each a
+	 * list of restart records. Same setq + unwind-protect discipline as
+	 * {@link #HANDLER_CLUSTERS_VAR}.
+	 */
+	public static final String RESTART_CLUSTERS_VAR = "%RESTART-CLUSTERS%";
+
+	/**
+	 * The head tag of a restart record:
+	 * {@code (%restart name invoker report interactive test)}.
+	 */
+	public static final String RESTART_RECORD_TAG = "%RESTART";
+
+	/**
+	 * The {@code macrolet} macro (local, lexically scoped macro definitions). Expands its
+	 * body with the local macros active and drops the definitions (see
+	 * {@code LispMacroExpander}/{@code UserMacroExpander}/{@code LispEvaluator} macrolet
+	 * handling). Local macro bodies run at expansion time like {@code defmacro}.
+	 */
+	public static final String MACROLET = "MACROLET";
+
+	/**
+	 * The {@code symbol-macrolet} macro (local, lexically scoped symbol macros). Expanded
+	 * by a shadow-aware substitution over the body shared by the evaluator and all
+	 * compilers ({@code LispMacroExpander.expandSymbolMacrolet}): free references to a
+	 * bound name are replaced by its expansion, an inner binding form ({@code let},
+	 * {@code lambda}, ...) of the same name stops the substitution in its scope, and a
+	 * {@code setq}/{@code setf} of a bound name writes through the expansion place. Its
+	 * global, top-level sibling is {@link #DEFINE_SYMBOL_MACRO}.
+	 */
+	public static final String SYMBOL_MACROLET = "SYMBOL-MACROLET";
+
+	/**
+	 * The {@code define-symbol-macro} macro (global symbol macros). Registers a
+	 * program-wide name whose value-position references expand to a form and whose
+	 * {@code setq}/{@code setf} writes through that form as a place. The interpreter
+	 * keeps the table in {@code LispEvaluator} and consults it when the name has no
+	 * variable binding; the compile paths keep it in {@code UserMacroExpander}, which
+	 * drops the definition and substitutes every later top-level form through
+	 * {@code LispMacroExpander.substituteGlobalSymbolMacros} -- so the backends never see
+	 * the form. A definition that is not top level, or whose name is not a literal
+	 * symbol, is an error. {@code cffi:defcvar} expands into this.
+	 */
+	public static final String DEFINE_SYMBOL_MACRO = "DEFINE-SYMBOL-MACRO";
+
+	/**
+	 * The {@code make-condition} operator. Lite expansion to the {@code :format-control}
+	 * value (or the condition type name as a string), so the common
+	 * {@code (error (make-condition 'type :format-control "..."))} idiom signals with the
+	 * intended message. Classified as a macro here (in CL it is a function).
+	 */
+	public static final String MAKE_CONDITION = "MAKE-CONDITION";
+
+	/**
+	 * The {@code documentation} accessor. Lite: reads expand to nil and
+	 * {@code (setf (documentation ...) "...")} discards the docstring (docstrings are not
+	 * stored anywhere). Classified as a macro here (in CL it is a function).
+	 */
+	public static final String DOCUMENTATION = "DOCUMENTATION";
+
+	/**
+	 * The {@code pushnew} macro. Expands like {@link #PUSH} guarded by {@code member};
+	 * extra {@code :test}/{@code :key} arguments are passed through to {@code member}.
+	 */
+	public static final String PUSHNEW = "PUSHNEW";
+
+	/**
+	 * The {@code eval-when} operator. At top level its body runs under any situation (the
+	 * compile path splices it into top-level forms, see
+	 * {@code LispMacroExpander.flattenTopLevel}); elsewhere only {@code :execute} runs
+	 * it.
+	 */
+	public static final String EVAL_WHEN = "EVAL-WHEN";
+
+	/**
+	 * The {@code locally} operator. Expands to {@code progn} of its body with the leading
+	 * declarations dropped (declarations are parsed no-ops).
+	 */
+	public static final String LOCALLY = "LOCALLY";
+
+	/**
+	 * The {@code flet} macro (local, non-recursive function bindings). Expands to
+	 * let-bound lambdas plus a body rewrite of call position and {@code #'name} (see
+	 * {@code LispMacroExpander.expandFlet}).
+	 */
+	public static final String FLET = "FLET";
+
+	/**
+	 * The {@code labels} macro. Like {@link #FLET} but the definitions see each other
+	 * (mutual recursion) via the nil-then-{@code setq} letrec lowering.
+	 */
+	public static final String LABELS = "LABELS";
+
+	/**
+	 * The {@code values} function. In an ordinary (single-value) context it expands like
+	 * {@code prog1}: every argument is evaluated and the first is the result (zero
+	 * arguments yield nil). The multiple-value consumers recognize a literal
+	 * {@code (values ...)} producer syntactically and receive all of its values (see
+	 * {@code LispMacroExpander.lowerMvProducer}); there is no runtime multiple-value
+	 * representation.
+	 */
+	public static final String VALUES = "VALUES";
+
+	/**
+	 * The {@code multiple-value-bind} macro. Binds the variables to the values of the
+	 * producer form: a literal {@code (values ...)} call or a recognized two-value
+	 * built-in ({@code floor}/{@code ceiling}/{@code round}/{@code truncate} and
+	 * {@code gethash}); any other producer supplies a single value. Missing values bind
+	 * to nil.
+	 */
+	public static final String MULTIPLE_VALUE_BIND = "MULTIPLE-VALUE-BIND";
+
+	/**
+	 * The {@code multiple-value-list} macro. Collects the producer's values (recognized
+	 * like {@link #MULTIPLE_VALUE_BIND}) into a list.
+	 */
+	public static final String MULTIPLE_VALUE_LIST = "MULTIPLE-VALUE-LIST";
+
+	/**
+	 * The {@code multiple-value-call} macro. Calls the function with all values of every
+	 * producer form (recognized like {@link #MULTIPLE_VALUE_BIND}) as the arguments;
+	 * lowered to a direct {@code funcall}.
+	 */
+	public static final String MULTIPLE_VALUE_CALL = "MULTIPLE-VALUE-CALL";
+
+	/**
+	 * The {@code nth-value} macro. Returns the n-th (0-based) value of the producer form
+	 * (recognized like {@link #MULTIPLE_VALUE_BIND}); expands to {@code nth} over
+	 * {@code multiple-value-list}.
+	 */
+	public static final String NTH_VALUE = "NTH-VALUE";
+
+	/**
+	 * The {@code multiple-value-setq} macro. Assigns the multiple values of the producer
+	 * form (recognized like {@link #MULTIPLE_VALUE_BIND}) to the existing variables via
+	 * {@code setq} and returns the primary value; extra variables receive nil.
+	 */
+	public static final String MULTIPLE_VALUE_SETQ = "MULTIPLE-VALUE-SETQ";
+
+	/** The {@code multiple-value-prog1} macro. */
+	public static final String MULTIPLE_VALUE_PROG1 = "MULTIPLE-VALUE-PROG1";
+
+	/**
+	 * The {@code rotatef} macro. Rotates the values of its setf-able places left (each
+	 * place receives the old value of the next, the last receives the old value of the
+	 * first) and returns nil.
+	 */
+	public static final String ROTATEF = "ROTATEF";
+
+	/**
+	 * The {@code destructuring-bind} macro. Binds the variables of a (possibly nested)
+	 * pattern to the corresponding parts of the evaluated form, supporting
+	 * {@code &optional}/{@code &rest}/{@code &body}/{@code &key}/{@code &aux} inside the
+	 * pattern; expands to a {@code let*} of car/cdr chains (see
+	 * {@code LispMacroExpander.expandDestructuringBind}). A surplus element signals a
+	 * {@code program-error}; a missing position binds to nil; {@code &environment} is
+	 * unsupported.
+	 */
+	public static final String DESTRUCTURING_BIND = "DESTRUCTURING-BIND";
+
+	/**
+	 * The {@code error} macro (signal an error). It builds the message with the
+	 * {@code format} machinery and delegates to {@link #ERROR_INTERNAL}. Like
+	 * {@code format} it has no function value (classified as a macro).
+	 */
+	public static final String ERROR = "ERROR";
+
+	/**
+	 * The {@code cerror} operator (lite): without restarts the error is not continuable,
+	 * so {@code (cerror continue-format datum args...)} lowers to
+	 * {@code (error datum args...)}.
+	 */
+	public static final String CERROR = "CERROR";
+
+	/**
+	 * Internal single-argument primitive that throws/traps with a pre-built message
+	 * string. Not part of the public API; produced by the {@code error} macro expansion.
+	 */
+	public static final String ERROR_INTERNAL = "%ERROR";
+
+	/**
+	 * The {@code warn} macro (print a warning and continue). It builds the message with
+	 * the {@code format} machinery like {@link #ERROR} and delegates to
+	 * {@link #WARN_INTERNAL}; there is no condition system, so no condition object is
+	 * created and nothing can handle or muffle the warning. Like {@code error} it has no
+	 * function value (classified as a macro).
+	 */
+	public static final String WARN = "WARN";
+
+	/**
+	 * Internal single-argument primitive that writes {@code WARNING: message} plus a
+	 * newline to the standard error stream and returns nil. Not part of the public API;
+	 * produced by the {@code warn} macro expansion.
+	 */
+	public static final String WARN_INTERNAL = "%WARN";
+
+	/**
+	 * The Gray write-line dispatch helper ({@code rontolisp::%gray-write-line-dispatch},
+	 * {@code gray.lisp}), as the compile paths register it: {@link #WARN_INTERNAL}'s
+	 * lowering writes through it when the program carries it, so a report reaches an
+	 * {@code *error-output*} bound to a Gray instance.
+	 */
+	public static final String GRAY_WRITE_LINE_DISPATCH = "RONTOLISP::%GRAY-WRITE-LINE-DISPATCH";
+
+	/**
+	 * The name prefix of every {@code gray.lisp} helper defun in the {@code rontolisp}
+	 * package -- the dispatch helpers the Gray rewrite substitutes for the stream
+	 * built-ins and the default element loops. All are ordinary defuns: they evaluate
+	 * their arguments left to right.
+	 */
+	public static final String GRAY_HELPER_PREFIX = "%GRAY-";
+
+	/**
+	 * Internal two-argument primitive {@code (%error-cond condition message)} that
+	 * signals a fatal error carrying a condition object (a CLOS-subset tagged-list
+	 * instance) alongside the pre-built message string. Produced by the {@code error}
+	 * macro expansion for the typed and condition-object designator forms; on the WASM
+	 * backends it traps like {@link #ERROR_INTERNAL}. A third operand {@code t} -- the
+	 * restart-mode signal hook's terminal, reached only once
+	 * {@link #RUN_HANDLERS_INTERNAL} completed a walk for the condition -- makes the
+	 * throw say the {@code handler-bind} handlers ran, so no {@link #HB_GUARD_INTERNAL}
+	 * pad runs them again ({@code LispMacroExpander.handlersRanTerminal}).
+	 */
+	public static final String ERROR_COND_INTERNAL = "%ERROR-COND";
+
+	/**
+	 * Internal one-argument primitive {@code (%program-error message)} that signals a
+	 * {@code program-error} carrying the message: what an expansion-time argument-shape
+	 * rejection (a keyword the operator does not accept, an odd keyword tail, a wrong
+	 * argument count) lowers to, so the rejection becomes a CATCHABLE condition at the
+	 * call site on every backend instead of an exception at expansion time. The
+	 * interpreter throws it as a class-named error (no instance until a handler
+	 * synthesizes one); the compiled backends lower it to {@link #ERROR_COND_INTERNAL}
+	 * over a fresh {@code program-error} instance where a handler landing pad exists and
+	 * to {@link #ERROR_INTERNAL} otherwise ({@code LispMacroExpander.lowerProgramError}).
+	 */
+	public static final String PROGRAM_ERROR_INTERNAL = "%PROGRAM-ERROR";
+
+	/**
+	 * Internal form {@code (%compile-warning "text" form)}: {@code form}, about which a
+	 * compiled backend prints the warning {@code text} when it compiles this occurrence
+	 * ({@code CompileWarnings.warnedForm}). The interpreter emits no compile warnings and
+	 * only evaluates {@code form}. What an expander leaves behind when it knows at
+	 * expansion time that a call may fail when it runs, since {@code macro} cannot reach
+	 * {@code CompileWarnings} and only a compiled form may warn.
+	 */
+	public static final String COMPILE_WARNING_INTERNAL = "%COMPILE-WARNING";
+
+	/**
+	 * Internal one-argument primitive {@code (%parse-error message)} that signals a
+	 * {@code parse-error} reporting the message: what {@code parse-integer}'s expansion
+	 * signals for a string that is no integer syntax
+	 * ({@code LispMacroExpander.expandParseInteger}). Lowered like
+	 * {@link #PROGRAM_ERROR_INTERNAL} ({@code LispMacroExpander.lowerParseError}).
+	 */
+	public static final String PARSE_ERROR_INTERNAL = "%PARSE-ERROR";
+
+	/**
+	 * Internal primitive {@code (%arity-surplus-message max required rest)}: the message
+	 * of the {@code &optional} surplus-argument check ({@code LambdaLists}),
+	 * {@code ClosRegistry.aritySurplusMessage(max, required + (length rest))}.
+	 * {@code max} and {@code required} are integer literals. The JVM answers it from one
+	 * shared runtime helper; the other backends lower it
+	 * ({@code LambdaLists.lowerAritySurplusMessage}).
+	 */
+	public static final String ARITY_SURPLUS_MESSAGE_INTERNAL = "%ARITY-SURPLUS-MESSAGE";
+
+	/**
+	 * Internal primitive {@code (%arity-missing-message required got)}: the message of
+	 * the destructuring missing-element check ({@code LambdaLists}), the
+	 * {@link am.ik.rontolisp.ClosRegistry#arityMessage(int, boolean, int)} shape with a
+	 * lower bound ({@code required} expected at least, {@code got} present). Both are
+	 * integer literals. The JVM answers it from the shared {@code _arityMissing} helper
+	 * (the quote-framed twin of {@code _aritySurplus}, not the dispatchers'
+	 * {@code _arityMsg}: the message lands in a condition's {@code format-control} slot
+	 * and an unframed string would fail {@code stringp}); the other backends lower it
+	 * ({@code LambdaLists.lowerArityMissingMessage}).
+	 */
+	public static final String ARITY_MISSING_MESSAGE_INTERNAL = "%ARITY-MISSING-MESSAGE";
+
+	/**
+	 * Internal declaration identifier {@code (declare (%arity-report prefix suffix))} at
+	 * the head of a function body: a wrong-count call of that function reports
+	 * {@code prefix + count + suffix} instead of {@code Function expects ...}
+	 * ({@link DeclaredArityReport}). A language front end spells its own refusal with it
+	 * (Clojure's {@code Wrong number of args (N) passed to: ns/name}); every other
+	 * declaration processor ignores it.
+	 */
+	public static final String ARITY_REPORT_INTERNAL = "%ARITY-REPORT";
+
+	/**
+	 * Internal one-argument primitive {@code (%supplied-p param)}: true unless
+	 * {@code param} holds the UNSUPPLIED marker -- what a caller passes for an
+	 * {@code &optional} parameter it has no argument for, when the callee takes its
+	 * optionals as physical parameters ({@code LambdaLists.toNative}). Only the prologue
+	 * that desugaring writes reads it, over a physical optional parameter, so the marker
+	 * never reaches a Lisp binding. The interpreter answers it too, for the
+	 * {@code flet}/{@code labels} definitions that reach it in the physical shape
+	 * ({@code LambdaLists.expandPhysical}, {@code LambdaLists.UNSUPPLIED}).
+	 */
+	public static final String SUPPLIED_P_INTERNAL = "%SUPPLIED-P";
+
+	/**
+	 * Internal two-argument primitive {@code (%file-error pathname message)} that signals
+	 * a {@code file-error} carrying the pathname and reporting the message: what a failed
+	 * {@code open} lowers to on the compiled backends
+	 * ({@code LispMacroExpander.expandOpenFileErrorSignal}) and what the prelude
+	 * {@code delete-file} / {@code rename-file} / {@code truename} call. The interpreter
+	 * throws the instance directly; the compiled backends lower it to
+	 * {@link #ERROR_COND_INTERNAL} over a fresh {@code file-error} instance where a
+	 * handler landing pad exists and to {@link #ERROR_INTERNAL} otherwise
+	 * ({@code LispMacroExpander.lowerFileError}), the {@link #PROGRAM_ERROR_INTERNAL}
+	 * split.
+	 */
+	public static final String FILE_ERROR_INTERNAL = "%FILE-ERROR";
+
+	/**
+	 * Internal two-argument primitive {@code (%package-error package message)} that
+	 * signals a {@code package-error} carrying the package designator (a keyword) and
+	 * reporting the message: what the compile-path {@code intern} / {@code find-symbol}
+	 * lowerings emit for a package that does not exist
+	 * ({@code LispMacroExpander.expandInternInPackage} /
+	 * {@code expandFindSymbolInPackage}). Lowered like {@link #FILE_ERROR_INTERNAL}
+	 * ({@code LispMacroExpander.lowerPackageError}); the interpreter's operators signal
+	 * directly and never see it.
+	 */
+	public static final String PACKAGE_ERROR_INTERNAL = "%PACKAGE-ERROR";
+
+	/**
+	 * The {@code (%symbol-in-package name package)} prelude helper a compiled
+	 * {@code find-symbol} / {@code intern} with a COMPUTED package designator calls: the
+	 * qualified spelling built behind a {@code find-package} guard, signalling a
+	 * {@code package-error} for a package that does not exist
+	 * ({@code LispMacroExpander.computedPackageLookup}). One call per site instead of the
+	 * guard inline.
+	 */
+	public static final String SYMBOL_IN_PACKAGE_INTERNAL = "%SYMBOL-IN-PACKAGE";
+
+	/**
+	 * The {@code (%baked-access package name)} helper a compiled {@code find-symbol} /
+	 * {@code intern} it cannot fold calls: the symbol a read/compile-time package reaches
+	 * under the name through an import, a re-export or a use, consed onto its status, or
+	 * nil when the {@code %baked-access%} rows do not answer
+	 * ({@code LispMacroExpander.injectBakedAccess}).
+	 */
+	public static final String BAKED_ACCESS_INTERNAL = "%BAKED-ACCESS";
+
+	/**
+	 * The {@code (%standard-name-p name)} helper: whether {@code cl} exports the name,
+	 * read from the table of the standard names the compiled runtime decodes on first
+	 * use. {@code symbol-package} asks it of a bare symbol, and the {@code %baked-access}
+	 * rows of a package that uses {@code cl}
+	 * ({@code LispMacroExpander.standardNameDefinition}).
+	 */
+	public static final String STANDARD_NAME_P_INTERNAL = "%STANDARD-NAME-P";
+
+	/**
+	 * The keywords of the packages a computed package designator can name that use
+	 * {@code cl} (every designator of each), so a lookup through one asks
+	 * {@link #STANDARD_NAME_P_INTERNAL} ({@code LispMacroExpander.injectBakedAccess}).
+	 */
+	public static final String CL_USERS_INTERNAL = "%CL-USERS%";
+
+	/**
+	 * The {@code (%program-package-p keyword)} helper: whether a computed package
+	 * designator's package is one the program defines, whose name nothing answers builds
+	 * the INTERNAL spelling {@code PKG::NAME}
+	 * ({@code LispMacroExpander.injectBakedAccess}).
+	 */
+	public static final String PROGRAM_PACKAGE_P_INTERNAL = "%PROGRAM-PACKAGE-P";
+
+	/**
+	 * The {@code (%standard-access-status package name)} helper: the status half of a
+	 * {@code find-symbol} / {@code intern} with a computed package designator when the
+	 * program carries the standard names -- the package's row, then a standard name
+	 * through {@code cl} ({@code :inherited}), then the build's {@code :external}.
+	 */
+	public static final String STANDARD_ACCESS_STATUS_INTERNAL = "%STANDARD-ACCESS-STATUS";
+
+	/**
+	 * The {@code (%symbol-home symbol)} helper: the package keyword a compiled symbol's
+	 * spelling names -- its qualifier, {@code :keyword}, nil for an uninterned symbol,
+	 * {@code :cl-user} for a bare one. {@code symbol-package} refines the bare case
+	 * through {@link #STANDARD_NAME_P_INTERNAL}; the package walks, which look a symbol
+	 * up in that home anyway, read it as is.
+	 */
+	public static final String SYMBOL_HOME_INTERNAL = "%SYMBOL-HOME";
+
+	/** The {@code %baked-access%} rows {@link #BAKED_ACCESS_INTERNAL} reads. */
+	public static final String BAKED_ACCESS_TABLE_INTERNAL = "%BAKED-ACCESS%";
+
+	/**
+	 * The designator index {@link #BAKED_ACCESS_INTERNAL} builds on first use, holding
+	 * each row's lookup table once it is decoded.
+	 */
+	public static final String BAKED_ACCESS_INDEX_INTERNAL = "%BAKED-ACCESS-INDEX%";
+
+	/** The row loader behind {@link #BAKED_ACCESS_INTERNAL}. */
+	public static final String BAKED_ACCESS_FILL_INTERNAL = "%BAKED-ACCESS-FILL";
+
+	/**
+	 * The {@code (%baked-access-status package name)} helper: the status half of a
+	 * {@code find-symbol} / {@code intern} with a computed package designator, which
+	 * reads a package value (a keyword) without a second {@code find-package}.
+	 */
+	public static final String BAKED_ACCESS_STATUS_INTERNAL = "%BAKED-ACCESS-STATUS";
+
+	/**
+	 * The {@code (%find-package designator)} helper a compiled {@code find-package} with
+	 * a COMPUTED designator calls: the lookup in the package table baked from the
+	 * resolver's final registry (plus the runtime table when the program can create
+	 * packages). Injected by the backends after package resolution
+	 * ({@code LispMacroExpander.injectFindPackageHelper}), so the table is built once per
+	 * program instead of once per site.
+	 */
+	public static final String FIND_PACKAGE_INTERNAL = "%FIND-PACKAGE";
+
+	/**
+	 * Internal {@code (%open-or-nil path direction [element-type])}: {@code open} in the
+	 * positional shape, answering nil where {@code open} would fail. Only the compiled
+	 * backends' {@code open} lowering produces it
+	 * ({@code LispMacroExpander.expandOpenFileErrorSignal}), which tests the nil and
+	 * signals the {@code file-error} itself.
+	 */
+	public static final String OPEN_OR_NIL_INTERNAL = "%OPEN-OR-NIL";
+
+	/**
+	 * The {@code signal} macro (signal a non-fatal condition). Same designator surface as
+	 * {@link #ERROR}; when no handler is established the signal returns nil (the CL
+	 * fall-through), which is the only behavior on the WASM backends.
+	 */
+	public static final String SIGNAL = "SIGNAL";
+
+	/**
+	 * Internal two-argument primitive {@code (%signal-cond condition message)} behind
+	 * {@link #SIGNAL}: raises the condition when a {@code handler-case} whose clause
+	 * types match it is established on the current thread of control, and returns nil
+	 * otherwise (CLHS 9.1.4.1: {@code signal} transfers control only to a handler that
+	 * will handle the condition). Takes the third operand {@link #ERROR_COND_INTERNAL}
+	 * does, to the same end.
+	 */
+	public static final String SIGNAL_COND_INTERNAL = "%SIGNAL-COND";
+
+	/**
+	 * Internal one-argument predicate defun behind {@link #SIGNAL_COND_INTERNAL} on the
+	 * compiled backends: whether any {@code handler-case} clause entry (nil cdr) of the
+	 * dynamic {@code %handler-clusters%} stack matches the condition. Injected by
+	 * {@code expandTopLevelDefinitions} when the program both signals and establishes a
+	 * {@code handler-case}; the interpreter keeps its own per-thread clause-type stack
+	 * and never resolves this name.
+	 */
+	public static final String HC_MATCH_INTERNAL = "%HC-MATCH-P";
+
+	/**
+	 * The {@code with-slots} macro: binds variables to the slots of a CLOS-subset or
+	 * {@code defstruct} instance for the body. The variables are substituted with
+	 * {@code slot-value} forms over a once-evaluated instance temp -- CL's symbol-macro
+	 * semantics -- so {@code setf}/{@code incf} of one writes through to the slot.
+	 */
+	public static final String WITH_SLOTS = "WITH-SLOTS";
+
+	/**
+	 * The {@code with-accessors} macro: the accessor-call twin of {@link #WITH_SLOTS}.
+	 * Each {@code (var accessor)} pair substitutes {@code var} with
+	 * {@code (accessor instance)} in the body, so a read is an accessor call and a
+	 * {@code setf} of the variable is a {@code setf} of the accessor place.
+	 */
+	public static final String WITH_ACCESSORS = "WITH-ACCESSORS";
+
+	/**
+	 * The {@code change-class} macro: mutates an instance IN PLACE into a statically
+	 * known class, retaining the slots both classes share by name, filling the new ones
+	 * from their initforms (or the supplied initargs) and yielding the instance. The MOP
+	 * protocol around it ({@code update-instance-for-different-class}) is out of scope.
+	 */
+	public static final String CHANGE_CLASS = "CHANGE-CLASS";
+
+	/**
+	 * The internal {@code (%obj-become obj '<tag>)} primitive behind
+	 * {@link #CHANGE_CLASS}: replaces an instance's layout in place, keeping its identity
+	 * and its slot storage. The target layout must have been reserved room by
+	 * {@code LispLayout.capacity()}, which is why the tag has to be a literal.
+	 */
+	public static final String OBJ_BECOME = "%OBJ-BECOME";
+
+	/**
+	 * The {@code handler-case} operator: evaluates an expression, dispatching an error
+	 * signaled during it to the first clause whose condition type matches (rethrowing
+	 * when none does). Interpreter and JVM backends only; the WASM compilers reject it (a
+	 * WASM error is an uncatchable trap).
+	 */
+	public static final String HANDLER_CASE = "HANDLER-CASE";
+
+	/**
+	 * {@code macroexpand-1}'s answer for {@link #HANDLER_CASE}:
+	 * {@code (%handler-case form 'type #'(lambda ll . body)...)}, folded back to the
+	 * native form ({@code LispMacroExpander.foldNativeExpansion}) wherever a walker emits
+	 * it.
+	 */
+	public static final String HANDLER_CASE_INTERNAL = "%HANDLER-CASE";
+
+	/**
+	 * {@code macroexpand-1}'s answer for {@code defun}:
+	 * {@code (%defun 'name #'(lambda ll (block name . body)))}, folded back like
+	 * {@link #HANDLER_CASE_INTERNAL}.
+	 */
+	public static final String DEFUN_INTERNAL = "%DEFUN";
+
+	/**
+	 * {@code macroexpand-1}'s answer for the other natively-run definers
+	 * ({@code defmacro}, {@code defvar}, {@code defclass}, {@code in-package}, ...):
+	 * {@code (%definition 'form)}, folded back like {@link #HANDLER_CASE_INTERNAL}.
+	 */
+	public static final String DEFINITION_INTERNAL = "%DEFINITION";
+
+	/**
+	 * The {@code ignore-errors} macro: sugar over {@code (handler-case (progn forms...)
+	 * (error (c) (values nil c)))}. Interpreter and JVM backends only, like
+	 * {@link #HANDLER_CASE}.
+	 */
+	public static final String IGNORE_ERRORS = "IGNORE-ERRORS";
+
+	/**
+	 * The {@code handler-bind} macro. Pushes a cluster of
+	 * {@code (type-test . handler-function)} entries onto the dynamic
+	 * {@link #HANDLER_CLUSTERS_VAR} stack for its body's extent; the signal-designator
+	 * expansions call {@link #RUN_HANDLERS_INTERNAL} at the signal point, BEFORE
+	 * unwinding, so a handler can {@code invoke-restart} into a still-established
+	 * {@code restart-case}. A handler that returns declines and the search resumes.
+	 * Expanded by {@code LispMacroExpander.expandHandlerBind}; {@code --no-gc} has no
+	 * condition objects and keeps the historical call-time stub.
+	 */
+	public static final String HANDLER_BIND = "HANDLER-BIND";
+
+	/**
+	 * Internal zero-argument form that decrements the per-thread {@code handler-case}
+	 * handler depth and yields nil. JVM backend only: emitted as the cleanup of the
+	 * handler-depth bookkeeping when a {@code return} exits a {@code handler-case}
+	 * protected region (the {@code UnwindScope} channel).
+	 */
+	public static final String HC_DEPTH_DEC_INTERNAL = "%HC-DEPTH-DEC";
+
+	/**
+	 * Internal two-argument form {@code (%dyn-restore KEY SAVE-SLOT)} that restores one
+	 * special variable's dynamic binding from the local the binding site saved the
+	 * previous binding in, and yields nil. Compile paths only, and built by the backends
+	 * themselves: a special {@code let} compiles its body as a protected region whose
+	 * cleanups are these restores, so every exit channel the {@code unwind-protect}
+	 * machinery covers -- normal completion, an error unwind, a cross-lambda exit, a
+	 * {@code return}/{@code return-from}/{@code go} escape -- restores the binding
+	 * ({@code .kb/dynamic-special-variables.md}). {@code KEY} is the JVM {@code _d$}
+	 * ThreadLocal field's constant-pool index or the wasm global (or {@code --reentrant}
+	 * task slot) index.
+	 */
+	public static final String DYN_RESTORE_INTERNAL = "%DYN-RESTORE";
+
+	/** The {@code and} macro. */
+	public static final String AND = "AND";
+
+	/** The {@code or} macro. */
+	public static final String OR = "OR";
+
+	/** The {@code not} built-in function. */
+	public static final String NOT = "NOT";
+
+	/** The {@code when} macro. */
+	public static final String WHEN = "WHEN";
+
+	/** The {@code dotimes} macro. */
+	public static final String DOTIMES = "DOTIMES";
+
+	/** The {@code prog1} macro. */
+	public static final String PROG1 = "PROG1";
+
+	/**
+	 * The {@code time} macro (evaluate a form, print the elapsed real time to standard
+	 * output, and return the form's value).
+	 */
+	public static final String TIME = "TIME";
+
+	/**
+	 * The {@code prog2} macro (evaluate the forms in order and return the value of the
+	 * second).
+	 */
+	public static final String PROG2 = "PROG2";
+
+	/**
+	 * The {@code psetq} macro (parallel assignment: every right-hand side is evaluated
+	 * before any variable is assigned).
+	 */
+	public static final String PSETQ = "PSETQ";
+
+	/**
+	 * The {@code psetf} macro ({@code psetq} generalized to setf places): every place
+	 * subform and every right-hand side is evaluated into a temporary before any
+	 * assignment happens, so a later place reading a variable assigned by an earlier pair
+	 * still sees the old value.
+	 */
+	public static final String PSETF = "PSETF";
+
+	/**
+	 * The {@code typecase} macro (dispatch on the type of an object using the built-in
+	 * type predicates).
+	 */
+	public static final String TYPECASE = "TYPECASE";
+
+	/** The {@code do} macro (parallel iteration). */
+	public static final String DO = "DO";
+
+	/**
+	 * The {@code do*} macro (sequential iteration; {@code let*}-style bindings/steps).
+	 */
+	public static final String DO_STAR = "DO*";
+
+	/**
+	 * The {@code loop} macro. Only the "simple loop" subset is supported (numeric/list
+	 * stepping, accumulation, simple control clauses); see
+	 * {@link am.ik.rontolisp.macro.LispMacroExpander#expandLoop} for the exact grammar
+	 * and limitations.
+	 */
+	public static final String LOOP = "LOOP";
+
+	/** The {@code return} special form (non-local exit from the nearest loop block). */
+	public static final String RETURN = "RETURN";
+
+	/**
+	 * The {@code return-from} macro. INTERPRETER: a real named non-local exit -- throws a
+	 * name-carrying signal caught by the matching {@code block} (a {@code defun} body is
+	 * wrapped in a block named after the function, a {@code defmethod} body in one named
+	 * after the generic), so it crosses intervening {@code do}/{@code loop} blocks and
+	 * closure calls within the exit's dynamic extent, as in CL; {@code (return-from nil
+	 * v)} is plain {@code return}. COMPILE PATH (JVM / wasm-GC): a LEXICAL named exit --
+	 * the jump targets the nearest lexically enclosing {@code block} with a matching name
+	 * in the same compiled function, crossing intervening {@code do}/{@code loop}
+	 * {@code %block}s; a {@code return-from} whose name matches no enclosing block exits
+	 * the current function (the {@code %fn-block} function boundary), so a
+	 * {@code return-from} inside a lambda cannot cross into its lexically enclosing
+	 * function. See {@link am.ik.rontolisp.LambdaLists}.
+	 */
+	public static final String RETURN_FROM = "RETURN-FROM";
+
+	/**
+	 * The {@code block} operator. INTERPRETER: a real named block -- catches the
+	 * {@code return-from} signal carrying its name ({@code (block nil ...)} additionally
+	 * catches plain {@code return}, like the loop macros' implicit block). COMPILE PATH
+	 * (JVM / wasm-GC): a lexical named block target compiled like {@code %block} but
+	 * keyed by name ({@code (block nil ...)} behaves exactly like {@code %block}).
+	 */
+	public static final String BLOCK = "BLOCK";
+
+	/**
+	 * The internal {@code %block} special form establishing the {@code return} boundary
+	 * that the loop macros ({@code do}/{@code dolist}/{@code dotimes}/{@code loop}) wrap
+	 * their expansion in. Not part of the public Lisp API. The named {@code return-from}
+	 * signal passes THROUGH it uncaught on the interpreter -- that transparency is what
+	 * lets a named return cross an intervening loop.
+	 */
+	public static final String BLOCK_INTERNAL = "%BLOCK";
+
+	/**
+	 * The internal {@code (%fn-block name body...)} function-boundary block the compilers
+	 * wrap a {@code return-from}-containing defun/lambda body in ({@code name} is the
+	 * defun's name, {@code nil} for a lambda). It is a named block target (a
+	 * {@code return-from} with the matching name exits the function) and ALSO the
+	 * fallback target for a {@code return-from} whose name matches no lexically enclosing
+	 * block -- the compile-path deviation that keeps a {@code return-from} inside a
+	 * lambda a lambda-local exit (the interpreter's dynamic-extent crossing cannot span a
+	 * separately compiled method). It does NOT catch plain {@code return}. Not part of
+	 * the public Lisp API.
+	 */
+	public static final String FN_BLOCK_INTERNAL = "%FN-BLOCK";
+
+	/**
+	 * The internal {@code (%nlx-tag)} primitive: mints a fresh, unique identity object
+	 * per evaluation -- the dynamic block-instance id that keys a cross-lambda non-local
+	 * exit. The compile-path {@code CrossLambdaExitLowering} binds one per establishing
+	 * block activation (via {@code let}) so recursion targets the right frame. Never
+	 * printed or inspected; only compared by identity. Not part of the public Lisp API.
+	 */
+	public static final String NLX_TAG_INTERNAL = "%NLX-TAG";
+
+	/**
+	 * The internal {@code (%nlx-catch id body...)} form the compile-path
+	 * {@code CrossLambdaExitLowering} wraps a block whose {@code return-from} escapes a
+	 * nested lambda in. It runs {@code body} as an implicit {@code progn} inside an
+	 * exception-handling region: a {@code %nlx-throw} whose id matches {@code id} is
+	 * caught and its carried value becomes the form's value; any other throw (a real
+	 * condition, or a {@code %nlx-throw} for an outer block) propagates. Only emitted
+	 * when the program uses a cross-lambda exit (EH mode); not part of the public Lisp
+	 * API.
+	 */
+	public static final String NLX_CATCH_INTERNAL = "%NLX-CATCH";
+
+	/**
+	 * The internal {@code (%nlx-throw id value)} form a cross-lambda {@code return-from}
+	 * lowers to: it throws a non-local exit carrying the dynamic block-instance
+	 * {@code id} (a lexical the lambda closed over) and {@code value}, unwinding the real
+	 * call stack to the matching {@code %nlx-catch}. Intervening {@code unwind-protect}
+	 * cleanups run on the way out. Not part of the public Lisp API.
+	 */
+	public static final String NLX_THROW_INTERNAL = "%NLX-THROW";
+
+	/**
+	 * The {@code throw} special form: {@code (throw tag result)} transfers control (and
+	 * the value of {@code result}) to the most recent {@code catch} whose tag is
+	 * {@code eq} to {@code tag}, unwinding the stack and running every intervening
+	 * {@code unwind-protect} cleanup. Unlike {@code return-from}/{@code go} the target is
+	 * DYNAMIC -- the tag is an ordinary runtime value, so the catcher need not be
+	 * lexically visible. A {@code throw} with no matching {@code catch} is an error. On
+	 * the compile path it rides the same non-local-exit machinery as a cross-lambda
+	 * {@code return-from} ({@code .kb/do-return-block.md}), so a program using it
+	 * compiles in EH mode on the wasm-GC backends.
+	 * @see #CATCH
+	 */
+	public static final String THROW = "THROW";
+
+	// Type predicates
+
+	/** The {@code null} built-in function. */
+	public static final String NULL = "NULL";
+
+	/** The {@code atom} built-in function. */
+	public static final String ATOM = "ATOM";
+
+	/** The {@code numberp} built-in function. */
+	public static final String NUMBERP = "NUMBERP";
+
+	/** The {@code integerp} built-in function. */
+	public static final String INTEGERP = "INTEGERP";
+
+	/** The {@code floatp} built-in function. */
+	public static final String FLOATP = "FLOATP";
+
+	/** The {@code rationalp} built-in function. */
+	public static final String RATIONALP = "RATIONALP";
+
+	/** The {@code realp} built-in function (true for integers, ratios and floats). */
+	public static final String REALP = "REALP";
+
+	/** The {@code complexp} built-in function (true for complex numbers). */
+	public static final String COMPLEXP = "COMPLEXP";
+
+	/** The {@code symbolp} built-in function. */
+	public static final String SYMBOLP = "SYMBOLP";
+
+	/** The {@code stringp} built-in function. */
+	public static final String STRINGP = "STRINGP";
+
+	/** The {@code listp} built-in function. */
+	public static final String LISTP = "LISTP";
+
+	/** The {@code consp} built-in function. */
+	public static final String CONSP = "CONSP";
+
+	/** The {@code keywordp} built-in function. */
+	public static final String KEYWORDP = "KEYWORDP";
+
+	// Type conversion
+
+	/** The {@code float} built-in function. */
+	public static final String FLOAT = "FLOAT";
+
+	/** The {@code truncate} built-in function. */
+	public static final String TRUNCATE = "TRUNCATE";
+
+	/** The {@code floor} built-in function. */
+	public static final String FLOOR = "FLOOR";
+
+	/** The {@code ceiling} built-in function. */
+	public static final String CEILING = "CEILING";
+
+	/** The {@code round} built-in function. */
+	public static final String ROUND = "ROUND";
+
+	/** The {@code ffloor} macro: {@link #FLOOR} with a {@link #FLOAT} quotient. */
+	public static final String FFLOOR = "FFLOOR";
+
+	/** The {@code fceiling} macro: {@link #CEILING} with a {@link #FLOAT} quotient. */
+	public static final String FCEILING = "FCEILING";
+
+	/** The {@code ftruncate} macro: {@link #TRUNCATE} with a {@link #FLOAT} quotient. */
+	public static final String FTRUNCATE = "FTRUNCATE";
+
+	/** The {@code fround} macro: {@link #ROUND} with a {@link #FLOAT} quotient. */
+	public static final String FROUND = "FROUND";
+
+	/** The {@code numerator} built-in function. */
+	public static final String NUMERATOR = "NUMERATOR";
+
+	/** The {@code denominator} built-in function. */
+	public static final String DENOMINATOR = "DENOMINATOR";
+
+	/**
+	 * The {@code rational} built-in function: the exact rational a real number IS --
+	 * identity for integers and ratios, the exact binary value for a float
+	 * ({@code (rational 0.1)} is {@code 3602879701896397/36028797018963968}).
+	 */
+	public static final String RATIONAL = "RATIONAL";
+
+	/**
+	 * The {@code rationalize} prelude function: the simplest rational that approximates a
+	 * float within half a ulp on either side ({@code (rationalize 0.1)} is {@code 1/10});
+	 * integers and ratios are already exact, so they are returned unchanged.
+	 */
+	public static final String RATIONALIZE = "RATIONALIZE";
+
+	// Convenience macros
+
+	/** The {@code 1+} macro. */
+	public static final String ONE_PLUS = "1+";
+
+	/** The {@code 1-} macro. */
+	public static final String ONE_MINUS = "1-";
+
+	/** The {@code zerop} macro. */
+	public static final String ZEROP = "ZEROP";
+
+	/** The {@code plusp} macro. */
+	public static final String PLUSP = "PLUSP";
+
+	/** The {@code minusp} macro. */
+	public static final String MINUSP = "MINUSP";
+
+	/** The {@code evenp} macro. */
+	public static final String EVENP = "EVENP";
+
+	/** The {@code oddp} macro. */
+	public static final String ODDP = "ODDP";
+
+	/** The {@code unless} macro. */
+	public static final String UNLESS = "UNLESS";
+
+	/** The {@code first} macro. */
+	public static final String FIRST = "FIRST";
+
+	/** The {@code rest} macro. */
+	public static final String REST = "REST";
+
+	/** The {@code second} macro. */
+	public static final String SECOND = "SECOND";
+
+	/** The {@code third} macro. */
+	public static final String THIRD = "THIRD";
+
+	/** The {@code fourth} macro. */
+	public static final String FOURTH = "FOURTH";
+
+	/** The {@code fifth} macro. */
+	public static final String FIFTH = "FIFTH";
+
+	/** The {@code sixth} macro. */
+	public static final String SIXTH = "SIXTH";
+
+	/** The {@code seventh} macro. */
+	public static final String SEVENTH = "SEVENTH";
+
+	/** The {@code eighth} macro. */
+	public static final String EIGHTH = "EIGHTH";
+
+	/** The {@code ninth} macro. */
+	public static final String NINTH = "NINTH";
+
+	/** The {@code tenth} macro. */
+	public static final String TENTH = "TENTH";
+
+	/** The {@code nth} macro. */
+	public static final String NTH = "NTH";
+
+	// I/O
+
+	/** The {@code print} built-in function. */
+	public static final String PRINT = "PRINT";
+
+	/** The {@code prin1} built-in function. */
+	public static final String PRIN1 = "PRIN1";
+
+	/** The {@code princ} built-in function. */
+	public static final String PRINC = "PRINC";
+
+	/** The {@code terpri} built-in function. */
+	public static final String TERPRI = "TERPRI";
+
+	/** The {@code fresh-line} built-in function (newline only if not at line start). */
+	public static final String FRESH_LINE = "FRESH-LINE";
+
+	/** The {@code princ-to-string} built-in function. */
+	public static final String PRINC_TO_STRING = "PRINC-TO-STRING";
+
+	/** The {@code prin1-to-string} built-in function. */
+	public static final String PRIN1_TO_STRING = "PRIN1-TO-STRING";
+
+	/** The {@code concatenate} built-in function (only {@code 'string} is supported). */
+	public static final String CONCATENATE = "CONCATENATE";
+
+	/** The {@code %string-concat} built-in function. */
+	public static final String STRING_CONCAT = "%STRING-CONCAT";
+
+	/**
+	 * The {@code %str-fresh} internal form: "this value, as a FRESH mutable string". The
+	 * compile backends compile the argument and finish with the mutable-result wrap every
+	 * flipped string producer emits (a non-string passes through). Two callers: the
+	 * pure-builtin fold spells the result of a fresh-string producer over literal
+	 * arguments as {@code (%str-fresh "...")}, so each evaluation answers a fresh mutable
+	 * string while the constant stays a constant ({@code .kb/pure-builtin-fold.md}); and
+	 * the first-class {@code #'concatenate} wrapper wraps its {@code %string-concat}
+	 * reduce in it, so the funcall spelling answers the identity call position answers
+	 * ({@code .kb/string-write-runtime.md}). Never read from source. The interpreter,
+	 * whose strings are mutable already, binds it as a copy.
+	 */
+	public static final String STR_FRESH = "%STR-FRESH";
+
+	/**
+	 * The {@code %normalize-string} internal: normalize a string to its
+	 * transport-readable (framed) form -- a mutable character vector becomes a fresh
+	 * proper string, anything else passes through unchanged. The explicit rendering the
+	 * transport boundary needs now that {@code string} of a string answers the argument
+	 * itself; used by the HTTP stack, never read from source.
+	 */
+	public static final String NORMALIZE_STRING = "%NORMALIZE-STRING";
+
+	/**
+	 * The {@code %substring} internal: {@code (%substring string start end)}, the
+	 * characters {@code [start, end)} of a string as an IMMUTABLE string, where
+	 * {@code subseq} answers a fresh mutable one -- on the compile backends a character
+	 * vector every later comparison, hash and concatenation of it walks
+	 * ({@code .kb/string-write-runtime.md}). For library Lisp whose strings nothing
+	 * writes; the caller keeps {@code 0 <= start <= end <= (length string)}. Never read
+	 * from source.
+	 */
+	public static final String SUBSTRING_INTERNAL = "%SUBSTRING";
+
+	/**
+	 * The {@code %string-upcase-piece} internal: {@code string-upcase} of one whole
+	 * string as an IMMUTABLE string, the way {@link #SUBSTRING_INTERNAL} is
+	 * {@code subseq}'s: the public name answers a fresh mutable one. For library Lisp
+	 * whose strings nothing writes. Never read from source.
+	 */
+	public static final String STRING_UPCASE_PIECE = "%STRING-UPCASE-PIECE";
+
+	/** The {@code string-downcase} twin of {@link #STRING_UPCASE_PIECE}. */
+	public static final String STRING_DOWNCASE_PIECE = "%STRING-DOWNCASE-PIECE";
+
+	/**
+	 * The {@code %string-stream-piece} internal: what
+	 * {@link #STRING_STREAM_CONTENTS_INTERNAL} answers (and clears), as an IMMUTABLE
+	 * string -- the capture without the mutable-string wrap. For library Lisp whose
+	 * strings nothing writes. Never read from source.
+	 */
+	public static final String STRING_STREAM_PIECE = "%STRING-STREAM-PIECE";
+
+	/**
+	 * The {@code %string-order} internal primitive: {@code (%string-order a b)} over two
+	 * strings orders them by code point, the shorter first when one begins the other, and
+	 * answers where: 0 when they are equal, {@code -(k + 1)} when A comes first and
+	 * {@code k + 1} when B does, {@code k} the index of the first character that differs
+	 * (the shorter one's length when one begins the other). Nil -- nothing decided --
+	 * when the backend does not compare the operands itself (a mutable character vector
+	 * on either side), and the caller's loop runs. Never read from source.
+	 */
+	public static final String STRING_ORDER = "%STRING-ORDER";
+
+	/**
+	 * The {@code %string-code} internal primitive: {@code (%string-code string index)}
+	 * answers the code of the character at the integer INDEX of a string, and -1 when
+	 * INDEX is no index of it -- the test and the read
+	 * {@code (char-code (char string index))} makes behind a bounds test of the caller's,
+	 * in one step. For library code whose strings nothing writes: on WASM an immutable
+	 * string's read is one call that checks no operand type, where a mutable character
+	 * vector is rendered first ({@code .kb/string-index-cost.md}). Never read from
+	 * source.
+	 */
+	public static final String STRING_CODE = "%STRING-CODE";
+
+	/**
+	 * The {@code %string-split} internal primitive: {@code (%string-split string
+	 * separator limit)} answers the pieces of STRING between the leftmost LIMIT
+	 * occurrences of SEPARATOR that do not overlap -- all of them when LIMIT is negative
+	 * -- in a fresh adjustable vector with a fill pointer. Nil -- nothing decided --
+	 * where the backend has no arm (the interpreter compiles it to constant nil; on the
+	 * JVM and WASM an empty separator or an operand that is no string), and the caller's
+	 * loop runs. See {@code .kb/bulk-primitives.md}. Never read from source.
+	 */
+	public static final String STRING_SPLIT = "%STRING-SPLIT";
+
+	/**
+	 * The {@code %string-join} internal primitive: {@code (%string-join strings
+	 * separator)} answers the strings of a general vector as one immutable string,
+	 * SEPARATOR between them. Nil -- nothing decided -- where the backend has no arm (the
+	 * interpreter compiles it to constant nil; on the JVM and WASM an element that is no
+	 * immutable string), and the caller's loop runs. See {@code .kb/bulk-primitives.md}.
+	 * Never read from source.
+	 */
+	public static final String STRING_JOIN = "%STRING-JOIN";
+
+	/**
+	 * The {@code %string-count} internal primitive: {@code (%string-count needle string
+	 * start end)} answers how many occurrences of NEEDLE that do not overlap, leftmost
+	 * first, lie in STRING between the character indices START and END, which the caller
+	 * checked. Nil -- nothing decided -- where the backend has no arm (the interpreter
+	 * compiles it to constant nil; on the JVM and WASM an empty needle or an operand that
+	 * is no immutable string), and the caller's loop runs. See
+	 * {@code .kb/bulk-primitives.md}. Never read from source.
+	 */
+	public static final String STRING_COUNT = "%STRING-COUNT";
+
+	/**
+	 * The {@code %sort-by-keys} internal primitive: {@code (%sort-by-keys keys elements
+	 * out descending)} stores into the general vector OUT the ELEMENTS -- the KEYS
+	 * themselves when ELEMENTS is nil -- in the order of their keys, elements of equal
+	 * keys in the order they stood in, and answers OUT. Nil -- nothing decided, OUT as it
+	 * was -- where the backend has no arm (the interpreter compiles it to constant nil;
+	 * on the JVM and WASM keys that are not all integers within 64 bits or all immutable
+	 * strings), and the caller's sort runs. See {@code .kb/bulk-primitives.md}. Never
+	 * read from source.
+	 */
+	public static final String SORT_BY_KEYS = "%SORT-BY-KEYS";
+
+	/**
+	 * The {@code %seq-string-result} internal TYPE DESIGNATOR: "a string, built by a
+	 * sequence operator's own result conversion rather than by a program-written
+	 * {@code coerce} / {@code map}". It reads as {@code string} everywhere the two
+	 * expansions look at a result type, and differs in exactly one place -- the
+	 * mutable-result wrap the compile backends put on a {@code (map 'string ...)} site is
+	 * NOT emitted for it, so {@code reverse} / {@code remove} / {@code substitute} /
+	 * {@code sort} over a string keep the immutable result they have always had while the
+	 * program-written spellings answer a mutable one. Flipping THOSE would cost the JVM
+	 * array runtime in every program that only reverses a LIST, which is measured in
+	 * {@code .kb/string-write-runtime.md}.
+	 */
+	public static final String SEQ_STRING_RESULT = "%SEQ-STRING-RESULT";
+
+	/**
+	 * The {@code %fixed-decimal} internal helper: one number as a fixed-point decimal
+	 * string, {@code (%fixed-decimal value places int-digits plus-p)}. It is what
+	 * {@code format}'s {@code ~F} and {@code ~$} lower to on both format paths, so the
+	 * directive costs one call instead of an inlined scale/round/slice expansion. The
+	 * algorithm it must render is {@code compiler/FixedDecimal}.
+	 */
+	public static final String FIXED_DECIMAL = "%FIXED-DECIMAL";
+
+	/**
+	 * The {@code %seq-string} internal helper: one character sequence (a string, a cons
+	 * list, a vector, or nil -- the empty list) as a string. It is what makes the
+	 * {@code concatenate 'string} family take any sequence argument without planting a
+	 * {@code coerce} loop at every call site (see {@code compiler/ConcatenateForms}).
+	 */
+	public static final String SEQ_STRING = "%SEQ-STRING";
+
+	/**
+	 * The {@code %seq-int-vector} internal helper: one sequence of integers as a PACKED
+	 * unsigned-integer vector of a given element width ({@code (%seq-int-vector seq 8)}).
+	 * It is what lets the {@code concatenate} vector family honour an
+	 * {@code (unsigned-byte 8|16|32)} element type without planting an allocate-and-fill
+	 * loop at every call site (see {@code compiler/ConcatenateForms} and
+	 * {@code .kb/packed-integer-vectors.md}).
+	 */
+	public static final String SEQ_INT_VECTOR = "%SEQ-INT-VECTOR";
+
+	/**
+	 * The {@code %seq-float-vector} internal helper: one sequence of reals as a PACKED
+	 * FLOAT array of a given element type, named by its {@code ArrayElementTypes} code
+	 * ({@code (%seq-float-vector seq 5)} for {@code single-float}). The float twin of
+	 * {@link #SEQ_INT_VECTOR}, and it exists for the same two reasons: the
+	 * {@code concatenate} vector family and {@code coerce} must honour a
+	 * {@code single-float} / {@code double-float} / {@code bfloat16} element type, and
+	 * neither may plant an allocate-and-fill loop at every call site (see
+	 * {@code compiler/ConcatenateForms} and {@code .kb/vec.md}).
+	 */
+	public static final String SEQ_FLOAT_VECTOR = "%SEQ-FLOAT-VECTOR";
+
+	/** The {@code read-line} built-in function. */
+	public static final String READ_LINE = "READ-LINE";
+
+	/**
+	 * The {@code read-char} built-in function (read a single character:
+	 * {@code (read-char [stream [eof-error-p [eof-value]]])}). Works on the same stream
+	 * handles as {@code read-line} (standard input, file streams and string input
+	 * streams).
+	 */
+	public static final String READ_CHAR = "READ-CHAR";
+
+	/**
+	 * The {@code read-char-no-hang} built-in function
+	 * ({@code (read-char-no-hang [stream [eof-error-p [eof-value]]])}). On a stream
+	 * HANDLE it IS {@code read-char}: no source rontolisp can open answers "a character
+	 * would block" separately from "read one". On a Gray instance it dispatches to
+	 * {@code rontolisp:stream-read-char-no-hang}, which a class that DOES have a
+	 * non-blocking source overrides.
+	 */
+	public static final String READ_CHAR_NO_HANG = "READ-CHAR-NO-HANG";
+
+	/**
+	 * The {@code unread-char} built-in function ({@code (unread-char character
+	 * [stream])}). On a Gray instance it dispatches to
+	 * {@code rontolisp:stream-unread-char}, whose default parks the character in the
+	 * protocol's one-slot pushback; on a stream HANDLE the character is parked in the
+	 * handle-side pushback the character reads drain -- Java in {@code Environment} for
+	 * the interpreter, {@code unread-char.lisp} on the compile paths
+	 * ({@code .kb/gray-streams.md}).
+	 */
+	public static final String UNREAD_CHAR = "UNREAD-CHAR";
+
+	/**
+	 * The internal {@code rontolisp::%unread-char-push} defun of
+	 * {@code unread-char.lisp}: the handle-side pushback the compile paths' rewrite
+	 * ({@code eval/UnreadCharLibrary}) sends every {@code unread-char} call site to.
+	 */
+	public static final String UNREAD_CHAR_PUSH_INTERNAL = "%UNREAD-CHAR-PUSH";
+
+	/**
+	 * The internal {@code rontolisp::%unread-read-char} defun of
+	 * {@code unread-char.lisp}: {@code read-char} / {@code read-char-no-hang} draining
+	 * the handle-side pushback. A rewritten call site names it, and so does the function
+	 * value of either operator where it is spliced ({@code BuiltinFunctionWrappers}).
+	 */
+	public static final String UNREAD_READ_CHAR_INTERNAL = "%UNREAD-READ-CHAR";
+
+	/**
+	 * The internal {@code rontolisp::%unread-peek-char} defun of
+	 * {@code unread-char.lisp}: {@code peek-char} over the handle-side pushback.
+	 */
+	public static final String UNREAD_PEEK_CHAR_INTERNAL = "%UNREAD-PEEK-CHAR";
+
+	/**
+	 * The internal {@code rontolisp::%unread-read-line} defun of
+	 * {@code unread-char.lisp}: {@code read-line} draining the handle-side pushback.
+	 */
+	public static final String UNREAD_READ_LINE_INTERNAL = "%UNREAD-READ-LINE";
+
+	/**
+	 * The internal {@code rontolisp::%unread-listen} defun of {@code unread-char.lisp}:
+	 * {@code listen} counting a parked character as one that remains.
+	 */
+	public static final String UNREAD_LISTEN_INTERNAL = "%UNREAD-LISTEN";
+
+	/**
+	 * The internal {@code rontolisp::%unread-file-position} defun of
+	 * {@code unread-char.lisp}: the {@code file-position} query counting a parked
+	 * character as not consumed.
+	 */
+	public static final String UNREAD_FILE_POSITION_INTERNAL = "%UNREAD-FILE-POSITION";
+
+	/**
+	 * The internal {@code rontolisp::%unread-file-position-set} defun of
+	 * {@code unread-char.lisp}: the {@code file-position} set dropping a parked
+	 * character.
+	 */
+	public static final String UNREAD_FILE_POSITION_SET_INTERNAL = "%UNREAD-FILE-POSITION-SET";
+
+	/**
+	 * The {@code peek-char} built-in function
+	 * ({@code (peek-char [peek-type [stream [eof-error-p [eof-value]]]])}): the next
+	 * character of a stream WITHOUT consuming it. A literal {@code peek-type} of
+	 * {@code t} skips whitespace first, a literal character skips up to that character;
+	 * both are lowered to a {@code read-char} loop over the {@code nil} form.
+	 */
+	public static final String PEEK_CHAR = "PEEK-CHAR";
+
+	/**
+	 * The internal one-argument {@code %peek-char} primitive: the next character of a
+	 * stream, left in place. The {@code peek-type} handling of {@link #PEEK_CHAR} lowers
+	 * onto it.
+	 */
+	public static final String PEEK_CHAR_INTERNAL = "%PEEK-CHAR";
+
+	// String operations
+
+	/** The {@code string} built-in function (string-designator coercion). */
+	public static final String STRING = "STRING";
+
+	/** The {@code string-upcase} built-in function. */
+	public static final String STRING_UPCASE = "STRING-UPCASE";
+
+	/** The {@code string-downcase} built-in function. */
+	public static final String STRING_DOWNCASE = "STRING-DOWNCASE";
+
+	/** The {@code string-capitalize} built-in function. */
+	public static final String STRING_CAPITALIZE = "STRING-CAPITALIZE";
+
+	/**
+	 * The {@code nstring-upcase} built-in: the DESTRUCTIVE spelling of
+	 * {@link #STRING_UPCASE} -- it writes the folded characters back into the argument
+	 * and answers the string the writes left behind. Prelude Lisp over
+	 * {@link #NSTRING_REPLACE}, so the fold itself is the same one {@code string-upcase}
+	 * performs and the two cannot drift. chunga's {@code make-keyword} passes it as
+	 * {@code #'nstring-upcase}.
+	 */
+	public static final String NSTRING_UPCASE = "NSTRING-UPCASE";
+
+	/** The {@code nstring-downcase} built-in: {@link #NSTRING_UPCASE} downwards. */
+	public static final String NSTRING_DOWNCASE = "NSTRING-DOWNCASE";
+
+	/**
+	 * The {@code nstring-capitalize} built-in: {@link #NSTRING_UPCASE} over
+	 * {@link #STRING_CAPITALIZE}'s word rule.
+	 */
+	public static final String NSTRING_CAPITALIZE = "NSTRING-CAPITALIZE";
+
+	/**
+	 * The {@code %nstring-replace} internal helper: writes a folded string back into the
+	 * original character by character with {@code (setf (aref s i) c)} and answers what
+	 * that write chain left behind -- the SAME object for a mutable character vector, a
+	 * rebuilt one for an immutable string on the compile paths
+	 * ({@code .kb/string-write-runtime.md}). The one walk behind all three
+	 * {@code nstring-*} names.
+	 */
+	public static final String NSTRING_REPLACE = "%NSTRING-REPLACE";
+
+	/** The {@code subseq} built-in function (strings only). */
+	public static final String SUBSEQ = "SUBSEQ";
+
+	/**
+	 * The internal {@code %subseq-core} operator (compile-path only): the JVM/WASM subseq
+	 * compilers, without the arrayp dispatch that
+	 * {@link am.ik.rontolisp.macro.LispMacroExpander#expandSubseqCompat} injects to route
+	 * a vector argument through {@code make-array} + {@code aref}. Never appears in user
+	 * source (the expansion is only re-entered internally through the same subseq
+	 * compilers).
+	 */
+	public static final String SUBSEQ_CORE = "%SUBSEQ-CORE";
+
+	/**
+	 * The internal {@code %subseq-end} operator (compile-path only):
+	 * {@code (%subseq-end start end length)} answers {@code end} -- {@code length} when
+	 * {@code end} is nil -- when {@code 0 <= start <= end <= length}, and otherwise
+	 * signals the interpreter's {@code "SUBSEQ: invalid bounds S, E for vector of length
+	 * N"}. The vector arm of the shared subseq dispatch
+	 * ({@link am.ik.rontolisp.macro.LispMacroExpander#subseqRuntimeWrapper()}) calls it
+	 * before allocating its copy; the string and list lanes check inside
+	 * {@link #SUBSEQ_CORE}.
+	 */
+	public static final String SUBSEQ_END = "%SUBSEQ-END";
+
+	/**
+	 * The {@code %subseq-runtime} internal helper: the whole
+	 * {@link am.ik.rontolisp.macro.LispMacroExpander#expandSubseqCompat} dispatch --
+	 * string, general array (a {@code %array-alike} plus an element copy loop), cons
+	 * chain -- as ONE defun, {@code (%subseq-runtime seq start end)} with a nil
+	 * {@code end} meaning "to the end". Injected once per program by each compiler
+	 * backend, beside the builtin wrappers -- which is where most of a program's
+	 * {@code subseq} sites live -- so that a site is a call rather than an inlined copy
+	 * loop; see {@code .kb/subseq-runtime.md}. The interpreter never sees it (its
+	 * {@code subseq} dispatches over {@code Environment.seqAsList} directly).
+	 */
+	public static final String SUBSEQ_RUNTIME = "%SUBSEQ-RUNTIME";
+
+	/**
+	 * The {@code %seq-to-list} internal helper: the literal {@code (coerce x 'list)}
+	 * conversion body as ONE defun. Injected once per program by each compiler backend as
+	 * a trio with {@link #SEQ_TO_STRING} and {@link #SEQ_TO_VECTOR}, beside the builtin
+	 * wrappers, so every generic sequence lowering's representation dispatch
+	 * ({@code seqResultDispatchForm} / {@code seqAsListForm} and every literal
+	 * {@code coerce} site) is a call rather than an inlined {@code map} loop; see
+	 * {@code .kb/seq-conversion-runtime.md}. The interpreter never sees it (its
+	 * {@code coerce} expands the inline form).
+	 */
+	public static final String SEQ_TO_LIST = "%SEQ-TO-LIST";
+
+	/** The {@code %seq-to-string} internal helper; see {@link #SEQ_TO_LIST}. */
+	public static final String SEQ_TO_STRING = "%SEQ-TO-STRING";
+
+	/** The {@code %seq-to-vector} internal helper; see {@link #SEQ_TO_LIST}. */
+	public static final String SEQ_TO_VECTOR = "%SEQ-TO-VECTOR";
+
+	/**
+	 * The {@code %replace-runtime} internal helper: the whole
+	 * {@link am.ik.rontolisp.macro.LispMacroExpander#expandReplace} dispatch -- the
+	 * destructive element-copy loop, the list source read and the immutable-string
+	 * rebuild -- as ONE defun,
+	 * {@code (%replace-runtime seq1 seq2 start1 end1 start2 end2)} with a nil bound
+	 * meaning its default. Injected once per program by each compiler backend, beside the
+	 * builtin wrappers, so that a site is a call rather than an inlined copy of the whole
+	 * dispatch; see {@code .kb/sequence-op-runtimes.md}. The interpreter never sees it
+	 * (its {@code replace} is a native built-in).
+	 */
+	public static final String REPLACE_RUNTIME = "%REPLACE-RUNTIME";
+
+	/**
+	 * The {@code %replace-runtime-array} internal helper: the {@code %arrayp} ARM of
+	 * {@link #REPLACE_RUNTIME} on its own, over the same six parameters. Travels with the
+	 * wide helper, whose array arm is a call to it, so a program carries the copy loop
+	 * once however many of the two it reaches; a site whose destination is PROVABLY an
+	 * array calls it directly and the wide dispatch -- the list rewrite and the
+	 * immutable-string rebuild -- is then reachable only from a caller that needs it. See
+	 * {@code .kb/sequence-op-runtimes.md}.
+	 */
+	public static final String REPLACE_ARRAY_RUNTIME = "%REPLACE-RUNTIME-ARRAY";
+
+	/**
+	 * The {@code %replace-bulk} internal predicate, emitted only inside
+	 * {@link #REPLACE_ARRAY_RUNTIME}'s body and the general-array arm of the
+	 * {@code subseq} dispatch ({@link #SUBSEQ_RUNTIME}):
+	 * {@code (%replace-bulk dst src s1 s2 n)} answers true after copying the {@code n}
+	 * elements in one engine-level bulk copy when the backend can (WASM: both sequences
+	 * are packed integer vectors of the SAME width and the bounds are in range --
+	 * {@code array.copy}), and nil -- copying nothing -- otherwise, in which case the
+	 * caller's element loop runs. The JVM moves two distinct general vectors with storage
+	 * of their own ({@code _bulkCopy}). See {@code .kb/sequence-op-runtimes.md}.
+	 */
+	public static final String REPLACE_BULK = "%REPLACE-BULK";
+
+	/**
+	 * The {@code %string-search} internal primitive, called only by the prelude's
+	 * {@link #SEARCH}: {@code (%string-search seq1 seq2 start1 end1 start2 end2)} over
+	 * checked bounds answers the leftmost match when the backend can scan two strings
+	 * without an element loop (WASM: no allocation at all), -1 when there is none, and
+	 * nil -- nothing decided -- for anything else, in which case {@code search}'s loop
+	 * runs. The interpreter compiles it to constant nil; the JVM scans two immutable
+	 * strings ({@code _strSearch}). See {@code .kb/string-search-runtime.md}.
+	 */
+	public static final String STRING_SEARCH = "%STRING-SEARCH";
+
+	/** The {@code %fill-runtime} internal helper; see {@link #REPLACE_RUNTIME}. */
+	public static final String FILL_RUNTIME = "%FILL-RUNTIME";
+
+	/**
+	 * The {@code %fill-runtime-array} internal helper: the {@code %arrayp} arm of
+	 * {@link #FILL_RUNTIME} on its own; see {@link #REPLACE_ARRAY_RUNTIME}.
+	 */
+	public static final String FILL_ARRAY_RUNTIME = "%FILL-RUNTIME-ARRAY";
+
+	/**
+	 * The {@code %map-into-runtime-<em>n</em>} internal helpers; see
+	 * {@link #REPLACE_RUNTIME}. One per SOURCE-SEQUENCE COUNT the program uses, because
+	 * the loop body is a {@code funcall} of exactly that many arguments -- passing the
+	 * sources as a list instead would need an {@code apply} and with it the spread
+	 * dispatcher. Build a name with {@link #mapIntoRuntime(int)}.
+	 */
+	public static final String MAP_INTO_RUNTIME_PREFIX = "%MAP-INTO-RUNTIME-";
+
+	/**
+	 * The {@code %map-into-runtime-<em>n</em>} helper name for {@code n} source
+	 * sequences.
+	 * @param sourceCount the number of source sequences the site passes
+	 * @return the helper's symbol name
+	 */
+	public static String mapIntoRuntime(int sourceCount) {
+		return MAP_INTO_RUNTIME_PREFIX + sourceCount;
+	}
+
+	/**
+	 * The {@code %sort-runtime} internal helper: the shared merge sort every {@code sort}
+	 * site on a compile path calls, {@code (%sort-runtime list predicate)} over a list
+	 * whose cells it relinks. Injected once per program by each compiler backend, beside
+	 * the builtin wrappers -- which is where a program's {@code #'sort} site lives -- so
+	 * no site carries a sort of its own; see {@code .kb/sort.md}. The interpreter never
+	 * sees it (its {@code sort} is native), but runs the same algorithm, so the four
+	 * backends answer one permutation.
+	 */
+	public static final String SORT_RUNTIME = "%SORT-RUNTIME";
+
+	/**
+	 * The {@code %copy-list-runtime} internal helper: the shared {@code copy-list} every
+	 * site on a compile path calls, {@code (%copy-list-runtime list)}, which copies the
+	 * spine and keeps a dotted list's final atom as the copy's tail. Injected once per
+	 * program that names {@code copy-list}, beside the builtin wrappers, like
+	 * {@link #SORT_RUNTIME}. The interpreter never sees it (its {@code copy-list} is
+	 * native and keeps the tail the same way).
+	 */
+	public static final String COPY_LIST_RUNTIME = "%COPY-LIST-RUNTIME";
+
+	/**
+	 * The {@code %no-applicable-method} internal helper: the generic-function
+	 * dispatchers' shared last-resort signal, {@code (error (%string-concat prefix
+	 * (princ-to-string (%class-designator arg))))} as ONE defun. Injected once per
+	 * program whose dispatchers can reach it ({@code expandTopLevelDefinitions}); without
+	 * it every dispatcher -- including each synthesized slot reader/writer -- re-inlines
+	 * the whole error tail (condition construction plus the class-naming render). The
+	 * interpreter defines it before its first dispatcher
+	 * ({@code LispEvaluator.defineDispatcher}), so the dispatcher AST is one shape
+	 * everywhere.
+	 */
+	public static final String NO_APPLICABLE_METHOD_RUNTIME = "%NO-APPLICABLE-METHOD";
+
+	/**
+	 * The {@code make-string} built-in function ({@code (make-string n &key
+	 * initial-element element-type)}). Lowered to a fill loop over {@code concatenate};
+	 * {@code element-type} is parsed and ignored (single string representation).
+	 */
+	public static final String MAKE_STRING = "MAKE-STRING";
+
+	/**
+	 * The {@code replace} built-in function ({@code (replace seq1 seq2 &key start1 end1
+	 * start2 end2)}). String-aware; lowered to a {@code concatenate} of the untouched
+	 * head/tail of {@code seq1} around the copied region of {@code seq2}. Since strings
+	 * are immutable values, it returns a fresh string rather than mutating in place.
+	 */
+	public static final String REPLACE = "REPLACE";
+
+	/**
+	 * The {@code fill} built-in function ({@code (fill sequence item &key start end)}).
+	 * Destructive over an array (a packed vector included) and over a list; an immutable
+	 * string is rebuilt through {@code concatenate} like {@link #REPLACE}, so it answers
+	 * a fresh string rather than mutating in place.
+	 */
+	public static final String FILL = "FILL";
+
+	/** The {@code string=} built-in function (case-sensitive string equality). */
+	public static final String STRING_EQ = "STRING=";
+
+	/**
+	 * The {@code string<} built-in function (case-sensitive lexicographic less-than;
+	 * returns the mismatch index or nil). Implemented as a rontolisp-source {@code defun}
+	 * shared by every backend (see {@code LispPreludeLibrary}).
+	 */
+	public static final String STRING_LT = "STRING<";
+
+	/**
+	 * The {@code string>} built-in function (case-sensitive lexicographic greater-than;
+	 * returns the mismatch index or nil).
+	 */
+	public static final String STRING_GT = "STRING>";
+
+	/**
+	 * The {@code string<=} built-in function (case-sensitive lexicographic not-greater;
+	 * returns the mismatch index or nil).
+	 */
+	public static final String STRING_LE = "STRING<=";
+
+	/**
+	 * The {@code string>=} built-in function (case-sensitive lexicographic not-less;
+	 * returns the mismatch index or nil).
+	 */
+	public static final String STRING_GE = "STRING>=";
+
+	/**
+	 * The {@code string/=} built-in function (case-sensitive inequality; returns the
+	 * mismatch index or nil).
+	 */
+	public static final String STRING_NE = "STRING/=";
+
+	/** The {@code string-equal} built-in function (case-insensitive string equality). */
+	public static final String STRING_EQUAL = "STRING-EQUAL";
+
+	/**
+	 * The {@code string-lessp} built-in function (case-insensitive lexicographic
+	 * less-than; returns the mismatch index or nil).
+	 */
+	public static final String STRING_LESSP = "STRING-LESSP";
+
+	/**
+	 * The {@code string-greaterp} built-in function (case-insensitive lexicographic
+	 * greater-than; returns the mismatch index or nil).
+	 */
+	public static final String STRING_GREATERP = "STRING-GREATERP";
+
+	/**
+	 * The {@code string-not-greaterp} built-in function (case-insensitive lexicographic
+	 * not-greater; returns the mismatch index or nil).
+	 */
+	public static final String STRING_NOT_GREATERP = "STRING-NOT-GREATERP";
+
+	/**
+	 * The {@code string-not-lessp} built-in function (case-insensitive lexicographic
+	 * not-less; returns the mismatch index or nil).
+	 */
+	public static final String STRING_NOT_LESSP = "STRING-NOT-LESSP";
+
+	/**
+	 * The {@code string-not-equal} built-in function (case-insensitive inequality;
+	 * returns the mismatch index or nil).
+	 */
+	public static final String STRING_NOT_EQUAL = "STRING-NOT-EQUAL";
+
+	/**
+	 * The {@code %string-compare} internal helper backing the whole {@code string<} /
+	 * {@code string-lessp} comparison family: one lexicographic walk returning
+	 * {@code (order . mismatch-index)}.
+	 */
+	public static final String STRING_COMPARE = "%STRING-COMPARE";
+
+	/**
+	 * The {@code %char-fold-chain} internal helper backing the case-INSENSITIVE character
+	 * ordering family ({@code char-lessp} and friends): one adjacent-pair walk over
+	 * downcased code points, accepting a sign in {@code [lo, hi]}.
+	 */
+	public static final String CHAR_FOLD_CHAIN = "%CHAR-FOLD-CHAIN";
+
+	/**
+	 * The {@code %set-xor-match} internal helper backing {@link #SET_EXCLUSIVE_OR}: one
+	 * {@code :test} / {@code :test-not} / {@code :key} decision, so both of that
+	 * function's scans make it with the same argument order.
+	 */
+	public static final String SET_XOR_MATCH = "%SET-XOR-MATCH";
+
+	/**
+	 * The {@code %ll-key-cell} internal helper a desugared {@code &key} prologue calls
+	 * once per keyword parameter: the plist cell whose indicator is the keyword (or its
+	 * upcased twin), or nil. Defined by {@code LambdaLists.runtimeDefun}, one Lisp body
+	 * for every backend.
+	 */
+	public static final String LL_KEY_CELL = "%LL-KEY-CELL";
+
+	/**
+	 * The {@code %ll-check-keys} internal helper a desugared {@code &key} prologue calls
+	 * once per function: the unknown-keyword and odd-tail {@code program-error} check
+	 * over the plist against the declared keyword list. Defined beside
+	 * {@link #LL_KEY_CELL}.
+	 */
+	public static final String LL_CHECK_KEYS = "%LL-CHECK-KEYS";
+
+	/** The {@code string-trim} built-in function. */
+	public static final String STRING_TRIM = "STRING-TRIM";
+
+	/** The {@code string-left-trim} built-in function. */
+	public static final String STRING_LEFT_TRIM = "STRING-LEFT-TRIM";
+
+	/** The {@code string-right-trim} built-in function. */
+	public static final String STRING_RIGHT_TRIM = "STRING-RIGHT-TRIM";
+
+	/**
+	 * The {@code read} function. Not a built-in on any backend: it is prelude rontolisp
+	 * over {@code read-char} / {@code unread-char} / {@code read-from-string}
+	 * ({@code LispPreludeLibrary}), so one definition consumes exactly one datum's
+	 * characters and leaves the stream positioned after it on all four backends.
+	 */
+	public static final String READ = "READ";
+
+	/**
+	 * The {@code %rd-datum} internal helper: copies the characters of exactly ONE datum
+	 * from a stream into an output string stream. The whole {@code %rd-} family below it
+	 * is the character-level scanner {@code read} is written over.
+	 */
+	public static final String RD_DATUM = "%RD-DATUM";
+
+	/**
+	 * The {@code %rd-dispatch} internal helper: the datum scanner's dispatch on the first
+	 * character of a datum.
+	 */
+	public static final String RD_DISPATCH = "%RD-DISPATCH";
+
+	/** The {@code %rd-skip} internal helper: whitespace and {@code ;} comments. */
+	public static final String RD_SKIP = "%RD-SKIP";
+
+	/** The {@code %rd-skip-line} internal helper: the rest of a {@code ;} comment. */
+	public static final String RD_SKIP_LINE = "%RD-SKIP-LINE";
+
+	/** The {@code %rd-block-comment} internal helper: a nesting {@code #| |#}. */
+	public static final String RD_BLOCK_COMMENT = "%RD-BLOCK-COMMENT";
+
+	/** The {@code %rd-list} internal helper: a balanced {@code (...)}. */
+	public static final String RD_LIST = "%RD-LIST";
+
+	/** The {@code %rd-string} internal helper: a {@code "..."} literal. */
+	public static final String RD_STRING = "%RD-STRING";
+
+	/** The {@code %rd-bars} internal helper: a {@code |...|} multiple escape. */
+	public static final String RD_BARS = "%RD-BARS";
+
+	/** The {@code %rd-token-rest} internal helper: a token's constituents. */
+	public static final String RD_TOKEN_REST = "%RD-TOKEN-REST";
+
+	/** The {@code %rd-char-literal} internal helper: a {@code #\} literal. */
+	public static final String RD_CHAR_LITERAL = "%RD-CHAR-LITERAL";
+
+	/** The {@code %rd-sharp} internal helper: the {@code #} dispatch. */
+	public static final String RD_SHARP = "%RD-SHARP";
+
+	/** The {@code %rd-guard} internal helper: a {@code #+}/{@code #-} guard. */
+	public static final String RD_GUARD = "%RD-GUARD";
+
+	/** The {@code %rd-feature} internal helper: a feature expression off the stream. */
+	public static final String RD_FEATURE = "%RD-FEATURE";
+
+	/** The {@code %rd-featurep} internal helper: a feature expression's truth. */
+	public static final String RD_FEATUREP = "%RD-FEATUREP";
+
+	/** The {@code %rd-whitespace-p} internal helper: the whitespace set. */
+	public static final String RD_WHITESPACE_P = "%RD-WHITESPACE-P";
+
+	/** The {@code %rd-terminating-p} internal helper: the terminating macro chars. */
+	public static final String RD_TERMINATING_P = "%RD-TERMINATING-P";
+
+	/** The {@code read-from-string} built-in function (parse one form from a string). */
+	public static final String READ_FROM_STRING = "READ-FROM-STRING";
+
+	/** The {@code parse-integer} built-in function (parse an integer from a string). */
+	public static final String PARSE_INTEGER = "PARSE-INTEGER";
+
+	/** The {@code functionp} built-in function (is the value a function?). */
+	public static final String FUNCTIONP = "FUNCTIONP";
+
+	/**
+	 * The {@code constantp} built-in function (true if the form is a constant object).
+	 * Lite: true for self-evaluating objects (numbers, strings, characters, keywords,
+	 * {@code t}/{@code nil}) and {@code (quote x)} forms; false otherwise (false
+	 * negatives only push work to runtime).
+	 */
+	public static final String CONSTANTP = "CONSTANTP";
+
+	/**
+	 * The {@code get-setf-expansion} function (a prelude defun). Lite: returns the five
+	 * setf-expansion values for a variable place ({@code setq} writer) or an accessor
+	 * cons ({@code setf} writer over one temp per argument); the optional environment
+	 * argument is accepted and ignored. The consumer destructures the values through the
+	 * ordinary {@code %mv-spill} channel, so a portable {@code define-modify-macro}-style
+	 * macro body ({@code multiple-value-bind} over this call) works unchanged.
+	 */
+	public static final String GET_SETF_EXPANSION = "GET-SETF-EXPANSION";
+
+	/**
+	 * The {@code streamp} built-in function (true if the argument is a stream). Streams
+	 * are opaque integer handles across all backends, so this is lowered to
+	 * {@code integerp} (lite).
+	 */
+	public static final String STREAMP = "STREAMP";
+
+	/**
+	 * The {@code simple-string-p} function, lowered to {@code stringp} (lite): every
+	 * rontolisp string answers true, so the portable "coerce unless simple" idiom keeps
+	 * the string unchanged instead of copying.
+	 */
+	public static final String SIMPLE_STRING_P = "SIMPLE-STRING-P";
+
+	/**
+	 * The internal {@code %arrayp} predicate (is the value an array?). Used by the
+	 * {@code vector}/{@code array}/{@code sequence} type specifiers in
+	 * {@code check-type}/{@code typecase} tests; not a public function.
+	 */
+	/**
+	 * The {@code arrayp} built-in function: the standard spelling of the internal
+	 * {@link #ARRAYP_INTERNAL} predicate (a string is an array, like CL).
+	 */
+	public static final String ARRAYP = "ARRAYP";
+
+	/**
+	 * The internal {@code %arrayp} predicate: true for the general / packed array
+	 * representations only. Strings are arrays in CL but not one of those
+	 * representations, so {@link #ARRAYP} is {@code (or (stringp x) (%arrayp x))}; the
+	 * {@code vector} / {@code array} / {@code sequence} type specifiers dispatch on this
+	 * half.
+	 */
+	public static final String ARRAYP_INTERNAL = "%ARRAYP";
+
+	/**
+	 * The internal {@code %simple-array-p} predicate: true for a value that is an array
+	 * (a string included) AND simple -- no fill pointer, not adjustable, not displaced.
+	 * Any other value, array or not, answers nil, so the predicate is TOTAL and needs no
+	 * guard at a call site. It is what separates the {@code simple-} type specifiers from
+	 * their general counterparts ({@code .kb/declarations-type-checks.md}).
+	 *
+	 * <p>
+	 * It is one predicate rather than
+	 * {@code (and (not (array-has-fill-pointer-p x)) (not (adjustable-array-p x)) (not
+	 * (%array-disp-target x)))} because that composition is not total: the fill-pointer
+	 * surface REFUSES a packed vector on the compile backends (a packed array is simple
+	 * by construction, so it must answer t, not trap) and {@code %array-disp-target}
+	 * casts its argument to the general array shape. Each backend answers the question
+	 * from the representation it owns, in one place.
+	 */
+	public static final String SIMPLE_ARRAY_P_INTERNAL = "%SIMPLE-ARRAY-P";
+
+	/**
+	 * The internal {@code %string-dimension} accessor: the array DIMENSION of a string,
+	 * which is the only size a sized string type specifier ({@code (string n)},
+	 * {@code (simple-array character (n))} and every sibling) is allowed to compare
+	 * against. It is NOT {@code length}: {@code length} of a fill-pointered character
+	 * vector is the FILL POINTER, and CL sizes the specifier by the dimension, so
+	 * {@code (typep (make-array 4 :element-type 'character :fill-pointer 0) '(string 4))}
+	 * is true.
+	 *
+	 * <p>
+	 * It exists because {@code array-dimension} refuses a string on the compile paths and
+	 * because it must answer for EVERY string representation -- the immutable runtime
+	 * string, the mutable character vector and the displaced string view -- from one
+	 * place per backend. Callers guard it with {@code stringp}, which is how the string
+	 * arm of a type test is reached at all; it is not asked about a non-string.
+	 */
+	public static final String STRING_DIMENSION_INTERNAL = "%STRING-DIMENSION";
+
+	/**
+	 * The {@code vectorp} built-in function (is the value a vector?). Strings are vectors
+	 * in CL. A vector is a rank-1 array and nothing else, so an array of any other rank
+	 * answers nil here while {@link #ARRAYP} still answers t for it -- the same rank the
+	 * {@code vector} type specifier checks.
+	 */
+	public static final String VECTORP = "VECTORP";
+
+	/**
+	 * The {@code simple-vector-p} prelude function: exactly what
+	 * {@code (typep object 'simple-vector)} answers, so the two cannot drift apart.
+	 */
+	public static final String SIMPLE_VECTOR_P = "SIMPLE-VECTOR-P";
+
+	/**
+	 * The {@code bit-vector-p} prelude function: exactly what
+	 * {@code (typep object 'bit-vector)} answers: true for the rank-1 general array
+	 * stamped {@code bit}.
+	 */
+	public static final String BIT_VECTOR_P = "BIT-VECTOR-P";
+
+	/**
+	 * The {@code simple-bit-vector-p} prelude function: exactly what
+	 * {@code (typep object 'simple-bit-vector)} answers.
+	 */
+	public static final String SIMPLE_BIT_VECTOR_P = "SIMPLE-BIT-VECTOR-P";
+
+	/**
+	 * The {@code array-in-bounds-p} prelude function: the bounds check without signaling
+	 * -- nil for a non-array, a rank/subscript-count mismatch or any out-of-range
+	 * subscript, t only when every subscript is a valid index.
+	 */
+	public static final String ARRAY_IN_BOUNDS_P = "ARRAY-IN-BOUNDS-P";
+
+	/**
+	 * The internal {@code %mv-spill} global variable carrying a producer's secondary
+	 * values across a function boundary: every {@code (values ...)} call stores its extra
+	 * values here as it returns its primary -- a fresh list, nil for exactly one value,
+	 * {@code t} for no value at all ({@code LispMacroExpander.MV_ZERO_VALUES}) -- and a
+	 * multiple-value consumer whose producer form may pass values along clears the spill,
+	 * evaluates the producer, and reads the extras back -- clearing the spill again as it
+	 * does, since values one consumer took must not resurface as an enclosing consumer's
+	 * (the REPL echo, {@code LispEvaluator.evalValues}, is one such consumer). The
+	 * channel is exact: a single-valued tail clears it (the compile paths settle every
+	 * function tail, the interpreter clears on every primitive step), so a publish in an
+	 * argument, a {@code let} initform or a form before the last never reaches a
+	 * consumer. The compilers inject a top-level {@code (setq %mv-spill nil)} to create
+	 * the global when a program uses any multiple-value operator; the interpreter keeps
+	 * it as a field of its global environment (.kb/multiple-values.md).
+	 */
+	public static final String MV_SPILL = "%MV-SPILL";
+
+	// Characters
+
+	/** The {@code char} built-in function (the character at an index of a string). */
+	public static final String CHAR = "CHAR";
+
+	/** The {@code schar} built-in function (a synonym for {@code char}). */
+	public static final String SCHAR = "SCHAR";
+
+	/**
+	 * The {@code %schar-set} internal helper: the {@code (setf (schar s i) c)} /
+	 * {@code (setf (char s i) c)} lowering, mutating the string in place and returning
+	 * the stored character. An optional fourth operand, the quoted place head
+	 * ({@code 'char}, {@code 'schar}, {@code 'aref}, {@code 'row-major-aref}), names the
+	 * store a wrong-type string, subscript or value reports under: {@code (SETF CHAR)};
+	 * without it the report is unnamed.
+	 */
+	public static final String SCHAR_SET = "%SCHAR-SET";
+
+	/**
+	 * The {@code %schar-set-runtime} internal helper: {@link #SCHAR_SET}'s whole
+	 * compile-path body as ONE defun, {@code (%schar-set-runtime s i c)} answering the
+	 * string the write leaves behind (the same object when it is a mutable character
+	 * vector, a fresh one when the rebuild had to run). Injected once per program by
+	 * {@code LispMacroExpander.expandTopLevelDefinitions} so that a
+	 * {@code (setf (aref v i) x)} site is a call rather than an inlined subseq/concat
+	 * rebuild -- see {@code .kb/wasm-shared-coercion.md} for the same lesson applied to
+	 * the numeric coercion ladder. The interpreter never sees it: it has a real in-place
+	 * {@code %schar-set} primitive.
+	 */
+	public static final String SCHAR_SET_RUNTIME = "%SCHAR-SET-RUNTIME";
+
+	/** The {@code char-code} built-in function (the code point of a character). */
+	public static final String CHAR_CODE = "CHAR-CODE";
+
+	/**
+	 * The {@code char-int} built-in function: a non-negative integer encoding the
+	 * character, the code point with no implementation-defined attributes beyond it --
+	 * the same value {@code char-code} answers.
+	 */
+	public static final String CHAR_INT = "CHAR-INT";
+
+	/**
+	 * The {@code code-char} built-in function (the character with a given code point).
+	 */
+	public static final String CODE_CHAR = "CODE-CHAR";
+
+	/** The {@code char=} built-in function (character equality). */
+	public static final String CHAR_EQ = "CHAR=";
+
+	/** The {@code char<} built-in function (character less-than by code point). */
+	public static final String CHAR_LT = "CHAR<";
+
+	/**
+	 * The {@code char<=} built-in function (character less-than-or-equal by code point).
+	 */
+	public static final String CHAR_LE = "CHAR<=";
+
+	/** The {@code char>} built-in function (monotonically decreasing chain). */
+	public static final String CHAR_GT = "CHAR>";
+
+	/** The {@code char>=} built-in function (monotonically non-increasing chain). */
+	public static final String CHAR_GE = "CHAR>=";
+
+	/** The {@code char/=} built-in function (all arguments pairwise distinct). */
+	public static final String CHAR_NE = "CHAR/=";
+
+	/**
+	 * The {@code char-equal} built-in function (case-insensitive {@code char=} chain).
+	 */
+	public static final String CHAR_EQUAL = "CHAR-EQUAL";
+
+	/**
+	 * The {@code char-not-equal} built-in function (case-insensitive {@code char/=}: all
+	 * arguments pairwise distinct once downcased). A prelude defun.
+	 */
+	public static final String CHAR_NOT_EQUAL = "CHAR-NOT-EQUAL";
+
+	/**
+	 * The {@code char-lessp} built-in function (case-insensitive {@code char<} chain). A
+	 * prelude defun over {@link #CHAR_FOLD_CHAIN}.
+	 */
+	public static final String CHAR_LESSP = "CHAR-LESSP";
+
+	/**
+	 * The {@code char-greaterp} built-in function (case-insensitive {@code char>} chain).
+	 * A prelude defun over {@link #CHAR_FOLD_CHAIN}.
+	 */
+	public static final String CHAR_GREATERP = "CHAR-GREATERP";
+
+	/**
+	 * The {@code char-not-greaterp} built-in function (case-insensitive {@code char<=}
+	 * chain). A prelude defun over {@link #CHAR_FOLD_CHAIN}.
+	 */
+	public static final String CHAR_NOT_GREATERP = "CHAR-NOT-GREATERP";
+
+	/**
+	 * The {@code char-not-lessp} built-in function (case-insensitive {@code char>=}
+	 * chain). A prelude defun over {@link #CHAR_FOLD_CHAIN}.
+	 */
+	public static final String CHAR_NOT_LESSP = "CHAR-NOT-LESSP";
+
+	/**
+	 * The {@code graphic-char-p} built-in function (true for a printing character --
+	 * space included, newline excluded). A prelude defun over the code point.
+	 */
+	public static final String GRAPHIC_CHAR_P = "GRAPHIC-CHAR-P";
+
+	/**
+	 * The {@code standard-char-p} built-in function (true for the 96 standard characters:
+	 * the printing ASCII range plus newline). A prelude defun over the code point.
+	 */
+	public static final String STANDARD_CHAR_P = "STANDARD-CHAR-P";
+
+	/** The {@code char-upcase} built-in function (the uppercase form of a character). */
+	public static final String CHAR_UPCASE = "CHAR-UPCASE";
+
+	/**
+	 * The {@code char-downcase} built-in function (the lowercase form of a character).
+	 */
+	public static final String CHAR_DOWNCASE = "CHAR-DOWNCASE";
+
+	/** The {@code characterp} built-in function (true if the argument is a character). */
+	public static final String CHARACTERP = "CHARACTERP";
+
+	/**
+	 * The {@code alpha-char-p} built-in function (true if the character is alphabetic).
+	 */
+	public static final String ALPHA_CHAR_P = "ALPHA-CHAR-P";
+
+	/**
+	 * The {@code alphanumericp} built-in function (true if the character is a letter or a
+	 * decimal digit). A prelude defun over {@code alpha-char-p}/{@code digit-char-p}.
+	 */
+	public static final String ALPHANUMERICP = "ALPHANUMERICP";
+
+	/**
+	 * The {@code make-load-form} generic function (CLHS 3.2.4.4): the one protocol for
+	 * "this object appears as a literal in code that will be compiled; here is a form
+	 * that reconstructs it". Like {@link #PRINT_OBJECT} it is cl-owned, so a
+	 * {@code defmethod} written inside a package that uses cl joins the ONE generic every
+	 * consumer reaches, and like it there is no system method: the compile path routes
+	 * only a type some method specializes on, and dumps every other instance by structure
+	 * (see {@code eval/LoadFormSubstituter} and {@code .kb/make-load-form.md}).
+	 */
+	public static final String MAKE_LOAD_FORM = "MAKE-LOAD-FORM";
+
+	/**
+	 * The {@code make-load-form-saving-slots} standard function: a prelude defun
+	 * answering the {@code (%obj-new '<tag> 'v1 ... 'vn)} creation form that rebuilds the
+	 * instance with its current slot values -- which is exactly what the quote compilers
+	 * dump an instance as, so a library method delegating to it (cl-ppcre's
+	 * charmap/charset) gets the built-in answer. Lite: {@code :slot-names} is ignored
+	 * (every slot travels) and the object is rebuilt, not allocated-then-filled, so a
+	 * circular reference back to it is not supported.
+	 */
+	public static final String MAKE_LOAD_FORM_SAVING_SLOTS = "MAKE-LOAD-FORM-SAVING-SLOTS";
+
+	/**
+	 * The {@code sxhash} built-in function: a prelude defun hashing by structural content
+	 * (integers/characters/strings/symbols/conses; anything else hashes to 0). Values are
+	 * stable within a run but NOT specified across backends.
+	 */
+	public static final String SXHASH = "SXHASH";
+
+	/**
+	 * The {@code sbit} built-in function (+ its {@code (setf sbit)} writer): prelude
+	 * defuns over {@code aref}, since a "bit vector" is the general array holding 0/1.
+	 */
+	/**
+	 * The {@code bit} prelude function: a bit-array element (and its {@code setf}
+	 * writer), the non-simple twin of {@link #SBIT}.
+	 */
+	public static final String BIT = "BIT";
+
+	/**
+	 * The {@code sbit} prelude function: a SIMPLE bit-array element (and its {@code setf}
+	 * writer), the simple-array twin of {@link #BIT}.
+	 */
+	public static final String SBIT = "SBIT";
+
+	/**
+	 * The eleven {@code bit-*} array-logic functions ({@code bit-and}, {@code bit-andc1},
+	 * {@code bit-andc2}, {@code bit-eqv}, {@code bit-ior}, {@code bit-nand},
+	 * {@code bit-nor}, {@code bit-not}, {@code bit-orc1}, {@code bit-orc2},
+	 * {@code bit-xor}): prelude defuns over
+	 * {@code array-dimensions}/{@code row-major-aref}, validating their inputs with
+	 * {@code bit-vector-p} and answering a fresh (or the designated result) bit vector
+	 * stamped {@code bit}.
+	 */
+	public static final String BIT_AND = "BIT-AND";
+
+	public static final String BIT_ANDC1 = "BIT-ANDC1";
+
+	public static final String BIT_ANDC2 = "BIT-ANDC2";
+
+	public static final String BIT_EQV = "BIT-EQV";
+
+	public static final String BIT_IOR = "BIT-IOR";
+
+	public static final String BIT_NAND = "BIT-NAND";
+
+	public static final String BIT_NOR = "BIT-NOR";
+
+	public static final String BIT_NOT = "BIT-NOT";
+
+	public static final String BIT_ORC1 = "BIT-ORC1";
+
+	public static final String BIT_ORC2 = "BIT-ORC2";
+
+	public static final String BIT_XOR = "BIT-XOR";
+
+	/**
+	 * The {@code both-case-p} built-in function: a prelude defun -- {@code lower-case-p}
+	 * or {@code upper-case-p}.
+	 */
+	public static final String BOTH_CASE_P = "BOTH-CASE-P";
+
+	/**
+	 * The {@code special-operator-p} standard function: a prelude defun testing the name
+	 * against the 25 ANSI special operators
+	 * ({@link am.ik.rontolisp.PackageRegistry#ansiSpecialOperatorNames()}), so every
+	 * backend answers from ONE definition. Nil for the CL macros rontolisp implements as
+	 * special forms of its own -- those answer through {@link #MACRO_FUNCTION}.
+	 */
+	public static final String SPECIAL_OPERATOR_P = "SPECIAL-OPERATOR-P";
+
+	/**
+	 * The {@code macro-function} standard function: the macro expander of a name, or nil
+	 * for a function, a special operator or an unknown name. The interpreter answers with
+	 * a real expander (a {@code (funcall f form env)} single-step expansion); a compiled
+	 * program has no macro table left, so it answers the {@link #MACRO_EXPANDER_STUB}
+	 * function -- exact as a predicate, a signal when called.
+	 */
+	public static final String MACRO_FUNCTION = "MACRO-FUNCTION";
+
+	/**
+	 * The {@code compiler-macro-function} standard function: the compiler macro
+	 * {@code define-compiler-macro} registered for a name, or nil. The interpreter
+	 * answers the real expander; a compiled program has expanded its compiler macros
+	 * away, so it answers {@link #MACRO_EXPANDER_STUB} for a registered name (a prelude
+	 * defun the compile path's macro pass overrides with the program's table).
+	 */
+	public static final String COMPILER_MACRO_FUNCTION = "COMPILER-MACRO-FUNCTION";
+
+	/**
+	 * The {@code %macro-fn} internal: the compile-path body of {@link #MACRO_FUNCTION},
+	 * testing the name against the baked built-in macro table plus the program's own
+	 * macro names ({@code UserMacroExpander} passes them in).
+	 */
+	public static final String MACRO_FN_INTERNAL = "%MACRO-FN";
+
+	/**
+	 * The {@code %macro-expander-stub} internal: what {@link #MACRO_FUNCTION} answers on
+	 * the compiled backends. Non-nil (the predicate every caller uses is exact) and
+	 * signals when actually CALLED -- the macro it would expand is gone before the
+	 * backend sees the program.
+	 */
+	public static final String MACRO_EXPANDER_STUB = "%MACRO-EXPANDER-STUB";
+
+	/**
+	 * The {@code %operator-function} internal: what {@code symbol-function} and
+	 * {@code fdefinition} answer on the compile paths for a special operator or a macro,
+	 * one function per name that signals {@code undefined-function} when called; nil for
+	 * any other name. A computed {@code fboundp} asks it on a registry miss.
+	 */
+	public static final String OPERATOR_FUNCTION_INTERNAL = "%OPERATOR-FUNCTION";
+
+	/** The alist {@link #OPERATOR_FUNCTION_INTERNAL} keeps its answers in. */
+	public static final String OPERATOR_FUNCTIONS_VAR = "%OPERATOR-FUNCTIONS%";
+
+	/**
+	 * The run-time {@code (setf macro-function)} of the compile paths:
+	 * {@code (%set-macro-function name function)} makes {@link #MACRO_FUNCTION} answer
+	 * {@code function} for {@code name} from then on. What was compiled is already
+	 * expanded, so no call site changes. A write the expansion pass consumed never gets
+	 * here.
+	 */
+	public static final String SET_MACRO_FUNCTION = "%SET-MACRO-FUNCTION";
+
+	/**
+	 * The compile paths' alist of {@link #SET_MACRO_FUNCTION} writes, name to function,
+	 * consulted by {@link #MACRO_FUNCTION} first.
+	 */
+	public static final String MACRO_FUNCTION_WRITES = "%MACRO-FUNCTION-WRITES%";
+
+	/**
+	 * The {@code (setf compiler-macro-function)} writer:
+	 * {@code (%set-compiler-macro-function name function)} installs {@code function} as
+	 * the name's compiler macro, or removes it when {@code function} is nil. The
+	 * interpreter's rewrites later call sites; a compiled program only answers it from
+	 * {@link #COMPILER_MACRO_FUNCTION}, its call sites being compiled already.
+	 */
+	public static final String SET_COMPILER_MACRO_FUNCTION = "%SET-COMPILER-MACRO-FUNCTION";
+
+	/**
+	 * The compile paths' alist of {@link #SET_COMPILER_MACRO_FUNCTION} writes, name to
+	 * function (nil for a removal), consulted by {@link #COMPILER_MACRO_FUNCTION} first.
+	 */
+	public static final String COMPILER_MACRO_FUNCTION_WRITES = "%COMPILER-MACRO-FUNCTION-WRITES%";
+
+	/**
+	 * The {@code compiled-function-p} standard function: a prelude defun answering true
+	 * for every function, as {@code (typep x 'compiled-function)} does.
+	 */
+	public static final String COMPILED_FUNCTION_P = "COMPILED-FUNCTION-P";
+
+	/**
+	 * The {@code function-lambda-expression} standard function: a lite prelude stub
+	 * returning {@code (values nil t nil)} (no source is recorded).
+	 */
+	public static final String FUNCTION_LAMBDA_EXPRESSION = "FUNCTION-LAMBDA-EXPRESSION";
+
+	/**
+	 * The {@code list-all-packages} standard function: every registered package as the
+	 * keyword {@link #FIND_PACKAGE} answers for it. The interpreter reads the live
+	 * registry; the compile paths fold the call to the constant list the resolver's final
+	 * registry holds (see {@code .kb/packages.md}).
+	 */
+	public static final String LIST_ALL_PACKAGES = "LIST-ALL-PACKAGES";
+
+	/**
+	 * The {@code find-class} standard function: answers the memoized class metaobject of
+	 * a registered class or struct type, of a built-in type name ({@code integer},
+	 * {@code string}, ...), with CL {@code errorp} semantics. The interpreter defines it
+	 * over {@code ClosRegistry.classMetaobject}; the compile paths emit a thin wrapper
+	 * over {@link #FIND_CLASS_INTERNAL} ({@code LispMacroExpander}), gated on the program
+	 * referencing the function.
+	 */
+	public static final String FIND_CLASS = "FIND-CLASS";
+
+	/**
+	 * The generated internal resolver behind both {@link #FIND_CLASS} and
+	 * {@link #CLASS_OF} on the compile paths: {@code (%find-class sym errorp)} scans the
+	 * {@link #CLASS_META_TABLE} spellings (instance tags included), falls back to the
+	 * built-in class names ({@code ClosRegistry.BUILTIN_CLASS_NAMES}), and materializes
+	 * through {@link #FIND_CLASS_MATERIALIZE}. It is separate from the public
+	 * {@code find-class} defun so a program defining its own {@code find-class} does not
+	 * change what {@code class-of} answers.
+	 */
+	public static final String FIND_CLASS_INTERNAL = "%FIND-CLASS";
+
+	/**
+	 * The run-time {@code (setf find-class)}: {@code (%set-find-class name class)} makes
+	 * the public {@link #FIND_CLASS} answer {@code class} for {@code name} from then on,
+	 * nil FORGETTING the name (contextl's {@code layer-makunbound}); the class object and
+	 * its instances are untouched, and {@code class-of} keeps answering it. A later
+	 * {@code defclass} of the name ends the override. Everything but the static alias
+	 * shape {@code (setf (find-class 'a) (find-class 'b))} lowers to it.
+	 */
+	public static final String SET_FIND_CLASS = "%SET-FIND-CLASS";
+
+	/**
+	 * The compile paths' alist of {@link #SET_FIND_CLASS} overrides, name to class (nil
+	 * when forgotten), consulted by the public {@link #FIND_CLASS} wrapper first.
+	 */
+	public static final String FIND_CLASS_OVERRIDES = "%FIND-CLASS-OVERRIDES%";
+
+	/**
+	 * The compile paths' end of a {@link #SET_FIND_CLASS} override:
+	 * {@code (%find-class-defined 'name)} follows each top-level {@code defclass} of a
+	 * program carrying the overrides, so a class defined again after it was forgotten is
+	 * found again.
+	 */
+	public static final String FIND_CLASS_DEFINED = "%FIND-CLASS-DEFINED";
+
+	/**
+	 * The quoted per-class data table backing the compile paths' generated
+	 * {@link #FIND_CLASS_INTERNAL}: one entry per registered class or struct layout --
+	 * the accepted name spellings (instance tag included, so a {@code class-of}
+	 * designator resolves directly), the canonical superclass name (or nil), and the
+	 * effective-slot data each metaobject is materialized from.
+	 */
+	public static final String CLASS_META_TABLE = "%CLASS-META-TABLE";
+
+	/**
+	 * The generated {@code find-class}'s memo alist (canonical class name to its
+	 * materialized metaobject), which is what makes the answer {@code eq}-stable across
+	 * calls like the interpreter's registry memo.
+	 */
+	public static final String CLASS_METAOBJECT_MEMO = "%CLASS-METAOBJECTS";
+
+	/**
+	 * The generated helper materializing one class metaobject from its
+	 * {@link #CLASS_META_TABLE} entry (recursing into {@link #FIND_CLASS_INTERNAL} for
+	 * the superclass) and memoizing it in {@link #CLASS_METAOBJECT_MEMO}.
+	 */
+	public static final String FIND_CLASS_MATERIALIZE = "%FIND-CLASS-MATERIALIZE";
+
+	/**
+	 * The shared runtime-slot-name READ dispatch: {@code (%slot-value-runtime obj name)}
+	 * resolves a slot name known only at run time over every registered layout. The
+	 * dispatch body grows with the whole registry (every layout times its slots), so it
+	 * is generated ONCE per program as this defun ({@code LispMacroExpander}, gated on a
+	 * non-literal-name {@code slot-value}) instead of inline per call site -- a call site
+	 * inside a loop otherwise grows the loop body past the JVM's signed 16-bit branch
+	 * encoding, the same disease the {@code %class-slot-defs} inline dispatch had. The
+	 * interpreter never calls it (its evaluator resolves runtime names natively).
+	 */
+	public static final String SLOT_VALUE_RUNTIME = "%SLOT-VALUE-RUNTIME";
+
+	/**
+	 * The shared runtime-slot-name {@code slot-boundp} dispatch, the boundness twin of
+	 * {@link #SLOT_VALUE_RUNTIME} -- same gate, same reason.
+	 */
+	public static final String SLOT_BOUNDP_RUNTIME = "%SLOT-BOUNDP-RUNTIME";
+
+	/**
+	 * The shared runtime-slot-name WRITE dispatch, the {@code setf} twin of
+	 * {@link #SLOT_VALUE_RUNTIME}: {@code (%slot-value-set-runtime obj name value)}
+	 * stores through a slot name known only at run time and answers the stored value
+	 * (postmodern's {@code dao-from-fields} writes every column this way). Generated on
+	 * the compile paths gated on a runtime-name {@code (setf (slot-value ...))}; the
+	 * interpreter serves it as a native builtin.
+	 */
+	public static final String SLOT_VALUE_SET_RUNTIME = "%SLOT-VALUE-SET-RUNTIME";
+
+	/**
+	 * The slot-access protocol's routing test ({@code macro/slot-protocol.lisp}): whether
+	 * an instance's class was defined with a {@code :metaclass}, so its slot forms go
+	 * through {@code slot-value-using-class} and its siblings.
+	 */
+	public static final String SLOT_PROTOCOL_INSTANCE_P = "%SLOT-PROTOCOL-INSTANCE-P";
+
+	/**
+	 * {@code (%slot-protocol-value obj name)}: a read through the slot-access protocol.
+	 */
+	public static final String SLOT_PROTOCOL_VALUE = "%SLOT-PROTOCOL-VALUE";
+
+	/** {@code (%slot-protocol-set obj name value)}: a write through the protocol. */
+	public static final String SLOT_PROTOCOL_SET = "%SLOT-PROTOCOL-SET";
+
+	/**
+	 * {@code (%slot-protocol-boundp obj name)}: a boundness test through the protocol.
+	 */
+	public static final String SLOT_PROTOCOL_BOUNDP = "%SLOT-PROTOCOL-BOUNDP";
+
+	/**
+	 * {@code (%slot-protocol-makunbound obj name)}: a makunbound through the protocol.
+	 */
+	public static final String SLOT_PROTOCOL_MAKUNBOUND = "%SLOT-PROTOCOL-MAKUNBOUND";
+
+	/**
+	 * The slot-access protocol's {@code (%slot-protocol-inherit-initfunctions name
+	 * pairs)}: the initforms a class inherits from a plain superclass, for its fill.
+	 */
+	public static final String SLOT_PROTOCOL_INHERIT_INITFUNCTIONS = "%SLOT-PROTOCOL-INHERIT-INITFUNCTIONS";
+
+	/**
+	 * {@code (%slot-protocol-fill obj initargs slot-names)}: CL's initarg and initform
+	 * fill (CLHS 7.1.4) through {@code (setf slot-value-using-class)}.
+	 */
+	public static final String SLOT_PROTOCOL_FILL = "%SLOT-PROTOCOL-FILL";
+
+	/**
+	 * The shared runtime-class-designator {@code change-class} dispatch:
+	 * {@code (%change-class-runtime obj designator initarg-plist)} resolves a class
+	 * designator known only at run time (a symbol or a class metaobject -- upstream
+	 * ASDF's {@code (change-class ret class)}) onto one small per-class arm carrying the
+	 * static expansion's layout swap + initform fill, the initargs read out of the plist.
+	 * Generated on the compile paths gated on a non-literal class argument; the
+	 * interpreter resolves the designator natively and re-enters the static expansion.
+	 */
+	public static final String CHANGE_CLASS_RUNTIME = "%CHANGE-CLASS-RUNTIME";
+
+	/**
+	 * The function value of {@code make-condition}:
+	 * {@code (%make-condition-runtime type initarg-plist)} constructs the condition a
+	 * type known only at run time names, one arm per registered condition class, each the
+	 * literal call's construction with the initargs read out of the plist. Generated on
+	 * the compile paths for a program naming {@code #'make-condition}; the interpreter
+	 * evaluates the literal call.
+	 */
+	public static final String MAKE_CONDITION_RUNTIME = "%MAKE-CONDITION-RUNTIME";
+
+	/**
+	 * The slot-name fold every runtime-slot-name dispatch above applies to its name
+	 * argument first: {@code (%slot-name-key n)} is {@code (intern (symbol-name n))},
+	 * which re-spells a symbol arriving in the caller's package as the bare base name the
+	 * dispatch arms quote. Generated as its own defun rather than inlined in each
+	 * dispatcher so that the ONE {@code intern} rontolisp itself puts in every such
+	 * program is a single, identifiable form. (An {@code intern} no longer holds the
+	 * {@code --optimize} funcall-dispatch gate open at all --
+	 * {@code compiler/RuntimeNameProducers},
+	 * {@code .kb/optimize-dead-code-elimination.md} -- so the identifiability is history
+	 * rather than load-bearing now; the single defun stays because it is also simply
+	 * smaller than one inlined copy per dispatcher.)
+	 */
+	public static final String SLOT_NAME_KEY = "%SLOT-NAME-KEY";
+
+	/**
+	 * The internal runtime-class {@code make-instance}: {@code (%mop-make-instance
+	 * designator initargs...)} instantiates a class chosen at RUN time (a metaobject or a
+	 * name symbol) -- what the static {@code make-instance} expansion cannot do, and what
+	 * the metaclass protocol needs (the class it instantiates is the answer of a user
+	 * generic). The interpreter defines it as a builtin that re-enters the ordinary
+	 * {@code make-instance} evaluation; the compile paths generate a name-dispatch defun
+	 * over the METAOBJECT-ancestored classes only ({@code LispMacroExpander}), gated on a
+	 * {@code :metaclass} defclass.
+	 */
+	public static final String MOP_MAKE_INSTANCE = "%MOP-MAKE-INSTANCE";
+
+	/**
+	 * The internal metaobject-registration primitive behind the metaclass protocol:
+	 * {@code (%register-class-metaobject name metaobject)} primes the {@code find-class}
+	 * memo (the interpreter's registry memo, the compile paths'
+	 * {@link #CLASS_METAOBJECT_MEMO}) so {@code find-class}/{@code class-of} answer the
+	 * driver-built instance of the user metaclass instead of materializing a plain
+	 * {@code standard-class} view.
+	 */
+	public static final String REGISTER_CLASS_METAOBJECT = "%REGISTER-CLASS-METAOBJECT";
+
+	/**
+	 * The definition-time driver of the metaclass protocol
+	 * ({@code macro/mop-protocol.lisp}): a {@code defclass} carrying {@code (:metaclass
+	 * M)} expands to its usual static definitions plus one
+	 * {@code (%ensure-class-with-metaclass 'name 'M '(supers) '(slot-specs)
+	 * '(class-initargs))} call, which instantiates the metaclass (running the user's
+	 * {@code shared-initialize} hooks), builds the direct-slot-definition metaobjects
+	 * through {@code direct-slot-definition-class}, validates superclasses, and eagerly
+	 * finalizes ({@code compute-effective-slot-definition} under the
+	 * {@code *direct-column-slot*}-style dynamic-extent contract, then
+	 * {@code finalize-inheritance}).
+	 */
+	public static final String ENSURE_CLASS_WITH_METACLASS = "%ENSURE-CLASS-WITH-METACLASS";
+
+	/**
+	 * The {@code print-unreadable-object} macro: a lite expansion writing
+	 * {@code #<[class ]...>} around the body ({@code :type} prints the {@code class-of}
+	 * designator, {@code :identity} is ignored), returning nil.
+	 */
+	public static final String PRINT_UNREADABLE_OBJECT = "PRINT-UNREADABLE-OBJECT";
+
+	/**
+	 * The {@code with-package-iterator} macro: a lite expansion binding the iterator name
+	 * to a LOCAL FUNCTION (an {@code flet}, not CL's {@code macrolet}) that always
+	 * reports no more symbols -- there is no intern table to iterate, so the loop body
+	 * runs zero times (cl-ppcre's regex-apropos).
+	 */
+	public static final String WITH_PACKAGE_ITERATOR = "WITH-PACKAGE-ITERATOR";
+
+	/**
+	 * The {@code do-external-symbols} macro: iterates a package's external symbols
+	 * (interpreter-real over the package registry; the compile paths support it inside
+	 * {@code #.} only, through the macro-time evaluator).
+	 */
+	public static final String DO_EXTERNAL_SYMBOLS = "DO-EXTERNAL-SYMBOLS";
+
+	/**
+	 * The {@code do-symbols} macro: the sibling of {@link #DO_EXTERNAL_SYMBOLS} over
+	 * every symbol ACCESSIBLE in the package -- the ones it owns, internal and external
+	 * alike, plus the exports it inherits through its use list -- each spelled against
+	 * the package that owns it. Interpreter-only for the same reason.
+	 */
+	public static final String DO_SYMBOLS = "DO-SYMBOLS";
+
+	/**
+	 * The {@code do-all-symbols} macro: iterates every distinct symbol accessible in any
+	 * registered package (each visited once, in sorted order), binding
+	 * {@code (var [result-form])} like {@link #DO_SYMBOLS}. Expands through
+	 * {@code list-all-packages} plus {@code do-symbols} with duplicate suppression, so
+	 * the interpreter and both compilers share the one universe walk.
+	 */
+	public static final String DO_ALL_SYMBOLS = "DO-ALL-SYMBOLS";
+
+	/**
+	 * The {@code lower-case-p} built-in function (true if the character is a lowercase
+	 * letter). Lowered to {@code (not (char= c (char-upcase c)))} so it follows the
+	 * platform's Unicode case tables.
+	 */
+	public static final String LOWER_CASE_P = "LOWER-CASE-P";
+
+	/**
+	 * The {@code upper-case-p} built-in function (true if the character is an uppercase
+	 * letter). Lowered to {@code (not (char= c (char-downcase c)))}.
+	 */
+	public static final String UPPER_CASE_P = "UPPER-CASE-P";
+
+	/**
+	 * The {@code digit-char-p} built-in function (the weight of a digit character in the
+	 * given radix, or nil).
+	 */
+	/**
+	 * The {@code digit-char} prelude function: the character denoting a weight in a radix
+	 * (the inverse of {@code digit-char-p}), or nil.
+	 */
+	public static final String DIGIT_CHAR = "DIGIT-CHAR";
+
+	/**
+	 * The {@code digit-char-p} built-in function: the weight of a character as a digit in
+	 * a radix (10 unless a second argument gives one), or nil -- the inverse of
+	 * {@link #DIGIT_CHAR}.
+	 */
+	public static final String DIGIT_CHAR_P = "DIGIT-CHAR-P";
+
+	/** The {@code :radix} keyword recognized by {@code parse-integer}. */
+	public static final String RADIX_KEYWORD = ":RADIX";
+
+	/** The {@code :junk-allowed} keyword recognized by {@code parse-integer}. */
+	public static final String JUNK_ALLOWED_KEYWORD = ":JUNK-ALLOWED";
+
+	/** The {@code :start} keyword recognized by {@code parse-integer}. */
+	public static final String START_KEYWORD = ":START";
+
+	/** The {@code :end} keyword recognized by {@code parse-integer}. */
+	public static final String END_KEYWORD = ":END";
+
+	/** The {@code :abort} keyword {@code close} accepts and ignores. */
+	public static final String ABORT_KEYWORD = ":ABORT";
+
+	/** The {@code :start1} keyword recognized by {@code replace}. */
+	public static final String START1_KEYWORD = ":START1";
+
+	/** The {@code :end1} keyword recognized by {@code replace}. */
+	public static final String END1_KEYWORD = ":END1";
+
+	/** The {@code :start2} keyword recognized by {@code replace}. */
+	public static final String START2_KEYWORD = ":START2";
+
+	/** The {@code :end2} keyword recognized by {@code replace}. */
+	public static final String END2_KEYWORD = ":END2";
+
+	/** The {@code eval} built-in function (interpreter only). */
+	public static final String EVAL = "EVAL";
+
+	/** The {@code load} built-in function (interpreter only). */
+	public static final String LOAD = "LOAD";
+
+	/**
+	 * The {@code require} built-in function: loads a module once. A runtime function on
+	 * the interpreter; a literal, top-level compile-time directive on the compile path
+	 * (consumed by {@code LoadInliner}).
+	 */
+	public static final String REQUIRE = "REQUIRE";
+
+	/**
+	 * The {@code provide} built-in function: marks a module as loaded so a later
+	 * {@code require} of the same name is a no-op. A runtime function on the interpreter;
+	 * a literal, top-level compile-time directive on the compile path (consumed by
+	 * {@code LoadInliner}).
+	 */
+	public static final String PROVIDE = "PROVIDE";
+
+	// File I/O
+
+	/** The {@code open} built-in function. */
+	public static final String OPEN = "OPEN";
+
+	/** The {@code close} built-in function. */
+	public static final String CLOSE = "CLOSE";
+
+	/**
+	 * The {@code probe-file} built-in function: the truename as a PATHNAME value when the
+	 * file exists, {@code nil} otherwise -- made absolute
+	 * ({@link #ABSOLUTE_PATH_INTERNAL}), every symbolic link resolved and every {@code .}
+	 * / {@code ..} taken out ({@link #REAL_PATH_INTERNAL}), a directory in directory form
+	 * whatever the spelling, as SBCL resolves them. Prelude Lisp over
+	 * {@link #PROBE_TRUENAME_INTERNAL}; takes both designator spellings.
+	 * {@link #TRUENAME} is this plus a signal. The {@code open} / {@code load} existence
+	 * guards ask the primitive directly: they need no truename.
+	 */
+	public static final String PROBE_FILE = "PROBE-FILE";
+
+	/**
+	 * The {@code %probe-truename} internal prelude function: {@link #PROBE_FILE}'s answer
+	 * as a namestring, nil when nothing is there -- the path resolved by
+	 * {@link #REAL_PATH_INTERNAL} and asked of {@link #PROBE_FILE_INTERNAL}, or, for a
+	 * link whose target is missing, the link itself with its directory resolved (SBCL's
+	 * answer). {@link #DIRECTORY} resolves each link it lists through it.
+	 */
+	public static final String PROBE_TRUENAME_INTERNAL = "%PROBE-TRUENAME";
+
+	/**
+	 * The {@code %probe-file} internal primitive behind {@link #PROBE_FILE} and the
+	 * {@code open} / {@code load} existence guards: takes a namestring, answers it back
+	 * when the file exists -- in directory form (one trailing {@code /} added) when it
+	 * names a directory -- and {@code nil} otherwise, also for a file spelled with a
+	 * trailing {@code /}. Links are followed but resolve into no spelling: the answer is
+	 * the path as given. The one file primitive that does NOT signal on a missing path,
+	 * so it is the only way to ask the question on WASM (where a failed {@code open}
+	 * traps rather than signalling, which no {@code handler-case} can catch). Stays
+	 * string-in/string-out on every backend; the pathname wrapping lives in the prelude
+	 * {@code probe-file}.
+	 */
+	public static final String PROBE_FILE_INTERNAL = "%PROBE-FILE";
+
+	/**
+	 * The {@code %read-link} internal primitive: takes a namestring and answers the
+	 * target a symbolic link of that name holds, as written in the link, or {@code nil}
+	 * when the name is no link (a plain file, a directory, nothing at all) or the host
+	 * refuses to read it. String-in/string-out on every backend, never signalling --
+	 * {@link #REAL_PATH_INTERNAL} walks a path's components over it.
+	 */
+	public static final String READ_LINK_INTERNAL = "%READ-LINK";
+
+	/**
+	 * The {@code %make-link} internal primitive: takes a target and a namestring and
+	 * makes a symbolic link of that name holding the target as given ({@code symlink});
+	 * answers {@code t}, or {@code nil} when the host made none (something is there, the
+	 * directory refuses it, nothing is above it; a WASI host refuses an absolute target).
+	 * Never signalling: the caller asks why.
+	 */
+	public static final String MAKE_LINK_INTERNAL = "%MAKE-LINK";
+
+	/**
+	 * The {@code %file-stat} internal primitive: takes a namestring and whether to follow
+	 * a symbolic link in its last component, and answers what the host's {@code stat}
+	 * (following) or {@code lstat} says of it -- the list {@code (type size modified
+	 * accessed made mode)}: the type 1 a regular file, 2 a directory, 3 a symbolic link
+	 * (only where not following), 4 anything else; the size in bytes; the times in
+	 * nanoseconds since 1970, the time the file was made {@code nil} where the host does
+	 * not say (both WASI backends); the permission bits (07777), {@code nil} where the
+	 * host has none (both WASI backends). Where it cannot say, the fixnum of why: 1
+	 * nothing is there (or something above is no directory), 2 the host refused, 3 too
+	 * many links, 4 another reason. Never signalling, no file opened.
+	 */
+	public static final String FILE_STAT_INTERNAL = "%FILE-STAT";
+
+	/**
+	 * The {@code %file-set-times} internal primitive: takes a namestring, whether to
+	 * follow a symbolic link in its last component, and the times of last access and of
+	 * last writing to give it, each in nanoseconds since 1970 or {@code nil} to leave it
+	 * as it is; answers 0 when they were written, else {@link #FILE_STAT_INTERNAL}'s
+	 * fixnum of why not. Never signalling.
+	 */
+	public static final String FILE_SET_TIMES_INTERNAL = "%FILE-SET-TIMES";
+
+	/**
+	 * The {@code %file-access} internal primitive: takes a namestring and what is asked
+	 * of it -- 4 reading, 2 writing, 1 executing (a directory: searching), as
+	 * {@code access(2)} asks -- and answers {@code T} where the host lets the program do
+	 * it, else {@code nil}. Interpreter and JVM only ({@code runtime/RontoFileModes}): no
+	 * WASI host has permission bits, and the Java subset's files, its one caller, answer
+	 * otherwise there. Never signalling.
+	 */
+	public static final String FILE_ACCESS_INTERNAL = "%FILE-ACCESS";
+
+	/**
+	 * The {@code %file-space} internal primitive: takes a namestring and which size of
+	 * the partition holding it is asked -- 0 its size, 1 the bytes free, 2 the bytes this
+	 * program may use -- and answers it, 0 where the path names nothing. Interpreter and
+	 * JVM only, as {@link #FILE_ACCESS_INTERNAL} is. Never signalling.
+	 */
+	public static final String FILE_SPACE_INTERNAL = "%FILE-SPACE";
+
+	/**
+	 * The {@code %file-set-mode} internal primitive: takes a namestring and the
+	 * permission bits to give the file it names ({@code chmod}, 07777, a link followed);
+	 * answers 0, or {@link #FILE_STAT_INTERNAL}'s fixnum of why not. Interpreter and JVM
+	 * only, as {@link #FILE_ACCESS_INTERNAL} is. Never signalling.
+	 */
+	public static final String FILE_SET_MODE_INTERNAL = "%FILE-SET-MODE";
+
+	/**
+	 * The {@code %file-make} internal primitive: takes a namestring, permission bits
+	 * (0777) and whether a directory is made, and makes a file or a directory that is not
+	 * there with those bits less the process's umask, as {@code open(2)} with
+	 * {@code O_CREAT} and {@code mkdir(2)} do; answers 0, or
+	 * {@link #FILE_STAT_INTERNAL}'s fixnum of why not (4 for anything there). Interpreter
+	 * and JVM only, as {@link #FILE_ACCESS_INTERNAL} is. Never signalling.
+	 */
+	public static final String FILE_MAKE_INTERNAL = "%FILE-MAKE";
+
+	/**
+	 * The {@code %terminal-p} internal primitive: takes a process standard stream's
+	 * descriptor (0, 1 or 2) and answers whether it is a terminal -- {@code isatty} on
+	 * the interpreter and the JVM, a character device by WASI's {@code fd_fdstat_get} on
+	 * Preview 1, a {@code wasi:cli/terminal-*} handle on the component. Never signalling;
+	 * {@code nil} for anything it cannot tell. {@link #INTERACTIVE_STREAM_P} rides it.
+	 */
+	public static final String TERMINAL_P_INTERNAL = "%TERMINAL-P";
+
+	/**
+	 * The {@code %real-path} internal prelude function: a namestring with every symbolic
+	 * link among its components resolved (over {@link #READ_LINK_INTERNAL}) and every
+	 * {@code .} and {@code ..} taken out -- or, given a true second argument, the
+	 * {@code .} and {@code ..} alone, by spelling, no link read. A relative path stays
+	 * relative, an absolute one absolute; a component that does not exist is kept as
+	 * spelled. One Lisp definition on all four backends, behind {@link #PROBE_FILE},
+	 * {@link #TRUENAME}, {@link #DIRECTORY} and the Clojure front end's canonical paths.
+	 */
+	public static final String REAL_PATH_INTERNAL = "%REAL-PATH";
+
+	/**
+	 * The {@code %absolute-path} internal prelude function: a namestring merged with
+	 * {@code *default-pathname-defaults*} and, when still relative, placed below the
+	 * working directory ({@link #HOST_GETCWD}) -- what {@link #PROBE_FILE},
+	 * {@link #TRUENAME} and {@link #DIRECTORY} answer below, as SBCL's do. Where there is
+	 * no working directory (both WASM backends, an in-memory interpreter loader) a
+	 * relative path stays relative to whatever the host resolves it against: on WASM the
+	 * preopens.
+	 */
+	public static final String ABSOLUTE_PATH_INTERNAL = "%ABSOLUTE-PATH";
+
+	/**
+	 * The {@code pathname} built-in function: the identity on a pathname value, a fresh
+	 * pathname over a namestring, an error for anything else. Prelude Lisp; the canonical
+	 * constructor every producer ({@code make-pathname}, {@code directory},
+	 * {@code probe-file}, ...) funnels through.
+	 */
+	public static final String PATHNAME = "PATHNAME";
+
+	/**
+	 * The {@code parse-namestring} built-in function -- lite: {@code (values (pathname
+	 * thing) (length namestring))}, host and defaults accepted and ignored (a rontolisp
+	 * namestring has no host to parse against).
+	 */
+	public static final String PARSE_NAMESTRING = "PARSE-NAMESTRING";
+
+	/**
+	 * The {@code %path-ns} internal helper: a pathname value's namestring, anything else
+	 * unchanged. The LENIENT unwrap the prelude path functions coerce their arguments
+	 * through before doing string work -- unlike {@link #NAMESTRING_CL} it never signals,
+	 * so the existing "a non-string coerces to the empty namestring" tolerance of the
+	 * directory family is preserved.
+	 */
+	public static final String PATH_NS = "%PATH-NS";
+
+	/**
+	 * The {@code %list-directory} internal primitive: the one directory-LISTING call each
+	 * backend implements. Takes a directory namestring and answers a list of the entry
+	 * NAMES it contains (no path prefix), a subdirectory's name carrying a trailing
+	 * {@code /} so the caller can tell the two kinds apart without a second probe. The
+	 * order is the host's; {@link #DIRECTORY} sorts it. Like {@link #PROBE_FILE} it never
+	 * signals -- a missing path, a plain file, or a host with no filesystem all answer
+	 * nil -- so a library that walks an OPTIONAL tree degrades instead of failing.
+	 * Everything user-facing ({@link #DIRECTORY}, {@code uiop:directory-files},
+	 * {@code uiop:subdirectories}, {@code uiop:collect-sub*directories}) is Lisp source
+	 * over this one call, so the pattern/prefix/sort rules cannot drift between backends.
+	 */
+	public static final String LIST_DIRECTORY = "%LIST-DIRECTORY";
+
+	/**
+	 * The {@code %dir-namestring} internal helper: a pathname in DIRECTORY form, i.e. the
+	 * namestring with a trailing {@code /} added unless it already ends in one (and the
+	 * empty namestring, which designates the working directory, left alone). The one rule
+	 * shared by {@link #DIRECTORY}, {@code uiop:directory-exists-p} and
+	 * {@code uiop:collect-sub*directories}, so a walk hands its collector the same shape
+	 * at the root as at every level below it. Lisp source, like everything else in the
+	 * listing family.
+	 */
+	public static final String DIR_NAMESTRING = "%DIR-NAMESTRING";
+
+	/**
+	 * The {@code %wild-match} internal helper: glob matching over a namestring, {@code *}
+	 * standing for any sequence of characters, {@code ?} for exactly one, and
+	 * {@code **}{@code /} ({@link #WILD_INFERIORS_AT}) for zero or more whole directory
+	 * levels -- the wild-component matching {@link #DIRECTORY} needs to be ANSI's
+	 * {@code directory} rather than a bare listing.
+	 */
+	public static final String WILD_MATCH = "%WILD-MATCH";
+
+	/**
+	 * The {@code %wild-inferiors-at} internal helper: whether a pattern carries the
+	 * {@code **}{@code /} (CL's {@code :wild-inferiors}) token at an index. The ONE
+	 * spelling of "this is a wild-inferiors segment", read by {@link #WILD_MATCH}, its
+	 * capturing twin {@link #WILD_CAPTURES} and {@link #TRANSLATE_PATHNAME}'s
+	 * substitution scan, so the three cannot disagree about where one starts. Three
+	 * characters, not two: the trailing {@code /} is part of the token because the token
+	 * matches ZERO levels as well as many, and only swallowing the separator lets
+	 * {@code "/a/**}{@code /*.lisp"} match {@code "/a/c.lisp"} the way CL does.
+	 */
+	public static final String WILD_INFERIORS_AT = "%WILD-INFERIORS-AT";
+
+	/**
+	 * The {@code %pathname-typed-p} internal helper: whether a pathname's NAME component
+	 * carries a type, i.e. holds a {@code .} anywhere but at the front (a leading dot is
+	 * part of the name, as every Unix pathname parser has it). What makes
+	 * {@link #DIRECTORY}'s {@code "*"} mean what CL means by it -- a wild name with NO
+	 * type, so {@code "d/*"} matches {@code sub} and {@code README} but not
+	 * {@code a.txt}, while {@code "d/*.*"} matches everything.
+	 */
+	public static final String PATHNAME_TYPED_P = "%PATHNAME-TYPED-P";
+
+	/**
+	 * The {@code pathname-directory} built-in: the directory component of a namestring as
+	 * CL's list, {@code (:absolute "usr" "share")} / {@code (:relative "sub")}, or nil
+	 * when the namestring has no directory part. Prelude Lisp over the primitives every
+	 * backend has, like {@link #DIRECTORY}. The consumer that asked for it is a directory
+	 * WALK deciding what to do per entry -- local-time's timezone reader skips the
+	 * {@code Etc} subtree with it. Component-for-component the INVERSE of
+	 * {@link #PATHNAME_DIRECTORY_STRING} ({@link #PATHNAME_DIRECTORY_COMPONENT}), so a
+	 * {@code *} comes back as {@code :wild}, a {@code **} as {@code :wild-inferiors} and
+	 * a {@code ..} as {@code :up}.
+	 */
+	public static final String PATHNAME_DIRECTORY = "PATHNAME-DIRECTORY";
+
+	/**
+	 * The {@code %pathname-directory-component} internal helper: one directory component
+	 * of a namestring as the keyword CL names it by, or the string itself when it is an
+	 * ordinary name. The inverse of the rendering {@link #PATHNAME_DIRECTORY_STRING}
+	 * performs, written as its own defun so the two halves of the round trip sit next to
+	 * each other.
+	 */
+	public static final String PATHNAME_DIRECTORY_COMPONENT = "%PATHNAME-DIRECTORY-COMPONENT";
+
+	/**
+	 * The {@code pathname-name} built-in: the file-name component of a namestring without
+	 * its type -- everything after the last {@code /} and before the LAST dot, where a
+	 * dot at position 0 is part of the name rather than a type separator
+	 * ({@code "d/a.b.c"} is {@code "a.b"}, {@code "d/.a"} is {@code ".a"}). {@code nil}
+	 * when the namestring names no file (it ends in {@code /}), which is what CL answers.
+	 * Prelude Lisp over the shared {@code %pathname-split} rule, so it cannot drift from
+	 * {@link #PATHNAME_TYPE} or from {@link #MAKE_PATHNAME}'s {@code :defaults}
+	 * component-wise defaulting. A component that is exactly {@code "*"} answers
+	 * {@code :wild}, the keyword {@link #MAKE_PATHNAME} builds it from -- decomposition
+	 * is the inverse of construction here as it is for the directory list.
+	 */
+	public static final String PATHNAME_NAME = "PATHNAME-NAME";
+
+	/**
+	 * The {@code pathname-type} built-in: the type (extension) component of a namestring
+	 * without its dot, or {@code nil} when there is none. The sibling of
+	 * {@link #PATHNAME_NAME}, the same split rule and the same {@code :wild} answer.
+	 */
+	public static final String PATHNAME_TYPE = "PATHNAME-TYPE";
+
+	/**
+	 * The {@code pathname-host} built-in: always {@code nil}. A rontolisp namestring is a
+	 * flat Unix-shaped path with no host syntax, so the component is not present, and
+	 * {@code nil} is what CL prescribes for a component that is not there. The argument
+	 * is still validated as a pathname designator, so a non-designator signals exactly as
+	 * {@link #NAMESTRING_CL} does. Prelude Lisp, all four backends.
+	 */
+	public static final String PATHNAME_HOST = "PATHNAME-HOST";
+
+	/**
+	 * The {@code pathname-device} built-in: always {@code nil}, for the reason
+	 * {@link #PATHNAME_HOST} is -- and the same answer SBCL gives on Unix. rove's
+	 * {@code resolve-file} is the caller that asked for it (it pops a directory component
+	 * only for a non-nil, non-{@code :unspecific} device).
+	 */
+	public static final String PATHNAME_DEVICE = "PATHNAME-DEVICE";
+
+	/**
+	 * The {@code pathname-version} built-in: always {@code nil}, for the reason
+	 * {@link #PATHNAME_HOST} is -- rontolisp has no file versions, so no namestring can
+	 * carry one. (SBCL answers {@code :newest} for a pathname it PARSED from a namestring
+	 * and {@code nil} for one {@code make-pathname} built; {@code nil} -- "the component
+	 * is not present" -- is the one answer that is true of every pathname here.)
+	 */
+	public static final String PATHNAME_VERSION = "PATHNAME-VERSION";
+
+	/**
+	 * The {@code wild-pathname-p} built-in: whether the pathname carries a wildcard
+	 * ({@code *} or {@code ?}) in the component the optional field-key names, or in ANY
+	 * component when it is {@code nil}/omitted. {@code :host}, {@code :device} and
+	 * {@code :version} are always {@code nil} here because those components do not exist
+	 * ({@link #PATHNAME_HOST}); {@code :directory}, {@code :name} and {@code :type} test
+	 * the matching piece of the shared {@code %pathname-split}, so the answer cannot
+	 * drift from what {@link #DIRECTORY} actually matches with. Prelude Lisp, all four
+	 * backends.
+	 */
+	public static final String WILD_PATHNAME_P = "WILD-PATHNAME-P";
+
+	/**
+	 * The {@code %wild-component-p} internal helper: whether a namestring piece holds a
+	 * {@code *} or a {@code ?}, i.e. the one definition of "this component is wild" that
+	 * {@link #WILD_PATHNAME_P} tests each component with.
+	 */
+	public static final String WILD_COMPONENT_P = "%WILD-COMPONENT-P";
+
+	/**
+	 * The {@code enough-namestring} built-in: the SHORTEST namestring that still names
+	 * the same file once merged against {@code defaults} (which itself defaults to
+	 * {@link #DEFAULT_PATHNAME_DEFAULTS_VAR}). Over a flat namestring that is exactly
+	 * "drop the defaults' directory prefix when the path starts with it, otherwise answer
+	 * the whole namestring", which is the inverse of the merge {@link #MERGE_PATHNAMES}
+	 * performs, so {@code (merge-pathnames (enough-namestring p d) d)} names {@code p}
+	 * again whenever the prefix matched. rove prints a test's source location with it.
+	 * Prelude Lisp, all four backends.
+	 */
+	public static final String ENOUGH_NAMESTRING = "ENOUGH-NAMESTRING";
+
+	/**
+	 * The {@code file-namestring} built-in: the name-and-type part of a namestring --
+	 * everything after the last {@code /}, or the whole namestring when there is none.
+	 * The complement of {@link #DIRECTORY_NAMESTRING}, taken as the substring the shared
+	 * {@code %pathname-split} directory ends at, so the two always concatenate back to
+	 * {@link #NAMESTRING_CL}. A namestring naming a directory answers {@code ""}. Prelude
+	 * Lisp, all four backends; dexador names a multipart content part with it.
+	 */
+	public static final String FILE_NAMESTRING = "FILE-NAMESTRING";
+
+	/**
+	 * The {@code directory-namestring} built-in: the directory part of a namestring, up
+	 * to and INCLUDING the last {@code /} ({@code ""} when there is none). The complement
+	 * of {@link #FILE_NAMESTRING}.
+	 */
+	public static final String DIRECTORY_NAMESTRING = "DIRECTORY-NAMESTRING";
+
+	/**
+	 * The {@code host-namestring} built-in: always {@code ""}. A rontolisp namestring
+	 * carries no host ({@link #PATHNAME_HOST} is the {@code nil}-answering component),
+	 * and {@code ""} is what CL requires here -- the function is specified to answer a
+	 * STRING, which is also what SBCL answers on Unix. The argument is validated as a
+	 * pathname designator, so a non-designator signals where the rest of the family does.
+	 */
+	public static final String HOST_NAMESTRING = "HOST-NAMESTRING";
+
+	/**
+	 * The {@code translate-pathname} built-in: matches {@code source} against
+	 * {@code from-wildcard} and substitutes the pieces its wildcards captured into
+	 * {@code to-wildcard}, COMPONENT-wise -- directory to directory, name to name, type
+	 * to type -- so each to component receives the captures of its own from component.
+	 * Wildcards are the ones the rest of the pathname family understands -- {@code *} and
+	 * {@code ?} within one component (a {@code *} does NOT span a directory boundary),
+	 * and a {@code **}{@code /} directory segment consuming a RUN of source directories
+	 * as ONE capture, which a {@code **}{@code /} in the to-wildcard writes back
+	 * verbatim. A NIL FROM component matches anything and captures the whole source
+	 * component; an absent TO component is filled from the source, as SBCL's merge does.
+	 * A source that does not match {@code from-wildcard} is an error, as it is in CL.
+	 */
+	public static final String TRANSLATE_PATHNAME = "TRANSLATE-PATHNAME";
+
+	/**
+	 * The {@code %wild-captures} internal helper: the list of substrings the wildcards in
+	 * a pattern matched, left to right, or {@code :no-match}. The capturing twin of
+	 * {@link #WILD_MATCH} -- one matcher rule, two answers -- read by
+	 * {@link #TRANSLATE_PATHNAME}.
+	 */
+	public static final String WILD_CAPTURES = "%WILD-CAPTURES";
+
+	/**
+	 * The {@code translate-logical-pathname} built-in. A namestring whose prefix before
+	 * the first {@code :} is a host defined through
+	 * {@link #LOGICAL_PATHNAME_TRANSLATIONS} is translated by the first rule whose
+	 * from-pattern it matches ({@link #PATHNAME_MATCH_P}, then
+	 * {@link #TRANSLATE_PATHNAME}); every other pathname is physical and answers itself,
+	 * as CL prescribes.
+	 */
+	public static final String TRANSLATE_LOGICAL_PATHNAME = "TRANSLATE-LOGICAL-PATHNAME";
+
+	/**
+	 * The {@code logical-pathname} built-in: the pathname of a namestring naming a
+	 * defined logical host; any other argument signals the {@code type-error} CL
+	 * requires. The answer is the flat pathname value -- there is no distinct
+	 * logical-pathname type ({@code .kb/pathnames.md}).
+	 */
+	public static final String LOGICAL_PATHNAME = "LOGICAL-PATHNAME";
+
+	/**
+	 * The {@code logical-pathname-translations} accessor and its {@code setf} writer: the
+	 * translation list recorded per logical host. Reading an undefined host signals a
+	 * {@code type-error}, as SBCL does.
+	 */
+	public static final String LOGICAL_PATHNAME_TRANSLATIONS = "LOGICAL-PATHNAME-TRANSLATIONS";
+
+	/**
+	 * The {@code load-logical-pathname-translations} built-in: nil for a defined host;
+	 * there is no translations file to search, so an undefined one signals a
+	 * {@code file-error}.
+	 */
+	public static final String LOAD_LOGICAL_PATHNAME_TRANSLATIONS = "LOAD-LOGICAL-PATHNAME-TRANSLATIONS";
+
+	/**
+	 * The internal {@code (%logical-host-entry host &optional create)} helper: the
+	 * {@code (HOST . translations)} cell of the logical-host table, created when asked.
+	 */
+	public static final String LOGICAL_HOST_ENTRY = "%LOGICAL-HOST-ENTRY";
+
+	/**
+	 * The {@code pathname-match-p} built-in: component-wise wildcard matching over the
+	 * flat namestring, the same per-component rule {@link #TRANSLATE_PATHNAME} matches by
+	 * (a missing wildcard component matches anything, {@code *} a missing component).
+	 */
+	public static final String PATHNAME_MATCH_P = "PATHNAME-MATCH-P";
+
+	/**
+	 * The {@code *default-pathname-defaults*} variable: the pathname {@code merge}-style
+	 * operators default their {@code defaults} argument to. Initially {@code #P""} -- the
+	 * empty pathname, which is also SBCL's initial value and the only honest one here,
+	 * since rontolisp absolutizes nothing and has no notion of a process working
+	 * directory it could name. A genuine dynamic variable on all four backends (the
+	 * compile paths get a {@code defvar} injected for a program that mentions it), so
+	 * {@code (let ((*default-pathname-defaults* #P"d/")) ...)} binds.
+	 */
+	public static final String DEFAULT_PATHNAME_DEFAULTS_VAR = "*DEFAULT-PATHNAME-DEFAULTS*";
+
+	/**
+	 * The {@code %pathname-split} internal helper: a namestring to
+	 * {@code (directory name . type)}, where {@code name} and {@code type} are nil when
+	 * absent. The ONE place the "last dot separates the type, position 0 does not" rule
+	 * lives, shared by {@link #PATHNAME_NAME}, {@link #PATHNAME_TYPE} and the runtime
+	 * {@link #MAKE_PATHNAME}; pinned against the Java {@code PathnameOps.components} by
+	 * {@code LispPreludeLibraryTest}.
+	 */
+	public static final String PATHNAME_SPLIT = "%PATHNAME-SPLIT";
+
+	/**
+	 * The {@code %pathname-directory-string} internal helper: {@link #MAKE_PATHNAME}'s
+	 * {@code :directory} argument (a {@code (:relative "a" "b")} / {@code (:absolute
+	 * ...)} list, a bare list of components, or a directory namestring) as a directory
+	 * prefix with its trailing {@code /}. {@code :up} / {@code :back} render as
+	 * {@code ..}, {@code :wild} as {@code *} and {@code :wild-inferiors} as {@code **}.
+	 * The Lisp twin of {@code PathnameOps.formatDirectory}.
+	 */
+	public static final String PATHNAME_DIRECTORY_STRING = "%PATHNAME-DIRECTORY-STRING";
+
+	/**
+	 * The {@code %pathname-component-string} internal helper: {@link #MAKE_PATHNAME}'s
+	 * {@code :name} / {@code :type} argument as a string -- a string passes through, nil
+	 * is the empty component, {@code :wild} is the {@code *} it names, and any other
+	 * symbol or keyword contributes its name.
+	 */
+	public static final String PATHNAME_COMPONENT_STRING = "%PATHNAME-COMPONENT-STRING";
+
+	/**
+	 * The {@code delete-file} built-in function: deletes the named file, answering
+	 * {@code t}. Interpreter and JVM delete for real; both WASM backends signal at CALL
+	 * time, exactly like {@link #ENSURE_DIRECTORIES_EXIST} and for the same reason -- the
+	 * WASI import set here carries no unlink call, and "the file is gone afterwards" has
+	 * no honest non-answer. Lite deviation: CL signals a {@code file-error} when the file
+	 * does not exist, and so does this.
+	 */
+	public static final String DELETE_FILE = "DELETE-FILE";
+
+	/**
+	 * The {@code %delete-file} internal primitive: delete the named file, answering
+	 * {@code t}, or {@code nil} when it does not exist / cannot be deleted. The
+	 * write-side sibling of {@link #LIST_DIRECTORY} and {@link #MAKE_DIRECTORIES}, and
+	 * the one call {@link #DELETE_FILE} is Lisp source over, so the "what does a missing
+	 * file do" rule has a single definition. Both WASM backends lower it to a call-time
+	 * error.
+	 */
+	public static final String DELETE_FILE_INTERNAL = "%DELETE-FILE";
+
+	/**
+	 * The {@code rename-file} built-in function: renames (moves) a file, answering the
+	 * new name as a pathname. Interpreter and JVM rename for real; both WASM backends
+	 * signal at CALL time, exactly like {@link #DELETE_FILE} and for the same reason --
+	 * the WASI import set here carries no rename call, and "the file is at the new name
+	 * afterwards" has no honest non-answer.
+	 *
+	 * <p>
+	 * Lite deviation: CL returns {@code (values defaulted-new-name old-truename
+	 * new-truename)} and this returns the defaulted new name only, the same rule
+	 * {@link #ENSURE_DIRECTORIES_EXIST} follows -- a prelude defun's secondary values
+	 * would not survive the function boundary on the compile paths, so promising them
+	 * would be the lie.
+	 */
+	public static final String RENAME_FILE = "RENAME-FILE";
+
+	/**
+	 * The {@code %rename-file} internal primitive: rename the first namestring to the
+	 * second, answering {@code t}, or {@code nil} when the source does not exist or the
+	 * host refused. The third write-side sibling of {@link #LIST_DIRECTORY} /
+	 * {@link #MAKE_DIRECTORIES} / {@link #DELETE_FILE_INTERNAL}, and the one call
+	 * {@link #RENAME_FILE} is Lisp source over, so the "what does a missing file do" rule
+	 * has a single definition. Both WASM backends lower it to a call-time error.
+	 */
+	public static final String RENAME_FILE_INTERNAL = "%RENAME-FILE";
+
+	/**
+	 * The {@code y-or-n-p} built-in function: prints the (optional) {@code format}
+	 * control + arguments followed by {@code " (y or n) "} and reads one line from
+	 * standard input, answering {@code t} for a line starting with {@code y}/{@code Y}
+	 * and {@code nil} for one starting with {@code n}/{@code N}, re-asking otherwise.
+	 * Prelude Lisp over {@code read-line}, so every backend behaves identically. Lite
+	 * deviation: CL's {@code y-or-n-p} reads single CHARACTERS without echo where this
+	 * reads a line, and end-of-input answers {@code nil} instead of signalling (a
+	 * non-interactive backend has no way to ask again).
+	 */
+	public static final String Y_OR_N_P = "Y-OR-N-P";
+
+	/**
+	 * The {@code directory} built-in, in ANSI's shape: the TRUENAMES of the files
+	 * MATCHING the pathspec, each once, sorted with {@code string<} so every backend
+	 * answers in the same order whatever the host's readdir order is, and nil when
+	 * nothing matches (it never signals). Lisp source over {@link #LIST_DIRECTORY}.
+	 * SBCL's {@code :resolve-symlinks} key: nil keeps the matched spellings, a link to a
+	 * directory in directory form and a dangling link dropped.
+	 * <ul>
+	 * <li>A wild NAME component -- {@code "src/*.lisp"}, {@code "src/*"},
+	 * {@code "src/*.*"} -- lists the directory and keeps the entries the pattern matches
+	 * ({@link #WILD_MATCH}; {@code "*.*"} matches every entry, including one with no
+	 * type, which is what CL means by it). A link is matched by its own name and answered
+	 * by its truename ({@link #PROBE_TRUENAME_INTERNAL}); a directory carries a trailing
+	 * {@code /}.</li>
+	 * <li>A non-wild pathspec designates ITSELF, as in CL: {@code "src/f.lisp"} answers
+	 * its truename when the file exists, and a directory answers itself in directory form
+	 * ({@code "src"} and {@code "src/"} both give {@code ("src/")}) -- listing it is
+	 * {@code "src/*.*"}, not {@code "src/"}.</li>
+	 * <li>A wild DIRECTORY component expands the prefix before the name is matched
+	 * ({@link #WILD_DIRS}): {@code "src/*}{@code /f.lisp"} walks one level, and
+	 * {@code "src/**}{@code /*.lisp"} walks the whole subtree including {@code src/}
+	 * itself, because {@code :wild-inferiors} matches zero levels as well as many.</li>
+	 * </ul>
+	 */
+	public static final String DIRECTORY = "DIRECTORY";
+
+	/**
+	 * The {@code %directory-in} internal helper: {@link #DIRECTORY}'s per-directory half
+	 * -- the entries of ONE directory prefix that a final (name) component matches, or
+	 * the pathspec itself when that component is not wild. Split out so the wild-
+	 * directory walk can run the identical name matching in every directory
+	 * {@link #WILD_DIRS} expanded to.
+	 */
+	public static final String DIRECTORY_IN = "%DIRECTORY-IN";
+
+	/**
+	 * The {@code %directory-subdirs} internal helper: the SUBDIRECTORY entries of one
+	 * directory prefix (each with its trailing {@code /}), a link to a directory among
+	 * them, sorted. The one step {@link #WILD_DIRS} descends by.
+	 */
+	public static final String DIRECTORY_SUBDIRS = "%DIRECTORY-SUBDIRS";
+
+	/**
+	 * The {@code %wild-dirs} internal helper: a directory prefix plus the remaining
+	 * directory components, expanded to every existing directory namestring they match. A
+	 * {@code **} component contributes the base itself AND every subtree below it, in
+	 * that order, which is what makes {@code :wild-inferiors} match zero levels; a
+	 * {@code *} (or any other wild component) descends exactly one level.
+	 */
+	public static final String WILD_DIRS = "%WILD-DIRS";
+
+	/**
+	 * The {@code %path-dir-parts} internal helper: a directory namestring split into its
+	 * components, the leading {@code /} of an absolute path dropped (the caller carries
+	 * it as the starting base).
+	 */
+	public static final String PATH_DIR_PARTS = "%PATH-DIR-PARTS";
+
+	/** The {@code write-line} built-in function. */
+	public static final String WRITE_LINE = "WRITE-LINE";
+
+	/**
+	 * The {@code with-open-stream} macro: binds a variable to an already-open stream
+	 * expression and closes it on exit (the {@code with-open-file} shape without the
+	 * open).
+	 */
+	public static final String WITH_OPEN_STREAM = "WITH-OPEN-STREAM";
+
+	/** The {@code with-open-file} macro. */
+	public static final String WITH_OPEN_FILE = "WITH-OPEN-FILE";
+
+	/**
+	 * The {@code unwind-protect} special form: runs cleanup forms on every exit from the
+	 * protected form (normal return, {@code error} unwind, {@code return}/
+	 * {@code return-from}). Interpreter and JVM backends only; a WASM error is an
+	 * uncatchable trap, so the WASM compilers reject it.
+	 */
+	public static final String UNWIND_PROTECT = "UNWIND-PROTECT";
+
+	/** The {@code :direction} keyword recognized by {@code with-open-file}. */
+	public static final String DIRECTION_KEYWORD = ":DIRECTION";
+
+	/** The {@code :initial-value} keyword recognized by {@code reduce}. */
+	public static final String INITIAL_VALUE_KEYWORD = ":INITIAL-VALUE";
+
+	/**
+	 * The {@code :test} keyword recognized by {@code member} (the equality predicate).
+	 */
+	public static final String TEST_KEYWORD = ":TEST";
+
+	/**
+	 * The {@code :key} keyword recognized by the sequence and alist functions (a selector
+	 * applied to each element before the equality test).
+	 */
+	public static final String KEY_KEYWORD = ":KEY";
+
+	/**
+	 * The {@code :test-not} keyword recognized by {@code position} (the negated equality
+	 * predicate).
+	 */
+	public static final String TEST_NOT_KEYWORD = ":TEST-NOT";
+
+	/**
+	 * The {@code :from-end} keyword recognized by the {@code position} family (when true,
+	 * the index of the last match is returned).
+	 */
+	public static final String FROM_END_KEYWORD = ":FROM-END";
+
+	/**
+	 * The {@code :count} keyword recognized by the {@code remove} / {@code substitute}
+	 * family: the number of matching elements to act on, {@code nil} meaning every one.
+	 */
+	public static final String COUNT_KEYWORD = ":COUNT";
+
+	/** The {@code :input} keyword (open a file for reading). */
+	public static final String INPUT_KEYWORD = ":INPUT";
+
+	/** The {@code :output} keyword (open a file for writing). */
+	public static final String OUTPUT_KEYWORD = ":OUTPUT";
+
+	/**
+	 * The {@code :probe} direction: {@code open} answers a file stream that is already
+	 * CLOSED (or nil when the file is not there), so a program can ask about the file
+	 * without reading it. It needs no mode of its own -- the lowering opens for input and
+	 * closes.
+	 */
+	public static final String PROBE_KEYWORD = ":PROBE";
+
+	/**
+	 * The {@code :io} direction: one BIDIRECTIONAL file stream, reads and writes sharing
+	 * one cursor. It is a real Common Lisp direction and also the normalized spelling of
+	 * the truncating variant; {@link #IO_APPEND_KEYWORD} and
+	 * {@link #IO_OVERWRITE_KEYWORD} are its two {@code :if-exists} variants.
+	 */
+	public static final String IO_KEYWORD = ":IO";
+
+	/**
+	 * The {@code :append} pseudo-direction: the NORMALIZED spelling of
+	 * {@code :direction :output :if-exists :append}, not a Common Lisp direction of its
+	 * own. {@code compiler.OpenModes.normalizeKeywordForm} and
+	 * {@code LispMacroExpander.expandWithOpenFile} both produce it so that every backend
+	 * reads one literal token where the source wrote an option pair.
+	 */
+	public static final String APPEND_KEYWORD = ":APPEND";
+
+	/**
+	 * The {@code :overwrite} pseudo-direction: the NORMALIZED spelling of
+	 * {@code :direction :output :if-exists :overwrite} -- open for writing WITHOUT
+	 * truncating, positioned at 0, so the bytes past what is written survive. The
+	 * {@link #APPEND_KEYWORD} shape exactly, one disposition over.
+	 */
+	public static final String OVERWRITE_KEYWORD = ":OVERWRITE";
+
+	/**
+	 * The {@code :io-append} pseudo-direction: {@code :direction :io :if-exists :append}
+	 * as one literal token.
+	 */
+	public static final String IO_APPEND_KEYWORD = ":IO-APPEND";
+
+	/**
+	 * The {@code :io-overwrite} pseudo-direction: {@code :direction :io :if-exists
+	 * :overwrite} as one literal token.
+	 */
+	public static final String IO_OVERWRITE_KEYWORD = ":IO-OVERWRITE";
+
+	/**
+	 * The one direction token naming a WRITING open of the given direction and
+	 * {@code :if-exists} disposition -- what {@code open}'s lowerings put in the
+	 * positional form so that every backend resolves the whole mode from ONE literal
+	 * ({@code compiler.OpenModes.directionMode} is the mapping to the mode bits).
+	 * @param io whether the direction is {@code :io} rather than {@code :output}
+	 * @param append whether the disposition is {@code :append}
+	 * @param overwrite whether the disposition is {@code :overwrite}
+	 * @return the direction keyword name
+	 */
+	public static String outputDirectionToken(boolean io, boolean append, boolean overwrite) {
+		if (io) {
+			return append ? IO_APPEND_KEYWORD : overwrite ? IO_OVERWRITE_KEYWORD : IO_KEYWORD;
+		}
+		return append ? APPEND_KEYWORD : overwrite ? OVERWRITE_KEYWORD : OUTPUT_KEYWORD;
+	}
+
+	/**
+	 * The {@code :element-type} keyword recognized by {@code with-open-file} (and as the
+	 * optional third {@code open} argument): the literal {@code '(unsigned-byte 8)}
+	 * selects a binary stream, the literal {@code 'character} the default text stream.
+	 */
+	public static final String ELEMENT_TYPE_KEYWORD = ":ELEMENT-TYPE";
+
+	/** The {@code unsigned-byte} type specifier symbol used in {@code :element-type}. */
+	public static final String UNSIGNED_BYTE = "UNSIGNED-BYTE";
+
+	/** The {@code character} type specifier symbol used in {@code :element-type}. */
+	public static final String CHARACTER_TYPE = "CHARACTER";
+
+	/** The {@code character} function: the character a character designator names. */
+	public static final String CHARACTER = "CHARACTER";
+
+	/**
+	 * The {@code double-float} type specifier symbol. As the {@code :element-type} of
+	 * {@code make-array} (and the element type of a {@code #d(...)} literal) it selects
+	 * the packed {@link am.ik.rontolisp.LispDoubleFloatArray} representation.
+	 */
+	public static final String DOUBLE_FLOAT = "DOUBLE-FLOAT";
+
+	/**
+	 * The {@code single-float} type specifier symbol. As the {@code :element-type} of
+	 * {@code make-array} (and the element type of a {@code #f(...)} literal) it selects
+	 * the packed {@link am.ik.rontolisp.LispSingleFloatArray} representation (f32
+	 * backing; scalars still read/write as {@code double}, widening on read and narrowing
+	 * on write).
+	 */
+	public static final String SINGLE_FLOAT = "SINGLE-FLOAT";
+
+	/**
+	 * The {@code bfloat16} type specifier symbol. As the {@code :element-type} of
+	 * {@code make-array} (and the element type of a {@code #bf16(...)} literal) it
+	 * selects the packed {@link am.ik.rontolisp.LispBFloat16Array} representation: the
+	 * TOP 16 BITS of an f32, so widening to a float is exact and narrowing rounds to
+	 * nearest even. Scalars still read/write as {@code double}, like the two CL widths.
+	 *
+	 * <p>
+	 * This is a rontolisp EXTENSION, not a Common Lisp type: it belongs to the
+	 * {@code rontolisp} package and must never be added to {@code CL_SYMBOLS}. It is a
+	 * fourth subtype of {@code float} and an EMPTY one -- a lattice EDGE below
+	 * {@code float} ({@code LispMacroExpander.SUBTYPEP_PARENTS}), never one of the
+	 * collapsed float aliases: no scalar has the type, so {@code (typep 1.0 'bfloat16)}
+	 * is nil while {@code (subtypep 'bfloat16 'float)} is t. Distinct from
+	 * {@link #BFLOAT16_KEYWORD}, which names a bit-pattern FORMAT for the bulk
+	 * widen/narrow primitives rather than an array element type.
+	 */
+	public static final String BFLOAT16 = "BFLOAT16";
+
+	/** The {@code read-byte} built-in function (binary streams only). */
+	public static final String READ_BYTE = "READ-BYTE";
+
+	/** The {@code write-byte} built-in function (binary streams only). */
+	public static final String WRITE_BYTE = "WRITE-BYTE";
+
+	/** The {@code read-sequence} macro (fills a vector from a binary stream). */
+	public static final String READ_SEQUENCE = "READ-SEQUENCE";
+
+	/** The {@code write-sequence} macro (writes a vector to a binary stream). */
+	public static final String WRITE_SEQUENCE = "WRITE-SEQUENCE";
+
+	/**
+	 * The {@code force-output} built-in function: flushes an output stream's buffered
+	 * bytes to the underlying sink ({@code finish-output} is the same operation here --
+	 * every write is synchronous once flushed). Returns nil.
+	 */
+	public static final String FORCE_OUTPUT = "FORCE-OUTPUT";
+
+	/** The {@code finish-output} built-in function (alias of {@code force-output}). */
+	public static final String FINISH_OUTPUT = "FINISH-OUTPUT";
+
+	/**
+	 * The {@code clear-output} built-in function: discards whatever the output stream has
+	 * buffered but not yet written. Nothing is buffered in a discardable way on any
+	 * backend -- a write is synchronous once flushed -- so this validates its stream
+	 * designator and answers nil, the same lite shape {@code force-output} has. It exists
+	 * because the Gray protocol names {@code stream-clear-output} and a portable stream
+	 * class implements it.
+	 */
+	public static final String CLEAR_OUTPUT = "CLEAR-OUTPUT";
+
+	/**
+	 * The {@code clear-input} function: discards whatever the input stream has buffered
+	 * but not yet delivered. Nothing on any backend buffers input a program could throw
+	 * away -- a read reaches the underlying source as it is made -- so this validates its
+	 * stream designator and answers nil, {@link #CLEAR_OUTPUT}'s shape on the read side.
+	 * Prelude Lisp, since there is no primitive underneath it.
+	 */
+	public static final String CLEAR_INPUT = "CLEAR-INPUT";
+
+	/**
+	 * The {@code file-string-length} function: how far writing the object would advance
+	 * {@code file-position} on the stream -- the object's UTF-8 byte length, the one
+	 * external format every backend writes.
+	 */
+	public static final String FILE_STRING_LENGTH = "FILE-STRING-LENGTH";
+
+	/**
+	 * The {@code interactive-stream-p} function: whether the stream is attached to an
+	 * interactive device -- a process standard stream that is a terminal
+	 * ({@link #TERMINAL_P_INTERNAL}); {@code t} asks for standard input and output
+	 * together. Every other stream answers nil. Prelude Lisp.
+	 */
+	public static final String INTERACTIVE_STREAM_P = "INTERACTIVE-STREAM-P";
+
+	/**
+	 * The {@code stream-external-format} function: {@code :utf-8} for every stream, the
+	 * one external format the reader and every writer use.
+	 */
+	public static final String STREAM_EXTERNAL_FORMAT = "STREAM-EXTERNAL-FORMAT";
+
+	/**
+	 * The {@code broadcast-stream-streams} accessor: a broadcast stream's component list,
+	 * the sibling of {@link #CONCATENATED_STREAM_STREAMS}.
+	 */
+	public static final String BROADCAST_STREAM_STREAMS = "BROADCAST-STREAM-STREAMS";
+
+	/**
+	 * The {@code listen} built-in function: whether a character/byte is immediately
+	 * available on an input stream without blocking.
+	 */
+	public static final String LISTEN = "LISTEN";
+
+	// String streams
+
+	/** The {@code write-string} built-in function (a string to a stream, no newline). */
+	public static final String WRITE_STRING = "WRITE-STRING";
+
+	/**
+	 * The {@code write-char} operator: writes a single character, expanding to
+	 * {@code write-string} of its one-character string on every backend.
+	 */
+	public static final String WRITE_CHAR = "WRITE-CHAR";
+
+	/**
+	 * The {@code write-to-string} built-in function (a {@code prin1-to-string} alias).
+	 */
+	public static final String WRITE_TO_STRING = "WRITE-TO-STRING";
+
+	/**
+	 * The {@code %write-to-string-keyed} prelude defun: {@code #'write-to-string}'s
+	 * keyword arm on the compile paths, {@code (%write-to-string-keyed object keys)}
+	 * binding the printer variables the runtime keyword list names around one print --
+	 * what the call-position lowering
+	 * ({@code LispMacroExpander.expandWriteToStringKeywords}) does with a literal tail.
+	 * Spliced only for a program that can pass a function value of
+	 * {@code write-to-string} more than one argument; the wrapper calls it only where it
+	 * was spliced ({@code BuiltinFunctionWrappers}).
+	 */
+	public static final String WRITE_TO_STRING_KEYED_INTERNAL = "%WRITE-TO-STRING-KEYED";
+
+	/** The {@code with-output-to-string} macro (collect output into a string). */
+	public static final String WITH_OUTPUT_TO_STRING = "WITH-OUTPUT-TO-STRING";
+
+	/** The {@code with-input-from-string} macro (read from a string as a stream). */
+	public static final String WITH_INPUT_FROM_STRING = "WITH-INPUT-FROM-STRING";
+
+	/**
+	 * The {@code with-standard-io-syntax} macro: a {@code let} of the reader and printer
+	 * control variables to CLHS 23.1.2's table around its body
+	 * ({@code LispMacroExpander#expandWithStandardIoSyntax}).
+	 */
+	public static final String WITH_STANDARD_IO_SYNTAX = "WITH-STANDARD-IO-SYNTAX";
+
+	/**
+	 * The {@code with-compilation-unit} macro: a {@code progn} around the body, which is
+	 * the whole of it here. Its option list only controls how the deferred-warning report
+	 * of an enclosing unit is merged, and there is no {@code compile-file} to defer a
+	 * warning from -- the compile backends compile a whole program in one pass. Upstream
+	 * ASDF wraps every operation sequence in one.
+	 */
+	public static final String WITH_COMPILATION_UNIT = "WITH-COMPILATION-UNIT";
+
+	/** The internal {@code %make-string-output-stream} helper (string-builder stream). */
+	public static final String MAKE_STRING_OUTPUT_STREAM_INTERNAL = "%MAKE-STRING-OUTPUT-STREAM";
+
+	/** The internal {@code %make-string-input-stream} helper (read from a string). */
+	public static final String MAKE_STRING_INPUT_STREAM_INTERNAL = "%MAKE-STRING-INPUT-STREAM";
+
+	/**
+	 * The internal {@code %string-stream-contents} helper: the string accumulated by a
+	 * {@code %make-string-output-stream} stream, which it also CLEARS (CL's
+	 * {@code get-output-stream-string} contract -- {@link #GET_OUTPUT_STREAM_STRING} is
+	 * its public spelling).
+	 */
+	public static final String STRING_STREAM_CONTENTS_INTERNAL = "%STRING-STREAM-CONTENTS";
+
+	/**
+	 * The {@code make-string-output-stream} built-in function: a fresh string output
+	 * stream, the public spelling of {@link #MAKE_STRING_OUTPUT_STREAM_INTERNAL}.
+	 */
+	public static final String MAKE_STRING_OUTPUT_STREAM = "MAKE-STRING-OUTPUT-STREAM";
+
+	/**
+	 * The {@code make-string-input-stream} built-in function: a character input stream
+	 * over a string, the public spelling of {@link #MAKE_STRING_INPUT_STREAM_INTERNAL}.
+	 * CL's lambda list is {@code (string &optional start end)}, and the bounded form is
+	 * the stream over that subsequence.
+	 */
+	public static final String MAKE_STRING_INPUT_STREAM = "MAKE-STRING-INPUT-STREAM";
+
+	/**
+	 * The {@code get-output-stream-string} built-in function: the string a
+	 * {@code make-string-output-stream} stream has accumulated so far, CLEARING the
+	 * stream so the next call answers only what was written after this one.
+	 */
+	public static final String GET_OUTPUT_STREAM_STRING = "GET-OUTPUT-STREAM-STRING";
+
+	/**
+	 * The {@code make-synonym-stream} built-in function: a stream that forwards every
+	 * operation to the CURRENT value of the symbol it names.
+	 */
+	public static final String MAKE_SYNONYM_STREAM = "MAKE-SYNONYM-STREAM";
+
+	/**
+	 * The {@code synonym-stream-symbol} built-in function: the symbol a synonym stream
+	 * forwards to, i.e. the argument {@link #MAKE_SYNONYM_STREAM} was given.
+	 */
+	public static final String SYNONYM_STREAM_SYMBOL = "SYNONYM-STREAM-SYMBOL";
+
+	/**
+	 * The internal prelude helper every stream-designator resolution funnels a designator
+	 * through: a synonym stream answers the CURRENT value of the variable it names (by
+	 * calling the reader closure reserved beside its declared slot), recursively, so a
+	 * synonym over a synonym resolves too; anything else answers itself.
+	 */
+	public static final String STREAM_TARGET = "%STREAM-TARGET";
+
+	/**
+	 * The internal spelling of {@link #CLOSE} that skips the synonym-stream guard -- the
+	 * plain-designator close the guard falls through to. Without a second name the guard
+	 * would re-expand into itself.
+	 */
+	public static final String CLOSE_INTERNAL = "%CLOSE";
+
+	// The printer entry points and the pretty-printer subset (.kb/pretty-printer.md)
+
+	/**
+	 * The {@code write} standard function: the printer entry point whose keyword
+	 * arguments BIND the printer control variables around one print. A prelude defun over
+	 * {@code prin1-to-string} / {@code princ-to-string}.
+	 */
+	public static final String WRITE = "WRITE";
+
+	/**
+	 * The {@code pprint} standard function: a fresh line then {@code write} with
+	 * {@code :escape t :pretty t}, returning no values. A prelude defun.
+	 */
+	public static final String PPRINT = "PPRINT";
+
+	/**
+	 * The {@code pprint-logical-block} standard macro: writes the prefix, runs the body,
+	 * writes the suffix. rontolisp streams carry no column, so the block never WRAPS --
+	 * see {@link #PPRINT_NEWLINE}.
+	 */
+	public static final String PPRINT_LOGICAL_BLOCK = "PPRINT-LOGICAL-BLOCK";
+
+	/**
+	 * The {@code pprint-pop} standard macro: the next element of the enclosing block's
+	 * list, leaving the block once {@code *print-length*} elements are out or the rest is
+	 * no list.
+	 */
+	public static final String PPRINT_POP = "PPRINT-POP";
+
+	/**
+	 * The {@code pprint-exit-if-list-exhausted} standard macro: leaves the enclosing
+	 * block when its list is exhausted.
+	 */
+	public static final String PPRINT_EXIT_IF_LIST_EXHAUSTED = "PPRINT-EXIT-IF-LIST-EXHAUSTED";
+
+	/**
+	 * The {@code pprint-newline} standard function: a line break for {@code :mandatory},
+	 * nothing for the three conditional kinds ({@code :linear} / {@code :fill} /
+	 * {@code :miser}) -- deciding those needs the stream's current column, which no
+	 * backend tracks. A prelude defun.
+	 */
+	public static final String PPRINT_NEWLINE = "PPRINT-NEWLINE";
+
+	/**
+	 * The {@code pprint-indent} standard function: accepted and ignored (no column
+	 * tracking, so no indentation state exists to change). A prelude defun.
+	 */
+	public static final String PPRINT_INDENT = "PPRINT-INDENT";
+
+	/**
+	 * The {@code pprint-tab} standard function: accepted and ignored, like
+	 * {@link #PPRINT_INDENT}. A prelude defun.
+	 */
+	public static final String PPRINT_TAB = "PPRINT-TAB";
+
+	/**
+	 * The {@code copy-pprint-dispatch} standard function: a fresh dispatch table holding
+	 * a copy of the argument's entries (an explicit nil means the INITIAL table, which is
+	 * empty here). A prelude defun.
+	 */
+	public static final String COPY_PPRINT_DISPATCH = "COPY-PPRINT-DISPATCH";
+
+	/**
+	 * The {@code set-pprint-dispatch} standard function: adds (or, with a nil function,
+	 * removes) the entry for a type specifier in a dispatch table. A prelude defun.
+	 */
+	public static final String SET_PPRINT_DISPATCH = "SET-PPRINT-DISPATCH";
+
+	/**
+	 * The {@code pprint-dispatch} standard function: the highest-priority entry function
+	 * matching an object, and whether one was found. A prelude defun.
+	 */
+	public static final String PPRINT_DISPATCH = "PPRINT-DISPATCH";
+
+	/**
+	 * The {@code %pprint-dispatch-default} internal helper: the {@code (stream object)}
+	 * printer {@code pprint-dispatch} answers with when no entry matches.
+	 */
+	public static final String PPRINT_DISPATCH_DEFAULT = "%PPRINT-DISPATCH-DEFAULT";
+
+	/** The {@code :stream} keyword argument of {@link #WRITE}. */
+	public static final String STREAM_KEYWORD = ":STREAM";
+
+	/**
+	 * The {@code :raw-body} keyword argument of {@link #HTTP_HANDLER} (and of the
+	 * {@code %http-server-start} seam): it selects the shape of the served request body,
+	 * {@link #STREAM_KEYWORD} (the default, rontolisp's asynchronous stream) or
+	 * {@link #BUFFERED_KEYWORD} (fully read and synchronously readable -- what a Clack
+	 * application needs).
+	 */
+	public static final String RAW_BODY_KEYWORD = ":RAW-BODY";
+
+	/** The {@code :buffered} value of {@link #RAW_BODY_KEYWORD}. */
+	public static final String BUFFERED_KEYWORD = ":BUFFERED";
+
+	// Packages
+
+	/** The {@code in-package} directive that switches the current package. */
+	public static final String IN_PACKAGE = "IN-PACKAGE";
+
+	/**
+	 * The {@code defpackage} directive that defines a new package. Like
+	 * {@code in-package}, it is a literal, top-level, read/compile-time directive
+	 * consumed by the {@code PackageResolver}.
+	 */
+	public static final String DEFPACKAGE = "DEFPACKAGE";
+
+	/**
+	 * The {@code use-package} standard function, which adds packages to a package's use
+	 * list so their external symbols are visible unqualified. Packages are resolved at
+	 * read/compile time here, so a literal top-level call is consumed by the
+	 * {@code PackageResolver} exactly like {@code in-package} (and therefore works on
+	 * every backend); the interpreter additionally binds it as a runtime function for
+	 * computed calls.
+	 */
+	public static final String USE_PACKAGE = "USE-PACKAGE";
+
+	/**
+	 * The {@code unuse-package} standard function, the inverse of {@link #USE_PACKAGE}:
+	 * the named packages leave the target's use list, so their external symbols stop
+	 * being visible unqualified there. Same literal-consumption rule as
+	 * {@link #USE_PACKAGE} -- a literal top-level call is consumed by the
+	 * {@code PackageResolver}, a computed one runs as a function (the interpreter over
+	 * the live registry, the compiled backends over {@code %runtime-packages%}).
+	 */
+	public static final String UNUSE_PACKAGE = "UNUSE-PACKAGE";
+
+	/**
+	 * The {@code export} standard function, which makes symbols EXTERNAL in a package --
+	 * the runtime spelling of {@code defpackage}'s {@code :export} clause, used by
+	 * libraries that build their export list programmatically. Handled exactly like
+	 * {@link #USE_PACKAGE}: a literal top-level call is consumed by the
+	 * {@code PackageResolver} (so it takes effect for the forms that follow and works on
+	 * every backend), while a computed call stays a runtime function only the interpreter
+	 * can serve.
+	 */
+	public static final String EXPORT = "EXPORT";
+
+	/**
+	 * The {@code unexport} standard function, the inverse of {@link #EXPORT}: the symbol
+	 * stays present in the package but is no longer visible unqualified through a
+	 * {@code use}. Same literal-consumption rule.
+	 */
+	public static final String UNEXPORT = "UNEXPORT";
+
+	/**
+	 * The {@code import} standard function, which makes a symbol of another package
+	 * accessible unqualified in a package -- the runtime spelling of {@code defpackage}'s
+	 * {@code :import-from} clause. Handled exactly like {@link #USE_PACKAGE}: a literal
+	 * top-level call is consumed by the {@code PackageResolver} (so it takes effect for
+	 * the forms that follow and works on every backend), while a computed call stays a
+	 * runtime function only the interpreter can serve.
+	 */
+	public static final String IMPORT = "IMPORT";
+
+	/**
+	 * The {@code shadow} standard function: makes the named symbols the package's OWN
+	 * present symbols, ahead of anything a used package exports under those names, and
+	 * lists them among its shadowing symbols. A runtime function on every backend: the
+	 * interpreter writes the live registry, the compiled backends the
+	 * {@code %runtime-packages%} member table (a read/compile-time package is frozen
+	 * there and answers {@code t} without a change).
+	 */
+	public static final String SHADOW = "SHADOW";
+
+	/**
+	 * The {@code shadowing-import} standard function: imports the given symbols,
+	 * displacing a present symbol of the same name, and lists them among the package's
+	 * shadowing symbols. Same runtime split as {@link #SHADOW}.
+	 */
+	public static final String SHADOWING_IMPORT = "SHADOWING-IMPORT";
+
+	/**
+	 * The {@code unintern} standard function: removes a present symbol from a package's
+	 * member table, so {@code find-symbol} stops answering it and -- when the package was
+	 * its home -- {@code symbol-package} answers nil. Same runtime split as
+	 * {@link #SHADOW}.
+	 */
+	public static final String UNINTERN = "UNINTERN";
+
+	/**
+	 * The {@code %package-iterator-entries} helper behind {@code with-package-iterator}:
+	 * {@code (%package-iterator-entries package-list symbol-types)} answers the
+	 * {@code (symbol status package)} triples the iterator hands out, one per accessible
+	 * symbol whose status is in the list. The interpreter binds a native over its live
+	 * registry; the compiled backends a prelude defun over the baked table plus the
+	 * runtime member table.
+	 */
+	public static final String PACKAGE_ITERATOR_ENTRIES_INTERNAL = "%PACKAGE-ITERATOR-ENTRIES";
+
+	/**
+	 * The {@code %runtime-member-find} helper of the compiled backends: the symbol a
+	 * {@code %runtime-packages%} entry makes accessible under a name (a present member,
+	 * else one inherited through its use list), or nil. Read by the {@code find-symbol}
+	 * lowering when the designator names a runtime package.
+	 */
+	public static final String RUNTIME_MEMBER_FIND_INTERNAL = "%RUNTIME-MEMBER-FIND";
+
+	/**
+	 * The {@code %runtime-member-status} helper of the compiled backends: the
+	 * accessibility status ({@code :internal} / {@code :external} / {@code :inherited})
+	 * of a name in a {@code %runtime-packages%} entry, or nil -- the second value beside
+	 * {@link #RUNTIME_MEMBER_FIND_INTERNAL}.
+	 */
+	public static final String RUNTIME_MEMBER_STATUS_INTERNAL = "%RUNTIME-MEMBER-STATUS";
+
+	/**
+	 * The {@code %runtime-member-intern} helper of the compiled backends: the accessible
+	 * symbol of that name in a {@code %runtime-packages%} entry, or a fresh internal
+	 * member recorded in it -- the {@code intern} lowering's runtime-package arm.
+	 */
+	public static final String RUNTIME_MEMBER_INTERN_INTERNAL = "%RUNTIME-MEMBER-INTERN";
+
+	/**
+	 * The {@code %runtime-external-find} helper of the compiled backends: the symbol a
+	 * package (a runtime entry or a baked row) EXPORTS under a name, or nil -- what a
+	 * using package inherits.
+	 */
+	public static final String RUNTIME_EXTERNAL_FIND_INTERNAL = "%RUNTIME-EXTERNAL-FIND";
+
+	/**
+	 * The {@code %runtime-package-op} helper of the compiled backends:
+	 * {@code (%runtime-package-op operator symbols package)} runs one of the member-table
+	 * mutations ({@code export} / {@code unexport} / {@code import} /
+	 * {@code shadowing-import} / {@code shadow} / {@code unintern} / {@code use-package}
+	 * / {@code unuse-package}) against a {@code %runtime-packages%} entry, answering
+	 * {@code t} unchanged for a read/compile-time package (whose registry is frozen) and
+	 * signalling a {@code package-error} for a designator naming nothing.
+	 */
+	public static final String RUNTIME_PACKAGE_OP_INTERNAL = "%RUNTIME-PACKAGE-OP";
+
+	/**
+	 * Internal marker {@code (%own-symbol "NAME")} the compile path's macro expander
+	 * leaves where it consumed a {@code defmacro} that made the current package own a
+	 * {@code cl} extension name ({@code PackageResolver}'s definition claim): the
+	 * compilers' own resolution pass never sees the definition, so the marker replays the
+	 * claim there. Consumed by the resolver, never reaching the backends.
+	 */
+	public static final String OWN_SYMBOL = "%OWN-SYMBOL";
+
+	/**
+	 * Internal marker {@code (%read-symbols (PACKAGE MEMBER...)...)}, everything a
+	 * string, the compile path's macro expander leaves at the end of a program that can
+	 * ask what a package holds: the names its macro-time reader recorded, which the
+	 * compilers' resolution pass records in turn so the baked package tables hold them.
+	 * Consumed by the resolver, never reaching the backends.
+	 */
+	public static final String READ_SYMBOLS = "%READ-SYMBOLS";
+
+	/**
+	 * Internal marker {@code (%image-packages ROW...)}, everything a string but one flag,
+	 * the compile path's macro expander leaves in front of the next form wherever code
+	 * its evaluator ran made or changed a package ({@code make-package}, a computed
+	 * {@code export}): each such package as the compile image holds it there, which the
+	 * compilers' resolution pass takes over. Consumed by the resolver, never reaching the
+	 * backends.
+	 */
+	public static final String IMAGE_PACKAGES = "%IMAGE-PACKAGES";
+
+	/**
+	 * Internal marker inserted by {@code LoadInliner} before the spliced forms of a
+	 * loaded file: it makes the {@code PackageResolver} save the current package so a
+	 * file's internal {@code in-package} cannot leak past the load, mirroring Common Lisp
+	 * binding {@code *package*} around a {@code load}. Consumed by the resolver, never
+	 * reaching the backends. Paired with {@link #POP_PACKAGE}.
+	 */
+	public static final String PUSH_PACKAGE = "%PUSH-PACKAGE";
+
+	/**
+	 * Internal marker inserted by {@code LoadInliner} after the spliced forms of a loaded
+	 * file: it makes the {@code PackageResolver} restore the package saved by the
+	 * matching {@link #PUSH_PACKAGE}. Consumed by the resolver, which leaves the runtime
+	 * restore {@code (setq *package* :SAVED)} in its place; the backends never see the
+	 * marker itself.
+	 */
+	public static final String POP_PACKAGE = "%POP-PACKAGE";
+
+	/**
+	 * Internal marker inserted by {@code LoadInliner} before the forms it splices for an
+	 * ASDF system, carrying the system's name as a string: it is the provenance the
+	 * {@code LibraryDefunPruner} tree-shakes a third-party tree by, since no other pass
+	 * records which file a top-level form came from. Brackets nest with
+	 * {@code :depends-on}, and the innermost one wins. Consumed by the resolver like
+	 * {@link #PUSH_PACKAGE} (without touching the package stack), never reaching the
+	 * backends. Paired with {@link #END_SYSTEM}.
+	 */
+	public static final String BEGIN_SYSTEM = "%BEGIN-SYSTEM";
+
+	/**
+	 * Internal marker inserted by {@code LoadInliner} after the forms it splices for an
+	 * ASDF system, closing the innermost {@link #BEGIN_SYSTEM}. Consumed by the resolver,
+	 * never reaching the backends.
+	 */
+	public static final String END_SYSTEM = "%END-SYSTEM";
+
+	/**
+	 * Internal marker inserted by {@code LoadInliner} before the forms it splices for one
+	 * FILE, carrying that file's {@link #LOAD_PATHNAME_VAR} and
+	 * {@link #LOAD_TRUENAME_VAR} values as two strings: it is what gives a spliced file
+	 * the load context the interpreter binds around the same file.
+	 * {@code LispMacroExpander.lowerLoadContextMarkers} lowers the bracket to top-level
+	 * assignments of the two variables (and a restore of the enclosing file's values at
+	 * {@link #END_FILE}) when the program reads either one, and drops it otherwise, so a
+	 * program that never mentions them is byte-identical. Brackets nest with a nested
+	 * {@code load}; the payload is a string rather than a symbol for the same reason
+	 * {@link #BEGIN_SYSTEM}'s is. Behind the two values, the names of the features an
+	 * {@code :around-compile} hook added around the file, which the macro-time pass binds
+	 * for it. Paired with {@link #END_FILE}.
+	 */
+	public static final String BEGIN_FILE = "%BEGIN-FILE";
+
+	/**
+	 * Internal marker inserted by {@code LoadInliner} after the forms it splices for one
+	 * file, closing the innermost {@link #BEGIN_FILE}.
+	 */
+	public static final String END_FILE = "%END-FILE";
+
+	/**
+	 * The run-time stack ({@code rontolisp::%load-readtables}) of the readtables current
+	 * as each open {@link #BEGIN_FILE} level began: a program that mentions
+	 * {@link #READTABLE_VAR} pushes onto it at a file's start and pops it back at the
+	 * file's end, the binding {@code load} makes on the interpreter
+	 * ({@code LispMacroExpander.lowerLoadContextMarkers}).
+	 */
+	public static final String LOAD_READTABLES_INTERNAL = "%LOAD-READTABLES";
+
+	/**
+	 * Internal marker {@code (%asdf-component "SYSTEM" INDEX)} inserted by
+	 * {@code LoadInliner} before the forms it splices for one COMPONENT of an ASDF system
+	 * (the file or leaf shim at {@code INDEX} of the system's load order). The compilers
+	 * lower the bracket ({@code compiler.SplicedComponentGroups}): once the program has
+	 * defined an {@code asdf:perform} method, the component's forms become a top-level
+	 * group run through {@code asdf:perform}, so an extension's {@code :around} method
+	 * wraps them as it wraps a load on the interpreter; otherwise the bracket is dropped.
+	 * Consumed by the resolver like {@link #BEGIN_FILE} as the backstop. Paired with
+	 * {@link #ASDF_COMPONENT_END}.
+	 */
+	public static final String ASDF_COMPONENT = "%ASDF-COMPONENT";
+
+	/** Closes the innermost {@link #ASDF_COMPONENT} bracket. */
+	public static final String ASDF_COMPONENT_END = "%ASDF-COMPONENT-END";
+
+	/**
+	 * Internal marker {@code (%asdf-system-op "SYSTEM" :before|:after)} inserted by
+	 * {@code LoadInliner} where the interpreter performs a system's own operations:
+	 * {@code :before} after the dependencies and ahead of the components (prepare-op),
+	 * {@code :after} behind them (compile-op, load-op). Lowered or dropped with the
+	 * {@link #ASDF_COMPONENT} brackets.
+	 */
+	public static final String ASDF_SYSTEM_OP = "%ASDF-SYSTEM-OP";
+
+	/**
+	 * Internal marker {@code (%top-group N)} opening a TOP-LEVEL GROUP: the top-level
+	 * forms up to the matching {@link #TOP_GROUP_END} are compiled as top-level forms
+	 * (the static passes see them where they stand) but are not run in sequence -- their
+	 * run-time code is reached only through {@link #RUN_TOP_GROUP}. What a spliced
+	 * component lowers to once {@code asdf:perform} has methods
+	 * ({@code compiler.SplicedComponentGroups}). Kept verbatim by the resolver.
+	 */
+	public static final String TOP_GROUP = "%TOP-GROUP";
+
+	/** Closes the {@link #TOP_GROUP} of the same number. */
+	public static final String TOP_GROUP_END = "%TOP-GROUP-END";
+
+	/**
+	 * {@code (%run-top-group N)}: runs top-level group {@code N}'s forms and answers nil
+	 * -- the body of the thunk the group's {@code asdf:perform} call receives. A special
+	 * form of the compile backends, kept verbatim by the resolver.
+	 */
+	public static final String RUN_TOP_GROUP = "%RUN-TOP-GROUP";
+
+	/**
+	 * Internal marker {@code (%struct-definition (defstruct ...))} left in the form
+	 * stream by {@code LibraryDefunPruner} when it expands a BUNDLED library's
+	 * {@code defstruct} into its generated defuns AHEAD of pruning (so each defun prunes
+	 * individually). Unlike the {@link #BEGIN_SYSTEM} brackets it SURVIVES resolution:
+	 * the payload is what {@code LispMacroExpander.expandTopLevelDefinitions} re-runs the
+	 * expansion's registration side effects from (the setf-place registry, the struct
+	 * layout/predicate/slot-type registrations) -- the regenerated defuns themselves are
+	 * discarded there, because the stream already carries the kept subset.
+	 */
+	public static final String STRUCT_DEFINITION = "%STRUCT-DEFINITION";
+
+	/** The {@code :use} clause keyword of {@code defpackage}. */
+	public static final String USE_KEYWORD = ":USE";
+
+	/** The {@code :export} clause keyword of {@code defpackage}. */
+	public static final String EXPORT_KEYWORD = ":EXPORT";
+
+	/** The {@code :nicknames} clause keyword of {@code defpackage}. */
+	public static final String NICKNAMES_KEYWORD = ":NICKNAMES";
+
+	/** The {@code :import-from} clause keyword of {@code defpackage}. */
+	public static final String IMPORT_FROM_KEYWORD = ":IMPORT-FROM";
+
+	/**
+	 * The {@code *package*} variable: the current package, as the package keyword
+	 * {@link #FIND_PACKAGE} answers ({@code :CL-USER}). A genuine dynamic variable on
+	 * every backend, read when a form RUNS: {@code (in-package P)} assigns it and a
+	 * {@code let} of it binds it for the extent. On the interpreter the variable IS the
+	 * {@code PackageResolver}'s current package (one cell, read and written through); the
+	 * compile paths give it a {@code defvar} default when the program reads it
+	 * ({@code LispMacroExpander.injectMvSpillGlobal}).
+	 */
+	public static final String PACKAGE_VAR = "*PACKAGE*";
+
+	/**
+	 * The {@code *read-default-float-format*} variable. Every float shares the one double
+	 * representation, so its value ({@code double-float}) is informational: it exists so
+	 * library code that reads or binds it loads and runs. Special on every backend.
+	 */
+	public static final String READ_DEFAULT_FLOAT_FORMAT = "*READ-DEFAULT-FLOAT-FORMAT*";
+
+	/**
+	 * The {@code *read-base*} variable: 10, special on every backend, the radix every
+	 * reader reads a rational token in ({@code .kb/read-load-streams.md}).
+	 */
+	public static final String READ_BASE_VAR = "*READ-BASE*";
+
+	/**
+	 * The {@code values-list} built-in function (spread a list as multiple values through
+	 * the {@code %mv-spill} channel).
+	 */
+	public static final String VALUES_LIST = "VALUES-LIST";
+
+	/**
+	 * The {@code complex} built-in function: answers the canonical complex (or demoted
+	 * real) value for one real part and an optional imaginary part. A non-real part
+	 * signals a catchable type-error.
+	 */
+	public static final String COMPLEX = "COMPLEX";
+
+	/** The {@code realpart} built-in function (the real part; a real answers itself). */
+	public static final String REALPART = "REALPART";
+
+	/**
+	 * The {@code imagpart} built-in function (the imaginary part; a real answers (* 0 x)
+	 * -- an integer zero, or a float zero of the same format sign included, like SBCL).
+	 */
+	public static final String IMAGPART = "IMAGPART";
+
+	/** The {@code conjugate} built-in function (negates the imaginary part). */
+	public static final String CONJUGATE = "CONJUGATE";
+
+	/**
+	 * The {@code phase} built-in function (the angle in the complex plane: a float; zero
+	 * for a non-negative real, pi for a negative one).
+	 */
+	public static final String PHASE = "PHASE";
+
+	/**
+	 * The {@code upgraded-complex-part-type} built-in function (the upgraded part type
+	 * for a complex type specifier: a real-subtype name answers itself, a compound real
+	 * specifier answers its head's name; anything else signals an error, like SBCL).
+	 */
+	public static final String UPGRADED_COMPLEX_PART_TYPE = "UPGRADED-COMPLEX-PART-TYPE";
+
+	/**
+	 * The {@code *features*} variable: an ordinary special holding the active feature
+	 * list on every backend, seeded from the set the frontend READ the program with (see
+	 * {@code reader.Features} and {@code .kb/reader-features.md}). Not a read-time
+	 * substitution -- a program binds it, pushes onto it and reads it back.
+	 */
+	public static final String FEATURES_VAR = "*FEATURES*";
+
+	/** The {@code version} function provided by the {@code rontolisp} package. */
+	public static final String VERSION = "VERSION";
+
+	/**
+	 * The {@code fetch} function provided by the {@code rontolisp} package. Starts an
+	 * outgoing HTTP request (JavaScript {@code fetch}-style) and immediately returns a
+	 * <em>future</em> while the request runs asynchronously. The optional second argument
+	 * is an options property list ({@code :method}, {@code :headers}, {@code :body}).
+	 * Awaiting the future yields the result property list
+	 * {@code (:status <int> :headers <alist> :body <stream>)} whose body is a stream of
+	 * string chunks ({@code rontolisp:read-all} drains it).
+	 */
+	public static final String FETCH = "FETCH";
+
+	/**
+	 * The {@code await} special form provided by the {@code rontolisp} package. Legal
+	 * inside {@code rontolisp:async-defun}/{@code async-lambda} bodies and at top level
+	 * (the top level is implicitly asynchronous). Given a future, suspends the current
+	 * asynchronous function until it settles and returns its value; a future that settled
+	 * with an error re-signals that condition. A settled future never suspends, nested
+	 * futures are flattened, and any other value is returned unchanged, like a JavaScript
+	 * {@code await} on a non-promise.
+	 */
+	public static final String AWAIT = "AWAIT";
+
+	/**
+	 * The {@code async} wrapper macro provided by the {@code rontolisp} package. Wraps an
+	 * ordinary defining form and turns it into its asynchronous counterpart, for a
+	 * notation closer to JavaScript's {@code async function} / {@code async () =>}:
+	 * {@code (rontolisp:async (defun f (x) ...))} expands to
+	 * {@code (rontolisp:async-defun f (x) ...)} and
+	 * {@code (rontolisp:async (lambda (x) ...))} to
+	 * {@code (rontolisp:async-lambda (x) ...)}; anything else inside is an error. A pure
+	 * frontend rewrite: the expansion runs before the async machinery looks at the
+	 * program, so every backend only ever sees the canonical lowered forms.
+	 */
+	public static final String ASYNC = "ASYNC";
+
+	/**
+	 * The {@code async-defun} special form provided by the {@code rontolisp} package.
+	 * Defines an asynchronous function: same surface as {@code defun} (full lambda-list
+	 * support), but calling it runs the body only until its first suspension point (an
+	 * {@code rontolisp:await} of an unsettled future) and returns a future that settles
+	 * with the body's value (or its error).
+	 */
+	public static final String ASYNC_DEFUN = "ASYNC-DEFUN";
+
+	/**
+	 * The {@code async-lambda} special form provided by the {@code rontolisp} package.
+	 * The anonymous counterpart of {@code rontolisp:async-defun}: evaluates to a function
+	 * value whose invocation returns a future.
+	 */
+	public static final String ASYNC_LAMBDA = "ASYNC-LAMBDA";
+
+	/**
+	 * The {@code futurep} predicate provided by the {@code rontolisp} package. Returns
+	 * {@code t} if the argument is a future (as returned by calling an
+	 * {@code rontolisp:async-defun} function or {@code rontolisp:fetch}), {@code nil}
+	 * otherwise.
+	 */
+	public static final String FUTUREP = "FUTUREP";
+
+	/**
+	 * The {@code streamp} predicate provided by the {@code rontolisp} package. Returns
+	 * {@code t} if the argument is an asynchronous stream value (as returned by
+	 * {@code rontolisp:make-stream} or carried in a {@code rontolisp:fetch} response
+	 * body), {@code nil} otherwise. The same spelling as the {@code cl:streamp}
+	 * file-stream predicate ({@link #STREAMP}) but a different symbol: the packages
+	 * disambiguate, and each predicate answers {@code nil} for the other's streams.
+	 */
+	public static final String ASYNC_STREAMP = "STREAMP";
+
+	/**
+	 * The {@code make-stream} function provided by the {@code rontolisp} package. Creates
+	 * a fresh open asynchronous stream; one value owns both the read and the write end.
+	 * Producers append chunks with {@code rontolisp:stream-write} and finish with
+	 * {@code rontolisp:stream-close}; consumers take chunks with
+	 * {@code rontolisp:stream-read}.
+	 */
+	public static final String MAKE_STREAM = "MAKE-STREAM";
+
+	/**
+	 * The {@code stream-read} function provided by the {@code rontolisp} package. Returns
+	 * a future that settles to the stream's next chunk, or {@code nil} once the stream is
+	 * closed and drained (end of stream). Chunks are never {@code nil}.
+	 */
+	public static final String STREAM_READ = "STREAM-READ";
+
+	/**
+	 * The {@code stream-write} function provided by the {@code rontolisp} package.
+	 * Appends a chunk to a stream and returns a future that settles when the stream has
+	 * accepted it, so producers can be flow-controlled with {@code rontolisp:await}.
+	 */
+	public static final String STREAM_WRITE = "STREAM-WRITE";
+
+	/**
+	 * The {@code stream-close} function provided by the {@code rontolisp} package. Closes
+	 * a stream's write end: pending and future reads drain the remaining chunks and then
+	 * observe end of stream.
+	 */
+	public static final String STREAM_CLOSE = "STREAM-CLOSE";
+
+	/**
+	 * The {@code read-all} function provided by the {@code rontolisp} package. Returns a
+	 * future that settles to the remaining chunks of a stream drained into ONE string:
+	 * string chunks are concatenated, and OCTET chunks -- the {@code (unsigned-byte 8)}
+	 * vectors every HTTP body stream answers ({@link #OCTETS_TO_STRING_INTERNAL}) -- are
+	 * joined and UTF-8 decoded, so a document-shaped consumer reads text off a byte
+	 * stream. A stream mixing the two kinds is an error.
+	 */
+	public static final String READ_ALL = "READ-ALL";
+
+	/**
+	 * The internal {@code rontolisp::%octets-to-string} primitive: an
+	 * {@code (unsigned-byte 8)} vector -> the string its UTF-8 bytes spell, LENIENTLY --
+	 * a byte that leads no valid sequence, and a sequence the vector truncates, answer
+	 * their own characters, so malformed input never signals (the rule
+	 * {@code http-server.lisp}'s decoder applies to a request). ONE definition in Lisp
+	 * source ({@code LispPreludeLibrary}) for the compile paths; the interpreter mirrors
+	 * it in Java arm for arm, so a drained body is decoded natively there. It is what
+	 * {@code rontolisp:read-all} decodes an octet-chunk stream with, and what the
+	 * host-driven reactor's envelope arm renders an octet body as.
+	 *
+	 * <p>
+	 * The loop is the FALLBACK, not the path: the definition first offers the vector to
+	 * the native {@link #OCTETS_TO_STRING_PACKED_INTERNAL}, which answers every packed
+	 * octet vector itself, so only a general array reaches the per-byte arms.
+	 */
+	public static final String OCTETS_TO_STRING_INTERNAL = "%OCTETS-TO-STRING";
+
+	/**
+	 * The internal {@code rontolisp::%octets-to-string-packed} primitive: the NATIVE half
+	 * of {@link #OCTETS_TO_STRING_INTERNAL} -- a packed {@code (unsigned-byte 8)} vector
+	 * -> the string {@link #OCTETS_TO_STRING_INTERNAL}'s lenient rule decodes it to, and
+	 * {@code nil} for any other value. Native on every backend: valid UTF-8 is a platform
+	 * decode (interpreter, JVM) or a validate-then-{@code array.copy} (WASM), and the
+	 * malformed rest a native transcode, so a binary body never reaches a compiled
+	 * per-byte loop. It never signals: a value it does not take (a general array) answers
+	 * {@code nil} and the prelude's loop decides.
+	 */
+	public static final String OCTETS_TO_STRING_PACKED_INTERNAL = "%OCTETS-TO-STRING-PACKED";
+
+	/**
+	 * The internal {@code rontolisp::%host-lower-at-run-time} primitive: a Clojure
+	 * lowering verb over computed arguments, lowered as the program runs by the compiler
+	 * a JVM class carries -- the verb, its arguments as forms, the metadata reader, the
+	 * refusal of a call that does not lower, and {@code *ns*} -> the value of the call.
+	 * Only the stand-in a program the class lowers again as it runs splices
+	 * ({@code eval/ClojureLibrary}) names it, and only the JVM backend compiles it
+	 * ({@code cli/JvmRunTimeLowering}, {@code .kb/clojure-frontend.md}, "Lowering at run
+	 * time").
+	 */
+	public static final String HOST_LOWER_AT_RUN_TIME_INTERNAL = "%HOST-LOWER-AT-RUN-TIME";
+
+	/**
+	 * The internal {@code rontolisp::%run-time-constant} primitive: the value a form
+	 * lowered as the program runs embeds -- a function or an atom the running program
+	 * handed a lowering verb, which no datum spells -- by its index among the constants
+	 * the class compiled for that form holds. Only such a class's forms name it.
+	 */
+	public static final String RUN_TIME_CONSTANT_INTERNAL = "%RUN-TIME-CONSTANT";
+
+	/**
+	 * The internal {@code rontolisp::%run-time-answer} primitive: the form whose value a
+	 * form lowered as the program runs answers, stored where the run-time half reads it
+	 * once the class compiled for those forms ran them. Only such a class's forms name
+	 * it.
+	 */
+	public static final String RUN_TIME_ANSWER_INTERNAL = "%RUN-TIME-ANSWER";
+
+	/**
+	 * The internal {@code rontolisp::%run-time-redefine} primitive:
+	 * {@code (%run-time-redefine 'name fn)} points every call of the {@code notinline}
+	 * function {@code name} by name at {@code fn} -- a JVM host's or fragment's store of
+	 * the function's cell, the redefinition a form lowered as the program runs makes of a
+	 * function the class or an earlier one defined. Only such a class's forms name it.
+	 */
+	public static final String RUN_TIME_REDEFINE_INTERNAL = "%RUN-TIME-REDEFINE";
+
+	/**
+	 * The internal {@code rontolisp::%octets-join} helper: a list of
+	 * {@code (unsigned-byte 8)} vectors and their total length -> ONE packed vector
+	 * holding them in order (a single chunk is answered as it is, uncopied). The blit
+	 * every drain of an octet-chunk stream needs, written once
+	 * ({@code LispPreludeLibrary}) -- {@code read-all} joins before it decodes, and
+	 * {@code %http-drain} joins a stream response body into the octets a transport writes
+	 * as they are.
+	 */
+	public static final String OCTETS_JOIN_INTERNAL = "%OCTETS-JOIN";
+
+	/**
+	 * The internal {@code rontolisp::%copy-equal-table} helper: a hash table -> a fresh
+	 * {@code equal} table holding its entries (each key as first stored) in its iteration
+	 * order, which a later store into either leaves the other without -- the copy a
+	 * Clojure map, set or record field table takes before an {@code assoc},
+	 * {@code dissoc}, {@code conj} or {@code disj} changes it. Native on every backend
+	 * ({@code LispHashTable.copyEqual}, the JVM's {@code _hashCopy}, wasm's
+	 * {@code _ht_copy}): an {@code equal} table's copy shares its structure, O(n) the
+	 * first time and O(1) after it ({@code .kb/hash-tables.md}, "Copies share
+	 * structure").
+	 */
+	public static final String COPY_EQUAL_TABLE_INTERNAL = "%COPY-EQUAL-TABLE";
+
+	/**
+	 * The internal {@code rontolisp::%octets-to-string-replacing} helper: the octets of
+	 * an {@code (unsigned-byte 8)} vector from a start below an end -> the text the JDK's
+	 * {@code new String(bytes, UTF_8)} decodes them to, each malformed sequence ONE
+	 * {@code U+FFFD} (as many octets per replacement as that decoder takes, a sequence
+	 * the range ends inside one) -- the decoding the Clojure front end's text of octets
+	 * takes, where {@link #OCTETS_TO_STRING_INTERNAL} keeps a malformed octet as its own
+	 * character. ONE definition in Lisp source ({@code LispPreludeLibrary}) for the
+	 * compile paths, which hands every well-formed run to the native lenient decoder; the
+	 * interpreter's is the JDK decoder itself ({@code Environment}).
+	 */
+	public static final String OCTETS_TO_STRING_REPLACING_INTERNAL = "%OCTETS-TO-STRING-REPLACING";
+
+	/**
+	 * The internal {@code rontolisp::%make-text-pull-stream} constructor: a character
+	 * input stream (a Gray stream of the prelude's) whose text a function answers a piece
+	 * at a time, asked for the next piece only when a read needs a character the pieces
+	 * so far do not hold -- what a reader over a fetched reply's body is, so a line is
+	 * answered as soon as it has arrived.
+	 */
+	public static final String MAKE_TEXT_PULL_STREAM_INTERNAL = "%MAKE-TEXT-PULL-STREAM";
+
+	/**
+	 * The {@code wait-for} function provided by the {@code rontolisp} package. Returns a
+	 * future that settles (to {@code nil}) after the given number of milliseconds -- the
+	 * timer primitive of the async/await surface, mirroring WASI 0.3's
+	 * {@code wasi:clocks/monotonic-clock.wait-for}. Deliberately NOT named {@code sleep}:
+	 * Common Lisp's {@code sleep} is a blocking function taking seconds, while this one
+	 * only starts a timer ({@code (rontolisp:await (rontolisp:wait-for
+	 * 500))} is the sleeping form).
+	 */
+	public static final String WAIT_FOR = "WAIT-FOR";
+
+	/**
+	 * The {@code then} future-as-value combinator provided by the {@code rontolisp}
+	 * package: {@code (rontolisp:then future fn)} returns a fresh future that, on the
+	 * input's successful settlement, applies {@code fn} to its value; on error it
+	 * propagates the condition through unchanged (the JavaScript {@code .then} shape).
+	 * Implemented as a Lisp-prelude {@code defun} over {@code async-lambda} +
+	 * {@code await}, so every backend supports it identically.
+	 */
+	public static final String THEN = "THEN";
+
+	/**
+	 * The {@code then*} variadic future combinator provided by the {@code rontolisp}
+	 * package: {@code (rontolisp:then* future fn1 fn2 ...)} chains each function through
+	 * the previous stage's (flattened) settled value. With no callbacks the operator
+	 * returns the input future unchanged. A stage that returns a future is auto-flattened
+	 * on the next stage's read.
+	 */
+	public static final String THEN_STAR = "THEN*";
+
+	/**
+	 * The name {@code CATCH}, which two unrelated operators share -- the package
+	 * qualification tells them apart, and both spellings are canonical symbol names, so
+	 * one constant serves both:
+	 * <ul>
+	 * <li>BARE ({@code catch}, or {@code cl:}-qualified): the CL {@code catch} special
+	 * form {@code (catch tag body...)}. It evaluates {@code tag}, runs {@code body} as an
+	 * implicit {@code progn} and returns its value -- unless a {@code throw} to an
+	 * {@code eq} tag fires within its dynamic extent, in which case the thrown value
+	 * becomes the form's value. See {@link #THROW}.</li>
+	 * <li>{@link #CATCH_QUALIFIED} ({@code rontolisp:catch}): the future-as-value
+	 * combinator {@code (rontolisp:catch future handler)}, returning a fresh future that,
+	 * on the input's error, invokes {@code handler} on the condition and settles to its
+	 * return value; on success it passes the value through. Deliberately named
+	 * {@code catch}: it is the JavaScript {@code .catch} shape, not the tag-based
+	 * non-local exit.</li>
+	 * </ul>
+	 */
+	public static final String CATCH = "CATCH";
+
+	/**
+	 * The {@code finally} future-as-value combinator provided by the {@code rontolisp}
+	 * package: {@code (rontolisp:finally future thunk)} returns a fresh future carrying
+	 * the input's original settlement (value or condition) and runs the thunk exactly
+	 * once on either outcome. The thunk's return value is discarded; a condition raised
+	 * inside the thunk replaces the pending outcome (matches {@code unwind-protect}).
+	 */
+	public static final String FINALLY = "FINALLY";
+
+	/**
+	 * The internal {@code %async-run} primitive backing the
+	 * {@code rontolisp:async-defun}/{@code async-lambda} lowering on the interpreter, JVM
+	 * and Preview-1 WASM backends: takes a zero-argument function value, runs it under
+	 * the backend's asynchronous mechanism and returns the resulting future. The
+	 * {@code --component} backend compiles the async defining forms natively (state
+	 * machines) and never sees this name.
+	 */
+	public static final String ASYNC_RUN = "%ASYNC-RUN";
+
+	/**
+	 * The internal {@code rontolisp::%future-new} primitive of the WASM async state
+	 * machines: a fresh PENDING first-class future. Undocumented; it makes the suspension
+	 * machinery (spill/restore, waiter cascade) exercisable end-to-end without the import
+	 * layer, it is the race future of sockets.lisp's {@code %future-race} (a socket read
+	 * or a TLS handshake against its deadline) and the future a thread of a Java program
+	 * awaits while it cannot go on (java.lisp). A Preview 1 module naming it is compiled
+	 * with the state machines a component has ({@code .kb/async-await.md}).
+	 */
+	public static final String FUTURE_NEW_INTERNAL = "%FUTURE-NEW";
+
+	/**
+	 * The internal {@code rontolisp::%future-settle} primitive: settles a pending future
+	 * with a value, resuming its waiters; a settled future stays as it is. See
+	 * {@link #FUTURE_NEW_INTERNAL}.
+	 */
+	public static final String FUTURE_SETTLE_INTERNAL = "%FUTURE-SETTLE";
+
+	/**
+	 * The internal {@code rontolisp::%task-swap} primitive of the WASM async state
+	 * machines: makes its argument the CURRENT task record -- {@code nil} for none -- and
+	 * answers the one it replaces. A frame made with no current task belongs to none, so
+	 * whichever task settles the future it waits for resumes it there: what the threads
+	 * of a served Java program are, which outlive the request that started them
+	 * (java.lisp). See {@link #FUTURE_NEW_INTERNAL}.
+	 */
+	public static final String TASK_SWAP_INTERNAL = "%TASK-SWAP";
+
+	/**
+	 * The internal {@code rontolisp::%trap} primitive of the WASM backend: the
+	 * {@code unreachable} instruction, which ends the instance where it runs -- no
+	 * handler takes it and no cleanup form runs. What a program with a run time of its
+	 * own ends with where the module is a reactor, which has no process to exit
+	 * (exit.lisp's arm of a reactor).
+	 */
+	public static final String TRAP_INTERNAL = "%TRAP";
+
+	/**
+	 * The internal {@code rontolisp::%future-reject} test primitive: rejects a pending
+	 * future with a message (a {@code simple-error} re-signals at await). See
+	 * {@link #FUTURE_NEW_INTERNAL}.
+	 */
+	public static final String FUTURE_REJECT_INTERNAL = "%FUTURE-REJECT";
+
+	/**
+	 * The internal {@code rontolisp::%subtask-future} primitive of the
+	 * {@code --component} async import layer: takes an async-lowered call's
+	 * {@code (packed . retptr)} token and the member's lift wrapper (as a function
+	 * value), and returns a first-class future -- settled immediately when the call
+	 * completed eagerly ({@code RETURNED}), otherwise pending and registered in the
+	 * task's waitable&rarr;future scheduler registry, to be settled by the event loop
+	 * when the subtask reports {@code RETURNED}. Synthesized by
+	 * {@code WitImportDirective} for {@code async func} members; component-only.
+	 */
+	public static final String SUBTASK_FUTURE_INTERNAL = "%SUBTASK-FUTURE";
+
+	/**
+	 * The internal {@code rontolisp::%stream-new} primitive: takes a read thunk and a
+	 * close thunk (arity-0 function values over whatever the chunks come from) and
+	 * returns a first-class stream value that
+	 * {@code rontolisp:stream-read}/{@code stream-close}/{@code streamp} operate on.
+	 * Nothing about it is WASI: {@code --component} builds it over the wasi byte-stream
+	 * built-ins ({@code TYPE_WASI_STREAM}, synthesized by http.lisp for request/response
+	 * bodies), and a Preview 1 / {@code --no-wasi} module over a host import or any Lisp
+	 * closure ({@code TYPE_P1_STREAM}). Every backend has it: the interpreter builds a
+	 * PULL-mode {@link LispStream} and the JVM the same three fields as an
+	 * {@code Object[3]}, so a body that has not arrived yet crosses as a stream rather
+	 * than as a buffer. The one mode nothing has is a guest WRITE end
+	 * ({@code rontolisp:make-stream}), which stays interpreter/JVM-only.
+	 */
+	public static final String STREAM_NEW_INTERNAL = "%STREAM-NEW";
+
+	/**
+	 * The internal {@code rontolisp::%future-force} primitive: resolves a future to its
+	 * settled value from SYNCHRONOUS code (a rejection re-signals, like await) -- an
+	 * ordinary function, so unlike the {@code rontolisp:await} special form it is legal
+	 * outside an async body. Per backend: the interpreter joins
+	 * ({@code LispEvaluator.awaitValue}), the JVM calls the {@code _await} runtime, a
+	 * non-asyncMode WASM build resolves the degenerate settled future
+	 * ({@code _p1_future_await}), and an asyncMode {@code --component} build blocks on
+	 * the module scheduler ({@code _sched_loop}) -- which is what lets a synchronous
+	 * built-in surface (the tcp-* wrappers in sockets.lisp) sit on an asynchronous WIT
+	 * import there, while async bodies get the await-shaped promotion instead. The other
+	 * synchronous consumer is the host-driven reactor transport
+	 * ({@code http-reactor.lisp}), which resolves a future-valued application answer at
+	 * its boundary.
+	 */
+	public static final String FUTURE_FORCE_INTERNAL = "%FUTURE-FORCE";
+
+	/**
+	 * The internal {@code rontolisp::%future-settled-p} primitive: whether a future has
+	 * settled -- fulfilled or rejected -- without waiting for it ({@code t} for any value
+	 * that is no future, which an await answers at once). Per backend: the interpreter's
+	 * {@code LispFuture} and the JVM's {@code CompletableFuture} answer {@code isDone}, a
+	 * {@code --component}'s future its state, and a degenerate Preview 1 future is
+	 * settled from the start but a deferred one ({@link #FUTURE_DEFERRED_INTERNAL}),
+	 * which settles at its first await. It scans nothing and drives no scheduler: on a
+	 * {@code --component} a pending future settles only while something blocks on the
+	 * scheduler. Its consumer is the Clojure front end's {@code future-done?} and timed
+	 * {@code deref} of the future {@code rontolisp.http-client} answers under
+	 * {@code :async true} ({@code clojure.lisp}).
+	 */
+	public static final String FUTURE_SETTLED_INTERNAL = "%FUTURE-SETTLED-P";
+
+	/**
+	 * The internal {@code rontolisp::%future-deferred} primitive of the degenerate
+	 * (Preview 1) tier: {@code (%future-deferred thunk)} is a future that settles on its
+	 * first await, to what {@code thunk} answers there -- every await calls it, so the
+	 * thunk keeps its own answer, and one that signals makes that await signal. It exists
+	 * for a transport whose work is already running elsewhere when the future is made: a
+	 * {@code --native} output's fetch, whose request is in flight on a runner thread when
+	 * {@code fetch} returns, waits for the reply head at the first await -- which is
+	 * where a transport failure has to signal ({@code eval/HostFetchLibrary}). WASM
+	 * outside asyncMode only, like the async-runtime bindings beside it; nothing else
+	 * produces or needs one.
+	 */
+	public static final String FUTURE_DEFERRED_INTERNAL = "%FUTURE-DEFERRED";
+
+	/**
+	 * The internal {@code rontolisp::%read-line-raw}/{@code %read-char-raw}/
+	 * {@code %read-byte-raw}/{@code %write-line-raw}/{@code %write-byte-raw}/
+	 * {@code %close-raw}/{@code %open-stream-p-raw} aliases of the NATIVE stream
+	 * built-ins on the {@code --component} backend: the socket-dispatch defuns
+	 * sockets.lisp splices ({@code %io-read-line} &amp;c) fall back through these for a
+	 * non-socket handle, so the compile-time socket rewrite of the public names cannot
+	 * recurse. Component-only.
+	 */
+	public static final String READ_LINE_RAW_INTERNAL = "%READ-LINE-RAW";
+
+	/** See {@link #READ_LINE_RAW_INTERNAL}. */
+	public static final String READ_CHAR_RAW_INTERNAL = "%READ-CHAR-RAW";
+
+	/** See {@link #READ_LINE_RAW_INTERNAL}. */
+	public static final String READ_BYTE_RAW_INTERNAL = "%READ-BYTE-RAW";
+
+	/** See {@link #READ_LINE_RAW_INTERNAL}. */
+	public static final String WRITE_LINE_RAW_INTERNAL = "%WRITE-LINE-RAW";
+
+	/** See {@link #READ_LINE_RAW_INTERNAL}. */
+	public static final String WRITE_BYTE_RAW_INTERNAL = "%WRITE-BYTE-RAW";
+
+	/** See {@link #READ_LINE_RAW_INTERNAL}. */
+	public static final String WRITE_STRING_RAW_INTERNAL = "%WRITE-STRING-RAW";
+
+	/** See {@link #READ_LINE_RAW_INTERNAL}. */
+	public static final String FRESH_LINE_RAW_INTERNAL = "%FRESH-LINE-RAW";
+
+	/** See {@link #READ_LINE_RAW_INTERNAL}. */
+	public static final String CLOSE_RAW_INTERNAL = "%CLOSE-RAW";
+
+	/** See {@link #READ_LINE_RAW_INTERNAL}. */
+	public static final String LISTEN_RAW_INTERNAL = "%LISTEN-RAW";
+
+	/**
+	 * See {@link #READ_LINE_RAW_INTERNAL}: the native {@code force-output}, which
+	 * {@code finish-output}'s dispatch defun falls back to as well (the two coincide).
+	 */
+	public static final String FORCE_OUTPUT_RAW_INTERNAL = "%FORCE-OUTPUT-RAW";
+
+	/** See {@link #READ_LINE_RAW_INTERNAL}. */
+	public static final String OPEN_STREAM_P_RAW_INTERNAL = "%OPEN-STREAM-P-RAW";
+
+	/**
+	 * The canonical internal-qualified spelling of {@link #OPEN_STREAM_P_RAW_INTERNAL}:
+	 * what a form the backends build asks, whatever a Gray program defines
+	 * {@code open-stream-p} to be.
+	 */
+	public static final String OPEN_STREAM_P_RAW_QUALIFIED = "RONTOLISP::" + OPEN_STREAM_P_RAW_INTERNAL;
+
+	/**
+	 * The compile paths' per-file-stream element-type registry: a prelude defun that
+	 * records a binary {@code open}'s element type against its stream and answers the
+	 * stream. Called around every literal binary {@code open} leaf once the program can
+	 * ask about an element type ({@code .kb/read-load-streams.md}, "Element types wider
+	 * and narrower than one octet").
+	 */
+	public static final String FILE_STREAM_REGISTER_INTERNAL = "%FILE-STREAM-REGISTER";
+
+	/**
+	 * The registry removal every compiled {@code close} runs once the registry exists.
+	 */
+	public static final String FILE_STREAM_FORGET_INTERNAL = "%FILE-STREAM-FORGET";
+
+	/** The registry lookup: a stream's entry, or nil. */
+	public static final String FILE_STREAM_ENTRY_INTERNAL = "%FILE-STREAM-ENTRY";
+
+	/**
+	 * Whether a stream value is a CHARACTER stream (a string stream): the question
+	 * {@code read-sequence} / {@code write-sequence} ask when the buffer is not a string
+	 * ({@code LispMacroExpander.expandReadSequence}). A prelude defun.
+	 */
+	public static final String CHARACTER_STREAM_P_INTERNAL = "%CHARACTER-STREAM-P";
+
+	/**
+	 * The argument check {@code read-sequence} / {@code write-sequence} run before their
+	 * packed / chars / element arms ({@code LispMacroExpander.expandReadSequence}): a
+	 * dotted-list buffer, a negative, non-integer or symbolic bound, and a range outside
+	 * the buffer are {@code type-error}s. One prelude defun, not an inline test -- the
+	 * {@code %character-stream-p} shape, for the same per-site reason. A prelude defun.
+	 */
+	public static final String CHECK_SEQUENCE_BOUNDS_INTERNAL = "%CHECK-SEQUENCE-BOUNDS";
+
+	/** The registry read behind a compiled {@code stream-element-type}. */
+	public static final String FILE_STREAM_ELEMENT_TYPE_INTERNAL = "%FILE-STREAM-ELEMENT-TYPE";
+
+	/** The prelude {@code read-byte} a program with a WIDE element type reads through. */
+	public static final String WIDE_READ_BYTE_INTERNAL = "%WIDE-READ-BYTE";
+
+	/** The prelude {@code write-byte} twin of {@link #WIDE_READ_BYTE_INTERNAL}. */
+	public static final String WIDE_WRITE_BYTE_INTERNAL = "%WIDE-WRITE-BYTE";
+
+	/**
+	 * Octets to elements: {@code file-length} / {@code file-position} on a wide stream.
+	 */
+	public static final String WIDE_ELEMENTS_INTERNAL = "%WIDE-ELEMENTS";
+
+	/** Elements to octets: the {@code file-position} set on a wide stream. */
+	public static final String WIDE_POSITION_OCTETS_INTERNAL = "%WIDE-POSITION-OCTETS";
+
+	/** The registry entry of a wide stream, nil for any other. */
+	public static final String WIDE_WIDTH_INTERNAL = "%WIDE-WIDTH";
+
+	/**
+	 * The one-octet {@code read-byte} the wide helpers compose from: the backend's own
+	 * primitive, reached under a name the wide lowering does not rewrite again.
+	 */
+	public static final String READ_OCTET_INTERNAL = "%READ-OCTET";
+
+	/** See {@link #READ_OCTET_INTERNAL}: the one-octet {@code write-byte}. */
+	public static final String WRITE_OCTET_INTERNAL = "%WRITE-OCTET";
+
+	/** See {@link #READ_OCTET_INTERNAL}: {@code file-length} in octets. */
+	public static final String FILE_OCTET_LENGTH_INTERNAL = "%FILE-OCTET-LENGTH";
+
+	/** See {@link #READ_OCTET_INTERNAL}: {@code file-position} in octets. */
+	public static final String FILE_OCTET_POSITION_INTERNAL = "%FILE-OCTET-POSITION";
+
+	/** See {@link #READ_LINE_RAW_INTERNAL}. */
+	public static final String READ_SEQUENCE_RAW_INTERNAL = "%READ-SEQUENCE-RAW";
+
+	/** See {@link #READ_LINE_RAW_INTERNAL}. */
+	public static final String WRITE_SEQUENCE_RAW_INTERNAL = "%WRITE-SEQUENCE-RAW";
+
+	/**
+	 * The bulk binary-I/O primitives behind {@code read-sequence} /
+	 * {@code write-sequence} over a PACKED buffer (a packed float array of any rank, a
+	 * packed {@code (unsigned-byte 8|16|32)} vector):
+	 * {@code (%read-sequence-packed seq stream
+	 * start end)} fills elements {@code [start, end)} (row-major; {@code end} nil = the
+	 * total size) with raw little-endian elements off a binary stream and answers the
+	 * fill position, {@code (%write-sequence-packed seq stream start end)} writes them
+	 * out the same way and answers {@code seq}. Both answer NIL -- "declined" -- for a
+	 * buffer or a stream they do not handle, and the expansion then runs its element loop
+	 * ({@code .kb/binary-sequence-io.md}).
+	 */
+	public static final String READ_SEQUENCE_PACKED = "%READ-SEQUENCE-PACKED";
+
+	/** See {@link #READ_SEQUENCE_PACKED}. */
+	public static final String WRITE_SEQUENCE_PACKED = "%WRITE-SEQUENCE-PACKED";
+
+	/**
+	 * The bulk CHARACTER-I/O primitive behind {@code read-sequence} over a character
+	 * buffer: {@code (%read-sequence-chars seq stream start end)} fills code points
+	 * {@code [start, end)} of a mutable character vector off a character stream and
+	 * answers the fill position. It answers NIL -- "declined" -- for a buffer or a stream
+	 * it does not handle, and the expansion then runs its per-character loop
+	 * ({@code .kb/character-sequence-io.md}).
+	 */
+	public static final String READ_SEQUENCE_CHARS = "%READ-SEQUENCE-CHARS";
+
+	/**
+	 * The internal {@code rontolisp::%str-byte-length} accessor of the
+	 * {@code --component} socket layer: the content BYTE count of a string (its
+	 * {@code $str_bytes} length minus the two surrounding quotes). A socket chunk's bytes
+	 * are the wire truth, and the character accessors UTF-8-decode them (binary bytes
+	 * that happen to form a valid multi-byte sequence would collapse), so sockets.lisp's
+	 * chunk-buffer bookkeeping walks bytes through this family instead. Component-only.
+	 */
+	public static final String STR_BYTE_LENGTH_INTERNAL = "%STR-BYTE-LENGTH";
+
+	/**
+	 * The internal {@code rontolisp::%str-byte-ref} accessor: the i-th content byte
+	 * (0-255) of a string. See {@link #STR_BYTE_LENGTH_INTERNAL}.
+	 */
+	public static final String STR_BYTE_REF_INTERNAL = "%STR-BYTE-REF";
+
+	/**
+	 * The internal {@code rontolisp::%str-from-byte} constructor: a fresh string whose
+	 * ONE content byte is the given value (0-255), regardless of UTF-8 validity -- what
+	 * lets the socket {@code write-byte} put exactly one byte on the wire through the
+	 * write path's raw {@code $str_bytes} copy. See {@link #STR_BYTE_LENGTH_INTERNAL}.
+	 */
+	public static final String STR_FROM_BYTE_INTERNAL = "%STR-FROM-BYTE";
+
+	/**
+	 * The internal {@code rontolisp::%str-from-octets} constructor: a fresh string whose
+	 * content bytes are the octets {@code [start, end)} of a packed
+	 * {@code (unsigned-byte 8)} vector, copied as they are (one {@code array.copy}),
+	 * regardless of UTF-8 validity -- {@link #STR_FROM_BYTE_INTERNAL} for a run, so a
+	 * socket line is built a chunk's run at a time instead of a byte at a time. See
+	 * {@link #STR_BYTE_LENGTH_INTERNAL}.
+	 */
+	public static final String STR_FROM_OCTETS_INTERNAL = "%STR-FROM-OCTETS";
+
+	/**
+	 * The internal {@code rontolisp::%sock-fail} signalling site of the {@code --native}
+	 * runner's socket provider ({@code runner-sockets.lisp}): the one place it signals a
+	 * host failure or a wrong-kind handle from. Its NAME is an exception-handling trigger
+	 * for the WASM compiler, the way the usocket guard is, so a program carrying the
+	 * provider compiles in EH mode and the signal is a catchable {@code simple-error}
+	 * that reports its text when uncaught -- a bare {@code error} outside EH mode is a
+	 * trap carrying nothing (.kb/tcp-sockets.md, "--native: the runner's sockets").
+	 */
+	public static final String SOCK_FAIL_INTERNAL = "%SOCK-FAIL";
+
+	/**
+	 * The {@code json-parse} function provided by the {@code rontolisp} package. Parses a
+	 * JSON document string into Lisp values following {@code com.inuoe.jzon}'s defaults:
+	 * a JSON object becomes a hash table with string keys, an array a simple vector, and
+	 * {@code true}/{@code false}/{@code null} become {@code t}/{@code nil}/the symbol
+	 * {@code null} -- so it is a lightweight, forward-compatible subset of jzon.
+	 */
+	public static final String JSON_PARSE = "JSON-PARSE";
+
+	/**
+	 * The {@code json-stringify} function provided by the {@code rontolisp} package.
+	 * Serializes a Lisp value into a JSON document string following
+	 * {@code com.inuoe.jzon}'s defaults: {@code nil} is {@code false}, the symbol
+	 * {@code null} is {@code null}, a vector or list is an array, and a hash table is an
+	 * object -- the inverse of {@code rontolisp:json-parse}.
+	 */
+	public static final String JSON_STRINGIFY = "JSON-STRINGIFY";
+
+	/**
+	 * The {@code json-span} function provided by the {@code rontolisp} package: over a
+	 * JSON document's bytes -- a string, an octet vector, or an address and a size of a
+	 * wasm module's linear memory -- it validates the document and answers the byte range
+	 * of the value a path of keys and indexes leads to, where an edit splices it
+	 * ({@code .kb/json.md}, "json-span").
+	 */
+	public static final String JSON_SPAN = "JSON-SPAN";
+
+	/**
+	 * The {@code json-value} function provided by the {@code rontolisp} package: what
+	 * {@code json-parse} answers for the value {@code json-span} finds, and whether it
+	 * found one.
+	 */
+	public static final String JSON_VALUE = "JSON-VALUE";
+
+	/**
+	 * The internal {@code rontolisp::%json-scan} primitive: the wasm-GC backend's native
+	 * {@code json-span} scan ({@code WasmJsonSpanRuntimeBuilder}), which
+	 * {@code json.lisp}'s {@code %json-native-scan} calls on that backend alone.
+	 */
+	public static final String JSON_SCAN_INTERNAL = "%JSON-SCAN";
+
+	/**
+	 * The internal {@code rontolisp::%json-decode} primitive: the wasm-GC backend's
+	 * native JSON parser ({@code WasmJsonRuntimeBuilder}), which {@code json.lisp}'s
+	 * {@code %json-native-parse} calls on that backend alone ({@code .kb/json.md}).
+	 */
+	public static final String JSON_DECODE_INTERNAL = "%JSON-DECODE";
+
+	/**
+	 * The internal {@code rontolisp::%json-encode} primitive: the wasm-GC backend's
+	 * native JSON serializer, the half of {@code json.lisp}'s
+	 * {@code %json-native-stringify}.
+	 */
+	public static final String JSON_ENCODE_INTERNAL = "%JSON-ENCODE";
+
+	/**
+	 * The {@code plist-hash-table} function provided by the {@code rontolisp} package. A
+	 * lightweight subset of {@code alexandria:plist-hash-table}: builds a hash table from
+	 * a property list (odd elements keys, even elements values), passing any trailing
+	 * arguments on to {@code make-hash-table}. Pairs naturally with
+	 * {@code rontolisp:json-stringify} for building JSON objects.
+	 */
+	public static final String PLIST_HASH_TABLE = "PLIST-HASH-TABLE";
+
+	/**
+	 * The {@code hash-table-plist} function provided by the {@code rontolisp} package. A
+	 * lightweight subset of {@code alexandria:hash-table-plist}: returns a property list
+	 * of the hash table's key/value pairs (the inverse of {@link #PLIST_HASH_TABLE}).
+	 */
+	public static final String HASH_TABLE_PLIST = "HASH-TABLE-PLIST";
+
+	/**
+	 * The {@code alist-hash-table} function provided by the {@code rontolisp} package. A
+	 * lightweight subset of {@code alexandria:alist-hash-table}: builds a hash table from
+	 * an association list (first occurrence of a key wins), passing any trailing
+	 * arguments on to {@code make-hash-table}.
+	 */
+	public static final String ALIST_HASH_TABLE = "ALIST-HASH-TABLE";
+
+	/**
+	 * The {@code hash-table-alist} function provided by the {@code rontolisp} package. A
+	 * lightweight subset of {@code alexandria:hash-table-alist}: returns an association
+	 * list of the hash table's key/value pairs (the inverse of
+	 * {@link #ALIST_HASH_TABLE}).
+	 */
+	public static final String HASH_TABLE_ALIST = "HASH-TABLE-ALIST";
+
+	/**
+	 * The {@code alist-plist} function provided by the {@code rontolisp} package. A
+	 * lightweight subset of {@code alexandria:alist-plist}: returns a property list
+	 * holding the same keys and values as an association list, in the same order (the
+	 * inverse of {@link #PLIST_ALIST}).
+	 */
+	public static final String ALIST_PLIST = "ALIST-PLIST";
+
+	/**
+	 * The {@code plist-alist} function provided by the {@code rontolisp} package. A
+	 * lightweight subset of {@code alexandria:plist-alist}: returns an association list
+	 * holding the same keys and values as a property list, in the same order (the inverse
+	 * of {@link #ALIST_PLIST}).
+	 */
+	public static final String PLIST_ALIST = "PLIST-ALIST";
+
+	/**
+	 * The {@code starlark-call} function provided by the {@code rontolisp} package: what
+	 * Common Lisp calls a value of the experimental Starlark front end with -- a
+	 * {@code def}, a {@code lambda}, a built-in or a bound method -- handing it the
+	 * positional arguments as they are ({@code eval/starlark.lisp}).
+	 */
+	public static final String STARLARK_CALL = "STARLARK-CALL";
+
+	/**
+	 * The {@code url-decode} function provided by the {@code rontolisp} package. Decodes
+	 * a percent-encoded (URL-encoded) string: {@code %XX} byte sequences are decoded as
+	 * UTF-8 and {@code +} becomes a space.
+	 */
+	public static final String URL_DECODE = "URL-DECODE";
+
+	/**
+	 * The {@code url-encode} function provided by the {@code rontolisp} package. Encodes
+	 * a string for use in a URL: unreserved characters (letters, digits, {@code -},
+	 * {@code _}, {@code .}, {@code ~}) pass through and everything else becomes
+	 * percent-encoded UTF-8 bytes (a space becomes {@code %20}).
+	 */
+	public static final String URL_ENCODE = "URL-ENCODE";
+
+	/**
+	 * The {@code query-params} function provided by the {@code rontolisp} package. Parses
+	 * a query string such as {@code "a=1&b=two&flag"} into an alist of
+	 * {@code (key . value)} string pairs with keys and values url-decoded, duplicates
+	 * preserved in order; {@code nil} yields {@code nil}.
+	 */
+	public static final String QUERY_PARAMS = "QUERY-PARAMS";
+
+	/**
+	 * The {@code query-param} function provided by the {@code rontolisp} package. Returns
+	 * the url-decoded value of the first match of a name in a query string, or
+	 * {@code nil}; {@code nil}-safe in the query argument.
+	 */
+	public static final String QUERY_PARAM = "QUERY-PARAM";
+
+	/**
+	 * The {@code url-path} function provided by the {@code rontolisp} package. Returns
+	 * the part of a URL or request-target string before the first {@code ?}.
+	 */
+	public static final String URL_PATH = "URL-PATH";
+
+	/**
+	 * The {@code url-query} function provided by the {@code rontolisp} package. Returns
+	 * the raw query-string part of a URL or request-target string (after the first
+	 * {@code ?}, possibly empty), or {@code nil} when there is no {@code ?}.
+	 */
+	public static final String URL_QUERY = "URL-QUERY";
+
+	/**
+	 * The {@code tcp-connect} function provided by the {@code rontolisp} package. Opens a
+	 * blocking TCP connection to {@code host} (a hostname or IP literal; the WASM
+	 * component backend connects over IPv4 only) and {@code port}, and returns a
+	 * bidirectional stream handle usable with {@code read-line}, {@code write-line},
+	 * {@code read-byte}, {@code write-byte} and {@code close}.
+	 */
+	public static final String TCP_CONNECT = "TCP-CONNECT";
+
+	/**
+	 * The {@code tcp-listen} function provided by the {@code rontolisp} package. Binds a
+	 * listening TCP socket on {@code port} (0 picks an ephemeral port, see
+	 * {@code rontolisp:tcp-local-port}) and an optional {@code host} (default: all
+	 * interfaces) and returns a listener handle for {@code rontolisp:tcp-accept} /
+	 * {@code close}.
+	 */
+	public static final String TCP_LISTEN = "TCP-LISTEN";
+
+	/**
+	 * The {@code tcp-accept} function provided by the {@code rontolisp} package. Blocks
+	 * until a client connects to the given listener handle and returns a bidirectional
+	 * stream handle for the accepted connection (same stream operations as
+	 * {@code rontolisp:tcp-connect}).
+	 */
+	public static final String TCP_ACCEPT = "TCP-ACCEPT";
+
+	/**
+	 * The {@code tcp-local-port} function provided by the {@code rontolisp} package.
+	 * Returns the local port number bound to a listener or socket handle (useful after
+	 * listening on port 0).
+	 */
+	public static final String TCP_LOCAL_PORT = "TCP-LOCAL-PORT";
+
+	/**
+	 * The {@code tcp-local-address} function provided by the {@code rontolisp} package.
+	 * Returns the local/bound IP address of a listener or socket handle as a string.
+	 * Interpreter and JVM backends only for a real value; the WASM component backend
+	 * returns {@code nil}.
+	 */
+	public static final String TCP_LOCAL_ADDRESS = "TCP-LOCAL-ADDRESS";
+
+	/**
+	 * The {@code tcp-peer-address} function provided by the {@code rontolisp} package.
+	 * Returns the remote IP address of a connected socket handle as a string. Interpreter
+	 * and JVM backends only for a real value; the WASM component backend returns
+	 * {@code nil}.
+	 */
+	public static final String TCP_PEER_ADDRESS = "TCP-PEER-ADDRESS";
+
+	/**
+	 * The {@code tcp-peer-port} function provided by the {@code rontolisp} package.
+	 * Returns the remote port number of a connected socket handle. Interpreter and JVM
+	 * backends only for a real value; the WASM component backend returns {@code nil}.
+	 */
+	public static final String TCP_PEER_PORT = "TCP-PEER-PORT";
+
+	/**
+	 * The {@code tcp-set-timeout} function provided by the {@code rontolisp} package.
+	 * Sets the read deadline of a connected socket handle: {@code (tcp-set-timeout
+	 * handle milliseconds)} makes every subsequent blocking read on the handle signal an
+	 * error after that many milliseconds without data (milliseconds is a non-negative
+	 * integer, like {@code rontolisp:wait-for}; {@code nil} clears the deadline).
+	 * Interpreter and JVM backends only ({@code Socket.setSoTimeout}); the WASM component
+	 * backend SIGNALS at call time (wasi:sockets has no read-deadline knob and a timeout
+	 * that never fires is worse than an error), and Preview 1 keeps the tcp family's
+	 * call-time error. The {@code usocket} shim's
+	 * {@code (setf (usocket:socket-option s :receive-timeout) seconds)} rides this.
+	 */
+	public static final String TCP_SET_TIMEOUT = "TCP-SET-TIMEOUT";
+
+	/**
+	 * The internal {@code rontolisp::%tcp-read-some} primitive,
+	 * {@code (%tcp-read-some socket octets start end wait)}: what has come of a connected
+	 * socket, stored into the {@code (unsigned-byte 8)} vector {@code octets} from
+	 * {@code start} and below {@code end}, in one host read where the stream built-ins
+	 * take a call a byte. With {@code wait} it first waits for one octet; without it
+	 * takes only what is at hand. Answers the position past the last octet stored, so
+	 * {@code start} at the end of the stream, or with no {@code wait} when nothing has
+	 * come. The interpreter's and the JVM's {@code InputStream.read(byte[], int, int)},
+	 * the chunk the component's and {@code --native}'s providers hold
+	 * ({@code sockets.lisp}, {@code runner-sockets.lisp}); Preview 1's call-time refusal.
+	 * A host failure signals {@code read-sequence: MSG}. The Java subset's socket reads
+	 * are its callers ({@code java.lisp}).
+	 */
+	public static final String TCP_READ_SOME_INTERNAL = "%TCP-READ-SOME";
+
+	/** The canonical spelling of {@code rontolisp::%tcp-read-some}. */
+	public static final String TCP_READ_SOME_INTERNAL_QUALIFIED = "RONTOLISP::" + TCP_READ_SOME_INTERNAL;
+
+	/**
+	 * The internal {@code rontolisp::%tcp-socket} primitive,
+	 * {@code (%tcp-socket host port)}: a socket not connected yet, the stream value
+	 * {@link #TCP_CONNECT_SOCKET_INTERNAL} connects in place. Bound to {@code host:port}
+	 * when {@code port} is an integer -- every interface for a nil {@code host}, a port
+	 * of the host's choosing for 0 -- and not bound for a nil {@code port}. A bind that
+	 * fails signals {@code %tcp-socket: cannot bind to H|*:P: MSG}; a component answers
+	 * nil and keeps the host's reason ({@code sockets.lisp}'s {@code *sock-last-error*}).
+	 * The interpreter's and the JVM's {@code java.net.Socket} made and bound
+	 * ({@code runtime/RontoSockets}), a component's {@code tcp-socket} made and bound,
+	 * the {@code --native} runner's socket; Preview 1's call-time refusal. The Java
+	 * subset's {@code Socket} is its caller ({@code java.lisp}).
+	 */
+	public static final String TCP_SOCKET_INTERNAL = "%TCP-SOCKET";
+
+	/** The canonical spelling of {@code rontolisp::%tcp-socket}. */
+	public static final String TCP_SOCKET_INTERNAL_QUALIFIED = "RONTOLISP::" + TCP_SOCKET_INTERNAL;
+
+	/**
+	 * The internal {@code rontolisp::%tcp-connect-socket} primitive,
+	 * {@code (%tcp-connect-socket socket host port millis)}: connects a socket
+	 * {@link #TCP_SOCKET_INTERNAL} made to {@code host:port} -- a name the host looks up
+	 * -- and answers it, waiting {@code millis} milliseconds at most (nil or 0: as long
+	 * as the host's connect waits). A connect past its limit fails with
+	 * {@code tcp-connect: cannot connect to H:P: Connect timed out}, any other failure
+	 * with the host's words after the same lead, as {@link #TCP_CONNECT}'s; a component
+	 * answers nil and keeps the reason. A close of the socket from another thread ends
+	 * the wait. The socket is left to the caller to close after a failure.
+	 */
+	public static final String TCP_CONNECT_SOCKET_INTERNAL = "%TCP-CONNECT-SOCKET";
+
+	/** The canonical spelling of {@code rontolisp::%tcp-connect-socket}. */
+	public static final String TCP_CONNECT_SOCKET_INTERNAL_QUALIFIED = "RONTOLISP::" + TCP_CONNECT_SOCKET_INTERNAL;
+
+	/**
+	 * The internal {@code rontolisp::%tcp-shutdown} primitive,
+	 * {@code (%tcp-shutdown socket output)}: half of a connected socket ended -- with a
+	 * non-nil {@code output} its output, what is buffered sent first and the peer then
+	 * reading its end ({@code shutdown(SHUT_WR)}); else its input, a read under way
+	 * answering the end ({@code shutdown(SHUT_RD)}). Answers nil; a host failure signals
+	 * {@code %tcp-shutdown: MSG}. The interpreter's and the JVM's
+	 * {@code Socket.shutdownOutput} / {@code shutdownInput}, a component's send stream
+	 * ended or receive stream dropped, the {@code --native} runner's {@code shutdown};
+	 * Preview 1's call-time refusal. The Java subset's {@code Socket} is its caller.
+	 */
+	public static final String TCP_SHUTDOWN_INTERNAL = "%TCP-SHUTDOWN";
+
+	/** The canonical spelling of {@code rontolisp::%tcp-shutdown}. */
+	public static final String TCP_SHUTDOWN_INTERNAL_QUALIFIED = "RONTOLISP::" + TCP_SHUTDOWN_INTERNAL;
+
+	/**
+	 * The internal {@code rontolisp::%tcp-option} primitive,
+	 * {@code (%tcp-option socket option value)}: an option of a connected socket given to
+	 * the host, OPTION an integer: 0 {@code TCP_NODELAY} and 1 {@code SO_KEEPALIVE}
+	 * (VALUE 1 on, 0 off), 2 {@code SO_LINGER} (seconds, -1 off), 3 {@code SO_OOBINLINE}
+	 * (1 on, 0 off), 4 {@code IP_TOS} (0 to 255); 5 sends VALUE, a byte, as urgent data
+	 * after what is buffered. Answers nil; a host failure signals
+	 * {@code %tcp-option: MSG}. The interpreter's and the JVM's {@code java.net.Socket}
+	 * setters ({@code runtime/RontoSockets}), the {@code --native} runner's
+	 * {@code socket2} ones; a component gives {@code keep-alive-enabled} to its
+	 * {@code tcp-socket}, answers nil for the options {@code wasi:sockets} has no knob
+	 * for and signals for urgent data; Preview 1's call-time refusal. The Java subset's
+	 * {@code Socket} is its caller.
+	 */
+	public static final String TCP_OPTION_INTERNAL = "%TCP-OPTION";
+
+	/** The canonical spelling of {@code rontolisp::%tcp-option}. */
+	public static final String TCP_OPTION_INTERNAL_QUALIFIED = "RONTOLISP::" + TCP_OPTION_INTERNAL;
+
+	/**
+	 * The {@code tls-connect} function provided by the {@code rontolisp} package. Opens a
+	 * blocking TCP connection to {@code host} and {@code port}, performs a TLS handshake
+	 * (the server certificate is validated against the JDK default trust store and the
+	 * hostname is verified), and returns a bidirectional stream handle usable with
+	 * {@code read-line}, {@code write-line}, {@code read-byte}, {@code write-byte} and
+	 * {@code close}. On the WASM component it is {@code tcp-connect} plus
+	 * {@code tls-upgrade} over {@code wasi:tls}.
+	 */
+	public static final String TLS_CONNECT = "TLS-CONNECT";
+
+	/**
+	 * The read deadline, in milliseconds, under which the interpreter's and the JVM
+	 * backend's {@code tls-connect} run the handshake on the socket they open: a peer
+	 * that accepts and never answers TLS fails the call instead of hanging it. The caller
+	 * has no handle to set a deadline on before the handshake, so the operator sets one;
+	 * the connection it answers carries none ({@code tcp-set-timeout} sets one). Not a
+	 * name, but the one number both backends must share.
+	 */
+	public static final int TLS_CONNECT_HANDSHAKE_TIMEOUT_MS = 10_000;
+
+	/**
+	 * The {@code tls-listen} function provided by the {@code rontolisp} package. Binds a
+	 * listening TLS socket serving the certificate from a PKCS12 keystore file:
+	 * {@code (tls-listen keystore password port &optional host)}. The listener handle
+	 * works with {@code rontolisp:tcp-accept}, {@code rontolisp:tcp-local-port} and
+	 * {@code close}; an accepted connection performs its TLS handshake on the first
+	 * read/write. Interpreter and JVM backends only; the WASM backend has no TLS host
+	 * support.
+	 */
+	public static final String TLS_LISTEN = "TLS-LISTEN";
+
+	/**
+	 * The {@code tls-listen-pem} function provided by the {@code rontolisp} package.
+	 * Binds a listening TLS socket serving the certificate chain and unencrypted PKCS#8
+	 * private key read from two PEM files:
+	 * {@code (tls-listen-pem cert-file key-file port &optional
+	 * host)}. Otherwise identical to {@code tls-listen} (the listener handle works with
+	 * {@code rontolisp:tcp-accept}, {@code rontolisp:tcp-local-port} and {@code close}).
+	 * The interpreter reads the PEM files at run time; the JVM backend embeds the parsed
+	 * keystore at compile time (so the {@code cert-file}/{@code key-file} paths must be
+	 * string literals when compiling). WASM has no TLS host support.
+	 */
+	public static final String TLS_LISTEN_PEM = "TLS-LISTEN-PEM";
+
+	/**
+	 * Internal helper the {@code tls-listen-pem} compile-time inliner rewrites to: binds
+	 * a TLS listener from an in-memory PKCS12 keystore passed as a Base64 string
+	 * ({@code (%tls-listen-p12 base64 password port &optional host)}). Not part of the
+	 * public API -- programs call {@code tls-listen-pem}.
+	 */
+	public static final String TLS_LISTEN_P12 = "%TLS-LISTEN-P12";
+
+	/**
+	 * The {@code tls-upgrade} function provided by the {@code rontolisp} package. Wraps
+	 * an ALREADY-CONNECTED TCP stream handle in TLS as a client --
+	 * {@code (tls-upgrade stream host)} or
+	 * {@code (tls-upgrade stream host :insecure value)} -- performing the handshake
+	 * against {@code host} (certificate chain + HTTPS-style endpoint identification, both
+	 * skipped by a non-nil {@code :insecure}) and returning a NEW stream handle over the
+	 * same connection. This is the primitive behind the {@code cl+ssl} shim's
+	 * {@code make-ssl-client-stream}, which upgrades a stream a client library has
+	 * already connected (and possibly proxied) rather than opening a new one like
+	 * {@code tls-connect}. Interpreter and JVM backends only; the WASM backend has no TLS
+	 * host support.
+	 */
+	public static final String TLS_UPGRADE = "TLS-UPGRADE";
+
+	/** The {@code cl} package name (standard functions, macros and variables). */
+	public static final String CL_PKG = "CL";
+
+	/** The {@code cl-user} package name (default working package, uses {@code cl}). */
+	public static final String CL_USER_PKG = "CL-USER";
+
+	/** The {@code rontolisp} package name (does not use {@code cl}). */
+	public static final String RONTOLISP_PKG = "RONTOLISP";
+
+	/**
+	 * The {@code linalg} package name (numpy-style vector/matrix operations). Like the
+	 * JSON functions, the package is implemented once in rontolisp itself
+	 * ({@code linalg.lisp}, see {@code LinalgLibrary}) so a single implementation runs on
+	 * every backend; the exported function names live in
+	 * {@code PackageRegistry#linalgFunctionNames()}.
+	 */
+	public static final String LINALG_PKG = "LINALG";
+
+	// The linalg members an --simd build intercepts (see .kb/linalg-simd.md). The other
+	// exported names exist only as linalg.lisp defuns, so PackageRegistry keeps them as
+	// bare strings; these fifteen are dispatched on by name in three interceptors
+	// (eval.LinalgSimd, codegen.jvm.JvmLinalgKernelCompiler,
+	// codegen.wasm.WasmLinalgSimdCompiler) and so need constants.
+
+	/** {@code linalg:add}: element-wise {@code a + b}; either operand may be a scalar. */
+	public static final String LINALG_ADD = "ADD";
+
+	/** {@code linalg:sub}: element-wise {@code a - b}; either operand may be a scalar. */
+	public static final String LINALG_SUB = "SUB";
+
+	/**
+	 * {@code linalg:mul}: element-wise (Hadamard) {@code a * b}, NOT a matrix product;
+	 * either operand may be a scalar.
+	 */
+	public static final String LINALG_MUL = "MUL";
+
+	/** {@code linalg:div}: element-wise {@code a / b}; either operand may be a scalar. */
+	public static final String LINALG_DIV = "DIV";
+
+	/** {@code linalg:sum}: the sum of every element, at any rank. */
+	public static final String LINALG_SUM = "SUM";
+
+	/** {@code linalg:amax}: the largest element, at any rank. */
+	public static final String LINALG_AMAX = "AMAX";
+
+	/** {@code linalg:amin}: the smallest element, at any rank. */
+	public static final String LINALG_AMIN = "AMIN";
+
+	/** {@code linalg:norm}: the Euclidean (L2 / Frobenius) norm. */
+	public static final String LINALG_NORM = "NORM";
+
+	/**
+	 * {@code linalg:dot}: the numpy dispatch -- vector.vector to a scalar, matrix.vector
+	 * and vector.matrix to a vector, matrix.matrix to a matrix.
+	 */
+	public static final String LINALG_DOT = "DOT";
+
+	/**
+	 * {@code linalg:outer}: the outer product of two vectors (inputs flattened first).
+	 */
+	public static final String LINALG_OUTER = "OUTER";
+
+	/** {@code linalg:transpose}: a matrix transpose; a vector is returned unchanged. */
+	public static final String LINALG_TRANSPOSE = "TRANSPOSE";
+
+	/** {@code linalg:trace}: the main-diagonal sum of a square matrix. */
+	public static final String LINALG_TRACE = "TRACE";
+
+	/** {@code linalg:argmax}: the index of the largest element of a vector. */
+	public static final String LINALG_ARGMAX = "ARGMAX";
+
+	/** {@code linalg:argmin}: the index of the smallest element of a vector. */
+	public static final String LINALG_ARGMIN = "ARGMIN";
+
+	/** {@code linalg:reshape}: a fresh array of the given shape, row-major elements. */
+	public static final String LINALG_RESHAPE = "RESHAPE";
+
+	/**
+	 * {@code linalg:concatenate}: the arrays of a list joined along an existing axis
+	 * ({@code torch:cat}). A device member over a resident input ({@code .kb/gpu.md}).
+	 */
+	public static final String LINALG_CONCATENATE = "CONCATENATE";
+
+	/** {@code linalg:exp}: element-wise {@code e^x} (numpy {@code np.exp}). */
+	public static final String LINALG_EXP = "EXP";
+
+	/** {@code linalg:log}: element-wise natural log (numpy {@code np.log}). */
+	public static final String LINALG_LOG = "LOG";
+
+	/** {@code linalg:tanh}: element-wise hyperbolic tangent (numpy {@code np.tanh}). */
+	public static final String LINALG_TANH = "TANH";
+
+	/** {@code linalg:sin}: element-wise sine (numpy {@code np.sin}). */
+	public static final String LINALG_SIN = "SIN";
+
+	/** {@code linalg:cos}: element-wise cosine (numpy {@code np.cos}). */
+	public static final String LINALG_COS = "COS";
+
+	/** {@code linalg:tan}: element-wise tangent (numpy {@code np.tan}). */
+	public static final String LINALG_TAN = "TAN";
+
+	/** {@code linalg:asin}: element-wise arc sine (numpy {@code np.arcsin}). */
+	public static final String LINALG_ASIN = "ASIN";
+
+	/** {@code linalg:acos}: element-wise arc cosine (numpy {@code np.arccos}). */
+	public static final String LINALG_ACOS = "ACOS";
+
+	/** {@code linalg:atan}: element-wise arc tangent (numpy {@code np.arctan}). */
+	public static final String LINALG_ATAN = "ATAN";
+
+	/** {@code linalg:sinh}: element-wise hyperbolic sine (numpy {@code np.sinh}). */
+	public static final String LINALG_SINH = "SINH";
+
+	/** {@code linalg:cosh}: element-wise hyperbolic cosine (numpy {@code np.cosh}). */
+	public static final String LINALG_COSH = "COSH";
+
+	/** {@code linalg:sqrt}: element-wise square root (numpy {@code np.sqrt}). */
+	public static final String LINALG_SQRT = "SQRT";
+
+	/** {@code linalg:abs}: element-wise absolute value (numpy {@code np.abs}). */
+	public static final String LINALG_ABS = "ABS";
+
+	/** {@code linalg:negative}: element-wise negation (numpy {@code np.negative}). */
+	public static final String LINALG_NEGATIVE = "NEGATIVE";
+
+	/** {@code linalg:sign}: element-wise {@code signum} (numpy {@code np.sign}). */
+	public static final String LINALG_SIGN = "SIGN";
+
+	/**
+	 * {@code linalg:maximum}: element-wise larger of two operands (numpy
+	 * {@code np.maximum}); either operand may be a scalar. Defined by the strict
+	 * comparison {@code (if (> x y) x y)}, so the second operand wins whenever the first
+	 * is not strictly greater (ties, and unordered {@code NaN} comparisons).
+	 */
+	public static final String LINALG_MAXIMUM = "MAXIMUM";
+
+	/**
+	 * {@code linalg:minimum}: element-wise smaller of two operands (numpy
+	 * {@code np.minimum}); either operand may be a scalar. Defined by
+	 * {@code (if (< x y) x y)}, the mirror of {@link #LINALG_MAXIMUM}.
+	 */
+	public static final String LINALG_MINIMUM = "MINIMUM";
+
+	/**
+	 * {@code linalg:greater}: element-wise {@code a > b} as a 0.0/1.0 mask (numpy
+	 * {@code np.greater}); either operand may be a scalar, and two arrays broadcast. The
+	 * dropout mask {@code (linalg:greater (linalg:rand shape) p)} is the shape that put
+	 * it on the acceleration seam.
+	 */
+	public static final String LINALG_GREATER = "GREATER";
+
+	/** {@code linalg:greater-equal}: element-wise {@code a >= b} as a 0.0/1.0 mask. */
+	public static final String LINALG_GREATER_EQUAL = "GREATER-EQUAL";
+
+	/** {@code linalg:less}: element-wise {@code a < b} as a 0.0/1.0 mask. */
+	public static final String LINALG_LESS = "LESS";
+
+	/** {@code linalg:less-equal}: element-wise {@code a <= b} as a 0.0/1.0 mask. */
+	public static final String LINALG_LESS_EQUAL = "LESS-EQUAL";
+
+	/**
+	 * {@code linalg:equal}: element-wise numeric equality as a 0.0/1.0 mask (one boolean
+	 * for the whole array is {@code linalg:array-equal}, which is never intercepted).
+	 */
+	public static final String LINALG_EQUAL = "EQUAL";
+
+	/**
+	 * {@code linalg:where}: element-wise selection (numpy {@code np.where}) -- the
+	 * element of {@code x} where the mask is non-zero, of {@code y} where it is zero; all
+	 * three operands may be scalars or arrays and broadcast together. It is what
+	 * {@code torch:masked-fill} (the causal attention mask) is built on, which is why it
+	 * is on the acceleration seam.
+	 */
+	public static final String LINALG_WHERE = "WHERE";
+
+	/**
+	 * {@code linalg:take-rows}: the axis-0 slabs of an array selected by an index vector
+	 * (numpy {@code np.take(a, idx, axis=0)}) -- the embedding lookup behind
+	 * {@code torch:index-select}.
+	 */
+	public static final String LINALG_TAKE_ROWS = "TAKE-ROWS";
+
+	/**
+	 * {@code linalg:gather}: one element per ROW of a matrix, the column chosen by an
+	 * index vector (numpy's {@code y[np.arange(n), t]} fancy-indexing idiom) -- the
+	 * target-logit pick behind {@code torch:cross-entropy-loss}.
+	 */
+	public static final String LINALG_GATHER = "GATHER";
+
+	/**
+	 * {@code linalg:clip}: element-wise {@code min(max(x, lo), hi)} (numpy
+	 * {@code np.clip} with scalar bounds), defined as the composition
+	 * {@code (linalg:minimum (linalg:maximum a lo) hi)}.
+	 */
+	public static final String LINALG_CLIP = "CLIP";
+
+	/**
+	 * {@code linalg:relu}: element-wise {@code max(x, 0.0)}, defined as
+	 * {@code (linalg:maximum a 0.0)}.
+	 */
+	public static final String LINALG_RELU = "RELU";
+
+	/**
+	 * {@code linalg:erf}: element-wise Gauss error function ({@code scipy.special.erf}),
+	 * the all-positive-term A&amp;S 7.1.6 series of {@code linalg::%la-erf-1} applied to
+	 * every element. The exact {@code torch:gelu} ({@code nn.GELU}'s default) is built on
+	 * it, so it is every transformer feed-forward block. Its defun is an {@code emap},
+	 * which is never intercepted, so the member is intercepted itself under
+	 * {@code --simd}.
+	 */
+	public static final String LINALG_ERF = "ERF";
+
+	/**
+	 * {@code linalg::%la-im2col} (INTERNAL, note the double colon): unfolds a rank-4 NCHW
+	 * array into the {@code (N*out-h*out-w, C*fh*fw)} window matrix behind the CNN
+	 * examples (Deep Learning from Scratch {@code common/util.py}). Pure index
+	 * arithmetic, intercepted under {@code --simd} because it dominates the accelerated
+	 * convolution runs.
+	 */
+	public static final String LINALG_IM2COL = "%LA-IM2COL";
+
+	/**
+	 * {@code linalg::%la-col2im} (INTERNAL): the {@code %la-im2col} adjoint --
+	 * scatter-adds the window matrix back into a fresh zero rank-4 NCHW array
+	 * (overlapping windows accumulate; the convolution backward pass).
+	 */
+	public static final String LINALG_COL2IM = "%LA-COL2IM";
+
+	/**
+	 * {@code linalg::%la-matmul-nd} (INTERNAL): the STACKED matrix product behind
+	 * {@code linalg:matmul} at rank {@code >= 3} ({@code torch.bmm} /
+	 * {@code torch.matmul}) -- the last two axes are the matrix, every leading axis
+	 * broadcasts. Intercepted under {@code --simd} because it is every attention layer
+	 * and every {@code torch:linear} over a {@code (B T C)} activation.
+	 */
+	public static final String LINALG_MATMUL_ND = "%LA-MATMUL-ND";
+
+	/**
+	 * {@code linalg::%la-matmul-nd-ta} (INTERNAL): the same stacked product with the LEFT
+	 * operand's last two axes exchanged -- {@code a^T . b}, which is the matmul adjoint
+	 * for the right operand. It exists as a member of its own so that an accelerator can
+	 * read the operand where it lies; the portable defun is the transpose and the product
+	 * it names, so nothing about the result depends on which one ran.
+	 */
+	public static final String LINALG_MATMUL_ND_TA = "%LA-MATMUL-ND-TA";
+
+	/**
+	 * {@code linalg::%la-matmul-nd-tb} (INTERNAL): the mirror -- {@code a . b^T}, the
+	 * matmul adjoint for the left operand.
+	 */
+	public static final String LINALG_MATMUL_ND_TB = "%LA-MATMUL-ND-TB";
+
+	/**
+	 * {@code linalg::%la-adam-step} (INTERNAL): Adam's FUSED element-wise update over a
+	 * parameter, its gradient and its two moment buffers, with the whole rule packed into
+	 * one double vector. It lives in {@code linalg} rather than in {@code torch} because
+	 * this seam intercepts {@code linalg:} members and nothing else, and it was 31% of a
+	 * {@code --gpu --simd} training step as a boxed {@code do} loop
+	 * ({@code torch::%o-adam-step}, its only caller, keeps the rule's documentation).
+	 */
+	public static final String LINALG_ADAM_STEP = "%LA-ADAM-STEP";
+
+	/**
+	 * {@code linalg::%la-rng-fill} (INTERNAL): fills a packed array with draws from an
+	 * explicit Wichmann-Hill state and answers the state it ends on -- the one loop
+	 * behind {@code linalg:rand}, {@code linalg:randn} and {@code linalg:uniform}, which
+	 * take their state from and put it back into the three {@code %la-rng-s*} specials.
+	 * Passing the state as an array is what makes the fill a pure function of its
+	 * arguments, and so a member this seam can intercept.
+	 */
+	public static final String LINALG_RNG_FILL = "%LA-RNG-FILL";
+
+	/**
+	 * {@code linalg::%la-gather-strided} (INTERNAL): the one strided read every
+	 * {@code linalg:slice} and every {@code %la-broadcast-to} is -- a fresh array filled
+	 * by walking the source's flat index from a base through per-axis strides, the width
+	 * riding as {@link am.ik.rontolisp.FloatWidth#code()}. Intercepted because the boxed
+	 * odometer walk was a fifth of a {@code --gpu --simd} training step through
+	 * {@code torch:masked-fill} and the {@code torch:cat} adjoint.
+	 */
+	public static final String LINALG_GATHER_STRIDED = "%LA-GATHER-STRIDED";
+
+	/**
+	 * {@code linalg::%la-scatter-rows} (INTERNAL): the adjoint of
+	 * {@link #LINALG_TAKE_ROWS}, in place -- slab {@code i} of the gradient is ADDED into
+	 * slab {@code idx[i]} of the destination. The loop {@code torch:index-select}'s
+	 * backward used to spell inline.
+	 */
+	public static final String LINALG_SCATTER_ROWS = "%LA-SCATTER-ROWS";
+
+	/**
+	 * {@code linalg:softmax}: a device member in its {@code :axis} form.
+	 */
+	public static final String LINALG_SOFTMAX = "SOFTMAX";
+
+	/**
+	 * {@code linalg::%la-softmax-grad} (INTERNAL): {@code torch:softmax}'s adjoint
+	 * {@code s * (g - sum(g * s))} along an axis, the composition it always was, spelled
+	 * as one member so the device can run it as one pass.
+	 */
+	public static final String LINALG_SOFTMAX_GRAD = "%LA-SOFTMAX-GRAD";
+
+	/**
+	 * {@code linalg::%la-scaled-masked-softmax} (INTERNAL): the last-axis softmax of a
+	 * score divided by a scalar and masked first -- {@code torch:div} then
+	 * {@code torch:masked-fill} then {@code torch:softmax}, the attention head's idiom --
+	 * spelled as one member so the device runs the three as one pass (2026-09-02).
+	 */
+	public static final String LINALG_SCALED_MASKED_SOFTMAX = "%LA-SCALED-MASKED-SOFTMAX";
+
+	/**
+	 * {@code linalg::%la-scaled-masked-softmax-grad} (INTERNAL): the adjoint of the
+	 * member above -- softmax's, then the mask's zeroing, then the division -- as one
+	 * member (2026-09-02).
+	 */
+	public static final String LINALG_SCALED_MASKED_SOFTMAX_GRAD = "%LA-SCALED-MASKED-SOFTMAX-GRAD";
+
+	/**
+	 * {@code linalg:log-softmax}: a device member in its {@code :axis} form.
+	 */
+	public static final String LINALG_LOG_SOFTMAX = "LOG-SOFTMAX";
+
+	/**
+	 * {@code linalg::%la-log-softmax-grad} (INTERNAL): {@code torch:log-softmax}'s
+	 * adjoint {@code g - exp(out) * sum(g)} along an axis, the composition it always was,
+	 * spelled as one member so the device can run it as one pass.
+	 */
+	public static final String LINALG_LOG_SOFTMAX_GRAD = "%LA-LOG-SOFTMAX-GRAD";
+
+	/**
+	 * {@code linalg::%la-gelu} (INTERNAL): the exact GELU {@code x * (1 + erf(x / sqrt
+	 * 2)) / 2} as the composition {@code torch:gelu} spelled in torch ops, now one member
+	 * with an adjoint of its own ({@link #LINALG_GELU_GRAD}) -- so a device can run each
+	 * as one pass.
+	 */
+	public static final String LINALG_GELU = "%LA-GELU";
+
+	/**
+	 * {@code linalg::%la-gelu-grad} (INTERNAL): the tape's backward through that
+	 * composition, {@code (g x old)} -- the gradient {@code x} holds after the node,
+	 * folded onto the gradient {@code old} it had accumulated before (or nil), in the
+	 * order the reverse walk would have added the composition's two contributions.
+	 */
+	public static final String LINALG_GELU_GRAD = "%LA-GELU-GRAD";
+
+	/**
+	 * {@code linalg::%la-layer-norm} (INTERNAL): {@code (x eps)}, the normalization
+	 * {@code (x - mean) / sqrt(var + eps)} over the last axis as {@code torch:layer-norm}
+	 * composed it from torch ops -- one member so a device can run it as one pass
+	 * ({@code .kb/torch.md}). The module's own forward reaches
+	 * {@link #LINALG_LAYER_NORM_AFFINE} instead; this one stays for the shapes that
+	 * decline it and for the chain the fused member is pinned against.
+	 */
+	public static final String LINALG_LAYER_NORM = "%LA-LAYER-NORM";
+
+	/**
+	 * {@code linalg::%la-layer-norm-grad} (INTERNAL): the tape's backward through that
+	 * normalization, {@code (g x eps old)}, with the same {@code old} protocol as
+	 * {@link #LINALG_GELU_GRAD}: the four contributions the composition makes to its
+	 * input, in the reverse walk's order, onto what {@code x} had accumulated.
+	 */
+	public static final String LINALG_LAYER_NORM_GRAD = "%LA-LAYER-NORM-GRAD";
+
+	/**
+	 * {@code linalg::%la-layer-norm-affine} (INTERNAL): {@code (x w b eps)}, that
+	 * normalization AND the module's affine {@code norm * weight + bias} -- the two
+	 * BROADCAST passes over the whole activation that {@code torch:layer-norm} spelled as
+	 * two more tape nodes.
+	 */
+	public static final String LINALG_LAYER_NORM_AFFINE = "%LA-LAYER-NORM-AFFINE";
+
+	/**
+	 * {@code linalg::%la-layer-norm-affine-grad} (INTERNAL): its adjoint,
+	 * {@code (g x w eps old)}, and the ONE member in {@code linalg:} that answers two
+	 * arrays -- a two-element LIST of the input's gradient (the {@code old} protocol of
+	 * {@link #LINALG_GELU_GRAD}, with the broadcast {@code g * weight} folded in) and
+	 * {@code g * norm}, whose axis-0 folds are the weight's gradient. {@code norm} is
+	 * what the fused forward no longer stores.
+	 */
+	public static final String LINALG_LAYER_NORM_AFFINE_GRAD = "%LA-LAYER-NORM-AFFINE-GRAD";
+
+	/**
+	 * {@code linalg::%la-dropout-mask} (INTERNAL): {@code (shape p st width)}, the
+	 * inverted-dropout mask {@code (rand > p) / (1 - p)} drawn from the state vector
+	 * {@code st}, which is advanced IN PLACE to the generator's end state -- the three
+	 * members {@code torch:dropout} composed, as one, so a device can draw and scale the
+	 * mask in one pass. The width rides as a CODE, like {@link #LINALG_GATHER_STRIDED}'s
+	 * -- {@link am.ik.rontolisp.FloatWidth#code()}.
+	 */
+	public static final String LINALG_DROPOUT_MASK = "%LA-DROPOUT-MASK";
+
+	/**
+	 * {@code linalg::%la-sum-squares} (INTERNAL): an accumulator plus the sum of the
+	 * squares of an array's elements, the left fold {@code torch:clip-grad-norm} takes
+	 * over every gradient -- moved onto the acceleration seam from the boxed loop it was.
+	 */
+	public static final String LINALG_SUM_SQUARES = "%LA-SUM-SQUARES";
+
+	/**
+	 * {@code linalg::%la-scale} (INTERNAL): an array scaled IN PLACE by a number, the
+	 * other half of {@code torch:clip-grad-norm}.
+	 */
+	public static final String LINALG_SCALE = "%LA-SCALE";
+
+	/**
+	 * The {@code torch} package name (a PyTorch-style tensor with reverse-mode autograd
+	 * over the {@code linalg} kernels). Like {@code linalg}, the package is implemented
+	 * once in rontolisp itself ({@code torch.lisp}, see {@code TorchLibrary}); the
+	 * exported function names live in {@code PackageRegistry#torchFunctionNames()}. The
+	 * one macro, {@code torch:no-grad}, is a built-in {@code LispMacroExpander}
+	 * expansion, so its member name gets a constant here.
+	 */
+	public static final String TORCH_PKG = "TORCH";
+
+	/**
+	 * {@code torch:no-grad}: the gradient-mode macro -- runs its body with
+	 * {@code torch::*grad-enabled*} dynamically bound to {@code nil}, so no operation
+	 * inside records the autograd tape. Expanded by
+	 * {@code LispMacroExpander#expandTorchNoGrad}.
+	 */
+	public static final String TORCH_NO_GRAD = "NO-GRAD";
+
+	/** {@code torch:no-grad} spelled with its package qualifier. */
+	public static final String TORCH_NO_GRAD_QUALIFIED = TORCH_PKG + ":" + TORCH_NO_GRAD;
+
+	/**
+	 * {@code torch::*grad-enabled*} (INTERNAL): the dynamic gradient-mode variable
+	 * {@code torch:no-grad}'s expansion rebinds. The expansion synthesizes this name
+	 * AFTER {@code LibraryDefunPruner} runs, so the pruner treats a {@code torch:no-grad}
+	 * occurrence as a reference to it (the {@code vec:aset} synthetic-edge pattern).
+	 */
+	public static final String TORCH_GRAD_ENABLED_QUALIFIED = TORCH_PKG + "::*GRAD-ENABLED*";
+
+	/**
+	 * The {@code vec} package name: portable packed-{@code f64} vector kernels over the
+	 * packed {@code (array double-float)} type. Implemented once in rontolisp itself
+	 * ({@code vec.lisp}, see {@code VecLibrary}) as the scalar reference / cross-backend
+	 * oracle, spliced/loaded on demand exactly like {@code linalg}: the interpreter, the
+	 * JVM compiler and the wasm-GC compiler run those {@code defun}s over the packed
+	 * representation. Two backends add an acceleration layer that intercepts the
+	 * vectorizable kernels at their call sites: the JVM {@code --simd} flag lowers them
+	 * to {@code jdk.incubator.vector} lane loops, and the {@code --no-gc} scalar WASM
+	 * backend lowers them to real fixed-width WASM SIMD ({@code v128} / {@code f64x2.*})
+	 * over its packed {@code [len][f64...]} linear-memory block. The package names the
+	 * portable abstraction; {@code --simd} names the (optional) acceleration mechanism.
+	 */
+	public static final String VEC_PKG = "VEC";
+
+	/** {@code vec:zeros}: a fresh length-n vector of {@code 0.0}. */
+	public static final String VEC_ZEROS = "ZEROS";
+
+	/** {@code vec:ones}: a fresh length-n vector of {@code 1.0}. */
+	public static final String VEC_ONES = "ONES";
+
+	/**
+	 * {@code vec:arange}: a fresh vector {@code [0.0, 1.0, ..., n-1]} (numpy name, as in
+	 * {@code linalg}).
+	 */
+	public static final String VEC_ARANGE = "ARANGE";
+
+	/**
+	 * {@code vec:from-list}: a fresh vector from a Lisp list of numbers (portable
+	 * backends only).
+	 */
+	public static final String VEC_FROM_LIST = "FROM-LIST";
+
+	/**
+	 * {@code vec:to-list}: a Lisp list of a vector's elements (portable backends only).
+	 */
+	public static final String VEC_TO_LIST = "TO-LIST";
+
+	/**
+	 * {@code vec:aref}: read one element of a vector; a setf place via {@code vec:aset}.
+	 */
+	public static final String VEC_AREF = "AREF";
+
+	/**
+	 * {@code vec:aset}: write one element of a vector, returning the stored value (the
+	 * {@code setf} writer).
+	 */
+	public static final String VEC_ASET = "ASET";
+
+	/** {@code vec:length}: the element count of a vector. */
+	public static final String VEC_LENGTH = "LENGTH";
+
+	/** {@code vec:add}: element-wise {@code a + b} into a fresh vector. */
+	public static final String VEC_ADD = "ADD";
+
+	/** {@code vec:sub}: element-wise {@code a - b} into a fresh vector. */
+	public static final String VEC_SUB = "SUB";
+
+	/** {@code vec:mul}: element-wise (Hadamard) {@code a * b} into a fresh vector. */
+	public static final String VEC_MUL = "MUL";
+
+	/** {@code vec:div}: element-wise {@code a / b} into a fresh vector. */
+	public static final String VEC_DIV = "DIV";
+
+	/** {@code vec:scale}: {@code v * s} (scalar broadcast) into a fresh vector. */
+	public static final String VEC_SCALE = "SCALE";
+
+	/**
+	 * {@code vec:+}: the CL operator spelling of {@link #VEC_ADD}. The four operator
+	 * names are STRICTLY BINARY aliases, unlike their n-ary {@code linalg:} siblings:
+	 * every {@code vec:} kernel is fixed-arity and allocation-explicit (that is why the
+	 * {@code -into} family exists at all), so an n-ary spelling that silently allocated
+	 * one intermediate vector per extra operand would contradict the package's contract.
+	 */
+	public static final String VEC_PLUS = "+";
+
+	/** {@code vec:-}: the CL operator spelling of {@link #VEC_SUB} (binary). */
+	public static final String VEC_MINUS = "-";
+
+	/** {@code vec:*}: the CL operator spelling of {@link #VEC_MUL} (binary). */
+	public static final String VEC_STAR = "*";
+
+	/** {@code vec:/}: the CL operator spelling of {@link #VEC_DIV} (binary). */
+	public static final String VEC_SLASH = "/";
+
+	/** {@code vec:sum}: horizontal sum of a vector, a scalar. */
+	public static final String VEC_SUM = "SUM";
+
+	/** {@code vec:mean}: arithmetic mean of a vector, a scalar. */
+	public static final String VEC_MEAN = "MEAN";
+
+	/** {@code vec:dot}: dot product of two vectors, a scalar. */
+	public static final String VEC_DOT = "DOT";
+
+	/** {@code vec:norm}: Euclidean norm {@code sqrt(dot(v, v))}, a scalar. */
+	public static final String VEC_NORM = "NORM";
+
+	/**
+	 * {@code vec:matvec}: GEMV -- a rank-2 matrix {@code W(d, n)} times a rank-1 vector
+	 * {@code x(n)}, yielding a rank-1 vector {@code y(d)} with
+	 * {@code y[i] = dot(row_i, x)}.
+	 */
+	public static final String VEC_MATVEC = "MATVEC";
+
+	/**
+	 * {@code vec:add-into}: element-wise {@code a + b} written into {@code out}, which is
+	 * returned. The destination-passing sibling of {@link #VEC_ADD}: it allocates
+	 * nothing, so a loop over it keeps the bump-allocated linear heap of the WASM
+	 * backends flat. {@code out} may alias {@code a} and/or {@code b} (element {@code i}
+	 * depends only on element {@code i}).
+	 */
+	public static final String VEC_ADD_INTO = "ADD-INTO";
+
+	/** {@code vec:sub-into}: element-wise {@code a - b} into {@code out}. */
+	public static final String VEC_SUB_INTO = "SUB-INTO";
+
+	/** {@code vec:mul-into}: element-wise {@code a * b} into {@code out}. */
+	public static final String VEC_MUL_INTO = "MUL-INTO";
+
+	/** {@code vec:div-into}: element-wise {@code a / b} into {@code out}. */
+	public static final String VEC_DIV_INTO = "DIV-INTO";
+
+	/** {@code vec:scale-into}: {@code v * s} (scalar broadcast) into {@code out}. */
+	public static final String VEC_SCALE_INTO = "SCALE-INTO";
+
+	/**
+	 * {@code vec:matvec-into}: GEMV written into {@code out}. Unlike the element-wise
+	 * kernels, {@code out[i]} depends on every element of {@code x}, so {@code out} must
+	 * not be {@code eq} to {@code x} (nor to {@code w}); the call signals otherwise.
+	 */
+	public static final String VEC_MATVEC_INTO = "MATVEC-INTO";
+
+	// The element-wise unary ufuncs. Each has a fresh-vector form and a
+	// destination-passing -into sibling; out MAY alias the operand (element i depends
+	// only
+	// on element i, the add-into rule).
+
+	/** {@code vec:exp}: element-wise {@code e^x} into a fresh vector. */
+	public static final String VEC_EXP = "EXP";
+
+	/** {@code vec:log}: element-wise natural log into a fresh vector. */
+	public static final String VEC_LOG = "LOG";
+
+	/** {@code vec:tanh}: element-wise hyperbolic tangent into a fresh vector. */
+	public static final String VEC_TANH = "TANH";
+
+	/** {@code vec:sin}: element-wise sine into a fresh vector. */
+	public static final String VEC_SIN = "SIN";
+
+	/** {@code vec:cos}: element-wise cosine into a fresh vector. */
+	public static final String VEC_COS = "COS";
+
+	/** {@code vec:tan}: element-wise tangent into a fresh vector. */
+	public static final String VEC_TAN = "TAN";
+
+	/** {@code vec:asin}: element-wise arc sine into a fresh vector. */
+	public static final String VEC_ASIN = "ASIN";
+
+	/** {@code vec:acos}: element-wise arc cosine into a fresh vector. */
+	public static final String VEC_ACOS = "ACOS";
+
+	/** {@code vec:atan}: element-wise arc tangent into a fresh vector. */
+	public static final String VEC_ATAN = "ATAN";
+
+	/** {@code vec:sinh}: element-wise hyperbolic sine into a fresh vector. */
+	public static final String VEC_SINH = "SINH";
+
+	/** {@code vec:cosh}: element-wise hyperbolic cosine into a fresh vector. */
+	public static final String VEC_COSH = "COSH";
+
+	/** {@code vec:sqrt}: element-wise square root into a fresh vector. */
+	public static final String VEC_SQRT = "SQRT";
+
+	/** {@code vec:abs}: element-wise absolute value into a fresh vector. */
+	public static final String VEC_ABS = "ABS";
+
+	/** {@code vec:square}: element-wise {@code x * x} into a fresh vector. */
+	public static final String VEC_SQUARE = "SQUARE";
+
+	/** {@code vec:negative}: element-wise negation into a fresh vector. */
+	public static final String VEC_NEGATIVE = "NEGATIVE";
+
+	/** {@code vec:sign}: element-wise {@code signum} into a fresh vector. */
+	public static final String VEC_SIGN = "SIGN";
+
+	/** {@code vec:reciprocal}: element-wise {@code 1 / x} into a fresh vector. */
+	public static final String VEC_RECIPROCAL = "RECIPROCAL";
+
+	// The comparison-select ufuncs. All are defined by the strict comparison the linalg:
+	// siblings state ((if (> x y) x y) and its mirrors), so the second operand / the
+	// bound
+	// wins whenever the comparison is false -- including unordered NaN comparisons.
+
+	/** {@code vec:maximum}: element-wise larger of two vectors into a fresh vector. */
+	public static final String VEC_MAXIMUM = "MAXIMUM";
+
+	/** {@code vec:minimum}: element-wise smaller of two vectors into a fresh vector. */
+	public static final String VEC_MINIMUM = "MINIMUM";
+
+	/** {@code vec:relu}: element-wise {@code max(x, 0.0)} into a fresh vector. */
+	public static final String VEC_RELU = "RELU";
+
+	/**
+	 * {@code vec:clip}: element-wise {@code min(max(x, lo), hi)} (scalar bounds) into a
+	 * fresh vector.
+	 */
+	public static final String VEC_CLIP = "CLIP";
+
+	/** {@code vec:exp-into}: element-wise {@code e^x} into {@code out}. */
+	public static final String VEC_EXP_INTO = "EXP-INTO";
+
+	/** {@code vec:log-into}: element-wise natural log into {@code out}. */
+	public static final String VEC_LOG_INTO = "LOG-INTO";
+
+	/** {@code vec:tanh-into}: element-wise hyperbolic tangent into {@code out}. */
+	public static final String VEC_TANH_INTO = "TANH-INTO";
+
+	/** {@code vec:sin-into}: element-wise sine into {@code out}. */
+	public static final String VEC_SIN_INTO = "SIN-INTO";
+
+	/** {@code vec:cos-into}: element-wise cosine into {@code out}. */
+	public static final String VEC_COS_INTO = "COS-INTO";
+
+	/** {@code vec:tan-into}: element-wise tangent into {@code out}. */
+	public static final String VEC_TAN_INTO = "TAN-INTO";
+
+	/** {@code vec:asin-into}: element-wise arc sine into {@code out}. */
+	public static final String VEC_ASIN_INTO = "ASIN-INTO";
+
+	/** {@code vec:acos-into}: element-wise arc cosine into {@code out}. */
+	public static final String VEC_ACOS_INTO = "ACOS-INTO";
+
+	/** {@code vec:atan-into}: element-wise arc tangent into {@code out}. */
+	public static final String VEC_ATAN_INTO = "ATAN-INTO";
+
+	/** {@code vec:sinh-into}: element-wise hyperbolic sine into {@code out}. */
+	public static final String VEC_SINH_INTO = "SINH-INTO";
+
+	/** {@code vec:cosh-into}: element-wise hyperbolic cosine into {@code out}. */
+	public static final String VEC_COSH_INTO = "COSH-INTO";
+
+	/** {@code vec:sqrt-into}: element-wise square root into {@code out}. */
+	public static final String VEC_SQRT_INTO = "SQRT-INTO";
+
+	/** {@code vec:abs-into}: element-wise absolute value into {@code out}. */
+	public static final String VEC_ABS_INTO = "ABS-INTO";
+
+	/** {@code vec:square-into}: element-wise {@code x * x} into {@code out}. */
+	public static final String VEC_SQUARE_INTO = "SQUARE-INTO";
+
+	/** {@code vec:negative-into}: element-wise negation into {@code out}. */
+	public static final String VEC_NEGATIVE_INTO = "NEGATIVE-INTO";
+
+	/** {@code vec:sign-into}: element-wise {@code signum} into {@code out}. */
+	public static final String VEC_SIGN_INTO = "SIGN-INTO";
+
+	/** {@code vec:reciprocal-into}: element-wise {@code 1 / x} into {@code out}. */
+	public static final String VEC_RECIPROCAL_INTO = "RECIPROCAL-INTO";
+
+	/** {@code vec:maximum-into}: element-wise larger of two vectors into {@code out}. */
+	public static final String VEC_MAXIMUM_INTO = "MAXIMUM-INTO";
+
+	/** {@code vec:minimum-into}: element-wise smaller of two vectors into {@code out}. */
+	public static final String VEC_MINIMUM_INTO = "MINIMUM-INTO";
+
+	/** {@code vec:relu-into}: element-wise {@code max(x, 0.0)} into {@code out}. */
+	public static final String VEC_RELU_INTO = "RELU-INTO";
+
+	/**
+	 * {@code vec:clip-into}: element-wise {@code min(max(x, lo), hi)} into {@code out}.
+	 */
+	public static final String VEC_CLIP_INTO = "CLIP-INTO";
+
+	/**
+	 * {@code vec:aref} fully qualified: a {@code setf} place (writer {@code vec:aset}).
+	 */
+	public static final String VEC_QUALIFIED_AREF = VEC_PKG + ":" + VEC_AREF;
+
+	/**
+	 * {@code vec:aset} fully qualified: the {@code setf} writer for {@code vec:aref}.
+	 */
+	public static final String VEC_QUALIFIED_ASET = VEC_PKG + ":" + VEC_ASET;
+
+	/**
+	 * The {@code usocket} package name (a usocket-compatible shim over the
+	 * {@code rontolisp:tcp-*} built-ins). Like {@code linalg}/{@code vec} it is
+	 * implemented once in rontolisp itself ({@code usocket.lisp}, see
+	 * {@code UsocketLibrary}) so a single implementation runs on every backend; the
+	 * exported names live in {@code PackageRegistry#usocketFunctionNames()}. The four
+	 * {@code with-*} convenience macros are built-in {@code LispMacroExpander} expansions
+	 * (the {@code rontolisp:with-arena} pattern), not library defuns.
+	 */
+	public static final String USOCKET_PKG = "USOCKET";
+
+	/**
+	 * {@code usocket:socket-connect}: the shim's TCP client entry point. Named as a
+	 * constant because {@code UsocketLibrary}'s dedup guard checks whether a program
+	 * already defines it (the ASDF built-in-system hook may have spliced the library
+	 * before the generic {@code process()} pass runs).
+	 */
+	public static final String USOCKET_SOCKET_CONNECT = "SOCKET-CONNECT";
+
+	/**
+	 * {@code usocket:host-to-hostname host} -- a host designator (string, vector quad,
+	 * host-byte-order integer or nil) as a hostname/dotted-quad STRING. Real: every input
+	 * shape upstream accepts is rendered the way upstream renders it.
+	 */
+	public static final String USOCKET_HOST_TO_HOSTNAME = "HOST-TO-HOSTNAME";
+
+	/**
+	 * {@code usocket:get-host-by-name name} -- lite: no backend has a name-resolution
+	 * primitive (the {@code tcp-*} built-ins resolve host names inside the host), so the
+	 * designator comes back rendered by {@link #USOCKET_HOST_TO_HOSTNAME} rather than
+	 * resolved to upstream's vector quad. clack's {@code handler:run} calls the pair only
+	 * to normalize its {@code :address} before handing it to a backend handler, which
+	 * resolves it for real.
+	 */
+	public static final String USOCKET_GET_HOST_BY_NAME = "GET-HOST-BY-NAME";
+
+	/**
+	 * The {@code usocket::%usock-guard} internal form: wraps a socket-operation body so
+	 * an underlying failure is re-signaled as a typed {@code usocket:socket-error}. A
+	 * {@code handler-case} wrap on the interpreter and the JVM; a plain pass-through on
+	 * WASM, where errors are uncatchable traps (the shim source is parsed once and shared
+	 * by every backend, so the branch lives in the expansion, not in reader features).
+	 */
+	public static final String USOCKET_GUARD = "%USOCK-GUARD";
+
+	/** The package-qualified spelling of {@code usocket::%usock-guard}. */
+	public static final String USOCKET_GUARD_QUALIFIED = USOCKET_PKG + "::" + USOCKET_GUARD;
+
+	/**
+	 * The {@code usocket:with-client-socket} macro:
+	 * {@code (with-client-socket (socket stream host port &rest connect-args) body...)}
+	 * connects, binds {@code socket} and its stream, runs the body and closes the socket
+	 * on every exit on the interpreter/JVM ({@code unwind-protect}), on normal exit only
+	 * on WASM.
+	 */
+	public static final String USOCKET_WITH_CLIENT_SOCKET = "WITH-CLIENT-SOCKET";
+
+	/** The canonical package-qualified spelling of {@code usocket:with-client-socket}. */
+	public static final String USOCKET_WITH_CLIENT_SOCKET_QUALIFIED = USOCKET_PKG + ":" + USOCKET_WITH_CLIENT_SOCKET;
+
+	/**
+	 * The {@code usocket:with-connected-socket} macro:
+	 * {@code (with-connected-socket (var socket-form) body...)} binds {@code var}, runs
+	 * the body and closes the socket on normal exit.
+	 */
+	public static final String USOCKET_WITH_CONNECTED_SOCKET = "WITH-CONNECTED-SOCKET";
+
+	/**
+	 * The canonical package-qualified spelling of {@code usocket:with-connected-socket}.
+	 */
+	public static final String USOCKET_WITH_CONNECTED_SOCKET_QUALIFIED = USOCKET_PKG + ":"
+			+ USOCKET_WITH_CONNECTED_SOCKET;
+
+	/**
+	 * The {@code usocket:with-server-socket} macro: same expansion as
+	 * {@code usocket:with-connected-socket} (usocket aliases the two).
+	 */
+	public static final String USOCKET_WITH_SERVER_SOCKET = "WITH-SERVER-SOCKET";
+
+	/** The canonical package-qualified spelling of {@code usocket:with-server-socket}. */
+	public static final String USOCKET_WITH_SERVER_SOCKET_QUALIFIED = USOCKET_PKG + ":" + USOCKET_WITH_SERVER_SOCKET;
+
+	/**
+	 * The {@code usocket:with-socket-listener} macro:
+	 * {@code (with-socket-listener (var host port &rest listen-args) body...)} listens,
+	 * binds {@code var}, runs the body and closes the listener on normal exit.
+	 */
+	public static final String USOCKET_WITH_SOCKET_LISTENER = "WITH-SOCKET-LISTENER";
+
+	/**
+	 * The canonical package-qualified spelling of {@code usocket:with-socket-listener}.
+	 */
+	public static final String USOCKET_WITH_SOCKET_LISTENER_QUALIFIED = USOCKET_PKG + ":"
+			+ USOCKET_WITH_SOCKET_LISTENER;
+
+	/**
+	 * The {@code wasm-export} directive provided by the {@code rontolisp} package. Used
+	 * as {@code (rontolisp:wasm-export 'name :params '(...) :returns ...)} to mark a
+	 * function for direct WASM export. A no-op on the interpreter and the JVM backend.
+	 */
+	public static final String WASM_EXPORT = "WASM-EXPORT";
+
+	/**
+	 * The {@code jvm-export} directive provided by the {@code rontolisp} package — the
+	 * JVM twin of {@link #WASM_EXPORT}. Used as {@code (rontolisp:jvm-export 'name
+	 * :params '(...) :returns ... :as "javaName")} to emit a typed, Java-callable static
+	 * method next to a compiled {@code defun}. A no-op on the interpreter and the WASM
+	 * backends.
+	 */
+	public static final String JVM_EXPORT = "JVM-EXPORT";
+
+	/**
+	 * The {@code wit-export} directive provided by the {@code rontolisp} package. Used as
+	 * {@code (rontolisp:wit-export "world.wit" :world name)} to declare that the program
+	 * implements a WIT world: the compiler checks every {@code defun} against the world's
+	 * exports and lowers them into the equivalent {@link #WASM_EXPORT} directives. A
+	 * contract check (but no export) on the interpreter and the JVM backend.
+	 */
+	public static final String WIT_EXPORT = "WIT-EXPORT";
+
+	/** The fully qualified {@code rontolisp:wit-export} directive name. */
+	public static final String WIT_EXPORT_QUALIFIED = RONTOLISP_PKG + ":" + WIT_EXPORT;
+
+	/**
+	 * The {@code http-handler} directive provided by the {@code rontolisp} package. Used
+	 * as {@code (rontolisp:http-handler 'name [port])} to serve HTTP requests with a
+	 * handler function that receives a request property list ({@code :method} /
+	 * {@code :path} / {@code :headers} / {@code :body}) and returns a response property
+	 * list ({@code :status} / {@code :headers} / {@code :body}). On the interpreter and
+	 * the JVM backend it runs a blocking embedded HTTP server on the given port (default
+	 * 8080); when compiled to a WASI component ({@code --component}) it exports
+	 * {@code wasi:http/incoming-handler} so the module runs under {@code wasmtime serve}
+	 * (the port argument is ignored, the host owns the socket).
+	 */
+	public static final String HTTP_HANDLER = "HTTP-HANDLER";
+
+	/**
+	 * The internal {@code rontolisp::%http-reactor} marker:
+	 * {@code (rontolisp::%http-reactor 'dispatch-fn "export-name")}, left inside a Clack
+	 * handler backend's {@code run} by the {@code clack-handler-reactor} shim. It is NOT
+	 * a function -- nothing defines it. On the WASM backends
+	 * {@code eval/HttpReactorInliner} lowers the call site to {@code nil} and answers it
+	 * with the synthesized {@link #WASM_EXPORT} of a bridge to the named dispatcher (a
+	 * host-driven reactor's entry point is an export, and {@code wasm-export} needs a
+	 * literal name at compile time, which a program that only calls {@code clack:clackup}
+	 * cannot supply); every other backend never reads the form (the shim guards it with
+	 * {@code #+rontolisp-wasm}) because its host calls the dispatcher directly.
+	 */
+	public static final String HTTP_REACTOR = "%HTTP-REACTOR";
+
+	/**
+	 * The internal {@code rontolisp::%http-server-start} function: the STOPPABLE
+	 * counterpart of the {@link #HTTP_HANDLER} directive, used as
+	 * {@code (rontolisp::%http-server-start handler-fn port address)} where
+	 * {@code handler-fn} is a FUNCTION VALUE (unlike the directive's quoted name). Starts
+	 * an embedded HTTP server bound to {@code address:port} and returns an opaque server
+	 * handle (nothing portable may print or compare one) for {@link #HTTP_SERVER_JOIN} /
+	 * {@link #HTTP_SERVER_STOP}. Interpreter and JVM backend only
+	 * ({@code RontoHttpServer.startServer}); the {@code clack-handler-rontolisp} shim is
+	 * the driving consumer -- a WASM component serves through the exported
+	 * {@code wasi:http} handler instead (the host owns the socket), so the shim's
+	 * {@code #+rontolisp-wasm} branch never names this.
+	 */
+	public static final String HTTP_SERVER_START = "%HTTP-SERVER-START";
+
+	/**
+	 * The internal {@code rontolisp::%http-server-join} function: blocks until the given
+	 * server is stopped or the calling thread is interrupted
+	 * ({@code rontolisp:destroy-thread} on the acceptor thread -- clack's
+	 * {@code :use-thread t} stop path); both return normally so an {@code unwind-protect}
+	 * around the join runs its cleanup in an orderly unwind.
+	 */
+	public static final String HTTP_SERVER_JOIN = "%HTTP-SERVER-JOIN";
+
+	/**
+	 * The internal {@code rontolisp::%http-server-stop} function: stops the given server
+	 * and releases its joiners. Idempotent, so the acceptor's unwind cleanup and an
+	 * explicit {@code clack:stop} cannot double-fault. An optional second argument,
+	 * non-nil, lets the exchanges still open end first (a caller that has answered every
+	 * request it took: what is open is a response still being written).
+	 */
+	public static final String HTTP_SERVER_STOP = "%HTTP-SERVER-STOP";
+
+	/**
+	 * The internal {@code rontolisp::%http-server-port} function: the bound port of a
+	 * running server ({@code -1} after stop) -- the ephemeral-port readback that makes
+	 * {@code :port 0} usable.
+	 */
+	public static final String HTTP_SERVER_PORT = "%HTTP-SERVER-PORT";
+
+	/**
+	 * The internal {@code rontolisp::%http-server-take} function: the exchange the
+	 * calling thread dispatches, which its application answers itself -- from any thread,
+	 * after its handler returned or before -- through {@link #HTTP_SERVER_HEAD},
+	 * {@link #HTTP_SERVER_WRITE} and {@link #HTTP_SERVER_FINISH}; what the handler
+	 * returns is not written. The two-step serve's socket leg (http-serve.lisp, the Java
+	 * subset's {@code com.sun.net.httpserver}). Interpreter and JVM backend only
+	 * ({@code RontoHttpServer.take}).
+	 */
+	public static final String HTTP_SERVER_TAKE = "%HTTP-SERVER-TAKE";
+
+	/**
+	 * The internal {@code rontolisp::%http-server-head} function: the status and the
+	 * field alist of a taken exchange's response, whose body follows. See
+	 * {@link #HTTP_SERVER_TAKE}.
+	 */
+	public static final String HTTP_SERVER_HEAD = "%HTTP-SERVER-HEAD";
+
+	/**
+	 * The internal {@code rontolisp::%http-server-write} function: octets of a taken
+	 * exchange's body. See {@link #HTTP_SERVER_TAKE}.
+	 */
+	public static final String HTTP_SERVER_WRITE = "%HTTP-SERVER-WRITE";
+
+	/**
+	 * The internal {@code rontolisp::%http-server-finish} function: the end of a taken
+	 * exchange's response, written whole by the calling thread -- or, with a non-nil
+	 * second argument, the 500 of an application that failed -- and the exchange closed.
+	 * See {@link #HTTP_SERVER_TAKE}.
+	 */
+	public static final String HTTP_SERVER_FINISH = "%HTTP-SERVER-FINISH";
+
+	/**
+	 * The internal {@code rontolisp::%swank-listen port interface} function behind the
+	 * interpreter's {@code swank:create-server}: the evaluator's {@code SwankHost} binds
+	 * the port (0 for any free one) and answers the bound port, before accepting
+	 * anything.
+	 */
+	public static final String SWANK_LISTEN = "%SWANK-LISTEN";
+
+	/**
+	 * The internal {@code rontolisp::%swank-serve port dont-close} function: serves the
+	 * listening server -- every connection, on a thread of its own, when
+	 * {@code dont-close}; else the first one, waited for on the calling thread.
+	 */
+	public static final String SWANK_SERVE = "%SWANK-SERVE";
+
+	/**
+	 * The internal {@code rontolisp::%swank-stop port} function behind the interpreter's
+	 * {@code swank:stop-server}: t when a server listened on the port.
+	 */
+	public static final String SWANK_STOP = "%SWANK-STOP";
+
+	/**
+	 * The {@code with-arena} macro provided by the {@code rontolisp} package. Used as
+	 * {@code (rontolisp:with-arena () body...)} to name a reclamation boundary: on the
+	 * interpreter, the JVM backend and wasm-GC it expands to a plain {@code progn} (a
+	 * real GC already reclaims), while the {@code --no-gc} backend lowers it to a bump
+	 * heap-pointer mark / body / reset with the body's value (a string or packed float
+	 * array) copied down to the mark. Nothing allocated inside the body may be reachable
+	 * after it, except the body's own value.
+	 */
+	public static final String WITH_ARENA = "WITH-ARENA";
+
+	/**
+	 * The canonical package-qualified spelling of {@code rontolisp:with-arena}, as it
+	 * appears in call position after {@code PackageResolver} resolution.
+	 */
+	public static final String WITH_ARENA_QUALIFIED = RONTOLISP_PKG + ":" + WITH_ARENA;
+
+	/**
+	 * The {@code rontolisp:make-mutex} function: a fresh mutual-exclusion lock, returned
+	 * as an OPAQUE handle -- print it, compare it or do arithmetic on it and the answer
+	 * is backend-dependent by design (a {@code ReentrantLock} object on the JVM backend,
+	 * an integer handle on the interpreter, a constant on WASM). The lock is REENTRANT:
+	 * the thread holding it may acquire it again, and must release it as many times.
+	 */
+	public static final String MAKE_MUTEX = "MAKE-MUTEX";
+
+	/**
+	 * The {@code rontolisp:mutex-acquire} function: blocks until the calling thread holds
+	 * the mutex, then returns it. A no-op returning its argument on the WASM backends,
+	 * which are single-threaded by construction (see {@link #MAKE_MUTEX}).
+	 */
+	public static final String MUTEX_ACQUIRE = "MUTEX-ACQUIRE";
+
+	/**
+	 * The {@code rontolisp:mutex-release} function: releases one acquisition of the mutex
+	 * and returns it. Releasing a mutex the calling thread does not hold is an error on
+	 * the interpreter and the JVM backend, and unnoticed on WASM.
+	 */
+	public static final String MUTEX_RELEASE = "MUTEX-RELEASE";
+
+	/**
+	 * The {@code with-mutex} macro provided by the {@code rontolisp} package. Used as
+	 * {@code (rontolisp:with-mutex (mutex-form) body...)}: acquires the mutex, runs the
+	 * body and releases it on every exit. The release rides {@code unwind-protect} on the
+	 * interpreter, the JVM backend and a WASM module already in EH mode; a non-EH WASM
+	 * module gets the normal-exit-only shape, which is exact there because
+	 * acquire/release are no-ops on a single-threaded backend.
+	 */
+	public static final String WITH_MUTEX = "WITH-MUTEX";
+
+	/**
+	 * The canonical package-qualified spelling of {@code rontolisp:with-mutex}, as it
+	 * appears in call position after {@code PackageResolver} resolution.
+	 */
+	public static final String WITH_MUTEX_QUALIFIED = RONTOLISP_PKG + ":" + WITH_MUTEX;
+
+	/**
+	 * The {@code rontolisp:make-thread} function: spawns a (virtual) thread running a
+	 * zero-argument function and returns an OPAQUE thread handle (a {@code LispThread} on
+	 * the interpreter, a marker-headed array on the JVM backend -- see
+	 * {@link #MAKE_MUTEX} for the opacity rule). The optional second argument is an alist
+	 * of {@code (symbol . value)} pairs, each established as a thread-scoped dynamic
+	 * binding in the new thread before the function runs (the spawned thread otherwise
+	 * inherits NO dynamic bindings from its spawner). Interpreter and JVM only: the WASM
+	 * backends are single-threaded by construction and do not compile it -- the
+	 * {@code bordeaux-threads} shim's spawn entry points signal there instead.
+	 */
+	public static final String MAKE_THREAD = "MAKE-THREAD";
+
+	/**
+	 * The {@code rontolisp:join-thread} function: blocks until the thread's function
+	 * returns and yields its value; an error the thread died on is re-signaled in the
+	 * joiner.
+	 */
+	public static final String JOIN_THREAD = "JOIN-THREAD";
+
+	/** The {@code rontolisp:threadp} function: whether the value is a thread handle. */
+	public static final String THREADP = "THREADP";
+
+	/**
+	 * The {@code rontolisp:thread-alive-p} function: whether the handle's thread is still
+	 * running.
+	 */
+	public static final String THREAD_ALIVE_P = "THREAD-ALIVE-P";
+
+	/**
+	 * The {@code rontolisp:destroy-thread} function: interrupts the handle's thread (a
+	 * blocked operation unblocks with an error there) and returns the handle. Like
+	 * {@code Thread.interrupt}, a body that never blocks may run to completion anyway.
+	 */
+	public static final String DESTROY_THREAD = "DESTROY-THREAD";
+
+	/**
+	 * The {@code rontolisp:current-thread} function: the calling thread's own handle,
+	 * EQ-stable per thread (cached in a ThreadLocal on both backends that have it), so it
+	 * can key an {@code eq} hash table -- dbi's per-thread connection cache
+	 * ({@code steal-cache-table}) is the driving consumer through
+	 * {@code bt2:current-thread}. Works for ANY thread (the main thread and served
+	 * requests included, not only {@code make-thread} spawns); in a spawned body it is
+	 * the handle {@code make-thread} returned. Interpreter and JVM only, like the rest of
+	 * the family.
+	 */
+	public static final String CURRENT_THREAD = "CURRENT-THREAD";
+
+	/**
+	 * The internal {@code rontolisp::%thread-name} primitive: the name a thread handle
+	 * was given as {@code make-thread}'s third argument, {@code nil} when none (and for a
+	 * thread {@code make-thread} did not spawn). Behind
+	 * {@code bordeaux-threads:thread-name}; interpreter and JVM only.
+	 */
+	public static final String THREAD_NAME_INTERNAL = "%THREAD-NAME";
+
+	/** The canonical spelling of {@code rontolisp::%thread-name}. */
+	public static final String THREAD_NAME_INTERNAL_QUALIFIED = RONTOLISP_PKG + "::" + THREAD_NAME_INTERNAL;
+
+	/**
+	 * The internal {@code rontolisp::%cons-cas-car} primitive:
+	 * {@code (%cons-cas-car cell expected new)} stores {@code new} in the car of the cons
+	 * {@code cell} if the car is the very object {@code expected}, as one atomic step,
+	 * and answers whether it did. Interpreter and JVM only; a comparison by {@code eq} is
+	 * the caller's, who retries with the object it read ({@code atomics:cas}).
+	 */
+	public static final String CONS_CAS_CAR_INTERNAL = "%CONS-CAS-CAR";
+
+	/**
+	 * The internal {@code rontolisp::%double-spelled} primitive: {@code (%double-spelled
+	 * float)} answers that float as if a token with a {@code d} marker had spelled it
+	 * ({@link LispDouble#doubleSpelled}), for a reader of a library's own; the compile
+	 * paths' definition answers its argument.
+	 */
+	public static final String DOUBLE_SPELLED_INTERNAL = "%DOUBLE-SPELLED";
+
+	/** The canonical spelling of {@code rontolisp::%double-spelled}. */
+	public static final String DOUBLE_SPELLED_INTERNAL_QUALIFIED = RONTOLISP_PKG + "::" + DOUBLE_SPELLED_INTERNAL;
+
+	/**
+	 * The internal {@code rontolisp::%prin1-keeping-float-spelling}:
+	 * {@code prin1-to-string} spelling a float a {@code d} marker spelled with one
+	 * ({@code FloatText.text}), so a read of the text answers the same spelling; the
+	 * compile paths' definition is {@code prin1-to-string}.
+	 */
+	public static final String PRIN1_KEEPING_FLOAT_SPELLING_INTERNAL = "%PRIN1-KEEPING-FLOAT-SPELLING";
+
+	/** The canonical spelling of {@code rontolisp::%prin1-keeping-float-spelling}. */
+	public static final String PRIN1_KEEPING_FLOAT_SPELLING_INTERNAL_QUALIFIED = RONTOLISP_PKG + "::"
+			+ PRIN1_KEEPING_FLOAT_SPELLING_INTERNAL;
+
+	/** The internal {@code rontolisp::%double-spelled-p} predicate over any value. */
+	public static final String DOUBLE_SPELLED_P_INTERNAL = "%DOUBLE-SPELLED-P";
+
+	/** The canonical spelling of {@code rontolisp::%double-spelled-p}. */
+	public static final String DOUBLE_SPELLED_P_INTERNAL_QUALIFIED = RONTOLISP_PKG + "::" + DOUBLE_SPELLED_P_INTERNAL;
+
+	/**
+	 * The internal {@code rontolisp::%function-lambda-list}: a function designator's
+	 * lambda list, or {@code :unknown} (trivial-arguments' {@code arglist}).
+	 */
+	public static final String FUNCTION_LAMBDA_LIST_INTERNAL = "%FUNCTION-LAMBDA-LIST";
+
+	/** The canonical spelling of {@code rontolisp::%function-lambda-list}. */
+	public static final String FUNCTION_LAMBDA_LIST_INTERNAL_QUALIFIED = RONTOLISP_PKG + "::"
+			+ FUNCTION_LAMBDA_LIST_INTERNAL;
+
+	/**
+	 * The internal {@code rontolisp::%macroexpand-all}: a form with every macro in it
+	 * expanded (trivial-macroexpand-all's {@code macroexpand-all}).
+	 */
+	public static final String MACROEXPAND_ALL_INTERNAL = "%MACROEXPAND-ALL";
+
+	/** The canonical spelling of {@code rontolisp::%macroexpand-all}. */
+	public static final String MACROEXPAND_ALL_INTERNAL_QUALIFIED = RONTOLISP_PKG + "::" + MACROEXPAND_ALL_INTERNAL;
+
+	/** The canonical spelling of {@code rontolisp::%cons-cas-car}. */
+	public static final String CONS_CAS_CAR_INTERNAL_QUALIFIED = RONTOLISP_PKG + "::" + CONS_CAS_CAR_INTERNAL;
+
+	/** {@link #CONS_CAS_CAR_INTERNAL} on the cdr. */
+	public static final String CONS_CAS_CDR_INTERNAL = "%CONS-CAS-CDR";
+
+	/** The canonical spelling of {@code rontolisp::%cons-cas-cdr}. */
+	public static final String CONS_CAS_CDR_INTERNAL_QUALIFIED = RONTOLISP_PKG + "::" + CONS_CAS_CDR_INTERNAL;
+
+	/**
+	 * The internal {@code rontolisp::%condition-variable-new} primitive: a fresh
+	 * condition variable ({@code runtime/RontoConditionVariable}), behind
+	 * {@code bordeaux-threads:make-condition-variable}. Interpreter and JVM only.
+	 */
+	public static final String CONDITION_VARIABLE_NEW_INTERNAL = "%CONDITION-VARIABLE-NEW";
+
+	/** The canonical spelling of {@code rontolisp::%condition-variable-new}. */
+	public static final String CONDITION_VARIABLE_NEW_INTERNAL_QUALIFIED = RONTOLISP_PKG + "::"
+			+ CONDITION_VARIABLE_NEW_INTERNAL;
+
+	/**
+	 * The internal {@code rontolisp::%condition-wait} primitive:
+	 * {@code (%condition-wait variable mutex nanos)} releases the held mutex (every
+	 * hold), waits for a notify or {@code nanos} nanoseconds ({@code nil}: no limit),
+	 * takes the mutex back and answers {@code t}, or {@code nil} on timeout.
+	 */
+	public static final String CONDITION_WAIT_INTERNAL = "%CONDITION-WAIT";
+
+	/** The canonical spelling of {@code rontolisp::%condition-wait}. */
+	public static final String CONDITION_WAIT_INTERNAL_QUALIFIED = RONTOLISP_PKG + "::" + CONDITION_WAIT_INTERNAL;
+
+	/**
+	 * The internal {@code rontolisp::%condition-notify} primitive:
+	 * {@code (%condition-notify variable all)} wakes the oldest waiter, or every waiter
+	 * when {@code all} is non-nil; answers {@code nil}.
+	 */
+	public static final String CONDITION_NOTIFY_INTERNAL = "%CONDITION-NOTIFY";
+
+	/** The canonical spelling of {@code rontolisp::%condition-notify}. */
+	public static final String CONDITION_NOTIFY_INTERNAL_QUALIFIED = RONTOLISP_PKG + "::" + CONDITION_NOTIFY_INTERNAL;
+
+	/**
+	 * The internal {@code rontolisp::%run-program} primitive behind
+	 * {@code uiop:run-program}: {@code (%run-program argv directory input output
+	 * error-output modes)} starts a program, waits for it and answers its exit code
+	 * ({@code runtime/RontoProcess}). Interpreter and JVM only: no WASM backend starts a
+	 * process, and uiop's definition there signals instead of calling this.
+	 */
+	public static final String RUN_PROGRAM_INTERNAL = "%RUN-PROGRAM";
+
+	/** The canonical spelling of {@code rontolisp::%run-program}. */
+	public static final String RUN_PROGRAM_INTERNAL_QUALIFIED = RONTOLISP_PKG + "::" + RUN_PROGRAM_INTERNAL;
+
+	/**
+	 * The {@code rontolisp:current-file} read-time literal: the origin file of the source
+	 * being read, as a string, or {@code nil} when there is none (a REPL line, a runtime
+	 * {@code read-from-string}). Substituted by {@code LispReader} where the symbol
+	 * appears, like {@code pi} and {@code *features*} -- see
+	 * {@code .kb/source-positions.md} for why a READ-time literal and not an
+	 * expansion-time one.
+	 */
+	public static final String CURRENT_FILE = "CURRENT-FILE";
+
+	/**
+	 * The {@code rontolisp:current-line} read-time literal: the 1-based line the symbol
+	 * itself stands on. The twin of {@link #CURRENT_FILE}.
+	 */
+	public static final String CURRENT_LINE = "CURRENT-LINE";
+
+	/**
+	 * The canonical package-qualified spelling of {@code rontolisp:async}, as it appears
+	 * in call position after {@code PackageResolver} resolution.
+	 */
+	public static final String ASYNC_QUALIFIED = RONTOLISP_PKG + ":" + ASYNC;
+
+	/**
+	 * The canonical package-qualified spelling of {@code rontolisp:async-defun}, as it
+	 * appears in call position after {@code PackageResolver} resolution.
+	 */
+	public static final String ASYNC_DEFUN_QUALIFIED = RONTOLISP_PKG + ":" + ASYNC_DEFUN;
+
+	/**
+	 * The canonical package-qualified spelling of {@code rontolisp:async-lambda}, as it
+	 * appears in call position after {@code PackageResolver} resolution.
+	 */
+	public static final String ASYNC_LAMBDA_QUALIFIED = RONTOLISP_PKG + ":" + ASYNC_LAMBDA;
+
+	/**
+	 * The canonical package-qualified spelling of {@code rontolisp:await}, as it appears
+	 * in call position after {@code PackageResolver} resolution.
+	 */
+	public static final String AWAIT_QUALIFIED = RONTOLISP_PKG + ":" + AWAIT;
+
+	/**
+	 * The canonical package-qualified spelling of {@code rontolisp:fetch}.
+	 */
+	public static final String FETCH_QUALIFIED = RONTOLISP_PKG + ":" + FETCH;
+
+	/**
+	 * The canonical internal-qualified spelling of {@code rontolisp::%future-force}, the
+	 * synchronous future resolver ({@link #FUTURE_FORCE_INTERNAL}) -- unlike the
+	 * {@code rontolisp:await} special form it is an ordinary function, callable outside
+	 * an async body, which is what lets a synchronous transport boundary (the host-driven
+	 * reactor's {@code %http-reactor-handle}) resolve an application's future-valued
+	 * answer on every backend.
+	 */
+	public static final String FUTURE_FORCE_QUALIFIED = RONTOLISP_PKG + "::" + FUTURE_FORCE_INTERNAL;
+
+	/**
+	 * The canonical internal-qualified spelling of {@code rontolisp::%future-settled-p}
+	 * ({@link #FUTURE_SETTLED_INTERNAL}), which the JVM backend gates its helper on.
+	 */
+	public static final String FUTURE_SETTLED_QUALIFIED = RONTOLISP_PKG + "::" + FUTURE_SETTLED_INTERNAL;
+
+	/**
+	 * The canonical internal-qualified spelling of {@code rontolisp::%future-new}
+	 * ({@link #FUTURE_NEW_INTERNAL}): a program naming it settles futures of its own, so
+	 * its async bodies have to suspend and the WASM compiler builds the state machines
+	 * for it outside a component too.
+	 */
+	public static final String FUTURE_NEW_QUALIFIED = RONTOLISP_PKG + "::" + FUTURE_NEW_INTERNAL;
+
+	/**
+	 * The canonical internal-qualified spelling of {@code rontolisp::%future-deferred}
+	 * ({@link #FUTURE_DEFERRED_INTERNAL}), which the WASM compiler gates the deferred arm
+	 * of the Preview 1 await on.
+	 */
+	public static final String FUTURE_DEFERRED_QUALIFIED = RONTOLISP_PKG + "::" + FUTURE_DEFERRED_INTERNAL;
+
+	/**
+	 * The canonical package-qualified spelling of {@code rontolisp:then}.
+	 */
+	public static final String THEN_QUALIFIED = RONTOLISP_PKG + ":" + THEN;
+
+	/**
+	 * The canonical package-qualified spelling of {@code rontolisp:then*}.
+	 */
+	public static final String THEN_STAR_QUALIFIED = RONTOLISP_PKG + ":" + THEN_STAR;
+
+	/**
+	 * The canonical package-qualified spelling of {@code rontolisp:catch}.
+	 */
+	public static final String CATCH_QUALIFIED = RONTOLISP_PKG + ":" + CATCH;
+
+	/**
+	 * The canonical package-qualified spelling of {@code rontolisp:finally}.
+	 */
+	public static final String FINALLY_QUALIFIED = RONTOLISP_PKG + ":" + FINALLY;
+
+	/**
+	 * The canonical internal-qualified spelling of {@code rontolisp::%async-run}, the
+	 * name the {@code async-defun}/{@code async-lambda} lowering synthesizes in call
+	 * position.
+	 */
+	public static final String ASYNC_RUN_QUALIFIED = RONTOLISP_PKG + "::" + ASYNC_RUN;
+
+	/**
+	 * The canonical internal-qualified spelling of {@code rontolisp::%subtask-future},
+	 * the name {@code WitImportDirective} synthesizes in call position for an
+	 * {@code async func} member's binding under {@code --component}.
+	 */
+	public static final String SUBTASK_FUTURE_INTERNAL_QUALIFIED = RONTOLISP_PKG + "::" + SUBTASK_FUTURE_INTERNAL;
+
+	/**
+	 * The canonical internal-qualified spelling of {@code rontolisp::%stream-new}, the
+	 * ONE producer of a PULL stream on every backend -- which is what the compilers gate
+	 * the stream type and runtime on (the JVM's async runtime, the WASM tiers' stream
+	 * type and its two runtime functions).
+	 */
+	public static final String STREAM_NEW_INTERNAL_QUALIFIED = RONTOLISP_PKG + "::" + STREAM_NEW_INTERNAL;
+
+	/**
+	 * The canonical internal-qualified spelling of {@code rontolisp::%octets-to-string}
+	 * ({@link #OCTETS_TO_STRING_INTERNAL}).
+	 */
+	public static final String OCTETS_TO_STRING_INTERNAL_QUALIFIED = RONTOLISP_PKG + "::" + OCTETS_TO_STRING_INTERNAL;
+
+	/**
+	 * The canonical internal-qualified spelling of {@code rontolisp::%copy-equal-table}
+	 * ({@link #COPY_EQUAL_TABLE_INTERNAL}).
+	 */
+	public static final String COPY_EQUAL_TABLE_INTERNAL_QUALIFIED = RONTOLISP_PKG + "::" + COPY_EQUAL_TABLE_INTERNAL;
+
+	/** The canonical spelling of {@code rontolisp::%json-decode}. */
+	public static final String JSON_DECODE_INTERNAL_QUALIFIED = RONTOLISP_PKG + "::" + JSON_DECODE_INTERNAL;
+
+	/** The canonical spelling of {@code rontolisp::%json-encode}. */
+	public static final String JSON_ENCODE_INTERNAL_QUALIFIED = RONTOLISP_PKG + "::" + JSON_ENCODE_INTERNAL;
+
+	/** The canonical spelling of {@code rontolisp::%json-scan}. */
+	public static final String JSON_SCAN_INTERNAL_QUALIFIED = RONTOLISP_PKG + "::" + JSON_SCAN_INTERNAL;
+
+	/**
+	 * The canonical internal-qualified spelling of
+	 * {@code rontolisp::%octets-to-string-packed}
+	 * ({@link #OCTETS_TO_STRING_PACKED_INTERNAL}), which is what the compile backends
+	 * gate its runtime helper on.
+	 */
+	public static final String OCTETS_TO_STRING_PACKED_INTERNAL_QUALIFIED = RONTOLISP_PKG + "::"
+			+ OCTETS_TO_STRING_PACKED_INTERNAL;
+
+	/**
+	 * The canonical internal-qualified spelling of
+	 * {@code rontolisp::%host-lower-at-run-time}
+	 * ({@link #HOST_LOWER_AT_RUN_TIME_INTERNAL}).
+	 */
+	public static final String HOST_LOWER_AT_RUN_TIME_QUALIFIED = RONTOLISP_PKG + "::"
+			+ HOST_LOWER_AT_RUN_TIME_INTERNAL;
+
+	/**
+	 * The canonical internal-qualified spelling of {@code rontolisp::%run-time-constant}
+	 * ({@link #RUN_TIME_CONSTANT_INTERNAL}).
+	 */
+	public static final String RUN_TIME_CONSTANT_QUALIFIED = RONTOLISP_PKG + "::" + RUN_TIME_CONSTANT_INTERNAL;
+
+	/**
+	 * The canonical internal-qualified spelling of {@code rontolisp::%run-time-answer}
+	 * ({@link #RUN_TIME_ANSWER_INTERNAL}).
+	 */
+	public static final String RUN_TIME_ANSWER_QUALIFIED = RONTOLISP_PKG + "::" + RUN_TIME_ANSWER_INTERNAL;
+
+	/**
+	 * The canonical internal-qualified spelling of {@code rontolisp::%run-time-redefine}
+	 * ({@link #RUN_TIME_REDEFINE_INTERNAL}).
+	 */
+	public static final String RUN_TIME_REDEFINE_QUALIFIED = RONTOLISP_PKG + "::" + RUN_TIME_REDEFINE_INTERNAL;
+
+	/**
+	 * The canonical internal-qualified spelling of
+	 * {@code rontolisp::%octets-to-string-replacing}
+	 * ({@link #OCTETS_TO_STRING_REPLACING_INTERNAL}), the interpreter's native binding.
+	 */
+	public static final String OCTETS_TO_STRING_REPLACING_INTERNAL_QUALIFIED = RONTOLISP_PKG + "::"
+			+ OCTETS_TO_STRING_REPLACING_INTERNAL;
+
+	/**
+	 * The internal {@code rontolisp::%inflate-new} primitive: {@code (%inflate-new kind)}
+	 * -> a streaming DEFLATE decoder of the kind (0 raw, 1 zlib, 2 gzip). The decoder of
+	 * a compressed HTTP reply ({@code rontolisp.http-client});
+	 * {@code runtime/RontoInflate} on the interpreter and the JVM, the Lisp decoder
+	 * {@code inflate.lisp} the wasm targets splice ({@code eval/InflateLibrary}).
+	 */
+	public static final String INFLATE_NEW_INTERNAL = "%INFLATE-NEW";
+
+	/**
+	 * The internal {@code rontolisp::%inflate-update} primitive:
+	 * {@code (%inflate-update decoder octets limit)} -> the octets the compressed
+	 * {@code octets}, appended to what the decoder holds, make decodable (at most
+	 * {@code limit} unless it is nil; 0 reads a zlib or gzip header and stops), or the
+	 * message of a malformed stream as a string.
+	 */
+	public static final String INFLATE_UPDATE_INTERNAL = "%INFLATE-UPDATE";
+
+	/**
+	 * The internal {@code rontolisp::%inflate-finish} primitive:
+	 * {@code (%inflate-finish decoder)} -> nil when the compressed input given is whole,
+	 * 1 when a gzip header or trailer is cut short, 2 when the compressed data is.
+	 */
+	public static final String INFLATE_FINISH_INTERNAL = "%INFLATE-FINISH";
+
+	/** The canonical spelling of {@code rontolisp::%inflate-new}. */
+	public static final String INFLATE_NEW_INTERNAL_QUALIFIED = RONTOLISP_PKG + "::" + INFLATE_NEW_INTERNAL;
+
+	/** The canonical spelling of {@code rontolisp::%inflate-update}. */
+	public static final String INFLATE_UPDATE_INTERNAL_QUALIFIED = RONTOLISP_PKG + "::" + INFLATE_UPDATE_INTERNAL;
+
+	/** The canonical spelling of {@code rontolisp::%inflate-finish}. */
+	public static final String INFLATE_FINISH_INTERNAL_QUALIFIED = RONTOLISP_PKG + "::" + INFLATE_FINISH_INTERNAL;
+
+	/**
+	 * The {@code wasm-import} directive provided by the {@code rontolisp} package. Used
+	 * as {@code (rontolisp:wasm-import 'name :from "module" :as "field" :params '(...)
+	 * :returns ...)} to declare a host function imported into the compiled WASM module
+	 * and callable from Lisp like a top-level defun. On the interpreter and the JVM
+	 * backend it defines a stub that signals an error when called.
+	 */
+	public static final String WASM_IMPORT = "WASM-IMPORT";
+
+	/**
+	 * The {@code wit-import} directive provided by the {@code rontolisp} package. Used as
+	 * {@code (rontolisp:wit-import "kv.wit" :interface "wasi:keyvalue/store@0.2.0" :package
+	 * kv)} to bind a WIT interface's functions as ordinary Lisp functions. The mirror of
+	 * {@link #WIT_EXPORT}: the WIT file is the single description of the boundary, and
+	 * each backend binds it to what it can reach -- Preview 1 WASM lowers it to
+	 * {@link #WASM_IMPORT} directives, while the interpreter and the JVM backend dispatch
+	 * through the provider bound for the interface ({@link #WIT_PROVIDE}, or a built-in
+	 * one).
+	 */
+	public static final String WIT_IMPORT = "WIT-IMPORT";
+
+	/** The fully qualified {@code rontolisp:wit-import} directive name. */
+	public static final String WIT_IMPORT_QUALIFIED = RONTOLISP_PKG + ":" + WIT_IMPORT;
+
+	/**
+	 * The {@code wit-provide} function provided by the {@code rontolisp} package. Used as
+	 * {@code (rontolisp:wit-provide "wasi:keyvalue/store@0.2.0" #'my-store)} to bind the
+	 * implementation of a {@link #WIT_IMPORT}ed interface: the provider is an ordinary
+	 * Lisp callable taking the bound function's name followed by its arguments. It is
+	 * what makes the same WIT-importing source run against a different implementation per
+	 * backend. A no-op on the WASM backends, where the host supplies the imports.
+	 */
+	public static final String WIT_PROVIDE = "WIT-PROVIDE";
+
+	/**
+	 * The internal {@code rontolisp::%wit-call} dispatch primitive: the body every
+	 * {@link #WIT_IMPORT} binding lowers to on the interpreter and the JVM backend.
+	 * Defined in {@code wit.lisp} (see {@code WitLibrary}), not by a backend.
+	 */
+	public static final String WIT_CALL = "%WIT-CALL";
+
+	/**
+	 * The internal {@code rontolisp::%wit-coerce}: hands a {@code list<T>} argument on as
+	 * a proper list (a vector converted), signalling {@code type-error} for anything
+	 * else, wherever a quoted descriptor of the parameter's WIT type places one. Defined
+	 * in {@code wit.lisp}.
+	 */
+	public static final String WIT_COERCE = "%WIT-COERCE";
+
+	/**
+	 * The {@code wit-error} condition provided by the {@code rontolisp} package: what the
+	 * error arm of a WIT {@code result<T, E>} signals, carrying the mapped {@code E}
+	 * payload in its {@code payload} slot (the settled type mapping, {@code .kb/wit.md}).
+	 * Defined in {@code wit.lisp} (see {@code WitLibrary}).
+	 */
+	public static final String WIT_ERROR = "WIT-ERROR";
+
+	/**
+	 * The {@code interactive-interrupt} condition of the {@code rontolisp} package: what
+	 * SIGINT is signalled as on the interpreter and the JVM backend, for a program with a
+	 * handler naming it ({@code .kb/error-handling.md}, "SIGINT"). Seeded by
+	 * {@code ClosRegistry}.
+	 */
+	public static final String INTERACTIVE_INTERRUPT = "INTERACTIVE-INTERRUPT";
+
+	/** {@link #INTERACTIVE_INTERRUPT}, qualified. */
+	public static final String INTERACTIVE_INTERRUPT_QUALIFIED = RONTOLISP_PKG + ":" + INTERACTIVE_INTERRUPT;
+
+	/**
+	 * The defun the JVM backend injects into a program naming
+	 * {@link #INTERACTIVE_INTERRUPT} and calls at every poll
+	 * ({@code LispMacroExpander.interruptPollDefun}).
+	 */
+	public static final String INTERRUPT_POLL_INTERNAL = "%INTERRUPT-POLL";
+
+	/**
+	 * The JVM backend's primitive under {@link #INTERRUPT_POLL_INTERNAL}: whether a
+	 * SIGINT is pending for the calling thread, taking it.
+	 */
+	public static final String INTERRUPT_TAKE_INTERNAL = "%INTERRUPT-TAKE";
+
+	/**
+	 * The reader of {@link #WIT_ERROR}'s {@code payload} slot: the mapped {@code E} value
+	 * of the WIT {@code result} whose error arm signaled.
+	 */
+	public static final String WIT_ERROR_PAYLOAD = "WIT-ERROR-PAYLOAD";
+
+	/**
+	 * The internal form a {@link #WIT_IMPORT} directive lowers to under
+	 * {@code --component}: {@code (rontolisp::%component-import "iface-id" "wit text"
+	 * ("member" "lisp-name") ...)}. The WIT text travels inside the form so the WASM
+	 * compiler reads no files (the browser playground has no filesystem). Consumed by
+	 * {@code WasmComponentImportCompiler}; never user-written.
+	 */
+	public static final String COMPONENT_IMPORT = "%COMPONENT-IMPORT";
+
+	/**
+	 * The internal envelope unwrapper a result-returning {@link #WIT_IMPORT} binding's
+	 * public wrapper defun calls on the WASM backends: the raw import returns
+	 * {@code (:ok . V)} / {@code (:error . E)} and {@code rontolisp::%wit-result} either
+	 * yields the ok value or signals {@link #WIT_ERROR} with the error payload. Defined
+	 * in {@code wit.lisp}.
+	 */
+	public static final String WIT_RESULT = "%WIT-RESULT";
+
+	/**
+	 * The {@code java} package name (interpreter-only Java interop by reflection). It
+	 * does not use {@code cl}; its functions wrap arbitrary host objects as
+	 * {@code LispJavaObject} and so run on the JVM interpreter only -- the JVM-class and
+	 * WASM backends cannot lower a {@code LispJavaObject}.
+	 */
+	public static final String JAVA_PKG = "JAVA";
+
+	/**
+	 * {@code java:new} -- constructs a host object: {@code (java:new "fqcn" args...)}.
+	 */
+	public static final String JAVA_NEW = "NEW";
+
+	/** {@code java:call} -- invokes an instance method on a host object. */
+	public static final String JAVA_CALL = "CALL";
+
+	/**
+	 * {@code java:static} -- invokes a static method:
+	 * {@code (java:static "fqcn" "m" ...)}.
+	 */
+	public static final String JAVA_STATIC = "STATIC";
+
+	/** {@code java:field} -- reads a static or instance field (e.g. a constant). */
+	public static final String JAVA_FIELD = "FIELD";
+
+	/**
+	 * {@code java:proxy} -- makes a host interface instance from a rontolisp callable.
+	 */
+	public static final String JAVA_PROXY = "PROXY";
+
+	/**
+	 * {@code java:reify} -- implements host interfaces with one function per method:
+	 * {@code (java:reify "fqcn" "method" function ...)}, or {@code '("fqcn" ...)} for
+	 * several, optionally standing for a value ({@link #JAVA_VALUE_OPTION}).
+	 */
+	public static final String JAVA_REIFY = "REIFY";
+
+	/**
+	 * The keyword that, right after a {@code java:reify}'s interfaces, gives the Lisp
+	 * value the object stands for: {@code java:} answers it wherever Java hands the
+	 * object back, as for a {@code java:handle}.
+	 */
+	public static final String JAVA_VALUE_OPTION = ":VALUE";
+
+	/**
+	 * The keyword that, beside {@link #JAVA_VALUE_OPTION}, gives the class Java's
+	 * messages name a {@code java:reify} object standing for a value by.
+	 */
+	public static final String JAVA_CLASS_OPTION = ":CLASS";
+
+	/**
+	 * {@code java:object} -- the type specifier {@code (java:object "fqcn")}: a value a
+	 * Java member answered as that class. In {@code the} and {@code declare} it types a
+	 * {@code java:} receiver or argument for static resolution
+	 * ({@code compiler.JavaSiteResolver}).
+	 */
+	public static final String JAVA_OBJECT = "OBJECT";
+
+	/**
+	 * {@code java:*warn-on-reflection*} -- when true, the interpreter reports each
+	 * {@code java:} site it cannot resolve before running it; the compile path's switch
+	 * is {@code --warn-java-reflection}.
+	 */
+	public static final String JAVA_WARN_ON_REFLECTION = "*WARN-ON-REFLECTION*";
+
+	/**
+	 * The keyword a {@code java:new} / {@code java:call} / {@code java:static} call may
+	 * end in, after its arguments: a function argument converted to an interface
+	 * implements it by the method's arguments, not as a {@code java:proxy}
+	 * ({@code compiler.JavaSiteResolver#FUNCTIONAL}).
+	 */
+	public static final String JAVA_FUNCTIONAL_MARKER = ":FUNCTIONAL";
+
+	/**
+	 * The keyword a {@code java:} call may end in, after its arguments (beside
+	 * {@link #JAVA_FUNCTIONAL_MARKER}): Java's {@code false} comes back as the symbol
+	 * {@link #JAVA_FALSE} rather than {@code nil} ({@code compiler.JavaMarkers}).
+	 */
+	public static final String JAVA_FALSE_MARKER = ":JAVA-FALSE";
+
+	/**
+	 * The keyword a {@code java:new} / {@code java:call} / {@code java:static} /
+	 * {@code java:field} may end in, beside the other markers: a {@code byte[]} the form
+	 * answers -- its value, an element of an array it answers -- comes back as an
+	 * {@code (unsigned-byte 8)} vector of its octets rather than a list of signed bytes
+	 * ({@code compiler.JavaMarkers}).
+	 */
+	public static final String JAVA_OCTETS_MARKER = ":OCTETS";
+
+	/**
+	 * The keyword a {@code java:} form may end in, beside the other markers, followed by
+	 * a function: Java calls every function the form converts to an interface, or the
+	 * implementation it makes calls, through that function -- {@code (f function object
+	 * arguments)}, {@code object} true when the method answers an object -- and takes its
+	 * answer ({@code compiler.JavaMarkers#through}).
+	 */
+	public static final String JAVA_THROUGH_MARKER = ":THROUGH";
+
+	/**
+	 * The name of the symbol {@code java:} passes as Java's {@code false} -- the
+	 * {@code boolean} false, and {@code Boolean.FALSE} where a reference is expected,
+	 * where {@code nil} is {@code null} -- and which a function called back from Java may
+	 * answer for a {@code boolean}: {@code |false|}, Java's own spelling. A language with
+	 * a false distinct from {@code nil} spells its false with it, so its false crosses as
+	 * Java's.
+	 */
+	public static final String JAVA_FALSE = "false";
+
+	/** {@code java:new}, qualified. */
+	public static final String JAVA_NEW_QUALIFIED = JAVA_PKG + ":" + JAVA_NEW;
+
+	/** {@code java:call}, qualified. */
+	public static final String JAVA_CALL_QUALIFIED = JAVA_PKG + ":" + JAVA_CALL;
+
+	/** {@code java:static}, qualified. */
+	public static final String JAVA_STATIC_QUALIFIED = JAVA_PKG + ":" + JAVA_STATIC;
+
+	/** {@code java:field}, qualified. */
+	public static final String JAVA_FIELD_QUALIFIED = JAVA_PKG + ":" + JAVA_FIELD;
+
+	/** {@code java:proxy}, qualified. */
+	public static final String JAVA_PROXY_QUALIFIED = JAVA_PKG + ":" + JAVA_PROXY;
+
+	/** {@code java:reify}, qualified. */
+	public static final String JAVA_REIFY_QUALIFIED = JAVA_PKG + ":" + JAVA_REIFY;
+
+	/**
+	 * {@code java:subclass} -- makes a host class instance from a rontolisp callable:
+	 * {@code (java:subclass "super" '("iface"...) '("method"...) ctor-args... callable)}.
+	 */
+	public static final String JAVA_SUBCLASS = "SUBCLASS";
+
+	/** {@code java:object}, qualified. */
+	public static final String JAVA_OBJECT_QUALIFIED = JAVA_PKG + ":" + JAVA_OBJECT;
+
+	/** {@code java:subclass}, qualified. */
+	public static final String JAVA_SUBCLASS_QUALIFIED = JAVA_PKG + ":" + JAVA_SUBCLASS;
+
+	/**
+	 * {@code java:handle} -- a Java object that stands for a Lisp value:
+	 * {@code (java:handle value text hash order class)}, the last three optional. Java
+	 * sees the text as its {@code toString} and equals handles of one class by it (with a
+	 * nil hash, only a handle of the very same value); the hash (the text's by default)
+	 * is its {@code hashCode}, the order -- a text (the text by default), or a function
+	 * of the value and the object compared with -- what handles of its class sort by; a
+	 * handle of a real number is a {@code Number}; {@code java:} answers the value
+	 * wherever Java hands the handle back.
+	 */
+	public static final String JAVA_HANDLE = "HANDLE";
+
+	/** {@code java:handle}, qualified. */
+	public static final String JAVA_HANDLE_QUALIFIED = JAVA_PKG + ":" + JAVA_HANDLE;
+
+	/**
+	 * {@code java:view} -- a read-only Java collection that stands for a Lisp one:
+	 * {@code (java:view value items shape printer order class)}, the last three optional.
+	 * The items -- a sequence, or for a {@code :map} a hash table or a plist -- converted
+	 * as {@code Object} arguments are its elements; its {@code toString} is the printer's
+	 * answer for the value; {@code java:} answers the value wherever Java hands it back.
+	 * A {@code :bytes} view is no collection: Java is handed the {@code byte[]} of its
+	 * items, an {@code (unsigned-byte 8)} vector ({@link #JAVA_VIEW_BYTES}).
+	 */
+	public static final String JAVA_VIEW = "VIEW";
+
+	/** {@code java:view}, qualified. */
+	public static final String JAVA_VIEW_QUALIFIED = JAVA_PKG + ":" + JAVA_VIEW;
+
+	/** The {@code java:view} shape of a {@code java.util.List}. */
+	public static final String JAVA_VIEW_LIST = ":LIST";
+
+	/**
+	 * The {@code java:view} shape of a {@code java.util.List} that is also
+	 * {@code RandomAccess} and {@code Comparable} (by its order).
+	 */
+	public static final String JAVA_VIEW_VECTOR = ":VECTOR";
+
+	/** The {@code java:view} shape of a {@code java.util.Set}. */
+	public static final String JAVA_VIEW_SET = ":SET";
+
+	/** The {@code java:view} shape of a {@code java.util.Map}. */
+	public static final String JAVA_VIEW_MAP = ":MAP";
+
+	/**
+	 * The {@code java:view} shape of a {@code byte[]}: its items an
+	 * {@code (unsigned-byte 8)} vector, which Java is handed as a {@code byte[]} of its
+	 * octets wherever a {@code byte[]} fits.
+	 */
+	public static final String JAVA_VIEW_BYTES = ":BYTES";
+
+	/**
+	 * The {@code java:} operators, qualified. A program naming none of them holds no host
+	 * object: the JVM backend emits no {@code java:} runtime for it, and the Clojure
+	 * library splices its host arms out of it.
+	 */
+	public static final java.util.List<String> JAVA_OPERATORS_QUALIFIED = java.util.List.of(JAVA_NEW_QUALIFIED,
+			JAVA_CALL_QUALIFIED, JAVA_STATIC_QUALIFIED, JAVA_FIELD_QUALIFIED, JAVA_PROXY_QUALIFIED,
+			JAVA_REIFY_QUALIFIED, JAVA_SUBCLASS_QUALIFIED, JAVA_HANDLE_QUALIFIED, JAVA_VIEW_QUALIFIED);
+
+	/** {@link #JAVA_WARN_ON_REFLECTION}, qualified. */
+	public static final String JAVA_WARN_ON_REFLECTION_QUALIFIED = JAVA_PKG + ":" + JAVA_WARN_ON_REFLECTION;
+
+	/**
+	 * {@code java:java-exception} -- the condition type a {@code java:} member that
+	 * throws signals: a {@code simple-error} carrying the throwable.
+	 */
+	public static final String JAVA_EXCEPTION = "JAVA-EXCEPTION";
+
+	/** {@link #JAVA_EXCEPTION}, qualified. */
+	public static final String JAVA_EXCEPTION_QUALIFIED = JAVA_PKG + ":" + JAVA_EXCEPTION;
+
+	/**
+	 * {@code java:java-exception-cause} -- the throwable a {@code java:java-exception}
+	 * carries.
+	 */
+	public static final String JAVA_EXCEPTION_CAUSE = "JAVA-EXCEPTION-CAUSE";
+
+	/** {@link #JAVA_EXCEPTION_CAUSE}, qualified. */
+	public static final String JAVA_EXCEPTION_CAUSE_QUALIFIED = JAVA_PKG + ":" + JAVA_EXCEPTION_CAUSE;
+
+	/**
+	 * The slot of {@code java:java-exception} holding the throwable (or, in an exception
+	 * of the Clojure runtime's, the function building it), after the {@code simple-error}
+	 * pair; %-fenced, so no user slot named alike turns ambiguous.
+	 */
+	public static final String JAVA_EXCEPTION_CAUSE_SLOT = "%JAVA-EXCEPTION-CAUSE";
+
+	/**
+	 * The {@code objc} package name: the Objective-C runtime through the foreign function
+	 * API ({@code am.ik.objc}, wired in {@code eval.ObjcInterop}), with LispWorks 8.1's
+	 * {@code OBJC} vocabulary written in {@code objc.lisp} -- reflection-free, so it runs
+	 * in the native binary too. Interpreted, compiled to a JVM class (the binding travels
+	 * in the class, {@code codegen.jvm.JvmObjcRuntimeBuilder}) and to a {@code --native}
+	 * executable for macOS; never to any other WASM output. Does not use {@code cl}.
+	 */
+	public static final String OBJC_PKG = "OBJC";
+
+	/**
+	 * {@code objc::%sleep}: the event-loop wait every {@code sleep} of a {@code --native}
+	 * program that carries {@code objc-native-primitives.lisp} compiles to (the module
+	 * runs on thread 0, so a spin would freeze its windows).
+	 */
+	public static final String OBJC_SLEEP_INTERNAL = OBJC_PKG + "::%SLEEP";
+
+	/** {@code objc:on-main} -- runs a function on thread 0 and answers its value. */
+	public static final String OBJC_ON_MAIN = "ON-MAIN";
+
+	/**
+	 * {@code objc:with-autorelease-pool} -- the pool macro, a built-in expansion into
+	 * {@link #OBJC_CALL_WITH_AUTORELEASE_POOL} over a lambda.
+	 */
+	public static final String OBJC_WITH_AUTORELEASE_POOL = "WITH-AUTORELEASE-POOL";
+
+	/** {@link #OBJC_WITH_AUTORELEASE_POOL}, qualified. */
+	public static final String OBJC_WITH_AUTORELEASE_POOL_QUALIFIED = OBJC_PKG + ":" + OBJC_WITH_AUTORELEASE_POOL;
+
+	/**
+	 * The function {@code objc:with-autorelease-pool} expands into ({@code objc.lisp}).
+	 */
+	public static final String OBJC_CALL_WITH_AUTORELEASE_POOL = OBJC_PKG + "::%CALL-WITH-AUTORELEASE-POOL";
+
+	/**
+	 * {@code objc:objc-object-pointer}, qualified: the type of an Objective-C object (a
+	 * defstruct in {@code objc.lisp}); no {@code structure-object}. A {@code --native}
+	 * backend compares it by its address slot ({@code .kb/objc.md}, "One
+	 * representation").
+	 */
+	public static final String OBJC_POINTER_TYPE = OBJC_PKG + ":OBJC-OBJECT-POINTER";
+
+	/**
+	 * {@code objc:objc-class}, qualified: a class pointer; no {@code structure-object}.
+	 */
+	public static final String OBJC_CLASS_TYPE = OBJC_PKG + ":OBJC-CLASS";
+
+	/** {@code objc:sel}, qualified: a selector; no {@code structure-object}. */
+	public static final String OBJC_SEL_TYPE = OBJC_PKG + ":SEL";
+
+	/** {@code objc:objc-exception}: an Objective-C exception a send raised. */
+	public static final String OBJC_EXCEPTION_TYPE = OBJC_PKG + ":OBJC-EXCEPTION";
+
+	/** {@code objc:ns-error}: the failure {@code objc:invoke-with-error} signals. */
+	public static final String NS_ERROR_TYPE = OBJC_PKG + ":NS-ERROR";
+
+	// The primitive layer (objc.lisp is written over these; each backend
+	// supplies them: eval/ObjcPrimitives, codegen/jvm/JvmObjcPrimitivesTemplate,
+	// objc-native-primitives.lisp).
+
+	/** {@code (objc::%get-class name)} -- a class's address, 0 when there is none. */
+	public static final String OBJC_GET_CLASS = OBJC_PKG + "::%GET-CLASS";
+
+	/** {@code (objc::%class-name class)} -- a class's name. */
+	public static final String OBJC_CLASS_NAME_INTERNAL = OBJC_PKG + "::%CLASS-NAME";
+
+	/**
+	 * {@code (objc::%object-class object)} -- an object's class (a class's metaclass).
+	 */
+	public static final String OBJC_OBJECT_CLASS = OBJC_PKG + "::%OBJECT-CLASS";
+
+	/** {@code (objc::%class-p object)} -- whether an object is a class. */
+	public static final String OBJC_CLASS_P = OBJC_PKG + "::%CLASS-P";
+
+	/** {@code (objc::%register-selector name)} -- a {@code SEL}'s address. */
+	public static final String OBJC_REGISTER_SELECTOR = OBJC_PKG + "::%REGISTER-SELECTOR";
+
+	/** {@code (objc::%selector-name sel)} -- a {@code SEL}'s name. */
+	public static final String OBJC_SELECTOR_NAME_INTERNAL = OBJC_PKG + "::%SELECTOR-NAME";
+
+	/**
+	 * {@code (objc::%method-types class sel)} -- an instance method's encoding, or nil.
+	 */
+	public static final String OBJC_METHOD_TYPES = OBJC_PKG + "::%METHOD-TYPES";
+
+	/** {@code (objc::%send receiver sel types fixed args mode)} -- the one call. */
+	public static final String OBJC_SEND_INTERNAL = OBJC_PKG + "::%SEND";
+
+	/**
+	 * {@code (objc::%raised)}: the retained address of what the last {@code %send},
+	 * {@code %send-super} or {@code %call-function} of this thread raised (0 for nil), or
+	 * nil when it raised nothing; reading clears it. A call that raised answers nil.
+	 */
+	public static final String OBJC_RAISED = OBJC_PKG + "::%RAISED";
+
+	/**
+	 * {@code (objc::%new-handle address gc)} -- a reference handle holding {@code gc}.
+	 */
+	public static final String OBJC_NEW_HANDLE = OBJC_PKG + "::%NEW-HANDLE";
+
+	/** {@code (objc::%refs handle which delta)} -- adjusts one of a handle's counts. */
+	public static final String OBJC_REFS = OBJC_PKG + "::%REFS";
+
+	/** {@code (objc::%interned address)} -- the live pointer value for an address. */
+	public static final String OBJC_INTERNED = OBJC_PKG + "::%INTERNED";
+
+	/**
+	 * {@code (objc::%intern address pointer)} -- records it; answers the one that won.
+	 */
+	public static final String OBJC_INTERN = OBJC_PKG + "::%INTERN";
+
+	/** {@code (objc::%load-module path)} -- loads a framework or a dylib. */
+	public static final String OBJC_LOAD_MODULE = OBJC_PKG + "::%LOAD-MODULE";
+
+	/** {@code (objc::%initialize)} -- opens the runtime, or signals why it cannot. */
+	public static final String OBJC_INITIALIZE = OBJC_PKG + "::%INITIALIZE";
+
+	// The class-definition half of the primitive layer (objc-class.lisp is written over
+	// these as well).
+
+	/**
+	 * {@code (objc::%allocate-class superclass name)} -- a new class pair's address, 0
+	 * when the runtime refuses the name.
+	 */
+	public static final String OBJC_ALLOCATE_CLASS = OBJC_PKG + "::%ALLOCATE-CLASS";
+
+	/**
+	 * {@code (objc::%add-ivar class name size alignment types)} -- adds an instance
+	 * variable to a class not yet registered; nil when the runtime refuses it.
+	 */
+	public static final String OBJC_ADD_IVAR = OBJC_PKG + "::%ADD-IVAR";
+
+	/** {@code (objc::%register-class class)} -- registers a class pair. */
+	public static final String OBJC_REGISTER_CLASS = OBJC_PKG + "::%REGISTER-CLASS";
+
+	/**
+	 * {@code (objc::%add-method class sel types function flags)} -- installs (or
+	 * replaces) a method whose body is a Lisp function of the receiver's address and the
+	 * raw arguments.
+	 */
+	public static final String OBJC_ADD_METHOD = OBJC_PKG + "::%ADD-METHOD";
+
+	/**
+	 * {@code (objc::%add-protocol class name)} -- adopts a protocol; nil when there is
+	 * none of that name.
+	 */
+	public static final String OBJC_ADD_PROTOCOL = OBJC_PKG + "::%ADD-PROTOCOL";
+
+	/** {@code (objc::%superclass class)} -- a class's superclass, 0 at a root. */
+	public static final String OBJC_SUPERCLASS = OBJC_PKG + "::%SUPERCLASS";
+
+	/**
+	 * {@code (objc::%send-super receiver class sel types fixed args mode)} -- the one
+	 * call, looked up from {@code class} ({@code objc_msgSendSuper}).
+	 */
+	public static final String OBJC_SEND_SUPER = OBJC_PKG + "::%SEND-SUPER";
+
+	/**
+	 * {@code (objc::%ivar-offset class name)} -- an instance variable's offset, -1 when
+	 * there is none.
+	 */
+	public static final String OBJC_IVAR_OFFSET = OBJC_PKG + "::%IVAR-OFFSET";
+
+	/** {@code (objc::%ivar-types class name)} -- an instance variable's encoding. */
+	public static final String OBJC_IVAR_TYPES = OBJC_PKG + "::%IVAR-TYPES";
+
+	/** {@code (objc::%peek address types)} -- reads one value of a type, raw. */
+	public static final String OBJC_PEEK = OBJC_PKG + "::%PEEK";
+
+	/** {@code (objc::%poke address types raw)} -- writes one raw value of a type. */
+	public static final String OBJC_POKE = OBJC_PKG + "::%POKE";
+
+	// The blocks and C functions half (objc-block.lisp and fli:define-foreign-function
+	// are written over these).
+
+	/**
+	 * {@code (objc::%make-block types signature function)} -- a block literal whose body
+	 * is a Lisp function of the raw arguments; answers its address.
+	 */
+	public static final String OBJC_MAKE_BLOCK = OBJC_PKG + "::%MAKE-BLOCK";
+
+	/**
+	 * {@code (objc::%free-block address)} -- gives up the maker's hold on a block and
+	 * frees the literal; the body lives while a copy does.
+	 */
+	public static final String OBJC_FREE_BLOCK = OBJC_PKG + "::%FREE-BLOCK";
+
+	/**
+	 * {@code (objc::%call-function address types fixed args mode)} -- a call of a C
+	 * function (or a block's invoke function) through its address, on the calling thread.
+	 */
+	public static final String OBJC_CALL_FUNCTION = OBJC_PKG + "::%CALL-FUNCTION";
+
+	/**
+	 * {@code (objc::%symbol-address name)} -- a symbol of any loaded image, 0 when none
+	 * defines it.
+	 */
+	public static final String OBJC_SYMBOL_ADDRESS = OBJC_PKG + "::%SYMBOL-ADDRESS";
+
+	// The byte copies objc:data and objc:bytes are written over.
+
+	/**
+	 * {@code (objc::%octets value)} -- a packed buffer's bytes (what
+	 * {@code write-sequence} writes for it) or a string's UTF-8, as a fresh
+	 * {@code (unsigned-byte 8)} vector; nil for any other value.
+	 */
+	public static final String OBJC_OCTETS = OBJC_PKG + "::%OCTETS";
+
+	/**
+	 * {@code (objc::%write-octets address octets)} -- copies an {@code (unsigned-byte 8)}
+	 * vector to foreign memory.
+	 */
+	public static final String OBJC_WRITE_OCTETS = OBJC_PKG + "::%WRITE-OCTETS";
+
+	/**
+	 * {@code (objc::%read-octets address length)} -- copies a block of foreign memory
+	 * into a fresh {@code (unsigned-byte 8)} vector.
+	 */
+	public static final String OBJC_READ_OCTETS = OBJC_PKG + "::%READ-OCTETS";
+
+	/**
+	 * The primitives, as the compile path gates the shipped binding on them.
+	 */
+	public static final java.util.List<String> OBJC_PRIMITIVES = java.util.List.of(OBJC_GET_CLASS,
+			OBJC_CLASS_NAME_INTERNAL, OBJC_OBJECT_CLASS, OBJC_CLASS_P, OBJC_REGISTER_SELECTOR,
+			OBJC_SELECTOR_NAME_INTERNAL, OBJC_METHOD_TYPES, OBJC_SEND_INTERNAL, OBJC_NEW_HANDLE, OBJC_REFS,
+			OBJC_INTERNED, OBJC_INTERN, OBJC_LOAD_MODULE, OBJC_INITIALIZE, OBJC_ALLOCATE_CLASS, OBJC_ADD_IVAR,
+			OBJC_REGISTER_CLASS, OBJC_ADD_METHOD, OBJC_ADD_PROTOCOL, OBJC_SUPERCLASS, OBJC_SEND_SUPER, OBJC_IVAR_OFFSET,
+			OBJC_IVAR_TYPES, OBJC_PEEK, OBJC_POKE, OBJC_MAKE_BLOCK, OBJC_FREE_BLOCK, OBJC_CALL_FUNCTION,
+			OBJC_SYMBOL_ADDRESS, OBJC_RAISED, OBJC_OCTETS, OBJC_WRITE_OCTETS, OBJC_READ_OCTETS);
+
+	/**
+	 * The {@code fli} package name: the part of LispWorks' foreign language interface the
+	 * {@code objc} base's examples reach for ({@code define-foreign-function}, foreign
+	 * objects and pointers), implemented in {@code objc.lisp} over the same primitive
+	 * layer. macOS only.
+	 */
+	public static final String FLI_PKG = "FLI";
+
+	/**
+	 * {@code fli::pointer}: LispWorks' FLI pointer, a defstruct in {@code objc.lisp} that
+	 * is not a {@code structure-object}.
+	 */
+	public static final String FLI_POINTER_TYPE = FLI_PKG + "::POINTER";
+
+	/**
+	 * The {@code cocoa} package name: LispWorks' {@code COCOA} -- the four Foundation
+	 * structures, their setters and {@code ns-not-found} -- implemented in
+	 * {@code objc.lisp} beside the new {@code objc} base. macOS only.
+	 */
+	public static final String COCOA_PKG = "COCOA";
+
+	/**
+	 * The {@code appkit} package name: a Cocoa widget layer over the {@code objc} verbs,
+	 * written in rontolisp itself ({@code appkit.lisp}, see {@code eval.AppKitLibrary})
+	 * and loaded lazily on the first {@code appkit:} resolution, the {@code linalg}
+	 * pattern. Does not use {@code cl}; every function is external.
+	 */
+	public static final String APPKIT_PKG = "APPKIT";
+
+	/**
+	 * The {@code geom} package name: solid modeling -- rigid transforms, a scene graph
+	 * and boundary-represented solids with a cached triangle mesh -- written in rontolisp
+	 * itself over {@code linalg} ({@code geom.lisp}, see {@code eval.GeomLibrary}) and
+	 * loaded lazily on the first {@code geom:} resolution, the {@code linalg} pattern. It
+	 * reaches for nothing outside {@code linalg}, so it runs on all four backends and in
+	 * the browser playground. Does not use {@code cl}; every exported name is external.
+	 */
+	public static final String GEOM_PKG = "GEOM";
+
+	/**
+	 * The {@code checkpoint} package: staging a published model's tensors into packed
+	 * float arrays ({@code checkpoint.lisp}, see {@code eval.CheckpointLibrary}), shared
+	 * by every checkpoint reader.
+	 */
+	public static final String CHECKPOINT_PKG = "CHECKPOINT";
+
+	/**
+	 * The {@code safetensors} package: the Hugging Face checkpoint reader
+	 * ({@code safetensors.lisp}, see {@code eval.SafetensorsLibrary}).
+	 */
+	public static final String SAFETENSORS_PKG = "SAFETENSORS";
+
+	/**
+	 * The {@code tokenizer} package name: the byte-level (GPT-2 / SmolLM2 / Qwen / Llama
+	 * 3) and SentencePiece (Llama 2) BPE tokenizers a published language model ships
+	 * with, written in rontolisp itself ({@code tokenizers.lisp}, see
+	 * {@code eval.TokenizersLibrary}) and loaded lazily on the first {@code tokenizer:}
+	 * resolution, the {@code linalg} pattern. It reaches for nothing but {@code cl} --
+	 * not even the filesystem, since the vocabulary is an argument -- so it runs on all
+	 * four backends and in the browser playground. Does not use {@code cl}; every
+	 * exported name is external.
+	 */
+	public static final String TOKENIZER_PKG = "TOKENIZER";
+
+	/**
+	 * The {@code gguf} package name: reads a GGUF checkpoint -- the hyperparameters, the
+	 * tokenizer fields and the tensors of a downloaded language model, in one file --
+	 * written in rontolisp itself ({@code gguf.lisp}, see {@code eval.GgufLibrary}) and
+	 * loaded lazily on the first {@code gguf:} resolution, the {@code linalg} pattern. It
+	 * reaches for nothing but {@code cl} and ANSI CL file I/O, so it runs on all four
+	 * backends. Does not use {@code cl}; every exported name is external.
+	 */
+	public static final String GGUF_PKG = "GGUF";
+
+	/**
+	 * The {@code metal} package name: a Metal drawing surface on an {@code appkit} window
+	 * -- the layer, the device, the command queue, the render pass and the buffer helpers
+	 * every Metal program writes identically -- written in rontolisp itself over the
+	 * {@code objc} verbs ({@code metal.lisp}, see {@code eval.MetalLibrary}) and loaded
+	 * lazily on the first {@code metal:} resolution, the {@code appkit} pattern. macOS
+	 * only, like everything that reaches {@code objc}. Does not use {@code cl}; every
+	 * exported name is external.
+	 */
+	public static final String METAL_PKG = "METAL";
+
+	/**
+	 * The {@code scene} package name: a 3-D viewer for {@code geom} solids -- an
+	 * orbit/pan/dolly camera, a ground grid, axis triads and an animation hook -- written
+	 * in rontolisp itself over {@code geom}, {@code metal} and {@code appkit}
+	 * ({@code scene.lisp}, see {@code eval.SceneLibrary}) and loaded lazily on the first
+	 * {@code scene:} resolution. macOS only, like {@code metal}. Does not use {@code cl};
+	 * every exported name is external.
+	 */
+	public static final String SCENE_PKG = "SCENE";
+
+	/**
+	 * The {@code ffi} package name: the foreign primitives CFFI's backend stands on --
+	 * plain C through the foreign function API ({@code am.ik.ffi}, wired in
+	 * {@code eval.FfiInterop}). The C-flavoured sibling of {@code objc}: a handful of
+	 * generic verbs named after the foreign system, reflection-free, so it runs in the
+	 * native binary too. Interpreter-only for now; both WASM backends refuse it
+	 * permanently (no foreign function API there). Does not use {@code cl}.
+	 */
+	public static final String FFI_PKG = "FFI";
+
+	/**
+	 * {@code ffi:open} -- dlopen a library by name or path and answer its handle:
+	 * {@code (ffi:open "libm.so.6")}. With no argument, the handle of the process's own
+	 * symbols.
+	 */
+	public static final String FFI_OPEN = "OPEN";
+
+	/**
+	 * {@code ffi:symbol} -- the address of a symbol in an opened library, or {@code nil}
+	 * when it is not there: {@code (ffi:symbol lib "cos")}.
+	 */
+	public static final String FFI_SYMBOL = "SYMBOL";
+
+	/**
+	 * {@code ffi:call} -- calls a function address with a calling convention decided now:
+	 * {@code (ffi:call fn :double '(:double) 0.0)}. A {@code :varargs} marker in the
+	 * argument-type list starts the variadic tail.
+	 */
+	public static final String FFI_CALL = "CALL";
+
+	/**
+	 * {@code ffi:callback} -- a code address C can call, adapting a Lisp function:
+	 * {@code (ffi:callback fn :int '(:pointer :pointer))}.
+	 */
+	public static final String FFI_CALLBACK = "CALLBACK";
+
+	/** {@code ffi:alloc} -- {@code malloc}: {@code (ffi:alloc 16)} answers a pointer. */
+	public static final String FFI_ALLOC = "ALLOC";
+
+	/** {@code ffi:free} -- {@code free} of what {@code ffi:alloc} answered. */
+	public static final String FFI_FREE = "FREE";
+
+	/**
+	 * {@code ffi:peek} -- a typed load at pointer + offset: {@code (ffi:peek p :int)},
+	 * {@code (ffi:peek p :long 8)}.
+	 */
+	public static final String FFI_PEEK = "PEEK";
+
+	/**
+	 * {@code ffi:poke} -- a typed store at pointer + offset, answering the value:
+	 * {@code (ffi:poke p :int 42)}, {@code (ffi:poke p :long 42 8)}.
+	 */
+	public static final String FFI_POKE = "POKE";
+
+	/** {@code ffi:size} -- the byte size of a foreign type. */
+	public static final String FFI_SIZE = "SIZE";
+
+	/** {@code ffi:align} -- the byte alignment of a foreign type. */
+	public static final String FFI_ALIGN = "ALIGN";
+
+	/** {@code ffi:pointerp} -- whether a value is a foreign pointer. */
+	public static final String FFI_POINTERP = "POINTERP";
+
+	/**
+	 * {@code ffi:address} -- a pointer's integer address, and its own inverse: given an
+	 * integer, the pointer at that address ({@code (ffi:address 0)} is C's NULL).
+	 */
+	public static final String FFI_ADDRESS = "ADDRESS";
+
+	/** {@code ffi:errno} -- the {@code errno} the calling thread's last call left. */
+	public static final String FFI_ERRNO = "ERRNO";
+
+	/**
+	 * {@code ffi:%apply-call} -- internal: {@code ffi:call} with the arguments as one
+	 * LIST, {@code (ffi:%apply-call fn ret types args)}. It exists for the {@code cffi}
+	 * backend, whose argument lists are runtime values: {@code (apply #'ffi:call ...)}
+	 * would need the operator as a first-class value, which the compiled backends do not
+	 * give the {@code ffi} package (the {@code objc:} precedent), where this spells the
+	 * same call as a fixed-arity form every backend compiles.
+	 */
+	public static final String FFI_APPLY_CALL = "%APPLY-CALL";
+
+	/**
+	 * The {@code asdf} package name (a limited, API-compatible subset of ASDF -- see
+	 * {@code eval.AsdfSystems}). Real ASDF is not ported.
+	 */
+	public static final String ASDF_PKG = "ASDF";
+
+	/**
+	 * The {@code asdf-user} package name: where a {@code .asd} file is loaded
+	 * ({@code eval.AsdfSystems#loadAsd}). Defined in an image when it loads its first
+	 * {@code .asd}.
+	 */
+	public static final String ASDF_USER_PKG = "ASDF-USER";
+
+	/**
+	 * {@code asdf:defsystem} -- defines a system (name, {@code :depends-on},
+	 * {@code :serial}, {@code :components}) for a later {@code asdf:load-system}.
+	 * Consumed at compile time by the {@code LoadInliner} pass; a special form (the
+	 * options are data, not evaluated) on the interpreter.
+	 */
+	public static final String DEFSYSTEM = "DEFSYSTEM";
+
+	/**
+	 * {@code asdf:load-system} -- loads a system by name: dependency systems first, then
+	 * the component files in {@code :depends-on}/{@code :serial} order. The system comes
+	 * from a prior {@code asdf:defsystem} or from {@code NAME.asd} found on the system
+	 * search path. Loading the same system twice is a no-op. Spliced at compile time by
+	 * the {@code LoadInliner} pass; a runtime function on the interpreter.
+	 */
+	public static final String LOAD_SYSTEM = "LOAD-SYSTEM";
+
+	/**
+	 * {@code register-system-packages} -- a top-level {@code .asd} form real ASDF uses to
+	 * map package names onto the system that defines them
+	 * ({@code (register-system-packages "lack-component" '(:lack.component))}). Recorded
+	 * into the loader's package-to-system map, which is what a
+	 * {@link #PACKAGE_INFERRED_SYSTEM} consults when it turns a component file's
+	 * {@code defpackage} dependency into a system name.
+	 */
+	public static final String REGISTER_SYSTEM_PACKAGES = "REGISTER-SYSTEM-PACKAGES";
+
+	/**
+	 * {@code package-inferred-system} -- the {@code asdf:defsystem} {@code :class} whose
+	 * component graph is DERIVED instead of listed: such a system has no
+	 * {@code :components} clause, a sub-system name is a file path under the primary
+	 * system's directory ({@code x/a/b} -> {@code a/b.lisp}), and that file's leading
+	 * {@code defpackage} names its dependencies. The system style the fukamachi ecosystem
+	 * (ningle, rove) has moved to; the only {@code :class} value the ASDF subset
+	 * implements.
+	 */
+	public static final String PACKAGE_INFERRED_SYSTEM = "PACKAGE-INFERRED-SYSTEM";
+
+	/**
+	 * {@code %read-eval} -- the internal marker the marker-mode reader wraps a {@code #.}
+	 * read-time-eval datum in ({@code #.datum} lexes to {@code (%read-eval datum)}).
+	 * Consumers resolve the marker by evaluating the datum: {@code eval.AsdfSystems}
+	 * against a {@code .asd} file's top-level {@code defparameter} bindings (the
+	 * cl-postgres {@code (:file #.*string-file*)} idiom), the evaluator's load / the
+	 * runtime {@code read} built-ins / the compile path's macro-time interpreter against
+	 * the global environment ({@code LispEvaluator.resolveReadTimeEval}).
+	 */
+	public static final String READ_EVAL = "%READ-EVAL";
+
+	/**
+	 * The {@code #.} marker variant the backquote reader emits for a marker kept whole
+	 * inside a template's construction code: the load-time substitution wraps the value
+	 * in {@code quote} (the value is template DATA, not code), where the plain
+	 * {@link #READ_EVAL} marker substitutes the raw value. Unresolved occurrences
+	 * evaluate as the same 1-arg identity.
+	 */
+	public static final String READ_EVAL_TEMPLATE = "%READ-EVAL-TEMPLATE";
+
+	/**
+	 * The {@code #.} marker variant the TOLERANT reader emits when the datum cannot even
+	 * be re-lexed: {@code (%read-eval-unreadable "RAW SOURCE TEXT")}. It carries the raw
+	 * text rather than a datum precisely because there is no datum, and it exists so the
+	 * decision "does this value matter" stays with the CONSUMER -- the lexer is the one
+	 * layer that cannot know whether the position is load-bearing. {@code AsdfSystems}
+	 * ignores it in an option nothing reads and fails the load quoting the raw text where
+	 * it would decide a dependency or a source file, or sits in a form the {@code .asd}
+	 * runs. Only {@code LispLexer.ReadEvalMode.SKIP_UNREADABLE} produces it, so it never
+	 * reaches an evaluator or a backend.
+	 */
+	public static final String READ_EVAL_UNREADABLE = "%READ-EVAL-UNREADABLE";
+
+	/**
+	 * The marker a source read leaves for a {@code #+}/{@code #-} guard whose feature
+	 * expression holds a {@code #.} ({@code #+#.(cl:if ... '(and) '(or)) FORM}): no
+	 * evaluator exists while a source is read, so the guard is decided where the
+	 * {@link #READ_EVAL} markers are resolved. Shape:
+	 * {@code (%read-time-feature "+"|"-" (FEATURE-SET-SPELLING...) EXPR [FORM])} --
+	 * {@code EXPR} with its {@code #.} as {@code %read-eval} markers, the set as
+	 * {@code reader.Features.encode} spells it, {@code FORM} absent when nested guards
+	 * left nothing. The resolution splices {@code FORM} in or drops the element.
+	 */
+	public static final String READ_TIME_FEATURE = "%READ-TIME-FEATURE";
+
+	/**
+	 * The {@link #READ_TIME_FEATURE} variant inside backquote construction code: a
+	 * SPLICED template element whose last argument is the guarded element's segment code
+	 * (a {@code (list ...)} or the {@code ,@} form), resolved to that code or to
+	 * {@code nil}.
+	 */
+	public static final String READ_TIME_FEATURE_TEMPLATE = "%READ-TIME-FEATURE-TEMPLATE";
+
+	/**
+	 * {@code *read-eval*} -- whether {@code #.} read-time evaluation is enabled (CLHS:
+	 * binding it to {@code nil} makes the reader signal on {@code #.}). Seeded {@code t}
+	 * and proclaimed special on the interpreter, checked by
+	 * {@code LispEvaluator.resolveReadTimeEval} -- which also covers the compile path's
+	 * macro-time marker resolution. The compiled runtime readers signal on {@code #.}
+	 * unconditionally (a permanent limit, see {@code .kb/read-load-streams.md}); a
+	 * compiled program that names the variable gets a {@code defvar} of it ({@code t}).
+	 */
+	public static final String READ_EVAL_VAR = "*READ-EVAL*";
+
+	/**
+	 * {@code *read-suppress*} -- when true the reader still PARSES a datum (consuming
+	 * exactly the characters a real read would) but yields {@code nil} and suppresses
+	 * every error the datum would otherwise signal (CLHS 2.2). Seeded {@code nil} and
+	 * proclaimed special on the interpreter, honored by the runtime {@code read} /
+	 * {@code read-from-string} built-ins through {@code LispReader.datumEnd}. The
+	 * compiled runtime readers have no suppressed mode (see
+	 * {@code .kb/read-load-streams.md}); a compiled program that names the variable gets
+	 * a {@code defvar} of it ({@code nil}), which a reader macro such as puri's
+	 * {@code #u} tests.
+	 */
+	public static final String READ_SUPPRESS_VAR = "*READ-SUPPRESS*";
+
+	/** The canonical qualified spelling of {@code asdf:defsystem}. */
+	public static final String ASDF_DEFSYSTEM = ASDF_PKG + ":" + DEFSYSTEM;
+
+	/** The canonical qualified spelling of {@code asdf:load-system}. */
+	public static final String ASDF_LOAD_SYSTEM = ASDF_PKG + ":" + LOAD_SYSTEM;
+
+	/**
+	 * {@code asdf:find-system} -- looks up a system by name; returns the memoized
+	 * {@code asdf:system} instance ({@code eq} across calls) when found, or {@code nil}
+	 * when the optional {@code error-p} arg is nil and the system is not registered. The
+	 * uax-15 pattern:
+	 * {@code (asdf:system-source-directory (asdf:find-system 'uax-15 nil))}.
+	 */
+	public static final String FIND_SYSTEM = "FIND-SYSTEM";
+
+	/**
+	 * {@code asdf:test-system} -- loads the system, follows its
+	 * {@code :in-order-to ((test-op (test-op ...)))} edges, then runs its recorded
+	 * {@code :perform (test-op (o c) ...)} body (fukamachi's {@code .asd} shape:
+	 * {@code :perform (test-op (op c) (symbol-call :rove :run c))}).
+	 */
+	public static final String TEST_SYSTEM = "TEST-SYSTEM";
+
+	/** The {@code test-op} operation name in a {@code .asd}'s test-op wiring options. */
+	public static final String TEST_OP = "TEST-OP";
+
+	/**
+	 * {@code asdf:perform} -- the operation protocol's generic function
+	 * {@code (perform operation component)}. {@code load-system} performs prepare-op,
+	 * compile-op and load-op on every component file and on the system itself, so an
+	 * extension's {@code :around}/{@code :before}/{@code :after} method runs around each
+	 * component load (asdf-flv's file-local variables).
+	 */
+	public static final String PERFORM = "PERFORM";
+
+	/** The {@code asdf:load-op} operation class. */
+	public static final String LOAD_OP = "LOAD-OP";
+
+	/**
+	 * {@code asdf:operate} -- {@code (operate operation system &rest keys)}: load-op is
+	 * {@code load-system}, test-op is {@code test-system}; any other operation signals.
+	 */
+	public static final String OPERATE = "OPERATE";
+
+	/** The canonical qualified spelling of {@code asdf:test-system}. */
+	public static final String ASDF_TEST_SYSTEM = ASDF_PKG + ":" + TEST_SYSTEM;
+
+	/** The {@code asdf:component} base class of the component metaobject family. */
+	public static final String COMPONENT = "COMPONENT";
+
+	/** The {@code asdf:module} component class (real ASDF's, {@code system}'s parent). */
+	public static final String MODULE = "MODULE";
+
+	/**
+	 * {@code asdf:system-source-directory} -- returns the system's source directory (with
+	 * a trailing {@code /}) as a string, for building runtime paths to bundled data files
+	 * that live next to the {@code .asd}.
+	 */
+	public static final String SYSTEM_SOURCE_DIRECTORY = "SYSTEM-SOURCE-DIRECTORY";
+
+	/**
+	 * {@code asdf:system-relative-pathname} -- the
+	 * {@code (system-source-directory system)} + {@code relative} composition in one
+	 * call, which is how a library names a data file bundled next to its {@code .asd}
+	 * without an intervening {@code merge-pathnames}. quri's {@code etld.lisp} is the
+	 * seed case:
+	 * {@code (asdf:system-relative-pathname :quri #P"data/effective_tld_names.dat")}.
+	 */
+	public static final String SYSTEM_RELATIVE_PATHNAME = "SYSTEM-RELATIVE-PATHNAME";
+
+	/**
+	 * {@code asdf:component-pathname} -- the base pathname of any component (system,
+	 * module or file); of a system, the directory its {@code :pathname} names below
+	 * {@link #SYSTEM_SOURCE_DIRECTORY}. local-time locates its bundled {@code zoneinfo/}
+	 * repository with
+	 * {@code (asdf:component-pathname (asdf:find-system :local-time nil))}.
+	 */
+	public static final String COMPONENT_PATHNAME = "COMPONENT-PATHNAME";
+
+	/** The canonical qualified spelling of {@code asdf:find-system}. */
+	public static final String ASDF_FIND_SYSTEM = ASDF_PKG + ":" + FIND_SYSTEM;
+
+	/**
+	 * {@code uiop:not-implemented-error} -- upstream's own name for "this implementation
+	 * cannot do that", both the condition and the function that signals it. Every uiop
+	 * export nothing implements yet is a stub that signals it naming the operation
+	 * ({@code eval.UiopLibrary}), so no uiop name reaches a caller as an undefined
+	 * function.
+	 */
+	public static final String NOT_IMPLEMENTED_ERROR = "NOT-IMPLEMENTED-ERROR";
+
+	/**
+	 * {@code uiop:parameter-error} -- upstream's companion condition for "this operation
+	 * exists but does not accept that parameter (combination)".
+	 */
+	public static final String PARAMETER_ERROR = "PARAMETER-ERROR";
+
+	/**
+	 * {@code uiop:emptyp} -- true for {@code nil} and for an empty vector. A real UIOP
+	 * definition ({@code uiop-utility.lisp}, verbatim upstream), not a stub.
+	 */
+	public static final String EMPTYP = "EMPTYP";
+
+	/** {@code uiop:first-char} -- the first character of a non-empty string, else nil. */
+	public static final String FIRST_CHAR = "FIRST-CHAR";
+
+	/** {@code uiop:last-char} -- the last character of a non-empty string, else nil. */
+	public static final String LAST_CHAR = "LAST-CHAR";
+
+	/**
+	 * {@code uiop:split-string} -- splits a string on any character of a separator
+	 * sequence, right to left, honoring {@code :max} (a {@code LispPreludeLibrary} entry
+	 * with upstream's semantics).
+	 */
+	public static final String SPLIT_STRING = "SPLIT-STRING";
+
+	/**
+	 * {@code make-pathname} (CL) -- builds a pathname value. Rontolisp uses strings for
+	 * paths, so this returns a namestring composed of {@code :directory} (a list starting
+	 * with {@code :relative} or {@code :absolute}, or a bare directory namestring) plus
+	 * optional {@code :name} and {@code :type} components, with each UNSUPPLIED component
+	 * taken from {@code :defaults}.
+	 *
+	 * <p>
+	 * Two renderings of the SAME rule, pinned against each other by
+	 * {@code LispPreludeLibraryTest}: {@code cli/CompileTimePathnameFolder} reduces the
+	 * literal-keyword shapes to a namestring at compile time (which is what makes an
+	 * ASDF-located data directory a literal in the emitted artifact), and prelude Lisp
+	 * answers the shapes the folder declines -- anything with a computed
+	 * {@code :defaults} or {@code :name}, which is what a library writes when it builds a
+	 * path from something it just looked up (mito's {@code generate-migrations} names its
+	 * {@code .up.sql} / {@code .down.sql} files that way). Before that runtime form
+	 * existed those calls compiled to a call-time error on all three compiled backends.
+	 */
+	public static final String MAKE_PATHNAME = "MAKE-PATHNAME";
+
+	/**
+	 * {@code merge-pathnames} (CL) -- the ANSI spelling of the merge
+	 * {@link #MERGE_PATHNAMES_STAR} already performs (the merge works on the namestring a
+	 * pathname value carries, so the two coincide: uiop's variant only differs in
+	 * host/device/version components that are not modelled). A library that locates a
+	 * data file relative to its own source spells it this way -- local-time's
+	 * {@code zoneinfo/} lookup is the seed case.
+	 */
+	public static final String MERGE_PATHNAMES = "MERGE-PATHNAMES";
+
+	/**
+	 * {@code truename} (CL) -- the canonical namestring of an EXISTING file, signalling a
+	 * {@code file-error} when it does not exist: {@link #PROBE_FILE}'s answer, every
+	 * symbolic link resolved and every {@code .} / {@code ..} taken out. Nothing is made
+	 * absolute -- a relative argument answers a path relative to the working directory,
+	 * which no WASM backend can name -- and the signal is how the
+	 * {@code (ignore-errors (truename ...))} existence-probe idiom works.
+	 */
+	public static final String TRUENAME = "TRUENAME";
+
+	/**
+	 * The {@code ql} package name (a limited, API-compatible subset of Quicklisp). Its
+	 * canonical spelling is {@code ql}; {@code quicklisp} is a nickname. Downloads a
+	 * system (and its dependencies) from the real Quicklisp distribution into a local
+	 * cache and then defers to the {@code asdf} subset to load it -- see
+	 * {@code eval.QuicklispClient}.
+	 */
+	public static final String QL_PKG = "QL";
+
+	/**
+	 * {@code ql:quickload} -- downloads a system by name (with its dependencies) from the
+	 * Quicklisp distribution into the local cache, then loads it like
+	 * {@code asdf:load-system}. The download happens at interpret time or compile time
+	 * (Java-side); a compiled program has the sources spliced in, so the WASM/JVM runtime
+	 * never fetches. Spliced at compile time by the {@code LoadInliner} pass; a runtime
+	 * function on the interpreter.
+	 */
+	public static final String QUICKLOAD = "QUICKLOAD";
+
+	/** The canonical qualified spelling of {@code ql:quickload}. */
+	public static final String QL_QUICKLOAD = QL_PKG + ":" + QUICKLOAD;
+
+	/**
+	 * The {@code ql-dist} package name -- where Quicklisp keeps the distribution
+	 * machinery, of which rontolisp implements the one member a program writes:
+	 * {@code install-dist}. See {@code eval.DistClient}.
+	 */
+	public static final String QL_DIST_PKG = "QL-DIST";
+
+	/**
+	 * {@code ql-dist:install-dist} -- installs a Quicklisp-format distribution (a known
+	 * dist name, {@code "ultralisp"}, or the URL of its distinfo) beside the Quicklisp
+	 * dist {@code ql:quickload} downloads from. The dists are searched in installation
+	 * order. Like {@code ql:quickload} it takes effect at interpret time or compile time
+	 * (Java-side): a literal top-level call is consumed by the {@code LoadInliner} pass.
+	 */
+	public static final String INSTALL_DIST = "INSTALL-DIST";
+
+	/** The canonical qualified spelling of {@code ql-dist:install-dist}. */
+	public static final String QL_DIST_INSTALL_DIST = QL_DIST_PKG + ":" + INSTALL_DIST;
+
+	/**
+	 * {@code ql:update-dist} -- drops a dist's cached indexes so the next
+	 * {@code ql:quickload} sees the releases published since the cache was written (what
+	 * a dist rebuilt every few minutes, like Ultralisp, needs). Same timing as
+	 * {@code ql:quickload}: interpret time, or compile time for a literal top-level call.
+	 */
+	public static final String UPDATE_DIST = "UPDATE-DIST";
+
+	/** The canonical qualified spelling of {@code ql:update-dist}. */
+	public static final String QL_UPDATE_DIST = QL_PKG + ":" + UPDATE_DIST;
+
+	/**
+	 * The {@code tagbody} special form: body forms interleaved with go-tag labels
+	 * (symbols/integers); {@code go} transfers control to a label. Interpreter-only for
+	 * now (the compile path rejects it).
+	 */
+	public static final String TAGBODY = "TAGBODY";
+
+	/** The {@code go} special form: transfers control to a {@code tagbody} label. */
+	public static final String GO = "GO";
+
+	/** The {@code prog} macro: {@code (block nil (let bindings (tagbody body...)))}. */
+	public static final String PROG = "PROG";
+
+	/** The {@code prog*} macro: like {@link #PROG} with sequential bindings. */
+	public static final String PROG_STAR = "PROG*";
+
+	/**
+	 * The {@code shiftf} macro: shifts place values left, stores the last value, and
+	 * returns the first place's old value.
+	 */
+	public static final String SHIFTF = "SHIFTF";
+
+	/**
+	 * The {@code load-time-value} special operator: its form is evaluated once per
+	 * occurrence, not once per use. The compile path hoists the value into a slot of the
+	 * synthesized {@link #LOAD_TIME_VALUE_SLOTS} vector filled on first use
+	 * ({@code LispMacroExpander.hoistLoadTimeValues}); the interpreter memoizes the
+	 * occurrence by identity. A value form cheap enough not to be worth a slot (an atom,
+	 * or a {@code quote}/{@code function}/{@code find-package} wrapper) keeps the plain
+	 * re-evaluating lowering.
+	 */
+	public static final String LOAD_TIME_VALUE = "LOAD-TIME-VALUE";
+
+	/**
+	 * The synthesized global vector holding every hoisted {@code load-time-value} result,
+	 * one slot per occurrence, numbered from 0 in walk order (so the emitted program
+	 * stays deterministic). A slot holds a one-element list, {@code nil} meaning "not
+	 * computed yet".
+	 */
+	public static final String LOAD_TIME_VALUE_SLOTS = "%LOAD-TIME-VALUE-SLOTS";
+
+	/**
+	 * Prefix of the binding a {@code make-load-form} method's INIT form is run against:
+	 * {@code (let ((%LOAD-FORM-OBJECT-1 <creation>)) <init> %LOAD-FORM-OBJECT-1)}. See
+	 * {@code eval/LoadFormSubstituter}.
+	 */
+	public static final String LOAD_FORM_OBJECT_PREFIX = "%LOAD-FORM-OBJECT-";
+
+	/** The {@code mask-field} built-in function (ldb shifted back into position). */
+	public static final String MASK_FIELD = "MASK-FIELD";
+
+	/** The {@code scale-float} built-in function ({@code f * 2^n}). */
+	/**
+	 * The {@code decode-float} prelude function: the three values of a float's binary
+	 * decomposition -- significand in [1/2, 1), exponent, and sign (1.0 or -1.0).
+	 */
+	public static final String DECODE_FLOAT = "DECODE-FLOAT";
+
+	/**
+	 * The {@code integer-decode-float} prelude function: the three values of a float's
+	 * binary decomposition with an integer significand -- significand, exponent and sign
+	 * -- such that {@code significand * 2^exponent * sign} is the original number. The
+	 * scaling loop is exact in binary floating point, like {@link #DECODE_FLOAT}.
+	 */
+	public static final String INTEGER_DECODE_FLOAT = "INTEGER-DECODE-FLOAT";
+
+	/**
+	 * The {@code scale-float} built-in function: a float scaled by a power of two
+	 * ({@code (scale-float f n)} is {@code f * 2^n}), the recomposing counterpart of
+	 * {@link #DECODE_FLOAT}.
+	 */
+	public static final String SCALE_FLOAT = "SCALE-FLOAT";
+
+	/**
+	 * The {@code float-radix} built-in function (the radix of the float representation,
+	 * always 2: every float here is a binary double).
+	 */
+	public static final String FLOAT_RADIX = "FLOAT-RADIX";
+
+	/**
+	 * The {@code float-sign} prelude function (the sign of a float as a float: 1.0 or
+	 * -1.0, or the second float's magnitude with the first float's sign).
+	 */
+	public static final String FLOAT_SIGN = "FLOAT-SIGN";
+
+	/**
+	 * The {@code float-digits} prelude function (the number of radix-2 digits the float
+	 * representation uses: 53 for every float, a double).
+	 */
+	public static final String FLOAT_DIGITS = "FLOAT-DIGITS";
+
+	/**
+	 * The {@code float-precision} prelude function (the number of significant radix-2
+	 * digits a float holds: 53 for a normal double, fewer for a subnormal, 0 for a zero).
+	 */
+	public static final String FLOAT_PRECISION = "FLOAT-PRECISION";
+
+	/**
+	 * The {@code typep} macro -- lite: the type specifier must be a literal (quoted)
+	 * type; it lowers through the shared static type-test builder.
+	 */
+	public static final String TYPEP = "TYPEP";
+
+	/**
+	 * The {@code subtypep} built-in function -- registered on the evaluator (it needs the
+	 * CLOS class registry) over the built-in type lattice; a single primary value.
+	 */
+	public static final String SUBTYPEP = "SUBTYPEP";
+
+	/**
+	 * The shared runtime-{@code subtypep} dispatch defun the compilers inject once per
+	 * program when a {@code subtypep} call carries a non-literal type specifier.
+	 */
+	public static final String SUBTYPEP_RUNTIME = "%SUBTYPEP-RUNTIME";
+
+	/**
+	 * The ancestor-set table backing {@link #SUBTYPEP_RUNTIME}: an alist-like constant,
+	 * each entry {@code ((sub-name...) ancestor-name...)} grouping the type universe's
+	 * names by ancestor set. Emitted as a top-level {@code defvar} of pure quoted data so
+	 * the dispatch defun stays small regardless of how many classes a program registers.
+	 */
+	public static final String SUBTYPEP_ANCESTOR_TABLE = "%SUBTYPEP-ANCESTOR-TABLE";
+
+	/**
+	 * The {@code subtypep} VALID-P companion: CL's SECOND value, {@code t} when the
+	 * answer is a decision and {@code nil} when this lattice cannot decide the pair. Only
+	 * the multiple-value lowering of a {@code subtypep} producer emits it -- a program
+	 * never spells it.
+	 */
+	public static final String SUBTYPEP_VALID = "%SUBTYPEP-VALID";
+
+	/**
+	 * The {@code read-from-string} STOP-INDEX companion: CL's SECOND value, the index of
+	 * the first character the read did not consume. Only the multiple-value lowering of a
+	 * {@code read-from-string} producer emits it -- a program never spells it. The
+	 * interpreter answers from a raw-character scan of the datum
+	 * ({@code LispLexer.datumEnd}), which is what lets it answer for text the parse
+	 * refuses (a suppressed read); the compiled backends read their runtime reader's
+	 * cursor after parsing the datum, so there the index exists exactly where the datum
+	 * does.
+	 */
+	public static final String READ_FROM_STRING_END = "%READ-FROM-STRING-END";
+
+	/**
+	 * {@code (%read-line-pair &optional stream)}: the line {@code read-line} reads from
+	 * the stream designator, as a cons {@code (line . missing-newline-p)} -- the second
+	 * value true when end of file ended the line -- or nil at end of file. What the
+	 * multiple-value lowering of a {@code read-line} producer reads both values off
+	 * ({@code LispMacroExpander.lowerMvProducer}), so a single-valued call keeps the
+	 * one-value built-in and pays nothing for the second value.
+	 */
+	public static final String READ_LINE_PAIR_INTERNAL = "%READ-LINE-PAIR";
+
+	/**
+	 * {@code (%quiet-values form...)}: {@code values} for library source whose extra
+	 * values only a program's OWN multiple-value consumer can observe. It does not by
+	 * itself give a compiled program the multiple-value channel: with one (the program
+	 * uses a multiple-value operator) it is {@code values}, without one it is
+	 * {@code prog1} -- every form evaluated, the first answered
+	 * ({@code LispMacroExpander.injectMvSpillGlobal}). The interpreter always has the
+	 * channel, so there it is {@code values}.
+	 */
+	public static final String QUIET_VALUES_INTERNAL = "%QUIET-VALUES";
+
+	/**
+	 * {@code (%quiet-multiple-value-list form)}: the consumer twin of
+	 * {@link #QUIET_VALUES_INTERNAL} -- {@code multiple-value-list} in a program with the
+	 * multiple-value channel, {@code (list form)} without one. A call, not a binding
+	 * form, so every pass that walks the program before the choice is made reads it as
+	 * what it is in either spelling.
+	 */
+	public static final String QUIET_MULTIPLE_VALUE_LIST_INTERNAL = "%QUIET-MULTIPLE-VALUE-LIST";
+
+	/**
+	 * The prelude defun behind a {@code read-from-string} call that passes more than the
+	 * string: CL's whole lambda list ({@code eof-error-p}, {@code eof-value},
+	 * {@code :start}, {@code :end}, {@code :preserve-whitespace}) over the {@code read}
+	 * scanner, answering the datum and the stop index. The call position and the function
+	 * value route such a call here on every backend; the one-argument call keeps the
+	 * built-in.
+	 */
+	public static final String READ_FROM_STRING_FULL_INTERNAL = "%READ-FROM-STRING-FULL";
+
+	/**
+	 * The one-argument {@code read-from-string} of the compiled backends' runtime reader
+	 * without the check that refuses malformed text: what
+	 * {@code LispMacroExpander.expandReadFromStringFailure} reads through before it asks
+	 * {@link #READ_FAILURE_INTERNAL}. Only that lowering emits it.
+	 */
+	public static final String READ_FROM_STRING_RAW_INTERNAL = "%READ-FROM-STRING-RAW";
+
+	/**
+	 * {@code (%read-failure)}: how the compiled backends' runtime reader's last
+	 * {@code read-from-string} parse ended -- 0 with a datum, 1 when the text ran out
+	 * before one was complete (or held none), 2 or more at a {@code )} that closed
+	 * nothing. Only {@code LispMacroExpander.expandReadFromStringFailure} emits it.
+	 */
+	public static final String READ_FAILURE_INTERNAL = "%READ-FAILURE";
+
+	/**
+	 * The shared runtime-{@code %subtypep-valid} dispatch defun the compilers inject once
+	 * per program when a multiple-value {@code subtypep} carries a non-literal type
+	 * specifier -- the valid-p twin of {@link #SUBTYPEP_RUNTIME}, which it calls.
+	 */
+	public static final String SUBTYPEP_VALID_RUNTIME = "%SUBTYPEP-VALID-RUNTIME";
+
+	/**
+	 * The shared runtime-{@code typep} dispatch defun the compilers inject once per
+	 * program when a {@code typep} call carries a non-literal type specifier. Inlining
+	 * that dispatch at every call site (the interpreter's model) grows with the number of
+	 * registered classes and overflowed the JVM's 16-bit branch offsets at cl-postgres
+	 * scale; the defun keeps each call site one fixed-size call.
+	 */
+	public static final String TYPEP_RUNTIME = "%TYPEP-RUNTIME";
+
+	/**
+	 * The COMPOUND half of {@link #TYPEP_RUNTIME}: the defun a computed specifier that
+	 * arrived as a CONS -- {@code (integer 0 10)}, and everything {@code type-of} answers
+	 * for an array -- is routed to. Injected under the same gate, in its own defun for
+	 * the reason {@link #TYPEP_RUNTIME} is a defun at all (the JVM's 16-bit branch
+	 * offsets), and recursing back into it for a sub-specifier.
+	 */
+	public static final String TYPEP_COMPOUND_RUNTIME = "%TYPEP-COMPOUND-RUNTIME";
+
+	/**
+	 * The shared runtime-{@code error} dispatch defun the compilers inject once per
+	 * program when an {@code error} call carries a computed condition-type symbol with
+	 * initargs (cl-postgres' {@code (error (get-error-type code) :code ...)}). It
+	 * dispatches over the registered CONDITION classes, each arm a small call into a
+	 * per-class construction helper; inlining every class's typed expansion at the call
+	 * site produced a 90 KB method body at cl-postgres scale -- past even the JVM's 64 KB
+	 * hard method limit.
+	 */
+	public static final String ERROR_RUNTIME = "%ERROR-RUNTIME";
+
+	/** The {@code signal} twin of {@link #ERROR_RUNTIME}. */
+	public static final String SIGNAL_RUNTIME = "%SIGNAL-RUNTIME";
+
+	/** The {@code warn} twin of {@link #ERROR_RUNTIME}. */
+	public static final String WARN_RUNTIME = "%WARN-RUNTIME";
+
+	/** What {@code #'cerror} calls: {@link #ERROR_RUNTIME} under its restart. */
+	public static final String CERROR_RUNTIME = "%CERROR-RUNTIME";
+
+	/**
+	 * The instance-tag acceptance table backing {@link #TYPEP_RUNTIME}: an alist-like
+	 * constant, each entry {@code ((type-name...) tag...)} mapping every registered
+	 * class/struct type name (qualified and plain spellings) to the instance tags it
+	 * accepts. Emitted as a top-level {@code defvar} holding pure quoted data so the
+	 * dispatch defun stays small regardless of how many classes a program registers.
+	 */
+	public static final String TYPEP_TAG_TABLE = "%TYPEP-TAG-TABLE";
+
+	/**
+	 * The user-{@code deftype} alias table backing {@link #DEFTYPE_ALIAS_RUNTIME}: an
+	 * alist-like constant, each entry {@code ((alias-name...) expansion)} mapping every
+	 * registered zero-parameter {@code deftype} name (qualified and plain spellings) to
+	 * the type specifier it expands to, alias chains already followed. Emitted as a
+	 * top-level {@code defvar} holding pure quoted data -- the shape the measurement
+	 * chose over one dispatch arm per alias, which cost 10% of a program that merely
+	 * loads alexandria ({@code .kb/array-literals.md}).
+	 */
+	public static final String DEFTYPE_ALIAS_TABLE = "%DEFTYPE-ALIAS-TABLE";
+
+	/**
+	 * The shared alias resolver the compile paths inject beside {@link #TYPEP_RUNTIME}: a
+	 * scan of {@link #DEFTYPE_ALIAS_TABLE} answering the expansion of a type designator
+	 * that names a user {@code deftype}, and the designator itself otherwise. It is what
+	 * makes {@code (typep x ty)} with {@code ty} a VALUE naming an alias answer what the
+	 * literal spelling answers -- the literal one is resolved at expansion time by the
+	 * recognizer that reads it, and a designator held in a variable reaches no
+	 * recognizer.
+	 */
+	public static final String DEFTYPE_ALIAS_RUNTIME = "%DEFTYPE-ALIAS";
+
+	/**
+	 * The declaration identifier of {@code (declaim (%deftype-instance 'spec
+	 * 'expansion))}: the macro pass's record of what one compound specifier headed by a
+	 * parameterized {@code deftype} expands to, consumed by the compile paths' definition
+	 * walk ({@code ClosRegistry.registerDeftypeInstance}). Matched by member name.
+	 */
+	public static final String DEFTYPE_INSTANCE_DECLARATION = "%DEFTYPE-INSTANCE";
+
+	/**
+	 * The interpreter's run-time expansion of a {@code typep} designator that is a
+	 * compound specifier headed by a parameterized {@code deftype}; any other designator
+	 * comes back unchanged.
+	 */
+	public static final String DEFTYPE_EXPAND_INTERNAL = "%DEFTYPE-EXPAND";
+
+	/** The {@code char-name} built-in function. */
+	public static final String CHAR_NAME = "CHAR-NAME";
+
+	/** The {@code name-char} function: the inverse of {@link #CHAR_NAME}. */
+	public static final String NAME_CHAR = "NAME-CHAR";
+
+	/** The {@code fdefinition} built-in function (alias of {@code symbol-function}). */
+	public static final String FDEFINITION = "FDEFINITION";
+
+	/**
+	 * The {@code fmakunbound} built-in function: makes the name call-time-undefined
+	 * again. On the interpreter the global function binding (and any macro of the same
+	 * name) is dropped outright; on the compiled backends a tombstone shadows the name in
+	 * the eval runtime's function namespace, so every LATE-bound reference
+	 * ({@code funcall}/{@code fboundp}/{@code eval} through the symbol) sees it undefined
+	 * while call sites the compiler already bound directly keep working
+	 * ({@code .kb/symbol-runtime-api.md}).
+	 */
+	public static final String FMAKUNBOUND = "FMAKUNBOUND";
+
+	/**
+	 * The {@code makunbound} built-in function: the symbol's current value binding -- the
+	 * active dynamic binding, else the global value -- loses its value, so {@code boundp}
+	 * answers nil and a read signals {@code unbound-variable}. The compile paths store
+	 * the UNBOUND marker into the variable
+	 * ({@code LispMacroExpander.expandMakunboundForCompile}) and take the name out of the
+	 * eval mirror ({@code .kb/dynamic-special-variables.md}).
+	 */
+	public static final String MAKUNBOUND = "MAKUNBOUND";
+
+	/**
+	 * The internal primitive behind {@code (setf (symbol-function 'f) fn)} /
+	 * {@code (setf (fdefinition 'f) fn)}: installs {@code fn} as the symbol's global
+	 * function binding in the runtime function namespace (the {@code _fenv} the
+	 * late-bound references probe, shadowing any compiled defun of the name) and returns
+	 * the value. The write-side twin of {@link #FMAKUNBOUND}'s tombstone.
+	 */
+	public static final String SET_SYMBOL_FUNCTION_INTERNAL = "%SET-SYMBOL-FUNCTION";
+
+	/**
+	 * The internal primitive reading a symbol's function binding OUT of the runtime
+	 * function namespace only ({@code _fenv}; the compiled-function registry is
+	 * deliberately not probed), signalling {@code The function X is undefined} on a miss.
+	 * The body of the forwarder defun injected for a name that is ONLY defined by
+	 * {@code (setf (symbol-function ...))} -- probing the registry there would find the
+	 * forwarder itself and loop.
+	 */
+	public static final String FENV_FUNCTION_INTERNAL = "%FENV-FUNCTION";
+
+	/**
+	 * What a top-level {@code defun} of a name a run-time write can reach leaves where it
+	 * stood ({@code compiler.RedefinedDefuns}): the name's binding in the run-time
+	 * function namespace, if a write made one, is gone again, so the compiled definition
+	 * answers from here on, as a definition does where a load runs its form.
+	 */
+	public static final String RESTORE_COMPILED_DEFINITION_INTERNAL = "%RESTORE-COMPILED-DEFINITION";
+
+	/**
+	 * What a {@code defmethod} or {@code defgeneric} of a generic function that already
+	 * has its dispatcher leaves where it stood, on the compile paths, until
+	 * {@code compiler.RedefinedDefuns} turns it into what binds the name again there, or
+	 * drops it: it binds a name a program retired or replaced.
+	 */
+	public static final String GENERIC_DEFINED_AGAIN_INTERNAL = "%GENERIC-DEFINED-AGAIN";
+
+	/**
+	 * The generic-function protocol's predicate of a name holding its generic function
+	 * metaobject (generic-functions.lisp), which a definition of the generic leaves
+	 * there.
+	 */
+	public static final String GF_INSTALLED_P_INTERNAL = "%GF-INSTALLED-P";
+
+	/** The generic-function protocol's table of its metaobjects, by generic. */
+	public static final String GF_METAOBJECTS_VAR = "%GF-METAOBJECTS%";
+
+	/**
+	 * The compile paths' prelude helper mapping a function name built at run time onto
+	 * the name its function is stored under: a {@code (setf place)} list onto the
+	 * writer's internal symbol ({@link #SETF_FUNCTION_SYMBOL_INTERNAL}), anything else
+	 * onto itself. A computed designator given to {@code fboundp} or
+	 * {@code (setf fdefinition)} goes through it, where the program can build such a list
+	 * ({@code compiler.RuntimeFunctionNames.sites}).
+	 */
+	public static final String FUNCTION_NAME_INTERNAL = "%FUNCTION-NAME";
+
+	/**
+	 * The compile paths' prelude {@code fdefinition} of a computed function name: the
+	 * name mapped by {@link #FUNCTION_NAME_INTERNAL}, an undefined {@code (setf place)}
+	 * function reported as the list ({@link #UNDEFINED_SETF_FUNCTION_INTERNAL}).
+	 */
+	public static final String FDEFINITION_INTERNAL = "%FDEFINITION";
+
+	/**
+	 * The compile paths' prelude {@code fmakunbound} of a computed function name: the
+	 * name mapped by {@link #FUNCTION_NAME_INTERNAL} retired, the name given answered.
+	 */
+	public static final String FMAKUNBOUND_INTERNAL = "%FMAKUNBOUND";
+
+	/**
+	 * {@code (%setf-function-symbol place)}: the symbol a {@code (setf place)} function
+	 * is stored under, built when the program runs -- the prefix and the place's
+	 * spelling, interned on wasm, where symbols compare by string-table offset.
+	 */
+	public static final String SETF_FUNCTION_SYMBOL_INTERNAL = "%SETF-FUNCTION-SYMBOL";
+
+	/**
+	 * {@code (%undefined-setf-function place)}: signals the {@code undefined-function} a
+	 * call of the undefined {@code (setf place)} function signals, naming the list.
+	 */
+	public static final String UNDEFINED_SETF_FUNCTION_INTERNAL = "%UNDEFINED-SETF-FUNCTION";
+
+	/**
+	 * The {@code file-position} built-in function -- lite: always {@code nil} (streams do
+	 * not support repositioning), so callers take their non-seeking fallback.
+	 */
+	public static final String FILE_POSITION = "FILE-POSITION";
+
+	/**
+	 * The {@code file-length} built-in function: the byte length of the file a FILE
+	 * stream is open on. Interpreter and JVM answer it from the path the stream was
+	 * opened with; every other stream (string streams, sockets, the standard streams) and
+	 * both WASM backends answer {@code nil} -- which is what Common Lisp prescribes when
+	 * the length cannot be determined, not a stub (see {@code .kb/read-load-streams.md}).
+	 */
+	public static final String FILE_LENGTH = "FILE-LENGTH";
+
+	/**
+	 * The {@code file-write-date} built-in function: the file's last-modification time as
+	 * a universal time (seconds since 1900), or {@code nil} when it cannot be determined
+	 * -- which is the answer on both WASM backends, whose WASI import set carries no
+	 * {@code filestat} call.
+	 */
+	public static final String FILE_WRITE_DATE = "FILE-WRITE-DATE";
+
+	/**
+	 * The {@code ensure-directories-exist} built-in function: creates the directory
+	 * component of the given namestring (a trailing {@code /} makes the whole string the
+	 * directory) and returns the namestring, or signals a {@code file-error} carrying the
+	 * designator as given when the host refuses -- on all four backends (ANSI, SBCL
+	 * agrees).
+	 *
+	 * <p>
+	 * Lite deviation: Common Lisp returns {@code (values pathspec created)} and this
+	 * returns the pathspec only -- a prelude defun's secondary value would not survive
+	 * the function boundary on the compile paths, so promising one would be the lie.
+	 */
+	public static final String ENSURE_DIRECTORIES_EXIST = "ENSURE-DIRECTORIES-EXIST";
+
+	/**
+	 * The {@code %make-directories} internal primitive: create the named directory and
+	 * every missing parent, answering {@code t}, or {@code nil} when the host refuses --
+	 * the {@link #DELETE_FILE_INTERNAL} / {@link #RENAME_FILE_INTERNAL} shape. The
+	 * write-side sibling of {@link #LIST_DIRECTORY}, and the one call
+	 * {@link #ENSURE_DIRECTORIES_EXIST} is Lisp source over, so both "which part of the
+	 * namestring is the directory" and "a refused directory is a file-error" have a
+	 * single definition.
+	 */
+	public static final String MAKE_DIRECTORIES = "%MAKE-DIRECTORIES";
+
+	/**
+	 * The {@code make-broadcast-stream} built-in function: a
+	 * {@link #MAKE_BROADCAST_STREAM_INTERNAL} Gray output stream that fans every write
+	 * out to each component in order -- with no components, one over the empty list,
+	 * whose writes are dropped. The call position expands to it and the function value
+	 * calls it ({@code BuiltinFunctionWrappers}).
+	 */
+	public static final String MAKE_BROADCAST_STREAM = "MAKE-BROADCAST-STREAM";
+
+	/**
+	 * The {@code %make-broadcast-stream} internal primitive: the component-carrying half
+	 * of {@link #MAKE_BROADCAST_STREAM}, taking the component list. Prelude Lisp defining
+	 * a {@code rontolisp:fundamental-character-output-stream} subclass whose
+	 * {@code stream-write-char} / {@code stream-write-string} methods loop the
+	 * components, so ONE definition serves every backend and no runtime learns a new
+	 * stream kind -- the Gray dispatch that already exists carries it
+	 * ({@code .kb/gray-streams.md}).
+	 *
+	 * <p>
+	 * The consequence to know: a broadcast stream with components IS a Gray stream, so
+	 * exactly the operators that dispatch on one work with it ({@code format},
+	 * {@code princ}, {@code write-string}, {@code write-char}). {@code terpri} /
+	 * {@code fresh-line} / {@code write-line} / {@code force-output} / {@code close} are
+	 * not part of the protocol here and signal on any Gray stream, broadcast or not.
+	 */
+	public static final String MAKE_BROADCAST_STREAM_INTERNAL = "%MAKE-BROADCAST-STREAM";
+
+	/**
+	 * The {@code %broadcast-stream} internal class name -- the Gray output-stream class
+	 * {@link #MAKE_BROADCAST_STREAM_INTERNAL} instantiates. Owned by {@code cl} so the
+	 * spliced prelude forms and a user program in any package name the same class.
+	 */
+	public static final String BROADCAST_STREAM_CLASS = "%BROADCAST-STREAM";
+
+	/**
+	 * The {@code %broadcast-stream-components} reader of {@link #BROADCAST_STREAM_CLASS}.
+	 */
+	public static final String BROADCAST_STREAM_COMPONENTS = "%BROADCAST-STREAM-COMPONENTS";
+
+	/**
+	 * The {@code make-two-way-stream} prelude function: one input + one output stream as
+	 * one. A Gray stream subclassing both
+	 * {@code rontolisp:fundamental-character-input-stream} and
+	 * {@code rontolisp:fundamental-character-output-stream}; reading comes from the input
+	 * component, writing goes to the output one, and the two accessors
+	 * {@link #TWO_WAY_STREAM_INPUT_STREAM} / {@link #TWO_WAY_STREAM_OUTPUT_STREAM}
+	 * recover them. Prelude Lisp, no backend learns a new stream kind.
+	 */
+	public static final String MAKE_TWO_WAY_STREAM = "MAKE-TWO-WAY-STREAM";
+
+	/** {@code two-way-stream-input-stream}, the input accessor of a two-way stream. */
+	public static final String TWO_WAY_STREAM_INPUT_STREAM = "TWO-WAY-STREAM-INPUT-STREAM";
+
+	/** {@code two-way-stream-output-stream}, the output accessor of a two-way stream. */
+	public static final String TWO_WAY_STREAM_OUTPUT_STREAM = "TWO-WAY-STREAM-OUTPUT-STREAM";
+
+	/**
+	 * The {@code make-echo-stream} prelude function: a two-way stream whose input reads
+	 * are echoed to the output component. Subclass of {@link #TWO_WAY_STREAM_CLASS}.
+	 */
+	public static final String MAKE_ECHO_STREAM = "MAKE-ECHO-STREAM";
+
+	/** {@code echo-stream-input-stream}, the input accessor of an echo stream. */
+	public static final String ECHO_STREAM_INPUT_STREAM = "ECHO-STREAM-INPUT-STREAM";
+
+	/** {@code echo-stream-output-stream}, the output accessor of an echo stream. */
+	public static final String ECHO_STREAM_OUTPUT_STREAM = "ECHO-STREAM-OUTPUT-STREAM";
+
+	/**
+	 * The {@code make-concatenated-stream} prelude function: read the component streams
+	 * in order, dropping each at its end of file.
+	 */
+	public static final String MAKE_CONCATENATED_STREAM = "MAKE-CONCATENATED-STREAM";
+
+	/**
+	 * {@code concatenated-stream-streams}, the accessor returning a concatenated stream's
+	 * component list.
+	 */
+	public static final String CONCATENATED_STREAM_STREAMS = "CONCATENATED-STREAM-STREAMS";
+
+	/**
+	 * The {@code %two-way-stream} internal Gray class {@link #MAKE_TWO_WAY_STREAM}
+	 * instantiates. Owned by {@code cl} so the spliced prelude forms and a user program
+	 * in any package name the same class.
+	 */
+	public static final String TWO_WAY_STREAM_CLASS = "%TWO-WAY-STREAM";
+
+	/**
+	 * The {@code %two-way-input} internal input reader of {@link #TWO_WAY_STREAM_CLASS}.
+	 */
+	public static final String TWO_WAY_STREAM_INPUT_INTERNAL = "%TWO-WAY-INPUT";
+
+	/**
+	 * The {@code %two-way-output} internal output reader of
+	 * {@link #TWO_WAY_STREAM_CLASS}.
+	 */
+	public static final String TWO_WAY_STREAM_OUTPUT_INTERNAL = "%TWO-WAY-OUTPUT";
+
+	/**
+	 * The {@code %echo-stream} internal Gray class {@link #MAKE_ECHO_STREAM}
+	 * instantiates.
+	 */
+	public static final String ECHO_STREAM_CLASS = "%ECHO-STREAM";
+
+	/** The {@code %echo-input} internal input reader of {@link #ECHO_STREAM_CLASS}. */
+	public static final String ECHO_STREAM_INPUT_INTERNAL = "%ECHO-INPUT";
+
+	/** The {@code %echo-output} internal output reader of {@link #ECHO_STREAM_CLASS}. */
+	public static final String ECHO_STREAM_OUTPUT_INTERNAL = "%ECHO-OUTPUT";
+
+	/**
+	 * The {@code %concatenated-stream} internal Gray class
+	 * {@link #MAKE_CONCATENATED_STREAM} instantiates.
+	 */
+	public static final String CONCATENATED_STREAM_CLASS = "%CONCATENATED-STREAM";
+
+	/**
+	 * The {@code %concatenated-stream-streams} internal accessor of
+	 * {@link #CONCATENATED_STREAM_CLASS}.
+	 */
+	public static final String CONCATENATED_STREAM_STREAMS_INTERNAL = "%CONCATENATED-STREAM-STREAMS";
+
+	/**
+	 * The {@code pathnamep} built-in function: whether the value is a pathname -- an
+	 * instance of the fixed {@code LispLayout.PATHNAME} layout, the value {@code #P"..."}
+	 * denotes. A string is NOT one (restoring CL's rule); it answers exactly what
+	 * {@code (typep x 'pathname)} does, as CL requires the two to agree. Expands to
+	 * {@code (%obj-is x '%PATHNAME)} on the compile paths, so with the instance gate off
+	 * (no pathname can exist) it is a constant nil.
+	 */
+	public static final String PATHNAMEP = "PATHNAMEP";
+
+	/**
+	 * The {@code namestring} built-in function -- the namestring carried by a pathname
+	 * value, or a namestring given directly (a string designates the pathname it names).
+	 * Prelude Lisp; {@code uiop:namestring} and {@code uiop:native-namestring} lower onto
+	 * this same function ({@code LispMacroExpander.expandUiopStubCall}), as real UIOP
+	 * re-exports/derives them from CL's. The constant is spelled {@code NAMESTRING_CL}
+	 * because {@link #NAMESTRING} is the {@code uiop} package MEMBER of the same name.
+	 */
+	public static final String NAMESTRING_CL = "NAMESTRING";
+
+	/** The {@code input-stream-p} built-in function -- lite: any stream handle. */
+	public static final String INPUT_STREAM_P = "INPUT-STREAM-P";
+
+	/**
+	 * The {@code open-stream-p} built-in function: real against the stream table (a
+	 * closed handle's entry is removed), unlike the lite direction predicates.
+	 */
+	public static final String OPEN_STREAM_P = "OPEN-STREAM-P";
+
+	/** The {@code output-stream-p} built-in function -- lite: any stream handle. */
+	public static final String OUTPUT_STREAM_P = "OUTPUT-STREAM-P";
+
+	/** The {@code stream-element-type} built-in function -- always {@code character}. */
+	public static final String STREAM_ELEMENT_TYPE = "STREAM-ELEMENT-TYPE";
+
+	/**
+	 * The {@code slot-boundp} built-in: true when the instance's type declares the slot
+	 * AND the slot does not hold the unbound marker ({@link #SLOT_MAKUNBOUND}).
+	 */
+	public static final String SLOT_BOUNDP = "SLOT-BOUNDP";
+
+	/**
+	 * The {@code slot-makunbound} built-in: stores a fresh unbound marker into the slot,
+	 * so {@code slot-boundp} goes nil and a read signals {@code unbound-slot}.
+	 */
+	public static final String SLOT_MAKUNBOUND = "SLOT-MAKUNBOUND";
+
+	/**
+	 * The {@code slot-exists-p} built-in: true when the instance's type declares the
+	 * slot, regardless of boundness (an unbound slot exists; {@link #SLOT_BOUNDP} is the
+	 * boundness test).
+	 */
+	public static final String SLOT_EXISTS_P = "SLOT-EXISTS-P";
+
+	/**
+	 * The shared runtime-slot-name {@code slot-exists-p} dispatch, the existence twin of
+	 * {@link #SLOT_BOUNDP_RUNTIME}: a class-tag dispatch answering t when the value's
+	 * layout declares the (base-spelling-normalized) name.
+	 */
+	public static final String SLOT_EXISTS_P_RUNTIME = "%SLOT-EXISTS-P-RUNTIME";
+
+	/**
+	 * The internal {@code (%slot-read value instance 'name)} checked read: the value
+	 * unless it is the unbound marker, in which case {@code unbound-slot} is signalled
+	 * with the slot name and the instance (through {@code slot-unbound} when the program
+	 * has that generic). Every {@code slot-value} and every generated
+	 * {@code :reader}/{@code :accessor} body goes through it. Not a public function;
+	 * generated by {@code LispMacroExpander.slotUnboundDefuns}.
+	 */
+	public static final String SLOT_READ_INTERNAL = "%SLOT-READ";
+
+	/**
+	 * The internal {@code (%slot-bound-p value)} test: nil when the value is the unbound
+	 * marker, t otherwise. The out-of-line half of every {@code slot-boundp} arm; see
+	 * {@link #SLOT_READ_INTERNAL}.
+	 */
+	public static final String SLOT_BOUND_P_INTERNAL = "%SLOT-BOUND-P";
+
+	/**
+	 * The internal {@code (%struct-type-error value "OPERATOR" 'type)} signal: a
+	 * {@code type-error} reporting {@code OPERATOR: The value X is not of type TYPE},
+	 * answering the value and the struct type. The out-of-line failure arm of every
+	 * generated {@code defstruct} accessor, accessor place and copier; generated by
+	 * {@code LispMacroExpander.structTypeErrorDefun()}.
+	 */
+	public static final String STRUCT_TYPE_ERROR_INTERNAL = "%STRUCT-TYPE-ERROR";
+
+	/**
+	 * The {@code class-of} standard function: the class METAOBJECT of any value -- the
+	 * memoized {@code standard-class} instance {@code find-class} answers for a
+	 * struct/CLOS instance's type, or the built-in class metaobject
+	 * ({@code ClosRegistry.BUILTIN_CLASS_NAMES}) of everything else. The old lite view
+	 * (the raw tag / type-name symbol) lives on as {@link #CLASS_DESIGNATOR_INTERNAL} for
+	 * the internal consumers that only need a name.
+	 */
+	public static final String CLASS_OF = "CLASS-OF";
+
+	/**
+	 * The internal {@code (%class-designator x)} function -- what {@code class-of} was
+	 * before the metaobject migration: the instance-tag symbol of a struct/CLOS instance
+	 * ({@code %struct-NAME}/{@code %class-NAME}), else a built-in type NAME symbol. The
+	 * light view internal consumers ride ({@code type-of},
+	 * {@code print-unreadable-object :type}, the no-applicable-method message, json.lisp)
+	 * so they neither drag the metaobject runtime into every program nor change output.
+	 */
+	public static final String CLASS_DESIGNATOR_INTERNAL = "%CLASS-DESIGNATOR";
+
+	/**
+	 * The internal {@code %class-slot-defs} introspection helper: takes a class
+	 * designator (the {@code %class-<name>} tag symbol {@code %class-designator} returns,
+	 * the class name, or a class METAOBJECT -- whose name slot is read) and returns a
+	 * list of {@code (slot-name declared-type)} pairs for the class's full slot list. The
+	 * closer-mop shim's {@code class-slots} is built on it, so slot-walking serializers
+	 * (jzon) see real fields. Not a public function.
+	 */
+	public static final String CLASS_SLOT_DEFS_INTERNAL = "%CLASS-SLOT-DEFS";
+
+	/**
+	 * The shared dispatch defun a compile-path {@code %class-slot-defs} call lowers to:
+	 * scans {@link #CLASS_SLOT_DEFS_TABLE} for the designator and answers the
+	 * {@code (name type)} pair list. One defun per program instead of one inlined
+	 * membership cond per call site -- the inline shape grew with the registry and put
+	 * the ci-spec corpus's biggest top-level form past the JVM's 65535-byte method
+	 * ceiling when the MOP base classes joined the registry.
+	 */
+	public static final String CLASS_SLOT_DEFS_RUNTIME = "%CLASS-SLOT-DEFS-RUNTIME";
+
+	/**
+	 * The quoted data table backing {@link #CLASS_SLOT_DEFS_RUNTIME}: one entry per
+	 * registered class/struct layout -- the accepted designator spellings (instance tag +
+	 * print name) followed by the {@code (name type)} pairs.
+	 */
+	public static final String CLASS_SLOT_DEFS_TABLE = "%CLASS-SLOT-DEFS-TABLE";
+
+	/**
+	 * The internal instance constructor: {@code (%obj-new '<tag> v1 ... vn)} builds an
+	 * instance of the type carrying that tag, with the values in layout order. The tag
+	 * must be a quoted literal on the compile path (the same rule
+	 * {@code make-instance}/{@code slot-value} follow), because the layout is resolved at
+	 * expansion time.
+	 */
+	public static final String OBJ_NEW = "%OBJ-NEW";
+
+	/**
+	 * The internal slot reader: {@code (%obj-ref obj <k>)} reads slot {@code k} (0-based,
+	 * a literal integer) of an instance; a negative {@code k} counts back from the end of
+	 * the instance's storage ({@code LispLayout.TAIL_CELL}).
+	 */
+	public static final String OBJ_REF = "%OBJ-REF";
+
+	/**
+	 * The internal slot writer: {@code (%obj-set obj <k> v)} writes slot {@code k}
+	 * (0-based, a literal integer; negative counts back from the end, as for
+	 * {@link #OBJ_REF}) of an instance and returns the value written.
+	 */
+	public static final String OBJ_SET = "%OBJ-SET";
+
+	/**
+	 * The internal instance-of test: {@code (%obj-is obj '<tag1> '<tag2> ...)} is
+	 * {@code t} when the value is an instance whose type tag is one of the listed ones.
+	 * Replaces the tagged-list era's {@code (if (consp x) (equal (car x) 'tag) nil)} in
+	 * struct predicates, class specializers and condition-type tests.
+	 */
+	public static final String OBJ_IS = "%OBJ-IS";
+
+	/**
+	 * The internal instance tag reader: {@code (%obj-tag obj)} yields the
+	 * {@code %struct-<name>} / {@code %class-<name>} symbol of an instance, or nil for a
+	 * non-instance. {@code %class-designator} is built on it.
+	 */
+	public static final String OBJ_TAG = "%OBJ-TAG";
+
+	/**
+	 * The internal instance predicate: {@code (%obj-p x)} is {@code t} for any instance
+	 * of a struct or class type. Used where a test must accept every instance regardless
+	 * of type (the Gray-stream dispatch, {@code standard-object}).
+	 */
+	public static final String OBJ_P = "%OBJ-P";
+
+	/**
+	 * The internal instance slot reader: {@code (%obj-slots x)} is a FRESH list of the
+	 * instance's slot values in layout order, nil for anything else. It exists so Lisp
+	 * code can walk an instance's contents without a registry lookup per slot -- the
+	 * prelude's {@code equalp} compares two instances by handing their slot lists back to
+	 * itself, which is exact AND costs no per-call-site slot dispatch.
+	 */
+	public static final String OBJ_SLOTS = "%OBJ-SLOTS";
+
+	/**
+	 * The internal printed frame of an instance: {@code (%obj-print-frame x)} is a FRESH
+	 * list {@code (class-p name slot...)} -- {@code t} for the {@code #<...>} syntax and
+	 * nil for {@code #S(...)}, then the printed type name and each slot name in layout
+	 * order, as strings -- and nil for a value that has no slot syntax: a non-instance, a
+	 * pathname, a stream. With {@link #OBJ_SLOTS} it is what the {@code print-object}
+	 * walk needs to spell an instance itself.
+	 */
+	public static final String OBJ_PRINT_FRAME = "%OBJ-PRINT-FRAME";
+
+	/**
+	 * The {@code print-object} generic function: a {@code defmethod} on it is what the
+	 * printer consults for an instance of that type, in place of the built-in
+	 * {@code #S(...)}/{@code #<...>} rendering. The printer only routes a type some
+	 * method specializes on.
+	 */
+	public static final String PRINT_OBJECT = "PRINT-OBJECT";
+
+	/**
+	 * The {@code describe-object} generic function: what {@code describe} calls. Its
+	 * system method writes the object and its type, as SBCL's first two lines do; a
+	 * {@code defmethod} on it joins the one cl-owned generic, as on
+	 * {@link #PRINT_OBJECT}.
+	 */
+	public static final String DESCRIBE_OBJECT = "DESCRIBE-OBJECT";
+
+	/**
+	 * The {@code describe} standard function: a prelude defun calling
+	 * {@link #DESCRIBE_OBJECT} on the stream designator's stream, answering no values.
+	 */
+	public static final String DESCRIBE = "DESCRIBE";
+
+	/**
+	 * The {@code notinline} declaration: a call it covers expands no compiler macro
+	 * ({@code LispEvaluator.markNotinlineCalls}).
+	 */
+	public static final String NOTINLINE = "NOTINLINE";
+
+	/**
+	 * The prelude defun {@link #DESCRIBE_OBJECT}'s system method calls: the object and
+	 * its type in brackets.
+	 */
+	public static final String DESCRIBE_OBJECT_DEFAULT_INTERNAL = "%DESCRIBE-OBJECT-DEFAULT";
+
+	/**
+	 * The {@code slot-unbound} generic: a read of an unbound slot calls it with the
+	 * instance's class, the instance and the slot name; its system method signals
+	 * {@code unbound-slot}.
+	 */
+	public static final String SLOT_UNBOUND = "SLOT-UNBOUND";
+
+	/**
+	 * The {@code slot-missing} generic: a {@code slot-value} read or write of a slot the
+	 * object's class does not declare calls it; its system method signals an error.
+	 */
+	public static final String SLOT_MISSING = "SLOT-MISSING";
+
+	/**
+	 * The {@code initialize-instance} generic: {@code make-instance} runs it on the fresh
+	 * instance with the initargs. Like {@link #PRINT_OBJECT} it has to be ONE cl-owned
+	 * generic -- CL's instance-initialization protocol chains through the same three
+	 * generics whatever package a method is defined in.
+	 */
+	public static final String INITIALIZE_INSTANCE = "INITIALIZE-INSTANCE";
+
+	/** The {@code reinitialize-instance} generic; see {@link #INITIALIZE_INSTANCE}. */
+	public static final String REINITIALIZE_INSTANCE = "REINITIALIZE-INSTANCE";
+
+	/**
+	 * The {@code shared-initialize} generic both {@link #INITIALIZE_INSTANCE} and
+	 * {@link #REINITIALIZE_INSTANCE} chain to; see {@link #INITIALIZE_INSTANCE}.
+	 */
+	public static final String SHARED_INITIALIZE = "SHARED-INITIALIZE";
+
+	/**
+	 * The internal {@code (%print-object-str x escape)} renderer: the text the printer
+	 * writes for a value, {@code print-object} consulted. Generated by
+	 * {@code LispMacroExpander.printObjectStrDefuns} into any program that defines a
+	 * {@code print-object} method; nothing else changes shape. It is the RECURSIVE half:
+	 * a cons or a general rank-1 vector is walked element-wise so a nested instance
+	 * reaches the generic too, and every other value goes to
+	 * {@link #PRINT_OBJECT_LEAF_INTERNAL}.
+	 */
+	public static final String PRINT_OBJECT_STR_INTERNAL = "%PRINT-OBJECT-STR";
+
+	/**
+	 * The internal {@code (%print-object-leaf x escape)} renderer: the text for ONE value
+	 * that is not a walked container -- the {@code print-object} method route, the
+	 * condition {@code :report} route and the raw fallback. Generated beside
+	 * {@link #PRINT_OBJECT_STR_INTERNAL}, which is the only caller: splitting the two
+	 * keeps the recursive walk one fixed piece of Lisp source while the routing stays the
+	 * program-dependent half.
+	 */
+	public static final String PRINT_OBJECT_LEAF_INTERNAL = "%PRINT-OBJECT-LEAF";
+
+	/**
+	 * The internal {@code (%print-object-default x)}: the text {@code print-object}'s
+	 * system method writes for a value.
+	 */
+	public static final String PRINT_OBJECT_DEFAULT_INTERNAL = "%PRINT-OBJECT-DEFAULT";
+
+	/**
+	 * The internal {@code (%condition-report-str c)} renderer: a condition instance's
+	 * {@code :report} text (or, for the {@code simple-condition} family, its
+	 * {@code format-control}/{@code format-arguments} rendering), and nil for every value
+	 * whose class has no report at all. Generated by
+	 * {@code LispMacroExpander.conditionReportDefuns} into any program that can build a
+	 * condition; it is what makes {@code princ}/{@code ~A} of a condition print the
+	 * report instead of the generic {@code #<...>} instance syntax.
+	 */
+	public static final String CONDITION_REPORT_STR_INTERNAL = "%CONDITION-REPORT-STR";
+
+	/**
+	 * The internal {@code (%signal-text c fallback)}: the text a signal of {@code c}
+	 * reports, a failing report's text included. A signal's message operand, which no
+	 * backend evaluates at the signal: each runs it where the text is read
+	 * ({@code LispMacroExpander.conditionReportFallback}). Generated beside
+	 * {@link #CONDITION_REPORT_STR_INTERNAL}.
+	 */
+	public static final String SIGNAL_TEXT_INTERNAL = "%SIGNAL-TEXT";
+
+	/**
+	 * The internal {@code (%format-condition control arguments)} helper: the
+	 * {@code simple-condition} family's specified report, i.e. {@code format} applied to
+	 * the condition's {@code format-control} over its {@code format-arguments}. A control
+	 * that is a FUNCTION (also legal per the standard) is called on the stream and the
+	 * arguments instead. Generated beside {@link #CONDITION_REPORT_STR_INTERNAL}.
+	 */
+	public static final String FORMAT_CONDITION_INTERNAL = "%FORMAT-CONDITION";
+
+	/**
+	 * The internal {@code (%text-control text)}: the {@code format-control} whose
+	 * rendering is {@code text} verbatim -- the text with every {@code ~} doubled -- or
+	 * the value itself when it is not a string. Every site that stores already-rendered
+	 * TEXT (a signal's message, a built-in failure's) in a condition's
+	 * {@code format-control} stores it through this, so the report, which renders the
+	 * slot as a control, prints the text once.
+	 */
+	public static final String TEXT_CONTROL_INTERNAL = "%TEXT-CONTROL";
+
+	/**
+	 * The internal {@code (%control-text control)}: the rendering of a control whose only
+	 * directive is {@code ~~} -- every {@code ~~} undoubled -- or the value itself when
+	 * it is not a string. The inverse of {@link #TEXT_CONTROL_INTERNAL}, and all the
+	 * rendering {@link #FORMAT_CONDITION_INTERNAL} needs where the condition narrowing
+	 * proved no other directive can reach it.
+	 */
+	public static final String CONTROL_TEXT_INTERNAL = "%CONTROL-TEXT";
+
+	/**
+	 * The internal alias of {@code princ-to-string} that does NOT consult
+	 * {@code print-object}. It is what {@link #PRINT_OBJECT_STR_INTERNAL}'s fallback
+	 * calls; without it the fallback would re-enter the very rewrite that produced it.
+	 */
+	public static final String PRINC_TO_STRING_RAW = "%PRINC-TO-STRING";
+
+	/**
+	 * The non-consulting alias of {@code prin1-to-string}; see
+	 * {@link #PRINC_TO_STRING_RAW}.
+	 */
+	public static final String PRIN1_TO_STRING_RAW = "%PRIN1-TO-STRING";
+
+	/**
+	 * The internal {@code (%princ-piece x)} conversion: {@code princ-to-string} with the
+	 * {@code print-object} / {@code *print-case*} routing the public name has, but
+	 * WITHOUT the mutable-result wrap the public name finishes with on the compile
+	 * backends. It is what the codegen's own expansions build string PIECES with -- the
+	 * {@code format} directives, {@code map 'string}'s per-element accumulator, a
+	 * condition's default message, a computed {@code gensym} suffix -- where the string
+	 * is consumed by an internal append or written straight to a stream and the program
+	 * never receives it. The public {@code princ-to-string} wraps its result into a
+	 * mutable character vector so it carries identity
+	 * ({@code .kb/string-write-runtime.md}, "Allocated strings are mutable with
+	 * identity"); a piece built with it would pay that conversion once per PIECE, and
+	 * {@code map 'string} once per CHARACTER. Distinct from {@link #PRINC_TO_STRING_RAW},
+	 * which does not route through {@code print-object} and therefore cannot serve a
+	 * piece that renders a user instance.
+	 */
+	public static final String PRINC_PIECE_INTERNAL = "%PRINC-PIECE";
+
+	/**
+	 * The {@code prin1-to-string} twin of {@link #PRINC_PIECE_INTERNAL}: routed, escaped,
+	 * unwrapped.
+	 */
+	public static final String PRIN1_PIECE_INTERNAL = "%PRIN1-PIECE";
+
+	/**
+	 * The internal {@code (%decimal-piece x)} conversion: {@link #PRINC_PIECE_INTERNAL}
+	 * under {@code *print-base*} 10 and {@code *print-radix*} nil, which is what
+	 * {@code ~D} prints (CLHS 22.3.2.2). A leaf, lowered by
+	 * {@code LispMacroExpander.expandDecimalLeaf}: to {@link #DECIMAL_TEXT_INTERNAL}
+	 * where either variable can be off its default, to {@link #PRINC_PIECE_INTERNAL}
+	 * elsewhere, so the expansion itself names neither variable.
+	 */
+	public static final String DECIMAL_PIECE_INTERNAL = "%DECIMAL-PIECE";
+
+	/**
+	 * The stream twin of {@link #DECIMAL_PIECE_INTERNAL}: {@code (%decimal-princ x)}
+	 * writes the text to {@code *standard-output*}, and is {@code princ} where neither
+	 * variable can be off its default.
+	 */
+	public static final String DECIMAL_PRINC_INTERNAL = "%DECIMAL-PRINC";
+
+	/**
+	 * The internal {@code (%decimal-text x)} prelude defun the two decimal leaves lower
+	 * to in a program that names a printer-control variable:
+	 * {@link #PRINC_PIECE_INTERNAL} with {@code *print-base*} and {@code *print-radix*}
+	 * bound to their defaults.
+	 */
+	public static final String DECIMAL_TEXT_INTERNAL = "%DECIMAL-TEXT";
+
+	/**
+	 * The runtime {@code format} renderer's entry point,
+	 * {@code (%fmt-render control-string argument-list)} ({@code format-render.lisp}).
+	 */
+	public static final String FMT_RENDER = "%FMT-RENDER";
+
+	/**
+	 * The renderer's {@code (%fmt-apply stream control-string argument-list)}: what a
+	 * {@link #FORMATTER} function calls, answering the arguments left over.
+	 */
+	public static final String FMT_APPLY = "%FMT-APPLY";
+
+	/**
+	 * The {@code formatter} standard macro: a function of a stream and arguments that
+	 * renders its control string ({@link #FMT_APPLY}).
+	 */
+	public static final String FORMATTER = "FORMATTER";
+
+	/**
+	 * {@code (%fmt-starts-fresh-p control)}: whether a run-time control opens with a
+	 * {@code ~&}, which asks the destination's column
+	 * ({@code LispMacroExpander.formatStartsFresh}).
+	 */
+	public static final String FMT_STARTS_FRESH = "%FMT-STARTS-FRESH-P";
+
+	/**
+	 * The internal {@code (%print-cased x escape)} renderer: the text the printer writes
+	 * for a value with the printer-control variables applied -- {@link #PRINT_CASE_VAR}
+	 * to every SYMBOL it spells, {@link #PRINT_LENGTH_VAR} / {@link #PRINT_LEVEL_VAR} to
+	 * every list and vector, {@link #PRINT_GENSYM_VAR} to an uninterned symbol,
+	 * {@link #PRINT_BASE_VAR} / {@link #PRINT_RADIX_VAR} to every rational. A prelude
+	 * defun (one definition for all four backends), spliced into -- and called from the
+	 * printing operators of -- a program that mentions one of those variables (or calls
+	 * {@code write} / {@code write-to-string} with the keyword that binds one); nothing
+	 * else changes shape. Its own leaves are the non-consulting
+	 * {@link #PRINC_TO_STRING_RAW} / {@link #PRIN1_TO_STRING_RAW} conversions, which is
+	 * what makes the recursion terminate. The name predates the length/level/base half
+	 * (it started as the {@code *print-case*} renderer).
+	 */
+	public static final String PRINT_CASED_INTERNAL = "%PRINT-CASED";
+
+	/**
+	 * The internal {@code (%print-case-fold text)} helper: one symbol spelling under the
+	 * current {@link #PRINT_CASE_VAR}. {@code :downcase} is {@code string-downcase};
+	 * {@code :capitalize} keeps each word's first character and downcases the rest (CLHS
+	 * 22.1.3.3 converts only the UPPERCASE characters, so a lowercase one is never
+	 * upcased -- which is where this differs from {@code string-capitalize}).
+	 */
+	public static final String PRINT_CASE_FOLD_INTERNAL = "%PRINT-CASE-FOLD";
+
+	/**
+	 * The internal {@code (%unescaped-symbol-text s)} helper: undoes the {@code |...|}
+	 * framing {@code prin1-to-string} adds to a symbol name that is not upcase-invariant,
+	 * so a caller that reads a KNOWN, lowercase-prefixed internal tag spelling back out
+	 * of {@code prin1-to-string}'s text -- {@code type-of} and {@code symbol-package}
+	 * peeling {@code %struct-}/{@code %class-} off a {@code %class-designator} answer --
+	 * keeps matching against the bare prefix rather than a piped one. Strips exactly one
+	 * leading and trailing {@code |} when present; does not undo interior
+	 * backslash-doubling, since neither prelude consumer's inputs (a tag prefix and a
+	 * reader-upcased type name) can contain a literal {@code |} or {@code \} themselves.
+	 * Not a substitute for {@link #PRIN1_TO_STRING_RAW}, which exists to dodge the
+	 * {@code print-object} REWRITE rather than the escaping itself.
+	 */
+	public static final String UNESCAPED_SYMBOL_TEXT_INTERNAL = "%UNESCAPED-SYMBOL-TEXT";
+
+	/**
+	 * The internal {@code (%pc-walk x escape path depth)} helper: the recursive half of
+	 * {@link #PRINT_CASED_INTERNAL}, threading the rendering path and depth of the shared
+	 * cycle guard ({@code RenderCycleGuard}) through itself so a cyclic cons or vector
+	 * prints finitely -- the twin of the {@code %print-object-str} walk's
+	 * {@code %pos-walk}.
+	 */
+	public static final String PRINT_CASED_WALK_INTERNAL = "%PC-WALK";
+
+	/**
+	 * The internal {@code (%pc-on-path x path)} helper: the identity scan over
+	 * {@link #PRINT_CASED_WALK_INTERNAL}'s rendering path.
+	 */
+	public static final String PRINT_CASED_ON_PATH_INTERNAL = "%PC-ON-PATH";
+
+	/**
+	 * The internal {@code (%pc-chain-stop x)} helper: Floyd's cycle detection over a cdr
+	 * chain for {@link #PRINT_CASED_WALK_INTERNAL} -- the cell where the cycle begins, or
+	 * nil for a terminating chain.
+	 */
+	public static final String PRINT_CASED_CHAIN_STOP_INTERNAL = "%PC-CHAIN-STOP";
+
+	/**
+	 * The internal {@code (%pc-unqualified symbol text)} helper (prelude): the
+	 * {@code prin1} text of a symbol with its package qualifier dropped when the symbol
+	 * is accessible in the current {@code *package*} (CLHS 22.1.3.3.1) -- the symbol leaf
+	 * {@link #PRINT_CASED_WALK_INTERNAL} takes under {@code prin1}. It parses the
+	 * qualifier off the raw text and asks {@link #SYMBOL_PRINT_BARE_P_INTERNAL}.
+	 */
+	public static final String PRINT_CASED_UNQUALIFIED_INTERNAL = "%PC-UNQUALIFIED";
+
+	/**
+	 * The internal {@code (%pc-qualifier text colon)} primitive: the {@code prin1} text
+	 * of a symbol that keeps its qualifier, spelled with the current package's nickname
+	 * for its home when it has one. The compile paths lower the call to the text itself
+	 * for a program with no nicknames.
+	 */
+	public static final String PRINT_CASED_QUALIFIER_INTERNAL = "%PC-QUALIFIER";
+
+	/**
+	 * The definition behind {@link #PRINT_CASED_QUALIFIER_INTERNAL} in a compiled program
+	 * with nicknames ({@code LispMacroExpander.injectLocalNicknames}).
+	 */
+	public static final String PRINT_CASED_LOCAL_QUALIFIER_INTERNAL = "%PC-LOCAL-QUALIFIER";
+
+	/**
+	 * The internal {@code (%pc-instance-text text)} helper (prelude): the {@code prin1}
+	 * text of an instance with the type name it leads with, in {@code #<NAME ...>} or
+	 * {@code #S(NAME ...)}, spelled as {@link #PRINT_CASED_UNQUALIFIED_INTERNAL} spells a
+	 * symbol. The instance leaf of {@link #PRINT_CASED_WALK_INTERNAL}.
+	 */
+	public static final String PRINT_CASED_INSTANCE_TEXT_INTERNAL = "%PC-INSTANCE-TEXT";
+
+	/**
+	 * The internal {@code (%pc-instance x escape path depth level)} half of
+	 * {@link #PRINT_CASED_WALK_INTERNAL}: an instance with slot syntax, walked.
+	 */
+	public static final String PRINT_CASED_INSTANCE_INTERNAL = "%PC-INSTANCE";
+
+	/**
+	 * The internal {@code (%symbol-print-bare-p symbol package-spelling external-p)}
+	 * primitive: whether a package-qualified symbol prints without its qualifier in the
+	 * current {@code *package*}. The interpreter answers from the live registry
+	 * ({@code PackageResolver.printsBare}); the compile paths lower the call onto the
+	 * baked {@code SymbolPrintTable} ({@code LispMacroExpander.expandSymbolPrintBareP}).
+	 */
+	public static final String SYMBOL_PRINT_BARE_P_INTERNAL = "%SYMBOL-PRINT-BARE-P";
+
+	/**
+	 * The internal {@code (%symbol-print-prefix symbol)} primitive, the same question of
+	 * a symbol spelled bare: the qualifier of its home, {@code cl} or {@code cl-user},
+	 * where the current {@code *package*} reads the name as something else, nil where it
+	 * prints bare. The interpreter answers from the live registry
+	 * ({@code PackageResolver.bareSymbolPrefix}); the compile paths lower the call onto
+	 * the baked {@code SymbolPrintTable}
+	 * ({@code LispMacroExpander.expandSymbolPrintPrefix}).
+	 */
+	public static final String SYMBOL_PRINT_PREFIX_INTERNAL = "%SYMBOL-PRINT-PREFIX";
+
+	/**
+	 * The internal {@code (%home-spelling text)} primitive: what a one-argument
+	 * {@code intern} takes to answer the symbol whose canonical spelling is the text,
+	 * whatever package is current. The text itself on the compile paths, where that
+	 * {@code intern} builds it from the spelling; on the interpreter, which homes a bare
+	 * name in the current package, a bare spelling comes back qualified by
+	 * {@code cl-user}.
+	 */
+	public static final String HOME_SPELLING_INTERNAL = "%HOME-SPELLING";
+
+	/**
+	 * The internal {@code (%print-package-raw-p)} primitive: whether the current
+	 * {@code *package*} is the pristine {@code cl-user}, under which no qualified symbol
+	 * is accessible and the raw conversion is already exact -- the package half of
+	 * {@link #PRINT_CASED_INTERNAL}'s fast path. Lowered to a constant on the compile
+	 * paths when the program never leaves {@code cl-user}.
+	 */
+	public static final String PRINT_PACKAGE_RAW_P_INTERNAL = "%PRINT-PACKAGE-RAW-P";
+
+	/**
+	 * The internal {@code (%pc-fold text)} leaf of {@link #PRINT_CASED_WALK_INTERNAL}:
+	 * {@link #PRINT_CASE_FOLD_INTERNAL} when the program names a printer-control
+	 * variable, the text itself otherwise -- so a program routed through the walk for its
+	 * {@code *package*} alone never carries the case fold. Lowered by the compile paths
+	 * ({@code LispMacroExpander.expandPrintCasedLeaf}); the interpreter always calls the
+	 * fold.
+	 */
+	public static final String PRINT_CASED_FOLD_LEAF_INTERNAL = "%PC-FOLD";
+
+	/**
+	 * The internal {@code (%pc-type-name text)} leaf of {@code print-unreadable-object}'s
+	 * {@code :type}: the type name as {@code write} spells that symbol under the printer
+	 * controls in effect, and the text itself where a program can have none.
+	 */
+	public static final String PRINT_CASED_TYPE_NAME_INTERNAL = "%PC-TYPE-NAME";
+
+	/**
+	 * The internal {@code (%pc-radixed n)} leaf of {@link #PRINT_CASED_WALK_INTERNAL}:
+	 * {@link #PRINT_RADIXED_INTERNAL} when the program names a printer-control variable,
+	 * the raw conversion otherwise (the walk only reaches it when {@code *print-base*} /
+	 * {@code *print-radix*} are off their defaults, which such a program cannot do).
+	 */
+	public static final String PRINT_CASED_RADIXED_LEAF_INTERNAL = "%PC-RADIXED";
+
+	/**
+	 * The internal {@code (%pc-raw x)} leaf of {@link #PRINT_CASED_INTERNAL}'s fast path:
+	 * {@link #PRINT_READABLE_RAW_INTERNAL} when the program can print readably, the raw
+	 * {@code prin1} conversion otherwise. Lowered by the compile paths
+	 * ({@code LispMacroExpander.expandPrintReadableLeaf}), as is every leaf below.
+	 */
+	public static final String PRINT_CASED_RAW_LEAF_INTERNAL = "%PC-RAW";
+
+	/**
+	 * The internal {@code (%pc-leaf x)} leaf of {@link #PRINT_CASED_WALK_INTERNAL}:
+	 * {@link #PRINT_READABLE_LEAF_INTERNAL} when the program can print readably, the raw
+	 * {@code prin1} conversion otherwise.
+	 */
+	public static final String PRINT_CASED_TEXT_LEAF_INTERNAL = "%PC-LEAF";
+
+	/**
+	 * The internal {@code (%pc-instance-check x escape)} leaf of the walks' instance
+	 * arms: {@link #PRINT_READABLE_INSTANCE_INTERNAL} when the program can print readably
+	 * and nil otherwise.
+	 */
+	public static final String PRINT_CASED_INSTANCE_CHECK_INTERNAL = "%PC-INSTANCE-CHECK";
+
+	/**
+	 * The internal {@code (%pc-without-readably form)} form around text a signal or a
+	 * report renders: {@code form} with {@code *print-readably*} bound to nil where the
+	 * program can print readably, and {@code form} alone otherwise. SBCL formats a
+	 * condition's message when it reports, under {@code princ}; here a message is
+	 * rendered at the signal, which must not raise {@code print-not-readable} in its
+	 * place.
+	 */
+	public static final String PRINT_WITHOUT_READABLY_INTERNAL = "%PC-WITHOUT-READABLY";
+
+	/**
+	 * The internal {@code (%pc-not-readable x)} prelude defun: signals
+	 * {@code print-not-readable} for {@code x} under {@code *print-readably*}. Spliced
+	 * only for a program that can print readably, so its being defined is what the leaves
+	 * above lower on.
+	 */
+	public static final String PRINT_NOT_READABLE_INTERNAL = "%PC-NOT-READABLE";
+
+	/**
+	 * The internal {@code (%pc-readable-raw x)} prelude defun: the raw {@code prin1}
+	 * text, or the walk when {@code *print-readably*} is on and that text holds
+	 * {@code #<}.
+	 */
+	public static final String PRINT_READABLE_RAW_INTERNAL = "%PC-READABLE-RAW";
+
+	/**
+	 * The internal {@code (%pc-readable-leaf x)} prelude defun: the {@code prin1} text of
+	 * a value the walk does not take apart, under {@code *print-readably*} signalling for
+	 * an unreadable one and spelling a hash table or an array of rank other than 1
+	 * itself.
+	 */
+	public static final String PRINT_READABLE_LEAF_INTERNAL = "%PC-READABLE-LEAF";
+
+	/**
+	 * The internal {@code (%pc-readable-instance x escape)} prelude defun: signals for an
+	 * instance that prints as {@code #<...>} under {@code prin1}.
+	 */
+	public static final String PRINT_READABLE_INSTANCE_INTERNAL = "%PC-READABLE-INSTANCE";
+
+	/**
+	 * The internal {@code (%pc-readable-nested x)} prelude defun: spells a hash table or
+	 * an array of rank other than 1 from the {@code prin1} text of its elements, refusing
+	 * one that holds itself.
+	 */
+	public static final String PRINT_READABLE_NESTED_INTERNAL = "%PC-READABLE-NESTED";
+
+	/** The internal {@code (%pc-holds-unreadable text)} prelude defun. */
+	public static final String PRINT_HOLDS_UNREADABLE_INTERNAL = "%PC-HOLDS-UNREADABLE";
+
+	/** The internal {@code (%pc-readable-table table)} prelude defun. */
+	public static final String PRINT_READABLE_TABLE_INTERNAL = "%PC-READABLE-TABLE";
+
+	/** The internal {@code (%pc-readable-rows a dims start size)} prelude defun. */
+	public static final String PRINT_READABLE_ROWS_INTERNAL = "%PC-READABLE-ROWS";
+
+	/**
+	 * The internal {@code (%print-radixed n)} helper: an integer or ratio spelled under
+	 * the current {@link #PRINT_BASE_VAR} and {@link #PRINT_RADIX_VAR} -- {@code FF},
+	 * {@code #xFF}, {@code 255.}, {@code #3r100110}, {@code #x1/FF} -- the leaf
+	 * {@link #PRINT_CASED_WALK_INTERNAL} takes for a rational when either variable is off
+	 * its default. Digits are upper-case, as CL prints them.
+	 */
+	public static final String PRINT_RADIXED_INTERNAL = "%PRINT-RADIXED";
+
+	/**
+	 * The internal {@code (%print-in-base n base)} helper: the bare digits of an integer
+	 * in a base from 2 to 36, with a leading {@code -} for a negative one.
+	 */
+	public static final String PRINT_IN_BASE_INTERNAL = "%PRINT-IN-BASE";
+
+	/**
+	 * The {@code type-error-datum} condition reader (prelude): the {@code datum} slot of
+	 * a {@code type-error}. Its {@code expected-type} twin is
+	 * {@link #TYPE_ERROR_EXPECTED_TYPE}.
+	 */
+	public static final String TYPE_ERROR_DATUM = "TYPE-ERROR-DATUM";
+
+	/**
+	 * The {@code type-error-expected-type} condition reader; see
+	 * {@link #TYPE_ERROR_DATUM}.
+	 */
+	public static final String TYPE_ERROR_EXPECTED_TYPE = "TYPE-ERROR-EXPECTED-TYPE";
+
+	/**
+	 * The {@code cell-error-name} condition reader: the {@code name} slot every
+	 * {@code cell-error} (so {@code unbound-variable}, {@code undefined-function} and
+	 * {@code unbound-slot}) carries.
+	 */
+	public static final String CELL_ERROR_NAME = "CELL-ERROR-NAME";
+
+	/** The {@code arithmetic-error-operation} condition reader. */
+	public static final String ARITHMETIC_ERROR_OPERATION = "ARITHMETIC-ERROR-OPERATION";
+
+	/** The {@code arithmetic-error-operands} condition reader. */
+	public static final String ARITHMETIC_ERROR_OPERANDS = "ARITHMETIC-ERROR-OPERANDS";
+
+	/**
+	 * The {@code unbound-slot-instance} condition reader: the object whose slot was
+	 * unbound when {@code unbound-slot} was signalled.
+	 */
+	public static final String UNBOUND_SLOT_INSTANCE = "UNBOUND-SLOT-INSTANCE";
+
+	/**
+	 * The {@code print-not-readable-object} condition reader: the object that could not
+	 * be printed readably.
+	 */
+	public static final String PRINT_NOT_READABLE_OBJECT = "PRINT-NOT-READABLE-OBJECT";
+
+	/**
+	 * The {@code stream-error-stream} condition reader: the {@code stream} slot every
+	 * {@code stream-error} (so {@code end-of-file} and {@code reader-error}) carries.
+	 */
+	public static final String STREAM_ERROR_STREAM = "STREAM-ERROR-STREAM";
+
+	/**
+	 * The {@code file-error-pathname} condition reader: the {@code pathname} slot a
+	 * {@code file-error} carries -- the designator the failed operation was given.
+	 */
+	public static final String FILE_ERROR_PATHNAME = "FILE-ERROR-PATHNAME";
+
+	/** The {@code simple-condition-format-control} condition reader. */
+	public static final String SIMPLE_CONDITION_FORMAT_CONTROL = "SIMPLE-CONDITION-FORMAT-CONTROL";
+
+	/** The {@code simple-condition-format-arguments} condition reader. */
+	public static final String SIMPLE_CONDITION_FORMAT_ARGUMENTS = "SIMPLE-CONDITION-FORMAT-ARGUMENTS";
+
+	/** The {@code array-dimension-limit} constant variable. */
+	public static final String ARRAY_DIMENSION_LIMIT = "ARRAY-DIMENSION-LIMIT";
+
+	/** The {@code array-rank-limit} constant variable. */
+	public static final String ARRAY_RANK_LIMIT = "ARRAY-RANK-LIMIT";
+
+	/** The {@code call-arguments-limit} constant variable. */
+	public static final String CALL_ARGUMENTS_LIMIT = "CALL-ARGUMENTS-LIMIT";
+
+	/** The {@code lambda-parameters-limit} constant variable. */
+	public static final String LAMBDA_PARAMETERS_LIMIT = "LAMBDA-PARAMETERS-LIMIT";
+
+	/** The {@code multiple-values-limit} constant variable. */
+	public static final String MULTIPLE_VALUES_LIMIT = "MULTIPLE-VALUES-LIMIT";
+
+	/**
+	 * The {@code internal-time-units-per-second} constant variable: 1000 on every
+	 * backend, since {@code get-internal-real-time}/{@code get-internal-run-time} count
+	 * milliseconds.
+	 */
+	public static final String INTERNAL_TIME_UNITS_PER_SECOND = "INTERNAL-TIME-UNITS-PER-SECOND";
+
+	/** The {@code char-code-limit} constant variable. */
+	public static final String CHAR_CODE_LIMIT = "CHAR-CODE-LIMIT";
+
+	/**
+	 * The {@code lambda-list-keywords} constant variable, bound as a global holding the
+	 * list of the supported {@code &}-symbols (see {@link ClConstants}).
+	 */
+	public static final String LAMBDA_LIST_KEYWORDS = "LAMBDA-LIST-KEYWORDS";
+
+	/** The {@code pi} constant variable, bound as a global holding the double. */
+	public static final String PI = "PI";
+
+	/** The {@code array-total-size-limit} constant variable. */
+	public static final String ARRAY_TOTAL_SIZE_LIMIT = "ARRAY-TOTAL-SIZE-LIMIT";
+
+	/**
+	 * The {@code most-positive-fixnum} constant variable, bound as a global with a
+	 * per-backend value (see {@link ClConstants}): the interpreter and the JVM backend
+	 * hold a Java long, a WASM fixnum is an unboxed i31 reference.
+	 */
+	public static final String MOST_POSITIVE_FIXNUM = "MOST-POSITIVE-FIXNUM";
+
+	/** The {@code most-negative-fixnum} constant variable, the sibling of the above. */
+	public static final String MOST_NEGATIVE_FIXNUM = "MOST-NEGATIVE-FIXNUM";
+
+	/** The {@code boole-1} constant. */
+	public static final String BOOLE_1 = "BOOLE-1";
+
+	/** The {@code boole-2} constant. */
+	public static final String BOOLE_2 = "BOOLE-2";
+
+	/** The {@code boole-and} constant. */
+	public static final String BOOLE_AND = "BOOLE-AND";
+
+	/** The {@code boole-andc1} constant. */
+	public static final String BOOLE_ANDC1 = "BOOLE-ANDC1";
+
+	/** The {@code boole-andc2} constant. */
+	public static final String BOOLE_ANDC2 = "BOOLE-ANDC2";
+
+	/** The {@code boole-c1} constant. */
+	public static final String BOOLE_C1 = "BOOLE-C1";
+
+	/** The {@code boole-c2} constant. */
+	public static final String BOOLE_C2 = "BOOLE-C2";
+
+	/** The {@code boole-clr} constant. */
+	public static final String BOOLE_CLR = "BOOLE-CLR";
+
+	/** The {@code boole-eqv} constant. */
+	public static final String BOOLE_EQV = "BOOLE-EQV";
+
+	/** The {@code boole-ior} constant. */
+	public static final String BOOLE_IOR = "BOOLE-IOR";
+
+	/** The {@code boole-nand} constant. */
+	public static final String BOOLE_NAND = "BOOLE-NAND";
+
+	/** The {@code boole-nor} constant. */
+	public static final String BOOLE_NOR = "BOOLE-NOR";
+
+	/** The {@code boole-orc1} constant. */
+	public static final String BOOLE_ORC1 = "BOOLE-ORC1";
+
+	/** The {@code boole-orc2} constant. */
+	public static final String BOOLE_ORC2 = "BOOLE-ORC2";
+
+	/** The {@code boole-set} constant. */
+	public static final String BOOLE_SET = "BOOLE-SET";
+
+	/** The {@code boole-xor} constant. */
+	public static final String BOOLE_XOR = "BOOLE-XOR";
+
+	/** The {@code *print-circle*} variable (accepted and ignored by the printer). */
+	public static final String PRINT_CIRCLE_VAR = "*PRINT-CIRCLE*";
+
+	/**
+	 * {@code *modules*} -- the list of module name STRINGS {@code provide} has recorded,
+	 * and the very set {@code require} consults. On the compile paths it stays nil: a
+	 * {@code require} is resolved by splicing the file in at compile time
+	 * ({@code LoadInliner}), so no module is ever provided at run time. esrap's
+	 * editor-support reads it to detect a swank/slynk image.
+	 */
+	public static final String MODULES_VAR = "*MODULES*";
+
+	/**
+	 * {@code *print-escape*} -- t while {@code prin1}/{@code print}/{@code ~S} render and
+	 * nil while {@code princ}/{@code ~A} do, bound around the {@code print-object} method
+	 * call so a method can tell the two apart (quri's {@code uri} method renders the bare
+	 * URI under princ and {@code #<TYPE uri>} under prin1). Its global value is t, CL's.
+	 */
+	public static final String PRINT_ESCAPE_VAR = "*PRINT-ESCAPE*";
+
+	/**
+	 * {@code *print-readably*} -- nil globally, t under {@code with-standard-io-syntax}.
+	 * True picks the {@code prin1} conversion where the printer chooses one
+	 * ({@code write}, a {@code write-to-string} keyword); a portable {@code print-object}
+	 * method tests it alongside {@link #PRINT_ESCAPE_VAR}.
+	 */
+	public static final String PRINT_READABLY_VAR = "*PRINT-READABLY*";
+
+	/**
+	 * {@code *print-pretty*} -- t, as in most implementations. It gates only the
+	 * pretty-printer subset ({@link #PPRINT_NEWLINE} and the format logical block); the
+	 * ordinary printer never changes layout, so binding it nil only turns MANDATORY line
+	 * breaks off.
+	 */
+	public static final String PRINT_PRETTY_VAR = "*PRINT-PRETTY*";
+
+	/**
+	 * {@code *print-right-margin*} -- nil, and accepted-and-ignored: a conditional line
+	 * break needs the stream's current column, which no backend tracks.
+	 */
+	public static final String PRINT_RIGHT_MARGIN_VAR = "*PRINT-RIGHT-MARGIN*";
+
+	/**
+	 * {@code *print-miser-width*} -- nil, accepted and ignored (see the margin above).
+	 */
+	public static final String PRINT_MISER_WIDTH_VAR = "*PRINT-MISER-WIDTH*";
+
+	/** {@code *print-lines*} -- nil, accepted and ignored (see the margin above). */
+	public static final String PRINT_LINES_VAR = "*PRINT-LINES*";
+
+	/**
+	 * {@code *print-length*} -- nil (print every element), which is also what the printer
+	 * does; binding it does not truncate. esrap's {@code print-object} on a parse result
+	 * binds it, so it has to EXIST on the compile paths.
+	 */
+	public static final String PRINT_LENGTH_VAR = "*PRINT-LENGTH*";
+
+	/** {@code *print-level*} -- nil (print to any depth), like the printer. */
+	public static final String PRINT_LEVEL_VAR = "*PRINT-LEVEL*";
+
+	/** {@code *print-base*} -- 10, the base the printer writes integers in. */
+	public static final String PRINT_BASE_VAR = "*PRINT-BASE*";
+
+	/** {@code *print-radix*} -- nil: no radix prefix, like the printer. */
+	public static final String PRINT_RADIX_VAR = "*PRINT-RADIX*";
+
+	/**
+	 * {@code *print-case*} -- {@code :upcase} by default, which is how the printer spells
+	 * a symbol (the reader upcases, {@code .kb/reader-case-upcase.md}). HONORED: binding
+	 * it to {@code :downcase} or {@code :capitalize} converts the case of every symbol
+	 * the printing operators spell, through the shared {@link #PRINT_CASED_INTERNAL}
+	 * renderer ({@code .kb/pretty-printer.md}).
+	 */
+	public static final String PRINT_CASE_VAR = "*PRINT-CASE*";
+
+	/**
+	 * The default (and rontolisp-canonical) {@link #PRINT_CASE_VAR} value: symbols print
+	 * with the stored, upper-case spelling the reader gave them
+	 * ({@code .kb/reader-case-upcase.md}). {@code :downcase} and {@code :capitalize} are
+	 * the two values that make the printer convert.
+	 */
+	public static final String PRINT_CASE_UPCASE = ":UPCASE";
+
+	/** {@code *print-array*} -- t: an array prints its elements, like the printer. */
+	public static final String PRINT_ARRAY_VAR = "*PRINT-ARRAY*";
+
+	/** {@code *print-gensym*} -- t, CL's default. */
+	public static final String PRINT_GENSYM_VAR = "*PRINT-GENSYM*";
+
+	/** The {@code *gensym-counter*} special variable. */
+	public static final String GENSYM_COUNTER_VAR = "*GENSYM-COUNTER*";
+
+	/**
+	 * {@code *macroexpand-hook*}: calls the expander it is given, for a compiler-macro
+	 * expander that calls through it (introspect-environment's); the expansions do not
+	 * consult it.
+	 */
+	public static final String MACROEXPAND_HOOK_VAR = "*MACROEXPAND-HOOK*";
+
+	/** The {@code *random-state*} special variable. */
+	public static final String RANDOM_STATE_VAR = "*RANDOM-STATE*";
+
+	/**
+	 * {@code *trace-output*} -- the t designator (the process standard output), like
+	 * {@link #STANDARD_OUTPUT_VAR}. esrap's rule tracing formats to it.
+	 */
+	public static final String TRACE_OUTPUT_VAR = "*TRACE-OUTPUT*";
+
+	/** {@code *debug-io*} -- the t designator, read and written like the terminal. */
+	public static final String DEBUG_IO_VAR = "*DEBUG-IO*";
+
+	/** {@code *query-io*} -- the t designator (see {@link #DEBUG_IO_VAR}). */
+	public static final String QUERY_IO_VAR = "*QUERY-IO*";
+
+	/** {@code *terminal-io*} -- the t designator (see {@link #DEBUG_IO_VAR}). */
+	public static final String TERMINAL_IO_VAR = "*TERMINAL-IO*";
+
+	/**
+	 * {@code *print-pprint-dispatch*} -- the current pretty-print dispatch table, a
+	 * mutable one-element list holding the entry list. Real entries, real lookup through
+	 * {@link #PPRINT_DISPATCH}; the ordinary printing operators do NOT consult it (see
+	 * {@code .kb/pretty-printer.md}).
+	 */
+	public static final String PRINT_PPRINT_DISPATCH_VAR = "*PRINT-PPRINT-DISPATCH*";
+
+	/**
+	 * {@code %mask-signed-field} -- SBCL's {@code sb-c::mask-signed-field}: the low
+	 * {@code size} bits of an integer read as a signed {@code size}-bit integer. The size
+	 * must be a literal on the compile path (the lowering's masks are literals), and a
+	 * non-integer signals the type error {@code logxor} reports on every backend. The
+	 * compiled backends fuse {@code (%mask-signed-field 64 (* a b))} into one wrapping
+	 * multiply (.kb/jvm-int-fusion.md); the Clojure front end's unchecked verbs wrap
+	 * through it.
+	 */
+	public static final String MASK_SIGNED_FIELD = "%MASK-SIGNED-FIELD";
+
+	/**
+	 * {@code %ieee754-double-bits} -- the IEEE 754 bits of a double as an unsigned 64-bit
+	 * integer. The float-features shim library is built over these four.
+	 */
+	public static final String IEEE754_DOUBLE_BITS = "%IEEE754-DOUBLE-BITS";
+
+	/** {@code %ieee754-double-from-bits} -- the double of unsigned 64-bit IEEE bits. */
+	public static final String IEEE754_DOUBLE_FROM_BITS = "%IEEE754-DOUBLE-FROM-BITS";
+
+	/**
+	 * {@code %strict-math} -- {@code (%strict-math :name x [y])} is
+	 * {@code java.lang.StrictMath.name(x[, y])} over doubles, the same bits on every
+	 * backend: {@code compiler.StrictMathFunction} lists the names and their shapes. It
+	 * never leaves the reals ({@code :log} of a negative is NaN, where {@code log}
+	 * answers a complex). The keyword must be a literal on the compile path. The Clojure
+	 * front end's {@code clojure.math} is built on it.
+	 */
+	public static final String STRICT_MATH_INTERNAL = "%STRICT-MATH";
+
+	/**
+	 * The {@code %decimal-double} internal prelude helper: the double nearest
+	 * {@code mantissa * 10^exponent} (a non-negative integer mantissa), ties to even --
+	 * {@code float} of the exact rational, which every backend rounds once -- with a
+	 * value surely past either end of the double range answered from the mantissa's bit
+	 * length, so a huge exponent never builds its power of ten. The one decimal-to-double
+	 * conversion of the Scheme reader ({@code %scheme-decimal}) and the Clojure reader's
+	 * decimal arm, which agree with Java's {@code parseDouble}.
+	 */
+	public static final String DECIMAL_DOUBLE_INTERNAL = "%DECIMAL-DOUBLE";
+
+	/**
+	 * {@code %ieee754-single-bits} -- the IEEE 754 single-precision bits (unsigned
+	 * 32-bit) of a float rounded to single precision.
+	 */
+	public static final String IEEE754_SINGLE_BITS = "%IEEE754-SINGLE-BITS";
+
+	/**
+	 * The WASM backend's own half of {@link #IEEE754_DOUBLE_BITS}: the 64 bits as a
+	 * SIGNED integer (an {@code i64} reinterpretation), which the lowering then lifts
+	 * into the unsigned range. Never read from source.
+	 */
+	public static final String IEEE754_DOUBLE_BITS_SIGNED = "%IEEE754-DOUBLE-BITS-SIGNED";
+
+	/**
+	 * The WASM backend's own half of {@link #IEEE754_DOUBLE_FROM_BITS}: the double whose
+	 * bits are a SIGNED 64-bit integer. Never read from source.
+	 */
+	public static final String IEEE754_DOUBLE_FROM_SIGNED_BITS = "%IEEE754-DOUBLE-FROM-SIGNED-BITS";
+
+	/** {@code %ieee754-single-from-bits} -- the float of unsigned 32-bit IEEE bits. */
+	public static final String IEEE754_SINGLE_FROM_BITS = "%IEEE754-SINGLE-FROM-BITS";
+
+	/**
+	 * {@code %single-float-p} -- the {@code single-float} type test: a float a binary32
+	 * holds exactly (a NaN included), nil for every other value. Every float here is one
+	 * binary64, so {@code single-float} names that SUBSET of the floats
+	 * ({@code .kb/declarations-type-checks.md}, "single-float is the floats a binary32
+	 * holds").
+	 */
+	public static final String SINGLE_FLOAT_P_INTERNAL = "%SINGLE-FLOAT-P";
+
+	/**
+	 * {@code %single-float} -- the binary32 nearest a float, as the float it is: what
+	 * {@code coerce} to {@code single-float} and an {@code f}/{@code s} exponent marker
+	 * answer.
+	 */
+	public static final String SINGLE_FLOAT_INTERNAL = "%SINGLE-FLOAT";
+
+	/**
+	 * {@code %identity-hash} -- the identity hash of an aggregate (a cons, a vector or
+	 * other array, a table, a function, an instance) as a signed 32-bit integer: the same
+	 * for the same object for its whole life whatever its contents do, the hash an
+	 * {@code eq} table places it by ({@code System.identityHashCode} on the interpreter
+	 * and the JVM, the wasm object's identity-hash slot, which a program calling this
+	 * carries, .kb/hash-tables.md). Values differ between backends and runs; an atom (a
+	 * number, a character, a symbol) has no identity apart from its value, and what it
+	 * answers for one is unspecified. The Clojure front end's {@code hash} of a function,
+	 * an atom or a type without a hash of its own reads it, the oracle's
+	 * {@code Object.hashCode}.
+	 */
+	public static final String IDENTITY_HASH = "%IDENTITY-HASH";
+
+	/**
+	 * {@code rontolisp:bfloat16-bits} -- the bfloat16 bit pattern of a real, as an
+	 * integer 0..65535, rounded to nearest even. Unlike the {@code %ieee754-*} quartet
+	 * this pair is portable to every backend: sixteen bits fit a fixnum everywhere.
+	 */
+	public static final String BFLOAT16_BITS = "BFLOAT16-BITS";
+
+	/**
+	 * {@code rontolisp:bits-bfloat16} -- the double a bfloat16 bit pattern encodes.
+	 * Widening is exact and total, so this is the inverse of {@link #BFLOAT16_BITS} over
+	 * all 65536 patterns.
+	 */
+	public static final String BITS_BFLOAT16 = "BITS-BFLOAT16";
+
+	/** The {@code closer-mop} shim package (and built-in ASDF system) name. */
+	public static final String CLOSER_MOP_PKG = "CLOSER-MOP";
+
+	/**
+	 * The {@code closer-common-lisp} package (nickname {@code c2cl}): a flat re-export of
+	 * the {@code cl} externals overlaid with the {@code closer-mop} externals (closer-mop
+	 * wins name collisions), like the upstream closer-mop library's package of the same
+	 * name -- what postmodern's DAO layer {@code :use}s.
+	 */
+	public static final String CLOSER_COMMON_LISP_PKG = "CLOSER-COMMON-LISP";
+
+	/**
+	 * {@code closer-mop:class-slots} -- the effective-slot-definition metaobjects of a
+	 * class metaobject, or the legacy {@code (name type)} pairs of a class-of TAG symbol
+	 * ({@code %class-slot-defs}).
+	 */
+	public static final String CLASS_SLOTS = "CLASS-SLOTS";
+
+	/** {@code closer-mop:ensure-finalized} -- identity (metaobjects are born final). */
+	public static final String ENSURE_FINALIZED = "ENSURE-FINALIZED";
+
+	/**
+	 * {@code closer-mop:compute-slots} -- the effective slots of a class metaobject.
+	 * Finalization is eager here ({@link #FINALIZE_INHERITANCE}), so this is
+	 * {@code class-slots} over the already-final metaobject (trivia level2's
+	 * find-effective-slot is the driving consumer).
+	 */
+	public static final String COMPUTE_SLOTS = "COMPUTE-SLOTS";
+
+	/**
+	 * {@code closer-mop:generic-function-lambda-list}. A defgeneric's dispatcher is a
+	 * plain function value on every backend -- no metaobject exists to read a lambda list
+	 * from -- so the shim defun signals. Reachable only through an explicit call: the
+	 * {@code generic-function} type is empty (see the macro expander's type tests), so
+	 * trivia level2's {@code (etypecase fn (generic-function ...))} guard routes around
+	 * it to the portable test-call fallback.
+	 */
+	public static final String GENERIC_FUNCTION_LAMBDA_LIST = "GENERIC-FUNCTION-LAMBDA-LIST";
+
+	/** {@code closer-mop:classp} -- whether a value is a class metaobject. */
+	public static final String CLASSP = "CLASSP";
+
+	/**
+	 * The {@code class-name} standard function (and {@code closer-mop:class-name}): the
+	 * name symbol of a class metaobject. The core side is a prelude defun reading the
+	 * metaobject's name slot ({@code (%obj-ref class 0)} -- the seeded
+	 * {@code standard-class} slot-order contract).
+	 */
+	public static final String CLASS_NAME = "CLASS-NAME";
+
+	/** {@code closer-mop:class-direct-superclasses} over a class metaobject. */
+	public static final String CLASS_DIRECT_SUPERCLASSES = "CLASS-DIRECT-SUPERCLASSES";
+
+	/** {@code closer-mop:class-finalized-p} over a class metaobject. */
+	public static final String CLASS_FINALIZED_P = "CLASS-FINALIZED-P";
+
+	/** {@code closer-mop:slot-definition-name}. */
+	public static final String SLOT_DEFINITION_NAME = "SLOT-DEFINITION-NAME";
+
+	/** {@code closer-mop:slot-definition-initargs}. */
+	public static final String SLOT_DEFINITION_INITARGS = "SLOT-DEFINITION-INITARGS";
+
+	/** {@code closer-mop:slot-definition-type}. */
+	public static final String SLOT_DEFINITION_TYPE = "SLOT-DEFINITION-TYPE";
+
+	/**
+	 * {@code closer-mop:validate-superclass} -- the metaclass protocol's compatibility
+	 * check; the system default method ({@code macro/mop-protocol.lisp}) is permissive
+	 * (always true), a documented lite divergence.
+	 */
+	public static final String VALIDATE_SUPERCLASS = "VALIDATE-SUPERCLASS";
+
+	/**
+	 * {@code closer-mop:direct-slot-definition-class} -- the class of the
+	 * direct-slot-definition metaobject built for one {@code defclass} slot spec; the
+	 * default method answers the {@code standard-direct-slot-definition} NAME (a
+	 * designator {@code %mop-make-instance} accepts, so the default drags no
+	 * {@code find-class} runtime into the program).
+	 */
+	public static final String DIRECT_SLOT_DEFINITION_CLASS = "DIRECT-SLOT-DEFINITION-CLASS";
+
+	/**
+	 * {@code closer-mop:effective-slot-definition-class} -- as
+	 * {@link #DIRECT_SLOT_DEFINITION_CLASS} for the effective side; called INSIDE
+	 * {@code compute-effective-slot-definition}'s default method, i.e. within the dynamic
+	 * extent of the user method's {@code call-next-method} (postmodern binds
+	 * {@code *direct-column-slot*} around it).
+	 */
+	public static final String EFFECTIVE_SLOT_DEFINITION_CLASS = "EFFECTIVE-SLOT-DEFINITION-CLASS";
+
+	/**
+	 * {@code closer-mop:compute-effective-slot-definition} -- builds one
+	 * effective-slot-definition metaobject from the direct definitions of a slot name;
+	 * the default method instantiates {@code effective-slot-definition-class}'s answer
+	 * through {@code %mop-make-instance}.
+	 */
+	public static final String COMPUTE_EFFECTIVE_SLOT_DEFINITION = "COMPUTE-EFFECTIVE-SLOT-DEFINITION";
+
+	/**
+	 * {@code closer-mop:finalize-inheritance} -- computes a class metaobject's effective
+	 * slots (inherited first, own after, shadowing merged in place) and marks it
+	 * finalized. The metaclass driver calls it EAGERLY at definition time, a documented
+	 * divergence from CL's lazy finalization; user {@code :after} methods are where
+	 * postmodern builds its DAO methods.
+	 */
+	public static final String FINALIZE_INHERITANCE = "FINALIZE-INHERITANCE";
+
+	/**
+	 * {@code closer-mop:ensure-class-using-class} -- the AMOP definition entry point the
+	 * {@code %ensure-class-with-metaclass} driver routes through. The system default
+	 * method ({@code macro/mop-protocol.lisp}) dispatches on the EXISTING class
+	 * metaobject: nil takes the first-definition path, a metaobject the
+	 * reinitialize-instance redefinition path -- which is why a user {@code :around}
+	 * specialized on a metaclass (mito's dao-table-class superclass injection) fires on
+	 * REdefinition only, per AMOP.
+	 */
+	public static final String ENSURE_CLASS_USING_CLASS = "ENSURE-CLASS-USING-CLASS";
+
+	/** {@code closer-mop:slot-definition-readers} ({@code %obj-ref} index 4). */
+	public static final String SLOT_DEFINITION_READERS = "SLOT-DEFINITION-READERS";
+
+	/**
+	 * {@code closer-mop:slot-definition-initfunction} -- the initform thunk at
+	 * {@code %obj-ref} index 5 (appended 2026-08-03, the append-only slot-definition
+	 * contract). Filled only on DRIVER-built slot definitions (a {@code :metaclass}
+	 * class's canonicalized specs carry a live {@code (lambda () initform)}); the
+	 * materialized plain views answer nil.
+	 */
+	public static final String SLOT_DEFINITION_INITFUNCTION = "SLOT-DEFINITION-INITFUNCTION";
+
+	/**
+	 * {@code closer-mop:slot-definition-writers} ({@code %obj-ref} index 6, appended
+	 * 2026-10-30): filled on direct slot definitions, nil on effective ones.
+	 */
+	public static final String SLOT_DEFINITION_WRITERS = "SLOT-DEFINITION-WRITERS";
+
+	/** {@code closer-mop:slot-definition-initform} ({@code %obj-ref} index 2). */
+	public static final String SLOT_DEFINITION_INITFORM = "SLOT-DEFINITION-INITFORM";
+
+	/**
+	 * {@code closer-mop:slot-definition-allocation} ({@code %obj-ref} index 7, appended
+	 * 2026-11-01): {@code :class} on a class-allocated slot, {@code :instance} otherwise.
+	 */
+	public static final String SLOT_DEFINITION_ALLOCATION = "SLOT-DEFINITION-ALLOCATION";
+
+	/**
+	 * {@code closer-mop:slot-definition-location}: an instance slot's index in the
+	 * instance, what {@link #STANDARD_INSTANCE_ACCESS} takes.
+	 */
+	public static final String SLOT_DEFINITION_LOCATION = "SLOT-DEFINITION-LOCATION";
+
+	/** {@code closer-mop:standard-instance-access} and its {@code setf} function. */
+	public static final String STANDARD_INSTANCE_ACCESS = "STANDARD-INSTANCE-ACCESS";
+
+	/**
+	 * {@code closer-mop:funcallable-standard-instance-access} and its {@code setf}
+	 * function.
+	 */
+	public static final String FUNCALLABLE_STANDARD_INSTANCE_ACCESS = "FUNCALLABLE-STANDARD-INSTANCE-ACCESS";
+
+	/**
+	 * {@code closer-mop:set-funcallable-instance-function}: installs the function a
+	 * funcallable instance calls ({@code LispLayout.FUNCALLABLE_CELL}).
+	 */
+	public static final String SET_FUNCALLABLE_INSTANCE_FUNCTION = "SET-FUNCALLABLE-INSTANCE-FUNCTION";
+
+	/** {@code closer-mop:class-direct-slots} over a class metaobject (index 2). */
+	public static final String CLASS_DIRECT_SLOTS = "CLASS-DIRECT-SLOTS";
+
+	/**
+	 * {@code closer-mop:class-direct-subclasses} -- the registered classes whose direct
+	 * superclasses contain the given class, as metaobjects. Backed by
+	 * {@link #CLASS_DIRECT_SUBCLASSES_INTERNAL}.
+	 */
+	public static final String CLASS_DIRECT_SUBCLASSES = "CLASS-DIRECT-SUBCLASSES";
+
+	/**
+	 * The internal {@code %class-direct-subclasses} resolver behind
+	 * {@link #CLASS_DIRECT_SUBCLASSES}: a native registry scan on the interpreter, a
+	 * generated dispatch defun over the static registry on the compile paths (injected
+	 * gated on a reference, like the allocate-instance runtime).
+	 */
+	public static final String CLASS_DIRECT_SUBCLASSES_INTERNAL = "%CLASS-DIRECT-SUBCLASSES";
+
+	/**
+	 * The internal {@code %class-default-initargs} behind
+	 * {@code closer-mop:class-default-initargs}: AMOP's {@code (initarg form function)}
+	 * list, from the registry on the interpreter, a generated dispatch defun on the
+	 * compile paths (injected gated on a reference, like
+	 * {@link #CLASS_DIRECT_SUBCLASSES_INTERNAL}).
+	 */
+	public static final String CLASS_DEFAULT_INITARGS_INTERNAL = "%CLASS-DEFAULT-INITARGS";
+
+	/**
+	 * The {@code %mop-fill-slots} initarg fill of the metaclass protocol:
+	 * {@code (%mop-fill-slots obj initargs initforms-p)} stores each supplied initarg
+	 * into its slot (leftmost wins) and, when {@code initforms-p} is true, each
+	 * still-unbound slot's initform. It is the system {@code shared-initialize} primary's
+	 * body for METAOBJECT classes (metaclasses, slot-definition classes), which is what
+	 * lets a user {@code initialize-instance :around}'s munged initargs take effect --
+	 * the fill happens INSIDE the generic chain, unlike the static constructor. A native
+	 * registry-backed builtin on the interpreter, a generated per-class dispatch defun on
+	 * the compile paths.
+	 */
+	public static final String MOP_FILL_SLOTS = "%MOP-FILL-SLOTS";
+
+	/** The {@code flexi-streams} shim package (and built-in ASDF system) name. */
+	public static final String FLEXI_STREAMS_PKG = "FLEXI-STREAMS";
+
+	/**
+	 * {@code flexi-streams:make-flexi-stream} -- a {@link #FLEXI_STREAM} over the octet
+	 * stream it is given.
+	 */
+	public static final String MAKE_FLEXI_STREAM = "MAKE-FLEXI-STREAM";
+
+	/**
+	 * {@code flexi-streams:flexi-stream} -- the WRAPPER class: a Gray stream that lends
+	 * characters (through its {@link #EXTERNAL_FORMAT}) to the octet stream it wraps. A
+	 * class rather than the identity the shim used to answer, because that is what the
+	 * name means everywhere else -- upstream cl+ssl specializes {@code ssl-stream-handle}
+	 * on it -- and because writing a character to an octet sink found no applicable
+	 * method as long as the "wrapper" WAS the sink.
+	 */
+	public static final String FLEXI_STREAM = "FLEXI-STREAM";
+
+	/** {@code flexi-streams:flexi-stream-stream} -- the wrapped stream. */
+	public static final String FLEXI_STREAM_STREAM = "FLEXI-STREAM-STREAM";
+
+	/**
+	 * {@code flexi-streams:flexi-stream-external-format} -- the wrapper's
+	 * {@link #EXTERNAL_FORMAT}, which selects its codec; its setf converts a designator.
+	 */
+	public static final String FLEXI_STREAM_EXTERNAL_FORMAT = "FLEXI-STREAM-EXTERNAL-FORMAT";
+
+	/**
+	 * {@code flexi-streams:external-format} -- the class of an external format: a
+	 * canonical name ({@code :utf-8}, {@code :iso-8859-1} or {@code :us-ascii}, the
+	 * shim's three) and an end-of-line style.
+	 */
+	public static final String EXTERNAL_FORMAT = "EXTERNAL-FORMAT";
+
+	/** {@code flexi-streams:make-external-format}. */
+	public static final String MAKE_EXTERNAL_FORMAT = "MAKE-EXTERNAL-FORMAT";
+
+	/** {@code flexi-streams:external-format-name}. */
+	public static final String EXTERNAL_FORMAT_NAME = "EXTERNAL-FORMAT-NAME";
+
+	/** {@code flexi-streams:external-format-eol-style}. */
+	public static final String EXTERNAL_FORMAT_EOL_STYLE = "EXTERNAL-FORMAT-EOL-STYLE";
+
+	/**
+	 * {@code flexi-streams:external-format-little-endian} (recorded, selects nothing).
+	 */
+	public static final String EXTERNAL_FORMAT_LITTLE_ENDIAN = "EXTERNAL-FORMAT-LITTLE-ENDIAN";
+
+	/** {@code flexi-streams:external-format-id} (recorded, selects nothing). */
+	public static final String EXTERNAL_FORMAT_ID = "EXTERNAL-FORMAT-ID";
+
+	/** {@code flexi-streams:external-format-equal}. */
+	public static final String EXTERNAL_FORMAT_EQUAL = "EXTERNAL-FORMAT-EQUAL";
+
+	/** {@code flexi-streams:*default-eol-style*} -- {@code :lf}. */
+	public static final String DEFAULT_EOL_STYLE = "*DEFAULT-EOL-STYLE*";
+
+	/**
+	 * {@code flexi-streams:*substitution-char*} -- what an uncodable code point or octet
+	 * codes as, instead of signalling.
+	 */
+	public static final String SUBSTITUTION_CHAR = "*SUBSTITUTION-CHAR*";
+
+	/** {@code flexi-streams:octet} -- the type {@code (unsigned-byte 8)}. */
+	public static final String OCTET = "OCTET";
+
+	/** {@code flexi-streams:with-input-from-sequence}. */
+	public static final String WITH_INPUT_FROM_SEQUENCE = "WITH-INPUT-FROM-SEQUENCE";
+
+	/** {@code flexi-streams:with-output-to-sequence}. */
+	public static final String WITH_OUTPUT_TO_SEQUENCE = "WITH-OUTPUT-TO-SEQUENCE";
+
+	/**
+	 * {@code flexi-streams:flexi-stream-element-type} -- {@code character} by default.
+	 */
+	public static final String FLEXI_STREAM_ELEMENT_TYPE = "FLEXI-STREAM-ELEMENT-TYPE";
+
+	/** {@code flexi-streams:flexi-stream-position} -- the wrapper's octet counter. */
+	public static final String FLEXI_STREAM_POSITION = "FLEXI-STREAM-POSITION";
+
+	/**
+	 * {@code flexi-streams:flexi-stream-bound} -- the absolute octet position reading
+	 * stops at, or nil.
+	 */
+	public static final String FLEXI_STREAM_BOUND = "FLEXI-STREAM-BOUND";
+
+	/**
+	 * {@code string-to-octets} -- the flexi-streams shim's encoder, AND (as
+	 * {@code rontolisp:string-to-octets}, a distinct symbol the same bare member name
+	 * serves since prelude selection matches by RESOLVED symbol, not by this String alone
+	 * -- {@code am.ik.rontolisp.eval.LispPreludeLibrary#process}) the language's own
+	 * encoder.
+	 */
+	public static final String STRING_TO_OCTETS = "STRING-TO-OCTETS";
+
+	/**
+	 * {@code octets-to-string} -- the flexi-streams shim's decoder, AND (as
+	 * {@code rontolisp:octets-to-string}, a distinct symbol -- see
+	 * {@link #STRING_TO_OCTETS}) a thin public delegator to the native
+	 * {@link #OCTETS_TO_STRING_INTERNAL} lenient decoder.
+	 */
+	public static final String OCTETS_TO_STRING = "OCTETS-TO-STRING";
+
+	/**
+	 * {@code flexi-streams:vector-stream} -- the base class of the shim's in-memory octet
+	 * streams. Not a wrapper like {@link #MAKE_FLEXI_STREAM}: an in-memory stream is a
+	 * real Gray stream over an octet vector, because http-body's {@code slurp-stream}
+	 * TYPE-TESTS a body stream against this class to take its no-copy fast path.
+	 */
+	public static final String VECTOR_STREAM = "VECTOR-STREAM";
+
+	/**
+	 * {@code flexi-streams::vector-input-stream} -- the readable {@link #VECTOR_STREAM}.
+	 * Internal, as upstream: the constructor is the whole public surface.
+	 */
+	public static final String VECTOR_INPUT_STREAM = "VECTOR-INPUT-STREAM";
+
+	/**
+	 * {@code flexi-streams::vector-stream-vector} -- the backing octet vector. INTERNAL,
+	 * as upstream, which is why http-body spells it with a double colon; its
+	 * {@code (:import-from :flexi-streams :vector-stream-vector)} names the same symbol.
+	 */
+	public static final String VECTOR_STREAM_VECTOR = "VECTOR-STREAM-VECTOR";
+
+	/** {@code flexi-streams::vector-stream-index} -- the read cursor (internal). */
+	public static final String VECTOR_STREAM_INDEX = "VECTOR-STREAM-INDEX";
+
+	/** {@code flexi-streams::vector-stream-end} -- the end bound (internal). */
+	public static final String VECTOR_STREAM_END = "VECTOR-STREAM-END";
+
+	/**
+	 * {@code flexi-streams:make-in-memory-input-stream} -- an octet vector as a binary
+	 * input stream. smart-buffer's {@code finalize-buffer} hands one back for every
+	 * request body that stayed under the memory limit, so it is on the LIVE multipart
+	 * path, not a stub.
+	 */
+	public static final String MAKE_IN_MEMORY_INPUT_STREAM = "MAKE-IN-MEMORY-INPUT-STREAM";
+
+	/**
+	 * {@code flexi-streams::vector-output-stream} -- the writable in-memory octet stream.
+	 * NOT a {@link #VECTOR_STREAM}: that class is what http-body type-tests to take its
+	 * no-copy INPUT path, and an output stream has no readable vector to hand it.
+	 * Internal, as upstream.
+	 */
+	public static final String VECTOR_OUTPUT_STREAM = "VECTOR-OUTPUT-STREAM";
+
+	/**
+	 * {@code flexi-streams:make-in-memory-output-stream} -- an octet sink whose bytes
+	 * {@link #GET_OUTPUT_STREAM_SEQUENCE} hands back. The write half of the in-memory
+	 * pair, the shape upstream cl+ssl's {@code with-bio-output-to-sequence} is written
+	 * over.
+	 */
+	public static final String MAKE_IN_MEMORY_OUTPUT_STREAM = "MAKE-IN-MEMORY-OUTPUT-STREAM";
+
+	/**
+	 * {@code flexi-streams:get-output-stream-sequence} -- the bytes written to a
+	 * {@link #MAKE_IN_MEMORY_OUTPUT_STREAM} so far, resetting the stream as upstream
+	 * does.
+	 */
+	public static final String GET_OUTPUT_STREAM_SEQUENCE = "GET-OUTPUT-STREAM-SEQUENCE";
+
+	/**
+	 * The {@code org.shirakumo.float-features} shim package name ({@code float-features}
+	 * is its built-in nickname and the built-in ASDF system name).
+	 */
+	public static final String FLOAT_FEATURES_PKG = "ORG.SHIRAKUMO.FLOAT-FEATURES";
+
+	/** {@code float-features:bits-double-float}. */
+	public static final String BITS_DOUBLE_FLOAT = "BITS-DOUBLE-FLOAT";
+
+	/** {@code float-features:double-float-bits}. */
+	public static final String DOUBLE_FLOAT_BITS = "DOUBLE-FLOAT-BITS";
+
+	/** {@code float-features:single-float-bits}. */
+	public static final String SINGLE_FLOAT_BITS = "SINGLE-FLOAT-BITS";
+
+	/** {@code float-features:bits-single-float}. */
+	public static final String BITS_SINGLE_FLOAT = "BITS-SINGLE-FLOAT";
+
+	// The single/double-float bits pairs above are canonical under float-features: (an
+	// external symbol there, internal here) because float-features is a real upstream
+	// CL library and that is its own API's spelling. float-features has no f16 pair --
+	// float16-bits/bits-float16 and the bulk widen/narrow below are a rontolisp
+	// extension, so THEIR external home is the rontolisp: package itself
+	// (see PackageRegistry's rontolispExternals), not float-features. Same reasoning
+	// puts bfloat16-bits/bits-bfloat16 under rontolisp: too.
+
+	/**
+	 * {@code rontolisp:float16-bits} -- a real narrowed to its IEEE binary16 bit pattern
+	 * (round-to-nearest-even), as an unsigned integer in {@code [0, 65535]}.
+	 */
+	public static final String FLOAT16_BITS = "FLOAT16-BITS";
+
+	/**
+	 * {@code rontolisp:bits-float16} -- the exact real an IEEE binary16 bit pattern
+	 * encodes.
+	 */
+	public static final String BITS_FLOAT16 = "BITS-FLOAT16";
+
+	/**
+	 * {@code rontolisp:widen-float-bits} -- bulk-widens a packed {@code (unsigned-byte
+	 * 16)} vector of {@code :float16} or {@code :bfloat16} bit patterns into an existing
+	 * packed float array, row-major from a {@code :start} offset. See
+	 * {@code .kb/bfloat16.md}.
+	 */
+	public static final String WIDEN_FLOAT_BITS = "WIDEN-FLOAT-BITS";
+
+	/**
+	 * {@code rontolisp:narrow-float-bits} -- the inverse of {@link #WIDEN_FLOAT_BITS}:
+	 * bulk-narrows a packed float array into a packed {@code (unsigned-byte 16)} vector
+	 * of {@code :float16} or {@code :bfloat16} bit patterns, row-major from a
+	 * {@code :start} offset in the destination.
+	 */
+	public static final String NARROW_FLOAT_BITS = "NARROW-FLOAT-BITS";
+
+	/**
+	 * {@code rontolisp:quantize} -- a packed float array to a block-quantized weight
+	 * matrix ({@code am.ik.rontolisp.LispQuantizedMatrix}), by ggml's rule for the format
+	 * named. See {@code .kb/quantized-matrix.md}.
+	 */
+	public static final String QUANTIZE = "QUANTIZE";
+
+	/**
+	 * {@code rontolisp:dequantize} -- a quantized matrix to a fresh packed float array of
+	 * the element type named.
+	 */
+	public static final String DEQUANTIZE = "DEQUANTIZE";
+
+	/**
+	 * {@code rontolisp:make-quantized-matrix} -- an all-zero quantized matrix of a format
+	 * and shape, the destination a checkpoint reader fills with {@code read-sequence}.
+	 */
+	public static final String MAKE_QUANTIZED_MATRIX = "MAKE-QUANTIZED-MATRIX";
+
+	/** {@code rontolisp:quantized-matrix-p} -- the type predicate. */
+	public static final String QUANTIZED_MATRIX_P = "QUANTIZED-MATRIX-P";
+
+	/**
+	 * {@code rontolisp:quantized-rows} -- a fresh quantized matrix gathering the rows of
+	 * another one named by a list of row indexes, block for block. The immutable type's
+	 * answer to {@code subseq} and to {@code linalg:take-rows}: a row is whole blocks, so
+	 * a gather is one array copy a row and the bytes are the source's.
+	 */
+	public static final String QUANTIZED_ROWS = "QUANTIZED-ROWS";
+
+	/** {@code rontolisp:quantized-matrix} -- the type name {@code typep} answers to. */
+	public static final String QUANTIZED_MATRIX = "QUANTIZED-MATRIX";
+
+	/**
+	 * {@code q8-0} -- the format designator of ggml's {@code Q8_0}
+	 * ({@code am.ik.rontolisp.QuantizedFormat#Q8_0}), and what {@code array-element-type}
+	 * answers for a matrix in it.
+	 */
+	public static final String Q8_0 = "Q8-0";
+
+	/**
+	 * {@code rontolisp::%quantized-quant} -- the signed 8-bit quant at {@code (row, col)}
+	 * of a quantized matrix, an integer. Internal: what {@code vec.lisp}'s integer-dot
+	 * GEMV reads, so the scalar oracle folds the same integers the lane kernel folds.
+	 */
+	public static final String QUANTIZED_QUANT_INTERNAL = "%QUANTIZED-QUANT";
+
+	/**
+	 * {@code rontolisp::%quantized-scale} -- the scale of block {@code b} of row
+	 * {@code row} of a quantized matrix, a double (the binary16 widened, exact).
+	 */
+	public static final String QUANTIZED_SCALE_INTERNAL = "%QUANTIZED-SCALE";
+
+	/**
+	 * The {@code :float16} format keyword
+	 * {@link #WIDEN_FLOAT_BITS}/{@link #NARROW_FLOAT_BITS} take.
+	 */
+	public static final String FLOAT16_KEYWORD = ":FLOAT16";
+
+	/**
+	 * The {@code :bfloat16} format keyword
+	 * {@link #WIDEN_FLOAT_BITS}/{@link #NARROW_FLOAT_BITS} take.
+	 */
+	public static final String BFLOAT16_KEYWORD = ":BFLOAT16";
+
+	/** The {@code trivial-gray-streams} shim package (and built-in ASDF system) name. */
+	public static final String TRIVIAL_GRAY_STREAMS_PKG = "TRIVIAL-GRAY-STREAMS";
+
+	/**
+	 * The {@code babel} shim package (and built-in ASDF system) name. Real babel is a
+	 * charset-conversion library: 40+ concrete encodings generated by macrology over
+	 * 20,000 lines of code-page tables. rontolisp has ONE character model -- a character
+	 * IS a Unicode code point and the wire form is UTF-8 -- so the shim implements
+	 * exactly that codec and rejects any other {@code :encoding}, rather than silently
+	 * mis-coding.
+	 */
+	public static final String BABEL_PKG = "BABEL";
+
+	/**
+	 * The {@code babel-encodings} shim package name: the encoding half of real babel --
+	 * the two specials, the encoding and mapping lookups, the four mapping readers a
+	 * consumer that decodes INCREMENTALLY calls per character, and the character-coding
+	 * condition hierarchy. An encoding (and a mapping) IS its name here, since one
+	 * character model leaves an encoding object nothing to carry.
+	 */
+	public static final String BABEL_ENCODINGS_PKG = "BABEL-ENCODINGS";
+
+	/**
+	 * {@code babel:string-to-octets} /
+	 * {@code babel-encodings:*default-character-encoding*} -- {@code :utf-8}, the one
+	 * encoding the shim implements.
+	 */
+	public static final String DEFAULT_CHARACTER_ENCODING = "*DEFAULT-CHARACTER-ENCODING*";
+
+	/** {@code babel:string-size-in-octets} -- the UTF-8 byte length of a string. */
+	public static final String STRING_SIZE_IN_OCTETS = "STRING-SIZE-IN-OCTETS";
+
+	/** {@code babel:list-character-encodings} -- the names the shim implements. */
+	public static final String LIST_CHARACTER_ENCODINGS = "LIST-CHARACTER-ENCODINGS";
+
+	/**
+	 * {@code babel::normalize-encoding} -- internal to the shim: folds a caller's
+	 * {@code :encoding} onto one of the implemented names, or signals. Every driver and
+	 * every mapping reader starts there, so an encoding designator is normalized exactly
+	 * once per entry point.
+	 */
+	public static final String NORMALIZE_ENCODING = "NORMALIZE-ENCODING";
+
+	/**
+	 * The {@code bordeaux-threads} shim package (and built-in ASDF system) name;
+	 * {@code bt} is its built-in nickname, exactly as upstream's
+	 * {@code apiv1/pkgdcl.lisp} declares it. Upstream's own {@code .asd} hard-errors on
+	 * an unknown implementation, so a shim is the only route: it is a portability layer
+	 * that cannot support rontolisp from its side.
+	 */
+	public static final String BORDEAUX_THREADS_PKG = "BORDEAUX-THREADS";
+
+	/** {@code bt:make-lock} -- a fresh lock over {@link #MAKE_MUTEX}. */
+	public static final String MAKE_LOCK = "MAKE-LOCK";
+
+	/** {@code bt:acquire-lock} -- over {@link #MUTEX_ACQUIRE}; returns {@code t}. */
+	public static final String ACQUIRE_LOCK = "ACQUIRE-LOCK";
+
+	/** {@code bt:release-lock} -- over {@link #MUTEX_RELEASE}; returns {@code t}. */
+	public static final String RELEASE_LOCK = "RELEASE-LOCK";
+
+	/**
+	 * {@code bt:*supports-threads-p*} -- {@code t} on the interpreter and the JVM backend
+	 * (one virtual thread per request under {@code serve}), {@code nil} on the WASM
+	 * backends.
+	 */
+	public static final String SUPPORTS_THREADS_P = "*SUPPORTS-THREADS-P*";
+
+	/**
+	 * {@code bt:with-lock-held} -- a built-in {@code LispMacroExpander} expansion onto
+	 * {@link #WITH_MUTEX} (the {@code usocket:with-*} pattern), dispatched on its
+	 * qualified name, not a shim {@code defun}.
+	 */
+	public static final String WITH_LOCK_HELD = "WITH-LOCK-HELD";
+
+	/**
+	 * The canonical package-qualified spelling of
+	 * {@code bordeaux-threads:with-lock-held}.
+	 */
+	public static final String WITH_LOCK_HELD_QUALIFIED = BORDEAUX_THREADS_PKG + ":" + WITH_LOCK_HELD;
+
+	/**
+	 * {@code bt:with-recursive-lock-held} -- the SAME expansion as
+	 * {@link #WITH_LOCK_HELD}. Upstream distinguishes the two because its
+	 * {@code make-lock} is not reentrant; the shim's is (bordeaux-threads.lisp), so a
+	 * recursive lock and a plain one are one object and the two macros are one shape.
+	 */
+	public static final String WITH_RECURSIVE_LOCK_HELD = "WITH-RECURSIVE-LOCK-HELD";
+
+	/**
+	 * The canonical package-qualified spelling of
+	 * {@code bordeaux-threads:with-recursive-lock-held}.
+	 */
+	public static final String WITH_RECURSIVE_LOCK_HELD_QUALIFIED = BORDEAUX_THREADS_PKG + ":"
+			+ WITH_RECURSIVE_LOCK_HELD;
+
+	/**
+	 * {@code bt:make-recursive-lock} -- a shim {@code defun} answering the same reentrant
+	 * lock {@code make-lock} does.
+	 */
+	public static final String MAKE_RECURSIVE_LOCK = "MAKE-RECURSIVE-LOCK";
+
+	/**
+	 * {@code bt:lock} -- the shim's lock type: a structure over a mutex handle, so a lock
+	 * has a class of its own (a method may specialize on it) rather than the handle's.
+	 * {@code bt:recursive-lock} names the same type.
+	 */
+	public static final String LOCK = "LOCK";
+
+	/** {@code bt:recursive-lock} -- a type naming {@link #LOCK}. */
+	public static final String RECURSIVE_LOCK = "RECURSIVE-LOCK";
+
+	/** {@code bt:lock-p} -- the lock structure's predicate. */
+	public static final String LOCK_P = "LOCK-P";
+
+	/** {@code bt:recursive-lock-p} -- {@link #LOCK_P}, every lock being reentrant. */
+	public static final String RECURSIVE_LOCK_P = "RECURSIVE-LOCK-P";
+
+	/** {@code bt:acquire-recursive-lock} -- {@link #ACQUIRE_LOCK}'s twin. */
+	public static final String ACQUIRE_RECURSIVE_LOCK = "ACQUIRE-RECURSIVE-LOCK";
+
+	/** {@code bt:release-recursive-lock} -- {@link #RELEASE_LOCK}'s twin. */
+	public static final String RELEASE_RECURSIVE_LOCK = "RELEASE-RECURSIVE-LOCK";
+
+	/**
+	 * {@code bt:make-condition-variable} -- over
+	 * {@link #CONDITION_VARIABLE_NEW_INTERNAL}.
+	 */
+	public static final String MAKE_CONDITION_VARIABLE = "MAKE-CONDITION-VARIABLE";
+
+	/**
+	 * {@code bt:condition-wait} -- over {@link #CONDITION_WAIT_INTERNAL}; signals on
+	 * WASM.
+	 */
+	public static final String CONDITION_WAIT = "CONDITION-WAIT";
+
+	/** {@code bt:condition-notify} -- over {@link #CONDITION_NOTIFY_INTERNAL}. */
+	public static final String CONDITION_NOTIFY = "CONDITION-NOTIFY";
+
+	/** {@code bt:condition-broadcast} -- over {@link #CONDITION_NOTIFY_INTERNAL}. */
+	public static final String CONDITION_BROADCAST = "CONDITION-BROADCAST";
+
+	/**
+	 * {@code bt:semaphore} -- the shim's counting semaphore type, a lock and a condition
+	 * variable.
+	 */
+	public static final String SEMAPHORE = "SEMAPHORE";
+
+	/** {@code bt:semaphore-p} -- the semaphore structure's predicate. */
+	public static final String SEMAPHORE_P = "SEMAPHORE-P";
+
+	/** {@code bt:make-semaphore}. */
+	public static final String MAKE_SEMAPHORE = "MAKE-SEMAPHORE";
+
+	/** {@code bt:signal-semaphore}. */
+	public static final String SIGNAL_SEMAPHORE = "SIGNAL-SEMAPHORE";
+
+	/** {@code bt:wait-on-semaphore}. */
+	public static final String WAIT_ON_SEMAPHORE = "WAIT-ON-SEMAPHORE";
+
+	/** {@code bt:thread} -- the type of a thread handle. */
+	public static final String THREAD = "THREAD";
+
+	/** {@code bt:thread-name} -- over {@link #THREAD_NAME_INTERNAL}. */
+	public static final String THREAD_NAME = "THREAD-NAME";
+
+	/** {@code bt:thread-yield}. */
+	public static final String THREAD_YIELD = "THREAD-YIELD";
+
+	/**
+	 * {@code bt:all-threads} -- the main thread and the live threads the shim spawned.
+	 */
+	public static final String ALL_THREADS = "ALL-THREADS";
+
+	/**
+	 * {@code bt:interrupt-thread} -- signals: no backend can run code inside another
+	 * thread.
+	 */
+	public static final String INTERRUPT_THREAD = "INTERRUPT-THREAD";
+
+	/** {@code bt:start-multiprocessing} -- a no-op. */
+	public static final String START_MULTIPROCESSING = "START-MULTIPROCESSING";
+
+	/** {@code bt:with-timeout} -- signals: no backend can interrupt a running body. */
+	public static final String WITH_TIMEOUT = "WITH-TIMEOUT";
+
+	/** {@code bt:timeout} -- the condition {@link #WITH_TIMEOUT} names. */
+	public static final String TIMEOUT = "TIMEOUT";
+
+	/**
+	 * {@code bt:*standard-io-bindings*} -- an {@code :initial-bindings} alist of the
+	 * standard I/O variables.
+	 */
+	public static final String STANDARD_IO_BINDINGS = "*STANDARD-IO-BINDINGS*";
+
+	/**
+	 * The {@code bt2} shim package name: the modern (v2) bordeaux-threads API namespace,
+	 * exactly as upstream's {@code apiv2/pkgdcl.lisp} declares it ({@code defpackage :bt2
+	 * (:nicknames :bordeaux-threads-2)}); the same built-in ASDF system
+	 * {@code bordeaux-threads} provides both packages. Home of the thread-creation names
+	 * ({@code make-thread} and friends over the {@code rontolisp:make-thread} primitive,
+	 * clack's handler.lisp is the driving consumer) and of
+	 * {@code *default-special-bindings*}; the v1 lock subset stays home in
+	 * {@code bordeaux-threads} and is re-exported here by import, and conversely the
+	 * thread names are imported into the v1 package (clack {@code :import-from}s them
+	 * there).
+	 */
+	public static final String BT2_PKG = "BT2";
+
+	/**
+	 * {@code bt2:*default-special-bindings*} -- the default {@code :initial-bindings}
+	 * alist of {@code bt2:make-thread}: {@code (symbol . form)} pairs bound dynamically
+	 * around the spawned thread's function. The shim supports {@code quote} forms and
+	 * self-evaluating values (whose value is thread-independent, so where they are
+	 * evaluated is unobservable) and signals on any other form.
+	 */
+	public static final String DEFAULT_SPECIAL_BINDINGS = "*DEFAULT-SPECIAL-BINDINGS*";
+
+	/**
+	 * {@code bt2::resolve-binding-value} -- internal to the shim: resolves one
+	 * {@code :initial-bindings} value form (quote or self-evaluating), or signals. Owned
+	 * by the package rather than left to the resolver's tolerance for an unknown
+	 * {@code ::} member (the {@code babel::normalize-encoding} precedent).
+	 */
+	public static final String RESOLVE_BINDING_VALUE = "RESOLVE-BINDING-VALUE";
+
+	/**
+	 * The {@code uiop} package (and built-in ASDF system) name. It is upstream's
+	 * {@code uiop/driver}: a re-export of 15 sub-packages, each of which OWNS the members
+	 * it defines, so a {@code uiop:name} occurrence canonicalizes to the sub-package's
+	 * spelling. The sub-package names below are the ones this file has to spell; the
+	 * whole table is {@code UiopExports} (see {@code .kb/uiop.md}).
+	 */
+	public static final String UIOP_PKG = "UIOP";
+
+	/** The {@code uiop/package} sub-package: the symbol and package surgery family. */
+	public static final String UIOP_PACKAGE_PKG = "UIOP/PACKAGE";
+
+	/** The {@code uiop/package-local-nicknames} sub-package. */
+	public static final String UIOP_PACKAGE_LOCAL_NICKNAMES_PKG = "UIOP/PACKAGE-LOCAL-NICKNAMES";
+
+	/** The {@code uiop/utility} sub-package: the portable helpers. */
+	public static final String UIOP_UTILITY_PKG = "UIOP/UTILITY";
+
+	/** The {@code uiop/version} sub-package: version comparison and deprecation. */
+	public static final String UIOP_VERSION_PKG = "UIOP/VERSION";
+
+	/** The {@code uiop/os} sub-package: host identity and the environment. */
+	public static final String UIOP_OS_PKG = "UIOP/OS";
+
+	/** The {@code uiop/pathname} sub-package: the pathname algebra. */
+	public static final String UIOP_PATHNAME_PKG = "UIOP/PATHNAME";
+
+	/** The {@code uiop/filesystem} sub-package: probe, walk and mutate. */
+	public static final String UIOP_FILESYSTEM_PKG = "UIOP/FILESYSTEM";
+
+	/** The {@code uiop/stream} sub-package: file contents, temporary files, safe I/O. */
+	public static final String UIOP_STREAM_PKG = "UIOP/STREAM";
+
+	/**
+	 * {@code uiop:native-namestring} -- real: a rontolisp namestring IS the host spelling
+	 * (no backend translates), so it is CL's {@code namestring}. Lowered onto it on the
+	 * compile paths ({@code LispMacroExpander.expandUiopStubCall}) and a Lisp definition
+	 * ({@code uiop-filesystem.lisp}) for every other position. jzon's pathname stringify
+	 * method and trivial-mimes' {@code mime-probe} are the callers that made it real.
+	 */
+	public static final String NATIVE_NAMESTRING = "NATIVE-NAMESTRING";
+
+	/**
+	 * {@code uiop:namestring} -- a rontolisp EXTRA: upstream's uiop only INHERITS CL's
+	 * (through {@code :use :uiop/common-lisp}) rather than exporting it, so
+	 * {@code uiop:namestring} would not read there. Kept external and imported from
+	 * {@code cl}, so both spellings name the one prelude function.
+	 */
+	public static final String NAMESTRING = "NAMESTRING";
+
+	/**
+	 * {@code uiop:getenv} -- not a stub: reading an environment variable is a real
+	 * built-in on every backend. Common Lisp has NO {@code getenv}, so this is the only
+	 * spelling rontolisp offers; the operator is dispatched on its qualified name
+	 * ({@link #UIOP_GETENV}) by both compilers, the way {@code usocket:with-*} is.
+	 */
+	public static final String GETENV = "GETENV";
+
+	/** The canonical package-qualified spelling of {@link #GETENV}. */
+	public static final String UIOP_GETENV = UIOP_OS_PKG + ":" + GETENV;
+
+	/**
+	 * The {@code %host-getenv} internal primitive behind {@link #GETENV}: the HOST's
+	 * value for a variable name, or nil when the host has none. The public
+	 * {@code uiop:getenv} is Lisp ({@code uiop-os.lisp}) that consults the per-program
+	 * override map first ({@link #GETENV_OVERRIDE}) and falls back to this -- which is
+	 * what makes {@code (setf (uiop:getenv x) v)} readable back on all four backends,
+	 * where no host lets a process rewrite its own environment. Per backend:
+	 * {@code System.getenv} on the interpreter and the JVM, the WASI environ buffer scan
+	 * ({@code _getenv}) on Preview 1, and the spliced {@code environment.lisp} defun over
+	 * wit-imported {@code wasi:cli/environment} under {@code --component}.
+	 */
+	public static final String HOST_GETENV = "%HOST-GETENV";
+
+	/**
+	 * The {@code %host-environ} internal primitive behind Scheme's
+	 * {@code get-environment-variables}: every variable of the HOST's environment as a
+	 * list of {@code "NAME=value"} strings, in the host's own order. Per backend:
+	 * {@code System.getenv()} on the interpreter and the JVM, the WASI environ buffer
+	 * ({@code _getenv} called with no name) on Preview 1, and the spliced
+	 * {@code environment.lisp} defun over wit-imported {@code wasi:cli/environment}'s
+	 * {@code get-environment} under {@code --component}.
+	 */
+	public static final String HOST_ENVIRON = "%HOST-ENVIRON";
+
+	/**
+	 * The {@code %host-getcwd} internal primitive behind {@code uiop:getcwd}: the host's
+	 * working-directory namestring, or nil when the host has no such notion. The JVM's
+	 * {@code user.dir} on the JVM, the {@code SourceLoader}'s working directory on the
+	 * interpreter (that same {@code user.dir} for the filesystem loader, nil for an
+	 * in-memory one); nil on both WASM backends, which have preopened directories and no
+	 * current one at all -- {@link #ABSOLUTE_PATH_INTERNAL} reads it, and
+	 * {@code uiop:getcwd} turns that nil into the {@code not-implemented-error} its one
+	 * shared Lisp definition signals, so the divergence is a value, not a second code
+	 * path.
+	 */
+	public static final String HOST_GETCWD = "%HOST-GETCWD";
+
+	/**
+	 * The {@code %host-exit} internal primitive behind {@code uiop:quit}: end the process
+	 * with the given status code. The public {@code uiop:quit} is Lisp
+	 * ({@code uiop-image.lisp}) that finishes the standard output streams first and then
+	 * calls this, so the four backends share one definition of what quitting means. Per
+	 * backend: a {@code LispExitSignal} the CLI turns into the process code on the
+	 * interpreter (it is NOT a condition -- {@code handler-case} cannot see it, and
+	 * {@code unwind-protect} deliberately runs no cleanup for it), {@code System.exit} on
+	 * the JVM, and the spliced {@code exit.lisp} defun on both WASM backends -- over
+	 * wasi_snapshot_preview1 {@code proc_exit} on Preview 1 and over wit-imported
+	 * {@code wasi:cli/exit@0.3.0}'s {@code exit-with-code} under {@code --component}.
+	 */
+	public static final String HOST_EXIT = "%HOST-EXIT";
+
+	/**
+	 * The {@code %host-log} internal primitive a Java program's root logger hands its
+	 * records to under {@code --wasi-logging}: a level by its place among
+	 * {@code wasi:logging}'s (trace .. critical), a context and a message. Only the
+	 * spliced {@code logging.lisp} defun defines it, over wit-imported
+	 * {@code wasi:logging/logging@0.1.0-draft}'s {@code log} under {@code --component};
+	 * no other build reaches it.
+	 */
+	public static final String HOST_LOG = "%HOST-LOG";
+
+	/**
+	 * The {@code %host-argv} internal primitive behind the {@code uiop/image}
+	 * command-line family: the program's own argument vector as a list of strings, argv0
+	 * first. The five public names are Lisp over it ({@code uiop-image.lisp}), so
+	 * {@code (uiop:command-line-arguments)} is {@code (rest (%host-argv))} on every
+	 * backend rather than four behaviours wearing one name. Per backend: the CLI's own
+	 * arguments -- the input file, then what follows a {@code --} separator -- on the
+	 * interpreter, {@code main(String[])} behind the class name on the JVM, the WASI
+	 * {@code args_sizes_get} / {@code args_get} buffer scan ({@code _argv}) on Preview 1,
+	 * and the spliced {@code environment.lisp} defun over wit-imported
+	 * {@code wasi:cli/environment}'s {@code get-arguments} under {@code --component}. A
+	 * host with no command line at all (the browser playground) answers nil, which is
+	 * upstream's own answer for an implementation it cannot ask.
+	 */
+	public static final String HOST_ARGV = "%HOST-ARGV";
+
+	/**
+	 * The {@code %getenv-override} prelude reader: the {@code (name . value)} entry a
+	 * {@code (setf (uiop:getenv name) value)} wrote, or nil. {@link #GETENV_OVERRIDE_SET}
+	 * is the writer; both carry the store's defvar, the way the {@code symbol-plist}
+	 * family carries {@code %symbol-plists}.
+	 */
+	public static final String GETENV_OVERRIDE = "%GETENV-OVERRIDE";
+
+	/** The {@code %getenv-override-set} prelude writer; see {@link #GETENV_OVERRIDE}. */
+	public static final String GETENV_OVERRIDE_SET = "%GETENV-OVERRIDE-SET";
+
+	/**
+	 * {@code uiop:os-unix-p} -- real: every rontolisp backend presents the POSIX-shaped
+	 * file and namestring model ({@code .kb/pathnames.md}), so this answers {@code t}
+	 * everywhere. It is deliberately NOT derived from a {@code :unix} feature: adding one
+	 * would flip the {@code #+unix} reader branch of every library the frontend reads,
+	 * which is a much wider claim than "uiop's OS predicate" ({@code .kb/uiop.md}).
+	 */
+	public static final String OS_UNIX_P = "OS-UNIX-P";
+
+	/**
+	 * {@code uiop:os-macosx-p} -- real, and upstream's own derivation
+	 * ({@code (featurep '(:or :darwin ...))}), which answers nil here because no backend
+	 * carries a host-OS feature.
+	 */
+	public static final String OS_MACOSX_P = "OS-MACOSX-P";
+
+	/**
+	 * {@code uiop:os-cond} -- the OS dispatch macro. Upstream evaluates each clause test
+	 * at MACROEXPANSION time and keeps the first winner's body; rontolisp's OS predicates
+	 * are ordinary runtime functions, so the expansion is a plain {@code cond} over the
+	 * clauses (upstream's own abcl arm), which selects the same clause. A Java expansion
+	 * like every uiop macro ({@code .kb/uiop.md}).
+	 */
+	public static final String OS_COND = "OS-COND";
+
+	/**
+	 * {@code uiop:add-package-local-nickname} -- gives a package a nickname of its own
+	 * for another package, the mechanism jzon's README recommends for shortening
+	 * {@code com.inuoe.jzon} to {@code jzon}. A literal top-level call is a directive the
+	 * resolver consumes as well, since it changes how the forms after it read.
+	 */
+	public static final String ADD_PACKAGE_LOCAL_NICKNAME = "ADD-PACKAGE-LOCAL-NICKNAME";
+
+	/**
+	 * {@code uiop:package-local-nicknames}: a package's own nicknames, as
+	 * {@code (NICKNAME-STRING . PACKAGE-KEYWORD)} pairs in nickname order.
+	 */
+	public static final String PACKAGE_LOCAL_NICKNAMES = "PACKAGE-LOCAL-NICKNAMES";
+
+	/**
+	 * {@code uiop:remove-package-local-nickname}: answers {@code t} when the package had
+	 * the nickname, nil otherwise. A literal top-level call is consumed like the add.
+	 */
+	public static final String REMOVE_PACKAGE_LOCAL_NICKNAME = "REMOVE-PACKAGE-LOCAL-NICKNAME";
+
+	/**
+	 * The internal {@code (%local-nickname-add nickname package scope)} under
+	 * {@link #ADD_PACKAGE_LOCAL_NICKNAME}: checks the nickname and answers the scope
+	 * package. A native on the interpreter; on the compile paths a definition
+	 * {@code LispMacroExpander.injectLocalNicknames} adds over the run-time table.
+	 */
+	public static final String LOCAL_NICKNAME_ADD_INTERNAL = "%LOCAL-NICKNAME-ADD";
+
+	/**
+	 * The internal {@code (%local-nickname-remove nickname scope)} under
+	 * {@link #REMOVE_PACKAGE_LOCAL_NICKNAME}, placed like
+	 * {@link #LOCAL_NICKNAME_ADD_INTERNAL}.
+	 */
+	public static final String LOCAL_NICKNAME_REMOVE_INTERNAL = "%LOCAL-NICKNAME-REMOVE";
+
+	/**
+	 * The internal {@code (%package-local-nicknames package)} under
+	 * {@link #PACKAGE_LOCAL_NICKNAMES}, placed like {@link #LOCAL_NICKNAME_ADD_INTERNAL}.
+	 */
+	public static final String PACKAGE_LOCAL_NICKNAMES_INTERNAL = "%PACKAGE-LOCAL-NICKNAMES";
+
+	/**
+	 * The compile paths' run-time nickname table, a global list of
+	 * {@code (PACKAGE NICKNAME . TARGET)} entries, newest first, every cell a string: a
+	 * nil target removes a nickname and a nil nickname forgets the entries behind it
+	 * ({@code LispMacroExpander.injectLocalNicknames}).
+	 */
+	public static final String LOCAL_NICKNAMES_VAR_INTERNAL = "%LOCAL-NICKNAMES%";
+
+	/**
+	 * {@code (%local-nickname-put package nickname target)}: one table entry, the event a
+	 * literal top-level add or remove leaves in a compiled program.
+	 */
+	public static final String LOCAL_NICKNAME_PUT_INTERNAL = "%LOCAL-NICKNAME-PUT";
+
+	/**
+	 * {@code (%local-nickname-define package rows)}: the event a {@code defpackage}
+	 * leaves in a compiled program, its {@code :local-nicknames} replacing the package's.
+	 */
+	public static final String LOCAL_NICKNAME_DEFINE_INTERNAL = "%LOCAL-NICKNAME-DEFINE";
+
+	/**
+	 * {@code (%local-nickname-target package nickname)}: the table's answer for a package
+	 * given by name, a target name or nil.
+	 */
+	public static final String LOCAL_NICKNAME_TARGET_INTERNAL = "%LOCAL-NICKNAME-TARGET";
+
+	/**
+	 * {@code (%local-nickname-find nickname)}: {@link #LOCAL_NICKNAME_TARGET_INTERNAL} in
+	 * the current {@code *package*}.
+	 */
+	public static final String LOCAL_NICKNAME_FIND_INTERNAL = "%LOCAL-NICKNAME-FIND";
+
+	/**
+	 * {@code (%find-package-global designator)}: {@link #FIND_PACKAGE_INTERNAL} past the
+	 * current package's nicknames, in a program that has any.
+	 */
+	public static final String FIND_PACKAGE_GLOBAL_INTERNAL = "%FIND-PACKAGE-GLOBAL";
+
+	/**
+	 * {@code (%read-home symbol qualifier)}: the symbol a token a compiled program's
+	 * run-time reader read names in the current package, or, with a qualifier, in the
+	 * package the qualifier names ({@code LispMacroExpander.injectReadHome}). The emitted
+	 * readers call it, and only a program that can read under a package other than the
+	 * pristine {@code cl-user} defines it.
+	 */
+	public static final String READ_HOME_INTERNAL = "%READ-HOME";
+
+	/**
+	 * {@code (%local-nicknames-moving designator thunk deleting)}: runs the body of a
+	 * {@code rename-package} or {@code delete-package} and tells the table.
+	 */
+	public static final String LOCAL_NICKNAMES_MOVING_INTERNAL = "%LOCAL-NICKNAMES-MOVING";
+
+	/** {@code (%local-nickname-before a b)}: {@code string<} over two nicknames. */
+	public static final String LOCAL_NICKNAME_BEFORE_INTERNAL = "%LOCAL-NICKNAME-BEFORE";
+
+	/**
+	 * {@code uiop:merge-pathnames*} -- the safer defaults-aware merge, portable across
+	 * ASDF-loaded libraries. Runtime function on all backends (interpreter + JVM at
+	 * present; the WASM sandbox has no filesystem access to the loaded system's data dir,
+	 * so the WASM tests using it are gated at the E2E layer).
+	 */
+	public static final String MERGE_PATHNAMES_STAR = "MERGE-PATHNAMES*";
+
+	/**
+	 * {@code uiop:file-exists-p} -- not a stub: {@link #PROBE_FILE}'s truename when it
+	 * names a FILE, nil for a directory, a dangling link or nothing (upstream's
+	 * contract), Lisp in {@code uiop-filesystem.lisp} on every backend. postmodern's
+	 * {@code execute-file.lisp} has five of them.
+	 */
+	public static final String FILE_EXISTS_P = "FILE-EXISTS-P";
+
+	/**
+	 * {@code uiop:run-program} (stub: resolves, undefined when called). Spawning an
+	 * external process is outside every backend's sandbox by design, so the honest answer
+	 * is a call-time error rather than a silent no-op.
+	 */
+	public static final String RUN_PROGRAM = "RUN-PROGRAM";
+
+	/**
+	 * {@code uiop:directory-exists-p} -- the directory twin of {@link #FILE_EXISTS_P}:
+	 * {@link #PROBE_FILE}'s truename (with a trailing {@code /}, links resolved) when the
+	 * path names an existing DIRECTORY, nil otherwise. Answered through
+	 * {@link am.ik.rontolisp.eval.SourceLoader} like {@link #PROBE_FILE}, so a host
+	 * without a filesystem (the browser playground) answers nil rather than failing.
+	 * local-time's {@code reread-timezone-repository} validates its repository root with
+	 * it.
+	 */
+	public static final String DIRECTORY_EXISTS_P = "DIRECTORY-EXISTS-P";
+
+	/**
+	 * {@code uiop:collect-sub*directories directory collectp recursep collector} -- the
+	 * recursive directory walk, Lisp source over {@link #DIRECTORY} like its two
+	 * siblings, so it runs on every backend. {@code collectp} decides whether a directory
+	 * is handed to {@code collector}, {@code recursep} whether its subdirectories are
+	 * visited; both are called with the directory's namestring. local-time's
+	 * {@code reread-timezone-repository} is the caller that asked for it.
+	 */
+	public static final String COLLECT_SUB_DIRECTORIES = "COLLECT-SUB*DIRECTORIES";
+
+	/**
+	 * {@code uiop:directory-files} -- the non-directory entries of a directory, Lisp
+	 * source over {@link #DIRECTORY}. UIOP's optional second argument is a
+	 * name-and-type-only wildcard pathname; here it is the namestring of one, appended to
+	 * the directory and matched by {@link #WILD_MATCH} exactly as {@link #DIRECTORY}
+	 * would ({@code (uiop:directory-files "db/" "*.up.sql")}). Omitting it lists
+	 * everything, UIOP's {@code *wild-file-for-directory*} default. A pattern carrying a
+	 * DIRECTORY component is an error in real UIOP and here too.
+	 */
+	public static final String DIRECTORY_FILES = "DIRECTORY-FILES";
+
+	/**
+	 * {@code uiop:read-file-string} -- the whole file as one string. Prelude Lisp over
+	 * {@code with-open-file} + a CHUNKED {@code read-sequence} loop, so it runs on every
+	 * backend that can open a file for input. Two constraints shape that loop and neither
+	 * is cosmetic: sizing one buffer from {@code file-length} would trap on both WASM
+	 * backends (they answer nil for it -- no WASI filestat call is imported), and the
+	 * loop stops on the first SHORT read so that end of file is read at most once (a
+	 * second read past EOF traps on the {@code --component} backend). Lite deviation:
+	 * real UIOP passes its {@code &rest} keys through to the open, and they are accepted
+	 * and ignored here (the only one that could matter, {@code :external-format}, has no
+	 * rontolisp surface -- every backend reads UTF-8).
+	 */
+	public static final String READ_FILE_STRING = "READ-FILE-STRING";
+
+	/**
+	 * {@code uiop:subdirectories} -- the {@link #DIRECTORY_FILES} twin that keeps only
+	 * the subdirectories (each with its trailing {@code /}). Lisp source over
+	 * {@link #DIRECTORY}, and what {@link #COLLECT_SUB_DIRECTORIES} recurses through.
+	 */
+	public static final String SUBDIRECTORIES = "SUBDIRECTORIES";
+
+	/**
+	 * {@code uiop:ensure-directory-pathname} -- the pathname in DIRECTORY form: a
+	 * namestring that already ends in {@code /} is itself, anything else gains one. The
+	 * namestring is flat here, so this is the whole of real UIOP's
+	 * name/type-to-directory-component promotion. Prelude Lisp, every backend.
+	 */
+	public static final String ENSURE_DIRECTORY_PATHNAME = "ENSURE-DIRECTORY-PATHNAME";
+
+	/**
+	 * {@code uiop:default-temporary-directory} -- the host's temporary directory in
+	 * {@link #ENSURE_DIRECTORY_PATHNAME} form: {@code $TMPDIR} when the environment
+	 * carries one, {@code /tmp/} otherwise. Prelude Lisp over {@link #GETENV}, so a
+	 * backend whose environment is empty (both WASM ones, unless the host passes
+	 * {@code --env}) answers the fallback rather than failing.
+	 */
+	public static final String DEFAULT_TEMPORARY_DIRECTORY = "DEFAULT-TEMPORARY-DIRECTORY";
+
+	/**
+	 * {@code uiop:delete-file-if-exists} -- {@link #DELETE_FILE} with the missing-file
+	 * {@code file-error} swallowed (nil), which is the whole reason real UIOP exports it.
+	 * Prelude Lisp over {@link #DELETE_FILE_INTERNAL}, so it inherits that primitive's
+	 * WASM divergence: both WASM backends signal at CALL time (no WASI unlink import).
+	 */
+	public static final String DELETE_FILE_IF_EXISTS = "DELETE-FILE-IF-EXISTS";
+
+	/**
+	 * {@code uiop:with-temporary-file} -- a built-in {@code LispMacroExpander} expansion
+	 * (the {@code usocket:with-*} pattern), not a stub: it is on smart-buffer's LIVE
+	 * disk-spill path, where a multipart body larger than the memory limit is written to
+	 * a temporary file and the pathname handed back. The option list is UIOP's keyword
+	 * plist -- {@code :stream}, {@code :pathname}, {@code :directory}, {@code :prefix},
+	 * {@code :type}, {@code :keep}, {@code :direction}, {@code :element-type} -- and the
+	 * expansion is upstream's own wrapper: it builds a thunk and calls
+	 * {@link #CALL_WITH_TEMPORARY_FILE}, which creates the file through
+	 * {@link #TEMP_FILE_NAME}, runs the thunk, closes, and deletes unless {@code :keep}
+	 * is true.
+	 */
+	public static final String WITH_TEMPORARY_FILE = "WITH-TEMPORARY-FILE";
+
+	/** The canonical package-qualified spelling of {@link #WITH_TEMPORARY_FILE}. */
+	public static final String UIOP_WITH_TEMPORARY_FILE_QUALIFIED = UIOP_STREAM_PKG + ":" + WITH_TEMPORARY_FILE;
+
+	/**
+	 * {@code uiop:call-with-temporary-file thunk} -- the real temporary-file function:
+	 * creates a uniquely-named file through {@link #TEMP_FILE_NAME}, runs the thunk with
+	 * the stream and/or pathname, and deletes unless {@code :keep}. Lisp source
+	 * ({@code uiop-stream.lisp}); {@link #WITH_TEMPORARY_FILE} and
+	 * {@code tmpize-pathname} are wrappers over it.
+	 */
+	public static final String CALL_WITH_TEMPORARY_FILE = "CALL-WITH-TEMPORARY-FILE";
+
+	/**
+	 * {@code uiop:with-null-input (var &rest keys) body...} -- binds {@code var} to an
+	 * input stream that always returns EOF (a string stream over ""), discarding the
+	 * ignored option keys. A built-in {@code LispMacroExpander} expansion into
+	 * {@link #CALL_WITH_NULL_INPUT}.
+	 */
+	public static final String WITH_NULL_INPUT = "WITH-NULL-INPUT";
+
+	/**
+	 * {@code uiop:call-with-null-input fun} -- calls the fun with an input stream that
+	 * always returns EOF. Lisp source ({@code uiop-stream.lisp}); named here because
+	 * {@link #WITH_NULL_INPUT} expands into it.
+	 */
+	public static final String CALL_WITH_NULL_INPUT = "CALL-WITH-NULL-INPUT";
+
+	/**
+	 * {@code uiop:with-null-output (var &rest keys) body...} -- binds {@code var} to an
+	 * output stream that discards all output, dropping the ignored option keys. A
+	 * built-in {@code LispMacroExpander} expansion into {@link #CALL_WITH_NULL_OUTPUT}.
+	 */
+	public static final String WITH_NULL_OUTPUT = "WITH-NULL-OUTPUT";
+
+	/**
+	 * {@code uiop:call-with-null-output fun} -- calls the fun with an output stream that
+	 * discards all output. Lisp source ({@code uiop-stream.lisp}); named here because
+	 * {@link #WITH_NULL_OUTPUT} expands into it.
+	 */
+	public static final String CALL_WITH_NULL_OUTPUT = "CALL-WITH-NULL-OUTPUT";
+
+	/**
+	 * {@code uiop:with-staging-pathname (var &optional value) body...} -- binds
+	 * {@code var} to a staging pathname derived from {@code value}, runs the body, then
+	 * atomically renames the staging pathname over the target. A built-in
+	 * {@code LispMacroExpander} expansion into {@link #CALL_WITH_STAGING_PATHNAME}.
+	 */
+	public static final String WITH_STAGING_PATHNAME = "WITH-STAGING-PATHNAME";
+
+	/**
+	 * {@code uiop:call-with-staging-pathname pathname fun} -- calls the fun with a
+	 * staging pathname derived from {@code pathname}, then renames it over the target on
+	 * success. Lisp source ({@code uiop-stream.lisp}); named here because
+	 * {@link #WITH_STAGING_PATHNAME} expands into it.
+	 */
+	public static final String CALL_WITH_STAGING_PATHNAME = "CALL-WITH-STAGING-PATHNAME";
+
+	/**
+	 * The {@code %temp-file-name} internal helper: a namestring naming a file that does
+	 * NOT exist yet, inside the given directory (which it creates), built from the prefix
+	 * and type plus a random suffix and retried until it misses. The one place
+	 * {@link #CALL_WITH_TEMPORARY_FILE}'s uniqueness rule is written down; keeping it out
+	 * of the expansion means the retry loop is compiled once per program rather than once
+	 * per call site.
+	 */
+	public static final String TEMP_FILE_NAME = "%TEMP-FILE-NAME";
+
+	/**
+	 * The dump behind {@code uiop:dump-image}: the interpreter's compile of its image (a
+	 * Java built-in), a refusal in a compiled program (a prelude definition).
+	 */
+	public static final String DUMP_IMAGE_PRIMITIVE = "%DUMP-IMAGE";
+
+	/**
+	 * {@code uiop:get-pathname-defaults} ({@code uiop/filesystem}'s export) -- the
+	 * defaults relative names are resolved against. Lisp source in
+	 * {@code uiop-filesystem.lisp} reading {@code *default-pathname-defaults*} (initially
+	 * {@code #P""}, the pathname designating the host working directory every backend
+	 * resolves a relative path against), so
+	 * {@code (merge-pathnames X (get-pathname-defaults))} yields {@code X} unchanged.
+	 */
+	public static final String GET_PATHNAME_DEFAULTS = "GET-PATHNAME-DEFAULTS";
+
+	/**
+	 * {@code uiop:if-let bindings then [else]} -- real UIOP's own copy of alexandria's:
+	 * binds like {@code let} (in parallel) and takes the {@code then} branch only when
+	 * EVERY variable came out non-nil. A single un-nested binding
+	 * ({@code (if-let (x form) ...)}) is accepted too, exactly as upstream, which detects
+	 * it by the binding list's car being a symbol. A built-in {@code LispMacroExpander}
+	 * expansion, like {@link #WITH_TEMPORARY_FILE}.
+	 */
+	public static final String IF_LET = "IF-LET";
+
+	/** The canonical package-qualified spelling of {@link #IF_LET}. */
+	public static final String UIOP_IF_LET_QUALIFIED = UIOP_UTILITY_PKG + ":" + IF_LET;
+
+	/**
+	 * {@code uiop:when-let bindings body...} -- {@link #IF_LET} with an implicit
+	 * {@code progn} body and no else branch.
+	 */
+	public static final String WHEN_LET = "WHEN-LET";
+
+	/** The canonical package-qualified spelling of {@link #WHEN_LET}. */
+	public static final String UIOP_WHEN_LET_QUALIFIED = UIOP_PKG + ":" + WHEN_LET;
+
+	/**
+	 * {@code uiop:when-let* bindings body...} -- the sequential {@link #WHEN_LET}: each
+	 * binding's form sees the ones before it, and the first nil binding short-circuits
+	 * the whole form to nil without evaluating the rest.
+	 */
+	public static final String WHEN_LET_STAR = "WHEN-LET*";
+
+	/** The canonical package-qualified spelling of {@link #WHEN_LET_STAR}. */
+	public static final String UIOP_WHEN_LET_STAR_QUALIFIED = UIOP_PKG + ":" + WHEN_LET_STAR;
+
+	/**
+	 * {@code uiop:with-deprecation (level) definitions...} -- upstream marks the
+	 * definitions it wraps as deprecated so a later caller gets a style warning.
+	 * rontolisp has no deprecation-warning machinery and no compile-time warning channel
+	 * to route one through, so the honest lowering is {@code (progn definitions...)}:
+	 * every definition is established exactly as written and the level form is ignored.
+	 * It wraps top-level {@code defun}s in the wild, so the expansion also splices at top
+	 * level ({@code LispMacroExpander.flattenTopLevel}) rather than burying them in an
+	 * expression.
+	 */
+	public static final String WITH_DEPRECATION = "WITH-DEPRECATION";
+
+	/** The canonical package-qualified spelling of {@link #WITH_DEPRECATION}. */
+	public static final String UIOP_WITH_DEPRECATION_QUALIFIED = UIOP_VERSION_PKG + ":" + WITH_DEPRECATION;
+
+	/**
+	 * The {@code uiop/utility:style-warn} member a {@code with-deprecation}
+	 * {@code :style-warning} level signals through -- the deprecation family's low end
+	 * ({@code .kb/uiop.md}).
+	 */
+	public static final String STYLE_WARN = "STYLE-WARN";
+
+	/**
+	 * The {@code uiop/version:version-deprecation} member that maps a version string to
+	 * the current deprecation level ({@code :style-warning} / {@code :warning} /
+	 * {@code :error} / {@code :delete}); the level form a {@code with-deprecation}
+	 * expansion evaluates at run time.
+	 */
+	public static final String VERSION_DEPRECATION = "VERSION-DEPRECATION";
+
+	/**
+	 * The {@code uiop/version:deprecated-function-style-warning} condition class,
+	 * signalled by a {@code with-deprecation} {@code :style-warning} level.
+	 */
+	public static final String DEPRECATED_FUNCTION_STYLE_WARNING = "DEPRECATED-FUNCTION-STYLE-WARNING";
+
+	/**
+	 * The {@code uiop/version:deprecated-function-warning} condition class, signalled by
+	 * a {@code :warning} level.
+	 */
+	public static final String DEPRECATED_FUNCTION_WARNING = "DEPRECATED-FUNCTION-WARNING";
+
+	/**
+	 * The {@code uiop/version:deprecated-function-error} condition class, signalled by a
+	 * {@code :error} level.
+	 */
+	public static final String DEPRECATED_FUNCTION_ERROR = "DEPRECATED-FUNCTION-ERROR";
+
+	/**
+	 * The {@code uiop/version:deprecated-function-should-be-deleted} condition class,
+	 * signalled by a {@code :delete} level.
+	 */
+	public static final String DEPRECATED_FUNCTION_SHOULD_BE_DELETED = "DEPRECATED-FUNCTION-SHOULD-BE-DELETED";
+
+	/**
+	 * {@code uiop:with-upgradability () definitions...} -- upstream wraps EVERY one of
+	 * its own definitions in this so ASDF can redefine itself inside a running image (the
+	 * forms are re-evaluated at compile, load and run time and the functions declared
+	 * {@code notinline}). rontolisp has no image to upgrade and no separate compile-time
+	 * evaluation to schedule, so the expansion is {@code (progn
+	 * definitions...)} -- a semantic CHOICE, not an omission ({@code .kb/uiop.md}). Like
+	 * {@link #WITH_DEPRECATION} it wraps top-level definitions, so it splices at top
+	 * level ({@code LispMacroExpander.flattenTopLevel}) instead of burying them in an
+	 * expression.
+	 */
+	public static final String WITH_UPGRADABILITY = "WITH-UPGRADABILITY";
+
+	/**
+	 * {@code uiop:nest form...} -- the anti-indentation macro: it nests each form inside
+	 * the previous one's tail, so {@code (nest (with-a) (with-b) body)} is
+	 * {@code (with-a (with-b body))}. Purely syntactic, so the expansion is the whole
+	 * implementation.
+	 */
+	public static final String NEST = "NEST";
+
+	/**
+	 * {@code uiop:while-collecting (collector...) body...} -- binds one local collector
+	 * FUNCTION per name; calling it inside the body appends to that name's list, and the
+	 * form answers one list per collector as multiple values, in order.
+	 */
+	public static final String WHILE_COLLECTING = "WHILE-COLLECTING";
+
+	/**
+	 * {@code uiop:appendf place &rest lists} -- upstream's
+	 * {@code (define-modify-macro appendf (&rest args) append)}. Expanded here rather
+	 * than defined with {@code define-modify-macro} in the uiop Lisp source, because the
+	 * compile path expands user macros ({@code UserMacroExpander}) BEFORE the uiop splice
+	 * and would therefore never see it.
+	 */
+	public static final String APPENDF = "APPENDF";
+
+	/**
+	 * {@code uiop:latest-timestamp-f place &rest timestamps} -- the
+	 * {@code define-modify-macro} over {@link #LATEST_TIMESTAMP}, expanded here for the
+	 * same reason as {@link #APPENDF}.
+	 */
+	public static final String LATEST_TIMESTAMP_F = "LATEST-TIMESTAMP-F";
+
+	/**
+	 * {@code uiop:latest-timestamp &rest timestamps} -- {@link #LATEST_TIMESTAMP_F}'s
+	 * accumulator.
+	 */
+	public static final String LATEST_TIMESTAMP = "LATEST-TIMESTAMP";
+
+	/**
+	 * {@code uiop:with-muffled-conditions (conditions) body...} -- shorthand for
+	 * {@link #CALL_WITH_MUFFLED_CONDITIONS} over a thunk of the body.
+	 */
+	public static final String WITH_MUFFLED_CONDITIONS = "WITH-MUFFLED-CONDITIONS";
+
+	/**
+	 * {@code uiop:call-with-muffled-conditions thunk conditions} -- runs the thunk under
+	 * a {@code handler-bind} that invokes the {@code muffle-warning} restart for every
+	 * condition matching one of the patterns. Lisp source ({@code uiop-utility.lisp});
+	 * named here because {@link #WITH_MUFFLED_CONDITIONS} expands into it.
+	 */
+	public static final String CALL_WITH_MUFFLED_CONDITIONS = "CALL-WITH-MUFFLED-CONDITIONS";
+
+	/**
+	 * {@code uiop:with-muffled-compiler-conditions () body...} -- shorthand for
+	 * {@link #CALL_WITH_MUFFLED_COMPILER_CONDITIONS} over a thunk of the body.
+	 */
+	public static final String WITH_MUFFLED_COMPILER_CONDITIONS = "WITH-MUFFLED-COMPILER-CONDITIONS";
+
+	/**
+	 * {@code uiop:call-with-muffled-compiler-conditions thunk} -- runs the thunk under
+	 * the uninteresting + compiler-condition muffling. Lisp source
+	 * ({@code uiop-lisp-build.lisp}); named here because
+	 * {@link #WITH_MUFFLED_COMPILER_CONDITIONS} expands into it.
+	 */
+	public static final String CALL_WITH_MUFFLED_COMPILER_CONDITIONS = "CALL-WITH-MUFFLED-COMPILER-CONDITIONS";
+
+	/**
+	 * {@code uiop:with-muffled-loader-conditions () body...} -- shorthand for
+	 * {@link #CALL_WITH_MUFFLED_LOADER_CONDITIONS} over a thunk of the body.
+	 */
+	public static final String WITH_MUFFLED_LOADER_CONDITIONS = "WITH-MUFFLED-LOADER-CONDITIONS";
+
+	/**
+	 * {@code uiop:call-with-muffled-loader-conditions thunk} -- runs the thunk under the
+	 * uninteresting + loader-condition muffling. Lisp source
+	 * ({@code uiop-lisp-build.lisp}); named here because
+	 * {@link #WITH_MUFFLED_LOADER_CONDITIONS} expands into it.
+	 */
+	public static final String CALL_WITH_MUFFLED_LOADER_CONDITIONS = "CALL-WITH-MUFFLED-LOADER-CONDITIONS";
+
+	/**
+	 * {@code uiop:with-fatal-condition-handler () body...} -- shorthand for
+	 * {@link #CALL_WITH_FATAL_CONDITION_HANDLER} over a thunk of the body.
+	 */
+	public static final String WITH_FATAL_CONDITION_HANDLER = "WITH-FATAL-CONDITION-HANDLER";
+
+	/**
+	 * {@code uiop:call-with-fatal-condition-handler thunk} -- runs the thunk under a
+	 * {@code handler-bind} that reports any {@code serious-condition} and exits 99. Lisp
+	 * source ({@code uiop-image.lisp}); named here because
+	 * {@link #WITH_FATAL_CONDITION_HANDLER} expands into it.
+	 */
+	public static final String CALL_WITH_FATAL_CONDITION_HANDLER = "CALL-WITH-FATAL-CONDITION-HANDLER";
+
+	/**
+	 * {@code uiop:with-pathname-defaults ([defaults]) body...} -- runs the body with
+	 * {@code *default-pathname-defaults*} bound to the given form, or to
+	 * {@link #NIL_PATHNAME_VAR} when none is given (upstream's neutral-defaults arm).
+	 */
+	public static final String WITH_PATHNAME_DEFAULTS = "WITH-PATHNAME-DEFAULTS";
+
+	/**
+	 * {@code uiop:with-enough-pathname (var &key pathname defaults) body...} -- shorthand
+	 * for {@link #CALL_WITH_ENOUGH_PATHNAME} over a one-argument lambda of the body. The
+	 * {@code :pathname} form defaults to the VARIABLE named by {@code var} (upstream's
+	 * rebinding shorthand) and {@code :defaults} to {@code *default-pathname-defaults*}.
+	 */
+	public static final String WITH_ENOUGH_PATHNAME = "WITH-ENOUGH-PATHNAME";
+
+	/**
+	 * {@code uiop:call-with-enough-pathname maybe-subpath defaults thunk} -- calls the
+	 * thunk with {@code enough-pathname} of the two, under
+	 * {@code *default-pathname-defaults*} bound to the defaults. Lisp source
+	 * ({@code uiop-pathname.lisp}); named here because {@link #WITH_ENOUGH_PATHNAME}
+	 * expands into it.
+	 */
+	public static final String CALL_WITH_ENOUGH_PATHNAME = "CALL-WITH-ENOUGH-PATHNAME";
+
+	/**
+	 * {@code uiop:with-current-directory ([dir]) body...} -- runs the body with the
+	 * working directory changed to {@code dir}, restoring it afterwards. A built-in
+	 * {@code LispMacroExpander} expansion into {@link #CALL_WITH_CURRENT_DIRECTORY}, like
+	 * {@link #WITH_MUFFLED_CONDITIONS} is into its call-with function. The dir form is
+	 * evaluated once, inside the call, exactly as upstream's backquote places it.
+	 */
+	public static final String WITH_CURRENT_DIRECTORY = "WITH-CURRENT-DIRECTORY";
+
+	/**
+	 * {@code uiop:call-with-current-directory dir thunk} -- calls the thunk with
+	 * {@code *default-pathname-defaults*} bound to the directory and the process working
+	 * directory changed to it. Lisp source ({@code uiop-filesystem.lisp}); inherits
+	 * {@code chdir}'s decision, so a non-nil dir signals {@code not-implemented-error} on
+	 * every backend and a nil dir just runs the thunk. Named here because
+	 * {@link #WITH_CURRENT_DIRECTORY} expands into it.
+	 */
+	public static final String CALL_WITH_CURRENT_DIRECTORY = "CALL-WITH-CURRENT-DIRECTORY";
+
+	/**
+	 * {@code uiop:with-input (var &optional value) body...} -- binds {@code var} to an
+	 * input stream coerced from {@code value} (a stream designator, string or pathname)
+	 * and runs the body. A built-in {@code LispMacroExpander} expansion into
+	 * {@link #CALL_WITH_INPUT_INTERNAL}, like {@link #WITH_CURRENT_DIRECTORY} is into its
+	 * call-with function.
+	 */
+	public static final String WITH_INPUT = "WITH-INPUT";
+
+	/** The canonical package-qualified spelling of {@link #WITH_INPUT}. */
+	public static final String UIOP_WITH_INPUT_QUALIFIED = UIOP_STREAM_PKG + ":" + WITH_INPUT;
+
+	/**
+	 * {@code uiop:call-with-input input function} -- calls the function with an input
+	 * stream coerced from {@code input}. Upstream defines it but does not export it, so
+	 * it lives as the {@code %call-with-input} prelude entry rather than a uiop resource
+	 * definition (a resource may only define inventory names); the {@code with-input}
+	 * expansion and the exported designator readers call it.
+	 */
+	public static final String CALL_WITH_INPUT_INTERNAL = "%CALL-WITH-INPUT";
+
+	/**
+	 * {@code uiop:with-output (var &optional value &key element-type) body...} -- binds
+	 * {@code var} to an output stream coerced from {@code value} and runs the body. A
+	 * built-in {@code LispMacroExpander} expansion into
+	 * {@link #CALL_WITH_OUTPUT_INTERNAL}.
+	 */
+	public static final String WITH_OUTPUT = "WITH-OUTPUT";
+
+	/** The canonical package-qualified spelling of {@link #WITH_OUTPUT}. */
+	public static final String UIOP_WITH_OUTPUT_QUALIFIED = UIOP_STREAM_PKG + ":" + WITH_OUTPUT;
+
+	/**
+	 * {@code uiop:call-with-output output function} -- calls the function with an output
+	 * stream coerced from {@code output}. Upstream defines it but does not export it, so
+	 * it lives as the {@code %call-with-output} prelude entry rather than a uiop resource
+	 * definition; the {@code with-output} expansion and {@code output-string} call it.
+	 */
+	public static final String CALL_WITH_OUTPUT_INTERNAL = "%CALL-WITH-OUTPUT";
+
+	/**
+	 * {@code uiop:with-input-file (var pathname &rest keys) body...} -- opens the file
+	 * for input and runs the body with {@code var} bound to the stream. A built-in
+	 * {@code LispMacroExpander} expansion into {@link #CALL_WITH_INPUT_FILE}.
+	 */
+	public static final String WITH_INPUT_FILE = "WITH-INPUT-FILE";
+
+	/**
+	 * {@code uiop:call-with-input-file pathname thunk} -- opens the file for input and
+	 * calls the thunk with the stream. Lisp source ({@code uiop-stream.lisp}). Named here
+	 * because {@link #WITH_INPUT_FILE} expands into it.
+	 */
+	public static final String CALL_WITH_INPUT_FILE = "CALL-WITH-INPUT-FILE";
+
+	/**
+	 * {@code uiop:with-output-file (var pathname &rest keys) body...} -- opens the file
+	 * for output and runs the body with {@code var} bound to the stream. A built-in
+	 * {@code LispMacroExpander} expansion into {@link #CALL_WITH_OUTPUT_FILE}.
+	 */
+	public static final String WITH_OUTPUT_FILE = "WITH-OUTPUT-FILE";
+
+	/**
+	 * {@code uiop:call-with-output-file pathname thunk} -- opens the file for output and
+	 * calls the thunk with the stream. Lisp source ({@code uiop-stream.lisp}). Named here
+	 * because {@link #WITH_OUTPUT_FILE} expands into it.
+	 */
+	public static final String CALL_WITH_OUTPUT_FILE = "CALL-WITH-OUTPUT-FILE";
+
+	/**
+	 * {@code uiop:with-safe-io-syntax ((&key package) &rest body)} -- runs the body with
+	 * the safe reader options (standard syntax, {@code *package*} bound,
+	 * {@code *read-eval*} nil). A built-in {@code LispMacroExpander} expansion into
+	 * {@link #CALL_WITH_SAFE_IO_SYNTAX}.
+	 */
+	public static final String WITH_SAFE_IO_SYNTAX = "WITH-SAFE-IO-SYNTAX";
+
+	/**
+	 * {@code uiop:call-with-safe-io-syntax thunk} -- calls the thunk under the safe
+	 * reader options. Lisp source ({@code uiop-stream.lisp}). Named here because
+	 * {@link #WITH_SAFE_IO_SYNTAX} expands into it.
+	 */
+	public static final String CALL_WITH_SAFE_IO_SYNTAX = "CALL-WITH-SAFE-IO-SYNTAX";
+
+	/**
+	 * {@code uiop:eval-input input} -- read and evaluate forms from a stream designator.
+	 * Lisp source ({@code uiop-stream.lisp}) over the {@code %call-with-input} prelude
+	 * entry. Named here because its surface-form selection row opens through
+	 * {@link #CALL_WITH_INPUT_FILE}.
+	 */
+	public static final String EVAL_INPUT = "EVAL-INPUT";
+
+	/**
+	 * {@code uiop:input-string input} -- coerce an input designator to its contents. Lisp
+	 * source ({@code uiop-stream.lisp}) over the {@code %call-with-input} prelude entry.
+	 * Named here for the same selection row as {@link #EVAL_INPUT}.
+	 */
+	public static final String INPUT_STRING = "INPUT-STRING";
+
+	/**
+	 * {@code uiop:output-string string &optional output} -- print a string to an output
+	 * designator. Lisp source ({@code uiop-stream.lisp}) over the
+	 * {@code %call-with-output} prelude entry. Named here because its surface-form
+	 * selection row opens through {@link #CALL_WITH_OUTPUT_FILE}.
+	 */
+	public static final String OUTPUT_STRING = "OUTPUT-STRING";
+
+	/**
+	 * {@code uiop:*nil-pathname*} -- the neutral defaults pathname, {@code #P""} here.
+	 * Named because {@link #WITH_PATHNAME_DEFAULTS}'s no-defaults expansion references
+	 * it, which is also what makes {@code UiopLibrary} splice its {@code defvar}.
+	 */
+	public static final String NIL_PATHNAME_VAR = "*NIL-PATHNAME*";
+
+	/**
+	 * {@code uiop:subpathname pathname subpath &key type} -- a relative subpath merged
+	 * under the pathname's directory. Named for the compile-time fold
+	 * ({@code cli/CompileTimePathnameFolder}): a subpathname over literals is a literal,
+	 * the same way {@code uiop:merge-pathnames*} already folds.
+	 */
+	public static final String SUBPATHNAME = "SUBPATHNAME";
+
+	/**
+	 * {@code uiop:uiop-debug &rest keys} -- loads a developer's personal debug file. The
+	 * expansion is the {@link #LOAD_UIOP_DEBUG_UTILITY} call (upstream additionally wraps
+	 * it in an {@code eval-when}, which rontolisp's single-pass top level does not need);
+	 * the loader itself signals, because a run-time {@code load} of a computed pathname
+	 * is not something any backend has.
+	 */
+	public static final String UIOP_DEBUG = "UIOP-DEBUG";
+
+	/** {@code uiop:load-uiop-debug-utility} -- what {@link #UIOP_DEBUG} expands into. */
+	public static final String LOAD_UIOP_DEBUG_UTILITY = "LOAD-UIOP-DEBUG-UTILITY";
+
+	/**
+	 * {@code uiop:compatfmt format} -- upstream strips the pretty-printer directives from
+	 * the format string on the implementations that cannot read them (GCL, Genera).
+	 * rontolisp reads them all, so the expansion is the string unchanged, which is also
+	 * upstream's own {@code #-(or gcl genera)} arm.
+	 */
+	public static final String COMPATFMT = "COMPATFMT";
+
+	/**
+	 * {@code uiop:symbol-call package name &rest args} -- real UIOP's late-binding call:
+	 * look the name up in the package at RUN time and apply it. Not a stub on the
+	 * interpreter (a global function in {@code LispEvaluator} over the package resolver's
+	 * member spelling); on the compile backends it lowers to the generic uiop call-time
+	 * error, because a compiled program has no runtime name-to-function table. lack's
+	 * {@code util.lisp} spells it with a SINGLE colon, so the name has to be external for
+	 * the whole file to read.
+	 */
+	public static final String SYMBOL_CALL = "SYMBOL-CALL";
+
+	/** The canonical package-qualified spelling of {@link #SYMBOL_CALL}. */
+	public static final String UIOP_SYMBOL_CALL = UIOP_PACKAGE_PKG + ":" + SYMBOL_CALL;
+
+	/**
+	 * The {@code uiop/image} sub-package: the command line, exit and the dump hooks.
+	 * Libraries name a sub-package directly in an {@code (:import-from :uiop/image ...)}
+	 * clause, which fails at read time when the package is absent -- this was the first
+	 * one registered, before the whole bundle was.
+	 */
+	public static final String UIOP_IMAGE_PKG = "UIOP/IMAGE";
+
+	/**
+	 * {@code uiop/image:print-condition-backtrace condition &key stream count} -- lite:
+	 * no backend carries a Lisp-level call stack, so it prints the CONDITION to the
+	 * stream and nothing else. Re-exported by {@link #UIOP_PKG} like real UIOP does.
+	 * {@code lack-middleware-backtrace} is the caller.
+	 */
+	public static final String PRINT_CONDITION_BACKTRACE = "PRINT-CONDITION-BACKTRACE";
+
+	/**
+	 * The {@code swank} shim package (and built-in ASDF system) name. The real swank is
+	 * SLIME's server half, whose {@code .asd} is a program rontolisp cannot parse; on the
+	 * interpreter the shim's {@code create-server} starts the server {@code --swank}
+	 * runs. clack's {@code .asd} hard-depends on it, so the shim is also what keeps
+	 * {@code (ql:quickload "clack")} from downloading SLIME and dying on it.
+	 */
+	public static final String SWANK_PKG = "SWANK";
+
+	/**
+	 * {@code swank:create-server &key port dont-close interface} -- on the interpreter,
+	 * starts the SWANK server on the program's own evaluator ({@link #SWANK_LISTEN},
+	 * {@link #SWANK_SERVE}) and answers its port; a compiled program signals, having no
+	 * interpreter to serve. clack reaches it when {@code clackup} is passed
+	 * {@code :swank-port}.
+	 */
+	public static final String CREATE_SERVER = "CREATE-SERVER";
+
+	/**
+	 * {@code swank:stop-server port} -- stops the server listening on the port
+	 * ({@link #SWANK_STOP}), its connections going on; nil in a compiled program, which
+	 * started none (clack's {@code stop} calls it whenever a swank port was recorded).
+	 */
+	public static final String STOP_SERVER = "STOP-SERVER";
+
+	/**
+	 * The {@code mgl-pax} stub package (nickname {@code pax}) behind the built-in ASDF
+	 * system {@code mgl-pax-bootstrap}. Real mgl-pax is a documentation system;
+	 * mgl-pax-bootstrap is its tiny package-definition core, which trivial-utf-8 (a uuid
+	 * dependency) hard-depends on. The stub defines only what trivial-utf-8's source
+	 * calls: {@code define-package} (consumed by the resolver as {@code defpackage}),
+	 * {@code defsection} (defines the section name as a nil variable), and nil no-ops for
+	 * the PAX-World registration helpers.
+	 */
+	public static final String MGL_PAX_PKG = "MGL-PAX";
+
+	/**
+	 * {@code define-package} -- uiop's and mgl-pax's {@code defpackage} variant. A
+	 * literal top-level call qualified to either package is consumed by
+	 * {@code PackageResolver.resolve} exactly like {@code defpackage} (the variant's
+	 * extra tolerance -- redefinition without warnings -- is the resolver's behavior
+	 * already; its extra clauses error loudly until a consumer needs them).
+	 */
+	public static final String DEFINE_PACKAGE = "DEFINE-PACKAGE";
+
+	/**
+	 * The {@code trivial-garbage} shim package (nickname {@code tg}, and built-in ASDF
+	 * system) name. The real library is a per-implementation portability layer over GC
+	 * finalizers, weak tables and weak pointers; no backend exposes GC hooks, and its
+	 * {@code .asd} errors under rontolisp's features. The shim's {@code finalize} is a
+	 * no-op returning the object (CL guarantees finalizers nothing, so a conforming
+	 * consumer already works when they never fire); dbd-postgres is the consumer.
+	 */
+	public static final String TRIVIAL_GARBAGE_PKG = "TRIVIAL-GARBAGE";
+
+	/**
+	 * The {@code cl+ssl} shim package (and built-in ASDF system) name. The real library
+	 * is a CFFI binding to OpenSSL, unloadable here (its {@code cffi} dependency's
+	 * {@code .asd} errors on an unsupported Lisp); every CL HTTP client (dexador, drakma,
+	 * ...) reaches TLS through it. The shim covers the CLIENT side over the
+	 * {@code rontolisp:tls-upgrade} primitive -- {@code make-ssl-client-stream} upgrades
+	 * an already-connected stream -- and SIGNALS on what has no backing (client
+	 * certificates, {@code :verify-location} CA paths) rather than accepting and
+	 * ignoring. See {@code cl-ssl.lisp} and {@code .kb/tcp-sockets.md}.
+	 */
+	public static final String CL_SSL_PKG = "CL+SSL";
+
+	/**
+	 * The {@code trivial-cltl2} shim package (nickname {@code cltl2}, and built-in ASDF
+	 * system) name. The real library is a pure re-export of each host implementation's
+	 * CLtL2 environment API (sb-cltl2 etc.) -- on rontolisp every implementation branch
+	 * of its one source file is feature-false, so loading it verbatim yields a package
+	 * whose every export is undefined. The shim provides the two members trivia level2
+	 * calls ({@code define-declaration} as a registering no-op,
+	 * {@code declaration-information} answering nil -- rontolisp declarations are no-ops,
+	 * so there is never information to report) and typo's {@code function-information}
+	 * (the global kind, no declarations); the remaining exports resolve but are
+	 * undefined-function errors when called (the uiop stub convention).
+	 */
+	public static final String TRIVIAL_CLTL2_PKG = "TRIVIAL-CLTL2";
+
+	/** {@code trivial-cltl2:define-declaration} -- expands to the declaration name. */
+	public static final String DEFINE_DECLARATION = "DEFINE-DECLARATION";
+
+	/** {@code trivial-cltl2:declaration-information} -- always nil (no-op declares). */
+	public static final String DECLARATION_INFORMATION = "DECLARATION-INFORMATION";
+
+	/**
+	 * The {@code clack.handler.rontolisp} package: the rontolisp handler backend for
+	 * Clack, satisfied by the built-in ASDF system {@code clack-handler-rontolisp}
+	 * ({@code clack-handler-rontolisp.lisp}, {@code eval.ShimLibraries}). Unlike the
+	 * other shim packages it is NOT seeded in {@code PackageRegistry}: clack locates a
+	 * handler backend by probing {@code (find-package "CLACK.HANDLER.RONTOLISP")} and
+	 * loading the system only on a miss (lack's {@code find-package-or-load}), so a
+	 * pre-seeded package would short-circuit the load and leave {@code run} undefined.
+	 * The shim carries the {@code defpackage} instead (the leaf-module pattern),
+	 * registering the package when the system loads.
+	 */
+	public static final String CLACK_HANDLER_RONTOLISP_PKG = "CLACK.HANDLER.RONTOLISP";
+
+	/**
+	 * The {@code clack-handler-rontolisp} built-in ASDF system name -- the
+	 * ecosystem-conventional hyphenated spelling a user names directly.
+	 */
+	public static final String CLACK_HANDLER_RONTOLISP_SYSTEM = "clack-handler-rontolisp";
+
+	/**
+	 * The dotted system name lack's {@code find-package-or-load} actually derives from
+	 * the package name (it hyphenates {@code /} but leaves {@code .} alone when not in
+	 * backward-compatible mode), registered as an alias of
+	 * {@link #CLACK_HANDLER_RONTOLISP_SYSTEM} so {@code (clackup app :server :rontolisp)}
+	 * resolves the backend at run time.
+	 */
+	public static final String CLACK_HANDLER_RONTOLISP_DOTTED_SYSTEM = "clack.handler.rontolisp";
+
+	/**
+	 * The {@code clack.handler.reactor} package: the Clack handler backend for a
+	 * HOST-DRIVEN REACTOR -- a Cloudflare Worker, a browser page, a node or JVM
+	 * embedding, any host that has already parsed the request and calls an exported
+	 * function instead of handing the program a socket. Satisfied by the built-in ASDF
+	 * system {@code clack-handler-reactor} ({@code clack-handler-reactor.lisp},
+	 * {@code eval.ShimLibraries}), and NOT seeded in {@code PackageRegistry} for the same
+	 * reason as {@link #CLACK_HANDLER_RONTOLISP_PKG}.
+	 *
+	 * <p>
+	 * It is driven by {@code clackup} like every other handler backend, and what its
+	 * {@code run} owns instead of a socket is the shared application store plus -- on the
+	 * WASM backends -- the {@link #HTTP_REACTOR} marker the export is synthesized from.
+	 * Below {@code run} sit two public functions over the same shared transport:
+	 * {@code handle} (application + JSON request string in, JSON response string out) and
+	 * {@code dispatch}, which runs the stored application and is what a host calls.
+	 */
+	public static final String CLACK_HANDLER_REACTOR_PKG = "CLACK.HANDLER.REACTOR";
+
+	/**
+	 * The {@code clack-handler-reactor} built-in ASDF system name -- the
+	 * ecosystem-conventional hyphenated spelling a user names directly. It names the
+	 * TRANSPORT rather than a deployment vendor, like every other name in this lineage
+	 * ({@code %http-reactor-*}, {@code #+rontolisp-reactor}).
+	 */
+	public static final String CLACK_HANDLER_REACTOR_SYSTEM = "clack-handler-reactor";
+
+	/**
+	 * The dotted alias of {@link #CLACK_HANDLER_REACTOR_SYSTEM}, registered for the same
+	 * reason as {@link #CLACK_HANDLER_RONTOLISP_DOTTED_SYSTEM}: it is the system name
+	 * lack's {@code find-package-or-load} derives from the package name.
+	 */
+	public static final String CLACK_HANDLER_REACTOR_DOTTED_SYSTEM = "clack.handler.reactor";
+
+	/**
+	 * The {@code defpackage} {@code :local-nicknames} clause keyword: each
+	 * {@code (nickname actual-package)} pair is a nickname the package has for itself.
+	 */
+	public static final String LOCAL_NICKNAMES_KEYWORD = ":LOCAL-NICKNAMES";
+
+	/**
+	 * {@code rontolisp:fundamental-character-output-stream} -- the base class of
+	 * rontolisp's own Gray-stream extension (eval.GrayStreamsLibrary).
+	 */
+	public static final String GRAY_CHAR_OUTPUT_STREAM = "FUNDAMENTAL-CHARACTER-OUTPUT-STREAM";
+
+	/** {@code rontolisp:fundamental-character-input-stream}. */
+	public static final String GRAY_CHAR_INPUT_STREAM = "FUNDAMENTAL-CHARACTER-INPUT-STREAM";
+
+	/** {@code rontolisp:stream-write-char} -- the Gray per-character write generic. */
+	public static final String GRAY_STREAM_WRITE_CHAR = "STREAM-WRITE-CHAR";
+
+	/**
+	 * {@code rontolisp:stream-write-string} -- the Gray write generic the
+	 * {@code write-string}/{@code write-char} built-ins dispatch to for CLOS-instance
+	 * streams.
+	 */
+	public static final String GRAY_STREAM_WRITE_STRING = "STREAM-WRITE-STRING";
+
+	/** {@code rontolisp:fundamental-stream} -- the root Gray base class. */
+	public static final String GRAY_FUNDAMENTAL_STREAM = "FUNDAMENTAL-STREAM";
+
+	/** {@code rontolisp:fundamental-input-stream}. */
+	public static final String GRAY_INPUT_STREAM = "FUNDAMENTAL-INPUT-STREAM";
+
+	/** {@code rontolisp:fundamental-output-stream}. */
+	public static final String GRAY_OUTPUT_STREAM = "FUNDAMENTAL-OUTPUT-STREAM";
+
+	/** {@code rontolisp:fundamental-binary-input-stream}. */
+	public static final String GRAY_BINARY_INPUT_STREAM = "FUNDAMENTAL-BINARY-INPUT-STREAM";
+
+	/** {@code rontolisp:fundamental-binary-output-stream}. */
+	public static final String GRAY_BINARY_OUTPUT_STREAM = "FUNDAMENTAL-BINARY-OUTPUT-STREAM";
+
+	/** {@code rontolisp:fundamental-character-stream} -- the character leaves' parent. */
+	public static final String GRAY_CHARACTER_STREAM = "FUNDAMENTAL-CHARACTER-STREAM";
+
+	/** {@code rontolisp:fundamental-binary-stream} -- the binary leaves' parent. */
+	public static final String GRAY_BINARY_STREAM = "FUNDAMENTAL-BINARY-STREAM";
+
+	/**
+	 * {@code trivial-gray-streams:trivial-gray-stream-mixin} -- the portable mixin class
+	 * of the trivial-gray-streams shim (upstream's own class name; the only Gray class
+	 * name that lives in the shim package alone).
+	 */
+	public static final String GRAY_STREAM_MIXIN = "TRIVIAL-GRAY-STREAM-MIXIN";
+
+	/**
+	 * {@code rontolisp:stream-read-byte} -- the Gray read generic the {@code read-byte}
+	 * built-in dispatches to for CLOS-instance streams. Answers a byte or {@code :eof}
+	 * (the read-side EOF convention, shared by {@code stream-read-char} and
+	 * {@code stream-read-line}).
+	 */
+	public static final String GRAY_STREAM_READ_BYTE = "STREAM-READ-BYTE";
+
+	/** {@code rontolisp:stream-read-char} -- see {@link #GRAY_STREAM_READ_BYTE}. */
+	public static final String GRAY_STREAM_READ_CHAR = "STREAM-READ-CHAR";
+
+	/**
+	 * {@code rontolisp:stream-read-char-no-hang} -- the {@code read-char-no-hang} Gray
+	 * generic. Its default method IS {@code stream-read-char} (sb-gray's default too): no
+	 * rontolisp source is non-blocking in a way a class could not wrap itself.
+	 */
+	public static final String GRAY_STREAM_READ_CHAR_NO_HANG = "STREAM-READ-CHAR-NO-HANG";
+
+	/**
+	 * {@code rontolisp:stream-peek-char} -- the {@code peek-char} Gray generic. Its
+	 * default method reads one character and hands it back through
+	 * {@link #GRAY_STREAM_UNREAD_CHAR}.
+	 */
+	public static final String GRAY_STREAM_PEEK_CHAR = "STREAM-PEEK-CHAR";
+
+	/**
+	 * {@code rontolisp:stream-unread-char} -- the {@code unread-char} Gray generic, and
+	 * what {@code stream-peek-char}'s default pushes back through. Its own default method
+	 * parks the character in the protocol's one-slot pushback cell, so
+	 * {@code stream-read-char} stays the single method a character input stream must
+	 * define; a class that can rewind its source defines this and owns the pushback.
+	 */
+	public static final String GRAY_STREAM_UNREAD_CHAR = "STREAM-UNREAD-CHAR";
+
+	/** {@code rontolisp:stream-read-line} -- see {@link #GRAY_STREAM_READ_BYTE}. */
+	public static final String GRAY_STREAM_READ_LINE = "STREAM-READ-LINE";
+
+	/** {@code rontolisp:stream-listen} -- the {@code listen} built-in's Gray generic. */
+	public static final String GRAY_STREAM_LISTEN = "STREAM-LISTEN";
+
+	/** {@code rontolisp:stream-write-byte} -- the {@code write-byte} Gray generic. */
+	public static final String GRAY_STREAM_WRITE_BYTE = "STREAM-WRITE-BYTE";
+
+	/**
+	 * {@code rontolisp:stream-read-sequence (stream sequence start end)} -- the
+	 * {@code read-sequence} Gray generic; end is always an integer (the dispatch
+	 * normalizes a missing {@code :end} to the sequence length).
+	 */
+	public static final String GRAY_STREAM_READ_SEQUENCE = "STREAM-READ-SEQUENCE";
+
+	/** {@code rontolisp:stream-write-sequence} -- see the read twin. */
+	public static final String GRAY_STREAM_WRITE_SEQUENCE = "STREAM-WRITE-SEQUENCE";
+
+	/**
+	 * {@code rontolisp:stream-file-position} -- the {@code file-position} Gray generic;
+	 * the two-argument {@code (file-position s pos)} goes through the
+	 * {@code (setf rontolisp:stream-file-position)} writer generic.
+	 */
+	public static final String GRAY_STREAM_FILE_POSITION = "STREAM-FILE-POSITION";
+
+	/**
+	 * {@code rontolisp:stream-line-column} -- the Gray column generic; {@code nil} (the
+	 * default method's answer) means the stream tracks no column, which is what makes
+	 * {@code fresh-line} write its newline unconditionally.
+	 */
+	public static final String GRAY_STREAM_LINE_COLUMN = "STREAM-LINE-COLUMN";
+
+	/**
+	 * {@code rontolisp:stream-start-line-p} -- whether the stream is at the start of a
+	 * line; the default method answers from {@link #GRAY_STREAM_LINE_COLUMN}.
+	 */
+	public static final String GRAY_STREAM_START_LINE_P = "STREAM-START-LINE-P";
+
+	/** {@code rontolisp:stream-terpri} -- the {@code terpri} Gray generic. */
+	public static final String GRAY_STREAM_TERPRI = "STREAM-TERPRI";
+
+	/** {@code rontolisp:stream-fresh-line} -- the {@code fresh-line} Gray generic. */
+	public static final String GRAY_STREAM_FRESH_LINE = "STREAM-FRESH-LINE";
+
+	/** {@code rontolisp:stream-advance-to-column} -- the Gray column-padding generic. */
+	public static final String GRAY_STREAM_ADVANCE_TO_COLUMN = "STREAM-ADVANCE-TO-COLUMN";
+
+	/** {@code rontolisp:stream-force-output} -- the {@code force-output} Gray generic. */
+	public static final String GRAY_STREAM_FORCE_OUTPUT = "STREAM-FORCE-OUTPUT";
+
+	/**
+	 * {@code rontolisp:stream-finish-output} -- the {@code finish-output} Gray generic.
+	 */
+	public static final String GRAY_STREAM_FINISH_OUTPUT = "STREAM-FINISH-OUTPUT";
+
+	/** {@code rontolisp:stream-clear-output} -- the {@code clear-output} Gray generic. */
+	public static final String GRAY_STREAM_CLEAR_OUTPUT = "STREAM-CLEAR-OUTPUT";
+
+	/** {@code rontolisp:stream-clear-input} -- the {@code clear-input} Gray generic. */
+	public static final String GRAY_STREAM_CLEAR_INPUT = "STREAM-CLEAR-INPUT";
+
+	/**
+	 * The {@code *standard-output*} variable -- bound to the stream designator {@code t}
+	 * (standard output), which every print-family function accepts.
+	 */
+	public static final String STANDARD_OUTPUT_VAR = "*STANDARD-OUTPUT*";
+
+	/**
+	 * The {@code *error-output*} variable -- bound to the stream designator for the
+	 * process standard ERROR (the handle {@code 2}, the WASI fd every backend agrees on),
+	 * so a write through it reaches stderr rather than stdout. Binding it redirects
+	 * {@code warn}, the same way {@link #STANDARD_OUTPUT_VAR} redirects the print family.
+	 */
+	public static final String ERROR_OUTPUT_VAR = "*ERROR-OUTPUT*";
+
+	/**
+	 * The {@code *standard-input*} variable -- bound to the stream designator {@code t}
+	 * (standard input), which every read-family function accepts as "the standard
+	 * stream". Binding it redirects the stream-argument-less read family, the input
+	 * mirror of {@link #STANDARD_OUTPUT_VAR}.
+	 */
+	public static final String STANDARD_INPUT_VAR = "*STANDARD-INPUT*";
+
+	/**
+	 * Checks if the given name matches the c[ad]{2,4}r pattern (e.g., caar, cadr, cddr,
+	 * caddr, cdddr, etc.). The family is not enumerated in a constant table -- the
+	 * package classification ({@code PackageRegistry}/{@code PackageResolver}) and the
+	 * expander both derive membership from the spelling, so it lives here with the names
+	 * rather than in the expander (which sits above the reader and must stay unreachable
+	 * from this package).
+	 * @param name the function name to check
+	 * @return {@code true} if the name matches the pattern
+	 */
+	public static boolean isCarCdrComposition(String name) {
+		int len = name.length();
+		if (len < 4 || len > 6 || name.charAt(0) != 'C' || name.charAt(len - 1) != 'R') {
+			return false;
+		}
+		for (int i = 1; i < len - 1; i++) {
+			char ch = name.charAt(i);
+			if (ch != 'A' && ch != 'D') {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	/**
+	 * The width of an {@code (unsigned-byte 8|16|32)} element-type specifier -- the three
+	 * widths the packed integer-vector representation supports
+	 * ({@code .kb/packed-integer-vectors.md}) -- or 0 for anything else, {@code *},
+	 * {@code t}, {@code character} and the unsupported widths included. A
+	 * package-qualified spelling is matched by its member name.
+	 *
+	 * <p>
+	 * It lives here, with the names, because every layer asks it: the interpreter's
+	 * {@code make-array}, {@code ConcatenateForms}' result-type normalizer in
+	 * {@code compiler}, and {@code PureBuiltinFolder} in {@code macro} -- which may not
+	 * import {@code compiler}, so the shared spelling has to sit below both.
+	 * @param elementType the element-type specifier
+	 * @return 8, 16, 32, or 0
+	 */
+	public static int unsignedByteWidth(@org.jspecify.annotations.Nullable LispVal elementType) {
+		if (elementType instanceof LispCons cons && cons.car() instanceof LispSymbol head
+				&& cons.cdr() instanceof LispCons widthCell && widthCell.car() instanceof LispInteger width
+				&& widthCell.cdr() instanceof LispNil) {
+			PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(head.name());
+			if (UNSIGNED_BYTE.equals(qn == null ? head.name() : qn.member())
+					&& (width.value() == 8 || width.value() == 16 || width.value() == 32)) {
+				return (int) width.value();
+			}
+		}
+		return 0;
+	}
+
+	/**
+	 * The packed element width a SEQUENCE RESULT-TYPE designator asks for --
+	 * {@code (vector (unsigned-byte 8))}, {@code (simple-array (unsigned-byte 32) (*))}
+	 * -- or 0 for a general (element-type-free) result.
+	 *
+	 * <p>
+	 * Which spellings carry an element type is a SHAPE rule, not a position rule: only
+	 * {@code (vector T ...)}, {@code (array T ...)} and {@code (simple-array T ...)} lead
+	 * with one, while {@code (simple-vector SIZE)} and the bit-vector spellings carry a
+	 * SIZE in that slot, so reading position 1 unconditionally would turn esrap's
+	 * {@code (simple-vector 41)} into a specialized request.
+	 * @param designator the result-type designator, already unquoted
+	 * @return 8, 16, 32, or 0
+	 */
+	public static int packedVectorWidth(@org.jspecify.annotations.Nullable LispVal designator) {
+		return unsignedByteWidth(packedVectorElementType(designator));
+	}
+
+	/**
+	 * The ELEMENT TYPE a sequence result-type designator spells, or null when it spells
+	 * none -- the shape rule {@link #packedVectorWidth} rests on, lifted out so a caller
+	 * that asks about a FLOAT element type reads the same rule rather than a second copy
+	 * of it.
+	 *
+	 * <p>
+	 * Which spellings carry an element type is a SHAPE rule, not a position rule: only
+	 * {@code (vector T ...)}, {@code (array T ...)} and {@code (simple-array T ...)} lead
+	 * with one, while {@code (simple-vector SIZE)} and the bit-vector spellings carry a
+	 * SIZE in that slot, so reading position 1 unconditionally would turn esrap's
+	 * {@code (simple-vector 41)} into a specialized request.
+	 * @param designator the result-type designator, already unquoted
+	 * @return the element-type specifier, or null when the designator carries none
+	 */
+	public static @org.jspecify.annotations.Nullable LispVal packedVectorElementType(
+			@org.jspecify.annotations.Nullable LispVal designator) {
+		if (!(designator instanceof LispCons spec) || !(spec.car() instanceof LispSymbol head)
+				|| !(spec.cdr() instanceof LispCons rest)) {
+			return null;
+		}
+		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(head.name());
+		boolean carriesElementType = switch (qn == null ? head.name() : qn.member()) {
+			case "VECTOR", "ARRAY", "SIMPLE-ARRAY" -> true;
+			default -> false;
+		};
+		return carriesElementType ? rest.car() : null;
+	}
+
+	private LispNames() {
+	}
+
+}

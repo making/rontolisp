@@ -1,0 +1,17 @@
+# descriptor -Dfrom.system=sys -Donly.system=sys2 -Db=from-system-b test.interp:props:1
+artifact test.interp:props:jar:1
+dep test.lib:d1:jar::1.0 scope=compile optional=null
+dep test.lib:d2:jar::25.0.4 scope=compile optional=null
+dep test.lib:d3:jar::${env.HOME} scope=compile optional=null
+dep test.lib:d4:jar::jar scope=compile optional=null
+dep test.lib:d5:jar::${unknown.property} scope=compile optional=null
+dep test.lib:d6:jar::Display Name scope=compile optional=null
+dep test.lib:d7:jar::${basedir} scope=compile optional=null
+dep test.lib:d8:jar::${project.basedir} scope=compile optional=null
+dep test.lib:d9:jar::test.interp scope=compile optional=null
+dep test.lib:d10:jar::model scope=compile optional=null
+dep test.lib:d11:jar::1.0-x scope=compile optional=null
+dep test.lib:d12:jar::sys2 scope=compile optional=null
+dep test.lib:d14:jar::x1.0y1.0z scope=compile optional=null
+dep test.lib:d15:jar::$1.0 scope=compile optional=null
+dep test.lib:d16:jar::test.interp scope=compile optional=null

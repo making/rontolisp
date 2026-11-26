@@ -1,0 +1,521 @@
+package am.ik.rontolisp.compiler;
+
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.TreeMap;
+import java.util.function.Function;
+
+import am.ik.rontolisp.ClosRegistry;
+import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispInteger;
+import am.ik.rontolisp.LispNames;
+import am.ik.rontolisp.LispNil;
+import am.ik.rontolisp.LispString;
+import am.ik.rontolisp.LispSymbol;
+import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.PackageRegistry;
+import am.ik.rontolisp.SourceProvenance;
+import am.ik.rontolisp.macro.LispMacroExpander;
+
+/**
+ * The compile-path half of "a user definition of a BUILT-IN name" (the interpreter half
+ * lives in {@code LispEvaluator.defineDispatcher}): <strong>a built-in whose name a
+ * program defines a method on becomes that generic's DEFAULT METHOD</strong>. The
+ * expression compilers lower a built-in name in call position unconditionally, so the
+ * dispatcher defun {@code LispMacroExpander.expandTopLevelDefinitions} emits under the
+ * generic's own name is dead there and the user method was silently ignored (fast-io's
+ * {@code close}/{@code open-stream-p}/... methods on its stream classes).
+ *
+ * <p>
+ * The Gray-dispatch rewrite ({@code GrayStreamsLibrary.process}) is the model, but where
+ * Gray rewrites a fixed protocol name list, the name set here is COMPUTED: every
+ * registered generic whose name collides with a compiler-lowered built-in function. For
+ * each such name this pass (1) replaces the dead dispatcher defun with the same
+ * dispatcher under {@code %<name>--dispatch}, generated with the built-in as the
+ * generic's default method (fallback = {@code %<name>--builtin}, exactly the
+ * interpreter's stash name), (2) binds that fallback with a forwarder defun whose body
+ * spells the ORIGINAL built-in call -- which the compilers still lower -- and (3)
+ * rewrites the program's call sites and {@code (function name)} references onto the
+ * dispatcher. The walker skips the two generated defuns (rewriting the forwarder's
+ * fallback call into the dispatch again would recurse forever -- the
+ * {@code GrayStreamsLibrary.DISPATCH_DEFUNS} rule), quoted data, macro-definition bodies,
+ * and every non-evaluated binding position it knows ({@code let}/{@code lambda} families,
+ * {@code case}/{@code handler-case} clause heads), and keeps the head of a place
+ * ({@code setf}, {@code incf}, {@code push}, ...). When {@code close} is shadowed, the
+ * {@code with-open-*}/{@code with-*-to-string} forms are pre-expanded so their implicit
+ * {@code (close ...)} routes through the dispatcher like it does on the interpreter
+ * (where every {@code close} call goes through the global function binding).
+ *
+ * <p>
+ * A program that registers no colliding generic is returned unchanged (byte-identical
+ * output). A plain {@code (defun close ...)} of a built-in name is NOT covered here --
+ * same boundary as the interpreter half, which only stashes a Java-backed
+ * {@code LispFunction} and deliberately lets defuns shadow each other.
+ */
+public final class ShadowedBuiltins {
+
+	private static final String INSECURE_KEYWORD = ":INSECURE";
+
+	/** The built-ins whose keyword/value pair is {@code :insecure v}. */
+	private static final Set<String> INSECURE_TAKING = Set.of(
+			PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.TLS_CONNECT),
+			PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.TLS_UPGRADE));
+
+	private ShadowedBuiltins() {
+	}
+
+	/**
+	 * Wrapped names a generic must NOT shadow. The signal operators double as
+	 * {@code handler-case} clause heads ({@code (error (e) ...)} is a clause, not a
+	 * call), and {@code make-instance}/{@code class-of} have dedicated dispatch machinery
+	 * ({@code %mop-make-instance}, the metaobject runtime) a rename would sever.
+	 * {@code subtypep}'s wrapper leans on the {@code %subtypep-runtime} a gate has
+	 * already injected, so it cannot be spelled as a fallback
+	 * ({@link BuiltinFunctionWrappers#LOWERED_WITHOUT_WRAPPER} says the same of its
+	 * lowering).
+	 */
+	private static final Set<String> NOT_SHADOWABLE = Set.of(LispNames.ERROR, LispNames.CERROR, LispNames.SIGNAL,
+			LispNames.WARN, LispNames.MAKE_INSTANCE, LispNames.CLASS_OF, LispNames.SUBTYPEP);
+
+	/**
+	 * Wrapped names the INTERPRETER evaluates through an {@code evalCons} case, a macro
+	 * expansion, or an evaluator-side registration ({@code LispEvaluator.registerEval},
+	 * which needs the resolver's live registry -- {@code find-package} and the three
+	 * package-registry queries) rather than a global {@code LispFunction} binding. Its
+	 * half of the stash mechanism keeps only a Java-backed {@code LispFunction}
+	 * ({@code LispEvaluator.builtinDefaultMethodFor}), so it stashes nothing for these --
+	 * dispatching a user method on them HERE would diverge from the interpreter in the
+	 * opposite direction. Pinned by {@code ShadowedBuiltinsTest}: every name the set
+	 * keeps must be a {@code LispFunction} in a fresh global environment.
+	 */
+	private static final Set<String> EXPANSION_LOWERED = Set.of(LispNames.NE, LispNames.APPLY, LispNames.ASSOC,
+			LispNames.ASSOC_IF, LispNames.COUNT, LispNames.COUNT_IF, LispNames.REMOVE, LispNames.DELETE,
+			LispNames.SUBSTITUTE, LispNames.REMOVE_DUPLICATES, LispNames.DELETE_DUPLICATES, LispNames.NSUBSTITUTE,
+			LispNames.DELETE_IF, LispNames.DELETE_IF_NOT, LispNames.EVERY, LispNames.FILE_WRITE_DATE, LispNames.FIND,
+			LispNames.FIND_IF, LispNames.FIND_IF_NOT, LispNames.FIND_PACKAGE, LispNames.FORMAT, LispNames.FUNCALL,
+			LispNames.MAPC, LispNames.MAPCAN, LispNames.MAPCAR, LispNames.MAPCON, LispNames.MAPHASH, LispNames.MAPL,
+			LispNames.MAPLIST, LispNames.MEMBER, LispNames.MEMBER_IF, LispNames.NSUBSTITUTE_IF,
+			LispNames.NSUBSTITUTE_IF_NOT, LispNames.LIST_ALL_PACKAGES, LispNames.PACKAGE_USE_LIST,
+			LispNames.PACKAGE_USED_BY_LIST, LispNames.POSITION, LispNames.POSITION_IF, LispNames.POSITION_IF_NOT,
+			LispNames.PROBE_FILE, LispNames.RASSOC, LispNames.RASSOC_IF, LispNames.REDUCE, LispNames.REMOVE_IF,
+			LispNames.REMOVE_IF_NOT, LispNames.SIMPLE_CONDITION_FORMAT_ARGUMENTS,
+			LispNames.SIMPLE_CONDITION_FORMAT_CONTROL, LispNames.SOME, LispNames.SORT, LispNames.STABLE_SORT,
+			LispNames.SUBSTITUTE_IF, LispNames.SUBSTITUTE_IF_NOT, LispNames.SYMBOL_VALUE, LispNames.ELT,
+			LispNames.COERCE, LispNames.TYPEP, LispNames.UPGRADED_COMPLEX_PART_TYPE, LispNames.ENDP,
+			LispNames.LIST_STAR, LispNames.REVAPPEND, LispNames.NRECONC, LispNames.VECTOR, LispNames.SVREF,
+			LispNames.ARRAY_RANK, LispNames.ARRAY_DIMENSION, LispNames.ARRAY_TOTAL_SIZE,
+			LispNames.ARRAY_ROW_MAJOR_INDEX, LispNames.MAP, LispNames.MAP_INTO, LispNames.NOTANY, LispNames.NOTEVERY,
+			LispNames.READ_SEQUENCE, LispNames.WRITE_SEQUENCE, LispNames.WRITE_CHAR, LispNames.UNION,
+			LispNames.INTERSECTION, LispNames.SET_DIFFERENCE, LispNames.ADJOIN, LispNames.SUBSETP, LispNames.SET,
+			LispNames.MAKE_BROADCAST_STREAM, LispNames.BOUNDP, LispNames.FBOUNDP, LispNames.MAKUNBOUND);
+
+	private static volatile @org.jspecify.annotations.Nullable Set<String> lowered;
+
+	/**
+	 * The compiler-lowered built-in FUNCTION names a user {@code defmethod} can shadow:
+	 * every {@link BuiltinFunctionWrappers} name (minus internals and
+	 * {@link #NOT_SHADOWABLE}) plus
+	 * {@link BuiltinFunctionWrappers#LOWERED_WITHOUT_WRAPPER}.
+	 * @return the shadowable lowered built-in function names
+	 */
+	public static Set<String> loweredBuiltinFunctions() {
+		Set<String> cached = lowered;
+		if (cached == null) {
+			Set<String> names = new HashSet<>(BuiltinFunctionWrappers.names());
+			names.removeIf(
+					name -> name.startsWith("%") || NOT_SHADOWABLE.contains(name) || EXPANSION_LOWERED.contains(name)
+					// The interpreter expands these in call position too.
+							|| BuiltinFunctionWrappers.INLINE_EXPANDED_VALUE_FUNCTIONS.contains(name));
+			names.addAll(BuiltinFunctionWrappers.LOWERED_WITHOUT_WRAPPER);
+			cached = Set.copyOf(names);
+			lowered = cached;
+		}
+		return cached;
+	}
+
+	/**
+	 * Runs the pass over an {@code expandTopLevelDefinitions}-processed program: replaces
+	 * each colliding generic's dead dispatcher defun with the forwarder + renamed
+	 * dispatcher pair and rewrites the program's call sites onto the dispatcher. Returns
+	 * the program unchanged when no registered generic collides with a lowered built-in.
+	 * @param program the top-level forms, after {@code expandTopLevelDefinitions}
+	 * @param closRegistry the completed registry (classes, generics, methods)
+	 * @return the program with the shadowed built-ins dispatched
+	 */
+	public static List<LispVal> process(List<LispVal> program, ClosRegistry closRegistry) {
+		return process(program, closRegistry, Map.of());
+	}
+
+	/**
+	 * As {@link #process(List, ClosRegistry)}, composing with a backend pre-pass that
+	 * already redirected built-in call sites onto dispatch defuns of its own
+	 * ({@code WasmSocketsRewrite}'s {@code rontolisp::%io-close} family): a call whose
+	 * head is such an alias of a shadowed name is rewritten onto the dispatcher too, and
+	 * the forwarder's fall-through calls the ALIAS -- keeping the pre-pass's bookkeeping
+	 * (the socket table) in the loop -- instead of the raw built-in.
+	 * @param program the top-level forms, after {@code expandTopLevelDefinitions}
+	 * @param closRegistry the completed registry (classes, generics, methods)
+	 * @param builtinAliases backend dispatch-defun name -&gt; the native built-in it
+	 * stands for (empty when the backend has no such pre-pass)
+	 * @return the program with the shadowed built-ins dispatched
+	 */
+	public static List<LispVal> process(List<LispVal> program, ClosRegistry closRegistry,
+			Map<String, BuiltinAlias> builtinAliases) {
+		Map<String, String> shadowed = dispatchers(closRegistry);
+		if (shadowed.isEmpty()) {
+			return program;
+		}
+		// The walker matches the alias spellings alongside the native ones, and the
+		// forwarder targets the alias where one exists.
+		Map<String, String> callHeads = new LinkedHashMap<>(shadowed);
+		Map<String, Map.Entry<String, BuiltinAlias>> fallbackAliases = new LinkedHashMap<>();
+		for (Map.Entry<String, BuiltinAlias> alias : builtinAliases.entrySet()) {
+			String dispatch = shadowed.get(alias.getValue().builtin());
+			if (dispatch != null) {
+				callHeads.put(alias.getKey(), dispatch);
+				fallbackAliases.put(alias.getValue().builtin(), alias);
+			}
+		}
+		// The dead dispatchers are identified structurally: regenerating the 2-arg
+		// dispatcher against the same completed registry reproduces the exact defun
+		// expandTopLevelDefinitions placed (LispCons equality is structural), so a user
+		// (defun close ...) of the same name can never be mistaken for one.
+		Map<String, LispVal> plainDispatchers = new LinkedHashMap<>();
+		for (String name : shadowed.keySet()) {
+			plainDispatchers.put(name, LispMacroExpander.generateDispatcher(name, closRegistry));
+		}
+		boolean closeShadowed = shadowed.containsKey(LispNames.CLOSE);
+		List<LispVal> out = new ArrayList<>(program.size() + shadowed.size());
+		for (LispVal form : program) {
+			String replaced = null;
+			for (Map.Entry<String, LispVal> plain : plainDispatchers.entrySet()) {
+				if (plain.getValue().equals(form)) {
+					replaced = plain.getKey();
+					break;
+				}
+			}
+			if (replaced != null) {
+				out.add(forwarderDefun(replaced, closRegistry, fallbackAliases.get(replaced)));
+				out.add(LispMacroExpander.shadowedBuiltinDispatcher(replaced, closRegistry));
+			}
+			else {
+				out.add(rewrite(form, callHeads, closeShadowed));
+			}
+		}
+		return out;
+	}
+
+	// Each registered generic colliding with a lowered built-in -> its dispatcher's name.
+	public static Map<String, String> dispatchers(ClosRegistry closRegistry) {
+		Map<String, String> shadowed = new LinkedHashMap<>();
+		for (ClosRegistry.GenericInfo generic : closRegistry.generics().values()) {
+			if (loweredBuiltinFunctions().contains(generic.name())) {
+				shadowed.put(generic.name(), LispMacroExpander.shadowedDispatcherName(generic.name()));
+			}
+		}
+		return shadowed;
+	}
+
+	/**
+	 * What the {@code _lookup} registry answers in place of a built-in's own name: a call
+	 * by a run-time name ({@code (funcall (intern "CLOSE") x)}, a form {@code eval} runs)
+	 * has to reach the user method as a compiled call does, but the name cannot enter the
+	 * compilers' {@code functions} table, whose entry would stop the forwarder's call
+	 * from lowering to the built-in. So the registry alone maps it: a row of the
+	 * generic's name answers the dispatcher, in place of the function value's wrapper if
+	 * the program has one, which stays for the forwarder's {@code #'name}.
+	 * @param <F> what the backend records of a function
+	 * @param closRegistry the completed registry
+	 * @param functions the backend's functions by name: a generic whose dispatcher defun
+	 * this pass never saw (a nested {@code defmethod}) has no row
+	 * @return the generic's name -&gt; its dispatcher, sorted so the output's bytes
+	 * follow from the program; empty for a program without such a generic
+	 */
+	public static <F> Map<String, F> runTimeNames(ClosRegistry closRegistry,
+			Function<String, @org.jspecify.annotations.Nullable F> functions) {
+		Map<String, F> rows = new TreeMap<>();
+		dispatchers(closRegistry).forEach((name, dispatcher) -> {
+			F function = functions.apply(dispatcher);
+			if (function != null) {
+				rows.put(name, function);
+			}
+		});
+		return rows;
+	}
+
+	/**
+	 * A backend dispatch defun standing in for a built-in ({@code WasmSocketsRewrite}'s
+	 * {@code rontolisp::%io-close} for {@code close}), with the argument counts it takes:
+	 * the pre-pass redirects only a call inside that range, and so does the forwarder.
+	 *
+	 * @param builtin the native built-in name
+	 * @param min the fewest arguments the dispatch defun takes
+	 * @param max the most arguments the dispatch defun takes
+	 */
+	public record BuiltinAlias(String builtin, int min, int max) {
+
+		boolean accepts(int count) {
+			return count >= this.min && count <= this.max;
+		}
+
+	}
+
+	/**
+	 * The compile-path binding of the fallback name
+	 * ({@link LispMacroExpander#builtinDefaultMethodName}): where the interpreter stashes
+	 * the Java-backed {@code LispFunction} it found, the compilers have no function VALUE
+	 * to stash, so the stash becomes a forwarder defun whose body spells the ORIGINAL
+	 * built-in call, which the expression compilers lower. The walker that rewrites the
+	 * program's call sites onto the dispatcher skips it (rewriting it would recurse
+	 * through the dispatcher forever -- the {@code GrayStreamsLibrary.DISPATCH_DEFUNS}
+	 * rule).
+	 *
+	 * <p>
+	 * A non-variadic generic forwards its parameters: {@code (T p1..pn)}. A variadic one
+	 * receives the dispatcher's whole tail and forwards all of it, as the interpreter
+	 * applies the stashed built-in to every argument: a case over the tail's length picks
+	 * a direct lowered call per argument count the built-in's call shape
+	 * ({@link BuiltinCallArity}) accepts -- {@code (floor x)} or {@code (floor x d)} --
+	 * and past the positional counts a keyword or {@code &rest} tail is applied to the
+	 * built-in's function value ({@code (apply #'write-line s st kw)}), which re-extracts
+	 * the keywords the lowering needs as literals. {@code close}'s {@code :abort v} is
+	 * checked here for the same reason and dropped, as the lowering drops it. Any other
+	 * count signals the built-in's wrong-count {@code program-error}, its message built
+	 * at run time so the compilers' static-program-error warning never fires for a count
+	 * no call site passes.
+	 * @param genericName the generic-function name, a lowered built-in's
+	 * @param closRegistry the registry holding the generic (for the parameter names)
+	 * @param alias the backend dispatch defun the forwarder calls in place of the
+	 * built-in for a count inside its range (name -&gt; alias), or null
+	 * @return the forwarder defun
+	 */
+	static LispVal forwarderDefun(String genericName, ClosRegistry closRegistry,
+			Map.@org.jspecify.annotations.Nullable Entry<String, BuiltinAlias> alias) {
+		ClosRegistry.GenericInfo generic = closRegistry.findGeneric(genericName);
+		if (generic == null) {
+			throw new IllegalArgumentException("Unknown generic function: " + genericName);
+		}
+		List<LispVal> params = generic.paramNames().stream().<LispVal>map(LispSymbol::new).toList();
+		LispVal lambdaList = LispNil.INSTANCE;
+		LispVal body;
+		if (generic.variadic()) {
+			LispSymbol rest = new LispSymbol(LispMacroExpander.GF_REST_VAR);
+			List<LispVal> withRest = new ArrayList<>(params);
+			withRest.add(new LispSymbol(LispNames.LAMBDA_REST));
+			withRest.add(rest);
+			lambdaList = consList(withRest);
+			body = tailDispatch(genericName, params, rest, alias);
+		}
+		else {
+			if (!params.isEmpty()) {
+				lambdaList = consList(params);
+			}
+			body = call(genericName, params, new LispInteger(params.size()), alias);
+		}
+		return listOf(new LispSymbol(LispNames.DEFUN),
+				new LispSymbol(LispMacroExpander.builtinDefaultMethodName(genericName)), lambdaList, body);
+	}
+
+	// The case over the tail's length: (if tail<k> deeper arm<k>) per positional count
+	// k, innermost the count past every positional one. Also the body of a native
+	// built-in's function value (FunctionValueWrappers.nativeValue).
+	static LispVal tailDispatch(String builtin, List<LispVal> params, LispSymbol rest,
+			Map.@org.jspecify.annotations.Nullable Entry<String, BuiltinAlias> alias) {
+		BuiltinCallArity.Shape shape = BuiltinCallArity.of(builtin);
+		if (shape == null) {
+			throw new IllegalStateException(builtin + " has no call shape to forward a tail by");
+		}
+		int n = params.size();
+		LispVal length = listOf(new LispSymbol(LispNames.LENGTH), rest);
+		LispVal count = n == 0 ? length : listOf(new LispSymbol(LispNames.ADD), new LispInteger(n), length);
+		String operator = BuiltinCallArity.operator(builtin);
+		LispVal expr;
+		int last;
+		if (shape.max() == BuiltinCallArity.UNBOUNDED) {
+			if (!BuiltinFunctionWrappers.names().contains(builtin)) {
+				throw new IllegalStateException(builtin + " takes a tail but has no function value to apply");
+			}
+			List<LispVal> apply = new ArrayList<>();
+			apply.add(new LispSymbol(LispNames.APPLY));
+			apply.add(listOf(new LispSymbol(LispNames.FUNCTION), new LispSymbol(builtin)));
+			apply.addAll(params);
+			apply.add(rest);
+			expr = consList(apply);
+			last = Math.max(0, positionalCount(builtin) - n);
+		}
+		else {
+			int beyond = Math.max(n, shape.max() + 1);
+			expr = wrongCount(shape.message(operator, beyond), beyond, count);
+			last = shape.max() - n;
+		}
+		for (int k = last; k >= 0; k--) {
+			List<LispVal> args = new ArrayList<>(params);
+			LispVal cell = rest;
+			for (int i = 0; i < k; i++) {
+				args.add(listOf(new LispSymbol(LispNames.CAR), cell));
+				cell = listOf(new LispSymbol(LispNames.CDR), cell);
+			}
+			LispVal arm = shape.accepts(n + k) ? call(builtin, args, count, alias)
+					: wrongCount(shape.message(operator, n + k), n + k, count);
+			expr = listOf(new LispSymbol(LispNames.IF), cell, expr, arm);
+		}
+		return expr;
+	}
+
+	// The built-in called with these argument forms: a direct lowered call, except that
+	// close's keyword position must hold :abort, which the lowering drops (it strips a
+	// LITERAL :abort only, so a run-time one is checked here), and tls-connect's and
+	// tls-upgrade's must hold :insecure, which the lowering takes only as a literal --
+	// another keyword is the interpreter's error.
+	private static LispVal call(String builtin, List<LispVal> args, LispVal count,
+			Map.@org.jspecify.annotations.Nullable Entry<String, BuiltinAlias> alias) {
+		if (LispNames.CLOSE.equals(builtin) && args.size() == 3) {
+			String message = ClosRegistry.arityMessage(LispNames.CLOSE, 1, false, args.size());
+			return listOf(new LispSymbol(LispNames.IF),
+					listOf(new LispSymbol(LispNames.EQ_GENERAL), args.get(1), new LispSymbol(LispNames.ABORT_KEYWORD)),
+					call(builtin, args.subList(0, 1), count, alias), wrongCount(message, args.size(), count));
+		}
+		if (INSECURE_TAKING.contains(builtin) && args.size() == 4) {
+			LispSymbol insecure = new LispSymbol(INSECURE_KEYWORD);
+			return listOf(new LispSymbol(LispNames.IF),
+					listOf(new LispSymbol(LispNames.EQ_GENERAL), args.get(2), insecure),
+					listOf(new LispSymbol(builtin), args.get(0), args.get(1), insecure, args.get(3)),
+					listOf(new LispSymbol(LispNames.ERROR),
+							new LispString(BuiltinCallArity.operator(builtin) + " expects :insecure, got: ~S"),
+							args.get(2)));
+		}
+		List<LispVal> call = new ArrayList<>(1 + args.size());
+		call.add(new LispSymbol(alias != null && alias.getValue().accepts(args.size()) ? alias.getKey() : builtin));
+		call.addAll(args);
+		return consList(call);
+	}
+
+	// (%program-error (%string-concat "<OP> expects ..., got " (%prin1-piece count))):
+	// the report for sampleCount with the count computed at run time.
+	private static LispVal wrongCount(String sample, int sampleCount, LispVal count) {
+		String suffix = ClosRegistry.ARITY_MESSAGE_INFIX + sampleCount;
+		if (!sample.endsWith(suffix)) {
+			throw new IllegalStateException("Unexpected arity message shape: " + sample);
+		}
+		LispVal message = listOf(new LispSymbol(LispNames.STRING_CONCAT),
+				new LispString(sample.substring(0, sample.length() - String.valueOf(sampleCount).length())),
+				listOf(new LispSymbol(LispNames.PRIN1_PIECE_INTERNAL), count));
+		return listOf(new LispSymbol(LispNames.PROGRAM_ERROR_INTERNAL), message);
+	}
+
+	// The parameters of a wrapper's lambda list before its &rest: how many arguments an
+	// unbounded built-in takes positionally ((s &optional st &rest kw) is 2).
+	private static int positionalCount(String builtin) {
+		LispVal lambda = BuiltinFunctionWrappers.lambdaFor(builtin);
+		int count = 0;
+		if (lambda instanceof LispCons lambdaCons && lambdaCons.cdr() instanceof LispCons listCell) {
+			for (LispVal cell = listCell.car(); cell instanceof LispCons c; cell = c.cdr()) {
+				if (c.car() instanceof LispSymbol marker && LispNames.LAMBDA_REST.equals(marker.name())) {
+					break;
+				}
+				if (!(c.car() instanceof LispSymbol marker && LispNames.LAMBDA_OPTIONAL.equals(marker.name()))) {
+					count++;
+				}
+			}
+		}
+		return count;
+	}
+
+	/**
+	 * Renames the call sites and {@code #'name} references of the given built-ins onto
+	 * their dispatchers -- this pass's walk, with the same non-evaluated positions kept.
+	 * The interpreter uses it ahead of its multiple-value lowerings, which recognize a
+	 * producer ({@code floor}, {@code gethash}, ...) by its NAME and would otherwise
+	 * spell the built-in's own values past a user method.
+	 * @param form the form to walk
+	 * @param dispatchers built-in name -&gt; the name its dispatcher is bound under
+	 * @return the rewritten form, or {@code form} itself when nothing matched
+	 */
+	public static LispVal renameCallSites(LispVal form, Map<String, String> dispatchers) {
+		return CallSiteWalk.walk(form, new CallSiteRenamer(dispatchers, false, false));
+	}
+
+	private static LispVal rewrite(LispVal form, Map<String, String> shadowed, boolean closeShadowed) {
+		return CallSiteWalk.walk(form, new CallSiteRenamer(shadowed, closeShadowed, true));
+	}
+
+	/**
+	 * Renames each call of a shadowed built-in -- and each {@code #'name} of one -- onto
+	 * its dispatcher; {@link CallSiteWalk} keeps the positions that are not calls. On a
+	 * compile path a {@code (symbol-function 'name)} or {@code (fdefinition 'name)} is
+	 * {@code #'name} too: the compilers resolve the literal in their {@code functions}
+	 * table, which holds the built-in's wrapper. The interpreter's reads the binding,
+	 * which already is the dispatcher.
+	 */
+	private record CallSiteRenamer(Map<String, String> shadowed, boolean closeShadowed,
+			boolean literalDefinitions) implements CallSiteWalk.Rewriter {
+
+		@Override
+		public @org.jspecify.annotations.Nullable LispVal call(LispCons cons, LispSymbol op) {
+			String opName = op.name();
+			if (LispNames.FUNCTION.equals(opName)) {
+				if (cons.cdr() instanceof LispCons arg && arg.car() instanceof LispSymbol named) {
+					String dispatch = this.shadowed.get(named.name());
+					if (dispatch != null) {
+						return listOf(op, new LispSymbol(dispatch));
+					}
+				}
+				return null;
+			}
+			if (this.literalDefinitions
+					&& (LispNames.SYMBOL_FUNCTION.equals(opName) || LispNames.FDEFINITION.equals(opName))
+					&& cons.cdr() instanceof LispCons arg && arg.cdr() instanceof LispNil
+					&& arg.car() instanceof LispCons quoted && quoted.car() instanceof LispSymbol quote
+					&& LispNames.QUOTE.equals(quote.name()) && quoted.cdr() instanceof LispCons named
+					&& named.car() instanceof LispSymbol name) {
+				String dispatch = this.shadowed.get(name.name());
+				if (dispatch != null) {
+					return SourceProvenance.inherit(cons,
+							listOf(new LispSymbol(LispNames.FUNCTION), new LispSymbol(dispatch)));
+				}
+			}
+			if (this.closeShadowed) {
+				// The stream-closing macros spell (close ...) only after expansion;
+				// pre-expand them (unwind-protect shape, the interpreter/JVM
+				// semantics) so that close routes through the dispatcher exactly like
+				// the interpreter's global-binding lookup does.
+				LispVal expanded = switch (opName) {
+					case LispNames.WITH_OPEN_FILE -> LispMacroExpander.expandWithOpenFile(cons);
+					case LispNames.WITH_OPEN_STREAM -> LispMacroExpander.expandWithOpenStream(cons, true);
+					case LispNames.WITH_OUTPUT_TO_STRING -> LispMacroExpander.expandWithOutputToString(cons, true);
+					case LispNames.WITH_INPUT_FROM_STRING -> LispMacroExpander.expandWithInputFromString(cons, true);
+					default -> null;
+				};
+				if (expanded != null) {
+					return CallSiteWalk.walk(expanded, this);
+				}
+			}
+			String dispatch = this.shadowed.get(opName);
+			if (dispatch == null) {
+				return null;
+			}
+			// Positioned at the call, so a report the backend makes of it (a wrong
+			// argument count) points at the source.
+			return SourceProvenance.inherit(cons,
+					new LispCons(new LispSymbol(dispatch), CallSiteWalk.arguments(cons.cdr(), this)));
+		}
+
+	}
+
+	private static LispVal consList(List<LispVal> items) {
+		return listOf(items.toArray(LispVal[]::new));
+	}
+
+	private static LispVal listOf(LispVal... items) {
+		LispVal result = am.ik.rontolisp.LispNil.INSTANCE;
+		for (int i = items.length - 1; i >= 0; i--) {
+			result = new LispCons(items[i], result);
+		}
+		return result;
+	}
+
+}

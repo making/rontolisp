@@ -1,0 +1,1555 @@
+package am.ik.rontolisp.cli;
+
+import java.io.IOException;
+import java.nio.file.Path;
+import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.Deque;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
+
+import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispNames;
+import am.ik.rontolisp.LispNil;
+import am.ik.rontolisp.LispString;
+import am.ik.rontolisp.LispSymbol;
+import am.ik.rontolisp.LispTrue;
+import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.PackageRegistry;
+import am.ik.rontolisp.PackageResolver;
+import am.ik.rontolisp.compiler.SplicedComponentGroups;
+import am.ik.rontolisp.compiler.WitImportDirective;
+import am.ik.rontolisp.eval.AsdfRuntimeLibrary;
+import am.ik.rontolisp.eval.AsdfSystems;
+import am.ik.rontolisp.eval.BuiltinSystems;
+import am.ik.rontolisp.eval.DistClient;
+import am.ik.rontolisp.eval.LispEvaluator;
+import am.ik.rontolisp.eval.ReadTimeImage;
+import am.ik.rontolisp.eval.ReaderMacroReads;
+import am.ik.rontolisp.eval.ShimLibraries;
+import am.ik.rontolisp.eval.SourceLanguage;
+import am.ik.rontolisp.eval.SourceStandards;
+import am.ik.rontolisp.eval.SourceLoader;
+import am.ik.rontolisp.macro.LispMacroExpander;
+import am.ik.rontolisp.reader.FeaturePushes;
+import am.ik.rontolisp.reader.Features;
+import am.ik.rontolisp.reader.LispReadException;
+import am.ik.rontolisp.reader.ReadSyntax;
+import org.jspecify.annotations.Nullable;
+
+/**
+ * Expands top-level {@code (load "path")} forms into the forms of the loaded file so that
+ * a program split across files (a console driver that loads a rendering-free core)
+ * compiles on the JVM and WASM backends.
+ *
+ * <p>
+ * The interpreter loads at runtime against the global environment, so this pass runs only
+ * on the compile path: the compilers collect {@code defun}s in a static pass, which a
+ * runtime {@code load} cannot feed. Inlining the loaded forms at the source level makes
+ * the loaded definitions visible to that static pass, exactly as if the files had been
+ * concatenated.
+ *
+ * <p>
+ * Only a top-level call whose operator is {@code load} and whose argument is a string
+ * literal -- or reduces to one in the loading file's context, the portable
+ * {@code (load (merge-pathnames "x.lisp" *load-truename*))} -- is inlined; a {@code load}
+ * with any other computed argument, or one nested inside another form, is left untouched
+ * (it still runs at runtime via the embedded reader, e.g. under {@code --dynamic}). The
+ * entry file is bracketed with its load context like every spliced file, so the variables
+ * hold its path while its forms run, as on the interpreter. Inlining is recursive (a
+ * loaded file may load another) and guards against cycles. A relative path is resolved
+ * against the directory of the file doing the load (the entry source for top-level
+ * loads), matching the runtime {@code load} (see {@link SourceLoader#resolve}); the
+ * resolved path is then read by the supplied {@link SourceLoader}.
+ *
+ * <p>
+ * The same pass implements the compile-time side of {@code require}/{@code provide}
+ * (idempotent module loading). A top-level {@code (provide NAME)} records the module name
+ * and is consumed (replaced by a quoted symbol, like {@code in-package}); a top-level
+ * {@code (require NAME)} splices {@code NAME.lisp} exactly like {@code load} -- unless
+ * the name was already provided, in which case it is consumed without loading. An
+ * explicit second argument {@code (require NAME "path.lisp")} overrides the file mapping.
+ * The provided-module set is threaded through the whole inline recursion, so the diamond
+ * case (two files both requiring the same module) loads the module once. Unlike
+ * {@code load}, a {@code require} that is not a literal top-level form loads nothing at
+ * run time ({@link NestedRequires}); a {@code provide} cannot be deferred to runtime, so
+ * the compilers reject any occurrence left after this pass.
+ *
+ * <p>
+ * The same pass also implements the compile-time side of the limited ASDF subset (see
+ * {@link AsdfSystems}). A top-level {@code (asdf:defsystem ...)} registers a system and
+ * is consumed; a top-level literal {@code (asdf:load-system NAME)} resolves the system --
+ * from a prior {@code defsystem}, or by locating {@code NAME.asd} in the directory of the
+ * loading file and then on the system search path -- and splices its dependency systems
+ * and component files in order, exactly like a chain of {@code load}s. Loading the same
+ * system twice is a no-op (like {@code require}). The handling lives inside this
+ * recursion rather than as a separate pass so that a loaded file can call
+ * {@code asdf:load-system} and a spliced component file can {@code load}/{@code require}
+ * its own companions.
+ */
+public final class LoadInliner {
+
+	private LoadInliner() {
+	}
+
+	/**
+	 * Returns a copy of {@code program} with every top-level literal
+	 * {@code (load "path")} replaced by the (recursively inlined) forms of the loaded
+	 * file, resolving top-level relative paths working-directory-relative.
+	 * @param program the top-level forms read from the source
+	 * @param loader the loader used to resolve {@code load} paths
+	 * @return the program with top-level {@code load} forms inlined
+	 */
+	public static List<LispVal> inline(List<LispVal> program, SourceLoader loader) {
+		return inline(program, loader, null);
+	}
+
+	/**
+	 * Returns a copy of {@code program} with every top-level literal
+	 * {@code (load "path")} replaced by the (recursively inlined) forms of the loaded
+	 * file.
+	 * @param program the top-level forms read from the source
+	 * @param loader the loader used to resolve {@code load} paths
+	 * @param baseDir the directory of the entry source against which a top-level relative
+	 * {@code load} resolves, or {@code null} for working-directory-relative
+	 * @return the program with top-level {@code load} forms inlined
+	 */
+	public static List<LispVal> inline(List<LispVal> program, SourceLoader loader, @Nullable String baseDir) {
+		return inline(program, loader, baseDir, List.of());
+	}
+
+	/**
+	 * Returns a copy of {@code program} with every top-level literal
+	 * {@code (load "path")} replaced by the (recursively inlined) forms of the loaded
+	 * file, and every top-level literal {@code (asdf:load-system NAME)} replaced by the
+	 * system's component files (dependency systems first), reading loaded files with the
+	 * interpreter feature set.
+	 * @param program the top-level forms read from the source
+	 * @param loader the loader used to resolve {@code load} paths
+	 * @param baseDir the directory of the entry source against which a top-level relative
+	 * {@code load} resolves, or {@code null} for working-directory-relative
+	 * @param systemPath extra directories searched for {@code NAME.asd} files, after the
+	 * directory of the loading file
+	 * @return the program with top-level {@code load} forms inlined
+	 */
+	public static List<LispVal> inline(List<LispVal> program, SourceLoader loader, @Nullable String baseDir,
+			List<String> systemPath) {
+		return inline(program, loader, baseDir, systemPath, Features.INTERPRETER);
+	}
+
+	/**
+	 * Returns a copy of {@code program} with every top-level literal
+	 * {@code (load "path")} replaced by the (recursively inlined) forms of the loaded
+	 * file, and every top-level literal {@code (asdf:load-system NAME)} replaced by the
+	 * system's component files (dependency systems first). Loaded files and {@code .asd}
+	 * files are read with the given feature set, so the compile path passes the target
+	 * backend's features (the entry program must have been read with the same set).
+	 * @param program the top-level forms read from the source
+	 * @param loader the loader used to resolve {@code load} paths
+	 * @param baseDir the directory of the entry source against which a top-level relative
+	 * {@code load} resolves, or {@code null} for working-directory-relative
+	 * @param systemPath extra directories searched for {@code NAME.asd} files, after the
+	 * directory of the loading file
+	 * @param features the reader features for loaded files
+	 * @return the program with top-level {@code load} forms inlined
+	 */
+	public static List<LispVal> inline(List<LispVal> program, SourceLoader loader, @Nullable String baseDir,
+			List<String> systemPath, Features features) {
+		return inline(program, loader, baseDir, systemPath, features, DistClient.createDefault());
+	}
+
+	/**
+	 * Same as {@link #inline(List, SourceLoader, String, List, Features)} but with an
+	 * injectable {@link DistClient} for {@code ql:quickload} (a test seam: an in-memory
+	 * downloader over a temporary cache).
+	 * @param program the top-level forms read from the source
+	 * @param loader the loader used to resolve {@code load} paths
+	 * @param baseDir the directory of the entry source, or {@code null}
+	 * @param systemPath extra directories searched for {@code NAME.asd} files
+	 * @param features the reader features for loaded files
+	 * @param dists the dist downloader behind {@code ql:quickload}
+	 * @return the program with top-level {@code load}/system forms inlined
+	 */
+	public static List<LispVal> inline(List<LispVal> program, SourceLoader loader, @Nullable String baseDir,
+			List<String> systemPath, Features features, DistClient dists) {
+		return inline(program, loader, baseDir, systemPath, features, dists, SourceStandards.DEFAULT);
+	}
+
+	/**
+	 * Same as {@link #inline(List, SourceLoader, String, List, Features, DistClient)} for
+	 * a program read against the given standards: every loaded file is read against them,
+	 * as the entry file was.
+	 * @param program the top-level forms read from the source
+	 * @param loader the loader used to resolve {@code load} paths
+	 * @param baseDir the directory of the entry source, or {@code null}
+	 * @param systemPath extra directories searched for {@code NAME.asd} files
+	 * @param features the reader features for loaded files
+	 * @param dists the dist downloader behind {@code ql:quickload}
+	 * @param standards what loaded files are read against ({@code --scheme-standard})
+	 * @return the program with top-level {@code load}/system forms inlined
+	 */
+	public static List<LispVal> inline(List<LispVal> program, SourceLoader loader, @Nullable String baseDir,
+			List<String> systemPath, Features features, DistClient dists, SourceStandards standards) {
+		return inline(program, loader, baseDir, systemPath, features, dists, standards, null);
+	}
+
+	/**
+	 * Same as
+	 * {@link #inline(List, SourceLoader, String, List, Features, DistClient, SourceStandards)}
+	 * for a program read from a Common Lisp file: the program is the file being loaded,
+	 * so it is bracketed with its own load context as a loaded file is --
+	 * {@code *load-pathname*} the path as given, {@code *load-truename*} its truename --
+	 * which the interpreter binds around the same file.
+	 * @param program the top-level forms read from the source
+	 * @param loader the loader used to resolve {@code load} paths
+	 * @param baseDir the directory of the entry source, or {@code null}
+	 * @param systemPath extra directories searched for {@code NAME.asd} files
+	 * @param features the reader features for loaded files
+	 * @param dists the dist downloader behind {@code ql:quickload}
+	 * @param standards what loaded files are read against ({@code --scheme-standard})
+	 * @param entryFile the file the program was read from, or {@code null} for a program
+	 * that is no file's (standard input, {@code -e}, a generated program)
+	 * @return the program with top-level {@code load}/system forms inlined
+	 */
+	public static List<LispVal> inline(List<LispVal> program, SourceLoader loader, @Nullable String baseDir,
+			List<String> systemPath, Features features, DistClient dists, SourceStandards standards,
+			@Nullable String entryFile) {
+		return inline((ctx, out) -> FormSource.of(program), loader, baseDir, systemPath, features, dists, standards,
+				entryFile);
+	}
+
+	/**
+	 * Reads Common Lisp source and inlines it as
+	 * {@link #inline(List, SourceLoader, String, List, Features, DistClient, SourceStandards, String)}
+	 * does a program read beforehand -- except that the source, like every file it loads,
+	 * is read a FORM AT A TIME, each form with the readtable the forms before it left at
+	 * compile time ({@link ReadTimeImage}, {@code .kb/readtables.md}).
+	 * @param source the entry program text
+	 * @param loader the loader used to resolve {@code load} paths
+	 * @param baseDir the directory of the entry source, or {@code null}
+	 * @param systemPath extra directories searched for {@code NAME.asd} files
+	 * @param features the reader features, the entry's and the loaded files'
+	 * @param dists the dist downloader behind {@code ql:quickload}
+	 * @param standards what loaded files are read against ({@code --scheme-standard})
+	 * @param entryFile the file the program was read from, or {@code null} for a program
+	 * that is no file's (standard input, {@code -e}, a generated program)
+	 * @return the program with top-level {@code load}/system forms inlined
+	 */
+	public static List<LispVal> inlineSource(String source, SourceLoader loader, @Nullable String baseDir,
+			List<String> systemPath, Features features, DistClient dists, SourceStandards standards,
+			@Nullable String entryFile) {
+		return inline((ctx, out) -> read(SourceLanguage.COMMON_LISP, source, entryFile, ctx, out), loader, baseDir,
+				systemPath, features, dists, standards, entryFile);
+	}
+
+	/** Opens the entry program's forms once the inlining's state exists. */
+	@FunctionalInterface
+	private interface EntryForms {
+
+		FormSource open(Ctx ctx, List<LispVal> out);
+
+	}
+
+	private static List<LispVal> inline(EntryForms entry, SourceLoader loader, @Nullable String baseDir,
+			List<String> systemPath, Features features, DistClient dists, SourceStandards standards,
+			@Nullable String entryFile) {
+		List<LispVal> result = new ArrayList<>();
+		ReaderMacroReads.clear();
+		// The system registry and the loaded set are insertion-ordered: the baked
+		// %asdf-registry% (AsdfRuntimeLibrary) is emitted from them, and the emitted
+		// program must be deterministic (.kb/emitted-output-determinism.md).
+		Ctx ctx = new Ctx(loader, new ArrayDeque<>(), new HashSet<>(), new java.util.LinkedHashMap<>(), new HashMap<>(),
+				new java.util.LinkedHashSet<>(), new ArrayDeque<>(), new ArrayList<>(systemPath), new ArrayList<>(),
+				new ArrayList<>(), new SourceRegistryConfig(), features, dists,
+				new java.util.concurrent.atomic.AtomicInteger(), baseDir, standards, new BuildImage(features),
+				new Reading(features));
+		FormSource program = entry.open(ctx, result);
+		if (entryFile == null) {
+			expandInto(program, result, ctx, new Origin(baseDir, null, null));
+		}
+		else {
+			String truename = loader.canonicalPath(entryFile);
+			result.add(beginFile(entryFile, truename, List.of()));
+			expandInto(program, result, ctx, new Origin(baseDir, entryFile, truename));
+			result.add(marker(LispNames.END_FILE));
+		}
+		// A require left in the program (nested, or a computed name) loads nothing at
+		// run time; the provided set is complete here.
+		result = NestedRequires.lower(result, ctx.provided());
+		// Fold the ASDF/UIOP pathname primitives + bundle with-open-file bodies of
+		// literal-path files: a real library evaluates them at load time to build a path
+		// pointing at a bundled data file (uax-15's precomputed-tables.lisp), and the
+		// compilers cannot lower them dynamically. See CompileTimePathnameFolder. The
+		// systems registry is complete by this point -- every asdf:load-system, inline
+		// asdf:defsystem and ql:quickload has already registered its LispSystem.
+		result = CompileTimePathnameFolder.fold(result, ctx.systems());
+		// The runtime component metaobjects (asdf.lisp + the baked %asdf-registry%
+		// table): spliced when the folded program still references any runtime asdf
+		// name -- after the folder, so a program whose only asdf use folded away pays
+		// nothing. See AsdfRuntimeLibrary.
+		return AsdfRuntimeLibrary.process(result, ctx.systems(), ctx.loadedSystems());
+	}
+
+	/**
+	 * The state threaded through the inline recursion: the loader, the in-progress file
+	 * stack (cycle guard), the provided modules, the ASDF side -- the registered systems,
+	 * the {@code register-system-packages} package-to-system map (what a package-inferred
+	 * system reads when it derives a dependency), the already-loaded systems, the
+	 * in-progress system stack (cycle guard) and the (mutable) {@code .asd} search path,
+	 * which {@code ql:quickload} extends with the downloaded cache directories, what the
+	 * program pushed on {@code asdf:*central-registry*}, searched first -- the reader
+	 * features for loaded files, the dist downloader and how many {@code ql:quickload}s
+	 * are splicing (while one is, a system no search directory holds is downloaded where
+	 * it is first needed), the entry source's directory (the base every path in the
+	 * spliced program is resolved against once this pass has flattened it), and the build
+	 * image {@code .asd} files are loaded into.
+	 */
+	private record Ctx(SourceLoader loader, Deque<String> loading, Set<String> provided,
+			Map<String, AsdfSystems.LispSystem> systems, Map<String, String> systemPackages, Set<String> loadedSystems,
+			Deque<String> loadingSystems, List<String> systemPath, List<String> distDirs, List<String> centralRegistry,
+			SourceRegistryConfig sourceRegistry, Features features, DistClient dists,
+			java.util.concurrent.atomic.AtomicInteger quickloadDepth, @Nullable String entryBaseDir,
+			SourceStandards standards, BuildImage buildImage, Reading reading) {
+
+		/** This state, its registries shared, reading with {@code features}. */
+		Ctx readingWith(Features features) {
+			return new Ctx(this.loader, this.loading, this.provided, this.systems, this.systemPackages,
+					this.loadedSystems, this.loadingSystems, this.systemPath, this.distDirs, this.centralRegistry,
+					this.sourceRegistry, features, this.dists, this.quickloadDepth, this.entryBaseDir, this.standards,
+					this.buildImage, this.reading);
+		}
+
+		/**
+		 * Where a {@code .asd} is searched for, as real ASDF's search functions order it:
+		 * the central registry, then the source registry, with this pass's search path
+		 * standing for the configuration it inherits. Each file of the registry is the
+		 * one its configuration chose, so the directory of the name asked for goes first.
+		 * @param name the system asked for, or {@code null} for no one system
+		 * @param baseDir the directory of the file asking, on the search path
+		 */
+		List<String> searchDirs(@Nullable String name, @Nullable String baseDir) {
+			AsdfSystems.SourceRegistry registry = this.sourceRegistry.registry;
+			String primary = name == null ? null : AsdfSystems.primarySystemName(name);
+			List<String> dirs = new ArrayList<>(this.centralRegistry);
+			addRegistryDirs(dirs, registry.ahead(), primary);
+			if (registry.inherits()) {
+				dirs.add(baseDir == null ? "" : baseDir);
+				dirs.addAll(this.systemPath);
+			}
+			addRegistryDirs(dirs, registry.behind(), primary);
+			dirs.addAll(this.distDirs);
+			return dirs;
+		}
+
+		private static void addRegistryDirs(List<String> dirs, Map<String, String> files, @Nullable String primary) {
+			String own = primary == null ? null : files.get(primary);
+			if (own != null) {
+				dirs.add(Objects.requireNonNull(SourceLoader.parentDir(own)));
+			}
+			for (String file : files.values()) {
+				dirs.add(Objects.requireNonNull(SourceLoader.parentDir(file)));
+			}
+		}
+	}
+
+	/**
+	 * The source registry a compile path reads, as the program's literal calls leave it.
+	 */
+	private static final class SourceRegistryConfig {
+
+		private AsdfSystems.SourceRegistry registry = AsdfSystems.SourceRegistry.DEFAULT;
+
+		private LispVal parameter = LispNil.INSTANCE;
+
+	}
+
+	/**
+	 * What the reads so far leave for the next one: the read-time image the files are
+	 * read with once one of them can change how source reads ({@link ReadTimeImage};
+	 * {@code null} until then), the package a {@code t} or {@code nil} token is read in,
+	 * and the features the forms spliced so far pushed.
+	 */
+	private static final class Reading {
+
+		/** The set the program is read with, not the one a system widens for its own. */
+		private final Features features;
+
+		@Nullable private ReadTimeImage image;
+
+		/**
+		 * The features the literal pushes among the forms followed so far announce
+		 * ({@link FeaturePushes#announced}), oldest first: what {@code *features*} holds
+		 * beyond the read set where {@code load} runs those forms.
+		 */
+		private final List<String> announced = new ArrayList<>();
+
+		/**
+		 * The packages a {@code t} or {@code nil} token is read in
+		 * ({@link PackageResolver#followReadPackageDirective}), from the first form that
+		 * names one on; {@code null} until then, every token reading in {@code cl-user}.
+		 */
+		@Nullable private PackageResolver packages;
+
+		/** How many forms of the program read so far {@link #packages} has followed. */
+		private int followed;
+
+		Reading(Features features) {
+			this.features = features;
+		}
+
+		/**
+		 * Whether a {@code t} or {@code nil} token is {@code cl}'s constant where the
+		 * read stands, which the forms read so far decide.
+		 */
+		boolean readsClTOrNil(String name) {
+			PackageResolver read = this.packages;
+			return read == null || read.readsClTOrNil(name);
+		}
+
+		/** Follows the forms read since the last call, ahead of the next read. */
+		void follow(List<LispVal> program) {
+			while (this.followed < program.size()) {
+				LispVal form = program.get(this.followed++);
+				if (PackageResolver.isReadPackageDirective(form)) {
+					PackageResolver read = this.packages;
+					if (read == null) {
+						read = new PackageResolver();
+						this.packages = read;
+					}
+					read.followReadPackageDirective(form);
+				}
+				for (String feature : FeaturePushes.announced(form)) {
+					if (!this.announced.contains(feature)) {
+						this.announced.add(feature);
+					}
+				}
+			}
+			ReadTimeImage image = this.image;
+			if (image != null) {
+				image.follow(program);
+			}
+		}
+
+		/**
+		 * What the forms followed so far pushed onto {@code *features*}: the literal
+		 * pushes, and what the read-time image ran. A file spliced next starts its read
+		 * with them, as {@code load} reads a file with the {@code *features*} the files
+		 * before it left ({@code .kb/reader-features.md}).
+		 * @return the feature names, without the leading colon
+		 */
+		List<String> pushed() {
+			ReadTimeImage image = this.image;
+			if (image == null) {
+				return this.announced;
+			}
+			List<String> pushed = new ArrayList<>(this.announced);
+			for (String feature : image.featuresPushed()) {
+				if (!pushed.contains(feature)) {
+					pushed.add(feature);
+				}
+			}
+			return pushed;
+		}
+
+	}
+
+	/**
+	 * The top-level forms of one file, as {@link #expandInto} takes them: read
+	 * beforehand, or read one at a time as they are taken.
+	 */
+	@FunctionalInterface
+	private interface FormSource {
+
+		/**
+		 * The next form.
+		 * @return the form, or {@code null} after the last one
+		 */
+		@Nullable LispVal next();
+
+		static FormSource of(List<LispVal> forms) {
+			java.util.Iterator<LispVal> iterator = forms.iterator();
+			return () -> iterator.hasNext() ? iterator.next() : null;
+		}
+
+	}
+
+	/**
+	 * Reads one file's forms. Common Lisp source is read a form at a time: once a file
+	 * that can change how source reads has opened the image
+	 * ({@link ReadTimeImage#changesSyntax}), each form is read with the syntax the image
+	 * holds after the forms spliced before it -- the rest of a file already being read
+	 * included, which is why no file is read whole beforehand. Another language's file is
+	 * lowered whole.
+	 */
+	private static FormSource read(SourceLanguage language, String source, @Nullable String path, Ctx ctx,
+			List<LispVal> out) {
+		if (language != SourceLanguage.COMMON_LISP) {
+			am.ik.rontolisp.reader.LispReader.ReadPrefix read = language.readLoaded(source, ctx.features(),
+					Objects.requireNonNull(path), ctx.standards(), ctx.loader());
+			am.ik.rontolisp.reader.LispReadException error = read.error();
+			if (error != null) {
+				throw error;
+			}
+			return FormSource.of(read.forms());
+		}
+		Reading reading = ctx.reading();
+		// The read starts from what the forms spliced before it pushed, in any file.
+		reading.follow(out);
+		Features features = ctx.features().with(reading.pushed());
+		if (reading.image == null
+				&& (ReadTimeImage.changesSyntax(source) || FeaturePushes.computesAPush(source, features, path))) {
+			reading.image = new ReadTimeImage(reading.features, ctx.systems(), ctx.systemPackages(),
+					ctx.loadedSystems());
+		}
+		SourceLanguage.Forms forms = SourceLanguage.readForms(source, features, path)
+			.readingTOrNil(reading::readsClTOrNil);
+		return () -> {
+			reading.follow(out);
+			ReadTimeImage image = reading.image;
+			if (image == null) {
+				return forms.next(null, reading.pushed());
+			}
+			ReadSyntax syntax = image.syntax(out);
+			int calls = image.readerMacroCalls();
+			int start = forms.position();
+			LispVal form = forms.next(syntax, reading.pushed());
+			// A form of the program's own a reader macro function read: the macro-time
+			// pass reads it again, for what the read leaves in the compiling image
+			// (ReaderMacroReads). A system's forms are loaded, not read again.
+			if (form != null && image.readerMacroCalls() != calls && ctx.loadingSystems().isEmpty()) {
+				ReaderMacroReads.record(form,
+						new ReaderMacroReads.Origin(source, path, forms.features(), start, forms.position()));
+			}
+			return form;
+		};
+	}
+
+	/**
+	 * The image the compile path loads {@code .asd} files into
+	 * ({@link LispEvaluator#buildImage}): an interpreter at compile time, created on the
+	 * first {@code .asd} -- a program whose systems are all built in or defined inline
+	 * never pays for one. What a file does there stays there; the program gets the plan
+	 * its {@code defsystem} forms record. Its output goes to standard error, where a
+	 * compiler's diagnostics go.
+	 */
+	private static final class BuildImage {
+
+		private final Features target;
+
+		@Nullable private LispEvaluator image;
+
+		BuildImage(Features target) {
+			this.target = target;
+		}
+
+		LispEvaluator image(Ctx ctx, List<String> searchDirs) {
+			LispEvaluator built = this.image;
+			if (built == null) {
+				built = LispEvaluator.buildImage(System.err, this.target, ctx.loader(), ctx.systems(),
+						ctx.systemPackages());
+				built.setProgramSystems(ctx.loadedSystems());
+				this.image = built;
+			}
+			// A system a .asd loads is searched for where the compile path searches, and
+			// the way it does.
+			built.setSystemPath(searchDirs);
+			built.setQuickloading(ctx.dists(), ctx.quickloadDepth().get() > 0);
+			return built;
+		}
+
+	}
+
+	/**
+	 * Where the forms being expanded come from: the directory a relative path in them
+	 * resolves against, and the file's load context (both {@code null} outside every
+	 * file), which a computed {@code load} path is folded with.
+	 */
+	private record Origin(@Nullable String baseDir, @Nullable String pathname, @Nullable String truename) {
+	}
+
+	private static void expandInto(FormSource forms, List<LispVal> out, Ctx ctx, Origin origin) {
+		expandInto(forms, out, ctx, origin, null);
+	}
+
+	/**
+	 * Expands one file's forms into {@code out}; a spliced file's {@code bracket} gets
+	 * the package save marker in front of its first {@code in-package}.
+	 */
+	private static void expandInto(FormSource forms, List<LispVal> out, Ctx ctx, Origin origin,
+			@Nullable PackageBracket bracket) {
+		String baseDir = origin.baseDir();
+		for (LispVal form = forms.next(); form != null; form = forms.next()) {
+			if (bracket != null && !bracket.pushed && selectsAPackage(List.of(form))) {
+				out.add(marker(LispNames.PUSH_PACKAGE));
+				bracket.pushed = true;
+			}
+			if (WitImportDirective.isDirective(form)) {
+				// A wit-import names its .wit relative to the file that WRITES it, like
+				// load. Splicing flattens every file into one program, though, so by the
+				// time WitImportInliner resolves the path the only base directory left is
+				// the ENTRY file's -- and a directive that came from a loaded library
+				// would
+				// look for its .wit beside the entry instead of beside itself. This is
+				// the
+				// one place that still knows which file the form came from, so rebase it
+				// here, onto the entry's directory.
+				out.add(rebaseWitImport((LispCons) form, ctx, baseDir));
+				continue;
+			}
+			if (AsdfSystems.isDefsystemForm(form)) {
+				// Register the system for a later load-system and consume the directive
+				// (like provide). Component paths resolve against this file's directory.
+				// A class it names, which loaded code defines, is looked up in the build
+				// image, created only for that.
+				AsdfSystems.LispSystem system = AsdfSystems.parseDefsystem(form, baseDir, ctx.features(),
+						(designator, definers, ownClasses) -> {
+							return ctx.buildImage()
+								.image(ctx, ctx.searchDirs(null, baseDir))
+								.classResolver()
+								.resolve(designator, definers, ownClasses);
+						});
+				ctx.systems().put(system.name(), system);
+				out.add(quotedSymbol(system.name()));
+				continue;
+			}
+			String systemName = AsdfSystems.loadSystemName(form);
+			if (systemName != null) {
+				spliceSystem(systemName, out, ctx, baseDir);
+				out.add(quotedSymbol(systemName));
+				continue;
+			}
+			// The other spellings of a load: oos, operate with load-op, load-systems,
+			// require-system.
+			List<String> systemNames = AsdfSystems.loadSystemsNames(form);
+			if (systemNames != null) {
+				for (String name : systemNames) {
+					spliceSystem(name, out, ctx, baseDir);
+					out.add(quotedSymbol(name));
+				}
+				continue;
+			}
+			String madeSystem = AsdfSystems.makeSystemName(form);
+			if (madeSystem != null) {
+				// Spliced, and the call stays: at run time it answers what the system's
+				// :build-operation asks for.
+				spliceSystem(madeSystem, out, ctx, baseDir);
+				out.add(form);
+				continue;
+			}
+			String testSystemName = AsdfSystems.testSystemName(form);
+			if (testSystemName != null) {
+				// A top-level literal (asdf:test-system NAME) splices the system AND its
+				// :in-order-to test-op chain (the tests system, which a plain load never
+				// pulls in), then KEEPS the call: at run time the generated dispatch
+				// (AsdfRuntimeLibrary) walks the recorded wiring and runs the perform
+				// defuns spliced with each system.
+				spliceTestOpClosure(testSystemName, out, ctx, baseDir, new HashSet<>());
+				out.add(form);
+				continue;
+			}
+			String distSpec = distDirective(form, LispNames.QL_DIST_PKG, LispNames.INSTALL_DIST);
+			if (distSpec != null) {
+				// Installing a dist is a COMPILE-TIME configuration of where the
+				// quickloads below it download from, so it is applied here and consumed
+				// (the compiled program downloads nothing at run time). Its value is the
+				// dist name, like the interpreter's.
+				try {
+					out.add(new LispString(ctx.dists().installDist(distSpec)));
+				}
+				catch (IllegalArgumentException ex) {
+					throw new IllegalStateException(LispNames.QL_DIST_INSTALL_DIST + ": " + ex.getMessage(), ex);
+				}
+				continue;
+			}
+			String updatedDist = distDirective(form, LispNames.QL_PKG, LispNames.UPDATE_DIST);
+			if (updatedDist != null) {
+				try {
+					ctx.dists().updateDist(updatedDist);
+				}
+				catch (IOException ex) {
+					throw new IllegalStateException(LispNames.QL_UPDATE_DIST + ": " + ex.getMessage(), ex);
+				}
+				out.add(new LispString(updatedDist));
+				continue;
+			}
+			List<String> quickloadNames = quickloadNames(form);
+			if (quickloadNames != null) {
+				for (String name : quickloadNames) {
+					// Download the system (and its dependencies) into the cache, register
+					// the extracted .asd directories on the search path, then splice it
+					// in
+					// exactly like asdf:load-system -- so the JVM/WASM compilers see the
+					// component files natively and the runtime never fetches. A built-in
+					// system (e.g. "usocket") skips the download; spliceSystem satisfies
+					// it from the embedded library.
+					if (!BuiltinSystems.isBuiltin(name)) {
+						downloadQuicklisp(name, ctx);
+					}
+					ctx.quickloadDepth().incrementAndGet();
+					try {
+						spliceSystem(name, out, ctx, baseDir);
+					}
+					finally {
+						ctx.quickloadDepth().decrementAndGet();
+					}
+					out.add(quotedSymbol(name));
+				}
+				continue;
+			}
+			String provideName = provideName(form);
+			if (provideName != null) {
+				// Record the module and consume the directive (a duplicate provide is a
+				// no-op, like Common Lisp).
+				ctx.provided().add(provideName);
+				out.add(quotedSymbol(provideName));
+				continue;
+			}
+			// A path argument that is not a literal may still be one here: the portable
+			// idiom builds it from this file's load context, which is known.
+			PathFolder folder = arg -> CompileTimePathnameFolder.foldLoadPath(arg, ctx.systems(), origin.pathname(),
+					origin.truename());
+			LispVal asdPath = AsdfSystems.loadAsdPath(form);
+			String foldedAsd = asdPath == null ? null : folder.fold(asdPath);
+			if (foldedAsd != null) {
+				// A definition file named here is read while splicing, as load-system
+				// reads
+				// one; any other path stays the call the run-time seam refuses.
+				loadAsdFile(SourceLoader.resolve(baseDir, foldedAsd), ctx);
+				out.add(LispTrue.INSTANCE);
+				continue;
+			}
+			LispVal pushedDir = AsdfSystems.centralRegistryPush(form);
+			String foldedDir = pushedDir == null ? null : folder.fold(pushedDir);
+			if (foldedDir != null && !ctx.centralRegistry().contains(foldedDir)) {
+				// What a compile path reads of the variable, a literal push as
+				// load-system
+				// reads a literal name. The form stays: the program can read the
+				// variable.
+				ctx.centralRegistry().add(0, foldedDir);
+			}
+			AsdfSystems.SourceRegistryCall registryCall = AsdfSystems.sourceRegistryCall(form);
+			if (registryCall != null) {
+				// The same: what a compile path reads of the source registry. The form
+				// stays for the program to read the variables and search at run time.
+				readSourceRegistry(registryCall, ctx, origin);
+			}
+			RequireForm require = requireForm(form, folder);
+			String rawPath = null;
+			if (require != null) {
+				if (ctx.provided().contains(require.name()) || AsdfSystems.isImplementationModule(require.name())) {
+					// Already provided: consume without loading (this is the whole point
+					// of require over load).
+					out.add(quotedSymbol(require.name()));
+					continue;
+				}
+				// The default file mapping downcases the module name (like ASDF's
+				// coerce-name): (require :util) reads as UTIL under the upcase premise
+				// but still loads util.lisp. The spelling lives in the source-language
+				// seam, beside the extension that picks the language.
+				rawPath = require.path() != null ? require.path() : SourceLanguage.fileNameForModule(require.name());
+			}
+			LoadForm load = null;
+			if (require == null) {
+				load = loadForm(form, folder);
+				rawPath = load == null ? null : load.path();
+			}
+			if (rawPath == null) {
+				out.add(form);
+				continue;
+			}
+			if (load != null && !load.errorIfMissing() && !readable(SourceLoader.resolve(baseDir, rawPath), ctx)) {
+				// (load "x.lisp" :if-does-not-exist nil) over a file that is not there:
+				// the path is literal, so the answer is decidable here, and it is the
+				// nil the runtime load would have returned.
+				out.add(LispNil.INSTANCE);
+				continue;
+			}
+			String operator = require != null ? LispNames.REQUIRE : LispNames.LOAD;
+			// Resolve relative to the loading file's directory (the entry source at the
+			// top level), the same rule the runtime load uses. *load-pathname* is the
+			// path load was CALLED with, so the raw spelling rides along beside it.
+			spliceFile(operator, SourceLoader.resolve(baseDir, rawPath), out, ctx, rawPath);
+		}
+	}
+
+	/** Whether the source at the resolved path can be read -- {@code load}'s probe. */
+	private static boolean readable(String path, Ctx ctx) {
+		try {
+			ctx.loader().load(path);
+			return true;
+		}
+		catch (IOException ex) {
+			return false;
+		}
+	}
+
+	/**
+	 * Reads the file at the (resolved) path and recursively expands its forms into
+	 * {@code out}, guarding against load cycles. Nested loads inside the file resolve
+	 * relative to the file's directory.
+	 * @param pathname the spelling {@code load} was called with -- the file's
+	 * {@code *load-pathname*}, which is the RESOLVED path for an ASDF component (that is
+	 * what ASDF hands {@code load}, and it is what makes the value equal
+	 * {@code asdf:component-pathname})
+	 */
+	private static void spliceFile(String operator, String path, List<LispVal> out, Ctx ctx, String pathname) {
+		spliceFile(operator, path, out, ctx, pathname, null, null, null, List.of());
+	}
+
+	/**
+	 * Splices one file. When it is a COMPONENT of an ASDF system, the system's name, the
+	 * component's path within it and the system's base directory are given too, so
+	 * {@link ShimLibraries#rewriteComponentSource} can rewrite forms of the real source
+	 * (uax-15's table building), and the features its {@code :around-compile} hook added,
+	 * which {@code ctx} reads with and the macro-time pass binds around its forms.
+	 */
+	private static void spliceFile(String operator, String path, List<LispVal> out, Ctx ctx, String pathname,
+			@Nullable String systemName, @Nullable String componentFile, @Nullable String systemBaseDir,
+			List<String> hookFeatures) {
+		if (ctx.loading().contains(path)) {
+			throw new IllegalStateException(
+					"Circular load detected: " + String.join(" -> ", ctx.loading()) + " -> " + path);
+		}
+		String source;
+		try {
+			source = ctx.loader().load(path);
+		}
+		catch (IOException ex) {
+			throw new IllegalStateException(operator + ": cannot read file " + path + ": " + ex.getMessage(), ex);
+		}
+		if (systemName != null && componentFile != null) {
+			source = ShimLibraries.rewriteComponentSource(systemName, componentFile, source, systemBaseDir,
+					ctx.loader());
+		}
+		ctx.loading().addLast(path);
+		// #. in a loaded file rides the same marker read as the main source; the markers
+		// resolve later in UserMacroExpander against the macro-time evaluator. A read
+		// error is prefixed with this file's path, so a spliced library's stray paren
+		// names its own line, not a line of the flattened entry program. The read is
+		// the source-language seam's, picked by THIS file's extension, so one program
+		// may mix languages file by file -- and Common Lisp a form at a time (read).
+		FormSource forms = read(SourceLanguage.forFile(path, null), source, path, ctx, out);
+		// A file that selects a package with a top-level (in-package ...) must not leak
+		// it past the load: the spliced forms are bracketed with package save/restore
+		// markers so the PackageResolver (and, ahead of it, UserMacroExpander's
+		// resolver) restores the caller's package after the file -- at resolution time
+		// AND, through the (setq *package* ...) the pop marker resolves to, at run time
+		// -- mirroring Common Lisp binding *package* for the duration of load. The save
+		// goes in front of the file's first in-package (expandInto), which the form at a
+		// time read meets only then; until then the package is the caller's, so it saves
+		// the same one. Files that never change the package (the common case -- a plain
+		// file of defuns) are spliced verbatim, so their output is unchanged.
+		PackageBracket bracket = new PackageBracket();
+		// The load context of the file, for the two variables the interpreter binds
+		// around the same file: the spelling load was called with and the path it
+		// resolved to. The bracket is emitted unconditionally and lowered (or dropped)
+		// once the whole program is in view -- this pass cannot yet know whether
+		// anything reads the variables, because the libraries spliced after it may.
+		// The truename is the file's absolute path, links resolved -- what truename
+		// answers for it -- so a path merged onto it names the same file wherever the
+		// load runs from.
+		String truename = ctx.loader().canonicalPath(path);
+		out.add(beginFile(pathname, truename, hookFeatures));
+		expandInto(forms, out, ctx, new Origin(SourceLoader.parentDir(path), pathname, truename), bracket);
+		if (bracket.pushed) {
+			out.add(marker(LispNames.POP_PACKAGE));
+		}
+		out.add(marker(LispNames.END_FILE));
+		ctx.loading().removeLast();
+	}
+
+	/**
+	 * Whether a spliced file's package save marker has been emitted
+	 * ({@link #spliceFile}).
+	 */
+	private static final class PackageBracket {
+
+		private boolean pushed;
+
+	}
+
+	/**
+	 * Whether any top-level form of a loaded file is an {@code (in-package ...)}
+	 * directive (in any package spelling, e.g. {@code (cl:in-package ...)}) -- the only
+	 * form that changes the resolver's current package and so the only one whose effect
+	 * must be confined to the load.
+	 */
+	private static boolean selectsAPackage(List<LispVal> forms) {
+		for (LispVal form : forms) {
+			if (form instanceof LispCons cons && cons.car() instanceof LispSymbol op) {
+				PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(op.name());
+				String member = qn == null ? op.name() : qn.member();
+				if (LispNames.IN_PACKAGE.equals(member)) {
+					return true;
+				}
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Splices the named system and, transitively, every system its recorded
+	 * {@code :in-order-to ((test-op (test-op ...)))} wiring chains test-op to -- what a
+	 * top-level {@code (asdf:test-system NAME)} needs on a compiled backend, where
+	 * nothing can be loaded at run time. The {@code visited} set terminates a cyclic
+	 * chain.
+	 */
+	private static void spliceTestOpClosure(String name, List<LispVal> out, Ctx ctx, @Nullable String requestBaseDir,
+			Set<String> visited) {
+		if (!visited.add(name)) {
+			return;
+		}
+		spliceSystem(name, out, ctx, requestBaseDir);
+		AsdfSystems.LispSystem system = ctx.systems().get(name);
+		if (system == null) {
+			return;
+		}
+		for (String edge : system.testOpEdges()) {
+			spliceTestOpClosure(edge, out, ctx, requestBaseDir, visited);
+		}
+	}
+
+	/**
+	 * Splices the named system into {@code out}: dependency systems first (recursively),
+	 * then the component files in their {@code :depends-on}/{@code :serial} order. An
+	 * already-loaded system is a no-op; an unknown system is located as {@code NAME.asd}
+	 * in the directory of the loading file ({@code requestBaseDir}) and then on the
+	 * system search path.
+	 */
+	private static void spliceSystem(String name, List<LispVal> out, Ctx ctx, @Nullable String requestBaseDir) {
+		if (ctx.loadedSystems().contains(name)) {
+			return;
+		}
+		if (ctx.loadingSystems().contains(name)) {
+			throw new IllegalStateException("Circular system :depends-on detected: "
+					+ String.join(" -> ", ctx.loadingSystems()) + " -> " + name);
+		}
+		String refusal = ShimLibraries.refusalReason(name, ctx.features());
+		if (refusal != null) {
+			throw new IllegalStateException("Cannot load system '" + name + "': " + refusal);
+		}
+		String conflict = ShimLibraries.conflictingSystem(name);
+		if (conflict != null && ctx.loadedSystems().contains(conflict)) {
+			throw new IllegalStateException("Cannot load system '" + name + "': it defines the same packages as '"
+					+ conflict + "', which is already loaded -- load one of the two, not both");
+		}
+		if (BuiltinSystems.isBuiltin(name)) {
+			// A system rontolisp provides itself (e.g. "usocket"): splice the embedded
+			// library instead of locating a NAME.asd. Splice rather than just mark
+			// loaded -- a dependent library may reach the package through defpackage
+			// :import-from + bare names, which the UsocketLibrary.process Walker
+			// (running before PackageResolver) cannot detect.
+			// Bracketed like any other system, and the pruner reads the name: a built-in
+			// system must NOT be pruned (usocket's with-* built-in macros synthesize
+			// socket-close/%usock-guard calls after the pruner runs), and the bracket is
+			// what stops it inheriting the provenance of a third-party system that
+			// :depends-on it.
+			// Its own built-in :depends-on edges first, like a third-party system's:
+			// flexi-streams' vector-stream defclass needs the Gray protocol that
+			// trivial-gray-streams splices, and the splice ORDER is what makes the
+			// superclass resolvable on the eagerly compiling backends.
+			for (String dependency : BuiltinSystems.dependencies(name)) {
+				spliceSystem(dependency, out, ctx, requestBaseDir);
+			}
+			out.add(beginSystem(name));
+			out.addAll(BuiltinSystems.forms(name, ctx.features()));
+			out.add(marker(LispNames.END_SYSTEM));
+			ctx.loadedSystems().add(name);
+			return;
+		}
+		AsdfSystems.LispSystem located = ctx.systems().get(name);
+		if (located == null) {
+			List<String> searchDirs = ctx.searchDirs(name, requestBaseDir);
+			AsdfSystems.LocatedAsd asd = locateAsd(name, searchDirs, ctx);
+			// The .asd runs in the build image, and each system it defines is registered
+			// the moment it is defined. .asd forms read upcased like all source;
+			// AsdfSystems matches clause keywords case-insensitively and coerce-names
+			// system designators.
+			LispEvaluator image = ctx.buildImage().image(ctx, searchDirs);
+			try {
+				AsdfSystems.loadAsd(asd.source(), asd.path(), ctx.features(), ctx.systemPackages(), image.asdImage(),
+						defined -> ctx.systems().putIfAbsent(defined.name(), defined));
+			}
+			catch (IllegalStateException | LispReadException ex) {
+				throw ex;
+			}
+			catch (RuntimeException ex) {
+				// What the file's own forms signalled, at compile time: name the file,
+				// as a defsystem the parse refuses does.
+				throw new IllegalStateException(asd.path() + ": " + ex.getMessage(), ex);
+			}
+			located = ctx.systems().get(name);
+			if (located == null) {
+				// A NAME/SUB of a :package-inferred-system: the .asd declares no
+				// components, so the name is answered from the file it points at.
+				AsdfSystems.inferPackageInferredSystems(name, ctx.systems(), ctx.systemPackages(), ctx.loader(),
+						ctx.features());
+				located = ctx.systems().get(name);
+			}
+			if (located == null) {
+				throw new IllegalStateException(asd.path() + " does not define system '" + name + "'");
+			}
+		}
+		AsdfSystems.LispSystem definition = located;
+		AsdfSystems.LispSystem system = AsdfSystems.resolveWeakDependencies(located, ctx.systems(),
+				weakName -> searchFinds(weakName, definition, ctx));
+		ctx.loadingSystems().addLast(name);
+		// A system that declares :rontolisp-features has its OWN component files read
+		// with the target backend's features widened by that declaration (the static
+		// encoding of the eval-when *features* push a real .asd would do). The record
+		// copy shares every mutable field, so the registries stay one set of state; a
+		// dependency keeps the outer ctx, since it declares its own.
+		Ctx systemCtx = system.features().isEmpty() ? ctx : ctx.readingWith(ctx.features().with(system.features()));
+		// Everything spliced from here on belongs to this system. A dependency opens its
+		// own bracket inside this one, so the pruner's innermost-wins rule attributes
+		// each
+		// form to the system whose file it actually came from.
+		out.add(beginSystem(name));
+		try {
+			// :defsystem-depends-on first: real ASDF loads those while the .asd is READ,
+			// so they precede the system's own dependencies (they are not sideway
+			// dependencies of it -- component-sideway-dependencies never lists them).
+			for (String dependency : system.defsystemDependsOn()) {
+				spliceSystem(dependency, out, ctx, system.baseDir());
+			}
+			for (String dependency : system.dependsOn()) {
+				// A dependency's .asd most likely sits next to this system's (or on the
+				// search path), so its directory becomes the first search entry.
+				spliceSystem(dependency, out, ctx, system.baseDir());
+			}
+			// Where the interpreter performs the system's own actions and each
+			// component's (the operation protocol, asdf.lisp): brackets the compilers
+			// lower into asdf:perform calls once the program defines a perform method,
+			// and that are dropped otherwise (SplicedComponentGroups).
+			out.add(SplicedComponentGroups.systemOpMarker(name, true));
+			List<String> files = system.files();
+			for (int index = 0; index < files.size(); index++) {
+				String file = files.get(index);
+				AsdfSystems.LoadedClass loaded = system.loadedClasses().components().get(file);
+				out.add(SplicedComponentGroups.componentMarker(name, index, loaded != null && loaded.deferred()));
+				LispVal hook = system.aroundCompile().get(file);
+				// What the component's build actions generated, which its compile-op
+				// compiles instead of its own file (cffi-grovel's): performed in the
+				// build
+				// image now, so the program carries their output and performs none.
+				String generated = loaded != null && loaded.lispSource()
+						? buildComponentSource(name, index, file, system, ctx) : null;
+				String read = generated != null ? generated : file;
+				if (loaded != null && !loaded.lispSource()) {
+					// The class's methods act on this file; no loader reads it. The
+					// bracket
+					// stays, for its actions to be performed.
+				}
+				else if (hook == null) {
+					spliceComponent(system, read, out, systemCtx, List.of());
+				}
+				else {
+					// The hook runs in the build image, around the read of the component,
+					// and of the program gets what it decided: the features it added
+					// (LispEvaluator.callAroundCompile).
+					List<String> searchDirs = new ArrayList<>();
+					searchDirs.add(system.baseDir());
+					searchDirs.addAll(ctx.systemPath());
+					ctx.buildImage()
+						.image(ctx, searchDirs)
+						.callAroundCompile("system " + name + " component " + file, hook, system.defsystemDependsOn(),
+								added -> spliceComponent(system, read, out, systemCtx, added));
+				}
+				out.add(SplicedComponentGroups.componentEndMarker());
+			}
+			out.add(SplicedComponentGroups.systemOpMarker(name, false));
+			// The system's recorded :perform (test-op ...) body, as the defun the
+			// generated asdf:test-system dispatch calls -- emitted at the system's own
+			// splice point, so the body compiles in the system's context
+			// (AsdfRuntimeLibrary).
+			LispVal testOpDefun = AsdfRuntimeLibrary.testOpDefun(system);
+			if (testOpDefun != null) {
+				out.add(testOpDefun);
+			}
+		}
+		finally {
+			ctx.loadingSystems().removeLast();
+		}
+		out.add(marker(LispNames.END_SYSTEM));
+		ctx.loadedSystems().add(name);
+		if ("clack".equals(name)) {
+			// The compile paths must carry the rontolisp handler backend EAGERLY: clack
+			// resolves it late-bound by name at clackup time (find-package ->
+			// asdf:load-system), a route only the interpreter can walk at run time. On
+			// a compiled backend the package probe reads the baked table and the
+			// interned RUN resolves through the _lookup registry, so the shim's forms
+			// have to be part of the program -- splicing it with clack is what puts
+			// them there.
+			spliceSystem(LispNames.CLACK_HANDLER_RONTOLISP_SYSTEM, out, ctx, requestBaseDir);
+		}
+	}
+
+	/**
+	 * The file a component of a class loaded code defines is spliced from when its build
+	 * actions generate it (cffi-grovel's process-op), performed in the build image
+	 * ({@link LispEvaluator#buildComponentSource}); {@code null} for the component's own
+	 * file. A failure names the component, as a compile error does.
+	 */
+	@Nullable private static String buildComponentSource(String name, int index, String file, AsdfSystems.LispSystem system,
+			Ctx ctx) {
+		List<String> searchDirs = new ArrayList<>();
+		searchDirs.add(system.baseDir());
+		searchDirs.addAll(ctx.systemPath());
+		try {
+			return ctx.buildImage().image(ctx, searchDirs).buildComponentSource(name, index);
+		}
+		catch (RuntimeException ex) {
+			throw new IllegalStateException("system " + name + " component " + file + ": " + ex.getMessage(), ex);
+		}
+	}
+
+	/**
+	 * Runs a literal {@code initialize-source-registry} in the build image, which holds
+	 * the one implementation of the configuration DSL, and keeps what it found. Its file
+	 * is the load context, what {@code :here} names.
+	 */
+	private static void readSourceRegistry(AsdfSystems.SourceRegistryCall call, Ctx ctx, Origin origin) {
+		SourceRegistryConfig config = ctx.sourceRegistry();
+		if (call.clear()) {
+			config.registry = AsdfSystems.SourceRegistry.DEFAULT;
+			config.parameter = LispNil.INSTANCE;
+			return;
+		}
+		LispVal parameter = call.parameter() != null ? call.parameter() : config.parameter;
+		LispEvaluator image = ctx.buildImage().image(ctx, ctx.searchDirs(null, origin.baseDir()));
+		try {
+			config.registry = image.readSourceRegistry(parameter, origin.pathname(), origin.truename());
+		}
+		catch (RuntimeException ex) {
+			throw new IllegalStateException("asdf:initialize-source-registry: " + ex.getMessage(), ex);
+		}
+		config.parameter = parameter;
+	}
+
+	/**
+	 * Whether a {@code NAME.asd} is on the search path, from a system's own directory
+	 * first: the answer to its {@code :weakly-depends-on}.
+	 */
+	private static boolean searchFinds(String name, AsdfSystems.LispSystem system, Ctx ctx) {
+		try {
+			AsdfSystems.locate(name, ctx.searchDirs(name, system.baseDir()), ctx.loader());
+			return true;
+		}
+		catch (AsdfSystems.SystemNotFoundException ex) {
+			return false;
+		}
+	}
+
+	/**
+	 * {@code asdf:load-asd} of a file named at compile time: its definitions run in the
+	 * build image and replace what the registry holds under their names. A file that
+	 * cannot be read defines nothing, as in real ASDF.
+	 */
+	private static void loadAsdFile(String path, Ctx ctx) {
+		AsdfSystems.LocatedAsd asd = AsdfSystems.readAsd(path, ctx.loader());
+		if (asd == null) {
+			return;
+		}
+		try {
+			AsdfSystems.loadAsd(asd.source(), asd.path(), ctx.features(), ctx.systemPackages(),
+					ctx.buildImage().image(ctx, ctx.searchDirs(null, SourceLoader.parentDir(path))).asdImage(),
+					defined -> ctx.systems().put(defined.name(), defined));
+		}
+		catch (IllegalStateException | LispReadException ex) {
+			throw ex;
+		}
+		catch (RuntimeException ex) {
+			throw new IllegalStateException(asd.path() + ": " + ex.getMessage(), ex);
+		}
+	}
+
+	/**
+	 * Splices one component of a system: a substituted leaf module's forms, or its file
+	 * read with the features its hook added.
+	 */
+	private static void spliceComponent(AsdfSystems.LispSystem system, String file, List<LispVal> out, Ctx systemCtx,
+			List<String> hookFeatures) {
+		List<LispVal> leafShim = ShimLibraries.leafModuleForms(system.name(), file, system.baseDir(),
+				systemCtx.loader());
+		if (leafShim != null) {
+			// A substituted leaf module: splice the shim forms in the file's
+			// place, bracketed exactly as spliceFile brackets a real component
+			// -- most shims carry the replaced file's defpackage and select no
+			// package, so their output is unchanged; the cffi backend, a
+			// near-verbatim analogue of upstream's own implementation file,
+			// does select one and the bracket confines it.
+			boolean shimBracket = selectsAPackage(leafShim);
+			if (shimBracket) {
+				out.add(marker(LispNames.PUSH_PACKAGE));
+			}
+			out.addAll(leafShim);
+			if (shimBracket) {
+				out.add(marker(LispNames.POP_PACKAGE));
+			}
+			return;
+		}
+		// A component is loaded by its RESOLVED path (real ASDF hands load
+		// the component pathname), so *load-pathname* equals
+		// *load-truename* equals asdf:component-pathname for it -- what
+		// rove's file-to-package map correlates by.
+		String resolved = SourceLoader.resolve(system.baseDir(), file);
+		Ctx ctx = hookFeatures.isEmpty() ? systemCtx : systemCtx.readingWith(systemCtx.features().with(hookFeatures));
+		spliceFile(LispNames.ASDF_LOAD_SYSTEM, resolved, out, ctx, resolved, system.name(), file, system.baseDir(),
+				hookFeatures);
+	}
+
+	/**
+	 * If {@code form} is a top-level literal call of the dist directive
+	 * {@code pkg:member} ({@code ql-dist:install-dist} / {@code ql:update-dist}), returns
+	 * its single string-designator argument; otherwise {@code null}. Trailing keyword
+	 * options are accepted and ignored like {@code quickload}'s; a non-literal argument
+	 * is a hard error, since the compile path configures the dists while it splices and
+	 * has nothing to evaluate one with (the interpreter's runtime function does accept a
+	 * computed one).
+	 */
+	@Nullable private static String distDirective(LispVal form, String pkg, String member) {
+		if (!(form instanceof LispCons cons) || !(cons.car() instanceof LispSymbol op)) {
+			return null;
+		}
+		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(op.name());
+		if (qn == null || !pkg.equals(qn.pkg()) || !member.equals(qn.member())) {
+			return null;
+		}
+		String spelling = pkg + ":" + member;
+		List<LispVal> items = cons.toList();
+		if (items.size() < 2) {
+			throw new IllegalStateException(spelling + " expects exactly one argument: " + form.print());
+		}
+		AsdfSystems.checkIgnoredLoadOptions(spelling, items.subList(2, items.size()));
+		return AsdfSystems.designator(spelling, items.get(1));
+	}
+
+	/**
+	 * If {@code form} is a top-level literal {@code (ql:quickload NAME)} (or
+	 * {@code (ql:quickload '("a" "b"))}), returns the system names; otherwise
+	 * {@code null}. A non-literal argument is a hard error (the compile path cannot
+	 * evaluate it -- the interpreter's runtime function accepts computed names instead).
+	 */
+	@Nullable private static List<String> quickloadNames(LispVal form) {
+		if (!(form instanceof LispCons cons) || !(cons.car() instanceof LispSymbol op)) {
+			return null;
+		}
+		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(op.name());
+		if (qn == null || !LispNames.QL_PKG.equals(qn.pkg()) || !LispNames.QUICKLOAD.equals(qn.member())) {
+			return null;
+		}
+		List<LispVal> items = cons.toList();
+		if (items.size() < 2) {
+			throw new IllegalStateException(LispNames.QL_QUICKLOAD
+					+ " expects exactly one system name (or a quoted list of names): " + form.print());
+		}
+		// Trailing keyword options (:silent t, ...) are accepted and ignored, like the
+		// interpreter's runtime quickload.
+		AsdfSystems.checkIgnoredLoadOptions(LispNames.QL_QUICKLOAD, items.subList(2, items.size()));
+		LispVal arg = items.get(1);
+		// A quoted list of names: '("a" "b") reads as (quote ("a" "b")).
+		if (arg instanceof LispCons quoted && quoted.car() instanceof LispSymbol quoteOp
+				&& LispNames.QUOTE.equals(quoteOp.name()) && quoted.cdr() instanceof LispCons datumCell
+				&& datumCell.car() instanceof LispCons listDatum && listDatum.isProperList()) {
+			List<String> names = new ArrayList<>();
+			for (LispVal element : listDatum.toList()) {
+				names.add(AsdfSystems.designator(LispNames.QL_QUICKLOAD, element));
+			}
+			return names;
+		}
+		return List.of(AsdfSystems.designator(LispNames.QL_QUICKLOAD, arg));
+	}
+
+	/**
+	 * Downloads the named system (and its dependencies) through the context's
+	 * {@link DistClient} and adds the extracted {@code .asd} directories to the search
+	 * path, so the following {@link #spliceSystem} can locate and splice it.
+	 */
+	private static List<String> downloadQuicklisp(String name, Ctx ctx) {
+		List<String> asdDirs;
+		try {
+			asdDirs = ctx.dists().ensureAvailable(name);
+		}
+		catch (IOException ex) {
+			throw new IllegalStateException(LispNames.QL_QUICKLOAD + ": " + ex.getMessage(), ex);
+		}
+		for (String dir : asdDirs) {
+			if (!ctx.distDirs().contains(dir)) {
+				ctx.distDirs().add(dir);
+			}
+		}
+		return asdDirs;
+	}
+
+	/**
+	 * Locates a system's {@code .asd}; under {@code ql:quickload}, one no search
+	 * directory holds is downloaded first -- the interpreter's
+	 * {@code LispEvaluator.locateAsd}, whose comment says why the index misses it.
+	 * @param searchDirs the search directories, widened in place by a download
+	 */
+	private static AsdfSystems.LocatedAsd locateAsd(String name, List<String> searchDirs, Ctx ctx) {
+		try {
+			return AsdfSystems.locate(name, searchDirs, ctx.loader());
+		}
+		catch (AsdfSystems.SystemNotFoundException ex) {
+			if (ctx.quickloadDepth().get() == 0) {
+				throw ex;
+			}
+			searchDirs.addAll(downloadQuicklisp(name, ctx));
+			return AsdfSystems.locate(name, searchDirs, ctx.loader());
+		}
+	}
+
+	/**
+	 * A top-level {@code load} this pass can consume: a literal path plus, optionally,
+	 * CL's keyword options with LITERAL values.
+	 *
+	 * @param path the literal pathname
+	 * @param errorIfMissing the {@code :if-does-not-exist} answer -- false means a
+	 * missing file is nil rather than a failed compile
+	 */
+	private record LoadForm(String path, boolean errorIfMissing) {
+	}
+
+	/**
+	 * If {@code form} is a top-level {@code (load "path" [:option value]...)} with a
+	 * string-literal path and literal option values, returns it; otherwise returns
+	 * {@code null}.
+	 *
+	 * <p>
+	 * A COMPUTED option value leaves the form alone, exactly like a computed path: the
+	 * runtime {@code load} understands the same four options
+	 * ({@code LispMacroExpander.lowerLoadOptions}), so there is no need to guess here
+	 * what an expression will answer. {@code :verbose} / {@code :print} /
+	 * {@code :external-format} are consumed with the value (a spliced file produces no
+	 * progress output and is read as UTF-8 either way); {@code :if-does-not-exist} is the
+	 * one that changes what this pass does.
+	 */
+	@Nullable private static LoadForm loadForm(LispVal form, PathFolder folder) {
+		if (!(form instanceof LispCons cons)) {
+			return null;
+		}
+		List<LispVal> items = cons.toList();
+		if (items.size() < 2 || !(items.get(0) instanceof LispSymbol op)
+				|| !LispNames.LOAD.equals(LispMacroExpander.clOperatorSpelling(op.name()))) {
+			return null;
+		}
+		// A literal path is a string or a #P"..." pathname value; a computed one counts
+		// when the loading file's context reduces it to one.
+		String path = am.ik.rontolisp.eval.PathnameOps.designatorNamestring(items.get(1));
+		if (path == null) {
+			path = folder.fold(items.get(1));
+		}
+		if (path == null) {
+			return null;
+		}
+		boolean errorIfMissing = true;
+		for (int i = 2; i < items.size(); i += 2) {
+			if (i + 1 >= items.size() || !(items.get(i) instanceof LispSymbol key) || !key.name().startsWith(":")
+					|| !isLiteralOptionValue(items.get(i + 1))) {
+				return null;
+			}
+			switch (key.name()) {
+				case ":VERBOSE", ":PRINT", ":EXTERNAL-FORMAT" -> {
+				}
+				case ":IF-DOES-NOT-EXIST" -> errorIfMissing = !(items.get(i + 1) instanceof LispNil);
+				default -> {
+					return null;
+				}
+			}
+		}
+		return new LoadForm(path, errorIfMissing);
+	}
+
+	/**
+	 * Whether an option value is a literal this pass can read: a keyword, {@code nil} /
+	 * {@code t}, a string or a number. A list is a call and a bare symbol a variable --
+	 * both are answers only the run time has.
+	 */
+	private static boolean isLiteralOptionValue(LispVal value) {
+		if (value instanceof LispCons) {
+			return false;
+		}
+		return !(value instanceof LispSymbol sym) || sym.name().startsWith(":");
+	}
+
+	/**
+	 * If {@code form} is a top-level {@code (provide NAME)}, returns the module name;
+	 * otherwise returns {@code null}. A {@code provide} whose argument is not a literal
+	 * designator is a hard error: unlike {@code load}, the compiled runtime reader does
+	 * not know {@code provide}, so it cannot be deferred to runtime.
+	 */
+	@Nullable private static String provideName(LispVal form) {
+		List<LispVal> items = operatorForm(form, LispNames.PROVIDE);
+		if (items == null) {
+			return null;
+		}
+		if (items.size() != 2) {
+			throw new IllegalStateException(LispNames.PROVIDE + " expects exactly one argument: " + form.print());
+		}
+		return moduleDesignator(LispNames.PROVIDE, items.get(1), form);
+	}
+
+	/**
+	 * If {@code form} is a top-level {@code (require NAME)} or
+	 * {@code (require NAME "path.lisp")}, returns the parsed directive; otherwise returns
+	 * {@code null}. Like {@code provide}, a non-literal argument is a hard error -- but a
+	 * path the loading file's context reduces to a literal is one ({@link PathFolder}).
+	 */
+	@Nullable private static RequireForm requireForm(LispVal form, PathFolder folder) {
+		List<LispVal> items = operatorForm(form, LispNames.REQUIRE);
+		if (items == null) {
+			return null;
+		}
+		if (items.size() != 2 && items.size() != 3) {
+			throw new IllegalStateException(
+					LispNames.REQUIRE + " expects a module name and an optional file path: " + form.print());
+		}
+		String name = moduleDesignator(LispNames.REQUIRE, items.get(1), form);
+		String path = null;
+		if (items.size() == 3) {
+			path = items.get(2) instanceof LispString str ? str.value() : folder.fold(items.get(2));
+			if (path == null) {
+				throw new IllegalStateException(LispNames.REQUIRE
+						+ " expects a file path known at compile time (a string literal, or one merged onto"
+						+ " *load-truename*): " + form.print());
+			}
+		}
+		return new RequireForm(name, path);
+	}
+
+	@Nullable private static List<LispVal> operatorForm(LispVal form, String operator) {
+		if (!(form instanceof LispCons cons) || !(cons.car() instanceof LispSymbol op)
+				|| !operator.equals(LispMacroExpander.clOperatorSpelling(op.name()))) {
+			return null;
+		}
+		return cons.toList();
+	}
+
+	/**
+	 * Parses a literal module-name designator: a keyword ({@code :util}), a quoted symbol
+	 * ({@code 'util}) or a string ({@code "util"}). Anything else (a bare symbol would be
+	 * a variable reference at runtime, a computed expression cannot be evaluated here) is
+	 * a hard error.
+	 */
+	private static String moduleDesignator(String operator, LispVal designator, LispVal form) {
+		if (designator instanceof LispCons quoted && quoted.car() instanceof LispSymbol quoteOp
+				&& LispNames.QUOTE.equals(quoteOp.name()) && quoted.cdr() instanceof LispCons datumCell
+				&& datumCell.car() instanceof LispSymbol datum) {
+			return datum.name();
+		}
+		if (designator instanceof LispSymbol sym && sym.isKeyword()) {
+			return sym.name().substring(1);
+		}
+		if (designator instanceof LispString str) {
+			return str.value();
+		}
+		throw new IllegalStateException(
+				operator + " expects a literal module name (keyword, quoted symbol or string), got " + form.print());
+	}
+
+	/**
+	 * Rewrites a {@code rontolisp:wit-import} path so that resolving it against the ENTRY
+	 * source's directory -- the only base left once this pass has flattened every loaded
+	 * file into one program -- still names the {@code .wit} the writing file meant. A
+	 * directive in the entry source is already in that frame and is returned untouched,
+	 * so the path it reports on an error stays the one its author typed.
+	 * @param form the directive form
+	 * @param ctx the inline state (for the entry source's directory)
+	 * @param baseDir the directory of the file that wrote the directive
+	 * @return the directive, rebased if it came from a loaded file
+	 */
+	private static LispVal rebaseWitImport(LispCons form, Ctx ctx, @Nullable String baseDir) {
+		List<LispVal> items = form.toList();
+		if (Objects.equals(baseDir, ctx.entryBaseDir()) || items.size() < 2
+				|| !(items.get(1) instanceof LispString path)) {
+			// Not from a loaded file, or not a shape this pass can rewrite -- either way
+			// WitImportDirective sees exactly what the author wrote (and reports it).
+			return form;
+		}
+		List<LispVal> out = new ArrayList<>(items);
+		out.set(1, new LispString(againstEntry(ctx.entryBaseDir(), SourceLoader.resolve(baseDir, path.value()))));
+		LispVal result = LispNil.INSTANCE;
+		for (int i = out.size() - 1; i >= 0; i--) {
+			result = new LispCons(out.get(i), result);
+		}
+		return result;
+	}
+
+	// The spelling of an already-resolved path that survives one more
+	// SourceLoader.resolve against the entry's directory: unchanged where that resolve is
+	// the identity (no entry directory at all), and otherwise written relative to the
+	// entry, so a library's .wit is still quoted as a short path rather than a machine
+	// one. The frames only ever disagree when a load path was absolute; there, absolute
+	// is what passes through untouched.
+	private static String againstEntry(@Nullable String entryBaseDir, String resolved) {
+		if (entryBaseDir == null || entryBaseDir.isEmpty()) {
+			return resolved;
+		}
+		Path from = Path.of(entryBaseDir);
+		Path to = Path.of(resolved);
+		return from.isAbsolute() == to.isAbsolute() ? from.relativize(to).toString()
+				: to.toAbsolutePath().normalize().toString();
+	}
+
+	private static LispVal quotedSymbol(String name) {
+		return new LispCons(new LispSymbol(LispNames.QUOTE), new LispCons(new LispSymbol(name), LispNil.INSTANCE));
+	}
+
+	/**
+	 * A bare {@code (%push-package)} / {@code (%pop-package)} / {@code (%end-system)} /
+	 * {@code (%end-file)} directive consumed by the package resolver (see
+	 * {@link #spliceFile}).
+	 */
+	private static LispVal marker(String name) {
+		return new LispCons(new LispSymbol(name), LispNil.INSTANCE);
+	}
+
+	/**
+	 * A {@code (%begin-system "NAME")} provenance marker (see {@link #spliceSystem}). The
+	 * payload is a string rather than a symbol on purpose: every reference-collecting
+	 * pass downstream walks symbols, so a string name pollutes no name set.
+	 */
+	private static LispVal beginSystem(String name) {
+		return new LispCons(new LispSymbol(LispNames.BEGIN_SYSTEM),
+				new LispCons(new LispString(name), LispNil.INSTANCE));
+	}
+
+	/**
+	 * A {@code (%begin-file "PATHNAME" "TRUENAME" "FEATURE"...)} load-context marker (see
+	 * {@link #spliceFile}), carrying the two values the interpreter binds around the same
+	 * file and the feature names an {@code :around-compile} hook added around it. Strings
+	 * for the same reason {@link #beginSystem}'s name is one.
+	 */
+	private static LispVal beginFile(String pathname, String truename, List<String> hookFeatures) {
+		LispVal features = LispNil.INSTANCE;
+		for (int i = hookFeatures.size() - 1; i >= 0; i--) {
+			features = new LispCons(new LispString(hookFeatures.get(i)), features);
+		}
+		return new LispCons(new LispSymbol(LispNames.BEGIN_FILE),
+				new LispCons(new LispString(pathname), new LispCons(new LispString(truename), features)));
+	}
+
+	private record RequireForm(String name, @Nullable String path) {
+	}
+
+	/**
+	 * Reduces a computed {@code load} / {@code require} path in the loading file's
+	 * context ({@link CompileTimePathnameFolder#foldLoadPath}).
+	 */
+	@FunctionalInterface
+	private interface PathFolder {
+
+		/**
+		 * @param arg the path argument
+		 * @return its namestring, or {@code null} when it is not known at compile time
+		 */
+		@Nullable String fold(LispVal arg);
+
+	}
+
+}

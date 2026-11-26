@@ -1,0 +1,5 @@
+package root:component;
+
+world root {
+  export mandelbrot: func(x0: f64, x1: f64, y0: f64, y1: f64, cols: s32, rows: s32, max-iter: s32) -> string;
+}

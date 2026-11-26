@@ -1,0 +1,741 @@
+package am.ik.rontolisp.cli;
+
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.PrintStream;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.TimeUnit;
+
+import am.ik.rontolisp.compiler.UncaughtReport;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.EnabledIf;
+import org.junit.jupiter.api.io.TempDir;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+/**
+ * {@code --report-locations}: a wasm-GC module prints the interpreter's uncaught report
+ * and location lines, on Preview 1 and {@code --component} alike -- turning the report on
+ * for a program with no catching form -- and a program read from no file is
+ * byte-identical with and without the option ({@code .kb/error-handling.md}, "Location
+ * lines on wasm-GC").
+ */
+class WasmReportLocationsTest {
+
+	@TempDir
+	Path tempDir;
+
+	@Test
+	@EnabledIf("am.ik.rontolisp.testsupport.HostWasmtime#isAvailable")
+	void lineGranularityPrintsTheInterpretersLinesOnBothBackends() throws Exception {
+		// The interpreter's own case (RontoLispCliStreamsTest): through a package, a
+		// dolist/when expansion, and a tail call into a library function whose forms
+		// carry no position -- the call site in PARSE is what is reported.
+		Path program = write("app.lisp", """
+				(defpackage :app (:use :cl))
+				(in-package :app)
+
+				(defun parse (s)
+				  (parse-integer s))
+
+				(defun run ()
+				  (dolist (s '("1" "x"))
+				    (when s
+				      (print (parse s)))))
+
+				(print (ignore-errors (parse "y")))
+				(run)
+				""");
+		List<String> expected = List.of("Unhandled condition: parse-integer: junk in string \"x\"",
+				"  at " + program + ":5 in APP::PARSE");
+		assertThat(interpreterReport(program)).isEqualTo(expected);
+		assertThat(wasmReport(program, "--report-locations=line")).isEqualTo(expected);
+		assertThat(wasmReport(program, "--report-locations=line", "--component")).isEqualTo(expected);
+	}
+
+	@Test
+	@EnabledIf("am.ik.rontolisp.testsupport.HostWasmtime#isAvailable")
+	void aSetfFunctionIsNamedByTheNameTheProgramWrote() throws Exception {
+		// The line named the internal name the writer is stored under, %setf-RPT-W.
+		Path program = write("setf-function.lisp", """
+				(defun (setf rpt-w) (v x)
+				  (declare (ignore x))
+				  (error "cannot store ~a" v))
+
+				(print (ignore-errors (funcall #'(setf rpt-w) 0 0)))
+				(funcall #'(setf rpt-w) 1 2)
+				""");
+		assertSameLines(program, "Unhandled condition: cannot store 1", "  at " + program + ":3 in (SETF RPT-W)");
+		List<String> expected = List.of("Unhandled condition: cannot store 1",
+				"  at " + program + ":1 in (SETF RPT-W)");
+		assertThat(wasmReport(program, "--report-locations=function")).isEqualTo(expected);
+	}
+
+	@Test
+	@EnabledIf("am.ik.rontolisp.testsupport.HostWasmtime#isAvailable")
+	void aConditionOnlyTheRuntimeSignalsRendersItsReport() throws Exception {
+		// No stream in the program, so the report renders over a raw handle, which close
+		// used to refuse: CLOSE: The value -40032 is not of type STREAM.
+		Path program = write("no-applicable.lisp", """
+				(defstruct rpt-st a)
+				(defgeneric rpt-g (x) (:method ((x integer)) 1))
+				(print (ignore-errors nil))
+				(rpt-g (make-rpt-st :a 1))
+				""");
+		List<String> expected = List.of("Unhandled condition: No applicable method: RPT-G on RPT-ST");
+		assertThat(wasmReport(program)).isEqualTo(expected);
+		assertThat(wasmReport(program, "--component")).isEqualTo(expected);
+	}
+
+	@Test
+	@EnabledIf("am.ik.rontolisp.testsupport.HostWasmtime#isAvailable")
+	void functionGranularityNamesTheFunctionAndTheLineItsDefinitionStartsOn() throws Exception {
+		Path program = write("app.lisp", """
+				(defun parse (s)
+				  (let ((n (length s)))
+				    (parse-integer s :end n)))
+
+				(print (ignore-errors (parse "y")))
+				(parse "x")
+				""");
+		List<String> expected = List.of("Unhandled condition: parse-integer: junk in string \"x\"",
+				"  at " + program + ":1 in PARSE");
+		assertThat(wasmReport(program, "--report-locations=function")).isEqualTo(expected);
+		assertThat(wasmReport(program, "--report-locations=function", "--component")).isEqualTo(expected);
+	}
+
+	@Test
+	@EnabledIf("am.ik.rontolisp.testsupport.HostWasmtime#isAvailable")
+	void anAsyncBodysConditionNamesTheAsyncFunctionAndEveryAwaitSite() throws Exception {
+		// Preview 1 runs the body at the call, --component on a state machine whose
+		// rejected future the await re-signals: both print the interpreter's hops.
+		Path program = write("prices.lisp", """
+				(print (ignore-errors (error "caught")))
+				(rontolisp:async-defun current-price (symbol)
+				  (let ((feed nil))
+				    (error "no price for ~a" symbol)))
+
+				(rontolisp:async-defun portfolio ()
+				  (list
+				    (rontolisp:await (current-price "ABC"))))
+
+				(print (rontolisp:await (portfolio)))
+				""");
+		List<String> expected = List.of("Unhandled condition: no price for ABC", "  at " + program + ":4",
+				"  in CURRENT-PRICE (async), awaited at " + program + ":8",
+				"  in PORTFOLIO (async), awaited at " + program + ":10");
+		assertThat(interpreterReport(program)).isEqualTo(expected);
+		assertThat(wasmReport(program, "--report-locations=line")).isEqualTo(expected);
+		assertThat(wasmReport(program, "--report-locations=line", "--component")).isEqualTo(expected);
+	}
+
+	@Test
+	@EnabledIf("am.ik.rontolisp.testsupport.HostWasmtime#isAvailable")
+	void aConditionReSignalledByASecondAwaitNamesThatAwait() throws Exception {
+		// The second program is --component only: Preview 1 has no wait-for.
+		Path direct = write("relay-then-direct.lisp", """
+				(rontolisp:async-defun job ()
+				  (error "job failed"))
+
+				(rontolisp:async-defun relay (f)
+				  (rontolisp:await f))
+
+				(let ((f (job)))
+				  (handler-case (rontolisp:await (relay f))
+				    (error () (print :caught)))
+				  (rontolisp:await f))
+				""");
+		assertThat(wasmReport(direct, "--report-locations=line", "--component"))
+			.isEqualTo(List.of("Unhandled condition: job failed", "  at " + direct + ":2",
+					"  in JOB (async), awaited at " + direct + ":10"))
+			.isEqualTo(interpreterReport(direct))
+			.isEqualTo(wasmReport(direct, "--report-locations=line"));
+		Path relayed = write("direct-then-relay.lisp", """
+				(rontolisp:async-defun job ()
+				  (rontolisp:await (rontolisp:wait-for 1))
+				  (error "job failed"))
+
+				(rontolisp:async-defun relay (f)
+				  (rontolisp:await f))
+
+				(let ((f (job)))
+				  (handler-case (rontolisp:await f)
+				    (error () (print :caught)))
+				  (handler-case (rontolisp:await (relay f))
+				    (error () (print :caught-again)))
+				  (rontolisp:await (relay f)))
+				""");
+		assertThat(wasmReport(relayed, "--report-locations=line", "--component"))
+			.isEqualTo(List.of("Unhandled condition: job failed", "  at " + relayed + ":3",
+					"  in JOB (async), awaited at " + relayed + ":6",
+					"  in RELAY (async), awaited at " + relayed + ":13"))
+			.isEqualTo(interpreterReport(relayed));
+	}
+
+	@Test
+	@EnabledIf("am.ik.rontolisp.testsupport.HostWasmtime#isAvailable")
+	void aFrontEndsProgramNamesTheFunctionHoldingTheForm() throws Exception {
+		Path program = write("app.scm", """
+				(import (scheme base) (scheme write))
+
+				(define-syntax must
+				  (syntax-rules ()
+				    ((_ x) (or x (error "not a number")))))
+
+				(define (parse s)
+				  (must (string->number s)))
+
+				(define (run)
+				  (for-each (lambda (s)
+				              (when s
+				                (display (parse s))))
+				            '("1" "x")))
+
+				(guard (e (#t (display "caught")))
+				  (raise 'oops))
+				(run)
+				""");
+		List<String> expected = List.of("Unhandled condition: not a number", "  at " + program + ":8 in parse");
+		assertThat(interpreterReport(program)).isEqualTo(expected);
+		assertThat(wasmReport(program, "--report-locations=line")).isEqualTo(expected);
+		Path starlark = write("app.star", """
+				def parse(s):
+				    return int(s)
+
+				def run(items):
+				    return [
+				        (lambda v: parse(v) + v)(s)
+				        for s in items]
+
+				print(run([]))
+				run(["2"])
+				""");
+		List<String> located = List.of("Unhandled condition: unknown binary op: int + string",
+				"  at " + starlark + ":6 in run");
+		assertThat(interpreterReport(starlark)).isEqualTo(located);
+		assertThat(wasmReport(starlark, "--report-locations=line")).isEqualTo(located);
+		assertThat(wasmReport(starlark, "--report-locations=line", "--component")).isEqualTo(located);
+	}
+
+	@Test
+	@EnabledIf("am.ik.rontolisp.testsupport.HostWasmtime#isAvailable")
+	void aMethodAndALocalFunctionInItReportAsTheInterpreterDoes() throws Exception {
+		// The method body is a function the lowering names %AREA--m0, reported as its
+		// generic; the labels function inside it reports its own line, not the labels
+		// form's, on both.
+		Path program = write("shapes.lisp", """
+				(defgeneric area (s))
+				(defmethod area ((s list))
+				  (labels ((walk (xs acc)
+				             (if (null xs)
+				                 (error "no area for ~a" acc)
+				                 (walk (cdr xs) (+ acc (car xs))))))
+				    (walk s 0)))
+
+				(print (ignore-errors (area '(1))))
+				(area '(1 2))
+				""");
+		List<String> expected = List.of("Unhandled condition: no area for 3", "  at " + program + ":5 in AREA");
+		assertThat(interpreterReport(program)).isEqualTo(expected);
+		assertThat(wasmReport(program, "--report-locations=line")).isEqualTo(expected);
+	}
+
+	@Test
+	@EnabledIf("am.ik.rontolisp.testsupport.HostWasmtime#isAvailable")
+	void aLambdaNamesTheFunctionItIsWrittenInThoughATailCallLeftItsCaller() throws Exception {
+		// RUN-CALLBACK's tail call through a function value is a return_call, so its
+		// frame is gone when the lambda signals: the lambda's own frame names MAIN, where
+		// it is written -- the interpreter's answer, which no caller decides.
+		Path program = write("callback.lisp", """
+				(defun run-callback (cb)
+				  (funcall cb))
+
+				(defun main ()
+				  (run-callback (lambda ()
+				                  (error "callback failed")))
+				  :done)
+
+				(print (ignore-errors (error "caught")))
+				(main)
+				""");
+		List<String> expected = List.of("Unhandled condition: callback failed", "  at " + program + ":6 in MAIN");
+		assertThat(interpreterReport(program)).isEqualTo(expected);
+		assertThat(wasmReport(program, "--report-locations=line")).isEqualTo(expected);
+		assertThat(wasmReport(program, "--report-locations=line", "--component")).isEqualTo(expected);
+	}
+
+	@Test
+	@EnabledIf("am.ik.rontolisp.testsupport.HostWasmtime#isAvailable")
+	void aNestedDefunIsANamedFunction() throws Exception {
+		Path program = write("nested.lisp", """
+				(defun make-it ()
+				  (defun made (x)
+				    (error "made ~a" x)))
+
+				(print (ignore-errors (error "caught")))
+				(make-it)
+				(made 3)
+				""");
+		List<String> expected = List.of("Unhandled condition: made 3", "  at " + program + ":3 in MADE");
+		assertThat(interpreterReport(program)).isEqualTo(expected);
+		assertThat(wasmReport(program, "--report-locations=line")).isEqualTo(expected);
+	}
+
+	@Test
+	@EnabledIf("am.ik.rontolisp.testsupport.HostWasmtime#isAvailable")
+	void aConditionAHandlerCaughtLeavesNothingALaterOneCouldMisreport() throws Exception {
+		// The frames note the first condition on its way to the handler-case; the second
+		// escapes from the top level, in no function, and must say only that.
+		Path program = write("twice.lisp", """
+				(defun deep (n)
+				  (if (> n 3)
+				      (error "deep ~a" n)
+				      (deep (+ n 1))))
+
+				(print (handler-case (deep 0) (error () :caught)))
+				(error "later")
+				""");
+		List<String> expected = List.of("Unhandled condition: later", "  at " + program + ":7");
+		assertThat(interpreterReport(program)).isEqualTo(expected);
+		assertThat(wasmReport(program, "--report-locations=line")).isEqualTo(expected);
+		assertThat(wasmReport(program, "--report-locations=function")).isEqualTo(expected);
+	}
+
+	@Test
+	@EnabledIf("am.ik.rontolisp.testsupport.HostWasmtime#isAvailable")
+	void aTailCallStillRunsInConstantStackAndASignalInTailPositionKeepsItsFrame() throws Exception {
+		// A tail call into another frame or through a function value stays a
+		// return_call, so the depths .kb/wasm-tail-calls.md pins still hold; a tail call
+		// into a signal becomes a plain call, or FAILS would never be named.
+		Path program = write("tail.lisp", """
+				(print (ignore-errors (error "caught")))
+				(defun count-down (n acc)
+				  (if (= n 0)
+				      acc
+				      (count-down (- n 1) (+ acc 1))))
+				(print (count-down 1000000 0))
+				(print (labels ((walk (n) (if (= n 0) :walked (walk (- n 1))))) (walk 1000000)))
+				(defun fails (x)
+				  (error "fails with ~a" x))
+				(fails 42)
+				""");
+		for (String granularity : List.of("line", "function")) {
+			Result run = compileAndRun(program, "--report-locations=" + granularity);
+			assertThat(run.stdout()).as(granularity).isEqualTo("NIL\n1000000\n:WALKED\n");
+			assertThat(report(run.stderr())).as(granularity)
+				.containsExactly("Unhandled condition: fails with 42",
+						"  at " + program + ":" + (granularity.equals("line") ? 9 : 8) + " in FAILS");
+		}
+	}
+
+	@Test
+	@EnabledIf("am.ik.rontolisp.testsupport.HostWasmtime#isAvailable")
+	void aTailCallIntoAFunctionWithNoPositionKeepsTheCallersFrame() throws Exception {
+		// CHECK's body is a macro's output, so it is not a frame; a return_call into it
+		// would leave USE's frame too, and the report would fall back to the top level.
+		// Called from two functions, so the optimizer's inliner keeps it a call.
+		Path program = write("checker.lisp", """
+				(defmacro define-checker (name)
+				  `(defun ,name (x) (if (numberp x) x (error "not a number: ~a" x))))
+				(define-checker check)
+				(defun use (x)
+				  (check x))
+				(defun also (x)
+				  (check x))
+				(print (ignore-errors (also "b")))
+				(use "a")
+				""");
+		List<String> expected = List.of("Unhandled condition: not a number: a", "  at " + program + ":5 in USE");
+		assertThat(interpreterReport(program)).isEqualTo(expected);
+		assertThat(wasmReport(program, "--report-locations=line")).isEqualTo(expected);
+	}
+
+	@Test
+	@EnabledIf("am.ik.rontolisp.testsupport.HostWasmtime#isAvailable")
+	void aTailCallThroughAFunctionValueIntoABuiltInKeepsTheCallersFrame() throws Exception {
+		// Whether a tail call through a value may leave the frame is the callee's to
+		// decide, at run time: into a built-in the frame stays and notes the funcall's
+		// (or apply's) line, into a frame it leaves -- a continuation chain 100,000 deep
+		// still runs in constant stack.
+		Path funcall = write("funcall.lisp", """
+				(defun run (f x)
+				  (funcall f x))
+				(print (ignore-errors nil))
+				(run #'parse-integer "x")
+				""");
+		Path apply = write("apply.lisp", """
+				(defun run (f x)
+				  (let ((y x))
+				    (apply f (list y))))
+				(defun loop-k (n k)
+				  (if (= n 0)
+				      (funcall k 0)
+				      (loop-k (- n 1) (lambda (v) (funcall k (+ v 1))))))
+				(print (ignore-errors nil))
+				(print (loop-k 100000 #'identity))
+				(run #'parse-integer "x")
+				""");
+		assertSameLines(funcall, "Unhandled condition: parse-integer: junk in string \"x\"",
+				"  at " + funcall + ":2 in RUN");
+		assertSameLines(apply, "Unhandled condition: parse-integer: junk in string \"x\"",
+				"  at " + apply + ":3 in RUN");
+		assertThat(compileAndRun(apply, "--report-locations=line").stdout()).isEqualTo("NIL\n100000\n");
+	}
+
+	@Test
+	@EnabledIf("am.ik.rontolisp.testsupport.HostWasmtime#isAvailable")
+	void aHandlerBindHandlersFormsAndTheFormItDeclinedReportTheirOwnLines() throws Exception {
+		// A handler that signals reports its own form, a lambda's under the function it
+		// is written in and a defun's under its own name; a handler that declines leaves
+		// the signalling form's line, not the handler-bind's.
+		Path lambda = write("lambda.lisp", """
+				(defun k ()
+				  (handler-bind ((error (lambda (c)
+				                          (declare (ignore c))
+				                          (error "handler failed"))))
+				    (error "first")))
+				(print (ignore-errors nil))
+				(k)
+				""");
+		Path named = write("named.lisp", """
+				(defun h (c)
+				  (declare (ignore c))
+				  (error "handler failed"))
+				(defun k ()
+				  (handler-bind ((error #'h))
+				    (error "first")))
+				(print (ignore-errors nil))
+				(k)
+				""");
+		Path declined = write("declined.lisp", """
+				(defun k ()
+				  (handler-bind ((error (lambda (c) (declare (ignore c)) nil)))
+				    (parse-integer
+				      "x")))
+				(print (ignore-errors nil))
+				(k)
+				""");
+		assertSameLines(lambda, "Unhandled condition: handler failed", "  at " + lambda + ":4 in K");
+		assertSameLines(named, "Unhandled condition: handler failed", "  at " + named + ":3 in H");
+		assertSameLines(declined, "Unhandled condition: parse-integer: junk in string \"x\"",
+				"  at " + declined + ":3 in K");
+	}
+
+	@Test
+	@EnabledIf("am.ik.rontolisp.testsupport.HostWasmtime#isAvailable")
+	void aLandingPadTheConditionPassesKeepsTheLineItWasSignalledOn() throws Exception {
+		// An unwind-protect's cleanups, a special binding's restore and a handler-case
+		// with no matching clause each catch and rethrow inside the function: the line is
+		// the signalling form's, not the region's.
+		Path cleanup = write("cleanup.lisp", """
+				(defun f (x)
+				  (unwind-protect
+				       (parse-integer x)
+				    (print :cleanup)))
+				(print (ignore-errors nil))
+				(f "zz")
+				""");
+		Path special = write("special.lisp", """
+				(defvar *depth* 0)
+				(defun f (s)
+				  (let ((*depth* 1))
+				    (parse-integer
+				      s)))
+				(print (ignore-errors nil))
+				(f "zz")
+				""");
+		Path unmatched = write("unmatched.lisp", """
+				(defun f (s)
+				  (handler-case
+				      (parse-integer
+				        s)
+				    (type-error () :no)))
+				(print (ignore-errors nil))
+				(f "zz")
+				""");
+		String report = "Unhandled condition: parse-integer: junk in string \"zz\"";
+		assertSameLines(cleanup, report, "  at " + cleanup + ":3 in F");
+		assertSameLines(special, report, "  at " + special + ":4 in F");
+		assertSameLines(unmatched, report, "  at " + unmatched + ":3 in F");
+	}
+
+	@Test
+	@EnabledIf("am.ik.rontolisp.testsupport.HostWasmtime#isAvailable")
+	void aFusedArithmeticTreeReportsTheOperationThatFailedAndTheFunctionItIsWrittenIn() throws Exception {
+		// The fused tree compiles as one form, but its fallback marks each operation: a
+		// later line, a raw local's loop step, and a defun inlined from its own body --
+		// named after that defun, and under FUNCTION at the line its definition starts
+		// on.
+		Path lines = write("lines.lisp", """
+				(defun f (a b)
+				  (+ (* a 2)
+				     (* b 3)))
+				(print (ignore-errors nil))
+				(f 1 "x")
+				""");
+		Path step = write("step.lisp", """
+				(defun f (step)
+				  (let ((acc 0))
+				    (dotimes (i 3)
+				      (setq acc
+				            (+ acc
+				               step)))
+				    acc))
+				(print (ignore-errors nil))
+				(f "x")
+				""");
+		Path inlined = write("inlined.lisp", """
+				(defun sq (x)
+				  (* x x))
+
+				(defun f (a)
+				  (+ 1
+				     (sq a)))
+
+				(print (ignore-errors nil))
+				(print (f "s"))
+				""");
+		String report = "Unhandled condition: *: The value \"x\" is not of type NUMBER";
+		assertSameLines(lines, report, "  at " + lines + ":3 in F");
+		assertSameLines(step, "Unhandled condition: +: The value \"x\" is not of type NUMBER",
+				"  at " + step + ":5 in F");
+		assertSameLines(inlined, "Unhandled condition: *: The value \"s\" is not of type NUMBER",
+				"  at " + inlined + ":2 in SQ");
+		assertThat(wasmReport(inlined, "--report-locations=function")).containsExactly(
+				"Unhandled condition: *: The value \"s\" is not of type NUMBER", "  at " + inlined + ":1 in SQ");
+	}
+
+	@Test
+	@EnabledIf("am.ik.rontolisp.testsupport.HostWasmtime#isAvailable")
+	void previewOneSignalsAnAsyncBodysConditionAtTheAwait() throws Exception {
+		// Preview 1 runs the body at its call, but keeps its condition in the future for
+		// the await, as the other backends do: the output between the two is printed and
+		// the hop names the await's line. An async body that leaves through a tail call
+		// still opens its hop, and a library's async lambda (then's) is a hop of its own.
+		Path between = write("between.lisp", """
+				(rontolisp:async-defun job ()
+				  (error "job failed"))
+				(print (ignore-errors nil))
+				(let ((f (job)))
+				  (print :between)
+				  (rontolisp:await f))
+				""");
+		Path tail = write("tail.lisp", """
+				(defun helper (x)
+				  (error "helper ~a" x))
+				(rontolisp:async-defun job (x) (helper x))
+				(print (ignore-errors nil))
+				(rontolisp:await (job 1))
+				""");
+		Path then = write("then.lisp", """
+				(rontolisp:async-defun job (x)
+				  (if (> x 1) (error "too big ~a" x) x))
+				(print (ignore-errors nil))
+				(print (rontolisp:await (rontolisp:catch (job 5) (lambda (e) (format nil "handled ~a" e)))))
+				(rontolisp:await (rontolisp:then (job 7) (lambda (v) v)))
+				""");
+		assertSameLines(between, "Unhandled condition: job failed", "  at " + between + ":2",
+				"  in JOB (async), awaited at " + between + ":6");
+		assertThat(compileAndRun(between, "--report-locations=line").stdout()).isEqualTo("NIL\n:BETWEEN\n");
+		assertSameLines(tail, "Unhandled condition: helper 1", "  at " + tail + ":2 in HELPER",
+				"  in JOB (async), awaited at " + tail + ":5");
+		assertSameLines(then, "Unhandled condition: too big 7", "  at " + then + ":2", "  in JOB (async)",
+				"  in an async lambda, awaited at " + then + ":5");
+		assertThat(compileAndRun(then, "--report-locations=line").stdout()).isEqualTo("NIL\n\"handled too big 5\"\n");
+	}
+
+	@Test
+	@EnabledIf("am.ik.rontolisp.testsupport.HostWasmtime#isAvailable")
+	void aProgramWithNoCatchingFormGetsTheReportAndItsLines() throws Exception {
+		// No catching form: without the option the module is a bare trap; with it, the
+		// option turns the report on as well as the lines under it.
+		Path program = write("plain.lisp", """
+				(defun parse (s)
+				  (parse-integer s))
+				(print (parse "12"))
+				(print (parse "x"))
+				""");
+		List<String> expected = List.of("Unhandled condition: parse-integer: junk in string \"x\"",
+				"  at " + program + ":2 in PARSE");
+		assertThat(interpreterReport(program)).isEqualTo(expected);
+		assertThat(wasmReport(program)).isEmpty();
+		for (String granularity : List.of("line", "function")) {
+			List<String> located = granularity.equals("line") ? expected
+					: List.of(expected.get(0), "  at " + program + ":1 in PARSE");
+			assertThat(wasmReport(program, "--report-locations=" + granularity)).as(granularity).isEqualTo(located);
+			assertThat(wasmReport(program, "--report-locations=" + granularity, "--component")).as(granularity)
+				.isEqualTo(located);
+		}
+	}
+
+	@Test
+	@EnabledIf("am.ik.rontolisp.testsupport.HostWasmtime#isAvailable")
+	void outsideExceptionHandlingModeATypedConditionReportsAsTheInterpreterDoes() throws Exception {
+		// The report is the only reader of a condition here, so it must render every
+		// class that can escape: a report inherited from a superclass, a format control
+		// with arguments, and a static report string.
+		Path inherited = write("inherited.lisp", """
+				(define-condition base-error (error) ((v :initarg :v :reader v))
+				  (:report (lambda (c s) (format s "base report ~a" (v c)))))
+				(define-condition sub-error (base-error) ())
+				(defun f (x) (error 'sub-error :v x))
+				(f (length "abc"))
+				""");
+		Path control = write("control.lisp", """
+				(define-condition my-simple (simple-error) ())
+				(defun f (x) (error 'my-simple :format-control "mine ~a" :format-arguments (list x)))
+				(f (length "abc"))
+				""");
+		Path fixed = write("fixed.lisp", """
+				(define-condition fixed-error (error) () (:report "a static report"))
+				(defun f (x) (when x (error 'fixed-error)))
+				(f (length "abc"))
+				""");
+		for (Path program : List.of(inherited, control, fixed)) {
+			List<String> expected = interpreterReport(program);
+			assertThat(expected).as(program.toString()).hasSize(2);
+			assertThat(wasmReport(program, "--report-locations=line")).as(program.toString()).isEqualTo(expected);
+		}
+	}
+
+	@Test
+	void outsideExceptionHandlingModeAProgramReadFromNoFileHasNothingToLocate() throws Exception {
+		// -e with no catching form: nothing was read from a file, so the option asks for
+		// nothing -- no report is turned on for it.
+		String source = "(defun f (s) (parse-integer s)) (f \"y\")";
+		Path plain = this.tempDir.resolve("plain.wasm");
+		Path located = this.tempDir.resolve("located.wasm");
+		assertThat(runReporting("-e", source, "-o", plain.toString())[0]).isEqualTo("0");
+		assertThat(runReporting("-e", source, "-o", located.toString(), "--report-locations=line")[0]).isEqualTo("0");
+		assertThat(Files.readAllBytes(located)).isEqualTo(Files.readAllBytes(plain));
+	}
+
+	@Test
+	void aProgramReadFromNoFileHasNothingToLocate() throws Exception {
+		// -e: in exception-handling mode, but no form was read from a file, so there
+		// is no frame to note anything and the module is the one the option was not
+		// asked for.
+		String source = "(print (ignore-errors (error \"x\"))) (defun f (s) (parse-integer s)) (f \"y\")";
+		Path plain = this.tempDir.resolve("plain.wasm");
+		Path located = this.tempDir.resolve("located.wasm");
+		assertThat(runReporting("-e", source, "-o", plain.toString())[0]).isEqualTo("0");
+		assertThat(runReporting("-e", source, "-o", located.toString(), "--report-locations=line")[0]).isEqualTo("0");
+		assertThat(Files.readAllBytes(located)).isEqualTo(Files.readAllBytes(plain));
+	}
+
+	@Test
+	void outsideExceptionHandlingModeAReactorWithNowhereToReportIsUnchanged() throws Exception {
+		// --no-wasi: standard error is a discarding sink, so the report would print
+		// nowhere and the option turns nothing on.
+		Path program = write("reactor.lisp", """
+				(defun twice (n)
+				  (if (> n 100) (error "too big: ~a" n) (* 2 n)))
+				(rontolisp:wasm-export 'twice :params '(:int) :returns :int)
+				""");
+		byte[] plain = Files.readAllBytes(compile(program, "plain.wasm", "--no-wasi"));
+		assertThat(Files.readAllBytes(compile(program, "located.wasm", "--no-wasi", "--report-locations=line")))
+			.isEqualTo(plain);
+	}
+
+	@Test
+	void theOptionIsRefusedWhereItCouldMeanNothing() throws Exception {
+		Path program = write("app.lisp", "(print 1)\n");
+		assertThat(runReporting(program.toString(), "-o", this.tempDir.resolve("App.class").toString(),
+				"--report-locations=line")[2])
+			.contains("--report-locations reaches a wasm-GC output only");
+		assertThat(runReporting(program.toString(), "-o", this.tempDir.resolve("s.wasm").toString(), "--no-gc",
+				"--report-locations=line")[2])
+			.contains("--report-locations reaches a wasm-GC output only");
+		assertThat(runReporting(program.toString(), "--report-locations=line")[2])
+			.contains("--report-locations chooses what a compiled wasm-GC module");
+		assertThat(runReporting(program.toString(), "-o", this.tempDir.resolve("a.wasm").toString(),
+				"--report-locations=everything")[2])
+			.contains("--report-locations takes 'function' or 'line' ('everything' given)");
+	}
+
+	/**
+	 * Asserts the interpreter prints {@code expected} and a
+	 * {@code --report-locations=line} module prints the same, on Preview 1 and
+	 * {@code --component} alike.
+	 */
+	private void assertSameLines(Path program, String... expected) throws Exception {
+		assertThat(interpreterReport(program)).as("interpreter").containsExactly(expected);
+		assertThat(wasmReport(program, "--report-locations=line")).as("Preview 1").containsExactly(expected);
+		assertThat(wasmReport(program, "--report-locations=line", "--component")).as("--component")
+			.containsExactly(expected);
+	}
+
+	private Path write(String name, String source) throws IOException {
+		Path program = this.tempDir.resolve(name);
+		Files.writeString(program, source);
+		return program;
+	}
+
+	private Path compile(Path program, String output, String... flags) {
+		Path wasm = this.tempDir.resolve(output);
+		List<String> args = new ArrayList<>(List.of(program.toString(), "-o", wasm.toString()));
+		args.addAll(List.of(flags));
+		String[] result = runReporting(args.toArray(new String[0]));
+		assertThat(result[0]).as("compile %s: %s", program, result[2]).isEqualTo("0");
+		return wasm;
+	}
+
+	/** The interpreter's report and location lines for {@code program}. */
+	private List<String> interpreterReport(Path program) {
+		String[] result = runReporting(program.toString());
+		assertThat(result[0]).isEqualTo("1");
+		return report(result[2]);
+	}
+
+	/** The wasm module's report and location lines, wasmtime's own trap note dropped. */
+	private List<String> wasmReport(Path program, String... flags) throws Exception {
+		Result run = compileAndRun(program, flags);
+		assertThat(run.exitCode()).isNotZero();
+		return report(run.stderr());
+	}
+
+	private Result compileAndRun(Path program, String... flags) throws Exception {
+		Path wasm = compile(program, "out.wasm", flags);
+		Path out = this.tempDir.resolve("run.out");
+		Path err = this.tempDir.resolve("run.err");
+		Process process = new ProcessBuilder("wasmtime", "run", wasm.toString()).redirectOutput(out.toFile())
+			.redirectError(err.toFile())
+			.redirectInput(ProcessBuilder.Redirect.from(new java.io.File("/dev/null")))
+			.start();
+		assertThat(process.waitFor(120, TimeUnit.SECONDS)).isTrue();
+		return new Result(process.exitValue(), Files.readString(out), Files.readString(err));
+	}
+
+	private static List<String> report(String stderr) {
+		return stderr.lines()
+			.filter(line -> line.startsWith(UncaughtReport.PREFIX) || UncaughtReport.isLocationLine(line))
+			.toList();
+	}
+
+	/** {@code {exitCode, stdout, stderr}} of the CLI's reporting entry point. */
+	private String[] runReporting(String... args) {
+		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		ByteArrayOutputStream err = new ByteArrayOutputStream();
+		RontoLispCli cli = new RontoLispCli(new ByteArrayInputStream(new byte[0]), new PrintStream(out));
+		PrintStream oldErr = System.err;
+		System.setErr(new PrintStream(err));
+		int code;
+		try {
+			code = RontoLispCli.runReporting(cli, args);
+		}
+		finally {
+			System.setErr(oldErr);
+		}
+		return new String[] { String.valueOf(code), out.toString(StandardCharsets.UTF_8),
+				err.toString(StandardCharsets.UTF_8) };
+	}
+
+	private record Result(int exitCode, String stdout, String stderr) {
+	}
+
+}

@@ -1,0 +1,816 @@
+{
+  "resources": {
+    "includes": [
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.Version"
+        },
+        "pattern": "am/ik/rontolisp/version\\.properties"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.codegen.wasm.WasmComponentBuilder"
+        },
+        "pattern": "am/ik/rontolisp/codegen/wasm/component/.*\\.bin"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.codegen.wasm.WasmComponentBuilder"
+        },
+        "pattern": "am/ik/rontolisp/codegen/wasm/component/.*\\.wasm"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.codegen.wasm.NoGcWasmComponentBuilder"
+        },
+        "pattern": "am/ik/rontolisp/codegen/wasm/component/.*\\.bin"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.codegen.wasm.NoGcWasmComponentBuilder"
+        },
+        "pattern": "am/ik/rontolisp/codegen/wasm/component/.*\\.wasm"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.codegen.jvm.JvmJavaRuntimeBuilder"
+        },
+        "pattern": "am/ik/rontolisp/codegen/jvm/JavaBridgeTemplate\\.class"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.codegen.jvm.JvmSimdRuntimeBuilder"
+        },
+        "pattern": "am/ik/rontolisp/codegen/jvm/JvmSimdVectorTemplate\\.class"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.codegen.jvm.JvmBlasRuntimeBuilder"
+        },
+        "pattern": "am/ik/rontolisp/codegen/jvm/JvmBlasTemplate\\.class"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.codegen.jvm.JvmBlasRuntimeBuilder"
+        },
+        "pattern": "META-INF/native-image/am\\.ik\\.rontolisp/rontolisp-blas/reachability-metadata\\.json"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.codegen.jvm.JvmGeomRuntimeBuilder"
+        },
+        "pattern": "am/ik/rontolisp/codegen/jvm/JvmGeomTemplate\\.class"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.gpu.CudaGemm"
+        },
+        "pattern": "am/ik/gpu/gemm\\.ptx"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.gpu.MetalGemm"
+        },
+        "pattern": "am/ik/gpu/gemm\\.metal"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.codegen.jvm.JvmLispCompiler"
+        },
+        "pattern": "am/ik/rontolisp/runtime/.*\\.class"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.codegen.jvm.JvmGpuRuntimeBuilder"
+        },
+        "pattern": "am/ik/rontolisp/codegen/jvm/JvmGpuTemplate\\.class"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.codegen.jvm.JvmGpuRuntimeBuilder"
+        },
+        "pattern": "am/ik/gpu/.*\\.class"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.codegen.jvm.JvmGpuRuntimeBuilder"
+        },
+        "pattern": "am/ik/gpu/gemm\\.ptx"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.codegen.jvm.JvmGpuRuntimeBuilder"
+        },
+        "pattern": "am/ik/gpu/gemm\\.metal"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.codegen.jvm.JvmGpuRuntimeBuilder"
+        },
+        "pattern": "am/ik/gpu/reachability-metadata\\.json"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.codegen.jvm.JvmObjcRuntimeBuilder"
+        },
+        "pattern": "META-INF/native-image/am\\.ik\\.rontolisp/rontolisp-objc/reachability-metadata\\.json"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.codegen.jvm.JvmObjcRuntimeBuilder"
+        },
+        "pattern": "am/ik/rontolisp/codegen/jvm/JvmObjcPrimitivesTemplate\\.class"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.codegen.jvm.JvmObjcRuntimeBuilder"
+        },
+        "pattern": "am/ik/objc/.*\\.class"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.codegen.jvm.JvmFfiRuntimeBuilder"
+        },
+        "pattern": "am/ik/rontolisp/codegen/jvm/JvmFfiTemplate\\.class"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.codegen.jvm.JvmFfiRuntimeBuilder"
+        },
+        "pattern": "am/ik/rontolisp/codegen/jvm/JvmFfiHandle\\.class"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.codegen.jvm.JvmFfiRuntimeBuilder"
+        },
+        "pattern": "am/ik/ffi/.*\\.class"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.macro.FormatRenderer"
+        },
+        "pattern": "am/ik/rontolisp/macro/format-render\\.lisp"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.macro.FormatRenderer"
+        },
+        "pattern": "am/ik/rontolisp/macro/format-render-slash\\.lisp"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.macro.FormatRenderer"
+        },
+        "pattern": "am/ik/rontolisp/macro/format-render-slash-stub\\.lisp"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.macro.MopProtocol"
+        },
+        "pattern": "am/ik/rontolisp/macro/mop-protocol\\.lisp"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.macro.DynamicClasses"
+        },
+        "pattern": "am/ik/rontolisp/macro/dynamic-classes\\.lisp"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.macro.SlotProtocol"
+        },
+        "pattern": "am/ik/rontolisp/macro/slot-protocol\\.lisp"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.macro.GenericFunctions"
+        },
+        "pattern": "am/ik/rontolisp/macro/generic-functions\\.lisp"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.macro.CompileRuntime"
+        },
+        "pattern": "am/ik/rontolisp/macro/compile-runtime\\.lisp"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.macro.EvalMacroRows"
+        },
+        "pattern": "am/ik/rontolisp/macro/eval-macros\\.lisp"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.JsonLibrary"
+        },
+        "pattern": "am/ik/rontolisp/eval/json\\.lisp"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.AsdfRuntimeLibrary"
+        },
+        "pattern": "am/ik/rontolisp/eval/asdf\\.lisp"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.AsdfRuntimeLibrary"
+        },
+        "pattern": "am/ik/rontolisp/eval/asdf-search\\.lisp"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.VecLibrary"
+        },
+        "pattern": "am/ik/rontolisp/eval/vec\\.lisp"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.LinalgLibrary"
+        },
+        "pattern": "am/ik/rontolisp/eval/linalg\\.lisp"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.AppKitLibrary"
+        },
+        "pattern": "am/ik/rontolisp/eval/appkit\\.lisp"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.ObjcNativeLibrary"
+        },
+        "pattern": "am/ik/rontolisp/eval/objc-native-primitives\\.lisp"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.ObjcLibrary"
+        },
+        "pattern": "am/ik/rontolisp/eval/objc\\.lisp"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.ObjcLibrary"
+        },
+        "pattern": "am/ik/rontolisp/eval/objc-class\\.lisp"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.ObjcLibrary"
+        },
+        "pattern": "am/ik/rontolisp/eval/objc-macros\\.lisp"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.ObjcLibrary"
+        },
+        "pattern": "am/ik/rontolisp/eval/objc-block\\.lisp"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.GeomLibrary"
+        },
+        "pattern": "am/ik/rontolisp/eval/geom\\.lisp"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.CheckpointLibrary"
+        },
+        "pattern": "am/ik/rontolisp/eval/checkpoint\\.lisp"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.SafetensorsLibrary"
+        },
+        "pattern": "am/ik/rontolisp/eval/safetensors\\.lisp"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.MetalLibrary"
+        },
+        "pattern": "am/ik/rontolisp/eval/metal\\.lisp"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.SceneLibrary"
+        },
+        "pattern": "am/ik/rontolisp/eval/scene\\.lisp"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.TorchLibrary"
+        },
+        "pattern": "am/ik/rontolisp/eval/torch\\.lisp"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.TokenizersLibrary"
+        },
+        "pattern": "am/ik/rontolisp/eval/tokenizers\\.lisp"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.GgufLibrary"
+        },
+        "pattern": "am/ik/rontolisp/eval/gguf\\.lisp"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.SchemeLibrary"
+        },
+        "pattern": "am/ik/rontolisp/eval/scheme\\.lisp"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.StarlarkLibrary"
+        },
+        "pattern": "am/ik/rontolisp/eval/starlark\\.lisp"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.JavaLibrary"
+        },
+        "pattern": "am/ik/rontolisp/eval/java\\.lisp"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.java.JavaClasses"
+        },
+        "pattern": "am/ik/rontolisp/java/library/.*\\.java"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.java.JavaZones"
+        },
+        "pattern": "am/ik/rontolisp/java/zone-rules\\.txt"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.java.JavaZoneNames"
+        },
+        "pattern": "am/ik/rontolisp/java/zone-names\\.txt"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.java.JavaJdkMembers"
+        },
+        "pattern": "am/ik/rontolisp/java/jdk-members\\.txt"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.ClojureLibrary"
+        },
+        "pattern": "am/ik/rontolisp/eval/clojure\\.lisp"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.RegexLibrary"
+        },
+        "pattern": "am/ik/rontolisp/eval/regex\\.lisp"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.RegexLibrary"
+        },
+        "pattern": "am/ik/rontolisp/eval/regex-unicode\\.lisp"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.UriLibrary"
+        },
+        "pattern": "am/ik/rontolisp/eval/uri\\.lisp"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.UnicodeNormalizationLibrary"
+        },
+        "pattern": "am/ik/rontolisp/eval/unicode-normalization\\.lisp"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.UnicodeNormalizationLibrary"
+        },
+        "pattern": "am/ik/rontolisp/eval/unicode-normalization-tables\\.lisp"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.clojure.ClojureBuiltinNamespaces"
+        },
+        "pattern": "am/ik/rontolisp/clojure/lib/ring/(util|middleware)/[a-z0-9_]+\\.clj"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.clojure.ClojureBuiltinNamespaces"
+        },
+        "pattern": "am/ik/rontolisp/clojure/lib/clojure/([a-z_]+/)*[a-z_]+\\.clj"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.clojure.ClojureBuiltinNamespaces"
+        },
+        "pattern": "am/ik/rontolisp/clojure/lib/rontolisp/([a-z_]+/)*[a-z_]+\\.clj"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.clojure.ClojureBuiltinNamespaces"
+        },
+        "pattern": "am/ik/rontolisp/clojure/lib/riddley/[a-z_]+\\.clj"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.UrlLibrary"
+        },
+        "pattern": "am/ik/rontolisp/eval/url\\.lisp"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.UsocketLibrary"
+        },
+        "pattern": "am/ik/rontolisp/eval/usocket\\.lisp"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.HttpLibrary"
+        },
+        "pattern": "am/ik/rontolisp/eval/http\\.lisp"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.HttpServerLibrary"
+        },
+        "pattern": "am/ik/rontolisp/eval/http-server\\.lisp"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.HttpReactorLibrary"
+        },
+        "pattern": "am/ik/rontolisp/eval/http-reactor\\.lisp"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.HttpServeLibrary"
+        },
+        "pattern": "am/ik/rontolisp/eval/http-serve\\.lisp"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.HttpLibrary"
+        },
+        "pattern": "am/ik/rontolisp/eval/http\\.wit"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.WitLibrary"
+        },
+        "pattern": "am/ik/rontolisp/eval/wit\\.lisp"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.WaitForLibrary"
+        },
+        "pattern": "am/ik/rontolisp/eval/wait\\.lisp"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.WaitForLibrary"
+        },
+        "pattern": "am/ik/rontolisp/eval/clocks\\.wit"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.InflateLibrary"
+        },
+        "pattern": "am/ik/rontolisp/eval/inflate\\.lisp"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.EnvironmentLibrary"
+        },
+        "pattern": "am/ik/rontolisp/eval/environment\\.lisp"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.LocalTimeLibrary"
+        },
+        "pattern": "am/ik/rontolisp/eval/localtime\\.lisp"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.EnvironmentLibrary"
+        },
+        "pattern": "am/ik/rontolisp/eval/environment\\.wit"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.ExitLibrary"
+        },
+        "pattern": "am/ik/rontolisp/eval/exit\\.lisp"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.ExitLibrary"
+        },
+        "pattern": "am/ik/rontolisp/eval/exit\\.wit"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.LoggingLibrary"
+        },
+        "pattern": "am/ik/rontolisp/eval/logging\\.lisp"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.LoggingLibrary"
+        },
+        "pattern": "am/ik/rontolisp/eval/logging\\.wit"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.SocketsLibrary"
+        },
+        "pattern": "am/ik/rontolisp/eval/sockets\\.lisp"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.SocketsLibrary"
+        },
+        "pattern": "am/ik/rontolisp/eval/sockets\\.wit"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.SocketsLibrary"
+        },
+        "pattern": "am/ik/rontolisp/eval/runner-sockets\\.lisp"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.TlsLibrary"
+        },
+        "pattern": "am/ik/rontolisp/eval/tls\\.lisp"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.TlsLibrary"
+        },
+        "pattern": "am/ik/rontolisp/eval/tls\\.wit"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.StdinLibrary"
+        },
+        "pattern": "am/ik/rontolisp/eval/stdin\\.lisp"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.StdinLibrary"
+        },
+        "pattern": "am/ik/rontolisp/eval/stdin-stub\\.lisp"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.StdinLibrary"
+        },
+        "pattern": "am/ik/rontolisp/eval/stdin-dispatch\\.lisp"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.StdinLibrary"
+        },
+        "pattern": "am/ik/rontolisp/eval/stdin\\.wit"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.ShimLibraries"
+        },
+        "pattern": "am/ik/rontolisp/eval/babel\\.lisp"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.ShimLibraries"
+        },
+        "pattern": "am/ik/rontolisp/eval/bordeaux-threads\\.lisp"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.ShimLibraries"
+        },
+        "pattern": "am/ik/rontolisp/eval/closer-mop\\.lisp"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.ShimLibraries"
+        },
+        "pattern": "am/ik/rontolisp/eval/flexi-streams\\.lisp"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.ShimLibraries"
+        },
+        "pattern": "am/ik/rontolisp/eval/float-features\\.lisp"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.ShimLibraries"
+        },
+        "pattern": "am/ik/rontolisp/eval/trivial-gray-streams\\.lisp"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.ShimLibraries"
+        },
+        "pattern": "am/ik/rontolisp/eval/swank\\.lisp"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.CommonLispSwank"
+        },
+        "pattern": "am/ik/rontolisp/eval/cl-arglists\\.txt"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.ShimLibraries"
+        },
+        "pattern": "am/ik/rontolisp/eval/trivial-cltl2\\.lisp"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.ShimLibraries"
+        },
+        "pattern": "am/ik/rontolisp/eval/mgl-pax-bootstrap\\.lisp"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.ShimLibraries"
+        },
+        "pattern": "am/ik/rontolisp/eval/trivial-garbage\\.lisp"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.ShimLibraries"
+        },
+        "pattern": "am/ik/rontolisp/eval/cl-ssl\\.lisp"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.ShimLibraries"
+        },
+        "pattern": "am/ik/rontolisp/eval/clack-handler-(rontolisp|reactor)\\.lisp"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.ShimLibraries"
+        },
+        "pattern": "am/ik/rontolisp/eval/jzon-eisel-lemire\\.lisp"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.ShimLibraries"
+        },
+        "pattern": "am/ik/rontolisp/eval/jzon-ratio-to-double\\.lisp"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.ShimLibraries"
+        },
+        "pattern": "am/ik/rontolisp/eval/jzon-schubfach\\.lisp"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.ShimLibraries"
+        },
+        "pattern": "am/ik/rontolisp/eval/ironclad-prng\\.lisp"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.ShimLibraries"
+        },
+        "pattern": "am/ik/rontolisp/eval/tiny-routes-lite-path-template\\.lisp"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.ShimLibraries"
+        },
+        "pattern": "am/ik/rontolisp/eval/cffi-rontolisp\\.lisp"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.ShimLibraries"
+        },
+        "pattern": "am/ik/rontolisp/eval/cffi-strings\\.lisp"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.AsdOverrides"
+        },
+        "pattern": "am/ik/rontolisp/eval/ironclad-slice\\.asd"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.AsdOverrides"
+        },
+        "pattern": "am/ik/rontolisp/eval/cffi-rontolisp\\.asd"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.AsdOverrides"
+        },
+        "pattern": "am/ik/rontolisp/eval/uffi-cffi\\.asd"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.AsdOverrides"
+        },
+        "pattern": "am/ik/rontolisp/eval/deploy-rontolisp\\.asd"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.AsdOverrides"
+        },
+        "pattern": "am/ik/rontolisp/eval/cl-postgres-deps\\.asd"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.AsdOverrides"
+        },
+        "pattern": "am/ik/rontolisp/eval/postmodern-deps\\.asd"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.AsdOverrides"
+        },
+        "pattern": "am/ik/rontolisp/eval/trivia-trivial\\.asd"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.AsdOverrides"
+        },
+        "pattern": "am/ik/rontolisp/eval/dbi-deps\\.asd"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.AsdOverrides"
+        },
+        "pattern": "am/ik/rontolisp/eval/chipz-crc32-slice\\.asd"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.AsdOverrides"
+        },
+        "pattern": "am/ik/rontolisp/eval/tiny-routes-lite\\.asd"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.AsdOverrides"
+        },
+        "pattern": "am/ik/rontolisp/eval/cl-unicode-built\\.asd"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.GrayStreamsLibrary"
+        },
+        "pattern": "am/ik/rontolisp/eval/gray\\.lisp"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.UnreadCharLibrary"
+        },
+        "pattern": "am/ik/rontolisp/eval/unread-char\\.lisp"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.UiopExports"
+        },
+        "pattern": "am/ik/rontolisp/uiop-exports\\.txt"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.AsdfExports"
+        },
+        "pattern": "am/ik/rontolisp/asdf-exports\\.txt"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.UiopLibrary"
+        },
+        "pattern": "am/ik/rontolisp/eval/uiop-.*\\.lisp"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.cli.NoticesCommand"
+        },
+        "pattern": "META-INF/(LICENSE|NOTICE|THIRD-PARTY-NOTICES\\.txt|graalvm-notices\\.txt)"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.cli.NoticesCommand"
+        },
+        "pattern": "am/ik/rontolisp/native/.*-notices\\.txt"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.cli.NativeToolchain"
+        },
+        "pattern": "am/ik/rontolisp/native/.*"
+      }
+    ]
+  }
+}

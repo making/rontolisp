@@ -1,0 +1,273 @@
+package am.ik.rontolisp.codegen.jvm;
+
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+
+import am.ik.rontolisp.LambdaLists;
+import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispNames;
+import am.ik.rontolisp.PackageRegistry;
+import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.compiler.DefinedCallArity;
+import am.ik.rontolisp.compiler.FreeVarAnalyzer;
+import am.ik.rontolisp.macro.LispMacroExpander;
+
+/**
+ * Compiles {@code lambda} expressions (both value creation and inline calls).
+ */
+final class JvmLambdaCompiler {
+
+	private JvmLambdaCompiler() {
+	}
+
+	/**
+	 * Compiles a lambda expression as a closure value.
+	 */
+	static void compileValue(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		List<LispVal> parts = cons.toList();
+		LambdaLists.NativeForm nf = LambdaLists.toNative(parts.get(1), parts.subList(2, parts.size()),
+				LambdaLists.MAX_PHYSICAL_PARAMS, ctx.specialVars);
+		List<String> paramNames = nf.paramNames();
+		// A lambda body's tail settles the multiple-value channel like a defun's does
+		// (LispMacroExpander.settleDefunTails ran over those before Pass 1): a
+		// single-valued tail clears what an argument or a non-tail form published,
+		// so a consumer behind a funcall reads the closure's own values and nothing
+		// older. Only in a program whose spill global exists.
+		List<LispVal> bodyExprs = ctx.globalFields.containsKey(LispNames.MV_SPILL)
+				? LispMacroExpander.settleFunctionBody(nf.body()) : nf.body();
+		Set<String> boundVars = new HashSet<>(paramNames);
+		// A global, function or built-in name shadowed by a lexical binding visible at
+		// this lambda's creation site (an enclosing let variable, defun parameter, or
+		// an outer closure's capture) must be captured like any other free variable:
+		// Lisp-2 means a bare symbol is always a variable reference.
+		Set<String> enclosingLexicals = new HashSet<>(ctx.locals.keySet());
+		enclosingLexicals.addAll(ctx.captures.keySet());
+		LinkedHashSet<String> freeVars = FreeVarAnalyzer.findFreeVars(bodyExprs, boundVars, ctx.functions.keySet(),
+				ctx.globals, enclosingLexicals);
+		int funcId = ctx.nextFuncId[0]++;
+		// The other place a funcId becomes a callable VALUE (see Ctx.valueFuncIds): a
+		// lambda is only ever reached through a dispatcher, so it needs a case.
+		ctx.valueFuncIds.add(funcId);
+		String methodName = "_lambda_" + funcId;
+		// The lambda's code is written in this method's function -- unless it is an async
+		// body, whose report line names no function (its hop line names the async one).
+		String asyncHead = ctx.asyncBodyHeads.get(cons);
+		// A labels function whose tail calls cycle through its siblings joins their tail
+		// group, once: the expansion is fresh per compilation of the labels form, so a
+		// second lambda claiming the member would be a second compilation of this very
+		// form, which compiles on its own (JvmTailGroup).
+		JvmTailGroup.Member tailMember = ctx.tailGroupMembers.get(cons);
+		if (tailMember != null && tailMember.lambda != null) {
+			tailMember = null;
+		}
+		JvmLispCompiler.LambdaInfo info = new JvmLispCompiler.LambdaInfo(funcId, methodName, paramNames, nf.variadic(),
+				nf.optionals(), bodyExprs, new ArrayList<>(freeVars), ctx.lambdaReportNames.get(cons), asyncHead,
+				asyncHead == null ? ctx.writtenIn : null, ctx.lambdaSelfVars.get(cons), tailMember, ctx.body);
+		if (tailMember != null) {
+			tailMember.lambda = info;
+		}
+		ctx.lambdaDecls.add(info);
+		// The edge the shake keeps the lambda's dispatcher case by: the case is live
+		// while this body is (JvmClassSplitter). Recorded with the value-tail depth, and
+		// re-pointed once the lambda's own body shows it needs none (Pass 2c).
+		ctx.body.makesValueOf(methodName, JvmLispCompiler.lambdaDescriptor(paramNames.size(), true));
+		int totalSize = 1 + freeVars.size();
+		JvmEmitHelper.emitIntConst(ctx, totalSize);
+		ctx.body.anewarray(ctx.objectClass).dup().iconst_0();
+		JvmEmitHelper.emitIntConst(ctx, funcId);
+		ctx.body.invokestatic(ctx.integerValueOf).aastore();
+		int captureIdx = 0;
+		for (String freeVar : freeVars) {
+			ctx.body.dup();
+			JvmEmitHelper.emitIntConst(ctx, 1 + captureIdx);
+			Integer slot = ctx.locals.get(freeVar);
+			if (slot != null) {
+				if (!ctx.boxedVars.contains(freeVar)) {
+					// The binder and this emitter must agree on which names need a
+					// cell, and ONE owner answers that -- FreeVarAnalyzer's capture
+					// walk, which every binder consults. Landing here means the binder
+					// was not asked (or answered differently), and what used to happen
+					// was silent: the closure got a FRESH one-element cell holding a
+					// COPY, so an assignment on either side never reached the other.
+					// Two binders were missing the question (a defun nested in a let,
+					// an inline ((lambda (p) ...) a) call) and both were wrong answers,
+					// not crashes -- so this is loud on purpose.
+					throw new IllegalStateException("closure over " + freeVar
+							+ " whose binding left it unboxed: the capture analysis and the closure emitter"
+							+ " disagree about this name (FreeVarAnalyzer.findCapturedVars)");
+				}
+				ctx.body.aload(slot);
+			}
+			else if (ctx.captures.containsKey(freeVar)) {
+				ctx.body.aload(ctx.closureEnvSlot);
+				JvmEmitHelper.emitIntConst(ctx, 1 + ctx.captures.get(freeVar));
+				ctx.body.aaload();
+			}
+			else {
+				throw new UnsupportedOperationException(
+						"Cannot capture variable: " + freeVar + PackageRegistry.standardNameAdvice(freeVar));
+			}
+			ctx.body.aastore();
+			captureIdx++;
+		}
+	}
+
+	/**
+	 * Compiles an inline lambda call: {@code ((lambda (params) body) args)}.
+	 */
+	static void compileCall(LispCons lambda, LispCons call, JvmLispCompiler.Ctx ctx, String className) {
+		List<LispVal> lambdaParts = lambda.toList();
+		LambdaLists.NativeForm nf = LambdaLists.toNative(lambdaParts.get(1), lambdaParts.subList(2, lambdaParts.size()),
+				LambdaLists.MAX_PHYSICAL_PARAMS, ctx.specialVars);
+		List<String> paramNames = nf.paramNames();
+		// The body is a function body however it is called: its tail settles the
+		// multiple-value channel (see compileValue).
+		List<LispVal> bodyExprs = ctx.globalFields.containsKey(LispNames.MV_SPILL)
+				? LispMacroExpander.settleFunctionBody(nf.body()) : nf.body();
+		List<LispVal> callArgs = call.toList();
+		int required = nf.required();
+		int positional = required + nf.optionals();
+		int supplied = callArgs.size() - 1;
+		// A count the lambda list rules out signals when the call runs, as a named
+		// function's direct call does (compiler/DefinedCallArity).
+		LispVal wrongCount = DefinedCallArity.wrongCountSignal(call, null, required, nf.variadic(),
+				am.ik.rontolisp.DeclaredArityReport.ofLambda(lambda));
+		if (wrongCount != null) {
+			JvmExprCompiler.compileExpr(wrongCount, ctx, className);
+			return;
+		}
+		Map<String, Integer> savedLocals = new HashMap<>(ctx.locals);
+		Set<String> savedBoxedVars = ctx.boxedVars;
+		Map<String, JvmIntFusionCompiler.RawLocal> savedRawLocals = new HashMap<>(ctx.rawLocals);
+		Map<String, Integer> savedRawDoubleLocals = new HashMap<>(ctx.rawDoubleLocals);
+		Set<String> savedDeclaredDoubles = ctx.declaredDoubles;
+		Map<String, Object> savedDeclaredIntegers = ctx.declaredIntegers;
+		Map<String, JvmIntFusionCompiler.LocalIntLambda> savedLocalIntLambdas = new HashMap<>(ctx.localIntLambdas);
+		int savedNextLocal = ctx.nextLocal;
+		// The parameters are bound HERE, in the caller's frame, so this is a binder and
+		// it owes the same question every other binder asks: does a closure in the body
+		// read this name? One owner answers it -- FreeVarAnalyzer.findCapturedVars, the
+		// same call JvmLetCompiler and the defun/lambda prologues make -- because the
+		// closure emitter below decides capture from findFreeVars, and a binder that
+		// does not agree with it hands the closure a private snapshot cell instead of
+		// the binding (.kb/core-representation.md).
+		Set<String> capturedParams = FreeVarAnalyzer.findCapturedVars(bodyExprs, new HashSet<>(paramNames),
+				ctx.functions.keySet(), ctx.captureMemo);
+		ctx.boxedVars = new HashSet<>(ctx.boxedVars);
+		for (int i = 0; i < positional; i++) {
+			String name = paramNames.get(i);
+			// A physical optional the call does not pass binds the UNSUPPLIED marker the
+			// body's prologue tests (JvmPhysicalArgs).
+			boolean passed = i < supplied;
+			if (capturedParams.contains(name)) {
+				ctx.body.iconst_1().anewarray(ctx.objectClass).dup().iconst_0();
+				if (passed) {
+					JvmExprCompiler.compileExpr(callArgs.get(i + 1), ctx, className);
+				}
+				else {
+					JvmPhysicalArgs.emitUnsupplied(ctx, className);
+				}
+				ctx.body.aastore();
+			}
+			else if (passed) {
+				JvmExprCompiler.compileExpr(callArgs.get(i + 1), ctx, className);
+			}
+			else {
+				JvmPhysicalArgs.emitUnsupplied(ctx, className);
+			}
+			int slot = ctx.allocLocal(name);
+			ctx.body.astore(slot);
+			bindName(name, capturedParams.contains(name), ctx);
+		}
+		if (nf.variadic()) {
+			// Evaluate the surplus arguments left to right into temps, then link them
+			// into a cons list bound to the rest parameter.
+			List<Integer> extraSlots = new ArrayList<>();
+			for (int i = positional; i < supplied; i++) {
+				JvmExprCompiler.compileExpr(callArgs.get(i + 1), ctx, className);
+				int s = ctx.allocTemp();
+				ctx.body.astore(s);
+				extraSlots.add(s);
+			}
+			String restName = paramNames.get(positional);
+			int restSlot = ctx.allocLocal(restName);
+			ctx.body.aconst_null().astore(restSlot);
+			for (int k = extraSlots.size() - 1; k >= 0; k--) {
+				ctx.body.iconst_2().anewarray(ctx.objectClass).dup().iconst_0();
+				ctx.body.aload(extraSlots.get(k)).aastore().dup().iconst_1().aload(restSlot);
+				ctx.body.aastore().astore(restSlot);
+			}
+			if (capturedParams.contains(restName)) {
+				// The list is built in place, so the cell is wrapped around the
+				// finished value rather than around the build.
+				ctx.body.iconst_1().anewarray(ctx.objectClass).dup().iconst_0();
+				ctx.body.aload(restSlot).aastore().astore(restSlot);
+			}
+			bindName(restName, capturedParams.contains(restName), ctx);
+		}
+		// Body-head float declarations of the inline lambda, for its body only: a
+		// bound param name shadows an outer declared name whatever it declares
+		// (.kb/jvm-double-arithmetic.md).
+		Set<String> bodyDeclaredDoubles = new HashSet<>(ctx.declaredDoubles);
+		bodyDeclaredDoubles.removeAll(paramNames);
+		for (String declared : am.ik.rontolisp.compiler.DeclaredScalarTypes.declaredDoubles(bodyExprs,
+				ctx.closRegistry)) {
+			if (!ctx.specialVars.contains(declared)) {
+				bodyDeclaredDoubles.add(declared);
+			}
+		}
+		ctx.declaredDoubles = bodyDeclaredDoubles;
+		ctx.declaredIntegers = JvmIntFusionCompiler.bodyDeclaredIntegers(savedDeclaredIntegers, paramNames, bodyExprs,
+				ctx);
+		// The body runs in place and its last form's value is the call's, so when the
+		// call is the method's tail that form is too (JvmSelfTailCall, JvmTailBounce),
+		// and every body form is on the exit chain when the call is. A parameter named
+		// like a special is bound by a let around the whole body (LambdaLists.toNative),
+		// which hands neither mark on.
+		LispVal savedMark = ctx.tailMark;
+		LispVal savedExit = ctx.exitMark;
+		boolean exits = JvmReturnCompiler.onExitChain(call, ctx);
+		for (int i = 0; i < bodyExprs.size(); i++) {
+			if (i > 0) {
+				ctx.body.pop();
+			}
+			ctx.tailMark = savedMark == call && i == bodyExprs.size() - 1 ? bodyExprs.get(i) : null;
+			ctx.exitMark = exits ? bodyExprs.get(i) : null;
+			JvmExprCompiler.compileExpr(bodyExprs.get(i), ctx, className);
+		}
+		ctx.tailMark = savedMark;
+		ctx.exitMark = savedExit;
+		ctx.locals = savedLocals;
+		ctx.boxedVars = savedBoxedVars;
+		ctx.rawLocals = savedRawLocals;
+		ctx.rawDoubleLocals = savedRawDoubleLocals;
+		ctx.declaredDoubles = savedDeclaredDoubles;
+		ctx.declaredIntegers = savedDeclaredIntegers;
+		ctx.localIntLambdas = savedLocalIntLambdas;
+		ctx.nextLocal = savedNextLocal;
+	}
+
+	/**
+	 * Records what representation a freshly bound name has, REPLACING whatever a shadowed
+	 * outer binding of the same name had: the maps are keyed on names, so an outer
+	 * unboxed dual-representation local or local integer lambda would otherwise still
+	 * answer for this one.
+	 */
+	private static void bindName(String name, boolean boxed, JvmLispCompiler.Ctx ctx) {
+		ctx.rawLocals.remove(name);
+		ctx.rawDoubleLocals.remove(name);
+		ctx.localIntLambdas.remove(name);
+		if (boxed) {
+			ctx.boxedVars.add(name);
+		}
+		else {
+			ctx.boxedVars.remove(name);
+		}
+	}
+
+}

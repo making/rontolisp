@@ -1,0 +1,443 @@
+# Compile to WASM
+
+Give `rontolisp` an output path ending in `.wasm` with `-o`, and it compiles the
+source to a WebAssembly binary instead of interpreting it. As with the JVM
+backend, the output extension selects the target, and the binary is emitted by
+hand without a third-party assembler. Examples below assume
+[wasmtime](https://wasmtime.dev/) 47+, which enables wasm-GC and
+exception-handling by default:
+
+```bash
+echo '(print (+ 1 2))' > hello.lisp
+rontolisp hello.lisp -o hello.wasm
+wasmtime run hello.wasm
+```
+
+```lisp
+(print (+ 1 2))
+```
+
+```
+3
+```
+
+## Choosing an Output
+
+Two independent choices determine the shape of the output:
+
+- **Value model.** By default, values live on the WebAssembly **GC heap**
+  (integers as `i31ref`, boxed as a signed 64-bit struct past the fixnum
+  range and as a limb-based big integer past that, floats boxed in a struct), which supports the **full
+  language** but requires a wasm-GC capable runtime (wasmtime 14+, Node 22+,
+  current browsers). `--no-gc` instead lowers a **pure-compute subset** of the
+  language onto unboxed `i64`/`f64` scalars and linear-memory strings — the
+  result is a plain MVP module that runs on **any** WebAssembly engine and is
+  orders of magnitude smaller.
+- **Packaging.** By default the output is a **WASI Preview 1 core module**.
+  `--component` wraps it as a **component**: on the GC path a WASI 0.3
+  component with full I/O over the async canonical ABI, on the `--no-gc` path a
+  compact typed reactor component that runs with no host flags at all.
+  `--no-wasi` drops the WASI imports, turning either packaging into a
+  pure-compute library ("reactor"): a Preview 1 module a host instantiates
+  with no import object, or — with `--component` — a **reactor component
+  that imports nothing** and runs its top-level forms at instantiation.
+
+Crossing the two axes gives the six shapes:
+
+| Output shape | Flags | Language | Runs on | Details |
+| --- | --- | --- | --- | --- |
+| WASI command module | (none) | full | wasm-GC engine with WASI Preview 1 (`wasmtime run`) | [wasm-GC core module](../guides/wasm-gc-module.md) |
+| Library (reactor) module | `--no-wasi` | full (pure-compute exports) | any wasm-GC engine, no imports needed (Node 22+, current browsers; `--host-random` and `--host-output` add one host import each, `--host-fetch` two, `--host-sockets` the socket functions, `--host-timer` up to three that only a JSPI host answers) | [`--no-wasi` reactor mode](../guides/wasm-gc-module.md#no-wasi-reactor-mode) |
+| WASI 0.3 component | `--component` | full, plus component-only I/O (`rontolisp:fetch`, TCP sockets) | wasmtime 46+ or another component host with wasm-GC | [WASI 0.3 component](../guides/wasm-component.md) |
+| Reactor component | `--component --no-wasi` | full (pure-compute exports) | any component host with wasm-GC, empty import object | [Reactor components](../guides/wasm-component.md#reactor-components---component---no-wasi) |
+| Plain core module | `--no-gc` | numeric/string [subset](../guides/wasm-nogc.md#eligible-subset) | **any** WebAssembly engine, even without wasm-GC or SIMD | [Non-GC output](../guides/wasm-nogc.md) |
+| Compact typed component | `--no-gc --component` | numeric/string [subset](../guides/wasm-nogc.md#eligible-subset) | any component host, **zero flags** | [Compact component output](../guides/wasm-nogc.md#compact-component-output---no-gc---component) |
+
+Rule of thumb: pick the **value model** by what the code needs — the full
+language means the GC heap; a numeric/string kernel that fits the subset gains
+universal portability and a hundreds-of-bytes binary from `--no-gc` — then pick
+the **packaging** by the host: a component host gets `--component`, a plain
+engine or JavaScript embedder gets a core module.
+To ship the WASI command module as one executable that needs no wasmtime, see
+[Compile to a Native Executable](native.md).
+
+On the wasm-GC outputs a call in tail position is a WebAssembly tail call
+(`return_call`), so a loop written as tail recursion runs at any depth: a direct
+call, a call through a function value or `apply`, a call in the tail of a `cond`,
+`case`, `when`, `flet`, `labels` or another built-in macro or of an inline
+`((lambda ...) ...)`, and the value of a `return-from`/`return` that leaves the
+function, from a loop body too. A call inside a special binding,
+an `unwind-protect` or a `handler-case` keeps its frame. The engine must support
+tail calls (wasmtime 21+, Chrome 112+, Firefox 121+, Safari 18.2+).
+
+## Host Boundaries
+
+Two complementary directives declare what crosses the module/host boundary:
+
+- [**`rontolisp:wasm-export` / `rontolisp:wasm-import`**](../guides/wasm-host-boundary.md)
+  spell out the boundary by hand, in rontolisp's own type designators (`:int`,
+  `:float`, `:string`, `:s-expr`, ...). The same directive compiles into four
+  different host contracts depending on the output shape (raw core function,
+  typed component-model export, ...). Under `--no-wasi`,
+  [`--emit-js-glue`](../guides/wasm-host-boundary.md#generating-the-host-glue---emit-js-glue)
+  writes the JavaScript half of that boundary from the same declarations, and
+  `--emit-worker-entry` a Cloudflare Worker's `index.js` over it.
+- [**WIT contracts (`wit-export` / `wit-import`)**](../guides/wit-contracts.md)
+  drive the boundary from a `.wit` file — one contract, checked on every
+  backend, with per-backend implementations (typed component-model exports
+  under `--component`, provider callbacks on the interpreter and the JVM, and
+  under `--no-wasi` [canonical-ABI imports the glue answers](../guides/wasm-host-boundary.md#wit-interfaces-beyond-the-flat-set),
+  `wasi:keyvalue` over Workers KV included).
+  Also covers [`--emit-wit`](../guides/wit-contracts.md#emitting-the-wit-world---emit-wit)
+  and [`--scaffold-wit`](../guides/wit-contracts.md#scaffolding-an-implementation---scaffold-wit).
+
+## Running a Component in a Browser
+
+`jco transpile` turns a component into plain JavaScript that runs in a page:
+see the [browser guide](../guides/wasm-browser.md) for what works today (a
+`--no-gc --component` needs nothing at all, a wasm-GC `--component` loads and
+computes but cannot yet print) and, at the end, a complete Node + browser
+walkthrough for calling a `--no-wasi` / `--no-gc` reactor module by hand.
+
+## Cross-Cutting Flags
+
+### Optimize (Tree Shaking)
+
+Compilation drops every function unreachable from the module's roots (its
+exports and the `_start`/`_initialize` entry) and renumbers the survivors.
+Unused WASI imports are removed too, so a pure-compute reactor module is a
+handful of functions:
+
+```bash
+echo "(defun fact (n) (if (<= n 1) 1 (* n (fact (- n 1)))))
+(rontolisp:wasm-export 'fact :params '(:int) :returns :int)" > fact.lisp
+rontolisp fact.lisp --no-wasi -o fact.wasm
+wasmtime run --invoke fact fact.wasm 5      # => 120, from a ~1.8 KB module
+```
+
+Pass `--optimize=off` and the module instead embeds the **entire** runtime
+(printer, rational, string, reader and `eval` helpers, the WASI import slots, …)
+regardless of what the program actually uses, because function indices are then
+held fixed: the same `fact` module is ~155 KB rather than ~1.8 KB.
+The shaking is behavior-preserving: it walks the call graph from
+the actual `call` instructions, so anything reachable (including code an
+embedded `eval`/`load` dispatches to) is kept. It applies on **every** output
+shape, `--component` included. The
+same levels also dead-code-eliminate the [JVM output](jvm.md).
+
+Reachability is only the first cut. The optimizer then decides every runtime
+type test the module can answer for itself: a wasm-GC value can only be what
+the module's own constructors built, so in `fact` -- whose numbers enter as an
+`:int` and never become a float or a ratio -- the generic arithmetic's float and
+rational arms are proved dead and dropped, the helpers that only those arms
+called go with them, and a call that merely forwards its arguments to another
+function is redirected past the hop. What stays is what the program can reach:
+`fact` keeps the exact-integer promotion past 64 bits, because its product can
+overflow and the answer must not wrap.
+
+The dead functions take their baggage with them: the WASI imports only they used,
+the type definitions nothing left names, and the static string data no surviving
+code still addresses — a printed literal's module is a few hundred bytes rather
+than the whole runtime's string table.
+
+Definitions that compile to byte-for-byte identical bodies — typically the
+accessors a `defstruct` or `define-condition` generates — are emitted once, with
+every call redirected to the shared body. Only the code is shared: each function
+keeps its own identity, so `(eq #'f #'g)` stays `NIL`.
+
+Naming the function outright helps here. `(mapcar #'double xs)`, `(reduce #'+ xs)`,
+`(sort xs #'<)` and `(funcall #'double x)` compile to the same direct call
+`(double x)` does, rather than making `double` a first-class value and calling it
+through the runtime's per-arity dispatcher. Two things follow: the call itself is
+cheaper, and a function nothing else reaches stops being reachable through that
+dispatcher — which is often what keeps whole swathes of a library in the artifact.
+Pass the same function as a computed value (a variable, a `lambda`, a designator
+built at run time) and the dispatcher comes back, as it must.
+
+That floor does not depend on how the program spells the write. A constant text
+is rendered at compile time and emitted as bytes, so `print`, `princ` + `terpri`,
+`write-string`, `write-line` and `(format t "Hello, ~a!~%" "World")` all leave the
+runtime printer behind and land within a few dozen bytes of each other (under 600 B
+as a core module, under 1.8 KB as a component). What is left of the static data is
+only what the program itself writes: the printer's own fixed strings — `NIL`, the
+list punctuation, the float specials, the character names — go with the printer.
+Print a computed value and both come back, as they must.
+
+A value the compiler can work out for itself is not a computed value, though. A
+call to a **pure built-in whose every argument is a literal** — `(* 6 7)`,
+`(/ 1 3)`, `(length "Hello World!")`, `(concatenate 'string "Hello" " " "World!")`,
+`(string-upcase "hi")` — is evaluated at compile time and the call is deleted, on
+every backend that compiles (the interpreter still evaluates it at run time, which
+is the same answer). That happens before the printer fold above, so
+`(princ (* 6 7))` reaches the very same floor as `(princ 42)` and
+`(format t "~a~%" (length "abc"))` the same as `(format t "~a~%" 3)`; a ratio
+folds like an integer, so `(print (/ 1 3))` is `(print 1/3)`. Redefine one
+of those names — a `defun`, a `defmethod`, an `flet` — and your definition wins:
+the compiler stops folding that name anywhere in the program. `--dynamic` turns
+the whole thing off, since every name there resolves at run time.
+
+A literal lookup table is folded the same way, and there the saving is the table
+itself: `(coerce '(0 #x77073096 …) '(vector (unsigned-byte 32)))` and
+`(make-array n :element-type '(unsigned-byte 8) :initial-contents '(…))` become
+the specialized vector they build, which the module carries as static data at the
+element width instead of building a list of boxed integers at startup — around 4
+bytes an element for a 32-bit table rather than 12. Each evaluation of the form
+still yields a fresh, independently mutable vector, exactly as the call did. An
+element that does not fit the declared width is not folded; the run-time builder
+masks it, as it always has.
+
+On the `--component` path the **wrapper shrinks with the core**, not just the core
+itself. Which WASI 0.3 interfaces a component imports follows from what the program
+can actually reach: `(print "Hello World!")` compiles to a component importing
+`wasi:cli/types` and `wasi:cli/stdout` and nothing else — no `wasi:filesystem`, no
+`wasi:clocks`, no `wasi:random`, and not even `wasi:cli/stderr`, since nothing in
+that program can write to standard error — while a program that opens a file, reads
+the clock and draws random bytes keeps them all, and one that calls
+[`warn`](../reference/macros/warn.md) or writes to `*error-output*` gets
+`wasi:cli/stderr` back — and so does one that uses a condition-handling form
+([`handler-case`](../reference/macros/handler-case.md) and friends), because the
+report an uncaught condition prints before it traps goes there too. The same holds
+inside an interface: a program that only writes a file imports `wasi:filesystem/types`
+with the functions and types that takes, without `stat` or `rename-at`. `--emit-wit` prints the world the component really has, so
+the emitted `.wit` shrinks with it.
+
+```bash
+echo '(print "Hello World!")' > hello.lisp
+rontolisp hello.lisp --component -o hello.wasm                       # ~1.7 KB
+rontolisp hello.lisp --component --optimize=off -o hello-full.wasm   # ~165 KB
+```
+
+At `--optimize=off` a component always declares the full fixed WASI surface, which
+is what makes the two builds comparable byte-for-byte across releases.
+
+Tree shaking also decides how much of a **loaded library** it can reach. A
+compiled program calls most functions directly, but a `funcall` needs a dispatch
+table, and a function listed there counts as reachable whether or not anything
+ever calls it that way. So a function is listed only when your program can
+actually obtain it as a value — `#'name`, a quoted `'name` designator, a
+`lambda` — and everything else becomes ordinary dead code the shaker
+removes. A `lambda` counts only while code that survives the shake makes it: a
+closure made only inside a function nothing calls goes with that function. A
+`#'name` makes the function a value, not its name a designator: a symbol finds a
+function at run time only when the program spells that name as a constant, or a
+package walk (`do-symbols`, `apropos-list`, ...) hands the symbol back, so a
+function taken as a value only inside a function nothing calls goes with it as
+well. On a
+program that loads `md5` and calls one function, that is the difference between
+about 1.1 MB and 582 KB.
+
+A program that holds a symbol **builder** — `intern`, `find-symbol`,
+`make-symbol`, `uiop:symbol-call` — keeps the listing, and instead widens it: a
+string or keyword constant the module carries can become a designator at run
+time, so the compiler probes those spellings of each function's name as well.
+That is what lets a Worker whose handler discovery is `(find-symbol "RUN" pkg)`
+still shake out everything it calls only directly.
+
+The listing is all-or-nothing, and what switches it off is a program that can
+name a function out of data this compile never sees: any use of `eval`, `read`,
+`read-from-string` or a runtime `load` — including one inside a library you
+loaded. When the build does not shrink as much as you expected, ask the compiler
+which operator it was:
+
+```bash
+rontolisp -Drontolisp.debug.dispatchgate=true app.lisp -o app.wasm
+# => [dispatch-gate] every function stays dispatchable because of: EVAL
+```
+
+A `~/name/` directive in a format control string counts as well, because it
+names its function at run time — but only a control string the compiler can see
+brings it in, so a program that spells no such directive is unaffected (see
+[`format`](../reference/macros/format.md)).
+
+`--dynamic` switches it off too, by design: late binding resolves any name at
+run time.
+
+One carve-out follows from that: a designator assembled at run time
+out of **computed** pieces — `(funcall (intern (concatenate 'string "gre"
+suffix)))` — is no constant the compiler can read, so the call signals the
+ordinary "undefined function" error, whether or not the program also takes that
+function as a `#'name` value. `--dynamic` is the way back, and
+`--optimize=off` is not: the listing is not part of what the level switches, so
+declining the optimizer does not bring such a name back.
+
+For a much smaller module still, the same `fact.lisp` compiled with
+[`--no-gc`](../guides/wasm-nogc.md) lowers `fact` to unboxed `i32` and drops
+the whole GC runtime that made the 2.5 KB (the condition hierarchy, cons cells,
+the printer):
+
+```bash
+rontolisp fact.lisp --no-gc -o fact.wasm
+wasmtime run --invoke fact fact.wasm 5      # => 120, from a ~108 byte module
+```
+
+The source is unchanged — `wasm-export` works identically on both value models
+— and the resulting module also drops the wasm-GC engine requirement.
+
+Independently of the level (and on every output mode, `--component`
+included), compilation always tree-shakes the libraries it splices in: the
+bundled Lisp-source ones (`linalg:`, `vec:`, JSON, URL, `equalp`/`string<`) and
+every system loaded with
+[`asdf:load-system` / `ql:quickload`](../guides/asdf-systems.md). A function,
+variable or constant your program never mentions -- by name anywhere in the
+source, including quoted symbols and string literals -- is not compiled into the
+module. Your own code is never pruned, and neither is anything a `load`/`require`
+splices in: only a library that came from a system is subject to it.
+
+Classes, generic functions, methods, conditions and structures are pruned by
+the same rule: a class nothing references leaves together with its methods,
+and a method on a generic your program does call is still dropped when no
+reachable code can create an instance of the class it specializes on. Methods
+on the standard protocol names (`initialize-instance`, `print-object`,
+`close`, ...) follow their class alone, since those calls are implicit.
+
+The one consequence: a library function whose name is only assembled at runtime
+from computed strings and called through `eval`/`apply` signals the usual
+"undefined function" error. Compile with `--no-prune` (or `--dynamic`) to keep
+every library definition in that case.
+
+The flag takes an optional level. `--optimize` and `--optimize=default` are the
+same thing — everything above, and what an absent flag already selects — and the
+bare spelling keeps that meaning permanently; `--optimize=size` is that plus the
+trades in the next section; `--optimize=off` is none of it, and emits what a
+build before the flag was on by default emitted.
+
+`--optimize=off` exists for two jobs, and neither of them is making a program
+work: comparing a module against one built before a compiler change, and
+bisecting a suspected tree-shaker bug by asking whether the unshaken module
+behaves differently. A program whose functions are reached only through a name
+the compiler cannot read needs `--dynamic` — the funcall dispatch listing above
+is not part of what the level switches, so `off` does not bring such a name
+back.
+
+### Optimizing for Size (`--optimize=size`)
+
+Eight wasm-GC emissions deliberately spend bytes to gain speed, and all eight
+are on at `--optimize=off` and `--optimize=default` alike:
+
+- an integer expression tree like `(logand (+ (ash x 7) i) #xFFFFFFFF)` compiles
+  **twice** — once as a single unboxed `i64` computation, and once through the
+  generic helpers, as the fallback a float, a ratio or an overflow into bignum
+  territory takes;
+- a `let` binding whose assignments are integer arithmetic gets an unboxed
+  `i64` slot beside its ordinary boxed one;
+- a `car` or `cdr` — and the walk `apply` performs over its argument list for a
+  function it resolves at run time — spells its nil-passing read inline, 17
+  bytes a site, instead of calling one shared reader;
+- a one-subscript `aref` or `(setf aref)` of an array whose representation
+  nothing declares first asks, inline, whether it is a general vector with
+  storage of its own and the subscript inside it, and reads or stores the
+  element there — about 60 bytes a site — ahead of the checks and the dispatch
+  over every array representation that anything else still takes;
+- `vector-push-extend` with no extension argument stores into a general vector
+  that has room the same way, about 115 bytes a site, ahead of the push that
+  checks, grows and reports;
+- `length` of a value declared a general vector — `(vector t)`,
+  `simple-vector`, a `defstruct` slot of that `:type` — reads its fill pointer
+  or its size inline, about 60 bytes a site, ahead of the shared length;
+- a call of a `defstruct` predicate or slot reader is the type test or the slot
+  read its definition is, 25 to 35 bytes a site more than the call (a reader
+  handed anything but an instance still calls the definition, which reports);
+- a comparison of two values neither of which is a literal compares two
+  fixnums inline, about 40 bytes a site, ahead of the generic comparison.
+
+`--optimize=size` declines all eight, except where the first is the smaller code:
+the compiler measures each integer tree both ways and keeps it unboxed when that
+is fewer bytes — a tree with nothing to fall back from, such as a Java `int`
+operation over declared operands, is one `i64` instruction there and a call into
+the generic helpers otherwise. Nothing the program computes changes, nor
+the order its output and errors happen in — the fast paths only ever existed as
+alternatives to what stays — but the
+arithmetic now runs through the generic helpers and every `car`/`cdr` is a
+call, so the price is real, and how much you pay depends on how integer-heavy
+the program is (the shared reader alone costs 1-3% on a list-traversal loop):
+
+| program | `--optimize=default` | `--optimize=size` | run time |
+| --- | --- | --- | --- |
+| ironclad SHA-256/HMAC/PBKDF2, 4096 rounds | 2,078,195 B | 1,562,816 B (**-24.8%**) | 1.4 s -> 5.2 s (**3.8x**) |
+| a `vec:`-kernel neural-net training loop | 271,233 B | 214,169 B (-21.0%) | 1.07 s -> 1.26 s (+18%) |
+| a float MLP training loop (no `vec:`) | 159,747 B | 125,496 B (-21.4%) | 5.6 s -> 6.1 s (+9%) |
+| `cl-postgres` hello world (`--component`) | 8,024,998 B | 6,384,099 B (-20.4%) | — |
+| the `hello-clack` Cloudflare Worker (`--no-wasi`) | 990,451 B | 815,414 B (-17.7%) | — |
+
+(wasmtime 47, best of three runs.) The size win barely varies; the run-time
+price does, because only integer arithmetic fuses — a float kernel pays it on
+its loop indices alone, while a crypto round pays it on everything.
+
+So reach for it when the module has to travel — an edge deploy, a browser
+download, a registry with a size limit — unless the program's hot loop is
+integer arithmetic (hashing, crypto, bit twiddling), where the same win costs
+several times the run time.
+
+The level is accepted on every backend, so a build script need not know which
+one it targets, but only wasm-GC (Preview 1 and `--component`) has anything to
+trade: the [JVM](jvm.md) and [`--no-gc`](../guides/wasm-nogc.md) outputs are
+byte-for-byte what `--optimize=default` produces.
+
+### Uncaught Condition Locations (`--report-locations`)
+
+When nothing catches a condition, the interpreter and a compiled JVM program print
+where it happened under the `Unhandled condition:` line
+([`error`](../reference/macros/error.md)). A wasm-GC module prints the same lines
+when compiled with `--report-locations`:
+
+```console
+$ rontolisp app.lisp -o app.wasm --report-locations=line
+$ wasmtime run app.wasm
+Unhandled condition: parse-integer: junk in string "x"
+  at app.lisp:5 in APP::PARSE
+```
+
+- `line` names the innermost form of the program's files that the condition
+  passed through and the named function holding it, as the interpreter does,
+  including the `in NAME (async), awaited at FILE:LINE` line of each `await`
+  that rethrew it.
+- `function` names the function and the line its definition starts on: fewer
+  bytes, a coarser answer.
+
+It works on Preview 1, `--component` and `--native` alike, and is off by
+default. A program without a catching form (`handler-case`, `ignore-errors`,
+`unwind-protect`, ...) otherwise stops on a bare trap with no report at all;
+the option gives it the `Unhandled condition:` line as well, and with it the
+exception-handling proposal a catching form needs (wasmtime 37+), except under
+`--no-wasi`, whose standard error goes nowhere. It adds nothing to a program
+given with `-e`, which has no file to point into. The file names are the paths
+the compiler read, stored in the module. Tail calls into the program's own
+functions, directly or through a function value, run in constant stack under
+the option as well.
+
+Every function read from a file catches the condition on its way out, and
+under `line` every form that starts a new line records it:
+
+| module (`--optimize=size`) | off | `function` | `line` |
+| --- | --- | --- | --- |
+| `zlib` (chipz gunzip) | 89,499 B | 94,685 B (+5.8%) | 100,626 B (+12.4%) |
+| 100 three-line functions | 14,092 B | 18,754 B (+33.1%) | 20,765 B (+47.4%) |
+| `hello_world`, no catching form | 480 B | 643 B | 654 B |
+| `(print (read))`, no catching form | 39,027 B | 42,300 B | 42,313 B |
+
+That is about 45 bytes per function, and 6 to 7 more per line under `line`.
+Without a catching form the report itself comes on top: the text of every
+condition the program can signal, which is what grows the last row.
+Run time is unchanged on V8 (Node 24). On wasmtime 51 (x86-64) the catch costs a
+call-heavy function more: under `function` a recursive `fib` runs about 1.3x
+slower, while the other benchmark programs stay within 0-25%.
+
+### SIMD Acceleration (`--simd`)
+
+`--simd` is the one acceleration switch shared by every backend: it lowers the
+vectorizable [`vec:` and `linalg:` kernels](../guides/simd-acceleration.md) to
+real vector instructions. On WASM it is orthogonal to the value model:
+
+- **wasm-GC + `--simd`** lowers the kernels to native fixed-width SIMD
+  (`f64x2`/`f32x4`) over GC-managed lane-group arrays — packed float arrays
+  stay ordinary GC objects, and memory behaves exactly as without the flag.
+  Composes with `--component` and every `--optimize` level; run as usual with
+  `wasmtime run` (wasmtime enables the SIMD proposal by default).
+- **`--no-gc` + `--simd`** lowers the same kernels to `v128` over the packed
+  linear-memory blocks. Without `--simd`, `--no-gc` emits plain scalar loops
+  instead — a v128-free MVP module that also runs on a runtime lacking the
+  SIMD proposal.
+
+The full story — which kernels vectorize, precision rules for single-float
+reductions, measured effects, and the `linalg` interception — lives in the
+[SIMD acceleration guide](../guides/simd-acceleration.md).

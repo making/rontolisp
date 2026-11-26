@@ -1,0 +1,359 @@
+package am.ik.rontolisp.eval;
+
+import java.io.ByteArrayOutputStream;
+import java.io.PrintStream;
+import java.util.List;
+import java.util.concurrent.TimeUnit;
+
+import am.ik.rontolisp.LispNil;
+import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.reader.LispReader;
+import am.ik.rontolisp.testsupport.OwnHandlerStacksPrograms;
+import am.ik.rontolisp.testsupport.SocketTest;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+/**
+ * The {@code rontolisp:make-thread} / {@code join-thread} / {@code threadp} /
+ * {@code thread-alive-p} / {@code destroy-thread} primitives and the
+ * {@code bordeaux-threads}/{@code bt2} shim over them on the interpreter, including the
+ * property the whole feature exists for (clack's handler.lisp shape): a spawned thread
+ * runs its function under the given dynamic bindings, invisible to the spawner.
+ */
+class ThreadTest {
+
+	private static LispVal evalAll(LispEvaluator evaluator, String input) {
+		LispVal result = LispNil.INSTANCE;
+		for (LispVal expr : LispReader.readAllFromString(input)) {
+			result = evaluator.eval(expr);
+		}
+		return result;
+	}
+
+	private static LispEvaluator evaluator() {
+		return new LispEvaluator(new PrintStream(new ByteArrayOutputStream()));
+	}
+
+	@Test
+	void joinThreadYieldsTheFunctionsValueAndTheThreadIsDeadAfterwards() {
+		assertThat(evalAll(evaluator(), """
+				(let ((th (rontolisp:make-thread (lambda () (+ 40 2)))))
+				  (list (rontolisp:threadp th)
+				        (rontolisp:join-thread th)
+				        (rontolisp:thread-alive-p th)))
+				""").print()).isEqualTo("(T 42 NIL)");
+	}
+
+	@Test
+	void eachThreadHasItsOwnMultipleValueChannel() {
+		// The value-count register is per thread (ValueCountRegister): through the one
+		// shared field a sibling's step cleared the values between th-helper's publish
+		// and the consumer's read ("Expected integer, got: NIL" on every run).
+		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		evalAll(new LispEvaluator(new PrintStream(out, true, java.nio.charset.StandardCharsets.UTF_8)), """
+				(defun th-helper (n) (values n (* n n) (- n)))
+				(defun th-work (n)
+				  (let ((acc 0))
+				    (dotimes (i 20000)
+				      (multiple-value-bind (a b c) (th-helper (+ n i))
+				        (setq acc (+ acc (- (+ a b c) (* (+ n i) (+ n i)))))))
+				    acc))
+				(let ((threads nil))
+				  (dotimes (n 8) (let ((k n)) (push (rontolisp:make-thread (lambda () (th-work k))) threads)))
+				  (print (mapcar (lambda (th) (rontolisp:join-thread th)) threads)))
+				""");
+		assertThat(out.toString(java.nio.charset.StandardCharsets.UTF_8).trim()).isEqualTo("(0 0 0 0 0 0 0 0)");
+	}
+
+	@Test
+	void aMacroExpandingOnAThreadLeavesItsPackageToThatThread() {
+		// The interpreter expands at the first call, in the package the body was read
+		// in. Through the one shared current package the spawner read its next forms
+		// there, and two threads' overlapping save and restore left it there for good
+		// (sento's workers: "The variable SENTO.ACTOR::*F* is unbound" in the program).
+		assertThat(evalAll(evaluator(), """
+				(defpackage :tp-home (:use :cl))
+				(in-package :tp-home)
+				(defvar *expanding* nil)
+				(defvar *resume* nil)
+				(defmacro expands-slowly ()
+				  (setq *expanding* t)
+				  (loop until *resume* do (sleep 0.01))
+				  :expanded)
+				(defun call-it () (expands-slowly))
+				(in-package :cl-user)
+				(let ((th (rontolisp:make-thread (lambda () (tp-home::call-it)))))
+				  (loop until tp-home::*expanding* do (sleep 0.01))
+				  (let ((seen (package-name *package*)))
+				    (setq tp-home::*resume* t)
+				    (list seen (rontolisp:join-thread th) (package-name *package*))))
+				""").print()).isEqualTo("(\"COMMON-LISP-USER\" :EXPANDED \"COMMON-LISP-USER\")");
+	}
+
+	@Test
+	void aCompilerMacroExpandingOnAThreadMutesOnlyThatThread() {
+		// The mute around the expansion was one flag: what another thread printed
+		// meanwhile was lost, and two threads' overlapping save and restore left it set
+		// for good (a second lparallel worker: nothing the program printed afterwards).
+		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		evalAll(new LispEvaluator(new PrintStream(out, true, java.nio.charset.StandardCharsets.UTF_8)), """
+				(defvar *expanding* nil)
+				(defvar *resume* nil)
+				(defun slow () :slow)
+				(define-compiler-macro slow (&whole form)
+				  (setq *expanding* t)
+				  (loop until *resume* do (sleep 0.01))
+				  form)
+				(defun call-slow () (slow))
+				(let ((th (rontolisp:make-thread #'call-slow)))
+				  (loop until *expanding* do (sleep 0.01))
+				  (print :meanwhile)
+				  (setq *resume* t)
+				  (rontolisp:join-thread th))
+				""");
+		assertThat(out.toString(java.nio.charset.StandardCharsets.UTF_8).trim()).isEqualTo(":MEANWHILE");
+	}
+
+	@Test
+	// A hang guard: a body that never ends its eager part blocks its caller for good.
+	@Timeout(value = 2, unit = TimeUnit.MINUTES, threadMode = Timeout.ThreadMode.SEPARATE_THREAD)
+	void aThreadsHandlersAreItsOwn() {
+		// The handler stack was one global: a thread leaving its handler-bind restored
+		// what it had saved over a handler the main thread pushed since, and the main
+		// thread's condition found none (sento's test suite: "Unhandled condition").
+		for (String[] shape : List.of(OwnHandlerStacksPrograms.MAKE_THREAD, OwnHandlerStacksPrograms.JAVA_THREAD,
+				OwnHandlerStacksPrograms.ASYNC_BODY)) {
+			ByteArrayOutputStream out = new ByteArrayOutputStream();
+			evalAll(new LispEvaluator(new PrintStream(out, true, java.nio.charset.StandardCharsets.UTF_8)),
+					OwnHandlerStacksPrograms.thread(shape));
+			assertThat(out.toString(java.nio.charset.StandardCharsets.UTF_8).trim()).as(shape[0])
+				.isEqualTo(OwnHandlerStacksPrograms.THREAD_OUTPUT);
+		}
+	}
+
+	@Test
+	void threadpIsNilOnANonThread() {
+		assertThat(evalAll(evaluator(), "(rontolisp:threadp 42)")).isEqualTo(LispNil.INSTANCE);
+	}
+
+	@Test
+	void currentThreadIsAnEqStableLiveHandle() {
+		// EQ-stability is the property dbi's per-thread connection cache keys on: the
+		// handle must be reusable as an eq hash-table key across calls.
+		assertThat(evalAll(evaluator(), """
+				(let ((h (rontolisp:current-thread)))
+				  (list (rontolisp:threadp h)
+				        (eq h (rontolisp:current-thread))
+				        (rontolisp:thread-alive-p h)
+				        (let ((table (make-hash-table :test 'eq)))
+				          (setf (gethash (rontolisp:current-thread) table) :hit)
+				          (gethash (rontolisp:current-thread) table))))
+				""").print()).isEqualTo("(T T T :HIT)");
+	}
+
+	@Test
+	void currentThreadDiffersAcrossThreads() {
+		// A spawned body's self-handle is its own, not the spawner's.
+		assertThat(evalAll(evaluator(), """
+				(let ((mine (rontolisp:current-thread)))
+				  (eq mine (rontolisp:join-thread
+				            (rontolisp:make-thread (lambda () (rontolisp:current-thread))))))
+				""")).isEqualTo(LispNil.INSTANCE);
+	}
+
+	@Test
+	void threadAlivePOnANonThreadIsAnError() {
+		assertThatThrownBy(() -> evalAll(evaluator(), "(rontolisp:thread-alive-p 42)"))
+			.isInstanceOf(LispEvalException.class)
+			.hasMessage("THREAD-ALIVE-P: The value 42 is not of type (SATISFIES RONTOLISP:THREADP)");
+	}
+
+	@SocketTest
+	void threadAndSocketOperatorsSignalTheirConditionOverAValueTheyCannotTake() {
+		// Pinned identically on the JVM (JvmThreadTest).
+		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		evalAll(new LispEvaluator(new PrintStream(out, true, java.nio.charset.StandardCharsets.UTF_8)),
+				am.ik.rontolisp.HandleOperandFixture.PROGRAM);
+		assertThat(out.toString(java.nio.charset.StandardCharsets.UTF_8).trim())
+			.isEqualTo(am.ik.rontolisp.HandleOperandFixture.EXPECTED);
+	}
+
+	@SocketTest
+	void socketHostFailuresReadAsTheJvmBackendsDo() {
+		// Pinned identically on the JVM (JvmThreadTest).
+		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		evalAll(new LispEvaluator(new PrintStream(out, true, java.nio.charset.StandardCharsets.UTF_8)),
+				am.ik.rontolisp.HandleOperandFixture.HOST_FAILURE_PROGRAM);
+		assertThat(out.toString(java.nio.charset.StandardCharsets.UTF_8).trim())
+			.isEqualTo(am.ik.rontolisp.HandleOperandFixture.HOST_FAILURE_EXPECTED);
+	}
+
+	@Test
+	void joinThreadResignalsTheThreadsErrorSoHandlerCaseDispatches() {
+		assertThat(evalAll(evaluator(), """
+				(handler-case
+				    (rontolisp:join-thread (rontolisp:make-thread (lambda () (error "thread boom"))))
+				  (error (e) (format nil "caught: ~A" e)))
+				""").print()).isEqualTo("\"caught: thread boom\"");
+	}
+
+	@Test
+	void aBuiltInsTypeErrorStaysOneAcrossTheJoin() {
+		// The interpreter twin of JvmThreadTest#aBuiltInsTypeErrorStaysOneAcrossTheJoin.
+		assertThat(evalAll(evaluator(), """
+				(defvar *tj* (read-from-string "5"))
+				(handler-case (rontolisp:join-thread (rontolisp:make-thread (lambda () (car *tj*))))
+				  (type-error (c) (list :type-error (type-error-datum c) (type-error-expected-type c))))
+				""").print()).isEqualTo("(:TYPE-ERROR 5 LIST)");
+	}
+
+	@Test
+	void makeThreadBindingsAreDynamicBindingsInTheSpawnedThreadOnly() {
+		// The clack.handler shape: the spawned server thread prints through a rebound
+		// *standard-output*, while the spawner's own stream stays untouched.
+		assertThat(evalAll(evaluator(), """
+				(defvar *cap* (make-string-output-stream))
+				(rontolisp:join-thread
+				 (rontolisp:make-thread (lambda () (princ "from-thread"))
+				                        (list (cons '*standard-output* *cap*))))
+				(get-output-stream-string *cap*)
+				""").print()).isEqualTo("\"from-thread\"");
+	}
+
+	@Test
+	void spawnedThreadDoesNotInheritTheSpawnersDynamicBindings() {
+		// Same rule as the JVM backend's plain ThreadLocal store: the new thread reads
+		// the global default until it binds for itself -- a closure built inside the
+		// binding too, since a special reference reads the binding active when it runs
+		// (.kb/dynamic-special-variables.md).
+		assertThat(evalAll(evaluator(), """
+				(defvar *who* 'global)
+				(defun who-reader () *who*)
+				(let ((*who* 'spawner))
+				  (list (who-reader)
+				        (rontolisp:join-thread (rontolisp:make-thread #'who-reader))
+				        (rontolisp:join-thread (rontolisp:make-thread (lambda () *who*)))))
+				""").print()).isEqualTo("(SPAWNER GLOBAL GLOBAL)");
+	}
+
+	@Test
+	void aSpecialWithoutAValueIsUnboundInAThreadThatDoesNotBindIt() {
+		// The reference answer JvmThreadTest's twin is measured against: a spawned thread
+		// sees none of the spawner's bindings, so a special without a value reads unbound
+		// there unless the bindings alist hands it one, and join-thread re-signals an
+		// uncaught read.
+		assertThat(evalAll(evaluator(), """
+				(defvar *tv*)
+				(defun tv-read () (handler-case *tv* (unbound-variable (c) (list :unbound (cell-error-name c)))))
+				(list (let ((*tv* :spawner))
+				        (list (tv-read)
+				              (rontolisp:join-thread (rontolisp:make-thread #'tv-read))
+				              (rontolisp:join-thread (rontolisp:make-thread #'tv-read (list (cons '*tv* :handed))))
+				              (handler-case (rontolisp:join-thread (rontolisp:make-thread (lambda () *tv*)))
+				                (unbound-variable (c) (list :joined (cell-error-name c))))))
+				      (tv-read))
+				""").print()).isEqualTo("((:SPAWNER (:UNBOUND *TV*) :HANDED (:JOINED *TV*)) (:UNBOUND *TV*))");
+	}
+
+	@Test
+	void destroyThreadOnAFinishedThreadAnswersTheHandle() {
+		assertThat(evalAll(evaluator(), """
+				(let ((th (rontolisp:make-thread (lambda () 1))))
+				  (rontolisp:join-thread th)
+				  (rontolisp:threadp (rontolisp:destroy-thread th)))
+				""").print()).isEqualTo("T");
+	}
+
+	@Test
+	void bt2ShimSpawnsThroughThePrimitivesWithInitialBindings() {
+		LispEvaluator evaluator = evaluator();
+		evaluator.eval(LispReader.readFromString("(asdf:load-system \"bordeaux-threads\")"));
+		// clack's handler.lisp shape verbatim: a quote form and an already-evaluated
+		// stream value in :initial-bindings, plus the v1 spellings clack imports.
+		assertThat(evalAll(evaluator, """
+				(defvar *bt2-cap* (make-string-output-stream))
+				(defvar *bt2-cfg* 'unset)
+				(let ((th (bt2:make-thread (lambda () (princ "bt2-thread") *bt2-cfg*)
+				                           :name "worker"
+				                           :initial-bindings
+				                           (list (cons '*standard-output* *bt2-cap*)
+				                                 (cons '*bt2-cfg* '(quote configured))))))
+				  (list (bordeaux-threads:threadp th)
+				        (bt2:join-thread th)
+				        (bordeaux-threads:thread-alive-p th)
+				        (get-output-stream-string *bt2-cap*)
+				        *bt2-cfg*
+				        bt2:*default-special-bindings*
+				        (eq (bt2:thread-native-thread th) th)
+				        (handler-case (bt2:join-thread (bt2:make-thread (lambda () (error "boom"))))
+				          (bt2:abnormal-exit (c) (princ-to-string (bt2:abnormal-exit-condition c))))))
+				""").print()).isEqualTo("(T CONFIGURED NIL \"bt2-thread\" UNSET NIL T \"boom\")");
+	}
+
+	@Test
+	void btConditionVariablesAndSemaphoresHandOffBetweenNamedThreads() {
+		// A lock has a class of its own (serapeum specializes on it); a spawned thread
+		// finds its own name through current-thread; a semaphore and a condition
+		// variable hand off between threads, and each wait times out with nil. The JVM
+		// twin binds *standard-io-bindings*' reader variables in a program that has
+		// none of them.
+		LispEvaluator evaluator = evaluator();
+		evaluator.eval(LispReader.readFromString("(asdf:load-system \"bordeaux-threads\")"));
+		assertThat(evalAll(evaluator, """
+				(defmethod bt-kind ((x bt:lock)) :lock)
+				(defmethod bt-kind ((x integer)) :integer)
+				(defvar *cv-lock* (bt:make-lock))
+				(defvar *cv* (bt:make-condition-variable))
+				(defvar *cv-box* nil)
+				(defvar *go* (bt:make-semaphore :name "go"))
+				(let ((th (bt:make-thread (lambda ()
+				                            (bt:wait-on-semaphore *go*)
+				                            (bt:with-lock-held (*cv-lock*)
+				                              (setq *cv-box* (bt:thread-name (bt:current-thread)))
+				                              (bt:condition-broadcast *cv*))
+				                            :finished)
+				                          :name "worker"
+				                          :initial-bindings bt:*standard-io-bindings*)))
+				  (list (bt-kind (bt:make-recursive-lock)) (bt-kind 7)
+				         (bt:thread-name th)
+				         (if (member th (bt:all-threads)) t nil)
+				         (bt:wait-on-semaphore (bt:make-semaphore) :timeout 1/100)
+				         (bt:with-lock-held (*cv-lock*) (bt:condition-wait *cv* *cv-lock* :timeout 1/100))
+				         (progn (bt:signal-semaphore *go*)
+				                (bt:with-lock-held (*cv-lock*)
+				                  (loop until (or *cv-box* (not (bt:thread-alive-p th)))
+				                        do (bt:condition-wait *cv* *cv-lock* :timeout 1))
+				                  *cv-box*))
+				         (bt:join-thread th)
+				         (bt:wait-on-semaphore (bt:make-semaphore :count 1))
+				         (bt:thread-name (bt:current-thread))))
+				""").print()).isEqualTo("(:LOCK :INTEGER \"worker\" T NIL NIL \"worker\" :FINISHED T NIL)");
+	}
+
+	@Test
+	void bt2RejectsAVariableReferenceBindingForm() {
+		LispEvaluator evaluator = evaluator();
+		evaluator.eval(LispReader.readFromString("(asdf:load-system \"bordeaux-threads\")"));
+		// A symbol form would need the new thread's dynamic environment; the shim
+		// signals instead of binding the wrong value.
+		assertThatThrownBy(() -> evalAll(evaluator, """
+				(bt2:make-thread (lambda () 1)
+				                 :initial-bindings (list (cons '*x* '*standard-output*)))
+				""")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("unsupported :initial-bindings value form");
+	}
+
+	@Test
+	void bt2LockNamesResolveOntoTheV1LockSubset() {
+		LispEvaluator evaluator = evaluator();
+		evaluator.eval(LispReader.readFromString("(asdf:load-system \"bordeaux-threads\")"));
+		assertThat(evalAll(evaluator, """
+				(let ((l (bt2:make-lock)))
+				  (bt2:with-lock-held (l) 'held))
+				""").print()).isEqualTo("HELD");
+	}
+
+}

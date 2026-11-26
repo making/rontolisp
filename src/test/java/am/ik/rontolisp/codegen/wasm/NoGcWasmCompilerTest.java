@@ -1,0 +1,3688 @@
+package am.ik.rontolisp.codegen.wasm;
+
+import java.io.ByteArrayOutputStream;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+
+import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.compiler.OptimizeLevel;
+import am.ik.rontolisp.reader.LispReader;
+import org.junit.jupiter.api.Test;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+/**
+ * Structural tests for {@link NoGcWasmCompiler}: the emitted module is a plain MVP module
+ * (no wasm-GC types, no imports, no memory), exports the requested functions, and
+ * ineligible functions reachable from an export are rejected with a clear error. These
+ * run without Docker; the end-to-end {@code wasmtime --invoke} checks live in
+ * {@link WasmLispCompilerIntegrationTest}.
+ */
+class NoGcWasmCompilerTest {
+
+	private static byte[] compile(String source) {
+		List<LispVal> program = LispReader.readAllFromString(source);
+		return new NoGcWasmCompiler().compile(program);
+	}
+
+	// Compiles with --simd on, so the vectorizable vec: kernels lower to native v128
+	// (f64x2/f32x4). Without --simd (the plain compile() above) they lower to scalar
+	// loops
+	// with no 0xFD opcode. The [count][data] block layout is identical either way.
+	private static byte[] compileSimd(String source) {
+		List<LispVal> program = LispReader.readAllFromString(source);
+		return NoGcWasmCompiler.builder().optimize(OptimizeLevel.NONE).simd(true).build().compile(program);
+	}
+
+	@Test
+	void unwindProtectIsCompileError() { // The wasm-GC backends now catch via the
+											// exception-handling proposal,
+		// but --no-gc keeps the clear rejection: no condition objects in its
+		// unboxed value model, and its contract is a zero-flag plain MVP module.
+		assertThatThrownBy(() -> compile("""
+				(defun up-f (n) (unwind-protect (* n 2) n))
+				(rontolisp:wasm-export 'up-f :params '(:int) :returns :int)
+				""")).isInstanceOf(UnsupportedOperationException.class).hasMessageContaining("UNWIND-PROTECT");
+	}
+
+	@Test
+	void standardConstantsInCodePositionAnswerTheirLiterals() {
+		// The reader binds pi and the limit/float constants as symbols
+		// (even under quote), and scalar mode has no globals -- so a code-position
+		// reference answers the literal directly (see ClConstants), with the WASM
+		// values. Quoted uses need no global either (quote carries no type there).
+		assertThat(compile("""
+				(defun circle-area (r) (* pi r r))
+				(defun get-fixnum () most-positive-fixnum)
+				(defun get-eps () single-float-epsilon)
+				(rontolisp:wasm-export 'circle-area :params '(:float) :returns :float)
+				(rontolisp:wasm-export 'get-fixnum :params '() :returns :int)
+				(rontolisp:wasm-export 'get-eps :params '() :returns :float)
+				""")).isNotEmpty();
+	}
+
+	// The scalar backend has an F32VEC and an F64VEC and nothing else. A bfloat16 literal
+	// used to be emitted as an F64VEC -- eight bytes an element, the wrong memory layout,
+	// no diagnostic -- because the arm that caught it was a pattern over the SEALED
+	// umbrella rather than one per permit (.kb/vec.md, .kb/bfloat16.md).
+	@Test
+	void bfloat16ArraysAreRefusedOnTheNoGcBackend() {
+		assertThatThrownBy(() -> compile("""
+				(defun bf-make (n) (make-array n :element-type 'bfloat16))
+				(rontolisp:wasm-export 'bf-make :params '(:int) :returns :int)
+				""")).isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("bfloat16 arrays are supported on the interpreter and the JVM only")
+			.hasMessageContaining("the --no-gc backend");
+	}
+
+	@Test
+	void formatIsRefusedPastWhatItCanSpellOut() {
+		for (var refused : List.of(Map.entry("(format nil \"~s\" n)", "takes only"),
+				Map.entry("(format nil n)", "literal control string"),
+				Map.entry("(format n \"x\")", "writes to t or nil"), Map.entry("(format nil \"~a\")", "too few"),
+				Map.entry("(format nil \"x\" n)", "too many"))) {
+			assertThatThrownBy(() -> compile("(defun f (n) " + refused.getKey() + " 1)\n"
+					+ "(rontolisp:wasm-export 'f :params '(:int) :returns :int)"))
+				.isInstanceOf(UnsupportedOperationException.class)
+				.hasMessageContaining("--no-gc: format")
+				.hasMessageContaining(refused.getValue());
+		}
+	}
+
+	// The other backends call the (setf name) function of a place; this one has no
+	// function values, so the place is refused where it is written. The definition --
+	// which the prelude's bit/sbit writers splice in on any program spelling the symbol,
+	// a quoted 'bit type specifier included -- compiles to nothing, as nothing else can
+	// call it.
+	@Test
+	void aSetfPlaceIsRefusedOnTheNoGcBackend() {
+		assertThatThrownBy(() -> compile("""
+				(defun (setf foo) (v x) v)
+				(defun put-it (x) (setf (foo x) 1) x)
+				(rontolisp:wasm-export 'put-it :params '(:int) :returns :int)
+				""")).isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("setf does not support place: FOO");
+	}
+
+	// The bit-* array operators are prelude defuns over the general boxed array, and
+	// the scalar backend has no general array type: the spliced defun reaches the
+	// make-array refusal with its usual clear compile error.
+	@Test
+	void bitArrayOperatorsAreRefusedOnTheNoGcBackend() {
+		assertThatThrownBy(() -> compile("""
+				(defun bit-and-it (a b) (bit-and a b))
+				(rontolisp:wasm-export 'bit-and-it :params '(:int :int) :returns :int)
+				""")).isInstanceOf(UnsupportedOperationException.class).hasMessageContaining("--no-gc");
+	}
+
+	@Test
+	void quantizedMatricesAreRefusedOnTheNoGcBackend() {
+		assertThatThrownBy(() -> compile("""
+				(defun q (n) (rontolisp:quantize (make-array n :element-type 'single-float) 'q8-0))
+				(rontolisp:wasm-export 'q :params '(:int) :returns :int)
+				""")).isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("quantized matrices are supported on the interpreter and the JVM only")
+			.hasMessageContaining("the --no-gc backend");
+	}
+
+	@Test
+	void quantizedRowsIsRefusedOnTheNoGcBackend() {
+		assertThatThrownBy(() -> compile("""
+				(defun r (n) (rontolisp:quantized-rows n '(0)))
+				(rontolisp:wasm-export 'r :params '(:int) :returns :int)
+				""")).isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("quantized matrices are supported on the interpreter and the JVM only")
+			.hasMessageContaining("the --no-gc backend");
+	}
+
+	@Test
+	void bfloat16LiteralsAreRefusedOnTheNoGcBackend() {
+		assertThatThrownBy(() -> compile("""
+				(defun bf-lit () (aref #bf16(1.0 2.0) 0))
+				(rontolisp:wasm-export 'bf-lit :params '() :returns :float)
+				""")).isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("bfloat16 arrays are supported on the interpreter and the JVM only")
+			.hasMessageContaining("the --no-gc backend");
+	}
+
+	// vec:zeros/ones/arange read the width from a literal :element-type pair; before the
+	// dispatch ran through the prototype table a bfloat16 name fell into the DOUBLE
+	// default
+	// and built an eight-byte vector whose numbers differed from the interpreter's. The
+	// refusal belongs where the representation is chosen, and this backend refuses at
+	// COMPILE time like it refuses the literal and make-array above (.kb/bfloat16.md,
+	// "The packed array": interpreter and JVM only).
+	@Test
+	void bfloat16VecConstructorsAreRefusedOnTheNoGcBackend() {
+		assertThatThrownBy(() -> compile("""
+				(defun bv (n) (vec:zeros n :element-type 'bfloat16))
+				(rontolisp:wasm-export 'bv :params '(:int) :returns :int)
+				""")).isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("bfloat16 arrays are supported on the interpreter and the JVM only")
+			.hasMessageContaining("the --no-gc backend");
+	}
+
+	@Test
+	void emitsPlainMvpModuleWithNoGcTypesImportsOrMemory() {
+		byte[] module = compile("""
+				(defun fact (n) (if (<= n 1) 1 (* n (fact (1- n)))))
+				(rontolisp:wasm-export 'fact :params '(:int) :returns :int)
+				""");
+		assertThat(new String(module, 0, 4, StandardCharsets.ISO_8859_1)).isEqualTo("\0asm");
+		Map<Integer, byte[]> sections = sections(module);
+		// No import section (id 2) and no memory section (id 5): instantiable with no
+		// import object and no linear memory.
+		assertThat(sections).doesNotContainKey(2).doesNotContainKey(5);
+		// Type section present and made up only of func types over i32/f64 (no rec group,
+		// no struct/array/i31, no eqref).
+		assertThat(sections).containsKey(1);
+		assertScalarFuncTypes(Objects.requireNonNull(sections.get(1)));
+		// The wrapper is exported under the function name.
+		assertThat(exportNames(Objects.requireNonNull(sections.get(7)))).contains("fact");
+	}
+
+	@Test
+	void floatAndBoolExportsUseScalarSignatures() {
+		byte[] module = compile("""
+				(defun area (r) (* 3.14159 (* r r)))
+				(defun in-range (x) (if (< x 0) nil (if (> x 100) nil t)))
+				(rontolisp:wasm-export 'area :params '(:float) :returns :float)
+				(rontolisp:wasm-export 'in-range :params '(:int) :returns :bool)
+				""");
+		Map<Integer, byte[]> sections = sections(module);
+		assertScalarFuncTypes(Objects.requireNonNull(sections.get(1)));
+		assertThat(exportNames(Objects.requireNonNull(sections.get(7)))).contains("area", "in-range");
+	}
+
+	@Test
+	void infersI64ForIntegerFunctionsAndF64ForFloatFunctions() {
+		// fact: (i64) -> i64 internally, (i32) -> i32 at the host boundary.
+		List<int[][]> intTypes = funcTypes(Objects.requireNonNull(sections(compile("""
+				(defun fact (n) (if (<= n 1) 1 (* n (fact (1- n)))))
+				(rontolisp:wasm-export 'fact :params '(:int) :returns :int)
+				""")).get(1)));
+		// type 0 = internal fact, type 1 = wrapper
+		assertThat(intTypes.get(0)[0]).containsExactly(0x7E); // i64 param
+		assertThat(intTypes.get(0)[1]).containsExactly(0x7E); // i64 result
+		assertThat(intTypes.get(1)[0]).containsExactly(0x7F); // i32 param (host)
+		assertThat(intTypes.get(1)[1]).containsExactly(0x7F); // i32 result (host)
+
+		// area: (f64) -> f64 internally, matching the :float boundary.
+		List<int[][]> floatTypes = funcTypes(Objects.requireNonNull(sections(compile("""
+				(defun area (r) (* 3.14159 (* r r)))
+				(rontolisp:wasm-export 'area :params '(:float) :returns :float)
+				""")).get(1)));
+		assertThat(floatTypes.get(0)[0]).containsExactly(0x7C); // f64 param
+		assertThat(floatTypes.get(0)[1]).containsExactly(0x7C); // f64 result
+	}
+
+	@Test
+	void longBoundaryExportsTheInternalFunctionDirectly() {
+		// :long pins both the internal i64 representation AND the host boundary to i64,
+		// so a wrapper would be a pure pass-through (get_local*n; call; end). No wrapper
+		// is emitted: the export names the internal function itself.
+		byte[] module = compile("""
+				(defun sumsquared (a b) (* (+ a b) (+ a b)))
+				(rontolisp:wasm-export 'sumsquared :params '(:long :long) :returns :long)
+				""");
+		Map<Integer, byte[]> sections = sections(module);
+		List<int[][]> types = funcTypes(Objects.requireNonNull(sections.get(1)));
+		// Exactly one function in the module: the internal (i64,i64) -> i64.
+		assertThat(types).hasSize(1);
+		assertThat(types.get(0)[0]).containsExactly(0x7E, 0x7E); // i64,i64 params
+		assertThat(types.get(0)[1]).containsExactly(0x7E); // i64 result
+		assertThat(functionBodies(Objects.requireNonNull(sections.get(10)))).hasSize(1);
+		assertThat(exportedFuncIndex(Objects.requireNonNull(sections.get(7)), "sumsquared")).isEqualTo(0);
+	}
+
+	@Test
+	void floatBoundaryExportsTheInternalFunctionDirectly() {
+		// :float pins f64 on both sides, so the same pass-through elision applies.
+		byte[] module = compile("""
+				(defun area (r) (* 3.14159 (* r r)))
+				(rontolisp:wasm-export 'area :params '(:float) :returns :float)
+				""");
+		Map<Integer, byte[]> sections = sections(module);
+		assertThat(funcTypes(Objects.requireNonNull(sections.get(1)))).hasSize(1);
+		assertThat(exportedFuncIndex(Objects.requireNonNull(sections.get(7)), "area")).isEqualTo(0);
+	}
+
+	@Test
+	void mixedBoundariesElideOnlyThePassThroughWrapper() {
+		// sumsquared (:long -> :long) is a pass-through and exports the internal
+		// function; fact (:int -> :int) needs wrap/extend marshalling and keeps its
+		// wrapper, which is the sole function after the internals.
+		byte[] module = compile("""
+				(defun sumsquared (a b) (* (+ a b) (+ a b)))
+				(defun fact (n) (if (<= n 1) 1 (* n (fact (1- n)))))
+				(rontolisp:wasm-export 'sumsquared :params '(:long :long) :returns :long)
+				(rontolisp:wasm-export 'fact :params '(:int) :returns :int)
+				""");
+		Map<Integer, byte[]> sections = sections(module);
+		byte[] exports = Objects.requireNonNull(sections.get(7));
+		// 2 internals + 1 wrapper (fact's); sumsquared -> internal 0, fact -> wrapper 2.
+		assertThat(functionBodies(Objects.requireNonNull(sections.get(10)))).hasSize(3);
+		assertThat(exportedFuncIndex(exports, "sumsquared")).isEqualTo(0);
+		assertThat(exportedFuncIndex(exports, "fact")).isEqualTo(2);
+	}
+
+	@Test
+	void longBoundaryOverAFloatResultKeepsTheTruncatingWrapper() {
+		// The internal return type is inferred f64, so the :long boundary needs an
+		// i64.trunc_f64_s conversion -- the wrapper stays. Counted at OptimizeLevel.NONE:
+		// the wrapper is the only caller of `half`, so the default level moves the body
+		// into it and the two bodies this counts become one (the conversion is still
+		// there -- what it is asserting is that the wrapper was EMITTED).
+		byte[] module = compilePlainUnoptimized("""
+				(defun half (a) (/ (float a) 2.0))
+				(rontolisp:wasm-export 'half :params '(:long) :returns :long)
+				""");
+		Map<Integer, byte[]> sections = sections(module);
+		assertThat(functionBodies(Objects.requireNonNull(sections.get(10)))).hasSize(2);
+		assertThat(exportedFuncIndex(Objects.requireNonNull(sections.get(7)), "half")).isEqualTo(1);
+	}
+
+	@Test
+	void anAllocatingModuleKeepsTheHeapResetWrapperForALongExport() {
+		// princ-to-string renders into a fresh heap block, so the call can move the heap
+		// pointer and a scalar-return export keeps its wrapper for the reset even when
+		// the host signature matches the internal one exactly.
+		byte[] module = compile("""
+				(defun withlit (a) (+ a (length (princ-to-string a))))
+				(rontolisp:wasm-export 'withlit :params '(:long) :returns :long)
+				""");
+		Map<Integer, byte[]> sections = sections(module);
+		byte[] wrapper = functionBody(Objects.requireNonNull(sections.get(10)),
+				exportedFuncIndex(Objects.requireNonNull(sections.get(7)), "withlit"));
+		assertThat(containsGlobalReset(wrapper)).as("an allocating :long export keeps the heap-reset wrapper").isTrue();
+	}
+
+	@Test
+	void aLiteralOnlyModuleNeedsNoWrapperForAMatchingLongExport() {
+		// The same export over a module that only READS a literal: memory is used, but
+		// nothing can bump the heap, so there is nothing to reset and the identity
+		// wrapper is elided -- the export names the internal function itself.
+		byte[] module = compile("""
+				(defun withlit (a) (+ a (length "hello")))
+				(rontolisp:wasm-export 'withlit :params '(:long) :returns :long)
+				""");
+		Map<Integer, byte[]> sections = sections(module);
+		assertThat(sections).containsKey(5); // memory (the literal lives there)
+		assertThat(exportedFuncIndex(Objects.requireNonNull(sections.get(7)), "withlit")).isEqualTo(0);
+	}
+
+	@Test
+	void iterationAndLocalMutationCompileToAPlainMvpModule() {
+		// dotimes + a let-bound accumulator mutated by setq: no heap, no GC types, still
+		// a
+		// plain MVP module that exports the function.
+		byte[] module = compile("""
+				(defun sum-upto (n)
+				  (let ((acc 0))
+				    (dotimes (i n) (setq acc (+ acc i)))
+				    acc))
+				(rontolisp:wasm-export 'sum-upto :params '(:int) :returns :int)
+				""");
+		Map<Integer, byte[]> sections = sections(module);
+		assertThat(sections).doesNotContainKey(2).doesNotContainKey(5);
+		assertScalarFuncTypes(Objects.requireNonNull(sections.get(1)));
+		assertThat(exportNames(Objects.requireNonNull(sections.get(7)))).contains("sum-upto");
+	}
+
+	@Test
+	void aFloatAccumulatorWidensTheLocalAndReturnTypeToF64() {
+		// acc starts as an integer 0 but is summed with floats, so the inferred local and
+		// the function's return type widen to f64.
+		// Unoptimized, so the internal function is still its own entry: at --optimize
+		// the single-call-site move folds it into the wrapper and there is only the
+		// host signature left to read.
+		List<int[][]> funcTypes = funcTypes(Objects.requireNonNull(sections(compilePlainUnoptimized("""
+				(defun sumsq (n)
+				  (let ((acc 0))
+				    (dotimes (i n) (setq acc (+ acc (* (float i) (float i)))))
+				    acc))
+				(rontolisp:wasm-export 'sumsq :params '(:int) :returns :float)
+				""")).get(1)));
+		// type 0 = internal sumsq: (i64) -> f64 (param pinned i64, return widened to f64)
+		assertThat(funcTypes.get(0)[0]).containsExactly(0x7E); // i64 param
+		assertThat(funcTypes.get(0)[1]).containsExactly(0x7C); // f64 result
+	}
+
+	@Test
+	void mathBuiltinsCompileToAPlainMvpModule() {
+		byte[] module = compile("""
+				(defun popcount (x)
+				  (let ((c 0))
+				    (do ((v x (ash v -1))) ((= v 0) c)
+				      (setq c (+ c (logand v 1))))))
+				(defun root (x) (sqrt x))
+				(rontolisp:wasm-export 'popcount :params '(:int) :returns :int)
+				(rontolisp:wasm-export 'root :params '(:float) :returns :float)
+				""");
+		Map<Integer, byte[]> sections = sections(module);
+		assertThat(sections).doesNotContainKey(2).doesNotContainKey(5);
+		assertScalarFuncTypes(Objects.requireNonNull(sections.get(1)));
+		assertThat(exportNames(Objects.requireNonNull(sections.get(7)))).contains("popcount", "root");
+	}
+
+	@Test
+	void bitwiseComplementFamilyCompilesToAPlainMvpModule() {
+		byte[] module = compile("""
+				(defun nor-f (x y) (lognor x y))
+				(defun nand-f (x y) (lognand x y))
+				(defun eqv-f (x y z) (logeqv x y z))
+				(defun radix-f (f) (float-radix f))
+				(rontolisp:wasm-export 'nor-f :params '(:int :int) :returns :int)
+				(rontolisp:wasm-export 'nand-f :params '(:int :int) :returns :int)
+				(rontolisp:wasm-export 'eqv-f :params '(:int :int :int) :returns :int)
+				(rontolisp:wasm-export 'radix-f :params '(:float) :returns :int)
+				""");
+		Map<Integer, byte[]> sections = sections(module);
+		assertThat(sections).doesNotContainKey(2).doesNotContainKey(5);
+		assertScalarFuncTypes(Objects.requireNonNull(sections.get(1)));
+		assertThat(exportNames(Objects.requireNonNull(sections.get(7)))).contains("nor-f", "nand-f", "eqv-f",
+				"radix-f");
+	}
+
+	@Test
+	void sliceCLogcountCompilesToAPlainMvpModule() {
+		// logcount lowers to the scalar population-count loop (a negative operand
+		// complemented first), so a program calling it compiles on --no-gc instead
+		// of refusing.
+		byte[] module = compile("""
+				(defun lc-f (n) (logcount n))
+				(rontolisp:wasm-export 'lc-f :params '(:int) :returns :int)
+				""");
+		Map<Integer, byte[]> sections = sections(module);
+		assertThat(sections).doesNotContainKey(2).doesNotContainKey(5);
+		assertScalarFuncTypes(Objects.requireNonNull(sections.get(1)));
+		assertThat(exportNames(Objects.requireNonNull(sections.get(7)))).contains("lc-f");
+	}
+
+	@Test
+	void rejectsIntegerDecodeFloatAndRationalize() {
+		// integer-decode-float's second and third values and rationalize's ratio
+		// answer have no representation in the scalar value model, so both are
+		// refused at compile time like rational -- never a silently dropped value,
+		// never a float masquerading as exact.
+		assertThatThrownBy(() -> compile("""
+				(defun idf-f (f) (integer-decode-float f))
+				(rontolisp:wasm-export 'idf-f :params '(:float) :returns :int)
+				""")).isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("integer-decode-float is not supported")
+			.hasMessageContaining("IDF-F");
+		assertThatThrownBy(() -> compile("""
+				(defun rz-f (x) (rationalize x))
+				(rontolisp:wasm-export 'rz-f :params '(:float) :returns :float)
+				""")).isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("rationalize is not supported")
+			.hasMessageContaining("RZ-F");
+	}
+
+	@Test
+	void rejectsFloatSignAndFloatDigits() {
+		// float-sign's &optional lambda list and float-digits' floatp check have
+		// no scalar lowering, so both are refused at compile time like
+		// integer-decode-float above -- never a trap, never a wrong answer.
+		assertThatThrownBy(() -> compile("""
+				(defun fs-f (f) (float-sign f))
+				(rontolisp:wasm-export 'fs-f :params '(:float) :returns :float)
+				""")).isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("float-sign is not supported")
+			.hasMessageContaining("FS-F");
+		assertThatThrownBy(() -> compile("""
+				(defun fd-f (f) (float-digits f))
+				(rontolisp:wasm-export 'fd-f :params '(:float) :returns :int)
+				""")).isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("float-digits is not supported")
+			.hasMessageContaining("FD-F");
+	}
+
+	@Test
+	void rejectsLdbTest() {
+		// ldb-test rides on ldb, whose expansion reads the bytespec cons back
+		// -- and the scalar value model has no cons -- so it is refused at
+		// compile time like deposit-field's field replacement --
+		// never a trap, never a wrong answer.
+		assertThatThrownBy(() -> compile("""
+				(defun lt-f (bs n) (ldb-test bs n))
+				(rontolisp:wasm-export 'lt-f :params '(:int :int) :returns :bool)
+				""")).isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("ldb-test is not supported")
+			.hasMessageContaining("LT-F");
+	}
+
+	// A global variable is a wasm global, what every backend takes for one: a definer's
+	// name, a name assigned where no binding holds it. A literal no code runs ahead of is
+	// its initial value, so a top level of literals needs no start function; a form that
+	// runs code runs in one, at instantiation.
+	@Test
+	void theTopLevelIsGlobalsAndAStartFunction() {
+		byte[] literals = compile("""
+				(defvar *n* 5)
+				(setq *n* 7)
+				(defun f (x) (setq g (+ x *n*)))
+				(rontolisp:wasm-export 'f :params '(:int) :returns :int)
+				""");
+		// *n* (mutable i64, 7), then g (0): no memory, so no heap pointer ahead of them
+		assertThat(sections(literals).get(6)).containsExactly(2, 0x7E, 1, 0x42, 7, 0x0B, 0x7E, 1, 0x42, 0, 0x0B);
+		assertThat(sections(literals)).doesNotContainKey(8);
+		byte[] running = compile("""
+				(defun seven () 7)
+				(defvar *n* (seven))
+				(print *n*)
+				(defun f (x) (+ x *n*))
+				(rontolisp:wasm-export 'f :params '(:int) :returns :int)
+				""");
+		assertThat(sections(running)).containsKey(8);
+	}
+
+	@Test
+	void rejectsSpecialVariableBinding() {
+		// A special binds dynamically, saved and restored around every way out of its
+		// extent; this backend binds only lexically.
+		assertThatThrownBy(() -> compile("""
+				(defvar *x* 1)
+				(defun f (n) (let ((*x* n)) *x*))
+				(rontolisp:wasm-export 'f :params '(:int) :returns :int)
+				""")).isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("binds the special variable '*X*'");
+	}
+
+	@Test
+	void rejectsListIteration() {
+		// dolist iterates a list (car/cdr), which is ineligible; it is not an expanded
+		// core
+		// form here, so it is rejected as an unsupported operation.
+		assertThatThrownBy(() -> compile("""
+				(defun f (n) (let ((s 0)) (dolist (x (list 1 2 n)) (setq s (+ s x))) s))
+				(rontolisp:wasm-export 'f :params '(:int) :returns :int)
+				""")).isInstanceOf(UnsupportedOperationException.class).hasMessageContaining("DOLIST");
+	}
+
+	@Test
+	void onlyReachableFunctionsAreCompiledSoUnreachedIneligibleCodeIsIgnored() {
+		// `helper` conses (ineligible), but it is not reachable from the single export,
+		// so
+		// the module compiles fine and `helper` is simply dropped.
+		byte[] module = compile("""
+				(defun helper (x) (car (cons x x)))
+				(defun square (x) (* x x))
+				(rontolisp:wasm-export 'square :params '(:int) :returns :int)
+				""");
+		assertThat(exportNames(Objects.requireNonNull(sections(module).get(7)))).containsExactly("square");
+	}
+
+	@Test
+	void rejectsIneligibleOperationReachableFromAnExport() {
+		assertThatThrownBy(() -> compile("""
+				(defun f (n) (car (cons n n)))
+				(rontolisp:wasm-export 'f :params '(:int) :returns :int)
+				""")).isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("CAR")
+			.hasMessageContaining("f");
+	}
+
+	@Test
+	void rejectsComplexNumbers() {
+		// The scalar backend is for pure numeric exports: a complex construction, a
+		// #C literal, or a complex-only operator is a compile-time refusal naming
+		// the form -- never a trap, never a wrong number.
+		assertThatThrownBy(() -> compile("""
+				(defun f (n) (complex n 2))
+				(rontolisp:wasm-export 'f :params '(:int) :returns :int)
+				""")).isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("complex numbers are not supported")
+			.hasMessageContaining("COMPLEX")
+			.hasMessageContaining("f");
+		assertThatThrownBy(() -> compile("""
+				(defun f (n) (+ n #c(1 2)))
+				(rontolisp:wasm-export 'f :params '(:int) :returns :int)
+				""")).isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("complex numbers are not supported")
+			.hasMessageContaining("#C(1 2)");
+		assertThatThrownBy(() -> compile("""
+				(defun f (n) (realpart n))
+				(rontolisp:wasm-export 'f :params '(:int) :returns :int)
+				""")).isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("complex numbers are not supported")
+			.hasMessageContaining("REALPART")
+			.hasMessageContaining("f");
+		assertThatThrownBy(() -> compile("""
+				(defun f (n) (imagpart n))
+				(rontolisp:wasm-export 'f :params '(:int) :returns :int)
+				""")).isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("complex numbers are not supported")
+			.hasMessageContaining("IMAGPART")
+			.hasMessageContaining("f");
+	}
+
+	@Test
+	void rejectsRational() {
+		// The scalar value model (unboxed i64/f64) has no ratio representation,
+		// so rational is refused at compile time -- never a trap, never a
+		// float masquerading as an exact answer.
+		assertThatThrownBy(() -> compile("""
+				(defun f (n) (rational n))
+				(rontolisp:wasm-export 'f :params '(:float) :returns :float)
+				""")).isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("rational numbers are not supported")
+			.hasMessageContaining("RATIONAL")
+			.hasMessageContaining("f");
+	}
+
+	@Test
+	void rejectsFreeVariable() {
+		assertThatThrownBy(() -> compile("""
+				(defun f (n) (+ n missing))
+				(rontolisp:wasm-export 'f :params '(:int) :returns :int)
+				""")).isInstanceOf(UnsupportedOperationException.class).hasMessageContaining("MISSING");
+	}
+
+	@Test
+	void rejectsSexprExportType() {
+		// :string is supported, but :s-expr still needs a cons/reader/printer
+		// runtime and is rejected.
+		assertThatThrownBy(() -> compile("""
+				(defun id (s) s)
+				(rontolisp:wasm-export 'id :params '(:s-expr) :returns :s-expr)
+				""")).isInstanceOf(UnsupportedOperationException.class).hasMessageContaining(":s-expr");
+	}
+
+	@Test
+	void stringExportEmitsLinearMemoryDataAndAllocator() {
+		// A :string-returning export that concatenates literals needs linear memory: the
+		// module now carries a memory (id 5), global (id 6) and data (id 11) section, and
+		// exports the memory + the __ronto_alloc bump allocator alongside the function.
+		byte[] module = compile("""
+				(defun shade (i) (cond ((>= i 10) "#") ((>= i 5) ".") (t " ")))
+				(defun row (n) (let ((out "")) (dotimes (k n) (setq out (concatenate 'string out (shade k)))) out))
+				(rontolisp:wasm-export 'row :params '(:int) :returns :string)
+				""");
+		Map<Integer, byte[]> sections = sections(module);
+		// Still a plain MVP module: no import (id 2) and no wasm-GC rec group.
+		assertThat(sections).doesNotContainKey(2);
+		assertThat(sections).containsKey(5); // memory
+		assertThat(sections).containsKey(6); // global (heap pointer)
+		assertThat(sections).containsKey(11); // data (string literals)
+		assertThat(exportNames(Objects.requireNonNull(sections.get(7)))).contains("row", "memory", "__ronto_alloc");
+	}
+
+	@Test
+	void aStringValuedFunctionInfersAnI32ReturnType() {
+		// concatenate yields a STRING, lowered to an i32 pointer internally; the wrapper
+		// returns the host (ptr,len) pair (two i32 results).
+		byte[] module = compile("""
+				(defun greet () (concatenate 'string "hi " "there"))
+				(rontolisp:wasm-export 'greet :params '() :returns :string)
+				""");
+		List<int[][]> types = funcTypes(Objects.requireNonNull(sections(module).get(1)));
+		// type 0 = internal greet: no params, one i32 (string pointer) result.
+		assertThat(types.get(0)[0]).isEmpty();
+		assertThat(types.get(0)[1]).containsExactly(0x7F); // i32 pointer
+		// type 1 = wrapper: no params, two i32 results (content ptr, length).
+		assertThat(types.get(1)[1]).containsExactly(0x7F, 0x7F);
+	}
+
+	@Test
+	void rejectsProgramWithNoExports() {
+		assertThatThrownBy(() -> compile("(defun f (n) n)")).isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("exports nothing");
+	}
+
+	@Test
+	void rejectsExportOfUnknownFunction() {
+		assertThatThrownBy(() -> compile("(rontolisp:wasm-export 'nope :params '(:int) :returns :int)"))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("unknown function");
+	}
+
+	@Test
+	void rejectsArityMismatch() {
+		assertThatThrownBy(() -> compile("""
+				(defun f (a b) (+ a b))
+				(rontolisp:wasm-export 'f :params '(:int) :returns :int)
+				""")).isInstanceOf(UnsupportedOperationException.class).hasMessageContaining("arity mismatch");
+	}
+
+	@Test
+	void optimizeProducesAValidShapeAndKeepsTheExport() {
+		byte[] module = NoGcWasmCompiler.builder()
+			.optimize(OptimizeLevel.DEFAULT)
+			.build()
+			.compile(LispReader.readAllFromString("""
+					(defun fact (n) (if (<= n 1) 1 (* n (fact (1- n)))))
+					(rontolisp:wasm-export 'fact :params '(:int) :returns :int)
+					"""));
+		Map<Integer, byte[]> sections = sections(module);
+		assertThat(sections).doesNotContainKey(2);
+		assertThat(exportNames(Objects.requireNonNull(sections.get(7)))).contains("fact");
+	}
+
+	@Test
+	void aStringParamAloneCarriesNoHeapReset() {
+		// A :string parameter becomes the internal string in place: the wrapper only
+		// stores the [len] header at ptr - 4 into the four bytes __ronto_alloc
+		// already reserved, so nothing bumps the heap. A body that only reads the
+		// string (length/char never allocate) leaves the module non-allocating, and
+		// the scalar-return wrapper carries no snapshot/restore bracket. Assert both
+		// :int and :long returns.
+		for (String ret : List.of(":int", ":long")) {
+			byte[] module = compile("""
+					(defun count-vowels (s)
+					  (let ((n 0)) (dotimes (i (length s)) (when (char= (char s i) #\\a) (setq n (+ n 1)))) n))
+					(rontolisp:wasm-export 'count-vowels :as "cv" :params '(:string) :returns %s)
+					""".formatted(ret));
+			Map<Integer, byte[]> sections = sections(module);
+			byte[] wrapper = functionBody(Objects.requireNonNull(sections.get(10)),
+					exportedFuncIndex(Objects.requireNonNull(sections.get(7)), "cv"));
+			assertThat(containsGlobalReset(wrapper)).as("read-only :string -> %s wrapper resets nothing", ret)
+				.isFalse();
+		}
+		// ... while a body that allocates behind the same parameter still resets:
+		// concatenate bump-allocates, so the heap can move during the call.
+		byte[] module = compile("""
+				(defun shout-len (s) (length (concatenate 'string s "!")))
+				(rontolisp:wasm-export 'shout-len :params '(:string) :returns :int)
+				""");
+		Map<Integer, byte[]> sections = sections(module);
+		byte[] wrapper = functionBody(Objects.requireNonNull(sections.get(10)),
+				exportedFuncIndex(Objects.requireNonNull(sections.get(7)), "shout-len"));
+		assertThat(containsGlobalReset(wrapper)).as("allocating :string -> :int wrapper still resets heap global 0")
+			.isTrue();
+	}
+
+	@Test
+	void stringReturnExportDoesNotResetTheHeap() {
+		// A :string result is a live heap pointer the host is about to read, so the
+		// wrapper
+		// must NOT reset the heap (that would free the returned string).
+		byte[] module = compile("""
+				(defun echo (s) (concatenate 'string s s))
+				(rontolisp:wasm-export 'echo :params '(:string) :returns :string)
+				""");
+		Map<Integer, byte[]> sections = sections(module);
+		byte[] wrapper = functionBody(Objects.requireNonNull(sections.get(10)),
+				exportedFuncIndex(Objects.requireNonNull(sections.get(7)), "echo"));
+		assertThat(containsGlobalReset(wrapper)).as("wrapper for :string -> :string does not reset the heap").isFalse();
+	}
+
+	@Test
+	void pureNumericExportEmitsNoHeapReset() {
+		// A pure-numeric export has no linear memory at all (no global 0 exists), so no
+		// reset is emitted -- the wrapper carries no snapshot/restore pair at all.
+		byte[] module = compile("""
+				(defun fact (n) (if (<= n 1) 1 (* n (fact (1- n)))))
+				(rontolisp:wasm-export 'fact :params '(:int) :returns :int)
+				""");
+		Map<Integer, byte[]> sections = sections(module);
+		assertThat(sections).doesNotContainKey(6); // no global section
+		byte[] wrapper = functionBody(Objects.requireNonNull(sections.get(10)),
+				exportedFuncIndex(Objects.requireNonNull(sections.get(7)), "fact"));
+		assertThat(containsGlobalReset(wrapper)).as("pure-numeric wrapper has no heap reset").isFalse();
+	}
+
+	@Test
+	void stringModuleExportsTheHostArenaApi() {
+		// A module that uses linear memory exports the two arena functions
+		// (__ronto_alloc_mark / __ronto_alloc_reset) alongside memory and
+		// __ronto_alloc, so a resident host can bracket its own input allocation.
+		byte[] module = compile("""
+				(defun count-vowels (s)
+				  (let ((n 0)) (dotimes (i (length s)) (when (char= (char s i) #\\a) (setq n (+ n 1)))) n))
+				(rontolisp:wasm-export 'count-vowels :as "cv" :params '(:string) :returns :int)
+				""");
+		Map<Integer, byte[]> sections = sections(module);
+		assertThat(exportNames(Objects.requireNonNull(sections.get(7)))).contains("cv", "memory", "__ronto_alloc",
+				"__ronto_alloc_mark", "__ronto_alloc_reset");
+	}
+
+	@Test
+	void pureNumericModuleOmitsTheHostArenaApi() {
+		// No linear memory (no heap-pointer global exists), so neither arena function is
+		// emitted -- a pure-numeric module exports neither the mark nor the reset.
+		byte[] module = compile("""
+				(defun fact (n) (if (<= n 1) 1 (* n (fact (1- n)))))
+				(rontolisp:wasm-export 'fact :params '(:int) :returns :int)
+				""");
+		assertThat(exportNames(Objects.requireNonNull(sections(module).get(7)))).doesNotContain("__ronto_alloc_mark",
+				"__ronto_alloc_reset");
+	}
+
+	@Test
+	void hostArenaApiBodiesAreTheHeapPointerGetAndSet() {
+		// __ronto_alloc_mark is `global.get 0; end` (no locals) and __ronto_alloc_reset
+		// is
+		// `local.get 0; global.set 0; end` (no locals) -- the two halves of a bump-arena
+		// snapshot/restore over heap-pointer global 0.
+		byte[] module = compile("""
+				(defun echo (s) (concatenate 'string s s))
+				(rontolisp:wasm-export 'echo :params '(:string) :returns :string)
+				""");
+		Map<Integer, byte[]> sections = sections(module);
+		byte[] code = Objects.requireNonNull(sections.get(10));
+		byte[] exports = Objects.requireNonNull(sections.get(7));
+		byte[] mark = functionBody(code, exportedFuncIndex(exports, "__ronto_alloc_mark"));
+		byte[] reset = functionBody(code, exportedFuncIndex(exports, "__ronto_alloc_reset"));
+		// [locals=0][global.get 0][end]
+		assertThat(mark).containsExactly(0x00, 0x23, 0x00, 0x0B);
+		// [locals=0][local.get 0][global.set 0][end]
+		assertThat(reset).containsExactly(0x00, 0x20, 0x00, 0x24, 0x00, 0x0B);
+	}
+
+	@Test
+	void exportedRontoAllocReservesTheStringHeader() {
+		// __ronto_alloc is NOT the internal __alloc: it is __alloc(size + 4) + 4, a
+		// one-call wrapper holding four bytes back for the [len] header the export
+		// wrapper stores at ptr - 4. Its own body is
+		// [locals=0][local.get 0][i32.const 4][i32.add][call __alloc]
+		// [i32.const 4][i32.add][end], and it is exported at its own index.
+		byte[] module = compilePlainUnoptimized("""
+				(defun count-vowels (s)
+				  (let ((n 0)) (dotimes (i (length s)) (when (char= (char s i) #\\a) (setq n (+ n 1)))) n))
+				(rontolisp:wasm-export 'count-vowels :as "cv" :params '(:string) :returns :int)
+				""");
+		Map<Integer, byte[]> sections = sections(module);
+		byte[] code = Objects.requireNonNull(sections.get(10));
+		byte[] exports = Objects.requireNonNull(sections.get(7));
+		int alloc = allocFunctionIndex(module);
+		assertThat(alloc).as("a single-byte LEB index keeps the body assertion exact").isLessThan(128);
+		int ronto = exportedFuncIndex(exports, "__ronto_alloc");
+		assertThat(ronto).as("__ronto_alloc is its own function, not the internal __alloc").isNotEqualTo(alloc);
+		assertThat(functionBody(code, ronto)).containsExactly(0x00, 0x20, 0x00, 0x41, 0x04, 0x6A, 0x10, alloc, 0x41,
+				0x04, 0x6A, 0x0B);
+	}
+
+	@Test
+	void stringParamWrapperWritesTheHeaderInPlace() {
+		// The export wrapper for a :string parameter stages nothing: the host's
+		// block becomes the string via one header store at ptr - 4
+		// (`local.get ptr; i32.const 4; i32.sub; local.get len; i32.store`, then the
+		// same ptr - 4 left for the call). No scratch locals (no locals declaration
+		// at all here: the read-only body needs no heap bracket either) and no call
+		// to the allocator or the copy helper.
+		byte[] module = compilePlainUnoptimized("""
+				(defun count-vowels (s)
+				  (let ((n 0)) (dotimes (i (length s)) (when (char= (char s i) #\\a) (setq n (+ n 1)))) n))
+				(rontolisp:wasm-export 'count-vowels :as "cv" :params '(:string) :returns :int)
+				""");
+		Map<Integer, byte[]> sections = sections(module);
+		byte[] wrapper = functionBody(Objects.requireNonNull(sections.get(10)),
+				exportedFuncIndex(Objects.requireNonNull(sections.get(7)), "cv"));
+		assertThat(wrapper[0]).as("one locals run").isEqualTo((byte) 0x01);
+		assertThat(wrapper[1]).as("of one local: the :int return's range-guard scratch").isEqualTo((byte) 0x01);
+		assertThat(wrapper[2]).as("that scratch is an i64").isEqualTo((byte) 0x7E);
+		assertThat(containsSequence(wrapper, 0x20, 0x00, 0x41, 0x04, 0x6B, 0x20, 0x01, 0x36, 0x02, 0x00))
+			.as("the header store at ptr - 4")
+			.isTrue();
+		int alloc = allocFunctionIndex(module);
+		assertThat(callsFunction(wrapper, alloc)).as("the wrapper never calls __alloc").isFalse();
+		assertThat(callsFunction(wrapper, alloc + 1)).as("the wrapper never calls __memcpy").isFalse();
+	}
+
+	// True when the body holds a `call` to the function index: indices here are all
+	// single-byte LEBs, so a two-byte scan is exact.
+	private static boolean callsFunction(byte[] body, int funcIndex) {
+		for (int i = 0; i + 1 < body.length; i++) {
+			if ((body[i] & 0xFF) == 0x10 && (body[i + 1] & 0xFF) == funcIndex) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	@Test
+	void stringIndexingHelpersAreEmittedOnlyWhenUsed() {
+		// The UTF-8 code-point helpers (__strlen_cp, __byte_offset, __char_at) are gated
+		// per operator, the way printUsed/ftoaUsed gate the print and float-render
+		// helpers: a module that only moves text carries none of them, while each
+		// indexing operator pulls in exactly its helper family (__char_at is built on
+		// __byte_offset, so char costs two). OptimizeLevel.NONE out loud, so the
+		// tree shaker and the single-call-site move cannot fold or drop anything:
+		// each program is one internal plus its wrapper, and the counts differ by
+		// exactly the helpers.
+		byte[] concatOnly = compilePlainUnoptimized("""
+				(defun shout (s) (concatenate 'string s "!"))
+				(rontolisp:wasm-export 'shout :params '(:string) :returns :string)
+				""");
+		byte[] withSubseq = compilePlainUnoptimized("""
+				(defun tail (s) (subseq s 1))
+				(rontolisp:wasm-export 'tail :params '(:string) :returns :string)
+				""");
+		byte[] stringEqOnly = compilePlainUnoptimized("""
+				(defun isx (s) (if (string= s "x") 1 0))
+				(rontolisp:wasm-export 'isx :params '(:string) :returns :int)
+				""");
+		byte[] withLength = compilePlainUnoptimized("""
+				(defun width (s) (length s))
+				(rontolisp:wasm-export 'width :params '(:string) :returns :int)
+				""");
+		byte[] withChar = compilePlainUnoptimized("""
+				(defun first-code (s) (char-code (char s 0)))
+				(rontolisp:wasm-export 'first-code :params '(:string) :returns :int)
+				""");
+		int stringBaseline = functionCount(Objects.requireNonNull(sections(concatOnly).get(10)));
+		assertThat(functionCount(Objects.requireNonNull(sections(withSubseq).get(10)))).isEqualTo(stringBaseline + 1);
+		int intBaseline = functionCount(Objects.requireNonNull(sections(stringEqOnly).get(10)));
+		assertThat(functionCount(Objects.requireNonNull(sections(withLength).get(10)))).isEqualTo(intBaseline + 1);
+		assertThat(functionCount(Objects.requireNonNull(sections(withChar).get(10)))).isEqualTo(intBaseline + 2);
+		// The helpers reuse the __alloc/__streq shapes, so no type-section entry is
+		// added for them, and every type stays a plain numeric one.
+		assertScalarFuncTypes(Objects.requireNonNull(sections(withChar).get(1)));
+	}
+
+	@Test
+	void lengthOverAPackedVectorNeedsNoCodePointHelper() {
+		// A generic (length v) over a packed float vector still reads the
+		// element-count header inline: only a string length gates __strlen_cp. Both
+		// programs are one internal plus its wrapper over the four memory helpers
+		// (OptimizeLevel.NONE, so nothing is folded or dropped), and their
+		// code-section function counts match exactly.
+		byte[] vecLength = compilePlainUnoptimized("""
+				(defun width (n) (length (vec:ones n)))
+				(rontolisp:wasm-export 'width :params '(:int) :returns :int)
+				""");
+		byte[] vecSum = compilePlainUnoptimized("""
+				(defun total (n) (truncate (vec:sum (vec:ones n))))
+				(rontolisp:wasm-export 'total :params '(:int) :returns :int)
+				""");
+		assertThat(functionCount(Objects.requireNonNull(sections(vecLength).get(10))))
+			.isEqualTo(functionCount(Objects.requireNonNull(sections(vecSum).get(10))));
+	}
+
+	// --- module surface: types, the arena API, wrappers, literals ----------------------
+
+	@Test
+	void theTypeSectionWritesEachSignatureOnce() {
+		// A wasm function type is structural, so functions of the same shape share one
+		// entry: three (i64, i64) -> i64 internals, one type. The export is a
+		// pass-through (nothing marshals, nothing allocates), so it adds no wrapper and
+		// no host type either.
+		//
+		// OptimizeLevel.NONE out loud: this is what the EMITTER writes, and `add`/`mul`
+		// have one call site each, so the default level moves both into `combine` and
+		// there is one function left to name a type.
+		byte[] module = compilePlainUnoptimized("""
+				(defun add (a b) (+ a b))
+				(defun mul (a b) (* a b))
+				(defun combine (a b) (+ (add a b) (mul a b)))
+				(rontolisp:wasm-export 'combine :params '(:long :long) :returns :long)
+				""");
+		Map<Integer, byte[]> sections = sections(module);
+		assertThat(funcTypes(Objects.requireNonNull(sections.get(1)))).hasSize(1);
+		// Three functions, all naming type 0.
+		assertThat(Objects.requireNonNull(sections.get(3))).containsExactly(0x03, 0x00, 0x00, 0x00);
+	}
+
+	@Test
+	void distinctSignaturesStillGetTheirOwnTypeEntry() {
+		// The other half of the dedup: two shapes, two entries, and each function names
+		// the one that describes it. OptimizeLevel.NONE for the same reason as its twin
+		// above -- `twice` has one call site.
+		byte[] module = compilePlainUnoptimized("""
+				(defun twice (a) (* a 2))
+				(defun sum (a b) (+ (twice a) b))
+				(rontolisp:wasm-export 'sum :params '(:long :long) :returns :long)
+				""");
+		Map<Integer, byte[]> sections = sections(module);
+		assertThat(funcTypes(Objects.requireNonNull(sections.get(1)))).hasSize(2);
+	}
+
+	@Test
+	void aModuleThatOnlyPassesItsOwnLiteralsOutOmitsTheArenaApi() {
+		// The host-facing reactor shape: string literals cross OUT to an import as the
+		// (ptr,len) of a block this module already owns. The host never allocates in
+		// here and nothing in here bumps the heap, so the three arena entry points are
+		// an API the boundary cannot use -- only `memory` (which the host reads the
+		// literal through) is exported beside the function.
+		byte[] module = compile("""
+				(rontolisp:wasm-import 'js-log :from "env" :as "log" :params '(:string) :returns nil)
+				(defun greet () (js-log "hello"))
+				(rontolisp:wasm-export 'greet :as "Greet" :params '() :returns nil)
+				""");
+		List<String> exports = exportNames(Objects.requireNonNull(sections(module).get(7)));
+		assertThat(exports).contains("Greet", "memory")
+			.doesNotContain("__ronto_alloc", "__ronto_alloc_mark", "__ronto_alloc_reset");
+	}
+
+	@Test
+	void aStringReturningImportKeepsTheArenaApi() {
+		// The host writes the result bytes into THIS module's memory before handing back
+		// (ptr,len), and the allocator it reserves them with is the exported one -- so
+		// an import's :string RESULT keeps the arena API even though no export mentions
+		// a string.
+		byte[] module = compile("""
+				(rontolisp:wasm-import 'js-name :from "env" :as "name" :params '() :returns :string)
+				(defun name-length () (length (js-name)))
+				(rontolisp:wasm-export 'name-length :as "NameLength" :params '() :returns :int)
+				""");
+		assertThat(exportNames(Objects.requireNonNull(sections(module).get(7)))).contains("NameLength", "memory",
+				"__ronto_alloc", "__ronto_alloc_mark", "__ronto_alloc_reset");
+		// A program holding the arena fields keeps it too, for a host to answer through
+		// out-pointers, unless the host has the program's own allocator export instead.
+		String memory = """
+				(rontolisp:wasm-import 'mem-alloc :from "rontolisp:memory" :as "alloc" :params '(:u32) :returns :u32)
+				(defun cell () (mem-alloc 8))
+				(rontolisp:wasm-export 'cell :as "Cell" :params '() :returns :u32)
+				""";
+		assertThat(exportNames(Objects.requireNonNull(sections(compile(memory)).get(7)))).contains("Cell", "memory",
+				"__ronto_alloc", "__ronto_alloc_mark", "__ronto_alloc_reset");
+		assertThat(exportNames(Objects.requireNonNull(sections(compile(memory + """
+				(defun allocate (size) (mem-alloc size))
+				(rontolisp:wasm-export 'allocate :as "Allocate" :params '(:u32) :returns :u32)
+				""")).get(7)))).contains("Cell", "Allocate", "memory")
+			.doesNotContain("__ronto_alloc", "__ronto_alloc_mark", "__ronto_alloc_reset");
+	}
+
+	@Test
+	void aWrapperThatCannotAllocateCarriesNoHeapBracket() {
+		// The scalar auto-reset exists to undo allocation during the call. A module
+		// whose only use of memory is reading its own literals has no call site that can
+		// move the heap pointer, so the wrapper saves and restores nothing.
+		byte[] module = compile("""
+				(defun report (n) (+ n (length "tick")))
+				(rontolisp:wasm-export 'report :as "Report" :params '(:s32) :returns :s32)
+				""");
+		Map<Integer, byte[]> sections = sections(module);
+		byte[] wrapper = functionBody(Objects.requireNonNull(sections.get(10)),
+				exportedFuncIndex(Objects.requireNonNull(sections.get(7)), "Report"));
+		assertThat(containsGlobalReset(wrapper)).as("nothing allocates, so nothing is reset").isFalse();
+	}
+
+	@Test
+	void aVoidImportCallLeavesNothingForItsCallerToDrop() {
+		// The import answers nothing, so its wrapper's type is (i64) -> () and the call
+		// site pushes nothing: neither the i64 zero the wrapper used to invent for a
+		// statement nor the drop that immediately undid it is emitted.
+		byte[] module = compilePlainUnoptimized("""
+				(rontolisp:wasm-import 'ping :from "host" :as "ping" :params '(:long) :returns :void)
+				(defun go (n) (ping n) (ping (+ n 1)) n)
+				(rontolisp:wasm-export 'go :params '(:long) :returns :long)
+				""");
+		Map<Integer, byte[]> sections = sections(module);
+		List<int[][]> types = funcTypes(Objects.requireNonNull(sections.get(1)));
+		// go is (i64) -> i64 (it still answers its own value); the import's forwarder,
+		// which used to be (i64) -> i64 too, now answers nothing.
+		assertThat(types.get(0)[1]).containsExactly(0x7E);
+		assertThat(types).anySatisfy(type -> {
+			assertThat(type[0]).containsExactly(0x7E);
+			assertThat(type[1]).isEmpty();
+		});
+		assertThat(containsSequence(localFunctionBody(module, "go"), 0x1A)).as("nothing to drop").isFalse();
+	}
+
+	@Test
+	void aVoidBodyMakesAVoidExportAPassThrough() {
+		// The void half of the pass-through rule: notify's own last form answers
+		// nothing, so the internal function is already the () -> () the :void export
+		// needs and the wrapper that existed only to drop the i64 zero is gone.
+		byte[] module = compile("""
+				(rontolisp:wasm-import 'ping :from "host" :as "ping" :params '(:long) :returns :void)
+				(defun notify () (ping 1) (ping 2))
+				(rontolisp:wasm-export 'notify :as "Notify" :params '() :returns :void)
+				""");
+		Map<Integer, byte[]> sections = sections(module);
+		assertThat(funcTypes(Objects.requireNonNull(sections.get(1))))
+			.allSatisfy(type -> assertThat(type[1]).as("no function in the module answers a value").isEmpty());
+		// Two internals (notify and the ping forwarder) behind the one host import, and
+		// no wrapper: the export names notify itself.
+		assertThat(functionBodies(Objects.requireNonNull(sections.get(10)))).hasSize(2);
+		assertThat(exportedFuncIndex(Objects.requireNonNull(sections.get(7)), "Notify")).isEqualTo(1);
+	}
+
+	@Test
+	void theDeadNilOfACondTArmDoesNotDragAVoidChainBackToAnInteger() {
+		// The macro expander ends every cond in `(if t ... nil)`. That nil is dead --
+		// the constant test has already decided the branch -- so it must not join an
+		// all-void chain back up to INT and put the zero it stands for into every arm.
+		byte[] module = compilePlainUnoptimized("""
+				(rontolisp:wasm-import 'ping :from "host" :as "ping" :params '(:long) :returns :void)
+				(defun dispatch (n)
+				  (cond ((= n 1) (ping 10))
+				        ((= n 2) (ping 20))
+				        (t (ping 30))))
+				(rontolisp:wasm-export 'dispatch :params '(:long) :returns :void)
+				""");
+		byte[] body = localFunctionBody(module, "dispatch");
+		assertThat(containsSequence(body, 0x04, 0x40)).as("if with the empty blocktype").isTrue();
+		assertThat(containsSequence(body, 0x04, 0x7E)).as("no arm carries an i64 result").isFalse();
+	}
+
+	@Test
+	void aWhileLoopPushesNothingForTheFormAfterItToDrop() {
+		// while is VOID: the nil the other backends answer here is never read, so the
+		// loop's two ENDs are followed straight by the next form rather than by the
+		// i64 zero and the drop that undid it.
+		byte[] module = compilePlainUnoptimized("""
+				(defun count-up (n)
+				  (let ((i 0))
+				    (while (< i n) (setq i (+ i 1)))
+				    i))
+				(rontolisp:wasm-export 'count-up :params '(:long) :returns :long)
+				""");
+		assertThat(containsSequence(localFunctionBody(module, "count-up"), 0x0B, 0x0B, 0x42, 0x00, 0x1A))
+			.as("loop end, then nil, then drop")
+			.isFalse();
+	}
+
+	@Test
+	void aComparisonFeedsTheBranchWithoutBeingWidenedFirst() {
+		// `if` consumes an i32 condition and a comparison produces exactly that, so the
+		// widening into the i64 value domain (and the `!= 0` that would undo it) is not
+		// emitted: i64.lt_s (0x53) is followed directly by if (0x04) with an i64 result
+		// type (0x7E).
+		byte[] module = compile("""
+				(defun classify (n) (if (< n 10) 1 2))
+				(rontolisp:wasm-export 'classify :params '(:long) :returns :long)
+				""");
+		Map<Integer, byte[]> sections = sections(module);
+		byte[] body = functionBody(Objects.requireNonNull(sections.get(10)),
+				exportedFuncIndex(Objects.requireNonNull(sections.get(7)), "classify"));
+		assertThat(containsSequence(body, 0x53, 0x04, 0x7E)).as("i64.lt_s feeds if directly").isTrue();
+		// i64.extend_i32_s (0xAC) followed by the i64.const 0 / i64.ne truthiness test.
+		assertThat(containsSequence(body, 0xAC, 0x42, 0x00, 0x52)).as("no widen-and-compare-back").isFalse();
+	}
+
+	@Test
+	void theConstantTrueArmOfACondEmitsNoTest() {
+		// cond's final (t ...) arm expands to (if t ... nil). The test is decided here,
+		// not at run time, so the body carries neither the constant-true test
+		// (i64.const 1; i64.const 0; i64.ne) nor a branch for it.
+		byte[] module = compile("""
+				(defun pick (n) (cond ((= n 1) 10) ((= n 2) 20) (t 30)))
+				(rontolisp:wasm-export 'pick :params '(:long) :returns :long)
+				""");
+		Map<Integer, byte[]> sections = sections(module);
+		byte[] body = functionBody(Objects.requireNonNull(sections.get(10)),
+				exportedFuncIndex(Objects.requireNonNull(sections.get(7)), "pick"));
+		assertThat(containsSequence(body, 0x42, 0x01, 0x42, 0x00, 0x52)).as("no constant-true test").isFalse();
+	}
+
+	@Test
+	void stringLiteralsArePackedWithoutAlignmentPadding() {
+		// Each literal is [len:i32 LE][bytes] laid out back to back. The only aligned
+		// access into one is the i32.load that reads the length, whose alignment
+		// immediate is a HINT in wasm -- so an odd-length literal costs its own bytes
+		// and nothing more. Both literals are read as VALUES (length), which is what
+		// gives them a header to pack.
+		byte[] module = compile("""
+				(defun emit () (+ (length "abc") (length "de")))
+				(rontolisp:wasm-export 'emit :as "Emit" :params '() :returns :int)
+				""");
+		byte[] data = Objects.requireNonNull(sections(module).get(11));
+		assertThat(containsBytes(data, new byte[] { 3, 0, 0, 0, 'a', 'b', 'c', 2, 0, 0, 0, 'd', 'e' }))
+			.as("the two literals sit back to back, no padding between them")
+			.isTrue();
+	}
+
+	@Test
+	void aLiteralOnlyFoldedImportSitesReadCarriesNoLengthHeader() {
+		// A folded import call site pushes a literal's content address and byte length
+		// as two constants and never reads a [len] header, so a literal that appears
+		// nowhere else is laid out as its bytes alone: five bytes, not thirteen.
+		byte[] module = compile("""
+				(rontolisp:wasm-import 'js-log :from "env" :as "log" :params '(:string) :returns nil)
+				(defun emit () (progn (js-log "abc") (js-log "de")))
+				(rontolisp:wasm-export 'emit :as "Emit" :params '() :returns nil)
+				""");
+		byte[] data = Objects.requireNonNull(sections(module).get(11));
+		assertThat(containsBytes(data, new byte[] { 'a', 'b', 'c', 'd', 'e' })).as("raw bytes, back to back").isTrue();
+		assertThat(containsBytes(data, new byte[] { 3, 0, 0, 0, 'a', 'b', 'c' })).as("no header before \"abc\"")
+			.isFalse();
+	}
+
+	@Test
+	void aLiteralAlsoReadAsAValueKeepsItsLengthHeader() {
+		// One spelling is one block. "abc" is folded at the import site AND read by
+		// length, so it keeps its header (the folded site points past it); "de" is only
+		// folded, so it has none.
+		byte[] module = compile("""
+				(rontolisp:wasm-import 'js-log :from "env" :as "log" :params '(:string) :returns nil)
+				(defun emit () (progn (js-log "abc") (js-log "de") (length "abc")))
+				(rontolisp:wasm-export 'emit :as "Emit" :params '() :returns :int)
+				""");
+		byte[] data = Objects.requireNonNull(sections(module).get(11));
+		assertThat(containsBytes(data, new byte[] { 3, 0, 0, 0, 'a', 'b', 'c', 'd', 'e' }))
+			.as("\"abc\" headered, \"de\" bare right behind it")
+			.isTrue();
+	}
+
+	@Test
+	void aRuntimeFragmentSharedWithAFoldedSiteDropsItsHeaderLikeAProgramLiteral() {
+		// The printer writes "NIL" as a region (two constants), so a folded site passing
+		// the same spelling is another region-only use: the shared block carries no
+		// header. Only the fragments the helpers hand out as HEADER pointers stay pinned
+		// (princToStringOfABooleanKeepsBothHeaders, and __ftoa's specials).
+		byte[] module = compile("""
+				(rontolisp:wasm-import 'js-log :from "env" :as "log" :params '(:string) :returns nil)
+				(defun emit () (progn (js-log "NIL") (print nil)))
+				(rontolisp:wasm-export 'emit :as "Emit" :params '() :returns nil)
+				""");
+		byte[] data = Objects.requireNonNull(sections(module).get(11));
+		assertThat(containsBytes(data, new byte[] { 3, 0, 0, 0, 'N', 'I', 'L' }))
+			.as("no header: both uses are region-only")
+			.isFalse();
+		assertThat(containsBytes(data, new byte[] { 'N', 'I', 'L', '\n' })).isTrue();
+	}
+
+	@Test
+	void princToStringOfABooleanKeepsBothHeaders() {
+		// princ-to-string of a boolean answers the static header, so T/NIL stay pinned
+		// headered even though a print of the same spelling would drop it.
+		byte[] module = compile("""
+				(defun render (b) (princ-to-string (> b 0)))
+				(rontolisp:wasm-export 'render :params '(:long) :returns :string)
+				""");
+		byte[] data = Objects.requireNonNull(sections(module).get(11));
+		assertThat(containsBytes(data, new byte[] { 1, 0, 0, 0, 'T' })).isTrue();
+		assertThat(containsBytes(data, new byte[] { 3, 0, 0, 0, 'N', 'I', 'L' })).isTrue();
+	}
+
+	@Test
+	void aStatementPrincOfALiteralWritesTwoConstants() {
+		// (princ "Hi") in statement position writes its region as two constants --
+		// the same lowering terpri's "\n" uses -- leaving nothing behind, so the
+		// body carries no DROP (0x1A) and no i32.load (0x28) reading a length
+		// header, and the spelling is laid out header-free. Unoptimized: the
+		// default level may inline the defun into its wrapper.
+		byte[] module = compilePlainUnoptimized("""
+				(defun main () (princ "Hi") (terpri))
+				(rontolisp:wasm-export 'main :as "main" :params '() :returns nil)
+				""");
+		byte[] body = internalFunctionBody(module);
+		assertThat(containsSequence(body, 0x1A)).as("no drop: the statement leaves nothing").isFalse();
+		assertThat(containsSequence(body, 0x28)).as("no i32.load: no length header is read").isFalse();
+		byte[] data = Objects.requireNonNull(sections(module).get(11));
+		assertThat(containsBytes(data, new byte[] { 'H', 'i', '\n' }))
+			.as("\"Hi\" and the runtime \"\\n\" both header-free, back to back")
+			.isTrue();
+		assertThat(containsBytes(data, new byte[] { 2, 0, 0, 0, 'H', 'i' })).as("no header before \"Hi\"").isFalse();
+	}
+
+	@Test
+	void aValuePositionPrincOfALiteralWritesTwoConstantsAndLeavesTheValue() {
+		// princ answers its argument: as the last form of a function whose result
+		// is used, (princ "Hi") writes two constants like a statement site but
+		// leaves the header address behind as the value -- so the body reads no
+		// length (no i32.load, 0x28) and the spelling keeps its header.
+		// Unoptimized: the default level may inline the defun into its wrapper.
+		byte[] module = compilePlainUnoptimized("""
+				(defun f () (princ "Hi"))
+				(rontolisp:wasm-export 'f :as "f" :params '() :returns :string)
+				""");
+		byte[] body = internalFunctionBody(module);
+		assertThat(containsSequence(body, 0x28)).as("no i32.load: the write is two constants").isFalse();
+		byte[] data = Objects.requireNonNull(sections(module).get(11));
+		assertThat(containsBytes(data, new byte[] { 2, 0, 0, 0, 'H', 'i' }))
+			.as("\"Hi\" keeps its header: the value is the header address")
+			.isTrue();
+	}
+
+	@Test
+	void aPrincAsTheLastFormOfAVoidExportWritesTwoConstantsAndLeavesTheValue() {
+		// The last form answers the function result even under :void (the wrapper
+		// drops it), so it is a value position, not a statement: two constants
+		// plus the header address, and the header stays. Unoptimized: the default
+		// level may inline the defun into its wrapper.
+		byte[] module = compilePlainUnoptimized("""
+				(defun main () (princ "Hi"))
+				(rontolisp:wasm-export 'main :as "main" :params '() :returns nil)
+				""");
+		byte[] body = internalFunctionBody(module);
+		assertThat(containsSequence(body, 0x28)).as("no i32.load: the write is two constants").isFalse();
+		byte[] data = Objects.requireNonNull(sections(module).get(11));
+		assertThat(containsBytes(data, new byte[] { 2, 0, 0, 0, 'H', 'i' })).as("\"Hi\" keeps its header").isTrue();
+	}
+
+	@Test
+	void aComputedBooleanPrintsTAndNilByName() {
+		// A computed boolean is a BOOL, not an INT: princ of (> n 0) branches to the
+		// T/NIL regions where an INT would render digits through __itoa -- so the body
+		// reads no length header (no i32.load, 0x28) and the pool carries only the
+		// newline and the two names, all header-free, back to back.
+		byte[] module = compilePlainUnoptimized("""
+				(defun main (n) (princ (> n 0)) (terpri))
+				(rontolisp:wasm-export 'main :as "main" :params '(:long) :returns nil)
+				""");
+		byte[] body = internalFunctionBody(module);
+		assertThat(containsSequence(body, 0x28)).as("no i32.load: the names are regions").isFalse();
+		byte[] data = Objects.requireNonNull(sections(module).get(11));
+		assertThat(containsBytes(data, new byte[] { '\n', 'T', 'N', 'I', 'L' })).isTrue();
+		assertThat(containsBytes(data, new byte[] { 1, 0, 0, 0, 'T' })).as("no header before T").isFalse();
+		assertThat(containsBytes(data, new byte[] { 3, 0, 0, 0, 'N', 'I', 'L' })).as("no header before NIL").isFalse();
+	}
+
+	@Test
+	void aPrincOnlyModuleOmitsTheQuoteAndBooleanFragments() {
+		// Each of the five print-pool fragments arrives on first use: a princ-only
+		// module needs the newline and nothing else -- no quotes, no backslash, no T,
+		// no NIL.
+		byte[] module = compile("""
+				(defun main () (princ "hi") (terpri))
+				(rontolisp:wasm-export 'main :as "main" :params '() :returns nil)
+				""");
+		byte[] data = Objects.requireNonNull(sections(module).get(11));
+		assertThat(containsBytes(data, new byte[] { 'h', 'i', '\n' })).isTrue();
+		assertThat(containsBytes(data, new byte[] { '"' })).as("no quote fragment").isFalse();
+		assertThat(containsBytes(data, new byte[] { '\\' })).as("no escape fragment").isFalse();
+		assertThat(containsBytes(data, new byte[] { 'T' })).as("no T fragment").isFalse();
+		assertThat(containsBytes(data, new byte[] { 'N', 'I', 'L' })).as("no NIL fragment").isFalse();
+	}
+
+	@Test
+	void aPrintOfAStringNeedsQuotesButNoBooleanFragments() {
+		// print of a string frames it in quotes and scans escapes, so the quote and
+		// backslash fragments are live -- but T/NIL are still dead: nothing prints a
+		// boolean.
+		byte[] module = compile("""
+				(defun main () (print "hi") (terpri))
+				(rontolisp:wasm-export 'main :as "main" :params '() :returns nil)
+				""");
+		byte[] data = Objects.requireNonNull(sections(module).get(11));
+		assertThat(containsBytes(data, new byte[] { 2, 0, 0, 0, 'h', 'i' })).as("\"hi\" keeps its header").isTrue();
+		assertThat(containsBytes(data, new byte[] { '"' })).isTrue();
+		assertThat(containsBytes(data, new byte[] { '\\' })).isTrue();
+		assertThat(containsBytes(data, new byte[] { 'T' })).as("no T fragment").isFalse();
+		assertThat(containsBytes(data, new byte[] { 'N', 'I', 'L' })).as("no NIL fragment").isFalse();
+	}
+
+	@Test
+	void aLiteralOnlyPrintingModuleCarriesNoHeapBracketAndNoHeapGlobal() {
+		// Nothing in a folded-literal printing module bumps the heap: __write writes
+		// the iovec into fixed scratch and neither literal is allocated -- so no wrapper
+		// carries the mark/reset bracket, and with the bracket gone nothing reads the
+		// heap pointer at all and the global section goes too. The :void export names
+		// the internal function directly.
+		byte[] module = compile("""
+				(defun main () (princ "Hello, World!") (terpri))
+				(rontolisp:wasm-export 'main :as "main" :params '() :returns nil)
+				""");
+		Map<Integer, byte[]> secs = sections(module);
+		assertThat(secs).doesNotContainKey(6);
+		// The internal function plus the __write_stdout funnel it calls -- and nothing
+		// else: the allocator family drops out through the tree shaker.
+		assertThat(functionBodies(Objects.requireNonNull(secs.get(10)))).hasSize(2);
+		for (byte[] body : functionBodies(Objects.requireNonNull(secs.get(10)))) {
+			assertThat(containsGlobalReset(body)).as("nothing allocates, so nothing is reset").isFalse();
+		}
+		assertThat(exportedFuncIndex(Objects.requireNonNull(secs.get(7)), "main")).isEqualTo(1);
+	}
+
+	@Test
+	void printOfALiteralKeepsTheGenericPath() {
+		// print frames the text in quotes and escapes embedded " / \, which is a
+		// run loop over the bytes (i32.load8_u, 0x2D), not one literal write: the
+		// spelling keeps its header even in statement position. Unoptimized: the
+		// default level may inline the defun into its wrapper.
+		byte[] module = compilePlainUnoptimized("""
+				(defun main () (print "Hi") (terpri))
+				(rontolisp:wasm-export 'main :as "main" :params '() :returns nil)
+				""");
+		byte[] body = internalFunctionBody(module);
+		assertThat(containsSequence(body, 0x2D)).as("the escape scan reads bytes").isTrue();
+		byte[] data = Objects.requireNonNull(sections(module).get(11));
+		assertThat(containsBytes(data, new byte[] { 2, 0, 0, 0, 'H', 'i' })).as("\"Hi\" keeps its header").isTrue();
+	}
+
+	@Test
+	void aLiteralPrintedAndReadAsAValueKeepsItsLengthHeader() {
+		// "abc" is folded at the statement princ but also read by length, so it
+		// keeps its header and the folded site points past it.
+		byte[] module = compile("""
+				(defun emit () (progn (princ "abc") (length "abc")))
+				(rontolisp:wasm-export 'emit :as "Emit" :params '() :returns :int)
+				""");
+		byte[] data = Objects.requireNonNull(sections(module).get(11));
+		assertThat(containsBytes(data, new byte[] { 3, 0, 0, 0, 'a', 'b', 'c' })).as("\"abc\" keeps its header")
+			.isTrue();
+	}
+
+	@Test
+	void aLiteralPrintedAndPassedToAFoldedImportCarriesNoLengthHeader() {
+		// "abc" is only ever pushed as two constants -- at the folded import site
+		// and at the statement princ -- so it carries no header; "de" is read by
+		// length, so it keeps its own.
+		byte[] module = compile("""
+				(rontolisp:wasm-import 'js-log :from "env" :as "log" :params '(:string) :returns nil)
+				(defun emit () (progn (js-log "abc") (princ "abc") (length "de")))
+				(rontolisp:wasm-export 'emit :as "Emit" :params '() :returns :int)
+				""");
+		byte[] data = Objects.requireNonNull(sections(module).get(11));
+		assertThat(containsBytes(data, new byte[] { 3, 0, 0, 0, 'a', 'b', 'c' })).as("no header before \"abc\"")
+			.isFalse();
+		assertThat(containsBytes(data, new byte[] { 2, 0, 0, 0, 'd', 'e' })).as("\"de\" keeps its header").isTrue();
+	}
+
+	// --- print / stdout --------------------------------------------------------------
+
+	// The exact import-section payload a printing module must carry: exactly one entry,
+	// (import "wasi_snapshot_preview1" "fd_write" (func (type 0))).
+	private static byte[] fdWriteImportSection() {
+		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		out.write(0x01); // one import
+		byte[] module = "wasi_snapshot_preview1".getBytes(StandardCharsets.UTF_8);
+		out.write(module.length);
+		out.writeBytes(module);
+		byte[] field = "fd_write".getBytes(StandardCharsets.UTF_8);
+		out.write(field.length);
+		out.writeBytes(field);
+		out.write(0x00); // external kind: function
+		out.write(0x00); // type index 0
+		return out.toByteArray();
+	}
+
+	@Test
+	void printGatesTheFdWriteImportOnAndOff() {
+		// The SAME defun with and without the print: only the printing build gains an
+		// import section, and its bytes are exactly the single fd_write entry. This pins
+		// the contract in both directions: a print-free program keeps ZERO imports
+		// (the foundation of the adapter-free --no-gc component), a printing program
+		// imports exactly wasi_snapshot_preview1.fd_write.
+		byte[] printing = compile("""
+				(defun show (n) (print n) n)
+				(rontolisp:wasm-export 'show :params '(:int) :returns :int)
+				""");
+		byte[] silent = compile("""
+				(defun show (n) n)
+				(rontolisp:wasm-export 'show :params '(:int) :returns :int)
+				""");
+		assertThat(sections(silent)).doesNotContainKey(2);
+		byte[] importSection = Objects.requireNonNull(sections(printing).get(2));
+		assertThat(importSection).containsExactly(fdWriteImportSection());
+	}
+
+	@Test
+	void printingModuleStillRunsThroughStringMachineryAndExportsWork() {
+		// print of int/float/string/bool literals and princ/terpri all compile; the
+		// module keeps the memory + allocator machinery and the export under its name.
+		byte[] module = compile("""
+				(defun show (n)
+				  (print n)
+				  (print 3.14)
+				  (print "hello")
+				  (princ "bare")
+				  (print t)
+				  (print nil)
+				  (terpri)
+				  n)
+				(rontolisp:wasm-export 'show :params '(:int) :returns :int)
+				""");
+		Map<Integer, byte[]> sections = sections(module);
+		assertThat(sections).containsKey(2).containsKey(5);
+		// The memory is exported; the arena API is not. Printing allocates (__itoa /
+		// __ftoa render into fresh blocks) but nothing crosses the BOUNDARY in memory,
+		// so there is no host buffer to place and no result pointer to pop.
+		assertThat(exportNames(Objects.requireNonNull(sections.get(7)))).contains("show", "memory")
+			.doesNotContain("__ronto_alloc", "__ronto_alloc_mark", "__ronto_alloc_reset");
+	}
+
+	@Test
+	void fdWriteImportShiftsEveryFunctionIndexByOne() {
+		// The import occupies function index 0, so the exported wrapper of the FIRST
+		// program sits one above the print-free build's -- all index math flows through
+		// the Mem.funcIndex accessor.
+		byte[] printing = compile("""
+				(defun show (n) (print n) n)
+				(rontolisp:wasm-export 'show :params '(:int) :returns :int)
+				""");
+		byte[] silent = compile("""
+				(defun show (n) (princ-to-string n) n)
+				(rontolisp:wasm-export 'show :params '(:int) :returns :int)
+				""");
+		int printingIndex = exportedFuncIndex(Objects.requireNonNull(sections(printing).get(7)), "show");
+		int silentIndex = exportedFuncIndex(Objects.requireNonNull(sections(silent).get(7)), "show");
+		assertThat(printingIndex).isEqualTo(silentIndex + 1);
+	}
+
+	@Test
+	void princToStringOfAFloatNowCompiles() {
+		// The __ftoa port lifts the old "no float printer in scalar mode"
+		// error; a float renders through the same digit-extraction algorithm as the GC
+		// backend. No print op is involved, so the module still has ZERO imports.
+		byte[] module = compile("""
+				(defun render (x) (length (princ-to-string x)))
+				(rontolisp:wasm-export 'render :params '(:float) :returns :int)
+				""");
+		assertThat(sections(module)).doesNotContainKey(2).containsKey(5);
+	}
+
+	@Test
+	void printRejectsTheStreamArgumentAndPackedArrays() {
+		assertThatThrownBy(() -> compile("""
+				(defun f (n) (print n 1))
+				(rontolisp:wasm-export 'f :params '(:int) :returns :int)
+				""")).isInstanceOf(UnsupportedOperationException.class).hasMessageContaining("stream argument");
+		assertThatThrownBy(() -> compile("""
+				(defun f () (terpri 1))
+				(rontolisp:wasm-export 'f :params '() :returns :void)
+				""")).isInstanceOf(UnsupportedOperationException.class).hasMessageContaining("stream argument");
+		assertThatThrownBy(() -> compile("""
+				(defun f (n) (print (vec:ones n)) n)
+				(rontolisp:wasm-export 'f :params '(:int) :returns :int)
+				""")).isInstanceOf(UnsupportedOperationException.class).hasMessageContaining("packed float array");
+	}
+
+	// --- with-arena ------------------------------------------------------------------
+
+	@Test
+	void withArenaCompilesForScalarStringAndPackedResults() {
+		// A scalar, a string and a packed-vector result all compile; the module keeps
+		// zero imports (with-arena is pure memory management, no I/O).
+		byte[] module = compile("""
+				(defun s (n)
+				  (rontolisp:with-arena () (+ n 1)))
+				(defun str ()
+				  (rontolisp:with-arena () (concatenate 'string "a" "b")))
+				(defun v (n)
+				  (vec:aref (rontolisp:with-arena () (vec:ones n)) 0))
+				(rontolisp:wasm-export 's :params '(:int) :returns :int)
+				(rontolisp:wasm-export 'str :params '() :returns :string)
+				(rontolisp:wasm-export 'v :params '(:int) :returns :float)
+				""");
+		assertThat(sections(module)).doesNotContainKey(2);
+		assertThat(exportNames(Objects.requireNonNull(sections(module).get(7)))).contains("s", "str", "v");
+	}
+
+	@Test
+	void withArenaOnAMemorylessModuleIsAPlainProgn() {
+		// No linear memory at all (pure numeric): there is no allocator to mark/reset,
+		// so with-arena is a plain progn and the module stays memoryless.
+		byte[] module = compile("""
+				(defun f (n) (rontolisp:with-arena () (* n n)))
+				(rontolisp:wasm-export 'f :params '(:int) :returns :int)
+				""");
+		assertThat(sections(module)).doesNotContainKey(2).doesNotContainKey(5);
+	}
+
+	@Test
+	void withArenaRejectsANonEmptyOptionList() {
+		assertThatThrownBy(() -> compile("""
+				(defun f (n) (rontolisp:with-arena (:size 10) n))
+				(rontolisp:wasm-export 'f :params '(:int) :returns :int)
+				""")).isInstanceOf(UnsupportedOperationException.class).hasMessageContaining("empty option list");
+	}
+
+	// --- minimal binary parsing helpers ------------------------------------------------
+
+	// Whether the byte array contains the given (unsigned) byte sequence anywhere. Used
+	// to
+	// confirm a specific SIMD opcode (SIMD_PREFIX 0xFD + a sub-opcode) is emitted.
+	// The body of the local function an export names, addressed the way the code section
+	// is: the export carries an ABSOLUTE function index, so the host imports in front of
+	// the local ones have to come off it first.
+	private static byte[] localFunctionBody(byte[] module, String exportName) {
+		Map<Integer, byte[]> sections = sections(module);
+		int absolute = exportedFuncIndex(Objects.requireNonNull(sections.get(7)), exportName);
+		return functionBody(Objects.requireNonNull(sections.get(10)), absolute - importedFunctions(module).size());
+	}
+
+	// The first internal function body in the code section. Internal bodies are
+	// emitted before the export wrappers and the memory helpers, so in a
+	// single-defun UNOPTIMIZED program (compilePlainUnoptimized -- the default level
+	// may inline the defun into its wrapper) this is the defun itself -- the shape
+	// to assert on when the export is NOT a pass-through (a printing program always
+	// takes a wrapper, which is what localFunctionBody would then return).
+	private static byte[] internalFunctionBody(byte[] module) {
+		return functionBodies(Objects.requireNonNull(sections(module).get(10))).get(0);
+	}
+
+	// Whether the code section holds the 0xFD SIMD prefix as an opcode, the f64.const
+	// / f32.const immediates stepped over (a coefficient byte is not an opcode).
+	private static boolean containsSimdPrefix(byte[] code) {
+		return containsSimdPrefix(code, 0, code.length);
+	}
+
+	// The same over the FIRST function body only -- the user's f, where a vec:
+	// lowering lives. The fdlibm bodies appended after the user's functions carry the
+	// byte inside LEB immediates too (sinh's low-word bound 0x8fb9f87d), so a probe of
+	// a transcendental lowering reads the user's body alone.
+	private static boolean containsSimdPrefixInUserFunction(byte[] code) {
+		int[] p = { 0 };
+		readUleb(code, p); // the entry count
+		int size = readUleb(code, p);
+		return containsSimdPrefix(code, p[0], p[0] + size);
+	}
+
+	private static boolean containsSimdPrefix(byte[] code, int from, int to) {
+		for (int i = from; i < to; i++) {
+			int b = code[i] & 0xFF;
+			if (b == 0x44) {
+				i += 8;
+			}
+			else if (b == 0x43) {
+				i += 4;
+			}
+			else if (b == 0xFD) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private static boolean containsSequence(byte[] haystack, int... needle) {
+		outer: for (int i = 0; i + needle.length <= haystack.length; i++) {
+			for (int j = 0; j < needle.length; j++) {
+				if ((haystack[i + j] & 0xFF) != (needle[j] & 0xFF)) {
+					continue outer;
+				}
+			}
+			return true;
+		}
+		return false;
+	}
+
+	// All payloads of the given section id, in order. A printing component carries
+	// several sections of one id (four core-module sections, interleaved alias/canon/
+	// instance sections), which the map-shaped sections() helper cannot represent.
+	private static List<byte[]> sectionPayloads(byte[] binary, int sectionId) {
+		List<byte[]> result = new ArrayList<>();
+		int[] p = { 8 };
+		while (p[0] < binary.length) {
+			int id = binary[p[0]++] & 0xFF;
+			int size = readUleb(binary, p);
+			byte[] payload = new byte[size];
+			System.arraycopy(binary, p[0], payload, 0, size);
+			p[0] += size;
+			if (id == sectionId) {
+				result.add(payload);
+			}
+		}
+		return result;
+	}
+
+	// Splits a module into a map of section id -> section payload bytes (skipping the
+	// 8-byte header). Assumes at most one of each non-custom section, which holds here.
+	private static Map<Integer, byte[]> sections(byte[] module) {
+		Map<Integer, byte[]> result = new HashMap<>();
+		int[] p = { 8 };
+		while (p[0] < module.length) {
+			int id = module[p[0]++] & 0xFF;
+			int size = readUleb(module, p);
+			byte[] payload = new byte[size];
+			System.arraycopy(module, p[0], payload, 0, size);
+			p[0] += size;
+			result.put(id, payload);
+		}
+		return result;
+	}
+
+	// Asserts the type section contains only function types whose params and results are
+	// plain numeric value types (i32 0x7F, i64 0x7E, f64 0x7C) -- i.e. no rec group /
+	// struct / array / i31 / ref types. Internal functions use i64/f64; the host wrappers
+	// use i32/f64.
+	private static void assertScalarFuncTypes(byte[] typeSection) {
+		int[] p = { 0 };
+		int count = readUleb(typeSection, p);
+		for (int i = 0; i < count; i++) {
+			int form = typeSection[p[0]++] & 0xFF;
+			assertThat(form).as("type %d is a func type (0x60)", i).isEqualTo(0x60);
+			int params = readUleb(typeSection, p);
+			for (int j = 0; j < params; j++) {
+				assertScalarValType(typeSection[p[0]++] & 0xFF);
+			}
+			int results = readUleb(typeSection, p);
+			for (int j = 0; j < results; j++) {
+				assertScalarValType(typeSection[p[0]++] & 0xFF);
+			}
+		}
+		assertThat(p[0]).isEqualTo(typeSection.length);
+	}
+
+	// Parses the type section into a list of {paramValTypes, resultValTypes} per func
+	// type.
+	private static List<int[][]> funcTypes(byte[] typeSection) {
+		List<int[][]> result = new ArrayList<>();
+		int[] p = { 0 };
+		int count = readUleb(typeSection, p);
+		for (int i = 0; i < count; i++) {
+			p[0]++; // 0x60 func form
+			int[] params = new int[readUleb(typeSection, p)];
+			for (int j = 0; j < params.length; j++) {
+				params[j] = typeSection[p[0]++] & 0xFF;
+			}
+			int[] results = new int[readUleb(typeSection, p)];
+			for (int j = 0; j < results.length; j++) {
+				results[j] = typeSection[p[0]++] & 0xFF;
+			}
+			result.add(new int[][] { params, results });
+		}
+		return result;
+	}
+
+	private static void assertScalarValType(int valType) {
+		assertThat(valType).as("value type is a plain numeric type (i32/i64/f64)").isIn(0x7F, 0x7E, 0x7C);
+	}
+
+	private static List<String> exportNames(byte[] exportSection) {
+		List<String> names = new ArrayList<>();
+		int[] p = { 0 };
+		int count = readUleb(exportSection, p);
+		for (int i = 0; i < count; i++) {
+			int len = readUleb(exportSection, p);
+			names.add(new String(exportSection, p[0], len, StandardCharsets.UTF_8));
+			p[0] += len;
+			p[0]++; // external kind
+			readUleb(exportSection, p); // index
+		}
+		return names;
+	}
+
+	// Extracts the body (locals decl + instructions) of the function at the given index
+	// in
+	// the code section (id 10). No imports exist in a --no-gc module, so the function
+	// index
+	// equals the code-section entry index.
+	private static byte[] functionBody(byte[] codeSection, int index) {
+		int[] p = { 0 };
+		int count = readUleb(codeSection, p);
+		for (int i = 0; i < count; i++) {
+			int size = readUleb(codeSection, p);
+			if (i == index) {
+				byte[] body = new byte[size];
+				System.arraycopy(codeSection, p[0], body, 0, size);
+				return body;
+			}
+			p[0] += size;
+		}
+		throw new IllegalArgumentException("no function at index " + index);
+	}
+
+	// The number of function bodies in the code section (id 10).
+	private static int functionCount(byte[] codeSection) {
+		return readUleb(codeSection, new int[] { 0 });
+	}
+
+	// Returns the function index of the export with the given name (external kind 0x00).
+	private static int exportedFuncIndex(byte[] exportSection, String name) {
+		int[] p = { 0 };
+		int count = readUleb(exportSection, p);
+		for (int i = 0; i < count; i++) {
+			int len = readUleb(exportSection, p);
+			String n = new String(exportSection, p[0], len, StandardCharsets.UTF_8);
+			p[0] += len;
+			int kind = exportSection[p[0]++] & 0xFF;
+			int idx = readUleb(exportSection, p);
+			if (kind == 0x00 && n.equals(name)) {
+				return idx;
+			}
+		}
+		throw new IllegalArgumentException("no exported function named " + name);
+	}
+
+	// True if the body contains both a global.get 0 (0x23 0x00) and a global.set 0
+	// (0x24 0x00) -- the heap snapshot/restore pair. The wrapper never calls the
+	// allocator inline, so its only global ops are the heap reset.
+	private static boolean containsGlobalReset(byte[] body) {
+		boolean getGlobal0 = false;
+		boolean setGlobal0 = false;
+		for (int i = 0; i + 1 < body.length; i++) {
+			int op = body[i] & 0xFF;
+			int operand = body[i + 1] & 0xFF;
+			if (op == 0x23 && operand == 0x00) {
+				getGlobal0 = true;
+			}
+			if (op == 0x24 && operand == 0x00) {
+				setGlobal0 = true;
+			}
+		}
+		return getGlobal0 && setGlobal0;
+	}
+
+	private static int readUleb(byte[] bytes, int[] p) {
+		int result = 0;
+		int shift = 0;
+		while (true) {
+			int b = bytes[p[0]++] & 0xFF;
+			result |= (b & 0x7F) << shift;
+			if ((b & 0x80) == 0) {
+				break;
+			}
+			shift += 7;
+		}
+		return result;
+	}
+
+	// --- packed double-float vectors (F64VEC) ------------------------------------------
+
+	@Test
+	void packedFloatVectorUsesLinearMemoryWithScalarTypesOnly() {
+		// A #d(...) literal + aref: the vector lives in linear memory (a memory section
+		// is
+		// present, id 5) but every type is still a plain scalar func type -- no wasm-GC
+		// struct/array/i31/eqref and no imports.
+		byte[] module = compile("""
+				(defun third (i) (aref #d(10.0 20.0 30.0 40.0) i))
+				(rontolisp:wasm-export 'third :params '(:int) :returns :float)
+				""");
+		Map<Integer, byte[]> sections = sections(module);
+		assertThat(sections).containsKey(5).doesNotContainKey(2);
+		assertScalarFuncTypes(Objects.requireNonNull(sections.get(1)));
+		assertThat(exportNames(Objects.requireNonNull(sections.get(7)))).contains("third");
+	}
+
+	@Test
+	void makeArrayDoubleFloatAndSetfArefCompileToAScalarModule() {
+		// make-array :element-type 'double-float + (setf (aref ...)) + length: still a
+		// plain MVP module with a memory section and scalar-only func types.
+		byte[] module = compile("""
+				(defun build (n x)
+				  (let ((v (make-array n :element-type 'double-float :initial-element 0.0)))
+				    (setf (aref v 0) x)
+				    (+ (aref v 0) (length v))))
+				(rontolisp:wasm-export 'build :params '(:int :float) :returns :float)
+				""");
+		Map<Integer, byte[]> sections = sections(module);
+		assertThat(sections).containsKey(5).doesNotContainKey(2);
+		assertScalarFuncTypes(Objects.requireNonNull(sections.get(1)));
+		assertThat(exportNames(Objects.requireNonNull(sections.get(7)))).contains("build");
+	}
+
+	@Test
+	void rank2FloatLiteralIsAClearCompileError() {
+		assertThatThrownBy(() -> compile("""
+				(defun f () (aref #d((1.0 2.0) (3.0 4.0)) 0))
+				(rontolisp:wasm-export 'f :params '() :returns :float)
+				""")).isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("multi-dimensional #d(...) literal (rank 2)")
+			.hasMessageContaining("only a rank-1");
+	}
+
+	@Test
+	void rank3MakeArrayIsAClearCompileError() {
+		// Rank-2 is the packed matrix layout; rank >= 3 still has no packed
+		// layout on this backend.
+		assertThatThrownBy(() -> compile("""
+				(defun f () (aref (make-array '(2 3 4) :element-type 'double-float) 0))
+				(rontolisp:wasm-export 'f :params '() :returns :float)
+				""")).isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("rank-3 make-array")
+			.hasMessageContaining("rank-1 (a vector) or rank-2 (a matrix)");
+	}
+
+	@Test
+	void rank2MakeArrayCompilesToThePackedMatrixLayout() {
+		// (make-array (list d n)) builds the [rows][cols][data] packed matrix:
+		// two-subscript aref/setf and a flat row-major-aref compile to a plain scalar
+		// module -- linear memory, scalar func types only, no 0xFD SIMD opcode.
+		byte[] module = compile("""
+				(defun f (d)
+				  (let ((w (make-array (list d 3) :element-type 'double-float :initial-element 1.0)))
+				    (setf (aref w 1 2) 5.0)
+				    (+ (aref w 1 2) (row-major-aref w 5))))
+				(rontolisp:wasm-export 'f :params '(:int) :returns :float)
+				""");
+		Map<Integer, byte[]> sections = sections(module);
+		assertScalarFuncTypes(Objects.requireNonNull(sections.get(1)));
+		assertThat(sections.get(5)).as("memory section (the matrix lives in linear memory)").isNotNull();
+		byte[] code = Objects.requireNonNull(sections.get(10));
+		assertThat(containsSimdPrefix(code)).as("no SIMD prefix in the scalar module").isFalse();
+		// A quoted literal dimension list builds the same layout (the single-float width
+		// included).
+		byte[] quoted = compile("""
+				(defun f ()
+				  (let ((w (make-array '(2 3) :element-type 'single-float :initial-element 2.0)))
+				    (aref w 1 1)))
+				(rontolisp:wasm-export 'f :params '() :returns :float)
+				""");
+		assertScalarFuncTypes(Objects.requireNonNull(sections(quoted).get(1)));
+	}
+
+	@Test
+	void makeArrayWithoutDoubleFloatElementTypeIsAClearCompileError() {
+		// The scalar backend has no general (boxed) array type, so a make-array without
+		// :element-type 'double-float cannot be represented.
+		assertThatThrownBy(() -> compile("""
+				(defun f (n) (aref (make-array n) 0))
+				(rontolisp:wasm-export 'f :params '(:int) :returns :float)
+				""")).isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("only supported with :element-type")
+			.hasMessageContaining("double-float");
+	}
+
+	@Test
+	void makeArrayWithFillPointerOrAdjustableIsAClearCompileError() {
+		assertThatThrownBy(() -> compile("""
+				(defun f (n) (aref (make-array n :element-type 'double-float :adjustable t) 0))
+				(rontolisp:wasm-export 'f :params '(:int) :returns :float)
+				""")).isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining(":fill-pointer / :adjustable / :displaced-to");
+	}
+
+	@Test
+	void simdReductionKernelsEmitRealV128Instructions() {
+		// With --simd, vec:dot lowers to native fixed-width SIMD over the packed vector:
+		// the
+		// code section carries the SIMD prefix (0xFD) with the f64x2 reduction ops (splat
+		// +
+		// a horizontal extract_lane fold), not a plain scalar loop. The module stays a
+		// plain
+		// MVP module: a memory section, scalar-only func types, no wasm-GC and no
+		// imports.
+		byte[] module = compileSimd("""
+				(defun dot (n) (let ((v (vec:arange n))) (vec:dot v v)))
+				(rontolisp:wasm-export 'dot :params '(:int) :returns :float)
+				""");
+		Map<Integer, byte[]> sections = sections(module);
+		assertThat(sections).containsKey(5).doesNotContainKey(2);
+		assertScalarFuncTypes(Objects.requireNonNull(sections.get(1)));
+		assertThat(exportNames(Objects.requireNonNull(sections.get(7)))).contains("dot");
+		byte[] code = Objects.requireNonNull(sections.get(10));
+		assertThat(containsSequence(code, 0xFD, 0x14)).as("f64x2.splat (0xFD 0x14)").isTrue();
+		assertThat(containsSequence(code, 0xFD, 0x21)).as("f64x2.extract_lane (0xFD 0x21)").isTrue();
+	}
+
+	@Test
+	void simdElementwiseAndConstructorKernelsCompileToAPlainMvpModule() {
+		// With --simd, zeros/ones/arange/add/scale/sum/mean/norm all lower to the packed
+		// vector + v128 SIMD and stay a plain MVP module (no wasm-GC types, no imports).
+		// The
+		// element-wise kernels' lane loop emits v128.store (0xFD 0x0B).
+		byte[] module = compileSimd("""
+				(defun go (n)
+				  (let* ((a (vec:arange n))
+				         (b (vec:scale (vec:ones n) 2.0))
+				         (c (vec:add a b)))
+				    (+ (vec:sum c) (vec:mean a) (vec:norm b))))
+				(rontolisp:wasm-export 'go :params '(:int) :returns :float)
+				""");
+		Map<Integer, byte[]> sections = sections(module);
+		assertThat(sections).containsKey(5).doesNotContainKey(2);
+		assertScalarFuncTypes(Objects.requireNonNull(sections.get(1)));
+		assertThat(exportNames(Objects.requireNonNull(sections.get(7)))).contains("go");
+		assertThat(containsSequence(Objects.requireNonNull(sections.get(10)), 0xFD, 0x0B)).as("v128.store (0xFD 0x0B)")
+			.isTrue();
+	}
+
+	@Test
+	void theQuotientKernelAndTheOperatorAliasesLowerNativelyOnBothNoGcModes() {
+		// --no-gc never splices vec.lisp: every vec: name is intercepted here, so an
+		// un-wired name is a hard compile error rather than a slow fallback. vec:div,
+		// vec:div-into and the four CL operator spellings must therefore lower like the
+		// kernels they alias, in the scalar AND the v128 lowering alike.
+		String source = """
+				(defun go (n)
+				  (let* ((a (vec:arange n))
+				         (b (vec:ones n))
+				         (c (vec:div-into (vec:zeros n) (vec:div a b) b)))
+				    (vec:sum (vec:/ (vec:* (vec:+ a b) b) (vec:- c b)))))
+				(rontolisp:wasm-export 'go :params '(:int) :returns :float)
+				""";
+		byte[] scalar = compile(source);
+		assertThat(containsSequence(Objects.requireNonNull(sections(scalar).get(10)), 0xA3))
+			.as("f64.div (0xA3) in the scalar lowering")
+			.isTrue();
+		byte[] simd = compileSimd(source);
+		assertThat(containsSequence(Objects.requireNonNull(sections(simd).get(10)), 0xFD, 0xF3))
+			.as("f64x2.div (0xFD 0xF3) in the v128 lowering")
+			.isTrue();
+	}
+
+	@Test
+	void noSimdVecKernelsLowerToScalarLoopsWithNoV128() {
+		// Without --simd (the default --no-gc), the SAME vec: program lowers to plain
+		// scalar
+		// linear-memory loops: NO 0xFD SIMD opcode anywhere (runs on an MVP runtime
+		// lacking
+		// the SIMD proposal), yet it stays a plain module with a memory section and
+		// scalar-only func types. The element-wise and reduction kernels use
+		// f64.load/store
+		// (0x2B / 0x39) and f64.add/mul rather than v128, over the byte-identical
+		// [count][data] block.
+		String source = """
+				(defun go (n)
+				  (let* ((a (vec:arange n))
+				         (b (vec:scale (vec:ones n) 2.0))
+				         (c (vec:add a b)))
+				    (+ (vec:sum c) (vec:dot a b) (vec:mean a) (vec:norm b))))
+				(rontolisp:wasm-export 'go :params '(:int) :returns :float)
+				""";
+		byte[] module = compile(source);
+		Map<Integer, byte[]> sections = sections(module);
+		assertThat(sections).containsKey(5).doesNotContainKey(2);
+		assertScalarFuncTypes(Objects.requireNonNull(sections.get(1)));
+		byte[] code = Objects.requireNonNull(sections.get(10));
+		assertThat(containsSimdPrefix(code)).as("no SIMD prefix (0xFD) in the scalar --no-gc module").isFalse();
+		assertThat(containsSequence(code, 0x2B, 0x00, 0x00)).as("f64.load (0x2B) reads packed elements").isTrue();
+		assertThat(containsSequence(code, 0x39, 0x00, 0x00)).as("f64.store (0x39) writes packed elements").isTrue();
+		// The v128 build of the very same source DOES carry 0xFD -- the two differ only
+		// in
+		// the loop body, so both are valid lowerings of one program.
+		assertThat(containsSequence(Objects.requireNonNull(sections(compileSimd(source)).get(10)), 0xFD))
+			.as("the --simd build of the same source does use v128")
+			.isTrue();
+	}
+
+	// --- destination-passing kernels -------------------------------------------------
+
+	@Test
+	void intoKernelsCallTheBumpAllocatorOnlyForTheConstructors() {
+		// The whole point of -into: the kernel writes into the caller's block instead of
+		// bump-allocating a fresh one. Both programs construct two vectors (2 __alloc
+		// calls); the allocating vec:add adds a third, vec:add-into adds none. Asserted
+		// on
+		// both lowerings, since allocVec is emitted outside the scalar/v128 branch.
+		String into = """
+				(defun f (n)
+				  (let ((o (vec:zeros n)) (a (vec:ones n)))
+				    (vec:sum (vec:add-into o a a))))
+				(rontolisp:wasm-export 'f :params '(:int) :returns :float)
+				""";
+		String alloc = into.replace("(vec:add-into o a a)", "(vec:add a a)");
+		for (boolean simd : new boolean[] { false, true }) {
+			assertThat(allocCallCount(simd ? compileSimd(into) : compile(into))).as("vec:add-into, simd=%s", simd)
+				.isEqualTo(2);
+			assertThat(allocCallCount(simd ? compileSimd(alloc) : compile(alloc))).as("vec:add, simd=%s", simd)
+				.isEqualTo(3);
+		}
+	}
+
+	@Test
+	void scaleIntoAlsoSkipsTheBumpAllocator() {
+		String into = """
+				(defun f (n)
+				  (let ((o (vec:zeros n)) (a (vec:ones n)))
+				    (vec:sum (vec:scale-into o a 2.0))))
+				(rontolisp:wasm-export 'f :params '(:int) :returns :float)
+				""";
+		assertThat(allocCallCount(compileSimd(into))).isEqualTo(2);
+		assertThat(allocCallCount(compileSimd(into.replace("(vec:scale-into o a 2.0)", "(vec:scale a 2.0)"))))
+			.isEqualTo(3);
+	}
+
+	@Test
+	void simdIntoKernelsEmitRealV128InstructionsAndTheScalarLoweringEmitsNone() {
+		// Same scalar/v128 seam as the allocating siblings: --simd emits v128.store
+		// (0xFD 0x0B), the default emits no 0xFD at all and drives f64.load/store.
+		String source = """
+				(defun go (n)
+				  (let ((o (vec:zeros n)) (a (vec:arange n)) (b (vec:ones n)))
+				    (vec:scale-into o (vec:mul-into o (vec:sub-into o (vec:add-into o a b) b) a) 2.0)
+				    (vec:sum o)))
+				(rontolisp:wasm-export 'go :params '(:int) :returns :float)
+				""";
+		byte[] v128 = Objects.requireNonNull(sections(compileSimd(source)).get(10));
+		assertThat(containsSequence(v128, 0xFD, 0x0B)).as("v128.store (0xFD 0x0B)").isTrue();
+		byte[] scalar = Objects.requireNonNull(sections(compile(source)).get(10));
+		assertThat(containsSequence(scalar, 0xFD)).as("no SIMD prefix in the scalar --no-gc -into lowering").isFalse();
+		assertThat(containsSequence(scalar, 0x2B, 0x00, 0x00)).as("f64.load (0x2B)").isTrue();
+		assertThat(containsSequence(scalar, 0x39, 0x00, 0x00)).as("f64.store (0x39)").isTrue();
+	}
+
+	@Test
+	void singleFloatIntoKernelsUseTheF32StrideAndOpcodes() {
+		String source = """
+				(defun go (n)
+				  (let ((o (vec:zeros n :element-type 'single-float)) (a (vec:arange n :element-type 'single-float)))
+				    (vec:sum (vec:add-into o a a))))
+				(rontolisp:wasm-export 'go :params '(:int) :returns :float)
+				""";
+		byte[] scalar = Objects.requireNonNull(sections(compile(source)).get(10));
+		assertThat(containsSequence(scalar, 0x2A, 0x00, 0x00)).as("f32.load (0x2A)").isTrue();
+		assertThat(containsSequence(scalar, 0x38, 0x00, 0x00)).as("f32.store (0x38)").isTrue();
+		assertThat(allocCallCount(compile(source))).as("only the two constructors allocate").isEqualTo(2);
+	}
+
+	// --- element-wise unary ufuncs ---------------------------------------------------
+
+	@Test
+	void unaryUfuncsEmitV128UnderSimdAndScalarLoopsByDefault() {
+		// sqrt/abs/square/negative/reciprocal (+ -into) lower to whole v128 groups under
+		// --simd (f64x2.sqrt 0xFD 0xEF among them) and to plain f64 loops by default (no
+		// 0xFD at all). exp / sign lower as element loops in both modes (pinned below).
+		String source = """
+				(defun go (n)
+				  (let ((o (vec:zeros n)) (v (vec:arange n)))
+				    (vec:sqrt-into o (vec:square v))
+				    (vec:negative-into o o)
+				    (vec:abs-into o o)
+				    (vec:reciprocal-into o (vec:add o (vec:ones n)))
+				    (+ (vec:sum o) (vec:sum (vec:sqrt (vec:abs (vec:negative (vec:reciprocal (vec:square v)))))))))
+				(rontolisp:wasm-export 'go :params '(:int) :returns :float)
+				""";
+		byte[] v128 = Objects.requireNonNull(sections(compileSimd(source)).get(10));
+		assertThat(containsSequence(v128, 0xFD, 0xEF)).as("f64x2.sqrt (0xFD 0xEF)").isTrue();
+		assertThat(containsSequence(v128, 0xFD, 0xEC)).as("f64x2.abs (0xFD 0xEC)").isTrue();
+		assertThat(containsSequence(v128, 0xFD, 0xED)).as("f64x2.neg (0xFD 0xED)").isTrue();
+		byte[] scalar = Objects.requireNonNull(sections(compile(source)).get(10));
+		assertThat(containsSequence(scalar, 0xFD)).as("no SIMD prefix in the scalar --no-gc unary lowering").isFalse();
+		assertThat(containsSequence(scalar, 0x9F)).as("f64.sqrt (0x9F)").isTrue();
+		assertThat(containsSequence(scalar, 0x99)).as("f64.abs (0x99)").isTrue();
+		assertThat(containsSequence(scalar, 0x9A)).as("f64.neg (0x9A)").isTrue();
+	}
+
+	@Test
+	void singleFloatUnaryUfuncsUseTheF32Opcodes() {
+		String source = """
+				(defun go (n)
+				  (let ((v (vec:arange n :element-type 'single-float)))
+				    (vec:sum (vec:sqrt (vec:abs (vec:negative v))))))
+				(rontolisp:wasm-export 'go :params '(:int) :returns :float)
+				""";
+		byte[] scalar = Objects.requireNonNull(sections(compile(source)).get(10));
+		assertThat(containsSequence(scalar, 0x91)).as("f32.sqrt (0x91)").isTrue();
+		assertThat(containsSequence(scalar, 0x8B)).as("f32.abs (0x8B)").isTrue();
+		assertThat(containsSequence(scalar, 0x8C)).as("f32.neg (0x8C)").isTrue();
+		byte[] v128 = Objects.requireNonNull(sections(compileSimd(source)).get(10));
+		assertThat(containsSequence(v128, 0xFD, 0xE3)).as("f32x4.sqrt (0xFD 0xE3)").isTrue();
+	}
+
+	@Test
+	void unaryIntoKernelsSkipTheBumpAllocator() {
+		String into = """
+				(defun f (n)
+				  (let ((o (vec:zeros n)) (a (vec:ones n)))
+				    (vec:sum (vec:sqrt-into o a))))
+				(rontolisp:wasm-export 'f :params '(:int) :returns :float)
+				""";
+		String alloc = into.replace("(vec:sqrt-into o a)", "(vec:sqrt a)");
+		for (boolean simd : new boolean[] { false, true }) {
+			assertThat(allocCallCount(simd ? compileSimd(into) : compile(into))).as("vec:sqrt-into, simd=%s", simd)
+				.isEqualTo(2);
+			assertThat(allocCallCount(simd ? compileSimd(alloc) : compile(alloc))).as("vec:sqrt, simd=%s", simd)
+				.isEqualTo(3);
+		}
+	}
+
+	// The f64.const of a coefficient only one fdlibm function carries
+	// (WasmFdlibmRuntimeBuilder): what the lowering probes below look for, since the
+	// body itself may be inlined into its one caller by the optimizer.
+	private static int[] fdlibmConstant(WasmFdlibmRuntimeBuilder.Fn fn) {
+		double c = switch (fn) {
+			case EXP -> 0x1.62e42fefa39efp9; // o_threshold
+			case EXPM1 -> -0x1.11111111110f4p-5; // Q1
+			case LOG -> 0x1.5555555555593p-1; // Lg1
+			case K_SIN -> -0x1.5555555555549p-3; // S1
+			case K_TAN -> 0x1.5555555555563p-2; // T[0]
+			case ASIN -> -0x1.4d61203eb6f7dp-2; // pS1
+			case ATAN -> 0x1.555555555550dp-2; // aT[0]
+			default -> throw new IllegalArgumentException("no probe constant for " + fn);
+		};
+		int[] out = new int[9];
+		out[0] = 0x44; // f64.const
+		long bits = Double.doubleToRawLongBits(c);
+		for (int i = 0; i < 8; i++) {
+			out[1 + i] = (int) ((bits >>> (8 * i)) & 0xFF);
+		}
+		return out;
+	}
+
+	@Test
+	void expAndSignLowerNativelyOnNoGc() {
+		// vec:exp / vec:sign (and -into) call the fdlibm exp the module carries
+		// (WasmFdlibmRuntimeBuilder) / inline WasmVecSimdRuntimeBuilder.emitSignumF64,
+		// so BOTH lowerings drive the same scalar element loop -- no 0xFD SIMD opcode
+		// even under --simd, and fdlibm exp's coefficients are in the code section. The
+		// probe avoids vec:sum (whose --simd lowering IS v128) so 0xFD absence is
+		// exp/sign's.
+		String source = """
+				(defun f (n)
+				  (let ((v (vec:ones n)) (o (vec:zeros n)))
+				    (vec:exp-into o v)
+				    (vec:sign-into o o)
+				    (+ (vec:aref (vec:exp v) 0) (vec:aref (vec:sign o) 1))))
+				(rontolisp:wasm-export 'f :params '(:int) :returns :float)
+				""";
+		for (boolean simd : new boolean[] { false, true }) {
+			byte[] code = Objects.requireNonNull(sections(simd ? compileSimd(source) : compile(source)).get(10));
+			assertThat(containsSequence(code, fdlibmConstant(WasmFdlibmRuntimeBuilder.Fn.EXP)))
+				.as("fdlibm exp, simd=%s", simd)
+				.isTrue();
+			assertThat(containsSimdPrefixInUserFunction(code))
+				.as("no SIMD prefix in the exp/sign lowering, simd=%s", simd)
+				.isFalse();
+		}
+		// -into writes into the caller's block: only the two constructors allocate.
+		assertThat(allocCallCount(compile("""
+				(defun f (n)
+				  (let ((v (vec:ones n)) (o (vec:zeros n)))
+				    (vec:sum (vec:sign-into o (vec:exp-into o v)))))
+				(rontolisp:wasm-export 'f :params '(:int) :returns :float)
+				"""))).as("exp-into / sign-into skip the bump allocator").isEqualTo(2);
+	}
+
+	@Test
+	void logAndTanhLowerNativelyOnNoGc() {
+		// vec:log / vec:tanh (and -into) call the fdlibm log / tanh the module
+		// carries (tanh over expm1), so BOTH lowerings drive the same scalar element
+		// loop -- no 0xFD SIMD opcode even under --simd, and fdlibm log's and expm1's
+		// coefficients are in the code section. The probe avoids vec:sum (whose --simd
+		// lowering IS v128) so 0xFD absence is log/tanh's.
+		String source = """
+				(defun f (n)
+				  (let ((v (vec:ones n)) (o (vec:zeros n)))
+				    (vec:log-into o v)
+				    (vec:tanh-into o o)
+				    (+ (vec:aref (vec:log v) 0) (vec:aref (vec:tanh o) 1))))
+				(rontolisp:wasm-export 'f :params '(:int) :returns :float)
+				""";
+		for (boolean simd : new boolean[] { false, true }) {
+			byte[] code = Objects.requireNonNull(sections(simd ? compileSimd(source) : compile(source)).get(10));
+			assertThat(containsSequence(code, fdlibmConstant(WasmFdlibmRuntimeBuilder.Fn.LOG)))
+				.as("fdlibm log, simd=%s", simd)
+				.isTrue();
+			assertThat(containsSequence(code, fdlibmConstant(WasmFdlibmRuntimeBuilder.Fn.EXPM1)))
+				.as("fdlibm expm1 (tanh's callee), simd=%s", simd)
+				.isTrue();
+			assertThat(containsSimdPrefixInUserFunction(code))
+				.as("no SIMD prefix in the log/tanh lowering, simd=%s", simd)
+				.isFalse();
+		}
+		// -into writes into the caller's block: only the two constructors allocate.
+		assertThat(allocCallCount(compile("""
+				(defun f (n)
+				  (let ((v (vec:ones n)) (o (vec:zeros n)))
+				    (vec:sum (vec:tanh-into o (vec:log-into o v)))))
+				(rontolisp:wasm-export 'f :params '(:int) :returns :float)
+				"""))).as("log-into / tanh-into skip the bump allocator").isEqualTo(2);
+	}
+
+	@Test
+	void sinCosTanLowerNativelyOnNoGc() {
+		// vec:sin / vec:cos / vec:tan (and -into) call the fdlibm sin / cos / tan the
+		// module carries, so BOTH lowerings drive the same scalar element loop -- no
+		// 0xFD SIMD opcode even under --simd, and fdlibm __kernel_sin's and
+		// __kernel_tan's coefficients are in the code section (with the 2/pi table the
+		// reduction reads in the data section). The probe avoids vec:sum (whose --simd
+		// lowering IS v128) so 0xFD absence is sin/cos/tan's.
+		String source = """
+				(defun f (n)
+				  (let ((v (vec:ones n)) (o (vec:zeros n)))
+				    (vec:sin-into o v)
+				    (vec:cos-into o o)
+				    (+ (vec:aref (vec:sin v) 0) (vec:aref (vec:cos o) 1) (vec:aref (vec:tan (vec:tan-into o o)) 2))))
+				(rontolisp:wasm-export 'f :params '(:int) :returns :float)
+				""";
+		for (boolean simd : new boolean[] { false, true }) {
+			byte[] module = simd ? compileSimd(source) : compile(source);
+			byte[] code = Objects.requireNonNull(sections(module).get(10));
+			assertThat(containsSequence(code, fdlibmConstant(WasmFdlibmRuntimeBuilder.Fn.K_SIN)))
+				.as("fdlibm __kernel_sin, simd=%s", simd)
+				.isTrue();
+			assertThat(containsSequence(code, fdlibmConstant(WasmFdlibmRuntimeBuilder.Fn.K_TAN)))
+				.as("fdlibm __kernel_tan, simd=%s", simd)
+				.isTrue();
+			assertThat(containsSimdPrefixInUserFunction(code))
+				.as("no SIMD prefix in the sin/cos/tan lowering, simd=%s", simd)
+				.isFalse();
+			byte[] data = Objects.requireNonNull(sections(module).get(11));
+			int[] tables = new int[64];
+			byte[] blob = WasmFdlibmRuntimeBuilder.tables();
+			for (int i = 0; i < tables.length; i++) {
+				tables[i] = blob[i] & 0xFF;
+			}
+			assertThat(containsSequence(data, tables)).as("the 2/pi table, simd=%s", simd).isTrue();
+		}
+		// -into writes into the caller's block: only the two constructors allocate.
+		assertThat(allocCallCount(compile("""
+				(defun f (n)
+				  (let ((v (vec:ones n)) (o (vec:zeros n)))
+				    (vec:sum (vec:tan-into o (vec:cos-into o (vec:sin-into o v))))))
+				(rontolisp:wasm-export 'f :params '(:int) :returns :float)
+				"""))).as("sin-into / cos-into / tan-into skip the bump allocator").isEqualTo(2);
+	}
+
+	@Test
+	void arcAndHyperbolicLowerNativelyOnNoGc() {
+		// vec:asin / vec:acos / vec:atan / vec:sinh / vec:cosh (and -into) call the
+		// fdlibm functions the module carries, so BOTH lowerings drive the same scalar
+		// element loop -- no 0xFD SIMD opcode even under --simd, and fdlibm asin's,
+		// atan's and expm1's (sinh's callee) coefficients are in the code section. The
+		// probe
+		// avoids vec:sum (whose --simd lowering IS v128) so 0xFD absence is these ops'.
+		String source = """
+				(defun f (n)
+				  (let ((v (vec:ones n)) (o (vec:zeros n)))
+				    (vec:asin-into o v)
+				    (vec:acos-into o o)
+				    (vec:atan-into o o)
+				    (vec:sinh-into o o)
+				    (+ (vec:aref (vec:asin v) 0) (vec:aref (vec:acos o) 1) (vec:aref (vec:atan v) 0)
+				       (vec:aref (vec:sinh v) 0) (vec:aref (vec:cosh (vec:cosh-into o o)) 2))))
+				(rontolisp:wasm-export 'f :params '(:int) :returns :float)
+				""";
+		for (boolean simd : new boolean[] { false, true }) {
+			byte[] code = Objects.requireNonNull(sections(simd ? compileSimd(source) : compile(source)).get(10));
+			for (WasmFdlibmRuntimeBuilder.Fn fn : new WasmFdlibmRuntimeBuilder.Fn[] { WasmFdlibmRuntimeBuilder.Fn.ASIN,
+					WasmFdlibmRuntimeBuilder.Fn.ATAN, WasmFdlibmRuntimeBuilder.Fn.EXPM1 }) {
+				assertThat(containsSequence(code, fdlibmConstant(fn))).as("fdlibm %s, simd=%s", fn, simd).isTrue();
+			}
+			assertThat(containsSimdPrefixInUserFunction(code))
+				.as("no SIMD prefix in the arc/hyperbolic lowering, simd=%s", simd)
+				.isFalse();
+		}
+		// -into writes into the caller's block: only the two constructors allocate.
+		assertThat(allocCallCount(
+				compile("""
+						(defun f (n)
+						  (let ((v (vec:ones n)) (o (vec:zeros n)))
+						    (vec:sum (vec:cosh-into o (vec:sinh-into o (vec:atan-into o (vec:acos-into o (vec:asin-into o v))))))))
+						(rontolisp:wasm-export 'f :params '(:int) :returns :float)
+						""")))
+			.as("asin..cosh -into skip the bump allocator")
+			.isEqualTo(2);
+	}
+
+	@Test
+	void scalarTranscendentalsLowerNativelyOnNoGc() {
+		// The scalar builtins -- exp/log/sin/cos/tan/asin/acos/atan/sinh/cosh/tanh, the
+		// two-argument (atan y x) and (log n base), and expt when one operand is a
+		// FLOAT -- used to be unknown under --no-gc (.kb/vec.md); since 2026-09-17 they
+		// are calls into the same fdlibm runtime the vec: kernels above call, so the
+		// same coefficient probes apply, and an exact integer operand (expt's base
+		// here) coerces through the INT -> FLOAT promotion the lattice already has.
+		String source = """
+				(defun f (x y)
+				  (+ (exp x) (log x) (sin x) (cos x) (tan x) (asin x) (acos x) (atan x)
+				     (sinh x) (cosh x) (tanh x) (atan y x) (log x y) (expt 2 y)))
+				(rontolisp:wasm-export 'f :params '(:float :float) :returns :float)
+				""";
+		for (boolean simd : new boolean[] { false, true }) {
+			byte[] code = Objects.requireNonNull(sections(simd ? compileSimd(source) : compile(source)).get(10));
+			for (WasmFdlibmRuntimeBuilder.Fn fn : new WasmFdlibmRuntimeBuilder.Fn[] { WasmFdlibmRuntimeBuilder.Fn.EXP,
+					WasmFdlibmRuntimeBuilder.Fn.LOG, WasmFdlibmRuntimeBuilder.Fn.K_SIN,
+					WasmFdlibmRuntimeBuilder.Fn.K_TAN, WasmFdlibmRuntimeBuilder.Fn.ASIN,
+					WasmFdlibmRuntimeBuilder.Fn.ATAN }) {
+				assertThat(containsSequence(code, fdlibmConstant(fn))).as("fdlibm %s, simd=%s", fn, simd).isTrue();
+			}
+			assertThat(containsSimdPrefixInUserFunction(code))
+				.as("no SIMD prefix in the scalar transcendental lowering, simd=%s", simd)
+				.isFalse();
+		}
+	}
+
+	@Test
+	void exptOfTwoNonFloatOperandsIsCompileError() {
+		// The exact rational-multiplication loop the other backends run for an
+		// integer/ratio base to an integer exponent needs a value model (ratio,
+		// arbitrary-precision integer) this backend does not carry, so only the float
+		// pow(x, y) path joins the eligible subset -- a clear compile error rather
+		// than a silently wrong float answer.
+		assertThatThrownBy(() -> compile("""
+				(defun f (a b) (expt a b))
+				(rontolisp:wasm-export 'f :params '(:int :int) :returns :int)
+				""")).isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("expt")
+			.hasMessageContaining("rational-multiplication");
+	}
+
+	@Test
+	void comparisonSelectsLowerNativelyOnNoGc() {
+		// vec:maximum / vec:minimum / vec:relu / vec:clip (and
+		// -into) are strict-comparison selects. Without --simd they are scalar
+		// compare+select loops -- the f64.gt/f64.lt + select pairs appear and no 0xFD
+		// SIMD opcode does; under --simd, maximum/minimum/relu become gt/lt lane masks
+		// + v128.bitselect. The probes avoid vec:sum (whose --simd lowering IS v128)
+		// so the 0xFD assertions are these ops' own.
+		String selects = """
+				(defun f (n)
+				  (let ((a (vec:ones n)) (b (vec:zeros n)) (o (vec:zeros n)))
+				    (vec:maximum-into o a b)
+				    (vec:minimum-into o o a)
+				    (vec:relu-into o o)
+				    (+ (vec:aref (vec:maximum a b) 0) (vec:aref (vec:minimum a b) 0) (vec:aref (vec:relu o) 0))))
+				(rontolisp:wasm-export 'f :params '(:int) :returns :float)
+				""";
+		byte[] scalarCode = Objects.requireNonNull(sections(compile(selects)).get(10));
+		assertThat(containsSequence(scalarCode, 0xFD)).as("no SIMD prefix in the default lowering").isFalse();
+		assertThat(containsSequence(scalarCode, 0x64, 0x1B)).as("f64.gt + select (maximum/relu)").isTrue();
+		assertThat(containsSequence(scalarCode, 0x63, 0x1B)).as("f64.lt + select (minimum)").isTrue();
+		byte[] simdCode = Objects.requireNonNull(sections(compileSimd(selects)).get(10));
+		assertThat(containsSequence(simdCode, 0xFD, 0x4A)).as("f64x2.gt lane mask under --simd").isTrue();
+		assertThat(containsSequence(simdCode, 0xFD, 0x49)).as("f64x2.lt lane mask under --simd").isTrue();
+		assertThat(containsSequence(simdCode, 0xFD, 0x52)).as("v128.bitselect under --simd").isTrue();
+		// clip drives the same widened scalar element loop in BOTH modes (like exp).
+		String clip = """
+				(defun f (n)
+				  (let ((v (vec:ones n)) (o (vec:zeros n)))
+				    (vec:clip-into o v -1.0 1.0)
+				    (vec:aref (vec:clip o 0.0 2.0) 0)))
+				(rontolisp:wasm-export 'f :params '(:int) :returns :float)
+				""";
+		for (boolean simd : new boolean[] { false, true }) {
+			byte[] code = Objects.requireNonNull(sections(simd ? compileSimd(clip) : compile(clip)).get(10));
+			assertThat(containsSimdPrefix(code)).as("no SIMD prefix in the clip lowering, simd=%s", simd).isFalse();
+			assertThat(containsSequence(code, 0x64, 0x1B)).as("clip's gt select, simd=%s", simd).isTrue();
+			assertThat(containsSequence(code, 0x63, 0x1B)).as("clip's lt select, simd=%s", simd).isTrue();
+		}
+		// -into writes into the caller's block: only the three constructors allocate.
+		assertThat(allocCallCount(compile("""
+				(defun f (n)
+				  (let ((a (vec:ones n)) (b (vec:zeros n)) (o (vec:zeros n)))
+				    (vec:maximum-into o a b)
+				    (vec:minimum-into o o b)
+				    (vec:relu-into o o)
+				    (vec:clip-into o o -1.0 1.0)
+				    (vec:sum o)))
+				(rontolisp:wasm-export 'f :params '(:int) :returns :float)
+				"""))).as("the comparison-select -into forms skip the bump allocator").isEqualTo(3);
+	}
+
+	@Test
+	void matvecOnARankOneVectorIsAClearCompileError() {
+		// matvec is GEMV over a rank-2 packed matrix; passing a rank-1 vector
+		// as W is a clear error, for matvec and matvec-into alike.
+		assertThatThrownBy(() -> compile("""
+				(defun f (n) (vec:sum (vec:matvec (vec:zeros n) (vec:zeros n))))
+				(rontolisp:wasm-export 'f :params '(:int) :returns :float)
+				""")).isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("vec:matvec")
+			.hasMessageContaining("rank-2 packed matrix");
+		assertThatThrownBy(() -> compile("""
+				(defun f (n) (vec:sum (vec:matvec-into (vec:zeros n) (vec:zeros n) (vec:zeros n))))
+				(rontolisp:wasm-export 'f :params '(:int) :returns :float)
+				""")).isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("vec:matvec-into")
+			.hasMessageContaining("rank-2 packed matrix");
+	}
+
+	@Test
+	void matvecEmitsPerRowV128DotUnderSimdAndScalarLoopsByDefault() {
+		// The GEMV kernel runs one dot per matrix row: under --simd the same
+		// f64x2 lane loop vec:dot uses (splat accumulator 0xFD 0x14, lane multiply 0xFD
+		// 0xF2 (LEB 0xF2 0x01), horizontal extract_lane 0xFD 0x21); without --simd a
+		// v128-free scalar loop, so the module stays MVP-clean.
+		String doubles = """
+				(defun f (n)
+				  (let ((w (make-array (list n n) :element-type 'double-float :initial-element 1.0))
+				        (x (vec:ones n)))
+				    (vec:aref (vec:matvec w x) 0)))
+				(rontolisp:wasm-export 'f :params '(:int) :returns :float)
+				""";
+		byte[] scalar = Objects.requireNonNull(sections(compile(doubles)).get(10));
+		assertThat(containsSequence(scalar, 0xFD)).as("no SIMD prefix in the scalar matvec lowering").isFalse();
+		byte[] simd = Objects.requireNonNull(sections(compileSimd(doubles)).get(10));
+		assertThat(containsSequence(simd, 0xFD, 0x14)).as("f64x2.splat (per-row accumulator)").isTrue();
+		assertThat(containsSequence(simd, 0xFD, 0xF2, 0x01)).as("f64x2.mul (lane multiply-accumulate)").isTrue();
+		assertThat(containsSequence(simd, 0xFD, 0x21)).as("f64x2.extract_lane (horizontal fold)").isTrue();
+		// A single-float matrix drives the f32x4 dot (four lanes) at the f32 stride.
+		String singles = """
+				(defun f (n)
+				  (let ((w (make-array (list n n) :element-type 'single-float :initial-element 1.0))
+				        (x (vec:ones n :element-type 'single-float)))
+				    (vec:aref (vec:matvec w x) 0)))
+				(rontolisp:wasm-export 'f :params '(:int) :returns :float)
+				""";
+		byte[] simdF = Objects.requireNonNull(sections(compileSimd(singles)).get(10));
+		assertThat(containsSequence(simdF, 0xFD, 0x13)).as("f32x4.splat (per-row accumulator)").isTrue();
+		assertThat(containsSequence(simdF, 0xFD, 0xE6, 0x01)).as("f32x4.mul (lane multiply-accumulate)").isTrue();
+		assertThat(containsSequence(simdF, 0xFD, 0x1F)).as("f32x4.extract_lane (horizontal fold)").isTrue();
+		assertThat(containsSequence(Objects.requireNonNull(sections(compile(singles)).get(10)), 0xFD))
+			.as("no SIMD prefix in the scalar single-float matvec lowering")
+			.isFalse();
+	}
+
+	@Test
+	void matvecIntoSkipsTheBumpAllocatorAndGuardsAliasing() {
+		// matvec-into writes into the caller's vector: only the matrix + the two
+		// constructors allocate. Its out-aliases-x/w guard is a runtime pointer-equality
+		// trap (i32.or; if; unreachable), the --no-gc analog of the other backends'
+		// error / ref.eq trap -- out MUST NOT alias x or w (each output element folds
+		// over all of x).
+		byte[] module = compile("""
+				(defun f (n)
+				  (let ((w (make-array (list n n) :element-type 'double-float :initial-element 1.0))
+				        (x (vec:ones n))
+				        (o (vec:zeros n)))
+				    (vec:matvec-into o w x)
+				    (vec:sum o)))
+				(rontolisp:wasm-export 'f :params '(:int) :returns :float)
+				""");
+		assertThat(allocCallCount(module)).as("the matrix + two constructors allocate; matvec-into does not")
+			.isEqualTo(3);
+		byte[] code = Objects.requireNonNull(sections(module).get(10));
+		assertThat(containsSequence(code, 0x72, 0x04, 0x40, 0x00)).as("i32.or; if; unreachable alias trap").isTrue();
+	}
+
+	@Test
+	void matvecWidthMismatchIsATypeError() {
+		// x (and out) must be the same width as W -- the vec: fail-fast rule; a f32
+		// matrix against a f64 vector is the incompatible-types error, not a silent
+		// widening.
+		assertThatThrownBy(() -> compile("""
+				(defun f (n)
+				  (let ((w (make-array (list n n) :element-type 'single-float :initial-element 1.0))
+				        (x (vec:ones n)))
+				    (vec:aref (vec:matvec w x) 0)))
+				(rontolisp:wasm-export 'f :params '(:int) :returns :float)
+				""")).isInstanceOf(UnsupportedOperationException.class).hasMessageContaining("incompatible types");
+	}
+
+	/**
+	 * Counts {@code allocVec} sites in the FIRST function body -- the first reachable
+	 * defun, which the tests above name {@code f} / {@code go}. Restricted to that body
+	 * because the always-emitted {@code __itoa} helper calls the allocator too, so a
+	 * whole-code-section count carries a constant helper baseline.
+	 *
+	 * <p>
+	 * Matched on {@code allocVec}'s full trailing instruction sequence
+	 * ({@code i32.shl; i32.add; call $__ronto_alloc}) rather than the bare {@code call}:
+	 * a two-byte {@code 0x10 <index>} scan hits false positives inside the v128
+	 * immediates of a {@code --simd} body. The allocator is found by its BODY (see
+	 * {@link #allocFunctionIndex}), not by its export: a packed-vector module allocates
+	 * without any memory-typed boundary, and the export is gated on the boundary.
+	 */
+	private static int allocCallCount(byte[] module) {
+		Map<Integer, byte[]> sections = sections(module);
+		int allocIndex = allocFunctionIndex(module);
+		assertThat(allocIndex).as("a --no-gc module that allocates emits __alloc").isNotNegative();
+		assertThat(allocIndex).as("a single-byte LEB index keeps the byte scan exact").isLessThan(128);
+		byte[] body = functionBodies(Objects.requireNonNull(sections.get(10))).get(0);
+		int count = 0;
+		for (int i = 0; i + 3 < body.length; i++) {
+			boolean allocVec = (body[i] & 0xFF) == 0x74 // i32.shl (count << elemShift)
+					&& (body[i + 1] & 0xFF) == 0x6A // i32.add (+ the 4-byte header)
+					&& (body[i + 2] & 0xFF) == 0x10 // call
+					&& (body[i + 3] & 0xFF) == allocIndex;
+			if (allocVec) {
+				count++;
+			}
+		}
+		return count;
+	}
+
+	/** Splits a code section into its per-function bodies (each a size-prefixed blob). */
+	/**
+	 * The function index of {@code __alloc}, found by its body: it is the only function
+	 * that GROWS linear memory, so it is the only one carrying
+	 * {@code memory.size; i32.sub; memory.grow; drop} (3F 00 6B 40 00 1A). None of the
+	 * modules here declares an import, so a code-section entry index is a function index.
+	 * @param module the compiled module
+	 * @return the allocator's function index, or -1 when the module has no allocator
+	 */
+	private static int allocFunctionIndex(byte[] module) {
+		List<byte[]> bodies = functionBodies(Objects.requireNonNull(sections(module).get(10)));
+		for (int i = 0; i < bodies.size(); i++) {
+			if (containsSequence(bodies.get(i), 0x3F, 0x00, 0x6B, 0x40, 0x00, 0x1A)) {
+				return i;
+			}
+		}
+		return -1;
+	}
+
+	private static List<byte[]> functionBodies(byte[] codeSection) {
+		List<byte[]> bodies = new ArrayList<>();
+		int[] p = { 0 };
+		int count = readUleb(codeSection, p);
+		for (int i = 0; i < count; i++) {
+			int size = readUleb(codeSection, p);
+			bodies.add(Arrays.copyOfRange(codeSection, p[0], p[0] + size));
+			p[0] += size;
+		}
+		return bodies;
+	}
+
+	private static int exportedFunctionIndex(byte[] exportSection, String name) {
+		int[] p = { 0 };
+		int count = readUleb(exportSection, p);
+		for (int i = 0; i < count; i++) {
+			int len = readUleb(exportSection, p);
+			String found = new String(exportSection, p[0], len, StandardCharsets.UTF_8);
+			p[0] += len;
+			p[0]++; // external kind
+			int index = readUleb(exportSection, p);
+			if (found.equals(name)) {
+				return index;
+			}
+		}
+		return -1;
+	}
+
+	@Test
+	void simdFromListIsAClearCompileError() {
+		// vec:from-list / to-list need Lisp cons lists, which the scalar backend lacks,
+		// so
+		// they run only on the portable backends via vec.lisp.
+		assertThatThrownBy(() -> compile("""
+				(defun f () (vec:sum (vec:from-list '(1.0 2.0 3.0))))
+				(rontolisp:wasm-export 'f :params '() :returns :float)
+				""")).isInstanceOf(UnsupportedOperationException.class).hasMessageContaining("portable backends only");
+	}
+
+	// --- packed single-float vectors (F32VEC) ----------------------------------------
+
+	@Test
+	void packedSingleFloatVectorUsesLinearMemoryWithScalarTypesOnly() {
+		// A #f(...) single-float literal + aref: the vector lives in linear memory
+		// (memory
+		// section id 5) with a 4-byte f32 stride, but every boundary type is still a
+		// plain
+		// scalar func type -- no wasm-GC and no imports. aref reads via f32.load (0x2A)
+		// then
+		// widens with f64.promote_f32 (0xBB); the literal narrows each constant with
+		// f32.demote_f64 (0xB6) and stores via f32.store (0x38).
+		byte[] module = compile("""
+				(defun third (i) (aref #f(10.0 20.0 30.0 40.0) i))
+				(rontolisp:wasm-export 'third :params '(:int) :returns :float)
+				""");
+		Map<Integer, byte[]> sections = sections(module);
+		assertThat(sections).containsKey(5).doesNotContainKey(2);
+		assertScalarFuncTypes(Objects.requireNonNull(sections.get(1)));
+		assertThat(exportNames(Objects.requireNonNull(sections.get(7)))).contains("third");
+		byte[] code = Objects.requireNonNull(sections.get(10));
+		assertThat(containsSequence(code, 0xB6)).as("f32.demote_f64 (0xB6) narrows the literal").isTrue();
+		assertThat(containsSequence(code, 0x2A, 0x00, 0x00)).as("f32.load (0x2A) reads an element").isTrue();
+		assertThat(containsSequence(code, 0xBB)).as("f64.promote_f32 (0xBB) widens the read").isTrue();
+	}
+
+	@Test
+	void makeArraySingleFloatAndSetfArefCompileToAScalarModule() {
+		// make-array :element-type 'single-float + (setf (aref ...)) + length: a plain
+		// MVP
+		// module with a memory section and scalar-only func types. The store narrows with
+		// f32.demote_f64 (0xB6) into an f32.store (0x38).
+		byte[] module = compile("""
+				(defun build (n x)
+				  (let ((v (make-array n :element-type 'single-float :initial-element 0.0)))
+				    (setf (aref v 0) x)
+				    (+ (aref v 0) (length v))))
+				(rontolisp:wasm-export 'build :params '(:int :float) :returns :float)
+				""");
+		Map<Integer, byte[]> sections = sections(module);
+		assertThat(sections).containsKey(5).doesNotContainKey(2);
+		assertScalarFuncTypes(Objects.requireNonNull(sections.get(1)));
+		assertThat(exportNames(Objects.requireNonNull(sections.get(7)))).contains("build");
+		byte[] code = Objects.requireNonNull(sections.get(10));
+		assertThat(containsSequence(code, 0xB6)).as("f32.demote_f64 (0xB6) narrows the store").isTrue();
+		assertThat(containsSequence(code, 0x38, 0x00, 0x00)).as("f32.store (0x38) writes an element").isTrue();
+	}
+
+	@Test
+	void rank2SingleFloatLiteralIsAClearCompileError() {
+		assertThatThrownBy(() -> compile("""
+				(defun f () (aref #f((1.0 2.0) (3.0 4.0)) 0))
+				(rontolisp:wasm-export 'f :params '() :returns :float)
+				""")).isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("multi-dimensional #f(...) literal (rank 2)")
+			.hasMessageContaining("only a rank-1");
+	}
+
+	@Test
+	void makeArraySingleFloatErrorMessageMentionsBothWidths() {
+		// A make-array without a packed element-type still errors, now naming both
+		// widths.
+		assertThatThrownBy(() -> compile("""
+				(defun f (n) (aref (make-array n) 0))
+				(rontolisp:wasm-export 'f :params '(:int) :returns :float)
+				""")).isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("only supported with :element-type")
+			.hasMessageContaining("single-float");
+	}
+
+	@Test
+	void simdSingleFloatReductionKernelsEmitF32x4Instructions() {
+		// vec:dot over #f single-float operands lowers to native f32x4 SIMD: the code
+		// section carries the SIMD prefix (0xFD) with the f32x4 reduction ops -- splat
+		// (0xFD 0x13) and a four-lane extract_lane fold (0xFD 0x1F) -- NOT the f64x2 pair
+		// (0xFD 0x14 / 0xFD 0x21). Still a plain MVP module: memory section, scalar-only
+		// func types, no wasm-GC and no imports.
+		byte[] module = compileSimd("""
+				(defun dot (i)
+				  (let ((v #f(1.0 2.0 3.0 4.0 5.0)))
+				    (vec:dot v v)))
+				(rontolisp:wasm-export 'dot :params '(:int) :returns :float)
+				""");
+		Map<Integer, byte[]> sections = sections(module);
+		assertThat(sections).containsKey(5).doesNotContainKey(2);
+		assertScalarFuncTypes(Objects.requireNonNull(sections.get(1)));
+		byte[] code = Objects.requireNonNull(sections.get(10));
+		assertThat(containsSequence(code, 0xFD, 0x13)).as("f32x4.splat (0xFD 0x13)").isTrue();
+		assertThat(containsSequence(code, 0xFD, 0x1F)).as("f32x4.extract_lane (0xFD 0x1F)").isTrue();
+		assertThat(containsSequence(code, 0xFD, 0xE6, 0x01)).as("f32x4.mul (0xFD 0xE6)").isTrue();
+		assertThat(containsSequence(code, 0xFD, 0x14)).as("no f64x2.splat leaked into the f32 path").isFalse();
+	}
+
+	@Test
+	void simdSingleFloatElementwiseEmitsF32x4StoreKernel() {
+		// vec:add / vec:scale over #f operands emit the f32x4 element-wise lane loop
+		// (v128.store 0xFD 0x0B + f32x4.add 0xFD 0xE4 / f32x4.mul 0xFD 0xE6) and stay a
+		// plain MVP module. The result width is preserved (a f32 vector out).
+		byte[] module = compileSimd("""
+				(defun go (i)
+				  (let* ((a #f(1.0 2.0 3.0))
+				         (b (vec:scale a 2.0))
+				         (c (vec:add a b)))
+				    (aref c 0)))
+				(rontolisp:wasm-export 'go :params '(:int) :returns :float)
+				""");
+		Map<Integer, byte[]> sections = sections(module);
+		assertThat(sections).containsKey(5).doesNotContainKey(2);
+		assertScalarFuncTypes(Objects.requireNonNull(sections.get(1)));
+		byte[] code = Objects.requireNonNull(sections.get(10));
+		assertThat(containsSequence(code, 0xFD, 0x0B)).as("v128.store (0xFD 0x0B)").isTrue();
+		assertThat(containsSequence(code, 0xFD, 0xE4, 0x01)).as("f32x4.add (0xFD 0xE4)").isTrue();
+		assertThat(containsSequence(code, 0xFD, 0xE6, 0x01)).as("f32x4.mul (0xFD 0xE6) from scale").isTrue();
+	}
+
+	@Test
+	void noSimdSingleFloatKernelsLowerToScalarF32LoopsWithNoV128() {
+		// Without --simd, the same #f (single-float) program lowers to scalar f32 loops:
+		// NO
+		// 0xFD anywhere, but f32.load (0x2A) / f32.store (0x38) over the byte-identical
+		// [count][f32...] block, computing in f32 throughout (the reduction promotes to
+		// the
+		// f64 boundary on return). Runs on an MVP runtime without the SIMD proposal.
+		byte[] module = compile("""
+				(defun go (i)
+				  (let* ((a #f(1.0 2.0 3.0))
+				         (b (vec:scale a 2.0))
+				         (c (vec:add a b)))
+				    (vec:dot a c)))
+				(rontolisp:wasm-export 'go :params '(:int) :returns :float)
+				""");
+		Map<Integer, byte[]> sections = sections(module);
+		assertThat(sections).containsKey(5).doesNotContainKey(2);
+		assertScalarFuncTypes(Objects.requireNonNull(sections.get(1)));
+		byte[] code = Objects.requireNonNull(sections.get(10));
+		assertThat(containsSimdPrefix(code)).as("no SIMD prefix (0xFD) in the scalar f32 module").isFalse();
+		assertThat(containsSequence(code, 0x2A, 0x00, 0x00)).as("f32.load (0x2A) reads packed f32 elements").isTrue();
+		assertThat(containsSequence(code, 0x38, 0x00, 0x00)).as("f32.store (0x38) writes packed f32 elements").isTrue();
+	}
+
+	@Test
+	void mixedWidthSimdOperandsAreAClearCompileError() {
+		// vec: is the fixed-contract package: a single-float and a double-float operand
+		// in
+		// the same kernel is a genuine type error, not a silent widen.
+		assertThatThrownBy(() -> compile("""
+				(defun f (n) (aref (vec:add #f(1.0 2.0 3.0) (vec:zeros n)) 0))
+				(rontolisp:wasm-export 'f :params '(:int) :returns :float)
+				""")).isInstanceOf(UnsupportedOperationException.class).hasMessageContaining("incompatible types");
+	}
+
+	// --- --no-gc --component (compact reactor component) ------------------------------
+
+	// Compiles in component mode: the same MVP core module wrapped as a reactor-style
+	// component whose scalar exports are typed component-model exports.
+	private static byte[] compileComponent(String source) {
+		List<LispVal> program = LispReader.readAllFromString(source);
+		return NoGcWasmCompiler.builder().optimize(OptimizeLevel.NONE).component(true).build().compile(program);
+	}
+
+	// The plain core module at the SAME level as compileComponent, for the
+	// byte-identity pairs below (the default level would shake helpers the component's
+	// core keeps).
+	private static byte[] compilePlainUnoptimized(String source) {
+		return NoGcWasmCompiler.builder()
+			.optimize(OptimizeLevel.NONE)
+			.build()
+			.compile(LispReader.readAllFromString(source));
+	}
+
+	private static final String COMPONENT_PROGRAM = """
+			(defun sumsquared (a b) (+ (* a a) (* b b)))
+			(rontolisp:wasm-export 'sumsquared :params '(:int :int) :returns :int)
+			""";
+
+	@Test
+	void componentWrapsThePlainCoreModuleVerbatim() {
+		// The wrap is a pure post stage: the component preamble (layer 0x01), then core
+		// module section 0 carrying the byte-identical non-component module, then the
+		// instantiate / alias / type / lift / export wiring -- no import block, no
+		// adapter module, no shared-memory module (the compact selling point).
+		// Both halves at OptimizeLevel.NONE: compileComponent is unoptimized, and the
+		// default level moves `sumsquared` into its export wrapper (the single-call-site
+		// move), so compile() here would compare two different programs.
+		byte[] plain = compilePlainUnoptimized(COMPONENT_PROGRAM);
+		byte[] component = compileComponent(COMPONENT_PROGRAM);
+		assertThat(new String(component, 0, 4, StandardCharsets.ISO_8859_1)).isEqualTo("\0asm");
+		assertThat(component[6]).as("component layer byte").isEqualTo((byte) 0x01);
+		Map<Integer, byte[]> outer = sections(component);
+		// Core-module section (component section id 1) carries the plain module
+		// byte-for-byte; no second core module (adapter/mem) exists.
+		assertThat(outer.get(1)).isEqualTo(plain);
+		// Exactly the reactor wiring: core instance (2), alias (6), type (7), canon (8),
+		// export (11) -- and no component/instance import machinery (10, 5, 4, 3).
+		assertThat(outer).containsKeys(2, 6, 7, 8, 11);
+		assertThat(outer).doesNotContainKey(10).doesNotContainKey(5).doesNotContainKey(4).doesNotContainKey(3);
+		// A single-export component of a tiny program stays in the hundreds of bytes.
+		assertThat(component.length).as("compact component size").isLessThan(1024);
+	}
+
+	@Test
+	void componentLongExportsUseS64() {
+		// :long crosses the canonical ABI as s64 (VT_S64 = 0x78) -- --no-gc is the one
+		// backend where :long is valid, so the component type section must carry it.
+		byte[] component = compileComponent("""
+				(defun bigmul (a b) (* a b))
+				(rontolisp:wasm-export 'bigmul :params '(:long :long) :returns :long)
+				""");
+		byte[] typeSection = Objects.requireNonNull(sections(component).get(7));
+		int s64Count = 0;
+		for (byte b : typeSection) {
+			if ((b & 0xFF) == 0x78) {
+				s64Count++;
+			}
+		}
+		assertThat(s64Count).as("two s64 params + one s64 result").isGreaterThanOrEqualTo(3);
+	}
+
+	@Test
+	void componentPrintWiresTheMicroAdapter() {
+		// A printing program under --no-gc --component (the print micro-adapter) is not
+		// a compile error: the wrap prepends the WASI 0.3 stdout import block and wires
+		// three fixed core modules -- a funcref-table shim, the bridge implementing the
+		// core's single fd_write import over write-via-stream + the async stream/future
+		// canon built-ins (parking on a blocking waitable-set.wait, so the exports
+		// become ASYNC lifts), and the fixup whose element segment closes the shim
+		// indirection. The embedded core module stays byte-identical to the plain
+		// --no-gc printing output.
+		String program = """
+				(defun f (n) (print n) n)
+				(rontolisp:wasm-export 'f :params '(:int) :returns :int)
+				""";
+		// Both sides at OptimizeLevel.NONE: the assertion below is a byte-identity pair,
+		// so the two compiles must agree on the level.
+		byte[] plain = NoGcWasmCompiler.builder()
+			.optimize(OptimizeLevel.NONE)
+			.build()
+			.compile(LispReader.readAllFromString(program));
+		byte[] component = compileComponent(program);
+		assertThat(component[6]).as("component layer byte").isEqualTo((byte) 0x01);
+		String text = new String(component, StandardCharsets.ISO_8859_1);
+		assertThat(text).contains("wasi:cli/types@0.3.0", "wasi:cli/stdout@0.3.0", "write-via-stream");
+		assertThat(text).doesNotContain("@0.2.0");
+		List<byte[]> coreModules = sectionPayloads(component, 1);
+		assertThat(coreModules).as("core + shim + bridge + fixup").hasSize(4);
+		assertThat(coreModules.get(0)).isEqualTo(plain);
+		// The shim exports the fixup's patch target: the "$imports" funcref table.
+		assertThat(new String(coreModules.get(1), StandardCharsets.ISO_8859_1)).contains("$imports", "fd_write");
+		// The export is lifted against an ASYNC function type (tag 0x43, params vec,
+		// one named p0: s32 param, result s32) -- only an async-typed task may block in
+		// the bridge's waitable-set park.
+		boolean asyncFuncType = false;
+		for (byte[] typeSection : sectionPayloads(component, 7)) {
+			if (containsSequence(typeSection, 0x43, 0x01, 0x02, 'p', '0', 0x7a)) {
+				asyncFuncType = true;
+			}
+		}
+		assertThat(asyncFuncType).as("async function type for the printing export").isTrue();
+		// The fixed machinery adds O(hundreds of bytes) to the scalar baseline: the
+		// whole printing component of a tiny program stays around 2 KB.
+		assertThat(component.length).as("printing component size").isLessThan(2560);
+	}
+
+	@Test
+	void componentPrintFreeProgramsCarryNoneOfThePrintMachinery() {
+		// The micro-adapter is gated on the fd_write import (mem.printUsed): a
+		// print-free component keeps the single embedded core module and no import
+		// section (componentWrapsThePlainCoreModuleVerbatim pins the full adapter-free
+		// shape; this pins the gate from the print side).
+		byte[] component = compileComponent(COMPONENT_PROGRAM);
+		assertThat(sectionPayloads(component, 1)).hasSize(1);
+		assertThat(new String(component, StandardCharsets.ISO_8859_1)).doesNotContain("wasi:cli/stdout@0.3.0");
+	}
+
+	@Test
+	void componentPrintComposesWithStringExports() {
+		// Print + :string in one component: the canonical string ABI
+		// lifts over the core's own memory, which the print wiring has already aliased
+		// as core memory 0 -- so exactly ONE memory alias exists, and the core module
+		// carries the cabi_* exports next to its fd_write import.
+		String program = """
+				(defun shout (s) (print "in") (concatenate 'string s "!"))
+				(rontolisp:wasm-export 'shout :params '(:string) :returns :string)
+				""";
+		byte[] component = compileComponent(program);
+		List<byte[]> coreModules = sectionPayloads(component, 1);
+		assertThat(coreModules).hasSize(4);
+		byte[] core = coreModules.get(0);
+		assertThat(exportNames(Objects.requireNonNull(sections(core).get(7)))).contains("shout", "memory",
+				"cabi_realloc", "cabi_post_i32");
+		// An alias-core-memory entry is [00 02] (sort core memory) [01] (instance
+		// export) [01] (the core instance) then the name "memory"; the string lift
+		// reuses the print wiring's alias instead of adding a second one.
+		int memoryAliases = 0;
+		for (byte[] aliasSection : sectionPayloads(component, 6)) {
+			if (containsSequence(aliasSection, 0x00, 0x02, 0x01, 0x01, 0x06, 'm', 'e', 'm', 'o', 'r', 'y')) {
+				memoryAliases++;
+			}
+		}
+		assertThat(memoryAliases).as("exactly one core-memory alias section hit").isEqualTo(1);
+		// The string-involving lift keeps its four canonical options: (memory 0)
+		// (realloc ...) utf8 (post-return ...).
+		boolean stringLift = false;
+		for (byte[] canonSection : sectionPayloads(component, 8)) {
+			if (containsSequence(canonSection, 0x04, 0x03, 0x00, 0x04)) {
+				stringLift = true;
+			}
+		}
+		assertThat(stringLift).as("canonical string-lift options present").isTrue();
+	}
+
+	@Test
+	void componentStringExportAppendsTheCanonicalStringAbi() {
+		// A :string boundary under --component appends the canonical
+		// string ABI to the core module: cabi_realloc (the host lowers string arguments
+		// through it), the shared cabi_post_i32 post-return, and a retptr shim exported
+		// under the export name (the canonical ABI caps flat results at one, so a
+		// :string result crosses as a single i32 pointing at an 8-byte (ptr,len)
+		// record, not the wrapper's two values). The component lifts with the four
+		// canonical options in wasm-tools order: (memory 0) (realloc 0) utf8
+		// (post-return 1), then type index 0.
+		byte[] component = compileComponent("""
+				(defun shout (s) (concatenate 'string s "!"))
+				(rontolisp:wasm-export 'shout :params '(:string) :returns :string)
+				""");
+		byte[] core = Objects.requireNonNull(sections(component).get(1));
+		Map<Integer, byte[]> coreSections = sections(core);
+		byte[] exports = Objects.requireNonNull(coreSections.get(7));
+		assertThat(exportNames(exports)).contains("shout", "memory", "cabi_realloc", "cabi_post_i32");
+		// The post-return pops the bump heap back to its base so a resident instance
+		// stays flat: [locals=0][i32.const heapBase][global.set 0][end].
+		byte[] code = Objects.requireNonNull(coreSections.get(10));
+		byte[] post = functionBody(code, exportedFuncIndex(exports, "cabi_post_i32"));
+		assertThat(post[0]).as("no locals").isEqualTo((byte) 0x00);
+		assertThat(post[1]).as("i32.const").isEqualTo((byte) 0x41);
+		assertThat(post[post.length - 3]).as("global.set").isEqualTo((byte) 0x24);
+		assertThat(post[post.length - 2]).as("global 0").isEqualTo((byte) 0x00);
+		// cabi_realloc reserves the same four header bytes __ronto_alloc does, so a
+		// canonically-lowered string argument takes the same in-place wrapper path:
+		// [locals=0][local.get 3][i32.const 4][i32.add][call __alloc]
+		// [i32.const 4][i32.add][end].
+		byte[] realloc = functionBody(code, exportedFuncIndex(exports, "cabi_realloc"));
+		assertThat(realloc[0]).isEqualTo((byte) 0x00);
+		assertThat(realloc[1]).isEqualTo((byte) 0x20);
+		assertThat(realloc[2]).isEqualTo((byte) 0x03);
+		assertThat(realloc[3]).isEqualTo((byte) 0x41); // i32.const
+		assertThat(realloc[4]).isEqualTo((byte) 0x04);
+		assertThat(realloc[5]).isEqualTo((byte) 0x6A); // i32.add
+		assertThat(realloc[6]).isEqualTo((byte) 0x10); // call
+		assertThat(realloc[7]).as("the call target is the internal __alloc").isEqualTo((byte) allocFunctionIndex(core));
+		assertThat(realloc[realloc.length - 4]).isEqualTo((byte) 0x41); // i32.const
+		assertThat(realloc[realloc.length - 3]).isEqualTo((byte) 0x04);
+		assertThat(realloc[realloc.length - 2]).isEqualTo((byte) 0x6A); // i32.add
+		assertThat(realloc[realloc.length - 1]).isEqualTo((byte) 0x0B); // end
+		// The component type section carries the string valtype (0x73) and the canon
+		// section the options vec (04: memory 03 00, realloc 04 00, utf8 00,
+		// post-return 05 01).
+		byte[] componentTypes = Objects.requireNonNull(sections(component).get(7));
+		assertThat(containsSequence(componentTypes, 0x73)).as("string valtype").isTrue();
+		byte[] canon = Objects.requireNonNull(sections(component).get(8));
+		assertThat(containsSequence(canon, 0x04, 0x03, 0x00, 0x04, 0x00, 0x00, 0x05, 0x01))
+			.as("canonical string-lift options")
+			.isTrue();
+	}
+
+	@Test
+	void componentSharesOnePostReturnPerFlatResultSignature() {
+		// One cabi_post_* per flat-result signature, shared across exports: a :string
+		// result and an :int result both flatten to i32 (one cabi_post_i32), :float to
+		// f64, an omitted result to none -- and only one cabi_realloc regardless of how
+		// many exports use strings. A scalar export in the same module lifts optionless
+		// and adds nothing.
+		byte[] component = compileComponent("""
+				(defun shout (s) (concatenate 'string s "!"))
+				(defun count-len (s) (length s))
+				(defun ratio (s) (* 1.5 (length s)))
+				(defun consume (s) (length s))
+				(defun scalar-only (a b) (+ a b))
+				(rontolisp:wasm-export 'shout :params '(:string) :returns :string)
+				(rontolisp:wasm-export 'count-len :params '(:string) :returns :int)
+				(rontolisp:wasm-export 'ratio :params '(:string) :returns :float)
+				(rontolisp:wasm-export 'consume :params '(:string))
+				(rontolisp:wasm-export 'scalar-only :params '(:int :int) :returns :int)
+				""");
+		byte[] core = Objects.requireNonNull(sections(component).get(1));
+		List<String> names = exportNames(Objects.requireNonNull(sections(core).get(7)));
+		assertThat(names).contains("cabi_realloc", "cabi_post_i32", "cabi_post_f64", "cabi_post_void");
+		assertThat(names.stream().filter("cabi_realloc"::equals)).hasSize(1);
+		assertThat(names.stream().filter("cabi_post_i32"::equals)).as("shared by shout and count-len").hasSize(1);
+	}
+
+	@Test
+	void componentWithoutStringExportsOmitsTheStringAbi() {
+		// The string ABI is gated on a :string boundary: a scalar-only component's core
+		// module carries no cabi_* exports (and componentWrapsThePlainCoreModuleVerbatim
+		// pins it byte-identical to the non-component output).
+		byte[] component = compileComponent(COMPONENT_PROGRAM);
+		byte[] core = Objects.requireNonNull(sections(component).get(1));
+		assertThat(exportNames(Objects.requireNonNull(sections(core).get(7)))).doesNotContain("cabi_realloc",
+				"cabi_post_i32", "cabi_post_void");
+	}
+
+	@Test
+	void componentRejectsNonKebabName() {
+		// Component-model export names must match the label grammar; the same rule as
+		// the GC component path (rename with :as).
+		assertThatThrownBy(() -> compileComponent("""
+				(defun sum_squared (a) a)
+				(rontolisp:wasm-export 'sum_squared :params '(:int) :returns :int)
+				""")).isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("not a valid component-model export name");
+	}
+
+	@Test
+	void asyncAwaitSurfaceIsRejected() {
+		// no futures, no suspension, no boxed values to represent them
+		assertThatThrownBy(() -> compile("""
+				(rontolisp:async-defun f () 1)
+				(rontolisp:wasm-export 'f :returns :long)
+				""")).isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("RONTOLISP:ASYNC-DEFUN is not supported with --no-gc");
+		assertThatThrownBy(() -> compile("""
+				(rontolisp:async (defun f () 1))
+				(rontolisp:wasm-export 'f :returns :long)
+				""")).isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("RONTOLISP:ASYNC is not supported with --no-gc");
+		assertThatThrownBy(() -> compile("""
+				(defun f () (rontolisp:await 1))
+				(rontolisp:wasm-export 'f :returns :long)
+				""")).isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("RONTOLISP:AWAIT is not supported with --no-gc");
+		assertThatThrownBy(() -> compile("""
+				(defun f () (rontolisp:make-stream))
+				(rontolisp:wasm-export 'f :returns :long)
+				""")).isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("RONTOLISP:MAKE-STREAM is not supported with --no-gc");
+		assertThatThrownBy(() -> compile("""
+				(defun f () (rontolisp:wait-for 10))
+				(rontolisp:wasm-export 'f :returns :long)
+				""")).isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("RONTOLISP:WAIT-FOR is not supported with --no-gc");
+		// The future-as-value combinators are rejected BY NAME (not the downstream
+		// async-lambda the prelude splice would inject): the diagnostic points at the
+		// operator the user's program actually mentions.
+		assertThatThrownBy(() -> compile("""
+				(defun f () (rontolisp:then 1 #'identity))
+				(rontolisp:wasm-export 'f :returns :long)
+				""")).isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("RONTOLISP:THEN is not supported with --no-gc");
+		assertThatThrownBy(() -> compile("""
+				(defun f () (rontolisp:then* 1 #'identity))
+				(rontolisp:wasm-export 'f :returns :long)
+				""")).isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("RONTOLISP:THEN* is not supported with --no-gc");
+		assertThatThrownBy(() -> compile("""
+				(defun f () (rontolisp:catch 1 (lambda (c) c)))
+				(rontolisp:wasm-export 'f :returns :long)
+				""")).isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("RONTOLISP:CATCH is not supported with --no-gc");
+		assertThatThrownBy(() -> compile("""
+				(defun f () (rontolisp:finally 1 (lambda () nil)))
+				(rontolisp:wasm-export 'f :returns :long)
+				""")).isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("RONTOLISP:FINALLY is not supported with --no-gc");
+	}
+
+	@Test
+	void componentRejectsAsyncExport() {
+		// :async is not a user-level knob here: a printing program's exports become
+		// async lifts automatically and every other I/O op is a compile error, so an
+		// explicit :async request is a clear error rather than a silently-ignored
+		// option.
+		assertThatThrownBy(() -> compileComponent("""
+				(defun add2 (a b) (+ a b))
+				(rontolisp:wasm-export 'add2 :params '(:long :long) :returns :long :async t)
+				""")).isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining(":async is not supported with --no-gc --component");
+	}
+
+	@Test
+	void componentInternalStringUseIsAllowedWhenTheBoundaryIsScalar() {
+		// Internal strings (the module-private linear memory) are fine under the wrap;
+		// only the :string BOUNDARY type is Tier 2. The core module keeps its memory
+		// section; the component still has no import machinery.
+		byte[] component = compileComponent("""
+				(defun f (n) (length (princ-to-string n)))
+				(rontolisp:wasm-export 'f :params '(:int) :returns :int)
+				""");
+		assertThat(new String(component, 0, 4, StandardCharsets.ISO_8859_1)).isEqualTo("\0asm");
+		assertThat(component[6]).isEqualTo((byte) 0x01);
+	}
+
+	@Test
+	void componentCompileRecordsTheWitText() {
+		// The CLI's --emit-wit output for the adapter-free reactor: an import-free world
+		// of
+		// just the typed exports (:long lifts as s64 here only).
+		NoGcWasmCompiler compiler = NoGcWasmCompiler.builder().optimize(OptimizeLevel.NONE).component(true).build();
+		assertThat(compiler.componentWit()).isNull();
+		compiler.compile(LispReader.readAllFromString("""
+				(defun big-add (a b) (+ a b))
+				(defun evenp2 (n) (= 0 (mod n 2)))
+				(rontolisp:wasm-export 'big-add :params '(:long :long) :returns :long)
+				(rontolisp:wasm-export 'evenp2 :params '(:int) :returns :bool)
+				"""));
+		assertThat(compiler.componentWit()).isEqualTo("""
+				package root:component;
+
+				world root {
+				  export big-add: func(p0: s64, p1: s64) -> s64;
+				  export evenp2: func(p0: s32) -> bool;
+				}
+				""");
+	}
+
+	@Test
+	void componentWitOfAPrintingProgramCarriesTheStdioImports() {
+		// The print micro-adapter's WASI 0.3 stdout surface shows up as world imports
+		// (plus their package definitions), separated from the exports by one blank
+		// line the way wasm-tools prints it -- and the exports say `async func`,
+		// because a printing program's exports are async lifts.
+		NoGcWasmCompiler compiler = NoGcWasmCompiler.builder().optimize(OptimizeLevel.NONE).component(true).build();
+		compiler.compile(LispReader.readAllFromString("""
+				(defun hello () (print "hi"))
+				(rontolisp:wasm-export 'hello)
+				"""));
+		assertThat(compiler.componentWit()).contains("""
+				world root {
+				  import wasi:cli/types@0.3.0;
+				  import wasi:cli/stdout@0.3.0;
+
+				  export hello: async func();
+				}
+				""").contains("package wasi:cli@0.3.0 {");
+	}
+
+	@Test
+	void nonComponentCompileRecordsNoWitText() {
+		NoGcWasmCompiler compiler = new NoGcWasmCompiler();
+		compiler.compile(LispReader
+			.readAllFromString("(defun f (a) a) (rontolisp:wasm-export 'f :params '(:long) :returns :long)"));
+		assertThat(compiler.componentWit()).isNull();
+	}
+
+	@Test
+	void noWasiReplacesTheFdWriteImportWithADiscardingSink() {
+		// --no-wasi on a PRINTING program: the single fd_write import becomes an
+		// internal sink DEFINED at function index 0 (funcBase stays 1, so every planned
+		// index holds), and the module keeps zero imports -- the GC backend's contract
+		// (output discarded, nothing traps) applied unchanged. A print-free program
+		// never had the import, so the flag is a byte-exact no-op there.
+		String printing = """
+				(defun show (n) (print n) n)
+				(rontolisp:wasm-export 'show :params '(:int) :returns :int)
+				""";
+		byte[] noWasi = NoGcWasmCompiler.builder()
+			.optimize(OptimizeLevel.NONE)
+			.noWasi(true)
+			.build()
+			.compile(LispReader.readAllFromString(printing));
+		assertThat(sections(noWasi)).as("import section").doesNotContainKey(2);
+		// The sink body: 0 locals; local.get 3 ; local.get 1 ; i32.load off=4 ;
+		// i32.store ; i32.const 0 (the same body the GC backend pins).
+		byte[] sink = { 0x00, 0x20, 0x03, 0x20, 0x01, 0x28, 0x02, 0x04, 0x36, 0x02, 0x00, 0x41, 0x00, 0x0b };
+		assertThat(containsBytes(noWasi, sink)).as("the fd_write sink body").isTrue();
+		// The index shift is unchanged: the exported wrapper sits at the printing
+		// build's index, one above the silent build's (the sink occupies index 0 the
+		// way the import did).
+		// The same level as the noWasi build above: the claim is about the shift the sink
+		// causes at emission, and comparing it against an optimized build compares that
+		// shift with whatever the shake and the single-call-site move did as well.
+		byte[] importing = compilePlainUnoptimized(printing);
+		assertThat(exportedFuncIndex(Objects.requireNonNull(sections(noWasi).get(7)), "show"))
+			.isEqualTo(exportedFuncIndex(Objects.requireNonNull(sections(importing).get(7)), "show"));
+		String silent = """
+				(defun show (n) n)
+				(rontolisp:wasm-export 'show :params '(:int) :returns :int)
+				""";
+		// Both at OptimizeLevel.NONE, the flag the one difference: what is claimed is
+		// that --no-wasi changes nothing here, not that it changes nothing the shake and
+		// the single-call-site move would also have done.
+		assertThat(NoGcWasmCompiler.builder()
+			.optimize(OptimizeLevel.NONE)
+			.noWasi(true)
+			.build()
+			.compile(LispReader.readAllFromString(silent))).isEqualTo(compilePlainUnoptimized(silent));
+	}
+
+	@Test
+	void componentNoWasiPrintingProgramTakesThePrintFreeShape() {
+		// --no-gc --no-wasi --component on a PRINTING program: the core carries the
+		// sink instead of the import, so the wrap never wires the print micro-adapter
+		// -- ONE core module, no wasi:cli/stdout anywhere, and the exports lift SYNC
+		// again (the WIT says `func`, not `async func`, over the same empty world as a
+		// print-free reactor). A printing program collapses back onto the print-free
+		// shape rather than merely losing its imports.
+		NoGcWasmCompiler compiler = NoGcWasmCompiler.builder()
+			.optimize(OptimizeLevel.NONE)
+			.component(true)
+			.noWasi(true)
+			.build();
+		byte[] component = compiler.compile(LispReader.readAllFromString("""
+				(defun show (n) (print n) (* n 2))
+				(rontolisp:wasm-export 'show :params '(:s64) :returns :s64)
+				"""));
+		assertThat(containsAscii(component, "wasi:cli/stdout")).isFalse();
+		assertThat(countCoreModuleSections(component)).isEqualTo(1);
+		assertThat(compiler.componentWit()).isEqualTo("""
+				package root:component;
+
+				world root {
+				  export show: func(p0: s64) -> s64;
+				}
+				""");
+	}
+
+	private static boolean containsAscii(byte[] bytes, String needle) {
+		return new String(bytes, StandardCharsets.ISO_8859_1).contains(needle);
+	}
+
+	private static boolean containsBytes(byte[] haystack, byte[] needle) {
+		outer: for (int i = 0; i + needle.length <= haystack.length; i++) {
+			for (int j = 0; j < needle.length; j++) {
+				if (haystack[i + j] != needle[j]) {
+					continue outer;
+				}
+			}
+			return true;
+		}
+		return false;
+	}
+
+	// The number of core-module sections (component section id 1) in a component.
+	private static int countCoreModuleSections(byte[] component) {
+		int count = 0;
+		int pos = 8;
+		while (pos < component.length) {
+			int id = component[pos++];
+			int size = 0;
+			int shift = 0;
+			while (true) {
+				int b = component[pos++] & 0xFF;
+				size |= (b & 0x7F) << shift;
+				if ((b & 0x80) == 0) {
+					break;
+				}
+				shift += 7;
+			}
+			if (id == 1) {
+				count++;
+			}
+			pos += size;
+		}
+		return count;
+	}
+
+	@Test
+	void theSizeLevelIsADocumentedNoOpOnThisBackend() {
+		// Same statement as on the JVM: this lowering is i64-native, so it never emits
+		// the boxed/unboxed pair --optimize=size declines on wasm-GC. Accepted, equal,
+		// and pinned so the docs cannot quietly go stale.
+		List<LispVal> program = LispReader.readAllFromString("""
+				(defun rol32f (x s) (logand (logior (ash x s) (ash x (- s 32))) 4294967295))
+				(rontolisp:wasm-export 'rol32f :params '(:long :long) :returns :long)
+				""");
+		byte[] fast = NoGcWasmCompiler.builder().optimize(OptimizeLevel.DEFAULT).build().compile(program);
+		byte[] small = NoGcWasmCompiler.builder().optimize(OptimizeLevel.SIZE).build().compile(program);
+		assertThat(small).isEqualTo(fast);
+	}
+
+	// --- rontolisp:wasm-import -------------------------------------------------------
+
+	@Test
+	void aHostImportBecomesTheModulesOnlyImportEntry() {
+		// The declaration's (module, field) pair is what the module imports, and nothing
+		// else joins it: an import-free --no-gc module has no import section at all, so
+		// this section's whole content is the declared entries in declaration order.
+		byte[] module = compile("""
+				(rontolisp:wasm-import 'host-add :from "host" :as "add" :params '(:int :int) :returns :int)
+				(rontolisp:wasm-import 'host-tick :from "host" :as "tick" :params '() :returns :void)
+				(defun sum (a b) (host-tick) (host-add a b))
+				(rontolisp:wasm-export 'sum :params '(:int :int) :returns :int)
+				""");
+		assertThat(importedFunctions(module)).containsExactly("host.add", "host.tick");
+	}
+
+	@Test
+	void theHostImportsPrecedeAPrintingModulesFdWrite() {
+		// The spec puts every imported function ahead of every defined one, and the
+		// injector prepends the declared entries at the FRONT of the section -- so a
+		// printing program's fd_write moves out of index 0 and every reference in the
+		// module shifts with it. If that shift were missed, __write_stdout would call a
+		// host function instead.
+		byte[] module = compile("""
+				(rontolisp:wasm-import 'host-add :from "host" :as "add" :params '(:int :int) :returns :int)
+				(defun sum (a b) (print a) (host-add a b))
+				(rontolisp:wasm-export 'sum :params '(:int :int) :returns :int)
+				""");
+		assertThat(importedFunctions(module)).containsExactly("host.add", "wasi_snapshot_preview1.fd_write");
+	}
+
+	@Test
+	void aDeclaredButUncalledImportCostsTheModuleNothing() {
+		// Reachability from the exports decides what the module holds, for an import
+		// exactly as for a defun: a host function nothing calls is not imported, at
+		// EVERY optimize level -- the byte-identity is with the program that never
+		// declared it.
+		String withUnused = """
+				(rontolisp:wasm-import 'never :from "host" :as "never" :params '(:int) :returns :int)
+				(defun twice (n) (* n 2))
+				(rontolisp:wasm-export 'twice :params '(:int) :returns :int)
+				""";
+		String without = """
+				(defun twice (n) (* n 2))
+				(rontolisp:wasm-export 'twice :params '(:int) :returns :int)
+				""";
+		assertThat(compile(withUnused)).isEqualTo(compile(without));
+	}
+
+	@Test
+	void aScalarImportNeedsNeitherMemoryNorAnAllocator() {
+		// The narrow types ARE the internal representation, so an import that trades
+		// only integers adds no linear memory, no allocator and no data segment -- the
+		// module stays the memoryless shape a pure-numeric --no-gc program has.
+		byte[] module = compile("""
+				(rontolisp:wasm-import 'host-add :from "host" :as "add" :params '(:int :int) :returns :int)
+				(defun sum (a b) (host-add a b))
+				(rontolisp:wasm-export 'sum :params '(:int :int) :returns :int)
+				""");
+		assertThat(sections(module)).doesNotContainKey(5).doesNotContainKey(11);
+		assertScalarFuncTypes(Objects.requireNonNull(sections(module).get(1)));
+	}
+
+	@Test
+	void aStringBoundaryOnAnImportPullsInTheMemoryAndOnlyAResultTheAllocator() {
+		// A :string crossing either way is linear memory: an ARGUMENT is handed over as
+		// the (ptr,len) of a block the module already holds, and a RESULT is bytes the
+		// host wrote here through the exported __ronto_alloc. Both need the memory
+		// exported, so both flag it used -- but only the RESULT asks the HOST to put
+		// bytes in here, and only it therefore exports the allocator.
+		byte[] param = compile("""
+				(rontolisp:wasm-import 'emit :from "host" :as "emit" :params '(:string) :returns :void)
+				(defun go () (emit "hi") 1)
+				(rontolisp:wasm-export 'go :params '() :returns :int)
+				""");
+		byte[] result = compile("""
+				(rontolisp:wasm-import 'fetch-name :from "host" :as "name" :params '() :returns :string)
+				(defun go () (length (fetch-name)))
+				(rontolisp:wasm-export 'go :params '() :returns :int)
+				""");
+		for (byte[] module : List.of(param, result)) {
+			assertThat(sections(module)).containsKey(5);
+		}
+		assertThat(exportNames(Objects.requireNonNull(sections(param).get(7)))).contains("memory")
+			.doesNotContain("__ronto_alloc");
+		assertThat(exportNames(Objects.requireNonNull(sections(result).get(7)))).contains("memory", "__ronto_alloc");
+	}
+
+	// --- the literal :string call site (the wrapper's whole job, done at compile time) -
+
+	// The import wrapper's whole body for a :string parameter: `local.get p; i32.const 4;
+	// i32.add; local.get p; i32.load` -- the [len][bytes] header pointer turned into the
+	// (content ptr, len) pair the host reads. Present exactly when a wrapper survived.
+	private static boolean marshalsAStringHeader(byte[] module) {
+		byte[] code = Objects.requireNonNull(sections(module).get(10));
+		return containsSequence(code, 0x20, 0x00, 0x41, 0x04, 0x6A, 0x20, 0x00, 0x28, 0x02, 0x00);
+	}
+
+	@Test
+	void aLiteralStringArgumentCrossesAsTwoConstantsAndTakesTheWrapperWithIt() {
+		// For a LITERAL both halves of that pair are compile-time constants -- the block
+		// sits at a fixed address in the static data segment -- so the site pushes two
+		// of them and calls the host function itself. With no first-class functions on
+		// this backend that call site was the wrapper's only reference, so nothing is
+		// left to emit it for. The PAIR is the same module with the argument arriving at
+		// run time, which carries all of it.
+		String program = """
+				(rontolisp:wasm-import 'emit :from "host" :as "emit" :params '(:string) :returns :void)
+				(defun go (s) (emit %s) 1)
+				(rontolisp:wasm-export 'go :params '(:string) :returns :int)
+				""";
+		byte[] folded = compilePlainUnoptimized(program.formatted("\"hi\""));
+		byte[] wrapped = compilePlainUnoptimized(program.formatted("s"));
+		assertThat(marshalsAStringHeader(folded)).isFalse();
+		assertThat(marshalsAStringHeader(wrapped)).isTrue();
+		assertThat(functionBodies(Objects.requireNonNull(sections(folded).get(10))))
+			.hasSize(functionBodies(Objects.requireNonNull(sections(wrapped).get(10))).size() - 1);
+		assertThat(importedFunctions(folded)).containsExactly("host.emit");
+		// The module lengths are not comparable (the literal is six bytes of data the
+		// other program has no reason to hold); the code section is what moved.
+		assertThat(Objects.requireNonNull(sections(folded).get(10)).length)
+			.isLessThan(Objects.requireNonNull(sections(wrapped).get(10)).length);
+	}
+
+	@Test
+	void aThinForwarderOverAnImportIsWhereTheLiteralIs() {
+		// The shape a host-facing module is actually written in: a Lisp helper per host
+		// function, and the literals at the HELPER's call sites. The helper only names
+		// the boundary -- its arguments are its own parameters -- so the fold reads the
+		// site one frame up, and when it takes every site the helper has nothing left to
+		// do either. Byte-identical to the program that called the import directly.
+		byte[] viaForwarder = compile("""
+				(rontolisp:wasm-import 'emit :from "host" :as "emit" :params '(:string :string) :returns :void)
+				(defun say (element-id text) (emit element-id text))
+				(defun go (n) (say "id" "one") (say "id" "two") n)
+				(rontolisp:wasm-export 'go :params '(:int) :returns :int)
+				""");
+		byte[] direct = compile("""
+				(rontolisp:wasm-import 'emit :from "host" :as "emit" :params '(:string :string) :returns :void)
+				(defun go (n) (emit "id" "one") (emit "id" "two") n)
+				(rontolisp:wasm-export 'go :params '(:int) :returns :int)
+				""");
+		assertThat(viaForwarder).isEqualTo(direct);
+		assertThat(marshalsAStringHeader(viaForwarder)).isFalse();
+	}
+
+	@Test
+	void anExportedForwarderKeepsItsWrapper() {
+		// The host can call an exported helper with a string of its own, so neither it
+		// nor the wrapper behind it can go: the fold is whole-program, and an export is
+		// a call site it cannot see.
+		assertThat(marshalsAStringHeader(compilePlainUnoptimized("""
+				(rontolisp:wasm-import 'emit :from "host" :as "emit" :params '(:string) :returns :void)
+				(defun say (text) (emit text))
+				(defun go (n) (say "hi") n)
+				(rontolisp:wasm-export 'go :params '(:int) :returns :int)
+				(rontolisp:wasm-export 'say :params '(:string) :returns :int)
+				"""))).isTrue();
+	}
+
+	@Test
+	void oneSiteThatCannotFoldKeepsTheWrapperForAllOfThem() {
+		// A folded site does not remove the wrapper by itself -- only the last one does
+		// -- so an import with a runtime-string site anywhere would pay the length
+		// constants at its literal sites AND keep the wrapper. It folds nothing instead.
+		assertThat(marshalsAStringHeader(compilePlainUnoptimized("""
+				(rontolisp:wasm-import 'emit :from "host" :as "emit" :params '(:string) :returns :void)
+				(defun go (s) (emit "hi") (emit s) 1)
+				(rontolisp:wasm-export 'go :params '(:string) :returns :int)
+				"""))).isTrue();
+	}
+
+	@Test
+	void theFoldIsDeclinedWhenTheSitesWouldCostMoreThanTheWrapper() {
+		// Each folded site pays the length constant per :string argument, and the
+		// wrapper is paid once. Enough sites of a wide enough import and the arithmetic
+		// turns over -- which the compiler measures rather than guesses, so the fold
+		// cannot grow a module. Three :string parameters, eight sites.
+		StringBuilder wide = new StringBuilder("""
+				(rontolisp:wasm-import 'emit :from "host" :as "emit"
+				                       :params '(:string :string :string) :returns :void)
+				(defun go (n)
+				""");
+		for (int i = 0; i < 8; i++) {
+			wide.append("  (emit \"a").append(i).append("\" \"b").append(i).append("\" \"c").append(i).append("\")\n");
+		}
+		wide.append("""
+				  n)
+				(rontolisp:wasm-export 'go :params '(:int) :returns :int)
+				""");
+		assertThat(marshalsAStringHeader(compilePlainUnoptimized(wide.toString()))).isTrue();
+	}
+
+	@Test
+	void aStringReturningImportKeepsItsWrapperHoweverItsArgumentsArrive() {
+		// The result is bytes the host wrote into this memory, copied into a fresh
+		// [len][bytes] block through the allocator: a wrapper's worth of code that a
+		// call site would only repeat, so the argument side never decides this one.
+		assertThat(marshalsAStringHeader(compilePlainUnoptimized("""
+				(rontolisp:wasm-import 'ask :from "host" :as "ask" :params '(:string) :returns :string)
+				(defun go () (length (ask "q")))
+				(rontolisp:wasm-export 'go :params '() :returns :int)
+				"""))).isTrue();
+	}
+
+	@Test
+	void theImportTypeDesignatorsThisBackendRefusesNameWhatItTakes() {
+		// Two designators, both a heap object the scalar value model has no runtime for
+		// --
+		// and both perfectly valid one backend over, so the message says "not supported
+		// with --no-gc" rather than "unknown", and names the set that IS taken. The
+		// vocabulary follows the HOUSE INTEGER: this backend's is i64, so the whole
+		// fixed-width family crosses here where the wasm-GC i31ref takes only :s32.
+		assertThatThrownBy(() -> compile("""
+				(rontolisp:wasm-import 'ask :from "host" :as "ask" :params '(:s-expr) :returns :int)
+				(defun go () (ask 1))
+				(rontolisp:wasm-export 'go :params '() :returns :int)
+				""")).isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("type designator :S-EXPR is not supported with --no-gc")
+			.hasMessageContaining(":STRING");
+		assertThatThrownBy(() -> compile("""
+				(rontolisp:wasm-import 'read-chunk :from "host" :as "read" :params '() :returns :bytes)
+				(defun go () (read-chunk 1))
+				(rontolisp:wasm-export 'go :params '() :returns :int)
+				""")).isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("type designator :BYTES is not supported with --no-gc")
+			.hasMessageContaining(":STRING");
+	}
+
+	@Test
+	void anAsyncImportIsRefusedBecauseThereIsNoFutureToAnswerWith() {
+		// :async t says the call answers a future. Started == settled is still a future,
+		// and this value model has nothing to represent one -- the rest of the async
+		// surface is already refused by name, so this one is too.
+		assertThatThrownBy(() -> compile("""
+				(rontolisp:wasm-import 'slow :from "host" :as "slow" :params '(:int) :returns :int :async t)
+				(defun go (n) (slow n))
+				(rontolisp:wasm-export 'go :params '(:int) :returns :int)
+				""")).isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("rontolisp:wasm-import :async is not supported with --no-gc");
+	}
+
+	@Test
+	void aScalarComponentImportIsAnInstanceImportLoweredAheadOfTheCore() {
+		// A host import under --component is a component-model instance import (one per
+		// :from module, typed by the reached functions under their :param-names) whose
+		// function is aliased, canon-lowered with NO options (flat scalars touch no
+		// memory) and handed to the core's instantiation -- so there is no shim, the
+		// component has exactly one core module, and that core is byte-identical to the
+		// plain --no-gc output.
+		String program = """
+				(rontolisp:wasm-import 'host-add :from "host" :as "add" :params '(:int :int) :param-names '(a b) :returns :int)
+				(defun sum (a b) (host-add a b))
+				(rontolisp:wasm-export 'sum :as "sum" :params '(:int :int) :returns :int)
+				""";
+		byte[] component = compileComponent(program);
+		List<byte[]> coreModules = sectionPayloads(component, 1);
+		assertThat(coreModules).hasSize(1);
+		assertThat(coreModules.get(0)).isEqualTo(compilePlainUnoptimized(program));
+		String text = new String(component, StandardCharsets.ISO_8859_1);
+		assertThat(text).contains("host", "add");
+		// The import section (id 10) names the instance; the type section carries the
+		// instance type's func type with the two labels, and the canon section an
+		// optionless lower (01 00 <func> 00) ahead of the lifts.
+		assertThat(sectionPayloads(component, 10)).hasSize(1);
+		byte[] instanceType = sectionPayloads(component, 7).get(0);
+		assertThat(containsSequence(instanceType, 0x42)).as("instance type").isTrue();
+		assertThat(containsSequence(instanceType, 0x01, 'a', 0x7a, 0x01, 'b', 0x7a)).as("named s32 params").isTrue();
+		byte[] lowers = sectionPayloads(component, 8).get(0);
+		assertThat(containsSequence(lowers, 0x01, 0x00, 0x00, 0x00)).as("canon lower, no options").isTrue();
+		assertThat(sectionPayloads(component, 1)).as("no shim module").hasSize(1);
+	}
+
+	@Test
+	void aStringComponentImportGoesThroughAGeneratedShimAndFixup() {
+		// A :string argument makes the lower name the core's own memory, which does not
+		// exist until the core is instantiated -- the wit-component cycle. The wrap
+		// generates a funcref-table shim (instantiated first; the core imports its
+		// trampolines) and a fixup whose element segment patches the real lowered
+		// function in once memory is aliased: three core modules, the shim exporting the
+		// "$imports" table, and a lower with the (memory 0) utf8 options (02 03 00 00). A
+		// string ARGUMENT alone changes nothing in the core: still byte-identical.
+		String program = """
+				(rontolisp:wasm-import 'host-log :from "env" :as "host-log" :params '(:string) :returns :void)
+				(defun run (n) (host-log "hello") n)
+				(rontolisp:wasm-export 'run :as "run" :params '(:int) :returns :int)
+				""";
+		byte[] component = compileComponent(program);
+		List<byte[]> coreModules = sectionPayloads(component, 1);
+		assertThat(coreModules).as("core + shim + fixup").hasSize(3);
+		assertThat(coreModules.get(0)).isEqualTo(compilePlainUnoptimized(program));
+		assertThat(new String(coreModules.get(1), StandardCharsets.ISO_8859_1)).contains("$imports", "0");
+		assertThat(new String(coreModules.get(2), StandardCharsets.ISO_8859_1)).contains("$imports");
+		boolean memoryUtf8Lower = false;
+		for (byte[] canon : sectionPayloads(component, 8)) {
+			if (containsSequence(canon, 0x01, 0x00, 0x00, 0x02, 0x03, 0x00, 0x00)) {
+				memoryUtf8Lower = true;
+			}
+		}
+		assertThat(memoryUtf8Lower).as("canon lower (memory 0) string-encoding=utf8").isTrue();
+		// The core's export list carries no cabi_realloc: only a :string RESULT (or a
+		// :string export) needs the host to allocate in this memory.
+		assertThat(exportNames(Objects.requireNonNull(sections(coreModules.get(0)).get(7))))
+			.doesNotContain("cabi_realloc");
+	}
+
+	@Test
+	void aStringResultComponentImportTakesTheReturnPointerAbiAndPullsInRealloc() {
+		// The canonical ABI caps flat results at one, so a :string result comes back
+		// through a trailing i32 return pointer the wrapper allocates, and the host
+		// writes the bytes through cabi_realloc -- exported by the core for that reason
+		// alone (no :string export here), and named in the lower's options with memory
+		// and utf8 (03 03 00 04 <realloc> 00). This is the one shape whose core differs
+		// from the plain --no-gc output (there the result is the (ptr,len) pair).
+		String program = """
+				(rontolisp:wasm-import 'host-name :from "env" :as "host-name" :params '(:int) :returns :string)
+				(defun name-len (n) (length (host-name n)))
+				(rontolisp:wasm-export 'name-len :as "name-len" :params '(:int) :returns :int)
+				""";
+		byte[] component = compileComponent(program);
+		byte[] core = sectionPayloads(component, 1).get(0);
+		assertThat(core).isNotEqualTo(compilePlainUnoptimized(program));
+		Map<Integer, byte[]> coreSections = sections(core);
+		assertThat(exportNames(Objects.requireNonNull(coreSections.get(7)))).contains("cabi_realloc", "memory");
+		// The import's type: (i32 i32) -> () -- the :int argument and the return
+		// pointer, no results -- is the last entry of the type section.
+		byte[] types = Objects.requireNonNull(coreSections.get(1));
+		assertThat(types[types.length - 5]).as("func type").isEqualTo((byte) 0x60);
+		assertThat(types[types.length - 4]).as("two params").isEqualTo((byte) 0x02);
+		assertThat(types[types.length - 3]).isEqualTo((byte) 0x7f);
+		assertThat(types[types.length - 2]).isEqualTo((byte) 0x7f);
+		assertThat(types[types.length - 1]).as("no results").isEqualTo((byte) 0x00);
+		boolean reallocLower = false;
+		for (byte[] canon : sectionPayloads(component, 8)) {
+			if (containsSequence(canon, 0x03, 0x03, 0x00, 0x04) && containsSequence(canon, 0x00, 0x00)) {
+				reallocLower = true;
+			}
+		}
+		assertThat(reallocLower).as("canon lower (memory 0) (realloc n) string-encoding=utf8").isTrue();
+	}
+
+	@Test
+	void componentPrintComposesWithTheImportShim() {
+		// The print micro-adapter's fixed shim/fixup and the generated import shim/fixup
+		// are two independent tables: the core instantiates against both, and each
+		// fixup patches its own. Six core modules, one export lifted async as every
+		// printing export is, and the core still byte-identical to the plain printing
+		// output.
+		String program = """
+				(rontolisp:wasm-import 'host-log :from "env" :as "host-log" :params '(:string) :returns :void)
+				(defun run (n) (print n) (host-log "hello") n)
+				(rontolisp:wasm-export 'run :as "run" :params '(:int) :returns :int)
+				""";
+		byte[] component = compileComponent(program);
+		List<byte[]> coreModules = sectionPayloads(component, 1);
+		assertThat(coreModules).as("core + print shim/bridge/fixup + import shim/fixup").hasSize(6);
+		assertThat(coreModules.get(0)).isEqualTo(compilePlainUnoptimized(program));
+		String text = new String(component, StandardCharsets.ISO_8859_1);
+		assertThat(text).contains("wasi:cli/stdout@0.3.0", "write-via-stream", "host-log");
+	}
+
+	@Test
+	void componentImportNamesFollowTheComponentModelGrammar() {
+		// The module becomes an imported instance and the field a function of its type,
+		// so both (and every :param-names entry) must be component-model names: a
+		// kebab label, or for the module a WIT interface id. The Preview 1 module
+		// accepts any spelling, which is why the check lives with the wrap.
+		assertThatThrownBy(() -> compileComponent("""
+				(rontolisp:wasm-import 'host-log :from "env" :as "host_log" :params '(:string) :returns :void)
+				(defun run (n) (host-log "x") n)
+				(rontolisp:wasm-export 'run :as "run" :params '(:int) :returns :int)
+				""")).isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining(":as \"host_log\" is not a valid component-model function name");
+		assertThatThrownBy(() -> compileComponent("""
+				(rontolisp:wasm-import 'host-log :from "My Host" :as "host-log" :params '(:string) :returns :void)
+				(defun run (n) (host-log "x") n)
+				(rontolisp:wasm-export 'run :as "run" :params '(:int) :returns :int)
+				""")).isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining(":from \"My Host\" is not a valid component-model import name");
+		assertThatThrownBy(() -> compileComponent(
+				"""
+						(rontolisp:wasm-import 'host-add :from "docs:host/env@0.1.0" :as "add" :params '(:int) :param-names '(Bad_Name) :returns :int)
+						(defun run (n) (host-add n))
+						(rontolisp:wasm-export 'run :as "run" :params '(:int) :returns :int)
+						"""))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining(":param-names entry 'bad_name' is not a valid component-model parameter name");
+		// Two bindings of one (module, field) cannot both appear in the instance type.
+		assertThatThrownBy(() -> compileComponent("""
+				(rontolisp:wasm-import 'one :from "env" :as "add" :params '(:int :int) :returns :int)
+				(rontolisp:wasm-import 'two :from "env" :as "add" :params '(:int :int) :returns :int)
+				(defun run (n) (+ (one n n) (two n n)))
+				(rontolisp:wasm-export 'run :as "run" :params '(:int) :returns :int)
+				""")).isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("both bind \"env\".\"add\", which --no-gc --component cannot import twice");
+	}
+
+	@Test
+	void anUncalledComponentImportDeclaresNothing() {
+		// Only the imports the exports reach are imported, and the component declares
+		// exactly what the core imports: with nothing reached there is no import block
+		// at all, and the component is byte-identical to the import-free one.
+		String declared = """
+				(rontolisp:wasm-import 'host-add :from "env" :as "add" :params '(:int :int) :returns :int)
+				(defun sumsquared (a b) (+ (* a a) (* b b)))
+				(rontolisp:wasm-export 'sumsquared :params '(:int :int) :returns :int)
+				""";
+		assertThat(compileComponent(declared)).isEqualTo(compileComponent(COMPONENT_PROGRAM));
+	}
+
+	@Test
+	void oneNameNamesOneFunction() {
+		assertThatThrownBy(() -> compile("""
+				(rontolisp:wasm-import 'thing :from "host" :as "a" :params '() :returns :int)
+				(rontolisp:wasm-import 'thing :from "host" :as "b" :params '() :returns :int)
+				(defun go () (thing))
+				(rontolisp:wasm-export 'go :params '() :returns :int)
+				""")).isInstanceOf(UnsupportedOperationException.class).hasMessageContaining("declares 'THING' twice");
+		assertThatThrownBy(() -> compile("""
+				(rontolisp:wasm-import 'thing :from "host" :as "a" :params '() :returns :int)
+				(defun thing () 1)
+				(defun go () (thing))
+				(rontolisp:wasm-export 'go :params '() :returns :int)
+				""")).isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("has the same name as a top-level defun");
+	}
+
+	@Test
+	void aConsumedPackageDeclarationIsDroppedRatherThanRefused() {
+		// defpackage resolves to the quoted package name and in-package to
+		// (setq *package* :P). Both are consumed declarations by the time the backend
+		// sees them, and it has no top-level init body to evaluate a value in -- so
+		// both are dropped, which is what lets a user package (and rontolisp:wit-import,
+		// whose lowering writes a defpackage) reach this backend at all.
+		byte[] packaged = compile("""
+				(defpackage app (:use cl) (:export run))
+				(in-package app)
+				(defun run (n) (* n 2))
+				(rontolisp:wasm-export 'app:run :as "run" :params '(:int) :returns :int)
+				""");
+		assertThat(exportNames(Objects.requireNonNull(sections(packaged).get(7)))).contains("run");
+	}
+
+	// The "module.field" of every function import, in index order.
+	private static List<String> importedFunctions(byte[] module) {
+		byte[] section = sections(module).get(2);
+		if (section == null) {
+			return List.of();
+		}
+		List<String> out = new ArrayList<>();
+		int[] p = { 0 };
+		int count = readUleb(section, p);
+		for (int i = 0; i < count; i++) {
+			String moduleName = readName(section, p);
+			String field = readName(section, p);
+			int kind = section[p[0]++] & 0xFF;
+			readUleb(section, p);
+			if (kind == 0x00) {
+				out.add(moduleName + "." + field);
+			}
+		}
+		return out;
+	}
+
+	private static String readName(byte[] section, int[] p) {
+		int len = readUleb(section, p);
+		String name = new String(section, p[0], len, StandardCharsets.UTF_8);
+		p[0] += len;
+		return name;
+	}
+
+}

@@ -1,0 +1,221 @@
+package am.ik.rontolisp.eval;
+
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.List;
+
+import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.compiler.FetchResponseShape;
+import am.ik.rontolisp.compiler.HostBoundary;
+import am.ik.rontolisp.reader.Features;
+import am.ik.rontolisp.reader.LispReader;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+/**
+ * Pins the {@code --host-fetch} lowering against {@link FetchResponseShape}: the
+ * generated Lisp AND the shipped host ({@code examples/cloudflare-workers/dog-fetcher})
+ * both carry the envelope the records declare, so the two sides of the {@code env.fetch}
+ * boundary cannot drift apart -- the {@code GlImportObjectTest} rule, applied to the
+ * fetch envelope instead of eyeballs.
+ */
+class HostFetchLibraryTest {
+
+	// The shipped host half. GENERATED since the glue learned to write it on both
+	// boundaries (src/index.js is the build's three lines now), which is why this reads
+	// worker.js:
+	// the file that really speaks the envelope is the one to hold to the record.
+	private static final Path WORKER_HOST = Path.of("examples/cloudflare-workers/dog-fetcher/src/worker.js");
+
+	@Test
+	void spliceHappensExactlyWhenTheProgramFetches() {
+		List<LispVal> fetches = LispReader.readAllFromString("(defun f () (rontolisp:fetch \"https://x\"))",
+				Features.WASM_REACTOR);
+		assertThat(HostFetchLibrary.process(fetches, HostBoundary.STREAMING)).hasSizeGreaterThan(fetches.size());
+		// The zero-import contract: a program that never fetches is returned as-is.
+		List<LispVal> plain = LispReader.readAllFromString("(defun f () 1)", Features.WASM_REACTOR);
+		assertThat(HostFetchLibrary.process(plain, HostBoundary.STREAMING)).isSameAs(plain);
+	}
+
+	// The envelope is the record's, whichever boundary carries the body -- that is the
+	// whole point of deriving it -- so both shapes are held to the same assertions.
+	@ParameterizedTest
+	@EnumSource(HostBoundary.class)
+	void generatedLoweringCarriesTheDerivedEnvelope(HostBoundary boundary) {
+		String source = HostFetchLibrary.source(boundary);
+		// The head's import, under the documented host module/field.
+		assertThat(source).contains(":from \"" + HostFetchLibrary.IMPORT_MODULE + "\"")
+			.contains(":as \"" + HostFetchLibrary.IMPORT_FIELD + "\"");
+		// Request side: every record field a host receives crosses, as its own JSON key.
+		// The two deadlines do not: a program naming one is refused at the call, and one
+		// naming none keeps the lowering it had.
+		for (FetchResponseShape.Field field : FetchResponseShape.hostRequestFields()) {
+			assertThat(source).as("request field '%s' is carried", field.name()).contains(field.keyword());
+		}
+		assertThat(source).doesNotContain("timeout");
+		assertThat(HostFetchLibrary.source(boundary, false, true))
+			.contains("(when (or (getf options :connect-timeout) (getf options :first-byte-timeout))")
+			.doesNotContain(":CONNECT-TIMEOUT");
+		// Response side: every record field is read back by its JSON key, in record
+		// order inside the result plist, plus the reserved error arm. The body's key is
+		// read on BOTH boundaries: on the streaming one it is the in-band fallback a host
+		// may still fill, on the envelope one it is where the whole reply arrived.
+		for (FetchResponseShape.Field field : FetchResponseShape.responseFields()) {
+			assertThat(source).as("response field '%s' is read", field.name())
+				.contains("(gethash \"" + field.name() + "\" envelope)");
+		}
+		assertThat(source).contains("(gethash \"" + FetchResponseShape.HOST_ENVELOPE_ERROR_KEY + "\" envelope)");
+		assertThat(source).as("the body is the stream every backend's :body is")
+			.contains("(rontolisp::%host-fetch-body (gethash \"" + FetchResponseShape.responseField("body").name()
+					+ "\" envelope))");
+	}
+
+	@Test
+	void theEnvelopeBoundaryDropsTheBodyImportAndTheCursorBehindIt() {
+		String envelope = HostFetchLibrary.source(HostBoundary.ENVELOPE);
+		String streaming = HostFetchLibrary.source(HostBoundary.STREAMING);
+		// The reply-body import, the generation counter that tells a stream its reply was
+		// superseded, the pull thunk over the import, and the mid-body error channel the
+		// split needs -- all four exist only because the body left the head.
+		assertThat(streaming).contains(":as \"" + HostFetchLibrary.BODY_IMPORT_FIELD + "\"")
+			.contains("%host-fetch-open")
+			.contains("%host-fetch-pull")
+			.contains("failed mid-transfer");
+		assertThat(envelope).doesNotContain(HostFetchLibrary.BODY_IMPORT_FIELD)
+			.doesNotContain("%host-fetch-open")
+			.doesNotContain("%host-fetch-pull")
+			.doesNotContain("failed mid-transfer")
+			// ...and the reactor's byte-shaped receive machinery is not named either.
+			.doesNotContain("%http-reactor-buffer")
+			.doesNotContain("%http-reactor-chunk");
+		// What is left is one stream over the head's own key -- no default written
+		// here, because the transport normalizes an absent/empty/null key into the
+		// empty stream itself, which is what the record's declared default means.
+		assertThat(envelope).contains("(rontolisp::%http-reactor-body-stream in-band)");
+		assertThat(FetchResponseShape.RESPONSE_BODY_DEFAULT).as("an empty stream drains to the declared default")
+			.isEmpty();
+		// The streaming arm normalizes BEFORE choosing the pull thunk, so a host
+		// answering `"body": null` -- JSON for "not here", not for "empty" -- still
+		// reaches the import rather than short-circuiting on a non-nil symbol.
+		assertThat(streaming).contains("(or (rontolisp::%http-reactor-source in-band)");
+	}
+
+	@Test
+	void theReentrantStreamingLoweringDrainsByReplyId() {
+		String source = HostFetchLibrary.source(HostBoundary.STREAMING, true);
+		// The reply-body import leads with the :int REPLY ID the head carried back in
+		// its reserved "body-id" key, and every pull hands it over -- so overlapped
+		// calls (and a second fetch inside one call) each drain their own reply, and
+		// the serialised shape's open-reply counter does not exist.
+		assertThat(source).contains(":as \"" + HostFetchLibrary.BODY_IMPORT_FIELD + "\"")
+			.contains(":params '(:int) :returns :bytes")
+			.contains("(rontolisp::%host-fetch-read-body id buf)")
+			.contains("(gethash \"" + FetchResponseShape.HOST_BODY_ID_KEY + "\" envelope)")
+			.doesNotContain("%host-fetch-open")
+			.doesNotContain("superseded by a later fetch");
+		// The in-band fallback still wins, normalized first, like the serialised shape.
+		assertThat(source).contains("(or (rontolisp::%http-reactor-source in-band)");
+		// The envelope boundary ignores the flag: no cursor exists to need identity.
+		assertThat(HostFetchLibrary.source(HostBoundary.ENVELOPE, true))
+			.isEqualTo(HostFetchLibrary.source(HostBoundary.ENVELOPE));
+	}
+
+	@Test
+	void theShippedWorkerHostSpeaksTheSameEnvelope() throws IOException {
+		String host = Files.readString(WORKER_HOST, StandardCharsets.UTF_8);
+		// The host reads every request field the record declares...
+		for (FetchResponseShape.Field field : FetchResponseShape.hostRequestFields()) {
+			assertThat(host).as("the worker host reads request.%s", field.name()).contains("request." + field.name());
+		}
+		// ...and answers every response field, plus the error arm -- the head's fields
+		// as JSON keys, the BODY through its own import, which is the split this
+		// boundary is. A record that grows a field fails here until the host carries it.
+		for (FetchResponseShape.Field field : FetchResponseShape.responseFields()) {
+			if ("body".equals(field.name())) {
+				assertThat(host).as("the worker host provides the body import")
+					.contains(HostFetchLibrary.BODY_IMPORT_FIELD);
+			}
+			else {
+				assertThat(host).as("the worker host answers '%s'", field.name()).contains(field.name() + ":");
+			}
+		}
+		assertThat(host).contains(FetchResponseShape.HOST_ENVELOPE_ERROR_KEY + ":");
+	}
+
+	@ParameterizedTest
+	@EnumSource(HostBoundary.class)
+	void loweringParsesInCanonicalShape(HostBoundary boundary) {
+		// The generated source must read cleanly with the reactor feature set; a parse
+		// error here would otherwise surface as a confusing CLI failure. Cached per
+		// boundary, so a second compile in the same JVM must not be served the first
+		// boundary's parse -- which is what asking for both here would catch.
+		assertThat(HostFetchLibrary.forms(boundary)).isNotEmpty();
+		assertThat(HostFetchLibrary.forms(boundary)).isSameAs(HostFetchLibrary.forms(boundary));
+	}
+
+	@Test
+	void theRunnerLoweringIsSplicedExactlyWhenTheProgramFetches() {
+		List<LispVal> fetches = LispReader.readAllFromString("(defun f () (rontolisp:fetch \"https://x\"))",
+				Features.WASM);
+		List<LispVal> spliced = HostFetchLibrary.processForRunner(fetches);
+		// Appended after the program, so its own forms (and import ordinals) come first.
+		assertThat(spliced).hasSizeGreaterThan(fetches.size()).startsWith(fetches.toArray(LispVal[]::new));
+		// A --native program that never fetches imports nothing new: its module is the
+		// one it was before the transport existed.
+		List<LispVal> plain = LispReader.readAllFromString("(defun f () 1)", Features.WASM);
+		assertThat(HostFetchLibrary.processForRunner(plain)).isSameAs(plain);
+	}
+
+	@Test
+	void theRunnerLoweringCarriesTheDerivedEnvelopeOverTheRunnersImports() {
+		String source = HostFetchLibrary.runnerSource();
+		// The runner's own import module, answered by rlrun-net -- no env import a host
+		// would have to supply.
+		String module = ":from \"" + FetchResponseShape.RUNNER_IMPORT_MODULE + "\"";
+		assertThat(source).contains(module + " :as \"" + FetchResponseShape.RUNNER_START_FIELD + "\"")
+			.contains(module + " :as \"" + FetchResponseShape.RUNNER_HEAD_FIELD + "\"")
+			.contains(module + " :as \"" + HostFetchLibrary.BODY_IMPORT_FIELD + "\"")
+			.doesNotContain(":from \"" + HostFetchLibrary.IMPORT_MODULE + "\"");
+		// The same envelope as the host's: every request field crosses, every response
+		// field is read back by its key, and the error arm signals. The two deadlines
+		// cross in a program that names a timeout option, and in no other.
+		String timed = HostFetchLibrary.runnerSource(true);
+		for (FetchResponseShape.Field field : FetchResponseShape.requestFields()) {
+			assertThat(timed).as("request field '%s' is carried", field.name()).contains(field.keyword());
+			assertThat(source.contains(field.keyword())).as("request field '%s' without a timeout", field.name())
+				.isEqualTo(!FetchResponseShape.isDeadline(field));
+		}
+		for (FetchResponseShape.Field field : FetchResponseShape.responseFields()) {
+			assertThat(source).as("response field '%s' is read", field.name())
+				.contains("(gethash \"" + field.name() + "\" envelope)");
+		}
+		assertThat(source).contains("(gethash \"" + FetchResponseShape.HOST_ENVELOPE_ERROR_KEY + "\" envelope)");
+		// The reply is a HANDLE the runner answers at once (an externref the collector
+		// releases), every body pull names it, and there is no one-cursor counter.
+		assertThat(source).contains(":params '(:string) :returns :extern)")
+			.contains(":params '(:extern) :returns :bytes)")
+			.contains("(rontolisp::%host-fetch-read-body reply buf)")
+			.doesNotContain("%host-fetch-open")
+			.doesNotContain("superseded by a later fetch");
+		// The request is in flight when fetch returns; the head is waited for at the
+		// FIRST AWAIT of a deferred future, which is where a transport failure signals,
+		// as on the interpreter and the JVM.
+		assertThat(source).contains("(rontolisp::%future-deferred").contains("(rontolisp::%host-fetch-head reply)");
+		// The transport is the runner's, not a host's: fetch sends the default agent
+		// itself unless the caller's headers name the field.
+		assertThat(source).contains("(string-equal (car pair) \"" + FetchResponseShape.USER_AGENT_HEADER + "\")")
+			.contains("\"" + FetchResponseShape.defaultUserAgent() + "\"");
+	}
+
+	@Test
+	void theRunnerLoweringParsesInCanonicalShape() {
+		assertThat(HostFetchLibrary.runnerForms()).isNotEmpty();
+		assertThat(HostFetchLibrary.runnerForms()).isSameAs(HostFetchLibrary.runnerForms());
+	}
+
+}

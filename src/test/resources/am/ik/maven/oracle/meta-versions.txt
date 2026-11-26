@@ -1,0 +1,15 @@
+# descriptor test.meta:lib:LATEST test.meta:lib:RELEASE test.meta:snaplatest:LATEST test.meta:snaplatest:RELEASE test.meta:both:RELEASE test.meta:moved:LATEST test.meta:nometa:LATEST
+artifact test.meta:lib:jar:LATEST
+dep test.meta:two:jar::1 scope=compile optional=null
+artifact test.meta:lib:jar:RELEASE
+dep test.meta:two:jar::1 scope=compile optional=null
+artifact test.meta:snaplatest:jar:LATEST
+dep test.meta:two:jar::1 scope=compile optional=null
+artifact test.meta:snaplatest:jar:RELEASE
+dep test.meta:one:jar::1 scope=compile optional=null
+artifact test.meta:both:jar:RELEASE
+dep test.meta:one:jar::1 scope=compile optional=null
+artifact test.meta:lib:jar:1.0
+relocation test.meta:moved:jar:1.0
+dep test.meta:one:jar::1 scope=compile optional=null
+error Failed to read artifact descriptor for test.meta:nometa:jar:LATEST <- Failed to resolve version for test.meta:nometa:jar:LATEST: Could not find metadata test.meta:nometa/maven-metadata.xml in local (<local>) <- Could not find metadata test.meta:nometa/maven-metadata.xml in local (<local>)

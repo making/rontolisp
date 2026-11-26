@@ -1,0 +1,51 @@
+# リファレンス
+
+Clojure フロントエンドが提供する名前ごとの 1 ページです。実験的サブセットのフォーム・操作・
+interop エントリのすべてを、分野ごとにまとめています。**表の各名前は専用のページにリンクして
+おり**、そこにシグネチャ、動作、オラクルとの差異（あれば）、動作例があります。拒否される
+フォームはここには載せません -- [セマンティクス](semantics.md)にあります。
+
+| ページ | 内容 |
+|---|---|
+| [構文と定義](reference/syntax.md) | `def`/`defn`/`fn`、束縛、条件分岐、`quote`、`comment`、`declare` |
+| [スレッディング](reference/threading.md) | `->`、`->>`、`as->`、`doto` と条件付きスレッダー |
+| [seq](reference/seqs.md) | 取れば lazy、そうでなければ strict な seq 群 |
+| [反復](reference/iteration.md) | `doseq`/`dotimes`/`for`、`dorun`/`doall`、`run!` |
+| [マップ・セット・ベクター](reference/collections.md) | `equal` ハッシュテーブル上の永続コレクション操作 |
+| [高階関数](reference/higher-order.md) | `comp`・`partial`・`complement`・`constantly`・`identity`・`memoize`・`trampoline`、`juxt`・`fnil`・`every-pred`・`some-fn`・`min-key`・`max-key` |
+| [数値と述語](reference/numbers.md) | 算術、比較、型述語 |
+| [型・コレクション述語](reference/predicates.md) | `seq?`/`map?`/`keyword?`/`int?` などの種類の判定、`identical?`、`distinct?`、`extends?` |
+| [インスタントと UUID](reference/instants.md) | `#inst` と `#uuid` の値: `inst-ms`、`random-uuid`、`parse-uuid` |
+| [状態](reference/state.md) | `atom`/`deref`/`swap!` と volatile 三兄弟 |
+| [マルチメソッドと階層](reference/multimethods.md) | `defmulti`/`defmethod`、`derive` と階層参照 |
+| [プロトコル、レコード、型](reference/protocols.md) | `defprotocol`・`defrecord`・`deftype`、`reify`、`extend` 系と `satisfies?` |
+| [エラー](reference/errors.md) | `try`/`catch`/`finally`、`throw`、`ex-info` とその参照 |
+| [名前空間](reference/namespaces.md) | `ns` とトップレベル `require`/`use`/`import` |
+| [名前とキーワード](reference/names.md) | `name`/`namespace`/`keyword`/`symbol` |
+| [(clojure.string)](reference/string.md) | 文字列ライブラリと核の `subs` |
+| [(clojure.set)](reference/clojure-set.md) | 関係演算の集合ライブラリ: `union`/`intersection`/`difference`、`select`/`project`/`rename`、`index`/`join`、`subset?`/`superset?` |
+| [clojure.data](reference/clojure-data.md) | 再帰的な比較: 片側だけにあるものと両方にあるものを返す `diff` |
+| [clojure.datafy](reference/clojure-datafy.md) | 値のデータ化とデータからの移動: `clojure.core.protocols` のプロトコルの上の `datafy`/`nav`、`reduce`/`reduce-kv` が参照する `CollReduce`/`IKVReduce` |
+| [clojure.core.reducers](reference/clojure-core-reducers.md) | レデューサーとフォルダー: 畳み込み可能なビューとしての `map`/`filter`/`mapcat`/`take` など、部分ごとの `fold`、`foldcat`/`cat`/`append!`、`monoid` |
+| [clojure.edn](reference/clojure-edn.md) | EDN データの読み取り: `:eof`・`:readers`・`:default` を取る `read-string`/`read` |
+| [clojure.instant](reference/clojure-instant.md) | RFC 3339 タイムスタンプの読み取り: `parse-timestamp`、`validated`、`read-instant-date`/`-timestamp`/`-calendar` |
+| [clojure.java.io](reference/clojure-java-io.md) | ファイル、URL と、その上のストリーム: `file`、`reader`/`writer`、`input-stream`/`output-stream`、`copy`、`resource`、`Coercions`/`IOFactory` プロトコル、`rontolisp:fetch` で読む `http:` URL |
+| [clojure.math](reference/clojure-math.md) | どのバックエンドでも同じビットを返す double の関数、丸めと隣の double、オーバーフローを拒否する long の算術 |
+| [clojure.pprint](reference/clojure-pprint.md) | プリティプリント: 右マージンの内側にレイアウトする `pprint`/`write`、`print-table`、コード用の `code-dispatch`、プログラムが拡張・置換できるディスパッチ |
+| [clojure.reflect](reference/clojure-reflect.md) | ホストのクラスの基底、フラグ、メンバーをデータで返す: `type-reflect`/`reflect`、`Constructor`/`Method`/`Field` のレコード、`typename` |
+| [clojure.stacktrace](reference/clojure-stacktrace.md) | スロー可能オブジェクトとその原因の出力: `root-cause`、`print-throwable`、`print-stack-trace`、`print-cause-trace` |
+| [clojure.template](reference/clojure-template.md) | 式のテンプレート: `apply-template`、`do-template` |
+| [clojure.walk](reference/clojure-walk.md) | 入れ子のデータの汎用走査: `walk`/`postwalk`/`prewalk`、`-replace` の組、`keywordize-keys`/`stringify-keys` |
+| [clojure.zip](reference/clojure-zip.md) | ジッパーによる関数的な木の編集: `vector-zip`/`seq-zip`/`xml-zip`、移動、編集、深さ優先の巡回 |
+| [正規表現](reference/regex.md) | `re-find`/`re-seq`/`re-matches`、`re-matcher`/`re-groups`、`re-pattern` とパターンの `split`/`replace` |
+| [Ring アダプター](reference/ring.md) | `ring.adapter.rontolisp/run-server`: Ring ハンドラをすべてのトランスポートで提供 |
+| [Ring ユーティリティ](reference/ring-util.md) | 組み込みの `ring.util.*` と `ring.middleware.*`: レスポンスの組み立て、URL とフォームの符号化、パラメーターのミドルウェア |
+| [HTTP クライアント (rontolisp.http-client)](reference/http-client.md) | babashka.http-client と同じ API の `request` と `get`/`post`/`put`/`delete`/`head`/`patch`。どのトランスポートでも `rontolisp:fetch` を通る |
+| [WASM ホスト関数 (rontolisp.wasm)](reference/wasm.md) | `defimport`/`export`: モジュールが呼ぶホスト関数、ホストが呼ぶ関数 |
+| [WIT 契約 (rontolisp.wit)](reference/wit.md) | `import`/`export`/`provide`: 呼び出す WIT インターフェース、実装する WIT world |
+| [Java interop](reference/interop.md) | `.`、`..`、構築、`memfn`、`proxy` |
+| [トランスデューサー](reference/transducers.md) | `transduce`・`eduction`・`sequence`・`completing`、`reduced` とその仲間、`cat`、seq 関数の1引数形 |
+| [入出力](reference/io.md) | `spit`・`slurp`・`line-seq`・`file-seq`・`clojure.java.io/reader` と `format` |
+| [テスト (clojure.test)](reference/test.md) | `deftest`/`is`/`are`/`testing` と `run-tests` の集計ランナー |
+| [マクロ](reference/macros.md) | `defmacro`、syntax-quote、`gensym`、`macroexpand-1`、`macroexpand` |
+| [コードの走査 (riddley)](reference/riddley.md) | 組み込みの `riddley.walk` と `riddley.compiler`: 各マクロ呼び出しの位置で見えるローカルを渡す `macroexpand-all` と `walk-exprs` |

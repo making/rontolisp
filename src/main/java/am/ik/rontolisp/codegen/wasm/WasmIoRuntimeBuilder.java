@@ -1,0 +1,4409 @@
+package am.ik.rontolisp.codegen.wasm;
+
+import java.io.ByteArrayOutputStream;
+
+import am.ik.wasm.Instruction;
+import am.ik.wasm.Type;
+import am.ik.wasm.WasmWriter;
+import org.jspecify.annotations.Nullable;
+
+/**
+ * Builds the WASM bodies of the file-stream runtime used by the {@code open},
+ * {@code close}, {@code write-line}, {@code read-byte}, {@code write-byte} and
+ * stream-taking {@code read-line} built-ins (and therefore by the {@code with-open-file}
+ * macro).
+ *
+ * <p>
+ * A stream value is the WASI file descriptor returned by {@code path_open}, boxed as an
+ * i31 integer (mirroring the JVM backend, where the handle indexes a stream table). Like
+ * {@code load}, {@code open} resolves its path through {@link #buildPathDirFdBody()}
+ * against the PREOPEN TABLE -- a relative path against the first preopened directory (fd
+ * 3), an absolute one against the preopen whose name is its longest prefix -- so the
+ * module must run with {@code --dir}. {@code _write_line} writes the string bytes plus a
+ * newline straight through {@code fd_write} (fd 1 = stdout when no stream is given), and
+ * {@code _close} delegates to {@code fd_close}.
+ */
+final class WasmIoRuntimeBuilder {
+
+	private WasmIoRuntimeBuilder() {
+	}
+
+	/**
+	 * The longest preopen name {@code _path_dirfd} will compare against, and the linear
+	 * scratch it reserves for one {@code prestat} record (8 bytes) plus that name.
+	 * Preview 1 caps a path component at 255 bytes and a preopen name is a host-chosen
+	 * directory path, so 512 is generous; a longer one is SKIPPED rather than truncated,
+	 * because a truncated name would compare equal to a prefix that is not the directory
+	 * it names.
+	 */
+	private static final int PRESTAT_NAME_MAX = 512;
+
+	private static final int PRESTAT_SCRATCH_BYTES = 8 + PRESTAT_NAME_MAX;
+
+	/**
+	 * How many descriptors above fd 2 the preopen walk will look at. Every host lays its
+	 * preopens out contiguously from fd 3 and the walk stops at the first
+	 * {@code fd_prestat_get} errno anyway, so this is only a bound against a host that
+	 * answers success forever.
+	 */
+	private static final int PREOPEN_SCAN_MAX = 64;
+
+	/**
+	 * Builds the _path_dirfd(ptr, len) function body: the directory descriptor the staged
+	 * path at {@code [ptr, ptr+len)} must be opened relative to, with the path that
+	 * descriptor is to see left in the {@link WasmLispCompiler#PATH_PTR_ADDR} /
+	 * {@link WasmLispCompiler#PATH_LEN_ADDR} cells. The front end of EVERY {@code path_*}
+	 * call on this backend -- {@code _open}, {@code _probe_file},
+	 * {@code _list_directory}, {@code _load}, {@code _make_directories},
+	 * {@code _delete_file}, {@code _rename_file} -- so the resolution rule has one
+	 * definition.
+	 *
+	 * <p>
+	 * A RELATIVE path answers fd 3 and the path unchanged: the first preopened directory,
+	 * exactly what every site hard-coded before, so nothing that worked moves. An
+	 * ABSOLUTE one (a leading {@code /}) is matched against the preopen NAMES, which is
+	 * the whole point: {@code fd_prestat_get} answers a preopened fd's name length and
+	 * {@code fd_prestat_dir_name} the name itself, and without them nothing here can
+	 * learn that fd 3 IS {@code /tmp} -- so {@code "/tmp/x.txt"} went to
+	 * {@code path_open} whole and WASI rejected it, which is why a runtime-computed
+	 * absolute path (asdf:system-relative-pathname, a merge against *load-truename*, a
+	 * path out of a config file) could not be opened at all.
+	 *
+	 * <p>
+	 * The match is a path-COMPONENT prefix, longest wins: with {@code --dir /} and
+	 * {@code --dir /tmp} both preopened, {@code /tmp/x} resolves against {@code /tmp}
+	 * rather than {@code /}, and {@code /tmpfoo} matches neither (the byte after the
+	 * prefix must be a separator). A trailing slash on the preopen name is stripped
+	 * first, so a host spelling {@code /} and one spelling {@code /tmp/} both behave.
+	 * When the remainder would be EMPTY -- the path names the preopened directory itself
+	 * -- it becomes {@code "."}, written over the path's last staged byte: WASI takes no
+	 * empty path, and the staging is scratch the caller pops right after.
+	 *
+	 * <p>
+	 * A path with a {@code ..} component CLIMBS, and a preopen is a sandbox that refuses
+	 * a {@code ..} escaping it: such a path resolves against the SHORTEST covering
+	 * preopen instead, the one with the most room above the path ({@code /} when it is
+	 * preopened). A relative climbing path is first JOINED onto fd 3's name when that
+	 * name is absolute -- a host that names fd 3 after the absolute current directory
+	 * (the {@code --native} runner stub, {@code .kb/native-output.md}) has told the
+	 * module where it runs, so {@code ../x} from {@code /a/b} opens {@code a/b/../x}
+	 * under {@code /}, which the host resolves physically, as the kernel resolves a
+	 * native program's {@code ..}. The joined bytes stay allocated above HEAP_PTR until
+	 * the caller pops its own staging. {@code wasmtime run --dir .} names fd 3
+	 * {@code "."}, so it keeps the old answer.
+	 *
+	 * <p>
+	 * When NO preopen covers an absolute path the answer is fd 3 with the path whole,
+	 * i.e. the call the site would have made anyway, so the failure surfaces as the
+	 * ordinary "cannot open" errno each caller already turns into nil -- an errno, never
+	 * a trap.
+	 * @return the function body bytes
+	 */
+	static byte[] buildPathDirFdBody() {
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+		// params: PTR=0 (i32), LEN=1 (i32) ; i32 locals: SCR=2, FD=3, NLEN=4, BFD=5,
+		// BSKIP=6, T=7, I=8, UP=9
+		w.write(1);
+		w.write(8);
+		w.write(Type.I32);
+		final int PTR = 0, LEN = 1, SCR = 2, FD = 3, NLEN = 4, BFD = 5, BSKIP = 6, T = 7, I = 8, UP = 9;
+		final int SLASH = '/', DOT = '.';
+
+		// up = the path has a ".." component. Every probe is in bounds: the caller's
+		// staging frames the path with a quote byte on each side.
+		i32(w, 0);
+		setLocal(w, UP);
+		i32(w, 0);
+		setLocal(w, I);
+		w.write(Instruction.BLOCK, 0x40);
+		w.write(Instruction.LOOP, 0x40);
+		getLocal(w, I);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		getLocal(w, LEN);
+		w.write(Instruction.I32_GE_U);
+		w.write(Instruction.BR_IF);
+		w.writeUnsignedLeb128(1);
+		// mem8[ptr+i] == '.' && mem8[ptr+i+1] == '.'
+		getLocal(w, PTR);
+		getLocal(w, I);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
+		i32(w, DOT);
+		w.write(Instruction.I32_EQ);
+		getLocal(w, PTR);
+		getLocal(w, I);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_LOAD8_U, 0x00, 0x01);
+		i32(w, DOT);
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.I32_AND);
+		// && (i == 0 || mem8[ptr+i-1] == '/')
+		getLocal(w, I);
+		w.write(Instruction.I32_EQZ);
+		getLocal(w, PTR);
+		getLocal(w, I);
+		w.write(Instruction.I32_ADD);
+		i32(w, 1);
+		w.write(Instruction.I32_SUB);
+		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
+		i32(w, SLASH);
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.I32_OR);
+		w.write(Instruction.I32_AND);
+		// && (i + 2 == len || mem8[ptr+i+2] == '/')
+		getLocal(w, I);
+		i32(w, 2);
+		w.write(Instruction.I32_ADD);
+		getLocal(w, LEN);
+		w.write(Instruction.I32_EQ);
+		getLocal(w, PTR);
+		getLocal(w, I);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_LOAD8_U, 0x00, 0x02);
+		i32(w, SLASH);
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.I32_OR);
+		w.write(Instruction.I32_AND);
+		w.write(Instruction.IF, 0x40);
+		i32(w, 1);
+		setLocal(w, UP);
+		w.write(Instruction.BR);
+		w.writeUnsignedLeb128(2);
+		w.write(Instruction.END);
+		getLocal(w, I);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		setLocal(w, I);
+		w.write(Instruction.BR);
+		w.writeUnsignedLeb128(0);
+		w.write(Instruction.END); // loop
+		w.write(Instruction.END); // block
+
+		w.write(Instruction.BLOCK, 0x40); // $walk: left with an absolute path in PTR/LEN
+		// an absolute path goes straight to the walk (len == 0 reads the closing quote)
+		getLocal(w, LEN);
+		i32(w, 0);
+		w.write(Instruction.I32_NE);
+		getLocal(w, PTR);
+		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
+		i32(w, SLASH);
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.I32_AND);
+		w.write(Instruction.BR_IF);
+		w.writeUnsignedLeb128(0);
+		// a relative path that does not climb: fd 3, the path unchanged
+		getLocal(w, UP);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.IF, 0x40);
+		emitStoreResolvedPath(w, PTR, LEN);
+		i32(w, 3);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+		// A relative path that climbs: join it onto fd 3's name when that name is
+		// absolute. scr = HEAP_PTR, advanced over the prestat record, the name, the
+		// separator and the path BEFORE fd_prestat_get (under --component its first call
+		// allocates at HEAP_PTR).
+		loadMem32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		setLocal(w, SCR);
+		WasmEmitHelper.emitGrowHeapTo(w, () -> {
+			getLocal(w, SCR);
+			i32(w, PRESTAT_SCRATCH_BYTES + 1);
+			w.write(Instruction.I32_ADD);
+			getLocal(w, LEN);
+			w.write(Instruction.I32_ADD);
+		});
+		i32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		getLocal(w, SCR);
+		i32(w, PRESTAT_SCRATCH_BYTES + 1 + 7);
+		w.write(Instruction.I32_ADD);
+		getLocal(w, LEN);
+		w.write(Instruction.I32_ADD);
+		i32(w, -8);
+		w.write(Instruction.I32_AND);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		w.write(Instruction.BLOCK, 0x40); // $unjoinable
+		i32(w, 3);
+		getLocal(w, SCR);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_FD_PRESTAT_GET);
+		w.write(Instruction.BR_IF);
+		w.writeUnsignedLeb128(0);
+		getLocal(w, SCR);
+		w.write(Instruction.I32_LOAD, 0x02, 0x04);
+		setLocal(w, NLEN);
+		getLocal(w, NLEN);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.BR_IF);
+		w.writeUnsignedLeb128(0);
+		getLocal(w, NLEN);
+		i32(w, PRESTAT_NAME_MAX);
+		w.write(Instruction.I32_GT_U);
+		w.write(Instruction.BR_IF);
+		w.writeUnsignedLeb128(0);
+		i32(w, 3);
+		getLocal(w, SCR);
+		i32(w, 8);
+		w.write(Instruction.I32_ADD);
+		getLocal(w, NLEN);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_FD_PRESTAT_DIR_NAME);
+		w.write(Instruction.BR_IF);
+		w.writeUnsignedLeb128(0);
+		// a relative name ("." under `wasmtime run --dir .`) says nothing about where
+		// the program runs
+		getLocal(w, SCR);
+		w.write(Instruction.I32_LOAD8_U, 0x00, 0x08);
+		i32(w, SLASH);
+		w.write(Instruction.I32_NE);
+		w.write(Instruction.BR_IF);
+		w.writeUnsignedLeb128(0);
+		emitStripTrailingSlashes(w, SCR, NLEN);
+		// the root's name contributes no bytes: "/" + path, not "//" + path
+		getLocal(w, NLEN);
+		i32(w, 1);
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.IF, 0x40);
+		i32(w, 0);
+		setLocal(w, NLEN);
+		w.write(Instruction.END);
+		// mem8[scr+8+nlen] = '/' ; memory.copy(scr+9+nlen, ptr, len)
+		getLocal(w, SCR);
+		getLocal(w, NLEN);
+		w.write(Instruction.I32_ADD);
+		i32(w, SLASH);
+		w.write(Instruction.I32_STORE8, 0x00, 0x08);
+		getLocal(w, SCR);
+		getLocal(w, NLEN);
+		w.write(Instruction.I32_ADD);
+		i32(w, 9);
+		w.write(Instruction.I32_ADD);
+		getLocal(w, PTR);
+		getLocal(w, LEN);
+		w.write(Instruction.MISC_PREFIX);
+		w.writeUnsignedLeb128(Instruction.MEMORY_COPY);
+		w.write(0x00, 0x00);
+		// ptr = scr + 8 ; len = nlen + 1 + len
+		getLocal(w, SCR);
+		i32(w, 8);
+		w.write(Instruction.I32_ADD);
+		setLocal(w, PTR);
+		getLocal(w, NLEN);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		getLocal(w, LEN);
+		w.write(Instruction.I32_ADD);
+		setLocal(w, LEN);
+		w.write(Instruction.BR);
+		w.writeUnsignedLeb128(1); // -> after $walk, the joined path kept allocated
+		w.write(Instruction.END); // $unjoinable
+		// fd 3 has no absolute name: release the reservation; fd 3, the path unchanged
+		i32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		getLocal(w, SCR);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		emitStoreResolvedPath(w, PTR, LEN);
+		i32(w, 3);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END); // $walk
+
+		// scr = HEAP_PTR, reserved over the walk and popped after it. Under --component
+		// the first fd_prestat_get lifts the preopen list through cabi_realloc, which
+		// allocates at HEAP_PTR -- an un-advanced scratch would be overwritten by the
+		// very names being read into it (the discipline _open uses for its staged path).
+		loadMem32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		setLocal(w, SCR);
+		WasmEmitHelper.emitGrowHeapTo(w, () -> {
+			getLocal(w, SCR);
+			i32(w, PRESTAT_SCRATCH_BYTES);
+			w.write(Instruction.I32_ADD);
+		});
+		i32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		getLocal(w, SCR);
+		i32(w, PRESTAT_SCRATCH_BYTES + 7);
+		w.write(Instruction.I32_ADD);
+		i32(w, -8);
+		w.write(Instruction.I32_AND);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		// bfd = 3 ; bskip = 0 (no match yet -- any match scores at least 1) ; fd = 3
+		i32(w, 3);
+		setLocal(w, BFD);
+		i32(w, 0);
+		setLocal(w, BSKIP);
+		i32(w, 3);
+		setLocal(w, FD);
+
+		w.write(Instruction.BLOCK, 0x40); // $done
+		w.write(Instruction.LOOP, 0x40); // $scan
+		// a non-zero fd_prestat_get errno means fd is not preopened: the walk is over
+		getLocal(w, FD);
+		getLocal(w, SCR);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_FD_PRESTAT_GET);
+		w.write(Instruction.BR_IF);
+		w.writeUnsignedLeb128(1);
+		// nlen = prestat.u.dir.pr_name_len (u32 at scr+4; the tag byte at scr+0 is 0 for
+		// a directory, and a directory is the only preopen kind preview1 defines)
+		getLocal(w, SCR);
+		w.write(Instruction.I32_LOAD, 0x02, 0x04);
+		setLocal(w, NLEN);
+		w.write(Instruction.BLOCK, 0x40); // $next
+		getLocal(w, NLEN);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.BR_IF);
+		w.writeUnsignedLeb128(0);
+		getLocal(w, NLEN);
+		i32(w, PRESTAT_NAME_MAX);
+		w.write(Instruction.I32_GT_U);
+		w.write(Instruction.BR_IF);
+		w.writeUnsignedLeb128(0);
+		// fd_prestat_dir_name(fd, scr + 8, nlen)
+		getLocal(w, FD);
+		getLocal(w, SCR);
+		i32(w, 8);
+		w.write(Instruction.I32_ADD);
+		getLocal(w, NLEN);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_FD_PRESTAT_DIR_NAME);
+		w.write(Instruction.BR_IF);
+		w.writeUnsignedLeb128(0);
+		emitStripTrailingSlashes(w, SCR, NLEN);
+		// a preopen whose own name is relative (wasmtime's `--dir .` spells it ".") can
+		// never cover an absolute path
+		getLocal(w, SCR);
+		w.write(Instruction.I32_LOAD8_U, 0x00, 0x08);
+		i32(w, SLASH);
+		w.write(Instruction.I32_NE);
+		w.write(Instruction.BR_IF);
+		w.writeUnsignedLeb128(0);
+		// t = this preopen's skip, 0 when it does not cover the path
+		i32(w, 0);
+		setLocal(w, T);
+		getLocal(w, NLEN);
+		i32(w, 1);
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.IF, 0x40);
+		// the root preopen "/" covers every absolute path
+		i32(w, 1);
+		setLocal(w, T);
+		w.write(Instruction.ELSE);
+		getLocal(w, NLEN);
+		getLocal(w, LEN);
+		w.write(Instruction.I32_LE_U);
+		w.write(Instruction.IF, 0x40);
+		// t = memeq(ptr, scr + 8, nlen) -- provisionally 1, cleared on the first
+		// differing byte
+		i32(w, 0);
+		setLocal(w, I);
+		i32(w, 1);
+		setLocal(w, T);
+		w.write(Instruction.BLOCK, 0x40);
+		w.write(Instruction.LOOP, 0x40);
+		getLocal(w, I);
+		getLocal(w, NLEN);
+		w.write(Instruction.I32_GE_U);
+		w.write(Instruction.BR_IF);
+		w.writeUnsignedLeb128(1);
+		getLocal(w, PTR);
+		getLocal(w, I);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
+		getLocal(w, SCR);
+		getLocal(w, I);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_LOAD8_U, 0x00, 0x08);
+		w.write(Instruction.I32_NE);
+		w.write(Instruction.IF, 0x40);
+		i32(w, 0);
+		setLocal(w, T);
+		w.write(Instruction.BR);
+		w.writeUnsignedLeb128(2);
+		w.write(Instruction.END); // if (byte differs)
+		getLocal(w, I);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		setLocal(w, I);
+		w.write(Instruction.BR);
+		w.writeUnsignedLeb128(0);
+		w.write(Instruction.END); // loop
+		w.write(Instruction.END); // block
+		getLocal(w, T);
+		w.write(Instruction.IF, 0x40);
+		getLocal(w, NLEN);
+		getLocal(w, LEN);
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.IF, 0x40);
+		// the path names the preopened directory itself
+		getLocal(w, NLEN);
+		setLocal(w, T);
+		w.write(Instruction.ELSE);
+		getLocal(w, PTR);
+		getLocal(w, NLEN);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
+		i32(w, SLASH);
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.IF, 0x40);
+		getLocal(w, NLEN);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		setLocal(w, T);
+		w.write(Instruction.ELSE);
+		// a component boundary is required: "/tmpfoo" is not under "/tmp"
+		i32(w, 0);
+		setLocal(w, T);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
+		w.write(Instruction.END); // if (the name matched)
+		w.write(Instruction.END); // if (nlen <= len)
+		w.write(Instruction.END); // if (nlen == 1)
+		// longest prefix wins; for a climbing path the SHORTEST covering one does, with
+		// bskip == 0 standing for "none yet": t != 0 && (up ? bskip - 1 >=u t : t >u
+		// bskip)
+		getLocal(w, T);
+		i32(w, 0);
+		w.write(Instruction.I32_NE);
+		getLocal(w, BSKIP);
+		i32(w, 1);
+		w.write(Instruction.I32_SUB);
+		getLocal(w, T);
+		w.write(Instruction.I32_GE_U);
+		getLocal(w, T);
+		getLocal(w, BSKIP);
+		w.write(Instruction.I32_GT_U);
+		getLocal(w, UP);
+		w.write(Instruction.SELECT);
+		w.write(Instruction.I32_AND);
+		w.write(Instruction.IF, 0x40);
+		getLocal(w, T);
+		setLocal(w, BSKIP);
+		getLocal(w, FD);
+		setLocal(w, BFD);
+		w.write(Instruction.END);
+		w.write(Instruction.END); // $next
+		getLocal(w, FD);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		setLocal(w, FD);
+		getLocal(w, FD);
+		i32(w, 3 + PREOPEN_SCAN_MAX);
+		w.write(Instruction.I32_LT_U);
+		w.write(Instruction.BR_IF);
+		w.writeUnsignedLeb128(0);
+		w.write(Instruction.END); // $scan
+		w.write(Instruction.END); // $done
+
+		// pop the prestat scratch (a joined path lies below it and stays)
+		i32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		getLocal(w, SCR);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		// nothing covers it: hand the whole path to fd 3, whose path_open answers the
+		// ordinary "cannot open" errno the call site already turns into nil
+		getLocal(w, BSKIP);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.IF, 0x40);
+		emitStoreResolvedPath(w, PTR, LEN);
+		i32(w, 3);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+		// an empty remainder is not a path WASI accepts: relative to its own descriptor
+		// the preopened directory is ".". The staging is scratch, so the dot goes in
+		// place of the path's last byte.
+		getLocal(w, BSKIP);
+		getLocal(w, LEN);
+		w.write(Instruction.I32_GE_U);
+		w.write(Instruction.IF, 0x40);
+		getLocal(w, PTR);
+		getLocal(w, LEN);
+		w.write(Instruction.I32_ADD);
+		i32(w, 1);
+		w.write(Instruction.I32_SUB);
+		i32(w, DOT);
+		w.write(Instruction.I32_STORE8, 0x00, 0x00);
+		getLocal(w, LEN);
+		i32(w, 1);
+		w.write(Instruction.I32_SUB);
+		setLocal(w, BSKIP);
+		w.write(Instruction.END);
+		// the resolved path: ptr + bskip, len - bskip
+		getLocal(w, PTR);
+		getLocal(w, BSKIP);
+		w.write(Instruction.I32_ADD);
+		setLocal(w, PTR);
+		getLocal(w, LEN);
+		getLocal(w, BSKIP);
+		w.write(Instruction.I32_SUB);
+		setLocal(w, LEN);
+		emitStoreResolvedPath(w, PTR, LEN);
+		getLocal(w, BFD);
+		w.write(Instruction.END);
+		return body.toByteArray();
+	}
+
+	/** Stores {@code _path_dirfd}'s answer path into its two out-cells. */
+	private static void emitStoreResolvedPath(WasmWriter w, int ptr, int len) {
+		i32(w, WasmLispCompiler.PATH_PTR_ADDR);
+		getLocal(w, ptr);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		i32(w, WasmLispCompiler.PATH_LEN_ADDR);
+		getLocal(w, len);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+	}
+
+	/**
+	 * Strips trailing slashes from the preopen name at {@code scr + 8} (keeping at least
+	 * one byte): a host may spell the root {@code "/"} and a directory {@code "/tmp/"}.
+	 */
+	private static void emitStripTrailingSlashes(WasmWriter w, int scr, int nlen) {
+		w.write(Instruction.BLOCK, 0x40);
+		w.write(Instruction.LOOP, 0x40);
+		getLocal(w, nlen);
+		i32(w, 1);
+		w.write(Instruction.I32_LE_U);
+		w.write(Instruction.BR_IF);
+		w.writeUnsignedLeb128(1);
+		getLocal(w, scr);
+		getLocal(w, nlen);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_LOAD8_U, 0x00, 0x07);
+		i32(w, '/');
+		w.write(Instruction.I32_NE);
+		w.write(Instruction.BR_IF);
+		w.writeUnsignedLeb128(1);
+		getLocal(w, nlen);
+		i32(w, 1);
+		w.write(Instruction.I32_SUB);
+		setLocal(w, nlen);
+		w.write(Instruction.BR);
+		w.writeUnsignedLeb128(0);
+		w.write(Instruction.END); // loop
+		w.write(Instruction.END); // block
+	}
+
+	/**
+	 * Emits the {@code path_ptr, path_len} pair {@code _path_dirfd} just resolved -- the
+	 * two arguments after {@code dirfd} (and {@code dirflags}, where the call has one) of
+	 * every {@code path_*} import.
+	 * @param w the writer
+	 */
+	static void emitResolvedPath(WasmWriter w) {
+		loadMem32(w, WasmLispCompiler.PATH_PTR_ADDR);
+		loadMem32(w, WasmLispCompiler.PATH_LEN_ADDR);
+	}
+
+	/**
+	 * Emits the first four {@code path_open} arguments -- {@code dirfd},
+	 * {@code dirflags}, {@code path_ptr}, {@code path_len} -- for a path staged at
+	 * {@code off + 1} with length {@code plen} (the {@code _str_to_mem} framing every
+	 * caller here uses: the content sits between the quote bytes). The pair comes from
+	 * {@link #buildPathDirFdBody()} rather than from a hard-coded fd 3, which is what
+	 * makes an absolute runtime path resolvable; a relative one is unchanged.
+	 * @param w the writer
+	 * @param off the local holding the staged path's base offset
+	 * @param plen the local holding the staged path's content length
+	 */
+	static void emitDirFdAndPath(WasmWriter w, int off, int plen) {
+		// dirfd = _path_dirfd(off + 1, plen) -- it also writes the resolved path cells
+		getLocal(w, off);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		getLocal(w, plen);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_PATH_DIRFD);
+		// dirflags = symlink_follow: a link in the LAST component is opened through, as
+		// the host's own open does (and Files / File on the other two backends). Without
+		// it a preview1 host refuses the open, so a path naming a link read as missing.
+		i32(w, LOOKUPFLAGS_SYMLINK_FOLLOW);
+		emitResolvedPath(w);
+	}
+
+	/**
+	 * Builds the _open(path, mode) function body. Opens the file named by the path string
+	 * via WASI path_open (mode 0 = read, 1 = create/truncate for write) and returns the
+	 * file descriptor as an i31 integer, or {@code ref.null eq} (nil) when path_open
+	 * failed. The failure is answered rather than trapped so the CALL SITE can signal a
+	 * real Lisp error ({@link WasmOpenCompiler}) -- a trap is not catchable, and a
+	 * library that probes for an optional file by opening it inside {@code handler-case}
+	 * (local-time reading {@code /etc/localtime}) would otherwise abort the whole program
+	 * on the one backend that has no filesystem.
+	 * @return the function body bytes
+	 */
+	static byte[] buildOpenBody(boolean bidirectional) {
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+		// params: PATH=0 (ref), MODE=1 (i32) ; i32 locals: OFF=2, PLEN=3
+		w.write(1);
+		w.write(2);
+		w.write(Type.I32);
+		final int PATH = 0, MODE = 1, OFF = 2, PLEN = 3;
+
+		// The path bytes live on the GC heap, so copy them into linear scratch at
+		// HEAP_PTR and derive the pointer + length path_open needs. off = HEAP_PTR ;
+		// plen = _str_to_mem(path, off) - 2 (strip the surrounding quotes). HEAP_PTR is
+		// then ADVANCED over the staged bytes for the duration of the call (and popped
+		// back right after): under --component the adapter's first open lifts the
+		// preopen directory list through cabi_realloc, which allocates at HEAP_PTR --
+		// an un-advanced staging would be overwritten before path_open reads it.
+		loadMem32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		setLocal(w, OFF);
+		getLocal(w, PATH);
+		getLocal(w, OFF);
+		WasmEmitHelper.emitStrToMemCall(w);
+		i32(w, 2);
+		w.write(Instruction.I32_SUB);
+		setLocal(w, PLEN);
+		// HEAP_PTR = align8(off + plen + 2)
+		i32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		getLocal(w, OFF);
+		getLocal(w, PLEN);
+		w.write(Instruction.I32_ADD);
+		i32(w, 2 + 7);
+		w.write(Instruction.I32_ADD);
+		i32(w, -8);
+		w.write(Instruction.I32_AND);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		// path_open(dirfd, dirflags=symlink_follow, path_ptr, path_len -- all four from
+		// emitDirFdAndPath, which resolves the staged path against the preopen table,
+		// oflags=(read: 0, write: CREAT|TRUNC=9, append: CREAT=1),
+		// fs_rights_base=(read: FD_READ=2, write: FD_WRITE|FD_SEEK|FD_TELL=100),
+		// fs_rights_inheriting=0, fdflags=(append: APPEND=1, else 0),
+		// fd_out=OPEN_FD_ADDR).
+		// MODE here is WasmOpenCompiler.wasmMode: 0 read / 1 write / 2 append.
+		emitDirFdAndPath(w, OFF, PLEN);
+		getLocal(w, MODE);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.IF);
+		w.write(Type.I32);
+		i32(w, 0);
+		w.write(Instruction.ELSE);
+		if (bidirectional) {
+			// The two content-KEEPING dispositions: :append (mode 2 / 5) opens O_CREAT
+			// alone, because O_TRUNC would discard exactly what the append keeps, and
+			// :overwrite (mode 3 / 6) opens with NEITHER -- the file must already be
+			// there and everything past the write survives.
+			emitModeIsOneOf(w, MODE, 3, 6);
+			w.write(Instruction.IF);
+			w.write(Type.I32);
+			i32(w, 0);
+			w.write(Instruction.ELSE);
+			emitModeIsOneOf(w, MODE, 2, 5);
+			w.write(Instruction.IF);
+			w.write(Type.I32);
+			i32(w, 1);
+			w.write(Instruction.ELSE);
+			i32(w, 9);
+			w.write(Instruction.END);
+			w.write(Instruction.END);
+		}
+		else {
+			// mode 2 = :append -- O_CREAT alone, because O_TRUNC would discard exactly
+			// the content the append is there to keep.
+			getLocal(w, MODE);
+			i32(w, 2);
+			w.write(Instruction.I32_EQ);
+			w.write(Instruction.IF);
+			w.write(Type.I32);
+			i32(w, 1);
+			w.write(Instruction.ELSE);
+			i32(w, 9);
+			w.write(Instruction.END);
+		}
+		w.write(Instruction.END);
+		getLocal(w, MODE);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.IF);
+		w.write(Type.I64);
+		w.write(Instruction.I64_CONST);
+		w.writeSignedLeb128(2);
+		w.write(Instruction.ELSE);
+		if (bidirectional) {
+			// An :io descriptor (mode 4, 5 or 6) asks for FD_READ too: one fd, one
+			// cursor, both directions.
+			getLocal(w, MODE);
+			i32(w, 4);
+			w.write(Instruction.I32_GE_S);
+			w.write(Instruction.IF);
+			w.write(Type.I64);
+			w.write(Instruction.I64_CONST);
+			w.writeSignedLeb128(102);
+			w.write(Instruction.ELSE);
+			w.write(Instruction.I64_CONST);
+			w.writeSignedLeb128(100);
+			w.write(Instruction.END);
+		}
+		else {
+			w.write(Instruction.I64_CONST);
+			w.writeSignedLeb128(100);
+		}
+		w.write(Instruction.END);
+		w.write(Instruction.I64_CONST);
+		w.writeSignedLeb128(0);
+		// fdflags = FDFLAGS_APPEND (1) for the appending modes, 0 otherwise -- the
+		// comparison result IS the flag value.
+		if (bidirectional) {
+			emitModeIsOneOf(w, MODE, 2, 5);
+		}
+		else {
+			getLocal(w, MODE);
+			i32(w, 2);
+			w.write(Instruction.I32_EQ);
+		}
+		i32(w, WasmLispCompiler.OPEN_FD_ADDR);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_PATH_OPEN);
+		// pop the staged path (PLEN is free now: reuse it for the errno)
+		setLocal(w, PLEN);
+		i32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		getLocal(w, OFF);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		// if errno != 0: answer nil (the call site turns it into a Lisp error)
+		getLocal(w, PLEN);
+		w.write(Instruction.IF, 0x40);
+		w.write(Instruction.REF_NULL);
+		w.writeHeapType(Type.EQ.code());
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+		// return ref.i31(mem[OPEN_FD_ADDR])
+		loadMem32(w, WasmLispCompiler.OPEN_FD_ADDR);
+		w.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+		w.write(Instruction.END);
+		return body.toByteArray();
+	}
+
+	/**
+	 * Pushes {@code mode == a || mode == b} as an i32 -- the {@code _open} mode tests
+	 * that pair an {@code :output} disposition with its {@code :io} twin.
+	 */
+	private static void emitModeIsOneOf(WasmWriter w, int mode, int a, int b) {
+		getLocal(w, mode);
+		i32(w, a);
+		w.write(Instruction.I32_EQ);
+		getLocal(w, mode);
+		i32(w, b);
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.I32_OR);
+	}
+
+	/**
+	 * Builds the _host_getcwd() function body: the working directory as a string, or
+	 * {@code ref.null eq} (nil) when the module cannot know one. Every relative path
+	 * resolves against fd 3, so fd 3's preopen name IS the working directory when the
+	 * host spells it absolute -- the {@code --native} runner stub names it after the
+	 * current directory -- and says nothing when it is relative ({@code wasmtime run
+	 * --dir .} names it {@code "."}). A trailing slash is dropped (the root stays
+	 * {@code "/"}), and a name over {@value #PRESTAT_NAME_MAX} bytes answers nil, the
+	 * preopen walk's own limit. The scratch is advanced over before
+	 * {@code fd_prestat_get} (under {@code --component} its first call allocates at
+	 * HEAP_PTR) and popped after: the prestat record, 8-aligned as the host checks it,
+	 * the name at {@code scr + 8}, its opening quote written over the record's last byte
+	 * and its closing quote after it, read back by {@code _str_fresh}.
+	 * @return the function body bytes
+	 */
+	static byte[] buildHostGetcwdBody() {
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+		// no params ; i32 locals: OLD=0, SCR=1, NLEN=2 ; ref local: STR=3
+		w.write(2);
+		w.write(3);
+		w.write(Type.I32);
+		w.write(1);
+		w.writeRefType(true, Type.EQ.code());
+		final int OLD = 0, SCR = 1, NLEN = 2, STR = 3;
+		// old = HEAP_PTR ; scr = align8(old) ; HEAP_PTR = align8(scr +
+		// PRESTAT_SCRATCH_BYTES + 1), the memory grown to cover it
+		loadMem32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		setLocal(w, OLD);
+		getLocal(w, OLD);
+		i32(w, 7);
+		w.write(Instruction.I32_ADD);
+		i32(w, -8);
+		w.write(Instruction.I32_AND);
+		setLocal(w, SCR);
+		WasmEmitHelper.emitGrowHeapTo(w, () -> {
+			getLocal(w, SCR);
+			i32(w, PRESTAT_SCRATCH_BYTES + 1);
+			w.write(Instruction.I32_ADD);
+		});
+		i32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		getLocal(w, SCR);
+		i32(w, PRESTAT_SCRATCH_BYTES + 1 + 7);
+		w.write(Instruction.I32_ADD);
+		i32(w, -8);
+		w.write(Instruction.I32_AND);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		w.write(Instruction.BLOCK, 0x40); // $none: str stays nil
+		// fd_prestat_get(3, scr) == 0, else no preopen at all
+		i32(w, 3);
+		getLocal(w, SCR);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_FD_PRESTAT_GET);
+		w.write(Instruction.BR_IF);
+		w.writeUnsignedLeb128(0);
+		// nlen = the record's name length, 1..PRESTAT_NAME_MAX
+		getLocal(w, SCR);
+		w.write(Instruction.I32_LOAD, 0x02, 0x04);
+		setLocal(w, NLEN);
+		getLocal(w, NLEN);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.BR_IF);
+		w.writeUnsignedLeb128(0);
+		getLocal(w, NLEN);
+		i32(w, PRESTAT_NAME_MAX);
+		w.write(Instruction.I32_GT_U);
+		w.write(Instruction.BR_IF);
+		w.writeUnsignedLeb128(0);
+		// fd_prestat_dir_name(3, scr + 8, nlen) == 0
+		i32(w, 3);
+		getLocal(w, SCR);
+		i32(w, 8);
+		w.write(Instruction.I32_ADD);
+		getLocal(w, NLEN);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_FD_PRESTAT_DIR_NAME);
+		w.write(Instruction.BR_IF);
+		w.writeUnsignedLeb128(0);
+		// a relative name says nothing about where the program runs
+		getLocal(w, SCR);
+		w.write(Instruction.I32_LOAD8_U, 0x00, 0x08);
+		i32(w, '/');
+		w.write(Instruction.I32_NE);
+		w.write(Instruction.BR_IF);
+		w.writeUnsignedLeb128(0);
+		emitStripTrailingSlashes(w, SCR, NLEN);
+		// mem8[scr + 7] = '"' ; mem8[scr + 8 + nlen] = '"' ; str = _str_fresh(scr + 7,
+		// nlen + 2)
+		getLocal(w, SCR);
+		i32(w, '"');
+		w.write(Instruction.I32_STORE8, 0x00, 0x07);
+		getLocal(w, SCR);
+		getLocal(w, NLEN);
+		w.write(Instruction.I32_ADD);
+		i32(w, '"');
+		w.write(Instruction.I32_STORE8, 0x00, 0x08);
+		getLocal(w, SCR);
+		i32(w, 7);
+		w.write(Instruction.I32_ADD);
+		getLocal(w, NLEN);
+		i32(w, 2);
+		w.write(Instruction.I32_ADD);
+		WasmEmitHelper.emitStrFreshCall(w);
+		setLocal(w, STR);
+		w.write(Instruction.END); // $none
+		// pop the scratch and answer
+		i32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		getLocal(w, OLD);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		getLocal(w, STR);
+		w.write(Instruction.END);
+		return body.toByteArray();
+	}
+
+	/**
+	 * Builds the _probe_file(path) function body: the path when it names an existing
+	 * file, the path in directory form (one trailing {@code /} added) when it names a
+	 * directory, {@code ref.null eq} (nil) otherwise. Same staging and {@code path_open}
+	 * call as {@link #buildOpenBody()} in read mode, with the differences that make it a
+	 * probe rather than an open: a non-zero errno answers nil instead of trapping (a wasm
+	 * trap is not catchable, which is exactly why {@code (handler-case (open ...))}
+	 * cannot stand in for this on WASM), the open descriptor is asked its file type
+	 * through {@code fd_filestat_get} (the stat the other two backends make with
+	 * {@code isDirectory}), and it is closed again via {@code fd_close} so probing leaks
+	 * no descriptor.
+	 *
+	 * <p>
+	 * The staged path keeps a spare byte after its closing quote and the 64-byte
+	 * {@code filestat} sits 8-aligned after that, so the directory form is the staged
+	 * bytes with {@code /"} written over the quote, read back by {@code _str_fresh}. The
+	 * preopen resolution writes {@code "."} over the path's last staged byte when the
+	 * path names a preopened directory itself, so that byte is saved before the
+	 * {@code path_open} and put back after it.
+	 * @return the function body bytes
+	 */
+	static byte[] buildProbeFileBody() {
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+		// param: PATH=0 (ref) ; i32 locals: OFF=1, PLEN=2, FS=3, ERR=4, TYPE=5, LAST=6 ;
+		// ref local: STR=7
+		w.write(2);
+		w.write(6);
+		w.write(Type.I32);
+		w.write(1);
+		w.writeRefType(true, Type.EQ.code());
+		final int PATH = 0, OFF = 1, PLEN = 2, FS = 3, ERR = 4, TYPE = 5, LAST = 6, STR = 7;
+
+		// Stage the path bytes into linear scratch exactly as _open does (see there for
+		// why HEAP_PTR is advanced over the staging for the duration of the call).
+		loadMem32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		setLocal(w, OFF);
+		getLocal(w, PATH);
+		getLocal(w, OFF);
+		WasmEmitHelper.emitStrToMemCall(w);
+		i32(w, 2);
+		w.write(Instruction.I32_SUB);
+		setLocal(w, PLEN);
+		// fs = align8(off + plen + 3): the quoted path, one spare byte, then the record
+		// (8-aligned, or a checking host rejects it -- see _file_length);
+		// HEAP_PTR = fs + FILESTAT_BYTES, the memory grown to cover it
+		getLocal(w, OFF);
+		getLocal(w, PLEN);
+		w.write(Instruction.I32_ADD);
+		i32(w, 3 + 7);
+		w.write(Instruction.I32_ADD);
+		i32(w, -8);
+		w.write(Instruction.I32_AND);
+		setLocal(w, FS);
+		WasmEmitHelper.emitGrowHeapTo(w, () -> {
+			getLocal(w, FS);
+			i32(w, FILESTAT_BYTES);
+			w.write(Instruction.I32_ADD);
+		});
+		i32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		getLocal(w, FS);
+		i32(w, FILESTAT_BYTES);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		// last = memory[off + plen], the path's last byte, which the preopen resolution
+		// may overwrite with "."
+		getLocal(w, OFF);
+		getLocal(w, PLEN);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
+		setLocal(w, LAST);
+		// path_open(dirfd/dirflags/path_ptr/path_len from emitDirFdAndPath, oflags=0,
+		// fs_rights_base=FD_READ=2, fs_rights_inheriting=0, fdflags=0,
+		// fd_out=OPEN_FD_ADDR)
+		emitDirFdAndPath(w, OFF, PLEN);
+		i32(w, 0);
+		w.write(Instruction.I64_CONST);
+		w.writeSignedLeb128(2);
+		w.write(Instruction.I64_CONST);
+		w.writeSignedLeb128(0);
+		i32(w, 0);
+		i32(w, WasmLispCompiler.OPEN_FD_ADDR);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_PATH_OPEN);
+		setLocal(w, ERR);
+		// memory[off + plen] = last: the staging spells the path again
+		getLocal(w, OFF);
+		getLocal(w, PLEN);
+		w.write(Instruction.I32_ADD);
+		getLocal(w, LAST);
+		w.write(Instruction.I32_STORE8, 0x00, 0x00);
+		// if errno != 0: pop the staging, return nil
+		getLocal(w, ERR);
+		w.write(Instruction.IF, 0x40);
+		i32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		getLocal(w, OFF);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		emitNil(w);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+		// type = fd_filestat_get(fd, fs) == 0 ? fs.filetype : 0 (unknown reads as a file)
+		loadMem32(w, WasmLispCompiler.OPEN_FD_ADDR);
+		getLocal(w, FS);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_FD_FILESTAT_GET);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.IF);
+		w.write(Type.I32);
+		getLocal(w, FS);
+		w.write(Instruction.I32_LOAD8_U, 0x00, FILESTAT_FILETYPE_OFFSET);
+		w.write(Instruction.ELSE);
+		i32(w, 0);
+		w.write(Instruction.END);
+		setLocal(w, TYPE);
+		// close the descriptor the probe just opened
+		loadMem32(w, WasmLispCompiler.OPEN_FD_ADDR);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_FD_CLOSE);
+		w.write(Instruction.DROP);
+		// str = path, or -- a directory spelled without its trailing slash -- the
+		// directory form, built while the staging is held: memory[off+1+plen] = '/',
+		// memory[off+2+plen] = '"', _str_fresh(off, plen + 3)
+		getLocal(w, PATH);
+		setLocal(w, STR);
+		getLocal(w, TYPE);
+		i32(w, FILETYPE_DIRECTORY);
+		w.write(Instruction.I32_EQ);
+		getLocal(w, OFF);
+		getLocal(w, PLEN);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
+		i32(w, 0x2f);
+		w.write(Instruction.I32_NE);
+		w.write(Instruction.I32_AND);
+		w.write(Instruction.IF, 0x40);
+		getLocal(w, OFF);
+		getLocal(w, PLEN);
+		w.write(Instruction.I32_ADD);
+		i32(w, 0x2f);
+		w.write(Instruction.I32_STORE8, 0x00, 0x01);
+		getLocal(w, OFF);
+		getLocal(w, PLEN);
+		w.write(Instruction.I32_ADD);
+		i32(w, 0x22);
+		w.write(Instruction.I32_STORE8, 0x00, 0x02);
+		getLocal(w, OFF);
+		getLocal(w, PLEN);
+		i32(w, 3);
+		w.write(Instruction.I32_ADD);
+		WasmEmitHelper.emitStrFreshCall(w);
+		setLocal(w, STR);
+		w.write(Instruction.END);
+		// pop the staging and answer
+		i32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		getLocal(w, OFF);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		getLocal(w, STR);
+		w.write(Instruction.END);
+		return body.toByteArray();
+	}
+
+	/**
+	 * The listing buffer handed to {@code fd_readdir}, and the scratch that follows it
+	 * where each entry's quoted name is assembled before {@code _str_fresh} copies it
+	 * onto the GC heap. Both live above HEAP_PTR (transient scratch, never advanced --
+	 * nothing between them allocates in linear memory), so the pair costs no permanent
+	 * heap. 8 KiB holds ~340 typical dirents per round trip and the loop resumes through
+	 * the cookie anyway; the 512-byte tail covers preview1's 255-byte name ceiling plus
+	 * the quotes and the directory slash.
+	 */
+	private static final int READDIR_BUF_BYTES = 8192;
+
+	private static final int READDIR_NAME_SCRATCH_BYTES = 512;
+
+	/**
+	 * Builds the _list_directory(path) function body: {@code (t . names)} for a readable
+	 * directory, {@code ref.null eq} (nil) otherwise -- the one directory-LISTING
+	 * primitive, over which {@code directory} and the {@code uiop:} spellings are Lisp
+	 * source (LispPreludeLibrary). The path is staged into linear scratch and opened as a
+	 * DIRECTORY through {@code path_open} exactly as {@link #buildProbeFileBody()} opens
+	 * a file, then {@code fd_readdir}'s preview1 dirent stream is drained in
+	 * {@value #READDIR_BUF_BYTES}-byte rounds, resuming through the cookie of the last
+	 * COMPLETE entry (a round can end mid-entry, and the truncated tail must not be
+	 * decoded).
+	 *
+	 * <p>
+	 * Two rules keep the answer identical to the other three backends. A failed open -- a
+	 * missing path, a plain file, a host with no preopened directory -- answers nil
+	 * rather than trapping, like {@code probe-file}, so a library walking an OPTIONAL
+	 * tree degrades instead of aborting. And the {@code "."} / {@code ".."} entries a
+	 * preview1 host yields are SKIPPED: {@code Files.list} and wasi:filesystem's
+	 * {@code read-directory} both omit them, so emitting them here would be the one
+	 * backend that walks its own parent forever. The names keep the host's order, as the
+	 * other backends' {@code File.list()} does: each entry is linked after the last one
+	 * (until 2026-11-21 it was consed ahead of them, which reversed the listing).
+	 * @return the function body bytes
+	 */
+	static byte[] buildListDirectoryBody(boolean identityHash) {
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+		// param: PATH=0 (ref) ; i32 locals 1..9, i64 local 10, ref local 11 (the first
+		// cell), cons locals 12 (the last cell) and 13 (the cell being linked)
+		final int PATH = 0, OFF = 1, PLEN = 2, FD = 3, BUF = 4, END = 5, P = 6, NAMLEN = 7, DST = 8, I = 9;
+		final int COOKIE = 10, ACC = 11, TAIL = 12, CELL = 13;
+		w.write(4);
+		w.write(9);
+		w.write(Type.I32);
+		w.write(1);
+		w.write(Type.I64);
+		w.write(1);
+		w.writeRefType(true, Type.EQ.code());
+		w.write(2);
+		w.writeRefType(true, WasmLispCompiler.TYPE_CONS);
+
+		// Stage the path bytes into linear scratch exactly as _open / _probe_file do.
+		loadMem32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		setLocal(w, OFF);
+		getLocal(w, PATH);
+		getLocal(w, OFF);
+		WasmEmitHelper.emitStrToMemCall(w);
+		i32(w, 2);
+		w.write(Instruction.I32_SUB);
+		setLocal(w, PLEN);
+		// HEAP_PTR = align8(off + plen + 2)
+		i32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		getLocal(w, OFF);
+		getLocal(w, PLEN);
+		w.write(Instruction.I32_ADD);
+		i32(w, 2 + 7);
+		w.write(Instruction.I32_ADD);
+		i32(w, -8);
+		w.write(Instruction.I32_AND);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		// path_open(dirfd/dirflags/path_ptr/path_len from emitDirFdAndPath,
+		// oflags=DIRECTORY=2, fs_rights_base=FD_READDIR=1<<14, fs_rights_inheriting=0,
+		// fdflags=0, fd_out=OPEN_FD_ADDR)
+		emitDirFdAndPath(w, OFF, PLEN);
+		i32(w, 2);
+		w.write(Instruction.I64_CONST);
+		w.writeSignedLeb128(1 << 14);
+		w.write(Instruction.I64_CONST);
+		w.writeSignedLeb128(0);
+		i32(w, 0);
+		i32(w, WasmLispCompiler.OPEN_FD_ADDR);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_PATH_OPEN);
+		// pop the staged path (PLEN is free now: reuse it for the errno)
+		setLocal(w, PLEN);
+		i32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		getLocal(w, OFF);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		// if errno != 0: not a readable directory -> nil
+		getLocal(w, PLEN);
+		w.write(Instruction.IF, 0x40);
+		w.write(Instruction.REF_NULL);
+		w.writeHeapType(Type.EQ.code());
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+		loadMem32(w, WasmLispCompiler.OPEN_FD_ADDR);
+		setLocal(w, FD);
+		// buf = HEAP_PTR (transient; the name scratch follows it), grown to cover both.
+		// HEAP_PTR is then ADVANCED over the pair for the duration of the walk and popped
+		// back at the end -- the same discipline _open uses for its staged path, and here
+		// it is load-bearing under --component: every directory-entry NAME the canonical
+		// ABI lifts is allocated through cabi_realloc, which bumps this very cell, so an
+		// un-advanced buffer would be overwritten by the names being read into it.
+		loadMem32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		setLocal(w, BUF);
+		WasmEmitHelper.emitGrowHeapTo(w, () -> {
+			getLocal(w, BUF);
+			i32(w, READDIR_BUF_BYTES + READDIR_NAME_SCRATCH_BYTES);
+			w.write(Instruction.I32_ADD);
+		});
+		i32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		getLocal(w, BUF);
+		i32(w, READDIR_BUF_BYTES + READDIR_NAME_SCRATCH_BYTES + 7);
+		w.write(Instruction.I32_ADD);
+		i32(w, -8);
+		w.write(Instruction.I32_AND);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		// acc = nil ; cookie = 0
+		w.write(Instruction.REF_NULL);
+		w.writeHeapType(Type.EQ.code());
+		setLocal(w, ACC);
+		w.write(Instruction.I64_CONST);
+		w.writeSignedLeb128(0);
+		setLocal(w, COOKIE);
+		// outer: block { loop { ... } }
+		w.write(Instruction.BLOCK);
+		w.write(0x40);
+		w.write(Instruction.LOOP);
+		w.write(0x40);
+		// errno = fd_readdir(fd, buf, BUF_BYTES, cookie, READDIR_USED_ADDR)
+		getLocal(w, FD);
+		getLocal(w, BUF);
+		i32(w, READDIR_BUF_BYTES);
+		getLocal(w, COOKIE);
+		i32(w, WasmLispCompiler.READDIR_USED_ADDR);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_FD_READDIR);
+		// a non-zero errno ends the walk with whatever was collected (break outer)
+		w.write(Instruction.BR_IF);
+		w.writeUnsignedLeb128(1);
+		// end = buf + bufused ; nothing written means the directory is exhausted
+		getLocal(w, BUF);
+		loadMem32(w, WasmLispCompiler.READDIR_USED_ADDR);
+		w.write(Instruction.I32_ADD);
+		setLocal(w, END);
+		getLocal(w, END);
+		getLocal(w, BUF);
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.BR_IF);
+		w.writeUnsignedLeb128(1);
+		// p = buf
+		getLocal(w, BUF);
+		setLocal(w, P);
+		// inner: block { loop { ... } } over the dirents in this round
+		w.write(Instruction.BLOCK);
+		w.write(0x40);
+		w.write(Instruction.LOOP);
+		w.write(0x40);
+		// a 24-byte dirent header must fit, and its name after it
+		getLocal(w, P);
+		i32(w, 24);
+		w.write(Instruction.I32_ADD);
+		getLocal(w, END);
+		w.write(Instruction.I32_GT_U);
+		w.write(Instruction.BR_IF);
+		w.writeUnsignedLeb128(1);
+		// namlen = u32 at p+16 (d_namlen)
+		getLocal(w, P);
+		i32(w, 16);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_LOAD, 0x02, 0x00);
+		setLocal(w, NAMLEN);
+		getLocal(w, P);
+		i32(w, 24);
+		w.write(Instruction.I32_ADD);
+		getLocal(w, NAMLEN);
+		w.write(Instruction.I32_ADD);
+		getLocal(w, END);
+		w.write(Instruction.I32_GT_U);
+		w.write(Instruction.BR_IF);
+		w.writeUnsignedLeb128(1);
+		// cookie = d_next (u64 at p+0): the resume point of the last COMPLETE entry
+		getLocal(w, P);
+		w.write(Instruction.I64_LOAD, 0x03, 0x00);
+		setLocal(w, COOKIE);
+		// skip "." and ".." -- see the class comment on why they must not be collected
+		emitDotEntryTest(w, P, NAMLEN);
+		w.write(Instruction.IF, 0x40);
+		// dst = buf + BUF_BYTES ; memory[dst] = '"'
+		getLocal(w, BUF);
+		i32(w, READDIR_BUF_BYTES);
+		w.write(Instruction.I32_ADD);
+		setLocal(w, DST);
+		getLocal(w, DST);
+		i32(w, 0x22);
+		w.write(Instruction.I32_STORE8, 0x00, 0x00);
+		// copy the name bytes: for (i = 0; i < namlen; i++) dst[1+i] = p[24+i]
+		i32(w, 0);
+		setLocal(w, I);
+		w.write(Instruction.BLOCK);
+		w.write(0x40);
+		w.write(Instruction.LOOP);
+		w.write(0x40);
+		getLocal(w, I);
+		getLocal(w, NAMLEN);
+		w.write(Instruction.I32_GE_U);
+		w.write(Instruction.BR_IF);
+		w.writeUnsignedLeb128(1);
+		getLocal(w, DST);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		getLocal(w, I);
+		w.write(Instruction.I32_ADD);
+		getLocal(w, P);
+		i32(w, 24);
+		w.write(Instruction.I32_ADD);
+		getLocal(w, I);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
+		w.write(Instruction.I32_STORE8, 0x00, 0x00);
+		getLocal(w, I);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		setLocal(w, I);
+		w.write(Instruction.BR);
+		w.writeUnsignedLeb128(0);
+		w.write(Instruction.END); // loop
+		w.write(Instruction.END); // block
+		// a directory entry (preview1 filetype 3) carries the trailing '/'
+		getLocal(w, P);
+		i32(w, 20);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
+		i32(w, 3);
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.IF, 0x40);
+		getLocal(w, DST);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		getLocal(w, NAMLEN);
+		w.write(Instruction.I32_ADD);
+		i32(w, 0x2f);
+		w.write(Instruction.I32_STORE8, 0x00, 0x00);
+		getLocal(w, NAMLEN);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		setLocal(w, NAMLEN);
+		w.write(Instruction.END);
+		// memory[dst+1+namlen] = '"' ; cell = cons(_str_fresh(dst, namlen + 2), nil),
+		// linked after the last cell (or the first one)
+		getLocal(w, DST);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		getLocal(w, NAMLEN);
+		w.write(Instruction.I32_ADD);
+		i32(w, 0x22);
+		w.write(Instruction.I32_STORE8, 0x00, 0x00);
+		getLocal(w, DST);
+		getLocal(w, NAMLEN);
+		i32(w, 2);
+		w.write(Instruction.I32_ADD);
+		WasmEmitHelper.emitStrFreshCall(w);
+		w.write(Instruction.REF_NULL);
+		w.writeHeapType(Type.EQ.code());
+		WasmEmitHelper.emitNewCons(w, identityHash);
+		setLocal(w, CELL);
+		getLocal(w, TAIL);
+		w.write(Instruction.REF_IS_NULL);
+		w.write(Instruction.IF, 0x40);
+		getLocal(w, CELL);
+		setLocal(w, ACC);
+		w.write(Instruction.ELSE);
+		getLocal(w, TAIL);
+		getLocal(w, CELL);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_SET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		w.writeUnsignedLeb128(1);
+		w.write(Instruction.END);
+		getLocal(w, CELL);
+		setLocal(w, TAIL);
+		// namlen may have grown by the slash; restore it for the p advance below
+		getLocal(w, P);
+		i32(w, 16);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_LOAD, 0x02, 0x00);
+		setLocal(w, NAMLEN);
+		w.write(Instruction.END); // if (not a dot entry)
+		// p += 24 + namlen
+		getLocal(w, P);
+		i32(w, 24);
+		w.write(Instruction.I32_ADD);
+		getLocal(w, NAMLEN);
+		w.write(Instruction.I32_ADD);
+		setLocal(w, P);
+		w.write(Instruction.BR);
+		w.writeUnsignedLeb128(0);
+		w.write(Instruction.END); // inner loop
+		w.write(Instruction.END); // inner block
+		// Only an EMPTY round ends the walk (the test at the top of the loop). A short
+		// one does not: a preview1 host fills the buffer and truncates the last entry,
+		// so "used < buflen" reads as "exhausted" there -- but the --component adapter
+		// stops at the last record that fits WHOLE, which makes a full directory look
+		// short and silently truncated the listing on that backend alone.
+		// A round that decoded no complete entry would spin forever: bail out.
+		getLocal(w, P);
+		getLocal(w, BUF);
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.BR_IF);
+		w.writeUnsignedLeb128(1);
+		w.write(Instruction.BR);
+		w.writeUnsignedLeb128(0);
+		w.write(Instruction.END); // outer loop
+		w.write(Instruction.END); // outer block
+		// pop the listing buffer, close the descriptor and answer (t . names)
+		i32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		getLocal(w, BUF);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		getLocal(w, FD);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_FD_CLOSE);
+		w.write(Instruction.DROP);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_T_SYM);
+		getLocal(w, ACC);
+		WasmEmitHelper.emitNewCons(w, identityHash);
+		w.write(Instruction.END);
+		return body.toByteArray();
+	}
+
+	/**
+	 * Pushes 1 when the dirent at {@code pSlot} is NOT the {@code "."} / {@code ".."}
+	 * self/parent entry, i.e. when it should be collected.
+	 */
+	private static void emitDotEntryTest(WasmWriter w, int pSlot, int namlenSlot) {
+		// !(namlen <= 2 && name[0] == '.' && (namlen == 1 || name[1] == '.'))
+		getLocal(w, namlenSlot);
+		i32(w, 2);
+		w.write(Instruction.I32_LE_U);
+		w.write(Instruction.IF);
+		w.write(Type.I32);
+		getLocal(w, pSlot);
+		i32(w, 24);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
+		i32(w, 0x2e);
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.IF);
+		w.write(Type.I32);
+		getLocal(w, namlenSlot);
+		i32(w, 1);
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.IF);
+		w.write(Type.I32);
+		i32(w, 1);
+		w.write(Instruction.ELSE);
+		getLocal(w, pSlot);
+		i32(w, 25);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
+		i32(w, 0x2e);
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.END);
+		w.write(Instruction.ELSE);
+		i32(w, 0);
+		w.write(Instruction.END);
+		w.write(Instruction.ELSE);
+		i32(w, 0);
+		w.write(Instruction.END);
+		w.write(Instruction.I32_EQZ);
+	}
+
+	/**
+	 * The bytes of a preview1 {@code filestat} record: {@code dev} u64 at 0, {@code ino}
+	 * u64 at 8, {@code filetype} u8 at 16, {@code nlink} u64 at 24, {@code size} u64 at
+	 * 32, then the three timestamps ({@code atim}, {@code mtim}, {@code ctim}: u64
+	 * nanoseconds since the Unix epoch). Only the fields {@code _file_length} and
+	 * {@code _file_write_date} read are named below.
+	 */
+	private static final int FILESTAT_BYTES = 64;
+
+	private static final int FILESTAT_FILETYPE_OFFSET = 16;
+
+	private static final int FILESTAT_SIZE_OFFSET = 32;
+
+	private static final int FILESTAT_MTIM_OFFSET = 48;
+
+	/**
+	 * preview1 {@code lookupflags::symlink_follow}: open or stat what a link in the last
+	 * component names.
+	 */
+	private static final int LOOKUPFLAGS_SYMLINK_FOLLOW = 1;
+
+	/** Seconds from the Common Lisp epoch (1900) to the Unix one (1970). */
+	private static final long UNIVERSAL_TIME_UNIX_EPOCH = 2208988800L;
+
+	/** preview1 {@code filetype::directory}. */
+	private static final int FILETYPE_DIRECTORY = 3;
+
+	/** preview1 {@code filetype::regular_file}. */
+	private static final int FILETYPE_REGULAR_FILE = 4;
+
+	/** The 8-byte scratch {@code file_position_*} writes/reads the tracked offset in. */
+	private static final int FILEPOS_BYTES = 8;
+
+	/** preview1 {@code whence::set} -- the offset is absolute. */
+	private static final int WHENCE_SET = 0;
+
+	/** preview1 {@code whence::cur} -- the offset is relative to the fd's cursor. */
+	private static final int WHENCE_CUR = 1;
+
+	/**
+	 * Where the two {@code file-position} runtime bodies find the host call that answers
+	 * for a descriptor.
+	 *
+	 * <p>
+	 * The two WASI backends reach the same answer through different calls. Preview 1 has
+	 * a real moveable cursor, so ONE injected {@code wasi_snapshot_preview1.fd_seek}
+	 * serves both directions -- {@code (fd, 0, cur)} reads it, {@code (fd, n, set)} moves
+	 * it. {@code --component} has no cursor (WASI 0.3 reads are offset-based), so the
+	 * adapter tracks a per-fd offset and exports the {@code file_position_get} /
+	 * {@code file_position_set} pair over it. Either way the descriptor offset is the
+	 * stream's position for a character stream as much as for a binary one.
+	 *
+	 * @param fdSeek whether {@code getFunc}/{@code setFunc} name preview1's
+	 * {@code fd_seek} (one function, the four-argument shape) rather than the adapter's
+	 * {@code (fd, ptr)} pair
+	 * @param getFunc the slot-encoded function index of the query import
+	 * @param setFunc the slot-encoded function index of the set import (the same function
+	 * as {@code getFunc} under {@code fdSeek})
+	 */
+	record FilePositionAbi(boolean fdSeek, int getFunc, int setFunc) {
+	}
+
+	/**
+	 * Builds the _file_length(stream) function body: the byte length of the file the
+	 * stream is open on as an exact integer, or {@code ref.null eq} (nil) when the length
+	 * cannot be determined.
+	 *
+	 * <p>
+	 * The fd is already in hand -- a stream value on this backend IS its WASI descriptor
+	 * -- so the length is one {@code fd_filestat_get} away, and the answer is REAL here
+	 * exactly as it is on the interpreter and the JVM. What still answers nil is what
+	 * genuinely has no length, which is the same set those two answer nil for: a
+	 * non-handle designator ({@code t}, nil, a synonym stream the caller did not
+	 * resolve), a string stream (a NEGATIVE handle), one of the process standard streams
+	 * (below {@link am.ik.rontolisp.compiler.StreamDesignators#FIRST_USER_HANDLE}), and
+	 * anything the host does not report as a REGULAR FILE -- a socket, a directory, a
+	 * closed descriptor, a character device. Nil rather than a trap for all of them: CL
+	 * says {@code file-length} answers nil when the length cannot be determined, and a
+	 * wasm trap is not catchable.
+	 *
+	 * <p>
+	 * The 64-byte {@code filestat} is staged at {@code HEAP_PTR}, which is ADVANCED over
+	 * it for the duration of the call and popped back after -- the {@code _open}
+	 * discipline, load-bearing under {@code --component} for the same reason it is there
+	 * (the adapter may allocate through {@code cabi_realloc}, which bumps that very cell,
+	 * while the syscall runs).
+	 *
+	 * <p>
+	 * No flush is needed before the stat, unlike the interpreter and the JVM: a write on
+	 * this backend goes straight through {@code fd_write}, so there is no buffer between
+	 * {@code write-byte} and the file.
+	 * @return the function body bytes
+	 */
+	static byte[] buildFileLengthBody() {
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+		// param: STREAM=0 (ref) ; i32 locals: FD=1, OFF=2, ERR=3
+		w.write(1);
+		w.write(3);
+		w.write(Type.I32);
+		final int STREAM = 0, FD = 1, OFF = 2, ERR = 3;
+
+		// A non-handle designator has no file behind it.
+		getLocal(w, STREAM);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(Type.I31.code());
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.IF, 0x40);
+		emitNil(w);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+		getLocal(w, STREAM);
+		refCast(w, Type.I31.code());
+		w.write(Instruction.GC_PREFIX, Instruction.I31_GET_S);
+		setLocal(w, FD);
+		// A negative handle is a string stream; 0/1/2 are the process standard streams.
+		getLocal(w, FD);
+		i32(w, (int) am.ik.rontolisp.compiler.StreamDesignators.FIRST_USER_HANDLE);
+		w.write(Instruction.I32_LT_S);
+		w.write(Instruction.IF, 0x40);
+		emitNil(w);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+		// off = align8(HEAP_PTR), grown to cover the record; HEAP_PTR advanced over it
+		// and
+		// popped back to off afterwards. The alignment is REQUIRED, not tidiness: the
+		// preview1 filestat's u64 fields make the whole record 8-aligned, and a host that
+		// checks (wasmtime does) rejects an unaligned buffer with "Pointer not aligned to
+		// 8" rather than writing it. HEAP_PTR is a bump pointer over values of every
+		// width, so it is 8-aligned only by luck.
+		loadMem32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		i32(w, 7);
+		w.write(Instruction.I32_ADD);
+		i32(w, -8);
+		w.write(Instruction.I32_AND);
+		setLocal(w, OFF);
+		WasmEmitHelper.emitGrowHeapTo(w, () -> {
+			getLocal(w, OFF);
+			i32(w, FILESTAT_BYTES);
+			w.write(Instruction.I32_ADD);
+		});
+		i32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		getLocal(w, OFF);
+		i32(w, FILESTAT_BYTES);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		// errno = fd_filestat_get(fd, off)
+		getLocal(w, FD);
+		getLocal(w, OFF);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_FD_FILESTAT_GET);
+		setLocal(w, ERR);
+		// pop the staged record
+		i32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		getLocal(w, OFF);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		// a non-zero errno: the host cannot stat this descriptor -> nil
+		getLocal(w, ERR);
+		w.write(Instruction.IF, 0x40);
+		emitNil(w);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+		// only a regular file HAS a length
+		getLocal(w, OFF);
+		w.write(Instruction.I32_LOAD8_U, 0x00, FILESTAT_FILETYPE_OFFSET);
+		i32(w, FILETYPE_REGULAR_FILE);
+		w.write(Instruction.I32_NE);
+		w.write(Instruction.IF, 0x40);
+		emitNil(w);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+		// return _int_new(mem_i64[off + 32])
+		getLocal(w, OFF);
+		w.write(Instruction.I64_LOAD, 0x03, FILESTAT_SIZE_OFFSET);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_INT_NEW);
+		w.write(Instruction.END);
+		return body.toByteArray();
+	}
+
+	/**
+	 * Builds the _file_position(stream) function body: a string stream's (a negative
+	 * handle's) character position, or the byte position of the file the stream is open
+	 * on, as an exact integer, or {@code ref.null eq} (nil) when the position cannot be
+	 * determined.
+	 *
+	 * <p>
+	 * For a file, the fd is already in hand, so the position is one host call away:
+	 * preview1's {@code fd_seek(fd, 0, cur)} reads the descriptor's own cursor, and on
+	 * the {@code --component} backend {@code file_position_get} reads the adapter's
+	 * tracked per-fd byte offset (the {@code fd_seek} stand-in, since WASI 0.3 reads are
+	 * offset-based and have no moveable cursor). The answer is REAL here exactly as it is
+	 * on the interpreter and the JVM. What still answers nil is what genuinely has no
+	 * position, the same set {@code _file_length} answers nil for: a non-handle
+	 * designator ({@code t}, nil, an unresolved synonym), a process standard stream
+	 * (below {@code FIRST_USER_HANDLE}), and anything the host cannot address as a file
+	 * -- which the call answers as a non-zero errno.
+	 *
+	 * <p>
+	 * The 8-byte offset is staged at {@code HEAP_PTR}, advanced then popped back, exactly
+	 * the {@code _open} / {@code _file_length} discipline (load-bearing under
+	 * {@code --component}, where the adapter may allocate through {@code cabi_realloc}
+	 * while the call runs).
+	 * @param abi where the host call lives ({@link FilePositionAbi}); its function
+	 * indices are slot-encoded ({@code PLACEHOLDER_FUNC_BASE + ordinal}), resolved by the
+	 * {@code WasmImportInjector} post-pass. Null under {@code --no-wasi}: only a string
+	 * stream answers, every descriptor nil.
+	 * @return the function body bytes
+	 */
+	static byte[] buildFilePositionBody(@Nullable FilePositionAbi abi) {
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+		// param: STREAM=0 (ref) ; i32 locals: FD=1, OFF=2, ERR=3, then the string arm's
+		// REC=4, P=5, N=6, END=7, BOUND=8 ; ref local: BUF=9
+		w.write(2);
+		w.write(8);
+		w.write(Type.I32);
+		w.write(1);
+		w.writeRefType(true, WasmLispCompiler.TYPE_STR_BYTES);
+		final int STREAM = 0, FD = 1, OFF = 2, ERR = 3;
+
+		// A non-handle designator has no file behind it.
+		getLocal(w, STREAM);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(Type.I31.code());
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.IF, 0x40);
+		emitNil(w);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+		getLocal(w, STREAM);
+		refCast(w, Type.I31.code());
+		w.write(Instruction.GC_PREFIX, Instruction.I31_GET_S);
+		setLocal(w, FD);
+		// A negative handle is a string stream, which answers its character position.
+		WasmStringStreamRuntimeBuilder.emitPositionQueryArm(w, FD,
+				new WasmStringStreamRuntimeBuilder.PositionLocals(4, 5, 6, 7, 8, 9));
+		if (abi == null) {
+			emitNil(w);
+			w.write(Instruction.END);
+			return body.toByteArray();
+		}
+		// 0/1/2 are the process standard streams.
+		getLocal(w, FD);
+		i32(w, (int) am.ik.rontolisp.compiler.StreamDesignators.FIRST_USER_HANDLE);
+		w.write(Instruction.I32_LT_S);
+		w.write(Instruction.IF, 0x40);
+		emitNil(w);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+		// off = align8(HEAP_PTR); HEAP_PTR advanced over it, popped back after.
+		loadMem32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		i32(w, 7);
+		w.write(Instruction.I32_ADD);
+		i32(w, -8);
+		w.write(Instruction.I32_AND);
+		setLocal(w, OFF);
+		WasmEmitHelper.emitGrowHeapTo(w, () -> {
+			getLocal(w, OFF);
+			i32(w, FILEPOS_BYTES);
+			w.write(Instruction.I32_ADD);
+		});
+		i32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		getLocal(w, OFF);
+		i32(w, FILEPOS_BYTES);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		// errno = fd_seek(fd, 0, cur, off) / file_position_get(fd, off)
+		getLocal(w, FD);
+		if (abi.fdSeek()) {
+			w.write(Instruction.I64_CONST);
+			w.writeSignedLeb128(0);
+			i32(w, WHENCE_CUR);
+		}
+		getLocal(w, OFF);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(abi.getFunc());
+		setLocal(w, ERR);
+		// pop the staged offset
+		i32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		getLocal(w, OFF);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		// a non-zero errno: the host cannot report this descriptor's position -> nil
+		getLocal(w, ERR);
+		w.write(Instruction.IF, 0x40);
+		emitNil(w);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+		// Bytes the fd's pushback holds were read from the descriptor but not consumed:
+		// err = how many.
+		WasmUtf8StreamDecoder.emitHeldCount(w, FD);
+		setLocal(w, ERR);
+		// return _int_new(mem_i64[off] - err)
+		getLocal(w, OFF);
+		w.write(Instruction.I64_LOAD, 0x03, 0x00);
+		getLocal(w, ERR);
+		w.write(Instruction.I64_EXTEND_U_I32);
+		w.write(Instruction.I64_SUB);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_INT_NEW);
+		w.write(Instruction.END);
+		return body.toByteArray();
+	}
+
+	/**
+	 * Builds the _file_position_set(stream, position) function body: repositions the file
+	 * behind the stream and answers the symbol {@code t} on success, or {@code ref.null
+	 * eq} (nil) when the position cannot be set (CL's "cannot be repositioned").
+	 *
+	 * <p>
+	 * The position argument is widened through {@code _int_val} and handed to the host
+	 * call: preview1's {@code fd_seek(fd, n, set, out)} takes it as an i64 operand and
+	 * writes the resulting offset to {@code out}, which is discarded; the adapter's
+	 * {@code file_position_set(fd, ptr)} reads it out of the staged 8 bytes instead.
+	 * Either way the scratch uses the same advance-then-pop discipline as
+	 * {@link #buildFilePositionBody}.
+	 * @param abi where the host call lives ({@link FilePositionAbi}); null under
+	 * {@code --no-wasi}, where only a string stream can be repositioned
+	 * @return the function body bytes
+	 */
+	static byte[] buildFilePositionSetBody(@Nullable FilePositionAbi abi) {
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+		// params: STREAM=0 (ref), POS=1 (ref) ; i32 locals: FD=2, OFF=3, ERR=4, then the
+		// string arm's REC=5, P=6, N=7, END=8, BOUND=9 ; ref local: BUF=10
+		w.write(2);
+		w.write(8);
+		w.write(Type.I32);
+		w.write(1);
+		w.writeRefType(true, WasmLispCompiler.TYPE_STR_BYTES);
+		final int STREAM = 0, POS = 1, FD = 2, OFF = 3, ERR = 4;
+
+		getLocal(w, STREAM);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(Type.I31.code());
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.IF, 0x40);
+		emitNil(w);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+		getLocal(w, STREAM);
+		refCast(w, Type.I31.code());
+		w.write(Instruction.GC_PREFIX, Instruction.I31_GET_S);
+		setLocal(w, FD);
+		// A negative handle is a string stream, which repositions by character.
+		WasmStringStreamRuntimeBuilder.emitPositionSetArm(w, POS, FD,
+				new WasmStringStreamRuntimeBuilder.PositionLocals(5, 6, 7, 8, 9, 10));
+		if (abi == null) {
+			emitNil(w);
+			w.write(Instruction.END);
+			return body.toByteArray();
+		}
+		getLocal(w, FD);
+		i32(w, (int) am.ik.rontolisp.compiler.StreamDesignators.FIRST_USER_HANDLE);
+		w.write(Instruction.I32_LT_S);
+		w.write(Instruction.IF, 0x40);
+		emitNil(w);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+		// off = align8(HEAP_PTR); HEAP_PTR advanced over it, popped back after.
+		loadMem32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		i32(w, 7);
+		w.write(Instruction.I32_ADD);
+		i32(w, -8);
+		w.write(Instruction.I32_AND);
+		setLocal(w, OFF);
+		WasmEmitHelper.emitGrowHeapTo(w, () -> {
+			getLocal(w, OFF);
+			i32(w, FILEPOS_BYTES);
+			w.write(Instruction.I32_ADD);
+		});
+		i32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		getLocal(w, OFF);
+		i32(w, FILEPOS_BYTES);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		if (!abi.fdSeek()) {
+			// mem_i64[off] = _int_val(pos)
+			getLocal(w, OFF);
+			getLocal(w, POS);
+			w.write(Instruction.CALL);
+			w.writeUnsignedLeb128(WasmLispCompiler.FUNC_INT_VAL);
+			w.write(Instruction.I64_STORE, 0x03, 0x00);
+		}
+		// errno = fd_seek(fd, _int_val(pos), set, off) / file_position_set(fd, off)
+		getLocal(w, FD);
+		if (abi.fdSeek()) {
+			getLocal(w, POS);
+			w.write(Instruction.CALL);
+			w.writeUnsignedLeb128(WasmLispCompiler.FUNC_INT_VAL);
+			i32(w, WHENCE_SET);
+		}
+		getLocal(w, OFF);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(abi.setFunc());
+		setLocal(w, ERR);
+		// pop the staged offset
+		i32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		getLocal(w, OFF);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		// a non-zero errno: the position cannot be set -> nil
+		getLocal(w, ERR);
+		w.write(Instruction.IF, 0x40);
+		emitNil(w);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+		// Bytes the fd's pushback holds belong to the old position: drop them.
+		WasmUtf8StreamDecoder.emitDropHeld(w, FD);
+		// return t
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_T_SYM);
+		w.write(Instruction.END);
+		return body.toByteArray();
+	}
+
+	private static void emitNil(WasmWriter w) {
+		w.write(Instruction.REF_NULL);
+		w.writeHeapType(Type.EQ.code());
+	}
+
+	private static void emitT(WasmWriter w, WasmLispCompiler.StringTable.StringEntry t) {
+		i32(w, t.offset());
+		i32(w, t.length());
+		WasmEmitHelper.emitStrBuildCall(w);
+	}
+
+	/**
+	 * Builds the _make_directories(path) function body: the T symbol when the directory
+	 * exists afterwards, {@code ref.null eq} (nil) otherwise. The path is staged into
+	 * linear scratch and resolved against the preopen table through {@code _path_dirfd}
+	 * exactly as {@link #buildOpenBody()} stages and resolves its own, with the same
+	 * HEAP_PTR advance-and-pop discipline (load-bearing under {@code --component}, where
+	 * the adapter allocates through {@code cabi_realloc} at that cell while a filesystem
+	 * call runs).
+	 *
+	 * <p>
+	 * Preview 1's {@code path_create_directory} creates ONE level, while the interpreter
+	 * ({@code Files.createDirectories}) and the JVM ({@code mkdirs}) make every missing
+	 * parent: the body walks the slash-separated prefixes and creates each through the
+	 * {@code path_create_directory} import, so all three backends answer the same "it
+	 * exists afterwards". Only the FINAL prefix's errno counts -- an intermediate one
+	 * that already exists (or fails for a reason the final answers for) is not the
+	 * answer. A trailing slash is stripped first, so the final prefix never names the
+	 * directory with one.
+	 *
+	 * <p>
+	 * A nonzero final errno is VERIFIED by opening the path as a DIRECTORY (the
+	 * {@code _list_directory} open): a host answers EEXIST for a directory that is
+	 * already there, and the verify turns that into the T the contract promises without
+	 * trusting any one errno number. Anything that is not an openable directory stays
+	 * nil, and the Lisp {@code ensure-directories-exist} above the call site
+	 * ({@code LispPreludeLibrary}) turns that nil into a {@code file-error} -- the
+	 * {@code %delete-file} / {@code %rename-file} shape, unlike {@code file-length}'s
+	 * "cannot be determined" nil.
+	 * @param st the string table (for the {@code T} symbol)
+	 * @return the function body bytes
+	 */
+	static byte[] buildMakeDirectoriesBody(WasmLispCompiler.StringTable st) {
+		WasmLispCompiler.StringTable.StringEntry t = st.addBodyString("T");
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+		// param: PATH=0 (ref) ; i32 locals: OFF=1, PLEN=2, DIRFD=3, BASE=4, N=5,
+		// I=6, J=7, ERR=8
+		w.write(1);
+		w.write(8);
+		w.write(Type.I32);
+		final int PATH = 0, OFF = 1, PLEN = 2, DIRFD = 3, BASE = 4, N = 5, I = 6, J = 7, ERR = 8;
+		final int SLASH = '/';
+
+		// Stage the path bytes into linear scratch exactly as _open does (see there
+		// for why HEAP_PTR stays advanced until every filesystem call has run).
+		loadMem32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		setLocal(w, OFF);
+		getLocal(w, PATH);
+		getLocal(w, OFF);
+		WasmEmitHelper.emitStrToMemCall(w);
+		i32(w, 2);
+		w.write(Instruction.I32_SUB);
+		setLocal(w, PLEN);
+		// HEAP_PTR = align8(off + plen + 2)
+		i32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		getLocal(w, OFF);
+		getLocal(w, PLEN);
+		w.write(Instruction.I32_ADD);
+		i32(w, 2 + 7);
+		w.write(Instruction.I32_ADD);
+		i32(w, -8);
+		w.write(Instruction.I32_AND);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		// dirfd = _path_dirfd(off + 1, plen); base, n = the path it resolved.
+		getLocal(w, OFF);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		getLocal(w, PLEN);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_PATH_DIRFD);
+		setLocal(w, DIRFD);
+		emitResolvedPath(w);
+		setLocal(w, N);
+		setLocal(w, BASE);
+		// Strip trailing slashes: the final prefix must not name the directory with
+		// one.
+		w.write(Instruction.BLOCK);
+		w.write(0x40);
+		w.write(Instruction.LOOP);
+		w.write(0x40);
+		getLocal(w, N);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.BR_IF);
+		w.writeUnsignedLeb128(1);
+		getLocal(w, BASE);
+		getLocal(w, N);
+		w.write(Instruction.I32_ADD);
+		i32(w, 1);
+		w.write(Instruction.I32_SUB);
+		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
+		i32(w, SLASH);
+		w.write(Instruction.I32_NE);
+		w.write(Instruction.BR_IF);
+		w.writeUnsignedLeb128(1);
+		getLocal(w, N);
+		i32(w, 1);
+		w.write(Instruction.I32_SUB);
+		setLocal(w, N);
+		w.write(Instruction.BR);
+		w.writeUnsignedLeb128(0);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
+		// An empty remainder names no directory: pop the staging and answer T, which
+		// is what the JVM's mkdirs-unconditional-T answers for it too.
+		getLocal(w, N);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.IF, 0x40);
+		i32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		getLocal(w, OFF);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		emitT(w, t);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+		// Create every slash-separated prefix: i scans, j finds the next slash or
+		// the end, and [base, base+j) is created (an empty prefix is skipped).
+		i32(w, 0);
+		setLocal(w, I);
+		i32(w, 0);
+		setLocal(w, ERR);
+		w.write(Instruction.BLOCK);
+		w.write(0x40);
+		w.write(Instruction.LOOP);
+		w.write(0x40);
+		getLocal(w, I);
+		setLocal(w, J);
+		w.write(Instruction.BLOCK);
+		w.write(0x40);
+		w.write(Instruction.LOOP);
+		w.write(0x40);
+		getLocal(w, J);
+		getLocal(w, N);
+		w.write(Instruction.I32_GE_U);
+		w.write(Instruction.BR_IF);
+		w.writeUnsignedLeb128(1);
+		getLocal(w, BASE);
+		getLocal(w, J);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
+		i32(w, SLASH);
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.BR_IF);
+		w.writeUnsignedLeb128(1);
+		getLocal(w, J);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		setLocal(w, J);
+		w.write(Instruction.BR);
+		w.writeUnsignedLeb128(0);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
+		// path_create_directory(dirfd, base, j)
+		getLocal(w, J);
+		w.write(Instruction.IF, 0x40);
+		getLocal(w, DIRFD);
+		getLocal(w, BASE);
+		getLocal(w, J);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_PATH_CREATE_DIRECTORY);
+		setLocal(w, ERR);
+		w.write(Instruction.END);
+		// the end of the path was the final prefix: the walk is over
+		getLocal(w, J);
+		getLocal(w, N);
+		w.write(Instruction.I32_GE_U);
+		w.write(Instruction.BR_IF);
+		w.writeUnsignedLeb128(1);
+		getLocal(w, J);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		setLocal(w, I);
+		w.write(Instruction.BR);
+		w.writeUnsignedLeb128(0);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
+		// A clean final create answers T.
+		getLocal(w, ERR);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.IF, 0x40);
+		i32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		getLocal(w, OFF);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		emitT(w, t);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+		// Otherwise verify: open the path as a DIRECTORY (the _list_directory open),
+		// which turns "already there" into T whatever errno the host used -- through a
+		// link, as File.isDirectory answers.
+		getLocal(w, DIRFD);
+		i32(w, LOOKUPFLAGS_SYMLINK_FOLLOW);
+		getLocal(w, BASE);
+		getLocal(w, N);
+		i32(w, 2);
+		w.write(Instruction.I64_CONST);
+		w.writeSignedLeb128(1 << 14);
+		w.write(Instruction.I64_CONST);
+		w.writeSignedLeb128(0);
+		i32(w, 0);
+		i32(w, WasmLispCompiler.OPEN_FD_ADDR);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_PATH_OPEN);
+		setLocal(w, ERR);
+		// pop the staged path (the open is done with it)
+		i32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		getLocal(w, OFF);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		// not an openable directory: nil, which the call site signals on
+		getLocal(w, ERR);
+		w.write(Instruction.IF, 0x40);
+		emitNil(w);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+		loadMem32(w, WasmLispCompiler.OPEN_FD_ADDR);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_FD_CLOSE);
+		w.write(Instruction.DROP);
+		emitT(w, t);
+		w.write(Instruction.END);
+		return body.toByteArray();
+	}
+
+	/**
+	 * Builds the _delete_file(path) function body: the T symbol when the named file or
+	 * empty directory was removed, {@code ref.null eq} (nil) when there was nothing to
+	 * remove or the host refused. The file goes through the {@code path_unlink_file}
+	 * import; when that refuses and the program declared {@code path_remove_directory},
+	 * the same resolved path is removed as a directory -- the answer
+	 * {@code Files.deleteIfExists} and {@code File.delete} give on the other two
+	 * backends, so a non-empty directory stays and answers nil there too. One trailing
+	 * slash is dropped for that call: a directory namestring ends in one, and wasmtime
+	 * refuses {@code "dir/"} where it removes {@code "dir"}. Same staging and preopen
+	 * resolution as {@link #buildProbeFileBody()}; the "a missing file is a file-error"
+	 * decision lives once in the Lisp {@code delete-file} above this, as on the
+	 * interpreter and the JVM.
+	 * @param st the string table (for the {@code T} symbol)
+	 * @param removeDirectoryFunc the placeholder index of the injected
+	 * {@code path_remove_directory} import, or {@code -1} when the module declares none
+	 * @return the function body bytes
+	 */
+	static byte[] buildDeleteFileBody(WasmLispCompiler.StringTable st, int removeDirectoryFunc) {
+		WasmLispCompiler.StringTable.StringEntry t = st.addBodyString("T");
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+		// param: PATH=0 (ref) ; i32 locals: OFF=1, PLEN=2, DIRFD=3, RLEN=4
+		w.write(1);
+		w.write(4);
+		w.write(Type.I32);
+		final int PATH = 0, OFF = 1, PLEN = 2, DIRFD = 3, RLEN = 4;
+
+		// Stage the path bytes into linear scratch exactly as _open does.
+		loadMem32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		setLocal(w, OFF);
+		getLocal(w, PATH);
+		getLocal(w, OFF);
+		WasmEmitHelper.emitStrToMemCall(w);
+		i32(w, 2);
+		w.write(Instruction.I32_SUB);
+		setLocal(w, PLEN);
+		// HEAP_PTR = align8(off + plen + 2)
+		i32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		getLocal(w, OFF);
+		getLocal(w, PLEN);
+		w.write(Instruction.I32_ADD);
+		i32(w, 2 + 7);
+		w.write(Instruction.I32_ADD);
+		i32(w, -8);
+		w.write(Instruction.I32_AND);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		// dirfd = _path_dirfd(off + 1, plen), which also leaves the resolved path in its
+		// two cells for both calls below.
+		getLocal(w, OFF);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		getLocal(w, PLEN);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_PATH_DIRFD);
+		setLocal(w, DIRFD);
+		// errno = path_unlink_file(dirfd, path_ptr, path_len) (PLEN is free now: reuse
+		// it for the errno)
+		getLocal(w, DIRFD);
+		emitResolvedPath(w);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_PATH_UNLINK_FILE);
+		setLocal(w, PLEN);
+		if (removeDirectoryFunc >= 0) {
+			// unlink refused: try the path as an (empty) directory, minus one trailing
+			// slash (rlen = len - (len > 1 && path[len - 1] == '/'))
+			getLocal(w, PLEN);
+			w.write(Instruction.IF, 0x40);
+			loadMem32(w, WasmLispCompiler.PATH_LEN_ADDR);
+			setLocal(w, RLEN);
+			getLocal(w, RLEN);
+			getLocal(w, RLEN);
+			i32(w, 1);
+			w.write(Instruction.I32_GT_U);
+			loadMem32(w, WasmLispCompiler.PATH_PTR_ADDR);
+			getLocal(w, RLEN);
+			w.write(Instruction.I32_ADD);
+			i32(w, 1);
+			w.write(Instruction.I32_SUB);
+			w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
+			i32(w, '/');
+			w.write(Instruction.I32_EQ);
+			w.write(Instruction.I32_AND);
+			w.write(Instruction.I32_SUB);
+			setLocal(w, RLEN);
+			getLocal(w, DIRFD);
+			loadMem32(w, WasmLispCompiler.PATH_PTR_ADDR);
+			getLocal(w, RLEN);
+			w.write(Instruction.CALL);
+			w.writeUnsignedLeb128(removeDirectoryFunc);
+			setLocal(w, PLEN);
+			w.write(Instruction.END);
+		}
+		// pop the staged path
+		i32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		getLocal(w, OFF);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		// a nonzero errno means nothing was removed: nil, like the other backends
+		getLocal(w, PLEN);
+		w.write(Instruction.IF, 0x40);
+		emitNil(w);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+		emitT(w, t);
+		w.write(Instruction.END);
+		return body.toByteArray();
+	}
+
+	/** The size of a WASI {@code fdstat}: filetype u8, flags u16, two u64 rights. */
+	private static final int FDSTAT_BYTES = 24;
+
+	/** WASI's {@code filetype::character_device}: what a host reports for a terminal. */
+	private static final int FILETYPE_CHARACTER_DEVICE = 2;
+
+	/**
+	 * Builds the _terminal_p(fd) function body: the T symbol when the process standard
+	 * stream {@code fd} (0, 1 or 2) is a terminal, {@code ref.null eq} (nil) otherwise --
+	 * any other value, a refusal, or another file type. A terminal is what WASI reports
+	 * as a character device through the injected {@code fd_fdstat_get}: wasmtime answers
+	 * so for a standard stream exactly when it is a tty, and the component adapter when
+	 * {@code wasi:cli}'s {@code get-terminal-*} hands out a terminal. The 24-byte
+	 * {@code fdstat} lands at {@code HEAP_PTR}, 8-aligned, advanced over the call and
+	 * popped after it, like {@link #buildFileWriteDateBody}'s {@code filestat}.
+	 * @param fdFdstatGetFunc the placeholder index of the injected {@code fd_fdstat_get}
+	 * import
+	 * @param st the string table the T symbol's name is interned in
+	 * @return the function body bytes
+	 */
+	static byte[] buildTerminalPBody(int fdFdstatGetFunc, WasmLispCompiler.StringTable st) {
+		WasmLispCompiler.StringTable.StringEntry t = st.addBodyString("T");
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+		// param: FD=0 (ref) ; i32 locals: N=1, OLD=2, BUF=3, ERR=4
+		w.write(1);
+		w.write(4);
+		w.write(Type.I32);
+		final int FD = 0, N = 1, OLD = 2, BUF = 3, ERR = 4;
+
+		// n = the fixnum, or -1 for anything else; only 0, 1 and 2 are asked about
+		WasmEmitHelper.emitBoundIndex(w, FD);
+		setLocal(w, N);
+		getLocal(w, N);
+		i32(w, 2);
+		w.write(Instruction.I32_GT_U);
+		w.write(Instruction.IF, 0x40);
+		emitNil(w);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+		// buf = align8(HEAP_PTR); HEAP_PTR = buf + 24, the memory grown to cover it
+		loadMem32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		setLocal(w, OLD);
+		getLocal(w, OLD);
+		i32(w, 7);
+		w.write(Instruction.I32_ADD);
+		i32(w, -8);
+		w.write(Instruction.I32_AND);
+		setLocal(w, BUF);
+		WasmEmitHelper.emitGrowHeapTo(w, () -> {
+			getLocal(w, BUF);
+			i32(w, FDSTAT_BYTES);
+			w.write(Instruction.I32_ADD);
+		});
+		i32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		getLocal(w, BUF);
+		i32(w, FDSTAT_BYTES);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		// err = fd_fdstat_get(n, buf); pop HEAP_PTR
+		getLocal(w, N);
+		getLocal(w, BUF);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(fdFdstatGetFunc);
+		setLocal(w, ERR);
+		i32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		getLocal(w, OLD);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		// err == 0 && filetype == character_device ? T : nil
+		getLocal(w, ERR);
+		w.write(Instruction.I32_EQZ);
+		getLocal(w, BUF);
+		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
+		i32(w, FILETYPE_CHARACTER_DEVICE);
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.I32_AND);
+		w.write(Instruction.IF, 0x40);
+		emitT(w, t);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+		emitNil(w);
+		w.write(Instruction.END);
+		return body.toByteArray();
+	}
+
+	/**
+	 * One clock {@code subscription} (48 bytes), its {@code event} (32) and the
+	 * {@code nevents} word: the block {@link #buildSleepMsBody} hands
+	 * {@code poll_oneoff}.
+	 */
+	private static final int POLL_SCRATCH_BYTES = 88;
+
+	/** WASI's {@code clockid::monotonic}. */
+	private static final int CLOCK_MONOTONIC = 1;
+
+	/** The largest millisecond count whose nanoseconds fit an i64. */
+	private static final long MAX_SLEEP_MS = Long.MAX_VALUE / 1_000_000L;
+
+	/**
+	 * Builds the _sleep_ms(ms) function body, Preview 1's {@code %sleep-ms}: blocks in
+	 * the injected {@code poll_oneoff} on a relative monotonic-clock subscription until
+	 * {@code ms} (a positive exact integer, the guard is {@code expandSleep}'s) have
+	 * elapsed, then answers nil. The wait is a loop on the monotonic clock around the
+	 * poll, so a host that wakes early -- or refuses the poll and returns at once -- is
+	 * polled again for the rest: the interval always elapses, at worst by spinning, the
+	 * shape every {@code sleep} had before the import. A count past what an i64 of
+	 * nanoseconds holds (a limb-tier integer included) waits the i64 maximum. The block
+	 * lands at {@code HEAP_PTR}, 8-aligned, advanced over the call and popped after it,
+	 * like {@link #buildTerminalPBody}'s {@code fdstat}.
+	 * @param pollOneoffFunc the placeholder index of the injected {@code poll_oneoff}
+	 * import
+	 * @return the function body bytes
+	 */
+	static byte[] buildSleepMsBody(int pollOneoffFunc) {
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+		// param: MS=0 (ref) ; i64 locals: NS=1, DEADLINE=2, NOW=3 ; i32 locals: OLD=4,
+		// BUF=5
+		w.write(2);
+		w.write(3);
+		w.write(Type.I64);
+		w.write(2);
+		w.write(Type.I32);
+		final int MS = 0, NS = 1, DEADLINE = 2, NOW = 3, OLD = 4, BUF = 5;
+
+		// ns = ms * 10^6, saturating at the i64 maximum
+		i64(w, Long.MAX_VALUE);
+		setLocal(w, NS);
+		getLocal(w, MS);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_BIGINT);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.IF, 0x40);
+		getLocal(w, MS);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_INT_VAL);
+		setLocal(w, NOW);
+		getLocal(w, NOW);
+		i64(w, MAX_SLEEP_MS);
+		w.write(Instruction.I64_GT_S);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.IF, 0x40);
+		getLocal(w, NOW);
+		i64(w, 1_000_000L);
+		w.write(Instruction.I64_MUL);
+		setLocal(w, NS);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
+		// deadline = now + ns, saturating at the u64 maximum
+		emitMonotonicNanos(w);
+		w.write(Instruction.TEE_LOCAL);
+		w.writeUnsignedLeb128(NOW);
+		getLocal(w, NS);
+		w.write(Instruction.I64_ADD);
+		w.write(Instruction.TEE_LOCAL);
+		w.writeUnsignedLeb128(DEADLINE);
+		getLocal(w, NOW);
+		w.write(Instruction.I64_LT_U);
+		w.write(Instruction.IF, 0x40);
+		i64(w, -1L);
+		setLocal(w, DEADLINE);
+		w.write(Instruction.END);
+		// buf = align8(HEAP_PTR); HEAP_PTR = buf + 88, the memory grown to cover it
+		loadMem32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		setLocal(w, OLD);
+		getLocal(w, OLD);
+		i32(w, 7);
+		w.write(Instruction.I32_ADD);
+		i32(w, -8);
+		w.write(Instruction.I32_AND);
+		setLocal(w, BUF);
+		WasmEmitHelper.emitGrowHeapTo(w, () -> {
+			getLocal(w, BUF);
+			i32(w, POLL_SCRATCH_BYTES);
+			w.write(Instruction.I32_ADD);
+		});
+		i32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		getLocal(w, BUF);
+		i32(w, POLL_SCRATCH_BYTES);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		// the subscription: userdata 0, tag clock (0), clock id monotonic, precision 0,
+		// flags 0 (a relative timeout); the timeout is written per poll
+		storeI64At(w, BUF, 0, 0L);
+		storeI64At(w, BUF, 8, 0L);
+		storeI64At(w, BUF, 16, CLOCK_MONOTONIC);
+		storeI64At(w, BUF, 32, 0L);
+		storeI64At(w, BUF, 40, 0L);
+		// loop: now = clock; until now >= deadline, poll for deadline - now
+		w.write(Instruction.BLOCK, 0x40);
+		w.write(Instruction.LOOP, 0x40);
+		emitMonotonicNanos(w);
+		w.write(Instruction.TEE_LOCAL);
+		w.writeUnsignedLeb128(NOW);
+		getLocal(w, DEADLINE);
+		w.write(Instruction.I64_GE_U);
+		w.write(Instruction.BR_IF, 1);
+		getLocal(w, BUF);
+		getLocal(w, DEADLINE);
+		getLocal(w, NOW);
+		w.write(Instruction.I64_SUB);
+		w.write(Instruction.I64_STORE, 0x03, 24);
+		// poll_oneoff(in = buf, out = buf + 48, nsubscriptions = 1, nevents = buf + 80)
+		getLocal(w, BUF);
+		getLocal(w, BUF);
+		i32(w, 48);
+		w.write(Instruction.I32_ADD);
+		i32(w, 1);
+		getLocal(w, BUF);
+		i32(w, 80);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(pollOneoffFunc);
+		w.write(Instruction.DROP);
+		w.write(Instruction.BR, 0);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
+		// pop HEAP_PTR
+		i32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		getLocal(w, OLD);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		emitNil(w);
+		w.write(Instruction.END);
+		return body.toByteArray();
+	}
+
+	// Leaves the monotonic clock's nanoseconds on the stack: clock_time_get(monotonic,
+	// precision 1, TIME_SCRATCH_ADDR), then the i64 it wrote.
+	private static void emitMonotonicNanos(WasmWriter w) {
+		i32(w, CLOCK_MONOTONIC);
+		i64(w, 1L);
+		i32(w, WasmLispCompiler.TIME_SCRATCH_ADDR);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_CLOCK_TIME_GET);
+		w.write(Instruction.DROP);
+		i32(w, WasmLispCompiler.TIME_SCRATCH_ADDR);
+		w.write(Instruction.I64_LOAD, 0x03, 0x00);
+	}
+
+	// mem64[local + offset] = value
+	private static void storeI64At(WasmWriter w, int local, int offset, long value) {
+		getLocal(w, local);
+		i64(w, value);
+		w.write(Instruction.I64_STORE, 0x03);
+		w.writeUnsignedLeb128(offset);
+	}
+
+	/**
+	 * Builds the _file_write_date(path) function body: the universal time the named file
+	 * was last written, as an exact integer, or {@code ref.null eq} (nil) when it cannot
+	 * be told -- a missing file, a host that refuses the stat, or a host that reports no
+	 * modification time (preview1's 0), the JVM's {@code lastModified() == 0} answer. The
+	 * path is staged and resolved against the preopen table as
+	 * {@link #buildProbeFileBody()} does, then stated through the injected
+	 * {@code path_filestat_get} with symlinks followed (what {@code Files} and
+	 * {@code File} answer on the other two backends). The 64-byte {@code filestat}
+	 * follows the staged path at {@code HEAP_PTR}, 8-aligned (wasmtime refuses an
+	 * unaligned one, {@link #buildFileLengthBody()}), and both are popped together. Whole
+	 * seconds, truncated toward zero (a signed division: the component adapter's time
+	 * before 1970 is negative nanoseconds), like the interpreter's
+	 * {@code toMillis() / 1000}.
+	 * @param pathFilestatGetFunc the placeholder index of the injected
+	 * {@code path_filestat_get} import
+	 * @return the function body bytes
+	 */
+	static byte[] buildFileWriteDateBody(int pathFilestatGetFunc) {
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+		// param: PATH=0 (ref) ; i32 locals: OFF=1, PLEN=2, BUF=3 ; i64 local: NS=4
+		w.write(2);
+		w.write(3);
+		w.write(Type.I32);
+		w.write(1);
+		w.write(Type.I64);
+		final int PATH = 0, OFF = 1, PLEN = 2, BUF = 3, NS = 4;
+
+		// Stage the path bytes into linear scratch exactly as _open does.
+		loadMem32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		setLocal(w, OFF);
+		getLocal(w, PATH);
+		getLocal(w, OFF);
+		WasmEmitHelper.emitStrToMemCall(w);
+		i32(w, 2);
+		w.write(Instruction.I32_SUB);
+		setLocal(w, PLEN);
+		// buf = align8(off + plen + 2); HEAP_PTR = buf + 64, the memory grown to cover it
+		getLocal(w, OFF);
+		getLocal(w, PLEN);
+		w.write(Instruction.I32_ADD);
+		i32(w, 2 + 7);
+		w.write(Instruction.I32_ADD);
+		i32(w, -8);
+		w.write(Instruction.I32_AND);
+		setLocal(w, BUF);
+		WasmEmitHelper.emitGrowHeapTo(w, () -> {
+			getLocal(w, BUF);
+			i32(w, FILESTAT_BYTES);
+			w.write(Instruction.I32_ADD);
+		});
+		i32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		getLocal(w, BUF);
+		i32(w, FILESTAT_BYTES);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		// errno = path_filestat_get(_path_dirfd(off + 1, plen), symlink_follow,
+		// resolved path, buf) (PLEN is free now: reuse it for the errno)
+		getLocal(w, OFF);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		getLocal(w, PLEN);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_PATH_DIRFD);
+		i32(w, LOOKUPFLAGS_SYMLINK_FOLLOW);
+		emitResolvedPath(w);
+		getLocal(w, BUF);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(pathFilestatGetFunc);
+		setLocal(w, PLEN);
+		getLocal(w, BUF);
+		w.write(Instruction.I64_LOAD, 0x03, FILESTAT_MTIM_OFFSET);
+		setLocal(w, NS);
+		// pop the staged path and record
+		i32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		getLocal(w, OFF);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		// a nonzero errno, or no time reported: "cannot be determined"
+		getLocal(w, PLEN);
+		getLocal(w, NS);
+		w.write(Instruction.I64_EQZ);
+		w.write(Instruction.I32_OR);
+		w.write(Instruction.IF, 0x40);
+		emitNil(w);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+		// return _int_new(ns / 1e9 + 2208988800)
+		getLocal(w, NS);
+		w.write(Instruction.I64_CONST);
+		w.writeSignedLeb128(1_000_000_000L);
+		w.write(Instruction.I64_DIV_S);
+		w.write(Instruction.I64_CONST);
+		w.writeSignedLeb128(UNIVERSAL_TIME_UNIX_EPOCH);
+		w.write(Instruction.I64_ADD);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_INT_NEW);
+		w.write(Instruction.END);
+		return body.toByteArray();
+	}
+
+	/**
+	 * The most bytes {@code _read_link} reads a link's target into: Linux's
+	 * {@code PATH_MAX}. A target this long or longer answers nil rather than a truncated
+	 * path (preview1's {@code path_readlink} truncates silently).
+	 */
+	private static final int READ_LINK_MAX = 4096;
+
+	/**
+	 * Builds the _read_link(path) function body: the target the symbolic link at the path
+	 * holds, as a fresh string written as the link has it, or {@code ref.null eq} (nil)
+	 * when the path is no link (preview1's {@code inval}), is not there, lies outside
+	 * every preopen, or the host refuses -- wasmtime refuses a link whose target is
+	 * absolute ({@code perm}), which reads as "no link" and leaves the component as
+	 * spelled. The path is staged and resolved against the preopen table as
+	 * {@link #buildProbeFileBody()} does; after it, 8-aligned, sit the 4-byte
+	 * {@code bufused} cell (wasmtime refuses an unaligned one) and the target framed in
+	 * the quote bytes {@code _str_fresh} reads, and all of it is popped together after
+	 * the string is built.
+	 * @param pathReadlinkFunc the placeholder index of the injected {@code path_readlink}
+	 * import
+	 * @return the function body bytes
+	 */
+	static byte[] buildReadLinkBody(int pathReadlinkFunc) {
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+		// param: PATH=0 (ref) ; i32 locals: OFF=1, PLEN=2, BUF=3, USED=4 ; ref local:
+		// STR=5
+		w.write(2);
+		w.write(4);
+		w.write(Type.I32);
+		w.write(1);
+		w.writeRefType(true, Type.EQ.code());
+		final int PATH = 0, OFF = 1, PLEN = 2, BUF = 3, USED = 4, STR = 5;
+
+		// Stage the path bytes into linear scratch exactly as _open does.
+		loadMem32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		setLocal(w, OFF);
+		getLocal(w, PATH);
+		getLocal(w, OFF);
+		WasmEmitHelper.emitStrToMemCall(w);
+		i32(w, 2);
+		w.write(Instruction.I32_SUB);
+		setLocal(w, PLEN);
+		// buf = align8(off + plen + 2): bufused @0, '"' @4, target @5, '"' after it;
+		// HEAP_PTR = buf + 8 + READ_LINK_MAX, the memory grown to cover it
+		getLocal(w, OFF);
+		getLocal(w, PLEN);
+		w.write(Instruction.I32_ADD);
+		i32(w, 2 + 7);
+		w.write(Instruction.I32_ADD);
+		i32(w, -8);
+		w.write(Instruction.I32_AND);
+		setLocal(w, BUF);
+		WasmEmitHelper.emitGrowHeapTo(w, () -> {
+			getLocal(w, BUF);
+			i32(w, 8 + READ_LINK_MAX);
+			w.write(Instruction.I32_ADD);
+		});
+		i32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		getLocal(w, BUF);
+		i32(w, 8 + READ_LINK_MAX);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		// errno = path_readlink(_path_dirfd(off + 1, plen), resolved path, buf + 5,
+		// READ_LINK_MAX, buf) (PLEN is free now: reuse it for the errno)
+		getLocal(w, OFF);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		getLocal(w, PLEN);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_PATH_DIRFD);
+		emitResolvedPath(w);
+		getLocal(w, BUF);
+		i32(w, 5);
+		w.write(Instruction.I32_ADD);
+		i32(w, READ_LINK_MAX);
+		getLocal(w, BUF);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(pathReadlinkFunc);
+		setLocal(w, PLEN);
+		getLocal(w, BUF);
+		w.write(Instruction.I32_LOAD, 0x02, 0x00);
+		setLocal(w, USED);
+		// a nonzero errno, or a target that may have been cut short: no link
+		getLocal(w, PLEN);
+		getLocal(w, USED);
+		i32(w, READ_LINK_MAX);
+		w.write(Instruction.I32_GE_U);
+		w.write(Instruction.I32_OR);
+		w.write(Instruction.IF, 0x40);
+		i32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		getLocal(w, OFF);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		emitNil(w);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+		// frame the target in quotes and build the string while the scratch is held
+		getLocal(w, BUF);
+		i32(w, 0x22);
+		w.write(Instruction.I32_STORE8, 0x00, 0x04);
+		getLocal(w, BUF);
+		getLocal(w, USED);
+		w.write(Instruction.I32_ADD);
+		i32(w, 0x22);
+		w.write(Instruction.I32_STORE8, 0x00, 0x05);
+		getLocal(w, BUF);
+		i32(w, 4);
+		w.write(Instruction.I32_ADD);
+		getLocal(w, USED);
+		i32(w, 2);
+		w.write(Instruction.I32_ADD);
+		WasmEmitHelper.emitStrFreshCall(w);
+		setLocal(w, STR);
+		// pop the staged path, the cell and the target
+		i32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		getLocal(w, OFF);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		getLocal(w, STR);
+		w.write(Instruction.END);
+		return body.toByteArray();
+	}
+
+	/** preview1 {@code filestat}'s {@code atim}: the time of last access. */
+	private static final int FILESTAT_ATIM_OFFSET = 40;
+
+	/** preview1 {@code filetype::symbolic_link}. */
+	private static final int FILETYPE_SYMBOLIC_LINK = 7;
+
+	/** preview1 {@code fstflags}: write {@code atim}, write {@code mtim}. */
+	private static final int FSTFLAGS_ATIM = 1;
+
+	private static final int FSTFLAGS_MTIM = 4;
+
+	/**
+	 * Builds the _file_stat(path, follow) function body: what the host's stat (follow not
+	 * nil) or lstat says of the path, the list
+	 * {@code (type size modified accessed nil nil)} -- the type 1 a regular file, 2 a
+	 * directory, 3 a symbolic link, 4 anything else, the times preview1's nanoseconds
+	 * read signed (the component adapter's of a time before 1970 is below zero), the time
+	 * of making and the permission bits nil (no WASI stat has either) -- or the fixnum of
+	 * why it cannot say: 1 for {@code noent} and {@code notdir}, 2 for {@code acces} and
+	 * {@code perm} (wasmtime's for a link out of its preopen), 3 for {@code loop}, 4 for
+	 * anything else. No file is opened, so a file the program may not read is described
+	 * too. The path is staged and resolved and the {@code filestat} placed as
+	 * {@link #buildFileWriteDateBody} does, over the same injected
+	 * {@code path_filestat_get}; its fields are read into locals before the pop.
+	 * @param pathFilestatGetFunc the placeholder index of the injected
+	 * {@code path_filestat_get} import
+	 * @param identityHash whether the module's conses carry the identity-hash slot
+	 * @return the function body bytes
+	 */
+	static byte[] buildFileStatBody(int pathFilestatGetFunc, boolean identityHash) {
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+		// params: PATH=0, FOLLOW=1 (ref) ; i32 locals: OFF=2, PLEN=3, BUF=4, TYPE=5 ; i64
+		// locals: SIZE=6, MTIM=7, ATIM=8 ; ref local: ACC=9
+		w.write(3);
+		w.write(4);
+		w.write(Type.I32);
+		w.write(3);
+		w.write(Type.I64);
+		w.write(1);
+		w.writeRefType(true, Type.EQ.code());
+		final int PATH = 0, FOLLOW = 1, OFF = 2, PLEN = 3, BUF = 4, TYPE = 5, SIZE = 6, MTIM = 7, ATIM = 8, ACC = 9;
+
+		// Stage the path bytes into linear scratch exactly as _open does.
+		loadMem32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		setLocal(w, OFF);
+		getLocal(w, PATH);
+		getLocal(w, OFF);
+		WasmEmitHelper.emitStrToMemCall(w);
+		i32(w, 2);
+		w.write(Instruction.I32_SUB);
+		setLocal(w, PLEN);
+		// buf = align8(off + plen + 2); HEAP_PTR = buf + 64, the memory grown to cover it
+		getLocal(w, OFF);
+		getLocal(w, PLEN);
+		w.write(Instruction.I32_ADD);
+		i32(w, 2 + 7);
+		w.write(Instruction.I32_ADD);
+		i32(w, -8);
+		w.write(Instruction.I32_AND);
+		setLocal(w, BUF);
+		WasmEmitHelper.emitGrowHeapTo(w, () -> {
+			getLocal(w, BUF);
+			i32(w, FILESTAT_BYTES);
+			w.write(Instruction.I32_ADD);
+		});
+		i32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		getLocal(w, BUF);
+		i32(w, FILESTAT_BYTES);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		// errno = path_filestat_get(_path_dirfd(off + 1, plen), follow ? symlink_follow
+		// : 0, resolved path, buf) (PLEN is free now: reuse it for the errno)
+		getLocal(w, OFF);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		getLocal(w, PLEN);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_PATH_DIRFD);
+		getLocal(w, FOLLOW);
+		w.write(Instruction.REF_IS_NULL);
+		w.write(Instruction.I32_EQZ);
+		emitResolvedPath(w);
+		getLocal(w, BUF);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(pathFilestatGetFunc);
+		setLocal(w, PLEN);
+		getLocal(w, BUF);
+		w.write(Instruction.I32_LOAD8_U, 0x00, FILESTAT_FILETYPE_OFFSET);
+		setLocal(w, TYPE);
+		getLocal(w, BUF);
+		w.write(Instruction.I64_LOAD, 0x03, FILESTAT_SIZE_OFFSET);
+		setLocal(w, SIZE);
+		getLocal(w, BUF);
+		w.write(Instruction.I64_LOAD, 0x03, FILESTAT_MTIM_OFFSET);
+		setLocal(w, MTIM);
+		getLocal(w, BUF);
+		w.write(Instruction.I64_LOAD, 0x03, FILESTAT_ATIM_OFFSET);
+		setLocal(w, ATIM);
+		// pop the staged path and record
+		i32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		getLocal(w, OFF);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		// a nonzero errno: why
+		getLocal(w, PLEN);
+		w.write(Instruction.IF, 0x40);
+		emitErrnoReason(w, PLEN);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+		// type = regular_file 1, directory 2, symbolic_link 3, else 4
+		emitMapped(w, TYPE,
+				new int[][] { { FILETYPE_REGULAR_FILE, 1 }, { FILETYPE_DIRECTORY, 2 }, { FILETYPE_SYMBOLIC_LINK, 3 } },
+				4);
+		setLocal(w, TYPE);
+		// acc = (type size modified accessed nil nil), consed from the end
+		emitNil(w);
+		emitNil(w);
+		WasmEmitHelper.emitNewCons(w, identityHash);
+		setLocal(w, ACC);
+		emitNil(w);
+		getLocal(w, ACC);
+		WasmEmitHelper.emitNewCons(w, identityHash);
+		setLocal(w, ACC);
+		for (int slot : new int[] { ATIM, MTIM, SIZE }) {
+			getLocal(w, slot);
+			w.write(Instruction.CALL);
+			w.writeUnsignedLeb128(WasmLispCompiler.FUNC_INT_NEW);
+			getLocal(w, ACC);
+			WasmEmitHelper.emitNewCons(w, identityHash);
+			setLocal(w, ACC);
+		}
+		getLocal(w, TYPE);
+		w.write(Instruction.I64_EXTEND_U_I32);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_INT_NEW);
+		getLocal(w, ACC);
+		WasmEmitHelper.emitNewCons(w, identityHash);
+		w.write(Instruction.END);
+		return body.toByteArray();
+	}
+
+	/**
+	 * Builds the _file_set_times(path, follow, accessed, modified) function body: gives
+	 * the path the times of last access and of last writing through the injected
+	 * {@code path_filestat_set_times}, each a nanosecond count or nil to leave it (its
+	 * {@code fstflags} bit unset), and answers the fixnum 0, or
+	 * {@link #buildFileStatBody}'s fixnum of why not. A time below zero is written as
+	 * zero: preview1's timestamp is unsigned. The host writes the times by the path, so a
+	 * file the program may not read takes them too. Staged and resolved as
+	 * {@link #buildDeleteFileBody} does.
+	 * @param pathFilestatSetTimesFunc the placeholder index of the injected
+	 * {@code path_filestat_set_times} import
+	 * @return the function body bytes
+	 */
+	static byte[] buildFileSetTimesBody(int pathFilestatSetTimesFunc) {
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+		// params: PATH=0, FOLLOW=1, ACCESSED=2, MODIFIED=3 (ref) ; i32 locals: OFF=4,
+		// PLEN=5, FST=6 ; i64 locals: ATIM=7, MTIM=8
+		w.write(2);
+		w.write(3);
+		w.write(Type.I32);
+		w.write(2);
+		w.write(Type.I64);
+		final int PATH = 0, FOLLOW = 1, ACCESSED = 2, MODIFIED = 3, OFF = 4, PLEN = 5, FST = 6, ATIM = 7, MTIM = 8;
+
+		// each time given: its nanoseconds, zero at the least, and its fstflags bit
+		emitGivenTime(w, ACCESSED, ATIM, FST, FSTFLAGS_ATIM);
+		emitGivenTime(w, MODIFIED, MTIM, FST, FSTFLAGS_MTIM);
+		// Stage the path bytes into linear scratch exactly as _open does.
+		loadMem32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		setLocal(w, OFF);
+		getLocal(w, PATH);
+		getLocal(w, OFF);
+		WasmEmitHelper.emitStrToMemCall(w);
+		i32(w, 2);
+		w.write(Instruction.I32_SUB);
+		setLocal(w, PLEN);
+		// HEAP_PTR = align8(off + plen + 2)
+		i32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		getLocal(w, OFF);
+		getLocal(w, PLEN);
+		w.write(Instruction.I32_ADD);
+		i32(w, 2 + 7);
+		w.write(Instruction.I32_ADD);
+		i32(w, -8);
+		w.write(Instruction.I32_AND);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		// errno = path_filestat_set_times(_path_dirfd(off + 1, plen), follow ?
+		// symlink_follow : 0, resolved path, atim, mtim, fst) (PLEN is free now: reuse
+		// it for the errno)
+		getLocal(w, OFF);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		getLocal(w, PLEN);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_PATH_DIRFD);
+		getLocal(w, FOLLOW);
+		w.write(Instruction.REF_IS_NULL);
+		w.write(Instruction.I32_EQZ);
+		emitResolvedPath(w);
+		getLocal(w, ATIM);
+		getLocal(w, MTIM);
+		getLocal(w, FST);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(pathFilestatSetTimesFunc);
+		setLocal(w, PLEN);
+		// pop the staged path
+		i32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		getLocal(w, OFF);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		getLocal(w, PLEN);
+		w.write(Instruction.IF, 0x40);
+		emitErrnoReason(w, PLEN);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+		i64(w, 0);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_INT_NEW);
+		w.write(Instruction.END);
+		return body.toByteArray();
+	}
+
+	/**
+	 * Builds the body {@code _file_stat} and {@code _file_set_times} have where the
+	 * module has no files ({@code --no-wasi}): the fixnum 1, nothing there.
+	 * @return the function body bytes
+	 */
+	static byte[] buildNothingThereBody() {
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+		w.write(0);
+		i64(w, 1);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_INT_NEW);
+		w.write(Instruction.END);
+		return body.toByteArray();
+	}
+
+	/**
+	 * Emits, for a time given as a value (nil to leave it), its nanoseconds into the i64
+	 * local, zero where it is below zero, and its bit into the fstflags local.
+	 */
+	private static void emitGivenTime(WasmWriter w, int value, int nanos, int fst, int bit) {
+		getLocal(w, value);
+		w.write(Instruction.REF_IS_NULL);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.IF, 0x40);
+		getLocal(w, value);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_INT_VAL);
+		setLocal(w, nanos);
+		getLocal(w, nanos);
+		i64(w, 0);
+		w.write(Instruction.I64_LT_S);
+		w.write(Instruction.IF, 0x40);
+		i64(w, 0);
+		setLocal(w, nanos);
+		w.write(Instruction.END);
+		getLocal(w, fst);
+		i32(w, bit);
+		w.write(Instruction.I32_OR);
+		setLocal(w, fst);
+		w.write(Instruction.END);
+	}
+
+	/**
+	 * Emits the fixnum of why a path operation failed, read off the preview1 errno in the
+	 * i32 local: 1 {@code noent} or {@code notdir}, 2 {@code acces} or {@code perm}, 3
+	 * {@code loop}, 4 anything else.
+	 */
+	private static void emitErrnoReason(WasmWriter w, int errno) {
+		emitMapped(w, errno, new int[][] { { ERRNO_NOENT, 1 }, { ERRNO_NOTDIR, 1 }, { ERRNO_ACCES, 2 },
+				{ ERRNO_PERM, 2 }, { ERRNO_LOOP, 3 } }, 4);
+		w.write(Instruction.I64_EXTEND_U_I32);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_INT_NEW);
+	}
+
+	/**
+	 * Emits the i32 the i32 local's value maps to by the pairs {@code {from, to}}, the
+	 * {@code otherwise} where none matches: nested selects, the last pair outermost.
+	 */
+	private static void emitMapped(WasmWriter w, int local, int[][] pairs, int otherwise) {
+		emitMapped(w, local, pairs, pairs.length, otherwise);
+	}
+
+	private static void emitMapped(WasmWriter w, int local, int[][] pairs, int n, int otherwise) {
+		if (n == 0) {
+			i32(w, otherwise);
+			return;
+		}
+		i32(w, pairs[n - 1][1]);
+		emitMapped(w, local, pairs, n - 1, otherwise);
+		getLocal(w, local);
+		i32(w, pairs[n - 1][0]);
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.SELECT);
+	}
+
+	/**
+	 * Builds the _make_link(target, path) function body: the T symbol when a symbolic
+	 * link holding the target as given was made at the path, {@code ref.null eq} (nil)
+	 * when the host made none, over the injected {@code path_symlink} import. Both are
+	 * staged; only the path is resolved against the preopen table, the target being the
+	 * link's contents, which the host reads against the link's own directory (wasmtime
+	 * refuses an absolute one: {@code perm}).
+	 * @param pathSymlinkFunc the placeholder index of the injected {@code path_symlink}
+	 * import
+	 * @param st the string table (for the {@code T} symbol)
+	 * @return the function body bytes
+	 */
+	static byte[] buildMakeLinkBody(int pathSymlinkFunc, WasmLispCompiler.StringTable st) {
+		WasmLispCompiler.StringTable.StringEntry t = st.addBodyString("T");
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+		// params: TARGET=0 (ref), PATH=1 (ref) ; i32 locals: OFF1=2, LEN1=3, OFF2=4,
+		// LEN2=5
+		w.write(1);
+		w.write(4);
+		w.write(Type.I32);
+		final int TARGET = 0, PATH = 1, OFF1 = 2, LEN1 = 3, OFF2 = 4, LEN2 = 5;
+		// Stage the target, then the path above it.
+		for (int[] staged : new int[][] { { TARGET, OFF1, LEN1 }, { PATH, OFF2, LEN2 } }) {
+			loadMem32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+			setLocal(w, staged[1]);
+			getLocal(w, staged[0]);
+			getLocal(w, staged[1]);
+			WasmEmitHelper.emitStrToMemCall(w);
+			i32(w, 2);
+			w.write(Instruction.I32_SUB);
+			setLocal(w, staged[2]);
+			// HEAP_PTR = align8(off + len + 2)
+			i32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+			getLocal(w, staged[1]);
+			getLocal(w, staged[2]);
+			w.write(Instruction.I32_ADD);
+			i32(w, 2 + 7);
+			w.write(Instruction.I32_ADD);
+			i32(w, -8);
+			w.write(Instruction.I32_AND);
+			w.write(Instruction.I32_STORE, 0x02, 0x00);
+		}
+		// errno = path_symlink(off1 + 1, len1, _path_dirfd(off2 + 1, len2), resolved
+		// path) (LEN2 is free now: reuse it for the errno)
+		getLocal(w, OFF1);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		getLocal(w, LEN1);
+		getLocal(w, OFF2);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		getLocal(w, LEN2);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_PATH_DIRFD);
+		emitResolvedPath(w);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(pathSymlinkFunc);
+		setLocal(w, LEN2);
+		// pop both stagings
+		i32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		getLocal(w, OFF1);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		// a nonzero errno means no link was made: nil, like the other backends
+		getLocal(w, LEN2);
+		w.write(Instruction.IF, 0x40);
+		emitNil(w);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+		emitT(w, t);
+		w.write(Instruction.END);
+		return body.toByteArray();
+	}
+
+	/**
+	 * Builds the _rename_file(from, to) function body: the T symbol when the file was
+	 * renamed, {@code ref.null eq} (nil) when there was nothing to rename or the host
+	 * refused, over the {@code path_rename} import. Both paths are staged and each is
+	 * resolved against the preopen table on its own -- the two may live under different
+	 * preopens -- so the staging of the first survives the resolution of the second
+	 * ({@code _path_dirfd} pops only its own scratch, and a path it JOINS stays allocated
+	 * above both stagings until the pop at the end).
+	 * @param st the string table (for the {@code T} symbol)
+	 * @return the function body bytes
+	 */
+	static byte[] buildRenameFileBody(WasmLispCompiler.StringTable st) {
+		WasmLispCompiler.StringTable.StringEntry t = st.addBodyString("T");
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+		// params: FROM=0 (ref), TO=1 (ref) ; i32 locals: OFF1=2, LEN1=3, OFF2=4,
+		// LEN2=5, D1=6, P1=7, N1=8, D2=9, ERR=10
+		w.write(1);
+		w.write(9);
+		w.write(Type.I32);
+		final int FROM = 0, TO = 1, OFF1 = 2, LEN1 = 3, OFF2 = 4, LEN2 = 5, D1 = 6, P1 = 7, N1 = 8, D2 = 9, ERR = 10;
+
+		// Stage the source path.
+		loadMem32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		setLocal(w, OFF1);
+		getLocal(w, FROM);
+		getLocal(w, OFF1);
+		WasmEmitHelper.emitStrToMemCall(w);
+		i32(w, 2);
+		w.write(Instruction.I32_SUB);
+		setLocal(w, LEN1);
+		// HEAP_PTR = align8(off1 + len1 + 2)
+		i32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		getLocal(w, OFF1);
+		getLocal(w, LEN1);
+		w.write(Instruction.I32_ADD);
+		i32(w, 2 + 7);
+		w.write(Instruction.I32_ADD);
+		i32(w, -8);
+		w.write(Instruction.I32_AND);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		// Stage the destination path above it.
+		loadMem32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		setLocal(w, OFF2);
+		getLocal(w, TO);
+		getLocal(w, OFF2);
+		WasmEmitHelper.emitStrToMemCall(w);
+		i32(w, 2);
+		w.write(Instruction.I32_SUB);
+		setLocal(w, LEN2);
+		// HEAP_PTR = align8(off2 + len2 + 2)
+		i32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		getLocal(w, OFF2);
+		getLocal(w, LEN2);
+		w.write(Instruction.I32_ADD);
+		i32(w, 2 + 7);
+		w.write(Instruction.I32_ADD);
+		i32(w, -8);
+		w.write(Instruction.I32_AND);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		// Resolve the source: dirfd, then the resolved pointer and length into locals
+		// (the destination resolution below overwrites the cells).
+		getLocal(w, OFF1);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		getLocal(w, LEN1);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_PATH_DIRFD);
+		setLocal(w, D1);
+		emitResolvedPath(w);
+		setLocal(w, N1);
+		setLocal(w, P1);
+		// Resolve the destination the same way.
+		getLocal(w, OFF2);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		getLocal(w, LEN2);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_PATH_DIRFD);
+		setLocal(w, D2);
+		// path_rename(d1, p1, n1, d2, resolved destination)
+		getLocal(w, D1);
+		getLocal(w, P1);
+		getLocal(w, N1);
+		getLocal(w, D2);
+		emitResolvedPath(w);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_PATH_RENAME);
+		setLocal(w, ERR);
+		// pop both stagings
+		i32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		getLocal(w, OFF1);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		// a nonzero errno means nothing was renamed: nil, like the other backends
+		getLocal(w, ERR);
+		w.write(Instruction.IF, 0x40);
+		emitNil(w);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+		emitT(w, t);
+		w.write(Instruction.END);
+		return body.toByteArray();
+	}
+
+	/**
+	 * Builds the _close(stream) function body. Closes the file descriptor via WASI
+	 * fd_close and returns the symbol {@code T}.
+	 * @param st the string table (for the {@code T} symbol)
+	 * @param ostreamTableGlobal the module global holding the string output-stream buffer
+	 * table
+	 * @return the function body bytes
+	 */
+	static byte[] buildCloseBody(WasmLispCompiler.StringTable st, int ostreamTableGlobal, boolean lineStarts) {
+		WasmLispCompiler.StringTable.StringEntry t = st.addBodyString("T");
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+		// param: FD_VAL=0 (ref) ; i32 locals: FD=1, REC=2, SLOT=3
+		w.write(1);
+		w.write(3);
+		w.write(Type.I32);
+		final int FD = 1, REC = 2, SLOT = 3;
+		// fd = i31.get_s(fd_val)
+		getLocal(w, 0);
+		refCast(w, Type.I31.code());
+		w.write(Instruction.GC_PREFIX, Instruction.I31_GET_S);
+		setLocal(w, FD);
+		// A negative handle is a string stream: an OUTPUT one hands its buffer table slot
+		// back so the bytes become collectable and the slot is reused (the record's own
+		// 12 bytes stay -- see WasmStringStreamRuntimeBuilder), an input one is nothing
+		// but its record and needs no unwinding.
+		getLocal(w, FD);
+		i32(w, 0);
+		w.write(Instruction.I32_LT_S);
+		w.write(Instruction.IF, 0x40);
+		i32(w, 0);
+		getLocal(w, FD);
+		w.write(Instruction.I32_SUB);
+		setLocal(w, REC);
+		WasmStringStreamRuntimeBuilder.emitCloseOutputRecord(w, REC, SLOT, ostreamTableGlobal);
+		w.write(Instruction.END);
+		// fd_close only for a real USER fd -- the process standard streams (0/1/2, among
+		// them the *error-output* designator) outlive a close of them, as they do on the
+		// interpreter and the JVM.
+		getLocal(w, FD);
+		i32(w, (int) am.ik.rontolisp.compiler.StreamDesignators.FIRST_USER_HANDLE);
+		w.write(Instruction.I32_GE_S);
+		w.write(Instruction.IF, 0x40);
+		getLocal(w, FD);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_FD_CLOSE);
+		w.write(Instruction.DROP);
+		// Bytes its pushback holds die with it: the next open may be handed its number.
+		WasmUtf8StreamDecoder.emitDropHeld(w, FD);
+		// So does its line: a stream starts at column 0, whatever it is opened on.
+		if (lineStarts) {
+			getLocal(w, FD);
+			i32(w, 0);
+			w.write(Instruction.CALL);
+			w.writeUnsignedLeb128(WasmLispCompiler.FUNC_LINE_MARK);
+		}
+		w.write(Instruction.END);
+		// return t
+		i32(w, t.offset());
+		i32(w, t.length());
+		WasmEmitHelper.emitStrBuildCall(w);
+		w.write(Instruction.END);
+		return body.toByteArray();
+	}
+
+	/**
+	 * Builds the _write_line(str, stream) function body. Writes the string content
+	 * (without the surrounding quotes) plus a newline to the stream's file descriptor (1
+	 * = stdout when the stream is nil) via fd_write, and returns the string.
+	 * @param st the string table (for the newline byte)
+	 * @param lineStarts whether a descriptor's line start is kept for
+	 * {@code _fresh_line_stream}
+	 * @return the function body bytes
+	 */
+	static byte[] buildWriteLineBody(WasmLispCompiler.StringTable st, boolean charvecPossible, boolean lineStarts) {
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+		// params: STR=0 (ref), FD_VAL=1 (ref) ; i32 locals: OFF=2, LEN=3, FD=4, REC=5
+		// (the last only for the string-stream branch); ref local NSTR=6 (the rendered
+		// form the write reads -- STR itself is returned, so a character vector
+		// argument keeps its identity)
+		w.write(2);
+		w.write(4);
+		w.write(Type.I32);
+		w.write(1);
+		w.writeRefType(true, Type.EQ.code());
+		final int STR = 0, FD_VAL = 1, OFF = 2, LEN = 3, FD = 4, REC = 5, NSTR = 6;
+		final int IOV = WasmLispCompiler.IOV_OFFSET;
+		final int NWRITTEN = WasmLispCompiler.NWRITTEN_OFFSET;
+
+		// A mutable character vector (a subseq/copy-seq result being written) renders
+		// once here; any other value passes through _charvec_to_str unchanged.
+		getLocal(w, STR);
+		setLocal(w, NSTR);
+		WasmEmitHelper.emitCharvecToStrLocal(w, NSTR, charvecPossible);
+		// fd = stream is an i31 handle ? i31.get_s(stream) : 1 (stdout) -- nil and the
+		// designator t (a redirected *standard-output*'s default) both mean stdout. The
+		// dispatch comes FIRST: the string-output-stream branch copies GC array to GC
+		// array and must not stage the string into linear memory at all.
+		getLocal(w, FD_VAL);
+		w.write(Instruction.REF_IS_NULL);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.IF);
+		w.write(Type.I32);
+		getLocal(w, FD_VAL);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(Type.I31.code());
+		w.write(Instruction.IF);
+		w.write(Type.I32);
+		getLocal(w, FD_VAL);
+		refCast(w, Type.I31.code());
+		w.write(Instruction.GC_PREFIX, Instruction.I31_GET_S);
+		w.write(Instruction.ELSE);
+		i32(w, 1);
+		w.write(Instruction.END);
+		w.write(Instruction.ELSE);
+		i32(w, 1);
+		w.write(Instruction.END);
+		setLocal(w, FD);
+		// A negative handle is a string output stream: append the content and a newline
+		// to its byte buffer (see WasmStringStreamRuntimeBuilder) and return the string.
+		getLocal(w, FD);
+		i32(w, 0);
+		w.write(Instruction.I32_LT_S);
+		w.write(Instruction.IF, 0x40);
+		i32(w, 0);
+		getLocal(w, FD);
+		w.write(Instruction.I32_SUB);
+		setLocal(w, REC);
+		getLocal(w, NSTR);
+		WasmEmitHelper.emitStrBytesArray(w);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_LEN);
+		i32(w, 2);
+		w.write(Instruction.I32_SUB);
+		setLocal(w, LEN);
+		WasmStringStreamRuntimeBuilder.emitAppend(w, REC, LEN, () -> {
+			getLocal(w, NSTR);
+			WasmEmitHelper.emitStrBytesArray(w);
+		}, () -> i32(w, 1));
+		WasmStringStreamRuntimeBuilder.emitAppendByte(w, REC, 10);
+		getLocal(w, STR);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+		// The string's bytes live on the GC heap: copy them into linear scratch at
+		// HEAP_PTR so OFF/LEN name a real linear range (off = base, len = total incl.
+		// quotes). HEAP_PTR is NOT advanced -- the fd_write below consumes the copy
+		// immediately.
+		loadMem32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		setLocal(w, OFF);
+		getLocal(w, NSTR);
+		getLocal(w, OFF);
+		WasmEmitHelper.emitStrToMemCall(w);
+		setLocal(w, LEN);
+		// iov.ptr = off + 1 ; iov.len = len - 2 (strip surrounding quotes)
+		i32(w, IOV);
+		getLocal(w, OFF);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		i32(w, IOV + 4);
+		getLocal(w, LEN);
+		i32(w, 2);
+		w.write(Instruction.I32_SUB);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		// fd_write(fd, IOV, 1, NWRITTEN)
+		getLocal(w, FD);
+		i32(w, IOV);
+		i32(w, 1);
+		i32(w, NWRITTEN);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_FD_WRITE);
+		w.write(Instruction.DROP);
+		// iov.ptr = newline ; iov.len = 1
+		i32(w, IOV);
+		i32(w, st.newline.offset());
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		i32(w, IOV + 4);
+		i32(w, st.newline.length());
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		// fd_write(fd, IOV, 1, NWRITTEN)
+		getLocal(w, FD);
+		i32(w, IOV);
+		i32(w, 1);
+		i32(w, NWRITTEN);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_FD_WRITE);
+		w.write(Instruction.DROP);
+		// The line is over: standard output's flag, or the descriptor's.
+		getLocal(w, FD);
+		i32(w, 1);
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.IF, 0x40);
+		i32(w, WasmLispCompiler.LINE_START_ADDR);
+		i32(w, 0);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		w.write(Instruction.END);
+		if (lineStarts) {
+			getLocal(w, FD);
+			i32(w, 0);
+			w.write(Instruction.CALL);
+			w.writeUnsignedLeb128(WasmLispCompiler.FUNC_LINE_MARK);
+		}
+		// return the string
+		getLocal(w, STR);
+		w.write(Instruction.END);
+		return body.toByteArray();
+	}
+
+	/**
+	 * Builds the _read_byte(stream, eof-error-p, eof-value) function body. Reads one raw
+	 * byte from the stream's file descriptor via fd_read into the BYTE_SCRATCH_ADDR
+	 * scratch cell -- no quote framing, no newline scan -- and returns it as an i31
+	 * integer. On EOF returns eof-value when eof-error-p is nil, otherwise traps.
+	 *
+	 * <p>
+	 * A non-handle designator -- nil, or the {@code t} an unbound
+	 * {@code *standard-input*} reads as -- is fd 0, the process standard input, exactly
+	 * like {@code _read_char}'s dispatch: the test is "is a handle", not "is nil",
+	 * because a {@code ref.cast} on the {@code t} struct would trap.
+	 * @return the function body bytes
+	 */
+	static byte[] buildReadByteBody() {
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+		// params: STREAM=0 (ref), EOF_ERROR_P=1 (ref), EOF_VALUE=2 (ref) ; i32 local:
+		// FD=3
+		w.write(1);
+		w.write(1);
+		w.write(Type.I32);
+		final int STREAM = 0, EOF_ERROR_P = 1, EOF_VALUE = 2, FD = 3;
+		final int IOV = WasmLispCompiler.IOV_OFFSET;
+		final int NWRITTEN = WasmLispCompiler.NWRITTEN_OFFSET;
+		final int SCRATCH = WasmLispCompiler.BYTE_SCRATCH_ADDR;
+
+		// fd = stream is an i31 handle ? i31.get_s(stream) : 0 (stdin)
+		getLocal(w, STREAM);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(Type.I31.code());
+		w.write(Instruction.IF);
+		w.write(Type.I32);
+		getLocal(w, STREAM);
+		refCast(w, Type.I31.code());
+		w.write(Instruction.GC_PREFIX, Instruction.I31_GET_S);
+		w.write(Instruction.ELSE);
+		i32(w, 0);
+		w.write(Instruction.END);
+		setLocal(w, FD);
+		// iov.ptr = BYTE_SCRATCH_ADDR ; iov.len = 1
+		i32(w, IOV);
+		i32(w, SCRATCH);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		i32(w, IOV + 4);
+		i32(w, 1);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		// fd_read(fd, IOV, 1, NWRITTEN) ; drop errno
+		getLocal(w, FD);
+		i32(w, IOV);
+		i32(w, 1);
+		i32(w, NWRITTEN);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_FD_READ);
+		w.write(Instruction.DROP);
+		// if (mem[NWRITTEN] == 0): EOF -- return eof-value when eof-error-p is nil,
+		// trap otherwise
+		loadMem32(w, NWRITTEN);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.IF, 0x40);
+		getLocal(w, EOF_ERROR_P);
+		w.write(Instruction.REF_IS_NULL);
+		w.write(Instruction.IF, 0x40);
+		getLocal(w, EOF_VALUE);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.ELSE);
+		w.write(Instruction.UNREACHABLE);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
+		// return ref.i31(mem_u8[BYTE_SCRATCH_ADDR])
+		i32(w, SCRATCH);
+		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
+		w.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+		w.write(Instruction.END);
+		return body.toByteArray();
+	}
+
+	/**
+	 * Builds the _read_char(stream, eof-error-p, eof-value) function body. Reads one
+	 * Unicode CODE POINT (1..4 UTF-8 bytes) from the stream and returns it as a character
+	 * struct -- WASM strings are UTF-8 encoded on the byte model but a CHARACTER is a
+	 * code point on every backend, so read-char decodes the sequence starting at the
+	 * cursor. A nil stream reads from standard input (fd 0); a negative i31 handle is a
+	 * string input stream whose {@code [kind][cursor][end]} record is consumed 1..4 bytes
+	 * at a time (the sequence is clamped against the buffer end -- a truncated tail
+	 * yields the lead byte as a bare CHARACTER); a non-negative handle is a WASI fd whose
+	 * bytes, the fd's pushback first, go through {@link WasmUtf8StreamDecoder} one at a
+	 * time -- malformed input decodes as the JVM decodes it, and a byte that interrupted
+	 * a sequence is pushed back to start the next character. On EOF at the start returns
+	 * eof-value when eof-error-p is nil, otherwise traps.
+	 * @return the function body bytes
+	 */
+	static byte[] buildReadCharBody() {
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+		// params: STREAM=0 (ref), EOF_ERROR_P=1 (ref), EOF_VALUE=2 (ref) ; i32 locals:
+		// FD=3, REC=4, CUR=5, END=6, NEEDED=7, B0=8, B1=9, B2=10, B3=11, then the fd
+		// decode's B=12, CP=13, NEED=14, K=15, N=16, OFF=17, LO=18, RANGE=19
+		w.write(1);
+		w.write(17);
+		w.write(Type.I32);
+		final int STREAM = 0, EOF_ERROR_P = 1, EOF_VALUE = 2, FD = 3, REC = 4, CUR = 5, END = 6, NEEDED = 7, B0 = 8,
+				B1 = 9, B2 = 10, B3 = 11;
+		final WasmUtf8StreamDecoder.Locals decode = new WasmUtf8StreamDecoder.Locals(B0, 12, 13, 14, 15, 16, 17, 18,
+				19);
+
+		// fd = stream is an i31 handle ? i31.get_s(stream) : 0 (stdin). The test is
+		// "is a handle", not "is nil": nil AND the t designator (what *standard-input*
+		// holds by default) are both standard input, and a ref.cast on t would trap.
+		getLocal(w, STREAM);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(Type.I31.code());
+		w.write(Instruction.IF);
+		w.write(Type.I32);
+		getLocal(w, STREAM);
+		refCast(w, Type.I31.code());
+		w.write(Instruction.GC_PREFIX, Instruction.I31_GET_S);
+		w.write(Instruction.ELSE);
+		i32(w, 0);
+		w.write(Instruction.END);
+		setLocal(w, FD);
+		// A negative handle is a string input stream: decode a UTF-8 sequence within the
+		// [cursor, end) range.
+		getLocal(w, FD);
+		i32(w, 0);
+		w.write(Instruction.I32_LT_S);
+		w.write(Instruction.IF, 0x40);
+		i32(w, 0);
+		getLocal(w, FD);
+		w.write(Instruction.I32_SUB);
+		setLocal(w, REC);
+		// cur = mem[rec + 4]; end = mem[rec + 8];
+		getLocal(w, REC);
+		i32(w, 4);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_LOAD, 0x02, 0x00);
+		setLocal(w, CUR);
+		getLocal(w, REC);
+		i32(w, 8);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_LOAD, 0x02, 0x00);
+		setLocal(w, END);
+		// if (cur >= end): EOF
+		getLocal(w, CUR);
+		getLocal(w, END);
+		w.write(Instruction.I32_GE_S);
+		w.write(Instruction.IF, 0x40);
+		emitReadCharEof(w, EOF_ERROR_P, EOF_VALUE);
+		w.write(Instruction.END);
+		// b0 = mem_u8[cur]; needed = utf8ByteCount(b0);
+		getLocal(w, CUR);
+		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
+		setLocal(w, B0);
+		emitUtf8ByteCount(w, B0);
+		setLocal(w, NEEDED);
+		// If cur + needed > end: needed = 1 (truncated tail -- return bare lead byte).
+		getLocal(w, CUR);
+		getLocal(w, NEEDED);
+		w.write(Instruction.I32_ADD);
+		getLocal(w, END);
+		w.write(Instruction.I32_GT_S);
+		w.write(Instruction.IF, 0x40);
+		i32(w, 1);
+		setLocal(w, NEEDED);
+		w.write(Instruction.END);
+		// Load b1..b3 as needed.
+		getLocal(w, NEEDED);
+		i32(w, 2);
+		w.write(Instruction.I32_GE_S);
+		w.write(Instruction.IF, 0x40);
+		getLocal(w, CUR);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
+		setLocal(w, B1);
+		w.write(Instruction.END);
+		getLocal(w, NEEDED);
+		i32(w, 3);
+		w.write(Instruction.I32_GE_S);
+		w.write(Instruction.IF, 0x40);
+		getLocal(w, CUR);
+		i32(w, 2);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
+		setLocal(w, B2);
+		w.write(Instruction.END);
+		getLocal(w, NEEDED);
+		i32(w, 4);
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.IF, 0x40);
+		getLocal(w, CUR);
+		i32(w, 3);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
+		setLocal(w, B3);
+		w.write(Instruction.END);
+		// mem[rec + 4] = cur + needed
+		getLocal(w, REC);
+		i32(w, 4);
+		w.write(Instruction.I32_ADD);
+		getLocal(w, CUR);
+		getLocal(w, NEEDED);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		// return TYPE_CHAR(decodeUtf8(needed, b0, b1, b2, b3))
+		emitUtf8DecodeFromLocals(w, NEEDED, B0, B1, B2, B3);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CHAR);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+		// WASI fd branch: the lead byte (the fd's pushback first), end of file before it,
+		// then the rest of the sequence through the shared decoder.
+		WasmUtf8StreamDecoder.emitNextByte(w, FD, B0);
+		getLocal(w, B0);
+		i32(w, 0);
+		w.write(Instruction.I32_LT_S);
+		w.write(Instruction.IF, 0x40);
+		emitReadCharEof(w, EOF_ERROR_P, EOF_VALUE);
+		w.write(Instruction.END);
+		WasmUtf8StreamDecoder.emitDecode(w, decode, () -> WasmUtf8StreamDecoder.emitNextByte(w, FD, decode.b()));
+		// The byte that interrupted a malformed sequence starts the next character.
+		getLocal(w, decode.off());
+		w.write(Instruction.IF, 0x40);
+		WasmUtf8StreamDecoder.emitPushFront(w, FD, () -> getLocal(w, decode.b()), () -> i32(w, 1));
+		w.write(Instruction.END);
+		getLocal(w, decode.cp());
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CHAR);
+		w.write(Instruction.END);
+		return body.toByteArray();
+	}
+
+	/**
+	 * Builds the _peek_char(stream, eof-error-p, eof-value) function body: the next
+	 * character of the stream, LEFT IN PLACE. A string input stream (a negative i31
+	 * handle) decodes the UTF-8 sequence at its record's cursor WITHOUT advancing it, so
+	 * peeking there is exact and unlimited. A WASI fd cannot be un-read, so the character
+	 * is decoded as {@code _read_char} decodes it and EVERY byte the decode took -- the
+	 * one that interrupted a malformed sequence included -- goes back to the front of the
+	 * fd's byte pushback ({@link WasmUtf8StreamDecoder}), keyed on the fd so a peek on
+	 * one stream is never consumed by a read on another. The next read, or a repeated
+	 * peek, decodes the same bytes to the same character.
+	 * @return the function body bytes
+	 */
+	static byte[] buildPeekCharBody() {
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+		// params: STREAM=0 (ref), EOF_ERROR_P=1 (ref), EOF_VALUE=2 (ref) ; i32 locals:
+		// FD=3, REC=4, CUR=5, END=6, NEEDED=7, B0=8, B1=9, B2=10, B3=11, then the fd
+		// decode's B=12, CP=13, NEED=14, K=15, N=16, OFF=17, LO=18, RANGE=19 and the
+		// bytes it took, TAKEN=20 (the first in the low byte), TAKEN_N=21
+		w.write(1);
+		w.write(19);
+		w.write(Type.I32);
+		final int STREAM = 0, EOF_ERROR_P = 1, EOF_VALUE = 2, FD = 3, REC = 4, CUR = 5, END = 6, NEEDED = 7, B0 = 8,
+				B1 = 9, B2 = 10, B3 = 11, TAKEN = 20, TAKEN_N = 21;
+		final WasmUtf8StreamDecoder.Locals decode = new WasmUtf8StreamDecoder.Locals(B0, 12, 13, 14, 15, 16, 17, 18,
+				19);
+
+		// fd = stream is an i31 handle ? i31.get_s(stream) : 0 (stdin). The test is
+		// "is a handle", not "is nil": nil AND the t designator (what *standard-input*
+		// holds by default) are both standard input, and a ref.cast on t would trap.
+		getLocal(w, STREAM);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(Type.I31.code());
+		w.write(Instruction.IF);
+		w.write(Type.I32);
+		getLocal(w, STREAM);
+		refCast(w, Type.I31.code());
+		w.write(Instruction.GC_PREFIX, Instruction.I31_GET_S);
+		w.write(Instruction.ELSE);
+		i32(w, 0);
+		w.write(Instruction.END);
+		setLocal(w, FD);
+		// A negative handle is a string input stream: decode at the cursor, leave it.
+		getLocal(w, FD);
+		i32(w, 0);
+		w.write(Instruction.I32_LT_S);
+		w.write(Instruction.IF, 0x40);
+		i32(w, 0);
+		getLocal(w, FD);
+		w.write(Instruction.I32_SUB);
+		setLocal(w, REC);
+		getLocal(w, REC);
+		i32(w, 4);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_LOAD, 0x02, 0x00);
+		setLocal(w, CUR);
+		getLocal(w, REC);
+		i32(w, 8);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_LOAD, 0x02, 0x00);
+		setLocal(w, END);
+		getLocal(w, CUR);
+		getLocal(w, END);
+		w.write(Instruction.I32_GE_S);
+		w.write(Instruction.IF, 0x40);
+		emitReadCharEof(w, EOF_ERROR_P, EOF_VALUE);
+		w.write(Instruction.END);
+		getLocal(w, CUR);
+		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
+		setLocal(w, B0);
+		emitUtf8ByteCount(w, B0);
+		setLocal(w, NEEDED);
+		// If cur + needed > end: needed = 1 (truncated tail -- bare lead byte).
+		getLocal(w, CUR);
+		getLocal(w, NEEDED);
+		w.write(Instruction.I32_ADD);
+		getLocal(w, END);
+		w.write(Instruction.I32_GT_S);
+		w.write(Instruction.IF, 0x40);
+		i32(w, 1);
+		setLocal(w, NEEDED);
+		w.write(Instruction.END);
+		getLocal(w, NEEDED);
+		i32(w, 2);
+		w.write(Instruction.I32_GE_S);
+		w.write(Instruction.IF, 0x40);
+		getLocal(w, CUR);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
+		setLocal(w, B1);
+		w.write(Instruction.END);
+		getLocal(w, NEEDED);
+		i32(w, 3);
+		w.write(Instruction.I32_GE_S);
+		w.write(Instruction.IF, 0x40);
+		getLocal(w, CUR);
+		i32(w, 2);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
+		setLocal(w, B2);
+		w.write(Instruction.END);
+		getLocal(w, NEEDED);
+		i32(w, 4);
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.IF, 0x40);
+		getLocal(w, CUR);
+		i32(w, 3);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
+		setLocal(w, B3);
+		w.write(Instruction.END);
+		// The cursor is NOT advanced -- that is the whole difference from _read_char.
+		emitUtf8DecodeFromLocals(w, NEEDED, B0, B1, B2, B3);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CHAR);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+		// WASI fd: decode the next character, recording every byte taken, then push them
+		// all back -- the stream is left exactly where it was.
+		WasmUtf8StreamDecoder.emitNextByte(w, FD, B0);
+		getLocal(w, B0);
+		i32(w, 0);
+		w.write(Instruction.I32_LT_S);
+		w.write(Instruction.IF, 0x40);
+		emitReadCharEof(w, EOF_ERROR_P, EOF_VALUE);
+		w.write(Instruction.END);
+		getLocal(w, B0);
+		setLocal(w, TAKEN);
+		i32(w, 1);
+		setLocal(w, TAKEN_N);
+		WasmUtf8StreamDecoder.emitDecode(w, decode, () -> {
+			WasmUtf8StreamDecoder.emitNextByte(w, FD, decode.b());
+			// taken |= b << (taken_n * 8) ; taken_n += 1 -- not at end of file
+			getLocal(w, decode.b());
+			i32(w, 0);
+			w.write(Instruction.I32_GE_S);
+			w.write(Instruction.IF, 0x40);
+			getLocal(w, TAKEN);
+			getLocal(w, decode.b());
+			getLocal(w, TAKEN_N);
+			i32(w, 3);
+			w.write(Instruction.I32_SHL);
+			w.write(Instruction.I32_SHL);
+			w.write(Instruction.I32_OR);
+			setLocal(w, TAKEN);
+			getLocal(w, TAKEN_N);
+			i32(w, 1);
+			w.write(Instruction.I32_ADD);
+			setLocal(w, TAKEN_N);
+			w.write(Instruction.END);
+		});
+		WasmUtf8StreamDecoder.emitPushFront(w, FD, () -> getLocal(w, TAKEN), () -> getLocal(w, TAKEN_N));
+		getLocal(w, decode.cp());
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CHAR);
+		w.write(Instruction.END);
+		return body.toByteArray();
+	}
+
+	// EOF: return eof-value when eof-error-p is nil, trap otherwise (like _read_byte).
+	private static void emitReadCharEof(WasmWriter w, int eofErrorP, int eofValue) {
+		getLocal(w, eofErrorP);
+		w.write(Instruction.REF_IS_NULL);
+		w.write(Instruction.IF, 0x40);
+		getLocal(w, eofValue);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.ELSE);
+		w.write(Instruction.UNREACHABLE);
+		w.write(Instruction.END);
+	}
+
+	// Pushes the UTF-8 sequence length (1..4) implied by a lead byte, based on the
+	// same high-bit ranges as _str_char_at: [0..0x80)=1, [0x80..0xE0)=2,
+	// [0xE0..0xF0)=3, else 4.
+	static void emitUtf8ByteCount(WasmWriter w, int b0Local) {
+		getLocal(w, b0Local);
+		i32(w, 0x80);
+		w.write(Instruction.I32_LT_U);
+		w.write(Instruction.IF);
+		w.write(Type.I32);
+		i32(w, 1);
+		w.write(Instruction.ELSE);
+		getLocal(w, b0Local);
+		i32(w, 0xE0);
+		w.write(Instruction.I32_LT_U);
+		w.write(Instruction.IF);
+		w.write(Type.I32);
+		i32(w, 2);
+		w.write(Instruction.ELSE);
+		getLocal(w, b0Local);
+		i32(w, 0xF0);
+		w.write(Instruction.I32_LT_U);
+		w.write(Instruction.IF);
+		w.write(Type.I32);
+		i32(w, 3);
+		w.write(Instruction.ELSE);
+		i32(w, 4);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
+	}
+
+	// Pushes the decoded Unicode code point given the sequence length in {@code
+	// neededLocal} and the 1..4 bytes in {@code b0Local}..{@code b3Local}. Follows the
+	// same 6-bit continuation decoding as _str_char_at.
+	static void emitUtf8DecodeFromLocals(WasmWriter w, int neededLocal, int b0Local, int b1Local, int b2Local,
+			int b3Local) {
+		getLocal(w, neededLocal);
+		i32(w, 1);
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.IF);
+		w.write(Type.I32);
+		getLocal(w, b0Local);
+		w.write(Instruction.ELSE);
+		getLocal(w, neededLocal);
+		i32(w, 2);
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.IF);
+		w.write(Type.I32);
+		// ((b0 & 0x1F) << 6) | (b1 & 0x3F)
+		getLocal(w, b0Local);
+		i32(w, 0x1F);
+		w.write(Instruction.I32_AND);
+		i32(w, 6);
+		w.write(Instruction.I32_SHL);
+		getLocal(w, b1Local);
+		i32(w, 0x3F);
+		w.write(Instruction.I32_AND);
+		w.write(Instruction.I32_OR);
+		w.write(Instruction.ELSE);
+		getLocal(w, neededLocal);
+		i32(w, 3);
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.IF);
+		w.write(Type.I32);
+		// ((b0 & 0x0F) << 12) | ((b1 & 0x3F) << 6) | (b2 & 0x3F)
+		getLocal(w, b0Local);
+		i32(w, 0x0F);
+		w.write(Instruction.I32_AND);
+		i32(w, 12);
+		w.write(Instruction.I32_SHL);
+		getLocal(w, b1Local);
+		i32(w, 0x3F);
+		w.write(Instruction.I32_AND);
+		i32(w, 6);
+		w.write(Instruction.I32_SHL);
+		w.write(Instruction.I32_OR);
+		getLocal(w, b2Local);
+		i32(w, 0x3F);
+		w.write(Instruction.I32_AND);
+		w.write(Instruction.I32_OR);
+		w.write(Instruction.ELSE);
+		// 4-byte: ((b0 & 0x07) << 18) | ((b1 & 0x3F) << 12) | ((b2 & 0x3F) << 6) |
+		// (b3 & 0x3F)
+		getLocal(w, b0Local);
+		i32(w, 0x07);
+		w.write(Instruction.I32_AND);
+		i32(w, 18);
+		w.write(Instruction.I32_SHL);
+		getLocal(w, b1Local);
+		i32(w, 0x3F);
+		w.write(Instruction.I32_AND);
+		i32(w, 12);
+		w.write(Instruction.I32_SHL);
+		w.write(Instruction.I32_OR);
+		getLocal(w, b2Local);
+		i32(w, 0x3F);
+		w.write(Instruction.I32_AND);
+		i32(w, 6);
+		w.write(Instruction.I32_SHL);
+		w.write(Instruction.I32_OR);
+		getLocal(w, b3Local);
+		i32(w, 0x3F);
+		w.write(Instruction.I32_AND);
+		w.write(Instruction.I32_OR);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
+	}
+
+	/**
+	 * Builds the _write_byte(byte, stream) function body. Writes the byte's low 8 bits as
+	 * one raw byte to the stream's file descriptor via fd_write -- no quote framing, no
+	 * newline -- and returns the byte.
+	 *
+	 * <p>
+	 * The designator mirror of {@link #buildReadByteBody}: a non-handle -- nil, or the
+	 * {@code t} an unbound {@code *standard-output*} reads as -- is fd 1, the process
+	 * standard output. The reserved handle 2 needs no branch of its own here: fd 2 IS
+	 * stderr for {@code fd_write}, the same reason the string writers have none.
+	 * @return the function body bytes
+	 */
+	static byte[] buildWriteByteBody() {
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+		// params: BYTE=0 (ref), STREAM=1 (ref)
+		w.write(0);
+		final int BYTE = 0, STREAM = 1;
+		final int IOV = WasmLispCompiler.IOV_OFFSET;
+		final int NWRITTEN = WasmLispCompiler.NWRITTEN_OFFSET;
+		final int SCRATCH = WasmLispCompiler.BYTE_SCRATCH_ADDR;
+
+		// mem_u8[BYTE_SCRATCH_ADDR] = i31.get_s(byte)
+		i32(w, SCRATCH);
+		getLocal(w, BYTE);
+		refCast(w, Type.I31.code());
+		w.write(Instruction.GC_PREFIX, Instruction.I31_GET_S);
+		w.write(Instruction.I32_STORE8, 0x00, 0x00);
+		// iov.ptr = BYTE_SCRATCH_ADDR ; iov.len = 1
+		i32(w, IOV);
+		i32(w, SCRATCH);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		i32(w, IOV + 4);
+		i32(w, 1);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		// fd = stream is an i31 handle ? i31.get_s(stream) : 1 (stdout)
+		getLocal(w, STREAM);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(Type.I31.code());
+		w.write(Instruction.IF);
+		w.write(Type.I32);
+		getLocal(w, STREAM);
+		refCast(w, Type.I31.code());
+		w.write(Instruction.GC_PREFIX, Instruction.I31_GET_S);
+		w.write(Instruction.ELSE);
+		i32(w, 1);
+		w.write(Instruction.END);
+		// fd_write(fd, IOV, 1, NWRITTEN) ; drop errno
+		i32(w, IOV);
+		i32(w, 1);
+		i32(w, NWRITTEN);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_FD_WRITE);
+		w.write(Instruction.DROP);
+		// return the byte
+		getLocal(w, BYTE);
+		w.write(Instruction.END);
+		return body.toByteArray();
+	}
+
+	/**
+	 * Builds the {@code --no-wasi} {@code fd_write} stub: a SINK. It reports the whole
+	 * iovec as written ({@code *nwritten = iovs[0].len}) and returns errno 0, so a
+	 * reactor's {@code print} / {@code format t} -- and, far more importantly, a
+	 * quickloaded library that logs while it loads -- discards its bytes instead of
+	 * trapping the instance at {@code _initialize}.
+	 *
+	 * <p>
+	 * <strong>Why output gets a sink</strong> (the re-evaluation trigger, decided
+	 * 2026-08-07): a reactor host hands the module no file descriptors at all, so there
+	 * IS no destination for stdout/stderr -- discarding loses only the bytes, and the
+	 * alternative was killing the whole instance for a log line, with a bare
+	 * {@code unreachable} naming nothing. This was the first stub to answer, and the
+	 * general rule grew out of it: a stub may answer when the answer is TRUE OF THIS
+	 * MODULE (no destination, no environment, no files), and may not when answering would
+	 * return data the program cannot tell from real -- which is why {@code fd_read} and
+	 * {@code clock_time_get} are still bare {@code unreachable} (see
+	 * {@code .kb/wasm-export-no-wasi.md} for the whole table).
+	 *
+	 * <p>
+	 * Every emitter here calls {@code fd_write} with ONE iovec and drops the errno, so
+	 * the single-iovec accounting is exact; a future caller passing more (or looping on
+	 * {@code *nwritten}) must widen this.
+	 * @return the function body bytes
+	 */
+	static byte[] buildNoWasiFdWriteSinkBody() {
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+		// params: FD=0, IOVS=1, IOVS_LEN=2, NWRITTEN=3 (all i32); no locals.
+		w.write(0);
+		final int IOVS = 1, NWRITTEN = 3;
+		// *nwritten = iovs[0].len
+		getLocal(w, NWRITTEN);
+		getLocal(w, IOVS);
+		w.write(Instruction.I32_LOAD, 0x02, 0x04);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		// return 0 (success)
+		i32(w, 0);
+		w.write(Instruction.END);
+		return body.toByteArray();
+	}
+
+	/**
+	 * Builds the {@code --no-wasi} {@code environ_sizes_get} stub: reports an EMPTY
+	 * environment (0 variables, 0 bytes) and returns errno 0, so
+	 * {@code (uiop:getenv "X")} answers {@code nil} instead of trapping.
+	 *
+	 * <p>
+	 * <strong>Why this is truth, not fabrication</strong> (the re-evaluation trigger,
+	 * decided 2026-08-09): "no environment variables are set" is a state every real WASI
+	 * host can produce -- {@code wasmtime run} without {@code --env} is exactly it -- and
+	 * a reactor host hands the module no environment at all, so reporting zero is a fact
+	 * about this module rather than data invented to look like a host's. It is the same
+	 * shape of answer as the {@code fd_write} sink and the opposite of a
+	 * {@code clock_time_get} answering 0, which would name a time that is not the time.
+	 * Every caller already handles the unset case: {@code getenv} is a lookup that may
+	 * miss.
+	 *
+	 * <p>
+	 * This is the second half of {@code smart-buffer}'s one load-time form
+	 * ({@code (merge-pathnames (format nil "smart-buffer-~36R" (random ...))
+	 * (uiop:default-temporary-directory))}) -- {@code default-temporary-directory} reads
+	 * {@code TMPDIR} -- and so of the {@code lack-request} chain that could not be
+	 * instantiated on a Worker.
+	 * @return the function body bytes
+	 */
+	static byte[] buildNoWasiEnvironSizesGetBody() {
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+		// params: COUNT_OUT=0, BUFSIZE_OUT=1 (both i32); no locals.
+		w.write(0);
+		final int COUNT_OUT = 0, BUFSIZE_OUT = 1;
+		getLocal(w, COUNT_OUT);
+		i32(w, 0);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		getLocal(w, BUFSIZE_OUT);
+		i32(w, 0);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		i32(w, 0);
+		w.write(Instruction.END);
+		return body.toByteArray();
+	}
+
+	/** preview1 {@code errno::noent} -- "no such file or directory". */
+	static final int ERRNO_NOENT = 44;
+
+	/** preview1 {@code errno::badf} -- "bad file descriptor". */
+	static final int ERRNO_BADF = 8;
+
+	/** preview1 {@code errno::acces} -- "permission denied". */
+	static final int ERRNO_ACCES = 2;
+
+	/** preview1 {@code errno::loop} -- "too many levels of symbolic links". */
+	static final int ERRNO_LOOP = 32;
+
+	/** preview1 {@code errno::notdir} -- "not a directory". */
+	static final int ERRNO_NOTDIR = 54;
+
+	/** preview1 {@code errno::perm} -- "operation not permitted". */
+	static final int ERRNO_PERM = 63;
+
+	/**
+	 * Builds a {@code --no-wasi} stub that simply REPORTS the given preview1 errno: the
+	 * whole body is {@code i32.const errno}, valid for every i32-returning WASI signature
+	 * whatever its parameters, because the parameters are just ignored.
+	 *
+	 * <p>
+	 * This is how the FILESYSTEM family answers instead of trapping, and it needed no new
+	 * logic anywhere else: {@code _open}, {@code _probe_file}, {@code _list_directory}
+	 * and {@code _load} all already turn a non-zero {@code path_open} errno into
+	 * {@code nil} -- deliberately, because a wasm trap is not catchable and a library
+	 * probing for an OPTIONAL file must degrade rather than abort. Handing them
+	 * {@code ENOENT} therefore makes {@code probe-file} / {@code directory} answer
+	 * {@code nil} and the {@code open} call sites signal a real, catchable Lisp error,
+	 * which is the truth about a module that has no filesystem at all -- no file exists,
+	 * so no file is found. {@code fd_close} / {@code fd_readdir} get {@code EBADF} for
+	 * the same reason: with every open failing there is no descriptor they could be
+	 * handed, and "that is not a descriptor" is again a true answer rather than an
+	 * invented one.
+	 *
+	 * <p>
+	 * {@code environ_get} uses it with errno 0: an EMPTY environment has no pointers and
+	 * no bytes to write, so success with nothing written is the complete answer (the
+	 * caller's loop is bounded by the count {@link #buildNoWasiEnvironSizesGetBody()}
+	 * just reported, which is zero).
+	 *
+	 * <p>
+	 * The syntactic {@code (with-open-file ...)} / {@code (open ...)} rewrite in
+	 * {@code compiler/NoWasiFilesystemStubs} stays, and is not made redundant by this: it
+	 * is what gives those two forms a message naming WASI instead of a generic "cannot
+	 * open", and -- the reason it runs first -- what drops the dead
+	 * {@code read}/{@code eval} bodies inside them out of the module entirely
+	 * ({@code .kb/optimize-dead-code-elimination.md}). This stub is the backstop for
+	 * every path that rewrite cannot see: {@code probe-file}, {@code directory},
+	 * {@code load}, and an {@code open} reached through {@code funcall}.
+	 * @param errno the preview1 errno to report
+	 * @return the function body bytes
+	 */
+	static byte[] buildNoWasiErrnoBody(int errno) {
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+		// no locals; the parameters (whatever the signature has) are ignored.
+		w.write(0);
+		i32(w, errno);
+		w.write(Instruction.END);
+		return body.toByteArray();
+	}
+
+	/**
+	 * Builds the body of {@code __ronto_seed_random (i64) -> ()}, the host's way to
+	 * replace the {@code --no-wasi} generator's constant start state with real entropy:
+	 * it stores the argument into {@link WasmLispCompiler#RANDOM_STATE_ADDR}, and the
+	 * next SplitMix64 step continues from there.
+	 *
+	 * <p>
+	 * This is what a JavaScript host calls -- once, right after instantiation and BEFORE
+	 * {@code _initialize}, so even a library's load-time {@code (random ...)} draws from
+	 * the host's entropy:
+	 * {@code seed(new BigUint64Array(crypto.getRandomValues(new Uint8Array(8)).buffer)[0])}.
+	 * It is an EXPORT rather than an import on purpose: an import would make the module
+	 * un-instantiable with an empty import object, which is the entire contract of
+	 * {@code --no-wasi}. A host that does not call it gets the deterministic sequence,
+	 * unchanged.
+	 *
+	 * <p>
+	 * Seeding does NOT turn {@code rontolisp:random-bytes} back on. SplitMix64 is
+	 * invertible from a single output, so a host-seeded stream is unpredictable but not
+	 * cryptographically strong, and the entropy API keeps signalling rather than shipping
+	 * something that only looks like a CSPRNG.
+	 *
+	 * <p>
+	 * Core-module shape only ({@code --no-wasi} without {@code --component}). A reactor
+	 * COMPONENT would have to lift this into its WIT world to expose it, which is a
+	 * world-shape decision rather than a core export -- and its top level runs at
+	 * instantiation anyway, so there is no window before the load-time draws.
+	 * @return the function body bytes
+	 */
+	static byte[] buildSeedRandomBody() {
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+		// param: SEED=0 (i64); no locals.
+		w.write(0);
+		i32(w, WasmLispCompiler.RANDOM_STATE_ADDR);
+		getLocal(w, 0);
+		w.write(Instruction.I64_STORE, 0x03, 0x00);
+		w.write(Instruction.END);
+		return body.toByteArray();
+	}
+
+	/**
+	 * Builds the body of {@code __ronto_set_time (i64) -> ()}, the host's way to give a
+	 * {@code --no-wasi} module a clock: it stores the argument -- nanoseconds since the
+	 * Unix epoch, preview1's own {@code clock_time_get} unit -- into
+	 * {@link WasmLispCompiler#HOST_TIME_ADDR}, which is what {@code get-universal-time} /
+	 * {@code get-internal-real-time} / {@code get-internal-run-time} read from there on.
+	 *
+	 * <p>
+	 * <strong>Why this does not break the "a stub may not invent a value" rule -- it is
+	 * the rule's other half.</strong> A stub answering 0 would name 1970; a stub counting
+	 * its own calls would hand back numbers that look like milliseconds and are not. The
+	 * host, though, genuinely knows the time, and handing it over is the same move
+	 * {@link #buildSeedRandomBody()} already makes for entropy: the value the program
+	 * reads IS a real reading, taken by the only party in a position to take one. Until
+	 * the host calls this, the cell is zero and the three built-ins keep signalling --
+	 * the constant start state that is harmless for {@code random} would be exactly the
+	 * 1970 lie here.
+	 *
+	 * <p>
+	 * The clock does not ADVANCE between host calls, and that is the honest shape rather
+	 * than a degraded one: a Cloudflare Worker's own clock is frozen for the duration of
+	 * a request (a deliberate timing-attack mitigation), so a value that only moves when
+	 * the host moves it is exactly what that platform has. A host that wants it to
+	 * advance calls the setter again -- per request is the natural rhythm, next to the
+	 * seed hook in every {@code examples/cloudflare-workers/*}{@code /src/index.js}.
+	 * Nothing inside the module can move it, which is why {@code sleep} SIGNALS on
+	 * {@code --no-wasi} instead of waiting the way Preview 1 does: with no timer to park
+	 * on and no clock that can advance while a call is running, a wait could never end.
+	 *
+	 * <p>
+	 * Core-module shape only ({@code --no-wasi} without {@code --component}), for the
+	 * seed hook's reason: a reactor component runs its top level at INSTANTIATION, so
+	 * there is no window in which a host could set the time before the load-time reads,
+	 * and exposing it there would mean lifting it into the WIT world -- a world-shape
+	 * decision, not a core export.
+	 * @return the function body bytes
+	 */
+	static byte[] buildSetTimeBody() {
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+		// param: NANOS=0 (i64); no locals.
+		w.write(0);
+		i32(w, WasmLispCompiler.HOST_TIME_ADDR);
+		getLocal(w, 0);
+		w.write(Instruction.I64_STORE, 0x03, 0x00);
+		w.write(Instruction.END);
+		return body.toByteArray();
+	}
+
+	/**
+	 * Builds a {@code --no-wasi} slot a host opt-in routes: instead of the module-local
+	 * stub, the slot FORWARDS its parameters to a host import and returns the host's
+	 * errno. {@code --host-random}'s {@code random_get(buf, len)} is what
+	 * {@code rontolisp::%random-byte} spends per byte and what the module-local generator
+	 * is SEEDED from on its first {@code random} draw ({@code .kb/random.md});
+	 * {@code --host-output}'s {@code fd_write(fd, iovs, iovs_len, nwritten)} is standard
+	 * output and error, which the stub otherwise discards.
+	 *
+	 * <p>
+	 * The signature is preview1's exactly, so a host that already has a WASI
+	 * implementation can pass it straight through; the import module is {@code env}
+	 * rather than {@code wasi_snapshot_preview1} because the module still imports no WASI
+	 * function -- it imports the host function the flag asked for.
+	 * @param paramCount the slot's i32 parameters, all forwarded in order
+	 * @param placeholderFuncIndex the placeholder call index of the host import
+	 * ({@code WasmImportCompiler.PLACEHOLDER_FUNC_BASE + ordinal}), which
+	 * {@link am.ik.wasm.WasmImportInjector} rewrites to the import's real function index
+	 * @return the function body bytes
+	 */
+	static byte[] buildNoWasiHostForwardBody(int paramCount, int placeholderFuncIndex) {
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+		// no locals
+		w.write(0);
+		for (int i = 0; i < paramCount; i++) {
+			getLocal(w, i);
+		}
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(placeholderFuncIndex);
+		w.write(Instruction.END);
+		return body.toByteArray();
+	}
+
+	// SplitMix64 constants: the golden-ratio increment and the two mixing multipliers.
+	private static final long SM64_GAMMA = 0x9E3779B97F4A7C15L;
+
+	private static final long SM64_MIX1 = 0xBF58476D1CE4E5B9L;
+
+	private static final long SM64_MIX2 = 0x94D049BB133111EBL;
+
+	/**
+	 * Builds the {@code --no-wasi} {@code random_get} stub: a SplitMix64 generator over
+	 * {@link WasmLispCompiler#RANDOM_STATE_ADDR} that fills the caller's buffer with
+	 * {@code buf_len} pseudo-random bytes and returns errno 0. Nothing is imported, so a
+	 * reactor's {@code (random n)} -- including one in a TOP-LEVEL form of a quickloaded
+	 * library -- answers instead of killing the instance.
+	 *
+	 * <p>
+	 * Since {@code random} draws by INLINING the same generator step at the call site
+	 * ({@link WasmRandomCompiler}, {@code .kb/random.md}), nothing under a plain
+	 * {@code --no-wasi} reaches this body any more and the tree shaker drops it; the
+	 * sequence a program sees is unchanged, because the step is the same step. It is
+	 * still emitted (the slot's index is fixed) and it is still live under
+	 * {@code --host-random}, where it forwards the seeding call to the host.
+	 *
+	 * <p>
+	 * <strong>Why this is not the fabricated input the sink rule forbids</strong> (the
+	 * re-evaluation trigger, decided 2026-08-09): {@code random} is not an entropy API.
+	 * CL specifies it as a pseudo-random draw from {@code *random-state*}, and a
+	 * conforming image may start from a fixed state -- here {@code make-random-state}
+	 * already answers {@code nil}, so no state object is observable and "the sequence
+	 * repeats" is inside the contract, not a lie about the host. The primitive that DOES
+	 * promise entropy, {@code rontolisp::%random-byte} behind
+	 * {@code rontolisp:random-bytes}, is therefore NOT served from here on
+	 * {@code --no-wasi}: {@code WasmExprCompiler} lowers it to a call-time error instead,
+	 * because answering it from a fixed-seed PRNG would be exactly the "data the program
+	 * cannot tell from real" the {@code fd_read} / {@code clock_time_get} stubs still
+	 * trap over.
+	 *
+	 * <p>
+	 * The state cell starts at the zero of untouched linear memory, so every instance of
+	 * one module walks the same sequence. That is accepted, not overlooked: a core module
+	 * with no imports has no entropy available at all, and the alternatives (an import,
+	 * or a host poke into a frozen linear-memory address) both cost the zero-import
+	 * property that is the whole point of the flag. If a consumer ever needs per-instance
+	 * sequences, the cell above is the single place to write and the answer is an
+	 * exported {@code __ronto_seed_random} next to {@code __ronto_alloc}.
+	 * @return the function body bytes
+	 */
+	static byte[] buildNoWasiRandomGetBody() {
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+		// params: BUF=0, LEN=1 (both i32); i64 locals: S=2 (the generator's scratch),
+		// T=3 (the tail's byte shifter).
+		w.write(1);
+		w.write(2);
+		w.write(Type.I64);
+		final int BUF = 0, LEN = 1, S = 2, T = 3;
+		// while (len >= 8) { mem64[buf] = next(); buf += 8; len -= 8; }
+		w.write(Instruction.BLOCK, 0x40); // $done
+		w.write(Instruction.LOOP, 0x40); // $chunk
+		getLocal(w, LEN);
+		i32(w, 8);
+		w.write(Instruction.I32_LT_U);
+		w.write(Instruction.BR_IF);
+		w.writeUnsignedLeb128(1);
+		getLocal(w, BUF);
+		emitSplitMix64Next(w, sw -> sw.writeUnsignedLeb128(S));
+		// align=0: a caller's buffer need not be 8-aligned (the two rontolisp call sites
+		// pass RANDOM_SCRATCH_ADDR, which is, but random_get's contract does not say so).
+		w.write(Instruction.I64_STORE, 0x00, 0x00);
+		getLocal(w, BUF);
+		i32(w, 8);
+		w.write(Instruction.I32_ADD);
+		setLocal(w, BUF);
+		getLocal(w, LEN);
+		i32(w, 8);
+		w.write(Instruction.I32_SUB);
+		setLocal(w, LEN);
+		w.write(Instruction.BR);
+		w.writeUnsignedLeb128(0);
+		w.write(Instruction.END); // $chunk
+		w.write(Instruction.END); // $done
+		// Tail (len is now 0..7): one more draw, spent one byte at a time.
+		w.write(Instruction.BLOCK, 0x40); // $tailDone
+		getLocal(w, LEN);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.BR_IF);
+		w.writeUnsignedLeb128(0);
+		emitSplitMix64Next(w, sw -> sw.writeUnsignedLeb128(S));
+		setLocal(w, T);
+		w.write(Instruction.LOOP, 0x40); // $tail
+		getLocal(w, BUF);
+		getLocal(w, T);
+		w.write(Instruction.I32_WRAP_I64);
+		w.write(Instruction.I32_STORE8, 0x00, 0x00);
+		getLocal(w, BUF);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		setLocal(w, BUF);
+		getLocal(w, T);
+		i64(w, 8);
+		w.write(Instruction.I64_SHR_U);
+		setLocal(w, T);
+		getLocal(w, LEN);
+		i32(w, 1);
+		w.write(Instruction.I32_SUB);
+		w.write(Instruction.TEE_LOCAL);
+		w.writeUnsignedLeb128(LEN);
+		w.write(Instruction.BR_IF);
+		w.writeUnsignedLeb128(0);
+		w.write(Instruction.END); // $tail
+		w.write(Instruction.END); // $tailDone
+		// errno 0
+		i32(w, 0);
+		w.write(Instruction.END);
+		return body.toByteArray();
+	}
+
+	/**
+	 * Writes the local INDEX of the generator's i64 scratch slot, after the opcode. A
+	 * hand-built body here knows its slot number outright; a body emitted through
+	 * {@code WasmLispCompiler.Ctx} has to go through the i64 placeholder machinery
+	 * instead, because an i64 local's absolute index is not known until the body is
+	 * complete. One generator, two ways of naming its scratch.
+	 */
+	@FunctionalInterface
+	interface ScratchSlot {
+
+		void write(WasmWriter w);
+
+	}
+
+	/**
+	 * One SplitMix64 step over {@link WasmLispCompiler#RANDOM_STATE_ADDR}, leaving the
+	 * u64 draw on the stack: the state cell advances by the golden-ratio gamma, and the
+	 * new state is mixed through two xor-shift-multiply rounds and a final xor-shift.
+	 * This is the generator behind {@code random} on EVERY wasm build
+	 * ({@code .kb/random.md}); {@code scratch} names an i64 local the caller does not
+	 * need across the sequence.
+	 * @param w the writer to emit into
+	 * @param scratch names the i64 scratch local
+	 */
+	static void emitSplitMix64Next(WasmWriter w, ScratchSlot scratch) {
+		// mem64[RANDOM_STATE_ADDR] += GAMMA ; scratch = the new state
+		i32(w, WasmLispCompiler.RANDOM_STATE_ADDR);
+		i32(w, WasmLispCompiler.RANDOM_STATE_ADDR);
+		w.write(Instruction.I64_LOAD, 0x03, 0x00);
+		i64(w, SM64_GAMMA);
+		w.write(Instruction.I64_ADD);
+		w.write(Instruction.TEE_LOCAL);
+		scratch.write(w);
+		w.write(Instruction.I64_STORE, 0x03, 0x00);
+		emitSplitMix64Mix(w, scratch, 30, SM64_MIX1);
+		emitSplitMix64Mix(w, scratch, 27, SM64_MIX2);
+		// push scratch ^ (scratch >>> 31)
+		getLocal(w, scratch);
+		getLocal(w, scratch);
+		i64(w, 31);
+		w.write(Instruction.I64_SHR_U);
+		w.write(Instruction.I64_XOR);
+	}
+
+	// scratch = (scratch ^ (scratch >>> shift)) * multiplier
+	private static void emitSplitMix64Mix(WasmWriter w, ScratchSlot scratch, int shift, long multiplier) {
+		getLocal(w, scratch);
+		getLocal(w, scratch);
+		i64(w, shift);
+		w.write(Instruction.I64_SHR_U);
+		w.write(Instruction.I64_XOR);
+		i64(w, multiplier);
+		w.write(Instruction.I64_MUL);
+		setLocal(w, scratch);
+	}
+
+	private static void getLocal(WasmWriter w, ScratchSlot slot) {
+		w.write(Instruction.GET_LOCAL);
+		slot.write(w);
+	}
+
+	private static void setLocal(WasmWriter w, ScratchSlot slot) {
+		w.write(Instruction.SET_LOCAL);
+		slot.write(w);
+	}
+
+	// === low-level emit helpers ===
+
+	private static void getLocal(WasmWriter w, int slot) {
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(slot);
+	}
+
+	private static void setLocal(WasmWriter w, int slot) {
+		w.write(Instruction.SET_LOCAL);
+		w.writeUnsignedLeb128(slot);
+	}
+
+	private static void i32(WasmWriter w, int value) {
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(value);
+	}
+
+	private static void i64(WasmWriter w, long value) {
+		w.write(Instruction.I64_CONST);
+		w.writeSignedLeb128(value);
+	}
+
+	private static void structGet(WasmWriter w, int type, int field) {
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeUnsignedLeb128(type);
+		w.writeUnsignedLeb128(field);
+	}
+
+	private static void refCast(WasmWriter w, int heapType) {
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(heapType);
+	}
+
+	private static void loadMem32(WasmWriter w, int addr) {
+		i32(w, addr);
+		w.write(Instruction.I32_LOAD, 0x02, 0x00);
+	}
+
+}

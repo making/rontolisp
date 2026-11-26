@@ -1,0 +1,1175 @@
+index_page: reference/functions.md
+categories:
+  - title: "算術演算"
+    index_page: reference/functions/cl.md
+    functions:
+      - { slug: plus, name: "+" }
+      - { slug: minus, name: "-" }
+      - { slug: mul, name: "*" }
+      - { slug: div, name: "/" }
+      - { slug: mod, name: "mod" }
+      - { slug: rem, name: "rem" }
+      - { slug: 1plus, name: "1+" }
+      - { slug: 1minus, name: "1-" }
+      - { slug: abs, name: "abs" }
+      - { slug: min, name: "min" }
+      - { slug: max, name: "max" }
+      - { slug: gcd, name: "gcd" }
+      - { slug: lcm, name: "lcm" }
+      - { slug: signum, name: "signum" }
+  - title: "比較と数値述語"
+    index_page: reference/functions/cl.md
+    functions:
+      - { slug: numeq, name: "=" }
+      - { slug: ne, name: "/=" }
+      - { slug: lt, name: "<" }
+      - { slug: gt, name: ">" }
+      - { slug: le, name: "<=" }
+      - { slug: ge, name: ">=" }
+      - { slug: zerop, name: "zerop" }
+      - { slug: plusp, name: "plusp" }
+      - { slug: minusp, name: "minusp" }
+      - { slug: evenp, name: "evenp" }
+      - { slug: oddp, name: "oddp" }
+  - title: "数値変換と丸め"
+    index_page: reference/functions/cl.md
+    functions:
+      - { slug: float, name: "float" }
+      - { slug: truncate, name: "truncate" }
+      - { slug: floor, name: "floor" }
+      - { slug: ceiling, name: "ceiling" }
+      - { slug: round, name: "round" }
+      - { slug: ffloor, name: "ffloor" }
+      - { slug: fceiling, name: "fceiling" }
+      - { slug: ftruncate, name: "ftruncate" }
+      - { slug: fround, name: "fround" }
+      - { slug: numerator, name: "numerator" }
+      - { slug: denominator, name: "denominator" }
+      - { slug: rational, name: "rational" }
+      - { slug: rationalize, name: "rationalize" }
+  - title: "数学関数"
+    index_page: reference/functions/cl.md
+    functions:
+      - { slug: sqrt, name: "sqrt" }
+      - { slug: isqrt, name: "isqrt" }
+      - { slug: expt, name: "expt" }
+      - { slug: exp, name: "exp" }
+      - { slug: log, name: "log" }
+      - { slug: sin-cos-tan, name: "sin cos tan" }
+      - { slug: asin-acos-atan, name: "asin acos atan" }
+      - { slug: sinh-cosh-tanh, name: "sinh cosh tanh" }
+      - { slug: random, name: "random" }
+      - { slug: make-random-state, name: "make-random-state" }
+      - { slug: random-state-p, name: "random-state-p" }
+      - { slug: scale-float, name: "scale-float" }
+      - { slug: float-radix, name: "float-radix" }
+      - { slug: float-sign, name: "float-sign" }
+      - { slug: float-digits, name: "float-digits" }
+      - { slug: float-precision, name: "float-precision" }
+      - { slug: decode-float, name: "decode-float" }
+      - { slug: integer-decode-float, name: "integer-decode-float" }
+  - title: "複素数"
+    index_page: reference/functions/cl.md
+    functions:
+      - { slug: complex, name: "complex" }
+      - { slug: complexp, name: "complexp" }
+      - { slug: realp, name: "realp" }
+      - { slug: realpart, name: "realpart" }
+      - { slug: imagpart, name: "imagpart" }
+      - { slug: conjugate, name: "conjugate" }
+      - { slug: phase, name: "phase" }
+      - { slug: upgraded-complex-part-type, name: "upgraded-complex-part-type" }
+  - title: "ビット演算"
+    index_page: reference/functions/cl.md
+    functions:
+      - { slug: logand, name: "logand" }
+      - { slug: logior, name: "logior" }
+      - { slug: logxor, name: "logxor" }
+      - { slug: lognot, name: "lognot" }
+      - { slug: logandc1, name: "logandc1" }
+      - { slug: logandc2, name: "logandc2" }
+      - { slug: logorc1, name: "logorc1" }
+      - { slug: logorc2, name: "logorc2" }
+      - { slug: lognand, name: "lognand" }
+      - { slug: lognor, name: "lognor" }
+      - { slug: logeqv, name: "logeqv" }
+      - { slug: ash, name: "ash" }
+      - { slug: integer-length, name: "integer-length" }
+      - { slug: logbitp, name: "logbitp" }
+      - { slug: logtest, name: "logtest" }
+      - { slug: logcount, name: "logcount" }
+      - { slug: boole, name: "boole" }
+      - { slug: byte, name: "byte" }
+      - { slug: byte-size, name: "byte-size" }
+      - { slug: byte-position, name: "byte-position" }
+      - { slug: ldb, name: "ldb" }
+      - { slug: dpb, name: "dpb" }
+      - { slug: deposit-field, name: "deposit-field" }
+      - { slug: ldb-test, name: "ldb-test" }
+      - { slug: mask-field, name: "mask-field" }
+  - title: "等価性と型述語"
+    index_page: reference/functions/cl.md
+    functions:
+      - { slug: eq, name: "eq" }
+      - { slug: eql, name: "eql" }
+      - { slug: equal, name: "equal" }
+      - { slug: equalp, name: "equalp" }
+      - { slug: null, name: "null" }
+      - { slug: not, name: "not" }
+      - { slug: atom, name: "atom" }
+      - { slug: numberp, name: "numberp" }
+      - { slug: integerp, name: "integerp" }
+      - { slug: floatp, name: "floatp" }
+      - { slug: rationalp, name: "rationalp" }
+      - { slug: symbolp, name: "symbolp" }
+      - { slug: stringp, name: "stringp" }
+      - { slug: simple-string-p, name: "simple-string-p" }
+      - { slug: simple-vector-p, name: "simple-vector-p" }
+      - { slug: bit-vector-p, name: "bit-vector-p" }
+      - { slug: simple-bit-vector-p, name: "simple-bit-vector-p" }
+      - { slug: listp, name: "listp" }
+      - { slug: consp, name: "consp" }
+      - { slug: keywordp, name: "keywordp" }
+      - { slug: characterp, name: "characterp" }
+      - { slug: functionp, name: "functionp" }
+      - { slug: vectorp, name: "vectorp" }
+      - { slug: arrayp, name: "arrayp" }
+      - { slug: array-in-bounds-p, name: "array-in-bounds-p" }
+      - { slug: constantp, name: "constantp" }
+      - { slug: get-setf-expansion, name: "get-setf-expansion" }
+      - { slug: streamp, name: "streamp" }
+      - { slug: subtypep, name: "subtypep" }
+      - { slug: class-of, name: "class-of" }
+      - { slug: type-of, name: "type-of" }
+      - { slug: pathnamep, name: "pathnamep" }
+  - title: "出力"
+    index_page: reference/functions/cl.md
+    functions:
+      - { slug: print, name: "print" }
+      - { slug: prin1, name: "prin1" }
+      - { slug: princ, name: "princ" }
+      - { slug: terpri, name: "terpri" }
+      - { slug: fresh-line, name: "fresh-line" }
+      - { slug: princ-to-string, name: "princ-to-string" }
+      - { slug: prin1-to-string, name: "prin1-to-string" }
+      - { slug: write-to-string, name: "write-to-string" }
+      - { slug: write, name: "write" }
+      - { slug: pprint, name: "pprint pprint-newline pprint-indent pprint-tab" }
+      - { slug: pprint-dispatch, name: "copy-pprint-dispatch set-pprint-dispatch pprint-dispatch" }
+  - title: "文字列"
+    index_page: reference/functions/cl.md
+    functions:
+      - { slug: concatenate, name: "concatenate" }
+      - { slug: string, name: "string" }
+      - { slug: make-string, name: "make-string" }
+      - { slug: make-sequence, name: "make-sequence" }
+      - { slug: replace, name: "replace" }
+      - { slug: fill, name: "fill" }
+      - { slug: string-upcase, name: "string-upcase" }
+      - { slug: string-downcase, name: "string-downcase" }
+      - { slug: string-capitalize, name: "string-capitalize" }
+      - { slug: nstring-case, name: "nstring-upcase nstring-downcase nstring-capitalize" }
+      - { slug: subseq, name: "subseq" }
+      - { slug: string-eq, name: "string=" }
+      - { slug: string-compare, name: "string< string> string<= string>= string/= string-lessp string-greaterp string-not-greaterp string-not-lessp string-not-equal" }
+      - { slug: string-equal, name: "string-equal" }
+      - { slug: string-trim, name: "string-trim" }
+      - { slug: string-left-trim, name: "string-left-trim" }
+      - { slug: string-right-trim, name: "string-right-trim" }
+  - title: "文字"
+    index_page: reference/functions/cl.md
+    functions:
+      - { slug: char, name: "char schar" }
+      - { slug: char-code, name: "char-code" }
+      - { slug: char-int, name: "char-int" }
+      - { slug: code-char, name: "code-char" }
+      - { slug: character, name: "character" }
+      - { slug: char-compare, name: "char= char< char<= char> char>= char/= char-equal" }
+      - { slug: char-compare-ci, name: "char-lessp char-greaterp char-not-lessp char-not-greaterp char-not-equal" }
+      - { slug: char-case, name: "char-upcase char-downcase" }
+      - { slug: alpha-char-p, name: "alpha-char-p" }
+      - { slug: alphanumericp, name: "alphanumericp" }
+      - { slug: graphic-char-p, name: "graphic-char-p standard-char-p" }
+      - { slug: make-load-form, name: "make-load-form" }
+      - { slug: make-load-form-saving-slots, name: "make-load-form-saving-slots" }
+      - { slug: sxhash, name: "sxhash" }
+      - { slug: bit-and, name: "bit-and" }
+      - { slug: bit-andc1, name: "bit-andc1" }
+      - { slug: bit-andc2, name: "bit-andc2" }
+      - { slug: bit-eqv, name: "bit-eqv" }
+      - { slug: bit-ior, name: "bit-ior" }
+      - { slug: bit-nand, name: "bit-nand" }
+      - { slug: bit-nor, name: "bit-nor" }
+      - { slug: bit-not, name: "bit-not" }
+      - { slug: bit-orc1, name: "bit-orc1" }
+      - { slug: bit-orc2, name: "bit-orc2" }
+      - { slug: bit-xor, name: "bit-xor" }
+      - { slug: sbit, name: "sbit" }
+      - { slug: bit, name: "bit" }
+      - { slug: both-case-p, name: "both-case-p" }
+      - { slug: special-operator-p, name: "special-operator-p" }
+      - { slug: macro-function, name: "macro-function" }
+      - { slug: compiler-macro-function, name: "compiler-macro-function" }
+      - { slug: compiled-function-p, name: "compiled-function-p" }
+      - { slug: function-lambda-expression, name: "function-lambda-expression" }
+      - { slug: list-all-packages, name: "list-all-packages" }
+      - { slug: find-class, name: "find-class" }
+      - { slug: allocate-instance, name: "allocate-instance" }
+      - { slug: add-method, name: "ensure-generic-function add-method remove-method find-method method-qualifiers compute-applicable-methods" }
+      - { slug: slot-unbound, name: "slot-unbound" }
+      - { slug: slot-missing, name: "slot-missing" }
+      - { slug: class-name, name: "class-name" }
+      - { slug: copy-structure, name: "copy-structure" }
+      - { slug: get, name: "get" }
+      - { slug: symbol-plist, name: "symbol-plist" }
+      - { slug: remprop, name: "remprop" }
+      - { slug: case-char-p, name: "lower-case-p upper-case-p" }
+      - { slug: digit-char-p, name: "digit-char-p" }
+      - { slug: digit-char, name: "digit-char" }
+      - { slug: char-name, name: "char-name" }
+      - { slug: name-char, name: "name-char" }
+  - title: "コンスとリストの構築"
+    index_page: reference/functions/cl.md
+    functions:
+      - { slug: cons, name: "cons" }
+      - { slug: car, name: "car" }
+      - { slug: cdr, name: "cdr" }
+      - { slug: car-cdr-compositions, name: "caar cddddr" }
+      - { slug: first, name: "first" }
+      - { slug: rest, name: "rest" }
+      - { slug: second-third-fourth, name: "second third fourth" }
+      - { slug: nth, name: "nth" }
+      - { slug: nthcdr, name: "nthcdr" }
+      - { slug: ldiff, name: "ldiff" }
+      - { slug: list, name: "list" }
+      - { slug: list*, name: "list*" }
+      - { slug: acons, name: "acons" }
+      - { slug: make-list, name: "make-list" }
+      - { slug: copy-list, name: "copy-list" }
+      - { slug: copy-tree, name: "copy-tree" }
+      - { slug: sublis, name: "sublis" }
+      - { slug: nsublis, name: "nsublis" }
+  - title: "リスト操作"
+    index_page: reference/functions/cl.md
+    functions:
+      - { slug: length, name: "length" }
+      - { slug: reverse, name: "reverse" }
+      - { slug: nreverse, name: "nreverse" }
+      - { slug: last, name: "last" }
+      - { slug: butlast, name: "butlast" }
+      - { slug: nbutlast, name: "nbutlast" }
+      - { slug: list-length, name: "list-length" }
+      - { slug: tailp, name: "tailp" }
+      - { slug: elt, name: "elt" }
+      - { slug: endp, name: "endp" }
+      - { slug: revappend, name: "revappend" }
+      - { slug: nreconc, name: "nreconc" }
+      - { slug: nconc, name: "nconc" }
+      - { slug: sort, name: "sort" }
+      - { slug: stable-sort, name: "stable-sort" }
+      - { slug: merge, name: "merge" }
+      - { slug: copy-seq, name: "copy-seq" }
+  - title: "リスト検索"
+    index_page: reference/functions/cl.md
+    functions:
+      - { slug: member, name: "member" }
+      - { slug: member-if, name: "member-if" }
+      - { slug: member-if-not, name: "member-if-not" }
+      - { slug: find, name: "find" }
+      - { slug: find-if, name: "find-if" }
+      - { slug: find-if-not, name: "find-if-not" }
+      - { slug: position, name: "position" }
+      - { slug: position-if, name: "position-if" }
+      - { slug: position-if-not, name: "position-if-not" }
+      - { slug: count, name: "count" }
+      - { slug: count-if, name: "count-if" }
+      - { slug: count-if-not, name: "count-if-not" }
+      - { slug: assoc, name: "assoc" }
+      - { slug: assoc-if, name: "assoc-if" }
+      - { slug: assoc-if-not, name: "assoc-if-not" }
+      - { slug: rassoc, name: "rassoc" }
+      - { slug: rassoc-if, name: "rassoc-if" }
+      - { slug: rassoc-if-not, name: "rassoc-if-not" }
+      - { slug: pairlis, name: "pairlis" }
+      - { slug: copy-alist, name: "copy-alist" }
+      - { slug: getf, name: "getf" }
+      - { slug: get-properties, name: "get-properties" }
+  - title: "リストのフィルタリングと変更"
+    index_page: reference/functions/cl.md
+    functions:
+      - { slug: remove, name: "remove" }
+      - { slug: remove-if, name: "remove-if" }
+      - { slug: remove-if-not, name: "remove-if-not" }
+      - { slug: remove-duplicates, name: "remove-duplicates" }
+      - { slug: delete-duplicates, name: "delete-duplicates" }
+      - { slug: delete, name: "delete" }
+      - { slug: delete-if, name: "delete-if" }
+      - { slug: delete-if-not, name: "delete-if-not" }
+      - { slug: subst, name: "subst" }
+      - { slug: subst-if, name: "subst-if" }
+      - { slug: subst-if-not, name: "subst-if-not" }
+      - { slug: nsubst, name: "nsubst" }
+      - { slug: nsubst-if, name: "nsubst-if" }
+      - { slug: nsubst-if-not, name: "nsubst-if-not" }
+      - { slug: search, name: "search" }
+      - { slug: mismatch, name: "mismatch" }
+      - { slug: tree-equal, name: "tree-equal" }
+      - { slug: substitute, name: "substitute" }
+      - { slug: nsubstitute, name: "nsubstitute" }
+      - { slug: substitute-if, name: "substitute-if" }
+      - { slug: substitute-if-not, name: "substitute-if-not" }
+      - { slug: nsubstitute-if, name: "nsubstitute-if" }
+      - { slug: nsubstitute-if-not, name: "nsubstitute-if-not" }
+  - title: "集合"
+    index_page: reference/functions/cl.md
+    functions:
+      - { slug: union, name: "union" }
+      - { slug: intersection, name: "intersection" }
+      - { slug: set-difference, name: "set-difference" }
+      - { slug: set-exclusive-or, name: "set-exclusive-or" }
+      - { slug: adjoin, name: "adjoin" }
+      - { slug: subsetp, name: "subsetp" }
+      - { slug: nunion, name: "nunion" }
+      - { slug: nintersection, name: "nintersection" }
+      - { slug: nset-difference, name: "nset-difference" }
+      - { slug: nset-exclusive-or, name: "nset-exclusive-or" }
+  - title: "破壊的なセル操作"
+    index_page: reference/functions/cl.md
+    functions:
+      - { slug: rplaca, name: "rplaca" }
+      - { slug: rplacd, name: "rplacd" }
+  - title: "高階関数"
+    index_page: reference/functions/cl.md
+    functions:
+      - { slug: funcall, name: "funcall" }
+      - { slug: apply, name: "apply" }
+      - { slug: values, name: "values" }
+      - { slug: values-list, name: "values-list" }
+      - { slug: mapcar, name: "mapcar" }
+      - { slug: map, name: "map" }
+      - { slug: map-into, name: "map-into" }
+      - { slug: mapc, name: "mapc" }
+      - { slug: mapcan, name: "mapcan" }
+      - { slug: maplist, name: "maplist" }
+      - { slug: mapcon, name: "mapcon" }
+      - { slug: mapl, name: "mapl" }
+      - { slug: reduce, name: "reduce" }
+      - { slug: every, name: "every" }
+      - { slug: some, name: "some" }
+      - { slug: notany, name: "notany" }
+      - { slug: notevery, name: "notevery" }
+      - { slug: identity, name: "identity" }
+      - { slug: constantly, name: "constantly" }
+      - { slug: symbol-function, name: "symbol-function" }
+  - title: "ハッシュテーブル"
+    index_page: reference/functions/cl.md
+    functions:
+      - { slug: make-hash-table, name: "make-hash-table" }
+      - { slug: gethash, name: "gethash" }
+      - { slug: remhash, name: "remhash" }
+      - { slug: clrhash, name: "clrhash" }
+      - { slug: hash-table-count, name: "hash-table-count" }
+      - { slug: hash-table-test, name: "hash-table-test" }
+      - { slug: hash-table-size, name: "hash-table-size" }
+      - { slug: hash-table-rehash-size, name: "hash-table-rehash-size" }
+      - { slug: hash-table-rehash-threshold, name: "hash-table-rehash-threshold" }
+      - { slug: hash-table-p, name: "hash-table-p" }
+      - { slug: maphash, name: "maphash" }
+  - title: "配列"
+    index_page: reference/functions/cl.md
+    functions:
+      - { slug: make-array, name: "make-array" }
+      - { slug: aref, name: "aref" }
+      - { slug: row-major-aref, name: "row-major-aref" }
+      - { slug: array-row-major-index, name: "array-row-major-index" }
+      - { slug: vector, name: "vector" }
+      - { slug: svref, name: "svref" }
+      - { slug: array-dimensions, name: "array-dimensions" }
+      - { slug: array-dimension, name: "array-dimension" }
+      - { slug: array-rank, name: "array-rank" }
+      - { slug: array-total-size, name: "array-total-size" }
+      - { slug: coerce, name: "coerce" }
+      - { slug: fill-pointer, name: "fill-pointer" }
+      - { slug: array-has-fill-pointer-p, name: "array-has-fill-pointer-p" }
+      - { slug: adjustable-array-p, name: "adjustable-array-p" }
+      - { slug: array-element-type, name: "array-element-type" }
+      - { slug: upgraded-array-element-type, name: "upgraded-array-element-type" }
+      - { slug: vector-push, name: "vector-push" }
+      - { slug: vector-pop, name: "vector-pop" }
+      - { slug: vector-push-extend, name: "vector-push-extend" }
+      - { slug: adjust-array, name: "adjust-array" }
+      - { slug: array-displacement, name: "array-displacement" }
+  - title: "リーダーと評価"
+    index_page: reference/functions/cl.md
+    functions:
+      - { slug: read, name: "read" }
+      - { slug: read-line, name: "read-line" }
+      - { slug: y-or-n-p, name: "y-or-n-p" }
+      - { slug: read-char, name: "read-char" }
+      - { slug: peek-char, name: "peek-char" }
+      - { slug: read-char-no-hang, name: "read-char-no-hang" }
+      - { slug: unread-char, name: "unread-char" }
+      - { slug: read-from-string, name: "read-from-string" }
+      - { slug: parse-integer, name: "parse-integer" }
+      - { slug: read-delimited-list, name: "read-delimited-list" }
+      - { slug: read-preserving-whitespace, name: "read-preserving-whitespace" }
+      - { slug: copy-readtable, name: "copy-readtable" }
+      - { slug: readtablep, name: "readtablep" }
+      - { slug: readtable-case, name: "readtable-case" }
+      - { slug: get-macro-character, name: "get-macro-character" }
+      - { slug: set-macro-character, name: "set-macro-character" }
+      - { slug: make-dispatch-macro-character, name: "make-dispatch-macro-character" }
+      - { slug: get-dispatch-macro-character, name: "get-dispatch-macro-character" }
+      - { slug: set-dispatch-macro-character, name: "set-dispatch-macro-character" }
+      - { slug: set-syntax-from-char, name: "set-syntax-from-char" }
+      - { slug: eval, name: "eval" }
+      - { slug: compile, name: "compile" }
+      - { slug: load, name: "load" }
+      - { slug: require, name: "require" }
+      - { slug: provide, name: "provide" }
+  - title: "シンボルとマクロ"
+    index_page: reference/functions/cl.md
+    functions:
+      - { slug: gensym, name: "gensym" }
+      - { slug: gentemp, name: "gentemp" }
+      - { slug: make-symbol, name: "make-symbol" }
+      - { slug: copy-symbol, name: "copy-symbol" }
+      - { slug: intern, name: "intern" }
+      - { slug: find-symbol, name: "find-symbol" }
+      - { slug: find-package, name: "find-package" }
+      - { slug: symbol-name, name: "symbol-name" }
+      - { slug: symbol-package, name: "symbol-package" }
+      - { slug: package-name, name: "package-name" }
+      - { slug: package-use-list, name: "package-use-list" }
+      - { slug: package-used-by-list, name: "package-used-by-list" }
+      - { slug: package-shadowing-symbols, name: "package-shadowing-symbols" }
+      - { slug: shadow, name: "shadow" }
+      - { slug: shadowing-import, name: "shadowing-import" }
+      - { slug: unintern, name: "unintern" }
+      - { slug: make-package, name: "make-package" }
+      - { slug: delete-package, name: "delete-package" }
+      - { slug: rename-package, name: "rename-package" }
+      - { slug: packagep, name: "packagep" }
+      - { slug: package-nicknames, name: "package-nicknames" }
+      - { slug: find-all-symbols, name: "find-all-symbols" }
+      - { slug: apropos-list, name: "apropos-list" }
+      - { slug: apropos, name: "apropos" }
+      - { slug: package-error-package, name: "package-error-package" }
+      - { slug: symbol-value, name: "symbol-value" }
+      - { slug: set, name: "set" }
+      - { slug: boundp, name: "boundp" }
+      - { slug: fboundp, name: "fboundp" }
+      - { slug: fmakunbound, name: "fmakunbound" }
+      - { slug: makunbound, name: "makunbound" }
+      - { slug: macroexpand-1, name: "macroexpand-1" }
+      - { slug: macroexpand, name: "macroexpand" }
+      - { slug: fdefinition, name: "fdefinition" }
+      - { slug: use-package, name: "use-package" }
+      - { slug: unuse-package, name: "unuse-package" }
+      - { slug: export, name: "export" }
+      - { slug: unexport, name: "unexport" }
+      - { slug: import, name: "import" }
+  - title: "ストリームとファイル"
+    index_page: reference/functions/cl.md
+    functions:
+      - { slug: open, name: "open" }
+      - { slug: close, name: "close" }
+      - { slug: probe-file, name: "probe-file" }
+      - { slug: directory, name: "directory" }
+      - { slug: truename, name: "truename" }
+      - { slug: pathname, name: "pathname" }
+      - { slug: parse-namestring, name: "parse-namestring" }
+      - { slug: merge-pathnames, name: "merge-pathnames" }
+      - { slug: make-pathname, name: "make-pathname" }
+      - { slug: namestring, name: "namestring" }
+      - { slug: pathname-directory, name: "pathname-directory" }
+      - { slug: pathname-name, name: "pathname-name" }
+      - { slug: pathname-type, name: "pathname-type" }
+      - { slug: pathname-host, name: "pathname-host" }
+      - { slug: pathname-device, name: "pathname-device" }
+      - { slug: pathname-version, name: "pathname-version" }
+      - { slug: wild-pathname-p, name: "wild-pathname-p" }
+      - { slug: enough-namestring, name: "enough-namestring" }
+      - { slug: namestring-components, name: "file-namestring directory-namestring host-namestring" }
+      - { slug: translate-pathname, name: "translate-pathname" }
+      - { slug: translate-logical-pathname, name: "translate-logical-pathname" }
+      - { slug: logical-pathname, name: "logical-pathname" }
+      - { slug: logical-pathname-translations, name: "logical-pathname-translations" }
+      - { slug: load-logical-pathname-translations, name: "load-logical-pathname-translations" }
+      - { slug: pathname-match-p, name: "pathname-match-p" }
+      - { slug: open-stream-p, name: "open-stream-p" }
+      - { slug: force-output, name: "force-output" }
+      - { slug: finish-output, name: "finish-output" }
+      - { slug: clear-output, name: "clear-output" }
+      - { slug: clear-input, name: "clear-input" }
+      - { slug: listen, name: "listen" }
+      - { slug: write-line, name: "write-line" }
+      - { slug: write-string, name: "write-string" }
+      - { slug: write-char, name: "write-char" }
+      - { slug: read-byte, name: "read-byte" }
+      - { slug: write-byte, name: "write-byte" }
+      - { slug: read-sequence, name: "read-sequence" }
+      - { slug: write-sequence, name: "write-sequence" }
+      - { slug: file-position, name: "file-position" }
+      - { slug: file-length, name: "file-length" }
+      - { slug: file-write-date, name: "file-write-date" }
+      - { slug: ensure-directories-exist, name: "ensure-directories-exist" }
+      - { slug: delete-file, name: "delete-file" }
+      - { slug: rename-file, name: "rename-file" }
+      - { slug: make-string-output-stream, name: "make-string-output-stream" }
+      - { slug: make-string-input-stream, name: "make-string-input-stream" }
+      - { slug: get-output-stream-string, name: "get-output-stream-string" }
+      - { slug: make-synonym-stream, name: "make-synonym-stream" }
+      - { slug: synonym-stream-symbol, name: "synonym-stream-symbol" }
+      - { slug: make-broadcast-stream, name: "make-broadcast-stream" }
+      - { slug: make-two-way-stream, name: "make-two-way-stream" }
+      - { slug: two-way-stream-input-stream, name: "two-way-stream-input-stream" }
+      - { slug: two-way-stream-output-stream, name: "two-way-stream-output-stream" }
+      - { slug: make-echo-stream, name: "make-echo-stream" }
+      - { slug: echo-stream-input-stream, name: "echo-stream-input-stream" }
+      - { slug: echo-stream-output-stream, name: "echo-stream-output-stream" }
+      - { slug: make-concatenated-stream, name: "make-concatenated-stream" }
+      - { slug: concatenated-stream-streams, name: "concatenated-stream-streams" }
+      - { slug: broadcast-stream-streams, name: "broadcast-stream-streams" }
+      - { slug: file-string-length, name: "file-string-length" }
+      - { slug: interactive-stream-p, name: "interactive-stream-p" }
+      - { slug: stream-external-format, name: "stream-external-format" }
+      - { slug: input-stream-p, name: "input-stream-p" }
+      - { slug: output-stream-p, name: "output-stream-p" }
+      - { slug: stream-element-type, name: "stream-element-type" }
+  - title: "システムと時間"
+    index_page: reference/functions/cl.md
+    functions:
+      - { slug: get-universal-time, name: "get-universal-time" }
+      - { slug: encode-universal-time, name: "encode-universal-time" }
+      - { slug: decode-universal-time, name: "decode-universal-time" }
+      - { slug: get-decoded-time, name: "get-decoded-time" }
+      - { slug: get-internal-real-time, name: "get-internal-real-time" }
+      - { slug: get-internal-run-time, name: "get-internal-run-time" }
+      - { slug: sleep, name: "sleep" }
+      - { slug: environment-enquiry, name: "lisp-implementation-type lisp-implementation-version software-type software-version machine-type machine-version machine-instance short-site-name long-site-name" }
+      - { slug: user-homedir-pathname, name: "user-homedir-pathname" }
+      - { slug: invoke-debugger, name: "invoke-debugger" }
+      - { slug: compile-file, name: "compile-file compile-file-pathname" }
+  - title: "rontolisp パッケージ"
+    index_page: reference/functions/rontolisp.md
+    functions:
+      - { slug: rontolisp-version, name: "rontolisp:version" }
+      - { slug: rontolisp-random-bytes, name: "rontolisp:random-bytes" }
+      - { slug: rontolisp-unix-time, name: "rontolisp:unix-time" }
+      - { slug: rontolisp-bfloat16-bits, name: "rontolisp:bfloat16-bits" }
+      - { slug: rontolisp-bits-bfloat16, name: "rontolisp:bits-bfloat16" }
+      - { slug: rontolisp-float16-bits, name: "rontolisp:float16-bits" }
+      - { slug: rontolisp-bits-float16, name: "rontolisp:bits-float16" }
+      - { slug: rontolisp-widen-float-bits, name: "rontolisp:widen-float-bits" }
+      - { slug: rontolisp-narrow-float-bits, name: "rontolisp:narrow-float-bits" }
+      - { slug: rontolisp-quantize, name: "rontolisp:quantize" }
+      - { slug: rontolisp-dequantize, name: "rontolisp:dequantize" }
+      - { slug: rontolisp-make-quantized-matrix, name: "rontolisp:make-quantized-matrix" }
+      - { slug: rontolisp-quantized-rows, name: "rontolisp:quantized-rows" }
+      - { slug: rontolisp-quantized-matrix-p, name: "rontolisp:quantized-matrix-p" }
+      - { slug: rontolisp-octets-to-string, name: "rontolisp:octets-to-string" }
+      - { slug: rontolisp-string-to-octets, name: "rontolisp:string-to-octets" }
+      - { slug: rontolisp-make-mutex, name: "rontolisp:make-mutex" }
+      - { slug: rontolisp-mutex-acquire, name: "rontolisp:mutex-acquire" }
+      - { slug: rontolisp-mutex-release, name: "rontolisp:mutex-release" }
+      - { slug: rontolisp-make-thread, name: "rontolisp:make-thread" }
+      - { slug: rontolisp-join-thread, name: "rontolisp:join-thread" }
+      - { slug: rontolisp-threadp, name: "rontolisp:threadp" }
+      - { slug: rontolisp-thread-alive-p, name: "rontolisp:thread-alive-p" }
+      - { slug: rontolisp-destroy-thread, name: "rontolisp:destroy-thread" }
+      - { slug: rontolisp-current-thread, name: "rontolisp:current-thread" }
+      - { slug: rontolisp-fetch, name: "rontolisp:fetch" }
+      - { slug: rontolisp-futurep, name: "rontolisp:futurep" }
+      - { slug: rontolisp-streamp, name: "rontolisp:streamp" }
+      - { slug: rontolisp-make-stream, name: "rontolisp:make-stream" }
+      - { slug: rontolisp-stream-read, name: "rontolisp:stream-read" }
+      - { slug: rontolisp-stream-write, name: "rontolisp:stream-write" }
+      - { slug: rontolisp-stream-close, name: "rontolisp:stream-close" }
+      - { slug: rontolisp-read-all, name: "rontolisp:read-all" }
+      - { slug: rontolisp-wait-for, name: "rontolisp:wait-for" }
+      - { slug: rontolisp-then, name: "rontolisp:then" }
+      - { slug: rontolisp-then-star, name: "rontolisp:then*" }
+      - { slug: rontolisp-catch, name: "rontolisp:catch" }
+      - { slug: rontolisp-finally, name: "rontolisp:finally" }
+      - { slug: rontolisp-http-handler, name: "rontolisp:http-handler" }
+      - { slug: rontolisp-json-parse, name: "rontolisp:json-parse" }
+      - { slug: rontolisp-json-stringify, name: "rontolisp:json-stringify" }
+      - { slug: rontolisp-json-span, name: "rontolisp:json-span" }
+      - { slug: rontolisp-json-value, name: "rontolisp:json-value" }
+      - { slug: rontolisp-plist-hash-table, name: "rontolisp:plist-hash-table" }
+      - { slug: rontolisp-hash-table-plist, name: "rontolisp:hash-table-plist" }
+      - { slug: rontolisp-alist-hash-table, name: "rontolisp:alist-hash-table" }
+      - { slug: rontolisp-hash-table-alist, name: "rontolisp:hash-table-alist" }
+      - { slug: rontolisp-alist-plist, name: "rontolisp:alist-plist" }
+      - { slug: rontolisp-plist-alist, name: "rontolisp:plist-alist" }
+      - { slug: rontolisp-url-decode, name: "rontolisp:url-decode" }
+      - { slug: rontolisp-url-encode, name: "rontolisp:url-encode" }
+      - { slug: rontolisp-query-params, name: "rontolisp:query-params" }
+      - { slug: rontolisp-query-param, name: "rontolisp:query-param" }
+      - { slug: rontolisp-url-path, name: "rontolisp:url-path" }
+      - { slug: rontolisp-url-query, name: "rontolisp:url-query" }
+      - { slug: rontolisp-starlark-call, name: "rontolisp:starlark-call" }
+      - { slug: rontolisp-tcp-connect, name: "rontolisp:tcp-connect" }
+      - { slug: rontolisp-tcp-listen, name: "rontolisp:tcp-listen" }
+      - { slug: rontolisp-tcp-accept, name: "rontolisp:tcp-accept" }
+      - { slug: rontolisp-tcp-local-port, name: "rontolisp:tcp-local-port" }
+      - { slug: rontolisp-tcp-addresses, name: "rontolisp:tcp-local-address rontolisp:tcp-peer-address rontolisp:tcp-peer-port" }
+      - { slug: rontolisp-tcp-set-timeout, name: "rontolisp:tcp-set-timeout" }
+      - { slug: rontolisp-tls-connect, name: "rontolisp:tls-connect" }
+      - { slug: rontolisp-tls-listen, name: "rontolisp:tls-listen" }
+      - { slug: rontolisp-tls-listen-pem, name: "rontolisp:tls-listen-pem" }
+      - { slug: rontolisp-tls-upgrade, name: "rontolisp:tls-upgrade" }
+      - { slug: rontolisp-wasm-export, name: "rontolisp:wasm-export" }
+      - { slug: rontolisp-jvm-export, name: "rontolisp:jvm-export" }
+      - { slug: rontolisp-wasm-import, name: "rontolisp:wasm-import" }
+      - { slug: rontolisp-wit-export, name: "rontolisp:wit-export" }
+      - { slug: rontolisp-wit-import, name: "rontolisp:wit-import" }
+      - { slug: rontolisp-wit-provide, name: "rontolisp:wit-provide" }
+  - title: "linalg パッケージ"
+    index_page: reference/functions/linalg.md
+    functions:
+      - { slug: linalg-zeros, name: "linalg:zeros" }
+      - { slug: linalg-ones, name: "linalg:ones" }
+      - { slug: linalg-full, name: "linalg:full" }
+      - { slug: linalg-zeros-like, name: "linalg:zeros-like" }
+      - { slug: linalg-eye, name: "linalg:eye" }
+      - { slug: linalg-arange, name: "linalg:arange" }
+      - { slug: linalg-linspace, name: "linalg:linspace" }
+      - { slug: linalg-from-list, name: "linalg:from-list" }
+      - { slug: linalg-to-list, name: "linalg:to-list" }
+      - { slug: linalg-shape, name: "linalg:shape" }
+      - { slug: linalg-ndim, name: "linalg:ndim" }
+      - { slug: linalg-size, name: "linalg:size" }
+      - { slug: linalg-reshape, name: "linalg:reshape" }
+      - { slug: linalg-flatten, name: "linalg:flatten" }
+      - { slug: linalg-transpose, name: "linalg:transpose" }
+      - { slug: linalg-pad, name: "linalg:pad" }
+      - { slug: linalg-expand-dims, name: "linalg:expand-dims" }
+      - { slug: linalg-squeeze, name: "linalg:squeeze" }
+      - { slug: linalg-concatenate, name: "linalg:concatenate" }
+      - { slug: linalg-stack, name: "linalg:stack" }
+      - { slug: linalg-slice, name: "linalg:slice" }
+      - { slug: linalg-triu, name: "linalg:triu" }
+      - { slug: linalg-tril, name: "linalg:tril" }
+      - { slug: linalg-add, name: "linalg:add" }
+      - { slug: linalg-sub, name: "linalg:sub" }
+      - { slug: linalg-mul, name: "linalg:mul" }
+      - { slug: linalg-div, name: "linalg:div" }
+      - { slug: linalg-plus, name: "linalg:+" }
+      - { slug: linalg-minus, name: "linalg:-" }
+      - { slug: linalg-star, name: "linalg:*" }
+      - { slug: linalg-slash, name: "linalg:/" }
+      - { slug: linalg-emap, name: "linalg:emap" }
+      - { slug: linalg-exp, name: "linalg:exp" }
+      - { slug: linalg-log, name: "linalg:log" }
+      - { slug: linalg-tanh, name: "linalg:tanh" }
+      - { slug: linalg-sin, name: "linalg:sin" }
+      - { slug: linalg-cos, name: "linalg:cos" }
+      - { slug: linalg-tan, name: "linalg:tan" }
+      - { slug: linalg-asin, name: "linalg:asin" }
+      - { slug: linalg-acos, name: "linalg:acos" }
+      - { slug: linalg-atan, name: "linalg:atan" }
+      - { slug: linalg-sinh, name: "linalg:sinh" }
+      - { slug: linalg-cosh, name: "linalg:cosh" }
+      - { slug: linalg-sqrt, name: "linalg:sqrt" }
+      - { slug: linalg-abs, name: "linalg:abs" }
+      - { slug: linalg-square, name: "linalg:square" }
+      - { slug: linalg-negative, name: "linalg:negative" }
+      - { slug: linalg-sign, name: "linalg:sign" }
+      - { slug: linalg-reciprocal, name: "linalg:reciprocal" }
+      - { slug: linalg-power, name: "linalg:power" }
+      - { slug: linalg-maximum, name: "linalg:maximum" }
+      - { slug: linalg-minimum, name: "linalg:minimum" }
+      - { slug: linalg-clip, name: "linalg:clip" }
+      - { slug: linalg-relu, name: "linalg:relu" }
+      - { slug: linalg-erf, name: "linalg:erf" }
+      - { slug: linalg-softmax, name: "linalg:softmax" }
+      - { slug: linalg-log-softmax, name: "linalg:log-softmax" }
+      - { slug: linalg-dot, name: "linalg:dot" }
+      - { slug: linalg-matmul, name: "linalg:matmul" }
+      - { slug: linalg-outer, name: "linalg:outer" }
+      - { slug: linalg-cross, name: "linalg:cross" }
+      - { slug: linalg-sum, name: "linalg:sum" }
+      - { slug: linalg-mean, name: "linalg:mean" }
+      - { slug: linalg-var, name: "linalg:var" }
+      - { slug: linalg-std, name: "linalg:std" }
+      - { slug: linalg-amax, name: "linalg:amax" }
+      - { slug: linalg-amin, name: "linalg:amin" }
+      - { slug: linalg-argmax, name: "linalg:argmax" }
+      - { slug: linalg-argmin, name: "linalg:argmin" }
+      - { slug: linalg-norm, name: "linalg:norm" }
+      - { slug: linalg-trace, name: "linalg:trace" }
+      - { slug: linalg-diff, name: "linalg:diff" }
+      - { slug: linalg-gradient, name: "linalg:gradient" }
+      - { slug: linalg-det, name: "linalg:det" }
+      - { slug: linalg-inv, name: "linalg:inv" }
+      - { slug: linalg-solve, name: "linalg:solve" }
+      - { slug: linalg-array-equal, name: "linalg:array-equal" }
+      - { slug: linalg-equal, name: "linalg:equal" }
+      - { slug: linalg-greater, name: "linalg:greater" }
+      - { slug: linalg-greater-equal, name: "linalg:greater-equal" }
+      - { slug: linalg-less, name: "linalg:less" }
+      - { slug: linalg-less-equal, name: "linalg:less-equal" }
+      - { slug: linalg-where, name: "linalg:where" }
+      - { slug: linalg-take-rows, name: "linalg:take-rows" }
+      - { slug: linalg-row, name: "linalg:row" }
+      - { slug: linalg-gather, name: "linalg:gather" }
+      - { slug: linalg-one-hot, name: "linalg:one-hot" }
+      - { slug: linalg-seed, name: "linalg:seed" }
+      - { slug: linalg-rand, name: "linalg:rand" }
+      - { slug: linalg-randn, name: "linalg:randn" }
+      - { slug: linalg-uniform, name: "linalg:uniform" }
+      - { slug: linalg-choice, name: "linalg:choice" }
+      - { slug: linalg-permutation, name: "linalg:permutation" }
+  - title: "torch パッケージ"
+    index_page: reference/functions/torch.md
+    functions:
+      - { slug: torch-tensor, name: "torch:tensor" }
+      - { slug: torch-tensorp, name: "torch:tensorp" }
+      - { slug: torch-data, name: "torch:data" }
+      - { slug: torch-grad, name: "torch:grad" }
+      - { slug: torch-shape, name: "torch:shape" }
+      - { slug: torch-item, name: "torch:item" }
+      - { slug: torch-detach, name: "torch:detach" }
+      - { slug: torch-zero-grad, name: "torch:zero-grad" }
+      - { slug: torch-requires-grad-p, name: "torch:requires-grad-p" }
+      - { slug: torch-backward, name: "torch:backward" }
+      - { slug: torch-add, name: "torch:add" }
+      - { slug: torch-sub, name: "torch:sub" }
+      - { slug: torch-mul, name: "torch:mul" }
+      - { slug: torch-div, name: "torch:div" }
+      - { slug: torch-neg, name: "torch:neg" }
+      - { slug: torch-power, name: "torch:power" }
+      - { slug: torch-exp, name: "torch:exp" }
+      - { slug: torch-log, name: "torch:log" }
+      - { slug: torch-sqrt, name: "torch:sqrt" }
+      - { slug: torch-tanh, name: "torch:tanh" }
+      - { slug: torch-relu, name: "torch:relu" }
+      - { slug: torch-erf, name: "torch:erf" }
+      - { slug: torch-gelu, name: "torch:gelu" }
+      - { slug: torch-matmul, name: "torch:matmul" }
+      - { slug: torch-sum, name: "torch:sum" }
+      - { slug: torch-mean, name: "torch:mean" }
+      - { slug: torch-var, name: "torch:var" }
+      - { slug: torch-std, name: "torch:std" }
+      - { slug: torch-amax, name: "torch:amax" }
+      - { slug: torch-argmax, name: "torch:argmax" }
+      - { slug: torch-topk, name: "torch:topk" }
+      - { slug: torch-multinomial, name: "torch:multinomial" }
+      - { slug: torch-softmax, name: "torch:softmax" }
+      - { slug: torch-log-softmax, name: "torch:log-softmax" }
+      - { slug: torch-masked-fill, name: "torch:masked-fill" }
+      - { slug: torch-gather, name: "torch:gather" }
+      - { slug: torch-index-select, name: "torch:index-select" }
+      - { slug: torch-reshape, name: "torch:reshape" }
+      - { slug: torch-view, name: "torch:view" }
+      - { slug: torch-transpose, name: "torch:transpose" }
+      - { slug: torch-unsqueeze, name: "torch:unsqueeze" }
+      - { slug: torch-squeeze, name: "torch:squeeze" }
+      - { slug: torch-cat, name: "torch:cat" }
+      - { slug: torch-stack, name: "torch:stack" }
+      - { slug: torch-slice, name: "torch:slice" }
+      - { slug: torch-set-data, name: "torch:set-data" }
+      - { slug: torch-module, name: "torch:module" }
+      - { slug: torch-modulep, name: "torch:modulep" }
+      - { slug: torch-module-kind, name: "torch:module-kind" }
+      - { slug: torch-field, name: "torch:field" }
+      - { slug: torch-fields, name: "torch:fields" }
+      - { slug: torch-set-field, name: "torch:set-field" }
+      - { slug: torch-forward, name: "torch:forward" }
+      - { slug: torch-parameter, name: "torch:parameter" }
+      - { slug: torch-parameters, name: "torch:parameters" }
+      - { slug: torch-train, name: "torch:train" }
+      - { slug: torch-eval, name: "torch:eval" }
+      - { slug: torch-training-p, name: "torch:training-p" }
+      - { slug: torch-linear, name: "torch:linear" }
+      - { slug: torch-embedding, name: "torch:embedding" }
+      - { slug: torch-sequential, name: "torch:sequential" }
+      - { slug: torch-layer-norm, name: "torch:layer-norm" }
+      - { slug: torch-dropout, name: "torch:dropout" }
+      - { slug: torch-mse-loss, name: "torch:mse-loss" }
+      - { slug: torch-cross-entropy-loss, name: "torch:cross-entropy-loss" }
+      - { slug: torch-optimizer, name: "torch:optimizer" }
+      - { slug: torch-optimizerp, name: "torch:optimizerp" }
+      - { slug: torch-optimizer-kind, name: "torch:optimizer-kind" }
+      - { slug: torch-optimizer-params, name: "torch:optimizer-params" }
+      - { slug: torch-step, name: "torch:step" }
+      - { slug: torch-step-count, name: "torch:step-count" }
+      - { slug: torch-sgd, name: "torch:sgd" }
+      - { slug: torch-adam, name: "torch:adam" }
+      - { slug: torch-adamw, name: "torch:adamw" }
+      - { slug: torch-clip-grad-norm, name: "torch:clip-grad-norm" }
+      - { slug: torch-pad-sequence, name: "torch:pad-sequence" }
+      - { slug: torch-shuffled-batches, name: "torch:shuffled-batches" }
+      - { slug: torch-padding-mask, name: "torch:padding-mask" }
+      - { slug: torch-subsequent-mask, name: "torch:subsequent-mask" }
+  - title: "java パッケージ (JVM 専用)"
+    index_page: reference/functions/java.md
+    functions:
+      - { slug: java-new, name: "java:new" }
+      - { slug: java-call, name: "java:call" }
+      - { slug: java-static, name: "java:static" }
+      - { slug: java-field, name: "java:field" }
+      - { slug: java-proxy, name: "java:proxy" }
+      - { slug: java-subclass, name: "java:subclass" }
+      - { slug: java-reify, name: "java:reify" }
+      - { slug: java-handle, name: "java:handle" }
+      - { slug: java-view, name: "java:view" }
+      - { slug: java-exception-cause, name: "java:java-exception-cause" }
+  - title: "ffi パッケージ (C ライブラリ)"
+    index_page: reference/functions/ffi.md
+    functions:
+      - { slug: ffi-open, name: "ffi:open" }
+      - { slug: ffi-symbol, name: "ffi:symbol" }
+      - { slug: ffi-call, name: "ffi:call" }
+      - { slug: ffi-callback, name: "ffi:callback" }
+      - { slug: ffi-alloc, name: "ffi:alloc" }
+      - { slug: ffi-free, name: "ffi:free" }
+      - { slug: ffi-peek, name: "ffi:peek" }
+      - { slug: ffi-poke, name: "ffi:poke" }
+      - { slug: ffi-size, name: "ffi:size" }
+      - { slug: ffi-align, name: "ffi:align" }
+      - { slug: ffi-pointerp, name: "ffi:pointerp" }
+      - { slug: ffi-address, name: "ffi:address" }
+      - { slug: ffi-errno, name: "ffi:errno" }
+  - title: "objc パッケージ (Objective-C ランタイム)"
+    index_page: reference/functions/objc.md
+    functions:
+      - { slug: objc-ensure-objc-initialized, name: "objc:ensure-objc-initialized" }
+      - { slug: objc-invoke, name: "objc:invoke" }
+      - { slug: objc-invoke-bool, name: "objc:invoke-bool" }
+      - { slug: objc-invoke-into, name: "objc:invoke-into" }
+      - { slug: objc-can-invoke-p, name: "objc:can-invoke-p" }
+      - { slug: objc-alloc-init-object, name: "objc:alloc-init-object" }
+      - { slug: objc-description, name: "objc:description" }
+      - { slug: objc-trace-invoke, name: "objc:trace-invoke" }
+      - { slug: objc-untrace-invoke, name: "objc:untrace-invoke" }
+      - { slug: objc-coerce-to-objc-class, name: "objc:coerce-to-objc-class" }
+      - { slug: objc-objc-class-name, name: "objc:objc-class-name" }
+      - { slug: objc-coerce-to-selector, name: "objc:coerce-to-selector" }
+      - { slug: objc-selector-name, name: "objc:selector-name" }
+      - { slug: objc-objc-class-method-signature, name: "objc:objc-class-method-signature" }
+      - { slug: objc-retain, name: "objc:retain" }
+      - { slug: objc-release, name: "objc:release" }
+      - { slug: objc-autorelease, name: "objc:autorelease" }
+      - { slug: objc-retain-count, name: "objc:retain-count" }
+      - { slug: objc-make-autorelease-pool, name: "objc:make-autorelease-pool" }
+      - { slug: objc-ns-string-to-string, name: "objc:ns-string-to-string" }
+      - { slug: objc-string-to-ns-string, name: "objc:string-to-ns-string" }
+      - { slug: objc-objc-object-pointer, name: "objc:objc-object-pointer" }
+      - { slug: objc-objc-object-from-pointer, name: "objc:objc-object-from-pointer" }
+      - { slug: objc-objc-object-var-value, name: "objc:objc-object-var-value" }
+      - { slug: objc-objc-object-copied, name: "objc:objc-object-copied" }
+      - { slug: objc-objc-object-destroyed, name: "objc:objc-object-destroyed" }
+      - { slug: objc-make-objc-block, name: "objc:make-objc-block" }
+      - { slug: objc-free-objc-block, name: "objc:free-objc-block" }
+      - { slug: objc-call-objc-block, name: "objc:call-objc-block" }
+      - { slug: objc-objc-block-pointer, name: "objc:objc-block-pointer" }
+      - { slug: objc-objc-block-live-p, name: "objc:objc-block-live-p" }
+      - { slug: objc-invoke-with-error, name: "objc:invoke-with-error" }
+      - { slug: objc-objc-exception-name, name: "objc:objc-exception-name" }
+      - { slug: objc-objc-exception-reason, name: "objc:objc-exception-reason" }
+      - { slug: objc-objc-exception-object, name: "objc:objc-exception-object" }
+      - { slug: objc-ns-error-domain, name: "objc:ns-error-domain" }
+      - { slug: objc-ns-error-code, name: "objc:ns-error-code" }
+      - { slug: objc-ns-error-description, name: "objc:ns-error-description" }
+      - { slug: objc-ns-error-object, name: "objc:ns-error-object" }
+      - { slug: objc-on-main, name: "objc:on-main" }
+      - { slug: objc-data, name: "objc:data" }
+      - { slug: objc-bytes, name: "objc:bytes" }
+      - { slug: objc-objectp, name: "objc:objectp" }
+  - title: "cocoa パッケージ (Foundation の構造体)"
+    index_page: reference/functions/cocoa.md
+    functions:
+      - { slug: cocoa-set-ns-point-star, name: "cocoa:set-ns-point*" }
+      - { slug: cocoa-set-ns-size-star, name: "cocoa:set-ns-size*" }
+      - { slug: cocoa-set-ns-rect-star, name: "cocoa:set-ns-rect*" }
+      - { slug: cocoa-set-ns-range-star, name: "cocoa:set-ns-range*" }
+      - { slug: cocoa-add-observer, name: "cocoa:add-observer" }
+      - { slug: cocoa-remove-observer, name: "cocoa:remove-observer" }
+  - title: "fli パッケージ (外部オブジェクト)"
+    index_page: reference/functions/fli.md
+    functions:
+      - { slug: fli-allocate-foreign-object, name: "fli:allocate-foreign-object" }
+      - { slug: fli-free-foreign-object, name: "fli:free-foreign-object" }
+      - { slug: fli-dereference, name: "fli:dereference" }
+      - { slug: fli-foreign-slot-value, name: "fli:foreign-slot-value" }
+      - { slug: fli-size-of, name: "fli:size-of" }
+      - { slug: fli-pointerp, name: "fli:pointerp" }
+      - { slug: fli-pointer-address, name: "fli:pointer-address" }
+      - { slug: fli-make-pointer, name: "fli:make-pointer" }
+      - { slug: fli-null-pointer-p, name: "fli:null-pointer-p" }
+      - { slug: fli-pointer-eq, name: "fli:pointer-eq" }
+  - title: "appkit パッケージ (Cocoa ウィジェット)"
+    index_page: reference/functions/appkit.md
+    functions:
+      - { slug: appkit-window, name: "appkit:window" }
+      - { slug: appkit-label, name: "appkit:label" }
+      - { slug: appkit-button, name: "appkit:button" }
+      - { slug: appkit-panel, name: "appkit:panel" }
+      - { slug: appkit-color, name: "appkit:color" }
+      - { slug: appkit-font, name: "appkit:font" }
+      - { slug: appkit-set-text, name: "appkit:set-text" }
+      - { slug: appkit-set-color, name: "appkit:set-color" }
+      - { slug: appkit-text, name: "appkit:text" }
+      - { slug: appkit-on-click, name: "appkit:on-click" }
+      - { slug: appkit-click, name: "appkit:click" }
+      - { slug: appkit-timer, name: "appkit:timer" }
+      - { slug: appkit-menu, name: "appkit:menu" }
+      - { slug: appkit-status-item, name: "appkit:status-item" }
+      - { slug: appkit-quit, name: "appkit:quit" }
+      - { slug: appkit-close, name: "appkit:close" }
+      - { slug: appkit-visible-p, name: "appkit:visible-p" }
+      - { slug: appkit-wait, name: "appkit:wait" }
+  - title: "checkpoint パッケージ（テンソルのステージング）"
+    index_page: reference/functions/checkpoint.md
+    functions:
+      - { slug: checkpoint-make-tensor, name: "checkpoint:make-tensor" }
+      - { slug: checkpoint-stage-float-bits, name: "checkpoint:stage-float-bits" }
+      - { slug: checkpoint-stage-float32, name: "checkpoint:stage-float32" }
+      - { slug: checkpoint-skip-bytes, name: "checkpoint:skip-bytes" }
+  - title: "safetensors パッケージ（Hugging Face チェックポイント）"
+    index_page: reference/functions/safetensors.md
+    functions:
+      - { slug: safetensors-read, name: "safetensors:read" }
+      - { slug: safetensors-header, name: "safetensors:header" }
+      - { slug: safetensors-entries, name: "safetensors:entries" }
+  - title: "geom パッケージ (ソリッドモデリング)"
+    index_page: reference/functions/geom.md
+    functions:
+      - { slug: geom-vec3, name: "geom:vec3" }
+      - { slug: geom-axis-vector, name: "geom:axis-vector" }
+      - { slug: geom-axis-angle-matrix, name: "geom:axis-angle-matrix" }
+      - { slug: geom-rpy-matrix, name: "geom:rpy-matrix" }
+      - { slug: geom-make-transform, name: "geom:make-transform" }
+      - { slug: geom-translation-of, name: "geom:translation-of" }
+      - { slug: geom-rotation-of, name: "geom:rotation-of" }
+      - { slug: geom-compose, name: "geom:compose" }
+      - { slug: geom-invert, name: "geom:invert" }
+      - { slug: geom-transform-point, name: "geom:transform-point" }
+      - { slug: geom-inverse-transform-point, name: "geom:inverse-transform-point" }
+      - { slug: geom-make-node, name: "geom:make-node" }
+      - { slug: geom-local-transform, name: "geom:local-transform" }
+      - { slug: geom-world-transform, name: "geom:world-transform" }
+      - { slug: geom-world-translation, name: "geom:world-translation" }
+      - { slug: geom-world-rotation, name: "geom:world-rotation" }
+      - { slug: geom-parent-of, name: "geom:parent-of" }
+      - { slug: geom-children-of, name: "geom:children-of" }
+      - { slug: geom-attach, name: "geom:attach" }
+      - { slug: geom-detach, name: "geom:detach" }
+      - { slug: geom-translate, name: "geom:translate" }
+      - { slug: geom-rotate, name: "geom:rotate" }
+      - { slug: geom-place, name: "geom:place" }
+      - { slug: geom-reorient, name: "geom:reorient" }
+      - { slug: geom-box, name: "geom:box" }
+      - { slug: geom-cylinder, name: "geom:cylinder" }
+      - { slug: geom-cone, name: "geom:cone" }
+      - { slug: geom-sphere, name: "geom:sphere" }
+      - { slug: geom-torus, name: "geom:torus" }
+      - { slug: geom-extrusion, name: "geom:extrusion" }
+      - { slug: geom-revolution, name: "geom:revolution" }
+      - { slug: geom-polyhedron, name: "geom:polyhedron" }
+      - { slug: geom-read-model, name: "geom:read-model" }
+      - { slug: geom-read-obj, name: "geom:read-obj" }
+      - { slug: geom-read-stl, name: "geom:read-stl" }
+      - { slug: geom-read-ply, name: "geom:read-ply" }
+      - { slug: geom-read-gltf, name: "geom:read-gltf" }
+      - { slug: geom-arrow, name: "geom:arrow" }
+      - { slug: geom-triad, name: "geom:triad" }
+      - { slug: geom-vertices-of, name: "geom:vertices-of" }
+      - { slug: geom-facets-of, name: "geom:facets-of" }
+      - { slug: geom-color-of, name: "geom:color-of" }
+      - { slug: geom-label-of, name: "geom:label-of" }
+      - { slug: geom-user-data, name: "geom:user-data" }
+      - { slug: geom-scale, name: "geom:scale" }
+      - { slug: geom-nscale, name: "geom:nscale" }
+      - { slug: geom-mesh, name: "geom:mesh" }
+      - { slug: geom-wireframe, name: "geom:wireframe" }
+      - { slug: geom-mesh-triangle-count, name: "geom:mesh-triangle-count" }
+      - { slug: geom-bounds, name: "geom:bounds" }
+      - { slug: geom-lower-of, name: "geom:lower-of" }
+      - { slug: geom-upper-of, name: "geom:upper-of" }
+      - { slug: geom-bounds-center, name: "geom:bounds-center" }
+      - { slug: geom-bounds-extent, name: "geom:bounds-extent" }
+      - { slug: geom-bounds-union, name: "geom:bounds-union" }
+      - { slug: geom-volume, name: "geom:volume" }
+      - { slug: geom-centroid, name: "geom:centroid" }
+      - { slug: geom-surface-area, name: "geom:surface-area" }
+      - { slug: geom-union, name: "geom:union" }
+      - { slug: geom-difference, name: "geom:difference" }
+      - { slug: geom-intersection, name: "geom:intersection" }
+      - { slug: geom-section, name: "geom:section" }
+      - { slug: geom-history, name: "geom:history" }
+  - title: "tokenizer パッケージ (モデルのトークナイザ)"
+    index_page: reference/functions/tokenizer.md
+    functions:
+      - { slug: tokenizer-make-bpe, name: "tokenizer:make-bpe" }
+      - { slug: tokenizer-make-sentencepiece, name: "tokenizer:make-sentencepiece" }
+      - { slug: tokenizer-encode, name: "tokenizer:encode" }
+      - { slug: tokenizer-decode, name: "tokenizer:decode" }
+      - { slug: tokenizer-decode-bytes, name: "tokenizer:decode-bytes" }
+      - { slug: tokenizer-pre-tokenize, name: "tokenizer:pre-tokenize" }
+      - { slug: tokenizer-token-string, name: "tokenizer:token-string" }
+      - { slug: tokenizer-token-id, name: "tokenizer:token-id" }
+      - { slug: tokenizer-vocabulary-size, name: "tokenizer:vocabulary-size" }
+      - { slug: tokenizer-bos-id, name: "tokenizer:bos-id" }
+      - { slug: tokenizer-eos-id, name: "tokenizer:eos-id" }
+  - title: "gguf パッケージ (チェックポイントリーダ)"
+    index_page: reference/functions/gguf.md
+    functions:
+      - { slug: gguf-read, name: "gguf:read" }
+      - { slug: gguf-version, name: "gguf:version" }
+      - { slug: gguf-metadata, name: "gguf:metadata" }
+      - { slug: gguf-metadata-value, name: "gguf:metadata-value" }
+      - { slug: gguf-tensor-names, name: "gguf:tensor-names" }
+      - { slug: gguf-tensor-info, name: "gguf:tensor-info" }
+      - { slug: gguf-tensor, name: "gguf:tensor" }
+      - { slug: gguf-tokenizer-fields, name: "gguf:tokenizer-fields" }
+  - title: "metal パッケージ (GPU 描画)"
+    index_page: reference/functions/metal.md
+    functions:
+      - { slug: metal-attach, name: "metal:attach" }
+      - { slug: metal-offscreen, name: "metal:offscreen" }
+      - { slug: metal-pixels, name: "metal:pixels" }
+      - { slug: metal-device, name: "metal:device" }
+      - { slug: metal-layer, name: "metal:layer" }
+      - { slug: metal-queue, name: "metal:queue" }
+      - { slug: metal-library, name: "metal:library" }
+      - { slug: metal-pipeline, name: "metal:pipeline" }
+      - { slug: metal-depth-state, name: "metal:depth-state" }
+      - { slug: metal-floats, name: "metal:floats" }
+      - { slug: metal-buffer, name: "metal:buffer" }
+      - { slug: metal-shared-buffer, name: "metal:shared-buffer" }
+      - { slug: metal-upload, name: "metal:upload" }
+      - { slug: metal-uniform, name: "metal:uniform" }
+      - { slug: metal-frame, name: "metal:frame" }
+      - { slug: metal-run, name: "metal:run" }
+      - { slug: metal-resize, name: "metal:resize" }
+      - { slug: metal-set-clear-color, name: "metal:set-clear-color" }
+      - { slug: metal-constants, name: "metal:+triangle+ metal:+line+ metal:+point+ metal:+triangle-strip+ metal:+cull-none+ metal:+cull-front+ metal:+cull-back+ metal:+winding-clockwise+ metal:+winding-counter-clockwise+ metal:+compare-less+ metal:+compare-always+" }
+  - title: "scene パッケージ (3D ビューア)"
+    index_page: reference/functions/scene.md
+    functions:
+      - { slug: scene-viewer, name: "scene:viewer" }
+      - { slug: scene-offscreen, name: "scene:offscreen" }
+      - { slug: scene-snapshot, name: "scene:snapshot" }
+      - { slug: scene-add, name: "scene:add" }
+      - { slug: scene-drop, name: "scene:drop" }
+      - { slug: scene-clear, name: "scene:clear" }
+      - { slug: scene-contents, name: "scene:contents" }
+      - { slug: scene-fit, name: "scene:fit" }
+      - { slug: scene-camera, name: "scene:camera" }
+      - { slug: scene-grid, name: "scene:grid" }
+      - { slug: scene-grid-color, name: "scene:grid-color" }
+      - { slug: scene-background, name: "scene:background" }
+      - { slug: scene-shading, name: "scene:shading" }
+      - { slug: scene-axes, name: "scene:axes" }
+      - { slug: scene-ray, name: "scene:ray" }
+      - { slug: scene-on-click, name: "scene:on-click" }
+      - { slug: scene-refresh, name: "scene:refresh" }
+      - { slug: scene-animate, name: "scene:animate" }
+      - { slug: scene-wait, name: "scene:wait" }
+      - { slug: scene-window-of, name: "scene:window-of" }
+      - { slug: scene-context-of, name: "scene:context-of" }
+  - title: "asdf パッケージ (システム定義)"
+    index_page: reference/functions/asdf.md
+    functions:
+      - { slug: asdf-defsystem, name: "asdf:defsystem" }
+      - { slug: asdf-load-system, name: "asdf:load-system" }
+      - { slug: asdf-test-system, name: "asdf:test-system" }
+      - { slug: asdf-operate, name: "asdf:operate" }
+      - { slug: asdf-perform, name: "asdf:perform" }
+      - { slug: asdf-oos, name: "asdf:oos" }
+      - { slug: asdf-load-asd, name: "asdf:load-asd" }
+      - { slug: asdf-clear-system, name: "asdf:clear-system" }
+      - { slug: asdf-map-systems, name: "asdf:map-systems" }
+      - { slug: asdf-find-component, name: "asdf:find-component" }
+      - { slug: asdf-system-description, name: "asdf:system-description" }
+      - { slug: asdf-central-registry, name: "asdf:*central-registry*" }
+      - { slug: asdf-initialize-source-registry, name: "asdf:initialize-source-registry" }
+      - { slug: asdf-system-definition-search-functions, name: "asdf:*system-definition-search-functions*" }
+      - { slug: asdf-find-system, name: "asdf:find-system" }
+      - { slug: asdf-registered-systems, name: "asdf:registered-systems" }
+      - { slug: asdf-system-relative-pathname, name: "asdf:system-relative-pathname" }
+      - { slug: asdf-component-pathname, name: "asdf:component-pathname" }
+      - { slug: asdf-component-name, name: "asdf:component-name" }
+      - { slug: asdf-component-version, name: "asdf:component-version" }
+      - { slug: asdf-component-children, name: "asdf:component-children" }
+      - { slug: asdf-component-sideway-dependencies, name: "asdf:component-sideway-dependencies" }
+      - { slug: asdf-component-parent, name: "asdf:component-parent" }
+      - { slug: asdf-component-system, name: "asdf:component-system" }
+  - title: "uiop パッケージ (ASDF の移植性レイヤ)"
+    index_page: reference/uiop.md
+    functions:
+      - { slug: uiop-getenv, name: "uiop:getenv" }
+      - { slug: uiop-file-exists-p, name: "uiop:file-exists-p" }
+      - { slug: uiop-directory-exists-p, name: "uiop:directory-exists-p" }
+      - { slug: uiop-directory-files, name: "uiop:directory-files" }
+      - { slug: uiop-subdirectories, name: "uiop:subdirectories" }
+      - { slug: uiop-collect-sub-directories, name: "uiop:collect-sub*directories" }
+      - { slug: uiop-read-file-string, name: "uiop:read-file-string" }
+      - { slug: uiop-merge-pathnames-star, name: "uiop:merge-pathnames*" }
+      - { slug: uiop-subpathname, name: "uiop:subpathname" }
+      - { slug: uiop-subpathp, name: "uiop:subpathp" }
+      - { slug: uiop-parse-unix-namestring, name: "uiop:parse-unix-namestring" }
+      - { slug: uiop-unix-namestring, name: "uiop:unix-namestring" }
+      - { slug: uiop-ensure-pathname, name: "uiop:ensure-pathname" }
+      - { slug: uiop-enough-pathname, name: "uiop:enough-pathname" }
+      - { slug: uiop-pathname-directory-pathname, name: "uiop:pathname-directory-pathname" }
+      - { slug: uiop-pathname-parent-directory-pathname, name: "uiop:pathname-parent-directory-pathname" }
+      - { slug: uiop-split-name-type, name: "uiop:split-name-type" }
+      - { slug: uiop-absolute-pathname-p, name: "uiop:absolute-pathname-p" }
+      - { slug: uiop-relative-pathname-p, name: "uiop:relative-pathname-p" }
+      - { slug: uiop-directory-pathname-p, name: "uiop:directory-pathname-p" }
+      - { slug: uiop-file-pathname-p, name: "uiop:file-pathname-p" }
+      - { slug: uiop-native-namestring, name: "uiop:native-namestring" }
+      - { slug: uiop-add-package-local-nickname, name: "uiop:add-package-local-nickname" }
+      - { slug: uiop-emptyp, name: "uiop:emptyp" }
+      - { slug: uiop-first-char, name: "uiop:first-char" }
+      - { slug: uiop-last-char, name: "uiop:last-char" }
+      - { slug: uiop-split-string, name: "uiop:split-string" }
+      - { slug: uiop-symbol-call, name: "uiop:symbol-call" }
+      - { slug: uiop-print-condition-backtrace, name: "uiop/image:print-condition-backtrace" }
+  - title: "ql / ql-dist パッケージ (Quicklisp)"
+    index_page: reference/functions/ql-and-ql-dist.md
+    functions:
+      - { slug: ql-quickload, name: "ql:quickload" }
+      - { slug: ql-dist-install-dist, name: "ql-dist:install-dist" }
+      - { slug: ql-update-dist, name: "ql:update-dist" }
+  - title: "usocket パッケージ(usocket 互換ソケット)"
+    index_page: reference/functions/usocket.md
+    functions:
+      - { slug: usocket-socket-connect, name: "usocket:socket-connect" }
+      - { slug: usocket-socket-listen, name: "usocket:socket-listen" }
+      - { slug: usocket-socket-accept, name: "usocket:socket-accept" }
+      - { slug: usocket-socket-stream, name: "usocket:socket-stream usocket:socket-close" }
+      - { slug: usocket-accessors, name: "usocket:get-local-port usocket:get-local-address usocket:get-local-name usocket:get-peer-address usocket:get-peer-port usocket:get-peer-name" }
+      - { slug: usocket-host-names, name: "usocket:host-to-hostname usocket:get-host-by-name" }
+  - title: "コンディション"
+    index_page: reference/functions/cl.md
+    functions:
+      - { slug: simple-condition-format-control, name: "simple-condition-format-control" }
+      - { slug: type-error-datum, name: "type-error-datum" }
+      - { slug: type-error-expected-type, name: "type-error-expected-type" }
+      - { slug: cell-error-name, name: "cell-error-name" }
+      - { slug: unbound-slot-instance, name: "unbound-slot-instance" }
+      - { slug: arithmetic-error-operation, name: "arithmetic-error-operation" }
+      - { slug: arithmetic-error-operands, name: "arithmetic-error-operands" }
+      - { slug: print-not-readable-object, name: "print-not-readable-object" }
+      - { slug: file-error-pathname, name: "file-error-pathname" }
+      - { slug: print-object, name: "print-object" }
+      - { slug: describe, name: "describe" }
+      - { slug: describe-object, name: "describe-object" }
+      - { slug: simple-condition-format-arguments, name: "simple-condition-format-arguments" }
+      - { slug: find-restart, name: "find-restart" }
+      - { slug: invoke-restart, name: "invoke-restart" }
+      - { slug: compute-restarts, name: "compute-restarts" }
+      - { slug: restart-name, name: "restart-name" }
+      - { slug: muffle-warning, name: "muffle-warning" }
+      - { slug: invalid-method-error, name: "invalid-method-error" }
+      - { slug: method-combination-error, name: "method-combination-error" }
+      - { slug: abort, name: "abort" }
+      - { slug: continue, name: "continue" }
+      - { slug: use-value, name: "use-value" }
+      - { slug: store-value, name: "store-value" }

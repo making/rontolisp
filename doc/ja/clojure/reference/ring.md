@@ -1,0 +1,103 @@
+# Ring アダプター (ring.adapter.rontolisp)
+
+`ring.adapter.rontolisp/run-server` は、[Ring](https://github.com/ring-clojure/ring)
+のハンドラ（リクエストマップを受け取ってレスポンスマップを返す関数）を、ターゲット自身の
+HTTP 受信トランスポートで提供します。組み込みなので、`clojure.string` と同じように require
+します。Clack バックエンドの `:server :rontolisp`（[Clack](../../guides/clack.md)）が対応する
+すべてのトランスポートで、同じソースが動きます。両アダプターは同じトランスポートのコードを
+呼び出します。
+
+| ターゲット | ビルド | トランスポート |
+|---|---|---|
+| インタプリタ | `rontolisp app.clj` | プログラムがバインドするソケット（`:port`、`:host`） |
+| JVM | `-o App.class`、`-o app.jar` | 同じソケットサーバー |
+| Servlet war | `-o app.war` | ポートはコンテナが持ち、`run-server` はハンドラを登録して戻る |
+| ネイティブ実行ファイル | `--native -o app` | ソケットは実行ファイルのランナーが持つ（`:port`、`:host`）。`run-server` はプロセスが止められるまで配信する（[ネイティブ実行ファイルへのコンパイル](../../compiling/native.md#serving-http)） |
+| WASM コンポーネント | `-o app.wasm --component`、`wasmtime serve` で実行 | ソケットはホストが持ち、`run-server` はすぐ戻る |
+| WASM リアクター | `-o app.wasm --no-wasi` | ホストが `handle-request` エクスポートを呼ぶ（[Clack ガイド](../../guides/clack.md)のリアクタビルド） |
+
+素の Preview 1 モジュール（`-o app.wasm`）は接続を受け付けません。コンパイルはでき、
+実行時に `run-server` が `--component` が必要だというエラーを通知します。
+
+| Name | Example | Result |
+|---|---|---|
+| `ring.adapter.rontolisp/run-server` | `(run-server handler {:port 3000})` | ブロックする。`:join? false` ならサーバーを返す |
+
+```console
+$ cat app.clj
+(ns app (:require [ring.adapter.rontolisp :refer [run-server]]))
+
+(defn handler [{:keys [request-method uri]}]
+  {:status 200
+   :headers {"Content-Type" "text/plain"}
+   :body (str (name request-method) " " uri "\n")})
+
+(run-server handler {:port 3000 :host "127.0.0.1"})
+$ rontolisp app.clj &
+$ curl http://127.0.0.1:3000/hello
+get /hello
+```
+
+## リクエストマップ
+
+| キー | 値 |
+|---|---|
+| `:request-method` | 小文字キーワードのメソッド: `:get`、`:post` など |
+| `:uri` | 送られたままの（パーセントデコードしない）パス。クエリは含まない |
+| `:query-string` | `?` より後のテキスト。なければ `nil` |
+| `:headers` | 小文字のヘッダー名から値へのマップ。繰り返されたヘッダーは `", "` で連結 |
+| `:server-name`、`:server-port` | `Host` ヘッダーから。なければ待ち受けアドレス |
+| `:remote-addr` | 接続元アドレス。コンポーネントと、ホストが送らないリアクターでは `nil` |
+| `:scheme` | `:http` または `:https` |
+| `:protocol` | `"HTTP/1.1"` |
+| `:content-type`、`:content-length` | ヘッダーから。なければ `nil` |
+| `:body` | リクエストボディのオクテットの `java.io.InputStream`。ボディのないリクエストでは空 |
+
+`:body` はどのバックエンドでも `.read`、`slurp`（`:encoding` の文字セット。既定は UTF-8）、
+`clojure.java.io/reader`、`line-seq`、`clojure.java.io/copy`、`java.io.InputStreamReader`
+で読めます。バイナリのアップロードはオクテットどおりに読めます。ストリームはバッファ済みなので、
+読み取りがネットワークを待つことはありません。クラスは Ring の Jetty アダプターと同じ
+`org.eclipse.jetty.ee9.nested.HttpInput` で、Jetty と同じく閉じても読めるままです。`slurp`
+の後の読み取りはボディの終端を返します。レスポンスの `:body` として返すか、
+[`rontolisp.http-client`](http-client.md) のリクエストの `:body` として送ると、そのオクテットに
+なります。
+
+## レスポンスマップ
+
+| キー | 値 |
+|---|---|
+| `:status` | 整数。なければ 200 |
+| `:headers` | ヘッダー名（文字列かキーワード）から、文字列、または 1 要素ずつ別のヘッダー行で送る文字列の seq へのマップ |
+| `:body` | 文字列、各要素を `str` で送る seq、リーダーか入力ストリーム（終端まで読んで閉じる）、`java.io.File`（そのバイト列をそのまま送る）、または `nil` |
+
+ハンドラがマップ以外を返した場合と、それ以外の種類のボディを返した場合はエラーを通知し、
+トランスポートは 500 を返します。プログラムが読めるファイルを指さない `java.io.File` も
+同じです。WebAssembly の配信トランスポート（`wasmtime serve`、リアクター）にはファイル
+システムがないので、ファイルを配信できるのはインタープリター、JVM、war、ネイティブ実行ファイルです。プログラムが
+持ち運ぶ[リソース](clojure-java-io.md)の上のバイトストリームはどこでも配信できます。
+レスポンスを組み立てる関数（`file-response` と `resource-response` を含む）とパラメーターの
+ミドルウェアは、組み込みの [Ring ユーティリティ](ring-util.md)にあります。
+
+## Cloudflare Workers
+
+Worker は `handle-request` エクスポートを呼ぶので、リアクタービルドはソースを変えずに
+Worker としてデプロイできます。`--emit-worker-entry` が JavaScript 側をモジュールの隣に書き出します。
+グルーと、その上の Worker の `index.js` です(`index.js` は一度だけ書き出し、すでにあれば
+そのまま残します)。
+
+```console
+$ rontolisp app.clj -o src/worker.wasm --no-wasi --optimize=size --emit-worker-entry
+$ cat src/index.js
+...
+import module from "./worker.wasm";
+import { worker } from "./worker.js";
+
+export default worker(module);
+$ npx wrangler dev      # http://localhost:8787
+$ npx wrangler deploy
+```
+
+ここでは `:port` と `:host` は読まれません。`wrangler.jsonc` と、他のターゲットと同じ Ring の例を
+ビルドする `build.sh` を含む完全なプロジェクトは
+[`examples/cloudflare-workers/ring-hello-one-source/`](https://github.com/making/rontolisp/tree/develop/examples/cloudflare-workers/ring-hello-one-source)
+にあります。

@@ -1,0 +1,19 @@
+# satisfies?
+
+`(satisfies? Protocol x)`
+
+Whether the protocol reaches `x`: the tag's row, the row of a class `x` extends or
+implements (an extension to `Throwable` satisfies for an `ex-info`), or the `Object` row
+an extension installed, like the oracle. A record, deftype or `reify` whose body names the protocol
+satisfies it, with methods or none. The protocol is a literal name, like `defmethod`'s
+multimethod; as a value (`(def sat satisfies?)` applied, or higher-order) the
+run-time protocol value reads the same tables.
+
+```clojure
+(defprotocol P (m [x]))
+(extend-protocol P Object (m [_] :other))
+(println (satisfies? P 1))   ; true
+(println (satisfies? P nil)) ; false: nil never consults the Object row, like the oracle
+(extend nil P {:m (fn [_] :nil)})
+(println (satisfies? P nil) (m nil)) ; true :nil
+```

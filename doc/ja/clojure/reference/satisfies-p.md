@@ -1,0 +1,19 @@
+# satisfies?
+
+`(satisfies? Protocol x)`
+
+プロトコルが `x` に届くかどうかです。タグの行、`x` が継承または実装するクラスの行
+（`Throwable` への extend は `ex-info` について満たします）、または extend で入れた
+`Object` 行があれば真です（オラクル同様）。本体でそのプロトコルを挙げた record・deftype・`reify` は、
+メソッドの有無によらず満たします。プロトコルは `defmethod` の multimethod 同様
+リテラルの名前です。値として（`(def sat satisfies?)` を適用するなど）使う場合も、
+実行時のプロトコル値が同じ表を読みます。
+
+```clojure
+(defprotocol P (m [x]))
+(extend-protocol P Object (m [_] :other))
+(println (satisfies? P 1))   ; true
+(println (satisfies? P nil)) ; false: nil が Object 行を参照することは決してありません（オラクル同様）
+(extend nil P {:m (fn [_] :nil)})
+(println (satisfies? P nil) (m nil)) ; true :nil
+```

@@ -1,0 +1,229 @@
+package am.ik.gpu;
+
+/**
+ * The in-force thresholds and the width answer, for tests OUTSIDE this package. Nothing
+ * in the feature needs them -- {@code Gpu.worth} is the probe-free question a caller asks
+ * and {@code Gpu.multiply} is the real one, deliberately ({@code .kb/gpu.md}) -- but the
+ * interceptor's tests have to size their shapes off the threshold ACTUALLY in force, or
+ * they hard-code one backend's crossover and read as a kernel regression on the other.
+ *
+ * <p>
+ * A test-scope shim rather than a widening of {@link Gpu}: making these public would
+ * invite a caller to probe (a {@code dlopen}, a context, a kernel compile) on a path that
+ * may never touch the device, which is the one thing the {@code worth} / {@code multiply}
+ * split exists to prevent.
+ */
+public final class GpuThresholds {
+
+	private GpuThresholds() {
+	}
+
+	/** The minimum {@code batch * n * m * p} a product is accepted at here. */
+	public static long minWork() {
+		return Gpu.minWork();
+	}
+
+	/** The minimum element count an element-wise map is accepted at here. */
+	public static long mapMinElements() {
+		return Gpu.mapMinElements();
+	}
+
+	/** The minimum OUTPUT element count a broadcast or a gather is accepted at here. */
+	public static long stridedMinElements() {
+		return Gpu.stridedMinElements();
+	}
+
+	/**
+	 * The minimum INPUT element count an axis fold is accepted at here, or
+	 * {@link Long#MAX_VALUE} on a backend that is not a member of that tier at all.
+	 * @return the fold threshold in force
+	 */
+	public static long foldMinElements() {
+		return Gpu.foldMinElements();
+	}
+
+	/**
+	 * The minimum element count a fused row member (the softmax, log-softmax, GELU and
+	 * layer-norm pairs) is offered at here: the fold threshold on CUDA, the map threshold
+	 * on Metal, whose fold threshold is {@link Long#MAX_VALUE}.
+	 * @return the fused threshold in force
+	 */
+	public static long fusedMinElements() {
+		return Gpu.fusedMinElements();
+	}
+
+	public static long rngMinElements() {
+		return Gpu.rngMinElements();
+	}
+
+	/**
+	 * The minimum {@code rows * cols} a matrix-by-vector product is offered at here, or
+	 * {@link Long#MAX_VALUE} on a backend that keeps no resident copies and so is not a
+	 * member of it.
+	 * @return the GEMV threshold in force
+	 */
+	public static long matvecMinElements() {
+		return Gpu.matvecMinElements();
+	}
+
+	/**
+	 * Whether a member gated by {@code threshold} is offered here for its SIZE at
+	 * {@code elements} -- {@code false} at EVERY size when the backend answers
+	 * {@link Long#MAX_VALUE}, which is its sentinel for "not a member of that tier at
+	 * all" (Metal's axis fold and generator fill).
+	 *
+	 * <p>
+	 * This is the question a test has to ask before believing that the mechanism it goes
+	 * on to assert on ran at all, and it is a question because the sentinel is a NUMBER:
+	 * arithmetic over it does not produce an impossible shape, it produces a shape BELOW
+	 * every threshold. {@code 2 * foldMinElements()} wraps to {@code -2} and
+	 * {@code (foldMinElements() + 383) / 384} to a negative, and a {@code Math.max}
+	 * against the caller's own floor then quietly hands back that floor. Both spellings
+	 * were in this suite, and each made a whole test defun-against-defun on the backend
+	 * that answers the sentinel ({@code .kb/gpu.md}, "Tests").
+	 * @param threshold one of the thresholds above
+	 * @param elements the count the test built
+	 * @return {@code true} when a member gated by {@code threshold} is offered at that
+	 * count here
+	 */
+	public static boolean acceptedForSize(long threshold, long elements) {
+		return threshold != Long.MAX_VALUE && elements >= threshold;
+	}
+
+	/**
+	 * Residency lookups answered from the cache since the process started, or {@code -1}
+	 * with no device -- the one observable that says a call over a resident operand
+	 * REALLY ran on the device, which no printed value can, since the accepted member is
+	 * written to land on the oracle's own bits. Both backends keep a cache.
+	 * @return the hit count, or -1
+	 */
+	public static long residencyHits() {
+		DeviceResidency residency = Gpu.residency();
+		return residency != null ? residency.hits() : -1;
+	}
+
+	/**
+	 * Residency lookups that missed since the process started, or {@code -1} with no
+	 * device -- with {@link #residencyHits()}, what says whether a call uploaded.
+	 * @return the miss count, or -1
+	 */
+	public static long residencyMisses() {
+		DeviceResidency residency = Gpu.residency();
+		return residency != null ? residency.misses() : -1;
+	}
+
+	/**
+	 * How many resident copies are DIRTY right now -- results left on the device that the
+	 * host has not read ({@code Gpu.lazyResults}) -- or {@code -1} with no device. The
+	 * one observable that says a result really stayed on the device.
+	 * @return the dirty count, or -1
+	 */
+	public static int dirtyCount() {
+		DeviceResidency residency = Gpu.residency();
+		return residency != null ? residency.dirtyCount() : -1;
+	}
+
+	/**
+	 * How many result STUBS hold a backing right now -- lazy results the host has read,
+	 * or written, at least once -- or {@code -1} with no device. With
+	 * {@link #dirtyCount}, the observable that says a lazy result allocated no host array
+	 * until it was read.
+	 * @return the backing count, or -1
+	 */
+	public static int backingCount() {
+		DeviceResidency residency = Gpu.residency();
+		return residency != null ? residency.backingCount() : -1;
+	}
+
+	/**
+	 * Whether {@code host}'s OWN entry is dirty right now, or {@code false} with no
+	 * device. Unlike {@link #dirtyCount()}, this asks about ONE result rather than the
+	 * process-wide tally, which a test sharing a fork with others should prefer: the
+	 * tally also counts whatever an earlier test's arrays left in the cache until the
+	 * collector reaches them (`.kb/gpu.md`, "Tests").
+	 * @param host the result's own storage (see {@code LispFloatArray#storage()})
+	 * @return {@code true} when {@code host}'s device copy has bytes the host does not
+	 */
+	public static boolean isDirty(Object host) {
+		DeviceResidency residency = Gpu.residency();
+		return residency != null && residency.dirty(host);
+	}
+
+	/**
+	 * Whether {@code host} (a stub) holds a backing right now, or {@code false} with no
+	 * device -- the per-handle counterpart of {@link #backingCount()}, for the same
+	 * reason {@link #isDirty(Object)} exists next to {@link #dirtyCount()}.
+	 * @param host the stub
+	 * @return {@code true} when a backing array has been allocated for it
+	 */
+	public static boolean isBacked(Object host) {
+		DeviceResidency residency = Gpu.residency();
+		return residency != null && residency.backed(host);
+	}
+
+	/**
+	 * Whether lazy results are in force on the device the interceptors found -- the mode
+	 * they switch on where the backend says it pays
+	 * ({@code Gpu.lazyResultsIfWorthwhile}): CUDA yes, Metal no, measured. The tests that
+	 * assert a result STAYED assume it.
+	 * @return {@code true} while results stay on the device until read
+	 */
+	public static boolean lazyResultsOn() {
+		return Gpu.lazyResultsOn();
+	}
+
+	/**
+	 * Whether lazy results PAY on the device found -- what decides whether an
+	 * interceptor, in this process or in a compiled class's own copy of the library,
+	 * switches them on ({@code GpuDevice.lazyResultsPay}): CUDA yes, and Metal since its
+	 * command buffers became asynchronous.
+	 * @return {@code true} when an interceptor over this device runs with lazy results
+	 */
+	public static boolean lazyResultsPay() {
+		GpuDevice device = Gpu.device();
+		return device != null && device.lazyResultsPay();
+	}
+
+	/**
+	 * Whether a {@code #d} operand can reach the device at all. {@code false} on Metal,
+	 * where MSL has no {@code double}.
+	 * @return {@code true} when the double half of the library is live here
+	 */
+	public static boolean supportsDouble() {
+		GpuDevice device = Gpu.device();
+		return device != null && device.supportsDouble();
+	}
+
+	/**
+	 * Whether a {@code #bf16} matrix can be the weight of a device GEMV here:
+	 * {@code true} on CUDA, {@code false} on Metal.
+	 * @return {@code true} when the bfloat16 GEMV is live here
+	 */
+	public static boolean supportsBfloat16() {
+		GpuDevice device = Gpu.device();
+		return device != null && device.supportsBfloat16();
+	}
+
+	/**
+	 * Whether a Q8_0 quantized matrix can be the weight of a device GEMV here:
+	 * {@code true} on CUDA, {@code false} on Metal.
+	 * @return {@code true} when the Q8_0 GEMV is live here
+	 */
+	public static boolean supportsQuantized() {
+		GpuDevice device = Gpu.device();
+		return device != null && device.supportsQuantized();
+	}
+
+	/**
+	 * {@link Gpu#quantizeActivationQ8}, for the interceptor suites' oracle of what the
+	 * device was handed.
+	 * @param x the activation
+	 * @param offsetX its first element
+	 * @param cols its length
+	 * @return the packed activation
+	 */
+	public static byte[] quantizeActivationQ8(float[] x, int offsetX, int cols) {
+		return Gpu.quantizeActivationQ8(x, offsetX, cols);
+	}
+
+}

@@ -1,0 +1,572 @@
+;;;; rontolisp-intro.lisp -- an introduction to rontolisp for a programmer who has never
+;;;; seen it: what it is, how to run it, the language, the backends, the libraries.
+;;;;
+;;;; Every fact comes from the repository (README.md, doc/ja, .kb, examples/,
+;;;; bench-report/). The runnable blocks are small, so they finish at once on the
+;;;; hosted browser runtime. Rendered by decks/build.sh.
+
+(deck :title "rontolisp 入門"
+      :author "rontolisp"
+      :date "2026-10-24"
+      :url "https://github.com/making/rontolisp"
+      :description "Java で実装した Common Lisp 処理系 rontolisp の入門。インストールから Common Lisp・Scheme・Clojure の各言語、インタプリタ・JVM・WASM・ネイティブの各バックエンド、ライブラリまでを紹介する"
+      :page-url "https://making.github.io/rontolisp/decks/rontolisp-intro/rontolisp-intro.html"
+      :page-image "rontolisp-intro.png"
+      :page-image-font ("fonts/BIZUDPGothic-Regular.ttf" "fonts/BIZUDPGothic-Bold.ttf")
+      :theme (theme :base :light :code :dark)
+      :aspect :16x9
+      :runtime :hosted
+      :kicker :section
+      :agenda "話の流れ"
+      :progress t
+      :page-numbers t
+      :footer "github.com/making/rontolisp")
+
+;;; --- what rontolisp is ------------------------------------------------------------
+
+(section "rontolisp とは")
+
+(slide :title "Java で実装した Common Lisp 処理系"
+  (p "一つのソースを、三つの実行モードで動かす。")
+  (ul (li (b "インタプリタ") " REPL とファイル実行。ツリーウォークで評価する")
+      (li (b "JVM コンパイラ") " " (tt ".class") " や " (tt ".jar") " を出力する")
+      (li (b "WASM コンパイラ") " wasm-GC を使った " (tt ".wasm") " を出力する"))
+  (p "コアライブラリは外部依存を持たない。JVM と WASM のバイトコードは、ASM などのライブラリを使わずに生成する。"))
+
+(slide :title "まず動かしてみる"
+  (p "このデッキのコードは、ブラウザ上の rontolisp で実行できる。クリックして編集し、Run で実行する。")
+  (say "Run で 3628800 が出る" :at "(fact 10)" :step t
+    (code :lang "lisp" "
+      (defun fact (n)
+        (if (= n 0) 1 (* n (fact (- n 1)))))
+      (print (fact 10))"))
+  (notes "Run を押す。続けて (fact 30) に書き換えて実行し、多倍長整数になることを見せる。"))
+
+(slide :title "Common Lisp、Scheme、Clojure を読む"
+  (column
+    (p (b "Common Lisp"))
+    (code :lang "lisp" "
+      ;; sq.lisp
+      (defun sq (x) (* x x))
+      (print (sq 12))"))
+  (column
+    (p (b "Scheme"))
+    (code :lang "scheme" "
+      ;; sq.scm
+      (define (sq x) (* x x))
+      (display (sq 12))"))
+  (column
+    (p (b "Clojure"))
+    (code :lang "clojure" "
+      ;; sq.clj
+      (defn sq [x] (* x x))
+      (println (sq 12))"))
+  (p "どの言語のソースも同じコアフォームに変換するので、インタプリタ、JVM、WASM、ネイティブのどれでも動く。"))
+
+;;; --- getting started --------------------------------------------------------------
+
+(section "インストールと最初の実行")
+
+(slide :title "インストール"
+  (p "リリースページのビルド済みバイナリを " (tt "PATH") " に置く。JVM は要らない。")
+  (code :lang "console" "
+    $ URL=https://github.com/making/rontolisp/releases/download/0.1.0-SNAPSHOT
+    $ wget $URL/rontolisp-darwin-arm64
+    $ chmod +x rontolisp-darwin-arm64
+    $ sudo mv rontolisp-darwin-arm64 /usr/local/bin/rontolisp
+    $ rontolisp --version")
+  (ul "Linux の x86-64 と ARM64 向けもある"
+      "Java 25 以降があれば、実行可能 JAR でも動く"))
+
+(slide :title "REPL"
+  (p "引数なしで起動すると REPL になる。定義は入力をまたいで残る。")
+  (code :lang "console" "
+    $ rontolisp
+    CL-USER> (+ 1 2)
+    3
+    CL-USER> (defun fact (n) (if (= n 0) 1 (* n (fact (- n 1)))))
+    FACT
+    CL-USER> (fact 10)
+    3628800
+    CL-USER> (quit)")
+  (p "プロンプトには現在のパッケージ名が出る。括弧が閉じるまで複数行を読む。"))
+
+(slide :title "ファイルを実行する"
+  (column
+    (code :lang "lisp" :run nil "
+      ;; program.lisp
+      (defun square (x) (* x x))
+      (print (square 5))
+      (print (square 12))"))
+  (column
+    (code :lang "console" "
+      $ rontolisp program.lisp
+
+      25
+      144
+      $ rontolisp -e \"(print (+ 1 2))\"
+
+      3")
+    (ul "REPL と違い、評価した値を表示しない"
+        "エラーで終わると、終了コードが 0 以外になる")))
+
+(slide :title "コマンドの一覧"
+  (table :header ("コマンド" "動作")
+    ((tt "rontolisp") "REPL")
+    ((tt "rontolisp app.lisp") "ファイルをインタプリタで実行")
+    ((tt "rontolisp -e \"(...)\"") "引数のプログラムを実行")
+    ((tt "rontolisp app.lisp -o OUT") (cell "コンパイル。" (tt "OUT") " の拡張子で出力を選ぶ"))
+    ((tt "rontolisp format src/") "ソースを正規のレイアウトにインデントし直す")
+    ((tt "rontolisp test tests/main.lisp") "rove のテストを実行し、結果を終了コードで返す")))
+
+;;; --- the language -----------------------------------------------------------------
+
+(section "言語")
+
+(slide :title "Common Lisp の主な機能"
+  (table :header ("機能" "主なフォーム")
+    ("マクロ" (cell (tt "defmacro") "、バッククォート、" (tt "macroexpand")))
+    ("CLOS" (cell (tt "defclass") "、" (tt "defgeneric") "、" (tt "defmethod")))
+    ("コンディションとリスタート" (cell (tt "handler-case") "、" (tt "restart-case")))
+    ("多値" (cell (tt "values") "、" (tt "multiple-value-bind")))
+    ("繰り返し" (cell (tt "loop") "、" (tt "dolist") "、" (tt "dotimes")))
+    ("数値" "多倍長整数、有理数、浮動小数点数")))
+
+(slide :title "ANSI Common Lisp テストスイート"
+  (p "19,769 件のテストのうち " (accent (b "16,529 件")) " が通過している (83.6%)。")
+  (ul "計測の対象はインタプリタ"
+      "CI が毎日スイート全体を実行し、通過数が変わるたびに結果を記録する"
+      "対応する機能を増やし、通過数を引き続き上げていく")
+  (source "ansi-test/results/interpreter.md (2026-10-23 時点、スイートのリビジョン ca06bd9)"))
+
+(slide :title "プログラムもリスト"
+  (p "コードは S 式で書く。S 式はリストなので、マクロはリストを組み立ててコードを作る。")
+  (cells '(progn (princ "hi ") (princ "hi ")))
+  (code :lang "lisp" "
+    (defmacro twice (&body body) `(progn ,@body ,@body))
+    (print (macroexpand-1 '(twice (princ \"hi \"))))
+    (twice (princ \"hi \"))"))
+
+(slide :title "CLOS とコンディション"
+  (code :lang "lisp" "
+    (defclass circle () ((r :initarg :r :reader r)))
+    (defclass square () ((side :initarg :side :reader side)))
+    (defgeneric area (shape))
+    (defmethod area ((c circle)) (* 3 (r c) (r c)))
+    (defmethod area ((s square)) (* (side s) (side s)))
+    (print (mapcar #'area (list (make-instance 'circle :r 2)
+                                (make-instance 'square :side 3))))
+    (handler-case (/ 1 0)
+      (division-by-zero () :infinity))"))
+
+(slide :title "Scheme のフロントエンド"
+  (p "Scheme のコードでは、" (tt "(scheme base)") " などの R7RS-small のライブラリを " (tt "import") " して使う。")
+  (code :lang "scheme" "
+    (import (scheme base) (scheme write))
+    (define (count-up n)
+      (let loop ((i 0) (acc '()))
+        (if (= i n)
+            (reverse acc)
+            (loop (+ i 1) (cons (* i i) acc)))))
+    (display (count-up 5))"))
+
+(slide :title "Clojure のフロントエンド"
+  (p "Clojure のコードでは、" (tt "->>") " などのスレッディングマクロや、シーケンスを扱うコア関数を使える。")
+  (code :lang "clojure" "
+    (defn fact [n]
+      (if (< n 2) 1 (* n (fact (- n 1)))))
+    (println (fact 20))
+    (println (->> (range 10) (filter odd?) (map #(* % %)) (reduce +)))
+    (println (frequencies \"mississippi\"))"))
+
+(slide :title "言語はファイルごとに決まる"
+  (table :header ("拡張子" "言語")
+    ((tt ".lisp .asd") "Common Lisp")
+    ((tt ".scm") "Scheme")
+    ((tt ".clj .cljc") "Clojure")
+    ("それ以外" (cell (tt "--source-language") " で指定する")))
+  (p "一つのプログラムに、複数の言語のファイルを混ぜられる。"))
+
+;;; --- backends ---------------------------------------------------------------------
+
+(section "バックエンド")
+
+(slide :title "一つのパイプラインから三つの実行モードへ"
+  (flow "ソース (CL、Scheme、Clojure)" "コアフォームに変換" "マクロ展開"
+        ("インタプリタ、" (tt ".class") "、" (tt ".wasm")))
+  (ul "言語の違いは最初の変換で吸収する"
+      "バックエンドが受け取るのは、どの言語でも同じコアフォーム"))
+
+(slide :title "出力の拡張子でバックエンドを選ぶ"
+  (code :lang "console" "
+    $ rontolisp hello.lisp                                # インタプリタ
+    $ rontolisp hello.lisp -o Hello.class && java Hello   # JVM
+    $ rontolisp hello.lisp -o hello.jar && java -jar hello.jar
+    $ rontolisp hello.lisp -o hello.wasm && wasmtime run hello.wasm
+    $ rontolisp hello.lisp -o hello-c.wasm --component && wasmtime run hello-c.wasm
+    $ rontolisp hello.lisp --native -o hello && ./hello   # ネイティブ")
+  (p "どの形でも " (tt "(print (+ 1 2))") " は 3 を出力する。"))
+
+(slide :title "JVM と WASM"
+  (column
+    (p (b "JVM"))
+    (ul (li (tt ".jar") " は " (tt "java -jar") " で動く")
+        "Java のライブラリにもできる"))
+  (column
+    (p (b "WASM"))
+    (ul (li "既定は WASI Preview 1")
+        (li (tt "--component") " で WASI 0.3")
+        (li (tt "--no-wasi") " でインポートなし")
+        (li (tt "--no-gc") " で wasm-GC のないエンジン向け"))))
+
+(slide :title "ネイティブ実行ファイル"
+  (p (tt "--native") " は、WASM 出力を wasmtime でマシンコードにプリコンパイルし、小さなランナーの後ろに付ける。")
+  (ul "実行に wasmtime も JVM も要らない"
+      "起動は約 10 ms"
+      (li (tt "rontolisp:fetch") "、Clack や Ring の Web アプリ、TCP ソケットも動く。通信はランナーが行う")
+      (li (tt "--native-target") " で Linux の x86_64 と aarch64、macOS の aarch64 向けを作れる"))
+  (source "doc/ja/compiling/native.md"))
+
+(slide :title "インタプリタとコンパイル結果の速さ"
+  (lead "fib ベンチマークの実行時間 (短いほど速い)")
+  (say "ループ中心のコードは、コンパイルで 20〜200 倍速くなる" :at "インタプリタ"
+    (bars :unit " ms" ("インタプリタ" "5,442") ("JVM" 60) ("WASM" 218)))
+  (source "bench-report/results/benchmarks.md (2026-09-04, Linux x86_64, AMD EPYC 9V74)"))
+
+(slide :title "インタプリタは試行錯誤に使う"
+  (ul "すぐに起動し、コンパイル後と同じ意味で実行する"
+      "I/O が中心のスクリプトなら、速さの差は表に出にくい"
+      "CPU 負荷の高い処理は、コンパイルしてから動かす")
+  (code :lang "console" "
+    $ rontolisp program.lisp -o program.jar
+    $ java -jar program.jar"))
+
+(slide :title "ブラウザで動かす"
+  (ul (li (b "プレイグラウンド") " rontolisp 自体を GraalVM の Web Image で WebAssembly にしたもの。"
+          "REPL と、" (tt ".class") " や " (tt ".wasm") " へのコンパイルがブラウザの中で完結する")
+      (li (b "ドキュメント") " リファレンスの Lisp の例は Run で実行できる")
+      (li (b "このデッキ") " 同じブラウザ版がコードを実行している")
+      (li (b "自分のプログラム") " WASM にコンパイルしてページから呼ぶ ("
+          (tt "examples/browser/") " のマインスイーパーや WebGL)")))
+
+;;; --- interop and libraries --------------------------------------------------------
+
+(section "連携とライブラリ")
+
+(slide :title "Java 連携"
+  (p "rontolisp 独自の " (tt "java") " パッケージで、任意の Java API をリフレクション経由で呼べる。")
+  (code :lang "lisp" :run nil "
+    (java:call (java:new \"java.lang.StringBuilder\" \"ab\") \"length\")  ; => 2
+    (java:static \"java.lang.Math\" \"max\" 3 7)                        ; => 7
+    (java:field \"java.lang.Integer\" \"MAX_VALUE\")                    ; => 2147483647")
+  (p "JVM 上のインタプリタと、コンパイルした " (tt ".class") " で使える。"))
+
+(slide :title "ASDF で複数ファイルのプロジェクトを読む"
+  (column
+    (code :lang "lisp" :run nil "
+      ;; my-app.asd
+      (defsystem :my-app
+        :depends-on (:base)
+        :serial t
+        :components ((:file \"package\")
+                     (:file \"main\")))"))
+  (column
+    (ul (li (link "https://asdf.common-lisp.dev/" "ASDF") " の " (tt "defsystem") " に合わせた組み込み実装")
+        (li (tt ".asd") " はプレーンなデータとして解析する")
+        "依存するシステムから順に読み込む"
+        (li (tt "--system-path") " で探す場所を足す")
+        "インタプリタ、JVM、WASM のどれでも同じように動く")))
+
+(slide :title "実在のライブラリをそのまま読む"
+  (code :lang "console" "
+    $ rontolisp
+    CL-USER> (ql:quickload \"split-sequence\")
+    (split-sequence)
+    CL-USER> (split-sequence:split-sequence #\\, \"a,b,c\")
+    (\"a\" \"b\" \"c\")")
+  (ul (li (tt "ql:quickload") " は " (link "https://www.quicklisp.org/" "Quicklisp") " の配布物から取得し、" (tt "~/.rontolisp/quicklisp/") " にキャッシュする")
+      (li (link "https://github.com/sharplispers/split-sequence" "split-sequence") "、" (link "https://gitlab.common-lisp.net/alexandria/alexandria" "alexandria") "、" (link "https://github.com/edicl/cl-ppcre" "cl-ppcre") "、" (link "https://edicl.github.io/cl-who/" "cl-who") "、"
+          (link "https://github.com/Zulu-Inuoe/jzon" "jzon") "、" (link "https://github.com/froydnj/chipz" "chipz") " などが、上流のソースのままインタプリタ、JVM、WASM で動く")))
+
+(slide :title "既存のライブラリと API"
+  (table :header ("パッケージ" "用途" "rontolisp での実装")
+         :caption "上流のままは、元のライブラリのソースをそのまま読む"
+    ((link "https://asdf.common-lisp.dev/uiop.html" (tt "uiop")) "環境変数、ファイル、文字列" "UIOP の API を実装")
+    ((link "https://github.com/fukamachi/rove" (tt "rove")) "テスト" "上流のまま")
+    ((link "https://github.com/fukamachi/clack" (tt "clack")) "Web アプリケーション" "上流のまま")
+    ((link "https://cffi.common-lisp.dev/" (tt "cffi")) "C ライブラリの呼び出し" "上流のまま")
+    ((link "https://www.lispworks.com/documentation/lw81/objc/objc.htm" (tt "objc")) "Objective-C の呼び出し" "LispWorks の API を実装")))
+
+(slide :title "rontolisp 独自のパッケージ"
+  (table :header ("名前" "用途")
+         :caption "次のページから、二つの表のパッケージを一つずつ紹介する"
+    ((tt "java") "Java API の呼び出し")
+    ((tt "rontolisp:fetch") "HTTP リクエスト")
+    ((tt "rontolisp test") "rove のテストを実行するコマンド")
+    ((cell (tt "linalg") "、" (tt "vec") "、" (tt "torch")) "行列演算とニューラルネットワーク")
+    ((cell (tt "appkit") "、" (tt "metal")) "macOS の GUI と GPU 描画")))
+
+(slide :title "uiop で環境やファイルを扱う"
+  (p (link "https://asdf.common-lisp.dev/uiop.html" (tt "uiop")) " は、環境変数、パス名、ファイル、文字列の操作を、多くのライブラリが使う共通の名前で提供する。rontolisp はその API に合わせて組み込みで実装している。")
+  (code :lang "lisp" "
+    (print (uiop:split-string \"red,green,blue\" :separator \",\"))
+    (print (uiop:strcat \"ronto\" \"lisp\"))
+    (print (uiop:subpathname \"/usr/local/\" \"bin/rontolisp\"))
+    (print (uiop:emptyp \"\"))"))
+
+(slide :title "rove でテストを書く"
+  (p "上流の " (link "https://github.com/fukamachi/rove" "rove") " で書いたテストを、rontolisp 独自の " (tt "rontolisp test") " が実行し、結果を終了コードで返す。")
+  (column
+    (code :lang "lisp" :run nil "
+      ;; tests/main.lisp
+      (defpackage #:my-app/tests
+        (:use #:cl #:rove))
+      (in-package #:my-app/tests)
+
+      (defun add (a b) (+ a b))
+
+      (deftest add-test
+        (ok (= (add 1 2) 3))
+        (ng (= (add 1 2) 4)))"))
+  (column
+    (code :lang "console" "
+      $ rontolisp test tests/main.lisp
+      add-test
+        ✓ Expect (= (ADD 1 2) 3) to be true.
+        ✓ Expect (= (ADD 1 2) 4) to be false.
+      Summary:
+        All 1 test passed.
+      $ echo $?
+      0")))
+
+(slide :title "fetch で HTTP リクエストを送る"
+  (p "rontolisp 独自の " (tt "rontolisp:fetch") " は JavaScript の " (tt "fetch") " にならった API で、" (tt "rontolisp:await") " で応答を待つ。")
+  (code :lang "lisp" "
+    (let* ((res (rontolisp:await
+                 (rontolisp:fetch \"https://httpbin.ik.am/get?lang=lisp\")))
+           (body (rontolisp:await (rontolisp:read-all (getf res :body))))
+           (json (rontolisp:json-parse body)))
+      (print (getf res :status))
+      (print (gethash \"lang\" (gethash \"args\" json))))"))
+
+(slide :title "Clack で Web アプリを書く"
+  (p "上流の " (link "https://github.com/fukamachi/clack" "Clack") " をそのまま読み込む。アプリケーションは、リクエストの plist を受け取ってレスポンスのリストを返す関数。")
+  (code :lang "lisp" :run nil "
+    (ql:quickload \"clack\")  ; app.lisp
+    (clack:clackup
+     (lambda (env)
+       (list 200 '(:content-type \"text/plain\")
+             (list (format nil \"Hello, ~A~%\" (getf env :path-info)))))
+     :server :rontolisp :port 5000 :use-thread nil)")
+  (code :lang "console" "
+    $ rontolisp app.lisp &
+    $ curl http://127.0.0.1:5000/rontolisp
+    Hello, /rontolisp"))
+
+(slide :title "Web アプリを一つのソースで各環境へ"
+  (p (link "https://github.com/fukamachi/clack" "Clack") " のアプリケーションを、ソースを変えずにビルドだけで各環境に合わせる。")
+  (table :header ("ビルド" "動かす場所")
+    ((tt "rontolisp app.lisp") "インタプリタ")
+    ((tt "-o app.jar") "JVM、Google App Engine")
+    ((tt "-o app.war") "Servlet コンテナ")
+    ((tt "--native -o app") "ネイティブ実行ファイル")
+    ((tt "-o app.wasm --component") (cell (tt "wasmtime serve") " など"))
+    ((tt "-o worker.wasm --no-wasi") "Cloudflare Workers"))
+  (source "examples/net/httpbin-clack.lisp、examples/cloudflare-workers/、examples/gae/"))
+
+(slide :title "linalg と vec で行列を計算する"
+  (p "どちらも rontolisp 独自のパッケージで、" (tt "linalg") " は numpy 風の行列演算を、" (tt "vec") " は浮動小数点ベクトルの演算カーネルを提供する。")
+  (code :lang "lisp" "
+    (print (linalg:matmul #2A((1 2) (3 4)) #2A((5 6) (7 8))))
+    (print (linalg:solve #2A((4 0) (2 4)) #(8 8)))
+    (print (linalg:sum #2A((1 2 3) (4 5 6)) :axis 0))
+    (print (vec:matvec #d((1.0 2.0) (3.0 4.0)) #d(5.0 6.0)))
+    (print (vec:dot #d(1.0 2.0 3.0) #d(4.0 5.0 6.0)))"))
+
+(slide :title "行列演算を SIMD、BLAS、GPU で速くする"
+  (p (tt "linalg") " と " (tt "vec") " の行列演算を、フラグでハードウェアに振り向ける。")
+  (table :header ("フラグ" "計算する場所")
+    ((tt "--simd") "CPU のベクトル命令")
+    ((tt "--blas") "OS の BLAS (Accelerate、OpenBLAS など)")
+    ((tt "--gpu") "NVIDIA の GPU (CUDA)、Mac の GPU (Metal)"))
+  (ul "BLAS や GPU のないマシンでも、同じプログラムが同じ結果を出す"
+      (li "128x128 の行列積 1 回が、インタプリタの 1,848 ms から " (tt "--simd") " で 0.62 ms、"
+          (tt "--blas") " で 0.034 ms になる"))
+  (source "doc/ja/guides/blas-acceleration.md、gpu-acceleration.md (計測は Apple M4 Max)"))
+
+(slide :title "torch でニューラルネットワークを学習する"
+  (p "rontolisp 独自の " (tt "torch") " は、" (tt "linalg") " の上に載る PyTorch 風のパッケージ。2 層のネットワークに XOR を学習させる。")
+  (code :lang "lisp" "
+    (linalg:seed 3)
+    (defparameter *mlp*
+      (torch:sequential (torch:linear 2 8) #'torch:relu (torch:linear 8 1)))
+    (defparameter *xs* (torch:tensor '((0.0 0.0) (0.0 1.0) (1.0 0.0) (1.0 1.0))))
+    (defparameter *ys* (torch:tensor '((0.0) (1.0) (1.0) (0.0))))
+    (defparameter *sgd* (torch:sgd *mlp* :lr 0.2))
+    (dotimes (i 200)
+      (let ((loss (torch:mse-loss (torch:forward *mlp* *xs*) *ys*)))
+        (torch:zero-grad *sgd*)
+        (torch:backward loss)
+        (torch:step *sgd*)))
+    (print (torch:data (torch:forward *mlp* *xs*)))"))
+
+(slide :title "cffi で C ライブラリを呼ぶ"
+  (p "上流の " (link "https://cffi.common-lisp.dev/" "CFFI") " をそのまま読み込み、" (tt "defcfun") " で C の関数を Lisp の関数として定義する。")
+  (code :lang "console" "
+    CL-USER> (ql:quickload :cffi)
+    CL-USER> (cffi:defcfun \"strlen\" :long (s :string))
+    CL-USER> (strlen \"hello, world\")
+    12")
+  (p (tt "rontolisp") " コマンドと、コンパイルした " (tt ".class") " や " (tt ".jar") " で使える。"))
+
+(slide :title "Mac アプリを作る"
+  (column
+    (ul (li (tt "objc") " で AppKit を呼ぶ。" (link "https://www.lispworks.com/documentation/lw81/objc/objc.htm" "LispWorks") " の API を実装している")
+        (li "rontolisp 独自の " (tt "appkit") " でウィンドウやボタンを組み立てる")
+        "インタプリタ、JVM、ネイティブ実行ファイルで動く"
+        "追加のインストールは要らない"))
+  (column
+    (image "macos-minesweeper.png" :alt "rontolisp で書いた macOS のマインスイーパー"))
+  (source "examples/browser/minesweeper/minesweeper-macos.lisp"))
+
+(slide :title "appkit のコード"
+  (p "ウィンドウにラベルを置き、クリックで表示を変える。マインスイーパーも、同じ関数で画面を組み立てている。")
+  (code :lang "lisp" :run nil "
+    (defvar *win*
+      (appkit:window \"rontolisp\" :width 240 :height 160 :dark t))
+    (defvar *face*
+      (appkit:label *win* \"🙂\" :x 94 :y 54 :width 52 :height 52
+                    :size 26 :align :center))
+    (appkit:on-click *face*
+      (lambda (button) (appkit:set-text *face* \"😮\")))
+    (appkit:wait *win*)"))
+
+(slide :title "Metal で GPU に描く"
+  (p "rontolisp 独自の " (tt "metal") " パッケージで Metal を呼び、約 13,000 個のボクセルからなる庭園をアニメーションで描く。")
+  (image "macos-pagoda-garden.png" :alt "Metal で描いたボクセルの庭園と五重塔")
+  (source "examples/macos/metal-pagoda-garden.lisp"))
+
+(slide :title "Metal の描画コード"
+  (p "ウィンドウに Metal を取り付け、シェーダからパイプラインを作り、フレームごとに描画コマンドを送る。")
+  (code :lang "lisp" :run nil "
+    (defvar *metal*
+      (metal:attach *window* :clear '(0.02 0.03 0.07 1.0) :depth t))
+    (defvar *library* (metal:library *metal* *shaders*))
+    (defvar *solid* (metal:pipeline *metal* *library* \"vox_vertex\" \"vox_fragment\"))
+    (defvar *static-buffer* (metal:buffer *metal* *static*))
+    ;; every frame
+    (objc:invoke encoder \"setRenderPipelineState:\" *solid*)
+    (objc:invoke encoder \"setVertexBuffer:offset:atIndex:\" *static-buffer* 0 0)
+    (objc:invoke encoder \"drawPrimitives:vertexStart:vertexCount:\"
+                 metal:+triangle+ 0 (* 36 *static-count*))")
+  (source "examples/macos/metal-pagoda-garden.lisp (抜粋、一部省略)"))
+
+;;; --- interop and libraries from Clojure ---------------------------------------------
+
+(slide :title "Clojure から使う"
+  (table :header ("用途" "Common Lisp" "Clojure")
+         :caption "Clojure のプログラムでは右の列を使う。テストはどちらも rontolisp test で実行する"
+    ("Java の呼び出し" (cell (tt "java") " パッケージ") "Java interop")
+    ("依存ライブラリ" "ASDF、Quicklisp" (tt "deps.edn"))
+    ("テスト" "rove" (tt "clojure.test"))
+    ("HTTP リクエスト" (tt "rontolisp:fetch") (tt "rontolisp.http-client"))
+    ("Web アプリ" "Clack" "Ring")))
+
+(slide :title "Clojure の Java interop"
+  (p (link "https://clojure.org/reference/java_interop" "Clojure の書き方") "で Java を呼ぶ。" (tt "fn") " は、そのまま " (tt "Comparator") " として渡せる。")
+  (code :lang "clojure" :run nil "
+    (ns demo
+      (:import (java.util ArrayList Collections)))
+
+    (let [words (ArrayList. [\"kiwi\" \"fig\" \"banana\"])]
+      (Collections/sort words (fn [a b] (compare (count a) (count b))))
+      (println (vec words)))                ; [fig kiwi banana]
+    (println (Integer/parseInt \"42\") (.toUpperCase \"hi\") (Math/max 3 7))
+    ;; 42 HI 7")
+  (p "JVM 上のインタプリタと、コンパイルした " (tt ".class") " で使える。"))
+
+(slide :title "deps.edn で Clojure のライブラリを使う"
+  (p (link "https://clojure.org/reference/deps_edn" (tt "deps.edn")) " に書いた "
+     (link "https://github.com/clojure/data.json" "data.json") " などを、Maven から取得して読む。")
+  (code :lang "clojure" :run nil "
+    ;; deps.edn
+    {:paths [\"src\"]
+     :deps {org.clojure/data.json {:mvn/version \"2.5.1\"}}}
+    ;; src/app/main.clj
+    (ns app.main
+      (:require [clojure.data.json :as json]))
+    (defn -main [& args]
+      (println (json/write-str {:lang \"clojure\" :args args})))")
+  (code :lang "console" "
+    $ rontolisp -M -m app.main x y
+    {\"lang\":\"clojure\",\"args\":[\"x\",\"y\"]}"))
+
+(slide :title "clojure.test でテストを書く"
+  (p (link "https://clojure.github.io/clojure/clojure.test-api.html" (tt "clojure.test")) " で書いたテストは、"
+     (tt "deps.edn") " のあるディレクトリで " (tt "rontolisp test") " を実行すると、結果を終了コードで返す。")
+  (code :lang "clojure" "
+    (ns demo-test
+      (:require [clojure.test :refer [deftest is testing run-tests]]))
+
+    (defn add [a b] (+ a b))
+
+    (deftest add-test
+      (testing \"adding two integers\"
+        (is (= 3 (add 1 2)))
+        (is (not= 4 (add 1 2)))))
+
+    (run-tests)"))
+
+(slide :title "rontolisp.http-client で HTTP リクエストを送る"
+  (p "rontolisp 独自の " (tt "rontolisp.http-client") " は、"
+     (link "https://github.com/babashka/http-client" "babashka.http-client") " と同じ API で、内部では "
+     (tt "rontolisp:fetch") " を使う。")
+  (code :lang "clojure" "
+    (ns example
+      (:require [rontolisp.http-client :as http]))
+
+    (let [r (http/get \"https://httpbin.ik.am/get\"
+                      {:query-params {\"lang\" \"clojure\"}})]
+      (println (:status r) (get-in r [:headers \"content-type\"]))
+      (println (re-find #\"\\\"lang\\\": ?\\\"clojure\\\"\" (:body r))))"))
+
+(slide :title "Ring で Web アプリを書く"
+  (p "rontolisp 独自の " (tt "ring.adapter.rontolisp") " が " (link "https://github.com/ring-clojure/ring" "Ring")
+     " のハンドラを動かす。デプロイ先は Clack と同じ。")
+  (code :lang "clojure" :run nil "
+    (ns app
+      (:require [ring.adapter.rontolisp :refer [run-server]]
+                [ring.util.response :as response]))
+    (defn handler [{:keys [uri]}]
+      (-> (response/response (str \"Hello, \" uri \"\\n\"))
+          (response/content-type \"text/plain\")))
+    (run-server handler {:port 3000})")
+  (code :lang "console" "
+    $ curl http://127.0.0.1:3000/clojure
+    Hello, /clojure"))
+
+;;; --- next steps -------------------------------------------------------------------
+
+(section "次の一歩")
+
+(slide :title "examples ディレクトリ"
+  (table :header ("ディレクトリ" "内容")
+    ((tt "console/") "アルゴリズムとコンソール入出力")
+    ((cell (tt "scheme/") " " (tt "clojure/")) "Scheme と Clojure のプログラム")
+    ((cell (tt "ml/") " " (tt "llm/")) "数値計算、機械学習、Llama 2 の推論")
+    ((cell (tt "net/") " " (tt "db/")) "ソケット、HTTP サーバ、PostgreSQL")
+    ((cell (tt "jvm/") " " (tt "macos/")) "Java 連携、Swing、Cocoa、Metal")
+    ((tt "browser/") "ページで動かす WASM")
+    ((tt "asdf/") "実在のライブラリの読み込み")))
+
+(slide :title "次に読むもの"
+  (ul (li (link "https://making.github.io/rontolisp/docs/" "ドキュメント")
+          " はじめに、コンパイル、言語リファレンス、ガイド")
+      (li (link "https://making.github.io/rontolisp/playground.html" "プレイグラウンド")
+          " インストールせずに試す")
+      (li (link "https://making.github.io/rontolisp/skill/" "エージェントスキル")
+          " AI コーディングエージェント向けに、ドキュメントから生成したもの")
+      (li (link "https://github.com/making/rontolisp" "GitHub")
+          " ソースと " (tt "examples/"))))
+
+(slide :class "closing" "インタプリタで試し、同じソースを JVM、WASM、ネイティブで動かす。")

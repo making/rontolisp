@@ -1,0 +1,3110 @@
+package am.ik.gpu;
+
+import java.io.IOException;
+import java.io.InputStream;
+import java.lang.foreign.Arena;
+import java.lang.foreign.MemorySegment;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.WeakHashMap;
+
+import org.jspecify.annotations.Nullable;
+
+import static am.ik.gpu.MetalDriver.D;
+import static am.ik.gpu.MetalDriver.F;
+import static am.ik.gpu.MetalDriver.I;
+import static am.ik.gpu.MetalDriver.L;
+
+/**
+ * The Apple half of {@code --gpu}: one {@code MTLDevice}, one command queue, one library
+ * compiled from {@code gemm.metal} at run time, and the kernels it exports -- a STACKED
+ * matrix product, an element-wise map, the strided broadcast/gather pair, the GEMV behind
+ * {@code vec:matvec}, and the resident tier (the equal-shape and scalar binary ops,
+ * {@code where}, the Adam step, the strided copy and the axis fold) -- plus the rank-2
+ * product, which goes through {@code MPSMatrixMultiplication} instead. Everything that
+ * can fail fails into a decline; nothing here throws but {@link #materialize}, which
+ * cannot.
+ *
+ * <h2>Single float, or nothing</h2>
+ *
+ * MSL rejects {@code double} outright, so {@link #supportsDouble()} is {@code false} and
+ * every double-taking method here answers {@code false} without touching the device. That
+ * is not a gap to fill later: there is no fp64 on this hardware to fill it with. It makes
+ * the decline protocol load-bearing in a way it is not on CUDA -- {@code linalg}'s
+ * default width reaches this backend only after {@code torch:}'s single-float default or
+ * an explicit {@code #f} array. Where a member's CPU twin computes in double and the
+ * float arithmetic cannot land on its bits -- a scalar that is not a float, the Adam
+ * step, the sum fold -- {@code gemm.metal} runs binary64 in software, so the resident
+ * tier is bit-identical to the CPU kernels here exactly as it is on CUDA.
+ *
+ * <h2>The kernels compile at run time, from a string</h2>
+ *
+ * {@code newLibraryWithSource:options:error:} is the whole toolchain: the MSL compiler is
+ * in the OS, so unlike the CUDA half there is no generated artifact to check in beside
+ * the source and nothing to pin to a virtual architecture. Measured 32 ms the first time
+ * a given text is ever seen on a machine and 2-3 ms on every later process, because the
+ * OS caches it the way the NVIDIA driver caches PTX.
+ *
+ * <h2>This class owns a buffer pool, and the CUDA half does not</h2>
+ *
+ * {@code CudaGemm} allocates per call because the DRIVER has a stream-ordered pool behind
+ * {@code cuMemAllocAsync}. Metal has no such thing: a fresh {@code MTLBuffer} is cheap to
+ * create (1-8 us) but its pages fault in on the first write, which measured 60 us on a
+ * small product and 4.3 ms on a 4 MB one. So the buffers here are size-classed and
+ * reused.
+ *
+ * <h2>Residency on top of the pool: two modes, and a measurement between them</h2>
+ *
+ * Eagerly (the library's default), every result comes home before the call returns, and
+ * this half keeps ONE kind of array resident: the matrix of an accepted {@link #gemvF}.
+ * Measured ({@code .kb/gpu.md}, "Residency and the GEMV on this backend"): on unified
+ * memory an upload is a memcpy into the slab's {@code contents} -- 1.5 MB in ~75 us --
+ * while a slab held out of the pool for a resident copy costs the pool a FRESH slab for
+ * the next call of that size, and a fresh slab pays its first-touch page faults (~1 us a
+ * page). With every result still coming home, keeping every operand and result resident
+ * was 1-5% SLOWER than the pure pool at every cap tried. Every other slab is SCRATCH:
+ * fully overwritten on the way in, fully read on the way out, recycled the moment the
+ * call ends.
+ *
+ * <p>
+ * Lazily ({@link #lazyResults}), a member's result is NOT copied home: its slab goes into
+ * the same {@link DeviceResidency} as the host array's DIRTY copy, the next member finds
+ * it there, and the bytes move only when something on the host reads the array
+ * ({@link #materialize}) -- which is what makes a chain move nothing and what turns the
+ * members a round trip had refused (the resident tier) into launches with no copy. Every
+ * operand a call uploads is kept too, as a clean copy. The slabs the cache holds come
+ * back to the pool at the two safe moments -- the start of a call, before any operand is
+ * looked up, and the end of one, after the command buffer has completed -- and a dirty
+ * copy the cache lets go of (the LRU, a release, a replacement) is downloaded first,
+ * never dropped. Lazily a call also does not WAIT: it commits its command buffer and
+ * returns, and the wait moves to the first host touch of the bytes ({@link #commit},
+ * {@link #settle}) -- which is what lets the device run a chain while the host encodes
+ * the next member, and what made the mode pay here (the interceptors ask for it,
+ * {@link #lazyResultsPay}). It did not pay while every call waited: a tie at the small
+ * shapes and a loss at the full ones. The other half of that loss was memory -- on
+ * unified memory the pool and the heap share the machine -- and the lazy budgets below
+ * are what keep them apart ({@code .kb/gpu.md}, "Asynchronous command buffers").
+ *
+ * @see Gpu
+ * @see MetalDriver
+ * @see DeviceResidency
+ */
+final class MetalGemm implements GpuDevice {
+
+	/** The MSL source, beside this class in the resources. */
+	static final String KERNEL_RESOURCE = "gemm.metal";
+
+	/**
+	 * The kernels {@link #KERNEL_RESOURCE} must export. The rank-2 product is absent on
+	 * purpose: MPS serves it.
+	 */
+	static final String KERNEL_BATCHED_F32 = "gemm_batched_f32", KERNEL_MAP_F32 = "map_f32",
+			KERNEL_BCAST_F32 = "bcast_f32", KERNEL_GATHER_F32 = "gather_f32", KERNEL_GEMV_F32 = "gemv_f32";
+
+	/** The resident tier's kernels, in the order of {@link #tier}. */
+	static final String[] KERNELS_RESIDENT = { "zip_f32", "scal_f32", "where_f32", "adam_f32", "copy_f32", "fold_f32" };
+
+	private static final int ZIP = 0, SCAL = 1, WHERE = 2, ADAM = 3, COPY = 4, FOLD = 5;
+
+	/**
+	 * The fused tier's kernels, in the order of {@link #fused}. The last three are the
+	 * attention head's scaled and masked softmax pair, and the launch that packs their
+	 * mask a bit a cell.
+	 */
+	static final String[] KERNELS_FUSED = { "gelu_f32", "gelu_grad_f32", "softmax_f32", "softmax_grad_f32",
+			"log_softmax_f32", "log_softmax_grad_f32", "layer_norm_f32", "layer_norm_grad_f32", "softmax_sm_f32",
+			"softmax_grad_sm_f32", "pack_mask" };
+
+	private static final int GELU = 0, GELU_GRAD = 1, SOFTMAX = 2, SOFTMAX_GRAD = 3, LOG_SOFTMAX = 4,
+			LOG_SOFTMAX_GRAD = 5, LAYER_NORM = 6, LAYER_NORM_GRAD = 7, SOFTMAX_SM = 8, SOFTMAX_GRAD_SM = 9,
+			PACK_MASK = 10;
+
+	/**
+	 * The kernels an EMBEDDER supplied, when this library's classes travel without its
+	 * resources -- see {@link Gpu#useMetalKernels(String)}.
+	 */
+	private static volatile @Nullable String embeddedSource;
+
+	/**
+	 * The minimum {@code batch * n * m * p} a matrix product is accepted at:
+	 * {@code 2^22}, a 166x166x166 product. Measured on an M4 Max against {@code --simd}
+	 * on the JVM at f32, us per call: n=96 85 against ~135, n=128 178 against 144, n=192
+	 * 571 against ~150, n=256 1288 against 166. So the crossover is just under n=128 and
+	 * 2^22 is where the margin (2.6x) is past the noise -- the same "not where it first
+	 * appears" rule the CUDA threshold follows, sitting 32x higher because the floor
+	 * does.
+	 */
+	private static final long MIN_WORK = 1L << 22;
+
+	/**
+	 * The minimum element count an element-wise map is accepted at: {@code 2^17}.
+	 * Measured on an M4 Max at f32, us per call, CPU against device: the cheapest member
+	 * taken ({@code sin}) is 45 against ~110 at 16384 and ~380 against ~180 at 131072,
+	 * {@code exp} 3x there and {@code erf} 20x. Eight times the CUDA threshold, for the
+	 * same reason the product's is 32 times it.
+	 *
+	 * <p>
+	 * <b>Re-measured at the shape a CHAIN produces, which is not the shape above, and it
+	 * holds</b> (M4 Max, 2026-09-02). The straddling operand is a per-row intermediate --
+	 * the {@code rows x
+	 * 1} array {@code log-softmax}'s {@code (linalg:log (linalg:sum ... :keepdims t))}
+	 * takes, 16384 elements at the reference GPT's shapes, an eighth of this threshold.
+	 * Per call in us, {@code log} over a freshly written f32 operand, CPU against the
+	 * device back to back: 62-66 against 98-137 at 16384, 126-142 against 111-125 at
+	 * 32768, 495-564 against 139-163 at 131072 -- so back to back the device crosses near
+	 * {@code 2^15}. <b>The chain never calls it back to back.</b> This backend refuses
+	 * the axis fold at every size ({@link #thresholds}, {@code Long.MAX_VALUE}), so the
+	 * {@code sum} that writes this operand is a CPU loop -- 28-30 ms of it at the
+	 * reference GPT's {@code (16384 3038)} -- and this GPU lowers its clocks after ~1 ms
+	 * idle. The same call behind a growing gap: 111-139 us at 0 ms, 147-154 at 1 ms,
+	 * 401-419 at 2 ms, flattening to 478-653 by 32 ms. In that column the crossover is
+	 * {@code 2^17}..{@code 2^18}, which is where this threshold already is, and at the
+	 * reference GPT's 16384 the CPU wins by 6-8x. So the log-softmax straddle
+	 * {@code .kb/gpu.md} records is the price of a threshold that is right, not the
+	 * symptom of one that is wrong.
+	 */
+	private static final long MIN_MAP_ELEMENTS = 1L << 17;
+
+	/**
+	 * The minimum OUTPUT element count a broadcast or a gather is accepted at:
+	 * {@code 2^18}. Measured on an M4 Max at f32: a broadcast {@code sub} is 455 us
+	 * against ~260 at 262144 and 727 against ~300 at the transformer's own
+	 * {@code (4 256 384) - (4 256 1)}, and an axes transpose 357 against ~180 at
+	 * {@code (4 256 192)}.
+	 */
+	private static final long MIN_STRIDED_ELEMENTS = 1L << 18;
+
+	/**
+	 * The minimum {@code rows * cols} a matrix-by-vector product is accepted at, once its
+	 * matrix is resident: {@code 2^21}, just over a 1448x1448 matrix. Measured on an M4
+	 * Max at f32 against the JIT-warm {@code --simd} lane kernel, us per call, with the
+	 * matrix resident (against {@code matvec-baseline.lisp}): 1024x1024 is 100 CPU
+	 * against 90 device -- a tie, because a resident call is the ~77 us command-buffer
+	 * floor plus a memory-bound kernel that does not reach it until the matrix is several
+	 * megabytes -- 1448x1448 is 233 against 93 (2.5x), 1536x1536 267 against 94 (2.8x;
+	 * ~115 median in the shipped route, 2.3x), 2048x2048 500 against 105 (4.8x), and
+	 * llama2's 32000x288 classifier head 800 against 185 (4.3x). Sixteen times the CUDA
+	 * threshold, for the floor's sake; the cold trip -- the matrix copied in every call
+	 * -- never pays here at any size (753 us at the head, against the CPU's 800), which
+	 * is why the two-sight rule of {@link #gemvF} is not optional on this backend either.
+	 * And one thing the threshold cannot see: this GPU lowers its clocks after ~1 ms
+	 * idle, and the first command buffer after such a gap pays ~0.5 ms more, so a GEMV
+	 * called once every few milliseconds (a decode loop) wins far less than a
+	 * back-to-back one ({@code .kb/gpu.md}, "Residency and the GEMV on this backend").
+	 */
+	private static final long MIN_MATVEC_ELEMENTS = 1L << 21;
+
+	/**
+	 * The minimum element count a member is accepted at when it is offered for its
+	 * RESIDENT operand rather than for its size -- the resident tier, and every
+	 * size-thresholded member below its own threshold. A launch with no copy still pays
+	 * this backend's per-command-buffer floor (~100 us through the shipped route,
+	 * whatever the size, until 2^18 elements), and the CPU's alternative over a resident
+	 * operand is a memcpy of it plus a lane loop, which crosses it between 2^18 and 2^19
+	 * -- yet the training step measured fastest with the floor HERE, lower than that,
+	 * because a declined member costs a materialize, the CPU loop and the re-upload of
+	 * its result around it ({@code .kb/gpu.md}, "Residency and the GEMV on this
+	 * backend").
+	 */
+	static final long MIN_RESIDENT_ELEMENTS = 1L << 14;
+
+	/**
+	 * Where {@code MPSMatrixMultiplication} takes over from {@link #KERNEL_BATCHED_F32}
+	 * for ONE matrix of the product: {@code 2^27}, a 512x512x512 product. Below it the
+	 * tiled kernel is ahead (166 us against 180 at n=256) because MPS costs ~35 us of
+	 * object churn a call; above it MPS wins outright -- 202 against 308 at n=512, 523
+	 * against 1545 at n=1024, 2264 against 10183 at n=2048.
+	 */
+	private static final long MPS_MIN_WORK = 1L << 27;
+
+	/**
+	 * Threads per threadgroup for the flat kernels: the map, the broadcast, the gather,
+	 * the resident tier.
+	 */
+	private static final int FLAT_GROUP = 256;
+
+	/**
+	 * Threads per threadgroup for the GEMV: one SIMD-group per row, so this many divided
+	 * by the pipeline's {@code threadExecutionWidth} rows per threadgroup.
+	 */
+	private static final int GEMV_GROUP = 256;
+
+	/** The tile {@code gemm_batched_f32} is written around, and so its group shape. */
+	private static final int TILE = 16;
+
+	/**
+	 * The SIMD-group width the FUSED row kernels are written around -- one thread per
+	 * row, thirty-two rows through one transposed tile. Every Apple GPU is 32 wide and
+	 * the probe rejects a GEMV pipeline that says otherwise; these kernels index the tile
+	 * by it, so it is a constant here rather than a queried width.
+	 */
+	private static final int SIMD_WIDTH = 32;
+
+	/**
+	 * SIMD groups per threadgroup in the fused row kernels, which is what bounds their
+	 * threadgroup memory: two tiles of {@code 32 x 33} floats per group, 16.5 KB in all
+	 * for the two-tile members. {@code gemm.metal} declares the same number.
+	 */
+	private static final int ROW_SIMDS = 2;
+
+	/**
+	 * The smallest slab the pool hands out. A rank-8 layout buffer is 96 bytes and a
+	 * one-element operand is 4, so without a floor the pool would fill with classes that
+	 * exist only to be distinct.
+	 */
+	private static final int MIN_SLAB_BYTES = 4096;
+
+	/** The largest slab class, {@code 2^36} = 64 GB -- past any Apple device today. */
+	private static final int MAX_SLAB_CLASS = 36;
+
+	/**
+	 * What fraction of the device's recommended working set the pool may hold. The rest
+	 * is for the program's own textures and buffers, and for the OS: a compute library
+	 * that fills the working set is one that makes the machine unusable while it runs.
+	 */
+	private static final long POOL_BUDGET_DIVISOR = 4;
+
+	/**
+	 * Eagerly: what fraction of the POOL's budget the resident set -- the GEMV matrices
+	 * -- may hold, and the cap on it: {@code min(pool / 4, 1 GB)}, the CUDA half's own
+	 * cap. A resident slab is one the pool cannot recycle, so the bound is what keeps a
+	 * program that offers many distinct matrices from turning the pool into fresh pages;
+	 * a model whose weights exceed it keeps its most recently used ones.
+	 */
+	private static final long RESIDENT_SHARE = 4, RESIDENT_CAP = 1L << 30;
+
+	/**
+	 * Lazily: the POOL may hold the recommended working set less the JVM's maximum heap
+	 * and less a headroom of an eighth (never less than {@link #LAZY_HEADROOM_FLOOR}).
+	 * The CUDA half's lazy rule is the same shape over free DEVICE memory; here the
+	 * pool's slabs and the heap are the same physical memory, and a pool sized without
+	 * the heap -- the working set less an eighth, the earlier rule -- filled the machine
+	 * at the reference GPT's shapes: 96 GB of slabs beside a 24 GB heap on 128 GB, and a
+	 * step that went from 1.9 s to 4 with the system's time in page compression. The
+	 * quarter share of the eager pool is not enough either once results live on the
+	 * device: a training step at the reference GPT's shapes holds tens of gigabytes of
+	 * activations reachable until its backward, and a budget below that flushed them as
+	 * fast as they were made -- measured, 195 GB of flushes over 13 steps and a step a
+	 * third slower than the pure pool ({@code .kb/gpu.md}, "Asynchronous command
+	 * buffers"), the trap the CUDA half hit at a 1 GB budget ("Lazy results").
+	 */
+	private static final long LAZY_HEADROOM_SHARE = 8, LAZY_HEADROOM_FLOOR = 512L << 20;
+
+	/**
+	 * Lazily: the resident set may hold HALF the pool's budget, in span bytes. The two
+	 * budgets count in different units -- the cache counts the spans it mirrors, the pool
+	 * the power-of-two CAPACITY of its slabs, up to twice the span -- so a resident
+	 * budget nearer the pool's is never reached before the pool's is, and the LRU that
+	 * asks for a collection before it flushes never runs; what runs instead is the pool's
+	 * own pressure path. Measured: at seven eighths the pool filled at every step with
+	 * the LRU idle.
+	 */
+	private static final long LAZY_RESIDENT_DIVISOR = 2;
+
+	private final MetalDriver driver;
+
+	private final MemorySegment device;
+
+	private final MemorySegment queue;
+
+	private final MemorySegment library;
+
+	private final MemorySegment gemmBatched;
+
+	private final MemorySegment map;
+
+	private final MemorySegment bcast;
+
+	private final MemorySegment gather;
+
+	private final MemorySegment gemv;
+
+	/** The resident tier's pipelines, indexed by {@link #ZIP} and its siblings. */
+	private final MemorySegment[] tier;
+
+	/** The fused tier's pipelines, indexed by {@link #GELU} and its siblings. */
+	private final MemorySegment[] fused;
+
+	/** The GEMV pipeline's SIMD-group width, which is how many threads share one row. */
+	private final int gemvWidth;
+
+	private final String description;
+
+	private final long workingSet;
+
+	/**
+	 * What the pool may hold in all, free or held: a quarter of the working set eagerly
+	 * ({@link #POOL_BUDGET_DIVISOR}), the working set less a headroom of an eighth
+	 * lazily, when the resident copies are the program's own live data and live in it
+	 * ({@link #LAZY_HEADROOM_SHARE}). Re-derived by {@link #lazyResults}.
+	 */
+	private volatile long poolBudget;
+
+	/**
+	 * Free slabs by size class, {@code free[k]} holding buffers of {@code 1 << k} bytes.
+	 */
+	private final ArrayDeque<Slab>[] free;
+
+	/**
+	 * Every slab this pool has minted and not released, free or held, in bytes of
+	 * capacity.
+	 */
+	private long pooledBytes;
+
+	/**
+	 * The resident copies: host array -> the address of the slab holding its elements
+	 * ({@link DeviceResidency}), and {@link #held} is the slab behind each such address.
+	 * Both are kept in step under {@code this}: a slab is put into {@link #held} before
+	 * the cache learns its address, and removed from it only when the cache has handed
+	 * the address back through {@link DeviceResidency#drain()}.
+	 */
+	private final DeviceResidency residency = new DeviceResidency();
+
+	private final Map<Long, Slab> held = new HashMap<>();
+
+	/** Whether results stay on the device until the host reads them. */
+	private volatile boolean lazy;
+
+	/**
+	 * A command buffer committed WITHOUT a wait (the lazy mode, {@link #commit}) that the
+	 * host has not yet seen complete: its sequence number, the retained object, the slabs
+	 * its dispatch read and -- filled in by {@code finish} -- the ones it wrote, which
+	 * are the slabs that hold nobody's result if it ends in any status but
+	 * {@code Completed} ({@link #retire}).
+	 */
+	private record Inflight(long seq, MemorySegment commands, Slab[] read, List<Slab> written) {
+	}
+
+	/**
+	 * The command buffers in flight, oldest first. One queue executes them in the order
+	 * they were committed, so every one numbered at or below {@link #retired} has
+	 * completed, and a slab whose {@code fence} is at or below it may be touched by the
+	 * host. Under {@code this}.
+	 */
+	private final ArrayDeque<Inflight> inflight = new ArrayDeque<>();
+
+	/** The sequence number of the last command buffer committed asynchronously. */
+	private long committed;
+
+	/**
+	 * Every command buffer numbered at or below this has completed and been released.
+	 * Volatile, like a slab's fence: {@link #settle} reads both from whichever thread is
+	 * about to touch the bytes, and a stale read must err towards waiting.
+	 */
+	private volatile long retired;
+
+	/**
+	 * For the tests: the sequence number whose status is to be read as a failure, or 0.
+	 * Metal gives a kernel no way to fail on purpose; what the pin needs is the library's
+	 * handling of a failed status, not the OS's way of producing one.
+	 */
+	private long failAt;
+
+	/**
+	 * The storage (a host array, or a stub's backing) of every result whose command
+	 * buffer failed after the call had answered {@code true} and whose entry has since
+	 * been let go of: the flush had nothing to bring home, and the first host read of it
+	 * ({@link #materialize}) throws rather than answering the zeros the storage holds.
+	 * Weak, by identity: an array the program has dropped needs no verdict.
+	 */
+	private final Set<Object> lostStorage = Collections.newSetFromMap(new WeakHashMap<>());
+
+	/** {@code true} once anything has ever been lost: the guard on the read fast path. */
+	private volatile boolean anyLost;
+
+	/** A test-imposed residency budget, or -1 for the derived one. */
+	private volatile long residentBudgetOverride = -1;
+
+	/**
+	 * Whether a big enough matrix goes to MPS. Not final: the tiled kernel is otherwise
+	 * UNREACHABLE for any shape above {@link #MPS_MIN_WORK} on a machine that has MPS,
+	 * which is every machine that has Metal -- and it is a path that has to keep
+	 * computing the same answers. Flipped only by {@code MetalGpuTest.withoutMps}, the
+	 * exact counterpart of {@code GpuTest}'s allocator-route test.
+	 */
+	private volatile boolean mps = true;
+
+	@SuppressWarnings("unchecked")
+	private MetalGemm(MetalDriver driver, MemorySegment device, MemorySegment queue, MemorySegment library,
+			MemorySegment[] kernels, int gemvWidth, String description, long workingSet) {
+		this.driver = driver;
+		this.device = device;
+		this.queue = queue;
+		this.library = library;
+		this.gemmBatched = kernels[0];
+		this.map = kernels[1];
+		this.bcast = kernels[2];
+		this.gather = kernels[3];
+		this.gemv = kernels[4];
+		this.tier = java.util.Arrays.copyOfRange(kernels, 5, 5 + KERNELS_RESIDENT.length);
+		this.fused = java.util.Arrays.copyOfRange(kernels, 5 + KERNELS_RESIDENT.length, kernels.length);
+		this.gemvWidth = gemvWidth;
+		this.description = description;
+		this.workingSet = workingSet;
+		this.free = new ArrayDeque[MAX_SLAB_CLASS + 1];
+		this.poolBudget = derivedPoolBudget();
+		this.residency.setBudget(derivedResidentBudget());
+	}
+
+	/**
+	 * The outcome of a probe: the usable device, or {@code null} and the reason there is
+	 * none. There is always a reason, and it is always printable.
+	 *
+	 * @param gemm the opened device, or {@code null} when this machine has none
+	 * @param description what was found, or why nothing was
+	 */
+	record Probe(@Nullable MetalGemm gemm, String description) {
+	}
+
+	/**
+	 * Asks this machine, once, whether it can run the kernels: the frameworks bind, a
+	 * default device exists, a command queue opens, the MSL compiles and every kernel
+	 * resolves. Any failure answers "no" with a reason and leaves nothing acquired.
+	 * @return the device, or the reason there is none
+	 */
+	static Probe probe() {
+		MetalDriver driver;
+		try {
+			driver = MetalDriver.open();
+		}
+		catch (Throwable ex) {
+			return new Probe(null, "Metal could not be bound: " + describeThrowable(ex));
+		}
+		if (driver == null) {
+			return new Probe(null, "Metal.framework is not present: this machine is not a Mac with a GPU");
+		}
+		MemorySegment pool = MemorySegment.NULL;
+		// Everything acquired so far, so that EVERY exit below -- and there are eight --
+		// unwinds it. A machine that declines at the last step must not leave a command
+		// queue, an MSL library and eleven pipeline states behind, which is the same rule
+		// CudaGemm.unwind follows for a retained primary context.
+		MemorySegment queue = MemorySegment.NULL;
+		MemorySegment library = MemorySegment.NULL;
+		String[] names = new String[5 + KERNELS_RESIDENT.length + KERNELS_FUSED.length];
+		names[0] = KERNEL_BATCHED_F32;
+		names[1] = KERNEL_MAP_F32;
+		names[2] = KERNEL_BCAST_F32;
+		names[3] = KERNEL_GATHER_F32;
+		names[4] = KERNEL_GEMV_F32;
+		System.arraycopy(KERNELS_RESIDENT, 0, names, 5, KERNELS_RESIDENT.length);
+		System.arraycopy(KERNELS_FUSED, 0, names, 5 + KERNELS_RESIDENT.length, KERNELS_FUSED.length);
+		MemorySegment[] kernels = new MemorySegment[names.length];
+		boolean keep = false;
+		try {
+			pool = driver.autoreleasePoolPush();
+			MemorySegment device = driver.systemDefaultDevice();
+			if (device.address() == 0) {
+				return new Probe(null, "MTLCreateSystemDefaultDevice found no Metal device");
+			}
+			queue = driver.message(device, "newCommandQueue");
+			if (queue.address() == 0) {
+				return new Probe(null, "newCommandQueue failed on " + name(driver, device));
+			}
+			String source = readSource();
+			if (source == null) {
+				return new Probe(null, "the Metal kernels (" + KERNEL_RESOURCE + ") are not on the classpath");
+			}
+			MemorySegment options = compileOptions(driver);
+			try (Arena arena = Arena.ofConfined()) {
+				MemorySegment error = arena.allocate(MetalDriver.P);
+				error.set(MetalDriver.P, 0, MemorySegment.NULL);
+				library = driver.message(device, "newLibraryWithSource:options:error:", driver.nsString(source),
+						options, error);
+				String failure = library.address() != 0 ? null
+						: driver.fromNsString(driver.message(error.get(MetalDriver.P, 0), "localizedDescription"));
+				release(driver, options);
+				if (failure != null) {
+					return new Probe(null, "the Metal kernels did not compile: " + failure);
+				}
+			}
+			for (int i = 0; i < names.length; i++) {
+				MemorySegment state = pipeline(driver, device, library, names[i]);
+				if (state == null) {
+					return new Probe(null, "the Metal kernel " + names[i] + " could not be built");
+				}
+				kernels[i] = state;
+			}
+			if (driver.objcClass("MPSMatrixMultiplication").address() == 0) {
+				return new Probe(null, "MetalPerformanceShaders is present but has no MPSMatrixMultiplication");
+			}
+			// The GEMV shares one SIMD-group per row, so the host has to know the width
+			// the kernel was compiled to rather than assume the 32 of every Apple GPU.
+			long width = driver.messageLong(kernels[4], "threadExecutionWidth");
+			if (width <= 0 || width > GEMV_GROUP || (width & (width - 1)) != 0) {
+				return new Probe(null, "the Metal GEMV kernel has an unusable SIMD-group width " + width);
+			}
+			long workingSet = driver.messageLong(device, "recommendedMaxWorkingSetSize");
+			boolean unified = driver.respondsTo(device, "hasUnifiedMemory")
+					&& driver.messageBool(device, "hasUnifiedMemory");
+			String description = name(driver, device) + " (Metal, " + (unified ? "unified memory, " : "")
+					+ (workingSet >> 30) + " GB working set)";
+			keep = true;
+			return new Probe(
+					new MetalGemm(driver, device, queue, library, kernels, (int) width, description, workingSet),
+					description);
+		}
+		catch (Throwable ex) {
+			return new Probe(null, "the Metal device could not be probed: " + describeThrowable(ex));
+		}
+		finally {
+			if (!keep) {
+				for (MemorySegment kernel : kernels) {
+					if (kernel != null) {
+						release(driver, kernel);
+					}
+				}
+				release(driver, library);
+				release(driver, queue);
+			}
+			pop(driver, pool);
+		}
+	}
+
+	/**
+	 * {@code MTLMathModeSafe}, or {@code setFastMathEnabled:NO} on an OS whose
+	 * {@code MTLCompileOptions} predates it. Not a preference: the relaxed default
+	 * flushes denormals and reassociates, and the strided tier claims bit-identity with
+	 * the scalar defun.
+	 */
+	private static MemorySegment compileOptions(MetalDriver driver) throws Throwable {
+		MemorySegment options = driver.message(driver.message(driver.objcClass("MTLCompileOptions"), "alloc"), "init");
+		if (options.address() == 0) {
+			return MemorySegment.NULL;
+		}
+		if (driver.respondsTo(options, "setMathMode:")) {
+			driver.messageVoid(options, "setMathMode:", MetalDriver.MATH_MODE_SAFE);
+		}
+		else if (driver.respondsTo(options, "setFastMathEnabled:")) {
+			driver.messageVoid(options, "setFastMathEnabled:", false);
+		}
+		return options;
+	}
+
+	private static @Nullable MemorySegment pipeline(MetalDriver driver, MemorySegment device, MemorySegment library,
+			String name) throws Throwable {
+		MemorySegment function = driver.message(library, "newFunctionWithName:", driver.nsString(name));
+		if (function.address() == 0) {
+			return null;
+		}
+		try (Arena arena = Arena.ofConfined()) {
+			MemorySegment error = arena.allocate(MetalDriver.P);
+			error.set(MetalDriver.P, 0, MemorySegment.NULL);
+			MemorySegment state = driver.message(device, "newComputePipelineStateWithFunction:error:", function, error);
+			release(driver, function);
+			return state.address() == 0 ? null : state;
+		}
+	}
+
+	private static String name(MetalDriver driver, MemorySegment device) throws Throwable {
+		return driver.fromNsString(driver.message(device, "name"));
+	}
+
+	private static void release(MetalDriver driver, MemorySegment object) {
+		try {
+			if (object.address() != 0) {
+				driver.messageVoid(object, "release");
+			}
+		}
+		catch (Throwable ignored) {
+			// An object that cannot be released is not a reason to fail a probe that was
+			// already failing.
+		}
+	}
+
+	private static void pop(MetalDriver driver, MemorySegment pool) {
+		try {
+			if (pool.address() != 0) {
+				driver.autoreleasePoolPop(pool);
+			}
+		}
+		catch (Throwable ignored) {
+		}
+	}
+
+	private static String describeThrowable(Throwable ex) {
+		try {
+			return String.valueOf(ex);
+		}
+		catch (Throwable nested) {
+			return ex.getClass().getName();
+		}
+	}
+
+	/** See {@link Gpu#useMetalKernels(String)}. */
+	static void embeddedSource(String source) {
+		embeddedSource = source;
+	}
+
+	private static @Nullable String readSource() {
+		String embedded = embeddedSource;
+		if (embedded != null) {
+			return embedded;
+		}
+		try (InputStream in = MetalGemm.class.getResourceAsStream(KERNEL_RESOURCE)) {
+			return in == null ? null : new String(in.readAllBytes(), StandardCharsets.UTF_8);
+		}
+		catch (IOException | RuntimeException ex) {
+			return null;
+		}
+	}
+
+	@Override
+	public String description() {
+		return this.description;
+	}
+
+	/**
+	 * Always {@code true} once the probe has answered. There is no Metal counterpart of a
+	 * sticky {@code CUresult}: a command buffer that ends in any status but
+	 * {@code Completed} is an ordinary per-call decline, and nothing this class can
+	 * observe leaves the device permanently unusable. A field that is never written would
+	 * be worse than saying so.
+	 * @return {@code true}
+	 */
+	@Override
+	public boolean usable() {
+		return true;
+	}
+
+	/** Always {@code false}: MSL has no {@code double}. */
+	@Override
+	public boolean supportsDouble() {
+		return false;
+	}
+
+	/**
+	 * Always {@code false}: the bfloat16 GEMV is a CUDA member only (MSL has a
+	 * {@code bfloat}, but nothing has been measured there).
+	 */
+	@Override
+	public boolean supportsBfloat16() {
+		return false;
+	}
+
+	/** Always {@code false}: the Q8_0 GEMV is a CUDA member only. */
+	@Override
+	public boolean supportsQuantized() {
+		return false;
+	}
+
+	/** Whether a matrix at or above {@link #MPS_MIN_WORK} goes to MPS. For the tests. */
+	boolean mpsEnabled() {
+		return this.mps;
+	}
+
+	/**
+	 * Routes big products through the tiled kernel instead of MPS, or back. Answers what
+	 * was in force before. Package-private and for the test that runs both routes over
+	 * one shape; nothing in the feature ever calls it.
+	 * @param wanted whether MPS should serve a big enough matrix
+	 * @return the previous setting
+	 */
+	boolean setMps(boolean wanted) {
+		boolean previous = this.mps;
+		this.mps = wanted;
+		return previous;
+	}
+
+	/** The per-matrix work at which MPS takes over. For the test that spans it. */
+	static long mpsMinWork() {
+		return MPS_MIN_WORK;
+	}
+
+	/**
+	 * The axis fold's threshold is {@code Long.MAX_VALUE}: it is never offered for its
+	 * size on this backend (the measured refusal, {@code .kb/gpu.md}), only over a
+	 * resident operand. The generator fill is not a member at all. The FUSED tier's
+	 * threshold is not the fold's, and deliberately: what a fused row kernel replaces is
+	 * a chain of memory passes and command buffers, not one fold, so it carries the
+	 * element-wise map's crossover ({@link #MIN_MAP_ELEMENTS}) like the members of the
+	 * tier that have a libm call in them.
+	 */
+	@Override
+	public Thresholds thresholds() {
+		return new Thresholds(MIN_WORK, MIN_MAP_ELEMENTS, MIN_STRIDED_ELEMENTS, Long.MAX_VALUE, MIN_MAP_ELEMENTS,
+				Long.MAX_VALUE, MIN_MATVEC_ELEMENTS);
+	}
+
+	/**
+	 * What the device's recommended working set has left. Metal reports the ALLOCATED
+	 * size rather than the free size, so this is the recommendation less what this
+	 * process holds -- which is what the leak tests need and all they need.
+	 */
+	@Override
+	public long freeDeviceMemory() {
+		try {
+			return this.workingSet - this.driver.messageLong(this.device, "currentAllocatedSize");
+		}
+		catch (Throwable ex) {
+			return 0;
+		}
+	}
+
+	// --- the double half: a hard decline, one line each
+	// ---------------------------------
+
+	@Override
+	public boolean gemm(double[] a, int oa, double[] b, int ob, double[] c, int oc, int n, int m, int p) {
+		return false;
+	}
+
+	@Override
+	public boolean gemm(double[] a, int oa, int sa, double[] b, int ob, int sb, double[] c, int oc, int batch, int n,
+			int m, int p) {
+		return false;
+	}
+
+	@Override
+	public boolean map(int op, double[] a, int oa, double[] c, int oc, int n) {
+		return false;
+	}
+
+	/**
+	 * The generator fill is not a member here: it writes {@code double} draws, and this
+	 * backend has no {@code double} (and its threshold is {@code Long.MAX_VALUE}, so the
+	 * question is never asked). Both widths decline.
+	 */
+	@Override
+	public boolean rngFill(double[] c, int oc, int n, int mode, double lo, double span, int s1, int s2, int s3) {
+		return false;
+	}
+
+	@Override
+	public boolean rngFillF(float[] c, int oc, int n, int mode, double lo, double span, int s1, int s2, int s3) {
+		return false;
+	}
+
+	@Override
+	public boolean bcast(int op, double[] a, int oa, int[] sa, double[] b, int ob, int[] sb, double[] c, int oc,
+			int[] dims) {
+		return false;
+	}
+
+	@Override
+	public boolean gather(double[] a, int oa, int[] sa, double[] c, int oc, int[] dims) {
+		return false;
+	}
+
+	@Override
+	public boolean fold(int op, double[] a, int oa, double[] c, int oc, int outer, int len, int inner) {
+		return false;
+	}
+
+	/** The matrix-by-vector product at {@code double} is a hard decline like the rest. */
+	@Override
+	public boolean gemv(double[] w, int ow, double[] x, int ox, double[] y, int oy, int rows, int cols) {
+		return false;
+	}
+
+	/** And over a bfloat16 matrix: no kernel here ({@link #supportsBfloat16()}). */
+	@Override
+	public boolean gemvBf16(short[] w, int ow, float[] x, int ox, float[] y, int oy, int rows, int cols) {
+		return false;
+	}
+
+	/** And over a Q8_0 matrix: no kernel here ({@link #supportsQuantized()}). */
+	@Override
+	public boolean gemvQ8(byte[] w, int ow, float[] x, int ox, float[] y, int oy, int rows, int cols) {
+		return false;
+	}
+
+	@Override
+	public boolean zip(int op, double[] a, int oa, double[] b, int ob, double[] c, int oc, int n) {
+		return false;
+	}
+
+	@Override
+	public boolean scale(int op, double[] a, int oa, double s, boolean swap, double[] c, int oc, int n) {
+		return false;
+	}
+
+	@Override
+	public boolean where(@Nullable Object m, int om, int[] sm, double ms, double @Nullable [] x, int ox, int[] sx,
+			double xs, double @Nullable [] y, int oy, int[] sy, double ys, double[] c, int oc, int[] dims) {
+		return false;
+	}
+
+	@Override
+	public boolean adamStep(double[] x, int ox, double[] g, int og, double[] m, int om, double[] v, int ov, int n,
+			double[] rule) {
+		return false;
+	}
+
+	@Override
+	public boolean copy(double[] a, int oa, int[] sa, int spanOa, int spanNa, double[] c, int oc, int[] sc, int spanOc,
+			int spanNc, int[] dims) {
+		return false;
+	}
+
+	/**
+	 * The index tier and the clip norm are CUDA-only: their kernels were never written
+	 * for this backend, so every member of both declines ({@code .kb/gpu.md}, "What is
+	 * deliberately NOT here").
+	 */
+	@Override
+	public boolean take(int mode, double[] a, int oa, int lenA, double[] c, int oc, int[] idx, int n, int slab) {
+		return false;
+	}
+
+	@Override
+	public boolean takeF(int mode, float[] a, int oa, int lenA, float[] c, int oc, int[] idx, int n, int slab) {
+		return false;
+	}
+
+	@Override
+	public boolean scatter(double[] z, int oz, double[] g, int og, int[] meta, int rows, int slab, int m) {
+		return false;
+	}
+
+	@Override
+	public boolean scatterF(float[] z, int oz, float[] g, int og, int[] meta, int rows, int slab, int m) {
+		return false;
+	}
+
+	@Override
+	public double @Nullable [] sumSquares(double[] a, int oa, int n) {
+		return null;
+	}
+
+	@Override
+	public double @Nullable [] sumSquaresF(float[] a, int oa, int n) {
+		return null;
+	}
+
+	// --- the single-float half ---------------------------------------------------------
+
+	@Override
+	public boolean gemmF(float[] a, int oa, float[] b, int ob, float[] c, int oc, int n, int m, int p) {
+		return gemmF(a, oa, 0, b, ob, 0, c, oc, 1, n, m, p);
+	}
+
+	/**
+	 * {@code c = a x b} for a STACK of {@code batch} row-major {@code n x m} by
+	 * {@code m x p} products, with per-batch ELEMENT strides on each operand -- 0 for a
+	 * broadcast one, in which case only that operand's single slab is copied.
+	 *
+	 * <p>
+	 * Which kernel runs is a size question and not a shape one: a matrix at or above
+	 * {@link #MPS_MIN_WORK} goes to {@code MPSMatrixMultiplication}, one encode per slab
+	 * into ONE command buffer, and anything smaller to the tiled kernel, one dispatch for
+	 * the whole stack. The two agree bit for bit -- measured over a rectangular 37x23x19
+	 * product, 0 of 703 cells differ -- so the choice is invisible in the results.
+	 * @return {@code true} when {@code c} was filled (or, lazily, left resident),
+	 * {@code false} when the product declined or the device failed -- in which case
+	 * {@code c} is untouched
+	 */
+	@Override
+	public boolean gemmF(float[] a, int oa, int sa, float[] b, int ob, int sb, float[] c, int oc, int batch, int n,
+			int m, int p) {
+		return gemmFT(a, oa, sa, false, b, ob, sb, false, c, oc, batch, n, m, p);
+	}
+
+	/** The double half of the transposed product: the hard decline every double is. */
+	@Override
+	public boolean gemmT(double[] a, int oa, int sa, boolean ta, double[] b, int ob, int sb, boolean tb, double[] c,
+			int oc, int batch, int n, int m, int p) {
+		return false;
+	}
+
+	/**
+	 * The TRANSPOSED stacked product: either operand's {@code n x m} (or {@code m x p})
+	 * matrix STORED with its last two axes exchanged, which is what the linear backward's
+	 * {@code g . b^T} and {@code a^T . g} hand it -- and, since the transpose view, the
+	 * attention head's forward too.
+	 *
+	 * <p>
+	 * The kernel indexes the operand where it already is instead of reading a strided
+	 * copy of it, so the pass the transpose used to cost disappears. The fold is
+	 * untouched -- k ascending over the same tile -- so the result is the untransposed
+	 * product's bit for bit and the orientation is invisible above this seam. Both routes
+	 * carry it: the tiled kernel through {@code ta} / {@code tb} in its parameter block,
+	 * and MPS through {@code transposeLeft:} / {@code transposeRight:} over descriptors
+	 * of the STORED shape, which agree with the kernel exactly as the plain pair does.
+	 * @return {@code true} when {@code c} was filled, {@code false} when the product
+	 * declined or the device failed -- in which case {@code c} is untouched
+	 */
+	@Override
+	public boolean gemmFT(float[] a, int oa, int sa, boolean ta, float[] b, int ob, int sb, boolean tb, float[] c,
+			int oc, int batch, int n, int m, int p) {
+		long aElements = span(batch, sa, (long) n * m), bElements = span(batch, sb, (long) m * p),
+				cElements = (long) batch * n * p;
+		if (!acceptable((long) batch * n * m * p, MIN_WORK, cElements, a, b)) {
+			return false;
+		}
+		MemorySegment pool = MemorySegment.NULL;
+		Call call = null;
+		try {
+			pool = this.driver.autoreleasePoolPush();
+			enter();
+			call = new Call(3);
+			call.lookup(0, a, oa, aElements);
+			call.lookup(1, b, ob, bElements);
+			if (!call.ensure(0, aElements) || !call.ensure(1, bElements) || !call.ensure(2, cElements)) {
+				return false;
+			}
+			call.stage(0, a, oa, aElements, false);
+			call.stage(1, b, ob, bElements, false);
+			boolean ran = this.mps && (long) n * m * p >= MPS_MIN_WORK
+					? multiplyThroughMps(call, sa, ta, sb, tb, batch, n, m, p)
+					: dispatchGemm(call, sa, ta, sb, tb, batch, n, m, p);
+			if (!ran) {
+				return false;
+			}
+			call.finish(2, c, oc, cElements);
+			return true;
+		}
+		catch (Throwable ex) {
+			return false;
+		}
+		finally {
+			end(call);
+			pop(this.driver, pool);
+		}
+	}
+
+	/** One dispatch of the tiled kernel over the whole stack. */
+	private boolean dispatchGemm(Call call, int sa, boolean ta, int sb, boolean tb, int batch, int n, int m, int p)
+			throws Throwable {
+		Slab[] slabs = call.slabs;
+		try (Arena arena = Arena.ofConfined()) {
+			MemorySegment args = arena.allocate(I, 7);
+			args.setAtIndex(I, 0, n);
+			args.setAtIndex(I, 1, p);
+			args.setAtIndex(I, 2, m);
+			args.setAtIndex(I, 3, sa);
+			args.setAtIndex(I, 4, sb);
+			args.setAtIndex(I, 5, ta ? 1 : 0);
+			args.setAtIndex(I, 6, tb ? 1 : 0);
+			MemorySegment commands = this.driver.message(this.queue, "commandBuffer");
+			MemorySegment encoder = beginEncoder(commands, this.gemmBatched);
+			this.driver.messageVoid(encoder, "setBuffer:offset:atIndex:", slabs[0].buffer, 0, 0);
+			this.driver.messageVoid(encoder, "setBuffer:offset:atIndex:", slabs[1].buffer, 0, 1);
+			this.driver.messageVoid(encoder, "setBuffer:offset:atIndex:", slabs[2].buffer, 0, 2);
+			this.driver.messageVoid(encoder, "setBytes:length:atIndex:", args, 7L * Integer.BYTES, 3);
+			this.driver.dispatch(encoder, MetalDriver.size(arena, (p + TILE - 1) / TILE, (n + TILE - 1) / TILE, batch),
+					MetalDriver.size(arena, TILE, TILE, 1));
+			this.driver.messageVoid(encoder, "endEncoding");
+			return commit(commands, call);
+		}
+	}
+
+	/**
+	 * One {@code MPSMatrixMultiplication} encoded per slab into ONE command buffer. The
+	 * per-slab loop is what lets a broadcast operand keep its zero stride, which is the
+	 * shape every {@code torch:linear} over a {@code (B T C)} activation has and which a
+	 * batched {@code MPSMatrixDescriptor} cannot be handed. Metal's floor is per command
+	 * buffer rather than per dispatch, so the encodes share the one wait.
+	 */
+	private boolean multiplyThroughMps(Call call, int sa, boolean ta, int sb, boolean tb, int batch, int n, int m,
+			int p) throws Throwable {
+		Slab[] slabs = call.slabs;
+		// A transposed operand's descriptor is its STORED shape -- m x n rather than
+		// n x m -- and MPS is told to read it transposed; the rowBytes stay the storage's
+		// own contiguous row.
+		MemorySegment left = ta ? this.driver.matrixDescriptor(m, n, (long) n * Float.BYTES)
+				: this.driver.matrixDescriptor(n, m, (long) m * Float.BYTES);
+		MemorySegment right = tb ? this.driver.matrixDescriptor(p, m, (long) m * Float.BYTES)
+				: this.driver.matrixDescriptor(m, p, (long) p * Float.BYTES);
+		MemorySegment result = this.driver.matrixDescriptor(n, p, (long) p * Float.BYTES);
+		if (left.address() == 0 || right.address() == 0 || result.address() == 0) {
+			return false;
+		}
+		MemorySegment multiplication = this.driver.matrixMultiplication(this.device, ta, tb, n, p, m);
+		if (multiplication.address() == 0) {
+			return false;
+		}
+		MemorySegment commands = this.driver.message(this.queue, "commandBuffer");
+		try {
+			for (int z = 0; z < batch; z++) {
+				MemorySegment ma = this.driver.matrix(slabs[0].buffer, (long) z * sa * Float.BYTES, left);
+				MemorySegment mb = this.driver.matrix(slabs[1].buffer, (long) z * sb * Float.BYTES, right);
+				MemorySegment mc = this.driver.matrix(slabs[2].buffer, (long) z * n * p * Float.BYTES, result);
+				try {
+					if (ma.address() == 0 || mb.address() == 0 || mc.address() == 0) {
+						return false;
+					}
+					this.driver.messageVoid(multiplication,
+							"encodeToCommandBuffer:leftMatrix:rightMatrix:resultMatrix:", commands, ma, mb, mc);
+				}
+				finally {
+					release(this.driver, ma);
+					release(this.driver, mb);
+					release(this.driver, mc);
+				}
+			}
+			return commit(commands, call);
+		}
+		finally {
+			release(this.driver, multiplication);
+		}
+	}
+
+	/**
+	 * {@code c[i] = op(a[i])} over {@code n} elements -- the element-wise tier, where the
+	 * member is the op code rather than the kernel. A libm member at or above the
+	 * threshold, or ANY member (the resident tier's four included) over a resident
+	 * operand.
+	 * @return {@code true} when {@code c} was filled
+	 */
+	@Override
+	public boolean mapF(int op, float[] a, int oa, float[] c, int oc, int n) {
+		if (!acceptable(op < Gpu.MAP_LIBM_OPS ? n : 0, MIN_MAP_ELEMENTS, n, a)) {
+			return false;
+		}
+		MemorySegment pool = MemorySegment.NULL;
+		Call call = null;
+		try {
+			pool = this.driver.autoreleasePoolPush();
+			enter();
+			call = new Call(2);
+			call.lookup(0, a, oa, n);
+			if (!call.ensure(0, n) || !call.ensure(1, n)) {
+				return false;
+			}
+			call.stage(0, a, oa, n, false);
+			try (Arena arena = Arena.ofConfined()) {
+				MemorySegment args = arena.allocate(I, 2);
+				args.setAtIndex(I, 0, n);
+				args.setAtIndex(I, 1, op);
+				MemorySegment commands = this.driver.message(this.queue, "commandBuffer");
+				MemorySegment encoder = beginEncoder(commands, this.map);
+				this.driver.messageVoid(encoder, "setBuffer:offset:atIndex:", call.slabs[0].buffer, 0, 0);
+				this.driver.messageVoid(encoder, "setBuffer:offset:atIndex:", call.slabs[1].buffer, 0, 1);
+				this.driver.messageVoid(encoder, "setBytes:length:atIndex:", args, 2L * Integer.BYTES, 2);
+				flatDispatch(arena, encoder, n);
+				this.driver.messageVoid(encoder, "endEncoding");
+				if (!commit(commands, call)) {
+					return false;
+				}
+			}
+			call.finish(1, c, oc, n);
+			return true;
+		}
+		catch (Throwable ex) {
+			return false;
+		}
+		finally {
+			end(call);
+			pop(this.driver, pool);
+		}
+	}
+
+	/**
+	 * {@code out[i] = op(a[ia(i)], b[ib(i)])} over a BROADCAST binary element-wise op.
+	 * Bit-identical to the scalar defun: see {@code gemm.metal}, which argues the case
+	 * rather than inheriting the CUDA half's compute-in-double rule, because there is no
+	 * double here to compute in.
+	 * @return {@code true} when {@code c} was filled
+	 */
+	@Override
+	public boolean bcastF(int op, float[] a, int oa, int[] sa, float[] b, int ob, int[] sb, float[] c, int oc,
+			int[] dims) {
+		int rank = dims.length;
+		int n = count(dims);
+		long aElements = span(dims, sa) + 1, bElements = span(dims, sb) + 1;
+		if (!acceptable(n, MIN_STRIDED_ELEMENTS, n, a, b)) {
+			return false;
+		}
+		MemorySegment pool = MemorySegment.NULL;
+		Call call = null;
+		try {
+			pool = this.driver.autoreleasePoolPush();
+			enter();
+			call = new Call(3);
+			call.lookup(0, a, oa, aElements);
+			call.lookup(1, b, ob, bElements);
+			if (!call.ensure(0, aElements) || !call.ensure(1, bElements) || !call.ensure(2, n)) {
+				return false;
+			}
+			call.stage(0, a, oa, aElements, false);
+			call.stage(1, b, ob, bElements, false);
+			try (Arena arena = Arena.ofConfined()) {
+				MemorySegment meta = layout(arena, 3, dims, sa, sb, null);
+				MemorySegment args = arena.allocate(I, 3);
+				args.setAtIndex(I, 0, op);
+				args.setAtIndex(I, 1, n);
+				args.setAtIndex(I, 2, rank);
+				MemorySegment commands = this.driver.message(this.queue, "commandBuffer");
+				MemorySegment encoder = beginEncoder(commands, this.bcast);
+				bind(encoder, call.slabs, 0, 1, 2);
+				this.driver.messageVoid(encoder, "setBytes:length:atIndex:", meta, 3L * rank * Integer.BYTES, 3);
+				this.driver.messageVoid(encoder, "setBytes:length:atIndex:", args, 3L * Integer.BYTES, 4);
+				flatDispatch(arena, encoder, n);
+				this.driver.messageVoid(encoder, "endEncoding");
+				if (!commit(commands, call)) {
+					return false;
+				}
+			}
+			call.finish(2, c, oc, n);
+			return true;
+		}
+		catch (Throwable ex) {
+			return false;
+		}
+		finally {
+			end(call);
+			pop(this.driver, pool);
+		}
+	}
+
+	/**
+	 * {@code out[i] = a[ia(i)]}: the permuted COPY behind an axes transpose. A copy, so
+	 * trivially bit-identical.
+	 * @return {@code true} when {@code c} was filled
+	 */
+	@Override
+	public boolean gatherF(float[] a, int oa, int[] sa, float[] c, int oc, int[] dims) {
+		int rank = dims.length;
+		int n = count(dims);
+		long aElements = span(dims, sa) + 1;
+		if (!acceptable(n, MIN_STRIDED_ELEMENTS, n, a)) {
+			return false;
+		}
+		MemorySegment pool = MemorySegment.NULL;
+		Call call = null;
+		try {
+			pool = this.driver.autoreleasePoolPush();
+			enter();
+			call = new Call(2);
+			call.lookup(0, a, oa, aElements);
+			if (!call.ensure(0, aElements) || !call.ensure(1, n)) {
+				return false;
+			}
+			call.stage(0, a, oa, aElements, false);
+			try (Arena arena = Arena.ofConfined()) {
+				MemorySegment meta = layout(arena, 2, dims, sa, null, null);
+				MemorySegment args = arena.allocate(I, 2);
+				args.setAtIndex(I, 0, n);
+				args.setAtIndex(I, 1, rank);
+				MemorySegment commands = this.driver.message(this.queue, "commandBuffer");
+				MemorySegment encoder = beginEncoder(commands, this.gather);
+				bind(encoder, call.slabs, 0, 1);
+				this.driver.messageVoid(encoder, "setBytes:length:atIndex:", meta, 2L * rank * Integer.BYTES, 2);
+				this.driver.messageVoid(encoder, "setBytes:length:atIndex:", args, 2L * Integer.BYTES, 3);
+				flatDispatch(arena, encoder, n);
+				this.driver.messageVoid(encoder, "endEncoding");
+				if (!commit(commands, call)) {
+					return false;
+				}
+			}
+			call.finish(1, c, oc, n);
+			return true;
+		}
+		catch (Throwable ex) {
+			return false;
+		}
+		finally {
+			end(call);
+			pop(this.driver, pool);
+		}
+	}
+
+	/**
+	 * The axis fold, over a RESIDENT operand only: {@link #thresholds} says
+	 * {@code Long.MAX_VALUE}, so {@link Gpu} never offers it for its size here -- the
+	 * measured refusal stands for the round trip -- and offers it over an operand that is
+	 * already on the device, where the trip the refusal measured is not paid and the
+	 * alternative is bringing the operand home for the CPU fold. The sum accumulates in
+	 * software binary64 ({@code gemm.metal}) and so lands on {@code %la-fold-axis}'s
+	 * bits; amax / amin move bits.
+	 * @return {@code true} when {@code c} was filled
+	 */
+	@Override
+	public boolean foldF(int op, float[] a, int oa, float[] c, int oc, int outer, int len, int inner) {
+		long n = (long) outer * inner * len;
+		int cells = outer * inner;
+		if (!acceptable(0, Long.MAX_VALUE, n, a)) {
+			return false;
+		}
+		MemorySegment pool = MemorySegment.NULL;
+		Call call = null;
+		try {
+			pool = this.driver.autoreleasePoolPush();
+			enter();
+			call = new Call(2);
+			call.lookup(0, a, oa, n);
+			if (!call.ensure(0, n) || !call.ensure(1, cells)) {
+				return false;
+			}
+			call.stage(0, a, oa, n, false);
+			try (Arena arena = Arena.ofConfined()) {
+				MemorySegment args = arena.allocate(I, 4);
+				args.setAtIndex(I, 0, op);
+				args.setAtIndex(I, 1, outer);
+				args.setAtIndex(I, 2, len);
+				args.setAtIndex(I, 3, inner);
+				MemorySegment commands = this.driver.message(this.queue, "commandBuffer");
+				MemorySegment encoder = beginEncoder(commands, this.tier[FOLD]);
+				bind(encoder, call.slabs, 0, 1);
+				this.driver.messageVoid(encoder, "setBytes:length:atIndex:", args, 4L * Integer.BYTES, 2);
+				flatDispatch(arena, encoder, cells);
+				this.driver.messageVoid(encoder, "endEncoding");
+				if (!commit(commands, call)) {
+					return false;
+				}
+			}
+			call.finish(1, c, oc, cells);
+			return true;
+		}
+		catch (Throwable ex) {
+			return false;
+		}
+		finally {
+			end(call);
+			pop(this.driver, pool);
+		}
+	}
+
+	/**
+	 * {@code y = W x}, the GEMV behind {@code vec:matvec} -- and the one member of this
+	 * class whose accept-or-decline is a question of RESIDENCY rather than of size, for
+	 * the reason {@code CudaGemm.gemv} gives, stronger here: a matrix-by-vector product
+	 * is one pass over {@code W}, and on this backend copying {@code W} in is a memcpy of
+	 * the very bytes the CPU kernel would have streamed, so the cold trip loses at EVERY
+	 * size (753 us at llama2's 32000x288 head against the CPU's 800, and the floor below
+	 * that). Over a resident matrix the call is the ~77 us command-buffer floor plus a
+	 * read at the device's own bandwidth, and it is ahead from
+	 * {@link #MIN_MATVEC_ELEMENTS}. So the rule is the CUDA half's: <b>a matrix is taken
+	 * when it is resident, or when it has been offered once before and not written
+	 * since</b> -- the second offer uploads it, every later one finds it there, and a
+	 * matrix the program rewrites between calls is offered "for the first time" every
+	 * time and never pays for a trip it would lose. The first sight is a decline that
+	 * takes no slab, and the mark it leaves is a residency entry with no buffer
+	 * ({@link DeviceResidency#offeredBefore}), so {@link #written} clears it exactly as
+	 * it would clear a copy. The matrix is kept resident in BOTH modes (eagerly, it is
+	 * the only array that is); {@code x} and {@code y} follow the mode like every other
+	 * operand and result.
+	 *
+	 * <p>
+	 * The accumulator is COMPENSATED rather than a double ({@code gemm.metal}): a
+	 * float-float pair carrying ~48 bits, which lands on the scalar defun's
+	 * double-accumulated bits on 1024 of 1024 rows measured -- the same contract the CUDA
+	 * kernel's double earns, without the width MSL does not have.
+	 * @return {@code true} when {@code y} was filled, {@code false} when the call
+	 * declined or the device failed -- in which case {@code y} is untouched
+	 */
+	@Override
+	public boolean gemvF(float[] w, int ow, float[] x, int ox, float[] y, int oy, int rows, int cols) {
+		long wElements = (long) rows * cols;
+		if (wElements < MIN_MATVEC_ELEMENTS) {
+			return false;
+		}
+		MemorySegment pool = MemorySegment.NULL;
+		Call call = null;
+		try {
+			pool = this.driver.autoreleasePoolPush();
+			enter();
+			call = new Call(3);
+			// The two-sight rule above: a matrix seen for the first time is declined and
+			// marked, nothing taken; seen again unwritten, it is copied in below.
+			if (call.lookup(0, w, ow, wElements) == null
+					&& !this.residency.offeredBefore(w, (long) ow * Float.BYTES, wElements * Float.BYTES)) {
+				return false;
+			}
+			call.lookup(1, x, ox, cols);
+			if (!call.ensure(0, wElements) || !call.ensure(1, cols) || !call.ensure(2, rows)) {
+				return false;
+			}
+			call.stage(0, w, ow, wElements, true);
+			call.stage(1, x, ox, cols, false);
+			if (!dispatchGemv(call, rows, cols)) {
+				return false;
+			}
+			call.finish(2, y, oy, rows);
+			return true;
+		}
+		catch (Throwable ex) {
+			return false;
+		}
+		finally {
+			end(call);
+			pop(this.driver, pool);
+		}
+	}
+
+	/**
+	 * One dispatch of the GEMV: one SIMD-group per row, {@link #GEMV_GROUP} threads a
+	 * group.
+	 */
+	private boolean dispatchGemv(Call call, int rows, int cols) throws Throwable {
+		Slab[] slabs = call.slabs;
+		try (Arena arena = Arena.ofConfined()) {
+			MemorySegment args = arena.allocate(I, 2);
+			args.setAtIndex(I, 0, rows);
+			args.setAtIndex(I, 1, cols);
+			int rowsPerGroup = GEMV_GROUP / this.gemvWidth;
+			MemorySegment commands = this.driver.message(this.queue, "commandBuffer");
+			MemorySegment encoder = beginEncoder(commands, this.gemv);
+			bind(encoder, slabs, 0, 1, 2);
+			this.driver.messageVoid(encoder, "setBytes:length:atIndex:", args, 2L * Integer.BYTES, 3);
+			this.driver.dispatch(encoder, MetalDriver.size(arena, (rows + rowsPerGroup - 1) / rowsPerGroup, 1, 1),
+					MetalDriver.size(arena, GEMV_GROUP, 1, 1));
+			this.driver.messageVoid(encoder, "endEncoding");
+			return commit(commands, call);
+		}
+	}
+
+	// --- the resident tier ------------------------------------------------------------
+	// Offered by Gpu only once an operand is resident, and declined here below
+	// MIN_RESIDENT_ELEMENTS, where the command-buffer floor loses to a memcpy and a lane
+	// loop. Each is the ordinary shape -- look up, take what is missing, stage, launch,
+	// finish -- and each lands on the CPU kernel's bits (gemm.metal says how).
+
+	/**
+	 * {@code c[i] = op(a[i], b[i])} over two operands of the same shape.
+	 * @return {@code true} when {@code c} was filled
+	 */
+	@Override
+	public boolean zipF(int op, float[] a, int oa, float[] b, int ob, float[] c, int oc, int n) {
+		if (!acceptable(0, Long.MAX_VALUE, n, a, b)) {
+			return false;
+		}
+		MemorySegment pool = MemorySegment.NULL;
+		Call call = null;
+		try {
+			pool = this.driver.autoreleasePoolPush();
+			enter();
+			call = new Call(3);
+			call.lookup(0, a, oa, n);
+			call.lookup(1, b, ob, n);
+			if (!call.ensure(0, n) || !call.ensure(1, n) || !call.ensure(2, n)) {
+				return false;
+			}
+			call.stage(0, a, oa, n, false);
+			call.stage(1, b, ob, n, false);
+			try (Arena arena = Arena.ofConfined()) {
+				MemorySegment args = arena.allocate(I, 2);
+				args.setAtIndex(I, 0, op);
+				args.setAtIndex(I, 1, n);
+				MemorySegment commands = this.driver.message(this.queue, "commandBuffer");
+				MemorySegment encoder = beginEncoder(commands, this.tier[ZIP]);
+				bind(encoder, call.slabs, 0, 1, 2);
+				this.driver.messageVoid(encoder, "setBytes:length:atIndex:", args, 2L * Integer.BYTES, 3);
+				flatDispatch(arena, encoder, n);
+				this.driver.messageVoid(encoder, "endEncoding");
+				if (!commit(commands, call)) {
+					return false;
+				}
+			}
+			call.finish(2, c, oc, n);
+			return true;
+		}
+		catch (Throwable ex) {
+			return false;
+		}
+		finally {
+			end(call);
+			pop(this.driver, pool);
+		}
+	}
+
+	/**
+	 * {@code c[i] = op(a[i], s)} -- or {@code op(s, a[i])} when {@code swap} -- over a
+	 * DOUBLE scalar whatever the array's width, which is the CPU kernel's contract too. A
+	 * scalar that is exactly a float takes the float path; any other takes the
+	 * software-binary64 path ({@code gemm.metal}); both are the CPU's bits. In place (the
+	 * destination IS the operand, as {@code %la-scale} writes it) over a resident operand
+	 * the kernel reads and writes the one slab, which is then marked dirty.
+	 * @return {@code true} when {@code c} was filled
+	 */
+	@Override
+	public boolean scaleF(int op, float[] a, int oa, double s, boolean swap, float[] c, int oc, int n) {
+		if (!acceptable(0, Long.MAX_VALUE, n, a)) {
+			return false;
+		}
+		MemorySegment pool = MemorySegment.NULL;
+		Call call = null;
+		try {
+			pool = this.driver.autoreleasePoolPush();
+			enter();
+			call = new Call(2);
+			call.lookup(0, a, oa, n);
+			if (c == a && oc == oa && call.slabs[0] != null) {
+				call.share(1, 0);
+			}
+			if (!call.ensure(0, n) || !call.ensure(1, n)) {
+				return false;
+			}
+			call.stage(0, a, oa, n, false);
+			try (Arena arena = Arena.ofConfined()) {
+				boolean exact = (double) (float) s == s || Double.isNaN(s);
+				MemorySegment args = arena.allocate(I, 4);
+				args.setAtIndex(I, 0, op);
+				args.setAtIndex(I, 1, n);
+				args.setAtIndex(I, 2, swap ? 1 : 0);
+				args.setAtIndex(I, 3, exact ? 1 : 0);
+				MemorySegment scalar = arena.allocate(L, 2);
+				scalar.setAtIndex(L, 0, Double.doubleToRawLongBits(s));
+				scalar.setAtIndex(L, 1, Float.floatToRawIntBits((float) s) & 0xffffffffL);
+				MemorySegment commands = this.driver.message(this.queue, "commandBuffer");
+				MemorySegment encoder = beginEncoder(commands, this.tier[SCAL]);
+				bind(encoder, call.slabs, 0, 1);
+				this.driver.messageVoid(encoder, "setBytes:length:atIndex:", args, 4L * Integer.BYTES, 2);
+				this.driver.messageVoid(encoder, "setBytes:length:atIndex:", scalar, 2L * Long.BYTES, 3);
+				flatDispatch(arena, encoder, n);
+				this.driver.messageVoid(encoder, "endEncoding");
+				if (!commit(commands, call)) {
+					return false;
+				}
+			}
+			call.finish(1, c, oc, n);
+			return true;
+		}
+		catch (Throwable ex) {
+			return false;
+		}
+		finally {
+			end(call);
+			pop(this.driver, pool);
+		}
+	}
+
+	/**
+	 * {@code c = where(m, x, y)} over three operands broadcast to {@code dims}, any of
+	 * which may be a scalar. The values and the result must be single; the MASK may be
+	 * EITHER WIDTH, and a {@code double[]} one is not the hard decline every other double
+	 * operand here is. {@code linalg:where}'s test is {@code (/= m 0)} -- "any bit but
+	 * the sign set" -- so the mask is a PREDICATE, read as raw words and never entering
+	 * the arithmetic this backend has no {@code double} for, exactly as the fused
+	 * softmax's {@code pack_mask} reads it. It is staged and looked up at its own width.
+	 * The value scalars are narrowed on the host exactly as the CPU kernel narrows them.
+	 * @return {@code true} when {@code c} was filled
+	 */
+	@Override
+	public boolean whereF(@Nullable Object m, int om, int[] sm, double ms, float @Nullable [] x, int ox, int[] sx,
+			double xs, float @Nullable [] y, int oy, int[] sy, double ys, float[] c, int oc, int[] dims) {
+		boolean wide = m instanceof double[];
+		if (m != null && !wide && !(m instanceof float[])) {
+			return false;
+		}
+		long maskWidth = wide ? Double.BYTES : Float.BYTES;
+		int rank = dims.length;
+		int n = count(dims);
+		if (!acceptable(0, Long.MAX_VALUE, n, m, x, y)) {
+			return false;
+		}
+		long mElements = m == null ? 0 : span(dims, sm) + 1, xElements = x == null ? 0 : span(dims, sx) + 1,
+				yElements = y == null ? 0 : span(dims, sy) + 1;
+		if (mElements > Integer.MAX_VALUE) {
+			return false;
+		}
+		MemorySegment pool = MemorySegment.NULL;
+		Call call = null;
+		try {
+			pool = this.driver.autoreleasePoolPush();
+			enter();
+			// Slots: 0 mask, 1 x, 2 y, 3 result. A scalar operand's slot stays null and
+			// the result slab is bound in its place, never read.
+			call = new Call(4);
+			if (m != null) {
+				call.lookupBytes(0, m, om * maskWidth, mElements * maskWidth);
+			}
+			if (x != null) {
+				call.lookup(1, x, ox, xElements);
+			}
+			if (y != null) {
+				call.lookup(2, y, oy, yElements);
+			}
+			if ((m != null && !call.ensureBytes(0, mElements * maskWidth)) || (x != null && !call.ensure(1, xElements))
+					|| (y != null && !call.ensure(2, yElements)) || !call.ensure(3, n)) {
+				return false;
+			}
+			if (m != null) {
+				call.stageMask(0, m, om, (int) mElements, wide, false);
+			}
+			if (x != null) {
+				call.stage(1, x, ox, xElements, false);
+			}
+			if (y != null) {
+				call.stage(2, y, oy, yElements, false);
+			}
+			try (Arena arena = Arena.ofConfined()) {
+				MemorySegment meta = layout(arena, 4, dims, sm, sx, sy);
+				MemorySegment args = arena.allocate(I, 7);
+				args.setAtIndex(I, 0, n);
+				args.setAtIndex(I, 1, rank);
+				args.setAtIndex(I, 2, m != null ? 1 : 0);
+				args.setAtIndex(I, 3, x != null ? 1 : 0);
+				args.setAtIndex(I, 4, y != null ? 1 : 0);
+				args.setAtIndex(I, 5, ms != 0.0 ? 1 : 0);
+				args.setAtIndex(I, 6, wide ? 1 : 0);
+				MemorySegment scalars = arena.allocate(F, 2);
+				scalars.setAtIndex(F, 0, (float) xs);
+				scalars.setAtIndex(F, 1, (float) ys);
+				MemorySegment commands = this.driver.message(this.queue, "commandBuffer");
+				MemorySegment encoder = beginEncoder(commands, this.tier[WHERE]);
+				Slab result = call.slabs[3];
+				for (int i = 0; i < 4; i++) {
+					Slab slab = call.slabs[i] != null ? call.slabs[i] : result;
+					this.driver.messageVoid(encoder, "setBuffer:offset:atIndex:", slab.buffer, 0, i);
+				}
+				this.driver.messageVoid(encoder, "setBytes:length:atIndex:", meta, 4L * rank * Integer.BYTES, 4);
+				this.driver.messageVoid(encoder, "setBytes:length:atIndex:", args, 7L * Integer.BYTES, 5);
+				this.driver.messageVoid(encoder, "setBytes:length:atIndex:", scalars, 2L * Float.BYTES, 6);
+				flatDispatch(arena, encoder, n);
+				this.driver.messageVoid(encoder, "endEncoding");
+				if (!commit(commands, call)) {
+					return false;
+				}
+			}
+			call.finish(3, c, oc, n);
+			return true;
+		}
+		catch (Throwable ex) {
+			return false;
+		}
+		finally {
+			end(call);
+			pop(this.driver, pool);
+		}
+	}
+
+	/**
+	 * Adam's fused update in place over the parameter, its gradient and the two moments:
+	 * the parameter and the moments are WRITTEN on the device and (lazily) marked dirty,
+	 * so a model's weights, once resident, never come home until the host reads them.
+	 * Every operation is software binary64 ({@code gemm.metal}), so the three land on the
+	 * CPU kernel's bits. The rule is {@code [lr, lr*wd, wd, b1, 1-b1, b2, 1-b2, eps,
+	 * c1, c2, mode]}.
+	 * @return {@code true} when the update ran
+	 */
+	@Override
+	public boolean adamStepF(float[] x, int ox, float[] g, int og, float[] m, int om, float[] v, int ov, int n,
+			double[] rule) {
+		if (!acceptable(0, Long.MAX_VALUE, n, x, g, m, v)) {
+			return false;
+		}
+		MemorySegment pool = MemorySegment.NULL;
+		Call call = null;
+		try {
+			pool = this.driver.autoreleasePoolPush();
+			enter();
+			call = new Call(4);
+			call.lookup(0, x, ox, n);
+			call.lookup(1, g, og, n);
+			call.lookup(2, m, om, n);
+			call.lookup(3, v, ov, n);
+			if (!call.ensure(0, n) || !call.ensure(1, n) || !call.ensure(2, n) || !call.ensure(3, n)) {
+				return false;
+			}
+			call.stage(0, x, ox, n, false);
+			call.stage(1, g, og, n, false);
+			call.stage(2, m, om, n, false);
+			call.stage(3, v, ov, n, false);
+			try (Arena arena = Arena.ofConfined()) {
+				MemorySegment args = arena.allocate(I, 2);
+				args.setAtIndex(I, 0, n);
+				args.setAtIndex(I, 1, (int) rule[10]);
+				MemorySegment bits = arena.allocate(L, 10);
+				for (int i = 0; i < 10; i++) {
+					bits.setAtIndex(L, i, Double.doubleToRawLongBits(rule[i]));
+				}
+				MemorySegment commands = this.driver.message(this.queue, "commandBuffer");
+				MemorySegment encoder = beginEncoder(commands, this.tier[ADAM]);
+				bind(encoder, call.slabs, 0, 1, 2, 3);
+				this.driver.messageVoid(encoder, "setBytes:length:atIndex:", args, 2L * Integer.BYTES, 4);
+				this.driver.messageVoid(encoder, "setBytes:length:atIndex:", bits, 10L * Long.BYTES, 5);
+				flatDispatch(arena, encoder, n);
+				this.driver.messageVoid(encoder, "endEncoding");
+				if (!commit(commands, call)) {
+					return false;
+				}
+			}
+			// Three arrays were written in place: each stays resident as the
+			// authoritative copy (lazily) or comes home now (eagerly).
+			call.finish(0, x, ox, n);
+			call.finish(2, m, om, n);
+			call.finish(3, v, ov, n);
+			return true;
+		}
+		catch (Throwable ex) {
+			return false;
+		}
+		finally {
+			end(call);
+			pop(this.driver, pool);
+		}
+	}
+
+	/**
+	 * The strided copy: {@code c[oc + sc.i] = a[oa + sa.i]} over {@code dims}, either
+	 * stride vector possibly negative -- reshape, the rank-2 transpose, a slice and each
+	 * slab of a concatenation, over a resident operand only. Offsets are element offsets
+	 * of the two WALKS' origins; the residency span of each array is still its whole data
+	 * part, which the caller passes as {@code spanA} / {@code spanC} (an element offset
+	 * and count), so that a slice finds the array it was cut from. A destination already
+	 * resident (a concatenation's second slab onward) is written into in place.
+	 * @return {@code true} when {@code c} was filled
+	 */
+	@Override
+	public boolean copyF(float[] a, int oa, int[] sa, int spanOa, int spanNa, float[] c, int oc, int[] sc, int spanOc,
+			int spanNc, int[] dims) {
+		int rank = dims.length;
+		int n = count(dims);
+		if (!acceptable(0, Long.MAX_VALUE, n, a)) {
+			return false;
+		}
+		MemorySegment pool = MemorySegment.NULL;
+		Call call = null;
+		try {
+			pool = this.driver.autoreleasePoolPush();
+			enter();
+			call = new Call(2);
+			call.lookup(0, a, spanOa, spanNa);
+			call.lookup(1, c, spanOc, spanNc);
+			if (!call.ensure(0, spanNa) || !call.ensure(1, spanNc)) {
+				return false;
+			}
+			call.stage(0, a, spanOa, spanNa, false);
+			try (Arena arena = Arena.ofConfined()) {
+				MemorySegment meta = layout(arena, 3, dims, sa, sc, null);
+				MemorySegment args = arena.allocate(I, 4);
+				args.setAtIndex(I, 0, n);
+				args.setAtIndex(I, 1, rank);
+				// The kernel walks from each side's origin: the walk's own offset within
+				// the span.
+				args.setAtIndex(I, 2, oa - spanOa);
+				args.setAtIndex(I, 3, oc - spanOc);
+				MemorySegment commands = this.driver.message(this.queue, "commandBuffer");
+				MemorySegment encoder = beginEncoder(commands, this.tier[COPY]);
+				bind(encoder, call.slabs, 0, 1);
+				this.driver.messageVoid(encoder, "setBytes:length:atIndex:", meta, 3L * rank * Integer.BYTES, 2);
+				this.driver.messageVoid(encoder, "setBytes:length:atIndex:", args, 4L * Integer.BYTES, 3);
+				flatDispatch(arena, encoder, n);
+				this.driver.messageVoid(encoder, "endEncoding");
+				if (!commit(commands, call)) {
+					return false;
+				}
+			}
+			call.finish(1, c, spanOc, spanNc);
+			return true;
+		}
+		catch (Throwable ex) {
+			return false;
+		}
+		finally {
+			end(call);
+			pop(this.driver, pool);
+		}
+	}
+
+	/**
+	 * The acceptance rule every member shares: big enough for its size threshold, or --
+	 * offered for a resident operand -- at least {@link #MIN_RESIDENT_ELEMENTS} elements,
+	 * where a launch with no copy beats a memcpy and a lane loop. {@code work} is what
+	 * the size threshold counts (0 for a member that has none here).
+	 */
+	private boolean acceptable(long work, long threshold, long elements, @Nullable Object... operands) {
+		if (work >= threshold) {
+			return true;
+		}
+		if (elements < MIN_RESIDENT_ELEMENTS) {
+			return false;
+		}
+		for (Object operand : operands) {
+			if (operand != null && this.residency.resident(operand)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	// --- encoding
+	// -----------------------------------------------------------------------
+
+	private MemorySegment beginEncoder(MemorySegment commands, MemorySegment state) throws Throwable {
+		MemorySegment encoder = this.driver.message(commands, "computeCommandEncoder");
+		this.driver.messageVoid(encoder, "setComputePipelineState:", state);
+		return encoder;
+	}
+
+	/** Binds {@code slabs[slots[k]]} at buffer index {@code k}. */
+	private void bind(MemorySegment encoder, Slab[] slabs, int... slots) throws Throwable {
+		for (int k = 0; k < slots.length; k++) {
+			this.driver.messageVoid(encoder, "setBuffer:offset:atIndex:", slabs[slots[k]].buffer, 0, k);
+		}
+	}
+
+	private void flatDispatch(Arena arena, MemorySegment encoder, int n) throws Throwable {
+		this.driver.dispatch(encoder, MetalDriver.size(arena, (n + FLAT_GROUP - 1) / FLAT_GROUP, 1, 1),
+				MetalDriver.size(arena, FLAT_GROUP, 1, 1));
+	}
+
+	/**
+	 * The end of every member's encoding, one of two ways. EAGERLY -- the library's
+	 * default contract, "{@code out} is filled when the call returns" -- it commits and
+	 * waits, and a command buffer that ends in any status but {@code Completed} is an
+	 * ordinary decline. LAZILY it commits and RETURNS: nothing waits until the host is
+	 * about to touch bytes the device may still be reading or writing ({@link #settle}),
+	 * so a chain of members over resident operands runs on the device while the host goes
+	 * on encoding the next. The command buffer is retained past the call's autorelease
+	 * pool and released when it retires; its number becomes the fence of every slab the
+	 * call holds. A failure is then learned only after the call has answered
+	 * {@code true}, which the lazy mode is built to carry: it surfaces at the first host
+	 * read of a result the failed buffer wrote, as the {@code IllegalStateException} that
+	 * mode already reserves for a result the host has no other copy of
+	 * ({@link Gpu#lazyResults}).
+	 */
+	private boolean commit(MemorySegment commands, Call call) throws Throwable {
+		if (!this.lazy) {
+			return commitAndWait(commands);
+		}
+		this.driver.messageVoid(commands, "commit");
+		this.driver.message(commands, "retain");
+		synchronized (this) {
+			long seq = ++this.committed;
+			call.seq = seq;
+			this.inflight.addLast(new Inflight(seq, commands, call.operands(), new ArrayList<>(2)));
+			for (Slab slab : call.slabs) {
+				if (slab != null) {
+					slab.fence = seq;
+				}
+			}
+		}
+		return true;
+	}
+
+	/**
+	 * The host is about to read or write {@code slab}'s bytes: waits for the command
+	 * buffer that last touched it, if it is still in flight -- and, one queue executing
+	 * in order, for every earlier one, each of which is retired on the way.
+	 */
+	private void settle(Slab slab) {
+		if (slab.fence > this.retired) {
+			waitFor(slab.fence);
+		}
+	}
+
+	/** {@link #settle} for everything: nothing is in flight when this returns. */
+	private void waitAll() {
+		waitFor(this.committed);
+	}
+
+	private synchronized void waitFor(long seq) {
+		try {
+			while (!this.inflight.isEmpty() && this.inflight.peekFirst().seq() <= seq) {
+				Inflight head = this.inflight.pollFirst();
+				this.driver.messageVoid(head.commands(), "waitUntilCompleted");
+				retire(head);
+			}
+		}
+		catch (Throwable ex) {
+			throw new IllegalStateException("a Metal command buffer could not be waited for", ex);
+		}
+	}
+
+	/**
+	 * Retires, without blocking, every command buffer at the head of the line that has
+	 * already completed: the start of every call, so that a retained command buffer goes
+	 * back to the queue promptly and a failure is learned as early as it can be.
+	 */
+	private synchronized void retireCompleted() {
+		try {
+			while (!this.inflight.isEmpty() && status(this.inflight.peekFirst()) >= MetalDriver.STATUS_COMPLETED) {
+				retire(this.inflight.pollFirst());
+			}
+		}
+		catch (Throwable ex) {
+			throw new IllegalStateException("a Metal command buffer's status could not be read", ex);
+		}
+	}
+
+	/**
+	 * The buffer's status -- read as a failure, once it has finished, if a test said so.
+	 */
+	private long status(Inflight buffer) throws Throwable {
+		long status = this.driver.messageLong(buffer.commands(), "status");
+		return buffer.seq() == this.failAt && status >= MetalDriver.STATUS_COMPLETED ? MetalDriver.STATUS_ERROR
+				: status;
+	}
+
+	/**
+	 * A completed command buffer leaves the line. Ended in any status but
+	 * {@code Completed}, the slabs it wrote hold nobody's result and are marked LOST, and
+	 * so is every result of a later buffer in flight that read one of them -- a chain
+	 * over a lost result is lost with it -- until a slab is taken fresh from the pool
+	 * again ({@link #take}) or written as a pure result by a buffer that did not read it.
+	 */
+	private void retire(Inflight done) throws Throwable {
+		long status = status(done);
+		this.retired = done.seq();
+		release(this.driver, done.commands());
+		if (status == MetalDriver.STATUS_COMPLETED) {
+			return;
+		}
+		markLost(done.written());
+		for (Inflight later : this.inflight) {
+			boolean readsLost = false;
+			for (Slab slab : later.read()) {
+				readsLost |= slab.lost;
+			}
+			if (readsLost) {
+				markLost(later.written());
+				continue;
+			}
+			for (Slab slab : later.written()) {
+				boolean read = false;
+				for (Slab operand : later.read()) {
+					read |= operand == slab;
+				}
+				if (!read) {
+					slab.lost = false;
+				}
+			}
+		}
+	}
+
+	private void markLost(List<Slab> slabs) {
+		for (Slab slab : slabs) {
+			slab.lost = true;
+		}
+		this.anyLost |= !slabs.isEmpty();
+	}
+
+	/** {@code finish}'s report: the slab {@code seq}'s dispatch wrote. Under this. */
+	private synchronized void noteWritten(long seq, Slab slab) {
+		Inflight last = this.inflight.peekLast();
+		if (last != null && last.seq() == seq) {
+			last.written().add(slab);
+			return;
+		}
+		for (Inflight buffer : this.inflight) {
+			if (buffer.seq() == seq) {
+				buffer.written().add(slab);
+				return;
+			}
+		}
+	}
+
+	/**
+	 * For the tests: the next command buffer committed asynchronously is to be read as
+	 * having FAILED, whatever the device says. Package-private.
+	 */
+	void failNextCommandBuffer() {
+		synchronized (this) {
+			this.failAt = this.committed + 1;
+		}
+	}
+
+	/** For the tests: how many command buffers are in flight right now. */
+	int inflightCount() {
+		synchronized (this) {
+			return this.inflight.size();
+		}
+	}
+
+	/**
+	 * Commits and waits: the eager half of {@link #commit}. A command buffer that ends in
+	 * any status but {@code Completed} is an ordinary decline -- Metal has no
+	 * sticky-context state for this to retire the feature over, unlike a CUDA
+	 * {@code CUresult}.
+	 */
+	private boolean commitAndWait(MemorySegment commands) throws Throwable {
+		this.driver.messageVoid(commands, "commit");
+		this.driver.messageVoid(commands, "waitUntilCompleted");
+		return this.driver.messageLong(commands, "status") == MetalDriver.STATUS_COMPLETED;
+	}
+
+	// --- one call's slabs
+	// ---------------------------------------------------------------
+
+	/**
+	 * The slabs of one member call: for each slot, the slab and whether it is the CALL's
+	 * (scratch taken from the pool this call, recycled at the end unless the cache
+	 * adopted it) or the CACHE's (a resident copy the lookup found, or one the call
+	 * adopted). The addresses of the resident ones are what an eviction under pool
+	 * pressure must leave alone, because the coming dispatch reads them.
+	 */
+	private final class Call {
+
+		final Slab[] slabs;
+
+		final boolean[] owned;
+
+		/**
+		 * Whether the slot is an OPERAND the dispatch reads -- a lookup hit, an upload,
+		 * or a share of one -- as against a result it only writes. What {@link #retire}
+		 * needs to follow a lost result through the buffers that read it.
+		 */
+		final boolean[] operand;
+
+		/**
+		 * The sequence number {@link #commit} gave this call's command buffer, lazily.
+		 */
+		long seq;
+
+		Call(int slots) {
+			this.slabs = new Slab[slots];
+			this.owned = new boolean[slots];
+			this.operand = new boolean[slots];
+		}
+
+		/** The slabs the dispatch reads. */
+		Slab[] operands() {
+			int count = 0;
+			for (int i = 0; i < this.slabs.length; i++) {
+				count += this.operand[i] && this.slabs[i] != null ? 1 : 0;
+			}
+			Slab[] read = new Slab[count];
+			for (int i = 0, k = 0; i < this.slabs.length; i++) {
+				if (this.operand[i] && this.slabs[i] != null) {
+					read[k++] = this.slabs[i];
+				}
+			}
+			return read;
+		}
+
+		/**
+		 * Looks the host span up in the cache; a hit fills the slot with the cache's
+		 * slab. A hit whose slab is already gone (dropped, and a drain beat this call to
+		 * it) is a miss like any other.
+		 */
+		@Nullable Slab lookup(int slot, Object host, long offsetElements, long elements) {
+			return lookupBytes(slot, host, offsetElements * Float.BYTES, elements * Float.BYTES);
+		}
+
+		/**
+		 * {@link #lookup} over a span given in BYTES -- the softmax pair's mask, which
+		 * may be either width whatever the operand's is.
+		 */
+		@Nullable Slab lookupBytes(int slot, Object host, long offsetBytes, long bytes) {
+			long address = MetalGemm.this.residency.lookup(host, offsetBytes, bytes);
+			if (address == 0) {
+				return null;
+			}
+			synchronized (MetalGemm.this) {
+				Slab slab = MetalGemm.this.held.get(address);
+				if (slab != null) {
+					this.slabs[slot] = slab;
+					this.operand[slot] = true;
+				}
+				return slab;
+			}
+		}
+
+		/** The slot shares another's slab -- an in-place member's destination. */
+		void share(int slot, int other) {
+			this.slabs[slot] = this.slabs[other];
+			this.operand[slot] = this.operand[other];
+		}
+
+		/** A scratch slab for the slot unless the lookup filled it. */
+		boolean ensure(int slot, long elements) {
+			return ensureBytes(slot, elements * Float.BYTES);
+		}
+
+		boolean ensureBytes(int slot, long bytes) {
+			if (this.slabs[slot] != null) {
+				return true;
+			}
+			Slab slab = take(bytes, keep());
+			if (slab == null) {
+				return false;
+			}
+			this.slabs[slot] = slab;
+			this.owned[slot] = true;
+			return true;
+		}
+
+		/** The addresses of every slab the call holds, for the pool's eviction. */
+		private long[] keep() {
+			long[] keep = new long[this.slabs.length];
+			for (int i = 0; i < keep.length; i++) {
+				keep[i] = this.slabs[i] != null ? this.slabs[i].buffer().address() : 0;
+			}
+			return keep;
+		}
+
+		/**
+		 * Copies the operand in unless the lookup found it there, and -- lazily, or when
+		 * {@code adopt} says so (the GEMV's matrix) -- records the slab as the array's
+		 * clean resident copy, which the cache owns from then on.
+		 */
+		void stage(int slot, float[] host, int offset, long elements, boolean adopt) {
+			if (!this.owned[slot]) {
+				return;
+			}
+			Slab slab = this.slabs[slot];
+			this.operand[slot] = true;
+			// A stub (DeviceResidency, the class comment) is uploaded from its backing.
+			float[] source = host.length >= offset + elements ? host : (float[]) MetalGemm.this.residency.source(host,
+					(long) offset * Float.BYTES, elements * Float.BYTES);
+			// A slab from the free list may still be read by a command buffer in flight:
+			// the ordering the residency design exists to forbid, and the one wait a
+			// chain over resident operands never pays.
+			MetalGemm.this.settle(slab);
+			upload(source, offset, slab, (int) elements);
+			if (adopt || MetalGemm.this.lazy) {
+				MetalGemm.this.adopt(host, (long) offset * Float.BYTES, elements * Float.BYTES, slab, false, keep());
+				this.owned[slot] = false;
+			}
+		}
+
+		/**
+		 * {@link #stage} for the softmax pair's mask: its bytes at ITS width, which the
+		 * packing kernel reads as raw words. {@code adopt} is the second sight of an
+		 * array that is not resident -- the causal mask of a training step -- after which
+		 * the cache owns the copy and the seventy-two calls of a step share one upload.
+		 */
+		void stageMask(int slot, Object mask, int offset, int elements, boolean wide, boolean adopt) {
+			if (!this.owned[slot]) {
+				return;
+			}
+			Slab slab = this.slabs[slot];
+			this.operand[slot] = true;
+			long width = wide ? Double.BYTES : Float.BYTES;
+			long offsetBytes = offset * width, bytes = elements * width;
+			int length = wide ? ((double[]) mask).length : ((float[]) mask).length;
+			Object source = length >= offset + elements ? mask
+					: MetalGemm.this.residency.source(mask, offsetBytes, bytes);
+			MetalGemm.this.settle(slab);
+			if (wide) {
+				MemorySegment.copy((double[]) source, offset, slab.contents(), D, 0, elements);
+			}
+			else {
+				MemorySegment.copy((float[]) source, offset, slab.contents(), F, 0, elements);
+			}
+			if (adopt || MetalGemm.this.lazy) {
+				MetalGemm.this.adopt(mask, offsetBytes, bytes, slab, false, keep());
+				this.owned[slot] = false;
+			}
+		}
+
+		/**
+		 * The end of a successful member over the slot's array. Eagerly the result comes
+		 * down and the slab stays scratch. Lazily nothing comes down: a slab the call
+		 * took is recorded as the array's DIRTY copy, and one the cache already held (an
+		 * in-place member) is marked dirty.
+		 */
+		void finish(int slot, float[] host, int offset, long elements) {
+			Slab slab = this.slabs[slot];
+			if (!MetalGemm.this.lazy) {
+				// Eagerly a stub's backing is allocated and filled here, before the call
+				// returns.
+				float[] target = host.length >= offset + elements ? host : (float[]) MetalGemm.this.residency
+					.storageFor(host, (long) offset * Float.BYTES, elements * Float.BYTES);
+				download(slab, target, offset, (int) elements);
+				return;
+			}
+			MetalGemm.this.noteWritten(this.seq, slab);
+			if (this.owned[slot]) {
+				MetalGemm.this.adopt(host, (long) offset * Float.BYTES, elements * Float.BYTES, slab, true, keep());
+				this.owned[slot] = false;
+			}
+			else {
+				MetalGemm.this.residency.markDirty(host, (long) offset * Float.BYTES, elements * Float.BYTES);
+			}
+		}
+
+	}
+
+	/**
+	 * The end of every call, successful or not: the scratch slabs go back to the pool,
+	 * and then the other safe moment to give the cache's dropped slabs back -- the
+	 * command buffer has completed, so nothing the kernel read is recycled underneath it.
+	 */
+	private void end(@Nullable Call call) {
+		if (call != null) {
+			synchronized (this) {
+				for (int i = 0; i < call.slabs.length; i++) {
+					if (call.owned[i] && call.slabs[i] != null) {
+						push(call.slabs[i]);
+					}
+				}
+			}
+		}
+		drainPending();
+	}
+
+	// --- residency
+	// ----------------------------------------------------------------------
+
+	/**
+	 * The start of every call: gives the pool back every slab the cache has dropped since
+	 * the last call. One of the two moments that is safe -- before any operand of THIS
+	 * call has been looked up, so no slab the coming dispatch reads can be among them.
+	 */
+	private void enter() {
+		retireCompleted();
+		drainPending();
+	}
+
+	/**
+	 * Records {@code slab} as the resident copy of {@code host}'s span, clean or dirty.
+	 * The slab goes into {@link #held} BEFORE the cache learns its address, so a lookup
+	 * that finds the address always finds the slab; whatever the cache replaced or
+	 * evicted for it comes back through the next drain, a dirty one downloaded first.
+	 * {@code keep} is the call's own slabs, which an eviction must leave alone.
+	 */
+	private void adopt(Object host, long offsetBytes, long bytes, Slab slab, boolean dirty, long[] keep) {
+		long address = slab.buffer().address();
+		synchronized (this) {
+			this.held.put(address, slab);
+		}
+		this.residency.put(host, offsetBytes, bytes, address, dirty);
+		if (this.residency.collectionWanted()) {
+			// Only dirty copies left to evict: wake the collector first, if it is due,
+			// so that results the program has dropped -- stubs the young generation has
+			// not got round to -- go back to the pool rather than being flushed into
+			// fresh host arrays (DeviceResidency, the class comment); then evict what is
+			// still over budget, keeping this call's slabs. The flushes run at the next
+			// drain, as every flush here does.
+			if (this.residency.collectionDue()) {
+				System.gc();
+				this.residency.collected();
+			}
+			drainPending();
+			this.residency.evictOverBudget(keep);
+		}
+	}
+
+	/**
+	 * Performs every flush the cache has let go of -- a DIRTY copy it evicted, released
+	 * or replaced, whose bytes the host array does not have: each is downloaded into its
+	 * array -- and then returns every slab the cache has dropped, replaced, evicted or
+	 * orphaned by a collected array to the pool's free lists.
+	 */
+	private void drainPending() {
+		synchronized (this) {
+			flushNow();
+			long[] dropped = this.residency.drain();
+			for (long address : dropped) {
+				Slab slab = this.held.remove(address);
+				if (slab != null) {
+					push(slab);
+				}
+			}
+		}
+	}
+
+	/**
+	 * Downloads every pending flush and queues its slab for the drain. A flush whose slab
+	 * holds a LOST result has nothing to bring home: its storage is remembered, and the
+	 * first read of it throws ({@link #materialize}). Under this.
+	 */
+	private void flushNow() {
+		for (DeviceResidency.Flush flush : this.residency.flushes()) {
+			Slab slab = this.held.get(flush.pointer());
+			if (slab != null && flush.target() instanceof float[] target && !bringHome(slab, target,
+					(int) (flush.offset() / Float.BYTES), (int) (flush.bytes() / Float.BYTES))) {
+				this.lostStorage.add(target);
+			}
+			this.residency.release(flush.pointer());
+		}
+	}
+
+	/**
+	 * A host array is about to be written: its resident copy, if any, is stale and is
+	 * dropped -- after being brought home first when it was the authoritative one
+	 * ({@link #materialize}), so that the write lands on the array's real bytes. For a
+	 * clean copy no device call happens here -- the slab goes back to the pool at the
+	 * next call's safe moment -- so this is safe from any thread and costs a volatile
+	 * read when nothing is resident.
+	 * @param host the host array that is being written
+	 * @return the array to write into: {@code host}, or a stub's backing
+	 */
+	@Override
+	public Object written(Object host) {
+		Object storage = materialize(host);
+		this.residency.written(host);
+		return storage;
+	}
+
+	// --- the fused tier (the Apple half of CudaGemm's) --------------------------------
+	// Eight of the nine compositions gemm.cu fuses, each one MSL kernel where torch.lisp
+	// launched a chain of linalg: members -- and on this backend that removes four of
+	// five COMMAND BUFFERS as well as the memory passes, which eagerly are four full
+	// waits (lazily the buffers are asynchronous). Every one reproduces the chain's
+	// rounding, through the float route where two floats settle it and through the
+	// software binary64 route where they do not (gemm.metal, "THE FUSED TIER"). The
+	// ninth, the dropout mask, stays declined: see dropoutMaskF.
+	//
+	// The double halves are the hard decline every other member's is.
+
+	@Override
+	public boolean gelu(double[] a, int oa, double[] c, int oc, int n) {
+		return false;
+	}
+
+	/**
+	 * The exact GELU, {@code x * (1 + erf(x / sqrt 2)) / 2}, as one pass where the
+	 * composition ran five.
+	 * @return {@code true} when {@code c} was filled
+	 */
+	@Override
+	public boolean geluF(float[] a, int oa, float[] c, int oc, int n) {
+		if (!acceptable(n, MIN_MAP_ELEMENTS, n, a)) {
+			return false;
+		}
+		return flat(this.fused[GELU], 1, new float[][] { a }, new int[] { oa }, c, oc, n, false);
+	}
+
+	@Override
+	public boolean geluGrad(double[] g, int og, double[] x, int ox, double @Nullable [] old, int oOld, double[] c,
+			int oc, int n) {
+		return false;
+	}
+
+	/**
+	 * The tape's backward through that composition, folded onto {@code old} -- the
+	 * gradient {@code x} had already accumulated -- exactly where the tape's own
+	 * accumulation would have put it.
+	 * @return {@code true} when {@code c} was filled
+	 */
+	@Override
+	public boolean geluGradF(float[] g, int og, float[] x, int ox, float @Nullable [] old, int oOld, float[] c, int oc,
+			int n) {
+		if (!acceptable(n, MIN_MAP_ELEMENTS, n, g, x, old)) {
+			return false;
+		}
+		float[][] operands = old != null ? new float[][] { g, x, old } : new float[][] { g, x };
+		int[] offsets = old != null ? new int[] { og, ox, oOld } : new int[] { og, ox };
+		return flat(this.fused[GELU_GRAD], 3, operands, offsets, c, oc, n, old != null);
+	}
+
+	@Override
+	public boolean softmax(double[] a, int oa, @Nullable Object mask, int om, int maskLen, double[] c, int oc, int rows,
+			int len, int sop, double sf, double fill) {
+		return false;
+	}
+
+	/**
+	 * {@code linalg:softmax} over the last axis as one pass: the strict amax, the
+	 * broadcast subtraction, {@code exp} at the width, the sum fold and the broadcast
+	 * division.
+	 * @return {@code true} when {@code c} was filled
+	 */
+	@Override
+	public boolean softmaxF(float[] a, int oa, @Nullable Object mask, int om, int maskLen, float[] c, int oc, int rows,
+			int len, int sop, double sf, double fill) {
+		if (mask == null && sop == 0) {
+			return rowMember(this.fused[SOFTMAX], 1, rows, len, 0, new float[][] { a }, new int[] { oa }, c, oc);
+		}
+		return softmaxScaledMasked(this.fused[SOFTMAX_SM], 1, rows, len, new float[][] { a }, new int[] { oa }, mask,
+				om, maskLen, c, oc, sop, sf, fill);
+	}
+
+	@Override
+	public boolean softmaxGrad(double[] g, int og, double[] s, int os, @Nullable Object mask, int om, int maskLen,
+			double[] c, int oc, int rows, int len, int sop, double sf) {
+		return false;
+	}
+
+	/**
+	 * {@code torch:softmax}'s adjoint {@code s * (g - sum(g * s))}, one pass -- and, when
+	 * the forward folded a scale and a mask, their adjoints in the tape's order: zero
+	 * under the mask, then the scale, both taken in the store.
+	 */
+	@Override
+	public boolean softmaxGradF(float[] g, int og, float[] s, int os, @Nullable Object mask, int om, int maskLen,
+			float[] c, int oc, int rows, int len, int sop, double sf) {
+		if (mask == null && sop == 0) {
+			return rowMember(this.fused[SOFTMAX_GRAD], 2, rows, len, 0, new float[][] { g, s }, new int[] { og, os }, c,
+					oc);
+		}
+		return softmaxScaledMasked(this.fused[SOFTMAX_GRAD_SM], 2, rows, len, new float[][] { g, s },
+				new int[] { og, os }, mask, om, maskLen, c, oc, sop, sf, 0.0);
+	}
+
+	@Override
+	public boolean logSoftmax(double[] a, int oa, double[] c, int oc, int rows, int len) {
+		return false;
+	}
+
+	/** {@code linalg:log-softmax} over the last axis, one pass. */
+	@Override
+	public boolean logSoftmaxF(float[] a, int oa, float[] c, int oc, int rows, int len) {
+		return rowMember(this.fused[LOG_SOFTMAX], 1, rows, len, 0, new float[][] { a }, new int[] { oa }, c, oc);
+	}
+
+	@Override
+	public boolean logSoftmaxGrad(double[] g, int og, double[] o, int oo, double[] c, int oc, int rows, int len) {
+		return false;
+	}
+
+	/** {@code torch:log-softmax}'s adjoint {@code g - exp(out) * sum(g)}, one pass. */
+	@Override
+	public boolean logSoftmaxGradF(float[] g, int og, float[] o, int oo, float[] c, int oc, int rows, int len) {
+		return rowMember(this.fused[LOG_SOFTMAX_GRAD], 2, rows, len, 0, new float[][] { g, o }, new int[] { og, oo }, c,
+				oc);
+	}
+
+	@Override
+	public boolean layerNorm(double[] x, int ox, double[] c, int oc, int rows, int len, double eps) {
+		return false;
+	}
+
+	/**
+	 * {@code torch:layer-norm}'s normalization {@code (x - mean) / sqrt(var + eps)} over
+	 * the last axis, one pass. {@code eps} rides as raw {@code binary64} bits: it is
+	 * generally not a float, and the member boundary the composition rounds at is the
+	 * {@code double} addition.
+	 * @return {@code true} when {@code c} was filled
+	 */
+	@Override
+	public boolean layerNormF(float[] x, int ox, float[] c, int oc, int rows, int len, double eps) {
+		return rowMember(this.fused[LAYER_NORM], 1, rows, len, eps, new float[][] { x }, new int[] { ox }, c, oc);
+	}
+
+	@Override
+	public boolean layerNormGrad(double[] g, int og, double[] x, int ox, double @Nullable [] old, int oOld, double[] c,
+			int oc, int rows, int len, double eps) {
+		return false;
+	}
+
+	/** The tape's backward through that composition, folded onto {@code old}. */
+	@Override
+	public boolean layerNormGradF(float[] g, int og, float[] x, int ox, float @Nullable [] old, int oOld, float[] c,
+			int oc, int rows, int len, double eps) {
+		float[][] operands = old != null ? new float[][] { g, x, old } : new float[][] { g, x };
+		int[] offsets = old != null ? new int[] { og, ox, oOld } : new int[] { og, ox };
+		return rowMember(this.fused[LAYER_NORM_GRAD], 3, rows, len, eps, operands, offsets, c, oc);
+	}
+
+	@Override
+	public boolean layerNormAffine(double[] x, int ox, double[] w, int ow, double[] b, int ob, double[] c, int oc,
+			int rows, int len, double eps) {
+		return false;
+	}
+
+	/**
+	 * Layer-norm's affine folded into the normalization: DECLINED here, at both widths,
+	 * so the module runs the normalization and its two broadcast passes member by member
+	 * as it did before. The MSL pair was BUILT and measured it rather than guessing: per
+	 * call it is worth 13% of the forward and a quarter of the adjoint at the reference
+	 * GPT's shapes, and it does not move the step at all, because the host round trips it
+	 * removes had already been removed generically at the compiled call site. The kernels
+	 * are not kept. {@code .kb/gpu.md}, "Three further Metal findings", has the numbers
+	 * and the condition that would reopen it.
+	 * @return {@code false}, always
+	 */
+	@Override
+	public boolean layerNormAffineF(float[] x, int ox, float[] w, int ow, float[] b, int ob, float[] c, int oc,
+			int rows, int len, double eps) {
+		return false;
+	}
+
+	@Override
+	public boolean layerNormAffineGrad(double[] g, int og, double[] x, int ox, double[] w, int ow,
+			double @Nullable [] old, int oOld, double[] c, int oc, double[] gn, int ogn, int rows, int len,
+			double eps) {
+		return false;
+	}
+
+	/** Its adjoint, declined for the same reason and on the same measurement. */
+	@Override
+	public boolean layerNormAffineGradF(float[] g, int og, float[] x, int ox, float[] w, int ow, float @Nullable [] old,
+			int oOld, float[] c, int oc, float[] gn, int ogn, int rows, int len, double eps) {
+		return false;
+	}
+
+	@Override
+	public boolean dropoutMask(double[] c, int oc, int n, double p, double span, int s1, int s2, int s3) {
+		return false;
+	}
+
+	/**
+	 * The inverted dropout mask: DECLINED here, and on the arithmetic rather than for
+	 * want of a kernel. The draw is Wichmann-Hill's, whose uniform is three
+	 * {@code double} divisions and two {@code double} additions per element -- and on
+	 * this backend a {@code double} division is the software binary64 one, a restoring
+	 * divide of fifty-five bit-serial steps. The generator fill is already not a member
+	 * here for exactly that reason ({@code rngFillF}), and fusing the comparison and the
+	 * scale onto it would not change which half is expensive: it is the draw, not the two
+	 * passes over it. The chain's own draw runs on the CPU and the two passes over it run
+	 * here as they did before.
+	 * @return {@code false}, always
+	 */
+	@Override
+	public boolean dropoutMaskF(float[] c, int oc, int n, double p, double span, int s1, int s2, int s3) {
+		return false;
+	}
+
+	/**
+	 * One FLAT fused member: {@code declared} operand buffers then the result then the
+	 * parameter block ({@code n}, and whether the optional last operand is present), one
+	 * thread per element. An operand the call does not have -- {@code old}, the gradient
+	 * an adjoint folds onto -- is absent from {@code operands} and its buffer index is
+	 * bound to the result's slab instead, because Metal validates every buffer the
+	 * function declares and the kernel never reads it.
+	 */
+	private boolean flat(MemorySegment state, int declared, float[][] operands, int[] offsets, float[] c, int oc, int n,
+			boolean optional) {
+		MemorySegment pool = MemorySegment.NULL;
+		Call call = null;
+		int slots = operands.length + 1, result = operands.length;
+		try {
+			pool = this.driver.autoreleasePoolPush();
+			enter();
+			call = new Call(slots);
+			for (int k = 0; k < operands.length; k++) {
+				call.lookup(k, operands[k], offsets[k], n);
+			}
+			for (int k = 0; k < slots; k++) {
+				if (!call.ensure(k, n)) {
+					return false;
+				}
+			}
+			for (int k = 0; k < operands.length; k++) {
+				call.stage(k, operands[k], offsets[k], n, false);
+			}
+			try (Arena arena = Arena.ofConfined()) {
+				MemorySegment args = arena.allocate(I, 2);
+				args.setAtIndex(I, 0, n);
+				args.setAtIndex(I, 1, optional ? 1 : 0);
+				MemorySegment commands = this.driver.message(this.queue, "commandBuffer");
+				MemorySegment encoder = beginEncoder(commands, state);
+				bindFused(encoder, call.slabs, declared, result);
+				this.driver.messageVoid(encoder, "setBytes:length:atIndex:", args, 2L * Integer.BYTES, declared + 1);
+				flatDispatch(arena, encoder, n);
+				this.driver.messageVoid(encoder, "endEncoding");
+				if (!commit(commands, call)) {
+					return false;
+				}
+			}
+			call.finish(result, c, oc, n);
+			return true;
+		}
+		catch (Throwable ex) {
+			return false;
+		}
+		finally {
+			end(call);
+			pop(this.driver, pool);
+		}
+	}
+
+	/**
+	 * One ROW fused member: {@code rows} contiguous rows of {@code len}, one thread per
+	 * row through a transposed threadgroup tile, {@link #ROW_SIMDS} SIMD groups to a
+	 * threadgroup. The buffers are {@code declared} operands, the result, the parameter
+	 * block (rows, len, whether the optional {@code old} operand is present) and
+	 * {@code eps} as raw {@code binary64} bits -- which only the two layer-norm members
+	 * declare, the others passing 0 and never reading it. Offered from
+	 * {@link #MIN_MAP_ELEMENTS} or over a resident operand, which is what this backend's
+	 * fused threshold says ({@link #thresholds()}).
+	 */
+	private boolean rowMember(MemorySegment state, int declared, int rows, int len, double eps, float[][] operands,
+			int[] offsets, float[] c, int oc) {
+		long n = (long) rows * len;
+		if (n > Integer.MAX_VALUE || !acceptable(n, MIN_MAP_ELEMENTS, n, (Object[]) operands)) {
+			return false;
+		}
+		int elements = (int) n;
+		MemorySegment pool = MemorySegment.NULL;
+		Call call = null;
+		int slots = operands.length + 1, result = operands.length;
+		try {
+			pool = this.driver.autoreleasePoolPush();
+			enter();
+			call = new Call(slots);
+			for (int k = 0; k < operands.length; k++) {
+				call.lookup(k, operands[k], offsets[k], elements);
+			}
+			for (int k = 0; k < slots; k++) {
+				if (!call.ensure(k, elements)) {
+					return false;
+				}
+			}
+			for (int k = 0; k < operands.length; k++) {
+				call.stage(k, operands[k], offsets[k], elements, false);
+			}
+			try (Arena arena = Arena.ofConfined()) {
+				MemorySegment args = arena.allocate(I, 3);
+				args.setAtIndex(I, 0, rows);
+				args.setAtIndex(I, 1, len);
+				args.setAtIndex(I, 2, operands.length == declared ? 1 : 0);
+				MemorySegment epsilon = arena.allocate(L, 1);
+				epsilon.setAtIndex(L, 0, Double.doubleToRawLongBits(eps));
+				MemorySegment commands = this.driver.message(this.queue, "commandBuffer");
+				MemorySegment encoder = beginEncoder(commands, state);
+				bindFused(encoder, call.slabs, declared, result);
+				this.driver.messageVoid(encoder, "setBytes:length:atIndex:", args, 3L * Integer.BYTES, declared + 1);
+				this.driver.messageVoid(encoder, "setBytes:length:atIndex:", epsilon, (long) Long.BYTES, declared + 2);
+				int groups = (rows + ROW_SIMDS * SIMD_WIDTH - 1) / (ROW_SIMDS * SIMD_WIDTH);
+				this.driver.dispatch(encoder, MetalDriver.size(arena, groups, 1, 1),
+						MetalDriver.size(arena, ROW_SIMDS * SIMD_WIDTH, 1, 1));
+				this.driver.messageVoid(encoder, "endEncoding");
+				if (!commit(commands, call)) {
+					return false;
+				}
+			}
+			call.finish(result, c, oc, elements);
+			return true;
+		}
+		catch (Throwable ex) {
+			return false;
+		}
+		finally {
+			end(call);
+			pop(this.driver, pool);
+		}
+	}
+
+	/**
+	 * The attention head's softmax pair: {@link #rowMember}'s shape with the mask as an
+	 * operand of its own length and width and the scale as the trailing parameters. Two
+	 * dispatches ride ONE command buffer -- {@code pack_mask} over the mask, then the row
+	 * kernel over the packed words -- because a compute encoder dispatches serially, so
+	 * the pack costs the launch and not a second wait, which on this backend is what a
+	 * call costs.
+	 *
+	 * <p>
+	 * The mask is either width: a {@code double[]} one is read as raw word pairs by the
+	 * packing kernel and never enters arithmetic -- {@link #whereF} reads its own mask
+	 * the same way, for the same reason. It is staged like any operand and ADOPTED on the
+	 * second sight ({@link #gemvF}'s rule), because the causal mask of a training step is
+	 * one array reached seventy-two times a step and its upload is otherwise paid every
+	 * time.
+	 *
+	 * <p>
+	 * The slots are the {@code declared} operands, then the mask, the packed words and
+	 * the result. The row kernel's buffers are the operands, the packed words and the
+	 * result -- the mask itself is bound only to the packing dispatch -- and a call with
+	 * no mask binds the result's slab in the packed words' place, which the kernel never
+	 * reads.
+	 */
+	private boolean softmaxScaledMasked(MemorySegment state, int declared, int rows, int len, float[][] operands,
+			int[] offsets, @Nullable Object mask, int om, int maskLen, float[] c, int oc, int sop, double sf,
+			double fill) {
+		long n = (long) rows * len;
+		if (n > Integer.MAX_VALUE || !acceptable(n, MIN_MAP_ELEMENTS, n, (Object[]) operands)) {
+			return false;
+		}
+		boolean wide = mask instanceof double[];
+		if (mask != null && !wide && !(mask instanceof float[])) {
+			return false;
+		}
+		int elements = (int) n;
+		int maskSlot = operands.length, packedSlot = operands.length + 1, result = operands.length + 2;
+		long maskWidth = wide ? Double.BYTES : Float.BYTES;
+		int words = mask == null ? 0 : (maskLen + 31) / 32;
+		MemorySegment pool = MemorySegment.NULL;
+		Call call = null;
+		try {
+			pool = this.driver.autoreleasePoolPush();
+			enter();
+			call = new Call(result + 1);
+			for (int k = 0; k < operands.length; k++) {
+				call.lookup(k, operands[k], offsets[k], elements);
+			}
+			boolean adopt = false;
+			if (mask != null) {
+				long maskOffset = om * maskWidth, maskBytes = maskLen * maskWidth;
+				adopt = call.lookupBytes(maskSlot, mask, maskOffset, maskBytes) == null
+						&& this.residency.offeredBefore(mask, maskOffset, maskBytes);
+				if (!call.ensureBytes(maskSlot, maskBytes)
+						|| !call.ensureBytes(packedSlot, (long) words * Integer.BYTES)) {
+					return false;
+				}
+			}
+			for (int k = 0; k < operands.length; k++) {
+				if (!call.ensure(k, elements)) {
+					return false;
+				}
+			}
+			if (!call.ensure(result, elements)) {
+				return false;
+			}
+			if (mask == null) {
+				call.share(packedSlot, result);
+			}
+			for (int k = 0; k < operands.length; k++) {
+				call.stage(k, operands[k], offsets[k], elements, false);
+			}
+			if (mask != null) {
+				call.stageMask(maskSlot, mask, om, maskLen, wide, adopt);
+			}
+			try (Arena arena = Arena.ofConfined()) {
+				MemorySegment args = arena.allocate(I, 6);
+				args.setAtIndex(I, 0, rows);
+				args.setAtIndex(I, 1, len);
+				args.setAtIndex(I, 2, sop);
+				args.setAtIndex(I, 3, (double) (float) sf == sf || Double.isNaN(sf) ? 1 : 0);
+				args.setAtIndex(I, 4, mask == null ? 1 : maskLen);
+				args.setAtIndex(I, 5, mask == null ? 0 : 1);
+				MemorySegment scalars = arena.allocate(L, 3);
+				scalars.setAtIndex(L, 0, Double.doubleToRawLongBits(sf));
+				scalars.setAtIndex(L, 1, Float.floatToRawIntBits((float) sf) & 0xffffffffL);
+				scalars.setAtIndex(L, 2, Float.floatToRawIntBits((float) fill) & 0xffffffffL);
+				MemorySegment packArgs = arena.allocate(I, 2);
+				packArgs.setAtIndex(I, 0, maskLen);
+				packArgs.setAtIndex(I, 1, wide ? 1 : 0);
+				MemorySegment commands = this.driver.message(this.queue, "commandBuffer");
+				MemorySegment encoder = this.driver.message(commands, "computeCommandEncoder");
+				if (mask != null) {
+					this.driver.messageVoid(encoder, "setComputePipelineState:", this.fused[PACK_MASK]);
+					this.driver.messageVoid(encoder, "setBuffer:offset:atIndex:", call.slabs[maskSlot].buffer(), 0, 0);
+					this.driver.messageVoid(encoder, "setBuffer:offset:atIndex:", call.slabs[packedSlot].buffer(), 0,
+							1);
+					this.driver.messageVoid(encoder, "setBytes:length:atIndex:", packArgs, 2L * Integer.BYTES, 2);
+					flatDispatch(arena, encoder, words);
+				}
+				this.driver.messageVoid(encoder, "setComputePipelineState:", state);
+				for (int k = 0; k < operands.length; k++) {
+					this.driver.messageVoid(encoder, "setBuffer:offset:atIndex:", call.slabs[k].buffer(), 0, k);
+				}
+				this.driver.messageVoid(encoder, "setBuffer:offset:atIndex:", call.slabs[packedSlot].buffer(), 0,
+						declared);
+				this.driver.messageVoid(encoder, "setBuffer:offset:atIndex:", call.slabs[result].buffer(), 0,
+						declared + 1);
+				this.driver.messageVoid(encoder, "setBytes:length:atIndex:", args, 6L * Integer.BYTES, declared + 2);
+				this.driver.messageVoid(encoder, "setBytes:length:atIndex:", scalars, 3L * Long.BYTES, declared + 3);
+				int groups = (rows + ROW_SIMDS * SIMD_WIDTH - 1) / (ROW_SIMDS * SIMD_WIDTH);
+				this.driver.dispatch(encoder, MetalDriver.size(arena, groups, 1, 1),
+						MetalDriver.size(arena, ROW_SIMDS * SIMD_WIDTH, 1, 1));
+				this.driver.messageVoid(encoder, "endEncoding");
+				if (!commit(commands, call)) {
+					return false;
+				}
+			}
+			call.finish(result, c, oc, elements);
+			return true;
+		}
+		catch (Throwable ex) {
+			return false;
+		}
+		finally {
+			end(call);
+			pop(this.driver, pool);
+		}
+	}
+
+	/**
+	 * Binds {@code declared} operand buffers then the result: the slabs the call holds,
+	 * with the result's standing in for an optional operand the call does not have.
+	 */
+	private void bindFused(MemorySegment encoder, Slab[] slabs, int declared, int result) throws Throwable {
+		for (int k = 0; k < declared; k++) {
+			this.driver.messageVoid(encoder, "setBuffer:offset:atIndex:",
+					(k < result ? slabs[k] : slabs[result]).buffer, 0, k);
+		}
+		this.driver.messageVoid(encoder, "setBuffer:offset:atIndex:", slabs[result].buffer, 0, declared);
+	}
+
+	/**
+	 * Brings a DIRTY copy of {@code host} home -- the download every host read of
+	 * packed-array storage performs first under {@link #lazyResults}: a memcpy out of the
+	 * slab's {@code contents} -- and answers the array the host must read ({@code host},
+	 * or its backing when it is a stub: {@link DeviceResidency}, the class comment).
+	 * Cheap when it does not matter: a volatile read when nothing is dirty and no stub is
+	 * backed, and a few identity compares for a loop that reads one array. When it does
+	 * matter it is the one operation of this library that cannot decline: the host has no
+	 * other copy of those bytes, so a slab that is not there is an error rather than a
+	 * fallback.
+	 * @param host the host array about to be read
+	 * @return the array holding its bytes
+	 */
+	@Override
+	public Object materialize(Object host) {
+		Object recent = this.residency.recentClaim(host);
+		if (recent != null) {
+			return lostOrNot(recent);
+		}
+		DeviceResidency.Claim claim = this.residency.claim(host);
+		DeviceResidency.Flush flush = claim.flush();
+		if (flush == null) {
+			return lostOrNot(claim.storage());
+		}
+		Slab slab;
+		synchronized (this) {
+			slab = this.held.get(flush.pointer());
+		}
+		if (slab == null || !(flush.target() instanceof float[] target)) {
+			throw new IllegalStateException("a device result could not be brought home: its buffer is gone");
+		}
+		if (!bringHome(slab, target, (int) (flush.offset() / Float.BYTES), (int) (flush.bytes() / Float.BYTES))) {
+			synchronized (this) {
+				this.lostStorage.add(target);
+			}
+			throw lost();
+		}
+		return claim.storage();
+	}
+
+	/** {@code storage}, unless it is a lost result's, which the host must not read. */
+	private Object lostOrNot(Object storage) {
+		if (this.anyLost) {
+			synchronized (this) {
+				if (this.lostStorage.contains(storage)) {
+					throw lost();
+				}
+			}
+		}
+		return storage;
+	}
+
+	private static IllegalStateException lost() {
+		return new IllegalStateException(
+				"a device result could not be brought home: the command buffer that computed it failed");
+	}
+
+	@Override
+	public boolean resident(Object host) {
+		return this.residency.resident(host);
+	}
+
+	@Override
+	public long extent(Object host) {
+		return this.residency.extent(host);
+	}
+
+	/**
+	 * {@code true}: with the command buffers asynchronous the mode pays -- measured, the
+	 * training step at the reference GPT's shapes goes 4.80 -> 1.81 s and the narrow
+	 * shapes 0.083 -> 0.041 ({@code .kb/gpu.md}, "Asynchronous command buffers"). It was
+	 * {@code false} while every call waited for its command buffer and the mode was a tie
+	 * at small shapes and a loss at large ones.
+	 */
+	@Override
+	public boolean lazyResultsPay() {
+		return true;
+	}
+
+	@Override
+	public boolean lazyResultsOn() {
+		return this.lazy;
+	}
+
+	/**
+	 * Switches lazy results on or off, and re-derives the residency budget for the mode.
+	 * Switching OFF brings every dirty copy home first, so that the eager contract -- a
+	 * result is in its array when the call returns -- holds for everything resident from
+	 * then on.
+	 * @param on whether results stay on the device until first read
+	 */
+	@Override
+	public void lazyResults(boolean on) {
+		this.lazy = on;
+		this.poolBudget = derivedPoolBudget();
+		this.residency
+			.setBudget(this.residentBudgetOverride >= 0 ? this.residentBudgetOverride : derivedResidentBudget());
+		if (!on) {
+			synchronized (this) {
+				for (DeviceResidency.Flush flush : this.residency.claimAllDirty()) {
+					Slab slab = this.held.get(flush.pointer());
+					if (slab != null && flush.target() instanceof float[] target && !bringHome(slab, target,
+							(int) (flush.offset() / Float.BYTES), (int) (flush.bytes() / Float.BYTES))) {
+						this.lostStorage.add(target);
+					}
+				}
+			}
+			// Eagerly every call waits for its own command buffer and nothing else may
+			// be in flight; the mode starts with the line empty.
+			waitAll();
+		}
+	}
+
+	/**
+	 * Bytes held by resident copies right now. For the tests and the description.
+	 * @return the resident total, in bytes
+	 */
+	@Override
+	public long residentBytes() {
+		return this.residency.bytes();
+	}
+
+	/**
+	 * Drops every resident copy -- downloading the dirty ones first -- and gives its slab
+	 * back to the pool. For the tests, whose leak baselines are measured against an EMPTY
+	 * resident set; the pool keeps the slabs, which is what the steady-state assertion
+	 * wants.
+	 */
+	@Override
+	public void releaseResident() {
+		this.residency.evictAll();
+		drainPending();
+		waitAll();
+	}
+
+	@Override
+	public DeviceResidency residency() {
+		return this.residency;
+	}
+
+	/**
+	 * Imposes a residency budget in bytes, or {@code -1} to go back to the derived one.
+	 * Package-private and for the tests, which need the LRU to evict at a size they can
+	 * afford to fill. Takes effect at once; entries over the new budget go at the next
+	 * insertion.
+	 */
+	void residentBudget(long bytes) {
+		this.residentBudgetOverride = bytes;
+		this.residency.setBudget(bytes >= 0 ? bytes : derivedResidentBudget());
+	}
+
+	/** The pool's budget for the mode in force: see {@link #LAZY_HEADROOM_SHARE}. */
+	private long derivedPoolBudget() {
+		if (this.lazy) {
+			long heap = Runtime.getRuntime().maxMemory();
+			long headroom = Math.max(this.workingSet / LAZY_HEADROOM_SHARE, LAZY_HEADROOM_FLOOR);
+			return Math.max(1L << 28,
+					this.workingSet - headroom - (heap == Long.MAX_VALUE ? this.workingSet / 2 : heap));
+		}
+		return Math.max(1L << 28, this.workingSet / POOL_BUDGET_DIVISOR);
+	}
+
+	/**
+	 * The resident set's budget for the mode in force: see {@link #RESIDENT_SHARE} and
+	 * {@link #LAZY_HEADROOM_SHARE}.
+	 */
+	private long derivedResidentBudget() {
+		if (this.lazy) {
+			return Math.max(0, this.poolBudget / LAZY_RESIDENT_DIVISOR);
+		}
+		return Math.min(RESIDENT_CAP, this.poolBudget / RESIDENT_SHARE);
+	}
+
+	// --- the buffer pool
+	// -----------------------------------------------------------------
+
+	/**
+	 * One reusable device buffer and the host pointer into it. On unified memory
+	 * {@code contents} IS host memory, so an upload is a {@code memcpy} and nothing more.
+	 * {@code fence} is the number of the last command buffer that read or wrote it (0:
+	 * none) -- the one the host must see complete before it touches the bytes, and the
+	 * only one, since one queue executes in order ({@link #settle}). {@code lost} says
+	 * the last command buffer to write it failed, so its bytes are nobody's result.
+	 */
+	private static final class Slab {
+
+		final MemorySegment buffer;
+
+		final MemorySegment contents;
+
+		final long capacity;
+
+		final int sizeClass;
+
+		volatile long fence;
+
+		boolean lost;
+
+		Slab(MemorySegment buffer, MemorySegment contents, long capacity, int sizeClass) {
+			this.buffer = buffer;
+			this.contents = contents;
+			this.capacity = capacity;
+			this.sizeClass = sizeClass;
+		}
+
+		MemorySegment buffer() {
+			return this.buffer;
+		}
+
+		MemorySegment contents() {
+			return this.contents;
+		}
+
+		int sizeClass() {
+			return this.sizeClass;
+		}
+
+	}
+
+	/**
+	 * A slab of at least {@code bytes}, from the free lists or freshly minted. When the
+	 * pool's budget is reached, first its own free classes are released; if that is not
+	 * enough, every resident copy but the ones in {@code keep} -- the slabs the call in
+	 * progress is holding -- is given back (a dirty one downloaded first) and the free
+	 * lists are released again: the resident set must never be the reason a call
+	 * declines. {@code null} only when the slab cannot fit even then.
+	 */
+	private @Nullable Slab take(long bytes, long[] keep) {
+		if (bytes <= 0) {
+			return null;
+		}
+		int sizeClass = sizeClass(bytes);
+		if (sizeClass > MAX_SLAB_CLASS) {
+			return null;
+		}
+		synchronized (this) {
+			ArrayDeque<Slab> bucket = this.free[sizeClass];
+			if (bucket != null && !bucket.isEmpty()) {
+				// Whatever it held is over: the taker writes it, or uploads into it after
+				// settling it.
+				Slab slab = bucket.pop();
+				slab.lost = false;
+				return slab;
+			}
+			long capacity = 1L << sizeClass;
+			if (this.pooledBytes + capacity > this.poolBudget && !evict(capacity)) {
+				// Under pool pressure the resident set gives way, least recently used
+				// first and a clean copy before a dirty one, a slab's worth at a time:
+				// the resident set must never be the reason a call declines, and -- the
+				// pool being the machine's own memory here -- neither may the whole of
+				// it be flushed into the heap at once, which is what evicting it all did
+				// (measured: a thousand flushes and ten gigabytes of backings in one
+				// call, and an OutOfMemoryError when the step's phase made it forty).
+				while (this.residency.occupied()) {
+					if (this.residency.evictSome(keep, capacity) == 0) {
+						break;
+					}
+					flushNow();
+					for (long address : this.residency.drain()) {
+						Slab slab = this.held.remove(address);
+						if (slab != null) {
+							push(slab);
+						}
+					}
+					if (evict(capacity)) {
+						break;
+					}
+				}
+				if (this.pooledBytes + capacity > this.poolBudget) {
+					return null;
+				}
+			}
+			Slab slab = create(capacity, sizeClass);
+			if (slab != null) {
+				this.pooledBytes += capacity;
+			}
+			return slab;
+		}
+	}
+
+	private @Nullable Slab create(long capacity, int sizeClass) {
+		try {
+			MemorySegment buffer = this.driver.message(this.device, "newBufferWithLength:options:", capacity,
+					MetalDriver.STORAGE_SHARED);
+			if (buffer.address() == 0) {
+				return null;
+			}
+			return new Slab(buffer, this.driver.contents(buffer, capacity), capacity, sizeClass);
+		}
+		catch (Throwable ex) {
+			return null;
+		}
+	}
+
+	/**
+	 * Frees whole classes of unused slabs until {@code wanted} bytes fit under the
+	 * budget. Called only when the budget is reached, which a program with one steady
+	 * working set never does.
+	 */
+	private boolean evict(long wanted) {
+		for (int k = MAX_SLAB_CLASS; k >= 0 && this.pooledBytes + wanted > this.poolBudget; k--) {
+			ArrayDeque<Slab> bucket = this.free[k];
+			while (bucket != null && !bucket.isEmpty() && this.pooledBytes + wanted > this.poolBudget) {
+				release(this.driver, bucket.pop().buffer());
+				this.pooledBytes -= 1L << k;
+			}
+		}
+		return this.pooledBytes + wanted <= this.poolBudget;
+	}
+
+	/** Onto its free list. Callers hold {@code this}. */
+	private void push(Slab slab) {
+		ArrayDeque<Slab> bucket = this.free[slab.sizeClass()];
+		if (bucket == null) {
+			bucket = new ArrayDeque<>();
+			this.free[slab.sizeClass()] = bucket;
+		}
+		bucket.push(slab);
+	}
+
+	private static int sizeClass(long bytes) {
+		return 64 - Long.numberOfLeadingZeros(Math.max(bytes, MIN_SLAB_BYTES) - 1);
+	}
+
+	// --- copies
+	// -------------------------------------------------------------------------
+
+	private static void upload(float[] source, int offset, Slab slab, int elements) {
+		MemorySegment.copy(source, offset, slab.contents(), F, 0, elements);
+	}
+
+	/**
+	 * Brings a result home: waits for the command buffer that wrote the slab, if it is
+	 * still in flight, then copies. {@code false} when that buffer failed, in which case
+	 * the slab holds nobody's result and nothing is copied.
+	 */
+	private boolean bringHome(Slab slab, float[] destination, int offset, int elements) {
+		settle(slab);
+		if (slab.lost) {
+			return false;
+		}
+		download(slab, destination, offset, elements);
+		return true;
+	}
+
+	private static void download(Slab slab, float[] destination, int offset, int elements) {
+		MemorySegment.copy(slab.contents(), F, 0, destination, offset, elements);
+	}
+
+	/**
+	 * The layout the strided kernels index out of -- the output dims, then one source
+	 * stride per output axis per operand, all in elements -- packed into a CONFINED
+	 * segment that rides to the kernel BY VALUE ({@code setBytes:length:atIndex:} at the
+	 * index the buffer used to be bound at; a {@code constant int*} parameter takes
+	 * either). It was a pooled slab until 2026-08-24. Unlike the CUDA half's move, the
+	 * COPY was never the problem here -- writing into a shared slab's {@code contents} is
+	 * a memcpy on unified memory that orders behind nothing -- what it removes is a 4 KB
+	 * slab ({@link #MIN_SLAB_BYTES}) taken from and given back to the pool per strided
+	 * call, its binding, and one class of pooled buffer that a committed command buffer
+	 * reads, which is a slab a per-slab fence would otherwise have to cover.
+	 *
+	 * <p>
+	 * {@code vectors} is how many the kernel indexes -- the dims plus one stride vector
+	 * per operand -- so the segment is exactly the bytes the old slab held. {@link Gpu}
+	 * holds the rank to {@link Gpu#MAX_STRIDED_RANK}, which is what keeps the length
+	 * under {@code setBytes}'s 4 KB limit: the worst case is four vectors at rank 16, 256
+	 * bytes. The guard says so rather than trusting it; it throws into the member's own
+	 * {@code catch}, which is an ordinary decline.
+	 */
+	private static MemorySegment layout(Arena arena, int vectors, int[] dims, int[] sa, int @Nullable [] sb,
+			int @Nullable [] sc) {
+		int rank = dims.length;
+		if (rank > Gpu.MAX_STRIDED_RANK || vectors > 4) {
+			throw new IllegalArgumentException("layout rank " + rank + " x " + vectors);
+		}
+		MemorySegment meta = arena.allocate(I, (long) vectors * rank);
+		for (int k = 0; k < rank; k++) {
+			meta.setAtIndex(I, k, dims[k]);
+			meta.setAtIndex(I, rank + k, sa[k]);
+			if (sb != null) {
+				meta.setAtIndex(I, 2 * rank + k, sb[k]);
+			}
+			if (sc != null) {
+				meta.setAtIndex(I, 3 * rank + k, sc[k]);
+			}
+		}
+		return meta;
+	}
+
+	// --- shapes
+	// -------------------------------------------------------------------------
+
+	/** The output element count of a strided shape; the caller has already bounded it. */
+	private static int count(int[] dims) {
+		int n = 1;
+		for (int d : dims) {
+			n *= d;
+		}
+		return n;
+	}
+
+	/** The highest element index a stride vector reaches over {@code dims}. */
+	private static long span(int[] dims, int[] stride) {
+		long span = 0;
+		for (int k = 0; k < dims.length; k++) {
+			span += (long) (dims[k] - 1) * stride[k];
+		}
+		return span;
+	}
+
+	/**
+	 * How many elements of an operand one launch spans: the last batch's slab plus
+	 * everything the stride skipped over on the way to it. A broadcast operand (stride 0)
+	 * spans ONE slab however long the batch is.
+	 */
+	private static long span(int batch, int stride, long matrix) {
+		return (long) (batch - 1) * stride + matrix;
+	}
+
+}

@@ -1,0 +1,40 @@
+# usocket:get-local-port usocket:get-local-address usocket:get-local-name usocket:get-peer-address usocket:get-peer-port usocket:get-peer-name
+
+`(usocket:get-local-port socket)` -- `(usocket:get-local-address socket)` -- `(usocket:get-local-name socket)` -- `(usocket:get-peer-address socket)` -- `(usocket:get-peer-port socket)` -- `(usocket:get-peer-name socket)`
+
+usocket のアドレスアクセサです。
+[`rontolisp:tcp-local-port`](rontolisp-tcp-local-port.md) /
+[`tcp-local-address` / `tcp-peer-address` / `tcp-peer-port`](rontolisp-tcp-addresses.md)
+組み込みの上に載っています。`get-local-*` アクセサはリスナーと接続済み
+ソケットの両方で動き(主な用途は `usocket:*auto-port*` で listen した後の
+エフェメラルポートの読み戻し)、`get-peer-*` アクセサは接続済みソケット
+専用です。
+
+```lisp
+(let* ((listener (usocket:socket-listen "127.0.0.1" usocket:*auto-port*))
+       (port (usocket:get-local-port listener)))
+  (usocket:socket-close listener)
+  (> port 0)) ; => T
+```
+
+`get-local-name` / `get-peer-name` は `(values address port)` を返します:
+`multiple-value-bind` は両方を受け取り、通常の単一値コンテキストでは
+アドレスを受け取ります。
+
+```lisp
+(let ((listener (usocket:socket-listen "127.0.0.1" usocket:*auto-port*)))
+  (multiple-value-bind (address port) (usocket:get-local-name listener)
+    (usocket:socket-close listener)
+    (list address (> port 0)))) ; => ("127.0.0.1" T)
+```
+
+## バックエンドごとの対応
+
+- **インタープリタ**と **JVM**: フル対応。
+- **WASM**: コンポーネントモードのみ。6 つのアクセサすべてが
+  インタープリタ/JVM と同様に実際のアドレスとポートを返します(失敗時は
+  エラーを通知せず `nil` を返します)。素の Preview 1 `.wasm` は呼び出し時に
+  エラーを通知します。
+- **ネイティブ実行ファイル**(`--native`): インタープリタ/JVM と同じくフル対応
+  ([ネイティブ実行ファイルの TCP ソケット](../../compiling/native.md#tcp-sockets))。
+- **ブラウザプレイグラウンド**: 非対応。

@@ -1,0 +1,173 @@
+name: Deploy playground to GitHub Pages
+
+# Builds the browser playground (web/dist) with the GraalVM Web Image backend
+# and publishes it to GitHub Pages.
+#
+# Repo setup (one time): Settings -> Pages -> Build and deployment ->
+# Source: "GitHub Actions".
+
+on:
+  push:
+    branches:
+    - develop
+    paths:
+    - web/**
+    - examples/browser/wasm-browser/**
+    - examples/browser/hiragana/**
+    - examples/browser/minesweeper/**
+    - examples/browser/webgl-common/**
+    - examples/browser/webgl-galaxy/**
+    - examples/browser/webgl-heat3d/**
+    - examples/browser/webgl-robot-arm/**
+    - examples/browser/webgl-platformer/**
+    - examples/browser/webgl-battlefront/**
+    - examples/browser/webgl-triangle/**
+    - examples/browser/webgl-cube/**
+    - examples/browser/webgl-solids/**
+    - src/**
+    - pom.xml
+    - doc/**
+    - docs-tool/**
+    # The agent skill mirrors the example programs, so they are an input to it.
+    - examples/**
+    # lispresen's golden deck and its link-preview image, published beside the playground
+    # whose runtime it loads.
+    - lispresen/examples/intro.html
+    - lispresen/examples/intro.png
+    # The lispresen editor the intro deck frames, compiled from lispresen's sources.
+    - lispresen/src/**
+    - lispresen/web/**
+    # lispresen's agent skill, published as a plugin in the skill's marketplace.
+    - lispresen/skills/**
+    # The slide decks and their link-preview images.
+    - decks/**
+    - .github/workflows/pages.yaml
+  workflow_dispatch:
+
+# Allow the deploy job to publish to Pages via OIDC.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Only one concurrent Pages deployment; newer pushes supersede in-progress runs.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v7
+      with:
+        # The skill version counts the commits that can change it, so the whole
+        # history has to be here.
+        fetch-depth: 0
+    - name: Set up GraalVM 25
+      uses: graalvm/setup-graalvm@v1
+      with:
+        java-version: '25'
+        distribution: 'graalvm'
+        cache: maven
+    - name: Install Binaryen (provides wasm-as for Web Image)
+      run: |
+        set -e
+        BINARYEN_VERSION=130
+        curl -sSL "https://github.com/WebAssembly/binaryen/releases/download/version_${BINARYEN_VERSION}/binaryen-version_${BINARYEN_VERSION}-x86_64-linux.tar.gz" | tar xz
+        echo "$PWD/binaryen-version_${BINARYEN_VERSION}/bin" >> "$GITHUB_PATH"
+    - name: Verify wasm-as
+      run: wasm-as --version
+    - name: Build playground (rontolisp -> WebAssembly)
+      run: ./mvnw -V --no-transfer-progress -Pweb -DskipTests package
+    # The image has one thread and one stack, which no JVM test runs on: check what
+    # its exports answer -- a Java program that starts threads among them -- before
+    # anything is published. A node whose WebAssembly has GC and exception handling.
+    - name: Set up Node.js (to check the playground image)
+      uses: actions/setup-node@v7
+      with:
+        node-version: '24'
+    - name: Check the playground image
+      run: node web/playground-check.js web/dist
+    # Build the standalone Markdown -> HTML docs tool and render doc/ into
+    # web/dist/docs. The web profile (above) recreates web/dist, so docs must
+    # run after it and only add the docs/ subtree (it never deletes web/dist).
+    # Its tests are the gate on the agent skill: they regenerate the bundle from
+    # doc/ and fail on a link that no longer resolves, so a renamed page cannot
+    # ship a dead skill.
+    - name: Build docs tool
+      run: ./mvnw -V --no-transfer-progress -f docs-tool/pom.xml package
+    - name: Generate documentation site (doc -> web/dist/docs)
+      run: java -jar docs-tool/target/rontolisp-docgen.jar --source doc --out web/dist/docs
+    # The skill's version is <project major.minor>.<commits that can change it>,
+    # but only if the bundle's CONTENT actually moved: the generator compares its
+    # digest against the published one and keeps the old version when they match,
+    # so a doc/ja-only commit, or a rebuilt .wasm the bundle excludes, does not
+    # tell every installed copy to re-download itself.
+    - name: Compute skill version
+      id: skill
+      run: |
+        set -e
+        BASE=$(./mvnw -q --no-transfer-progress help:evaluate -Dexpression=project.version -DforceStdout | tail -1)
+        MAJOR_MINOR=${BASE%-SNAPSHOT}
+        MAJOR_MINOR=${MAJOR_MINOR%.*}
+        PATCH=$(git rev-list --count HEAD -- doc docs-tool examples)
+        echo "version=${MAJOR_MINOR}.${PATCH}" >> "$GITHUB_OUTPUT"
+        # What is published now, if anything -- absent on the very first deploy.
+        PUBLISHED=$(curl -sSL --fail https://making.github.io/rontolisp/skill/version.json || echo '{}')
+        echo "previous-version=$(echo "$PUBLISHED" | sed -n 's/.*"version": *"\([^"]*\)".*/\1/p')" >> "$GITHUB_OUTPUT"
+        echo "previous-hash=$(echo "$PUBLISHED" | sed -n 's/.*"contentHash": *"\([^"]*\)".*/\1/p')" >> "$GITHUB_OUTPUT"
+        echo "candidate ${MAJOR_MINOR}.${PATCH}; published $PUBLISHED"
+        # lispresen's skill is hand-written, so its version counts only the commits
+        # that can change its plugin: the skill directory and the code packaging it.
+        LISPRESEN=$(git rev-list --count HEAD -- lispresen/skills docs-tool/src/main/java/am/ik/rontolisp/docgen/SkillGen.java)
+        echo "lispresen-version=${MAJOR_MINOR}.${LISPRESEN}" >> "$GITHUB_OUTPUT"
+    - name: Generate agent skills (doc, lispresen/skills -> web/dist/skill)
+      run: |
+        java -jar docs-tool/target/rontolisp-docgen.jar skill \
+          --source doc --out web/dist/skill \
+          --version '${{ steps.skill.outputs.version }}' \
+          --previous-version '${{ steps.skill.outputs.previous-version }}' \
+          --previous-hash '${{ steps.skill.outputs.previous-hash }}' \
+          --commit '${{ github.sha }}' \
+          --site-base 'https://making.github.io/rontolisp' \
+          --plugin 'lispresen/skills/lispresen@${{ steps.skill.outputs.lispresen-version }}'
+    # The golden deck is self-contained (check.sh renders it with --embed) and loads
+    # its runtime from this same site, so it is copied as is, with the PNG of its title
+    # slide that lispresen draws and its og:image names. After the web profile, which
+    # recreates web/dist.
+    - name: Publish the lispresen intro deck (web/dist/lispresen/intro.html, intro.png)
+      run: |
+        install -D -m 644 lispresen/examples/intro.html web/dist/lispresen/intro.html
+        install -D -m 644 lispresen/examples/intro.png web/dist/lispresen/intro.png
+    # The editor (lispresen/web) is the page the intro deck's (frame ...) names, at
+    # lispresen/editor/. Its lispresen.wasm is built, not committed, so it is compiled
+    # here with the rontolisp jar the web profile packaged. After the web profile, which
+    # recreates web/dist.
+    - name: Publish the lispresen editor (web/dist/lispresen/editor/)
+      run: lispresen/web/build.sh web/dist/lispresen/editor
+    # Every deck is committed rendered (decks/build.sh, --embed), so its HTML and the PNG
+    # its og:image names are copied as is: decks/<name>/*.html and *.png to
+    # web/dist/decks/<name>/. After the web profile, which recreates web/dist.
+    - name: Publish the slide decks (web/dist/decks/<name>/)
+      run: |
+        shopt -s nullglob
+        for f in decks/*/*.html decks/*/*.png; do
+          name=$(basename "$(dirname "$f")")
+          install -D -m 644 "$f" "web/dist/decks/$name/$(basename "$f")"
+        done
+    - name: Upload Pages artifact
+      uses: actions/upload-pages-artifact@v5
+      with:
+        path: web/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+    - name: Deploy to GitHub Pages
+      id: deployment
+      uses: actions/deploy-pages@v5

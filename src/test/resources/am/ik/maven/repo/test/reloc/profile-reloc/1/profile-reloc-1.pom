@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>test.reloc</groupId>
+  <artifactId>profile-reloc</artifactId>
+  <version>1</version>
+  <profiles>
+    <profile><id>p</id><activation><jdk>[11,)</jdk></activation>
+<distributionManagement><relocation><groupId>test.reloc.new</groupId><artifactId>old</artifactId></relocation></distributionManagement>
+    </profile>
+  </profiles>
+  <dependencies>
+      <dependency><groupId>test.lib</groupId><artifactId>profile-reloc-own</artifactId><version>1</version></dependency>
+  </dependencies>
+</project>

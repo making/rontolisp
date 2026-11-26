@@ -1,0 +1,46 @@
+package am.ik.rontolisp.codegen.jvm;
+
+import java.lang.classfile.constantpool.MethodRefEntry;
+import java.lang.classfile.constantpool.Utf8Entry;
+import java.util.List;
+
+import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.compiler.OpenModes;
+
+/**
+ * Compiles the {@code open} built-in. The direction must be the literal {@code :input}
+ * (default) or {@code :output} keyword and the optional element type the literal
+ * {@code 'character} (default) or {@code '(unsigned-byte 8)} (binary) so the file mode is
+ * known at compile time; the path argument is compiled to a runtime string and passed to
+ * the {@code _open} stream runtime helper, which returns the stream handle.
+ */
+final class JvmOpenCompiler {
+
+	private JvmOpenCompiler() {
+	}
+
+	static void compile(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		LispVal runtimeOptions = OpenModes.lowerRuntimeOptions(cons);
+		if (runtimeOptions != null) {
+			// A computed option value: the dispatch onto the literal shapes carries the
+			// mode instead, so this compiler still only ever sees literals.
+			JvmExprCompiler.compileExpr(runtimeOptions, ctx, className);
+			return;
+		}
+		cons = OpenModes.normalizeKeywordForm(cons);
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 2 || parts.size() > 4) {
+			throw new UnsupportedOperationException("open expects 1 to 3 arguments, got " + (parts.size() - 1));
+		}
+		JvmExprCompiler.compileExpr(parts.get(1), ctx, className);
+		// 5 and 7 are the OpenModes.APPEND_BIT arms, so the constant no longer fits
+		// ICONST_0..3.
+		JvmEmitHelper.emitIntConst(ctx, OpenModes.staticMode(parts));
+		Utf8Entry nameUtf8 = ctx.cp.utf8Entry(JvmIoRuntimeBuilder.OPEN_METHOD);
+		Utf8Entry descUtf8 = ctx.cp.utf8Entry(JvmIoRuntimeBuilder.OPEN_DESC);
+		MethodRefEntry openRef = ctx.cp.methodRef(ctx.cp.classEntry(className), nameUtf8, descUtf8);
+		ctx.body.invokestatic(openRef);
+	}
+
+}

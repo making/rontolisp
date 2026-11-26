@@ -1,0 +1,80 @@
+package am.ik.rontolisp.starlark;
+
+import java.util.List;
+
+import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.reader.LispReadException;
+import org.jspecify.annotations.Nullable;
+
+/**
+ * The EXPERIMENTAL Starlark front end: a file is read by the specification's grammar and
+ * LOWERED to the Common Lisp core forms every pipeline already consumes. Partial
+ * conformance by design and no compatibility promise; the lowering table, the value model
+ * and the stated deviations are in {@code .kb/starlark-frontend.md} and on the
+ * user-facing {@code doc/en/starlark/} section.
+ *
+ * <p>
+ * This package depends on the AST types and {@code reader} only. It is reached through
+ * the source-language seam ({@code eval/SourceLanguage.STARLARK}), never directly, and
+ * its run-time helpers are Common Lisp source shipped like every other library
+ * ({@code eval/StarlarkLibrary}).
+ */
+public final class Starlark {
+
+	private Starlark() {
+	}
+
+	/**
+	 * Reads a Starlark file and lowers it to Common Lisp core forms.
+	 * @param source the file's text
+	 * @param file the origin file for diagnostics, or {@code null} when unknown
+	 * @param standard what the file is read against ({@code --starlark-standard})
+	 * @return the top-level forms
+	 * @throws LispReadException on a lexical or syntax error, a name nothing binds, a
+	 * construct the front end does not have yet, or one the standard refuses, each with
+	 * its position
+	 */
+	public static List<LispVal> read(String source, @Nullable String file, StarlarkStandard standard) {
+		return read(source, file, standard, StarlarkFiles.NONE);
+	}
+
+	/**
+	 * Reads a Starlark file and lowers it to Common Lisp core forms, the modules its
+	 * {@code load} statements name with it: each is read through {@code files}, lowered
+	 * with globals of its own and run once, ahead of the statement that first loads it.
+	 * @param source the file's text
+	 * @param file the origin file for diagnostics and for what a {@code load}'s path is
+	 * relative to, or {@code null} when unknown
+	 * @param standard what the file and its modules are read against
+	 * ({@code --starlark-standard})
+	 * @param files where a {@code load} statement's module is read from
+	 * @return the top-level forms
+	 * @throws LispReadException as {@link #read(String, String, StarlarkStandard)}, and
+	 * on a module that cannot be loaded or a name it does not define
+	 */
+	public static List<LispVal> read(String source, @Nullable String file, StarlarkStandard standard,
+			StarlarkFiles files) {
+		return StarlarkLowering.lower(StarlarkParser.parse(source, file), standard, source, file, files);
+	}
+
+	/**
+	 * Starts an interactive session, whose buffers are lowered as one file's run.
+	 * @param standard what every buffer is read against ({@code --starlark-standard})
+	 * @param files where a {@code load} statement's module is read from
+	 * @return the session
+	 */
+	public static StarlarkSession session(StarlarkStandard standard, StarlarkFiles files) {
+		return new StarlarkSession(standard, files);
+	}
+
+	/**
+	 * The run-time library's definitions generated from this package's tables -- the
+	 * attributes of each type, the code points a string's {@code repr} escapes -- which
+	 * {@code eval/StarlarkLibrary} appends to {@code starlark.lisp}.
+	 * @return the forms, in the library's canonical shape
+	 */
+	public static List<LispVal> runtimeForms() {
+		return StarlarkLowering.runtimeForms();
+	}
+
+}

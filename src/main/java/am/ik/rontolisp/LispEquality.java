@@ -1,0 +1,397 @@
+package am.ik.rontolisp;
+
+/**
+ * The {@code equal} predicate and the structural hash that agrees with it -- the pair a
+ * hash table is built from, shared by the interpreter and (as the specification the
+ * emitted code reproduces) by both compiled backends.
+ *
+ * <p>
+ * Hashing and comparison are deliberately SEPARATE. {@link #hash} folds the key's
+ * structure down to an {@code int} under a fixed {@linkplain #HASH_DEPTH_CAP depth cap},
+ * and {@link #equal} then decides the candidates that landed in one bucket. Nothing here
+ * prints the key: a hash table that keyed on the printed text of its key paid the size of
+ * the key's whole graph on every lookup, and never terminated at all on a cyclic one.
+ *
+ * <p>
+ * <strong>The cap is what makes a cyclic key safe.</strong> A hash need not be injective,
+ * so refusing to descend past {@value #HASH_DEPTH_CAP} levels is free CORRECTNESS: two
+ * {@code equal} keys still hash equal, because the cap is by DEPTH -- a deterministic
+ * function of the structure alone, never of insertion order or of an address. It is not
+ * free COST, which is why {@linkplain #HASH_WORK_CAP a work budget} runs beside it: a key
+ * whose substructure is SHARED has exponentially many root-to-leaf paths, so bounding the
+ * height of the walk bounds nothing about its size. Comparison terminates for the same
+ * reason {@code equal} does: {@link #equal} answers true on identity before it recurses,
+ * so storing and retrieving under the SAME cyclic object works. Two DISTINCT cyclic
+ * structures compared with {@code equal} may still not terminate; ANSI leaves that
+ * undefined and so does this implementation.
+ */
+public final class LispEquality {
+
+	/**
+	 * How many levels {@link #hash} descends before folding in a constant instead. Both
+	 * compiled backends reproduce the same cap (the JVM {@code _hash} carries the
+	 * remaining depth as its second parameter, the WASM {@code _hash} counts the live
+	 * recursion depth in a global), so a key hashes to the same bucket population on
+	 * every backend.
+	 */
+	public static final int HASH_DEPTH_CAP = 64;
+
+	/**
+	 * How many NODES {@link #hash} may visit in one whole traversal before it folds a
+	 * constant instead of descending -- the budget that bounds the WORK the depth cap
+	 * bounds only the height of.
+	 *
+	 * <p>
+	 * The depth cap alone admits at most {@code 2 * } {@value #HASH_DEPTH_CAP} nodes for
+	 * a LINEAR key (a list, a string, a chain of instances), and the number of
+	 * root-to-leaf PATHS through a key whose substructure is SHARED is exponential in its
+	 * height -- a scene graph, a doubly-linked list, a parse tree with parent pointers
+	 * and an ORM entity are all that shape, and at 64 levels the walk is astronomical.
+	 * {@value} is 32x what a linear key can cost, so no key a program plausibly places (a
+	 * list, a small tree, an instance and its slots) is truncated by it, and it bounds
+	 * one placement at a few thousand field reads -- the same order as the ONE
+	 * {@link #equal} comparison the bucket scan then runs against the key it finds.
+	 *
+	 * <p>
+	 * <strong>The soundness argument is the depth cap's.</strong> Two {@code equal} keys
+	 * have the same shape, so the deterministic traversal below visits them in the same
+	 * order and exhausts the budget at the same place, and they still hash equal. Like
+	 * the depth cap, the budget may NEVER be made order-of-insertion or address
+	 * dependent: it is reset at the start of every top-level {@link #hash} call, so what
+	 * a key hashes to is a function of that key alone and not of what was hashed before
+	 * it. All four backends carry the same number ({@code .kb/hash-tables.md}).
+	 */
+	public static final int HASH_WORK_CAP = 4096;
+
+	private LispEquality() {
+	}
+
+	/**
+	 * The {@code equal} predicate: identical objects are equal; two conses are equal when
+	 * their cars and cdrs are recursively equal; a structure, a CLOS object and a
+	 * condition are equal only to themselves ({@link #equalByIdentity}); two bit vectors
+	 * compare their active elements with {@code eql} ({@link #isBitVector}); everything
+	 * else falls back to {@code eql} (numbers and characters by value and type, strings,
+	 * a pathname and the opaque built-ins structurally through their own {@code equals},
+	 * other aggregates by identity). A host object on the left asks its own
+	 * {@code equals} with the right operand as Java receives it
+	 * ({@link LispJavaObject#receiverObject}, {@code .kb/eq-numbers.md}, "Host objects").
+	 * @param a the first value
+	 * @param b the second value
+	 * @return whether the two values are {@code equal}
+	 */
+	public static boolean equal(LispVal a, LispVal b) {
+		// Two lists are compared down their cdr spines in a loop, so a long list costs
+		// no stack; only nesting recurses. Two distinct circular lists that agree
+		// element for element would keep the loop going for ever: a cell remembered at
+		// every power of two (Brent) reports one instead.
+		LispCons remembered = null;
+		int power = 1;
+		int steps = 0;
+		while (a != b && a instanceof LispCons consA) {
+			if (!(b instanceof LispCons consB) || !equal(consA.car(), consB.car())) {
+				return false;
+			}
+			if (consA == remembered) {
+				throw new LispTrees.CircularListException();
+			}
+			if (++steps == power) {
+				remembered = consA;
+				power <<= 1;
+				steps = 0;
+			}
+			a = consA.cdr();
+			b = consB.cdr();
+		}
+		if (a == b) {
+			return true;
+		}
+		if (b instanceof LispCons) {
+			return false;
+		}
+		if (a instanceof LispJavaObject host) {
+			// A host object asks its own equals, handed what an Object parameter
+			// receives: another host object, nil's null, or a receiver-kind value's
+			// one object -- as Clojure's = asks its left operand. Any other value
+			// converts to no one object, and is equal to no host object.
+			Object other = LispJavaObject.receiverObject(b);
+			return (other != null || b instanceof LispNil) && host.ref().equals(other);
+		}
+		if (a instanceof LispNil || b instanceof LispNil) {
+			return a instanceof LispNil && b instanceof LispNil;
+		}
+		if (equalByIdentity(a) || equalByIdentity(b)) {
+			return false;
+		}
+		if (a instanceof LispArray x && b instanceof LispArray y && isBitVector(x) && isBitVector(y)) {
+			return bitVectorsEqual(x, y);
+		}
+		return a.equals(b);
+	}
+
+	/**
+	 * Whether {@code equal} compares an array element by element: a bit vector, which is
+	 * the rank-1 general array stamped {@code bit} ({@code .kb/array-literals.md}, "The
+	 * degraded array REMEMBERS its element type"). Every other array is compared by
+	 * identity (CLHS {@code equal}).
+	 * @param array the array
+	 * @return whether it is a bit vector
+	 */
+	public static boolean isBitVector(LispArray array) {
+		return array.dimensions().length == 1 && array.elementTypeCode() == ArrayElementTypes.BIT;
+	}
+
+	// CLHS 5.3: the ACTIVE elements (up to a fill pointer) compared with eql.
+	private static boolean bitVectorsEqual(LispArray a, LispArray b) {
+		int length = a.effectiveLength();
+		if (length != b.effectiveLength()) {
+			return false;
+		}
+		for (int i = 0; i < length; i++) {
+			if (!eql(bitVectorElement(a, i), bitVectorElement(b, i))) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	private static LispVal bitVectorElement(LispArray array, int i) {
+		LispVal element = array.readFlat(i);
+		return element != null ? element : LispNil.INSTANCE;
+	}
+
+	/**
+	 * Whether {@code equal} compares a value by identity although it is an instance: a
+	 * structure, a CLOS object or a condition -- CLHS {@code equal} descends only conses,
+	 * strings, bit vectors and pathnames. A pathname, and an opaque built-in (a stream, a
+	 * readtable, a random state, whose backend-local handle slot is what tells two
+	 * apart), compare by their slots. An {@code equal} hash table places such an instance
+	 * by its identity ({@link #hash}), so a key whose slots change after it is stored
+	 * keeps its bucket ({@code .kb/instance-syntax.md}).
+	 * @param v the value
+	 * @return whether it is a structure, CLOS or condition instance
+	 */
+	public static boolean equalByIdentity(LispVal v) {
+		return v instanceof LispInstance instance && (instance.layout().kind() == LispLayout.Kind.STRUCT
+				|| instance.layout().kind() == LispLayout.Kind.CLASS);
+	}
+
+	/**
+	 * The aggregates {@code eq}/{@code eql} compare by REFERENCE, never by contents: a
+	 * cons, an instance (a struct, a CLOS object, a condition, a pathname) and a string
+	 * the running program allocated. The instance arm is what keeps the interpreter in
+	 * step with the JVM and both WASM backends, which compare instances with
+	 * {@code ref.eq} / Java identity -- {@code LispInstance.equals} is structural (that
+	 * is {@code equal}'s contract, {@code .kb/instance-syntax.md}) and letting it decide
+	 * {@code eql} made every identity-keyed walk in the interpreter conflate two records
+	 * with equal slots. The string arm is ANSI's: two distinct strings with equal
+	 * contents are not {@code eql}. A SOURCE LITERAL is the exception and compares by
+	 * content: both compiled backends coalesce equal literals into one constant (the JVM
+	 * constant pool, the WASM string table), which CLHS 3.2.4.4 permits, so two
+	 * {@code "ab"} in the program text are one object there and must be one here.
+	 * @param v the value to test
+	 * @return whether {@code eq}/{@code eql} compare it by reference
+	 */
+	public static boolean isIdentityAggregate(LispVal v) {
+		return v instanceof LispCons || v instanceof LispInstance
+				|| (v instanceof LispString string && !string.sourceLiteral());
+	}
+
+	/**
+	 * The {@code eql} predicate: like {@code eq}, but numbers of the same type and value
+	 * are {@code eql}. Cons cells, instances and allocated strings compare by reference
+	 * identity ({@link #isIdentityAggregate}), and a host object by the identity of the
+	 * object it wraps: the wrapper is fresh on every Java call that answers the object,
+	 * and the object's own {@code equals} is {@link #equal}'s answer, not this one's
+	 * ({@code .kb/eq-numbers.md}, "Host objects").
+	 * @param a the first value
+	 * @param b the second value
+	 * @return whether the two values are {@code eql}
+	 */
+	public static boolean eql(LispVal a, LispVal b) {
+		if (isIdentityAggregate(a) || isIdentityAggregate(b)) {
+			return a == b;
+		}
+		if (a instanceof LispJavaObject host) {
+			return b instanceof LispJavaObject other && host.ref() == other.ref();
+		}
+		if (a instanceof LispNil || b instanceof LispNil) {
+			return a instanceof LispNil && b instanceof LispNil;
+		}
+		return a.equals(b);
+	}
+
+	/**
+	 * The {@code eq} predicate: {@link #eql}. CLHS leaves {@code eq} on numbers and
+	 * characters implementation-dependent (a number may be copied at any time); here it
+	 * compares them by type and value on every backend, because box identity is not
+	 * something the backends can agree on -- an unboxed double local re-boxes on each
+	 * read on the JVM and keeps one struct on WASM, so an identity answer would depend on
+	 * the optimizer ({@code .kb/eq-numbers.md}). Aggregates and symbols compare exactly
+	 * as {@code eql} compares them, so the two predicates are one.
+	 * @param a the first value
+	 * @param b the second value
+	 * @return whether the two values are {@code eq}
+	 */
+	public static boolean eq(LispVal a, LispVal b) {
+		return eql(a, b);
+	}
+
+	/**
+	 * Folds a value into the key an {@code equalp} hash table places it under: the
+	 * canonical representative of everything {@code equalp} calls the same. A string and
+	 * a character fold to their upper case, a finite float to the exact rational it
+	 * equals (so {@code 1}, {@code 1.0} and {@code 2/2} are one key, and so are
+	 * {@code 0.5} and {@code 1/2}), and a cons folds element-wise. A structure or CLOS
+	 * instance, which {@link #equal} compares by identity, folds to the list
+	 * {@code (marker tag slot...)} of its slots' folds behind a marker no other value is
+	 * equal to ({@link #EQUALP_INSTANCE_MARKER}), so the table matches it slot by slot as
+	 * the {@code equalp} predicate does. Everything else is its own representative, and
+	 * one of those is a real deviation from ANSI {@code equalp} tables, recorded in
+	 * {@code .kb/hash-tables.md}: an ARRAY does not fold, since {@link #equal} on a
+	 * vector other than a bit vector is identity on every backend and a folded copy would
+	 * never find itself. The deviation is a MISS, never a false match: the fold only ever
+	 * refuses to merge two keys {@code equalp} would call the same.
+	 *
+	 * <p>
+	 * Folding rather than a second hash/compare pair is what keeps ONE structural table
+	 * behind both tests: {@code equalp} on two values is {@link #equal} on their folds,
+	 * so the existing {@link #hash} / {@link #equal} pair -- and every backend's own copy
+	 * of it -- carries {@code equalp} unchanged. The fold must stay in step with the
+	 * {@code equalp} predicate itself, which is defined once in Lisp
+	 * ({@code LispPreludeLibrary}) and shared by all four backends.
+	 * @param v the key as the caller wrote it
+	 * @return the folded key
+	 */
+	public static LispVal equalpKey(LispVal v) {
+		return equalpKey(v, HASH_DEPTH_CAP, new int[] { HASH_WORK_CAP });
+	}
+
+	// Capped at the same depth as the hash, and by the same work budget, for the same two
+	// reasons: a CYCLIC key must terminate, and a key with SHARED substructure has
+	// exponentially many root-to-leaf paths -- which the fold does not merely walk, it
+	// ALLOCATES. Past either cap the subtree is its own fold, so the pair (fold, then
+	// hash and equal) still agrees with itself -- what a deep or wide key loses is only
+	// the case- and number-insensitivity below the cut, never a false match.
+	private static LispVal equalpKey(LispVal v, int depth, int[] budget) {
+		if (depth <= 0 || budget[0] <= 0) {
+			return v;
+		}
+		budget[0]--;
+		return switch (v) {
+			case LispString string -> new LispString(upcase(string.value()));
+			case LispChar character -> new LispChar(Character.toUpperCase(character.codePoint()));
+			case LispDouble number -> Double.isFinite(number.value()) ? LispRatio.ofDouble(number.value()) : number;
+			case LispComplex complex when isZeroPart(complex.real()) && isZeroPart(complex.imag()) ->
+				equalpKey(complex.real(), depth - 1, budget);
+			case LispCons cons ->
+				new LispCons(equalpKey(cons.car(), depth - 1, budget), equalpKey(cons.cdr(), depth - 1, budget));
+			case LispInstance instance when equalByIdentity(instance) -> equalpInstanceKey(instance, depth, budget);
+			default -> v;
+		};
+	}
+
+	/**
+	 * The head of an instance's {@code equalp} fold: a host object no program can reach,
+	 * so it is {@link #equal} to nothing but itself and no key a program writes can match
+	 * a fold that starts with it.
+	 */
+	private static final LispVal EQUALP_INSTANCE_MARKER = new LispJavaObject(new Object());
+
+	// (marker tag slot-fold...): the layout's tag tells two types apart, and the slots
+	// fold one level down, as a cons's elements do -- the same depth and budget, so a
+	// cyclic instance graph still folds to a finite list.
+	private static LispVal equalpInstanceKey(LispInstance instance, int depth, int[] budget) {
+		LispVal slots = LispNil.INSTANCE;
+		for (int i = instance.slotCount() - 1; i >= 0; i--) {
+			slots = new LispCons(equalpKey(instance.slot(i), depth - 1, budget), slots);
+		}
+		return new LispCons(EQUALP_INSTANCE_MARKER, new LispCons(new LispString(instance.layout().tag()), slots));
+	}
+
+	/**
+	 * Whether a real part is a zero, so a complex with two zero parts folds to its real
+	 * part below: {@code equalp} compares numbers with {@code =}, and
+	 * {@code (= 2.0 #C(2.0 0.0))} is true, so the two must share one key. A complex with
+	 * a non-zero imaginary part is its own fold (a miss, never a false match, like the
+	 * array deviation above).
+	 */
+	private static boolean isZeroPart(LispVal part) {
+		if (part instanceof LispDouble d) {
+			return d.value() == 0.0;
+		}
+		return LispComplex.isRationalZero(part);
+	}
+
+	/**
+	 * Upper case ONE CODE POINT AT A TIME, which is the mapping every backend can apply:
+	 * the compiled backends fold through their own {@code char-upcase} table (generated
+	 * from {@link Character#toUpperCase(int)}), and a whole-string
+	 * {@code String.toUpperCase} would part company with them wherever it expands one
+	 * code point into several ({@code ss} for a sharp s). It is also the mapping the
+	 * {@code equalp} PREDICATE uses -- {@code string-equal} compares character by
+	 * character -- so the fold and the predicate agree on the same strings.
+	 */
+	private static String upcase(String value) {
+		StringBuilder folded = new StringBuilder(value.length());
+		int i = 0;
+		while (i < value.length()) {
+			int codePoint = value.codePointAt(i);
+			folded.appendCodePoint(Character.toUpperCase(codePoint));
+			i += Character.charCount(codePoint);
+		}
+		return folded.toString();
+	}
+
+	/**
+	 * The structural hash that agrees with {@link #equal}: equal values hash equal.
+	 * @param v the value to hash
+	 * @return the hash
+	 */
+	public static int hash(LispVal v) {
+		return hash(v, HASH_DEPTH_CAP, new int[] { HASH_WORK_CAP });
+	}
+
+	// The two recursive containers -- a cons and an instance -- are folded here rather
+	// than through their own hashCode, which recurses without a bound (and is what a
+	// cyclic key used to run out of stack on); a structure or CLOS instance, which equal
+	// compares by identity, hashes by identity, so writing its slots never moves its
+	// bucket. A bit vector folds its active elements, as equal compares them. Everything
+	// else answers with its own hashCode, which its equals agrees with by the Java
+	// contract, and which is identity exactly where equal is identity.
+	//
+	// budget is the WHOLE traversal's remaining node visits, a one-cell array because it
+	// has to be shared by the siblings rather than handed down each branch -- a
+	// per-branch
+	// count bounds nothing when the branches share their substructure.
+	private static int hash(LispVal v, int depth, int[] budget) {
+		if (depth <= 0 || budget[0] <= 0) {
+			return 0;
+		}
+		budget[0]--;
+		if (v instanceof LispCons cons) {
+			return 31 * hash(cons.car(), depth - 1, budget) + hash(cons.cdr(), depth - 1, budget) + 1;
+		}
+		if (v instanceof LispInstance inst) {
+			if (equalByIdentity(inst)) {
+				return System.identityHashCode(inst);
+			}
+			int h = inst.layout().tag().hashCode();
+			for (int i = 0; i < inst.slotCount(); i++) {
+				h = 31 * h + hash(inst.slot(i), depth - 1, budget);
+			}
+			return h;
+		}
+		if (v instanceof LispArray array && isBitVector(array)) {
+			// The active elements, as equal compares them, each a node of the budget.
+			int length = array.effectiveLength();
+			int h = length;
+			for (int i = 0; i < length && budget[0] > 0; i++) {
+				h = 31 * h + hash(bitVectorElement(array, i), depth - 1, budget);
+			}
+			return h;
+		}
+		return v.hashCode();
+	}
+
+}

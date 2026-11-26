@@ -1,0 +1,698 @@
+name: Java CI with Maven
+
+on:
+  push:
+    branches:
+    - develop
+    - main
+    paths:
+    - src/**
+    - examples/**
+    - pom.xml
+    - rontolisp-maven-plugin/**
+    - rontolisp-native/**
+    # The sources of the modules outside the reactor are what the e2e job compiles
+    # as libraries of a Java program (FetchSpecE2eTest, ClPostgresE2eTest,
+    # JavaWitImportTest).
+    - servlet-httpserver/src/main/**
+    - webmvc-fn-lite/src/main/**
+    - jdbc-postgresql/src/main/**
+    - jdbc-spin-postgres/src/main/**
+    - rontolisp-java-api/src/main/**
+    # The plugin's E2E runs its consumer builds on the wrapper's Maven, so a
+    # bump needs this workflow.
+    - .mvn/**
+    - .github/workflows/ci.yaml
+    - .github/scripts/move-snapshot-tag.sh
+  pull_request:
+    branches:
+    - develop
+    - main
+    paths:
+    - src/**
+    - pom.xml
+    - rontolisp-maven-plugin/**
+    - rontolisp-native/**
+    - servlet-httpserver/src/main/**
+    - webmvc-fn-lite/src/main/**
+    - jdbc-postgresql/src/main/**
+    - jdbc-spin-postgres/src/main/**
+    - rontolisp-java-api/src/main/**
+    - .mvn/**
+    - .github/workflows/ci.yaml
+  # On demand, so the suite can be re-run against an unchanged tree. Timing work needs
+  # that: runner speed varies by up to 1.4x between runs, which is larger than most of
+  # the effects being measured, and `gh run rerun` refuses these runs.
+  workflow_dispatch: {}
+jobs:
+  # The suite split into two jobs by scope: `test-e2e` runs the
+  # `am.ik.rontolisp.e2e.*` classes (subprocess-spawning, wasmtime compiles,
+  # network -- 63 classes at the cut) and `test-rest` runs everything else
+  # (361). Each gets its own runner with its own heap budget: past ~19k tests
+  # the suite died with cumulative OOM heap pressure in one job's reused
+  # forks, and two forks times 6 GB is the most a 16 GB runner affords
+  # (.kb/test-execution.md, "CI shards"). The split is CI-only: a local
+  # `./mvnw test` runs the whole suite in one reactor, unchanged.
+  #
+  # Selection is two surefire profiles in pom.xml
+  # (`-Drontolisp.test.scope=e2e|rest`), NOT `-Dtest` patterns: an
+  # exclusion-only `-Dtest` resolves every non-test class on the test
+  # classpath (measured 2026-10-21: discovery died on Bf16NarrowBench's
+  # incubator Vector), while the profiles reuse the default scanner minus the
+  # cut, so no class is dropped or doubled. forkCount sizing (the build-helper
+  # `size-test-forks` execution) is independent of the scope and keeps working
+  # in both shards.
+  #
+  # Both jobs run on pull requests exactly as the old `test` did (no `if`),
+  # and everything downstream waits for BOTH shards. Keep the two jobs' steps
+  # in sync: each shard has classes needing OpenBLAS and wasmtime, and each
+  # restores the wasmtime module cache. Partition-safety across the jobs:
+  # separate runners share no filesystem, port space or /tmp -- the only
+  # coupling is the caches, whose keys are content-identical for one tree
+  # (.kb/test-execution.md, "CI shards").
+  test-e2e:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v7
+    - name: Install OpenBlas
+      run: sudo apt-get install -y libopenblas0-pthread
+    - name: Set up GraalVM 25
+      uses: graalvm/setup-graalvm@v1
+      with:
+        java-version: '25'
+        distribution: 'graalvm'
+        cache: maven
+    # WasmLispCompilerIntegrationTest runs wasmtime as a host process instead of in the
+    # shared container (see HostWasmtime). Pin the same version the container image pins
+    # so the two runners stay comparable, and fail here rather than let the class skip:
+    # @EnabledIf would drop all 1010 of its tests silently, which reads as a speedup.
+    - name: Install wasmtime
+      uses: bytecodealliance/actions/wasmtime/setup@v1
+      with:
+        version: "v51.0.0"
+    - name: Verify wasmtime
+      run: |
+        wasmtime --version
+        test "$(wasmtime --version | awk '{print $2}' | cut -d. -f1)" -ge 46
+    # JavaSpecE2eTest's host-log leg builds a host of wasi:logging from WAT and composes it
+    # with a program's component (wasm-tools parse, component embed/new, compose); without
+    # the tool the leg is skipped. Pinned: `compose` is deprecated upstream.
+    - name: Install wasm-tools
+      run: |
+        curl -sSfL https://github.com/bytecodealliance/wasm-tools/releases/download/v1.263.0/wasm-tools-1.263.0-x86_64-linux.tar.gz | tar -xz -C "$RUNNER_TEMP"
+        sudo mv "$RUNNER_TEMP/wasm-tools-1.263.0-x86_64-linux/wasm-tools" /usr/local/bin/wasm-tools
+        wasm-tools --version
+    # ClPostgresE2eTest serves examples/java/spin-postgres under Spin, the one host of
+    # spin:postgres/postgres, which the JDBC driver jdbc-spin-postgres runs its statements
+    # on; without the binary the leg is skipped. Pinned: a version
+    # .kb/jdbc-spin-postgres.md measured.
+    - name: Install Spin
+      run: |
+        mkdir "$RUNNER_TEMP/spin"
+        curl -sSfL https://github.com/spinframework/spin/releases/download/v4.3.0/spin-v4.3.0-linux-amd64.tar.gz | tar -xz -C "$RUNNER_TEMP/spin"
+        sudo mv "$RUNNER_TEMP/spin/spin" /usr/local/bin/spin
+        spin --version
+    # Compiling each module -- not the Java-side codegen -- is where this job's time
+    # goes: the class's summed case time is 2997 s against a cold cache and 171 s
+    # against a warm one. wasmtime already parallelises that compile across every
+    # core, which is why raising the JUnit thread count never moved the job: one
+    # wasmtime process alone saturates a 4 vCPU runner. The corpus is stable between
+    # runs, so carrying its cache is the way to stop paying for it.
+    #
+    # Restore the newest previous cache even when the key misses: entries are keyed
+    # per module, so a commit that changed codegen still hits for every module it did
+    # not change.
+    #
+    # Keying on the sources that decide what the modules are, rather than on the sha,
+    # keeps this from hoarding: a commit that leaves them alone hits exactly and
+    # uploads nothing. Do NOT try to bound the directory with wasmtime's own size
+    # limit -- measured, it left the 1.5 GB unchanged and only cost hit rate (a warm
+    # re-run went from 10.5 s to 46.8 s). Watch the size step below instead; the
+    # budget shared with the Maven caches is 10 GB.
+    # The e2e key is its own lineage; the trailing restore-key still inherits
+    # the warm full-suite cache the rest shard keeps writing.
+    - name: Cache the wasmtime compiled modules
+      uses: actions/cache@v6
+      with:
+        path: ~/.cache/wasmtime
+        key: wasmtime-e2e-modules-${{ runner.os }}-${{ hashFiles('src/main/**', 'src/test/java/am/ik/rontolisp/codegen/wasm/**') }}
+        restore-keys: |
+          wasmtime-e2e-modules-${{ runner.os }}-
+          wasmtime-modules-${{ runner.os }}-
+    - name: Unit Tests
+      # No parallelism flag: CoreCountParallelismStrategy derives the intra-class
+      # parallelism from the runner's core count, which is the 4 this step used to
+      # pass by hand, and follows the runner if that ever changes. The run prints
+      # the value it picked ("[rontolisp] JUnit parallelism = ...").
+      #
+      # Do not tune this against a single run: runner speed varies by up to 1.4x
+      # between runs, which is larger than any effect measured here so far (4 and 8
+      # came out at 2186 s and 2215 s -- indistinguishable). Compare only runs whose
+      # parallelism-independent classes agree, e.g. JvmLispCompilerTest, and whose
+      # printed parallelism matches.
+      run: ./mvnw -V --no-transfer-progress clean test -Drontolisp.test.scope=e2e
+    # The module cache is content-addressed and a run inherits the previous tree's entry
+    # through its restore-key, so it accumulates modules no current run compiles again:
+    # measured 2026-11-19, the e2e cache held 5.8 GB, nearly all of it from earlier
+    # trees. On the 10 GB budget that evicted every other cache, the native-image Rust
+    # build caches (830 MB per platform) included -- none had been restored. Keep the
+    # newest files under 3 GiB: the modules this tree compiles are the newest, and they
+    # are what the next run asks for. wasmtime's own limit needs -C cache-config on
+    # every invocation, which the tests do not pass. The size printed stays the number to
+    # watch if this job ever evicts the Maven caches.
+    - name: Trim the wasmtime cache
+      if: always()
+      run: |
+        find ~/.cache/wasmtime -type f -printf '%T@ %s %p\n' 2>/dev/null | sort -k1,1nr |
+          awk -v budget=$((3 * 1024 * 1024 * 1024)) '{ if (sum < budget) sum += $2; else print $3 }' |
+          xargs -r rm -f
+        du -sh ~/.cache/wasmtime || true
+  test-rest:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v7
+    - name: Install OpenBlas
+      run: sudo apt-get install -y libopenblas0-pthread
+    - name: Set up GraalVM 25
+      uses: graalvm/setup-graalvm@v1
+      with:
+        java-version: '25'
+        distribution: 'graalvm'
+        cache: maven
+    # The rest shard also compiles WASM modules on the host
+    # (WasmLispCompilerIntegrationTest lives outside the e2e package), so it
+    # needs the same wasmtime pin and the same module cache -- this key keeps
+    # the lineage the old single `test` job wrote.
+    - name: Install wasmtime
+      uses: bytecodealliance/actions/wasmtime/setup@v1
+      with:
+        version: "v51.0.0"
+    - name: Verify wasmtime
+      run: |
+        wasmtime --version
+        test "$(wasmtime --version | awk '{print $2}' | cut -d. -f1)" -ge 46
+    - name: Cache the wasmtime compiled modules
+      uses: actions/cache@v6
+      with:
+        path: ~/.cache/wasmtime
+        key: wasmtime-modules-${{ runner.os }}-${{ hashFiles('src/main/**', 'src/test/java/am/ik/rontolisp/codegen/wasm/**') }}
+        restore-keys: |
+          wasmtime-modules-${{ runner.os }}-
+    - name: Unit Tests
+      # Same parallelism note as test-e2e above: the flag stays off and the
+      # strategy derives it from the runner.
+      run: ./mvnw -V --no-transfer-progress clean test -Drontolisp.test.scope=rest
+    # The same trim as test-e2e, for the rest shard's own lineage.
+    - name: Trim the wasmtime cache
+      if: always()
+      run: |
+        find ~/.cache/wasmtime -type f -printf '%T@ %s %p\n' 2>/dev/null | sort -k1,1nr |
+          awk -v budget=$((3 * 1024 * 1024 * 1024)) '{ if (sum < budget) sum += $2; else print $3 }' |
+          xargs -r rm -f
+        du -sh ~/.cache/wasmtime || true
+  # Each platform's runner stubs (rlrun, and rlrun-net for a program that fetches), for
+  # every native binary to carry beside its own pair: a --native-target output starts
+  # with the TARGET's stub, and only a runner of that platform can build it
+  # (.kb/native-output.md, "The Java side").
+  native-stubs:
+    needs: [test-e2e, test-rest]
+    if: github.event_name != 'pull_request'
+    strategy:
+      matrix:
+        include:
+        - { os: ubuntu-latest, platform: linux-x86_64 }
+        - { os: ubuntu-24.04-arm, platform: linux-aarch64 }
+        - { os: macos-latest, platform: macos-aarch64 }
+    runs-on: ${{ matrix.os }}
+    steps:
+    - uses: actions/checkout@v7
+    - name: Set up Rust
+      uses: dtolnay/rust-toolchain@stable
+    # No Rust build cache: the stubs take about a minute to build, and the 830 MB an
+    # entry takes is what the native-image job's Rust build caches need -- the ones
+    # here never survived beside them (2026-11-19).
+    - name: Build the runner stubs
+      run: rontolisp-native/build.sh --stub ${{ matrix.platform }}
+    - name: Upload the runner stubs
+      uses: actions/upload-artifact@v7
+      with:
+        name: native-stub-${{ matrix.platform }}
+        path: rontolisp-native/target/resources/
+  # The native binary is built and verified by two jobs, so a failed verify re-runs
+  # ("Re-run failed jobs") against the same binary instead of rebuilding it. The build
+  # hands the binary (`<artifact-name>`) and its --native pair (`native-shims-<platform>`)
+  # to native-image-verify through the artifacts `release` publishes from; they are
+  # uploaded on pull requests too, for the verify.
+  native-image:
+    needs: [test-e2e, test-rest, native-stubs]
+    # native-stubs is skipped on a pull request, which would skip this job too.
+    if: ${{ !cancelled() && needs.test-e2e.result == 'success' && needs.test-rest.result == 'success' && needs.native-stubs.result != 'failure' }}
+    strategy:
+      # Every leg runs to its end: "Re-run failed jobs" re-runs the cancelled legs too, so
+      # one failure under fail-fast rebuilds every platform, and the
+      # cancelled ones say nothing about whether the failure is the platform's.
+      fail-fast: false
+      matrix:
+        include: ${{ github.event_name == 'pull_request' && fromJSON('[{"os":"ubuntu-latest","artifact-name":"rontolisp-linux-amd64","platform":"linux-x86_64"}]') || fromJSON('[{"os":"ubuntu-latest","artifact-name":"rontolisp-linux-amd64","platform":"linux-x86_64"},{"os":"ubuntu-24.04-arm","artifact-name":"rontolisp-linux-arm64","platform":"linux-aarch64"},{"os":"macos-latest","artifact-name":"rontolisp-darwin-arm64","platform":"macos-aarch64"}]') }}
+    runs-on: ${{ matrix.os }}
+    steps:
+    - uses: actions/checkout@v7
+    - name: Set up GraalVM 25
+      uses: graalvm/setup-graalvm@v1
+      with:
+        java-version: '25'
+        distribution: 'graalvm'
+        cache: maven
+    # The --native precompile shim and runner stub (.kb/native-output.md) are Rust,
+    # built for this platform by rontolisp-native/build.sh, which -Pnative runs. The
+    # module pins wasmtime 51, whose MSRV is 1.97.
+    - name: Set up Rust
+      uses: dtolnay/rust-toolchain@stable
+    - name: Cache the Rust build
+      uses: Swatinem/rust-cache@v2
+      with:
+        workspaces: rontolisp-native
+    # The other platforms' stubs, which the binary carries for --native-target. A pull
+    # request builds without them; its cross-target tests skip.
+    - name: Download every platform's runner stub
+      if: github.event_name != 'pull_request'
+      uses: actions/download-artifact@v8
+      with:
+        pattern: native-stub-*
+        path: rontolisp-native/target/resources
+        merge-multiple: true
+    # build.sh --test runs an output on the oldest CPU of its architecture, and the other
+    # Linux architecture's output, under qemu user mode.
+    - name: Install qemu
+      if: runner.os == 'Linux'
+      run: sudo apt-get update && sudo apt-get install -y qemu-user
+    # -Drontolisp.native.required=true: a binary without the host's pair (or, on
+    # Linux, with a stub that links glibc dynamically) fails here instead of shipping
+    # a --native that says "not available".
+    - name: Build native image
+      run: ./mvnw -V --no-transfer-progress -Pnative -Drontolisp.native.required=true clean package -DskipTests
+    - name: Test the shim and the stub
+      working-directory: rontolisp-native
+      env:
+        RLNATIVE_REQUIRE_QEMU: ${{ runner.os == 'Linux' && '1' || '' }}
+      run: ./build.sh --test
+    # The verify job tests against this pair; the release job folds every platform's
+    # pair into the executable jar.
+    - name: Upload the --native pair
+      uses: actions/upload-artifact@v7
+      with:
+        name: native-shims-${{ matrix.platform }}
+        path: rontolisp-native/target/resources/
+    - name: Rename binary
+      run: mv target/rontolisp target/${{ matrix.artifact-name }}
+    - name: Upload artifact
+      uses: actions/upload-artifact@v7
+      with:
+        name: ${{ matrix.artifact-name }}
+        path: target/${{ matrix.artifact-name }}
+  native-image-verify:
+    needs: native-image
+    # The default success() would also read native-stubs, skipped on a pull request.
+    if: ${{ !cancelled() && needs.native-image.result == 'success' }}
+    strategy:
+      # For the reason native-image gives.
+      fail-fast: false
+      matrix:
+        include: ${{ github.event_name == 'pull_request' && fromJSON('[{"os":"ubuntu-latest","artifact-name":"rontolisp-linux-amd64","platform":"linux-x86_64"}]') || fromJSON('[{"os":"ubuntu-latest","artifact-name":"rontolisp-linux-amd64","platform":"linux-x86_64"},{"os":"ubuntu-24.04-arm","artifact-name":"rontolisp-linux-arm64","platform":"linux-aarch64"},{"os":"macos-latest","artifact-name":"rontolisp-darwin-arm64","platform":"macos-aarch64"}]') }}
+    runs-on: ${{ matrix.os }}
+    steps:
+    - uses: actions/checkout@v7
+    # JAVA_HOME is the builder's JDK: the notices check below reads its legal/ files.
+    - name: Set up GraalVM 25
+      uses: graalvm/setup-graalvm@v1
+      with:
+        java-version: '25'
+        distribution: 'graalvm'
+        cache: maven
+    # The pair goes where the build had it, so the test classpath carries it
+    # (NativeToolchainTest, NativeTcpTest) and -Drontolisp.native.required=true finds
+    # it. Downloaded after the checkout, it is newer than its sources, so build.sh
+    # does not try to rebuild it and the job needs no Rust.
+    - name: Download the --native pair
+      uses: actions/download-artifact@v8
+      with:
+        name: native-shims-${{ matrix.platform }}
+        path: rontolisp-native/target/resources
+    - name: Download the native binary
+      uses: actions/download-artifact@v8
+      with:
+        name: ${{ matrix.artifact-name }}
+        path: target
+    # An artifact drops the execute bit; without it CiSpecE2eTest and
+    # ClojureNativeLoweringE2eTest would skip rather than fail.
+    - name: Restore the binary's name and execute bit
+      run: |
+        mv target/${{ matrix.artifact-name }} target/rontolisp
+        chmod +x target/rontolisp
+    # NativeOutputE2eTest runs an output on the oldest CPU of its architecture, and the
+    # other Linux architecture's output, under qemu user mode.
+    - name: Install qemu
+      if: runner.os == 'Linux'
+      run: sudo apt-get update && sudo apt-get install -y qemu-user
+    # The version every other job pins and the runner's crates are pinned to:
+    # NativeOutputE2eTest diffs a --native output against `wasmtime run`, so a new
+    # release must arrive by a commit that moves every pin, not by a re-run.
+    - name: Install wasmtime
+      uses: bytecodealliance/actions/wasmtime/setup@v1
+      with:
+        version: "v51.0.0"
+    - name: Verify native image
+      run: |
+        set -e
+        ./target/rontolisp -v
+        # The binary owes the notices of the GraalVM runtime linked into it, the JDK
+        # modules it links and every third-party notice the builder JDK ships for them
+        # (src/native/graalvm-notices.sh). The set is the JDK's per platform: the Linux
+        # builds ship jdk.incubator.vector's sleef.md, the macOS build does not.
+        ./target/rontolisp notices --tool >notices-tool.txt
+        notices=('GraalVM Free Terms and Conditions' 'No-Fee Terms and Conditions')
+        for file in "$JAVA_HOME"/legal/{java.base,jdk.incubator.vector}/*.md; do
+          [[ -f $file ]] || continue
+          module=$(basename "$(dirname "$file")")
+          notices+=("Third-party component of $module: $(basename "$file" .md)")
+        done
+        for notice in "${notices[@]}"; do
+          grep -qF "$notice" notices-tool.txt \
+            || { echo "the native binary's notices lack '$notice'" >&2; exit 1; }
+        done
+        rm notices-tool.txt
+        if [[ ${{ github.event_name }} != pull_request ]]; then
+          for platform in linux-x86_64 linux-aarch64 macos-aarch64; do
+            for stub in rlrun rlrun-net; do
+              [[ -f rontolisp-native/target/resources/am/ik/rontolisp/native/$platform/$stub ]] \
+                || { echo "the native binary carries no $platform $stub" >&2; exit 1; }
+            done
+          done
+        fi
+        # Run the ci-spec.yaml cases through the native binary in all four
+        # backend modes (interpreter / JVM / WASM Preview 1 / WASM as a WASI 0.2
+        # component), each of them twice: default kernels and --simd, which is a
+        # different packed-array representation rather than a faster route to the
+        # same one (.kb/vec.md). The driver reports the exact failing case by
+        # name and leg, so there is no positional expected file to keep in sync.
+        # NativeOutputE2eTest compiles through the binary's --native (its resources
+        # and FFM downcalls) and diffs the output against wasmtime run; FetchSpecE2eTest
+        # runs the fetch corpus on every transport, the native leg through the binary's
+        # network runner. NativeTcpTest runs the socket loopback programs in a --native
+        # executable, through the same network runner's rltcp host (it skips where no
+        # host pair is on the classpath, which is every other job). ClojureNativeLoweringE2eTest
+        # requires the binary to lower the Clojure corpus to the IR the JVM does: it
+        # reads a host form's class from the JDK's class files, where its own image
+        # holds only part of the JDK.
+        ./mvnw -V --no-transfer-progress \
+          -Dtest='CiSpecE2eTest,NativeOutputE2eTest,NativeToolchainTest,FetchSpecE2eTest,NativeTcpTest,ClojureNativeLoweringE2eTest' -DfailIfNoTests=false \
+          -Drontolisp.binary="$PWD/target/rontolisp" \
+          -Drontolisp.native.required=true \
+          test
+  release:
+    # The verify, not only the build: a binary that fails it is not published.
+    needs: [native-image, native-image-verify]
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      # move-snapshot-tag.sh dispatches a run of the tip when a workflow change overtook this one
+      actions: write
+    steps:
+    - uses: actions/checkout@v7
+    - name: Set up GraalVM 25
+      uses: graalvm/setup-graalvm@v1
+      with:
+        java-version: '25'
+        distribution: 'graalvm'
+        cache: maven
+    - name: Extract version
+      id: version
+      run: |
+        VERSION=$(./mvnw help:evaluate -Dexpression=project.version -q -DforceStdout)
+        if [[ "$VERSION" == *-SNAPSHOT ]]; then
+          IS_SNAPSHOT=true
+        else
+          IS_SNAPSHOT=false
+        fi
+        echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+        echo "is_snapshot=$IS_SNAPSHOT" >> "$GITHUB_OUTPUT"
+    - name: Download the native binaries
+      uses: actions/download-artifact@v8
+      with:
+        pattern: rontolisp-*
+        path: artifacts
+    # Every platform's --native pair goes into the executable jar, which runs on any
+    # of them (~11 MB compressed for the three; .kb/native-output.md, "The Java side").
+    # The Maven Central jar (the deploy job) carries none.
+    - name: Download every platform's --native pair
+      uses: actions/download-artifact@v8
+      with:
+        pattern: native-shims-*
+        path: rontolisp-native/target/resources
+        merge-multiple: true
+    - name: Build executable JAR
+      run: |
+        set -e
+        ./mvnw -V --no-transfer-progress -Drontolisp.native.required=true -DskipTests clean package
+        for platform in linux-x86_64 linux-aarch64 macos-aarch64; do
+          for stub in rlrun rlrun-net runner-notices.txt; do
+            unzip -l target/rontolisp-*-exec.jar | grep -q "am/ik/rontolisp/native/$platform/$stub\$" \
+              || { echo "the executable jar has no --native $stub for $platform" >&2; exit 1; }
+          done
+        done
+        unzip -l target/rontolisp-*-exec.jar | grep -q 'META-INF/THIRD-PARTY-NOTICES.txt$' \
+          || { echo "the executable jar has no third-party notices" >&2; exit 1; }
+    # Move the snapshot tag onto this commit and leave the release itself alone, so
+    # the action below UPDATES it in place (it overwrites the assets) instead of the
+    # release being recreated from scratch.
+    #
+    # Do NOT go back to `gh release delete --cleanup-tag` + create: that is a
+    # non-atomic replace, and the create half failing takes the published release
+    # with it. It did (run 30629526919: the delete succeeded, the create got a
+    # spurious 403 that the action refuses to retry), which left the repo with no
+    # release and no tag at all -- and the install commands in README.md and
+    # doc/{en,ja}/getting-started/build.md point at
+    # releases/download/<version>/rontolisp-*, so they 404 for as long as that
+    # lasts. Updating in place makes a failed run degrade to "assets are one commit
+    # stale" rather than "the download links are dead".
+    #
+    # GITHUB_TOKEN may not point a ref at a commit whose workflows differ from develop's
+    # tip, so a run a workflow change overtook publishes nothing and hands over to a run
+    # of the tip; one older than the tag's commit publishes nothing either (the script).
+    - name: Move the snapshot tag to this commit
+      id: tag
+      if: steps.version.outputs.is_snapshot == 'true'
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: .github/scripts/move-snapshot-tag.sh "${{ steps.version.outputs.version }}"
+    - name: Create release
+      if: steps.tag.outputs.publish != 'false'
+      uses: softprops/action-gh-release@v3
+      with:
+        tag_name: ${{ steps.version.outputs.version }}
+        target_commitish: ${{ github.sha }}
+        prerelease: ${{ steps.version.outputs.is_snapshot }}
+        name: ${{ steps.version.outputs.is_snapshot == 'true' && format('{0} (snapshot)', steps.version.outputs.version) || steps.version.outputs.version }}
+        files: |
+          artifacts/rontolisp-linux-amd64/rontolisp-linux-amd64
+          artifacts/rontolisp-linux-arm64/rontolisp-linux-arm64
+          artifacts/rontolisp-darwin-arm64/rontolisp-darwin-arm64
+          target/rontolisp-${{ steps.version.outputs.version }}-exec.jar
+  # Every example in examples/examples.yaml, on every backend it declares. It runs
+  # AFTER `release` on purpose: the suite is long and a red example must not hold the
+  # binary back -- by the time this starts, the release assets are already published.
+  # `release` is itself guarded on `event_name != 'pull_request'`, so this is skipped
+  # on PRs, which is the accepted trade for that ordering.
+  #
+  # Nothing ran this suite before: the `test-*` jobs run `clean test`, where no exec jar
+  # exists so the class aborts, and `native-image-verify` runs only CiSpecE2eTest -- which is
+  # why a Clack :raw-body change left a Worker example answering 500 unnoticed.
+  examples:
+    needs: release
+    runs-on: ubuntu-latest
+    # The slowest legs compile WASM modules, and wasmtime spreads that across every
+    # core -- so a 4 vCPU runner is far off the ~26 min this takes on a big machine.
+    # Bound it rather than let a hang bill the 6-hour default.
+    timeout-minutes: 180
+    steps:
+    - uses: actions/checkout@v7
+    - name: Set up GraalVM 25
+      uses: graalvm/setup-graalvm@v1
+      with:
+        java-version: '25'
+        distribution: 'graalvm'
+        cache: maven
+    # The `wasm` RUN backend executes the compiled module; the compile-only backends do
+    # not need it. Same pin as the test job, so a failure here means the example rather
+    # than the runtime.
+    - name: Install wasmtime
+      uses: bytecodealliance/actions/wasmtime/setup@v1
+      with:
+        version: "v51.0.0"
+    # Both caches are RESTORE + SAVE rather than one `actions/cache`, and both saves
+    # run on `always()`. actions/cache only writes its cache when the job SUCCEEDS,
+    # and this is the one job in the pipeline that is allowed to be red -- a single
+    # broken example would otherwise mean no cache is ever written, so every run
+    # re-downloads the 63 MB dist and recompiles every module. The whole point of
+    # placing this job after `release` is that its failures are cheap; that only
+    # holds if a failure still leaves the caches warm.
+    #
+    # Same reasoning as the test job's cache: the module compile, not the codegen, is
+    # where the time goes, and the corpus is stable between runs.
+    - name: Restore the wasmtime compiled modules
+      id: wasmtime-cache
+      uses: actions/cache/restore@v6
+      with:
+        path: ~/.cache/wasmtime
+        key: wasmtime-examples-${{ runner.os }}-${{ hashFiles('src/main/**', 'examples/**') }}
+        restore-keys: |
+          wasmtime-examples-${{ runner.os }}-
+    # 34 examples ql:quickload their systems (clack, lack, tiny-routes, ningle, ...).
+    # Carrying the dist keeps the run off the network, so a red job means an example
+    # broke rather than that a dist moved under it.
+    - name: Restore the Quicklisp dist
+      id: quicklisp-cache
+      uses: actions/cache/restore@v6
+      with:
+        path: ~/.rontolisp/quicklisp
+        key: quicklisp-${{ runner.os }}-${{ hashFiles('examples/examples.yaml') }}
+        restore-keys: |
+          quicklisp-${{ runner.os }}-
+    # Drive the suite with the binary that was just PUBLISHED, not a fresh build: it
+    # needs no native-image run here, each of the 253 legs starts in milliseconds
+    # instead of paying JVM startup, and a green run is then a statement about the
+    # artifact users are downloading.
+    - name: Download the released binary
+      uses: actions/download-artifact@v8
+      with:
+        name: rontolisp-linux-amd64
+        path: bin
+    - name: Run every example
+      run: |
+        set -e
+        chmod +x bin/rontolisp-linux-amd64
+        ./mvnw -V --no-transfer-progress \
+          -Dtest=ExamplesE2eTest -DfailIfNoTests=false \
+          -Drontolisp.binary="$PWD/bin/rontolisp-linux-amd64" \
+          test
+    # `cache-hit` is true only on an EXACT key match, so a run restored through a
+    # restore-key still saves under its own key -- which is what carries a new
+    # example's modules and a new dependency's sources forward.
+    - name: Save the wasmtime compiled modules
+      if: always() && steps.wasmtime-cache.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v6
+      with:
+        path: ~/.cache/wasmtime
+        key: ${{ steps.wasmtime-cache.outputs.cache-primary-key }}
+    - name: Save the Quicklisp dist
+      if: always() && steps.quicklisp-cache.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v6
+      with:
+        path: ~/.rontolisp/quicklisp
+        key: ${{ steps.quicklisp-cache.outputs.cache-primary-key }}
+  # The Maven plugin is outside the root reactor, so `./mvnw test` never sees it. It
+  # needs the core installed by coordinates, which is why this is a job of its own rather
+  # than a step of `test`, and it runs the REAL-Maven E2E: the phase ordering that lets
+  # src/main/java compile against the Lisp classes cannot be seen any other way.
+  maven-plugin:
+    needs: [test-e2e, test-rest]
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v7
+    - name: Set up JDK 25
+      uses: actions/setup-java@v6
+      with:
+        java-version: '25'
+        distribution: 'liberica'
+        cache: maven
+    # The wasm goal's leg runs the modules it builds; without wasmtime it would skip.
+    - name: Install wasmtime
+      uses: bytecodealliance/actions/wasmtime/setup@v1
+      with:
+        version: "v51.0.0"
+    - name: Install rontolisp
+      run: ./mvnw -V --no-transfer-progress install -DskipTests
+    - name: Install the plugin
+      run: ./mvnw -V --no-transfer-progress -f rontolisp-maven-plugin/pom.xml install -DskipTests
+    - name: Test the plugin
+      run: ./mvnw -V --no-transfer-progress -f rontolisp-maven-plugin/pom.xml -Drontolisp.plugin.e2e=true test
+
+  deploy:
+    needs: [test-e2e, test-rest]
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+    - uses: actions/checkout@v7
+    - name: Import Secrets
+      id: secrets
+      uses: hashicorp/vault-action@v4.0.0
+      with:
+        exportToken: true
+        method: jwt
+        url: ${{ secrets.VAULT_ADDR }}
+        role: cicd
+        secrets: |
+          kv/data/cicd/maven_central username | MAVEN_CENTRAL_USERNAME ;
+          kv/data/cicd/maven_central password | MAVEN_CENTRAL_PASSWORD ;
+          kv/data/cicd/gpg secring | GPG_SECRING ;
+          kv/data/cicd/gpg passphrase | GPG_PASSPHRASE ;
+    - name: Set up JDK 25
+      uses: actions/setup-java@v6
+      with:
+        java-version: '25'
+        distribution: 'liberica'
+        cache: maven
+        gpg-private-key: ${{ steps.secrets.outputs.GPG_SECRING }}
+        gpg-passphrase: ${{ steps.secrets.outputs.GPG_PASSPHRASE }}
+    # The Portal credentials get an id of their own: `central` is also the id of the
+    # repository Maven reads from (repo.maven.apache.org), and Maven 3.10 binds a
+    # server's credentials to the origins declared for its id, so under the id
+    # `central` they never reach central.sonatype.com (HTTP 401). It must match
+    # `publishingServerId` in pom.xml and rontolisp-maven-plugin/pom.xml, as the side
+    # modules' workflows match theirs (.kb/session-workflow.md, "The deploy job").
+    - name: Generates Maven Settings
+      uses: s4u/maven-settings-action@v4.0.0
+      with:
+        servers: |
+          [{
+              "id": "sonatype-central",
+              "username": "${{ steps.secrets.outputs.MAVEN_CENTRAL_USERNAME }}",
+              "password": "${{ steps.secrets.outputs.MAVEN_CENTRAL_PASSWORD }}"
+          }]
+    # On the wrapper's Maven like every other job, not the runner's /usr/bin/mvn: a
+    # runner image update must not change the Maven that publishes.
+    - name: Deploy to Maven Central
+      run: |
+        set -e
+        ./mvnw -V \
+            generate-sources \
+            javadoc:jar \
+            source:jar \
+            package \
+            org.apache.maven.plugins:maven-gpg-plugin:3.0.1:sign \
+            deploy \
+            --no-transfer-progress \
+            -Dgpg.passphrase=${GPG_PASSPHRASE} \
+            -DskipTests=true
+    # The Maven plugin is its own reactor and depends on the core by coordinates, so it
+    # goes after -- the step above ran the full lifecycle, which installed what it needs.
+    - name: Deploy rontolisp-maven-plugin to Maven Central
+      run: |
+        set -e
+        ./mvnw -V -f rontolisp-maven-plugin/pom.xml \
+            javadoc:jar \
+            source:jar \
+            package \
+            org.apache.maven.plugins:maven-gpg-plugin:3.0.1:sign \
+            deploy \
+            --no-transfer-progress \
+            -Dgpg.passphrase=${GPG_PASSPHRASE} \
+            -DskipTests=true
+    - name: Revoke token
+      if: always()
+      run: |
+        curl -X POST -s -H "X-Vault-Token: ${VAULT_TOKEN}" ${{ secrets.VAULT_ADDR }}/v1/auth/token/revoke-self || true

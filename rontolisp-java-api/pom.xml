@@ -1,0 +1,142 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+		 xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+		 xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+	<modelVersion>4.0.0</modelVersion>
+
+	<!--
+		The names a Java program compiled by rontolisp's Java compiler takes from rontolisp:
+		@WitImport, the WitException a WIT result's error arm is thrown as, and @WitExport. Plain Java
+		with no dependency, so a program naming them compiles with javac and runs on a JDK
+		as well; rontolisp gives them their meaning when it compiles the program. It depends
+		on nothing of rontolisp and is outside the root reactor. Built separately:
+
+		  ../mvnw -f rontolisp-java-api/pom.xml spring-javaformat:apply verify
+	-->
+
+	<groupId>am.ik.rontolisp</groupId>
+	<artifactId>rontolisp-java-api</artifactId>
+	<version>0.1.0-SNAPSHOT</version>
+	<packaging>jar</packaging>
+	<name>rontolisp-java-api</name>
+	<description>What a Java program compiled by rontolisp names of rontolisp's: @WitImport and @WitExport</description>
+	<url>https://github.com/making/rontolisp</url>
+
+	<licenses>
+		<license>
+			<name>Apache License, Version 2.0</name>
+			<url>http://www.apache.org/licenses/LICENSE-2.0.txt</url>
+			<distribution>repo</distribution>
+		</license>
+	</licenses>
+	<scm>
+		<url>https://github.com/making/rontolisp</url>
+		<connection>scm:git:git@github.com:making/rontolisp.git</connection>
+		<developerConnection>scm:git:git@github.com:making/rontolisp.git</developerConnection>
+	</scm>
+	<developers>
+		<developer>
+			<id>making</id>
+			<name>Toshiaki Maki</name>
+			<email>makingx@gmail.com</email>
+			<url>https://ik.am</url>
+		</developer>
+	</developers>
+
+	<properties>
+		<!-- What a program declaring a WIT variant (a sealed interface of records) needs. -->
+		<maven.compiler.release>17</maven.compiler.release>
+		<project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+	</properties>
+
+	<build>
+		<plugins>
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-compiler-plugin</artifactId>
+				<version>3.13.0</version>
+			</plugin>
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-source-plugin</artifactId>
+				<version>3.3.1</version>
+				<executions>
+					<execution>
+						<id>attach-sources</id>
+						<goals>
+							<goal>jar-no-fork</goal>
+						</goals>
+					</execution>
+				</executions>
+			</plugin>
+			<!-- What Maven Central requires beside the jar: the sources (above) and the javadoc. -->
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-javadoc-plugin</artifactId>
+				<version>3.12.0</version>
+				<executions>
+					<execution>
+						<id>attach-javadocs</id>
+						<goals>
+							<goal>jar</goal>
+						</goals>
+					</execution>
+				</executions>
+			</plugin>
+			<!-- Same formatter, same version as the root project. -->
+			<plugin>
+				<groupId>io.spring.javaformat</groupId>
+				<artifactId>spring-javaformat-maven-plugin</artifactId>
+				<version>0.0.47</version>
+				<executions>
+					<execution>
+						<phase>validate</phase>
+						<goals>
+							<goal>validate</goal>
+						</goals>
+					</execution>
+				</executions>
+			</plugin>
+			<!-- `deploy` publishes to Maven Central: a SNAPSHOT to its snapshot repository, any
+			     other version as a release. The server id is the one the workflow's settings
+			     carry the Portal credentials under (.kb/session-workflow.md, "The deploy job"). -->
+			<plugin>
+				<groupId>org.sonatype.central</groupId>
+				<artifactId>central-publishing-maven-plugin</artifactId>
+				<version>0.11.0</version>
+				<extensions>true</extensions>
+				<configuration>
+					<publishingServerId>sonatype-central</publishingServerId>
+					<autoPublish>true</autoPublish>
+					<waitUntil>published</waitUntil>
+				</configuration>
+			</plugin>
+		</plugins>
+	</build>
+
+	<profiles>
+		<!-- The signatures Maven Central requires, made by the workflow's deploy job with the
+		     key it imports: -Psign deploy -Dgpg.passphrase=... -->
+		<profile>
+			<id>sign</id>
+			<build>
+				<plugins>
+					<plugin>
+						<groupId>org.apache.maven.plugins</groupId>
+						<artifactId>maven-gpg-plugin</artifactId>
+						<version>3.0.1</version>
+						<executions>
+							<execution>
+								<id>sign-artifacts</id>
+								<phase>verify</phase>
+								<goals>
+									<goal>sign</goal>
+								</goals>
+							</execution>
+						</executions>
+					</plugin>
+				</plugins>
+			</build>
+		</profile>
+	</profiles>
+</project>

@@ -1,0 +1,375 @@
+title: rontolisp
+lang_name: English
+sections:
+  - title: Getting Started
+    pages:
+      - file: index.md
+        title: Introduction
+      - file: getting-started/build.md
+        title: Build & Install
+      - file: getting-started/repl.md
+        title: REPL
+      - file: getting-started/swank.md
+        title: SWANK (SLIME, SLY, Lem)
+      - file: getting-started/file-interpretation.md
+        title: File Interpretation
+      - file: getting-started/command-line.md
+        title: Command-Line Options
+      - file: getting-started/format.md
+        title: Formatting Source Code
+      - file: getting-started/agent-skill.md
+        title: Agent Skill
+  - title: Compiling
+    pages:
+      - file: compiling/jvm.md
+        title: Compile to JVM Bytecode
+      - file: compiling/wasm.md
+        title: Compile to WASM
+      - file: compiling/native.md
+        title: Compile to a Native Executable
+      - file: compiling/asdf-programs.md
+        title: Build an Executable from an ASDF System
+      - file: compiling/maven-plugin.md
+        title: Maven Plugin
+      - file: compiling/licenses.md
+        title: Licenses of a Compiled Program
+      - file: compiling/dynamic.md
+        title: Dynamic (Late Binding)
+      - file: compiling/warnings.md
+        title: Compile-Time Warnings
+      - file: compiling/ir-dump.md
+        title: Dumping the IR (`--dump-ir`)
+      - file: compiling/self-hosted-repl.md
+        title: Self-Hosted REPL
+  - title: Language Reference
+    pages:
+      - file: reference/data-types.md
+        title: Data Types
+      - file: reference/special-forms.md
+        title: Special Forms
+      - file: reference/macros.md
+        title: Macros
+      - file: reference/functions.md
+        title: Functions
+        subpages:
+          - file: reference/functions/cl.md
+            title: cl Package Functions
+          - file: reference/functions/rontolisp.md
+            title: rontolisp Package Functions
+          - file: reference/functions/linalg.md
+            title: linalg Package Functions
+          - file: reference/functions/torch.md
+            title: torch Package Functions
+          - file: reference/functions/java.md
+            title: java Package Functions
+          - file: reference/functions/ffi.md
+            title: ffi Package Functions
+          - file: reference/functions/objc.md
+            title: objc Package Functions
+          - file: reference/functions/cocoa.md
+            title: cocoa Package Functions
+          - file: reference/functions/fli.md
+            title: fli Package Functions
+          - file: reference/functions/appkit.md
+            title: appkit Package Functions
+          - file: reference/functions/checkpoint.md
+            title: checkpoint Package Functions
+          - file: reference/functions/safetensors.md
+            title: safetensors Package Functions
+          - file: reference/functions/geom.md
+            title: geom Package Functions
+          - file: reference/functions/tokenizer.md
+            title: tokenizer Package Functions
+          - file: reference/functions/gguf.md
+            title: gguf Package Functions
+          - file: reference/functions/metal.md
+            title: metal Package Functions
+          - file: reference/functions/scene.md
+            title: scene Package Functions
+          - file: reference/functions/asdf.md
+            title: asdf Package Functions
+          - file: reference/uiop.md
+            title: The uiop Package
+            subpages:
+              - file: reference/uiop/utility.md
+                title: uiop/utility
+              - file: reference/uiop/os.md
+                title: uiop/os
+              - file: reference/uiop/pathname.md
+                title: uiop/pathname
+              - file: reference/uiop/filesystem.md
+                title: uiop/filesystem
+              - file: reference/uiop/image.md
+                title: uiop/image
+          - file: reference/functions/ql-and-ql-dist.md
+            title: ql and ql-dist Package Functions
+          - file: reference/functions/usocket.md
+            title: usocket Package Functions
+      - file: reference/packages.md
+        title: Packages
+      - file: reference/function-namespace.md
+        title: Function Namespace
+  - title: Guides
+    pages:
+      - file: guides/linear-algebra.md
+        title: Vectors & Matrices (linalg)
+      - file: guides/simd-acceleration.md
+        title: Vector Kernels & SIMD (vec, linalg)
+      - file: guides/blas-acceleration.md
+        title: Tuned BLAS Acceleration (--blas)
+      - file: guides/gpu-acceleration.md
+        title: GPU Acceleration (--gpu)
+      - file: guides/neural-networks.md
+        title: Neural Networks (torch)
+      - file: guides/running-a-checkpoint.md
+        title: Reading a Model Checkpoint (gguf, safetensors)
+      - file: guides/solid-modeling.md
+        title: Solid Modeling (geom)
+      - file: guides/java-interop.md
+        title: Java Interop
+      - file: guides/objc-appkit.md
+        title: macOS GUI (objc / appkit)
+      - file: guides/cffi.md
+        title: C Libraries (cffi)
+      - file: guides/jvm-library.md
+        title: Export a JVM Library (jvm-export / --no-main)
+      - file: guides/async.md
+        title: Asynchronous Programming (async / await)
+      - file: guides/http-fetch.md
+        title: HTTP Requests (fetch)
+      - file: guides/http-handler.md
+        title: Serving HTTP (http-handler)
+      - file: guides/tcp-sockets.md
+        title: TCP Sockets
+      - file: guides/gray-streams.md
+        title: Gray Streams
+      - file: guides/asdf-systems.md
+        title: Systems (asdf)
+      - file: guides/clack.md
+        title: Clack Web Applications
+      - file: guides/mito.md
+        title: O/R Mapping (mito, sxql)
+      - file: guides/dexador.md
+        title: HTTP Client (dexador)
+      - file: guides/testing.md
+        title: Testing (rove)
+      - file: guides/reader-case.md
+        title: Reader Case (Upcasing)
+      - file: guides/readtables.md
+        title: Readtables
+      - file: guides/math-backends.md
+        title: Math Function Backends
+      - file: guides/clock-and-random.md
+        title: The Clock and Randomness
+      - file: guides/wasm-host-boundary.md
+        title: WASM Host Boundary (wasm-export / wasm-import)
+      - file: guides/wit-contracts.md
+        title: WIT Contracts (wit-export / wit-import)
+      - file: guides/wasm-gc-module.md
+        title: wasm-GC Core Module (Default Output)
+      - file: guides/wasm-component.md
+        title: WASI 0.3 Component (--component)
+      - file: guides/wasm-nogc.md
+        title: WASM Non-GC Output (--no-gc)
+      - file: guides/wasm-browser.md
+        title: Running WASM in a Browser
+      - file: guides/missing-features.md
+        title: Unsupported CL Features
+      - file: guides/eval-limitations.md
+        title: Compiled eval Limitations
+      - file: guides/read-load-limitations.md
+        title: Compiled read/load Limitations
+  - title: Scheme (experimental)
+    pages:
+      - file: scheme/index.md
+        title: Overview
+      - file: scheme/repl.md
+        title: REPL
+      - file: scheme/standards.md
+        title: Standards
+      - file: scheme/syntax.md
+        title: Syntax
+      - file: scheme/libraries.md
+        title: Libraries
+      - file: scheme/sicp.md
+        title: SICP Compatibility
+      - file: scheme/eval.md
+        title: eval
+      - file: scheme/deviations.md
+        title: Deviations
+      - file: scheme/common-lisp.md
+        title: Mixing with Common Lisp
+      - file: scheme/reference.md
+        title: Reference
+        subpages:
+          - file: scheme/reference/syntax.md
+            title: "Syntax"
+          - file: scheme/reference/library-base.md
+            title: "(scheme base)"
+          - file: scheme/reference/library-write.md
+            title: "(scheme write)"
+          - file: scheme/reference/library-read.md
+            title: "(scheme read)"
+          - file: scheme/reference/library-char.md
+            title: "(scheme char)"
+          - file: scheme/reference/library-inexact.md
+            title: "(scheme inexact)"
+          - file: scheme/reference/library-complex.md
+            title: "(scheme complex)"
+          - file: scheme/reference/library-cxr.md
+            title: "(scheme cxr)"
+          - file: scheme/reference/library-lazy.md
+            title: "(scheme lazy)"
+          - file: scheme/reference/library-case-lambda.md
+            title: "(scheme case-lambda)"
+          - file: scheme/reference/library-process-context.md
+            title: "(scheme process-context)"
+          - file: scheme/reference/library-eval.md
+            title: "(scheme eval)"
+          - file: scheme/reference/library-repl.md
+            title: "(scheme repl)"
+          - file: scheme/reference/library-load.md
+            title: "(scheme load)"
+          - file: scheme/reference/library-file.md
+            title: "(scheme file)"
+          - file: scheme/reference/library-r5rs.md
+            title: "(scheme r5rs)"
+          - file: scheme/reference/library-sicp.md
+            title: "SICP Names"
+  - title: Clojure (experimental)
+    pages:
+      - file: clojure/index.md
+        title: Overview
+      - file: clojure/repl.md
+        title: REPL
+      - file: clojure/nrepl.md
+        title: nREPL
+      - file: clojure/syntax.md
+        title: Syntax
+      - file: clojure/semantics.md
+        title: Semantics
+      - file: clojure/deviations.md
+        title: Deviations
+      - file: clojure/reference.md
+        title: Reference
+        subpages:
+          - file: clojure/reference/syntax.md
+            title: "Syntax and definition"
+          - file: clojure/reference/threading.md
+            title: "Threading"
+          - file: clojure/reference/seqs.md
+            title: "Seqs"
+          - file: clojure/reference/iteration.md
+            title: "Iteration"
+          - file: clojure/reference/collections.md
+            title: "Maps, sets and vectors"
+          - file: clojure/reference/numbers.md
+            title: "Numbers and predicates"
+          - file: clojure/reference/predicates.md
+            title: "Type and collection predicates"
+          - file: clojure/reference/instants.md
+            title: "Instants and UUIDs"
+          - file: clojure/reference/state.md
+            title: "State"
+          - file: clojure/reference/multimethods.md
+            title: "Multimethods and hierarchies"
+          - file: clojure/reference/protocols.md
+            title: "Protocols, records and types"
+          - file: clojure/reference/errors.md
+            title: "Errors"
+          - file: clojure/reference/namespaces.md
+            title: "Namespaces"
+          - file: clojure/reference/names.md
+            title: "Names and keywords"
+          - file: clojure/reference/string.md
+            title: "(clojure.string)"
+          - file: clojure/reference/clojure-set.md
+            title: "(clojure.set)"
+          - file: clojure/reference/clojure-walk.md
+            title: "(clojure.walk)"
+          - file: clojure/reference/clojure-zip.md
+            title: "(clojure.zip)"
+          - file: clojure/reference/clojure-data.md
+            title: "(clojure.data)"
+          - file: clojure/reference/clojure-datafy.md
+            title: "(clojure.datafy)"
+          - file: clojure/reference/clojure-core-reducers.md
+            title: "(clojure.core.reducers)"
+          - file: clojure/reference/clojure-edn.md
+            title: "(clojure.edn)"
+          - file: clojure/reference/clojure-instant.md
+            title: "(clojure.instant)"
+          - file: clojure/reference/clojure-java-io.md
+            title: "(clojure.java.io)"
+          - file: clojure/reference/clojure-java-shell.md
+            title: "(clojure.java.shell)"
+          - file: clojure/reference/clojure-main.md
+            title: "(clojure.main)"
+          - file: clojure/reference/clojure-math.md
+            title: "(clojure.math)"
+          - file: clojure/reference/clojure-pprint.md
+            title: "(clojure.pprint)"
+          - file: clojure/reference/clojure-reflect.md
+            title: "(clojure.reflect)"
+          - file: clojure/reference/clojure-repl.md
+            title: "(clojure.repl)"
+          - file: clojure/reference/clojure-stacktrace.md
+            title: "(clojure.stacktrace)"
+          - file: clojure/reference/clojure-template.md
+            title: "(clojure.template)"
+          - file: clojure/reference/clojure-xml.md
+            title: "(clojure.xml)"
+          - file: clojure/reference/regex.md
+            title: "Regular expressions"
+          - file: clojure/reference/higher-order.md
+            title: "Higher-order functions"
+          - file: clojure/reference/transducers.md
+            title: "Transducers"
+          - file: clojure/reference/io.md
+            title: "IO"
+          - file: clojure/reference/ring.md
+            title: "Ring adapter"
+          - file: clojure/reference/ring-util.md
+            title: "Ring utilities"
+          - file: clojure/reference/http-client.md
+            title: "HTTP client (rontolisp.http-client)"
+          - file: clojure/reference/wasm.md
+            title: "WASM host functions (rontolisp.wasm)"
+          - file: clojure/reference/wit.md
+            title: "WIT contracts (rontolisp.wit)"
+          - file: clojure/reference/interop.md
+            title: "Java interop"
+          - file: clojure/reference/test.md
+            title: "Tests (clojure.test)"
+          - file: clojure/reference/macros.md
+            title: "Macros"
+          - file: clojure/reference/riddley.md
+            title: "Code walking (riddley)"
+  - title: Starlark (experimental)
+    pages:
+      - file: starlark/index.md
+        title: Overview
+      - file: starlark/common-lisp.md
+        title: Mixing with Common Lisp
+      - file: starlark/deviations.md
+        title: Deviations
+  - title: A subset of the Java language (experimental)
+    pages:
+      - file: java/index.md
+        title: Overview
+      - file: java/classes.md
+        title: The JDK classes
+      - file: java/servlet.md
+        title: A Servlet application
+      - file: java/webmvc-fn.md
+        title: A WebMvc.fn application
+      - file: java/jdbc.md
+        title: A JDBC program on PostgreSQL
+      - file: java/wit.md
+        title: WIT interfaces and worlds
+      - file: java/logging.md
+        title: Logging
+      - file: java/testing.md
+        title: Testing a Java program
+      - file: java/deviations.md
+        title: Deviations

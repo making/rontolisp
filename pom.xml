@@ -1,0 +1,843 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+		 xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+		 xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+	<modelVersion>4.0.0</modelVersion>
+
+	<groupId>am.ik.rontolisp</groupId>
+	<artifactId>rontolisp</artifactId>
+	<version>0.1.0-SNAPSHOT</version>
+	<name>rontolisp</name>
+	<description>A Common Lisp subset for JVM and WASM</description>
+
+	<properties>
+		<java.version>25</java.version>
+		<maven.compiler.release>${java.version}</maven.compiler.release>
+		<maven.compiler.source>${java.version}</maven.compiler.source>
+		<maven.compiler.target>${java.version}</maven.compiler.target>
+		<project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+		<spring-boot.version>4.1.1</spring-boot.version>
+		<version-generate-skip>false</version-generate-skip>
+		<!--
+			The plugins JarMavenConsumerE2eTest's offline builds run, pinned rather than left to
+			the running Maven's default bindings, which move with the Maven version. The
+			consumer project declares these same versions, so it resolves exactly what this
+			module's own build executed in full.
+		-->
+		<maven-resources-plugin.version>3.4.0</maven-resources-plugin.version>
+		<maven-compiler-plugin.version>3.16.0</maven-compiler-plugin.version>
+		<maven-install-plugin.version>3.1.4</maven-install-plugin.version>
+		<!-- The native executable output's precompile shim and runner stub
+		     (.kb/native-output.md): build them with rontolisp-native/build.sh during
+		     generate-resources when cargo is found (-Pnative turns this on), and fail
+		     unless the host's pair ends up on the classpath (CI turns this on). A host
+		     pair older than its sources is rebuilt under the defaults too. -->
+		<rontolisp.native.build>false</rontolisp.native.build>
+		<rontolisp.native.required>false</rontolisp.native.required>
+	</properties>
+	<licenses>
+		<license>
+			<name>Apache License, Version 2.0</name>
+			<url>http://www.apache.org/licenses/LICENSE-2.0.txt</url>
+			<distribution>repo</distribution>
+		</license>
+	</licenses>
+	<scm>
+		<url>https://github.com/making/rontolisp</url>
+		<connection>scm:git:git@github.com:making/rontolisp.git</connection>
+		<developerConnection>scm:git:git@github.com:making/rontolisp.git
+		</developerConnection>
+	</scm>
+	<url>https://github.com/making/rontolisp</url>
+
+	<developers>
+		<developer>
+			<id>making</id>
+			<name>Toshiaki Maki</name>
+			<email>makingx@gmail.com</email>
+			<url>https://ik.am</url>
+		</developer>
+	</developers>
+	<dependencies>
+		<!-- Shaded into the exec jar and linked into the native binary, its own native
+		     libraries included. Third-party: JLine 4.4.7 (BSD-3-Clause), Copyright (c)
+		     2002-2023 the original author or authors. Notice: THIRD-PARTY-NOTICES.txt, "JLine". -->
+		<dependency>
+			<groupId>org.jline</groupId>
+			<artifactId>jline</artifactId>
+			<version>4.4.7</version>
+		</dependency>
+		<dependency>
+			<groupId>org.jspecify</groupId>
+			<artifactId>jspecify</artifactId>
+		</dependency>
+		<!-- The ONE sanctioned outside dependency of am.ik.rontolisp.runtime (the servlet
+		     transport a -o app.war output travels, .kb/http-server.md): provided scope,
+		     so it is never in the exec jar, a .class/.jar output or the native image.
+		     The version is Spring Boot's; the war runs on any Servlet 6 container. -->
+		<dependency>
+			<groupId>jakarta.servlet</groupId>
+			<artifactId>jakarta.servlet-api</artifactId>
+			<scope>provided</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.junit.jupiter</groupId>
+			<artifactId>junit-jupiter-api</artifactId>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.junit.jupiter</groupId>
+			<artifactId>junit-jupiter-engine</artifactId>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.junit.jupiter</groupId>
+			<artifactId>junit-jupiter-params</artifactId>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.junit.platform</groupId>
+			<artifactId>junit-platform-launcher</artifactId>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.assertj</groupId>
+			<artifactId>assertj-core</artifactId>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.testcontainers</groupId>
+			<artifactId>testcontainers</artifactId>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.testcontainers</groupId>
+			<artifactId>testcontainers-junit-jupiter</artifactId>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>tools.jackson.dataformat</groupId>
+			<artifactId>jackson-dataformat-yaml</artifactId>
+			<scope>test</scope>
+		</dependency>
+		<!-- WarE2eTest deploys a compiled war into BOTH embedded containers (initializer
+		     discovery is a container behavior, not a spec guarantee). Test scope only. -->
+		<dependency>
+			<groupId>org.apache.tomcat.embed</groupId>
+			<artifactId>tomcat-embed-core</artifactId>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.eclipse.jetty.ee11</groupId>
+			<artifactId>jetty-ee11-webapp</artifactId>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.eclipse.jetty.ee11</groupId>
+			<artifactId>jetty-ee11-annotations</artifactId>
+			<scope>test</scope>
+		</dependency>
+	</dependencies>
+
+	<build>
+		<plugins>
+			<plugin>
+				<groupId>io.github.git-commit-id</groupId>
+				<artifactId>git-commit-id-maven-plugin</artifactId>
+				<version>10.0.1</version>
+				<executions>
+					<execution>
+						<id>get-git-info</id>
+						<goals>
+							<goal>revision</goal>
+						</goals>
+						<phase>initialize</phase>
+					</execution>
+				</executions>
+				<configuration>
+					<generateGitPropertiesFile>false</generateGitPropertiesFile>
+					<failOnNoGitDirectory>false</failOnNoGitDirectory>
+				</configuration>
+			</plugin>
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-antrun-plugin</artifactId>
+				<version>3.2.0</version>
+				<executions>
+					<!-- The build info is emitted as a RESOURCE, not as a generated
+					     Version.java: am.ik.rontolisp.Version is a checked-in source so
+					     that goals invoked outside the lifecycle (`mvn clean javadoc:jar`
+					     does not fork generate-sources) can still resolve it. Version
+					     falls back to "unknown" when this resource is absent. -->
+					<execution>
+						<id>gen-build-info</id>
+						<phase>generate-resources</phase>
+						<goals>
+							<goal>run</goal>
+						</goals>
+						<configuration>
+							<skip>${version-generate-skip}</skip>
+							<target>
+								<echo file="${project.build.directory}/generated-resources/version/am/ik/rontolisp/version.properties">version=${project.version}
+build=${maven.build.timestamp}
+gitCommit=${git.commit.id.abbrev}
+gitBranch=${git.branch}
+</echo>
+							</target>
+						</configuration>
+					</execution>
+					<!-- Runs before process-resources copies rontolisp-native/target/resources
+					     (registered below), so a pair built here is in this build's jar and
+					     native image. Runs on every build, whatever the two properties say:
+					     build.sh also rebuilds a host pair older than its sources, and a
+					     plain `./mvnw test` must reach that check (.kb/native-output.md). With
+					     nothing to build it costs a find over ~50 files. Unix only: build.sh
+					     is a bash script. -->
+					<execution>
+						<id>native-shims</id>
+						<phase>generate-resources</phase>
+						<goals>
+							<goal>run</goal>
+						</goals>
+						<configuration>
+							<target>
+								<exec executable="bash" osfamily="unix" failonerror="true">
+									<arg value="${project.basedir}/rontolisp-native/build.sh"/>
+									<arg value="--maven"/>
+									<arg value="${rontolisp.native.build}"/>
+									<arg value="${rontolisp.native.required}"/>
+								</exec>
+							</target>
+						</configuration>
+					</execution>
+				</executions>
+			</plugin>
+			<plugin>
+				<groupId>org.codehaus.mojo</groupId>
+				<artifactId>build-helper-maven-plugin</artifactId>
+				<version>3.6.2</version>
+				<executions>
+					<execution>
+						<id>add-generated-resources</id>
+						<phase>generate-resources</phase>
+						<goals>
+							<goal>add-resource</goal>
+						</goals>
+						<configuration>
+							<resources>
+								<resource>
+									<directory>${project.build.directory}/generated-resources/version</directory>
+								</resource>
+								<!-- The licence, NOTICE and third-party notices travel in the jar and
+								     the native binary, where `rontolisp notices` reads them. -->
+								<resource>
+									<directory>${project.basedir}</directory>
+									<targetPath>META-INF</targetPath>
+									<includes>
+										<include>LICENSE</include>
+										<include>NOTICE</include>
+										<include>THIRD-PARTY-NOTICES.txt</include>
+									</includes>
+								</resource>
+								<!-- The precompile shims and runner stubs of the native
+								     executable output (.kb/native-output.md): the host's pair
+								     when rontolisp-native/build.sh has built it, every release
+								     platform's in CI's jar. Absent, the build is the same and the
+								     CLI says the output is not available for the host. -->
+								<resource>
+									<directory>${project.basedir}/rontolisp-native/target/resources</directory>
+								</resource>
+							</resources>
+						</configuration>
+					</execution>
+					<execution>
+						<!-- Sizes surefire's forkCount from the cores that are FREE when the
+						     tests start, not the cores the machine has: several builds share
+						     one development box, so a count derived from the core count alone
+						     oversubscribes it the moment a second suite runs. Free cores are
+						     availableProcessors minus the 1-minute load average; a fork gets
+						     eight of them, floored at 2 (the count CI was tuned on). Eight, not
+						     fewer, because the heavy classes run their own methods on up to 16
+						     threads and every fork pays its own JIT warm-up: on the idle 64-thread
+						     (32-core) box the test phase took 408 s at 29 forks, 372 s at 16,
+						     268 s at 8 and 332 s at 4. The load average is -1 where the OS has
+						     none (Windows), which reads as an idle machine.
+						     -Drontolisp.test.forkCount=N pins it. -->
+						<id>size-test-forks</id>
+						<phase>process-test-classes</phase>
+						<goals>
+							<goal>bsh-property</goal>
+						</goals>
+						<configuration>
+							<properties>
+								<property>rontolisp.test.forkCount</property>
+							</properties>
+							<source><![CDATA[
+								String pinned = System.getProperty("rontolisp.test.forkCount");
+								int cores = Runtime.getRuntime().availableProcessors();
+								double load = java.lang.management.ManagementFactory.getOperatingSystemMXBean()
+									.getSystemLoadAverage();
+								int free = cores - (int) Math.round(Math.max(load, 0.0));
+								int forks = Math.max(2, free / 8);
+								rontolisp.test.forkCount = pinned != null ? pinned : String.valueOf(forks);
+								System.out.println("[rontolisp] surefire forkCount = " + rontolisp.test.forkCount
+										+ " (availableProcessors = " + cores + ", load average = " + load + ")");
+							]]></source>
+						</configuration>
+					</execution>
+				</executions>
+			</plugin>
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-resources-plugin</artifactId>
+				<version>${maven-resources-plugin.version}</version>
+			</plugin>
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-install-plugin</artifactId>
+				<version>${maven-install-plugin.version}</version>
+			</plugin>
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-compiler-plugin</artifactId>
+				<version>${maven-compiler-plugin.version}</version>
+				<configuration>
+					<!-- JvmSimdVectorTemplate uses the incubator Vector API (embedded as a
+					     resource for the simd JVM acceleration bridge; never loaded as a
+					     class by the compiler itself). javac needs the module made visible. -->
+					<compilerArgs>
+						<arg>--add-modules</arg>
+						<arg>jdk.incubator.vector</arg>
+					</compilerArgs>
+				</configuration>
+			</plugin>
+			<plugin>
+				<groupId>am.ik.maven</groupId>
+				<artifactId>nullability-maven-plugin</artifactId>
+				<version>0.5.1</version>
+				<extensions>true</extensions>
+				<executions>
+					<execution>
+						<goals>
+							<goal>configure</goal>
+							<goal>generate-package-info</goal>
+						</goals>
+					</execution>
+				</executions>
+				<configuration>
+					<checking>tests</checking>
+				</configuration>
+			</plugin>
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-surefire-plugin</artifactId>
+				<version>3.6.0</version>
+				<configuration>
+					<!-- The JVM simd acceleration test defines the embedded Vector API
+					     bridge (Lookup.defineClass) and invokes it in-process, so the test
+					     JVM must have jdk.incubator.vector in its module graph. The blas
+					     tests bind a tuned CBLAS through the foreign function API, which
+					     is a restricted method: without the second flag every such test
+					     prints a multi-line warning to stderr. The -Xmx floor is load-bearing:
+					     the suite passed ~19k tests and the CI runner's default ergonomics
+					     heap (~4 GB on the 16 GB runner) started dying with
+					     OutOfMemoryError: Java heap space mid-run on 2026-10-21 (five
+					     consecutive `test`-job failures, three with the confirmed heap
+					     signature, zero assertion failures, stacks
+					     in unrelated compile paths). Two forks times 6 GB is the most the
+					     16 GB runner affords beside Maven itself and the wasmtime host
+					     compiles; lower it only with a green CI run to show for it. -->
+					<argLine>--add-modules jdk.incubator.vector --enable-native-access=ALL-UNNAMED -Xmx6g</argLine>
+					<!-- Forked JVMs run different test classes in parallel, reused across
+					     classes so JVM startup is paid once per fork. The count is set by
+					     build-helper's size-test-forks execution from the free cores at test
+					     time: 2 on the CI runner's 4 vCPU, 8 on the idle 64-thread
+					     development machine. With many forks the wall clock is bounded by the
+					     longest single class, which is why the heavy classes run their own
+					     methods concurrently (.kb/test-execution.md). Each fork gets its own
+					     static wasmtime container for the Docker-based tests. -->
+					<forkCount>${rontolisp.test.forkCount}</forkCount>
+					<reuseForks>true</reuseForks>
+					<!--
+						What JarMavenConsumerE2eTest's shelled-out builds run on: the Maven running
+						this build and the local repository it seeded. Never an `mvn` on PATH, whose
+						default bindings move with the machine's Maven.
+					-->
+					<systemPropertyVariables>
+						<rontolisp.jar.e2e.maven.home>${maven.home}</rontolisp.jar.e2e.maven.home>
+						<rontolisp.jar.e2e.local.repository>${settings.localRepository}</rontolisp.jar.e2e.local.repository>
+						<rontolisp.jar.e2e.maven-resources-plugin>${maven-resources-plugin.version}</rontolisp.jar.e2e.maven-resources-plugin>
+						<rontolisp.jar.e2e.maven-compiler-plugin>${maven-compiler-plugin.version}</rontolisp.jar.e2e.maven-compiler-plugin>
+						<rontolisp.jar.e2e.maven-install-plugin>${maven-install-plugin.version}</rontolisp.jar.e2e.maven-install-plugin>
+					</systemPropertyVariables>
+				</configuration>
+			</plugin>
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-shade-plugin</artifactId>
+				<version>3.6.2</version>
+				<executions>
+					<execution>
+						<phase>package</phase>
+						<goals>
+							<goal>shade</goal>
+						</goals>
+						<configuration>
+							<shadedArtifactAttached>true</shadedArtifactAttached>
+							<shadedClassifierName>exec</shadedClassifierName>
+							<transformers>
+								<transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
+									<mainClass>am.ik.rontolisp.cli.RontoLispCli</mainClass>
+									<manifestEntries>
+										<Enable-Native-Access>ALL-UNNAMED</Enable-Native-Access>
+									</manifestEntries>
+								</transformer>
+							</transformers>
+						</configuration>
+					</execution>
+				</executions>
+			</plugin>
+			<plugin>
+				<groupId>io.spring.javaformat</groupId>
+				<artifactId>spring-javaformat-maven-plugin</artifactId>
+				<version>0.0.48</version>
+				<executions>
+					<execution>
+						<phase>validate</phase>
+						<inherited>true</inherited>
+						<goals>
+							<goal>validate</goal>
+						</goals>
+					</execution>
+				</executions>
+			</plugin>
+			<plugin>
+				<groupId>org.sonatype.central</groupId>
+				<artifactId>central-publishing-maven-plugin</artifactId>
+				<version>0.11.0</version>
+				<extensions>true</extensions>
+				<configuration>
+					<publishingServerId>sonatype-central</publishingServerId>
+					<autoPublish>true</autoPublish>
+					<waitUntil>published</waitUntil>
+				</configuration>
+			</plugin>
+		</plugins>
+	</build>
+
+	<profiles>
+		<!-- CI-only test sharding (.kb/test-execution.md, "CI shards"): the `test`
+		     job split into `test-e2e` and `test-rest`. Each profile narrows
+		     surefire's selection; the base configuration (forkCount sizing,
+		     argLine, reuseForks) is untouched, so a local `./mvnw test` without
+		     the property runs the whole suite exactly as before. Activated by
+		     -Drontolisp.test.scope=e2e|rest, never by default. -->
+		<profile>
+			<id>test-scope-e2e</id>
+			<activation>
+				<property>
+					<name>rontolisp.test.scope</name>
+					<value>e2e</value>
+				</property>
+			</activation>
+			<build>
+				<plugins>
+					<plugin>
+						<groupId>org.apache.maven.plugins</groupId>
+						<artifactId>maven-surefire-plugin</artifactId>
+						<configuration>
+							<includes>
+								<include>**/e2e/*Test.java</include>
+							</includes>
+						</configuration>
+					</plugin>
+				</plugins>
+			</build>
+		</profile>
+		<profile>
+			<id>test-scope-rest</id>
+			<activation>
+				<property>
+					<name>rontolisp.test.scope</name>
+					<value>rest</value>
+				</property>
+			</activation>
+			<build>
+				<plugins>
+					<plugin>
+						<groupId>org.apache.maven.plugins</groupId>
+						<artifactId>maven-surefire-plugin</artifactId>
+						<configuration>
+							<excludes>
+								<exclude>**/e2e/*Test.java</exclude>
+							</excludes>
+						</configuration>
+					</plugin>
+				</plugins>
+			</build>
+		</profile>
+		<profile>
+			<id>native</id>
+			<properties>
+				<!-- A native binary carries the host's native-output pair whenever cargo is
+				     there to build it (-Drontolisp.native.build=false opts out). -->
+				<rontolisp.native.build>true</rontolisp.native.build>
+			</properties>
+			<dependencies>
+				<!-- The SubstrateVM API (@TargetClass / @Substitute, @InvokeCFunctionPointer,
+				     PinnedObject) that src/native/java compiles against: provided, so it is
+				     the image builder's own copy at build time and nothing on any other
+				     classpath. Version-locked to the GraalVM the image is built with. -->
+				<dependency>
+					<groupId>org.graalvm.sdk</groupId>
+					<artifactId>nativeimage</artifactId>
+					<version>25.4.4.1.1</version>
+					<scope>provided</scope>
+				</dependency>
+			</dependencies>
+			<build>
+				<plugins>
+					<!-- src/native/java holds the native-image substitutions (the downcalls
+					     re-issued through SubstrateVM's AOT route, .kb/native-downcalls.md);
+					     compiled only for this profile, the way src/web/java is for -Pweb. -->
+					<plugin>
+						<groupId>org.codehaus.mojo</groupId>
+						<artifactId>build-helper-maven-plugin</artifactId>
+						<executions>
+							<execution>
+								<id>add-native-source</id>
+								<phase>generate-sources</phase>
+								<goals>
+									<goal>add-source</goal>
+								</goals>
+								<configuration>
+									<sources>
+										<source>${project.basedir}/src/native/java</source>
+									</sources>
+								</configuration>
+							</execution>
+							<execution>
+								<id>add-graalvm-notices</id>
+								<phase>generate-resources</phase>
+								<goals>
+									<goal>add-resource</goal>
+								</goals>
+								<configuration>
+									<resources>
+										<resource>
+											<directory>${project.build.directory}/generated-resources/graalvm</directory>
+										</resource>
+									</resources>
+								</configuration>
+							</execution>
+						</executions>
+					</plugin>
+					<!-- The GraalVM that builds the image asks its licence terms and the
+					     third-party notices of the JDK modules it links to travel with the
+					     binary: src/native/graalvm-notices.sh writes them from java.home
+					     (the Oracle GraalVM this build runs under) into
+					     META-INF/graalvm-notices.txt, which the notices subcommand (flag: tool)
+					     prints (.kb/java-frontend-provenance.md, "The GraalVM runtime of the native binary"). -->
+					<plugin>
+						<groupId>org.apache.maven.plugins</groupId>
+						<artifactId>maven-antrun-plugin</artifactId>
+						<executions>
+							<execution>
+								<id>graalvm-notices</id>
+								<phase>generate-resources</phase>
+								<goals>
+									<goal>run</goal>
+								</goals>
+								<configuration>
+									<target>
+										<exec executable="bash" osfamily="unix" failonerror="true">
+											<arg value="${project.basedir}/src/native/graalvm-notices.sh"/>
+											<arg value="${java.home}"/>
+											<arg value="${project.build.directory}/generated-resources/graalvm/META-INF/graalvm-notices.txt"/>
+										</exec>
+									</target>
+								</configuration>
+							</execution>
+						</executions>
+					</plugin>
+					<plugin>
+						<groupId>org.graalvm.buildtools</groupId>
+						<artifactId>native-maven-plugin</artifactId>
+						<version>1.1.14</version>
+						<extensions>true</extensions>
+						<executions>
+							<execution>
+								<id>build-native</id>
+								<goals>
+									<goal>compile-no-fork</goal>
+								</goals>
+								<phase>package</phase>
+							</execution>
+						</executions>
+						<configuration>
+							<mainClass>am.ik.rontolisp.cli.RontoLispCli</mainClass>
+							<imageName>rontolisp</imageName>
+							<buildArgs>
+								<buildArg>--no-fallback</buildArg>
+								<buildArg>--enable-native-access=ALL-UNNAMED</buildArg>
+								<!-- The build's own files as one resource: the compiler a JVM
+									 class lowering its Clojure program at run time carries
+									 (.kb/jvm-run-time-lowering.md). -->
+								<buildArg>--features=am.ik.rontolisp.cli.RunTimeCompilerFeature</buildArg>
+								<!-- The interpreter's opt-in simd flag (VecSimdKernels) uses the
+									 incubator Vector API; the module must be in the image's
+									 module graph. Build-time only: the produced binary needs
+									 no runtime flag. -->
+								<buildArg>--add-modules</buildArg>
+								<buildArg>jdk.incubator.vector</buildArg>
+								<buildArg>-H:+UnlockExperimentalVMOptions</buildArg>
+								<!-- Oracle GraalVM intrinsifies jdk.incubator.vector in Native
+									 Image only behind this (experimental) flag. Without it the
+									 Vector API falls back to per-lane emulation that is 6-32x
+									 SLOWER than a scalar loop, so it is effectively mandatory
+									 for the simd flag to be worth anything on the binary.
+									 GraalVM 25 refuses to combine it with -H:+SharedArenaSupport,
+									 which the JLine FFM terminal provider needs; JLineRepl pins
+									 the JNI provider in the image instead (no shared arena). -->
+								<buildArg>-H:+VectorAPISupport</buildArg>
+							</buildArgs>
+						</configuration>
+					</plugin>
+				</plugins>
+			</build>
+		</profile>
+		<!--
+			Build the browser playground: compile src/web/java (RontoPlayground)
+			to a WebAssembly module with the GraalVM Native Image Web Image backend.
+			Usage: ./mvnw -Pweb -DskipTests package
+			Requires a GraalVM with the svm-wasm tool and Binaryen (wasm-as) 119+.
+		-->
+		<profile>
+			<id>web</id>
+			<properties>
+				<!-- src/web/java uses the GraalVM-only org.graalvm.webimage.api module,
+					 which the ct.sym used by the release flag hides. Use source/target. -->
+				<maven.compiler.release/>
+			</properties>
+			<build>
+				<plugins>
+					<!-- Add src/web/java to the compile sources only for this profile. -->
+					<plugin>
+						<groupId>org.codehaus.mojo</groupId>
+						<artifactId>build-helper-maven-plugin</artifactId>
+						<executions>
+							<execution>
+								<id>add-web-source</id>
+								<phase>generate-sources</phase>
+								<goals>
+									<goal>add-source</goal>
+								</goals>
+								<configuration>
+									<sources>
+										<source>${project.basedir}/src/web/java</source>
+									</sources>
+								</configuration>
+							</execution>
+						</executions>
+					</plugin>
+					<!-- @JS needs parameter names recorded in bytecode. -->
+					<plugin>
+						<groupId>org.apache.maven.plugins</groupId>
+						<artifactId>maven-compiler-plugin</artifactId>
+						<configuration>
+							<parameters>true</parameters>
+						</configuration>
+					</plugin>
+					<!-- Compile rontolisp itself to wasm. The svm-wasm tool must be the
+						 first native-image argument, so it is passed via buildArgs. -->
+					<plugin>
+						<groupId>org.graalvm.buildtools</groupId>
+						<artifactId>native-maven-plugin</artifactId>
+						<version>1.1.14</version>
+						<extensions>true</extensions>
+						<executions>
+							<execution>
+								<id>build-web-playground</id>
+								<goals>
+									<goal>compile-no-fork</goal>
+								</goals>
+								<phase>package</phase>
+							</execution>
+						</executions>
+						<configuration>
+							<mainClass>am.ik.rontolisp.web.RontoPlayground</mainClass>
+							<imageName>rontoplayground</imageName>
+							<!-- RontoPlayground does not use jline; skip the reachability
+								 metadata repository so jline is not force-included. -->
+							<metadataRepository>
+								<enabled>false</enabled>
+							</metadataRepository>
+							<buildArgs>
+								<buildArg>--tool:svm-wasm</buildArg>
+								<!-- jline is on the classpath only so JLineRepl compiles; it is
+									 unused here. Ignore its embedded META-INF/native-image config,
+									 which would otherwise force-include jline (~5x larger image). -->
+								<buildArg>--exclude-config</buildArg>
+								<buildArg>.*jline.*\.jar</buildArg>
+								<buildArg>META-INF/native-image/.*</buildArg>
+								<buildArg>-H:-AutoRunVM</buildArg>
+							</buildArgs>
+						</configuration>
+					</plugin>
+					<!-- Stage the generated wasm/js next to playground.html for serving. -->
+					<plugin>
+						<groupId>org.apache.maven.plugins</groupId>
+						<artifactId>maven-antrun-plugin</artifactId>
+						<executions>
+							<execution>
+								<id>stage-web-dist</id>
+								<phase>package</phase>
+								<goals>
+									<goal>run</goal>
+								</goals>
+								<configuration>
+									<target>
+										<property name="web.dist" location="${project.basedir}/web/dist"/>
+										<delete dir="${web.dist}"/>
+										<mkdir dir="${web.dist}"/>
+										<copy todir="${web.dist}">
+											<fileset dir="${project.build.directory}">
+												<include name="rontoplayground.js"/>
+												<include name="rontoplayground.js.wasm"/>
+											</fileset>
+											<fileset dir="${project.basedir}/web">
+												<!-- index.html redirects to the docs (docs/en); the
+													 playground UI is served at playground.html. The
+													 interpreter runs inside ronto-worker.js;
+													 coi-serviceworker supplies the COOP/COEP headers
+													 SharedArrayBuffer needs on GitHub Pages. -->
+												<include name="index.html"/>
+												<include name="playground.html"/>
+												<include name="compile-run.html"/>
+												<include name="ronto-worker.js"/>
+												<include name="coi-serviceworker.min.js"/>
+											</fileset>
+										</copy>
+										<!-- Stage the standalone "run user WASM in the browser" example as a
+											 subpath of the same Pages site (/wasm-browser/). Its .wasm files
+											 are checked in, so no compilation is needed here; the example's
+											 index.html uses relative URLs and works under any subpath. -->
+										<copy todir="${web.dist}/wasm-browser">
+											<fileset dir="${project.basedir}/examples/browser/wasm-browser"/>
+										</copy>
+										<!-- Stage the handwritten-hiragana recognition demo as another
+											 subpath (/hiragana/). Only the five runtime files the browser
+											 loads are copied (infer.wasm reads the trained weights.bin at
+											 startup, through the shim's virtual filesystem); the offline
+											 training artifacts (train.lisp, dataset.lisp, net.lisp,
+											 prototypes.lisp, glyphgen/, samples/, tools/) are excluded to
+											 keep the Pages payload small. The demo's index.html uses
+											 relative URLs and works under any subpath. -->
+										<copy todir="${web.dist}/hiragana">
+											<fileset dir="${project.basedir}/examples/browser/hiragana">
+												<include name="index.html"/>
+												<include name="wasi-shim.js"/>
+												<include name="glyphs.js"/>
+												<include name="infer.wasm"/>
+												<include name="weights.bin"/>
+											</fileset>
+										</copy>
+										<!-- Stage the host bindings the WebGL pages import (/webgl-common/).
+											 Generated from gl.wit and shared by every webgl-* demo below
+											 except the deliberately self-contained triangle, which imports
+											 nothing. Each page reaches it as ../webgl-common/gl-imports.js,
+											 so it must sit beside the demo subpaths, not inside one. -->
+										<copy todir="${web.dist}/webgl-common">
+											<fileset dir="${project.basedir}/examples/browser/webgl-common">
+												<include name="gl-imports.js"/>
+											</fileset>
+										</copy>
+										<!-- Stage the WebGL galaxy demo as another subpath (/webgl-galaxy/).
+											 Its .wasm is checked in, so no compilation is needed here. Only
+											 the two runtime files the browser loads are copied; the demo's
+											 index.html uses relative URLs and works under any subpath. -->
+										<copy todir="${web.dist}/webgl-galaxy">
+											<fileset dir="${project.basedir}/examples/browser/webgl-galaxy">
+												<include name="index.html"/>
+												<include name="galaxy.wasm"/>
+											</fileset>
+										</copy>
+										<!-- Stage the WebGL hello-world triangle and the rotating cube as
+											 further subpaths (/webgl-triangle/, /webgl-cube/), same shape as
+											 the galaxy demo above. -->
+										<copy todir="${web.dist}/webgl-triangle">
+											<fileset dir="${project.basedir}/examples/browser/webgl-triangle">
+												<include name="index.html"/>
+												<include name="triangle.wasm"/>
+											</fileset>
+										</copy>
+										<copy todir="${web.dist}/webgl-cube">
+											<fileset dir="${project.basedir}/examples/browser/webgl-cube">
+												<include name="index.html"/>
+												<include name="cube.wasm"/>
+											</fileset>
+										</copy>
+										<copy todir="${web.dist}/webgl-heat3d">
+											<fileset dir="${project.basedir}/examples/browser/webgl-heat3d">
+												<include name="index.html"/>
+												<include name="heat3d.wasm"/>
+											</fileset>
+										</copy>
+										<copy todir="${web.dist}/webgl-robot-arm">
+											<fileset dir="${project.basedir}/examples/browser/webgl-robot-arm">
+												<include name="index.html"/>
+												<include name="robot-arm.wasm"/>
+											</fileset>
+										</copy>
+										<copy todir="${web.dist}/webgl-platformer">
+											<fileset dir="${project.basedir}/examples/browser/webgl-platformer">
+												<include name="index.html"/>
+												<include name="platformer.wasm"/>
+											</fileset>
+										</copy>
+										<copy todir="${web.dist}/webgl-battlefront">
+											<fileset dir="${project.basedir}/examples/browser/webgl-battlefront">
+												<include name="index.html"/>
+												<include name="battlefront.wasm"/>
+											</fileset>
+										</copy>
+										<copy todir="${web.dist}/webgl-solids">
+											<fileset dir="${project.basedir}/examples/browser/webgl-solids">
+												<include name="index.html"/>
+												<include name="solids.wasm"/>
+											</fileset>
+										</copy>
+										<!-- Stage the Minesweeper demo as another subpath (/minesweeper/).
+											 Its .wasm is checked in, so no compilation is needed here. The
+											 page is copied to index.html so the demo is reachable at
+											 /minesweeper/; its fetch of ./minesweeper.wasm uses a relative
+											 URL and works under any subpath. The .lisp source is not shipped
+											 (the page links to it on GitHub). -->
+										<copy file="${project.basedir}/examples/browser/minesweeper/minesweeper.html"
+											  tofile="${web.dist}/minesweeper/index.html"/>
+										<copy file="${project.basedir}/examples/browser/minesweeper/minesweeper.wasm"
+											  todir="${web.dist}/minesweeper"/>
+										<echo message="Web playground staged in ${web.dist} (examples at ${web.dist}/wasm-browser, ${web.dist}/hiragana and ${web.dist}/minesweeper)"/>
+										<echo message="Serve it: cd web/dist &amp;&amp; jwebserver -p 8000"/>
+									</target>
+								</configuration>
+							</execution>
+						</executions>
+					</plugin>
+				</plugins>
+			</build>
+		</profile>
+	</profiles>
+
+	<dependencyManagement>
+		<dependencies>
+			<dependency>
+				<groupId>org.springframework.boot</groupId>
+				<artifactId>spring-boot-dependencies</artifactId>
+				<version>${spring-boot.version}</version>
+				<type>pom</type>
+				<scope>import</scope>
+			</dependency>
+		</dependencies>
+	</dependencyManagement>
+</project>

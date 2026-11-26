@@ -1,0 +1,192 @@
+# btc-ticker — the Worker with nothing in it
+
+One outgoing request, one JSON answer: ask
+[bitFlyer](https://lightning.bitflyer.com/docs?lang=en) what a bitcoin costs in
+yen, and say so. It is the hello world of the **envelope boundary**
+(the default; `build.sh` passes no `--host-boundary`), and the whole of its
+JavaScript is:
+
+```js
+import module from "./worker.wasm";
+import { worker } from "./worker.js";
+
+export default worker(module);
+```
+
+`--emit-worker-entry` (`build.sh`) generates `src/worker.js` and, on the first
+build, writes `src/index.js`: those three lines, under a comment header. A later
+build never overwrites `src/index.js`, so it is yours to edit.
+
+```bash
+./build.sh          # worker.lisp -> src/worker.wasm + src/worker.js + src/index.js
+npx wrangler dev    # http://localhost:8787
+npx wrangler deploy
+```
+
+```console
+$ curl http://localhost:8787/
+{"pair":"BTC/JPY","price":10125486.0}
+```
+
+## The boundary, and why there is nothing left to write
+
+An HTTP reactor speaks one JSON envelope in each direction — `{method, target,
+headers, body, scheme, remote-addr}` in, `{status, headers, body}` out. What
+`--host-boundary` decides is whether a **body** rides inside that envelope or
+streams beside it through imports of its own.
+
+`envelope` says inside. Everything follows from that:
+
+| | this Worker | [`../dog-fetcher`](../dog-fetcher) (`streaming`, the default) |
+| --- | --- | --- |
+| Module imports | `env.fetch` | `env.fetch`, `env.readResponseBody`, `env.readRequestBody`, `env.writeResponseBody` |
+| Host-side state | none | the upstream reader, the request body, the response chunks, the cursor `lisp.drop` discards |
+| `src/index.js` | 3 lines | 3 lines — the glue writes that half on both boundaries |
+| A binary body | flattened | crosses exactly |
+| A large body | copied | never doubles linear memory |
+| A streamed upstream reply | buffered, then forwarded | forwarded chunk at a time |
+
+**This is the DEFAULT boundary** — `build.sh` names no `--host-boundary` at all.
+Most Workers read a document and answer one, and there the copy is unmeasurable
+while the state it removes is where the bugs were. Ask for
+`--host-boundary=streaming` when a body is **binary** (the envelope carries a
+body as JSON text, so `ff fe 41` arrives as the seven bytes
+`ef bf bd ef bf bd 41` with the `content-length` still saying three), **large**
+(linear memory grows with it), or **relayed** from an upstream reply you would
+rather forward a chunk at a time — which is [`../dog-fetcher`](../dog-fetcher),
+and the five `httpbin*` Workers, all of which say so in their own `build.sh`.
+
+**It is not a size decision.** The same source on the two boundaries lands within
+about 1% either way — measured, both raw and gzipped, in
+[`size-report/results/cloudflare-workers.md`](../../../size-report/results/cloudflare-workers.md),
+and which way it falls is not stable across compiler changes. What changes is the
+amount of *state* on the host side, and every defect this surface's reviews have
+turned up was a state-lifetime bug — a reply cursor outliving its source, an
+instance bound outside the critical section it is used in. An envelope host has
+no cursor to outlive anything.
+
+The host half is written for you either way — `--emit-js-glue` derives it on both
+boundaries, so `../dog-fetcher`'s `src/index.js` is three lines too. What this
+boundary removes is not JavaScript, it is STATE: there is no reader for the host
+to own and no cursor whose lifetime it has to get right.
+
+- **`env.fetch`** — `--host-fetch` states both directions of its envelope
+  (rontolisp's own `FetchResponseShape`, pinned by `HostFetchLibraryTest`), so
+  its host half is the same twenty lines in every program: call the platform
+  `fetch`, answer `{status, headers, body}`, answer `{error}` on a throw. The
+  generated file exports it as `defaultHost()`.
+- **the reactor envelope** — mapping a `Request` onto it and a `Response` off it
+  is transport work. The generated file exports that as `worker(module)`.
+
+Both are **defaults, not replacements**. A host that wants its own supplies it,
+entry by entry:
+
+```js
+import { worker, suspending } from "./worker.js";
+
+export default worker(module, {
+  // Which header carries the client address is the platform's business, so the
+  // generated file does not guess. This is the Cloudflare answer.
+  remoteAddr: (request) => request.headers.get("cf-connecting-ip"),
+  // Laid over defaultHost()'s entries one at a time, so replacing env.fetch
+  // does not cost you the rest of `env`.
+  host: { env: { fetch: suspending(myOwnFetch) } },
+});
+```
+
+Everything the streaming boundary is documented to cost is still paid here and
+is still worth reading: the JSPI seam, the one-call-at-a-time queue, and the
+re-entrancy the two of them create. `worker()` owns all of it —
+[`../dog-fetcher`](../dog-fetcher/README.md#one-lisp-call-at-a-time) explains
+what it is doing.
+
+## Why the application hands over a future
+
+`rontolisp:await` is legal only inside an `async-defun` / `async-lambda`, and
+this Worker has to look *at* the fetched price to choose 200 or 502. So the
+response is built in an `async-defun` and `app` — an ordinary Clack function —
+returns its **future**, which every rontolisp transport resolves at its own
+boundary (the reactor's dispatcher, the socket servers, `wasmtime serve`).
+
+That is the same shape as [`../dog-fetcher`](../dog-fetcher), and there it is
+not a choice: tiny-routes generates its route bodies as plain lambdas, where
+`await` is a compile error. Here it is one, and the reason to make it is that
+anything **wrapping** the application — Clack middleware, a router — would
+otherwise be handed the future where it expects the response list.
+
+Nothing stops an `async-defun` from *being* the application when nothing wraps
+it (`(rontolisp:async-defun app (env) ... (rontolisp:await ...) ...)`, four
+lines shorter, and what the
+[Clack guide](../../../doc/en/guides/clack.md) shows for a handler). This
+directory takes the other one so that the only thing separating it from
+`../dog-fetcher` is the boundary.
+
+## The same worker.lisp on every backend
+
+`:server :rontolisp` resolves the transport when the source is read for a
+target, and `rontolisp:fetch` follows along — the JDK client, `wasi:http`,
+`env.fetch`. All four, from the repo root:
+
+```bash
+JAR=target/rontolisp-0.1.0-SNAPSHOT-exec.jar
+W=examples/cloudflare-workers/btc-ticker/worker.lisp
+
+# 1. interpreter — a blocking server on :8080
+java -jar $JAR $W
+
+# 2. JVM class (keep the jar on the classpath)
+java -jar $JAR $W -o BtcTicker.class && java -cp $JAR:. BtcTicker
+
+# 3. WASI component under wasmtime serve
+java -jar $JAR $W -o btc-ticker.wasm --component && \
+  wasmtime serve -S cli=y -S inherit-network=y btc-ticker.wasm
+
+# 4. the Worker (this directory): build.sh + wrangler dev, as above
+```
+
+Off Cloudflare the reactor build is equally drivable from node, under
+`node --experimental-wasm-jspi`: `worker()` is a standard fetch handler, so
+`worker(module).fetch(new Request("http://x/"))` answers a `Response`. The flag
+is needed because the generated `defaultHost()` marks `env.fetch` suspending —
+workerd has JSPI unflagged, node does not. A host that would rather answer
+synchronously overrides that entry (`worker(module, { host: { env: { fetch } } })`)
+and needs no flag, which is what [`../dog-fetcher`](../dog-fetcher) does with its
+hand-written half.
+
+## What's in here
+
+| File | Purpose |
+| --- | --- |
+| [`worker.lisp`](worker.lisp) | The whole program. This is what `build.sh` compiles. |
+| `src/index.js` | Written by `./build.sh` (`--emit-worker-entry`) on the first build: three lines. Yours to edit; a later build never overwrites it. |
+| [`src/worker.js`](src/worker.js) | The boundary AND the host, GENERATED by `--emit-js-glue` from worker.lisp's declarations. Do not edit; `./build.sh` rewrites it. |
+| `src/worker.wasm` | A build product — run `./build.sh` first. |
+
+Module sizes are measured rather than quoted here:
+[`size-report/results/cloudflare-workers.md`](../../../size-report/results/cloudflare-workers.md).
+
+## Limitations
+
+The Worker sandbox and `--no-wasi` limitations of
+[`../hello-clack`](../hello-clack/README.md#limitations) apply unchanged, plus
+the ones this boundary chooses:
+
+- **A body is a document, not a stream.** Every body is copied through the
+  envelope, and a binary one is flattened one character per octet. A Worker that
+  proxies uploads, serves images or forwards a streamed reply wants
+  `--host-boundary=streaming` — [`../dog-fetcher`](../dog-fetcher) is that.
+- **One in-flight request per isolate.** A handler waiting on bitFlyer returns
+  to the event loop, and the module refuses a second entry with a trap; the
+  generated queue is what turns that into serialisation rather than a failed
+  request.
+- **Started == settled.** The reactor's fetch future is settled the moment the
+  call returns, so `await` never suspends and two fetches never overlap — and
+  because the reply arrives whole, a transport failure is always the `fetch`
+  call's, never a drain's.
+
+## Rebuilding
+
+```bash
+./mvnw clean package -DskipTests   # from the repository root
+examples/cloudflare-workers/btc-ticker/build.sh
+```

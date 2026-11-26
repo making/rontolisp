@@ -1,0 +1,92 @@
+# `make-load-form` — a literal object is dumped by its own method
+
+**Invariant**: an OBJECT appearing as a literal in code the compile path is about to compile is
+reconstructed by the form its own `make-load-form` method returns, not by serialising its slots. Done
+once in `eval/LoadFormSubstituter`; both backends inherit it, no codegen of their own. It finishes
+before any backend runs, so interpreter, JVM and both WASM backends see the same program.
+
+## Where it runs
+
+A macro can splice a LIVE object into its expansion (cffi's `defcfun` embeds a `#<FOREIGN-ENUM>`);
+in code position it is self-evaluating (CLHS 3.1.2.1.3), and `JvmQuoteCompiler`/`WasmQuoteCompiler`
+would dump it slot by slot (`Cannot quote: #<HASH-TABLE ...>`) while the interpreter never notices.
+So it runs where the object appears and an evaluator still exists: `UserMacroExpander`, the compile
+path's macro-time pass, with `LoadFormSubstituter.substitute` walking the WHOLE emitted program once
+at the end of it -- a form reaches `result` by several routes (kept `eval-when` member,
+`pax:defsection` residue, MOP splice).
+
+## Default = the structural dump
+
+- `make-load-form` is a cl-owned generic (`LispNames.MAKE_LOAD_FORM`, `PackageRegistry.CL_SYMBOLS`)
+  -- the `print-object` pattern, so a `defmethod` in any package that uses cl joins the one generic.
+  Its standard methods are ONE synthesized default primary (`synthesizeMakeLoadFormDefault`, made
+  with the first method or the first call / `#'make-load-form`): an instance signals SBCL's
+  `don't know how to dump ~S (default MAKE-LOAD-FORM method called).`, anything else
+  no-applicable-method. The substituter never reaches it (below).
+- `LoadFormSubstituter` acts only on an instance whose type a method's CLASS/TYPE specializer covers
+  as the dispatcher tests it (`LispEvaluator.hasMakeLoadFormMethodFor`): the instance's tag among the
+  specializer class's and its descendants' tags, or its struct's and `:include` descendants'; **an
+  unspecialized default method does NOT count** -- it would claim every instance. Not by name
+  (2026-11-06): the package-stripped names it compared made coalton's `Pathname` class
+  (`coalton-library/file::pathname`, which has a method) claim every `cl:pathname` literal (fset's
+  tests, eclector), and the default method signalled `don't know how to dump #P"."` at the end of the
+  library's macro-time pass. Everything else the quote compilers dump by structure, which IS
+  rontolisp's built-in default, written in Java: every `#S(...)` literal travels unchanged on every
+  backend.
+- `make-load-form-saving-slots` (prelude defun) spells that answer as data --
+  `(%obj-new '<tag> 'v1 ... 'vn)` over `%obj-tag` / `%obj-slots`. Lite: `:slot-names` ignored (every
+  slot travels); the object is rebuilt, not allocated-then-filled, so no self-reference.
+- **A method answering that form leaves the object a literal** (2026-11-06,
+  `LoadFormSubstituter.staysLiteral`): its tag, its slots by identity and no init form, and every
+  object its slots reach staying a literal too. The quote compilers then build the graph where it
+  stands, a node two literals reach once (`QuotedSharing`). Before, each such object took a
+  `load-time-value` of its own, nested ones inside their parent's: 1.2 million for coalton's library,
+  whose environment updates carry types, schemes and entries that all save their slots. A cycle among
+  them still takes the creation-form path, which reports it.
+- An object with an unspellable slot and NO method still fails with `Cannot quote: ...` -- the signal
+  that the type wants a method.
+
+## What is emitted
+
+`(make-load-form obj)` runs in the macro-time evaluator; the object becomes
+`(load-time-value <creation-form>)`, so the creation form runs ONCE at load time and every reference
+shares the object. `hoistLoadTimeValues` turns it into a slot of `%LOAD-TIME-VALUE-SLOTS` filled on
+first use (`.kb/compiler-macros.md`).
+
+- **init form** (the method's 2nd value):
+  `(let ((%LOAD-FORM-OBJECT-1 <creation>)) <init> %LOAD-FORM-OBJECT-1)`. Every occurrence of that same
+  object BY IDENTITY inside the init form is rewritten to the binding.
+- **nested object**: the creation form is walked too; re-entering an object still being built is
+  reported as a cycle, not looped.
+- **inside a quoted constant**: `quote` is not descended into (its argument is data), but a constant
+  CONTAINING such an object is rebuilt through `cons` and wrapped in `load-time-value`. Only the cons
+  spine is rebuilt -- an object buried in a quoted ARRAY or hash table still fails the compile.
+- One object dumped twice in a top-level form yields one creation form (identity-memoized) and one
+  slot (2026-11-06): the hoist keys an occurrence by identity, and the backends' resolver resolves a
+  `load-time-value` form once per package region (`PackageResolver.loadTimeValueCopies`), as it does a
+  quoted datum. Before, each place took a slot and the two were two objects (ci-spec
+  `make-load-form-literal-object`'s `eq`s answered NIL on the compile paths). A program with no method
+  pays one registry lookup, the walk never starts.
+- **What the substitution writes is read again by the backends' resolver** in the package the form
+  sits in (2026-11-06, coalton). The `cons`/`let`/`load-time-value`/`quote` it writes are the reader's
+  own (`ReaderSymbols`), which the resolver leaves alone: a bare `cons` in a coalton package was
+  `coalton:cons`, the list constructor (`The function COALTON:CONS is undefined`). The class tag a
+  `make-load-form-saving-slots` creation form quotes, `'|%class-PKG::NAME|`, is an instance tag to
+  `PackageResolver.resolveSymbolName` as the struct tag was (`No such package: %class-MLF` for any
+  class outside `cl-user`). Residual: a method's own creation form is spelled as the macro-time
+  evaluator holds it, so a `cl` name in it that the target package shadows reads as the package's.
+  ci-spec `make-load-form-literal-object`.
+
+**Why it exists: cffi.** `defcfun` with a `defcenum` type embeds the foreign-type object, and
+upstream `src/early-types.lisp` supplies a `make-load-form` method over `parse-type`/`unparse-type`.
+Honoring it is the difference between the ecosystem's C bindings running interpreted and running from
+a compiled `.class` (`.kb/cffi.md`).
+
+## Tests
+
+- `JvmLispCompilerTest#compileAndRunLiteralObjectDumpedByMakeLoadForm`,
+  `#compileRefusesALiteralObjectWithNoMakeLoadFormMethod`, `#compileAndRunMakeLoadFormSavingSlots`
+- `WasmLispCompilerIntegrationTest#literalObjectDumpedByMakeLoadForm`
+- `LispEvaluatorTest#makeLoadFormSavingSlotsAnswersTheInstanceCreationForm`
+- `ci-spec.yaml` case `make-load-form-literal-object`; `examples/jvm/cffi-sqlite.lisp` jvm leg
+- Docs: `reference/functions/make-load-form{,-saving-slots}.md` (both language trees).

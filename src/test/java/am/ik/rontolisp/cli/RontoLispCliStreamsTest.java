@@ -1,0 +1,1322 @@
+package am.ik.rontolisp.cli;
+
+import java.io.BufferedReader;
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.PrintStream;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.List;
+
+import org.jspecify.annotations.Nullable;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+
+import am.ik.rontolisp.compiler.UncaughtReport;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+/**
+ * The CLI end to end, in process, for the methods that take over a process-wide stream:
+ * {@code System.err} to read what the CLI reported there ({@link #runReporting}), or
+ * {@code System.out}. Split out of {@link RontoLispCliTest} so that class can run its
+ * methods concurrently: a top-level class runs alone in its fork, so a capture here never
+ * sees another method's output.
+ */
+class RontoLispCliStreamsTest {
+
+	@TempDir
+	Path tempDir;
+
+	private String runCli(String input, String... args) {
+		ByteArrayInputStream in = new ByteArrayInputStream(input.getBytes(StandardCharsets.UTF_8));
+		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		RontoLispCli cli = new RontoLispCli(in, new PrintStream(out));
+		cli.run(args);
+		return out.toString(StandardCharsets.UTF_8);
+	}
+
+	/**
+	 * Drives the reporting wrapper {@code main} runs the CLI through, answering
+	 * {@code {exitCode, stdout, stderr}}. {@code main} itself ends in
+	 * {@code System.exit}, so it cannot be called from a test JVM.
+	 */
+	private String[] runReporting(String... args) {
+		return runReporting(new RontoLispCli(new ByteArrayInputStream(new byte[0]), new PrintStream(this.stdout)),
+				args);
+	}
+
+	private final ByteArrayOutputStream stdout = new ByteArrayOutputStream();
+
+	/**
+	 * A REPL session through the reporting wrapper, fed the input as a PIPE feeds it (no
+	 * prompt, failures on standard error) or as a TERMINAL does: {@code {exitCode,
+	 * stdout, stderr}}.
+	 */
+	private String[] runSession(boolean terminal, String input, String... args) {
+		RontoLispCli cli = new RontoLispCli(new ByteArrayInputStream(input.getBytes(StandardCharsets.UTF_8)),
+				new PrintStream(this.stdout, true, StandardCharsets.UTF_8));
+		cli.assumeTerminal(terminal);
+		return runReporting(cli, args);
+	}
+
+	private String[] runReporting(RontoLispCli cli, String... args) {
+		ByteArrayOutputStream out = this.stdout;
+		out.reset();
+		ByteArrayOutputStream err = new ByteArrayOutputStream();
+		PrintStream oldErr = System.err;
+		System.setErr(new PrintStream(err));
+		int code;
+		try {
+			code = RontoLispCli.runReporting(cli, args);
+		}
+		finally {
+			System.setErr(oldErr);
+		}
+		return new String[] { String.valueOf(code), out.toString(StandardCharsets.UTF_8),
+				err.toString(StandardCharsets.UTF_8) };
+	}
+
+	// -- --warnings-as-errors ------------------------------
+
+	private static final String WRONG_COUNTS = """
+			(defun add (a b) (+ a b))
+			(defun f (x)
+			  (list (add x)
+			        (car x 2)))
+			(print (handler-case (f '(1)) (program-error () :caught)))
+			(defun g (x)
+			  (list (format nil "~:*~a" x)
+			        (error "~a")
+			        (format nil "abc~")))
+			""";
+
+	@Test
+	void warningsAsErrorsPrintsEveryWarningExitsOneAndWritesNothingOnEveryCompileBackend() throws Exception {
+		Path file = this.tempDir.resolve("counts.lisp");
+		Files.writeString(file, WRONG_COUNTS);
+		for (String name : List.of("Counts.class", "counts.jar", "counts.wasm")) {
+			Path output = this.tempDir.resolve(name);
+			String[] failed = runReporting(file.toString(), "-o", output.toString(), "--warnings-as-errors");
+			assertThat(failed[0]).as(name).isEqualTo("1");
+			// Every warning, a user function's, a built-in's and a literal format
+			// control's, then the failure.
+			assertThat(failed[2].lines().toList()).as(name)
+				.containsExactly(file
+						+ ":3:9: warning: Function expects 2 arguments, got 1; compiled as a call-time program-error",
+						file + ":4:9: warning: CAR expects 1 argument, got 2; compiled as a call-time program-error",
+						file + ":7:9: warning: format: ~* moves outside the argument list; checked when the call runs",
+						file + ":8:9: warning: format: not enough arguments for directive ~a; checked when the call runs",
+						file + ":9:9: warning: format: control string ends with ~; checked when the call runs",
+						"error: 5 warnings about the program's source, treated as errors (--warnings-as-errors)");
+			assertThat(output).as(name).doesNotExist();
+
+			// Without the option the same program compiles: each call signals when it
+			// runs, and the warnings are only printed.
+			String[] compiled = runReporting(file.toString(), "-o", output.toString());
+			assertThat(compiled[0]).as(name).isEqualTo("0");
+			assertThat(compiled[2].lines().filter(line -> line.contains("warning:")).count()).as(name).isEqualTo(5);
+			assertThat(output).as(name).exists();
+		}
+	}
+
+	@Test
+	void warningsAsErrorsCountsAWarningAboutCodeAUserMacroBuiltAtTheMacroCall() throws Exception {
+		// Neither call has a position of its own: `list` built the first, and the second
+		// is a top-level form spliced out of the progn the macro expanded to. Both are
+		// placed -- and counted -- at the macro call.
+		Path file = this.tempDir.resolve("built.lisp");
+		Files.writeString(file, """
+				(defun add (a b) (+ a b))
+				(defmacro call-add (x) (list 'progn (list 'print (list 'add x))))
+				(defmacro wrapped (x) `(let ((y ,x)) (car y 2)))
+				(call-add 1)
+				(print (wrapped '(1)))
+				""");
+		Path output = this.tempDir.resolve("built.wasm");
+		String[] failed = runReporting(file.toString(), "-o", output.toString(), "--warnings-as-errors");
+		assertThat(failed[0]).isEqualTo("1");
+		assertThat(failed[2].lines().toList()).containsExactly(
+				file + ":4:1: warning: Function expects 2 arguments, got 1; compiled as a call-time program-error",
+				file + ":5:8: warning: CAR expects 1 argument, got 2; compiled as a call-time program-error",
+				"error: 2 warnings about the program's source, treated as errors (--warnings-as-errors)");
+		assertThat(output).doesNotExist();
+	}
+
+	@Test
+	void warningsAsErrorsCountsAWarningAMacroSignalsWhileItExpands() throws Exception {
+		Path file = this.tempDir.resolve("mw.lisp");
+		Files.writeString(file, """
+				(defmacro m (x) (warn "m got ~a" x) x)
+				(print (m 1))
+				""");
+		Path output = this.tempDir.resolve("Mw.class");
+		String[] failed = runReporting(file.toString(), "-o", output.toString(), "--warnings-as-errors");
+		assertThat(failed[0]).isEqualTo("1");
+		assertThat(failed[2].lines().toList()).containsExactly(file + ":2:8: warning: m got 1",
+				"error: 1 warning about the program's source, treated as errors (--warnings-as-errors)");
+		assertThat(output).doesNotExist();
+
+		// A style-warning and a muffled warning leave the compile alone.
+		Files.writeString(file, """
+				(defmacro s (x) (warn 'style-warning) x)
+				(defmacro q (x) (handler-bind ((warning #'muffle-warning)) (warn "q")) x)
+				(print (list (s 1) (q 2)))
+				""");
+		String[] compiled = runReporting(file.toString(), "-o", output.toString(), "--warnings-as-errors");
+		assertThat(compiled[0]).isEqualTo("0");
+		assertThat(compiled[2].lines().toList()).singleElement()
+			.satisfies(line -> assertThat(line).startsWith(file + ":3:14: style-warning: "));
+		assertThat(output).exists();
+	}
+
+	// A program deeper than the 1 MiB linux-x64 gives a process's first thread, and well
+	// inside the stack the CLI hands the interpreter. cl-mustache's spec suite is the
+	// real-world specimen (~800 KiB down); this is the same shape in two lines.
+	//
+	// The depth is MEASURED, and measured beside the run it justifies. What 1 MiB holds
+	// is the JIT's answer, not the program's: 337 calls with C1 frames, 511 cold, ~1130
+	// once Graal has compiled the evaluator, and more than 1500 on CI run 34637528638.
+	// A depth found once and reused later (a constant, or a search cached for the JVM)
+	// can therefore fit by the time it is asserted on.
+	private static final int DEEP_PROGRAM_FIRST_DEPTH = 1500;
+
+	private static final int DEEP_PROGRAM_MAX_DEPTH = 1 << 16;
+
+	// What linux-x64 gives thread 0, and so what the CLI used to interpret on there.
+	private static final long LAUNCHER_STACK_BYTES = 1L << 20;
+
+	private static String deepProgram(int depth) {
+		return """
+				(defun depth (n) (if (= n 0) 0 (+ 1 (depth (- n 1)))))
+				(print (depth %d))
+				""".formatted(depth);
+	}
+
+	// Runs the body on a thread with the given stack and answers what it threw, so a
+	// StackOverflowError is this test's evidence rather than its failure.
+	private static @Nullable Throwable onAStackOf(long stackBytes, Runnable body) throws InterruptedException {
+		Throwable[] thrown = new Throwable[1];
+		Thread thread = new Thread(null, () -> {
+			try {
+				body.run();
+			}
+			catch (Throwable ex) {
+				thrown[0] = ex;
+			}
+		}, "launcher", stackBytes);
+		thread.start();
+		thread.join();
+		return thrown[0];
+	}
+
+	@Test
+	void aWrittenHttpHandlerPortWarnsOnceOnAWarBecauseTheContainerOwnsThePort() throws Exception {
+		Path program = this.tempDir.resolve("app.lisp");
+		Files.writeString(program, """
+				(defun handle (env)
+				  (list 200 '(:content-type "text/plain") (list "ok")))
+				(rontolisp:http-handler 'handle 8080)
+				""");
+		java.io.ByteArrayOutputStream err = new java.io.ByteArrayOutputStream();
+		PrintStream oldErr = System.err;
+		System.setErr(new PrintStream(err, true, StandardCharsets.UTF_8));
+		try {
+			runCli("", program.toString(), "-o", this.tempDir.resolve("app.war").toString());
+		}
+		finally {
+			System.setErr(oldErr);
+		}
+		assertThat(err.toString(StandardCharsets.UTF_8)).contains("the servlet container owns the port");
+	}
+
+	@Test
+	void anUncaughtConditionReportsOneLineAndExitsOne() throws Exception {
+		// The interpreter's half of the cross-backend contract: the condition's report,
+		// once, on standard error -- not the 16 (212 for a cl-postgres connect) frames
+		// of LispEvaluator the default handler used to print -- and under it where it
+		// happened. The program's own output still comes out. A compiled class and jar
+		// print the same lines.
+		Path program = this.tempDir.resolve("boom.lisp");
+		Files.writeString(program, "(print \"before\")\n(error \"boom: ~a\" 42)\n");
+		String[] result = runReporting(program.toString());
+		assertThat(result[0]).isEqualTo("1");
+		assertThat(result[1]).isEqualTo("\"before\"\n");
+		assertThat(result[2].lines()).containsExactly("Unhandled condition: boom: 42", "  at " + program + ":2");
+		assertCompiledRunsReport(program, result[2]);
+	}
+
+	@Test
+	void anUncaughtConditionNamesTheInnermostFormAndTheFunctionHoldingIt() throws Exception {
+		// The innermost form read from the file that the condition passed through, and
+		// the named function whose body holds it -- through a package (the resolver's
+		// rewrite keeps the position), a when/dolist expansion, and a tail call into a
+		// built-in library function whose own forms carry no position: the call site in
+		// PARSE is what is reported, not the library's body and not RUN.
+		Path program = this.tempDir.resolve("app.lisp");
+		Files.writeString(program, """
+				(defpackage :app (:use :cl))
+				(in-package :app)
+
+				(defun parse (s)
+				  (parse-integer s))
+
+				(defun run ()
+				  (dolist (s '("1" "x"))
+				    (when s
+				      (print (parse s)))))
+
+				(run)
+				""");
+		String[] result = runReporting(program.toString());
+		assertThat(result[0]).isEqualTo("1");
+		assertThat(result[2].lines()).containsExactly("Unhandled condition: parse-integer: junk in string \"x\"",
+				"  at " + program + ":5 in APP::PARSE");
+		assertCompiledRunsReport(program, result[2]);
+	}
+
+	@Test
+	void anUncaughtConditionInASchemeFileNamesTheInnermostFormAndTheProcedureHoldingIt() throws Exception {
+		// The .scm twin: the lowering rebuilds every datum into core forms, and each
+		// rewrite keeps the position of the datum it stands for -- through a `when`
+		// desugaring, an anonymous lambda and a syntax-rules expansion.
+		Path program = this.tempDir.resolve("app.scm");
+		Files.writeString(program, """
+				(import (scheme base) (scheme write))
+
+				(define-syntax must
+				  (syntax-rules ()
+				    ((_ x) (or x (error "not a number")))))
+
+				(define (parse s)
+				  (must (string->number s)))
+
+				(define (run)
+				  (for-each (lambda (s)
+				              (when s
+				                (display (parse s))))
+				            '("1" "x")))
+
+				(run)
+				""");
+		String[] result = runReporting(program.toString());
+		assertThat(result[0]).isEqualTo("1");
+		assertThat(result[1]).isEqualTo("1");
+		assertThat(result[2].lines()).containsExactly("Unhandled condition: not a number",
+				"  at " + program + ":8 in parse");
+	}
+
+	@Test
+	void anUncaughtConditionInALoadedFileNamesThatFile() throws Exception {
+		// A macro that signals while expanding at evaluation time: the form in the
+		// LOADED file, inside the macro -- not F, whose body holds the call site. The
+		// message itself stays bare
+		// (RontoLispCliTest#theInterpreterKeepsItsBareErrorText).
+		Files.writeString(this.tempDir.resolve("lib.lisp"), """
+				(defmacro twice (x)
+				  (error "twice: bad argument ~a" x))
+
+				(defun f (n)
+				  (twice n))
+				""");
+		Path main = this.tempDir.resolve("main.lisp");
+		Files.writeString(main, "(load \"lib.lisp\")\n(print (f 1))\n");
+		String[] result = runReporting(main.toString());
+		List<String> lines = result[2].lines().toList();
+		assertThat(lines).hasSize(2);
+		assertThat(lines.get(0)).isEqualTo("Unhandled condition: twice: bad argument N");
+		assertThat(lines.get(1)).startsWith("  at ").endsWith("lib.lisp:2 in TWICE");
+		// A run-time error while the loaded file's top-level forms run: the handler-bind
+		// seam re-raises a condition-less error as a replacement carrying the instance,
+		// and the replacement keeps where the original had been.
+		Files.writeString(this.tempDir.resolve("run.lisp"), """
+				(defun g ()
+				  (no-such-fn 1))
+
+				(g)
+				""");
+		Files.writeString(main, "(print 0)\n(load \"run.lisp\")\n");
+		assertThat(runReporting(main.toString())[2].lines()).containsExactly(
+				"Unhandled condition: The function NO-SUCH-FN is undefined",
+				"  at " + this.tempDir.resolve("run.lisp") + ":2 in G");
+	}
+
+	@Test
+	void anAsyncBodysConditionNamesTheAsyncFunctionAndEveryAwaitSite() throws Exception {
+		// The body runs on its own virtual thread and await rethrows on another, so the
+		// awaiter's frames are not the async function's: each boundary is its own line,
+		// naming the async function and the await that rethrew.
+		Path program = this.tempDir.resolve("prices.lisp");
+		Files.writeString(program, """
+				(rontolisp:async-defun current-price (symbol)
+				  (let ((feed nil))
+				    (error "no price for ~a" symbol)))
+
+				(rontolisp:async-defun portfolio ()
+				  (list
+				    (rontolisp:await (current-price "ABC"))))
+
+				(print (rontolisp:await (portfolio)))
+				""");
+		String[] result = runReporting(program.toString());
+		assertThat(result[0]).isEqualTo("1");
+		assertThat(result[2].lines()).containsExactly("Unhandled condition: no price for ABC", "  at " + program + ":3",
+				"  in CURRENT-PRICE (async), awaited at " + program + ":7",
+				"  in PORTFOLIO (async), awaited at " + program + ":9");
+		assertCompiledRunsReport(program, result[2]);
+	}
+
+	/**
+	 * The JVM backend's half of the location lines: the program compiled to a
+	 * {@code .class} and to a program {@code .jar}, each run the way its user runs it --
+	 * {@code java -cp dir Prog}, {@code java -jar prog.jar} -- reports on standard error
+	 * exactly what the interpreter did, and exits 1. The launcher's own
+	 * {@code Exception in thread "main"} echo is the host's line, not the report's, and
+	 * is left out of the comparison.
+	 */
+	private void assertCompiledRunsReport(Path program, String interpreted) throws Exception {
+		Path classDir = Files.createDirectories(this.tempDir.resolve("class-out"));
+		runCli("", program.toString(), "-o", classDir.resolve("Prog.class").toString());
+		Path jar = this.tempDir.resolve("prog.jar");
+		runCli("", program.toString(), "-o", jar.toString());
+		for (List<String> command : List.of(List.of("-cp", classDir.toString(), "Prog"),
+				List.of("-jar", jar.toString()))) {
+			List<String> java = new java.util.ArrayList<>();
+			java.add(Path.of(System.getProperty("java.home"), "bin", "java").toString());
+			java.addAll(command);
+			Process process = new ProcessBuilder(java).redirectOutput(ProcessBuilder.Redirect.DISCARD).start();
+			String err = new String(process.getErrorStream().readAllBytes(), StandardCharsets.UTF_8);
+			assertThat(process.waitFor()).as(String.join(" ", command)).isEqualTo(1);
+			assertThat(err.lines().filter(line -> !line.startsWith("Exception in thread ")))
+				.as(String.join(" ", command))
+				.containsExactlyElementsOf(interpreted.lines().toList());
+		}
+	}
+
+	@Test
+	void aProgramWithNoFileReportsTheLineAlone() {
+		// -e names no file, so there is nothing to locate against: the report is the one
+		// line it always was -- on the compiled backends too
+		// (UncaughtReportParityTest#aProgramWithNothingLocatedCompilesAsItAlwaysDid).
+		String[] result = runReporting("-e", "(defun f (x) (car x)) (f 1)");
+		assertThat(result[0]).isEqualTo("1");
+		assertThat(result[2].lines()).containsExactly("Unhandled condition: CAR: The value 1 is not of type LIST");
+	}
+
+	@Test
+	void aSignaledReportlessInstanceNamesItsClass() {
+		// (error c) over an instance whose class reports nothing: the text names the
+		// class as written, not the escaped printed form of its internal tag.
+		String[] result = runReporting("-e",
+				"(define-condition uc-plain (error) ()) (error (identity (make-condition 'uc-plain)))");
+		assertThat(result[2].lines()).containsExactly("Unhandled condition: Condition of type UC-PLAIN was signalled.");
+	}
+
+	@Test
+	void aRontolispDiagnosticIsNotDressedUpAsACondition() throws Exception {
+		// Only a signaled condition takes the cross-backend wording; a read error, a
+		// compile failure or a bad command line is the COMPILER talking and says
+		// "error:", keeping the file:line:column: prefix the frontend put on it.
+		Path program = this.tempDir.resolve("unbalanced.lisp");
+		Files.writeString(program, "(print (+ 1 2)\n");
+		String[] result = runReporting(program.toString());
+		assertThat(result[0]).isEqualTo("1");
+		assertThat(result[2].trim()).startsWith("error: ").doesNotContain("Unhandled condition");
+	}
+
+	@Test
+	void aSchemeTailCallThroughAProcedureValueRunsInConstantStackOnTheInterpreter() {
+		// 300,000 deep on the test JVM's own thread, where the interpreter used to hold
+		// a few thousand: a session's definitions are variables called through funcall,
+		// and a file's tail call through an argument is the same funcall. The wasm twin
+		// is WasmLispCompilerIntegrationTest's constant-stack case; the JVM output stays
+		// bounded (.kb/interpreter-tail-calls.md).
+		String program = "(define (g self n) (if (= n 0) 'done (self self (- n 1))))";
+		assertThat(runCli(program + "\n(g g 300000)\n", "--source-language", "scheme")).isEqualTo("done\n");
+		String[] file = runReporting("-e", program + " (display (g g 300000)) (newline)", "--source-language",
+				"scheme");
+		assertThat(file[2]).isEmpty();
+		assertThat(file[1]).isEqualTo("done\n");
+	}
+
+	@Test
+	void aPipedSchemeReplReadSeesWhatWasTypedNext() {
+		// (read) consumes the session's own stdin: the next datum typed is the answer
+		// (a read-eval loop started at the prompt takes over). Lines and run-time reads
+		// share one BufferedReader, so no second look-ahead hides what was typed.
+		String[] session = runSession(false, "(display (read)) (newline)\n42\n", "--source-language", "scheme");
+		assertThat(session[0]).isEqualTo("0");
+		assertThat(session[1]).isEqualTo("42\n\n");
+		assertThat(session[2]).isEmpty();
+	}
+
+	@Test
+	void aTerminalReplPromptsOncePerFreshForm() {
+		// The prompt is the current package, as in any CL REPL: an (in-package ...)
+		// typed at one prompt shows at the next, so which package a bare symbol
+		// interns into is never invisible.
+		// defpackage answers the package (its keyword, what find-package answers).
+		assertThat(runSession(true, "(defpackage :app (:use :cl))\n(in-package :app)\n(+ 1 2)\n")[1])
+			.isEqualTo("CL-USER> :APP\nCL-USER> :APP\nAPP> 3\nAPP> ");
+		// A form typed over two lines is answered at one prompt.
+		assertThat(runSession(true, "(+ 1\n 2)\n(define x 1)\n", "--source-language", "scheme")[1])
+			.isEqualTo("scheme> 3\nscheme> scheme> ");
+	}
+
+	@Test
+	void aPipedReplReportsFailuresOnStandardErrorAndEndsNonZero() {
+		for (String[] session : List.of(runSession(false, "(car 1)\n(+ 1 2)\n"),
+				runSession(false, "(car 1)\n(+ 1 2)\n", "--source-language", "scheme"))) {
+			assertThat(session[0]).isEqualTo("1");
+			assertThat(session[1]).isEqualTo("3\n");
+			assertThat(session[2]).startsWith("Error: CAR: ").endsWith("\n").hasLineCount(1);
+		}
+		assertThat(runSession(false, "(+ 1 2)\n")[0]).isEqualTo("0");
+		// On a terminal the report stays between the prompts, and the status is 0: a
+		// person saw it.
+		String[] terminal = runSession(true, "(car 1)\n(+ 1 2)\n", "--source-language", "scheme");
+		assertThat(terminal[0]).isEqualTo("0");
+		assertThat(terminal[1]).startsWith("scheme> Error: CAR: ").endsWith("\nscheme> 3\nscheme> ");
+		assertThat(terminal[2]).isEmpty();
+	}
+
+	@Test
+	void exitEndsTheSessionWithItsStatusInEitherLanguage() {
+		String[] scheme = runSession(false, "(display \"a\")\n(exit 3)\n(display \"never\")\n", "--source-language",
+				"scheme");
+		assertThat(scheme[0]).isEqualTo("3");
+		assertThat(scheme[1]).isEqualTo("a\n");
+		assertThat(runSession(false, "(exit)\n", "--source-language", "scheme")[0]).isEqualTo("0");
+		assertThat(runSession(false, "(exit #t)\n", "--source-language", "scheme")[0]).isEqualTo("0");
+		assertThat(runSession(false, "(exit #f)\n", "--source-language", "scheme")[0]).isEqualTo("1");
+		assertThat(runSession(false, "(emergency-exit 300)\n", "--source-language", "scheme")[0]).isEqualTo("44");
+		// The status an exit asks for wins over a failure reported before it.
+		assertThat(runSession(false, "(car 1)\n(exit 0)\n", "--source-language", "scheme")[0]).isEqualTo("0");
+		// It used to be reported as "Error: null" and the session went on.
+		String[] lisp = runSession(false, "(+ 1 2)\n(uiop:quit 4)\n5\n");
+		assertThat(lisp[0]).isEqualTo("4");
+		assertThat(lisp[1]).isEqualTo("3\n");
+		assertThat(lisp[2]).isEmpty();
+	}
+
+	@Test
+	void anExitInASchemeFileEndsTheProcessWithItsStatus() throws Exception {
+		Path program = this.tempDir.resolve("exits.scm");
+		Files.writeString(program, """
+				(import (scheme base) (scheme write) (scheme process-context))
+				(display "before") (newline)
+				(dynamic-wind (lambda () #t) (lambda () (exit 7)) (lambda () (display "after")))
+				(display "never")
+				""");
+		String[] result = runReporting(program.toString());
+		assertThat(result[0]).isEqualTo("7");
+		assertThat(result[1]).isEqualTo("before\nafter");
+		assertThat(result[2]).isEmpty();
+	}
+
+	@Test
+	void theSchemeReplReportsANonProcedureAsAFileDoes() throws IOException {
+		// One text for one condition: the REPL, file mode and every compiled backend
+		// report what the condition says (.kb/error-handling.md), so a Scheme session
+		// does not reword it.
+		String[] session = runSession(false, """
+				(define (get key) #f)
+				((get 'op) 2 3)
+				(define h 3)
+				(h 1)
+				""", "--source-language", "scheme");
+		assertThat(session[2]).isEqualTo("""
+				Error: The object is not applicable: #f
+				Error: The object is not applicable: 3
+				""");
+		Path program = this.tempDir.resolve("apply.scm");
+		Files.writeString(program, "(define h 3)\n(display \"before\")\n(h 1)\n");
+		String[] file = runReporting(program.toString());
+		assertThat(file[0]).isEqualTo("1");
+		assertThat(file[1]).isEqualTo("before");
+		assertThat(file[2].lines()).containsExactly("Unhandled condition: The object is not applicable: 3",
+				"  at " + program + ":3");
+	}
+
+	@Test
+	void theSchemeReplCatchesAndReportsRaisedObjects() throws IOException {
+		// An error object caught at one prompt is a value at the next; an uncaught raise
+		// reports the object as write spells it, an uncaught error its message and
+		// irritants -- the file-mode texts after "Unhandled condition: ".
+		String[] session = runSession(false, """
+				(define e1 (guard (e (#t e)) (error "bad" 1 "two")))
+				(error-object-message e1)
+				(error-object-irritants e1)
+				(with-exception-handler (lambda (e) 10) (lambda () (+ 1 (raise-continuable 'c))))
+				(raise (list 1 "a"))
+				(error "msg" 'x)
+				""", "--source-language", "scheme");
+		assertThat(session[1]).isEqualTo("\"bad\"\n(1 \"two\")\n11\n");
+		assertThat(session[2]).isEqualTo("""
+				Error: (1 "a")
+				Error: msg x
+				""");
+	}
+
+	@Test
+	void aMalformedLineIsReportedWholeWithoutEvaluatingItsCompletePrefix() {
+		// Pinned, not designed: the buffer is read before anything in it runs.
+		for (String[] session : List.of(runSession(false, "(print 5) garbage)\n(+ 1 2)\n"),
+				runSession(false, "(display 5) garbage)\n(+ 1 2)\n", "--source-language", "scheme"))) {
+			assertThat(session[1]).isEqualTo("3\n");
+			assertThat(session[2]).startsWith("Error: ");
+		}
+	}
+
+	@Test
+	void theSchemeReplReportsAnErrorWithoutAFilePrefixAndGoesOn() {
+		String[] session = runSession(false, "(car)\n(if)\n)\n(+ 1 2)\n", "--source-language", "scheme");
+		assertThat(session[1]).isEqualTo("3\n");
+		assertThat(session[2]).contains("Error: ").doesNotContain("null:");
+	}
+
+	@Test
+	void aStackOverflowAtTheReplIsReportedAndTheSessionKeepsItsDefinitions() {
+		// Each level binds a special, so the deepest frames' restores run with no stack
+		// left: whatever they could not undo must not survive into the next prompt.
+		String[] lisp = runSession(true, """
+				(defvar *level* 0)
+				(defun sink (n) (let ((*level* n)) (+ 1 (sink (+ n 1)))))
+				(sink 1)
+				*level*
+				(+ 1 2)
+				""");
+		assertThat(lisp[1]).contains("Error: stack overflow").endsWith("CL-USER> 0\nCL-USER> 3\nCL-USER> ");
+		String[] scheme = runSession(false, """
+				(define (sink n) (+ 1 (sink n)))
+				(define kept 42)
+				(sink 0)
+				kept
+				""", "--source-language", "scheme");
+		assertThat(scheme[1]).isEqualTo("42\n");
+		assertThat(scheme[2]).startsWith("Error: stack overflow");
+	}
+
+	@Test
+	void aCyclicValueIsEchoedWithoutKillingTheSession() {
+		assertThat(runCli("(define l (list 1 2))\n(set-cdr! (cdr l) l)\nl\n(+ 1 2)\n", "--source-language", "scheme"))
+			.isEqualTo("#0=(1 2 . #0#)\n3\n");
+		// A print-object method routes the Common Lisp echo through prin1-to-string.
+		String[] lisp = runSession(false, """
+				(defclass pt () ())
+				(defmethod print-object ((p pt) s) (format s "PT"))
+				(defparameter *l* (list 1 2))
+				(progn (setf (cdr (cdr *l*)) *l*) nil)
+				*l*
+				(+ 1 2)
+				""");
+		assertThat(lisp[2]).isEmpty();
+		assertThat(lisp[1]).endsWith("\n3\n");
+	}
+
+	@Test
+	void anUncaughtStackOverflowInAFileIsOneLineAndExitOne() {
+		String[] result = runReporting("-e", "(defun sink (n) (+ 1 (sink n)))\n(print (sink 0))\n");
+		assertThat(result[0]).isEqualTo("1");
+		assertThat(result[2].trim()).isEqualTo("error: stack overflow (--stack <MiB> raises the limit)");
+	}
+
+	/**
+	 * A host {@code StackOverflowError} is no condition on the interpreter, so a Clojure
+	 * {@code catch StackOverflowError} / {@code thrown?} never runs its handler: the
+	 * program ends with the one-line report (the oracle catches it and goes on; the JVM
+	 * backend's landing does too, {@code ClojureProjectNamespacesTest}).
+	 */
+	@Test
+	void aClojureCatchOfAStackOverflowDoesNotRunOnTheInterpreter() throws Exception {
+		Path program = this.tempDir.resolve("overflow_catch.clj");
+		Files.writeString(program, """
+				(defn deep [n] (if (= n 0) 0 (+ 1 (deep (- n 1)))))
+				(println "before")
+				(println (try (deep 100000000) (catch StackOverflowError e :caught)))
+				(println "after")
+				""");
+		String[] result = runReporting(program.toString());
+		assertThat(result[0]).isEqualTo("1");
+		assertThat(result[1]).isEqualTo("before\n");
+		assertThat(result[2].trim()).isEqualTo("error: stack overflow (--stack <MiB> raises the limit)");
+	}
+
+	@Test
+	void aClojureThrownAssertionOverAStackOverflowEndsTheInterpretedProgram() throws Exception {
+		Path program = this.tempDir.resolve("overflow_thrown.clj");
+		Files.writeString(program, """
+				(ns overflow-thrown (:use clojure.test))
+				(defn deep [n] (if (= n 0) 0 (+ 1 (deep (- n 1)))))
+				(deftest t1 (is (thrown? StackOverflowError (deep 100000000))))
+				(deftest t2 (is (= 1 1)))
+				(run-tests)
+				""");
+		String[] result = runReporting(program.toString());
+		assertThat(result[0]).isEqualTo("1");
+		assertThat(result[1]).isEqualTo("\nTesting overflow-thrown\n");
+		assertThat(result[2].trim()).isEqualTo("error: stack overflow (--stack <MiB> raises the limit)");
+	}
+
+	@Test
+	void anUnknownSourceLanguageFailsFast() throws Exception {
+		Path program = this.tempDir.resolve("hello.lisp");
+		Files.writeString(program, "(print (+ 1 2))\n");
+		String[] result = runReporting(program.toString(), "--source-language=elvish");
+		assertThat(result[0]).isEqualTo("1");
+		assertThat(result[2]).contains("--source-language");
+	}
+
+	@Test
+	void schemeStandardR7rsIsStrictOnAFileOnEveryPath() throws Exception {
+		Path program = this.tempDir.resolve("sicp.scm");
+		Files.writeString(program, "; no import\n(display (1+ 1))\n");
+		assertThat(runReporting(program.toString())[1]).isEqualTo("2");
+		String expected = "error: " + program + ":2:1: an R7RS program begins with an import declaration";
+		assertThat(runReporting(program.toString(), "--scheme-standard", "r7rs")[2].trim()).isEqualTo(expected);
+		assertThat(runReporting(program.toString(), "--scheme-standard=r7rs", "-o",
+				this.tempDir.resolve("Sicp.class").toString())[2]
+			.trim()).isEqualTo(expected);
+		Path strict = this.tempDir.resolve("strict.scm");
+		Files.writeString(strict, "(import (scheme base) (scheme write))\n(display (square 3))\n");
+		assertThat(runCli("", strict.toString(), "--scheme-standard", "r7rs")).isEqualTo("9");
+	}
+
+	@Test
+	void schemeStandardR7rsReachesAFileLoadedAtRunTimeAndInlined() throws Exception {
+		Files.writeString(this.tempDir.resolve("lib.scm"), "(define (twice x) (* 2 x))\n");
+		Path program = this.tempDir.resolve("main.lisp");
+		Files.writeString(program, "(load \"lib.scm\")\n(print (|twice| 21))\n");
+		String message = this.tempDir.resolve("lib.scm") + ":1:1: an R7RS program begins with an import declaration";
+		// The interpreter reads the file when the load runs, so the refusal is a
+		// condition that load signals; the compile path splices the file and refuses it
+		// as a compile error.
+		assertThat(runReporting(program.toString(), "--scheme-standard", "r7rs")[2].trim()).isEqualTo(
+				UncaughtReport.line(message) + System.lineSeparator() + UncaughtReport.AT_PREFIX + program + ":1");
+		assertThat(runReporting(program.toString(), "--scheme-standard", "r7rs", "-o",
+				this.tempDir.resolve("Mixed.class").toString())[2]
+			.trim()).isEqualTo("error: " + message);
+	}
+
+	@Test
+	void schemeStandardR7rsStartsTheReplWithTheR7rsLibrariesOnly() {
+		String[] session = runSession(false, "(square 3)\n(1+ 1)\n(exact->inexact 1)\n", "--source-language", "scheme",
+				"--scheme-standard", "r7rs");
+		assertThat(session[1]).isEqualTo("9\n");
+		assertThat(session[2]).contains("s%1+").contains("exact->inexact");
+		assertThat(runCli("(1+ 1)\n", "--source-language", "scheme")).isEqualTo("2\n");
+	}
+
+	@Test
+	void anUnknownSchemeStandardFailsFastByName() throws Exception {
+		Path program = this.tempDir.resolve("hello.scm");
+		Files.writeString(program, "(display 1)\n");
+		String[] result = runReporting(program.toString(), "--scheme-standard=r6rs");
+		assertThat(result[0]).isEqualTo("1");
+		assertThat(result[1]).isEmpty();
+		assertThat(result[2]).contains("--scheme-standard 'r6rs' names no standard");
+	}
+
+	@Test
+	void aSchemeSyntaxErrorNamesItsPositionOnEveryPath() throws Exception {
+		Path program = this.tempDir.resolve("broken.scm");
+		Files.writeString(program, "(define (f x)\n  (if))\n");
+		String expected = "error: " + program + ":2:3: malformed if";
+		assertThat(runReporting(program.toString())[2].trim()).isEqualTo(expected);
+		assertThat(runReporting(program.toString(), "-o", this.tempDir.resolve("Broken.class").toString())[2].trim())
+			.isEqualTo(expected);
+	}
+
+	@Test
+	void aSchemeProgramIsRefusedByTheScalarBackend() throws Exception {
+		Path program = this.tempDir.resolve("scalar.scm");
+		Files.writeString(program, "(define (f x) (* x 2))\n");
+		String[] result = runReporting(program.toString(), "-o", this.tempDir.resolve("scalar.wasm").toString(),
+				"--no-gc");
+		assertThat(result[0]).isEqualTo("1");
+		assertThat(result[2].trim()).isEqualTo("error: Cannot compile: a Scheme program needs the GC backend --"
+				+ " --no-gc has no cons cell, no symbol and no closure (drop --no-gc)");
+	}
+
+	@Test
+	void aClojureRefusalReportsTheSameLineWhetherOrNotTheProgramReadsAClass() throws Exception {
+		// a refusal carries the class the oracle throws only in a program reading one
+		// (a catch by class elsewhere), and reports its message either way, on the
+		// interpreter, the compiled class and the jar
+		Path plain = this.tempDir.resolve("plain_refusal.clj");
+		Files.writeString(plain, "(println 2)\n(first 5)\n");
+		Path reading = this.tempDir.resolve("reading_refusal.clj");
+		Files.writeString(reading, "(println (try (inc 1) (catch IllegalStateException e :x)))\n(first 5)\n");
+		for (Path program : List.of(plain, reading)) {
+			String[] result = runReporting(program.toString());
+			assertThat(result[0]).isEqualTo("1");
+			assertThat(result[1]).isEqualTo("2\n");
+			assertThat(result[2].lines()).containsExactly("Unhandled condition: seq needs a collection");
+			assertCompiledRunsReport(program, result[2]);
+		}
+	}
+
+	@Test
+	void aClojureProgramIsRefusedByTheScalarBackend() throws Exception {
+		Path program = this.tempDir.resolve("scalar.clj");
+		Files.writeString(program, "(defn f [x] (* x 2))\n");
+		String[] result = runReporting(program.toString(), "-o", this.tempDir.resolve("scalar.wasm").toString(),
+				"--no-gc");
+		assertThat(result[0]).isEqualTo("1");
+		assertThat(result[2].trim()).isEqualTo("error: Cannot compile: a Clojure program needs the GC backend --"
+				+ " --no-gc has no cons cell, no symbol and no closure (drop --no-gc)");
+	}
+
+	@Test
+	void aStarlarkFileRunsCompilesAndIsRefusedWhereItCannot() throws Exception {
+		Path program = this.tempDir.resolve("hello.star");
+		Files.writeString(program, "def greet(name):\n    return \"hello, \" + name\nprint(greet(\"starlark\"))\n");
+		assertThat(runReporting(program.toString())).containsExactly("0", "hello, starlark\n", "");
+		Path compiled = this.tempDir.resolve("HelloStarlark.class");
+		assertThat(runReporting(program.toString(), "-o", compiled.toString())[0]).isEqualTo("0");
+		assertThat(compiled).exists();
+		// --source-language reads any other source as Starlark
+		assertThat(runReporting("-e", "print(1 + 2)", "--source-language", "starlark")[1]).isEqualTo("3\n");
+		// a load statement reads its module beside the file loading it
+		Files.writeString(this.tempDir.resolve("words.star"), "def twice(s):\n    return s * 2\n");
+		Path loading = this.tempDir.resolve("loading.star");
+		Files.writeString(loading, "load(\"words.star\", \"twice\")\nprint(twice(\"ab\"))\n");
+		assertThat(runReporting(loading.toString())).containsExactly("0", "abab\n", "");
+		// a name nothing binds is refused before anything runs, at its position, on
+		// the interpreter and the compile path alike
+		Path broken = this.tempDir.resolve("broken.star");
+		Files.writeString(broken, "print(\"never\")\nprint(nope)\n");
+		String expected = "error: " + broken + ":2:7: undefined: nope";
+		String[] refused = runReporting(broken.toString());
+		assertThat(refused[1]).isEmpty();
+		assertThat(refused[2].trim()).isEqualTo(expected);
+		assertThat(runReporting(broken.toString(), "-o", this.tempDir.resolve("Broken.class").toString())[2].trim())
+			.isEqualTo(expected);
+		// --starlark-standard spec refuses what the specification does, as early
+		Path toplevel = this.tempDir.resolve("toplevel.star");
+		Files.writeString(toplevel, "for x in [1]:\n    print(x)\n");
+		assertThat(runReporting(toplevel.toString())[1]).isEqualTo("1\n");
+		assertThat(runReporting(toplevel.toString(), "--starlark-standard", "spec")[2].trim())
+			.isEqualTo("error: " + toplevel + ":1:1: for loop not within a function");
+		assertThat(runReporting(toplevel.toString(), "--starlark-standard=python")[2])
+			.contains("--starlark-standard 'python' names no standard");
+		// the scalar backend has none of its values
+		assertThat(runReporting(program.toString(), "-o", this.tempDir.resolve("scalar.wasm").toString(), "--no-gc")[2]
+			.trim())
+			.isEqualTo("error: Cannot compile: a Starlark program needs the GC backend -- --no-gc has no structure,"
+					+ " no hash table and no closure (drop --no-gc)");
+	}
+
+	@Test
+	void aJavaFileRunsCompilesAndIsRefusedWhereItCannot() throws Exception {
+		Path program = this.tempDir.resolve("Hello.java");
+		Files.writeString(program, """
+				public class Hello {
+				    static String greet(String name) {
+				        return "hello, " + name;
+				    }
+
+				    public static void main(String[] args) {
+				        System.out.println(greet("java"));
+				    }
+				}
+				""");
+		assertThat(runReporting(program.toString())).containsExactly("0", "hello, java\n", "");
+		Path compiled = this.tempDir.resolve("HelloJava.class");
+		assertThat(runReporting(program.toString(), "-o", compiled.toString())[0]).isEqualTo("0");
+		assertThat(compiled).exists();
+		// --source-language reads any other source as Java: here a compact source file
+		assertThat(runReporting("-e", "void main() { IO.println(1 + 2); }", "--source-language", "java")[1])
+			.isEqualTo("3\n");
+		// a refusal the library can only make where the program runs, by name: a format
+		// type of a MessageFormat's pattern
+		assertThat(runReporting("-e", "void main() { new java.text.MessageFormat(\"{0, Number,#}\"); }",
+				"--source-language", "java")[2])
+			.contains("UnsupportedOperationException: the format type Number of MessageFormat is not supported by the"
+					+ " experimental Java subset yet");
+		// a locale's own data the program does not carry: its digits and separators
+		assertThat(runReporting("-e",
+				"void main() { IO.println(String.format(java.util.Locale.FRANCE, \"%s\", \"s\"));"
+						+ " IO.println(String.format(java.util.Locale.FRANCE, \"%,d\", 1234)); }",
+				"--source-language", "java")[2])
+			.contains("UnsupportedOperationException: the conversion %d of a format in the locale fr-FR is not"
+					+ " supported by the experimental Java subset yet");
+		// and a method of a JDK class found by a computed name that the program calls
+		// nowhere: reflection adds nothing to what the compiled program holds
+		assertThat(runReporting("-e",
+				"void main() throws Exception { String name = \"isBlank\";"
+						+ " IO.println(String.class.getDeclaredMethod(name).invoke(\"a\")); }",
+				"--source-language", "java")[2])
+			.contains("UnsupportedOperationException: invoke of java.lang.String.isBlank() is not supported by the"
+					+ " experimental Java subset where the program uses it only by reflection");
+		// System.exit ends the program with its status, after what it printed
+		assertThat(runReporting("-e", "void main() { IO.println(\"out\"); System.exit(3); IO.println(\"no\"); }",
+				"--source-language", "java"))
+			.containsExactly("3", "out\n", "");
+		// and so it does called on a thread the program started, while the thread the
+		// program started on waits
+		assertThat(runReporting("-e",
+				"void main() throws InterruptedException { Thread t = new Thread(() -> { IO.println(\"out\");"
+						+ " System.exit(4); }); t.start(); t.join(); IO.println(\"no\"); }",
+				"--source-language", "java"))
+			.containsExactly("4", "out\n", "");
+		// a shutdown hook calling it, which a JDK waits in for ever, ends the program by
+		// name
+		assertThat(runReporting("-e",
+				"void main() { Runtime.getRuntime().addShutdownHook(new Thread(() -> System.exit(5)));"
+						+ " IO.println(\"out\"); }",
+				"--source-language", "java"))
+			.containsExactly("1", "out\n", "a shutdown hook called System.exit, which waits for ever: the"
+					+ " experimental Java subset ends the program here\n");
+		// a construct the subset does not have is refused by name before anything runs,
+		// at its position, on the interpreter and the compile path alike
+		Path broken = this.tempDir.resolve("Broken.java");
+		Files.writeString(broken, "void main() {\n    IO.println(\"never\");\n    switch (1L) { default -> { } }\n}\n");
+		String expected = "error: " + broken
+				+ ":3:5: a switch over long is not supported by the experimental Java subset yet";
+		String[] refused = runReporting(broken.toString());
+		assertThat(refused[1]).isEmpty();
+		assertThat(refused[2].trim()).isEqualTo(expected);
+		assertThat(runReporting(broken.toString(), "-o", this.tempDir.resolve("Broken.class").toString())[2].trim())
+			.isEqualTo(expected);
+		// a program that sends a request fetches: a Preview 1 module, which no host
+		// answers HTTP for, is refused where it is compiled, by the client's name
+		Path client = this.tempDir.resolve("Client.java");
+		Files.writeString(client,
+				"""
+						import java.net.URI;
+						import java.net.http.*;
+
+						public class Client {
+						    public static void main(String[] args) throws Exception {
+						        HttpRequest request = HttpRequest.newBuilder(URI.create("http://localhost/")).build();
+						        System.out.println(HttpClient.newHttpClient().send(request, HttpResponse.BodyHandlers.ofString()).body());
+						    }
+						}
+						""");
+		String[] unanswered = runReporting(client.toString(), "-o", this.tempDir.resolve("client.wasm").toString());
+		assertThat(unanswered[0]).isEqualTo("1");
+		assertThat(unanswered[2]).contains("the Java subset's java.net.http client")
+			.contains("is only available in WASM component mode (--component) or a --native executable");
+		// a session lowers every buffer with the declarations of the earlier ones: a
+		// subclass, a body declared later reaches an earlier caller; a class's static
+		// state lives on; a value shows by its static type; what a step left uncaught
+		// is reported and the session goes on; a step throws what it likes, as a
+		// snippet does, where a method declares what it throws; a field updater made
+		// by one buffer finds its field in the buffers after it; the values() of an enum
+		// an
+		// earlier buffer initialized
+		String[] session = runSession(false,
+				"""
+						interface Shape { double area(); }
+						record Sq(double s) implements Shape { public double area() { return s * s; } }
+						double total(List<Shape> shapes) { double t = 0; for (Shape s : shapes) t += s.area(); return t; }
+						List<Shape> shapes = new ArrayList<>()
+						shapes.add(new Sq(2))
+						record Circle(double r) implements Shape { public double area() { return 3 * r * r; } }
+						shapes.add(new Circle(1))
+						total(shapes)
+						int twice(int n) { return 2 * n; }
+						int quad(int n) { return twice(twice(n)); }
+						quad(1)
+						int twice(int n) { return n + 1; }
+						quad(1)
+						class Counter { static int n; static int next() { return ++n; } }
+						Counter.next()
+						Counter.next()
+						1 / 0
+						"a\\"b"
+						'c'
+						int[] xs = {1,
+						    2}
+						System.out.println(xs.length)
+						byte[] bs = "ab".getBytes("UTF-8")
+						class Cell { volatile int hits; }
+						java.util.concurrent.atomic.AtomicIntegerFieldUpdater<Cell> up
+						Cell cell
+						{ up = java.util.concurrent.atomic.AtomicIntegerFieldUpdater.newUpdater(Cell.class, "hits"); cell = new Cell(); }
+						up.incrementAndGet(cell)
+						up.addAndGet(cell, 2)
+						int nap(int n) { Thread.sleep(n); return n; }
+						enum Dir { N, S }
+						System.out.println(Dir.N)
+						Dir.values().length
+						""",
+				"--source-language", "java");
+		assertThat(session[1]).isEqualTo("""
+				shapes ==> []
+				$1 ==> true
+				$2 ==> true
+				$3 ==> 7.0
+				$4 ==> 4
+				$5 ==> 3
+				$6 ==> 1
+				$7 ==> 2
+				$9 ==> "a\\"b"
+				$10 ==> 'c'
+				xs ==> int[2] { 1, 2 }
+				2
+				bs ==> byte[2] { 97, 98 }
+				up ==> null
+				cell ==> null
+				$12 ==> 1
+				$13 ==> 3
+				N
+				$15 ==> 2
+				""");
+		assertThat(session[2]).contains("Exception java.lang.ArithmeticException: / by zero",
+				"unreported exception InterruptedException; must be caught or declared to be thrown");
+		// the tests of a Java file run against JUnit Jupiter, the program's own
+		// dependency
+		// read from its source path (a run with it: JavaSpecE2eTest), and a run without
+		// it
+		// says how to give it; the status is the verdict: 1 then, as where the file holds
+		// no test, and 2 for a wrong command line
+		Path tests = this.tempDir.resolve("HelloTest.java");
+		Files.writeString(tests, """
+				import org.junit.jupiter.api.Test;
+
+				import static org.assertj.core.api.Assertions.assertThat;
+
+				class HelloTest {
+				    @Test
+				    void greets() {
+				        assertThat(Hello.greet("java")).isEqualTo("hello, java");
+				    }
+
+				    @Test
+				    void shouts() {
+				        assertThat(Hello.greet("java")).isEqualTo("HELLO");
+				    }
+				}
+				""");
+		String[] tested = runReporting("test", tests.toString());
+		assertThat(tested[2]).contains("HelloTest.java:6:5: the class org.junit.jupiter.api.Test is not on the"
+				+ " source path: JUnit Jupiter is a dependency of the program, compiled from its sources"
+				+ " (--java-source-dep org.junit.jupiter:junit-jupiter-api:VERSION)");
+		assertThat(tested[0]).isEqualTo("1");
+		String[] none = runReporting("test", program.toString());
+		assertThat(none[2]).contains("rontolisp test: no tests were run for " + program);
+		assertThat(none[0]).isEqualTo("1");
+		// several files of one tree are one run, the further ones read as the first is
+		String[] several = runReporting("test", program.toString(), tests.toString());
+		assertThat(several[2]).contains("HelloTest.java:6:5: the class org.junit.jupiter.api.Test is not on the");
+		assertThat(several[0]).isEqualTo("1");
+		// a directory is the .java files below it
+		Path tree = Files.createDirectories(this.tempDir.resolve("tree"));
+		Files.copy(tests, tree.resolve("HelloTest.java"));
+		String[] directory = runReporting("test", tree.toString());
+		assertThat(directory[2]).contains("HelloTest.java:6:5: the class org.junit.jupiter.api.Test is not on the");
+		assertThat(directory[0]).isEqualTo("1");
+		String[] reporter = runReporting("test", "-r", "dot", tests.toString());
+		assertThat(reporter[2]).contains("--reporter picks a rove reporter");
+		assertThat(reporter[0]).isEqualTo("2");
+		// a Java file holds no S-expression to re-indent
+		assertThat(runReporting("format", program.toString())[2]).contains("is Java source, which has no S-expression");
+		// the scalar backend makes a reactor, and a program with a main is a command
+		assertThat(runReporting(program.toString(), "-o", this.tempDir.resolve("scalar.wasm").toString(), "--no-gc")[2]
+			.trim())
+			.isEqualTo("error: --no-gc makes a reactor, whose entry points are its exports, and the program exports"
+					+ " nothing (a (rontolisp:wasm-export ...) directive exports a function); a program that runs once,"
+					+ " as a command, compiles on the default GC backend (drop --no-gc)");
+	}
+
+	@Test
+	void anUncaughtSchemeErrorReportsItsMessageAndIrritants() throws Exception {
+		// The message is built under a rebound *standard-output*, inside a helper the
+		// interpreter loads lazily: loaded without registering its special bindings,
+		// the text went to stdout and the report named the exception class.
+		Path program = this.tempDir.resolve("fails.scm");
+		Files.writeString(program, "(define (f) (error \"bad thing:\" 'sym \"str\" 42 '(1 #f)))\n(f)\n");
+		String[] result = runReporting(program.toString());
+		assertThat(result[0]).isEqualTo("1");
+		assertThat(result[1]).isEmpty();
+		assertThat(result[2].lines()).containsExactly("Unhandled condition: bad thing: sym \"str\" 42 (1 #f)",
+				"  at " + program + ":1 in f");
+	}
+
+	@Test
+	void aSchemeTranscendentalWithAComplexAnswerAnswersTheComplexOnEveryPath() throws Exception {
+		// Common Lisp answers #C(0.0 2.0), and so does this front end now: the tower is
+		// the runtimes' (scheme-spec.yaml's complex-numbers case pins the values).
+		for (String[] call : List.of(new String[] { "(sqrt -4)", "#C(0.0 2.0)" },
+				new String[] { "(log -1.5)", "#C(0.4054651081081644 3.141592653589793)" },
+				new String[] { "(asin 2)", "#C(1.5707963267948966 -1.3169578969248166)" },
+				new String[] { "(acos 2)", "#C(0.0 1.3169578969248166)" },
+				new String[] { "(log 8 -2)", "#C(0.13926097063622436 -0.6311808726237905)" })) {
+			Path program = this.tempDir.resolve("complex.scm");
+			Files.writeString(program, "(display " + call[0] + ")(newline)\n");
+			String[] result = runReporting(program.toString());
+			assertThat(result[0]).as(call[0]).isEqualTo("0");
+			assertThat(result[1]).as(call[0]).isEqualTo(call[1] + "\n");
+			assertThat(result[2]).as(call[0]).isEmpty();
+		}
+	}
+
+	@Test
+	void anErrorInsideSchemeEvalIsReportedInSchemeTerms() throws Exception {
+		// The evaluator behind eval spells its own messages through the Scheme printer,
+		// on the interpreter and the compiled backends alike (scheme-spec.yaml pins the
+		// values; the messages end the program, so they are pinned here).
+		for (String[] program : List.of(
+				new String[] { "(eval 'nothing (interaction-environment))", "Unbound variable: nothing" },
+				new String[] { "(eval '(if) (interaction-environment))", "Ill-formed special form: (if)" },
+				new String[] { "(eval '(define-record-type p (mk) p?) (interaction-environment))",
+						"Not supported inside eval: (define-record-type p (mk) p?)" },
+				new String[] { "(eval 1 2)", "eval: not an environment: 2" },
+				new String[] { "(eval '((lambda (a b) a) 1) (interaction-environment))",
+						"Wrong number of arguments: (a b) given (1)" },
+				new String[] { "(eval '(3 4) (interaction-environment))", "The object is not applicable: 3" },
+				new String[] { "(environment '(scheme time))", "environment: library is not available: (scheme time)" },
+				new String[] { "(eval 'if (interaction-environment))",
+						"Syntactic keyword may not be used as an expression: if" })) {
+			Path file = this.tempDir.resolve("eval-error.scm");
+			Files.writeString(file, program[0] + "\n");
+			String[] result = runReporting(file.toString());
+			assertThat(result[0]).as(program[0]).isEqualTo("1");
+			assertThat(result[1]).as(program[0]).isEmpty();
+			assertThat(result[2].lines().findFirst()).as(program[0]).contains("Unhandled condition: " + program[1]);
+		}
+	}
+
+	@Test
+	void aTestOrBuildCommandLineThatCannotNameATargetExitsTwo() {
+		// 2, not 1: "the command was wrong" has to stay distinct from "a test failed"
+		// (or a build), which is the whole point of the subcommand's exit code (as with
+		// `format`).
+		for (String[] args : List.of(new String[] { "test" }, new String[] { "test", "nope.lisp" },
+				new String[] { "test", "-r", "not a style", "x.lisp" }, new String[] { "test", "x.java", "y.lisp" },
+				new String[] { "test", this.tempDir.toString() }, new String[] { "build" },
+				new String[] { "build", "nope.asd" }, new String[] { "build", "app.lisp" })) {
+			String[] result = runReporting(args);
+			assertThat(result[0]).as("%s", String.join(" ", args)).isEqualTo("2");
+			assertThat(result[2]).as("%s", String.join(" ", args)).startsWith("rontolisp: " + args[0] + ": ");
+		}
+	}
+
+	@Test
+	void aCallToAnUndefinedFunctionWarnsAtItsCallSite() throws Exception {
+		Files.writeString(this.tempDir.resolve("lib.lisp"), """
+				(defun broken (y)
+				  (no-such-function y))
+				""");
+		Path main = this.tempDir.resolve("main.lisp");
+		Files.writeString(main, "(load \"lib.lisp\")\n(print (broken 1))\n");
+		PrintStream savedErr = System.err;
+		ByteArrayOutputStream captured = new ByteArrayOutputStream();
+		try {
+			System.setErr(new PrintStream(captured, true, StandardCharsets.UTF_8));
+			runCli("", main.toString(), "-o", this.tempDir.resolve("Main.class").toString());
+		}
+		finally {
+			System.setErr(savedErr);
+		}
+		assertThat(captured.toString(StandardCharsets.UTF_8))
+			.contains("lib.lisp:2:3: warning: the function NO-SUCH-FUNCTION is undefined");
+	}
+
+	@Test
+	void aReferenceToAnUndefinedFunctionWarnsAtTheReferenceOnEveryBackend() throws Exception {
+		// #'name and a quoted designator of a name no definition has compile -- the
+		// first to a signal where it is evaluated, the second to a symbol the
+		// dispatcher looks up when the call runs -- each with its own warning.
+		Path file = this.tempDir.resolve("warn.lisp");
+		Files.writeString(file, """
+				(defun ref () #'no-such-ref)
+				(defun call (x)
+				  (funcall 'no-such-call x))
+				(print (list (ignore-errors (ref)) (ignore-errors (call 1))))
+				(defclass waits (never-defined) ())
+				(defpackage :warn-nocl (:use))
+				(cl:in-package :warn-nocl)
+				(cl:defun ref () (cl:list (car 1) #'cdr))
+				(cl:defun call (x) (cl:funcall 'cadr x))
+				(cl:print (cl:list (cl:ignore-errors (ref)) (cl:ignore-errors (call 1))))
+				""");
+		for (String output : new String[] { "Warn.class", "warn.wasm" }) {
+			PrintStream savedErr = System.err;
+			ByteArrayOutputStream captured = new ByteArrayOutputStream();
+			try {
+				System.setErr(new PrintStream(captured, true, StandardCharsets.UTF_8));
+				runCli("", file.toString(), "-o", this.tempDir.resolve(output).toString());
+			}
+			finally {
+				System.setErr(savedErr);
+			}
+			// The location prints the path as given; the file name is what is pinned.
+			assertThat(captured.toString(StandardCharsets.UTF_8)
+				.lines()
+				.filter(line -> line.contains("warning: "))
+				.map(line -> line.substring(line.lastIndexOf('/') + 1))).as(output)
+				.containsExactly(
+						"warn.lisp:1:15: warning: the function NO-SUCH-REF is undefined; compiled as a run-time error",
+						"warn.lisp:3:12: warning: the function NO-SUCH-CALL is undefined; looked up when the call runs",
+						// A package's own symbol spelled like a standard name says what
+						// to write.
+						"warn.lisp:8:27: warning: the function WARN-NOCL::CAR is undefined; compiled as a call-time error (use CL:CAR)",
+						"warn.lisp:8:35: warning: the function WARN-NOCL::CDR is undefined; compiled as a run-time error (use CL:CDR)",
+						"warn.lisp:9:32: warning: the function WARN-NOCL::CADR is undefined; looked up when the call runs (use CL:CADR)",
+						"warn.lisp:5:1: warning: DEFCLASS WAITS: the superclass NEVER-DEFINED is never defined, so the class has no instances");
+		}
+	}
+
+	@Test
+	void anUndefinedStandardNameIsReportedWithTheSpellingToUse() throws Exception {
+		// The condition's own text is the one every backend reports; a run of the
+		// interpreter has no compile to warn in, so it says it under the report.
+		Path file = this.tempDir.resolve("nocl.lisp");
+		Files.writeString(file, """
+				(defpackage :report-nocl (:use))
+				(cl:in-package :report-nocl)
+				(car '(1))
+				""");
+		assertThat(runReporting(file.toString())[2].lines()).containsExactly(
+				UncaughtReport.line("The function REPORT-NOCL::CAR is undefined"),
+				UncaughtReport.AT_PREFIX + file + ":3", "  (use CL:CAR)");
+		// The REPL's, and an unbound variable's.
+		String[] session = runSession(false, "(in-package :rontolisp)\ncadr\n(cl:princ 1)\n");
+		assertThat(session[2].lines()).contains("Error: The variable RONTOLISP::CADR is unbound", "  (use CL:CADR)");
+		// A name cl does not have, and a package's export, have nothing to advise.
+		Files.writeString(file, """
+				(defpackage :report-nocl (:use) (:export #:second))
+				(cl:in-package :report-nocl)
+				(frobnicate)
+				""");
+		assertThat(runReporting(file.toString())[2]).doesNotContain("(use ");
+		Files.writeString(file, """
+				(defpackage :report-nocl (:use) (:export #:second))
+				(cl:in-package :report-nocl)
+				(second)
+				""");
+		assertThat(runReporting(file.toString())[2]).doesNotContain("(use ");
+	}
+
+	@Test
+	void aReferenceToAnUndefinedSetfFunctionWarnsWithTheNameTheProgramWrote() throws Exception {
+		Path file = this.tempDir.resolve("warn.lisp");
+		Files.writeString(file, """
+				(defun ref () #'(setf no-such-setf))
+				(print (ignore-errors (ref)))
+				""");
+		for (String output : new String[] { "Warn.class", "warn.wasm" }) {
+			PrintStream savedErr = System.err;
+			ByteArrayOutputStream captured = new ByteArrayOutputStream();
+			try {
+				System.setErr(new PrintStream(captured, true, StandardCharsets.UTF_8));
+				runCli("", file.toString(), "-o", this.tempDir.resolve(output).toString());
+			}
+			finally {
+				System.setErr(savedErr);
+			}
+			assertThat(captured.toString(StandardCharsets.UTF_8)
+				.lines()
+				.filter(line -> line.contains("warning: "))
+				.map(line -> line.substring(line.lastIndexOf('/') + 1))).as(output)
+				.containsExactly(
+						"warn.lisp:1:15: warning: the function (SETF NO-SUCH-SETF) is undefined; compiled as a run-time error");
+		}
+	}
+
+	@Test
+	void anUndefinedNameAProgramCanBindAtRunTimeWarnsThatItIsLookedUp() throws Exception {
+		// A program writing the function namespace through a computed name: a call or
+		// #' of a name no definition has reads the namespace when it runs, and says so.
+		// A name the program spells in (compile 'name definition) is not undefined.
+		Path file = this.tempDir.resolve("warn.lisp");
+		Files.writeString(file, """
+				(defun install (name fn) (setf (fdefinition name) fn))
+				(defun ref () #'no-such-ref)
+				(defun call (x) (no-such-call x))
+				(print (list (ignore-errors (ref)) (ignore-errors (call 1))))
+				(compile 'by-compile '(lambda (x) x))
+				(print (list (by-compile 1) (funcall 'by-compile 2) (funcall #'by-compile 3)))
+				""");
+		for (String output : new String[] { "Warn.class", "warn.wasm" }) {
+			PrintStream savedErr = System.err;
+			ByteArrayOutputStream captured = new ByteArrayOutputStream();
+			try {
+				System.setErr(new PrintStream(captured, true, StandardCharsets.UTF_8));
+				runCli("", file.toString(), "-o", this.tempDir.resolve(output).toString());
+			}
+			finally {
+				System.setErr(savedErr);
+			}
+			assertThat(captured.toString(StandardCharsets.UTF_8)
+				.lines()
+				.filter(line -> line.contains("warning: "))
+				.map(line -> line.substring(line.lastIndexOf('/') + 1))).as(output)
+				.containsExactly(
+						"warn.lisp:2:15: warning: the function NO-SUCH-REF is undefined; looked up when the reference runs",
+						"warn.lisp:3:17: warning: the function NO-SUCH-CALL is undefined; looked up when the call runs");
+		}
+	}
+
+	@Test
+	void anUndefinedFunctionWarnsExactlyOncePerCallSite() throws Exception {
+		// The JVM backend re-runs the whole compile when a runtime-helper gate was
+		// under-predicted, and the discarded attempt used to have printed its warnings
+		// already -- two identical lines for one call site. (An undefined function pulls
+		// in the eval group, so this program takes the retry.)
+		Path file = this.tempDir.resolve("warn.lisp");
+		Files.writeString(file, """
+				(defun broken (y)
+				  (no-such-function y))
+				(print (broken 1))
+				""");
+		PrintStream savedErr = System.err;
+		ByteArrayOutputStream captured = new ByteArrayOutputStream();
+		try {
+			System.setErr(new PrintStream(captured, true, StandardCharsets.UTF_8));
+			runCli("", file.toString(), "-o", this.tempDir.resolve("Warn.class").toString());
+		}
+		finally {
+			System.setErr(savedErr);
+		}
+		assertThat(captured.toString(StandardCharsets.UTF_8)
+			.lines()
+			.filter(line -> line.contains("the function NO-SUCH-FUNCTION is undefined"))
+			.count()).isEqualTo(1);
+	}
+
+	@Test
+	void mainRunsTheProgramOnItsOwnStackNotTheLaunchersOne() throws Exception {
+		// So the depth ceiling is one number on every platform and every launcher: main
+		// is called here on a thread with exactly what linux-x64 gives thread 0, and runs
+		// a program that the same thread cannot run through run.
+		//
+		// Each round pairs the two at one depth, main FIRST: the control then runs on a
+		// JIT at least as warm as main's, so its overflow shows the depth needs more than
+		// the launcher's stack even with the frames main may have had. A control that
+		// fits does not fail the test -- it doubles the depth and pairs again.
+		for (int depth = DEEP_PROGRAM_FIRST_DEPTH; depth <= DEEP_PROGRAM_MAX_DEPTH; depth *= 2) {
+			final int d = depth;
+			ByteArrayOutputStream out = new ByteArrayOutputStream();
+			PrintStream oldOut = System.out;
+			System.setOut(new PrintStream(out, true, StandardCharsets.UTF_8));
+			Throwable thrown;
+			try {
+				thrown = onAStackOf(LAUNCHER_STACK_BYTES,
+						() -> RontoLispCli.main(new String[] { "-e", deepProgram(d) }));
+			}
+			finally {
+				System.setOut(oldOut);
+			}
+			assertThat(thrown).as("main at depth %d", depth).isNull();
+			assertThat(out.toString(StandardCharsets.UTF_8)).contains(String.valueOf(depth));
+			Throwable control = onAStackOf(LAUNCHER_STACK_BYTES, () -> {
+				RontoLispCli cli = new RontoLispCli(new ByteArrayInputStream(new byte[0]),
+						new PrintStream(new ByteArrayOutputStream()));
+				cli.run(new String[] { "-e", deepProgram(d) });
+			});
+			if (control instanceof StackOverflowError) {
+				return;
+			}
+			assertThat(control).as("run on the launcher's stack at depth %d", depth).isNull();
+		}
+		throw new AssertionError(
+				"no depth up to " + DEEP_PROGRAM_MAX_DEPTH + " overflowed a " + LAUNCHER_STACK_BYTES + "-byte stack");
+	}
+
+}

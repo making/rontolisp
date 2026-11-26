@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>test.interp</groupId>
+  <artifactId>props</artifactId>
+  <version>1</version>
+  <name>Display Name</name>
+  <properties>
+    <a>${b}</a>
+    <b>1.0</b>
+    <from.system>model</from.system>
+    <nested>${a}-x</nested>
+  </properties>
+  <dependencies>
+      <dependency><groupId>test.lib</groupId><artifactId>d1</artifactId><version>${a}</version></dependency>
+      <dependency><groupId>test.lib</groupId><artifactId>d2</artifactId><version>${java.version}</version></dependency>
+      <dependency><groupId>test.lib</groupId><artifactId>d3</artifactId><version>${env.HOME}</version></dependency>
+      <dependency><groupId>test.lib</groupId><artifactId>d4</artifactId><version>${project.packaging}</version></dependency>
+      <dependency><groupId>test.lib</groupId><artifactId>d5</artifactId><version>${unknown.property}</version></dependency>
+      <dependency><groupId>test.lib</groupId><artifactId>d6</artifactId><version>${project.name}</version></dependency>
+      <dependency><groupId>test.lib</groupId><artifactId>d7</artifactId><version>${basedir}</version></dependency>
+      <dependency><groupId>test.lib</groupId><artifactId>d8</artifactId><version>${project.basedir}</version></dependency>
+      <dependency><groupId>test.lib</groupId><artifactId>d9</artifactId><version>${groupId}</version></dependency>
+      <dependency><groupId>test.lib</groupId><artifactId>d10</artifactId><version>${from.system}</version></dependency>
+      <dependency><groupId>test.lib</groupId><artifactId>d11</artifactId><version>${nested}</version></dependency>
+      <dependency><groupId>test.lib</groupId><artifactId>d12</artifactId><version>${only.system}</version></dependency>
+      <dependency><groupId>test.lib</groupId><artifactId>d14</artifactId><version>x${b}y${b}z</version></dependency>
+      <dependency><groupId>test.lib</groupId><artifactId>d15</artifactId><version>$${b}</version></dependency>
+      <dependency><groupId>test.lib</groupId><artifactId>d16</artifactId><version>${project.groupId}</version></dependency>
+  </dependencies>
+</project>

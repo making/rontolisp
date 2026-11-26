@@ -1,0 +1,332 @@
+# An array literal is a CONSTRUCTOR, not a constant
+
+**Invariant: every evaluation of an array literal — `#(...)`, `#nA(...)`, `#*1011`,
+`#f(...)`, `#d(...)`, `#N@(...)` — answers a FRESH, independently mutable array on all four
+backends. Two evaluations of one literal are never `eq`; a write through one is invisible to
+the next.** A deliberate deviation from CL, which permits coalescing. The reader's array is
+the SOURCE constant and never leaves the program. `PureBuiltinFolder` rests on this
+(`.kb/pure-builtin-fold.md`).
+
+Do not revisit "shared and immutable": enforcement has no store choke point or spare bit on
+either compile backend (the JVM packed header `[rank, dims..., data...]` has no free slot and
+the rank word is read as `(int) a[0]` in ~160 places, most inside the embedded
+`JvmSimdVectorTemplate`/`JvmGpuTemplate`/`JvmBlasTemplate`; wasm packed integer vectors are a
+BARE `(array (mut i8|i16|i32))` and every emitted type is `sub final`,
+`.kb/wasm-gc-final-types.md`). A string literal is likewise shared-and-writable
+(`.kb/string-write-runtime.md`).
+
+- Mechanism: `JvmQuoteCompiler`/`WasmQuoteCompiler`'s `compileQuotedArray` /
+  `compilePackedLiteral` / `compileSinglePackedLiteral` / `compileLiteralIntVector` |
+  `compileIntVectorLiteral` rebuild at the site; `eval/LiteralArrays.materialize` is the
+  interpreter's half, called from the three self-evaluating array arms of
+  `LispEvaluator.eval`. The copy is **deep through nested ARRAYS only**; every other element
+  passes through by identity, and on the compile backends is one constant for the same reason
+  (`compiler/QuotedSharing`, `.kb/quoted-data.md`, "A node two literals reach"):
+  `(eq (aref (f) 0) (aref (f) 0))` is `T` for `(defun f () #((k)))`, `NIL` there until 2026-11-05.
+- **`quote` goes the other way**: `'#(1 2 3)` is a CONSTANT, one shared object per quote
+  site on all four backends; the two rules meet exactly at the `'`. `evalQuote` hands the
+  datum back as is because `(quote <value>)` is also the interpreter's live-value splice
+  (`LispEvaluator.quoteValue`); both compile backends memoize (`.kb/quoted-data.md`).
+- **A bare `#P"..."` / `#S(...)` in code position is a CONSTANT too** — the `LispInstance`
+  eval arm also carries live instances spliced back through `(quote <value>)` and cannot
+  tell the two apart, so the compile side meets it instead.
+
+## A long literal
+Measured 2026-11-04 on cxml's `(sbit '#*... rune)` name tables: 55,296 elements each, a store per
+element, 497,828 bytes of method on the JVM, past the format's limit, and two bodies of that order
+on wasm.
+
+- **Runs** (`compiler/LiteralArrayRuns`, both compile backends): a general array's run of 8 or more
+  equal immediates (integer, character, nil) is one build: `addAll(Collections.nCopies(n, v))` /
+  `array.fill`. They stay separate elements; the array is as mutable as ever. A shorter run keeps
+  its stores, so a literal without one is emitted as before. cxml's module went from 4,188,375 to
+  2,465,116 bytes.
+- **Builders, JVM only** (`JvmQuoteCompiler.emitBuilderCall`, the `_ql$N` a long list's spine already
+  used): past twice `QUOTE_CHUNK_BUDGET` a literal of ANY family, general or packed, is filled by a
+  chain of methods taking the array and answering it, so nothing bounds a literal by the method
+  limit and the method holding one stays under HotSpot's HugeMethodLimit. wasm has no such limit and
+  keeps one body (`.kb/quoted-data.md`, "Long data is NOT split"; 30,000 floats ran).
+- Pinned by `JvmLispCompilerTest#anArrayLiteralOfAnyFamilyIsHeldToNoMethodLimit` and ci-spec
+  `array-literal-freshness-cross-backend`.
+
+## The RANK-0 array, and why `#0A` carries no parens
+`(make-array nil)` is legal on all four backends: no dimensions, total size 1, one element
+`aref` / `(setf (aref ...))` reach with **no subscripts**. Needed beyond conformance:
+array-operations' `as-array` default method IS `(make-array nil :initial-element object)`
+(`.kb/asdf.md`).
+- **Every flat-index fold must start at `flat = 0` and run from `k = 0`, never at `subs[0]`
+  with `k = 1`**: `LispArray.flatIndex`, `LispFloatArray.flatIndex`,
+  `JvmArrayRuntimeBuilder.emitFlatN`, the two `JvmFloatArrayRuntimeBuilder` N-bodies. On the
+  compile backends the subscript count is STATIC, so `JvmArrayCompiler`/`WasmArrayCompiler`'s
+  `compileAref`/`compileAset` rewrite the rank-0 shape to an explicit index 0.
+- **Syntax is `#0A<datum>`, no parens.** `#0A5` holds 5; `#0A(1 2)` holds the LIST `(1 2)`.
+  `LispLexer` accepts `#0A` without the `(`; `LispReader.readArray` takes one `readExpr()`.
+  Printers mirror it: `LispArray.renderArrayData` returns early for rank 0; the JVM's
+  `_arrayToString` appends `"0A"` in place of `"("`; wasm's `emitPrintArray` tests rank 0
+  OUTSIDE the packed branch and suppresses its `rparen` — which is why wasm's string table
+  holds `"A"` and `"("` separately, not one `"A("`.
+- A rank-0 array prints `#0A<datum>` at EVERY representation, packed float included, and
+  reads back as a general rank-0 array — the round trip loses the packing (as SBCL).
+- `--no-gc` refuses: `NoGcWasmCompiler.dimExprs` answers an empty list for `nil` and
+  `compileMakeArray` reports "a rank-0 make-array ... is not supported".
+- Related: `vectorp` of a rank-0 or rank-2 array is `NIL`
+  (`.kb/declarations-type-checks.md`).
+
+## A SPECIALIZED element type above rank 1 is the general array
+**Invariant: `:element-type` selects a specialized representation only at RANK 1, except the
+packed FLOAT families, which are packed at every rank. Above rank 1 a `character` or
+`(unsigned-byte 8|16|32)` request answers the PLAIN GENERAL array on all four backends —
+`stringp` and `vectorp` are `NIL` — and the only traces the element type leaves are the fill
+for unsupplied elements and the type the array REMEMBERS.**
+
+Degrade rather than mark, because **the marker implies rank 1** and is enforced at the ONE
+constructor, so no reader checks the rank. The rank is a RUNTIME fact at every site, so all
+three compile-time recognizers stayed and the rank test moved into the allocation:
+- Interpreter `Environment.makeArrayBuiltin`: the character arm already required
+  `dims.length == 1`.
+- JVM `JvmArrayRuntimeBuilder._charVecMake`: opens with `_ivMake`'s exact rank-1 test; rank n
+  returns `_arrayMake(dims, init, null, adj)` without the length-4 header. **Trap (fixed):**
+  `JvmArrayCompiler.compileMake` defaulted the fill pointer by RE-COMPILING the dimensions
+  expression; the default is now the unspelled `t` designator, so the dims expression is
+  **evaluated exactly once**.
+- wasm `WasmArrayCompiler.compileMake`: the meta-offset marker is `array.len(dims) == 1`
+  instead of a compile-time `1`, emitted only under the compile-time character branch.
+- `LispMacroExpander.lowerCharacterInitialContentsMakeArray` declines a LITERAL rank >= 2
+  dims list, falling to `lowerInitialContentsMakeArray`.
+- **The fill for an unsupplied element is one OF THE DECLARED TYPE, not `nil`** (`#\Space`,
+  `0`, `0.0`), from ONE place per backend keyed by the element-type CODE:
+  `ArrayElementTypes.defaultElement`. **The character fill is `#\Space` everywhere a slot is
+  opened, and that is a DECISION** (`ArrayElementTypes.DEFAULT_CHARACTER`; SBCL answers
+  `#\Nul` for slots `vector-push-extend`/`adjust-array` open). The general (`t`) vector keeps
+  `NIL` where SBCL answers `0`.
+
+## The degraded array REMEMBERS its element type
+**Invariant: a general array carries the UPGRADED element type it was asked for on all four
+backends. `array-element-type` answers it, `type-of` builds `(SIMPLE-ARRAY et dims)` /
+`(VECTOR et size)` from it, `typep` takes the same specifier back, and an unsupplied element
+takes that type's own zero. The representation degrades; the declared type does not.**
+
+**The type space is CLOSED**, so it is a code, not a value: `t` plus the widths
+`ArrayElementTypes.specializedCodes()` enumerates — `character`, `(unsigned-byte 8|16|32)`,
+`single-float`, `double-float`, `bfloat16`, and `bit` (the one code with no packed storage:
+a bit vector IS the general boxed array stamped `bit`, `.todo/043`); everything else upgrades
+to `t` and is remembered as nothing. **Count them against the class, not against this sentence** —
+which said "seven answers" and spelled the pre-`bfloat16` six until 2026-09-06, the same drift
+the runtime-designator section below is entirely about.
+`am.ik.rontolisp.ArrayElementTypes` is that space (`codeOf` the
+one recognizer, `valueOf`, `defaultElement`), in the ROOT package so `LispArray`,
+`Environment`, `LispMacroExpander` and both codegen packages share it. Each backend spends a
+slot it already had, so no array grew:
+- **Interpreter**: one `int` field on `LispArray`; `become` does not touch it, so the type
+  survives adjustment; `adoptElementType` is its ONE writer after construction
+  (`%array-adopt-element-type`, `.kb/adjustable-arrays.md`).
+- **JVM**: header slot **4**, free on every non-displaced array; a DISPLACED view hops to its
+  target and reads the chain end's slot 4. The length-3 header grows to 5; the length-6
+  PACKED header ALREADY HAS the slot. No header-length test moved: 4 is still the character
+  vector, 6 packed, 7 the string view, `header[3] != null` still displaced.
+  `_arrayMakeTyped` stamps, `_arrayElementType` reads back, `_arrayWiden` carries slot 4
+  over, `_ivMake`/`_charVecMake` stamp their rank-n fallbacks.
+- **wasm**: the meta MARKER word `meta.cdr.cdr`. The remembered type is `code + 1`, i.e.
+  2..7, leaving 1 to the string shape — so `_charvec_p` is untouched and
+  `%array-disp-offset`'s "non-displaced arrays report 0" guard already covers it.
+- **The general arm of `array-element-type` is GATED, per WIDTH.**
+  `LispMacroExpander.makeArrayElementTypeCodes(program, registry)` answers a bit MASK; a
+  program with no qualifying `make-array` compiles byte-identically. **Trap: on wasm the mask
+  rides in `Ctx.typedArrayCodes` and must reach `WasmAsyncEmit.freshCtx`** (inherited by
+  construction since 2026-10-04) — without
+  it a top-level `(array-element-type a)` answers `t` while the same form inside a defun
+  answers the remembered type.
+- **A quoted bit-vector type spec arms the bit width too** (2026-10-31): `make-sequence`,
+  `coerce`, `concatenate`, `map` and `merge` build a stamped bit array for one
+  (`isBitVectorResultType`) through an expansion the mask scan never sees, so a wasm program
+  with no `#*` literal and no `(make-array ... :element-type 'bit)` answered
+  `(bit-vector-p (make-sequence 'bit-vector 3))` NIL, and printed `#(1 1 1)` wherever the
+  printer reads the type back (a program constructing conditions). `#'make-sequence` arms it
+  too: its computed type may name a bit vector. Pinned by
+  `WasmLispCompilerIntegrationTest#bitVectorPreservationAcrossSequenceOps`; the ci-spec twin
+  cannot catch it, the corpus carries `#*` literals.
+- **`type-of` had to ask the simplicity question FIRST**, because a typed array can have a
+  fill pointer: prelude arm order is fill-pointer/adjustable, then the `t`-and-rank-1
+  `simple-vector` case, then `(simple-array et dims)`. That needed
+  `array-has-fill-pointer-p` and `adjustable-array-p` to answer **NIL** for a packed array
+  instead of refusing it.
+- Size cost ~+0.2-0.4% inside the gate. **A DISPLACED view answers its chain end's type on
+  all four** (its own meta slot carries the offset, so every reader hops: `LispArray`'s
+  constructor, `_arrayElementType`, wasm's `emitRememberedElementType`); this file said `t`
+  until 2026-11-08, when the four answered `bit` for a view of a bit vector.
+  `adjust-array` COPIES the remembered type (`.kb/adjustable-arrays.md`).
+
+## `equal` on a bit vector compares its elements
+**Invariant (CLHS 5.3, all four backends since 2026-11-08): two bit vectors -- rank 1, stamped
+`bit`, read through a displaced chain as above -- are `equal` when their ACTIVE elements (up to
+a fill pointer) are pairwise `eql`; an `equal` hash folds those elements under the depth cap
+and work budget (`.kb/hash-tables.md`, "The two caps").** Every other array stays identity.
+Before, all four compared a bit vector by identity: `(equal #*101 #*101)` was `NIL`.
+
+- Interpreter: `LispEquality.equal`/`hash`'s bit-vector arm (`isBitVector`). An `eql`/`eq`
+  table now places every `LispArray` by identity (`LispHashTable.placementHash`), since the
+  structural hash no longer is identity for a bit vector.
+- JVM: `JvmBitVectorRuntimeBuilder` (`_bvLen`, `_bvEqual`, `_bvHash` beside `_hash`);
+  `_equal` hands two `List`s to `_bvEqual`, `_hash` a `List` to `_bvHash`. An eql/eq table
+  already sends a `List` to `identityHashCode` before `_hash`.
+- WASM: an inline arm in `_equal` and in `_hash`'s cell arm (`WasmRuntimeBuilder`
+  `emitBitVectorLength`), elements through `_arr_get`. An eql/eq table places a cell by
+  `_ihash`.
+- **Gated on the `bit` width of `makeArrayElementTypeCodes`**: a program that cannot stamp a
+  bit vector gets the `_equal`/`_hash` it had, byte for byte (checked 2026-11-08 on a
+  program with arrays and an `equal` table: `.class`, P1 and component identical).
+- `equalp` tables gain it too: the key fold leaves an array as is, and the table's
+  `equal`/hash pair now matches two bit vectors. Pinned by ci-spec
+  `equalp-arrays-elementwise`.
+
+## A RUNTIME `:element-type` reaches the same array a literal one does
+**Invariant: `(make-array n :element-type et)` with `et` a VALUE builds what the literal
+spelling of that value would build on all four backends — representation, remembered element
+type and zero fill.**
+- **The arm set is DERIVED from `ArrayElementTypes`, never restated.** It used to be written
+  out by hand in four places — the program-scan mask, the inline lowering's arms, and the two
+  `%make-array-et*` helper sources — and all four were documented as covering seven codes while
+  spelling six. `bfloat16` was missing from every one of them from the day the width landed
+  until 2026-09-05, so a runtime designator naming it built a BOXED general array on every
+  backend but the interpreter, whose `make-array` reads the designator at run time and was
+  therefore the one engine that could not see the defect (`.todo/487`). All four now read
+  `ArrayElementTypes.specializedCodes()` / `ALL_SPECIALIZED_MASK`; an eighth width is one entry
+  in that class. **Count arms against the class, never against a sentence.**
+- **The wasm case is why it mattered.** `WasmArrayCompiler` refuses the LITERAL
+  `:element-type 'bfloat16` at the point the representation is chosen, with a comment saying it
+  exists so that "an unrefused request falls through to the general BOXED array below and the
+  program answers different numbers here than on the interpreter — a wrong number rather than a
+  crash". The runtime-designator path reached the same allocation by another route and walked
+  around the guard, producing exactly that wrong number. **A guard on one spelling of an
+  operation is not a guard**: the next width added must be refused where the REPRESENTATION is
+  chosen, which both spellings pass through, not where one of them is written.
+- **The dispatch is a PRELUDE HELPER, not an inline expansion**: wasm emits `make-array`
+  through the helper rather than expanding all seven arms at every site. A program with no
+  runtime designator is unchanged.
+- **Two helpers, split on `:fill-pointer` / `:adjustable`**: `%make-array-et (dims et init
+  given)` and `%make-array-et-fp` (also `fp`, `adj`). Not one helper with two more
+  parameters: those keywords are exactly what makes every arm degrade to the general
+  representation. `given` is a parameter, not a nil test at the call site, so the unsupplied
+  element is the arm's OWN zero.
+- Selection: `LispMacroExpander.lowerRuntimeElementTypeMakeArray` runs inside the expression
+  compilers, long after the prelude pass, so `LispPreludeLibrary.referencedBySurfaceForm` and
+  `LibraryDefunPruner` key on the SURFACE fact. **Trap: a call site injected after the pass
+  ran would find no defun**, so the lowering asks `ctx.functions` and falls back to the
+  inline seven arms; `:initial-contents`/`:displaced-to` expand inline too.
+- **A `deftype` ALIAS held in a VARIABLE resolves through a SECOND generated defun**
+  `%make-array-et-alias` (one arm per registered alias, answering the canonical spelling),
+  which the lowering wraps the designator in — otherwise `et` bound to `'octet` reaches the
+  `t` arm while the interpreter packs. **That table carries ONLY the aliases naming one of
+  the specialized codes** — it asks `ArrayElementTypes.codeOf`, so it needs no count: a
+  general resolver over every alias alexandria registers was the shape not taken. This
+  bullet said "six" while the code was correct, the exact INVERSE of
+  the four transcriptions above, where correct prose sat beside stale code. **The count in
+  prose was wrong in both directions independently, in one file, in one afternoon: the prose
+  is the unreliable half whichever way it drifts. Count against the class.**
+- **`typep` had the same hole, closed on a DIFFERENT narrowing** — only the aliases the
+  PROGRAM SPELLS can reach a runtime `typep`; the make-array narrowing does not carry
+  over. Full story: `.kb/declarations-type-checks.md`.
+
+## An UNKNOWN `:element-type` upgrades to `t`, and `make-array` does NOT signal
+**Invariant: `make-array` never signals on the element type. A designator naming no type this
+implementation knows — a typo (`'single-flaot`), a width that does not exist, a `deftype` the
+program never registered — builds the general boxed array; `array-element-type` answers `t` and
+an unsupplied element is `nil`, identically on all four backends and through BOTH spellings
+(literal and runtime designator).** `'bit` is not one of those: since `.todo/043` it is a
+remembered code (the bit-vector stamp), answered back as `bit` with a `0` fill.
+
+Decided 2026-09-06 (`.todo/703`) AGAINST the opposite proposal — signal on an element type the
+dispatch does not recognise, so that a typo cannot masquerade as a working array. Three
+measurements overturned it:
+
+- **The upstream oracle does not signal.** SBCL answers a `t` array at run time for
+  `'single-flaot`, `'not-a-type` and `'loopy` alike; its only diagnostic is a compile-time
+  STYLE-WARNING `undefined type: SINGLE-FLAOT`, and `'fixnum` / `'(integer -1 1)` are
+  upgraded with no diagnostic at all (`'bit` is remembered, not upgraded, since `.todo/043`).
+  An error here would be a divergence FROM the oracle, not
+  conformance to it.
+- **A `deftype` may be registered after the reference**, which is why the oracle's diagnostic is
+  a style-warning and never a signal: where `make-array` is compiled, "this names no type" is not
+  yet a fact. rontolisp has the same ordering — `%make-array-et-alias` resolves aliases the
+  program registers, and a program may register one in a `(load ...)`ed file.
+- **Refusing "not a packed width" would break most of the shipped corpus.** Census of every
+  `:element-type` in the tree (2026-09-06): `'fixnum` at 12 sites, `'bit` 5, `'(unsigned-byte 64)`
+  5, plus `'integer`, `'(signed-byte 8|64)`, `'(or null fixnum)`, `'(integer -1 1)` — alexandria,
+  cl-ppcre, ironclad, jzon, chipz, md5, cl-base64, fast-io. Every
+  one is a LEGAL upgrade to `t`
+  under CLHS, which lets `make-array` upgrade any element type — except `'bit`, which since
+  `.todo/043` is remembered rather than upgraded.
+
+**And the weaker form, a warning, has no oracle to key on either.** "Names no type at all" needs
+the set of type names that EXIST, which this project does not have. The nearest thing is
+`LispMacroExpander.makeTypeTest`'s switch — what `typecase` can test, and it already refuses an
+unknown specifier at expansion time. Manufacturing a SECOND set beside it is precisely the
+transcription the sections above are about, with a green tick on it.
+
+**So the diagnosis stays with the CALLER, and that is a decision rather than an oversight.**
+`checkpoint:make-tensor` is the checkpoint readers' one allocation path and asserts
+`array-element-type` after allocating (`.kb/checkpoint-readers.md`); that assertion stays. Any
+other code that DEPENDS on getting a packed representation asserts the same way — the width it
+asked for is the postcondition to check, not something `make-array` will refuse for it.
+
+## What a wasm `make-array` site costs
+Three quarters of a site was the DIMENSION parse, now three shared callees in
+`WasmArrayRuntimeBuilder` at fixed indices after `FUNC_TO_MUT_STR`, reusing existing callable
+signatures so no type index moves: `_arr_dims`, `_arr_total`, `_arr_fp`. Every allocating
+shape shares them. **The i31 shorthand stays INLINE, on purpose** — `emitParseDims` still
+spells `(make-array n)` as `ref.test i31` + `array.new`; only the list arm calls. In EH mode
+the shorthand adds one unsigned compare against the array size limit and hands an i31 outside
+it to `_arr_dims`, which checks every dimension (`.kb/error-handling.md`, "A make-array
+dimension"); outside EH mode the site is unchanged.
+
+**A dimension proven an integer is the shorthand alone** (2026-11-21, k76;
+`WasmArrayCompiler.integerDimension`): a literal, a form whose shape or declaration bounds
+it (`WasmIntFusionCompiler.knownRange`, a `the` included) or integer arithmetic over such
+(`answersInteger`). No list arm; a packed integer width no rank test and no general arm; a
+character array its rank-1 marker. A range within `[0, array-dimension-limit)` is checked by
+nothing; otherwise in EH mode an i31 test and the compare hand anything else to `_arr_dims`,
+which reports it, then `unreachable`. Java's `new T[n]` asserts its size, `new T[n][m]`
+declares its sizes (a `let` variable bound to a `the` proves nothing at the dimension; a
+declaration of it does)
+([java-frontend.md](java-frontend.md), "Numbers"). Sizes: a method making a `long[]` 174 ->
+150 B, an `int[]` 153 -> 61, an `Object[]` 127 -> 103; Lisp examples the same or smaller
+(`llm.lisp` 1,117,390 -> 1,116,044).
+
+**NOT done**: a whole-allocation `$_array_make` mirroring the JVM's `_arrayMake`. What is
+left inline would move behind a callee that branches on
+`:fill-pointer`/`:adjustable`/rank at RUN time where
+the site knows all three at compile time; a Lisp-level helper taxes a tight
+allocation loop. Wasm-specific: `WasmArrayCompiler.compileMake` emits inline at every site,
+where the JVM's is an `invokestatic` on a body emitted once.
+
+## Tests
+ci-spec `array-literal-freshness-cross-backend`, `rank-zero-arrays-cross-backend`,
+`character-element-type-above-rank-one`, `general-array-remembers-its-element-type`,
+`runtime-element-type-make-array`, `runtime-element-type-deftype-alias`,
+`make-array-unknown-element-type`, `packed-float-*`,
+`packed-single-float-*`, `setf-elt-cross-backend`.
+**The runtime-vs-literal pins are keyed to `ArrayElementTypes.specializedCodes()`, never to a
+list of widths** — a hand-written list of seven would be a fifth transcription with a green tick
+on it: `LispPreludeLibraryTest#bothMakeArrayElementTypeHelpersCoverEverySpecializedCode` (both
+generated helpers carry an arm per code),
+`LispEvaluatorTest#evalMakeArrayWithARuntimeElementTypeMatchesTheLiteralSpelling` (the
+reference engine), `JvmLispCompilerTest#compileAndRunMakeArrayWithARuntimeElementTypeMatchesTheLiteralSpelling`
+(both lowerings: through the helper and with the arms inline),
+`WasmLispCompilerIntegrationTest#aRuntimeElementTypeDesignatorAnswersWhatTheLiteralSpellingAnswers`
+(where a width the backend refuses must be refused through BOTH spellings, not answered by one).
+The "does not signal" decision is pinned per engine by the
+`*MakeArrayDoesNotSignalOnAnUnknownElementType` trio (the unknown designator through both
+spellings, plus the legal CLHS upgrades an error would have refused).
+`LispEvaluatorTest`
+(`everyArrayLiteralSyntaxIsFreshAtEveryEvaluation`,
+`writingThroughAnArrayLiteralDoesNotReachTheNextEvaluation`,
+`anArrayNestedInAnArrayLiteralIsFreshToo`, `rank2ArrayLiteralIsMutable`,
+`makeArrayWithNoDimensionsIsARankZeroArray`,
+`rankZeroArrayIsWrittenAndPrintedWithoutSubscripts`,
+`rankZeroArrayLiteralReadsItsDatumWhole`, `evalMakeArrayEvaluatesItsDimensionsExactlyOnce`),
+`LispReaderTest.readRank0ArrayLiteralHoldsOneDatumWithoutParens`, and the
+`*CharacterElementTypeAboveRankOneIsAGeneralArray` /
+`*GeneralArrayRemembersItsDeclaredElementType` /
+`*RuntimeElementTypePicksTheSameArrayAsALiteralOne` / `*RuntimeElementTypeResolvesADeftypeAlias`
+trios across `LispEvaluatorTest`/`JvmLispCompilerTest`/`WasmLispCompilerIntegrationTest`, plus
+`LinalgSimdTest.theSelectsAndCopiesAreBitIdenticalToTheScalarOracleAtEveryShapeAndWidth`.

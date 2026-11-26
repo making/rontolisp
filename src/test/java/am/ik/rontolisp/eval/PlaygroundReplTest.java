@@ -1,0 +1,271 @@
+package am.ik.rontolisp.eval;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+
+import am.ik.rontolisp.reader.Features;
+import org.junit.jupiter.api.Test;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+/**
+ * The browser's interpreter: what the playground's REPL and the documentation site's Run
+ * cells show, in every language.
+ */
+class PlaygroundReplTest {
+
+	private static SourceLoader files(Map<String, String> files) {
+		return new UploadedFiles(files);
+	}
+
+	private static final SourceLoader NO_FILES = files(Map.of());
+
+	@Test
+	void commonLispIsTheDefaultAndEchoesOnlyTheLastFormsValues() {
+		PlaygroundRepl repl = new PlaygroundRepl(NO_FILES);
+		assertThat(repl.language()).isEqualTo(SourceLanguage.COMMON_LISP);
+		assertThat(repl.eval("(princ \"a\") (+ 1 2) (floor 10 3)")).isEqualTo("a3\n1");
+		assertThat(repl.eval("(defun sq (x) (* x x))")).isEqualTo("SQ");
+		assertThat(repl.eval("(sq 7)")).isEqualTo("49");
+	}
+
+	@Test
+	void theSchemePickReadsSchemeAndKeepsItsSessionAcrossBuffers() {
+		PlaygroundRepl repl = new PlaygroundRepl(NO_FILES).pick(SourceLanguage.SCHEME);
+		// A definition has no value to show, an effect's unspecified value neither.
+		assertThat(repl.eval("(define (ev? n) (if (= n 0) #t (od? (- n 1))))")).isEmpty();
+		assertThat(repl.eval("(define (od? n) (if (= n 0) #f (ev? (- n 1))))")).isEmpty();
+		assertThat(repl.eval("(ev? 10)")).isEqualTo("#t");
+		assertThat(repl.eval("(display \"hi\")")).isEqualTo("hi");
+		assertThat(repl.eval("(list 'a \"s\" #\\x '())")).isEqualTo("(a \"s\" #\\x ())");
+		assertThat(repl.eval("(define x 1) (+ x 41)")).isEqualTo("42");
+	}
+
+	@Test
+	void switchingTheLanguageKeepsTheOneEvaluatorsDefinitions() {
+		PlaygroundRepl repl = new PlaygroundRepl(NO_FILES);
+		repl.eval("(defun twice (x) (* 2 x))");
+		repl.pick(SourceLanguage.SCHEME);
+		assertThat(repl.eval("(define (sq x) (* x x)) (sq 4)")).isEqualTo("16");
+		repl.pick(SourceLanguage.COMMON_LISP);
+		assertThat(repl.eval("(twice 5)")).isEqualTo("10");
+		repl.pick(SourceLanguage.SCHEME);
+		assertThat(repl.eval("(sq 5)")).isEqualTo("25");
+	}
+
+	@Test
+	void theClojurePickReadsClojureAndKeepsItsSessionAcrossBuffers() {
+		PlaygroundRepl repl = new PlaygroundRepl(NO_FILES).pick(SourceLanguage.CLOJURE);
+		assertThat(repl.eval("(defn twice [x] (* 2 x))")).isEqualTo("#'user/twice");
+		assertThat(repl.eval("(twice 21)")).isEqualTo("42");
+		assertThat(repl.eval("(def x 1) (+ x 41)")).isEqualTo("42");
+	}
+
+	@Test
+	void aClojureSessionKeepsTheSortedArmsOfWhatAnEarlierBufferDefined() {
+		// a buffer lowered before any sorted collection existed still reads one a later
+		// buffer builds: the interpreter's forms keep their sorted-collection arms
+		PlaygroundRepl repl = new PlaygroundRepl(NO_FILES).pick(SourceLanguage.CLOJURE);
+		assertThat(repl.eval("(defn look [m k] [(get m k) (count m) (first m)])")).isEqualTo("#'user/look");
+		assertThat(repl.eval("(look (sorted-map :b 2 :a 1) :b)")).isEqualTo("[2 2 [:a 1]]");
+	}
+
+	@Test
+	void aClojureSessionKeepsItsLastResultsAndItsLastExceptionInTheHistoryVars() {
+		// the oracle's REPL: *1, *2 and *3 hold the last three results and *e the last
+		// exception, which leaves the results alone; *repl* is true and thread-bound,
+		// *file* and *source-path* name no file, and *ns* follows an ns input
+		PlaygroundRepl repl = new PlaygroundRepl(NO_FILES).pick(SourceLanguage.CLOJURE);
+		assertThat(repl.eval("[*1 *2 *3 *e]")).isEqualTo("[nil nil nil nil]");
+		repl.eval("1");
+		repl.eval("2");
+		repl.eval("(+ 1 2)");
+		assertThat(repl.eval("[*1 *2 *3]")).isEqualTo("[3 2 1]");
+		assertThat(repl.eval("*1")).isEqualTo("[3 2 1]");
+		assertThatThrownBy(() -> repl.eval("(/ 1 0)")).hasMessageContaining("Division by zero");
+		assertThat(repl.eval("[(first *1) (ex-message *e) (class *e)]"))
+			.isEqualTo("[3 \"Divide by zero\" :java.lang.ArithmeticException]");
+		assertThatThrownBy(() -> repl.eval("(def hist-x (throw (ex-info \"in a def\" {})))"))
+			.hasMessageContaining("in a def");
+		assertThat(repl.eval("(ex-message *e)")).isEqualTo("\"in a def\"");
+		assertThat(repl.eval("[*repl* (thread-bound? #'*repl*) *file* *source-path*]"))
+			.isEqualTo("[true true \"NO_SOURCE_PATH\" \"NO_SOURCE_FILE\"]");
+		assertThat(repl.eval("(ns sess.where) [*ns* (str *ns*)]"))
+			.isEqualTo("[#object[clojure.lang.Namespace \"sess.where\"] \"sess.where\"]");
+	}
+
+	@Test
+	void aClojureSessionRefersWhatTheOraclesReplRequiresAndAFileNone() {
+		PlaygroundRepl repl = new PlaygroundRepl(NO_FILES).pick(SourceLanguage.CLOJURE);
+		repl.eval("(defn sq \"Squares.\" [x] (* x x))");
+		assertThat(repl.eval("(doc sq)")).isEqualTo("-------------------------\nuser/sq\n([x])\n  Squares.\nnil");
+		assertThat(repl.eval("(pprint {:a 1})")).isEqualTo("{:a 1}\nnil");
+		assertThatThrownBy(() -> repl.eval("(source sq)")).hasMessageContaining("clojure.repl/source is not built in");
+		assertThatThrownBy(() -> repl.run("(doc sq)")).hasMessageContaining("unknown name: doc");
+	}
+
+	@Test
+	void theClojureRunPrintsAndItsTranscriptEchoesEveryForm() {
+		PlaygroundRepl repl = new PlaygroundRepl(NO_FILES).pick(SourceLanguage.CLOJURE);
+		assertThat(repl.run("""
+				(println "hi")
+				(println (reduce + [1 2 3]))
+				""")).isEqualTo("hi\n6\n");
+		assertThat(repl.transcript("""
+				(println "hi")
+				(defn sq [x] (* x x))
+				(sq 7)
+				""")).isEqualTo("hi\nnil\n#'user/sq\n49\n");
+	}
+
+	@Test
+	void aClojureRequireReadsTheUploadedDepsEdnLikeEveryOtherRoute() {
+		// the uploads are the working directory: their deps.edn names the roots, as it
+		// does for the CLI, and the names' slashes make its directories, so a :local/root
+		// is one
+		SourceLoader loader = files(
+				Map.of("deps.edn", "{:paths [\"lib\"]}", "lib/app/x.clj", "(ns app.x) (defn f [] :from-lib)"));
+		PlaygroundRepl repl = new PlaygroundRepl(loader).pick(SourceLanguage.CLOJURE);
+		assertThat(repl.run("(require 'app.x) (println (app.x/f))")).isEqualTo(":from-lib\n");
+		assertThat(repl.eval("(require '[app.x :as x]) (x/f)")).isEqualTo(":from-lib");
+		SourceLoader local = files(Map.of("deps.edn", "{:deps {my/lib {:local/root \"lib\"}}}", "lib/deps.edn",
+				"{:paths [\"src\"]}", "lib/src/app/x.clj", "(ns app.x) (defn f [] :from-local)"));
+		assertThat(new PlaygroundRepl(local).pick(SourceLanguage.CLOJURE).eval("(require 'app.x) (app.x/f)"))
+			.isEqualTo(":from-local");
+		assertThat(new PlaygroundRepl(local).eval("(list (directory \"*.edn\") (probe-file \"lib\"))"))
+			.isEqualTo("((#P\"deps.edn\") #P\"lib/\")");
+	}
+
+	@Test
+	void theStarlarkPickKeepsItsGlobalsAndModulesAcrossBuffersAndRunsAProgram() {
+		PlaygroundRepl repl = new PlaygroundRepl(files(Map.of("sq.star", "def sq(x):\n    return x * x\n")))
+			.pick(SourceLanguage.STARLARK);
+		assertThat(repl.eval("def f(n):\n    return [n] * 2\nprint(f(1))")).isEqualTo("[1, 1]\n");
+		assertThat(repl.eval("xs = f(2)\nxs")).isEqualTo("[2, 2]");
+		assertThat(repl.eval("None")).isEmpty();
+		// a buffer stopped before its assignment: the global is checked, not missing
+		assertThatThrownBy(() -> repl.eval("z = 1 // 0; w = 1")).hasMessageContaining("floored division by zero");
+		assertThatThrownBy(() -> repl.eval("w")).hasMessageContaining("global variable w referenced before assignment");
+		assertThatThrownBy(() -> repl.eval("nope")).hasMessageContaining("undefined: nope");
+		assertThat(repl.eval("load(\"sq.star\", \"sq\")\nsq(xs[0])")).isEqualTo("4");
+		assertThat(new PlaygroundRepl(files(Map.of("sq.star", "def sq(x):\n    return x * x\n")))
+			.pick(SourceLanguage.STARLARK)
+			.run("load(\"sq.star\", \"sq\")\nprint(sq(3))\n")).isEqualTo("9\n");
+	}
+
+	@Test
+	void theJavaPickKeepsItsDeclarationsAcrossBuffersAndRunsAProgram() {
+		PlaygroundRepl repl = new PlaygroundRepl(NO_FILES).pick(SourceLanguage.JAVA);
+		assertThat(repl.eval("int twice(int n) { return 2 * n; }\nSystem.out.println(twice(2))")).isEqualTo("4\n");
+		assertThat(repl.eval("var xs = new int[] { twice(3) }")).isEqualTo("xs ==> int[1] { 6 }");
+		assertThatThrownBy(() -> repl.eval("xs[1]")).hasMessageContaining(
+				"Exception java.lang.ArrayIndexOutOfBoundsException: Index 1 out of bounds for length 1");
+		assertThat(repl.eval("String.valueOf(xs[0])")).isEqualTo("$3 ==> \"6\"");
+		assertThat(new PlaygroundRepl(NO_FILES).pick(SourceLanguage.JAVA).run("void main() { IO.println(1 + 2); }"))
+			.isEqualTo("3\n");
+		// The uploads are the source tree of a program the page reads from no file: a
+		// class it names, or a buffer of its session, is read from the upload its name
+		// spells and checked as the program's own; a resource is read from them too, by a
+		// name computed where the program runs as well.
+		PlaygroundRepl uploaded = new PlaygroundRepl(
+				files(Map.of("geo/Place.java", "package geo; public record Place(String name) { }", "Helper.java",
+						"class Helper { static int twice(int n) { return 2 * n; } }", "Bad.java",
+						"class Bad { static int unused() { return \"s\"; } }", "geo/name.txt", "é")))
+			.pick(SourceLanguage.JAVA);
+		assertThat(uploaded
+			.run("void main() throws Exception { IO.println(new geo.Place(\"x\").name() + Helper.twice(2)"
+					+ " + new String(geo.Place.class.getResourceAsStream(\"name.txt\").readAllBytes())"
+					+ " + new String(geo.Place.class.getResourceAsStream(\"NAME.TXT\".toLowerCase()).readAllBytes())); }"))
+			.isEqualTo("x4éé\n");
+		assertThat(uploaded.eval("new geo.Place(\"y\")")).isEqualTo("$1 ==> Place[name=y]");
+		assertThatThrownBy(() -> uploaded.run("void main() { Bad.unused(); }"))
+			.hasMessage("Bad.java:1:42: incompatible types: String cannot be converted to int");
+		// Where the host has one stack, a program that starts threads is handed to what
+		// runs it there; any other program, and every program of a host with threads,
+		// is the interpreter's.
+		String threaded = """
+				void main() throws InterruptedException {
+				    Thread worker = new Thread(() -> IO.println("worker"));
+				    worker.start();
+				    worker.join();
+				}
+				""";
+		List<String> handed = new ArrayList<>();
+		PlaygroundRepl oneStack = new PlaygroundRepl(NO_FILES, "", source -> {
+			handed.add(source);
+			return "compiled\n";
+		}).pick(SourceLanguage.JAVA);
+		assertThat(oneStack.run("void main() { IO.println(1 + 2); }")).isEqualTo("3\n");
+		assertThat(oneStack.run(threaded)).isEqualTo("compiled\n");
+		assertThat(handed).containsExactly(threaded);
+		assertThat(new PlaygroundRepl(NO_FILES).pick(SourceLanguage.JAVA).run(threaded)).isEqualTo("worker\n");
+		// A buffer of its session starts no thread there, and says so; the other
+		// languages of the page keep theirs.
+		assertThatThrownBy(() -> oneStack.eval("new Thread(() -> IO.println(\"worker\")).start()"))
+			.hasMessageContaining("a thread is started only by a whole program in the browser");
+		// The page has no file system: a program or a buffer that reaches a file is
+		// refused before it runs; one that only computes paths runs.
+		assertThatThrownBy(() -> oneStack.run("""
+				void main() throws Exception { IO.println(java.nio.file.Files.readString(java.nio.file.Path.of("x"))); }
+				""")).hasMessage("a file is read or written only outside the browser: the page has no file system"
+				+ " (run the program with rontolisp on a host)");
+		assertThatThrownBy(() -> oneStack.eval("new java.io.File(\"x\").exists()"))
+			.hasMessageContaining("a file is read or written only outside the browser");
+		assertThat(oneStack.run("void main() { IO.println(java.nio.file.Path.of(\"a\", \"b/\").resolve(\"..\")); }"))
+			.isEqualTo("a/b/..\n");
+		assertThat(oneStack.pick(SourceLanguage.COMMON_LISP)
+			.eval("(rontolisp:join-thread (rontolisp:make-thread (lambda () 42)))")).isEqualTo("42");
+	}
+
+	@Test
+	void aFailureCarriesTheConditionsOwnText() {
+		PlaygroundRepl repl = new PlaygroundRepl(NO_FILES).pick(SourceLanguage.SCHEME);
+		assertThatThrownBy(() -> repl.eval("(3 4)")).hasMessageContaining("The object is not applicable: 3");
+		assertThat(repl.eval("(+ 1 1)")).isEqualTo("2");
+	}
+
+	@Test
+	void exitEndsTheBufferKeepingItsOutput() {
+		PlaygroundRepl repl = new PlaygroundRepl(NO_FILES).pick(SourceLanguage.SCHEME);
+		assertThat(repl.eval("(display \"before\") (exit 3) (display \"after\")")).isEqualTo("before");
+		assertThat(repl.run("(display \"before\") (exit 3) (display \"after\")")).isEqualTo("before");
+	}
+
+	@Test
+	void aProgramReadsItsStandardInputAndTheFilesItIncludes() {
+		PlaygroundRepl repl = new PlaygroundRepl(
+				files(Map.of("greet.scm", "(define (greet name) (string-append \"hello, \" name))")),
+				"first line\nsecond\n")
+			.pick(SourceLanguage.SCHEME);
+		assertThat(repl.run("""
+				(include "greet.scm")
+				(display (greet (read-line)))
+				(newline)
+				(write (read-line))
+				""")).isEqualTo("hello, first line\n\"second\"");
+	}
+
+	@Test
+	void aTranscriptEchoesEveryFormAfterItsOwnOutput() {
+		PlaygroundRepl repl = new PlaygroundRepl(NO_FILES).pick(SourceLanguage.SCHEME);
+		assertThat(repl.transcript("""
+				(+ 1 2) ; => 3
+				(define x 10)
+				(display "x is ")
+				(* x x) ; => 100
+				(values 1 2)
+				""")).isEqualTo("3\nx is \n100\n1\n2\n");
+	}
+
+	@Test
+	void theCompileButtonsReadThePickedLanguageWithItsFiles() {
+		SourceLoader loader = files(Map.of("sq.scm", "(define (sq x) (* x x))"));
+		assertThat(SourceLanguage.SCHEME.readStrict("(include \"sq.scm\") (display (sq 3))", Features.JVM, loader))
+			.isNotEmpty();
+		assertThatThrownBy(() -> SourceLanguage.COMMON_LISP.readStrict("#.(+ 1 2)", Features.JVM, loader))
+			.hasMessageContaining("#.");
+	}
+
+}

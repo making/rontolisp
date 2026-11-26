@@ -1,0 +1,56 @@
+# 構文と定義
+
+束縛と制御のフォームです。定義はファイル全体の事前走査で決まるので、定義は後で定義される名前を使えます。実関数を持つ値束縛の head 位置呼び出しは値セルの funcall に、それ以外の変数は prelude ディスパッチャ経由になります（実関数は funcall し、コレクションは呼び出します）。
+
+| Name | Example | Result |
+|---|---|---|
+| `def` | `(do (def x 5) nil)` | `nil` |
+| `defn` | `(do (defn sq [x] (* x x)) (sq 7))` | `49` |
+| `defn-` | `(do (defn- sq [x] (* x x)) (sq 7))` | `49` |
+| `definline` | `(do (definline sq [x] (* x x)) (sq 7))` | `49` |
+| `defonce` | `(do (defonce x 5) x)` | `5` |
+| `fn` | `((fn [a b] (+ a b)) 1 2)` | `3` |
+| `let` | `(let [x 1 y x] y)` | `1` |
+| `seq-to-map-for-destructuring` | `(seq-to-map-for-destructuring (list :a 1 :b 2))` | `{:a 1, :b 2}` |
+| `letfn` | `(letfn [(f [x] x)] (f 1))` | `1` |
+| `loop` | `(loop [i 0] (if (= i 3) i (recur (inc i))))` | `3` |
+| `recur` | `(loop [a 0] (if (= a 2) a (recur (inc a))))` | `2` |
+| `if` | `(if (< 1 2) :yes :no)` | `:yes` |
+| `when` | `(when true 1 2)` | `2` |
+| `cond` | `(cond (= 1 2) :one (= 1 1) :two :else :other)` | `:two` |
+| `do` | `(do 1 2 3)` | `3` |
+| `and` | `(and 1 2 3)` | `3` |
+| `or` | `(or nil nil 3)` | `3` |
+| `not` | `(not nil)` | `true` |
+| `quote` | `(quote (a b c))` | `(a b c)` |
+| `with-meta` | `(with-meta [1] {:a 1})` | `[1]` |
+| `var` | `(do (def x 5) #'x)` | `#'user/x` |
+| `var-get` | `(do (def x 5) (var-get #'x))` | `5` |
+| `alter-var-root` | `(do (def x 5) (alter-var-root #'x inc))` | `6` |
+| `alter-meta!` | `(do (def x 5) (alter-meta! #'x assoc :k 1) (:k (meta #'x)))` | `1` |
+| `reset-meta!` | `(do (def x 5) (reset-meta! #'x {:k 2}))` | `{:k 2}` |
+| `resolve` | `(resolve 'inc)` | `#'clojure.core/inc` |
+| `find-var` | `(find-var 'clojure.core/inc)` | `#'clojure.core/inc` |
+| `test` | `(do (defn ^{:test (fn [] nil)} t []) (test #'t))` | `:ok` |
+| `comment` | `(comment (anything at all))` | `nil` |
+| `declare` | `(declare later)` | `nil` |
+| `when-let` | `(when-let [x 1] (+ x 10))` | `11` |
+| `if-let` | `(if-let [x nil] 1 :none)` | `:none` |
+| `when-not` | `(when-not false :ran)` | `:ran` |
+| `if-not` | `(if-not nil :t :e)` | `:t` |
+| `when-first` | `(when-first [x [1 2]] x)` | `1` |
+| `if-some` | `(if-some [x false] [x] :none)` | `[false]` |
+| `when-some` | `(when-some [x nil] :body)` | `nil` |
+| `case` | `(case 2 1 :one (2 3) :few :many)` | `:few` |
+| `condp` | `(condp < 5 10 :big 3 :mid)` | `:mid` |
+| `while` | `(let [a (atom 0)] (while (< @a 3) (swap! a inc)) @a)` | `3` |
+| `locking` | `(locking :k (+ 1 2))` | `3` |
+| `with-redefs` | `(do (defn f [] 1) (with-redefs [f (fn [] 2)] (f)))` | `2` |
+| `binding` | `(do (def ^:dynamic *d* 1) (binding [*d* 2] *d*))` | `2` |
+| `with-bindings` | `(do (def ^:dynamic *d* 1) (with-bindings {#'*d* 2} *d*))` | `2` |
+| `push-thread-bindings` | `(do (push-thread-bindings {#'*print-length* 1}) (try (pr-str [1 2]) (finally (pop-thread-bindings))))` | `"[1 ...]"` |
+| `bound-fn` | `(do (def ^:dynamic *d* 1) (binding [*d* 2] ((bound-fn [] *d*))))` | `2` |
+| `with-local-vars` | `(with-local-vars [a 1] @a)` | `1` |
+| `time` | `(time (+ 1 2))` | `3` |
+| `with-loading-context` | `(with-loading-context (+ 1 2))` | `3` |
+| `with-precision` | `(with-precision 10 (/ 1 3))` | `1/3` |

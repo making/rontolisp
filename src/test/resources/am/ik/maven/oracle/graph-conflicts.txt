@@ -1,0 +1,36 @@
+# collect test.resolve:system-wins:1 test.resolve:unknown-scope:1 test.resolve:shared:1 test.resolve:cycle:1 test.resolve:reloc-conflict:1
+test.resolve:system-wins:jar::1 scope=compile optional=null
+  test.resolve:s-holder:jar::1 scope=compile optional=null
+    test.resolve:sysdep:jar::1 scope=system optional=null
+  test.resolve:q:jar::1 scope=compile optional=null
+    test.resolve:q2:jar::1 scope=compile optional=null
+      test.resolve:sysdep:jar::1 scope=compile optional=null
+test.resolve:unknown-scope:jar::1 scope=compile optional=null
+  test.resolve:rt:jar::1 scope=runtime optional=null
+    test.resolve:y:jar::1 scope=compile optional=null
+      test.resolve:y-child:jar::1 scope=compile optional=null
+  test.resolve:odd-holder:jar::1 scope=compile optional=null
+    test.resolve:odd:jar::1 scope=odd optional=null
+test.resolve:shared:jar::1 scope=compile optional=null
+  test.resolve:s1:jar::1 scope=compile optional=null
+    test.resolve:common:jar::1 scope=compile optional=null
+      test.resolve:w:jar::1 scope=compile optional=null
+      test.resolve:v:jar::1 scope=compile optional=null
+  test.resolve:s2:jar::1 scope=compile optional=null
+    test.resolve:s3:jar::1 scope=compile optional=null
+      test.resolve:common:jar::1 scope=compile optional=null
+        test.resolve:w:jar::1 scope=compile optional=null
+        test.resolve:v:jar::1 scope=compile optional=null
+  test.resolve:t:jar::1 scope=compile optional=null
+    test.resolve:u:jar::1 scope=compile optional=null
+      test.resolve:w:jar::2 scope=compile optional=null
+      test.resolve:v:jar::2 scope=compile optional=null
+test.resolve:cycle:jar::1 scope=compile optional=null
+  test.resolve:cy-a:jar::1 scope=compile optional=null
+    test.resolve:cy-b:jar::1 scope=compile optional=null
+      test.resolve:cy-a:jar::2 scope=compile optional=null cycle
+      test.resolve:cy-c:jar::1 scope=compile optional=null
+test.resolve:reloc-conflict:jar::1 scope=compile optional=null
+  test.resolve:r-new:jar::1 scope=compile optional=null relocations=[test.resolve:r-old:jar:1]
+  test.resolve:p:jar::1 scope=compile optional=null
+    test.resolve:r-old:jar::2 scope=compile optional=null

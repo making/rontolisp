@@ -1,0 +1,23 @@
+as sent: Booking[guest=Ann, room=TWIN, checkIn=2026-12-24, nights=3]
+a long: Booking[guest=Ken, room=SUITE, checkIn=2027-01-02, nights=14]
+a double: Booking[guest=Ken, room=SUITE, checkIn=2027-01-02, nights=2]
+a fraction: 1 violations
+  "nights" must be of type integer
+other types: 4 violations
+  "guest" must be of type string
+  "room" must be one of the following values: [SINGLE, TWIN, SUITE]
+  "checkIn" must be of type LocalDate
+  "nights" must be of type integer
+out of limits: 3 violations
+  "guest" must not be blank
+  "checkIn" has to be after or equals to 2026-12-01
+  "nights" must be less than or equal to 14
+nothing: 4 violations
+  "guest" is required
+  "room" is required
+  "checkIn" is required
+  "nights" is required
+a form: Booking[guest=Ann, room=SINGLE, checkIn=2026-12-31, nights=2]
+a form's typo: 2 violations
+  "checkIn" must be of type LocalDate
+  "nights" must be of type integer

@@ -1,0 +1,907 @@
+package am.ik.rontolisp.codegen.jvm;
+
+import java.lang.classfile.constantpool.MethodRefEntry;
+import java.util.List;
+
+import org.jspecify.annotations.Nullable;
+
+import am.ik.jvm.MethodCode;
+import am.ik.rontolisp.ArrayElementTypes;
+import am.ik.rontolisp.ArrayGrowth;
+import am.ik.rontolisp.ClConstants;
+import am.ik.rontolisp.LispBFloat16Array;
+import am.ik.rontolisp.LispChar;
+import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispDoubleFloatArray;
+import am.ik.rontolisp.LispFloatArray;
+import am.ik.rontolisp.LispInteger;
+import am.ik.rontolisp.LispSingleFloatArray;
+import am.ik.rontolisp.macro.LispMacroExpander;
+import am.ik.rontolisp.LispNames;
+import am.ik.rontolisp.LispNil;
+import am.ik.rontolisp.LispSymbol;
+import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.compiler.OperandTypes;
+
+/**
+ * Compiles the array built-ins ({@code make-array}, {@code aref}, {@code %aset}, and the
+ * fill-pointer surface). Each pushes its arguments and calls the matching static runtime
+ * helper emitted by {@link JvmArrayRuntimeBuilder}. {@code make-array} resolves the
+ * {@code :initial-element}/{@code :fill-pointer}/{@code :adjustable} keywords at compile
+ * time (their value expressions are compiled and evaluated at runtime);
+ * {@code aref}/{@code %aset} pick a helper by the number of subscripts: ranks 1 and 2
+ * call dedicated fast helpers, higher ranks package the subscripts into an
+ * {@code Object[]} for the generic {@code _arefN}/{@code _asetN}.
+ */
+final class JvmArrayCompiler {
+
+	private JvmArrayCompiler() {
+	}
+
+	// The packed float-array dispatch helper name when the program uses packed arrays,
+	// otherwise the general array helper. Both share the same descriptor, so only the
+	// invoked method name changes; the default build (no packed arrays) is
+	// byte-identical.
+	private static String fvOr(JvmLispCompiler.Ctx ctx, String fvName, String generalName) {
+		return ctx.usesFloatArray ? fvName : generalName;
+	}
+
+	// The rank-1 dispatch chain head: the packed integer-vector helper when the program
+	// uses packed integer vectors (it delegates iv -> fv -> general internally), else
+	// the fv/general choice. All three tiers share the same descriptor.
+	private static String ivOr(JvmLispCompiler.Ctx ctx, String ivName, String fvName, String generalName) {
+		return ctx.usesIntArray ? ivName : fvOr(ctx, fvName, generalName);
+	}
+
+	// Emits an invokestatic _ivRequireGeneral / _fvRequireGeneral guard rejecting a
+	// packed integer vector or packed float array with a clear "not applicable" error
+	// (the fill-pointer / adjustability / displacement surface never applies to either --
+	// they are always a simple array, mirroring the interpreter's requireGeneralArray;
+	// the wasm backend traps on the same shapes). Any other value passes through
+	// unchanged. A no-op unless the program uses the matching packed representation,
+	// keeping the default build byte-identical; the two checks chain (each returns its
+	// argument unless it throws) when a program uses both.
+	private static void emitRequireGeneralIfPacked(JvmLispCompiler.Ctx ctx, String className) {
+		if (ctx.usesIntArray) {
+			invokeHelper(ctx, className, JvmIntArrayRuntimeBuilder.REQUIRE_GENERAL,
+					JvmIntArrayRuntimeBuilder.REQUIRE_GENERAL_DESC);
+		}
+		if (ctx.usesFloatArray) {
+			invokeHelper(ctx, className, JvmFloatArrayRuntimeBuilder.REQUIRE_GENERAL,
+					JvmFloatArrayRuntimeBuilder.REQUIRE_GENERAL_DESC);
+		}
+	}
+
+	/**
+	 * Runs the array operand on the stack through the program's {@code _jckarr} in a
+	 * {@code java:} program: a host {@code ArrayList} a call answered is no Lisp array,
+	 * and every accessor below reads its operand by the class alone, so it is refused
+	 * here with the interpreter's {@code OP expects an array, got X}. A program without
+	 * {@code java:} holds no host list and emits nothing.
+	 * @param ctx the compilation context, the operand on top of its stack
+	 * @param lispName the operator the refusal names
+	 */
+	static void emitHostArrayGuard(JvmLispCompiler.Ctx ctx, String lispName) {
+		JvmJavaSites javaSites = ctx.javaSites;
+		if (javaSites == null) {
+			return;
+		}
+		// The operator the refusal names, or null (ACONST_NULL) for an unnamed one.
+		String reported = OperandTypes.reportedOperator(lispName);
+		if (reported == null) {
+			ctx.body.aconst_null();
+		}
+		else {
+			JvmEmitHelper.compileUnspelledLiteral(reported, ctx);
+		}
+		ctx.body.invokestatic(javaSites.direct().arrayGuard());
+	}
+
+	static void compileMake(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		List<LispVal> args = cons.toList();
+		if (args.size() < 2) {
+			throw new UnsupportedOperationException("make-array expects at least 1 argument");
+		}
+		LispVal displacedTo = findKeywordValue(args, LispNames.DISPLACED_TO_KEYWORD);
+		if (displacedTo != null) {
+			// A displaced view owns no storage, so there is nothing for
+			// :initial-element / :initial-contents to fill -- the one combination CLHS
+			// forbids. :fill-pointer and :adjustable ARE allowed and travel into the
+			// view's own header slots.
+			if (findKeywordValue(args, LispNames.INITIAL_ELEMENT_KEYWORD) != null
+					|| findKeywordValue(args, LispNames.INITIAL_CONTENTS_KEYWORD) != null) {
+				throw new UnsupportedOperationException(
+						"make-array: :displaced-to cannot be combined with :initial-element/:initial-contents");
+			}
+			JvmExprCompiler.compileExpr(args.get(1), ctx, className);
+			JvmExprCompiler.compileExpr(displacedTo, ctx, className);
+			compileKeywordValueOrNull(findKeywordValue(args, LispNames.DISPLACED_INDEX_OFFSET_KEYWORD), ctx, className);
+			compileKeywordValueOrNull(findKeywordValue(args, LispNames.FILL_POINTER_KEYWORD), ctx, className);
+			compileKeywordValueOrNull(findKeywordValue(args, LispNames.ADJUSTABLE_KEYWORD), ctx, className);
+			invokeHelper(ctx, className, JvmArrayRuntimeBuilder.MAKE_DISPLACED,
+					JvmArrayRuntimeBuilder.MAKE_DISPLACED_DESC);
+			return;
+		}
+		if (findKeywordValue(args, LispNames.DISPLACED_INDEX_OFFSET_KEYWORD) != null) {
+			throw new UnsupportedOperationException("make-array: :displaced-index-offset requires :displaced-to");
+		}
+		LispVal fillPointer = findKeywordValue(args, LispNames.FILL_POINTER_KEYWORD);
+		LispVal adjustable = findKeywordValue(args, LispNames.ADJUSTABLE_KEYWORD);
+		LispVal initValue = findKeywordValue(args, LispNames.INITIAL_ELEMENT_KEYWORD);
+		// Resolved ONCE, through the deftype registry: every recognizer below sees the
+		// expansion a user alias stands for, so (make-array n :element-type 'octet)
+		// picks the same representation as the literal '(unsigned-byte 8) spelling.
+		LispVal elementType = LispMacroExpander
+			.resolveElementTypeAlias(findKeywordValue(args, LispNames.ELEMENT_TYPE_KEYWORD), ctx.closRegistry);
+		LispVal runtimeElementTypeLowering = LispMacroExpander.lowerRuntimeElementTypeMakeArray(cons,
+				ctx.functions::containsKey);
+		if (runtimeElementTypeLowering != null) {
+			// A :element-type held in a VARIABLE picks the representation at run time,
+			// since no expansion-time recognizer can see it: a call to the
+			// %make-array-et prelude helper where that defun is present, the whole
+			// seven-arm dispatch inline where it is not.
+			JvmExprCompiler.compileExpr(runtimeElementTypeLowering, ctx, className);
+			return;
+		}
+		LispVal charContentsLowering = LispMacroExpander.lowerCharacterInitialContentsMakeArray(cons);
+		if (charContentsLowering != null) {
+			// A rank-1 character array built from :initial-contents is a fresh string
+			// copy of the contents (a mutable character vector normalizes through the
+			// lowering's subseq).
+			JvmExprCompiler.compileExpr(charContentsLowering, ctx, className);
+			return;
+		}
+		LispVal contentsLowering = LispMacroExpander.lowerInitialContentsMakeArray(cons);
+		if (contentsLowering != null) {
+			// :initial-contents lowers to the allocation plus an element-wise fill.
+			JvmExprCompiler.compileExpr(contentsLowering, ctx, className);
+			return;
+		}
+		if (LispMacroExpander.isCharacterElementType(elementType)) {
+			// A rank-1 :element-type 'character array is a mutable character vector,
+			// marked by _charVecMake's length-4 header and normalized on demand into the
+			// quote-framed runtime string (_strv). MUTABILITY is the marker's, not the
+			// fill pointer's: aref reads and setf-aref writes reach every slot of a
+			// character vector with no fill pointer at all -- uax-15's
+			// from-unicode-string is (make-array N :element-type 'character) followed by
+			// (setf (aref ...) ch), and it needs the representation, not a fill pointer.
+			// So a MISSING :fill-pointer leaves the slot nil, exactly as the general
+			// array's does: the header's fill-pointer slot is what says the value is NOT
+			// a simple string (_strv falls back to dims[0], and %simple-array-p reads
+			// the same slot). Defaulting it to the capacity instead made
+			// (array-has-fill-pointer-p (make-string 3)) answer t here and nil on the
+			// other three backends and in SBCL. The rank is a runtime fact, so
+			// _charVecMake does the rank-1 test and falls back to the general
+			// representation above it (as _ivMake does).
+			JvmExprCompiler.compileExpr(args.get(1), ctx, className);
+			compileKeywordValueOrNull(initValue != null ? initValue : new LispChar(' '), ctx, className);
+			compileKeywordValueOrNull(fillPointer, ctx, className);
+			compileKeywordValueOrNull(adjustable, ctx, className);
+			invokeHelper(ctx, className, JvmArrayRuntimeBuilder.CHAR_VEC_MAKE, JvmArrayRuntimeBuilder.MAKE_DESC);
+			return;
+		}
+		int packedIntWidth = packedIntElementWidth(elementType);
+		if (ctx.usesIntArray && packedIntWidth > 0 && fillPointer == null && adjustable == null) {
+			// A plain :element-type '(unsigned-byte 8|16|32) array (no fill pointer /
+			// adjustable / displacement) is a packed long[] with a width header:
+			// _ivMake(dims, init, width) allocates it when dims designates rank 1 and
+			// falls back to the general representation for rank n (the interpreter's
+			// runtime rank check).
+			JvmExprCompiler.compileExpr(args.get(1), ctx, className);
+			compileKeywordValueOrNull(initValue, ctx, className);
+			JvmEmitHelper.emitIntConst(ctx, packedIntWidth);
+			invokeHelper(ctx, className, JvmIntArrayRuntimeBuilder.MAKE, JvmIntArrayRuntimeBuilder.MAKE_DESC);
+			return;
+		}
+		LispFloatArray packedProto = ctx.usesFloatArray ? LispFloatArray.prototypeFor(elementType) : null;
+		if (packedProto != null && fillPointer == null && adjustable == null) {
+			// A plain :element-type naming a packed float width (no fill pointer /
+			// adjustable / displacement) is a packed array on the width's own backing:
+			// the width's _*Make(dims, init) allocates it and fills with the coerced
+			// (narrowed to the width where it is narrower) init (default 0.0 inside the
+			// helper). The switch covers the PERMITS with no default arm, so the next
+			// width is a compile error here rather than a silent fall to the general
+			// boxed path (.kb/vec.md, "Asking a packed array its width").
+			JvmExprCompiler.compileExpr(args.get(1), ctx, className);
+			compileKeywordValueOrNull(initValue, ctx, className);
+			// Through make-array's wrapper: an initial element that is no real is
+			// _dbl's unnamed type-error, which the wrapper names as the interpreter's
+			// built-in seam does.
+			switch (packedProto) {
+				case LispBFloat16Array ignored -> invokeNamedHelper(ctx, className,
+						JvmFloatArrayRuntimeBuilder.BFLOAT16_MAKE, JvmFloatArrayRuntimeBuilder.MAKE_DESC);
+				case LispSingleFloatArray ignored -> invokeNamedHelper(ctx, className,
+						JvmFloatArrayRuntimeBuilder.SINGLE_MAKE, JvmFloatArrayRuntimeBuilder.MAKE_DESC);
+				case LispDoubleFloatArray ignored -> invokeNamedHelper(ctx, className, JvmFloatArrayRuntimeBuilder.MAKE,
+						JvmFloatArrayRuntimeBuilder.MAKE_DESC);
+			}
+			return;
+		}
+		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
+		// A declared element type that reaches the GENERAL representation -- a packed
+		// one combined with :fill-pointer / :adjustable, an (unsigned-byte n) request in
+		// a program with no packed-integer gate -- is REMEMBERED on the array, and its
+		// own zero is what an unsupplied element takes rather than nil.
+		int elementTypeCode = ArrayElementTypes.codeOf(elementType);
+		if (initValue == null) {
+			initValue = ArrayElementTypes.defaultElement(elementTypeCode);
+		}
+		compileKeywordValueOrNull(initValue, ctx, className);
+		compileKeywordValueOrNull(findKeywordValue(args, LispNames.FILL_POINTER_KEYWORD), ctx, className);
+		compileKeywordValueOrNull(findKeywordValue(args, LispNames.ADJUSTABLE_KEYWORD), ctx, className);
+		if (elementTypeCode == ArrayElementTypes.T) {
+			invokeHelper(ctx, className, JvmArrayRuntimeBuilder.MAKE, JvmArrayRuntimeBuilder.MAKE_DESC);
+			return;
+		}
+		JvmEmitHelper.emitIntConst(ctx, elementTypeCode);
+		invokeHelper(ctx, className, JvmArrayRuntimeBuilder.MAKE_TYPED, JvmArrayRuntimeBuilder.MAKE_TYPED_DESC);
+	}
+
+	static void compileArrayBecome(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		// (%array-become old new): adjust old in place to new's shape/contents.
+		List<LispVal> args = cons.toList();
+		if (args.size() != 3) {
+			throw new UnsupportedOperationException(
+					"%array-become expects 2 arguments, got " + (args.size() - 1) + " argument(s)");
+		}
+		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
+		emitRequireGeneralIfPacked(ctx, className);
+		JvmExprCompiler.compileExpr(args.get(2), ctx, className);
+		emitRequireGeneralIfPacked(ctx, className);
+		invokeHelper(ctx, className, JvmArrayRuntimeBuilder.ARRAY_BECOME, JvmArrayRuntimeBuilder.ARRAY_BECOME_DESC);
+	}
+
+	static void compileArrayBecomeDisplaced(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		// (%array-become-displaced a dims target offset fp): turn a (an adjustable
+		// array, guaranteed non-packed by the expansion's adjustable-array-p guard) in
+		// place into a displaced view over target and return a.
+		List<LispVal> args = cons.toList();
+		if (args.size() != 6) {
+			throw new UnsupportedOperationException(
+					"%array-become-displaced expects 5 arguments, got " + (args.size() - 1) + " argument(s)");
+		}
+		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
+		JvmExprCompiler.compileExpr(args.get(2), ctx, className);
+		JvmExprCompiler.compileExpr(args.get(3), ctx, className);
+		JvmExprCompiler.compileExpr(args.get(4), ctx, className);
+		JvmExprCompiler.compileExpr(args.get(5), ctx, className);
+		invokeHelper(ctx, className, JvmArrayRuntimeBuilder.ARRAY_BECOME_DISPLACED,
+				JvmArrayRuntimeBuilder.ARRAY_BECOME_DISPLACED_DESC);
+	}
+
+	static void compileArrayAdoptElementType(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		// (%array-adopt-element-type new old): make the freshly built copy remember the
+		// adjusted array's element type and answer the copy. adjust-array's expansion
+		// wraps its make-array in this, since CLHS does not change the element type and
+		// a non-adjustable adjustment returns a fresh array.
+		List<LispVal> args = cons.toList();
+		if (args.size() != 3) {
+			throw new UnsupportedOperationException(
+					"%array-adopt-element-type expects 2 arguments, got " + (args.size() - 1) + " argument(s)");
+		}
+		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
+		JvmExprCompiler.compileExpr(args.get(2), ctx, className);
+		invokeHelper(ctx, className, JvmArrayRuntimeBuilder.ADOPT_ELEMENT_TYPE,
+				JvmArrayRuntimeBuilder.ADOPT_ELEMENT_TYPE_DESC);
+	}
+
+	static void compileArrayJavaComponent(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		// (%array-java-component array) reads the Java array component the vector
+		// stands for; (%array-java-component array name) remembers it. The two halves
+		// are one operator so the Clojure front end's aclone can carry a component over
+		// without a second internal name.
+		List<LispVal> args = cons.toList();
+		if (args.size() == 2) {
+			JvmExprCompiler.compileExpr(args.get(1), ctx, className);
+			invokeHelper(ctx, className, JvmArrayRuntimeBuilder.JAVA_COMPONENT,
+					JvmArrayRuntimeBuilder.JAVA_COMPONENT_DESC);
+			return;
+		}
+		if (args.size() == 3) {
+			JvmExprCompiler.compileExpr(args.get(1), ctx, className);
+			JvmExprCompiler.compileExpr(args.get(2), ctx, className);
+			invokeHelper(ctx, className, JvmArrayRuntimeBuilder.SET_JAVA_COMPONENT,
+					JvmArrayRuntimeBuilder.SET_JAVA_COMPONENT_DESC);
+			return;
+		}
+		throw new UnsupportedOperationException(
+				"%array-java-component expects 1 or 2 arguments, got " + (args.size() - 1) + " argument(s)");
+	}
+
+	static void compileArrayDefaultElement(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		// (%array-default-element array): the element an unsupplied slot of the array
+		// takes, i.e. its remembered element type's own zero (nil when it remembers
+		// nothing). adjust-array's expansion passes it as the :initial-element it was
+		// not given.
+		compileUnary(cons, ctx, className, LispNames.ARRAY_DEFAULT_ELEMENT, JvmArrayRuntimeBuilder.DEFAULT_ELEMENT,
+				JvmArrayRuntimeBuilder.DEFAULT_ELEMENT_DESC);
+	}
+
+	static void compileDispTarget(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		// array-displacement's primary value, reported under its name
+		// (OperandTypes.reportedOperator): the one operator that reads it.
+		compileUnary(cons, ctx, className, LispNames.ARRAY_DISP_TARGET, JvmArrayRuntimeBuilder.DISP_TARGET,
+				JvmArrayRuntimeBuilder.DISP_TARGET_DESC, true);
+	}
+
+	static void compileDispOffset(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		compileUnary(cons, ctx, className, LispNames.ARRAY_DISP_OFFSET, JvmArrayRuntimeBuilder.DISP_OFFSET,
+				JvmArrayRuntimeBuilder.DISP_OFFSET_DESC);
+	}
+
+	static void compileArrayUndisplace(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		compileUnary(cons, ctx, className, LispNames.ARRAY_UNDISPLACE, JvmArrayRuntimeBuilder.UNDISPLACE,
+				JvmArrayRuntimeBuilder.UNDISPLACE_DESC);
+	}
+
+	static void compileFillPointer(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		List<LispVal> args = cons.toList();
+		if (args.size() != 2) {
+			throw new UnsupportedOperationException("fill-pointer expects 1 argument, got " + (args.size() - 1));
+		}
+		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
+		emitHostArrayGuard(ctx, LispNames.FILL_POINTER);
+		emitFillPointerVectorCheck(ctx, className);
+		invokeHelper(ctx, className, JvmArrayRuntimeBuilder.FILL_POINTER, JvmArrayRuntimeBuilder.FILL_POINTER_DESC);
+	}
+
+	static void compileSetFillPointer(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		// (%set-fill-pointer array value): the setf target of (fill-pointer array). The
+		// store runs under the operator's wrapper: a value outside [0, dimension] is its
+		// type-error.
+		List<LispVal> args = cons.toList();
+		if (args.size() != 3) {
+			throw new UnsupportedOperationException(
+					"%set-fill-pointer expects an array and a value, got " + (args.size() - 1) + " argument(s)");
+		}
+		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
+		emitHostArrayGuard(ctx, LispNames.SET_FILL_POINTER);
+		emitFillPointerVectorCheck(ctx, className);
+		JvmExprCompiler.compileExpr(args.get(2), ctx, className);
+		invokeNamedHelper(ctx, className, JvmArrayRuntimeBuilder.SET_FILL_POINTER,
+				JvmArrayRuntimeBuilder.SET_FILL_POINTER_DESC);
+	}
+
+	static void compileHasFillPointer(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		// NOT guarded by _ivRequireGeneral: a packed representation simply HAS no fill
+		// pointer, which is nil rather than an error (what CL says of a simple array,
+		// and what the interpreter has always answered). _arrayHasFillPointer already
+		// answers nil for anything that is not the general ArrayList shape.
+		compilePredicate(cons, ctx, className, LispNames.ARRAY_HAS_FILL_POINTER_P,
+				JvmArrayRuntimeBuilder.HAS_FILL_POINTER, JvmArrayRuntimeBuilder.HAS_FILL_POINTER_DESC);
+	}
+
+	static void compileAdjustableArrayP(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		// Unguarded for the same reason as array-has-fill-pointer-p above.
+		compilePredicate(cons, ctx, className, LispNames.ADJUSTABLE_ARRAY_P, JvmArrayRuntimeBuilder.ADJUSTABLE_ARRAY_P,
+				JvmArrayRuntimeBuilder.ADJUSTABLE_ARRAY_P_DESC);
+	}
+
+	static void compileVectorPush(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		// (vector-push value vector)
+		List<LispVal> args = cons.toList();
+		if (args.size() != 3) {
+			throw new UnsupportedOperationException(
+					"vector-push expects a value and a vector, got " + (args.size() - 1) + " argument(s)");
+		}
+		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
+		JvmExprCompiler.compileExpr(args.get(2), ctx, className);
+		emitHostArrayGuard(ctx, LispNames.VECTOR_PUSH);
+		emitFillPointerVectorCheck(ctx, className);
+		invokeHelper(ctx, className, JvmArrayRuntimeBuilder.VECTOR_PUSH, JvmArrayRuntimeBuilder.VECTOR_PUSH_DESC);
+	}
+
+	static void compileVectorPop(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		List<LispVal> args = cons.toList();
+		if (args.size() != 2) {
+			throw new UnsupportedOperationException("vector-pop expects 1 argument, got " + (args.size() - 1));
+		}
+		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
+		emitHostArrayGuard(ctx, LispNames.VECTOR_POP);
+		emitFillPointerVectorCheck(ctx, className);
+		invokeHelper(ctx, className, JvmArrayRuntimeBuilder.VECTOR_POP, JvmArrayRuntimeBuilder.VECTOR_POP_DESC);
+	}
+
+	static void compileVectorPushExtend(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		// (vector-push-extend value vector [extension])
+		List<LispVal> args = cons.toList();
+		if (args.size() < 3 || args.size() > 4) {
+			throw new UnsupportedOperationException(
+					"vector-push-extend expects 2 or 3 arguments, got " + (args.size() - 1));
+		}
+		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
+		JvmExprCompiler.compileExpr(args.get(2), ctx, className);
+		emitHostArrayGuard(ctx, LispNames.VECTOR_PUSH_EXTEND);
+		emitFillPointerVectorCheck(ctx, className);
+		if (args.size() == 4) {
+			JvmExprCompiler.compileExpr(args.get(3), ctx, className);
+		}
+		else {
+			// The missing optional argument, as the "not supplied" sentinel the helper
+			// turns into the shared default growth policy (am.ik.rontolisp.ArrayGrowth).
+			JvmEmitHelper.compileLong(ArrayGrowth.NO_EXTENSION, ctx);
+		}
+		invokeHelper(ctx, className, JvmArrayRuntimeBuilder.VECTOR_PUSH_EXTEND,
+				JvmArrayRuntimeBuilder.VECTOR_PUSH_EXTEND_DESC);
+	}
+
+	// A unary array PREDICATE: the same shape as compileUnary without the packed guard,
+	// for the two questions a packed array answers nil to instead of refusing. A value
+	// that is no array at all is the predicate's type-error.
+	private static void compilePredicate(LispCons cons, JvmLispCompiler.Ctx ctx, String className, String lispName,
+			String helper, String desc) {
+		List<LispVal> args = cons.toList();
+		if (args.size() != 2) {
+			throw new UnsupportedOperationException(lispName + " expects 1 argument, got " + (args.size() - 1));
+		}
+		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
+		emitHostArrayGuard(ctx, lispName);
+		emitArrayOperandCheck(ctx, className);
+		invokeHelper(ctx, className, helper, desc);
+	}
+
+	private static void compileUnary(LispCons cons, JvmLispCompiler.Ctx ctx, String className, String lispName,
+			String helper, String desc) {
+		compileUnary(cons, ctx, className, lispName, helper, desc, false);
+	}
+
+	// checked: the operand is a user-facing operator's, so a value that is no array is
+	// that operator's type-error (emitArrayOperandCheck) rather than the helper's
+	// datum-less cast failure; the internal helpers' operands are arrays by
+	// construction.
+	private static void compileUnary(LispCons cons, JvmLispCompiler.Ctx ctx, String className, String lispName,
+			String helper, String desc, boolean checked) {
+		List<LispVal> args = cons.toList();
+		if (args.size() != 2) {
+			throw new UnsupportedOperationException(lispName + " expects 1 argument, got " + (args.size() - 1));
+		}
+		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
+		emitHostArrayGuard(ctx, lispName);
+		if (checked) {
+			emitArrayOperandCheck(ctx, className);
+		}
+		// Every unary caller is part of the fill-pointer / adjustability / displacement
+		// surface, none of which applies to a packed integer vector.
+		emitRequireGeneralIfPacked(ctx, className);
+		invokeHelper(ctx, className, helper, desc);
+	}
+
+	/**
+	 * Runs the array operand on the stack through {@code _ckArr} under the innermost
+	 * operator's wrapper: any array answers itself, anything else is that operator's
+	 * {@code ARRAY} type-error ({@code JvmArrayRuntimeBuilder.CK_ARRAY}). After the
+	 * {@code java:} guard, which refuses a host {@code ArrayList} this check would pass.
+	 * @param ctx the compilation context, the operand on top of its stack
+	 * @param className the generated class
+	 */
+	private static void emitArrayOperandCheck(JvmLispCompiler.Ctx ctx, String className) {
+		invokeNamedHelper(ctx, className, JvmArrayRuntimeBuilder.CK_ARRAY, JvmArrayRuntimeBuilder.CK_ARRAY_DESC);
+	}
+
+	/**
+	 * Runs the vector operand on the stack through {@code _ckFp} under the innermost
+	 * operator's wrapper: a vector with a fill pointer answers itself, any other array is
+	 * that operator's {@code (AND VECTOR (SATISFIES ARRAY-HAS-FILL-POINTER-P))}
+	 * type-error and anything else its {@code ARRAY} one
+	 * ({@code JvmArrayRuntimeBuilder.CK_FILL_POINTER}) -- a packed array included, which
+	 * has none. After the {@code java:} guard, as {@link #emitArrayOperandCheck}.
+	 * @param ctx the compilation context, the operand on top of its stack
+	 * @param className the generated class
+	 */
+	private static void emitFillPointerVectorCheck(JvmLispCompiler.Ctx ctx, String className) {
+		invokeNamedHelper(ctx, className, JvmArrayRuntimeBuilder.CK_FILL_POINTER, JvmArrayRuntimeBuilder.CK_ARRAY_DESC);
+	}
+
+	// Compiles the keyword's value expression, or pushes null (nil) when the keyword is
+	// absent.
+	private static void compileKeywordValueOrNull(@Nullable LispVal value, JvmLispCompiler.Ctx ctx, String className) {
+		if (value != null) {
+			JvmExprCompiler.compileExpr(value, ctx, className);
+		}
+		else {
+			ctx.body.aconst_null();
+		}
+	}
+
+	static void compileAref(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		List<LispVal> args = cons.toList();
+		// Every argument form runs before anything is checked, as CL evaluates a call's
+		// arguments: the array expression once (left on the stack for the read, its
+		// reference kept in a temp), then each subscript, checked as an integer where it
+		// is evaluated. Only then the array and its rank (emitRankCheck), and the read
+		// helper checks the bounds -- the interpreter's order (.kb/error-handling.md, "A
+		// rank mismatch"). subscriptCount is the ORIGINAL number of subscripts at this
+		// call site (0 for a bare (aref a), which reads a rank-0 array's single element),
+		// computed before any arity-specific rewriting below.
+		int subscriptCount = args.size() - 2;
+		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
+		int arrSlot = ctx.allocTemp();
+		ctx.body.dup();
+		ctx.body.astore(arrSlot);
+		if (subscriptCount == 0) {
+			// (aref a): a rank-0 array holds its one element at row-major index 0, so
+			// the empty Horner fold is the constant 0 (the arm WasmArrayCompiler has).
+			JvmExprCompiler.compileExpr(new LispInteger(0), ctx, className);
+			emitRankCheck(ctx, className, arrSlot, LispNames.AREF, subscriptCount);
+			invokeNamedHelper(ctx, className, ivOr(ctx, JvmIntArrayRuntimeBuilder.AREF1,
+					JvmFloatArrayRuntimeBuilder.AREF1, JvmArrayRuntimeBuilder.AREF1),
+					JvmArrayRuntimeBuilder.AREF1_DESC);
+		}
+		else if (subscriptCount == 1) {
+			compileSubscript(args.get(2), ctx, className);
+			emitRankCheck(ctx, className, arrSlot, LispNames.AREF, subscriptCount);
+			invokeNamedHelper(ctx, className, ivOr(ctx, JvmIntArrayRuntimeBuilder.AREF1,
+					JvmFloatArrayRuntimeBuilder.AREF1, JvmArrayRuntimeBuilder.AREF1),
+					JvmArrayRuntimeBuilder.AREF1_DESC);
+		}
+		else if (subscriptCount == 2) {
+			compileSubscript(args.get(2), ctx, className);
+			compileSubscript(args.get(3), ctx, className);
+			emitRankCheck(ctx, className, arrSlot, LispNames.AREF, subscriptCount);
+			invokeNamedHelper(ctx, className,
+					fvOr(ctx, JvmFloatArrayRuntimeBuilder.AREF2, JvmArrayRuntimeBuilder.AREF2),
+					JvmArrayRuntimeBuilder.AREF2_DESC);
+		}
+		else {
+			emitSubscriptArray(args, 2, subscriptCount, ctx, className);
+			emitRankCheck(ctx, className, arrSlot, LispNames.AREF, subscriptCount);
+			invokeNamedHelper(ctx, className,
+					fvOr(ctx, JvmFloatArrayRuntimeBuilder.AREFN, JvmArrayRuntimeBuilder.AREFN),
+					JvmArrayRuntimeBuilder.AREFN_DESC);
+		}
+	}
+
+	/**
+	 * An access's check of its array, once its other arguments are evaluated and on the
+	 * stack above the array: the array, reloaded from {@code arrSlot}, goes through the
+	 * Java host array guard and {@code _*CheckRank} ({@link #emitArefArrayCheck}), and
+	 * the answer is dropped. The read or store helper the caller invokes next takes the
+	 * array from below the other arguments, as before; a hot site pays the one check call
+	 * it paid when the check came first, and a load, a store and a pop the JIT folds.
+	 * @param ctx the compile context, its operator the access's
+	 * @param className the class the helpers live in
+	 * @param arrSlot the temp holding the array
+	 * @param lispName the access the host guard names
+	 * @param subscriptCount the subscripts the site spells
+	 */
+	private static void emitRankCheck(JvmLispCompiler.Ctx ctx, String className, int arrSlot, String lispName,
+			int subscriptCount) {
+		ctx.body.aload(arrSlot);
+		emitHostArrayGuard(ctx, lispName);
+		JvmEmitHelper.compileLong(subscriptCount, ctx);
+		invokeNamedHelper(ctx, className, ivOr(ctx, JvmIntArrayRuntimeBuilder.CHECK_RANK,
+				JvmFloatArrayRuntimeBuilder.CHECK_RANK, JvmArrayRuntimeBuilder.CHECK_RANK),
+				JvmArrayRuntimeBuilder.CHECK_RANK_DESC);
+		ctx.body.pop();
+	}
+
+	/**
+	 * {@code aref}'s check of the array on the stack, which it leaves there: a Java host
+	 * array is refused, then the rank must be {@code subscriptCount} ({@code _*CheckRank}
+	 * under the operator's wrapper, which throws the operator's type-error over the
+	 * array, {@code OperandTypes.rankType}). For the fused integer tree's fallback, which
+	 * reads a rank-1 aref outside the form after computing and checking its index
+	 * ({@code JvmIntFusionCompiler}).
+	 * @param ctx the compile context, its operator the access's
+	 * @param className the class the helpers live in
+	 * @param subscriptCount the subscripts the site spells
+	 */
+	static void emitArefArrayCheck(JvmLispCompiler.Ctx ctx, String className, int subscriptCount) {
+		emitHostArrayGuard(ctx, LispNames.AREF);
+		JvmEmitHelper.compileLong(subscriptCount, ctx);
+		invokeNamedHelper(ctx, className, ivOr(ctx, JvmIntArrayRuntimeBuilder.CHECK_RANK,
+				JvmFloatArrayRuntimeBuilder.CHECK_RANK, JvmArrayRuntimeBuilder.CHECK_RANK),
+				JvmArrayRuntimeBuilder.CHECK_RANK_DESC);
+	}
+
+	static void compileRowMajorAref(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		// (row-major-aref array index): the data is stored flat right after the header,
+		// so this is exactly the rank-1 accessor, independent of the array's rank. A
+		// subscript that is no integer is ROW-MAJOR-AREF's type-error.
+		List<LispVal> args = cons.toList();
+		if (args.size() != 3) {
+			throw new UnsupportedOperationException(
+					"row-major-aref expects an array and an index, got " + (args.size() - 1) + " argument(s)");
+		}
+		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
+		emitHostArrayGuard(ctx, LispNames.ROW_MAJOR_AREF);
+		compileSubscript(args.get(2), ctx, className);
+		invokeNamedHelper(ctx, className, ivOr(ctx, JvmIntArrayRuntimeBuilder.AREF1, JvmFloatArrayRuntimeBuilder.AREF1,
+				JvmArrayRuntimeBuilder.AREF1), JvmArrayRuntimeBuilder.AREF1_DESC);
+	}
+
+	static void compileRowMajorAset(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		// (%row-major-aset array index value): flat store, the rank-1 setter, a
+		// wrong-type
+		// subscript or packed value reported as (SETF ROW-MAJOR-AREF)'s, as %aset's are.
+		List<LispVal> args = cons.toList();
+		if (args.size() != 4) {
+			throw new UnsupportedOperationException("%row-major-aset expects an array, an index and a value, got "
+					+ (args.size() - 1) + " argument(s)");
+		}
+		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
+		emitHostArrayGuard(ctx, LispNames.ROW_MAJOR_ASET);
+		compileSubscript(args.get(2), ctx, className);
+		JvmExprCompiler.compileExpr(args.get(3), ctx, className);
+		invokeNamedHelper(ctx, className, ivOr(ctx, JvmIntArrayRuntimeBuilder.ASET1, JvmFloatArrayRuntimeBuilder.ASET1,
+				JvmArrayRuntimeBuilder.ASET1), JvmArrayRuntimeBuilder.ASET1_DESC);
+	}
+
+	static void compileElementType(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		// (array-element-type array): a string answers character (a string is a vector of
+		// characters, the one character type); a general array answers what it REMEMBERS
+		// being asked for (t unless make-array was told something narrower it could not
+		// represent); otherwise the list (unsigned-byte n) for a packed integer vector
+		// and double-float/single-float for a packed float array.
+		//
+		// Only used when the program uses a packed representation or can build a typed
+		// general array; otherwise array-element-type expands to the lite
+		// (if (stringp array) 'character t). The string check runs first so a string
+		// never reaches the dispatch, the ArrayList test separates the general array
+		// from the packed ones (a packed general array is an ArrayList too, and its
+		// header is where the remembered type lives), and _ivElementType delegates the
+		// non-long[] case to _fvElementType when both packed gates are on.
+		List<LispVal> args = cons.toList();
+		if (args.size() != 2) {
+			throw new UnsupportedOperationException("array-element-type expects 1 argument, got " + (args.size() - 1));
+		}
+		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
+		emitHostArrayGuard(ctx, LispNames.ARRAY_ELEMENT_TYPE);
+		// A value that is no array never reaches the dispatch below, whose last arm
+		// answers t for whatever it is handed.
+		emitArrayOperandCheck(ctx, className);
+		int tempSlot = ctx.allocTemp();
+		ctx.body.astore(tempSlot);
+		// a string answers character; the synthesized name is unspelled (real run-time
+		// data, and character is also a function name)
+		JvmStringpCompiler.emitStringpCheck(ctx, tempSlot);
+		MethodCode.Label characterPos = ctx.body.newLabel();
+		MethodCode.Label endPos = ctx.body.newLabel();
+		ctx.body.ifnonnull(characterPos);
+		if (ctx.usesTypedArray) {
+			ctx.body.aload(tempSlot);
+			ctx.body.instanceOf(ctx.cp.classEntry("java/util/ArrayList"));
+			MethodCode.Label notListPos = ctx.body.newLabel();
+			ctx.body.ifeq(notListPos);
+			ctx.body.aload(tempSlot);
+			invokeHelper(ctx, className, JvmArrayRuntimeBuilder.ELEMENT_TYPE, JvmArrayRuntimeBuilder.ELEMENT_TYPE_DESC);
+			ctx.body.goto_(endPos);
+			ctx.body.labelBinding(notListPos);
+		}
+		if (ctx.usesIntArray || ctx.usesFloatArray) {
+			// not a string, not a general array: the packed dispatch
+			ctx.body.aload(tempSlot);
+			if (ctx.usesIntArray) {
+				invokeHelper(ctx, className, JvmIntArrayRuntimeBuilder.ELEMENT_TYPE,
+						JvmIntArrayRuntimeBuilder.ELEMENT_TYPE_DESC);
+			}
+			else {
+				invokeHelper(ctx, className, JvmFloatArrayRuntimeBuilder.ELEMENT_TYPE,
+						JvmFloatArrayRuntimeBuilder.ELEMENT_TYPE_DESC);
+			}
+		}
+		else {
+			JvmEmitHelper.compileTrue(ctx);
+		}
+		ctx.body.goto_(endPos);
+		ctx.body.labelBinding(characterPos);
+		JvmEmitHelper.compileUnspelledLiteral(LispNames.CHARACTER_TYPE, ctx);
+		ctx.body.labelBinding(endPos);
+	}
+
+	static void compileArrayAlike(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		// (%array-alike seq n): a fresh zero-filled rank-1 array of the SAME KIND as seq
+		// (packed at the same width when seq is packed or REMEMBERS a packed width, else
+		// general) -- the type-preserving allocator behind the shared subseq/copy-seq
+		// lowering. One helper for every representation, keyed on the element type, so
+		// there is no per-gate routing to get wrong (.kb/subseq-runtime.md). Evaluation
+		// order: seq then n.
+		List<LispVal> args = cons.toList();
+		if (args.size() != 3) {
+			throw new UnsupportedOperationException("%array-alike expects a sequence and a length");
+		}
+		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
+		JvmExprCompiler.compileExpr(args.get(2), ctx, className);
+		invokeHelper(ctx, className, JvmArrayRuntimeBuilder.ALIKE, JvmArrayRuntimeBuilder.ALIKE_DESC);
+	}
+
+	static void compileDims(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		List<LispVal> args = cons.toList();
+		if (args.size() != 2) {
+			throw new UnsupportedOperationException("array-dimensions expects 1 argument, got " + (args.size() - 1));
+		}
+		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
+		emitHostArrayGuard(ctx, LispNames.ARRAY_DIMENSIONS);
+		invokeNamedHelper(ctx, className, ivOr(ctx, JvmIntArrayRuntimeBuilder.DIMS, JvmFloatArrayRuntimeBuilder.DIMS,
+				JvmArrayRuntimeBuilder.DIMS), JvmArrayRuntimeBuilder.DIMS_DESC);
+	}
+
+	static void compileAset(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		// (%aset array subscript... value)
+		List<LispVal> args = cons.toList();
+		// The order compileAref above evaluates and checks in, the value evaluated with
+		// the other arguments before the rank check; the store helper then coerces the
+		// value and checks the bounds.
+		int subscriptCount = args.size() - 3;
+		LispVal value = args.get(args.size() - 1);
+		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
+		int arrSlot = ctx.allocTemp();
+		ctx.body.dup();
+		ctx.body.astore(arrSlot);
+		if (subscriptCount == 0) {
+			// (%aset a value): the rank-0 store, the twin of the (aref a) arm above.
+			JvmExprCompiler.compileExpr(new LispInteger(0), ctx, className);
+			JvmExprCompiler.compileExpr(value, ctx, className);
+			emitRankCheck(ctx, className, arrSlot, LispNames.ASET, subscriptCount);
+			invokeNamedHelper(ctx, className, ivOr(ctx, JvmIntArrayRuntimeBuilder.ASET1,
+					JvmFloatArrayRuntimeBuilder.ASET1, JvmArrayRuntimeBuilder.ASET1),
+					JvmArrayRuntimeBuilder.ASET1_DESC);
+		}
+		else if (subscriptCount == 1) {
+			compileSubscript(args.get(2), ctx, className);
+			JvmExprCompiler.compileExpr(value, ctx, className);
+			emitRankCheck(ctx, className, arrSlot, LispNames.ASET, subscriptCount);
+			invokeNamedHelper(ctx, className, ivOr(ctx, JvmIntArrayRuntimeBuilder.ASET1,
+					JvmFloatArrayRuntimeBuilder.ASET1, JvmArrayRuntimeBuilder.ASET1),
+					JvmArrayRuntimeBuilder.ASET1_DESC);
+		}
+		else if (subscriptCount == 2) {
+			compileSubscript(args.get(2), ctx, className);
+			compileSubscript(args.get(3), ctx, className);
+			JvmExprCompiler.compileExpr(value, ctx, className);
+			emitRankCheck(ctx, className, arrSlot, LispNames.ASET, subscriptCount);
+			invokeNamedHelper(ctx, className,
+					fvOr(ctx, JvmFloatArrayRuntimeBuilder.ASET2, JvmArrayRuntimeBuilder.ASET2),
+					JvmArrayRuntimeBuilder.ASET2_DESC);
+		}
+		else {
+			emitSubscriptArray(args, 2, subscriptCount, ctx, className);
+			JvmExprCompiler.compileExpr(value, ctx, className);
+			emitRankCheck(ctx, className, arrSlot, LispNames.ASET, subscriptCount);
+			invokeNamedHelper(ctx, className,
+					fvOr(ctx, JvmFloatArrayRuntimeBuilder.ASETN, JvmArrayRuntimeBuilder.ASETN),
+					JvmArrayRuntimeBuilder.ASETN_DESC);
+		}
+	}
+
+	// Packages the rank subscript expressions starting at args[firstSub] into an
+	// Object[] (evaluated left to right) for the generic _arefN/_asetN helpers.
+	private static void emitSubscriptArray(List<LispVal> args, int firstSub, int rank, JvmLispCompiler.Ctx ctx,
+			String className) {
+		JvmEmitHelper.emitIntConst(ctx, rank);
+		ctx.body.anewarray(ctx.objectClass);
+		for (int i = 0; i < rank; i++) {
+			ctx.body.dup();
+			JvmEmitHelper.emitIntConst(ctx, i);
+			compileSubscript(args.get(firstSub + i), ctx, className);
+			ctx.body.aastore();
+		}
+	}
+
+	// The packed integer-vector element width a make-array :element-type argument
+	// designates: 8/16/32 for the literal quoted list '(unsigned-byte 8|16|32), else 0.
+	// The head symbol name is matched ignoring any package qualifier, like the float
+	// widths. Shared with JvmLispCompiler's usesIntArray program scan.
+	static int packedIntElementWidth(@Nullable LispVal elementType) {
+		LispVal spec = elementType;
+		if (spec instanceof LispCons quote && quote.car() instanceof LispSymbol q && LispNames.QUOTE.equals(q.name())
+				&& quote.cdr() instanceof LispCons rest && rest.cdr() instanceof LispNil) {
+			spec = rest.car();
+		}
+		if (spec instanceof LispCons cons && cons.car() instanceof LispSymbol head
+				&& cons.cdr() instanceof LispCons widthCell && widthCell.car() instanceof am.ik.rontolisp.LispInteger w
+				&& widthCell.cdr() instanceof LispNil) {
+			String name = head.name();
+			int colon = name.lastIndexOf(':');
+			String local = colon >= 0 ? name.substring(colon + 1) : name;
+			if (local.equals(LispNames.UNSIGNED_BYTE) && (w.value() == 8 || w.value() == 16 || w.value() == 32)) {
+				return (int) w.value();
+			}
+		}
+		return 0;
+	}
+
+	// The local (package-qualifier-stripped) symbol name of a literal quoted
+	// :element-type
+	// value, or null when it is not a quoted symbol.
+	private static @Nullable LispVal findKeywordValue(List<LispVal> args, String keyword) {
+		for (int i = 2; i + 1 < args.size(); i += 2) {
+			if (args.get(i) instanceof LispSymbol kw && keyword.equals(kw.name())) {
+				return args.get(i + 1);
+			}
+		}
+		return null;
+	}
+
+	/**
+	 * Emits an {@code invokestatic _strv} call normalizing a mutable character vector on
+	 * the operand stack into the quote-framed runtime string (any other value passes
+	 * through unchanged). A no-op unless the array runtime helpers are emitted -- a
+	 * character vector can only be created by {@code make-array}, which raises the same
+	 * gate -- so array-free programs stay byte-identical.
+	 * @param ctx the compilation context
+	 * @param className the generated class name
+	 */
+	static void emitStrvNormalize(JvmLispCompiler.Ctx ctx, String className) {
+		if (!ctx.usesArrays) {
+			return;
+		}
+		invokeHelper(ctx, className, JvmArrayRuntimeBuilder.STRV, JvmArrayRuntimeBuilder.STRV_DESC);
+	}
+
+	/**
+	 * Emits an {@code invokestatic _toMutStr} call converting a fresh runtime string on
+	 * the operand stack into a MUTABLE character vector, so the producer's result has a
+	 * writable identity like the interpreter's (a non-string passes through unchanged). A
+	 * no-op unless the program contains a flipped producer
+	 * ({@code MutableStringProducers.programUsesAny}, the same scan the WASM backend
+	 * wraps under, and a subset of the array gate -- so the helper is always emitted
+	 * where this call is).
+	 * @param ctx the compilation context
+	 * @param className the generated class name
+	 */
+	static void emitToMutStr(JvmLispCompiler.Ctx ctx, String className) {
+		if (!ctx.mutableStringProducers) {
+			return;
+		}
+		invokeHelper(ctx, className, JvmArrayRuntimeBuilder.TO_MUT_STR, JvmArrayRuntimeBuilder.TO_MUT_STR_DESC);
+	}
+
+	/**
+	 * {@code (%check-dimension x 'op)}: {@code x} when it is an integer in
+	 * {@code [0, array-dimension-limit)}, else {@code op}'s
+	 * {@code (INTEGER 0 (array-dimension-limit))} type-error -- {@code _ckBound} against
+	 * the limit under the operator's wrapper, the check {@code _arrayDimsTotal} makes of
+	 * a {@code make-array} dimension. Answers the integer re-boxed.
+	 */
+	static void compileCheckDimension(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		JvmExprCompiler.compileExpr(cons.toList().get(1), ctx, className);
+		ctx.body.ldc(ctx.cp.entries().intEntry((int) ClConstants.arraySizeLimit(false)));
+		@Nullable String outer = ctx.operator;
+		ctx.operator = LispMacroExpander.checkOperator(cons);
+		try {
+			ctx.body.invokestatic(ctx.numOp(JvmOperandTypeRuntime.CK_BOUND));
+		}
+		finally {
+			ctx.operator = outer;
+		}
+		ctx.body.i2l();
+		JvmEmitHelper.boxLong(ctx);
+	}
+
+	/**
+	 * Compiles a subscript and checks it is an integer: anything else is a type-error
+	 * naming the access ({@code _ckIdx}, {@code JvmOperandTypeRuntime}), where the
+	 * helpers' own unboxing would throw a host {@code NullPointerException} or
+	 * {@code ClassCastException}.
+	 */
+	private static void compileSubscript(LispVal subscript, JvmLispCompiler.Ctx ctx, String className) {
+		JvmExprCompiler.compileExpr(subscript, ctx, className);
+		emitSubscriptCheck(ctx);
+	}
+
+	/**
+	 * Checks the subscript on the stack is an integer, leaving it there ({@code _ckIdx}
+	 * under the operator's wrapper).
+	 * @param ctx the compile context, its operator the access's
+	 */
+	static void emitSubscriptCheck(JvmLispCompiler.Ctx ctx) {
+		ctx.body.invokestatic(ctx.numOp(JvmOperandTypeRuntime.CK_IDX));
+	}
+
+	/**
+	 * Invokes an element accessor under the operator's wrapper: an out-of-range subscript
+	 * and a packed array's store coercing the value through the numeric funnels both
+	 * throw an unnamed report, which the wrapper names ({@code JvmOperandTypeRuntime}).
+	 */
+	private static void invokeNamedHelper(JvmLispCompiler.Ctx ctx, String className, String name, String desc) {
+		MethodRefEntry ref = ctx.cp.methodRef(ctx.cp.classEntry(className), name, desc);
+		ctx.body.invokestatic(ctx.wrapForOperator(name, desc, ref));
+	}
+
+	private static void invokeHelper(JvmLispCompiler.Ctx ctx, String className, String name, String desc) {
+		MethodRefEntry ref = ctx.cp.methodRef(ctx.cp.classEntry(className), name, desc);
+		ctx.body.invokestatic(ref);
+	}
+
+}

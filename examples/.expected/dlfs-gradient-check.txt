@@ -1,0 +1,4 @@
+W1: PASS (mean |diff| < 1e-6)
+b1: PASS (mean |diff| < 1e-6)
+W2: PASS (mean |diff| < 1e-6)
+b2: PASS (mean |diff| < 1e-6)

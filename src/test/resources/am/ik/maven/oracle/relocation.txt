@@ -1,0 +1,25 @@
+# descriptor test.reloc:old:1 test.reloc:chain-a:1 test.reloc:cyc-a:1 test.reloc:child-of-reloc:1 test.reloc:version-only:1 test.reloc:interpolated:1 test.reloc:to-missing:1 test.reloc:profile-reloc:1
+artifact test.reloc.new:old:jar:1
+relocation test.reloc:old:jar:1
+dep test.lib:after-reloc:jar::1 scope=compile optional=null
+artifact test.reloc:chain-c:jar:1
+relocation test.reloc:chain-a:jar:1
+relocation test.reloc:chain-b:jar:1
+dep test.lib:end-of-chain:jar::1 scope=compile optional=null
+artifact test.reloc:cyc-a:jar:1
+relocation test.reloc:cyc-a:jar:1
+relocation test.reloc:cyc-b:jar:1
+warning invalid test.reloc:cyc-a:jar:1: Artifact relocations form a cycle: [test.reloc:cyc-a:1, test.reloc:cyc-b:1]
+artifact test.reloc:child-of-reloc:jar:1
+dep test.lib:child-dep:jar::1 scope=compile optional=null
+artifact test.reloc:version-only:jar:2
+relocation test.reloc:version-only:jar:1
+dep test.lib:v2-dep:jar::1 scope=compile optional=null
+artifact test.reloc.new:old:jar:1
+relocation test.reloc:interpolated:jar:1
+dep test.lib:after-reloc:jar::1 scope=compile optional=null
+artifact test.reloc.nowhere:to-missing:jar:1
+relocation test.reloc:to-missing:jar:1
+warning missing test.reloc.nowhere:to-missing:jar:1
+artifact test.reloc:profile-reloc:jar:1
+dep test.lib:profile-reloc-own:jar::1 scope=compile optional=null

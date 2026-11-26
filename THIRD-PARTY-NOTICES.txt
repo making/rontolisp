@@ -1,0 +1,968 @@
+rontolisp third-party notices
+
+rontolisp is licensed under the Apache License, Version 2.0 (LICENSE); NOTICE holds the
+attributions that licence requires to be kept. Some files contain code or data from the
+projects below, each under its own licence. An entry names the project, where it came
+from, its licence, what ships it, the files of this repository that hold it -- each of
+which says so in its header -- and the licence text.
+
+Ships:
+  output      a compiled program (.class, .jar, .war, .wasm, native executable) may
+              carry it; `rontolisp notices` prints these entries with rontolisp's own
+              licence, for a program's distribution
+  tool        the rontolisp jar and native binary carry it; compiled programs do not
+  repository  only this source repository (examples, the web site)
+
+Vendored libraries and specifications kept whole (under src/test/resources/,
+src/wasm-component/deps/, examples/, decks/, lispresen/) carry their own licence files
+and are not repeated here.
+
+================================================================================
+fdlibm
+Version: 5.3
+Origin: https://www.netlib.org/fdlibm/
+License: fdlibm (Sun Microsystems permission notice)
+Ships: output
+Files:
+  src/main/java/am/ik/rontolisp/codegen/wasm/WasmFdlibmSources.java
+Use: The transcendental functions of the WASM backends, rewritten from Sun's C files into the
+  subset WasmFdlibmRuntimeBuilder compiles.
+--------------------------------------------------------------------------------
+e_exp.c, e_pow.c:
+====================================================
+Copyright (C) 2004 by Sun Microsystems, Inc. All rights reserved.
+
+Permission to use, copy, modify, and distribute this
+software is freely granted, provided that this notice
+is preserved.
+====================================================
+
+k_tan.c:
+====================================================
+Copyright 2004 Sun Microsystems, Inc.  All Rights Reserved.
+
+Permission to use, copy, modify, and distribute this
+software is freely granted, provided that this notice
+is preserved.
+====================================================
+
+s_expm1.c, e_log.c, s_log1p.c, e_log10.c, s_sin.c, s_cos.c, s_tan.c, k_sin.c,
+k_cos.c, e_rem_pio2.c, k_rem_pio2.c, e_asin.c, e_acos.c, s_atan.c, e_atan2.c,
+e_sinh.c, e_cosh.c, s_tanh.c, e_hypot.c, s_cbrt.c, e_remainder.c, e_fmod.c,
+s_scalbn.c:
+====================================================
+Copyright (C) 1993 by Sun Microsystems, Inc. All rights reserved.
+
+Developed at SunSoft, a Sun Microsystems, Inc. business.
+Permission to use, copy, modify, and distribute this
+software is freely granted, provided that this notice
+is preserved.
+====================================================
+
+================================================================================
+Schubfach
+Version: todec, 2018-2020
+Origin: https://github.com/c4f7fcce9cb06515/Schubfach
+License: MIT
+Ships: output
+Files:
+  src/main/java/am/ik/rontolisp/codegen/wasm/SchubfachTables.java
+  src/main/java/am/ik/rontolisp/codegen/wasm/WasmSchubfachRuntimeBuilder.java
+Use: The shortest-decimal selection of the WASM backends' float printing, adapted.
+--------------------------------------------------------------------------------
+Copyright 2018-2020 Raffaello Giulietti
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+================================================================================
+ring
+Version: ring-core 1.15.5, ring-codec 1.3.0
+Origin: https://github.com/ring-clojure/ring, https://github.com/ring-clojure/ring-codec
+License: MIT
+Ships: output
+Files:
+  src/main/resources/am/ik/rontolisp/clojure/lib/ring/middleware/content_type.clj
+  src/main/resources/am/ik/rontolisp/clojure/lib/ring/middleware/keyword_params.clj
+  src/main/resources/am/ik/rontolisp/clojure/lib/ring/middleware/params.clj
+  src/main/resources/am/ik/rontolisp/clojure/lib/ring/util/codec.clj
+  src/main/resources/am/ik/rontolisp/clojure/lib/ring/util/codec_base64.clj
+  src/main/resources/am/ik/rontolisp/clojure/lib/ring/util/mime_type.clj
+  src/main/resources/am/ik/rontolisp/clojure/lib/ring/util/request.clj
+  src/main/resources/am/ik/rontolisp/clojure/lib/ring/util/response.clj
+  src/main/resources/am/ik/rontolisp/clojure/lib/ring/util/response_files.clj
+Use: The built-in ring.util and ring.middleware namespaces of the Clojure front end keep ring's
+  docstrings, function bodies and MIME table.
+--------------------------------------------------------------------------------
+Copyright (c) 2009-2010 Mark McGranaghan
+Copyright (c) 2009-2026 James Reeves
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+================================================================================
+riddley
+Version: 0.2.2
+Origin: https://github.com/clj-commons/riddley
+License: MIT
+Ships: output
+Files:
+  src/main/resources/am/ik/rontolisp/clojure/lib/riddley/walk.clj
+Use: The built-in riddley.walk follows riddley's walk.
+--------------------------------------------------------------------------------
+Copyright (c) 2013 Zachary Tellman
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+================================================================================
+tiny-routes
+Version: v0.1.1
+Origin: https://github.com/jeko2000/tiny-routes
+License: BSD-3-Clause
+Ships: output
+Files:
+  src/main/resources/am/ik/rontolisp/eval/tiny-routes-lite-path-template.lisp
+  src/main/resources/am/ik/rontolisp/eval/tiny-routes-lite.asd
+Use: The ppcre-free path-template module of tiny-routes/lite reproduces five of upstream's
+  definitions; its .asd keeps upstream's primary system.
+--------------------------------------------------------------------------------
+Copyright (c) 2021 Johnny Ruiz
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+1. Redistributions of source code must retain the above copyright notice, this
+   list of conditions and the following disclaimer.
+
+2. Redistributions in binary form must reproduce the above copyright notice,
+   this list of conditions and the following disclaimer in the documentation
+   and/or other materials provided with the distribution.
+
+3. Neither the name of the copyright holder nor the names of its contributors may be
+   used to endorse or promote products derived from this software without
+   specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+================================================================================
+ASDF
+Version: ASDF 3.3.1, UIOP
+Origin: https://asdf.common-lisp.dev/
+License: MIT
+Ships: output
+Files:
+  src/main/resources/am/ik/rontolisp/eval/asdf-search.lisp
+  src/main/resources/am/ik/rontolisp/eval/asdf.lisp
+  src/main/resources/am/ik/rontolisp/eval/uiop-backward-driver.lisp
+  src/main/resources/am/ik/rontolisp/eval/uiop-configuration.lisp
+  src/main/resources/am/ik/rontolisp/eval/uiop-filesystem.lisp
+  src/main/resources/am/ik/rontolisp/eval/uiop-image.lisp
+  src/main/resources/am/ik/rontolisp/eval/uiop-launch-program.lisp
+  src/main/resources/am/ik/rontolisp/eval/uiop-lisp-build.lisp
+  src/main/resources/am/ik/rontolisp/eval/uiop-os.lisp
+  src/main/resources/am/ik/rontolisp/eval/uiop-package.lisp
+  src/main/resources/am/ik/rontolisp/eval/uiop-pathname.lisp
+  src/main/resources/am/ik/rontolisp/eval/uiop-run-program.lisp
+  src/main/resources/am/ik/rontolisp/eval/uiop-stream.lisp
+  src/main/resources/am/ik/rontolisp/eval/uiop-utility.lisp
+  src/main/resources/am/ik/rontolisp/eval/uiop-version.lisp
+Use: The ASDF and UIOP run-time shims keep upstream's bodies where they run as written.
+--------------------------------------------------------------------------------
+Copyright (c) 2001-2016 Daniel Barlow and contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+================================================================================
+CFFI
+Origin: https://github.com/cffi/cffi
+License: MIT
+Ships: output
+Files:
+  src/main/resources/am/ik/rontolisp/eval/cffi-rontolisp.asd
+  src/main/resources/am/ik/rontolisp/eval/cffi-rontolisp.lisp
+  src/main/resources/am/ik/rontolisp/eval/cffi-strings.lisp
+  src/main/resources/am/ik/rontolisp/eval/uffi-cffi.asd
+Use: The cffi-sys backend, the strings module and the two replacement .asd files follow
+  upstream's sources.
+--------------------------------------------------------------------------------
+Copyright (C) 2005-2007, James Bielman  <jamesjb@jamesjb.com>
+
+Permission is hereby granted, free of charge, to any person
+obtaining a copy of this software and associated documentation
+files (the "Software"), to deal in the Software without
+restriction, including without limitation the rights to use, copy,
+modify, merge, publish, distribute, sublicense, and/or sell copies
+of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be
+included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+NONINFRINGEMENT.  IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+DEALINGS IN THE SOFTWARE.
+
+================================================================================
+starlark-go
+Origin: https://github.com/google/starlark-go
+License: BSD-3-Clause
+Ships: output
+Files:
+  src/main/resources/am/ik/rontolisp/eval/starlark.lisp
+Use: str.format of the Starlark front end is ported from string_format.
+--------------------------------------------------------------------------------
+Copyright (c) 2017 The Bazel Authors.  All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are
+met:
+
+1. Redistributions of source code must retain the above copyright
+   notice, this list of conditions and the following disclaimer.
+
+2. Redistributions in binary form must reproduce the above copyright
+   notice, this list of conditions and the following disclaimer in the
+   documentation and/or other materials provided with the
+   distribution.
+
+3. Neither the name of the copyright holder nor the names of its
+   contributors may be used to endorse or promote products derived
+   from this software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+"AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+================================================================================
+ggml
+Origin: https://github.com/ggml-org/ggml
+License: MIT
+Ships: output
+Files:
+  src/main/java/am/ik/rontolisp/codegen/jvm/JvmQuantizedMatrixRuntimeBuilder.java
+  src/main/java/am/ik/rontolisp/eval/QuantizedMatrices.java
+Use: The Q8_0 quantization of rontolisp:quantize transcribes quantize_row_q8_0_ref.
+--------------------------------------------------------------------------------
+MIT License
+
+Copyright (c) 2023-2026 The ggml authors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+================================================================================
+Unicode
+Version: Unicode Character Database, as the running JDK reports it
+Origin: https://www.unicode.org/
+License: Unicode-3.0
+Ships: output
+Files:
+  src/main/java/am/ik/rontolisp/clojure/ClojureCaseMapping.java
+  src/main/java/am/ik/rontolisp/codegen/wasm/WasmCaseFoldRuntimeBuilder.java
+  src/main/java/am/ik/rontolisp/scheme/SchemeCharacters.java
+  src/main/resources/am/ik/rontolisp/eval/java.lisp
+  src/main/resources/am/ik/rontolisp/eval/regex-unicode.lisp
+  src/main/resources/am/ik/rontolisp/eval/unicode-normalization-tables.lisp
+  src/main/resources/am/ik/rontolisp/java/library/java/time/format/Texts.java
+  src/main/resources/am/ik/rontolisp/java/library/java/time/format/ZoneNames.java
+  src/main/resources/am/ik/rontolisp/java/library/java/time/temporal/ChronoField.java
+  src/main/resources/am/ik/rontolisp/java/library/java/time/temporal/IsoFields.java
+  src/main/resources/am/ik/rontolisp/java/library/java/time/temporal/WeekFields.java
+  src/main/resources/am/ik/rontolisp/java/library/rontolisp/internal/Locales.java
+  src/main/resources/am/ik/rontolisp/java/zone-names.txt
+Use: The case-mapping, character-property, grapheme and normalization tables compiled programs
+  carry are UCD data; the words of months, days, eras, quarters, half days and periods of
+  the day a java.time formatter writes, its localized patterns, the names of zones in words,
+  the names of fields, the weeks of a locale and of a region and the languages a JDK has
+  data of are CLDR data, as a JDK writes them.
+--------------------------------------------------------------------------------
+UNICODE LICENSE V3
+
+COPYRIGHT AND PERMISSION NOTICE
+
+Copyright © 1991-2026 Unicode, Inc.
+
+NOTICE TO USER: Carefully read the following legal agreement. BY
+DOWNLOADING, INSTALLING, COPYING OR OTHERWISE USING DATA FILES, AND/OR
+SOFTWARE, YOU UNEQUIVOCALLY ACCEPT, AND AGREE TO BE BOUND BY, ALL OF THE
+TERMS AND CONDITIONS OF THIS AGREEMENT. IF YOU DO NOT AGREE, DO NOT
+DOWNLOAD, INSTALL, COPY, DISTRIBUTE OR USE THE DATA FILES OR SOFTWARE.
+
+Permission is hereby granted, free of charge, to any person obtaining a
+copy of data files and any associated documentation (the "Data Files") or
+software and any associated documentation (the "Software") to deal in the
+Data Files or Software without restriction, including without limitation
+the rights to use, copy, modify, merge, publish, distribute, and/or sell
+copies of the Data Files or Software, and to permit persons to whom the
+Data Files or Software are furnished to do so, provided that either (a)
+this copyright and permission notice appear with all copies of the Data
+Files or Software, or (b) this copyright and permission notice appear in
+associated Documentation.
+
+THE DATA FILES AND SOFTWARE ARE PROVIDED "AS IS", WITHOUT WARRANTY OF ANY
+KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT OF
+THIRD PARTY RIGHTS.
+
+IN NO EVENT SHALL THE COPYRIGHT HOLDER OR HOLDERS INCLUDED IN THIS NOTICE
+BE LIABLE FOR ANY CLAIM, OR ANY SPECIAL INDIRECT OR CONSEQUENTIAL DAMAGES,
+OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS,
+WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION,
+ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THE DATA
+FILES OR SOFTWARE.
+
+Except as contained in this notice, the name of a copyright holder shall
+not be used in advertising or otherwise to promote the sale, use or other
+dealings in these Data Files or Software without prior written
+authorization of the copyright holder.
+
+================================================================================
+tz database
+Version: the one zone-rules.txt names (tzdb)
+Origin: https://www.iana.org/time-zones
+License: Public domain
+Ships: output
+Files:
+  src/main/resources/am/ik/rontolisp/java/zone-rules.txt
+Use: The changes of offset of the regions a compiled Java program names (java.time) are tz
+  database data, as a running JDK's public java.time.zone API answered them.
+--------------------------------------------------------------------------------
+The Time Zone Database is in the public domain: its LICENSE file states so of the files of
+its code and data, but for a few files of the code it lists, none of which is used here.
+
+================================================================================
+WASI
+Version: WASI 0.3.0
+Origin: https://github.com/WebAssembly/WASI
+License: W3C Community Contributor License Agreement
+Ships: output
+Files:
+  src/main/resources/am/ik/rontolisp/eval/clocks.wit
+  src/main/resources/am/ik/rontolisp/eval/environment.wit
+  src/main/resources/am/ik/rontolisp/eval/exit.wit
+  src/main/resources/am/ik/rontolisp/eval/http.wit
+  src/main/resources/am/ik/rontolisp/eval/sockets.wit
+  src/main/resources/am/ik/rontolisp/eval/stdin.wit
+Use: The WIT interfaces --component binds, trimmed; the WASI part of the world --emit-wit
+  writes is generated from the same WIT. src/wasm-component/deps/ holds the unmodified WIT
+  with its own LICENSE.md.
+--------------------------------------------------------------------------------
+Copyright © 2019-2024 the Contributors to the WASI Specification, published
+by the [WebAssembly Community Group][cg] under the
+[W3C Community Contributor License Agreement (CLA)][cla]. A human-readable
+[summary][summary] is available.
+
+[cg]: https://www.w3.org/community/webassembly/
+[cla]: https://www.w3.org/community/about/agreements/cla/
+[summary]: https://www.w3.org/community/about/agreements/cla-deed/
+
+================================================================================
+wasmtime
+Version: v47.0.2 (tls.wit), v51.0.0
+Origin: https://github.com/bytecodealliance/wasmtime
+License: Apache-2.0 WITH LLVM-exception
+Ships: output
+Files:
+  src/main/resources/am/ik/rontolisp/eval/tls.wit
+Use: The wasi:tls draft interface, from wasmtime's tree. wasmtime itself is under "Rust
+  crates".
+--------------------------------------------------------------------------------
+Copyright (c) the Wasmtime Project Developers.
+
+The Apache License, Version 2.0 is LICENSE at the root of this repository (META-INF/LICENSE
+in the jar).
+
+--- LLVM Exceptions to the Apache 2.0 License ----
+
+As an exception, if, as a result of your compiling your source code, portions
+of this Software are embedded into an Object form of such source code, you
+may redistribute such embedded portions in such Object form without complying
+with the conditions of Sections 4(a), 4(b) and 4(d) of the License.
+
+In addition, if you combine or link compiled forms of this Software with
+software that is licensed under the GPLv2 ("Combined Software") and if a
+court of competent jurisdiction determines that the patent provision (Section
+3), the indemnity provision (Section 9) or other Section of the License
+conflicts with the conditions of the GPLv2, you may retroactively and
+prospectively choose to deem waived or otherwise exclude such Section(s) of
+the License, but only in their entirety and only with respect to the Combined
+Software.
+
+================================================================================
+Rust crates
+Version: wasmtime 51.0.0 and the crates it links
+Origin: https://github.com/bytecodealliance/wasmtime
+License: MIT, Apache-2.0, Apache-2.0 WITH LLVM-exception, BSD-3-Clause, ISC, Unicode-3.0, Zlib,
+  CDLA-Permissive-2.0
+Ships: output
+Files:
+  rontolisp-native/build.sh
+Use: The native runner every --native output starts with (rlrun, rlrun-net) and the precompile
+  shim of the rontolisp jar and binary (librlprecomp) link wasmtime and its crates.
+--------------------------------------------------------------------------------
+The list is generated from cargo's metadata when the binaries are built
+(rontolisp-native/build.sh), per platform, and travels beside them in the jar and the
+native binary:
+
+  am/ik/rontolisp/native/<platform>/runner-notices.txt   the runners' crates
+  am/ik/rontolisp/native/<platform>/shim-notices.txt     the shim's crates
+
+Each names every crate with its version, licence and repository, then every licence file
+the crates' packages ship. `rontolisp notices --native` prints the runner's for a
+platform.
+
+================================================================================
+Apache Maven
+Version: Maven 3.9.16, Maven Artifact Resolver 1.9
+Origin: https://maven.apache.org/
+License: Apache-2.0
+Ships: tool
+Files:
+  src/main/java/am/ik/maven/AncillaryMerger.java
+  src/main/java/am/ik/maven/BuildMerger.java
+  src/main/java/am/ik/maven/ConflictResolver.java
+  src/main/java/am/ik/maven/ModelBuilder.java
+  src/main/java/am/ik/maven/ModelValidator.java
+  src/main/java/am/ik/rontolisp/clojure/ClojureMavenVersions.java
+Use: The POM model builder, validator and mergers of am.ik.maven and the conflict resolution
+  and version order behind --java-dep and deps.edn are ported from Maven's sources, changed
+  (rewritten over this repository's own model; each file says so).
+--------------------------------------------------------------------------------
+Apache Maven
+Copyright 2001-2026 The Apache Software Foundation
+
+Maven Artifact Resolver
+Copyright 2010-2026 The Apache Software Foundation
+
+This product includes software developed at
+The Apache Software Foundation (http://www.apache.org/).
+
+The Apache License, Version 2.0 is LICENSE at the root of this repository (META-INF/LICENSE
+in the jar).
+
+================================================================================
+Spring Framework
+Version: 7.1.0
+Origin: https://github.com/spring-projects/spring-framework
+License: Apache-2.0
+Ships: repository
+Files:
+  webmvc-fn-lite/src/main/java/org/springframework/http/DefaultHttpStatusCode.java
+  webmvc-fn-lite/src/main/java/org/springframework/http/HttpHeaders.java
+  webmvc-fn-lite/src/main/java/org/springframework/http/HttpInputMessage.java
+  webmvc-fn-lite/src/main/java/org/springframework/http/HttpMessage.java
+  webmvc-fn-lite/src/main/java/org/springframework/http/HttpMethod.java
+  webmvc-fn-lite/src/main/java/org/springframework/http/HttpOutputMessage.java
+  webmvc-fn-lite/src/main/java/org/springframework/http/HttpStatus.java
+  webmvc-fn-lite/src/main/java/org/springframework/http/HttpStatusCode.java
+  webmvc-fn-lite/src/main/java/org/springframework/http/InvalidMediaTypeException.java
+  webmvc-fn-lite/src/main/java/org/springframework/http/MediaType.java
+  webmvc-fn-lite/src/main/java/org/springframework/http/converter/AbstractHttpMessageConverter.java
+  webmvc-fn-lite/src/main/java/org/springframework/http/converter/ByteArrayHttpMessageConverter.java
+  webmvc-fn-lite/src/main/java/org/springframework/http/converter/HttpMessageConversionException.java
+  webmvc-fn-lite/src/main/java/org/springframework/http/converter/HttpMessageConverter.java
+  webmvc-fn-lite/src/main/java/org/springframework/http/converter/HttpMessageNotReadableException.java
+  webmvc-fn-lite/src/main/java/org/springframework/http/converter/HttpMessageNotWritableException.java
+  webmvc-fn-lite/src/main/java/org/springframework/http/converter/StringHttpMessageConverter.java
+  webmvc-fn-lite/src/main/java/org/springframework/http/converter/json/JacksonJsonHttpMessageConverter.java
+  webmvc-fn-lite/src/main/java/org/springframework/http/server/ServletServerHttpRequest.java
+  webmvc-fn-lite/src/main/java/org/springframework/http/server/ServletServerHttpResponse.java
+  webmvc-fn-lite/src/main/java/org/springframework/util/LinkedMultiValueMap.java
+  webmvc-fn-lite/src/main/java/org/springframework/util/MultiValueMap.java
+  webmvc-fn-lite/src/main/java/org/springframework/web/HttpMediaTypeNotAcceptableException.java
+  webmvc-fn-lite/src/main/java/org/springframework/web/HttpMediaTypeNotSupportedException.java
+  webmvc-fn-lite/src/main/java/org/springframework/web/context/WebApplicationContext.java
+  webmvc-fn-lite/src/main/java/org/springframework/web/context/support/StaticWebApplicationContext.java
+  webmvc-fn-lite/src/main/java/org/springframework/web/server/ResponseStatusException.java
+  webmvc-fn-lite/src/main/java/org/springframework/web/servlet/DispatcherServlet.java
+  webmvc-fn-lite/src/main/java/org/springframework/web/servlet/HandlerExecutionChain.java
+  webmvc-fn-lite/src/main/java/org/springframework/web/servlet/HandlerMapping.java
+  webmvc-fn-lite/src/main/java/org/springframework/web/servlet/ModelAndView.java
+  webmvc-fn-lite/src/main/java/org/springframework/web/servlet/function/DefaultServerRequest.java
+  webmvc-fn-lite/src/main/java/org/springframework/web/servlet/function/DefaultServerResponseBuilder.java
+  webmvc-fn-lite/src/main/java/org/springframework/web/servlet/function/HandlerFilterFunction.java
+  webmvc-fn-lite/src/main/java/org/springframework/web/servlet/function/HandlerFunction.java
+  webmvc-fn-lite/src/main/java/org/springframework/web/servlet/function/NestedRequest.java
+  webmvc-fn-lite/src/main/java/org/springframework/web/servlet/function/RequestPredicate.java
+  webmvc-fn-lite/src/main/java/org/springframework/web/servlet/function/RequestPredicates.java
+  webmvc-fn-lite/src/main/java/org/springframework/web/servlet/function/RoutePattern.java
+  webmvc-fn-lite/src/main/java/org/springframework/web/servlet/function/RouterFunction.java
+  webmvc-fn-lite/src/main/java/org/springframework/web/servlet/function/RouterFunctionBuilder.java
+  webmvc-fn-lite/src/main/java/org/springframework/web/servlet/function/RouterFunctions.java
+  webmvc-fn-lite/src/main/java/org/springframework/web/servlet/function/ServerRequest.java
+  webmvc-fn-lite/src/main/java/org/springframework/web/servlet/function/ServerResponse.java
+  webmvc-fn-lite/src/main/java/org/springframework/web/servlet/function/support/RouterFunctionMapping.java
+Use: webmvc-fn-lite/ is a part of Spring MVC's functional endpoints (WebMvc.fn) under the names
+  and the signatures of Spring Framework's classes, so that an application written against it
+  compiles against Spring Framework unchanged. The classes were written here, from the API and
+  from what Spring Framework answers (the module's ConformanceTest runs both); none of Spring
+  Framework's files is copied. The module is a Maven project of its own: neither the rontolisp
+  jar nor a program compiled without it carries it, and its own jar carries this notice
+  (META-INF/NOTICE).
+--------------------------------------------------------------------------------
+Spring Framework 7.1.0
+Copyright (c) 2002-2026 Broadcom Inc.
+
+This product is licensed to you under the Apache License, Version 2.0
+(the "License"). You may not use this product except in compliance with
+the License.
+
+This product may include a number of subcomponents with separate
+copyright notices and license terms. Your use of the source code for
+these subcomponents is subject to the terms and conditions of the
+subcomponent's license, as noted in the license.txt file.
+
+The Apache License, Version 2.0 is LICENSE at the root of this repository (META-INF/LICENSE
+in the module's jar).
+
+================================================================================
+AssertJ
+Version: 3.27.7
+Origin: https://github.com/assertj/assertj
+License: Apache-2.0
+Ships: output
+Files:
+  src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/AbstractAssert.java
+  src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/AbstractBooleanAssert.java
+  src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/AbstractByteArrayAssert.java
+  src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/AbstractCharArrayAssert.java
+  src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/AbstractCharacterAssert.java
+  src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/AbstractComparableAssert.java
+  src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/AbstractDoubleArrayAssert.java
+  src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/AbstractDoubleAssert.java
+  src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/AbstractFloatAssert.java
+  src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/AbstractIntArrayAssert.java
+  src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/AbstractIntegerAssert.java
+  src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/AbstractIterableAssert.java
+  src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/AbstractLongArrayAssert.java
+  src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/AbstractLongAssert.java
+  src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/AbstractObjectAssert.java
+  src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/AbstractStringAssert.java
+  src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/AbstractThrowableAssert.java
+  src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/Assertions.java
+  src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/BooleanAssert.java
+  src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/ByteArrayAssert.java
+  src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/CharArrayAssert.java
+  src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/CharacterAssert.java
+  src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/DoubleArrayAssert.java
+  src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/DoubleAssert.java
+  src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/FloatAssert.java
+  src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/IntArrayAssert.java
+  src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/IntegerAssert.java
+  src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/IterableAssert.java
+  src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/ListAssert.java
+  src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/LongArrayAssert.java
+  src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/LongAssert.java
+  src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/MapAssert.java
+  src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/NotThrownAssert.java
+  src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/ObjectArrayAssert.java
+  src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/ObjectAssert.java
+  src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/OptionalAssert.java
+  src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/StringAssert.java
+  src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/ThrowableAssert.java
+  src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/ThrowableAssertAlternative.java
+  src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/ThrowableTypeAssert.java
+  src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/data/MapEntry.java
+Use: The part of AssertJ's assertions the Java subset has, which `rontolisp test` runs a Java
+  file's tests against, under the names and the signatures of AssertJ's classes, so that a test
+  written against AssertJ is compiled unchanged. The classes were written here, from the API and
+  from what AssertJ answers (JavaSpecE2eTest runs both: the JDK leg of its run of tests is
+  AssertJ itself); none of AssertJ's files is copied. A compiled program carries them only
+  where it names them, which is a compiled run of tests.
+--------------------------------------------------------------------------------
+AssertJ
+Copyright 2012-2025 the original author or authors.
+
+Licensed under the Apache License, Version 2.0, which is LICENSE at the root of this
+repository.
+
+================================================================================
+opentest4j
+Version: 1.3.0
+Origin: https://github.com/ota4j-team/opentest4j
+License: Apache-2.0
+Ships: output
+Files:
+  src/main/resources/am/ik/rontolisp/java/library/org/opentest4j/AssertionFailedError.java
+  src/main/resources/am/ik/rontolisp/java/library/org/opentest4j/IncompleteExecutionException.java
+  src/main/resources/am/ik/rontolisp/java/library/org/opentest4j/MultipleFailuresError.java
+  src/main/resources/am/ik/rontolisp/java/library/org/opentest4j/TestAbortedException.java
+Use: The two errors a failed assertion of the Java subset's test API throws and the exception an
+  assumption that does not hold throws, under the names and the signatures of opentest4j's
+  classes; written here from the API, none of opentest4j's files is copied. A compiled program carries them only where it names them, which is a compiled run
+  of tests.
+--------------------------------------------------------------------------------
+opentest4j
+Copyright 2015-2025 the original author or authors.
+
+Licensed under the Apache License, Version 2.0, which is LICENSE at the root of this
+repository.
+
+================================================================================
+JLine
+Version: 4.4.7
+Origin: https://github.com/jline/jline3
+License: BSD-3-Clause
+Ships: tool
+Files:
+  pom.xml
+Use: The REPL's line editor, shaded into the exec jar and linked into the native binary with
+  its own native libraries (Jansi's included).
+--------------------------------------------------------------------------------
+Copyright (c) 2002-2023, the original author or authors.
+All rights reserved.
+
+https://opensource.org/licenses/BSD-3-Clause
+
+Redistribution and use in source and binary forms, with or
+without modification, are permitted provided that the following
+conditions are met:
+
+Redistributions of source code must retain the above copyright
+notice, this list of conditions and the following disclaimer.
+
+Redistributions in binary form must reproduce the above copyright
+notice, this list of conditions and the following disclaimer
+in the documentation and/or other materials provided with
+the distribution.
+
+Neither the name of JLine nor the names of its contributors
+may be used to endorse or promote products derived from this
+software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+"AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING,
+BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY
+AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO
+EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE
+FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY,
+OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED
+AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING
+IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED
+OF THE POSSIBILITY OF SUCH DAMAGE.
+
+================================================================================
+llama2.c
+Version: llama2.c, tinyllamas
+Origin: https://github.com/karpathy/llama2.c, https://huggingface.co/karpathy/tinyllamas
+License: MIT
+Ships: repository
+Files:
+  examples/llm/llm.lisp
+  examples/ml/tiny-llm.lisp
+  examples/llm/stories260K.bin
+  examples/llm/tok512.bin
+  src/test/resources/tokenizers/sentencepiece.lisp
+Use: The LLM examples port run.c; stories260K.bin and tok512.bin are tinyllamas' checkpoint
+  and tokenizer. The sentencepiece tokenizer fixture holds tok512.bin's vocabulary.
+--------------------------------------------------------------------------------
+Copyright (c) 2023 Andrej Karpathy
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+================================================================================
+GPT-2
+Origin: https://huggingface.co/openai-community/gpt2, https://github.com/openai/gpt-2
+License: Modified MIT
+Ships: repository
+Files:
+  src/test/resources/tokenizers/gpt2.lisp
+Use: A test fixture of the tokenizer package: the entries of the model's tokenizer.json
+  vocabulary and merge list its corpus reaches, with the ids the model gives them.
+--------------------------------------------------------------------------------
+Modified MIT License
+
+Software Copyright (c) 2019 OpenAI
+
+We don’t claim ownership of the content you create with GPT-2, so it is yours to do with as you please.
+We only ask that you use GPT-2 responsibly and clearly indicate your content was created using GPT-2.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and
+associated documentation files (the "Software"), to deal in the Software without restriction,
+including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense,
+and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so,
+subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included
+in all copies or substantial portions of the Software.
+The above copyright notice and this permission notice need not be included
+with content created by the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
+INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS
+BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE
+OR OTHER DEALINGS IN THE SOFTWARE.
+
+================================================================================
+SmolLM2
+Origin: https://huggingface.co/HuggingFaceTB/SmolLM2-135M
+License: Apache-2.0
+Ships: repository
+Files:
+  src/test/resources/tokenizers/smollm2.lisp
+Use: A test fixture of the tokenizer package: the entries of the model's tokenizer.json
+  vocabulary and merge list its corpus reaches, with the ids the model gives them.
+--------------------------------------------------------------------------------
+SmolLM2, by Hugging Face (HuggingFaceTB). Its model card states the Apache License,
+Version 2.0, which is LICENSE at the root of this repository.
+
+================================================================================
+Qwen2.5
+Origin: https://huggingface.co/Qwen/Qwen2.5-0.5B
+License: Apache-2.0
+Ships: repository
+Files:
+  src/test/resources/tokenizers/qwen25.lisp
+Use: A test fixture of the tokenizer package: the entries of the model's tokenizer.json
+  vocabulary and merge list its corpus reaches, with the ids the model gives them.
+--------------------------------------------------------------------------------
+Copyright 2024 Alibaba Cloud
+
+Licensed under the Apache License, Version 2.0, which is LICENSE at the root of this
+repository.
+
+================================================================================
+Qwen3.5
+Origin: https://huggingface.co/Qwen/Qwen3.5-0.8B
+License: Apache-2.0
+Ships: repository
+Files:
+  src/test/resources/tokenizers/qwen35.lisp
+Use: A test fixture of the tokenizer package: the entries of the model's tokenizer.json
+  vocabulary and merge list its corpus reaches, with the ids the model gives them.
+--------------------------------------------------------------------------------
+Copyright 2026 Alibaba Cloud
+
+Licensed under the Apache License, Version 2.0, which is LICENSE at the root of this
+repository.
+
+================================================================================
+transformers
+Origin: https://github.com/huggingface/transformers
+License: Apache-2.0
+Ships: repository
+Files:
+  examples/llm/causal-conv.lisp
+  examples/llm/deltanet.lisp
+  examples/llm/deltanet-ref.py
+  examples/llm/shortconv.lisp
+  examples/llm/shortconv-ref.py
+Use: The Gated DeltaNet and short-conv layers of the LLM example, and the Python references
+  their checks are pinned against, follow modeling_qwen3_5.py and modeling_lfm2.py.
+--------------------------------------------------------------------------------
+Copyright 2018- The Hugging Face team. All rights reserved.
+Copyright 2025 The Qwen Team and The HuggingFace Inc. team. All rights reserved.
+Copyright 2025 The HuggingFace Team. All rights reserved.
+
+Licensed under the Apache License, Version 2.0, which is LICENSE at the root of this
+repository.
+
+================================================================================
+wasmCloud
+Origin: https://github.com/wasmCloud/wasmCloud
+License: Apache-2.0
+Ships: repository
+Files:
+  examples/wasmcloud/http-client/app.lisp
+  examples/wasmcloud/http-handler/app.lisp
+  examples/wasmcloud/http-hello-world/app.lisp
+  examples/wasmcloud/http-kv-handler/app.lisp
+  examples/wasmcloud/service-tcp/http-api.lisp
+  examples/wasmcloud/service-tcp/service-leet.lisp
+Use: The wasmCloud examples port the repository's templates, keeping their routes and
+  response bodies.
+--------------------------------------------------------------------------------
+wasmCloud's templates declare the Apache License, Version 2.0 (their Cargo.toml), which
+is LICENSE at the root of this repository.
+
+================================================================================
+proxy-wasm-rust-sdk
+Origin: https://github.com/proxy-wasm/proxy-wasm-rust-sdk
+License: Apache-2.0
+Ships: repository
+Files:
+  examples/proxy-wasm/no-gc/http_body.lisp
+  examples/proxy-wasm/no-gc/http_headers.lisp
+  examples/proxy-wasm/sdk-examples/http_body.lisp
+  examples/proxy-wasm/sdk-examples/http_headers.lisp
+Use: The http_body and http_headers filters port the Rust SDK's examples of those names.
+--------------------------------------------------------------------------------
+Copyright 2020 Google LLC
+
+Licensed under the Apache License, Version 2.0, which is LICENSE at the root of this
+repository.
+
+================================================================================
+coi-serviceworker
+Version: v0.1.7
+Origin: https://github.com/gzuidhof/coi-serviceworker
+License: MIT
+Ships: repository
+Files:
+  web/coi-serviceworker.min.js
+Use: The playground site serves it unmodified to enable cross-origin isolation.
+--------------------------------------------------------------------------------
+MIT License
+
+Copyright (c) 2021 Guido Zuidhof
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+================================================================================
+Kuzushiji-49
+Origin: http://codh.rois.ac.jp/kmnist/
+License: CC-BY-SA-4.0
+Ships: repository
+Files:
+  examples/browser/hiragana/tools/k49/prepare-k49.py
+  examples/browser/hiragana/weights.bin
+Use: The hiragana example trains on Kuzushiji-49; its trained weights.bin is distributed under
+  the same licence, CC BY-SA 4.0, as an adaptation of the dataset.
+--------------------------------------------------------------------------------
+Kuzushiji-49 (c) ROIS-DS Center for Open Data in the Humanities (CODH), adapted from the
+Kuzushiji dataset created by the National Institute of Japanese Literature (NIJL).
+Licensed under the Creative Commons Attribution-ShareAlike 4.0 International License:
+https://creativecommons.org/licenses/by-sa/4.0/
+
+Tarin Clanuwat, Mikel Bober-Irizar, Asanobu Kitamoto, Alex Lamb, Kazuaki Yamamoto,
+David Ha, "Deep Learning for Classical Japanese Literature", arXiv:1812.01718.
+
+Changes: the images were reduced to 24x24 binary bitmaps of 46 of the 49 classes
+(tools/k49/prepare-k49.py) and a network was trained on them; weights.bin is that
+network's parameters.

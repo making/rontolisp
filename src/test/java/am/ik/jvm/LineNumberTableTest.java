@@ -1,0 +1,225 @@
+package am.ik.jvm;
+
+import java.lang.classfile.Attributes;
+import java.lang.classfile.ClassFile;
+import java.lang.classfile.ClassModel;
+import java.lang.classfile.CodeModel;
+import java.lang.classfile.MethodModel;
+import java.lang.classfile.attribute.LineNumberInfo;
+import java.lang.classfile.constantpool.ClassEntry;
+import java.lang.classfile.constantpool.MethodRefEntry;
+import java.lang.reflect.InvocationTargetException;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+
+import org.junit.jupiter.api.Test;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+/**
+ * A method's {@code LineNumberTable} through every way {@link JvmClassSplitter} writes a
+ * {@link ClassDefinition}: one class, one class shaken, a relaxed branch in front of the
+ * line, a method moved to a part -- each checked where it matters, in the line a thrown
+ * exception's stack trace reports.
+ */
+class LineNumberTableTest {
+
+	private static final String CLASS = "Lines";
+
+	@Test
+	void aThrowingMethodReportsTheLineItsInstructionMapsTo() throws Exception {
+		Fixture f = new Fixture(true);
+		f.throwing("boom", List.of(new ClassDefinition.Line(0, 7)));
+		byte[] bytes = write(f.build(), null);
+		assertThat(lines(bytes, "boom")).containsExactly(0, 7);
+		assertThat(thrownLine(Map.of(CLASS, bytes), "boom")).isEqualTo(7);
+	}
+
+	@Test
+	void aMethodWithoutLineNumbersCarriesNoAttributeAndNoName() {
+		Fixture f = new Fixture(false);
+		f.throwing("boom", List.of());
+		byte[] bytes = write(f.build(), null);
+		assertThat(lines(bytes, "boom")).isEmpty();
+		assertThat(new String(bytes, java.nio.charset.StandardCharsets.ISO_8859_1)).doesNotContain("LineNumberTable");
+	}
+
+	@Test
+	void lineNumbersNeedTheAttributeNamed() {
+		ConstantPool cp = new ConstantPool();
+		ClassDefinition.Builder builder = ClassDefinition.builder(cp, AccessFlag.ACC_PUBLIC | AccessFlag.ACC_SUPER,
+				cp.classEntry(CLASS), cp.classEntry("java/lang/Object"), cp.utf8Entry("Code"));
+		builder.addMethod(AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC, cp.utf8Entry("m"), cp.utf8Entry("()V"),
+				new MethodCode().return_(), List.of(new ClassDefinition.Line(0, 1)));
+		assertThatThrownBy(builder::build).isInstanceOf(IllegalStateException.class)
+			.hasMessageContaining("LineNumberTable");
+	}
+
+	@Test
+	void relaxingABranchMovesTheLinesAfterIt() throws Exception {
+		// A goto over 40,000 nops to a throw is past the signed 16-bit offset: written as
+		// a goto_w it is two bytes longer, and the line starting at the throw's first
+		// instruction starts where that instruction is written.
+		Fixture f = new Fixture(true);
+		MethodCode code = new MethodCode();
+		MethodCode.Label far = code.newLabel();
+		code.goto_(far);
+		for (int i = 0; i < 40_000; i++) {
+			code.nop();
+		}
+		code.labelBinding(far);
+		int throwAt = code.position();
+		f.throwingCode(code, "far");
+		f.definition.addMethod(AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC, f.cp.utf8Entry("far"),
+				f.cp.utf8Entry("()V"), code,
+				List.of(new ClassDefinition.Line(0, 1), new ClassDefinition.Line(throwAt, 2)));
+		byte[] bytes = write(f.build(), null);
+		assertThat(lines(bytes, "far")).containsExactly(0, 1, 5 + 40_000, 2);
+		assertThat(thrownLine(Map.of(CLASS, bytes), "far")).isEqualTo(2);
+	}
+
+	@Test
+	void theShakeKeepsAKeptMethodsLinesAndDropsTheNameWithTheLastMethodCarryingThem() throws Exception {
+		Fixture f = new Fixture(true);
+		f.throwing("boom", List.of(new ClassDefinition.Line(0, 11)));
+		f.throwing("gone", List.of(new ClassDefinition.Line(0, 12)));
+		byte[] kept = write(f.build(), Set.of("boom"));
+		assertThat(lines(kept, "boom")).containsExactly(0, 11);
+		assertThat(thrownLine(Map.of(CLASS, kept), "boom")).isEqualTo(11);
+		Fixture g = new Fixture(true);
+		g.throwing("boom", List.of());
+		g.throwing("gone", List.of(new ClassDefinition.Line(0, 12)));
+		byte[] none = write(g.build(), Set.of("boom"));
+		assertThat(new String(none, java.nio.charset.StandardCharsets.ISO_8859_1)).doesNotContain("LineNumberTable");
+	}
+
+	@Test
+	void aMethodTheSplitterMovesToAPartKeepsItsLines() throws Exception {
+		Fixture f = new Fixture(true);
+		// Enough strings that a tiny budget forces the later methods into parts.
+		for (int k = 0; k < 12; k++) {
+			f.throwing("boom" + k, List.of(new ClassDefinition.Line(0, 100 + k)));
+		}
+		JvmClassSplitter.Split split = JvmClassSplitter.write(f.build(), null, method -> false, 40,
+				JvmClassSplitter.Target.of(61));
+		assertThat(split.parts()).isNotEmpty();
+		Map<String, byte[]> classes = new HashMap<>(split.parts());
+		classes.put(CLASS, split.mainClass());
+		String part = split.parts().keySet().iterator().next();
+		String moved = firstMethod(java.util.Objects.requireNonNull(classes.get(part)));
+		int k = Integer.parseInt(moved.substring("boom".length()));
+		assertThat(lines(java.util.Objects.requireNonNull(classes.get(part)), moved)).containsExactly(0, 100 + k);
+		assertThat(thrownLine(classes, part, moved)).isEqualTo(100 + k);
+	}
+
+	private static byte[] write(ClassDefinition definition,
+			java.util.@org.jspecify.annotations.Nullable Set<String> roots) {
+		JvmClassSplitter.Split split = JvmClassSplitter.write(definition, roots, method -> false,
+				ConstantPool.MAX_INDEX, JvmClassSplitter.Target.of(61));
+		assertThat(split.parts()).isEmpty();
+		return split.mainClass();
+	}
+
+	private static List<Integer> lines(byte[] classFile, String method) {
+		ClassModel model = ClassFile.of().parse(classFile);
+		for (MethodModel m : model.methods()) {
+			if (m.methodName().stringValue().equals(method)) {
+				CodeModel code = m.code().orElseThrow();
+				List<Integer> out = new ArrayList<>();
+				code.findAttribute(Attributes.lineNumberTable()).ifPresent(table -> {
+					for (LineNumberInfo info : table.lineNumbers()) {
+						out.add(info.startPc());
+						out.add(info.lineNumber());
+					}
+				});
+				return out;
+			}
+		}
+		throw new AssertionError("no method " + method);
+	}
+
+	private static String firstMethod(byte[] classFile) {
+		return ClassFile.of().parse(classFile).methods().getFirst().methodName().stringValue();
+	}
+
+	private static int thrownLine(Map<String, byte[]> classes, String method) throws Exception {
+		return thrownLine(classes, CLASS, method);
+	}
+
+	private static int thrownLine(Map<String, byte[]> classes, String owner, String method) throws Exception {
+		Class<?> clazz = new Loader(classes).loadClass(owner.replace('/', '.'));
+		try {
+			java.lang.reflect.Method m = clazz.getDeclaredMethod(method);
+			m.setAccessible(true);
+			m.invoke(null);
+		}
+		catch (InvocationTargetException ex) {
+			return java.util.Objects.requireNonNull(ex.getCause()).getStackTrace()[0].getLineNumber();
+		}
+		throw new AssertionError(method + " did not throw");
+	}
+
+	/** Class Lines: static methods that throw a fresh RuntimeException. */
+	private static final class Fixture {
+
+		final ConstantPool cp = new ConstantPool();
+
+		final ClassDefinition.Builder definition;
+
+		final ClassEntry exception;
+
+		final MethodRefEntry init;
+
+		Fixture(boolean namesLineNumbers) {
+			this.definition = ClassDefinition.builder(this.cp, AccessFlag.ACC_PUBLIC | AccessFlag.ACC_SUPER,
+					this.cp.classEntry(CLASS), this.cp.classEntry("java/lang/Object"), this.cp.utf8Entry("Code"));
+			if (namesLineNumbers) {
+				this.definition.lineNumberTableName(this.cp.utf8Entry("LineNumberTable"));
+			}
+			this.exception = this.cp.classEntry("java/lang/RuntimeException");
+			this.init = this.cp.methodRef(this.exception, "<init>", "(Ljava/lang/String;)V");
+		}
+
+		void throwing(String name, List<ClassDefinition.Line> lines) {
+			MethodCode code = new MethodCode();
+			this.throwingCode(code, name);
+			this.definition.addMethod(AccessFlag.ACC_PUBLIC | AccessFlag.ACC_STATIC, this.cp.utf8Entry(name),
+					this.cp.utf8Entry("()V"), code, lines);
+		}
+
+		void throwingCode(MethodCode code, String name) {
+			code.new_(this.exception).dup().ldc(this.cp.stringEntry("from " + name)).invokespecial(this.init).athrow();
+		}
+
+		ClassDefinition build() {
+			return this.definition.build();
+		}
+
+	}
+
+	/** Defines the written classes, the way a class path would serve them. */
+	private static final class Loader extends ClassLoader {
+
+		private final Map<String, byte[]> classes;
+
+		Loader(Map<String, byte[]> classes) {
+			super(LineNumberTableTest.class.getClassLoader());
+			this.classes = classes;
+		}
+
+		@Override
+		protected Class<?> findClass(String name) throws ClassNotFoundException {
+			byte[] bytes = this.classes.get(name.replace('.', '/'));
+			if (bytes == null) {
+				throw new ClassNotFoundException(name);
+			}
+			return defineClass(name, bytes, 0, bytes.length);
+		}
+
+	}
+
+}

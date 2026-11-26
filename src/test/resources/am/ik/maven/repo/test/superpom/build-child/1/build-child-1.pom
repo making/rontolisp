@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <parent><groupId>test.superpom</groupId><artifactId>build-parent</artifactId><version>1</version></parent>
+  <artifactId>build-child</artifactId>
+  <build><finalName>${project.artifactId}-final</finalName></build>
+  <dependencies>
+      <dependency><groupId>test.lib</groupId><artifactId>d1</artifactId><version>${project.build.directory}</version></dependency>
+      <dependency><groupId>test.lib</groupId><artifactId>d2</artifactId><version>${project.build.outputDirectory}</version></dependency>
+      <dependency><groupId>test.lib</groupId><artifactId>d3</artifactId><version>${project.build.finalName}</version></dependency>
+  </dependencies>
+</project>

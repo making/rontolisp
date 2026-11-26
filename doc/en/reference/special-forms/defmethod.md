@@ -1,0 +1,88 @@
+# defmethod
+
+`(defmethod name [qualifier] (param... ) body...)`
+
+Adds a method to the generic function `name` (creating it when no [`defgeneric`](defgeneric.md) preceded it) and returns the name symbol. **Any** required parameter may carry a specializer, written `(var specializer)`:
+
+- `(var (eql literal))` — matches when the argument is the literal (a keyword, quoted symbol, number, or character). A bare name is looked up as a [`defconstant`](defconstant.md) defined earlier and matches its value; any other name is a variable, evaluated like the forms below. `(eql (find-class 'name))` matches that class object (`(find-class 't)` included). Any other form, such as `(eql (compute-key 'x))`, is evaluated once, when the method is defined, and the method matches an argument `eql` to that value; until the definition has run, the method does not apply
+- `(var class-name)` — matches instances of a [`defclass`](defclass.md) class and its subclasses
+- `(var struct-name)` — matches instances of a [`defstruct`](defstruct.md) type (the dispatcher tests the instance tag, like the struct predicate)
+- `(var type-name)` — matches a built-in type (`integer`, `float`, `number`, `string`, `symbol`, `keyword`, `character`, `cons`, `list`, `null`, `hash-table`, `function`, `bit-vector`, `vector`, `array`, `pathname`, `package`, `stream` and its subtypes such as `string-stream`, ...). `function` also matches a funcallable instance (a `closer-mop:funcallable-standard-class` instance). A `package` parameter matches exactly what [`typep`](../macros/typep.md) calls a package, and is tried BEFORE `keyword`/`symbol`, so the designator idiom "a `package` method plus an unspecialized method that calls [`find-package`](../functions/find-package.md) and recurses" terminates
+- `(var metaclass-name)` — `class` matches every class object (what [`find-class`](../functions/find-class.md) and [`class-of`](../functions/class-of.md) answer), `standard-class` the ones `defclass` and `defstruct` define, and `built-in-class` those of the built-in classes. `structure-class` is accepted but matches nothing: a structure's class object is a `standard-class`
+- `(var method-metaobject-class)` — `generic-function`, `standard-generic-function`, `method`, `standard-method`, `method-combination` and closer-mop's `standard-accessor-method`, `standard-reader-method`, `standard-writer-method` and `eql-specializer` are classes, also usable as a [`defclass`](defclass.md) superclass, a type and a [`find-class`](../functions/find-class.md) name. Their instances are the generic function and method metaobjects of [`add-method`](../functions/add-method.md) and its siblings; a program that uses none of those keeps a plain function as a generic function's value and no method object, and there `make-instance` of one of these classes signals
+- A class object in place of a name (`#.(class-of 1)`) means the same as the class name
+- `(var t)` or a plain `var` — the default method
+
+A call runs the most specific matching method: parameters are ranked leftmost-first, and per parameter `eql` methods win over class methods (subclass before superclass), then built-in types (subtypes such as `integer` before their supertypes such as `number`, `bit-vector` before `vector` before `array`, `string-stream` before `stream`), then the default; with no match the call signals an error. Defining the same specializer combination again replaces the previous method. The lambda list may continue past the required parameters with `&optional`/`&rest`/`&key` (the dispatcher forwards the tail via `apply`). The body may start with a docstring and `(declare ...)` (both are ignored).
+
+```lisp
+(defclass animal () ())
+(defclass dog (animal) ())
+(defgeneric speak (x))
+(defmethod speak ((x dog)) "woof")
+(defmethod speak ((x animal)) "some sound")
+(defmethod speak ((x integer)) "a number")
+(defmethod speak ((x (eql :cat))) "meow")
+(defmethod speak (x) "?")
+(list (speak (make-instance 'dog)) (speak (make-instance 'animal))
+      (speak 42) (speak :cat) (speak "s")) ; => ("woof" "some sound" "a number" "meow" "?")
+```
+
+## Lambda-list congruence
+
+Every method's lambda list must be **congruent** with the generic function's (CLHS 7.6.4): the same number of required parameters and of `&optional` parameters, `&rest` or `&key` in both or in neither, and every keyword a `defgeneric` names after `&key` accepted by the method (named in its `&key`, or through `&allow-other-keys`, or by `&rest` without `&key`). The generic's lambda list is its `defgeneric`'s, else the first method's; `initialize-instance`, `reinitialize-instance`, `shared-initialize` and `print-object` have their standard ones. A method that is not congruent is not added: the `defmethod` signals a `program-error` where it runs, on every backend.
+
+```console
+(defgeneric scale (x factor &optional offset))
+(defmethod scale ((x integer) factor) (* x factor))
+;; Unhandled condition: DEFMETHOD SCALE: the method has fewer optional arguments than the generic function
+```
+
+## Setf methods
+
+`name` may also be the function name `(setf reader)`: the method becomes part of the *setf function* of `reader`, and `(setf (reader arg...) value)` dispatches through it with the new value as the FIRST parameter (CL's setf-function argument order). A setf method on the same name as a [`defclass`](defclass.md) `:accessor` merges with the accessor's writer methods instead of shadowing them, and `#'(setf reader)` is the writer as a first-class function. `(defgeneric (setf reader) ...)` works the same way, inline `(:method ...)` clauses included.
+
+```lisp
+(defclass sbox () ((v :initarg :v :reader content)))
+(defmethod (setf content) (new (b sbox)) (setf (slot-value b 'v) new))
+(let ((b (make-instance 'sbox :v 1)))
+  (setf (content b) 42)
+  (content b)) ; => 42
+```
+
+## Method qualifiers and `call-next-method`
+
+An optional `:before`, `:after`, or `:around` **qualifier** before the lambda list adds an auxiliary method (standard method combination). For one call:
+
+- every applicable `:around` method runs, most specific first, each wrapping the rest;
+- then every `:before` method runs for effect, most specific first;
+- then the most specific applicable primary (unqualified) method runs — its value is the result;
+- then every `:after` method runs for effect, **least** specific first.
+
+Under a short-form [`:method-combination`](defgeneric.md) the qualifier set is different: a primary method carries the COMBINATION NAME instead (`(defmethod total + ((x account)) ...)`), `:around` still wraps, and `:before`/`:after` are rejected.
+
+Inside a primary or `:around` method, `(call-next-method)` invokes the next less specific method (passing the current arguments, or new ones if given as `(call-next-method arg...)`), and `(next-method-p)` returns whether such a method exists. Calling `call-next-method` with no next method signals an error.
+
+```lisp
+(defclass point () ((x :initarg :x :accessor px)))
+(defclass point3d (point) ((z :initarg :z :accessor pz)))
+(defgeneric describe-point (p))
+(defmethod describe-point ((p point)) (list :x (px p)))
+(defmethod describe-point ((p point3d)) (append (call-next-method) (list :z (pz p))))
+(defmethod describe-point :around ((p point)) (list :point (call-next-method)))
+(describe-point (make-instance 'point3d :x 1 :z 3)) ; => (:POINT (:X 1 :Z 3))
+```
+
+Lite subset: standard method combination is supported for class and default methods (an `:around`/`:before`/`:after` with an `eql` or built-in-type specializer combines only with primaries of the same specializer plus the default method). On the compilation path `defmethod` is supported below the top level too -- in a `let`/`let*` body, whose bindings the method body may close over, under a conditional, in a loop, in a function body; the methods a compiled program can dispatch to are fixed at compile time. A method takes effect where its form runs, on every backend: a call that runs before the form does not see it.
+
+## A method on a built-in name
+
+Defining a method on the name of a built-in function (`close`, `open-stream-p`, `stream-element-type`, ...) makes the **built-in the generic function's default method**: instances of the specialized class run the method, and every other argument keeps the built-in behavior — including through a `(call-next-method)` out of the least specific primary method. A method on `close` for your own stream class therefore leaves `(close stream)` on a real file stream working. A user default (unspecialized) method still replaces the built-in outright.
+
+```lisp
+(defclass counter () ((n :initform 3)))
+(defmethod length ((c counter)) (slot-value c 'n))
+(list (length (make-instance 'counter)) (length "abcd")) ; => (3 4)
+```
+
+Lite subset: this works on every backend — the compilation paths route calls to such a name through the generated dispatcher, whose fall-through is the original built-in, and a call by a name computed at run time or a form [`eval`](../functions/eval.md) runs reaches it too. Only names backed by a native built-in function participate; a name implemented as an expansion (`mapcar`, `sort`, `format`, ...) cannot take methods, and a plain `defun` on a built-in name is still ignored on the compilation paths.

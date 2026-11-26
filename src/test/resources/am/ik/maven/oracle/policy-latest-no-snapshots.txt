@@ -1,0 +1,11 @@
+# descriptor --no-snapshots test.meta:snaplatest:LATEST test.meta:snaplatest:RELEASE test.meta:lib:LATEST test.meta:lib:RELEASE test.meta:both:RELEASE
+artifact test.meta:snaplatest:jar:LATEST
+warning missing test.meta:snaplatest:jar:3.0-SNAPSHOT
+artifact test.meta:snaplatest:jar:RELEASE
+dep test.meta:one:jar::1 scope=compile optional=null
+artifact test.meta:lib:jar:LATEST
+dep test.meta:two:jar::1 scope=compile optional=null
+artifact test.meta:lib:jar:RELEASE
+dep test.meta:two:jar::1 scope=compile optional=null
+artifact test.meta:both:jar:RELEASE
+dep test.meta:one:jar::1 scope=compile optional=null

@@ -1,0 +1,9 @@
+Evaluating with env x=10, y=3:
+  (+ 1 (* 2 3)) => 7
+  (- (* X X) (* Y Y)) => 91
+  (MOD (+ X Y) 5) => 3
+
+Cross-check against the built-in eval (constant expressions):
+  (+ 1 (* 2 3)) : my-eval=7  eval=7
+  (- 100 (* 7 8)) : my-eval=44  eval=44
+  (* (+ 1 2) (+ 3 4)) : my-eval=21  eval=21

@@ -1,0 +1,539 @@
+package am.ik.rontolisp.compiler;
+
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.function.Predicate;
+
+import org.jspecify.annotations.Nullable;
+
+import am.ik.rontolisp.LambdaLists;
+import am.ik.rontolisp.LispArray;
+import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispNames;
+import am.ik.rontolisp.LispNil;
+import am.ik.rontolisp.LispSymbol;
+import am.ik.rontolisp.LispTrees;
+import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.PackageRegistry;
+import am.ik.rontolisp.SourceProvenance;
+import am.ik.rontolisp.macro.LispMacroExpander;
+
+/**
+ * Static rewriting of function designators for the compilers. Common Lisp allows a symbol
+ * as a function designator (e.g. {@code (funcall 'car x)}); the compilers support the
+ * statically-known case by rewriting a literal {@code (quote name)} in function position
+ * into {@code (function name)}, which both backends resolve against the compile-time
+ * function registry.
+ */
+public final class FunctionDesignators {
+
+	/**
+	 * The argument index of the function designator of every standard operator that calls
+	 * one: the operators the backends resolve with {@link #normalize} directly, and the
+	 * ones whose expansion hands the designator to one of them.
+	 */
+	private static final Map<String, Integer> DESIGNATOR_ARGUMENT;
+	static {
+		Map<String, Integer> index = new HashMap<>();
+		for (String op : List.of(LispNames.FUNCALL, LispNames.APPLY, LispNames.MULTIPLE_VALUE_CALL, LispNames.MAPCAR,
+				LispNames.MAPC, LispNames.MAPCAN, LispNames.MAPLIST, LispNames.MAPL, LispNames.MAPCON, LispNames.REDUCE,
+				LispNames.MAPHASH, "EVERY", "SOME", LispNames.NOTANY, "NOTEVERY", "REMOVE-IF", "REMOVE-IF-NOT",
+				"DELETE-IF", "DELETE-IF-NOT", "FIND-IF", "FIND-IF-NOT", "POSITION-IF", "POSITION-IF-NOT", "COUNT-IF",
+				"COUNT-IF-NOT", "MEMBER-IF", "MEMBER-IF-NOT", "ASSOC-IF", "ASSOC-IF-NOT", "RASSOC-IF",
+				"RASSOC-IF-NOT")) {
+			index.put(op, 1);
+		}
+		for (String op : List.of(LispNames.MAP, LispNames.MAP_INTO, LispNames.SORT, LispNames.STABLE_SORT,
+				"SUBSTITUTE-IF", "SUBSTITUTE-IF-NOT", "NSUBSTITUTE-IF", "NSUBSTITUTE-IF-NOT", LispNames.SUBST_IF,
+				"SUBST-IF-NOT", "NSUBST-IF", "NSUBST-IF-NOT")) {
+			index.put(op, 2);
+		}
+		DESIGNATOR_ARGUMENT = Map.copyOf(index);
+	}
+
+	/**
+	 * The built-ins outside the wrapper catalog whose generated defun
+	 * {@code LispMacroExpander.expandTopLevelDefinitions} injects only for a program
+	 * referencing the operator (a call or {@code #'name}).
+	 */
+	private static final Set<String> REFERENCE_INJECTED_RUNTIMES = Set.of(LispNames.FIND_CLASS,
+			LispNames.ALLOCATE_INSTANCE, LispNames.COMPILE);
+
+	private static final Set<String> CASE_FORMS = Set.of(LispNames.CASE, LispNames.ECASE, LispNames.CCASE,
+			LispNames.TYPECASE, LispNames.ETYPECASE, LispNames.CTYPECASE);
+
+	private FunctionDesignators() {
+	}
+
+	/**
+	 * The argument index of the function designator a standard operator calls.
+	 * @param op the operator's member name
+	 * @return the index, or {@code -1} when {@code op} takes no function designator
+	 */
+	static int designatorArgument(String op) {
+		return DESIGNATOR_ARGUMENT.getOrDefault(op, -1);
+	}
+
+	/**
+	 * Rewrites every literal {@code 'name} designator of a WRAPPED built-in
+	 * ({@link BuiltinFunctionWrappers#names()} and the reference-gated ones) into
+	 * {@code #'name}, where an operator takes it as its function argument
+	 * ({@code (apply 'format nil ...)}, {@code (mapcar 'class-of ...)}).
+	 *
+	 * <p>
+	 * The backends resolve both spellings to the same function ({@link #normalize}), but
+	 * only at code generation. Every gate that decides whether a wrapper -- and whatever
+	 * runtime its body calls -- is emitted at all scans the program BEFORE that for
+	 * {@code (function name)}, so a program that spelled the designator with a quote
+	 * compiled to a call of a function its own gate had left out: postmodern's
+	 * {@code (apply 'concatenate 'string expanded)} failed with "Cannot compile:
+	 * CONCATENATE". Rewriting here, once, puts every such gate and the code generator on
+	 * one spelling instead of teaching each scan the second one.
+	 *
+	 * <p>
+	 * Limited to built-in names because for them the two spellings cannot differ: a
+	 * standard function may not be bound locally (CLHS 11.1.2.1.2), and a name a local
+	 * {@code flet}/{@code labels}/{@code macrolet} binds anyway is left alone below it.
+	 * Quoted data is not walked, and a {@code case}-family clause's keys are not code.
+	 * Identity-preserving: a form with nothing to rewrite comes back as itself.
+	 *
+	 * <p>
+	 * A quoted {@code (setf name)} function name given to {@code fdefinition},
+	 * {@code fboundp}, {@code fmakunbound} or a {@code (setf (fdefinition ...))} place is
+	 * mapped here too, onto the internal name the writer is stored under
+	 * ({@link #setfFunctionNameCall}): the backends and the gates read symbols there.
+	 * @param program the package-resolved top-level forms
+	 * @return the program with those designators rewritten, or {@code program} itself
+	 */
+	public static List<LispVal> normalizeBuiltinDesignators(List<LispVal> program) {
+		List<LispVal> out = null;
+		for (int i = 0; i < program.size(); i++) {
+			LispVal form = program.get(i);
+			LispVal rewritten = rewrite(form, Set.of());
+			if (rewritten != form && out == null) {
+				out = new ArrayList<>(program.subList(0, i));
+			}
+			if (out != null) {
+				out.add(rewritten);
+			}
+		}
+		List<LispVal> normalized = out == null ? program : out;
+		return withDataCalledReferences(normalized);
+	}
+
+	/**
+	 * The program with a top-level {@code (function name)} appended for every
+	 * reference-gated built-in only quoted data names ({@link #dataCalledNames}), and for
+	 * {@code concatenate} when a call computes its result type (the lowering calls the
+	 * wrapper, {@link ConcatenateForms#expand}) or a conversion can ask for a packed
+	 * vector at run time ({@link ConcatenateForms#convertsToPackedAtRunTime}): the
+	 * wrapper gates, and every scan pairing a runtime with a wrapper body, read that
+	 * spelling, so these reach the same wrapper {@code #'name} does. A
+	 * {@code car}/{@code cdr} composition needs no runtime of its own and gets no
+	 * reference: its wrapper is injected from {@link #dataCalledNames} itself, so a
+	 * program spelling {@code #'cadr} keeps the inline lambda it always had.
+	 */
+	private static List<LispVal> withDataCalledReferences(List<LispVal> program) {
+		Set<String> wanted = new HashSet<>(dataCalledNames(program));
+		if (program.stream().anyMatch(ConcatenateForms::callsWithComputedResultType)
+				|| ConcatenateForms.convertsToPackedAtRunTime(program)) {
+			wanted.add(LispNames.CONCATENATE);
+		}
+		if (wanted.isEmpty()) {
+			return program;
+		}
+		Set<String> spelled = BuiltinFunctionWrappers.functionValueNames(program);
+		List<String> missing = wanted.stream()
+			.filter(name -> !LispNames.isCarCdrComposition(name) && !spelled.contains(name))
+			.sorted()
+			.toList();
+		if (missing.isEmpty()) {
+			return program;
+		}
+		List<LispVal> out = new ArrayList<>(program);
+		for (String name : missing) {
+			out.add(new LispCons(new LispSymbol(LispNames.FUNCTION),
+					new LispCons(new LispSymbol(name), LispNil.INSTANCE)));
+		}
+		return out;
+	}
+
+	/**
+	 * The built-ins a program can call only through a symbol it holds in quoted data
+	 * ({@code '((aref x) (cadr x))}, an esrap-style rule table): every {@code cl}
+	 * function whose compiled value is injected only for a program spelling
+	 * {@code #'name} -- the reference-gated wrappers
+	 * ({@link BuiltinFunctionWrappers#REFERENCE_GATED_FUNCTIONS},
+	 * {@link BuiltinFunctionWrappers#COMPLEX_GATED_FUNCTIONS}), the restart runtime's
+	 * functions and the generated {@code find-class}/{@code allocate-instance}/
+	 * {@code compile} defuns -- and the {@code car}/{@code cdr} compositions, which
+	 * compile inline and have no named function otherwise. Empty unless the program can
+	 * turn a datum into a call ({@link #turnsDataIntoCalls}), so a program that cannot
+	 * keeps its output.
+	 * @param program the package-resolved top-level forms
+	 * @return the names quoted data spells
+	 */
+	public static Set<String> dataCalledNames(List<LispVal> program) {
+		if (!turnsDataIntoCalls(program)) {
+			return Set.of();
+		}
+		Set<String> names = new HashSet<>();
+		for (LispVal form : program) {
+			collectQuotedNames(form, names);
+		}
+		return names;
+	}
+
+	private static boolean isDataCallable(String name) {
+		return LispNames.isCarCdrComposition(name) || PackageRegistry.splitQualified(name) == null
+				&& (BuiltinFunctionWrappers.REFERENCE_GATED_FUNCTIONS.contains(name)
+						|| BuiltinFunctionWrappers.COMPLEX_GATED_FUNCTIONS.contains(name)
+						|| LispMacroExpander.RESTART_RUNTIME_FUNCTION_NAMES.contains(name)
+						|| REFERENCE_INJECTED_RUNTIMES.contains(name));
+	}
+
+	/**
+	 * The arguments (1-based) an operator reads as a type, class, condition or slot name:
+	 * a quoted symbol there ({@code (typep c 'error)}, {@code (slot-value o 'log)}) is
+	 * consumed by the call and never reaches a computed call, so it names no function.
+	 */
+	private static final Map<String, Set<Integer>> NAME_ARGUMENTS = Map.ofEntries(Map.entry(LispNames.TYPEP, Set.of(2)),
+			Map.entry(LispNames.SUBTYPEP, Set.of(1, 2)), Map.entry(LispNames.COERCE, Set.of(2)),
+			Map.entry(LispNames.MAKE_INSTANCE, Set.of(1)), Map.entry(LispNames.FIND_CLASS, Set.of(1)),
+			Map.entry(LispNames.MAKE_CONDITION, Set.of(1)), Map.entry(LispNames.ERROR, Set.of(1)),
+			Map.entry(LispNames.SIGNAL, Set.of(1)), Map.entry(LispNames.WARN, Set.of(1)),
+			Map.entry(LispNames.CERROR, Set.of(2)), Map.entry(LispNames.CONCATENATE, Set.of(1)),
+			Map.entry(LispNames.MAKE_SEQUENCE, Set.of(1)), Map.entry(LispNames.MAP, Set.of(1)),
+			Map.entry(LispNames.MERGE, Set.of(1)), Map.entry(LispNames.SLOT_VALUE, Set.of(2)),
+			Map.entry(LispNames.SLOT_BOUNDP, Set.of(2)), Map.entry(LispNames.SLOT_MAKUNBOUND, Set.of(2)),
+			Map.entry(LispNames.SLOT_EXISTS_P, Set.of(2)));
+
+	// The data-callable symbols inside every (quote datum) of a form, but for the
+	// quoted names NAME_ARGUMENTS skips.
+	private static void collectQuotedNames(LispVal form, Set<String> names) {
+		Set<Integer> skipped = form instanceof LispCons call && call.car() instanceof LispSymbol head
+				? NAME_ARGUMENTS.getOrDefault(head.name(), Set.of()) : Set.of();
+		LispVal node = form;
+		int index = 0;
+		while (node instanceof LispCons cons) {
+			if (cons.car() instanceof LispSymbol op && LispNames.QUOTE.equals(op.name())) {
+				collectDatumNames(cons.cdr(), names);
+				return;
+			}
+			if (!(skipped.contains(index) && isQuote(cons.car()))) {
+				collectQuotedNames(cons.car(), names);
+			}
+			node = cons.cdr();
+			index++;
+		}
+	}
+
+	private static boolean isQuote(LispVal form) {
+		return form instanceof LispCons cons && cons.car() instanceof LispSymbol op
+				&& LispNames.QUOTE.equals(op.name());
+	}
+
+	private static void collectDatumNames(LispVal datum, Set<String> names) {
+		LispVal node = datum;
+		while (node instanceof LispCons cons) {
+			collectDatumNames(cons.car(), names);
+			node = cons.cdr();
+		}
+		if (node instanceof LispSymbol sym && isDataCallable(sym.name())) {
+			names.add(sym.name());
+		}
+		else if (node instanceof LispArray array) {
+			for (LispVal element : array.data()) {
+				collectDatumNames(element, names);
+			}
+		}
+	}
+
+	/**
+	 * Whether the program can call a function named by a symbol it computes: a
+	 * {@code funcall}/{@code apply} or a designator-taking operator ({@code mapcar},
+	 * {@code remove-if}, ...) handed a designator the compiler cannot read, a computed
+	 * {@code fboundp}/{@code symbol-function}/{@code fdefinition}, or one of those
+	 * operators taken as a value.
+	 */
+	private static boolean turnsDataIntoCalls(List<LispVal> program) {
+		return LispMacroExpander.usesRuntimeFunctionDesignator(program)
+				|| LispMacroExpander.usesRuntimeFunctionBox(program)
+				|| program.stream().anyMatch(FunctionDesignators::callsComputedDesignator);
+	}
+
+	private static boolean callsComputedDesignator(LispVal form) {
+		LispVal node = form;
+		while (node instanceof LispCons cons) {
+			if (cons.car() instanceof LispSymbol op) {
+				String name = op.name();
+				if (LispNames.QUOTE.equals(name)) {
+					return false;
+				}
+				if (LispNames.FUNCTION.equals(name)) {
+					return cons.cdr() instanceof LispCons arg && arg.car() instanceof LispSymbol fn
+							? DESIGNATOR_ARGUMENT.containsKey(fn.name()) || LispNames.FBOUNDP.equals(fn.name())
+							: callsComputedDesignator(cons.cdr());
+				}
+				if (LispNames.FBOUNDP.equals(name) && cons.cdr() instanceof LispCons arg
+						&& !(arg.car() instanceof LispCons quoted && quoted.car() instanceof LispSymbol q
+								&& LispNames.QUOTE.equals(q.name()))) {
+					return true;
+				}
+				Integer index = DESIGNATOR_ARGUMENT.get(name);
+				if (index != null && nthArgument(cons, index) instanceof LispVal designator
+						&& !LispMacroExpander.isStaticFunctionDesignator(designator)) {
+					return true;
+				}
+			}
+			if (callsComputedDesignator(cons.car())) {
+				return true;
+			}
+			node = cons.cdr();
+		}
+		return false;
+	}
+
+	private static @Nullable LispVal nthArgument(LispCons call, int index) {
+		LispVal node = call;
+		for (int i = 0; i < index && node instanceof LispCons cell; i++) {
+			node = cell.cdr();
+		}
+		return node instanceof LispCons cell ? cell.car() : null;
+	}
+
+	private static boolean isBuiltin(String name) {
+		return BuiltinFunctionWrappers.isWrappedBuiltin(name);
+	}
+
+	private static LispVal rewrite(LispVal form, Set<String> shadowed) {
+		if (!(form instanceof LispCons cons)) {
+			return form;
+		}
+		String op = cons.car() instanceof LispSymbol sym ? sym.name() : null;
+		if (LispNames.QUOTE.equals(op) || LispNames.FUNCTION.equals(op)) {
+			// #'(lambda ...) holds code, which the generic walk below reaches through the
+			// lambda form itself.
+			return LispNames.FUNCTION.equals(op) && cons.cdr() instanceof LispCons rest
+					&& rest.car() instanceof LispCons lambda
+							? LispCons.rebuilt(cons, cons.car(),
+									LispCons.rebuilt(rest, rewrite(lambda, shadowed), rest.cdr()))
+							: form;
+		}
+		if (op != null && CASE_FORMS.contains(op) && cons.cdr() instanceof LispCons keyed) {
+			// (case key (keys body...)...): the keys are data.
+			LispVal clauses = LispTrees.rebuildSpine(keyed.cdr(), node -> null, clause -> clause instanceof LispCons c
+					? LispCons.rebuilt(c, c.car(), rewriteEach(c.cdr(), shadowed)) : clause);
+			return LispCons.rebuilt(cons, cons.car(), LispCons.rebuilt(keyed, rewrite(keyed.car(), shadowed), clauses));
+		}
+		if ((LispNames.SYMBOL_FUNCTION.equals(op) || LispNames.FDEFINITION.equals(op))
+				&& quotedName(cons.cdr()) instanceof LispSymbol name
+				&& BuiltinFunctionWrappers.REFERENCE_GATED_FUNCTIONS.contains(name.name())
+				&& !shadowed.contains(name.name())) {
+			// (symbol-function 'format) is #'format -- the global definition, which no
+			// local one shadows here -- and only that spelling injects a reference-gated
+			// wrapper.
+			return SourceProvenance.inherit(cons,
+					new LispCons(new LispSymbol(LispNames.FUNCTION), new LispCons(name, LispNil.INSTANCE)));
+		}
+		if (op != null
+				&& (LispNames.FDEFINITION.equals(op) || LispNames.FBOUNDP.equals(op)
+						|| LispNames.FMAKUNBOUND.equals(op))
+				&& !shadowed.contains(op) && quotedSetfFunctionPlace(cons.cdr()) instanceof LispSymbol place) {
+			return setfFunctionNameCall(cons, op, place);
+		}
+		if ((LispNames.SETF.equals(op) || LispNames.PSETF.equals(op)) && cons.cdr() instanceof LispCons pairs) {
+			// A (symbol-function 'name) PLACE is the definition's setter, not a value.
+			return LispCons.rebuilt(cons, cons.car(), rewritePairs(pairs, shadowed));
+		}
+		Set<String> inner = shadowed;
+		if ((LispNames.FLET.equals(op) || LispNames.LABELS.equals(op) || LispNames.MACROLET.equals(op))
+				&& cons.cdr() instanceof LispCons rest && rest.car() instanceof LispCons definitions) {
+			inner = new HashSet<>(shadowed);
+			for (LispVal node = definitions; node instanceof LispCons cell; node = cell.cdr()) {
+				if (cell.car() instanceof LispCons def && def.car() instanceof LispSymbol name) {
+					inner.add(name.name());
+				}
+			}
+		}
+		LispCons call = cons;
+		Integer index = op == null ? null : DESIGNATOR_ARGUMENT.get(op);
+		if (index != null) {
+			call = withBuiltinDesignator(cons, index, shadowed);
+		}
+		return rewriteEach(call, inner);
+	}
+
+	// The (place value ...) list of a setf: a symbol-function / fdefinition place is
+	// kept, every other element walked as code.
+	private static LispVal rewritePairs(LispVal pairs, Set<String> shadowed) {
+		if (!(pairs instanceof LispCons place)) {
+			return pairs;
+		}
+		LispVal keptPlace = place.car() instanceof LispCons placeForm && placeForm.car() instanceof LispSymbol head
+				&& (LispNames.SYMBOL_FUNCTION.equals(head.name()) || LispNames.FDEFINITION.equals(head.name()))
+						? setfFunctionNamePlace(placeForm, head) : rewrite(place.car(), shadowed);
+		if (!(place.cdr() instanceof LispCons value)) {
+			return LispCons.rebuilt(place, keptPlace, place.cdr());
+		}
+		return LispCons.rebuilt(place, keptPlace,
+				LispCons.rebuilt(value, rewrite(value.car(), shadowed), rewritePairs(value.cdr(), shadowed)));
+	}
+
+	/**
+	 * A {@code (fdefinition '(setf name))}, {@code (fboundp '(setf name))} or
+	 * {@code (fmakunbound '(setf name))} call over the internal name the writer function
+	 * is stored under ({@link LispMacroExpander#setfFunctionName}), as the interpreter
+	 * maps the list when the call runs. {@code fdefinition} becomes
+	 * {@code #'(setf name)}, which every backend already resolves and reports undefined
+	 * as {@code (setf name)}; {@code fmakunbound} still answers the list.
+	 */
+	private static LispVal setfFunctionNameCall(LispCons call, String op, LispSymbol place) {
+		LispVal quotedName = ((LispCons) call.cdr()).car();
+		if (LispNames.FDEFINITION.equals(op)) {
+			return SourceProvenance.inherit(call, new LispCons(new LispSymbol(LispNames.FUNCTION),
+					new LispCons(((LispCons) quotedName).toList().get(1), LispNil.INSTANCE)));
+		}
+		LispCons internal = SourceProvenance.inherit(call, new LispCons(call.car(), new LispCons(
+				quoted(new LispSymbol(LispMacroExpander.setfFunctionName(place.name()))), LispNil.INSTANCE)));
+		if (LispNames.FBOUNDP.equals(op)) {
+			return internal;
+		}
+		return SourceProvenance.inherit(call, new LispCons(new LispSymbol(LispNames.PROGN),
+				new LispCons(internal, new LispCons(quotedName, LispNil.INSTANCE))));
+	}
+
+	/**
+	 * A {@code (fdefinition '(setf name))} setf place over the writer's internal name;
+	 * any other {@code symbol-function} / {@code fdefinition} place as it stands.
+	 */
+	private static LispVal setfFunctionNamePlace(LispCons placeForm, LispSymbol head) {
+		if (LispNames.FDEFINITION.equals(head.name())
+				&& quotedSetfFunctionPlace(placeForm.cdr()) instanceof LispSymbol place) {
+			return SourceProvenance.inherit(placeForm, new LispCons(head, new LispCons(
+					quoted(new LispSymbol(LispMacroExpander.setfFunctionName(place.name()))), LispNil.INSTANCE)));
+		}
+		return placeForm;
+	}
+
+	// The place of a one-element argument list (quote (setf place)), or null.
+	private static @Nullable LispSymbol quotedSetfFunctionPlace(LispVal args) {
+		return args instanceof LispCons arg && arg.cdr() instanceof LispNil && arg.car() instanceof LispCons quoted
+				&& quoted.car() instanceof LispSymbol q && LispNames.QUOTE.equals(q.name())
+				&& quoted.cdr() instanceof LispCons rest && rest.cdr() instanceof LispNil
+						? LambdaLists.setfFunctionPlaceName(rest.car()) : null;
+	}
+
+	private static LispCons quoted(LispVal datum) {
+		return new LispCons(new LispSymbol(LispNames.QUOTE), new LispCons(datum, LispNil.INSTANCE));
+	}
+
+	// The symbol of a one-element argument list (quote name), or null.
+	private static @Nullable LispSymbol quotedName(LispVal args) {
+		return args instanceof LispCons arg && arg.cdr() instanceof LispNil && arg.car() instanceof LispCons quoted
+				&& quoted.car() instanceof LispSymbol q && LispNames.QUOTE.equals(q.name())
+				&& quoted.cdr() instanceof LispCons rest && rest.cdr() instanceof LispNil
+				&& rest.car() instanceof LispSymbol name && !name.isKeyword() ? name : null;
+	}
+
+	/**
+	 * Every element of a list walked as code, the list rebuilt only where one changed.
+	 */
+	private static LispVal rewriteEach(LispVal list, Set<String> shadowed) {
+		return LispTrees.rebuildSpine(list, node -> null, element -> rewrite(element, shadowed));
+	}
+
+	/**
+	 * {@code call} with its argument at {@code index} rewritten from {@code 'name} to
+	 * {@code #'name} when it names a built-in no local definition shadows.
+	 */
+	private static LispCons withBuiltinDesignator(LispCons call, int index, Set<String> shadowed) {
+		List<LispCons> prefix = new ArrayList<>();
+		LispVal node = call;
+		for (int i = 0; i < index && node instanceof LispCons cell; i++) {
+			prefix.add(cell);
+			node = cell.cdr();
+		}
+		if (!(node instanceof LispCons argCell) || !(argCell.car() instanceof LispCons quoted)
+				|| !(quoted.car() instanceof LispSymbol q) || !LispNames.QUOTE.equals(q.name())
+				|| !(quoted.cdr() instanceof LispCons quotedRest) || !(quotedRest.car() instanceof LispSymbol name)
+				|| !(quotedRest.cdr() instanceof LispNil) || name.isKeyword() || !isBuiltin(name.name())
+				|| shadowed.contains(name.name())) {
+			return call;
+		}
+		LispCons designator = SourceProvenance.inherit(quoted,
+				new LispCons(new LispSymbol(LispNames.FUNCTION), new LispCons(name, LispNil.INSTANCE)));
+		LispVal tail = new LispCons(designator, argCell.cdr());
+		for (int i = prefix.size() - 1; i >= 0; i--) {
+			tail = new LispCons(prefix.get(i).car(), tail);
+		}
+		return SourceProvenance.inherit(call, (LispCons) tail);
+	}
+
+	/**
+	 * Rewrites a literal {@code (quote name)} function argument into
+	 * {@code (function name)}; any other form is returned unchanged.
+	 * @param fnForm the expression in function-designator position
+	 * @return the normalized expression
+	 */
+	public static LispVal normalize(LispVal fnForm) {
+		if (fnForm instanceof LispCons cons && cons.car() instanceof LispSymbol op && LispNames.QUOTE.equals(op.name())
+				&& cons.cdr() instanceof LispCons rest && rest.car() instanceof LispSymbol sym && !sym.isKeyword()) {
+			return new LispCons(new LispSymbol(LispNames.FUNCTION), new LispCons(sym, LispNil.INSTANCE));
+		}
+		return fnForm;
+	}
+
+	/**
+	 * {@link #normalize(LispVal)} for a backend that knows which names resolve: a quoted
+	 * name {@code defined} rejects stays the quoted SYMBOL, which the dispatcher looks up
+	 * when the call runs -- after the arguments, and never for a call that does not
+	 * happen, as the interpreter does -- with a compile-time warning, so a typo stays
+	 * visible. Rewritten, the backend would compile {@code (function name)} of a name no
+	 * definition has, which signals where the designator is evaluated, before the
+	 * arguments.
+	 * @param fnForm the expression in function-designator position
+	 * @param defined whether the backend resolves {@code (function name)} for a name
+	 * @return the normalized expression
+	 */
+	public static LispVal normalize(LispVal fnForm, Predicate<String> defined) {
+		LispVal normalized = normalize(fnForm);
+		if (normalized != fnForm && normalized instanceof LispCons function && function.cdr() instanceof LispCons rest
+				&& rest.car() instanceof LispSymbol sym && !defined.test(sym.name())) {
+			CompileWarnings.warnUndefinedFunction(fnForm, sym.name(), "looked up when the call runs");
+			return fnForm;
+		}
+		return normalized;
+	}
+
+	/**
+	 * The function NAME a designator the compiler can READ spells -- {@code #'name} or
+	 * {@code 'name} -- or {@code null} for one it cannot (a variable, a call, an inline
+	 * {@code (lambda ...)}).
+	 *
+	 * <p>
+	 * This is what lets an operator that funcalls its function argument emit the DIRECT
+	 * call its head-position spelling would have emitted instead of routing the value
+	 * through the arity dispatcher; a name is only a candidate, and each backend still
+	 * decides whether its own registry answers it at the arity in hand.
+	 *
+	 * <p>
+	 * A local function shadowing the name is not a concern here: {@code flet}/{@code
+	 * labels} rewrite both {@code (f x)} and {@code #'f} into their binding VARIABLE
+	 * before any backend sees the form ({@code .kb/flet-labels.md}), so a surviving
+	 * {@code (function name)} names the global one by construction.
+	 * @param fnForm the expression in function-designator position
+	 * @return the name, or {@code null} when the designator is not a literal one
+	 */
+	public static @Nullable String literalName(LispVal fnForm) {
+		return normalize(fnForm) instanceof LispCons cons && cons.car() instanceof LispSymbol op
+				&& LispNames.FUNCTION.equals(op.name()) && cons.cdr() instanceof LispCons rest
+				&& rest.car() instanceof LispSymbol sym && !sym.isKeyword() && rest.cdr() instanceof LispNil
+						? sym.name() : null;
+	}
+
+}

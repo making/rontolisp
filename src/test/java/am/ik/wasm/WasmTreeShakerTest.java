@@ -1,0 +1,1403 @@
+package am.ik.wasm;
+
+import java.io.ByteArrayOutputStream;
+import java.util.ArrayList;
+import java.util.List;
+
+import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.codegen.wasm.WasmLispCompiler;
+import am.ik.rontolisp.compiler.OptimizeLevel;
+import am.ik.rontolisp.reader.LispReader;
+import org.junit.jupiter.api.Test;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+/**
+ * Structural (no-Docker) tests for the WASM dead-code eliminator. These verify the
+ * tree-shaker's invariants directly on real compiled modules: the output is smaller,
+ * stays well-formed (function and code sections stay aligned, every function reference is
+ * in range), the roots survive, and the pass is idempotent. End-to-end execution under
+ * wasmtime is covered by {@code WasmLispCompilerIntegrationTest}.
+ */
+class WasmTreeShakerTest {
+
+	private static byte[] compile(String source, boolean noWasi, OptimizeLevel optimize) {
+		List<LispVal> program = LispReader.readAllFromString(source);
+		return WasmLispCompiler.builder().noWasi(noWasi).optimize(optimize).build().compile(program);
+	}
+
+	private static byte[] compileComponent(String source, OptimizeLevel optimize) {
+		List<LispVal> program = LispReader.readAllFromString(source);
+		return WasmLispCompiler.builder().component(true).optimize(optimize).build().compile(program);
+	}
+
+	@Test
+	void dropsUnreachableFunctionsAndShrinksOutput() {
+		String source = """
+				(defun fact (n) (if (<= n 1) 1 (* n (fact (- n 1)))))
+				(rontolisp:wasm-export 'fact :params '(:int) :returns :int)
+				""";
+		byte[] plain = compile(source, true, OptimizeLevel.NONE);
+		byte[] optimized = compile(source, true, OptimizeLevel.DEFAULT);
+
+		assertThat(optimized.length).isLessThan(plain.length / 5);
+		Module before = Module.parse(plain);
+		Module after = Module.parse(optimized);
+		assertThat(after.definedFunctionCount()).isLessThan(before.definedFunctionCount());
+		// no-wasi reactor: the top-level init entry is exported as `_initialize`, not
+		// `_start`.
+		assertThat(after.exportedFunctionNames()).contains("fact", "_initialize");
+		after.assertWellFormed();
+	}
+
+	@Test
+	void aRangeProbedElsewhereStaysWhileItsOwnBytesAreStillCited() {
+		// A deduplicated string can have two kinds of reader: a table whose words point
+		// at it (invisible to the constant scan, so the range is probed on the table's
+		// base word) and a body of its own. The five-argument form cuts on the probe
+		// alone -- right for a table ROW, which nothing else can address; the
+		// six-argument
+		// form with ownCitationKeeps is for the bytes themselves, which a body's own
+		// i32.const must keep even after the table's reader died. Found on the type-test
+		// fold retiring the printer's closure arm: _fun_name's table died, and with it
+		// the bytes of VECTOR -- the function name -- which type-of still built as a
+		// symbol, printed as NULs (.kb/wasm-ref-type-fold.md).
+		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+		w.write(0); // no locals
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(100); // cites the range's own first byte, never the probe
+		w.write(Instruction.DROP);
+		w.write(Instruction.END);
+		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		new WasmWriter(out).write("\0asm")
+			.writeLittleEndian4(1)
+			.writeTypeSection(types -> types.addFunc(new Type[] {}, new Type[] {}))
+			.writeFunction(functions -> functions.addFunction(0))
+			.writeMemory(memories -> memories.addMemory(1))
+			.writeExport(exports -> exports.addExport("f", ExternalKind.FUNCTION, 0))
+			.writeCode(code -> code.addFunction(body.toByteArray()))
+			.writeDataSection(data -> data.addActiveData(0, 100,
+					"ABCDEFGHIJKL".getBytes(java.nio.charset.StandardCharsets.ISO_8859_1)));
+		byte[] module = out.toByteArray();
+
+		byte[] rowLike = WasmTreeShaker.shake(module, List.of(),
+				List.of(new WasmTreeShaker.DroppableDataRange(0, 0, 4, 8, 12)));
+		byte[] nameLike = WasmTreeShaker.shake(module, List.of(),
+				List.of(new WasmTreeShaker.DroppableDataRange(0, 0, 4, 8, 12, true)));
+
+		assertThat(new String(dataSectionPayload(rowLike), java.nio.charset.StandardCharsets.ISO_8859_1))
+			.as("the probe is uncited, so the row-like form cuts")
+			.doesNotContain("ABCD")
+			.contains("EFGHIJKL");
+		assertThat(nameLike).as("the body's own citation keeps the name-like form").isSameAs(module);
+	}
+
+	@Test
+	void aReaderDecidedRangeIgnoresAnUnrelatedConstantEqualToItsBase() {
+		// A blob whose readers cite its BASE word was probed on that word, so any live
+		// constant equal to the address pinned it -- chipz's `2048` held ~990 dead bytes
+		// of fdlibm tables the day a string shift moved their base there. The
+		// reader-decided form keys the range on the reader's reachability instead.
+		byte[] unrelated = bodyCiting(100); // live, and equal to the blob's base by
+											// chance
+		byte[] reader = bodyCiting(100);
+		byte[] deadReader = module(unrelated, reader, false);
+		byte[] liveReader = module(unrelated, reader, true);
+		List<WasmTreeShaker.DroppableDataRange> readBy = List
+			.of(WasmTreeShaker.DroppableDataRange.readBy(0, 0, 12, new int[] { 1 }, false));
+
+		assertThat(dataSectionText(WasmTreeShaker.shake(deadReader, List.of(),
+				List.of(new WasmTreeShaker.DroppableDataRange(0, 0, 12, 0, 4)))))
+			.as("observation: the unrelated constant pins the blob")
+			.contains("ABCDEFGHIJKL");
+		assertThat(dataSectionText(WasmTreeShaker.shake(deadReader, List.of(), readBy)))
+			.as("the reader died, so the blob goes whatever else holds its address")
+			.doesNotContain("ABCD");
+		assertThat(dataSectionText(WasmTreeShaker.shake(liveReader, List.of(), readBy))).as("a live reader keeps it")
+			.contains("ABCDEFGHIJKL");
+		assertThat(dataSectionText(WasmTreeShaker.shake(liveReader, List.of(),
+				List.of(WasmTreeShaker.DroppableDataRange.readBy(0, 0, 12, new int[0], false)))))
+			.as("no reader at all: nothing reads the bytes")
+			.doesNotContain("ABCD");
+	}
+
+	private static byte[] bodyCiting(int address) {
+		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+		w.write(0); // no locals
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(address);
+		w.write(Instruction.DROP);
+		w.write(Instruction.END);
+		return body.toByteArray();
+	}
+
+	// Two functions over a 12-byte blob at address 100: f is exported; g is exported
+	// only when asked, so it is otherwise unreachable.
+	private static byte[] module(byte[] f, byte[] g, boolean exportG) {
+		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		new WasmWriter(out).write("\0asm")
+			.writeLittleEndian4(1)
+			.writeTypeSection(types -> types.addFunc(new Type[] {}, new Type[] {}))
+			.writeFunction(functions -> {
+				functions.addFunction(0);
+				functions.addFunction(0);
+			})
+			.writeMemory(memories -> memories.addMemory(1))
+			.writeExport(exports -> {
+				exports.addExport("f", ExternalKind.FUNCTION, 0);
+				if (exportG) {
+					exports.addExport("g", ExternalKind.FUNCTION, 1);
+				}
+			})
+			.writeCode(code -> {
+				code.addFunction(f);
+				code.addFunction(g);
+			})
+			.writeDataSection(data -> data.addActiveData(0, 100,
+					"ABCDEFGHIJKL".getBytes(java.nio.charset.StandardCharsets.ISO_8859_1)));
+		return out.toByteArray();
+	}
+
+	private static String dataSectionText(byte[] module) {
+		return new String(dataSectionPayload(module), java.nio.charset.StandardCharsets.ISO_8859_1);
+	}
+
+	@Test
+	void dropsGlobalsNoSurvivorReadsAndRenumbersTheRest() {
+		// The shaker walked functions, types and data; a GLOBAL nothing reads survived
+		// it. The backends emit one per top-level Lisp variable whether or not the
+		// program has a reader, so a 1.7 KB --no-wasi module carried fifteen of them and
+		// read none.
+		ByteArrayOutputStream live = new ByteArrayOutputStream();
+		WasmWriter lw = new WasmWriter(live);
+		lw.write(0); // no locals
+		lw.write(Instruction.GET_GLOBAL);
+		lw.writeUnsignedLeb128(2); // only the third global is read
+		lw.write(Instruction.DROP);
+		lw.write(Instruction.END);
+		ByteArrayOutputStream dead = new ByteArrayOutputStream();
+		WasmWriter dw = new WasmWriter(dead);
+		dw.write(0);
+		dw.write(Instruction.GET_GLOBAL);
+		dw.writeUnsignedLeb128(0); // read only from a function nothing calls
+		dw.write(Instruction.DROP);
+		dw.write(Instruction.END);
+		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		new WasmWriter(out).write("\0asm")
+			.writeLittleEndian4(1)
+			.writeTypeSection(types -> types.addFunc(new Type[] {}, new Type[] {}))
+			.writeFunction(functions -> functions.addFunction(0).addFunction(0))
+			.writeGlobal(globals -> {
+				for (int i = 0; i < 3; i++) {
+					globals.addGlobal(Type.I32, Mutability.VAR, g -> {
+						g.write(Instruction.I32_CONST);
+						g.writeSignedLeb128(0);
+					});
+				}
+			})
+			.writeExport(exports -> exports.addExport("live", ExternalKind.FUNCTION, 0))
+			.writeCode(code -> code.addFunction(live.toByteArray()).addFunction(dead.toByteArray()));
+
+		byte[] shaken = WasmTreeShaker.shake(out.toByteArray());
+
+		assertThat(globalCount(shaken)).as("only the global a surviving body reads is kept").isEqualTo(1);
+		// ... and the surviving read now names index 0, not 2.
+		assertThat(Module.parse(shaken).definedFunctionCount()).isEqualTo(1);
+		assertThat(shaken).as("global.get renumbered onto the survivor")
+			.containsSequence((byte) Instruction.GET_GLOBAL, (byte) 0x00);
+		assertThat(WasmTreeShaker.shake(shaken)).as("idempotent").isEqualTo(shaken);
+	}
+
+	@Test
+	void keepsAnExportedGlobalAndTheOnesItsInitializerNames() {
+		// Two roots the body walk cannot see: an EXPORTED global is part of the host
+		// contract, and a live global's initializer may name another global.
+		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		WasmWriter bw = new WasmWriter(body);
+		bw.write(0);
+		bw.write(Instruction.END);
+		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		new WasmWriter(out).write("\0asm")
+			.writeLittleEndian4(1)
+			.writeTypeSection(types -> types.addFunc(new Type[] {}, new Type[] {}))
+			.writeFunction(functions -> functions.addFunction(0))
+			.writeGlobal(globals -> {
+				globals.addGlobal(Type.I32, Mutability.CONST, g -> {
+					g.write(Instruction.I32_CONST);
+					g.writeSignedLeb128(7);
+				});
+				globals.addGlobal(Type.I32, Mutability.VAR, g -> {
+					g.write(Instruction.I32_CONST);
+					g.writeSignedLeb128(0);
+				});
+				// Global 2 is exported and its initializer reads global 0, so both live
+				// while global 1 goes.
+				globals.addGlobal(Type.I32, Mutability.CONST, g -> {
+					g.write(Instruction.GET_GLOBAL);
+					g.writeUnsignedLeb128(0);
+				});
+			})
+			.writeExport(
+					exports -> exports.addExport("f", ExternalKind.FUNCTION, 0).addExport("g", ExternalKind.GLOBAL, 2))
+			.writeCode(code -> code.addFunction(body.toByteArray()));
+
+		byte[] shaken = WasmTreeShaker.shake(out.toByteArray());
+
+		assertThat(globalCount(shaken)).isEqualTo(2);
+		assertThat(exportedGlobalIndices(shaken)).as("the export follows its global's new index").containsExactly(1);
+	}
+
+	@Test
+	void dropsAHostCellHookNoOtherSurvivorReads() {
+		// A host setter is an export, hence a root, hence immortal -- and on a module
+		// that reads nothing out of the cell it writes, it is 65 bytes of name, body,
+		// function entry and export entry with no effect. The hook's own body names the
+		// cell by construction, so the test is whether any OTHER survivor does.
+		byte[] reader = cellBody(Instruction.I32_LOAD, 216);
+		byte[] readHook = cellStore(216);
+		byte[] unreadHook = cellStore(224);
+		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		new WasmWriter(out).write("\0asm")
+			.writeLittleEndian4(1)
+			.writeTypeSection(types -> types.addFunc(new Type[] {}, new Type[] {}))
+			.writeFunction(functions -> functions.addFunction(0).addFunction(0).addFunction(0))
+			.writeMemory(memories -> memories.addMemory(1))
+			.writeExport(exports -> exports.addExport("read", ExternalKind.FUNCTION, 0)
+				.addExport("__ronto_seed_random", ExternalKind.FUNCTION, 1)
+				.addExport("__ronto_set_time", ExternalKind.FUNCTION, 2))
+			.writeCode(code -> code.addFunction(reader).addFunction(readHook).addFunction(unreadHook));
+
+		byte[] shaken = WasmTreeShaker.shake(out.toByteArray(), List.of(), List.of(),
+				List.of(new WasmTreeShaker.HostCellHook("__ronto_seed_random", 216),
+						new WasmTreeShaker.HostCellHook("__ronto_set_time", 224)));
+
+		Module m = Module.parse(shaken);
+		m.assertWellFormed();
+		assertThat(m.exportedFunctionNames()).as("the hook whose cell a survivor reads stays")
+			.containsExactly("read", "__ronto_seed_random");
+		assertThat(m.definedFunctionCount()).as("the unread hook's body goes with its export").isEqualTo(2);
+		// A hook the module does not export at all is not a hook to drop: the same list
+		// is offered for every build shape.
+		assertThat(
+				WasmTreeShaker.shake(shaken, List.of(), List.of(),
+						List.of(new WasmTreeShaker.HostCellHook("__ronto_seed_random", 216),
+								new WasmTreeShaker.HostCellHook("__ronto_set_time", 224))))
+			.as("idempotent")
+			.isEqualTo(shaken);
+	}
+
+	// A body that loads from `address` and drops the value: a READER of the cell.
+	private static byte[] cellBody(int load, int address) {
+		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+		w.write(0); // no locals
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(address);
+		w.write(load);
+		w.writeUnsignedLeb128(2); // align
+		w.writeUnsignedLeb128(0); // offset
+		w.write(Instruction.DROP);
+		w.write(Instruction.END);
+		return body.toByteArray();
+	}
+
+	// A host setter's body: store a constant into `address` and return.
+	private static byte[] cellStore(int address) {
+		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+		w.write(0);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(address);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(1);
+		w.write(Instruction.I32_STORE);
+		w.writeUnsignedLeb128(2);
+		w.writeUnsignedLeb128(0);
+		w.write(Instruction.END);
+		return body.toByteArray();
+	}
+
+	private static int globalCount(byte[] module) {
+		byte[] payload = sectionPayload(module, 6);
+		return payload == null ? 0 : leb(payload, new int[] { 0 });
+	}
+
+	private static List<Integer> exportedGlobalIndices(byte[] module) {
+		byte[] payload = java.util.Objects.requireNonNull(sectionPayload(module, 7));
+		int[] p = { 0 };
+		int count = leb(payload, p);
+		List<Integer> indices = new ArrayList<>();
+		for (int i = 0; i < count; i++) {
+			int nameLength = leb(payload, p);
+			p[0] += nameLength;
+			int kind = payload[p[0]++] & 0xff;
+			int index = leb(payload, p);
+			if (kind == 0x03) {
+				indices.add(index);
+			}
+		}
+		return indices;
+	}
+
+	private static byte @org.jspecify.annotations.Nullable [] sectionPayload(byte[] module, int wanted) {
+		int[] p = { 8 };
+		while (p[0] < module.length) {
+			int id = module[p[0]++] & 0xff;
+			int size = leb(module, p);
+			if (id == wanted) {
+				return java.util.Arrays.copyOfRange(module, p[0], p[0] + size);
+			}
+			p[0] += size;
+		}
+		return null;
+	}
+
+	@Test
+	void dropsUnusedWasiImports() {
+		// A program that only prints uses fd_write; the other seven WASI imports are
+		// dead.
+		byte[] optimized = compile("(print (+ 1 2))", false, OptimizeLevel.DEFAULT);
+		Module m = Module.parse(optimized);
+		m.assertWellFormed();
+		assertThat(m.functionImportNames()).containsExactly("fd_write");
+	}
+
+	@Test
+	void dropsTheNameSectionRenumberingHasInvalidated() {
+		// A `name` section maps FUNCTION AND TYPE indices to names, and the pass has just
+		// renumbered both -- keeping it would describe the module's old shape. The
+		// rontolisp backend emits none, so the module that shows this is the hand-written
+		// WASI adapter, where the name section is most of the bytes.
+		byte[] adapter;
+		try (java.io.InputStream in = WasmTreeShakerTest.class
+			.getResourceAsStream("/am/ik/rontolisp/codegen/wasm/component/adapter.wasm")) {
+			adapter = java.util.Objects.requireNonNull(in, "adapter.wasm").readAllBytes();
+		}
+		catch (java.io.IOException ex) {
+			throw new java.io.UncheckedIOException(ex);
+		}
+		assertThat(customSectionNames(adapter)).contains("name");
+
+		byte[] shaken = WasmTreeShaker.shake(
+				WasmExports.retain(adapter, new java.util.LinkedHashMap<>(java.util.Map.of("fd_write", "fd_write"))));
+
+		assertThat(customSectionNames(shaken)).isEmpty();
+	}
+
+	private static List<String> customSectionNames(byte[] module) {
+		List<String> names = new ArrayList<>();
+		int[] p = { 8 };
+		while (p[0] < module.length) {
+			int id = module[p[0]++] & 0xff;
+			int size = leb(module, p);
+			int end = p[0] + size;
+			if (id == 0) {
+				int len = leb(module, p);
+				names.add(new String(module, p[0], len, java.nio.charset.StandardCharsets.UTF_8));
+			}
+			p[0] = end;
+		}
+		return names;
+	}
+
+	private static int leb(byte[] buf, int[] p) {
+		int value = 0;
+		int shift = 0;
+		while (true) {
+			int b = buf[p[0]++] & 0xff;
+			value |= (b & 0x7f) << shift;
+			if ((b & 0x80) == 0) {
+				return value;
+			}
+			shift += 7;
+		}
+	}
+
+	@Test
+	void keepsTransitivelyReachableRuntime() {
+		// Ratio arithmetic reaches the rational runtime helpers; they must survive. The
+		// operand is a parameter: over two literals the sum folds to a constant.
+		byte[] optimized = compile("(defun plus-sixth (x) (+ x 1/6)) (print (plus-sixth 1/3))", false,
+				OptimizeLevel.DEFAULT);
+		Module m = Module.parse(optimized);
+		m.assertWellFormed();
+		assertThat(m.exportedFunctionNames()).contains("_start");
+	}
+
+	@Test
+	void shakesEhModeModules() {
+		// EH mode: the shaker must walk try_table/throw/throw_ref
+		// immediates correctly and keep the tag section verbatim, so P1 EH +
+		// --optimize compose.
+		String source = """
+				(defun protected-div (a b)
+				  (handler-case (/ a b) (error (e) -1)))
+				(print (unwind-protect (protected-div 10 2) (print :cleaned)))
+				""";
+		byte[] plain = compile(source, false, OptimizeLevel.NONE);
+		byte[] optimized = compile(source, false, OptimizeLevel.DEFAULT);
+		assertThat(optimized.length).isLessThan(plain.length);
+		Module m = Module.parse(optimized);
+		m.assertWellFormed();
+		assertThat(m.exportedFunctionNames()).contains("_start");
+		// Idempotence over the EH opcodes too.
+		assertThat(WasmTreeShaker.shake(optimized)).isEqualTo(optimized);
+	}
+
+	@Test
+	void internDoesNotHoldTheFuncallDispatchGateOpen() {
+		// A symbol BUILDER no longer bails the funcall-dispatch gate: whatever an intern
+		// can produce that resolves is a spelling the module holds, and the
+		// dispatchableFuncIds probes read every such spelling (symbol, framed string
+		// literal, keyword, alias, bare member). A name forged out of computed pieces is
+		// the LibraryDefunPruner carve-out -- the ordinary undefined-function error --
+		// so the computed-intern module shakes exactly like the keyword-intern one.
+		// Only the data evaluators (eval/read/read-from-string/load) still keep every
+		// function dispatchable, because their names arrive from OUTSIDE the module.
+		// The funcall keeps the dispatch machinery emitted at all -- without one there
+		// are no ladders and every module would be tiny whatever the gate decides. Its
+		// designator is COMPUTED on purpose: a designator the compiler can read is a
+		// direct call and emits no ladder either, and so is one it can read through a
+		// let temp (WasmDesignatorCall, LetBoundDesignators).
+		String funcall = "(defun f () 1) (print (funcall (car (list #'f)))) ";
+		String keyword = funcall + "(print (eq (intern (string-upcase \"post\") :keyword) :post))";
+		String forging = funcall + "(print (intern (string-upcase \"post\")))";
+		String reading = funcall + "(print (eval (read)))";
+		byte[] gated = compile(keyword, false, OptimizeLevel.DEFAULT);
+		byte[] computed = compile(forging, false, OptimizeLevel.DEFAULT);
+		byte[] bailed = compile(reading, false, OptimizeLevel.DEFAULT);
+		Module.parse(gated).assertWellFormed();
+		Module.parse(computed).assertWellFormed();
+		// The computed intern shakes like the keyword one (within the few hundred bytes
+		// its own string handling costs)...
+		assertThat((double) computed.length).isLessThan(gated.length * 1.5);
+		// ...while a data evaluator still keeps every wrapper dispatchable.
+		assertThat(gated.length).isLessThan(bailed.length / 2);
+	}
+
+	@Test
+	void widenedProbesApplyOnlyWithASymbolBuilderPresent() {
+		// The framed-string and keyword probes exist for the symbol BUILDERS: without
+		// one, no runtime path can turn a string constant into a designator, so a
+		// defun whose member name merely collides with an unrelated string literal
+		// keeps no registry row and shakes out. Pinned as a paired difference: the
+		// colliding literal and a non-colliding one must yield the same function
+		// count (an unconditional framed probe would keep RUNTASK alive in the first).
+		// The funcall's designator is COMPUTED so a ladder exists to keep RUNTASK at all
+		// (a designator the compiler can read -- written out or through a let temp -- is
+		// a direct call, WasmDesignatorCall / LetBoundDesignators).
+		String base = "(defun runtask () 2) (defun f () 1) (print (funcall (car (list #'f)))) ";
+		String collide = base + "(print \"RUNTASK\")";
+		String noCollide = base + "(print \"RUNTASX\")";
+		byte[] colliding = compile(collide, false, OptimizeLevel.DEFAULT);
+		byte[] plain = compile(noCollide, false, OptimizeLevel.DEFAULT);
+		Module.parse(colliding).assertWellFormed();
+		assertThat(Module.parse(colliding).definedFunctionCount())
+			.isEqualTo(Module.parse(plain).definedFunctionCount());
+	}
+
+	@Test
+	void theCompilersOwnInternShapesDoNotWidenTheProbes() {
+		// Two intern spellings ride into every Worker/serve program from the
+		// compiler's own emissions, and neither can produce a FUNCTION designator, so
+		// neither may hold the widened probes open (RuntimeNameProducers): the
+		// keyword-package shape (http-server.lisp interns the request method) only
+		// makes keywords, and the injected %slot-name-key defun (the slot-name fold
+		// every slot-value dispatcher calls) only re-interns a name the program
+		// already holds as a symbol. Same paired-difference pin as above, with each
+		// shape present.
+		String keyword = " (print (eq (intern (string-upcase \"post\") :keyword) :post))";
+		String slots = " (defstruct pt (x 0)) (print (slot-value (make-pt :x 7) 'x))";
+		for (String shape : new String[] { keyword, slots }) {
+			String base = "(defun runtask () 2) (defun f () 1) (print (funcall (car (list #'f))))" + shape;
+			byte[] colliding = compile(base + " (print \"RUNTASK\")", false, OptimizeLevel.DEFAULT);
+			byte[] plain = compile(base + " (print \"RUNTASX\")", false, OptimizeLevel.DEFAULT);
+			Module.parse(colliding).assertWellFormed();
+			assertThat(Module.parse(colliding).definedFunctionCount()).describedAs(shape)
+				.isEqualTo(Module.parse(plain).definedFunctionCount());
+		}
+	}
+
+	@Test
+	void aCompilerInternedTableNameDoesNotArmTheDispatchGate() {
+		// The gate's name probes read Ctx.spelledLiterals -- the spellings Pass 2
+		// emitted as VALUES -- not the whole string table. An instance layout's slot
+		// names are interned for the layout directory (a private compiler table), so a
+		// defun whose name merely matches a slot keeps no registry row and shakes.
+		// Paired difference as above: a slot named RUNTASK and one named RUNTASX must
+		// yield the same function count.
+		String base = "(defun runtask () 2) (defun f () 1) (print (funcall (car (list #'f)))) ";
+		String collide = base + "(defclass box () ((runtask :initarg :size))) "
+				+ "(print (null (make-instance 'box :size 5)))";
+		String noCollide = base + "(defclass box () ((runtasx :initarg :size))) "
+				+ "(print (null (make-instance 'box :size 5)))";
+		byte[] colliding = compile(collide, false, OptimizeLevel.DEFAULT);
+		byte[] plain = compile(noCollide, false, OptimizeLevel.DEFAULT);
+		Module.parse(colliding).assertWellFormed();
+		assertThat(Module.parse(colliding).definedFunctionCount())
+			.isEqualTo(Module.parse(plain).definedFunctionCount());
+	}
+
+	@Test
+	void aGeneratedReaderBodySlotNameDoesNotArmTheDispatchGate() {
+		// In a program with conditions live, a generated :reader/:accessor body quotes
+		// its slot name for the unbound-slot signal. That quote is synthesized, not
+		// spelled by the user, so it rides in %unspelled-quote and must not arm the
+		// gate -- before it did, every slot name of every class held a same-named
+		// defun's row, ladder case and body alive (one per chipz header accessor on
+		// the zlib size-report row). The read still answers, and the handler still
+		// catches the unbound read, with the rows absent.
+		String base = "(defun runtask () 2) (defun f () 1) (print (funcall (car (list #'f)))) ";
+		String tail = " (let ((b (make-instance 'box))) " + "(print (handler-case (box-task b) (error (e) -1))))";
+		String collide = base + "(defclass box () ((runtask :accessor box-task)))" + tail;
+		String noCollide = base + "(defclass box () ((runtasx :accessor box-task)))" + tail;
+		byte[] colliding = compile(collide, false, OptimizeLevel.DEFAULT);
+		byte[] plain = compile(noCollide, false, OptimizeLevel.DEFAULT);
+		Module.parse(colliding).assertWellFormed();
+		assertThat(Module.parse(colliding).definedFunctionCount())
+			.isEqualTo(Module.parse(plain).definedFunctionCount());
+	}
+
+	@Test
+	void aLiteralDesignatorSiteBuysNoLadderCase() {
+		// (mapcar #'dbl ...) is the direct call its head-position spelling would have
+		// been, so DBL never becomes a function VALUE and the arity-1 ladder is left the
+		// unreachable stub -- which is what stops it keeping HALVE, a function nothing
+		// calls that is dispatchable only because the program spells its name. Compute
+		// the same designator and the ladder comes back with both.
+		String defs = "(defun dbl (x) (* x 2)) (defun halve (x) (/ x 2)) ";
+		String tail = " (print 'halve)";
+		byte[] literal = compile(defs + "(print (mapcar #'dbl '(1 2)))" + tail, false, OptimizeLevel.DEFAULT);
+		byte[] computed = compile(defs + "(print (mapcar (car (list #'dbl)) '(1 2)))" + tail, false,
+				OptimizeLevel.DEFAULT);
+		Module.parse(literal).assertWellFormed();
+		Module.parse(computed).assertWellFormed();
+		assertThat(Module.parse(literal).definedFunctionCount())
+			.isLessThan(Module.parse(computed).definedFunctionCount());
+	}
+
+	@Test
+	void aClosureWhoseEveryCreatorIsShakenTakesItsLadderArmAlong() {
+		// MAKER makes a closure and nothing calls MAKER, so no closure of it can exist:
+		// the arity-1 ladder a live computed funcall keeps carries no arm for it, and
+		// ONLY-CLOSURE, which only the closure calls, shakes with it -- the module has
+		// the functions of the program without either defun. Call MAKER and both come
+		// back. ONLY-CLOSURE's body is not a single integer tree, which would be fused.
+		String live = "(defun f (x) (+ x 1)) (print (funcall (car (list #'f)) 1)) ";
+		String defs = "(defun only-closure (x) x (* x 3)) (defun maker () (lambda (y) (only-closure y))) ";
+		Module without = Module.parse(compile(live, false, OptimizeLevel.DEFAULT));
+		Module shaken = Module.parse(compile(defs + live, false, OptimizeLevel.DEFAULT));
+		Module made = Module.parse(compile(defs + live + "(print (funcall (maker) 2))", false, OptimizeLevel.DEFAULT));
+		shaken.assertWellFormed();
+		made.assertWellFormed();
+		assertThat(shaken.definedFunctionCount()).isEqualTo(without.definedFunctionCount());
+		assertThat(made.definedFunctionCount()).isGreaterThan(shaken.definedFunctionCount());
+		// The component's core is shaken by the same pass: it differs from the one
+		// without the two defuns only where a funcId is encoded.
+		assertThat(compileComponent(defs + live, OptimizeLevel.DEFAULT).length)
+			.isCloseTo(compileComponent(live, OptimizeLevel.DEFAULT).length, org.assertj.core.data.Offset.offset(8));
+		// A host import shifts every function index after the module is assembled; the
+		// rebuilt ladder is in the module before that, so it is renumbered with the rest.
+		String imported = "(rontolisp:wasm-import 'pull :from \"env\" :as \"pull\" :params '() :returns :int) "
+				+ "(defun f (x) (+ x (pull))) (print (funcall (car (list #'f)) 1)) ";
+		Module importedWithout = Module.parse(compile(imported, false, OptimizeLevel.DEFAULT));
+		Module importedShaken = Module.parse(compile(defs + imported, false, OptimizeLevel.DEFAULT));
+		importedShaken.assertWellFormed();
+		assertThat(importedShaken.functionImportNames()).contains("pull");
+		assertThat(importedShaken.definedFunctionCount()).isEqualTo(importedWithout.definedFunctionCount());
+	}
+
+	@Test
+	void aFunctionValueWhoseNameNothingSpellsHasNoRegistryRow() {
+		// H's quoted name keeps the name registry live. G is a value only inside NOBODY,
+		// which nothing calls, and nothing spells its name: the registry has no row for
+		// it (a row would make its value), so G's ladder arm goes and both defuns shake
+		// out, P1 and component alike. Call NOBODY and both come back.
+		String live = "(defun h (x) x (* x 10)) (print (funcall (car (list 'h)) 3)) ";
+		String defs = "(defun g (x) x (* x 100)) (defun nobody () #'g) ";
+		Module without = Module.parse(compile(live, false, OptimizeLevel.DEFAULT));
+		Module shaken = Module.parse(compile(defs + live, false, OptimizeLevel.DEFAULT));
+		Module made = Module.parse(compile(defs + live + "(print (funcall (nobody) 6))", false, OptimizeLevel.DEFAULT));
+		shaken.assertWellFormed();
+		made.assertWellFormed();
+		assertThat(shaken.definedFunctionCount()).isEqualTo(without.definedFunctionCount());
+		assertThat(made.definedFunctionCount()).isGreaterThan(shaken.definedFunctionCount());
+		assertThat(compileComponent(defs + live, OptimizeLevel.DEFAULT).length)
+			.isCloseTo(compileComponent(live, OptimizeLevel.DEFAULT).length, org.assertj.core.data.Offset.offset(8));
+	}
+
+	@Test
+	void aNameOnlyAFunctionNothingReachesSpellsHasNoCaseAndNoRow() {
+		// NOBODY holds the only 'GIVEN, and nothing calls it: no symbol of that name can
+		// reach the ladder, so GIVEN shakes out with the row and the bytes of its name.
+		// Call NOBODY and all three come back. The same in a reactor whose program spells
+		// nothing live: every row goes, and with them _lookup's loop. Its size is
+		// compared
+		// as a component, whose data sits above every funcId: on Preview 1 the lambda's
+		// funcId, which the two defuns shift, is an i32.const inside the string blob and
+		// keeps whichever string it lands in.
+		String live = "(defun h (x) x (* x 10)) (print (funcall (car (list 'h)) 3)) ";
+		String defs = "(defun given (x) x (* x 100)) (defun nobody () 'given) ";
+		byte[] unspelled = compile(live, false, OptimizeLevel.DEFAULT);
+		byte[] shaken = compile(defs + live, false, OptimizeLevel.DEFAULT);
+		byte[] made = compile(defs + live + "(print (funcall (nobody) 6))", false, OptimizeLevel.DEFAULT);
+		Module.parse(shaken).assertWellFormed();
+		Module.parse(made).assertWellFormed();
+		assertThat(Module.parse(shaken).definedFunctionCount())
+			.isEqualTo(Module.parse(unspelled).definedFunctionCount());
+		assertThat(contains(shaken, "GIVEN")).isFalse();
+		assertThat(Module.parse(made).definedFunctionCount())
+			.isGreaterThan(Module.parse(shaken).definedFunctionCount());
+		assertThat(contains(made, "GIVEN")).isTrue();
+		String reactor = "(defvar *f* (lambda (x) (+ x 1))) (defun e (x) (funcall *f* x)) "
+				+ "(rontolisp:wasm-export 'e :as \"e\" :params '(:s32) :returns :s32)";
+		Module.parse(compile(defs + reactor, true, OptimizeLevel.SIZE)).assertWellFormed();
+		assertThat(compileComponent(defs + reactor, OptimizeLevel.SIZE).length)
+			.isEqualTo(compileComponent(reactor, OptimizeLevel.SIZE).length);
+	}
+
+	@Test
+	void aMapVariableReadAsAComputedConversionMakesNoConcatenateValue() {
+		// (ecase map (:a 0)) reads as a (map <computed type> ...) call to the scan that
+		// opens #'concatenate's wrapper gate in a program spelling a packed element type,
+		// and may: what the gate reads is a reference, which is no value. With a ladder
+		// in the module, an evaluated one kept the wrapper and everything it reaches.
+		String program = "(defvar *f* (lambda (x) (+ x 1))) (defvar *v* (make-array 1 :element-type '(unsigned-byte 8)))"
+				+ "(defun pick (VAR) (ecase VAR (:a 0) (:b 1))) "
+				+ "(defun e (x) (+ (pick :a) (aref *v* 0) (funcall *f* x))) "
+				+ "(rontolisp:wasm-export 'e :as \"e\" :params '(:s32) :returns :s32)";
+		byte[] colliding = compile(program.replace("VAR", "map"), true, OptimizeLevel.SIZE);
+		byte[] plain = compile(program.replace("VAR", "mapp"), true, OptimizeLevel.SIZE);
+		Module.parse(colliding).assertWellFormed();
+		assertThat(Module.parse(colliding).definedFunctionCount())
+			.isEqualTo(Module.parse(plain).definedFunctionCount());
+	}
+
+	@Test
+	void aValueCallIsFollowedOnlyOnceAReachedFunctionMakesTheValue() {
+		// r calls the dispatcher d, whose arms call t (value 7) and u (value 8); m makes
+		// value 8 and t makes it too. Nothing reached makes either value, so neither arm
+		// is taken; exporting m makes 8, and making 7 takes t's arm, which makes 8.
+		int[][] calls = { { 1 }, { 2, 3 }, {}, {}, {} };
+		WasmTreeShaker.ValueCalls valueCalls = new WasmTreeShaker.ValueCalls(java.util.Set.of(1),
+				java.util.Map.of(2, 7, 3, 8), java.util.Map.of(4, java.util.Set.of(8), 2, java.util.Set.of(8)),
+				java.util.Set.of());
+		assertThat(WasmTreeShaker.valueReach(callModule(calls, false), valueCalls).made()).isEmpty();
+		assertThat(WasmTreeShaker.valueReach(callModule(calls, false), valueCalls).reached()).containsExactly(0, 1);
+		assertThat(WasmTreeShaker.valueReach(callModule(calls, true), valueCalls).made()).containsExactly(8);
+		WasmTreeShaker.ValueReach taken = WasmTreeShaker.valueReach(callModule(calls, false),
+				new WasmTreeShaker.ValueCalls(valueCalls.dispatchers(), valueCalls.targetValues(), valueCalls.makers(),
+						java.util.Set.of(7)));
+		assertThat(taken.made()).containsExactlyInAnyOrder(7, 8);
+		assertThat(taken.reached()).containsExactlyInAnyOrder(0, 1, 2, 3);
+	}
+
+	// Void functions whose bodies only call: function 0 is exported, and the last one
+	// too when asked.
+	private static byte[] callModule(int[][] calls, boolean exportLast) {
+		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		new WasmWriter(out).write("\0asm")
+			.writeLittleEndian4(1)
+			.writeTypeSection(types -> types.addFunc(new Type[] {}, new Type[] {}))
+			.writeFunction(functions -> {
+				for (int i = 0; i < calls.length; i++) {
+					functions.addFunction(0);
+				}
+			})
+			.writeExport(exports -> {
+				exports.addExport("r", ExternalKind.FUNCTION, 0);
+				if (exportLast) {
+					exports.addExport("m", ExternalKind.FUNCTION, calls.length - 1);
+				}
+			})
+			.writeCode(code -> {
+				for (int[] callees : calls) {
+					ByteArrayOutputStream body = new ByteArrayOutputStream();
+					WasmWriter w = new WasmWriter(body);
+					w.write(0); // no locals
+					for (int callee : callees) {
+						w.write(Instruction.CALL);
+						w.writeUnsignedLeb128(callee);
+					}
+					w.write(Instruction.END);
+					code.addFunction(body.toByteArray());
+				}
+			});
+		return out.toByteArray();
+	}
+
+	@Test
+	void anUnselectableGenericBranchAndItsMethodShakeOut() {
+		// The dispatcher lists only the branches some call site's argument shapes may
+		// select (compiler/GenericDispatchNarrowing): with (sizeof 21) as the only
+		// call, the string method -- and the helper only it calls -- fall out of the
+		// dispatcher and shake. A string call site brings them back, and so does
+		// taking #'sizeof as a VALUE (the narrower's escape).
+		String defs = "(defgeneric sizeof (x)) (defmethod sizeof ((x integer)) (keepme x)) "
+				+ "(defmethod sizeof ((x string)) (dropme x)) (defun keepme (x) (* x 2)) "
+				+ "(defun dropme (x) 999) (print (sizeof 21))";
+		byte[] narrowed = compile(defs, false, OptimizeLevel.DEFAULT);
+		byte[] stringSite = compile(defs + " (print (sizeof \"abc\"))", false, OptimizeLevel.DEFAULT);
+		byte[] escaped = compile(defs + " (print (funcall (car (list #'sizeof)) \"abc\"))", false,
+				OptimizeLevel.DEFAULT);
+		Module.parse(narrowed).assertWellFormed();
+		Module.parse(stringSite).assertWellFormed();
+		Module.parse(escaped).assertWellFormed();
+		assertThat(Module.parse(narrowed).definedFunctionCount())
+			.isLessThan(Module.parse(stringSite).definedFunctionCount());
+		assertThat(Module.parse(narrowed).definedFunctionCount())
+			.isLessThan(Module.parse(escaped).definedFunctionCount());
+	}
+
+	@Test
+	void aDesignatorBoundToATempIsTheSameDirectCall() {
+		// A designator the compiler can read through a let temp is the case above, not
+		// the computed one: the binding is propagated into the funcall sites and dropped
+		// (LetBoundDesignators), so the module is the written-out literal's own bytes --
+		// no ladder case, and HALVE shakes. Every expander that names a designator to
+		// avoid re-evaluating it (map/maplist/every/...) binds one, so this is what
+		// stops a coerced string from pinning the arity-1 ladder.
+		String defs = "(defun dbl (x) (* x 2)) (defun halve (x) (/ x 2)) ";
+		String tail = " (print 'halve)";
+		byte[] literal = compile(defs + "(print (mapcar #'dbl '(1 2)))" + tail, false, OptimizeLevel.DEFAULT);
+		byte[] bound = compile(defs + "(let ((f #'dbl)) (print (mapcar f '(1 2))))" + tail, false,
+				OptimizeLevel.DEFAULT);
+		assertThat(bound).isEqualTo(literal);
+		// One use as a plain VALUE and the binding stays: the value has to resolve, so
+		// the ladder is back and keeps HALVE with it.
+		byte[] valued = compile(
+				defs + "(let ((f #'dbl)) (print (mapcar f '(1 2))) (print (funcall (car (list f)) 3)))" + tail, false,
+				OptimizeLevel.DEFAULT);
+		Module.parse(valued).assertWellFormed();
+		assertThat(Module.parse(literal).definedFunctionCount())
+			.isLessThan(Module.parse(valued).definedFunctionCount());
+	}
+
+	@Test
+	void orphanedCaseFoldTableSegmentsAreDropped() {
+		// The ~16 KB Unicode case-fold tables ride in their own data segments owned by
+		// _char_upcase/_char_downcase. A program that never case-folds loses both
+		// segments with the helpers; one that folds keeps them and still works (behavior
+		// pinned by WasmLispCompilerIntegrationTest).
+		// The case fold has to be over a value the COMPILER cannot know, or the
+		// pure-builtin literal fold evaluates it and the helpers are unreachable after
+		// all (.kb/pure-builtin-fold.md) -- which is the third case asserted below.
+		byte[] hello = compile("(print \"Hello World!\")", false, OptimizeLevel.DEFAULT);
+		byte[] folding = compile("(defun fold-char (c) (char-upcase (char-downcase c))) (print (fold-char #\\A))",
+				false, OptimizeLevel.DEFAULT);
+		byte[] literalFolded = compile("(print (char-upcase (char-downcase #\\A)))", false, OptimizeLevel.DEFAULT);
+		Module.parse(hello).assertWellFormed();
+		Module.parse(folding).assertWellFormed();
+		Module.parse(literalFolded).assertWellFormed();
+		assertThat(dataSectionSize(hello)).isLessThan(512);
+		assertThat(dataSectionSize(folding)).isGreaterThan(16000);
+		assertThat(dataSectionSize(literalFolded)).isLessThan(512);
+		// 1024 also pins the literal-print specialization (WasmLiteralPrint): without
+		// it the generic printer family alone puts the module near 6 KB.
+		assertThat(hello.length).isLessThan(1024);
+	}
+
+	@Test
+	void everySpellingOfHelloWorldReachesTheSameFloor() {
+		// The literal fold belongs to the print FAMILY, not to `print`: whichever way a
+		// program spells "write this constant", none of them may reference the generic
+		// printer (WasmLiteralPrint). Before it was shared, the princ / format spellings
+		// carried the whole runtime printer -- 4.8 KB against print's 0.65 KB -- and a
+		// format argument hid its literal behind a `let` temp on top of that.
+		List<String> spellings = List.of("(print \"Hello World!\")", "(princ \"Hello World!\") (terpri)",
+				"(format t \"Hello World!~%\")", "(write-line \"Hello World!\")", "(write-string \"Hello World!\")",
+				"(format t \"Hello, ~a!~%\" \"World\")", "(format t \"~a~%\" 42)",
+				"(format t \"~s~%\" \"Hello World!\")");
+		for (String spelling : spellings) {
+			byte[] module = compile(spelling, false, OptimizeLevel.DEFAULT);
+			Module.parse(module).assertWellFormed();
+			assertThat(module.length).describedAs(spelling).isLessThan(1024);
+		}
+	}
+
+	@Test
+	void aFoldedComputationCompilesToTheLiteralItReducesTo() {
+		// The pure-builtin fold's payoff is that it feeds the literal folds above: a
+		// computed argument that the compiler can work out is a literal by the time
+		// WasmLiteralPrint sees it, so the whole generic printer shakes out. Byte
+		// IDENTITY with the literal spelling is the strongest form of that claim --
+		// nothing of the deleted call survives anywhere in the module
+		// (.kb/pure-builtin-fold.md).
+		assertThat(compile("(princ (* 6 7))", false, OptimizeLevel.DEFAULT))
+			.isEqualTo(compile("(princ 42)", false, OptimizeLevel.DEFAULT));
+		assertThat(compile("(princ (length \"Hello World!\"))", false, OptimizeLevel.DEFAULT))
+			.isEqualTo(compile("(princ 12)", false, OptimizeLevel.DEFAULT));
+		// concatenate 'string used to have a row here; it left the fold table when its
+		// compiled result became a mutable character vector with identity (a fold to
+		// one shared literal would forge aliasing -- .kb/pure-builtin-fold.md).
+		// symbol-name keeps a string-producing row in its place: its runtime answer is
+		// still an immutable value, so the fold forges nothing.
+		assertThat(compile("(princ (symbol-name :hello))", false, OptimizeLevel.DEFAULT))
+			.isEqualTo(compile("(princ \"HELLO\")", false, OptimizeLevel.DEFAULT));
+		assertThat(compile("(format t \"~a~%\" (* 6 7))", false, OptimizeLevel.DEFAULT))
+			.isEqualTo(compile("(format t \"~a~%\" 42)", false, OptimizeLevel.DEFAULT));
+		// A ratio result folds like an integer, so the rational runtime goes too.
+		assertThat(compile("(princ (/ 1 3))", false, OptimizeLevel.DEFAULT))
+			.isEqualTo(compile("(princ 1/3)", false, OptimizeLevel.DEFAULT));
+		assertThat(compile("(format t \"~a~%\" (+ 1/2 1/3))", false, OptimizeLevel.DEFAULT))
+			.isEqualTo(compile("(format t \"~a~%\" 5/6)", false, OptimizeLevel.DEFAULT));
+	}
+
+	@Test
+	void aRatioLiteralRoundsWithoutTheGenericConversion() {
+		// (floor (/ 7 2)) folds to (floor 7/2). The literal's two components are known
+		// exact integers, so the conversion is the _big_fdiv call the two-argument
+		// (floor 7 2) makes over them, not the ratio-or-integer-or-float dispatch a value
+		// of unknown type needs.
+		assertThat(compile("(princ (floor 7/2))", false, OptimizeLevel.DEFAULT))
+			.isEqualTo(compile("(princ (floor 7 2))", false, OptimizeLevel.DEFAULT));
+		assertThat(compile("(princ (round -7/2))", false, OptimizeLevel.DEFAULT))
+			.isEqualTo(compile("(princ (round -7 2))", false, OptimizeLevel.DEFAULT));
+	}
+
+	@Test
+	void everySpellingOfHelloWorldReachesTheSameComponentFloor() {
+		// The same eight spellings wrapped as WASI 0.3 components. The wrapper follows
+		// the core rather than standing under it, and for a program whose whole I/O is
+		// "write this constant to fd 1" that means TWO imported interfaces and no
+		// allocator: wasi:cli/stderr goes because the reserved fd 2 is unreachable from a
+		// source that names neither *error-output* nor warn, and the shared cabi_realloc
+		// goes because nothing here lifts host-owned bytes -- which takes the whole
+		// bump-allocator body of the shared memory module with it.
+		List<String> spellings = List.of("(print \"Hello World!\")", "(princ \"Hello World!\") (terpri)",
+				"(format t \"Hello World!~%\")", "(write-line \"Hello World!\")", "(write-string \"Hello World!\")",
+				"(format t \"Hello, ~a!~%\" \"World\")", "(format t \"~a~%\" 42)",
+				"(format t \"~s~%\" \"Hello World!\")");
+		for (String spelling : spellings) {
+			byte[] component = compileComponent(spelling, OptimizeLevel.DEFAULT);
+			assertThat(component.length).describedAs(spelling).isLessThan(2048);
+			assertThat(names(component, "wasi:cli/stdout")).describedAs(spelling).isTrue();
+			assertThat(names(component, "wasi:cli/stderr")).describedAs(spelling).isFalse();
+			assertThat(names(component, "cabi_realloc")).describedAs(spelling).isFalse();
+		}
+	}
+
+	@Test
+	void aProgramThatCanWriteFdTwoKeepsTheStderrSurface() {
+		// The narrowing above is a claim about the SOURCE -- a file descriptor is a
+		// value in the core module, not an edge, so the shaker cannot see it. Both
+		// spellings that materialize the reserved handle 2 must therefore hold the
+		// interface open, or --optimize would compile a warning into a trap.
+		for (String spelling : List.of("(warn \"careful\")", "(format *error-output* \"careful~%\")")) {
+			byte[] component = compileComponent(spelling, OptimizeLevel.DEFAULT);
+			assertThat(names(component, "wasi:cli/stderr")).describedAs(spelling).isTrue();
+		}
+	}
+
+	// Whether the component names something anywhere in its bytes: interface ids and
+	// core-module import/export fields are the only places these strings occur, and the
+	// emitted component carries no name sections to give a false positive.
+	private static boolean names(byte[] component, String text) {
+		return new String(component, java.nio.charset.StandardCharsets.ISO_8859_1).contains(text);
+	}
+
+	@Test
+	void dropsTypesTheSurvivorsNoLongerName() {
+		// The type section is a verbatim-copied fixed table (~60 entries: every runtime
+		// struct, array and helper signature). A program reaching almost none of the
+		// runtime must keep almost none of them, and a rec group goes as a unit.
+		byte[] plain = compile("(print \"Hello World!\")", false, OptimizeLevel.NONE);
+		byte[] optimized = compile("(print \"Hello World!\")", false, OptimizeLevel.DEFAULT);
+		Module before = Module.parse(plain);
+		Module after = Module.parse(optimized);
+		after.assertWellFormed();
+		assertThat(before.typeEntryCount()).isGreaterThan(50);
+		assertThat(after.typeEntryCount()).isLessThan(15);
+	}
+
+	@Test
+	void keepsTheTypesAnEhModeModuleStillNames() {
+		// The tag section names a function type by index and is copied verbatim, so its
+		// type has to be a renumbering root -- otherwise the tag would dangle.
+		byte[] optimized = compile("""
+				(print (handler-case (error "boom") (error (e) :caught)))
+				""", false, OptimizeLevel.DEFAULT);
+		Module m = Module.parse(optimized);
+		m.assertWellFormed();
+		assertThat(WasmTreeShaker.shake(optimized)).isEqualTo(optimized);
+	}
+
+	@Test
+	void dropsStringsOnlyDeadBodiesInterned() {
+		// The builtin wrappers Pass 2a compiles intern their literals -- FIND-PACKAGE's
+		// package-alias alist alone is ~680 bytes -- and the shaker then deletes the
+		// wrappers, leaving the bytes behind. A hello program keeps only what a live
+		// body still addresses; a program that actually reaches find-package keeps the
+		// table.
+		// A COMPUTED designator is what reaches the alist (PackageResolver folds a
+		// literal one before the compiler sees it), so that program keeps the table.
+		byte[] hello = compile("(print \"Hello World!\")", false, OptimizeLevel.DEFAULT);
+		byte[] packages = compile("""
+				(defun pkg (n) (find-package (string-upcase n)))
+				(print (pkg "cl-user"))
+				""", false, OptimizeLevel.DEFAULT);
+		Module.parse(hello).assertWellFormed();
+		Module.parse(packages).assertWellFormed();
+		assertThat(dataSectionSize(packages) - dataSectionSize(hello)).isGreaterThan(600);
+		// The rendered literal itself must still be there: 12 bytes of "Hello World!"
+		// plus its quotes, the seed cells, and little else.
+		assertThat(dataSectionSize(hello)).isBetween(32, 128);
+	}
+
+	@Test
+	void dropsThePrinterPrologueNoLiveBodyReads() {
+		// The StringTable constructor's fixed entries (NIL, the list punctuation, the
+		// float specials, the "#\" prefix and the eight character names) are read only by
+		// the RUNTIME printer bodies, each of which bakes the offset as its own
+		// i32.const -- so they are ordinary droppable ranges. A literal-fold hello never
+		// reaches the generic printer and must keep none of them; a program that prints a
+		// COMPUTED cons does reach it and keeps the punctuation.
+		byte[] hello = compile("(princ \"Hello World!\") (terpri)", false, OptimizeLevel.DEFAULT);
+		byte[] generic = compile("""
+				(defun pair (a b) (cons a b))
+				(print (pair 1 2))
+				""", false, OptimizeLevel.DEFAULT);
+		Module.parse(hello).assertWellFormed();
+		Module.parse(generic).assertWellFormed();
+		byte[] helloData = dataSectionPayload(hello);
+		for (String dead : new String[] { "#<lambda>", "#<function ", "#<FUTURE>", "Infinity", "Rubout", "Backspace",
+				"#A(" }) {
+			assertThat(contains(helloData, dead)).as("hello module keeps the dead prologue entry %s", dead).isFalse();
+		}
+		// "\n" is the one prologue entry a literal write reaches directly (terpri), so it
+		// stays -- and it is all that is left besides the printed literal.
+		assertThat(contains(helloData, "\n")).isTrue();
+		byte[] genericData = dataSectionPayload(generic);
+		for (String live : new String[] { "NIL", " . " }) {
+			assertThat(contains(genericData, live)).as("generic printer lost %s", live).isTrue();
+		}
+	}
+
+	@Test
+	void aBareOnePastTheEndPointerDoesNotKeepARange() {
+		// The keep predicate is the HALF-OPEN interval. A dead builtin-wrapper literal
+		// that happens to sit immediately before the one the program prints ends exactly
+		// where the live range starts; under a closed interval the live start pointer
+		// pinned the dead neighbour too. Same shape inside the prologue, where " . "
+		// abuts "\n". Nothing a live body cannot address may remain.
+		byte[] hello = compile("(princ \"Hello World!\") (terpri)", false, OptimizeLevel.DEFAULT);
+		byte[] data = dataSectionPayload(hello);
+		// What is left: the three 4-byte seed cells, "\n", and the framed literal.
+		assertThat(dataSectionSize(hello)).isLessThan(80);
+		assertThat(contains(data, "keyword")).isFalse();
+		assertThat(contains(data, " . ")).isFalse();
+		assertThat(contains(data, "\"Hello World!\"")).isTrue();
+	}
+
+	private static boolean contains(byte[] haystack, String needle) {
+		byte[] n = needle.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+		outer: for (int i = 0; i + n.length <= haystack.length; i++) {
+			for (int j = 0; j < n.length; j++) {
+				if (haystack[i + j] != n[j]) {
+					continue outer;
+				}
+			}
+			return true;
+		}
+		return false;
+	}
+
+	// The data section's payload bytes (empty when the section is absent).
+	private static byte[] dataSectionPayload(byte[] module) {
+		int[] p = { 8 };
+		while (p[0] < module.length) {
+			int id = module[p[0]++] & 0xff;
+			int size = WasmSections.readU(module, p);
+			if (id == 11) {
+				return java.util.Arrays.copyOfRange(module, p[0], p[0] + size);
+			}
+			p[0] += size;
+		}
+		return new byte[0];
+	}
+
+	@Test
+	void anInterningProgramOffersPerEntryRangesRowsFallingWithTheirBytes() {
+		// _intern scans a blob citing EVERY interned entry by offset, and that citation
+		// lives in DATA where the i32.const scan cannot see it -- which used to
+		// disqualify every candidate of an interning program wholesale. The citation is
+		// resolved structurally now: each candidate's (offset, length) row is its own
+		// droppable range PROBED on the string's interval, so row and bytes fall
+		// together, and _intern skips the zeroed hole a cut row reads as. An interning
+		// program therefore keeps only what live bodies still address: the program's own
+		// literal stays, while the dead wrapper literals (the sequence keywords, the
+		// find-package alias alist) go, rows included -- the module was over 24 KB of
+		// data before.
+		// The name is computed behind a defun so nothing folds: a folded
+		// string-upcase would drag the ~16 KB Unicode case-fold tables into a test
+		// that is about the intern blob's rows, and a folded subseq would replace the
+		// runtime-made name with a (%str-fresh ...) constant.
+		byte[] interning = compile("(defun sh (x) x) (print (intern (subseq (sh \"FOOX\") 0 3)))", false,
+				OptimizeLevel.DEFAULT);
+		Module.parse(interning).assertWellFormed();
+		assertThat(dataSectionSize(interning)).isLessThan(512);
+		byte[] data = dataSectionPayload(interning);
+		// The rest are the printer's arms for what this program never hands it, a future,
+		// a character, a list: the type-test fold retires each arm
+		// (.kb/wasm-ref-type-fold.md), and the literal only that arm addressed falls with
+		// it, like the wrapper literals.
+		for (String dead : new String[] { ":FROM-END", "\"ASDF\"", "keyword", "#<FUTURE>", "Rubout", "NIL(" }) {
+			assertThat(contains(data, dead)).as("dead literal %s survived the interning program", dead).isFalse();
+		}
+		assertThat(contains(data, "\"FOOX\"")).as("the interning program lost its literal").isTrue();
+		assertThat(WasmTreeShaker.shake(interning)).isEqualTo(interning);
+	}
+
+	// Total payload size of the data section (0 when absent).
+	private static int dataSectionSize(byte[] module) {
+		int[] p = { 8 };
+		while (p[0] < module.length) {
+			int id = module[p[0]++] & 0xff;
+			int size = WasmSections.readU(module, p);
+			if (id == 11) {
+				return size;
+			}
+			p[0] += size;
+		}
+		return 0;
+	}
+
+	@Test
+	void decodesTheOneByteAbstractReferenceBlockType() {
+		// THE decoder trap of the shortest-encoding pass: `block (result eqref)` is the
+		// single byte 0x6D, and a blocktype's third alternative is an s33 TYPE INDEX. A
+		// predicate that does not list the abstract-reference shorthands reads that byte
+		// as index -19 and tries to renumber it. Every value-producing `if` in a
+		// compiled body is one, so the module below is full of them.
+		byte[] optimized = compile("""
+				(defun pick (n) (if (> n 0) "positive" "not"))
+				(print (pick 1))
+				(print (pick -1))
+				""", false, OptimizeLevel.DEFAULT);
+		Module m = Module.parse(optimized);
+		m.assertWellFormed();
+		// 0x04 = `if`, 0x6D = eqref: the short form really is in the bytes being decoded.
+		assertThat(indexOf(optimized, new byte[] { 0x04, 0x6D })).isGreaterThan(0);
+		// A misread blocktype renumbers a type index that is not one, so the second pass
+		// would not agree with the first.
+		assertThat(WasmTreeShaker.shake(optimized)).isEqualTo(optimized);
+	}
+
+	private static int indexOf(byte[] haystack, byte[] needle) {
+		outer: for (int i = 0; i + needle.length <= haystack.length; i++) {
+			for (int k = 0; k < needle.length; k++) {
+				if (haystack[i + k] != needle[k]) {
+					continue outer;
+				}
+			}
+			return i;
+		}
+		return -1;
+	}
+
+	@Test
+	void keepsAndRenumbersTheTypeACastBranchNames() {
+		// Type 0 is named only by a dead function and goes; type 1, a struct, is named
+		// only by the live body's br_on_cast_fail, as the cast's target heap type -- so
+		// it survives, as type 0, and the immediate follows it there.
+		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		new WasmWriter(out).write("\0asm")
+			.writeLittleEndian4(1)
+			.writeTypeSection(types -> types.addFunc(new Type[] { Type.F64 }, new Type[0])
+				.addRecGroup(rec -> rec.addSubFinalStruct(fields -> fields.addField(false, w -> w.write(Type.I32))))
+				.addFunc(new Type[0], new Type[] { Type.I32 }))
+			.writeFunction(funcs -> funcs.addFunction(0).addFunction(2))
+			.writeExport(exports -> exports.addExport("g", ExternalKind.FUNCTION, 1))
+			.writeCode(code -> code.addFunction(new byte[] { 0x00, (byte) Instruction.END }).addFunction(entry(w -> {
+				w.write(Instruction.BLOCK, Type.EQ.code());
+				w.write(Instruction.I32_CONST).writeSignedLeb128(3);
+				w.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+				w.write(Instruction.GC_PREFIX, Instruction.BR_ON_CAST_FAIL);
+				w.write(0x01).writeUnsignedLeb128(0).writeHeapType(Type.EQ.code()).writeHeapType(1);
+				w.write(Instruction.DROP);
+				w.write(Instruction.REF_NULL).writeHeapType(Type.EQ.code());
+				w.write(Instruction.END);
+				w.write(Instruction.REF_IS_NULL);
+			})));
+		byte[] shaken = WasmTreeShaker.shake(out.toByteArray());
+
+		List<WasmSections.Section> sections = WasmSections.parseSections(shaken);
+		WasmCodeModel.TypeSection types = WasmCodeModel
+			.parseTypeSection(java.util.Objects.requireNonNull(WasmSections.find(sections, 1)).payload());
+		assertThat(types.count()).isEqualTo(2);
+		assertThat(types.types().get(0)).isInstanceOf(WasmCodeModel.StructType.class);
+		List<byte[]> entries = WasmSections
+			.parseCodeEntries(java.util.Objects.requireNonNull(WasmSections.find(sections, 10)).payload());
+		assertThat(entries).hasSize(1);
+		WasmCodeModel.Instr branch = WasmCodeModel.decode(entries.get(0), types)
+			.code()
+			.stream()
+			.filter(WasmCodeModel.Instr::isCastBranch)
+			.findFirst()
+			.orElseThrow();
+		assertThat(java.util.Objects.requireNonNull(branch.cast).to()).isZero();
+		assertThat(WasmTreeShaker.shake(shaken)).isEqualTo(shaken);
+	}
+
+	private static byte[] entry(java.util.function.Consumer<WasmWriter> instructions) {
+		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(out);
+		w.write(0); // no locals
+		instructions.accept(w);
+		w.write(Instruction.END);
+		return out.toByteArray();
+	}
+
+	@Test
+	void aSectionTheShakeEmptiedIsDroppedRatherThanWrittenBackEmpty() {
+		// A module exporting only its memory: the one function is unreachable and goes,
+		// and so does the type only it named. `00` (zero entries) says exactly what no
+		// section at all says, so the type, function and code sections must be gone --
+		// not present and empty. This is the shape the component's shared-memory module
+		// shakes down to for a print-only program, where it carried three of them. The
+		// function is the module's start function here, and still goes, its section with
+		// it: there is nothing in it to run (an initializer whose every store an
+		// earlier pass deleted).
+		java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+		new WasmWriter(out).write("\0asm")
+			.writeLittleEndian4(1)
+			.writeTypeSection(types -> types.addFunc(new Type[0], new Type[0]))
+			.writeFunction(funcs -> funcs.addFunction(0))
+			.writeMemory(memories -> memories.addMemory(1))
+			.writeExport(exports -> exports.addExport("memory", ExternalKind.MEMORY, 0))
+			.writeStartSection(0)
+			.writeCode(code -> code.addFunction(new byte[] { 0x00, (byte) 0x0B }));
+		byte[] shaken = WasmTreeShaker.shake(out.toByteArray());
+
+		assertThat(sectionIds(shaken)).containsExactly(5, 7); // memory, export -- no more
+		assertThat(WasmTreeShaker.shake(shaken)).isEqualTo(shaken);
+	}
+
+	private static List<Integer> sectionIds(byte[] module) {
+		List<Integer> ids = new ArrayList<>();
+		int[] p = { 8 };
+		while (p[0] < module.length) {
+			ids.add(module[p[0]++] & 0xff);
+			// Read the size first: `p[0] += readU(module, p)` would discard readU's own
+			// advance of p[0].
+			int size = WasmSections.readU(module, p);
+			p[0] += size;
+		}
+		return ids;
+	}
+
+	@Test
+	void isIdempotent() {
+		byte[] once = WasmTreeShaker.shake(compile("(print 42)", false, OptimizeLevel.NONE));
+		byte[] twice = WasmTreeShaker.shake(once);
+		assertThat(twice).isEqualTo(once);
+	}
+
+	@Test
+	void returnsEquivalentModuleWhenNothingToDrop() {
+		// Shaking an already-minimal module should not corrupt it.
+		byte[] optimized = compile("(print 1)", false, OptimizeLevel.DEFAULT);
+		assertThat(WasmTreeShaker.shake(optimized)).isEqualTo(optimized);
+	}
+
+	/**
+	 * A minimal read-only view of a core WASM module sufficient to assert the
+	 * tree-shaker's structural invariants. Mirrors the binary framing the shaker itself
+	 * relies on.
+	 */
+	private record Module(int functionImportCount, List<String> functionImportNames, int definedFunctionCount,
+			int codeEntryCount, List<String> exportedFunctionNames, List<Integer> exportedFunctionIndices,
+			int typeEntryCount, int definedTypeCount, List<Integer> functionTypeIndices) {
+
+		void assertWellFormed() {
+			// Function section and code section must stay aligned.
+			assertThat(codeEntryCount).isEqualTo(definedFunctionCount);
+			// Every exported function index must be in range.
+			int total = functionImportCount + definedFunctionCount;
+			assertThat(exportedFunctionIndices).allSatisfy(i -> assertThat(i).isBetween(0, total - 1));
+			// Every function signature must still name a type the module defines.
+			assertThat(functionTypeIndices).hasSize(total)
+				.allSatisfy(i -> assertThat(i).isBetween(0, definedTypeCount - 1));
+		}
+
+		static Module parse(byte[] module) {
+			int[] p = { 8 };
+			int functionImportCount = 0;
+			List<String> functionImportNames = new ArrayList<>();
+			int definedFunctionCount = 0;
+			int codeEntryCount = 0;
+			int typeEntryCount = 0;
+			int definedTypeCount = 0;
+			List<String> exportedFunctionNames = new ArrayList<>();
+			List<Integer> exportedFunctionIndices = new ArrayList<>();
+			List<Integer> functionTypeIndices = new ArrayList<>();
+			while (p[0] < module.length) {
+				int id = module[p[0]++] & 0xff;
+				int size = readU(module, p);
+				int end = p[0] + size;
+				switch (id) {
+					case 1 -> { // type
+						typeEntryCount = readU(module, p);
+						for (int i = 0; i < typeEntryCount; i++) {
+							definedTypeCount += skipRecType(module, p);
+						}
+					}
+					case 2 -> { // import
+						int count = readU(module, p);
+						for (int i = 0; i < count; i++) {
+							skipName(module, p); // module
+							String name = readName(module, p); // field
+							int kind = module[p[0]++] & 0xff;
+							switch (kind) {
+								case 0x00 -> { // func
+									functionTypeIndices.add(readU(module, p)); // typeidx
+									functionImportCount++;
+									functionImportNames.add(name);
+								}
+								case 0x01 -> { // table
+									skipValType(module, p);
+									skipLimits(module, p);
+								}
+								case 0x02 -> skipLimits(module, p);
+								case 0x03 -> { // global
+									skipValType(module, p);
+									p[0]++;
+								}
+								default -> throw new IllegalStateException("kind " + kind);
+							}
+						}
+					}
+					case 3 -> { // function
+						definedFunctionCount = readU(module, p);
+						for (int i = 0; i < definedFunctionCount; i++) {
+							functionTypeIndices.add(readU(module, p));
+						}
+					}
+					case 7 -> { // export
+						int count = readU(module, p);
+						for (int i = 0; i < count; i++) {
+							String name = readName(module, p);
+							int kind = module[p[0]++] & 0xff;
+							int index = readU(module, p);
+							if (kind == 0x00) {
+								exportedFunctionNames.add(name);
+								exportedFunctionIndices.add(index);
+							}
+						}
+					}
+					case 10 -> codeEntryCount = readU(module, p); // code
+					default -> {
+					}
+				}
+				p[0] = end;
+			}
+			return new Module(functionImportCount, functionImportNames, definedFunctionCount, codeEntryCount,
+					exportedFunctionNames, exportedFunctionIndices, typeEntryCount, definedTypeCount,
+					functionTypeIndices);
+		}
+
+		private static int readU(byte[] buf, int[] p) {
+			int result = 0;
+			int shift = 0;
+			while (true) {
+				int b = buf[p[0]++] & 0xff;
+				result |= (b & 0x7f) << shift;
+				if ((b & 0x80) == 0) {
+					return result;
+				}
+				shift += 7;
+			}
+		}
+
+		private static String readName(byte[] buf, int[] p) {
+			int len = readU(buf, p);
+			String s = new String(buf, p[0], len, java.nio.charset.StandardCharsets.UTF_8);
+			p[0] += len;
+			return s;
+		}
+
+		private static void skipName(byte[] buf, int[] p) {
+			// Read the length first: `p[0] += readU(buf, p)` would discard readU's own
+			// advance of p[0] (compound assignment captures the old p[0] before the
+			// call).
+			int len = readU(buf, p);
+			p[0] += len;
+		}
+
+		private static void skipValType(byte[] buf, int[] p) {
+			int b = buf[p[0]++] & 0xff;
+			if (b == 0x63 || b == 0x64) {
+				readU(buf, p);
+			}
+		}
+
+		// rectype := 0x4E vec(subtype) | subtype. Returns the number of type indices the
+		// entry defines, so a rec group counts as its member count.
+		private static int skipRecType(byte[] buf, int[] p) {
+			if ((buf[p[0]] & 0xff) == 0x4E) {
+				p[0]++;
+				int members = readU(buf, p);
+				for (int i = 0; i < members; i++) {
+					skipSubType(buf, p);
+				}
+				return members;
+			}
+			skipSubType(buf, p);
+			return 1;
+		}
+
+		private static void skipSubType(byte[] buf, int[] p) {
+			int b = buf[p[0]] & 0xff;
+			if (b == 0x50 || b == 0x4F) { // sub / sub final
+				p[0]++;
+				int supertypes = readU(buf, p);
+				for (int i = 0; i < supertypes; i++) {
+					readU(buf, p);
+				}
+			}
+			int tag = buf[p[0]++] & 0xff;
+			switch (tag) {
+				case 0x60 -> { // func
+					int params = readU(buf, p);
+					for (int i = 0; i < params; i++) {
+						skipValType(buf, p);
+					}
+					int results = readU(buf, p);
+					for (int i = 0; i < results; i++) {
+						skipValType(buf, p);
+					}
+				}
+				case 0x5E -> skipFieldType(buf, p); // array
+				case 0x5F -> { // struct
+					int fields = readU(buf, p);
+					for (int i = 0; i < fields; i++) {
+						skipFieldType(buf, p);
+					}
+				}
+				default -> throw new IllegalStateException("comptype tag " + tag);
+			}
+		}
+
+		private static void skipFieldType(byte[] buf, int[] p) {
+			int b = buf[p[0]] & 0xff;
+			if (b == 0x78 || b == 0x77) { // i8 / i16 packed storage
+				p[0]++;
+			}
+			else {
+				skipValType(buf, p);
+			}
+			p[0]++; // mutability
+		}
+
+		private static void skipLimits(byte[] buf, int[] p) {
+			int flag = buf[p[0]++] & 0xff;
+			readU(buf, p);
+			if ((flag & 0x01) != 0) {
+				readU(buf, p);
+			}
+		}
+	}
+
+}

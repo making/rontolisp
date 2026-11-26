@@ -1,0 +1,80 @@
+package am.ik.rontolisp.compiler;
+
+import java.util.List;
+
+/**
+ * A public method or constructor as the {@code java:} resolution sees it (see
+ * {@link JavaType}).
+ */
+public interface JavaExecutable {
+
+	/**
+	 * @return the class or interface that declares it
+	 */
+	JavaType declaringClass();
+
+	/**
+	 * @return the method name, or {@code <init>} for a constructor
+	 */
+	String name();
+
+	/**
+	 * @return the parameter types, the varargs parameter as its array type
+	 */
+	List<? extends JavaType> parameterTypes();
+
+	/**
+	 * @return the declared return type; for a constructor, the declaring class
+	 */
+	JavaType returnType();
+
+	/**
+	 * @return whether the last parameter is a varargs array
+	 */
+	boolean isVarArgs();
+
+	/**
+	 * @return whether it is a static method
+	 */
+	boolean isStatic();
+
+	/**
+	 * @return whether it is a constructor
+	 */
+	boolean isConstructor();
+
+	/**
+	 * @return whether the compiler made it rather than the source declaring it (a bridge
+	 * is): {@code ACC_SYNTHETIC}
+	 */
+	boolean isSynthetic();
+
+	/**
+	 * @return whether it is a bridge a compiler made to a method of the same name and
+	 * another erasure: {@code ACC_BRIDGE}
+	 */
+	boolean isBridge();
+
+	/**
+	 * @return whether it is declared {@code public}: what an overriding method in a
+	 * generated subclass keeps (a {@code protected} one keeps {@code protected})
+	 */
+	default boolean isPublic() {
+		return true;
+	}
+
+	/**
+	 * @return whether it is declared {@code protected}
+	 */
+	default boolean isProtected() {
+		return false;
+	}
+
+	/**
+	 * @return whether it has no body: an interface method that is neither default nor
+	 * static, or an abstract class's abstract method -- what a class implementing the
+	 * interface must supply ({@link JavaImplementations})
+	 */
+	boolean isAbstract();
+
+}

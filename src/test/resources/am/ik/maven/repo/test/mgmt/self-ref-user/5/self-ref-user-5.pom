@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>test.mgmt</groupId>
+  <artifactId>self-ref-user</artifactId>
+  <version>5</version>
+  <dependencyManagement>
+    <dependencies>
+      <dependency><groupId>test.mgmt</groupId><artifactId>bom-self-ref</artifactId><version>1</version><type>pom</type><scope>import</scope></dependency>
+    </dependencies>
+  </dependencyManagement>
+  <dependencies>
+      <dependency><groupId>test.lib</groupId><artifactId>sr</artifactId></dependency>
+      <dependency><groupId>test.mgmt</groupId><artifactId>sibling</artifactId></dependency>
+  </dependencies>
+</project>

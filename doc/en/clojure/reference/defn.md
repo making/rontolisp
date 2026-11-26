@@ -1,0 +1,56 @@
+# defn
+
+`(defn name docstring? [params...] body...)`
+`(defn name docstring? ([params...] body...)+`
+
+Defines a function. The multi-arity spelling is one clause per arity plus a dispatch on
+the argument count; a single variadic clause (`&` rest) takes any count past its fixed
+parameters, and any other count signals the oracle's `ArityException`
+(`Wrong number of args (3) passed to: my.app/f`), through a direct call, `apply` or the
+function as a value alike. At
+most one variadic clause and one clause per arity. Parameters destructure, vector and map
+patterns alike; a map pattern after `&` takes keyword arguments, as pairs or one map
+([seq-to-map-for-destructuring](seq-to-map-for-destructuring.md)). The name lowers to a direct call, so recursion is a call, not a value
+lookup; a head-position use of a *value* binding (a `def`, a parameter) is the funcall
+instead. A `recur` in the body jumps back to the enclosing clause with new argument
+values.
+
+A `^:dynamic` name holds its function in the var instead: the definition keeps its
+direct call shape (so `recur` still jumps straight to it), but calls go through the
+var's value, so `binding` rebinds them with dynamic extent (see
+[binding](binding.md)). Any other `defn` without the marker stays refused by
+`binding`, like the oracle's non-dynamic error.
+
+A definition may use a name defined below it: the file is pre-scanned for every top-level
+`def`/`defn` (and `declare`) name. Inside a body, `defn` works in statement position,
+a multi-arity one too (medley's `(letfn [...] (defn map-padded ...))`): each arity is
+defined when the body runs, closing over its locals. A condition map (`:pre`/`:post`)
+works as in [fn](fn.md).
+
+Redefining a `defn` with `def` captures the function: `(def p (memoize p))`
+evaluates its value against the OLD `FUNCTION` binding, so top-level calls hit
+the cache. In a file the `defun`'s own recursion stays direct; in the REPL and in an
+`eval` it goes through the new root too, as in Clojure.
+
+Redefining a name with another `defn` gives each definition its own function: the
+call sites below each definition call the newest, while a `(def g f)` between two
+definitions keeps the older one (`(g)` answers the old value, `(f)` the new one).
+Each namespace versions its own names. In a file, a function defined above a
+redefinition still calls the older definition; only `^:dynamic` names (whose calls
+go through the var) see the newest from every call site. In the REPL, and in an
+`eval` on the interpreter or the JVM, a redefinition reaches every caller, as Clojure's
+calls through the var do.
+
+```clojure
+(defn fact [n]
+  (if (< n 2) 1 (* n (fact (- n 1)))))
+(println (fact 5)) ; 120
+
+(defn area
+  ([] 0)
+  ([w h] (* w h)))
+(println (area 3 4)) ; 12
+
+(defn resty [x & xs] xs)
+(println (resty 1 2 3)) ; (2 3)
+```

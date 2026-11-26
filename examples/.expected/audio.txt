@@ -1,0 +1,23 @@
+== 1. AVFAudio ==
+a class now: AVAudioEngine
+sizeof(AudioBufferList) with one buffer: 24 bytes
+
+== 2. offline: a 440 Hz sine, a tenth of a second ==
+frames              4410
+block ran on        (MAIN)
+first sample        0.0000
+upward crossings    43
+peak                0.3536 (0.5/sqrt 2 = 0.3536)
+
+== 3. offline: other instruments ==
+100 Hz for half a second crosses upward 49 times
+an FM tone differs from the sine: T
+and stays in range: T
+
+== 4. a chord, rendered into a .wav ==
+rontolisp-chord.wav: 11025 frames at 44100 Hz
+
+== 5. live ==
+not asked to play (pass the argument play)
+
+every sample above came from a Lisp closure

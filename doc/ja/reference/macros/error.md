@@ -1,0 +1,30 @@
+# error
+
+`(error datum args...)`
+
+エラーを通知し、外側の [`handler-case`](handler-case.md) に捕捉されなければ実行を中止します。Common Lisp のコンディション designator をサポートします:
+
+- `(error "control" args...)` — 制御文字列は `format` と同じディレクティブ(`~a`、`~s`、`~%` など)を使い、残りの引数を埋めてメッセージを構築します。制御文字列は実行時に計算されたもの(変数、スロット参照、関数呼び出し)でも構いません: 実行時に文字列だった datum はフォーマット制御文字列であり、その後ろの引数はそのフォーマット引数です — リテラルの場合とまったく同じです。
+- `(error 'type :initarg value ...)` — 指定したクラス(組み込み、または [`define-condition`](define-condition.md) で定義)のコンディションインスタンスを構築して通知します。メッセージはクラスの `:report` の描画結果です(自身のもの、定義がなければ最も近い祖先のもの)。どの祖先にも `:report` がなく `simple-condition` 系のスロットを持つクラスでは、`:format-control` を `:format-arguments` に対して `format` した結果になります。どこにも `:report` がないクラスは `Condition (type initargs...) was signalled.` 形のままです。このメッセージは、同じコンディションオブジェクトを [`princ`](../functions/princ.md) が出力するテキストと完全に一致します([`define-condition`](define-condition.md) 参照)。
+- `(error obj)` — 構築済みのコンディションオブジェクト(例: [`make-condition`](make-condition.md) の結果)を通知します。実行時に文字列だった場合は、それを描画したメッセージとして通知し(最初の項目を参照)、シンボルだった場合はそれをコンディションクラスの名前とし、後ろの引数を initarg とします。
+
+コンディションを指さないものは、それを datum、`condition` を期待型とする `type-error` になります。クォートされたものも計算されたものも含めてどのコンディションクラスの名前でもないシンボルと、文字列、シンボル、コンディションのいずれでもない値(`5` や構造体)です。コンパイルが見つけられないリテラルの名前もコンパイルは通り、実行時にこれを通知します。標準ではフォーマット制御である関数の datum は、自身を印字した文字列として通知します。呼び出しはしません。
+
+すべてのバックエンドがコンディションを送出するため、`handler-case` が型でディスパッチできます: インタプリタと JVM はメッセージとコンディションオブジェクトを保持する例外をスローし、wasm-GC バックエンドはプログラムが捕捉フォーム(`handler-case`/`ignore-errors`/`unwind-protect`)を含む場合に WebAssembly 例外をスローし、含まない場合はトラップします。`#'error` は関数値を**持ち**、すべてのバックエンドで完全な designator プロトコルが通ります(`(apply #'error (list 'my-error :v x))` は型付きコンディションを構築)。コンパイルされたプログラムが計算された datum の名前から見つけるクラスは、演算子位置以外でシンボルとして綴られたものと、`intern`、`find-symbol`、`read`、`read-from-string`、`type-of`、`class-name` を呼ぶプログラムではそのプログラム自身のクラスすべてです。
+
+誰も捕捉しなかった場合、コンディションは**標準エラー出力に 1 行**で報告されます — `Unhandled condition: ` に続けて、同じコンディションを [`princ`](../functions/princ.md) が出力するテキストがそのまま並びます — そしてプロセスは非ゼロで終了します。この 1 行は 4 つのバックエンドすべてで同一です。その後ろに続くのはホスト自身が「プロセスが死んだ」と述べる行だけです(JVM の `Exception in thread "main" ...`、wasmtime のトラップ報告)。環境変数 `RONTOLISP_DEBUG` に任意の値を設定すると、インタプリタでもコンパイル済み `.class` でも JVM のスタックトレースが追加で出力されます。wasm-GC バックエンドが報告するのは、モジュールが例外機構を持つとき — つまりプログラムのどこかに捕捉フォームがあるとき(ライブラリを読み込むプログラムは常にそうです)だけです。捕捉フォームがなければモジュールはメッセージなしでトラップします。これが、通知を一切行わないプログラムに機構の代価を払わせないための仕組みです。モジュールがエクスポートする関数([`rontolisp:wasm-export`](../functions/rontolisp-wasm-export.md)、[`rontolisp:wit-export`](../functions/rontolisp-wit-export.md))も、ホストの呼び出しが捕捉しなかったコンディションを同じように報告してからトラップします。`--no-wasi` リアクターはそもそも書き込める標準エラー出力を持たないため、報告は破棄される出力シンクへ消えます([wasm-GC モジュールガイド](../../guides/wasm-gc-module.md#what-the-build-tells-you-before-you-run-it)を参照)。
+
+インタプリタと JVM バックエンド(コンパイル済みの `.class`、`.jar`、`.war`)は、その行の下に発生場所を示す同じ行を加えます。`at FILE:LINE in FUNCTION` は、コンディションが通過したプログラムのファイル中で最も内側のフォームと、そのフォームが書かれているプログラムの名前付き関数を示します(ラムダの中のフォームは、誰が呼び出したかにかかわらず、そのラムダが書かれている関数のものです。ライブラリ関数が示されることはありません。`(setf name)` 関数は `(SETF NAME)` と示されます)。[`rontolisp:async-defun`](../special-forms/rontolisp-async-defun.md) の本体から抜けたコンディションには、それを再送出した `await` ごとに `in NAME (async), awaited at FILE:LINE` の行が 1 行ずつ加わります。報告行そのものは変わらないため、`handler-case` や `princ` が見るものに影響はありません。`-e` で与えたプログラムは報告行だけを出力します。wasm-GC のビルドも、[`--report-locations`](../../compiling/wasm.md#uncaught-condition-locations---report-locations) を付けてコンパイルしない限り同様です。
+
+```console
+$ rontolisp app.lisp
+Unhandled condition: parse-integer: junk in string "x"
+  at app.lisp:5 in APP::PARSE
+```
+
+捕捉されない `error` は実行を中止するため、ここでは実行可能な例ではなく静的に示します:
+
+```console
+(error "bad value: ~a" x)
+(error 'type-error :datum x :expected-type 'integer)
+```

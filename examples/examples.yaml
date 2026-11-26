@@ -1,0 +1,1673 @@
+# Manifest of the non-GUI examples: the backends each can be verified on, plus
+# the inputs it needs and the expected result to check.
+#
+# Consumed by src/test/java/am/ik/rontolisp/e2e/ExamplesE2eTest.java, which turns
+# every (example x backend) pair into one JUnit dynamic test. See that class and
+# examples/README.md for how to run it.
+#
+# backend tokens
+# --------------
+#   RUN (the program runs to completion; we assert exit 0 and check the output):
+#     interpreter     <driver> FILE [args]
+#     jvm             <driver> FILE -o Prog.class   then  java -cp .:<exec jar> Prog [args]
+#                     (the jar is on the classpath because a compiled program that
+#                     reaches a runtime support class -- an HTTP server, a socket,
+#                     a Gray stream -- needs it; most are self-contained and do not)
+#     wasm            <driver> FILE -o prog.wasm --optimize   then  wasmtime run --dir . prog.wasm [args]
+#     wasm-component-run
+#                     <driver> FILE -o prog.wasm --component --optimize
+#                     then  wasmtime run --dir . prog.wasm [args]
+#                     (the component path has its OWN I/O adapter -- files, stdin
+#                     and directories over WASI 0.3 streams instead of the Preview 1
+#                     syscalls the `wasm` leg drives -- so an ordinary I/O-bearing
+#                     program needs THIS token, not the compile-only one below, to be
+#                     verified on that backend at all)
+#   COMPILE (blocking servers / host-invoked modules never return on their own --
+#   or are never run as a program at all: a war is deployed into a container and a
+#   reactor is called by its host -- so we only build them and assert the compile
+#   succeeds):
+#     jvm-compile     <driver> FILE -o Prog.class
+#     war-compile     <driver> FILE -o app.war
+#     wasm-component  <driver> FILE -o prog.wasm --component --optimize
+#                     (compile only -- for the shapes that genuinely cannot run here:
+#                     a server, a --invoke'd world, a component whose host is not on
+#                     this machine. Anything else belongs on wasm-component-run.)
+#     wasm-reactor    <driver> FILE -o prog.wasm --no-wasi --optimize
+#     no-gc           <driver> FILE -o prog.wasm --no-gc --optimize
+#     no-gc-simd      <driver> FILE -o prog.wasm --no-gc --simd --optimize
+#
+# Every WASM compile passes --optimize (the dead-code tree-shaker) explicitly,
+# for the record -- it has been the CLI default for a while, so the flag no
+# longer changes what gets built here; it is also a no-op under --component.
+# The `wasm` (run) backend is skipped when wasmtime is not on PATH; the compile
+# backends need no runtime.
+#
+# per-example fields (all optional except path/backends)
+# ------------------------------------------------------
+#   args         command-line arguments appended when the program is run
+#   os           the OSes the example can RUN on (mac / linux / windows; one
+#                token or a list). Omitted = everywhere, which is what almost
+#                every example is. It gates the RUN legs ONLY -- a COMPILE leg
+#                never executes the program, so it stays green on every machine.
+#                A gated-out leg is a skip, not a failure.
+#   stdin        text fed to the program's standard input (inline)
+#   stdinFile    ...or from a file, resolved under examples/
+#   expect       how to check RUN output -- exactly one of:
+#                  equals:    stdout must equal this text (hard-coded here)
+#                  file:      stdout must equal this file's contents (under examples/)
+#                  contains:  every listed substring must appear (partial match)
+#                  skip: true do not check output (random / non-repeatable results)
+#                omit expect entirely -> baseline "exit 0 and non-empty output".
+#                equals/file are compared against ALL run backends, so a per-backend
+#                divergence is a real failure.
+#   systemPath   directory -- or a LIST of directories -- added as
+#                --system-path (the ASDF source registry). Each element is
+#                resolved against the repository root and they are joined with
+#                the platform path separator, so a system whose dependencies
+#                are vendored side by side (rove needs rove + dissect +
+#                cl-ppcre) names them all. Passed to the interpreter leg too.
+#   workDir      sub-dir under examples/ the process runs from (default: none,
+#                i.e. the throwaway workdir itself). Set it when the script's
+#                CWD-relative reads assume a book root (e.g. deep-learning-from-
+#                scratch/); the leg's CWD becomes work/<workDir>/.
+#   workFiles    files to stage beside the program before it runs (relative to
+#                workDir when set, otherwise relative to examples/). Copied 1:1
+#                into the workspace, so the mirrored slice looks like the
+#                fragment of examples/ the script was written against. A missing
+#                file skips the leg (assumption abort) rather than failing --
+#                for gitignored dataset dumps you fetch via
+#                deep-learning-from-scratch/download-mnist.sh.
+#   library      shared libraries the example calls into through cffi, spelled as
+#                a define-foreign-library spells them (one per platform). The RUN
+#                legs are skipped unless the platform's loader resolves ONE of
+#                them -- the `os` gate's shape, for the other kind of thing a
+#                machine may not have. COMPILE legs are never gated: they load
+#                nothing.
+#   cli          rontolisp's own command line in place of FILE, for a deps.edn
+#                project ([-M:alias], [-X:alias, :k, v], [test]); `path` names a file
+#                in the project, and every leg runs in a copy of that file's
+#                directory. The leg's options (-o ..., --component) go ahead of the
+#                command line -- after a leading `test` -- since -M and -X end
+#                rontolisp's options; `args` follow it unseparated.
+#   javaSources  .java files compiled before the leg into a class directory that is
+#                passed as --java-classpath and joins a compiled program's java -cp
+#   javaSourcePath directories of the repository (one or a list), resolved and joined
+#                as systemPath's, passed to every leg as --java-source-path: a library
+#                a .java program compiles from its source tree
+#   javaSourceDep Maven coordinates (one or a list) passed to every leg as
+#                --java-source-dep: a library a .java program compiles from its sources
+#                jar. The suite resolves each sources jar first, as the option does
+#                (~/.m2, then Maven Central); offline without it the legs are skipped
+#                with the reason
+#                A program in a Maven project's src/main/java (java/shiori/ and the
+#                other applications that use a library) declares neither: its pom's
+#                dependencies are both, this repository's modules as their source
+#                directories (ExampleProject), so a version is written in the pom alone
+#   javaInterop  true for a program that calls Java members as it runs (java:, a
+#                Clojure host form). The native binary interprets no java:, so when
+#                it drives the suite the interpreter leg is skipped (an assumption,
+#                like os and library); the exec jar's interpreter runs it, and the
+#                compiled legs run under either driver.
+#   note         free-form comment
+#
+# GUI examples (jvm/, macos/, minesweeper, rainbow/, the webgl-*/ and other browser
+# demos) are intentionally absent: they open a window or run in a page and
+# cannot be checked headless. Two exceptions, both for the same reason -- the
+# part that is not GUI: browser/wit-component's Lisp half is a pure-compute
+# module with no host imports, so its COMPILE leg pins its WIT world against the
+# program even though its jco/browser half cannot run here; and
+# browser/minesweeper's rules live in a rendering-free core, which
+# minesweeper-core-test.lisp loads and checks with rove. browser/webgl-solids is
+# a third of that kind, with a COMPILE leg only: nothing here can drive its page,
+# but its model half is the shipped geom package and its compile leg is what says
+# the geom + linalg splice still lowers to a --no-wasi reactor. A further one is of a
+# different kind: browser/minesweeper's macOS front-end has a jvm-compile leg,
+# because a GUI that cannot RUN here can still be COMPILED here, and compiling
+# it is exactly what the objc:/appkit: JVM path has to keep doing. A fourth and a
+# fifth, macos/objc-runtime.lisp and macos/system-frameworks.lisp, open no window
+# at all: they are listed with their output checked and `os: [mac]`, so the RUN
+# legs gate on the platform the Objective-C runtime needs while their compile legs
+# keep running everywhere. macos/audio.lisp is a sixth of that kind: its sound is
+# rendered offline, and played only when asked.
+
+examples:
+  # --- console: pure, cross-backend algorithms & I/O -------------------------
+  - path: console/calc.lisp
+    backends: [interpreter, jvm, wasm]
+    expect:
+      file: .expected/calc.txt
+  - path: console/contact-book.lisp
+    backends: [interpreter, jvm, wasm]
+    note: per-contact listing order follows hash-table iteration, which varies by backend
+    expect:
+      contains:
+        - "Contact Book (3 entries):"
+        - "Alice -> alice@newdomain.com"
+        - "Alice (alice@newdomain.com)"
+  - path: console/error-handling.lisp
+    backends: [interpreter, jvm, wasm]
+    note: catching compiles via the wasm exception-handling proposal
+    expect:
+      file: .expected/error-handling.txt
+  - path: console/hanoi.lisp
+    backends: [interpreter, jvm, wasm]
+    expect:
+      file: .expected/hanoi.txt
+  - path: console/l-system.lisp
+    backends: [interpreter, jvm, wasm]
+    note: the character-distribution lines follow hash-table iteration order
+    expect:
+      contains:
+        - "L-system String Rewriting"
+        - "Total length: 611"
+        - "At iteration 12:"
+        - "Length: 16382 characters"
+  - path: console/life.lisp
+    backends: [interpreter, jvm, wasm]
+    expect:
+      file: .expected/life.txt
+  - path: console/line-numbers.lisp
+    backends: [interpreter, jvm, wasm]
+    note: writes poem.txt / poem-numbered.txt into the working directory
+    expect:
+      file: .expected/line-numbers.txt
+  - path: console/mandelbrot.lisp
+    backends: [interpreter, jvm, wasm]
+    expect:
+      file: .expected/mandelbrot.txt
+  - path: console/nqueens.lisp
+    backends: [interpreter, jvm, wasm]
+    expect:
+      file: .expected/nqueens.txt
+  - path: console/parse-numbers.lisp
+    backends: [interpreter, jvm, wasm]
+    note: writes numbers.txt into the working directory; small output hard-coded inline
+    expect:
+      equals: |
+        count=5 sum=97 min=3 max=42
+        letters=9 digits=6
+  - path: console/roman.lisp
+    backends: [interpreter, jvm, wasm]
+    systemPath: [src/test/resources/rove, src/test/resources/dissect, src/test/resources/cl-ppcre]
+    note: >-
+      the example CHECKS ITSELF with rove: the 1..3999 round-trip and the
+      known encodings/decodings are assertions, and the file ends with
+      (uiop:quit (if (run-suite *package*) 0 1)) -- so a broken encoder exits
+      non-zero and fails this leg instead of printing a line nobody reads. The
+      needles are the demo tables and rove's summary only; the per-assertion
+      lines print the forms, which still spell symbols package-qualified, and
+      rove appends a "(Nms)" duration to any assertion
+      slower than 37ms.
+    expect:
+      contains:
+        - "Integer -> Roman:"
+        - "     1 -> I"
+        - "   400 -> CD"
+        - "  3999 -> MMMCMXCIX"
+        - "Roman -> Integer:"
+        - '  "MCMXCIX" -> 1999'
+        - "✓ 3 tests completed"
+        - "All 3 tests passed."
+  - path: console/sieve.lisp
+    backends: [interpreter, jvm, wasm]
+    expect:
+      file: .expected/sieve.txt
+  - path: console/sorting.lisp
+    backends: [interpreter, jvm, wasm]
+    note: small, fully deterministic output hard-coded inline
+    expect:
+      equals: |
+        input:               (5 -3 8 -1 2 -7 4 0 6)
+        quicksort   (<):     (-7 -3 -1 0 2 4 5 6 8)
+        merge-sort  (<):     (-7 -3 -1 0 2 4 5 6 8)
+        built-in sort (<):   (-7 -3 -1 0 2 4 5 6 8)
+        quicksort |x| desc:  (8 -7 6 5 4 -3 2 -1 0)
+  - path: console/word-frequency.lisp
+    backends: [interpreter, jvm, wasm]
+    note: ranks with tied counts reorder by hash-table iteration order
+    expect:
+      contains:
+        - "Total unique words: 30"
+        - "Top 10 words:"
+        - '"to" 4'
+        - "Words appearing exactly once:"
+
+  # --- scheme: the experimental Scheme front end (.scm) ----------------------
+  - path: scheme/differentiation.scm
+    backends: [interpreter, jvm, wasm, wasm-component-run]
+    expect:
+      file: .expected/scheme-differentiation.txt
+  - path: scheme/queens.scm
+    backends: [interpreter, jvm, wasm, wasm-component-run]
+    expect:
+      file: .expected/scheme-queens.txt
+  - path: scheme/huffman.scm
+    backends: [interpreter, jvm, wasm, wasm-component-run]
+    expect:
+      file: .expected/scheme-huffman.txt
+  - path: scheme/streams.scm
+    backends: [interpreter, jvm, wasm, wasm-component-run]
+    expect:
+      file: .expected/scheme-streams.txt
+  - path: scheme/evaluator.scm
+    backends: [interpreter, jvm, wasm, wasm-component-run]
+    expect:
+      file: .expected/scheme-evaluator.txt
+  - path: scheme/collatz.scm
+    backends: [interpreter, jvm, wasm, wasm-component-run]
+    expect:
+      file: .expected/scheme-collatz.txt
+
+  # --- starlark: the experimental Starlark front end (.star) -----------------
+  - path: starlark/targets.star
+    backends: [interpreter, jvm, wasm, wasm-component-run]
+    expect:
+      file: .expected/starlark-targets.txt
+
+  # --- java: the experimental subset of the Java language (.java) ------------
+  - path: java/shop/Main.java
+    backends: [interpreter, jvm, wasm, wasm-component-run]
+    expect:
+      file: .expected/java-shop.txt
+  - path: java/yavi/src/main/java/yavi/Member.java
+    backends: [interpreter, jvm, wasm, wasm-component-run]
+    note: >-
+      YAVI's ValidatorBuilder over a record, compiled from the library's sources jar.
+      The suite resolves the sources jar before the legs and skips them, saying why,
+      offline without it. Measured 2026-11-22 over 0.18.1: on the exec jar the interpreter
+      runs it in 3.7 s and -o .class, -o .wasm and --component compile it in 7.7, 9.7 and
+      9.5 s; on the native binary the four legs, compile and run, take 0.7, 2.4, 2.9 and
+      2.9 s (measured 2026-11-20 over 0.18.0). The suite allows 240 s a process.
+    expect:
+      file: .expected/java-yavi.txt
+  - path: java/yavi/src/main/java/yavi/Booking.java
+    backends: [interpreter, jvm, wasm, wasm-component-run]
+    note: >-
+      YAVI's schema (Yavi.schema() .. fromMap) reading a record from a map and from a
+      form's strings: an enum by its constant's name, a LocalDate from its text, a
+      number of another type as the Integer asked for. Its module is about one and a half
+      times Member.java's (the schema reader, LocalDate, java.math). Measured
+      2026-11-22 over 0.18.1: on the exec jar the interpreter runs it in 8.3 s and -o .class,
+      -o .wasm and --component compile it in 13.9, 16.9 and 16.9 s; on the native
+      binary the four legs, compile and run, take 3.6, 6.9, 8.4 and 8.4 s (measured
+      2026-11-20 over 0.18.0).
+    expect:
+      file: .expected/java-yavi-booking.txt
+  - path: java/mustache/src/main/java/Shelf.java
+    backends: [interpreter, jvm, wasm, wasm-component-run]
+    note: >-
+      a page rendered by jmustache from a layout, a page and a partial in its
+      src/main/resources, read as resources by a name the loader computes; jmustache finds what a template
+      names in a record by reflection by name. Measured 2026-11-22 on the exec jar (a box
+      under load): the interpreter runs it in 3.8 s and -o .class, -o .wasm and
+      --component compile it in 9, 12 and 11 s.
+    expect:
+      file: .expected/java-mustache.txt
+  - path: java/reflection/src/main/java/com/example/reflection/Reflection.java
+    backends: [interpreter, jvm, wasm, wasm-component-run]
+    note: >-
+      greetings chosen by the class names a resource lists, each found by Class.forName and
+      made and called by reflection as the program's reachability metadata
+      (src/main/resources/META-INF/native-image) declares it, a name it does not declare not
+      found; then the properties of YAVI's ViolationDetail by name, which YAVI's jar declares.
+      GraalVM's native image prints the same lines from the same metadata (mvn -Pgraalvm
+      package).
+    expect:
+      file: .expected/java-reflection.txt
+  - path: java/logging/src/main/java/com/example/logging/App.java
+    backends: [interpreter, jvm, wasm, wasm-component-run]
+    note: >-
+      java.util.logging with a handler and a formatter of the program's on the standard
+      output, SLF4J bound to it by slf4j-jdk14 and Commons Logging through SLF4J, compiled
+      from the sources jars. Each record also goes to the root logger's handler on the
+      standard error, which is not checked: its lines carry the time. Under --wasi-logging
+      those go to the host's log (examples/java/logging/README.md). Measured 2026-11-25 on
+      the exec jar with Commons Logging: the interpreter runs it in 5.0 s and -o .class,
+      -o .wasm and --component compile it in 16, 17 and 17 s.
+    expect:
+      file: .expected/java-logging.txt
+  - path: java/hello-java/src/main/java/Hello.java
+    backends: [interpreter, jvm, wasm, wasm-component-run]
+    note: a compact source file, one line of main
+    expect:
+      equals: |
+        Hello World!
+  - path: java/no-wasi/Calc.java
+    backends: [wasm-reactor]
+    note: >-
+      a class with no main: add and fib are the exports of a module that
+      imports nothing, which java/no-wasi/build.sh calls with
+      `wasmtime run --invoke`. Host-invoked, so the harness only compiles it.
+  - path: java/java-calls-rust/src/main/java/com/example/casing/App.java
+    backends: [interpreter, jvm, wasm-component]
+    note: >-
+      wit/lisp-calls-rust's program in Java (see java/java-calls-rust/README.md):
+      a command that imports example:textkit/casing
+      through an @WitImport interface and calls shout. LocalCasing, named in
+      META-INF/services, answers on the interpreter and jvm legs, so both RUN
+      standalone and their output is checked. wasm-component pins that the import
+      lowers; RUNNING that leg needs the Rust component of wit/lisp-calls-rust
+      plug-composed in with `wac`, off the test path -- there LocalCasing is not
+      consulted, and the Rust component answers with the same output.
+    expect:
+      equals: |
+        hello world  ->  HELLO WORLD!
+        component model  ->  COMPONENT MODEL!
+        rust and lisp  ->  RUST AND LISP!
+  - path: java/rust-calls-java/src/main/java/com/example/vowels/Counter.java
+    backends: [wasm-component]
+    note: >-
+      wit/rust-calls-lisp's counter in Java (see java/rust-calls-java/README.md): a
+      program with no main whose @WitExport class implements the world counter, so it
+      compiles to a reactor component exporting vowel-count and no wasi:cli/run.
+      wasm-component pins that the world lowers; the Rust describer calls the export
+      through `wac` composition (`wasmtime run --invoke 'describe("hello world")'
+      vowels.wasm`), off the test path. The interpreter and the JVM refuse a program
+      with no main; the project's CounterTest calls vowelCount under a JDK and, through
+      the plugin's test goal, on the interpreter.
+  - path: java/http/Server.java
+    backends: [jvm-compile, wasm-component, wasm-reactor]
+    note: >-
+      an HTTP server on the JDK's own API, com.sun.net.httpserver: four contexts, a
+      query, a POST body, a status that is no success and a body in chunks. One
+      source for every transport rontolisp::%http-serve has -- a socket on the
+      interpreter and the JVM, the runner's server under --native, `wasmtime serve`
+      under --component, the handle-request export under --no-wasi. Compile legs,
+      like clojure/ring-hello.clj: a server does not end, and a reactor is called by
+      its host. The requests on every transport, beside a JDK's answers, are
+      FetchSpecE2eTest#javaHttpServer (java-http-server-spec.yaml).
+  - path: java/http/Client.java
+    backends: [interpreter, jvm]
+    note: >-
+      java.net.http's client against the application of java/http/Server.java, which
+      the program serves itself on a free local port and stops at its end: a GET, a
+      query, a POST body, a 405, a body in chunks and sendAsync. The server and the
+      client share the process, so only the targets with threads run it; the client
+      on every transport is FetchSpecE2eTest#javaHttpClient.
+    expect:
+      file: .expected/java-http-client.txt
+  - path: java/httpbin/src/main/java/httpbin/Httpbin.java
+    backends: [jvm-compile, wasm-component]
+    note: >-
+      net/httpbin.lisp on com.sun.net.httpserver: five endpoints answering a JSON
+      description of the request, built and (for a JSON body) checked with tiny-json
+      (its sources jar), which the program hands back as it came. Compile legs: a server
+      does not end. The answers on all four transports, beside a JDK's, are
+      FetchSpecE2eTest#javaHttpServer (java-http-server-spec.yaml, its `httpbin`).
+  - path: java/guestbook/src/main/java/guestbook/Guestbook.java
+    backends: [jvm-compile, wasm-component]
+    note: >-
+      a Servlet application on servlet-httpserver/, compiled with the container's
+      sources and the API's sources jar: a filter, three servlets and a listener the
+      container finds by their annotations, a form, sendRedirect, sendError and a
+      JSON API built with tiny-json (its sources jar). Compile legs: a server does not
+      end. The answers on all four transports, beside a JDK's, are
+      FetchSpecE2eTest#javaHttpServer (java-http-server-spec.yaml, its `guestbook`).
+  - path: java/mvcfn/src/main/java/com/example/Application.java
+    backends: [jvm-compile, wasm-component]
+    note: >-
+      routes in the style of Spring MVC's functional endpoints (WebMvc.fn) on
+      webmvc-fn-lite/ and servlet-httpserver/, compiled with their sources: a
+      DispatcherServlet over a context holding a RouterFunctionMapping, a nested path,
+      path variables, a query parameter, JSON bodies both ways through a converter of
+      tiny-json's values (its sources jar), a filter and an error handler. Compile legs:
+      a server does not end. The answers on all four transports, beside a JDK's, are
+      FetchSpecE2eTest#javaHttpServer (java-http-server-spec.yaml, its `mvcfn`).
+  - path: java/hello-servlet/src/main/java/HelloServlet.java
+    backends: [jvm-compile, wasm-component, wasm-reactor]
+    note: >-
+      the smallest Servlet application on servlet-httpserver/: a compact source file
+      with one lambda servlet. Compile legs: a server does not end, and the --no-wasi
+      reactor (what cloudflare-workers/hello-servlet-one-source deploys, unedited) is
+      called by its host. The answers on every transport, beside a JDK's, are
+      FetchSpecE2eTest#javaHttpServer (java-http-server-spec.yaml, its
+      `hello-servlet`).
+  - path: java/hello-session/src/main/java/HelloSession.java
+    backends: [jvm-compile, wasm-component, wasm-reactor]
+    note: >-
+      hello-servlet with a session, kept in wasi:keyvalue by servlet-httpserver-keyvalue/
+      on the source path: a visit counter that outlives the instance. Compile legs: a
+      server does not end; the component imports wasi:keyvalue/store@0.2.0-draft2, which
+      sluice-wicket-runtime-wasi provides and wasmtime 51 does not, and the --no-wasi
+      reactor (what cloudflare-workers/hello-session-one-source deploys, unedited)
+      imports it through the canonical ABI, which its glue answers over Workers KV. The
+      sessions on every transport, beside a JDK's, are FetchSpecE2eTest#javaHttpServer
+      (java-http-server-spec.yaml, its `keyvalue-sessions`).
+  - path: java/hello-mvcfn/src/main/java/HelloMvcfn.java
+    backends: [jvm-compile, wasm-component, wasm-reactor]
+    note: >-
+      the smallest WebMvc.fn application on webmvc-fn-lite/ and servlet-httpserver/: a
+      compact source file with one GET route behind a DispatcherServlet. Compile legs:
+      a server does not end, and the --no-wasi reactor (what
+      cloudflare-workers/hello-mvcfn-one-source deploys, unedited) is called by its
+      host. The answers on every transport, beside a JDK's, are
+      FetchSpecE2eTest#javaHttpServer (java-http-server-spec.yaml, its `hello-mvcfn`).
+  - path: java/jdbc/src/main/java/jdbc/Notes.java
+    backends: [jvm-compile, wasm-component]
+    note: >-
+      plain JDBC on the driver of jdbc-postgresql/, compiled with its sources: DATABASE_URL,
+      a PreparedStatement and its generated key, rows read into a record, an update, a
+      delete, a transaction committed and one rolled back, text outside ASCII. Compile legs:
+      the run needs a live server, which this suite has none of. The run on all four
+      targets, beside a JDK's (.expected/java-jdbc-notes.txt), is
+      ClPostgresE2eTest#theJdbcProgramsAnswerOnEveryBackendWhatTheyAnswerUnderTheJdk.
+
+  - path: java/shiori/src/main/java/com/example/shiori/Shiori.java
+    backends: [jvm-compile, wasm-component]
+    note: >-
+      db/shiori in Java: a web application over PostgreSQL on webmvc-fn-lite/,
+      servlet-httpserver/ and jdbc-postgresql/, compiled with their sources, its pages
+      jmustache's templates read as resources of its src/main/resources by a name of a
+      constant prefix and suffix, its forms
+      read by YAVI schemas, VCAP_SERVICES and its JSON through tiny-json (their sources jars).
+      Compile legs: a server does not end and its run needs a live database. Served on all
+      four targets against a database of each leg's and asked the requests a JDK serving it
+      answered: ClPostgresE2eTest#theJdbcProgramsAnswerOnEveryBackendWhatTheyAnswerUnderTheJdk.
+      Measured 2026-11-22 (a box under load): -o .class 57 s, --component 69 s.
+
+  - path: java/spin-postgres/src/main/java/com/example/notes/App.java
+    backends: [jvm-compile, wasm-component]
+    note: >-
+      a servlet keeping notes in PostgreSQL through plain JDBC, its driver
+      jdbc-spin-postgres: every statement runs on Spin's spin:postgres/postgres, which
+      connects, pools and speaks TLS. Compile legs: a server does not end, and only Spin
+      implements the interface (wasmtime serve refuses the import). Served by Spin and
+      asked its requests: ClPostgresE2eTest#theJdbcProgramAnswersThroughSpinsConnection,
+      where a Spin is on PATH; with TLS by hand (.kb/jdbc-spin-postgres.md).
+
+  # --- clojure: the experimental Clojure front end (.clj) --------------------
+  - path: clojure/demo.clj
+    backends: [interpreter, jvm, wasm, wasm-component-run]
+    expect:
+      file: .expected/clojure-demo.txt
+  - path: clojure/ring-hello.clj
+    backends: [jvm-compile, war-compile, wasm-component, wasm-reactor]
+    note: >-
+      a Ring handler (ring.util.response, wrap-params, wrap-keyword-params)
+      served by ring.adapter.rontolisp/run-server, the ONE source
+      for every transport :server :rontolisp picks between in
+      net/hello-clack.lisp (both adapters call the same rontolisp::%http-serve):
+      a socket on the interpreter and the JVM, a Servlet container under
+      -o app.war, `wasmtime serve` under --component, a host calling the
+      handle-request export under --no-wasi (what
+      cloudflare-workers/ring-hello-one-source deploys, unedited). Compile legs, like hello-clack:
+      a server blocks and a war or reactor is never run as a program. The
+      request round trips on all four backends are ClojureRingAdapterTest (and
+      ServeRingComponentE2eTest for `wasmtime serve`).
+  - path: clojure/serve-html.clj
+    backends: [jvm-compile, wasm-component]
+    note: >-
+      net/serve-html.lisp in Clojure: one page as the answer to every request,
+      the page a string-literal resource embedded in the artifact at build
+      time (no runtime filesystem, like the #. read-time form the Lisp
+      original uses), served by ring.adapter.rontolisp/run-server. Compile
+      legs only: a server blocks.
+  - path: clojure/host-boundary/main.clj
+    backends: [jvm-compile, wasm-reactor]
+    note: >-
+      the WASM host boundary guide's add/add10 in Clojure: rontolisp.wasm/defimport
+      and a defn's {:wasm/export ...} lower to the rontolisp:wasm-import and
+      rontolisp:wasm-export a Common Lisp source writes. Host-invoked (wasmtime run
+      --preload host=host.wasm --invoke add10 main.wasm 32 -> 42, or node run.mjs over
+      the --emit-js-glue file), so the harness only compiles; ClojureWasmBoundaryTest
+      runs the preload
+  - path: clojure/host-boundary/host.clj
+    backends: [jvm-compile, wasm-reactor]
+    note: the module main.wasm's "host" import is preloaded from -- a defn exported under :as "add"
+  - path: clojure/greeter/greeter.clj
+    backends: [jvm-compile, wasm-component]
+    note: >-
+      implements wit/greeter.wit with rontolisp.wit/export: each world export is the
+      var its label names, a bool crossing in Clojure's spelling. jvm-compile pins that
+      the same world check runs where nothing is exported. Host-invoked (wasmtime run
+      --invoke 'shout("Ada", true)' -> "HELLO, ADA!!!"), so the harness only compiles;
+      ClojureWitBoundaryTest runs the invokes
+  - path: clojure/macros.clj
+    backends: [interpreter, jvm, wasm, wasm-component-run]
+    note: >-
+      macro bodies calling the program's functions and reading its vars, eval at
+      expansion time, a template naming a private helper, &form/&env, run-time
+      macroexpand; the output is clj 1.12.6's
+    expect:
+      file: .expected/clojure-macros.txt
+  - path: clojure/text.clj
+    backends: [interpreter, jvm, wasm, wasm-component-run]
+    note: >-
+      java.util.regex's syntax (lookaround, inline flags, named groups, \G), \p{...},
+      \X, \N{name}, split/replace, format's flags, full case mapping, Unicode
+      whitespace, three charsets; the output is clj 1.12.6's
+    expect:
+      file: .expected/clojure-text.txt
+  - path: clojure/collections.clj
+    backends: [interpreter, jvm, wasm, wasm-component-run]
+    note: >-
+      a map's insertion-order seq, a 20,000-entry map built by assoc, records, a
+      deftype keying a map by its own hasheq/equals, hash, transients, PersistentQueue,
+      deftype/reify of the collection interfaces, keyword-argument and namespaced
+      destructuring, case/condp, iteration, byte arrays, #inst/#uuid; the output is
+      clj 1.12.6's
+    expect:
+      file: .expected/clojure-collections.txt
+  - path: clojure/bundled-namespaces.clj
+    backends: [interpreter, jvm, wasm, wasm-component-run]
+    note: >-
+      the clojure.jar namespaces shipped as Clojure source: walk, edn, template, pprint
+      (code-dispatch, print-table, cl-format), data, zip, core.protocols, datafy,
+      stacktrace, repl, math, core.reducers, set, instant, xml, java.io (a file in the
+      working directory: the wasm legs run with --dir .); the output is clj 1.12.6's
+    expect:
+      file: .expected/clojure-bundled-namespaces.txt
+  - path: clojure/state.clj
+    backends: [interpreter, jvm, wasm, wasm-component-run]
+    note: >-
+      atoms, refs with a rolled-back transaction and a validator, watches and
+      validators on atoms, refs and vars, swap-vals!/reset-vals!, agents failing,
+      refused, restarted and in :continue mode, await-for, delays, volatiles,
+      binding, alter-var-root, with-redefs; the output is clj 1.12.6's
+    expect:
+      file: .expected/clojure-state.txt
+  - path: clojure/portable.cljc
+    backends: [interpreter, jvm, wasm, wasm-component-run]
+    note: >-
+      a .cljc entry file: #? and #?@ under the :rontolisp/:clj features, read-string
+      under :read-cond :preserve and :allow, a tagged literal kept as data. clj 1.12.6
+      prints the same but for its own :clj branch on the first line
+    expect:
+      file: .expected/clojure-portable.txt
+  - path: clojure/deps-project/deps.edn
+    cli: ["-M:invoice"]
+    args: [tea, coffee]
+    backends: [interpreter, jvm, wasm, wasm-component-run]
+    note: >-
+      a deps.edn project's -main through an alias's :main-opts; the project reads a
+      :local/root library's .cljc, a data reader from src/data_readers.clj, and ns
+      clauses (:refer-clojure :exclude, :rename, :as-alias). A compiled leg keeps the
+      alias's arguments and takes the run's after them, so all four print alike
+    expect:
+      file: .expected/clojure-deps-project-main.txt
+  - path: clojure/deps-project/deps.edn
+    cli: ["-X:summary", ":currency", '"USD"']
+    backends: [interpreter, jvm, wasm, wasm-component-run]
+    note: -X calls the alias's :exec-fn with its :exec-args merged with the command line's
+    expect:
+      file: .expected/clojure-deps-project-exec.txt
+  - path: clojure/deps-project/deps.edn
+    cli: [test]
+    backends: [interpreter, jvm, wasm, wasm-component-run]
+    note: rontolisp test runs the -test namespaces under the :test alias's :extra-paths
+    expect:
+      file: .expected/clojure-deps-project-test.txt
+  - path: clojure/http-client.clj
+    backends: [interpreter, jvm]
+    javaInterop: true
+    note: >-
+      rontolisp.http-client against a Ring handler the program serves on a free local
+      port (:join? false), then System/exit: GET with query parameters, a form POST, a
+      PUT body, a streamed reply read by line-seq, the 404 ex-info and :throw false,
+      :async. The port comes from java.net.ServerSocket and the server needs a socket
+      the program owns, so only the interpreter and the JVM run it
+    expect:
+      file: .expected/clojure-http-client.txt
+  - path: clojure/wit-types/shop.clj
+    backends: [interpreter, jvm]
+    note: >-
+      a WIT import crossing an enum, flags, a variant with and without payload, a
+      record, an option, a list of tuples, a result argument and a result answer whose
+      error arm is caught, against the provider the program binds. No wasm leg: a
+      component import does not carry flags or a list of tuples yet, and a Preview 1
+      import carries scalars only (both are refused by name)
+    expect:
+      file: .expected/clojure-wit-types.txt
+  - path: clojure/java-library/main.clj
+    javaSources: [clojure/java-library/java/example/Slugger.java]
+    backends: [interpreter, jvm]
+    javaInterop: true
+    note: >-
+      a Java library of the example's own on --java-classpath: a static method and
+      field, a constructor, a List argument and a fn as a Predicate. The WASM targets
+      refuse --java-classpath
+    expect:
+      file: .expected/clojure-java-library.txt
+
+  # --- ml: numerical computing & machine learning ----------------------------
+  - path: ml/deep-digits.lisp
+    backends: [interpreter, jvm, wasm]
+    note: deterministic (fixed-seed LCG init, integer-scaled loss)
+    expect:
+      file: .expected/deep-digits.txt
+  - path: ml/heat3d.lisp
+    backends: [interpreter, jvm, wasm]
+    expect:
+      file: .expected/heat3d.txt
+  - path: ml/linear-regression.lisp
+    backends: [interpreter, jvm, wasm]
+    expect:
+      file: .expected/linear-regression.txt
+  - path: ml/maze-rl.lisp
+    backends: [interpreter, jvm, wasm]
+    note: unseeded random -- path, value count and the drawn maze differ every run
+    expect:
+      skip: true
+  - path: ml/mlp.lisp
+    backends: [interpreter, jvm, wasm]
+    note: random init/data -- only the fixed header lines are stable
+    expect:
+      contains:
+        - "Circle classification, 2-8-1 MLP"
+        - "train=150 examples, test=60 examples"
+        - "Final train accuracy:"
+  - path: ml/nn.lisp
+    backends: [interpreter, jvm, wasm]
+    note: random weight init -- losses/predictions vary, headings are stable
+    expect:
+      contains:
+        - "Training XOR (2-4-1 network)..."
+        - "Predictions after training:"
+  - path: ml/nn-vec.lisp
+    backends: [interpreter, jvm, wasm]
+    note: nn.lisp rewritten with the vec (vec:matvec GEMV, Hadamard deltas) and linalg (transpose/outer/emap) packages instead of hand-written loops; single-float (#f) throughout -- linalg is width-polymorphic and preserves the #f width, so the JVM --simd pass stays f32; random init, so only the headings are stable
+    expect:
+      contains:
+        - "Training XOR (2-4-1 network, vec + linalg)..."
+        - "Predictions after training:"
+  - path: ml/numerical-calculus.lisp
+    backends: [interpreter, jvm, wasm]
+    note: numpy-style diff/gradient (linalg calculus) -- every sample is a polynomial at integer coordinates, so the differences are exact and the output byte-identical on every backend
+    expect:
+      file: .expected/numerical-calculus.txt
+  - path: ml/simd-dot.lisp
+    backends: [interpreter, jvm, wasm]
+    note: the minimal --simd showcase -- one vec:dot over 1024 doubles, 4000 times. The vector is 0.0..1023.0, so the dot is an exact integer and every partial sum is exactly representable; lane-order folding therefore cannot change it. The elapsed-time line is not checked. Run it a second time with --simd - interpreter 2.59 s -> 2.3 ms, wasm-GC 273 -> 2.4 ms
+    expect:
+      contains:
+        - "(vec:dot v v) over 1024 doubles, 4000 times = 4096000 multiply-adds"
+        - "sum of squares below 1024 = 357389824"
+  - path: ml/simd-gemv.lisp
+    backends: [interpreter, jvm, wasm]
+    note: the --simd showcase -- 100 steps of vec:matvec (GEMV) + vec:dot on a 256x256 single-float matrix; deterministic (fixed-seed LCG weights, argmax indices printed instead of floats, so lane-order rounding cannot move them). The elapsed-time line is not checked. Run it a second time with --simd - wasm-GC 467 -> 3.9 ms, interpreter 4.6 s -> 15 ms. --blas reaches it too, because vec:matvec is a cblas_?gemv -- the argmax indices are unmoved by the library's reordered reduction (verified on OpenBLAS), and the harness runs the unaccelerated legs as before
+    expect:
+      contains:
+        - "simd-gemv: 100 steps of (vec:matvec w x) on a 256x256 single-float matrix"
+        - "argmax after steps 1-10: (0 14 82 126 14 140 126 79 134 175)"
+        - "argmax after step 100:   85"
+  - path: ml/blas-matmul.lisp
+    backends: [interpreter, jvm, wasm]
+    note: the --simd AND --blas showcase -- one 128x128 double-float linalg:matmul, linalg's default width. Deterministic (fixed-seed LCG entries are small integers, so every product and sum is exact at double and no reordering can move a printed digit; integers printed, not floats). The elapsed-time line is not checked. Run it again with --simd, with --blas and with both - per product, interpreter 1848 -> 0.62 -> 0.034 ms, JVM 0.37 -> 0.043 ms, wasm-GC 60 -> 1.4 ms (--blas needs the FFM API, so not on wasm). ~2 s on the interpreter leg, which runs the portable definition
+    expect:
+      contains:
+        - "blas-matmul: 128x128 double-float (linalg:matmul a b), 1 time(s)"
+        - "corners: (141404 143849 140073 127438)"
+        - "trace:   16222272"
+  - path: ml/simd-gemv-nogc.lisp
+    backends: [no-gc, no-gc-simd]
+    note: simd-gemv's inner loop as a --no-gc reactor (the rank-2 packed matrix layout + vec:matvec GEMV) -- the host invokes the fingerprint export (wasmtime run --invoke fingerprint prog.wasm 100 -> 85, matching simd-gemv.lisp's step-100 argmax on both lowerings; verified manually, the harness only compiles). matvec-into/scale-into keep the never-freed bump heap at exactly three blocks
+  - path: ml/tiny-llm.lisp
+    backends: [interpreter, jvm, wasm]
+    note: a 2-layer transformer decoder -- llama2's forward() without the tokenizer or the weight loader (RMSNorm, Q/K/V projections, causal self-attention over a KV cache, softmax, SwiGLU FFN, residuals, classifier head, greedy argmax decode). Deterministic (fixed-seed pseudo-random weights, token ids printed, not floats). 13 GEMVs per forward pass, so it is the example --simd earns its keep on. The elapsed-time line is not checked. Run it a second time with --simd - native interpreter 11.3 s -> 20 ms, wasm-GC 891 -> 7.8 ms. --blas reaches it too, with the same nine token ids. Uses vec:matvec and linalg:, so no --no-gc. ~13 s on the interpreter leg
+    expect:
+      contains:
+        - "tiny-llm: 2-layer transformer decoder, dim=256 hidden=512 ctx=12 vocab=48, single-float"
+        - "prompt:    (3 14 1 5)"
+        - "generated: (39 27 23 18 42 7 5 39 27)"
+
+  # --- llm: llama2.c ported whole (see its README.md) ----------------------
+  # Both entries run under --simd (the interpreter's scalar kernels take ~15 s per
+  # stories15M token), and the threaded legs (interpreter, JVM) under --simd
+  # --parallel as well: the row-parallel GEMV must tell the same story as the
+  # serial one, byte for byte. The first entry passes run.c's knobs on the
+  # COMMAND LINE and the second the same knobs in the ENVIRONMENT, which is what
+  # the program falls back to, so both halves of it are covered.
+  # Greedy decoding, so the story is byte-identical on every backend AND to the C
+  # program's -- the whole point of an `equals`.
+  - path: llm/llm.lisp
+    backends: [interpreter, jvm, wasm, wasm-component-run]
+    workDir: llm
+    workFiles: [stories260K.bin, tok512.bin]
+    simd: true
+    parallel: true
+    args: ["stories260K.bin", "-z", "tok512.bin", "-i", "Once upon a time", "-t", "0", "-n", "40"]
+    note: run.c ported whole -- checkpoint loader (read-sequence over packed single-float arrays), tokenizer + BPE encoder, forward pass, sampler, generate -- over the checked-in 1 MB stories260K model. Greedy (temperature 0), 40 tokens, so the story is the same on every backend and in `run stories260K.bin -z tok512.bin -t 0 -n 40 -i "Once upon a time"`. The tok/s line goes to stderr and is not checked
+    expect:
+      equals: |
+        Once upon a time, there was a little girl named Lily. She loved to play outside in the park. One day, she saw a big, r
+  # The Gated DeltaNet layer (Qwen3.5's :deltanet kind, llm/deltanet.lisp)
+  # against a float64 transcription of the PyTorch reference (deltanet-ref.py):
+  # the recurrence alone, then a whole decode step over five tokens, at 3
+  # decimals with a 2e-5 margin from every rounding boundary, so the text is
+  # the same with single-float arithmetic and the WASM exp approximation.
+  - path: llm/deltanet-check.lisp
+    backends: [interpreter, jvm, wasm, wasm-component-run]
+    note: deltanet.lisp's arithmetic pinned against deltanet-ref.py -- torch_recurrent_gated_delta_rule at heads 2 / dim 4 over three tokens plus the final states, then Qwen3_5GatedDeltaNet.forward (conv, SiLU, l2norm, the gates, the recurrence, the gated RMSNorm, out_proj) over five tokens of a dim-8 two-head kernel-4 layer. The scalar vec.lisp kernels on every backend
+    expect:
+      file: .expected/deltanet-check.txt
+  - path: llm/deltanet-check.lisp
+    backends: [interpreter, jvm, wasm, wasm-component-run]
+    simd: true
+    note: the same check under --simd on every leg -- the lane kernels' single-precision reductions land on the same text
+    expect:
+      file: .expected/deltanet-check.txt
+  # The shipped safetensors reader (safetensors:read over the checkpoint staging
+  # package, .kb/checkpoint-readers.md) over a few-hundred-byte fixture written by
+  # llm/safetensors-fixture.py: every supported dtype at rank 1, 2 and 3 and a
+  # one-element tensor, into single and double floats, the I64 refusal, :only, the
+  # chunked staging path (the chunk forced to five elements) and the sharded index.
+  # The values are exact in every width, so the text is the same on every backend.
+  - path: llm/safetensors-check.lisp
+    backends: [interpreter, jvm, wasm, wasm-component-run]
+    workDir: llm
+    workFiles: [safetensors-check.safetensors, safetensors-check-00001-of-00002.safetensors, safetensors-check-00002-of-00002.safetensors, safetensors-check.index.json]
+    note: safetensors:read / safetensors:header / safetensors:entries over the checked-in fixture -- F32, F16 and BF16 tensors of rank 1, 2 and 3 and one of a single element, single and double destinations, the dtype refusal, :only skipping a tensor through checkpoint:skip-bytes, the staging chunk forced down to five elements, and the two-shard index
+    expect:
+      file: .expected/safetensors-check.txt
+  - path: llm/safetensors-check.lisp
+    backends: [interpreter, jvm, wasm, wasm-component-run]
+    workDir: llm
+    workFiles: [safetensors-check.safetensors, safetensors-check-00001-of-00002.safetensors, safetensors-check-00002-of-00002.safetensors, safetensors-check.index.json]
+    simd: true
+    note: the same check under --simd -- a reader must answer the same arrays whatever the acceleration flag
+    expect:
+      file: .expected/safetensors-check.txt
+  # llm/tokenizer-fixture.py: one tiny byte-level BPE tokenizer as a Hugging Face
+  # tokenizer.json + tokenizer_config.json pair and as a GGUF metadata block, with
+  # added tokens flagged special (<|im_start|>, <|im_end|>) and not (<think>,
+  # </think>); the ids are the Python `tokenizers` library's.
+  - path: llm/checkpoint-tokenizer-check.lisp
+    backends: [interpreter, jvm, wasm, wasm-component-run]
+    workDir: llm
+    workFiles: [tokenizer-check/tokenizer.json, tokenizer-check/tokenizer_config.json, tokenizer-check.gguf]
+    note: load-hf-tokenizer and load-gguf-tokenizer (the readers llm.lisp uses for a published checkpoint's tokenizer) over the checked-in fixture, encoding a plain text, a chat turn with a think block, and a word glued to an added token -- every added token is one id whether or not it is flagged special, on both readers, the same ids the reference implementation gives
+    expect:
+      file: .expected/checkpoint-tokenizer-check.txt
+  # LFM2's gated short-conv layer (the :shortconv kind, llm/shortconv.lisp)
+  # against a float64 transcription of Lfm2ShortConv (shortconv-ref.py), four
+  # tokens of a dim-8 kernel-3 layer, the same 3-decimal / 2e-5-margin rule.
+  - path: llm/shortconv-check.lisp
+    backends: [interpreter, jvm, wasm, wasm-component-run]
+    note: shortconv.lisp's arithmetic pinned against shortconv-ref.py -- in_proj, the B | C | x split, the gated causal conv of kernel 3 (causal-conv.lisp, shared with deltanet.lisp) with no activation, out_proj -- over four tokens, so the two-row window fills and wraps. The scalar vec.lisp kernels on every backend
+    expect:
+      file: .expected/shortconv-check.txt
+  - path: llm/shortconv-check.lisp
+    backends: [interpreter, jvm, wasm, wasm-component-run]
+    simd: true
+    note: the same check under --simd on every leg
+    expect:
+      file: .expected/shortconv-check.txt
+  - path: llm/llm.lisp
+    backends: [interpreter, jvm, wasm]
+    workDir: llm
+    workFiles: [stories15M.bin, tokenizer.bin]
+    simd: true
+    parallel: true
+    env:
+      LLAMA2_PROMPT: Once upon a time
+      LLAMA2_TEMPERATURE: "0"
+      LLAMA2_STEPS: "60"
+    note: the llama2.c README demo itself, over stories15M.bin (60 MB, gitignored -- llm/download-stories15M.sh); the RUN legs skip themselves when it is absent. 60 greedy tokens = the same text `run stories15M.bin -t 0 -n 60 -i "Once upon a time"` prints. Measured 2026-08-22 with --simd - JVM 221 tok/s (319 with --simd --parallel on 20 threads, 278 with --gpu --simd, story unchanged), wasm-GC 125 tok/s, interpreter 44 tok/s
+    expect:
+      equals: |
+        Once upon a time, there was a little girl named Lily. She loved to play outside in the sunshine. One day, she saw a big, red ball in the sky. It was the sun! She thought it was so pretty.
+        Lily wanted to play with the ball
+
+  # --- deep-learning-from-scratch: the book, ported (see its README.md) -------
+  # The data-free scripts print byte-identically on every backend (weights come
+  # from the seeded linalg RNG; the exp-using ones round through truncate or a
+  # bucketed histogram, which the WASM exp approximation cannot flip). Scripts
+  # that read committed weight files (ch07/params.bin, ch03/sample-weight.bin)
+  # get RUN legs, with the file staged via workFiles. Scripts that also read
+  # dataset/*-ubyte (the gitignored idx dumps -- fetch via ./download-mnist.sh)
+  # ALSO get RUN legs, but each leg skips itself when the dumps are absent
+  # (assumption abort, not failure) -- CI without the dumps only exercises the
+  # compile-only wasm-component leg, a developer with them run gets the full
+  # cross-backend accuracy check. Only the ch08 training scripts stay
+  # compile-only: their deep-convnet forward pass is minutes per interpreter
+  # leg (revisit once it shrinks).
+  - path: deep-learning-from-scratch/ch02/and-gate.lisp
+    backends: [interpreter, jvm, wasm]
+    expect:
+      file: .expected/dlfs-and-gate.txt
+  - path: deep-learning-from-scratch/ch02/nand-gate.lisp
+    backends: [interpreter, jvm, wasm]
+    expect:
+      file: .expected/dlfs-nand-gate.txt
+  - path: deep-learning-from-scratch/ch02/or-gate.lisp
+    backends: [interpreter, jvm, wasm]
+    expect:
+      file: .expected/dlfs-or-gate.txt
+  - path: deep-learning-from-scratch/ch02/xor-gate.lisp
+    backends: [interpreter, jvm, wasm]
+    expect:
+      file: .expected/dlfs-xor-gate.txt
+  - path: deep-learning-from-scratch/ch03/activation-functions.lisp
+    backends: [interpreter, jvm, wasm]
+    expect:
+      file: .expected/dlfs-activation-functions.txt
+  - path: deep-learning-from-scratch/ch03/mnist-show.lisp
+    backends: [interpreter, jvm, wasm, wasm-component, wasm-component-run]
+    workDir: deep-learning-from-scratch
+    workFiles: [dataset/train-images-idx3-ubyte, dataset/train-labels-idx1-ubyte]
+    note: reads dataset/train-*-ubyte (gitignored -- ./download-mnist.sh); RUN legs skip themselves when the dumps are absent
+    expect:
+      file: .expected/dlfs-mnist-show.txt
+  - path: deep-learning-from-scratch/ch03/neuralnet-mnist.lisp
+    backends: [interpreter, jvm, wasm, wasm-component, wasm-component-run]
+    workDir: deep-learning-from-scratch
+    workFiles: [ch03/sample-weight.bin, dataset/t10k-images-idx3-ubyte, dataset/t10k-labels-idx1-ubyte]
+    note: reads dataset/t10k-*-ubyte (gitignored -- ./download-mnist.sh) + ch03/sample-weight.bin (committed); RUN legs skip themselves when the idx dumps are absent; softmax + argmax over 1000 images -> the same class per image on every backend
+    expect:
+      equals: |
+        Accuracy: 932/1000
+  - path: deep-learning-from-scratch/ch03/neuralnet-mnist-batch.lisp
+    backends: [interpreter, jvm, wasm, wasm-component, wasm-component-run]
+    workDir: deep-learning-from-scratch
+    workFiles: [ch03/sample-weight.bin, dataset/t10k-images-idx3-ubyte, dataset/t10k-labels-idx1-ubyte]
+    note: reads dataset/t10k-*-ubyte (gitignored -- ./download-mnist.sh) + ch03/sample-weight.bin (committed); RUN legs skip themselves when the idx dumps are absent
+    expect:
+      equals: |
+        Accuracy: 932/1000
+  - path: deep-learning-from-scratch/ch04/gradient-1d.lisp
+    backends: [interpreter, jvm, wasm]
+    expect:
+      file: .expected/dlfs-gradient-1d.txt
+  - path: deep-learning-from-scratch/ch04/gradient-2d.lisp
+    backends: [interpreter, jvm, wasm]
+    expect:
+      file: .expected/dlfs-gradient-2d.txt
+  - path: deep-learning-from-scratch/ch04/gradient-method.lisp
+    backends: [interpreter, jvm, wasm]
+    expect:
+      file: .expected/dlfs-gradient-method.txt
+  - path: deep-learning-from-scratch/ch04/gradient-simplenet.lisp
+    backends: [interpreter, jvm]
+    note: the numerical dW passes through exp/log (softmax loss), whose last printed digits differ on WASM
+    expect:
+      contains:
+        - "loss:"
+        - "dW:"
+  - path: deep-learning-from-scratch/ch04/train-neuralnet.lisp
+    backends: [jvm-compile, wasm-component]
+    note: reads dataset/train-*-ubyte (./download-mnist.sh); ~2 min interpreted, seconds under --simd
+  - path: deep-learning-from-scratch/ch05/buy-apple.lisp
+    backends: [interpreter, jvm, wasm]
+    expect:
+      file: .expected/dlfs-buy-apple.txt
+  - path: deep-learning-from-scratch/ch05/buy-apple-orange.lisp
+    backends: [interpreter, jvm, wasm]
+    expect:
+      file: .expected/dlfs-buy-apple-orange.txt
+  - path: deep-learning-from-scratch/ch05/gradient-check.lisp
+    backends: [interpreter, jvm, wasm]
+    note: the correctness gate of the CLOS layer library -- backprop must match central differences
+    expect:
+      file: .expected/dlfs-gradient-check.txt
+  - path: deep-learning-from-scratch/ch05/train-neuralnet.lisp
+    backends: [jvm-compile, wasm-component]
+    note: reads dataset/train-*-ubyte (./download-mnist.sh)
+  - path: deep-learning-from-scratch/ch06/optimizer-compare-naive.lisp
+    backends: [interpreter, jvm, wasm]
+    expect:
+      file: .expected/dlfs-optimizer-compare-naive.txt
+  - path: deep-learning-from-scratch/ch06/optimizer-compare-mnist.lisp
+    backends: [jvm-compile, wasm-component]
+    note: reads dataset/train-*-ubyte (./download-mnist.sh)
+  - path: deep-learning-from-scratch/ch06/weight-init-activation-histogram.lisp
+    backends: [interpreter, jvm, wasm]
+    expect:
+      file: .expected/dlfs-weight-init-activation-histogram.txt
+  - path: deep-learning-from-scratch/ch06/weight-init-compare.lisp
+    backends: [jvm-compile, wasm-component]
+    note: reads dataset/train-*-ubyte (./download-mnist.sh)
+  - path: deep-learning-from-scratch/ch06/batch-norm-gradient-check.lisp
+    backends: [interpreter, jvm, wasm]
+    expect:
+      file: .expected/dlfs-batch-norm-gradient-check.txt
+  - path: deep-learning-from-scratch/ch06/batch-norm-test.lisp
+    backends: [jvm-compile, wasm-component]
+    note: reads dataset/train-*-ubyte (./download-mnist.sh)
+  - path: deep-learning-from-scratch/ch06/overfit-weight-decay.lisp
+    backends: [jvm-compile, wasm-component]
+    note: reads dataset/*-ubyte (./download-mnist.sh)
+  - path: deep-learning-from-scratch/ch06/overfit-dropout.lisp
+    backends: [jvm-compile, wasm-component]
+    note: reads dataset/*-ubyte (./download-mnist.sh)
+  - path: deep-learning-from-scratch/ch06/hyperparameter-optimization.lisp
+    backends: [jvm-compile, wasm-component]
+    note: reads dataset/train-*-ubyte (./download-mnist.sh)
+  - path: deep-learning-from-scratch/ch07/gradient-check.lisp
+    backends: [interpreter, jvm, wasm]
+    note: the correctness gate of the Convolution/Pooling layers (im2col/col2im backprop)
+    expect:
+      file: .expected/dlfs-convnet-gradient-check.txt
+  - path: deep-learning-from-scratch/ch07/train-convnet.lisp
+    backends: [jvm-compile, wasm-component]
+    note: reads dataset/*-ubyte (./download-mnist.sh)
+  - path: deep-learning-from-scratch/ch07/visualize-filter.lisp
+    backends: [interpreter, jvm, wasm, wasm-component-run]
+    workDir: deep-learning-from-scratch
+    workFiles: [ch07/params.bin]
+    note: reads ch07/params.bin (committed) -- staged into the workspace via workFiles; output byte-identical across all four backends
+    expect:
+      file: .expected/dlfs-visualize-filter.txt
+  - path: deep-learning-from-scratch/ch08/train-deepnet.lisp
+    backends: [jvm-compile, wasm-component]
+    note: reads dataset/*-ubyte (./download-mnist.sh)
+  - path: deep-learning-from-scratch/ch08/misclassified-mnist.lisp
+    backends: [jvm-compile, wasm-component]
+    note: reads dataset/t10k-*-ubyte + ch08/deep-convnet-params.bin
+  - path: deep-learning-from-scratch/ch08/half-float-network.lisp
+    backends: [jvm-compile, wasm-component]
+    note: reads dataset/t10k-*-ubyte + ch08/deep-convnet-params.bin
+
+  # --- console/--no-gc: compiled to a plain MVP module, invoked by a host -----
+  - path: console/mandelbrot-nogc.lisp
+    backends: [no-gc, wasm-component]
+    note: implements mandelbrot_component.wit via rontolisp:wit-export -- the :string-RESULT counterpart of count-vowels' :string parameter, on the console rather than in a page. The no-gc leg pins that the world lowers to the byte-identical core module the memory-reading host has always called; wasm-component pins the wasm-GC lowering of the same world, at exactly the 7-parameter callable limit. Host-invoked (wasmtime run --invoke 'mandelbrot(-2.5, 1.0, -1.2, 1.2, 70, 30, 30)'), so the harness only compiles
+  - path: count-vowels/count-vowels.lisp
+    backends: [no-gc, wasm-component]
+    note: implements count_vowels_component.wit via rontolisp:wit-export -- the world is the export list, so this also pins the contract check on both component paths (the README builds it --no-gc --component; the wasm-component backend here exercises the wasm-GC lowering of the same world). Host-invoked (wasmtime run --invoke 'count-vowels("Hello, World!")' -> 3), so the harness only compiles
+
+  # --- browser/minesweeper: the rules of a GUI example, checked head-less -----
+  # (and, below it, the one GUI front-end that is compiled but never run)
+  - path: browser/minesweeper/minesweeper-core-test.lisp
+    backends: [interpreter, jvm, wasm]
+    systemPath: [src/test/resources/rove, src/test/resources/dissect, src/test/resources/cl-ppcre]
+    note: >-
+      the three minesweeper front-ends (browser/WASM, Swing and native macOS)
+      open a window and are excluded like every other GUI example, but the rules
+      they share --
+      minesweeper-core.lisp, a pure state machine that touches neither screen nor
+      entropy -- are not GUI at all. This file loads it and asserts them with
+      rove (geometry, the flood fill, the win and loss transitions, flagging, and
+      the placement rule that keeps the first click safe), ending with
+      (uiop:quit (if (run-suite *package*) 0 1)). Nothing verified that core
+      before. The needles are rove's summary only; the per-assertion lines print
+      forms, which still spell symbols package-qualified.
+    expect:
+      contains:
+        - "✓ 7 tests completed"
+        - "All 7 tests passed."
+  - path: browser/minesweeper/minesweeper-macos.lisp
+    backends: [jvm-compile]
+    note: >-
+      the third front-end of the same game, and the only GUI example with a leg
+      of its own: it opens a Cocoa window, so it can never RUN head-less, but it
+      is the largest objc:/appkit: program in the tree and compiling it needs no
+      macOS at all. The leg pins the whole JVM lowering of a window in one go --
+      the literal (load "minesweeper-core.lisp"), the (require :board
+      "../../macos/board.lisp") splice, the spliced appkit library with the
+      objc:define-objc-class classes its clickable panels and labels are
+      instances of, and the embedded am.ik.objc blob.
+
+  # --- macos: the objc package with no window in it ---------------------------
+  - path: macos/objc-runtime.lisp
+    backends: [interpreter, jvm, jvm-compile]
+    os: [mac]
+    note: >-
+      the only macos/ example that opens nothing -- introspection, key-value
+      coding, the variadic selectors whose encoding describes their fixed-arity
+      twin, a class defined at run time whose isEqual: Foundation calls -- so
+      it is the one whose OUTPUT can be checked, which is what os: [mac] is for:
+      the Objective-C runtime is macOS-only and this harness runs everywhere, so
+      the RUN legs gate on the platform and the jvm-compile leg does not. That
+      compile leg pins what minesweeper-macos cannot: a program that gates the
+      embedded am.ik.objc blob on through the bare objc: verbs, with no appkit:
+      reference and so no AppKitLibrary splice. The check is `contains` rather
+      than a whole expected file because section 2 prints the PRIVATE class the
+      runtime chose (__NSCFString, __NSArrayM, NSTaggedPointerString) -- true
+      today, Apple's to rename -- so the needles pin the stable tail of the
+      chain and every other section verbatim.
+    expect:
+      contains:
+        - "NSString        length=11  doubleValue=0.0  uppercaseString=OBJECTIVE-C"
+        - "<- NSString <- NSObject"
+        - "-[NSString rangeOfString:]   returns {_NSRange=QQ}, takes @ : @"
+        - "so rangeOfString: answers    (10 . 1)"
+        - "arrayWithObjects: built      Lisp, Smalltalk, Objective-C"
+        - "one argument, one element    1"
+        - "stringWithFormat: answers    the hand has 3 entries, 5.8% of the deck"
+        - "valueForKey: \"length\"    11, 4, 9"
+        - "keyPath \"@max.length\"    11"
+        - "sorted by \"length\"       Lisp, Smalltalk, Objective-C"
+        - "the dictionary by key    Brad Cox, 1984"
+        - "containsObject: a seven -> T"
+        - "indexOfObject: a seven -> 1"
+        - "observed rontolisp.card.played carrying the ace"
+        - "no window was opened, and nothing above declared a type"
+
+  - path: macos/system-frameworks.lisp
+    backends: [interpreter, jvm, jvm-compile]
+    os: [mac]
+    note: >-
+      the second macos/ example that opens nothing: the system's own frameworks
+      reached through the bare objc: verbs -- Vision, NaturalLanguage, Core Image
+      and the speech synthesizer, each mapped into the process at run time by an
+      NSBundle message rather than linked. Section 6 is the one that has to hold:
+      a Lisp string is drawn into an image by Core Image and read back out of it
+      by Vision, so the check is the round trip, not a rendering. Speech is
+      synthesized to an AIFF instead of the speakers, which is what makes the
+      example silent and checkable. The needles avoid what the machine is free to
+      vary -- the CIImage's address, the temporary directory, the file's byte
+      count -- and the jvm-compile leg keeps running everywhere, since a program
+      that gates the embedded am.ik.objc blob on compiles without macOS.
+    expect:
+      contains:
+        - "Vision           loaded=T"
+        - "ja -> これは日本語の文章です"
+        - "fr -> cette phrase est en français"
+        - "\"i recieve mail\": first misspelling at (2 . 7)"
+        - "guesses: receive, relieve"
+        - "date     September 1, 2026"
+        - "phone    090-1234-5678"
+        - "ja_JP   令和8年1月1日"
+        - "wrote     \"rontolisp\""
+        - "read back \"rontolisp\""
+        - "round trip T"
+        - "the file has audio in it: T"
+        - "nothing was installed, and no window was opened"
+
+  - path: macos/audio.lisp
+    backends: [interpreter, jvm, jvm-compile]
+    os: [mac]
+    note: >-
+      a third macos/ example that opens nothing, and the one that makes sound:
+      an AVAudioSourceNode whose render block is a Lisp closure asking an
+      instrument (a function of time) for every sample. It renders OFFLINE --
+      AVAudioEngine's manual rendering, which runs the graph inside the send and
+      so calls the block on the main thread, with no audio device -- which is
+      what makes the output silent, needless of sound hardware and exact: the
+      whole transcript is checked. The numbers are measurements of Apple's
+      graph (the main mixer's 1/sqrt(2) on a mono source; 43 upward zero
+      crossings in 4410 frames of 440 Hz), so a change there fails here on
+      purpose. Live playback (the argument `play`) is not a leg: it needs the
+      speakers, and on the interpreter the block cannot keep up with the
+      device. The --native executable prints the same file (checked by hand;
+      this harness has no --native leg).
+    expect:
+      file: .expected/audio.txt
+
+  # --- jvm: a C library through upstream CFFI (JVM family only) ----------------
+  - path: jvm/cffi-sqlite.lisp
+    backends: [interpreter, jvm]
+    library: [libsqlite3.so.0, libsqlite3.so, libsqlite3.dylib]
+    note: >-
+      a real SQLite database through cl-sqlite -- upstream CFFI, quickloaded and
+      bound to libsqlite3 by the foreign function API, with no SQL engine of our
+      own underneath it. `library:` gates the RUN leg the way `os:` gates the
+      macOS ones: the C library is the engine, and a machine without it skips
+      rather than fails. The jvm leg is what `make-load-form` bought: a defcenum
+      return type -- which cl-sqlite's every entry point has -- makes cffi embed
+      the foreign-type OBJECT in its expansion, and the compile path now dumps it
+      through the method cffi declares on it (.kb/make-load-form.md) instead of
+      by structure. Neither WASM backend has a foreign function API at all. The
+      version line is the machine's libsqlite3, hence `contains` rather than
+      `equals`.
+    expect:
+      contains:
+        - "rows 3"
+        - "nut 30"
+        - "bolt 25"
+        - "washer 7"
+        - "total 62"
+        - "over-ten bolt"
+        - "over-ten nut"
+
+  # --- browser/webgl-solids: the geom modeller, drawn in a page ----------------
+  - path: browser/webgl-solids/solids.lisp
+    backends: [wasm-reactor]
+    note: >-
+      the browser twin of the macOS `scene` viewer: geom's solids, its booleans
+      and its world transforms consumed UNCHANGED and drawn with WebGL2
+      (.kb/geom.md, "The browser twin"). Browsers cannot be driven headless here,
+      so only the COMPILE leg runs -- and it is the leg that matters, since it
+      pins that the shared gl package's require, the geom-inside-linalg splice
+      and the tree-shaker still lower the whole program to a --no-wasi reactor.
+      What it looks like is examples/browser/webgl-solids/index.html
+
+  # --- proxy-wasm: an Envoy filter on an SDK written in Lisp --------------------
+  - path: proxy-wasm/gateway.lisp
+    backends: [wasm-reactor]
+    note: >-
+      a Proxy-Wasm filter on the SDK in proxy-wasm.lisp, spliced in by its require.
+      A proxy calls it, so the harness only compiles; examples/proxy-wasm/check.sh
+      runs it in a real Envoy under Docker and checks it with curl
+  - path: proxy-wasm/sdk-examples/http_body.lisp
+    backends: [wasm-reactor]
+    note: >-
+      a filter on ../proxy-wasm.lisp, compiled only here; proxy-wasm/sdk-examples/check.sh
+      runs it in a real Envoy
+  - path: proxy-wasm/sdk-examples/http_headers.lisp
+    backends: [wasm-reactor]
+    note: >-
+      a filter on ../proxy-wasm.lisp, compiled only here; proxy-wasm/sdk-examples/check.sh
+      runs it in a real Envoy
+  - path: proxy-wasm/sdk-examples/error_log.lisp
+    backends: [wasm-reactor]
+    note: >-
+      a filter on ../proxy-wasm.lisp, compiled only here; proxy-wasm/sdk-examples/check.sh
+      runs it in a real Envoy
+  - path: proxy-wasm/sdk-examples/test_plugin.lisp
+    backends: [wasm-reactor]
+    note: >-
+      a filter on ../proxy-wasm.lisp, compiled only here; proxy-wasm/sdk-examples/check.sh
+      runs it in a real Envoy
+  - path: proxy-wasm/no-gc/http_body.lisp
+    backends: [no-gc]
+    note: >-
+      a filter on the --no-gc SDK in proxy-wasm.lisp, compiled only here;
+      proxy-wasm/no-gc/check.sh runs it in a real Envoy
+  - path: proxy-wasm/no-gc/http_headers.lisp
+    backends: [no-gc]
+    note: >-
+      a filter on the --no-gc SDK in proxy-wasm.lisp, compiled only here;
+      proxy-wasm/no-gc/check.sh runs it in a real Envoy
+  - path: proxy-wasm/no-gc/error_log.lisp
+    backends: [no-gc]
+    note: >-
+      a filter on the --no-gc SDK in proxy-wasm.lisp, compiled only here;
+      proxy-wasm/no-gc/check.sh runs it in a real Envoy
+  - path: proxy-wasm/no-gc/test_plugin.lisp
+    backends: [no-gc]
+    note: >-
+      a filter on the --no-gc SDK in proxy-wasm.lisp, compiled only here;
+      proxy-wasm/no-gc/check.sh runs it in a real Envoy
+
+  # --- browser/wit-component: a component loaded by a page, with no glue -------
+  - path: browser/wit-component/fractal.lisp
+    backends: [no-gc, wasm-component]
+    note: implements wit/fractal.wit via rontolisp:wit-export. The page loads the --no-gc --component build through jco (browsers cannot be driven headless here, so only the compile legs run); wasm-component additionally pins that the same world lowers on wasm-GC, which is why every export stays within the 7-parameter callable limit. Host-invoked (wasmtime run --invoke 'escape-time(0.0, 0.0, 50)' -> 50), so the harness only compiles
+
+  # --- wit/world: a handed-over WIT world, scaffolded and implemented ---------
+  - path: wit/world/analyzer.lisp
+    backends: [jvm-compile, wasm-component]
+    note: implements wit/analyzer.wit (package example:analyzer, world analyzer) via rontolisp:wit-export, its skeleton generated by --scaffold-wit. wasm-component pins the wasm-GC lowering of the whole world -- s32/string/bool results plus an async func that prints; jvm-compile pins that the same contract check runs on a backend exporting nothing. Host-invoked (wasmtime run --invoke 'word-count("...")'), so the harness only compiles
+
+  # --- wit/keyvalue: a WIT interface CALLED, with a provider per backend -------
+  - path: wit/keyvalue/page-hits.lisp
+    backends: [interpreter, jvm, wasm-component]
+    note: >-
+      binds wit/keyvalue.wit (the REAL wasi:keyvalue/store@0.2.0-draft, vendored
+      verbatim) with rontolisp:wit-import, and the provider behind it differs per
+      backend with no change to the program. rontolisp ships NO provider for any
+      interface, so the two JVM-family legs run against a store written in Lisp
+      beside the program: the interpreter leg requires memory-store.lisp (a
+      portable hash-table store), and the jvm leg runs the SAME source with
+      java-store.lisp required on top under #+rontolisp-jvm, whose
+      rontolisp:wit-provide REPLACES it with a java.util.LinkedHashMap and prints
+      a ";; [java store]" trace -- hence contains, not equals (the program's own
+      lines are identical on both). The wasm-component leg pins the canonical-ABI
+      import lowering (canon lower: result / option / variant / record /
+      list<u8> / list<string> / bool / resource handles all marshalled); the
+      harness only compiles it, because RUNNING it needs a host that provides
+      wasi:keyvalue -- and wasmtime does: `wasmtime run
+      -S keyvalue=y prog.wasm` prints
+      exactly the interpreter's lines, from a store that has never heard of this
+      program. No Preview 1 leg: a core import carries flat values only, and every
+      function of this interface returns a result. No --no-gc leg: its MVP module
+      imports nothing
+    expect:
+      contains:
+        - "hits per page:"
+        - "  /index = 3"
+        - "  /pricing = 2"
+        - "/docs exists?      yes"
+        - "/docs exists now?  no"
+        - 'keys:              ("/index" "/pricing")'
+        - "bad store:         NO-SUCH-STORE"
+        - 'seeded:            ("/a" "/b")'
+
+  - path: wit/keyvalue/page-hits.clj
+    backends: [interpreter, jvm, wasm-component]
+    note: >-
+      page-hits.lisp in Clojure, through rontolisp.wit/import and /provide: the
+      interpreter and jvm legs run against the store the program provides itself,
+      which sees and answers Clojure values; wasm-component compiles the
+      canonical-ABI import, which `wasmtime run -S keyvalue=y` runs against
+      wasmtime's own store with the same output (ClojureWitBoundaryTest runs all
+      three). A value, a list<u8>, is a byte array; list-keys answers the
+      key-response record as a map, and open's error arm is caught as an
+      ExceptionInfo holding the error variant's case keyword
+    expect:
+      file: .expected/wit-keyvalue-page-hits-clj.txt
+
+  - path: wit/keyvalue/PageHits.java
+    backends: [interpreter, jvm, wasm-component]
+    javaSourcePath: rontolisp-java-api/src/main/java
+    note: >-
+      page-hits.lisp in Java, through Store.java, an interface annotated @WitImport
+      (rontolisp-java-api): the interpreter and jvm legs run against MemoryStore.java,
+      the store of the program's own its META-INF/services/Store names and
+      ServiceLoader finds; wasm-component compiles the binding the front end writes
+      for the host, which `wasmtime run -S keyvalue=y` runs against wasmtime's own
+      store with the same output (JavaWitImportTest runs it, and a JDK's). No
+      Preview 1 leg, as for the Lisp counter: every function of the interface
+      answers a result
+    expect:
+      contains:
+        - "hits per page:"
+        - "  /index = 3"
+        - "  /pricing = 2"
+        - "/docs exists?      yes"
+        - "/docs exists now?  no"
+        - 'keys:              ("/index" "/pricing")'
+        - "/nope:             NIL"
+        - "bad store:         NO-SUCH-STORE"
+        - 'seeded:            ("/a" "/b")'
+
+  - path: wit/keyvalue/page-hits-server.lisp
+    backends: [jvm-compile, wasm-component]
+    note: >-
+      the same counter behind rontolisp:http-handler -- the pairing a served
+      component NEEDS, since a wasi:http host instantiates it afresh per request
+      and a global hash table would read back empty every time. wasm-component is
+      the leg that matters: it pins that a serve-mode component
+      (wasi:http/incoming-handler, its HTTP glue the serve.lisp library over
+      wit-imported wasi:http, its own index bookkeeping) ALSO carries an ADDITIONAL
+      user WIT instance import alongside its fixed wasi:http surface; jvm-compile
+      pins that the same source
+      compiles where the store is a Lisp provider instead. Compile-only, like
+      every blocking server here: running it means `wasmtime serve
+      -S keyvalue=y server.wasm` (whose in-memory kv store is rebuilt
+      per instance, so the tally restarts each request) or `wash dev` on wasmCloud,
+      where an out-of-process provider holds the counts and they accumulate
+
+  # --- wit/lisp-calls-rust & wit/rust-calls-lisp: cross-language wac compose ---
+  - path: wit/lisp-calls-rust/app.lisp
+    backends: [interpreter, jvm, wasm-component]
+    note: >-
+      the Lisp half of the "Lisp calls Rust" example (see
+      wit/lisp-calls-rust/README.md and build.sh): a command that imports the
+      interface example:textkit/casing with rontolisp:wit-import and calls shout.
+      It also binds a two-line rontolisp:wit-provide, so the interpreter and jvm
+      legs RUN standalone (the Lisp provider answers) and their output is checked.
+      wasm-component pins that the import lowers (canon lower, a plain
+      string->string func); the harness only compiles that leg, because RUNNING it
+      needs the Rust component (scaffolded with cargo-component) plug-composed in
+      with `wac`, off the test path -- and there the wit-provide is inert, so the
+      Rust component answers with the same output.
+    expect:
+      equals: |
+        hello world  ->  HELLO WORLD!
+        component model  ->  COMPONENT MODEL!
+        rust and lisp  ->  RUST AND LISP!
+  - path: wit/rust-calls-lisp/counter.lisp
+    backends: [wasm-component]
+    note: >-
+      the Lisp half of the "Rust calls Lisp" example: a reactor that exports the
+      plain function vowel-count via rontolisp:wit-export (world counter), exactly
+      the shape the Rust describer imports. wasm-component pins the wasm-GC lowering
+      of that world; the Rust component calls this export through `wac` composition
+      (`wasmtime run --invoke 'describe("hello world")' vowels.wasm` -> a sentence
+      with the Lisp-computed vowel count), off the test path
+  - path: wit/pipeline/app.lisp
+    backends: [wasm-component]
+    note: >-
+      the Lisp command of the THREE-component pipeline (wit/pipeline/README.md,
+      composition.wac): imports example:pipeline/shout with rontolisp:wit-import.
+      wasm-component pins the import lowering; RUNNING it needs the Rust shouter and
+      the Lisp counter wired in with a single `wac compose` (a chain plug cannot
+      do in one step), off the test path. Assembled, `wasmtime run
+      pipeline.wasm` prints "hello world  ->  HELLO WORLD!!!"
+  - path: wit/pipeline/stats.lisp
+    backends: [wasm-component]
+    note: >-
+      the Lisp counter of the same pipeline: exports the plain function vowel-count
+      via rontolisp:wit-export (world statistician), which the Rust shouter imports.
+      wasm-component pins the wasm-GC lowering; the Rust shouter calls this export,
+      and the Lisp app calls the shouter, all wired by wit/pipeline/composition.wac
+      through `wac compose`, off the test path
+
+  # --- net: sockets / HTTP servers & clients (blocking -> compile-only) -------
+  - path: net/echo-server.lisp
+    backends: [jvm-compile, wasm-component]
+  - path: net/echo-client.lisp
+    backends: [jvm-compile, wasm-component]
+  - path: net/http-hello.lisp
+    backends: [jvm-compile, wasm-component]
+  - path: net/serve-html.lisp
+    backends: [jvm-compile, wasm-component]
+  - path: net/http-handler.lisp
+    backends: [jvm-compile, wasm-component]
+  - path: net/http-handler-cl-who.lisp
+    backends: [jvm-compile, wasm-component]
+    systemPath: src/test/resources/cl-who
+  - path: net/httpbin.lisp
+    backends: [jvm-compile, wasm-component]
+  - path: net/hello-clack.lisp
+    backends: [jvm-compile, war-compile, wasm-component, wasm-reactor]
+    note: >-
+      the smallest Clack application, and the ONE source for every transport
+      :server :rontolisp picks between: a socket the program binds itself
+      (interpreter / JVM), a Servlet container that owns the port
+      (-o app.war), the wasi:http host under `wasmtime serve` (--component),
+      and a host that CALLS an export rather than handing over a socket
+      (--no-wasi -- what cloudflare-workers/hello-clack-one-source deploys,
+      unedited). All four legs are COMPILE legs: two bind a port and two are
+      never run as a program at all, a war being deployed and a reactor called.
+      So what this pins is that the file every one of those hosts ships stays
+      ONE file -- the JVM class, the war, the component and the reactor built
+      from it in the same run, which is the only place a per-target edit could
+      hide. The interpreter leg is the same program under `rontolisp` and blocks
+      like the others here. :port is read from the PORT environment variable,
+      which only the socket transports look at (the interpreter, the JVM and a
+      --native executable, whose runner serves; no leg here builds one).
+  - path: net/hello-clack-accesslog.lisp
+    backends: [jvm-compile, war-compile, wasm-component]
+    note: >-
+      the same application with lack's OWN accesslog middleware composed around
+      it by lack:builder -- the middleware quickloaded unpatched, so what this
+      pins is that a `(:accesslog ...)` builder keyword resolves on the compile
+      path at all: lack.util:find-middleware loads the middleware's system at
+      RUN time through quicklisp, which a compiled program has no way to do, so
+      the explicit `lack-middleware-accesslog` in the quickload list is what
+      makes the package exist before the builder form is expanded. The log line
+      itself goes to the transport's standard output on every leg here -- the
+      terminal, the Servlet container's log, and `stdout [0] ::` under
+      `wasmtime serve`, where the request carries no peer address and the line
+      opens with NIL. No wasm-reactor leg, and not because it fails to compile:
+      a --no-wasi module's standard output is a discarding sink, so the default
+      logger would write nowhere on a Worker.
+  - path: net/httpbin-clack.lisp
+    backends: [jvm-compile, war-compile, wasm-component, wasm-reactor]
+    note: >-
+      plain Clack, and the ONE source for every host:
+      cloudflare-workers/httpbin-clack-one-source compiles THIS file (not a
+      copy) as its deployed Worker, because :server :rontolisp takes the reactor
+      shape under --no-wasi. What this pins is that the file the Worker ships is
+      still a portable Clack application -- an application FUNCTION plus a
+      middleware applied directly, which is also the spelling that keeps
+      clackup's pathname branch provably dead -- on every transport
+      :server :rontolisp picks between: the two that bind a socket (a blocking
+      server, hence compile-only; Preview 1 has no incoming TCP), the Servlet
+      war a container deploys, and the reactor a host calls. Its --no-wasi leg
+      is the wasm-reactor token, the shape the Worker's own build.sh then
+      compiles --optimize=size with the streaming boundary its echoed bodies
+      need. Like net/hello-clack.lisp it takes :port from the PORT environment
+      variable -- the same file, five hosts, the endpoints being the only
+      difference.
+  - path: net/httpbin-tiny-routes.lisp
+    backends: [jvm-compile, wasm-component]
+    note: >-
+      the same endpoints composed with tiny-routes instead: route macros, a
+      /status/:code template, the decline protocol, and `pipe` threading the
+      table through wrap-request-body / wrap-query-parameters /
+      wrap-response-content-type -- so what this pins beyond the clack case is
+      that the library's own middleware stack compiles and that the lite
+      system's ql:quickload spelling resolves on both compile paths. Blocking
+      server, hence compile-only.
+  - path: net/httpbin-ningle.lisp
+    backends: [jvm-compile, wasm-component]
+    note: >-
+      the same endpoints a third way, on a ningle application OBJECT: routes
+      assigned in a loop with an :ANY fallback per path for the 405, a
+      controller that returns a STRING and mutates ningle:*response*, a
+      `:regexp t` /status rule whose :captures bind, and an overridden
+      ningle:not-found METHOD for the 404. What it pins beyond the tiny-routes
+      case is the other routing model on the two backends where clackup can bind
+      -- a `defmethod` on a CLOS library generic,
+      requirement closures compiled when the route is defined, and the whole
+      lack-request chain (http-body / fast-http / smart-buffer) compiling, which
+      ningle reads every request through.
+  - path: net/httpbin-clos.lisp
+    backends: [jvm-compile, wasm-component]
+  - path: net/httpbin-jzon.lisp
+    backends: [jvm-compile, wasm-component]
+  - path: net/magic-8-ball.lisp
+    backends: [jvm-compile, wasm-component]
+  - path: net/dog-fetcher.lisp
+    backends: [jvm-compile, wasm-component]
+  - path: net/linalg-api.lisp
+    backends: [jvm-compile, wasm-component]
+  - path: net/kv-server.lisp
+    backends: [jvm-compile, wasm-component]
+  - path: net/https-hello.lisp
+    backends: [jvm-compile]
+    note: TLS is a compile error on WASM -- JVM/interpreter only
+  - path: net/kv-server-tls.lisp
+    backends: [jvm-compile]
+    note: TLS is a compile error on WASM -- JVM/interpreter only
+  - path: net/dexador-client.lisp
+    backends: [jvm-compile, wasm-component]
+    note: >-
+      unpatched dexador from Quicklisp against net/httpbin.lisp. Compile legs: the
+      run needs that server up, which no leg here starts. What they pin is that the
+      whole dexador load (usocket and cl+ssl shims, babel, chipz, quri, trivial-mimes,
+      cl-cookie) still lowers to a JVM class and to a component.
+
+  # --- cloudflare-workers: a wasm-export handler driven by a JavaScript host ---
+  - path: cloudflare-workers/hello/worker.lisp
+    backends: [no-gc, wasm-component]
+    note: >-
+      the simplest Worker, and the one with no library in it: three
+      wasm-export'ed functions a JavaScript host calls directly. Host-invoked,
+      so the harness only compiles it. no-gc pins the plain MVP module the
+      Worker imports; wasm-component pins that the same three exports lower
+      through the canonical ABI, which is what
+      cloudflare-workers/httpbin-component transpiles with jco.
+  - path: cloudflare-workers/hello-java/Worker.java
+    backends: [wasm-reactor, no-gc]
+    note: >-
+      hello/ in Java: a class with no main, whose public static methods are the
+      module's exports under --no-wasi, called by src/index.js through the glue
+      --emit-js-glue writes, and under --no-gc a module of scalar values any
+      engine runs. Host-invoked, so the harness only compiles it; the calls on
+      node and the refusals elsewhere are JavaReactorTest, and WorkerTest.java
+      runs under `rontolisp test`.
+  - path: cloudflare-workers/hello-jdbc/Visits.java
+    backends: [wasm-reactor]
+    cli: [--host-sockets, --host-random, --host-output]
+    javaSourcePath: [jdbc-postgresql/src/main/java, jdbc-postgresql/src/main/resources]
+    note: >-
+      a JDBC program as a Worker: a visit counter in PostgreSQL through the driver of
+      jdbc-postgresql/, its java.net.Socket the host's under --host-sockets (connect()
+      of cloudflare:sockets, a Hyperdrive binding's connection string). Host-invoked,
+      so the harness only compiles it, with the flags its build.sh passes. The driver
+      through a host's connect() against a live server is
+      ClPostgresE2eTest#aJdbcProgramAHostCallsReachesTheServerThroughItsHostsConnect,
+      a handler's sockets on every transport FetchSpecE2eTest#javaHttpServer
+      (java-http-server-spec.yaml, its `peers`); under `wrangler dev` it is run by hand.
+  - path: cloudflare-workers/hello-clack/check.lisp
+    backends: [interpreter, jvm, wasm]
+    note: >-
+      the smallest Clack application on a Worker, and the counterpart of hello/:
+      worker.lisp is THREE forms -- quickload, the application defun, clackup
+      with :server :reactor -- and contains no Worker-specific code at all,
+      because the handler backend stores the app and the compiler synthesizes
+      the exported entry point. The demo drives it through that backend's
+      `dispatch`, the same function the synthesized wasm-export calls, so what
+      this pins is the clackup route itself on every backend the compiler has.
+      Checked with contains, not equals: the demo prints clackup's own start-up
+      banner, and the JSON key ORDER follows hash-table iteration order, which
+      differs per backend.
+    expect:
+      contains:
+        - 'Hello from Clack on Cloudflare Workers'
+        - 'GET /anything'
+        - '"status":200'
+  - path: cloudflare-workers/hello-tiny-routes/check.lisp
+    backends: [interpreter, jvm, wasm]
+    note: >-
+      the same greeting COMPOSED instead of written: three routes through
+      tiny-routes/lite (loaded by ql:quickload, so the lite system resolves on
+      the compile paths too), threaded through wrap-response-content-type by
+      `pipe` and handed to clackup with :server :reactor. What it pins beyond
+      hello-clack's case is the routing and the middleware seam on every backend
+      the compiler has -- the "/hello/:name" path template binding a parameter
+      through the ppcre-free matcher, and a path no route claims declining into
+      the catch-all 404. Checked with contains, not equals: the demo prints
+      clackup's own start-up banner, and JSON key order differs per backend.
+    expect:
+      contains:
+        - 'Hello from tiny-routes on Cloudflare Workers'
+        - 'Hello, rontolisp!'
+        - 'no route for /anything'
+        - '"status":404'
+  - path: cloudflare-workers/hello-ningle/check.lisp
+    backends: [interpreter, jvm, wasm]
+    note: >-
+      the same greeting a third way: ningle, where the application is a CLOS
+      OBJECT and each route is a `setf` on it. What it pins beyond
+      hello-tiny-routes' case is ningle's own model on every backend the
+      compiler has -- a bare STRING as a controller (ningle answers it as the
+      body), the "/hello/:name" template binding a parameter through myway's
+      ppcre scanner, and the 404 coming from an overridden ningle:not-found
+      METHOD, which is a defmethod on a library generic from the application's
+      package. The --no-wasi Worker build itself is NOT covered here -- it needs
+      node, not a rontolisp backend -- but the reactor path this drives is the
+      same one. Checked with contains, not equals: the demo prints clackup's own
+      start-up banner, and JSON key order differs per backend.
+    expect:
+      contains:
+        - 'Hello from ningle on Cloudflare Workers'
+        - 'Hello, rontolisp!'
+        - 'no route for /anything'
+        - '"status":404'
+  - path: cloudflare-workers/httpbin/check.lisp
+    backends: [interpreter, jvm, wasm]
+    systemPath: [src/test/resources/rove, src/test/resources/dissect, src/test/resources/cl-ppcre]
+    note: >-
+      loads worker.lisp -- the LIBRARY-FREE flavour: plain defuns, and thirty
+      lines of reactor adapter written out under them where the other three call
+      clack:clackup -- and drives it over the requests the README curls, then
+      CHECKS ITSELF with rove: every needle this entry used to spell is now an
+      assertion over the PARSED reply, and the file ends with
+      (uiop:quit (if (run-suite *package*) 0 1)), so a drifted answer exits
+      non-zero instead of quietly no longer matching. The adapter calls the same
+      rontolisp::%http-make-env / %http-normalize-response entry points the
+      handler backends do, so what it pins is that a hand-written adapter builds
+      the same environment on every backend: the "?" split and the
+      percent-decoding of the raw target (/%67et answers "path":"/get"), the
+      content-length the buffered :raw-body needs, and the response header ALIST
+      crossing as a JSON array of pairs rather than an object. The Worker itself
+      calls the wasm-export'ed handle-request from JavaScript and is built by the
+      directory's build.sh (--no-wasi --optimize, a shape no backend token here
+      covers). The needles left here are rove's summary only -- the exchange is
+      still printed, but its key ORDER inside a JSON object follows hash-table
+      iteration order and differs per backend, and the per-assertion lines print
+      forms, which still spell symbols package-qualified.
+    expect:
+      contains:
+        - "✓ 6 tests completed"
+        - "All 6 tests passed."
+  - path: cloudflare-workers/httpbin-clack/check.lisp
+    backends: [interpreter, jvm, wasm]
+    note: >-
+      loads worker.lisp -- the same endpoints as plain Clack, over the same
+      probes as the httpbin case above, so the pair runs one set of requests
+      through the built-in handler backend and through a hand-written copy of
+      what it does. A divergence shows up as the two cases disagreeing, which is
+      what pins the backend's `dispatch` (the very function the synthesized
+      handle-request export calls) on every backend the compiler has, rather
+      than only on the WASM one that has an export. It also pins Clack's other
+      composition unit -- a MIDDLEWARE, a function from application to
+      application, is what sets the content-type header here -- and, on the
+      unparseable-body probe, that lack's default backtrace middleware only
+      PRINTS (to *error-output*, a sink on the Worker) while the 200 with
+      "json":null still comes back. Checked with contains, not equals: the key
+      ORDER inside a JSON object follows hash-table iteration order, which
+      differs per backend.
+    expect:
+      contains:
+        - '\"path\":\"/get\"'
+        - '\"json\":{\"name\":\"rontolisp\"}'
+        - '\"json\":null'
+        - '\"allowed\":\"POST\"'
+        - '"status":404'
+        - '[["content-type","application/json"]]'
+  - path: cloudflare-workers/httpbin-tiny-routes/check.lisp
+    backends: [interpreter, jvm, wasm]
+    note: >-
+      loads worker.lisp -- the same endpoints written on the REAL tiny-routes
+      API, loaded as "tiny-routes/lite": the opt-in system whose ppcre-free
+      path-template matcher keeps cl-ppcre out of the module (.kb/asdf.md; the
+      corpus pinning lite == full is TinyRoutesLiteE2eTest). What this pins
+      beyond httpbin-clack's case is the routed Worker end to end on every
+      backend the compiler has: a method-specific route (define-get,
+      define-post, ... and wrap-request-matches-method for the PATCH one)
+      DECLINING on the wrong method so the single catch-all answers httpbin's
+      own 405, the /status/:code path template binding a parameter through the
+      lite matcher, a non-numeric :code declining into the catch-all's 404
+      instead, the library's own middleware stack under `pipe` supplying the
+      request body / query parameters / content-type header the handlers never
+      touch, and the ql:quickload spelling of the lite system resolving on the
+      compile paths. Checked with contains, not equals: JSON key order follows
+      hash-table iteration order, which differs per backend.
+    expect:
+      contains:
+        - '\"path\":\"/get\"'
+        - '\"json\":{\"name\":\"rontolisp\"}'
+        - '\"allowed\":\"POST\"'
+        - '"status":418'
+        - '\"path\":\"/status/teapot\"'
+        - '"status":404'
+        - '[["content-type","text/plain; charset=utf-8"]]'
+  - path: cloudflare-workers/httpbin-ningle/check.lisp
+    backends: [interpreter, jvm, wasm]
+    note: >-
+      loads worker.lisp -- the same endpoints in ningle's model: what this pins
+      is the four ningle mechanisms the file is written on, each of which the
+      tiny-routes case cannot reach.
+      Routes assigned in a LOOP (`setf` on the application object, so the five
+      echo endpoints and their five :ANY fallbacks are one dolist), a controller
+      that returns a STRING and says the rest by mutating ningle:*response*
+      (status and headers, never the Clack triple), a request that arrives
+      DECODED so one controller serves every method -- the query string as
+      `args` and the parsed body as `form`, both the lack-request chain's work,
+      for a JSON body and a form-encoded one alike -- and DECLINING as the only
+      thing a ningle route can do, which is why the :ANY rule assigned after
+      each method rule answers the 405, why /status is a `:regexp t` rule whose
+      :captures bind (a non-numeric code matches nothing), and why the 404 comes
+      from an overridden ningle:not-found METHOD. Checked with contains, not
+      equals: JSON key order follows hash-table iteration order, which differs
+      per backend.
+    expect:
+      contains:
+        - '\"path\":\"/get\"'
+        # One key per needle: a needle spanning two keys of one object would
+        # depend on their order.
+        - '\"a\":\"1\"'
+        - '\"b\":\"two\"'
+        - '\"form\":{\"name\":\"rontolisp\"}'
+        - '\"form\":{\"name\":\"lisp\"}'
+        - '\"allowed\":\"POST\"'
+        - '\"path\":\"/anything\"'
+        - '"status":418'
+        - '\"path\":\"/status/teapot\"'
+        - '"status":404'
+        - '[["content-type","text/plain; charset=utf-8"]]'
+
+  # --- size-report/: the two programs the cross-language size table measures.
+  # They live outside examples/ because they exist to be measured rather than
+  # read; size-report/measure.sh reports them and this manifest pins that they
+  # still compute the right thing on every backend.
+  - path: ../size-report/programs/hello_world/hello_world.lisp
+    backends: [interpreter, jvm, wasm, wasm-component-run]
+    note: >-
+      the size-comparison floor. What matters about it is the size of the compiled
+      module, but the number only means something if the module still prints, so
+      the run legs pin the output and the wasm-component leg pins that the WASI 0.3
+      build of it compiles too.
+    expect:
+      equals: |
+        Hello, World!
+  - path: ../size-report/programs/pi_approx/pi_approx.lisp
+    backends: [interpreter, jvm, wasm, wasm-component-run]
+    note: >-
+      a million Leibniz terms in f64 and one ~,15F. The equals check is the point:
+      the 15 decimal places must be identical on every backend, or the size table
+      would be comparing modules that do not agree on what they compute.
+    expect:
+      equals: |
+        pi = 3.141591653589774
+  - path: ../size-report/programs/hello_world/hello_world-nogc.lisp
+    backends: [no-gc]
+    note: >-
+      the --no-gc floor: a plain MVP core module that prints through fd_write with
+      no wasm-GC at all. Host-invoked (wasmtime run --invoke say-hello), so the
+      harness only compiles it.
+  - path: ../size-report/programs/pi_approx/pi_approx-nogc.lisp
+    backends: [no-gc]
+    note: >-
+      the same Leibniz loop as an MVP core module -- the smallest artifact
+      measured. It prints with princ rather than ~,15F, so the gap to the wasm-GC
+      build is what the GC value model and the fixed-decimal rendering cost, not
+      the loop. Host-invoked (wasmtime run --invoke
+      approx-pi), so the harness only compiles it.

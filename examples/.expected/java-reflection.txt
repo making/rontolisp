@@ -1,0 +1,5 @@
+English: Hello, Ann!
+Japanese: こんにちは、Annさん
+no class com.example.reflection.Esperanto
+name=name, messageKey=charSequence.notBlank, message="name" must not be blank
+name=age, messageKey=numeric.lessThan, message="age" must be less than 150

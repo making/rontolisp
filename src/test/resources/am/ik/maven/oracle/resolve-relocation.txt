@@ -1,0 +1,4 @@
+# resolve test.resolve:reloc-conflict:1
+test.resolve:reloc-conflict:jar::1 scope=compile optional=false
+  test.resolve:r-new:jar::1 scope=compile optional=false relocations=[test.resolve:r-old:jar:1]
+  test.resolve:p:jar::1 scope=compile optional=false

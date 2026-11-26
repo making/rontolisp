@@ -1,0 +1,22 @@
+# Spin manifest for the notes servlet: `mvn package`, then `spin up` (README.md).
+#
+# Needs Spin 4.1.0 or later: its wasmtime (48+) runs the component's wasi:http@0.3.0
+# imports, and it serves spin:postgres/postgres@4.2.0.
+spin_manifest_version = 2
+
+[application]
+name = "spin-postgres"
+version = "0.1.0"
+description = "A Java servlet listing notes kept in PostgreSQL through Spin's connection."
+
+# The server the component may reach: SPIN_VARIABLE_DB_HOST=host:port overrides it.
+[variables]
+db_host = { default = "127.0.0.1:5432" }
+
+[[trigger.http]]
+route = "/..."
+component = "notes"
+
+[component.notes]
+source = "target/spin-postgres.wasm"
+allowed_outbound_hosts = ["postgres://{{ db_host }}"]

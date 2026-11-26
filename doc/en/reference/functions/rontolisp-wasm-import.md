@@ -1,0 +1,200 @@
+# rontolisp:wasm-import
+
+`(rontolisp:wasm-import 'name :from "module" :as "field" :params '(type...) [:param-names '(name...)] :returns type [:async t])`
+
+Declares a function the WASM host provides (JavaScript in a browser, or another
+module preloaded into wasmtime) and makes it callable from Lisp under `name`
+exactly like a top-level `defun` — including `#'name`, `funcall`, `mapcar` and
+`eval`. It is a compile-time directive, not an ordinary function: on the
+**interpreter** and **JVM** backends it defines a stub that signals an error
+when called (there is no host to call), so the same source still loads on every
+backend. See the [WASM host boundary guide](../../guides/wasm-host-boundary.md)
+for the full guide and the [WebGL galaxy example](https://github.com/making/rontolisp/tree/develop/examples/browser/webgl-galaxy)
+for a complete browser program.
+
+```lisp
+(rontolisp:wasm-import 'draw-pixel :from "gl" :as "drawPixel"
+                       :params '(:int :int :int) :returns :void)   ; => DRAW-PIXEL
+```
+
+## Arguments
+
+- A quoted symbol naming the Lisp-visible function. It resolves in the
+  current [package](../packages.md) like a `defun` name, so a directive after
+  `(in-package mylib)` defines `mylib:name`.
+- `:from` — the import module name (the import-object key on the JavaScript
+  side, or the `--preload` name in wasmtime). Defaults to `"env"`.
+- `:as` — the import field name (the property inside that module object).
+  Defaults to the bare Lisp name (without any package qualifier).
+- `:params` — a list of boundary type designators, one per parameter. Omitted,
+  `nil` or `'()` means no arguments.
+- `:param-names` — the parameter names of the **component-model** signature,
+  one per `:params` entry, as symbols or strings; defaults to `p0`, `p1`, ….
+  Read only by
+  [`--no-gc --component`](../../guides/wasm-nogc.md#host-imports-in-a-component),
+  where they are the labels of the imported function's type (a WIT world's
+  names, when the import stands for one); a core module's imports have no
+  parameter names.
+- `:returns` — the result boundary type designator. Omitted, `nil`, `'()` or
+  `:void` declares a void result (Lisp receives `nil`).
+
+The type designators are shared with
+[`rontolisp:wasm-export`](rontolisp-wasm-export.md):
+
+| Designator | WASM boundary | Notes |
+| --- | --- | --- |
+| `:int` | `i32` | an argument must fit the 31-bit signed range (the internal `i31ref`) and traps outside it; a result crosses over the full 32-bit signed range |
+| `:u32` | `i32` | the full unsigned range, exactly, and an argument outside it traps; a JavaScript host reads the value as signed, so `n >>> 0` recovers it |
+| `:float` | `f64` | an int or ratio argument is converted like the arithmetic built-ins |
+| `:bool` | `i32` | `nil` crosses as `0`, anything else as `1`; a non-zero result reads back as `t` |
+| `:string` | `(ptr, len)` | UTF-8 bytes in linear memory |
+| `:s-expr` | `(ptr, len)` | the argument is printed to readable text; a result is parsed by the embedded reader |
+| `:bytes` | `(ptr, len)` argument / `(ptr, cap) -> len` result | an `(unsigned-byte 8)` vector as raw bytes — no UTF-8 in either direction |
+| `:octets` | `(ptr, len)` | imports only: an `(unsigned-byte 8)` vector as a value, raw bytes both ways; an argument may also be a string (its UTF-8 bytes) |
+
+A `:string`/`:s-expr` **argument** is a `(ptr, len)` view into memory the call
+already holds — read it, but do not write through it. See [the boundary
+guide](../../guides/wasm-host-boundary.md#importing-host-functions) for what
+backs the pointer on each backend and why writing through it is unsafe.
+
+A `:string` result must be written into linear memory by the host (reserve the
+buffer with the exported `__ronto_alloc`) and returned as a `(ptr, len)` pair
+(a two-element array from JavaScript).
+
+A `:bytes` **result** is caller-buffered (the `read(2)` shape): the Lisp
+signature gains one trailing parameter — the `(unsigned-byte 8)` vector to
+receive into — and the host function is called with a trailing `(ptr, cap)`
+pair: *write up to `cap` bytes at `ptr` and return the value's full length*.
+The Lisp call answers that full length, so a result longer than the buffer is
+a retry with a bigger buffer, never a silent truncation; the wrapper's staging
+is popped on return, so a pull loop over one reused buffer keeps linear memory
+flat.
+
+```lisp
+(rontolisp:wasm-import 'read-chunk :from "env" :as "readChunk"
+                       :params '() :returns :bytes)   ; => READ-CHUNK
+;; (read-chunk buf) => the chunk's full length; up to (length buf) bytes
+;; of buf are overwritten. On the JS side: readChunk(ptr, cap) -> n.
+```
+
+An `:octets` **result** is the `:string` shape over raw bytes: the host
+reserves the buffer with `__ronto_alloc`, writes the octets and returns
+`(ptr, len)`, and the call answers a fresh `(unsigned-byte 8)` vector of exactly
+those octets — no decode, no receive buffer. It is what
+[`rontolisp:wit-import :octets t`](rontolisp-wit-import.md) declares a WIT
+`list<u8>` as on Preview 1.
+
+## `:async t` — a host function that may suspend
+
+`:async t` declares that the host may implement the function
+**asynchronously** — on a JavaScript host, a `WebAssembly.Suspending`-wrapped
+function (JSPI). The call then returns a **future** that
+[`rontolisp:await`](../special-forms/rontolisp-await.md) resolves, so the source says at the
+call site that the boundary is asynchronous — the same reading as an
+`async func` member of a [`rontolisp:wit-import`](rontolisp-wit-import.md),
+which lowers to exactly this option on this backend. (The word deliberately
+matches [`rontolisp:wasm-export`](rontolisp-wasm-export.md)'s `:async`: WIT
+spells both directions `async func`, and the directive carries the direction.)
+
+```lisp
+(rontolisp:wasm-import 'host-fetch :from "env" :as "fetch"
+                       :params '(:string) :returns :string :async t)   ; => HOST-FETCH
+```
+
+- On this backend the future is **settled at creation**: the host call blocks
+  the wasm stack — synchronously, or suspended through JSPI — so the value is
+  ready when the call returns and `await` never actually suspends. The option
+  buys one source that reads the same everywhere, not concurrency.
+- The build prints what the host now owes: wrap the import in
+  `WebAssembly.Suspending`, enter every export that can reach it through
+  `WebAssembly.promising` (the build lists them), and serialise calls — a
+  suspended module can be re-entered, and a re-entered export **refuses with a
+  trap** instead of silently corrupting both calls (every export wrapper of a
+  module that can suspend carries a re-entry guard, unless it was compiled
+  [`--reentrant`](../../guides/wasm-host-boundary.md#overlapping-calls---reentrant),
+  which lets a JSPI host overlap calls instead). A host that answers
+  synchronously is equally valid; the call returns an already-settled future
+  either way. `--emit-js-glue` WRITES that half rather than describing it (the
+  [host boundary guide](../../guides/wasm-host-boundary.md#generating-the-host-glue---emit-js-glue)):
+  the host is then left with what its functions do, and says which of them
+  suspend.
+- Under `--no-wasi`, a call reachable from a top-level form is a **compile
+  error**: `_initialize` runs on a stack no `promising` entered, so a
+  suspension there traps naming nobody. Move the call behind an export, or
+  drop `:async t` if the host answers synchronously.
+
+## `"rontolisp:memory"` — the module's own linear memory
+
+The reserved `:from` value binds no host function. Each directive names a field
+of the module's own memory instead, so a program can reserve out-cells, hand
+their addresses to the host and read back what the host wrote. The import
+section gains nothing. On the interpreter and JVM the name is the usual stub.
+
+| `:as` | `:params` | `:returns` | What it does |
+| --- | --- | --- | --- |
+| `"alloc"` | `(:u32)` | `:u32` | Reserves bytes on the bump heap, as `__ronto_alloc` does |
+| `"mark"` | none | `:u32` | The heap's current top |
+| `"reset"` | `(:u32)` | none | Pops the heap back to a `mark` |
+| `"load8"` / `"store8"` | `(:u32)` / `(:u32 :u32)` | `:u32` / none | One byte |
+| `"load32"` / `"store32"` | `(:u32)` / `(:u32 :u32)` | `:u32` / none | Little-endian, any alignment |
+| `"load64"` / `"store64"` | `(:u32)` / `(:u32 :s64)` | `:s64` / none | Little-endian, any alignment |
+| `"string"` | `(:u32 :u32)` | `:string` | A new string from `(ptr, len)`, as UTF-8 |
+| `"octets"` | `(:u32 :u32)` | `:octets` | A new byte vector from `(ptr, len)`; not under `--no-gc` |
+| `"search"` | `(:string :u32 :u32)` | `:s32` | Where a string's bytes first occur in the `(ptr, len)` given: the index, or -1 |
+| `"address"` | `(:string)` | `:u32` | Where a string's UTF-8 bytes are, to read and not to write; only under `--no-gc` |
+| `"size"` | `(:string)` | `:u32` | How many bytes those are, where `length` counts characters; only under `--no-gc` |
+
+The Lisp name is yours; the field and its exact signature are not, and a
+declaration that differs is a compile error. `:async t` and
+`--no-gc --component` are refused. An address outside the `:u32` range traps,
+and so does an access past the end of memory; nothing else protects the
+memory, so a store through a wrong address overwrites whatever is there.
+
+A program declaring `"alloc"`, `"mark"` or `"reset"` owns the heap: what it
+reserves stays reserved until it calls `"reset"`, across calls from the host. So
+an export can answer an address for the host to write into, and a long-lived
+instance has to pop its own scratch. Under `--no-gc` this also turns off the
+reset an export otherwise does when it returns a scalar. If the program exports
+its own allocator, a function handing its one parameter to `"alloc"`, and has no
+`:string` at an export or a host import, `--no-gc` leaves out the `__ronto_alloc`
+exports: the host has that allocator instead.
+
+```lisp
+(rontolisp:wasm-import '%alloc :from "rontolisp:memory" :as "alloc"
+                       :params '(:u32) :returns :u32)
+(rontolisp:wasm-import '%load32 :from "rontolisp:memory" :as "load32"
+                       :params '(:u32) :returns :u32)
+(rontolisp:wasm-import '%string :from "rontolisp:memory" :as "string"
+                       :params '(:u32 :u32) :returns :string)
+;; A C-shaped host function: answers through two char**/size_t* out-pointers.
+(rontolisp:wasm-import '%get-value :from "env" :as "get_value"
+                       :params '(:string :u32 :u32) :returns :s32)
+
+(defun get-value (key)
+  (let ((cells (%alloc 8)))
+    (when (= 0 (%get-value key cells (+ cells 4)))
+      (%string (%load32 cells) (%load32 (+ cells 4))))))
+```
+
+The [Proxy-Wasm example](https://github.com/making/rontolisp/tree/develop/examples/proxy-wasm)
+builds a complete SDK on this.
+
+## Limitations
+
+- On the default (wasm-GC) backend, core modules only: `--component` rejects
+  the directive with an error (a component binds interfaces with
+  [`rontolisp:wit-import`](rontolisp-wit-import.md)). On the interpreter and
+  JVM the declared name signals an error when called.
+- [`--no-gc`](../../guides/wasm-nogc.md#host-imports-rontolispwasm-import) takes
+  the directive, with its own type vocabulary: the whole fixed-width integer
+  family (its house integer is `i64`), `:float`, `:bool`, `:string` and `:void`,
+  but not `:s-expr`, not `:bytes`, not `:octets` and not `:async t`. Under
+  [`--no-gc --component`](../../guides/wasm-nogc.md#host-imports-in-a-component)
+  the reached imports become the component's imports, so `:from` must be a
+  lower-kebab-case label or a WIT interface id, and `:as` and every
+  `:param-names` entry a lower-kebab-case label.
+- The directive must appear at top level, before use like a `defun`.
+- Instantiating the compiled module requires the host to provide every declared
+  import; `wasmtime run` needs a `--preload <module>=<file>.wasm` for each
+  import module name, and a JavaScript host passes an import object.
+- At most 10 parameters (the general WASM-backend arity limit).

@@ -1,0 +1,29 @@
+[package]
+name = "rlrun"
+description = "The stub every --native output starts with: loads the appended module and runs it under WASI P1"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[features]
+# The network host: what a program that fetches or serves HTTP (`src/http`) or opens TCP
+# sockets (`src/tcp`) imports. Built as its own stub, rlrun-net, beside the plain rlrun,
+# so that an output that touches no network does not carry TLS (+1.14 MB on
+# linux-x86_64; .kb/native-output.md, "The network runner").
+net = ["dep:rustls", "dep:webpki-roots", "dep:httparse", "dep:socket2"]
+
+[dependencies]
+rlabi.workspace = true
+wasmtime.workspace = true
+wasmtime-wasi.workspace = true
+# rustls over ring (not aws-lc-rs: no cmake, and the smaller of the two), TLS 1.2 kept
+# for the origins that still speak nothing newer; Mozilla's roots compiled in, the set
+# wasmtime's own wasi:http trusts, so an output needs no CA bundle on the machine.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"], optional = true }
+webpki-roots = { version = "1", optional = true }
+httparse = { version = "1.10", optional = true }
+# A socket made before its connect -- bound first, connected with no wait -- which
+# std::net has no way to; already linked through tokio, so the stub links no new crate.
+socket2 = { version = "0.6", optional = true }

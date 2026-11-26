@@ -1,0 +1,31 @@
+# extend
+
+`(extend Type Protocol {method fn ...} ...)`
+
+Replaces each protocol's row for the type from its map of method functions:
+a later `extend` replaces the type's whole map, like the oracle (an empty map
+replaces with an empty row, `nil` removes the row). A map literal's rows are
+stored as written; a map the program computes
+(`(assoc clojure.java.io/default-streams-impl ...)`, a var holding one) is stored entry
+by entry when the form runs, an entry naming no method of the protocol left out, like
+the oracle; a non-map replaces the row as-is, satisfying and extending but
+dispatching nothing, like the oracle. `Object` as the type installs the miss default,
+like `extend-protocol`. Extending a record or deftype to a protocol its own body
+already implements refuses like the oracle's. The type may be any expression yielding a
+class value (`(class x)`, `(Class/forName "[D")`, the class of a core fn), and the
+protocol may be a value a var or local holds; the rows are stored when the form runs.
+As
+a value (`(def e extend)` applied, or higher-order) the run-time type and its protocol
+and method-map pairs replace the same rows in order, answering nil.
+
+```clojure
+(defprotocol P (m [x]))
+(extend String P {:m (fn [s] :str)})
+(println (m "s")) ; :str
+
+(defprotocol Shape (area [s]) (label [s]))
+(def shape-defaults {:label (fn [_] "shape")})
+(defrecord Square [n])
+(extend Square Shape (assoc shape-defaults :area (fn [s] (* (:n s) (:n s)))))
+(println (area (->Square 3)) (label (->Square 3))) ; 9 shape
+```

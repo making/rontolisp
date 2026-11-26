@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>test.desc</groupId>
+  <artifactId>ranges</artifactId>
+  <version>1</version>
+  <dependencies>
+      <dependency><groupId>test.lib</groupId><artifactId>r</artifactId><version>[1.0,2.0)</version></dependency>
+      <dependency><groupId>test.lib</groupId><artifactId>s</artifactId><version>1.0-SNAPSHOT</version></dependency>
+      <dependency><groupId>test.lib</groupId><artifactId>l</artifactId><version>LATEST</version></dependency>
+  </dependencies>
+</project>

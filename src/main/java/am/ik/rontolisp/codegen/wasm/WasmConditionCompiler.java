@@ -1,0 +1,260 @@
+package am.ik.rontolisp.codegen.wasm;
+
+import java.util.List;
+
+import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispNames;
+import am.ik.rontolisp.LispNil;
+import am.ik.rontolisp.LispSymbol;
+import am.ik.rontolisp.LispTrue;
+import am.ik.rontolisp.LispVal;
+import am.ik.wasm.Instruction;
+import am.ik.wasm.Type;
+
+/**
+ * Compiles a form in TEST position -- the test of an {@code if} or {@code while}, an
+ * operand of an {@code and}/{@code or} that is itself a test -- as a raw i32 truth value
+ * (0 = false, non-0 = true) instead of a Lisp boolean. A predicate's natural result is
+ * the i32 of a {@code ref.test}, {@code ref.is_null} or {@code ref.eq}; boxing it into
+ * {@code t}/nil ({@code if (result eqref) call $t else ref.null end}, a {@code _t_sym}
+ * call per true answer) only for the consumer to {@code ref.is_null} the box again cost
+ * nine bytes and a call per test, and {@code (not (consp x))} paid it twice. The
+ * hello-clack Worker carried 3,304 of those round trips.
+ *
+ * <p>
+ * {@code negated} asks for the COMPLEMENT: non-0 exactly when the test is false, which is
+ * what an {@code if} (whose wasm THEN arm is the Lisp else arm) and a loop's exit
+ * {@code br_if} want. A {@code not}/{@code null} flips the request instead of emitting an
+ * {@code i32.eqz}; a two-operand {@code char=}/{@code char<}/{@code char<=} is its
+ * code-point compare; {@code and}/{@code or} short-circuit through
+ * {@code if (result i32)} blocks over their operands compiled the same way, so a chain of
+ * predicates never materialises a box; anything else is compiled as a value and tested
+ * with one {@code ref.is_null}. The value-position predicates
+ * ({@code WasmNullPredCompiler}, {@code WasmConspCompiler}, ...) stay what they are: a
+ * value needs the box.
+ */
+final class WasmConditionCompiler {
+
+	private WasmConditionCompiler() {
+	}
+
+	/**
+	 * Emits an i32 that is non-0 exactly when {@code test} is true (false when
+	 * {@code negated}).
+	 * @param test the test form
+	 * @param ctx the function context
+	 * @param negated whether to answer the complement
+	 */
+	static void compile(LispVal test, WasmLispCompiler.Ctx ctx, boolean negated) {
+		if (tryCompile(test, ctx, negated)) {
+			return;
+		}
+		WasmExprCompiler.compileExpr(test, ctx);
+		ctx.writer.write(Instruction.REF_IS_NULL);
+		if (!negated) {
+			ctx.writer.write(Instruction.I32_EQZ);
+		}
+	}
+
+	/**
+	 * Like {@link #compile}, for the shapes with a native i32 truth value; returns
+	 * {@code false} having emitted nothing for every other shape.
+	 * @param test the test form
+	 * @param ctx the function context
+	 * @param negated whether to answer the complement
+	 * @return whether the test was compiled
+	 */
+	static boolean tryCompile(LispVal test, WasmLispCompiler.Ctx ctx, boolean negated) {
+		if (test instanceof LispTrue || test instanceof LispNil) {
+			ctx.writer.write(Instruction.I32_CONST);
+			ctx.writer.writeSignedLeb128((test instanceof LispTrue) != negated ? 1 : 0);
+			return true;
+		}
+		if (!(test instanceof LispCons cons) || !cons.isProperList() || !(cons.car() instanceof LispSymbol head)) {
+			return false;
+		}
+		// The names are dispatched exactly as WasmExprCompiler dispatches them, so no
+		// user definition can be meant instead; an await inside a test never reaches
+		// here (the async if/while compile their test through the state machine).
+		List<LispVal> args = cons.toList();
+		switch (head.name()) {
+			case LispNames.NOT, LispNames.NULL -> {
+				if (args.size() != 2) {
+					return false;
+				}
+				compile(args.get(1), ctx, !negated);
+				return true;
+			}
+			case LispNames.CONSP, LispNames.ATOM -> {
+				if (args.size() != 2) {
+					return false;
+				}
+				WasmExprCompiler.compileExpr(args.get(1), ctx);
+				ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+				ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CONS);
+				if (LispNames.ATOM.equals(head.name()) != negated) {
+					ctx.writer.write(Instruction.I32_EQZ);
+				}
+				return true;
+			}
+			case LispNames.SYMBOL_IS -> {
+				// A name dispatch's test: a string-table offset compare, no box.
+				WasmSymbolApiCompiler.emitSymbolIsTest(cons, ctx, negated);
+				return true;
+			}
+			case LispNames.EQ_GENERAL, LispNames.EQL -> {
+				if (args.size() != 3) {
+					return false;
+				}
+				if (WasmEmitHelper.tryEmitLiteralComparison(args, ctx, negated)) {
+					return true;
+				}
+				WasmExprCompiler.compileExpr(args.get(1), ctx);
+				WasmExprCompiler.compileExpr(args.get(2), ctx);
+				// eq and eql are one predicate (.kb/eq-numbers.md)
+				WasmEmitHelper.emitEqlComparison(ctx);
+				if (negated) {
+					ctx.writer.write(Instruction.I32_EQZ);
+				}
+				return true;
+			}
+			case LispNames.CHAR_EQ, LispNames.CHAR_LT, LispNames.CHAR_LE, LispNames.CHAR_GT, LispNames.CHAR_GE,
+					LispNames.CHAR_NE -> {
+				if (args.size() != 3) {
+					return false;
+				}
+				WasmCharCompiler.emitPairCompareI32(cons, ctx, WasmCharCompiler.pairCompareOpcode(head.name()));
+				if (negated) {
+					ctx.writer.write(Instruction.I32_EQZ);
+				}
+				return true;
+			}
+			case LispNames.SUPPLIED_P_INTERNAL -> {
+				if (args.size() != 2) {
+					return false;
+				}
+				// A physical optional's prologue test: the parameter is not the
+				// UNSUPPLIED marker (WasmPhysicalArgs).
+				WasmExprCompiler.compileExpr(args.get(1), ctx);
+				WasmPhysicalArgs.emitUnsupplied(ctx);
+				ctx.writer.write(Instruction.REF_EQ);
+				if (!negated) {
+					ctx.writer.write(Instruction.I32_EQZ);
+				}
+				return true;
+			}
+			case LispNames.AND, LispNames.OR -> {
+				compileChain(args.subList(1, args.size()), LispNames.AND.equals(head.name()), ctx);
+				if (negated) {
+					ctx.writer.write(Instruction.I32_EQZ);
+				}
+				return true;
+			}
+			case LispNames.IF -> {
+				return tryCompileIf(cons, args, ctx, negated);
+			}
+			case LispNames.OBJ_IS -> {
+				WasmInstanceCompiler.emitIsI32(cons, ctx);
+				if (negated) {
+					ctx.writer.write(Instruction.I32_EQZ);
+				}
+				return true;
+			}
+			default -> {
+				// A defstruct predicate is the type test its body is.
+				return WasmStructAccess.tryCompileTest(cons, ctx, negated)
+						|| WasmComparisonCompiler.tryCompileConditionI32(test, ctx, negated);
+			}
+		}
+	}
+
+	/**
+	 * The most {@code if}s down an else spine a test is compiled through: each level is a
+	 * frame of this compiler, and a longer chain -- a {@code case} of hundreds of keys in
+	 * a test -- is compiled as a value, by the loop of {@link WasmIfCompiler}.
+	 */
+	private static final int MAX_IF_SPINE = 32;
+
+	// (if a b c) as a test: a; if (result i32) [b as a test] else [c as a test] end, so
+	// neither arm's truth is boxed for the consumer to ask ref.is_null of -- what a
+	// comparison behind a type test is (`(if (integerp n) (< n 2) (generic n 2))`). Not
+	// in state-machine mode, whose `if` routes resumes through its arms, and not a name
+	// dispatch, which is a search over the names.
+	private static boolean tryCompileIf(LispCons cons, List<LispVal> args, WasmLispCompiler.Ctx ctx, boolean negated) {
+		if (ctx.asyncResume != null || args.size() < 3 || args.size() > 4) {
+			return false;
+		}
+		int spine = 0;
+		for (LispVal form = cons; form instanceof LispCons level && level.isProperList()
+				&& level.car() instanceof LispSymbol head && LispNames.IF.equals(head.name());) {
+			if (++spine > MAX_IF_SPINE || WasmNameDispatchCompiler.match(level, ctx) != null) {
+				return false;
+			}
+			List<LispVal> parts = level.toList();
+			if (parts.size() < 3 || parts.size() > 4) {
+				return false;
+			}
+			form = parts.size() > 3 ? parts.get(3) : LispNil.INSTANCE;
+		}
+		WasmFixnumVersioning.Plan versions = WasmFixnumVersioning.plan(cons, ctx);
+		if (versions != null) {
+			WasmFixnumVersioning.compileTest(versions, ctx, negated);
+			return true;
+		}
+		LispVal test = args.get(1);
+		LispVal elseForm = args.size() > 3 ? args.get(3) : LispNil.INSTANCE;
+		if (test instanceof LispTrue || test instanceof LispNil) {
+			compile(test instanceof LispTrue ? args.get(2) : elseForm, ctx, negated);
+			return true;
+		}
+		compile(test, ctx, false);
+		ctx.writer.write(Instruction.IF);
+		ctx.writer.write(Type.I32);
+		ctx.wasmCtrlDepth++;
+		compile(args.get(2), ctx, negated);
+		ctx.writer.write(Instruction.ELSE);
+		compile(elseForm, ctx, negated);
+		ctx.wasmCtrlDepth--;
+		ctx.writer.write(Instruction.END);
+		return true;
+	}
+
+	// (and a b c) -> a; if (result i32) [b; if (result i32) c else 0 end] else 0 end;
+	// (or a b c) -> a; if (result i32) 1 else [b; if (result i32) 1 else c end] end. An
+	// operand is compiled as a test itself, so nothing along the chain is boxed; the
+	// control depth is tracked through each arm so a return inside an operand finds its
+	// block. The nesting is emitted in a loop -- every operand but the last opens an if
+	// on
+	// the way down, and the ifs close on the way back -- so a long chain costs no Java
+	// stack per operand.
+	private static void compileChain(List<LispVal> operands, boolean conjunction, WasmLispCompiler.Ctx ctx) {
+		if (operands.isEmpty()) {
+			ctx.writer.write(Instruction.I32_CONST);
+			ctx.writer.writeSignedLeb128(conjunction ? 1 : 0);
+			return;
+		}
+		int last = operands.size() - 1;
+		for (int i = 0; i < last; i++) {
+			compile(operands.get(i), ctx, false);
+			ctx.writer.write(Instruction.IF);
+			ctx.writer.write(Type.I32);
+			ctx.wasmCtrlDepth++;
+			if (!conjunction) {
+				ctx.writer.write(Instruction.I32_CONST);
+				ctx.writer.writeSignedLeb128(1);
+				ctx.writer.write(Instruction.ELSE);
+			}
+		}
+		compile(operands.get(last), ctx, false);
+		for (int i = 0; i < last; i++) {
+			if (conjunction) {
+				ctx.writer.write(Instruction.ELSE);
+				ctx.writer.write(Instruction.I32_CONST);
+				ctx.writer.writeSignedLeb128(0);
+			}
+			ctx.wasmCtrlDepth--;
+			ctx.writer.write(Instruction.END);
+		}
+	}
+
+}

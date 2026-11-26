@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <parent><groupId>test.desc</groupId><artifactId>no-such-parent</artifactId><version>1</version></parent>
+  <groupId>test.desc</groupId>
+  <artifactId>missing-parent</artifactId>
+  <version>1</version>
+  <dependencies>
+      <dependency><groupId>test.lib</groupId><artifactId>a</artifactId><version>1</version></dependency>
+  </dependencies>
+</project>

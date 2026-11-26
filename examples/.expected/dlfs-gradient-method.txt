@@ -1,0 +1,8 @@
+lr = 0.1 (well-tuned):
+  step  0: (-3.000000, 4.000000)
+  step  5: (-0.983040, 1.310720)
+  step 10: (-0.322123, 0.429497)
+  step 15: (-0.105553, 0.140737)
+  final:   (-0.034588, 0.046117)
+lr = 10.0:  |x| diverged beyond 1e10 after 100 steps
+lr = 1e-10: still at (-3.0000, 4.0000) after 100 steps

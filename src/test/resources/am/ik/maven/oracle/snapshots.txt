@@ -1,0 +1,15 @@
+# descriptor test.snap:lib:1.0-SNAPSHOT test.snap:lib:1.0-20240101.000000-1 test.snap:old:1.0-SNAPSHOT test.snap:plain:1.0-SNAPSHOT test.snap:installed:1.0-SNAPSHOT test.snap:child:1 test.snap:missing:1.0-SNAPSHOT
+artifact test.snap:lib:jar:1.0-SNAPSHOT
+dep test.snap:dep:jar::1 scope=compile optional=null
+artifact test.snap:lib:jar:1.0-20240101.000000-1
+dep test.snap:old-dep:jar::1 scope=compile optional=null
+artifact test.snap:old:jar:1.0-SNAPSHOT
+dep test.snap:dep:jar::1 scope=compile optional=null
+artifact test.snap:plain:jar:1.0-SNAPSHOT
+dep test.snap:dep:jar::1 scope=compile optional=null
+artifact test.snap:installed:jar:1.0-SNAPSHOT
+dep test.snap:dep:jar::1 scope=compile optional=null
+artifact test.snap:child:jar:1
+dep test.snap:dep:jar::1 scope=compile optional=null
+artifact test.snap:missing:jar:1.0-SNAPSHOT
+warning missing test.snap:missing:jar:1.0-SNAPSHOT

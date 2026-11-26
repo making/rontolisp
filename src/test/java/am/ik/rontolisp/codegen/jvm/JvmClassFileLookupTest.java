@@ -1,0 +1,526 @@
+package am.ik.rontolisp.codegen.jvm;
+
+import java.lang.reflect.Field;
+import java.lang.reflect.Method;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Objects;
+import java.util.TreeSet;
+
+import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.compiler.JavaClassLookup;
+import am.ik.rontolisp.compiler.JavaExecutable;
+import am.ik.rontolisp.compiler.JavaField;
+import am.ik.rontolisp.compiler.JavaImplementation;
+import am.ik.rontolisp.compiler.JavaImplementationType;
+import am.ik.rontolisp.compiler.JavaImplementations;
+import am.ik.rontolisp.compiler.JavaKind;
+import am.ik.rontolisp.compiler.JavaSite;
+import am.ik.rontolisp.compiler.JavaSiteResolver;
+import am.ik.rontolisp.compiler.JavaStaticType;
+import am.ik.rontolisp.compiler.JavaType;
+import am.ik.rontolisp.compiler.ReflectiveJavaClasses;
+import am.ik.rontolisp.reader.LispReader;
+import org.jspecify.annotations.Nullable;
+import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+/**
+ * The class-file lookup (the JVM compiler's) must describe every class exactly as
+ * reflection (the interpreter's) does, or a site would resolve to one member interpreted
+ * and another compiled: the same candidates for every method name, the same constructors
+ * and fields, the same subtype relation -- over a corpus of JDK classes read from the
+ * running JDK's {@code ct.sym} for its own release -- and so the same resolution of every
+ * site in a corpus of {@code java:} call sites.
+ */
+class JvmClassFileLookupTest {
+
+	private static final List<String> CORPUS = List.of("java.lang.Object", "java.lang.String",
+			"java.lang.StringBuilder", "java.lang.StringBuffer", "java.lang.CharSequence", "java.lang.Appendable",
+			"java.lang.Math", "java.lang.StrictMath", "java.lang.Character", "java.lang.Integer", "java.lang.Long",
+			"java.lang.Double", "java.lang.Boolean", "java.lang.Number", "java.lang.System", "java.lang.Thread",
+			"java.lang.Runtime", "java.lang.Iterable", "java.lang.Comparable", "java.util.ArrayList", "java.util.List",
+			"java.util.Collection", "java.util.AbstractList", "java.util.Collections", "java.util.Arrays",
+			"java.util.HashMap", "java.util.Map", "java.util.Map$Entry", "java.util.TreeMap", "java.util.LinkedList",
+			"java.util.ArrayDeque", "java.util.Optional", "java.util.Objects", "java.util.Random", "java.util.UUID",
+			"java.util.Iterator", "java.util.stream.IntStream", "java.util.stream.Stream",
+			"java.util.stream.Collectors", "java.util.function.Function", "java.util.function.Supplier",
+			"java.util.concurrent.ConcurrentHashMap", "java.util.regex.Pattern", "java.util.regex.Matcher",
+			"java.io.StringWriter", "java.io.Writer", "java.io.PrintStream", "java.io.File", "java.nio.file.Path",
+			"java.nio.file.Files", "java.nio.ByteBuffer", "java.net.URI", "java.math.BigInteger",
+			"java.math.BigDecimal", "java.time.LocalDate", "java.time.Duration", "java.awt.Point",
+			"java.awt.BorderLayout", "java.awt.Container", "javax.swing.JFrame", "javax.swing.JButton",
+			"javax.swing.JLabel", "javax.swing.JPanel", "javax.swing.WindowConstants");
+
+	private static JvmClassFileLookup classFiles;
+
+	private static final JavaClassLookup REFLECTION = ReflectiveJavaClasses.instance();
+
+	@BeforeAll
+	static void open() {
+		Path ctSym = JvmClassFileLookup.findCtSym();
+		assertThat(ctSym).as("the test JDK's lib/ct.sym").isNotNull();
+		classFiles = JvmClassFileLookup.of(ctSym, Runtime.version().feature(), List.of());
+	}
+
+	@AfterAll
+	static void close() {
+		classFiles.close();
+	}
+
+	@Test
+	void everyMethodNameHasTheSameCandidates() throws Exception {
+		for (String className : CORPUS) {
+			Class<?> type = Class.forName(className);
+			JavaType reflected = Objects.requireNonNull(REFLECTION.find(className));
+			JavaType read = Objects.requireNonNull(classFiles.find(className), className);
+			TreeSet<String> names = new TreeSet<>();
+			for (Method method : type.getMethods()) {
+				names.add(method.getName());
+			}
+			for (String name : names) {
+				assertThat(signatures(read.methods(name))).as("%s.%s", className, name)
+					.isEqualTo(signatures(reflected.methods(name)));
+			}
+			assertThat(signatures(read.constructors())).as("%s constructors", className)
+				.isEqualTo(signatures(reflected.constructors()));
+		}
+	}
+
+	/**
+	 * What a Clojure lowering reads of a class it finds in class files -- a native
+	 * image's way -- is what reflection says ({@code clojure/ClojureJavaClasses}): the
+	 * supertypes' names, whether a public field exists, and every public method as
+	 * declared with its flags, the compiler's bridges among them.
+	 */
+	@Test
+	void theLoweringsQuestionsHaveReflectionsAnswers() {
+		for (String className : CORPUS) {
+			JavaType reflected = Objects.requireNonNull(REFLECTION.find(className));
+			JavaType read = Objects.requireNonNull(classFiles.find(className));
+			assertThat(read.superclassName()).as("%s superclass", className).isEqualTo(reflected.superclassName());
+			assertThat(read.interfaceNames()).as("%s interfaces", className).isEqualTo(reflected.interfaceNames());
+			assertThat(read.hasPublicFields()).as("%s public fields", className).isEqualTo(reflected.hasPublicFields());
+			assertThat(declared(read.publicMethods())).as("%s methods", className)
+				.isEqualTo(declared(reflected.publicMethods()));
+			assertThat(declared(read.constructors())).as("%s constructors", className)
+				.isEqualTo(declared(reflected.constructors()));
+		}
+		for (String name : List.of("[I", "[Ljava.lang.String;")) {
+			JavaType reflected = Objects.requireNonNull(REFLECTION.find(name));
+			JavaType read = Objects.requireNonNull(classFiles.find(name));
+			assertThat(read.superclassName()).as("%s superclass", name).isEqualTo(reflected.superclassName());
+			assertThat(read.interfaceNames()).as("%s interfaces", name).isEqualTo(reflected.interfaceNames());
+		}
+		// String's compareTo(Object) is the bridge javac writes for Comparable<String>
+		assertThat(declared(Objects.requireNonNull(classFiles.find("java.lang.String")).publicMethods()))
+			.contains("java.lang.String.compareTo[java.lang.Object]int synthetic bridge");
+	}
+
+	// Every executable as declared, with the flags the lowering reads.
+	private static List<String> declared(List<? extends JavaExecutable> executables) {
+		List<String> list = new ArrayList<>();
+		for (JavaExecutable e : executables) {
+			list.add(signature(e) + (e.isSynthetic() ? " synthetic" : "") + (e.isBridge() ? " bridge" : "")
+					+ (e.isAbstract() ? " abstract" : ""));
+		}
+		list.sort(null);
+		return list;
+	}
+
+	@Test
+	void everyPublicFieldIsTheSame() throws Exception {
+		for (String className : CORPUS) {
+			Class<?> type = Class.forName(className);
+			JavaType reflected = Objects.requireNonNull(REFLECTION.find(className));
+			JavaType read = Objects.requireNonNull(classFiles.find(className));
+			for (Field field : type.getFields()) {
+				assertThat(describe(read.field(field.getName()))).as("%s.%s", className, field.getName())
+					.isEqualTo(describe(reflected.field(field.getName())));
+			}
+			assertThat(read.field("noSuchField")).isNull();
+		}
+	}
+
+	@Test
+	void theTypesAgree() throws Exception {
+		List<JavaType> reflected = new ArrayList<>();
+		List<JavaType> read = new ArrayList<>();
+		for (String className : CORPUS) {
+			reflected.add(Objects.requireNonNull(REFLECTION.find(className)));
+			read.add(Objects.requireNonNull(classFiles.find(className)));
+		}
+		// A protected member class is public in its class file, which is what linking
+		// reads; a package-private supertype is neither public nor accessible.
+		for (String name : List.of("int", "[I", "[Ljava.lang.String;", "[[Ljava.lang.Object;",
+				"java.awt.Component$AccessibleAWTComponent", "java.lang.AbstractStringBuilder",
+				"java.io.InputStream")) {
+			reflected.add(Objects.requireNonNull(REFLECTION.find(name)));
+			read.add(Objects.requireNonNull(classFiles.find(name)));
+		}
+		for (int i = 0; i < read.size(); i++) {
+			JavaType a = read.get(i);
+			JavaType ra = reflected.get(i);
+			assertThat(a.name()).isEqualTo(ra.name());
+			assertThat(a.isInterface()).as("%s interface", a).isEqualTo(ra.isInterface());
+			assertThat(a.isFinal()).as("%s final", a).isEqualTo(ra.isFinal());
+			assertThat(a.isArray()).as("%s array", a).isEqualTo(ra.isArray());
+			assertThat(a.isAccessible()).as("%s accessible", a).isEqualTo(ra.isAccessible());
+			assertThat(a.isPublic()).as("%s public", a).isEqualTo(ra.isPublic());
+			assertThat(a.isAbstract()).as("%s abstract", a).isEqualTo(ra.isAbstract());
+			assertThat(a.isLinkable()).as("%s linkable", a).isEqualTo(ra.isLinkable());
+			for (int j = 0; j < read.size(); j++) {
+				assertThat(a.isAssignableFrom(read.get(j))).as("%s <- %s", a, read.get(j))
+					.isEqualTo(ra.isAssignableFrom(reflected.get(j)));
+			}
+		}
+		assertThat(classFiles.find("no.such.Type")).isNull();
+		// A package-private class of an exported package: present or not, never callable.
+		JavaType listN = classFiles.find("java.util.ImmutableCollections$ListN");
+		assertThat(listN == null || !listN.isAccessible()).isTrue();
+		assertThat(Objects.requireNonNull(classFiles.find("java.lang.AbstractStringBuilder")).isAccessible()).isFalse();
+	}
+
+	// A corpus of sites: each resolves to the same member (or stays unresolved for the
+	// same reason) whichever lookup describes the classes.
+	@Test
+	void everySiteResolvesTheSame() {
+		String corpus = """
+				(java:static "java.lang.Math" "max" 3 7)
+				(java:static "java.lang.Math" "max" 3 7.5)
+				(java:static "java.lang.Math" "max(long,long)" 3 7)
+				(java:static "java.lang.Math" "max(long,_)" 3 7)
+				(java:static "java.lang.Math" "abs" -5.5)
+				(java:static "java.lang.Math" "sqrt" 16)
+				(java:static "java.lang.Integer" "parseInt" "100")
+				(java:static "java.lang.Character" "charCount" #\\a)
+				(java:static "java.lang.Character" "toString" #\\a)
+				(java:static "java.lang.String" "valueOf" 5)
+				(java:static "java.lang.String" "valueOf" #\\a)
+				(java:static "java.lang.String" "format" "%s-%s" 1 "x")
+				(java:static "java.lang.String" "join" "-" "a" "b")
+				(java:static "java.util.List" "of" 1 2 3)
+				(java:static "java.util.List" "of")
+				(java:static "java.util.Objects" "equals" "a" "b")
+				(java:static "java.lang.Thread" "sleep" 1)
+				(java:new "java.lang.StringBuilder")
+				(java:new "java.lang.StringBuilder" "hi")
+				(java:new "java.lang.StringBuilder" 16)
+				(java:new "java.lang.StringBuilder(int)" 16)
+				(java:new "java.util.ArrayList")
+				(java:new "java.awt.Point" 3 4)
+				(java:new "javax.swing.JFrame" "title")
+				(java:new "java.lang.Thread" (lambda () nil))
+				(java:call (java:new "java.lang.StringBuilder") "append" "x")
+				(java:call (java:new "java.lang.StringBuilder") "append" "xy")
+				(java:call (java:new "java.lang.StringBuilder") "append" 42)
+				(java:call (java:new "java.lang.StringBuilder") "append" 4.2)
+				(java:call (java:new "java.lang.StringBuilder") "append" #\\a)
+				(java:call (java:new "java.lang.StringBuilder") "append" t)
+				(java:call (java:new "java.lang.StringBuilder") "length")
+				(java:call (java:call (java:new "java.lang.StringBuilder") "append" "x") "reverse")
+				(java:call (java:call (java:new "java.lang.StringBuilder") "reverse") "toString")
+				(java:call (java:new "java.util.ArrayList") "add" 42)
+				(java:call (java:new "java.util.ArrayList") "add" 0 42)
+				(java:call (java:new "java.util.ArrayList") "remove" 1)
+				(java:call (java:new "java.util.ArrayList") "size")
+				(java:call (the (java:object "java.util.Collection") x) "remove" 1)
+				(java:call (the (java:object "java.util.List") x) "get" 0)
+				(java:call (the (java:object "java.util.Map") x) "put" "k" 1)
+				(java:call (the (java:object "java.lang.Appendable") x) "append" #\\a)
+				(java:call (the (java:object "java.io.Writer") x) "write" "abc")
+				(java:call (java:new "java.io.StringWriter") "write" 65)
+				(java:call (java:new "javax.swing.JFrame") "setSize" 360 180)
+				(java:call (java:new "javax.swing.JFrame") "setVisible" t)
+				(java:call (java:new "javax.swing.JFrame") "setTitle" "x")
+				(java:call (java:new "javax.swing.JButton" "x") "addActionListener" (lambda (m e) nil))
+				(java:call (java:new "javax.swing.JPanel") "add" (java:new "javax.swing.JLabel" "x"))
+				(java:call (java:new "java.lang.StringBuilder") "append" x)
+				(java:call x "length")
+				(java:field "java.lang.Integer" "MAX_VALUE")
+				(java:field "javax.swing.WindowConstants" "DISPOSE_ON_CLOSE")
+				(java:field "javax.swing.JFrame" "EXIT_ON_CLOSE")
+				(java:field (java:new "java.awt.Point" 3 4) "y")
+				(java:field "java.awt.BorderLayout" "CENTER")
+				(java:static "java.lang.Math" "noSuchMethod" 1)
+				(java:static "no.such.Class" "m")
+				(java:static "java.lang.String" "length")
+				(java:static "java.lang.Integer" "parseInt" (the (java:object "java.lang.String") s) 16)
+				(java:new "java.io.InputStream")
+				(java:field "java.awt.Point" "x")
+				(java:call (java:static "java.util.List" "of" 1 2) "forEach" (lambda (m x) x))
+				""";
+		JavaSiteResolver byReflection = new JavaSiteResolver(REFLECTION);
+		JavaSiteResolver byClassFiles = new JavaSiteResolver(classFiles);
+		int resolved = 0;
+		for (LispVal form : LispReader.readAllFromString(corpus)) {
+			LispCons site = (LispCons) form;
+			JavaSite a = byReflection.resolve(site);
+			JavaSite b = byClassFiles.resolve(site);
+			assertThat(describe(b)).as(site.print()).isEqualTo(describe(a));
+			if (a.resolved()) {
+				resolved++;
+			}
+		}
+		assertThat(resolved).as("the corpus exercises resolution").isGreaterThan(40);
+	}
+
+	// Both lookups answer Class.getMethods() of an interface: none of Object's methods it
+	// does not redeclare. The resolver adds them for a java:call (JLS 9.2), so a site
+	// calling one on an interface receiver -- declared, or a java:reify object --
+	// resolves to Object's member through either lookup.
+	@Test
+	void anInterfaceReceiverReachesObjectsMethodsThroughTheResolver() {
+		for (JavaClassLookup lookup : List.of(REFLECTION, classFiles)) {
+			JavaType list = Objects.requireNonNull(lookup.find("java.util.List"));
+			assertThat(list.methods("toString")).as("%s", lookup).isEmpty();
+			assertThat(list.methods("getClass")).as("%s", lookup).isEmpty();
+			assertThat(signatures(list.methods("hashCode"))).as("%s", lookup)
+				.containsExactly("java.util.List.hashCode[]int");
+		}
+		String corpus = """
+				(java:call (the (java:object "java.util.List") x) "toString")
+				(java:call (the (java:object "java.util.List") x) "hashCode")
+				(java:call (the (java:object "java.util.List") x) "equals" "s")
+				(java:call (the (java:object "java.util.List") x) "getClass")
+				(java:call (the (java:object "java.util.List") x) "wait" 1)
+				(java:call (java:reify "java.lang.Runnable" "run" (lambda () nil)) "toString")
+				(java:call (java:reify "java.lang.Runnable" "run" (lambda () nil)) "hashCode")
+				(java:call (java:reify "java.lang.Runnable" "run" (lambda () nil)) "equals" nil)
+				""";
+		List<String> expected = List.of("java.lang.Object.toString[]java.lang.String", "java.util.List.hashCode[]int",
+				"java.util.List.equals[java.lang.Object]boolean", "java.lang.Object.getClass[]java.lang.Class",
+				"java.lang.Object.wait[long]void", "java.lang.Object.toString[]java.lang.String",
+				"java.lang.Object.hashCode[]int", "java.lang.Object.equals[java.lang.Object]boolean");
+		JavaSiteResolver byReflection = new JavaSiteResolver(REFLECTION);
+		JavaSiteResolver byClassFiles = new JavaSiteResolver(classFiles);
+		List<LispVal> sites = LispReader.readAllFromString(corpus);
+		for (int i = 0; i < sites.size(); i++) {
+			LispCons site = (LispCons) sites.get(i);
+			JavaSite a = byReflection.resolve(site);
+			assertThat(describe(byClassFiles.resolve(site))).as(site.print()).isEqualTo(describe(a));
+			assertThat(a.executable()).as(site.print()).isNotNull();
+			assertThat(signature(Objects.requireNonNull(a.executable()))).as(site.print()).isEqualTo(expected.get(i));
+		}
+	}
+
+	// java:reify / java:proxy implement an interface by the methods Class.getMethods()
+	// lists: both lookups list the same ones, abstract where reflection says so, so a
+	// form declares the same slots interpreted and compiled -- and the object's kind is
+	// assignable to the same types.
+	@Test
+	void everyInterfaceIsImplementedTheSame() {
+		List<String> interfaces = List.of("java.lang.Runnable", "java.lang.CharSequence", "java.lang.Appendable",
+				"java.lang.Iterable", "java.lang.Comparable", "java.util.Comparator", "java.util.Iterator",
+				"java.util.Collection", "java.util.List", "java.util.Map", "java.util.function.Function",
+				"java.util.function.UnaryOperator", "java.util.function.Supplier", "java.util.function.Predicate",
+				"java.util.function.IntSupplier", "java.util.concurrent.Callable", "java.beans.PropertyChangeListener",
+				"java.awt.event.MouseListener", "javax.net.ssl.X509TrustManager");
+		for (String name : interfaces) {
+			JavaType reflected = Objects.requireNonNull(REFLECTION.find(name), name);
+			JavaType read = Objects.requireNonNull(classFiles.find(name), name);
+			assertThat(abstractness(read.publicMethods())).as("%s methods", name)
+				.isEqualTo(abstractness(reflected.publicMethods()));
+			assertThat(slots(JavaImplementations.proxy(read, classFiles))).as("%s proxy", name)
+				.isEqualTo(slots(JavaImplementations.proxy(reflected, REFLECTION)));
+			JavaImplementationType readKind = classFiles.implementationOf(read);
+			JavaImplementationType reflectedKind = REFLECTION.implementationOf(reflected);
+			assertThat(classFiles.implementationOf(read)).isSameAs(readKind);
+			for (String target : CORPUS) {
+				assertThat(Objects.requireNonNull(classFiles.find(target)).isAssignableFrom(readKind))
+					.as("%s <- %s", target, readKind)
+					.isEqualTo(Objects.requireNonNull(REFLECTION.find(target)).isAssignableFrom(reflectedKind));
+			}
+		}
+		for (List<String> reify : List.of(List.of("java.util.Comparator", "compare"),
+				List.of("java.util.Iterator", "hasNext", "next"), List.of("java.lang.Appendable", "append(char)"),
+				List.of("java.lang.CharSequence", "length", "charAt", "toString", "hashCode"),
+				List.of("java.util.function.Function", "apply", "andThen"))) {
+			String name = reify.get(0);
+			List<String> designators = reify.subList(1, reify.size());
+			assertThat(slots(
+					JavaImplementations.reify(Objects.requireNonNull(classFiles.find(name)), designators, classFiles)))
+				.as("%s %s", name, designators)
+				.isEqualTo(slots(JavaImplementations.reify(Objects.requireNonNull(REFLECTION.find(name)), designators,
+						REFLECTION)));
+		}
+	}
+
+	private static List<String> abstractness(List<? extends JavaExecutable> executables) {
+		List<String> list = new ArrayList<>();
+		for (JavaExecutable e : executables) {
+			list.add(signature(e) + (e.isAbstract() ? " abstract" : ""));
+		}
+		list.sort(null);
+		return list;
+	}
+
+	// A java:subclass extends its superclass by the same methods on both lookups:
+	// every public or protected non-final instance method of the class chain, and
+	// the same inheritable constructors -- so a form declares the same slots
+	// interpreted and compiled, and the object's kind is assignable to the same
+	// types.
+	@Test
+	void everySuperclassIsSubclassedTheSame() {
+		List<String> supers = List.of("java.io.File", "java.util.ArrayList", "java.util.AbstractList",
+				"javax.swing.JPanel", "org.xml.sax.helpers.DefaultHandler", "java.awt.event.WindowAdapter",
+				"java.lang.Thread", "java.util.HashMap");
+		for (String name : supers) {
+			JavaType reflected = Objects.requireNonNull(REFLECTION.find(name), name);
+			JavaType read = Objects.requireNonNull(classFiles.find(name), name);
+			assertThat(overridable(read)).as("%s overridable", name).isEqualTo(overridable(reflected));
+			assertThat(signatures(read.subclassConstructors())).as("%s constructors", name)
+				.isEqualTo(signatures(reflected.subclassConstructors()));
+			assertThat(slots(JavaImplementations.subclass(read, List.of(), List.of("toString"))))
+				.as("%s subclass", name)
+				.isEqualTo(slots(JavaImplementations.subclass(reflected, List.of(), List.of("toString"))));
+			JavaImplementationType readKind = classFiles.subclassOf(read, List.of());
+			JavaImplementationType reflectedKind = REFLECTION.subclassOf(reflected, List.of());
+			assertThat(classFiles.subclassOf(read, List.of())).isSameAs(readKind);
+			for (String target : CORPUS) {
+				assertThat(Objects.requireNonNull(classFiles.find(target)).isAssignableFrom(readKind))
+					.as("%s <- %s", target, readKind)
+					.isEqualTo(Objects.requireNonNull(REFLECTION.find(target)).isAssignableFrom(reflectedKind));
+			}
+		}
+	}
+
+	private static List<String> overridable(JavaType type) {
+		List<String> list = new ArrayList<>();
+		for (JavaExecutable e : type.overridableMethods()) {
+			list.add(signature(e) + (e.isAbstract() ? " abstract" : "") + (e.isPublic() ? " public" : " protected"));
+		}
+		list.sort(null);
+		return list;
+	}
+
+	private static List<String> slots(JavaImplementation implementation) {
+		List<String> slots = new ArrayList<>();
+		for (JavaImplementation.Slot slot : implementation.slots()) {
+			slots.add(slot.dispatchKey() + "=" + slot.implementation());
+		}
+		return slots;
+	}
+
+	// A class-path root (here the project's own compiled classes, loaded in this JVM by
+	// reflection too) is described the same way: its classes are in the unnamed module,
+	// every one accessible.
+	@Test
+	void aClassPathClassIsDescribedAsReflectionDescribesIt() throws Exception {
+		Path classes = Path.of(JvmClassFileLookupTest.class.getProtectionDomain().getCodeSource().getLocation().toURI())
+			.resolveSibling("classes");
+		try (JvmClassFileLookup withClassPath = JvmClassFileLookup.of(JvmClassFileLookup.findCtSym(),
+				Runtime.version().feature(), List.of(classes))) {
+			for (String className : List.of("am.ik.rontolisp.LispCons", "am.ik.rontolisp.LispString",
+					"am.ik.jvm.ClassFileInfo", "am.ik.rontolisp.compiler.JavaOverloads")) {
+				Class<?> type = Class.forName(className);
+				JavaType reflected = Objects.requireNonNull(REFLECTION.find(className));
+				JavaType read = Objects.requireNonNull(withClassPath.find(className), className);
+				assertThat(read.isAccessible()).isEqualTo(reflected.isAccessible());
+				for (Method method : type.getMethods()) {
+					assertThat(signatures(read.methods(method.getName()))).as("%s.%s", className, method.getName())
+						.isEqualTo(signatures(reflected.methods(method.getName())));
+				}
+				assertThat(signatures(read.constructors())).isEqualTo(signatures(reflected.constructors()));
+			}
+		}
+	}
+
+	// --java-release: a site resolves against that release's API. StringBuilder.repeat
+	// arrived in 21, so under 17 the site is left to run time.
+	@Test
+	void aSiteResolvesAgainstTheReleaseItIsCompiledFor() {
+		LispCons site = (LispCons) LispReader
+			.readAllFromString("(java:call (java:new \"java.lang.StringBuilder\") \"repeat\" \"ab\" 2)")
+			.get(0);
+		try (JvmClassFileLookup release17 = JvmClassFileLookup.of(JvmClassFileLookup.findCtSym(), 17, List.of());
+				JvmClassFileLookup release21 = JvmClassFileLookup.of(JvmClassFileLookup.findCtSym(), 21, List.of())) {
+			assertThat(new JavaSiteResolver(release17).resolve(site).reason())
+				.isEqualTo("class java.lang.StringBuilder has no public method repeat");
+			assertThat(new JavaSiteResolver(release21).resolve(site).designator())
+				.isEqualTo("repeat(java.lang.CharSequence,int)");
+		}
+	}
+
+	// Where the JDK is found: a home first, else the java a PATH directory holds,
+	// followed through a symbolic link (the sdkman / alternatives layout) to its JDK.
+	@Test
+	void theJdkIsFoundFromAHomeOrThroughTheJavaOnPath(@TempDir Path dir) throws Exception {
+		Path jdk = dir.resolve("jdk");
+		java.nio.file.Files.createDirectories(jdk.resolve("lib"));
+		java.nio.file.Files.createDirectories(jdk.resolve("bin"));
+		java.nio.file.Files.write(jdk.resolve("lib").resolve("ct.sym"), new byte[0]);
+		java.nio.file.Files.write(jdk.resolve("bin").resolve("java"), new byte[0]);
+		Path shims = dir.resolve("shims");
+		java.nio.file.Files.createDirectories(shims);
+		java.nio.file.Files.createSymbolicLink(shims.resolve("java"), jdk.resolve("bin").resolve("java"));
+		Path expected = jdk.resolve("lib").resolve("ct.sym").toRealPath();
+		assertThat(JvmClassFileLookup.findCtSym(List.of(jdk.toString()), null)).isEqualTo(jdk.resolve("lib/ct.sym"));
+		assertThat(JvmClassFileLookup.findCtSym(List.of(dir.resolve("nowhere").toString()),
+				dir.resolve("empty") + java.io.File.pathSeparator + shims))
+			.isEqualTo(expected);
+		assertThat(JvmClassFileLookup.findCtSym(List.of(), dir.toString())).isNull();
+	}
+
+	private static String describe(JavaSite site) {
+		JavaExecutable executable = site.executable();
+		List<String> arguments = new ArrayList<>();
+		for (JavaSite.Argument argument : site.arguments()) {
+			List<String> kinds = new ArrayList<>();
+			for (JavaKind kind : argument.kinds()) {
+				kinds.add(kind instanceof JavaType t ? t.name() : kind.toString());
+			}
+			arguments.add(kinds + (argument.declared() != null ? " as " + argument.declared() : ""));
+		}
+		return site.operator() + " " + site.staticClass() + " " + site.designator() + " packed=" + site.packed()
+				+ " result=" + describe(site.result()) + " arguments=" + arguments + " reason=" + site.reason()
+				+ (executable != null ? " -> " + signature(executable) : "");
+	}
+
+	private static String describe(JavaStaticType type) {
+		return switch (type) {
+			case JavaStaticType.Kinds kinds -> {
+				TreeSet<String> names = new TreeSet<>();
+				for (JavaKind kind : kinds.kinds()) {
+					names.add(kind instanceof JavaType t ? t.name() : kind.toString());
+				}
+				yield "kinds" + names;
+			}
+			case JavaStaticType.Bounded bounded -> "bounded " + bounded.type().name();
+			case JavaStaticType.Unknown ignored -> "unknown";
+		};
+	}
+
+	private static List<String> signatures(List<? extends JavaExecutable> executables) {
+		List<String> list = new ArrayList<>();
+		for (JavaExecutable e : executables) {
+			list.add(signature(e));
+		}
+		list.sort(null);
+		return list;
+	}
+
+	private static String signature(JavaExecutable e) {
+		List<String> params = new ArrayList<>();
+		for (JavaType p : e.parameterTypes()) {
+			params.add(p.name());
+		}
+		return e.declaringClass().name() + "." + e.name() + params + e.returnType().name()
+				+ (e.isStatic() ? " static" : "") + (e.isVarArgs() ? " varargs" : "");
+	}
+
+	private static String describe(@Nullable JavaField field) {
+		if (field == null) {
+			return "none";
+		}
+		return field.declaringClass().name() + "." + field.name() + ":" + field.type().name()
+				+ (field.isStatic() ? " static" : "");
+	}
+
+}

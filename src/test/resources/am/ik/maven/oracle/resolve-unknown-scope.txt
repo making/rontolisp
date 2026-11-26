@@ -1,0 +1,7 @@
+# resolve test.resolve:unknown-scope:1
+test.resolve:unknown-scope:jar::1 scope=compile optional=false
+  test.resolve:rt:jar::1 scope=runtime optional=false
+    test.resolve:y:jar::1 scope=runtime optional=false
+      test.resolve:y-child:jar::1 scope=runtime optional=false
+  test.resolve:odd-holder:jar::1 scope=compile optional=false
+    test.resolve:odd:jar::1 scope=odd optional=false

@@ -1,0 +1,255 @@
+# A character index costs the same wherever it lands
+
+**Invariant: `(char s i)` / `(schar s i)` / `(aref s i)` / `(elt s i)` / `(length s)` /
+`(subseq s a b)` are O(1) or amortized O(1) in the index on ALL FOUR backends, in BOTH
+string representations -- the immutable runtime string AND the mutable character vector a
+`make-string` buffer is. A left-to-right (or right-to-left) scan of one string is LINEAR,
+never quadratic.** A cost invariant, not a semantic one; invisible at the sizes ci-spec
+and the doc examples use, which is why regressions here survive.
+
+A CHARACTER is a code point (`.kb/characters-code-points.md`) and no backend stores one
+per storage unit: interpreter `int[]` (`LispString`, slot `i`); JVM UTF-16
+`java.lang.String`, quote-framed, character `i` at code unit `1 + i` unless a surrogate
+pair precedes; WASM UTF-8 `$str_bytes`, quote-framed (`.kb/wasm-gc-strings.md`), byte
+`1 + i` unless a multi-byte sequence precedes. General fix: **decide the translation
+without walking where the shape allows, and REMEMBER what a walk found.**
+
+## Character vectors: do not render, just read the element
+The mutable character vector (`.kb/adjustable-arrays.md`) stores code points; index sites
+must not normalize through `_strv` (JVM) / `_charvec_to_str` (WASM), which renders the
+WHOLE vector per index.
+- **JVM**: one call to `_charRef(Object, int) -> int` (`JvmStringIndexRuntimeBuilder`),
+  reading through `_rmGet` (displacement walk, so string views work) or `_cpoff`.
+- **WASM**: `_str_char_ref(s, i) -> i32` (`FUNC_STR_CHAR_REF`,
+  `WasmStringRuntimeBuilder.buildStrCharRefBody`).
+- `elt` reaches it through `expandElt`'s `stringp` arm; `aref` never rendered. Whole-string
+  consumers (`string=`, `concatenate`, `write-string`, `_equal`/`_hash`/`_print_val`)
+  still render once per CALL.
+
+## WASM: the string carries its own cursor
+`TYPE_STRING` (rec-group type 4) gained three `(mut i32)` fields:
+
+    struct { i32 id, i32 len, (ref null eq) data, (mut i32) ci, (mut i32) cb, (mut i32) cc }
+
+`ci`/`cb` = "character `ci` starts at byte `cb`", `cc` = the character count, seeded
+`(0, 1, -1)` by `WasmStringRuntimeBuilder.emitSeedCursor` at every `struct.new`. `WasmStringRuntimeBuilder.buildStrCharByteOffsetBody`:
+- **`cb == ci + 1` means the `ci` characters before the cursor are one byte each**, so any
+  index at or below `ci` is `1 + i` -- always true for ASCII. Otherwise the walk starts at
+  whichever of the cursor and the string start is nearer, and the cursor follows.
+- The cursor is stored ONLY when the walk landed exactly on character `i`
+  (`remaining == 0`), so a store can never cost the fast path's single-byte-prefix fact.
+- `_str_char_count` (every `(length s)`) counts once, resuming at the cursor, and keeps the
+  count in `cc`, so a repeated `length` is one compare. A single-byte string also parks the
+  cursor on the closing quote (`cb == ci + 1` then answers every index); a multi-byte one
+  leaves it where the last index put it. **The count must not live only in the cursor**:
+  until 2026-10-25 a cursor on the closing quote WAS the count, so `(< i (length s))` around
+  `(char s i)` -- every tokenizer -- moved the cursor off the quote at each index, walked back
+  to the end at each length, and on a multi-byte string walked each index from the start:
+  quadratic. Found through lispresen's browser editor highlighting its deck source (an
+  export's `:string` parameter, so a `TYPE_STRING`): 896 ms per keystroke on a 56 KB Japanese
+  deck. `concatenate` and the other flipped producers answer a character vector and never
+  showed it; `rontolisp:octets-to-string` and export parameters do.
+- **Soundness: a string's bytes never change after it is built** -- an indexed write
+  rebuilds (`.kb/string-write-runtime.md`), so a cursor cannot go stale.
+
+## `%string-code`: the read a front end makes of a string nothing writes
+`(%string-code string index)` (`LispNames.STRING_CODE`, 2026-11-18, j88) answers
+the code of the character at an integer index, -1 when the index is none of the string:
+`(char-code (char s i))` behind the caller's bounds test, in one step. Why it exists: a
+front end whose strings are immutable (Java's `charAt`, [java-frontend.md](java-frontend.md))
+paid, in EH mode on WASM, a generic `length` call for its bounds test, `_idx_chk`, two
+stores of the operator register and `_str_char_ref`'s `_charvec_p` and string tests at each
+read -- 49 ns a character of a loop against 23.
+- **WASM**: one call of `_str_code(string, index)` (`FUNC_STR_CODE`,
+  `WasmStringRuntimeBuilder.buildStrCodeBody`). An index below the cursor of a single-byte
+  prefix is the byte at `1 + i`, read there; any other asks `_str_char_count` and
+  `_str_char_at`. No operand type is checked: an index that is no fixnum is outside every
+  string. A mutable character vector is rendered first (`emitCharvecToStrLocal`, only in
+  a module that can hold one), so one that reaches it is read right, at the cost
+  `_charvec_to_str` has.
+- **JVM**: `LispMacroExpander.expandStringCode`, the public reads. An operand that is a
+  variable is read where it stands (a `let` of it boxed a local the backend kept raw:
+  0.26 -> 0.30 s on the loop below), unless a later operand is a form that could assign it.
+- **Interpreter**: a function (`Environment`); a wide integer answers -1.
+- Measured (2026-11-18, Linux x86-64, GraalVM JDK 25.0.5, wasmtime 49, a Java loop over 26
+  letters 10^6 times, JVM / precompiled wasm, interleaved, best of five): 0.26 / 1.25 ->
+  0.26 / 0.61 s. Pinned by ci-spec `string-code-reads-a-character-s-code-or-minus-one` and
+  java-spec's `charAt` lines.
+
+## JVM: two shapes, and a memory that keeps the expensive one
+`JvmStringIndexRuntimeBuilder` emits `_cpoff(String, int) -> int` and `_scount(String) -> int`,
+which every character index and string length reads through, plus `_cpidx(String) -> int[]`, the
+slow half they share.
+
+**Flat** -- no surrogate pair anywhere -- is decided by one comparison:
+
+    s.codePointCount(1, len - 1) == len - 2      // no surrogate pair anywhere
+
+When it holds, offset is `1 + i` and count `len - 2`. The probe is CONSTANT TIME for a
+LATIN1-backed string, so every ASCII/Latin-1 string is O(1) with nothing remembered; for a wider
+one the fact is remembered in two plain static fields (`_cpsimple0/1`).
+
+**A string of at most 66 units is counted where it stands** (`_scount`,
+`SHORT_COUNT`, 2026-11-16): `codePointCount` and nothing remembered. `len` of a string
+just made missed both memories, probed the wide pair and stored the string into a static
+field -- `len("item" + str(i))` six million times 0.99 -> 0.94 s, whole process. An
+index (`_cpoff`) still remembers a short string: its probe is a count a character.
+
+**Wide** -- one surrogate pair is enough -- has no such arithmetic and used to fall back to
+`offsetByCodePoints(1, i)` on EVERY index with nothing remembered, which is quadratic in a string
+that is otherwise pure ASCII. It gets a BREAKPOINT TABLE now, built in one pass: `t[0]` is the
+character count and `t[1 + k]` the code-unit offset of character `k << 5`, so an index walks at
+most 31 characters from the nearest breakpoint and costs the same wherever it lands. One int per
+32 characters.
+
+**How each pair is published.** The flat pair is plain: a `String` is immutable so the fact cannot
+go stale, a reference field is written atomically, only the POSITIVE fact is cached, and a miss
+costs a re-probe -- hence no `volatile`, safe under one-virtual-thread-per-request
+([[concurrent-served-requests]]). The wide pair (`_cpwide0/1`) IS volatile: a slot is an
+`Object[]{String, int[]}`, and a plain store publishes neither the second element nor the table's
+contents, so a racing reader could match the string and then read an unwritten offset -- an answer
+pointing inside the framing quote. The release fence is the publication.
+
+**The victim is the SHORTER slot, in both pairs.** What the memory buys is the walk it skips, and
+that cost is the string's LENGTH, not how recently it was touched. Under the old "shift slot0 into
+slot1" rule any two short strings touched between two indexes evicted a long one -- and a JSON
+parse is precisely that shape, one fresh short string cut out per token interleaved with every
+index into the document, so the document was re-proven at O(n) every few characters. TWO entries in
+each pair because the walks come in pairs (`%string-compare` steps two strings at once).
+
+**The assumption, stated in the open: length is a PROXY for value.** A large string indexed ONCE
+holds its slot against a smaller one indexed constantly -- index a 10 MB string once, then
+alternate hot indexing between two 1 MB strings, and the cold 10 MB entry never leaves while the
+two hot ones fight over the remaining slot; recency would have aged it out. The shape is reachable,
+the regression is bounded by the two slots, and two slots do not justify an aging policy. What to
+widen for is more than two HOT strings at once, and the state to add then is a hit count per slot,
+not a timestamp.
+
+Measured 2026-09-05 (JDK 25, this rule against the previous one, same tree):
+- `rontolisp:json-parse` over the real Qwen3.5-0.8B `tokenizer.json` -- a flat, astral-free,
+  UTF16-backed document -- on the JVM class output: with the old rule it did not finish
+  (still inside `vocab`, with
+  `StringUTF16.codePointCount` under `_cpoff` under `%JSON-SKIP-WS` at every sample, the frames
+  `.todo/690` reported); with this rule it finishes in a fraction of a second. The text has to arrive as a `java.lang.String` to be the
+  subject at all: `rontolisp:octets-to-string` produces one, while `uiop:read-file-string` and
+  `concatenate` produce a character vector, which reads its element and never probes.
+- A wide character in front of many digits, scanned whole against the same characters in
+  pieces: slower by orders of magnitude before, at parity with ASCII after.
+
+**What the speedup is and is not.** It is a claim about `rontolisp:json-parse`, not about loading a
+model. `examples/llm/llm.lisp`'s checkpoint load did NOT get faster: re-measured on the
+shipped tree it is the same as before within
+noise. That file carried its own byte-level JSON reader **because `json-parse` could not finish**,
+so it never paid the cost and had nothing to recover. Deleting that workaround kept the same
+speed, which is a maintenance win and not a throughput one.
+
+Four separate things landed here and only the first two are speed for an existing caller:
+
+1. the interpreter's `subseq` no longer renders the whole buffer per call -- general, and the one
+   defect nothing anywhere had routed around;
+2. a surrogate-bearing string is indexed in constant time -- the 45x above;
+3. `rontolisp:json-parse` becomes usable on a large file **at all**, so nothing has to route around
+   it in future -- the value is to callers that do not exist yet;
+4. one existing workaround deleted at parity.
+
+The generalisation to avoid, because it was made and was wrong: a mechanism being fixed does not
+mean its known callers were paying for it. Check which callers were actually on the slow path
+before claiming a speedup for them. **And read a workaround as evidence** -- the byte reader sitting
+in the tree was a recorded fact about `json-parse` that nobody had read as one.
+
+## Cutting a piece out is an index too
+`(subseq s a b)` may not cost the STRING's length either. On the interpreter it copies the slice
+straight out of the code-point buffer (`LispString.subsequence`); it used to render the whole
+buffer into a `java.lang.String` through `value()` and then `substring` it, which cost O(length of
+s) whatever the slice's width -- so the same JSON parse was quadratic on the interpreter for a
+reason of its own. Synthetic tokenizer-shaped JSON, 2026-09-05: 88k characters 1.5 s, 178k 4.8 s,
+378k 19 s, 778k 77 s (clean N^2) -> 0.45 / 0.53 / 0.72 / 1.58 s, and the real 10,769,328-character
+`tokenizer.json` **15.7 s** (against an N^2 extrapolation of about four hours, which is why the
+report saw no first timing line in seven minutes).
+
+Whole-string consumers (`string=`, `concatenate`, `write-string`, `_equal`/`_hash`/`_print_val`)
+still render once per CALL, which is their own cost and not an index's. **Separate mechanism, fixed
+separately**: ACCUMULATING a file into a string was quadratic in its own right --
+`uiop:read-file-string`'s chunked `concatenate` and the `apply #'concatenate 'string` over
+`read-line` results both re-copied the accumulator per chunk, and neither reached `json-parse`
+at all on a large file. Both are linear now (`.kb/string-accumulate-cost.md`, `.todo/704`); the
+sentence above about which producer answers a `java.lang.String` still holds, and is why the
+byte-reader detour stayed.
+
+## Costs and what is still not constant
+- **`--no-gc` is outside this invariant, by design** (`.todo/813`, `.kb/no-gc-scalar-wasm.md`):
+  its `length` / `char` / `subseq` are O(n) scans over the `[len][bytes]` block
+  (`__strlen_cp` / `__char_at` / `__byte_offset`, emitted only when the operators are
+  used) -- code-point-correct like the other backends, but with no cursor and no
+  breakpoint table, so a random index costs its distance from the string start. A
+  left-to-right scan is still linear; a hot loop over a long wide string belongs on a
+  backend with the cursor.
+- WASM: **12 bytes per string** plus the bigger helper bodies (a real program carries a few
+  hundred extra bytes at either
+  `--optimize` level); `subseq`/`replace`/`position` needed no special-casing, and `search`
+  none for the index (what it boxes per position: `.kb/string-search-runtime.md`).
+- **WASM, a multi-byte string indexed randomly far from its cursor**: O(min(i, |i - ci|)).
+  The fix if it matters is a stride index on the same struct, NOT walking from zero.
+- **JVM, a surrogate-bearing string** costs the walk from its nearest breakpoint, at most 31
+  characters -- a constant, not the index. A WASM-style cursor cannot hang off a
+  `java.lang.String`, which is why the table lives beside it instead of in it.
+- **JVM, more than two HOT wide strings interleaved** still thrash: the memory holds two, and it
+  now keeps the two LONGEST rather than the two most recent (the assumption above). Widen the slot
+  count, with a per-slot hit count, before anything more clever.
+- **JVM, retention**: the two pairs hold up to four strings alive that the program might otherwise
+  have dropped. They are objects the program allocated itself, and the count is fixed; a
+  `WeakReference` slot would remove even that, at one `get()` per index on the hottest path.
+
+## Pinning tests
+No pin reads a clock. **The wall-clock ratio pins were removed 2026-10-23**: the ci-spec
+`SCAN-FLAT` / `LENGTH-FLAT` / `CV-SCAN-FLAT` tokens and the JUnit `assertScanIsFlat` family
+bounded the whole-string half by `500 + 6 *` the chunked half in ms -- on a loaded CI runner
+a ~500 ms absolute budget, the shape that failed CI 22 times in the read-sequence twin
+(`.kb/character-sequence-io.md`). What replaced them is protocol state: the JVM's memory
+slots and call shape, and on WASM a wasmtime FUEL budget -- an instruction count, the same
+on every machine, which sees a per-character walk (it cannot see the length of one
+`array.copy`, which no regression here hides behind).
+- ci-spec `character-vector-index-reads-the-element`,
+  `character-index-is-not-linear-in-the-index` (all four backends): CORRECTNESS --
+  forward/backward/jumping orders over one mixed ASCII / 2-byte / 3-byte / astral string,
+  and a scan of 131,072 characters as ONE string reading what 1,024-character chunks read.
+- ci-spec `character-index-into-a-string-holding-a-surrogate-pair` (all four backends):
+  CORRECTNESS only over a string with an astral character in every 16 -- the lengths, three
+  indexes, and that a walk of the long string reads exactly what 128 walks of the short one do.
+  Built through `rontolisp:octets-to-string` so the JVM half is an immutable string rather than a
+  character vector. **No timing token**: a verdict derived from `get-internal-real-time` is a
+  machine-speed value inside a file whose contract is exact strings, and a flake in it fails the
+  run carrying every other case's evidence. Sizing the scan so a quadratic implementation could
+  not finish was priced and rejected -- the driver's ceiling is a fixed
+  `CiSpecE2eTest.EXEC_TIMEOUT_SECONDS = 300` per invocation, so at 2^20 characters (the smallest
+  size whose n^2 exceeds it, and then only 3.7x) detection is a property of the RUNNER's speed
+  rather than of the code, and a timeout names the command, i.e. a backend and not a case.
+  The cost belongs in the per-backend pins below.
+- `JvmLispCompilerTest.compileAStringIndexRemembersTheLongestStringsItWalked`: drives
+  `_cpidx` on the compiled class and reads its slots -- a surrogate-bearing string's
+  breakpoint table is right at every breakpoint and is the SAME array after two shorter wide
+  strings were indexed; a non-LATIN1 flat string stays in `_cpsimple0/1` after two shorter
+  flat ones (the tokenizer.json mechanism in miniature). ASCII / Latin-1 needs no memory.
+  `#compileACharacterVectorIndexAgreesAcrossTheFourSpellings`: a `(char s i)` site is one
+  call of `_charRef`'s operator wrapper and no `_strv`, and `_charRef` reads a vector
+  through `_rmGet`.
+- `LispEvaluatorTest.evalSubseqDoesNotRenderTheWholeStringItCutsFrom` (an ALLOCATION budget:
+  64 one-character cuts out of 1,048,576 characters under 4 MB, where rendering allocated
+  67 MB), `#evalSubseqOfAStringIsByCodePointAndFollowsAView`.
+- `WasmLispCompilerIntegrationTest.aCharacterIndexAndALengthDoNotDecodeFromTheStartOfTheString`
+  (ASCII, Hiragana and an astral character in every 16, made a `TYPE_STRING` through
+  `octets-to-string`: one scan testing `(length s)` at every step, of 131,072 characters, and
+  20,000 lengths under 600 M fuel; measured 2026-10-25 at 166 / 313 / 201 M, and with the count
+  kept only in the cursor the Hiragana and astral legs exhaust the budget. Until then the
+  string came from `concatenate`, a character vector, so the pin measured the element path and
+  not the cursor),
+  `#aCharacterVectorIndexAgreesAcrossTheFourSpellings` (a 65,536-character buffer scanned
+  under 200 M; 32.5 M measured). **The COMPONENT leg has no cost
+  pin of its own, and does not need one -- but that is an inference, not a measurement**: the
+  cursor lives in `TYPE_STRING` in the CORE module, which the component wraps unchanged, and only
+  the I/O adapter and the entropy/clock source differ between the two legs. If the string runtime
+  ever moves out of the shared core module, or the component grows a string representation of its
+  own, this sentence is the notice that a pin went dark with it.
+
+Related: `.kb/characters-code-points.md`, `.kb/wasm-gc-strings.md`,
+`.kb/length-runtime.md`, `.kb/string-write-runtime.md`.

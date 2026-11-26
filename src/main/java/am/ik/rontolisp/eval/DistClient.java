@@ -1,0 +1,694 @@
+package am.ik.rontolisp.eval;
+
+import java.io.IOException;
+import java.net.URI;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.InvalidPathException;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
+import java.util.stream.Stream;
+
+import am.ik.artifact.Archives;
+import am.ik.artifact.ArtifactCache;
+import am.ik.artifact.AtomicInstall;
+import am.ik.artifact.Checksum;
+import am.ik.artifact.Downloader;
+import org.jspecify.annotations.Nullable;
+
+/**
+ * A limited, API-compatible subset of Quicklisp behind {@code ql:quickload}. Not a port:
+ * it downloads a system (and its transitive dependencies) from one or more <em>real</em>
+ * Quicklisp-format distributions into a local cache, extracts the release tarballs, and
+ * then hands the extracted {@code .asd} directories to the {@link AsdfSystems} loader --
+ * so {@code ql:quickload} is exactly {@code asdf:load-system} with an auto-download step
+ * in front of it.
+ *
+ * <p>
+ * A <em>dist</em> is the Quicklisp dist metadata format, which more than one distribution
+ * speaks: {@code quicklisp.txt} / {@code ultralisp.txt} (the distinfo) points at
+ * {@code systems.txt} (each line {@code project system-file system-name dep...}, giving
+ * dependency resolution) and {@code releases.txt} (each line
+ * {@code project url size md5 sha1 prefix file...}, giving the tarball URL and its
+ * top-level directory). Quicklisp is installed by default;
+ * <a href= "https://ultralisp.org/">Ultralisp</a> and any other Quicklisp-format
+ * distribution are opt-in, through {@code ql-dist:install-dist} (the CLI spells it
+ * {@code --dist}). The dists are searched IN ORDER and the first one that lists a system
+ * name provides it, per system -- so a dependency the earlier dist does not have is still
+ * resolved by a later one. A dist's indexes are downloaded only when it is actually
+ * consulted, so installing a second dist costs nothing until the first one comes up
+ * short.
+ *
+ * <p>
+ * Each dist caches its indexes and its extracted sources under its own directory
+ * ({@code ~/.rontolisp/<dist>/}; the base is overridden with {@code RONTOLISP_DIST_HOME},
+ * and the quicklisp dist additionally with the older {@code RONTOLISP_QUICKLISP_HOME}),
+ * so a second {@code quickload} of the same system does no network I/O.
+ * {@code ql:update-dist} drops a dist's cached indexes so the next resolution sees the
+ * current release of every project -- which is what a fast-moving dist like Ultralisp
+ * (rebuilt every few minutes) needs.
+ *
+ * <p>
+ * Transport, verification, extraction and the atomic install are the shared artifact
+ * layer's ({@link ArtifactCache}, {@link Archives}, {@link AtomicInstall}); a release
+ * archive is checked against the size and MD5 its {@code releases.txt} line publishes
+ * before anything is extracted. The {@link Downloader} is injectable so tests can serve
+ * an in-memory dist without touching the network. Because the download happens at
+ * interpret time or compile time (Java-side), a compiled program has the sources spliced
+ * in and never fetches at runtime -- the WASM {@code fetch} limitation does not apply.
+ */
+public final class DistClient {
+
+	/** The name of the Quicklisp dist, installed by default. */
+	public static final String QUICKLISP = "quicklisp";
+
+	/** The name of the Ultralisp dist ({@code https://ultralisp.org/}), opt-in. */
+	public static final String ULTRALISP = "ultralisp";
+
+	/**
+	 * The dists that have a name of their own: the canonical distinfo URL per name. Any
+	 * other Quicklisp-format distribution is installed by its distinfo URL.
+	 */
+	private static final Map<String, String> KNOWN_DISTS = Map.of(//
+			QUICKLISP, "https://beta.quicklisp.org/dist/quicklisp.txt", //
+			ULTRALISP, "https://dist.ultralisp.org/ultralisp.txt");
+
+	/**
+	 * The hosts of the known dists, so the URL a user copies from the distribution's own
+	 * front page ({@code http://dist.ultralisp.org/}, which serves the distinfo directly)
+	 * shares the cache directory -- and the identity -- of the named spelling.
+	 */
+	private static final Map<String, String> KNOWN_HOSTS = Map.of(//
+			"beta.quicklisp.org", QUICKLISP, //
+			"www.quicklisp.org", QUICKLISP, //
+			"quicklisp.org", QUICKLISP, //
+			"dist.ultralisp.org", ULTRALISP, //
+			"ultralisp.org", ULTRALISP);
+
+	/**
+	 * A {@code systems.txt} entry: the release project that provides the system and the
+	 * names of the systems it depends on.
+	 */
+	private record SystemEntry(String project, List<String> deps) {
+	}
+
+	/**
+	 * A {@code releases.txt} entry: the tarball URL, its published size and MD5 (kept as
+	 * written, checked when the release is downloaded), the archive's top-level directory
+	 * name (the extraction prefix) and the {@code .asd} files the index attributes to the
+	 * release, as paths relative to that directory ({@code alexandria.asd},
+	 * {@code src/com.inuoe.jzon.asd}).
+	 */
+	private record ReleaseEntry(String url, String size, String md5, String prefix, List<String> asdFiles) {
+	}
+
+	/**
+	 * One installed distribution: its name, the distinfo URL it bootstraps from, its
+	 * cache directory and its parsed indexes (loaded lazily, on the first lookup that
+	 * reaches this dist).
+	 */
+	private static final class Dist {
+
+		private final String name;
+
+		private final String distinfoUrl;
+
+		private final Path home;
+
+		@Nullable private Map<String, SystemEntry> systems;
+
+		@Nullable private Map<String, ReleaseEntry> releases;
+
+		private Dist(String name, String distinfoUrl, Path home) {
+			this.name = name;
+			this.distinfoUrl = distinfoUrl;
+			this.home = home;
+		}
+
+	}
+
+	/** Where a system name was found: the dist and the release project providing it. */
+	private record Located(Dist dist, SystemEntry entry) {
+	}
+
+	private final ArtifactCache cache;
+
+	private final Map<String, Path> homeOverrides;
+
+	/** The installed dists, in search order. */
+	private final List<Dist> dists = new ArrayList<>();
+
+	/**
+	 * Creates a client rooted at {@code base} (one subdirectory per dist), downloading
+	 * through {@code downloader}, with only the Quicklisp dist installed.
+	 * @param base the cache base directory
+	 * @param downloader the byte fetcher
+	 */
+	public DistClient(Path base, Downloader downloader) {
+		this(new ArtifactCache(base, downloader), List.of(), Map.of());
+	}
+
+	/**
+	 * Creates a client with additional dists installed beside Quicklisp.
+	 * @param base the cache base directory
+	 * @param downloader the byte fetcher
+	 * @param distSpecs dist names or distinfo URLs to install, in search order
+	 */
+	public DistClient(Path base, Downloader downloader, List<String> distSpecs) {
+		this(new ArtifactCache(base, downloader), distSpecs, Map.of());
+	}
+
+	private DistClient(ArtifactCache cache, List<String> distSpecs, Map<String, Path> homeOverrides) {
+		this.cache = cache;
+		this.homeOverrides = Map.copyOf(homeOverrides);
+		// Quicklisp is installed first unless the caller named it itself -- naming it is
+		// how the search order is changed, since the first dist listing a system wins.
+		boolean namesQuicklisp = distSpecs.stream().anyMatch(spec -> QUICKLISP.equals(distNameOrNull(spec)));
+		if (!namesQuicklisp) {
+			installDist(QUICKLISP);
+		}
+		for (String spec : distSpecs) {
+			installDist(spec);
+		}
+	}
+
+	/**
+	 * Creates the default client over {@link ArtifactCache#createDefault()} (cache under
+	 * {@code ~/.rontolisp/} or {@code RONTOLISP_DIST_HOME}, the network downloader), with
+	 * only the Quicklisp dist installed.
+	 * @return the default client
+	 */
+	public static DistClient createDefault() {
+		return createDefault(List.of());
+	}
+
+	/**
+	 * Creates the default client with additional dists installed (the CLI {@code --dist}
+	 * option / the {@code RONTOLISP_DISTS} environment variable).
+	 * @param distSpecs dist names or distinfo URLs to install, in search order
+	 * @return the default client
+	 */
+	public static DistClient createDefault(List<String> distSpecs) {
+		// The environment overrides are read HERE and not in homeFor: a client built
+		// with an explicit base (every test) must not pick up the developer's cache.
+		Map<String, Path> overrides = new HashMap<>();
+		String quicklispHome = System.getenv("RONTOLISP_QUICKLISP_HOME");
+		if (quicklispHome != null && !quicklispHome.isBlank()) {
+			overrides.put(QUICKLISP, Path.of(quicklispHome));
+		}
+		return new DistClient(ArtifactCache.createDefault(), distSpecs, overrides);
+	}
+
+	/**
+	 * Installs a distribution: a known dist name ({@code quicklisp}, {@code ultralisp})
+	 * or the URL of a Quicklisp-format distinfo. An already-installed dist keeps its
+	 * position in the search order (the call is idempotent); a new one is appended, so it
+	 * is consulted only for a system the dists before it do not provide. Nothing is
+	 * downloaded here -- the dist's indexes are fetched when a lookup first reaches it.
+	 * @param spec a dist name or a distinfo URL
+	 * @return the name of the installed dist
+	 * @throws IllegalArgumentException if the spec is neither a known name nor a URL
+	 */
+	public synchronized String installDist(String spec) {
+		String name = distName(spec);
+		for (Dist installed : this.dists) {
+			if (installed.name.equals(name)) {
+				return installed.name;
+			}
+		}
+		this.dists.add(new Dist(name, distinfoUrl(spec), homeFor(name)));
+		return name;
+	}
+
+	/**
+	 * Drops a dist's cached indexes, so the next {@code quickload} re-reads the
+	 * distribution's current {@code systems.txt} / {@code releases.txt} and sees the
+	 * releases published since the cache was written. Already-extracted sources are kept
+	 * (a release directory is named after its version, so a newer release extracts beside
+	 * the old one).
+	 * @param name the dist name
+	 * @throws IOException if the dist is not installed or its cache cannot be cleared
+	 */
+	public synchronized void updateDist(String name) throws IOException {
+		Dist dist = findDist(name);
+		if (dist == null) {
+			throw new IOException("no dist named '" + name + "' is installed (installed: "
+					+ String.join(", ", installedNames()) + ")");
+		}
+		Files.deleteIfExists(dist.home.resolve("systems.txt"));
+		Files.deleteIfExists(dist.home.resolve("releases.txt"));
+		dist.systems = null;
+		dist.releases = null;
+	}
+
+	/**
+	 * Returns the installed dist names, in search order.
+	 * @return the installed dist names
+	 */
+	public synchronized List<String> installedNames() {
+		return this.dists.stream().map(dist -> dist.name).toList();
+	}
+
+	/**
+	 * Ensures the named system and its transitive dependencies are downloaded and
+	 * extracted, and returns the directories that contain {@code .asd} files -- to be
+	 * added to the {@code asdf:load-system} search path so the actual loading proceeds
+	 * through the {@link AsdfSystems} subset.
+	 * @param systemName the system to make available
+	 * @return the {@code .asd} directories (absolute paths), in a stable order
+	 * @throws IOException if the dist metadata or a tarball cannot be fetched/extracted
+	 */
+	public synchronized List<String> ensureAvailable(String systemName) throws IOException {
+		String lookupName = systemName;
+		if (locate(lookupName) == null) {
+			// A secondary system (NAME/SUB) no dist index lists individually lives in
+			// NAME.asd by ASDF's naming rule, so the primary's release is the one to
+			// download; AsdfSystems.locate resolves the slash name against that same
+			// file, and reports loudly if it does not define the secondary system after
+			// all. This is how "tiny-routes/lite" -- a system the replacement .asd adds
+			// -- downloads the tiny-routes release.
+			int slash = lookupName.indexOf('/');
+			String primary = slash > 0 ? lookupName.substring(0, slash) : null;
+			if (primary == null || locate(primary) == null) {
+				throw new IOException("ql:quickload: system '" + systemName + "' is not in the installed dists ("
+						+ String.join(", ", installedNames()) + ")");
+			}
+			lookupName = primary;
+		}
+		LinkedHashMap<String, ProjectRef> projects = new LinkedHashMap<>();
+		collectProjects(lookupName, projects, new HashSet<>(), true);
+		List<String> searchDirs = new ArrayList<>();
+		Set<String> seen = new HashSet<>();
+		for (ProjectRef ref : projects.values()) {
+			Extracted extracted = ensureProject(ref);
+			collectAsdDirs(extracted.root(), extracted.asdFiles(), searchDirs, seen);
+		}
+		return searchDirs;
+	}
+
+	/** A release project to extract, and the dist it comes from. */
+	private record ProjectRef(Dist dist, String project) {
+	}
+
+	/**
+	 * An extracted release: its root directory and the {@code .asd} files its dist index
+	 * attributes to it, relative to that root.
+	 */
+	private record Extracted(Path root, List<String> asdFiles) {
+	}
+
+	/**
+	 * Returns where {@code systemName} is provided: the first installed dist whose
+	 * {@code systems.txt} lists it, or {@code null} if no dist does. The dists ahead of
+	 * the hit have their indexes loaded (once, cached); the ones behind it are never
+	 * touched.
+	 */
+	@Nullable private Located locate(String systemName) throws IOException {
+		for (Dist dist : this.dists) {
+			SystemEntry entry = systems(dist).get(systemName);
+			if (entry != null) {
+				return new Located(dist, entry);
+			}
+		}
+		return null;
+	}
+
+	/**
+	 * Walks the dependency graph from {@code system} (via each dist's
+	 * {@code systems.txt}), adding each reachable release project to {@code projects},
+	 * keyed by dist and project so the same project name in two dists stays two
+	 * downloads. Every name is resolved across ALL installed dists independently, so a
+	 * dependency the requested system's own dist lacks is taken from a later one. A
+	 * dependency that is in no dist is skipped (it is either built into Common Lisp or
+	 * genuinely unavailable -- the {@code asdf} loader reports it later if it is really
+	 * needed); the originally requested system must be present, so an unknown one there
+	 * is an error.
+	 */
+	private void collectProjects(String system, LinkedHashMap<String, ProjectRef> projects, Set<String> visited,
+			boolean required) throws IOException {
+		if (!visited.add(system)) {
+			return;
+		}
+		Located located = locate(system);
+		if (located == null) {
+			if (required) {
+				throw new IOException("ql:quickload: system '" + system + "' is not in the installed dists ("
+						+ String.join(", ", installedNames()) + ")");
+			}
+			return;
+		}
+		for (String dep : located.entry().deps()) {
+			collectProjects(dep, projects, visited, false);
+		}
+		String project = located.entry().project();
+		projects.putIfAbsent(located.dist().name + "/" + project, new ProjectRef(located.dist(), project));
+	}
+
+	/**
+	 * Ensures a release project's tarball is downloaded and extracted under
+	 * {@code <dist home>/software/<prefix>/}, and returns that directory together with
+	 * the {@code .asd} files the index attributes to the release. An already-extracted
+	 * project is reused (no network I/O).
+	 * <p>
+	 * The directory's existence IS the "installed" mark, so the archive is verified
+	 * against the size and MD5 its index line publishes before anything is extracted, and
+	 * installed through {@link AtomicInstall#installDirectory}: extracted into a private
+	 * staging directory and the finished prefix directory renamed into place. A refused
+	 * download or a failed extraction leaves nothing behind, and the next quickload
+	 * downloads again. Another process (or client) that installed the same release in the
+	 * meantime wins: its tree is complete by the same argument, so it is used.
+	 */
+	private Extracted ensureProject(ProjectRef ref) throws IOException {
+		ReleaseEntry release = releases(ref.dist()).get(ref.project());
+		if (release == null) {
+			throw new IOException("ql:quickload: no release found for project '" + ref.project() + "' in dist '"
+					+ ref.dist().name + "'");
+		}
+		Path root = ref.dist().home.resolve("software").resolve(release.prefix());
+		if (Files.isDirectory(root)) {
+			return new Extracted(root, release.asdFiles());
+		}
+		long size;
+		Checksum md5;
+		try {
+			size = Long.parseLong(release.size());
+			md5 = Checksum.md5(release.md5());
+		}
+		catch (IllegalArgumentException ex) {
+			throw new IOException(
+					"ql:quickload: the index line of release '" + ref.project() + "' in dist '" + ref.dist().name
+							+ "' has no valid size and MD5 ('" + release.size() + "', '" + release.md5() + "')",
+					ex);
+		}
+		byte[] tarGz = quickloadStep(() -> this.cache.download(release.url(), size, md5));
+		AtomicInstall.installDirectory(root, staging -> {
+			quickloadStep(() -> {
+				Archives.extractTarGz(tarGz, staging);
+				return staging;
+			});
+			Path extracted = staging.resolve(release.prefix());
+			if (!Files.isDirectory(extracted)) {
+				throw new IOException("ql:quickload: archive for '" + ref.project()
+						+ "' did not contain the expected directory '" + release.prefix() + "'");
+			}
+			return extracted;
+		});
+		return new Extracted(root, release.asdFiles());
+	}
+
+	/** A step through the shared artifact layer, whose messages name no caller. */
+	@FunctionalInterface
+	private interface IoStep<T> {
+
+		T run() throws IOException;
+
+	}
+
+	/**
+	 * Runs {@code step}, prefixing a failure's message with {@code ql:quickload:} so the
+	 * error names the operation the user wrote.
+	 */
+	private static <T> T quickloadStep(IoStep<T> step) throws IOException {
+		try {
+			return step.run();
+		}
+		catch (IOException ex) {
+			throw new IOException("ql:quickload: " + ex.getMessage(), ex);
+		}
+	}
+
+	private byte[] fetch(String url) throws IOException {
+		return quickloadStep(() -> this.cache.download(url));
+	}
+
+	private Map<String, SystemEntry> systems(Dist dist) throws IOException {
+		ensureIndex(dist);
+		return java.util.Objects.requireNonNull(dist.systems);
+	}
+
+	private Map<String, ReleaseEntry> releases(Dist dist) throws IOException {
+		ensureIndex(dist);
+		return java.util.Objects.requireNonNull(dist.releases);
+	}
+
+	/**
+	 * Ensures a dist's indexes ({@code systems.txt}, {@code releases.txt}) are cached and
+	 * parsed. On a cache miss, the distinfo is fetched to discover the index URLs, which
+	 * are then downloaded and written to the cache.
+	 */
+	private void ensureIndex(Dist dist) throws IOException {
+		if (dist.systems != null) {
+			return;
+		}
+		Files.createDirectories(dist.home);
+		Path systemsFile = dist.home.resolve("systems.txt");
+		Path releasesFile = dist.home.resolve("releases.txt");
+		if (!Files.isRegularFile(systemsFile) || !Files.isRegularFile(releasesFile)) {
+			String distinfo = new String(fetch(dist.distinfoUrl), StandardCharsets.UTF_8);
+			String systemsUrl = distinfoValue(distinfo, "system-index-url");
+			String releasesUrl = distinfoValue(distinfo, "release-index-url");
+			byte[] systemsBytes = fetch(systemsUrl);
+			byte[] releasesBytes = fetch(releasesUrl);
+			// releases.txt first: a systems.txt that exists then implies a complete
+			// releases.txt beside it, from this fetch or a later one.
+			AtomicInstall.writeFile(releasesFile, releasesBytes);
+			AtomicInstall.writeFile(systemsFile, systemsBytes);
+		}
+		dist.systems = parseSystems(Files.readString(systemsFile, StandardCharsets.UTF_8));
+		dist.releases = parseReleases(Files.readString(releasesFile, StandardCharsets.UTF_8));
+	}
+
+	@Nullable private Dist findDist(String name) {
+		for (Dist dist : this.dists) {
+			if (dist.name.equals(name)) {
+				return dist;
+			}
+		}
+		return null;
+	}
+
+	/**
+	 * Whether a source file belongs to a release some installed dist extracted -- a
+	 * dependency the program fetched, rather than source of its own. The compile path
+	 * prints such a file's warnings and does not count them toward
+	 * {@code --warnings-as-errors}, the way a build tool caps a registry dependency's
+	 * lints: the program's author cannot fix them.
+	 * @param file a source file path, as the program's reads name it
+	 * @return true when it lies under an installed dist's {@code software/} directory
+	 */
+	public synchronized boolean installedSource(String file) {
+		Path path;
+		try {
+			path = Path.of(file).toAbsolutePath().normalize();
+		}
+		catch (InvalidPathException ex) {
+			return false;
+		}
+		for (Dist dist : this.dists) {
+			if (path.startsWith(dist.home.resolve("software").toAbsolutePath().normalize())) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private Path homeFor(String name) {
+		Path override = this.homeOverrides.get(name);
+		return override != null ? override : this.cache.area(name);
+	}
+
+	/**
+	 * The name a dist spec installs under: a known name as written, a URL by its host
+	 * when the host is a known distribution's, and otherwise a directory-safe slug of the
+	 * URL (host plus path) -- so an unknown distribution still gets a stable cache
+	 * directory without a distinfo round trip to learn the name it calls itself.
+	 */
+	private static String distName(String spec) {
+		String name = distNameOrNull(spec);
+		if (name == null) {
+			throw new IllegalArgumentException("unknown dist '" + spec + "': give a known dist name ("
+					+ String.join(", ", KNOWN_DISTS.keySet().stream().sorted().toList())
+					+ ") or the URL of a Quicklisp-format distinfo");
+		}
+		return name;
+	}
+
+	@Nullable private static String distNameOrNull(String spec) {
+		String trimmed = spec.trim();
+		String lower = trimmed.toLowerCase(Locale.ROOT);
+		if (KNOWN_DISTS.containsKey(lower)) {
+			return lower;
+		}
+		if (!lower.startsWith("http://") && !lower.startsWith("https://")) {
+			return null;
+		}
+		URI uri;
+		try {
+			uri = URI.create(trimmed);
+		}
+		catch (IllegalArgumentException _) {
+			// Not a URL after all: reported as an unknown spec by distName, rather than
+			// as a URI syntax error from inside the constructor's order check.
+			return null;
+		}
+		String host = uri.getHost() == null ? "" : uri.getHost().toLowerCase(Locale.ROOT);
+		String known = KNOWN_HOSTS.get(host);
+		if (known != null) {
+			return known;
+		}
+		String path = uri.getPath() == null ? "" : uri.getPath();
+		String slug = (host + path).toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9._-]+", "-").replaceAll("^-+|-+$", "");
+		return slug.isEmpty() ? "dist" : slug;
+	}
+
+	/**
+	 * The distinfo URL a spec bootstraps from: a known dist's canonical URL, whether it
+	 * was named or given as one of its own URLs (the front-page {@code
+	 * http://dist.ultralisp.org/} redirects to the same distinfo, and one dist must have
+	 * one URL); any other spec is the URL as written.
+	 */
+	private static String distinfoUrl(String spec) {
+		String trimmed = spec.trim();
+		String known = KNOWN_DISTS.get(distNameOrNull(trimmed));
+		return known != null ? known : trimmed;
+	}
+
+	private static String distinfoValue(String distinfo, String key) throws IOException {
+		for (String line : distinfo.split("\n")) {
+			int colon = line.indexOf(':');
+			if (colon > 0 && line.substring(0, colon).trim().equals(key)) {
+				return line.substring(colon + 1).trim();
+			}
+		}
+		throw new IOException("ql:quickload: distinfo is missing '" + key + "'");
+	}
+
+	/**
+	 * Parses {@code systems.txt}: each non-comment line is
+	 * {@code project system-file system-name dep...}, keyed by system name.
+	 */
+	private static Map<String, SystemEntry> parseSystems(String text) {
+		Map<String, SystemEntry> index = new HashMap<>();
+		for (String line : text.split("\n")) {
+			if (line.isBlank() || line.charAt(0) == '#') {
+				continue;
+			}
+			String[] parts = line.trim().split("\\s+");
+			if (parts.length < 3) {
+				continue;
+			}
+			List<String> deps = parts.length > 3 ? List.of(parts).subList(3, parts.length) : List.of();
+			index.put(parts[2], new SystemEntry(parts[0], List.copyOf(deps)));
+		}
+		return index;
+	}
+
+	/**
+	 * Parses {@code releases.txt}: each non-comment line is
+	 * {@code project url size md5 sha1 prefix file...}, keyed by project. The trailing
+	 * {@code file...} column names the release's {@code .asd} files and is what decides
+	 * its search-path contribution ({@link #collectAsdDirs}).
+	 * <p>
+	 * The {@code sha1} column is dropped: it is a CONTENT hash, not the archive's, and
+	 * not one function of the archive across dists -- Quicklisp's is the SHA-1 of every
+	 * regular file's bytes concatenated in sorted path order, Ultralisp's matches no such
+	 * reconstruction (measured 2026-10-08, {@code .kb/dists.md}). The archive's size and
+	 * MD5 are what both dists publish correctly, so those are what a download is checked
+	 * against.
+	 */
+	private static Map<String, ReleaseEntry> parseReleases(String text) {
+		Map<String, ReleaseEntry> index = new HashMap<>();
+		for (String line : text.split("\n")) {
+			if (line.isBlank() || line.charAt(0) == '#') {
+				continue;
+			}
+			String[] parts = line.trim().split("\\s+");
+			if (parts.length < 6) {
+				continue;
+			}
+			List<String> files = parts.length > 6 ? List.copyOf(List.of(parts).subList(6, parts.length)) : List.of();
+			index.put(parts[0], new ReleaseEntry(parts[1], parts[2], parts[3], parts[5], files));
+		}
+		return index;
+	}
+
+	/**
+	 * Adds the directories a release contributes to the search path to {@code out}
+	 * (deduplicated via {@code seen}): the ones holding the {@code .asd} files its dist
+	 * index NAMES ({@code releases.txt}'s trailing {@code file...} column,
+	 * {@code indexFiles}), which is exactly the set Quicklisp itself registers for the
+	 * release.
+	 * <p>
+	 * Walking the whole release instead would put a vendored snapshot of ANOTHER library
+	 * on the path -- iterate's release carries {@code ext/alexandria/alexandria.asd},
+	 * cffi's {@code uffi-compat/uffi.asd} -- where it competes with that library's own
+	 * release for the name, and the winner is whichever release the program happened to
+	 * quickload first. No dist index attributes those files to the release, so they are
+	 * not candidates at all.
+	 * <p>
+	 * The contribution stays per DIRECTORY, not per file, because that is what
+	 * {@link AsdfSystems#locate} consumes (it asks each directory for {@code NAME.asd}).
+	 * A release's own extra {@code .asd} beside a named one is therefore still reachable
+	 * -- cl-sqlite's {@code sqlite-tests.asd}, trivia's {@code trivia.benchmark.asd} --
+	 * which is the behavior an unindexed secondary system relies on.
+	 * <p>
+	 * The whole-release walk remains the FALLBACK for a release whose index names no
+	 * {@code .asd} file that exists: contributing nothing would make the system
+	 * unloadable, and a dist is not required to write the column.
+	 */
+	private static void collectAsdDirs(Path root, List<String> indexFiles, List<String> out, Set<String> seen)
+			throws IOException {
+		List<Path> asdFiles = new ArrayList<>();
+		for (String file : indexFiles) {
+			if (!file.endsWith(".asd")) {
+				continue;
+			}
+			// Confined to the release, like Archives.safeResolve.
+			Path candidate = root.resolve(file).normalize();
+			if (candidate.startsWith(root) && Files.isRegularFile(candidate)) {
+				asdFiles.add(candidate);
+			}
+		}
+		if (asdFiles.isEmpty()) {
+			try (Stream<Path> walk = Files.walk(root)) {
+				asdFiles = walk.filter(p -> p.getFileName().toString().endsWith(".asd") && Files.isRegularFile(p))
+					.toList();
+			}
+		}
+		addAsdDirs(asdFiles, out, seen);
+	}
+
+	/**
+	 * Appends the directories holding {@code asdFiles} to {@code out} (deduplicated via
+	 * {@code seen}).
+	 * <p>
+	 * The caller's list comes from {@link Files#walk}, whose order is the host's
+	 * directory order -- a different search path on two machines from one release, hence
+	 * a different {@code .asd} chosen when a release defines one system name twice, hence
+	 * different emitted bytes for one program. Filesystem order is not an order
+	 * ({@code .kb/emitted-output-determinism.md}), so the directories are SORTED here.
+	 * Sorting also puts a release's top-level {@code .asd} ahead of any nested under it,
+	 * since a parent path is a prefix of every path below it.
+	 */
+	static void addAsdDirs(List<Path> asdFiles, List<String> out, Set<String> seen) {
+		asdFiles.stream()
+			.map(Path::getParent)
+			.filter(Objects::nonNull)
+			.map(dir -> dir.toAbsolutePath().normalize().toString())
+			.sorted()
+			.forEachOrdered(dir -> {
+				if (seen.add(dir)) {
+					out.add(dir);
+				}
+			});
+	}
+
+}

@@ -1,0 +1,814 @@
+package am.ik.rontolisp.codegen.jvm;
+
+import java.io.ByteArrayOutputStream;
+import java.lang.reflect.Method;
+import java.net.URL;
+import java.net.URLClassLoader;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.List;
+
+import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.compiler.OptimizeLevel;
+import am.ik.rontolisp.eval.VecLibrary;
+import am.ik.rontolisp.reader.LispReader;
+import am.ik.rontolisp.testsupport.CliStackExtension;
+import am.ik.rontolisp.testsupport.ThreadStdio;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.api.parallel.Execution;
+import org.junit.jupiter.api.parallel.ExecutionMode;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+/**
+ * The {@code --simd} JVM acceleration path: the six vectorizable {@code vec:} kernels
+ * ({@code add}/{@code sub}/{@code mul}/{@code scale}/{@code dot}/{@code sum}) are routed
+ * to the {@link JvmSimdVectorTemplate jdk.incubator.vector bridge} shipped beside the
+ * class, over the packed {@code double[]} representation instead of the scalar
+ * {@code vec.lisp} reference, and must produce byte-identical output. The bridge loads
+ * in-process from beside the class; the Surefire config adds
+ * {@code --add-modules jdk.incubator.vector} so the incubator module is in the test JVM's
+ * module graph. Both a small-array (scalar-tail) and a large-array (Vector API loop) case
+ * are exercised, plus the opt-in gating (no bridge unless {@code --simd} AND the simd
+ * package is used) and interop with the ordinary packed-array surface.
+ */
+@Execution(ExecutionMode.CONCURRENT)
+@ExtendWith(CliStackExtension.class)
+class JvmSimdAccelCompilerTest {
+
+	@TempDir
+	Path tempDir;
+
+	// Compiles into the class path root run() loads from: the bridge travels beside the
+	// class as its own file.
+	private byte[] compile(String lispCode, boolean accel) {
+		List<LispVal> program = VecLibrary.process(LispReader.readAllFromString(lispCode));
+		JvmLispCompiler compiler = JvmLispCompiler.builder()
+			.className("Test")
+			.optimize(OptimizeLevel.NONE)
+			.simd(accel)
+			.build();
+		byte[] classBytes = compiler.compile(program);
+		TravellingClassFiles.write(compiler, this.tempDir);
+		return classBytes;
+	}
+
+	private String run(byte[] classBytes) throws Exception {
+		Path classFile = tempDir.resolve("Test.class");
+		Files.write(classFile, classBytes);
+		try (URLClassLoader loader = new URLClassLoader(new URL[] { tempDir.toUri().toURL() },
+				ClassLoader.getSystemClassLoader())) {
+			Class<?> clazz = loader.loadClass("Test");
+			Method main = clazz.getMethod("main", String[].class);
+			ByteArrayOutputStream baos = new ByteArrayOutputStream();
+			try (var _ = ThreadStdio.out(baos)) {
+				main.invoke(null, (Object) new String[0]);
+			}
+			return baos.toString().trim();
+		}
+	}
+
+	private String accel(String lispCode) throws Exception {
+		return run(compile(lispCode, true));
+	}
+
+	private String scalar(String lispCode) throws Exception {
+		return run(compile(lispCode, false));
+	}
+
+	/** Asserts the accelerated class prints exactly what the scalar one prints. */
+	private void assertMatchesScalarReference(String lispCode) throws Exception {
+		assertThat(accel(lispCode)).as(lispCode).isEqualTo(scalar(lispCode));
+	}
+
+	@Test
+	void acceleratedKernelsMatchTheScalarReferenceByteForByte() throws Exception {
+		// Small arrays (n < THRESHOLD) exercise the scalar tail of each kernel; the
+		// accelerated output must be identical to the spliced vec.lisp reference,
+		// including the packed-array print format.
+		for (String expr : List.of("(print (vec:add #d(1.0 2.0 3.0) #d(4.0 5.0 6.0)))",
+				"(print (vec:sub #d(10.0 20.0 30.0) #d(1.0 2.0 3.0)))",
+				"(print (vec:mul #d(2.0 3.0 4.0) #d(5.0 6.0 7.0)))", "(print (vec:scale #d(1.0 2.0 3.0) 10.0))",
+				"(print (vec:dot #d(1.0 2.0 3.0) #d(4.0 5.0 6.0)))", "(print (vec:sum #d(1.0 2.0 3.0 4.0 5.0)))",
+				"(print (vec:mean #d(2.0 4.0 6.0)))", "(print (vec:norm #d(3.0 4.0)))")) {
+			assertThat(accel(expr)).as(expr).isEqualTo(scalar(expr));
+		}
+	}
+
+	@Test
+	void theQuotientKernelAndTheOperatorAliasesMatchTheScalarReference() throws Exception {
+		// vec:div is the fourth element-wise kernel; the four CL operator spellings are
+		// its strictly-binary alias family, compiled to the very same bridge methods, so
+		// the accelerated output must still equal the spliced vec.lisp reference.
+		for (String expr : List.of("(print (vec:div #d(8.0 12.0 20.0) #d(2.0 4.0 5.0)))",
+				"(print (vec:+ #d(1.0 2.0 3.0) #d(4.0 5.0 6.0)))", "(print (vec:- #d(10.0 20.0 30.0) #d(1.0 2.0 3.0)))",
+				"(print (vec:* #d(2.0 3.0 4.0) #d(5.0 6.0 7.0)))", "(print (vec:/ #d(8.0 12.0) #d(2.0 4.0)))",
+				"(print (vec:div-into (vec:zeros 3) #d(8.0 12.0 20.0) #d(2.0 4.0 5.0)))",
+				"(print (vec:div #f(8.0 12.0) #f(2.0 4.0)))", "(print (vec:/ #f(8.0 12.0) #f(2.0 4.0)))")) {
+			assertThat(accel(expr)).as(expr).isEqualTo(scalar(expr));
+		}
+		// The vector loop, not just the scalar tail.
+		String big = """
+				(let ((a (vec:arange 200)) (b (vec:ones 200)))
+				  (print (vec:aref (vec:/ a b) 199))
+				  (print (vec:sum (vec:div a b))))
+				""";
+		assertThat(accel(big)).isEqualTo(scalar(big));
+	}
+
+	@Test
+	void acceleratedResultVectorsInteroperateWithThePackedArraySurface() throws Exception {
+		// A bridge result is a plain rank-1 packed double[]: vec:aref / vec:length and
+		// the
+		// downstream vec: kernels consume it identically to a make-array double-float.
+		assertThat(accel("(print (vec:aref (vec:add #d(1.0 2.0 3.0) #d(4.0 5.0 6.0)) 1))")).isEqualTo("7.0");
+		assertThat(accel("(print (vec:length (vec:mul #d(1.0 2.0 3.0) #d(4.0 5.0 6.0))))")).isEqualTo("3");
+		assertThat(accel("(print (vec:sum (vec:add #d(1.0 2.0 3.0) #d(4.0 5.0 6.0))))")).isEqualTo("21.0");
+		assertThat(accel("(print (aref (vec:scale #d(2.0 4.0) 3.0) 1))")).isEqualTo("12.0");
+	}
+
+	@Test
+	void acceleratedLargeArraysMatchTheScalarReferenceOverTheVectorLoop() throws Exception {
+		// n >= THRESHOLD drives the real SPECIES_PREFERRED loop + f64-exact reductions,
+		// so
+		// the vector path stays byte-identical to the left-to-right scalar reference.
+		for (String expr : List.of("(print (vec:sum (vec:arange 1000)))",
+				"(print (vec:dot (vec:arange 1000) (vec:arange 1000)))",
+				"(print (vec:sum (vec:add (vec:arange 1000) (vec:arange 1000))))",
+				"(print (vec:sum (vec:scale (vec:ones 256) 3.0)))")) {
+			assertThat(accel(expr)).as(expr).isEqualTo(scalar(expr));
+		}
+	}
+
+	@Test
+	void acceleratedReductionsComputeTheExpectedValuesOverTheVectorLoop() throws Exception {
+		// sum(0..999) = 999*1000/2 = 499500; dot = sum of i^2 for i in 0..999 =
+		// 999*1000*1999/6 = 332833500 (both f64-exact; the large dot magnitude prints
+		// in scientific form with the FloatText lowercase exponent marker).
+		assertThat(accel("(print (vec:sum (vec:arange 1000)))")).isEqualTo("499500.0");
+		assertThat(accel("(print (vec:dot (vec:arange 1000) (vec:arange 1000)))")).isEqualTo("3.328335e8");
+	}
+
+	@Test
+	void acceleratedResultsAreObservationallyIdenticalToTheScalarReference() throws Exception {
+		// A #f/all-double literal, vec:zeros/ones/arange/from-list and every kernel
+		// result
+		// are the same packed double[] on both paths. Reading
+		// (aref/print/length/to-list),
+		// mutating (vec:aset writes the packed store in place) and the whole surface
+		// must
+		// match the scalar reference byte-for-byte. Each program uses a kernel so the
+		// accelerated build routes through the bridge.
+		for (String expr : List.of(
+				// mutate a kernel result through vec:aref, then read it back and reduce
+				"(let ((v (vec:add #d(1.0 2.0 3.0) #d(4.0 5.0 6.0)))) (setf (vec:aref v 0) 99.0)"
+						+ " (print v) (print (vec:aref v 0)) (print (vec:sum v)))",
+				// arange/from-list build via make-array double-float + aset
+				"(print (vec:to-list (vec:scale (vec:arange 5) 2.0)))",
+				"(print (vec:sum (vec:from-list '(1.0 2.0 3.0 4.0 5.0))))",
+				"(print (vec:mean (vec:from-list '(2.0 4.0 6.0 8.0))))",
+				// length/aref on a bare #f literal
+				"(print (length #d(1.0 2.0 3.0 4.0))) (print (aref #d(5.0 6.0 7.0) 2))",
+				// a large (vector-loop) array, mutated then reduced
+				"(let ((v (vec:arange 1000))) (setf (vec:aref v 0) 5.0) (print (vec:sum v)))")) {
+			assertThat(accel(expr)).as(expr).isEqualTo(scalar(expr));
+		}
+	}
+
+	@Test
+	void generalHeterogeneousArraysAreUnaffectedByTheSimdFlag() throws Exception {
+		// The packed float array is a separate type: a general (non-double-float) array
+		// still accepts heterogeneous stores and prints identically under --simd. The
+		// leading simd kernel turns the bridge on without touching the general array.
+		for (String expr : List.of(
+				"(vec:sum #d(1.0)) (let ((v (make-array 3 :initial-element 0)))"
+						+ " (setf (aref v 1) \"x\") (print v) (print (aref v 1)))",
+				"(vec:sum #d(1.0)) (let ((v (make-array 3 :initial-element 0)))"
+						+ " (setf (aref v 0) 42) (print v))")) {
+			assertThat(accel(expr)).as(expr).isEqualTo(scalar(expr));
+		}
+	}
+
+	@Test
+	void theBridgeIsEmbeddedOnlyUnderTheSimdFlag() {
+		// The opt-in guarantee: default compilation is unchanged (scalar vec.lisp, no
+		// incubator-module dependency, runs on any JRE); the bridge is embedded only
+		// under
+		// --simd, for a program that uses the vec package at all (the always-spliced
+		// mean/norm bodies call sum/dot, so any simd usage pulls it in).
+		assertThat(embedsBridge(compile("(print (vec:sum #d(1.0 2.0 3.0)))", true))).isTrue();
+		assertThat(embedsBridge(compile("(print (vec:length #d(1.0 2.0 3.0)))", true))).isTrue();
+		// Default (no --simd): never embedded, even with an accelerated kernel.
+		assertThat(embedsBridge(compile("(print (vec:sum #d(1.0 2.0 3.0)))", false))).isFalse();
+		// A non-simd program: no bridge even under --simd (nothing to accelerate).
+		assertThat(embedsBridge(compile("(print (+ 1 2))", true))).isFalse();
+	}
+
+	// --- single-float (#f) width-polymorphism -----------------------------------------
+
+	@Test
+	void acceleratedSingleFloatKernelsMatchTheScalarReferenceByteForByte() throws Exception {
+		// #f (single-float, float[]) inputs run the FloatVector kernels; the accelerated
+		// output must be byte-identical to the width-preserving scalar vec.lisp
+		// reference.
+		// Element-wise ops keep the #f width; reductions fold to an f64 scalar. Integer
+		// f32
+		// values are exact, so the vector and scalar paths agree.
+		for (String expr : List.of("(print (vec:add #f(1.0 2.0 3.0) #f(4.0 5.0 6.0)))",
+				"(print (vec:sub #f(10.0 20.0 30.0) #f(1.0 2.0 3.0)))",
+				"(print (vec:mul #f(2.0 3.0 4.0) #f(5.0 6.0 7.0)))", "(print (vec:scale #f(1.0 2.0 3.0) 10.0))",
+				"(print (vec:dot #f(1.0 2.0 3.0) #f(4.0 5.0 6.0)))", "(print (vec:sum #f(1.0 2.0 3.0 4.0 5.0)))",
+				"(print (vec:mean #f(2.0 4.0 6.0)))", "(print (vec:norm #f(3.0 4.0)))")) {
+			assertThat(accel(expr)).as(expr).isEqualTo(scalar(expr));
+		}
+	}
+
+	@Test
+	void acceleratedSingleFloatElementWiseKernelsPreserveTheSingleFloatWidth() throws Exception {
+		// Width preservation (result = input width): a #f element-wise result prints with
+		// the #f prefix on BOTH the accelerated and the scalar path -- it never widens to
+		// #d. This is what makes --simd a pure acceleration of the scalar reference here.
+		for (String expr : List.of("(print (vec:add #f(1.0 2.0 3.0) #f(4.0 5.0 6.0)))",
+				"(print (vec:sub #f(9.0 8.0 7.0) #f(1.0 2.0 3.0)))", "(print (vec:mul #f(2.0 3.0) #f(4.0 5.0)))",
+				"(print (vec:scale #f(2.0 4.0) 3.0))")) {
+			assertThat(accel(expr)).as(expr).startsWith("#f(").isEqualTo(scalar(expr));
+		}
+	}
+
+	@Test
+	void acceleratedSingleFloatResultsInteroperateWithThePackedArraySurface() throws Exception {
+		// A #f bridge result is a plain rank-1 packed float[]: vec:aref / vec:length /
+		// aref and the downstream kernels consume it, widening on read to an f64 scalar.
+		assertThat(accel("(print (vec:aref (vec:add #f(1.0 2.0 3.0) #f(4.0 5.0 6.0)) 1))")).isEqualTo("7.0");
+		assertThat(accel("(print (vec:length (vec:mul #f(1.0 2.0 3.0) #f(4.0 5.0 6.0))))")).isEqualTo("3");
+		assertThat(accel("(print (vec:sum (vec:add #f(1.0 2.0 3.0) #f(4.0 5.0 6.0))))")).isEqualTo("21.0");
+		assertThat(accel("(print (aref (vec:scale #f(2.0 4.0) 3.0) 1))")).isEqualTo("12.0");
+	}
+
+	@Test
+	void acceleratedSingleFloatLargeArraysMatchTheScalarReferenceOverTheVectorLoop() throws Exception {
+		// n >= THRESHOLD drives the real FloatVector loop (element-wise) and the f32
+		// accumulation (reductions). Integer values 0..199 are exact at BOTH widths --
+		// every partial sum stays under 2^24 -- so the vector and scalar paths are
+		// byte-identical. Values that separate them are pinned by
+		// singleFloatReductionsAccumulateInSinglePrecisionUnderSimd below.
+		String build = "(let ((a (make-array 200 :element-type 'single-float :initial-element 0.0)))"
+				+ " (dotimes (i 200) (setf (aref a i) (float i))) ";
+		for (String tail : List.of("(print (vec:sum a)))", "(print (vec:dot a a)))", "(print (vec:sum (vec:add a a))))",
+				"(print (vec:sum (vec:scale a 2.0))))", "(print (vec:aref (vec:mul a a) 199)))")) {
+			String expr = build + tail;
+			assertThat(accel(expr)).as(expr).isEqualTo(scalar(expr));
+		}
+	}
+
+	@Test
+	void acceleratedSingleFloatReductionsComputeTheExpectedValues() throws Exception {
+		// sum(0..199) = 199*200/2 = 19900; dot(a,a) = sum of i^2 = 199*200*399/6 =
+		// 2646700
+		// (both f64-exact).
+		String build = "(let ((a (make-array 200 :element-type 'single-float :initial-element 0.0)))"
+				+ " (dotimes (i 200) (setf (aref a i) (float i))) ";
+		assertThat(accel(build + "(print (vec:sum a)))")).isEqualTo("19900.0");
+		assertThat(accel(build + "(print (vec:dot a a)))")).isEqualTo("2646700.0");
+	}
+
+	/**
+	 * The multi-accumulator gate, pinned on both sides. From
+	 * {@code MATVEC_ACC_THRESHOLD = 2 * MATVEC_ACCUMULATORS * lanes = 32} columns up a
+	 * GEMV row folds four independent four-lane accumulators as
+	 * {@code (a0 + a1) + (a2 + a3)}; below it, the one chain it always had.
+	 *
+	 * <p>
+	 * The 2^24 probe makes the grouping legible: the lane holding {@code 2^24} swallows
+	 * every {@code 1.0} added to it, so the answer counts the ones that landed elsewhere.
+	 * 16 columns, one chain over 4 lane groups: {@code 2^24 + 3*4 = 16777228}. 32
+	 * columns, four chains over two groups each:
+	 * {@code (2^24 + 2 + 4) + 8 + 8 + 8 = 16777246}.
+	 *
+	 * <p>
+	 * <b>The same two integers are asserted on all four {@code --simd}
+	 * implementations</b> ({@code eval/VecSimdTest}, here, and both wasm backends): 16
+	 * and 32 are multiples of the lane count, so nobody is folding a partial group and
+	 * the four must agree exactly. That agreement is the point -- a gate firing at a
+	 * different column count, or in a different direction, on one backend shows up here
+	 * and nowhere else.
+	 *
+	 * <p>
+	 * 31 columns pins the gate's DIRECTION as {@code >=} rather than {@code >}: 7 lane
+	 * groups plus a 3-element scalar tail, still the single chain, {@code 2^24 + 24}. All
+	 * four implementations answer that, but only for this probe's data -- wasm-GC has no
+	 * scalar tail and folds the partial group with its padding zeroed, which reaches the
+	 * same neighbour here and a different one when the {@code 2^24} sits in the tail
+	 * region (the deliberate divergence pinned by
+	 * {@code partialFinalGroupFoldsTheScalarTailByDesign} and its wasm-GC mirror, a
+	 * contract exception recorded in {@code .kb/vec.md}).
+	 *
+	 * <p>
+	 * 24 columns is the middle of the region between {@code MATVEC_ROW_THRESHOLD} and
+	 * this gate -- lanes, one chain, 6 groups and no tail, {@code 2^24 + 3*6 = 16777234}
+	 * -- and is asserted on all four implementations for the same reason 16 and 32 are.
+	 * That region is what the gate left untested end to end, so it is also a corpus case
+	 * now ({@code simd-gemv-below-the-accumulator-gate-cross-backend}).
+	 */
+	@Test
+	void theMultiAccumulatorGateFiresAtTheSameColumnCountAsEveryOtherSimdBackend() throws Exception {
+		assertThat(accel(gateProbe(16))).as("16 columns: one chain").isEqualTo("16777228");
+		assertThat(accel(gateProbe(24))).as("24 columns: still one chain").isEqualTo("16777234");
+		assertThat(accel(gateProbe(31))).as("31 columns: still one chain").isEqualTo("16777240");
+		assertThat(accel(gateProbe(32))).as("32 columns: four chains").isEqualTo("16777246");
+	}
+
+	private static String gateProbe(int columns) {
+		return "(let ((m (make-array '(1 %d) :element-type 'single-float :initial-element 1.0))".formatted(columns)
+				+ " (v (vec:ones %d :element-type 'single-float)))".formatted(columns)
+				+ " (setf (aref m 0 0) 4096.0) (setf (vec:aref v 0) 4096.0)"
+				+ " (print (round (vec:aref (vec:matvec m v) 0))))";
+	}
+
+	@Test
+	void singleFloatReductionsAccumulateInSinglePrecisionUnderSimd() throws Exception {
+		// The compiled-path half of the contract that an #f reduction accumulates in
+		// single precision under --simd on every backend (.kb/vec.md); the interpreter
+		// half is eval/VecSimdTest, same probe, same numbers -- the two kernel files are
+		// deliberate duplicates and must not drift.
+		//
+		// v = #f(4096.0 1.0 ... 1.0), 1024 elements: dot(v,v) = 4096^2 + 1023 = 16778239.
+		// 4096^2 = 2^24, where the f32 spacing is 2, so the pinned lane holding it
+		// swallows its 1.0s; the other three lanes fold 256 each -> 2^24 + 768.
+		// FloatVector.SPECIES_128 is what makes 16777984 the answer on every host (8
+		// lanes would give 16778112, 16 lanes 16778176).
+		String v = "(let ((v (vec:ones 1024 :element-type 'single-float))) (setf (aref v 0) 4096.0) ";
+		assertThat(accel(v + "(print (round (vec:dot v v))))")).isEqualTo("16777984");
+		assertThat(scalar(v + "(print (round (vec:dot v v))))")).isEqualTo("16778239");
+
+		String s = "(let ((v (vec:ones 1024 :element-type 'single-float))) (setf (aref v 0) 16777216.0) ";
+		assertThat(accel(s + "(print (round (vec:sum v))))")).isEqualTo("16777984");
+		assertThat(scalar(s + "(print (round (vec:sum v))))")).isEqualTo("16778239");
+
+		// The scalar path accumulates 16778239 in f64 then narrows on store; that is an
+		// odd multiple of the f32 spacing at 2^24, so it ties to even -> 16778240.
+		// A GEMV row is NOT vec:dot's chain: above
+		// MATVEC_ACC_THRESHOLD columns it folds four independent f32x4 accumulators as
+		// (a0 + a1) + (a2 + a3), so 1024 columns group as sixteen lanes rather than four
+		// -- the lane holding 2^24 swallows only its own 63 ones and the other fifteen
+		// fold 64 each, giving 2^24 + 960 = 16778176. The scalar path is unchanged.
+		String gemv = "(let ((m (make-array '(1 1024) :element-type 'single-float :initial-element 1.0))"
+				+ " (v (vec:ones 1024 :element-type 'single-float)))"
+				+ " (setf (aref m 0 0) 4096.0) (setf (aref v 0) 4096.0)"
+				+ " (print (round (aref (vec:matvec m v) 0))))";
+		assertThat(accel(gemv)).isEqualTo("16778176");
+		assertThat(scalar(gemv)).isEqualTo("16778240");
+
+		// The #d control: double-float reductions are untouched and exact on both paths.
+		String d = "(let ((v (vec:ones 1024))) (setf (aref v 0) 4096.0) (print (round (vec:dot v v))))";
+		assertThat(accel(d)).isEqualTo("16778239");
+		assertThat(scalar(d)).isEqualTo("16778239");
+	}
+
+	@Test
+	void partialFinalGroupFoldsTheScalarTailByDesign() throws Exception {
+		// A contract exception, by design (.kb/vec.md): at a length that is not a
+		// multiple of the f32x4 lane count this side folds loopBound(n) lanes plus
+		// a scalar tail in index order, while wasm-GC folds ceil(n/4) zero-padded
+		// groups -- same value in exact arithmetic, different last bit at a
+		// rounding boundary. The mirror image (16777248 / 16777348) is pinned in
+		// WasmLispCompilerIntegrationTest; the interpreter answers these same
+		// integers in eval/VecSimdTest.
+		String gemv = "(let ((m (make-array '(1 31) :element-type 'single-float :initial-element 1.0))"
+				+ " (v (vec:ones 31 :element-type 'single-float)))"
+				+ " (setf (aref m 0 29) 4096.0) (setf (vec:aref v 29) 4096.0)"
+				+ " (print (round (vec:aref (vec:matvec m v) 0))))";
+		assertThat(accel(gemv)).as("31 columns, 2^24 in the tail: scalar tail").isEqualTo("16777244");
+		assertThat(scalar(gemv)).as("scalar oracle stays exact").isEqualTo("16777246");
+		String dot = "(let ((v (vec:ones 131 :element-type 'single-float))) (setf (vec:aref v 127) 4096.0)"
+				+ " (print (round (vec:dot v v))))";
+		assertThat(accel(dot)).as("131 elements, 4096.0 at index 127: scalar tail").isEqualTo("16777344");
+		assertThat(scalar(dot)).as("scalar oracle stays exact").isEqualTo("16777346");
+		String sum = "(let ((v (vec:ones 131 :element-type 'single-float))) (setf (vec:aref v 127) 16777216.0)"
+				+ " (print (round (vec:sum v))))";
+		assertThat(accel(sum)).as("131 elements, 2^24 at index 127: scalar tail").isEqualTo("16777344");
+		assertThat(scalar(sum)).as("scalar oracle stays exact").isEqualTo("16777346");
+	}
+
+	@Test
+	void mixedWidthOperandsDeclineToTheScalarReferenceUnderTheSimdFlag() throws Exception {
+		// A mixed #d/#f pair is NOT an error: vec.lisp's %map2 reads every operand
+		// through aref, which widens whatever the storage width is, so the scalar defun
+		// computes it happily -- and --simd is a speed flag, never a correctness one
+		// (.kb/vec.md, "The four acceleration layers"). The lane kernels carry no
+		// mixed-width form, so the call site's lane-width guard declines to the spliced
+		// defun instead of reaching the bridge's fixed-width cast, which used to raise
+		// "share an element type" on both of these.
+		assertMatchesScalarReference("(print (vec:add #d(1.0 2.0) #f(3.0 4.0)))");
+		assertMatchesScalarReference("(print (vec:dot #f(1.0 2.0) #d(3.0 4.0)))");
+		// The answer itself, not just the parity: the result width follows the FIRST
+		// operand (vec::%make-like), exactly as with the flag off.
+		assertThat(accel("(print (vec:add #d(1.0 2.0) #f(3.0 4.0)))")).isEqualTo("#d(4.0 6.0)");
+		assertThat(accel("(print (vec:add #f(1.0 2.0) #d(3.0 4.0)))")).isEqualTo("#f(4.0 6.0)");
+	}
+
+	@Test
+	void theSingleFloatBridgeIsEmbeddedOnlyUnderTheSimdFlag() {
+		// The dead-flag proof, extended to #f: a single-float simd program embeds the
+		// bridge
+		// under --simd and never without it, independent of runtime output parity.
+		assertThat(embedsBridge(compile("(print (vec:sum #f(1.0 2.0 3.0)))", true))).isTrue();
+		assertThat(embedsBridge(compile("(print (vec:add #f(1.0 2.0) #f(3.0 4.0)))", true))).isTrue();
+		assertThat(embedsBridge(compile("(print (vec:sum #f(1.0 2.0 3.0)))", false))).isFalse();
+	}
+
+	// --- matvec (GEMV) f64 + f32 -----------------------------------------------------
+
+	@Test
+	void acceleratedMatvecMatchesTheScalarReferenceByteForByte() throws Exception {
+		// Small matrices (n < THRESHOLD) exercise the scalar tail; the accelerated GEMV
+		// (one vectorized dot per row) must be byte-identical to the spliced vec.lisp
+		// reference, for both widths, including the packed-array print format. The last
+		// case is a non-square 3x4 matrix, catching a row-stride bug the square cases
+		// miss.
+		for (String expr : List.of("(print (vec:matvec #d((1 2) (3 4)) #d(5 6)))",
+				"(print (vec:matvec #d((1 2 3) (4 5 6)) #d(1 2 3)))", "(print (vec:matvec #f((1 2) (3 4)) #f(5 6)))",
+				"(print (vec:matvec #f((1 2 3) (4 5 6)) #f(1 2 3)))",
+				"(print (vec:matvec #d((1 2 3 4) (5 6 7 8) (9 10 11 12)) #d(1 1 1 1)))")) {
+			assertThat(accel(expr)).as(expr).isEqualTo(scalar(expr));
+		}
+	}
+
+	@Test
+	void acceleratedMatvecComputesTheExpectedValues() throws Exception {
+		// GEMV: y[i] = dot(row_i, x). #d((1 2)(3 4)) . #d(5 6) = (1*5+2*6, 3*5+4*6) =
+		// (17, 39); the #f pair yields the same values at single-float width.
+		assertThat(accel("(print (vec:matvec #d((1 2) (3 4)) #d(5 6)))")).isEqualTo("#d(17.0 39.0)");
+		assertThat(accel("(print (vec:matvec #f((1 2) (3 4)) #f(5 6)))")).isEqualTo("#f(17.0 39.0)");
+	}
+
+	@Test
+	void acceleratedMatvecPreservesTheSingleFloatWidth() throws Exception {
+		// A #f matrix/vector yields a #f result on both the accelerated and the scalar
+		// path -- GEMV is width-preserving via vec::%make-like, so --simd is a pure
+		// acceleration of the scalar reference (never a silent widen to #d).
+		String expr = "(print (vec:matvec #f((1 2 3) (4 5 6)) #f(1 2 3)))";
+		assertThat(accel(expr)).startsWith("#f(").isEqualTo(scalar(expr));
+	}
+
+	@Test
+	void acceleratedMatvecLargeMatricesMatchTheScalarReferenceOverTheVectorLoop() throws Exception {
+		// n >= THRESHOLD (200-column rows) drives the real SPECIES/FSPECIES lane loop;
+		// the
+		// per-row dot stays byte-identical to the left-to-right scalar reference on the
+		// f64-exact integer inputs. Row i sums to 19900 + 40000*i (sum(0..199) +
+		// 200*i*200)
+		// against an all-ones x, for both widths.
+		for (String et : List.of("'double-float", "'single-float")) {
+			String expr = "(let ((w (make-array (list 3 200) :element-type " + et + " :initial-element 0.0))"
+					+ " (x (make-array 200 :element-type " + et + " :initial-element 1.0)))"
+					+ " (dotimes (i 3) (dotimes (j 200) (setf (aref w i j) (+ j (* i 200)))))"
+					+ " (print (vec:matvec w x)))";
+			assertThat(accel(expr)).as(expr).isEqualTo(scalar(expr));
+		}
+	}
+
+	@Test
+	void acceleratedMatvecLargeMatrixComputesTheExpectedValues() throws Exception {
+		// The concrete large-matrix result: row0 = sum(0..199) = 19900, row1 =
+		// 19900+40000
+		// = 59900, row2 = 19900+80000 = 99900 (all f64-exact, so the vector loop
+		// matches).
+		String expr = "(let ((w (make-array (list 3 200) :element-type 'double-float :initial-element 0.0))"
+				+ " (x (make-array 200 :element-type 'double-float :initial-element 1.0)))"
+				+ " (dotimes (i 3) (dotimes (j 200) (setf (aref w i j) (+ j (* i 200)))))"
+				+ " (print (vec:matvec w x)))";
+		assertThat(accel(expr)).isEqualTo("#d(19900.0 59900.0 99900.0)");
+	}
+
+	@Test
+	void acceleratedMatvecResultInteroperatesWithThePackedArraySurface() throws Exception {
+		// A GEMV result is a plain rank-1 packed vector: aref / length / downstream vec:
+		// kernels consume it identically to a make-array vector.
+		assertThat(accel("(print (aref (vec:matvec #d((1 2) (3 4)) #d(5 6)) 1))")).isEqualTo("39.0");
+		assertThat(accel("(print (length (vec:matvec #d((1 2) (3 4) (5 6)) #d(1 1))))")).isEqualTo("3");
+		assertThat(accel("(print (vec:sum (vec:matvec #d((1 2) (3 4)) #d(5 6))))")).isEqualTo("56.0");
+	}
+
+	@Test
+	void mixedWidthMatvecOperandsDeclineToTheScalarReferenceUnderTheSimdFlag() throws Exception {
+		// A #d matrix against a #f vector (or the reverse) declines like every other
+		// kernel: the GEMV defun folds each row through aref, so the flag may not turn
+		// its answer into an error.
+		assertMatchesScalarReference("(print (vec:matvec #d((1 2) (3 4)) #f(5 6)))");
+		assertMatchesScalarReference("(print (vec:matvec #f((1 2) (3 4)) #d(5 6)))");
+	}
+
+	@Test
+	void theMatvecBridgeIsEmbeddedOnlyUnderTheSimdFlag() {
+		// Dead-flag proof for matvec: the bridge is embedded under --simd and never
+		// without it, for both widths, independent of runtime output.
+		assertThat(embedsBridge(compile("(print (vec:matvec #d((1 2) (3 4)) #d(5 6)))", true))).isTrue();
+		assertThat(embedsBridge(compile("(print (vec:matvec #f((1 2) (3 4)) #f(5 6)))", true))).isTrue();
+		assertThat(embedsBridge(compile("(print (vec:matvec #d((1 2) (3 4)) #d(5 6)))", false))).isFalse();
+	}
+
+	// --- destination-passing kernels --------------------------------------------------
+
+	@Test
+	void acceleratedIntoKernelsMatchTheirAllocatingSiblingsByteForByte() throws Exception {
+		// Small arrays (scalar tail) and large ones (vector loop), both widths. The
+		// -into result must print exactly like the allocating sibling's fresh vector.
+		record Pair(String into, String alloc) {
+		}
+		for (Pair p : List.of(
+				new Pair("(print (vec:add-into (vec:zeros 3) #d(1.0 2.0 3.0) #d(4.0 5.0 6.0)))",
+						"(print (vec:add #d(1.0 2.0 3.0) #d(4.0 5.0 6.0)))"),
+				new Pair("(print (vec:sub-into (vec:zeros 3) #d(10.0 20.0 30.0) #d(1.0 2.0 3.0)))",
+						"(print (vec:sub #d(10.0 20.0 30.0) #d(1.0 2.0 3.0)))"),
+				new Pair("(print (vec:mul-into (vec:zeros 3) #d(2.0 3.0 4.0) #d(5.0 6.0 7.0)))",
+						"(print (vec:mul #d(2.0 3.0 4.0) #d(5.0 6.0 7.0)))"),
+				new Pair("(print (vec:scale-into (vec:zeros 3) #d(1.0 2.0 3.0) 10.0))",
+						"(print (vec:scale #d(1.0 2.0 3.0) 10.0))"),
+				new Pair("(print (vec:sum (vec:add-into (vec:zeros 1000) (vec:arange 1000) (vec:arange 1000))))",
+						"(print (vec:sum (vec:add (vec:arange 1000) (vec:arange 1000))))"),
+				new Pair(
+						"(print (vec:add-into (vec:zeros 3 :element-type 'single-float) #f(1.0 2.0 3.0) #f(4.0 5.0 6.0)))",
+						"(print (vec:add #f(1.0 2.0 3.0) #f(4.0 5.0 6.0)))"),
+				new Pair("(print (vec:scale-into (vec:zeros 3 :element-type 'single-float) #f(1.0 2.0 3.0) 10.0))",
+						"(print (vec:scale #f(1.0 2.0 3.0) 10.0))"),
+				new Pair(
+						"(print (vec:sum (vec:mul-into (vec:zeros 1000 :element-type 'single-float) (vec:arange 1000 :element-type 'single-float) (vec:ones 1000 :element-type 'single-float))))",
+						"(print (vec:sum (vec:mul (vec:arange 1000 :element-type 'single-float) (vec:ones 1000 :element-type 'single-float))))"))) {
+			assertThat(accel(p.into())).as(p.into()).isEqualTo(scalar(p.alloc()));
+			assertThat(accel(p.into())).as(p.into()).isEqualTo(scalar(p.into()));
+		}
+	}
+
+	@Test
+	void acceleratedIntoKernelsReturnTheDestinationAndAllocateNothingInALoop() throws Exception {
+		// The point of -into: the loop rebinds nothing and the kernel returns the very
+		// vector it was handed, so in-place accumulation matches the allocating form.
+		String inPlace = """
+				(let ((acc (vec:zeros 1000)) (d (vec:arange 1000)))
+				  (dotimes (i 4) (vec:add-into acc acc d))
+				  (print (vec:sum acc)))
+				""";
+		String fresh = """
+				(let ((acc (vec:zeros 1000)) (d (vec:arange 1000)))
+				  (dotimes (i 4) (setq acc (vec:add acc d)))
+				  (print (vec:sum acc)))
+				""";
+		assertThat(accel(inPlace)).isEqualTo(scalar(fresh));
+		assertThat(accel("(let ((o (vec:zeros 2))) (print (eq o (vec:add-into o #d(1.0 2.0) #d(3.0 4.0)))))"))
+			.isEqualTo("T");
+	}
+
+	@Test
+	void acceleratedMatvecIntoMatchesTheAllocatingSibling() throws Exception {
+		assertThat(accel("(print (vec:matvec-into (vec:zeros 2) #d((1 2) (3 4)) #d(5 6)))")).isEqualTo("#d(17.0 39.0)");
+		assertThat(accel("(print (vec:matvec-into (vec:zeros 2 :element-type 'single-float) #f((1 2) (3 4)) #f(5 6)))"))
+			.isEqualTo(scalar("(print (vec:matvec #f((1 2) (3 4)) #f(5 6)))"));
+		String wide = """
+				(let ((w (make-array '(3 200) :element-type 'double-float :initial-element 0.0))
+				      (x (vec:arange 200))
+				      (o (vec:zeros 3)))
+				  (dotimes (i 3) (dotimes (j 200) (setf (aref w i j) (float (+ (* i 200) j)))))
+				  (print (vec:sum (vec:matvec-into o w x))))
+				""";
+		assertThat(accel(wide)).isEqualTo(scalar(wide.replace("(vec:matvec-into o w x)", "(vec:matvec w x)")));
+	}
+
+	@Test
+	void acceleratedMatvecIntoRejectsADestinationAliasingItsOperands() {
+		// out[row] folds over ALL of x. The bridge replaces the vec.lisp defun that
+		// carries the eq guard, so the guard is repeated in the bridge.
+		assertThatThrownBy(() -> accel("(let ((x #d(1.0 2.0))) (print (vec:matvec-into x #d((1 1) (1 1)) x)))"))
+			.hasStackTraceContaining("must not be the same array");
+	}
+
+	@Test
+	void mixedWidthIntoOperandsDeclineToTheScalarReferenceUnderTheSimdFlag() throws Exception {
+		// The destination is an operand of the guard like any other, so a destination of
+		// the other width declines even when the two inputs agree with each other.
+		assertMatchesScalarReference("(print (vec:add-into (vec:zeros 1) #d(1.0) #f(1.0)))");
+		assertMatchesScalarReference(
+				"(print (vec:add-into (vec:zeros 1 :element-type 'single-float) #d(1.0) #d(1.0)))");
+		assertMatchesScalarReference("(print (vec:scale-into (vec:zeros 1 :element-type 'single-float) #d(1.0) 2.0))");
+	}
+
+	// --- element-wise unary ufuncs ----------------------------------------------------
+
+	@Test
+	void unaryUfuncsMatchTheScalarReferenceAtBothSizesAndWidths() throws Exception {
+		for (String op : new String[] { "sqrt", "abs", "square", "negative", "sign", "reciprocal" }) {
+			// Every member runs over a sign-mixed vector, sqrt included: its element
+			// function is the float-domain square root, NaN on negatives on both
+			// the spliced defun and the bridge kernel.
+			for (String n : new String[] { "7", "200" }) {
+				assertMatchesScalarReference("(print (vec:" + op + " (vec:sub (vec:arange " + n
+						+ ") (vec:scale (vec:ones " + n + ") 100.0))))");
+			}
+			assertMatchesScalarReference("(print (vec:" + op
+					+ " (vec:add (vec:arange 200 :element-type 'single-float) (vec:ones 200 :element-type 'single-float))))");
+		}
+		// exp over reciprocal's (0, 1] range so the values stay bounded.
+		assertMatchesScalarReference(
+				"(print (round (* 1000000 (vec:sum (vec:exp (vec:reciprocal (vec:add (vec:arange 200) (vec:ones 200))))))))");
+		assertMatchesScalarReference("(print (vec:exp #d(0.0 1.0)))");
+		// log over strictly positive inputs, tanh over a sign-mixed range (Math.log /
+		// Math.tanh scalar loops on this backend).
+		for (String n : new String[] { "7", "200" }) {
+			assertMatchesScalarReference("(print (vec:log (vec:add (vec:arange %s) (vec:ones %s))))".formatted(n, n));
+			assertMatchesScalarReference(
+					"(print (vec:tanh (vec:scale (vec:sub (vec:arange %s) (vec:scale (vec:ones %s) 100.0)) 0.03)))"
+						.formatted(n, n));
+		}
+		assertMatchesScalarReference(
+				"(print (vec:log (vec:add (vec:arange 200 :element-type 'single-float) (vec:ones 200 :element-type 'single-float))))");
+		assertMatchesScalarReference("(print (vec:tanh (vec:arange 200 :element-type 'single-float)))");
+		// sin / cos / tan over a sign-mixed range (Math.sin / Math.cos / Math.tan
+		// scalar loops on this backend).
+		for (String op : new String[] { "sin", "cos", "tan" }) {
+			for (String n : new String[] { "7", "200" }) {
+				assertMatchesScalarReference(
+						"(print (vec:%s (vec:sub (vec:arange %s) (vec:scale (vec:ones %s) 100.0))))".formatted(op, n,
+								n));
+			}
+			assertMatchesScalarReference("(print (vec:%s (vec:arange 200 :element-type 'single-float)))".formatted(op));
+		}
+		// asin / acos over the scaled [-0.5, 0.5) domain, atan / sinh / cosh over the
+		// sign-mixed range.
+		for (String op : new String[] { "asin", "acos" }) {
+			assertMatchesScalarReference(
+					"(print (vec:%s (vec:scale (vec:sub (vec:arange 200) (vec:scale (vec:ones 200) 100.0)) 0.005)))"
+						.formatted(op));
+			assertMatchesScalarReference(
+					"(print (vec:%s (vec:scale (vec:arange 200 :element-type 'single-float) 0.005)))".formatted(op));
+		}
+		for (String op : new String[] { "atan", "sinh", "cosh" }) {
+			assertMatchesScalarReference(
+					"(print (vec:%s (vec:scale (vec:sub (vec:arange 200) (vec:scale (vec:ones 200) 100.0)) 0.05)))"
+						.formatted(op));
+			assertMatchesScalarReference(
+					"(print (vec:%s (vec:scale (vec:arange 200 :element-type 'single-float) 0.05)))".formatted(op));
+		}
+		assertMatchesScalarReference("(print (vec:asin #d(0.0 -0.0 1.0 -1.0 0.5)))");
+		assertMatchesScalarReference("(print (vec:acos #d(1.0 -1.0 0.0 0.5)))");
+		assertMatchesScalarReference("(print (vec:atan (vec:reciprocal #d(0.0 -0.0))))");
+		assertMatchesScalarReference("(print (vec:sinh #d(0.0 -0.0 0.25 -0.25 0.3)))");
+		assertMatchesScalarReference("(print (vec:cosh #d(0.0 -0.0 1.0)))");
+	}
+
+	@Test
+	void unaryIntoKernelsWriteIntoTheDestinationAndReturnIt() throws Exception {
+		assertThat(accel("(let ((o (vec:zeros 3))) (print (eq o (vec:sqrt-into o #d(4.0 9.0 16.0)))) (print o))"))
+			.isEqualTo("T\n#d(2.0 3.0 4.0)");
+		// In-place update: out MAY alias the operand (the add-into rule).
+		assertMatchesScalarReference("""
+				(let ((v (vec:add (vec:arange 200) (vec:ones 200))))
+				  (vec:sqrt-into v v)
+				  (print v))
+				""");
+		assertMatchesScalarReference(
+				"""
+						(let ((v (vec:sub (vec:arange 7 :element-type 'single-float) (vec:scale (vec:ones 7 :element-type 'single-float) 3.0))))
+						  (vec:abs-into v v)
+						  (print v))
+						""");
+		for (String op : new String[] { "exp", "negative", "sign", "reciprocal", "square", "tanh", "sin", "cos", "tan",
+				"atan", "sinh", "cosh" }) {
+			assertMatchesScalarReference(
+					"(print (vec:" + op + "-into (vec:zeros 7) (vec:add (vec:arange 7) (vec:ones 7))))");
+		}
+		assertMatchesScalarReference("(print (vec:log-into (vec:zeros 7) (vec:add (vec:arange 7) (vec:ones 7))))");
+	}
+
+	@Test
+	void mixedWidthUnaryIntoOperandsDeclineToTheScalarReferenceUnderTheSimdFlag() throws Exception {
+		assertMatchesScalarReference("(print (vec:sqrt-into (vec:zeros 1) #f(1.0)))");
+		assertMatchesScalarReference("(print (vec:abs-into (vec:zeros 1 :element-type 'single-float) #d(1.0)))");
+	}
+
+	// --- comparison-select ufuncs -----------------------------------------------------
+
+	@Test
+	void comparisonSelectsMatchTheScalarReferenceAtBothSizesAndWidths() throws Exception {
+		// a ascends through zero and b is its mirror image, so the winner flips
+		// mid-vector; both sizes, both widths (all inputs integer-valued, exact at
+		// either width).
+		for (String op : new String[] { "maximum", "minimum" }) {
+			for (String n : new String[] { "7", "200" }) {
+				assertMatchesScalarReference(
+						"(let ((a (vec:sub (vec:arange %1$s) (vec:scale (vec:ones %1$s) 100.0)))) (print (vec:%2$s a (vec:negative a))))"
+							.formatted(n, op));
+			}
+			assertMatchesScalarReference(
+					"(let ((a (vec:sub (vec:arange 200 :element-type 'single-float) (vec:scale (vec:ones 200 :element-type 'single-float) 100.0)))) (print (vec:%s a (vec:negative a))))"
+						.formatted(op));
+		}
+		for (String n : new String[] { "7", "200" }) {
+			assertMatchesScalarReference(
+					"(print (vec:relu (vec:sub (vec:arange %1$s) (vec:scale (vec:ones %1$s) 100.0))))".formatted(n));
+			assertMatchesScalarReference(
+					"(print (vec:clip (vec:sub (vec:arange %1$s) (vec:scale (vec:ones %1$s) 100.0)) -50.0 50.0))"
+						.formatted(n));
+		}
+		assertMatchesScalarReference(
+				"(print (vec:relu (vec:sub (vec:arange 200 :element-type 'single-float) (vec:scale (vec:ones 200 :element-type 'single-float) 100.0))))");
+		// f32 clip bounds deliberately NOT f32-representable: the bridge compares the
+		// widened element against the full double bound, like the spliced defun.
+		assertMatchesScalarReference(
+				"(print (vec:clip (vec:sub (vec:arange 200 :element-type 'single-float) (vec:scale (vec:ones 200 :element-type 'single-float) 100.0)) -50.3 50.3))");
+	}
+
+	@Test
+	void comparisonSelectsFollowTheStrictComparisonNotMathMax() throws Exception {
+		// The second operand (or the bound) wins any false comparison: the -0.0/0.0
+		// tie and NaN -- unlike Math.max/Math.min. The bridge mirrors the defun.
+		assertMatchesScalarReference("(print (vec:maximum #d(-0.0 0.0) #d(0.0 -0.0)))");
+		assertThat(accel("(print (vec:maximum #d(-0.0) #d(0.0)))")).isEqualTo("#d(0.0)");
+		assertThat(accel("(print (vec:maximum #d(0.0) #d(-0.0)))")).isEqualTo("#d(-0.0)");
+		assertThat(accel("(print (vec:minimum #d(0.0) #d(-0.0)))")).isEqualTo("#d(-0.0)");
+		assertThat(accel("(print (vec:maximum (vec:scale (vec:ones 1) (/ 0.0 0.0)) #d(7.0)))")).isEqualTo("#d(7.0)");
+		assertThat(accel("(print (vec:maximum #d(7.0) (vec:scale (vec:ones 1) (/ 0.0 0.0))))")).isEqualTo("#d(NaN)");
+		assertThat(accel("(print (vec:relu #d(-0.0)))")).isEqualTo("#d(0.0)");
+		assertThat(accel("(print (vec:relu (vec:scale (vec:ones 1) (/ 0.0 0.0))))")).isEqualTo("#d(0.0)");
+		// clip: a NaN element becomes lo; inverted bounds (lo > hi) end at hi.
+		assertThat(accel("(print (vec:clip (vec:scale (vec:ones 1) (/ 0.0 0.0)) -1.0 1.0))")).isEqualTo("#d(-1.0)");
+		assertMatchesScalarReference("(print (vec:clip #d(0.0 3.0 -3.0) 2.0 1.0))");
+	}
+
+	@Test
+	void comparisonSelectIntoKernelsMatchTheirAllocatingSiblings() throws Exception {
+		assertThat(accel("(print (vec:maximum-into (vec:zeros 3) #d(1.0 5.0 3.0) #d(4.0 2.0 3.0)))"))
+			.isEqualTo(scalar("(print (vec:maximum #d(1.0 5.0 3.0) #d(4.0 2.0 3.0)))"));
+		assertThat(accel(
+				"(print (vec:minimum-into (vec:zeros 3 :element-type 'single-float) #f(1.0 5.0 3.0) #f(4.0 2.0 3.0)))"))
+			.isEqualTo(scalar("(print (vec:minimum #f(1.0 5.0 3.0) #f(4.0 2.0 3.0)))"));
+		assertThat(accel("(print (vec:relu-into (vec:zeros 3) #d(-1.0 0.0 2.0)))"))
+			.isEqualTo(scalar("(print (vec:relu #d(-1.0 0.0 2.0)))"));
+		assertThat(accel("(print (vec:clip-into (vec:zeros 3) #d(-9.0 0.5 9.0) -1.0 1.0))"))
+			.isEqualTo(scalar("(print (vec:clip #d(-9.0 0.5 9.0) -1.0 1.0))"));
+		// -into returns the very destination and tolerates aliasing (the add-into
+		// rule); the guard comment lives in the bridge because it replaces the defun.
+		assertThat(accel("(let ((o (vec:zeros 2))) (print (eq o (vec:maximum-into o #d(1.0 2.0) #d(2.0 1.0)))))"))
+			.isEqualTo("T");
+		assertThat(accel("(let ((v #d(-9.0 9.0))) (vec:clip-into v v -1.0 1.0) (print v))")).isEqualTo("#d(-1.0 1.0)");
+	}
+
+	@Test
+	void theComparisonSelectBridgeIsEmbeddedOnlyUnderTheSimdFlag() {
+		assertThat(embedsBridge(compile("(print (vec:maximum #d(1.0) #d(2.0)))", true))).isTrue();
+		assertThat(embedsBridge(compile("(print (vec:clip #d(1.0) 0.0 2.0))", true))).isTrue();
+		assertThat(embedsBridge(compile("(print (vec:maximum #d(1.0) #d(2.0)))", false))).isFalse();
+	}
+
+	@Test
+	void theIntoBridgeIsEmbeddedOnlyUnderTheSimdFlag() {
+		// Dead-flag proof: without this every numeric assertion above would still pass on
+		// the scalar vec.lisp defuns, which -into also has.
+		assertThat(embedsBridge(compile("(print (vec:add-into (vec:zeros 1) #d(1.0) #d(1.0)))", true))).isTrue();
+		assertThat(embedsBridge(compile("(print (vec:matvec-into (vec:zeros 2) #d((1 2) (3 4)) #d(5 6)))", true)))
+			.isTrue();
+		assertThat(embedsBridge(compile("(print (vec:add-into (vec:zeros 1) #d(1.0) #d(1.0)))", false))).isFalse();
+	}
+
+	private static boolean embedsBridge(byte[] classBytes) {
+		return new String(classBytes, StandardCharsets.ISO_8859_1).contains(JvmSimdRuntimeBuilder.bridgeName("Test"));
+	}
+
+	// The bridge's entry points are package-private; every test above compiles into the
+	// default package, so this one alone proves the bridge is renamed into a NON-default
+	// package too.
+	@Test
+	void theBridgeIsRenamedIntoTheGeneratedClassOwnPackageAndRunsThere() throws Exception {
+		List<LispVal> program = VecLibrary
+			.process(LispReader.readAllFromString("(print (vec:add #d(1.0 2.0 3.0) #d(4.0 5.0 6.0)))"));
+		JvmLispCompiler compiler = JvmLispCompiler.builder()
+			.className("com/example/Test")
+			.optimize(OptimizeLevel.NONE)
+			.simd(true)
+			.build();
+		byte[] classBytes = compiler.compile(program);
+		TravellingClassFiles.write(compiler, this.tempDir);
+
+		String bridgeName = JvmSimdRuntimeBuilder.bridgeName("com/example/Test");
+		assertThat(bridgeName).isEqualTo("com/example/Test$SimdBridge");
+		assertThat(new String(classBytes, StandardCharsets.ISO_8859_1)).contains(bridgeName);
+
+		Path packageDir = this.tempDir.resolve("com").resolve("example");
+		Files.createDirectories(packageDir);
+		Files.write(packageDir.resolve("Test.class"), classBytes);
+		try (URLClassLoader loader = new URLClassLoader(new URL[] { this.tempDir.toUri().toURL() },
+				ClassLoader.getSystemClassLoader())) {
+			Class<?> clazz = loader.loadClass("com.example.Test");
+			Method main = clazz.getMethod("main", String[].class);
+			ByteArrayOutputStream baos = new ByteArrayOutputStream();
+			try (var _ = ThreadStdio.out(baos)) {
+				main.invoke(null, (Object) new String[0]);
+			}
+			assertThat(baos.toString().trim()).isEqualTo("#d(5.0 7.0 9.0)");
+		}
+	}
+
+}

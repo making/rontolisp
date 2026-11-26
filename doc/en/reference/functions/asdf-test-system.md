@@ -1,0 +1,45 @@
+# asdf:test-system
+
+`(asdf:test-system name &rest keys)`
+
+Loads the named system, follows its `:in-order-to ((test-op (test-op ...)))`
+chain (loading and testing each chained system the same way), then performs
+`asdf:test-op` on the system ([`asdf:perform`](asdf-perform.md)), whose
+default method runs the system's recorded `:perform (test-op (o c) ...)` body
+with the operation parameter bound to the `asdf:test-op` instance and the
+component parameter bound to the system's metaobject
+([`asdf:find-system`](asdf-find-system.md)'s answer). Returns `t`; the keys are
+accepted and ignored. A system with no test-op wiring is a no-op, like real
+ASDF's default `perform`, and a library's own `perform` method on `test-op`
+runs as for any other operation.
+
+This is the standard entry point fukamachi-style `.asd`s ship:
+
+```console
+(defsystem "my-app"
+  :components ((:file "main"))
+  :in-order-to ((test-op (test-op "my-app/tests"))))
+
+(defsystem "my-app/tests"
+  :depends-on ("my-app" "rove")
+  :components ((:file "tests/main"))
+  :perform (test-op (op c) (symbol-call :rove :run c)))
+
+;; run the tests:
+(asdf:test-system "my-app")
+```
+
+The body is recorded as data when the `.asd` is parsed; its bare symbols
+resolve the way `asdf-user` would resolve them (`symbol-call` is
+`uiop:symbol-call`, `component-name` is `asdf:component-name`), and a `#.`
+reader macro in it reads in the image the `.asd` runs in. `test-op :after (o c)`
+is recorded the same way, since ASDF's own method does nothing. A `:perform` for
+another operation, or a `#.` the image cannot read, is tolerated and ignored.
+
+## Backend support
+
+Works on all four backends. On the compile paths a **literal, top-level**
+`(asdf:test-system NAME)` splices the system *and* its test-op chain at compile
+time (a plain `load-system` never pulls the tests system in), then runs the
+recorded bodies at run time; a nested/computed call can only reach systems the
+program already spliced.

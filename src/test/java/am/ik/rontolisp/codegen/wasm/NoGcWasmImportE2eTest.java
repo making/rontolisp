@@ -1,0 +1,564 @@
+package am.ik.rontolisp.codegen.wasm;
+
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.List;
+
+import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.cli.CompileFrontendAccess;
+import am.ik.rontolisp.compiler.OptimizeLevel;
+import am.ik.rontolisp.reader.LispReader;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.EnabledIf;
+import org.junit.jupiter.api.io.TempDir;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+/**
+ * End-to-end checks of {@code rontolisp:wasm-import} on the {@code --no-gc} backend,
+ * against a JS host on plain node. The host is what nothing smaller can stand in for: a
+ * preloaded wasm host has its own linear memory, so no {@code wasmtime --invoke} run can
+ * read a {@code :string} argument's bytes or write a {@code :string} result's.
+ *
+ * <p>
+ * What is pinned:
+ * <ul>
+ * <li>every boundary type this backend takes crosses in both directions -- the integer
+ * family, {@code :float}, {@code :bool}, {@code :string} and a {@code :void} call;</li>
+ * <li>the boundary carries the value exactly or TRAPS, in both directions: a house
+ * {@code i64} wider than a narrow declared parameter, and a {@code :u64} result at or
+ * above 2^63 that the signed house integer cannot state;</li>
+ * <li>several {@code :string} arguments in one call each cross as their OWN region --
+ * here they are pointers to blocks the module already holds, so there is nothing to stage
+ * and nothing to alias;</li>
+ * <li>a pull loop over a {@code :string}-returning import keeps linear memory flat (the
+ * export wrapper's heap reset covers everything the call allocated);</li>
+ * <li>the reserved {@code rontolisp:memory} module reads what a host answered through
+ * out-pointers, and adds no import entry;</li>
+ * <li>none of it depends on the optimize level.</li>
+ * </ul>
+ */
+@EnabledIf("am.ik.rontolisp.codegen.wasm.NoGcWasmImportE2eTest#nodeIsAvailable")
+class NoGcWasmImportE2eTest {
+
+	static boolean nodeIsAvailable() {
+		try {
+			return new ProcessBuilder("node", "--version").start().waitFor() == 0;
+		}
+		catch (Exception ex) {
+			return false;
+		}
+	}
+
+	@TempDir
+	Path tempDir;
+
+	private static final String MODULE = """
+			(rontolisp:wasm-import 'host-add :from "env" :as "add" :params '(:s32 :s32) :returns :s32)
+			(rontolisp:wasm-import 'host-wide :from "env" :as "wide" :params '(:s64) :returns :s64)
+			(rontolisp:wasm-import 'host-scale :from "env" :as "scale" :params '(:float) :returns :float)
+			(rontolisp:wasm-import 'host-even :from "env" :as "even" :params '(:s32) :returns :bool)
+			(rontolisp:wasm-import 'host-note :from "env" :as "note" :params '(:bool) :returns :void)
+			(rontolisp:wasm-import 'host-join :from "env" :as "join" :params '(:string :string) :returns :string)
+			(rontolisp:wasm-import 'host-log :from "env" :as "log" :params '(:string) :returns :void)
+
+			(defun sum (a b) (host-add a b))
+			(rontolisp:wasm-export 'sum :params '(:s32 :s32) :returns :s32)
+
+			(defun wide (n) (host-wide n))
+			(rontolisp:wasm-export 'wide :params '(:s64) :returns :s64)
+
+			(defun scale (x) (host-scale x))
+			(rontolisp:wasm-export 'scale :params '(:float) :returns :float)
+
+			;; a :bool result is normalized to 0/1, so it drives an ordinary if
+			(defun classify (n) (if (host-even n) 1 0))
+			(rontolisp:wasm-export 'classify :params '(:s32) :returns :s32)
+
+			;; a :void import answers nil, which is the i64 zero
+			(defun note (b) (host-note b) 7)
+			(rontolisp:wasm-export 'note :params '(:bool) :returns :s32)
+
+			;; two :string arguments plus a :string result, all over blocks this module holds
+			(defun greet (who) (host-log who) (length (host-join "hello" who)))
+			(rontolisp:wasm-export 'greet :params '(:string) :returns :s32)
+
+			;; a pull loop inside ONE call: the arena bracket pops each answer, so k
+			;; iterations cost what one costs
+			(defun pump (k)
+			  (let ((n 0))
+			    (dotimes (i k) (rontolisp:with-arena () (setq n (length (host-join "a" "b")))))
+			    n))
+			(rontolisp:wasm-export 'pump :params '(:s32) :returns :s32)
+			""";
+
+	private static final String HOST = """
+			const fs = require('fs');
+			const dec = new TextDecoder();
+			const enc = new TextEncoder();
+			let inst;
+			const str = (p, n) => dec.decode(new Uint8Array(inst.exports.memory.buffer, p, n));
+			const give = (s) => {
+			  const b = enc.encode(s);
+			  const p = inst.exports.__ronto_alloc(b.length);
+			  new Uint8Array(inst.exports.memory.buffer).set(b, p);
+			  return [p, b.length];
+			};
+			let logged = null;
+			const env = {
+			  add: (a, b) => a + b,
+			  wide: (n) => n * 2n,
+			  scale: (x) => x * 2.5,
+			  even: (n) => (n % 2 === 0 ? 7 : 0),
+			  note: (b) => { logged = b; },
+			  // read the LAST argument first: both regions must still be live
+			  join: (p1, n1, p2, n2) => { const second = str(p2, n2); return give(str(p1, n1) + ", " + second + "!"); },
+			  log: (p, n) => { logged = str(p, n); },
+			};
+			const mod = new WebAssembly.Module(fs.readFileSync(process.argv[2]));
+			inst = new WebAssembly.Instance(mod, { env });
+			const withString = (name, s) => {
+			  const mark = inst.exports.__ronto_alloc_mark();
+			  const [p, n] = give(s);
+			  const out = inst.exports[name](p, n);
+			  inst.exports.__ronto_alloc_reset(mark);
+			  return out;
+			};
+			""";
+
+	private static final String DRIVER = HOST + """
+			console.log(inst.exports.sum(20, 22));
+			console.log(String(inst.exports.wide(1000000000000n)));
+			console.log(inst.exports.scale(4.0));
+			console.log(inst.exports.classify(4), inst.exports.classify(5));
+			console.log(inst.exports.note(1), logged);
+			console.log(withString('greet', 'world'), logged);
+			inst.exports.pump(1);
+			const before = inst.exports.memory.buffer.byteLength;
+			inst.exports.pump(20000);
+			console.log(inst.exports.memory.buffer.byteLength === before);
+			for (let i = 0; i < 20000; i++) withString('greet', 'world');
+			console.log(inst.exports.memory.buffer.byteLength === before);
+			""";
+
+	private static final List<String> EXPECTED = List.of("42", "2000000000000", "10", "1 0", "7 1", "13 world", "true",
+			"true");
+
+	@Test
+	void everyBoundaryTypeCrossesInBothDirections() throws Exception {
+		// greet answers (length (host-join "hello" who)) -- "hello, world!", 13
+		// characters -- over a string the HOST allocated in this module's memory and the
+		// wrapper copied into a [len][bytes] block. The `logged` beside it is the :void
+		// import's argument, and the two `true`s are the flatness of the two loops: k
+		// host
+		// calls inside ONE export call (the arena bracket) and k export calls from
+		// outside
+		// (the wrapper's own heap reset).
+		assertThat(run(MODULE, DRIVER, OptimizeLevel.NONE, "imports").lines().toList()).isEqualTo(EXPECTED);
+	}
+
+	@Test
+	void noOptimizeLevelChangesWhatTheHostSees() throws Exception {
+		for (OptimizeLevel level : List.of(OptimizeLevel.DEFAULT, OptimizeLevel.SIZE)) {
+			assertThat(run(MODULE, DRIVER, level, "imports-" + level.spelling()).lines().toList())
+				.as("optimize=%s", level.spelling())
+				.isEqualTo(EXPECTED);
+		}
+	}
+
+	@Test
+	void theBoundaryCarriesTheValueExactlyOrTraps() throws Exception {
+		// The house integer is i64 and the declared types are narrower or unsigned, so
+		// both directions have a value the other side cannot state. Outbound: a :s32
+		// parameter handed an i64 past 2^31. Inbound: a :u64 result at 2^63, which the
+		// SIGNED house integer would silently deliver as a negative Lisp integer.
+		String module = """
+				(rontolisp:wasm-import 'narrow :from "env" :as "narrow" :params '(:s32) :returns :s32)
+				(rontolisp:wasm-import 'unsigned :from "env" :as "unsigned" :params '() :returns :u64)
+				(defun pass (n) (narrow n))
+				(rontolisp:wasm-export 'pass :params '(:s64) :returns :s64)
+				(defun big () (unsigned))
+				(rontolisp:wasm-export 'big :params '() :returns :s64)
+				""";
+		String driver = """
+				const fs = require('fs');
+				let big = 0n;
+				const env = { narrow: (n) => n + 1, unsigned: () => big };
+				const mod = new WebAssembly.Module(fs.readFileSync(process.argv[2]));
+				const inst = new WebAssembly.Instance(mod, { env });
+				const attempt = (f) => { try { return String(f()); } catch (e) { return 'trap'; } };
+				console.log(attempt(() => inst.exports.pass(41n)));
+				console.log(attempt(() => inst.exports.pass(1n << 40n)));
+				big = (1n << 62n);
+				console.log(attempt(() => inst.exports.big()));
+				big = (1n << 63n);
+				console.log(attempt(() => inst.exports.big()));
+				""";
+		assertThat(run(module, driver, OptimizeLevel.SIZE, "guards").lines().toList()).containsExactly("42", "trap",
+				"4611686018427387904", "trap");
+	}
+
+	@Test
+	void theMemoryModuleReadsWhatAHostAnsweredThroughOutPointers() throws Exception {
+		// The rontolisp:memory fields over this backend's own bump heap. A :string lifted
+		// out of memory is a fresh block, and :u32 keeps its exact-or-trap guard here
+		// too.
+		String module = """
+				(rontolisp:wasm-import 'mem-alloc :from "rontolisp:memory" :as "alloc" :params '(:u32) :returns :u32)
+				(rontolisp:wasm-import 'mem-mark :from "rontolisp:memory" :as "mark" :returns :u32)
+				(rontolisp:wasm-import 'mem-reset :from "rontolisp:memory" :as "reset" :params '(:u32))
+				(rontolisp:wasm-import 'load8 :from "rontolisp:memory" :as "load8" :params '(:u32) :returns :u32)
+				(rontolisp:wasm-import 'load32 :from "rontolisp:memory" :as "load32" :params '(:u32) :returns :u32)
+				(rontolisp:wasm-import 'load64 :from "rontolisp:memory" :as "load64" :params '(:u32) :returns :s64)
+				(rontolisp:wasm-import 'store8 :from "rontolisp:memory" :as "store8" :params '(:u32 :u32))
+				(rontolisp:wasm-import 'store32 :from "rontolisp:memory" :as "store32" :params '(:u32 :u32))
+				(rontolisp:wasm-import 'store64 :from "rontolisp:memory" :as "store64" :params '(:u32 :s64))
+				(rontolisp:wasm-import 'mem-string :from "rontolisp:memory" :as "string" :params '(:u32 :u32) :returns :string)
+				(rontolisp:wasm-import 'answer :from "env" :as "answer" :params '(:u32 :u32))
+
+				(defun read-answer ()
+				  (let* ((cells (mem-alloc 8)))
+				    (answer cells (+ cells 4))
+				    (length (mem-string (load32 cells) (load32 (+ cells 4))))))
+				(rontolisp:wasm-export 'read-answer :params '() :returns :s64)
+
+				(defun round-trips (at)
+				  (store8 at 200)
+				  (store32 (+ at 4) 4000000000)
+				  (store64 (+ at 8) 1099511627776)
+				  (+ (load8 at) (load32 (+ at 4)) (load64 (+ at 8))))
+				(rontolisp:wasm-export 'round-trips :params '(:s64) :returns :s64)
+
+				(defun flat ()
+				  (let ((mark (mem-mark)))
+				    (mem-alloc 4096)
+				    (mem-reset mark)
+				    (if (= mark (mem-mark)) 1 0)))
+				(rontolisp:wasm-export 'flat :params '() :returns :s64)
+
+				(defun peek (address) (load8 address))
+				(rontolisp:wasm-export 'peek :params '(:s64) :returns :s64)
+
+				(defun reserve (size) (mem-alloc size))
+				(rontolisp:wasm-export 'reserve :params '(:u32) :returns :u32)
+
+				(rontolisp:wasm-import 'mem-address :from "rontolisp:memory" :as "address" :params '(:string) :returns :u32)
+				(rontolisp:wasm-import 'mem-size :from "rontolisp:memory" :as "size" :params '(:string) :returns :u32)
+				;; A string's bytes, where length counts its 2 characters.
+				(defun string-bytes ()
+				  (let ((s "日b"))
+				    (+ (* 1000 (mem-size s)) (load8 (mem-address s)) (load8 (+ 3 (mem-address s))) (length s))))
+				(rontolisp:wasm-export 'string-bytes :params '() :returns :s64)
+
+				;; Bytes 4 to 7 are the program's: no literal is there, and the empty string
+				;; at address 0 does not reach them.
+				(defun low-cell ()
+				  (let ((before (load32 4)))
+				    (store32 4 99)
+				    (+ (* 1000 before) (load32 4) (mem-size (or nil "")))))
+				(rontolisp:wasm-export 'low-cell :params '() :returns :s64)
+
+				(rontolisp:wasm-import 'mem-search :from "rontolisp:memory" :as "search" :params '(:string :u32 :u32) :returns :s32)
+				(defun search-in (needle needle-size at size)
+				  (mem-search (mem-string needle needle-size) at size))
+				(rontolisp:wasm-export 'search-in :params '(:u32 :u32 :u32 :u32) :returns :s32)
+				""";
+		String driver = """
+				const fs = require('fs');
+				let inst;
+				""" + WasmOctetsBoundaryE2eTest.SEARCH_CHECK + """
+				const env = {
+				  answer: (pointerCell, sizeCell) => {
+				    const text = new TextEncoder().encode('hello');
+				    const ptr = inst.exports.reserve(text.length);
+				    new Uint8Array(inst.exports.memory.buffer).set(text, ptr);
+				    const view = new DataView(inst.exports.memory.buffer);
+				    view.setUint32(pointerCell, ptr, true);
+				    view.setUint32(sizeCell, text.length, true);
+				  },
+				};
+				const mod = new WebAssembly.Module(fs.readFileSync(process.argv[2]));
+				inst = new WebAssembly.Instance(mod, { env });
+				const attempt = (f) => { try { return String(f()); } catch (e) { return 'trap'; } };
+				console.log(attempt(() => inst.exports['read-answer']()));
+				const at = inst.exports.reserve(16);
+				console.log(attempt(() => inst.exports['round-trips'](BigInt(at))));
+				console.log(attempt(() => inst.exports['string-bytes']()));
+				console.log(attempt(() => inst.exports['low-cell']()));
+				console.log(attempt(() => inst.exports.flat()));
+				console.log(attempt(() => inst.exports.peek(1n << 32n)));
+				console.log(WebAssembly.Module.imports(mod).map((i) => i.module + '.' + i.name).join(' '));
+				const reserved = inst.exports.reserve(8);
+				console.log(inst.exports.reserve(8) >= reserved + 8 ? 'stays reserved' : 'handed out twice');
+				console.log(searchCheck(inst.exports.reserve, inst.exports['search-in']));
+				""";
+		for (OptimizeLevel level : List.of(OptimizeLevel.NONE, OptimizeLevel.SIZE)) {
+			assertThat(run(module, driver, level, "memory-" + level.spelling()).lines().toList())
+				.as("optimize=%s", level.spelling())
+				.containsExactly("5", String.valueOf(200L + 4000000000L + 1099511627776L),
+						String.valueOf(4000 + 0xE6 + 'b' + 2), "99", "1", "trap", "env.answer", "stays reserved", "0");
+		}
+	}
+
+	@Test
+	void aLiteralStringArgumentReachesTheHostWithoutTheWrapper() throws Exception {
+		// The shape a host-facing reactor is written in: a thin Lisp helper per host
+		// function, and the literals at the HELPER's call sites. Every :string argument
+		// is a literal, so every site crosses as the two constants its [len][bytes]
+		// block already is, and neither the helper nor the import wrapper is emitted at
+		// all. What the host must still see is each argument's OWN bytes: the pointers
+		// are into the module's permanent literal block, where one spelling used twice
+		// is ONE block -- so "status" reaching all three calls intact is the pin, and
+		// the scalars beside it show the rest of the marshalling moved with them.
+		String module = """
+				(rontolisp:wasm-import 'js-set-text :from "env" :as "set_text"
+				                       :params '(:string :string) :returns :void)
+				(rontolisp:wasm-import 'js-mark :from "env" :as "mark"
+				                       :params '(:string :s32 :bool :float) :returns :s32)
+				(defun set-text (element-id text) (js-set-text element-id text))
+				(defun boot (n)
+				  (set-text "status" "ready")
+				  (set-text "status" "done")
+				  (js-mark "status" n t 0.5))
+				(rontolisp:wasm-export 'boot :params '(:s32) :returns :s32)
+				""";
+		String driver = """
+				const fs = require('fs');
+				const dec = new TextDecoder();
+				let inst;
+				const seen = [];
+				const str = (p, n) => dec.decode(new Uint8Array(inst.exports.memory.buffer, p, n));
+				const env = {
+				  set_text: (p1, n1, p2, n2) => seen.push(str(p1, n1) + '=' + str(p2, n2)),
+				  mark: (p, len, n, flag, weight) => {
+				    seen.push(str(p, len) + ':' + n + ':' + flag + ':' + weight);
+				    return n + 1;
+				  },
+				};
+				inst = new WebAssembly.Instance(new WebAssembly.Module(fs.readFileSync(process.argv[2])), { env });
+				console.log(inst.exports.boot(41));
+				console.log(seen.join(' | '));
+				""";
+		for (OptimizeLevel level : List.of(OptimizeLevel.NONE, OptimizeLevel.DEFAULT, OptimizeLevel.SIZE)) {
+			assertThat(run(module, driver, level, "literal-" + level.spelling()).lines().toList())
+				.as("optimize=%s", level.spelling())
+				.containsExactly("42", "status=ready | status=done | status:41:1:0.5");
+		}
+	}
+
+	@Test
+	void aFoldedLiteralReachesTheHostIntactWhetherOrNotItKeepsItsHeader() throws Exception {
+		// A literal only folded sites use is laid out without its [len] header; one also
+		// read as a value keeps it, and the folded site points past it. Either way the
+		// host sees the literal's own bytes: "both" (headered, also counted by length),
+		// "only" (bare), the empty literal, and a UTF-8 literal whose length is in BYTES.
+		String module = """
+				(rontolisp:wasm-import 'js-say :from "env" :as "say" :params '(:string) :returns :void)
+				(defun boot ()
+				  (js-say "both")
+				  (js-say "only")
+				  (js-say "")
+				  (js-say "日本語")
+				  (length "both"))
+				(rontolisp:wasm-export 'boot :params '() :returns :s32)
+				""";
+		String driver = """
+				const fs = require('fs');
+				const dec = new TextDecoder();
+				let inst;
+				const seen = [];
+				const env = {
+				  say: (p, n) => seen.push('[' + dec.decode(new Uint8Array(inst.exports.memory.buffer, p, n)) + ']'),
+				};
+				inst = new WebAssembly.Instance(new WebAssembly.Module(fs.readFileSync(process.argv[2])), { env });
+				console.log(inst.exports.boot());
+				console.log(seen.join(''));
+				""";
+		for (OptimizeLevel level : List.of(OptimizeLevel.NONE, OptimizeLevel.SIZE)) {
+			assertThat(run(module, driver, level, "header-free-" + level.spelling()).lines().toList())
+				.as("optimize=%s", level.spelling())
+				.containsExactly("4", "[both][only][][日本語]");
+		}
+	}
+
+	@Test
+	void aPrintedLiteralReachesBothTheHostAndStdoutIntact() throws Exception {
+		// A spelling printed by a statement princ AND passed to a folded
+		// import is pushed as two constants at both sites. "both" is also read by
+		// length, so it keeps its header and both folded sites point past it;
+		// "only" is never read through a header, so it carries none. Either way
+		// the host sees the literal's own bytes and stdout the display text. The
+		// module prints, so unlike the other cases here it keeps WASI: the driver
+		// serves fd_write itself (one iovec per call, exactly what __write_stdout
+		// passes) instead of node:wasi.
+		String module = """
+				(rontolisp:wasm-import 'js-say :from "env" :as "say" :params '(:string) :returns :void)
+				(defun boot ()
+				  (js-say "both") (princ "both") (terpri)
+				  (js-say "only") (princ "only") (terpri)
+				  (length "both"))
+				(rontolisp:wasm-export 'boot :params '() :returns :s32)
+				""";
+		String driver = """
+				const fs = require('fs');
+				const dec = new TextDecoder();
+				let inst;
+				const seen = [];
+				const printed = [];
+				const mem = () => new DataView(inst.exports.memory.buffer);
+				const str = (p, n) => dec.decode(new Uint8Array(inst.exports.memory.buffer, p, n));
+				const env = {
+				  say: (p, n) => seen.push('[' + str(p, n) + ']'),
+				};
+				const wasi = {
+				  fd_write: (fd, iovs, iovsLen, nwritten) => {
+				    let bytes = [];
+				    for (let i = 0; i < iovsLen; i++) {
+				      const p = mem().getUint32(iovs + i * 8, true);
+				      const n = mem().getUint32(iovs + i * 8 + 4, true);
+				      bytes = bytes.concat([...new Uint8Array(inst.exports.memory.buffer, p, n)]);
+				      printed.push(str(p, n));
+				    }
+				    mem().setUint32(nwritten, bytes.length, true);
+				    return 0;
+				  },
+				};
+				inst = new WebAssembly.Instance(new WebAssembly.Module(fs.readFileSync(process.argv[2])),
+				  { env, wasi_snapshot_preview1: wasi });
+				console.log(inst.exports.boot());
+				console.log(seen.join(''));
+				console.log(JSON.stringify(printed.join('')));
+				""";
+		for (OptimizeLevel level : List.of(OptimizeLevel.NONE, OptimizeLevel.SIZE)) {
+			assertThat(runWithWasi(module, driver, level, "print-fold-" + level.spelling()).lines().toList())
+				.as("optimize=%s", level.spelling())
+				.containsExactly("4", "[both][only]", "\"both\\nonly\\n\"");
+		}
+	}
+
+	@Test
+	void aWitImportedInterfaceIsTheHandWrittenImportBlock() throws Exception {
+		// The same lowering both WASM core-module backends take: a wit-import is exactly
+		// the wasm-import block it stands for, so binding an interface from its WIT
+		// costs nothing and the two programs compile to the SAME bytes.
+		Files.writeString(this.tempDir.resolve("api.wit"), """
+				package example:app@0.1.0;
+
+				interface api {
+				  add: func(a: s32, b: s32) -> s32;
+				  greet: func(name: string) -> string;
+				}
+				""", StandardCharsets.UTF_8);
+		String witProgram = """
+				(rontolisp:wit-import "api.wit" :interface "example:app/api@0.1.0" :package api :from "env")
+				(defun run (n) (length (api:greet (if (> (api:add n n) 10) "big" "small"))))
+				(rontolisp:wasm-export 'run :params '(:s32) :returns :s32)
+				""";
+		String handWritten = """
+				(rontolisp:wasm-import 'add :from "env" :as "add" :params '(:int :int) :returns :int)
+				(rontolisp:wasm-import 'greet :from "env" :as "greet" :params '(:string) :returns :string)
+				(defun run (n) (length (greet (if (> (add n n) 10) "big" "small"))))
+				(rontolisp:wasm-export 'run :params '(:s32) :returns :s32)
+				""";
+		byte[] fromWit = compileNoGc(CompileFrontendAccess.wasmReactor(witProgram, this.tempDir.toString(), true),
+				OptimizeLevel.SIZE);
+		byte[] byHand = compileNoGc(LispReader.readAllFromString(handWritten), OptimizeLevel.SIZE);
+		assertThat(fromWit).isEqualTo(byHand);
+
+		String driver = """
+				const fs = require('fs');
+				const dec = new TextDecoder(), enc = new TextEncoder();
+				let inst;
+				const env = {
+				  add: (a, b) => a + b,
+				  greet: (p, n) => {
+				    const b = enc.encode('hello ' + dec.decode(new Uint8Array(inst.exports.memory.buffer, p, n)));
+				    const q = inst.exports.__ronto_alloc(b.length);
+				    new Uint8Array(inst.exports.memory.buffer).set(b, q);
+				    return [q, b.length];
+				  },
+				};
+				inst = new WebAssembly.Instance(new WebAssembly.Module(fs.readFileSync(process.argv[2])), { env });
+				console.log(inst.exports.run(3), inst.exports.run(9));
+				""";
+		Path wasmFile = this.tempDir.resolve("wit.wasm");
+		Files.write(wasmFile, fromWit);
+		Path driverFile = this.tempDir.resolve("wit.js");
+		Files.writeString(driverFile, driver, StandardCharsets.UTF_8);
+		assertThat(runNode(driverFile, wasmFile)).isEqualTo("11 9");
+	}
+
+	@Test
+	void aPackageLessWitImportIsCallableFromTheProgramThatDeclaredIt() throws Exception {
+		// The guide's own first wit-import example (doc/*/guides/wit-contracts.md), which
+		// omits :package: the interface's functions land in the CURRENT package and
+		// `(add-ints n 10)` calls one unqualified. With no package there is no export
+		// table between the binding and the call site, so the binding has to carry the
+		// name the READER produces -- ADD-INTS. Bound as the WIT label verbatim it was
+		// |add-ints|, which this backend could not even compile a call to ("unsupported
+		// operation 'ADD-INTS'"); nothing ran the package-less form end to end, which is
+		// how the documented example stayed broken.
+		Files.writeString(this.tempDir.resolve("host.wit"), """
+				package example:host@0.1.0;
+
+				interface math {
+				  add-ints: func(a: s32, b: s32) -> s32;
+				}
+				""", StandardCharsets.UTF_8);
+		String program = """
+				(rontolisp:wit-import "host.wit" :interface "example:host/math@0.1.0")
+
+				(defun add10 (n) (add-ints n 10))
+				(rontolisp:wasm-export 'add10 :params '(:int) :returns :int)
+				""";
+		byte[] wasm = compileNoGc(CompileFrontendAccess.wasmReactor(program, this.tempDir.toString(), true),
+				OptimizeLevel.SIZE);
+		String driver = """
+				const fs = require('fs');
+				const math = { addInts: (a, b) => a + b };
+				const inst = new WebAssembly.Instance(
+				  new WebAssembly.Module(fs.readFileSync(process.argv[2])), { math });
+				console.log(inst.exports.add10(32));
+				""";
+		Path wasmFile = this.tempDir.resolve("packageless.wasm");
+		Files.write(wasmFile, wasm);
+		Path driverFile = this.tempDir.resolve("packageless.js");
+		Files.writeString(driverFile, driver, StandardCharsets.UTF_8);
+		assertThat(runNode(driverFile, wasmFile)).isEqualTo("42");
+	}
+
+	private static byte[] compileNoGc(List<LispVal> program, OptimizeLevel level) {
+		return NoGcWasmCompiler.builder().optimize(level).noWasi(true).build().compile(program);
+	}
+
+	private String run(String module, String driverJs, OptimizeLevel level, String name) throws Exception {
+		byte[] wasm = compileNoGc(LispReader.readAllFromString(module), level);
+		Path wasmFile = this.tempDir.resolve(name + ".wasm");
+		Files.write(wasmFile, wasm);
+		Path driver = this.tempDir.resolve(name + ".js");
+		Files.writeString(driver, driverJs, StandardCharsets.UTF_8);
+		return runNode(driver, wasmFile);
+	}
+
+	// As run, but the module keeps WASI (fd_write import) so a printing program
+	// can run under the driver's own fd_write shim.
+	private String runWithWasi(String module, String driverJs, OptimizeLevel level, String name) throws Exception {
+		byte[] wasm = NoGcWasmCompiler.builder().optimize(level).build().compile(LispReader.readAllFromString(module));
+		Path wasmFile = this.tempDir.resolve(name + ".wasm");
+		Files.write(wasmFile, wasm);
+		Path driver = this.tempDir.resolve(name + ".js");
+		Files.writeString(driver, driverJs, StandardCharsets.UTF_8);
+		return runNode(driver, wasmFile);
+	}
+
+	private static String runNode(Path driver, Path wasmFile) throws Exception {
+		Process process = new ProcessBuilder("node", driver.toString(), wasmFile.toString()).redirectErrorStream(true)
+			.start();
+		String output = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+		int exit = process.waitFor();
+		assertThat(exit).as("node exited %d:%n%s", exit, output).isZero();
+		return output.trim();
+	}
+
+}

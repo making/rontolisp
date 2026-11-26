@@ -1,0 +1,645 @@
+package am.ik.rontolisp.eval;
+
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.UncheckedIOException;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+
+import am.ik.rontolisp.LambdaLists;
+import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispNames;
+import am.ik.rontolisp.LispNil;
+import am.ik.rontolisp.LispPackageException;
+import am.ik.rontolisp.LispString;
+import am.ik.rontolisp.LispSymbol;
+import am.ik.rontolisp.LispTrue;
+import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.PackageRegistry;
+import am.ik.rontolisp.PackageResolver;
+import am.ik.rontolisp.UiopExports;
+import am.ik.rontolisp.macro.LispMacroExpander;
+import am.ik.rontolisp.reader.Features;
+import am.ik.rontolisp.reader.LispReader;
+import org.jspecify.annotations.Nullable;
+
+/**
+ * The one home of every {@code uiop} definition: the Lisp-source implementations
+ * ({@code uiop-<sub-package>.lisp} on the classpath, one per sub-package that has any)
+ * plus a {@code not-implemented-error} STUB, synthesized from {@link UiopExports the
+ * inventory}, for every export nothing implements yet.
+ *
+ * <p>
+ * The point of the stubs is that no uiop name may reach a caller as
+ * {@code The function UIOP:X is undefined}: uiop is 429 external symbols and this
+ * implementation fills them in over many changes, so "we cannot do that here" needs a
+ * name from the start. That name is upstream's own {@code uiop:not-implemented-error},
+ * and the stub reports the operation it stands for. Filling a name in means adding its
+ * real definition to the matching {@code .lisp} resource -- the stub for it then
+ * disappears on its own, because a name the resources define is never stubbed.
+ *
+ * <p>
+ * Every definition is keyed by its HOME-package spelling ({@code UIOP/OS:GETENV}, not
+ * {@code UIOP:GETENV}): {@code uiop} imports each member from the sub-package that
+ * defines it ({@code PackageRegistry}), so that is what {@code PackageResolver} rewrites
+ * a {@code uiop:} occurrence into and therefore what a definition of it must carry.
+ *
+ * <p>
+ * Two groups of names are deliberately NOT stubbed, because something else already
+ * defines them:
+ * <ul>
+ * <li>{@code LispMacroExpander.hasUiopMacroExpansion} -- forms with a real expansion
+ * ({@code if-let}, {@code with-temporary-file}, {@code with-deprecation},
+ * {@code define-package});</li>
+ * <li>the folds {@code LispMacroExpander.expandUiopStubCall} performs
+ * ({@code native-namestring}, {@code symbol-call}) -- those DO carry a Lisp definition
+ * here as well, so {@code #'uiop:native-namestring} is a value like any other.</li>
+ * </ul>
+ *
+ * <p>
+ * Consumers mirror {@code LispPreludeLibrary}: the interpreter lazy-loads ONE name's
+ * forms on first resolution, and the compile path prepends only the definitions the
+ * program reaches, computed to a fixpoint. Splicing all 429 and letting
+ * {@code LibraryDefunPruner} shake them out again would cost every uiop-using program a
+ * full resolution pass over 429 definitions; selecting up front is the same saving one
+ * step earlier, and it is why uiop is not in the pruner's prunable set (the usocket
+ * precedent -- {@code .kb/uiop.md}).
+ */
+public final class UiopLibrary {
+
+	/**
+	 * Sub-package to the classpath resource carrying its real definitions. A sub-package
+	 * absent here has no Lisp-source implementation yet, so every one of its exports is
+	 * stubbed.
+	 */
+	private static final Map<String, String> RESOURCES = Map.ofEntries(Map.entry("UIOP/PACKAGE", "uiop-package.lisp"),
+			Map.entry("UIOP/UTILITY", "uiop-utility.lisp"), Map.entry("UIOP/OS", "uiop-os.lisp"),
+			Map.entry("UIOP/PATHNAME", "uiop-pathname.lisp"), Map.entry("UIOP/FILESYSTEM", "uiop-filesystem.lisp"),
+			Map.entry("UIOP/STREAM", "uiop-stream.lisp"), Map.entry("UIOP/IMAGE", "uiop-image.lisp"),
+			Map.entry("UIOP/LAUNCH-PROGRAM", "uiop-launch-program.lisp"),
+			Map.entry("UIOP/RUN-PROGRAM", "uiop-run-program.lisp"),
+			Map.entry("UIOP/LISP-BUILD", "uiop-lisp-build.lisp"), Map.entry("UIOP/VERSION", "uiop-version.lisp"),
+			Map.entry("UIOP/BACKWARD-DRIVER", "uiop-backward-driver.lisp"),
+			Map.entry("UIOP/CONFIGURATION", "uiop-configuration.lisp"));
+
+	/** The {@code &rest} parameter of a synthesized stub; its arguments are ignored. */
+	private static final String STUB_ARGS = "%UIOP-STUB-ARGS";
+
+	/**
+	 * Upstream's INTERNAL names a resource may define beside the inventory: state a
+	 * library reads with {@code ::} (deploy's image hooks read
+	 * {@code uiop/image::*image-restored-p*}). Each is selected and lazy-loaded like an
+	 * export, and none is counted as one.
+	 */
+	private static final Set<String> INTERNALS = Set.of("UIOP/IMAGE::*IMAGE-RESTORED-P*");
+
+	/**
+	 * The built tables: every uiop member's definitions, keyed by its home-qualified name
+	 * and in inventory order, plus the subset that is REALLY implemented (a Lisp
+	 * definition here, a Java built-in or a built-in macro expansion) rather than
+	 * standing behind a synthesized {@code not-implemented-error} stub.
+	 * {@code UiopCoverageTest} measures the second against the first.
+	 *
+	 * @param definitions the definition forms per home-qualified name
+	 * @param implemented the home-qualified names with a real implementation
+	 */
+	record Tables(Map<String, List<LispVal>> definitions, Set<String> implemented) {
+	}
+
+	/**
+	 * The built tables per FEATURE SET. The resources are read with the target backend's
+	 * features, so a definition may branch on them -- and one does: {@code featurep}
+	 * evaluates a feature expression against {@code *features*}, which the reader
+	 * substitutes with the target's list on the compile backends and leaves as the symbol
+	 * (a real global) on the interpreter. Everything else in {@code uiop/os} that differs
+	 * per backend -- {@code architecture}, {@code implementation-identifier} -- is
+	 * derived from {@code featurep}, so this one thread is the whole per-backend story.
+	 * Keyed by the feature NAMES (plus the substitution flag), because {@code Features}
+	 * is not a value type.
+	 */
+	private static final Map<String, Tables> TABLES = new ConcurrentHashMap<>();
+
+	private UiopLibrary() {
+	}
+
+	/**
+	 * Returns the definitions of one uiop member, keyed by its HOME-package spelling.
+	 * Usually one form; two when upstream defines the name twice
+	 * ({@code not-implemented-error} is a condition AND the function that signals it).
+	 * @param qualifiedName the home-qualified name ({@code UIOP/OS:GETENV})
+	 * @return the forms, or an empty list when nothing defines the name
+	 */
+	public static List<LispVal> formsFor(String qualifiedName) {
+		return tables().definitions().getOrDefault(qualifiedName, List.of());
+	}
+
+	/**
+	 * Returns whether the library carries a definition (real or stub) for the name.
+	 * @param qualifiedName the home-qualified name
+	 * @return {@code true} when {@link #formsFor} is non-empty
+	 */
+	public static boolean definesName(String qualifiedName) {
+		return tables().definitions().containsKey(qualifiedName);
+	}
+
+	/**
+	 * Returns whether the name has a REAL implementation rather than a synthesized
+	 * {@code not-implemented-error} stub: a definition in one of the {@code uiop-*.lisp}
+	 * resources, a Java built-in, or a built-in macro expansion. This is what
+	 * {@code UiopCoverageTest} counts.
+	 * @param qualifiedName the home-qualified name
+	 * @return {@code true} when the name is implemented
+	 */
+	public static boolean isImplemented(String qualifiedName) {
+		return tables().implemented().contains(qualifiedName);
+	}
+
+	/**
+	 * Returns every name the library defines, in inventory order.
+	 * @return the home-qualified names
+	 */
+	public static Set<String> definedNames() {
+		return tables().definitions().keySet();
+	}
+
+	/**
+	 * Returns every CONDITION- or CLASS-kind member the library defines, in inventory
+	 * order. The interpreter registers all of them on its first uiop load, which is the
+	 * {@code not-implemented-error} rule the skeleton established generalized to the
+	 * whole inventory -- and for the same reason, one step further: a handler's type test
+	 * is built from the class tags known when the {@code handler-bind} form is EXPANDED,
+	 * so a condition class that first appears while the body runs is invisible to the
+	 * handler that was meant to catch it. The compile paths splice every reachable
+	 * definition before anything runs and never see that window; registering the 19
+	 * classes up front is what closes it here. They are
+	 * {@code define-condition}/{@code defclass} forms only, so the cost is a registry
+	 * entry each.
+	 * @return the condition and class names, home-qualified
+	 */
+	public static Set<String> conditionAndClassNames() {
+		Set<String> names = new LinkedHashSet<>();
+		for (UiopExports.Entry entry : UiopExports.entries()) {
+			if (entry.is("condition") || entry.is("class")) {
+				String qualified = UiopExports.qualified(entry.symbol());
+				if (definesName(qualified)) {
+					names.add(qualified);
+				}
+			}
+		}
+		return names;
+	}
+
+	/**
+	 * Returns the name plus every library definition reachable from it, to a fixpoint and
+	 * in inventory order: the interpreter's lazy load needs the same closure
+	 * {@link #process} splices on the compile paths, or the two disagree about what a
+	 * definition brings with it.
+	 *
+	 * <p>
+	 * The case that forces it is a name a body mentions but never CALLS:
+	 * {@code style-warn} signals {@code (make-condition 'uiop:simple-style-warning ...)},
+	 * and a quoted condition name is not a function resolution, so nothing would ever
+	 * trigger the class's own load -- the warning then had no report and no
+	 * {@code style-warning} supertype on the interpreter while the compile paths had
+	 * both.
+	 * @param qualifiedName the home-qualified name
+	 * @return the closure, in inventory order (empty when nothing defines the name)
+	 */
+	public static Set<String> closureOf(String qualifiedName) {
+		if (!definesName(qualifiedName)) {
+			return Set.of();
+		}
+		Set<String> selected = new LinkedHashSet<>();
+		selected.add(qualifiedName);
+		boolean grew = true;
+		while (grew) {
+			grew = false;
+			for (String name : List.copyOf(selected)) {
+				Set<String> referenced = new LinkedHashSet<>();
+				for (LispVal form : formsFor(name)) {
+					collectSymbols(form, referenced);
+				}
+				for (String candidate : definedNames()) {
+					if ((referenced.contains(candidate) || reachedBySurfaceForm(candidate, referenced))
+							&& selected.add(candidate)) {
+						grew = true;
+					}
+				}
+			}
+		}
+		// Inventory order, like the splice: the load order of a group is then the same
+		// on every backend.
+		Set<String> ordered = new LinkedHashSet<>();
+		for (String name : definedNames()) {
+			if (selected.contains(name)) {
+				ordered.add(name);
+			}
+		}
+		return ordered;
+	}
+
+	/**
+	 * Returns every definition, in inventory order: the whole library. Used by the
+	 * coverage test and by anything that wants uiop whole rather than selected.
+	 * @return the library forms
+	 */
+	public static List<LispVal> forms() {
+		List<LispVal> out = new ArrayList<>();
+		tables().definitions().values().forEach(out::addAll);
+		return List.copyOf(out);
+	}
+
+	/**
+	 * Returns whether the given symbol name is qualified with {@code uiop} or one of its
+	 * sub-packages.
+	 * @param symbolName the symbol name as written
+	 * @return {@code true} when the name belongs to the uiop family
+	 */
+	public static boolean isUiopQualified(String symbolName) {
+		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(symbolName);
+		return qn != null && UiopExports.isUiopFamily(qn.pkg());
+	}
+
+	/**
+	 * The compile-path pre-pass: prepends the definitions of every uiop member the
+	 * program reaches, and nothing else. Selection runs on a
+	 * {@link PackageResolver#resolveProgram(List) resolved} copy so a {@code uiop:name}
+	 * occurrence is matched as the home-package symbol it denotes, and to a fixpoint
+	 * because a uiop definition may call another one.
+	 *
+	 * <p>
+	 * It must run BEFORE the prelude selection: the bodies here call {@code namestring} /
+	 * {@code pathname} / {@code merge-pathnames} / {@code directory} and the prelude's
+	 * own helpers, and the prelude selects on what the program contains at the time it
+	 * runs. That is why {@code LispPreludeLibrary.process} CALLS this rather than sitting
+	 * beside it in the pipeline: the two are mutually dependent (the prelude's
+	 * {@code %temp-file-name} calls uiop back), so they are one pass with a fixed order,
+	 * and a pipeline that ran only the prelude would reintroduce exactly the
+	 * "{@code The function UIOP:X is undefined}" this library exists to abolish.
+	 * Re-running it is a no-op: a definition the program already carries is not spliced
+	 * again.
+	 * @param program the top-level forms (after load inlining and user-macro expansion)
+	 * @return the program with the referenced uiop definitions spliced in
+	 */
+	public static List<LispVal> process(List<LispVal> program) {
+		return process(program, Features.INTERPRETER);
+	}
+
+	/**
+	 * {@link #process(List)} for a target backend: the definitions are read with
+	 * {@code features}, so the one member that branches on the feature set --
+	 * {@code featurep}, and through it {@code architecture} and
+	 * {@code implementation-identifier} -- answers for the backend being compiled rather
+	 * than for the interpreter. The reader substitutes {@code *features*} with the
+	 * target's list on the compile backends and leaves the symbol alone on the
+	 * interpreter, where it is a real global.
+	 * @param program the top-level forms (after load inlining and user-macro expansion)
+	 * @param features the target backend's feature set
+	 * @return the program with the referenced uiop definitions spliced in
+	 */
+	public static List<LispVal> process(List<LispVal> program, Features features) {
+		Map<String, List<LispVal>> definitions = tables(features).definitions();
+		List<LispVal> resolved;
+		try {
+			resolved = new PackageResolver().resolveProgram(program);
+		}
+		catch (LispPackageException ex) {
+			// Not this pass's error to report -- the backends run the identical
+			// resolution first thing. Without canonical spellings a uiop reference
+			// cannot be recognised at all, so select nothing.
+			return program;
+		}
+		Set<String> occurring = new LinkedHashSet<>();
+		Set<String> alreadyDefined = new LinkedHashSet<>();
+		for (LispVal form : resolved) {
+			collectSymbols(form, occurring);
+			String defined = definedName(form);
+			if (defined != null) {
+				alreadyDefined.add(defined);
+			}
+		}
+		Set<String> selected = new LinkedHashSet<>();
+		for (String name : definitions.keySet()) {
+			if (alreadyDefined.contains(name)) {
+				// The dedup guard every library splice carries: the program already
+				// carries this definition (a previous run of this pass, an
+				// asdf:load-system splice, or the user's own), so a second copy would
+				// only redefine it.
+				continue;
+			}
+			if (occurring.contains(name) || reachedBySurfaceForm(name, occurring)) {
+				selected.add(name);
+			}
+		}
+		boolean grew = true;
+		while (grew) {
+			grew = false;
+			for (String name : List.copyOf(selected)) {
+				Set<String> referenced = new LinkedHashSet<>();
+				for (LispVal form : definitions.getOrDefault(name, List.of())) {
+					collectSymbols(form, referenced);
+				}
+				for (String candidate : definitions.keySet()) {
+					// A selected definition reaches what a surface form IT names reaches,
+					// as the program does: restore-image's standard-eval-thunk reaches
+					// eval-input, whose prelude helper opens a file through a name no
+					// definition spells, and escape-token's with-output and
+					// escape-command's output-string the same way.
+					if ((referenced.contains(candidate) || reachedBySurfaceForm(candidate, referenced))
+							&& !alreadyDefined.contains(candidate) && selected.add(candidate)) {
+						grew = true;
+					}
+				}
+			}
+		}
+		if (selected.isEmpty()) {
+			return program;
+		}
+		List<LispVal> out = new ArrayList<>();
+		// Emit in inventory order, not discovery order, so the spliced prefix is stable.
+		for (Map.Entry<String, List<LispVal>> entry : definitions.entrySet()) {
+			if (selected.contains(entry.getKey())) {
+				out.addAll(entry.getValue());
+			}
+		}
+		out.addAll(program);
+		return out;
+	}
+
+	/**
+	 * The definitions a uiop member reaches without NAMING, per member. Most rows are a
+	 * uiop MACRO's expansion, which runs inside the expression compilers, long after this
+	 * pass, so the names it introduces never occur in the program this pass looks at --
+	 * without the table the compiled program says
+	 * {@code The function UIOP/UTILITY:X is undefined} at run time while the interpreter
+	 * (which lazy-loads on resolution) works. Three rows are FUNCTIONS instead
+	 * ({@code eval-input}, {@code input-string}, {@code output-string}): they name the
+	 * {@code %call-with-input} / {@code %call-with-output} prelude entries in their own
+	 * bodies, and the table carries the uiop names those helpers' pathname arms reach for
+	 * -- the same timing problem one step further along.
+	 *
+	 * <p>
+	 * Only the DIRECT callee needs listing: {@link #process}'s fixpoint pulls in whatever
+	 * that one reaches in turn ({@code call-with-muffled-conditions} drags
+	 * {@code match-any-condition-p}, {@code match-condition-p} and {@code find-symbol*}
+	 * along). {@code with-temporary-file} (and {@code with-staging-pathname} through its
+	 * chain) reach the temporary-directory family and the delete through
+	 * {@code call-with-temporary-file}, whose own body names them -- the fixpoint pulls
+	 * them, including through the prelude's {@code %temp-file-name}.
+	 */
+	private static final Map<String, List<String>> MACRO_EXPANSION_CALLEES = Map.ofEntries(
+			// with-temporary-file is upstream's wrapper over
+			// call-with-temporary-file. The fixpoint pulls the rest (ensure-directory-
+			// pathname / default-temporary-directory, delete-file-if-exists,
+			// call-function)
+			// from that one definition -- including through %temp-file-name, whose
+			// directory arm is reached by call-with-temporary-file's own body.
+			Map.entry(LispNames.WITH_TEMPORARY_FILE, List.of(LispNames.CALL_WITH_TEMPORARY_FILE)),
+			Map.entry(LispNames.WITH_NULL_INPUT, List.of(LispNames.CALL_WITH_NULL_INPUT)),
+			Map.entry(LispNames.WITH_NULL_OUTPUT, List.of(LispNames.CALL_WITH_NULL_OUTPUT)),
+			// with-staging-pathname reaches call-with-staging-pathname -> tmpize-pathname
+			// -> call-with-temporary-file -> the temporary-directory family; the fixpoint
+			// pulls that chain and rename-file-overwriting-target.
+			Map.entry(LispNames.WITH_STAGING_PATHNAME, List.of(LispNames.CALL_WITH_STAGING_PATHNAME)),
+			Map.entry(LispNames.WITH_MUFFLED_CONDITIONS, List.of(LispNames.CALL_WITH_MUFFLED_CONDITIONS)),
+			Map.entry(LispNames.WITH_MUFFLED_COMPILER_CONDITIONS,
+					List.of(LispNames.CALL_WITH_MUFFLED_COMPILER_CONDITIONS)),
+			Map.entry(LispNames.WITH_MUFFLED_LOADER_CONDITIONS, List.of(LispNames.CALL_WITH_MUFFLED_LOADER_CONDITIONS)),
+			Map.entry(LispNames.UIOP_DEBUG, List.of(LispNames.LOAD_UIOP_DEBUG_UTILITY)),
+			Map.entry(LispNames.LATEST_TIMESTAMP_F, List.of(LispNames.LATEST_TIMESTAMP)),
+			// The no-defaults arm of with-pathname-defaults binds the *nil-pathname*
+			// VARIABLE -- a definition is a definition, so the same selection carries
+			// its defvar in.
+			Map.entry(LispNames.WITH_PATHNAME_DEFAULTS, List.of(LispNames.NIL_PATHNAME_VAR)),
+			Map.entry(LispNames.WITH_ENOUGH_PATHNAME, List.of(LispNames.CALL_WITH_ENOUGH_PATHNAME)),
+			Map.entry(LispNames.WITH_FATAL_CONDITION_HANDLER, List.of(LispNames.CALL_WITH_FATAL_CONDITION_HANDLER)),
+			Map.entry(LispNames.WITH_CURRENT_DIRECTORY, List.of(LispNames.CALL_WITH_CURRENT_DIRECTORY)),
+			// with-input / with-output expand over the %call-with-input /
+			// %call-with-output PRELUDE entries (upstream defines call-with-input
+			// and call-with-output but does not export them, so no uiop resource
+			// may define them); the pathname arm of each helper opens through
+			// call-with-input-file / call-with-output-file, which the program never
+			// names -- reading the designator here would duplicate the runtime
+			// rule, so both are pulled in unconditionally (the with-temporary-file
+			// :keep precedent above). The prelude halves live in
+			// LispPreludeLibrary.referencedBySurfaceForm. The three FUNCTION rows
+			// below are the same edge through the front door: eval-input,
+			// input-string and output-string name the prelude helpers in their own
+			// bodies, whose pathname arms the program likewise never names.
+			Map.entry(LispNames.WITH_INPUT, List.of(LispNames.CALL_WITH_INPUT_FILE)),
+			Map.entry(LispNames.WITH_OUTPUT, List.of(LispNames.CALL_WITH_OUTPUT_FILE)),
+			Map.entry(LispNames.EVAL_INPUT, List.of(LispNames.CALL_WITH_INPUT_FILE)),
+			Map.entry(LispNames.INPUT_STRING, List.of(LispNames.CALL_WITH_INPUT_FILE)),
+			Map.entry(LispNames.OUTPUT_STRING, List.of(LispNames.CALL_WITH_OUTPUT_FILE)),
+			Map.entry(LispNames.WITH_INPUT_FILE, List.of(LispNames.CALL_WITH_INPUT_FILE)),
+			Map.entry(LispNames.WITH_OUTPUT_FILE, List.of(LispNames.CALL_WITH_OUTPUT_FILE)),
+			Map.entry(LispNames.WITH_SAFE_IO_SYNTAX, List.of(LispNames.CALL_WITH_SAFE_IO_SYNTAX)),
+			// with-deprecation's expansion evaluates the level form and signals the
+			// deprecation class it selects -- but only the top-level use is expanded by
+			// flattenTopLevel BEFORE selection; a with-deprecation in an expression is
+			// expanded by the expression compilers AFTER it, so the names the expansion
+			// introduces must be listed here. style-warn is the uiop/utility function the
+			// :style-warning arm signals through, version-deprecation the usual level
+			// form, and the four condition classes are referenced by the expansion
+			// itself (no selected definition names them, so the fixpoint would not pull
+			// them in).
+			Map.entry(LispNames.WITH_DEPRECATION,
+					List.of(LispNames.STYLE_WARN, LispNames.VERSION_DEPRECATION,
+							LispNames.DEPRECATED_FUNCTION_STYLE_WARNING, LispNames.DEPRECATED_FUNCTION_WARNING,
+							LispNames.DEPRECATED_FUNCTION_ERROR, LispNames.DEPRECATED_FUNCTION_SHOULD_BE_DELETED)));
+
+	/** Whether a definition the program never NAMES is nonetheless reached from it. */
+	private static boolean reachedBySurfaceForm(String name, Set<String> occurring) {
+		for (Map.Entry<String, List<String>> entry : MACRO_EXPANSION_CALLEES.entrySet()) {
+			if (!occurring.contains(UiopExports.qualified(entry.getKey()))) {
+				continue;
+			}
+			for (String callee : entry.getValue()) {
+				if (name.equals(UiopExports.qualified(callee))) {
+					return true;
+				}
+			}
+		}
+		return false;
+	}
+
+	private static void collectSymbols(LispVal form, Set<String> into) {
+		while (true) {
+			switch (form) {
+				case LispSymbol sym -> into.add(sym.name());
+				case LispCons cons -> {
+					collectSymbols(cons.car(), into);
+					form = cons.cdr();
+					continue;
+				}
+				default -> {
+				}
+			}
+			return;
+		}
+	}
+
+	// The interpreter's tables, held once found: tables() is asked on every setf
+	// evaluation (LispEvaluator's uiop place trigger), and the keyed lookup below
+	// allocates a joined key per call. Racing threads store the one TABLES entry.
+	private static volatile @Nullable Tables interpreterTables;
+
+	private static Tables tables() {
+		Tables found = interpreterTables;
+		if (found == null) {
+			found = tables(Features.INTERPRETER);
+			interpreterTables = found;
+		}
+		return found;
+	}
+
+	private static Tables tables(Features features) {
+		return TABLES.computeIfAbsent(String.join(",", features.names()), ignored -> build(features));
+	}
+
+	private static Tables build(Features features) {
+		Map<String, List<LispVal>> real = new LinkedHashMap<>();
+		for (Map.Entry<String, String> resource : RESOURCES.entrySet()) {
+			for (LispVal form : LispReader.readAllFromString(readSource(resource.getValue()), features)) {
+				String defined = definedName(form);
+				if (defined == null) {
+					throw new IllegalStateException(resource.getValue() + ": not a definition form: " + form.print());
+				}
+				real.computeIfAbsent(defined, ignored -> new ArrayList<>()).add(form);
+			}
+		}
+		Map<String, List<LispVal>> out = new LinkedHashMap<>();
+		Set<String> implemented = new LinkedHashSet<>();
+		for (UiopExports.Entry entry : UiopExports.entries()) {
+			String qualified = UiopExports.qualified(entry.symbol());
+			if (implemented.contains(qualified) || out.containsKey(qualified)) {
+				// A second sub-package re-exporting the same symbol: one definition.
+				continue;
+			}
+			List<LispVal> defined = real.get(qualified);
+			if (defined != null) {
+				out.put(qualified, List.copyOf(defined));
+				implemented.add(qualified);
+			}
+			else if (LispMacroExpander.hasUiopMacroExpansion(entry.symbol())) {
+				implemented.add(qualified);
+			}
+			else {
+				out.put(qualified, stubFor(qualified, entry));
+			}
+		}
+		for (String internal : INTERNALS) {
+			List<LispVal> defined = real.get(internal);
+			if (defined == null) {
+				throw new IllegalStateException("uiop-*.lisp no longer defines the internal " + internal);
+			}
+			out.put(internal, List.copyOf(defined));
+		}
+		Set<String> unknown = new LinkedHashSet<>(real.keySet());
+		unknown.removeAll(out.keySet());
+		if (!unknown.isEmpty()) {
+			throw new IllegalStateException("uiop-*.lisp defines names uiop does not export: " + unknown);
+		}
+		// unmodifiable views over the INSERTION-ORDERED maps, not Map.copyOf /
+		// Set.copyOf:
+		// those answer an immutable map whose iteration order is salted per JVM run, and
+		// every consumer here promises inventory order -- the spliced prefix of a
+		// compiled
+		// program (process), the lazy-load closure (closureOf) and the coverage report.
+		// With copyOf the same source compiled twice emitted the definitions in different
+		// orders.
+		return new Tables(Collections.unmodifiableMap(out), Collections.unmodifiableSet(implemented));
+	}
+
+	/**
+	 * The definitions standing in for a member nothing implements yet, in the shape
+	 * upstream gives the name so the stub answers the same predicate the real definition
+	 * will ({@code fboundp} for a function, {@code boundp} for a variable, a defined type
+	 * for a condition). A {@code constant} gets a {@code defvar} rather than a
+	 * {@code defconstant}: the value is a placeholder, and pinning a placeholder as a
+	 * constant only makes the real definition a redefinition.
+	 */
+	private static List<LispVal> stubFor(String qualified, UiopExports.Entry entry) {
+		List<LispVal> forms = new ArrayList<>();
+		LispSymbol name = new LispSymbol(qualified);
+		if (entry.is("condition")) {
+			forms.add(list(new LispSymbol(LispNames.DEFINE_CONDITION), name, list(new LispSymbol(LispNames.ERROR)),
+					LispNil.INSTANCE));
+		}
+		if (entry.is("class")) {
+			forms.add(list(new LispSymbol(LispNames.DEFCLASS), name, LispNil.INSTANCE, LispNil.INSTANCE));
+		}
+		if (entry.is("type")) {
+			forms.add(list(new LispSymbol(LispNames.DEFTYPE), name, LispNil.INSTANCE, LispTrue.INSTANCE));
+		}
+		if (entry.is("function") || entry.is("macro")) {
+			// A macro-kind stub is a defun too, so the name is fboundp and usable as a
+			// value; the CALL form is lowered without evaluating its arguments by
+			// LispMacroExpander.expandUiopStubCall, which is what a macro that does
+			// nothing must do with the forms it was handed.
+			forms.add(list(new LispSymbol(LispNames.DEFUN), name,
+					list(new LispSymbol(LispNames.LAMBDA_REST), new LispSymbol(STUB_ARGS)),
+					list(new LispSymbol(UiopExports.qualified(LispNames.NOT_IMPLEMENTED_ERROR)),
+							new LispString(qualified))));
+		}
+		if (entry.is("variable") || entry.is("constant")) {
+			forms.add(list(new LispSymbol(LispNames.DEFVAR), name, LispNil.INSTANCE));
+		}
+		if (forms.isEmpty()) {
+			throw new IllegalStateException("no stub shape for kind " + entry.kind() + " (" + qualified + ")");
+		}
+		return List.copyOf(forms);
+	}
+
+	private static LispVal list(LispVal... items) {
+		LispVal result = LispNil.INSTANCE;
+		for (int i = items.length - 1; i >= 0; i--) {
+			result = new LispCons(items[i], result);
+		}
+		return result;
+	}
+
+	private static @org.jspecify.annotations.Nullable String definedName(LispVal form) {
+		if (form instanceof LispCons cons && cons.car() instanceof LispSymbol op && cons.cdr() instanceof LispCons rest
+				&& DEFINITION_OPERATORS.contains(op.name())) {
+			if (rest.car() instanceof LispSymbol defined) {
+				return defined.name();
+			}
+			// A SETF FUNCTION -- (defun (setf getenv) (new-value x) ...), which is how
+			// rontolisp spells upstream's (defsetf getenv ...). It is keyed under the
+			// PLACE, so the reader and the writer of one member are one definition:
+			// selected together, lazy-loaded together, and counted once by the coverage
+			// test. (LispMacroExpander rewrites the head onto the %setf- writer name and
+			// registers the place, which is what makes (setf (uiop:getenv x) v) expand.)
+			LispSymbol place = LambdaLists.setfFunctionPlaceName(rest.car());
+			if (place != null) {
+				return place.name();
+			}
+		}
+		return null;
+	}
+
+	private static final Set<String> DEFINITION_OPERATORS = Set.of(LispNames.DEFUN, LispNames.DEFMACRO,
+			LispNames.DEFVAR, LispNames.DEFPARAMETER, LispNames.DEFCONSTANT, LispNames.DEFINE_CONDITION,
+			LispNames.DEFCLASS, LispNames.DEFTYPE, LispNames.DEFGENERIC);
+
+	private static String readSource(String resource) {
+		try (InputStream in = UiopLibrary.class.getResourceAsStream(resource)) {
+			if (in == null) {
+				throw new IllegalStateException(resource + " is missing from the classpath");
+			}
+			return new String(in.readAllBytes(), StandardCharsets.UTF_8);
+		}
+		catch (IOException ex) {
+			throw new UncheckedIOException(ex);
+		}
+	}
+
+}

@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>test.profiles</groupId>
+  <artifactId>props</artifactId>
+  <version>1</version>
+  <profiles>
+    <profile><id>has-flag</id><activation><property><name>flag</name></property></activation>
+  <dependencies>
+      <dependency><groupId>test.lib</groupId><artifactId>has-flag</artifactId><version>1</version></dependency>
+  </dependencies>
+    </profile>
+    <profile><id>no-flag</id><activation><property><name>!flag</name></property></activation>
+  <dependencies>
+      <dependency><groupId>test.lib</groupId><artifactId>no-flag</artifactId><version>1</version></dependency>
+  </dependencies>
+    </profile>
+    <profile><id>mode-fast</id><activation><property><name>mode</name><value>fast</value></property></activation>
+  <dependencies>
+      <dependency><groupId>test.lib</groupId><artifactId>mode-fast</artifactId><version>1</version></dependency>
+  </dependencies>
+    </profile>
+    <profile><id>mode-not-fast</id><activation><property><name>mode</name><value>!fast</value></property></activation>
+  <dependencies>
+      <dependency><groupId>test.lib</groupId><artifactId>mode-not-fast</artifactId><version>1</version></dependency>
+  </dependencies>
+    </profile>
+    <profile><id>model-prop</id><activation><property><name>declared</name></property></activation>
+  <dependencies>
+      <dependency><groupId>test.lib</groupId><artifactId>model-prop</artifactId><version>1</version></dependency>
+  </dependencies>
+    </profile>
+  </profiles>
+  <properties>
+    <declared>yes</declared>
+  </properties>
+</project>

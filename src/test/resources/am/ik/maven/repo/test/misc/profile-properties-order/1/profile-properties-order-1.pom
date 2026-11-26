@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>test.misc</groupId>
+  <artifactId>profile-properties-order</artifactId>
+  <version>1</version>
+  <properties>
+    <a>model</a>
+  </properties>
+  <profiles>
+    <profile><id>p1</id><activation><jdk>[11,)</jdk></activation>
+  <properties>
+    <a>p1</a>
+  </properties>
+    </profile>
+    <profile><id>p2</id><activation><jdk>[11,)</jdk></activation>
+  <properties>
+    <a>p2</a>
+  </properties>
+    </profile>
+  </profiles>
+  <dependencies>
+      <dependency><groupId>test.lib</groupId><artifactId>a</artifactId><version>${a}</version></dependency>
+  </dependencies>
+</project>

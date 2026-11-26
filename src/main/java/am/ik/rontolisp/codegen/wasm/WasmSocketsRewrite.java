@@ -1,0 +1,450 @@
+package am.ik.rontolisp.codegen.wasm;
+
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+
+import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispNames;
+import am.ik.rontolisp.LispNil;
+import am.ik.rontolisp.LispSymbol;
+import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.PackageRegistry;
+import am.ik.rontolisp.compiler.CallSiteWalk;
+import am.ik.rontolisp.compiler.ShadowedBuiltins;
+import am.ik.rontolisp.macro.IgnoredArgument;
+import am.ik.rontolisp.macro.LispMacroExpander;
+
+/**
+ * The {@code --component} socket-I/O rewrite: when sockets.lisp is spliced (the program
+ * defines {@code rontolisp::%io-read-line}), the stream built-ins that can meet a socket
+ * handle are redirected onto the library's dispatch defuns, because a socket read/write
+ * no longer has an {@code fd_read}/{@code fd_write} adapter behind it -- the socket IS a
+ * Lisp-side entry over wit-imported {@code wasi:sockets} streams.
+ *
+ * <ul>
+ * <li><strong>Synchronous context</strong> (plain defun/lambda bodies):
+ * {@code (read-line s)} -&gt; {@code (rontolisp::%io-read-line s)} (and read-char /
+ * read-byte / write-line / write-byte / close alike). The dispatch defun forces the
+ * library's async read internals through {@code rontolisp::%future-force} (the blocking
+ * {@code _sched_loop} drive) for a socket handle and falls back to the native built-in
+ * (the {@code %...-raw} alias names) otherwise.</li>
+ * <li><strong>Asynchronous context</strong> (async-defun/async-lambda bodies and the top
+ * level -- the {@code LispAsync} placement rule): a read is PROMOTED instead --
+ * {@code (read-line s)} -&gt; {@code (rontolisp:await (rontolisp::%read-line-future s))}
+ * -- so a pending socket read suspends the task and other tasks keep running.
+ * {@code rontolisp:tcp-connect}/{@code tcp-accept} promote the same way onto their
+ * {@code %tcp-connect-f}/{@code %tcp-accept-f} async internals (which carry the
+ * nil-on-failure convention, so both surfaces behave identically). The inserted
+ * {@code rontolisp:await} is counted by {@code WasmAwaitAnalysis} like any user await,
+ * which is why this runs BEFORE compilation, right after the async-sugar rewrite.</li>
+ * </ul>
+ *
+ * <p>
+ * Writes and {@code close} are never promoted (the write built-ins keep the blocking
+ * park; drops are synchronous). {@code #'read-line} keeps the native wrapper -- a
+ * first-class read applied to a socket is out of contract, like {@code eval}.
+ *
+ * <p>
+ * The rewrite is SHAPE-driven, and it has to cover every shape a socket-capable built-in
+ * accepts -- the eof-carrying reads and the {@code :start}/{@code :end} sequence ops
+ * included -- because {@code GrayStreamsLibrary} runs before it and re-spells the
+ * built-ins with all their optional arguments filled in. See the comment on the shape
+ * constants below for why an incomplete table is a runtime trap and not merely a missed
+ * optimization.
+ */
+final class WasmSocketsRewrite {
+
+	// Sync-context substitutions: native name -> the sockets.lisp dispatch defun.
+	// force-output / finish-output flush a component socket's output buffer
+	// (sockets.lisp, "the output buffer").
+	private static final Map<String, String> SYNC_DISPATCH = Map.ofEntries(
+			Map.entry(LispNames.READ_LINE, "%IO-READ-LINE"), Map.entry(LispNames.READ_CHAR, "%IO-READ-CHAR"),
+			Map.entry(LispNames.READ_BYTE, "%IO-READ-BYTE"), Map.entry(LispNames.WRITE_LINE, "%IO-WRITE-LINE"),
+			Map.entry(LispNames.WRITE_BYTE, "%IO-WRITE-BYTE"), Map.entry(LispNames.WRITE_STRING, "%IO-WRITE-STRING"),
+			Map.entry(LispNames.FRESH_LINE, "%IO-FRESH-LINE"), Map.entry(LispNames.CLOSE, "%IO-CLOSE"),
+			Map.entry(LispNames.LISTEN, "%IO-LISTEN"), Map.entry(LispNames.OPEN_STREAM_P, "%IO-OPEN-STREAM-P"),
+			Map.entry(LispNames.FORCE_OUTPUT, "%IO-FORCE-OUTPUT"),
+			Map.entry(LispNames.FINISH_OUTPUT, "%IO-FINISH-OUTPUT"));
+
+	// Async-context read promotions: native name -> the future-returning async internal.
+	private static final Map<String, String> ASYNC_FUTURES = Map.of(LispNames.READ_LINE, "%READ-LINE-FUTURE",
+			LispNames.READ_CHAR, "%READ-CHAR-FUTURE", LispNames.READ_BYTE, "%READ-BYTE-FUTURE");
+
+	// Async-context tcp promotions: canonical qualified name -> the async internal.
+	private static final Map<String, String> TCP_FUTURES = Map.of(
+			PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.TCP_CONNECT), "%TCP-CONNECT-F",
+			PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.TCP_ACCEPT), "%TCP-ACCEPT-F");
+
+	// Accepted argument-count ranges per target: a call outside its range is left
+	// UNREWRITTEN so it resolves against the native built-in / public defun and errors
+	// under its public name ("tcp-connect expects 2 arguments"), not an internal one.
+	private static final Map<String, int[]> ARITIES = Map.ofEntries(Map.entry(LispNames.READ_LINE, new int[] { 0, 1 }),
+			Map.entry(LispNames.READ_CHAR, new int[] { 0, 1 }), Map.entry(LispNames.READ_BYTE, new int[] { 0, 1 }),
+			Map.entry(LispNames.WRITE_LINE, new int[] { 1, 2 }), Map.entry(LispNames.WRITE_BYTE, new int[] { 2, 2 }),
+			Map.entry(LispNames.WRITE_STRING, new int[] { 1, 2 }), Map.entry(LispNames.FRESH_LINE, new int[] { 0, 1 }),
+			Map.entry(LispNames.CLOSE, new int[] { 1, 1 }), Map.entry(LispNames.LISTEN, new int[] { 0, 1 }),
+			Map.entry(LispNames.OPEN_STREAM_P, new int[] { 1, 1 }),
+			Map.entry(LispNames.FORCE_OUTPUT, new int[] { 0, 1 }),
+			Map.entry(LispNames.FINISH_OUTPUT, new int[] { 0, 1 }),
+			Map.entry(PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.TCP_CONNECT), new int[] { 2, 2 }),
+			Map.entry(PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.TCP_ACCEPT), new int[] { 1, 1 }));
+
+	// The sequence ops and the eof-tolerant reads, dispatched by SHAPE (they need
+	// per-shape targets, so they stay out of the 1:1 maps above): cl-postgres' socket
+	// layer reads/writes byte arrays with (read-sequence result socket) /
+	// (write-sequence bytes socket) and probes with (read-byte socket nil 0), none of
+	// which the plain maps cover -- unrewritten they compile to the NATIVE stream
+	// built-ins, whose fd_read/fd_write on a socket fd (>= 200) walks off the preview1
+	// adapter's 64-slot fd table. A non-socket designator still reaches the native
+	// expansion through the %...-raw aliases inside the dispatch defuns.
+	//
+	// EVERY shape a socket-capable built-in accepts needs an entry here, not just the
+	// shapes user code tends to write: GrayStreamsLibrary.process runs BEFORE this pass
+	// and normalizes every possibly-CLOS-instance stream call site onto its
+	// %gray-*-dispatch helper, whose non-instance fall-through arm re-spells the
+	// built-in with EVERY optional argument filled in -- (read-line s eof-error-p
+	// eof-value), (read-sequence seq s :start a :end b), ... So a shape this pass does
+	// not recognize is not merely "unusual"; it is what a Gray-streams program (any
+	// (ql:quickload "cl-postgres") program) actually compiles to. That gap is what kept
+	// the cl-postgres component legs red for a while: the driver's
+	// (write-sequence bytes socket) became the keyworded fall-through arm, which had no
+	// dispatch target, and the write trapped mid-message with "unknown handle index 0".
+	private static final String IO_READ_BYTE_EOF = "%IO-READ-BYTE-EOF";
+
+	private static final String READ_BYTE_EOF_FUTURE = "%READ-BYTE-EOF-FUTURE";
+
+	private static final String IO_READ_CHAR_EOF = "%IO-READ-CHAR-EOF";
+
+	private static final String READ_CHAR_EOF_FUTURE = "%READ-CHAR-EOF-FUTURE";
+
+	private static final String IO_READ_LINE_EOF = "%IO-READ-LINE-EOF";
+
+	private static final String READ_LINE_EOF_FUTURE = "%READ-LINE-EOF-FUTURE";
+
+	private static final String IO_READ_SEQUENCE = "%IO-READ-SEQUENCE";
+
+	private static final String READ_SEQUENCE_FUTURE = "%READ-SEQUENCE-FUTURE";
+
+	private static final String IO_WRITE_SEQUENCE = "%IO-WRITE-SEQUENCE";
+
+	private static final String IO_MARKER = PackageRegistry.qualifyInternal(LispNames.RONTOLISP_PKG, "%IO-READ-LINE");
+
+	private WasmSocketsRewrite() {
+	}
+
+	/**
+	 * The dispatch defuns this rewrite substitutes for the stream built-ins, by member
+	 * name. They are ORDINARY defuns -- every argument is a value position -- so an await
+	 * among their arguments hoists like any other strict call's, even though the
+	 * {@code %} prefix marks the rest of the internal forms as structurally special
+	 * ({@link WasmAwaitNormalizer#isStrictCallHead}). Without this, an async
+	 * {@code (write-line (read-line s))} -- the write redirected here, the read promoted
+	 * to an await -- would leave the await in an unhoisted argument and be rejected.
+	 * @return the {@code %io-*} member names
+	 */
+	static Set<String> strictDispatchMembers() {
+		Set<String> members = new java.util.HashSet<>(SYNC_DISPATCH.values());
+		members.add(IO_READ_BYTE_EOF);
+		members.add(IO_READ_CHAR_EOF);
+		members.add(IO_READ_LINE_EOF);
+		members.add(IO_READ_SEQUENCE);
+		members.add(IO_WRITE_SEQUENCE);
+		return Set.copyOf(members);
+	}
+
+	/**
+	 * The {@code ShadowedBuiltins} composition seam: when this rewrite has fired on the
+	 * program, every {@code close}/{@code listen}/... call site already spells the
+	 * {@code rontolisp::%io-*} dispatch defun, so a user method on such a built-in name
+	 * must intercept THOSE heads -- and its dispatcher's fall-through must call the
+	 * {@code %io-*} defun (which keeps the socket table honest and falls back to the
+	 * {@code %...-raw} native aliases itself), never the raw built-in -- for a count
+	 * inside the range this rewrite substitutes ({@link #ARITIES}); any other count stays
+	 * on the native built-in, as it does here. Returns the canonical qualified dispatch
+	 * name -&gt; native built-in and range map when the rewrite fired, an empty map
+	 * otherwise.
+	 * @param program the top-level forms, after {@link #rewrite}
+	 * @return qualified {@code %io-*} name -&gt; native name and range, or empty
+	 */
+	static Map<String, ShadowedBuiltins.BuiltinAlias> builtinDispatchAliases(List<LispVal> program) {
+		if (!spliced(program)) {
+			return Map.of();
+		}
+		Map<String, ShadowedBuiltins.BuiltinAlias> aliases = new java.util.HashMap<>();
+		for (Map.Entry<String, String> entry : SYNC_DISPATCH.entrySet()) {
+			int[] range = java.util.Objects.requireNonNull(ARITIES.get(entry.getKey()));
+			aliases.put(PackageRegistry.qualifyInternal(LispNames.RONTOLISP_PKG, entry.getValue()),
+					new ShadowedBuiltins.BuiltinAlias(entry.getKey(), range[0], range[1]));
+		}
+		return Map.copyOf(aliases);
+	}
+
+	/**
+	 * Rewrites the program when sockets.lisp is spliced; returns it untouched otherwise.
+	 * @param program the resolved, async-sugar-rewritten top-level forms
+	 * @return the program with socket I/O redirected
+	 */
+	static List<LispVal> rewrite(List<LispVal> program) {
+		if (!spliced(program)) {
+			return program;
+		}
+		List<LispVal> out = new java.util.ArrayList<>(program.size());
+		for (LispVal form : program) {
+			// The top level is an asynchronous context (LispAsync.checkTopLevel).
+			out.add(CallSiteWalk.walk(form, ASYNC));
+		}
+		return out;
+	}
+
+	/**
+	 * Whether a socket dispatch provider is spliced: the marker is a top-level
+	 * {@code (defun rontolisp::%io-read-line ...)}, which sockets.lisp,
+	 * stdin-dispatch.lisp and runner-sockets.lisp each define.
+	 * @param program the top-level forms
+	 * @return whether the dispatch defuns are present
+	 */
+	static boolean spliced(List<LispVal> program) {
+		for (LispVal form : program) {
+			if (form instanceof LispCons cons && cons.car() instanceof LispSymbol head
+					&& (LispNames.DEFUN.equals(head.name()) || LispNames.ASYNC_DEFUN_QUALIFIED.equals(head.name()))
+					&& cons.cdr() instanceof LispCons rest && rest.car() instanceof LispSymbol name
+					&& IO_MARKER.equals(name.name())) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private static final Context SYNC = new Context(false);
+
+	private static final Context ASYNC = new Context(true);
+
+	/**
+	 * The rewrite in one context. Mirrors LispAsync.check's context rules: async-defun /
+	 * async-lambda bodies (and the %async-run thunk) are asynchronous, plain defun /
+	 * lambda / defmethod and flet / labels definitions reset to synchronous.
+	 * {@link CallSiteWalk} keeps the positions that are not calls -- a lexical variable
+	 * named {@code close} or {@code read-line}, a {@code case} key -- which this pass
+	 * would otherwise have read as calls and renamed.
+	 */
+	private record Context(boolean async) implements CallSiteWalk.Rewriter {
+
+		@Override
+		public @org.jspecify.annotations.Nullable LispVal call(LispCons cons, LispSymbol head) {
+			if (LispNames.ASYNC_RUN_QUALIFIED.equals(head.name())) {
+				// the thunk handed to the async primitive IS the asynchronous body
+				List<LispVal> parts = cons.toList();
+				List<LispVal> out = new java.util.ArrayList<>(parts.size());
+				out.add(parts.get(0));
+				for (int i = 1; i < parts.size(); i++) {
+					LispVal arg = parts.get(i);
+					out.add(arg instanceof LispCons argCons && argCons.isProperList()
+							&& argCons.car() instanceof LispSymbol lambda && LispNames.LAMBDA.equals(lambda.name())
+									? CallSiteWalk.lambda(argCons, ASYNC) : CallSiteWalk.walk(arg, ASYNC));
+				}
+				return LispCons.rebuiltList(cons, out);
+			}
+			// A read passing the recursive-p it ignores is rewritten without it first,
+			// so the shapes below never meet the extra argument.
+			LispVal withoutIgnored = IgnoredArgument.drop(cons);
+			if (withoutIgnored != cons) {
+				return CallSiteWalk.walk(withoutIgnored, this);
+			}
+			return substitute(head.name(), cons.toList(), this.async);
+		}
+
+		@Override
+		public CallSiteWalk.Rewriter body(String definer) {
+			return LispNames.ASYNC_DEFUN_QUALIFIED.equals(definer) || LispNames.ASYNC_LAMBDA_QUALIFIED.equals(definer)
+					? ASYNC : SYNC;
+		}
+
+	}
+
+	private static LispVal walk(LispVal form, boolean asyncContext) {
+		return CallSiteWalk.walk(form, asyncContext ? ASYNC : SYNC);
+	}
+
+	// The call substitution, or null when the head is not a target.
+	private static @org.jspecify.annotations.Nullable LispVal substitute(String head, List<LispVal> parts,
+			boolean asyncContext) {
+		// (close stream :abort expr) normalizes to (close stream) BEFORE the arity
+		// check, so an aborting close on a socket still reaches %io-close.
+		if (LispNames.CLOSE.equals(head) && parts.size() == 4 && parts.get(2) instanceof LispSymbol kw
+				&& LispNames.ABORT_KEYWORD.equals(kw.name())) {
+			parts = List.of(parts.get(0), parts.get(1));
+		}
+		// (write-char c [stream]) and a BOUNDED (write-string s stream :start a :end b)
+		// have no dispatch defun of their own: both already have a shared lowering onto
+		// the plain write-string this pass DOES cover, so lowering them HERE -- before
+		// the substitution instead of at WasmExprCompiler time, which is after it -- is
+		// what puts them on the socket path at all.
+		if (LispNames.WRITE_CHAR.equals(head) && (parts.size() == 2 || parts.size() == 3)) {
+			return walk(LispMacroExpander.expandWriteChar(consOf(parts)), asyncContext);
+		}
+		if (LispNames.WRITE_STRING.equals(head) && hasLiteralBounds(parts)) {
+			LispVal bounded = LispMacroExpander.lowerWriteStringBounds(consOf(parts));
+			if (bounded != null) {
+				return walk(bounded, asyncContext);
+			}
+		}
+		// (terpri [stream]) lowers onto write-string's dispatch: write-string owns the
+		// socket arm, and a terpri on a socket would otherwise reach the NATIVE terpri
+		// compiler and fd_write the newline past the preview 1 adapter's fd table. The
+		// progn restores the nil terpri answers (write-string answers its string). The
+		// stream-less form resolves through *standard-output* at the ORIGINAL call
+		// site, the same rule the write-string/write-line defaulting applies.
+		if (LispNames.TERPRI.equals(head) && (parts.size() == 1 || parts.size() == 2)) {
+			LispVal stream = parts.size() == 2 ? parts.get(1) : new LispSymbol(LispNames.STANDARD_OUTPUT_VAR);
+			return walk(
+					properList(
+							List.of(new LispSymbol(LispNames.PROGN),
+									properList(List.of(new LispSymbol(LispNames.WRITE_STRING),
+											new am.ik.rontolisp.LispString("\n"), stream)),
+									LispNil.INSTANCE)),
+					asyncContext);
+		}
+		// The eof-tolerant reads (2-3 args) and the sequence ops (bounded or not) take
+		// their own dispatch targets; reads promote in async context like the 1-arg
+		// reads, writes never do.
+		if (LispNames.READ_BYTE.equals(head) && (parts.size() == 3 || parts.size() == 4)) {
+			return asyncContext ? awaitOf(replaceHead(parts, READ_BYTE_EOF_FUTURE, true))
+					: replaceHead(parts, IO_READ_BYTE_EOF, false);
+		}
+		if (LispNames.READ_CHAR.equals(head) && (parts.size() == 3 || parts.size() == 4)) {
+			return asyncContext ? awaitOf(replaceHead(parts, READ_CHAR_EOF_FUTURE, true))
+					: replaceHead(parts, IO_READ_CHAR_EOF, false);
+		}
+		if (LispNames.READ_LINE.equals(head) && (parts.size() == 3 || parts.size() == 4)) {
+			return asyncContext ? awaitOf(replaceHead(parts, READ_LINE_EOF_FUTURE, true))
+					: replaceHead(parts, IO_READ_LINE_EOF, false);
+		}
+		if (LispNames.READ_SEQUENCE.equals(head) || LispNames.WRITE_SEQUENCE.equals(head)) {
+			List<LispVal> bounded = boundedSequenceArgs(parts);
+			if (bounded != null) {
+				if (LispNames.WRITE_SEQUENCE.equals(head)) {
+					return replaceHead(bounded, IO_WRITE_SEQUENCE, asyncContext);
+				}
+				return asyncContext ? awaitOf(replaceHead(bounded, READ_SEQUENCE_FUTURE, true))
+						: replaceHead(bounded, IO_READ_SEQUENCE, false);
+			}
+		}
+		int[] arity = ARITIES.get(head);
+		if (arity != null && (parts.size() - 1 < arity[0] || parts.size() - 1 > arity[1])) {
+			return null;
+		}
+		if (asyncContext) {
+			String future = ASYNC_FUTURES.get(head);
+			if (future == null) {
+				future = TCP_FUTURES.get(head);
+			}
+			if (future != null) {
+				return awaitOf(replaceHead(parts, future, asyncContext));
+			}
+		}
+		String tcpFuture = TCP_FUTURES.get(head);
+		if (tcpFuture != null) {
+			// Sync context: the public tcp defun already IS the forcing wrapper; leave
+			// the call alone (it resolves to the spliced defun).
+			return null;
+		}
+		String dispatch = SYNC_DISPATCH.get(head);
+		if (dispatch != null) {
+			// A stream-argument-less write keeps following the current
+			// *standard-output* through the dispatch defun: the redirect
+			// (.kb/standard-output-redirect.md) resolves at the ORIGINAL call site,
+			// one read instead of the one %write-string-raw's own designator
+			// resolution would do inside the dispatch defun. A non-redirecting program
+			// compiles the bare symbol to the constant t (= stdout), so this is always
+			// safe. An EXPLICIT nil needs nothing here: it flows through the dispatch
+			// defun's non-socket arm into %write-string-raw / %write-line-raw, whose
+			// compilers apply the same designator rule (StreamDesignators).
+			if (((LispNames.WRITE_STRING.equals(head) || LispNames.WRITE_LINE.equals(head)) && parts.size() == 2)
+					|| ((LispNames.FRESH_LINE.equals(head) || LispNames.FORCE_OUTPUT.equals(head)
+							|| LispNames.FINISH_OUTPUT.equals(head)) && parts.size() == 1)) {
+				List<LispVal> withDefault = new java.util.ArrayList<>(parts);
+				withDefault.add(new LispSymbol(LispNames.STANDARD_OUTPUT_VAR));
+				parts = withDefault;
+			}
+			return replaceHead(parts, dispatch, asyncContext);
+		}
+		return null;
+	}
+
+	// True when a write-string call carries a literal :start / :end keyword tail (the
+	// only tail LispMacroExpander.lowerWriteStringBounds accepts -- a non-literal keyword
+	// is left alone so the unrewritten call reports it under the public name).
+	private static boolean hasLiteralBounds(List<LispVal> parts) {
+		int i = parts.size() > 2 && !isBoundsKeyword(parts.get(2)) ? 3 : 2;
+		if (parts.size() <= i || (parts.size() - i) % 2 != 0) {
+			return false;
+		}
+		for (; i < parts.size(); i += 2) {
+			if (!isBoundsKeyword(parts.get(i))) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	private static boolean isBoundsKeyword(LispVal val) {
+		return val instanceof LispSymbol key && (":START".equals(key.name()) || ":END".equals(key.name()));
+	}
+
+	// (op seq stream [:start a] [:end b]) -> the POSITIONAL argument list the %io-*
+	// sequence dispatch defuns take, (op seq stream start end). A missing bound becomes
+	// nil (the defuns normalize it to 0 / (length seq), so the bound is computed on the
+	// same value the socket arm and the native fall-through both see). Returns null for
+	// any other shape -- a non-literal keyword or a stray positional argument -- leaving
+	// the call unrewritten so it errors under its public name.
+	private static @org.jspecify.annotations.Nullable List<LispVal> boundedSequenceArgs(List<LispVal> parts) {
+		if (parts.size() < 3 || (parts.size() - 3) % 2 != 0) {
+			return null;
+		}
+		LispVal start = LispNil.INSTANCE;
+		LispVal end = LispNil.INSTANCE;
+		for (int i = 3; i < parts.size(); i += 2) {
+			if (!(parts.get(i) instanceof LispSymbol key)) {
+				return null;
+			}
+			switch (key.name()) {
+				case ":START" -> start = parts.get(i + 1);
+				case ":END" -> end = parts.get(i + 1);
+				default -> {
+					return null;
+				}
+			}
+		}
+		return List.of(parts.get(0), parts.get(1), parts.get(2), start, end);
+	}
+
+	private static LispVal replaceHead(List<LispVal> parts, String internalName, boolean asyncContext) {
+		List<LispVal> out = new java.util.ArrayList<>(parts.size());
+		out.add(new LispSymbol(PackageRegistry.qualifyInternal(LispNames.RONTOLISP_PKG, internalName)));
+		for (int i = 1; i < parts.size(); i++) {
+			out.add(walk(parts.get(i), asyncContext));
+		}
+		return properList(out);
+	}
+
+	private static LispVal awaitOf(LispVal call) {
+		return properList(
+				List.of(new LispSymbol(PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.AWAIT)), call));
+	}
+
+	// The call parts back as the cons the LispMacroExpander lowerings take. Only ever
+	// called on a non-empty argument list (a call always has a head).
+	private static LispCons consOf(List<LispVal> parts) {
+		return (LispCons) properList(parts);
+	}
+
+	private static LispVal properList(List<LispVal> parts) {
+		LispVal tail = LispNil.INSTANCE;
+		for (int i = parts.size() - 1; i >= 0; i--) {
+			tail = new LispCons(parts.get(i), tail);
+		}
+		return tail;
+	}
+
+}

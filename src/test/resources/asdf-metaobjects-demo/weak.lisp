@@ -1,0 +1,1 @@
+(defun weak-fn () :weak)

@@ -1,0 +1,545 @@
+# Data Types
+
+| Type | Example | Description |
+|------|---------|-------------|
+| Integer | `42`, `-5`, `1,000`, `#xff`, `#o777`, `#b1010` | 64-bit signed integer that auto-promotes to a big integer on overflow, exact at any magnitude on every backend. `#x`/`#o`/`#b` read hexadecimal/octal/binary literals |
+| Ratio | `1/3`, `-2/5` | Exact rational number (Common Lisp ratio), always normalized; supported by all three backends |
+| Double | `3.14`, `-0.5`, `3,000.50`, `1d0`, `6.02e23` | 64-bit floating-point number |
+| String | `"hello"` | String literal |
+| Character | `#\a`, `#\Space`, `#\Newline` | Character literal (`#\` plus a glyph or a standard name: `Space`, `Newline`, `Tab`, `Return`, `Page`, `Backspace`, `Nul`, `Rubout`). The WASM backend indexes strings by byte, so non-ASCII characters are out of scope there |
+| Symbol | `x`, `foo` | Identifier |
+| Keyword | `:foo`, `:bar` | Self-evaluating symbol starting with `:` |
+| Nil | `nil` | False / empty list |
+| T | `t` | True |
+| Pi | `pi` | The constant π, bound as a global holding the double `3.141592653589793`; a quoted `pi` stays the symbol |
+| Fixnum range | `most-positive-fixnum`, `most-negative-fixnum` | Bound as globals like `pi`; the value is backend-dependent (a WASM fixnum is an unboxed 31-bit reference; the interpreter and the JVM backend answer `4611686018427387903` and `-4611686018427387904`, the bounds of `fixnum`, which is `(signed-byte 63)` as in SBCL on every backend, although an integer is held in a 64-bit long there) |
+| Other limits | `char-code-limit`, `array-total-size-limit`, `array-dimension-limit`, `array-rank-limit`, `call-arguments-limit`, `lambda-parameters-limit`, `multiple-values-limit` | Bound as globals like the fixnum range; `char-code-limit` is `1114112` (full Unicode code points) on every backend, the array limits are backend-dependent |
+| Float range | `most-positive-double-float`, `least-positive-normalized-single-float`, `double-float-epsilon` | The standard float-range constants, bound as globals holding doubles like `pi`. `short-float` is `single-float` and `long-float` is `double-float`; since every float is a double here, a single-float bound answers the exact double of the binary32 number it names (see "Float types" below) |
+| Cons | `(1 2 3)`, `(a . 1)` | Linked list built from cons cells; `(a . b)` is dotted-pair notation for a single cell |
+| Function | `#'car`, `(lambda (x) x)` | Function object obtained via `#'`/`function`/`lambda` |
+| Array | `#(1 2 3)`, `#2A((1 2) (3 4))`, `#0A5` | Fixed-size array of any rank (rank 1 = vector, rank 0 = a boxed scalar); `#(...)`, `#nA(...)` and `#0A<datum>` are self-evaluating array literals |
+| Hash table | `(make-hash-table)` | Mutable key/value table with structural (`equal`) keys |
+| Structure | `#S(POINT :X 1 :Y 2)` | An instance of a [`defstruct`](special-forms/defstruct.md) type. `#S(...)` is both how an instance prints and a self-evaluating literal that reads back into one; the `defstruct` must appear in an earlier top-level form |
+
+Numeric literals may use `,` as a grouping separator between digits in the
+integer part, so `1,000` reads as `1000` and `(+ 1,000 100)` evaluates to
+`1100`. The comma is only treated as a separator when it sits between two
+digits; it is stripped before parsing and applies to all three backends. This
+differs from Common Lisp, where `,` is the unquote character (not supported
+here).
+
+Float literals may carry a Common Lisp exponent marker -- a mantissa followed
+by one of `e`, `s`, `f`, `d`, `l` (case-insensitive), an optional sign, and an
+exponent, e.g. `1d0`, `1e0`, `1.5d3` (`1500.0`), `-2e-3`, `6.02e23`. This works
+in all three backends (it is a reader-level feature). **Unlike Common Lisp,
+rontolisp has a single floating-point format, so every marker reads as a 64-bit
+double** -- `1d0`, `1e0` and `1l0` are the same value, `*read-default-float-format*`
+changes no read, and an `f` or `s` marker reads as the double nearest a binary32:
+`0.1f0` is `0.10000000149011612`, the value Common Lisp's single-float `0.1` holds
+(see "Float types" below). A marker that is not followed by exponent digits is not a
+float: `1d` and `1d0x` read as symbols (like `1+`), not numbers.
+
+### Float types
+
+Every float is a 64-bit double, so `float`, `double-float` and `long-float` name the
+same type: every float. `single-float` and `short-float` name the floats a binary32
+holds exactly -- a subset, so `(subtypep 'single-float 'double-float)` is `T` and the
+reverse is `NIL`. A library that picks a 32-bit encoding for a `single-float` writes
+those floats without loss and takes its double arm for the rest:
+
+```lisp
+(list (typep 1.5 'single-float) (typep 0.1 'single-float) (typep 0.1 'double-float))
+; => (T NIL T)
+```
+
+`(coerce x 'single-float)` answers the binary32 nearest `x` (through the double `x`
+converts to), and a `single-float` method is more specific than a `double-float` one.
+Arithmetic stays double: `(* 0.1f0 3)` is a double that a binary32 need not hold, and
+`float-digits` answers `53` for every float. `type-of` answers `FLOAT`. Common Lisp's
+standard allows either one float type or distinct ones; a type that is a subset of
+another is neither, and is what keeps a value a 32-bit encoding would truncate out of
+it.
+
+A decimal point does not need digits on both sides: `.4` is `0.4` (so `(a .5)` is the
+two-element list `(A 0.5)` -- a dotted pair must spell the dot bare, `(a . 5)`),
+and `1.e5` is a float. A trailing dot with no exponent is a decimal-integer
+marker: `1.` is the integer `1`.
+
+On **every backend**, integer arithmetic never silently wraps: when an
+operation (`+`, `-`, `*`, `/`, `1+`, `1-`, `abs`, ...) overflows the fixed-width
+representation, the result is automatically promoted to an arbitrary-precision
+big integer, and integer literals of any magnitude are read exactly. A
+big-integer result that fits back in the narrower representation is demoted
+again, so values keep a single canonical representation. For example, with
+`(defun fact (n) (if (= n 0) 1 (* n (fact (- n 1)))))`, `(fact 32)` returns the
+exact `263130836933693530167218012160000000` everywhere. (The WASM compiler
+promotes in two steps -- its unboxed 31-bit fixnums first box into a signed
+64-bit value, then into a limb-based big integer -- but that is invisible to
+programs.)
+
+**All three backends** support Common Lisp ratios (exact rational numbers).
+`1/3` reads as a ratio literal, and integer division that does not divide
+evenly returns a ratio instead of truncating:
+
+```console
+CL-USER> 1/3
+1/3
+CL-USER> (/ 1 2)
+1/2
+CL-USER> (+ 1/2 1/3)
+5/6
+CL-USER> (/ 1 2.0)
+0.5
+CL-USER> (float 1/2)
+0.5
+```
+
+Ratio results are always normalized -- reduced by the gcd with the sign on the
+numerator (`2/4` reads as `1/2`), and demoted to an integer when the
+denominator reduces to one (`(/ 10 2)` is `5`, `(+ 1/2 1/2)` is `1`).
+Arithmetic, comparisons (`= < > <= >=`), `eq`/`eql`, `abs`/`min`/`max`/`1+`/`1-`/
+`signum`, the predicates (`numberp`, `rationalp`, `zerop`, `plusp`, `minusp`),
+`truncate`/`floor`/`ceiling`/`round`, `expt` with an integer exponent
+(`(expt 2 -1)` is `1/2`), and `numerator`/`denominator` all handle ratios;
+mixing in a float switches to float contagion. Unary `(/ x)` is the reciprocal
+(`(/ 2)` is `1/2`).
+
+A ratio's numerator and denominator are integers like any other, so a ratio is
+exact at any magnitude on every backend: the **interpreter and the JVM
+compiler** hold them as big integers, and the **WASM compiler** in the same
+promoting integer tiers as every other integer, so `(/ 3000000000 7)` is
+`3000000000/7` everywhere. `float` of a ratio is the nearest double, ties to
+even, on all four backends (`(float 30000000000000004/100000000000000000)` is
+`0.30000000000000004`). The runtime reader emitted for compiled `read`/`load`
+parses ratio tokens like the frontend (`(read-from-string "1/3")` is `1/3`).
+`mod`/`rem` take any real, a ratio included; `evenp`/`oddp`, `gcd`/`lcm` and
+`isqrt` take integers only, as in Common Lisp.
+
+## Comments, feature conditionals and `*features*`
+
+Besides the `;` line comment, the reader supports the Common Lisp `#| ... |#`
+block comment (nesting, per the standard) and the `#+`/`#-` feature
+conditionals: `#+expr form` keeps `form` only when the feature expression
+holds, `#-expr form` only when it does not. A feature expression is a feature
+name or an `(and ...)`/`(or ...)`/`(not ...)` combination (spelled bare or as
+keywords, case-insensitive). The active features are `:rontolisp` on every
+backend plus one backend-identifying feature — `:rontolisp-interpreter`,
+`:rontolisp-jvm` or `:rontolisp-wasm` — so one source file can select
+per-backend code, and `:unicode`, the portable spelling of "characters are
+Unicode code points" (true on every backend, so a library that branches on it
+takes its UTF-8 path), and `:common-lisp`, the feature of the language
+family that portable code writes `#+common-lisp` fallbacks against
+(`:ansi-cl`, the conformance claim, is absent), and what ASDF pushes when it loads,
+since it is always loaded here (`:asdf`, `:asdf2`, `:asdf3`, `:asdf3.1`, `:asdf3.2`,
+`:asdf3.3`, `:asdf-unicode`). The interpreter and the JVM also have
+`:thread-support` (they really spawn threads — see
+[`rontolisp:make-thread`](functions/rontolisp-make-thread.md)); a WASM compile
+in reactor mode (`--no-wasi`, or `--no-gc`) additionally has
+`:rontolisp-reactor` — the module's entry points are exports a host calls,
+which is how the Clack handler backend picks its transport (see the
+[Clack guide](../guides/clack.md)) — and a `--component` compile additionally
+has `:rontolisp-component`, which names the component BOUNDARY rather than a
+backend: a component's host functions cross the canonical ABI, so
+[`rontolisp:wasm-import`](../guides/wasm-gc-module.md) is refused there and a
+source that declares one guards it with `#-rontolisp-component`. (A
+`--component --no-wasi` build is a reactor too, so it has both.)
+A `--native` output additionally has `:rontolisp-native`: the module inside is
+the same Preview 1 build as ever, but the runner around it answers imports
+Preview 1 alone does not have (`rontolisp:fetch`, and `objc:`/`appkit:`/
+`metal:`/`scene:` on `macos-aarch64`), so a source that wants to fetch on
+native and fall back on Preview 1 elsewhere guards it with `#+rontolisp-native`.
+
+`*features*` is an ordinary special variable holding that list, on every
+backend: a program may `push` onto it, `setq` it, and bind it with `let` like
+any other special.
+
+A source may also **announce a feature about itself**: a top-level
+`(pushnew :my-feature *features*)` — bare or inside an `eval-when`/`progn` —
+is read by the reader, so a `#+my-feature` in the same file sees it. That is
+the header idiom real Common Lisp gets from loading a file form at a time, and
+it behaves identically on all four backends here. A push the program
+**computes** at top level, its value (`(pushnew (intern name :keyword) *features*)`)
+or whether it fires (`(if ok (pushnew :a *features*) (pushnew :b *features*))`),
+decides the `#+` of the forms below it in the same file, on all four backends: the
+interpreter has run it, and a compile path runs it at compile time for that purpose.
+A push inside a function's body does not count, even when the function is called.
+Either kind of push also decides the reads of every file loaded after it — the next
+`load`, the next component of an ASDF system, a system loaded later — since each file
+is read with the `*features*` the files before it left, as Common Lisp's `load` reads
+it. A `.asd` file is the exception: a push it makes holds for the files of the systems
+it defines after the push, and nothing else (see the
+[Systems guide](../guides/asdf-systems.md)).
+
+And **you** may declare features on the command line: `--feature NAME`
+(comma-separated, repeatable) widens the set every source of the run is read
+with — the entry file, the files it `load`s, the ASDF systems loaded under it —
+and seeds `*features*` with the same names, so a `(member :sbcl *features*)`
+and the `#+sbcl` beside it cannot disagree. That holds for a macro asking while
+the program compiles, too.
+
+```bash
+rontolisp app.lisp --feature sbcl
+rontolisp app.lisp -o app.jar --feature sbcl,clisp
+```
+
+That is for a portable library whose `#+sbcl` / `#+clisp` / `#-(or ...)` chain
+was written before rontolisp existed: it names none of our features, so every
+call falls into the else branch — usually an `(error "not implemented")` —
+even where every primitive the `sbcl` branch uses already answers exactly as
+SBCL does. rontolisp will not announce `:sbcl` for you, because that would be
+a lie told in every program that never asked for it; the flag makes it a claim
+**you** make, about a library you have read, for the run you are starting. The
+consequence is yours too: the same claim also selects the branches that really
+do call that implementation's internals. The rontolisp features themselves are
+refused — `:rontolisp`, the backend features and the target-describing ones
+(`:rontolisp-component`, `:rontolisp-reactor`, …) say what the output is, and
+what the output is is decided by `-o` and the flags beside it.
+
+```lisp
+#| a block comment
+   #| nesting like Common Lisp |#
+   still commented |#
+#+rontolisp (print :ok)             ; kept: :rontolisp is always active
+#-(or sbcl ccl) (print :portable)   ; kept: neither feature is active
+#+sbcl (print (uses #.unsupported-syntax))
+(print (car *features*))            ; the first feature is always :rontolisp
+
+(pushnew :my-feature *features*)
+#+my-feature (print :announced)     ; kept: the reader saw the push above
+(print (and (member :my-feature *features*) t))
+```
+
+Notes:
+
+- Reading happens once, at the frontend: the interpreter reads with
+  `:rontolisp-interpreter`, and compiling to a `.class`/`.wasm` file reads with
+  `:rontolisp-jvm`/`:rontolisp-wasm`, so the set a compiled program's `#+`
+  conditionals were resolved against is fixed at compile time. Files pulled in
+  by the compile-time `load`/`require`/`asdf:load-system` include are read with
+  the same target features, plus what the files spliced before them pushed. The
+  run-time `*features*` list starts out holding that same set.
+- `--feature` reaches the source **you** brought — the entry file, everything
+  it loads, and every ASDF system loaded under it. It never reaches the sources
+  rontolisp itself ships (the prelude, the built-in libraries and system
+  shims), which are always read with the backend's own set: a claim you make
+  about a third-party library must not rewrite our own conditionals underneath
+  it. A push the program makes does not reach them either.
+- A form skipped by a failing `#+`/`#-` guard is skipped at the raw character
+  level without being parsed, so it may use syntax rontolisp does not support
+  (that is the point of guarding it).
+- `#.` read-time evaluation **is** supported: each `#.` datum is evaluated
+  just before its top-level form runs — against the global environment on the
+  interpreter, and against the compile-time (macro-time) evaluator on the
+  JVM/WASM compile path — and the value is substituted into the form. Inside a
+  `.asd` file's `defsystem`, a `#.` is evaluated only where its value decides
+  what gets loaded (see the [Systems guide](../guides/asdf-systems.md)); the
+  browser playground's
+  Compile buttons do not support `#.`.
+- A feature expression may be computed by `#.`, as in
+  `#+#.(cl:if (cl:find-symbol "X" "SB-IMPL") '(and) '(or)) form`. The guard is
+  decided where its `#.` is evaluated — just before the top-level form runs,
+  so it sees the forms before it — and a failing guard drops `form` without
+  looking up the packages it names. Such a guard must stand as a top-level form
+  or a list element: behind `'`, `#'`, `` ` ``, `,`, `#n=` or a dotted `.`, in a
+  vector or array literal, or in a nested backquote it is a read error.
+- The runtime reader of compiled programs (`read`, `read-from-string`, runtime
+  `load`) does not know block comments or feature conditionals, like backquote
+  — see [Compiled read/load Limitations](../guides/read-load-limitations.md).
+
+## Source position literals (`rontolisp:current-file`, `rontolisp:current-line`)
+
+Two symbols the reader substitutes with the position they stand on -- the last
+read-time substitutions now that `pi` and the limit constants read as symbols
+bound to per-backend globals (see the table above): `rontolisp:current-file` becomes the
+origin file as a string (or `nil` when there is none — a REPL line, a
+`read-from-string`), and `rontolisp:current-line` becomes the 1-based line the
+symbol itself is on. They are ordinary literals afterwards, so they cost
+nothing at run time and read the same on the interpreter and on every compile
+backend.
+
+A file pulled in by `load` / `require` / `asdf:load-system` names **itself**,
+not the entry file it was spliced into — which is the point: in a program
+assembled from many files, a message can say where it really came from. The
+file is spelled exactly as the frontend saw it (the path given on the command
+line, or the one `load` resolved), which is also how a read error spells it.
+
+```console
+$ cat lib.lisp
+(defun where ()
+  (list rontolisp:current-file rontolisp:current-line))
+$ cat main.lisp
+(load "lib.lisp")
+(print (where))
+(print (list rontolisp:current-file rontolisp:current-line))
+$ rontolisp main.lisp
+("lib.lisp" 2)
+("main.lisp" 3)
+```
+
+Notes:
+
+- Substitution happens at **read** time, so inside a `defmacro` template these
+  name the macro's own definition site, not its call site. A logging macro
+  therefore takes them as arguments at the call site, the way C code passes
+  `__FILE__` / `__LINE__`:
+
+  ```console
+  (defmacro log-at (file line msg)
+    `(format t "~a:~a: ~a~%" ,file ,line ,msg))
+
+  (log-at rontolisp:current-file rontolisp:current-line "started")
+  ; prints e.g. app.lisp:12: started
+  ```
+
+- Only the qualified spellings are recognized (`rontolisp:current-file`,
+  `rontolisp::current-file`, `rl:current-file`). Unlike the rest of the
+  `rontolisp` package these are **not** available unqualified after
+  `(in-package rontolisp)`: reading happens before any `in-package` directive
+  is interpreted.
+- Being read-time, they are substituted wherever they appear, quoted data
+  included — `'rontolisp:current-line` is the number, not the symbol. This is
+  the same rule `#+`/`#-` and `#.` follow.
+
+## Dotted pairs, association lists and property lists
+
+The reader supports Common Lisp dotted-pair notation: `(a . b)` denotes a
+single cons cell whose car is `a` and whose cdr is `b`, and `(a b . c)` is a
+list whose final cdr is `c` instead of `nil`. This is how association-list
+(alist) literals are written:
+
+```lisp
+(cdr (assoc 'b '((a . 1) (b . 2)))) ; => 2
+```
+
+Dotted tails also work in backquote templates (`` `(a . ,x) `` expands to a
+`cons` chain), and the runtime reader of compiled programs parses the same
+notation, so a `read`/`read-from-string` of `"(a . 1)"` behaves identically in
+all backends. A standalone `.` outside a list is a read error, as in Common
+Lisp, and `,@` cannot be combined with a dotted tail in a backquote template.
+A dotted tail in **call position** (e.g. `(+ 1 . 2)`) is an error in all three
+backends -- a dotted pair is only meaningful as data.
+
+The alist function family -- `assoc`, `assoc-if`, `rassoc`, `acons`, `pairlis`
+and `copy-alist` -- works in all three backends. `assoc` and `rassoc` compare
+with `eql` by default and accept optional `:test`/`:key` keywords (`:test` a
+function designator, e.g. `#'equal` for string keys; `:key` a selector applied
+to each pair's car/cdr before the comparison), like `member`:
+
+```lisp
+(assoc "b" '(("a" . 1) ("b" . 2)) :test #'equal) ; => ("b" . 2)
+```
+
+Property lists (plists) -- flat lists of alternating indicator/value pairs
+like `(:a 1 :b 2)` -- are the keyword-based cousin of alists. `getf` reads the
+value for an indicator (two arguments only: no `&optional default`), the
+`remf` macro removes an indicator/value pair from a plist held in a variable
+or other `setf` place, and `&key` parameters in lambda lists are parsed from
+the same shape. `(setf (getf ...))` is not a supported place and there are no
+symbol plists (`get`/`symbol-plist`); to add or update an entry, rebuild the
+list, e.g. by prepending with `list*`:
+
+```lisp
+(let ((p (list :a 1 :b 2)))
+  (remf p :a)
+  (getf (list* :c 3 p) :c)) ; => 3
+```
+
+## Arrays
+
+`make-array`, `aref` and `(setf (aref ...))` work in all three backends. Arrays
+of **any rank >= 0** are supported; the dimensions argument is an integer
+(rank 1) or a list of integers, and `:initial-element` sets every
+cell (defaulting to nil). The empty list (`nil`) is the **rank-0** array: Common
+Lisp's box for "a scalar seen as an array", holding one element that `aref` and
+`(setf (aref ...))` reach with no subscripts at all. Elements are stored row-major with O(1) access
+(flat rank-independent access via
+[`row-major-aref`](functions/row-major-aref.md) /
+[`array-row-major-index`](functions/array-row-major-index.md)), and arrays are
+compared by identity (`eq`), so two distinct arrays are never `equal`. `length`
+returns the element count of a vector (rank-1 array); a multidimensional array
+is not a sequence, so `length` signals an error on it. Vectors
+can also be built with [`vector`](functions/vector.md) and read with
+[`svref`](functions/svref.md), array shapes are inspected with
+[`array-dimensions`](functions/array-dimensions.md) /
+[`array-rank`](functions/array-rank.md) /
+[`array-total-size`](functions/array-total-size.md), and
+[`coerce`](functions/coerce.md) converts between lists, vectors and strings.
+For numpy-style vector/matrix math on top of arrays, see the
+[`linalg` package](../guides/linear-algebra.md). A
+2-D array indexed in nested loops:
+
+```lisp
+(let ((m (make-array (list 2 3) :initial-element 0)))
+  (setf (aref m 1 2) 9)
+  (incf (aref m 1 2))
+  (aref m 1 2)) ; => 10
+```
+
+The `#(...)` reader syntax denotes a self-evaluating rank-1 vector literal whose
+elements are read as data (not evaluated), e.g. `#(1 2 3)` or `#(a "b")`. A
+rank-n array is written `#nA((...) ...)` with its contents as nested lists of
+depth n (`#2A` for a matrix, `#3A` for a rank-3 array, ...); every list at the
+same depth must have the same length, so ragged contents are a read error. A
+rank-0 array is written `#0A<datum>` with **no** parens at all, so `#0A5` holds
+the number 5 and `#0A(1 2)` holds the list `(1 2)`.
+Arrays print in the same readable syntax across all backends, with `prin1`
+quoting string elements and `princ` not:
+
+```lisp
+(print #(1 2 3))                          ; #(1 2 3)
+(princ #(a "b"))                          ; #(a b)
+(print #2A((1 2) (3 4)))                  ; #2A((1 2) (3 4))
+(aref #3A(((1 2) (3 4)) ((5 6) (7 8))) 1 0 1) ; => 6
+(make-array (list 2 2) :initial-element 0) ; #2A((0 0) (0 0))
+(print #0A5)                              ; #0A5
+(aref #0A5)                               ; => 5
+(let ((z (make-array nil))) (setf (aref z) 7) z) ; => #0A7
+```
+
+An array literal is a **constructor, not a constant**: every evaluation of it builds a
+fresh, independently mutable array, so a literal in a function body is a convenient
+spelling for the array it describes and writing into the result never reaches the next
+call. This holds for every array syntax (`#(...)`, `#nA(...)`, `#*1011`, `#d(...)`,
+`#f(...)`) on every backend. Common Lisp instead leaves a literal shared and its
+mutation undefined, so `(eq (f) (f))` below answers `T` in a conforming Lisp and `NIL`
+here:
+
+```lisp
+(defun tri () #(1 2 3))
+(eq (tri) (tri))                          ; => NIL
+(let ((v (tri))) (setf (aref v 0) 99) v)  ; => #(99 2 3)
+(tri)                                     ; => #(1 2 3)
+```
+
+The same syntax **under `quote` is a constant**, as in Common Lisp: every evaluation of
+one quote site answers the same shared object on every backend, for a quoted list as
+much as for a quoted array, so `(eq (f) (f))` is `T` for `(defun f () '(1 2 3))` and a
+destructive write through the result reaches the next call. Treat quoted data as
+read-only, as you would in any Common Lisp.
+
+A **structure or pathname literal is a constant even outside `quote`**: `#S(...)` and
+`#P"..."` are self-evaluating, and every evaluation of one site answers the same shared
+object on every backend, so `(eq (f) (f))` is `T` for `(defun f () #P"a/b.txt")`. This
+is the one literal syntax that does not follow the constructor rule above.
+
+### Packed float arrays (`#d` / `#f` / `#bf16`)
+
+`#d(...)`, `#f(...)` and `#bf16(...)` denote a **packed float array**: a float-typed array whose
+elements are stored unboxed. `#d(...)` is `double-float` (f64) and `#f(...)` is
+`single-float` (f32 -- half the memory, double the SIMD lane count). They read like
+`#(...)`, but every element is coerced to the array's float type, so `#d(1 2 3)` and
+`#d(1.0 2.0 3.0)` are the same vector and `(array-element-type #d(1.0))` is
+`double-float` (`single-float` for `#f`). Higher-rank literals use nested lists --
+`#d((1.0 2.0) (3.0 4.0))` is a matrix -- and
+`(make-array n :element-type 'double-float)` (or `'single-float`) builds one at
+runtime.
+
+`#bf16(...)` is the third width, **bfloat16**: the top sixteen bits of an IEEE binary32 --
+one sign bit, the same eight exponent bits an f32 has, and seven mantissa bits. It keeps
+the whole f32 range at a quarter of `#d`'s memory and about three decimal digits, which is
+why it is the storage format published machine-learning checkpoints use. It is a *storage*
+width rather than a compute one: hold weights in it, do not take a determinant in it.
+`(make-array n :element-type 'bfloat16)` builds one at runtime,
+`(array-element-type #bf16(1.0))` is `bfloat16`, and the printed form reads back as
+`#bf16(...)` like the other two. As a type name it sits below `float` in the
+[`subtypep`](functions/subtypep.md) lattice, and no scalar belongs to it. **The interpreter and the JVM only** -- the WASM backends have no bfloat16 array and
+refuse the width by name (`bfloat16 arrays are supported on the interpreter and the JVM
+only`) at the call that asks for one.
+
+Scalars stay `double`: reading an element widens it to a `double` (a single-float
+element is widened f32 -> f64), and storing one narrows it to the array's width
+(f64 -> f32 for a single-float array). There is no bfloat16 scalar either, so a `#bf16`
+element read answers the `double` its sixteen bits name -- exactly, since widening a
+bfloat16 pattern loses nothing -- and a store rounds to nearest, ties to even, the same
+rounding [`rontolisp:bfloat16-bits`](functions/rontolisp-bfloat16-bits.md) performs.
+Storing a non-real is a type error (a general
+array holds any value). Otherwise a packed array behaves like a general array of the
+same numbers for every operation -- `aref`, `(setf (aref ...))`, `length`,
+`row-major-aref`, `array-rank`, `array-dimensions` and `coerce` all work on it --
+except that it prints with its own `#d(...)` / `#f(...)` reader syntax, so its printed
+form reads back as a packed array of the same width (preserving the unboxed
+representation) rather than degrading to a general one. It is simply the unboxed,
+float-specialized representation the numeric kernels use, so fill pointers, adjustable
+and displaced arrays are not available on it (those need a general array). The
+double-float width is the default and what `linalg` produces. For fast vectorized
+kernels over packed arrays -- and their optional hardware acceleration -- see the
+[`vec` package](../guides/simd-acceleration.md). A packed array is also a binary I/O
+buffer: [`read-sequence`](functions/read-sequence.md) / [`write-sequence`](functions/write-sequence.md)
+move its elements as raw little-endian IEEE-754 in one bulk transfer (any rank, row-major),
+which is how a weight file or a numpy dump is loaded. A `#bf16` array moves its *stored*
+patterns, two little-endian bytes an element -- which is exactly what a BF16 safetensors or
+GGUF tensor holds, so such a tensor loads with no conversion at all and writing it back
+reproduces the file byte for byte.
+
+```lisp
+(aref #d(1.0 2.0 3.0) 1)                   ; => 2.0
+(array-element-type #d(1 2 3))             ; => DOUBLE-FLOAT
+(array-element-type #f(1.0 2.0))           ; => SINGLE-FLOAT
+(array-element-type #bf16(1.0 2.0))        ; => BFLOAT16
+(aref #bf16(0.1) 0)                        ; => 0.10009765625
+(print #d((1.0 2.0) (3.0 4.0)))            ; #d((1.0 2.0) (3.0 4.0))
+(coerce #d(1 2 3) 'list)                   ; => (1.0 2.0 3.0)
+(let ((v (make-array 3 :element-type 'single-float :initial-element 0.0)))
+  (setf (aref v 0) 5)
+  v)                                        ; => #f(5.0 0.0 0.0)
+```
+
+## Hash tables
+
+`make-hash-table`, `gethash`, `(setf (gethash ...))`, `remhash`, `clrhash`,
+`hash-table-count`, `hash-table-p` and `maphash` work in all three backends.
+Keys are compared structurally (as if by `equal`): a list key like `(list r c)`
+matches an equal list, and numbers, symbols, characters and strings match by
+value, while a structure or CLOS instance matches only itself. `:test 'equalp` widens that: such a table FOLDS each key before placing
+it, so `"CS"`, `"Cs"` and `"cs"` are one key, `#\a` and `#\A` are one key, a
+float and the rational it equals are one key (`1` and `1.0`, `1/2` and `0.5`),
+a list of them folds element-wise, and a structure or CLOS instance folds slot by slot. An array deliberately does not fold (a
+vector key is compared by identity, so a folded copy would never find itself).
+The `:test` is a symbol or one of the four functions (`#'equalp`), written
+literally or computed at run time (`(apply #'make-hash-table initargs)`). The fold only places the
+key: `maphash` hands back each key as it was first stored, `"cs"` for an entry
+written under `"cs"` and then under `"CS"`, and `0.5` for one written under `0.5`.
+Storing under a key the table already has replaces the value and keeps the key, under
+every test.
+An `eql` or `eq` table keys aggregates (conses, vectors, strings, instances) by
+identity and every other value by value. `maphash` walks the entries in insertion order
+on every backend (a key removed and stored again comes last); ANSI leaves the order
+unspecified, so portable code should not depend on it. A table itself prints
+as SBCL's unreadable tag minus its trailing identity hash --
+`#<HASH-TABLE :TEST EQUAL :COUNT n>`, the same text on every backend, with no
+entry content. `:TEST` is the test lookup actually implements, i.e. `EQUALP` for
+a folding table and `EQUAL` for every other one -- the same answer
+`hash-table-test` gives; `:COUNT` is the live entry count, the same number
+`hash-table-count` returns.
+A key is placed by a depth-capped structural hash and then decided by `equal`, so
+lookup does not depend on the size of the key's printed form and a key whose
+structure is CYCLIC is usable -- stored and retrieved under the same object:
+
+```lisp
+(let ((h (make-hash-table)))
+  (setf (gethash 'a h) 1)
+  (princ-to-string h))                      ; => "#<HASH-TABLE :TEST EQUAL :COUNT 1>"
+```
+
+```lisp
+(let ((h (make-hash-table :test 'equalp)))
+  (setf (gethash "CS" h) 1)
+  (list (gethash "Cs" h) (hash-table-count h)
+        (hash-table-test h)))               ; => (1 1 EQUALP)
+```
+
+They
+are also usable as first-class function values (`#'gethash`, `#'remhash`,
+`#'clrhash`, `#'hash-table-count`, `#'hash-table-p`, `#'maphash`, and
+`#'make-hash-table`) on all three backends -- passed via fixed-arity wrappers, so
+`gethash`'s optional default is not available through the function value, and
+`#'make-hash-table` accepts its keyword arguments but ignores them, always
+building the default table. A typical use --
+counting with `incf` on the place:
+
+```lisp
+(let ((counts (make-hash-table :test 'equal)))
+  (dolist (w '("a" "b" "a"))
+    (incf (gethash w counts 0)))
+  (gethash "a" counts)) ; => 2
+```

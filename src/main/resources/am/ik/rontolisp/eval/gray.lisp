@@ -1,0 +1,764 @@
+;; rontolisp's own Gray-stream extension: the base classes and generic
+;; functions a user-defined stream implements, mirroring how real
+;; implementations expose their native Gray support (sb-gray, ccl's
+;; ansi-streams, ...). The stream-taking built-ins (write-string/write-char,
+;; princ/prin1/print, terpri/fresh-line/write-line,
+;; force-output/finish-output/clear-output, close, write-byte,
+;; read-byte/read-char/read-char-no-hang/peek-char/unread-char/read-line,
+;; listen, read-sequence/write-sequence, file-position, and the stream
+;; predicates open-stream-p/input-stream-p/output-stream-p plus
+;; stream-element-type) dispatch to the rontolisp:stream-* generics when handed
+;; a CLOS instance instead of a stream handle. Third-party portability layers
+;; adapt to THIS protocol (see trivial-gray-streams.lisp); no third-party name
+;; is known to the core.
+;;
+;; Write-side requirement: a character output stream defines stream-write-char
+;; OR stream-write-string -- each has a default method written in terms of the
+;; other, so exactly one is enough and the rest of the output protocol
+;; (terpri, fresh-line, write-line, the print family) composes out of them.
+;; Defining NEITHER is the one broken shape: the two defaults then call each
+;; other. stream-write-string is always called with integer start and end, as
+;; SBCL does, so a method takes (stream string &optional start end).
+;;
+;; Read-side requirement: a character input stream defines stream-read-char and
+;; nothing else is mandatory (a binary one defines stream-read-byte). Every
+;; other read generic has a default written over it -- stream-read-line and
+;; stream-read-sequence loop it, stream-read-char-no-hang IS it, and
+;; stream-peek-char reads one and pushes it back through stream-unread-char,
+;; whose own default parks the character in a pushback cell on the instance. A
+;; class that can rewind its source defines stream-unread-char and owns the
+;; pushback instead; the cell is then never written.
+;;
+;; Read-side EOF convention: stream-read-byte / stream-read-char /
+;; stream-read-line / stream-peek-char / stream-read-char-no-hang return the
+;; keyword :eof at end of stream; the built-in dispatch translates that into
+;; the eof-error-p / eof-value contract (signalling end-of-file like the
+;; handle-based built-ins). stream-read-line answers (values line
+;; missing-newline-p) -- a partial last line with a true second value -- and
+;; :eof when no characters are left at all; a method's ("" t), the standard
+;; Gray spelling of end of file, is end of file too. Its values reach read-line
+;; through %quiet-values / %quiet-multiple-value-list, so they cost a program
+;; with no multiple-value consumer nothing.
+
+(defclass rontolisp:fundamental-stream () ())
+
+(defclass rontolisp:fundamental-input-stream (rontolisp:fundamental-stream) ())
+
+(defclass rontolisp:fundamental-output-stream (rontolisp:fundamental-stream) ())
+
+;; The element-kind intermediates; a class may subclass one beside a direction
+;; class instead of a leaf (lisp-binary's bit-stream).
+
+(defclass rontolisp:fundamental-character-stream (rontolisp:fundamental-stream)
+  ())
+
+(defclass rontolisp:fundamental-binary-stream (rontolisp:fundamental-stream) ())
+
+(defclass rontolisp:fundamental-character-output-stream
+    (rontolisp:fundamental-output-stream rontolisp:fundamental-character-stream)
+  ())
+
+(defclass rontolisp:fundamental-character-input-stream
+    (rontolisp:fundamental-input-stream rontolisp:fundamental-character-stream)
+  ())
+
+(defclass rontolisp:fundamental-binary-input-stream
+    (rontolisp:fundamental-input-stream rontolisp:fundamental-binary-stream)
+  ())
+
+(defclass rontolisp:fundamental-binary-output-stream
+    (rontolisp:fundamental-output-stream rontolisp:fundamental-binary-stream)
+  ())
+
+;; Output generics.
+
+(defgeneric rontolisp:stream-write-char (stream character))
+
+(defgeneric rontolisp:stream-write-string (stream string &optional start end))
+
+(defgeneric rontolisp:stream-write-byte (stream byte))
+
+;; Column / line-position protocol and the line-oriented output generics CL's
+;; Gray protocol names, so terpri / fresh-line / write-line / the print family
+;; reach a user stream instead of writing past it.
+
+(defgeneric rontolisp:stream-line-column (stream))
+
+(defgeneric rontolisp:stream-start-line-p (stream))
+
+(defgeneric rontolisp:stream-terpri (stream))
+
+(defgeneric rontolisp:stream-fresh-line (stream))
+
+(defgeneric rontolisp:stream-advance-to-column (stream column))
+
+;; Flush / discard / close. Nothing is buffered in a discardable way on any
+;; backend, so the defaults are no-ops; a stream wrapping something that IS
+;; buffered overrides them.
+
+(defgeneric rontolisp:stream-force-output (stream))
+
+(defgeneric rontolisp:stream-finish-output (stream))
+
+(defgeneric rontolisp:stream-clear-output (stream))
+
+;; Input generics.
+
+(defgeneric rontolisp:stream-read-byte (stream))
+
+(defgeneric rontolisp:stream-read-char (stream))
+
+(defgeneric rontolisp:stream-read-char-no-hang (stream))
+
+(defgeneric rontolisp:stream-peek-char (stream))
+
+(defgeneric rontolisp:stream-unread-char (stream character))
+
+(defgeneric rontolisp:stream-read-line (stream))
+
+(defgeneric rontolisp:stream-listen (stream))
+
+(defgeneric rontolisp:stream-clear-input (stream))
+
+;; Sequence generics: start/end are always integers by the time a method
+;; runs -- the dispatch helpers below normalize a missing end to
+;; (length sequence), mirroring the built-in read-sequence/write-sequence.
+
+(defgeneric rontolisp:stream-read-sequence (stream sequence start end))
+
+(defgeneric rontolisp:stream-write-sequence (stream sequence start end))
+
+;; file-position protocol: (file-position s) reads through the generic,
+;; (file-position s pos) writes through the (setf ...) generic.
+
+(defgeneric rontolisp:stream-file-position (stream))
+
+(defgeneric (setf rontolisp:stream-file-position) (position stream))
+
+;; Default methods: element-at-a-time fallbacks mirroring full Gray's
+;; defaults, so a class defining only the element generics still answers
+;; read-line and the sequence built-ins. The loops are plain defuns so the
+;; trivial-gray-streams shim can reuse them for its own defaults.
+
+;; The protocol's pushback: stream-unread-char's default method parks the
+;; character ON THE INSTANCE, in the one cell every class descending from
+;; fundamental-input-stream reserves past its declared slots (index -1 counts back
+;; from the end of the instance's storage, so it is one literal across classes of
+;; any width, and no printer, equal or slot listing sees it). %gray-read-char-1 --
+;; the single read-one-character entry every default and every read dispatch
+;; helper goes through -- drains it first. One character per stream, as CL keeps
+;; it, so two streams each hold one and a dropped stream takes its own along.
+;; A class that defines stream-unread-char itself never reaches this cell: its
+;; method rewinds its own source and its stream-read-char answers the rewound
+;; character.
+
+(defun rontolisp::%gray-default-unread-char (stream character)
+  (%obj-set stream -1 character)
+  nil)
+
+;; The typep keeps the cell read to the classes that reserve it: a dispatch helper
+;; hands any instance here, and another class's last cell is a declared slot.
+(defun rontolisp::%gray-read-char-1 (stream)
+  (let ((c
+         (if (typep stream 'rontolisp:fundamental-input-stream)
+             (%obj-ref stream -1)
+             nil)))
+    (if c
+        (progn
+          (%obj-set stream -1 nil)
+          c)
+        (rontolisp:stream-read-char stream))))
+
+;; The five characters CL's standard readtable calls whitespace -- the set
+;; peek-char's t peek-type skips. Kept in step with Environment's
+;; isLispWhitespace and LispMacroExpander.whitespaceCharTest, the other two
+;; copies of this set.
+(defun rontolisp::%gray-whitespace-char-p (c)
+  (or (char= c #\Space) (char= c #\Tab) (char= c #\Newline) (char= c #\Return)
+      (char= c #\Page)))
+
+(defun rontolisp::%gray-default-peek-char (stream)
+  (let ((c (rontolisp::%gray-read-char-1 stream)))
+    (if (eq c :eof)
+        :eof (progn
+               (rontolisp:stream-unread-char stream c)
+               c))))
+
+(defun rontolisp::%gray-default-read-line (stream)
+  (let ((acc "") (result nil) (missing nil) (done nil))
+    (do ()
+        (done (if (eq result :eof) :eof (%quiet-values result missing)))
+      (let ((c (rontolisp::%gray-read-char-1 stream)))
+        (cond ((eq c :eof)
+               (setq result (if (string= acc "") :eof acc))
+               (setq missing t)
+               (setq done t))
+              ((char= c #\Newline)
+               (setq result acc)
+               (setq done t))
+              (t (setq acc (concatenate 'string acc (string c)))))))))
+
+(defun rontolisp::%gray-default-read-sequence (stream sequence start end)
+  (let ((i start) (done nil) (chars (stringp sequence)))
+    (do ()
+        ((or done (>= i end)) i)
+      (let ((elt
+             (if chars
+                 (rontolisp::%gray-read-char-1 stream)
+                 (rontolisp:stream-read-byte stream))))
+        (if (eq elt :eof)
+            (setq done t)
+            (progn
+              (setf (aref sequence i) elt)
+              (setq i (+ i 1))))))))
+
+;; A string goes to stream-write-string in one call, as in SBCL, so a class that
+;; defines only that method receives the range; bytes go one at a time.
+(defun rontolisp::%gray-default-write-sequence (stream sequence start end)
+  (if (stringp sequence)
+      (progn
+        (rontolisp:stream-write-string stream sequence start end)
+        sequence)
+      (let ((i start))
+        (do ()
+            ((>= i end) sequence)
+          (rontolisp:stream-write-byte stream (aref sequence i))
+          (setq i (+ i 1))))))
+
+(defun rontolisp::%gray-default-write-string (stream string start end)
+  (let ((i (if start start 0)) (n (if end end (length string))))
+    (do ()
+        ((>= i n) string)
+      (rontolisp:stream-write-char stream (aref string i))
+      (setq i (+ i 1)))))
+
+(defun rontolisp::%gray-default-write-char (stream character)
+  (rontolisp:stream-write-string stream (string character) 0 1)
+  character)
+
+(defun rontolisp::%gray-default-terpri (stream)
+  (rontolisp:stream-write-char stream #\Newline)
+  nil)
+
+(defun rontolisp::%gray-default-start-line-p (stream)
+  (let ((column (rontolisp:stream-line-column stream)))
+    (if column (eql column 0) nil)))
+
+;; fresh-line's answer is CL's: t when it had to break the line, nil when the
+;; stream was already at one. A stream with no column cannot tell, so
+;; %gray-default-start-line-p answers nil for it and the line break is
+;; unconditional (.kb/gray-streams.md).
+(defun rontolisp::%gray-default-fresh-line (stream)
+  (if (rontolisp:stream-start-line-p stream)
+      nil
+      (progn
+        (rontolisp:stream-terpri stream)
+        t)))
+
+(defun rontolisp::%gray-default-advance-to-column (stream column)
+  (let ((at (rontolisp:stream-line-column stream)))
+    (if at
+        (progn
+          (do ()
+              ((>= at column) t)
+            (rontolisp:stream-write-char stream #\Space)
+            (setq at (+ at 1)))
+          t)
+        nil)))
+
+;; The write-side pair: each element generic has a default written in terms of
+;; the other, so a class defines whichever one it can and inherits the rest of
+;; the output protocol. stream-write-char is the one full Gray requires; the
+;; write-string default is the loop every implementation ships, and the
+;; write-char default is what keeps a stream that only knows how to write
+;; STRINGS (the shape rontolisp's own broadcast stream and jzon's writer use)
+;; answering write-char.
+
+(defmethod rontolisp:stream-write-string ((stream
+                                           rontolisp:fundamental-character-output-stream)
+                                          string &optional start end)
+  (rontolisp::%gray-default-write-string stream string start end))
+
+(defmethod rontolisp:stream-write-char
+    ((stream rontolisp:fundamental-character-output-stream) character)
+  (rontolisp::%gray-default-write-char stream character))
+
+;; Column defaults: nil is CL's "this stream does not track a column".
+
+(defmethod rontolisp:stream-line-column
+    ((stream rontolisp:fundamental-character-output-stream))
+  nil)
+
+(defmethod rontolisp:stream-start-line-p
+    ((stream rontolisp:fundamental-character-output-stream))
+  (rontolisp::%gray-default-start-line-p stream))
+
+(defmethod rontolisp:stream-terpri
+    ((stream rontolisp:fundamental-character-output-stream))
+  (rontolisp::%gray-default-terpri stream))
+
+(defmethod rontolisp:stream-fresh-line
+    ((stream rontolisp:fundamental-character-output-stream))
+  (rontolisp::%gray-default-fresh-line stream))
+
+(defmethod rontolisp:stream-advance-to-column
+    ((stream rontolisp:fundamental-character-output-stream) column)
+  (rontolisp::%gray-default-advance-to-column stream column))
+
+;; Flush / discard / close defaults.
+
+(defmethod rontolisp:stream-force-output
+    ((stream rontolisp:fundamental-output-stream))
+  nil)
+
+(defmethod rontolisp:stream-finish-output
+    ((stream rontolisp:fundamental-output-stream))
+  nil)
+
+(defmethod rontolisp:stream-clear-output
+    ((stream rontolisp:fundamental-output-stream))
+  nil)
+
+(defmethod rontolisp:stream-read-line
+    ((stream rontolisp:fundamental-input-stream))
+  (rontolisp::%gray-default-read-line stream))
+
+;; The read-side pair to the write side's write-char/write-string defaults:
+;; stream-read-char is the ONE method a character input stream must supply and
+;; everything else is written over it. stream-read-char-no-hang IS
+;; stream-read-char (rontolisp has no non-blocking source a class could not
+;; wrap itself); stream-peek-char reads one and hands it back through
+;; stream-unread-char, whose default parks it in the instance's pushback cell.
+
+(defmethod rontolisp:stream-read-char-no-hang
+    ((stream rontolisp:fundamental-input-stream))
+  (rontolisp::%gray-read-char-1 stream))
+
+(defmethod rontolisp:stream-peek-char
+    ((stream rontolisp:fundamental-input-stream))
+  (rontolisp::%gray-default-peek-char stream))
+
+(defmethod rontolisp:stream-unread-char
+    ((stream rontolisp:fundamental-input-stream) character)
+  (rontolisp::%gray-default-unread-char stream character))
+
+(defmethod rontolisp:stream-listen ((stream rontolisp:fundamental-input-stream))
+  nil)
+
+;; sb-gray's default too: clear-input of any other Gray stream has no method.
+(defmethod rontolisp:stream-clear-input
+    ((stream rontolisp:fundamental-character-input-stream))
+  nil)
+
+(defmethod rontolisp:stream-read-sequence
+    ((stream rontolisp:fundamental-input-stream) sequence start end)
+  (rontolisp::%gray-default-read-sequence stream sequence start end))
+
+(defmethod rontolisp:stream-write-sequence
+    ((stream rontolisp:fundamental-output-stream) sequence start end)
+  (rontolisp::%gray-default-write-sequence stream sequence start end))
+
+;; file-position defaults: nil is CL's "not supported" answer, the same one
+;; the handle-based built-in gives.
+
+(defmethod rontolisp:stream-file-position
+    ((stream rontolisp:fundamental-stream))
+  nil)
+
+(defmethod (setf rontolisp:stream-file-position)
+    (position (stream rontolisp:fundamental-stream))
+  nil)
+
+;; The built-in dispatch helpers the compile path rewrites call sites onto
+;; (GrayStreamsLibrary.process) and the interpreter's built-in wraps delegate
+;; to: a CLOS instance stream goes to the Gray generic, anything else falls
+;; back to the built-in. The interpreter needs no rewrite -- its built-in
+;; wraps call these helpers directly.
+;;
+;; Every helper resolves its stream through %stream-target FIRST: a synonym
+;; stream and an OPEN stream are both instances, so without that they would take
+;; the CLOS arm and die on "no applicable method", and a synonym's target --
+;; which may itself be a Gray instance -- would never be reached.
+;; %gray-close-dispatch is the one exception; see its comment.
+;;
+;; A helper hands its built-in the stream AS GIVEN, never the handle it resolved: a
+;; built-in resolves the designator itself and refuses a bare integer as the
+;; non-stream it is.
+;;
+;; Where nil designates a standard stream -- the print family's output stream,
+;; the character reads' input stream -- the helper resolves nil to the CURRENT
+;; *standard-output* / *standard-input* before the instance test: a Gray
+;; instance bound to the variable is the stream the call designates. A program
+;; that never binds the variable reads it as the constant t, so nothing changes
+;; there.
+
+(defun rontolisp::%gray-write-string-dispatch (s stream)
+  (let ((target (%stream-target (or stream *standard-output*))))
+    (if (%obj-p target)
+        (rontolisp:stream-write-string target s 0 (length s))
+        (write-string s stream))))
+
+(defun rontolisp::%gray-write-char-dispatch (c stream)
+  ;; write-char reaches stream-write-char -- the one method full Gray requires
+  ;; and, for a class that defines only it, the ONLY writer it has. The
+  ;; non-instance fallback is what write-char lowers to everywhere else.
+  (let ((target (%stream-target (or stream *standard-output*))))
+    (if (%obj-p target)
+        (progn
+          (rontolisp:stream-write-char target c)
+          c)
+        (progn
+          (write-string (string c) stream)
+          c))))
+
+;; The line-oriented and print-family helpers. princ/prin1/print RENDER through
+;; the ordinary value printer and hand the text to stream-write-string, so a
+;; print-object method still decides the text (%princ-piece / %prin1-piece, the routed conversions
+;; are what the print-object rewrite hooks) and the Gray stream sees exactly the
+;; bytes the handle-based built-in would have written -- print's newline
+;; included, trailing where rontolisp's print puts it.
+
+(defun rontolisp::%gray-princ-dispatch (value stream)
+  (let ((target (%stream-target (or stream *standard-output*))))
+    (if (%obj-p target)
+        (let ((text (%princ-piece value)))
+          (rontolisp:stream-write-string target text 0 (length text))
+          value)
+        (princ value stream))))
+
+(defun rontolisp::%gray-prin1-dispatch (value stream)
+  (let ((target (%stream-target (or stream *standard-output*))))
+    (if (%obj-p target)
+        (let ((text (%prin1-piece value)))
+          (rontolisp:stream-write-string target text 0 (length text))
+          value)
+        (prin1 value stream))))
+
+(defun rontolisp::%gray-print-dispatch (value stream)
+  (let ((target (%stream-target (or stream *standard-output*))))
+    (if (%obj-p target)
+        (let ((text (%prin1-piece value)))
+          (rontolisp:stream-write-string target text 0 (length text))
+          (rontolisp:stream-terpri target)
+          value)
+        (print value stream))))
+
+(defun rontolisp::%gray-terpri-dispatch (stream)
+  (let ((target (%stream-target (or stream *standard-output*))))
+    (if (%obj-p target)
+        (progn
+          (rontolisp:stream-terpri target)
+          nil)
+        (terpri stream))))
+
+(defun rontolisp::%gray-fresh-line-dispatch (stream)
+  (let ((target (%stream-target (or stream *standard-output*))))
+    (if (%obj-p target)
+        (rontolisp:stream-fresh-line target)
+        (fresh-line stream))))
+
+(defun rontolisp::%gray-write-line-dispatch (s stream)
+  (let ((target (%stream-target (or stream *standard-output*))))
+    (if (%obj-p target)
+        (progn
+          (rontolisp:stream-write-string target s 0 (length s))
+          (rontolisp:stream-terpri target)
+          s)
+        (write-line s stream))))
+
+;; write-line / write-string with a bounding keyword. A spelled bound is checked ONCE
+;; before the method runs -- a nil start, a negative or non-integer bound and a range
+;; outside the string are type-errors, as in SBCL -- and the method then sees integers,
+;; a nil end being the length. Apart from the unbounded helpers above, so a call
+;; spelling no bound does not carry the check.
+(defun rontolisp::%gray-write-line-bounds-dispatch (s stream start end)
+  (let ((target (%stream-target (or stream *standard-output*))))
+    (if (%obj-p target)
+        (progn
+          (%check-sequence-bounds s start end)
+          (rontolisp:stream-write-string target s start (if end end (length s)))
+          (rontolisp:stream-terpri target)
+          s)
+        (write-line s stream :start start :end end))))
+
+(defun rontolisp::%gray-write-string-bounds-dispatch (s stream start end)
+  (let ((target (%stream-target (or stream *standard-output*))))
+    (if (%obj-p target)
+        (progn
+          (%check-sequence-bounds s start end)
+          (rontolisp:stream-write-string target s start (if end end (length s)))
+          s)
+        (write-string s stream :start start :end end))))
+
+(defun rontolisp::%gray-force-output-dispatch (stream)
+  (let ((target (%stream-target (or stream *standard-output*))))
+    (if (%obj-p target)
+        (progn
+          (rontolisp:stream-force-output target)
+          nil)
+        (force-output stream))))
+
+(defun rontolisp::%gray-finish-output-dispatch (stream)
+  (let ((target (%stream-target (or stream *standard-output*))))
+    (if (%obj-p target)
+        (progn
+          (rontolisp:stream-finish-output target)
+          nil)
+        (finish-output stream))))
+
+(defun rontolisp::%gray-clear-output-dispatch (stream)
+  (let ((target (%stream-target (or stream *standard-output*))))
+    (if (%obj-p target)
+        (progn
+          (rontolisp:stream-clear-output target)
+          nil)
+        (clear-output stream))))
+
+;; close: a Gray stream has nothing to release, so closing one answers t, CL's
+;; own close value. A stream that DOES hold something defines
+;; (defmethod close ((s my-stream) &key abort) ...) -- CL's spelling for exactly
+;; this, dispatched on every backend by the shadowed-built-in machinery
+;; (.kb/clos.md) -- and there is deliberately no second, rontolisp-only generic
+;; competing with it: this helper is spliced, and the call sites rewritten, only
+;; for a program that defines no close method of its own.
+;; The ONE helper that does NOT resolve a synonym stream first: closing a
+;; synonym closes the SYNONYM, not the stream it forwards to (CLHS 21.1.3), and
+;; a synonym is an instance, so the instance arm is already its answer. An OPEN
+;; stream is an instance too and must NOT take that arm -- it is the one kind
+;; close really has work to do for, so it is tested by tag ahead of %obj-p. An
+;; instance that is no stream is the type error it is for the built-in.
+(defun rontolisp::%gray-close-dispatch (stream)
+  (if (%obj-is stream '%STREAM)
+      (close stream)
+      (if (%obj-p stream)
+          (if (streamp stream) t (%operand-type-error stream 'close 'stream))
+          (close stream))))
+
+(defun rontolisp::%gray-write-byte-dispatch (byte stream)
+  (let ((target (%stream-target stream)))
+    (if (%obj-p target)
+        (progn
+          (rontolisp:stream-write-byte target byte)
+          byte)
+        (write-byte byte stream))))
+
+(defun rontolisp::%gray-read-byte-dispatch (stream eof-error-p eof-value)
+  (let ((target (%stream-target stream)))
+    (if (%obj-p target)
+        (let ((b (rontolisp:stream-read-byte target)))
+          (if (eq b :eof) (if eof-error-p (error 'end-of-file) eof-value) b))
+        (read-byte stream eof-error-p eof-value))))
+
+;; For the character helpers below "as given" matters twice: the unread-char
+;; pushback lives on the stream VALUE (unread-char.lisp) -- keyed by a bare handle,
+;; two string streams read through these helpers would share one cell.
+(defun rontolisp::%gray-read-char-dispatch (stream eof-error-p eof-value)
+  (let ((target (%stream-target (or stream *standard-input*))))
+    (if (%obj-p target)
+        (let ((c (rontolisp::%gray-read-char-1 target)))
+          (if (eq c :eof) (if eof-error-p (error 'end-of-file) eof-value) c))
+        (read-char stream eof-error-p eof-value))))
+
+(defun rontolisp::%gray-read-char-no-hang-dispatch
+    (stream eof-error-p eof-value)
+  (let ((target (%stream-target (or stream *standard-input*))))
+    (if (%obj-p target)
+        (let ((c (rontolisp:stream-read-char-no-hang target)))
+          (if (eq c :eof) (if eof-error-p (error 'end-of-file) eof-value) c))
+        (read-char-no-hang stream eof-error-p eof-value))))
+
+;; peek-char carries CL's peek-type argument, and the SKIPPING forms have to be
+;; looped here rather than left to LispMacroExpander.expandPeekChar: that
+;; expansion runs after this rewrite, so its %peek-char / read-char calls would
+;; never see the instance. nil peeks, t skips whitespace, a character skips up
+;; to that character, and in every case the character stopped on stays in the
+;; stream -- the same contract the handle-based built-in follows (CL 21.2).
+(defun rontolisp::%gray-peek-char-dispatch
+    (peek-type stream eof-error-p eof-value)
+  (let ((target (%stream-target (or stream *standard-input*))))
+    (if (%obj-p target)
+        (let ((result nil) (done nil))
+          (do ()
+              (done result)
+            (let ((c (rontolisp:stream-peek-char target)))
+              (cond ((eq c :eof)
+                     (if eof-error-p (error 'end-of-file) nil)
+                     (setq result eof-value)
+                     (setq done t))
+                    ((null peek-type)
+                     (setq result c)
+                     (setq done t))
+                    ((eq peek-type t)
+                     (if (rontolisp::%gray-whitespace-char-p c)
+                         (rontolisp::%gray-read-char-1 target)
+                         (progn
+                           (setq result c)
+                           (setq done t))))
+                    (t (if (char= c peek-type)
+                           (progn
+                             (setq result c)
+                             (setq done t))
+                           (rontolisp::%gray-read-char-1 target)))))))
+        (peek-char peek-type stream eof-error-p eof-value))))
+
+(defun rontolisp::%gray-unread-char-dispatch (character stream)
+  (let ((target (%stream-target (or stream *standard-input*))))
+    (if (%obj-p target)
+        (progn
+          (rontolisp:stream-unread-char target character)
+          nil)
+        (unread-char character stream))))
+
+;; open-stream-p / stream-element-type follow the close rule: CL spells both as
+;; ordinary functions a program may own with a defmethod, so there is no
+;; competing rontolisp: generic and these helpers are used only when the
+;; program defines no method of its own. An instance with no method is OPEN (a
+;; Gray stream holds nothing that could be shut) and answers the element type
+;; of the base class it extends.
+
+;; The three PREDICATES hand the ORIGINAL designator to the built-in, not the
+;; resolved handle: %stream-target unwraps an open stream to its handle, and a
+;; bare handle is not a stream to streamp / input-stream-p / output-stream-p any
+;; more -- the value is. Only the %obj-p test needs the resolution.
+(defun rontolisp::%gray-open-stream-p-dispatch (stream)
+  (if (%obj-p (%stream-target stream))
+      (if (streamp stream)
+          t
+          (%operand-type-error stream 'open-stream-p 'stream))
+      (open-stream-p stream)))
+
+;; input-stream-p / output-stream-p: the same rule, answered by a typep against
+;; the two direction base classes rather than by a direction generic per class.
+;; Full Gray gives every base class a predicate method; two of those and four
+;; methods would ride in EVERY program that touches the protocol, for a query
+;; the class hierarchy already answers -- and a class reaches this protocol by
+;; subclassing exactly those base classes, so the typep is not an
+;; approximation. A stream that is neither (a bare fundamental-stream
+;; subclass) answers nil for both, like CL.
+(defun rontolisp::%gray-input-stream-p-dispatch (stream)
+  (let ((%gisp-s (%stream-target stream)))
+    (if (%obj-p %gisp-s)
+        (if (typep %gisp-s 'rontolisp:fundamental-input-stream) t nil)
+        (input-stream-p stream))))
+
+(defun rontolisp::%gray-output-stream-p-dispatch (stream)
+  (let ((%gosp-s (%stream-target stream)))
+    (if (%obj-p %gosp-s)
+        (if (typep %gosp-s 'rontolisp:fundamental-output-stream) t nil)
+        (output-stream-p stream))))
+
+(defun rontolisp::%gray-stream-element-type-dispatch (stream)
+  ;; A stream that subclasses a CHARACTER base class answers `character`, even
+  ;; when it subclasses a binary one too. That order is the BIVALENT rule, and
+  ;; it is what the answer is FOR: a caller asks so it knows which buffer to
+  ;; allocate -- (make-array n :element-type (stream-element-type s)) -- and a
+  ;; bivalent stream serves both read families out of one cursor, so the two
+  ;; buffers are equally readable while only the character one can then be
+  ;; written to a text sink. Upstream agrees: a Clack :raw-body is a
+  ;; flexi-stream, whose stream-element-type is the CHARACTER type even though
+  ;; read-byte works on it, and a portable library that sizes its buffer this
+  ;; way (tiny-routes' read-stream-to-string) writes the result into a string
+  ;; stream. Answering the binary type there signals on SBCL exactly as it does
+  ;; here, so it is a divergence rather than a stricter reading.
+  (let ((target (%stream-target stream)))
+    (if (%obj-p target)
+        (if (typep target 'rontolisp:fundamental-character-stream)
+            'character
+            (if (typep target 'rontolisp:fundamental-binary-stream)
+                '(unsigned-byte 8)
+                'character))
+        (stream-element-type stream))))
+
+(defun rontolisp::%gray-read-line-dispatch (stream eof-error-p eof-value)
+  (let ((target (%stream-target (or stream *standard-input*))))
+    (if (%obj-p target)
+        (let* ((vals
+                (%quiet-multiple-value-list
+                 (rontolisp:stream-read-line target)))
+               (l (car vals))
+               (missing (car (cdr vals))))
+          ;; :eof is this protocol's end of file, a ("" t) the standard Gray one.
+          (if (if (eq l :eof)
+                  t
+                  (if missing (if (stringp l) (= (length l) 0) nil) nil))
+              (%quiet-values (if eof-error-p (error 'end-of-file) eof-value) t)
+              (%quiet-values l missing)))
+        (read-line stream eof-error-p eof-value))))
+
+;; clear-input is prelude Lisp on every backend, one definition a call and a function
+;; value both reach, so a protocol program REPLACES it with this one rather than
+;; rewriting its calls (GrayStreamsLibrary.takeOverClearInput; on the interpreter, by
+;; evaluating this file). The non-Gray half is the prelude's definition.
+(defun clear-input (&optional %ci-s)
+  (let ((%ci-target (%stream-target (or %ci-s *standard-input*))))
+    (if (typep %ci-target 'rontolisp:fundamental-stream)
+        (progn
+          (rontolisp:stream-clear-input %ci-target)
+          nil)
+        (progn
+          (%check-stream (or %ci-s *standard-input*) 'clear-input t)
+          nil))))
+
+(defun rontolisp::%gray-listen-dispatch (stream)
+  (let ((target (%stream-target (or stream *standard-input*))))
+    (if (%obj-p target)
+        (if (rontolisp:stream-listen target) t nil)
+        (listen stream))))
+
+;; The built-in gets the stream AS GIVEN, not its resolved handle: it resolves the
+;; designator itself, and it reads the open stream value's kind to tell a string
+;; stream, which moves characters into any buffer (.kb/read-load-streams.md, "The
+;; stream picks the element").
+(defun rontolisp::%gray-read-sequence-dispatch (sequence stream start end)
+  (%check-sequence-bounds sequence start end)
+  (let ((target (%stream-target stream)))
+    (if (%obj-p target)
+        (rontolisp:stream-read-sequence target sequence start
+                                        (if end end (length sequence)))
+        ;; :end stays nil for the built-in: a rank-2 packed buffer has no length,
+        ;; and the expansion resolves nil to the whole buffer itself
+        ;; (.kb/binary-sequence-io.md).
+        (read-sequence sequence stream :start start :end end))))
+
+(defun rontolisp::%gray-write-sequence-dispatch (sequence stream start end)
+  (%check-sequence-bounds sequence start end)
+  (let ((target (%stream-target stream)))
+    (if (%obj-p target)
+        (progn
+          (rontolisp:stream-write-sequence target sequence start
+                                           (if end end (length sequence)))
+          sequence)
+        (write-sequence sequence stream :start start :end end))))
+
+(defun rontolisp::%gray-file-position-dispatch (stream)
+  (let ((target (%stream-target stream)))
+    ;; A broadcast stream answers for its last component, or 0 with none. The
+    ;; components are slot 0 (the base classes hold no slots), read directly:
+    ;; these helpers travel without the broadcast class entry, so the reader
+    ;; may not be defined where they run.
+    (if (%obj-is target '|%class-%BROADCAST-STREAM|)
+        (let ((cs (%obj-ref target 0)))
+          (if cs (rontolisp::%gray-file-position-dispatch (car (last cs))) 0))
+        (if (%obj-p target)
+            (rontolisp:stream-file-position target)
+            ;; As given, like the character helpers: the parked character counts.
+            (file-position stream)))))
+
+(defun rontolisp::%gray-file-position-set-dispatch (stream position)
+  (let ((target (%stream-target stream)))
+    (if (%obj-p target)
+        (setf (rontolisp:stream-file-position target) position)
+        (file-position stream position))))
+
+;; A broadcast stream answers the file queries for its LAST component, or for
+;; an empty list when it has none. The recursion carries a nested broadcast;
+;; a non-broadcast instance answers nil, and anything else falls back to the
+;; built-in -- the fallback must not see a Gray instance, or the interpreter's
+;; wrapper would send it straight back here.
+(defun rontolisp::%gray-broadcast-file-length (s)
+  (let ((target (%stream-target s)))
+    (if (%obj-is target '|%class-%BROADCAST-STREAM|)
+        ;; Slot 0 (see above): no reader dependency.
+        (let ((cs (%obj-ref target 0)))
+          (if cs (rontolisp::%gray-broadcast-file-length (car (last cs))) 0))
+        (if (%obj-p target) nil (file-length s)))))

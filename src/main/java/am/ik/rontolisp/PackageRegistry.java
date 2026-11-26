@@ -1,0 +1,2501 @@
+package am.ik.rontolisp;
+
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.SortedMap;
+import java.util.TreeMap;
+
+import org.jspecify.annotations.Nullable;
+
+/**
+ * A mutable registry of {@link LispPackage packages}, seeded with the built-in packages
+ * ({@code cl}, {@code cl-user}, {@code rontolisp}, and the interpreter-only {@code java}
+ * interop package). The resolution rules in {@link PackageResolver} operate generically
+ * over this registry, so a new package (or a future {@code defpackage}) only needs to be
+ * registered here.
+ */
+public final class PackageRegistry {
+
+	/**
+	 * {@link #splitQualified}'s answers for qualified names, a pure function of the name:
+	 * the interpreter asks it of the same names on every step it takes
+	 * ({@code symbol-name}, {@code symbol-package}, the class registry's keys), and a
+	 * split is two substrings and a lookup of the fresh package part. Cleared whole at
+	 * {@link #SPLIT_CACHE_LIMIT} names, which only a program interning names without
+	 * bound reaches.
+	 */
+	private static final java.util.concurrent.ConcurrentHashMap<String, QualifiedName> SPLITS = new java.util.concurrent.ConcurrentHashMap<>();
+
+	private static final int SPLIT_CACHE_LIMIT = 1 << 16;
+
+	/**
+	 * The {@code cl} special forms: operators handled natively by the evaluator and the
+	 * compilers that have no function value ({@code #'if} is an error).
+	 */
+	private static final Set<String> CL_SPECIAL_FORMS = Set.of(LispNames.QUOTE, LispNames.IF, LispNames.LET,
+			LispNames.PROGN, LispNames.SETQ, LispNames.LAMBDA, LispNames.WHILE, LispNames.FUNCTION, LispNames.DEFUN,
+			LispNames.DEFMACRO, LispNames.DEFSTRUCT, LispNames.DEFCLASS, LispNames.DEFGENERIC, LispNames.DEFMETHOD,
+			LispNames.DEFVAR, LispNames.DEFPARAMETER, LispNames.DEFCONSTANT, LispNames.RETURN, LispNames.IN_PACKAGE,
+			LispNames.DEFPACKAGE, LispNames.PROGV, LispNames.UNWIND_PROTECT, LispNames.TAGBODY, LispNames.GO,
+			LispNames.CATCH, LispNames.THROW);
+
+	/**
+	 * The {@code cl} macros: operators expanded by
+	 * {@link am.ik.rontolisp.macro.LispMacroExpander} that have no function value. Names
+	 * that expand internally but are also usable as function values ({@code first},
+	 * {@code length}, {@code 1+}, ...) are classified as functions.
+	 */
+	private static final Set<String> CL_MACROS = Set.of(LispNames.BLOCK, LispNames.COND, LispNames.CASE, LispNames.AND,
+			LispNames.OR, LispNames.WHEN, LispNames.UNLESS, LispNames.DOTIMES, LispNames.SETF, LispNames.PUSH,
+			LispNames.POP, LispNames.REMF, LispNames.LET_STAR, LispNames.DOLIST, LispNames.INCF, LispNames.DECF,
+			LispNames.FORMAT, LispNames.WITH_OPEN_FILE, LispNames.WITH_OPEN_STREAM, LispNames.PROG1, LispNames.DO,
+			LispNames.DO_STAR, LispNames.PROG2, LispNames.PSETQ, LispNames.PSETF, LispNames.TYPECASE, LispNames.ECASE,
+			LispNames.ETYPECASE, LispNames.CTYPECASE, LispNames.CCASE, LispNames.ERROR, LispNames.CERROR,
+			LispNames.TIME, LispNames.LOOP, LispNames.CHECK_TYPE, LispNames.ASSERT, LispNames.DECLARE,
+			LispNames.DECLAIM, LispNames.PROCLAIM, LispNames.THE, LispNames.EVAL_WHEN, LispNames.LOCALLY,
+			LispNames.FLET, LispNames.LABELS, LispNames.MULTIPLE_VALUE_BIND, LispNames.MULTIPLE_VALUE_LIST,
+			LispNames.MULTIPLE_VALUE_CALL, LispNames.NTH_VALUE, LispNames.MULTIPLE_VALUE_SETQ,
+			LispNames.MULTIPLE_VALUE_PROG1, LispNames.ROTATEF, LispNames.DESTRUCTURING_BIND,
+			LispNames.WITH_OUTPUT_TO_STRING, LispNames.WITH_INPUT_FROM_STRING, LispNames.WITH_STANDARD_IO_SYNTAX,
+			LispNames.PUSHNEW, LispNames.DEFTYPE, LispNames.DEFINE_CONDITION, LispNames.DEFINE_MODIFY_MACRO,
+			LispNames.DEFINE_METHOD_COMBINATION, LispNames.DEFINE_SETF_EXPANDER, LispNames.DEFSETF,
+			LispNames.DEFINE_COMPILER_MACRO, LispNames.RESTART_CASE, LispNames.MACROLET, LispNames.SYMBOL_MACROLET,
+			LispNames.DEFINE_SYMBOL_MACRO, LispNames.MAKE_CONDITION, LispNames.DOCUMENTATION, LispNames.COMPLEMENT,
+			LispNames.WARN, LispNames.SIGNAL, LispNames.RETURN_FROM, LispNames.MAKE_INSTANCE, LispNames.SLOT_VALUE,
+			LispNames.WITH_SLOTS, LispNames.WITH_ACCESSORS, LispNames.CHANGE_CLASS, LispNames.HANDLER_CASE,
+			LispNames.IGNORE_ERRORS, LispNames.HANDLER_BIND, LispNames.MAKE_SEQUENCE, LispNames.PROG,
+			LispNames.PROG_STAR, LispNames.SHIFTF, LispNames.LOAD_TIME_VALUE, LispNames.TYPEP, LispNames.SLOT_BOUNDP,
+			LispNames.SLOT_MAKUNBOUND, LispNames.SLOT_EXISTS_P, LispNames.PRINT_UNREADABLE_OBJECT,
+			LispNames.WITH_PACKAGE_ITERATOR, LispNames.WITH_HASH_TABLE_ITERATOR, LispNames.DO_EXTERNAL_SYMBOLS,
+			LispNames.DO_SYMBOLS, LispNames.DO_ALL_SYMBOLS, LispNames.WITH_COMPILATION_UNIT, LispNames.RESTART_BIND,
+			LispNames.WITH_SIMPLE_RESTART, LispNames.PPRINT_LOGICAL_BLOCK, LispNames.PPRINT_POP,
+			LispNames.PPRINT_EXIT_IF_LIST_EXHAUSTED, LispNames.FORMATTER);
+
+	/**
+	 * The {@code cl} functions: every standard name usable as a function value via
+	 * {@code #'name}. Car/cdr compositions ({@code cadr}, {@code cddr}, ...) are
+	 * recognized separately by {@link LispNames#isCarCdrComposition} and are not
+	 * enumerated here.
+	 */
+	private static final Set<String> CL_FUNCTIONS = Set.of(LispNames.FUNCALL, LispNames.ADD, LispNames.SUB,
+			LispNames.MUL, LispNames.DIV, LispNames.MOD, LispNames.REM, LispNames.ABS, LispNames.MIN, LispNames.MAX,
+			LispNames.SQRT, LispNames.ISQRT, LispNames.EXPT, LispNames.EXP, LispNames.LOG, LispNames.SIN, LispNames.COS,
+			LispNames.TAN, LispNames.ASIN, LispNames.ACOS, LispNames.ATAN, LispNames.SINH, LispNames.COSH,
+			LispNames.TANH, LispNames.CIS, LispNames.ASINH, LispNames.ACOSH, LispNames.ATANH, LispNames.RANDOM,
+			LispNames.MAKE_RANDOM_STATE, LispNames.RANDOM_STATE_P, LispNames.GCD, LispNames.LCM, LispNames.SIGNUM,
+			LispNames.EQ, LispNames.EQ_GENERAL, LispNames.EQL, LispNames.EQUAL, LispNames.EQUALP, LispNames.LT,
+			LispNames.GT, LispNames.LE, LispNames.GE, LispNames.CONS, LispNames.CAR, LispNames.CDR, LispNames.LIST,
+			LispNames.APPEND, LispNames.NTHCDR, LispNames.RPLACA, LispNames.RPLACD, LispNames.MAPCAR, LispNames.MAP,
+			LispNames.MAP_INTO, LispNames.MAPC, LispNames.MAPCAN, LispNames.APPLY, LispNames.SORT, LispNames.REDUCE,
+			LispNames.EVERY, LispNames.SOME, LispNames.REMOVE, LispNames.REMOVE_IF, LispNames.REMOVE_IF_NOT,
+			LispNames.NOT, LispNames.NULL, LispNames.ATOM, LispNames.NUMBERP, LispNames.INTEGERP, LispNames.FLOATP,
+			LispNames.RATIONALP, LispNames.REALP, LispNames.COMPLEXP, LispNames.COMPLEX, LispNames.REALPART,
+			LispNames.IMAGPART, LispNames.CONJUGATE, LispNames.PHASE, LispNames.UPGRADED_COMPLEX_PART_TYPE,
+			LispNames.NUMERATOR, LispNames.DENOMINATOR, LispNames.RATIONAL, LispNames.RATIONALIZE, LispNames.SYMBOLP,
+			LispNames.STRINGP, LispNames.LISTP, LispNames.CONSP, LispNames.KEYWORDP, LispNames.FLOAT,
+			LispNames.TRUNCATE, LispNames.FLOOR, LispNames.CEILING, LispNames.ROUND, LispNames.FTRUNCATE,
+			LispNames.FFLOOR, LispNames.FCEILING, LispNames.FROUND, LispNames.ONE_PLUS, LispNames.ONE_MINUS,
+			LispNames.ZEROP, LispNames.PLUSP, LispNames.MINUSP, LispNames.EVENP, LispNames.ODDP, LispNames.FIRST,
+			LispNames.SECOND, LispNames.THIRD, LispNames.FOURTH, LispNames.FIFTH, LispNames.SIXTH, LispNames.SEVENTH,
+			LispNames.EIGHTH, LispNames.NINTH, LispNames.TENTH, LispNames.NTH, LispNames.PRINT, LispNames.PRIN1,
+			LispNames.PRINC, LispNames.TERPRI, LispNames.FRESH_LINE, LispNames.READ_LINE, LispNames.READ,
+			LispNames.EVAL, LispNames.LOAD, LispNames.REQUIRE, LispNames.PROVIDE, LispNames.SYMBOL_FUNCTION,
+			LispNames.LENGTH, LispNames.REVERSE, LispNames.MEMBER, LispNames.FIND, LispNames.FIND_IF,
+			LispNames.FIND_IF_NOT, LispNames.MEMBER_IF, LispNames.POSITION, LispNames.POSITION_IF,
+			LispNames.POSITION_IF_NOT, LispNames.COUNT, LispNames.COUNT_IF, LispNames.ASSOC, LispNames.ASSOC_IF,
+			LispNames.LAST, LispNames.BUTLAST, LispNames.GETF, LispNames.REMOVE_DUPLICATES, LispNames.DELETE_DUPLICATES,
+			LispNames.NCONC, LispNames.REST, LispNames.PRINC_TO_STRING,
+			// The printer generic: a defmethod on it belongs to cl, so a method defined
+			// inside a package that uses cl specializes CL:PRINT-OBJECT rather than
+			// minting that package's own (quri's uri method).
+			LispNames.PRINT_OBJECT,
+			// The describer generic, cl-owned for the same reason: in-nomine's :after
+			// method reaches every describe. describe calls it.
+			LispNames.DESCRIBE_OBJECT, LispNames.DESCRIBE,
+			// The slot-access generics, cl-owned for the same reason: zpng's
+			// slot-unbound method must reach the generic every unbound read calls.
+			LispNames.SLOT_UNBOUND, LispNames.SLOT_MISSING,
+			// The instance-initialization generics, cl-owned for the same reason: CL has
+			// ONE of each, and make-instance's protocol chain must reach a hook whatever
+			// package defined it (cl-ppcre's initialize-instance :after and postmodern's
+			// shared-initialize :after must join the same generics).
+			LispNames.INITIALIZE_INSTANCE, LispNames.REINITIALIZE_INSTANCE, LispNames.SHARED_INITIALIZE,
+			LispNames.PRIN1_TO_STRING, LispNames.CONCATENATE, LispNames.STRING, LispNames.STRING_UPCASE,
+			LispNames.STRING_DOWNCASE, LispNames.STRING_CAPITALIZE, LispNames.SUBSEQ, LispNames.STRING_EQ,
+			LispNames.STRING_LT, LispNames.STRING_GT, LispNames.STRING_LE, LispNames.STRING_GE, LispNames.STRING_NE,
+			LispNames.STRING_EQUAL, LispNames.STRING_LESSP, LispNames.STRING_GREATERP, LispNames.STRING_NOT_GREATERP,
+			LispNames.STRING_NOT_LESSP, LispNames.STRING_NOT_EQUAL, LispNames.STRING_TRIM, LispNames.STRING_LEFT_TRIM,
+			LispNames.STRING_RIGHT_TRIM, LispNames.OPEN, LispNames.CLOSE, LispNames.PROBE_FILE, LispNames.DIRECTORY,
+			LispNames.PATHNAME_DIRECTORY, LispNames.CONSTANTLY, LispNames.WRITE_LINE, LispNames.READ_BYTE,
+			LispNames.WRITE_BYTE, LispNames.WRITE_CHAR, LispNames.READ_SEQUENCE, LispNames.WRITE_SEQUENCE,
+			LispNames.IDENTITY, LispNames.COPY_LIST, LispNames.COPY_STRUCTURE, LispNames.COPY_TREE,
+			LispNames.TREE_EQUAL, LispNames.NREVERSE, LispNames.MAKE_LIST, LispNames.UNION, LispNames.SET_EXCLUSIVE_OR,
+			LispNames.COUNT_IF_NOT, LispNames.MERGE, LispNames.NUNION, LispNames.NINTERSECTION,
+			LispNames.NSET_DIFFERENCE, LispNames.NSET_EXCLUSIVE_OR, LispNames.NSUBST, LispNames.NSUBST_IF,
+			LispNames.NSUBST_IF_NOT, LispNames.SUBST_IF, LispNames.SUBST_IF_NOT, LispNames.NSUBLIS,
+			LispNames.MEMBER_IF_NOT, LispNames.ASSOC_IF_NOT, LispNames.RASSOC_IF_NOT, LispNames.NBUTLAST,
+			LispNames.LIST_LENGTH, LispNames.TAILP, LispNames.GET_PROPERTIES, LispNames.INTERSECTION,
+			LispNames.SET_DIFFERENCE, LispNames.ADJOIN, LispNames.SUBSETP, LispNames.LOGAND, LispNames.LOGIOR,
+			LispNames.LOGXOR, LispNames.LOGNOT, LispNames.LOGANDC1, LispNames.LOGANDC2, LispNames.LOGORC1,
+			LispNames.LOGORC2, LispNames.LOGNAND, LispNames.LOGNOR, LispNames.LOGEQV, LispNames.ASH,
+			LispNames.INTEGER_LENGTH, LispNames.LOGBITP, LispNames.LOGTEST, LispNames.LOGCOUNT, LispNames.BOOLE,
+			LispNames.BYTE, LispNames.BYTE_SIZE, LispNames.BYTE_POSITION, LispNames.LDB, LispNames.DPB,
+			LispNames.DEPOSIT_FIELD, LispNames.LDB_TEST, LispNames.LIST_STAR, LispNames.ACONS, LispNames.ENDP,
+			LispNames.ELT, LispNames.RASSOC, LispNames.RASSOC_IF, LispNames.PAIRLIS, LispNames.COPY_ALIST,
+			LispNames.REVAPPEND, LispNames.NRECONC, LispNames.MAPLIST, LispNames.MAPCON, LispNames.MAPL,
+			LispNames.NOTANY, LispNames.NOTEVERY, LispNames.DELETE, LispNames.DELETE_IF, LispNames.DELETE_IF_NOT,
+			LispNames.SUBSTITUTE, LispNames.SUBST, LispNames.NSUBSTITUTE, LispNames.SUBSTITUTE_IF,
+			LispNames.SUBSTITUTE_IF_NOT, LispNames.NSUBSTITUTE_IF, LispNames.NSUBSTITUTE_IF_NOT, LispNames.SEARCH,
+			LispNames.MISMATCH, LispNames.GET_UNIVERSAL_TIME, LispNames.ENCODE_UNIVERSAL_TIME,
+			LispNames.DECODE_UNIVERSAL_TIME, LispNames.GET_DECODED_TIME, LispNames.GET_INTERNAL_REAL_TIME,
+			LispNames.GET_INTERNAL_RUN_TIME, LispNames.SLEEP, LispNames.FORCE_OUTPUT, LispNames.FINISH_OUTPUT,
+			LispNames.CLEAR_OUTPUT, LispNames.LISTEN, LispNames.READ_FROM_STRING, LispNames.PARSE_INTEGER,
+			LispNames.CHAR, LispNames.SCHAR, LispNames.CHAR_CODE, LispNames.CHAR_INT, LispNames.CODE_CHAR,
+			LispNames.CHAR_EQ, LispNames.CHAR_LT, LispNames.CHAR_LE, LispNames.CHAR_GT, LispNames.CHAR_GE,
+			LispNames.CHAR_NE, LispNames.CHAR_EQUAL, LispNames.CHAR_NOT_EQUAL, LispNames.CHAR_LESSP,
+			LispNames.CHAR_GREATERP, LispNames.CHAR_NOT_LESSP, LispNames.CHAR_NOT_GREATERP, LispNames.GRAPHIC_CHAR_P,
+			LispNames.STANDARD_CHAR_P, LispNames.CHAR_UPCASE, LispNames.CHAR_DOWNCASE, LispNames.CHARACTERP,
+			LispNames.ALPHA_CHAR_P, LispNames.ALPHANUMERICP, LispNames.LDIFF, LispNames.SUBLIS, LispNames.GENTEMP,
+			LispNames.MAKE_LOAD_FORM, LispNames.MAKE_LOAD_FORM_SAVING_SLOTS, LispNames.SXHASH, LispNames.SBIT,
+			LispNames.BIT, LispNames.BOTH_CASE_P, LispNames.SPECIAL_OPERATOR_P, LispNames.MACRO_FUNCTION,
+			LispNames.COMPILER_MACRO_FUNCTION, LispNames.COMPILED_FUNCTION_P, LispNames.FUNCTION_LAMBDA_EXPRESSION,
+			LispNames.LIST_ALL_PACKAGES, LispNames.USE_PACKAGE, LispNames.UNUSE_PACKAGE, LispNames.EXPORT,
+			LispNames.UNEXPORT, LispNames.FIND_CLASS, LispNames.GET, LispNames.SYMBOL_PLIST, LispNames.DIGIT_CHAR_P,
+			LispNames.DIGIT_CHAR, LispNames.MAKE_HASH_TABLE, LispNames.GETHASH, LispNames.REMHASH, LispNames.CLRHASH,
+			LispNames.HASH_TABLE_COUNT, LispNames.HASH_TABLE_TEST, LispNames.HASH_TABLE_SIZE,
+			LispNames.HASH_TABLE_REHASH_SIZE, LispNames.HASH_TABLE_REHASH_THRESHOLD, LispNames.HASH_TABLE_P,
+			LispNames.MAPHASH, LispNames.MAKE_ARRAY, LispNames.AREF, LispNames.VECTOR, LispNames.SVREF,
+			LispNames.ARRAY_DIMENSIONS, LispNames.ARRAY_DIMENSION, LispNames.ARRAY_RANK, LispNames.ARRAY_TOTAL_SIZE,
+			LispNames.ROW_MAJOR_AREF, LispNames.ARRAY_ROW_MAJOR_INDEX, LispNames.COERCE, LispNames.GENSYM,
+			LispNames.MACROEXPAND, LispNames.MACROEXPAND_1, LispNames.VALUES, LispNames.WRITE_STRING,
+			LispNames.WRITE_TO_STRING, LispNames.WRITE, LispNames.PPRINT, LispNames.PPRINT_NEWLINE,
+			LispNames.PPRINT_INDENT, LispNames.PPRINT_TAB, LispNames.COPY_PPRINT_DISPATCH,
+			LispNames.SET_PPRINT_DISPATCH, LispNames.PPRINT_DISPATCH, LispNames.SYMBOL_NAME, LispNames.INTERN,
+			LispNames.FIND_SYMBOL, LispNames.MAKE_SYMBOL, LispNames.BOUNDP, LispNames.FBOUNDP, LispNames.FMAKUNBOUND,
+			LispNames.MAKUNBOUND, LispNames.SYMBOL_VALUE, LispNames.SET, LispNames.FUNCTIONP, LispNames.VALUES_LIST,
+			LispNames.NE, LispNames.FILL_POINTER, LispNames.ARRAY_HAS_FILL_POINTER_P, LispNames.ADJUSTABLE_ARRAY_P,
+			LispNames.VECTOR_PUSH, LispNames.VECTOR_POP, LispNames.VECTOR_PUSH_EXTEND, LispNames.ARRAY_ELEMENT_TYPE,
+			LispNames.ADJUST_ARRAY, LispNames.ARRAY_DISPLACEMENT, LispNames.STABLE_SORT, LispNames.COPY_SEQ,
+			LispNames.READ_CHAR, LispNames.PEEK_CHAR, LispNames.READ_CHAR_NO_HANG, LispNames.UNREAD_CHAR,
+			LispNames.MAKE_STRING_OUTPUT_STREAM, LispNames.MAKE_STRING_INPUT_STREAM, LispNames.GET_OUTPUT_STREAM_STRING,
+			LispNames.MAKE_SYNONYM_STREAM, LispNames.SYNONYM_STREAM_SYMBOL, LispNames.VECTORP, LispNames.ARRAYP,
+			LispNames.MAKE_STRING, LispNames.REPLACE, LispNames.FILL, LispNames.LOWER_CASE_P, LispNames.UPPER_CASE_P,
+			LispNames.CONSTANTP, LispNames.GET_SETF_EXPANSION, LispNames.STREAMP, LispNames.SIMPLE_STRING_P,
+			LispNames.SIMPLE_VECTOR_P, LispNames.BIT_VECTOR_P, LispNames.SIMPLE_BIT_VECTOR_P,
+			LispNames.ARRAY_IN_BOUNDS_P, LispNames.BIT_AND, LispNames.BIT_ANDC1, LispNames.BIT_ANDC2, LispNames.BIT_EQV,
+			LispNames.BIT_IOR, LispNames.BIT_NAND, LispNames.BIT_NOR, LispNames.BIT_NOT, LispNames.BIT_ORC1,
+			LispNames.BIT_ORC2, LispNames.BIT_XOR, LispNames.MASK_FIELD, LispNames.SCALE_FLOAT, LispNames.FLOAT_RADIX,
+			LispNames.FLOAT_SIGN, LispNames.FLOAT_DIGITS, LispNames.FLOAT_PRECISION, LispNames.DECODE_FLOAT,
+			LispNames.INTEGER_DECODE_FLOAT, LispNames.SUBTYPEP, LispNames.CHAR_NAME, LispNames.NAME_CHAR,
+			LispNames.FDEFINITION, LispNames.FILE_POSITION, LispNames.FILE_LENGTH, LispNames.FILE_WRITE_DATE,
+			LispNames.ENSURE_DIRECTORIES_EXIST, LispNames.MAKE_BROADCAST_STREAM, LispNames.MAKE_TWO_WAY_STREAM,
+			LispNames.TWO_WAY_STREAM_INPUT_STREAM, LispNames.TWO_WAY_STREAM_OUTPUT_STREAM, LispNames.MAKE_ECHO_STREAM,
+			LispNames.ECHO_STREAM_INPUT_STREAM, LispNames.ECHO_STREAM_OUTPUT_STREAM, LispNames.MAKE_CONCATENATED_STREAM,
+			LispNames.CONCATENATED_STREAM_STREAMS, LispNames.BROADCAST_STREAM_STREAMS, LispNames.CLEAR_INPUT,
+			LispNames.FILE_STRING_LENGTH, LispNames.INTERACTIVE_STREAM_P, LispNames.STREAM_EXTERNAL_FORMAT,
+			LispNames.PATHNAMEP, LispNames.INPUT_STREAM_P, LispNames.OUTPUT_STREAM_P, LispNames.OPEN_STREAM_P,
+			LispNames.STREAM_ELEMENT_TYPE, LispNames.CLASS_OF, LispNames.CLASS_NAME, LispNames.ALLOCATE_INSTANCE,
+			LispNames.COMPILE, LispNames.CHARACTER, LispNames.SIMPLE_CONDITION_FORMAT_CONTROL,
+			LispNames.SIMPLE_CONDITION_FORMAT_ARGUMENTS, LispNames.TYPE_ERROR_DATUM, LispNames.TYPE_ERROR_EXPECTED_TYPE,
+			LispNames.CELL_ERROR_NAME, LispNames.ARITHMETIC_ERROR_OPERATION, LispNames.ARITHMETIC_ERROR_OPERANDS,
+			LispNames.UNBOUND_SLOT_INSTANCE, LispNames.PRINT_NOT_READABLE_OBJECT, LispNames.STREAM_ERROR_STREAM,
+			LispNames.FILE_ERROR_PATHNAME, LispNames.MAKE_PATHNAME, LispNames.MERGE_PATHNAMES, LispNames.TRUENAME,
+			LispNames.PATHNAME, LispNames.PARSE_NAMESTRING, LispNames.PATHNAME_NAME, LispNames.PATHNAME_TYPE,
+			LispNames.DELETE_FILE, LispNames.Y_OR_N_P, LispNames.NAMESTRING_CL, LispNames.COPY_READTABLE,
+			LispNames.SET_DISPATCH_MACRO_CHARACTER, LispNames.READTABLE_CASE, LispNames.GET_DISPATCH_MACRO_CHARACTER,
+			LispNames.MAKE_DISPATCH_MACRO_CHARACTER, LispNames.SET_MACRO_CHARACTER, LispNames.GET_MACRO_CHARACTER,
+			LispNames.SET_SYNTAX_FROM_CHAR, LispNames.READTABLEP, LispNames.READ_DELIMITED_LIST,
+			LispNames.READ_PRESERVING_WHITESPACE, LispNames.INVALID_METHOD_ERROR, LispNames.METHOD_COMBINATION_ERROR,
+			LispNames.UPGRADED_ARRAY_ELEMENT_TYPE, LispNames.FIND_PACKAGE, LispNames.SYMBOL_PACKAGE,
+			LispNames.PACKAGE_NAME, LispNames.TYPE_OF, LispNames.INVOKE_RESTART, LispNames.FIND_RESTART,
+			LispNames.COMPUTE_RESTARTS, LispNames.RESTART_NAME, LispNames.MUFFLE_WARNING, LispNames.ABORT,
+			LispNames.CONTINUE, LispNames.USE_VALUE, LispNames.STORE_VALUE, LispNames.REMPROP, LispNames.IMPORT,
+			LispNames.PACKAGE_USE_LIST, LispNames.PACKAGE_USED_BY_LIST, LispNames.PACKAGE_SHADOWING_SYMBOLS,
+			LispNames.PATHNAME_HOST, LispNames.PATHNAME_DEVICE, LispNames.PATHNAME_VERSION, LispNames.WILD_PATHNAME_P,
+			LispNames.ENOUGH_NAMESTRING, LispNames.TRANSLATE_PATHNAME, LispNames.TRANSLATE_LOGICAL_PATHNAME,
+			LispNames.LOGICAL_PATHNAME, LispNames.LOGICAL_PATHNAME_TRANSLATIONS,
+			LispNames.LOAD_LOGICAL_PATHNAME_TRANSLATIONS, LispNames.PATHNAME_MATCH_P, LispNames.RENAME_FILE,
+			LispNames.FILE_NAMESTRING, LispNames.DIRECTORY_NAMESTRING, LispNames.HOST_NAMESTRING,
+			LispNames.NSTRING_UPCASE, LispNames.NSTRING_DOWNCASE, LispNames.NSTRING_CAPITALIZE,
+			LispNames.LISP_IMPLEMENTATION_TYPE, LispNames.LISP_IMPLEMENTATION_VERSION, LispNames.SOFTWARE_TYPE,
+			LispNames.SOFTWARE_VERSION, LispNames.MACHINE_TYPE, LispNames.MACHINE_VERSION, LispNames.MACHINE_INSTANCE,
+			LispNames.SHORT_SITE_NAME, LispNames.LONG_SITE_NAME, LispNames.USER_HOMEDIR_PATHNAME, LispNames.COPY_SYMBOL,
+			LispNames.INVOKE_DEBUGGER, LispNames.REMOVE_METHOD, LispNames.ADD_METHOD, LispNames.FIND_METHOD,
+			LispNames.COMPUTE_APPLICABLE_METHODS, LispNames.ENSURE_GENERIC_FUNCTION, LispNames.METHOD_QUALIFIERS,
+			LispNames.MAKE_INSTANCES_OBSOLETE, LispNames.UPDATE_INSTANCE_FOR_REDEFINED_CLASS, LispNames.COMPILE_FILE,
+			LispNames.COMPILE_FILE_PATHNAME, LispNames.MAKE_PACKAGE, LispNames.DELETE_PACKAGE, LispNames.RENAME_PACKAGE,
+			LispNames.PACKAGEP, LispNames.PACKAGE_NICKNAMES, LispNames.FIND_ALL_SYMBOLS, LispNames.APROPOS,
+			LispNames.APROPOS_LIST, LispNames.PACKAGE_ERROR_PACKAGE, LispNames.SHADOW, LispNames.SHADOWING_IMPORT,
+			LispNames.UNINTERN);
+
+	/** The {@code cl} variables. */
+	private static final Set<String> CL_VARIABLES = union(Set.of(LispNames.PACKAGE_VAR,
+			LispNames.READ_DEFAULT_FLOAT_FORMAT, LispNames.READ_BASE_VAR, LispNames.PI, LispNames.ARRAY_DIMENSION_LIMIT,
+			LispNames.ARRAY_TOTAL_SIZE_LIMIT, LispNames.CHAR_CODE_LIMIT, LispNames.MOST_POSITIVE_FIXNUM,
+			LispNames.MOST_NEGATIVE_FIXNUM, LispNames.INTERNAL_TIME_UNITS_PER_SECOND, LispNames.PRINT_CIRCLE_VAR,
+			LispNames.ARRAY_RANK_LIMIT, LispNames.CALL_ARGUMENTS_LIMIT, LispNames.LAMBDA_PARAMETERS_LIMIT,
+			LispNames.MULTIPLE_VALUES_LIMIT, LispNames.BOOLE_1, LispNames.BOOLE_2, LispNames.BOOLE_AND,
+			LispNames.BOOLE_ANDC1, LispNames.BOOLE_ANDC2, LispNames.BOOLE_C1, LispNames.BOOLE_C2, LispNames.BOOLE_CLR,
+			LispNames.BOOLE_EQV, LispNames.BOOLE_IOR, LispNames.BOOLE_NAND, LispNames.BOOLE_NOR, LispNames.BOOLE_ORC1,
+			LispNames.BOOLE_ORC2, LispNames.BOOLE_SET, LispNames.BOOLE_XOR, LispNames.GENSYM_COUNTER_VAR,
+			LispNames.MACROEXPAND_HOOK_VAR, LispNames.RANDOM_STATE_VAR, LispNames.PRINT_ESCAPE_VAR,
+			LispNames.PRINT_READABLY_VAR, LispNames.FEATURES_VAR, LispNames.STANDARD_OUTPUT_VAR,
+			LispNames.ERROR_OUTPUT_VAR, LispNames.STANDARD_INPUT_VAR, LispNames.READTABLE_VAR,
+			LispNames.LAMBDA_LIST_KEYWORDS, LispNames.LOAD_PATHNAME_VAR, LispNames.LOAD_TRUENAME_VAR,
+			LispNames.COMPILE_FILE_PATHNAME_VAR, LispNames.COMPILE_FILE_TRUENAME_VAR, LispNames.LOAD_VERBOSE_VAR,
+			LispNames.LOAD_PRINT_VAR, LispNames.DEBUGGER_HOOK_VAR, LispNames.COMPILE_VERBOSE_VAR,
+			LispNames.COMPILE_PRINT_VAR, LispNames.READ_EVAL_VAR, LispNames.READ_SUPPRESS_VAR,
+			LispNames.PRINT_PRETTY_VAR, LispNames.PRINT_RIGHT_MARGIN_VAR, LispNames.PRINT_MISER_WIDTH_VAR,
+			LispNames.PRINT_LINES_VAR, LispNames.PRINT_PPRINT_DISPATCH_VAR, LispNames.PRINT_LENGTH_VAR,
+			LispNames.PRINT_LEVEL_VAR, LispNames.PRINT_BASE_VAR, LispNames.PRINT_RADIX_VAR, LispNames.PRINT_CASE_VAR,
+			LispNames.PRINT_ARRAY_VAR, LispNames.PRINT_GENSYM_VAR, LispNames.MODULES_VAR, LispNames.TRACE_OUTPUT_VAR,
+			LispNames.DEBUG_IO_VAR, LispNames.QUERY_IO_VAR, LispNames.TERMINAL_IO_VAR,
+			LispNames.DEFAULT_PATHNAME_DEFAULTS_VAR),
+			// The float-range constants (most-positive-single-float &c): constant
+			// variables like pi, bound as globals (see ClConstants).
+			ClConstants.FLOAT_NAMES, Set.copyOf(LispNames.REPL_VARIABLES));
+
+	/**
+	 * The {@code cl} type-specifier (and clause-keyword) names that are not also
+	 * function/macro names. Registered so they resolve bare inside user packages (a
+	 * {@code (:use :cl)} package's {@code 'double-float} or {@code (integer 0)} must not
+	 * become {@code pkg::double-float}); they are not callable and do not appear in the
+	 * introspection listings.
+	 */
+	private static final Set<String> CL_TYPES = Set.of("INTEGER", "NUMBER", "RATIONAL", "RATIO", "REAL", "COMPLEX",
+			"FIXNUM", "BIGNUM", "SINGLE-FLOAT", "DOUBLE-FLOAT", "SHORT-FLOAT", "LONG-FLOAT", "UNSIGNED-BYTE",
+			"SIGNED-BYTE", "BOOLEAN", "SEQUENCE", "ARRAY", "SIMPLE-ARRAY", "SIMPLE-VECTOR", "SIMPLE-STRING",
+			"BASE-STRING", "CHARACTER", "BASE-CHAR", "STANDARD-CHAR", "SATISFIES", "OTHERWISE", "STREAM",
+			// The stream SUBtypes and the readtable type. Every stream is a
+			// self-describing value carrying its KIND, so `file-stream`,
+			// `string-stream` and `synonym-stream` all have exact tests; the
+			// composite streams are prelude Gray classes, tested by class tag; a
+			// readtable is a value of the fixed LispLayout.READTABLE layout. See
+			// LispMacroExpander.makeTypeTest.
+			"FILE-STREAM", "STRING-STREAM", "SYNONYM-STREAM", "BROADCAST-STREAM", "TWO-WAY-STREAM", "ECHO-STREAM",
+			"CONCATENATED-STREAM", "READTABLE", "RANDOM-STATE", "COMPILED-FUNCTION", "SIMPLE-BASE-STRING",
+			"EXTENDED-CHAR",
+			// Bit-vector types (no longer empty: a bit vector is the
+			// general array stamped with the remembered element type bit, with its
+			// lattice edges in LispMacroExpander.SUBTYPEP_PARENTS). The metaclass names,
+			// by the same must-not-become-pkg::name rule: structure-class is an empty
+			// type (a defstruct's class metaobject is a standard-class), built-in-class a
+			// seeded class (McCLIM tells the two apart) -- trivia level2 dispatches
+			// typecase/etypecase over them.
+			"BIT-VECTOR", "SIMPLE-BIT-VECTOR", "STRUCTURE-CLASS", "BUILT-IN-CLASS",
+			// The generic-function and method metaobject classes
+			// (ClosRegistry.METHOD_METAOBJECT_FAMILIES): seeded where a program names
+			// one, instantiated only through a user subclass -- a defgeneric's
+			// dispatcher is a plain function and a method a registry row.
+			"GENERIC-FUNCTION", "STANDARD-GENERIC-FUNCTION", "METHOD", "STANDARD-METHOD", "METHOD-COMBINATION",
+			// CL symbols used as NAMES by libraries: trivia's class/structure/type
+			// patterns are (defpattern class ...) &c on the CL symbols, so the
+			// defpattern site (inside trivia's package) and a user's pattern site must
+			// resolve to the SAME bare spelling or the pattern-namespace lookup misses.
+			// CLASS is additionally a REAL class once the MOP surface seeds (the
+			// superclass of standard-class, .kb/clos.md), so the bare spelling is also
+			// what makes (typep x 'class) find it.
+			"CLASS", "STRUCTURE", "TYPE",
+			// The package TYPE name (a package value is find-package's keyword answer,
+			// .kb/symbol-runtime-api.md): cl-package-locks' (etypecase p (package p)
+			// (symbol ...)) must not resolve it to cl-package-locks::package.
+			"PACKAGE",
+			// The root class name: (find-class 'standard-object) must reach the
+			// find-class fallback (ClosRegistry.FIND_CLASS_ONLY_CLASS_NAMES) as the bare
+			// CL spelling -- mito's map-all-superclasses eq-compares superclass
+			// metaobjects against it from inside mito's own package. STANDARD-CLASS is
+			// its metaclass sibling: the compiled %find-class matches SPELLINGS, so a
+			// package-local MITO...::STANDARD-CLASS resolution missed the seeded entry
+			// (the interpreter's registry normalizes spellings and hid the gap).
+			"STANDARD-OBJECT", "STANDARD-CLASS");
+
+	/**
+	 * The built-in CONDITION class names, taken straight from the hierarchy
+	 * {@link ClosRegistry} seeds so the two can never drift apart. They belong to
+	 * {@code cl} for the same reason the type names above do, and the consequence is
+	 * sharper: a condition name is what a {@code handler-case} clause, a
+	 * {@code define-condition} parent and a RUNTIME {@code (typep c ty)} specifier all
+	 * spell, so a package-local {@code MY-PKG::TYPE-ERROR} made the same condition two
+	 * different symbols in two packages and left the runtime type test -- which matches
+	 * the registry's plain class name by spelling -- answering nil.
+	 */
+	private static final Set<String> CL_CONDITION_TYPES = Set.copyOf(ClosRegistry.CONDITION_CLASS_NAMES);
+
+	/**
+	 * Internal {@code %}-prefixed helpers owned by {@code cl} but excluded from the
+	 * introspection listings. Every name a built-in lowering emits belongs here: a
+	 * compile-path pass may run the lowering before the package resolver, inside the
+	 * user's package, where a name {@code cl} does not own resolves into that package.
+	 */
+	private static final Set<String> CL_INTERNALS = Set.of(LispNames.REMF_TAIL, LispNames.STRING_CONCAT,
+			LispNames.FIXED_DECIMAL, LispNames.SEQ_STRING, LispNames.SEQ_INT_VECTOR, LispNames.SEQ_FLOAT_VECTOR,
+			LispNames.BLOCK_INTERNAL, LispNames.FN_BLOCK_INTERNAL, LispNames.ERROR_INTERNAL, LispNames.PUTHASH,
+			LispNames.HANDLER_CASE_INTERNAL, LispNames.DEFUN_INTERNAL, LispNames.DEFINITION_INTERNAL, LispNames.ASET,
+			LispNames.ELT_CELL, LispNames.CHECK_LIST_INTERNAL, LispNames.OPERAND_TYPE_ERROR_INTERNAL,
+			LispNames.UNSPELLED_QUOTE, LispNames.CHECK_SEQUENCE_INTERNAL, LispNames.CHECK_SEQUENCE_RUNTIME,
+			LispNames.CHECK_STREAM_INTERNAL, LispNames.CHECK_STREAM_RUNTIME, LispNames.FORMAT_DESTINATION_INTERNAL,
+			LispNames.FORMAT_WRITE_INTERNAL, LispNames.READ_SEQUENCE_PACKED, LispNames.WRITE_SEQUENCE_PACKED,
+			LispNames.READ_SEQUENCE_CHARS, LispNames.ROW_MAJOR_ASET, LispNames.MAKE_STRING_OUTPUT_STREAM_INTERNAL,
+			LispNames.MAKE_STRING_INPUT_STREAM_INTERNAL, LispNames.STRING_STREAM_CONTENTS_INTERNAL,
+			LispNames.PEEK_CHAR_INTERNAL, LispNames.ARRAYP_INTERNAL, LispNames.SIMPLE_ARRAY_P_INTERNAL,
+			LispNames.STRING_DIMENSION_INTERNAL, LispNames.MV_SPILL, LispNames.SET_FILL_POINTER, LispNames.ARRAY_BECOME,
+			LispNames.ARRAY_BECOME_DISPLACED, LispNames.ARRAY_ALIKE, LispNames.ARRAY_DISP_TARGET,
+			LispNames.ARRAY_DEFAULT_ELEMENT, LispNames.ARRAY_ADOPT_ELEMENT_TYPE, LispNames.ARRAY_JAVA_COMPONENT,
+			LispNames.ARRAY_DISP_OFFSET, LispNames.ARRAY_UNDISPLACE, LispNames.FIND_SYMBOL_STATUS,
+			LispNames.SUBTYPEP_VALID, LispNames.READ_FROM_STRING_END, LispNames.READ_FROM_STRING_FULL_INTERNAL,
+			LispNames.READ_LINE_PAIR_INTERNAL, LispNames.QUIET_VALUES_INTERNAL,
+			LispNames.QUIET_MULTIPLE_VALUE_LIST_INTERNAL, LispNames.READ_FROM_STRING_RAW_INTERNAL,
+			LispNames.READ_FAILURE_INTERNAL, LispNames.WARN_INTERNAL, LispNames.SCHAR_SET, LispNames.NORMALIZE_STRING,
+			LispNames.SUBSTRING_INTERNAL, LispNames.STRING_UPCASE_PIECE, LispNames.STRING_DOWNCASE_PIECE,
+			LispNames.STRING_STREAM_PIECE, LispNames.STRING_ORDER, LispNames.STRING_CODE, LispNames.STRING_SPLIT,
+			LispNames.STRING_JOIN, LispNames.STRING_COUNT, LispNames.SORT_BY_KEYS, LispNames.MASK_SIGNED_FIELD,
+			LispNames.IEEE754_DOUBLE_BITS, LispNames.IEEE754_DOUBLE_FROM_BITS, LispNames.DECIMAL_DOUBLE_INTERNAL,
+			LispNames.IEEE754_SINGLE_BITS, LispNames.IEEE754_SINGLE_FROM_BITS, LispNames.SINGLE_FLOAT_P_INTERNAL,
+			LispNames.SINGLE_FLOAT_INTERNAL, LispNames.IDENTITY_HASH, LispNames.NANO_TIME, LispNames.UNIX_NANO_TIME,
+			LispNames.STRING_SEARCH, LispNames.READ_EVAL, LispNames.READ_EVAL_TEMPLATE, LispNames.READ_EVAL_UNREADABLE,
+			LispNames.READ_TIME_FEATURE, LispNames.READ_TIME_FEATURE_TEMPLATE, LispNames.SUBSEQ_CORE,
+			LispNames.SUBSEQ_END, LispNames.NLX_TAG_INTERNAL, LispNames.NLX_CATCH_INTERNAL,
+			LispNames.NLX_THROW_INTERNAL, LispNames.STRING_COMPARE, LispNames.CHAR_FOLD_CHAIN, LispNames.SET_XOR_MATCH,
+			LispNames.SUBST_WALK, LispNames.LL_KEY_CELL, LispNames.LL_CHECK_KEYS, LispNames.RD_DATUM,
+			LispNames.RD_DISPATCH, LispNames.RD_SKIP, LispNames.RD_SKIP_LINE, LispNames.RD_BLOCK_COMMENT,
+			LispNames.RD_LIST, LispNames.RD_STRING, LispNames.RD_BARS, LispNames.RD_TOKEN_REST,
+			LispNames.RD_CHAR_LITERAL, LispNames.RD_SHARP, LispNames.RD_GUARD, LispNames.RD_FEATURE,
+			LispNames.RD_FEATUREP, LispNames.RD_WHITESPACE_P, LispNames.RD_TERMINATING_P, LispNames.RT_MAKE_INTERNAL,
+			LispNames.RT_ENTRY_INTERNAL, LispNames.RT_STD_ENTRY_INTERNAL, LispNames.RT_STD_FN_INTERNAL,
+			LispNames.RT_STD_SUBS_INTERNAL, LispNames.RT_STD_OF_INTERNAL, LispNames.RT_STD_SUB_OF_INTERNAL,
+			LispNames.RT_CALL_STANDARD_INTERNAL, LispNames.RT_READ_AS_INTERNAL, LispNames.RT_DISPATCHER_INTERNAL,
+			LispNames.RT_OWN_ENTRY_INTERNAL, LispNames.RT_COPY_ENTRY_INTERNAL, LispNames.RT_DESIGNATOR_INTERNAL,
+			LispNames.RT_STANDARD_INTERNAL, LispNames.READTABLE_MACRO_ENTRIES_INTERNAL,
+			LispNames.PPRINT_DISPATCH_DEFAULT, LispNames.OBJ_NEW, LispNames.OBJ_REF, LispNames.OBJ_SET,
+			LispNames.OBJ_IS, LispNames.OBJ_TAG, LispNames.OBJ_P, LispNames.OBJ_SLOTS, LispNames.OBJ_PRINT_FRAME,
+			LispNames.RUN_HANDLERS_INTERNAL, LispNames.HB_GUARD_INTERNAL, LispNames.REPORTING_UNCAUGHT_INTERNAL,
+			LispNames.HC_MATCH_INTERNAL, LispNames.INTERRUPT_POLL_INTERNAL, LispNames.INTERRUPT_TAKE_INTERNAL,
+			LispNames.PROGRAM_ERROR_INTERNAL, LispNames.COMPILE_WARNING_INTERNAL, LispNames.PARSE_ERROR_INTERNAL,
+			LispNames.ARITY_SURPLUS_MESSAGE_INTERNAL, LispNames.ARITY_MISSING_MESSAGE_INTERNAL,
+			LispNames.FILE_ERROR_INTERNAL, LispNames.PACKAGE_ERROR_INTERNAL, LispNames.SYMBOL_IN_PACKAGE_INTERNAL,
+			LispNames.FIND_PACKAGE_INTERNAL, LispNames.OPEN_OR_NIL_INTERNAL, LispNames.HANDLER_CLUSTERS_VAR,
+			LispNames.RESTART_CLUSTERS_VAR, LispNames.RESTART_RECORD_TAG, LispNames.LIST_DIRECTORY,
+			LispNames.DIR_NAMESTRING, LispNames.WILD_MATCH, LispNames.PATHNAME_TYPED_P, LispNames.SLEEP_MS,
+			LispNames.MAKE_DIRECTORIES, LispNames.PATHNAME_SPLIT, LispNames.MAKE_ARRAY_ET_INTERNAL,
+			LispNames.MAKE_HASH_TABLE_BY_TEST_INTERNAL, LispNames.MAKE_ARRAY_ET_FP_INTERNAL,
+			LispNames.MAKE_BROADCAST_STREAM_INTERNAL, LispNames.WRITE_TO_STRING_KEYED_INTERNAL,
+			LispNames.BROADCAST_STREAM_CLASS, LispNames.BROADCAST_STREAM_COMPONENTS, LispNames.TWO_WAY_STREAM_CLASS,
+			LispNames.TWO_WAY_STREAM_INPUT_INTERNAL, LispNames.TWO_WAY_STREAM_OUTPUT_INTERNAL,
+			LispNames.ECHO_STREAM_CLASS, LispNames.ECHO_STREAM_INPUT_INTERNAL, LispNames.ECHO_STREAM_OUTPUT_INTERNAL,
+			LispNames.CONCATENATED_STREAM_CLASS, LispNames.CONCATENATED_STREAM_STREAMS_INTERNAL,
+			LispNames.PATHNAME_DIRECTORY_STRING, LispNames.PATHNAME_COMPONENT_STRING, LispNames.DELETE_FILE_INTERNAL,
+			LispNames.SET_SYMBOL_FUNCTION_INTERNAL, LispNames.FENV_FUNCTION_INTERNAL, LispNames.FUNCTION_NAME_INTERNAL,
+			LispNames.FDEFINITION_INTERNAL, LispNames.FMAKUNBOUND_INTERNAL, LispNames.SETF_FUNCTION_SYMBOL_INTERNAL,
+			LispNames.UNDEFINED_SETF_FUNCTION_INTERNAL, LispNames.TEMP_FILE_NAME,
+			LispNames.DESCRIBE_OBJECT_DEFAULT_INTERNAL, LispNames.FILE_STREAM_REGISTER_INTERNAL,
+			LispNames.FILE_STREAM_ELEMENT_TYPE_INTERNAL, LispNames.FILE_STREAM_ENTRY_INTERNAL,
+			LispNames.FILE_STREAM_FORGET_INTERNAL, LispNames.CHARACTER_STREAM_P_INTERNAL,
+			LispNames.CHECK_SEQUENCE_BOUNDS_INTERNAL, LispNames.WIDE_READ_BYTE_INTERNAL,
+			LispNames.WIDE_WRITE_BYTE_INTERNAL, LispNames.WIDE_ELEMENTS_INTERNAL,
+			LispNames.WIDE_POSITION_OCTETS_INTERNAL, LispNames.WIDE_WIDTH_INTERNAL, LispNames.READ_OCTET_INTERNAL,
+			LispNames.WRITE_OCTET_INTERNAL, LispNames.FILE_OCTET_LENGTH_INTERNAL,
+			LispNames.FILE_OCTET_POSITION_INTERNAL, LispNames.PROBE_FILE_INTERNAL, LispNames.PROBE_TRUENAME_INTERNAL,
+			LispNames.READ_LINK_INTERNAL, LispNames.MAKE_LINK_INTERNAL, LispNames.FILE_STAT_INTERNAL,
+			LispNames.FILE_SET_TIMES_INTERNAL, LispNames.FILE_ACCESS_INTERNAL, LispNames.FILE_SPACE_INTERNAL,
+			LispNames.FILE_SET_MODE_INTERNAL, LispNames.FILE_MAKE_INTERNAL, LispNames.TERMINAL_P_INTERNAL,
+			LispNames.REAL_PATH_INTERNAL, LispNames.ABSOLUTE_PATH_INTERNAL, LispNames.PATH_NS, LispNames.STREAM_TARGET,
+			LispNames.CLOSE_INTERNAL, LispNames.MACRO_FN_INTERNAL, LispNames.MACRO_EXPANDER_STUB,
+			LispNames.OPERATOR_FUNCTION_INTERNAL, LispNames.OPERATOR_FUNCTIONS_VAR, LispNames.SET_MACRO_FUNCTION,
+			LispNames.MACRO_FUNCTION_WRITES, LispNames.SET_COMPILER_MACRO_FUNCTION,
+			LispNames.COMPILER_MACRO_FUNCTION_WRITES, LispNames.WILD_COMPONENT_P, LispNames.WILD_CAPTURES,
+			LispNames.LOGICAL_HOST_ENTRY, LispNames.WILD_INFERIORS_AT, LispNames.PATHNAME_DIRECTORY_COMPONENT,
+			LispNames.DIRECTORY_IN, LispNames.DIRECTORY_SUBDIRS, LispNames.WILD_DIRS, LispNames.PATH_DIR_PARTS,
+			LispNames.RENAME_FILE_INTERNAL, LispNames.PRINT_CASED_INTERNAL, LispNames.PRINT_CASE_FOLD_INTERNAL,
+			LispNames.UNESCAPED_SYMBOL_TEXT_INTERNAL, LispNames.PRINT_CASED_WALK_INTERNAL,
+			LispNames.PRINT_CASED_ON_PATH_INTERNAL, LispNames.PRINT_CASED_CHAIN_STOP_INTERNAL,
+			LispNames.PRINT_RADIXED_INTERNAL, LispNames.PRINT_IN_BASE_INTERNAL,
+			LispNames.PRINT_CASED_UNQUALIFIED_INTERNAL, LispNames.PRINT_CASED_INSTANCE_TEXT_INTERNAL,
+			LispNames.PRINT_CASED_INSTANCE_INTERNAL, LispNames.SYMBOL_PRINT_BARE_P_INTERNAL,
+			LispNames.SYMBOL_PRINT_PREFIX_INTERNAL, LispNames.HOME_SPELLING_INTERNAL,
+			LispNames.PRINT_PACKAGE_RAW_P_INTERNAL, LispNames.PRINT_CASED_FOLD_LEAF_INTERNAL,
+			LispNames.PRINT_CASED_TYPE_NAME_INTERNAL, LispNames.PRINT_OBJECT_DEFAULT_INTERNAL,
+			LispNames.PRINT_CASED_RADIXED_LEAF_INTERNAL, LispNames.PRINT_CASED_RAW_LEAF_INTERNAL,
+			LispNames.PRINT_CASED_TEXT_LEAF_INTERNAL, LispNames.PRINT_CASED_INSTANCE_CHECK_INTERNAL,
+			LispNames.PRINT_WITHOUT_READABLY_INTERNAL, LispNames.PRINT_NOT_READABLE_INTERNAL,
+			LispNames.PRINT_READABLE_RAW_INTERNAL, LispNames.PRINT_READABLE_LEAF_INTERNAL,
+			LispNames.PRINT_READABLE_INSTANCE_INTERNAL, LispNames.PRINT_READABLE_NESTED_INTERNAL,
+			LispNames.PRINT_HOLDS_UNREADABLE_INTERNAL, LispNames.PRINT_READABLE_TABLE_INTERNAL,
+			LispNames.PRINT_READABLE_ROWS_INTERNAL, LispNames.PRINT_CASED_QUALIFIER_INTERNAL,
+			LispNames.PRINT_CASED_LOCAL_QUALIFIER_INTERNAL, LispNames.LOCAL_NICKNAME_ADD_INTERNAL,
+			LispNames.LOCAL_NICKNAME_REMOVE_INTERNAL, LispNames.PACKAGE_LOCAL_NICKNAMES_INTERNAL,
+			LispNames.LOCAL_NICKNAMES_VAR_INTERNAL, LispNames.LOCAL_NICKNAME_PUT_INTERNAL,
+			LispNames.LOCAL_NICKNAME_DEFINE_INTERNAL, LispNames.LOCAL_NICKNAME_TARGET_INTERNAL,
+			LispNames.LOCAL_NICKNAME_FIND_INTERNAL, LispNames.FIND_PACKAGE_GLOBAL_INTERNAL,
+			LispNames.READ_HOME_INTERNAL, LispNames.LOCAL_NICKNAME_BEFORE_INTERNAL,
+			LispNames.LOCAL_NICKNAMES_MOVING_INTERNAL, LispNames.HOST_GETENV, LispNames.HOST_ENVIRON,
+			LispNames.HOST_GETCWD, LispNames.HOST_EXIT, LispNames.HOST_ARGV, LispNames.GETENV_OVERRIDE,
+			LispNames.GETENV_OVERRIDE_SET, LispNames.NSTRING_REPLACE, LispNames.TARGET_MACHINE_TYPE,
+			LispNames.LOCAL_TIME_OFFSET, LispNames.LOCAL_ZONE_INTERNAL, LispNames.RUNTIME_PACKAGES_INTERNAL,
+			LispNames.BAKED_PACKAGES_INTERNAL, LispNames.DO_SYMBOLS_LIST_INTERNAL,
+			LispNames.BAKED_PACKAGE_FIND_INTERNAL, LispNames.RUNTIME_PACKAGE_FIND_INTERNAL,
+			LispNames.PACKAGE_SYMBOLS_WHERE_INTERNAL, LispNames.PACKAGE_SPELLING_NORMALIZE_INTERNAL,
+			LispNames.BAKED_IMPORT_REDIRECT_INTERNAL, LispNames.SPLIT_PACKED_INTERNAL,
+			LispNames.PACKAGE_ITERATOR_ENTRIES_INTERNAL, LispNames.RUNTIME_MEMBER_FIND_INTERNAL,
+			LispNames.RUNTIME_MEMBER_STATUS_INTERNAL, LispNames.RUNTIME_MEMBER_INTERN_INTERNAL,
+			LispNames.RUNTIME_EXTERNAL_FIND_INTERNAL, LispNames.RUNTIME_PACKAGE_OP_INTERNAL,
+			LispNames.CHECK_BOUNDS_INTERNAL, LispNames.PRINC_PIECE_INTERNAL, LispNames.PRIN1_PIECE_INTERNAL,
+			LispNames.DECIMAL_PIECE_INTERNAL, LispNames.DECIMAL_PRINC_INTERNAL, LispNames.DECIMAL_TEXT_INTERNAL,
+			LispNames.FMT_RENDER, LispNames.FMT_APPLY, LispNames.FMT_STARTS_FRESH, LispNames.STRICT_MATH_INTERNAL,
+			LispNames.REGISTER_COMPILED_TEMPLATE, LispNames.TEMPLATE_HOLE, LispNames.TEMPLATE_GENSYM);
+
+	/**
+	 * The standard lambda-list keywords: {@code cl}'s symbols, read as such in every
+	 * package that does not shadow them. Any other {@code &name} is an ordinary symbol of
+	 * the package it is read in.
+	 */
+	private static final Set<String> CL_LAMBDA_LIST_KEYWORDS = Set.copyOf(ClConstants.LAMBDA_LIST_KEYWORD_NAMES);
+
+	/**
+	 * {@code optimize} and its qualities: {@code cl}'s symbols in every package that does
+	 * not shadow them, so a quality one package names finds what
+	 * {@code trivial-cltl2:declaration-information} answers (serapeum's
+	 * {@code policy-quality}).
+	 */
+	private static final Set<String> CL_OPTIMIZE_NAMES = Set.of("OPTIMIZE", "COMPILATION-SPEED", "DEBUG", "SAFETY",
+			"SPACE", "SPEED");
+
+	/**
+	 * The standard declaration identifiers (CLHS 3.3.3, {@code type} and {@code optimize}
+	 * aside, which their own categories hold): {@code cl}'s symbols in every package that
+	 * does not shadow them, so a declaration one package reads matches the identifier
+	 * another package's code dispatches on -- parse-declarations' EQL methods on
+	 * {@code ftype}, which serapeum's {@code fbind} reaches with a declaration read in
+	 * its own package.
+	 */
+	private static final Set<String> CL_DECLARATION_NAMES = Set.of("DECLARATION", "DYNAMIC-EXTENT", "FTYPE",
+			"IGNORABLE", "IGNORE", "INLINE", "NOTINLINE", "SPECIAL");
+
+	/**
+	 * The names of the symbols owned by the {@code cl} package, derived as the union of
+	 * the categorized sets above.
+	 */
+	private static final Set<String> CL_SYMBOLS = union(CL_SPECIAL_FORMS, CL_MACROS, CL_FUNCTIONS, CL_VARIABLES,
+			CL_INTERNALS, CL_TYPES, CL_CONDITION_TYPES, CL_LAMBDA_LIST_KEYWORDS, CL_OPTIMIZE_NAMES,
+			CL_DECLARATION_NAMES);
+
+	/**
+	 * The standard names the {@code cl} package EXPORTS without implementing: CLHS
+	 * 11.1.2.1 fixes the package's external list at the 978 standard names, and a name is
+	 * exported whether or not an implementation has an operator behind it -- the name
+	 * being there is a {@code find-symbol} / {@code do-external-symbols} answer, not a
+	 * promise that calling it works. So these names are external and NOTHING else: they
+	 * are deliberately absent from {@link #CL_SYMBOLS}, the set {@link #isClSymbol} reads
+	 * and every resolution decision is made from, so a bare {@code bit-and} still interns
+	 * in the current package, a program may still {@code defun} one without meeting the
+	 * "cannot redefine the standard operator" guard, and {@code (bit-and a b)} still
+	 * signals an undefined function. {@link #isClMemberName} is the wider question --
+	 * "does {@code cl} answer for this name?" -- and only the symbol API asks it.
+	 * <p>
+	 * Plain strings rather than {@link LispNames} constants, exactly because there is no
+	 * implementation to name: a name that gains one moves OUT of this set and into its
+	 * category above. {@code PackageRegistryTest} pins the whole external set against the
+	 * standard's own list, so neither direction can drift.
+	 */
+	private static final Set<String> CL_EXPORTED_ONLY = Set.of("*BREAK-ON-SIGNALS*", "BREAK", "CALL-METHOD",
+			"CALL-NEXT-METHOD", "COMPILER-MACRO", "DISASSEMBLE", "DRIBBLE", "ED", "FILE-AUTHOR", "FUNCTION-KEYWORDS",
+			"HASH-TABLE", "INSPECT", "INVOKE-RESTART-INTERACTIVELY", "KEYWORD", "LOOP-FINISH", "MAKE-METHOD",
+			"NEXT-METHOD-P", "NIL", "NO-APPLICABLE-METHOD", "NO-NEXT-METHOD", "PPRINT-FILL", "PPRINT-LINEAR",
+			"PPRINT-TABULAR", "RESTART", "ROOM", "STANDARD", "STEP", "STRUCTURE-OBJECT", "SYMBOL", "T", "TRACE",
+			"UNTRACE", "UPDATE-INSTANCE-FOR-DIFFERENT-CLASS", "VARIABLE", "WITH-CONDITION-RESTARTS", "YES-OR-NO-P");
+
+	/**
+	 * The 28 car/cdr compositions ({@code caar} .. {@code cddddr}). Resolution recognizes
+	 * them by spelling ({@link LispNames#isCarCdrComposition}), so they are not in
+	 * {@link #CL_SYMBOLS}; the package still OWNS and EXPORTS them, which is what the
+	 * enumerations ({@code do-external-symbols}, {@code do-symbols}, ...) read.
+	 */
+	private static final Set<String> CL_COMPOSITIONS = compositions();
+
+	private static Set<String> compositions() {
+		Set<String> names = new HashSet<>();
+		List<String> middles = List.of("");
+		for (int length = 1; length <= 4; length++) {
+			List<String> longer = new java.util.ArrayList<>();
+			for (String middle : middles) {
+				longer.add(middle + "A");
+				longer.add(middle + "D");
+			}
+			middles = longer;
+			if (length >= 2) {
+				middles.forEach(middle -> names.add("C" + middle + "R"));
+			}
+		}
+		return Set.copyOf(names);
+	}
+
+	/**
+	 * The exported {@code cl} symbols: everything but the {@code %}-prefixed internals,
+	 * plus the car/cdr compositions and the standard names {@link #CL_EXPORTED_ONLY}
+	 * exports without implementing.
+	 */
+	private static final Set<String> CL_EXTERNALS = union(CL_SPECIAL_FORMS, CL_MACROS, CL_FUNCTIONS, CL_VARIABLES,
+			CL_TYPES, CL_CONDITION_TYPES, CL_LAMBDA_LIST_KEYWORDS, CL_OPTIMIZE_NAMES, CL_DECLARATION_NAMES,
+			CL_EXPORTED_ONLY, CL_COMPOSITIONS);
+
+	/**
+	 * The functions exported by the {@code linalg} package (numpy-style vector/matrix
+	 * operations), implemented in {@code linalg.lisp} (see {@code LinalgLibrary}). The
+	 * names are plain strings rather than {@link LispNames} constants because they exist
+	 * only as Lisp-source defuns -- no evaluator or compiler dispatches on them.
+	 */
+	private static final Set<String> LINALG_FUNCTIONS = Set.of("ZEROS", "ONES", "FULL", "EYE", "ARANGE", "LINSPACE",
+			"FROM-LIST", "TO-LIST", "SHAPE", "NDIM", "SIZE", "RESHAPE", "FLATTEN", "TRANSPOSE", "PAD", "ADD", "SUB",
+			"MUL", "DIV", "EMAP", "DOT", "MATMUL", "OUTER", "CROSS", "SUM", "MEAN", "AMAX", "AMIN", "ARGMAX", "ARGMIN",
+			"NORM", "TRACE", "DET", "INV", "SOLVE", "ARRAY-EQUAL", "EXP", "LOG", "TANH", "SIN", "COS", "TAN", "ASIN",
+			"ACOS", "ATAN", "SINH", "COSH", "SQRT", "ABS", "SQUARE", "NEGATIVE", "SIGN", "RECIPROCAL", "MAXIMUM",
+			"MINIMUM", "CLIP", "RELU", "ERF", "DIFF", "GRADIENT", "ZEROS-LIKE", "SEED", "RAND", "RANDN", "UNIFORM",
+			"CHOICE", "PERMUTATION", "TAKE-ROWS", "ROW", "GATHER", "ONE-HOT", "EQUAL", "GREATER", "GREATER-EQUAL",
+			"LESS", "LESS-EQUAL", "+", "-", "*", "/", "CONCATENATE", "STACK", "EXPAND-DIMS", "SQUEEZE", "SLICE", "TRIU",
+			"TRIL", "VAR", "STD", "WHERE", "POWER", "SOFTMAX", "LOG-SOFTMAX");
+
+	private static final List<String> LINALG_FUNCTION_NAMES = sorted(LINALG_FUNCTIONS);
+
+	/**
+	 * The names exported by the {@code torch} package (a PyTorch-style tensor with
+	 * reverse-mode autograd over the {@code linalg} kernels), implemented in
+	 * {@code torch.lisp} (see {@code TorchLibrary}). Plain strings like the linalg names
+	 * -- they exist only as Lisp-source defuns -- except {@code no-grad}, the one macro,
+	 * which is a built-in {@code LispMacroExpander} expansion and is dispatched on by
+	 * name ({@link LispNames#TORCH_NO_GRAD}).
+	 */
+	private static final Set<String> TORCH_FUNCTIONS = Set.of("TENSOR", "TENSORP", "DATA", "GRAD", "SHAPE", "ITEM",
+			"DETACH", "ZERO-GRAD", "REQUIRES-GRAD-P", "BACKWARD", LispNames.TORCH_NO_GRAD, "RESHAPE", "VIEW",
+			"TRANSPOSE", "UNSQUEEZE", "SQUEEZE", "CAT", "STACK", "SLICE", "ADD", "SUB", "MUL", "DIV", "NEG", "POWER",
+			"EXP", "LOG", "SQRT", "TANH", "MATMUL", "SUM", "MEAN", "VAR", "STD", "AMAX", "ARGMAX", "SOFTMAX",
+			"LOG-SOFTMAX", "RELU", "ERF", "GELU", "TOPK", "MULTINOMIAL", "MASKED-FILL", "GATHER", "INDEX-SELECT",
+			"MODULE", "MODULEP", "MODULE-KIND", "FIELD", "FIELDS", "SET-DATA", "SET-FIELD", "FORWARD", "PARAMETER",
+			"PARAMETERS", "TRAIN", "EVAL", "TRAINING-P", "LINEAR", "EMBEDDING", "SEQUENTIAL", "LAYER-NORM", "DROPOUT",
+			"MSE-LOSS", "CROSS-ENTROPY-LOSS", "OPTIMIZER", "OPTIMIZERP", "OPTIMIZER-KIND", "OPTIMIZER-PARAMS", "STEP",
+			"STEP-COUNT", "SGD", "ADAM", "ADAMW", "CLIP-GRAD-NORM", "PAD-SEQUENCE", "SHUFFLED-BATCHES", "PADDING-MASK",
+			"SUBSEQUENT-MASK");
+
+	private static final List<String> TORCH_FUNCTION_NAMES = sorted(TORCH_FUNCTIONS);
+
+	/**
+	 * The functions exported by the {@code vec} package (portable packed-{@code f64}
+	 * vector kernels over the packed {@code double-float} array type). Implemented once
+	 * in rontolisp itself ({@code vec.lisp}, see {@code VecLibrary}) as the scalar
+	 * reference, exactly like {@code linalg}; the JVM {@code --simd} flag and the
+	 * {@code --no-gc} scalar backend additionally intercept the vectorizable kernels for
+	 * acceleration.
+	 */
+	private static final Set<String> VEC_FUNCTIONS = Set.of(LispNames.VEC_ZEROS, LispNames.VEC_ONES,
+			LispNames.VEC_ARANGE, LispNames.VEC_FROM_LIST, LispNames.VEC_TO_LIST, LispNames.VEC_AREF,
+			LispNames.VEC_ASET, LispNames.VEC_LENGTH, LispNames.VEC_ADD, LispNames.VEC_SUB, LispNames.VEC_MUL,
+			LispNames.VEC_SCALE, LispNames.VEC_SUM, LispNames.VEC_MEAN, LispNames.VEC_DOT, LispNames.VEC_NORM,
+			LispNames.VEC_MATVEC, LispNames.VEC_ADD_INTO, LispNames.VEC_SUB_INTO, LispNames.VEC_MUL_INTO,
+			LispNames.VEC_SCALE_INTO, LispNames.VEC_MATVEC_INTO, LispNames.VEC_EXP, LispNames.VEC_LOG,
+			LispNames.VEC_TANH, LispNames.VEC_SIN, LispNames.VEC_COS, LispNames.VEC_TAN, LispNames.VEC_ASIN,
+			LispNames.VEC_ACOS, LispNames.VEC_ATAN, LispNames.VEC_SINH, LispNames.VEC_COSH, LispNames.VEC_SQRT,
+			LispNames.VEC_ABS, LispNames.VEC_SQUARE, LispNames.VEC_NEGATIVE, LispNames.VEC_SIGN,
+			LispNames.VEC_RECIPROCAL, LispNames.VEC_EXP_INTO, LispNames.VEC_LOG_INTO, LispNames.VEC_TANH_INTO,
+			LispNames.VEC_SIN_INTO, LispNames.VEC_COS_INTO, LispNames.VEC_TAN_INTO, LispNames.VEC_ASIN_INTO,
+			LispNames.VEC_ACOS_INTO, LispNames.VEC_ATAN_INTO, LispNames.VEC_SINH_INTO, LispNames.VEC_COSH_INTO,
+			LispNames.VEC_SQRT_INTO, LispNames.VEC_ABS_INTO, LispNames.VEC_SQUARE_INTO, LispNames.VEC_NEGATIVE_INTO,
+			LispNames.VEC_SIGN_INTO, LispNames.VEC_RECIPROCAL_INTO, LispNames.VEC_MAXIMUM, LispNames.VEC_MINIMUM,
+			LispNames.VEC_RELU, LispNames.VEC_CLIP, LispNames.VEC_MAXIMUM_INTO, LispNames.VEC_MINIMUM_INTO,
+			LispNames.VEC_RELU_INTO, LispNames.VEC_CLIP_INTO, LispNames.VEC_DIV, LispNames.VEC_DIV_INTO,
+			LispNames.VEC_PLUS, LispNames.VEC_MINUS, LispNames.VEC_STAR, LispNames.VEC_SLASH);
+
+	private static final List<String> VEC_FUNCTION_NAMES = sorted(VEC_FUNCTIONS);
+
+	/**
+	 * The functions exported by the {@code appkit} package (a Cocoa widget layer over the
+	 * {@code objc} package), implemented in {@code appkit.lisp} (see
+	 * {@code AppKitLibrary}). Plain strings, like {@code linalg}: they exist only as
+	 * Lisp-source defuns.
+	 */
+	private static final Set<String> APPKIT_FUNCTIONS = Set.of("WINDOW", "LABEL", "BUTTON", "PANEL", "COLOR", "FONT",
+			"SET-TEXT", "SET-COLOR", "TEXT", "ON-CLICK", "CLICK", "TIMER", "MENU", "STATUS-ITEM", "QUIT", "CLOSE",
+			"VISIBLE-P", "WAIT");
+
+	private static final List<String> APPKIT_FUNCTION_NAMES = sorted(APPKIT_FUNCTIONS);
+
+	/**
+	 * The names the {@code objc} package's library exports: LispWorks 8.1's {@code OBJC}
+	 * (the functions, the macros, {@code standard-objc-object} and the type designators)
+	 * plus this package's own {@code data}, {@code bytes}, {@code objectp} and the block
+	 * and exception names, implemented in {@code objc.lisp}, {@code objc-class.lisp},
+	 * {@code objc-block.lisp} and {@code objc-macros.lisp} ({@code ObjcLibrary}).
+	 * {@code on-main} is not among them: it is the primitive layer's.
+	 */
+	private static final Set<String> OBJC_BASE_NAMES = Set.of("ENSURE-OBJC-INITIALIZED", "INVOKE", "INVOKE-BOOL",
+			"INVOKE-INTO", "CAN-INVOKE-P", "ALLOC-INIT-OBJECT", "DESCRIPTION", "TRACE-INVOKE", "UNTRACE-INVOKE",
+			"COERCE-TO-OBJC-CLASS", "OBJC-CLASS-NAME", "COERCE-TO-SELECTOR", "SELECTOR-NAME",
+			"OBJC-CLASS-METHOD-SIGNATURE", "RETAIN", "RELEASE", "AUTORELEASE", "RETAIN-COUNT", "MAKE-AUTORELEASE-POOL",
+			LispNames.OBJC_WITH_AUTORELEASE_POOL, "NS-STRING-TO-STRING", "STRING-TO-NS-STRING", "OBJC-OBJECT-POINTER",
+			"OBJC-OBJECT-FROM-POINTER", "OBJC-CLASS", "SEL", "OBJC-BOOL", "OBJC-C++-BOOL", "OBJC-C-STRING",
+			"OBJC-AT-QUESTION-MARK", "OBJC-UNKNOWN", "DEFINE-OBJC-CLASS", "DEFINE-OBJC-METHOD",
+			"DEFINE-OBJC-CLASS-METHOD", "CURRENT-SUPER", "STANDARD-OBJC-OBJECT", "OBJC-OBJECT-VAR-VALUE",
+			"OBJC-OBJECT-COPIED", "OBJC-OBJECT-DESTROYED", "DEFINE-OBJC-STRUCT", "DEFINE-OBJC-TYPEDEF",
+			"DEFINE-OBJC-PROTOCOL", "DEFINE-OBJC-BLOCK-TYPE", "MAKE-OBJC-BLOCK", "FREE-OBJC-BLOCK", "WITH-OBJC-BLOCK",
+			"CALL-OBJC-BLOCK", "OBJC-BLOCK", "OBJC-BLOCK-POINTER", "OBJC-BLOCK-LIVE-P", "OBJC-EXCEPTION",
+			"OBJC-EXCEPTION-NAME", "OBJC-EXCEPTION-REASON", "OBJC-EXCEPTION-OBJECT", "NS-ERROR", "NS-ERROR-DOMAIN",
+			"NS-ERROR-CODE", "NS-ERROR-DESCRIPTION", "NS-ERROR-OBJECT", "INVOKE-WITH-ERROR", "DATA", "BYTES",
+			"OBJECTP");
+
+	private static final List<String> OBJC_BASE_NAME_LIST = sorted(OBJC_BASE_NAMES);
+
+	/**
+	 * The names the {@code cocoa} package exports (LispWorks 8.1's {@code COCOA}),
+	 * implemented in {@code objc.lisp}.
+	 */
+	private static final Set<String> COCOA_NAMES = Set.of("NS-POINT", "NS-SIZE", "NS-RECT", "NS-RANGE", "SET-NS-POINT*",
+			"SET-NS-SIZE*", "SET-NS-RECT*", "SET-NS-RANGE*", "NS-NOT-FOUND", "ADD-OBSERVER", "REMOVE-OBSERVER");
+
+	private static final List<String> COCOA_NAME_LIST = sorted(COCOA_NAMES);
+
+	/**
+	 * The names the {@code fli} package exports: the part of LispWorks 8.1's {@code FLI}
+	 * the {@code objc} base carries, implemented in {@code objc.lisp} and
+	 * {@code objc-macros.lisp}.
+	 */
+	private static final Set<String> FLI_NAMES = Set.of("DEFINE-FOREIGN-FUNCTION", "WITH-DYNAMIC-FOREIGN-OBJECTS",
+			"ALLOCATE-FOREIGN-OBJECT", "FREE-FOREIGN-OBJECT", "DEREFERENCE", "FOREIGN-SLOT-VALUE", "SIZE-OF",
+			"POINTERP", "POINTER-ADDRESS", "MAKE-POINTER", "NULL-POINTER-P", "POINTER-EQ");
+
+	private static final List<String> FLI_NAME_LIST = sorted(FLI_NAMES);
+
+	/**
+	 * The names exported by the {@code geom} package (solid modeling: rigid transforms, a
+	 * scene graph and boundary-represented solids), implemented in {@code geom.lisp} (see
+	 * {@code GeomLibrary}). Plain strings, like {@code linalg}: they exist only as
+	 * Lisp-source definitions. The three type names ({@code transform}, {@code node},
+	 * {@code solid}) and {@code bounds} are CLOS classes rather than functions, and are
+	 * registered here for the same reason -- a {@code (typep x 'geom:solid)} spelling has
+	 * to resolve.
+	 */
+	private static final Set<String> GEOM_FUNCTIONS = Set.of("TRANSFORM", "MAKE-TRANSFORM", "TRANSLATION-OF",
+			"ROTATION-OF", "COMPOSE", "INVERT", "TRANSFORM-POINT", "INVERSE-TRANSFORM-POINT", "AXIS-ANGLE-MATRIX",
+			"RPY-MATRIX", "AXIS-VECTOR", "VEC3", "NODE", "MAKE-NODE", "LOCAL-TRANSFORM", "WORLD-TRANSFORM",
+			"WORLD-TRANSLATION", "WORLD-ROTATION", "PARENT-OF", "CHILDREN-OF", "ATTACH", "DETACH", "TRANSLATE",
+			"ROTATE", "PLACE", "REORIENT", "SOLID", "BOX", "CYLINDER", "CONE", "SPHERE", "TORUS", "EXTRUSION",
+			"REVOLUTION", "POLYHEDRON", "READ-MODEL", "READ-OBJ", "READ-STL", "READ-PLY", "READ-GLTF", "ARROW", "TRIAD",
+			"FACETS-OF", "VERTICES-OF", "COLOR-OF", "LABEL-OF", "SCALE", "NSCALE", "MESH", "WIREFRAME",
+			"MESH-TRIANGLE-COUNT", "USER-DATA", "BOUNDS", "LOWER-OF", "UPPER-OF", "BOUNDS-CENTER", "BOUNDS-EXTENT",
+			"BOUNDS-UNION", "VOLUME", "CENTROID", "SURFACE-AREA", "UNION", "DIFFERENCE", "INTERSECTION", "SECTION",
+			"HISTORY", "*TOLERANCE*");
+
+	private static final List<String> GEOM_FUNCTION_NAMES = sorted(GEOM_FUNCTIONS);
+
+	/**
+	 * The names exported by the {@code checkpoint} package (tensor staging shared by the
+	 * checkpoint readers), implemented in {@code checkpoint.lisp} (see
+	 * {@code CheckpointLibrary}). Plain strings, like {@code linalg}.
+	 */
+	private static final Set<String> CHECKPOINT_FUNCTIONS = Set.of("MAKE-TENSOR", "STAGE-FLOAT-BITS", "STAGE-FLOAT32",
+			"SKIP-BYTES");
+
+	private static final List<String> CHECKPOINT_FUNCTION_NAMES = sorted(CHECKPOINT_FUNCTIONS);
+
+	/**
+	 * The names exported by the {@code safetensors} package (the Hugging Face checkpoint
+	 * reader), implemented in {@code safetensors.lisp} (see {@code SafetensorsLibrary}).
+	 * {@code READ} is the package's own external symbol, not {@code cl:read}: the package
+	 * uses nothing.
+	 */
+	private static final Set<String> SAFETENSORS_FUNCTIONS = Set.of("READ", "HEADER", "ENTRIES");
+
+	private static final List<String> SAFETENSORS_FUNCTION_NAMES = sorted(SAFETENSORS_FUNCTIONS);
+
+	/**
+	 * The names exported by the {@code tokenizer} package (the byte-level and
+	 * SentencePiece BPE tokenizers published language models ship with), implemented in
+	 * {@code tokenizers.lisp} (see {@code TokenizersLibrary}). Plain strings, like
+	 * {@code linalg}: they exist only as Lisp-source defuns, and the record they pass
+	 * around is an internal {@code tokenizer::%tk} defstruct, so no type name has to
+	 * resolve here.
+	 */
+	private static final Set<String> TOKENIZER_FUNCTIONS = Set.of("MAKE-BPE", "MAKE-SENTENCEPIECE", "ENCODE", "DECODE",
+			"DECODE-BYTES", "PRE-TOKENIZE", "TOKEN-STRING", "TOKEN-ID", "VOCABULARY-SIZE", "BOS-ID", "EOS-ID");
+
+	private static final List<String> TOKENIZER_FUNCTION_NAMES = sorted(TOKENIZER_FUNCTIONS);
+
+	/**
+	 * The names exported by the {@code gguf} package (reads a GGUF checkpoint: the
+	 * metadata, the tensor directory, the tensors and the tokenizer fields), implemented
+	 * in {@code gguf.lisp} (see {@code GgufLibrary}). Plain strings, like {@code linalg}:
+	 * they exist only as Lisp-source defuns, and the record they pass around is an
+	 * internal {@code gguf::%file} defstruct, so no type name has to resolve here.
+	 * {@code READ} shadows the {@code cl} name deliberately -- it is {@code gguf:read},
+	 * never bare.
+	 */
+	private static final Set<String> GGUF_FUNCTIONS = Set.of("READ", "VERSION", "METADATA", "METADATA-VALUE",
+			"TENSOR-NAMES", "TENSOR-INFO", "TENSOR", "TOKENIZER-FIELDS");
+
+	private static final List<String> GGUF_FUNCTION_NAMES = sorted(GGUF_FUNCTIONS);
+
+	/**
+	 * The names exported by the {@code metal} package (a Metal drawing surface on an
+	 * {@code appkit} window), implemented in {@code metal.lisp} (see
+	 * {@code MetalLibrary}). Plain strings, like {@code appkit}: they exist only as
+	 * Lisp-source definitions. {@code context} is the CLOS class the surface hands back
+	 * and the constants are the enum members a drawing PROGRAM names -- the primitive it
+	 * draws and the pipeline state it configures. The pixel formats, load/store actions,
+	 * blend factors and storage modes stay internal ({@code metal::}), because they are
+	 * {@code attach}/{@code pipeline}/{@code frame}'s own business rather than a decision
+	 * a caller makes.
+	 */
+	private static final Set<String> METAL_FUNCTIONS = Set.of("CONTEXT", "ATTACH", "OFFSCREEN", "PIXELS", "DEVICE",
+			"LAYER", "QUEUE", "LIBRARY", "PIPELINE", "DEPTH-STATE", "FLOATS", "BUFFER", "SHARED-BUFFER", "UPLOAD",
+			"UNIFORM", "FRAME", "RUN", "RESIZE", "SET-CLEAR-COLOR", "+POINT+", "+LINE+", "+TRIANGLE+",
+			"+TRIANGLE-STRIP+", "+CULL-NONE+", "+CULL-FRONT+", "+CULL-BACK+", "+WINDING-CLOCKWISE+",
+			"+WINDING-COUNTER-CLOCKWISE+", "+COMPARE-LESS+", "+COMPARE-ALWAYS+");
+
+	private static final List<String> METAL_FUNCTION_NAMES = sorted(METAL_FUNCTIONS);
+
+	/**
+	 * The names exported by the {@code scene} package (a 3-D viewer for {@code geom}
+	 * solids over {@code metal}), implemented in {@code scene.lisp} (see
+	 * {@code SceneLibrary}). {@code viewer-state} is the CLOS class a viewer is an
+	 * instance of, registered here for the same reason geom's class names are -- a
+	 * {@code (typep x 'scene:viewer-state)} spelling has to resolve.
+	 */
+	private static final Set<String> SCENE_FUNCTIONS = Set.of("VIEWER", "OFFSCREEN", "SNAPSHOT", "VIEWER-STATE",
+			"WINDOW-OF", "CONTEXT-OF", "ADD", "DROP", "CLEAR", "CONTENTS", "FIT", "CAMERA", "GRID", "GRID-COLOR",
+			"BACKGROUND", "SHADING", "AXES", "RAY", "ON-CLICK", "REFRESH", "ANIMATE", "WAIT");
+
+	private static final List<String> SCENE_FUNCTION_NAMES = sorted(SCENE_FUNCTIONS);
+
+	/**
+	 * The functions exported by the {@code usocket} package (a usocket-compatible shim
+	 * over the {@code rontolisp:tcp-*} built-ins), implemented in {@code usocket.lisp}
+	 * (see {@code UsocketLibrary}). Plain strings, like {@code linalg}: no evaluator or
+	 * compiler dispatches on them (only the {@code with-*} macros below are dispatched
+	 * on, by their qualified names).
+	 */
+	private static final Set<String> USOCKET_FUNCTIONS = Set.of(LispNames.USOCKET_SOCKET_CONNECT, "SOCKET-LISTEN",
+			"SOCKET-ACCEPT", "SOCKET-CLOSE", "SOCKET-STREAM", "SOCKET-OPTION", "WAIT-FOR-INPUT", "GET-LOCAL-PORT",
+			"GET-LOCAL-ADDRESS", "GET-LOCAL-NAME", "GET-PEER-PORT", "GET-PEER-ADDRESS", "GET-PEER-NAME",
+			LispNames.USOCKET_HOST_TO_HOSTNAME, LispNames.USOCKET_GET_HOST_BY_NAME);
+
+	/**
+	 * The macros exported by the {@code usocket} package: built-in
+	 * {@code LispMacroExpander} expansions dispatched on their qualified names (the
+	 * {@code rontolisp:with-arena} pattern), not {@code usocket.lisp} defuns.
+	 */
+	private static final Set<String> USOCKET_MACROS = Set.of(LispNames.USOCKET_WITH_CLIENT_SOCKET,
+			LispNames.USOCKET_WITH_CONNECTED_SOCKET, LispNames.USOCKET_WITH_SERVER_SOCKET,
+			LispNames.USOCKET_WITH_SOCKET_LISTENER);
+
+	/**
+	 * The variables exported by the {@code usocket} package ({@code usocket.lisp}
+	 * defparameters), plus the usocket condition-type names. rontolisp has no condition
+	 * system, so the condition names resolve as plain data symbols only (e.g.
+	 * {@code 'usocket:socket-error}) -- {@code handler-case} over them is not supported.
+	 */
+	private static final Set<String> USOCKET_VARIABLES = Set.of("*WILDCARD-HOST*", "*AUTO-PORT*", "SOCKET-CONDITION",
+			"SOCKET-ERROR", "CONNECTION-REFUSED-ERROR", "CONNECTION-ABORTED-ERROR", "CONNECTION-RESET-ERROR",
+			"TIMEOUT-ERROR", "ADDRESS-IN-USE-ERROR", "NS-ERROR");
+
+	private static final Set<String> USOCKET_EXTERNALS = union(USOCKET_FUNCTIONS, USOCKET_MACROS, USOCKET_VARIABLES);
+
+	/**
+	 * The symbols exported by the {@code closer-mop} shim package
+	 * ({@code closer-mop.lisp}, see {@code eval.ShimLibraries}) -- also the overlay half
+	 * of the {@code closer-common-lisp} re-export package.
+	 */
+	private static final Set<String> CLOSER_MOP_EXTERNALS = Set.of(LispNames.CLASS_SLOTS, LispNames.ENSURE_FINALIZED,
+			LispNames.CLASSP, LispNames.CLASS_NAME, LispNames.CLASS_DIRECT_SUPERCLASSES, LispNames.CLASS_FINALIZED_P,
+			LispNames.SLOT_DEFINITION_NAME, LispNames.SLOT_DEFINITION_INITARGS, LispNames.SLOT_DEFINITION_TYPE,
+			LispNames.COMPUTE_SLOTS, LispNames.GENERIC_FUNCTION_LAMBDA_LIST,
+			// The metaclass protocol generics (system defaults in
+			// macro/mop-protocol.lisp)
+			// and the two slot-definition base-class names a user metaclass protocol
+			// subclasses -- MOP names, not CL symbols, so they resolve only through this
+			// package (closer-common-lisp re-exports them).
+			LispNames.VALIDATE_SUPERCLASS, LispNames.DIRECT_SLOT_DEFINITION_CLASS,
+			LispNames.EFFECTIVE_SLOT_DEFINITION_CLASS, LispNames.COMPUTE_EFFECTIVE_SLOT_DEFINITION,
+			LispNames.FINALIZE_INHERITANCE, LispNames.ENSURE_CLASS_USING_CLASS,
+			ClosRegistry.STANDARD_DIRECT_SLOT_DEFINITION_NAME, ClosRegistry.STANDARD_EFFECTIVE_SLOT_DEFINITION_NAME,
+			// The mito-era accessors: readers/initfunction on slot
+			// definitions, direct slots/subclasses on class metaobjects.
+			LispNames.SLOT_DEFINITION_READERS, LispNames.SLOT_DEFINITION_INITFUNCTION, LispNames.CLASS_DIRECT_SLOTS,
+			LispNames.CLASS_DIRECT_SUBCLASSES,
+			// The slot-definition class hierarchy (access dispatches on these) and the
+			// remaining slot-definition readers.
+			ClosRegistry.SLOT_DEFINITION_NAME, ClosRegistry.DIRECT_SLOT_DEFINITION_NAME,
+			ClosRegistry.EFFECTIVE_SLOT_DEFINITION_NAME, ClosRegistry.STANDARD_SLOT_DEFINITION_NAME,
+			LispNames.SLOT_DEFINITION_WRITERS, LispNames.SLOT_DEFINITION_INITFORM, LispNames.SLOT_DEFINITION_ALLOCATION,
+			// Direct slot storage (McCLIM's dynamic slots).
+			LispNames.SLOT_DEFINITION_LOCATION, LispNames.STANDARD_INSTANCE_ACCESS,
+			LispNames.FUNCALLABLE_STANDARD_INSTANCE_ACCESS,
+			// Funcallable instances (djula's compiled templates): the metaclass, the
+			// class its instances descend from, and the installer.
+			ClosRegistry.FUNCALLABLE_STANDARD_CLASS, ClosRegistry.FUNCALLABLE_STANDARD_OBJECT,
+			LispNames.SET_FUNCALLABLE_INSTANCE_FUNCTION,
+			// The method metaobject classes closer-mop adds to cl's (specializers in
+			// moptilities; ClosRegistry.METHOD_METAOBJECT_FAMILIES).
+			ClosRegistry.STANDARD_ACCESSOR_METHOD, ClosRegistry.STANDARD_READER_METHOD,
+			ClosRegistry.STANDARD_WRITER_METHOD, ClosRegistry.EQL_SPECIALIZER,
+			// The generic-function protocol (macro/generic-functions.lisp): the
+			// generic function and method metaobject readers, eql specializers and
+			// ensure-method.
+			"INTERN-EQL-SPECIALIZER", "EQL-SPECIALIZER-OBJECT", "GENERIC-FUNCTION-NAME", "GENERIC-FUNCTION-METHODS",
+			"GENERIC-FUNCTION-METHOD-CLASS", "GENERIC-FUNCTION-ARGUMENT-PRECEDENCE-ORDER",
+			"GENERIC-FUNCTION-METHOD-COMBINATION", "GENERIC-FUNCTION-DECLARATIONS", "METHOD-SPECIALIZERS",
+			"METHOD-LAMBDA-LIST", "METHOD-FUNCTION", "METHOD-GENERIC-FUNCTION", "ENSURE-METHOD",
+			// contextl's class utilities.
+			"SUBCLASSP", "CLASS-PROTOTYPE", "REQUIRED-ARGS", "CLASS-PRECEDENCE-LIST", "COMPUTE-CLASS-PRECEDENCE-LIST",
+			// McCLIM's define-protocol-class walks a specialized lambda list.
+			"EXTRACT-SPECIALIZER-NAMES", "EXTRACT-LAMBDA-LIST",
+			// McCLIM's presentation types: a class per type, made by ensure-class.
+			"ENSURE-CLASS", ClosRegistry.FORWARD_REFERENCED_CLASS, "CLASS-DEFAULT-INITARGS",
+			"COMPUTE-APPLICABLE-METHODS-USING-CLASSES", "COMPUTE-EFFECTIVE-METHOD", "SPECIALIZER-DIRECT-METHODS",
+			"SPECIALIZER-DIRECT-GENERIC-FUNCTIONS",
+			// The slot-access protocol (macro/slot-protocol.lisp): contextl's special
+			// slots are methods on these.
+			"SLOT-VALUE-USING-CLASS", "SLOT-BOUNDP-USING-CLASS", "SLOT-MAKUNBOUND-USING-CLASS");
+
+	/**
+	 * The {@code cl} symbols upstream {@code closer-mop} re-exports: the metaobject class
+	 * names and the definition macros. {@code closer-mop:standard-object} IS
+	 * {@code cl:standard-object}; the {@code closer-mop} package records each as an
+	 * import from {@code cl}.
+	 */
+	private static final Set<String> CLOSER_MOP_CL_REEXPORTS = Set.of("BUILT-IN-CLASS", "CLASS", "GENERIC-FUNCTION",
+			"METHOD", "METHOD-COMBINATION", "STANDARD-CLASS", "STANDARD-GENERIC-FUNCTION", "STANDARD-METHOD",
+			"STANDARD-OBJECT", "DEFCLASS", "DEFGENERIC", "DEFINE-METHOD-COMBINATION", "DEFMETHOD",
+			"ENSURE-GENERIC-FUNCTION", "SUBTYPEP", "TYPEP");
+
+	private static final List<String> USOCKET_FUNCTION_NAMES = sorted(USOCKET_FUNCTIONS);
+
+	private static final List<String> CL_FUNCTION_NAMES = sorted(CL_FUNCTIONS);
+
+	private static final Set<String> SPECIAL_OPERATOR_NAMES = union(CL_SPECIAL_FORMS, CL_MACROS);
+
+	/**
+	 * The 25 ANSI SPECIAL OPERATORS -- the only names {@code special-operator-p} answers
+	 * t for. Deliberately not the same set as {@link #SPECIAL_OPERATOR_NAMES}: rontolisp
+	 * implements plenty of CL MACROS as special forms of its own ({@code defun},
+	 * {@code handler-case}, {@code dolist}, ...), and a caller of
+	 * {@code special-operator-p} only ever asks "can I {@code apply} this" -- those names
+	 * answer through {@code macro-function} instead, exactly as in CL.
+	 */
+	private static final Set<String> ANSI_SPECIAL_OPERATORS = Set.of(LispNames.BLOCK, LispNames.CATCH,
+			LispNames.EVAL_WHEN, LispNames.FLET, LispNames.FUNCTION, LispNames.GO, LispNames.IF, LispNames.LABELS,
+			LispNames.LET, LispNames.LET_STAR, LispNames.LOAD_TIME_VALUE, LispNames.LOCALLY, LispNames.MACROLET,
+			LispNames.MULTIPLE_VALUE_CALL, LispNames.MULTIPLE_VALUE_PROG1, LispNames.PROGN, LispNames.PROGV,
+			LispNames.QUOTE, LispNames.RETURN_FROM, LispNames.SETQ, LispNames.SYMBOL_MACROLET, LispNames.TAGBODY,
+			LispNames.THE, LispNames.THROW, LispNames.UNWIND_PROTECT);
+
+	/**
+	 * The operators {@code macro-function} answers NIL for: the 25 ANSI special
+	 * operators, {@code while}, and the names of {@link #inlineExpandedClFunctions()}.
+	 * {@code while} is rontolisp's OWN extension, not a CL name at all, and it only sits
+	 * in the {@code cl} package because that is where the built-in operators live -- so
+	 * claiming a macro function for it answers a question about a symbol CL does not
+	 * have. A code walker asking "is this head a macro I should expand?" about a
+	 * library's own {@code while} then gets a yes and refuses to walk its own clause:
+	 * iterate's `(iter ... (while test))` warned "a macro that won't expand" and looped
+	 * forever, because the clause survived into the emitted tagbody instead of becoming
+	 * its exit test.
+	 */
+	private static final Set<String> NO_MACRO_FUNCTION = union(ANSI_SPECIAL_OPERATORS, Set.of(LispNames.WHILE),
+			Set.of(LispNames.DECLARE), PackageRegistry.inlineExpandedClFunctions());
+
+	/**
+	 * The CL FUNCTIONS (and {@code declare}, which CL defines as no operator at all) that
+	 * sit in {@link #CL_MACROS} only because the expander rewrites their calls inline. CL
+	 * gives them no macro function and {@code macroexpand-1} leaves their calls alone
+	 * (SBCL 2.2.9): iterate's walker asks {@code macro-function} about every head and
+	 * warned "a macro that won't expand" for each {@code typep} in an {@code iter} body.
+	 * @return the inline-expanded CL function names
+	 */
+	private static Set<String> inlineExpandedClFunctions() {
+		return Set.of(LispNames.CERROR, LispNames.CHANGE_CLASS, LispNames.COMPLEMENT, LispNames.DOCUMENTATION,
+				LispNames.ERROR, LispNames.FORMAT, LispNames.MAKE_CONDITION, LispNames.MAKE_INSTANCE,
+				LispNames.MAKE_SEQUENCE, LispNames.PROCLAIM, LispNames.SIGNAL, LispNames.SLOT_BOUNDP,
+				LispNames.SLOT_EXISTS_P, LispNames.SLOT_MAKUNBOUND, LispNames.SLOT_VALUE, LispNames.TYPEP,
+				LispNames.WARN);
+	}
+
+	/**
+	 * Returns the operators {@code macro-function} must answer nil for -- the ANSI
+	 * special operators, rontolisp's own {@code while}, {@code declare}, and the CL
+	 * functions the expander rewrites inline.
+	 * @return the names with no macro function
+	 */
+	public static Set<String> namesWithoutMacroFunction() {
+		return NO_MACRO_FUNCTION;
+	}
+
+	/**
+	 * The names {@code macro-function} answers a macro function for, before the program's
+	 * own {@code defmacro}s are added: every operator with no function value that is not
+	 * in {@link #NO_MACRO_FUNCTION}. That includes the {@code cl} macros the expander
+	 * dispatches on AND the CL macros rontolisp happens to implement as special forms --
+	 * the two are indistinguishable to a caller, and both answers are "you cannot apply
+	 * this name".
+	 */
+	private static final List<String> RUNTIME_MACRO_NAMES = SPECIAL_OPERATOR_NAMES.stream()
+		.filter(name -> !NO_MACRO_FUNCTION.contains(name))
+		.sorted()
+		.toList();
+
+	private final Map<String, LispPackage> packages = new HashMap<>();
+
+	/**
+	 * The built-in package nicknames, mapping each nickname to the canonical package
+	 * name: the standard Common Lisp names ({@code common-lisp} for {@code cl},
+	 * {@code common-lisp-user} for {@code cl-user}) so portable {@code (:use
+	 * #:common-lisp)} clauses resolve, plus the shorthands {@code rl} for
+	 * {@code rontolisp}, {@code la} for {@code linalg}, {@code flex} for
+	 * {@code flexi-streams} (the spelling smart-buffer and http-body use) and
+	 * {@code quicklisp} for {@code ql}. Static (unlike user
+	 * {@code defpackage :nicknames}) so {@link #splitQualified} can normalize built-in
+	 * qualifiers for the compile-path pre-passes that scan the program before package
+	 * resolution runs.
+	 */
+	private static final Map<String, String> BUILTIN_NICKNAMES = Map.ofEntries(
+			Map.entry("COMMON-LISP", LispNames.CL_PKG), Map.entry("COMMON-LISP-USER", LispNames.CL_USER_PKG),
+			Map.entry("RL", LispNames.RONTOLISP_PKG), Map.entry("LA", LispNames.LINALG_PKG),
+			Map.entry("QUICKLISP", LispNames.QL_PKG), Map.entry("C2MOP", LispNames.CLOSER_MOP_PKG),
+			Map.entry("C2CL", LispNames.CLOSER_COMMON_LISP_PKG),
+			Map.entry("FLOAT-FEATURES", LispNames.FLOAT_FEATURES_PKG), Map.entry("BT", LispNames.BORDEAUX_THREADS_PKG),
+			Map.entry("BORDEAUX-THREADS-2", LispNames.BT2_PKG), Map.entry("CLTL2", LispNames.TRIVIAL_CLTL2_PKG),
+			Map.entry("PAX", LispNames.MGL_PAX_PKG), Map.entry("TG", LispNames.TRIVIAL_GARBAGE_PKG),
+			Map.entry("FLEX", LispNames.FLEXI_STREAMS_PKG),
+			// Real ASDF's own names for the asdf package: it IS asdf/interface, with
+			// asdf and asdf-utilities as nicknames (lass defines a component class in
+			// asdf/interface:: so ASDF finds it by its keyword).
+			Map.entry("ASDF/INTERFACE", LispNames.ASDF_PKG), Map.entry("ASDF-UTILITIES", LispNames.ASDF_PKG),
+			Map.entry("ASDF/DEFSYSTEM", "ASDF/PARSE-DEFSYSTEM"), Map.entry("ASDF-ACTION", "ASDF/ACTION"));
+
+	/**
+	 * Package nicknames, mapping each nickname to the canonical package name. Seeded with
+	 * {@link #BUILTIN_NICKNAMES}; {@code defpackage :nicknames} adds more.
+	 */
+	private final Map<String, String> nicknames = new HashMap<>(BUILTIN_NICKNAMES);
+
+	/** Each package's own nicknames ({@link #localNicknames(String)}). */
+	private final Map<String, SortedMap<String, String>> localNicknames = new HashMap<>();
+
+	private static final SortedMap<String, String> EMPTY_LOCAL_NICKNAMES = java.util.Collections
+		.unmodifiableSortedMap(new TreeMap<>());
+
+	/**
+	 * The canonical names of the runtime-tier packages (see
+	 * {@link #markRuntimePackage(String)}): created by {@code make-package} after
+	 * read/compile time, and the only ones {@code rename-package} /
+	 * {@code delete-package} may touch.
+	 */
+	private final Set<String> runtimePackages = new HashSet<>();
+
+	/**
+	 * The member names {@code unintern} removed from each package, keyed by canonical
+	 * package name. A symbol IS its spelling here, so the uninterned symbol cannot lose
+	 * its qualifier the way a CL symbol object loses its home; this record is what makes
+	 * {@code symbol-package} answer nil for it and {@code find-symbol} stop finding it as
+	 * the package's own -- until an {@code intern} of the name homes it again. An entry
+	 * travels with a {@link #rename} and goes with a {@link #remove}.
+	 */
+	private final Map<String, Set<String>> unhomed = new HashMap<>();
+
+	/**
+	 * The member names the runtime {@code intern} (and {@code shadow}) or a recording
+	 * reader minted in each package, keyed by canonical package name -- a subset of the
+	 * package's owned set. The resolver's case-fold retries (an upcased source spelling
+	 * reaching a lower-kebab wit-import member) consult only the DECLARED members, so a
+	 * minted {@code abc} never catches a later {@code Abc} or {@code ABC}: the
+	 * case-sensitive Scheme symbols all live in one package. Travels with a
+	 * {@link #rename}, goes with a {@link #remove}.
+	 */
+	private final Map<String, Set<String>> recorded = new HashMap<>();
+
+	/**
+	 * The canonical names of the packages whose member table is the WHOLE of them: made
+	 * by a {@code defpackage} or {@code make-package} and never read into since. A
+	 * backend's resolution mints a read symbol's spelling without writing the table, and
+	 * even a recording reader leaves out the names a definition derives (a
+	 * {@code defstruct}'s accessors) and those of forms pruned before it reads them, so
+	 * once any source minted a name there -- an {@code in-package} region, a
+	 * {@code pkg::name} reference -- a name absent from the table may still be one CL
+	 * would have interned, and only a sealed package may answer "no such symbol" (the
+	 * {@code defpackage} {@code :import-from} check). Travels with a {@link #rename},
+	 * goes with a {@link #remove}.
+	 */
+	private final Set<String> sealed = new HashSet<>();
+
+	/**
+	 * The canonical names of the packages the compile image made by running code
+	 * ({@link #markImagePackage}).
+	 */
+	private final Set<String> imagePackages = new HashSet<>();
+
+	/**
+	 * Bumped by every registration, removal, rename and nickname
+	 * ({@link #modifications}).
+	 */
+	private long modifications;
+
+	/**
+	 * The canonical names of the packages the constructor seeds (plus {@code keyword},
+	 * the designator of the keyword package accepted by {@code intern}). Kept in sync
+	 * with the constructor by hand -- except the 15 uiop sub-packages, which come from
+	 * {@link UiopExports} because the constructor seeds them from the same inventory;
+	 * used by {@link #isBuiltinPackageName} for the upcase reader mode's canonical fold,
+	 * which must not depend on a registry instance.
+	 */
+	private static final Set<String> BUILTIN_PACKAGE_NAMES = union(Set.of(LispNames.CL_PKG, LispNames.CL_USER_PKG,
+			LispNames.RONTOLISP_PKG, LispNames.LINALG_PKG, LispNames.TORCH_PKG, LispNames.VEC_PKG,
+			LispNames.USOCKET_PKG, LispNames.JAVA_PKG, LispNames.OBJC_PKG, LispNames.APPKIT_PKG, LispNames.GEOM_PKG,
+			LispNames.TOKENIZER_PKG, LispNames.CHECKPOINT_PKG, LispNames.SAFETENSORS_PKG, LispNames.GGUF_PKG,
+			LispNames.METAL_PKG, LispNames.SCENE_PKG, LispNames.COCOA_PKG, LispNames.FLI_PKG, LispNames.FFI_PKG,
+			LispNames.ASDF_PKG, LispNames.QL_PKG, LispNames.UIOP_PKG, LispNames.CLOSER_MOP_PKG,
+			LispNames.CLOSER_COMMON_LISP_PKG, LispNames.FLEXI_STREAMS_PKG, LispNames.FLOAT_FEATURES_PKG,
+			LispNames.TRIVIAL_GRAY_STREAMS_PKG, LispNames.BORDEAUX_THREADS_PKG, LispNames.BT2_PKG, LispNames.BABEL_PKG,
+			LispNames.BABEL_ENCODINGS_PKG, LispNames.SWANK_PKG, LispNames.TRIVIAL_CLTL2_PKG, LispNames.MGL_PAX_PKG,
+			LispNames.TRIVIAL_GARBAGE_PKG, LispNames.CL_SSL_PKG, LispNames.QL_DIST_PKG, "KEYWORD"),
+			union(Set.copyOf(UiopExports.subPackages()), AsdfExports.subPackages().keySet()));
+
+	/**
+	 * Creates a registry seeded with the built-in packages.
+	 *
+	 * <p>
+	 * Every evaluator and every compile builds one, and the built-in packages are the
+	 * same every time, so they are built ONCE ({@link Seed}) and each registry starts
+	 * from copies whose member tables share the seed's owned set and record only what the
+	 * program itself interns or uninterns ({@code LispPackage.MemberTable}). Building
+	 * them per registry -- a thousand-name copy for {@code cl} and again for
+	 * {@code closer-common-lisp}, the uiop sub-package tables recomputed -- was measured
+	 * (2026-09-24) at ~1.5 ms per registry, 12% of {@code DocExamplesTest}, which builds
+	 * one per page.
+	 */
+	public PackageRegistry() {
+		for (LispPackage seeded : Seed.PACKAGES) {
+			define(new LispPackage(seeded.name(), seeded.useList(), seeded.symbols(), seeded.externals(),
+					seeded.imports(), seeded.shadows()));
+		}
+	}
+
+	/** The built-in packages, built once and frozen: every component immutable. */
+	private static final class Seed {
+
+		static final List<LispPackage> PACKAGES = new PackageRegistry(true).packages.values()
+			.stream()
+			.map(p -> new LispPackage(p.name(), List.copyOf(p.useList()), Set.copyOf(p.symbols()),
+					Set.copyOf(p.externals()), Map.copyOf(p.imports()), Set.copyOf(p.shadows())))
+			.toList();
+
+	}
+
+	/**
+	 * Builds the built-in packages from scratch -- what {@link Seed} runs once.
+	 * @param seeding marks the seeding constructor apart from the public one
+	 */
+	@SuppressWarnings("unused")
+	private PackageRegistry(boolean seeding) {
+		// The owned set is the implemented symbols PLUS the export-only standard names,
+		// so the package's externals stay a subset of its symbols; the resolution
+		// predicate isClSymbol still reads CL_SYMBOLS alone.
+		define(new LispPackage(LispNames.CL_PKG, List.of(), union(CL_SYMBOLS, CL_EXPORTED_ONLY, CL_COMPOSITIONS),
+				CL_EXTERNALS));
+		// cl-user exports nothing, like the Common Lisp COMMON-LISP-USER package: its
+		// symbols are reachable as cl-user::name, never cl-user:name.
+		define(new LispPackage(LispNames.CL_USER_PKG, List.of(LispNames.CL_PKG), new HashSet<>(), Set.of()));
+		// Its canonical spelling is rontolisp; rl is a built-in nickname.
+		Set<String> rontolispExternals = new HashSet<>(Set.of(LispNames.VERSION, LispNames.FETCH, LispNames.AWAIT,
+				LispNames.ASYNC, LispNames.ASYNC_DEFUN, LispNames.ASYNC_LAMBDA, LispNames.FUTUREP,
+				LispNames.ASYNC_STREAMP, LispNames.MAKE_STREAM, LispNames.STREAM_READ, LispNames.STREAM_WRITE,
+				LispNames.STREAM_CLOSE, LispNames.READ_ALL, LispNames.WAIT_FOR, LispNames.THEN, LispNames.THEN_STAR,
+				LispNames.CATCH, LispNames.FINALLY, LispNames.JSON_PARSE, LispNames.JSON_STRINGIFY, LispNames.JSON_SPAN,
+				LispNames.JSON_VALUE, LispNames.PLIST_HASH_TABLE, LispNames.HASH_TABLE_PLIST,
+				LispNames.ALIST_HASH_TABLE, LispNames.HASH_TABLE_ALIST, LispNames.ALIST_PLIST, LispNames.PLIST_ALIST,
+				LispNames.URL_DECODE, LispNames.URL_ENCODE, LispNames.QUERY_PARAMS, LispNames.QUERY_PARAM,
+				LispNames.URL_PATH, LispNames.URL_QUERY, LispNames.STARLARK_CALL, LispNames.WASM_EXPORT,
+				LispNames.JVM_EXPORT, LispNames.WASM_IMPORT, LispNames.WIT_EXPORT, LispNames.WIT_IMPORT,
+				LispNames.WIT_PROVIDE, LispNames.WIT_ERROR, LispNames.WIT_ERROR_PAYLOAD, LispNames.WITH_ARENA,
+				LispNames.MAKE_MUTEX, LispNames.MUTEX_ACQUIRE, LispNames.MUTEX_RELEASE, LispNames.WITH_MUTEX,
+				LispNames.HTTP_HANDLER, LispNames.TCP_CONNECT, LispNames.TCP_LISTEN, LispNames.TCP_ACCEPT,
+				LispNames.TCP_LOCAL_PORT, LispNames.TCP_LOCAL_ADDRESS, LispNames.TCP_PEER_ADDRESS,
+				LispNames.TCP_PEER_PORT, LispNames.TCP_SET_TIMEOUT, LispNames.TLS_CONNECT, LispNames.TLS_LISTEN,
+				LispNames.TLS_LISTEN_PEM, LispNames.TLS_LISTEN_P12, LispNames.TLS_UPGRADE, LispNames.RANDOM_BYTES,
+				LispNames.UNIX_TIME, LispNames.MAKE_THREAD, LispNames.JOIN_THREAD, LispNames.THREADP,
+				LispNames.THREAD_ALIVE_P, LispNames.DESTROY_THREAD, LispNames.CURRENT_THREAD,
+				LispNames.INTERACTIVE_INTERRUPT,
+				// bfloat16 bit reinterpretation: a rontolisp extension, not a CL name.
+				LispNames.BFLOAT16_BITS, LispNames.BITS_BFLOAT16,
+				// Read-time source literals (reader.LispReader), not functions.
+				LispNames.CURRENT_FILE, LispNames.CURRENT_LINE,
+				// rontolisp's own Gray-stream extension
+				// (eval.GrayStreamsLibrary).
+				LispNames.GRAY_CHAR_OUTPUT_STREAM, LispNames.GRAY_CHAR_INPUT_STREAM, LispNames.GRAY_STREAM_WRITE_CHAR,
+				LispNames.GRAY_STREAM_WRITE_STRING, LispNames.GRAY_FUNDAMENTAL_STREAM, LispNames.GRAY_INPUT_STREAM,
+				LispNames.GRAY_OUTPUT_STREAM, LispNames.GRAY_BINARY_INPUT_STREAM, LispNames.GRAY_BINARY_OUTPUT_STREAM,
+				LispNames.GRAY_CHARACTER_STREAM, LispNames.GRAY_BINARY_STREAM, LispNames.GRAY_STREAM_WRITE_BYTE,
+				LispNames.GRAY_STREAM_READ_BYTE, LispNames.GRAY_STREAM_READ_CHAR, LispNames.GRAY_STREAM_UNREAD_CHAR,
+				LispNames.GRAY_STREAM_READ_LINE, LispNames.GRAY_STREAM_LISTEN, LispNames.GRAY_STREAM_READ_CHAR_NO_HANG,
+				LispNames.GRAY_STREAM_PEEK_CHAR, LispNames.GRAY_STREAM_READ_SEQUENCE,
+				LispNames.GRAY_STREAM_WRITE_SEQUENCE, LispNames.GRAY_STREAM_LINE_COLUMN,
+				LispNames.GRAY_STREAM_START_LINE_P, LispNames.GRAY_STREAM_TERPRI, LispNames.GRAY_STREAM_FRESH_LINE,
+				LispNames.GRAY_STREAM_ADVANCE_TO_COLUMN, LispNames.GRAY_STREAM_FORCE_OUTPUT,
+				LispNames.GRAY_STREAM_FINISH_OUTPUT, LispNames.GRAY_STREAM_CLEAR_OUTPUT,
+				LispNames.GRAY_STREAM_CLEAR_INPUT, LispNames.GRAY_STREAM_FILE_POSITION,
+				// The IEEE binary16 scalar pair and the bulk widen/narrow over packed
+				// float arrays (eval.FloatBitsWidening).
+				LispNames.FLOAT16_BITS, LispNames.BITS_FLOAT16, LispNames.WIDEN_FLOAT_BITS, LispNames.NARROW_FLOAT_BITS,
+				// The UTF-8 codec pair (eval.LispPreludeLibrary). The same
+				// bare member names ALSO name flexi-streams:string-to-octets /
+				// flexi-streams:octets-to-string, a different pair of symbols with a
+				// wider (:external-format/:start/:end) surface -- prelude selection
+				// matches by resolved symbol, not by this name alone, so the two never
+				// collide.
+				LispNames.STRING_TO_OCTETS, LispNames.OCTETS_TO_STRING,
+				// The bfloat16 array element type. A rontolisp EXTENSION, so it lives
+				// here and NOT in CL_TYPES: `bfloat16` is not a Common Lisp type name,
+				// unlike short-float / long-float, which the standard defines even where
+				// they collapse onto another width.
+				LispNames.BFLOAT16,
+				// The block-quantized weight matrix (.kb/quantized-matrix.md): its
+				// constructors, its predicate, its type name and the q8-0 format
+				// designator. Extensions like bfloat16 above, so they live here too.
+				LispNames.QUANTIZE, LispNames.DEQUANTIZE, LispNames.MAKE_QUANTIZED_MATRIX, LispNames.QUANTIZED_MATRIX_P,
+				LispNames.QUANTIZED_ROWS, LispNames.QUANTIZED_MATRIX, LispNames.Q8_0));
+		Set<String> rontolispSymbols = new HashSet<>(rontolispExternals);
+		// Internal: the two raw accessors vec.lisp's integer-dot GEMV reads a quantized
+		// matrix through, spelled rontolisp::%quantized-* by their one call site.
+		rontolispSymbols.add(LispNames.QUANTIZED_QUANT_INTERNAL);
+		rontolispSymbols.add(LispNames.QUANTIZED_SCALE_INTERNAL);
+		// Internal: the stoppable HTTP server seam behind the clack-handler-rontolisp
+		// shim, spelled rontolisp::%http-server-* by its call sites. Owned by the
+		// package rather than left to the resolver's tolerance for an unknown ::
+		// member.
+		rontolispSymbols.add(LispNames.HTTP_SERVER_START);
+		rontolispSymbols.add(LispNames.HTTP_SERVER_JOIN);
+		rontolispSymbols.add(LispNames.HTTP_SERVER_STOP);
+		rontolispSymbols.add(LispNames.HTTP_SERVER_PORT);
+		rontolispSymbols.add(LispNames.HTTP_SERVER_TAKE);
+		rontolispSymbols.add(LispNames.HTTP_SERVER_HEAD);
+		rontolispSymbols.add(LispNames.HTTP_SERVER_WRITE);
+		rontolispSymbols.add(LispNames.HTTP_SERVER_FINISH);
+		// Internal: the thread name and condition variables behind the bordeaux-threads
+		// shim, spelled rontolisp::%... by its call sites.
+		rontolispSymbols.add(LispNames.THREAD_NAME_INTERNAL);
+		rontolispSymbols.add(LispNames.CONDITION_VARIABLE_NEW_INTERNAL);
+		rontolispSymbols.add(LispNames.CONDITION_WAIT_INTERNAL);
+		rontolispSymbols.add(LispNames.CONDITION_NOTIFY_INTERNAL);
+		// Internal: the subprocess behind uiop:run-program, spelled rontolisp::%... by
+		// its one call site (uiop-run-program.lisp).
+		rontolispSymbols.add(LispNames.RUN_PROGRAM_INTERNAL);
+		// Internal: the compare-and-swap behind the atomics arm, spelled rontolisp::%...
+		// by its call sites.
+		rontolispSymbols.add(LispNames.CONS_CAS_CAR_INTERNAL);
+		rontolispSymbols.add(LispNames.CONS_CAS_CDR_INTERNAL);
+		// Internal: a float's spelling, spelled rontolisp::%... by coalton's rewrite.
+		rontolispSymbols.add(LispNames.DOUBLE_SPELLED_INTERNAL);
+		rontolispSymbols.add(LispNames.DOUBLE_SPELLED_P_INTERNAL);
+		rontolispSymbols.add(LispNames.PRIN1_KEEPING_FLOAT_SPELLING_INTERNAL);
+		// Internal: a function's lambda list, spelled rontolisp::%... by
+		// trivial-arguments' rewrite.
+		rontolispSymbols.add(LispNames.FUNCTION_LAMBDA_LIST_INTERNAL);
+		// Internal: every macro in a form expanded, spelled rontolisp::%... by
+		// trivial-macroexpand-all's rewrite.
+		rontolispSymbols.add(LispNames.MACROEXPAND_ALL_INTERNAL);
+		// Internal: the interpreter's SWANK server hook behind the swank shim's
+		// create-server / stop-server, spelled rontolisp::%swank-* by its call sites.
+		rontolispSymbols.add(LispNames.SWANK_LISTEN);
+		rontolispSymbols.add(LispNames.SWANK_SERVE);
+		rontolispSymbols.add(LispNames.SWANK_STOP);
+		define(new LispPackage(LispNames.RONTOLISP_PKG, List.of(), rontolispSymbols, Set.copyOf(rontolispExternals)));
+		// numpy-style vector/matrix operations, implemented once in linalg.lisp and
+		// spliced/loaded on demand (LinalgLibrary). Does not use cl; every function
+		// is external. Its canonical spelling is linalg; la is a built-in nickname.
+		define(new LispPackage(LispNames.LINALG_PKG, List.of(), new HashSet<>(LINALG_FUNCTIONS)));
+		// A PyTorch-style tensor with reverse-mode autograd over the linalg kernels,
+		// implemented once in torch.lisp and spliced/loaded on demand (TorchLibrary).
+		// Does not use cl; every registered name is external.
+		define(new LispPackage(LispNames.TORCH_PKG, List.of(), new HashSet<>(TORCH_FUNCTIONS)));
+		// Portable packed-f64 vector kernels, implemented once in vec.lisp (VecLibrary)
+		// as the scalar reference and spliced/loaded on demand like linalg. The JVM
+		// --simd
+		// flag and the --no-gc scalar backend accelerate the vectorizable kernels. Does
+		// not
+		// use cl; every function is external.
+		define(new LispPackage(LispNames.VEC_PKG, List.of(), new HashSet<>(VEC_FUNCTIONS)));
+		// A usocket-compatible shim over the rontolisp:tcp-* built-ins, implemented once
+		// in usocket.lisp (UsocketLibrary) and spliced/loaded on demand like linalg; the
+		// with-* macros are built-in LispMacroExpander expansions. Does not use cl; every
+		// registered symbol is external.
+		define(new LispPackage(LispNames.USOCKET_PKG, List.of(), new HashSet<>(USOCKET_EXTERNALS)));
+		// Interpreter-only Java interop. Does not use cl; its values (LispJavaObject)
+		// run on the JVM interpreter only -- the compilers cannot lower them.
+		define(new LispPackage(LispNames.JAVA_PKG, List.of(),
+				new HashSet<>(Set.of(LispNames.JAVA_NEW, LispNames.JAVA_CALL, LispNames.JAVA_STATIC,
+						LispNames.JAVA_FIELD, LispNames.JAVA_PROXY, LispNames.JAVA_REIFY, LispNames.JAVA_SUBCLASS,
+						LispNames.JAVA_HANDLE, LispNames.JAVA_VIEW, LispNames.JAVA_OBJECT,
+						LispNames.JAVA_WARN_ON_REFLECTION, LispNames.JAVA_EXCEPTION, LispNames.JAVA_EXCEPTION_CAUSE))));
+		// Objective-C through the foreign function API (no reflection, so it runs in the
+		// native binary too): LispWorks' OBJC vocabulary (objc.lisp) and the primitive
+		// on-main. Does not use cl.
+		Set<String> objcNames = new HashSet<>(OBJC_BASE_NAMES);
+		objcNames.add(LispNames.OBJC_ON_MAIN);
+		define(new LispPackage(LispNames.OBJC_PKG, List.of(), objcNames));
+		// LispWorks' COCOA: the Foundation structures beside objc (objc.lisp). Does not
+		// use cl; every registered name is external.
+		define(new LispPackage(LispNames.COCOA_PKG, List.of(), new HashSet<>(COCOA_NAMES)));
+		// LispWorks' FLI, the part the objc base's C functions need
+		// (define-foreign-function,
+		// objc.lisp). Does not use cl; every registered name is external.
+		define(new LispPackage(LispNames.FLI_PKG, List.of(), new HashSet<>(FLI_NAMES)));
+		// A Cocoa widget layer over objc:, implemented once in appkit.lisp and loaded on
+		// demand (AppKitLibrary). Does not use cl; every function is external.
+		define(new LispPackage(LispNames.APPKIT_PKG, List.of(), new HashSet<>(APPKIT_FUNCTIONS)));
+		// Solid modeling over the linalg kernels, implemented once in geom.lisp and
+		// spliced/loaded on demand (GeomLibrary). Backend-independent -- it reaches for
+		// nothing but linalg -- so unlike appkit it runs everywhere. Does not use cl;
+		// every registered name is external.
+		define(new LispPackage(LispNames.GEOM_PKG, List.of(), new HashSet<>(GEOM_FUNCTIONS)));
+		// Tensor staging shared by the checkpoint readers (checkpoint.lisp,
+		// CheckpointLibrary) and the safetensors reader over it (safetensors.lisp,
+		// SafetensorsLibrary): Lisp-source libraries spliced/loaded on demand, like
+		// geom. Neither uses cl; every registered name is external.
+		define(new LispPackage(LispNames.CHECKPOINT_PKG, List.of(), new HashSet<>(CHECKPOINT_FUNCTIONS)));
+		define(new LispPackage(LispNames.SAFETENSORS_PKG, List.of(), new HashSet<>(SAFETENSORS_FUNCTIONS)));
+		// The BPE tokenizers a published language model ships with, implemented once in
+		// tokenizers.lisp and spliced/loaded on demand (TokenizersLibrary). Reaches for
+		// nothing but cl -- the vocabulary is an argument, not a file it opens -- so it
+		// runs everywhere geom does. Does not use cl; every registered name is external.
+		define(new LispPackage(LispNames.TOKENIZER_PKG, List.of(), new HashSet<>(TOKENIZER_FUNCTIONS)));
+		// The reader for a GGUF checkpoint, implemented once in gguf.lisp and
+		// spliced/loaded on demand (GgufLibrary). Reaches for nothing but cl and ANSI CL
+		// file I/O, so it runs on all four backends. Does not use cl -- gguf:read is its
+		// own name and never shadows the standard one -- and every registered name is
+		// external.
+		define(new LispPackage(LispNames.GGUF_PKG, List.of(), new HashSet<>(GGUF_FUNCTIONS)));
+		// A Metal drawing surface over objc:, implemented once in metal.lisp and
+		// spliced/loaded on demand (MetalLibrary). macOS only, like appkit; usable
+		// WITHOUT geom or scene, which is what four examples do. Does not use cl.
+		define(new LispPackage(LispNames.METAL_PKG, List.of(), new HashSet<>(METAL_FUNCTIONS)));
+		// A 3-D viewer for geom solids over metal, implemented once in scene.lisp and
+		// spliced/loaded on demand (SceneLibrary). macOS only. Does not use cl.
+		define(new LispPackage(LispNames.SCENE_PKG, List.of(), new HashSet<>(SCENE_FUNCTIONS)));
+		// C interop through the foreign function API (no reflection, so it runs in the
+		// native binary too, against the registered shape grid): the foreign primitives
+		// CFFI's backend stands on (eval.FfiInterop over am.ik.ffi). Does not use cl;
+		// its values (LispForeignPointer) cannot be lowered by any WASM backend, and the
+		// JVM class output carries the binding as an embedded blob.
+		define(new LispPackage(LispNames.FFI_PKG, List.of(),
+				new HashSet<>(Set.of(LispNames.FFI_OPEN, LispNames.FFI_SYMBOL, LispNames.FFI_CALL,
+						LispNames.FFI_CALLBACK, LispNames.FFI_ALLOC, LispNames.FFI_FREE, LispNames.FFI_PEEK,
+						LispNames.FFI_POKE, LispNames.FFI_SIZE, LispNames.FFI_ALIGN, LispNames.FFI_POINTERP,
+						LispNames.FFI_ADDRESS, LispNames.FFI_ERRNO, LispNames.FFI_APPLY_CALL))));
+		// A limited, API-compatible subset of ASDF (.asd files run as Lisp, their
+		// defsystem forms parsed as data -- see eval.AsdfSystems; the runtime component
+		// metaobject family lives in Lisp source, eval.AsdfRuntimeLibrary / asdf.lisp).
+		// It uses cl, as real ASDF's does: a library extends ASDF from (in-package :asdf)
+		// (coalton-asdf's classes, so its keyword finds them). The surface is the
+		// inventory (AsdfExports, measured against SBCL 2.2.9's ASDF 3.3.1): asdf exports
+		// what asdf/interface exports and owns every member homed in an asdf/* package,
+		// so asdf::relative-pathname and asdf/component:relative-pathname are one symbol;
+		// a member homed in uiop/* is uiop's symbol. The sub-packages redirect every
+		// member they export.
+		Map<String, String> asdfImports = new HashMap<>();
+		Set<String> asdfSymbols = new HashSet<>(AsdfExports.owned());
+		AsdfExports.externals().forEach((name, entry) -> {
+			asdfSymbols.add(name);
+			if (entry.isUiopHomed()) {
+				asdfImports.put(name, entry.home());
+			}
+		});
+		define(new LispPackage(LispNames.ASDF_PKG, List.of(LispNames.CL_PKG), asdfSymbols,
+				Set.copyOf(AsdfExports.externals().keySet()), Map.copyOf(asdfImports)));
+		AsdfExports.subPackages().forEach((subPackage, members) -> {
+			Map<String, String> redirects = new HashMap<>();
+			members
+				.forEach((name, entry) -> redirects.put(name, entry.isUiopHomed() ? entry.home() : LispNames.ASDF_PKG));
+			define(new LispPackage(subPackage, List.of(), new HashSet<>(members.keySet()), Set.copyOf(members.keySet()),
+					Map.copyOf(redirects)));
+		});
+		// A limited, API-compatible subset of Quicklisp: ql:quickload downloads a system
+		// (and its dependencies) from the real Quicklisp distribution into a local cache
+		// and then defers to the asdf subset (see eval.QuicklispClient). Its canonical
+		// spelling is ql; quicklisp is a built-in nickname. Does not use cl; the symbol
+		// is external.
+		define(new LispPackage(LispNames.QL_PKG, List.of(),
+				new HashSet<>(Set.of(LispNames.QUICKLOAD, LispNames.UPDATE_DIST))));
+		// ql-dist, where Quicklisp keeps the distribution machinery: the one member a
+		// program writes is install-dist, which adds a Quicklisp-format distribution
+		// (Ultralisp, say) to the dists ql:quickload downloads from. Does not use cl.
+		define(new LispPackage(LispNames.QL_DIST_PKG, List.of(), new HashSet<>(Set.of(LispNames.INSTALL_DIST))));
+		// uiop, as upstream builds it: `uiop` IS `uiop/driver`, a re-export of 15
+		// sub-packages, and a library may name either spelling --
+		// lack-middleware-backtrace
+		// spells (:import-from :uiop/image :print-condition-backtrace), which is a READ
+		// error when the package is absent. Every sub-package owns the names its OWN rows
+		// in the inventory list (UiopExports, from the checked-in uiop-exports.txt); a
+		// name
+		// a second sub-package also exports is an import redirect to the home one
+		// (uiop/backward-driver re-exports five uiop/configuration names), and so is
+		// every
+		// member of uiop itself. Both spellings therefore name the SAME symbol rather
+		// than
+		// two functions with one member name. What is DEFINED behind those names is
+		// eval.UiopLibrary's business -- see .kb/uiop.md.
+		for (String subPackage : UiopExports.subPackages()) {
+			Set<String> externals = UiopExports.externals(subPackage);
+			Map<String, String> redirects = new HashMap<>();
+			for (String name : externals) {
+				String home = UiopExports.homePackage(name);
+				if (home != null && !home.equals(subPackage)) {
+					redirects.put(name, home);
+				}
+			}
+			define(new LispPackage(subPackage, List.of(), new HashSet<>(externals), Set.copyOf(externals),
+					Map.copyOf(redirects)));
+		}
+		Map<String, String> uiopImports = new HashMap<>(UiopExports.homePackages());
+		// namestring is IMPORTED from cl rather than owned: upstream's uiop/driver
+		// inherits CL's through (:use :uiop/common-lisp), rontolisp's cl:namestring is a
+		// real prelude function, and two same-member symbols would be two functions of
+		// which only one is defined. Deliberately EXTERNAL here, where upstream leaves it
+		// merely accessible.
+		uiopImports.put(LispNames.NAMESTRING, LispNames.CL_PKG);
+		Set<String> uiopExternals = new HashSet<>(uiopImports.keySet());
+		// when-let / when-let* are alexandria's names, not uiop's: real uiop exports
+		// if-let only. Kept as rontolisp EXTRAS (owned by uiop, hence no redirect) rather
+		// than dropped, because programs already spell them.
+		uiopExternals.add(LispNames.WHEN_LET);
+		uiopExternals.add(LispNames.WHEN_LET_STAR);
+		Set<String> uiopSymbols = new HashSet<>(uiopExternals);
+		define(new LispPackage(LispNames.UIOP_PKG, List.of(), uiopSymbols, Set.copyOf(uiopExternals),
+				Map.copyOf(uiopImports)));
+		// The dependency-shim packages behind the built-in ASDF systems of the same
+		// names (see eval.ShimLibraries): closer-mop (nickname c2mop),
+		// flexi-streams, org.shirakumo.float-features (nickname float-features) and
+		// trivial-gray-streams.
+		// closer-mop also EXPORTS the cl symbols naming the metaobject classes and the
+		// definition macros (upstream's export list); resolution is textual, so each is
+		// an import redirecting to cl -- collectors' (find-class
+		// 'closer-mop:standard-object)
+		// names cl:standard-object.
+		Map<String, String> closerMopImports = new HashMap<>();
+		for (String name : CLOSER_MOP_CL_REEXPORTS) {
+			closerMopImports.put(name, LispNames.CL_PKG);
+		}
+		Set<String> closerMopSymbols = new HashSet<>(CLOSER_MOP_EXTERNALS);
+		closerMopSymbols.addAll(closerMopImports.keySet());
+		define(new LispPackage(LispNames.CLOSER_MOP_PKG, List.of(), closerMopSymbols, Set.copyOf(closerMopSymbols),
+				Map.copyOf(closerMopImports)));
+		// closer-common-lisp (nickname c2cl): the flat re-export of the cl externals
+		// overlaid with the closer-mop externals (closer-mop wins collisions, per the
+		// upstream package of the same name). Resolution is textual, so every member is
+		// recorded as an IMPORT redirecting to its home package -- a qualified
+		// closer-common-lisp:class-slots resolves to closer-mop:class-slots and
+		// closer-common-lisp:mapcar to the bare cl name -- and using this package
+		// implies using cl (see PackageResolver.impliedUses).
+		Map<String, String> c2clImports = new HashMap<>();
+		for (String name : CL_EXTERNALS) {
+			c2clImports.put(name, LispNames.CL_PKG);
+		}
+		for (String name : CLOSER_MOP_EXTERNALS) {
+			c2clImports.put(name, LispNames.CLOSER_MOP_PKG);
+		}
+		define(new LispPackage(LispNames.CLOSER_COMMON_LISP_PKG, List.of(LispNames.CL_PKG),
+				Set.copyOf(c2clImports.keySet()), Set.copyOf(c2clImports.keySet()), Map.copyOf(c2clImports)));
+		// flexi-streams: the encoder/decoder pair and the wrapper are external, and so
+		// is the in-memory input constructor plus the vector-stream CLASS -- http-body
+		// spells (typep s 'flex:vector-stream) with a single colon. The three slot
+		// accessors stay INTERNAL, as upstream, which is why the same file reaches for
+		// flex::vector-stream-vector with a double one. The flexi-stream class and its
+		// five accessors are external for the same reason: upstream cl+ssl spells
+		// flexi-streams:flexi-stream / flexi-streams:flexi-stream-stream with one colon.
+		// The external-format surface and the two sequence macros are external as
+		// upstream: drakma :uses the package and cl-smtp imports from it.
+		Set<String> flexiExternals = Set.of(LispNames.MAKE_FLEXI_STREAM, LispNames.STRING_TO_OCTETS,
+				LispNames.OCTETS_TO_STRING, LispNames.VECTOR_STREAM, LispNames.MAKE_IN_MEMORY_INPUT_STREAM,
+				LispNames.MAKE_IN_MEMORY_OUTPUT_STREAM, LispNames.GET_OUTPUT_STREAM_SEQUENCE, LispNames.FLEXI_STREAM,
+				LispNames.FLEXI_STREAM_STREAM, LispNames.FLEXI_STREAM_EXTERNAL_FORMAT,
+				LispNames.FLEXI_STREAM_ELEMENT_TYPE, LispNames.FLEXI_STREAM_POSITION, LispNames.FLEXI_STREAM_BOUND,
+				LispNames.EXTERNAL_FORMAT, LispNames.MAKE_EXTERNAL_FORMAT, LispNames.EXTERNAL_FORMAT_NAME,
+				LispNames.EXTERNAL_FORMAT_EOL_STYLE, LispNames.EXTERNAL_FORMAT_LITTLE_ENDIAN,
+				LispNames.EXTERNAL_FORMAT_ID, LispNames.EXTERNAL_FORMAT_EQUAL, LispNames.DEFAULT_EOL_STYLE,
+				LispNames.SUBSTITUTION_CHAR, LispNames.OCTET, LispNames.WITH_INPUT_FROM_SEQUENCE,
+				LispNames.WITH_OUTPUT_TO_SEQUENCE);
+		Set<String> flexiSymbols = new HashSet<>(flexiExternals);
+		flexiSymbols.addAll(Set.of(LispNames.VECTOR_INPUT_STREAM, LispNames.VECTOR_STREAM_VECTOR,
+				LispNames.VECTOR_STREAM_INDEX, LispNames.VECTOR_STREAM_END, LispNames.VECTOR_OUTPUT_STREAM));
+		define(new LispPackage(LispNames.FLEXI_STREAMS_PKG, List.of(), flexiSymbols, flexiExternals));
+		define(new LispPackage(LispNames.FLOAT_FEATURES_PKG, List.of(),
+				new HashSet<>(Set.of(LispNames.BITS_DOUBLE_FLOAT, LispNames.DOUBLE_FLOAT_BITS,
+						LispNames.SINGLE_FLOAT_BITS, LispNames.BITS_SINGLE_FLOAT, "SHORT-FLOAT-POSITIVE-INFINITY",
+						"SHORT-FLOAT-NEGATIVE-INFINITY", "SHORT-FLOAT-NAN", "SINGLE-FLOAT-POSITIVE-INFINITY",
+						"SINGLE-FLOAT-NEGATIVE-INFINITY", "SINGLE-FLOAT-NAN", "DOUBLE-FLOAT-POSITIVE-INFINITY",
+						"DOUBLE-FLOAT-NEGATIVE-INFINITY", "DOUBLE-FLOAT-NAN", "LONG-FLOAT-POSITIVE-INFINITY",
+						"LONG-FLOAT-NEGATIVE-INFINITY", "LONG-FLOAT-NAN", "FLOAT-INFINITY-P", "FLOAT-NAN-P",
+						"WITH-FLOAT-TRAPS-MASKED", "WITH-ROUNDING-MODE", "SHORT-FLOAT-BITS", "LONG-FLOAT-BITS",
+						"BITS-SHORT-FLOAT", "BITS-LONG-FLOAT"))));
+		define(new LispPackage(LispNames.TRIVIAL_GRAY_STREAMS_PKG, List.of(),
+				new HashSet<>(Set.of(LispNames.GRAY_CHAR_OUTPUT_STREAM, LispNames.GRAY_CHAR_INPUT_STREAM,
+						LispNames.GRAY_STREAM_WRITE_CHAR, LispNames.GRAY_STREAM_WRITE_STRING,
+						LispNames.GRAY_FUNDAMENTAL_STREAM, LispNames.GRAY_INPUT_STREAM, LispNames.GRAY_OUTPUT_STREAM,
+						LispNames.GRAY_BINARY_INPUT_STREAM, LispNames.GRAY_BINARY_OUTPUT_STREAM,
+						LispNames.GRAY_CHARACTER_STREAM, LispNames.GRAY_BINARY_STREAM, LispNames.GRAY_STREAM_MIXIN,
+						LispNames.GRAY_STREAM_WRITE_BYTE, LispNames.GRAY_STREAM_READ_BYTE,
+						LispNames.GRAY_STREAM_READ_CHAR, LispNames.GRAY_STREAM_UNREAD_CHAR,
+						LispNames.GRAY_STREAM_READ_LINE, LispNames.GRAY_STREAM_LISTEN,
+						LispNames.GRAY_STREAM_READ_CHAR_NO_HANG, LispNames.GRAY_STREAM_PEEK_CHAR,
+						LispNames.GRAY_STREAM_CLEAR_INPUT, LispNames.GRAY_STREAM_READ_SEQUENCE,
+						LispNames.GRAY_STREAM_WRITE_SEQUENCE, LispNames.GRAY_STREAM_LINE_COLUMN,
+						LispNames.GRAY_STREAM_START_LINE_P, LispNames.GRAY_STREAM_TERPRI,
+						LispNames.GRAY_STREAM_FRESH_LINE, LispNames.GRAY_STREAM_ADVANCE_TO_COLUMN,
+						LispNames.GRAY_STREAM_FORCE_OUTPUT, LispNames.GRAY_STREAM_FINISH_OUTPUT,
+						LispNames.GRAY_STREAM_CLEAR_OUTPUT, LispNames.GRAY_STREAM_FILE_POSITION))));
+		// bordeaux-threads (nickname bt) + bt2 (nickname bordeaux-threads-2, mirroring
+		// upstream's apiv2/pkgdcl.lisp): one shim system (bordeaux-threads.lisp,
+		// eval.ShimLibraries) providing both API namespaces. The locking subset rides the
+		// rontolisp:*-mutex primitives and stays home in the v1 package (with-lock-held
+		// is a built-in LispMacroExpander expansion dispatched on its qualified name, the
+		// usocket:with-* pattern); thread creation rides the rontolisp:make-thread
+		// primitive (interpreter + JVM; the WASM entry points signal at call time) and is
+		// home in bt2, the modern API clack's handler.lisp drives. Each package imports
+		// the other's half, so both spellings of every name resolve to the ONE defining
+		// symbol (the closer-common-lisp / uiop-image redirect precedent).
+		Map<String, String> btThreadImports = Map.of(LispNames.MAKE_THREAD, LispNames.BT2_PKG, LispNames.JOIN_THREAD,
+				LispNames.BT2_PKG, LispNames.THREADP, LispNames.BT2_PKG, LispNames.THREAD_ALIVE_P, LispNames.BT2_PKG,
+				LispNames.DESTROY_THREAD, LispNames.BT2_PKG, LispNames.DEFAULT_SPECIAL_BINDINGS, LispNames.BT2_PKG,
+				LispNames.CURRENT_THREAD, LispNames.BT2_PKG);
+		// The rest of the v1 API (bordeaux-threads 0.9's export list), home in the v1
+		// package; the members bt2 exports under the same name are imported there.
+		List<String> btV1Members = List.of(LispNames.LOCK, LispNames.RECURSIVE_LOCK, LispNames.RECURSIVE_LOCK_P,
+				LispNames.MAKE_RECURSIVE_LOCK, LispNames.ACQUIRE_RECURSIVE_LOCK, LispNames.RELEASE_RECURSIVE_LOCK,
+				LispNames.WITH_RECURSIVE_LOCK_HELD, LispNames.MAKE_CONDITION_VARIABLE, LispNames.CONDITION_WAIT,
+				LispNames.CONDITION_NOTIFY, LispNames.CONDITION_BROADCAST, LispNames.SEMAPHORE,
+				LispNames.MAKE_SEMAPHORE, LispNames.SIGNAL_SEMAPHORE, LispNames.WAIT_ON_SEMAPHORE, LispNames.THREAD,
+				LispNames.THREAD_NAME, LispNames.THREAD_YIELD, LispNames.ALL_THREADS, LispNames.INTERRUPT_THREAD,
+				LispNames.WITH_TIMEOUT, LispNames.TIMEOUT, LispNames.STANDARD_IO_BINDINGS,
+				LispNames.START_MULTIPROCESSING);
+		Set<String> btV1Externals = new HashSet<>(Set.of(LispNames.MAKE_LOCK, LispNames.ACQUIRE_LOCK,
+				LispNames.RELEASE_LOCK, LispNames.WITH_LOCK_HELD, LispNames.SUPPORTS_THREADS_P, LispNames.MAKE_THREAD,
+				LispNames.JOIN_THREAD, LispNames.THREADP, LispNames.THREAD_ALIVE_P, LispNames.DESTROY_THREAD,
+				LispNames.DEFAULT_SPECIAL_BINDINGS, LispNames.CURRENT_THREAD, LispNames.LOCK_P, LispNames.SEMAPHORE_P));
+		btV1Externals.addAll(btV1Members);
+		define(new LispPackage(LispNames.BORDEAUX_THREADS_PKG, List.of(), btV1Externals, Set.copyOf(btV1Externals),
+				btThreadImports));
+		Map<String, String> bt2LockImports = new HashMap<>(Map.of(LispNames.MAKE_LOCK, LispNames.BORDEAUX_THREADS_PKG,
+				LispNames.ACQUIRE_LOCK, LispNames.BORDEAUX_THREADS_PKG, LispNames.RELEASE_LOCK,
+				LispNames.BORDEAUX_THREADS_PKG, LispNames.WITH_LOCK_HELD, LispNames.BORDEAUX_THREADS_PKG));
+		for (String member : btV1Members) {
+			bt2LockImports.put(member, LispNames.BORDEAUX_THREADS_PKG);
+		}
+		Set<String> bt2Externals = new HashSet<>(Set.of(LispNames.MAKE_THREAD, LispNames.JOIN_THREAD, LispNames.THREADP,
+				LispNames.THREAD_ALIVE_P, LispNames.DESTROY_THREAD, LispNames.DEFAULT_SPECIAL_BINDINGS,
+				LispNames.MAKE_LOCK, LispNames.ACQUIRE_LOCK, LispNames.RELEASE_LOCK, LispNames.WITH_LOCK_HELD,
+				LispNames.CURRENT_THREAD));
+		// The rest of bordeaux-threads 0.9.4's bt2 export list (bt2 only): string
+		// literals, as nothing in Java names them -- the trivial-cltl2 precedent below.
+		bt2Externals.addAll(List.of("ATOMIC-INTEGER", "MAKE-ATOMIC-INTEGER", "ATOMIC-INTEGER-COMPARE-AND-SWAP",
+				"ATOMIC-INTEGER-DECF", "ATOMIC-INTEGER-INCF", "ATOMIC-INTEGER-VALUE", "+SUPPORTS-THREADS-P+",
+				"BORDEAUX-THREADS-ERROR", "NOT-IMPLEMENTED", "ABNORMAL-EXIT", "ABNORMAL-EXIT-CONDITION",
+				"THREAD-NATIVE-THREAD", "SIGNAL-IN-THREAD", "WARN-IN-THREAD", "ERROR-IN-THREAD", "LOCKP", "LOCK-NAME",
+				"LOCK-NATIVE-LOCK", "NATIVE-LOCK", "NATIVE-LOCK-P", "NATIVE-RECURSIVE-LOCK", "NATIVE-RECURSIVE-LOCK-P",
+				"CONDITION-VARIABLE", "CONDITION-VARIABLE-P", "SEMAPHOREP"));
+		bt2Externals.addAll(btV1Members);
+		Set<String> bt2Symbols = new HashSet<>(bt2Externals);
+		// Internal: the shim's own :initial-bindings value-form resolver, spelled
+		// bt2::resolve-binding-value by its call site, the atomic counter's
+		// constructor, predicate and slots, and the shim's not-implemented condition and
+		// its signaller. Owned by the package rather than left to the resolver's
+		// tolerance for an unknown :: member.
+		bt2Symbols.addAll(Set.of(LispNames.RESOLVE_BINDING_VALUE, "%MAKE-ATOMIC-INTEGER", "ATOMIC-INTEGER-P",
+				"%ATOMIC-INTEGER-VALUE", "%ATOMIC-INTEGER-LOCK", "NOT-SUPPORTED", "SIGNAL-NOT-SUPPORTED"));
+		define(new LispPackage(LispNames.BT2_PKG, List.of(), bt2Symbols, Set.copyOf(bt2Externals), bt2LockImports));
+		// babel + babel-encodings: the UTF-8 slice of the charset-conversion library,
+		// implemented in babel.lisp (eval.ShimLibraries). Real babel carries 40+ code
+		// pages; rontolisp has one character model (a character IS a code point, the
+		// wire form is UTF-8), so the shim implements that codec and SIGNALS on any
+		// other :encoding rather than mis-coding silently. Both packages export
+		// *default-character-encoding* -- real babel's babel package inherits it by
+		// :use-ing babel-encodings, and callers spell both.
+		//
+		// babel-encodings owns the ENCODING half: the two specials, the encoding /
+		// mapping lookups, the four mapping readers a consumer that decodes
+		// INCREMENTALLY calls (dexador's decoding-stream imports exactly those), and
+		// the condition hierarchy the consumer's fallback path catches. The names are
+		// string literals rather than LispNames constants because nothing in Java
+		// refers to them -- the trivial-cltl2 precedent below.
+		Set<String> babelEncodingsExternals = new HashSet<>(Set.of(LispNames.DEFAULT_CHARACTER_ENCODING,
+				LispNames.LIST_CHARACTER_ENCODINGS, "*SUPPRESS-CHARACTER-CODING-ERRORS*", "GET-CHARACTER-ENCODING",
+				"ENC-MAX-UNITS-PER-CHAR", "LOOKUP-MAPPING", "CODE-POINT-COUNTER", "OCTET-COUNTER", "DECODER", "ENCODER",
+				"CHARACTER-CODING-ERROR", "CHARACTER-CODING-ERROR-BUFFER", "CHARACTER-CODING-ERROR-POSITION",
+				"CHARACTER-CODING-ERROR-ENCODING", "CHARACTER-DECODING-ERROR", "CHARACTER-DECODING-ERROR-OCTETS",
+				"CHARACTER-ENCODING-ERROR", "CHARACTER-ENCODING-ERROR-CODE", "END-OF-INPUT-IN-CHARACTER",
+				"CHARACTER-OUT-OF-RANGE", "INVALID-UTF8-STARTER-BYTE", "INVALID-UTF8-CONTINUATION-BYTE",
+				"OVERLONG-UTF8-SEQUENCE", "CHARACTER-ENCODING", "ENC-NAME", "ENC-ALIASES", "ENC-CODE-UNIT-SIZE",
+				"ENC-CODESPACE", "ENC-NATIVE-ENDIANNESS", "ENC-DECODE-LITERAL-CODE-UNIT-LIMIT",
+				"ENC-ENCODE-LITERAL-CODE-UNIT-LIMIT", "ENC-USE-BOM", "ENC-BOM-ENCODING", "ENC-NUL-ENCODING",
+				"ENC-DEFAULT-REPLACEMENT", "ENCODABLE-CODE-POINT-P", "AMBIGUOUS-ENCODING-P",
+				"INSTANTIATE-CONCRETE-MAPPINGS", "WITH-SIMPLE-VECTOR", "WITH-CHECKED-SIMPLE-VECTOR"));
+		define(new LispPackage(LispNames.BABEL_ENCODINGS_PKG, List.of(), babelEncodingsExternals));
+		Set<String> babelExternals = new HashSet<>(Set.of(LispNames.STRING_TO_OCTETS, LispNames.OCTETS_TO_STRING,
+				LispNames.STRING_SIZE_IN_OCTETS,
+				// The mapping TABLE and the character type live in babel proper
+				// upstream, not in babel-encodings. *string-vector-mappings* is
+				// INTERNAL upstream -- a defpackage :import-from reads it anyway
+				// --
+				// but a rontolisp :import-from resolves through the external
+				// list, so
+				// the shim exports it.
+				// unicode-string / simple-unicode-string are upstream's
+				// degenerate
+				// aliases (unicode-char above is exactly character) -- external
+				// upstream, and cffi's strings.lisp reads them by that spelling.
+				"*STRING-VECTOR-MAPPINGS*", "UNICODE-CHAR", "UNICODE-STRING", "SIMPLE-UNICODE-STRING",
+				"UNICODE-CHAR-CODE-LIMIT", "ENABLE-SHARP-BACKSLASH-SYNTAX", "SET-SHARP-BACKSLASH-SYNTAX-IN-READTABLE",
+				"EXTERNAL-FORMAT", "MAKE-EXTERNAL-FORMAT", "ENSURE-EXTERNAL-FORMAT", "EXTERNAL-FORMAT-ENCODING",
+				"EXTERNAL-FORMAT-EOL-STYLE", "EXTERNAL-FORMAT-EQUAL", "*DEFAULT-EOL-STYLE*", "ENCODABLE-CHARACTER-P",
+				"ENCODABLE-STRING-P", "CONCATENATE-STRINGS-TO-OCTETS", "VECTOR-SIZE-IN-CHARS"));
+		// Real babel :uses babel-encodings and re-exports it, so every babel-encodings
+		// external must also answer to the babel: spelling -- as an IMPORT REDIRECT,
+		// not an owned symbol, so babel:X and babel-encodings:X canonicalize to the
+		// SAME spelling (the home package's). http-body's detect-charset defaults from
+		// babel:*default-character-encoding* while the shim's defvar spells
+		// babel-encodings:; dexador imports character-decoding-error from babel and
+		// *suppress-character-coding-errors* from babel-encodings. Without the
+		// redirect each pair is two symbols, and the babel: one is a global nothing
+		// binds.
+		Map<String, String> babelImports = new HashMap<>();
+		for (String name : babelEncodingsExternals) {
+			babelImports.put(name, LispNames.BABEL_ENCODINGS_PKG);
+		}
+		babelExternals.addAll(babelEncodingsExternals);
+		Set<String> babelSymbols = new HashSet<>(babelExternals);
+		// Internal: the shim's own encoding-name normalizer and the codec the mapping
+		// readers hand out (the counters, the two coders, the one-character UTF-8
+		// decode and its two octet predicates), spelled babel::name by their call
+		// sites. Owned by the package rather than left to the resolver's tolerance for
+		// an unknown :: member.
+		babelSymbols.addAll(Set.of(LispNames.NORMALIZE_ENCODING, "%ENCODING-NAME", "%MAKE-EXTERNAL-FORMAT",
+				"%EXTERNAL-FORMAT-P", "%CHECK-VECTOR-BOUNDS", "%DECODING-ERROR", "%ENCODING-ERROR",
+				"%COUNT-CODE-POINTS", "%COUNT-OCTETS", "%DECODE-INTO", "%ENCODE-INTO", "%UTF-8-DECODE-1",
+				"%CONTINUATION-P", "%INVALID-CB-P", "STRING-GET", "STRING-SET"));
+		define(new LispPackage(LispNames.BABEL_PKG, List.of(), babelSymbols, babelExternals, babelImports));
+		// swank: the shim behind the built-in ASDF system of the same name
+		// (swank.lisp, eval.ShimLibraries). The real swank is SLIME's server half,
+		// whose .asd is a program the defsystem-as-data front-end cannot read at all;
+		// on the interpreter the shim's create-server starts the command line's server
+		// (cli.SwankServer). clack's .asd hard-depends on it, so without the shim
+		// (ql:quickload "clack") downloads the SLIME tarball and dies on it.
+		// *readtable-alist* is SLIME's package-name -> readtable alist, which
+		// named-readtables' in-readtable updates whenever a swank package exists.
+		define(new LispPackage(LispNames.SWANK_PKG, List.of(), new HashSet<>(
+				Set.of(LispNames.CREATE_SERVER, LispNames.STOP_SERVER, LispNames.SWANK_READTABLE_ALIST))));
+		// trivial-cltl2 (nickname cltl2): the shim behind the built-in ASDF system of
+		// the same name (trivial-cltl2.lisp, eval.ShimLibraries). The real library is
+		// a pure re-export of the host's CLtL2 environment API; on rontolisp every
+		// implementation branch is feature-false, so loading it verbatim yields only
+		// undefined names. define-declaration / declaration-information (trivia level2
+		// calls them) and function-information (typo's) have shim definitions; the rest
+		// of the export list resolves but is an undefined-function error when called
+		// (the uiop stub convention).
+		define(new LispPackage(LispNames.TRIVIAL_CLTL2_PKG, List.of(),
+				new HashSet<>(Set.of(LispNames.DEFINE_DECLARATION, LispNames.DECLARATION_INFORMATION, "COMPILER-LET",
+						"VARIABLE-INFORMATION", "FUNCTION-INFORMATION", "AUGMENT-ENVIRONMENT", "PARSE-MACRO",
+						"ENCLOSE"))));
+		// mgl-pax (nickname pax): the STUB behind the built-in ASDF system
+		// "mgl-pax-bootstrap" (mgl-pax-bootstrap.lisp, eval.ShimLibraries). trivial-utf-8
+		// (a uuid dependency) hard-depends on it and its source calls exactly these
+		// members. define-package is consumed by
+		// PackageResolver.resolve like defpackage; section and macro appear only as data
+		// inside defsection bodies (unevaluated, so they need to resolve but never to be
+		// defined) -- macro is the locative named-readtables' reference section spells.
+		define(new LispPackage(LispNames.MGL_PAX_PKG, List.of(), new HashSet<>(Set.of(LispNames.DEFINE_PACKAGE,
+				"DEFSECTION", "SECTION", "MACRO", "MAKE-GITHUB-SOURCE-URI-FN", "REGISTER-DOC-IN-PAX-WORLD"))));
+		// trivial-garbage (nickname tg): the no-op GC-finalizer shim behind the
+		// built-in ASDF system of the same name (trivial-garbage.lisp,
+		// eval.ShimLibraries) -- dbd-postgres imports the finalizer pair, and the
+		// weak-table pair is what a CFFI binding keeps its per-thread state in;
+		// serapeum's static-let holds a weak pointer.
+		define(new LispPackage(LispNames.TRIVIAL_GARBAGE_PKG, List.of(),
+				new HashSet<>(Set.of("GC", "FINALIZE", "CANCEL-FINALIZATION", "MAKE-WEAK-HASH-TABLE",
+						"HASH-TABLE-WEAKNESS", "MAKE-WEAK-POINTER", "WEAK-POINTER-P", "WEAK-POINTER-VALUE"))));
+		// cl+ssl: the CLIENT-side TLS shim behind the built-in ASDF system of the same
+		// name (cl-ssl.lisp, eval.ShimLibraries), over the rontolisp:tls-upgrade
+		// primitive. The externals are the surface dexador (and the other
+		// usocket+cl+ssl client stacks) import: make-ssl-client-stream upgrades an
+		// already-connected stream; make-context / with-global-context /
+		// ssl-check-verify-p carry the verify mode; ensure-initialized is a no-op;
+		// use-certificate-chain-file (a client certificate, no backing) signals. The
+		// global-context special stays INTERNAL, as upstream.
+		Set<String> clSslExternals = Set.of("ENSURE-INITIALIZED", "MAKE-CONTEXT", "WITH-GLOBAL-CONTEXT",
+				"+SSL-VERIFY-NONE+", "+SSL-VERIFY-PEER+", "SSL-CHECK-VERIFY-P", "USE-CERTIFICATE-CHAIN-FILE",
+				"MAKE-SSL-CLIENT-STREAM");
+		Set<String> clSslSymbols = new HashSet<>(clSslExternals);
+		clSslSymbols.add("*SSL-GLOBAL-CONTEXT*");
+		define(new LispPackage(LispNames.CL_SSL_PKG, List.of(), clSslSymbols, clSslExternals));
+	}
+
+	/**
+	 * Returns the names of the {@code cl} functions, sorted alphabetically.
+	 * @return the sorted function names
+	 */
+	public static List<String> clFunctionNames() {
+		return CL_FUNCTION_NAMES;
+	}
+
+	/**
+	 * Returns whether the given unqualified name is a {@code cl} FUNCTION -- a standard
+	 * name usable as a function value, as opposed to a macro or special operator. The
+	 * distinction is what tells a redefinition that a backend can reason about
+	 * ({@code (defun random ...)}) from one no dispatch could honour anywhere
+	 * ({@code (defun if ...)}).
+	 * @param name the canonical (upper-case, unqualified) name
+	 * @return {@code true} if it names a {@code cl} function
+	 */
+	public static boolean isClFunctionName(String name) {
+		return CL_FUNCTIONS.contains(name);
+	}
+
+	/**
+	 * Returns the names of the operators that have no function value ({@code #'name} is
+	 * an error): the special forms and the macros.
+	 * @return the special operator names
+	 */
+	public static Set<String> specialOperatorNames() {
+		return SPECIAL_OPERATOR_NAMES;
+	}
+
+	/**
+	 * Returns the 25 ANSI special operators -- the exact set {@code special-operator-p}
+	 * answers t for.
+	 * @return the ANSI special operator names
+	 */
+	public static Set<String> ansiSpecialOperatorNames() {
+		return ANSI_SPECIAL_OPERATORS;
+	}
+
+	/**
+	 * Returns the built-in names {@code macro-function} answers a macro function for
+	 * (every operator with no function value except the 25 ANSI special operators),
+	 * sorted alphabetically so the baked table a compiled program carries is stable.
+	 * @return the sorted built-in macro names
+	 */
+	public static List<String> runtimeMacroNames() {
+		return RUNTIME_MACRO_NAMES;
+	}
+
+	/**
+	 * Returns the names of the functions exported by the {@code linalg} package, sorted
+	 * alphabetically.
+	 * @return the sorted function names
+	 */
+	public static List<String> linalgFunctionNames() {
+		return LINALG_FUNCTION_NAMES;
+	}
+
+	/**
+	 * Returns the names exported by the {@code torch} package, sorted alphabetically.
+	 * @return the sorted names
+	 */
+	public static List<String> torchFunctionNames() {
+		return TORCH_FUNCTION_NAMES;
+	}
+
+	/**
+	 * Returns the names of the functions exported by the {@code vec} package, sorted
+	 * alphabetically.
+	 * @return the sorted function names
+	 */
+	public static List<String> vecFunctionNames() {
+		return VEC_FUNCTION_NAMES;
+	}
+
+	/**
+	 * Returns the names of the functions exported by the {@code appkit} package, sorted
+	 * alphabetically.
+	 * @return the sorted function names
+	 */
+	public static List<String> appkitFunctionNames() {
+		return APPKIT_FUNCTION_NAMES;
+	}
+
+	/**
+	 * The names the new {@code objc} base exports ({@code objc.lisp}), sorted.
+	 * @return the member names
+	 */
+	public static List<String> objcBaseNames() {
+		return OBJC_BASE_NAME_LIST;
+	}
+
+	/**
+	 * The names the {@code cocoa} package exports ({@code objc.lisp}), sorted.
+	 * @return the member names
+	 */
+	public static List<String> cocoaNames() {
+		return COCOA_NAME_LIST;
+	}
+
+	/**
+	 * The names the {@code fli} package exports ({@code objc.lisp}), sorted.
+	 * @return the names
+	 */
+	public static List<String> fliNames() {
+		return FLI_NAME_LIST;
+	}
+
+	/**
+	 * Returns the names exported by the {@code geom} package, sorted alphabetically.
+	 * @return the sorted exported names
+	 */
+	public static List<String> geomFunctionNames() {
+		return GEOM_FUNCTION_NAMES;
+	}
+
+	/**
+	 * The sorted exported names of the {@code checkpoint} package.
+	 * @return the names, upper-case
+	 */
+	public static List<String> checkpointFunctionNames() {
+		return CHECKPOINT_FUNCTION_NAMES;
+	}
+
+	/**
+	 * The sorted exported names of the {@code safetensors} package.
+	 * @return the names, upper-case
+	 */
+	public static List<String> safetensorsFunctionNames() {
+		return SAFETENSORS_FUNCTION_NAMES;
+	}
+
+	/**
+	 * Returns the names exported by the {@code tokenizer} package, sorted alphabetically.
+	 * @return the sorted exported names
+	 */
+	public static List<String> tokenizerFunctionNames() {
+		return TOKENIZER_FUNCTION_NAMES;
+	}
+
+	/**
+	 * Returns the names exported by the {@code gguf} package, sorted alphabetically.
+	 * @return the sorted exported names
+	 */
+	public static List<String> ggufFunctionNames() {
+		return GGUF_FUNCTION_NAMES;
+	}
+
+	/**
+	 * Returns the names exported by the {@code metal} package, sorted alphabetically.
+	 * @return the sorted exported names
+	 */
+	public static List<String> metalFunctionNames() {
+		return METAL_FUNCTION_NAMES;
+	}
+
+	/**
+	 * Returns the names exported by the {@code scene} package, sorted alphabetically.
+	 * @return the sorted exported names
+	 */
+	public static List<String> sceneFunctionNames() {
+		return SCENE_FUNCTION_NAMES;
+	}
+
+	/**
+	 * Returns the names of the functions exported by the {@code usocket} package, sorted
+	 * alphabetically.
+	 * @return the sorted function names
+	 */
+	public static List<String> usocketFunctionNames() {
+		return USOCKET_FUNCTION_NAMES;
+	}
+
+	/**
+	 * Returns every name exported by the {@code usocket} package (functions, macros and
+	 * variables), for the bare-name usage detection in {@code UsocketLibrary}.
+	 * @return the exported names
+	 */
+	public static Set<String> usocketExportedNames() {
+		return USOCKET_EXTERNALS;
+	}
+
+	@SafeVarargs
+	private static Set<String> union(Set<String>... sets) {
+		Set<String> result = new HashSet<>();
+		for (Set<String> set : sets) {
+			result.addAll(set);
+		}
+		return Set.copyOf(result);
+	}
+
+	private static List<String> sorted(Set<String> names) {
+		return names.stream().sorted().toList();
+	}
+
+	/**
+	 * Registers (or replaces) a package.
+	 * @param pkg the package to register
+	 */
+	public void define(LispPackage pkg) {
+		this.packages.put(pkg.name(), pkg);
+		this.modifications++;
+	}
+
+	/**
+	 * A count that changes whenever a package is registered, replaced, removed, renamed
+	 * or nicknamed: what tells a caller watching the packages ({@link #packageRecords})
+	 * that one may have moved. The member table's own writes do not count.
+	 * @return the count
+	 */
+	public long modifications() {
+		return this.modifications;
+	}
+
+	/**
+	 * The registered packages by canonical name. A package changes by being registered
+	 * again as a new record, so a caller compares the records by identity.
+	 * @return a copy of the table
+	 */
+	public Map<String, LispPackage> packageRecords() {
+		return Map.copyOf(this.packages);
+	}
+
+	/**
+	 * Records that the package is one the compile image made by running code
+	 * ({@code .kb/packages.md}, "The compile image's packages"): the program's
+	 * {@code make-package} of its name is the call that made it.
+	 * @param canonicalName the canonical package name
+	 */
+	public void markImagePackage(String canonicalName) {
+		this.imagePackages.add(canonicalName);
+	}
+
+	/**
+	 * Whether {@link #markImagePackage} recorded the package.
+	 * @param canonicalName the canonical package name
+	 * @return {@code true} for a package the compile image made
+	 */
+	public boolean isImagePackage(String canonicalName) {
+		return this.imagePackages.contains(canonicalName);
+	}
+
+	/**
+	 * Registers a nickname for a package, so the nickname resolves everywhere the
+	 * canonical name does.
+	 * @param nickname the nickname
+	 * @param packageName the canonical package name
+	 */
+	public void defineNickname(String nickname, String packageName) {
+		this.nicknames.put(nickname, packageName);
+		this.modifications++;
+	}
+
+	/**
+	 * A package's own nicknames (the SBCL package-local-nicknames extension), nickname to
+	 * target, in nickname order.
+	 * @param canonicalName the canonical package name
+	 * @return the nicknames, empty when the package has none
+	 */
+	public SortedMap<String, String> localNicknames(String canonicalName) {
+		SortedMap<String, String> table = this.localNicknames.get(canonicalName);
+		return table == null ? EMPTY_LOCAL_NICKNAMES : table;
+	}
+
+	/**
+	 * Gives a package a nickname of its own, or takes it away.
+	 * @param canonicalName the canonical package name
+	 * @param nickname the nickname, compared verbatim
+	 * @param target the canonical name of the package it names, or {@code null} to remove
+	 * it
+	 * @return {@code true} when the package had the nickname before
+	 */
+	public boolean putLocalNickname(String canonicalName, String nickname, @Nullable String target) {
+		if (target == null) {
+			SortedMap<String, String> table = this.localNicknames.get(canonicalName);
+			return table != null && table.remove(nickname) != null;
+		}
+		return this.localNicknames.computeIfAbsent(canonicalName, k -> new TreeMap<>()).put(nickname, target) != null;
+	}
+
+	/**
+	 * Forgets a package's own nicknames: a {@code defpackage} over the package states
+	 * them all.
+	 * @param canonicalName the canonical package name
+	 */
+	public void clearLocalNicknames(String canonicalName) {
+		this.localNicknames.remove(canonicalName);
+	}
+
+	/**
+	 * Resolves a package designator to the canonical package name: a registered nickname
+	 * maps to the package it names, any other name is returned unchanged.
+	 * @param name the package name or nickname
+	 * @return the canonical package name
+	 */
+	public String canonicalName(String name) {
+		return this.nicknames.getOrDefault(name, name);
+	}
+
+	/**
+	 * Returns the package with the given name (or nickname).
+	 * @param name the package name
+	 * @return the package
+	 * @throws LispPackageException if no such package is registered
+	 */
+	public LispPackage get(String name) {
+		LispPackage pkg = this.packages.get(canonicalName(name));
+		if (pkg == null) {
+			throw new LispPackageException("No such package: " + name);
+		}
+		return pkg;
+	}
+
+	/**
+	 * Every designator that names a registered package -- each canonical name plus every
+	 * nickname pointing at one -- mapped to that package's canonical name. Backs the
+	 * runtime {@code find-package} table the compile paths bake in: the compiled runtimes
+	 * have no registry, so the answer for a COMPUTED designator has to be carried over
+	 * from compile time.
+	 * @return the designator-to-canonical-name table
+	 */
+	public Map<String, String> designatorTable() {
+		Map<String, String> table = new HashMap<>();
+		for (String name : this.packages.keySet()) {
+			table.put(name, name);
+		}
+		this.nicknames.forEach((nickname, target) -> {
+			if (this.packages.containsKey(target)) {
+				table.put(nickname, target);
+			}
+		});
+		return table;
+	}
+
+	/**
+	 * Returns whether a package with the given name (or nickname) is registered.
+	 * @param name the package name
+	 * @return {@code true} if the package exists
+	 */
+	public boolean contains(String name) {
+		return this.packages.containsKey(canonicalName(name));
+	}
+
+	/**
+	 * Removes a package registration (the runtime {@code delete-package}): the package
+	 * itself and every nickname pointing at it. Seeded built-in nicknames are never
+	 * stored per-package (they live in the static table), so deleting a package cannot
+	 * orphan one.
+	 * @param canonicalName the canonical package name
+	 * @return {@code true} when a registration was removed
+	 */
+	public boolean remove(String canonicalName) {
+		if (this.packages.remove(canonicalName) == null) {
+			return false;
+		}
+		this.modifications++;
+		this.nicknames.entrySet().removeIf(entry -> entry.getValue().equals(canonicalName));
+		this.localNicknames.remove(canonicalName);
+		this.localNicknames.values().forEach(table -> table.values().removeIf(canonicalName::equals));
+		this.runtimePackages.remove(canonicalName);
+		this.unhomed.remove(canonicalName);
+		this.recorded.remove(canonicalName);
+		this.sealed.remove(canonicalName);
+		this.imagePackages.remove(canonicalName);
+		return true;
+	}
+
+	/**
+	 * Marks a freshly created package as fully described by its member table (see
+	 * {@link #sealed}).
+	 * @param canonicalName the canonical package name
+	 */
+	public void markSealed(String canonicalName) {
+		this.sealed.add(canonicalName);
+	}
+
+	/**
+	 * Records that source minted a name in the package: its member table no longer
+	 * answers for every symbol CL would find there (see {@link #sealed}).
+	 * @param canonicalName the canonical package name
+	 */
+	public void unseal(String canonicalName) {
+		if (!this.sealed.isEmpty()) {
+			this.sealed.remove(canonicalName);
+		}
+	}
+
+	/**
+	 * Whether the package's member table is the whole of it (see {@link #sealed}).
+	 * @param canonicalName the canonical package name
+	 * @return {@code true} when a name absent from the table is absent from the package
+	 */
+	public boolean isSealed(String canonicalName) {
+		return this.sealed.contains(canonicalName);
+	}
+
+	/**
+	 * Records that the runtime {@code intern} (or {@code shadow}, or a recording reader)
+	 * minted the member {@code name} in the package (see {@link #recorded}).
+	 * @param canonicalName the canonical package name
+	 * @param name the member name
+	 */
+	public void markRecorded(String canonicalName, String name) {
+		this.recorded.computeIfAbsent(canonicalName, k -> new HashSet<>()).add(name);
+	}
+
+	/**
+	 * Every member {@link #markRecorded} recorded, by package, in a stable order.
+	 * @return the member names by canonical package name
+	 */
+	public Map<String, Set<String>> recordedMembers() {
+		Map<String, Set<String>> members = new java.util.TreeMap<>();
+		this.recorded.forEach((pkg, names) -> {
+			if (!names.isEmpty()) {
+				members.put(pkg, new java.util.TreeSet<>(names));
+			}
+		});
+		return members;
+	}
+
+	/**
+	 * Forgets a runtime-minted member ({@code unintern} took it out).
+	 * @param canonicalName the canonical package name
+	 * @param name the member name
+	 */
+	public void unrecord(String canonicalName, String name) {
+		Set<String> names = this.recorded.get(canonicalName);
+		if (names != null) {
+			names.remove(name);
+		}
+	}
+
+	/**
+	 * Whether the member was minted by the runtime {@code intern} (or {@code shadow}, or
+	 * a recording reader) rather than declared -- the names the case-fold retries must
+	 * not reach.
+	 * @param canonicalName the canonical package name
+	 * @param name the member name
+	 * @return {@code true} for a runtime-minted member
+	 */
+	public boolean isRecorded(String canonicalName, String name) {
+		Set<String> names = this.recorded.get(canonicalName);
+		return names != null && names.contains(name);
+	}
+
+	/**
+	 * Records that {@code unintern} removed the package's own member {@code name}: the
+	 * symbol spelled with that home is no longer homed there (see {@link #unhomed}).
+	 * @param canonicalName the canonical package name
+	 * @param name the member name
+	 */
+	public void markUnhomed(String canonicalName, String name) {
+		this.unhomed.computeIfAbsent(canonicalName, k -> new HashSet<>()).add(name);
+	}
+
+	/**
+	 * Homes a member again (an {@code intern} of the name after an {@code unintern}).
+	 * @param canonicalName the canonical package name
+	 * @param name the member name
+	 */
+	public void rehome(String canonicalName, String name) {
+		Set<String> names = this.unhomed.get(canonicalName);
+		if (names != null) {
+			names.remove(name);
+		}
+	}
+
+	/**
+	 * Whether {@code unintern} removed the package's own member {@code name} and nothing
+	 * has interned it since.
+	 * @param canonicalName the canonical package name
+	 * @param name the member name
+	 * @return {@code true} when the symbol spelled with that home has no home
+	 */
+	public boolean isUnhomed(String canonicalName, String name) {
+		Set<String> names = this.unhomed.get(canonicalName);
+		return names != null && names.contains(name);
+	}
+
+	/**
+	 * Re-registers a package under a new canonical name (the runtime
+	 * {@code rename-package}): the same use list, symbols, externals, imports and shadows
+	 * travel, every old nickname is dropped, and {@code newNicknames} are registered for
+	 * the new name.
+	 * @param oldName the current canonical package name
+	 * @param newName the new canonical package name
+	 * @param newNicknames the nicknames replacing the old ones
+	 */
+	public void rename(String oldName, String newName, java.util.Collection<String> newNicknames) {
+		LispPackage pkg = this.packages.remove(oldName);
+		if (pkg == null) {
+			throw new LispPackageException("No such package: " + oldName);
+		}
+		this.modifications++;
+		this.nicknames.entrySet().removeIf(entry -> entry.getValue().equals(oldName));
+		boolean runtime = this.runtimePackages.remove(oldName);
+		this.packages.put(newName,
+				new LispPackage(newName, pkg.useList(), pkg.symbols(), pkg.externals(), pkg.imports(), pkg.shadows()));
+		for (String nickname : newNicknames) {
+			this.nicknames.put(nickname, newName);
+		}
+		SortedMap<String, String> ownNicknames = this.localNicknames.remove(oldName);
+		if (ownNicknames != null) {
+			this.localNicknames.put(newName, ownNicknames);
+		}
+		this.localNicknames.values().forEach(table -> table.replaceAll((k, v) -> v.equals(oldName) ? newName : v));
+		if (runtime) {
+			this.runtimePackages.add(newName);
+		}
+		Set<String> names = this.unhomed.remove(oldName);
+		if (names != null) {
+			this.unhomed.put(newName, names);
+		}
+		Set<String> minted = this.recorded.remove(oldName);
+		if (minted != null) {
+			this.recorded.put(newName, minted);
+		}
+		if (this.sealed.remove(oldName)) {
+			this.sealed.add(newName);
+		}
+		if (this.imagePackages.remove(oldName)) {
+			this.imagePackages.add(newName);
+		}
+	}
+
+	/**
+	 * Marks a package name as runtime-tier (created by {@code make-package} rather than
+	 * established at read/compile time). Only marked packages may be renamed or deleted:
+	 * the read/compile-time registry is what every backend resolved against, so mutating
+	 * it at run time would orphan the compiled spellings.
+	 * @param canonicalName the canonical package name
+	 */
+	public void markRuntimePackage(String canonicalName) {
+		this.runtimePackages.add(canonicalName);
+	}
+
+	/**
+	 * Returns whether the named package is runtime-tier (see
+	 * {@link #markRuntimePackage(String)}).
+	 * @param canonicalName the canonical package name
+	 * @return {@code true} when a runtime {@code make-package} created it
+	 */
+	public boolean isRuntimePackage(String canonicalName) {
+		return this.runtimePackages.contains(canonicalName);
+	}
+
+	/**
+	 * The nicknames currently registered for a canonical package name, in a deterministic
+	 * order. Backs the runtime {@code package-nicknames}: seeded built-in nicknames are
+	 * instance state (copied from the static table at construction), so they are listed
+	 * like user {@code defpackage :nicknames}.
+	 * @param canonicalName the canonical package name
+	 * @return the nickname spellings
+	 */
+	public java.util.List<String> nicknamesFor(String canonicalName) {
+		java.util.List<String> out = new java.util.ArrayList<>();
+		this.nicknames.forEach((nickname, target) -> {
+			if (target.equals(canonicalName)) {
+				out.add(nickname);
+			}
+		});
+		out.sort(String::compareTo);
+		return out;
+	}
+
+	/**
+	 * Returns whether the given name is a symbol owned by the {@code cl} package (a
+	 * standard function, macro, special form or variable, including car/cdr
+	 * compositions).
+	 * @param name the symbol name
+	 * @return {@code true} if the name is a {@code cl} symbol
+	 */
+	public static boolean isClSymbol(String name) {
+		return CL_SYMBOLS.contains(name) || LispNames.isCarCdrComposition(name);
+	}
+
+	/**
+	 * Returns whether the name is one of {@code cl}'s implementation-internal names --
+	 * spelled by the expansions and runtimes rontolisp generates, never by a program.
+	 * @param name the symbol name
+	 * @return true for an internal name
+	 */
+	public static boolean isClInternal(String name) {
+		return CL_INTERNALS.contains(name);
+	}
+
+	/**
+	 * Returns whether the name is a standard lambda-list keyword.
+	 * @param name the symbol name
+	 * @return true for one of the names in {@code lambda-list-keywords}
+	 */
+	public static boolean isClLambdaListKeyword(String name) {
+		return CL_LAMBDA_LIST_KEYWORDS.contains(name);
+	}
+
+	/**
+	 * Returns whether the name is {@code cl}'s whatever package reads it, one that uses
+	 * no {@code cl} included: an implementation-internal name, which expansions inject
+	 * into whatever package they run in; a lambda-list keyword, which their lambda lists
+	 * spell; and {@code quote}, the special form to the resolver in every package, so
+	 * that a variable named {@code quote} is one symbol with it.
+	 * @param name the bare symbol name
+	 * @return whether no package reads the name as a symbol of its own by default
+	 */
+	public static boolean readsClInEveryPackage(String name) {
+		return isClInternal(name) || isClLambdaListKeyword(name) || LispNames.QUOTE.equals(name);
+	}
+
+	/**
+	 * Returns whether the name is one {@code cl} exports that the standard does not:
+	 * rontolisp's own {@code while}. A portable library may own a symbol of that name
+	 * (parenscript, iterate, arnesi and for export one), so {@code cl}'s yields to it: a
+	 * package's own symbol and one inherited from another used package win over the
+	 * {@code cl} one, as when {@code cl} does not export the name at all.
+	 * @param name the symbol name
+	 * @return {@code true} for a {@code cl} extension name
+	 */
+	public static boolean isClExtensionName(String name) {
+		return LispNames.WHILE.equals(name);
+	}
+
+	/**
+	 * The variables the standard defines for a program, for a compile path that has to
+	 * seed them all: the {@code cl} variables without the REPL's {@code *}, {@code +} and
+	 * {@code /} families, which only the listener binds.
+	 * @return the variable names
+	 */
+	public static Set<String> standardVariableNames() {
+		Set<String> names = new HashSet<>(CL_VARIABLES);
+		LispNames.REPL_VARIABLES.forEach(names::remove);
+		return names;
+	}
+
+	/**
+	 * Returns whether the {@code cl} package ANSWERS for the given name -- the question
+	 * {@code find-symbol} / {@code intern} / {@code do-external-symbols} ask, which is
+	 * wider than {@link #isClSymbol}: it also admits the standard names the package
+	 * exports without implementing ({@link #CL_EXPORTED_ONLY}). Resolution never asks
+	 * this; a reference to such a name still interns in the current package and still
+	 * signals an undefined function when called.
+	 * @param name the symbol name
+	 * @return {@code true} if the {@code cl} package provides the name
+	 */
+	public static boolean isClMemberName(String name) {
+		return isClSymbol(name) || CL_EXPORTED_ONLY.contains(name);
+	}
+
+	/**
+	 * What the report of a name that named nothing adds when the name is a package's own
+	 * internal symbol spelled like a standard one. A package that uses no {@code cl} or
+	 * shadows the name reads {@code car} as its own symbol, a legitimate parameter or
+	 * definition, so only the report of a call or a read that found nothing can say it
+	 * was probably meant as {@code cl}'s. An exported symbol is the package's on purpose,
+	 * and a name {@code cl} has no definition of would not help.
+	 * @param spelling the name's canonical spelling
+	 * @return {@code " (use CL:CAR)"}, or the empty string for any other name
+	 */
+	public static String standardNameAdvice(String spelling) {
+		QualifiedName qn = splitQualified(spelling);
+		return qn != null && qn.internal() && isClSymbol(qn.member()) && !isClInternal(qn.member())
+				? " (use " + qualify(LispNames.CL_PKG, qn.member()) + ")" : "";
+	}
+
+	/** The names {@code cl} exports, sorted. */
+	private static final List<String> STANDARD_NAMES = List.copyOf(new java.util.TreeSet<>(CL_EXTERNALS));
+
+	/**
+	 * Returns the names the {@code cl} package exports -- what a package using {@code cl}
+	 * inherits, and what the compiled runtime's table of the standard names holds --
+	 * sorted.
+	 * @return the exported {@code cl} names
+	 */
+	public static List<String> standardNames() {
+		return STANDARD_NAMES;
+	}
+
+	/**
+	 * Returns whether {@code cl} exports the name, what {@link #standardNames} lists.
+	 * @param name the symbol name
+	 * @return whether the name is exported from {@code cl}
+	 */
+	public static boolean isStandardName(String name) {
+		return isClMemberName(name) && !isClInternal(name);
+	}
+
+	/**
+	 * Returns the standard names the {@code cl} package exports without implementing.
+	 * @return the export-only standard names
+	 */
+	public static Set<String> clExportedOnlyNames() {
+		return CL_EXPORTED_ONLY;
+	}
+
+	/**
+	 * Returns the fixed set of {@code cl}-package symbol names (functions, macros,
+	 * special forms, variables, type specifiers). Excludes the car/cdr compositions,
+	 * which are a pattern rather than a set (see {@link LispNames#isCarCdrComposition}).
+	 * @return the {@code cl} symbol names
+	 */
+	public static Set<String> clSymbols() {
+		return CL_SYMBOLS;
+	}
+
+	/**
+	 * Returns the (lowercase) names of every built-in package plus every built-in
+	 * nickname -- exactly the names {@link #isBuiltinPackageName} accepts. Used by the
+	 * upcase reader's canonical fold and by the compiled backends' baked fold set.
+	 * @return the built-in package and nickname names
+	 */
+	public static Set<String> builtinPackageAndNicknameNames() {
+		Set<String> names = new HashSet<>(BUILTIN_PACKAGE_NAMES);
+		names.addAll(BUILTIN_NICKNAMES.keySet());
+		return names;
+	}
+
+	/**
+	 * Composes a package-qualified symbol name for an external symbol, e.g.
+	 * {@code qualify("rontolisp", "version")} yields {@code "rontolisp:version"}.
+	 * @param pkg the package name
+	 * @param member the member symbol name
+	 * @return the qualified name
+	 */
+	public static String qualify(String pkg, String member) {
+		return pkg + ":" + member;
+	}
+
+	/**
+	 * Composes a package-qualified symbol name for an internal (non-exported) symbol,
+	 * e.g. {@code qualifyInternal("rontolisp", "%json-parse")} yields
+	 * {@code "rontolisp::%json-parse"}.
+	 * @param pkg the package name
+	 * @param member the member symbol name
+	 * @return the qualified name
+	 */
+	public static String qualifyInternal(String pkg, String member) {
+		return pkg + "::" + member;
+	}
+
+	/**
+	 * Returns every spelling {@code name} can be written as: both colon spellings of a
+	 * package-qualified name (external {@code pkg:member} first, then internal
+	 * {@code pkg::member}), or the name alone when it is not qualified.
+	 * <p>
+	 * A {@link List} rather than a {@code Set} on purpose: the pruners that ask this
+	 * question carry the answer around in their data model, and a {@code Set.of} of two
+	 * elements iterates in a per-JVM-run order, which is the exact ingredient of the
+	 * emitted-output bugs {@code .kb/emitted-output-determinism.md} records. The order
+	 * here is fixed and costs nothing.
+	 * @param name the symbol name, qualified or not
+	 * @return the spellings, in a fixed order
+	 */
+	public static List<String> spellings(String name) {
+		QualifiedName qn = splitQualified(name);
+		if (qn == null) {
+			return List.of(name);
+		}
+		return List.of(qualify(qn.pkg(), qn.member()), qualifyInternal(qn.pkg(), qn.member()));
+	}
+
+	/**
+	 * Returns whether the given (lowercase) name is a built-in package name or built-in
+	 * nickname. Static, like {@link #canonicalBuiltinName}: user {@code defpackage}
+	 * packages are unknown here, which is exactly what the upcase reader mode needs (a
+	 * user package spelled in source keeps its upcased spelling everywhere, so it stays
+	 * self-consistent).
+	 * @param name the candidate package name, already lowercased
+	 * @return {@code true} if it names a built-in package or nickname
+	 */
+	public static boolean isBuiltinPackageName(String name) {
+		return BUILTIN_PACKAGE_NAMES.contains(name) || BUILTIN_NICKNAMES.containsKey(name);
+	}
+
+	/**
+	 * Resolves a built-in package nickname to the canonical package name ({@code rl} to
+	 * {@code rontolisp}, {@code la} to {@code linalg}, ...); any other name is returned
+	 * unchanged. Unlike the instance {@link #canonicalName(String)} it knows nothing of
+	 * user {@code defpackage :nicknames}, so it is safe for the compile-path pre-passes
+	 * that scan the program before package resolution runs.
+	 * @param name the package name or built-in nickname
+	 * @return the canonical package name
+	 */
+	public static String canonicalBuiltinName(String name) {
+		return BUILTIN_NICKNAMES.getOrDefault(name, name);
+	}
+
+	/**
+	 * Splits a package-qualified symbol name into its package and member parts. A single
+	 * colon ({@code pkg:name}) references an external symbol, a double colon
+	 * ({@code pkg::name}) an internal one, mirroring Common Lisp. Returns {@code null}
+	 * for unqualified names and for keywords (a leading {@code :}). A built-in nickname
+	 * in the package part is normalized to the canonical name ({@code rl:version} splits
+	 * to {@code rontolisp}/{@code version}), so every pass that matches
+	 * {@link QualifiedName#pkg()} against a built-in package sees one spelling — user
+	 * {@code defpackage :nicknames} are instead resolved by {@code PackageResolver}
+	 * through the instance {@link #canonicalName(String)}.
+	 * @param name the symbol name
+	 * @return the split parts, or {@code null} if the name is not package-qualified
+	 */
+	public static @Nullable QualifiedName splitQualified(String name) {
+		if (name.startsWith("#:")) {
+			// A gensym-style "uninterned" symbol (#:g1): not package-qualified.
+			return null;
+		}
+		int idx = name.indexOf(':');
+		if (idx <= 0) {
+			// No colon, or a leading colon (keyword): not package-qualified.
+			return null;
+		}
+		QualifiedName known = SPLITS.get(name);
+		if (known != null) {
+			return known;
+		}
+		String pkg = canonicalBuiltinName(name.substring(name.charAt(0) == GLOBAL_QUALIFIER ? 1 : 0, idx));
+		QualifiedName split = idx + 1 < name.length() && name.charAt(idx + 1) == ':'
+				? new QualifiedName(pkg, name.substring(idx + 2), true)
+				: new QualifiedName(pkg, name.substring(idx + 1), false);
+		if (SPLITS.size() >= SPLIT_CACHE_LIMIT) {
+			SPLITS.clear();
+		}
+		SPLITS.put(name, split);
+		return split;
+	}
+
+	/**
+	 * The mark in front of a package-qualified spelling whose qualifier is a global
+	 * package name whatever nicknames the current package has: no reader produces it, and
+	 * {@link #splitQualified} reads past it. A symbol travels between the compile path's
+	 * passes as its spelling and each pass's resolver reads it again, which a package's
+	 * own nickname named like a real package would capture ({@code .kb/packages.md},
+	 * "Package-local nicknames").
+	 */
+	public static final char GLOBAL_QUALIFIER = '';
+
+	/**
+	 * The qualifier the source reader spells in front of a token whose colons were all
+	 * escaped ({@code |a:b|}, {@code a\:b}): it has no package marker, so it names a
+	 * member of the package it is read in, which only the resolver knows. Spelled as an
+	 * internal qualifier ({@link #currentPackageSpelling}), so that what reads a member
+	 * name ahead of the resolver ({@link #splitQualified}, {@code LispSymbol.memberName})
+	 * answers the whole name; the resolver reads it as a bare token of that name. Nothing
+	 * else produces it.
+	 */
+	public static final String CURRENT_PACKAGE_QUALIFIER = "";
+
+	/**
+	 * The spelling the source reader gives a token naming {@code member} in the current
+	 * package although the name holds a colon ({@link #CURRENT_PACKAGE_QUALIFIER}).
+	 * @param member the member name, colons and all
+	 * @return the spelling
+	 */
+	public static String currentPackageSpelling(String member) {
+		return CURRENT_PACKAGE_QUALIFIER + "::" + member;
+	}
+
+	/**
+	 * A package-qualified symbol name split into its package and member parts.
+	 *
+	 * @param pkg the package part
+	 * @param member the member symbol part
+	 * @param internal whether the double-colon qualifier was used ({@code pkg::member}),
+	 * granting access to internal (non-exported) symbols
+	 */
+	public record QualifiedName(String pkg, String member, boolean internal) {
+	}
+
+}

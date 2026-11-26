@@ -1,0 +1,31 @@
+# defpackage
+
+`(defpackage name (:use package...) (:export symbol...) (:nicknames name...) (:import-from package symbol...) (:local-nicknames (nick actual)...))`
+
+`name` という名前の新しいパッケージを定義し、そのパッケージ -- すなわちそのキーワードで、[`find-package`](../functions/find-package.md) や [`make-package`](../functions/make-package.md) が返すのと同じオブジェクト -- を返します。`in-package` と同様に、read/コンパイル時に消費されるリテラルなトップレベルディレクティブであり、パッケージはソース順に定義されます。名前と clause の引数はキーワード、裸のシンボル、文字列、または uninterned シンボルです(`:mypkg`、`mypkg`、`"mypkg"`、`#:mypkg` — 最後がポータブルな defpackage の慣用形です)。シンボルはその名前だけを表すので、パッケージ修飾付きのシンボルは修飾なしの名前と同じものを指します: `(:shadow cl:let)` は `let` を shadow します。
+
+- `(:use package...)` は、列挙したパッケージの external(export 済み)シンボルを修飾なしで見えるようにします。使用するパッケージは先に存在していなければなりません。`:use` clause がない場合、修飾なしで見えるものは **何もありません** — 標準シンボルを `cl:` プレフィックスなしで使うには `(:use :cl)` と書きます。`common-lisp` と `common-lisp-user` は `cl` と `cl-user` の組み込みニックネームなので、`(:use #:common-lisp)` も動作します。
+- `(:export symbol...)` はパッケージの external シンボルを宣言します: 他のパッケージから `name:symbol` として参照でき、このパッケージを使用するパッケージに継承されます。後から intern されるシンボル(例えば `(in-package name)` の下で定義され `:export` clause に含まれない `defun`)は internal であり、ダブルコロン `name::symbol` が必要です。パッケージが定義せずに継承している名前(`cl` 経由の標準名や使用先パッケージの export)は再エクスポートされるので、`(:use :cl) (:export #:car)` では `name:car` が標準の `car` になります。
+- `(:nicknames name...)` はパッケージの別名を登録します。ニックネームは正規名が解決されるすべての場所で解決されます。既存のパッケージ(またはニックネーム)と衝突するニックネームはエラーです。組み込みニックネーム — `common-lisp` と `common-lisp-user`(`cl`/`cl-user`)、`rl`(`rontolisp`)、`la`(`linalg`)、`quicklisp`(`ql`)— も組み込みパッケージ名と同様に予約されています。
+- `(:import-from package symbol...)` は、パッケージ全体を use せずに `package` の指定シンボルだけを修飾なしで見えるようにします。解決はテキストベースです: import された名前はソースパッケージの正規表記に解決されるので、`(:import-from #:common-lisp #:car)` は何も use しないパッケージに `car` だけを与えます。
+- `(:local-nicknames (nick actual)...)` は、**このパッケージ**が別のパッケージを呼ぶための自分専用の名前を定義します(SBCL の拡張。`defpackage` の外では [`uiop:add-package-local-nickname`](../functions/uiop-add-package-local-nickname.md))。このパッケージがカレントのとき、`nick:symbol` は `actual:symbol` として読まれ、パッケージ指示子 `nick` は `actual` を指し、`actual` のシンボルは `nick:symbol` と印字されます。他のパッケージではこのニックネームに意味がないので、2 つのパッケージが同じニックネームで別々のパッケージを指せます。別のパッケージやニックネームと同じ名前(`bt`、`uiop`)でもよく、このパッケージの中ではニックネームが優先します。`actual` は既に存在するか、このパッケージ自身である必要があります。`cl`、`common-lisp`、`keyword` とこのパッケージ自身の名前は拒否され、1 つのニックネームに 2 つ目の対象を与えることも拒否されます。
+- `(:shadow symbol...)` と `(:shadowing-import-from package symbol...)` は、指定シンボルをパッケージ内で自分自身(または指定パッケージ)のシンボルに解決させます。`cl` テーブルや use リストより優先されます。`(:intern symbol...)` は export せずにパッケージが**所有する**名前を追加するので、`name::symbol` では届き `name:symbol` では届きません。
+- `(:documentation "...")` と `(:size n)` は受理されますが無視されます。
+
+既に存在するパッケージを名前に指定した `defpackage` は、Common Lisp の規定どおりそのパッケージを **変更** します。clause は既存の内容にマージされるので、先の定義が宣言したものは失われません。ただしローカルニックネームは定義ごとにすべて指定し直すもので、この clause のない定義のパッケージはローカルニックネームを持ちません。(他のパッケージの *nickname* を名前に指定した場合は依然としてエラーです — それを通して変更すると、別名のパッケージに定義が黙って適用されてしまうためです。)その他の clause はエラーです。トップレベルでない `defpackage` は、それを囲むフォームが実行されたときにパッケージを登録します — インタープリタのみで、コンパイル済みバックエンドは実行時にレジストリを持たないため拒否します。完全なルールは[パッケージ](../packages.md#user-defined-packages-defpackage)を参照してください。
+
+```lisp
+(defpackage :util (:use :cl) (:export :trim)) ; => :UTIL
+```
+
+```lisp
+(defpackage #:mypkg
+  (:use #:common-lisp)
+  (:nicknames #:mp)
+  (:import-from #:rontolisp #:version)
+  (:export #:greet))
+(in-package :mypkg)
+(defun greet (name) (concatenate 'string "hello, " name))
+(in-package :cl-user)
+(mp:greet "world") ; => "hello, world"
+```

@@ -1,0 +1,24 @@
+package example:pipeline;
+
+/// The text emphasizer. Implemented by the Rust component and called by the Lisp
+/// app. `emphasize` uppercases the text and appends one `!` per vowel -- and it
+/// learns the vowel count by calling back into a Lisp component, so a single call
+/// crosses the language boundary twice.
+interface shout {
+  emphasize: func(text: string) -> string;
+}
+
+/// The Rust shouter's world. It EXPORTS the `shout` interface (what the Lisp app
+/// imports), and IMPORTS a plain `vowel-count` function (what a Lisp component
+/// supplies). So the Rust component is on both sides of the boundary.
+world shouter {
+  export shout;
+  import vowel-count: func(text: string) -> s32;
+}
+
+/// The Lisp statistician's world. It EXPORTS `vowel-count` as a plain function --
+/// exactly the shape the Rust world above imports. (The Lisp app needs no world:
+/// `rontolisp:wit-import` binds the `shout` interface directly.)
+world statistician {
+  export vowel-count: func(text: string) -> s32;
+}

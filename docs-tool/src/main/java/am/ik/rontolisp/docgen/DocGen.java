@@ -1,0 +1,484 @@
+package am.ik.rontolisp.docgen;
+
+import java.io.IOException;
+import java.io.UncheckedIOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import java.util.stream.Stream;
+
+import com.vladsch.flexmark.html.HtmlRenderer;
+import com.vladsch.flexmark.parser.Parser;
+import com.vladsch.flexmark.util.data.MutableDataSet;
+
+/**
+ * Documentation site generator. Converts the Markdown under a source tree into a static
+ * HTML site with a dark theme, sidebar navigation, previous/next links, and interactive
+ * runnable Lisp examples.
+ *
+ * <p>
+ * Layout of the source tree:
+ *
+ * <pre>
+ * doc/
+ *   assets/           shared CSS/JS (copied verbatim to &lt;out&gt;/assets)
+ *   en/ nav.yaml + **&#47;*.md     one directory per language (auto-detected)
+ *   ja/ ...
+ * </pre>
+ *
+ * Each language directory that contains a {@code nav.yaml} becomes a localized site under
+ * {@code <out>/<lang>/}. The default language also gets a redirect at
+ * {@code <out>/index.html}. Markdown links to {@code *.md} are rewritten to
+ * {@code *.html}. Each language also gets the two files of its client-side search index
+ * ({@link SearchIndex}).
+ *
+ * <p>
+ * Usage:
+ *
+ * <pre>
+ * java -jar rontolisp-docgen.jar --source doc --out web/dist/docs [--default-lang en]
+ * </pre>
+ */
+public final class DocGen {
+
+	private static final Pattern MD_LINK = Pattern.compile("href=\"([^\"]*?)\\.md(#[^\"]*)?\"");
+
+	private static final Pattern HEADING_ID = Pattern.compile("(<h[1-6]\\b[^>]*\\bid=\")([^\"]*)(\")");
+
+	private final Path source;
+
+	private final Path out;
+
+	private final String defaultLang;
+
+	private final Parser parser;
+
+	private final HtmlRenderer renderer;
+
+	/**
+	 * The heading anchors of the reference language, keyed by the doc-relative Markdown
+	 * path. A translated page keeps its own heading TEXT but takes these anchors: a
+	 * cross-page link is written once as {@code page.md#anchor} and mirrored verbatim
+	 * into every language tree, so an anchor slugged from the translated heading would
+	 * resolve in one tree only.
+	 */
+	private final Map<String, List<String>> referenceHeadingIds = new HashMap<>();
+
+	/** The language whose anchors every other language adopts. */
+	private String referenceLang;
+
+	/**
+	 * The client-side search index of the language currently being generated. Every page
+	 * rendered by this generator feeds it, and it is written out when the language is
+	 * done -- one index per tree, because a search never crosses languages.
+	 */
+	private SearchIndex searchIndex;
+
+	public DocGen(Path source, Path out, String defaultLang) {
+		this.source = source;
+		this.out = out;
+		this.defaultLang = defaultLang;
+		MutableDataSet options = Markdown.options();
+		this.parser = Parser.builder(options).build();
+		this.renderer = HtmlRenderer.builder(options).build();
+	}
+
+	public static void main(String[] args) throws IOException {
+		// `skill` selects the agent-skill bundle instead of the HTML site; both
+		// modes read the same doc/ tree, so they share this entry point.
+		if (args.length > 0 && "skill".equals(args[0])) {
+			SkillGen.main(java.util.Arrays.copyOfRange(args, 1, args.length));
+			return;
+		}
+		Path source = Path.of("doc");
+		Path out = Path.of("web/dist/docs");
+		String defaultLang = "en";
+		for (int i = 0; i < args.length - 1; i++) {
+			switch (args[i]) {
+				case "--source" -> source = Path.of(args[++i]);
+				case "--out" -> out = Path.of(args[++i]);
+				case "--default-lang" -> defaultLang = args[++i];
+				default -> {
+				}
+			}
+		}
+		new DocGen(source, out, defaultLang).generate();
+	}
+
+	/** Generates the whole site for every detected language. */
+	public void generate() throws IOException {
+		List<String> languages = detectLanguages();
+		if (languages.isEmpty()) {
+			throw new IOException("No language directories with nav.yaml found under " + this.source);
+		}
+		List<HtmlTemplate.Language> languageList = languages.stream()
+			.map(code -> new HtmlTemplate.Language(code, displayName(code)))
+			.toList();
+
+		Files.createDirectories(this.out);
+		copyAssets();
+
+		// The default language sorts first, so it is rendered before any tree that
+		// has to adopt its anchors.
+		this.referenceLang = languages.get(0);
+		for (String lang : languages) {
+			generateLanguage(lang, languageList);
+		}
+
+		String home = languages.contains(this.defaultLang) ? this.defaultLang : languages.get(0);
+		writeIndexRedirect(home);
+		System.out.println("Generated docs for " + languages + " into " + this.out);
+	}
+
+	private List<String> detectLanguages() throws IOException {
+		try (Stream<Path> entries = Files.list(this.source)) {
+			return entries.filter(Files::isDirectory)
+				.filter(dir -> !dir.getFileName().toString().equals("assets"))
+				.filter(dir -> Files.exists(dir.resolve("nav.yaml")))
+				.map(dir -> dir.getFileName().toString())
+				.sorted(byDefaultFirst())
+				.toList();
+		}
+	}
+
+	private Comparator<String> byDefaultFirst() {
+		return Comparator.comparing((String code) -> code.equals(this.defaultLang) ? 0 : 1).thenComparing(c -> c);
+	}
+
+	private void generateLanguage(String lang, List<HtmlTemplate.Language> languageList) throws IOException {
+		Path langDir = this.source.resolve(lang);
+		this.searchIndex = new SearchIndex(lang);
+		Nav nav = Nav.load(langDir.resolve("nav.yaml"));
+		List<Catalog> catalogs = Catalog.discover(langDir);
+		// Every index page a catalog's categories name (usually one, but a catalog may
+		// route several categories to their own per-package pages) is linked to its
+		// detail pages.
+		Map<String, Catalog> indexToCatalog = new HashMap<>();
+		for (Catalog catalog : catalogs) {
+			for (String indexPage : catalog.indexPages()) {
+				if (nav.findPage(indexPage).isEmpty()) {
+					throw new IOException("Catalog '" + catalog.baseDir() + "' names index_page '" + indexPage
+							+ "', which is not a page in " + lang + "/nav.yaml");
+				}
+				indexToCatalog.put(indexPage, catalog);
+			}
+		}
+		// A detail page and a table page at one path would overwrite each other's HTML.
+		for (Catalog catalog : catalogs) {
+			for (Catalog.Entry entry : catalog.flatEntries()) {
+				if (indexToCatalog.containsKey(catalog.mdFile(entry))) {
+					throw new IOException("Catalog '" + catalog.baseDir() + "' entry '" + entry.name()
+							+ "' has the slug of the index page " + catalog.mdFile(entry));
+				}
+			}
+		}
+
+		List<Nav.Page> pages = nav.flatPages();
+		for (int i = 0; i < pages.size(); i++) {
+			Nav.Page page = pages.get(i);
+			HtmlTemplate.Crumb prev = (i > 0) ? crumb(lang, pages.get(i - 1)) : null;
+			HtmlTemplate.Crumb next = (i < pages.size() - 1) ? crumb(lang, pages.get(i + 1)) : null;
+			renderNavPage(lang, nav, languageList, langDir, page, prev, next, indexToCatalog.get(page.file()));
+			renderSubpages(lang, nav, languageList, langDir, page, indexToCatalog);
+		}
+
+		for (Catalog catalog : catalogs) {
+			renderDetailPages(lang, nav, languageList, langDir, catalog);
+		}
+
+		this.searchIndex.write(this.out);
+	}
+
+	private void renderNavPage(String lang, Nav nav, List<HtmlTemplate.Language> languageList, Path langDir,
+			Nav.Page page, HtmlTemplate.Crumb prev, HtmlTemplate.Crumb next, Catalog catalog) throws IOException {
+		Path mdPath = langDir.resolve(page.file());
+		if (!Files.exists(mdPath)) {
+			throw new IOException("Missing Markdown source: " + mdPath);
+		}
+		String docPath = lang + "/" + replaceExtension(page.file());
+		String body = renderBody(Files.readString(mdPath, StandardCharsets.UTF_8), page.file(), lang, docPath,
+				page.title(), false);
+		// On a reference table page (functions/macros/special forms), link each
+		// operator name in the table to its detail page, so that one page is both
+		// the quick reference and the index of the detail pages.
+		if (catalog != null) {
+			body = TableLinkTransformer.transform(body, buildNameToSlug(catalog), catalog.linkPrefix(page.file()));
+		}
+		HtmlTemplate.PageContext ctx = new HtmlTemplate.PageContext(nav, lang, page.title(), docPath, page.file(),
+				docPath, body, TocBuilder.build(body), null, prev, next, languageList);
+		writePage(docPath, HtmlTemplate.render(ctx));
+	}
+
+	/**
+	 * Renders the sub-pages of a top-level nav page. They are reachable only through
+	 * their ancestors, so they get a back link to their immediate parent and a
+	 * previous/next chain of their own that starts there -- the same shape the
+	 * per-operator detail pages have, with the parent page standing in for the catalog
+	 * index. A subpage can ALSO be a catalog's index page (a per-package function table,
+	 * say), in which case its table names are linked to their detail pages exactly like a
+	 * top-level index page's.
+	 */
+	private void renderSubpages(String lang, Nav nav, List<HtmlTemplate.Language> languageList, Path langDir,
+			Nav.Page top, Map<String, Catalog> indexToCatalog) throws IOException {
+		renderSubpages(lang, nav, languageList, langDir, top, lang + "/" + replaceExtension(top.file()),
+				indexToCatalog);
+	}
+
+	/**
+	 * @param parent the immediate parent, whose page supplies the back link and starts
+	 * the previous/next chain
+	 * @param topDocPath the top-level ancestor's doc path -- subpages nest arbitrarily
+	 * deep, but the sidebar carries one row per TOPIC, so every descendant highlights
+	 * that one row regardless of nesting depth
+	 */
+	private void renderSubpages(String lang, Nav nav, List<HtmlTemplate.Language> languageList, Path langDir,
+			Nav.Page parent, String topDocPath, Map<String, Catalog> indexToCatalog) throws IOException {
+		List<Nav.Page> subpages = parent.subpages();
+		if (subpages.isEmpty()) {
+			return;
+		}
+		String parentDocPath = lang + "/" + replaceExtension(parent.file());
+		HtmlTemplate.Crumb backlink = new HtmlTemplate.Crumb(parentDocPath, parent.title());
+		for (int i = 0; i < subpages.size(); i++) {
+			Nav.Page page = subpages.get(i);
+			Path mdPath = langDir.resolve(page.file());
+			if (!Files.exists(mdPath)) {
+				throw new IOException("Missing Markdown source: " + mdPath);
+			}
+			String docPath = lang + "/" + replaceExtension(page.file());
+			HtmlTemplate.Crumb prev = (i > 0) ? crumb(lang, subpages.get(i - 1)) : backlink;
+			HtmlTemplate.Crumb next = (i < subpages.size() - 1) ? crumb(lang, subpages.get(i + 1)) : null;
+			String body = renderBody(Files.readString(mdPath, StandardCharsets.UTF_8), page.file(), lang, docPath,
+					page.title(), false);
+			Catalog catalog = indexToCatalog.get(page.file());
+			if (catalog != null) {
+				body = TableLinkTransformer.transform(body, buildNameToSlug(catalog), catalog.linkPrefix(page.file()));
+			}
+			HtmlTemplate.PageContext ctx = new HtmlTemplate.PageContext(nav, lang, page.title(), docPath, page.file(),
+					topDocPath, body, TocBuilder.build(body), backlink, prev, next, languageList);
+			writePage(docPath, HtmlTemplate.render(ctx));
+			renderSubpages(lang, nav, languageList, langDir, page, topDocPath, indexToCatalog);
+		}
+	}
+
+	/**
+	 * Renders every detail page of a catalog. Each entry's "back" link and title come
+	 * from its OWN category's index page, not a single page shared by the whole catalog
+	 * -- the previous/next chain still runs across every entry regardless of category.
+	 */
+	private void renderDetailPages(String lang, Nav nav, List<HtmlTemplate.Language> languageList, Path langDir,
+			Catalog catalog) throws IOException {
+		List<Catalog.EntryRef> refs = catalog.flatEntryRefs();
+		for (int i = 0; i < refs.size(); i++) {
+			Catalog.Entry entry = refs.get(i).entry();
+			String indexDocPath = lang + "/" + replaceExtension(refs.get(i).indexPage());
+			HtmlTemplate.Crumb backlink = new HtmlTemplate.Crumb(indexDocPath,
+					indexTitle(nav, refs.get(i).indexPage()));
+			Path mdPath = langDir.resolve(catalog.mdFile(entry));
+			if (!Files.exists(mdPath)) {
+				throw new IOException("Missing detail page: " + mdPath);
+			}
+			String docPath = lang + "/" + replaceExtension(catalog.mdFile(entry));
+			HtmlTemplate.Crumb prev = (i > 0) ? detailCrumb(lang, catalog, refs.get(i - 1).entry()) : backlink;
+			HtmlTemplate.Crumb next = (i < refs.size() - 1) ? detailCrumb(lang, catalog, refs.get(i + 1).entry())
+					: null;
+			String detailBody = renderBody(Files.readString(mdPath, StandardCharsets.UTF_8), catalog.mdFile(entry),
+					lang, docPath, entry.name(), true, catalog.label());
+			HtmlTemplate.PageContext ctx = new HtmlTemplate.PageContext(nav, lang, entry.name(), docPath,
+					catalog.mdFile(entry), indexDocPath, detailBody, TocBuilder.build(detailBody), backlink, prev, next,
+					languageList);
+			writePage(docPath, HtmlTemplate.render(ctx));
+		}
+	}
+
+	/**
+	 * The sidebar title of an index page, used for a detail page's back link. Callers
+	 * validate the page exists in {@code nav.yaml} up front (see {@code indexToCatalog}
+	 * in {@link #generateLanguage}), so a lookup miss here would be an internal
+	 * inconsistency, not a content typo.
+	 */
+	private static String indexTitle(Nav nav, String indexPage) {
+		return nav.findPage(indexPage)
+			.map(Nav.Page::title)
+			.orElseThrow(() -> new IllegalStateException("index_page '" + indexPage + "' vanished after validation"));
+	}
+
+	/**
+	 * Maps each individual operator name (HTML-escaped, as it appears in the rendered
+	 * table) to its page slug. A grouped entry like {@code char schar} maps every token
+	 * to the same page.
+	 */
+	static Map<String, String> buildNameToSlug(Catalog catalog) {
+		Map<String, String> map = new HashMap<>();
+		for (Catalog.Entry entry : catalog.flatEntries()) {
+			for (String token : entry.name().trim().split("\\s+")) {
+				if (!token.isEmpty()) {
+					map.put(HtmlTemplate.esc(token), entry.slug());
+				}
+			}
+		}
+		return map;
+	}
+
+	/**
+	 * Renders one Markdown page and feeds the search index with it. The index is built
+	 * from the body as it stands after the anchors are aligned and the links rewritten,
+	 * but BEFORE the runnable cells are built: the cell chrome is markup nobody searches
+	 * for, and the section anchors have to be the ones the page will actually carry.
+	 */
+	private String renderBody(String markdown, String mdFile, String lang, String docPath, String title,
+			boolean operator) throws IOException {
+		return renderBody(markdown, mdFile, lang, docPath, title, operator, "");
+	}
+
+	/**
+	 * @param label the catalog's {@link Catalog#label}, which the search results show
+	 * beside the title
+	 */
+	private String renderBody(String markdown, String mdFile, String lang, String docPath, String title,
+			boolean operator, String label) throws IOException {
+		String body = this.renderer.render(this.parser.parse(markdown));
+		body = alignHeadingIds(body, mdFile, lang);
+		body = rewriteMarkdownLinks(body);
+		this.searchIndex.addPage(docPath.substring(lang.length() + 1), title, body, operator, label);
+		return RunnableBlockTransformer.transform(body, ("/" + docPath).contains("/java/"));
+	}
+
+	/**
+	 * Gives a translated page the reference language's heading anchors, matched by
+	 * position. The trees are required to have the same heading layout, so a page whose
+	 * heading count differs from its reference counterpart is a translation that has
+	 * drifted -- it fails the build here rather than shipping anchors that point at the
+	 * wrong sections.
+	 */
+	private String alignHeadingIds(String body, String mdFile, String lang) throws IOException {
+		if (lang.equals(this.referenceLang)) {
+			this.referenceHeadingIds.put(mdFile, headingIds(body));
+			return body;
+		}
+		List<String> reference = this.referenceHeadingIds.get(mdFile);
+		if (reference == null) {
+			return body;
+		}
+		List<String> own = headingIds(body);
+		if (own.size() != reference.size()) {
+			throw new IOException("Heading layout of " + lang + "/" + mdFile + " differs from " + this.referenceLang
+					+ "/" + mdFile + ": " + own.size() + " headings vs " + reference.size()
+					+ ". Every language tree must have the same headings in the same order.");
+		}
+		Matcher matcher = HEADING_ID.matcher(body);
+		StringBuilder out = new StringBuilder();
+		int i = 0;
+		while (matcher.find()) {
+			String replacement = matcher.group(1) + reference.get(i++) + matcher.group(3);
+			matcher.appendReplacement(out, Matcher.quoteReplacement(replacement));
+		}
+		matcher.appendTail(out);
+		return out.toString();
+	}
+
+	/** The {@code id} of every heading of a rendered body, in document order. */
+	static List<String> headingIds(String bodyHtml) {
+		List<String> ids = new ArrayList<>();
+		Matcher matcher = HEADING_ID.matcher(bodyHtml);
+		while (matcher.find()) {
+			ids.add(matcher.group(2));
+		}
+		return ids;
+	}
+
+	private void writePage(String docPath, String html) throws IOException {
+		Path outPath = this.out.resolve(docPath);
+		Files.createDirectories(outPath.getParent());
+		Files.writeString(outPath, html, StandardCharsets.UTF_8);
+	}
+
+	private static HtmlTemplate.Crumb crumb(String lang, Nav.Page page) {
+		return new HtmlTemplate.Crumb(lang + "/" + replaceExtension(page.file()), page.title());
+	}
+
+	private static HtmlTemplate.Crumb detailCrumb(String lang, Catalog catalog, Catalog.Entry entry) {
+		return new HtmlTemplate.Crumb(lang + "/" + replaceExtension(catalog.mdFile(entry)), entry.name());
+	}
+
+	/** Rewrites {@code href="foo.md"} / {@code href="foo.md#x"} to {@code .html}. */
+	static String rewriteMarkdownLinks(String html) {
+		Matcher matcher = MD_LINK.matcher(html);
+		StringBuilder out = new StringBuilder();
+		while (matcher.find()) {
+			String target = matcher.group(1);
+			// Only a link to a page of this site becomes .html. An absolute URL
+			// ending in .md names a file somewhere else -- the published SKILL.md,
+			// say -- and there is no .html beside it.
+			String replacement = target.contains("://") || target.startsWith("//") ? matcher.group(0)
+					: "href=\"" + target + ".html" + (matcher.group(2) == null ? "" : matcher.group(2)) + "\"";
+			matcher.appendReplacement(out, Matcher.quoteReplacement(replacement));
+		}
+		matcher.appendTail(out);
+		return out.toString();
+	}
+
+	private void copyAssets() throws IOException {
+		Path assetsDir = this.source.resolve("assets");
+		if (!Files.isDirectory(assetsDir)) {
+			return;
+		}
+		Path target = this.out.resolve("assets");
+		Files.createDirectories(target);
+		try (Stream<Path> files = Files.walk(assetsDir)) {
+			files.forEach(src -> {
+				try {
+					Path dest = target.resolve(assetsDir.relativize(src).toString());
+					if (Files.isDirectory(src)) {
+						Files.createDirectories(dest);
+					}
+					else {
+						Files.createDirectories(dest.getParent());
+						Files.copy(src, dest, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+					}
+				}
+				catch (IOException e) {
+					throw new UncheckedIOException(e);
+				}
+			});
+		}
+	}
+
+	private void writeIndexRedirect(String home) throws IOException {
+		String html = """
+				<!DOCTYPE html>
+				<html lang="en">
+				<head>
+				<meta charset="UTF-8">
+				<meta http-equiv="refresh" content="0; url=%s/index.html">
+				<link rel="canonical" href="%s/index.html">
+				<title>rontolisp documentation</title>
+				</head>
+				<body>
+				<p>Redirecting to <a href="%s/index.html">the documentation</a>.</p>
+				</body>
+				</html>
+				""".formatted(home, home, home);
+		Files.writeString(this.out.resolve("index.html"), html, StandardCharsets.UTF_8);
+	}
+
+	private static String displayName(String code) {
+		return switch (code) {
+			case "en" -> "English";
+			case "ja" -> "日本語";
+			default -> code;
+		};
+	}
+
+	private static String replaceExtension(String mdFile) {
+		return mdFile.endsWith(".md") ? mdFile.substring(0, mdFile.length() - 3) + ".html" : mdFile;
+	}
+
+}

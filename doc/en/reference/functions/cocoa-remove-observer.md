@@ -1,0 +1,26 @@
+# cocoa:remove-observer
+
+`(cocoa:remove-observer target &key name object center)`
+
+Stops `target` observing the notifications named `name` from `object` (`nil` matching any) in `center`, the default notification center by default. Answers `nil`. Part of the macOS-only `cocoa` package -- the interpreter (`java -jar`, or the `rontolisp` native binary), a compiled `.class` / `.jar` and a `--native` executable for macOS on Apple silicon, never a `.wasm`; on a machine without the runtime it signals an `error`. See the [macOS GUI guide](../../guides/objc-appkit.md).
+
+```console
+MY-APP> (define-objc-class watcher ()
+          ((seen :initform nil :accessor seen))
+          (:objc-class-name "Watcher"))
+WATCHER
+MY-APP> (define-objc-method ("noticed:" :void) ((self watcher) (note objc-object-pointer))
+          (push (invoke-into 'string note "name") (seen self)))
+"noticed:"
+MY-APP> (defvar *w* (make-instance 'watcher))
+*W*
+MY-APP> (cocoa:add-observer *w* "noticed:" :name "Ping")
+NIL
+MY-APP> (invoke (invoke "NSNotificationCenter" "defaultCenter")
+                "postNotificationName:object:" "Ping" nil)
+NIL
+MY-APP> (seen *w*)
+("Ping")
+MY-APP> (cocoa:remove-observer *w* :name "Ping")
+NIL
+```

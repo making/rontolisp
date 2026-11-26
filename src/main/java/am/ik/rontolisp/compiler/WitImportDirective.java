@@ -1,0 +1,2152 @@
+package am.ik.rontolisp.compiler;
+
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Objects;
+import java.util.SequencedSet;
+import java.util.Set;
+
+import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispNames;
+import am.ik.rontolisp.LispNil;
+import am.ik.rontolisp.LispString;
+import am.ik.rontolisp.LispSymbol;
+import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.PackageRegistry;
+import am.ik.wit.WitDocument;
+import am.ik.wit.WitItem;
+import am.ik.wit.WitLocations;
+import am.ik.wit.WitParseResult;
+import am.ik.wit.WitResolver;
+import am.ik.wit.WitType;
+
+import org.jspecify.annotations.Nullable;
+
+/**
+ * The
+ * {@code (rontolisp:wit-import "kv.wit" :interface "wasi:keyvalue/store@0.2.0" :package
+ * kv)} directive: <em>this program calls this WIT interface</em>. It is the mirror of
+ * {@link WitExportDirective} and, like it, a compile-time front-end that <strong>lowers
+ * into forms that already exist</strong> -- there is no new call path on any backend.
+ *
+ * <p>
+ * What it lowers to depends on the backend, and that is the whole point: <em>one WIT, a
+ * different implementation per backend, zero source changes</em>.
+ *
+ * <ul>
+ * <li><strong>Preview 1 WASM</strong>: one {@link WasmImportDirective} per WIT function.
+ * A flat function (scalars / string / bool / handles) lowers to literally what a
+ * hand-written import block would have carried, so the emitted module is byte-identical
+ * to it and {@code --optimize} still shakes the functions the program never calls. A rich
+ * type is a compile error naming the WIT line: a core import is a bare host function,
+ * with no component type to describe a richer shape with. A {@code result}-returning
+ * function binds an internal raw import whose host answers the {@code (:ok . V)} /
+ * {@code (:error . E)} envelope, unwrapped by a public wrapper defun through
+ * {@code rontolisp::%wit-result} (whose error arm signals {@code rontolisp:wit-error}).
+ * An {@code async func} member lowers with {@code :async
+ * t}, so the binding answers a (settled) future there like on every other backend -- and
+ * inherits the option's build-time obligations ({@link SuspendingImports}).</li>
+ * <li><strong>Interpreter and JVM</strong>: an ordinary {@code defun} per WIT function,
+ * whose body calls {@code rontolisp::%wit-call} -- the runtime dispatch through the
+ * provider bound for the interface ({@code rontolisp:wit-provide}). Because each binding
+ * is an <em>ordinary defun</em>, {@code #'kv:get} / {@code funcall} / {@code mapcar} /
+ * {@code eval} work with no extra wiring, exactly as they do for {@code wasm-import}'s
+ * synthetic defuns.</li>
+ * <li><strong>{@code --component}</strong>: an internal
+ * {@code rontolisp::%component-import} form carrying the WIT text, from which the WASM
+ * compiler synthesizes one canonical-ABI marshalling defun per bound function (the guest
+ * side of a {@code canon lower}ed component import), plus the same envelope-unwrapping
+ * wrapper split as Preview 1 for {@code result}-returning functions. The canonical ABI
+ * marshals the rich types, so this is the only WASM boundary a {@code record} /
+ * {@code variant} / {@code enum} / {@code option} / {@code tuple} / {@code result}
+ * crosses -- as an argument as well as a result; only {@code flags} does not.</li>
+ * <li><strong>A {@code --no-wasi} core module</strong>, whose host is the JavaScript glue
+ * ({@link HostGlueEmitter}): an interface whose bound members all cross the flat set
+ * takes the Preview 1 lowering above, byte for byte; one binding a member outside it (or
+ * named {@code :canonical t}) takes the {@code --component} lowering instead, its imports
+ * the ones a component's core module has -- the interface's canonical id, each function's
+ * canonical-ABI name, the flat signature -- since the glue lifts and lowers the canonical
+ * ABI itself ({@link CanonicalCore}).</li>
+ * </ul>
+ *
+ * <p>
+ * {@code --no-gc} takes the Preview&nbsp;1 lowering unchanged: a WIT function reaches
+ * only the flat integer/float/bool/string set, which the scalar backend's unboxed value
+ * model carries, so one world serves both WASM core-module backends. Its one refusal is
+ * an {@code async func}, which would bind a future that backend has no value for.
+ *
+ * <p>
+ * Like {@link WitExportDirective} this class does no I/O and no codegen: the caller reads
+ * the WIT text (so the interpreter and the filesystem-less browser playground can supply
+ * it their own way) and splices the returned forms.
+ *
+ * @see WitTypeMapper
+ * @see WitResolver
+ */
+public final class WitImportDirective {
+
+	private WitImportDirective() {
+	}
+
+	/**
+	 * How a WIT function name is spelled as the WASM Preview 1 import field (the
+	 * host-side property name). A WIT label is always lower-kebab-case; a JavaScript host
+	 * normally spells the same function in camelCase, which is also what {@code jco}
+	 * produces when it transpiles a component.
+	 */
+	public enum FieldStyle {
+
+		/**
+		 * {@code create-shader} -> {@code createShader}: the JavaScript convention (the
+		 * default -- it is what the browser demos' hand-written import objects already
+		 * use).
+		 */
+		CAMEL,
+
+		/** {@code create-shader} -> {@code create-shader}: the WIT label verbatim. */
+		KEBAB;
+
+		String apply(String label) {
+			if (this == KEBAB) {
+				return label;
+			}
+			StringBuilder out = new StringBuilder(label.length());
+			boolean upper = false;
+			for (int i = 0; i < label.length(); i++) {
+				char c = label.charAt(i);
+				if (c == '-') {
+					upper = true;
+					continue;
+				}
+				out.append(upper ? Character.toUpperCase(c) : c);
+				upper = false;
+			}
+			return out.toString();
+		}
+
+	}
+
+	/**
+	 * A parsed {@code rontolisp:wit-import} directive.
+	 *
+	 * @param path the WIT file path as written (relative paths resolve against the source
+	 * file's directory, like {@code load})
+	 * @param iface the interface to bind, e.g. {@code wasi:keyvalue/store@0.2.0} (the
+	 * version may be omitted, and a bare interface name works when the file defines it
+	 * only once)
+	 * @param pkg the Lisp package the bindings land in, or {@code null} to define them in
+	 * the current package
+	 * @param module the WASM Preview 1 import module ({@code :from}), or {@code null} for
+	 * the interface's bare name
+	 * @param fieldStyle how a WIT label is spelled as a Preview 1 import field
+	 * @param names the naming hook of a front end that spells its identifiers its own way
+	 * ({@code :names (("open" "lisp-name") ...)}), or {@code null}: each listed member
+	 * binds under exactly that Lisp name and a member the table leaves out is not bound
+	 * at all. It names the Lisp side only, like {@code :package} -- the member a provider
+	 * is dispatched with, the Preview 1 field and the component import stay the WIT's --
+	 * so it is no per-function alias. The Clojure lowering passes it
+	 * ({@code rontolisp.wit}), whose vars are {@code c%ns/name} symbols no package export
+	 * table can reach
+	 * @param octets whether a {@code list<u8>} RESULT lifts as a packed
+	 * {@code (unsigned-byte 8)} vector, octet for octet ({@code :octets t}), instead of
+	 * the text a {@code string} lifts to: what {@code --component} decides, and what a
+	 * Preview 1 core module declares a {@code list<u8>} as ({@code :octets} rather than
+	 * {@code :string}, both directions); the interpreter and the JVM hand a provider's
+	 * value over unconverted either way, and {@code --no-gc}, which has no byte vector,
+	 * refuses a member carrying one
+	 * @param canonical whether a {@code --no-wasi} core module imports the interface
+	 * through the canonical ABI even where every member it binds crosses the flat set
+	 * ({@code :canonical t}): its import names and its values are then a component's
+	 * whatever members a program reaches, which the Java front end's bindings ask for.
+	 * Every other backend lowers as it does without it
+	 */
+	public record Directive(String path, String iface, @Nullable String pkg, @Nullable String module,
+			FieldStyle fieldStyle, @Nullable Map<String, String> names, boolean octets, boolean canonical) {
+
+		/**
+		 * A directive the flat set decides the core-module lowering of.
+		 * @param path the WIT file path as written
+		 * @param iface the interface to bind
+		 * @param pkg the Lisp package the bindings land in, or {@code null}
+		 * @param module the WASM Preview 1 import module, or {@code null}
+		 * @param fieldStyle how a WIT label is spelled as a Preview 1 import field
+		 * @param names the naming hook, or {@code null}
+		 * @param octets whether a {@code list<u8>} result lifts as octets
+		 */
+		public Directive(String path, String iface, @Nullable String pkg, @Nullable String module,
+				FieldStyle fieldStyle, @Nullable Map<String, String> names, boolean octets) {
+			this(path, iface, pkg, module, fieldStyle, names, octets, false);
+		}
+
+		/**
+		 * A directive lifting a {@code list<u8>} as text.
+		 * @param path the WIT file path as written
+		 * @param iface the interface to bind
+		 * @param pkg the Lisp package the bindings land in, or {@code null}
+		 * @param module the WASM Preview 1 import module, or {@code null}
+		 * @param fieldStyle how a WIT label is spelled as a Preview 1 import field
+		 * @param names the naming hook, or {@code null}
+		 */
+		public Directive(String path, String iface, @Nullable String pkg, @Nullable String module,
+				FieldStyle fieldStyle, @Nullable Map<String, String> names) {
+			this(path, iface, pkg, module, fieldStyle, names, false, false);
+		}
+
+		/**
+		 * A directive with no naming hook: the bindings are named by {@code :package} or
+		 * the reader.
+		 * @param path the WIT file path as written
+		 * @param iface the interface to bind
+		 * @param pkg the Lisp package the bindings land in, or {@code null}
+		 * @param module the WASM Preview 1 import module, or {@code null}
+		 * @param fieldStyle how a WIT label is spelled as a Preview 1 import field
+		 */
+		public Directive(String path, String iface, @Nullable String pkg, @Nullable String module,
+				FieldStyle fieldStyle) {
+			this(path, iface, pkg, module, fieldStyle, null, false, false);
+		}
+
+	}
+
+	/**
+	 * Returns whether the given form is a {@code (rontolisp:wit-import ...)} directive.
+	 * @param form the top-level form
+	 * @return {@code true} if it is a rontolisp:wit-import directive
+	 */
+	public static boolean isDirective(LispVal form) {
+		if (form instanceof LispCons cons && cons.car() instanceof LispSymbol sym) {
+			PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(sym.name());
+			return qn != null && LispNames.RONTOLISP_PKG.equals(qn.pkg()) && LispNames.WIT_IMPORT.equals(qn.member());
+		}
+		return false;
+	}
+
+	/**
+	 * Parses a {@code (rontolisp:wit-import "kv.wit" :interface "..." :package kv)}
+	 * directive.
+	 * @param form the directive form
+	 * @return the parsed directive
+	 * @throws UnsupportedOperationException if the directive is malformed
+	 */
+	public static Directive parse(LispCons form) {
+		List<LispVal> items = form.toList();
+		if (items.size() < 2 || !(items.get(1) instanceof LispString path)) {
+			throw new UnsupportedOperationException(
+					"rontolisp:wit-import expects a WIT file path string, got: " + form.print());
+		}
+		String iface = null;
+		String pkg = null;
+		String module = null;
+		FieldStyle fieldStyle = FieldStyle.CAMEL;
+		Map<String, String> names = null;
+		boolean octets = false;
+		boolean canonical = false;
+		int i = 2;
+		while (i < items.size()) {
+			if (!(items.get(i) instanceof LispSymbol keyword) || !keyword.isKeyword()) {
+				throw new UnsupportedOperationException(
+						"Expected a keyword option in " + form.print() + ", got: " + items.get(i).print());
+			}
+			if (i + 1 >= items.size()) {
+				throw new UnsupportedOperationException("Missing value for " + keyword.name() + " in " + form.print());
+			}
+			LispVal value = items.get(i + 1);
+			switch (keyword.name()) {
+				// :interface and :from name WIT-side things (lower-kebab), so a bare
+				// symbol -- upcased by the reader -- lowercases; :package names the
+				// Lisp-side package and keeps the reader's spelling.
+				case ":INTERFACE" -> iface = designator(value, ":interface", form).toLowerCase(Locale.ROOT);
+				case ":PACKAGE" -> pkg = designator(value, ":package", form);
+				case ":FROM" -> module = designator(value, ":from", form).toLowerCase(Locale.ROOT);
+				case ":FIELD-STYLE" -> fieldStyle = fieldStyle(value, form);
+				case ":NAMES" -> names = WitNamingHook.parse(value, "rontolisp:wit-import", form);
+				case ":OCTETS" ->
+					octets = WasmImportDirective.booleanValue(value, "rontolisp:wit-import", ":octets", form);
+				case ":CANONICAL" ->
+					canonical = WasmImportDirective.booleanValue(value, "rontolisp:wit-import", ":canonical", form);
+				default -> throw new UnsupportedOperationException(
+						"Unknown rontolisp:wit-import option " + keyword.name() + " in " + form.print());
+			}
+			i += 2;
+		}
+		if (iface == null) {
+			throw new UnsupportedOperationException("rontolisp:wit-import requires :interface (the WIT interface to "
+					+ "bind, e.g. :interface \"wasi:keyvalue/store@0.2.0\") in " + form.print());
+		}
+		if (names != null && pkg != null) {
+			throw new UnsupportedOperationException(
+					"rontolisp:wit-import :names spells every binding itself, so it takes no :package, in "
+							+ form.print());
+		}
+		return new Directive(path.value(), iface, pkg, module, fieldStyle, names, octets, canonical);
+	}
+
+	// A string, or a bare symbol written in the WIT's own spelling.
+	private static String designator(LispVal value, String keyword, LispCons form) {
+		return switch (value) {
+			case LispString str -> str.value();
+			case LispSymbol sym when !sym.isKeyword() -> {
+				PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(sym.name());
+				yield qn == null ? sym.name() : qn.member();
+			}
+			default -> throw new UnsupportedOperationException("rontolisp:wit-import " + keyword + " expects a name in "
+					+ form.print() + ", got: " + value.print());
+		};
+	}
+
+	private static FieldStyle fieldStyle(LispVal value, LispCons form) {
+		if (value instanceof LispSymbol sym && sym.isKeyword()) {
+			return switch (sym.name()) {
+				case ":CAMEL" -> FieldStyle.CAMEL;
+				case ":KEBAB" -> FieldStyle.KEBAB;
+				default -> throw new UnsupportedOperationException(
+						"rontolisp:wit-import :field-style expects :camel or :kebab in " + form.print() + ", got: "
+								+ sym.name());
+			};
+		}
+		throw new UnsupportedOperationException("rontolisp:wit-import :field-style expects :camel or :kebab in "
+				+ form.print() + ", got: " + value.print());
+	}
+
+	/**
+	 * Checks the WIT interface against the backend's boundary and lowers it into the
+	 * forms that bind it: on Preview 1 WASM a {@code rontolisp:wasm-import} per function,
+	 * on the interpreter and the JVM a {@code defun} per function dispatching through the
+	 * interface's provider. A {@code :package} also produces the {@code defpackage} that
+	 * exports the bound names.
+	 * @param directive the parsed directive
+	 * @param witSource the WIT text
+	 * @param witPath the WIT file path, for error messages
+	 * @param backend the backend being compiled for
+	 * @return the forms the directive stands for, in WIT order
+	 * @throws UnsupportedOperationException on any contract violation, naming the WIT
+	 * file and line
+	 */
+	public static List<LispVal> lower(Directive directive, String witSource, String witPath,
+			WitExportDirective.Backend backend) {
+		return lower(directive, witSource, witPath, backend, null);
+	}
+
+	/**
+	 * Like {@link #lower(Directive, String, String, WitExportDirective.Backend)}, with an
+	 * optional member filter for the {@code --component} backend: only the named members
+	 * are bound (and validated). The component path skips {@code --optimize}'s core tree
+	 * shaker by design, so unused interface functions are pruned here instead -- the
+	 * caller ({@code WitImportInliner}) passes the members the program references.
+	 * @param directive the parsed directive
+	 * @param witSource the WIT text
+	 * @param witPath the WIT file path, for error messages
+	 * @param backend the backend being compiled for
+	 * @param memberFilter the members to bind, or {@code null} for all of them
+	 * @return the forms the directive stands for, in WIT order
+	 */
+	public static List<LispVal> lower(Directive directive, String witSource, String witPath,
+			WitExportDirective.Backend backend, @Nullable Set<String> memberFilter) {
+		return lower(directive, witSource, witPath, backend, memberFilter, Set.of());
+	}
+
+	/**
+	 * Like {@link #lower(Directive, String, String, WitExportDirective.Backend, Set)},
+	 * plus the filter for resource {@code drop}s.
+	 * <p>
+	 * A WIT {@code resource} is released by its interface's {@code drop}, which the model
+	 * does not spell out as a function -- so there is nothing in
+	 * {@link WitResolver#functions} to bind, and a program that receives a handle has no
+	 * way to give it back. It is bound as <strong>{@code <resource>-drop}</strong>,
+	 * symmetric with the {@code <resource>-new} a constructor binds: both are rontolisp
+	 * spellings of something WIT does not name.
+	 * <p>
+	 * <strong>Only when the program names it</strong>, on every backend. A drop is not a
+	 * WIT function, so it is exempt from the "Preview 1 binds every function" convention
+	 * -- and this one rule is what keeps every artifact that existed before drops
+	 * byte-identical, since nothing references a {@code -drop} name in it.
+	 * @param directive the parsed directive
+	 * @param witSource the WIT text
+	 * @param witPath the WIT file path, for error messages
+	 * @param backend the backend being compiled for
+	 * @param memberFilter the FUNCTIONS to bind, or {@code null} for all of them
+	 * @param dropFilter the drop names the program references, or {@code null} to bind a
+	 * drop for every resource ({@code --no-prune} / {@code --dynamic}, and the
+	 * interpreter, which produces no artifact to keep identical)
+	 * @return the forms the directive stands for, in WIT order
+	 */
+	public static List<LispVal> lower(Directive directive, String witSource, String witPath,
+			WitExportDirective.Backend backend, @Nullable Set<String> memberFilter, @Nullable Set<String> dropFilter) {
+		return lower(directive, WitSource.file(witPath, witSource), backend, memberFilter, dropFilter);
+	}
+
+	/**
+	 * Like
+	 * {@link #lower(Directive, String, String, WitExportDirective.Backend, Set, Set)},
+	 * over a WIT file or a package read from its directory.
+	 * @param directive the parsed directive
+	 * @param source the WIT
+	 * @param backend the backend being compiled for
+	 * @param memberFilter the FUNCTIONS to bind, or {@code null} for all of them
+	 * @param dropFilter the drop names the program references, or {@code null} to bind a
+	 * drop for every resource
+	 * @return the forms the directive stands for, in WIT order
+	 */
+	public static List<LispVal> lower(Directive directive, WitSource source, WitExportDirective.Backend backend,
+			@Nullable Set<String> memberFilter, @Nullable Set<String> dropFilter) {
+		return lower(directive, source, backend, memberFilter, dropFilter, null);
+	}
+
+	/**
+	 * What a {@code --no-wasi} core module on the wasm-GC backend offers an interface the
+	 * flat set does not carry: its host is the JavaScript glue, which lifts and lowers
+	 * the canonical ABI itself, so the interface is imported the way a component's core
+	 * module imports it -- the canonical id as the import module, each function's
+	 * canonical-ABI name as the field, its flat signature -- and the WASM compiler
+	 * marshals it as it does under {@code --component}. A host that is no JavaScript (a
+	 * WASI runtime's, a native executable's runner) answers no such import, so every
+	 * other core module keeps refusing the type at its WIT line.
+	 *
+	 * @param memberFilter the members bound when the interface takes this lowering -- the
+	 * ones the program names, as on a component -- or {@code null} for all of them
+	 * ({@code --no-prune} / {@code --dynamic})
+	 */
+	public record CanonicalCore(@Nullable Set<String> memberFilter) {
+	}
+
+	/**
+	 * Like {@link #lower(Directive, WitSource, WitExportDirective.Backend, Set, Set)}, on
+	 * a core module that may import an interface through the canonical ABI.
+	 * @param directive the parsed directive
+	 * @param source the WIT
+	 * @param backend the backend being compiled for
+	 * @param memberFilter the FUNCTIONS to bind, or {@code null} for all of them
+	 * @param dropFilter the drop names the program references, or {@code null} to bind a
+	 * drop for every resource
+	 * @param canonicalCore what the module offers an interface the flat set does not
+	 * carry, or {@code null} where it offers nothing (every target but a
+	 * {@code --no-wasi} wasm-GC core module)
+	 * @return the forms the directive stands for, in WIT order
+	 */
+	public static List<LispVal> lower(Directive directive, WitSource source, WitExportDirective.Backend backend,
+			@Nullable Set<String> memberFilter, @Nullable Set<String> dropFilter,
+			@Nullable CanonicalCore canonicalCore) {
+		String witPath = source.path();
+		Target named = target(directive, source);
+		WitLocations locations = named.locations();
+		WitResolver resolver = named.resolver();
+		WitItem.InterfaceDef iface = named.iface();
+		List<WitResolver.Func> funcs = named.funcs();
+		// Preview 1 core-module lowering: one rontolisp:wasm-import per WIT function. The
+		// --no-gc backend takes the SAME lowering -- the directive is the same shape, the
+		// injector the same pass, and every type a WIT function can reach here (the flat
+		// integer/float/bool/string set) is one that backend's unboxed value model
+		// carries -- so a wit-imported interface is byte-for-byte the hand-written import
+		// block on both, and one WIT world serves both.
+		boolean wasm = backend == WitExportDirective.Backend.WASM_GC || backend.isNoGc();
+		boolean noGc = backend.isNoGc();
+		// --no-gc --component: the same wasm-import block, but the import is named the
+		// way the component's canon-lowered instance import is typed -- the interface's
+		// canonical id as the module, the WIT label verbatim as the field, and the WIT
+		// parameter names carried along -- so the wrap can declare the instance type a
+		// host (or a composed provider) checks the module against.
+		boolean noGcComponent = backend == WitExportDirective.Backend.WASM_NO_GC_COMPONENT;
+		boolean component = backend == WitExportDirective.Backend.WASM_COMPONENT;
+		// A --no-wasi core module imports through the canonical ABI an interface one of
+		// whose bound members leaves the flat set (or that asked for it): the
+		// component's own lowering, the imports left for the glue to answer. Decided over
+		// the members the flat lowering would bind, so a program reaching only the flat
+		// ones keeps the Preview 1 block, byte for byte; once it is taken, only the
+		// members the program names are bound, as on a component.
+		boolean canonicalImports = canonicalCore != null && backend == WitExportDirective.Backend.WASM_GC
+				&& (directive.canonical() || bindsBeyondFlat(directive, funcs, memberFilter, resolver, iface));
+		Set<String> filter = canonicalImports && canonicalCore != null ? canonicalCore.memberFilter() : memberFilter;
+		boolean canonical = component || canonicalImports;
+		String module = directive.module() == null ? iface.name() : directive.module();
+		// The provider registry is keyed by the interface's CANONICAL id, never by the
+		// reference as written: `wasi:keyvalue/store@0.2.0`, `wasi:keyvalue/store` and
+		// `store` all name this one interface, so all three must reach the one provider
+		// (and one `rontolisp:wit-provide` key must override it whichever was written).
+		// On the component path the canonical id is also the component import name.
+		String ifaceId = Objects.requireNonNullElse(resolver.canonicalId(iface), directive.iface());
+		List<LispVal> forms = new ArrayList<>();
+		List<LispVal> bindings = new ArrayList<>();
+		List<LispVal> componentMembers = new ArrayList<>();
+		Set<String> allMembers = new LinkedHashSet<>();
+		SequencedSet<String> boundMembers = new LinkedHashSet<>();
+		for (WitResolver.Func func : funcs) {
+			String member = memberName(func);
+			if (!allMembers.add(member)) {
+				throw new UnsupportedOperationException(WitSource.at(witPath, locations, func.def()) + ": interface '"
+						+ iface.name() + "' binds '" + member + "' twice");
+			}
+			if (unnamed(directive, member) || filtered(filter, directive, member)) {
+				continue;
+			}
+			boundMembers.add(member);
+			String name = bindingName(directive, member);
+			if (canonical) {
+				validateComponentFunc(func, witPath, locations, resolver, iface, member);
+				if (canonicalImports) {
+					refuseAsyncOnCore(func, witPath, locations, resolver, iface, member);
+				}
+				List<Param> params = parameters(func, witPath, locations, resolver, iface, member, false, true, false,
+						false);
+				if (func.def().func().async()) {
+					// An `async func` member async-lowers: the call starts as a subtask
+					// (%member-start, returning a (packed . retptr) token cons), which
+					// rontolisp::%subtask-future turns into a FIRST-CLASS FUTURE --
+					// settled immediately when the call completed eagerly (lifted
+					// through %member-lift), pending and scheduler-registered otherwise.
+					// The public defun returns that future; a result-returning member's
+					// public defun is an async-defun that awaits it and unwraps the
+					// (:ok . V) / (:error . E) envelope, so the error arm re-signals at
+					// the caller's await (the settled result mapping).
+					String start = internalName(directive, member, "-start");
+					String lift = internalName(directive, member, "-lift");
+					componentMembers.add(asyncCallBinding(member, start, lift));
+					bindings
+						.add(subtaskFutureDefun(name, start, lift, params, isResultReturning(func, resolver, iface)));
+					continue;
+				}
+				if (isResultReturning(func, resolver, iface)) {
+					// The raw synthetic defun returns the (:ok . V) / (:error . E)
+					// envelope; the public wrapper unwraps it and signals the error
+					// arm. A front end reading the envelope itself names the raw
+					// binding alone and gets no wrapper (rawOnly).
+					String raw = rawName(directive, member);
+					componentMembers.add(memberBinding(member, raw));
+					if (!rawOnly(filter, directive, member)) {
+						bindings.add(wrapperDefun(name, raw, params, true));
+					}
+				}
+				else if (params.stream().anyMatch(param -> param.descriptor() != null)) {
+					// A list<T> argument is coerced in Lisp, as the provider binding
+					// does: the raw binding stages proper lists only.
+					String raw = rawName(directive, member);
+					componentMembers.add(memberBinding(member, raw));
+					bindings.add(wrapperDefun(name, raw, params, false));
+				}
+				else {
+					componentMembers.add(memberBinding(member, name));
+				}
+				continue;
+			}
+			if (noGc && func.def().func().async()) {
+				// :async t answers a (settled) future, and the --no-gc value model has
+				// nothing to represent one -- the whole async surface is refused there.
+				// Say so against the WIT member, not against the wasm-import the
+				// lowering would have produced.
+				throw new UnsupportedOperationException(WitSource.at(witPath, locations, func.def()) + ": '" + member
+						+ "' is an async func, which --no-gc cannot bind (the scalar backend has no future value);"
+						+ " compile it on the default GC backend, or against a synchronous WIT world");
+			}
+			if (noGcComponent) {
+				validateNoGcComponentFunc(func, witPath, locations, resolver, iface, member);
+			}
+			// :octets t on a wasm-GC core module: a list<u8> crosses as :octets, a byte
+			// vector both ways, instead of :string text.
+			boolean octets = wasm && !noGc && directive.octets();
+			List<Param> params = parameters(func, witPath, locations, resolver, iface, member, wasm, false, noGc,
+					octets);
+			String returns = resultDesignator(func, witPath, locations, resolver, iface, member, wasm, noGc, octets);
+			if (noGc && directive.octets()) {
+				refuseOctets(func, witPath, locations, resolver, iface, member);
+			}
+			if (!wasm && func.def().func().async()) {
+				// An `async func` member on the interpreter / the JVM: the provider call
+				// is synchronous, but the binding is an async-defun so callers get a
+				// FUTURE on every backend that has one -- settled with the provider's
+				// result (eager-start runs the body to completion), or rejected when the
+				// provider signals (the condition re-signals at await, matching the
+				// component's error-arm mapping). Preview 1 lowers the same member to a
+				// `wasm-import :async t` below, whose wrapper answers the settled
+				// degenerate future -- so `futurep` agrees on every backend and one
+				// declaration serves the reactor, the component and the provider targets.
+				bindings.add(asyncProviderDefun(name, ifaceId, member, params));
+				continue;
+			}
+			if (noGcComponent) {
+				bindings.add(wasmImportForm(name, ifaceId, func.def().name(), params, returns, false, true));
+				continue;
+			}
+			bindings.add(wasm ? wasmImportForm(name, module, directive.fieldStyle().apply(member), params, returns,
+					func.def().func().async(), false) : providerDefun(name, ifaceId, member, params));
+		}
+		// A resource is released by its own interface's `drop`, which WIT declares no
+		// function for -- see the lower() javadoc for the name and why it is bound only
+		// when
+		// the program asks for it.
+		for (WitItem item : iface.items()) {
+			if (!(item instanceof WitItem.ResourceDef resource)) {
+				continue;
+			}
+			String member = resource.name() + "-drop";
+			if (!allMembers.add(member)) {
+				throw new UnsupportedOperationException(WitSource.at(witPath, locations, item) + ": interface '"
+						+ iface.name() + "' binds '" + member + "' twice");
+			}
+			// with-<resource>, the drop on any exit: bound when the program names it
+			// (and then the drop it expands to with it), unless a WIT function took the
+			// name. A :names table's front end spells its own.
+			String with = "with-" + resource.name();
+			boolean withNamed = directive.names() == null && !allMembers.contains(with)
+					&& !filtered(dropFilter, directive, with);
+			if (unnamed(directive, member) || (filtered(dropFilter, directive, member) && !withNamed)) {
+				continue;
+			}
+			boundMembers.add(member);
+			String name = bindingName(directive, member);
+			if (withNamed) {
+				allMembers.add(with);
+				boundMembers.add(with);
+				bindings.add(withResourceMacro(bindingName(directive, with), name));
+			}
+			if (canonical) {
+				componentMembers.add(dropBinding(resource.name(), name));
+			}
+			else if (noGcComponent) {
+				throw new UnsupportedOperationException(WitSource.at(witPath, locations, item) + ": '" + member
+						+ "' releases the resource '" + resource.name() + "', which --no-gc --component cannot bind"
+						+ NO_GC_COMPONENT_RESOURCE_REASON);
+			}
+			else if (wasm) {
+				// Preview 1: a handle is an opaque integer the host handed over -- there
+				// is
+				// no guest-side table and nothing to release. Importing a
+				// `[resource-drop]` field would INVENT a host function the interface
+				// never
+				// declared, breaking both the
+				// byte-identity-with-a-hand-written-import-block
+				// property and the browser demos' hand-written import objects.
+				bindings.add(noopDropDefun(name));
+			}
+			else {
+				bindings.add(providerDefun(name, ifaceId, member, List.of(new Param("self", ":INT"))));
+			}
+		}
+		// An async built-in is derived from a `type` ALIAS the interface declares to a
+		// stream or a future: `type body-stream = stream<u8>` binds body-stream-new /
+		// -read / -write / -drop-readable / -drop-writable / -cancel-read (the last a
+		// stream's alone). Like a drop, an async member is not a WIT function -- it is
+		// a rontolisp spelling of the canonical ABI's stream.*/future.* built-ins, typed
+		// by the alias's target -- so it is bound ONLY when the program names it, and it
+		// exists ONLY under --component: the built-ins are a component-model mechanism
+		// no other backend has.
+		for (WitItem item : iface.items()) {
+			if (!(item instanceof WitItem.TypeAlias alias)) {
+				continue;
+			}
+			Scoped target = resolveAliases(alias.target(), resolver, iface);
+			boolean stream = target.type() instanceof WitType.StreamOf;
+			if (!stream && !(target.type() instanceof WitType.FutureOf)) {
+				// A non-stream/future alias binds ONE derived member instead:
+				// `<alias>-task-return` -- `canon task.return` typed by the alias's
+				// target, the mid-task result delivery of a stackful async EXPORT (the
+				// WASI 0.3 replacement for 0.2's response-outparam.set). Like the async
+				// built-ins it is not a WIT function: bound ONLY when the program names
+				// it, and only under --component.
+				String member = alias.name() + "-task-return";
+				if (!allMembers.add(member)) {
+					throw new UnsupportedOperationException(WitSource.at(witPath, locations, item) + ": interface '"
+							+ iface.name() + "' binds '" + member + "' twice");
+				}
+				if (unnamed(directive, member) || filtered(dropFilter, directive, member)) {
+					continue;
+				}
+				if (!component) {
+					if (dropFilter != null) {
+						throw new UnsupportedOperationException(WitSource.at(witPath, locations, item) + ": '" + member
+								+ "' is the task-return built-in, which only the --component backend has (the async "
+								+ "canonical ABI); the interpreter, the JVM and Preview 1 WASM cannot bind it");
+					}
+					continue;
+				}
+				validateComponentParam(target.type(), witPath, locations, resolver, target.iface(), alias, member,
+						"the task result", true);
+				boundMembers.add(member);
+				String name = bindingName(directive, member);
+				componentMembers.add(taskReturnBinding(alias.name(), name));
+				continue;
+			}
+			for (String op : asyncOps(stream)) {
+				String member = alias.name() + "-" + op;
+				if (!allMembers.add(member)) {
+					throw new UnsupportedOperationException(WitSource.at(witPath, locations, item) + ": interface '"
+							+ iface.name() + "' binds '" + member + "' twice");
+				}
+				if (unnamed(directive, member) || filtered(dropFilter, directive, member)) {
+					continue;
+				}
+				if (!component) {
+					if (dropFilter != null) {
+						throw new UnsupportedOperationException(WitSource.at(witPath, locations, item) + ": '" + member
+								+ "' is a stream/future built-in, which only the --component backend has (the async "
+								+ "canonical ABI); the interpreter, the JVM and Preview 1 WASM cannot bind it");
+					}
+					// A bind-everything pass (no filter) on a non-component backend just
+					// skips them: the alias itself is legal WIT, and a program that never
+					// calls the built-ins must keep compiling everywhere.
+					continue;
+				}
+				validateAsyncAlias(target, witPath, locations, resolver, alias, member, op);
+				boundMembers.add(member);
+				String name = bindingName(directive, member);
+				componentMembers.add(asyncBinding(alias.name(), op, name));
+			}
+		}
+		// A component may import an interface purely for its TYPES: wasi:io/streams' own
+		// `stream-error` carries a wasi:io/error `error` resource, and a resource is its
+		// defining interface's type, so that interface has to be imported for the type to
+		// exist -- even though nothing calls its one function. (wasm-tools encodes
+		// exactly
+		// that: the wasi:io/error instance type of a real fetch component declares the
+		// resource and no functions at all.) Whether such an import is actually needed is
+		// only knowable once every import is in hand, so the component path defers the
+		// judgement to WasmComponentBuilder.appendUserImports. On every other backend an
+		// interface is a set of callable functions and nothing else, so an unused one is
+		// a mistake worth naming -- unless a front end's :names table filtered every
+		// member out: the table lists its whole tier, so a program that names none of
+		// it binds nothing.
+		if (boundMembers.isEmpty() && !component && (memberFilter == null || directive.names() == null)) {
+			throw new UnsupportedOperationException(WitSource.at(witPath, locations, iface) + ": interface '"
+					+ iface.name() + "': the program calls none of its functions");
+		}
+		if (directive.pkg() != null) {
+			forms.add(defpackageForm(directive.pkg(), boundMembers));
+		}
+		// A core module imports no interface for its types alone (it has no types to
+		// import), so a canonical lowering binding nothing leaves no form behind.
+		if (component || (canonicalImports && !componentMembers.isEmpty())) {
+			forms
+				.add(componentImportForm(ifaceId, source.text(named.document()), directive.octets(), componentMembers));
+		}
+		forms.addAll(bindings);
+		return forms;
+	}
+
+	// Whether one of the members the flat lowering would bind has a type outside the flat
+	// set a Preview 1 import carries -- the question that sends a --no-wasi core module's
+	// import through the canonical ABI. A type no backend binds (a stream, a future, a
+	// name nothing defines) is the lowering's to refuse, not a reason to switch.
+	private static boolean bindsBeyondFlat(Directive directive, List<WitResolver.Func> funcs,
+			@Nullable Set<String> memberFilter, WitResolver resolver, WitItem.InterfaceDef iface) {
+		for (WitResolver.Func func : funcs) {
+			String member = memberName(func);
+			if (unnamed(directive, member) || filtered(memberFilter, directive, member)) {
+				continue;
+			}
+			List<WitType> types = new ArrayList<>();
+			for (var param : func.def().func().params()) {
+				types.add(param.type());
+			}
+			if (func.def().kind() != WitItem.FuncKind.CONSTRUCTOR && func.def().func().result() != null) {
+				types.add(func.def().func().result());
+			}
+			for (WitType type : types) {
+				if (!FLAT.contains(flatRep(type, resolver, iface))) {
+					return true;
+				}
+			}
+		}
+		return false;
+	}
+
+	/** The representations a Preview 1 import carries ({@link #designatorOf}). */
+	private static final Set<WitTypeMapper.Rep> FLAT = Set.of(WitTypeMapper.Rep.INT, WitTypeMapper.Rep.HANDLE,
+			WitTypeMapper.Rep.FLOAT, WitTypeMapper.Rep.BOOLEAN, WitTypeMapper.Rep.STRING, WitTypeMapper.Rep.BYTE_STRING,
+			WitTypeMapper.Rep.STREAM_HANDLE, WitTypeMapper.Rep.FUTURE_HANDLE, WitTypeMapper.Rep.UNSUPPORTED);
+
+	// The representation of a type as designatorOf judges it, an undefined name counted
+	// as flat so the lowering names it.
+	private static WitTypeMapper.Rep flatRep(WitType type, WitResolver resolver, WitItem.InterfaceDef iface) {
+		Scoped scoped = resolveAliases(type, resolver, iface);
+		if (scoped.type() instanceof WitType.Named named) {
+			WitResolver.Owned owned = resolver.resolveOwned(scoped.iface(), named.name());
+			return owned == null ? WitTypeMapper.Rep.UNSUPPORTED : WitTypeMapper.repOfDefinition(owned.item());
+		}
+		return WitTypeMapper.rep(scoped.type());
+	}
+
+	// What a core module's canonical import cannot carry though a component's can: an
+	// async func is a subtask, a stream or a future a handle of the async built-ins --
+	// the component model's runtime, which a core module's host has none of.
+	private static void refuseAsyncOnCore(WitResolver.Func func, String witPath, WitLocations locations,
+			WitResolver resolver, WitItem.InterfaceDef iface, String member) {
+		if (func.def().func().async()) {
+			throw new UnsupportedOperationException(WitSource.at(witPath, locations, func.def()) + ": '" + member
+					+ "' is an async func, which a --no-wasi core module cannot import through the canonical ABI (the"
+					+ " call would be a subtask, which only a component's host runs); compile with --component");
+		}
+		List<WitType> types = new ArrayList<>();
+		for (var param : func.def().func().params()) {
+			types.add(param.type());
+		}
+		if (func.def().func().result() != null) {
+			types.add(func.def().func().result());
+		}
+		for (WitType type : types) {
+			if (mentionsStreamOrFuture(type, resolver, iface, new java.util.IdentityHashMap<>())) {
+				throw new UnsupportedOperationException(WitSource.at(witPath, locations, func.def()) + ": '" + member
+						+ "' carries a stream or a future, which a --no-wasi core module cannot import through the"
+						+ " canonical ABI (their built-ins are a component's host's); compile with --component");
+			}
+		}
+	}
+
+	// Whether a stream or a future occurs anywhere in a type, definitions followed once.
+	private static boolean mentionsStreamOrFuture(WitType type, WitResolver resolver, WitItem.InterfaceDef iface,
+			java.util.IdentityHashMap<WitItem, Boolean> seen) {
+		Scoped scoped = resolveAliases(type, resolver, iface);
+		WitItem.InterfaceDef in = scoped.iface();
+		return switch (scoped.type()) {
+			case WitType.StreamOf ignored -> true;
+			case WitType.FutureOf ignored -> true;
+			case WitType.ListOf list -> mentionsStreamOrFuture(list.element(), resolver, in, seen);
+			case WitType.OptionOf opt -> mentionsStreamOrFuture(opt.element(), resolver, in, seen);
+			case WitType.ResultOf res -> (res.ok() != null && mentionsStreamOrFuture(res.ok(), resolver, in, seen))
+					|| (res.err() != null && mentionsStreamOrFuture(res.err(), resolver, in, seen));
+			case WitType.TupleOf tuple ->
+				tuple.elements().stream().anyMatch(element -> mentionsStreamOrFuture(element, resolver, in, seen));
+			case WitType.Named named -> {
+				WitResolver.Owned owned = resolver.resolveOwned(in, named.name());
+				if (owned == null || seen.put(owned.item(), Boolean.TRUE) != null) {
+					yield false;
+				}
+				yield switch (owned.item()) {
+					case WitItem.RecordDef record -> record.fields()
+						.stream()
+						.anyMatch(field -> mentionsStreamOrFuture(field.type(), resolver, owned.owner(), seen));
+					case WitItem.VariantDef variant -> variant.cases()
+						.stream()
+						.anyMatch(c -> c.payload() != null
+								&& mentionsStreamOrFuture(c.payload(), resolver, owned.owner(), seen));
+					default -> false;
+				};
+			}
+			default -> false;
+		};
+	}
+
+	/**
+	 * The interface a directive names, parsed and resolved: what {@link #lower} and
+	 * {@link #describe} both start from.
+	 */
+	private record Target(WitDocument document, WitLocations locations, WitResolver resolver,
+			WitItem.InterfaceDef iface, List<WitResolver.Func> funcs) {
+	}
+
+	private static Target target(Directive directive, WitSource source) {
+		String witPath = source.path();
+		WitParseResult parsed = source.parse();
+		WitLocations locations = parsed.locations();
+		WitResolver resolver = new WitResolver(parsed.document());
+		WitItem.InterfaceDef iface = resolver.findInterface(directive.iface());
+		if (iface == null) {
+			throw new UnsupportedOperationException(witPath + ": no interface '" + directive.iface() + "' (found: "
+					+ String.join(", ", resolver.interfaceIds()) + ")");
+		}
+		List<WitResolver.Func> funcs = WitResolver.functions(iface);
+		if (funcs.isEmpty()) {
+			throw new UnsupportedOperationException(WitSource.at(witPath, locations, iface) + ": interface '"
+					+ iface.name() + "' declares no functions");
+		}
+		return new Target(parsed.document(), locations, resolver, iface, funcs);
+	}
+
+	/**
+	 * How a member of an interface comes to be bound ({@link #lower} has one rule per
+	 * kind).
+	 */
+	public enum Origin {
+
+		/**
+		 * A WIT function: bound on every backend ({@code --component} binds the ones the
+		 * program names).
+		 */
+		FUNCTION,
+
+		/** A resource's {@code <resource>-drop}: bound only when the program names it. */
+		DROP,
+
+		/**
+		 * A stream/future built-in of a {@code type} alias ({@code <alias>-new},
+		 * {@code -read}, ...): {@code --component} only, and only when the program names
+		 * it.
+		 */
+		ASYNC_BUILTIN,
+
+		/**
+		 * An {@code <alias>-task-return} of a {@code type} alias: {@code --component}
+		 * only, and only when the program names it.
+		 */
+		TASK_RETURN
+
+	}
+
+	/**
+	 * A member a {@code rontolisp:wit-import} of the interface binds, under the name the
+	 * lowering gives it.
+	 *
+	 * @param name the member name ({@code open}, {@code bucket-get},
+	 * {@code bucket-drop}): what a {@code :names} table maps and a provider is dispatched
+	 * with
+	 * @param origin how it comes to be bound
+	 * @param params its parameters, a resource method's handle first
+	 * @param result its result type ({@code null} for none; a constructor answers its
+	 * resource's handle)
+	 * @param async whether it is an {@code async func}
+	 * @param at the WIT file and line declaring it ({@code path:line})
+	 * @param resource the resource a method, a constructor, a static function or a drop
+	 * belongs to, else {@code null}
+	 * @param function the WIT function's own name ({@code list-keys} of
+	 * {@code bucket-list-keys}); the member's name for one WIT declares no function for
+	 * (a drop, a built-in)
+	 * @param kind what kind of function it is: {@code PLAIN} for a freestanding function,
+	 * a method (one with a resource) and every member WIT declares no function for
+	 */
+	public record Member(String name, Origin origin, List<WitTypeMapper.Param> params,
+			WitTypeMapper.@Nullable Shape result, boolean async, String at, @Nullable String resource, String function,
+			WitItem.FuncKind kind) {
+
+		/**
+		 * A member of no resource that WIT declares no function for.
+		 * @param name the member name
+		 * @param origin how it comes to be bound
+		 * @param params its parameters
+		 * @param result its result type, or {@code null}
+		 * @param async whether it is an {@code async func}
+		 * @param at the WIT file and line declaring it
+		 */
+		public Member(String name, Origin origin, List<WitTypeMapper.Param> params,
+				WitTypeMapper.@Nullable Shape result, boolean async, String at) {
+			this(name, origin, params, result, async, at, null, name, WitItem.FuncKind.PLAIN);
+		}
+
+	}
+
+	/**
+	 * The interface a directive names, described for a front end that binds names to its
+	 * members before the lowering runs -- the Clojure lowering, whose vars must be known
+	 * when a call site lowers ({@code rontolisp.wit/import}).
+	 *
+	 * @param id the interface's canonical id (the provider registry's key)
+	 * @param members every member a lowering may bind, in the lowering's order
+	 */
+	public record Description(String id, List<Member> members) {
+	}
+
+	/**
+	 * Describes the interface a directive names: every member {@link #lower} may bind,
+	 * named as it names them and checked as it checks them for being bindable at all (the
+	 * interface exists and declares functions, no member name is bound twice, every named
+	 * type is defined). Whether a member's types cross a given backend's boundary stays
+	 * {@link #lower}'s question: this answers what every backend agrees on.
+	 * @param directive the parsed directive
+	 * @param witSource the WIT text
+	 * @param witPath the WIT file path, for error messages
+	 * @return the interface's canonical id and members
+	 * @throws UnsupportedOperationException when the interface cannot be bound, naming
+	 * the WIT file and line
+	 */
+	public static Description describe(Directive directive, String witSource, String witPath) {
+		return describe(directive, WitSource.file(witPath, witSource));
+	}
+
+	/**
+	 * Like {@link #describe(Directive, String, String)}, over a WIT file or a package
+	 * read from its directory.
+	 * @param directive the parsed directive
+	 * @param source the WIT
+	 * @return the interface's canonical id and members
+	 */
+	public static Description describe(Directive directive, WitSource source) {
+		String witPath = source.path();
+		Target named = target(directive, source);
+		WitLocations locations = named.locations();
+		WitResolver resolver = named.resolver();
+		WitItem.InterfaceDef iface = named.iface();
+		String ifaceId = Objects.requireNonNullElse(resolver.canonicalId(iface), directive.iface());
+		List<Member> members = new ArrayList<>();
+		Set<String> allMembers = new LinkedHashSet<>();
+		// The same three passes, in the same order and with the same duplicate check, as
+		// lower(): its functions, its resources' drops, its type aliases' built-ins.
+		for (WitResolver.Func func : named.funcs()) {
+			String member = memberName(func);
+			if (!allMembers.add(member)) {
+				throw new UnsupportedOperationException(WitSource.at(witPath, locations, func.def()) + ": interface '"
+						+ iface.name() + "' binds '" + member + "' twice");
+			}
+			List<WitTypeMapper.Param> params = new ArrayList<>();
+			if (func.resource() != null && func.def().kind() == WitItem.FuncKind.PLAIN) {
+				params.add(new WitTypeMapper.Param("self", handleShape(func.resource(), true)));
+			}
+			for (var param : func.def().func().params()) {
+				params.add(new WitTypeMapper.Param(param.name(), shapeOf(param.type(), resolver, iface, witPath,
+						locations, func.def(), member, "parameter '" + param.name() + "'")));
+			}
+			WitType result = func.def().func().result();
+			WitTypeMapper.Shape resultShape;
+			if (func.def().kind() == WitItem.FuncKind.CONSTRUCTOR) {
+				resultShape = handleShape(Objects.requireNonNull(func.resource()), false);
+			}
+			else {
+				resultShape = result == null ? null
+						: shapeOf(result, resolver, iface, witPath, locations, func.def(), member, "the result");
+			}
+			members.add(new Member(member, Origin.FUNCTION, List.copyOf(params), resultShape, func.def().func().async(),
+					WitSource.at(witPath, locations, func.def()), func.resource(), func.def().name(),
+					func.def().kind()));
+		}
+		for (WitItem item : iface.items()) {
+			if (!(item instanceof WitItem.ResourceDef resource)) {
+				continue;
+			}
+			String member = resource.name() + "-drop";
+			if (!allMembers.add(member)) {
+				throw new UnsupportedOperationException(WitSource.at(witPath, locations, item) + ": interface '"
+						+ iface.name() + "' binds '" + member + "' twice");
+			}
+			members.add(new Member(member, Origin.DROP,
+					List.of(new WitTypeMapper.Param("self", handleShape(resource.name(), false))), null, false,
+					WitSource.at(witPath, locations, item), resource.name(), member, WitItem.FuncKind.PLAIN));
+		}
+		for (WitItem item : iface.items()) {
+			if (!(item instanceof WitItem.TypeAlias alias)) {
+				continue;
+			}
+			Scoped target = resolveAliases(alias.target(), resolver, iface);
+			boolean stream = target.type() instanceof WitType.StreamOf;
+			boolean async = stream || target.type() instanceof WitType.FutureOf;
+			// lower() checks an alias's target only where it binds the alias's members
+			// (--component, the program naming one), so neither does this: a target
+			// that names no definition is a shape nothing can bind
+			WitTypeMapper.Shape shape;
+			try {
+				shape = shapeOf(alias.target(), resolver, iface, witPath, locations, alias, alias.name(), "the alias");
+			}
+			catch (UnsupportedOperationException ex) {
+				shape = new WitTypeMapper.Shape(WitTypeMapper.Rep.UNSUPPORTED, null,
+						am.ik.wit.WitPrinter.type(alias.target()));
+			}
+			for (String op : async ? asyncOps(stream) : List.of("task-return")) {
+				String member = alias.name() + "-" + op;
+				if (!allMembers.add(member)) {
+					throw new UnsupportedOperationException(WitSource.at(witPath, locations, item) + ": interface '"
+							+ iface.name() + "' binds '" + member + "' twice");
+				}
+				members.add(async
+						? new Member(member, Origin.ASYNC_BUILTIN, List.of(), shape, false,
+								WitSource.at(witPath, locations, item))
+						: new Member(member, Origin.TASK_RETURN, List.of(new WitTypeMapper.Param("value", shape)), null,
+								false, WitSource.at(witPath, locations, item)));
+			}
+		}
+		return new Description(ifaceId, List.copyOf(members));
+	}
+
+	// The shape of a resource handle: the `self` a method borrows, the one a constructor
+	// answers and a drop takes.
+	private static WitTypeMapper.Shape handleShape(String resource, boolean borrow) {
+		return new WitTypeMapper.Shape(WitTypeMapper.Rep.HANDLE, null, resource, null, List.of(), resource, borrow);
+	}
+
+	// A WIT type use resolved to its house representation: aliases followed (across
+	// interfaces), a named type classified by its definition. A type naming no definition
+	// is the member's error, as lower() makes it.
+	private static WitTypeMapper.Shape shapeOf(WitType type, WitResolver resolver, WitItem.InterfaceDef iface,
+			String witPath, WitLocations locations, WitItem anchor, String member, String what) {
+		Scoped scoped = resolveAliases(type, resolver, iface);
+		if (scoped.type() instanceof WitType.Named named
+				&& resolver.resolveOwned(scoped.iface(), named.name()) == null) {
+			throw undefinedType(witPath, locations, anchor, member, what, named);
+		}
+		return shapeOf(type, resolver, iface, new ArrayList<>());
+	}
+
+	// The whole shape, every nested type described in the scope THAT type is written in
+	// (an option's element, a result's arms, a list's element, a record's fields, a
+	// variant's payloads, a tuple's elements). A nested type naming no definition, or a
+	// definition containing itself, has no representation: lower() reaches neither on the
+	// interpreter and the JVM, so the member is the front end's to refuse where a program
+	// calls it, never the whole interface's. `path` holds the definitions being
+	// described.
+	private static WitTypeMapper.Shape shapeOf(WitType type, WitResolver resolver, WitItem.InterfaceDef iface,
+			List<WitItem> path) {
+		Scoped scoped = resolveAliases(type, resolver, iface);
+		WitType t = scoped.type();
+		WitItem.InterfaceDef in = scoped.iface();
+		String wit = am.ik.wit.WitPrinter.type(type);
+		switch (t) {
+			case WitType.Named named -> {
+				WitResolver.Owned owned = resolver.resolveOwned(in, named.name());
+				if (owned == null || path.stream().anyMatch(seen -> seen == owned.item())) {
+					return new WitTypeMapper.Shape(WitTypeMapper.Rep.UNSUPPORTED, null, wit);
+				}
+				path.add(owned.item());
+				try {
+					List<WitTypeMapper.Part> parts = new ArrayList<>();
+					switch (owned.item()) {
+						case WitItem.RecordDef record -> {
+							for (WitItem.Field field : record.fields()) {
+								parts.add(new WitTypeMapper.Part(field.name(),
+										shapeOf(field.type(), resolver, owned.owner(), path)));
+							}
+						}
+						case WitItem.VariantDef variant -> {
+							for (WitItem.Case c : variant.cases()) {
+								parts.add(new WitTypeMapper.Part(c.name(), c.payload() == null ? null
+										: shapeOf(c.payload(), resolver, owned.owner(), path)));
+							}
+						}
+						case WitItem.EnumDef enumDef -> {
+							for (WitItem.Case c : enumDef.cases()) {
+								parts.add(new WitTypeMapper.Part(c.name(), null));
+							}
+						}
+						case WitItem.FlagsDef flags -> {
+							for (WitItem.Case c : flags.cases()) {
+								parts.add(new WitTypeMapper.Part(c.name(), null));
+							}
+						}
+						default -> {
+							// a resource: an opaque handle
+						}
+					}
+					return new WitTypeMapper.Shape(WitTypeMapper.repOfDefinition(owned.item()), null, wit, null,
+							List.copyOf(parts), definedName(owned.item()), false);
+				}
+				finally {
+					path.removeLast();
+				}
+			}
+			case WitType.BorrowOf borrow -> {
+				return new WitTypeMapper.Shape(WitTypeMapper.Rep.HANDLE, null, wit, null, List.of(),
+						resourceName(borrow.resource(), resolver, in), true);
+			}
+			case WitType.OwnOf own -> {
+				return new WitTypeMapper.Shape(WitTypeMapper.Rep.HANDLE, null, wit, null, List.of(),
+						resourceName(own.resource(), resolver, in), false);
+			}
+			case WitType.OptionOf option -> {
+				return new WitTypeMapper.Shape(WitTypeMapper.Rep.NIL_OR_VALUE,
+						shapeOf(option.element(), resolver, in, path), wit);
+			}
+			case WitType.ResultOf result -> {
+				return new WitTypeMapper.Shape(WitTypeMapper.Rep.RESULT,
+						result.ok() == null ? null : shapeOf(result.ok(), resolver, in, path), wit,
+						result.err() == null ? null : shapeOf(result.err(), resolver, in, path), List.of());
+			}
+			case WitType.ListOf list -> {
+				// a list of bytes is a byte string whatever alias names its element, as
+				// the canonical ABI lifts it (WasmComponentImportCompiler's isU8)
+				if (isU8(list.element(), resolver, in)) {
+					return new WitTypeMapper.Shape(WitTypeMapper.Rep.BYTE_STRING, null, wit);
+				}
+				return new WitTypeMapper.Shape(WitTypeMapper.Rep.LIST, shapeOf(list.element(), resolver, in, path),
+						wit);
+			}
+			case WitType.TupleOf tuple -> {
+				List<WitTypeMapper.Part> parts = new ArrayList<>();
+				for (WitType element : tuple.elements()) {
+					parts.add(new WitTypeMapper.Part(Integer.toString(parts.size()),
+							shapeOf(element, resolver, in, path)));
+				}
+				return new WitTypeMapper.Shape(WitTypeMapper.Rep.TUPLE_LIST, null, wit, null, List.copyOf(parts));
+			}
+			default -> {
+				return new WitTypeMapper.Shape(WitTypeMapper.rep(t), null, wit, null, List.of(),
+						t instanceof WitType.Prim prim ? prim.name() : null, false);
+			}
+		}
+	}
+
+	// The name a type definition introduces: what a front end naming its types after the
+	// WIT's finds its own by.
+	private static @Nullable String definedName(WitItem item) {
+		return switch (item) {
+			case WitItem.RecordDef def -> def.name();
+			case WitItem.VariantDef def -> def.name();
+			case WitItem.EnumDef def -> def.name();
+			case WitItem.FlagsDef def -> def.name();
+			case WitItem.ResourceDef def -> def.name();
+			default -> null;
+		};
+	}
+
+	// The resource an own<R> or a borrow<R> names, aliases followed (R may be one).
+	private static String resourceName(String name, WitResolver resolver, WitItem.InterfaceDef in) {
+		Scoped scoped = resolveAliases(new WitType.Named(name), resolver, in);
+		if (scoped.type() instanceof WitType.Named named) {
+			WitResolver.Owned owned = resolver.resolveOwned(scoped.iface(), named.name());
+			if (owned != null && owned.item() instanceof WitItem.ResourceDef resource) {
+				return resource.name();
+			}
+		}
+		return name;
+	}
+
+	private static final String NO_GC_COMPONENT_RESOURCE_REASON = " (a resource handle has no scalar component"
+			+ " type; the scalar component binds freestanding functions over the fixed-width integers, float64, bool"
+			+ " and string). Bind the interface on the default backend's --component, which carries handles";
+
+	// What the --no-gc component wrap can type its import instance with: freestanding
+	// functions whose every parameter and result is a WIT primitive with a boundary
+	// designator. The Preview 1 --no-gc lowering is more permissive (a handle crosses as
+	// an opaque :int), but a component's import instance type must name the real WIT
+	// type, and a resource has no scalar spelling -- so the refusal happens here,
+	// against the WIT line, before a mis-typed instance import could reach a host.
+	private static void validateNoGcComponentFunc(WitResolver.Func func, String witPath, WitLocations locations,
+			WitResolver resolver, WitItem.InterfaceDef iface, String member) {
+		if (func.resource() != null) {
+			throw new UnsupportedOperationException(WitSource.at(witPath, locations, func.def()) + ": '" + member
+					+ "' belongs to the resource '" + func.resource() + "', which --no-gc --component cannot bind"
+					+ NO_GC_COMPONENT_RESOURCE_REASON);
+		}
+		for (var param : func.def().func().params()) {
+			requireScalarWitType(param.type(), "parameter '" + param.name() + "'", func, witPath, locations, resolver,
+					iface, member);
+		}
+		WitType result = func.def().func().result();
+		if (result != null) {
+			requireScalarWitType(result, "the result", func, witPath, locations, resolver, iface, member);
+		}
+	}
+
+	private static void requireScalarWitType(WitType type, String what, WitResolver.Func func, String witPath,
+			WitLocations locations, WitResolver resolver, WitItem.InterfaceDef iface, String member) {
+		WitType resolved = resolveAliases(type, resolver, iface).type();
+		if (resolved instanceof WitType.Prim prim && BoundaryType.forWitName(prim.name()) != null) {
+			return;
+		}
+		throw new UnsupportedOperationException(WitSource.at(witPath, locations, func.def()) + ": '" + member
+				+ "': the WIT type of " + what + " is not one --no-gc --component can carry (a fixed-width integer,"
+				+ " float64, bool or string); compile the interface on the default backend's --component, where the"
+				+ " canonical ABI marshals it");
+	}
+
+	// The internal raw name of a result-returning binding: pkg::%member (the public
+	// wrapper defun unwraps its envelope). Under a :names table the bound name behind a
+	// lone-% suffix: the table's front end decides what its names may spell, and the
+	// Clojure one's mangled identifiers never end in one.
+	private static String rawName(Directive directive, String member) {
+		Map<String, String> names = directive.names();
+		if (names != null) {
+			return Objects.requireNonNull(names.get(member)) + "%raw";
+		}
+		String pkg = directive.pkg();
+		return pkg == null ? readerSpelling("%" + member) : PackageRegistry.qualifyInternal(pkg, "%" + member);
+	}
+
+	// An internal (non-exported) name of a member's binding in the directive's package:
+	// %member-start / %member-lift, or the bound name behind %start / %lift under a
+	// :names table (see rawName).
+	private static String internalName(Directive directive, String member, String role) {
+		Map<String, String> names = directive.names();
+		if (names != null) {
+			return Objects.requireNonNull(names.get(member)) + "%" + role.substring(1);
+		}
+		String bare = "%" + member + role;
+		String pkg = directive.pkg();
+		return pkg == null ? readerSpelling(bare) : PackageRegistry.qualifyInternal(pkg, bare);
+	}
+
+	// Whether a :names table leaves the member out: then it is not bound at all, and not
+	// checked against the backend's boundary either -- the front end judged it before.
+	private static boolean unnamed(Directive directive, String member) {
+		Map<String, String> names = directive.names();
+		return names != null && !names.containsKey(member);
+	}
+
+	// Whether a reference filter (the members the program names) rules the member out.
+	// Under a :names table the program names the BOUND name, which the filter holds as
+	// it is spelled, or the raw binding behind it (rawName: a front end that reads a
+	// result's envelope itself calls that); otherwise the WIT label, whose reader
+	// spellings the filter holds.
+	private static boolean filtered(@Nullable Set<String> filter, Directive directive, String member) {
+		if (filter == null) {
+			return false;
+		}
+		Map<String, String> names = directive.names();
+		if (names == null) {
+			return !filter.contains(member);
+		}
+		String name = names.get(member);
+		return !filter.contains(name) && !filter.contains(name + "%raw");
+	}
+
+	// Whether a result-returning member is named only through its raw binding: the front
+	// end unwraps the envelope itself, so the public wrapper -- and the wit.lisp runtime
+	// its %wit-result call splices -- would be dead code (--component skips the tree
+	// shaker).
+	private static boolean rawOnly(@Nullable Set<String> filter, Directive directive, String member) {
+		Map<String, String> names = directive.names();
+		return filter != null && names != null && !filter.contains(names.get(member));
+	}
+
+	// The Lisp name one binding is DEFINED under: the :names table's, when the directive
+	// carries one.
+	private static String bindingName(Directive directive, String member) {
+		Map<String, String> names = directive.names();
+		return names != null ? Objects.requireNonNull(names.get(member)) : bindingName(directive.pkg(), member);
+	}
+
+	// The Lisp name one binding is DEFINED under.
+	//
+	// With :package the WIT label is qualified and kept verbatim, and a kv:add-ints call
+	// site meets it through the package's export table, which matches case-insensitively.
+	// WITHOUT :package there is no export table in between: the definition and every call
+	// site have to produce the SAME string by themselves, and a call site goes through
+	// the
+	// READER, which upcases. So a package-less binding is named the reader's spelling of
+	// the label. Binding the label verbatim instead defined |add-ints| while every call
+	// site said ADD-INTS, and the two never met -- the documented package-less example
+	// failed on every backend at once (undefined function on the interpreter, a call-time
+	// error stub on wasm-GC, an unsupported operation under --no-gc).
+	private static String bindingName(@Nullable String pkg, String member) {
+		return pkg == null ? readerSpelling(member) : PackageRegistry.qualify(pkg, member);
+	}
+
+	// What the reader makes of a name written in source: WIT labels are lower-kebab, the
+	// reader upcases, so this is the one spelling a hand-written call site can produce.
+	private static String readerSpelling(String label) {
+		return label.toUpperCase(Locale.ROOT);
+	}
+
+	// (:async-call "send" "pkg::%send-start" "pkg::%send-lift") -- an async func member
+	// of a %component-import form: the start wrapper async-lowers the call, the lift
+	// wrapper reads the result out of the return area once the subtask has returned
+	// (called by %subtask-future for an eager completion, or by the scheduler).
+	private static LispVal asyncCallBinding(String member, String startName, String liftName) {
+		return list(List.of(new LispSymbol(":ASYNC-CALL"), new LispString(member), new LispString(startName),
+				new LispString(liftName)));
+	}
+
+	// (:task-return "handle-result" "pkg::handle-result-task-return") -- the task-return
+	// built-in derived from a non-stream/future type alias.
+	private static LispVal taskReturnBinding(String alias, String lispName) {
+		return list(List.of(new LispSymbol(":TASK-RETURN"), new LispString(alias), new LispString(lispName)));
+	}
+
+	// The public binding of an async func member under --component. A plain member:
+	// (defun name (p ...)
+	// (rontolisp::%subtask-future (start p ...) (function lift)))
+	// -- the future settles to the lifted result. A result-returning member instead:
+	// (rontolisp:async-defun name (p ...)
+	// (let ((%wit-envelope (rontolisp:await
+	// (rontolisp::%subtask-future (start p ...)
+	// (function lift)))))
+	// (rontolisp::%wit-result %wit-envelope)))
+	// -- awaiting inside an async-defun keeps the eager-start contract (the subtask is
+	// in flight before the caller resumes) and re-signals the envelope's error arm at
+	// the caller's await. The await sits in a let init (a spine position) so the state
+	// machine suspends there structurally.
+	private static LispVal subtaskFutureDefun(String name, String start, String lift, List<Param> params,
+			boolean resultReturning) {
+		List<LispVal> lambdaList = new ArrayList<>();
+		List<LispVal> startCall = new ArrayList<>();
+		startCall.add(new LispSymbol(start));
+		for (Param param : params) {
+			lambdaList.add(new LispSymbol(param.name()));
+			startCall.add(param.argument());
+		}
+		LispVal liftRef = list(List.of(new LispSymbol(LispNames.FUNCTION), new LispSymbol(lift)));
+		LispVal future = list(List.of(
+				new LispSymbol(
+						PackageRegistry.qualifyInternal(LispNames.RONTOLISP_PKG, LispNames.SUBTASK_FUTURE_INTERNAL)),
+				list(startCall), liftRef));
+		if (!resultReturning) {
+			return list(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(name), list(lambdaList), future));
+		}
+		LispSymbol envelope = new LispSymbol("%wit-envelope");
+		LispVal await = list(
+				List.of(new LispSymbol(PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.AWAIT)), future));
+		LispVal unwrap = list(
+				List.of(new LispSymbol(PackageRegistry.qualifyInternal(LispNames.RONTOLISP_PKG, LispNames.WIT_RESULT)),
+						envelope));
+		LispVal let = list(
+				List.of(new LispSymbol(LispNames.LET), list(List.of(list(List.of(envelope, await)))), unwrap));
+		return list(List.of(new LispSymbol(PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.ASYNC_DEFUN)),
+				new LispSymbol(name), list(lambdaList), let));
+	}
+
+	// (rontolisp:async-defun name (p ...) (rontolisp::%wit-call "iface" "member" p ...))
+	// -- an async func member on the interpreter / the JVM: the synchronous provider
+	// call wrapped so the binding returns a settled (or, on a signal, rejected) future.
+	private static LispVal asyncProviderDefun(String name, String iface, String member, List<Param> params) {
+		List<LispVal> lambdaList = new ArrayList<>();
+		List<LispVal> call = new ArrayList<>();
+		call.add(new LispSymbol(PackageRegistry.qualifyInternal(LispNames.RONTOLISP_PKG, LispNames.WIT_CALL)));
+		call.add(new LispString(iface));
+		call.add(new LispString(member));
+		for (Param param : params) {
+			lambdaList.add(new LispSymbol(param.name()));
+			call.add(param.argument());
+		}
+		return list(List.of(new LispSymbol(PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.ASYNC_DEFUN)),
+				new LispSymbol(name), list(lambdaList), list(call)));
+	}
+
+	// ("member" "lisp-name") -- one bound member of a %component-import form.
+	private static LispVal memberBinding(String member, String lispName) {
+		return list(List.of(new LispString(member), new LispString(lispName)));
+	}
+
+	// The operations an async (stream/future) type alias binds. `new` returns the
+	// (readable . writable) handle pair; the rest take an end. The set is the same for
+	// both kinds -- a future is a one-shot stream as far as its handle lifecycle goes --
+	// but for `cancel-read`, a stream's alone: it withdraws a read the async scheduler
+	// left in flight, and only a stream read is ever left so.
+	private static final List<String> ASYNC_OPS = List.of("new", "read", "write", "drop-readable", "drop-writable");
+
+	private static final List<String> STREAM_ASYNC_OPS = List.of("new", "read", "write", "drop-readable",
+			"drop-writable", "cancel-read");
+
+	private static List<String> asyncOps(boolean stream) {
+		return stream ? STREAM_ASYNC_OPS : ASYNC_OPS;
+	}
+
+	// (:async "body-stream" "read" "h:body-stream-read") -- an async built-in binding of
+	// a %component-import form. Like :drop it is a distinct emission kind: a canon
+	// stream.*/future.* built-in is a CORE function typed by a component-level
+	// stream/future type, with no instance function behind it.
+	private static LispVal asyncBinding(String alias, String op, String lispName) {
+		return list(
+				List.of(new LispSymbol(":ASYNC"), new LispString(alias), new LispString(op), new LispString(lispName)));
+	}
+
+	// The element/payload contract of a bound async alias: a stream must be a byte
+	// stream (stream<u8> is what the canonical built-ins read/write through linear
+	// memory) -- EXCEPT a stream of resource handles (wasi:sockets' accept
+	// stream<tcp-socket>), whose 4-byte elements the read built-in lifts as opaque
+	// integer handles; such a stream is read-only for the guest, so only read /
+	// cancel-read / drop-readable bind. A future must be parameterized, and its payload
+	// must be a liftable value (future.read lifts it with the same machinery as a
+	// function result).
+	private static void validateAsyncAlias(Scoped target, String witPath, WitLocations locations, WitResolver resolver,
+			WitItem.TypeAlias alias, String member, String op) {
+		if (target.type() instanceof WitType.StreamOf stream) {
+			WitType element = stream.element();
+			if (element != null && isResourceHandle(element, resolver, target.iface())) {
+				if (!"read".equals(op) && !"cancel-read".equals(op) && !"drop-readable".equals(op)) {
+					throw new UnsupportedOperationException(WitSource.at(witPath, locations, alias) + ": '" + member
+							+ "': the alias '" + alias.name() + "' names a stream of resource handles, which is "
+							+ "read-only for the guest -- only the -read, -cancel-read and -drop-readable built-ins "
+							+ "bind");
+				}
+				return;
+			}
+			if (element == null || !isU8(element, resolver, target.iface())) {
+				throw new UnsupportedOperationException(WitSource.at(witPath, locations, alias) + ": '" + member
+						+ "': the alias '" + alias.name() + "' names a stream whose element is not u8; only stream<u8> "
+						+ "(a byte stream) and a stream of resource handles have async built-ins");
+			}
+			return;
+		}
+		WitType payload = ((WitType.FutureOf) target.type()).element();
+		if (payload == null) {
+			throw new UnsupportedOperationException(WitSource.at(witPath, locations, alias) + ": '" + member
+					+ "': the alias '" + alias.name() + "' names a bare future with no payload type; only a "
+					+ "parameterized future<T> can be read or written");
+		}
+		validateComponentResult(payload, witPath, locations, resolver, target.iface(), alias, member,
+				"the future payload");
+	}
+
+	// (:drop "bucket" "kv:bucket-drop") -- a resource drop of a %component-import form.
+	// The
+	// keyword head is what tells it apart from a ("member" "lisp-name") function binding:
+	// `canon resource.drop` is a different emission kind, producing a CORE function with
+	// no
+	// component function behind it.
+	private static LispVal dropBinding(String resource, String lispName) {
+		return list(List.of(new LispSymbol(":DROP"), new LispString(resource), new LispString(lispName)));
+	}
+
+	// (defmacro with-bucket (binding &body body)
+	// (list 'let (list binding)
+	// (list 'unwind-protect (cons 'progn body) (list 'kv:bucket-drop (car binding)))))
+	// -- (with-bucket (b (kv:open "")) ...) gives the handle back on any exit, in
+	// with-open-file's shape. Built with list, not a backquote template, so it reads the
+	// same on every backend's expander.
+	private static LispVal withResourceMacro(String name, String drop) {
+		LispSymbol binding = new LispSymbol("binding");
+		LispSymbol body = new LispSymbol("body");
+		LispSymbol listOp = new LispSymbol("LIST");
+		LispVal let = list(List.of(listOp, quote(new LispSymbol(LispNames.LET)), list(List.of(listOp, binding)),
+				list(List.of(listOp, quote(new LispSymbol(LispNames.UNWIND_PROTECT)),
+						list(List.of(new LispSymbol("CONS"), quote(new LispSymbol(LispNames.PROGN)), body)),
+						list(List.of(listOp, quote(new LispSymbol(drop)),
+								list(List.of(new LispSymbol("CAR"), binding))))))));
+		return list(List.of(new LispSymbol(LispNames.DEFMACRO), new LispSymbol(name),
+				list(List.of(binding, new LispSymbol("&BODY"), body)), let));
+	}
+
+	// (defun name (self) self nil) -- a Preview 1 drop, which releases nothing.
+	private static LispVal noopDropDefun(String name) {
+		return list(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(name),
+				list(List.of(new LispSymbol("self"))), new LispSymbol("self"), LispNil.INSTANCE));
+	}
+
+	// (rontolisp::%component-import "iface-id" "wit text" ("member" "lisp-name") ...) --
+	// the WIT text travels inside the form so the WASM compiler reads no files (the
+	// browser playground has no filesystem). Under :octets t an (:octets t) entry
+	// leads the members: every list<u8> those bindings lift is an octet vector.
+	private static LispVal componentImportForm(String ifaceId, String witSource, boolean octets,
+			List<LispVal> members) {
+		List<LispVal> out = new ArrayList<>();
+		out.add(new LispSymbol(PackageRegistry.qualifyInternal(LispNames.RONTOLISP_PKG, LispNames.COMPONENT_IMPORT)));
+		out.add(new LispString(ifaceId));
+		out.add(new LispString(witSource));
+		if (octets) {
+			out.add(list(List.of(new LispSymbol(":OCTETS"), new LispSymbol("T"))));
+		}
+		out.addAll(members);
+		return list(out);
+	}
+
+	// (defun name (p ...) (rontolisp::%wit-result (raw p ...))) -- the public wrapper of
+	// a result-returning binding on the WASM backends; without `unwrap`, (raw p ...)
+	// alone,
+	// the wrapper that coerces a list<T> argument.
+	private static LispVal wrapperDefun(String name, String raw, List<Param> params, boolean unwrap) {
+		List<LispVal> lambdaList = new ArrayList<>();
+		List<LispVal> call = new ArrayList<>();
+		call.add(new LispSymbol(raw));
+		for (Param param : params) {
+			lambdaList.add(new LispSymbol(param.name()));
+			call.add(param.argument());
+		}
+		LispVal body = unwrap ? list(
+				List.of(new LispSymbol(PackageRegistry.qualifyInternal(LispNames.RONTOLISP_PKG, LispNames.WIT_RESULT)),
+						list(call)))
+				: list(call);
+		return list(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(name), list(lambdaList), body));
+	}
+
+	// Whether the function's (effective) result is a WIT result -- the shape whose error
+	// arm must signal, and therefore the shape that needs the envelope + wrapper split on
+	// the WASM backends.
+	private static boolean isResultReturning(WitResolver.Func func, WitResolver resolver, WitItem.InterfaceDef iface) {
+		if (func.def().kind() == WitItem.FuncKind.CONSTRUCTOR) {
+			return false;
+		}
+		WitType result = func.def().func().result();
+		if (result == null) {
+			return false;
+		}
+		return resolveAliases(result, resolver, iface).type() instanceof WitType.ResultOf;
+	}
+
+	/**
+	 * A WIT type together with the interface scope its named references resolve in. The
+	 * scope CHANGES as a walk descends: follow a {@code use} clause into another
+	 * interface and you are looking at THAT interface's types, whose own internal
+	 * references the starting scope never imported ({@code wasi:http/outgoing-handler}
+	 * uses {@code error-code} from {@code wasi:http/types}, and {@code error-code}'s
+	 * {@code DNS-error} case carries a {@code DNS-error-payload} it has never heard of).
+	 *
+	 * @param iface the interface the type is written in
+	 * @param type the type
+	 */
+	private record Scoped(WitItem.InterfaceDef iface, WitType type) {
+	}
+
+	// Follows a `type` alias chain (across interfaces) to the type it bottoms out at, and
+	// reports the scope THAT type is written in.
+	private static Scoped resolveAliases(WitType type, WitResolver resolver, WitItem.InterfaceDef iface) {
+		if (type instanceof WitType.Named named) {
+			WitResolver.Owned owned = resolver.resolveOwned(iface, named.name());
+			if (owned != null && owned.item() instanceof WitItem.TypeAlias alias) {
+				return resolveAliases(alias.target(), resolver, owned.owner());
+			}
+		}
+		return new Scoped(iface, type);
+	}
+
+	// What the canonical-ABI wrapper codegen supports today: results lift recursively
+	// from the return area and parameters lower to flat values (a list<T> as a staged
+	// canonical array), so everything but flags crosses both ways.
+	private static void validateComponentFunc(WitResolver.Func func, String witPath, WitLocations locations,
+			WitResolver resolver, WitItem.InterfaceDef iface, String member) {
+		for (var param : func.def().func().params()) {
+			validateComponentParam(param.type(), witPath, locations, resolver, iface, func.def(), member,
+					"parameter '" + param.name() + "'", true);
+		}
+		WitType result = func.def().func().result();
+		if (result != null) {
+			validateComponentResult(result, witPath, locations, resolver, iface, func.def(), member, "the result");
+		}
+	}
+
+	private static void validateComponentParam(WitType type, String witPath, WitLocations locations,
+			WitResolver resolver, WitItem.InterfaceDef iface, WitItem anchor, String member, String what,
+			boolean optionAllowed) {
+		Scoped scoped = resolveAliases(type, resolver, iface);
+		// From here on the type's names resolve in the interface that WROTE it, which is
+		// not necessarily the one this walk started in.
+		WitItem.InterfaceDef in = scoped.iface();
+		WitType t = scoped.type();
+		switch (t) {
+			case WitType.StreamOf ignored ->
+				validateAsyncElement(t, witPath, locations, resolver, in, anchor, member, what);
+			case WitType.FutureOf ignored ->
+				validateAsyncElement(t, witPath, locations, resolver, in, anchor, member, what);
+			case WitType.ListOf list ->
+				validateComponentParam(list.element(), witPath, locations, resolver, in, anchor, member, what, true);
+			case WitType.OptionOf opt -> {
+				if (!optionAllowed) {
+					// option<option<T>> has no rontolisp representation: both `none` and
+					// `some(none)` are nil.
+					throw new UnsupportedOperationException(WitSource.at(witPath, locations, anchor) + ": '" + member
+							+ "': the WIT type of " + what + " nests an option directly inside an option, which has no "
+							+ "rontolisp value (an option is the value or nil, so `none` and `some(none)` would be the "
+							+ "same nil)");
+				}
+				validateComponentParam(opt.element(), witPath, locations, resolver, in, anchor, member, what, false);
+			}
+			case WitType.ResultOf res -> {
+				if (res.ok() != null) {
+					validateComponentParam(res.ok(), witPath, locations, resolver, in, anchor, member, what, true);
+				}
+				if (res.err() != null) {
+					validateComponentParam(res.err(), witPath, locations, resolver, in, anchor, member, what, true);
+				}
+			}
+			case WitType.TupleOf tuple -> {
+				for (WitType element : tuple.elements()) {
+					validateComponentParam(element, witPath, locations, resolver, in, anchor, member, what, true);
+				}
+			}
+			case WitType.Named named -> {
+				WitResolver.Owned owned = resolver.resolveOwned(in, named.name());
+				// A definition's fields / cases are written in the interface that owns
+				// it.
+				WitItem.InterfaceDef owner = owned == null ? in : owned.owner();
+				switch (owned == null ? null : owned.item()) {
+					case WitItem.RecordDef record -> {
+						rejectEmptyRecord(record, witPath, locations, anchor, member, what);
+						for (WitItem.Field field : record.fields()) {
+							validateComponentParam(field.type(), witPath, locations, resolver, owner, anchor, member,
+									what, true);
+						}
+					}
+					case WitItem.VariantDef variant -> {
+						for (WitItem.Case c : variant.cases()) {
+							if (c.payload() != null) {
+								validateComponentParam(c.payload(), witPath, locations, resolver, owner, anchor, member,
+										what, true);
+							}
+						}
+					}
+					case WitItem.FlagsDef ignored -> throw new UnsupportedOperationException(WitSource.at(witPath,
+							locations, anchor) + ": '" + member + "': the WIT type of " + what
+							+ " involves flags, which does not cross the component import boundary yet (its rontolisp "
+							+ "representation is settled: a keyword list)");
+					case WitItem.EnumDef ignored -> {
+						// a keyword -- crosses
+					}
+					case WitItem.ResourceDef ignored -> {
+						// a handle -- crosses
+					}
+					case null -> throw undefinedType(witPath, locations, anchor, member, what, named);
+					default -> {
+						// a type alias was already resolved above
+					}
+				}
+			}
+			default -> {
+				// the scalars, bool, char, string, borrow/own -- all cross
+			}
+		}
+	}
+
+	// The component model has no empty record: `record r { }` cannot be encoded at all,
+	// so
+	// it would surface as an unreadable component rather than a compile error.
+	private static void rejectEmptyRecord(WitItem.RecordDef record, String witPath, WitLocations locations,
+			WitItem anchor, String member, String what) {
+		if (record.fields().isEmpty()) {
+			throw new UnsupportedOperationException(WitSource.at(witPath, locations, anchor) + ": '" + member
+					+ "': the WIT type of " + what + " involves the record '" + record.name()
+					+ "', which declares no fields -- the component model has no empty record type");
+		}
+	}
+
+	private static boolean isU8(WitType type, WitResolver resolver, WitItem.InterfaceDef iface) {
+		return resolveAliases(type, resolver, iface).type() instanceof WitType.Prim prim && "u8".equals(prim.name());
+	}
+
+	// Whether the type is (an own of, or a bare reference to) a resource -- the element
+	// shape of a handle stream like wasi:sockets' stream<tcp-socket>.
+	private static boolean isResourceHandle(WitType type, WitResolver resolver, WitItem.InterfaceDef iface) {
+		Scoped scoped = resolveAliases(type, resolver, iface);
+		if (scoped.type() instanceof WitType.OwnOf) {
+			return true;
+		}
+		return scoped.type() instanceof WitType.Named named
+				&& resolver.resolveType(scoped.iface(), named.name()) instanceof WitItem.ResourceDef;
+	}
+
+	// The --component acceptance policy for a stream/future value type: the handle itself
+	// crosses as a bare i32 (the canonical ABI's async built-ins read/write it), but the
+	// element governs that marshalling, so an unmarshalable element is rejected here as a
+	// friendly compile error rather than surfacing later as a codegen throw. A stream
+	// must be a byte stream (stream<u8>) or a stream of resource handles (wasi:sockets'
+	// accept stream<tcp-socket>, read through a handle-element alias built-in); a future
+	// must be parameterized so its payload can be read out (future.read), and that
+	// payload is validated as a produced value.
+	private static void validateAsyncElement(WitType t, String witPath, WitLocations locations, WitResolver resolver,
+			WitItem.InterfaceDef in, WitItem anchor, String member, String what) {
+		if (t instanceof WitType.StreamOf stream) {
+			WitType elem = stream.element();
+			if (elem == null || (!isU8(elem, resolver, in) && !isResourceHandle(elem, resolver, in))) {
+				throw new UnsupportedOperationException(WitSource.at(witPath, locations, anchor) + ": '" + member
+						+ "': the WIT type of " + what + " is a stream whose element is not u8; only stream<u8> "
+						+ "(a byte stream) and a stream of resource handles cross the component boundary");
+			}
+		}
+		else if (t instanceof WitType.FutureOf fut) {
+			if (fut.element() == null) {
+				throw new UnsupportedOperationException(WitSource.at(witPath, locations, anchor) + ": '" + member
+						+ "': the WIT type of " + what + " is a bare future with no payload type; only a parameterized "
+						+ "future<T> can be read");
+			}
+			validateComponentResult(fut.element(), witPath, locations, resolver, in, anchor, member, what);
+		}
+	}
+
+	private static UnsupportedOperationException undefinedType(String witPath, WitLocations locations, WitItem anchor,
+			String member, String what, WitType.Named named) {
+		return new UnsupportedOperationException(
+				WitSource.at(witPath, locations, anchor) + ": '" + member + "': the WIT type of " + what + " is '"
+						+ named.name() + "', which the file does not define (nor import with a use clause)");
+	}
+
+	private static void validateComponentResult(WitType type, String witPath, WitLocations locations,
+			WitResolver resolver, WitItem.InterfaceDef iface, WitItem anchor, String member, String what) {
+		Scoped scoped = resolveAliases(type, resolver, iface);
+		WitItem.InterfaceDef in = scoped.iface();
+		WitType t = scoped.type();
+		switch (t) {
+			case WitType.StreamOf ignored ->
+				validateAsyncElement(t, witPath, locations, resolver, in, anchor, member, what);
+			case WitType.FutureOf ignored ->
+				validateAsyncElement(t, witPath, locations, resolver, in, anchor, member, what);
+			case WitType.ListOf list ->
+				validateComponentResult(list.element(), witPath, locations, resolver, in, anchor, member, what);
+			case WitType.OptionOf opt ->
+				validateComponentResult(opt.element(), witPath, locations, resolver, in, anchor, member, what);
+			case WitType.ResultOf res -> {
+				if (res.ok() != null) {
+					validateComponentResult(res.ok(), witPath, locations, resolver, in, anchor, member, what);
+				}
+				if (res.err() != null) {
+					validateComponentResult(res.err(), witPath, locations, resolver, in, anchor, member, what);
+				}
+			}
+			case WitType.TupleOf tuple -> {
+				for (WitType element : tuple.elements()) {
+					validateComponentResult(element, witPath, locations, resolver, in, anchor, member, what);
+				}
+			}
+			case WitType.Named named -> {
+				WitResolver.Owned owned = resolver.resolveOwned(in, named.name());
+				WitItem.InterfaceDef owner = owned == null ? in : owned.owner();
+				switch (owned == null ? null : owned.item()) {
+					case WitItem.RecordDef record -> {
+						rejectEmptyRecord(record, witPath, locations, anchor, member, what);
+						for (WitItem.Field field : record.fields()) {
+							validateComponentResult(field.type(), witPath, locations, resolver, owner, anchor, member,
+									what);
+						}
+					}
+					case WitItem.VariantDef variant -> {
+						for (WitItem.Case c : variant.cases()) {
+							if (c.payload() != null) {
+								validateComponentResult(c.payload(), witPath, locations, resolver, owner, anchor,
+										member, what);
+							}
+						}
+					}
+					case WitItem.FlagsDef ignored ->
+						throw new UnsupportedOperationException(WitSource.at(witPath, locations, anchor) + ": '"
+								+ member + "': the WIT type of " + what + " involves flags, which does not cross the "
+								+ "component import boundary yet (its rontolisp representation is settled: a keyword "
+								+ "list)");
+					case WitItem.EnumDef ignored -> {
+						// a keyword -- crosses
+					}
+					case WitItem.ResourceDef ignored -> {
+						// a handle -- crosses
+					}
+					case null -> throw undefinedType(witPath, locations, anchor, member, what, named);
+					default -> {
+						// a type alias was already resolved above
+					}
+				}
+			}
+			default -> {
+				// primitive scalars, bool, string, char -- all cross
+			}
+		}
+	}
+
+	/**
+	 * The Lisp name a WIT function binds to, without a package qualifier: a freestanding
+	 * function keeps its WIT label; a {@code resource} member is prefixed with the
+	 * resource ({@code bucket.get} -> {@code bucket-get}, {@code constructor(bucket)} ->
+	 * {@code bucket-new}), which keeps the flat, Lisp-2 function namespace unambiguous
+	 * when two resources declare the same method.
+	 * @param func the WIT function and its owning resource
+	 * @return the bare Lisp function name
+	 */
+	public static String memberName(WitResolver.Func func) {
+		String resource = func.resource();
+		if (resource == null) {
+			return func.def().name();
+		}
+		return switch (func.def().kind()) {
+			case CONSTRUCTOR -> resource + "-new";
+			case PLAIN, STATIC -> resource + "-" + func.def().name();
+		};
+	}
+
+	// The lambda list of a binding. A resource method takes the handle as its leading
+	// parameter (the WIT `self` receiver, which the model does not spell out). octets:
+	// a list<u8> is the :octets designator rather than :string (:octets t on a wasm-GC
+	// core module).
+	private static List<Param> parameters(WitResolver.Func func, String witPath, WitLocations locations,
+			WitResolver resolver, WitItem.InterfaceDef iface, String member, boolean wasm, boolean component,
+			boolean noGc, boolean octets) {
+		List<Param> params = new ArrayList<>();
+		boolean method = func.resource() != null && func.def().kind() == WitItem.FuncKind.PLAIN;
+		if (method) {
+			params.add(new Param("self", ":INT"));
+		}
+		for (var param : func.def().func().params()) {
+			String designator = designatorOf(param.type(), witPath, locations, resolver, iface, func, member,
+					"parameter '" + param.name() + "'", wasm, component, noGc, octets);
+			String name = param.name();
+			if (method && "self".equals(name)) {
+				throw new UnsupportedOperationException(WitSource.at(witPath, locations, func.def()) + ": '" + member
+						+ "' declares a parameter named 'self', which collides with the resource handle rontolisp "
+						+ "passes as the first argument of a method");
+			}
+			params.add(new Param(name, designator, listDescriptor(param.type(), resolver, iface)));
+		}
+		return params;
+	}
+
+	// The wasm-import :returns designator (":VOID" when the function returns nothing). A
+	// constructor returns its resource, which the WIT model leaves implicit.
+	private static String resultDesignator(WitResolver.Func func, String witPath, WitLocations locations,
+			WitResolver resolver, WitItem.InterfaceDef iface, String member, boolean wasm, boolean noGc,
+			boolean octets) {
+		if (func.def().kind() == WitItem.FuncKind.CONSTRUCTOR) {
+			return ":INT";
+		}
+		WitType result = func.def().func().result();
+		if (result == null) {
+			return ":VOID";
+		}
+		// resultDesignator is only reached on the non-component path (the component path
+		// binds through the WIT text, not a flat designator), so component is always
+		// false.
+		return designatorOf(result, witPath, locations, resolver, iface, func, member, "the result", wasm, false, noGc,
+				octets);
+	}
+
+	// :octets t under --no-gc: the scalar backend has no byte vector, so the octets the
+	// option promises have no value to arrive as. Only a flat type reaches this check
+	// (designatorOf refused the rest), so a list<u8> is a parameter or the result
+	// itself.
+	private static void refuseOctets(WitResolver.Func func, String witPath, WitLocations locations,
+			WitResolver resolver, WitItem.InterfaceDef iface, String member) {
+		List<WitType> types = new ArrayList<>();
+		for (var param : func.def().func().params()) {
+			types.add(param.type());
+		}
+		if (func.def().func().result() != null) {
+			types.add(func.def().func().result());
+		}
+		for (WitType type : types) {
+			Scoped scoped = resolveAliases(type, resolver, iface);
+			if (scoped.type() instanceof WitType.ListOf list && isU8(list.element(), resolver, scoped.iface())) {
+				throw new UnsupportedOperationException(WitSource.at(witPath, locations, func.def()) + ": '" + member
+						+ "': :octets t crosses a list<u8> as a byte vector, which --no-gc has none of (the scalar "
+						+ "backend has no arrays); compile on the default GC backend, or drop :octets");
+			}
+		}
+	}
+
+	// The one place a WIT type is judged. On the WASM boundary only the flat set
+	// rontolisp:wasm-import can carry crosses; on the interpreter and the JVM the
+	// boundary
+	// is an ordinary Lisp function call, so every type crosses as its settled house
+	// representation (WitTypeMapper) and only stream/future -- which have no rontolisp
+	// value at all until language-level async lands -- are refused. octets: a list<u8>
+	// crosses as :octets, its octets raw, instead of :string text.
+	private static String designatorOf(WitType type, String witPath, WitLocations locations, WitResolver resolver,
+			WitItem.InterfaceDef iface, WitResolver.Func func, String member, String what, boolean wasm,
+			boolean component, boolean noGc, boolean octets) {
+		// --no-gc carries EVERY type that has a WIT spelling -- its house integer is i64,
+		// so the 64-bit widths cross where the wasm-GC i31ref has to refuse them. The
+		// designator is therefore read straight off the prim name, the way the EXPORT
+		// side already reads it, instead of through the width-losing Rep below: an s64
+		// import and an s64 export of one world must not disagree about which backend
+		// can bind them.
+		if (noGc) {
+			WitType resolved = resolveAliases(type, resolver, iface).type();
+			if (resolved instanceof WitType.Prim prim) {
+				BoundaryType boundary = BoundaryType.forWitName(prim.name());
+				if (boundary != null) {
+					return boundary.designator();
+				}
+			}
+		}
+		WitTypeMapper.Rep rep = repOf(type, witPath, locations, resolver, iface, func, member, what);
+		if (rep == WitTypeMapper.Rep.STREAM_HANDLE || rep == WitTypeMapper.Rep.FUTURE_HANDLE) {
+			if (component) {
+				// --component marshals a stream/future handle through the canonical ABI's
+				// async built-ins (validated in validateComponentFunc); the flat
+				// designator
+				// is unused on the component path, which drives the wrapper off the WIT
+				// text.
+				return ":VOID";
+			}
+			throw new UnsupportedOperationException(WitSource.at(witPath, locations, func.def()) + ": '" + member
+					+ "': the WIT type of " + what + " is a stream or a future, which only the --component backend can "
+					+ "marshal (through the canonical ABI's async built-ins); the interpreter, the JVM and Preview 1 "
+					+ "WASM have no rontolisp value for it");
+		}
+		if (rep == WitTypeMapper.Rep.UNSUPPORTED) {
+			throw new UnsupportedOperationException(WitSource.at(witPath, locations, func.def()) + ": '" + member
+					+ "': the WIT type of " + what + " has no rontolisp representation on any backend");
+		}
+		if (!wasm) {
+			// The interpreter and the JVM pass LispVals straight through to the provider,
+			// so the designator is unused there -- every representation is expressible.
+			return ":VOID";
+		}
+		return switch (rep) {
+			case INT, HANDLE -> ":INT";
+			case FLOAT -> ":FLOAT";
+			case BOOLEAN -> ":BOOL";
+			case STRING -> ":STRING";
+			case BYTE_STRING -> octets ? ":OCTETS" : ":STRING";
+			// A Preview 1 core import is a bare host function: it carries flat values and
+			// nothing else, because a core module has no component type with which to
+			// declare a richer shape to its host. The canonical ABI is what marshals the
+			// rich types, and it lives at the component boundary.
+			default -> throw new UnsupportedOperationException(WitSource.at(witPath, locations, func.def()) + ": '"
+					+ member + "': the WIT type of " + what + " does not cross the Preview 1 WASM import boundary, "
+					+ "which carries the flat set (the integer scalars up to 32 bits, the float scalars, bool, "
+					+ "string, list<u8> and resource handles). Its rontolisp representation is settled (" + rep.name()
+					+ "): compile with --component, where the canonical ABI marshals it, or run on the interpreter "
+					+ "or the JVM backend, which bind it through a provider");
+		};
+	}
+
+	private static WitTypeMapper.Rep repOf(WitType type, String witPath, WitLocations locations, WitResolver resolver,
+			WitItem.InterfaceDef iface, WitResolver.Func func, String member, String what) {
+		// Aliases first: WitTypeMapper classifies a type STRUCTURALLY, so it cannot
+		// follow
+		// an alias whose target is itself a name (`type headers = fields`, which every
+		// real
+		// wasi:http interface writes) -- only the resolver can.
+		Scoped scoped = resolveAliases(type, resolver, iface);
+		WitType t = scoped.type();
+		if (t instanceof WitType.Named named) {
+			WitResolver.Owned owned = resolver.resolveOwned(scoped.iface(), named.name());
+			if (owned == null) {
+				throw undefinedType(witPath, locations, func.def(), member, what, named);
+			}
+			return WitTypeMapper.repOfDefinition(owned.item());
+		}
+		return WitTypeMapper.rep(t);
+	}
+
+	// (rontolisp:wasm-import 'name :from "module" :as "field" :params '(...) :returns
+	// ... [:async t]) -- :async t when the WIT member is an `async func`, so the P1
+	// binding answers a (settled) future like every other backend's.
+	// With `namedParams`, the WIT parameter names ride along as :param-names (the
+	// --no-gc --component wrap types its import instance with them; a core module never
+	// reads them, so the Preview 1 block stays the hand-written one).
+	private static LispVal wasmImportForm(String name, String module, String field, List<Param> params, String returns,
+			boolean async, boolean namedParams) {
+		List<LispVal> designators = new ArrayList<>();
+		List<LispVal> paramNames = new ArrayList<>();
+		for (Param param : params) {
+			designators.add(new LispSymbol(param.designator()));
+			paramNames.add(new LispString(param.name()));
+		}
+		List<LispVal> out = new ArrayList<>();
+		out.add(new LispSymbol(PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.WASM_IMPORT)));
+		out.add(quote(new LispSymbol(name)));
+		out.add(new LispSymbol(":FROM"));
+		out.add(new LispString(module));
+		out.add(new LispSymbol(":AS"));
+		out.add(new LispString(field));
+		out.add(new LispSymbol(":PARAMS"));
+		out.add(quote(list(designators)));
+		if (namedParams) {
+			out.add(new LispSymbol(":PARAM-NAMES"));
+			out.add(quote(list(paramNames)));
+		}
+		out.add(new LispSymbol(":RETURNS"));
+		out.add(new LispSymbol(returns));
+		if (async) {
+			out.add(new LispSymbol(":ASYNC"));
+			out.add(new LispSymbol("T"));
+		}
+		return list(out);
+	}
+
+	// (defun name (p ...) (rontolisp::%wit-call "iface" "member" p ...))
+	private static LispVal providerDefun(String name, String iface, String member, List<Param> params) {
+		List<LispVal> lambdaList = new ArrayList<>();
+		List<LispVal> call = new ArrayList<>();
+		call.add(new LispSymbol(PackageRegistry.qualifyInternal(LispNames.RONTOLISP_PKG, LispNames.WIT_CALL)));
+		call.add(new LispString(iface));
+		call.add(new LispString(member));
+		for (Param param : params) {
+			lambdaList.add(new LispSymbol(param.name()));
+			call.add(param.argument());
+		}
+		return list(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(name), list(lambdaList), list(call)));
+	}
+
+	// (defpackage kv (:use cl) (:export get set ...)) -- the bound names are the
+	// package's
+	// external symbols, so a call site spells them kv:get like any other package.
+	// `members` is a SequencedSet, not a plain Set: its iteration order becomes the
+	// :export list of generated Lisp source, so an unordered one (a Set.of, a Set.copyOf)
+	// would emit a different-but-equivalent program per JVM run
+	// (.kb/emitted-output-determinism.md).
+	private static LispVal defpackageForm(String pkg, SequencedSet<String> members) {
+		List<LispVal> exports = new ArrayList<>();
+		exports.add(new LispSymbol(":EXPORT"));
+		for (String member : members) {
+			exports.add(new LispSymbol(member));
+		}
+		LispVal use = list(List.of(new LispSymbol(":USE"), new LispSymbol(LispNames.CL_PKG)));
+		// The package name is the designator VERBATIM: rontolisp symbols are
+		// case-preserving, so lowercasing it here while `PackageRegistry.qualify` keeps
+		// the bindings' case defined `KV:open` in a package named `kv` -- and every call
+		// site then failed to resolve with "No such package: KV".
+		return list(List.of(new LispSymbol(LispNames.DEFPACKAGE), new LispSymbol(pkg), use, list(exports)));
+	}
+
+	// One bound parameter: its Lisp name and the wasm-import type designator it crosses
+	// as
+	// (unused on the interpreter/JVM path, where the boundary is a Lisp call).
+	// `descriptor`, when the WIT type holds a list<T> (T other than u8), is the quoted
+	// map of where (listDescriptor): the binding passes the argument through
+	// rontolisp::%wit-coerce, so a vector crosses as a proper list and anything else
+	// signals type-error on every backend.
+	private record Param(String name, String designator, @Nullable LispVal descriptor) {
+
+		Param(String name, String designator) {
+			this(name, designator, null);
+		}
+
+		LispVal argument() {
+			LispSymbol symbol = new LispSymbol(this.name);
+			if (this.descriptor == null) {
+				return symbol;
+			}
+			return list(List.of(
+					new LispSymbol(PackageRegistry.qualifyInternal(LispNames.RONTOLISP_PKG, LispNames.WIT_COERCE)),
+					symbol, quote(this.descriptor)));
+		}
+
+	}
+
+	// Where a list<T> (T other than u8) sits in a parameter's WIT type, as the datum
+	// rontolisp::%wit-coerce walks: (:list D), (:option D), (:tuple D ...), (:record
+	// (:FIELD . D) ...), (:variant (:CASE . D) ...) -- a result's arms are :OK / :ERROR
+	// -- with nil for a position holding none; nil for the whole type when it holds none.
+	private static @Nullable LispVal listDescriptor(@Nullable WitType type, WitResolver resolver,
+			WitItem.InterfaceDef iface) {
+		if (type == null) {
+			return null;
+		}
+		Scoped scoped = resolveAliases(type, resolver, iface);
+		WitItem.InterfaceDef in = scoped.iface();
+		return switch (scoped.type()) {
+			case WitType.ListOf list -> isU8(list.element(), resolver, in) ? null
+					: list(List.of(new LispSymbol(":LIST"), orNil(listDescriptor(list.element(), resolver, in))));
+			case WitType.OptionOf opt -> {
+				LispVal element = listDescriptor(opt.element(), resolver, in);
+				yield element == null ? null : list(List.of(new LispSymbol(":OPTION"), element));
+			}
+			case WitType.TupleOf tuple -> {
+				List<LispVal> out = new ArrayList<>();
+				out.add(new LispSymbol(":TUPLE"));
+				boolean any = false;
+				for (WitType element : tuple.elements()) {
+					LispVal d = listDescriptor(element, resolver, in);
+					any |= d != null;
+					out.add(orNil(d));
+				}
+				yield any ? list(out) : null;
+			}
+			case WitType.ResultOf res -> keyed(":VARIANT", List.of("ok", "error"),
+					List.of(listDescriptorOrNil(res.ok(), resolver, in), listDescriptorOrNil(res.err(), resolver, in)));
+			case WitType.Named named -> {
+				WitResolver.Owned owned = resolver.resolveOwned(in, named.name());
+				WitItem.InterfaceDef owner = owned == null ? in : owned.owner();
+				yield switch (owned == null ? null : owned.item()) {
+					case WitItem.RecordDef record ->
+						keyed(":RECORD", record.fields().stream().map(WitItem.Field::name).toList(),
+								record.fields()
+									.stream()
+									.map(field -> listDescriptorOrNil(field.type(), resolver, owner))
+									.toList());
+					case WitItem.VariantDef variant ->
+						keyed(":VARIANT", variant.cases().stream().map(WitItem.Case::name).toList(),
+								variant.cases()
+									.stream()
+									.map(c -> listDescriptorOrNil(c.payload(), resolver, owner))
+									.toList());
+					case null, default -> null;
+				};
+			}
+			default -> null;
+		};
+	}
+
+	private static LispVal listDescriptorOrNil(@Nullable WitType type, WitResolver resolver,
+			WitItem.InterfaceDef iface) {
+		return orNil(listDescriptor(type, resolver, iface));
+	}
+
+	// (head (:NAME . D) ...) over the names whose descriptor is not nil; nil when none
+	// is.
+	private static @Nullable LispVal keyed(String head, List<String> names, List<LispVal> descriptors) {
+		List<LispVal> out = new ArrayList<>();
+		out.add(new LispSymbol(head));
+		for (int i = 0; i < names.size(); i++) {
+			if (descriptors.get(i) != LispNil.INSTANCE) {
+				out.add(new LispCons(new LispSymbol(":" + names.get(i).toUpperCase(Locale.ROOT)), descriptors.get(i)));
+			}
+		}
+		return out.size() == 1 ? null : list(out);
+	}
+
+	private static LispVal orNil(@Nullable LispVal value) {
+		return value == null ? LispNil.INSTANCE : value;
+	}
+
+	private static LispVal quote(LispVal value) {
+		return new LispCons(new LispSymbol(LispNames.QUOTE), new LispCons(value, LispNil.INSTANCE));
+	}
+
+	private static LispVal list(List<LispVal> elements) {
+		LispVal result = LispNil.INSTANCE;
+		for (int i = elements.size() - 1; i >= 0; i--) {
+			result = new LispCons(elements.get(i), result);
+		}
+		return result;
+	}
+
+}

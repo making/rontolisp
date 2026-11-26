@@ -1,0 +1,37 @@
+package am.ik.rontolisp.codegen.jvm;
+
+import java.lang.classfile.constantpool.MethodRefEntry;
+import java.lang.classfile.constantpool.Utf8Entry;
+import java.util.List;
+
+import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispNames;
+import am.ik.rontolisp.LispVal;
+
+/**
+ * Compiles the {@code %list-directory} internal primitive: {@code (t . names)} for a
+ * readable directory, nil otherwise. The path argument is compiled to a runtime string
+ * and passed to the {@code _listDirectory} runtime helper, which -- like
+ * {@code _probeFile} -- answers rather than signals for a path that is not there.
+ * Everything user-facing ({@code directory}, the {@code uiop:} spellings) is Lisp source
+ * over this call, in {@code LispPreludeLibrary}.
+ */
+final class JvmListDirectoryCompiler {
+
+	private JvmListDirectoryCompiler() {
+	}
+
+	static void compile(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() != 2) {
+			throw new UnsupportedOperationException(
+					LispNames.LIST_DIRECTORY + " expects 1 argument, got " + (parts.size() - 1));
+		}
+		JvmExprCompiler.compileExpr(parts.get(1), ctx, className);
+		Utf8Entry nameUtf8 = ctx.cp.utf8Entry(JvmIoRuntimeBuilder.LIST_DIRECTORY_METHOD);
+		Utf8Entry descUtf8 = ctx.cp.utf8Entry(JvmIoRuntimeBuilder.LIST_DIRECTORY_DESC);
+		MethodRefEntry ref = ctx.cp.methodRef(ctx.cp.classEntry(className), nameUtf8, descUtf8);
+		ctx.body.invokestatic(ref);
+	}
+
+}

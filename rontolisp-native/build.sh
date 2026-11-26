@@ -1,0 +1,429 @@
+#!/usr/bin/env bash
+# Builds the precompile shim and the runner stubs for the host and lays them out as
+#   <out>/am/ik/rontolisp/native/<os>-<arch>/{librlprecomp.so|librlprecomp.dylib, rlrun, rlrun-net}
+# (<out> defaults to target/resources), the classpath layout the Java side loads. The
+# stubs are one runner built twice: rlrun-net adds the network host a program that
+# fetches imports (the `net` feature: rustls, +1.14 MB), which no other output carries.
+# Beside them go the notices the binaries owe the crates they link: runner-notices.txt
+# (rlrun-net's crates, a superset of rlrun's; what every --native output carries) and,
+# with the shim, shim-notices.txt -- each crate's name, version, licence and repository
+# from cargo's metadata, then every licence file the crates' packages ship. Third-party:
+# wasmtime and the crates it links (MIT, Apache-2.0, BSD-3-Clause, ISC, Unicode-3.0,
+# Zlib, CDLA-Permissive-2.0). Notice: THIRD-PARTY-NOTICES.txt, "Rust crates".
+#
+#   ./build.sh [--test] [out-dir]    --test: then run the workspace tests against the stubs
+#   ./build.sh --stub PLATFORM [out-dir]
+#       only the runner stubs of PLATFORM (<os>-<arch>), laid out the same way: what a
+#       --native-target output for PLATFORM starts with. The host's platform, or on Linux
+#       the other Linux architecture, cross-built with <arch>-linux-gnu-gcc (Debian/Ubuntu:
+#       gcc-aarch64-linux-gnu / gcc-x86-64-linux-gnu) and the rustup target
+#       <arch>-unknown-linux-musl
+#   ./build.sh --is-static FILE      exit 0 iff FILE is an ELF executable with no interpreter
+#   ./build.sh --notices PACKAGE PLATFORM
+#       print the notices of the crates PACKAGE (rlrun: with the net feature) links on
+#       PLATFORM
+#   ./build.sh --maven BUILD REQUIRED
+#       what pom.xml runs in generate-resources, with the values of the properties
+#       rontolisp.native.build and rontolisp.native.required (true|false):
+#       BUILD     build the pair when cargo is found; without cargo, warn and go on.
+#                 A pair already there and older than a file it is built from is
+#                 rebuilt the same way under false too
+#       REQUIRED  fail unless target/resources holds the host's shim, both stubs and
+#                 their notices afterwards (built here or put there by CI), and on Linux
+#                 unless the stubs are static. A pair without notices gets them when
+#                 cargo is found, whatever BUILD says
+#
+# The two are built by SEPARATE cargo invocations on purpose: cargo unifies a
+# dependency's features across the packages of one invocation, so building them together
+# would put the shim's Cranelift into the stub.
+#
+# On Linux the stub links musl STATICALLY (the Rust target <arch>-unknown-linux-musl,
+# added through rustup when missing), so an output runs on any distribution: no glibc
+# floor. Not static glibc, which made every output 0.83 MB bigger; the stub brings its
+# own memcpy/memmove (and memset on x86_64), since musl's made the copying GC ~17% slower
+# on x86_64 and ~3% on aarch64 (.kb/native-output.md, "Traps"). Without the target (no rustup) the
+# stub falls back to
+# linking glibc dynamically with a warning, except under REQUIRED.
+#
+# The C the crates compile into every binary is built for the platform's oldest CPU, like
+# the Rust code, whatever the C compiler defaults to (c_floor).
+set -euo pipefail
+cd "$(dirname "$0")"
+
+case "$(uname -s)" in
+  Linux) os=linux; lib=librlprecomp.so ;;
+  Darwin) os=macos; lib=librlprecomp.dylib ;;
+  *) echo "unsupported host OS: $(uname -s)" >&2; exit 1 ;;
+esac
+case "$(uname -m)" in
+  x86_64 | amd64) arch=x86_64 ;;
+  arm64 | aarch64) arch=aarch64 ;;
+  *) echo "unsupported host architecture: $(uname -m)" >&2; exit 1 ;;
+esac
+
+# The C compiler flags of the oldest CPU of platform $1 (<os>-<arch>): the floor Rust's own
+# targets compile for (x86-64, Armv8.0-A, Apple M1) and rlprecomp::PLATFORMS precompiles
+# modules for. cc-rs compiles a crate's C -- wasmtime's helpers.c in every binary, ring's
+# in rlrun-net -- for the C compiler's DEFAULT CPU otherwise, which moves with the build
+# host: GitHub's Ubuntu 26.04 runner installs the amd64v3 variant, whose gcc defaults to
+# x86-64-v3, and every stub it built executed AVX at the first module load
+# (.kb/native-output.md, "Traps").
+c_floor() {
+  case $1 in
+    *-x86_64) echo "-march=x86-64" ;;
+    linux-aarch64) echo "-march=armv8-a" ;;
+    macos-aarch64) echo "-mcpu=apple-m1" ;;
+    *) echo "error: no C floor for $1" >&2; return 1 ;;
+  esac
+}
+
+# Prints the `CFLAGS_<triple>=...` assignment that builds the C of Rust target $1 for the
+# floor of platform $2, after the caller's own flags for that target: cc-rs puts these
+# last on its command line, so the floor's -march overrides the compiler's default.
+c_floor_env() {
+  local var=CFLAGS_${1//-/_} own floor
+  floor=$(c_floor "$2") || return
+  own=$(printenv "$var") || true
+  echo "$var=${own:+$own }$floor"
+}
+
+# The Rust target cargo builds for without --target.
+host_triple() {
+  rustc -vV | sed -n 's/^host: //p'
+}
+
+# Prints the directory holding the stubs once they are built. Every step ends in
+# `|| return`: callers run it in a command substitution under `if`, where `set -e` does
+# not apply.
+build_pair() {
+  local static_required=$1 cflags
+  cflags=$(c_floor_env "$(host_triple)" "$os-$arch") || return
+  env "$cflags" cargo build --locked --release -p rlprecomp >&2 || return
+  build_stubs "$arch" "$static_required"
+}
+
+# Builds both runners of <os>-$1 -- rlrun, and rlrun-net, which adds the network host a
+# fetching program imports (the `net` feature) -- and prints the directory holding them.
+# Two cargo invocations write one binary path, so the network runner is copied out
+# before the plain one is built over it.
+build_stubs() {
+  local stub_arch=$1 static_required=$2 net plain
+  net=$(build_stub "$stub_arch" "$static_required" --features net) || return
+  cp "$net" "$(dirname "$net")/rlrun-net" || return
+  plain=$(build_stub "$stub_arch" "$static_required") || return
+  if [[ $(dirname "$plain") != "$(dirname "$net")" ]]; then
+    echo "error: the two runners linked differently ($plain, $net)" >&2
+    return 1
+  fi
+  dirname "$plain"
+}
+
+# Builds the stub for <os>-$1 (on Linux, $1 may be the other architecture), with the
+# cargo arguments after $2, and prints its path.
+build_stub() {
+  local stub_arch=$1 static_required=$2 cflags
+  local -a extra=("${@:3}")
+  if [[ $os == linux ]]; then
+    local cc=cc
+    if [[ $stub_arch != "$arch" ]]; then
+      cc=$stub_arch-linux-gnu-gcc
+      command -v "$cc" >/dev/null || {
+        echo "error: cross-building the $stub_arch stub needs $cc" >&2
+        return 1
+      }
+    fi
+    # --target keeps the flags off the build scripts and proc macros. The C compiler and
+    # linker are named because cc-rs would look for <arch>-linux-musl-gcc, which the
+    # static link does not need: the Rust target brings musl's CRT objects and libc.a.
+    # relocation-model=static keeps both Linux stubs the same non-PIE static shape
+    # (musl's default is static-pie). It does NOT make qemu-x86_64 on an aarch64 host
+    # run a glibc binary: that QEMU (8.2.2) dies with an internal SIGSEGV (MAPERR
+    # addr=0x20) as soon as the guest opens /proc/self/maps -- Rust's startup guard
+    # setup does under glibc, and even a C program that only opens it dies the same way
+    # (CI run 36086331612, cross_target_module... linux-x86_64, reproduced 2026-09-25).
+    # The emulated runs for an architecture whose qemu cannot run are skipped by a probe
+    # in precomp/tests/stub.rs, not by the link shape.
+    local triple=$stub_arch-unknown-linux-musl
+    local var
+    var=$(tr 'a-z-' 'A-Z_' <<<"$triple")
+    cflags=$(c_floor_env "$triple" "$os-$stub_arch") || return
+    if ! have_target "$triple" || ! env "CARGO_TARGET_${var}_LINKER=$cc" "CC_${triple//-/_}=$cc" "$cflags" \
+      "CARGO_TARGET_${var}_RUSTFLAGS=-C relocation-model=static" \
+      cargo build --locked --profile release-runner -p rlrun --target "$triple" ${extra[@]+"${extra[@]}"} >&2; then
+      if $static_required; then
+        echo "error: the runner stub did not link statically against musl; install the" \
+          "Rust target: rustup target add $triple" >&2
+        return 1
+      fi
+      echo "WARNING: the runner stub did not link statically against musl (rustup target" \
+        "add $triple); linking glibc dynamically, so --native outputs need this host's" \
+        "glibc or newer" >&2
+      triple=$stub_arch-unknown-linux-gnu
+      var=$(tr 'a-z-' 'A-Z_' <<<"$triple")
+      cflags=$(c_floor_env "$triple" "$os-$stub_arch") || return
+      env "CARGO_TARGET_${var}_LINKER=$cc" "CC_${triple//-/_}=$cc" "$cflags" \
+        cargo build --locked --profile release-runner -p rlrun --target "$triple" ${extra[@]+"${extra[@]}"} >&2 || return
+    fi
+    echo "target/$triple/release-runner/rlrun"
+  else
+    [[ $stub_arch == "$arch" ]] || {
+      echo "error: on macOS the stub is built for the host's architecture only" >&2
+      return 1
+    }
+    cflags=$(c_floor_env "$(host_triple)" "$os-$stub_arch") || return
+    env "$cflags" cargo build --locked --profile release-runner -p rlrun ${extra[@]+"${extra[@]}"} >&2 || return
+    echo "target/release-runner/rlrun"
+  fi
+}
+
+# The two runners every platform ships: the plain one, and the one with the network host.
+RUNNERS=(rlrun rlrun-net)
+
+install_pair() {
+  local stubs=$1 dest=$2
+  mkdir -p "$dest"
+  cp "target/release/$lib" "$stubs/rlrun" "$stubs/rlrun-net" "$dest/"
+  write_notices "$os-$arch" "$dest" true
+  ls -l "$dest"
+}
+
+# The Rust target the binaries of PACKAGE $2 for platform $1 (<os>-<arch>) are built for:
+# what decides which crates link. A Linux runner links musl (its glibc fallback links the
+# same crates), the shim the host's glibc.
+binary_triple() {
+  case $1 in
+    linux-*) if [[ $2 == rlprecomp ]]; then echo "${1#*-}-unknown-linux-gnu"; else echo "${1#*-}-unknown-linux-musl"; fi ;;
+    macos-*) echo "${1#*-}-apple-darwin" ;;
+    *) echo "error: unknown platform $1" >&2; return 1 ;;
+  esac
+}
+
+# Prints the notices a binary of PACKAGE ($1) built for Rust target $2, with the cargo
+# arguments after them, owes the crates it links: the normal dependencies but proc
+# macros, which run in the compiler and leave nothing in the binary. A table of every
+# crate (name, version, licence expression, repository), then each licence file a
+# crate's package ships (LICENSE*, COPYING*, NOTICE* ...) once, under every crate that
+# ships the same text (white space aside). A crate whose package ships none is named
+# under a crate of the same repository that does (wasmtime's internal crates, under
+# wasmtime), else under the one licence file of a crate with the same licence
+# expression, else listed at the end with its expression. Every source is in
+# cargo's registry after a --locked build; a missing one is an error, never a shorter
+# list. Plain bash 3 and POSIX awk: macOS runs it too.
+crate_notices() {
+  local package=$1 triple=$2
+  local -a extra=("${@:3}")
+  local registry=${CARGO_HOME:-$HOME/.cargo}/registry/src
+  local crates id license repo name version dir file row
+  crates=$(cargo tree --locked -p "$package" --target "$triple" -e normal,no-proc-macro \
+    ${extra[@]+"${extra[@]}"} --prefix none --format '{p}|{l}|{r}' | sed 's/ (\*)$//' |
+    grep -v ' (/' | sort -u) || return
+  printf 'The Rust crates %s links on %s (%s crates).\n\n' "$package" "$triple" "$(wc -l <<<"$crates" | tr -d ' ')"
+  while IFS='|' read -r id license repo; do
+    printf '%-44s %-52s %s\n' "$id" "$license" "$repo"
+  done <<<"$crates"
+  while IFS='|' read -r id license repo; do
+    name=${id% v*}
+    version=${id##* v}
+    dir=$(compgen -G "$registry/*/$name-$version" | head -1) || true
+    if [[ -z $dir ]]; then
+      echo "error: no source of the crate $name $version under $registry" >&2
+      return 1
+    fi
+    row="$name $version	$repo	$license"
+    for file in "$dir"/*; do
+      [[ -f $file ]] || continue
+      case ${file##*/} in
+        LICENSE* | LICENCE* | COPYING* | COPYRIGHT* | NOTICE* | UNLICENSE* | license* | licence*)
+          row+="	$file" ;;
+      esac
+    done
+    printf '%s\n' "$row"
+  done <<<"$crates" | awk -F '\t' '
+    function text(f,  line, t) { t = ""; while ((getline line < f) > 0) t = t line "\n"; close(f); return t }
+    function key(t,  k) { k = t; gsub(/[ \t\n\r]+/, " ", k); return k }
+    {
+      if (NF < 4) { orphan[++orphans] = $1; orphanRepo[orphans] = $2; orphanLicense[orphans] = $3; next }
+      for (i = 4; i <= NF; i++) {
+        t = text($i); k = key(t)
+        if (!(k in index_)) { index_[k] = ++texts; body[texts] = t }
+        n = index_[k]
+        owners[n] = owners[n] (owners[n] == "" ? "" : ", ") $1
+        if (!($2 in byRepo)) byRepo[$2] = n
+        if (NF == 4 && !($3 in byLicense)) byLicense[$3] = n
+      }
+    }
+    END {
+      rule = "================================================================================"
+      dash = "--------------------------------------------------------------------------------"
+      left = 0
+      for (o = 1; o <= orphans; o++) {
+        if (orphanRepo[o] != "" && orphanRepo[o] in byRepo) n = byRepo[orphanRepo[o]]
+        else if (orphanLicense[o] in byLicense) n = byLicense[orphanLicense[o]]
+        else { rest[++left] = orphan[o] ": " orphanLicense[o]; continue }
+        owners[n] = owners[n] ", " orphan[o]
+      }
+      for (n = 1; n <= texts; n++) printf "\n%s\n%s\n%s\n\n%s", rule, owners[n], dash, body[n]
+      if (left) { printf "\n%s\nNo licence file in the package:\n", rule; for (o = 1; o <= left; o++) print rest[o] }
+    }'
+}
+
+# Writes the notices of <platform> $1 into directory $2: the runners' always, the shim's
+# when $3 is true.
+write_notices() {
+  local platform=$1 dest=$2 shim=$3 triple
+  triple=$(binary_triple "$platform" rlrun) || return
+  crate_notices rlrun "$triple" --features net >"$dest/runner-notices.txt.tmp" || return
+  mv "$dest/runner-notices.txt.tmp" "$dest/runner-notices.txt"
+  if $shim; then
+    triple=$(binary_triple "$platform" rlprecomp) || return
+    crate_notices rlprecomp "$triple" >"$dest/shim-notices.txt.tmp" || return
+    mv "$dest/shim-notices.txt.tmp" "$dest/shim-notices.txt"
+  fi
+}
+
+# From the ELF program headers, not ldd: ldd calls every foreign-architecture file "not a
+# dynamic executable" and, on aarch64, reports a static-pie as dynamic. Static means no
+# PT_INTERP (a static-pie still has a DYNAMIC segment for its own relocations).
+statically_linked() {
+  command -v readelf >/dev/null || { echo "error: readelf (binutils) not found" >&2; return 2; }
+  local headers
+  headers=$(readelf -lW "$1") || return
+  ! grep -q 'INTERP' <<<"$headers"
+}
+
+# Whether the standard library of Rust target $1 is installed; adds it through rustup
+# when it is not and rustup is there.
+have_target() {
+  local libdir
+  libdir=$(rustc --print target-libdir --target "$1") || return
+  compgen -G "$libdir/libstd-*.rlib" >/dev/null && return
+  command -v rustup >/dev/null || return
+  echo "rontolisp-native: adding the Rust target $1 (the runner stub links musl statically)" >&2
+  rustup target add "$1" >&2
+}
+
+find_cargo() {
+  if ! command -v cargo >/dev/null && [[ -x $HOME/.cargo/bin/cargo ]]; then
+    PATH=$HOME/.cargo/bin:$PATH
+  fi
+  command -v cargo >/dev/null
+}
+
+if [[ ${1:-} == --is-static ]]; then
+  file=${2:?FILE}
+  [[ $file == /* ]] || file=$OLDPWD/$file # relative to the caller, not to this directory
+  statically_linked "$file"
+  exit
+fi
+
+if [[ ${1:-} == --notices ]]; then
+  package=${2:?PACKAGE}
+  platform=${3:?PLATFORM}
+  find_cargo || { echo "error: cargo (Rust >= 1.97) not found" >&2; exit 1; }
+  triple=$(binary_triple "$platform" "$package")
+  if [[ $package == rlrun ]]; then
+    crate_notices rlrun "$triple" --features net
+  else
+    crate_notices "$package" "$triple"
+  fi
+  exit
+fi
+
+if [[ ${1:-} == --stub ]]; then
+  platform=${2:?PLATFORM}
+  out=${3:-target/resources}
+  [[ $platform == "$os"-* ]] || { echo "error: a $os host cannot build the $platform stub" >&2; exit 1; }
+  find_cargo || { echo "error: cargo (Rust >= 1.97) not found" >&2; exit 1; }
+  stubs=$(build_stubs "${platform#*-}" true)
+  dest=$out/am/ik/rontolisp/native/$platform
+  mkdir -p "$dest"
+  for runner in "${RUNNERS[@]}"; do
+    if [[ $os == linux ]] && ! statically_linked "$stubs/$runner"; then
+      echo "error: $stubs/$runner links glibc dynamically" >&2
+      exit 1
+    fi
+    cp "$stubs/$runner" "$dest/"
+  done
+  write_notices "$platform" "$dest" false
+  ls -l "$dest"
+  exit 0
+fi
+
+if [[ ${1:-} == --maven ]]; then
+  build=${2:?BUILD}
+  required=${3:?REQUIRED}
+  dest=target/resources/am/ik/rontolisp/native/$os-$arch
+  # A pair older than a file it is built from is rebuilt whatever BUILD says: otherwise
+  # every --native output, and every native test leg, runs the runner of an older tree
+  # (on 2026-10-23 a pair of 2026-10-08 sent each octet-vector request body empty, a
+  # runner change of 2026-10-09). make's rule, on the files' times: a pair CI downloaded
+  # is newer than the checkout, so it is never rebuilt. This script is one of the files:
+  # what it passes cargo is part of the binaries (c_floor).
+  stale=false
+  if [[ $build != true && -f $dest/$lib ]] &&
+    [[ -n $(find build.sh Cargo.toml Cargo.lock abi precomp runner -type f -newer "$dest/$lib" -print -quit) ]]; then
+    stale=true
+  fi
+  if [[ $build == true ]] || $stale; then
+    if find_cargo; then
+      if $stale; then
+        echo "rontolisp-native: the $os-$arch pair is older than its sources; rebuilding it" >&2
+      fi
+      if ! stubs=$(build_pair "$required"); then
+        if $stale; then
+          echo "error: rontolisp-native/build.sh failed; delete rontolisp-native/$dest" \
+            "to build without --native for $os-$arch" >&2
+        else
+          echo "error: rontolisp-native/build.sh failed; pass -Drontolisp.native.build=false" \
+            "to build without --native for $os-$arch" >&2
+        fi
+        exit 1
+      fi
+      install_pair "$stubs" "$dest"
+    elif [[ ! -f $dest/$lib ]]; then
+      echo "WARNING: cargo (Rust >= 1.97) not found: this build carries no --native" \
+        "precompiler for $os-$arch, and --native will say it is not available" >&2
+    elif $stale; then
+      echo "WARNING: rontolisp-native/$dest is older than its sources and cargo (Rust >= 1.97)" \
+        "is not found: --native outputs run the runner those older sources built" >&2
+    fi
+  fi
+  # A pair built before the notices were written beside it gets them now.
+  if [[ -f $dest/$lib && ! -f $dest/shim-notices.txt ]] && find_cargo; then
+    write_notices "$os-$arch" "$dest" true || {
+      echo "error: rontolisp-native/build.sh could not write the crates' notices" >&2
+      exit 1
+    }
+  fi
+  if [[ $required == true ]]; then
+    for file in "$lib" rlrun rlrun-net runner-notices.txt shim-notices.txt; do
+      if [[ ! -f $dest/$file ]]; then
+        echo "error: -Drontolisp.native.required=true but rontolisp-native/$dest has no" \
+          "$file (install Rust >= 1.97 or put CI's artifact there)" >&2
+        exit 1
+      fi
+    done
+    for runner in "${RUNNERS[@]}"; do
+      if [[ $os == linux ]] && ! statically_linked "$dest/$runner"; then
+        echo "error: -Drontolisp.native.required=true but rontolisp-native/$dest/$runner" \
+          "links glibc dynamically" >&2
+        exit 1
+      fi
+    done
+    echo "rontolisp-native: $os-$arch pair present in $dest"
+  fi
+  exit 0
+fi
+
+run_tests=false
+if [[ ${1:-} == --test ]]; then run_tests=true; shift; fi
+out=${1:-target/resources}
+
+stubs=$(build_pair false)
+install_pair "$stubs" "$out/am/ik/rontolisp/native/$os-$arch"
+
+if $run_tests; then
+  ./build-sh-test.sh
+  RLNATIVE_STUB=$PWD/$stubs/rlrun RLNATIVE_NET_STUB=$PWD/$stubs/rlrun-net \
+    cargo test --locked --workspace --features rlrun/net
+fi

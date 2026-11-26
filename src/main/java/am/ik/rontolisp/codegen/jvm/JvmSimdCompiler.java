@@ -1,0 +1,549 @@
+package am.ik.rontolisp.codegen.jvm;
+
+import java.lang.classfile.constantpool.ClassEntry;
+import java.lang.classfile.constantpool.MethodRefEntry;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
+
+import am.ik.jvm.MethodCode;
+import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispNames;
+import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.PackageRegistry;
+
+/**
+ * Compiles the accelerated {@code vec:} kernels ({@code add}/{@code sub}/{@code mul}/
+ * {@code scale}/{@code dot}/{@code sum}/{@code matvec}) to calls into the shipped
+ * {@link JvmSimdVectorTemplate bridge}, replacing the scalar {@code vec.lisp} reference
+ * at those call sites. Only wired in when the {@code --simd} flag emitted the runtime
+ * (i.e. {@link JvmLispCompiler.Ctx#simdOps} is non-null); otherwise the qualified call
+ * falls through to the ordinary spliced {@code vec:} defun. Each call site first invokes
+ * the emitted {@code _simdInit} helper (which initializes the bridge, see
+ * {@link JvmSimdRuntimeBuilder}), then evaluates the arguments and calls the matching
+ * bridge entry point. {@code mean}/{@code norm} are not intercepted directly -- they are
+ * accelerated transitively because their spliced bodies call {@code sum}/{@code dot}.
+ *
+ * <p>
+ * The two GEMV members are the exception: {@code vec:matvec} and {@code vec:matvec-into}
+ * have accelerators ABOVE the lane kernel -- the device under {@code --gpu} and a tuned
+ * CBLAS under {@code --blas} -- and neither flag implies {@code --simd}, so their call
+ * site is a guarded chain built by {@link #compileMatvecChain} whenever either of those
+ * two bridges was emitted, with or without this one.
+ */
+final class JvmSimdCompiler {
+
+	private JvmSimdCompiler() {
+	}
+
+	/** The accelerated members, mapped to the argument count of their Lisp call form. */
+	private static final Map<String, Integer> ARITIES = Map.ofEntries(Map.entry(LispNames.VEC_SUM, 1),
+			Map.entry(LispNames.VEC_ADD, 2), Map.entry(LispNames.VEC_SUB, 2), Map.entry(LispNames.VEC_MUL, 2),
+			Map.entry(LispNames.VEC_SCALE, 2), Map.entry(LispNames.VEC_DOT, 2), Map.entry(LispNames.VEC_MATVEC, 2),
+			Map.entry(LispNames.VEC_ADD_INTO, 3), Map.entry(LispNames.VEC_SUB_INTO, 3),
+			Map.entry(LispNames.VEC_MUL_INTO, 3), Map.entry(LispNames.VEC_SCALE_INTO, 3),
+			Map.entry(LispNames.VEC_MATVEC_INTO, 3),
+			// The element-wise unary ufuncs. vec:square / vec:square-into are
+			// NOT here: their spliced defuns call vec:mul / vec:mul-into, so they are
+			// accelerated transitively, like mean/norm.
+			Map.entry(LispNames.VEC_EXP, 1), Map.entry(LispNames.VEC_LOG, 1), Map.entry(LispNames.VEC_TANH, 1),
+			Map.entry(LispNames.VEC_SIN, 1), Map.entry(LispNames.VEC_COS, 1), Map.entry(LispNames.VEC_TAN, 1),
+			Map.entry(LispNames.VEC_ASIN, 1), Map.entry(LispNames.VEC_ACOS, 1), Map.entry(LispNames.VEC_ATAN, 1),
+			Map.entry(LispNames.VEC_SINH, 1), Map.entry(LispNames.VEC_COSH, 1), Map.entry(LispNames.VEC_SQRT, 1),
+			Map.entry(LispNames.VEC_ABS, 1), Map.entry(LispNames.VEC_NEGATIVE, 1), Map.entry(LispNames.VEC_SIGN, 1),
+			Map.entry(LispNames.VEC_RECIPROCAL, 1), Map.entry(LispNames.VEC_EXP_INTO, 2),
+			Map.entry(LispNames.VEC_LOG_INTO, 2), Map.entry(LispNames.VEC_TANH_INTO, 2),
+			Map.entry(LispNames.VEC_SIN_INTO, 2), Map.entry(LispNames.VEC_COS_INTO, 2),
+			Map.entry(LispNames.VEC_TAN_INTO, 2), Map.entry(LispNames.VEC_ASIN_INTO, 2),
+			Map.entry(LispNames.VEC_ACOS_INTO, 2), Map.entry(LispNames.VEC_ATAN_INTO, 2),
+			Map.entry(LispNames.VEC_SINH_INTO, 2), Map.entry(LispNames.VEC_COSH_INTO, 2),
+			Map.entry(LispNames.VEC_SQRT_INTO, 2), Map.entry(LispNames.VEC_ABS_INTO, 2),
+			Map.entry(LispNames.VEC_NEGATIVE_INTO, 2), Map.entry(LispNames.VEC_SIGN_INTO, 2),
+			Map.entry(LispNames.VEC_RECIPROCAL_INTO, 2),
+			// The comparison-select ufuncs.
+			Map.entry(LispNames.VEC_MAXIMUM, 2), Map.entry(LispNames.VEC_MINIMUM, 2), Map.entry(LispNames.VEC_RELU, 1),
+			Map.entry(LispNames.VEC_CLIP, 3), Map.entry(LispNames.VEC_MAXIMUM_INTO, 3),
+			Map.entry(LispNames.VEC_MINIMUM_INTO, 3), Map.entry(LispNames.VEC_RELU_INTO, 2),
+			Map.entry(LispNames.VEC_CLIP_INTO, 4),
+			// The element-wise quotient and the four CL operator spellings, which map to
+			// the same bridge methods as their named siblings.
+			Map.entry(LispNames.VEC_DIV, 2), Map.entry(LispNames.VEC_DIV_INTO, 3), Map.entry(LispNames.VEC_PLUS, 2),
+			Map.entry(LispNames.VEC_MINUS, 2), Map.entry(LispNames.VEC_STAR, 2), Map.entry(LispNames.VEC_SLASH, 2));
+
+	/**
+	 * The members whose LAST arguments are scalars rather than packed arrays, mapped to
+	 * how many: every other member's arguments are all arrays. The lane-kernel guard
+	 * below asks each ARRAY argument, positively, whether it is a width the lane kernels
+	 * carry; a scalar position is never asked.
+	 */
+	private static final Map<String, Integer> SCALAR_TAIL = Map.of(LispNames.VEC_SCALE, 1, LispNames.VEC_SCALE_INTO, 1,
+			LispNames.VEC_CLIP, 2, LispNames.VEC_CLIP_INTO, 2);
+
+	/**
+	 * The members with a FUSED bfloat16 kernel, mapped to the one operand position a
+	 * {@code short[]} may appear in: the weight matrix of a GEMV, the first operand of a
+	 * dot, the operand of a sum. Every OTHER array operand of such a call must then be a
+	 * {@code float[]} -- that pairing, bf16 weights against f32 activations, is the only
+	 * one {@link JvmSimdVectorTemplate} carries a kernel for, and the guard below is what
+	 * keeps the bridge TOTAL over what reaches it. A member absent from this map declines
+	 * a {@code short[]} in every position, as it did before the width existed.
+	 */
+	private static final Map<String, Integer> BF16_OPERAND = Map.of(LispNames.VEC_SUM, 0, LispNames.VEC_DOT, 0,
+			LispNames.VEC_MATVEC, 0, LispNames.VEC_MATVEC_INTO, 1);
+
+	/**
+	 * The members with a FUSED bfloat16 element-wise kernel: exactly the ones with a
+	 * single-float lane loop -- {@code add}/{@code sub}/{@code mul}/ {@code div} with the
+	 * four CL operator spellings and their {@code -into} siblings,
+	 * {@code sqrt}/{@code abs}/{@code negative}/{@code reciprocal} with theirs. Unlike
+	 * {@link #BF16_OPERAND}'s one narrow position against f32 activations, the admitted
+	 * pairing here is bf16 x bf16 {@code ->} bf16: every ARRAY operand must be a
+	 * {@code short[]}, and a mixed bf16/f32 pair -- or a bf16 {@code -into} destination
+	 * with f32 sources -- declines to the defun. A member absent from both maps declines
+	 * a {@code short[]} in every position, as it did before the width existed.
+	 */
+	private static final Set<String> BF16_ELEMENTWISE = Set.of(LispNames.VEC_ADD, LispNames.VEC_SUB, LispNames.VEC_MUL,
+			LispNames.VEC_DIV, LispNames.VEC_PLUS, LispNames.VEC_MINUS, LispNames.VEC_STAR, LispNames.VEC_SLASH,
+			LispNames.VEC_ADD_INTO, LispNames.VEC_SUB_INTO, LispNames.VEC_MUL_INTO, LispNames.VEC_DIV_INTO,
+			LispNames.VEC_SQRT, LispNames.VEC_ABS, LispNames.VEC_NEGATIVE, LispNames.VEC_RECIPROCAL,
+			LispNames.VEC_SQRT_INTO, LispNames.VEC_ABS_INTO, LispNames.VEC_NEGATIVE_INTO,
+			LispNames.VEC_RECIPROCAL_INTO);
+
+	/**
+	 * The two members with an integer-dot kernel over a Q8_0 quantized matrix
+	 * ({@code .kb/quantized-matrix.md}), mapped to the operand position a {@code byte[]}
+	 * may appear in -- the weight matrix. Every OTHER array operand of such a call must
+	 * then be of ONE width, all {@code float[]} or all {@code double[]}: the kernel takes
+	 * an f32 or an f64 activation and writes a destination of the same width, and a mixed
+	 * destination is a shape only the defun computes. A member absent from this map
+	 * declines a {@code byte[]} in every position. The device rung of
+	 * {@link #compileMatvecChain} takes the allocating form's {@code byte[]} against a
+	 * {@code float[]} ahead of this arm ({@code JvmGpuTemplate.gpuMatvec}) and answers
+	 * the same bits.
+	 */
+	private static final Map<String, Integer> QUANTIZED_OPERAND = Map.of(LispNames.VEC_MATVEC, 0,
+			LispNames.VEC_MATVEC_INTO, 1);
+
+	/**
+	 * Returns whether the given {@code simd} package member is one of the vectorizable
+	 * kernels this compiler accelerates.
+	 */
+	static boolean handles(String member) {
+		return ARITIES.containsKey(member);
+	}
+
+	/** The accelerated member names, in a stable order (the {@code --simd} emit gate). */
+	static List<String> members() {
+		return List.of(LispNames.VEC_ADD, LispNames.VEC_SUB, LispNames.VEC_MUL, LispNames.VEC_SCALE, LispNames.VEC_DOT,
+				LispNames.VEC_SUM, LispNames.VEC_MATVEC, LispNames.VEC_ADD_INTO, LispNames.VEC_SUB_INTO,
+				LispNames.VEC_MUL_INTO, LispNames.VEC_SCALE_INTO, LispNames.VEC_MATVEC_INTO, LispNames.VEC_EXP,
+				LispNames.VEC_LOG, LispNames.VEC_TANH, LispNames.VEC_SIN, LispNames.VEC_COS, LispNames.VEC_TAN,
+				LispNames.VEC_ASIN, LispNames.VEC_ACOS, LispNames.VEC_ATAN, LispNames.VEC_SINH, LispNames.VEC_COSH,
+				LispNames.VEC_SQRT, LispNames.VEC_ABS, LispNames.VEC_NEGATIVE, LispNames.VEC_SIGN,
+				LispNames.VEC_RECIPROCAL, LispNames.VEC_EXP_INTO, LispNames.VEC_LOG_INTO, LispNames.VEC_TANH_INTO,
+				LispNames.VEC_SIN_INTO, LispNames.VEC_COS_INTO, LispNames.VEC_TAN_INTO, LispNames.VEC_ASIN_INTO,
+				LispNames.VEC_ACOS_INTO, LispNames.VEC_ATAN_INTO, LispNames.VEC_SINH_INTO, LispNames.VEC_COSH_INTO,
+				LispNames.VEC_SQRT_INTO, LispNames.VEC_ABS_INTO, LispNames.VEC_NEGATIVE_INTO, LispNames.VEC_SIGN_INTO,
+				LispNames.VEC_RECIPROCAL_INTO, LispNames.VEC_MAXIMUM, LispNames.VEC_MINIMUM, LispNames.VEC_RELU,
+				LispNames.VEC_CLIP, LispNames.VEC_MAXIMUM_INTO, LispNames.VEC_MINIMUM_INTO, LispNames.VEC_RELU_INTO,
+				LispNames.VEC_CLIP_INTO, LispNames.VEC_DIV, LispNames.VEC_DIV_INTO, LispNames.VEC_PLUS,
+				LispNames.VEC_MINUS, LispNames.VEC_STAR, LispNames.VEC_SLASH);
+	}
+
+	static void compile(String member, LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		Map<String, MethodRefEntry> ops = ctx.simdOps;
+		if (ops == null) {
+			throw new IllegalStateException("simd acceleration runtime was not emitted");
+		}
+		List<LispVal> args = cons.toList();
+		int arity = Objects.requireNonNull(ARITIES.get(member));
+		requireArity(args.size() == arity + 1,
+				"vec:" + member + " expects " + arity + " argument" + (arity == 1 ? "" : "s"));
+		// The scalar vec.lisp fallback for a runtime without jdk.incubator.vector
+		// (JvmSimdRuntimeBuilder's _simdReady() reads false there): the very defun the
+		// program would call without --simd. Only reachable when it is actually there,
+		// at the arity this call site expects -- a shadowed redefinition, say, takes
+		// the ordinary direct-call path instead and forgoes acceleration altogether,
+		// same guard as compileMatvecChain below.
+		String qualified = PackageRegistry.qualify(LispNames.VEC_PKG, member);
+		JvmLispCompiler.FunctionInfo defun = ctx.functions.get(qualified);
+		if (defun == null || defun.variadic() || defun.paramCount() != arity) {
+			JvmFunctionCallCompiler.compileDefault(qualified, cons, ctx, className);
+			return;
+		}
+		// Make sure the bridge class is initialized -- or, on a runtime without
+		// jdk.incubator.vector, that _simdReady() below reads false -- before anything
+		// decides which path to take.
+		ctx.body.invokestatic(Objects.requireNonNull(ops.get("init")));
+		// Under --gpu the lane kernel reads its arguments on the host, so each is
+		// materialized first (a result the device still holds comes home) and the kernel
+		// is handed what the guard answers -- the array, or a result stub's backing; an
+		// -into kernel writes its caller's destination -- the first argument -- in place,
+		// so that one is reported as WRITTEN instead, before the call: the device's copy
+		// of it comes home if it was the authoritative one and is dropped (.kb/gpu.md,
+		// "Device residency"). The allocating forms return a fresh array the device has
+		// never seen; an -into form answers its destination, which is mapped back onto
+		// the caller's own object (_gpuUnswap) so the program never holds a backing.
+		//
+		// Each argument is evaluated exactly once, into a temp that BOTH the bridge
+		// call and the scalar-defun fallback below read -- recompiling an argument form
+		// would run its side effects twice (the same reason JvmLinalgKernelCompiler's
+		// chain uses temps).
+		Map<String, MethodRefEntry> gpuOps = ctx.gpuOps;
+		boolean into = member.endsWith("-INTO");
+		int[] slots = new int[arity];
+		int original = -1, handed = -1;
+		for (int i = 1; i <= arity; i++) {
+			JvmExprCompiler.compileExpr(args.get(i), ctx, className);
+			if (gpuOps != null) {
+				boolean destination = into && i == 1;
+				if (destination) {
+					original = ctx.allocTemp();
+					ctx.body.dup().astore(original);
+				}
+				ctx.body.invokestatic(Objects.requireNonNull(
+						gpuOps.get(destination ? JvmGpuRuntimeBuilder.WRITTEN : JvmGpuRuntimeBuilder.MATERIALIZE)));
+				if (destination) {
+					handed = ctx.allocTemp();
+					ctx.body.dup().astore(handed);
+				}
+			}
+			slots[i - 1] = ctx.allocTemp();
+			ctx.body.astore(slots[i - 1]);
+		}
+		// if (!_simdReady()) goto fallback; if (!laneWidth(array args)) goto fallback;
+		// Bridge(slots...); goto end; fallback: defun(slots...); end: -- the fallback
+		// lands exactly where a declined linalg: attempt would, so the gpu unswap below
+		// applies uniformly to either answer.
+		MethodCode.Label fallback = ctx.body.newLabel();
+		ctx.body.invokestatic(Objects.requireNonNull(ops.get(JvmSimdRuntimeBuilder.AVAILABLE)));
+		ctx.body.ifeq(fallback);
+		emitLaneWidthGuard(ctx, member, slots, fallback);
+		for (int slot : slots) {
+			ctx.body.aload(slot);
+		}
+		ctx.body.invokestatic(Objects.requireNonNull(ops.get(member)));
+		MethodCode.Label skipFallback = ctx.body.newLabel();
+		ctx.body.goto_(skipFallback);
+		ctx.body.labelBinding(fallback);
+		for (int slot : slots) {
+			ctx.body.aload(slot);
+		}
+		JvmTailBounce.emitDirectCall(defun, null, ctx, className);
+		ctx.body.labelBinding(skipFallback);
+		if (gpuOps != null && into) {
+			ctx.body.aload(original).aload(handed);
+			ctx.body.invokestatic(Objects.requireNonNull(gpuOps.get(JvmGpuRuntimeBuilder.UNSWAP)));
+		}
+	}
+
+	/**
+	 * The {@code vec:matvec} / {@code vec:matvec-into} call site as a CHAIN: the device
+	 * attempt ({@code --gpu}, the allocating form only), then a tuned CBLAS
+	 * ({@code --blas}, {@link JvmBlasTemplate#blasMatvec}), then the lane kernel when
+	 * {@code --simd} emitted one, then the spliced {@code vec.lisp} defun -- all over one
+	 * set of temps, the same shape {@link JvmLinalgKernelCompiler} emits for a
+	 * {@code linalg:} member, here for the two members of {@code vec:} that are a matrix
+	 * product.
+	 *
+	 * <h2>Why the accelerators get their own call site rather than riding on
+	 * {@code --simd}</h2>
+	 *
+	 * The other {@code vec:} kernels are TOTAL -- they accept packed arrays of one width
+	 * and signal on anything else -- so {@link #compile} can emit a bare
+	 * {@code INVOKESTATIC}. A device kernel and a library kernel are PARTIAL, and neither
+	 * flag implies {@code --simd}, so an attempt buried inside the lane bridge would be
+	 * unreachable in a {@code --blas}-only build and would drag the incubator Vector API
+	 * into it besides (the orthogonality {@link JvmBlasRuntimeBuilder} exists for). Hence
+	 * a guarded chain: each accelerator returns {@code null} for what it declines and
+	 * control falls into the rung below, ending at a total rung that always answers. The
+	 * library declines a shape it cannot take and every machine without a tuned CBLAS,
+	 * and the device declines the FIRST sight of any matrix ({@code .kb/gpu.md}), so the
+	 * fall-through is the common path and has to be exact.
+	 */
+	static void compileMatvecChain(String member, LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		boolean into = LispNames.VEC_MATVEC_INTO.equals(member);
+		int arity = into ? 3 : 2;
+		Map<String, MethodRefEntry> simd = ctx.simdOps;
+		Map<String, MethodRefEntry> blas = ctx.blasOps;
+		// The device takes the allocating form only; the -into form's chain starts at the
+		// library.
+		Map<String, MethodRefEntry> gpu = into ? null : ctx.gpuOps;
+		String blasKey = blas != null ? JvmLinalgBlas.vecKernelKey(member) : null;
+		List<LispVal> args = cons.toList();
+		requireArity(args.size() == arity + 1, "vec:" + member + " expects " + arity + " arguments");
+		String qualified = PackageRegistry.qualify(LispNames.VEC_PKG, member);
+		JvmLispCompiler.FunctionInfo defun = ctx.functions.get(qualified);
+		if (defun == null || defun.variadic() || defun.paramCount() != arity) {
+			// No scalar defun to decline to at this call site (a shadowed member, or a
+			// different arity) -- required unconditionally, because every rung above can
+			// decline: the ordinary call path is what the program would have run without
+			// the flags.
+			JvmFunctionCallCompiler.compileDefault(qualified, cons, ctx, className);
+			return;
+		}
+		// The bridges that need setting up before their first call (the CBLAS bridge
+		// needs none: it binds its library itself).
+		if (gpu != null) {
+			emitInit(ctx, gpu);
+		}
+		if (simd != null) {
+			emitInit(ctx, simd);
+		}
+		// Each argument form evaluated exactly once, into a temp every rung reads.
+		int[] slots = new int[arity];
+		for (int i = 0; i < arity; i++) {
+			JvmExprCompiler.compileExpr(args.get(i + 1), ctx, className);
+			slots[i] = ctx.allocTemp();
+			ctx.body.astore(slots[i]);
+		}
+		// r = <Program>$GpuBridge.gpuMatvec(w, x); if (r != null) goto end; -- or, for a
+		// quantized matrix, gpuMatvecQ8 over the array its holder holds.
+		MethodCode.Label deviceAnswered = ctx.body.newLabel();
+		if (gpu != null && ctx.usesQuantized) {
+			ClassEntry carrierClass = JvmQuantizedMatrixRuntimeBuilder.carrierClass(ctx.cp);
+			MethodCode.Label notQuantized = ctx.body.newLabel();
+			MethodCode.Label deviceDeclined = ctx.body.newLabel();
+			ctx.body.aload(slots[0]).instanceOf(carrierClass).ifeq(notQuantized);
+			ctx.body.aload(slots[0]).checkcast(carrierClass);
+			ctx.body.getfield(JvmQuantizedMatrixRuntimeBuilder.carrierData(ctx.cp)).aload(slots[1]);
+			ctx.body.invokestatic(Objects.requireNonNull(gpu.get(JvmGpuRuntimeBuilder.MATVEC_Q8))).dup();
+			ctx.body.ifnonnull(deviceAnswered);
+			ctx.body.pop().goto_(deviceDeclined);
+			ctx.body.labelBinding(notQuantized);
+			emitAttempt(ctx, gpu, JvmGpuRuntimeBuilder.MATVEC, slots, deviceAnswered);
+			ctx.body.labelBinding(deviceDeclined);
+		}
+		else if (gpu != null) {
+			emitAttempt(ctx, gpu, JvmGpuRuntimeBuilder.MATVEC, slots, deviceAnswered);
+		}
+		// Every rung below reads its arguments on the host, so each is materialized first
+		// (a result the device still holds the only copy of comes home); the -into form
+		// WRITES its destination, so that one is reported instead, with the caller's own
+		// object kept beside it so a host rung's answer can be mapped back (_gpuUnswap).
+		Map<String, MethodRefEntry> gpuOps = ctx.gpuOps;
+		int destinationOriginal = -1;
+		if (gpuOps != null) {
+			MethodRefEntry materialize = Objects.requireNonNull(gpuOps.get(JvmGpuRuntimeBuilder.MATERIALIZE));
+			MethodRefEntry report = Objects.requireNonNull(gpuOps.get(JvmGpuRuntimeBuilder.WRITTEN));
+			for (int i = 0; i < arity; i++) {
+				boolean destination = into && i == 0;
+				ctx.body.aload(slots[i]);
+				if (destination) {
+					destinationOriginal = ctx.allocTemp();
+					ctx.body.dup().astore(destinationOriginal);
+				}
+				ctx.body.invokestatic((destination ? report : materialize));
+				ctx.body.astore(slots[i]);
+			}
+		}
+		// The host rungs, each answering into the common end below the unswap.
+		MethodCode.Label hostAnswered = ctx.body.newLabel();
+		if (blasKey != null) {
+			emitAttempt(ctx, Objects.requireNonNull(blas), blasKey, slots, hostAnswered);
+		}
+		if (simd != null) {
+			// if (!_simdReady()) goto fallback -- a runtime without jdk.incubator.vector
+			// (JvmSimdRuntimeBuilder) takes the scalar defun instead, the same decline
+			// every other accelerated vec:/linalg: call site gives -- and so does an
+			// operand of a width the lane kernels do not carry (emitLaneWidthGuard).
+			MethodCode.Label fallback = ctx.body.newLabel();
+			ctx.body.invokestatic(Objects.requireNonNull(simd.get(JvmSimdRuntimeBuilder.AVAILABLE)));
+			ctx.body.ifeq(fallback);
+			emitLaneWidthGuard(ctx, member, slots, fallback);
+			loadAll(ctx, slots);
+			ctx.body.invokestatic(Objects.requireNonNull(simd.get(member)));
+			MethodCode.Label skipFallback = ctx.body.newLabel();
+			ctx.body.goto_(skipFallback);
+			ctx.body.labelBinding(fallback);
+			loadAll(ctx, slots);
+			JvmTailBounce.emitDirectCall(defun, null, ctx, className);
+			ctx.body.labelBinding(skipFallback);
+		}
+		else {
+			loadAll(ctx, slots);
+			JvmTailBounce.emitDirectCall(defun, null, ctx, className);
+		}
+		ctx.body.labelBinding(hostAnswered);
+		if (destinationOriginal >= 0) {
+			// A host rung answered the destination backing it was handed: answer the
+			// caller's own object instead.
+			ctx.body.aload(destinationOriginal).aload(slots[0]);
+			ctx.body
+				.invokestatic(Objects.requireNonNull(Objects.requireNonNull(gpuOps).get(JvmGpuRuntimeBuilder.UNSWAP)));
+		}
+		ctx.body.labelBinding(deviceAnswered);
+	}
+
+	/**
+	 * The lane kernels are TOTAL over the widths they carry -- a packed {@code double[]}
+	 * or {@code float[]}, all operands of ONE of the two -- and cast anything else
+	 * ({@link JvmSimdVectorTemplate}), so every ARRAY argument is asked, POSITIVELY,
+	 * whether it is that width before the kernel is called; any other representation (a
+	 * {@code bfloat16} {@code short[]} today, whatever width is added tomorrow) takes the
+	 * spliced {@code vec.lisp} defun over the packed representation instead, the same
+	 * decline the interpreter's {@code VecSimd} chain gives. Asking "is it the
+	 * unsupported one?" would let the next unsupported width fall through to the cast. A
+	 * scalar position ({@link #SCALAR_TAIL}) is not an array and is not asked. Each
+	 * failing test branches to the caller's {@code fallback} label.
+	 *
+	 * <p>
+	 * The FIRST array operand decides the width and every other one must match it: a
+	 * mixed {@code #d}/{@code #f} call is not an error -- {@code vec.lisp}'s
+	 * {@code %map2} reads every operand through {@code aref}, which widens whatever the
+	 * storage width is, so the scalar defun computes it happily and {@code --simd} may
+	 * not turn that answer into an error ({@code .kb/vec.md}, "The four acceleration
+	 * layers"). Asking each operand independently whether it is one of the two widths
+	 * admitted the mixed pair, which then reached {@link JvmSimdVectorTemplate}'s
+	 * fixed-width cast and raised {@code IllegalArgumentException} -- a divergence from
+	 * the interpreter, which declines it.
+	 *
+	 * <p>
+	 * The four members of {@link #BF16_OPERAND} carry a FUSED bfloat16 kernel as well, so
+	 * their guard has a second arm: when the designated operand is a {@code short[]},
+	 * every other array operand must be a {@code float[]} (bf16 weights, f32
+	 * activations); when it is not, the ordinary two-width test runs over every position
+	 * and a {@code short[]} anywhere fails it. The two arms are exclusive and both end at
+	 * the kernel call, so the bridge stays TOTAL over what the guard admits -- no
+	 * decline, no null check, and a call site that never sees the width emits exactly
+	 * what it emitted before.
+	 *
+	 * <p>
+	 * The members of {@link #BF16_ELEMENTWISE} carry a third arm ahead of the general
+	 * test: when the FIRST operand is a {@code short[]}, every other array operand must
+	 * be one too (bf16 x bf16 {@code ->} bf16); when it is not, the ordinary two-width
+	 * test runs and any {@code short[]} anywhere fails it -- so a mixed bf16/f32 pair
+	 * declines to the defun rather than reaching the bridge. Every combination this arm
+	 * admits has a kernel, and the bridge stays TOTAL the same way.
+	 *
+	 * <p>
+	 * The two GEMV members of {@link #QUANTIZED_OPERAND} have a third arm ahead of those
+	 * two, in a program that can build a Q8_0 quantized matrix
+	 * ({@code .kb/quantized-matrix.md}), for one at the weight position: the remaining
+	 * array operands must then all be {@code float[]} or all {@code double[]}, the two
+	 * activation widths the integer-dot kernel takes, and the kernel is handed the
+	 * {@code byte[]} the matrix's holder holds. The three arms are exclusive, and each
+	 * ends at the kernel call.
+	 */
+	private static void emitLaneWidthGuard(JvmLispCompiler.Ctx ctx, String member, int[] slots,
+			MethodCode.Label fallback) {
+		int arrays = slots.length - SCALAR_TAIL.getOrDefault(member, 0);
+		ClassEntry doubleArrayClass = ctx.cp.classEntry("[D");
+		ClassEntry floatArrayClass = ctx.cp.classEntry("[F");
+		Integer bf16Operand = BF16_OPERAND.get(member);
+		Integer quantizedOperand = QUANTIZED_OPERAND.get(member);
+		MethodCode.Label skipGenerals = ctx.body.newLabel();
+		if (quantizedOperand != null && ctx.usesQuantized) {
+			// if (!(slot_q instanceof RontoQuantizedMatrix)) goto next arm; then the
+			// other array operands are all float[] or all double[] (decided by the first
+			// of them), else fallback; admitted, slot_q becomes the matrix's array, which
+			// is what the kernel takes -- the template never names the holder, so it
+			// need not travel with it.
+			ClassEntry carrierClass = JvmQuantizedMatrixRuntimeBuilder.carrierClass(ctx.cp);
+			MethodCode.Label notQuantized = ctx.body.newLabel();
+			MethodCode.Label admitted = ctx.body.newLabel();
+			ctx.body.aload(slots[quantizedOperand]).instanceOf(carrierClass).ifeq(notQuantized);
+			int first = quantizedOperand == 0 ? 1 : 0;
+			// if (slot_first instanceof float[]) { others float[] } else { first
+			// double[]; others double[] }
+			ctx.body.aload(slots[first]).instanceOf(floatArrayClass);
+			MethodCode.Label notFloat = ctx.body.newLabel();
+			ctx.body.ifeq(notFloat);
+			for (int i = 0; i < arrays; i++) {
+				if (i == quantizedOperand || i == first) {
+					continue;
+				}
+				ctx.body.aload(slots[i]).instanceOf(floatArrayClass).ifeq(fallback);
+			}
+			ctx.body.goto_(admitted);
+			ctx.body.labelBinding(notFloat);
+			for (int i = 0; i < arrays; i++) {
+				if (i == quantizedOperand) {
+					continue;
+				}
+				ctx.body.aload(slots[i]).instanceOf(doubleArrayClass).ifeq(fallback);
+			}
+			ctx.body.labelBinding(admitted);
+			ctx.body.aload(slots[quantizedOperand]).checkcast(carrierClass);
+			ctx.body.getfield(JvmQuantizedMatrixRuntimeBuilder.carrierData(ctx.cp)).astore(slots[quantizedOperand]);
+			ctx.body.goto_(skipGenerals);
+			ctx.body.labelBinding(notQuantized);
+		}
+		if (bf16Operand != null) {
+			// if (!(slot_p instanceof short[])) goto general;
+			ClassEntry shortArrayClass = ctx.cp.classEntry("[S");
+			ctx.body.aload(slots[bf16Operand]).instanceOf(shortArrayClass);
+			MethodCode.Label general = ctx.body.newLabel();
+			ctx.body.ifeq(general);
+			for (int i = 0; i < arrays; i++) {
+				if (i == bf16Operand) {
+					continue;
+				}
+				// if (!(slot_i instanceof float[])) goto fallback
+				ctx.body.aload(slots[i]).instanceOf(floatArrayClass).ifeq(fallback);
+			}
+			ctx.body.goto_(skipGenerals);
+			ctx.body.labelBinding(general);
+		}
+		if (BF16_ELEMENTWISE.contains(member)) {
+			// if (!(slot_0 instanceof short[])) goto general;
+			ClassEntry shortArrayClass = ctx.cp.classEntry("[S");
+			ctx.body.aload(slots[0]).instanceOf(shortArrayClass);
+			MethodCode.Label generalBf16 = ctx.body.newLabel();
+			ctx.body.ifeq(generalBf16);
+			for (int i = 1; i < arrays; i++) {
+				// if (!(slot_i instanceof short[])) goto fallback
+				ctx.body.aload(slots[i]).instanceOf(shortArrayClass).ifeq(fallback);
+			}
+			ctx.body.goto_(skipGenerals);
+			ctx.body.labelBinding(generalBf16);
+		}
+		if (arrays > 0) {
+			// if (slot_0 instanceof double[]) { every array operand double[] }
+			// else { every array operand float[] } -- anything else falls back.
+			ctx.body.aload(slots[0]).instanceOf(doubleArrayClass);
+			MethodCode.Label notDouble = ctx.body.newLabel();
+			ctx.body.ifeq(notDouble);
+			for (int i = 1; i < arrays; i++) {
+				ctx.body.aload(slots[i]).instanceOf(doubleArrayClass).ifeq(fallback);
+			}
+			ctx.body.goto_(skipGenerals);
+			ctx.body.labelBinding(notDouble);
+			for (int i = 0; i < arrays; i++) {
+				ctx.body.aload(slots[i]).instanceOf(floatArrayClass).ifeq(fallback);
+			}
+		}
+		ctx.body.labelBinding(skipGenerals);
+	}
+
+	/** Sets a bridge up before its first call. */
+	private static void emitInit(JvmLispCompiler.Ctx ctx, Map<String, MethodRefEntry> ops) {
+		ctx.body.invokestatic(Objects.requireNonNull(ops.get("init")));
+	}
+
+	/**
+	 * One partial rung: call the kernel over the temps and jump to the chain's end when
+	 * it answered, leaving the stack as it was found when it declined.
+	 */
+	private static void emitAttempt(JvmLispCompiler.Ctx ctx, Map<String, MethodRefEntry> ops, String kernelKey,
+			int[] slots, MethodCode.Label answered) {
+		loadAll(ctx, slots);
+		ctx.body.invokestatic(Objects.requireNonNull(ops.get(kernelKey))).dup();
+		ctx.body.ifnonnull(answered);
+		ctx.body.pop();
+	}
+
+	private static void loadAll(JvmLispCompiler.Ctx ctx, int[] slots) {
+		for (int slot : slots) {
+			ctx.body.aload(slot);
+		}
+	}
+
+	private static void requireArity(boolean ok, String message) {
+		if (!ok) {
+			throw new UnsupportedOperationException(message);
+		}
+	}
+
+}

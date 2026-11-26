@@ -1,0 +1,175 @@
+package am.ik.rontolisp.codegen.jvm;
+
+import java.lang.classfile.constantpool.MethodRefEntry;
+import java.util.List;
+
+import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispLayout;
+import am.ik.rontolisp.LispNames;
+import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.compiler.StreamDesignators;
+import am.ik.rontolisp.compiler.StringValuedForms;
+import org.jspecify.annotations.Nullable;
+
+/**
+ * Compiles the string-stream built-ins behind with-output-to-string /
+ * with-input-from-string: {@code %make-string-output-stream},
+ * {@code %make-string-input-stream}, {@code %string-stream-contents}, and the public
+ * {@code write-string}. Also provides the {@code _writeStr} call emitter used by the
+ * print-family compilers for their optional stream argument.
+ */
+final class JvmStringStreamCompiler {
+
+	private JvmStringStreamCompiler() {
+	}
+
+	private static MethodRefEntry methodRef(JvmLispCompiler.Ctx ctx, String className, String name, String desc) {
+		return ctx.cp.methodRef(ctx.cp.classEntry(className), name, desc);
+	}
+
+	/**
+	 * The print family's default destination expression: the current value of
+	 * {@code *standard-output*} when the program gives it a global cell (it binds or
+	 * assigns it somewhere -- the redirect contract of
+	 * {@code (with-output-to-string (*standard-output*) ...)}), else {@code null} so a
+	 * redirect-free program keeps the hard-coded standard output and compiles
+	 * byte-identically to before.
+	 */
+	static @Nullable LispVal defaultStreamArg(JvmLispCompiler.Ctx ctx) {
+		return streamArg(ctx, null);
+	}
+
+	/**
+	 * The destination expression of an output operation, applying CL's stream designator
+	 * rule ({@link StreamDesignators}) when the {@code *standard-output*} redirect is
+	 * active: an omitted argument and an explicit nil both denote the current
+	 * {@code *standard-output*}.
+	 * @param ctx the compile context
+	 * @param explicit the stream argument expression, or {@code null} if omitted
+	 * @return the expression to compile, or {@code null} for the hard-coded standard
+	 * output
+	 */
+	static @Nullable LispVal streamArg(JvmLispCompiler.Ctx ctx, @Nullable LispVal explicit) {
+		LispVal resolved = ctx.globals.contains(LispNames.STANDARD_OUTPUT_VAR)
+				? StreamDesignators.resolveOutput(explicit) : explicit;
+		return streamDesignator(ctx, resolved);
+	}
+
+	/**
+	 * The source expression of an INPUT operation, the {@link #streamArg} mirror: an
+	 * omitted argument and an explicit nil both denote the current
+	 * {@code *standard-input*} when the program binds it somewhere.
+	 * @param ctx the compile context
+	 * @param explicit the stream argument expression, or {@code null} if omitted
+	 * @return the expression to compile, or {@code null} for the hard-coded standard
+	 * input
+	 */
+	static @Nullable LispVal inputStreamArg(JvmLispCompiler.Ctx ctx, @Nullable LispVal explicit) {
+		LispVal resolved = ctx.globals.contains(LispNames.STANDARD_INPUT_VAR) ? StreamDesignators.resolveInput(explicit)
+				: explicit;
+		return streamDesignator(ctx, resolved);
+	}
+
+	/**
+	 * A stream designator expression resolved down to the raw HANDLE the I/O helpers act
+	 * on, for a consumer that takes its stream argument as written (no
+	 * {@code *standard-output*} designator rule): a stream VALUE is unwrapped, a synonym
+	 * stream is followed. With neither kind reachable in this class the expression is
+	 * handed back untouched, so such a program keeps its exact bytes.
+	 * @param ctx the compile context
+	 * @param explicit the stream argument expression, or {@code null} if omitted
+	 * @return the expression to compile
+	 */
+	static @Nullable LispVal streamDesignator(JvmLispCompiler.Ctx ctx, @Nullable LispVal explicit) {
+		if (!ctx.usesSynonymStreams && !ctx.usesStreamValues) {
+			return explicit;
+		}
+		// The shared %STREAM-TARGET defun when the prelude spliced it (one call per
+		// stream operation), the inline %obj-* unwrap when it did not -- which happens
+		// for a stream value injected after the prelude selection ran.
+		return ctx.functions.containsKey(LispNames.STREAM_TARGET) ? StreamDesignators.throughStream(explicit)
+				: StreamDesignators.throughStreamInline(explicit);
+	}
+
+	/**
+	 * Emits an {@code invokestatic _writeStr(String, Object) -> void} call; the caller
+	 * must have pushed the rendered content string and the stream handle.
+	 */
+	static void emitWriteStr(JvmLispCompiler.Ctx ctx, String className) {
+		ctx.body.invokestatic(
+				methodRef(ctx, className, JvmIoRuntimeBuilder.WRITE_STR_METHOD, JvmIoRuntimeBuilder.WRITE_STR_DESC));
+	}
+
+	/**
+	 * Emits an {@code invokestatic _writeString(Object, Object) -> Object} call; the
+	 * caller must have pushed the quote-framed string value and the stream handle. The
+	 * write-string/terpri route: unlike {@link #emitWriteStr}, this helper carries the
+	 * socket arm (see .kb/tcp-sockets.md).
+	 */
+	static void emitWriteString(JvmLispCompiler.Ctx ctx, String className) {
+		ctx.body.invokestatic(methodRef(ctx, className, JvmIoRuntimeBuilder.WRITE_STRING_METHOD,
+				JvmIoRuntimeBuilder.WRITE_STRING_DESC));
+	}
+
+	/**
+	 * Compiles {@code (write-string str [stream])} via the {@code _writeString} helper.
+	 */
+	static void compileWriteString(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() != 2 && parts.size() != 3) {
+			throw new UnsupportedOperationException("write-string expects 1 or 2 arguments, got " + (parts.size() - 1));
+		}
+		JvmExprCompiler.compileExpr(parts.get(1), ctx, className);
+		// A mutable character vector normalizes to a string first -- unless the argument
+		// form cannot BE one (StringValuedForms), the same rule the WASM backend follows.
+		if (!StringValuedForms.certainlyString(parts.get(1))) {
+			JvmArrayCompiler.emitStrvNormalize(ctx, className);
+		}
+		LispVal stream = streamArg(ctx, parts.size() == 3 ? parts.get(2) : null);
+		if (stream != null) {
+			JvmExprCompiler.compileExpr(stream, ctx, className);
+		}
+		else {
+			ctx.body.aconst_null();
+		}
+		ctx.body.invokestatic(methodRef(ctx, className, JvmIoRuntimeBuilder.WRITE_STRING_METHOD,
+				JvmIoRuntimeBuilder.WRITE_STRING_DESC));
+	}
+
+	/** Compiles {@code (%make-string-output-stream)}. */
+	static void compileMakeOutputStream(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		ctx.body.invokestatic(methodRef(ctx, className, JvmIoRuntimeBuilder.MAKE_STRING_OUTPUT_STREAM_METHOD,
+				JvmIoRuntimeBuilder.MAKE_STRING_OUTPUT_STREAM_DESC));
+		if (ctx.usesStreamValues) {
+			JvmObjCompiler.emitWrapStream(ctx, className, LispLayout.Kinds.STRING_OUTPUT);
+		}
+	}
+
+	/** Compiles {@code (%make-string-input-stream str)}. */
+	static void compileMakeInputStream(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		List<LispVal> parts = cons.toList();
+		JvmExprCompiler.compileExpr(parts.get(1), ctx, className);
+		// The source may be a MUTABLE character vector -- trivial-utf-8 builds every
+		// string it decodes with make-string + (setf char) -- and the runtime helper
+		// casts to String, so it goes through the shared normalizer first, exactly like
+		// write-string above.
+		if (!StringValuedForms.certainlyString(parts.get(1))) {
+			JvmArrayCompiler.emitStrvNormalize(ctx, className);
+		}
+		ctx.body.invokestatic(methodRef(ctx, className, JvmIoRuntimeBuilder.MAKE_STRING_INPUT_STREAM_METHOD,
+				JvmIoRuntimeBuilder.MAKE_STRING_INPUT_STREAM_DESC));
+		if (ctx.usesStreamValues) {
+			JvmObjCompiler.emitWrapStream(ctx, className, LispLayout.Kinds.STRING_INPUT);
+		}
+	}
+
+	/** Compiles {@code (%string-stream-contents stream)}. */
+	static void compileContents(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		List<LispVal> parts = cons.toList();
+		JvmExprCompiler.compileExpr(java.util.Objects.requireNonNull(streamDesignator(ctx, parts.get(1))), ctx,
+				className);
+		ctx.body.invokestatic(methodRef(ctx, className, JvmIoRuntimeBuilder.STRING_STREAM_CONTENTS_METHOD,
+				JvmIoRuntimeBuilder.STRING_STREAM_CONTENTS_DESC));
+	}
+
+}

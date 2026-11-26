@@ -1,0 +1,692 @@
+package am.ik.rontolisp;
+
+import org.jspecify.annotations.Nullable;
+
+/**
+ * An array value (Common Lisp {@code array}/{@code simple-array}).
+ *
+ * <p>
+ * Arrays of any rank {@code >= 0} are supported, matching the compiled backends. Elements
+ * are stored row-major in a flat {@link LispVal} array; the flat index is the Horner fold
+ * over the subscripts (a rank-2 element {@code (i, j)} lives at {@code i * cols + j},
+ * where {@code cols} is the second dimension). A RANK-0 array is the degenerate case of
+ * that model rather than a special one: no dimensions, an empty fold (so its one element
+ * lives at flat index 0), and a total size of 1 -- Common Lisp's box for "a scalar seen
+ * as an array".
+ *
+ * <p>
+ * Arrays are compared by identity ({@code eq}); two distinct arrays are never
+ * {@code equal} even with the same contents, matching Common Lisp.
+ */
+public final class LispArray implements LispVal {
+
+	private int[] dimensions;
+
+	private LispVal[] data;
+
+	// The fill pointer of a rank-1 vector, or -1 when the array has none. When present it
+	// is the effective length (0 <= fillPointer <= dimensions[0]); aref/row-major-aref
+	// may
+	// still reach the full backing store, but length, printing and the sequence functions
+	// stop at the fill pointer.
+	private int fillPointer;
+
+	// Whether the array was created :adjustable. vector-push-extend grows any vector with
+	// a fill pointer regardless (matching common practice), but adjustable-array-p
+	// reports
+	// this flag verbatim.
+	private final boolean adjustable;
+
+	// The displacement target (make-array :displaced-to), or null when the array has its
+	// own storage. A displaced array holds no data of its own (data is a shared empty
+	// array): element access resolves through the target chain, adding displacedOffset at
+	// each hop, so writes are visible through every view. Displacement excludes only an
+	// initial element (a CLHS rule); a view MAY carry a fill pointer and the :adjustable
+	// flag, and both fields below are cleared in place when a full fill-pointered view
+	// grows -- vector-push-extend un-displaces rather than growing someone else's
+	// storage, exactly as SBCL does.
+	//
+	// The target is a LispArray, a LispIntVector or a LispFloatArray: the PACKED
+	// representations are displacement targets on the same terms as a general array
+	// (a view over a simple specialized vector is the construction CLHS's
+	// :displaced-to element-type rule is written for), and the walk below ends on one
+	// instead of hopping. (A view over a STRING is a LispString view, not a LispArray
+	// -- the target decides the shape.)
+	@Nullable private LispVal displacedTo;
+
+	private int displacedOffset;
+
+	// The UPGRADED element type this array was asked to hold, as an
+	// ArrayElementTypes code. It is ArrayElementTypes.T for almost every array --
+	// a general array is the representation every request that selects no
+	// specialized one lands in -- and something else exactly where make-array was
+	// told a narrower type it could not represent: a character or packed-integer
+	// element type above rank 1, or any of them combined with a fill pointer or
+	// adjustability. array-element-type answers it and the unsupplied element takes
+	// its zero; nothing else in the representation depends on it.
+	// Written once after construction by adoptElementType, the interpreter half of
+	// %array-adopt-element-type.
+	private int elementTypeCode;
+
+	private static final LispVal[] NO_DATA = new LispVal[0];
+
+	/**
+	 * Creates a simple array with the given dimensions backed by {@code data}
+	 * (row-major), with no fill pointer and not adjustable.
+	 * @param dimensions the dimension sizes (length = rank, {@code >= 0})
+	 * @param data the flat backing store (length = product of dimensions)
+	 */
+	public LispArray(int[] dimensions, LispVal[] data) {
+		this(dimensions, data, -1, false);
+	}
+
+	/**
+	 * Creates an array with the given dimensions, backing store, fill pointer and
+	 * adjustability.
+	 * @param dimensions the dimension sizes (length = rank, {@code >= 0})
+	 * @param data the flat backing store (length = product of dimensions)
+	 * @param fillPointer the fill pointer, or {@code -1} for none (only rank-1 arrays may
+	 * have one)
+	 * @param adjustable whether the array is adjustable
+	 */
+	public LispArray(int[] dimensions, LispVal[] data, int fillPointer, boolean adjustable) {
+		this(dimensions, data, fillPointer, adjustable, ArrayElementTypes.T);
+	}
+
+	/**
+	 * Creates an array that REMEMBERS the element type it was asked to hold, beyond the
+	 * shape of {@link #LispArray(int[], LispVal[], int, boolean)}.
+	 * @param dimensions the dimension sizes (length = rank, {@code >= 0})
+	 * @param data the flat backing store (length = product of dimensions)
+	 * @param fillPointer the fill pointer, or {@code -1} for none (only rank-1 arrays may
+	 * have one)
+	 * @param adjustable whether the array is adjustable
+	 * @param elementTypeCode the upgraded element type as an {@link ArrayElementTypes}
+	 * code
+	 */
+	public LispArray(int[] dimensions, LispVal[] data, int fillPointer, boolean adjustable, int elementTypeCode) {
+		this.dimensions = dimensions;
+		this.data = data;
+		this.fillPointer = fillPointer;
+		this.adjustable = adjustable;
+		this.displacedTo = null;
+		this.displacedOffset = 0;
+		this.elementTypeCode = elementTypeCode;
+	}
+
+	/**
+	 * Creates a displaced array: a view over {@code target}'s storage starting at
+	 * {@code offset} (row-major). The view has no fill pointer, is not adjustable and
+	 * owns no data.
+	 * @param dimensions the dimension sizes of the view (length = rank, {@code >= 0})
+	 * @param target the array supplying the storage
+	 * @param offset the row-major index into {@code target} where the view starts
+	 */
+	public LispArray(int[] dimensions, LispVal target, int offset) {
+		this(dimensions, target, offset, -1, false);
+	}
+
+	/**
+	 * Creates a displaced array carrying a fill pointer and/or the {@code :adjustable}
+	 * flag: a view over {@code target}'s storage that owns no data but whose active
+	 * length is its own. CLHS allows both keywords alongside {@code :displaced-to}.
+	 * @param dimensions the dimension sizes of the view (length = rank, {@code >= 0})
+	 * @param target the array supplying the storage
+	 * @param offset the row-major index into {@code target} where the view starts
+	 * @param fillPointer the fill pointer, or {@code -1} for none (rank-1 views only)
+	 * @param adjustable whether the view was created {@code :adjustable}
+	 */
+	public LispArray(int[] dimensions, LispVal target, int offset, int fillPointer, boolean adjustable) {
+		this.dimensions = dimensions;
+		this.data = NO_DATA;
+		this.fillPointer = fillPointer;
+		this.adjustable = adjustable;
+		this.displacedTo = target;
+		this.displacedOffset = offset;
+		// A view owns NO storage: its elements are the target's, so its element type is
+		// the target's. CL requires the two to be type-equivalent anyway (make-array,
+		// :displaced-to), so this IS the view's declared :element-type in every program
+		// a conforming implementation accepts. Inherited at BIRTH rather than resolved
+		// at every read because an array's element type never changes after it is made,
+		// and the target -- itself possibly a view -- already resolved its own, so one
+		// hop is the whole chain. undisplace() then needs no special case: what the
+		// view answered while displaced is what it answers once it owns its storage.
+		// A PACKED target's type is its representation rather than a remembered label,
+		// which is the same answer read a different way.
+		this.elementTypeCode = targetElementTypeCode(target);
+	}
+
+	// The element type a view over `target` answers: the target's own. A general array
+	// remembers it (and, being possibly a view itself, already resolved its chain); a
+	// packed vector IS its element type.
+	private static int targetElementTypeCode(LispVal target) {
+		return switch (target) {
+			case LispArray array -> array.elementTypeCode;
+			case LispIntVector iv -> switch (iv.width()) {
+				case 8 -> ArrayElementTypes.UNSIGNED_BYTE_8;
+				case 16 -> ArrayElementTypes.UNSIGNED_BYTE_16;
+				default -> ArrayElementTypes.UNSIGNED_BYTE_32;
+			};
+			// Exhaustive over the sealed widths, so a new one is a compile error here
+			// rather than the "expects an array" refusal below (which is what the
+			// bfloat16 width fell into when it was added by hand to the other sites).
+			case LispFloatArray packed -> switch (packed) {
+				case LispSingleFloatArray unused -> ArrayElementTypes.SINGLE_FLOAT;
+				case LispDoubleFloatArray unused -> ArrayElementTypes.DOUBLE_FLOAT;
+				case LispBFloat16Array unused -> ArrayElementTypes.BFLOAT16;
+			};
+			default ->
+				throw new IllegalArgumentException("make-array: :displaced-to expects an array, got " + target.print());
+		};
+	}
+
+	/**
+	 * Returns the dimension sizes.
+	 * @return the dimensions (length = rank)
+	 */
+	public int[] dimensions() {
+		return this.dimensions;
+	}
+
+	/**
+	 * Returns the flat row-major backing store. Empty for a displaced array (which owns
+	 * no storage; use {@link #readFlat}/{@link #writeFlat}).
+	 * @return the backing data (length = product of dimensions, or 0 when displaced)
+	 */
+	public LispVal[] data() {
+		return this.data;
+	}
+
+	/**
+	 * Returns the upgraded element type this array remembers, as an
+	 * {@link ArrayElementTypes} code. {@link ArrayElementTypes#T} for an array that was
+	 * asked for nothing narrower than {@code t}.
+	 * @return the element type code
+	 */
+	public int elementTypeCode() {
+		return this.elementTypeCode;
+	}
+
+	/**
+	 * Makes this array remember {@code code} as the element type it was asked for
+	 * ({@code %array-adopt-element-type}). The only writer of the field: a fresh copy
+	 * built by {@code adjust-array} adopts the adjusted array's type, which
+	 * {@code adjust-array} never changes.
+	 * @param code the {@link ArrayElementTypes} code to remember
+	 */
+	public void adoptElementType(int code) {
+		this.elementTypeCode = code;
+	}
+
+	// The Java array this vector stands for ({@code %array-java-component}): its
+	// component type's Java name -- "int", "java.lang.Object", "java.lang.String" -- or
+	// null for a vector that is no Java array. The Clojure front end's typed arrays and
+	// the arrays a java: call answers carry it, so a later java: call selects the array
+	// type the value really is; the compiled representation keeps the same name in the
+	// array header's remembered-type slot.
+	@Nullable private String javaComponent;
+
+	/**
+	 * Returns the Java array component this vector stands for, or {@code null} for a
+	 * vector that is no Java array.
+	 * @return the component type's Java name, or null
+	 */
+	public @Nullable String javaComponent() {
+		return this.javaComponent;
+	}
+
+	/**
+	 * Makes this array remember the Java array component it stands for
+	 * ({@code %array-java-component} with two arguments); {@code null} forgets it.
+	 * @param component the component type's Java name, or null
+	 */
+	public void setJavaComponent(@Nullable String component) {
+		this.javaComponent = component;
+	}
+
+	/**
+	 * Returns the displacement target, or {@code null} when the array owns its storage.
+	 * @return the {@code :displaced-to} array (a {@link LispArray}, a
+	 * {@link LispIntVector} or a {@link LispFloatArray}), or {@code null}
+	 */
+	@Nullable public LispVal displacedTo() {
+		return this.displacedTo;
+	}
+
+	/**
+	 * Returns the displacement offset ({@code :displaced-index-offset}; 0 when the array
+	 * is not displaced).
+	 * @return the row-major offset into the displacement target
+	 */
+	public int displacedOffset() {
+		return this.displacedOffset;
+	}
+
+	/**
+	 * Returns the total element count (the product of the dimensions).
+	 * @return the total size
+	 */
+	public int totalSize() {
+		int total = 1;
+		for (int d : this.dimensions) {
+			total *= d;
+		}
+		return total;
+	}
+
+	/**
+	 * Reads the element at the given row-major index, following the displacement chain.
+	 * @param flat the row-major index ({@code 0 <= flat < totalSize()})
+	 * @return the stored element
+	 */
+	public LispVal readFlat(int flat) {
+		LispArray a = this;
+		while (a.displacedTo != null) {
+			flat += a.displacedOffset;
+			if (!(a.displacedTo instanceof LispArray next)) {
+				// The chain ends on a PACKED target: its storage is the elements, read
+				// with that representation's own widening (unsigned for an integer
+				// vector, f32 -> f64 for a single-float array).
+				return a.displacedTo instanceof LispIntVector iv ? new LispInteger(iv.elementAt(flat))
+						: ((LispFloatArray) a.displacedTo).readFlat(flat);
+			}
+			a = next;
+		}
+		return a.data[flat];
+	}
+
+	/**
+	 * Stores the element at the given row-major index, following the displacement chain.
+	 * @param flat the row-major index ({@code 0 <= flat < totalSize()})
+	 * @param value the value to store
+	 */
+	public void writeFlat(int flat, LispVal value) {
+		LispArray a = this;
+		while (a.displacedTo != null) {
+			flat += a.displacedOffset;
+			if (!(a.displacedTo instanceof LispArray next)) {
+				// A store through a view into a PACKED target is the target's own store:
+				// masked to the element width for an integer vector, narrowed to the
+				// backing width for a float array.
+				if (a.displacedTo instanceof LispIntVector iv) {
+					iv.setElement(flat, exactPackedInt(value));
+				}
+				else {
+					((LispFloatArray) a.displacedTo).setElement(flat, packedDouble(value));
+				}
+				return;
+			}
+			a = next;
+		}
+		a.data[flat] = value;
+	}
+
+	// The long a store into a packed integer vector contributes (its low bits; the
+	// vector masks to the element width). The message is Environment's own, so a store
+	// through a view reads like a store into the target.
+	private static long exactPackedInt(LispVal value) {
+		return switch (value) {
+			case LispInteger i -> i.value();
+			case LispBigInteger b -> b.value().longValue();
+			default -> throw new IllegalArgumentException(
+					"%aset: a packed integer vector stores integers, got " + value.print());
+		};
+	}
+
+	// The double a store into a packed float array contributes (a non-real is a type
+	// error -- there is no degrade path, exactly as make-array's packed float arm has
+	// none).
+	private static double packedDouble(LispVal value) {
+		return switch (value) {
+			case LispDouble d -> d.value();
+			case LispInteger i -> (double) i.value();
+			case LispBigInteger b -> b.value().doubleValue();
+			case LispRatio r -> r.doubleValue();
+			default ->
+				throw new IllegalArgumentException("%aset: a packed float array stores reals, got " + value.print());
+		};
+	}
+
+	/**
+	 * Replaces this array's dimensions, data and fill pointer with {@code other}'s (the
+	 * in-place half of {@code adjust-array} on an adjustable array). The adjustable flag
+	 * is kept; {@code other} is discarded by the caller.
+	 * @param other the freshly built replacement array
+	 */
+	public void become(LispArray other) {
+		this.dimensions = other.dimensions;
+		this.data = other.data;
+		this.fillPointer = other.fillPointer;
+	}
+
+	/**
+	 * Replaces this array with a DISPLACED view over {@code target} (the
+	 * {@code adjust-array ... :displaced-to} on an {@code :adjustable} array, which keeps
+	 * its identity): the view's own dimensions and fill pointer, owning no storage. The
+	 * element type becomes the target's, since a view answers the type it is a view of.
+	 * @param dimensions the view's dimension sizes (length = rank, {@code >= 0})
+	 * @param target the array supplying the storage
+	 * @param offset the row-major index into {@code target} where the view starts
+	 * @param fillPointer the view's fill pointer, or {@code -1} for none
+	 */
+	public void becomeDisplaced(int[] dimensions, LispVal target, int offset, int fillPointer) {
+		this.dimensions = dimensions;
+		this.data = NO_DATA;
+		this.fillPointer = fillPointer;
+		this.displacedTo = target;
+		this.displacedOffset = offset;
+		this.elementTypeCode = targetElementTypeCode(target);
+	}
+
+	/**
+	 * Returns the fill pointer, or {@code -1} when the array has none.
+	 * @return the fill pointer, or {@code -1}
+	 */
+	public int fillPointer() {
+		return this.fillPointer;
+	}
+
+	/**
+	 * Returns whether the array has a fill pointer.
+	 * @return {@code true} if a fill pointer is present
+	 */
+	public boolean hasFillPointer() {
+		return this.fillPointer >= 0;
+	}
+
+	/**
+	 * Returns whether the array is adjustable.
+	 * @return {@code true} if the array was created adjustable
+	 */
+	public boolean adjustable() {
+		return this.adjustable;
+	}
+
+	/**
+	 * Sets the fill pointer to {@code value}.
+	 * @param value the new fill pointer ({@code 0 <= value <= dimensions[0]})
+	 */
+	public void setFillPointer(int value) {
+		if (this.fillPointer < 0) {
+			throw new IllegalStateException("array has no fill pointer");
+		}
+		if (value < 0 || value > this.dimensions[0]) {
+			throw new IndexOutOfBoundsException("fill pointer out of range: " + value);
+		}
+		this.fillPointer = value;
+	}
+
+	/**
+	 * Returns the effective length: the fill pointer when present, otherwise the total
+	 * element count.
+	 * @return the effective length
+	 */
+	public int effectiveLength() {
+		return this.fillPointer >= 0 ? this.fillPointer : totalSize();
+	}
+
+	/**
+	 * Pushes {@code value} at the fill pointer of a rank-1 vector, returning the index it
+	 * was stored at, or {@code -1} when the vector is full. Requires a fill pointer.
+	 * @param value the element to store
+	 * @return the index used, or {@code -1} if full
+	 */
+	public int vectorPush(LispVal value) {
+		requireVectorWithFillPointer("vector-push");
+		if (this.fillPointer >= this.dimensions[0]) {
+			return -1;
+		}
+		writeFlat(this.fillPointer, value);
+		return this.fillPointer++;
+	}
+
+	/**
+	 * Pops and returns the element below the fill pointer of a rank-1 vector. Requires a
+	 * fill pointer.
+	 * @return the popped element
+	 */
+	public LispVal vectorPop() {
+		requireVectorWithFillPointer("vector-pop");
+		if (this.fillPointer == 0) {
+			throw new IllegalStateException("vector-pop: empty vector");
+		}
+		return readFlat(--this.fillPointer);
+	}
+
+	/**
+	 * Pushes {@code value} like {@link #vectorPush}, growing the backing store when the
+	 * vector is full. Requires a fill pointer.
+	 * @param value the element to store
+	 * @param extension the number of elements to grow by when full, or
+	 * {@link ArrayGrowth#NO_EXTENSION} for the default policy
+	 * @return the index used
+	 */
+	public int vectorPushExtend(LispVal value, int extension) {
+		requireVectorWithFillPointer("vector-push-extend");
+		if (this.fillPointer >= this.dimensions[0]) {
+			// A full DISPLACED view stops being a view: its elements are copied into
+			// storage of its own and the displacement is dropped, so the growth never
+			// runs past the end of someone else's array. array-displacement answers
+			// nil/0 from here on, which is what SBCL 2.2.9 does.
+			undisplace();
+			int newCap = ArrayGrowth.grownCapacity(this.dimensions[0], extension);
+			LispVal[] grown = new LispVal[newCap];
+			System.arraycopy(this.data, 0, grown, 0, this.data.length);
+			// The slots the growth opens take the REMEMBERED element type's own zero,
+			// the same fill make-array gives an unsupplied element, so a vector asked
+			// to hold floats never reads back nil above its old capacity.
+			LispVal spare = ArrayElementTypes.defaultElement(this.elementTypeCode);
+			for (int i = this.data.length; i < newCap; i++) {
+				grown[i] = spare == null ? LispNil.INSTANCE : spare;
+			}
+			this.data = grown;
+			this.dimensions = new int[] { newCap };
+		}
+		writeFlat(this.fillPointer, value);
+		return this.fillPointer++;
+	}
+
+	/**
+	 * Copies a displaced array's current view contents into storage of its own and drops
+	 * the displacement, keeping its dimensions, fill pointer and adjustable flag. A no-op
+	 * for an array that owns its storage already.
+	 */
+	public void undisplace() {
+		if (this.displacedTo == null) {
+			return;
+		}
+		int total = totalSize();
+		LispVal[] own = new LispVal[total];
+		for (int i = 0; i < total; i++) {
+			own[i] = readFlat(i);
+		}
+		this.displacedTo = null;
+		this.displacedOffset = 0;
+		this.data = own;
+	}
+
+	private void requireVectorWithFillPointer(String fn) {
+		if (this.dimensions.length != 1) {
+			throw new IllegalStateException(fn + ": not a vector");
+		}
+		if (this.fillPointer < 0) {
+			throw new IllegalStateException(fn + ": vector has no fill pointer");
+		}
+	}
+
+	/**
+	 * Returns the element at the given subscripts.
+	 * @param subscripts the indices (one per dimension)
+	 * @return the stored element
+	 */
+	public LispVal aref(int... subscripts) {
+		return readFlat(flatIndex(subscripts));
+	}
+
+	/**
+	 * Stores {@code value} at the given subscripts.
+	 * @param value the value to store
+	 * @param subscripts the indices (one per dimension)
+	 */
+	public void aset(LispVal value, int... subscripts) {
+		writeFlat(flatIndex(subscripts), value);
+	}
+
+	private int flatIndex(int[] subscripts) {
+		if (subscripts.length != this.dimensions.length) {
+			throw new IllegalArgumentException(
+					"aref: expected " + this.dimensions.length + " subscripts, got " + subscripts.length);
+		}
+		// The Horner fold, started at 0 so a RANK-0 array (no subscripts) folds to the
+		// flat index 0 of its single element instead of reading a subscript that is not
+		// there.
+		int flat = 0;
+		for (int k = 0; k < subscripts.length; k++) {
+			flat = flat * this.dimensions[k] + subscripts[k];
+		}
+		if (flat < 0 || flat >= totalSize()) {
+			throw new IndexOutOfBoundsException("aref: index out of bounds");
+		}
+		return flat;
+	}
+
+	@Override
+	public String print() {
+		return render(LispVal::print);
+	}
+
+	@Override
+	public String display() {
+		return render(LispVal::display);
+	}
+
+	// Renders the readable vector/array syntax: a rank-1 array as #(e1 e2 ...) and a
+	// rank-n array as #nA((...) ...) (a rank-0 array as #0Ae, handled in
+	// renderArrayData). Each element is rendered with the supplied
+	// function (print for prin1, display for princ), so princ propagates to the elements
+	// the way Common Lisp's *print-escape* does. A nested group paren opens where the
+	// flat index is a multiple of that dimension's stride and closes where the next
+	// index is.
+	private String render(java.util.function.Function<LispVal, String> renderElement) {
+		// The cycle guard (RenderCycleGuard, shared with the instance and cons
+		// renderers): an array holding itself -- directly or through a list -- would
+		// recurse without end, so an array already on the current rendering path, or the
+		// frame past the depth cap, prints as "#", the *print-level* cutoff marker.
+		if (!RenderCycleGuard.enter(this)) {
+			return "#";
+		}
+		try {
+			int rank = this.dimensions.length;
+			// A rank-1 bit-stamped array prints #* when every element is 0/1, so a
+			// printed bit vector reads back as one. make-array never
+			// validates stores, so a non-bit element falls back to the general #()
+			// vector, which also loses the stamp on the read-back like a rank-n
+			// character array does.
+			if (rank == 1 && this.elementTypeCode == ArrayElementTypes.BIT) {
+				String bits = tryRenderBitVector();
+				if (bits != null) {
+					return bits;
+				}
+			}
+			return render(renderElement, rank == 1 ? "#(" : "#" + rank + "A(");
+		}
+		finally {
+			RenderCycleGuard.exit();
+		}
+	}
+
+	// The #* rendering of a rank-1 bit-stamped array, or null when any element is
+	// not a 0/1 bit (the caller falls back to the general vector). Reads through
+	// the displacement chain and stops at the fill pointer, like the general
+	// renderer.
+	private @Nullable String tryRenderBitVector() {
+		int count = effectiveLength();
+		StringBuilder sb = new StringBuilder(count + 2);
+		sb.append("#*");
+		for (int k = 0; k < count; k++) {
+			LispVal element = readFlat(k);
+			if (element instanceof LispInteger i && (i.value() == 0 || i.value() == 1)) {
+				sb.append((char) ('0' + i.value()));
+			}
+			else {
+				return null;
+			}
+		}
+		return sb.toString();
+	}
+
+	// Renders the array data with a caller-supplied opening prefix (up to and including
+	// the outermost '('). A packed {@link LispFloatArray} renders through the shared
+	// {@link #renderArrayData} with its width-specific prefix ("#d(" for double, "#f("
+	// for
+	// single) so it round-trips to a packed array of the same width; the data part after
+	// the '(' is identical to the general-array syntax at every rank (rank is inferred
+	// from
+	// nesting).
+	String render(java.util.function.Function<LispVal, String> renderElement, String openPrefix) {
+		return renderArrayData(this.dimensions, effectiveLength(), openPrefix,
+				k -> renderElement.apply(elementOrNil(k)));
+	}
+
+	/**
+	 * Renders the {@code #(...)}/{@code #nA(...)}/{@code #d(...)}/{@code #f(...)} array
+	 * syntax from dimensions and a per-flat-index element renderer, without materializing
+	 * a boxed array. A nested group paren opens where the flat index is a multiple of
+	 * that dimension's stride and closes where the next index is. Shared by the general
+	 * {@link LispArray} and the packed {@link LispFloatArray} so the (subtle) paren
+	 * layout lives in one place; the packed array renders its primitive backing directly,
+	 * boxing only the transient {@link LispDouble} each element's string needs.
+	 * @param dims the dimension sizes (length = rank; empty for a rank-0 array, which
+	 * renders as {@code #0A} followed by its single element -- no parens, the shape
+	 * {@code readArray} reads back)
+	 * @param count the number of leading elements to render (the effective length)
+	 * @param openPrefix the opening text through the outermost {@code (} (e.g.
+	 * {@code "#("}, {@code "#2A("}, {@code "#d("} or {@code "#f("})
+	 * @param renderElementAt renders the element at a given flat row-major index
+	 * @return the readable array syntax
+	 */
+	static String renderArrayData(int[] dims, int count, String openPrefix,
+			java.util.function.IntFunction<String> renderElementAt) {
+		int rank = dims.length;
+		if (rank == 0) {
+			// #0A<datum>: a rank-0 array has no dimensions to group, so it carries no
+			// parens at all and the caller's "#(" / "#2A(" / "#d(" prefix does not apply.
+			return "#0A" + renderElementAt.apply(0);
+		}
+		StringBuilder sb = new StringBuilder();
+		sb.append(openPrefix);
+		for (int k = 0; k < count; k++) {
+			if (k > 0) {
+				sb.append(' ');
+			}
+			for (int j = 1; j < rank; j++) {
+				if (k % strideOf(dims, j) == 0) {
+					sb.append('(');
+				}
+			}
+			sb.append(renderElementAt.apply(k));
+			for (int j = rank - 1; j >= 1; j--) {
+				if ((k + 1) % strideOf(dims, j) == 0) {
+					sb.append(')');
+				}
+			}
+		}
+		return sb.append(')').toString();
+	}
+
+	// The flat-index span of one step of dimension j-1: the product of the dimension
+	// sizes from j to the last.
+	private static int strideOf(int[] dims, int j) {
+		int s = 1;
+		for (int m = j; m < dims.length; m++) {
+			s *= dims[m];
+		}
+		return s;
+	}
+
+	private LispVal elementOrNil(int flat) {
+		LispVal element = readFlat(flat);
+		return element == null ? LispNil.INSTANCE : element;
+	}
+
+}

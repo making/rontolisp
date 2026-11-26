@@ -1,0 +1,174 @@
+package am.ik.rontolisp.cli;
+
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.PrintStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.List;
+
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+/**
+ * The embedded compile seam: source text in, class bytes out, no command line and no
+ * file. What must hold is that it is the SAME compile the CLI runs -- an embedder that
+ * got a different program from the same source would be a second compiler.
+ */
+class JvmSourceCompilerTest {
+
+	private static final String LIBRARY = """
+			(defvar *scale* 2.0)
+			(defun scaled-sum (a b) (* *scale* (+ a b)))
+			(defun norm2 (x) (sqrt (vec:dot x x)))
+			(rontolisp:jvm-export 'scaled-sum :params '(:float :float) :returns :float)
+			(rontolisp:jvm-export 'norm2 :params '(:float-vector) :returns :float)
+			""";
+
+	@TempDir
+	Path tempDir;
+
+	@Test
+	void theEmbeddedCompileIsByteIdenticalToTheCommandLines() throws Exception {
+		Path source = this.tempDir.resolve("kernels.lisp");
+		Files.writeString(source, LIBRARY);
+		Path output = this.tempDir.resolve("com/example/Kernels.class");
+		RontoLispCli cli = new RontoLispCli(new ByteArrayInputStream(new byte[0]),
+				new PrintStream(new ByteArrayOutputStream()));
+		// --class-name, because the -o path here is an absolute temp directory and the
+		// path IS the class name without it.
+		cli.run(new String[] { source.toString(), "-o", output.toString(), "--class-name", "com.example.Kernels",
+				"--no-main", "--simd" });
+
+		JvmSourceCompiler.Result compiled = new JvmSourceCompiler("com.example.Kernels").noMain(true)
+			.simd(true)
+			.baseDir(this.tempDir.toString())
+			.compile(LIBRARY, source.toString());
+
+		assertThat(compiled.internalClassName()).isEqualTo("com/example/Kernels");
+		assertThat(compiled.className()).isEqualTo("com.example.Kernels");
+		assertThat(compiled.classBytes()).isEqualTo(Files.readAllBytes(output));
+		// The :float-vector export's handle class travels with the artifact, so an
+		// embedder that writes only the class bytes would hand its consumer a
+		// NoClassDefFoundError.
+		assertThat(compiled.runtimeClasses()).containsKey("am/ik/rontolisp/runtime/RontoFloatArray.class");
+	}
+
+	@Test
+	void theEmbeddedWasmCompileIsByteIdenticalToTheCommandLines() throws Exception {
+		// A Java program of two packages and a library on its source path: the entry
+		// file's path is what the front end finds the other class's source tree from, and
+		// the source path where the library is, in the seam as on the command line.
+		Path main = this.tempDir.resolve("app/Main.java");
+		Files.createDirectories(main.getParent());
+		Files.writeString(main, """
+				package app;
+
+				import geo.Place;
+				import util.Greeting;
+
+				public class Main {
+				    public static void main(String[] args) {
+				        System.out.println(Greeting.of(Place.HOME));
+				    }
+				}
+				""");
+		Path greeting = this.tempDir.resolve("util/Greeting.java");
+		Files.createDirectories(greeting.getParent());
+		Files.writeString(greeting, """
+				package util;
+
+				public class Greeting {
+				    public static String of(String name) {
+				        return "hello, " + name;
+				    }
+				}
+				""");
+		Path library = this.tempDir.resolve("lib");
+		Path place = library.resolve("geo/Place.java");
+		Files.createDirectories(place.getParent());
+		Files.writeString(place, """
+				package geo;
+
+				public class Place {
+				    public static final String HOME = "wasm";
+				}
+				""");
+		Path output = this.tempDir.resolve("out/main.wasm");
+		new RontoLispCli(new ByteArrayInputStream(new byte[0]), new PrintStream(new ByteArrayOutputStream()))
+			.run(new String[] { main.toString(), "-o", output.toString(), "--component", "--emit-wit",
+					"--java-source-path", library.toString() });
+
+		Path embedded = this.tempDir.resolve("embedded/main.wasm");
+		new WasmSourceCompiler().component(true)
+			.emitWit(true)
+			.baseDir(this.tempDir.resolve("app").toString())
+			.javaSourcePath(List.of(library.toString()))
+			.compile(Files.readString(main), main.toString())
+			.write(embedded);
+
+		assertThat(embedded).hasBinaryContent(Files.readAllBytes(output));
+		assertThat(this.tempDir.resolve("embedded/main.wit"))
+			.hasSameTextualContentAs(this.tempDir.resolve("out/main.wit"));
+	}
+
+	@Test
+	void warningsAsErrorsFailsAnEmbeddedCompileThatWarns() {
+		String source = """
+				(defun add (a b) (+ a b))
+				(defun warned (x) (add x))
+				(rontolisp:jvm-export 'warned :params '(:float) :returns :float)
+				""";
+		assertThatThrownBy(() -> new JvmSourceCompiler("Warned").noMain(true)
+			.warningsAsErrors(true)
+			.compile(source, "warned.lisp")).isInstanceOf(WarningsAsErrorsException.class)
+			.hasMessageContaining("1 warning about the program's source");
+		assertThat(new JvmSourceCompiler("Warned").noMain(true).compile(source, "warned.lisp").classBytes())
+			.isNotEmpty();
+	}
+
+	@Test
+	void aFailureCarriesTheFrontendsPositionPrefix() {
+		assertThatThrownBy(() -> new JvmSourceCompiler("com.example.Broken").compile("""
+				(defmacro m () (error "cannot expand"))
+				(defun f (x) (m))
+				""", "broken.lisp")).isInstanceOf(LispCompileException.class)
+			.hasMessageStartingWith("broken.lisp:2:14:")
+			.hasMessageContaining("cannot expand");
+	}
+
+	@Test
+	void aLibraryWithNoExportCannotDropItsMain() {
+		assertThatThrownBy(() -> new JvmSourceCompiler("com.example.Empty").noMain(true)
+			.compile("(defun f (x) x)\n", "empty.lisp")).hasMessageContaining("jvm-export");
+	}
+
+	@Test
+	void compileIfExportedAnswersEmptyForOrdinaryLisp() {
+		// What a SOURCE SET asks: most of a directory of Lisp has no Java caller, so the
+		// question is whether the file has one, not whether it could be forced into one.
+		assertThat(new JvmSourceCompiler("com.example.Helpers").noMain(true)
+			.compileIfExported("(defun f (x) x)\n", "helpers.lisp")).isEmpty();
+	}
+
+	@Test
+	void compileIfExportedSeesAnExportALoadedFileContributes() throws Exception {
+		// The question is asked of the EXPANDED program, so a declaration that arrives
+		// through (load ...) counts -- the backend collects its directives from the same
+		// list.
+		Files.writeString(this.tempDir.resolve("exports.lisp"),
+				"(rontolisp:jvm-export 'twice :params '(:float) :returns :float)\n");
+		String source = """
+				(defun twice (x) (* 2 x))
+				(load "exports.lisp")
+				""";
+
+		assertThat(new JvmSourceCompiler("com.example.Kernels").noMain(true)
+			.baseDir(this.tempDir.toString())
+			.compileIfExported(source, this.tempDir.resolve("kernels.lisp").toString())).isPresent();
+	}
+
+}

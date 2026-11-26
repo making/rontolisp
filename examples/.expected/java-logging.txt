@@ -1,0 +1,10 @@
+FINE    Orders.place: order 1: 2 x tea
+INFO    Stock.reserve: 1 left of tea
+INFO    Orders.place: order 1 placed
+FINE    Orders.place: order 2: 2 x coffee
+WARNING Stock.reserve: coffee: 2 asked, 1 left
+WARNING Orders.place: order 2 refused (java.lang.IllegalStateException: coffee short)
+SEVERE  Stock.count: count of milk not read (java.lang.NumberFormatException: For input string: "a dozen")
+ALERT   Orders.hold: order 3 held: a new address
+INFO    Payments.charge: order 1 charged 6, 6 in all
+SEVERE  Payments.charge: order 2 not charged (java.lang.IllegalArgumentException: amount 0)

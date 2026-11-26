@@ -1,0 +1,6 @@
+<a class="spine{{#reading}} is-reading{{/reading}}{{#want}} is-unread{{/want}}{{#paused}} is-paused{{/paused}}" href="/books/{{id}}" style="{{spine}}" title="{{title}}／{{author}}" aria-label="{{title}}（{{author}}、{{status-label}}）">
+  <span class="spine-title"{{#latin}} lang="en"{{/latin}}>{{title}}</span>
+  <span class="spine-author">{{author}}</span>
+  {{#want}}<span class="spine-obi" aria-hidden="true"></span>{{/want}}
+  {{#reading}}<span class="spine-ribbon" aria-hidden="true"></span>{{/reading}}
+</a>

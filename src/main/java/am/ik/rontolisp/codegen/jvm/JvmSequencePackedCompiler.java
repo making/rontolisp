@@ -1,0 +1,66 @@
+package am.ik.rontolisp.codegen.jvm;
+
+import java.lang.classfile.constantpool.MethodRefEntry;
+import java.lang.classfile.constantpool.Utf8Entry;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+
+import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispNames;
+import am.ik.rontolisp.LispSymbol;
+import am.ik.rontolisp.LispVal;
+
+/**
+ * Compiles the {@code %read-sequence-packed} / {@code %write-sequence-packed} primitives
+ * the {@code read-sequence} / {@code write-sequence} expansions call first
+ * ({@code .kb/binary-sequence-io.md}): a call to the {@code _readSeqPacked} /
+ * {@code _writeSeqPacked} runtime helper when the program emits it, else a plain
+ * {@code nil} -- the "declined" answer, which sends the expansion down its element loop
+ * exactly as before the primitive existed.
+ */
+final class JvmSequencePackedCompiler {
+
+	private JvmSequencePackedCompiler() {
+	}
+
+	static void compile(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		List<LispVal> parts = cons.toList();
+		boolean read = LispNames.READ_SEQUENCE_PACKED.equals(((LispSymbol) parts.get(0)).name());
+		if (parts.size() != 5) {
+			throw new UnsupportedOperationException(
+					parts.get(0).print() + " expects (seq stream start end), got " + (parts.size() - 1) + " arguments");
+		}
+		if (!ctx.usesPackedSequenceIo) {
+			ctx.body.aconst_null();
+			return;
+		}
+		// The stream designator, like read-byte: an explicit nil means the current
+		// *standard-input* / *standard-output*, whose default the helper reads as the
+		// process stream.
+		LispVal stream = read ? JvmStringStreamCompiler.inputStreamArg(ctx, parts.get(2))
+				: JvmStringStreamCompiler.streamArg(ctx, parts.get(2));
+		JvmExprCompiler.compileExpr(parts.get(1), ctx, className);
+		// A bulk READ writes a packed float array's storage in place, behind the element
+		// setter's back, and a bulk WRITE reads it behind every reader's. Under --gpu the
+		// device may hold a resident -- or the only -- copy of that array, so the call
+		// site reports the sequence to _gpuWritten / _gpuMaterialize BEFORE the helper
+		// runs and hands the helper what the guard answers -- the array, or a result
+		// stub's backing (.kb/gpu.md, "Device residency"). The helper answers a position.
+		Map<String, MethodRefEntry> gpuOps = ctx.gpuOps;
+		if (gpuOps != null) {
+			ctx.body.invokestatic(Objects
+				.requireNonNull(gpuOps.get(read ? JvmGpuRuntimeBuilder.WRITTEN : JvmGpuRuntimeBuilder.MATERIALIZE)));
+		}
+		JvmExprCompiler.compileExpr(stream != null ? stream : parts.get(2), ctx, className);
+		JvmExprCompiler.compileExpr(parts.get(3), ctx, className);
+		JvmExprCompiler.compileExpr(parts.get(4), ctx, className);
+		Utf8Entry nameUtf8 = ctx.cp
+			.utf8Entry(read ? JvmIoRuntimeBuilder.READ_SEQ_PACKED_METHOD : JvmIoRuntimeBuilder.WRITE_SEQ_PACKED_METHOD);
+		Utf8Entry descUtf8 = ctx.cp
+			.utf8Entry(read ? JvmIoRuntimeBuilder.READ_SEQ_PACKED_DESC : JvmIoRuntimeBuilder.WRITE_SEQ_PACKED_DESC);
+		MethodRefEntry ref = ctx.cp.methodRef(ctx.cp.classEntry(className), nameUtf8, descUtf8);
+		ctx.body.invokestatic(ref);
+	}
+
+}

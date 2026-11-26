@@ -1,0 +1,31 @@
+# JVM bignum literals: one instance per value, built in `<clinit>`
+
+**Invariant: a `java.math.BigInteger` literal is constructed ONCE per compilation per
+distinct value, in `<clinit>`; every use site is a `GETSTATIC` of `_bi$N`.** Identity is
+unobservable (`_equal`/`_hash`/`eql` go through `BigInteger.equals`/`compareTo`).
+
+- `JvmLispCompiler.BigIntPool` (shaped like `LayoutPool`), shared across every `Ctx` of a
+  compilation via the single `Ctx.Builder`; `intern(cp, className, value)` keys on the value,
+  `emitClinitInit` drains it at class assembly.
+- A bignum literal is a reason to emit `<clinit>`, and the last fallback for the `<clinit>`
+  name/descriptor Utf8 constants.
+- Its initializers go FIRST inside `<clinit>`, before layouts, stream seeds and the top-level
+  runner.
+- `max_stack` 3 per initializer (the frame pass recomputes the shipped `max_stack`).
+- Plain `private static`, no `ACC_FINAL`+`ConstantValue`: a `ClassDefinition` field carries no
+  attributes (the one shape `JvmClassSplitter` writes).
+- `compileRatio`'s `BigInteger[2]` stays per-use (mutable array); its elements are pooled.
+- `runtime` gains no class (`.kb/jvm-export.md`); a bignum-free program is byte-identical to
+  pre-pool output. WASM literals are separate (`.kb/wasm-bignum.md`).
+
+## Tests
+`JvmLispCompilerTest#aBignumLiteralIsBuiltOnceAndLoadedFromAField`,
+`#aProgramWithoutABignumLiteralGetsNoPool`, `IroncladE2eTest`.
+
+The pool interns nothing, mints no constant and appends no
+initializer when empty, so the pin covers only the `_bi$` absence, not the
+initializer. The `<clinit>` a literal-free program (`(print (+ 1 2))`) carried
+came from f94's `_funcrefs` fill, not the pool -- and g04's dead-table prune
+drops that fill with the shaken table (its only work there), so the program now
+carries no initializer at all (`.kb/optimize-dead-code-elimination.md`, "A table
+no kept body reads goes with its reader").

@@ -1,0 +1,17 @@
+# マクロ
+
+コードを書くコードです。`defmacro` はコンパイル時 expander を定義します。呼び出し
+位置は lower 中に展開され、バックエンドが動くより前に済みます。同じ expander が
+実行時の `macroexpand-1` にも答えます。テンプレートは syntax-quote で、定義側の
+名前空間から見える var はその名前空間で限定され、`~`/`~@` と展開ごとの `x#` gensym を
+伴います。下の `unless` は
+`(defmacro unless [c t] (list 'if c nil t))` です。
+
+| 名前 | 例 | 結果 |
+|---|---|---|
+| `defmacro` | `(do (defmacro unless [c t] (list 'if c nil t)) (unless false 1))` | `1` |
+| `syntax-quote` | `(do (defmacro w [c & b] `(if ~c (do ~@b))) (macroexpand-1 '(w true 1)))` | `(if true (do 1))` |
+| `gensym` | `(= (gensym "g") (gensym "g"))` | `false` |
+| `macroexpand-1` | `(macroexpand-1 '(unless true 1))` | `(if true nil 1)` |
+| `macroexpand` | `(macroexpand '(unless false 1))` | `(if false nil 1)` |
+| `eval` | `(do (defmacro at-lower [f] (eval f)) (at-lower (+ 1 2)))` | `3` |

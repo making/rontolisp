@@ -1,0 +1,79 @@
+# defclass
+
+`(defclass name (superclass*) ((slot slot-option...) ...) class-option...)`
+
+Defines a class and returns the class object, the one [`find-class`](../functions/find-class.md) answers. This is a **static CLOS subset**: every superclass is defined by a `defclass` — or is `standard-object`, the root every class already has (writing it changes nothing; written before another superclass it is a precedence error), or one of the method metaobject classes listed under [`defmethod`](defmethod.md) — and instances are first-class objects created with [`make-instance`](../macros/make-instance.md) (like [`defstruct`](defstruct.md) instances they are not lists — `consp` is `nil` — and `print` shows them as `#<NAME :SLOT value ...>`). Slot options:
+
+- `:initarg name` — the initarg that fills the slot: a keyword or any other symbol, passed quoted (`(make-instance 'arc 'rx 1)`); defaults to the slot-name keyword. The option may repeat: any of the named initargs fills the slot, and when several are supplied the leftmost wins
+- `:initform expr` — the default value, evaluated at construction time when the slot is not supplied. **Omitting it leaves the slot UNBOUND**, as in CL: [`slot-boundp`](../macros/slot-boundp.md) is `nil` and a read signals `unbound-slot`
+- `:reader fn` — defines `fn` as a reader function
+- `:accessor fn` — like `:reader`, and additionally a `setf`-able place
+
+A subclass inherits every slot of its superclasses and its instances match the superclasses' [`defmethod`](defmethod.md) class specializers. **Multiple inheritance** is supported: the first superclass's slots come first and each later superclass appends the slots whose name is not present yet, a diamond keeps ONE copy of the shared slot, and both method dispatch and re-declared slot options follow the **class precedence list** (CLHS 4.3.5 -- the class, then its superclasses left to right, each before its own superclasses; conflicting local orders are an error). A subclass may re-declare an inherited slot: the storage stays the one inherited slot, while the subclass's `:initform` overrides the inherited one and its initargs and readers/accessors are added to the inherited ones. Reader/accessor functions are ordinary defuns, so they are first-class. The class options `(:documentation "...")` (accepted and ignored) and `(:default-initargs :initarg value ...)` (defaults applied by [`make-instance`](../macros/make-instance.md) for initargs not supplied) are supported. Beyond `:reader`/`:accessor`, the slot options `:type` (recorded, no checking), `:writer` (a symbol names a two-argument new-value-first generic, `(setf name)` the setf function of `name`) and `:allocation` are supported: `:allocation :class` stores the slot's value in ONE cell shared by the declaring class, its instances and its subclasses — every access path (accessors, [`slot-value`](../macros/slot-value.md), a `make-instance` initarg) reads and writes the shared cell, the `:initform` is evaluated once at class-definition time, and a subclass re-declaring the slot with `:allocation :class` gets a cell of its own (CLHS 7.5.3). Without a `:metaclass` (below), other class options and other slot options are errors. On the compilation path a `defclass` below the top level -- under a conditional, in a loop, in a function body -- is compiled like a top-level one (slot layout, constructors, accessors) and defines its class where it runs: until then [`find-class`](../functions/find-class.md) answers no class of the name. Its `:initform`s and `:default-initargs` may not refer to a variable a form around it binds. [`find-class`](../functions/find-class.md) and [`class-of`](../functions/class-of.md) answer the class metaobject, and of the runtime class operations only [`change-class`](../macros/change-class.md) exists (the target may be computed). Evaluating a `defclass` for an **existing name** updates the definition (a `:metaclass` class re-runs the class-definition protocol through `reinitialize-instance` on the SAME metaobject, see below), and on the compilation path the statically compiled parts (slot layout, constructors, accessors) always follow the LAST definition. The existing instances of a class defined with a `:metaclass` are updated (CLHS 4.3.6): a redefinition that adds or removes local slots, or a `make-instances-obsolete`, calls `update-instance-for-redefined-class` on each, whose system method initializes the added slots through `shared-initialize`. On the compilation path this covers the top-level redefinitions of the program (an `eval`'d `defclass` defines no class there) and `make-instances-obsolete` does nothing; the instances of a class defined without a `:metaclass` are not updated.
+
+**A superclass may be defined later**: `(defclass a (b) ())` before `b` exists defines `a`, and methods and subclasses may name both `a` and `b` right away. Until the last superclass is defined, [`make-instance`](../macros/make-instance.md) and [`allocate-instance`](../functions/allocate-instance.md) of `a`, of `b` or of a subclass signal an error; the `defclass` of that last superclass completes every class that waited for it, in the order they were written. Until then the interpreter has not defined `a`'s readers and accessors. On the compilation path a superclass the program never defines is a warning. A class that is its own superclass, directly or through the classes it waits for, and a [`defstruct`](defstruct.md) or built-in type as a superclass are errors, and [`define-condition`](../macros/define-condition.md) takes no forward reference.
+
+**Metaclasses** (the static MOP subset): the class option `(:metaclass M)` names a class inheriting `standard-class`, defined earlier by `defclass`. The class definition then runs the class-definition protocol at **definition time**: the metaclass is instantiated — its `shared-initialize` methods see every other unknown class option as an initarg whose value is the option's tail (`(:table-name "users")` passes `("users")`; the option name may be any symbol and the tail may be dotted, so `(original-name . t)` passes `t` under the initarg `original-name`), and a `:before` method's write to a slot with a declared `:initarg` is overwritten by the supplied initarg afterwards, CL's fill order (a slot without a declared `:initarg`, like `table-name` below, keeps the `:before`'s write) — each slot's non-standard options (`:col-type`, ...) are handed to `closer-mop:direct-slot-definition-class` as initargs and its answer is instantiated as that slot's direct-slot-definition metaobject, effective slots are computed through `closer-mop:compute-effective-slot-definition` (the default method picks and instantiates `closer-mop:effective-slot-definition-class` inside the dynamic extent of a user override's `call-next-method`), and `closer-mop:finalize-inheritance` runs **eagerly** (CL finalizes lazily; inputs are static, so only the timing of definition errors differs). `find-class` and `class-of` answer the metaclass instance from then on, while instances of the class itself stay ordinary objects. The definition routes through `closer-mop:ensure-class-using-class` — its user `:around` methods dispatch on the EXISTING class metaobject, so they fire when the same name is defined again (the first definition passes `nil`), and the redefinition takes the `reinitialize-instance` path on the same metaobject. Initialization runs through the ordinary generic chain, so user `initialize-instance`/`reinitialize-instance` `:around` methods on the metaclass (or on a slot-definition class) may rewrite the initargs — `:direct-superclasses` and `:direct-slots` included — before `(apply #'call-next-method ...)`, as mito's table classes do. Slot-definition metaobjects also carry `closer-mop:slot-definition-initfunction` (a zero-argument function evaluating the `:initform`; `nil` when the slot has none) and `closer-mop:slot-definition-allocation`. A slot that writes no `:allocation` but whose direct-slot-definition class defaults it to `:class` in an `initialize-instance` method (contextl's layer slots) is class-allocated, as if `:allocation :class` were written. The protocol is static: protocol calls on classes unknown at definition time signal an error.
+
+**Classes made at run time**: `(make-instance 'M :direct-superclasses (list ...))` of such a metaclass `M` makes a class metaobject at run time over defined (or run-time) superclasses, as contextl does for its layer contexts. Its class precedence list follows CLHS 4.3.5, and its instances (from [`allocate-instance`](../functions/allocate-instance.md) or `closer-mop:class-prototype`) answer [`class-of`](../functions/class-of.md) with that class, `typep`/`typecase` and `subtypep` through the precedence list, and every generic function orders their methods by it (standard method combination), `print-object` included. Such an instance has no slots of its own.
+
+**The slot-access protocol**: when the program defines a method on `closer-mop:slot-value-using-class`, `(setf closer-mop:slot-value-using-class)`, `closer-mop:slot-boundp-using-class` or `closer-mop:slot-makunbound-using-class`, or calls one, then [`slot-value`](../macros/slot-value.md) (a computed slot name included), its `setf`, `slot-boundp`, `slot-makunbound` and the accessors of an instance of a class defined with a `:metaclass` call those generic functions with the class metaobject, the instance and the effective slot definition (AMOP 5.5), as contextl's special slots require. Their system methods read and write the instance's own slot, and reading an unbound one calls `slot-unbound`. `make-instance` fills the initargs and initforms through `(setf closer-mop:slot-value-using-class)` as well, except for a class with `:default-initargs` (its own or inherited), whose slots it fills directly.
+
+```lisp
+(defclass animal () ((name :initarg :name :accessor animal-name)))
+(defclass dog (animal) ((breed :initarg :breed :initform "mixed" :reader dog-breed)))
+(setq d (make-instance 'dog :name "Rex"))
+(list (animal-name d) (dog-breed d)) ; => ("Rex" "mixed")
+```
+
+```lisp
+(defclass shape () ((sides :initform 0 :reader sides) (label :initarg :label)))
+(defclass square (shape) ((sides :initform 4 :accessor square-sides)))
+(let ((s (make-instance 'square)))
+  (list (sides s) (square-sides s) (slot-boundp s 'label))) ; => (4 4 NIL)
+```
+
+```lisp
+(defclass fast-stream () ((buffer :initform nil :accessor stream-buffer)))
+(defclass output-mixin () ((pos :initform 0 :accessor stream-pos)))
+(defclass fast-output-stream (fast-stream output-mixin) ())
+(defgeneric stream-kind (s))
+(defmethod stream-kind ((s fast-stream)) :fast)
+(defmethod stream-kind ((s output-mixin)) :output)
+(let ((s (make-instance 'fast-output-stream)))
+  (setf (stream-pos s) 10)
+  (list (stream-kind s) (stream-pos s) (typep s 'output-mixin))) ; => (:FAST 10 T)
+```
+
+```lisp
+(defclass counter () ((n :initform 0 :accessor counter-n)))
+(setq c (make-instance 'counter))
+(incf (counter-n c))
+(setf (counter-n c) (+ (counter-n c) 10))
+(counter-n c) ; => 11
+```
+
+```lisp
+(defclass table-class (standard-class) ((table-name)))
+(defmethod closer-mop:validate-superclass ((c table-class) (s standard-class)) t)
+(defmethod shared-initialize :before ((c table-class) slots &key table-name &allow-other-keys)
+  (if table-name (setf (slot-value c 'table-name) (car table-name)) nil))
+(defclass account () ((id :initarg :id)) (:metaclass table-class) (:table-name "accounts"))
+(list (class-name (find-class 'account))
+      (slot-value (find-class 'account) 'table-name)
+      (typep (find-class 'account) 'table-class)) ; => (ACCOUNT "accounts" T)
+```
+
+```lisp
+(defclass layer-class (standard-class) ())
+(defmethod closer-mop:validate-superclass ((c layer-class) (s standard-class)) t)
+(defclass base-layer () () (:metaclass layer-class))
+(defclass extra-layer () () (:metaclass layer-class))
+(defgeneric greet (layer)
+  (:method ((l base-layer)) (list :base))
+  (:method ((l extra-layer)) (cons :extra (call-next-method))))
+(let* ((c (make-instance 'layer-class
+                         :direct-superclasses (list (find-class 'extra-layer) (find-class 'base-layer))))
+       (p (allocate-instance c)))
+  (list (greet p) (eq (class-of p) c) (typep p 'base-layer))) ; => ((:EXTRA :BASE) T T)
+```

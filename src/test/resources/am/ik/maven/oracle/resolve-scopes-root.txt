@@ -1,0 +1,7 @@
+# resolve test.resolve:rt:1@runtime test.resolve:mid:1@provided test.resolve:scopes:1@test
+test.resolve:rt:jar::1 scope=runtime optional=false
+  test.resolve:y:jar::1 scope=runtime optional=false
+    test.resolve:y-child:jar::1 scope=runtime optional=false
+test.resolve:mid:jar::1 scope=provided optional=false
+test.resolve:scopes:jar::1 scope=test optional=false
+  test.resolve:cmp:jar::1 scope=test optional=false

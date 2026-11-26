@@ -1,0 +1,37 @@
+package example:fractal;
+
+/// An escape-time fractal explorer. This file is the contract, and the only
+/// thing the browser page ever learns about the module: `jco transpile` reads
+/// these types straight out of the compiled component and generates the
+/// JavaScript bindings from them, so the page imports five functions and never
+/// touches memory, a pointer or an import object.
+///
+/// Every function stays inside the type set a rontolisp component can carry
+/// today (s32/s64/f64/bool/string), and inside the seven-parameter limit a
+/// wasm-GC callable has -- so the same program also compiles on the wasm-GC
+/// component backend, not just on the --no-gc one the page loads.
+world fractal {
+  /// Render the Mandelbrot set as a `cols` x `rows` grid, row-major, returned as
+  /// a single string of exactly `cols * rows` characters -- one per pixel, taken
+  /// from `palette`. `scale` is the width of the view in complex-plane units;
+  /// the height follows from the grid's aspect ratio.
+  export mandelbrot: func(center-x: f64, center-y: f64, scale: f64, cols: s32, rows: s32, max-iter: s32) -> string;
+
+  /// Render the Julia set of the constant `cx + cy*i` the same way, as a view of
+  /// width `scale` centered on the origin.
+  export julia: func(cx: f64, cy: f64, scale: f64, cols: s32, rows: s32, max-iter: s32) -> string;
+
+  /// The characters the two renderers may return, darkest first: index 0 means
+  /// "inside the set", and the rest are an escape-time ramp. The host colors a
+  /// pixel by the index of its character in this string, so the pixel encoding
+  /// is declared here and nowhere in the page.
+  export palette: func() -> string;
+
+  /// The escape time of one point of the Mandelbrot set: how many iterations of
+  /// z <- z^2 + c it survives before |z| > 2, capped at `max-iter`.
+  export escape-time: func(x: f64, y: f64, max-iter: s32) -> s32;
+
+  /// Whether the point is in the Mandelbrot set, i.e. whether it survives all
+  /// `max-iter` iterations.
+  export in-set: func(x: f64, y: f64, max-iter: s32) -> bool;
+}

@@ -1,0 +1,19 @@
+connected to PostgreSQL
+Note[id=1, title=Buy milk, done=false, due=2026-12-01]
+Note[id=2, title=お茶を淹れる🍵, done=false, due=null]
+Note[id=3, title=Write the JDBC example, done=false, due=2026-11-22]
+marked done: 1
+Note[id=3, title=Write the JDBC example, done=true, due=2026-11-22]
+no note 9: true
+お茶を淹れる🍵: 7 characters, 22 bytes in UTF-8; Java counts 7
+committed
+rolled back: SQLSTATE 23502
+all notes:
+  Note[id=1, title=Buy milk, done=true, due=2026-12-01]
+  Note[id=2, title=お茶を淹れる🍵, done=false, due=null]
+  Note[id=3, title=Write the JDBC example, done=true, due=2026-11-22]
+  Note[id=4, title=Pay the rent, done=false, due=2026-11-30]
+deleted done: 2
+left:
+  Note[id=2, title=お茶を淹れる🍵, done=false, due=null]
+  Note[id=4, title=Pay the rent, done=false, due=2026-11-30]

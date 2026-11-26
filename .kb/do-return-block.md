@@ -1,0 +1,185 @@
+# `do`/`return` and the `%block` non-local exit boundary
+
+`do` is a macro (`LispMacroExpander.expandDo`) expanding to a `let`/`while` loop.
+`do`/`dolist`/`dotimes` wrap their expansion in the internal `%block`
+(`LispNames.BLOCK_INTERNAL`, `CL_INTERNALS`); `return` (`LispNames.RETURN`) exits to the
+**nearest** enclosing `%block`. `member`/`assoc` expand through `do`/`return`. The runtime
+`_eval` interpreters know none of these forms.
+
+## Plain `return`
+Interpreter: `BlockReturnSignal` (stack-trace-free) at the scope `evalBlock` established.
+JVM (`JvmBlockCompiler`/`JvmReturnCompiler`, `Ctx.blockTargets`): store-then-`goto`, reaching
+the exit with the stack the block was *entered* with (`BlockTarget.entryStack`) — the verifier
+requires it, so a `return` mid-expression **discards** the abandoned expression's operands
+(`JvmReturnCompiler.emitStackUnwind`, `.kb/error-handling.md`). WASM
+(`WasmBlockCompiler`/`WasmReturnCompiler`): `br` at
+`Ctx.wasmCtrlDepth - marker` (bumped only by `if` +1, `while` +2), which discards excess
+operands for free.
+
+## `block`/`return-from` on the INTERPRETER is LEXICAL, like the compile path
+- A block body runs in its own `Environment` marked with the block name
+  (`Environment.installBlock(name, owner)`); **the scope's OWNER is the block's identity**:
+  the scope itself for a block run in a frame of its own (`apply`'s defun-body block,
+  `evalDoSymbols`), and the frame's first block scope for a block `evalCons`'s loop
+  entered in tail position -- every block a frame enters is that frame's continuation, so
+  a `return-from` aimed at any of them ends the frame with the exit's value
+  (`.kb/interpreter-tail-calls.md`). `blockExit` resolves up the LEXICAL chain
+  (`Environment.findBlock`, which answers the owner). The nil block is an ordinary name
+  (`NIL_BLOCK` = `"NIL"`), so named blocks in between are transparent to a plain `return`
+  for free. A keyword names a block too (CLHS; both `blockName`s and
+  `CrossLambdaExitLowering.isBlockName`, since 2026-10-31 -- rutils' `(abbr :+ incf)` makes
+  `(block :+ ...)`): its name keeps the `:`, so `:x` and `x` are two blocks. ci-spec
+  `named-block-return-from` (a lexical and a cross-lambda exit).
+- **Not dynamic on purpose**: a `handler-bind` handler runs at the SIGNAL point, so a
+  nearest-active-frame lookup let the signalling function's own loop catch rove's `signals`
+  and return the CONDITION. For a dynamic exit use `catch`/`throw`.
+- `evalDefun` wraps the body (rewrite SKIPPED via 3-arg `LambdaLists.expand(..., false)`) in
+  `(block <function-name> ...)`, `expandDefmethod` wraps method bodies, **lambdas get NO
+  block** as in CL. A sole block form (`LispEvaluator.soleBlockForm`) installs on the CALL's own
+  scope. `(loop named foo ...)` wraps in `(block foo ...)` with `%block` still inside.
+
+## Named `block`/`return-from` on the COMPILE PATH (JVM + wasm-GC, LEXICAL)
+- **`%fn-block`** (`LispNames.FN_BLOCK_INTERNAL`): `LambdaLists.wrapReturnFrom` wraps a
+  `return-from`-containing body; the scan stops at nested `lambda`/`defun`
+  (`containsReturnFrom`).
+- `JvmLispCompiler.BlockTarget` / `WasmLispCompiler.BlockMarker` carry
+  `(name, catchesPlain, functionBoundary)`. Plain `return` takes the nearest `catchesPlain`
+  block, SKIPPING named blocks; `(return-from name v)` takes the nearest matching name, falling
+  back to the nearest `functionBoundary` (`Jvm`/`WasmReturnFromCompiler`;
+  `LispMacroExpander.blockName` handles designators).
+- Unwind: `JvmReturnCompiler.emitExit` generalizes the exit to any target depth (comparisons
+  use the target's 1-based block-stack depth, not the stack size). wasm: a `return-from` leaving
+  an `unwind-protect` whose protected form holds a named exit branches to that region's NAMED
+  trampoline (`$ntramp`, outside its try_table), the target in a selector local, and the
+  trampolines cascade to the block; only the stack-neutral cleanups that throw nothing (a
+  `handler-case`'s depth counter, a special `let`'s restores) are inlined at the exit
+  ([error-handling.md](error-handling.md), Phase 1). `go` still inlines every escaped cleanup:
+  a throw from one can re-enter its own handler.
+
+### Cross-lambda `return-from` / `return` = a real non-local exit (EH-based)
+`compiler/CrossLambdaExitLowering` (compile-path only, before `desugarProgram`) rewrites the
+establishing block to `(let ((id (%nlx-tag))) (%nlx-catch id BODY))` and the crossing exit to
+`(%nlx-throw id v)`; the lexical fast path stays for a same-function exit. Covers
+`flet`/`labels` bodies and a bare `(return [v])` against the nearest NIL-BLOCK scope. The `id`
+is a **dynamic block-instance id** captured by `FreeVarAnalyzer`, minted fresh per activation.
+- Transport: JVM a `RuntimeException` + the `_nleTl` `{throwable,id,value,previous}` channel
+  (`JvmNlxCompiler`); wasm a `$block-exit` tag carrying `(id . value)` (`WasmNlxCompiler`,
+  tag 1, gated). Out of an async body it crosses the future ([async-await.md](async-await.md),
+  "The eager part is a call").
+- **On wasm the id is an i31 VALUE** (`NLX_ID_CTR` cell, `ref.eq` = value equality),
+  snapshotted at region entry. **Never a fresh GC struct compared by identity**: that broke at
+  cl-ppcre scale, shape-dependently and engine-divergently. JVM object identity is sound.
+- **The JVM channel is a STACK, not a slot**: a cleanup completing an exit OF ITS OWN used to
+  clear it, so the outer exit found nothing at its landing pad and the first enclosing
+  `handler-case`/`%hb-guard` turned it into a message-less `simple-error`. An exit leaving a
+  `java:` callback leaves its entry with it (`_jsig`) until the `java:` site passes it on
+  (`_jfail`): a landing reads only the top entry, which an exit Java swallowed meanwhile would
+  otherwise hold ([java-interop.md](java-interop.md), "What a callback raises").
+- **`handler-case` does NOT intercept it**: the JVM handler rethrows a pending `_nleTl` first;
+  wasm uses a distinct tag with a block-exit passthrough restoring the handler depth.
+- EH-mode trigger: a cross-lambda exit compiles in EH mode like `handler-case`; a program
+  without one is byte-identical. `--no-gc` has no `return-from` at all. Consumers:
+  cl-ppcre (`ClPpcreE2eTest`).
+
+## `catch`/`throw` (dynamic, tag-keyed)
+`cl` SPECIAL FORMS (`LispNames.CATCH`/`THROW`, `PackageRegistry.CL_SPECIAL_FORMS`).
+**`LispNames.CATCH` is ONE constant serving two operators**: bare `catch` is this special form,
+`rontolisp:catch` (`LispNames.CATCH_QUALIFIED`) the unrelated future combinator — the package
+qualification, not the constant, tells them apart.
+- Interpreter `evalCatch`/`evalThrow`: `ThrowSignal(tag, value)`, tag evaluated ONCE on entry,
+  rethrown unless `Environment.isEqStrict`. `ThrowSignal` is deliberately NOT a
+  `LispEvalException`, which is why `handler-case` lets it through.
+- Compile path REUSES the cross-lambda machinery
+  (`Jvm/WasmNlxCompiler.compileTagCatch`/`compileTagThrow`); the tag is snapshotted into a
+  local BEFORE the region and the landing compares with `eq`.
+- **Why the two exit kinds never collide.** JVM: a block id is a fresh `new Object()`, never
+  `eq` to a Lisp tag. WASM: ids are i31 VALUES, so `(catch 3 ...)` WOULD have swallowed the
+  exit of a block whose id is 3 — the payload SHAPE discriminates (block exit `(id . value)`,
+  user throw `((tag) . value)`), and the landing pad `ref.test`s for the wrapper first.
+- Gating: both join `usesEhForm` and widen the block-exit gate (`Ctx.blockExitTag` wasm /
+  `Ctx.blockExitChannel` JVM); a program using neither is byte-identical. `--no-gc` rejects
+  both.
+- An unmatched `throw` = an error message (interpreter),
+  `RuntimeException: THROW: no enclosing catch for the tag` (JVM, constant message, tag not
+  printed), a trap on wasm-GC. In wasm async mode the tag snapshot is skipped, so a
+  NON-CONSTANT catch tag inside an `async-defun` is re-evaluated on the unwind.
+
+## `tagbody`/`go` + `prog`/`prog*`
+
+- **The body of `do`, `do*`, `dolist` and `dotimes` is an implicit tagbody** (2026-11-05, ci-spec
+  `iteration-bodies-are-implicit-tagbodies`, agrees with SBCL): `LispMacroExpander.iterationBody` wraps one holding a
+  tag and a `go`, leading declarations left in front; any other body expands as before. `dotimes`' own compilers
+  (`JvmTypedLoopCompiler`, `WasmDotimesCompiler`) hand such a body to the expansion. A tag was `Cannot compile symbol` on
+  the compilers and an uncaught `GoSignal` on the interpreter.
+- **A `go` nothing answers** reaches the interpreter's top-level entry as `GO: no enclosing tagbody holds the tag X`,
+  like `return-from`'s; it was a raw `GoSignal`.
+- **A tag is a symbol OR an integer** (CLHS 5.3, compared with `eql` -- the ANSI suite's
+  handler-case idiom aborts with `(go 10)` to a numeric label). Every tag table keys the
+  two uniformly: the interpreter's `evalTagbody` labels map by `plainName` /
+  `String.valueOf`, the backend `labelName` helpers by the same strings, so `go` and the
+  label scan share one predicate. Pinned by `LispEvaluatorTest.tagbodyAcceptsIntegerTags`,
+  `JvmLispCompilerTest.compileAndRunIntegerTagbodyTag`,
+  `WasmLispCompilerIntegrationTest.integerTagbodyTag`, ci-spec `integer-tagbody-tag`.
+- **Interpreter = dynamic `go`** (a superset of CL's lexical `go`): a thrown `GoSignal`
+  re-entering at the label, so it **crosses function boundaries**.
+- **Except in a statement's tail** (`LispEvaluator.evalTagbodyStatement`, 2026-09-19,
+  `.todo/901`): `evalTagbody` runs each statement through `evalCons`'s loop with the
+  tagbody's labels (`.kb/interpreter-tail-calls.md`), and a `(go L)` in any tail context
+  the loop follows -- an `if` arm, the last form of a `progn`, a `let`, a block or a called
+  function's body, a macro's expansion -- whose tag is one of ITS labels answers the label's
+  jump token instead of throwing; the loop never enters another `tagbody`, so this is the
+  innermost owner either way. A `let` binding a special undoes it in its `finally` before
+  the token leaves, as before the throw did. Every other `go` (an argument position, an
+  outer tag, a closure) still throws. The loop is the evaluation seam, so a malformed
+  statement is still a `program-error`. The label table is a key array scanned from the
+  end (the last duplicate wins, as the `HashMap` it replaced), not a map built per entry;
+  the jump tokens are integer objects private to the activation, compared by identity.
+  - Why: a thrown `go` unwinds every Java frame between it and the `tagbody` (`evalCons` ->
+    `evalIf` -> `eval` -> `evalLet` ...), and the JIT only turns that into a jump when all of
+    them inline, which the recursive evaluator rarely allows. With the change, a Scheme
+    named-`let` count-down and the CL `tagbody` count-down in `steps.lisp` run faster
+    whole-process than the same steps taken as non-tail calls -- a loop step now costs less
+    than a call step. The Scheme tail-call groups: `.kb/scheme-frontend.md`.
+  - It began as a separate walk over `if`/`progn`/`let`/`let*`/`when`/`unless`/`cond`
+    and folded into `evalCons` when that became a loop (`.todo/912`, the same day): a
+    tagbody statement is a tail context whose continuation is a jump, so the loop covers
+    it with one parameter.
+  - Pinned by `LispEvaluatorTest.aTagbodyStatementAnswersATailGoInsteadOfThrowingIt`,
+    `#aTailGoUndoesTheBindingsItLeavesAndReachesTheInnermostLabel` (SBCL prints the same),
+    `#aMalformedTagbodyStatementIsStillAProgramError`.
+- **Compilers = LEXICAL**: `go` becomes goto/br when its tag is in the SAME compiled function.
+  `JvmTagbodyCompiler` (every label a `joinShape` join point at the tagbody's entry stack
+  shape) + `JvmGoCompiler`; `WasmTagbodyCompiler` (dispatch loop + `br_table`, `i31` pc), which
+  **rejects `await` inside**.
+- **Lowered lambda crossing**: a `go` whose tag is established OUTSIDE its nested lambda goes
+  through `CrossLambdaExitLowering`, plus one move — a block exit LEAVES its block, a `go`
+  RE-ENTERS its tagbody at a label. The establishing `tagbody` becomes a re-entry loop of
+  ORDINARY forms, so neither backend's compiler knows about it:
+
+  ```lisp
+  (let ((id (%nlx-tag)) (pc 0) (r nil))
+    (tagbody retry (setq r (%nlx-catch id (tagbody (if (= pc 1) (go t1)) ... ITEMS)))
+      (if r (progn (setq pc r) (go retry)))))
+  ```
+
+  The crossing `(go t1)` becomes `(%nlx-throw id 1)` — the payload is the label's **1-based
+  re-entry index**, so normal completion yields nil and stops the loop. Only labels a crossing
+  `go` targets get a dispatch entry; a tagbody without one is emitted verbatim. Keyword labels
+  count. **Why at the AST level**: an in-backend fix would restructure every JVM tagbody into a
+  runtime pc-dispatch loop.
+- **Still unsupported on the compile path**: a `go` whose tag is not lexically visible at all
+  — the loud `GO tag X has no lexically enclosing tagbody` stub.
+- `prog`/`prog*` = `%block` + `let`/`let*` + `tagbody`, so `(return x)` exits the prog.
+
+## Tests
+`JvmLispCompilerTest.compileAndRunReturnInArgumentPosition`,
+`.compileAndRunReturnFromInsideLambdaExitsOuterDefun`,
+`.compileAndRunGoInsideLambdaReentersOuterTagbody`,
+`.compileAndRunNestedNonLocalExitInACleanupDoesNotLoseTheOuterOne`;
+`LispEvaluatorTest.returnInAHandlerBindHandlerExitsTheLEXICALNilBlock` (+ four neighbours),
+`.unwindProtectCleanupCompletingItsOwnExitKeepsThePendingOne`; wasm
+`returnFromExitsDefunAcrossLoop`, `goInsideLambdaReentersOuterTagbody`,
+`nestedNonLocalExitInACleanupDoesNotLoseTheOuterOne`; ci-spec
+`catch-throw-and-cross-lambda-exit-do-not-collide`, `handler-case-in-argument-position`,
+`handler-bind-return-lexical-block`, `cross-lambda-return-from`, `cross-lambda-go`,
+`nested-exit-in-an-unwind-cleanup`, `catch-throw`.

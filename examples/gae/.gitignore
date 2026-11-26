@@ -1,0 +1,10 @@
+# Build products, for both projects here. Each is produced by the directory's
+# build.sh, and gcloud uploads whatever is in the directory -- so a stale one
+# is a stale deployment, never a stale checkout.
+jar/app.jar
+war/app.war
+war/META-INF/
+war/WEB-INF/classes/
+# gcloud writes this into the directory it deploys, on its first deploy.
+jar/.gcloudignore
+war/.gcloudignore

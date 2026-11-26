@@ -1,0 +1,40 @@
+# handler-bind
+
+`(handler-bind ((type handler)...) body...)`
+
+Evaluates `body...` with the handlers established. When a condition is signaled during the body — by [`error`](error.md), [`signal`](signal.md), [`warn`](warn.md) or [`cerror`](cerror.md) — each matching handler is called **at the signal point, before any unwinding**, with the condition object as its one argument. That is the difference from [`handler-case`](handler-case.md): the stack between the signaler and the handler is still intact, so the handler can [`invoke-restart`](../functions/invoke-restart.md) a restart established by a [`restart-case`](restart-case.md) *inside* the body and transfer control there. A handler that returns normally **declines**: the search continues with outer handlers, and an unhandled `error` then aborts (or is caught by an enclosing `handler-case`) exactly as if no `handler-bind` were present. The `type` is any `handler-case` clause type, including classes from [`define-condition`](define-condition.md) and the class a built-in error carries (`type-error`, `division-by-zero`, ... -- see [`handler-case`](handler-case.md)); the handler expressions are evaluated when the `handler-bind` is entered.
+
+Supported on every backend except `--no-gc`. A program using the restart system compiles in EH mode on the wasm-GC backends. Handlers also run for the errors **built-ins** raise (a `(car 5)`-style type error, an out-of-range `aref`, an undefined function): the interpreter runs them at the signal point like a signaled condition; the compiled backends run them when the error unwinds past the `handler-bind` itself, so restarts established *inside* the body are gone and intervening [`unwind-protect`](../special-forms/unwind-protect.md) cleanups have already run by then (a **signaled** condition keeps the exact signal-point semantics everywhere). On the wasm-GC backends a failure that traps instead of signaling still ends the program without running handlers; a division by zero signals `division-by-zero` there and reaches them, as does a left [`ash`](../functions/ash.md) whose result cannot be built — only what rides the condition channel (signaled conditions, an undefined-function call) reaches them.
+
+```lisp
+(handler-bind ((error (lambda (c) (invoke-restart :use-value 42))))
+  (restart-case (error "boom")
+    (:use-value (v) (list :recovered v)))) ; => (:RECOVERED 42)
+```
+
+A handler that returns declines, and the error keeps propagating:
+
+```lisp
+(let ((log nil))
+  (handler-case
+      (handler-bind ((error (lambda (c) (setq log :seen))))
+        (error "boom"))
+    (error (e) (list :caught log)))) ; => (:CAUGHT :SEEN)
+```
+
+Handlers run **most recent first**, and a [`handler-case`](handler-case.md) established inside the body is one of them: a condition it matches is handled there and the enclosing handler is never called. Only when no clause of the inner `handler-case` matches does the search reach the outer handler.
+
+```lisp
+(block b
+  (handler-bind ((error (lambda (e) (return-from b :outer-ran))))
+    (handler-case (error "boom")
+      (error () :caught)))) ; => :CAUGHT
+```
+
+An error a built-in raises runs the handlers too — how a test framework turns a broken test body into a recorded failure instead of an aborted run:
+
+```lisp
+(block b
+  (handler-bind ((error (lambda (e) (return-from b :caught))))
+    (car 1))) ; => :CAUGHT
+```

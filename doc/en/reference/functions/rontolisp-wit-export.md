@@ -1,0 +1,183 @@
+# rontolisp:wit-export
+
+`(rontolisp:wit-export "world.wit" :world name)`
+
+Declares that the program **implements a WIT world**. The world's `export` items
+are checked against the program's top-level `defun`s at compile time and lowered
+into the [`rontolisp:wasm-export`](rontolisp-wasm-export.md) directives they
+stand for, so the boundary types are never written by hand and the `.wit` file
+and the compiled component cannot drift apart. The WIT is the single source of
+truth: the world is the program's export list (a hand-written
+`rontolisp:wasm-export` alongside it is an error), and the emitted component is
+byte-identical to the one those hand-written directives would have produced. It
+is a compile-time directive, not an ordinary function: on the **interpreter**
+and **JVM** backends it runs the same contract check and then returns `nil`, so
+the same source runs on every backend. See
+[Implementing a WIT World](../../guides/wit-contracts.md#implementing-a-wit-world-wit-export)
+for the full guide.
+
+Because the directive reads a `.wit` file from disk, the example is shown
+statically:
+
+```console
+// wit/greeter.wit
+package example:greeter;
+
+world greeter {
+  /// Greet someone by name.
+  export greet: func(who: string) -> string;
+}
+```
+
+```console
+;;; greet.lisp -- the directive comes last: on the interpreter it sees only the
+;;; functions defined so far.
+(defun greet (who)
+  (concatenate 'string "Hello, " who "!"))
+
+(rontolisp:wit-export "wit/greeter.wit" :world greeter)
+```
+
+```bash
+rontolisp greet.lisp --component -o greet.wasm
+wasmtime run --invoke 'greet("world")' greet.wasm
+# "Hello, world!"
+```
+
+## Arguments
+
+- The WIT file path, as a string. A relative path resolves against the directory
+  of the source file that names it, like [`load`](load.md). It may name a WIT
+  package directory, read as
+  [`rontolisp:wit-import`](rontolisp-wit-import.md#arguments) reads one.
+- `:world` — the world to implement, as a bare symbol (spelled the way WIT
+  spells it) or a string. It may be omitted when the file declares exactly one
+  world; when the file declares several, one must be named. For a package
+  directory, the worlds counted and searched are the package's own, not those of
+  its `deps/`.
+- `:reactor` — `t` makes the program a reactor, whose entry points are the
+  world's exports: a `--component` build lifts no `wasi:cli/run`, and the first
+  call of an export runs the program's top level, once, before its own body, so
+  an export a host calls directly reads what the top level set
+  ([A reactor](../../guides/wit-contracts.md#a-reactor-reactor-t)). Without it a
+  host that calls an export never runs the top level. A WASI command module
+  (`-o out.wasm` alone, or `--native`) refuses it; `--no-wasi` and `--no-gc`
+  outputs are reactors already. The interpreter and the JVM ignore it.
+
+Everything else comes from the world: `rontolisp:wasm-export`'s `:params`,
+`:param-names`, `:returns` and `:async` are all filled in from it, so the
+`defun`s carry no boundary types at all.
+
+## Supported WIT types
+
+| WIT type | Boundary type | Lisp value |
+| --- | --- | --- |
+| `s8` `s16` `s32` | `:s8` `:s16` `:s32` | an integer |
+| `u8` `u16` `u32` | `:u8` `:u16` `:u32` | an integer |
+| `s64` `u64` | `:s64` `:u64` | an integer; a `u64` value of 2^63 or more traps at the boundary |
+| `f64` | `:float` | a float |
+| `bool` | `:bool` | `t` or `nil` |
+| `string` | `:string` | a string |
+| (no result) | `:void` | the function's value is discarded |
+
+The whole fixed-width integer family crosses, so the canonical component-model
+tutorial world compiles unedited:
+
+```console
+// wit/adder.wit
+package docs:adder@0.1.0;
+
+interface add {
+  add: func(x: u32, y: u32) -> u32;
+}
+
+world adder {
+  export add;
+}
+```
+
+Each type carries its own range exactly, or the call traps — a negative returned
+through `u32` is refused rather than delivered as `4294967295`. The component
+model has no integer subtyping, so this is not cosmetic: a component that lifted
+`u32` as `s32` would be rejected against its own world by
+`wasm-tools component targets`, by `jco`, and by any `bindgen`-based host.
+
+An `async func` in the world lifts the export with `:async t`, so blocking is
+always legal inside it: I/O inside a sync export usually works too (the
+asynchronous built-ins complete without blocking when the host accepts
+immediately), but a host that reports BLOCKED would make it trap, and the
+async lift removes that residual risk — the WIT states
+which exports are async rather than leaving it to be guessed. Every other WIT
+type (`record`, `list`, `option`, `result`, resources, ...) is a compile error at
+the export boundary today; the error names the rontolisp representation the type
+is settled to have, once marshalling it lands.
+
+## What it checks
+
+Every violation is a compile error naming the WIT file and the line of the
+offending export:
+
+- an export the world declares with no matching `defun` —
+  `wit/greeter.wit:5: export 'greet' has no matching (defun greet ...) in the program`
+- an arity mismatch —
+  `wit/greeter.wit:5: export 'greet' declares 1 parameter(s), but (defun greet ...) takes 2`
+  (an exported function takes required parameters only: `&optional` / `&rest` /
+  `&key` are rejected)
+- a WIT type the export boundary does not carry (the whole fixed-width integer
+  family plus `f64` / `bool` / `string` crosses; a `record`, `list`, ... does
+  not yet)
+- an `async func` under `--no-gc --component`, whose adapter-free reactor has no
+  async machinery
+- an export name that is not a component-model label (lower-kebab-case words), a
+  duplicate export (refused by the WIT reader first, in `wasm-tools component
+  wit`'s words: `` export `a` conflicts with prior func of same name ``), or
+  the reserved name `run` (the component's `wasi:cli/run`
+  entry point)
+- a world with no exports, a `:world` the file does not declare, or an omitted
+  `:world` when the file declares several
+
+Because the world *is* the export list, so is mixing it with the hand-written
+form: a `rontolisp:wasm-export` in a program that also has a
+`rontolisp:wit-export`, and a `rontolisp:http-handler` together with a world (a
+serve-mode component exports only `wasi:http/handler@0.3.0`).
+
+## Limitations
+
+- Only the world's **export** side is a contract. `import` items are ignored (a
+  component's WASI imports come from the build, not from the world),
+  and an inline `import name: func(...)` is rejected rather than silently
+  dropped — the functions a program calls are bound from an interface with
+  [`rontolisp:wit-import`](rontolisp-wit-import.md), or declared by hand with
+  [`rontolisp:wasm-import`](rontolisp-wasm-import.md) (both Preview 1 only).
+  The component you get therefore has a much larger type than the world you wrote:
+  the 6-line world above compiles to a 149-line component type (ten `wasi:*`
+  imports plus `export wasi:cli/run`), and calling `rontolisp:fetch` inside `greet`
+  silently adds five more. `--emit-wit` is how you see it.
+- A world exports freestanding functions or an **interface defined in the same
+  file**: `export add;` referencing an in-file `interface add { ... }`, or an
+  inline `export ops: interface { ... }`, is implemented member by member and
+  produces a real `docs:adder/add` instance export (see
+  [Exporting an interface](../../guides/wit-contracts.md#exporting-an-interface)).
+  An export naming an interface the file does not define (a bare `wasi:*`
+  reference) is still an error.
+- Two exports of one label -- a function of the world and an interface's, or two
+  interfaces' -- are both the `defun` the label spells, and a component exports
+  each: `wasmtime run --invoke 'docs:adder/add.add@0.1.0(20, 22)'` calls the
+  interface's, a bare `add(20, 22)` the world's. A core module (Preview 1,
+  `--no-wasi`) exports a function by its label alone and refuses them.
+- `:s-expr` has no WIT spelling, so an export carrying an arbitrary s-expression
+  still needs a hand-written
+  [`rontolisp:wasm-export`](rontolisp-wasm-export.md) — and therefore a program
+  without a world.
+- On the **interpreter** the directive is an ordinary form evaluated in order, so
+  it sees only the functions defined **so far**: put it at the end of the file.
+  (The compile path collects every top-level `defun` first, so there the position
+  does not matter.)
+- Adding `--emit-wit` writes the component's real type back out, and its export
+  lines reproduce the world handed in, parameter names included — but by
+  construction, not by coincidence: the world *is* what those lines are derived
+  from, so they cannot disagree with it. Emitting is worth it for the import side,
+  not as a check on your program (that is `wit-export`'s own job, on every
+  backend). Two deliberate differences from the input file: the `///` doc comments
+  are gone (a component's type does not store them), and the emitted world is
+  always `package root:component; world root`.

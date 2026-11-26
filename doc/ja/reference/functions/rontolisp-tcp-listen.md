@@ -1,0 +1,62 @@
+# rontolisp:tcp-listen
+
+`(rontolisp:tcp-listen port &optional host)`
+
+`port` で listen する TCP ソケットをバインドし、
+[`rontolisp:tcp-accept`](rontolisp-tcp-accept.md) と [`close`](close.md) で
+使う**リスナーハンドル**を返します。ポート `0` を指定すると空いている
+エフェメラルポートが選ばれます — 実際のポートは
+[`rontolisp:tcp-local-port`](rontolisp-tcp-local-port.md) で取得できます。
+`host` を省略するとすべてのインターフェースにバインドし、`"127.0.0.1"` のような
+アドレス文字列を渡すと特定のインターフェースだけにバインドします。
+
+```lisp
+(let* ((listener (rontolisp:tcp-listen 0 "127.0.0.1"))
+       (port (rontolisp:tcp-local-port listener)))
+  (close listener)
+  (> port 0))   ; => T
+```
+
+サーバーはループで接続を受け付けます。accept されたハンドルは双方向ストリーム
+です([`rontolisp:tcp-accept`](rontolisp-tcp-accept.md) を参照):
+
+```console
+(let ((listener (rontolisp:tcp-listen 7777)))
+  (do ((n 1 (+ n 1))) (nil)
+    (let ((sock (rontolisp:tcp-accept listener)))
+      (do ((line (read-line sock) (read-line sock)))
+          ((null line) (close sock))
+        (write-line line sock)))))   ; echo every client forever
+```
+
+## バックエンドごとの対応
+
+- **インタープリタ**と **JVM**: JDK の `java.net.ServerSocket` を使用します
+  (インタープリタでは `SO_REUSEADDR` 付き)。バインド失敗(ポート使用中など)は
+  エラーを通知します。`(INTEGER 0 65535)` の範囲外の `port` や、文字列でも
+  `nil`(全インターフェース)でもない `host` は、バインドの前にその演算子の
+  `type-error` を通知します。
+- **WASM**: コンポーネント専用で、`wasi:sockets@0.3.0` 上で動作します。`host`
+  には IPv4 リテラルかホスト名を指定でき、ホスト名は
+  [`rontolisp:tcp-connect`](rontolisp-tcp-connect.md) と同じく解決します
+  (`-S allow-ip-name-lookup=y` を付けます)。`--component` でコンパイルし、
+  `wasmtime run -S inherit-network=y` で
+  実行します(wasmtime 46+)。バインド失敗は `nil` を返します。
+  Preview 1(コアモジュール)モードでは呼び出し時エラーです。
+- **ネイティブ実行ファイル**(`--native`): インタープリタ/JVM と同じです --
+  ランナーがポートをバインドし、`host` にはホスト名も IP リテラルも指定でき、
+  バインド失敗は同じエラーを通知します
+  ([ネイティブ実行ファイルの TCP ソケット](../../compiling/native.md#tcp-sockets))。
+- **ブラウザプレイグラウンド**: 非対応(ブラウザのサンドボックスに生の TCP は
+  ありません)。
+
+## 制限事項
+
+- リスナーハンドルが対応するのは `rontolisp:tcp-accept`、
+  `rontolisp:tcp-local-port`、`close` のみで、それ自体はバイトストリームでは
+  ありません。
+- 共通のソケット制限(TCP のみ、WASM では IPv4 のみ)は
+  [`rontolisp:tcp-connect`](rontolisp-tcp-connect.md) を参照してください。
+  このリスナーが扱うのは平文の TCP です。TLS リスナーには
+  [`rontolisp:tls-listen`](rontolisp-tls-listen.md) を使ってください
+  (インタープリタ/JVM のみ)。

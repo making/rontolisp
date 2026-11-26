@@ -1,0 +1,41 @@
+<!doctype html>
+<html>
+<head><title>My shelf</title></head>
+<body>
+
+<p class="flash">Saved &quot;Kokoro&quot;</p>
+<h1>My shelf</h1>
+<ol>
+  <li class="done">
+    <b>Kokoro</b> by Natsume Soseki
+    <span>248 of 248 pages, 100%</span>
+      <i>novel</i>, <i>meiji</i>
+  </li>
+  <li>
+    <b>Pride &amp; Prejudice</b> by Jane Austen
+    <span>120 of 432 pages, 27%</span>
+      <i>novel</i>
+  </li>
+  <li>
+    <b>&lt;script&gt;alert(1)&lt;/script&gt;</b> by Anonymous
+      <span>pages unknown</span>
+    
+  </li>
+</ol>
+
+</body>
+</html>
+
+<!doctype html>
+<html>
+<head><title>Empty shelf</title></head>
+<body>
+
+<h1>Empty shelf</h1>
+<ol>
+</ol>
+<p>No books yet.</p>
+
+</body>
+</html>
+

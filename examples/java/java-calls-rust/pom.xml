@@ -1,0 +1,133 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+		 xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+		 xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+	<modelVersion>4.0.0</modelVersion>
+
+	<groupId>com.example</groupId>
+	<artifactId>java-calls-rust</artifactId>
+	<version>1.0.0-SNAPSHOT</version>
+
+	<!--
+		A Java command that calls a Rust component: Casing.java imports the WIT
+		interface example:textkit/casing through rontolisp-java-api's @WitImport, and
+		LocalCasing answers it on a JDK, on the interpreter and on the JVM. The
+		component `mvn package` writes is composed with the Rust component of
+		../../wit/lisp-calls-rust/rust-shouter by wac (build.sh).
+	-->
+
+	<properties>
+		<maven.compiler.release>25</maven.compiler.release>
+		<project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+		<rontolisp.version>0.1.0-SNAPSHOT</rontolisp.version>
+		<rontolisp.mainClass>com.example.casing.App</rontolisp.mainClass>
+		<rontolisp-java-api.version>0.1.0-SNAPSHOT</rontolisp-java-api.version>
+		<junit.version>6.0.3</junit.version>
+		<assertj.version>3.27.7</assertj.version>
+	</properties>
+
+	<!-- The SNAPSHOTs: the plugin, the rontolisp it embeds and this repository's modules. -->
+	<repositories>
+		<repository>
+			<id>central-snapshots</id>
+			<url>https://central.sonatype.com/repository/maven-snapshots/</url>
+			<releases>
+				<enabled>false</enabled>
+			</releases>
+			<snapshots>
+				<enabled>true</enabled>
+			</snapshots>
+		</repository>
+	</repositories>
+	<pluginRepositories>
+		<pluginRepository>
+			<id>central-snapshots</id>
+			<url>https://central.sonatype.com/repository/maven-snapshots/</url>
+			<releases>
+				<enabled>false</enabled>
+			</releases>
+			<snapshots>
+				<enabled>true</enabled>
+			</snapshots>
+		</pluginRepository>
+	</pluginRepositories>
+
+	<dependencies>
+		<dependency>
+			<groupId>am.ik.rontolisp</groupId>
+			<artifactId>rontolisp-java-api</artifactId>
+			<version>${rontolisp-java-api.version}</version>
+		</dependency>
+		<dependency>
+			<groupId>org.junit.jupiter</groupId>
+			<artifactId>junit-jupiter</artifactId>
+			<version>${junit.version}</version>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.assertj</groupId>
+			<artifactId>assertj-core</artifactId>
+			<version>${assertj.version}</version>
+			<scope>test</scope>
+		</dependency>
+	</dependencies>
+
+	<build>
+		<finalName>${project.artifactId}</finalName>
+		<plugins>
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-resources-plugin</artifactId>
+				<version>3.4.0</version>
+			</plugin>
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-compiler-plugin</artifactId>
+				<version>3.13.0</version>
+			</plugin>
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-surefire-plugin</artifactId>
+				<version>3.5.2</version>
+			</plugin>
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-jar-plugin</artifactId>
+				<version>3.5.0</version>
+			</plugin>
+			<!-- target/java-calls-rust.wasm: the component the Rust component is plugged into.
+			     A component, not the Preview 1 module hello-java builds: an import of a
+			     user WIT interface lowers to a component import, and only a component is
+			     composed with another one by wac. -->
+			<plugin>
+				<groupId>am.ik.rontolisp</groupId>
+				<artifactId>rontolisp-maven-plugin</artifactId>
+				<version>${rontolisp.version}</version>
+				<executions>
+					<execution>
+						<goals>
+							<goal>wasm</goal>
+						</goals>
+						<configuration>
+							<component>true</component>
+						</configuration>
+					</execution>
+				</executions>
+			</plugin>
+			<plugin>
+				<groupId>org.codehaus.mojo</groupId>
+				<artifactId>exec-maven-plugin</artifactId>
+				<version>3.6.3</version>
+				<configuration>
+					<executable>${java.home}/bin/java</executable>
+					<classpathScope>compile</classpathScope>
+					<arguments>
+						<argument>-classpath</argument>
+						<classpath/>
+						<argument>${rontolisp.mainClass}</argument>
+					</arguments>
+				</configuration>
+			</plugin>
+		</plugins>
+	</build>
+</project>

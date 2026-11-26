@@ -1,0 +1,2 @@
+# Written by build.sh (--emit-js-glue) with the module beside it.
+src/worker.js

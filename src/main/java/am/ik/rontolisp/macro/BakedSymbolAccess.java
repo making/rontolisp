@@ -1,0 +1,156 @@
+package am.ik.rontolisp.macro;
+
+import java.util.Map;
+import java.util.Set;
+
+import am.ik.rontolisp.PackageResolver;
+import org.jspecify.annotations.Nullable;
+
+/**
+ * The read/compile-time registry's answer to "which symbol does this package make
+ * accessible under this name", as the compiled backends' {@code find-symbol} /
+ * {@code intern} lowerings consult it: folded at compile time for a literal name and
+ * package designator, read from the {@code %baked-access%} rows at run time otherwise
+ * ({@link LispMacroExpander#injectBakedAccess}). Built once per compile from the
+ * resolver's final registry.
+ */
+public final class BakedSymbolAccess {
+
+	/** No registry: every lowering keeps the spelling build. */
+	public static final BakedSymbolAccess NONE = new BakedSymbolAccess(null);
+
+	private final @Nullable PackageResolver resolver;
+
+	/** The rows, without and with the standard names, each computed on first use. */
+	private final Map<Boolean, Map<String, PackageResolver.AccessRow>> rows = new java.util.HashMap<>();
+
+	/** The row names {@link LispMacroExpander#injectBakedAccess} put in the program. */
+	private Set<String> served = Set.of();
+
+	/** Whether {@link LispMacroExpander#injectBakedAccess} put the standard names in. */
+	private boolean standardNames;
+
+	private BakedSymbolAccess(@Nullable PackageResolver resolver) {
+		this.resolver = resolver;
+	}
+
+	/**
+	 * The access view of a resolver that has resolved the whole program.
+	 * @param resolver the resolver holding the final registry
+	 * @return the access view
+	 */
+	public static BakedSymbolAccess of(PackageResolver resolver) {
+		return new BakedSymbolAccess(resolver);
+	}
+
+	/**
+	 * What {@code (find-symbol name pkg)} answers on the registry, or null.
+	 * @param pkg the literal package designator
+	 * @param name the literal name
+	 * @return the accessible symbol and its status, or null
+	 */
+	PackageResolver.@Nullable Accessible answer(String pkg, String name) {
+		return this.resolver == null ? null : this.resolver.bakedAccessible(pkg, name);
+	}
+
+	/**
+	 * The row name of a literal package designator ({@code (string (find-package pkg))}),
+	 * or null when no package answers to it.
+	 * @param pkg the literal package designator
+	 * @return the upcased canonical name, or null
+	 */
+	@Nullable String rowName(String pkg) {
+		String canonical = this.resolver == null ? null : this.resolver.findGlobalPackageName(pkg);
+		return canonical == null ? null : canonical.toUpperCase(java.util.Locale.ROOT);
+	}
+
+	/**
+	 * The row name of a literal package designator naming a package the program defines
+	 * (not one the registry seeds), whose name nothing answers is the INTERNAL symbol
+	 * {@code PKG::NAME} -- exact for a literal name, which the registry answers at
+	 * compile time -- or null.
+	 * @param pkg the literal package designator
+	 * @return the upcased canonical name, or null
+	 */
+	@Nullable String programPackage(String pkg) {
+		String canonical = this.resolver == null ? null : this.resolver.findGlobalPackageName(pkg);
+		return canonical == null || am.ik.rontolisp.PackageRegistry.isBuiltinPackageName(canonical) ? null
+				: canonical.toUpperCase(java.util.Locale.ROOT);
+	}
+
+	/**
+	 * {@link #programPackage} for a COMPUTED name, which the run time answers: only when
+	 * the package's row travels or the package answers no name itself (an export, an
+	 * import, a use), so a name the build spells {@code PKG::NAME} is one it does not
+	 * export. A row a site the scan missed left behind keeps the external build.
+	 * @param pkg the literal package designator
+	 * @return the upcased canonical name, or null
+	 */
+	@Nullable String internalBuild(String pkg) {
+		String row = programPackage(pkg);
+		return row == null || this.served.contains(row) || !answersItself(rows(this.standardNames).get(row)) ? row
+				: null;
+	}
+
+	/** Whether a row answers any name itself (not only a used package's exports). */
+	static boolean answersItself(PackageResolver.@Nullable AccessRow row) {
+		return row != null && (!row.present().isEmpty() || !row.uses().isEmpty());
+	}
+
+	/**
+	 * Every package designator mapped to the upcased canonical name of the package it
+	 * names.
+	 * @return the designator table
+	 */
+	Map<String, String> designators() {
+		return this.resolver == null ? Map.of() : this.resolver.runtimePackageTable();
+	}
+
+	/**
+	 * Every package's row, computed on first use.
+	 * @param standardNames whether the runtime answers the standard names through a use
+	 * of {@code cl} ({@link PackageResolver#bakedAccessRows})
+	 * @return the rows by upcased package name
+	 */
+	synchronized Map<String, PackageResolver.AccessRow> rows(boolean standardNames) {
+		PackageResolver registry = this.resolver;
+		return this.rows.computeIfAbsent(standardNames,
+				standard -> registry == null ? Map.of() : registry.bakedAccessRows(standard));
+	}
+
+	/**
+	 * Whether a literal package designator names a package that reaches the standard
+	 * names through a use of {@code cl}.
+	 * @param pkg the literal package designator
+	 * @return whether the package uses {@code cl}
+	 */
+	boolean usesCl(String pkg) {
+		return this.resolver != null && this.resolver.usesCl(pkg);
+	}
+
+	/**
+	 * Whether the program carries the row of a package, so a lookup in it with a computed
+	 * name goes through {@code %baked-access}.
+	 * @param rowName the upcased package name
+	 * @return whether the row was injected
+	 */
+	boolean serves(String rowName) {
+		return this.served.contains(rowName);
+	}
+
+	/**
+	 * Whether the program carries the table of the standard names for its lookups
+	 * ({@link LispMacroExpander#injectBakedAccess}), so a lookup in a package that uses
+	 * {@code cl} asks it after the package's row.
+	 * @return whether the lookups read the table of the standard names
+	 */
+	boolean standardNames() {
+		return this.standardNames;
+	}
+
+	void served(Set<String> rowNames, boolean standardNames) {
+		this.served = Set.copyOf(rowNames);
+		this.standardNames = standardNames;
+	}
+
+}

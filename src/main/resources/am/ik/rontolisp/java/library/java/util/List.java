@@ -1,0 +1,124 @@
+// Written for rontolisp's experimental Java subset from the API specification's names
+// and behaviour; nothing here is copied or translated from a JDK
+// (.kb/java-frontend-provenance.md). Lowered with every program that names it.
+package java.util;
+
+import java.util.function.UnaryOperator;
+import rontolisp.internal.Splits;
+
+public interface List<E> extends SequencedCollection<E> {
+
+    boolean add(E e);
+
+    boolean addAll(Collection<? extends E> c);
+
+    E get(int index);
+
+    E set(int index, E element);
+
+    void add(int index, E element);
+
+    boolean addAll(int index, Collection<? extends E> c);
+
+    E remove(int index);
+
+    int indexOf(Object o);
+
+    int lastIndexOf(Object o);
+
+    List<E> subList(int from, int to);
+
+    default Spliterator<E> spliterator() {
+        int marks = Spliterator.ORDERED | Spliterator.SIZED | Spliterator.SUBSIZED;
+        return this instanceof RandomAccess ? Splits.counted(this, marks) : Splits.of(this, marks);
+    }
+
+    ListIterator<E> listIterator();
+
+    ListIterator<E> listIterator(int index);
+
+    default void sort(Comparator<? super E> c) {
+        Object[] sorted = toArray();
+        Arrays.sortObjects(sorted, 0, sorted.length, c);
+        for (int i = 0; i < sorted.length; i++) {
+            set(i, (E) sorted[i]);
+        }
+    }
+
+    default void replaceAll(UnaryOperator<E> operator) {
+        Objects.requireNonNull(operator);
+        int n = size();
+        for (int i = 0; i < n; i++) {
+            set(i, operator.apply(get(i)));
+        }
+    }
+
+    default E getFirst() {
+        if (isEmpty()) {
+            throw new NoSuchElementException();
+        }
+        return get(0);
+    }
+
+    default E getLast() {
+        if (isEmpty()) {
+            throw new NoSuchElementException();
+        }
+        return get(size() - 1);
+    }
+
+    default E removeFirst() {
+        if (isEmpty()) {
+            throw new NoSuchElementException();
+        }
+        return remove(0);
+    }
+
+    default E removeLast() {
+        if (isEmpty()) {
+            throw new NoSuchElementException();
+        }
+        return remove(size() - 1);
+    }
+
+    default void addFirst(E e) {
+        add(0, e);
+    }
+
+    default void addLast(E e) {
+        add(e);
+    }
+
+    default List<E> reversed() {
+        return ReversedList.of(this, true);
+    }
+
+    @SafeVarargs
+    static <E> List<E> of(E... elements) {
+        Object[] held = new Object[elements.length];
+        for (int i = 0; i < held.length; i++) {
+            if (elements[i] == null) {
+                throw new NullPointerException();
+            }
+            held[i] = elements[i];
+        }
+        return new ImmutableCollections.ListN<>(held,
+                held.length == 1 ? ImmutableCollections.ONE : ImmutableCollections.OWN);
+    }
+
+    // a list of this kind is answered as it is; a part of one and a list holding nulls
+    // are copied
+    static <E> List<E> copyOf(Collection<? extends E> c) {
+        if (c instanceof ImmutableCollections.ListN<?> listed && listed.how < ImmutableCollections.NULLS) {
+            return (List<E>) listed;
+        }
+        Object[] held = c.toArray();
+        for (int i = 0; i < held.length; i++) {
+            if (held[i] == null) {
+                throw new NullPointerException();
+            }
+        }
+        return new ImmutableCollections.ListN<>(held,
+                held.length == 1 ? ImmutableCollections.ONE : ImmutableCollections.OWN);
+    }
+}

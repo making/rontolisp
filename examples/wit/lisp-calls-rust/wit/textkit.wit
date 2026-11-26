@@ -1,0 +1,18 @@
+package example:textkit;
+
+/// A text emphasizer, implemented in Rust. `shout` uppercases the text and adds
+/// an exclamation mark.
+interface casing {
+  shout: func(text: string) -> string;
+}
+
+/// The Rust component's world: it EXPORTS the `casing` interface, and imports
+/// nothing -- it needs nothing from anyone. This is the whole "Lisp calls Rust"
+/// service.
+///
+/// There is no world for the Lisp app: `rontolisp:wit-import` binds an INTERFACE
+/// (`:interface "example:textkit/casing"`) directly, so the app never names a
+/// world. Only the exporting side (Rust here) needs one.
+world emphasizer {
+  export casing;
+}

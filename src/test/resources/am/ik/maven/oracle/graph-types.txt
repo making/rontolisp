@@ -1,0 +1,11 @@
+# collect test.graph2:types:1 test.graph2:pom-agg:1 test.graph2:ear-thing:1
+test.graph2:types:jar::1 scope=compile optional=null
+  test.graph2:tj:jar:tests:1 scope=compile optional=null
+    test.graph2:tj-child:jar::1 scope=compile optional=null
+  test.graph2:ear-thing:ear::1 scope=compile optional=null
+  test.graph2:pom-agg:pom::1 scope=compile optional=null
+    test.graph2:agg-child:jar::1 scope=compile optional=null
+test.graph2:pom-agg:jar::1 scope=compile optional=null
+  test.graph2:agg-child:jar::1 scope=compile optional=null
+test.graph2:ear-thing:jar::1 scope=compile optional=null
+  test.graph2:ear-child:jar::1 scope=compile optional=null

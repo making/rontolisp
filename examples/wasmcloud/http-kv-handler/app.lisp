@@ -1,0 +1,93 @@
+;; A rontolisp port of wasmCloud's http-kv-handler template
+;; (templates/http-kv-handler in the wasmCloud repo): an HTTP handler backed
+;; by a key-value store. The original stores through wasi:keyvalue with a
+;; pluggable backend; this port has not been rewritten against the real
+;; wasi:keyvalue interface yet (examples/wit/keyvalue shows how a component
+;; imports it), so it implements the template's default "in_memory" backend as
+;; a global hash table.
+;; wasmCloud's templates are under the Apache License 2.0.
+;; Notice: THIRD-PARTY-NOTICES.txt, "wasmCloud"
+;;
+;;   POST /            {"key":"...","value":"..."}  -> stores the pair
+;;   GET  /?key=<key>                               -> the stored value, or 404
+;;   other methods                                  -> 405 "Method Not Allowed"
+;;
+;; Interpreter / JVM only: both keep the process (and so the hash table)
+;; alive across requests. It compiles under --component too, but WASI HTTP
+;; hosts either instantiate the component per request (wasmtime serve) or
+;; reset the heap between requests (jco, wasmCloud), so the store would be
+;; empty on every request -- a real WASM port needs wasi:keyvalue.
+;;
+;; Run (interpreter, blocking server on :8080):
+;;   rontolisp examples/wasmcloud/http-kv-handler/app.lisp
+;; Run (JVM class; self-contained -- the server travels beside it):
+;;   rontolisp examples/wasmcloud/http-kv-handler/app.lisp -o App.class && \
+;;     java -cp . App
+;; Talk to it with:
+;;   curl -X POST -d '{"key":"greeting","value":"hello"}' http://127.0.0.1:8080/
+;;   curl 'http://127.0.0.1:8080/?key=greeting'
+
+;; The in-memory store; string keys work as hash keys on every backend.
+(defvar *store* (make-hash-table))
+
+;; --- request helpers --------------------------------------------------------
+
+;; t when the body looks like a JSON object (json-parse signals on garbage;
+;; the cheap guard answers 400 without wrapping the parse in handler-case).
+(defun json-object-p (body)
+  (and (stringp body) (> (length body) 0) (eql (char body 0) #\{)))
+
+(defun text-response (status body)
+  (list status '(:content-type "text/plain") (list body)))
+
+;; --- handlers ----------------------------------------------------------------
+
+;; POST / with {"key":"...","value":"..."} stores the pair.
+(defun handle-post (env)
+  (let ((body (getf env :body)))
+    (if (json-object-p body)
+        (let* ((payload (rontolisp:json-parse body))
+               (key (gethash "key" payload))
+               (value (gethash "value" payload)))
+          (if (and (stringp key) (stringp value))
+              (progn
+                (setf (gethash key *store*) value)
+                (text-response 200
+                 (format nil "[in_memory] Stored key '~a'~%" key)))
+              (text-response 400
+               (format nil
+                "Invalid JSON (expected key and value string fields)~%"))))
+        (text-response 400
+         (format nil
+                 "Invalid JSON (expected key and value string fields)~%")))))
+
+;; GET /?key=<key> answers the stored value, or 404 when the key is unknown.
+;; The raw query string arrives as :query-string; rontolisp:query-param
+;; url-decodes the value.
+(defun handle-get (env)
+  (let ((key (rontolisp:query-param (getf env :query-string) "key")))
+    (if key
+        (let ((value (gethash key *store*)))
+          (if value
+              (text-response 200 (format nil "[in_memory] ~a~%" value))
+              (text-response 404
+               (format nil "[in_memory] Key '~a' not found~%" key))))
+        (text-response 400
+         (format nil "Missing required query parameter: key~%")))))
+
+;; :request-method is an interned keyword, so the comparisons are eq.
+(defun route (env)
+  (let ((method (getf env :request-method)))
+    (cond ((eq method :POST) (handle-post env))
+          ((eq method :GET) (handle-get env))
+          (t (text-response 405 (format nil "Method Not Allowed~%"))))))
+
+;; The env :raw-body is an asynchronous stream on every backend; drain it once
+;; here and hand the helpers an env whose :body is the whole string (getf
+;; finds the prepended pair first).
+(rontolisp:async-defun handle (env)
+  (let ((body (rontolisp:await (rontolisp:read-all (getf env :raw-body)))))
+    (route (append (list :body body) env))))
+
+;; Blocks and serves on port 8080.
+(rontolisp:http-handler 'handle 8080)

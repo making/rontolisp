@@ -1,0 +1,2691 @@
+package am.ik.rontolisp.eval;
+
+import java.lang.ref.WeakReference;
+import java.lang.reflect.Array;
+import java.lang.reflect.Constructor;
+import java.lang.reflect.Field;
+import java.lang.reflect.InvocationHandler;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
+import java.lang.reflect.Proxy;
+import java.math.BigInteger;
+import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.WeakHashMap;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Supplier;
+
+import org.jspecify.annotations.Nullable;
+
+import am.ik.rontolisp.ClosRegistry;
+import am.ik.rontolisp.LispArray;
+import am.ik.rontolisp.LispBigInteger;
+import am.ik.rontolisp.LispChar;
+import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispDouble;
+import am.ik.rontolisp.LispFloatArray;
+import am.ik.rontolisp.LispFunction;
+import am.ik.rontolisp.LispHashTable;
+import am.ik.rontolisp.LispInstance;
+import am.ik.rontolisp.LispIntVector;
+import am.ik.rontolisp.LispInteger;
+import am.ik.rontolisp.LispJavaObject;
+import am.ik.rontolisp.LispLambda;
+import am.ik.rontolisp.LispNames;
+import am.ik.rontolisp.LispNil;
+import am.ik.rontolisp.LispRatio;
+import am.ik.rontolisp.LispString;
+import am.ik.rontolisp.LispSymbol;
+import am.ik.rontolisp.LispTrue;
+import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.compiler.JavaExecutable;
+import am.ik.rontolisp.compiler.JavaField;
+import am.ik.rontolisp.compiler.JavaImplementation;
+import am.ik.rontolisp.compiler.JavaImplementationType;
+import am.ik.rontolisp.compiler.JavaImplementations;
+import am.ik.rontolisp.compiler.JavaKind;
+import am.ik.rontolisp.compiler.JavaMarkers;
+import am.ik.rontolisp.compiler.JavaOverloads;
+import am.ik.rontolisp.compiler.JavaSite;
+import am.ik.rontolisp.compiler.JavaType;
+import am.ik.rontolisp.compiler.ReflectiveJavaClasses;
+import am.ik.rontolisp.runtime.RontoJavaBytesView;
+import am.ik.rontolisp.runtime.RontoJavaCalls;
+import am.ik.rontolisp.runtime.RontoJavaHandle;
+import am.ik.rontolisp.runtime.RontoJavaListView;
+import am.ik.rontolisp.runtime.RontoJavaMapView;
+import am.ik.rontolisp.runtime.RontoJavaNumberHandle;
+import am.ik.rontolisp.runtime.RontoJavaSetView;
+import am.ik.rontolisp.runtime.RontoJavaValue;
+import am.ik.rontolisp.runtime.RontoJavaVectorView;
+
+/**
+ * Reflection bridge that exposes arbitrary Java APIs (Swing, AWT, ...) to the rontolisp
+ * interpreter. It marshals between Lisp values and Java objects, resolves overloaded
+ * constructors/methods by THE shared rule ({@link JavaOverloads}: a per-argument
+ * conversion cost, ties broken by a stable signature key rather than by reflection
+ * ordering), turns Lisp callables into Java interface instances via {@link Proxy},
+ * bridges proper lists and rank-1 vectors to Java arrays / {@code java.util.List}
+ * parameters (packing varargs tails), and returns Java array results as Lisp lists.
+ * <p>
+ * A member designator may carry a parameter tag ({@code "max(long,long)"},
+ * {@code "java.lang.StringBuilder(int)"}) that narrows the candidates. A site the
+ * interpreter resolved before running it ({@code compiler.JavaSiteResolver}) runs through
+ * {@link #invokeResolved}: the member the resolution chose, called with the arguments
+ * converted for exactly the kinds it counted on -- what a compiled program's direct call
+ * does ({@code codegen.jvm.JvmJavaDirectSites}), check for check and message for message.
+ * <p>
+ * This is the interpreter side of the bridge: the wrapped objects are
+ * {@link LispJavaObject}s, and the reflection relies on classes (and their members) being
+ * registered for reflection at runtime -- a GraalVM native image carries none for
+ * interop, so interpreting {@code java:} works only under {@code java -jar
+ * rontolisp.jar}. The JVM compiler supports the same five functions through its own
+ * rewrite of the run-time half against the compiled value representation
+ * ({@code codegen.jvm.JavaBridgeTemplate}) -- keep the marshalling rules of the two in
+ * sync. The WASM backend cannot lower host references and rejects {@code java:} forms.
+ */
+final class JavaInterop {
+
+	/**
+	 * The interpreter as a {@code java:} call sees it: what applies a Lisp function a
+	 * proxy calls back, and the classes a class name resolves to.
+	 */
+	interface Caller {
+
+		LispVal call(LispVal function, List<LispVal> args);
+
+		/**
+		 * The classes a class name resolves to: the program's Java class path over the
+		 * classes rontolisp runs with.
+		 * @return the lookup
+		 */
+		ReflectiveJavaClasses classes();
+
+		/**
+		 * The markers the call ends in ({@link JavaMarkers}): with {@code :functional} a
+		 * function argument converted to an interface implements it by its arguments
+		 * ({@link JavaImplementations#functional}), not as a {@code java:proxy}; with
+		 * {@code :java-false} Java's {@code false} comes back as {@code |false|}.
+		 * @return the markers
+		 */
+		default JavaMarkers markers() {
+			return JavaMarkers.NONE;
+		}
+
+		/**
+		 * The function the call ends in after {@code :through}
+		 * ({@link JavaMarkers#through}): Java calls every function the call converts, and
+		 * every function of the implementation it makes, through it.
+		 * @return the function, or {@code null} when the call names none
+		 */
+		default @Nullable LispVal through() {
+			return null;
+		}
+
+	}
+
+	// The caller of a call ending in these markers and, after :through, this function.
+	static Caller withMarkers(Caller caller, JavaMarkers markers, @Nullable LispVal through) {
+		if (caller.markers().equals(markers) && caller.through() == through) {
+			return caller;
+		}
+		return new Caller() {
+
+			@Override
+			public LispVal call(LispVal function, List<LispVal> args) {
+				return caller.call(function, args);
+			}
+
+			@Override
+			public ReflectiveJavaClasses classes() {
+				return caller.classes();
+			}
+
+			@Override
+			public JavaMarkers markers() {
+				return markers;
+			}
+
+			@Override
+			public @Nullable LispVal through() {
+				return through;
+			}
+
+		};
+	}
+
+	// The caller of a call whose evaluated arguments ARGS end in markers at or after
+	// FIRST: its markers, and the function after a :through among them.
+	static Caller withMarkers(Caller caller, List<LispVal> args, int first) {
+		return withMarkers(caller, JavaMarkers.of(args, first), JavaMarkers.throughFunction(args, first));
+	}
+
+	// Applies FUNCTION, which Java calls back, to ARGS: directly, or through the function
+	// the call ended in after :through, handed the function, how Java takes the answer
+	// of a method of return type RET (JavaImplementation.answerKind: a primitive's
+	// keyword, :object, or nil for void and for a COMPARISON the caller reads itself),
+	// whether the site converting it chose its member before it ran
+	// (JavaMarkers.resolved), and the arguments.
+	private static LispVal callBack(Caller caller, LispVal function, List<LispVal> args, Class<?> ret,
+			boolean comparison) {
+		LispVal through = caller.through();
+		if (through == null) {
+			return caller.call(function, args);
+		}
+		LispVal list = LispNil.INSTANCE;
+		for (int i = args.size() - 1; i >= 0; i--) {
+			list = new LispCons(args.get(i), list);
+		}
+		String kind = JavaImplementation.answerKind(ret.getName(), comparison);
+		return caller.call(through, List.of(function, kind == null ? LispNil.INSTANCE : new LispSymbol(kind),
+				caller.markers().resolved() ? LispTrue.INSTANCE : LispNil.INSTANCE, list));
+	}
+
+	// How many evaluated arguments ending the list are markers
+	// (compiler/JavaMarkers): the arguments a member takes are the ones before.
+	private static int markerCount(List<LispVal> args) {
+		return JavaMarkers.count(args, 0);
+	}
+
+	private static final ReflectiveJavaClasses CLASSES = ReflectiveJavaClasses.instance();
+
+	private static final int NO_MATCH = JavaOverloads.NO_MATCH;
+
+	// The overload chosen for (class, member designator, argument kinds), remembered: a
+	// kind is the smallest token of which every marshal() cost is a pure function, so
+	// the memoized choice is the one select() would make again. Lists and vectors are
+	// element-dependent and have no kind; a call passing one is resolved every time.
+	// Kinds are canonical (a JavaKind.Lisp constant or a canonical JavaType), so a
+	// member's remembered choices are scanned by identity. Mirrored in
+	// codegen.jvm.JavaBridgeTemplate.
+	private static final int CACHE_LIMIT = 4096; // a full cache is cleared, never grown
+
+	private static final int CHOICES_PER_MEMBER = 16; // a full member starts over
+
+	private static final String CONSTRUCTOR = "<init>"; // member key of a constructor
+
+	private static final String STATIC_PREFIX = "static "; // member key prefix of a
+															// static call
+
+	private static final ConcurrentHashMap<Class<?>, ConcurrentHashMap<String, Memo[]>> CHOICES = new ConcurrentHashMap<>();
+
+	// The overload a dispatched site chose for its argument kinds, remembered per site
+	// (by identity): over kinds the choice is a pure function of the site's overloads.
+	private static final ConcurrentHashMap<SiteKey, Memo[]> DISPATCHES = new ConcurrentHashMap<>();
+
+	// Parsed member designators: a tag is parsed once, not per call.
+	private static final ConcurrentHashMap<String, JavaOverloads.Member> MEMBERS = new ConcurrentHashMap<>();
+
+	// What functions called back from Java raised on this thread and no site has passed
+	// on yet, newest first (at most JavaImplementations.PENDING_SIGNALS): a Java call
+	// that throws one of them throws it on unchanged (fail). A compiled program keeps
+	// the same record (codegen.jvm.JvmJavaDirectSites' _jsig / _jfail).
+	private static final ThreadLocal<ArrayDeque<Throwable>> RAISED = new ThreadLocal<>();
+
+	private JavaInterop() {
+	}
+
+	// A site compared by identity: two sites that resolved alike are still two sites.
+	private record SiteKey(JavaSite site) {
+
+		@Override
+		public boolean equals(@Nullable Object other) {
+			return other instanceof SiteKey key && key.site == this.site;
+		}
+
+		@Override
+		public int hashCode() {
+			return System.identityHashCode(this.site);
+		}
+
+	}
+
+	// The overload select() chose for these argument kinds, and whether its
+	// arguments convert forced (its only candidate of the arity takes them however
+	// they convert).
+	private record Memo(JavaKind[] kinds, JavaOverloads.Overload overload, boolean forced) {
+
+		boolean matches(JavaKind[] argumentKinds) {
+			if (this.kinds.length != argumentKinds.length) {
+				return false;
+			}
+			for (int i = 0; i < argumentKinds.length; i++) {
+				if (this.kinds[i] != argumentKinds[i]) {
+					return false;
+				}
+			}
+			return true;
+		}
+
+	}
+
+	// A resolved overload and whether its arguments convert forced (its only
+	// candidate of the arity takes them however they convert).
+	private record Resolution(JavaOverloads.Overload overload, boolean forced) {
+	}
+
+	static LispVal newInstance(String classDesignator, List<LispVal> rawArgs, Caller caller) {
+		int markers = markerCount(rawArgs);
+		if (markers > 0) {
+			return newInstance(classDesignator, rawArgs.subList(0, rawArgs.size() - markers),
+					withMarkers(caller, rawArgs, 0));
+		}
+		List<LispVal> args = hostArguments(rawArgs, caller);
+		boolean tagged = isTagged(classDesignator);
+		String name = tagged ? member(classDesignator).name() : classDesignator;
+		ReflectiveJavaClasses.Type type = loadClass(name, caller);
+		// A tagged java:new is remembered under its designator, which no method name can
+		// spell, so it never answers an untagged one's choice.
+		Resolution resolution;
+		try {
+			resolution = resolve(type, tagged ? classDesignator : CONSTRUCTOR,
+					() -> JavaOverloads.filterByTag(type.constructors(), tagged ? member(classDesignator).tag() : null),
+					args, caller);
+		}
+		catch (NoClassDefFoundError ex) {
+			throw unlinkable(name, ex);
+		}
+		catch (ExceptionInInitializerError ex) {
+			throw initializerFailed(name, ex);
+		}
+		if (resolution == null) {
+			throw noMatch("constructing " + name, JavaOverloads.noMatchingCtor(name));
+		}
+		JavaOverloads.Overload overload = resolution.overload();
+		@Nullable Object[] handed = resolution.forced() ? marshalForcedArguments(overload, args, caller, "constructing " + name)
+				: marshalArguments(overload, args, caller);
+		try {
+			Constructor<?> constructor = (Constructor<?>) executable(overload);
+			Object made = constructor.newInstance(handed);
+			writeBackArrays(args, overload, handed, caller);
+			return unmarshal(made, caller);
+		}
+		catch (ReflectiveOperationException ex) {
+			throw fail("constructing " + name, ex);
+		}
+		catch (NoClassDefFoundError ex) {
+			throw unlinkable(name, ex);
+		}
+		catch (ExceptionInInitializerError ex) {
+			throw initializerFailed(name, ex);
+		}
+	}
+
+	static LispVal callInstance(LispVal target, String methodName, List<LispVal> args, Caller caller) {
+		// A condition standing for a host exception is called as that exception, as a
+		// member takes it; the refusal shows the value handed in.
+		Object receiver = receiverObject(hostException(target, caller));
+		if (receiver == null) {
+			throw new LispEvalException("java:call expects a java object as the first argument, got " + target.print());
+		}
+		return invoke(ReflectiveJavaClasses.of(receiver.getClass()), receiver, methodName, args, caller);
+	}
+
+	static LispVal callStatic(String className, String methodName, List<LispVal> args, Caller caller) {
+		return invoke(loadClass(className, caller), null, methodName, args, caller);
+	}
+
+	/**
+	 * A method invoked for the program. {@code Class.forName(String)} is
+	 * caller-sensitive, and the caller is the program: where its class loader is its own
+	 * -- the jars of its dependencies on it -- that loader finds the class, as a compiled
+	 * program's own loader does ({@code instance?} of a dependency's class), where the
+	 * reflective call would ask rontolisp's loader. A program over rontolisp's own loader
+	 * (a native image, which loads no class at run time) keeps the reflective call.
+	 */
+	private static @Nullable Object invokeMethod(Method method, @Nullable Object target, @Nullable Object[] args,
+			Caller caller) throws ReflectiveOperationException {
+		if (method.getDeclaringClass() == Class.class && method.getName().equals("forName") && args.length == 1
+				&& args[0] instanceof String name && caller.classes().loader() != JavaInterop.class.getClassLoader()) {
+			try {
+				return Class.forName(name, true, caller.classes().loader());
+			}
+			catch (ClassNotFoundException ex) {
+				throw new InvocationTargetException(ex);
+			}
+		}
+		return method.invoke(target, args);
+	}
+
+	// A static call chooses among the static methods only (JavaOverloads.staticMethods),
+	// so its choices are remembered apart from an instance call's of the same name.
+	private static LispVal invoke(ReflectiveJavaClasses.Type type, @Nullable Object receiver, String methodName,
+			List<LispVal> rawArgs, Caller caller) {
+		int markers = markerCount(rawArgs);
+		if (markers > 0) {
+			return invoke(type, receiver, methodName, rawArgs.subList(0, rawArgs.size() - markers),
+					withMarkers(caller, rawArgs, 0));
+		}
+		List<LispVal> args = hostArguments(rawArgs, caller);
+		boolean statics = receiver == null;
+		// The designator is parsed only when the candidates are needed: a remembered
+		// choice is found by the designator as written.
+		Resolution resolution;
+		try {
+			resolution = resolve(type, statics ? STATIC_PREFIX + methodName : methodName, () -> {
+				List<ReflectiveJavaClasses.Member> candidates;
+				List<String> tag = null;
+				if (!isTagged(methodName)) {
+					candidates = type.methods(methodName);
+				}
+				else {
+					JavaOverloads.Member member = member(methodName);
+					candidates = type.methods(member.name());
+					tag = member.tag();
+				}
+				return JavaOverloads.filterByTag(statics ? JavaOverloads.staticMethods(candidates) : candidates, tag);
+			}, args, caller);
+		}
+		catch (NoClassDefFoundError ex) {
+			throw unlinkable(type.name(), ex);
+		}
+		catch (ExceptionInInitializerError ex) {
+			throw initializerFailed(type.name(), ex);
+		}
+		if (resolution == null) {
+			throw noMatch("calling " + type.name() + "." + methodName, JavaOverloads.noMatchingMethod(
+					bareName(methodName), args.size(), receiver == null ? null : receiver.getClass().getName()));
+		}
+		JavaOverloads.Overload overload = resolution.overload();
+		@Nullable Object[] handed = resolution.forced()
+				? marshalForcedArguments(overload, args, caller,
+						"calling " + type.name() + "." + overload.executable().name())
+				: marshalArguments(overload, args, caller);
+		try {
+			Method method = (Method) executable(overload);
+			Object answer = invokeMethod(method, receiver, handed, caller);
+			writeBackArrays(args, overload, handed, caller);
+			return unmarshal(answer, caller);
+		}
+		catch (ReflectiveOperationException ex) {
+			throw fail("calling " + type.name() + "." + overload.executable().name(), ex);
+		}
+		catch (NoClassDefFoundError ex) {
+			throw unlinkable(type.name(), ex);
+		}
+		catch (ExceptionInInitializerError ex) {
+			throw initializerFailed(type.name(), ex);
+		}
+	}
+
+	// Whether a designator carries a parameter tag (or a stray parenthesis parseMember
+	// reports): the untagged common case is never looked up in MEMBERS.
+	private static boolean isTagged(String designator) {
+		return designator.indexOf('(') >= 0 || designator.indexOf(')') >= 0;
+	}
+
+	// The member name without its parameter tag, for the oracle's words.
+	private static String bareName(String designator) {
+		return isTagged(designator) ? member(designator).name() : designator;
+	}
+
+	private static JavaOverloads.Member member(String designator) {
+		JavaOverloads.Member cached = MEMBERS.get(designator);
+		if (cached == null) {
+			try {
+				cached = JavaOverloads.parseMember(designator);
+			}
+			catch (IllegalArgumentException ex) {
+				throw new LispEvalException(String.valueOf(ex.getMessage()));
+			}
+			remember(MEMBERS, designator, cached);
+		}
+		return cached;
+	}
+
+	private static java.lang.reflect.Executable executable(JavaOverloads.Overload overload) {
+		return ((ReflectiveJavaClasses.Member) overload.executable()).executable();
+	}
+
+	// The overload of `member` on `type` for these arguments: the one remembered for
+	// their kinds, otherwise select() over the candidates by argument kind (and
+	// remembered). A list or vector has no kind: such a call is costed by marshalling its
+	// arguments and never remembered -- but one candidate of the arity still takes them
+	// however they convert (the oracle's reflector calls one directly), converting
+	// forced when it runs.
+	private static @Nullable Resolution resolve(ReflectiveJavaClasses.Type type, String member,
+			Supplier<? extends List<? extends JavaExecutable>> candidates, List<LispVal> args, Caller caller) {
+		JavaKind[] kinds = kindsOf(args);
+		if (kinds == null) {
+			@Nullable Object[] slot = new @Nullable Object[1];
+			JavaOverloads.Overload chosen = JavaOverloads.select(candidates.get(), args.size(),
+					(i, target) -> marshal(args.get(i), target, caller, slot, 0));
+			if (chosen != null) {
+				return new Resolution(chosen, false);
+			}
+			JavaOverloads.Overload only = JavaOverloads.singleFixed(candidates.get(), args.size());
+			return only == null ? null : new Resolution(only, true);
+		}
+		Memo remembered = remembered(type.type(), member, kinds);
+		if (remembered != null) {
+			return new Resolution(remembered.overload(), remembered.forced());
+		}
+		JavaOverloads.Overload chosen = JavaOverloads.select(candidates.get(), kinds.length,
+				(i, target) -> JavaOverloads.kindCost(kinds[i], target, CLASSES));
+		if (chosen != null) {
+			rememberChoice(type.type(), member, new Memo(kinds, chosen, false));
+			return new Resolution(chosen, false);
+		}
+		// One candidate of the arity takes its arguments however they convert (the
+		// oracle's reflector calls one directly): remember the choice, converting
+		// forced when it runs.
+		JavaOverloads.Overload only = JavaOverloads.singleFixed(candidates.get(), kinds.length);
+		if (only != null) {
+			rememberChoice(type.type(), member, new Memo(kinds, only, true));
+			return new Resolution(only, true);
+		}
+		return null;
+	}
+
+	// The kind of every argument, or null when one has none.
+	private static JavaKind @Nullable [] kindsOf(List<LispVal> args) {
+		JavaKind[] kinds = new JavaKind[args.size()];
+		for (int i = 0; i < kinds.length; i++) {
+			JavaKind kind = kindOf(args.get(i));
+			if (kind == null) {
+				return null;
+			}
+			kinds[i] = kind;
+		}
+		return kinds;
+	}
+
+	private static @Nullable Memo remembered(Class<?> cls, String member, JavaKind[] kinds) {
+		ConcurrentHashMap<String, Memo[]> members = CHOICES.get(cls);
+		Memo[] memos = members == null ? null : members.get(member);
+		if (memos != null) {
+			for (Memo memo : memos) {
+				if (memo.matches(kinds)) {
+					return memo;
+				}
+			}
+		}
+		return null;
+	}
+
+	// Copy-on-write: a racing update may drop a choice, which is only resolved again.
+	private static void rememberChoice(Class<?> cls, String member, Memo memo) {
+		ConcurrentHashMap<String, Memo[]> members = CHOICES.get(cls);
+		if (members == null) {
+			members = new ConcurrentHashMap<>();
+			remember(CHOICES, cls, members);
+		}
+		Memo[] old = members.get(member);
+		Memo[] memos;
+		if (old == null || old.length >= CHOICES_PER_MEMBER) {
+			memos = new Memo[] { memo };
+		}
+		else {
+			memos = Arrays.copyOf(old, old.length + 1);
+			memos[old.length] = memo;
+		}
+		members.put(member, memos);
+	}
+
+	// The object a java:call is made on (LispJavaObject.receiverObject): a :bytes view's
+	// byte[] -- what it is to Java (compiled: _jrecv, the bridge's receiverObject) -- or
+	// the rule's object.
+	private static @Nullable Object receiverObject(LispVal value) {
+		return value instanceof LispJavaObject obj && obj.ref() instanceof RontoJavaBytesView view ? view.bytes()
+				: LispJavaObject.receiverObject(value);
+	}
+
+	// The token of which marshal(value, target) is a pure function for every target, or
+	// null when there is none: a list, vector or hash table (the cost sums its elements),
+	// a java:view List (an array of its items costs theirs), and the values marshal()
+	// never bridges (they never match, so nothing is remembered). A :bytes view has
+	// none either: it is the byte[] it hands Java, of no class a host kind names.
+	private static @Nullable JavaKind kindOf(LispVal value) {
+		return switch (value) {
+			case LispJavaObject obj when obj.ref() instanceof RontoJavaListView ignored -> null;
+			case LispJavaObject obj when obj.ref() instanceof RontoJavaBytesView ignored -> null;
+			case LispNil ignored -> JavaKind.Lisp.NIL;
+			case LispTrue ignored -> JavaKind.Lisp.T;
+			case LispSymbol symbol when LispNames.JAVA_FALSE.equals(symbol.name()) -> JavaKind.Lisp.FALSE;
+			case LispInteger ignored -> JavaKind.Lisp.INTEGER;
+			case LispBigInteger ignored -> JavaKind.Lisp.BIGNUM;
+			case LispDouble ignored -> JavaKind.Lisp.FLOAT;
+			case LispString s -> s.value().length() == 1 ? JavaKind.Lisp.STRING_1 : JavaKind.Lisp.STRING;
+			case LispChar c ->
+				Character.isBmpCodePoint(c.codePoint()) ? JavaKind.Lisp.CHAR : JavaKind.Lisp.SUPPLEMENTARY_CHAR;
+			case LispJavaObject obj -> hostKind(obj.ref());
+			case LispLambda ignored -> JavaKind.Lisp.FUNCTION;
+			case LispFunction ignored -> JavaKind.Lisp.FUNCTION;
+			default -> null;
+		};
+	}
+
+	private static <K, V> void remember(ConcurrentHashMap<K, V> cache, K key, V value) {
+		if (cache.size() >= CACHE_LIMIT) {
+			cache.clear();
+		}
+		cache.put(key, value);
+	}
+
+	// The Java arguments for the chosen overload, packing a varargs tail.
+	private static @Nullable Object[] marshalArguments(JavaOverloads.Overload overload, List<LispVal> args,
+			Caller caller) {
+		List<? extends JavaType> params = overload.executable().parameterTypes();
+		@Nullable Object[] out = new @Nullable Object[params.size()];
+		int fixed = overload.packed() ? params.size() - 1 : params.size();
+		for (int i = 0; i < fixed; i++) {
+			marshalSelected(args.get(i), params.get(i), caller, out, i);
+		}
+		if (overload.packed()) {
+			JavaType component = java.util.Objects.requireNonNull(params.get(fixed).componentType());
+			Object packed = Array.newInstance(classOf(component), args.size() - fixed);
+			@Nullable Object[] slot = new @Nullable Object[1];
+			for (int i = fixed; i < args.size(); i++) {
+				marshalSelected(args.get(i), component, caller, slot, 0);
+				Array.set(packed, i - fixed, slot[0]);
+			}
+			out[fixed] = packed;
+		}
+		return out;
+	}
+
+	// select() costed this argument against this type, so it converts -- unless a
+	// statically resolved site met a value its declaration did not promise.
+	private static void marshalSelected(LispVal value, JavaType target, Caller caller, @Nullable Object[] out,
+			int index) {
+		if (marshal(value, target, caller, out, index) == NO_MATCH) {
+			throw new IllegalStateException("java interop: the selected overload rejects " + value.print());
+		}
+	}
+
+	// The Java arguments for a site resolved from an explicit parameter tag, packing
+	// a varargs tail: each value converts however the member takes it (as java: always
+	// did), never refusing like the oracle. A conversion's failure propagates as it
+	// did: the refusal of a function where none is expected, anything else the member
+	// sees (or its own failure to take it).
+	private static @Nullable Object[] marshalUncheckedArguments(JavaOverloads.Overload overload, List<LispVal> args,
+			Caller caller) {
+		List<? extends JavaType> params = overload.executable().parameterTypes();
+		@Nullable Object[] out = new @Nullable Object[params.size()];
+		int fixed = overload.packed() ? params.size() - 1 : params.size();
+		for (int i = 0; i < fixed; i++) {
+			out[i] = convertForced(args.get(i), classOf(params.get(i)), caller);
+		}
+		if (overload.packed()) {
+			JavaType component = java.util.Objects.requireNonNull(params.get(fixed).componentType());
+			Object packed = Array.newInstance(classOf(component), args.size() - fixed);
+			for (int i = fixed; i < args.size(); i++) {
+				Array.set(packed, i - fixed, convertForced(args.get(i), classOf(component), caller));
+			}
+			out[fixed] = packed;
+		}
+		return out;
+	}
+
+	// A value converted however the target takes it: a value with a kind by the
+	// unchecked arms, anything else as marshal converts it.
+	private static @Nullable Object convertForced(LispVal value, Class<?> target, Caller caller) {
+		if (kindOf(value) != null) {
+			return convert(value, target, caller);
+		}
+		@Nullable Object[] slot = new @Nullable Object[1];
+		if (marshal(value, ReflectiveJavaClasses.of(target), caller, slot, 0) == NO_MATCH) {
+			throw new IllegalStateException("java interop: the selected overload rejects " + value.print());
+		}
+		return slot[0];
+	}
+
+	// A value converted however the target of a run-time resolution's only candidate
+	// takes it: a value with a kind by the unchecked arms, anything else by the checked
+	// casts (as a resolved site converts it): what marshal() cannot convert refuses
+	// with the oracle's ClassCastException, as the oracle's reflector's checked cast
+	// does. The refusal is the error calling the member WHAT names, carrying the real
+	// exception.
+	private static @Nullable Object convertForced(LispVal value, Class<?> target, Caller caller, String what) {
+		if (kindOf(value) != null) {
+			return convertForced(value, target, caller);
+		}
+		@Nullable Object[] slot = new @Nullable Object[1];
+		if (marshal(value, ReflectiveJavaClasses.of(target), caller, slot, 0) == NO_MATCH) {
+			throw fail(what, castFailure(castFromName(value), castTargetName(target)));
+		}
+		return slot[0];
+	}
+
+	// The class a forced conversion names a kindless value with: a view's own, anything
+	// else the Lisp object's (as a resolved site's checked conversion refuses it).
+	private static String castFromName(LispVal value) {
+		if (value instanceof LispJavaObject object) {
+			return object.ref().getClass().getName();
+		}
+		return value.getClass().getName();
+	}
+
+	// The Java arguments for the overload a run-time resolution's only candidate
+	// takes however they convert (as the oracle's reflector calls one directly):
+	// each value with a kind by the unchecked arms, anything else by the checked casts.
+	private static @Nullable Object[] marshalForcedArguments(JavaOverloads.Overload overload, List<LispVal> args,
+			Caller caller, String what) {
+		List<? extends JavaType> params = overload.executable().parameterTypes();
+		@Nullable Object[] out = new @Nullable Object[params.size()];
+		int fixed = overload.packed() ? params.size() - 1 : params.size();
+		for (int i = 0; i < fixed; i++) {
+			out[i] = convertForced(args.get(i), classOf(params.get(i)), caller, what);
+		}
+		if (overload.packed()) {
+			JavaType component = java.util.Objects.requireNonNull(params.get(fixed).componentType());
+			Object packed = Array.newInstance(classOf(component), args.size() - fixed);
+			for (int i = fixed; i < args.size(); i++) {
+				Array.set(packed, i - fixed, convertForced(args.get(i), classOf(component), caller, what));
+			}
+			out[fixed] = packed;
+		}
+		return out;
+	}
+
+	private static Class<?> classOf(JavaType type) {
+		return ((ReflectiveJavaClasses.Type) type).type();
+	}
+
+	// The Java arguments for the member a site resolved before it ran, packing a
+	// varargs tail: each value converted with the oracle's checked casts (a value the
+	// member was not chosen for refuses), never with the cost table's silent
+	// narrowings. A conversion's failure is the error calling the member, carrying
+	// the real exception.
+	private static @Nullable Object[] marshalCheckedArguments(JavaOverloads.Overload overload, List<LispVal> args,
+			Caller caller, String what) {
+		List<? extends JavaType> params = overload.executable().parameterTypes();
+		@Nullable Object[] out = new @Nullable Object[params.size()];
+		int fixed = overload.packed() ? params.size() - 1 : params.size();
+		try {
+			for (int i = 0; i < fixed; i++) {
+				out[i] = convertChecked(args.get(i), classOf(params.get(i)), caller);
+			}
+			if (overload.packed()) {
+				JavaType component = java.util.Objects.requireNonNull(params.get(fixed).componentType());
+				Object packed = Array.newInstance(classOf(component), args.size() - fixed);
+				for (int i = fixed; i < args.size(); i++) {
+					Array.set(packed, i - fixed, convertChecked(args.get(i), classOf(component), caller));
+				}
+				out[fixed] = packed;
+			}
+		}
+		catch (LispEvalException ex) {
+			throw ex;
+		}
+		catch (RuntimeException ex) {
+			throw fail(what, ex);
+		}
+		return out;
+	}
+
+	// (java:field "class.Name" "CONSTANT") -> static field; (java:field obj "name") ->
+	// instance field; with a VALUE after the name the field is written instead, and the
+	// form answers the value written.
+	static LispVal field(LispVal classOrObject, String fieldName, @Nullable LispVal value, Caller caller) {
+		String what = (value == null ? "reading" : "writing") + " field " + fieldName;
+		try {
+			if (classOrObject instanceof LispString s) {
+				ReflectiveJavaClasses.Type type = loadClass(s.value(), caller);
+				ReflectiveJavaClasses.FieldMember member = type.field(fieldName);
+				if (member != null && !member.isStatic()) {
+					throw new LispEvalException("java:field: "
+							+ am.ik.rontolisp.compiler.JavaSiteResolver.notStatic(type.name(), fieldName));
+				}
+				Field field = publicField(type, fieldName);
+				return value != null ? writeField(field, null, value, caller, what)
+						: unmarshal(field.get(null), caller);
+			}
+			if (classOrObject instanceof LispJavaObject obj) {
+				ReflectiveJavaClasses.Type type = ReflectiveJavaClasses.of(obj.ref().getClass());
+				if (type.field(fieldName) == null) {
+					throw noMatch(what, JavaOverloads.noMatchingField(fieldName, type.name()));
+				}
+				Field field = publicField(type, fieldName);
+				return value != null ? writeField(field, obj.ref(), value, caller, what)
+						: unmarshal(field.get(obj.ref()), caller);
+			}
+			throw new LispEvalException(
+					"java:field expects a class-name string or a java object, got " + classOrObject.print());
+		}
+		catch (ReflectiveOperationException ex) {
+			throw fail(what, ex);
+		}
+		catch (NoClassDefFoundError ex) {
+			String name = classOrObject instanceof LispString s ? s.value()
+					: classOrObject instanceof LispJavaObject obj ? obj.ref().getClass().getName()
+							: classOrObject.print();
+			throw unlinkable(name, ex);
+		}
+		catch (ExceptionInInitializerError ex) {
+			String name = classOrObject instanceof LispString s ? s.value()
+					: classOrObject instanceof LispJavaObject obj ? obj.ref().getClass().getName()
+							: classOrObject.print();
+			throw initializerFailed(name, ex);
+		}
+	}
+
+	// Writes VALUE -- a condition standing for a host exception as that exception -- to
+	// the field of TARGET (null for a static field) and answers what was written. The
+	// value converts as the oracle's reflector boxes a field write's (Reflector.boxArg):
+	// a number narrowed by its own intValue, longValue, ... where the field is a
+	// numeric primitive, nil there its NullPointerException; anything else as an
+	// argument of the field's type converts (marshal), else the field's type refuses
+	// it -- a numeric primitive with the reflector's IllegalArgumentException, any
+	// other type with the cast's ClassCastException. A final field is
+	// Field.set's IllegalAccessException. Mirrored by the bridge's writeField
+	// (codegen.jvm.JavaBridgeTemplate).
+	private static LispVal writeField(Field field, @Nullable Object target, LispVal value, Caller caller, String what)
+			throws IllegalAccessException {
+		LispVal handed = hostException(value, caller);
+		Class<?> type = field.getType();
+		Object written = null;
+		boolean converted = false;
+		boolean numeric = type.isPrimitive() && type != boolean.class && type != char.class;
+		if (numeric) {
+			Number number = switch (handed) {
+				case LispInteger i -> i.value();
+				case LispBigInteger b -> b.value();
+				case LispDouble d -> d.value();
+				default -> null;
+			};
+			if (number != null) {
+				written = JavaOverloads.writtenNumber(number, type);
+				converted = true;
+			}
+			else if (handed instanceof LispNil) {
+				throw fail(what, JavaOverloads.nullFieldWrite());
+			}
+		}
+		if (!converted) {
+			@Nullable Object[] slot = new @Nullable Object[1];
+			if (marshal(handed, ReflectiveJavaClasses.of(type), caller, slot, 0) == NO_MATCH) {
+				String given = writtenClassName(handed);
+				throw fail(what, numeric ? JavaOverloads.unexpectedParamType(type, given)
+						: castFailure(given, castTargetName(type)));
+			}
+			written = slot[0];
+		}
+		field.set(target, written);
+		return handed;
+	}
+
+	// The class a field write's refusal names a value by: the Java class a value with a
+	// kind crosses as, a host object's own, anything else castFromName's (mirrored by
+	// the bridge's writtenClassName).
+	private static String writtenClassName(LispVal value) {
+		return switch (value) {
+			case LispString ignored -> "java.lang.String";
+			case LispChar ignored -> "java.lang.Character";
+			case LispTrue ignored -> "java.lang.Boolean";
+			case LispSymbol symbol when LispNames.JAVA_FALSE.equals(symbol.name()) -> "java.lang.Boolean";
+			case LispInteger ignored -> "java.lang.Long";
+			case LispBigInteger ignored -> "java.math.BigInteger";
+			case LispDouble ignored -> "java.lang.Double";
+			case LispLambda ignored -> JavaImplementation.FUNCTION_CLASS;
+			case LispFunction ignored -> JavaImplementation.FUNCTION_CLASS;
+			default -> castFromName(value);
+		};
+	}
+
+	/**
+	 * Runs a site resolved before it ran ({@code compiler.JavaSiteResolver}), exactly as
+	 * a compiled program's direct call does ({@code codegen.jvm.JvmJavaDirectSites}): a
+	 * {@code java:call} / {@code java:field} receiver must be a java object and an
+	 * instance of the site's static class; each argument must be what the resolution
+	 * counted on -- one of its kinds, or {@code nil} or an instance of its bound; then
+	 * the member is called -- the resolved one, or at a dispatched site the cheapest of
+	 * the site's overloads for the arguments' kinds, the first on a tie
+	 * ({@link JavaOverloads#selectRanked}) -- with each argument converted to its
+	 * parameter type (a varargs tail packed as the overload packs it). A value a
+	 * declaration lied about is an error here, never converted for a member it was not
+	 * chosen for.
+	 * @param site the resolved site
+	 * @param receiver the {@code java:call} / {@code java:field} receiver, or
+	 * {@code null}
+	 * @param args the argument values, the names written at the site left out
+	 * @param caller applies a Lisp callable a proxy argument calls back
+	 * @return the member's value
+	 */
+	static LispVal invokeResolved(JavaSite site, @Nullable LispVal receiver, List<LispVal> args, Caller caller) {
+		String className = java.util.Objects.requireNonNull(site.staticClass());
+		String operator = "java:" + site.operator().name().toLowerCase(java.util.Locale.ROOT);
+		Object target = null;
+		if (receiver != null) {
+			boolean call = site.operator() == JavaSite.Operator.CALL;
+			target = call ? receiverObject(receiver) : receiver instanceof LispJavaObject obj ? obj.ref() : null;
+			if (target == null) {
+				throw new LispEvalException(
+						call ? "java:call expects a java object as the first argument, got " + receiver.print()
+								: "java:field expects a class-name string or a java object, got " + receiver.print());
+			}
+			if (!loadClass(className, caller).type().isInstance(target)) {
+				throw new LispEvalException(operator + ": the " + (call ? "receiver" : "object") + " is not a "
+						+ className + ", got " + receiver.print());
+			}
+		}
+		JavaField resolvedField = site.field();
+		if (resolvedField != null) {
+			try {
+				return unmarshal(((ReflectiveJavaClasses.FieldMember) resolvedField).field().get(target), caller);
+			}
+			catch (ReflectiveOperationException ex) {
+				throw fail("reading field " + resolvedField.name(), ex);
+			}
+			catch (NoClassDefFoundError ex) {
+				throw unlinkable(className, ex);
+			}
+			catch (ExceptionInInitializerError ex) {
+				throw initializerFailed(className, ex);
+			}
+		}
+		List<JavaSite.Argument> promised = site.arguments();
+		for (int i = 0; i < args.size(); i++) {
+			if (!keepsPromise(args.get(i), promised.get(i), caller)) {
+				throw new LispEvalException(operator + ": argument " + (i + 1) + " is not " + promised.get(i).expected()
+						+ ", got " + args.get(i).print());
+			}
+		}
+		// What the checks above show is the value the site was handed; what the member
+		// takes, a condition standing for a host exception as that exception.
+		List<LispVal> taken = hostArguments(args, caller);
+		JavaOverloads.Overload overload;
+		if (site.dispatched()) {
+			overload = dispatch(site, taken, caller);
+			if (overload == null) {
+				String designator = java.util.Objects.requireNonNull(site.designator());
+				if (site.operator() == JavaSite.Operator.NEW) {
+					throw noMatch("constructing " + className, JavaOverloads.noMatchingCtor(className));
+				}
+				throw noMatch("calling " + className + "." + designator, JavaOverloads.noMatchingMethod(
+						bareName(designator), taken.size(), target == null ? null : target.getClass().getName()));
+			}
+		}
+		else {
+			overload = new JavaOverloads.Overload(java.util.Objects.requireNonNull(site.executable()), site.packed());
+		}
+		JavaExecutable executable = overload.executable();
+		String what = executable.isConstructor() ? "constructing " + className
+				: "calling " + className + "." + executable.name();
+		@Nullable Object[] javaArgs = site.dispatched() ? marshalArguments(overload, taken, caller)
+				: site.unchecked() ? marshalUncheckedArguments(overload, taken, caller)
+						: marshalCheckedArguments(overload, taken, caller, what);
+		try {
+			java.lang.reflect.Executable reflected = ((ReflectiveJavaClasses.Member) executable).executable();
+			Object answer;
+			if (reflected instanceof Constructor<?> constructor) {
+				answer = constructor.newInstance(javaArgs);
+			}
+			else {
+				answer = invokeMethod((Method) reflected, target, javaArgs, caller);
+			}
+			writeBackArrays(taken, overload, javaArgs, caller);
+			return unmarshal(answer, caller);
+		}
+		catch (ReflectiveOperationException ex) {
+			throw fail(executable.isConstructor() ? "constructing " + className
+					: "calling " + className + "." + executable.name(), ex);
+		}
+		catch (NoClassDefFoundError ex) {
+			throw unlinkable(className, ex);
+		}
+		catch (ExceptionInInitializerError ex) {
+			throw initializerFailed(className, ex);
+		}
+	}
+
+	// The overload of a dispatched site for these arguments: the first cheapest of its
+	// ranked overloads, remembered per site for the argument kinds. A list or vector has
+	// no kind: such a call is costed by marshalling its arguments and never remembered.
+	private static JavaOverloads.@Nullable Overload dispatch(JavaSite site, List<LispVal> args, Caller caller) {
+		JavaKind[] kinds = kindsOf(args);
+		if (kinds == null) {
+			@Nullable Object[] slot = new @Nullable Object[1];
+			return JavaOverloads.selectRanked(site.overloads(), args.size(), (i, type) -> {
+				JavaKind kind = kindOf(args.get(i));
+				return kind != null ? JavaOverloads.kindCost(kind, type, CLASSES)
+						: marshal(args.get(i), type, caller, slot, 0);
+			});
+		}
+		SiteKey key = new SiteKey(site);
+		Memo[] memos = DISPATCHES.get(key);
+		if (memos != null) {
+			for (Memo memo : memos) {
+				if (memo.matches(kinds)) {
+					return memo.overload();
+				}
+			}
+		}
+		JavaOverloads.Overload chosen = JavaOverloads.selectRanked(site.overloads(), kinds.length,
+				(i, type) -> JavaOverloads.kindCost(kinds[i], type, CLASSES));
+		if (chosen != null) {
+			Memo[] grown;
+			if (memos == null || memos.length >= CHOICES_PER_MEMBER) {
+				grown = new Memo[] { new Memo(kinds, chosen, false) };
+			}
+			else {
+				grown = Arrays.copyOf(memos, memos.length + 1);
+				grown[memos.length] = new Memo(kinds, chosen, false);
+			}
+			remember(DISPATCHES, key, grown);
+		}
+		return chosen;
+	}
+
+	// Whether a value is what a resolved site counted on for its argument: one of the
+	// kinds, nil or an instance of the bound, or -- known only when it runs -- anything.
+	private static boolean keepsPromise(LispVal value, JavaSite.Argument argument, Caller caller) {
+		if (argument.known()) {
+			JavaKind kind = kindOf(value);
+			return kind != null && argument.kinds().contains(kind);
+		}
+		String bound = argument.bound();
+		if (bound == null || value instanceof LispNil) {
+			return true;
+		}
+		return value instanceof LispJavaObject obj && loadClass(bound, caller).type().isInstance(obj.ref());
+	}
+
+	private static Field publicField(ReflectiveJavaClasses.Type type, String fieldName) throws NoSuchFieldException {
+		ReflectiveJavaClasses.FieldMember field = type.field(fieldName);
+		if (field == null) {
+			throw new NoSuchFieldException(fieldName);
+		}
+		return field.field();
+	}
+
+	// (java:proxy "fully.qualified.Interface" callable): the callable is applied as
+	// (callable method-name arg1 arg2 ...) for every interface method, default ones too;
+	// Object's equals/hashCode/toString keep identity behavior
+	// (compiler/JavaImplementations.proxy, which a compiled program's generated class
+	// declares).
+	static LispVal proxy(String interfaceName, LispVal callable, Caller caller) {
+		return proxy(List.of(interfaceName), callable, caller);
+	}
+
+	// (java:proxy "I" "J" ... callable): one object implementing every interface, each
+	// method of each calling the callable by its name.
+	static LispVal proxy(List<String> interfaceNames, LispVal callable, Caller caller) {
+		List<JavaType> types = new ArrayList<>();
+		List<Class<?>> classes = new ArrayList<>();
+		for (String interfaceName : interfaceNames) {
+			ReflectiveJavaClasses.Type type = loadClass(interfaceName, caller);
+			if (!type.isInterface()) {
+				throw new LispEvalException(JavaImplementations.notAnInterface(true, interfaceName));
+			}
+			if (types.contains(type)) {
+				throw new LispEvalException(JavaImplementations.repeatedInterface(interfaceName));
+			}
+			types.add(type);
+			classes.add(type.type());
+		}
+		List<Object> key = List.of(classes, PROXY_KEY);
+		Dispatch dispatch = IMPLEMENTATIONS.get(key);
+		if (dispatch == null) {
+			try {
+				dispatch = new Dispatch(JavaImplementations.proxy(types, CLASSES));
+			}
+			catch (NoClassDefFoundError ex) {
+				throw unlinkable(String.join(",", interfaceNames), ex);
+			}
+			catch (ExceptionInInitializerError ex) {
+				throw initializerFailed(String.join(",", interfaceNames), ex);
+			}
+			remember(IMPLEMENTATIONS, key, dispatch);
+		}
+		return implement(dispatch, List.of(callable), caller);
+	}
+
+	// (java:subclass "super.Class" (iface...) (methods...) ctor-args... callable): one
+	// object extending the superclass (and the extra interfaces), each named method
+	// calling the callable with the object and the method's name before its arguments
+	// (compiler/JavaImplementations.subclass, which a compiled program's generated
+	// class declares).
+	static LispVal subclass(List<LispVal> args, Caller caller) {
+		int markers = JavaMarkers.count(args, 4);
+		if (markers > 0) {
+			// A function constructor argument implements its interface by its arguments
+			// (:functional); Java's false reaches the callable as |false| (:java-false).
+			return subclass(args.subList(0, args.size() - markers), withMarkers(caller, args, 4));
+		}
+		if (args.size() < 4 || !(args.get(0) instanceof LispString superName)) {
+			throw new LispEvalException(JavaImplementations.SUBCLASS_USAGE);
+		}
+		List<String> interfaceNames = stringList(args.get(1));
+		List<String> methodNames = stringList(args.get(2));
+		if (interfaceNames == null || methodNames == null) {
+			throw new LispEvalException(JavaImplementations.SUBCLASS_USAGE);
+		}
+		List<LispVal> ctorArgs = args.subList(3, args.size() - 1);
+		LispVal callable = args.get(args.size() - 1);
+		ReflectiveJavaClasses.Type superclass = loadClass(superName.value(), caller);
+		if (superclass.isInterface()) {
+			throw new LispEvalException(JavaImplementations.notAClass(superName.value()));
+		}
+		if (superclass.isFinal()) {
+			throw new LispEvalException(JavaImplementations.finalSuperclass(superName.value()));
+		}
+		List<JavaType> interfaces = new ArrayList<>();
+		List<Class<?>> ifaceClasses = new ArrayList<>();
+		for (String interfaceName : interfaceNames) {
+			ReflectiveJavaClasses.Type type = loadClass(interfaceName, caller);
+			if (!type.isInterface()) {
+				throw new LispEvalException(JavaImplementations.subclassNotAnInterface(interfaceName));
+			}
+			if (interfaces.contains(type)) {
+				throw new LispEvalException(JavaImplementations.subclassRepeatedInterface(interfaceName));
+			}
+			interfaces.add(type);
+			ifaceClasses.add(type.type());
+		}
+		List<Object> key = List.of(superclass.type(), ifaceClasses, methodNames);
+		SubclassDispatch dispatch = SUBCLASSES.get(key);
+		if (dispatch == null) {
+			JavaImplementation implementation;
+			try {
+				implementation = JavaImplementations.subclass(superclass, interfaces, methodNames);
+			}
+			catch (IllegalArgumentException ex) {
+				throw new LispEvalException(String.valueOf(ex.getMessage()));
+			}
+			catch (NoClassDefFoundError ex) {
+				throw unlinkable(superName.value(), ex);
+			}
+			catch (ExceptionInInitializerError ex) {
+				throw initializerFailed(superName.value(), ex);
+			}
+			dispatch = new SubclassDispatch(implementation, CLASSES.subclassOf(superclass, interfaces));
+			remember(SUBCLASSES, key, dispatch);
+		}
+		JavaOverloads.Overload overload;
+		try {
+			overload = selectConstructor(superclass, ctorArgs, caller);
+		}
+		catch (NoClassDefFoundError ex) {
+			throw unlinkable(superName.value(), ex);
+		}
+		catch (ExceptionInInitializerError ex) {
+			throw initializerFailed(superName.value(), ex);
+		}
+		if (overload == null) {
+			throw new LispEvalException(
+					"No matching constructor for " + superName.value() + " with " + ctorArgs.size() + " argument(s)");
+		}
+		Constructor<?> constructor = (Constructor<?>) ((ReflectiveJavaClasses.Member) overload.executable())
+			.executable();
+		Class<?> proxyClass;
+		try {
+			proxyClass = ClassProxyMaker.proxyClass(superclass.type(), ifaceClasses, dispatch.implementation,
+					constructor, caller.classes().loader());
+		}
+		catch (NoClassDefFoundError ex) {
+			throw unlinkable(superName.value(), ex);
+		}
+		catch (ExceptionInInitializerError ex) {
+			throw initializerFailed(superName.value(), ex);
+		}
+		SUBCLASS_KINDS.putIfAbsent(proxyClass, dispatch.kind);
+		@Nullable Object[] javaArgs = marshalArguments(overload, ctorArgs, caller);
+		try {
+			Constructor<?> proxyConstructor = proxyConstructor(proxyClass, constructor);
+			Object[] withHandler = new Object[javaArgs.length + 1];
+			withHandler[0] = new SubclassHandler(dispatch, callable, caller);
+			System.arraycopy(javaArgs, 0, withHandler, 1, javaArgs.length);
+			return unmarshal(proxyConstructor.newInstance(withHandler), caller);
+		}
+		catch (ReflectiveOperationException ex) {
+			throw fail("constructing " + superName.value(), ex);
+		}
+		catch (NoClassDefFoundError ex) {
+			throw unlinkable(superName.value(), ex);
+		}
+		catch (ExceptionInInitializerError ex) {
+			throw initializerFailed(superName.value(), ex);
+		}
+	}
+
+	// A proper list of strings as its values, or null when the value is not one.
+	private static @Nullable List<String> stringList(LispVal value) {
+		List<String> names = new ArrayList<>();
+		LispVal current = value;
+		while (current instanceof LispCons cons) {
+			if (!(cons.car() instanceof LispString name)) {
+				return null;
+			}
+			names.add(name.value());
+			current = cons.cdr();
+		}
+		return current instanceof LispNil ? names : null;
+	}
+
+	// The superclass constructor for these constructor arguments, over the public and
+	// the protected ones: never remembered (the candidates differ from java:new's
+	// public-only ones, and construction is rare).
+	private static JavaOverloads.@Nullable Overload selectConstructor(ReflectiveJavaClasses.Type superclass,
+			List<LispVal> args, Caller caller) {
+		List<ReflectiveJavaClasses.Member> candidates = new ArrayList<>();
+		for (JavaExecutable executable : superclass.subclassConstructors()) {
+			candidates.add((ReflectiveJavaClasses.Member) executable);
+		}
+		JavaKind[] kinds = kindsOf(args);
+		if (kinds == null) {
+			@Nullable Object[] slot = new @Nullable Object[1];
+			return JavaOverloads.select(candidates, args.size(),
+					(i, target) -> marshal(args.get(i), target, caller, slot, 0));
+		}
+		return JavaOverloads.select(candidates, kinds.length,
+				(i, target) -> JavaOverloads.kindCost(kinds[i], target, CLASSES));
+	}
+
+	// The generated constructor matching this superclass constructor: the handler
+	// first, then the same parameters.
+	private static Constructor<?> proxyConstructor(Class<?> proxyClass, Constructor<?> constructor)
+			throws NoSuchMethodException {
+		Class<?>[] params = constructor.getParameterTypes();
+		Class<?>[] proxyParams = new Class<?>[params.length + 1];
+		proxyParams[0] = ClassProxyHandler.class;
+		System.arraycopy(params, 0, proxyParams, 1, params.length);
+		return proxyClass.getConstructor(proxyParams);
+	}
+
+	// How a java:subclass of (superclass, interfaces, methods) extends it: computed
+	// once, the kind canonical per (superclass, interfaces).
+	private static final class SubclassDispatch {
+
+		final JavaImplementation implementation;
+
+		final JavaImplementationType kind;
+
+		SubclassDispatch(JavaImplementation implementation, JavaImplementationType kind) {
+			this.implementation = implementation;
+			this.kind = kind;
+		}
+
+	}
+
+	private static final ConcurrentHashMap<List<Object>, SubclassDispatch> SUBCLASSES = new ConcurrentHashMap<>();
+
+	// The kind of a generated subclass, by its class.
+	private static final ConcurrentHashMap<Class<?>, JavaImplementationType> SUBCLASS_KINDS = new ConcurrentHashMap<>();
+
+	/**
+	 * The handler of a {@code java:subclass} object: a named method calls the callable
+	 * with the object and the method's name before its unmarshalled arguments, and its
+	 * value is marshalled to the method's return type (a function is never made a proxy
+	 * there). What the function raises -- or the refusal of its value -- is recorded on
+	 * its way out to the Java caller ({@link #raised}), so the site whose Java call it
+	 * reaches throws it on unchanged.
+	 */
+	private static final class SubclassHandler implements ClassProxyHandler {
+
+		private final SubclassDispatch dispatch;
+
+		private final LispVal callable;
+
+		private final Caller caller;
+
+		SubclassHandler(SubclassDispatch dispatch, LispVal callable, Caller caller) {
+			this.dispatch = dispatch;
+			this.callable = callable;
+			this.caller = caller;
+		}
+
+		@Override
+		public @Nullable Object invoke(int slot, Object self, Object[] methodArgs) throws Throwable {
+			JavaImplementation.Slot implemented = this.dispatch.implementation.slots().get(slot);
+			try {
+				List<LispVal> callArgs = new ArrayList<>(methodArgs.length + 2);
+				callArgs.add(new LispJavaObject(self));
+				callArgs.add(new LispString(implemented.name()));
+				JavaMarkers markers = this.caller.markers();
+				for (Object argument : methodArgs) {
+					// what Java hands a function: Java's false after
+					// :java-false, a byte[] after :octets an octet vector over
+					// Java's own array
+					callArgs.add(unmarshal(argument, markers.javaFalse(), markers.octets()));
+				}
+				Class<?> ret = returnClass(implemented);
+				LispVal result = callBack(this.caller, this.callable, callArgs, ret, false);
+				if (ret == void.class) {
+					return null;
+				}
+				@Nullable Object[] boxed = new @Nullable Object[1];
+				ReflectiveJavaClasses.Type returnType = ReflectiveJavaClasses.of(ret);
+				if (marshal(result, returnType, this.caller, boxed, 0, false) == NO_MATCH) {
+					JavaImplementation implementation = this.dispatch.implementation;
+					throw new LispEvalException(JavaImplementation.subclassReturnMismatchPrefix() + result.print()
+							+ JavaImplementation.subclassReturnMismatchSuffix(
+									java.util.Objects.requireNonNull(implementation.superclass()),
+									implementation.interfaces(), returnType));
+				}
+				return boxed[0];
+			}
+			catch (Throwable signal) {
+				throw raised(signal);
+			}
+		}
+
+		// The method's return class: the slot's return type is canonical in this
+		// lookup, so its class is read off it.
+		private static Class<?> returnClass(JavaImplementation.Slot slot) {
+			JavaType type = slot.returnType();
+			if (type instanceof ReflectiveJavaClasses.Type reflective) {
+				return reflective.type();
+			}
+			try {
+				return Class.forName(type.name(), false, JavaInterop.class.getClassLoader());
+			}
+			catch (ClassNotFoundException ex) {
+				throw new LispEvalException("No such class: " + type.name());
+			}
+		}
+
+	}
+
+	// (java:reify interfaces [:value v] [:class "c"] "method" function ...): each
+	// function implements the one method its designator names of the interfaces -- one
+	// name, or a list of them (compiler/JavaImplementations.reify -- the rule a compiled
+	// program's generated class follows) -- and with :value the object stands for v.
+	static LispVal reify(List<LispVal> args, Caller caller) {
+		JavaImplementations.ReifyParts shape = args.isEmpty() ? null : JavaImplementations.reifyParts(args, 0);
+		if (shape == null) {
+			throw new LispEvalException(JavaImplementations.REIFY_USAGE);
+		}
+		int markers = JavaMarkers.count(args, shape.firstDesignator());
+		if (markers > 0) {
+			// Java's false reaches the functions as |false| (:java-false).
+			return reify(args.subList(0, args.size() - markers), withMarkers(caller, args, shape.firstDesignator()));
+		}
+		List<String> names = interfaceNames(args.get(0));
+		if (names == null || (args.size() - shape.firstDesignator()) % 2 != 0) {
+			throw new LispEvalException(JavaImplementations.REIFY_USAGE);
+		}
+		StandIn standIn = null;
+		if (shape.value() >= 0) {
+			LispVal className = shape.className() >= 0 ? args.get(shape.className()) : LispNil.INSTANCE;
+			if (!(className instanceof LispString) && !(className instanceof LispNil)) {
+				throw new LispEvalException(JavaImplementations.REIFY_USAGE);
+			}
+			standIn = new StandIn(args.get(shape.value()),
+					className instanceof LispString given ? given.value() : null);
+		}
+		List<String> designators = new ArrayList<>();
+		List<LispVal> functions = new ArrayList<>();
+		for (int i = shape.firstDesignator(); i < args.size(); i += 2) {
+			if (!(args.get(i) instanceof LispString designator)) {
+				throw new LispEvalException(JavaImplementations.REIFY_USAGE);
+			}
+			designators.add(designator.value());
+			functions.add(args.get(i + 1));
+		}
+		List<JavaType> types = new ArrayList<>();
+		List<Class<?>> classes = new ArrayList<>();
+		for (String name : names) {
+			ReflectiveJavaClasses.Type type = loadClass(name, caller);
+			if (!type.isInterface()) {
+				throw new LispEvalException(JavaImplementations.notAnInterface(false, name));
+			}
+			if (types.contains(type)) {
+				throw new LispEvalException(JavaImplementations.reifyRepeatedInterface(name));
+			}
+			types.add(type);
+			classes.add(type.type());
+		}
+		List<Object> key = List.of(classes, designators);
+		Dispatch dispatch = IMPLEMENTATIONS.get(key);
+		if (dispatch == null) {
+			try {
+				dispatch = new Dispatch(JavaImplementations.reify(types, designators, CLASSES));
+			}
+			catch (IllegalArgumentException ex) {
+				throw new LispEvalException(String.valueOf(ex.getMessage()));
+			}
+			catch (NoClassDefFoundError ex) {
+				throw unlinkable(String.join(",", names), ex);
+			}
+			catch (ExceptionInInitializerError ex) {
+				throw initializerFailed(String.join(",", names), ex);
+			}
+			remember(IMPLEMENTATIONS, key, dispatch);
+		}
+		if (standIn != null) {
+			String conflict = JavaImplementations.standInConflict(dispatch.implementation.interfaces());
+			if (conflict != null) {
+				throw new LispEvalException(conflict);
+			}
+		}
+		return implement(dispatch, functions, caller, standIn);
+	}
+
+	// A java:reify's interfaces: one name, or a non-empty proper list of names; null for
+	// anything else.
+	private static @Nullable List<String> interfaceNames(LispVal value) {
+		if (value instanceof LispString name) {
+			return List.of(name.value());
+		}
+		List<String> names = value instanceof LispCons ? stringList(value) : null;
+		return names == null || names.isEmpty() ? null : names;
+	}
+
+	/**
+	 * How a {@code java:reify} given {@code :value} stands for it: the value every
+	 * unmarshal answers for the object ({@code runtime/RontoJavaValue}) and the class
+	 * Java's messages name it by, null for the object's own.
+	 */
+	private record StandIn(LispVal value, @Nullable String className) {
+	}
+
+	// A function passed where an interface -- or Object -- is expected: the interface's
+	// java:proxy, or, at a call ending in :functional, the implementation calling the
+	// function with each abstract method's arguments
+	// (compiler/JavaImplementations.functional); after :functional :java-false, where
+	// Object, Runnable, Callable or Comparator is expected, the object the function is
+	// (functionObject).
+	private static LispVal implementation(Class<?> target, LispVal function, Caller caller) {
+		if (target == Object.class || JavaImplementation.standsForItsFunction(target.getName(), caller.markers())) {
+			return functionObject(function, caller);
+		}
+		if (!caller.markers().functional()) {
+			return proxy(target.getName(), function, caller);
+		}
+		List<Object> key = List.of(target, FUNCTIONAL_KEY);
+		Dispatch dispatch = IMPLEMENTATIONS.get(key);
+		if (dispatch == null) {
+			dispatch = new Dispatch(JavaImplementations.functional(ReflectiveJavaClasses.of(target), CLASSES));
+			remember(IMPLEMENTATIONS, key, dispatch);
+		}
+		return implement(dispatch, List.of(function), caller);
+	}
+
+	// The object a function converted at the caller's call is where Object (or Runnable,
+	// Callable or Comparator) is expected (compiler/JavaImplementations.functionObject):
+	// after :functional :java-false one implementing the three by its arguments and
+	// standing for it, which Java hands back as the function -- Clojure's fn; at any
+	// other call the refusal, a function having no Java object of its own there.
+	private static LispVal functionObject(LispVal function, Caller caller) {
+		if (!JavaImplementation.isFunctionObjectCall(caller.markers())) {
+			throw new LispEvalException(JavaImplementation.functionObjectRefusal(function.print()));
+		}
+		Dispatch dispatch = IMPLEMENTATIONS.get(FUNCTION_OBJECT_KEY);
+		if (dispatch == null) {
+			JavaImplementation object = JavaImplementations.functionObject(CLASSES, caller.markers());
+			dispatch = new Dispatch(java.util.Objects.requireNonNull(object, "the function interfaces"));
+			remember(IMPLEMENTATIONS, FUNCTION_OBJECT_KEY, dispatch);
+		}
+		return implement(dispatch, List.of(function), caller, new StandIn(function, JavaImplementation.FUNCTION_CLASS));
+	}
+
+	// The designators-list stand-in of a java:proxy's key.
+	private static final String PROXY_KEY = "proxy";
+
+	// The designators-list stand-in of a function's :functional implementation's key.
+	private static final String FUNCTIONAL_KEY = "functional";
+
+	// The key of the object a function is (functionObject).
+	private static final List<Object> FUNCTION_OBJECT_KEY = List.of("function object");
+
+	// How a java:proxy of an interface class, or a java:reify of (interface class,
+	// designators), implements it: resolved once.
+	private static final ConcurrentHashMap<List<Object>, Dispatch> IMPLEMENTATIONS = new ConcurrentHashMap<>();
+
+	// The object: a Proxy whose handler dispatches on the implementation's slots.
+	private static LispVal implement(Dispatch dispatch, List<LispVal> functions, Caller caller) {
+		return implement(dispatch, functions, caller, null);
+	}
+
+	// The object, standing for a value when STAND_IN is given: a Proxy implementing
+	// runtime/RontoJavaValue too, which every unmarshal answers the value of.
+	private static LispVal implement(Dispatch dispatch, List<LispVal> functions, Caller caller,
+			@Nullable StandIn standIn) {
+		List<JavaType> types = dispatch.implementation.interfaces();
+		Class<?>[] interfaces = new Class<?>[types.size() + (standIn != null ? 1 : 0)];
+		for (int i = 0; i < types.size(); i++) {
+			interfaces[i] = ((ReflectiveJavaClasses.Type) types.get(i)).type();
+		}
+		if (standIn != null) {
+			interfaces[types.size()] = RontoJavaValue.class;
+		}
+		return new LispJavaObject(Proxy.newProxyInstance(proxyLoader(interfaces), interfaces,
+				new ImplementationHandler(dispatch, functions, caller, standIn)));
+	}
+
+	// The loader a Proxy class over the interfaces is defined in: the first of theirs
+	// that
+	// sees every one of them.
+	private static @Nullable ClassLoader proxyLoader(Class<?>[] interfaces) {
+		for (Class<?> candidate : interfaces) {
+			ClassLoader loader = candidate.getClassLoader();
+			if (seesAll(loader, interfaces)) {
+				return loader;
+			}
+		}
+		return interfaces[0].getClassLoader();
+	}
+
+	private static boolean seesAll(@Nullable ClassLoader loader, Class<?>[] interfaces) {
+		for (Class<?> iface : interfaces) {
+			try {
+				if (Class.forName(iface.getName(), false, loader) != iface) {
+					return false;
+				}
+			}
+			catch (ClassNotFoundException ex) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	/**
+	 * Which slot of a {@code java:reify} / {@code java:proxy} implementation an invoked
+	 * method is, remembered per method (a {@code Proxy} class passes the same
+	 * {@code Method} objects on every call).
+	 */
+	private static final class Dispatch {
+
+		// Codes beside a slot's implementation index (NONE: an abstract method no
+		// function implements).
+		static final int HASH_CODE = -2;
+
+		static final int EQUALS = -3;
+
+		static final int TO_STRING = -4;
+
+		static final int DEFAULT = -5;
+
+		final JavaImplementation implementation;
+
+		final JavaImplementationType kind;
+
+		final String ifaceName;
+
+		private final java.util.Map<String, Integer> slots = new java.util.HashMap<>();
+
+		private final ConcurrentHashMap<Method, Integer> byMethod = new ConcurrentHashMap<>();
+
+		Dispatch(JavaImplementation implementation) {
+			this.implementation = implementation;
+			this.kind = CLASSES.implementationOf(implementation.interfaces());
+			this.ifaceName = implementation.interfaceNames();
+			for (JavaImplementation.Slot slot : implementation.slots()) {
+				this.slots.put(slot.dispatchKey(), slot.implementation());
+			}
+		}
+
+		int indexOf(Method method) {
+			Integer cached = this.byMethod.get(method);
+			if (cached == null) {
+				String key = keyOf(method);
+				Integer slot = this.slots.get(key + method.getReturnType().getName());
+				if (slot != null) {
+					cached = slot;
+				}
+				else {
+					cached = switch (key) {
+						case "hashCode()" -> HASH_CODE;
+						case "equals(java.lang.Object)" -> EQUALS;
+						case "toString()" -> TO_STRING;
+						default -> method.isDefault() ? DEFAULT : JavaImplementation.NONE;
+					};
+				}
+				this.byMethod.put(method, cached);
+			}
+			return cached;
+		}
+
+		static String keyOf(Method method) {
+			Class<?>[] params = method.getParameterTypes();
+			List<ReflectiveJavaClasses.Type> types = new ArrayList<>(params.length);
+			for (Class<?> param : params) {
+				types.add(ReflectiveJavaClasses.of(param));
+			}
+			return JavaImplementation.key(method.getName(), types);
+		}
+
+	}
+
+	/**
+	 * The handler of a {@code java:reify} / {@code java:proxy} object: a method a slot
+	 * declares calls its function -- a proxy's with the method's name first -- with the
+	 * arguments unmarshalled, and its value is marshalled to the method's return type (a
+	 * function is never made a proxy there); an abstract method no function implements
+	 * throws; a default method no slot overrides runs its body; {@code Object}'s three
+	 * keep their identity behavior. What a compiled program's generated class does,
+	 * method for method. What the function raises -- or the refusal of its value -- is
+	 * recorded on its way out to the Java caller ({@link #raised}), so the site whose
+	 * Java call it reaches throws it on unchanged.
+	 */
+	private static final class ImplementationHandler implements InvocationHandler {
+
+		private final Dispatch dispatch;
+
+		private final List<LispVal> functions;
+
+		private final Caller caller;
+
+		// Whether the call that made the object ends in :java-false: Java's false
+		// reaches the functions as |false|.
+		private final boolean javaFalse;
+
+		// Whether it ends in :octets: a byte[] reaches the functions as an octet vector
+		// over Java's own array, so what they store Java reads.
+		private final boolean octets;
+
+		// Whether compare is a Comparator's whose function may answer a boolean
+		// (compiler/JavaImplementation.readsComparison).
+		private final boolean comparison;
+
+		// The value the object stands for (a java:reify given :value), or null.
+		private final @Nullable StandIn standIn;
+
+		ImplementationHandler(Dispatch dispatch, List<LispVal> functions, Caller caller) {
+			this(dispatch, functions, caller, null);
+		}
+
+		ImplementationHandler(Dispatch dispatch, List<LispVal> functions, Caller caller, @Nullable StandIn standIn) {
+			this.dispatch = dispatch;
+			this.functions = List.copyOf(functions);
+			this.caller = caller;
+			this.standIn = standIn;
+			this.javaFalse = caller.markers().javaFalse();
+			this.octets = caller.markers().octets();
+			JavaImplementation marked = dispatch.implementation.withMarkers(caller.markers());
+			boolean reads = false;
+			for (JavaImplementation.Slot slot : marked.slots()) {
+				reads |= marked.readsComparison(slot);
+			}
+			this.comparison = reads;
+		}
+
+		@Override
+		public @Nullable Object invoke(Object p, Method method, @Nullable Object @Nullable [] methodArgs)
+				throws Throwable {
+			StandIn standing = this.standIn;
+			if (standing != null && method.getDeclaringClass() == RontoJavaValue.class) {
+				// runtime/RontoJavaValue: the value, and the class Java's messages name
+				return "value".equals(method.getName()) ? standing.value()
+						: standing.className() != null ? standing.className() : p.getClass().getName();
+			}
+			int index = this.dispatch.indexOf(method);
+			switch (index) {
+				case Dispatch.HASH_CODE -> {
+					return standing != null ? RontoJavaValue.identityHash((RontoJavaValue) p)
+							: System.identityHashCode(p);
+				}
+				case Dispatch.EQUALS -> {
+					Object other = methodArgs == null ? null : methodArgs[0];
+					return standing != null ? sameValue((RontoJavaValue) p, other) : p == other;
+				}
+				case Dispatch.TO_STRING -> {
+					return standing != null ? RontoJavaValue.identityText((RontoJavaValue) p)
+							: this.dispatch.implementation.defaultToString();
+				}
+				case Dispatch.DEFAULT -> {
+					return InvocationHandler.invokeDefault(p, method, methodArgs);
+				}
+				case JavaImplementation.NONE -> throw new UnsupportedOperationException(JavaImplementation
+					.noImplementation(this.dispatch.implementation.declaringName(Dispatch.keyOf(method)),
+							Dispatch.keyOf(method)));
+				default -> {
+				}
+			}
+			Object answer;
+			try {
+				answer = call(index, method, methodArgs);
+			}
+			catch (Throwable signal) {
+				throw raised(signal);
+			}
+			if (answer instanceof Refusal refusal) {
+				// A comparison's own failure -- AFunction.compare's cast to Number --
+				// like
+				// an abstract method's: not recorded, so the site wraps it as a member's.
+				throw refusal.failure();
+			}
+			return answer;
+		}
+
+		private @Nullable Object call(int index, Method method, @Nullable Object @Nullable [] methodArgs) {
+			boolean proxy = this.dispatch.implementation.proxy();
+			List<LispVal> callArgs = new ArrayList<>();
+			if (proxy) {
+				callArgs.add(new LispString(method.getName()));
+			}
+			if (methodArgs != null) {
+				for (Object a : methodArgs) {
+					callArgs.add(unmarshal(a, this.javaFalse, this.octets));
+				}
+			}
+			LispVal function = this.functions.get(index);
+			Class<?> ret = method.getReturnType();
+			boolean compares = this.comparison && ret == int.class && "compare".equals(method.getName())
+					&& method.getParameterCount() == 2;
+			LispVal result = callBack(this.caller, function, callArgs, ret, compares);
+			if (ret == void.class) {
+				return null;
+			}
+			if (compares) {
+				return comparison(function, callArgs, result);
+			}
+			@Nullable Object[] slot = new @Nullable Object[1];
+			ReflectiveJavaClasses.Type returnType = ReflectiveJavaClasses.of(ret);
+			if (marshal(result, returnType, this.caller, slot, 0, false) == NO_MATCH) {
+				// a java:reify names the method's interface, a java:proxy all of its own
+				String iface = proxy ? this.dispatch.ifaceName
+						: this.dispatch.implementation.declaringName(Dispatch.keyOf(method));
+				throw new LispEvalException(JavaImplementation.returnMismatchPrefix(proxy) + result.print()
+						+ JavaImplementation.returnMismatchSuffix(proxy, iface, method.getName(), returnType));
+			}
+			return slot[0];
+		}
+
+		// What a function implementing Comparator.compare answers, read as Clojure's
+		// AFunction.compare reads it (compiler/JavaImplementation.readsComparison): t is
+		// -1; |false| is 1 when the function answers true -- neither nil nor |false| --
+		// for the arguments swapped, else 0; a real number its intValue (an integer's low
+		// 32 bits, a float or ratio truncated). Nil is the Refusal of AFunction.compare's
+		// NullPointerException, anything else of its ClassCastException (compiled: _jcmp,
+		// the bridge's comparison).
+		private Object comparison(LispVal function, List<LispVal> args, LispVal answer) {
+			return switch (answer) {
+				case LispTrue ignored -> -1;
+				case LispSymbol symbol when LispNames.JAVA_FALSE.equals(symbol.name()) -> {
+					LispVal reversed = callBack(this.caller, function, List.of(args.get(1), args.get(0)), int.class,
+							true);
+					boolean truthy = !(reversed instanceof LispNil)
+							&& !(reversed instanceof LispSymbol s && LispNames.JAVA_FALSE.equals(s.name()));
+					yield truthy ? 1 : 0;
+				}
+				case LispInteger i -> (int) i.value();
+				case LispBigInteger b -> b.value().intValue();
+				case LispDouble d -> (int) d.value();
+				case am.ik.rontolisp.LispRatio r -> (int) r.doubleValue();
+				case LispNil ignored -> new Refusal(new NullPointerException(JavaImplementation.COMPARISON_OF_NIL));
+				default -> new Refusal(
+						new ClassCastException(JavaImplementation.comparisonCastFailure(javaClassName(answer))));
+			};
+		}
+
+	}
+
+	// RontoJavaValue.sameValue of an object compared with null (equals(null)), which the
+	// runtime interface cannot spell @Nullable.
+	@SuppressWarnings("NullAway")
+	private static boolean sameValue(RontoJavaValue self, @Nullable Object other) {
+		return RontoJavaValue.sameValue(self, other);
+	}
+
+	// A comparison's refusal (ImplementationHandler.comparison): the failure its
+	// comparator throws as its own, unrecorded.
+	private record Refusal(RuntimeException failure) {
+	}
+
+	// The class a comparison's refusal names for an answer: a host object's own, or that
+	// of the object a value of a receiver kind is in Java (a string's String), else its
+	// printed spelling (compiled: _jcmp, the bridge's comparison).
+	private static String javaClassName(LispVal answer) {
+		Object object = LispJavaObject.receiverObject(answer);
+		return object == null ? answer.print() : object.getClass().getName();
+	}
+
+	// The kind of a host object: a java:reify / java:proxy object's is its interface's
+	// implementation type, whatever Proxy class made it (as a compiled program's
+	// generated class is); a java:subclass object's its superclass and interfaces'
+	// subclass type, whatever generated subclass made it; any other object's its exact
+	// class.
+	private static JavaKind hostKind(Object ref) {
+		Class<?> type = ref.getClass();
+		if (Proxy.isProxyClass(type) && Proxy.getInvocationHandler(ref) instanceof ImplementationHandler handler) {
+			return handler.dispatch.kind;
+		}
+		JavaImplementationType subclass = SUBCLASS_KINDS.get(type);
+		if (subclass != null) {
+			return subclass;
+		}
+		return ReflectiveJavaClasses.of(type);
+	}
+
+	// Writes the Java value for `value` (assignable to `target`) into out[index] and
+	// returns its conversion cost, or NO_MATCH (writing nothing) if it cannot convert. A
+	// value with a kind is costed by kindCost -- the one cost table -- and converted by
+	// convert(); a list or vector element-wise, a hash table entry-wise. A function
+	// becomes a proxy of an interface: an argument's conversion.
+	private static int marshal(LispVal value, JavaType target, Caller caller, @Nullable Object[] out, int index) {
+		return marshal(value, target, caller, out, index, true);
+	}
+
+	// With proxies false, a function converts to nothing: the conversion of a value a
+	// java:reify / java:proxy function answers to Java, which -- as in Clojure -- never
+	// coerces a function (return a java:reify or java:proxy object instead). A compiled
+	// program's generated class converts its functions' values the same way
+	// (codegen.jvm.JvmJavaDirectSites#returnedConvert).
+	private static int marshal(LispVal value, JavaType target, Caller caller, @Nullable Object[] out, int index,
+			boolean proxies) {
+		JavaKind kind = kindOf(value);
+		if (kind != null) {
+			if (!proxies && kind == JavaKind.Lisp.FUNCTION) {
+				return NO_MATCH;
+			}
+			int cost = proxies ? JavaOverloads.kindCost(kind, target, CLASSES)
+					: JavaOverloads.returnedCost(kind, target, CLASSES);
+			if (cost != NO_MATCH) {
+				out[index] = convert(value, classOf(target), caller);
+			}
+			return cost;
+		}
+		switch (value) {
+			case LispJavaObject obj when obj.ref() instanceof RontoJavaListView view -> {
+				return marshalListView(view, target, caller, out, index, proxies);
+			}
+			case LispJavaObject obj when obj.ref() instanceof RontoJavaBytesView view -> {
+				// the byte[] it is to Java, wherever one fits: the octets' own storage,
+				// so what Java stores the program reads (compiled alike)
+				int cost = JavaOverloads.bytesViewCost(target);
+				if (cost != NO_MATCH) {
+					out[index] = view.bytes();
+				}
+				return cost;
+			}
+			case LispHashTable table -> {
+				List<LispVal> entries = new ArrayList<>(2 * table.count());
+				for (LispHashTable.Entry entry : table.entries()) {
+					entries.add(entry.key());
+					entries.add(entry.value());
+				}
+				return marshalTable(entries, target, caller, out, index, proxies);
+			}
+			default -> {
+				List<LispVal> elements = sequenceElements(value);
+				return elements != null
+						? marshalSequence(elements, target, caller, out, index, proxies, javaComponentOf(value))
+						: NO_MATCH;
+			}
+		}
+	}
+
+	// The Java value of a value with a kind, for a target kindCost accepted: delegates
+	// scalar conversions to JavaOverloads and receiver conversion to LispJavaObject.
+	private static @Nullable Object convert(LispVal value, Class<?> target, Caller caller) {
+		return switch (value) {
+			case LispNil ignored -> target == boolean.class ? Boolean.FALSE : null;
+			case LispInteger i -> JavaOverloads.convertLong(i.value(), target);
+			case LispDouble d -> JavaOverloads.convertDouble(d.value(), target);
+			case LispString s -> JavaOverloads.convertString(s.value(), target);
+			case LispChar c -> JavaOverloads.convertChar(c.codePoint(), target);
+			case LispLambda lambda -> ((LispJavaObject) implementation(target, lambda, caller)).ref();
+			case LispFunction function -> ((LispJavaObject) implementation(target, function, caller)).ref();
+			default -> java.util.Objects.requireNonNull(LispJavaObject.receiverObject(value));
+		};
+	}
+
+	// What a failed resolution throws: the oracle's refusal -- a real
+	// IllegalArgumentException in its words -- carried by a java:java-exception,
+	// as what a member threw is. A Clojure catch binds the exception by its class.
+	private static LispEvalException noMatch(String what, String oracleWords) {
+		return fail(what, new IllegalArgumentException(oracleWords));
+	}
+
+	// What a failed Java call throws when the failure is already a throwable (a
+	// coercion's, a resolution's): what a function called back from Java raised on
+	// to the Lisp code that made the call, as it is; anything else the error
+	// calling the member, a java:java-exception carrying it.
+	private static LispEvalException fail(String what, Throwable cause) {
+		if (passedOn(cause)) {
+			if (cause instanceof RuntimeException signal) {
+				throw signal;
+			}
+			if (cause instanceof Error error) {
+				throw error;
+			}
+		}
+		LispEvalException failure = LispEvalException.ofClass(ClosRegistry.JAVA_EXCEPTION_CLASS_NAME,
+				"error " + what + ": " + cause);
+		failure.initCause(cause);
+		return failure;
+	}
+
+	private static ClassCastException castFailure(String from, String to) {
+		return JavaOverloads.castFailure(from, to);
+	}
+
+	private static String castTargetName(Class<?> target) {
+		return JavaOverloads.checkedCastTargetName(target.getName());
+	}
+
+	// The Java value of a value for the target of a site resolved before it ran: the
+	// oracle's checked casts (JavaOverloads.convertChecked*). A sequence converts
+	// element-wise as marshal() converts it; a ratio answers its double for a floating
+	// target and truncates for an integral one, like the oracle's casts.
+	private static @Nullable Object convertChecked(LispVal value, Class<?> target, Caller caller) {
+		return switch (value) {
+			case LispNil ignored -> JavaOverloads.convertCheckedNil(target);
+			case LispTrue ignored -> JavaOverloads.convertCheckedBoolean(Boolean.TRUE, target);
+			// |false|, the one symbol with a kind; any other symbol falls to the
+			// default arm (no Java object of its own, like a ratio)
+			case LispSymbol symbol when LispNames.JAVA_FALSE.equals(symbol.name()) ->
+				JavaOverloads.convertCheckedBoolean(Boolean.FALSE, target);
+			case LispInteger i -> JavaOverloads.convertCheckedLong(i.value(), target);
+			case LispBigInteger b -> JavaOverloads.convertCheckedBigInteger(b.value(), target);
+			case LispDouble d -> JavaOverloads.convertCheckedDouble(d.value(), target);
+			case LispString string -> JavaOverloads.convertCheckedString(string.value(), target);
+			case LispChar c -> JavaOverloads.convertCheckedChar(c.codePoint(), target);
+			case LispRatio ratio -> convertCheckedRatio(ratio, target);
+			case LispJavaObject object -> {
+				Object ref = object.ref();
+				if (ref instanceof RontoJavaListView view) {
+					JavaType viewTarget = ReflectiveJavaClasses.of(target);
+					@Nullable Object[] slot = new @Nullable Object[1];
+					if (marshalListView(view, viewTarget, caller, slot, 0, true) == NO_MATCH) {
+						throw castFailure(ref.getClass().getName(), castTargetName(target));
+					}
+					yield slot[0];
+				}
+				if (ref instanceof RontoJavaBytesView view) {
+					if (JavaOverloads.bytesViewCost(ReflectiveJavaClasses.of(target)) == NO_MATCH) {
+						throw castFailure(ref.getClass().getName(), castTargetName(target));
+					}
+					yield view.bytes();
+				}
+				yield JavaOverloads.convertCheckedHost(ref, target);
+			}
+			case LispLambda ignored -> convertCheckedFunction(value, target, caller);
+			case LispFunction ignored -> convertCheckedFunction(value, target, caller);
+			default -> {
+				@Nullable Object[] slot = new @Nullable Object[1];
+				if (marshal(value, ReflectiveJavaClasses.of(target), caller, slot, 0) == NO_MATCH) {
+					throw castFailure(value.getClass().getName(), castTargetName(target));
+				}
+				yield slot[0];
+			}
+		};
+	}
+
+	// A ratio answers its double for a floating target and truncates toward zero
+	// for an integral one, like the oracle's casts of one.
+	private static Object convertCheckedRatio(LispRatio ratio, Class<?> target) {
+		if (target == double.class || target == Double.class) {
+			return ratio.doubleValue();
+		}
+		if (target == float.class || target == Float.class) {
+			double d = ratio.doubleValue();
+			if (d < -Float.MAX_VALUE || d > Float.MAX_VALUE) {
+				throw JavaOverloads.outOfRange("float", ratio.print());
+			}
+			return (float) d;
+		}
+		if (target == long.class || target == int.class || target == short.class || target == byte.class) {
+			return JavaOverloads.convertCheckedBigInteger(ratio.numerator().divide(ratio.denominator()), target);
+		}
+		throw castFailure(ratio.getClass().getName(), castTargetName(target));
+	}
+
+	private static Object convertCheckedFunction(LispVal function, Class<?> target, Caller caller) {
+		if (target.isInterface() || target == Object.class) {
+			return ((LispJavaObject) implementation(target, function, caller)).ref();
+		}
+		throw castFailure(JavaImplementation.FUNCTION_CLASS, castTargetName(target));
+	}
+
+	// A proper list (or rank-1 vector) converts to a Java array (element-wise to the
+	// component type, recursively) or, for any List-compatible reference target, to a
+	// java.util.List of boxed elements. The per-element costs count toward the total so
+	// string elements still prefer a String[] parameter over Object[].
+	private static int marshalSequence(List<LispVal> elements, JavaType target, Caller caller, @Nullable Object[] out,
+			int index, boolean proxies, @Nullable String javaComponent) {
+		@Nullable Object[] slot = new @Nullable Object[1];
+		JavaType component = target.componentType();
+		if (component != null) {
+			// A value that IS a Java array (a Clojure typed array, or one a java: call
+			// answered) crosses only where its array type fits: Object[] to Object[] and
+			// to
+			// a supertype array, Object[] never to long[]. Without the stamp the element
+			// costs decide, which is what a plain list or vector does.
+			int componentCost = arrayComponentCost(javaComponent, target);
+			if (componentCost == NO_MATCH) {
+				return NO_MATCH;
+			}
+			Object array = Array.newInstance(classOf(component), elements.size());
+			int total = javaComponent != null ? componentCost : JavaOverloads.COST_CONVERT;
+			for (int i = 0; i < elements.size(); i++) {
+				int cost = marshal(elements.get(i), component, caller, slot, 0, proxies);
+				if (cost == NO_MATCH) {
+					return NO_MATCH;
+				}
+				total += cost;
+				Array.set(array, i, slot[0]);
+			}
+			out[index] = array;
+			return total;
+		}
+		if (classOf(target).isAssignableFrom(ArrayList.class)) {
+			List<@Nullable Object> list = new ArrayList<>(elements.size());
+			int total = JavaOverloads.COST_BOXED;
+			JavaType object = ReflectiveJavaClasses.of(Object.class);
+			for (LispVal element : elements) {
+				int cost = marshal(element, object, caller, slot, 0, proxies);
+				if (cost == NO_MATCH) {
+					return NO_MATCH;
+				}
+				total += cost;
+				list.add(slot[0]);
+			}
+			out[index] = list;
+			return total;
+		}
+		return NO_MATCH;
+	}
+
+	// A java:view List converts, for a target it is an instance of, to itself -- a host
+	// object of its class -- and, where an array is expected, to an array of its items,
+	// at
+	// COST_VIEW_ARRAY plus their costs as the component: after every way to pass it
+	// whole,
+	// its varargs packing included (compiled: JvmJavaDirectSites' view arms, the bridge's
+	// marshalListView).
+	private static int marshalListView(RontoJavaListView view, JavaType target, Caller caller, @Nullable Object[] out,
+			int index, boolean proxies) {
+		if (!target.isPrimitive() && classOf(target).isInstance(view)) {
+			out[index] = view;
+			return classOf(target) == view.getClass() ? JavaOverloads.COST_EXACT : JavaOverloads.COST_WIDEN;
+		}
+		List<LispVal> items = target.componentType() == null ? null : sequenceElements((LispVal) view.items());
+		if (items == null) {
+			return NO_MATCH;
+		}
+		int cost = marshalSequence(items, target, caller, out, index, proxies,
+				view.value() instanceof LispVal inner ? javaComponentOf(inner) : null);
+		return cost == NO_MATCH ? NO_MATCH : cost - JavaOverloads.COST_CONVERT + JavaOverloads.COST_VIEW_ARRAY;
+	}
+
+	// A hash table converts, for any target a java.util.LinkedHashMap is assignable to,
+	// to a fresh one of its entries in insertion order, each key and value marshalled as
+	// an Object -- as a sequence converts to a java.util.List. ENTRIES alternates keys
+	// and values (compiled: JvmJavaDirectSites' _jtab, the bridge's tableEntries).
+	private static int marshalTable(List<LispVal> entries, JavaType target, Caller caller, @Nullable Object[] out,
+			int index, boolean proxies) {
+		if (target.isPrimitive() || !classOf(target).isAssignableFrom(LinkedHashMap.class)) {
+			return NO_MATCH;
+		}
+		@Nullable Object[] slot = new @Nullable Object[2];
+		JavaType object = ReflectiveJavaClasses.of(Object.class);
+		Map<@Nullable Object, @Nullable Object> map = new LinkedHashMap<>();
+		int total = JavaOverloads.COST_BOXED;
+		for (int i = 0; i < entries.size(); i += 2) {
+			int keyCost = marshal(entries.get(i), object, caller, slot, 0, proxies);
+			if (keyCost == NO_MATCH) {
+				return NO_MATCH;
+			}
+			int valueCost = marshal(entries.get(i + 1), object, caller, slot, 1, proxies);
+			if (valueCost == NO_MATCH) {
+				return NO_MATCH;
+			}
+			total += keyCost + valueCost;
+			map.put(slot[0], slot[1]);
+		}
+		out[index] = map;
+		return total;
+	}
+
+	private static @Nullable List<LispVal> properListElements(LispCons cons) {
+		List<LispVal> result = new ArrayList<>();
+		LispVal current = cons;
+		while (current instanceof LispCons c) {
+			result.add(c.car());
+			current = c.cdr();
+		}
+		return current instanceof LispNil ? result : null;
+	}
+
+	static LispVal unmarshal(@Nullable Object o) {
+		return unmarshal(o, false, false);
+	}
+
+	// What a call ending in the caller's markers answers for a Java value: Java's false
+	// as |false| after :java-false, nil otherwise; a byte[] an (unsigned-byte 8) vector
+	// after :octets, a list otherwise.
+	private static LispVal unmarshal(@Nullable Object o, Caller caller) {
+		JavaMarkers markers = caller.markers();
+		return unmarshal(o, markers.javaFalse(), markers.octets());
+	}
+
+	/**
+	 * {@code (java:handle value text hash order class)}: a Java object standing for the
+	 * value ({@link RontoJavaHandle}). Java sees the text as its {@code toString} (nil:
+	 * {@code Object}'s spelling, the class and the hex hash); handles of one class are
+	 * equal by their texts, their {@code hashCode} the hash's low 32 bits (the text's own
+	 * without one) -- or, with a nil hash, equal only to a handle of the very same value,
+	 * whose identity hash is the hash. A handle orders one of its class by the order text
+	 * (the text without one), or answers a function of its value and the object compared
+	 * with -- its answer's sign, or the {@code ClassCastException} of a cast to the class
+	 * when it answers no real -- and with a nil order no handle at all. A handle standing
+	 * for a real number is a {@code Number} of it ({@link RontoJavaNumberHandle}).
+	 * Wherever Java hands one back, {@code java:} answers the value. A function followed
+	 * by a call's markers, {@code :functional} and {@code :java-false} among them, is the
+	 * object the function is at such a call (compiler/JavaImplementations
+	 * .handleFunctionMarkers, {@link #functionObject}).
+	 * @param args the value, the text, and optionally the hash, the order and the class;
+	 * or a function and markers
+	 * @param caller what calls an order function, or the function
+	 * @return the handle, a host object
+	 */
+	static LispVal handle(List<LispVal> args, Caller caller) {
+		if (!args.isEmpty() && JavaImplementations.handleFunctionMarkers(args, 0) != null) {
+			if (!isFunction(args.get(0))) {
+				throw new LispEvalException(JavaImplementations.HANDLE_FUNCTION_USAGE + ", got " + args.get(0).print());
+			}
+			return functionObject(args.get(0), withMarkers(caller, args, 1));
+		}
+		if (args.size() < 2 || args.size() > 5) {
+			throw new LispEvalException(HANDLE_USAGE);
+		}
+		LispVal value = args.get(0);
+		String text = args.get(1) instanceof LispString given ? given.value() : null;
+		if (text == null && !(args.get(1) instanceof LispNil)) {
+			throw handleUsage(args.get(1));
+		}
+		boolean identity = args.size() > 2 && args.get(2) instanceof LispNil;
+		int hash = switch (args.size() > 2 ? args.get(2) : LispNil.INSTANCE) {
+			case LispInteger i -> (int) i.value();
+			case LispBigInteger b -> b.value().intValue();
+			case LispNil ignored when identity -> 0;
+			case LispNil ignored when text != null -> text.hashCode();
+			default -> throw handleUsage(args.size() > 2 ? args.get(2) : args.get(1));
+		};
+		if (text == null && !identity) {
+			// a handle with no text is equal only to a handle of its value
+			throw handleUsage(args.get(1));
+		}
+		int orderMode = text == null ? RontoJavaHandle.ORDER_NONE : RontoJavaHandle.ORDER_TEXT;
+		Object order = text;
+		if (args.size() > 3) {
+			switch (args.get(3)) {
+				case LispString given -> {
+					orderMode = RontoJavaHandle.ORDER_TEXT;
+					order = given.value();
+				}
+				case LispNil ignored -> {
+					orderMode = RontoJavaHandle.ORDER_NONE;
+					order = null;
+				}
+				case LispVal function when isFunction(function) -> {
+					orderMode = RontoJavaHandle.ORDER_FUNCTION;
+					order = function;
+				}
+				default -> throw handleUsage(args.get(3));
+			}
+		}
+		String className = args.size() > 4 ? className(args.get(4), JavaInterop::handleUsage) : null;
+		RontoJavaHandle handle = newHandle(value, text, identity, hash, orderMode, order, className,
+				orderMode == RontoJavaHandle.ORDER_FUNCTION ? new Calls(caller) : null);
+		return new LispJavaObject(switch (value) {
+			case LispInteger i -> new RontoJavaNumberHandle(handle, i.value(), i.value(), (int) i.value());
+			case LispBigInteger b ->
+				new RontoJavaNumberHandle(handle, b.value().doubleValue(), b.value().longValue(), b.value().intValue());
+			case LispDouble d -> new RontoJavaNumberHandle(handle, d.value(), (long) d.value(), (int) d.value());
+			case am.ik.rontolisp.LispRatio r -> {
+				// Clojure's Ratio: the DECIMAL64 quotient's double, and its int the
+				// intValue; the truncated quotient's low 64 bits the longValue.
+				double quotient = new java.math.BigDecimal(r.numerator())
+					.divide(new java.math.BigDecimal(r.denominator()), java.math.MathContext.DECIMAL64)
+					.doubleValue();
+				yield new RontoJavaNumberHandle(handle, quotient, r.numerator().divide(r.denominator()).longValue(),
+						(int) quotient);
+			}
+			default -> handle;
+		});
+	}
+
+	// The runtime class cannot spell @Nullable (it imports nothing but the JDK): null is
+	// its "none" for the text, the order, the class and the calls.
+	@SuppressWarnings("NullAway")
+	private static RontoJavaHandle newHandle(LispVal value, @Nullable String text, boolean identity, int hash,
+			int orderMode, @Nullable Object order, @Nullable String className, @Nullable RontoJavaCalls calls) {
+		return new RontoJavaHandle(value, text, identity, hash, orderMode, order, className, calls);
+	}
+
+	// The error of a malformed java:handle call (compiler/JavaImplementations; the
+	// compiled program's _jhandle checks alike).
+	static final String HANDLE_USAGE = JavaImplementations.HANDLE_USAGE;
+
+	private static LispEvalException handleUsage(LispVal got) {
+		return new LispEvalException(HANDLE_USAGE + ", got " + got.print());
+	}
+
+	// A class name argument: a string's text, or null for nil; anything else refused.
+	private static @Nullable String className(LispVal value,
+			java.util.function.Function<LispVal, LispEvalException> refusal) {
+		if (value instanceof LispString name) {
+			return name.value();
+		}
+		if (value instanceof LispNil) {
+			return null;
+		}
+		throw refusal.apply(value);
+	}
+
+	private static boolean isFunction(LispVal value) {
+		return value instanceof LispLambda || value instanceof LispFunction;
+	}
+
+	/**
+	 * {@code (java:view value items shape printer order class)}: a read-only Java
+	 * collection standing for the value, its elements the items converted as
+	 * {@code Object} arguments, once, here. {@code :list} and {@code :vector} make a
+	 * {@code java.util.List} of a sequence's elements (a vector's {@code RandomAccess}
+	 * and {@code Comparable} by the order), {@code :set} a {@code java.util.Set} of them,
+	 * {@code :map} a {@code java.util.Map} of a hash table's entries or a plist's pairs.
+	 * Its {@code toString} is the printer's answer for the value (the Java spelling
+	 * without one); every write is an {@code UnsupportedOperationException}; wherever
+	 * Java hands it back, {@code java:} answers the value. As an argument it is a host
+	 * object of its class, and a {@code List} also an array of its items where nothing
+	 * takes it whole ({@link #marshalListView}). {@code :bytes} over an
+	 * {@code (unsigned-byte 8)} vector makes no collection: Java is handed the vector's
+	 * own {@code byte[]} wherever one fits ({@code runtime/RontoJavaBytesView}), so what
+	 * Java stores into it the program reads.
+	 * @param args the value, the items, the shape, and optionally the printer, the order
+	 * and the class
+	 * @param caller what calls the printer and the order
+	 * @return the view, a host object
+	 */
+	static LispVal view(List<LispVal> args, Caller caller) {
+		if (args.size() < 3 || args.size() > 6) {
+			throw new LispEvalException(VIEW_USAGE);
+		}
+		LispVal value = args.get(0);
+		LispVal items = args.get(1);
+		String shape = args.get(2) instanceof LispSymbol keyword ? keyword.name() : "";
+		boolean map = LispNames.JAVA_VIEW_MAP.equals(shape);
+		boolean vector = LispNames.JAVA_VIEW_VECTOR.equals(shape);
+		boolean set = LispNames.JAVA_VIEW_SET.equals(shape);
+		boolean bytes = LispNames.JAVA_VIEW_BYTES.equals(shape);
+		if (!map && !vector && !set && !bytes && !LispNames.JAVA_VIEW_LIST.equals(shape)) {
+			throw viewUsage(args.get(2));
+		}
+		LispVal printer = args.size() > 3 ? args.get(3) : LispNil.INSTANCE;
+		if (!(printer instanceof LispNil) && !isFunction(printer)) {
+			throw viewUsage(printer);
+		}
+		LispVal order = args.size() > 4 ? args.get(4) : LispNil.INSTANCE;
+		if (!(order instanceof LispNil) && !(vector && isFunction(order))) {
+			throw viewUsage(order);
+		}
+		String className = args.size() > 5 ? className(args.get(5), JavaInterop::viewUsage) : null;
+		if (bytes) {
+			// the octets themselves: Java is handed their storage
+			if (!(items instanceof LispIntVector octets) || octets.width() != 8) {
+				throw viewUsage(items);
+			}
+			shareOctets(octets);
+			return new LispJavaObject(new RontoJavaBytesView(value, octets.octets()));
+		}
+		List<LispVal> members = map ? viewEntries(items) : sequenceElements(items);
+		if (members == null) {
+			throw viewUsage(items);
+		}
+		@Nullable Object[] elements = new @Nullable Object[members.size()];
+		@Nullable Object[] slot = new @Nullable Object[1];
+		JavaType object = ReflectiveJavaClasses.of(Object.class);
+		for (int i = 0; i < elements.length; i++) {
+			if (marshal(members.get(i), object, caller, slot, 0) == NO_MATCH) {
+				throw new LispEvalException(VIEW_NO_VALUE + members.get(i).print());
+			}
+			elements[i] = slot[0];
+		}
+		Object shown = printer instanceof LispNil ? null : printer;
+		Object ordered = order instanceof LispNil ? null : order;
+		RontoJavaCalls calls = shown != null || ordered != null ? new Calls(caller) : null;
+		return new LispJavaObject(newView(shape, value, items, elements, shown, ordered, className, calls));
+	}
+
+	// The view of the shape (java:view validated it). The runtime classes cannot spell
+	// @Nullable (they import nothing but the JDK): null is their "none" for the printer,
+	// the order, the class and the calls, and an element may be Java's null.
+	@SuppressWarnings("NullAway")
+	private static Object newView(String shape, LispVal value, LispVal items, @Nullable Object[] elements,
+			@Nullable Object printer, @Nullable Object order, @Nullable String className,
+			@Nullable RontoJavaCalls calls) {
+		return switch (shape) {
+			case LispNames.JAVA_VIEW_MAP -> new RontoJavaMapView(value, elements, printer, className, calls);
+			case LispNames.JAVA_VIEW_SET -> new RontoJavaSetView(value, elements, printer, className, calls);
+			case LispNames.JAVA_VIEW_VECTOR ->
+				new RontoJavaVectorView(value, items, elements, printer, order, className, calls);
+			default -> new RontoJavaListView(value, items, elements, printer, className, calls);
+		};
+	}
+
+	// The errors of a malformed java:view call and of an item that converts to no Object
+	// (compiler/JavaImplementations; the compiled program's _jview checks alike).
+	static final String VIEW_USAGE = JavaImplementations.VIEW_USAGE;
+
+	static final String VIEW_NO_VALUE = JavaImplementations.VIEW_NO_VALUE;
+
+	private static LispEvalException viewUsage(LispVal got) {
+		return new LispEvalException(VIEW_USAGE + ", got " + got.print());
+	}
+
+	// The elements of a sequence as marshal reads one -- nil, a proper list, a rank-1
+	// vector (its fill pointer bounding it), a specialized one -- or null for anything
+	// else.
+	private static @Nullable List<LispVal> sequenceElements(LispVal value) {
+		switch (value) {
+			case LispNil ignored -> {
+				return List.of();
+			}
+			case LispCons cons -> {
+				return properListElements(cons);
+			}
+			case LispArray array -> {
+				if (array.dimensions().length != 1) {
+					return null;
+				}
+				int count = array.effectiveLength();
+				List<LispVal> elements = new ArrayList<>(count);
+				for (int i = 0; i < count; i++) {
+					LispVal element = array.readFlat(i);
+					elements.add(element == null ? LispNil.INSTANCE : element);
+				}
+				return elements;
+			}
+			case LispFloatArray array -> {
+				if (array.dims().length != 1) {
+					return null;
+				}
+				List<LispVal> elements = new ArrayList<>(array.dims()[0]);
+				for (int i = 0; i < array.dims()[0]; i++) {
+					elements.add(new LispDouble(array.elementAt(i)));
+				}
+				return elements;
+			}
+			case LispIntVector vector -> {
+				List<LispVal> elements = new ArrayList<>(vector.length());
+				for (int i = 0; i < vector.length(); i++) {
+					elements.add(new LispInteger(vector.elementAt(i)));
+				}
+				return elements;
+			}
+			default -> {
+				return null;
+			}
+		}
+	}
+
+	// A map view's keys and values, alternating: a hash table's live entries in order,
+	// or a plist's pairs; null for anything else.
+	private static @Nullable List<LispVal> viewEntries(LispVal value) {
+		if (value instanceof LispHashTable table) {
+			List<LispVal> entries = new ArrayList<>(2 * table.count());
+			for (LispHashTable.Entry entry : table.entries()) {
+				entries.add(entry.key());
+				entries.add(entry.value());
+			}
+			return entries;
+		}
+		if (!(value instanceof LispNil) && !(value instanceof LispCons)) {
+			return null;
+		}
+		List<LispVal> plist = sequenceElements(value);
+		return plist != null && plist.size() % 2 == 0 ? plist : null;
+	}
+
+	/**
+	 * How a handle or a view the interpreter made calls back into the program: through
+	 * the evaluator. What the function raises leaves recorded ({@link #raised}), as a
+	 * {@code java:reify} callback's does.
+	 */
+	private record Calls(Caller caller) implements RontoJavaCalls {
+
+		@Override
+		public String text(Object printer, Object value) {
+			try {
+				LispVal answer = this.caller.call((LispVal) printer, List.of((LispVal) value));
+				return answer instanceof LispString text ? text.value() : answer.print();
+			}
+			catch (Throwable signal) {
+				throw unchecked(raised(signal));
+			}
+		}
+
+		// Null is the refusal RontoJavaCalls.order answers, which the runtime interface
+		// cannot spell @Nullable.
+		@Override
+		@SuppressWarnings("NullAway")
+		public @Nullable Integer order(Object order, Object value, Object other) {
+			try {
+				LispVal answer = this.caller.call((LispVal) order, List.of((LispVal) value, unmarshal(other)));
+				return switch (answer) {
+					case LispInteger i -> Long.signum(i.value());
+					case LispBigInteger b -> b.value().signum();
+					case LispDouble d -> (int) Math.signum(d.value());
+					case am.ik.rontolisp.LispRatio r -> r.numerator().signum();
+					default -> null;
+				};
+			}
+			catch (Throwable signal) {
+				throw unchecked(raised(signal));
+			}
+		}
+
+	}
+
+	// A throwable thrown on through a method that declares none.
+	private static RuntimeException unchecked(Throwable throwable) {
+		if (throwable instanceof RuntimeException exception) {
+			return exception;
+		}
+		if (throwable instanceof Error error) {
+			throw error;
+		}
+		return new RuntimeException(throwable);
+	}
+
+	// The Lisp value of a Java value: Java's false is nil, or |false| (javaFalse, a call
+	// ending in :java-false) -- an array's elements alike; a handle or a view is the
+	// value it stands for (compiled: _junm / _junf).
+	static LispVal unmarshal(@Nullable Object o, boolean javaFalse) {
+		return unmarshal(o, javaFalse, false);
+	}
+
+	// unmarshal with octets (a call ending in :octets): a byte[] -- the value or an
+	// element of an array -- is an (unsigned-byte 8) vector over the very array, which
+	// the program and Java then share (compiled: the array itself, _juno / _jufo).
+	static LispVal unmarshal(@Nullable Object o, boolean javaFalse, boolean octets) {
+		return switch (o) {
+			case null -> LispNil.INSTANCE;
+			case RontoJavaValue handle -> (LispVal) handle.value();
+			case Boolean b -> b ? LispTrue.INSTANCE : javaFalse ? JAVA_FALSE : LispNil.INSTANCE;
+			case Integer i -> new LispInteger(i);
+			case Long l -> new LispInteger(l);
+			case Short s -> new LispInteger(s);
+			case Byte b -> new LispInteger(b);
+			case Double d -> new LispDouble(d);
+			case Float f -> new LispDouble(f);
+			// A Java BigInteger is a Lisp integer (a fixnum when it fits), as compiled:
+			// the
+			// compiled representation cannot tell it from a bignum.
+			case BigInteger b -> b.bitLength() < 64 ? new LispInteger(b.longValue()) : new LispBigInteger(b);
+			case Character c -> new LispChar(c);
+			case String s -> new LispString(s);
+			case byte[] bytes when octets -> octetVector(bytes);
+			// A byte[] without :octets keeps the list of signed bytes a java: call has
+			// always answered (the byte-array family's own representation is the
+			// :octets vector); every other array answers the Clojure typed array it
+			// stands for -- a rank-1 vector of its unmarshalled elements, stamped with
+			// its component so a later java: call passes the array type it really is
+			// (clojure/ClojureInteropLowering; %clojure-object-array and friends).
+			case byte[] bytes -> arrayToList(bytes, javaFalse, octets);
+			default -> o.getClass().isArray() ? arrayToVector(o, javaFalse, octets) : new LispJavaObject(o);
+		};
+	}
+
+	// The Clojure typed array a Java array answers as: a rank-1 general array of its
+	// unmarshalled elements, stamped with the component type's Java name
+	// (%array-java-component). The oracle's Object[]/int[]/... is a vector here, as
+	// object-array's is; the stamp is what makes the round trip pass Object[] where
+	// Object[] is expected instead of the primitive array the element costs would
+	// choose.
+	private static LispArray arrayToVector(Object array, boolean javaFalse, boolean octets) {
+		int length = Array.getLength(array);
+		LispVal[] data = new LispVal[length];
+		for (int i = 0; i < length; i++) {
+			data[i] = unmarshal(Array.get(array, i), javaFalse, octets);
+		}
+		LispArray vector = new LispArray(new int[] { length }, data);
+		vector.setJavaComponent(array.getClass().getComponentType().getName());
+		return vector;
+	}
+
+	// The Java array component a Lisp value stands for: its own stamp, or the stamp of
+	// the vector a Clojure front end java:view was made over (every argument of a Clojure
+	// java: call crosses as such a view). Null for a plain list or vector.
+	private static @Nullable String javaComponentOf(LispVal value) {
+		return switch (value) {
+			case LispArray array -> array.javaComponent();
+			case LispJavaObject obj when obj.ref() instanceof RontoJavaListView view
+					&& view.value() instanceof LispVal inner ->
+				javaComponentOf(inner);
+			default -> null;
+		};
+	}
+
+	// What an array target costs a value stamped with the Java component `javaComponent`:
+	// exact for the same array type, WIDEN where an Object[] is expected (an array of any
+	// reference component fits it), NO_MATCH for anything else -- an Object[] never
+	// crosses as long[]. A value with no stamp costs COST_CONVERT, the element-wise
+	// conversion a plain list or vector has always had (the element costs are added by
+	// the
+	// caller). The component names are compared, not the classes: the direct-site cost
+	// functions compare the same names in bytecode, so the four backends choose alike.
+	private static int arrayComponentCost(@Nullable String javaComponent, JavaType target) {
+		if (javaComponent == null || !target.isArray()) {
+			return JavaOverloads.COST_CONVERT;
+		}
+		JavaType component = target.componentType();
+		if (component == null) {
+			return JavaOverloads.COST_CONVERT;
+		}
+		String name = component.name();
+		if (javaComponent.equals(name)) {
+			return JavaOverloads.COST_EXACT;
+		}
+		return "java.lang.Object".equals(name) && javaComponent.indexOf('.') >= 0 ? JavaOverloads.COST_WIDEN : NO_MATCH;
+	}
+
+	// After a call, copies what Java stored into an array argument back into the Clojure
+	// typed array it was marshalled from: the copy the crossing makes is written back
+	// when
+	// the member (or a constructor) returns or throws, so the program reads what Java
+	// wrote -- the round trip the todo's object-array case needs. Only a value stamped
+	// with a Java component writes back; a plain list or vector has no identity to keep.
+	private static void writeBackArrays(List<LispVal> args, JavaOverloads.Overload overload, @Nullable Object[] handed,
+			Caller caller) {
+		if (handed == null) {
+			return;
+		}
+		List<? extends JavaType> params = overload.executable().parameterTypes();
+		int fixed = overload.packed() ? params.size() - 1 : params.size();
+		for (int i = 0; i < fixed && i < args.size(); i++) {
+			writeBackArray(args.get(i), params.get(i), handed[i], caller);
+		}
+		if (overload.packed() && !params.isEmpty()) {
+			JavaType component = params.get(fixed).componentType();
+			Object packed = handed[fixed];
+			if (component != null && packed != null) {
+				for (int i = fixed; i < args.size(); i++) {
+					writeBackArray(args.get(i), component, Array.get(packed, i - fixed), caller);
+				}
+			}
+		}
+	}
+
+	private static void writeBackArray(LispVal value, JavaType target, @Nullable Object javaArray, Caller caller) {
+		if (javaArray == null || !target.isArray()) {
+			return;
+		}
+		LispArray array = stampedArray(value);
+		if (array == null || array.javaComponent() == null || array.dimensions().length != 1) {
+			return;
+		}
+		if (arrayComponentCost(array.javaComponent(), target) == NO_MATCH) {
+			return;
+		}
+		JavaMarkers markers = caller.markers();
+		int length = Math.min(Array.getLength(javaArray), array.dimensions()[0]);
+		for (int i = 0; i < length; i++) {
+			array.writeFlat(i, unmarshal(Array.get(javaArray, i), markers.javaFalse(), markers.octets()));
+		}
+	}
+
+	// The typed array a value is, through the Clojure front end's java:view of one, or
+	// null for a value that is no stamped array.
+	private static @Nullable LispArray stampedArray(LispVal value) {
+		return switch (value) {
+			case LispArray array -> array;
+			case LispJavaObject obj when obj.ref() instanceof RontoJavaListView view
+					&& view.value() instanceof LispArray inner ->
+				inner;
+			default -> null;
+		};
+	}
+
+	// The vector each byte[] the program and Java share is: compiled, an octet vector IS
+	// its byte[], so two answers of one array are eq, and so are a vector a :bytes view
+	// handed Java and the array coming back; here a vector is a wrapper, kept one per
+	// array. Weak both ways: the wrapper holds the array, so the entry holds the wrapper
+	// only weakly, and an array nothing holds takes its entry with it.
+	private static final Map<byte[], WeakReference<LispIntVector>> OCTET_VECTORS = new WeakHashMap<>();
+
+	// The vector over these octets: the one already shared, else a new one, kept.
+	private static LispIntVector octetVector(byte[] octets) {
+		synchronized (OCTET_VECTORS) {
+			WeakReference<LispIntVector> kept = OCTET_VECTORS.get(octets);
+			LispIntVector vector = kept != null ? kept.get() : null;
+			if (vector == null) {
+				vector = LispIntVector.wrapOctets(octets);
+				OCTET_VECTORS.put(octets, new WeakReference<>(vector));
+			}
+			return vector;
+		}
+	}
+
+	// A vector whose octets a :bytes view hands Java: the one their array comes back as.
+	private static void shareOctets(LispIntVector vector) {
+		synchronized (OCTET_VECTORS) {
+			WeakReference<LispIntVector> kept = OCTET_VECTORS.get(vector.octets());
+			if (kept == null || kept.get() == null) {
+				OCTET_VECTORS.put(vector.octets(), new WeakReference<>(vector));
+			}
+		}
+	}
+
+	// The symbol a call ending in :java-false answers Java's false as.
+	private static final LispSymbol JAVA_FALSE = new LispSymbol(LispNames.JAVA_FALSE);
+
+	// A Java array result (e.g. String.split) surfaces as a Lisp list, elements
+	// unmarshalled recursively; it round-trips back through marshalSequence.
+	private static LispVal arrayToList(Object array, boolean javaFalse, boolean octets) {
+		LispVal result = LispNil.INSTANCE;
+		for (int i = Array.getLength(array) - 1; i >= 0; i--) {
+			result = new LispCons(unmarshal(Array.get(array, i), javaFalse, octets), result);
+		}
+		return result;
+	}
+
+	private static ReflectiveJavaClasses.Type loadClass(String name, Caller caller) {
+		ReflectiveJavaClasses.Type type = caller.classes().find(name);
+		if (type == null) {
+			// a class whose own supertype cannot link (persistent-sorted-set's
+			// PersistentSortedSet over clojure.lang.APersistentSet) is no absent one:
+			// its refusal names the missing class, like every other java: entry point's
+			try {
+				Class.forName(name, false, caller.classes().loader());
+			}
+			catch (NoClassDefFoundError ex) {
+				throw unlinkable(name, ex);
+			}
+			catch (ClassNotFoundException | LinkageError ex) {
+				// absent, or broken some other way: no such class
+			}
+		}
+		if (type == null || type.isPrimitive() || type.isArray()) {
+			throw new LispEvalException("No such class: " + name);
+		}
+		return type;
+	}
+
+	// What a java: site over a class that cannot link throws: a catchable refusal
+	// naming the missing class, not the raw NoClassDefFoundError reflection throws --
+	// a dependency's class compiled against a language that is not here
+	// (metosin/reitit-core's reitit.Trie over clojure.lang;
+	// .kb/clojure-frontend.md, "Classes compiled against `clojure.lang`"). The missing
+	// name is the error's own, slashes to dots. Any other LinkageError is not caught:
+	// it propagates as it did.
+	private static LispEvalException unlinkable(String className, NoClassDefFoundError ex) {
+		return new LispEvalException(JavaOverloads.unlinkableMessage(className, ex));
+	}
+
+	private static RuntimeException initializerFailed(String className, ExceptionInInitializerError ex) {
+		NoClassDefFoundError cause = JavaOverloads.unlinkableCause(ex);
+		if (cause != null) {
+			return unlinkable(className, cause);
+		}
+		throw ex;
+	}
+
+	// What a failed Java call throws: what a function called back from Java raised -- an
+	// exit, a condition, uiop:quit -- on to the Lisp code that made the call, as it is;
+	// anything else is the error calling the member, a java:java-exception carrying
+	// what the member threw (the landing that catches it builds the condition from it).
+	private static RuntimeException fail(String what, ReflectiveOperationException ex) {
+		Throwable cause = ex instanceof InvocationTargetException ite && ite.getCause() != null ? ite.getCause() : ex;
+		return fail(what, cause);
+	}
+
+	// The arguments a member takes: each condition standing for a host exception -- a
+	// java:java-exception, whose cause slot holds the exception or a function building
+	// it -- as that exception; the list itself when none is one.
+	private static List<LispVal> hostArguments(List<LispVal> args, Caller caller) {
+		List<LispVal> out = null;
+		for (int i = 0; i < args.size(); i++) {
+			LispVal converted = hostException(args.get(i), caller);
+			if (converted != args.get(i)) {
+				if (out == null) {
+					out = new ArrayList<>(args);
+				}
+				out.set(i, converted);
+			}
+		}
+		return out == null ? args : out;
+	}
+
+	// The host exception a java:java-exception stands for, the value itself otherwise.
+	// The class is the cause slot's name at its index: every subclass lays its slots
+	// out after it, so no registry is needed to tell.
+	private static LispVal hostException(LispVal value, Caller caller) {
+		if (!(value instanceof LispInstance instance)) {
+			return value;
+		}
+		List<String> slots = instance.layout().slotNames();
+		if (slots.size() <= ClosRegistry.JAVA_EXCEPTION_CAUSE_INDEX
+				|| !ClosRegistry.JAVA_EXCEPTION_CAUSE_SLOT.equals(slots.get(ClosRegistry.JAVA_EXCEPTION_CAUSE_INDEX))) {
+			return value;
+		}
+		LispVal held = instance.slot(ClosRegistry.JAVA_EXCEPTION_CAUSE_INDEX);
+		if (held instanceof LispLambda || held instanceof LispFunction) {
+			held = caller.call(held, List.of(value));
+		}
+		return held instanceof LispJavaObject ? held : value;
+	}
+
+	// Records a throwable leaving a function called back from Java; answers it.
+	private static Throwable raised(Throwable throwable) {
+		ArrayDeque<Throwable> pending = RAISED.get();
+		if (pending == null) {
+			pending = new ArrayDeque<>();
+			RAISED.set(pending);
+		}
+		pending.addFirst(throwable);
+		if (pending.size() > JavaImplementations.PENDING_SIGNALS) {
+			pending.removeLast();
+		}
+		return throwable;
+	}
+
+	// Whether a callback raised this very throwable on this thread; if so it is taken off
+	// the record with every newer one -- those left their callbacks after it and never
+	// reached a site: Java code swallowed them while this one was on its way out.
+	private static boolean passedOn(Throwable throwable) {
+		ArrayDeque<Throwable> pending = RAISED.get();
+		if (pending == null) {
+			return false;
+		}
+		for (Throwable raised : pending) {
+			if (raised == throwable) {
+				while (pending.pollFirst() != throwable) {
+					// newer, swallowed
+				}
+				return true;
+			}
+		}
+		return false;
+	}
+
+}

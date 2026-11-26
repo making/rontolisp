@@ -1,0 +1,3122 @@
+package am.ik.gpu;
+
+import org.jspecify.annotations.Nullable;
+
+/**
+ * A matrix product -- or an element-wise map -- on the GPU, or a decline. That is the
+ * whole public surface of this library, and it is deliberately the shape of a PARTIAL
+ * function: a caller offers a computation and either the device took it or it did not,
+ * said with {@code false} or {@code null} and never with an exception.
+ *
+ * <h2>What "declines" covers</h2>
+ *
+ * Everything. No NVIDIA driver and no Metal, no device, a card older than the PTX this
+ * library carries, a JVM that forbids native access, a shape too big for the launch grid,
+ * a product too small to be worth a round trip, one too big for free device memory, a
+ * failed {@code CUresult} of any kind, a command buffer that did not complete, a
+ * {@code double} operand on a backend that has no {@code double}, or a context that a
+ * previous failure left unusable. All of them answer quietly, and the caller runs
+ * whatever it would have run anyway. This is the same posture {@code --simd} has toward a
+ * JDK without {@code jdk.incubator.vector} and {@code --blas} has toward a machine with
+ * no tuned CBLAS ({@code .kb/linalg-simd.md}, {@code .kb/linalg-blas.md}).
+ *
+ * <p>
+ * Two things are NOT declines, because neither is this library's to swallow. A
+ * {@code null} operand array is a defect in the caller and throws
+ * {@link NullPointerException}; and the array-returning overloads allocate the result, so
+ * they can throw {@link OutOfMemoryError} exactly as {@code new double[n * p]} can. The
+ * {@code out}-taking overloads allocate nothing.
+ *
+ * <h2>The probe runs once, and only when something needs it</h2>
+ *
+ * Binding the driver, retaining the primary context and JIT-compiling the kernels happens
+ * on the first call that needs a device, and is cached for the life of the process,
+ * failure included: a machine without a GPU pays one failed {@code dlopen} and never
+ * touches the driver again. {@link #worth} deliberately does not need it, so an
+ * interceptor can ask that on a path that then never touches the device.
+ * {@link #description()} says what was found or why nothing was, and is what a caller
+ * should print when it was asked for a GPU and cannot have one.
+ *
+ * <h2>Two kinds of device, one surface</h2>
+ *
+ * An NVIDIA card through the CUDA driver, or an Apple GPU through Metal, chosen by
+ * whichever one this machine has. Nothing above this class needs to know which, but two
+ * differences are visible through the decline protocol and are worth expecting: the Metal
+ * backend has no {@code double} at all, so every {@code double}-taking method below
+ * declines there whatever the size; and its per-call floor is five times CUDA's, so its
+ * size thresholds are higher and it takes the {@linkplain #fold axis fold} only over a
+ * resident operand, never for its size. {@code .kb/gpu.md} has the measurements behind
+ * each of those.
+ *
+ * <h2>Residency, and results that stay</h2>
+ *
+ * Every member keeps a copy of each operand and result on the device, keyed by the host
+ * array's identity, so a chain of members uploads each array once; {@link #written} is
+ * the caller's side of that contract. A caller may also ask for LAZY results
+ * ({@link #lazyResults}): a result then stays on the device and its host array is filled
+ * only when the caller says the host is about to read it ({@link #materialize}) -- the
+ * mode the rontolisp interceptors run in, having enumerated every host read -- and the
+ * members whose CPU twin is a lane loop, which no round trip could win, are offered over
+ * a resident operand ({@link #zip}, {@link #scale}, {@link #where}, {@link #adamStep},
+ * the {@link #MAP_SQRT} maps). Off, which is the default, every method below fills its
+ * {@code out} before it returns, as its javadoc says.
+ *
+ * <h2>Offsets, because the arrays have headers</h2>
+ *
+ * Every operand -- the result included -- takes an element offset. rontolisp's compiled
+ * backends carry a {@code [rank, dim..., data...]} header inside the same array as the
+ * data, so a caller must be able to say where the elements start AND to have the product
+ * written straight into the array it has already shaped; an interpreter whose arrays hold
+ * data alone passes 0. The array-returning overloads are the convenience form for a
+ * caller that wants a bare {@code n * p} result, and they delegate.
+ *
+ * @see CuResult
+ */
+public final class Gpu {
+
+	/**
+	 * Below this many multiply-adds a product declines and the caller's own kernel wins.
+	 *
+	 * <p>
+	 * A round trip to the device has a FLOOR -- context, allocation, launch, latency --
+	 * that does not shrink with the operand, measured at 15 us on the machine this was
+	 * tuned on. What it has to beat there is not CPU arithmetic but rontolisp's fastest
+	 * kernel on a small array, and that is cheap: a JIT-warm {@code --simd} product on
+	 * the JVM costs 6-10 us at n=32 and only passes the floor between n=32 and n=64 (f64:
+	 * 23 us at n=48 and 49 us at n=64, against 19 and 22 here; f32: 14 and 28.5 against
+	 * 16.5 and 17.3). 2^17 is a 50.8x50.8x50.8 product, which is where the later of the
+	 * two crossovers falls. Declining costs nothing, so the threshold sits where the win
+	 * is unambiguous rather than where it first appears.
+	 *
+	 * <p>
+	 * {@code --blas} puts the same predicate at 64 rather than 131072 on the JVM, because
+	 * a critical downcall into a CPU library floors at 30 ns there and a GPU round trip
+	 * at 15 us -- three orders of magnitude of fixed cost, and hence three orders of
+	 * magnitude of threshold. Inside a native image every FFM downcall costs 2-7 us
+	 * (SubstrateVM interprets the handle chain), so {@code --blas} moves to 2^15 / 2^17
+	 * there while THIS threshold holds: a member here is a handful of driver calls on top
+	 * of a 15 us floor, measured level with the JVM's at n=64. See {@code .kb/gpu.md}.
+	 */
+	static final long POOLED_MIN_WORK = 1L << 17;
+
+	/**
+	 * The threshold {@link #multiply} applies instead on a machine whose driver has no
+	 * usable stream-ordered allocator. Allocating the three buffers per call raises the
+	 * floor from 15 us to 170, which moves the crossover against the same CPU column to
+	 * between n=96 (131 us) and n=128 (384 us). {@link #worth} does NOT apply it, and
+	 * says why.
+	 */
+	static final long UNPOOLED_MIN_WORK = 1L << 21;
+
+	/**
+	 * Below this many elements an {@linkplain #map element-wise map} declines and the
+	 * caller's own kernel wins.
+	 *
+	 * <p>
+	 * It is four orders of magnitude below the product's threshold because it counts
+	 * ELEMENTS and not multiply-adds: a map is one libm call per element, so 2^14 of them
+	 * is 2^14 calls where a 2^17-multiply-add product is a 51-cubed matrix. Measured
+	 * against the fastest CPU path rontolisp has ({@code --simd}, JIT-warm) on the
+	 * machine this was tuned on, the crossover for the cheapest member offered here is
+	 * between 2000 and 4000 elements and for the dearest it is below 1000; the threshold
+	 * sits at 16384, where the cheapest of them is already 2.6x ahead and the rest 5-9x.
+	 * Below it the CPU wins outright and declining costs nothing. See {@code .kb/gpu.md}.
+	 */
+	static final long MAP_POOLED_MIN_ELEMENTS = 1L << 14;
+
+	/**
+	 * The element-wise threshold on a machine whose driver has no usable stream-ordered
+	 * allocator, where the per-call floor is ~170 us rather than ~15. That floor is above
+	 * the CPU's cost for 16384 elements of any member here, so the threshold moves up to
+	 * where the CPU column passes it: 65536 elements, where the cheapest member measures
+	 * 360 us on the CPU.
+	 */
+	static final long MAP_UNPOOLED_MIN_ELEMENTS = 1L << 16;
+
+	/**
+	 * Below this many OUTPUT elements a {@linkplain #bcast broadcast binary op} or a
+	 * {@linkplain #gather strided gather} declines.
+	 *
+	 * <p>
+	 * It is one power of two above the element-wise map's, and the reason is the CPU
+	 * column rather than this side: a map's CPU twin is a libm call per element, while
+	 * these two are one arithmetic op or one load per element -- but walked by an
+	 * ODOMETER rather than by a lane loop, which is what makes them worth offering at
+	 * all. Measured against a JIT-warm {@code --simd} CPU on the machine this was tuned
+	 * on, the crossover for both is between 4096 and 16384 elements; at 16384 the margin
+	 * is 1.2x at f64 (26.5 us against 21.8), which is inside the measurement, and at
+	 * 32768 it is 2.1x (53.0 against 25.7) at f64 and 2.3x at f32. The threshold sits at
+	 * the second, for the reason the product's does: where the win is unambiguous, not
+	 * where it first appears. See {@code .kb/gpu.md}.
+	 */
+	static final long STRIDED_POOLED_MIN_ELEMENTS = 1L << 15;
+
+	/**
+	 * The strided threshold on a machine whose driver has no usable stream-ordered
+	 * allocator, where the per-call floor is ~170 us rather than ~15 -- which is above
+	 * the CPU's cost for 32768 elements of either member, so it moves up to where the CPU
+	 * column passes it (2^17, ~200 us).
+	 */
+	static final long STRIDED_UNPOOLED_MIN_ELEMENTS = 1L << 17;
+
+	/**
+	 * Below this many INPUT elements an {@linkplain #fold axis fold} declines. It counts
+	 * the input rather than the output because that is what the fold reads and what the
+	 * copy up costs; the way back is {@code outer * inner} elements and is usually
+	 * nothing.
+	 *
+	 * <p>
+	 * Four times the strided threshold, and measured the same way: a fold moves ONE array
+	 * over the link where a broadcast binary moves three, so its device side is cheaper
+	 * -- but its CPU twin is cheaper by more, because a fold's odometer is one counter
+	 * rather than three. The two columns are level at 65536 (29.5 us against 30.6 at f64)
+	 * and the device is 1.7x/2.1x ahead at 131072. See {@code .kb/gpu.md}.
+	 */
+	static final long FOLD_POOLED_MIN_ELEMENTS = 1L << 17;
+
+	/**
+	 * The fold threshold with no stream-ordered allocator; see the two siblings above.
+	 */
+	static final long FOLD_UNPOOLED_MIN_ELEMENTS = 1L << 19;
+
+	/**
+	 * How many OUTPUT cells an axis fold needs before it is offered at all, whatever its
+	 * input size. Each output cell is one thread walking the axis sequentially -- which
+	 * is what keeps the fold in the defun's own order and therefore bit-identical -- so a
+	 * fold with one output cell is a single-threaded device loop and loses to any CPU.
+	 * One block's worth is the floor.
+	 */
+	private static final long FOLD_MIN_CELLS = 256;
+
+	/**
+	 * The same floor for a fold whose operand is already RESIDENT, which is a different
+	 * race. The 256 above is measured against a CPU that has the operand; a resident
+	 * operand under {@link #lazyResults} has to be DOWNLOADED before any CPU kernel can
+	 * touch it, and that copy costs more per element than the device's thin walk does,
+	 * however few threads it runs in. One warp is the floor there: below 32 cells the
+	 * launch cannot fill even one, and the download is the cheaper of two bad options.
+	 */
+	private static final long FOLD_RESIDENT_MIN_CELLS = 32;
+
+	/**
+	 * Below this many elements a {@linkplain #rngFill generator fill} declines and the
+	 * CPU's sequential walk wins. A fill has no operand to copy up -- only the result
+	 * comes back -- so its floor is the lowest of the set, and the CPU side costs ~3 ns
+	 * per uniform draw (~36 per Irwin-Hall normal, which is twelve of them). Measured on
+	 * the GB10: one uniform draw per element is 0.7-0.8x at 2^12 and 1.6-1.8x at 2^13,
+	 * the normal 4x at 2^12 already; 2^13 is where every rule wins, and the one threshold
+	 * serves all three ({@code .kb/gpu.md}).
+	 */
+	static final long RNG_POOLED_MIN_ELEMENTS = 1L << 13;
+
+	/**
+	 * The same on a machine without the stream-ordered allocator (one buffer, ~180 us).
+	 */
+	static final long RNG_UNPOOLED_MIN_ELEMENTS = 1L << 15;
+
+	/**
+	 * Below this many elements ({@code rows * cols}) a {@linkplain #matvec
+	 * matrix-by-vector product} declines. It is measured with the matrix RESIDENT, which
+	 * is the only case the member is offered in (below): a GEMV reads every element of
+	 * its matrix once, so over the link it loses to the CPU until ~2^19 elements, while
+	 * over a matrix that is already on the device its whole cost is the ~9 us floor --
+	 * {@code x} up, a launch, {@code y} down -- and the crossover against the JIT-warm
+	 * {@code --simd} lane kernel is between 256x256 (10.0 us CPU against 9.7, a tie at
+	 * {@code #f}) and 384x384 (23.0 against 10.7, 2.1x; 45.5 against 9.9 at {@code #d}).
+	 * 2^17 sits at the second, where the win is unambiguous ({@code .kb/gpu.md}).
+	 */
+	static final long MATVEC_POOLED_MIN_ELEMENTS = 1L << 17;
+
+	/**
+	 * The same on a machine without the stream-ordered allocator, where the floor is ~180
+	 * us: the CPU column passes that at about a million elements (200 us at 1024x1024
+	 * {@code #f}).
+	 */
+	static final long MATVEC_UNPOOLED_MIN_ELEMENTS = 1L << 20;
+
+	/** The deepest rank {@link #bcast} and {@link #gather} will walk; deeper declines. */
+	static final int MAX_STRIDED_RANK = 16;
+
+	/**
+	 * The op codes {@link #map} takes, mirrored by the {@code switch} in {@code gemm.cu}
+	 * -- the two are changed together and nothing links them, so a new member is one case
+	 * there, one constant here and one regeneration of the PTX.
+	 *
+	 * <p>
+	 * Every one of them is a member whose scalar cost is a libm CALL, and that is the
+	 * whole selection rule: measured on this project's machine the device beats a
+	 * JIT-warm SIMD CPU loop by 9-124x at f64 and by up to 394x at f32 on these, while
+	 * {@code sqrt} (1.4-2x), {@code abs}, {@code negative} and {@code sign} are one
+	 * machine instruction over one stream and the binary {@code add} / {@code sub} /
+	 * {@code mul} / {@code div} are one over three. Those are declines, and they are
+	 * declines by measurement rather than by assumption.
+	 */
+	public static final int MAP_EXP = 0, MAP_LOG = 1, MAP_TANH = 2, MAP_SIN = 3, MAP_COS = 4, MAP_TAN = 5, MAP_ASIN = 6,
+			MAP_ACOS = 7, MAP_ATAN = 8, MAP_SINH = 9, MAP_COSH = 10, MAP_ERF = 11;
+
+	/**
+	 * The four maps the element-wise tier REFUSED as a round trip and takes over a
+	 * RESIDENT operand only (the resident tier): one machine instruction each, so no size
+	 * makes the trip pay, and no trip is paid when the operand is already there. Each
+	 * computes in double and narrows on the store, so unlike the twelve above they are
+	 * BIT-IDENTICAL to the CPU kernels.
+	 */
+	public static final int MAP_SQRT = 12, MAP_ABS = 13, MAP_NEGATIVE = 14, MAP_SIGN = 15;
+
+	/**
+	 * How many op codes {@link #map} takes at the SIZE threshold -- the twelve libm
+	 * members; an op at or past this is offered over a resident operand only.
+	 */
+	public static final int MAP_LIBM_OPS = 12;
+
+	/**
+	 * How many op codes {@link #map} knows; an op outside {@code [0, MAP_OPS)} declines.
+	 */
+	public static final int MAP_OPS = 16;
+
+	/**
+	 * The op codes {@link #bcast} takes, mirrored by the {@code bin_op} switch in
+	 * {@code gemm.cu} -- the same arrangement {@link #MAP_EXP} has, and the same rule: a
+	 * new member is one case there, one constant here and one regeneration of the PTX.
+	 *
+	 * <p>
+	 * These are the four arithmetic ops and the two strict selects, and offering them is
+	 * NOT a reversal of the element-wise tier's refusal of the same names. That refusal
+	 * was measured at EQUAL shapes, where the caller's own kernel is a lane loop and a
+	 * round trip cannot win (and still cannot: 65 us against 112 at f32, measured). This
+	 * entry point is for the BROADCAST shape, where the caller walks an odometer element
+	 * by element instead and the same round trip is 5.5-8.5x faster. {@code .kb/gpu.md}
+	 * has both halves.
+	 *
+	 * <p>
+	 * {@link #BIN_MAX} and {@link #BIN_MIN} are the STRICT selects {@code x > y ? x : y}
+	 * and {@code x < y ? x : y}, so the second operand wins a tie and a NaN.
+	 */
+	public static final int BIN_ADD = 0, BIN_SUB = 1, BIN_MUL = 2, BIN_DIV = 3, BIN_MAX = 4, BIN_MIN = 5;
+
+	/**
+	 * The five comparison masks -- {@code 1.0} where the relation holds, else {@code 0.0}
+	 * -- which {@link #bcast}, {@link #zip} and {@link #scale} all take:
+	 * {@code linalg:greater} and its siblings, the dropout mask's compare among them.
+	 */
+	public static final int BIN_GT = 6, BIN_GE = 7, BIN_LT = 8, BIN_LE = 9, BIN_EQ = 10;
+
+	/**
+	 * How many op codes {@link #bcast}, {@link #zip} and {@link #scale} know; an op
+	 * outside {@code [0, BIN_OPS)} declines.
+	 */
+	public static final int BIN_OPS = 11;
+
+	/**
+	 * The op codes {@link #fold} takes, mirrored by the {@code fold} switch in
+	 * {@code gemm.cu}. {@link #FOLD_SUM} seeds with 0 and adds; {@link #FOLD_AMAX} and
+	 * {@link #FOLD_AMIN} seed with the FIRST element along the axis and compare strictly,
+	 * so the accumulator wins a tie and a NaN.
+	 */
+	public static final int FOLD_SUM = 0, FOLD_AMAX = 1, FOLD_AMIN = 2;
+
+	/** How many op codes {@link #fold} knows; anything else declines. */
+	public static final int FOLD_OPS = 3;
+
+	private Gpu() {
+	}
+
+	/**
+	 * The probe, and everything that depends on having run it, behind a holder so that it
+	 * happens on the first question that NEEDS a device rather than on any mention of
+	 * {@link Gpu}. It is not a cheap static initializer: a {@code dlopen}, a
+	 * {@code cuInit}, a retained primary context (which reserves device memory of its
+	 * own) and a PTX JIT.
+	 */
+	private static final class Probe {
+
+		private static final @Nullable GpuDevice DEVICE;
+
+		private static final String DESCRIPTION;
+
+		private static final long MIN_WORK;
+
+		private static final long MAP_MIN_ELEMENTS;
+
+		private static final long STRIDED_MIN_ELEMENTS;
+
+		private static final long FOLD_MIN_ELEMENTS;
+
+		/** The fused tier's own crossover; see {@link GpuDevice.Thresholds#fused()}. */
+		private static final long FUSED_MIN_ELEMENTS;
+
+		private static final long RNG_MIN_ELEMENTS;
+
+		private static final long MATVEC_MIN_ELEMENTS;
+
+		static {
+			GpuDevice device;
+			String description;
+			try {
+				// CUDA first and Metal second, which is not a preference: the two are
+				// mutually exclusive in practice (no machine has both libcuda.so.1 and
+				// Metal.framework) and each declines in a failed library lookup on the
+				// other's platform, so the order costs a dlopen that was going to fail
+				// anyway. What it does decide is which SENTENCE a machine with neither
+				// gets, and that is the platform's own -- see #describe.
+				CudaGemm.Probe cuda = CudaGemm.probe();
+				if (cuda.gemm() != null) {
+					device = cuda.gemm();
+					description = cuda.description();
+				}
+				else {
+					MetalGemm.Probe metal = MetalGemm.probe();
+					device = metal.gemm();
+					description = device != null ? metal.description() : describe(cuda, metal);
+				}
+			}
+			catch (Throwable ex) {
+				// The probes are written not to throw; if one ever does, the answer is
+				// still no. The nested try is not paranoia for its own sake: an exception
+				// escaping HERE would fail this class's initialization, and every later
+				// call would get a NoClassDefFoundError instead of a decline, for the
+				// life of the process.
+				device = null;
+				description = "no GPU could be probed";
+				try {
+					description = description + ": " + ex;
+				}
+				catch (Throwable nested) {
+					description = description + ": " + ex.getClass().getName();
+				}
+			}
+			DEVICE = device;
+			DESCRIPTION = description;
+			Gpu.probed = device;
+			if (device != null && (Gpu.lazyWanted || (Gpu.lazyIfWorthwhile && device.lazyResultsPay()))) {
+				device.lazyResults(true);
+			}
+			GpuDevice.Thresholds thresholds = device == null ? new GpuDevice.Thresholds(POOLED_MIN_WORK,
+					MAP_POOLED_MIN_ELEMENTS, STRIDED_POOLED_MIN_ELEMENTS, FOLD_POOLED_MIN_ELEMENTS,
+					FOLD_POOLED_MIN_ELEMENTS, RNG_POOLED_MIN_ELEMENTS, MATVEC_POOLED_MIN_ELEMENTS)
+					: device.thresholds();
+			MIN_WORK = thresholds.work();
+			MAP_MIN_ELEMENTS = thresholds.map();
+			STRIDED_MIN_ELEMENTS = thresholds.strided();
+			FOLD_MIN_ELEMENTS = thresholds.fold();
+			FUSED_MIN_ELEMENTS = thresholds.fused();
+			RNG_MIN_ELEMENTS = thresholds.rng();
+			MATVEC_MIN_ELEMENTS = thresholds.matvec();
+		}
+
+		/**
+		 * What to say when NEITHER backend found a device. Both have a reason and only
+		 * one of them is about this machine -- "libcuda.so.1 is not present" is noise on
+		 * a Mac and "this is not a Mac" is noise on a Linux box -- so the platform picks.
+		 */
+		private static String describe(CudaGemm.Probe cuda, MetalGemm.Probe metal) {
+			String os;
+			try {
+				os = String.valueOf(System.getProperty("os.name"));
+			}
+			catch (Throwable ex) {
+				os = "";
+			}
+			return os.startsWith("Mac") ? metal.description() : cuda.description();
+		}
+
+		private Probe() {
+		}
+
+	}
+
+	/**
+	 * Whether this machine has a GPU these kernels can run on. {@code false} is an
+	 * ordinary answer, not an error, and it is the answer on most machines. The first
+	 * call runs the probe.
+	 * @return {@code true} when a product may be offered to {@link #multiply}
+	 */
+	public static boolean available() {
+		GpuDevice device = Probe.DEVICE;
+		return device != null && device.usable();
+	}
+
+	/**
+	 * What was found -- device model, architecture, driver version -- or why nothing was.
+	 * Always a printable one-liner, on every machine. The first call runs the probe.
+	 * @return a one-line description of the probe's outcome
+	 */
+	public static String description() {
+		return Probe.DESCRIPTION;
+	}
+
+	/**
+	 * Supplies the PTX kernel text, for an embedder that carries this library's CLASSES
+	 * but not its resources.
+	 *
+	 * <p>
+	 * Normally the kernels are read from {@code am/ik/gpu/gemm.ptx} beside
+	 * {@link CudaGemm}, and nothing needs this. rontolisp's JVM backend injects the
+	 * library's class files into the standalone {@code .class} it emits, renamed into
+	 * that program's own package, where a classpath resource of ours cannot follow -- so
+	 * it hands the text in instead ({@code .kb/gpu.md}). The text supplied wins over the
+	 * resource when both are present.
+	 *
+	 * <p>
+	 * Must be called BEFORE the first {@link #available()} / {@link #description()} /
+	 * {@link #multiply} on this process, which is when the module is loaded; afterwards
+	 * it changes nothing and is not an error. It never throws and it never probes.
+	 * @param ptx the PTX text the driver is to JIT-compile
+	 */
+	public static void useKernels(String ptx) {
+		CudaGemm.embeddedPtx(ptx);
+	}
+
+	/**
+	 * Supplies the Metal Shading Language kernel text, for an embedder that carries this
+	 * library's CLASSES but not its resources -- {@link #useKernels(String)}'s Apple
+	 * sibling, and needed for the same reason and by the same one caller.
+	 *
+	 * <p>
+	 * Unlike the PTX this is the SOURCE rather than a compiled artifact: Metal's compiler
+	 * is in the OS, so there is nothing generated to carry. Must be called BEFORE the
+	 * first {@link #available()} / {@link #description()} / {@link #multiply} on this
+	 * process; afterwards it changes nothing and is not an error. It never throws and it
+	 * never probes.
+	 * @param msl the MSL text the OS is to compile
+	 */
+	public static void useMetalKernels(String msl) {
+		MetalGemm.embeddedSource(msl);
+	}
+
+	/**
+	 * The one device this process has probed, or {@code null}. Package-private and for
+	 * the tests: probing again would retain a second reference to the primary context and
+	 * JIT the module a second time, so nothing may call {@code CudaGemm.probe()} twice.
+	 * @return the probed device, or {@code null} when there is none
+	 */
+	static @Nullable GpuDevice device() {
+		return Probe.DEVICE;
+	}
+
+	/**
+	 * The threshold {@link #multiply} is applying on this machine, which is
+	 * {@link #worth}'s only when the driver's pooled allocator is in use. Package-private
+	 * and for the tests, which must size their shapes off the threshold actually in force
+	 * rather than off the one that was true when they were written.
+	 * @return the minimum {@code n * m * p} a product is accepted at
+	 */
+	static long minWork() {
+		return Probe.MIN_WORK;
+	}
+
+	/**
+	 * The element-wise threshold in force on this machine, which is
+	 * {@link #worthMap(long)}'s only when the driver's pooled allocator is in use.
+	 * Package-private and for the tests.
+	 * @return the minimum element count a map is accepted at
+	 */
+	static long mapMinElements() {
+		return Probe.MAP_MIN_ELEMENTS;
+	}
+
+	/**
+	 * The strided-tier threshold actually in force on this machine. Package-private and
+	 * for the tests, exactly as {@link #mapMinElements} is.
+	 * @return the minimum output element count a broadcast or gather is offered at
+	 */
+	static long stridedMinElements() {
+		return Probe.STRIDED_MIN_ELEMENTS;
+	}
+
+	/**
+	 * The axis-fold threshold actually in force on this machine, in INPUT elements.
+	 * @return the minimum input element count a fold is offered at
+	 */
+	static long foldMinElements() {
+		return Probe.FOLD_MIN_ELEMENTS;
+	}
+
+	/**
+	 * The fused tier's threshold actually in force on this machine, in elements: the fold
+	 * threshold on CUDA, the map threshold on Metal ({@code GpuDevice.Thresholds},
+	 * {@code fused}).
+	 * @return the minimum element count a fused row member is offered at
+	 */
+	static long fusedMinElements() {
+		return Probe.FUSED_MIN_ELEMENTS;
+	}
+
+	/**
+	 * The minimum number of output cells a fold needs when its operand has to be copied
+	 * up. Package-private and for the tests; a RESIDENT operand's floor is one warp
+	 * ({@link #FOLD_RESIDENT_MIN_CELLS}).
+	 * @return the fold's parallelism floor
+	 */
+	static long foldMinCells() {
+		return FOLD_MIN_CELLS;
+	}
+
+	static long rngMinElements() {
+		return Probe.RNG_MIN_ELEMENTS;
+	}
+
+	/**
+	 * The matrix-by-vector threshold in force on this machine, in {@code rows * cols};
+	 * {@link Long#MAX_VALUE} on a backend that is not a member of it. Package-private and
+	 * for the tests.
+	 * @return the minimum element count a GEMV is offered at
+	 */
+	static long matvecMinElements() {
+		return Probe.MATVEC_MIN_ELEMENTS;
+	}
+
+	/**
+	 * The probed device, copied out of {@link Probe} the moment it exists, so that
+	 * {@link #written} can answer "nothing is resident" on a process that has not probed
+	 * without running the probe -- a {@code dlopen}, a context and a PTX JIT -- from an
+	 * {@code aset} loop that merely stored a double.
+	 */
+	private static volatile @Nullable GpuDevice probed;
+
+	/**
+	 * Tells the library that a host array it may hold a RESIDENT copy of has been written
+	 * in place, so that copy is stale and must not be read again. The device members keep
+	 * a cache from a host array, by identity, to a device buffer holding a copy of it --
+	 * which is what lets a chain of members pay for one upload rather than one per call
+	 * -- and the host array stays authoritative, so every in-place write to a packed
+	 * float array has to come through here. The interceptors call it from every element
+	 * setter and every in-place kernel; the enumeration is in {@code .kb/gpu.md}.
+	 *
+	 * <p>
+	 * Cheap when it does not matter: a volatile read on a process with no device or
+	 * nothing resident, and an identity lookup under an uncontended monitor otherwise. It
+	 * never runs the probe, never touches the driver, never throws, and may be called
+	 * from any thread. An array that was never an operand is simply not found.
+	 *
+	 * <p>
+	 * Answers the array the write must land in. That is {@code hostArray} itself unless
+	 * it is a result STUB (see {@link #materialize}), whose bytes live in a backing this
+	 * library holds: the write goes there, and the program keeps holding the stub.
+	 * @param hostArray the {@code double[]} or {@code float[]} that was written
+	 * @return the array to write into
+	 */
+	public static Object written(Object hostArray) {
+		GpuDevice device = probed;
+		return device != null ? device.written(hostArray) : hostArray;
+	}
+
+	/**
+	 * Tells the library that a host array is about to be READ on the host, so that if the
+	 * device holds the only copy of its bytes -- a result left there under
+	 * {@link #lazyResults}, or an array a device member updated in place -- they come
+	 * home first. With lazy results off this never has anything to do; with them on, the
+	 * interceptors call it from every host read of packed-array storage, and the
+	 * enumeration of those readers is in {@code .kb/gpu.md} beside the writers'.
+	 *
+	 * <p>
+	 * As cheap as {@link #written} when it does not matter: a volatile read on a process
+	 * with no device or nothing lazy, a few identity compares for a loop that reads one
+	 * array, and the download only when the array is the one the device holds. It is also
+	 * the ONE operation here that cannot decline: when the host has no other copy of the
+	 * bytes, a download the driver refuses is an {@link IllegalStateException} rather
+	 * than a silent fallback, because silence there would be a wrong answer.
+	 *
+	 * <p>
+	 * <b>Answers the array to read</b>, which is {@code hostArray} itself unless it is a
+	 * result STUB. Under {@link #lazyResults} a caller may hand a member, as its result
+	 * array, one that is SHORTER than the span it names -- holding only the elements
+	 * before the result offset (the caller's header; nothing at all at offset 0) -- and
+	 * then no host array of the result's size is allocated until the host first asks for
+	 * the bytes here: they stay on the device, and this call allocates their BACKING (an
+	 * array of the full span, the stub's prefix copied in) and downloads into it. The
+	 * backing is kept for as long as the stub is reachable and answered by every later
+	 * call; {@link #written} answers it too, so a host write through the stub lands in
+	 * it; and a stub offered again as an operand after its device copy was dropped is
+	 * uploaded from it. The stub stays the object the program holds and the identity the
+	 * library keys on, which is why the backing is answered here rather than swapped in.
+	 * Without lazy results a stub is still accepted: the backing is allocated and filled
+	 * before the member returns, and this call answers it. An ordinary, full-length
+	 * result array behaves exactly as before: it is filled, and answered as itself.
+	 * @param hostArray the {@code double[]} or {@code float[]} about to be read
+	 * @return the array holding its bytes: {@code hostArray}, or a stub's backing
+	 */
+	public static Object materialize(Object hostArray) {
+		GpuDevice device = probed;
+		return device != null ? device.materialize(hostArray) : hostArray;
+	}
+
+	/**
+	 * Whether the device holds a copy of {@code hostArray} -- the question the resident
+	 * tier's members ask before they are offered at all, and the reason an interceptor
+	 * may offer a member below the size threshold: an operand that is already there pays
+	 * no trip. Never runs the probe and never touches the driver.
+	 * @param hostArray the {@code double[]} or {@code float[]}
+	 * @return {@code true} when a device copy of it is resident
+	 */
+	public static boolean resident(Object hostArray) {
+		GpuDevice device = probed;
+		return device != null && device.resident(hostArray);
+	}
+
+	/**
+	 * Switches LAZY results on or off for this process. On, a member's result stays on
+	 * the device -- its host array is NOT filled when the call returns -- until the host
+	 * first reads it through {@link #materialize}, or never; an array a device member
+	 * updates in place ({@link #adamStep}, {@link #rngFill}) likewise. That is what lets
+	 * a chain of members {@code matmul -> div -> where -> softmax -> matmul} move nothing
+	 * over the link, and it is the mode the interceptors run in where the device says it
+	 * pays ({@link #lazyResultsIfWorthwhile}: both backends), having enumerated every
+	 * host read ({@code .kb/gpu.md}, "The two seams, and what must report through them").
+	 * Off -- the default, and the contract every method's javadoc states -- a result is
+	 * in its array when the call returns. Switching off brings every lazy result home
+	 * first.
+	 *
+	 * <p>
+	 * On Metal the mode is also what lets a call return WITHOUT waiting for its command
+	 * buffer: eagerly every call waits, because it must either fill {@code out} or answer
+	 * {@code false}; lazily it commits and returns, and the wait moves to the first host
+	 * touch of the bytes. A command buffer that fails is then learned of after its call
+	 * answered {@code true}, and the failure surfaces at the first host read of a result
+	 * it wrote -- or of any result computed from one -- as the
+	 * {@code IllegalStateException} this mode already reserves for a result the host has
+	 * no other copy of; a result the failed buffer only read is intact
+	 * ({@code .kb/gpu.md}, "Asynchronous command buffers").
+	 *
+	 * <p>
+	 * Never runs the probe: the wish is recorded and applied to the device the moment it
+	 * is probed, so an embedder may ask for the mode BEFORE it has supplied the kernel
+	 * texts ({@link #useKernels}, {@link #useMetalKernels}). It did run the probe until
+	 * 2026-08-23, and that is why the JVM class output never found a Metal device: its
+	 * {@code _gpuInit} asked for lazy results between handing over the PTX and the MSL,
+	 * the probe ran with no MSL to compile, and every call on a Mac declined for the life
+	 * of the process -- silently, because a decline is an ordinary outcome.
+	 * @param on whether results stay on the device until the host first reads them
+	 */
+	public static void lazyResults(boolean on) {
+		lazyWanted = on;
+		GpuDevice device = probed;
+		if (device != null) {
+			device.lazyResults(on);
+		}
+	}
+
+	/** The mode {@link #lazyResults} asked for, applied when the device is probed. */
+	private static volatile boolean lazyWanted;
+
+	/**
+	 * Switches lazy results on IF THE DEVICE SAYS THEY PAY
+	 * ({@link GpuDevice#lazyResultsPay}): the interceptors' request, as against
+	 * {@link #lazyResults}, which is unconditional. The measurement lives in the backend,
+	 * not in the interceptor: a fifth off the training step on CUDA; on Metal a tie at
+	 * small shapes and a loss at large ones while every call waited for its command
+	 * buffer, and a step at 40% of the eager one since the buffers went asynchronous.
+	 * Never runs the probe; applied when it runs.
+	 */
+	public static void lazyResultsIfWorthwhile() {
+		lazyIfWorthwhile = true;
+		GpuDevice device = probed;
+		if (device != null && device.lazyResultsPay()) {
+			device.lazyResults(true);
+		}
+	}
+
+	private static volatile boolean lazyIfWorthwhile;
+
+	/**
+	 * Whether lazy results are in force on the probed device: the question an interceptor
+	 * asks before allocating a member's result array, since under the mode a STUB (see
+	 * {@link #materialize}) is enough. Never runs the probe; {@code false} before it.
+	 * @return {@code true} while results stay on the device until read
+	 */
+	public static boolean lazyResultsOn() {
+		GpuDevice device = probed;
+		return device != null && device.lazyResultsOn();
+	}
+
+	/**
+	 * A one-line account of a residency budget that turned out to be BELOW what the
+	 * program keeps coming back to, or {@code null} while it is holding -- which is the
+	 * answer on a machine with no device, before the probe, and on every run whose
+	 * working set fits.
+	 *
+	 * <p>
+	 * A cache too small for a program's working set does not merely lose the saving: an
+	 * array it evicts is a first sight again on its next pass, so a member that uploads
+	 * only on a second sight declines it, the CPU runs that pass, and the pass after pays
+	 * a cold upload. Measured on a 1.5 GB model with the budget forced to 512 MB, the
+	 * decode ran BELOW the same program with no device at all -- and nothing in the run
+	 * said so. This is what says so; {@link DeviceResidency#pressureReport()} has the
+	 * rule and the counts. Never runs the probe.
+	 * @return the line to print, or {@code null} when there is nothing to report
+	 */
+	public static @Nullable String residencyPressure() {
+		GpuDevice device = probed;
+		return device == null ? null : device.residency().pressureReport();
+	}
+
+	/**
+	 * Asks for {@link #residencyPressure}'s line, if there is one to make, to be printed
+	 * to standard error at process exit, behind {@code prefix} -- the one thing in this
+	 * library that speaks, and only when an embedder asks it to. An embedder that wants
+	 * the numbers somewhere else calls {@link #residencyPressure} itself and prints
+	 * nothing here.
+	 *
+	 * <p>
+	 * Idempotent: the hook is registered once however many times this is called, so an
+	 * interceptor may ask on every install. Never runs the probe (the hook asks at exit,
+	 * by which time the run either probed or did not), and never throws -- a VM already
+	 * shutting down, or one that forbids the hook, simply gets no report.
+	 * @param prefix what to write in front of the line, e.g. {@code "--gpu: "}
+	 */
+	public static synchronized void reportResidencyPressure(String prefix) {
+		if (reporting) {
+			return;
+		}
+		reporting = true;
+		try {
+			Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+				String line = residencyPressure();
+				if (line != null) {
+					System.err.println(prefix + line);
+				}
+			}, "gpu-residency-report"));
+		}
+		catch (Throwable ex) {
+			// A diagnostic is never a reason to fail: no report, and the program's own
+			// output is untouched.
+		}
+	}
+
+	private static boolean reporting;
+
+	/**
+	 * Bytes held by resident copies right now, or {@code 0}. Package-private and for the
+	 * tests, which assert the cache is bounded and that a release empties it.
+	 * @return the resident total, in bytes
+	 */
+	static long residentBytes() {
+		GpuDevice device = Probe.DEVICE;
+		return device != null ? device.residentBytes() : 0;
+	}
+
+	/**
+	 * Drops and frees every resident copy. Package-private and for the tests: the leak
+	 * assertions measure against an EMPTY device.
+	 */
+	static void releaseResident() {
+		GpuDevice device = Probe.DEVICE;
+		if (device != null) {
+			device.releaseResident();
+		}
+	}
+
+	/**
+	 * Imposes a residency budget in bytes on the device, or {@code -1} to restore the
+	 * derived one. Package-private and for the tests.
+	 * @param bytes the budget, or -1
+	 */
+	static void residentBudget(long bytes) {
+		GpuDevice device = Probe.DEVICE;
+		if (device instanceof CudaGemm cuda) {
+			cuda.residentBudget(bytes);
+		}
+		else if (device instanceof MetalGemm metal) {
+			metal.residentBudget(bytes);
+		}
+	}
+
+	/**
+	 * The device's residency cache, for the tests' hit and miss counts, or {@code null}
+	 * with no device.
+	 * @return the cache, or null
+	 */
+	static @Nullable DeviceResidency residency() {
+		GpuDevice device = Probe.DEVICE;
+		return device != null ? device.residency() : null;
+	}
+
+	/**
+	 * Whether an {@code n x m} by {@code m x p} product is big enough to be worth a round
+	 * trip to the device at all -- a pure size predicate over the three dimensions, so a
+	 * caller can ask it BEFORE it goes to the trouble of unwrapping its operands, and
+	 * before anything has touched the driver.
+	 *
+	 * <p>
+	 * It is deliberately the LOWER of the two thresholds this library uses: a machine
+	 * whose driver has no pooled allocator has a floor eleven times higher and declines
+	 * up to 16x further up, but discovering that costs a probe, and this predicate's
+	 * whole value is that it costs nothing. So {@code true} means "worth unwrapping for",
+	 * not "will be accepted"; {@link #multiply} asks the real question.
+	 * @param n rows of the left operand and of the result
+	 * @param m the inner dimension
+	 * @param p columns of the right operand and of the result
+	 * @return {@code true} when the product is above the size threshold
+	 */
+	public static boolean worth(long n, long m, long p) {
+		return worth(1, n, m, p);
+	}
+
+	/**
+	 * The same predicate for a STACK of {@code batch} such products, which is what a
+	 * batched matrix product ({@code torch.bmm}, and hence every attention layer) offers.
+	 *
+	 * <p>
+	 * The measure is the TOTAL multiply-adds, {@code batch * n * m * p}, against the same
+	 * threshold -- a batch is one round trip and one launch, so the floor this threshold
+	 * exists to clear is paid once for the whole stack, not once per matrix. That is also
+	 * why the batched shape is the one this feature pays on: the CPU's cost grows with
+	 * the total work while the device's fixed cost does not, and a batch of 16 small
+	 * matrices is 16x the work behind one 15 us floor. Measured, a batch of 64x64
+	 * products crosses over at batch 1 and stays ahead from there ({@code .kb/gpu.md}).
+	 * @param batch how many products are stacked
+	 * @param n rows of each left operand and of each result
+	 * @param m the inner dimension
+	 * @param p columns of each right operand and of each result
+	 * @return {@code true} when the stack is above the size threshold
+	 */
+	public static boolean worth(long batch, long n, long m, long p) {
+		return batch > 0 && n > 0 && m > 0 && p > 0 && batch * n * m * p >= POOLED_MIN_WORK;
+	}
+
+	/**
+	 * {@code out = a x b} for a row-major {@code n x m} by {@code m x p} pair of
+	 * double-float arrays, written straight into the caller's array at its own offset.
+	 * This is the form an interceptor wants: rontolisp's compiled arrays carry a
+	 * dimension header in front of their data, and a fresh array would have to be copied
+	 * into one.
+	 *
+	 * <p>
+	 * Double is the width this device class is WORST at -- a tenth to a fortieth of its
+	 * single-float throughput, depending on the card -- so this product wins by less than
+	 * its single-float sibling does, and on some machines a threaded CPU BLAS draws level
+	 * with it. It is still the width {@code linalg} defaults to, so it is here.
+	 *
+	 * <p>
+	 * The result is NOT bit-identical to a scalar row-by-column product: the kernel folds
+	 * {@code k} in the same ascending order, but every one of its multiply-adds is FUSED
+	 * ({@code fma.rn.f64}), so each term is rounded once where a scalar loop rounds
+	 * twice. Callers that need identity must not offer the product.
+	 * @param a the left operand, row-major, elements starting at {@code offsetA}
+	 * @param offsetA the index of {@code a}'s first element
+	 * @param b the right operand, row-major, elements starting at {@code offsetB}
+	 * @param offsetB the index of {@code b}'s first element
+	 * @param out the array the {@code n * p} result is written into
+	 * @param offsetOut the index in {@code out} the result starts at
+	 * @param n rows of {@code a} and of the result
+	 * @param m columns of {@code a} and rows of {@code b}
+	 * @param p columns of {@code b} and of the result
+	 * @return {@code true} when {@code out} was filled; {@code false} when this call
+	 * declined, in which case {@code out} is untouched
+	 */
+	public static boolean multiply(double[] a, int offsetA, double[] b, int offsetB, double[] out, int offsetOut, int n,
+			int m, int p) {
+		GpuDevice device = Probe.DEVICE;
+		return device != null
+				&& offered(extent(device, a), offsetA, extent(device, b), offsetB, extent(device, out), offsetOut, n, m,
+						p)
+				&& worthOrResident(device, (long) n * m * p, Probe.MIN_WORK, a, b)
+				&& device.gemm(a, offsetA, b, offsetB, out, offsetOut, n, m, p);
+	}
+
+	/**
+	 * The single-float sibling of
+	 * {@link #multiply(double[], int, double[], int, double[], int, int, int, int)}, and
+	 * the one the hardware is for.
+	 * @param a the left operand, row-major, elements starting at {@code offsetA}
+	 * @param offsetA the index of {@code a}'s first element
+	 * @param b the right operand, row-major, elements starting at {@code offsetB}
+	 * @param offsetB the index of {@code b}'s first element
+	 * @param out the array the {@code n * p} result is written into
+	 * @param offsetOut the index in {@code out} the result starts at
+	 * @param n rows of {@code a} and of the result
+	 * @param m columns of {@code a} and rows of {@code b}
+	 * @param p columns of {@code b} and of the result
+	 * @return {@code true} when {@code out} was filled
+	 */
+	public static boolean multiply(float[] a, int offsetA, float[] b, int offsetB, float[] out, int offsetOut, int n,
+			int m, int p) {
+		GpuDevice device = Probe.DEVICE;
+		return device != null
+				&& offered(extent(device, a), offsetA, extent(device, b), offsetB, extent(device, out), offsetOut, n, m,
+						p)
+				&& worthOrResident(device, (long) n * m * p, Probe.MIN_WORK, a, b)
+				&& device.gemmF(a, offsetA, b, offsetB, out, offsetOut, n, m, p);
+	}
+
+	/**
+	 * {@code out = a x b} for a STACK of {@code batch} row-major {@code n x m} by
+	 * {@code m x p} double-float products, written straight into the caller's array at
+	 * its own offset -- one round trip and one launch for the whole stack, because the
+	 * device carries the batch on {@code blockIdx.z}.
+	 *
+	 * <p>
+	 * {@code strideA} and {@code strideB} are per-batch ELEMENT strides, and either may
+	 * be 0: that is what a BROADCAST operand passes (a rank-2 right operand under a
+	 * rank-3 left one, which is every {@code torch:linear} over a {@code (B T C)}
+	 * activation), and the whole batch then reads the same slab -- so only that slab is
+	 * copied to the device. The result is contiguous, {@code n * p} per batch.
+	 *
+	 * <p>
+	 * The precision contract is the unbatched one's, and it is exactly the same code: a
+	 * batched cell is a per-batch
+	 * {@link #multiply(double[], int, double[], int, double[], int, int, int, int)
+	 * multiply} of the same slab, folding {@code k} in ascending order with a FUSED
+	 * multiply-add per term.
+	 * @param a the left operands, row-major, the first starting at {@code offsetA}
+	 * @param offsetA the index of {@code a}'s first element
+	 * @param strideA elements from one left operand to the next, or 0 to broadcast
+	 * @param b the right operands, row-major, the first starting at {@code offsetB}
+	 * @param offsetB the index of {@code b}'s first element
+	 * @param strideB elements from one right operand to the next, or 0 to broadcast
+	 * @param out the array the {@code batch * n * p} result is written into
+	 * @param offsetOut the index in {@code out} the result starts at
+	 * @param batch how many products are stacked
+	 * @param n rows of each left operand and of each result
+	 * @param m columns of each {@code a} and rows of each {@code b}
+	 * @param p columns of each {@code b} and of each result
+	 * @return {@code true} when {@code out} was filled; {@code false} when this call
+	 * declined, in which case {@code out} is untouched
+	 */
+	public static boolean multiply(double[] a, int offsetA, int strideA, double[] b, int offsetB, int strideB,
+			double[] out, int offsetOut, int batch, int n, int m, int p) {
+		GpuDevice device = Probe.DEVICE;
+		return device != null
+				&& offered(extent(device, a), offsetA, strideA, extent(device, b), offsetB, strideB,
+						extent(device, out), offsetOut, batch, n, m, p)
+				&& worthOrResident(device, (long) batch * n * m * p, Probe.MIN_WORK, a, b)
+				&& device.gemm(a, offsetA, strideA, b, offsetB, strideB, out, offsetOut, batch, n, m, p);
+	}
+
+	/**
+	 * The single-float sibling of
+	 * {@link #multiply(double[], int, int, double[], int, int, double[], int, int, int, int, int)},
+	 * and the one the hardware is for.
+	 * @param a the left operands, row-major, the first starting at {@code offsetA}
+	 * @param offsetA the index of {@code a}'s first element
+	 * @param strideA elements from one left operand to the next, or 0 to broadcast
+	 * @param b the right operands, row-major, the first starting at {@code offsetB}
+	 * @param offsetB the index of {@code b}'s first element
+	 * @param strideB elements from one right operand to the next, or 0 to broadcast
+	 * @param out the array the {@code batch * n * p} result is written into
+	 * @param offsetOut the index in {@code out} the result starts at
+	 * @param batch how many products are stacked
+	 * @param n rows of each left operand and of each result
+	 * @param m columns of each {@code a} and rows of each {@code b}
+	 * @param p columns of each {@code b} and of each result
+	 * @return {@code true} when {@code out} was filled
+	 */
+	public static boolean multiply(float[] a, int offsetA, int strideA, float[] b, int offsetB, int strideB,
+			float[] out, int offsetOut, int batch, int n, int m, int p) {
+		GpuDevice device = Probe.DEVICE;
+		return device != null
+				&& offered(extent(device, a), offsetA, strideA, extent(device, b), offsetB, strideB,
+						extent(device, out), offsetOut, batch, n, m, p)
+				&& worthOrResident(device, (long) batch * n * m * p, Probe.MIN_WORK, a, b)
+				&& device.gemmF(a, offsetA, strideA, b, offsetB, strideB, out, offsetOut, batch, n, m, p);
+	}
+
+	/**
+	 * The stacked product with either operand read TRANSPOSED IN PLACE: {@code a} is
+	 * still {@code n x m} and {@code b} still {@code m x p} as the product sees them, but
+	 * a transposed one is STORED with those two axes exchanged, and the kernel indexes it
+	 * where it lies instead of being handed a strided copy of it.
+	 *
+	 * <p>
+	 * That is the shape the two matmul adjoints have -- {@code g . b^T} and
+	 * {@code a^T . g} -- and the reason this overload exists: transposing first is a full
+	 * memory pass over an activation, which at a transformer's shapes was the largest
+	 * element-wise cost left in a training step after the fused tier.
+	 *
+	 * <p>
+	 * The per-batch strides are the operand's OWN, unchanged by the orientation: a
+	 * transposed slab holds the same {@code n * m} elements. Everything else is
+	 * {@link #multiply(float[], int, int, float[], int, int, float[], int, int, int, int, int)}'s,
+	 * the precision contract included -- the transposed cell folds {@code k} in the same
+	 * ascending order through the same fused multiply-adds, so the result is
+	 * BIT-IDENTICAL to the plain product of the transposed copy, and which orientation
+	 * ran is not observable.
+	 * @param a the left operands, row-major, the first starting at {@code offsetA}
+	 * @param offsetA the index of {@code a}'s first element
+	 * @param strideA elements from one left operand to the next, or 0 to broadcast
+	 * @param transposeA whether each left slab is stored {@code m x n}
+	 * @param b the right operands, row-major, the first starting at {@code offsetB}
+	 * @param offsetB the index of {@code b}'s first element
+	 * @param strideB elements from one right operand to the next, or 0 to broadcast
+	 * @param transposeB whether each right slab is stored {@code p x m}
+	 * @param out the array the {@code batch * n * p} result is written into
+	 * @param offsetOut the index in {@code out} the result starts at
+	 * @param batch how many products are stacked
+	 * @param n rows of each left operand and of each result
+	 * @param m columns of each {@code a} and rows of each {@code b}
+	 * @param p columns of each {@code b} and of each result
+	 * @return {@code true} when {@code out} was filled; {@code false} when this call
+	 * declined -- which includes every backend with no transposed kernel
+	 */
+	public static boolean multiply(float[] a, int offsetA, int strideA, boolean transposeA, float[] b, int offsetB,
+			int strideB, boolean transposeB, float[] out, int offsetOut, int batch, int n, int m, int p) {
+		GpuDevice device = Probe.DEVICE;
+		return device != null
+				&& offered(extent(device, a), offsetA, strideA, extent(device, b), offsetB, strideB,
+						extent(device, out), offsetOut, batch, n, m, p)
+				&& worthOrResident(device, (long) batch * n * m * p, Probe.MIN_WORK, a, b) && device.gemmFT(a, offsetA,
+						strideA, transposeA, b, offsetB, strideB, transposeB, out, offsetOut, batch, n, m, p);
+	}
+
+	/**
+	 * The double-float sibling of
+	 * {@link #multiply(float[], int, int, boolean, float[], int, int, boolean, float[], int, int, int, int, int)}.
+	 * @param a the left operands, row-major, the first starting at {@code offsetA}
+	 * @param offsetA the index of {@code a}'s first element
+	 * @param strideA elements from one left operand to the next, or 0 to broadcast
+	 * @param transposeA whether each left slab is stored {@code m x n}
+	 * @param b the right operands, row-major, the first starting at {@code offsetB}
+	 * @param offsetB the index of {@code b}'s first element
+	 * @param strideB elements from one right operand to the next, or 0 to broadcast
+	 * @param transposeB whether each right slab is stored {@code p x m}
+	 * @param out the array the {@code batch * n * p} result is written into
+	 * @param offsetOut the index in {@code out} the result starts at
+	 * @param batch how many products are stacked
+	 * @param n rows of each left operand and of each result
+	 * @param m columns of each {@code a} and rows of each {@code b}
+	 * @param p columns of each {@code b} and of each result
+	 * @return {@code true} when {@code out} was filled
+	 */
+	public static boolean multiply(double[] a, int offsetA, int strideA, boolean transposeA, double[] b, int offsetB,
+			int strideB, boolean transposeB, double[] out, int offsetOut, int batch, int n, int m, int p) {
+		GpuDevice device = Probe.DEVICE;
+		return device != null
+				&& offered(extent(device, a), offsetA, strideA, extent(device, b), offsetB, strideB,
+						extent(device, out), offsetOut, batch, n, m, p)
+				&& worthOrResident(device, (long) batch * n * m * p, Probe.MIN_WORK, a, b) && device.gemmT(a, offsetA,
+						strideA, transposeA, b, offsetB, strideB, transposeB, out, offsetOut, batch, n, m, p);
+	}
+
+	/**
+	 * {@code a x b} into a fresh array -- the convenience form, for a caller that wants a
+	 * bare {@code n * p} result with no header of its own.
+	 * @param a the left operand, row-major, elements starting at {@code offsetA}
+	 * @param offsetA the index of {@code a}'s first element
+	 * @param b the right operand, row-major, elements starting at {@code offsetB}
+	 * @param offsetB the index of {@code b}'s first element
+	 * @param n rows of {@code a} and of the result
+	 * @param m columns of {@code a} and rows of {@code b}
+	 * @param p columns of {@code b} and of the result
+	 * @return a fresh {@code n * p} array, or {@code null} when this call declines
+	 */
+	public static double @Nullable [] multiply(double[] a, int offsetA, double[] b, int offsetB, int n, int m, int p) {
+		GpuDevice device = Probe.DEVICE;
+		if (device == null || !offered(extent(device, a), offsetA, extent(device, b), offsetB, (long) n * p, 0, n, m, p)
+				|| !worthOrResident(device, (long) n * m * p, Probe.MIN_WORK, a, b)) {
+			return null;
+		}
+		double[] out = new double[n * p];
+		return multiply(a, offsetA, b, offsetB, out, 0, n, m, p) ? out : null;
+	}
+
+	/**
+	 * The single-float sibling of
+	 * {@link #multiply(double[], int, double[], int, int, int, int)}.
+	 * @param a the left operand, row-major, elements starting at {@code offsetA}
+	 * @param offsetA the index of {@code a}'s first element
+	 * @param b the right operand, row-major, elements starting at {@code offsetB}
+	 * @param offsetB the index of {@code b}'s first element
+	 * @param n rows of {@code a} and of the result
+	 * @param m columns of {@code a} and rows of {@code b}
+	 * @param p columns of {@code b} and of the result
+	 * @return a fresh {@code n * p} array, or {@code null} when this call declines
+	 */
+	public static float @Nullable [] multiply(float[] a, int offsetA, float[] b, int offsetB, int n, int m, int p) {
+		GpuDevice device = Probe.DEVICE;
+		if (device == null || !offered(extent(device, a), offsetA, extent(device, b), offsetB, (long) n * p, 0, n, m, p)
+				|| !worthOrResident(device, (long) n * m * p, Probe.MIN_WORK, a, b)) {
+			return null;
+		}
+		float[] out = new float[n * p];
+		return multiply(a, offsetA, b, offsetB, out, 0, n, m, p) ? out : null;
+	}
+
+	/**
+	 * Whether an element-wise map over {@code n} elements is big enough to be worth a
+	 * round trip at all -- the {@link #worth(long, long, long) worth} of the element-wise
+	 * tier, and the same kind of predicate: a pure size test that touches no driver, so a
+	 * caller can ask it before it unwraps its operand, and {@link #map} re-asks the real
+	 * question.
+	 *
+	 * <p>
+	 * It does not take the op code. Every member {@link #map} accepts costs the CPU a
+	 * libm call per element, and the spread between the cheapest of them and the dearest
+	 * (measured, 5x) is far smaller than the margin at the threshold, so one number
+	 * serves them all and a per-op table would be precision this measurement does not
+	 * support.
+	 * @param n how many elements the map covers
+	 * @return {@code true} when the map is above the size threshold
+	 */
+	public static boolean worthMap(long n) {
+		return n >= MAP_POOLED_MIN_ELEMENTS;
+	}
+
+	/**
+	 * {@code out[i] = op(a[i])} for {@code n} elements of a double-float array, written
+	 * straight into the caller's array at its own offset -- the ELEMENT-WISE tier.
+	 *
+	 * <p>
+	 * {@code op} is one of the {@link #MAP_EXP} constants; anything else declines, and so
+	 * does a map below the size threshold, one whose elements are not inside the arrays
+	 * it was handed, and everything the {@linkplain Gpu class contract} already covers.
+	 *
+	 * <p>
+	 * The result is NOT bit-identical to {@code java.lang.Math}'s answer for the same
+	 * member, and the break is far bigger than the fused multiply-add that separates an
+	 * accelerated product from a scalar one: two correctly-implemented libms simply
+	 * differ in their last ulps, and the device has its own. A caller that needs identity
+	 * must not offer the map. {@code .kb/gpu.md} carries the measured divergence per
+	 * member and per width.
+	 * @param op which member to apply, one of the {@code MAP_*} constants
+	 * @param a the operand
+	 * @param offsetA the index of {@code a}'s first element
+	 * @param out the array the {@code n} results are written into
+	 * @param offsetOut the index in {@code out} the results start at
+	 * @param n how many elements to map
+	 * @return {@code true} when {@code out} was filled; {@code false} when this call
+	 * declined, in which case {@code out} is untouched
+	 */
+	public static boolean map(int op, double[] a, int offsetA, double[] out, int offsetOut, int n) {
+		GpuDevice device = Probe.DEVICE;
+		return device != null && offeredMap(op, extent(device, a), offsetA, extent(device, out), offsetOut, n)
+				&& worthMapOrResident(device, op, n, a) && device.map(op, a, offsetA, out, offsetOut, n);
+	}
+
+	/**
+	 * The single-float sibling of {@link #map(int, double[], int, double[], int, int)},
+	 * and the one the hardware is for -- measured at 15-18x this width's kernel time on
+	 * the machine this was tuned on.
+	 * @param op which member to apply, one of the {@code MAP_*} constants
+	 * @param a the operand
+	 * @param offsetA the index of {@code a}'s first element
+	 * @param out the array the {@code n} results are written into
+	 * @param offsetOut the index in {@code out} the results start at
+	 * @param n how many elements to map
+	 * @return {@code true} when {@code out} was filled
+	 */
+	public static boolean map(int op, float[] a, int offsetA, float[] out, int offsetOut, int n) {
+		GpuDevice device = Probe.DEVICE;
+		return device != null && offeredMap(op, extent(device, a), offsetA, extent(device, out), offsetOut, n)
+				&& worthMapOrResident(device, op, n, a) && device.mapF(op, a, offsetA, out, offsetOut, n);
+	}
+
+	/**
+	 * The map's policy: a libm member at or above the size threshold, or ANY member over
+	 * a resident operand -- there is no trip to pay for then, and a result that stays
+	 * resident saves the next one.
+	 */
+	private static boolean worthMapOrResident(GpuDevice device, int op, long n, Object a) {
+		return (op < MAP_LIBM_OPS && n >= Probe.MAP_MIN_ELEMENTS) || device.resident(a);
+	}
+
+	/**
+	 * The policy every size-thresholded member shares: big enough for the threshold in
+	 * force, or an operand already resident.
+	 */
+	private static boolean worthOrResident(GpuDevice device, long work, long threshold, Object a, Object b) {
+		return work >= threshold || device.resident(a) || device.resident(b);
+	}
+
+	private static boolean worthOrResident(GpuDevice device, long work, long threshold, Object a) {
+		return work >= threshold || device.resident(a);
+	}
+
+	/**
+	 * Whether a {@linkplain #bcast broadcast binary op} or a {@linkplain #gather strided
+	 * gather} over {@code n} OUTPUT elements is worth a round trip at all -- the same
+	 * kind of driver-free size predicate {@link #worthMap} is, and re-asked by the calls
+	 * themselves.
+	 * @param n how many elements the result holds
+	 * @return {@code true} when the call is above the size threshold
+	 */
+	public static boolean worthStrided(long n) {
+		return n >= STRIDED_POOLED_MIN_ELEMENTS;
+	}
+
+	/**
+	 * Whether an {@linkplain #fold axis fold} over {@code n} INPUT elements is worth a
+	 * round trip at all. It counts the input, which is what the fold reads and what the
+	 * copy up costs.
+	 * @param n how many elements the operand holds
+	 * @return {@code true} when the fold is above the size threshold
+	 */
+	public static boolean worthFold(long n) {
+		return n >= FOLD_POOLED_MIN_ELEMENTS;
+	}
+
+	/**
+	 * {@code out[i] = op(a[ia(i)], b[ib(i)])} over the whole of a BROADCAST binary
+	 * element-wise op: the output is {@code dims}, row-major, and each operand's flat
+	 * index follows its own per-axis stride, 0 on an axis it is stretched across. That is
+	 * numpy's broadcast rule expressed as two stride vectors, and it is what an
+	 * {@code (n m 1)} operand against an {@code (n m p)} one needs.
+	 *
+	 * <p>
+	 * Every element is read WIDENED to double, the op runs in double, and only the store
+	 * narrows -- so this is BIT-IDENTICAL to a scalar widen-compute-narrow walk at both
+	 * widths, unlike {@link #map}. The four arithmetic ops are correctly rounded in IEEE
+	 * 754 and the two selects are comparisons, so there is nothing left for a libm to
+	 * disagree about.
+	 * @param op which op to apply, one of the {@link #BIN_ADD} constants
+	 * @param a the left operand
+	 * @param offsetA the index of {@code a}'s first element
+	 * @param strideA {@code a}'s stride along each output axis, in elements
+	 * @param b the right operand
+	 * @param offsetB the index of {@code b}'s first element
+	 * @param strideB {@code b}'s stride along each output axis, in elements
+	 * @param out the array the result is written into
+	 * @param offsetOut the index in {@code out} the result starts at
+	 * @param dims the output shape, outermost first
+	 * @return {@code true} when {@code out} was filled; {@code false} when this call
+	 * declined, in which case {@code out} is untouched
+	 */
+	public static boolean bcast(int op, double[] a, int offsetA, int[] strideA, double[] b, int offsetB, int[] strideB,
+			double[] out, int offsetOut, int[] dims) {
+		GpuDevice device = Probe.DEVICE;
+		return device != null
+				&& offeredBcast(op, extent(device, a), offsetA, strideA, extent(device, b), offsetB, strideB,
+						extent(device, out), offsetOut, dims)
+				&& worthOrResident(device, stridedCount(dims), Probe.STRIDED_MIN_ELEMENTS, a, b)
+				&& device.bcast(op, a, offsetA, strideA, b, offsetB, strideB, out, offsetOut, dims);
+	}
+
+	/**
+	 * The single-float sibling of
+	 * {@link #bcast(int, double[], int, int[], double[], int, int[], double[], int, int[])},
+	 * and the width the hardware is for. It widens to double, computes in double and
+	 * narrows on the store exactly as the double form does, which is what keeps it
+	 * bit-identical to the caller's own scalar walk.
+	 * @param op which op to apply, one of the {@link #BIN_ADD} constants
+	 * @param a the left operand
+	 * @param offsetA the index of {@code a}'s first element
+	 * @param strideA {@code a}'s stride along each output axis, in elements
+	 * @param b the right operand
+	 * @param offsetB the index of {@code b}'s first element
+	 * @param strideB {@code b}'s stride along each output axis, in elements
+	 * @param out the array the result is written into
+	 * @param offsetOut the index in {@code out} the result starts at
+	 * @param dims the output shape, outermost first
+	 * @return {@code true} when {@code out} was filled
+	 */
+	public static boolean bcast(int op, float[] a, int offsetA, int[] strideA, float[] b, int offsetB, int[] strideB,
+			float[] out, int offsetOut, int[] dims) {
+		GpuDevice device = Probe.DEVICE;
+		return device != null
+				&& offeredBcast(op, extent(device, a), offsetA, strideA, extent(device, b), offsetB, strideB,
+						extent(device, out), offsetOut, dims)
+				&& worthOrResident(device, stridedCount(dims), Probe.STRIDED_MIN_ELEMENTS, a, b)
+				&& device.bcastF(op, a, offsetA, strideA, b, offsetB, strideB, out, offsetOut, dims);
+	}
+
+	/**
+	 * {@code out[i] = a[ia(i)]}: a pure permuted COPY, where the output is {@code dims},
+	 * row-major, and the source index follows one stride per output axis. An axes
+	 * transpose is exactly this with the source's own strides permuted; so is any other
+	 * strided view materialization. Being a copy it is trivially bit-identical.
+	 * @param a the operand
+	 * @param offsetA the index of {@code a}'s first element
+	 * @param strideA {@code a}'s stride along each output axis, in elements
+	 * @param out the array the result is written into
+	 * @param offsetOut the index in {@code out} the result starts at
+	 * @param dims the output shape, outermost first
+	 * @return {@code true} when {@code out} was filled; {@code false} when this call
+	 * declined, in which case {@code out} is untouched
+	 */
+	public static boolean gather(double[] a, int offsetA, int[] strideA, double[] out, int offsetOut, int[] dims) {
+		GpuDevice device = Probe.DEVICE;
+		return device != null
+				&& offeredGather(extent(device, a), offsetA, strideA, extent(device, out), offsetOut, dims)
+				&& worthOrResident(device, stridedCount(dims), Probe.STRIDED_MIN_ELEMENTS, a)
+				&& device.gather(a, offsetA, strideA, out, offsetOut, dims);
+	}
+
+	/**
+	 * The single-float sibling of
+	 * {@link #gather(double[], int, int[], double[], int, int[])}.
+	 * @param a the operand
+	 * @param offsetA the index of {@code a}'s first element
+	 * @param strideA {@code a}'s stride along each output axis, in elements
+	 * @param out the array the result is written into
+	 * @param offsetOut the index in {@code out} the result starts at
+	 * @param dims the output shape, outermost first
+	 * @return {@code true} when {@code out} was filled
+	 */
+	public static boolean gather(float[] a, int offsetA, int[] strideA, float[] out, int offsetOut, int[] dims) {
+		GpuDevice device = Probe.DEVICE;
+		return device != null
+				&& offeredGather(extent(device, a), offsetA, strideA, extent(device, out), offsetOut, dims)
+				&& worthOrResident(device, stridedCount(dims), Probe.STRIDED_MIN_ELEMENTS, a)
+				&& device.gatherF(a, offsetA, strideA, out, offsetOut, dims);
+	}
+
+	/**
+	 * The fold of ONE axis of a row-major array: for each of the {@code outer * inner}
+	 * output cells, {@code out[o * inner + j]} folds {@code a[(o * len + k) * inner + j]}
+	 * over {@code k} ASCENDING. {@code outer} is the product of the axes before the
+	 * folded one and {@code inner} the product of those after it, so any rank reduces to
+	 * those three numbers.
+	 *
+	 * <p>
+	 * The accumulator is a {@code double} at BOTH widths and only the store narrows,
+	 * which is the same widen-compute-narrow rule {@link #bcast} follows -- and it is
+	 * deliberately NOT a parallel tree reduction: one thread walks each output cell's
+	 * whole axis in order, so the sum is the caller's own sequential sum and the fold is
+	 * bit-identical. That is also why a fold with too few output cells declines: it would
+	 * be a single-threaded device loop.
+	 * @param op which fold, one of the {@link #FOLD_SUM} constants
+	 * @param a the operand
+	 * @param offsetA the index of {@code a}'s first element
+	 * @param out the array the {@code outer * inner} results are written into
+	 * @param offsetOut the index in {@code out} the results start at
+	 * @param outer the product of the axes before the folded one
+	 * @param len the folded axis's own extent
+	 * @param inner the product of the axes after the folded one
+	 * @return {@code true} when {@code out} was filled; {@code false} when this call
+	 * declined, in which case {@code out} is untouched
+	 */
+	public static boolean fold(int op, double[] a, int offsetA, double[] out, int offsetOut, int outer, int len,
+			int inner) {
+		GpuDevice device = Probe.DEVICE;
+		if (device == null) {
+			return false;
+		}
+		boolean resident = device.resident(a);
+		return offeredFold(op, extent(device, a), offsetA, extent(device, out), offsetOut, outer, len, inner, resident)
+				&& (resident || (long) outer * inner * len >= Probe.FOLD_MIN_ELEMENTS)
+				&& device.fold(op, a, offsetA, out, offsetOut, outer, len, inner);
+	}
+
+	/**
+	 * The single-float sibling of
+	 * {@link #fold(int, double[], int, double[], int, int, int, int)}. The accumulator is
+	 * still a {@code double} -- narrowing it per term would be a different sum from the
+	 * caller's.
+	 * @param op which fold, one of the {@link #FOLD_SUM} constants
+	 * @param a the operand
+	 * @param offsetA the index of {@code a}'s first element
+	 * @param out the array the {@code outer * inner} results are written into
+	 * @param offsetOut the index in {@code out} the results start at
+	 * @param outer the product of the axes before the folded one
+	 * @param len the folded axis's own extent
+	 * @param inner the product of the axes after the folded one
+	 * @return {@code true} when {@code out} was filled
+	 */
+	public static boolean fold(int op, float[] a, int offsetA, float[] out, int offsetOut, int outer, int len,
+			int inner) {
+		GpuDevice device = Probe.DEVICE;
+		if (device == null) {
+			return false;
+		}
+		boolean resident = device.resident(a);
+		return offeredFold(op, extent(device, a), offsetA, extent(device, out), offsetOut, outer, len, inner, resident)
+				&& (resident || (long) outer * inner * len >= Probe.FOLD_MIN_ELEMENTS)
+				&& device.foldF(op, a, offsetA, out, offsetOut, outer, len, inner);
+	}
+
+	/**
+	 * The INDEX tier, member one of three: the axis-0 slabs of {@code a} named by
+	 * {@code idx}, in the index vector's order --
+	 * {@code out[i * slab + k] = a[idx[i] * slab + k]}. An embedding lookup is this and
+	 * nothing else. A pure copy, so it is bit-identical to any CPU kernel, and like the
+	 * rest of the resident tier it is offered ONLY over an operand that is already on the
+	 * device: a gather that has to copy its table up cannot beat a
+	 * {@code System.arraycopy} loop, and a resident one costs a launch.
+	 * @param a the table
+	 * @param offsetA the index of {@code a}'s first element
+	 * @param lenA how many elements of {@code a} the table spans
+	 * @param out the array the {@code idx.length * slab} results are written into
+	 * @param offsetOut the index in {@code out} the result starts at
+	 * @param idx the slab numbers to take, each in {@code [0, lenA / slab)}
+	 * @param slab the element count of one axis-0 slab
+	 * @return {@code true} when {@code out} was filled
+	 */
+	public static boolean takeRows(double[] a, int offsetA, int lenA, double[] out, int offsetOut, int[] idx,
+			int slab) {
+		GpuDevice device = Probe.DEVICE;
+		return device != null
+				&& offeredTake(extent(device, a), offsetA, lenA, extent(device, out), offsetOut, idx, slab)
+				&& device.resident(a) && device.take(0, a, offsetA, lenA, out, offsetOut, idx, idx.length * slab, slab);
+	}
+
+	/**
+	 * The single-float sibling of
+	 * {@link #takeRows(double[], int, int, double[], int, int[], int)}.
+	 */
+	public static boolean takeRows(float[] a, int offsetA, int lenA, float[] out, int offsetOut, int[] idx, int slab) {
+		GpuDevice device = Probe.DEVICE;
+		return device != null
+				&& offeredTake(extent(device, a), offsetA, lenA, extent(device, out), offsetOut, idx, slab)
+				&& device.resident(a)
+				&& device.takeF(0, a, offsetA, lenA, out, offsetOut, idx, idx.length * slab, slab);
+	}
+
+	/**
+	 * Member two: one element per ROW, the column chosen by the index vector --
+	 * {@code out[i] = a[i * cols + idx[i]]} over an {@code idx.length x cols} matrix.
+	 * That is the fancy-indexing idiom a class-index cross entropy picks its target logit
+	 * with. A pure copy again, and again offered over a resident operand only.
+	 * @param a the matrix
+	 * @param offsetA the index of {@code a}'s first element
+	 * @param out the array the {@code idx.length} results are written into
+	 * @param offsetOut the index in {@code out} the result starts at
+	 * @param idx one column number per row, each in {@code [0, cols)}
+	 * @param cols the matrix's row length
+	 * @return {@code true} when {@code out} was filled
+	 */
+	public static boolean pick(double[] a, int offsetA, double[] out, int offsetOut, int[] idx, int cols) {
+		GpuDevice device = Probe.DEVICE;
+		return device != null && offeredPick(extent(device, a), offsetA, extent(device, out), offsetOut, idx, cols)
+				&& device.resident(a)
+				&& device.take(1, a, offsetA, idx.length * cols, out, offsetOut, idx, idx.length, cols);
+	}
+
+	/**
+	 * The single-float sibling of
+	 * {@link #pick(double[], int, double[], int, int[], int)}.
+	 */
+	public static boolean pick(float[] a, int offsetA, float[] out, int offsetOut, int[] idx, int cols) {
+		GpuDevice device = Probe.DEVICE;
+		return device != null && offeredPick(extent(device, a), offsetA, extent(device, out), offsetOut, idx, cols)
+				&& device.resident(a)
+				&& device.takeF(1, a, offsetA, idx.length * cols, out, offsetOut, idx, idx.length, cols);
+	}
+
+	/**
+	 * Member three, and the adjoint of {@link #takeRows}: slab {@code i} of {@code g}
+	 * ADDED into slab {@code idx[i]} of {@code z}, IN PLACE, with a repeated index
+	 * accumulating in INDEX order -- which is the CPU kernel's value and not merely its
+	 * result, so this member sorts the indices by destination before it launches rather
+	 * than reaching for atomics. Widen, add, narrow per step, exactly as the CPU does,
+	 * hence bit-identical. Offered once either array is resident: the gradient usually
+	 * is, and {@code z} -- a fresh zero table -- then stays on the device for the
+	 * optimizer.
+	 * @param z the destination table, written in place
+	 * @param offsetZ the index of {@code z}'s first element
+	 * @param g the gradient, {@code idx.length} slabs of {@code slab} elements
+	 * @param offsetG the index of {@code g}'s first element
+	 * @param idx the destination slab of each of {@code g}'s, each in {@code [0, rows)}
+	 * @param rows how many slabs {@code z} has
+	 * @param slab the element count of one slab
+	 * @return {@code true} when the scatter ran
+	 */
+	public static boolean scatterRows(double[] z, int offsetZ, double[] g, int offsetG, int[] idx, int rows, int slab) {
+		GpuDevice device = Probe.DEVICE;
+		if (device == null || !offeredScatter(extent(device, z), offsetZ, extent(device, g), offsetG, idx, rows, slab)
+				|| !(device.resident(g) || device.resident(z))) {
+			return false;
+		}
+		return device.scatter(z, offsetZ, g, offsetG, groupByDestination(idx, rows), rows, slab, idx.length);
+	}
+
+	/**
+	 * The single-float sibling of
+	 * {@link #scatterRows(double[], int, double[], int, int[], int, int)}.
+	 */
+	public static boolean scatterRows(float[] z, int offsetZ, float[] g, int offsetG, int[] idx, int rows, int slab) {
+		GpuDevice device = Probe.DEVICE;
+		if (device == null || !offeredScatter(extent(device, z), offsetZ, extent(device, g), offsetG, idx, rows, slab)
+				|| !(device.resident(g) || device.resident(z))) {
+			return false;
+		}
+		return device.scatterF(z, offsetZ, g, offsetG, groupByDestination(idx, rows), rows, slab, idx.length);
+	}
+
+	/**
+	 * {@code seed + sum(a[i] * a[i])} over {@code n} elements in a {@code double}
+	 * accumulator, or {@code null} when this call declined -- the sum a gradient-norm
+	 * clip measures its norm with, and the ONE member of this library whose result is not
+	 * the caller's own arithmetic in the caller's own order.
+	 *
+	 * <p>
+	 * A single left fold has no parallel form: every other reduction here keeps its
+	 * caller's order by giving each output cell one thread and walking it sequentially,
+	 * and a whole-array sum has one cell. So this member folds in BLOCKS -- each block a
+	 * grid-strided slice of the array, added up in a shared-memory tree, and the block
+	 * partials added in block order by the caller -- which is the same arithmetic with a
+	 * different association: every term is rounded exactly where the sequential fold
+	 * rounds it, and the block count is a pure function of {@code n}, so the answer is
+	 * reproducible. It is a closer approximation of the exact sum than the sequential
+	 * fold is, and it differs from it. See {@code .kb/gpu.md}.
+	 *
+	 * <p>
+	 * Offered over a RESIDENT operand only, like the rest of that tier: this reads its
+	 * whole operand once, so over a round trip a CPU that already has the bytes wins.
+	 * @param a the operand
+	 * @param offsetA the index of {@code a}'s first element
+	 * @param n how many elements to fold
+	 * @param seed the accumulator to start from
+	 * @return the total, or {@code null} when the device declined
+	 */
+	public static @Nullable Double sumSquares(double[] a, int offsetA, int n, double seed) {
+		GpuDevice device = Probe.DEVICE;
+		if (device == null || n < 1 || offsetA < 0 || (long) offsetA + n > extent(device, a) || !device.resident(a)) {
+			return null;
+		}
+		return total(device.sumSquares(a, offsetA, n), seed);
+	}
+
+	/** The single-float sibling of {@link #sumSquares(double[], int, int, double)}. */
+	public static @Nullable Double sumSquares(float[] a, int offsetA, int n, double seed) {
+		GpuDevice device = Probe.DEVICE;
+		if (device == null || n < 1 || offsetA < 0 || (long) offsetA + n > extent(device, a) || !device.resident(a)) {
+			return null;
+		}
+		return total(device.sumSquaresF(a, offsetA, n), seed);
+	}
+
+	/** The block partials added up in block order, from the caller's accumulator. */
+	private static @Nullable Double total(double @Nullable [] partials, double seed) {
+		if (partials == null) {
+			return null;
+		}
+		double sum = seed;
+		for (double p : partials) {
+			sum += p;
+		}
+		return sum;
+	}
+
+	/**
+	 * The scatter's indices sorted by DESTINATION, stably, as the kernel reads them:
+	 * {@code rows + 1} group starts followed by the source slab numbers, ascending inside
+	 * each group. A counting sort, so it costs one pass over the indices and one over the
+	 * rows -- both of which are tiny beside the slabs they move.
+	 */
+	private static int[] groupByDestination(int[] idx, int rows) {
+		int m = idx.length;
+		int[] meta = new int[rows + 1 + m];
+		for (int value : idx) {
+			meta[value + 1]++;
+		}
+		for (int r = 0; r < rows; r++) {
+			meta[r + 1] += meta[r];
+		}
+		int[] cursor = new int[rows];
+		for (int r = 0; r < rows; r++) {
+			cursor[r] = meta[r];
+		}
+		for (int i = 0; i < m; i++) {
+			meta[rows + 1 + cursor[idx[i]]++] = i;
+		}
+		return meta;
+	}
+
+	/** Whether an index-driven slab gather is inside both arrays and its index range. */
+	private static boolean offeredTake(long lengthA, int offsetA, int lenA, long lengthOut, int offsetOut, int[] idx,
+			int slab) {
+		if (slab < 1 || lenA < slab || idx.length < 1 || offsetA < 0 || offsetOut < 0
+				|| (long) offsetA + lenA > lengthA) {
+			return false;
+		}
+		long out = (long) idx.length * slab;
+		return out <= Integer.MAX_VALUE && fitsResult(lengthOut, offsetOut, out) && inRange(idx, lenA / slab);
+	}
+
+	/** The same for the per-row pick. */
+	private static boolean offeredPick(long lengthA, int offsetA, long lengthOut, int offsetOut, int[] idx, int cols) {
+		if (cols < 1 || idx.length < 1 || offsetA < 0 || offsetOut < 0) {
+			return false;
+		}
+		long span = (long) idx.length * cols;
+		return span <= Integer.MAX_VALUE && offsetA + span <= lengthA && fitsResult(lengthOut, offsetOut, idx.length)
+				&& inRange(idx, cols);
+	}
+
+	/** The same for the scatter-add. */
+	private static boolean offeredScatter(long lengthZ, int offsetZ, long lengthG, int offsetG, int[] idx, int rows,
+			int slab) {
+		if (slab < 1 || rows < 1 || idx.length < 1 || offsetZ < 0 || offsetG < 0) {
+			return false;
+		}
+		long z = (long) rows * slab, g = (long) idx.length * slab;
+		return z <= Integer.MAX_VALUE && g <= Integer.MAX_VALUE && offsetZ + z <= lengthZ && offsetG + g <= lengthG
+				&& inRange(idx, rows);
+	}
+
+	/** Whether every index is inside {@code [0, bound)}. */
+	private static boolean inRange(int[] idx, int bound) {
+		for (int value : idx) {
+			if (value < 0 || value >= bound) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	/**
+	 * Whether a {@linkplain #rngFill generator fill} of {@code n} elements is worth a
+	 * round trip at all -- the driver-free size predicate, re-asked by the call itself.
+	 * Answers with the pooled CUDA constant like every other {@code worth}, and for the
+	 * same reason: it must cost nothing and answer the same before and after the probe.
+	 * (It read the threshold IN FORCE until 2026-08-22, which made it {@code false} at
+	 * every size on a Mac -- where the fill is not a member -- and ran the probe from a
+	 * predicate documented as driver-free; {@code GpuDeclineTest} caught it the first
+	 * time it ran on one.)
+	 * @param n how many elements the fill writes
+	 * @return {@code true} when the fill is above the size threshold
+	 */
+	public static boolean worthRng(long n) {
+		return n >= RNG_POOLED_MIN_ELEMENTS;
+	}
+
+	/**
+	 * Fills {@code n} elements of {@code out} from the Wichmann-Hill generator in state
+	 * {@code (s1, s2, s3)} -- the seeded generator behind {@code linalg:rand} /
+	 * {@code randn} / {@code uniform}: {@code mode} 0 is one uniform {@code [0, 1)} draw
+	 * per element, 1 the sum of twelve draws minus 6 (the Irwin-Hall normal), 2
+	 * {@code lo + span * draw}. The kernel reproduces the scalar generator operation for
+	 * operation and is BIT-IDENTICAL to a sequential fill at both widths: every element
+	 * starts from the state the closed form {@code a^k s mod m} puts it at, then draws as
+	 * the sequential walk would, and only the store into a single-float result narrows.
+	 * The state the generator ENDS on is the caller's to compute, through
+	 * {@link #rngAdvance}, from the same closed form.
+	 *
+	 * <p>
+	 * Declines a mode outside 0..2, a state word outside {@code [0, 2^23)} (the range the
+	 * generator keeps, and the range in which the integer arithmetic is exact), a fill
+	 * below the size threshold, and one that does not fit inside {@code out}.
+	 * @param out the array the draws are written into
+	 * @param offsetOut the index in {@code out} the fill starts at
+	 * @param n how many elements to fill
+	 * @param mode which element rule, 0..2
+	 * @param lo the lower bound of rule 2
+	 * @param span the range of rule 2
+	 * @param s1 the first state word
+	 * @param s2 the second state word
+	 * @param s3 the third state word
+	 * @return {@code true} when {@code out} was filled; {@code false} when this call
+	 * declined, in which case {@code out} is untouched
+	 */
+	public static boolean rngFill(double[] out, int offsetOut, int n, int mode, double lo, double span, int s1, int s2,
+			int s3) {
+		GpuDevice device = Probe.DEVICE;
+		return device != null && offeredRng(extent(device, out), offsetOut, n, mode, s1, s2, s3)
+				&& device.rngFill(out, offsetOut, n, mode, lo, span, s1, s2, s3);
+	}
+
+	/**
+	 * The single-float sibling of
+	 * {@link #rngFill(double[], int, int, int, double, double, int, int, int)}: the draws
+	 * are computed in double and narrowed on the store, as the scalar fill does.
+	 * @param out the array the draws are written into
+	 * @param offsetOut the index in {@code out} the fill starts at
+	 * @param n how many elements to fill
+	 * @param mode which element rule, 0..2
+	 * @param lo the lower bound of rule 2
+	 * @param span the range of rule 2
+	 * @param s1 the first state word
+	 * @param s2 the second state word
+	 * @param s3 the third state word
+	 * @return {@code true} when {@code out} was filled
+	 */
+	public static boolean rngFill(float[] out, int offsetOut, int n, int mode, double lo, double span, int s1, int s2,
+			int s3) {
+		GpuDevice device = Probe.DEVICE;
+		return device != null && offeredRng(extent(device, out), offsetOut, n, mode, s1, s2, s3)
+				&& device.rngFillF(out, offsetOut, n, mode, lo, span, s1, s2, s3);
+	}
+
+	/**
+	 * The state the generator is in after {@code steps} draws from {@code (s1, s2, s3)}
+	 * -- the host half of {@link #rngFill}, by the same closed form the kernel uses
+	 * ({@code a^k s mod m}, square-and-multiply, exact integer arithmetic), so a fill's
+	 * end state is what a sequential walk would have reached. Pure arithmetic: it touches
+	 * no device and is available on every machine.
+	 * @param s1 the first state word
+	 * @param s2 the second state word
+	 * @param s3 the third state word
+	 * @param steps how many draws to advance by
+	 * @return the three state words after {@code steps} draws
+	 */
+	public static int[] rngAdvance(int s1, int s2, int s3, long steps) {
+		return new int[] { (int) ((long) s1 * modPow(171, steps, 30269) % 30269),
+				(int) ((long) s2 * modPow(172, steps, 30307) % 30307),
+				(int) ((long) s3 * modPow(170, steps, 30323) % 30323) };
+	}
+
+	private static long modPow(long a, long e, long m) {
+		long r = 1, b = a % m;
+		while (e > 0) {
+			if ((e & 1) != 0) {
+				r = r * b % m;
+			}
+			b = b * b % m;
+			e >>= 1;
+		}
+		return r;
+	}
+
+	/**
+	 * Whether a {@code rows x cols} matrix-by-vector product is big enough to be worth
+	 * offering at all -- the driver-free size predicate of the GEMV, re-asked by
+	 * {@link #matvec} with the threshold actually in force. {@code true} is "worth
+	 * unwrapping for", not "will be accepted": the call itself also asks whether the
+	 * matrix is RESIDENT, which no size can tell.
+	 * @param rows rows of the matrix and length of the result
+	 * @param cols columns of the matrix and length of the vector
+	 * @return {@code true} when the product is above the size threshold
+	 */
+	public static boolean worthMatvec(long rows, long cols) {
+		return rows > 0 && cols > 0 && rows * cols >= MATVEC_POOLED_MIN_ELEMENTS;
+	}
+
+	/**
+	 * {@code y = W x} for a row-major {@code rows x cols} double-float matrix and a
+	 * {@code cols}-long vector, written straight into the caller's array at its own
+	 * offset -- the GEMV behind {@code vec:matvec}, the one member of this library
+	 * outside {@code linalg:} and the one whose worth is decided by RESIDENCY rather than
+	 * by size.
+	 *
+	 * <p>
+	 * A matrix-by-vector product is memory-bound: its whole cost is one pass over
+	 * {@code W}, and copying {@code W} to the device costs more than the pass, so over
+	 * the link the device loses to the CPU up to ~2^19 elements. Over a matrix that is
+	 * ALREADY on the device -- a model's weight, which is read every step and never
+	 * written -- the call is the ~9 us floor plus a read at the device's own bandwidth,
+	 * and the CPU loses from 2^17 elements up. So this member is accepted only when its
+	 * matrix is resident, or when the same matrix has been offered before and not written
+	 * since -- in which case this call uploads it and every later call finds it there.
+	 * The first offer of a matrix declines and costs nothing; a matrix the program
+	 * rewrites between calls is never uploaded and never pays for the trip it would lose.
+	 * Every other operand and result follows the ordinary residency rule. On Metal the
+	 * same rule holds at {@code float} only, from a higher threshold (the floor is per
+	 * command buffer there; {@code MetalGemm}).
+	 *
+	 * <p>
+	 * The accumulator at {@code #d} is a {@code double}, and the fused multiply-add and
+	 * the warp's tree are the product's own few-ulp story. At {@code #f} (and
+	 * {@code #bf16}) it is a COMPENSATED float-float pair on both backends -- the
+	 * product's rounding error recovered with an fma, every addition a TwoSum -- which
+	 * carries ~48 bits and lands on the scalar defun's widen-accumulate-narrow bits on
+	 * every measured row (1024 of 1024, and every row of seven larger shapes). CUDA used
+	 * a double there too until 2026-09-06, when the double FMA per element measured as a
+	 * compute ceiling on a GB10 that the bfloat16 kernel hit at half the device's
+	 * bandwidth ({@code gemm.cu}). Neither width is asserted as byte-identity.
+	 * @param w the matrix, row-major, elements starting at {@code offsetW}
+	 * @param offsetW the index of {@code w}'s first element
+	 * @param x the vector, elements starting at {@code offsetX}
+	 * @param offsetX the index of {@code x}'s first element
+	 * @param y the array the {@code rows} results are written into
+	 * @param offsetY the index in {@code y} the results start at
+	 * @param rows rows of {@code w} and length of the result
+	 * @param cols columns of {@code w} and length of {@code x}
+	 * @return {@code true} when {@code y} was filled; {@code false} when this call
+	 * declined, in which case {@code y} is untouched
+	 */
+	public static boolean matvec(double[] w, int offsetW, double[] x, int offsetX, double[] y, int offsetY, int rows,
+			int cols) {
+		GpuDevice device = Probe.DEVICE;
+		return device != null && offeredMatvec(extent(device, w), offsetW, extent(device, x), offsetX,
+				extent(device, y), offsetY, rows, cols) && device.gemv(w, offsetW, x, offsetX, y, offsetY, rows, cols);
+	}
+
+	/**
+	 * The single-float sibling of
+	 * {@link #matvec(double[], int, double[], int, double[], int, int, int)}, and the
+	 * width a decode loop runs at. The accumulator is the compensated float pair
+	 * ({@code gemm.cu}).
+	 * @param w the matrix, row-major, elements starting at {@code offsetW}
+	 * @param offsetW the index of {@code w}'s first element
+	 * @param x the vector, elements starting at {@code offsetX}
+	 * @param offsetX the index of {@code x}'s first element
+	 * @param y the array the {@code rows} results are written into
+	 * @param offsetY the index in {@code y} the results start at
+	 * @param rows rows of {@code w} and length of the result
+	 * @param cols columns of {@code w} and length of {@code x}
+	 * @return {@code true} when {@code y} was filled
+	 */
+	public static boolean matvec(float[] w, int offsetW, float[] x, int offsetX, float[] y, int offsetY, int rows,
+			int cols) {
+		GpuDevice device = Probe.DEVICE;
+		return device != null && offeredMatvec(extent(device, w), offsetW, extent(device, x), offsetX,
+				extent(device, y), offsetY, rows, cols) && device.gemvF(w, offsetW, x, offsetX, y, offsetY, rows, cols);
+	}
+
+	/**
+	 * The bfloat16 sibling of
+	 * {@link #matvec(float[], int, float[], int, float[], int, int, int)}, and the width
+	 * a published checkpoint's weights arrive in: the matrix is a {@code short[]} of bf16
+	 * bit patterns -- the top sixteen bits of an f32 each, two bytes an element -- and
+	 * the vector and the result are f32, the one pairing the CPU's fused kernel has (bf16
+	 * weights against f32 activations, {@code .kb/bfloat16.md}). The kernel widens each
+	 * pattern in its lane loop, which is exact, and is otherwise the f32 kernel: the same
+	 * compensated accumulator, the same order, so it lands where the f32 kernel lands
+	 * over the widened matrix, bit for bit, and its relation to the scalar defun is the
+	 * f32 row's -- not a new precision class. What the width buys is the bytes: a
+	 * resident row streams half of what the f32 row does, on a member whose cost IS that
+	 * stream. The same residency rule, the same size threshold (re-derived at this width,
+	 * {@code .kb/gpu.md}), and a hard decline on a device without the kernel
+	 * ({@link GpuDevice#supportsBfloat16()}: Metal).
+	 * @param w the matrix, row-major bf16 patterns, elements starting at {@code offsetW}
+	 * @param offsetW the index of {@code w}'s first element
+	 * @param x the vector, elements starting at {@code offsetX}
+	 * @param offsetX the index of {@code x}'s first element
+	 * @param y the array the {@code rows} results are written into
+	 * @param offsetY the index in {@code y} the results start at
+	 * @param rows rows of {@code w} and length of the result
+	 * @param cols columns of {@code w} and length of {@code x}
+	 * @return {@code true} when {@code y} was filled
+	 */
+	public static boolean matvec(short[] w, int offsetW, float[] x, int offsetX, float[] y, int offsetY, int rows,
+			int cols) {
+		GpuDevice device = Probe.DEVICE;
+		return device != null
+				&& device.supportsBfloat16() && offeredMatvec(extent(device, w), offsetW, extent(device, x), offsetX,
+						extent(device, y), offsetY, rows, cols)
+				&& device.gemvBf16(w, offsetW, x, offsetX, y, offsetY, rows, cols);
+	}
+
+	/** Columns a Q8_0 block holds. */
+	static final int Q8_BLOCK = 32;
+
+	/** Bytes a Q8_0 block takes: a binary16 scale, then {@link #Q8_BLOCK} int8 quants. */
+	static final int Q8_BLOCK_BYTES = 34;
+
+	/**
+	 * The Q8_0 sibling of
+	 * {@link #matvec(short[], int, float[], int, float[], int, int, int)}, and the width
+	 * a published {@code Q8_0} checkpoint's weights arrive in: the matrix is a
+	 * {@code byte[]} of ggml's blocks VERBATIM -- per block of 32 columns a binary16
+	 * scale then 32 int8 quants, 34 bytes, row-major, {@code rows * cols / 32} of them
+	 * from byte {@code offsetW} -- and the vector and the result are f32, the one pairing
+	 * the CPU's integer-dot kernel has ({@code .kb/quantized-matrix.md}). Unlike the
+	 * other three widths this one is the scalar defun's BITS: the activation is quantized
+	 * on the host by the contract's rule ({@link #quantizeActivationQ8}) and the kernel
+	 * walks the defun's four f32 lane accumulators over the blocks in its order
+	 * ({@code gemm.cu}), so a device that takes the call answers exactly what the CPU
+	 * kernel would have. The same residency rule (the matrix's span is its byte count),
+	 * the same element threshold, and a hard decline where the device has no such kernel
+	 * ({@link GpuDevice#supportsQuantized()}: Metal) or {@code cols} is not whole blocks.
+	 * @param w the matrix's blocks, row-major, starting at byte {@code offsetW}
+	 * @param offsetW the index of {@code w}'s first block byte
+	 * @param x the vector, elements starting at {@code offsetX}
+	 * @param offsetX the index of {@code x}'s first element
+	 * @param y the array the {@code rows} results are written into
+	 * @param offsetY the index in {@code y} the results start at
+	 * @param rows rows of {@code w} and length of the result
+	 * @param cols columns of {@code w} and length of {@code x}, a multiple of 32
+	 * @return {@code true} when {@code y} was filled
+	 */
+	public static boolean matvec(byte[] w, int offsetW, float[] x, int offsetX, float[] y, int offsetY, int rows,
+			int cols) {
+		GpuDevice device = Probe.DEVICE;
+		return device != null
+				&& device.supportsQuantized() && cols % Q8_BLOCK == 0 && offeredMatvecQ8(extent(device, w), offsetW,
+						extent(device, x), offsetX, extent(device, y), offsetY, rows, cols)
+				&& device.gemvQ8(w, offsetW, x, offsetX, y, offsetY, rows, cols);
+	}
+
+	/**
+	 * The activation of a Q8_0 GEMV, quantized as the CPU contract quantizes it
+	 * ({@code .kb/quantized-matrix.md}, "The GEMV contract"; the third transcription of
+	 * that rule, beside the interpreter's and the compiled template's, and pinned against
+	 * one in {@code GpuDeclineTest}): per block of 32, {@code amax} over {@code |x|} with
+	 * a strict {@code >} (a NaN never raises it), {@code sx = amax / 127} IN DOUBLE,
+	 * {@code q = rint(x / sx)} (CL {@code round}: half to even), everything zero where
+	 * {@code sx} is. Packed the way {@code gemv_q8_0} reads it: {@code nb} little-endian
+	 * doubles of {@code sx}, then the {@code cols} quants with each block's 32 PERMUTED
+	 * so that word {@code t} holds thread {@code t}'s four columns
+	 * ({@code 4 * (4 * (t >> 2) + m) + (t & 3)} for {@code m} in 0..3) -- the one place
+	 * outside {@code gemm.cu} that spells that order.
+	 * @param x the activation
+	 * @param offsetX the index of its first element
+	 * @param cols its length, a multiple of 32
+	 * @return the packed buffer, {@code cols / 4 + cols} bytes
+	 */
+	static byte[] quantizeActivationQ8(float[] x, int offsetX, int cols) {
+		int nb = cols / Q8_BLOCK;
+		byte[] out = new byte[nb * Double.BYTES + cols];
+		for (int b = 0; b < nb; b++) {
+			int base = offsetX + b * Q8_BLOCK;
+			double amax = 0.0;
+			for (int k = 0; k < Q8_BLOCK; k++) {
+				double v = Math.abs((double) x[base + k]);
+				if (v > amax) {
+					amax = v;
+				}
+			}
+			double sx = amax / 127.0;
+			long bits = Double.doubleToRawLongBits(sx);
+			for (int k = 0; k < Double.BYTES; k++) {
+				out[b * Double.BYTES + k] = (byte) (bits >>> (8 * k));
+			}
+			int o = nb * Double.BYTES + b * Q8_BLOCK;
+			if (sx == 0.0) {
+				continue;
+			}
+			for (int t = 0; t < 8; t++) {
+				int lane = t & 3, half = t >> 2;
+				for (int m = 0; m < 4; m++) {
+					out[o + 4 * t + m] = (byte) (int) Math.rint(x[base + 4 * (4 * half + m) + lane] / sx);
+				}
+			}
+		}
+		return out;
+	}
+
+	// --- the resident tier ------------------------------------------------------------
+	// Members whose CPU twin is a lane loop, which a round trip cannot beat at any size
+	// (the element-wise tier's measurement) and which are therefore offered ONLY over an
+	// operand that is already resident -- where there is no trip, and the result stays
+	// for the next member. Every one computes in double and narrows on the store, as the
+	// CPU kernels do, so all are bit-identical to them.
+
+	/**
+	 * {@code out[i] = op(a[i], b[i])} over two operands of the SAME shape -- the binary
+	 * members at the shape {@link #bcast} deliberately does not take. Offered only when
+	 * {@code a} or {@code b} is {@linkplain #resident resident}; otherwise declines,
+	 * whatever the size, because the caller's lane loop wins a round trip.
+	 * @param op one of the {@link #BIN_ADD} constants
+	 * @param a the left operand
+	 * @param offsetA the index of {@code a}'s first element
+	 * @param b the right operand
+	 * @param offsetB the index of {@code b}'s first element
+	 * @param out the array the {@code n} results are written into
+	 * @param offsetOut the index in {@code out} the results start at
+	 * @param n how many elements
+	 * @return {@code true} when {@code out} was filled (or, lazily, left resident)
+	 */
+	public static boolean zip(int op, double[] a, int offsetA, double[] b, int offsetB, double[] out, int offsetOut,
+			int n) {
+		GpuDevice device = Probe.DEVICE;
+		return device != null
+				&& offeredZip(op, extent(device, a), offsetA, extent(device, b), offsetB, extent(device, out),
+						offsetOut, n)
+				&& (device.resident(a) || device.resident(b))
+				&& device.zip(op, a, offsetA, b, offsetB, out, offsetOut, n);
+	}
+
+	/**
+	 * The single-float sibling of
+	 * {@link #zip(int, double[], int, double[], int, double[], int, int)}.
+	 * @param op one of the {@link #BIN_ADD} constants
+	 * @param a the left operand
+	 * @param offsetA the index of {@code a}'s first element
+	 * @param b the right operand
+	 * @param offsetB the index of {@code b}'s first element
+	 * @param out the array the {@code n} results are written into
+	 * @param offsetOut the index in {@code out} the results start at
+	 * @param n how many elements
+	 * @return {@code true} when {@code out} was filled
+	 */
+	public static boolean zip(int op, float[] a, int offsetA, float[] b, int offsetB, float[] out, int offsetOut,
+			int n) {
+		GpuDevice device = Probe.DEVICE;
+		return device != null
+				&& offeredZip(op, extent(device, a), offsetA, extent(device, b), offsetB, extent(device, out),
+						offsetOut, n)
+				&& (device.resident(a) || device.resident(b))
+				&& device.zipF(op, a, offsetA, b, offsetB, out, offsetOut, n);
+	}
+
+	/**
+	 * {@code out[i] = op(a[i], s)} -- or {@code op(s, a[i])} when {@code swap} -- over a
+	 * DOUBLE scalar whatever the array's width, which is the CPU kernel's contract
+	 * ({@code (float) (a[i] op s)} at {@code #f}). Offered only when {@code a} is
+	 * resident. A division by a power of two is launched as the multiply by its exact
+	 * reciprocal ({@link #exactReciprocal}), which is the same bits and not the same
+	 * speed.
+	 * @param op one of the {@link #BIN_ADD} constants
+	 * @param a the operand
+	 * @param offsetA the index of {@code a}'s first element
+	 * @param s the scalar
+	 * @param swap whether the scalar is the LEFT operand of {@code op}
+	 * @param out the array the {@code n} results are written into
+	 * @param offsetOut the index in {@code out} the results start at
+	 * @param n how many elements
+	 * @return {@code true} when {@code out} was filled
+	 */
+	public static boolean scale(int op, double[] a, int offsetA, double s, boolean swap, double[] out, int offsetOut,
+			int n) {
+		GpuDevice device = Probe.DEVICE;
+		double r = op == BIN_DIV && !swap ? exactReciprocal(s) : 0.0;
+		int rop = r != 0.0 ? BIN_MUL : op;
+		double rs = r != 0.0 ? r : s;
+		return device != null
+				&& offeredZip(rop, extent(device, a), offsetA, extent(device, a), offsetA, extent(device, out),
+						offsetOut, n)
+				&& device.resident(a) && device.scale(rop, a, offsetA, rs, swap, out, offsetOut, n);
+	}
+
+	/**
+	 * The reciprocal of {@code s} when dividing by it is EXACTLY multiplying by that
+	 * reciprocal, else {@code 0.0}. A divisor that is a power of two has an exact
+	 * reciprocal, so {@code a / s} and {@code a * (1 / s)} are two correct roundings of
+	 * the SAME real number and land on the same bits -- for every {@code a}, subnormals,
+	 * infinities and NaNs included. That matters because the divide is the one arithmetic
+	 * operation this card is slow at: the members compute in double (the CPU kernel's
+	 * contract), a {@code div.rn.f64} runs at a fraction of a multiply's rate, and the
+	 * attention scale {@code (torch:div score (sqrt d-k))} is a whole memory pass over
+	 * the scores that spends a third of itself in it. Both operands are required to be
+	 * NORMAL at BOTH widths, so the rewrite is equally exact on a backend that computes
+	 * in {@code float} (Metal): a reciprocal that is normal as a double but underflows to
+	 * zero as a float would not be.
+	 * @param s the divisor
+	 * @return {@code 1 / s} when the rewrite is exact, else {@code 0.0}
+	 */
+	static double exactReciprocal(double s) {
+		if (!normalPowerOfTwo(s)) {
+			return 0.0;
+		}
+		double r = 1.0 / s;
+		return normalPowerOfTwo(r) ? r : 0.0;
+	}
+
+	/**
+	 * Whether {@code v} is a power of two that is normal as a double AND as a float --
+	 * the mantissa bits all zero, and the exponent inside both formats' normal range.
+	 * @param v the value
+	 * @return whether the rewrite above may use it
+	 */
+	private static boolean normalPowerOfTwo(double v) {
+		long bits = Double.doubleToRawLongBits(v);
+		if ((bits & 0x000fffffffffffffL) != 0L) {
+			return false;
+		}
+		long exp = (bits >>> 52) & 0x7ffL;
+		return exp >= 1023 - 126 && exp <= 1023 + 127;
+	}
+
+	/**
+	 * The single-float sibling of
+	 * {@link #scale(int, double[], int, double, boolean, double[], int, int)}.
+	 * @param op one of the {@link #BIN_ADD} constants
+	 * @param a the operand
+	 * @param offsetA the index of {@code a}'s first element
+	 * @param s the scalar
+	 * @param swap whether the scalar is the LEFT operand of {@code op}
+	 * @param out the array the {@code n} results are written into
+	 * @param offsetOut the index in {@code out} the results start at
+	 * @param n how many elements
+	 * @return {@code true} when {@code out} was filled
+	 */
+	public static boolean scale(int op, float[] a, int offsetA, double s, boolean swap, float[] out, int offsetOut,
+			int n) {
+		GpuDevice device = Probe.DEVICE;
+		double r = op == BIN_DIV && !swap ? exactReciprocal(s) : 0.0;
+		int rop = r != 0.0 ? BIN_MUL : op;
+		double rs = r != 0.0 ? r : s;
+		return device != null
+				&& offeredZip(rop, extent(device, a), offsetA, extent(device, a), offsetA, extent(device, out),
+						offsetOut, n)
+				&& device.resident(a) && device.scaleF(rop, a, offsetA, rs, swap, out, offsetOut, n);
+	}
+
+	/**
+	 * {@code out = where(m, x, y)}: the element of {@code x} where the mask is non-zero,
+	 * of {@code y} where it is zero, over three operands broadcast to {@code dims} by the
+	 * numpy rules -- {@code linalg:where}, and through it {@code torch:masked-fill}. Any
+	 * operand may be a SCALAR: a {@code null} array with its value in the double beside
+	 * it (its stride vector is then ignored). The mask is a {@code double[]} or
+	 * {@code float[]} of either width, or {@code null}; {@code x} and {@code y} share the
+	 * result's. Offered only when some array operand is resident. A select, so
+	 * bit-identical to the CPU's.
+	 * @param m the mask, or {@code null} for a scalar
+	 * @param offsetM the index of {@code m}'s first element
+	 * @param strideM {@code m}'s stride along each output axis
+	 * @param scalarM the mask's value when it is a scalar
+	 * @param x the where-true operand, or {@code null} for a scalar
+	 * @param offsetX the index of {@code x}'s first element
+	 * @param strideX {@code x}'s stride along each output axis
+	 * @param scalarX {@code x}'s value when it is a scalar
+	 * @param y the where-false operand, or {@code null} for a scalar
+	 * @param offsetY the index of {@code y}'s first element
+	 * @param strideY {@code y}'s stride along each output axis
+	 * @param scalarY {@code y}'s value when it is a scalar
+	 * @param out the array the result is written into
+	 * @param offsetOut the index in {@code out} the result starts at
+	 * @param dims the output shape, outermost first
+	 * @return {@code true} when {@code out} was filled
+	 */
+	public static boolean where(@Nullable Object m, int offsetM, int[] strideM, double scalarM, double @Nullable [] x,
+			int offsetX, int[] strideX, double scalarX, double @Nullable [] y, int offsetY, int[] strideY,
+			double scalarY, double[] out, int offsetOut, int[] dims) {
+		GpuDevice device = Probe.DEVICE;
+		return device != null
+				&& offeredWhere(m == null ? -1 : extent(device, m), offsetM, strideM,
+						x == null ? -1 : extent(device, x), offsetX, strideX, y == null ? -1 : extent(device, y),
+						offsetY, strideY, extent(device, out), offsetOut, dims)
+				&& ((m != null && device.resident(m)) || (x != null && device.resident(x))
+						|| (y != null && device.resident(y)))
+				&& device.where(m, offsetM, strideM, scalarM, x, offsetX, strideX, scalarX, y, offsetY, strideY,
+						scalarY, out, offsetOut, dims);
+	}
+
+	/**
+	 * The single-float sibling of
+	 * {@link #where(Object, int, int[], double, double[], int, int[], double, double[], int, int[], double, double[], int, int[])}.
+	 * @param m the mask, or {@code null} for a scalar
+	 * @param offsetM the index of {@code m}'s first element
+	 * @param strideM {@code m}'s stride along each output axis
+	 * @param scalarM the mask's value when it is a scalar
+	 * @param x the where-true operand, or {@code null} for a scalar
+	 * @param offsetX the index of {@code x}'s first element
+	 * @param strideX {@code x}'s stride along each output axis
+	 * @param scalarX {@code x}'s value when it is a scalar
+	 * @param y the where-false operand, or {@code null} for a scalar
+	 * @param offsetY the index of {@code y}'s first element
+	 * @param strideY {@code y}'s stride along each output axis
+	 * @param scalarY {@code y}'s value when it is a scalar
+	 * @param out the array the result is written into
+	 * @param offsetOut the index in {@code out} the result starts at
+	 * @param dims the output shape, outermost first
+	 * @return {@code true} when {@code out} was filled
+	 */
+	public static boolean where(@Nullable Object m, int offsetM, int[] strideM, double scalarM, float @Nullable [] x,
+			int offsetX, int[] strideX, double scalarX, float @Nullable [] y, int offsetY, int[] strideY,
+			double scalarY, float[] out, int offsetOut, int[] dims) {
+		GpuDevice device = Probe.DEVICE;
+		return device != null
+				&& offeredWhere(m == null ? -1 : extent(device, m), offsetM, strideM,
+						x == null ? -1 : extent(device, x), offsetX, strideX, y == null ? -1 : extent(device, y),
+						offsetY, strideY, extent(device, out), offsetOut, dims)
+				&& ((m != null && device.resident(m)) || (x != null && device.resident(x))
+						|| (y != null && device.resident(y)))
+				&& device.whereF(m, offsetM, strideM, scalarM, x, offsetX, strideX, scalarX, y, offsetY, strideY,
+						scalarY, out, offsetOut, dims);
+	}
+
+	/**
+	 * Adam's fused update IN PLACE: {@code x}, {@code m} and {@code v} are rewritten from
+	 * {@code g} under {@code rule} = {@code [lr, lr*wd, wd, b1, 1-b1, b2, 1-b2, eps, c1,
+	 * c2, mode]} (mode 0 none, 1 coupled, 2 decoupled weight decay), exactly as
+	 * {@code linalg::%la-adam-step}'s CPU kernel spells it and in its order, so the three
+	 * land on its bits. Offered only when one of the four is resident -- and once it has
+	 * run, the three it wrote are (lazily, the authoritative copies), so a model's
+	 * weights never come home between steps.
+	 * @param x the parameter, rewritten
+	 * @param offsetX the index of {@code x}'s first element
+	 * @param g the gradient
+	 * @param offsetG the index of {@code g}'s first element
+	 * @param m the first moment, rewritten
+	 * @param offsetM the index of {@code m}'s first element
+	 * @param v the second moment, rewritten
+	 * @param offsetV the index of {@code v}'s first element
+	 * @param n how many elements
+	 * @param rule the eleven-number rule
+	 * @return {@code true} when the update ran; {@code false} when it declined, in which
+	 * case nothing was written
+	 */
+	public static boolean adamStep(double[] x, int offsetX, double[] g, int offsetG, double[] m, int offsetM,
+			double[] v, int offsetV, int n, double[] rule) {
+		GpuDevice device = Probe.DEVICE;
+		return device != null
+				&& offeredAdam(extent(device, x), offsetX, extent(device, g), offsetG, extent(device, m), offsetM,
+						extent(device, v), offsetV, n, rule)
+				&& (device.resident(x) || device.resident(g) || device.resident(m) || device.resident(v))
+				&& device.adamStep(x, offsetX, g, offsetG, m, offsetM, v, offsetV, n, rule);
+	}
+
+	/**
+	 * The single-float sibling of
+	 * {@link #adamStep(double[], int, double[], int, double[], int, double[], int, int, double[])}.
+	 * @param x the parameter, rewritten
+	 * @param offsetX the index of {@code x}'s first element
+	 * @param g the gradient
+	 * @param offsetG the index of {@code g}'s first element
+	 * @param m the first moment, rewritten
+	 * @param offsetM the index of {@code m}'s first element
+	 * @param v the second moment, rewritten
+	 * @param offsetV the index of {@code v}'s first element
+	 * @param n how many elements
+	 * @param rule the eleven-number rule
+	 * @return {@code true} when the update ran
+	 */
+	public static boolean adamStep(float[] x, int offsetX, float[] g, int offsetG, float[] m, int offsetM, float[] v,
+			int offsetV, int n, double[] rule) {
+		GpuDevice device = Probe.DEVICE;
+		return device != null
+				&& offeredAdam(extent(device, x), offsetX, extent(device, g), offsetG, extent(device, m), offsetM,
+						extent(device, v), offsetV, n, rule)
+				&& (device.resident(x) || device.resident(g) || device.resident(m) || device.resident(v))
+				&& device.adamStepF(x, offsetX, g, offsetG, m, offsetM, v, offsetV, n, rule);
+	}
+
+	/**
+	 * The strided COPY {@code out[offsetOut + strideOut.i] = a[offsetA + strideA.i]} over
+	 * {@code dims}, either stride vector possibly NEGATIVE (a slice with a negative step)
+	 * -- what {@code linalg:reshape}, the rank-2 {@code transpose}, {@code slice} and
+	 * each slab of a {@code concatenate} are. Offered over a resident operand only: a
+	 * copy cannot pay for a round trip, and over an operand that is already there it is a
+	 * launch with no copy over the link, whose result stays for the next member.
+	 * {@code spanA} / {@code spanOut} name each array's WHOLE data part (element offset
+	 * and count), which is what residency keys an array on -- a slice must find the array
+	 * it was cut from, and a concatenation's later slabs the output its first slab made
+	 * resident. A pure copy, so bit-identical. Declines a walk that reaches outside
+	 * either span.
+	 * @param a the source
+	 * @param offsetA the element index the source walk starts at
+	 * @param strideA the source stride along each output axis, in elements
+	 * @param spanA {@code {offset, count}} of {@code a}'s data part
+	 * @param out the destination
+	 * @param offsetOut the element index the destination walk starts at
+	 * @param strideOut the destination stride along each output axis
+	 * @param spanOut {@code {offset, count}} of {@code out}'s data part
+	 * @param dims the walk's shape, outermost first
+	 * @return {@code true} when {@code out} was filled (or, lazily, left resident)
+	 */
+	public static boolean copy(double[] a, int offsetA, int[] strideA, int[] spanA, double[] out, int offsetOut,
+			int[] strideOut, int[] spanOut, int[] dims) {
+		GpuDevice device = Probe.DEVICE;
+		return device != null
+				&& offeredCopy(extent(device, a), offsetA, strideA, spanA, extent(device, out), offsetOut, strideOut,
+						spanOut, dims)
+				&& device.resident(a) && device.copy(a, offsetA, strideA, spanA[0], spanA[1], out, offsetOut, strideOut,
+						spanOut[0], spanOut[1], dims);
+	}
+
+	/**
+	 * The single-float sibling of
+	 * {@link #copy(double[], int, int[], int[], double[], int, int[], int[], int[])}.
+	 * @param a the source
+	 * @param offsetA the element index the source walk starts at
+	 * @param strideA the source stride along each output axis, in elements
+	 * @param spanA {@code {offset, count}} of {@code a}'s data part
+	 * @param out the destination
+	 * @param offsetOut the element index the destination walk starts at
+	 * @param strideOut the destination stride along each output axis
+	 * @param spanOut {@code {offset, count}} of {@code out}'s data part
+	 * @param dims the walk's shape, outermost first
+	 * @return {@code true} when {@code out} was filled
+	 */
+	public static boolean copy(float[] a, int offsetA, int[] strideA, int[] spanA, float[] out, int offsetOut,
+			int[] strideOut, int[] spanOut, int[] dims) {
+		GpuDevice device = Probe.DEVICE;
+		return device != null
+				&& offeredCopy(extent(device, a), offsetA, strideA, spanA, extent(device, out), offsetOut, strideOut,
+						spanOut, dims)
+				&& device.resident(a) && device.copyF(a, offsetA, strideA, spanA[0], spanA[1], out, offsetOut,
+						strideOut, spanOut[0], spanOut[1], dims);
+	}
+
+	/**
+	 * The bounds of a strided copy: a shape it walks, both spans inside their arrays, and
+	 * both walks -- strides of either sign -- inside their spans.
+	 */
+	private static boolean offeredCopy(long lengthA, int offsetA, int[] strideA, int[] spanA, long lengthOut,
+			int offsetOut, int[] strideOut, int[] spanOut, int[] dims) {
+		long total = stridedCount(dims);
+		if (total < 0 || spanA.length != 2 || spanOut.length != 2 || strideA.length != dims.length
+				|| strideOut.length != dims.length) {
+			return false;
+		}
+		if (spanA[0] < 0 || spanA[1] < 0 || spanOut[0] < 0 || spanOut[1] < 0 || spanA[0] + (long) spanA[1] > lengthA
+				|| !fitsResult(lengthOut, spanOut[0], spanOut[1])) {
+			return false;
+		}
+		return walkInside(offsetA, strideA, dims, spanA) && walkInside(offsetOut, strideOut, dims, spanOut);
+	}
+
+	/**
+	 * Whether a walk from {@code offset} by {@code stride} over {@code dims} stays in the
+	 * span.
+	 */
+	private static boolean walkInside(int offset, int[] stride, int[] dims, int[] span) {
+		long lo = offset, hi = offset;
+		for (int k = 0; k < dims.length; k++) {
+			long travel = (long) (dims[k] - 1) * stride[k];
+			if (travel < 0) {
+				lo += travel;
+			}
+			else {
+				hi += travel;
+			}
+		}
+		return lo >= span[0] && hi < span[0] + (long) span[1];
+	}
+
+	/**
+	 * The bounds of an equal-shape binary op or a scalar form: an op it names, inside.
+	 */
+	private static boolean offeredZip(int op, long lengthA, int offsetA, long lengthB, int offsetB, long lengthOut,
+			int offsetOut, int n) {
+		return op >= 0 && op < BIN_OPS && n > 0 && offsetA >= 0 && offsetB >= 0 && (long) offsetA + n <= lengthA
+				&& (long) offsetB + n <= lengthB && fitsResult(lengthOut, offsetOut, n);
+	}
+
+	/**
+	 * The bounds of a three-way select: a shape it walks, at least one array operand, and
+	 * every array's reachable span inside it. A length of -1 marks a scalar operand.
+	 */
+	private static boolean offeredWhere(long lengthM, int offsetM, int[] strideM, long lengthX, int offsetX,
+			int[] strideX, long lengthY, int offsetY, int[] strideY, long lengthOut, int offsetOut, int[] dims) {
+		long total = stridedCount(dims);
+		if (total < 0 || !fitsResult(lengthOut, offsetOut, total)) {
+			return false;
+		}
+		if (lengthM < 0 && lengthX < 0 && lengthY < 0) {
+			return false;
+		}
+		if (lengthM >= 0) {
+			long spanM = stridedSpan(dims, strideM);
+			if (spanM < 0 || offsetM < 0 || offsetM + spanM >= lengthM) {
+				return false;
+			}
+		}
+		if (lengthX >= 0) {
+			long spanX = stridedSpan(dims, strideX);
+			if (spanX < 0 || offsetX < 0 || offsetX + spanX >= lengthX) {
+				return false;
+			}
+		}
+		if (lengthY >= 0) {
+			long spanY = stridedSpan(dims, strideY);
+			if (spanY < 0 || offsetY < 0 || offsetY + spanY >= lengthY) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	/** The bounds of an Adam update: four spans inside their arrays and a sane rule. */
+	private static boolean offeredAdam(long lengthX, int offsetX, long lengthG, int offsetG, long lengthM, int offsetM,
+			long lengthV, int offsetV, int n, double[] rule) {
+		return n > 0 && rule.length == 11 && (rule[10] == 0.0 || rule[10] == 1.0 || rule[10] == 2.0) && offsetX >= 0
+				&& offsetG >= 0 && offsetM >= 0 && offsetV >= 0 && (long) offsetX + n <= lengthX
+				&& (long) offsetG + n <= lengthG && (long) offsetM + n <= lengthM && (long) offsetV + n <= lengthV;
+	}
+
+	/**
+	 * Whether a GEMV is one this library will attempt: above the threshold in force, a
+	 * matrix that is one Java array, and all three operands inside the arrays they were
+	 * handed. Whether the matrix is resident is the device's question, not this one's.
+	 */
+	private static boolean offeredMatvec(long lengthW, int offsetW, long lengthX, int offsetX, long lengthY,
+			int offsetY, int rows, int cols) {
+		return rows > 0 && cols > 0 && (long) rows * cols >= Probe.MATVEC_MIN_ELEMENTS
+				&& (long) rows * cols <= Integer.MAX_VALUE && offsetW >= 0 && offsetX >= 0 && offsetY >= 0
+				&& offsetW + (long) rows * cols <= lengthW && offsetX + (long) cols <= lengthX
+				&& fitsResult(lengthY, offsetY, rows);
+	}
+
+	/**
+	 * {@link #offeredMatvec} for a Q8_0 matrix, whose extent is a BYTE count: the
+	 * threshold still counts elements, the span the blocks' bytes.
+	 */
+	private static boolean offeredMatvecQ8(long bytesW, int offsetW, long lengthX, int offsetX, long lengthY,
+			int offsetY, int rows, int cols) {
+		return rows > 0 && cols > 0 && cols % Q8_BLOCK == 0 && (long) rows * cols >= Probe.MATVEC_MIN_ELEMENTS
+				&& (long) rows * cols <= Integer.MAX_VALUE && offsetW >= 0 && offsetX >= 0 && offsetY >= 0
+				&& offsetW + (long) rows * (cols / Q8_BLOCK) * Q8_BLOCK_BYTES <= bytesW
+				&& offsetX + (long) cols <= lengthX && fitsResult(lengthY, offsetY, rows);
+	}
+
+	/**
+	 * The range the generator keeps its words in, and in which {@code a * s} is exact.
+	 */
+	private static final int RNG_STATE_LIMIT = 1 << 23;
+
+	private static boolean offeredRng(long lengthOut, int offsetOut, int n, int mode, int s1, int s2, int s3) {
+		return mode >= 0 && mode <= 2 && n > 0 && n >= Probe.RNG_MIN_ELEMENTS && fitsResult(lengthOut, offsetOut, n)
+				&& s1 >= 0 && s1 < RNG_STATE_LIMIT && s2 >= 0 && s2 < RNG_STATE_LIMIT && s3 >= 0
+				&& s3 < RNG_STATE_LIMIT;
+	}
+
+	private static long stridedCount(int[] dims) {
+		if (dims.length < 1 || dims.length > MAX_STRIDED_RANK) {
+			return -1;
+		}
+		long total = 1;
+		for (int d : dims) {
+			if (d < 1) {
+				return -1;
+			}
+			total *= d;
+			if (total > Integer.MAX_VALUE) {
+				return -1;
+			}
+		}
+		return total;
+	}
+
+	/**
+	 * The highest element index a stride vector can reach over {@code dims}, or -1 when
+	 * one of the strides is negative. The kernel indexes freely, so this is what bounds
+	 * it inside the caller's array.
+	 */
+	private static long stridedSpan(int[] dims, int[] stride) {
+		if (stride.length != dims.length) {
+			return -1;
+		}
+		long span = 0;
+		for (int k = 0; k < dims.length; k++) {
+			if (stride[k] < 0) {
+				return -1;
+			}
+			span += (long) (dims[k] - 1) * stride[k];
+		}
+		return span;
+	}
+
+	/**
+	 * Whether a broadcast binary op is one this library will attempt: an op it names, a
+	 * shape it will walk, above the threshold in force on this machine, and with both
+	 * operands' whole reachable span inside the arrays it was handed.
+	 */
+	private static boolean offeredBcast(int op, long lengthA, int offsetA, int[] strideA, long lengthB, int offsetB,
+			int[] strideB, long lengthOut, int offsetOut, int[] dims) {
+		long total = stridedCount(dims);
+		if (op < 0 || op >= BIN_OPS || total < 0) {
+			return false;
+		}
+		long spanA = stridedSpan(dims, strideA);
+		long spanB = stridedSpan(dims, strideB);
+		return spanA >= 0 && spanB >= 0 && offsetA >= 0 && offsetB >= 0 && offsetA + spanA < lengthA
+				&& offsetB + spanB < lengthB && fitsResult(lengthOut, offsetOut, total);
+	}
+
+	/** {@link #offeredBcast} for the one-operand form. */
+	private static boolean offeredGather(long lengthA, int offsetA, int[] strideA, long lengthOut, int offsetOut,
+			int[] dims) {
+		long total = stridedCount(dims);
+		if (total < 0) {
+			return false;
+		}
+		long spanA = stridedSpan(dims, strideA);
+		return spanA >= 0 && offsetA >= 0 && offsetA + spanA < lengthA && fitsResult(lengthOut, offsetOut, total);
+	}
+
+	/**
+	 * Whether an axis fold is one this library will attempt: an op it names, enough
+	 * output cells to be worth a grid -- one block's worth over a round trip, one warp's
+	 * over a RESIDENT operand, whose alternative is a download rather than a free CPU --
+	 * and inside both arrays. The SIZE threshold is asked by the caller, which skips it
+	 * for a resident operand like every other member here.
+	 */
+	private static boolean offeredFold(int op, long lengthA, int offsetA, long lengthOut, int offsetOut, int outer,
+			int len, int inner, boolean resident) {
+		if (op < 0 || op >= FOLD_OPS || outer < 1 || len < 1 || inner < 1) {
+			return false;
+		}
+		long cells = (long) outer * inner;
+		long total = cells * len;
+		return cells >= (resident ? FOLD_RESIDENT_MIN_CELLS : FOLD_MIN_CELLS) && cells <= Integer.MAX_VALUE
+				&& total <= Integer.MAX_VALUE && offsetA >= 0 && offsetA + total <= lengthA
+				&& fitsResult(lengthOut, offsetOut, cells);
+	}
+
+	/**
+	 * Whether an element-wise map is one this library will attempt: a member it names, at
+	 * or above the threshold actually in force on this machine, and actually present in
+	 * the two arrays it was handed.
+	 */
+	private static boolean offeredMap(int op, long lengthA, int offsetA, long lengthOut, int offsetOut, int n) {
+		return op >= 0 && op < MAP_OPS && n > 0 && offsetA >= 0 && (long) offsetA + n <= lengthA
+				&& fitsResult(lengthOut, offsetOut, n);
+	}
+
+	/**
+	 * Whether a product is one this library will attempt: big enough for the threshold
+	 * actually in force on this machine, launchable in one grid, and actually present in
+	 * the three arrays it was handed. A caller that gets its own offsets wrong is
+	 * declined rather than signalled -- the point of the whole mechanism is that it never
+	 * changes what a program computes.
+	 */
+	private static boolean offered(long lengthA, int offsetA, long lengthB, int offsetB, long lengthOut, int offsetOut,
+			int n, int m, int p) {
+		return offered(lengthA, offsetA, 0, lengthB, offsetB, 0, lengthOut, offsetOut, 1, n, m, p);
+	}
+
+	/**
+	 * The same for a STACK: every matrix has to be launchable, the whole stack has to
+	 * clear the threshold, and each operand's SPAN -- the last slab plus everything its
+	 * stride skipped on the way there, so a 0 stride spans one slab however long the
+	 * batch -- has to be inside the array it was handed.
+	 *
+	 * <p>
+	 * The launch bound asked here is the CUDA one on BOTH backends. Metal's grid axes are
+	 * 32-bit where CUDA's row axis is 16, so the CUDA bound is the stricter of the two
+	 * and a shape it refuses is one no backend has ever been offered -- one predicate is
+	 * worth more than the handful of enormous stacks the looser bound would add on one
+	 * platform.
+	 */
+	private static boolean offered(long lengthA, int offsetA, int strideA, long lengthB, int offsetB, int strideB,
+			long lengthOut, int offsetOut, int batch, int n, int m, int p) {
+		return batch > 0 && n > 0 && m > 0 && p > 0 && CudaGemm.launchable(batch, n, m, p) && offsetA >= 0
+				&& offsetB >= 0 && strideA >= 0 && strideB >= 0
+				&& (long) offsetA + (long) (batch - 1) * strideA + (long) n * m <= lengthA
+				&& (long) offsetB + (long) (batch - 1) * strideB + (long) m * p <= lengthB
+				&& fitsResult(lengthOut, offsetOut, (long) batch * n * p);
+	}
+
+	/**
+	 * Whether a member's RESULT span can be taken: inside the array it was handed, or the
+	 * array is a STUB -- exactly the prefix ahead of the result, and nothing else --
+	 * whose elements the library will hold on the device and in a backing of its own
+	 * ({@link #materialize}). Anything between the two is a caller's mistake and
+	 * declines.
+	 */
+	// --- the fused tier --------------------------------------------------------------
+
+	/**
+	 * {@code out[i] = gelu(a[i])}, the exact GELU {@code x * (1 + erf(x / sqrt 2)) / 2}
+	 * as ONE pass -- the five-member composition {@code torch:gelu} used to launch, each
+	 * a full memory pass over the feed-forward activation. Every rounding of that chain
+	 * is reproduced (each member narrowed to the operand width in the same place, the
+	 * device's own {@code erf} at the width), so the result is the composed device
+	 * chain's bit for bit and stands to the CPU as an accelerated {@code erf} does.
+	 * Offered like a libm map: from the element threshold, or over a resident operand.
+	 * @param a the operand
+	 * @param offsetA the index of {@code a}'s first element
+	 * @param out the array the {@code n} results are written into
+	 * @param offsetOut the index in {@code out} the results start at
+	 * @param n how many elements
+	 * @return {@code true} when {@code out} was filled; {@code false} when this call
+	 * declined, in which case {@code out} is untouched
+	 */
+	public static boolean gelu(double[] a, int offsetA, double[] out, int offsetOut, int n) {
+		GpuDevice device = Probe.DEVICE;
+		return device != null && offeredMap(0, extent(device, a), offsetA, extent(device, out), offsetOut, n)
+				&& (n >= Probe.MAP_MIN_ELEMENTS || device.resident(a)) && device.gelu(a, offsetA, out, offsetOut, n);
+	}
+
+	/** The single-float sibling of {@link #gelu(double[], int, double[], int, int)}. */
+	public static boolean gelu(float[] a, int offsetA, float[] out, int offsetOut, int n) {
+		GpuDevice device = Probe.DEVICE;
+		return device != null && offeredMap(0, extent(device, a), offsetA, extent(device, out), offsetOut, n)
+				&& (n >= Probe.MAP_MIN_ELEMENTS || device.resident(a)) && device.geluF(a, offsetA, out, offsetOut, n);
+	}
+
+	/**
+	 * The tape's backward through {@link #gelu}'s composition as one pass: with {@code g}
+	 * the gradient of the output and {@code x} the input, {@code out} receives the
+	 * gradient {@code x} holds AFTER this node -- the two contributions the composition's
+	 * two branches make, added in the order the reverse walk makes them, onto
+	 * {@code old}, the gradient {@code x} had accumulated before (or nothing, when
+	 * {@code old} is {@code null}). Reproduces the composed chain's arithmetic exactly,
+	 * {@code exp} and {@code erf} at the width. Offered from the element threshold or
+	 * over a resident operand.
+	 * @param g the output's gradient
+	 * @param offsetG the index of {@code g}'s first element
+	 * @param x the input
+	 * @param offsetX the index of {@code x}'s first element
+	 * @param old the gradient accumulated so far, or {@code null} for none
+	 * @param offsetOld the index of {@code old}'s first element
+	 * @param out the array the {@code n} results are written into
+	 * @param offsetOut the index in {@code out} the results start at
+	 * @param n how many elements
+	 * @return {@code true} when {@code out} was filled
+	 */
+	public static boolean geluGrad(double[] g, int offsetG, double[] x, int offsetX, double @Nullable [] old,
+			int offsetOld, double[] out, int offsetOut, int n) {
+		GpuDevice device = Probe.DEVICE;
+		return device != null && offeredGrad(device, g, offsetG, x, offsetX, old, offsetOld, out, offsetOut, n)
+				&& (n >= Probe.MAP_MIN_ELEMENTS || device.resident(x) || device.resident(g))
+				&& device.geluGrad(g, offsetG, x, offsetX, old, offsetOld, out, offsetOut, n);
+	}
+
+	/** The single-float sibling of {@link #geluGrad}. */
+	public static boolean geluGrad(float[] g, int offsetG, float[] x, int offsetX, float @Nullable [] old,
+			int offsetOld, float[] out, int offsetOut, int n) {
+		GpuDevice device = Probe.DEVICE;
+		return device != null && offeredGrad(device, g, offsetG, x, offsetX, old, offsetOld, out, offsetOut, n)
+				&& (n >= Probe.MAP_MIN_ELEMENTS || device.resident(x) || device.resident(g))
+				&& device.geluGradF(g, offsetG, x, offsetX, old, offsetOld, out, offsetOut, n);
+	}
+
+	/**
+	 * {@code linalg:softmax} over the LAST axis of a {@code rows x len} operand as one
+	 * pass per row: the strict max fold, the broadcast subtraction, {@code exp} at the
+	 * width, the sum fold and the broadcast division, each rounded where the member chain
+	 * rounds -- so the result is the composed device chain's, and stands to the CPU as an
+	 * accelerated {@code exp} does. The folds stay sequential, one thread per row.
+	 * Offered like an axis fold: enough rows (the fold's cell rule) and either the
+	 * element threshold or a resident operand.
+	 * @param a the operand, {@code rows} rows of {@code len} contiguous elements
+	 * @param offsetA the index of {@code a}'s first element
+	 * @param out the array the {@code rows * len} results are written into
+	 * @param offsetOut the index in {@code out} the results start at
+	 * @param rows how many rows
+	 * @param len the row length, the softmax's own axis
+	 * @return {@code true} when {@code out} was filled
+	 */
+	public static boolean softmax(double[] a, int offsetA, double[] out, int offsetOut, int rows, int len) {
+		return softmax(a, offsetA, null, 0, 0, out, offsetOut, rows, len, 0, 0.0, 0.0);
+	}
+
+	/**
+	 * The single-float sibling of
+	 * {@link #softmax(double[], int, double[], int, int, int)}.
+	 */
+	public static boolean softmax(float[] a, int offsetA, float[] out, int offsetOut, int rows, int len) {
+		return softmax(a, offsetA, null, 0, 0, out, offsetOut, rows, len, 0, 0.0, 0.0);
+	}
+
+	/**
+	 * {@link #softmax(double[], int, double[], int, int, int)} over a score that was
+	 * SCALED and MASKED first -- {@code torch:div} by a scalar, then
+	 * {@code torch:masked-fill}, the attention head's idiom -- with the two members
+	 * folded into the row pass (2026-09-02): each cell is read as {@code (T)(x op scale)}
+	 * and then as {@code fill} wherever the mask is non-zero, the roundings the two
+	 * members made, so the row the kernel folds is the row the chain would have stored. A
+	 * division by a power of two is launched as the multiply, exactly as {@link #scale}
+	 * does. The mask is a TRAILING block of the operand: {@code maskLen} divides
+	 * {@code rows * len} and cell {@code i} reads {@code mask[i % maskLen]}, which is
+	 * what a {@code (1 s s)} mask over a {@code (b s s)} score broadcasts to. Offered as
+	 * the plain softmax is; a mask that is neither width, or one the operand is not a
+	 * multiple of, declines.
+	 * @param a the operand, {@code rows} rows of {@code len} contiguous elements
+	 * @param offsetA the index of {@code a}'s first element
+	 * @param mask the mask, a {@code double[]} or {@code float[]}, or {@code null}
+	 * @param offsetM the index of the mask's first element
+	 * @param maskLen the mask's length, a divisor of {@code rows * len}
+	 * @param out the array the {@code rows * len} results are written into
+	 * @param offsetOut the index in {@code out} the results start at
+	 * @param rows how many rows
+	 * @param len the row length, the softmax's own axis
+	 * @param scaleOp {@link #BIN_DIV} or {@link #BIN_MUL} with {@code scale} as the right
+	 * operand, or 0 for no scale
+	 * @param scale the scalar
+	 * @param fill the value the masked cells take
+	 * @return {@code true} when {@code out} was filled
+	 */
+	public static boolean softmax(double[] a, int offsetA, @Nullable Object mask, int offsetM, int maskLen,
+			double[] out, int offsetOut, int rows, int len, int scaleOp, double scale, double fill) {
+		GpuDevice device = Probe.DEVICE;
+		int sop = softmaxScaleOp(scaleOp, scale);
+		return device != null && sop >= 0 && offeredRows(device, a, offsetA, out, offsetOut, rows, len, true)
+				&& offeredMask(device, mask, offsetM, maskLen, (long) rows * len) && device.softmax(a, offsetA, mask,
+						offsetM, maskLen, out, offsetOut, rows, len, sop, softmaxScale(scaleOp, scale), fill);
+	}
+
+	/**
+	 * The single-float sibling of
+	 * {@link #softmax(double[], int, Object, int, int, double[], int, int, int, int, double, double)}.
+	 */
+	public static boolean softmax(float[] a, int offsetA, @Nullable Object mask, int offsetM, int maskLen, float[] out,
+			int offsetOut, int rows, int len, int scaleOp, double scale, double fill) {
+		GpuDevice device = Probe.DEVICE;
+		int sop = softmaxScaleOp(scaleOp, scale);
+		return device != null && sop >= 0 && offeredRows(device, a, offsetA, out, offsetOut, rows, len, true)
+				&& offeredMask(device, mask, offsetM, maskLen, (long) rows * len) && device.softmaxF(a, offsetA, mask,
+						offsetM, maskLen, out, offsetOut, rows, len, sop, softmaxScale(scaleOp, scale), fill);
+	}
+
+	/**
+	 * The kernel's scale op for the API's: 0 for none, 1 for a multiply, 2 for a divide
+	 * -- a divide by a power of two rewritten to the multiply by its exact reciprocal,
+	 * {@link #scale}'s rule -- and {@code -1} for an op that is neither.
+	 */
+	private static int softmaxScaleOp(int scaleOp, double scale) {
+		if (scaleOp == 0) {
+			return 0;
+		}
+		if (scaleOp == BIN_MUL) {
+			return 1;
+		}
+		if (scaleOp == BIN_DIV) {
+			return exactReciprocal(scale) != 0.0 ? 1 : 2;
+		}
+		return -1;
+	}
+
+	/** The scalar the kernel multiplies or divides by, after the rewrite above. */
+	private static double softmaxScale(int scaleOp, double scale) {
+		if (scaleOp == BIN_DIV) {
+			double r = exactReciprocal(scale);
+			return r != 0.0 ? r : scale;
+		}
+		return scale;
+	}
+
+	/**
+	 * Whether the mask of a scaled-masked softmax is one the kernel reads: absent, or a
+	 * packed array of either width whose length divides the operand's and lies within its
+	 * extent.
+	 */
+	private static boolean offeredMask(GpuDevice device, @Nullable Object mask, int offsetM, int maskLen, long total) {
+		if (mask == null) {
+			return true;
+		}
+		if (!(mask instanceof double[]) && !(mask instanceof float[])) {
+			return false;
+		}
+		return maskLen >= 1 && total % maskLen == 0 && offsetM >= 0 && offsetM + maskLen <= extent(device, mask);
+	}
+
+	/**
+	 * {@code torch:softmax}'s adjoint {@code s * (g - sum(g * s))} per row, as one pass
+	 * where the composition ran four: the zip multiply, the sum fold (sequential), the
+	 * broadcast subtraction, the zip multiply. No libm in it, so BIT-IDENTICAL to the CPU
+	 * chain. Offered like {@link #softmax}, with either operand's residency counting.
+	 * @param g the output's gradient
+	 * @param offsetG the index of {@code g}'s first element
+	 * @param s the softmax output the forward produced
+	 * @param offsetS the index of {@code s}'s first element
+	 * @param out the array the {@code rows * len} results are written into
+	 * @param offsetOut the index in {@code out} the results start at
+	 * @param rows how many rows
+	 * @param len the row length
+	 * @return {@code true} when {@code out} was filled
+	 */
+	public static boolean softmaxGrad(double[] g, int offsetG, double[] s, int offsetS, double[] out, int offsetOut,
+			int rows, int len) {
+		return softmaxGrad(g, offsetG, s, offsetS, null, 0, 0, out, offsetOut, rows, len, 0, 0.0);
+	}
+
+	/** The single-float sibling of {@link #softmaxGrad}. */
+	public static boolean softmaxGrad(float[] g, int offsetG, float[] s, int offsetS, float[] out, int offsetOut,
+			int rows, int len) {
+		return softmaxGrad(g, offsetG, s, offsetS, null, 0, 0, out, offsetOut, rows, len, 0, 0.0);
+	}
+
+	/**
+	 * {@link #softmaxGrad(double[], int, double[], int, double[], int, int, int)} for a
+	 * softmax whose forward folded a scale and a mask
+	 * ({@link #softmax(double[], int, Object, int, int, double[], int, int, int, int, double, double)}):
+	 * after the adjoint, the two members' adjoints in the tape's order -- zero wherever
+	 * the mask is non-zero, then the scale applied to the result ({@code / scale} for
+	 * {@link #BIN_DIV}, the exact-reciprocal rewrite included) -- each rounded at the
+	 * width. No libm, so bit-identical to the CPU chain. Offered as the plain adjoint is,
+	 * with the mask rule of the forward.
+	 * @param g the output's gradient
+	 * @param offsetG the index of {@code g}'s first element
+	 * @param s the softmax output the forward produced
+	 * @param offsetS the index of {@code s}'s first element
+	 * @param mask the mask, a {@code double[]} or {@code float[]}, or {@code null}
+	 * @param offsetM the index of the mask's first element
+	 * @param maskLen the mask's length, a divisor of {@code rows * len}
+	 * @param out the array the {@code rows * len} results are written into
+	 * @param offsetOut the index in {@code out} the results start at
+	 * @param rows how many rows
+	 * @param len the row length
+	 * @param scaleOp the forward's scale op, or 0
+	 * @param scale the forward's scalar
+	 * @return {@code true} when {@code out} was filled
+	 */
+	public static boolean softmaxGrad(double[] g, int offsetG, double[] s, int offsetS, @Nullable Object mask,
+			int offsetM, int maskLen, double[] out, int offsetOut, int rows, int len, int scaleOp, double scale) {
+		GpuDevice device = Probe.DEVICE;
+		int sop = softmaxScaleOp(scaleOp, scale);
+		return device != null && sop >= 0 && offeredRows(device, g, offsetG, out, offsetOut, rows, len, true)
+				&& offeredRows(device, s, offsetS, out, offsetOut, rows, len, true)
+				&& offeredMask(device, mask, offsetM, maskLen, (long) rows * len) && device.softmaxGrad(g, offsetG, s,
+						offsetS, mask, offsetM, maskLen, out, offsetOut, rows, len, sop, softmaxScale(scaleOp, scale));
+	}
+
+	/**
+	 * The single-float sibling of
+	 * {@link #softmaxGrad(double[], int, double[], int, Object, int, int, double[], int, int, int, int, double)}.
+	 */
+	public static boolean softmaxGrad(float[] g, int offsetG, float[] s, int offsetS, @Nullable Object mask,
+			int offsetM, int maskLen, float[] out, int offsetOut, int rows, int len, int scaleOp, double scale) {
+		GpuDevice device = Probe.DEVICE;
+		int sop = softmaxScaleOp(scaleOp, scale);
+		return device != null && sop >= 0 && offeredRows(device, g, offsetG, out, offsetOut, rows, len, true)
+				&& offeredRows(device, s, offsetS, out, offsetOut, rows, len, true)
+				&& offeredMask(device, mask, offsetM, maskLen, (long) rows * len) && device.softmaxGradF(g, offsetG, s,
+						offsetS, mask, offsetM, maskLen, out, offsetOut, rows, len, sop, softmaxScale(scaleOp, scale));
+	}
+
+	/**
+	 * {@code linalg:log-softmax} over the LAST axis of a {@code rows x len} operand as
+	 * one pass per row where the chain ran six members: the strict max fold, the
+	 * broadcast subtraction, {@code exp} at the width, the sum fold, {@code log} of that
+	 * sum at the width and the broadcast subtraction. The deviation is recomputed rather
+	 * than stored, which is a memory pass saved and the same {@code (T)} subtraction, so
+	 * the result is the composed device chain's and stands to the CPU as an accelerated
+	 * {@code exp} and {@code log} do. Offered like {@link #softmax}.
+	 * @param a the operand, {@code rows} rows of {@code len} contiguous elements
+	 * @param offsetA the index of {@code a}'s first element
+	 * @param out the array the {@code rows * len} results are written into
+	 * @param offsetOut the index in {@code out} the results start at
+	 * @param rows how many rows
+	 * @param len the row length, the log-softmax's own axis
+	 * @return {@code true} when {@code out} was filled
+	 */
+	public static boolean logSoftmax(double[] a, int offsetA, double[] out, int offsetOut, int rows, int len) {
+		GpuDevice device = Probe.DEVICE;
+		return device != null && offeredRows(device, a, offsetA, out, offsetOut, rows, len, true)
+				&& device.logSoftmax(a, offsetA, out, offsetOut, rows, len);
+	}
+
+	/**
+	 * The single-float sibling of
+	 * {@link #logSoftmax(double[], int, double[], int, int, int)}.
+	 */
+	public static boolean logSoftmax(float[] a, int offsetA, float[] out, int offsetOut, int rows, int len) {
+		GpuDevice device = Probe.DEVICE;
+		return device != null && offeredRows(device, a, offsetA, out, offsetOut, rows, len, true)
+				&& device.logSoftmaxF(a, offsetA, out, offsetOut, rows, len);
+	}
+
+	/**
+	 * {@code torch:log-softmax}'s adjoint {@code g - exp(out) * sum(g)} per row, as one
+	 * pass where the composition ran four members: the sum fold (sequential), {@code exp}
+	 * of the forward result at the width, the broadcast multiply and the zip subtraction.
+	 * Offered like {@link #logSoftmax}, with either operand's residency counting.
+	 * @param g the output's gradient
+	 * @param offsetG the index of {@code g}'s first element
+	 * @param o the log-softmax output the forward produced
+	 * @param offsetO the index of {@code o}'s first element
+	 * @param out the array the {@code rows * len} results are written into
+	 * @param offsetOut the index in {@code out} the results start at
+	 * @param rows how many rows
+	 * @param len the row length
+	 * @return {@code true} when {@code out} was filled
+	 */
+	public static boolean logSoftmaxGrad(double[] g, int offsetG, double[] o, int offsetO, double[] out, int offsetOut,
+			int rows, int len) {
+		GpuDevice device = Probe.DEVICE;
+		return device != null && offeredRows(device, g, offsetG, out, offsetOut, rows, len, true)
+				&& offeredRows(device, o, offsetO, out, offsetOut, rows, len, true)
+				&& device.logSoftmaxGrad(g, offsetG, o, offsetO, out, offsetOut, rows, len);
+	}
+
+	/** The single-float sibling of {@link #logSoftmaxGrad}. */
+	public static boolean logSoftmaxGrad(float[] g, int offsetG, float[] o, int offsetO, float[] out, int offsetOut,
+			int rows, int len) {
+		GpuDevice device = Probe.DEVICE;
+		return device != null && offeredRows(device, g, offsetG, out, offsetOut, rows, len, true)
+				&& offeredRows(device, o, offsetO, out, offsetOut, rows, len, true)
+				&& device.logSoftmaxGradF(g, offsetG, o, offsetO, out, offsetOut, rows, len);
+	}
+
+	/**
+	 * {@code torch:layer-norm}'s normalization {@code (x - mean) / sqrt(var + eps)} over
+	 * the LAST axis as one pass per row where the torch composition ran eleven members:
+	 * the sum fold and the division by the length (the mean), the broadcast subtraction,
+	 * the squared deviations, their sum fold and division (the variance), the epsilon,
+	 * the square root, the broadcast division -- every one rounded where the chain
+	 * rounds, the folds sequential. No libm ({@code sqrt} is correctly rounded on both
+	 * sides), so BIT-IDENTICAL to the CPU chain. Offered like an axis fold.
+	 * @param x the operand, {@code rows} rows of {@code len} contiguous elements
+	 * @param offsetX the index of {@code x}'s first element
+	 * @param out the array the {@code rows * len} results are written into
+	 * @param offsetOut the index in {@code out} the results start at
+	 * @param rows how many rows
+	 * @param len the row length, the normalized axis
+	 * @param eps the epsilon added to the variance
+	 * @return {@code true} when {@code out} was filled
+	 */
+	public static boolean layerNorm(double[] x, int offsetX, double[] out, int offsetOut, int rows, int len,
+			double eps) {
+		GpuDevice device = Probe.DEVICE;
+		return device != null && offeredRows(device, x, offsetX, out, offsetOut, rows, len, false)
+				&& device.layerNorm(x, offsetX, out, offsetOut, rows, len, eps);
+	}
+
+	/** The single-float sibling of {@link #layerNorm}. */
+	public static boolean layerNorm(float[] x, int offsetX, float[] out, int offsetOut, int rows, int len, double eps) {
+		GpuDevice device = Probe.DEVICE;
+		return device != null && offeredRows(device, x, offsetX, out, offsetOut, rows, len, false)
+				&& device.layerNormF(x, offsetX, out, offsetOut, rows, len, eps);
+	}
+
+	/**
+	 * The tape's backward through {@link #layerNorm}'s composition as one pass per row:
+	 * with {@code g} the gradient of the normalized output, {@code out} receives the
+	 * gradient {@code x} holds AFTER this node -- the four contributions the composition
+	 * makes to its input (through the squared deviations, the variance's own mean, the
+	 * deviation and the mean), added in the order the reverse walk makes them onto
+	 * {@code old}, the gradient {@code x} had accumulated before (or nothing when
+	 * {@code null}). Every rounding is the chain's and the folds are sequential, so
+	 * BIT-IDENTICAL to the CPU chain. Offered like an axis fold, with either operand's
+	 * residency counting.
+	 * @param g the normalized output's gradient
+	 * @param offsetG the index of {@code g}'s first element
+	 * @param x the input
+	 * @param offsetX the index of {@code x}'s first element
+	 * @param old the gradient accumulated so far, or {@code null} for none
+	 * @param offsetOld the index of {@code old}'s first element
+	 * @param out the array the {@code rows * len} results are written into
+	 * @param offsetOut the index in {@code out} the results start at
+	 * @param rows how many rows
+	 * @param len the row length
+	 * @param eps the epsilon the forward added
+	 * @return {@code true} when {@code out} was filled
+	 */
+	public static boolean layerNormGrad(double[] g, int offsetG, double[] x, int offsetX, double @Nullable [] old,
+			int offsetOld, double[] out, int offsetOut, int rows, int len, double eps) {
+		GpuDevice device = Probe.DEVICE;
+		return device != null && offeredRows(device, g, offsetG, out, offsetOut, rows, len, false)
+				&& offeredRows(device, x, offsetX, out, offsetOut, rows, len, false)
+				&& (old == null || offeredRows(device, old, offsetOld, out, offsetOut, rows, len, false))
+				&& device.layerNormGrad(g, offsetG, x, offsetX, old, offsetOld, out, offsetOut, rows, len, eps);
+	}
+
+	/** The single-float sibling of {@link #layerNormGrad}. */
+	public static boolean layerNormGrad(float[] g, int offsetG, float[] x, int offsetX, float @Nullable [] old,
+			int offsetOld, float[] out, int offsetOut, int rows, int len, double eps) {
+		GpuDevice device = Probe.DEVICE;
+		return device != null && offeredRows(device, g, offsetG, out, offsetOut, rows, len, false)
+				&& offeredRows(device, x, offsetX, out, offsetOut, rows, len, false)
+				&& (old == null || offeredRows(device, old, offsetOld, out, offsetOut, rows, len, false))
+				&& device.layerNormGradF(g, offsetG, x, offsetX, old, offsetOld, out, offsetOut, rows, len, eps);
+	}
+
+	/**
+	 * {@link #layerNorm}'s normalization AND {@code torch:layer-norm}'s own affine --
+	 * {@code norm * weight + bias} over a {@code (len)} weight and bias -- as one pass
+	 * per row, where the module ran the normalization and then two BROADCAST passes over
+	 * the whole activation. Each parameter is read where the broadcast pass read it and
+	 * the two products round where the two members rounded, so BIT-IDENTICAL to the CPU
+	 * chain. Offered like {@link #layerNorm}; the parameters are two {@code len}-long
+	 * vectors and are not what decides.
+	 * @param x the operand, {@code rows} rows of {@code len} contiguous elements
+	 * @param offsetX the index of {@code x}'s first element
+	 * @param w the weight, {@code len} elements
+	 * @param offsetW the index of {@code w}'s first element
+	 * @param b the bias, {@code len} elements
+	 * @param offsetB the index of {@code b}'s first element
+	 * @param out the array the {@code rows * len} results are written into
+	 * @param offsetOut the index in {@code out} the results start at
+	 * @param rows how many rows
+	 * @param len the row length, the normalized axis
+	 * @param eps the epsilon added to the variance
+	 * @return {@code true} when {@code out} was filled
+	 */
+	public static boolean layerNormAffine(double[] x, int offsetX, double[] w, int offsetW, double[] b, int offsetB,
+			double[] out, int offsetOut, int rows, int len, double eps) {
+		GpuDevice device = Probe.DEVICE;
+		return device != null && offeredRows(device, x, offsetX, out, offsetOut, rows, len, false)
+				&& fitsVector(device, w, offsetW, len) && fitsVector(device, b, offsetB, len)
+				&& device.layerNormAffine(x, offsetX, w, offsetW, b, offsetB, out, offsetOut, rows, len, eps);
+	}
+
+	/** The single-float sibling of {@link #layerNormAffine}. */
+	public static boolean layerNormAffine(float[] x, int offsetX, float[] w, int offsetW, float[] b, int offsetB,
+			float[] out, int offsetOut, int rows, int len, double eps) {
+		GpuDevice device = Probe.DEVICE;
+		return device != null && offeredRows(device, x, offsetX, out, offsetOut, rows, len, false)
+				&& fitsVector(device, w, offsetW, len) && fitsVector(device, b, offsetB, len)
+				&& device.layerNormAffineF(x, offsetX, w, offsetW, b, offsetB, out, offsetOut, rows, len, eps);
+	}
+
+	/**
+	 * The tape's backward through {@link #layerNormAffine}, and the one member here that
+	 * answers TWO arrays: {@code out} is what {@link #layerNormGrad} writes with the
+	 * broadcast {@code g * weight} folded in, and {@code gn} is {@code g * norm}, whose
+	 * axis-0 folds are the weight's gradient. {@code norm} is what the fused forward no
+	 * longer stores -- and the row statistics this pass recomputes anyway are what it is
+	 * made of, so the second result costs its store and nothing else. Every rounding is
+	 * the chain's and the folds are sequential, so BIT-IDENTICAL to the CPU chain.
+	 * @param g the affine output's gradient
+	 * @param offsetG the index of {@code g}'s first element
+	 * @param x the input
+	 * @param offsetX the index of {@code x}'s first element
+	 * @param w the weight, {@code len} elements
+	 * @param offsetW the index of {@code w}'s first element
+	 * @param old the gradient accumulated so far, or {@code null} for none
+	 * @param offsetOld the index of {@code old}'s first element
+	 * @param out the array the input's gradient is written into
+	 * @param offsetOut the index in {@code out} the results start at
+	 * @param gn the array {@code g * norm} is written into
+	 * @param offsetGn the index in {@code gn} the results start at
+	 * @param rows how many rows
+	 * @param len the row length
+	 * @param eps the epsilon the forward added
+	 * @return {@code true} when both results were filled
+	 */
+	public static boolean layerNormAffineGrad(double[] g, int offsetG, double[] x, int offsetX, double[] w, int offsetW,
+			double @Nullable [] old, int offsetOld, double[] out, int offsetOut, double[] gn, int offsetGn, int rows,
+			int len, double eps) {
+		GpuDevice device = Probe.DEVICE;
+		return device != null && offeredRows(device, g, offsetG, out, offsetOut, rows, len, false)
+				&& offeredRows(device, x, offsetX, out, offsetOut, rows, len, false)
+				&& (old == null || offeredRows(device, old, offsetOld, out, offsetOut, rows, len, false))
+				&& fitsVector(device, w, offsetW, len) && fitsResult(extent(device, gn), offsetGn, (long) rows * len)
+				&& device.layerNormAffineGrad(g, offsetG, x, offsetX, w, offsetW, old, offsetOld, out, offsetOut, gn,
+						offsetGn, rows, len, eps);
+	}
+
+	/** The single-float sibling of {@link #layerNormAffineGrad}. */
+	public static boolean layerNormAffineGrad(float[] g, int offsetG, float[] x, int offsetX, float[] w, int offsetW,
+			float @Nullable [] old, int offsetOld, float[] out, int offsetOut, float[] gn, int offsetGn, int rows,
+			int len, double eps) {
+		GpuDevice device = Probe.DEVICE;
+		return device != null && offeredRows(device, g, offsetG, out, offsetOut, rows, len, false)
+				&& offeredRows(device, x, offsetX, out, offsetOut, rows, len, false)
+				&& (old == null || offeredRows(device, old, offsetOld, out, offsetOut, rows, len, false))
+				&& fitsVector(device, w, offsetW, len) && fitsResult(extent(device, gn), offsetGn, (long) rows * len)
+				&& device.layerNormAffineGradF(g, offsetG, x, offsetX, w, offsetW, old, offsetOld, out, offsetOut, gn,
+						offsetGn, rows, len, eps);
+	}
+
+	/**
+	 * The inverted-dropout mask {@code (rand > p) / (1 - p)} as one pass, from the
+	 * Wichmann-Hill state {@code (s1, s2, s3)}: the composition drew the uniform array
+	 * ({@link #rngFill} mode 0), compared it, and divided the mask -- three passes, two
+	 * of them over the just-written draws. The draw is {@link #rngFill}'s, stored at the
+	 * width and compared as the scalar {@code greater} compares it, then divided by
+	 * {@code span}, the {@code 1 - p} the caller computed; BIT-IDENTICAL to the CPU
+	 * chain, and the generator ends where {@link #rngAdvance} says it does after
+	 * {@code n} draws. Declines exactly what {@link #rngFill} declines.
+	 * @param out the array the mask is written into
+	 * @param offsetOut the index in {@code out} the mask starts at
+	 * @param n how many elements
+	 * @param p the drop probability
+	 * @param span the survival span {@code 1 - p} the mask is divided by
+	 * @param s1 the first state word
+	 * @param s2 the second state word
+	 * @param s3 the third state word
+	 * @return {@code true} when {@code out} was filled
+	 */
+	public static boolean dropoutMask(double[] out, int offsetOut, int n, double p, double span, int s1, int s2,
+			int s3) {
+		GpuDevice device = Probe.DEVICE;
+		return device != null && offeredRng(extent(device, out), offsetOut, n, 0, s1, s2, s3)
+				&& device.dropoutMask(out, offsetOut, n, p, span, s1, s2, s3);
+	}
+
+	/** The single-float sibling of {@link #dropoutMask}. */
+	public static boolean dropoutMask(float[] out, int offsetOut, int n, double p, double span, int s1, int s2,
+			int s3) {
+		GpuDevice device = Probe.DEVICE;
+		return device != null && offeredRng(extent(device, out), offsetOut, n, 0, s1, s2, s3)
+				&& device.dropoutMaskF(out, offsetOut, n, p, span, s1, s2, s3);
+	}
+
+	/**
+	 * Whether a one-pass adjoint over {@code n} elements is one this library will
+	 * attempt: the three operands and the result actually present, the optional
+	 * accumulated gradient included.
+	 */
+	private static boolean offeredGrad(GpuDevice device, Object g, int offsetG, Object x, int offsetX,
+			@Nullable Object old, int offsetOld, Object out, int offsetOut, int n) {
+		return n > 0 && offsetG >= 0 && (long) offsetG + n <= extent(device, g) && offsetX >= 0
+				&& (long) offsetX + n <= extent(device, x)
+				&& (old == null || (offsetOld >= 0 && (long) offsetOld + n <= extent(device, old)))
+				&& fitsResult(extent(device, out), offsetOut, n);
+	}
+
+	/**
+	 * Whether a row kernel over {@code rows x len} is one this library will attempt: the
+	 * fold's own cell rule (enough rows to fill a grid, fewer when the operand is already
+	 * here), the size threshold -- the map's for a kernel with a libm call in it, the
+	 * fold's otherwise -- or a resident operand, and the operand and result present.
+	 */
+	private static boolean offeredRows(GpuDevice device, Object a, int offsetA, Object out, int offsetOut, int rows,
+			int len, boolean libm) {
+		if (rows < 1 || len < 1 || (long) rows * len > Integer.MAX_VALUE) {
+			return false;
+		}
+		boolean resident = device.resident(a);
+		long total = (long) rows * len;
+		return rows >= (resident ? FOLD_RESIDENT_MIN_CELLS : FOLD_MIN_CELLS)
+				&& (resident || total >= (libm ? Probe.MAP_MIN_ELEMENTS : Probe.FUSED_MIN_ELEMENTS)) && offsetA >= 0
+				&& offsetA + total <= extent(device, a) && fitsResult(extent(device, out), offsetOut, total);
+	}
+
+	/**
+	 * Whether an operand read as a {@code len}-long vector -- layer-norm's weight and
+	 * bias -- lies inside what the host array (or the stub's span) holds.
+	 */
+	private static boolean fitsVector(GpuDevice device, Object v, int offset, int len) {
+		return offset >= 0 && (long) offset + len <= extent(device, v);
+	}
+
+	private static boolean fitsResult(long lengthOut, long offsetOut, long count) {
+		return offsetOut >= 0 && (lengthOut == offsetOut || offsetOut + count <= lengthOut);
+	}
+
+	/**
+	 * The element count {@code host} may be read or written at, as the bounds checks see
+	 * it: its Java length, or -- for a result stub, whose elements the device or its
+	 * backing holds -- the span it stands for ({@link GpuDevice#extent}).
+	 */
+	private static long extent(GpuDevice device, Object host) {
+		return device.extent(host);
+	}
+
+}

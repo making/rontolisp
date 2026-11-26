@@ -1,0 +1,769 @@
+package am.ik.rontolisp.codegen.jvm;
+
+import java.io.ByteArrayOutputStream;
+import java.io.PrintStream;
+import java.lang.invoke.MethodHandle;
+import java.lang.invoke.MethodHandles;
+import java.lang.reflect.Method;
+import java.net.URL;
+import java.net.URLClassLoader;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.List;
+import java.util.stream.IntStream;
+
+import am.ik.rontolisp.BFloat16;
+import am.ik.rontolisp.FloatText;
+import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.compiler.OptimizeLevel;
+import am.ik.rontolisp.eval.LinalgLibrary;
+import am.ik.rontolisp.eval.LispEvaluator;
+import am.ik.rontolisp.eval.LispPreludeLibrary;
+import am.ik.rontolisp.eval.VecLibrary;
+import am.ik.rontolisp.reader.LispReader;
+import am.ik.rontolisp.testsupport.CliStackExtension;
+import am.ik.rontolisp.testsupport.ThreadStdio;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.api.parallel.Execution;
+import org.junit.jupiter.api.parallel.ExecutionMode;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+/**
+ * The {@code bfloat16} packed array on the JVM backend ({@code .kb/bfloat16.md}): a
+ * {@code #bf16(...)} literal and {@code make-array :element-type 'bfloat16} compile to a
+ * bare {@code short[]} carrying the two-slots-per-dimension header
+ * {@link JvmPackedFloatWidth#BFLOAT16} lays out, and every array op routes through the
+ * {@code _fv*} helpers' third arm.
+ *
+ * <p>
+ * Three things this class pins that the {@code #d}/{@code #f} tests do not:
+ * <ul>
+ * <li><b>Both backends, every case.</b> A header-offset mistake in a hand-written
+ * bytecode reader shows up as a plausible value, not an exception, and only a comparison
+ * against the interpreter -- which has no header at all -- catches it. So every program
+ * here runs on both and the outputs are compared, with the length-1 and rank-2/3 shapes
+ * the trap surfaced on.
+ * <li><b>The dimension that does not fit a short.</b> A rank-1 vector of 40000 and a
+ * rank-2/3 array with a 40000 dimension: {@code aref} at the last index must answer the
+ * value stored there. This is the regression the two-slot header exists for.
+ * <li><b>The emitted conversion pair against the authority, exhaustively.</b>
+ * {@code _bf16Value} / {@code _bf16Bits} are {@link BFloat16} copied instruction for
+ * instruction (the authority cannot travel with a compiled program), and every earlier
+ * copy of this arithmetic that broke broke in the narrow / NaN direction -- so the narrow
+ * copy is swept over ALL 2^32 f32 bit patterns and the double NaN space, not merely the
+ * 65536 representable round trips.
+ * </ul>
+ */
+@Execution(ExecutionMode.CONCURRENT)
+@ExtendWith(CliStackExtension.class)
+class JvmBFloat16ArrayTest {
+
+	@TempDir
+	Path tempDir;
+
+	private String interpret(String lispCode) {
+		ByteArrayOutputStream baos = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(baos));
+		for (LispVal expr : LispReader.readAllFromString(lispCode)) {
+			evaluator.eval(expr);
+		}
+		return baos.toString().trim();
+	}
+
+	/** The interpreter with {@code --simd} installed, the other half of the flag. */
+	private String interpretSimd(String lispCode) {
+		ByteArrayOutputStream baos = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(baos));
+		evaluator.setSimd(true);
+		for (LispVal expr : LispReader.readAllFromString(lispCode)) {
+			evaluator.eval(expr);
+		}
+		return baos.toString().trim();
+	}
+
+	private byte[] compile(String lispCode, boolean accel) {
+		List<LispVal> program = LispPreludeLibrary.process(LispReader.readAllFromString(lispCode));
+		program = LinalgLibrary.process(VecLibrary.process(program));
+		JvmLispCompiler compiler = JvmLispCompiler.builder()
+			.className("Test")
+			.optimize(OptimizeLevel.NONE)
+			.simd(accel)
+			.build();
+		byte[] classBytes = compiler.compile(program);
+		// The bridges travel beside the class as their own files, where run() loads.
+		TravellingClassFiles.write(compiler, this.tempDir);
+		return classBytes;
+	}
+
+	private Class<?> load(byte[] classBytes) throws Exception {
+		Path classFile = this.tempDir.resolve("Test.class");
+		Files.write(classFile, classBytes);
+		URLClassLoader loader = new URLClassLoader(new URL[] { this.tempDir.toUri().toURL() },
+				ClassLoader.getSystemClassLoader());
+		return loader.loadClass("Test");
+	}
+
+	private String run(byte[] classBytes) throws Exception {
+		Class<?> clazz = load(classBytes);
+		Method main = clazz.getMethod("main", String[].class);
+		ByteArrayOutputStream baos = new ByteArrayOutputStream();
+		try (var _ = ThreadStdio.out(baos)) {
+			main.invoke(null, (Object) new String[0]);
+		}
+		return baos.toString().trim();
+	}
+
+	private String compileAndRun(String lispCode) throws Exception {
+		return run(compile(lispCode, false));
+	}
+
+	/**
+	 * The PARITY claim: runs the program on both backends, asserts they agree with each
+	 * other, and answers the text they agreed on. A failure here names the two backends
+	 * and nothing else.
+	 */
+	private String both(String lispCode) throws Exception {
+		String interpreted = interpret(lispCode);
+		String compiled = compileAndRun(lispCode);
+		assertThat(compiled).as("PARITY: JVM output must equal the interpreter's for:%n%s", lispCode)
+			.isEqualTo(interpreted);
+		return compiled;
+	}
+
+	/**
+	 * The ORACLE claim, kept apart from the parity one (.kb/measurement-probes.md, rule
+	 * 5): the text both backends agreed on, against a hand-written expectation. A failure
+	 * here means the expectation is what disagrees -- both backends already matched.
+	 */
+	private void assertAgreedText(String lispCode, String expected) throws Exception {
+		String agreed = both(lispCode);
+		assertThat(agreed)
+			.as("ORACLE: the text both backends agree on, against the hand-written expectation for:%n%s", lispCode)
+			.isEqualTo(expected);
+	}
+
+	// --- the #f mirror ---------------------------------------------------------
+
+	@Test
+	void rank1LiteralPrintsWithBf16SyntaxOnBothBackends() throws Exception {
+		assertAgreedText("(print #bf16(1.0 2.0 3.0))", "#bf16(1.0 2.0 3.0)");
+		assertAgreedText("(print #bf16(1 2 3))", "#bf16(1.0 2.0 3.0)");
+		assertAgreedText("(print (quote #bf16(1.0 2.0 3.0)))", "#bf16(1.0 2.0 3.0)");
+	}
+
+	@Test
+	void aLengthOneLiteralHoldsItsElementRatherThanAHeaderWord() throws Exception {
+		// The regression shape: an off-by-header read answers the rank word 1.0 here.
+		assertAgreedText("(print (aref #bf16(7.0) 0))", "7.0");
+		assertAgreedText("(print #bf16(7.0))", "#bf16(7.0)");
+		assertAgreedText("(print (length #bf16(7.0)))", "1");
+		assertAgreedText("(let ((v (make-array 1 :element-type 'bfloat16))) (setf (aref v 0) 2.5) (print (aref v 0)))",
+				"2.5");
+	}
+
+	@Test
+	void rank2AndRank3LiteralsIndexThroughTheTwoSlotHeader() throws Exception {
+		assertAgreedText("(print #bf16((1.0 2.0) (3.0 4.0)))", "#bf16((1.0 2.0) (3.0 4.0))");
+		assertAgreedText("(print (aref #bf16((1.0 2.0) (3.0 4.0)) 1 0))", "3.0");
+		assertAgreedText("(print (row-major-aref #bf16((1.0 2.0) (3.0 4.0)) 2))", "3.0");
+		assertAgreedText("(print (aref #bf16(((1.0 2.0) (3.0 4.0)) ((5.0 6.0) (7.0 8.0))) 1 0 1))", "6.0");
+		assertAgreedText("(print (array-dimensions #bf16(((1.0 2.0) (3.0 4.0)) ((5.0 6.0) (7.0 8.0)))))", "(2 2 2)");
+	}
+
+	@Test
+	void theBf16PrefixIsReadBeforeTheBinaryRadixPrefix() throws Exception {
+		assertAgreedText("(print (list #b1010 #bf16(1.0) #B101))", "(10 #bf16(1.0) 5)");
+	}
+
+	@Test
+	void arefWidensAndSetfArefNarrows() throws Exception {
+		assertAgreedText("(print (aref #bf16(1.5 2.5 3.5) 1))", "2.5");
+		// 0.1 is not representable at this width; the widened value is what aref
+		// answers, and the print of the array is the shortest text that re-reads to it.
+		assertAgreedText("(print (aref #bf16(0.1) 0))", "0.10009765625");
+		assertAgreedText("(print #bf16(0.1))", "#bf16(0.1)");
+		assertAgreedText("(let ((v #bf16(1.0 2.0 3.0))) (setf (aref v 1) 9.0) (print v))", "#bf16(1.0 9.0 3.0)");
+		assertAgreedText("(let ((v #bf16(1.0))) (setf (aref v 0) 0.1) (print (aref v 0)))", "0.10009765625");
+		assertAgreedText("(let ((v #bf16(1.0 2.0))) (print (setf (aref v 0) 0.1)))", "0.10009765625");
+		assertAgreedText("(let ((v #bf16(1.0 2.0))) (setf (aref v 0) 5) (print (aref v 0)))", "5.0");
+		assertAgreedText("(let ((m #bf16((1.0 2.0) (3.0 4.0)))) (setf (aref m 1 0) 7.0) (print m))",
+				"#bf16((1.0 2.0) (7.0 4.0))");
+		assertAgreedText("(let ((c (make-array '(2 2 2) :element-type 'bfloat16))) (setf (aref c 1 1 1) 8.0)"
+				+ " (print (list (aref c 1 1 1) (row-major-aref c 7) (aref c 0 0 0))))", "(8.0 8.0 0.0)");
+	}
+
+	@Test
+	void makeArrayWithBFloat16ElementTypeIsPacked() throws Exception {
+		assertAgreedText("(print (make-array 3 :element-type 'bfloat16))", "#bf16(0.0 0.0 0.0)");
+		assertAgreedText("(print (make-array 3 :element-type 'bfloat16 :initial-element 2.0))", "#bf16(2.0 2.0 2.0)");
+		assertAgreedText("(print (make-array '(2 2) :element-type 'bfloat16))", "#bf16((0.0 0.0) (0.0 0.0))");
+		assertAgreedText("(print (make-array '(2 3) :element-type 'bfloat16 :initial-element 0.1))",
+				"#bf16((0.1 0.1 0.1) (0.1 0.1 0.1))");
+		assertAgreedText("(print (list (length (make-array 5 :element-type 'bfloat16))"
+				+ " (array-dimensions (make-array '(2 3) :element-type 'bfloat16))"
+				+ " (array-total-size (make-array '(2 3) :element-type 'bfloat16))))", "(5 (2 3) 6)");
+	}
+
+	@Test
+	void predicatesElementTypeAndTypeOfNameTheWidth() throws Exception {
+		assertAgreedText("(print (list (arrayp #bf16(1.0)) (vectorp #bf16(1.0))"
+				+ " (typep #bf16(1.0) '(array bfloat16)) (typep #bf16(1.0) '(simple-array bfloat16 (1)))"
+				+ " (typep 1.0 'bfloat16)))", "(T T T T NIL)");
+		both("(print (list (typep #bf16(1.0) 'simple-array) (typep #bf16(1.0) 'vector) (typep #bf16(1.0) 'simple-vector)))");
+		assertAgreedText("(print (array-element-type #bf16(1.0)))", "BFLOAT16");
+		assertAgreedText("(print (type-of #bf16(1.0 2.0)))", "(SIMPLE-ARRAY BFLOAT16 (2))");
+	}
+
+	@Test
+	void theTypeLatticeAnswersALiteralAndAComputedPairAlike() throws Exception {
+		// bfloat16 is an EDGE below float in the subtypep lattice, not a fourth alias of
+		// it: the type is EMPTY, so the reverse direction is nil. A computed pair goes
+		// through the emitted %subtypep-ancestor-table%, whose universe is DERIVED from
+		// the edges; an alias reached it only through a hand-written list that did not
+		// name this one, so until 2026-09-08 a computed pair answered NIL on the JVM --
+		// against itself included -- while the literal fold said T.
+		assertAgreedText(
+				"(defun bfl-sub (a b) (subtypep (car (list a)) (car (list b))))"
+						+ " (print (list (list (subtypep 'bfloat16 'float) (subtypep 'bfloat16 'number)"
+						+ " (subtypep 'bfloat16 'bfloat16) (subtypep 'float 'bfloat16)"
+						+ " (subtypep 'single-float 'bfloat16) (subtypep 'double-float 'bfloat16))"
+						+ " (list (bfl-sub 'bfloat16 'float) (bfl-sub 'bfloat16 'number)"
+						+ " (bfl-sub 'bfloat16 'bfloat16) (bfl-sub 'float 'bfloat16)"
+						+ " (bfl-sub 'single-float 'bfloat16) (bfl-sub 'double-float 'bfloat16))"
+						+ " (list (typep 1.0 'bfloat16) (typep (car (list 1.0)) (car (list 'bfloat16))))))",
+				"((T T T NIL NIL NIL) (T T T NIL NIL NIL) (NIL NIL))");
+	}
+
+	@Test
+	void theThreeWidthsCoexistWithDistinctPrefixes() throws Exception {
+		assertAgreedText("(print (list #d(1.0) #f(1.0) #bf16(1.0)))", "(#d(1.0) #f(1.0) #bf16(1.0))");
+		assertAgreedText("(print (list (array-element-type #d(1.0)) (array-element-type #f(1.0))"
+				+ " (array-element-type #bf16(1.0))))", "(DOUBLE-FLOAT SINGLE-FLOAT BFLOAT16)");
+	}
+
+	@Test
+	void nonRealStoreIsATypeErrorOnBothBackends() {
+		String program = "(let ((v #bf16(1.0))) (setf (aref v 0) \"x\"))";
+		assertThatThrownBy(() -> interpret(program)).isInstanceOf(Exception.class);
+		assertThatThrownBy(() -> compileAndRun(program)).isInstanceOf(Exception.class);
+	}
+
+	// --- the dimension that does not fit a short -------------------------------
+
+	@Test
+	void aDimensionAbove32767IndexesToItsLastElement() throws Exception {
+		// A one-slot header (a short caps at 32767) would read the wrong data
+		// offset silently on exactly these shapes; the interpreter comparison is what
+		// says the answer is the stored value and not another slot's.
+		assertAgreedText(
+				"(let ((v (make-array 40000 :element-type 'bfloat16)))"
+						+ " (setf (aref v 39999) 3.0) (setf (aref v 0) 1.5)"
+						+ " (print (list (length v) (aref v 39999) (aref v 0) (aref v 1) (array-dimensions v))))",
+				"(40000 3.0 1.5 0.0 (40000))");
+		assertAgreedText("(let ((m (make-array '(2 40000) :element-type 'bfloat16)))"
+				+ " (setf (aref m 1 39999) 5.0) (setf (aref m 0 0) 1.0) (setf (aref m 0 39999) 2.0)"
+				+ " (print (list (aref m 1 39999) (aref m 0 0) (aref m 0 39999) (aref m 1 0)"
+				+ " (array-dimensions m) (row-major-aref m 79999) (row-major-aref m 39999) (array-total-size m))))",
+				"(5.0 1.0 2.0 0.0 (2 40000) 5.0 2.0 80000)");
+		assertAgreedText(
+				"(let ((c (make-array '(2 3 40000) :element-type 'bfloat16)))"
+						+ " (setf (aref c 1 2 39999) 9.0) (setf (aref c 0 1 39999) 4.0)"
+						+ " (print (list (aref c 1 2 39999) (aref c 0 1 39999) (aref c 1 2 0)"
+						+ " (array-dimensions c) (array-total-size c) (row-major-aref c 239999))))",
+				"(9.0 4.0 0.0 (2 3 40000) 240000 9.0)");
+		// A dimension exactly at the boundary on either side.
+		assertAgreedText(
+				"(let ((v (make-array 32768 :element-type 'bfloat16)) (w (make-array 32767 :element-type 'bfloat16)))"
+						+ " (setf (aref v 32767) 1.0) (setf (aref w 32766) 2.0)"
+						+ " (print (list (aref v 32767) (aref w 32766) (length v) (length w))))",
+				"(1.0 2.0 32768 32767)");
+	}
+
+	// --- every pattern, through the array ---------------------------------------
+
+	@Test
+	void everyPatternStoredThroughSetfArefReadsBackThroughAref() throws Exception {
+		// The 126 signalling NaNs included: a store narrows through _bf16Bits and a
+		// read widens through _bf16Value, neither crossing the f32, so the pattern
+		// survives the array on both backends.
+		assertAgreedText("""
+				(let ((v (make-array 65536 :element-type 'bfloat16)) (bad 0))
+				  (dotimes (i 65536) (setf (aref v i) (rontolisp:bits-bfloat16 i)))
+				  (dotimes (i 65536)
+				    (unless (= i (rontolisp:bfloat16-bits (aref v i))) (incf bad)))
+				  (print bad))
+				""", "0");
+	}
+
+	@Test
+	void everyPatternPrintsTheSameTextOnBothBackends() throws Exception {
+		// One 65536-element array printed whole: the JVM's _bf16Print must choose the
+		// digits FloatText.bfloat16Text chooses for every pattern, NaN and the
+		// infinities included.
+		String program = """
+				(let ((v (make-array 65536 :element-type 'bfloat16)))
+				  (dotimes (i 65536) (setf (aref v i) (rontolisp:bits-bfloat16 i)))
+				  (print v))
+				""";
+		String text = both(program);
+		assertThat(text).startsWith("#bf16(0.0 ");
+		// And the element text is the printer half's, not merely self-consistent.
+		String[] elements = text.substring("#bf16(".length(), text.length() - 1).split(" ");
+		assertThat(elements).hasSize(65536);
+		for (int pattern = 0; pattern < 65536; pattern++) {
+			assertThat(elements[pattern]).as("pattern %04x", pattern)
+				.isEqualTo(FloatText.bfloat16Text(BFloat16.value(pattern)));
+		}
+	}
+
+	// --- the emitted conversion pair against the authority -----------------------
+
+	private MethodHandle helper(Class<?> clazz, String name, Class<?>... params) throws Exception {
+		Method m = clazz.getDeclaredMethod(name, params);
+		m.setAccessible(true);
+		return MethodHandles.lookup().unreflect(m);
+	}
+
+	@Test
+	void theEmittedValueMatchesTheAuthorityOnEveryPattern() throws Throwable {
+		Class<?> clazz = load(compile("(print #bf16(1.0))", false));
+		MethodHandle value = helper(clazz, JvmFloatArrayRuntimeBuilder.BF16_VALUE, int.class);
+		for (int pattern = 0; pattern < 65536; pattern++) {
+			double got = (double) value.invokeExact(pattern);
+			assertThat(Double.doubleToRawLongBits(got)).as("pattern %04x", pattern)
+				.isEqualTo(Double.doubleToRawLongBits(BFloat16.value(pattern)));
+		}
+	}
+
+	@Test
+	void theEmittedNarrowingMatchesTheAuthorityOnEveryF32PatternAndEveryDoubleNaN() throws Throwable {
+		Class<?> clazz = load(compile("(print #bf16(1.0))", false));
+		MethodHandle bits = helper(clazz, JvmFloatArrayRuntimeBuilder.BF16_BITS, double.class);
+		// All 2^32 f32 patterns, widened to the double the array's callers hand in.
+		// Chunked over the common pool; each chunk answers its first mismatch or -1.
+		long mismatches = IntStream.range(0, 1 << 12).parallel().mapToLong(chunk -> {
+			long bad = 0;
+			int from = chunk << 20;
+			for (int p = from; p != from + (1 << 20); p++) {
+				double v = Float.intBitsToFloat(p);
+				int got;
+				try {
+					got = (int) bits.invokeExact(v);
+				}
+				catch (Throwable t) {
+					throw new AssertionError(t);
+				}
+				if (got != BFloat16.bits(v)) {
+					bad++;
+				}
+			}
+			return bad;
+		}).sum();
+		assertThat(mismatches).as("f32 patterns whose narrowing differs from BFloat16.bits").isZero();
+		// The double NaN arm: every sign x every top-seven-bit payload x low bits of
+		// the payload zero, one, all ones, and the f32-shaped shift of the top bits
+		// (the double an f32 signalling NaN becomes when widened by hand). This is the
+		// arm the f32 sweep cannot reach, since a widened f32 NaN arrives quieted.
+		long nanMismatches = 0;
+		for (int sign = 0; sign < 2; sign++) {
+			for (int top = 0; top < 128; top++) {
+				for (long low : new long[] { 0L, 1L, (1L << 45) - 1, 0x1234_5678_9abL, 1L << 44 }) {
+					long raw = ((long) sign << 63) | 0x7ff0000000000000L | ((long) top << 45) | low;
+					double v = Double.longBitsToDouble(raw);
+					if (!Double.isNaN(v)) {
+						continue; // top == 0 && low == 0 is an infinity, covered above
+					}
+					int got = (int) bits.invokeExact(v);
+					if (got != BFloat16.bits(v)) {
+						nanMismatches++;
+					}
+				}
+			}
+		}
+		assertThat(nanMismatches).as("double NaNs whose narrowing differs from BFloat16.bits").isZero();
+	}
+
+	@Test
+	void theEmittedPrintBoxMatchesTheTextAuthorityOnEveryPattern() throws Throwable {
+		Class<?> clazz = load(compile("(print #bf16(1.0))", false));
+		MethodHandle print = helper(clazz, JvmFloatArrayRuntimeBuilder.BF16_PRINT, int.class);
+		for (int pattern = 0; pattern < 65536; pattern++) {
+			Float box = (Float) print.invokeExact(pattern);
+			assertThat(Float.toString(box).replace('E', 'e')).as("pattern %04x", pattern)
+				.isEqualTo(FloatText.bfloat16Text(BFloat16.value(pattern)));
+		}
+	}
+
+	@Test
+	void theBackendWidthMirrorsTheLanguageDesignatorOneToOne() {
+		// JvmPackedFloatWidth is the layout half of am.ik.rontolisp.FloatWidth; a member
+		// added to one without the other is a compile error in the mapping, and this
+		// pins that the mapping is a bijection rather than merely total.
+		for (am.ik.rontolisp.FloatWidth width : am.ik.rontolisp.FloatWidth.values()) {
+			assertThat(JvmPackedFloatWidth.of(width).floatWidth()).isSameAs(width);
+		}
+		assertThat(JvmPackedFloatWidth.values()).hasSize(am.ik.rontolisp.FloatWidth.values().length);
+		assertThat(JvmPackedFloatWidth.of(am.ik.rontolisp.FloatWidth.BFLOAT16).descriptor()).isEqualTo("[S");
+		assertThat(JvmPackedFloatWidth.of(am.ik.rontolisp.FloatWidth.BFLOAT16).dataOffset(3)).isEqualTo(7);
+		assertThat(JvmPackedFloatWidth.of(am.ik.rontolisp.FloatWidth.SINGLE).dataOffset(3)).isEqualTo(4);
+	}
+
+	// --- the surfaces around the accessors ---------------------------------------
+
+	@Test
+	void aDisplacedViewOverABf16TargetReadsAndWritesThroughIt() throws Exception {
+		// The view declares the target's element type, as CL requires (and as the
+		// existing #f / (unsigned-byte n) view tests do): the JVM's general
+		// array-element-type arm is gated on some make-array in the program asking for
+		// a type, so an undeclared view answers T on this backend at every width.
+		assertAgreedText("(let* ((v #bf16(1.0 2.0 3.0 4.0))"
+				+ " (d (make-array 2 :element-type 'bfloat16 :displaced-to v :displaced-index-offset 1)))"
+				+ " (setf (aref d 0) 9.0) (print (list (aref d 1) (aref v 1) (length d) (array-element-type d) v)))",
+				"(3.0 9.0 2 BFLOAT16 #bf16(1.0 9.0 3.0 4.0))");
+		assertAgreedText("(let* ((v (make-array 40000 :element-type 'bfloat16))"
+				+ " (d (make-array 2 :element-type 'bfloat16 :displaced-to v :displaced-index-offset 39998)))"
+				+ " (setf (aref d 1) 0.1) (setf (aref d 0) 0.1) (print (list (aref v 39999) (aref d 0) (aref v 39998))))",
+				"(0.10009765625 0.10009765625 0.10009765625)");
+		// Not asserted: the VALUE a store through a view answers. The interpreter
+		// answers the value as given and the JVM the value as stored, at every packed
+		// width (.kb/adjustable-arrays.md, "A PACKED vector is a displacement target").
+	}
+
+	@Test
+	void theRuntimeReaderReadsTheLiteralOnBothBackends() throws Exception {
+		assertAgreedText("(print (read-from-string \"#bf16(1.5 2.5)\"))", "#bf16(1.5 2.5)");
+		assertAgreedText("(print (read-from-string \"(#b101 #BF16((0.1) (2.0)) #bf16(7.0))\"))",
+				"(5 #bf16((0.1) (2.0)) #bf16(7.0))");
+		assertAgreedText("(let ((r (read-from-string \"#bf16(1.0 2.0 3.0)\")))"
+				+ " (print (list (aref r 2) (length r) (array-element-type r))))", "(3.0 3 BFLOAT16)");
+	}
+
+	@Test
+	void theRoutedPrinterRendersTheWidthLikeTheRawOne() throws Exception {
+		// A program that also reads (or defines print-object) routes every print through
+		// the Lisp-level %print-object-str walk, whose vector arm excludes the packed
+		// float widths BY NAME -- the width was missing there and a #bf16 array printed
+		// as a general #(...) of widened doubles, found by the -o Prog.class E2E and not
+		// by any test that printed without reading. prin1-to-string and format ~a take
+		// that walk in every program.
+		assertAgreedText("(print #bf16(0.1)) (print (list #bf16(1.5) 1)) (print (read-from-string \"1\"))",
+				"#bf16(0.1)\n(#bf16(1.5) 1)\n1");
+		assertAgreedText("(print (prin1-to-string #bf16(0.1 2.0)))", "\"#bf16(0.1 2.0)\"");
+		assertAgreedText("(print (format nil \"~a|~s\" #bf16(0.1) #bf16((1.0) (2.0))))",
+				"\"#bf16(0.1)|#bf16((1.0) (2.0))\"");
+		assertAgreedText("(defclass pos-box () ((v :initarg :v)))"
+				+ " (defmethod print-object ((b pos-box) s) (format s \"<box ~a>\" (slot-value b 'v)))"
+				+ " (print (make-instance 'pos-box :v #bf16(0.5 0.1)))", "<box #bf16(0.5 0.1)>");
+	}
+
+	@Test
+	void loopsOverABf16ArrayAgreeWithTheInterpreter() throws Exception {
+		// A typed loop specializes on float[]/double[] at run time and bails to the
+		// boxed path for anything else; the sums must be the interpreter's. 499.5 is
+		// not representable at this width (the ulp on [256, 512) is 2) and rounds to
+		// nearest even, 500.0 -- a store that skipped the narrowing would answer 499.5.
+		assertAgreedText("""
+				(let ((v (make-array 1000 :element-type 'bfloat16)) (acc 0.0))
+				  (dotimes (i 1000) (setf (aref v i) (* i 0.5)))
+				  (dotimes (i 1000) (setq acc (+ acc (aref v i))))
+				  (print (list acc (aref v 999) (aref v 1))))
+				""", "(249750.0 500.0 0.5)");
+	}
+
+	@Test
+	void theBulkBitsPairCopiesEveryBf16PatternInBothDirections() throws Exception {
+		// :bfloat16 patterns into a #bf16 array and back out are pure COPIES -- the
+		// patterns already are this width's representation -- so the identity must hold
+		// over all 65536, NaN payloads and the 126 signalling ones included. Anything
+		// that routed the copy through a float or a double would lose exactly those.
+		assertAgreedText("""
+				(let* ((n 65536)
+				       (patterns (make-array n :element-type '(unsigned-byte 16)))
+				       (dst (make-array n :element-type 'bfloat16))
+				       (back (make-array n :element-type '(unsigned-byte 16)))
+				       (bad 0))
+				  (dotimes (i n) (setf (aref patterns i) i))
+				  (rontolisp:widen-float-bits patterns :bfloat16 dst)
+				  (rontolisp:narrow-float-bits dst :bfloat16 back)
+				  (print (dotimes (i n bad) (unless (= i (aref back i)) (incf bad)))))
+				""", "0");
+	}
+
+	@Test
+	void theBulkBitsPairConvertsF16AgainstTheRouteThroughAnF32Array() throws Exception {
+		// :float16 -> #bf16 is the only route a published F16 checkpoint has into the
+		// narrow width. The oracle is the route it replaces -- widen into #f, narrow to
+		// :bfloat16 -- which is already pinned against the scalar authority, so this
+		// says the direct arm did not grow a rounding of its own. All 65536 f16
+		// patterns.
+		assertAgreedText("""
+				(let* ((n 65536)
+				       (patterns (make-array n :element-type '(unsigned-byte 16)))
+				       (direct (make-array n :element-type 'bfloat16))
+				       (via (make-array n :element-type 'single-float))
+				       (dbits (make-array n :element-type '(unsigned-byte 16)))
+				       (vbits (make-array n :element-type '(unsigned-byte 16)))
+				       (bad 0))
+				  (dotimes (i n) (setf (aref patterns i) i))
+				  (rontolisp:widen-float-bits patterns :float16 direct)
+				  (rontolisp:widen-float-bits patterns :float16 via)
+				  (rontolisp:narrow-float-bits direct :bfloat16 dbits)
+				  (rontolisp:narrow-float-bits via :bfloat16 vbits)
+				  (print (dotimes (i n bad) (unless (= (aref dbits i) (aref vbits i)) (incf bad)))))
+				""", "0");
+		// And the other direction: a #bf16 SOURCE written out as :float16 patterns, over
+		// all 65536 bf16 patterns, against the same two-step through an #f array.
+		assertAgreedText("""
+				(let* ((n 65536)
+				       (patterns (make-array n :element-type '(unsigned-byte 16)))
+				       (src (make-array n :element-type 'bfloat16))
+				       (f32 (make-array n :element-type 'single-float))
+				       (direct (make-array n :element-type '(unsigned-byte 16)))
+				       (via (make-array n :element-type '(unsigned-byte 16)))
+				       (bad 0))
+				  (dotimes (i n) (setf (aref patterns i) i))
+				  (rontolisp:widen-float-bits patterns :bfloat16 src)
+				  (rontolisp:widen-float-bits patterns :bfloat16 f32)
+				  (rontolisp:narrow-float-bits src :float16 direct)
+				  (rontolisp:narrow-float-bits f32 :float16 via)
+				  (print (dotimes (i n bad) (unless (= (aref direct i) (aref via i)) (incf bad)))))
+				""", "0");
+	}
+
+	@Test
+	void theBulkBitsPairReadsTheBf16HeaderAtEveryShape() throws Exception {
+		// The two-slot header, in the one place that had no reason to know about it
+		// until now: a rank-2 destination, the :start offset checkpoint.lisp's chunked
+		// read uses, and a dimension past 32767 -- the regression this class exists for.
+		assertAgreedText("""
+				(let ((bits (make-array 6 :element-type '(unsigned-byte 16)))
+				      (dst (make-array '(2 3) :element-type 'bfloat16))
+				      (back (make-array 6 :element-type '(unsigned-byte 16))))
+				  (dotimes (i 6) (setf (aref bits i) (rontolisp:bfloat16-bits (+ i 1.0))))
+				  (rontolisp:widen-float-bits bits :bfloat16 dst)
+				  (rontolisp:narrow-float-bits dst :bfloat16 back)
+				  (print dst)
+				  (print (aref back 5)))
+				""", "#bf16((1.0 2.0 3.0) (4.0 5.0 6.0))\n" + BFloat16.bits(6.0));
+		assertAgreedText("""
+				(let ((bits (make-array 2 :element-type '(unsigned-byte 16)))
+				      (dst (make-array 5 :element-type 'bfloat16)))
+				  (setf (aref bits 0) (rontolisp:bfloat16-bits 1.5))
+				  (setf (aref bits 1) (rontolisp:bfloat16-bits 2.5))
+				  (rontolisp:widen-float-bits bits :bfloat16 dst :start 2)
+				  (print dst))
+				""", "#bf16(0.0 0.0 1.5 2.5 0.0)");
+		assertAgreedText("""
+				(let* ((n 40000)
+				       (bits (make-array n :element-type '(unsigned-byte 16)))
+				       (dst (make-array n :element-type 'bfloat16))
+				       (back (make-array n :element-type '(unsigned-byte 16))))
+				  (dotimes (i n) (setf (aref bits i) (rontolisp:bfloat16-bits (* i 0.5))))
+				  (rontolisp:widen-float-bits bits :bfloat16 dst)
+				  (rontolisp:narrow-float-bits dst :bfloat16 back)
+				  (print (list (aref dst 1) (aref dst 39999) (= (aref back 39999) (aref bits 39999)))))
+				""", "(0.5 19968.0 T)");
+		// 19999.5 is not representable at this width -- the ulp on [16384, 32768) is 128
+		// -- so the pattern stored is 19968.0's. The point is the INDEX: the last
+		// element of a 40000-long vector, whose dimension needs both header slots.
+	}
+
+	// --- vec: carries the width; --simd declines to the defun --------------------
+
+	/** Exactly representable operands, so the text can be pinned. */
+	private static final String VEC_EXACT_PROGRAM = """
+			(print (vec:add #bf16(1.0 2.0) #bf16(3.0 4.0)))
+			(print (vec:scale #bf16(1.0 2.0) 3.0))
+			(print (vec:sum #bf16(1.0 2.0 3.5)))
+			(print (vec:dot #bf16(1.0 2.0) #bf16(3.0 4.0)))
+			(print (vec:matvec #bf16((1.0 2.0) (3.0 4.0)) #bf16(1.0 1.0)))
+			(print (vec:clip #bf16(-1.0 0.5 2.0) 0.0 1.0))
+			(print (vec:zeros 3 :element-type 'bfloat16))
+			(let ((out (vec:zeros 2 :element-type 'bfloat16)))
+			  (vec:add-into out #bf16(1.0 2.0) #bf16(0.5 0.5))
+			  (print out))
+			""";
+
+	/** Operands the width rounds, and lengths above the lane kernels' thresholds. */
+	private static final String VEC_ROUNDING_PROGRAM = """
+			(print (vec:exp #bf16(0.0 1.0 -0.5)))
+			(let ((v (vec:zeros 300 :element-type 'bfloat16)) (w (vec:zeros 300 :element-type 'bfloat16)))
+			  (dotimes (i 300) (setf (aref v i) (* i 0.37)) (setf (aref w i) 1.5))
+			  (print (list (vec:sum v) (vec:dot v w) (aref (vec:mul v w) 299) (vec:scale v 0.1)
+			               (vec:matvec (make-array '(3 300) :element-type 'bfloat16 :initial-element 0.3) v))))
+			""";
+
+	/**
+	 * {@link #VEC_ROUNDING_PROGRAM} without {@code vec:sum} and {@code vec:mul}: every
+	 * member left is one {@code --simd} DECLINES at this width, so its answer is the
+	 * defun's bit for bit. {@code vec:sum} over a bf16 vector runs the fused kernel
+	 * instead and joins the f32 reduction contract, which accumulates in f32 rather than
+	 * the defun's f64; {@code vec:mul} over two bf16 vectors runs the fused element-wise
+	 * kernel, which is the defun's answer bit for bit.
+	 */
+	private static final String VEC_ROUNDING_DECLINED_PROGRAM = """
+			(print (vec:exp #bf16(0.0 1.0 -0.5)))
+			(let ((v (vec:zeros 300 :element-type 'bfloat16)) (w (vec:zeros 300 :element-type 'bfloat16)))
+			  (dotimes (i 300) (setf (aref v i) (* i 0.37)) (setf (aref w i) 1.5))
+			  (print (list (vec:dot v w) (aref (vec:maximum v w) 299) (vec:scale v 0.1)
+			               (vec:matvec (make-array '(3 300) :element-type 'bfloat16 :initial-element 0.3) v))))
+			""";
+
+	@Test
+	void vecKernelsPreserveTheBf16WidthOnTheJvm() throws Exception {
+		assertAgreedText(VEC_EXACT_PROGRAM, """
+				#bf16(4.0 6.0)
+				#bf16(3.0 6.0)
+				6.5
+				11.0
+				#bf16(3.0 7.0)
+				#bf16(0.0 0.5 1.0)
+				#bf16(0.0 0.0 0.0)
+				#bf16(1.5 2.5)""");
+		both(VEC_ROUNDING_PROGRAM);
+	}
+
+	@Test
+	void aSimdBuildDeclinesABf16OperandWithNoFusedKernelToTheDefunBitForBit() throws Exception {
+		// The lane kernels carry double[] and float[] only, except for the members with
+		// a FUSED bf16 kernel: the decode shape (below) and the element-wise bf16 x
+		// bf16 -> bf16 pairings. Every other bf16 operand takes the
+		// spliced vec.lisp defun over the packed representation, so --simd stays a
+		// speed flag and not a semantics flag at this width. Both programs here are
+		// exact at the width or reach only declined members -- plus the fused
+		// element-wise members, whose answer IS the defun's bit for bit -- so the
+		// defun's answer is the answer.
+		assertThat(run(compile(VEC_EXACT_PROGRAM, true))).isEqualTo(interpret(VEC_EXACT_PROGRAM));
+		assertThat(run(compile(VEC_ROUNDING_DECLINED_PROGRAM, true)))
+			.isEqualTo(interpret(VEC_ROUNDING_DECLINED_PROGRAM));
+		// The single-float operands beside it are still the lane kernels' (the same
+		// bits as the defun, which is the contract that lets this be asserted).
+		String mixedProgram = "(print (vec:add #f(1.0 2.0) #f(3.0 4.0))) (print (vec:sum #bf16(1.0 2.0)))";
+		assertThat(run(compile(mixedProgram, true))).isEqualTo("#f(4.0 6.0)\n3.0");
+	}
+
+	/**
+	 * The bfloat16 / widened-f32 fixture, mirroring {@code eval.VecSimdTest}'s:
+	 * {@code wb} a {@code rows x cols} bf16 matrix, {@code wf} its EXACT f32 widening,
+	 * {@code vb} / {@code vf} a bf16 vector and its widening, {@code x} f32 activations.
+	 * The values are a deterministic LCG and are exact at NEITHER width, which is what
+	 * makes the equivalence below able to fail.
+	 */
+	private static String bf16Fixture(int rows, int cols, String body) {
+		return """
+				(let ((s 1)
+				      (wb (make-array '(%1$d %2$d) :element-type 'bfloat16 :initial-element 0.0))
+				      (wf (make-array '(%1$d %2$d) :element-type 'single-float :initial-element 0.0))
+				      (vb (make-array %2$d :element-type 'bfloat16 :initial-element 0.0))
+				      (vf (make-array %2$d :element-type 'single-float :initial-element 0.0))
+				      (x (make-array %2$d :element-type 'single-float :initial-element 0.0)))
+				  (dotimes (i %1$d)
+				    (dotimes (j %2$d)
+				      (setq s (mod (+ (* s 1103515245) 12345) 2147483648))
+				      (setf (aref wb i j) (- (/ s 1073741824.0) 1.0))
+				      (setf (aref wf i j) (aref wb i j))))
+				  (dotimes (j %2$d)
+				    (setq s (mod (+ (* s 1103515245) 12345) 2147483648))
+				    (setf (aref vb j) (- (/ s 1073741824.0) 1.0))
+				    (setf (aref vf j) (aref vb j))
+				    (setq s (mod (+ (* s 1103515245) 12345) 2147483648))
+				    (setf (aref x j) (- (/ s 1073741824.0) 1.0)))
+				  %3$s)
+				""".formatted(rows, cols, body);
+	}
+
+	/** The four fused members over {@code prefix}b / {@code prefix}f operands. */
+	private static String fusedProducts(int rows, String w, String v) {
+		return """
+				(progn (print (vec:sum %2$s))
+				       (print (vec:dot %2$s x))
+				       (print (vec:matvec %1$s x))
+				       (print (vec:matvec-into (vec:zeros %3$d :element-type 'single-float) %1$s x)))
+				""".formatted(w, v, rows);
+	}
+
+	@Test
+	void aSimdBuildFusesTheBf16DecodeShapeAndAgreesWithTheWidenedF32Kernel() throws Exception {
+		// sum over bf16, dot(bf16, f32) and the two GEMVs over bf16 weights run the
+		// FUSED decode: the answer is the f32 kernel's over the widened operand, bit for
+		// bit -- bf16 -> f32 being exact (bits << 16) is what lets the contract be an
+		// equivalence rather than a tolerance, and why the width needs no entry of its
+		// own in the cross-backend identity contract. The interpreter's --simd install
+		// must land on the same bits as the embedded bridge, as it must at every other
+		// width.
+		for (int[] shape : new int[][] { { 1, 1 }, { 3, 16 }, { 5, 33 }, { 8, 288 } }) {
+			int rows = shape[0], cols = shape[1];
+			String fused = bf16Fixture(rows, cols, fusedProducts(rows, "wb", "vb"));
+			String widened = bf16Fixture(rows, cols, fusedProducts(rows, "wf", "vf"));
+			String compiled = run(compile(fused, true));
+			assertThat(compiled).as("fused == widen-then-f32 at %dx%d", rows, cols)
+				.isEqualTo(run(compile(widened, true)));
+			assertThat(compiled).as("interpreter --simd == compiled --simd at %dx%d", rows, cols)
+				.isEqualTo(interpretSimd(fused));
+		}
+	}
+
+	@Test
+	void aSimdBuildFusesBf16ElementWiseKernelsToTheDefunsBits() throws Exception {
+		// The fused subset -- add/sub/mul/div with the four CL operator spellings
+		// and their -into siblings, sqrt/abs/negative/reciprocal with theirs -- over
+		// bf16 x bf16 -> bf16, at 300 elements so the lane loop runs on both sides.
+		// Unlike the reductions above the oracle is the DEFUN itself (the f32
+		// intermediate is its answer bit for bit), so all three legs must print one
+		// text. The mixed pairings decline on both and are pinned by
+		// `eval.VecSimdTest`. sqrt runs over the signed values directly: its element
+		// function is the float-domain square root, NaN on negatives on both paths.
+		for (String body : new String[] { "(vec:add vb vb)", "(vec:sub vb vb)", "(vec:mul vb vb)", "(vec:div vb vb)",
+				"(vec:/ vb vb)", "(vec:sqrt vb)", "(vec:abs vb)", "(vec:negative vb)", "(vec:reciprocal vb)",
+				"(vec:add-into (vec:zeros 300 :element-type 'bfloat16) vb vb)",
+				"(vec:div-into (vec:zeros 300 :element-type 'bfloat16) vb vb)",
+				"(vec:sqrt-into (vec:zeros 300 :element-type 'bfloat16) vb)",
+				"(let ((o (vec:zeros 300 :element-type 'bfloat16))) (vec:mul-into o o vb) o)" }) {
+			String program = bf16Fixture(4, 300, "(print " + body + ")");
+			String expected = interpret(program);
+			assertThat(interpretSimd(program)).as("interpreter --simd: %s", body).isEqualTo(expected);
+			assertThat(run(compile(program, true))).as("compiled --simd: %s", body).isEqualTo(expected);
+		}
+	}
+
+	@Test
+	void theFusedBf16ReductionsAccumulateAtTheSameFourPinnedLanesAsF32() throws Exception {
+		// The dead-flag guard and the lane-count pin in one probe (.kb/vec.md): 2^24 and
+		// 1.0 are both exact in bfloat16, so the f32 probe transfers verbatim. Four
+		// pinned lanes give 2^24 + 768 for the single-chain reductions and 2^24 + 960
+		// for the GEMV row's four accumulators; the scalar defun keeps folding in f64.
+		String probe = """
+				(let ((v (make-array 1024 :element-type 'bfloat16 :initial-element 1.0))
+				      (d (make-array 1024 :element-type 'bfloat16 :initial-element 1.0))
+				      (m (make-array '(1 1024) :element-type 'bfloat16 :initial-element 1.0))
+				      (x (vec:ones 1024 :element-type 'single-float)))
+				  (setf (aref v 0) 16777216.0)
+				  (setf (aref d 0) 4096.0)
+				  (setf (aref m 0 0) 4096.0)
+				  (setf (aref x 0) 4096.0)
+				  (print (round (vec:sum v)))
+				  (print (round (vec:dot d x)))
+				  (print (round (aref (vec:matvec m x) 0))))
+				""";
+		assertThat(run(compile(probe, true))).isEqualTo("16777984\n16777984\n16778176");
+		assertThat(interpretSimd(probe)).isEqualTo("16777984\n16777984\n16778176");
+		assertThat(run(compile(probe, false))).isEqualTo("16778239\n16778239\n16778240");
+		assertThat(interpret(probe)).isEqualTo("16778239\n16778239\n16778240");
+	}
+
+	@Test
+	void linalgCarriesTheWidthOnBothBackends() throws Exception {
+		// It REFUSED it until 2026-09-06, while its width protocol was a boolean. Now the
+		// two backends that have the width answer it, and answer the same thing -- the
+		// half of the contract this file exists for; the --simd/--blas/--gpu seams
+		// declining it to the defun is LinalgBfloat16Test's and its compiled siblings'.
+		String program = "(print (linalg:add #bf16(1.0 2.0) #bf16(3.0 4.0)))";
+		assertThat(interpret(program)).isEqualTo("#bf16(4.0 6.0)");
+		assertThat(compileAndRun(program)).isEqualTo("#bf16(4.0 6.0)");
+	}
+
+}

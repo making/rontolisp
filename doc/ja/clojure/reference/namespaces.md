@@ -1,0 +1,75 @@
+# 名前空間
+
+名前空間はそれぞれ自分の var を持ちます。定義は現在の名前空間に属し、名前はまずその名前空間自身の var に、次に refer された var に解決され、`alias/name` や `full.name/name` は別の名前空間の public な var を指します。名前空間フォームはその名前空間へ切り替えて節を接続します::as は別名、:refer/:use は非修飾名、:import は interop 用クラス名を登録し、(:refer-clojure :only/:exclude ...) は見える核を狭めます。名前に付いたメタデータ（`^{...}`・`#^{...}`）、ドキュメント文字列、属性マップは読み飛ばします。[組み込みの名前空間](#built-in-namespaces)はファイルを必要としません。それ以外はプログラムが `ns` で宣言した名前空間か、ソースパス上のファイルから 1 度だけロードされる名前空間です（[セマンティクス](../semantics.md#namespaces-and-files)）。どのルートにもない名前空間はエラーです（[require](require.md)：関数や `try` の中ではコードの実行時）。
+
+| Name | Example | Result |
+|---|---|---|
+| `ns` | `(do (ns demo (:require [clojure.string :as s])) (s/upper-case "hi"))` | `HI` |
+| `require` | `(do (require '[clojure.string :as s]) (s/join "," ["a"]))` | `a` |
+| `use` | `(do (use '[clojure.string :only [upper-case]]) (upper-case "hi"))` | `HI` |
+| `import` | `(do (import java.util.Date) nil)` | `nil` |
+| `in-ns` | `(do (in-ns 'demo) nil)` | `nil` |
+| `the-ns` | `(str (the-ns 'user))` | `"user"` |
+| `find-ns` | `(find-ns 'no-such)` | `nil` |
+| `ns-name` | `(ns-name *ns*)` | `user` |
+| `ns-resolve` | `(ns-resolve 'clojure.core 'inc)` | `#'clojure.core/inc` |
+| `all-ns` | `(contains? (set (map str (all-ns))) "clojure.core")` | `true` |
+| `create-ns` | `(ns-name (create-ns 'demo))` | `demo` |
+| `remove-ns` | `(do (create-ns 'gone) (remove-ns 'gone) (some? (find-ns 'gone)))` | `false` |
+| `loaded-libs` | `(do (require 'clojure.string) (contains? (set (map str (loaded-libs))) "clojure.string"))` | `true` |
+| `intern` | `(intern 'user 'eg 7)` | `#'user/eg` |
+| `var-set` | `(try (var-set (intern 'user 'eg) 1) (catch IllegalStateException e :refused))` | `:refused` |
+| `with-redefs-fn` | `(def rd-x 1) (with-redefs-fn {(var rd-x) 99} (fn [] rd-x))` | `99` |
+| `ns-publics` | `(get (ns-publics 'clojure.core) 'map)` | `#'clojure.core/map` |
+| `ns-interns` | `(contains? (ns-interns 'clojure.core) 'map)` | `true` |
+| `ns-map` | `(get (ns-map 'user) 'map)` | `#'clojure.core/map` |
+| `ns-refers` | `(do (refer 'clojure.string :only '[join]) (some? (get (ns-refers 'user) 'join)))` | `true` |
+| `ns-aliases` | `(do (alias 's 'clojure.string) (ns-name (get (ns-aliases 'user) 's)))` | `clojure.string` |
+| `ns-imports` | `(get (ns-imports 'user) 'String)` | `java.lang.String` |
+| `alias` | `(do (alias 's 'clojure.string) (s/join "-" ["a"]))` | `a-b` |
+| `refer` | `(do (refer 'clojure.string :only '[upper-case]) (upper-case "ab"))` | `AB` |
+| `refer-clojure` | `(do (refer-clojure :rename '{map core-map}) (core-map inc [1 2]))` | `(2 3)` |
+| `ns-unmap` | `(do (refer 'clojure.string :only '[join]) (ns-unmap 'user 'join) (get (ns-refers 'user) 'join))` | `nil` |
+| `ns-unalias` | `(do (alias 's 'clojure.string) (ns-unalias 'user 's) (get (ns-aliases 'user) 's))` | `nil` |
+| `requiring-resolve` | `(requiring-resolve 'clojure.string/join)` | `#'clojure.string/join` |
+| `load-string` | `(load-string "(+ 1 2)")` | `3` |
+| `load-file` | `(load-file "helper.clj")` | the file's last value |
+
+## 組み込みの名前空間
+
+Clojure で書かれた組み込みの名前空間は、プロジェクトのファイルと同じ手順で、すべてのソースルートの
+あとに読み込まれます。そのため、ソースパス上に同じ名前のファイルがあればそちらが優先されます。
+例外は `clojure.walk`、`clojure.core.protocols`、`clojure.instant`、`clojure.uuid`、`clojure.java.io`、`clojure.main` で、Clojure と同じくプログラムより先に読み込まれており、
+`clojure.walk/postwalk` のような修飾名は、`clojure.edn` や `clojure.string` の修飾名と同じく `require`
+なしで届きます。Clojure 本体に含まれない `clojure.*` 名前空間
+（`clojure.data.json` などの contrib ライブラリ）は、ほかのライブラリと同じくソースパスから
+読み込みます。それ以外の Clojure 本体の名前空間はエラーです。
+
+| 名前空間 | ページ |
+|---|---|
+| `clojure.string` | [(clojure.string)](string.md) |
+| `clojure.set` | [(clojure.set)](clojure-set.md) |
+| `clojure.walk` | [clojure.walk](clojure-walk.md) |
+| `clojure.edn` | [clojure.edn](clojure-edn.md) |
+| `clojure.instant` | [clojure.instant](clojure-instant.md) |
+| `clojure.uuid`（var なし。`#uuid` はリーダが読む） | [インスタントと UUID](instants.md) |
+| `clojure.data` | [clojure.data](clojure-data.md) |
+| `clojure.zip` | [clojure.zip](clojure-zip.md) |
+| `clojure.datafy`, `clojure.core.protocols` | [clojure.datafy](clojure-datafy.md) |
+| `clojure.core.reducers` | [clojure.core.reducers](clojure-core-reducers.md) |
+| `clojure.stacktrace` | [clojure.stacktrace](clojure-stacktrace.md) |
+| `clojure.math` | [clojure.math](clojure-math.md) |
+| `clojure.pprint` | [clojure.pprint](clojure-pprint.md) |
+| `clojure.template` | [clojure.template](clojure-template.md) |
+| `clojure.java.io` | [clojure.java.io](clojure-java-io.md) |
+| `clojure.java.shell`（インタープリターと JVM） | [clojure.java.shell](clojure-java-shell.md) |
+| `clojure.xml` | [clojure.xml](clojure-xml.md) |
+| `clojure.reflect`（WebAssembly では呼び出し時に拒否） | [clojure.reflect](clojure-reflect.md) |
+| `clojure.repl` | [clojure.repl](clojure-repl.md) |
+| `clojure.main` | [clojure.main](clojure-main.md) |
+| `clojure.test` | [テスト (clojure.test)](test.md) |
+| `ring.adapter.rontolisp` | [Ring アダプター](ring.md) |
+| `ring.util.*`、`ring.middleware.*` | [Ring ユーティリティ](ring-util.md) |
+| `riddley.walk`、`riddley.compiler` | [コードの走査 (riddley)](riddley.md) |
+| `rontolisp.http-client` | [HTTP クライアント](http-client.md) |
+| `rontolisp.http-urls`（var はない。`clojure.java.io` が `http:` URL を `rontolisp:fetch` で読む） | [HTTP の URL](clojure-java-io.md#http-urls) |

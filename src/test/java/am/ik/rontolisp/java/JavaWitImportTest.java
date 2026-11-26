@@ -1,0 +1,865 @@
+package am.ik.rontolisp.java;
+
+import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.TimeUnit;
+import java.util.stream.Stream;
+
+import javax.tools.JavaCompiler;
+import javax.tools.ToolProvider;
+
+import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.eval.SourceLanguage;
+import am.ik.rontolisp.eval.SourceLoader;
+import am.ik.rontolisp.eval.SourceStandards;
+import am.ik.rontolisp.reader.Features;
+import am.ik.rontolisp.reader.LispReadException;
+import am.ik.rontolisp.testsupport.HostBoundaryRuns;
+import am.ik.rontolisp.testsupport.HostWasmtime;
+import am.ik.rontolisp.testsupport.JavaLibraryJar;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
+
+/**
+ * {@code @WitImport} of the Java front end: a Java interface standing for a WIT
+ * interface, checked against the WIT on every target, whose implementation
+ * {@code ServiceLoader} finds -- the program's own under a JDK, on the interpreter and on
+ * the JVM, the host's on a WASM target, through a binding the front end writes as Java.
+ * Each WASM target here runs against a real host: wasmtime's own {@code wasi:keyvalue},
+ * {@code wasi:sockets} and {@code wasi:http} types under {@code --component}, a module
+ * preloaded into wasmtime for a core module. And its opposite, {@code @WitExport}: a
+ * class implementing a WIT world, a component's entry points where the program has no
+ * {@code main}.
+ */
+class JavaWitImportTest {
+
+	private static final Path EXAMPLE = Path.of("examples/wit/keyvalue");
+
+	/** Where the annotation is: the library a program names it from. */
+	private static final String API = "rontolisp-java-api/src/main/java";
+
+	@TempDir
+	Path dir;
+
+	private Path write(String name, String text) throws Exception {
+		Path file = this.dir.resolve(name);
+		Files.createDirectories(file.getParent());
+		Files.writeString(file, text);
+		return file;
+	}
+
+	/**
+	 * {@code examples/wit/keyvalue/PageHits.java} prints the report of the Lisp counter
+	 * beside it everywhere: under a JDK, on the interpreter and on the JVM against the
+	 * store of its own {@code ServiceLoader} finds, as a component against wasmtime's.
+	 * The component imports the members the program calls, named in the directive the
+	 * front end writes ahead of the program; a Preview 1 module refuses the interface at
+	 * the WIT line, as it refuses the Lisp counter's, and a {@code --no-wasi} one imports
+	 * it through the canonical ABI, refusing the store its main reaches while the module
+	 * loads. The interface, its WIT and its provider are read from the example's
+	 * directory, from two directories on the source path, the WIT in the second as a
+	 * resource is in {@code src/main/resources}, and from a sources jar, what
+	 * {@code --java-source-dep} hands over.
+	 */
+	@Test
+	void theKeyvalueCounterPrintsTheLispCountersReportOnTheJdkAndEveryTarget() throws Exception {
+		String expected = HostBoundaryRuns.cli(EXAMPLE.resolve("page-hits.lisp").toString());
+		Path program = EXAMPLE.resolve("PageHits.java");
+		assertThat(jdk(program)).isEqualTo(expected);
+		assertThat(HostBoundaryRuns.cli("--java-source-path", API, program.toString())).isEqualTo(expected);
+		Map<String, String> library = new LinkedHashMap<>();
+		for (String file : List.of("Store.java", "MemoryStore.java", "META-INF/services/Store", "wit/keyvalue.wit")) {
+			library.put(file, Files.readString(EXAMPLE.resolve(file)));
+			write((file.endsWith(".java") ? "java/" : "resources/") + file, library.get(file));
+		}
+		String split = String.join(File.pathSeparator, API, this.dir.resolve("java").toString(),
+				this.dir.resolve("resources").toString());
+		Path alone = write("app/PageHits.java", Files.readString(program));
+		assertThat(HostBoundaryRuns.cli("--java-source-path", split, alone.toString())).isEqualTo(expected);
+		assertThat(HostBoundaryRuns.jvm(alone, Files.createDirectories(this.dir.resolve("classes")), "PageHits",
+				"--java-source-path", split))
+			.isEqualTo(expected);
+		Path jar = JavaLibraryJar.build(this.dir, "store-sources.jar", Map.of(), entry -> false, library);
+		String sourcePath = API + File.pathSeparator + jar;
+		assertThat(HostBoundaryRuns.cli("--java-source-path", sourcePath, alone.toString())).isEqualTo(expected);
+		// the WIT as a directive beside it names it, the version the WIT's; one of
+		// another
+		// root by the path from the program's directory, a jar's entry by the jar's path
+		assertThat(read(program, API).get(0)).isEqualTo("(RONTOLISP:WIT-IMPORT \"wit/keyvalue.wit\" :INTERFACE "
+				+ "\"wasi:keyvalue/store@0.2.0-draft\" :NAMES ((\"open\" \"Store$Wit.open\") (\"bucket-get\" "
+				+ "\"Store$Wit.bucket-get\") (\"bucket-set\" \"Store$Wit.bucket-set\") (\"bucket-delete\" "
+				+ "\"Store$Wit.bucket-delete\") (\"bucket-exists\" \"Store$Wit.bucket-exists\") (\"bucket-list-keys\" "
+				+ "\"Store$Wit.bucket-list-keys\") (\"bucket-drop\" \"Store$Wit.bucket-drop\")) :OCTETS T)");
+		assertThat(read(alone, split).get(0))
+			.startsWith("(RONTOLISP:WIT-IMPORT \"../resources/wit/keyvalue.wit\" :INTERFACE ");
+		assertThat(read(alone, sourcePath).get(0))
+			.startsWith("(RONTOLISP:WIT-IMPORT \"" + jar.toAbsolutePath() + "!/wit/keyvalue.wit\" :INTERFACE ");
+		assertThatThrownBy(() -> HostBoundaryRuns.cli("--java-source-path", split, alone.toString(), "-o",
+				this.dir.resolve("p1.wasm").toString()))
+			.hasMessageContaining("resources/wit/keyvalue.wit:36: 'open': the WIT type of the result does not cross "
+					+ "the Preview 1 WASM import boundary");
+		// a --no-wasi module imports it through the canonical ABI, for the glue to
+		// answer -- a JavaScript host, which may suspend, and which main reaches while
+		// the module loads
+		assertThatThrownBy(() -> HostBoundaryRuns.cli("--java-source-path", split, alone.toString(), "-o",
+				this.dir.resolve("reactor.wasm").toString(), "--no-wasi"))
+			.hasMessageContaining("Store$Wit.open%raw imports wasi:keyvalue/store@0.2.0-draft.open, which the "
+					+ "module's JavaScript host may answer by suspending")
+			.hasMessageContaining("PageHits.main(String[]) -> Store$Wit.open(String)");
+		assumeTrue(HostWasmtime.isAvailable(), "no wasmtime " + HostWasmtime.MINIMUM_MAJOR + "+ on PATH");
+		Path module = this.dir.resolve("page-hits.wasm");
+		HostBoundaryRuns.cli("--java-source-path", sourcePath, alone.toString(), "-o", module.toString(),
+				"--component");
+		HostWasmtime.ExecResult run = HostWasmtime.INSTANCE.execInContainer("wasmtime", "run", "-S", "keyvalue=y",
+				module.toString());
+		assertThat(run.exitCode()).as("wasmtime: %s", run.stderr()).isZero();
+		assertThat(run.stdout()).isEqualTo(expected);
+	}
+
+	/**
+	 * Every kind of value crosses wasmtime's own interfaces both ways: a static function,
+	 * an enum, a variant whose case holds a record holding a tuple (a record of the
+	 * program's), the unsigned integers as Java holds them (a {@code u8} of 200 is the
+	 * byte -56), a result whose error arm is a variant and one whose arm carries nothing,
+	 * a constructor, an own handle handed to another. The WIT is trimmed to the members
+	 * called, each exactly the host's.
+	 */
+	@Test
+	void everyKindOfValueCrossesWasmtimesSocketsAndHttpTypes() throws Exception {
+		assumeTrue(HostWasmtime.isAvailable(), "no wasmtime " + HostWasmtime.MINIMUM_MAJOR + "+ on PATH");
+		write("sockets.wit", SOCKETS_WIT);
+		write("Sockets.java", SOCKETS);
+		Path sockets = write("SocketsMain.java",
+				"""
+						import java.util.ServiceLoader;
+
+						import am.ik.rontolisp.wit.WitException;
+
+						public class SocketsMain {
+
+						    public static void main(String[] args) {
+						        Sockets types = ServiceLoader.load(Sockets.class).findFirst().orElseThrow();
+						        Sockets.TcpSocket socket = types.tcpSocketCreate(Sockets.IpAddressFamily.IPV4);
+						        Sockets.Octets loopback = new Sockets.Octets((byte) 127, (byte) 0, (byte) 0, (byte) 1);
+						        socket.bind(new Sockets.IpSocketAddress.Ipv4(new Sockets.Ipv4SocketAddress((short) 0, loopback)));
+						        if (socket.getLocalAddress() instanceof Sockets.IpSocketAddress.Ipv4(Sockets.Ipv4SocketAddress local)) {
+						            System.out.println(socket.getAddressFamily() + " " + local.address() + " "
+						                    + (Short.toUnsignedInt(local.port()) > 0));
+						        }
+						        socket.setHopLimit((byte) 200);
+						        socket.setKeepAliveCount(7);
+						        socket.setReceiveBufferSize(100000L);
+						        System.out.println(socket.getHopLimit() + " " + socket.getKeepAliveCount() + " "
+						                + (socket.getReceiveBufferSize() > 0));
+						        try {
+						            socket.bind(new Sockets.IpSocketAddress.Ipv4(new Sockets.Ipv4SocketAddress((short) 0, loopback)));
+						        }
+						        catch (WitException e) {
+						            System.out.println(e.getMessage());
+						        }
+						    }
+						}
+						""");
+		assertThat(component(sockets, "-S", "inherit-network=y")).isEqualTo("""
+				IPV4 Octets[a=127, b=0, c=0, d=1] true
+				-56 7 true
+				tcp-socket-bind of wasi:sockets/types@0.3.0 answered its error arm: InvalidState[]
+				""");
+		write("http.wit", HTTP_WIT);
+		write("Http.java", HTTP);
+		Path http = write("HttpMain.java", """
+				import java.util.ServiceLoader;
+
+				import am.ik.rontolisp.wit.WitException;
+
+				public class HttpMain {
+
+				    public static void main(String[] args) {
+				        Http types = ServiceLoader.load(Http.class).findFirst().orElseThrow();
+				        Http.OutgoingRequest request = types.outgoingRequestNew(types.fieldsNew());
+				        System.out.println(request.method());
+				        request.setMethod(new Http.Method.Post());
+				        System.out.println(request.method());
+				        request.setMethod(new Http.Method.Other("PATCH"));
+				        System.out.println(request.method());
+				        try {
+				            request.setMethod(new Http.Method.Other("bad method"));
+				        }
+				        catch (WitException e) {
+				            System.out.println(e.getMessage());
+				        }
+				    }
+				}
+				""");
+		assertThat(component(http, "-S", "http=y")).isEqualTo("""
+				Get[]
+				Post[]
+				Other[value=PATCH]
+				outgoing-request-set-method of wasi:http/types@0.2.0 answered its error arm
+				""");
+	}
+
+	/**
+	 * A core module's host is the provider too: the interface's functions are the
+	 * module's imports, here answered by a module wasmtime preloads under the interface's
+	 * name. A {@code u32} crosses as the {@code s32} of its bits, which a Java
+	 * {@code int} is.
+	 */
+	@Test
+	void aFlatInterfaceIsACoreModulesImportFromItsHost() throws Exception {
+		assumeTrue(HostWasmtime.isAvailable(), "no wasmtime " + HostWasmtime.MINIMUM_MAJOR + "+ on PATH");
+		write("flat.wit", """
+				package test:flat@0.1.0;
+
+				interface calc {
+				  add: func(a: s32, b: s32) -> s32;
+				  low-bits: func(x: u32) -> u32;
+				  half: func(x: f64) -> f64;
+				  negate: func(b: bool) -> bool;
+				}
+				""");
+		write("Calc.java", """
+				import am.ik.rontolisp.wit.WitImport;
+
+				@WitImport(value = "test:flat/calc", wit = "flat.wit")
+				public interface Calc {
+
+				    int add(int a, int b);
+
+				    int lowBits(int x);
+
+				    double half(double x);
+
+				    boolean negate(boolean b);
+				}
+				""");
+		Path program = write("CalcMain.java", """
+				import java.util.ServiceLoader;
+
+				public class CalcMain {
+
+				    public static void main(String[] args) {
+				        Calc calc = ServiceLoader.load(Calc.class).findFirst().orElseThrow();
+				        System.out.println(calc.add(2, 40) + " " + Integer.toHexString(calc.lowBits(-1)) + " "
+				                + calc.half(5.0) + " " + calc.negate(false) + " " + calc.negate(true));
+				    }
+				}
+				""");
+		Path host = write("calc.wat", """
+				(module
+				  (func (export "add") (param i32 i32) (result i32) (i32.add (local.get 0) (local.get 1)))
+				  (func (export "lowBits") (param i32) (result i32) (i32.and (local.get 0) (i32.const 0xffff)))
+				  (func (export "half") (param f64) (result f64) (f64.mul (local.get 0) (f64.const 0.5)))
+				  (func (export "negate") (param i32) (result i32) (i32.eqz (local.get 0))))
+				""");
+		Path module = this.dir.resolve("calc.wasm");
+		HostBoundaryRuns.cli("--java-source-path", API, program.toString(), "-o", module.toString());
+		HostWasmtime.ExecResult run = HostWasmtime.INSTANCE.execInContainer("wasmtime", "run", "--preload",
+				"calc=" + host, module.toString());
+		assertThat(run.exitCode()).as("wasmtime: %s", run.stderr()).isZero();
+		assertThat(run.stdout()).isEqualTo("42 ffff 2.5 true false\n");
+	}
+
+	/**
+	 * The declarations are checked against the WIT on every target, the interpreter's
+	 * included: each refusal names the Java declaration's line and the WIT member's. The
+	 * version is the WIT's: an interface declaring what two drafts of
+	 * {@code wasi:keyvalue} share is checked against either, and a member the drafts
+	 * spell apart is refused against the other.
+	 */
+	@Test
+	void theDeclarationsAreCheckedAgainstTheWitTheyName() throws Exception {
+		write("draft/keyvalue.wit", KEYVALUE_WIT);
+		write("draft2/keyvalue.wit", KEYVALUE_WIT.replace("0.2.0-draft;", "0.2.0-draft2;")
+			.replace("cursor: option<u64>", "cursor: option<string>"));
+		for (String draft : List.of("draft", "draft2")) {
+			write("Store.java", STORE.formatted(draft, ""));
+			assertThat(read(write("Main.java", MAIN), true).get(0)).startsWith("(RONTOLISP:WIT-IMPORT \"" + draft
+					+ "/keyvalue.wit\" :INTERFACE \"wasi:keyvalue/store@0.2.0-" + draft + "\"");
+		}
+		refused("KeyResponse listKeys(Optional<Long> cursor);",
+				"Store.java:12:21: listKeys (bucket-list-keys of wasi:keyvalue/store@0.2.0-draft2, draft2/keyvalue.wit:"
+						+ "20): its parameter cursor is option<string>, which is Optional<String> in Java, not "
+						+ "Optional<Long>");
+		write("Store.java", STORE.formatted("draft", "Optional<String> list(String key);"));
+		assertThatThrownBy(() -> read(write("Main.java", MAIN), false)).hasMessageEndingWith(
+				"Store.java:12:26: list names no method of the resource bucket of wasi:keyvalue/store@0.2.0-"
+						+ "draft, whose methods are get, set, listKeys, and close() its release");
+		write("Store.java", STORE.formatted("draft", "Optional<Boolean> get(String key);")
+			.replace("Optional<byte[]> get(String key);", ""));
+		assertThatThrownBy(() -> read(write("Main.java", MAIN), false))
+			.hasMessageContaining("get (bucket-get of wasi:keyvalue/store@0.2.0-draft, draft/keyvalue.wit:18): its "
+					+ "result's ok arm is option<list<u8>>, which is Optional<byte[]> in Java, not Optional<Boolean>");
+		write("Store.java", STORE.formatted("draft", "Keys listKeys(Optional<Long> cursor);")
+			.replace("record KeyResponse", "record Keys"));
+		assertThatThrownBy(() -> read(write("Main.java", MAIN), false)).hasMessageContaining(
+				"its result's ok arm is key-response, which is Store.KeyResponse in Java, a record the "
+						+ "@WitImport interface declares; it declares none of that name");
+		// the WIT is a resource of the interface's package in any root, a leading /
+		// naming
+		// it from the top of the root; nothing climbs above a root
+		write("res/kv/draft/keyvalue.wit", KEYVALUE_WIT);
+		Path packaged = write("lib/main/kv/Store.java", "package kv;\n\n" + STORE.formatted("draft", ""));
+		Path app = write("app/Main.java", "import kv.Store;\n\n" + MAIN);
+		String roots = String.join(File.pathSeparator, API, this.dir.resolve("lib/main").toString(),
+				this.dir.resolve("res").toString());
+		for (String wit : List.of("draft", "/kv/draft", "../kv/draft")) {
+			Files.writeString(packaged, "package kv;\n\n" + STORE.formatted(wit, ""));
+			assertThat(read(app, roots).get(0)).startsWith("(RONTOLISP:WIT-IMPORT \"../res/kv/draft/keyvalue.wit\"");
+		}
+		Files.writeString(packaged, "package kv;\n\n" + STORE.formatted("dra", ""));
+		assertThatThrownBy(() -> read(app, roots)).hasMessageEndingWith("Store.java:8:1: @WitImport: cannot read WIT "
+				+ "dra/keyvalue.wit: no root of the source path holds kv/dra/keyvalue.wit");
+		Path climbs = JavaLibraryJar.build(this.dir, "climbs.jar", Map.of(), entry -> false,
+				Map.of("Store.java", STORE.formatted("../draft", "")));
+		assertThatThrownBy(() -> read(write("top/Main.java", MAIN), API + File.pathSeparator + climbs))
+			.hasMessageEndingWith("cannot read WIT ../draft/keyvalue.wit: it names a resource above the top of a root");
+		write("Store.java", STORE.formatted("draft", "").replace("wit = \"draft/keyvalue.wit\"", "wit = WIT"));
+		assertThatThrownBy(() -> read(write("Main.java", MAIN), false)).hasMessageEndingWith(
+				"Store.java:6:1: @WitImport's wit is a string literal, which the compiler reads: the WIT names "
+						+ "nothing it computes");
+		write("Store.java",
+				STORE.formatted("draft", "")
+					.replace("public interface Store", "public abstract class Store")
+					.replace("    Bucket open", "    abstract Bucket open"));
+		assertThatThrownBy(() -> read(write("Main.java", MAIN), false)).hasMessageContaining(
+				"@WitImport annotates an interface, whose abstract methods are the functions of the WIT interface");
+	}
+
+	/**
+	 * A program with no {@code main} starts at its {@code @WitExport} class: a reactor
+	 * component exporting the world, each export the static method of its name, an
+	 * interface's of the member class of its name, an unsigned integer crossing as Java
+	 * holds its bits, the class's static initialization run by the first call. Under a
+	 * JDK, on the interpreter and on the JVM the class is an ordinary one a program with
+	 * a {@code main} calls, which prints what the component answers; the program with no
+	 * {@code main} is refused there and on a module. The class is checked against its
+	 * world on every target, the interpreter's included.
+	 */
+	@Test
+	void aClassImplementsTheWorldAComponentExports() throws Exception {
+		write("kinds.wit", KINDS_WIT);
+		Path kinds = write("Kinds.java", KINDS);
+		Path main = write("KindsMain.java", KINDS_MAIN);
+		String expected = "201\ntrue\n9223372036854775807\nHello, Java! seen: Java\n1\n1\n2.5\n";
+		assertThat(jdk(main)).isEqualTo(expected);
+		assertThat(HostBoundaryRuns.cli("--java-source-path", API, main.toString())).isEqualTo(expected);
+		assertThat(HostBoundaryRuns.jvm(main, Files.createDirectories(this.dir.resolve("classes")), "KindsMain",
+				"--java-source-path", API))
+			.isEqualTo(expected);
+		assertThat(read(kinds, true).getLast()).isEqualTo("(RONTOLISP:WIT-EXPORT \"kinds.wit\" :WORLD \"kinds\" :NAMES "
+				+ "((\"low-byte\" \"Kinds.lowByte(byte)%wit\") (\"negate\" \"Kinds.negate(boolean)\") (\"signed-wide\" "
+				+ "\"Kinds.signedWide(long)\") (\"greet\" \"Kinds.greet(String)\") (\"touch\" \"Kinds.touch()\") "
+				+ "(\"count\" \"Kinds.count()\") (\"test:kinds/math@0.1.0#add\" \"Kinds.Math.add(int,int)%wit\") "
+				+ "(\"test:kinds/math@0.1.0#half\" \"Kinds.Math.half(double)\") (\"test:kinds/math@0.1.0#count\" "
+				+ "\"Kinds.Math.count()\")) :REACTOR T)");
+		assertThatThrownBy(() -> HostBoundaryRuns.cli("--java-source-path", API, kinds.toString()))
+			.hasMessageEndingWith("Kinds.java:4:14: no main method found in Kinds: its entry points are the exports of "
+					+ "the @WitExport class Kinds, which a component exports, where a host calls them: compile it with "
+					+ "-o out.wasm --component");
+		assertThatThrownBy(() -> HostBoundaryRuns.cli("--java-source-path", API, kinds.toString(), "-o",
+				this.dir.resolve("p1.wasm").toString()))
+			.hasMessageEndingWith("compile it with --component, not to a module");
+		String mismatch = "Kinds.java:21:24: signedWide (signed-wide of world kinds, kinds.wit:12): its parameter x is "
+				+ "s64, which is long in Java, not int";
+		exportRefused("public static long signedWide(long x)", "public static long signedWide(int x)", mismatch);
+		// a command's class is checked too, on the interpreter's target
+		assertThatThrownBy(() -> read(write("CountMain.java", """
+				public class CountMain {
+
+				    public static void main(String[] args) {
+				        System.out.println(Kinds.count());
+				    }
+				}
+				"""), false)).hasMessageEndingWith(mismatch);
+		exportRefused("public static byte lowByte(byte x)", "public byte lowByte(byte x)",
+				"Kinds.java:10:17: lowByte (low-byte of world kinds, kinds.wit:10) is a static method in Java, which the "
+						+ "host calls with no instance");
+		exportRefused("public static class Math", "public static class Maths",
+				"Kinds.java:4:14: Kinds declares no member class Math, which is the interface test:kinds/math@0.1.0 the "
+						+ "world kinds exports (kinds.wit:16): a static member class whose static methods are its "
+						+ "functions");
+		write("Kinds.java", KINDS);
+		Path module = this.dir.resolve("kinds.wasm");
+		HostBoundaryRuns.cli("--java-source-path", API, kinds.toString(), "-o", module.toString(), "--component");
+		// java.lisp's System.exit and thread ends, which no export reaches, import no
+		// wasi:cli/exit
+		assertThat(new String(Files.readAllBytes(module), StandardCharsets.ISO_8859_1)).contains("wasi:cli/stdout")
+			.doesNotContain("wasi:cli/exit");
+		assumeTrue(HostWasmtime.isAvailable(), "no wasmtime " + HostWasmtime.MINIMUM_MAJOR + "+ on PATH");
+		Map<String, String> answers = new LinkedHashMap<>();
+		answers.put("low-byte(200)", "201");
+		answers.put("greet(\"Java\")", "\"Hello, Java! seen: Java\"");
+		answers.put("count()", "0");
+		answers.put("test:kinds/math.count@0.1.0()", "10");
+		answers.put("add(4294967295, 2)", "1");
+		answers.put("half(5.0)", "2.5");
+		for (Map.Entry<String, String> answer : answers.entrySet()) {
+			HostWasmtime.ExecResult run = HostWasmtime.INSTANCE.execInContainer("wasmtime", "run", "--invoke",
+					answer.getKey(), module.toString());
+			assertThat(run.exitCode()).as("wasmtime: %s", run.stderr()).isZero();
+			assertThat(run.stdout()).as(answer.getKey()).isEqualTo(answer.getValue() + "\n");
+		}
+		// what an export leaves uncaught is reported by the line a JDK writes, then traps
+		HostWasmtime.ExecResult thrown = HostWasmtime.INSTANCE.execInContainer("wasmtime", "run", "--invoke",
+				"low-byte(0)", module.toString());
+		assertThat(thrown.exitCode()).isNotZero();
+		assertThat(thrown.stderr())
+			.startsWith("Exception in thread \"main\" java.lang.IllegalArgumentException: no low byte of 0\n")
+			.contains("unreachable");
+	}
+
+	/** The program of the class refused, a declaration of it replaced. */
+	private void exportRefused(String declared, String replaced, String message) throws Exception {
+		Path kinds = write("Kinds.java", KINDS.replace(declared, replaced));
+		assertThatThrownBy(() -> read(kinds, true)).hasMessageEndingWith(message);
+	}
+
+	private void refused(String member, String message) throws Exception {
+		write("Store.java", STORE.formatted("draft2", member));
+		assertThatThrownBy(() -> read(write("Main.java", MAIN), false)).hasMessageEndingWith(message);
+	}
+
+	/** The program's forms for a component, or the interpreter's. */
+	private List<String> read(Path main, boolean component) throws Exception {
+		return read(main, component, List.of(API));
+	}
+
+	/** The program's forms for a component, its source path the roots given. */
+	private static List<String> read(Path main, String sourcePath) throws Exception {
+		return read(main, true, List.of(sourcePath.split(File.pathSeparator)));
+	}
+
+	private static List<String> read(Path main, boolean component, List<String> sourcePath) throws Exception {
+		return SourceLanguage.JAVA
+			.read(Files.readString(main),
+					component ? Features.WASM.with(List.of(Features.COMPONENT)) : Features.INTERPRETER, main.toString(),
+					SourceStandards.DEFAULT.withJavaSourcePath(sourcePath), SourceLoader.fileSystem())
+			.stream()
+			.map(LispVal::print)
+			.toList();
+	}
+
+	/** A program compiled as a component and run under wasmtime with the flags given. */
+	private String component(Path program, String... flags) throws Exception {
+		Path module = this.dir.resolve(program.getFileName().toString().replace(".java", ".wasm"));
+		HostBoundaryRuns.cli("--java-source-path", API, program.toString(), "-o", module.toString(), "--component");
+		List<String> command = new ArrayList<>(List.of("wasmtime", "run"));
+		command.addAll(List.of(flags));
+		command.add(module.toString());
+		HostWasmtime.ExecResult run = HostWasmtime.INSTANCE.execInContainer(command.toArray(String[]::new));
+		assertThat(run.exitCode()).as("wasmtime: %s", run.stderr()).isZero();
+		return run.stdout();
+	}
+
+	/**
+	 * A program run under the source launcher of the JDK running the test, the
+	 * annotation's library compiled by its {@code javac} on the class path: what javac
+	 * and a JDK make of the same source.
+	 */
+	private String jdk(Path program) throws Exception {
+		Path classes = Files.createDirectories(this.dir.resolve("api"));
+		List<Path> sources;
+		try (Stream<Path> files = Files.walk(Path.of(API))) {
+			sources = files.filter(file -> file.toString().endsWith(".java")).toList();
+		}
+		JavaCompiler javac = ToolProvider.getSystemJavaCompiler();
+		try (var files = javac.getStandardFileManager(null, null, StandardCharsets.UTF_8)) {
+			assertThat(javac
+				.getTask(null, files, null, List.of("-d", classes.toString()), null,
+						files.getJavaFileObjectsFromPaths(sources))
+				.call()).isTrue();
+		}
+		Process process = new ProcessBuilder(Path.of(System.getProperty("java.home"), "bin", "java").toString(), "-cp",
+				classes.toString(), program.getFileName().toString())
+			.directory(java.util.Objects.requireNonNull(program.getParent()).toFile())
+			.redirectErrorStream(true)
+			.start();
+		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		process.getInputStream().transferTo(out);
+		assertThat(process.waitFor(120, TimeUnit.SECONDS)).isTrue();
+		assertThat(process.exitValue()).as(out.toString(StandardCharsets.UTF_8)).isZero();
+		return out.toString(StandardCharsets.UTF_8);
+	}
+
+	/** A world exporting a function of each kind of value, and an interface. */
+	private static final String KINDS_WIT = """
+			package test:kinds@0.1.0;
+
+			interface math {
+			  add: func(a: u32, b: u32) -> u32;
+			  half: func(x: f64) -> f64;
+			  count: func() -> s32;
+			}
+
+			world kinds {
+			  export low-byte: func(x: u8) -> u8;
+			  export negate: func(b: bool) -> bool;
+			  export signed-wide: func(x: s64) -> s64;
+			  export greet: func(name: string) -> string;
+			  export touch: func();
+			  export count: func() -> s32;
+			  export math;
+			}
+			""";
+
+	/** The class implementing {@link #KINDS_WIT}. */
+	private static final String KINDS = """
+			import am.ik.rontolisp.wit.WitExport;
+
+			@WitExport(value = "kinds", wit = "kinds.wit")
+			public class Kinds {
+
+			    static int touched;
+
+			    static final StringBuilder seen = new StringBuilder("seen:");
+
+			    public static byte lowByte(byte x) {
+			        if (x == 0) {
+			            throw new IllegalArgumentException("no low byte of 0");
+			        }
+			        return (byte) (x + 1);
+			    }
+
+			    public static boolean negate(boolean b) {
+			        return !b;
+			    }
+
+			    public static long signedWide(long x) {
+			        return -x;
+			    }
+
+			    public static String greet(String name) {
+			        seen.append(' ').append(name);
+			        return "Hello, " + name + "! " + seen;
+			    }
+
+			    public static void touch() {
+			        touched++;
+			    }
+
+			    public static int count() {
+			        return touched;
+			    }
+
+			    public static class Math {
+
+			        public static int add(int a, int b) {
+			            return a + b;
+			        }
+
+			        public static double half(double x) {
+			            return x / 2;
+			        }
+
+			        public static int count() {
+			            return touched + 10;
+			        }
+			    }
+			}
+			""";
+
+	/** A program calling {@link #KINDS}' methods as a host would. */
+	private static final String KINDS_MAIN = """
+			public class KindsMain {
+
+			    public static void main(String[] args) {
+			        System.out.println(Kinds.lowByte((byte) 200) & 0xff);
+			        System.out.println(Kinds.negate(false));
+			        System.out.println(Kinds.signedWide(-9223372036854775807L));
+			        System.out.println(Kinds.greet("Java"));
+			        Kinds.touch();
+			        System.out.println(Kinds.count());
+			        System.out.println(Kinds.Math.add(-1, 2));
+			        System.out.println(Kinds.Math.half(5.0));
+			    }
+			}
+			""";
+
+	/** wasi:keyvalue's store, trimmed to what the declarations below name. */
+	private static final String KEYVALUE_WIT = """
+			package wasi:keyvalue@0.2.0-draft;
+
+			interface store {
+			  variant error {
+			    no-such-store,
+			    access-denied,
+			    other(string)
+			  }
+
+			  record key-response {
+			    keys: list<string>,
+			    cursor: option<u64>
+			  }
+
+			  open: func(identifier: string) -> result<bucket, error>;
+
+			  resource bucket {
+			    get: func(key: string) -> result<option<list<u8>>, error>;
+			    set: func(key: string, value: list<u8>) -> result<_, error>;
+			    list-keys: func(cursor: option<u64>) -> result<key-response, error>;
+			  }
+			}
+			""";
+
+	/**
+	 * An interface of the members both drafts spell alike, its WIT's directory and one
+	 * more member given.
+	 */
+	private static final String STORE = """
+			import java.util.List;
+			import java.util.Optional;
+
+			import am.ik.rontolisp.wit.WitImport;
+
+			@WitImport(value = "wasi:keyvalue/store", wit = "%s/keyvalue.wit")
+			public interface Store {
+
+			    Bucket open(String identifier);
+
+			    interface Bucket {
+			        %s
+			        Optional<byte[]> get(String key);
+
+			        void set(String key, byte[] value);
+			    }
+
+			    record KeyResponse(List<String> keys, Optional<Long> cursor) {
+			    }
+
+			    sealed interface Error {
+
+			        record NoSuchStore() implements Error {
+			        }
+
+			        record AccessDenied() implements Error {
+			        }
+
+			        record Other(String value) implements Error {
+			        }
+			    }
+			}
+			""";
+
+	private static final String MAIN = """
+			import java.util.ServiceLoader;
+
+			public class Main {
+
+			    public static void main(String[] args) {
+			        Store.Bucket bucket = ServiceLoader.load(Store.class).findFirst().orElseThrow().open("");
+			        bucket.set("k", new byte[] { 1 });
+			        System.out.println(bucket.get("k").isPresent());
+			    }
+			}
+			""";
+
+	private static final String SOCKETS_WIT = """
+			package wasi:sockets@0.3.0;
+
+			interface types {
+			  variant error-code {
+			    access-denied,
+			    not-supported,
+			    invalid-argument,
+			    out-of-memory,
+			    timeout,
+			    invalid-state,
+			    address-not-bindable,
+			    address-in-use,
+			    remote-unreachable,
+			    connection-refused,
+			    connection-broken,
+			    connection-reset,
+			    connection-aborted,
+			    datagram-too-large,
+			    other(option<string>)
+			  }
+
+			  enum ip-address-family {
+			    ipv4,
+			    ipv6
+			  }
+
+			  type ipv4-address = tuple<u8, u8, u8, u8>;
+			  type ipv6-address = tuple<u16, u16, u16, u16, u16, u16, u16, u16>;
+
+			  record ipv4-socket-address {
+			    port: u16,
+			    address: ipv4-address
+			  }
+
+			  record ipv6-socket-address {
+			    port: u16,
+			    flow-info: u32,
+			    address: ipv6-address,
+			    scope-id: u32
+			  }
+
+			  variant ip-socket-address {
+			    ipv4(ipv4-socket-address),
+			    ipv6(ipv6-socket-address)
+			  }
+
+			  resource tcp-socket {
+			    create: static func(address-family: ip-address-family) -> result<tcp-socket, error-code>;
+			    bind: func(local-address: ip-socket-address) -> result<_, error-code>;
+			    get-local-address: func() -> result<ip-socket-address, error-code>;
+			    get-address-family: func() -> ip-address-family;
+			    get-keep-alive-count: func() -> result<u32, error-code>;
+			    set-keep-alive-count: func(value: u32) -> result<_, error-code>;
+			    get-hop-limit: func() -> result<u8, error-code>;
+			    set-hop-limit: func(value: u8) -> result<_, error-code>;
+			    get-receive-buffer-size: func() -> result<u64, error-code>;
+			    set-receive-buffer-size: func(value: u64) -> result<_, error-code>;
+			  }
+			}
+			""";
+
+	private static final String SOCKETS = """
+			import java.util.Optional;
+
+			import am.ik.rontolisp.wit.WitImport;
+
+			@WitImport(value = "wasi:sockets/types@0.3.0", wit = "sockets.wit")
+			public interface Sockets {
+
+			    TcpSocket tcpSocketCreate(IpAddressFamily addressFamily);
+
+			    interface TcpSocket {
+			        void bind(IpSocketAddress localAddress);
+			        IpSocketAddress getLocalAddress();
+			        IpAddressFamily getAddressFamily();
+			        int getKeepAliveCount();
+			        void setKeepAliveCount(int value);
+			        byte getHopLimit();
+			        void setHopLimit(byte value);
+			        long getReceiveBufferSize();
+			        void setReceiveBufferSize(long value);
+			    }
+
+			    enum IpAddressFamily {
+			        IPV4, IPV6
+			    }
+
+			    // the tuples, records of the program's
+			    record Octets(byte a, byte b, byte c, byte d) {
+			    }
+
+			    record Segments(short a, short b, short c, short d, short e, short f, short g, short h) {
+			    }
+
+			    record Ipv4SocketAddress(short port, Octets address) {
+			    }
+
+			    record Ipv6SocketAddress(short port, int flowInfo, Segments address, int scopeId) {
+			    }
+
+			    sealed interface IpSocketAddress {
+			        record Ipv4(Ipv4SocketAddress value) implements IpSocketAddress {
+			        }
+
+			        record Ipv6(Ipv6SocketAddress value) implements IpSocketAddress {
+			        }
+			    }
+
+			    sealed interface ErrorCode {
+			        record AccessDenied() implements ErrorCode {}
+			        record NotSupported() implements ErrorCode {}
+			        record InvalidArgument() implements ErrorCode {}
+			        record OutOfMemory() implements ErrorCode {}
+			        record Timeout() implements ErrorCode {}
+			        record InvalidState() implements ErrorCode {}
+			        record AddressNotBindable() implements ErrorCode {}
+			        record AddressInUse() implements ErrorCode {}
+			        record RemoteUnreachable() implements ErrorCode {}
+			        record ConnectionRefused() implements ErrorCode {}
+			        record ConnectionBroken() implements ErrorCode {}
+			        record ConnectionReset() implements ErrorCode {}
+			        record ConnectionAborted() implements ErrorCode {}
+			        record DatagramTooLarge() implements ErrorCode {}
+			        record Other(Optional<String> value) implements ErrorCode {}
+			    }
+			}
+			""";
+
+	private static final String HTTP_WIT = """
+			package wasi:http@0.2.0;
+
+			interface types {
+			  variant method {
+			    get,
+			    head,
+			    post,
+			    put,
+			    delete,
+			    connect,
+			    options,
+			    trace,
+			    patch,
+			    other(string)
+			  }
+
+			  resource fields {
+			    constructor();
+			  }
+
+			  type headers = fields;
+
+			  resource outgoing-request {
+			    constructor(headers: headers);
+
+			    method: func() -> method;
+
+			    set-method: func(method: method) -> result;
+			  }
+			}
+			""";
+
+	private static final String HTTP = """
+			import am.ik.rontolisp.wit.WitImport;
+
+			@WitImport(value = "wasi:http/types", wit = "http.wit")
+			public interface Http {
+
+			    Fields fieldsNew();
+
+			    OutgoingRequest outgoingRequestNew(Fields headers);
+
+			    interface Fields {
+			    }
+
+			    interface OutgoingRequest {
+
+			        Method method();
+
+			        void setMethod(Method method);
+			    }
+
+			    sealed interface Method {
+			        record Get() implements Method {}
+			        record Head() implements Method {}
+			        record Post() implements Method {}
+			        record Put() implements Method {}
+			        record Delete() implements Method {}
+			        record Connect() implements Method {}
+			        record Options() implements Method {}
+			        record Trace() implements Method {}
+			        record Patch() implements Method {}
+			        record Other(String value) implements Method {}
+			    }
+			}
+			""";
+
+}

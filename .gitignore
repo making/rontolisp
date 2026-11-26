@@ -1,0 +1,87 @@
+target/
+dependency-reduced-pom.xml
+!.mvn/wrapper/maven-wrapper.jar
+!**/src/main/**/target/
+!**/src/test/**/target/
+
+### IntelliJ IDEA ###
+.idea/
+*.iws
+*.iml
+*.ipr
+
+### Eclipse ###
+.apt_generated
+.classpath
+.factorypath
+.project
+.settings
+.springBeans
+.sts4-cache
+
+### NetBeans ###
+/nbproject/private/
+/nbbuild/
+/dist/
+/nbdist/
+/.nb-gradle/
+build/
+!**/src/main/**/build/
+!**/src/test/**/build/
+
+### VS Code ###
+.vscode/
+
+### Mac OS ###
+.DS_Store
+
+### Web Image playground (generated artifacts) ###
+web/dist/
+web/playground-screenshot.png
+### Hiragana demo: the real-handwriting dataset (downloaded + preprocessed) ###
+# The trained weights.bin and infer.wasm ARE committed; the dataset is not.
+examples/browser/hiragana/tools/k49/data/
+examples/browser/hiragana/data/
+
+### Test scratch files (ci-spec file-stream cases run in-process by the corpus tests) ###
+/bin.dat
+/seq.dat
+/crlf.dat
+/probe.dat
+/sbi.dat
+/app.dat
+/fl.dat
+/eof.dat
+/dls-a.txt
+/dls-b.txt
+/pk.dat
+/c439.dat
+/wpc-a.txt
+/wpc-b.txt
+/wpc-sub/
+/ci-model.obj
+/ci-model.stl
+/ci-model-ascii.stl
+/ci-model.ply
+/ci-model-a.ply
+/ci-model-b.ply
+/ci-model-be.ply
+/ci-model.glb
+/ci-model.gguf
+/ci-acc.txt
+/utf8bad.dat
+/scene-model-file-vase.obj
+/scene-model-file-bracket.stl
+
+### Compiled-program scratch: the docs' `rontolisp prog.lisp -o Prog.class` writes to the CWD ###
+/*.class
+
+### The same run copies the runtime classes it needs beside the output, in package
+### directories -- `/*.class` does not reach those (10 of them reached develop on
+### 2026-09-03). The package root is `am/`, and no SOURCE lives outside `src/`.
+/am/
+
+### Spin manifest example: `spin build` compiles app.wasm, `spin up` writes .spin/logs ###
+app.wasm
+.spin/
+lopt-ok.lisp

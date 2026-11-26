@@ -1,0 +1,94 @@
+# wasm-GC object size: what a struct field costs on the heap, measured
+
+**Invariant: the heap cost of a struct field is decided by the engine's object layout, not
+by the field's width, so it is MEASURED per engine before it is weighed -- and on wasmtime
+a cons carries up to 16 bytes of fields for the price of two references.** The numbers
+below are why `.kb/hash-tables.md`'s identity-hash slot (a third `(mut i32)` on every
+cons of a module that makes an `eq`/`eql` table) was accepted: the todo that asked for it
+assumed "a cost paid by every cons is likely not worth it", and the measurement said the
+cost is zero where the compiled modules run.
+
+## The method
+
+A hand-written module allocates `n` structs of one shape into a linked list through a
+global (`alloc(n)`), so nothing is collectable, and the engine is asked how many fit.
+
+- **wasmtime**: a HARD-CAPPED GC heap, `wasmtime run -O gc-heap-may-move=n -O
+  gc-heap-reservation=<bytes> -O gc-heap-reservation-for-growth=0 --invoke alloc m.wat n`,
+  bisected on `n` (the copying collector's semi-space is half the reservation). Without
+  `gc-heap-may-move=n` the reservation is not a cap: the heap moves to a larger mapping and
+  every `n` fits. RSS is useless for this -- the semi-space doubles, so two layouts that
+  differ by 25% land on the same RSS.
+- **V8** (node): `v8.getHeapStatistics().used_heap_size` before and after `alloc(n)`, both
+  behind a forced `gc()` (`--expose-gc`); the delta divided by `n`.
+
+## The numbers (2026-09-17, linux-x86-64)
+
+wasmtime 47.0.3 (`5554cc1a6`, copying collector), the largest `n` that fits a 64 MiB
+reservation, and what it says per object:
+
+| shape | fields | bytes/object |
+| --- | --- | --- |
+| cell `{eqref}` | 4 | 32 |
+| cell `{eqref, i32}` | 8 | 32 |
+| cons `{eqref, eqref}` | 8 | 32 |
+| cons `{eqref, eqref, i32}` | 12 | 32 |
+| `{eqref, eqref, i32, i32}` | 16 | 32 |
+| `{eqref, eqref, i32 x4}` | 24 | 48 |
+
+So a wasmtime object is a 16-byte header plus its fields, ROUNDED UP TO 16: a 4-byte
+reference is 4 bytes, and every shape up to 16 bytes of fields is one 32-byte object. A
+doubled reservation confirms the reading. Unchanged on 49.0.0 and 51.0.0 (2026-11-22): the
+same bisection gives every shape above, and `cell3.wat` / `cell4.wat` below, the same `n` on
+both (1,048,575, 32 B; the 24-byte shape 699,050, 48 B).
+**The identity-hash slot costs a cons, a cell and an instance nothing on wasmtime.**
+
+**The cell's storage and meta fields** (2026-11-16, `.kb/adjustable-arrays.md`, "What an
+element access costs"; two hand-written WAT modules): the cell `{eqref, (ref null $buckets),
+(ref null $cons)}` and the same with the identity-hash slot are 32 B on wasmtime 49.0.0
+(the same count fits the capped heap as of `{eqref}`), 40 and 48 B on V8 13 (node 24.22;
+`{eqref}` 24). So on V8 a hash table, an array and a closure's box each weigh 16 B more;
+not gated, since a module with no array is the only one a gate would spare.
+
+V8 13 (node 24.19, no pointer compression, so a reference is 8 bytes): `used_heap_size`
+delta per object over `n = 1,000,000`.
+
+| shape | bytes/object |
+| --- | --- |
+| cell `{eqref}` | 24 |
+| cell `{eqref, i32}` | 32 |
+| cons `{eqref, eqref}` | 32 |
+| cons `{eqref, eqref, i32}` | 40 |
+| `{eqref, eqref, i32, i32}` | 40 |
+| `{eqref, eqref, i32 x4}` | 48 |
+
+A 16-byte header plus 8-byte-aligned fields: **on V8 the slot is +8 bytes per cons (+25%)
+and per cell (+33%)**, which is why the slot is GATED on the module making an identity
+table rather than declared everywhere -- a Cloudflare Worker (`.kb/size-measurement.md`)
+runs on V8, and a module that never keys by identity keeps the two-field cons byte for
+byte. Chrome and workerd compress pointers (4-byte references), where the same layout
+rule would put a two-field cons at 16 bytes and the slot at +8 (+50%); not measured.
+
+`TYPE_CLOSURE` (`.todo/854`) gained the same slot as its third field, `{i32 funcId, eqref
+env, i32 ihash}`: on wasmtime that is 12 content bytes (a 4-byte `eqref`), inside the same
+<=16-byte/32-byte-object bucket every row above already covers -- free, same argument as
+the cons rows, not re-measured because the rule is by BYTE COUNT, not by struct name. On
+V8 (8-byte `eqref`, no pointer compression) the slotless shape is already 12 content
+bytes (`i32` 4 + `eqref` 8), which the engine's 8-byte alignment rounds to 16 whether or
+not the slot is there -- so unlike the cons and cell rows above (each an exact multiple of
+8 before the slot, so the slot's 4 bytes push them into the NEXT multiple), the closure's
+own unaligned funcId already paid for the rounding the slot needs: no extra bytes either
+way. This follows from the model the measured rows establish rather than a fresh probe;
+worth confirming with `.todo/839`'s harness if the model ever looks wrong.
+
+## What this does not say
+
+- Nothing about SpiderMonkey, or about the browser playground's V8 with pointer
+  compression: measure before quoting.
+- Nothing about arrays: `TYPE_HASH_BUCKETS` and the packed `TYPE_F64ARR`/`TYPE_I32ARR`
+  storage are wasm `array` types, which have no field to add. A packed array as an
+  identity key therefore still hashes to `_hash`'s constant 0 (`.kb/hash-tables.md`).
+- The MODULE cost is separate and is what `.kb/size-measurement.md` is about: the slot is
+  two bytes (`i32.const 0`) per allocation site, `_ihash`'s body and one global -- +202
+  bytes on the 10,566-byte cons-keyed benchmark module; a shaken module carries six to
+  twenty-one cons sites, so the sites are a few dozen bytes.

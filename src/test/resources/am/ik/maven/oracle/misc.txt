@@ -1,0 +1,25 @@
+# descriptor test.misc:exclusions:1 test.misc:empty-activation:1 test.misc:no-parent-expr:1 test.misc:managed-expr:1 test.misc:revision:7 test.misc:revision-user:1 test.misc:dep-no-group:1 test.misc:profile-duplicate-id:1 test.misc:profile-properties-order:1 test.misc:managed-scope-import-type:1
+artifact test.misc:exclusions:jar:1
+dep test.lib:a:jar::1 scope=compile optional=null exclusions=only.group:,g:*,:only-artifact,*:x
+artifact test.misc:empty-activation:jar:1
+dep test.lib:upper-default:jar::1 scope=compile optional=null
+artifact test.misc:no-parent-expr:jar:1
+dep test.lib:a:jar::${project.parent.version} scope=compile optional=null
+dep test.lib:b:jar::${parent.version} scope=compile optional=null
+dep test.lib:c:jar::${project.parent.groupId} scope=compile optional=null
+artifact test.misc:managed-expr:jar:1
+dep test.lib:a:jar::${undefined} scope=compile optional=null
+managed test.lib:a:jar::${undefined} scope= optional=null
+artifact test.misc:revision:jar:7
+artifact test.misc:revision-user:jar:1
+dep test.misc:revision:jar::7 scope=compile optional=null
+artifact test.misc:dep-no-group:jar:1
+warning invalid test.misc:dep-no-group:jar:1: 1 problem was encountered while building the effective model for test.misc:dep-no-group:1 [ERROR] 'dependencies.dependency.groupId' for null:b:jar is missing. @
+artifact test.misc:profile-duplicate-id:jar:1
+dep test.lib:first:jar::1 scope=compile optional=null
+dep test.lib:second:jar::1 scope=compile optional=null
+artifact test.misc:profile-properties-order:jar:1
+dep test.lib:a:jar::p2 scope=compile optional=null
+artifact test.misc:managed-scope-import-type:jar:1
+dep test.lib:x:jar::1 scope=compile optional=null
+managed test.mgmt:bom-a:pom::1 scope=IMPORT optional=null

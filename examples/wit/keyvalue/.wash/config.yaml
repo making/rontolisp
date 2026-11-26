@@ -1,0 +1,10 @@
+build:
+  command: rontolisp page-hits-server.lisp -o page-hits-server.wasm --component
+  component_path: page-hits-server.wasm
+
+dev:
+  wasm_proposals:
+    - gc
+    # A WIT result's error arm signals a rontolisp condition, so the component
+    # carries the exception-handling machinery.
+    - exception-handling

@@ -1,0 +1,673 @@
+# The corpus of the EXPERIMENTAL Starlark front end (StarlarkSpecE2eTest): one case per
+# decision of the lowering in .kb/starlark-frontend.md.
+# Cases run IN ORDER, concatenated into one .star program per backend (they share its
+# globals, so each case names its own), and the output is sliced back per case -- the
+# ci-spec.yaml idea. Every case must print the same text on the interpreter, the JVM,
+# wasm and the component.
+cases:
+  # The feature tour the lowering was first measured with (.kb/starlark-frontend.md),
+  # printing what Java Starlark prints for it.
+  - name: the-feature-tour-of-the-prototype
+    source: |
+      # Starlark demo: closures, kwargs, comprehensions, dicts, strings, bigints
+      def fib(n):
+          a, b = 0, 1
+          for _ in range(n):
+              a, b = b, a + b
+          return a
+
+      def make_counter(start = 0, step = 1):
+          state = [start]
+          def bump(times = 1):
+              for _ in range(times):
+                  state[0] += step
+              return state[0]
+          return bump
+
+      def describe(name, *args, sep = ", ", **kwargs):
+          parts = [str(a) for a in args]
+          for k in sorted(kwargs):
+              parts.append("%s=%r" % (k, kwargs[k]))
+          return "{}({})".format(name, sep.join(parts))
+
+      def primes(limit):
+          out = []
+          for n in range(2, limit):
+              is_prime = True
+              for p in out:
+                  if p * p > n:
+                      break
+                  if n % p == 0:
+                      is_prime = False
+                      break
+              if not is_prime:
+                  continue
+              out.append(n)
+          return out
+
+      print("fib", [fib(i) for i in range(10)], fib(100))
+      c = make_counter(step = 5)
+      print(c(), c(times = 3), c(2))
+      print(describe("f", 1, 2.5, None, x = "a", y = [1, (2,)]))
+      print(describe("g", sep = "; ", *[True, False], **{"k": {"a": 1}}))
+      print(primes(50))
+      words = "the quick brown fox jumps over the lazy dog".split()
+      freq = {}
+      for w in words:
+          freq[w] = freq.get(w, 0) + 1
+      print(freq, len(freq), "the" in freq, "cat" not in freq)
+      print(sorted(words, key = len, reverse = True)[:3], max(words), min(words, key = len))
+      print({k: v for k, v in zip(words, range(100)) if v % 2 == 0})
+      print([(x, y) for x in range(3) for y in "ab".elems() if x != 1])
+      print(1 // 2, -7 // 2, -7 % 3, 7 / 2, 2.0 * 3, 1 << 70, "ab" * 3, [0] * 3, (1, 2) + (3,))
+      print("a,b,c".split(",")[-1].upper(), "x".join(["1", "2"]), "hello"[1:4], "hello"[::-1])
+      print(None or "dflt", 0 and 1, [] or {}, not [], 3 if "" else 4)
+      print(type(1), type("s"), type([]), type({}), type(()), type(None), type(fib), type(len))
+    expected: |
+      fib [0, 1, 1, 2, 3, 5, 8, 13, 21, 34] 354224848179261915075
+      5 20 30
+      f(1, 2.5, None, x="a", y=[1, (2,)])
+      g(True; False; k={"a": 1})
+      [2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47]
+      {"the": 2, "quick": 1, "brown": 1, "fox": 1, "jumps": 1, "over": 1, "lazy": 1, "dog": 1} 8 True True
+      ["quick", "brown", "jumps"] the the
+      {"the": 6, "brown": 2, "jumps": 4, "dog": 8}
+      [(0, "a"), (0, "b"), (2, "a"), (2, "b")]
+      0 -4 2 3.5 6.0 1180591620717411303424 ababab [0, 0, 0] (1, 2, 3)
+      C 1x2 ell olleh
+      dflt 0 {} True 4
+      int string list dict tuple NoneType function builtin_function_or_method
+  # A name is the innermost binding that holds it anywhere in its block; a comprehension's
+  # variables are its own, and its first iterable reads the enclosing block's; a closure
+  # reads the variable, not a copy; a top-level def bound once is entered directly.
+  - name: names-resolve-statically
+    source: |
+      def scope_early(n):
+          return n + 1
+      scope_x = 1
+      def scope_shadow():
+          scope_x = 2
+          def inner():
+              return scope_x
+          scope_x = 3
+          return inner()
+      print(scope_shadow(), scope_x, [scope_x for scope_x in [9]], [scope_x for scope_x in range(scope_x + 2)], scope_x)
+      scope_fs = []
+      for scope_i in range(3):
+          scope_fs.append(lambda: scope_i)
+      print([f() for f in scope_fs], [g() for g in [lambda: v for v in range(3)]])
+      def scope_mutual():
+          def even(n):
+              return True if n == 0 else odd(n - 1)
+          def odd(n):
+              return False if n == 0 else even(n - 1)
+          return even(10)
+      T = "an identifier without a lowercase letter"
+      print(scope_early(20), scope_mutual(), T, len == len, len == str, scope_early == scope_early)
+    expected: |
+      3 1 [9] [0, 1, 2] 1
+      [2, 2, 2] [2, 2, 2]
+      21 True an identifier without a lowercase letter True False True
+  # Both call tiers bind the same way and evaluate the arguments as written: the direct
+  # call of a built-in places them while lowering, the run-time binder when the call runs.
+  - name: arguments-bind-in-source-order-through-both-call-tiers
+    source: |
+      def call_note(tag, value, log):
+          log.append(tag)
+          return value
+      def call_take(a, b = 0, *rest, c = 0, **more):
+          return [a, b, rest, c, more]
+      def call_orders():
+          log = []
+          print(sorted([3, 1, 2], reverse = call_note("r", False, log), key = call_note("k", None, log)), log)
+          log = []
+          print(call_take(call_note(1, 1, log), c = call_note(2, 2, log), *[call_note(3, 3, log)], **{"z": call_note(4, 4, log)}), log)
+          log = []
+          d = {}
+          d[call_note("key", "k", log)] = call_note("value", 1, log)
+          print(d, log)
+          return log
+      call_log = call_orders()
+      def call_once(v, into = []):
+          into.append(v)
+          return into
+      print(call_once(1), call_once(2), call_once(3, []))
+      call_len = len
+      call_push = call_log.append
+      call_push("pushed")
+      print(call_len("abc"), call_len, call_push, call_log, "{a}{}".format(*[1], **{"a": 2}), dict(pairs = 1))
+    expected: |
+      [1, 2, 3] ["r", "k"]
+      [1, 3, (), 2, {"z": 4}] [1, 2, 3, 4]
+      {"k": 1} ["value", "key"]
+      [1, 2] [1, 2] [3]
+      3 <built-in function len> <built-in method append of list value> ["value", "key", "pushed"] 21 {"pairs": 1}
+  # A loop holds its iterable until it ends -- by running out, break or a return out of
+  # nested loops -- and gives it back then: the list can be appended to afterwards.
+  - name: a-loop-gives-its-iterable-back-on-every-exit
+    source: |
+      def loop_find(rows, want):
+          for row in rows:
+              for cell in row:
+                  if cell == want:
+                      return (row, cell)
+          return None
+      def loop_sum():
+          total = 0
+          for i in range(10):
+              if i % 2 == 0:
+                  continue
+              if i > 7:
+                  break
+              total += i
+          for a, (b, c) in [(1, (2, 3))]:
+              total += a + b + c
+          return [total, i]
+      loop_rows = [[1, 2], [3, 4]]
+      print(loop_find(loop_rows, 3), loop_find(loop_rows, 9))
+      loop_rows.append([5])
+      loop_rows[1].append(6)
+      print(loop_rows, loop_sum(), [(i, j) for i in range(3) if i for j in range(i)])
+      def loop_join(xs, s, n):
+          for x in xs:
+              if x == "skip":
+                  continue
+              if x == "stop":
+                  break
+              s += x
+          for i in range(n):
+              for j in range(2):
+                  s = s + str(i)
+          return s
+      def loop_seen(xs):
+          s = ""
+          def peek():
+              return s
+          seen = []
+          for x in xs:
+              s += x
+              seen.append(peek())
+          return seen
+      loop_text = ""
+      def loop_peek():
+          return loop_text
+      loop_texts = []
+      for x in ["a", "b"]:
+          loop_text += x
+          loop_texts.append(loop_peek())
+      print(loop_join(["a", "skip", "b", "stop", "c"], "<", 2), len(loop_join([], "", 100)), loop_join([[1], [2]], [0], 0), loop_join([1, 2], 10, 0), loop_seen(["x", "y"]), loop_texts)
+    expected: |
+      ([3, 4], 3) None
+      [[1, 2], [3, 4, 6], [5]] [22, 9] [(1, 0), (2, 0), (2, 1)]
+      <ab0011 380 [0, 1, 2] 13 ["x", "xy"] ["a", "ab"]
+  # What the lowering knows answers as the generic helpers do. An operator over operands
+  # that may be ints is the integer one behind a test of them, over known ints the
+  # integer one alone (a variable every binding of which is an int, past a machine word
+  # too); a loop over range counts, whatever the step, and its variable is the body's to
+  # assign; a known int or Boolean is its own truth. A def is entered directly with its
+  # defaults and names bound while lowering, a default being the one value the binder
+  # hands out too; a tuple of targets takes a tuple of values with none made; a list,
+  # tuple or dict of constants is made anew from quoted data each time; insert, pop and
+  # remove move a list's elements in place. sorted of ints or of strings is the backend's
+  # own sort where it has one (the greatest first or the smallest, items of one key in
+  # their order; strings that share more than their first seven bytes, ints past 64
+  # bits), as split by a separator and join are, and extend moves its elements as one
+  # block; str of a known int and a template's %d, %i and {} of one are its decimal text
+  # (an int at either end of the fixnum range and past it, pieces of several bytes, more
+  # than four pieces); an augmented assignment to a dict's item reads and stores through
+  # the item's cell, and a dict comprehension stores a key written twice once. count is
+  # the backend's own walk where it has one, find and the affixes its search (a string
+  # of one-byte characters, one of several, one never counted; each bound), strip reads
+  # codes, upper and lower of one-byte characters move the bytes, a split's short piece
+  # is made with its bytes in hand and a long one copied, pop() empties a list, and get
+  # and a store reach the table for an int or a string key. fast_wide sorts, joins,
+  # splits, counts and searches strings of characters below and above 256 and outside
+  # the BMP, on either side of the size a sort changes its method at, and a tuple's
+  # vector with False among its ints.
+  - name: what-the-lowering-knows-answers-as-the-generic-paths
+    source: |
+      def fast_add(a, b):
+          return a + b
+      def fast_compare(a, b):
+          return [a < b, a <= b, a > b, a >= b, a == b, a != b, a == None, None != b]
+      def fast_number(a, b):
+          return [a + b, a - b, a * b, a // 2, a % 3, -a // 2, a % -3, a and b, b - b or a]
+      print(fast_add(1, 2), fast_add("a", "b"), fast_add([1], [2]), fast_add(1, 2.5), fast_add(1 << 62, 1 << 62))
+      print(fast_compare(1, 2), fast_compare(2.5, 2), fast_compare("a", "b"), fast_compare((1, 2), (1, 2)))
+      print(fast_number(7, 2), fast_number(-7, 2), fast_number(7.5, 2), fast_number(1 << 70, 3))
+      def fast_count(n, xs):
+          total = 0
+          big = 1 << 62
+          for i in range(n):
+              total += i % 7 - i // 3 * 2 + (i << 2 >> 1) + (i & 6 | 1 ^ 3) + ~i + -i
+              big += big
+          for i in range(10, 0, -3):
+              total += i
+          for i in range(n, n + 6, 2):
+              i += 100
+              total += i
+          steps = []
+          for step in [1, 2, -2]:
+              for i in range(0 if step > 0 else 5, 5 if step > 0 else 0, step):
+                  steps.append(i)
+          for j in range(3, 3):
+              total = None
+          seen = [i, len(xs) + total, big, steps]
+          if total and not len(xs) and (total or xs) == total:
+              seen.append("truth")
+          done = False
+          for i in range(len(seen)):
+              done = done or i > 3
+          return seen + [done and not xs, [k * k for k in range(n) if k % 2]]
+      print(fast_count(5, []))
+      def fast_take(a, b = [], *rest, c = "c", **more):
+          b.append(a)
+          return [a, b, rest, c, more]
+      def fast_calls(log):
+          def note(v):
+              log.append(v)
+              return v
+          return [fast_take(1), fast_take(2, c = note("x"), b = note([])), fast_take(3, [], 4, 5, z = 6), fast_take(b = [0], a = note(7)), log]
+      print(fast_calls([]), fast_take(8), fast_take(*[9]))
+      def fast_swap(a, b, xs):
+          a, b = b, a
+          xs[0], xs[1] = xs[1], xs[0]
+          (c, d), [e] = (a, b), [xs]
+          f, g = 1, a + b
+          return [a, b, xs, c, d, e, f + g]
+      print(fast_swap(1, 2, [3, 4]))
+      def fast_literal():
+          return [[1, 2.5, "s", None, True, False, -3], (1, ("a", [2]), {"k": (3,)}), {"a": 1, 2: [3]}]
+      fast_one = fast_literal()
+      fast_one[0].append(4)
+      fast_one[1][1][1].append(5)
+      fast_one[2]["b"] = 6
+      print(fast_one, fast_literal())
+      fast_xs = [1, 2, 3]
+      fast_alias = fast_xs
+      fast_xs.insert(0, 0)
+      fast_xs.insert(-1, 9)
+      fast_xs.insert(99, 8)
+      print(fast_xs.pop(), fast_xs.pop(0), fast_xs.pop(-2), fast_xs)
+      fast_xs.remove(2)
+      print(fast_alias)
+      def fast_fill(log):
+          def note(v):
+              log.append(v)
+              return v
+          t = "{1}|{0!r}|{{}}"
+          u = "%s|%r|%%|%d|%X|%o|%e"
+          return ["{1}|{0!r}|{{}}".format(note("a"), note(2), note(3)) == t.format("a", 2, 3), "%s|%r|%%|%d|%X|%o|%e" % (note("s"), "r", 3.7, 255, 8, note(1)) == u % ("s", "r", 3.7, 255, 8, 1), "{}{}".format(1, "x"), "%d%%" % (5,), "plain".format(), "" % (), log]
+      print(fast_fill([]))
+      print(sorted([(1, "b"), (0, "z"), (1, "a")], key = lambda p: p[0]), sorted([3, 1, 2], reverse = True), sorted(["b", "", "ab", "a"]), sorted([2, 1.5, 3]), "abc".replace("", "-"), "a-b".replace("-", ""), " x ".strip() + "|", "a,b,,c".split(","), ",".join(["x", "y", "z"]), "ab" * 3, [0] * 3 + [1, 2] * 2, min([3, 1, 2]), max("b", "ab"))
+      print("héllo😀x"[1:6], "a😀b".split("😀"), "😀x😀".strip("😀"), "ab😀".replace("😀", "é"), "%s|%s" % ("é", "😀"), "{}😀{}".format(1, 2), sorted(["é", "z", "😀", "a", "～", "a😀", "a～", "a😀b"]), "x😀y".find("y"), "é" + "😀", "😀" in "a😀", max("a～", "a😀"), "ÀbÇ dÉ".upper(), "ÀbÇ dÉ".lower(), "ÀbÇ dÉ".capitalize())
+      def fast_divide(a, b, xs):
+          n = len(xs)
+          return [a % b, a // b, 7 % n, -7 // n, a % n, n // a]
+      print(fast_divide(17, 5, [1, 2, 3]), fast_divide(-17.5, 5, [1, 2, 3]), fast_divide(1 << 70, 7, [1]))
+      def fast_sort(n, span, base):
+          xs = []
+          x = 7
+          for i in range(n):
+              x = (x * 1103515245 + 12345) % 2147483648
+              xs.append(x % span + base)
+          by = sorted([(v, i) for i, v in enumerate(xs)], key = lambda p: p[0] % 5, reverse = True)
+          return [sorted(xs)[:4], sorted(xs, reverse = True)[:3], [p[1] for p in by[:5]], sorted(xs, key = lambda v: -v) == sorted(xs, reverse = True)]
+      print(fast_sort(600, 9, -4), fast_sort(2100, 1 << 31, -(1 << 30))[1:], fast_sort(70, 1 << 40, 0)[2:], sorted([1 << 40, 3, -5] * 200)[199:201], sorted([2, 1.5, 3] * 200)[199:201], sorted(["b", "a", "é"] * 200)[399:401])
+      def fast_items(d, k):
+          d[k] += 1
+          d[k] -= d[k] // 4
+          d["l"] += [k]
+          d[k], d["l"] = d["l"], d[k]
+          d[k] += [d["l"]]
+          e = {x % 3: x for x in range(7)}
+          e[1.0] *= 2
+          return [d, e]
+      print(fast_items({"a": 5, "l": []}, "a"))
+      def fast_bulk(n):
+          xs = []
+          x = 7
+          for i in range(n):
+              x = (x * 1103515245 + 12345) % 2147483648
+              xs.append(x % 1000)
+          ws = ["w" + str(v) for v in xs]
+          ls = ["a-long-prefix/" + str(v % 7) + "é" for v in xs]
+          by = sorted([(v, i) for i, v in enumerate(xs)], key = lambda p: "k%d" % (p[0] % 3), reverse = True)
+          far = sorted([v - 500 for v in xs] + [1 << 40, -(1 << 62), 1 << 31])
+          line = ", ".join(ws)
+          parts = line.split(", ")
+          parts.extend(parts[:3])
+          parts.append(parts.pop() + parts.pop(0))
+          grown = []
+          for v in xs[:40]:
+              grown.extend([v, v])
+          grown.extend(grown)
+          return [sorted(ws)[:3], sorted(ws, reverse = True)[:3], sorted(ls)[0], sorted(ls, reverse = True)[0], [p[1] for p in by[:4]], sorted(ws, key = lambda w: w[:2]) == sorted(ws, key = lambda w: w[:2], reverse = True)[::-1], far[:2], far[-2:], sorted(xs + [1 << 70])[-1] == 1 << 70, len(line), parts == ws[1:] + ws[:2] + [ws[2] + ws[0]], len(grown), grown[80:82] == xs[:1] * 2, "a--b----c".split("--"), "a--b----c".split("--", 1), "é|ö||".split("|"), len("é|ö||".split("|")[0]), "é".join(["ab"] * 3), len("é".join(["x"] * 70)), "".join([]), "|".join(("é",))]
+      print(fast_bulk(600), fast_bulk(5)[9:13])
+      def fast_text(i, s, big, b):
+          return ["item" + str(i), s + ":" + str(i % 7), "{}-{}".format(i, "x"), "%d:%s" % (i, s), "%d|%s|%i|%r" % (big, big, -i, s), str(b) + "{}{}".format(b, big), "é" + str(-i) + "😀", len("é" + str(-i) + "😀"), "%s%s%s%s%s%s" % (i, s, i, s, big, i)]
+      print(fast_text(42, "s", 1 << 70, True), fast_text(-1073741824, "", -(1 << 31), None))
+      def fast_strings():
+          line = "the quick brown fox jumps over the lazy dog"
+          u = "héllo wörld ö ö"
+          j = ",".join(["ab"] * 70)
+          xs = [1, 2, 3]
+          d = {"a": 1, 2: "two", (1, 2): 3}
+          d[2.0] = "TWO"
+          d["a"] += 1
+          return [line.count("o"), line.count("the"), line.count("o", 13, 27), line.count(""), "aaaaa".count("aa", 1), u.count("ö"), u.count("ö", 8), u.count("ö", 8, 13), j.count("b,a"), j.upper().count("B", 3, 9), line.find("fox"), line.find("fox", 17), line.find("o", 13, 27), u.find("ö", 8), u.find("d"), j.find("b,a", 5), line.find("dog", 0, 42), line.startswith(("a", "the")), line.endswith("lazy", 0, 39), u.startswith("hé"), u.endswith("ö ö"), line.startswith("quick", 4), "  \t pad \n".strip() + "|", "  pad  ".lstrip() + "|", "  pad  ".rstrip() + "|", "xxpadxyx".strip("xy"), "éépadéé".strip("é"), "abc".strip(""), "   ".strip() + "|", "Hello World 123".upper(), "Hello World 123".lower(), "Héllo Wörld".upper(), "HÉLLO".lower(), len("abc".upper()), len(j.lower()), "a,bb,cccccccc,ccccccccc,é,ééééé,".upper().split(","), xs.pop(), xs.pop(), xs.pop(), xs, d.get("a"), d.get(2), d.get((1, 2)), d.get("zz", "dflt"), len(d)]
+      print(fast_strings())
+      def fast_wide(n):
+          alphabet = ["a", "é", "ÿ", "Ā", "～", "😀", "z"]
+          ws = []
+          x = 7
+          for i in range(n):
+              x = (x * 1103515245 + 12345) % 2147483648
+              ws.append(alphabet[(x // 65536) % 7] * (1 + i % 3) + alphabet[(x // 1024) % 7] + ("-long-suffix" if i % 5 == 0 else ""))
+          up = sorted(ws)
+          by = sorted([(w, i) for i, w in enumerate(ws)], key = lambda p: p[0][:2], reverse = True)
+          line = "😀".join(ws)
+          return [up[:3], up[-2:], sorted(ws, reverse = True) == up[::-1], [p[1] for p in by[:6]], line.count("😀"), line.count("😀", 20, 60), line.find("z", 1), line.find("😀", 12), line.find("～😀", 3, len(line) - 2), len(line.split("😀")), line.split("😀", 2)[2][:5], "😀".join(line.split("😀")) == line, line.split("-long-suffix")[1][:4]]
+      print(fast_wide(40), fast_wide(6), sorted((5, 3, 1)), sorted((3, False, 1, True), key = lambda v: 0 if type(v) == "bool" else v), list((1, False, 2)), sorted(range(40), key = lambda v: v % 3, reverse = True)[12:16])
+      def fast_graph(n, k, one, many):
+          names = ["t%d" % i for i in range(n)]
+          t = {"name": "n" + k, "srcs": [k], "deps": []}
+          for i in range(9):
+              t["deps"].append("t%d" % (i * n))
+          by = {name: len(name) for name in names}
+          doubled = [x * 2 for x in t["deps"]]
+          doubled.append(k)
+          keys = [key for key in t]
+          pairs = [(key, len(key)) for key in by]
+          pairs.append(by["t" + str(n - 1)])
+          return ["%s" % one, "%d|" % n, "<%r>" % k, "%s%%" % n, "%s" % [k], "%s" % None, "%s|" % (n == 1), "%s-%s" % many, t["na" + "me"[:2]], t["de" + k[:0] + "ps"][7:], "dep" + "s" in t, "sr" + k in t, t.get("src" + "s"), by["t" + str(n // 2)], "t" + str(n) in by, by.get("t" + k), len(doubled), doubled[8:], keys, pairs[-2:], "%s: %d source%s, needs %s" % (k, n, "" if n == 1 else "s", one), "%s%d%s%d%s%d%s%d%s" % (k, 1, k, 2, k, 3, k, 4, k), "{}/{}/{}/{}/{}".format(n, k, n, k, n)]
+      print(fast_graph(12, "c", "o", (1, "two")), fast_graph(1, "", (3,), ((), [])))
+    expected: |
+      3 ab [1, 2] 3.5 9223372036854775808
+      [True, True, False, False, False, True, False, True] [False, False, True, True, False, True, False, True] [True, True, False, False, False, True, False, True] [False, True, False, True, True, False, False, True]
+      [9, 5, 14, 3, 1, -4, -2, 2, 7] [-5, -9, -14, -4, 2, 3, -1, 2, -7] [9.5, 5.5, 15.0, 3.0, 1.5, -4.0, -1.5, 2, 7.5] [1180591620717411303427, 1180591620717411303421, 3541774862152233910272, 590295810358705651712, 1, -590295810358705651712, -2, 3, 1180591620717411303424]
+      [1, 358, 147573952589676412928, [0, 1, 2, 3, 4, 0, 2, 4, 5, 3, 1], "truth", True, [1, 9]]
+      [[1, [1, 8, 9], (), "c", {}], [2, [2], (), "x", {}], [3, [3], (4, 5), "c", {"z": 6}], [7, [0, 7], (), "c", {}], ["x", [2], 7]] [8, [1, 8, 9], (), "c", {}] [9, [1, 8, 9], (), "c", {}]
+      [2, 1, [4, 3], 2, 1, [4, 3], 4]
+      [[1, 2.5, "s", None, True, False, -3, 4], (1, ("a", [2, 5]), {"k": (3,)}), {"a": 1, 2: [3], "b": 6}] [[1, 2.5, "s", None, True, False, -3], (1, ("a", [2]), {"k": (3,)}), {"a": 1, 2: [3]}]
+      8 0 9 [1, 2, 3]
+      [1, 3]
+      [True, True, "1x", "5%", "plain", "", ["a", 2, 3, "s", 1]]
+      [(0, "z"), (1, "b"), (1, "a")] [3, 2, 1] ["", "a", "ab", "b"] [1.5, 2, 3] -a-b-c- ab x| ["a", "b", "", "c"] x,y,z ababab [0, 0, 0, 1, 2, 1, 2] 1 b
+      éllo😀 ["a", "b"] x abé é|😀 1😀2 ["a", "a～", "a😀", "a😀b", "z", "é", "～", "😀"] 2 é😀 True a😀 ÀBÇ DÉ àbç dé Àbç dé
+      [2, 3, 1, -3, 2, 0] [2.5, -4.0, 1, -3, 0.5, -1.0] [2, 168655945816773043346, 0, -7, 0, 0]
+      [[-4, -4, -4, -4], [4, 4, 4], [1, 6, 25, 33, 34], True] [[1073610719, 1072588016, 1068574294], [1, 2, 25, 33, 34], True] [[22, 29, 31, 35, 37], True] [-5, 3] [1.5, 2] ["b", "é"]
+      [{"a": ["a", 5], "l": 5}, {0: 6, 1: 8, 2: 5}]
+      [["w0", "w10", "w10"], ["w991", "w990", "w982"], "a-long-prefix/0é", "a-long-prefix/6é", [0, 2, 5, 11], False, [-4611686018427387904, -500], [2147483648, 1099511627776], True, 3523, True, 160, True, ["a", "b", "", "c"], ["a", "b----c"], ["é", "ö", "", ""], 1, "abéabéab", 139, "", "é"] [28, True, 20, False]
+      ["item42", "s:0", "42-x", "42:s", "1180591620717411303424|1180591620717411303424|-42|\"s\"", "TrueTrue1180591620717411303424", "é-42😀", 5, "42s42s118059162071741130342442"] ["item-1073741824", ":6", "-1073741824-x", "-1073741824:", "-2147483648|-2147483648|1073741824|\"\"", "NoneNone-2147483648", "é1073741824😀", 12, "-1073741824-1073741824-2147483648-1073741824"]
+      [4, 2, 2, 44, 2, 3, 2, 1, 69, 2, 16, -1, 17, 12, 10, 7, -1, True, True, True, True, True, "pad|", "pad  |", "  pad|", "pad", "pad", "abc", "|", "HELLO WORLD 123", "hello world 123", "HÉLLO WÖRLD", "héllo", 3, 209, ["A", "BB", "CCCCCCCC", "CCCCCCCCC", "É", "ÉÉÉÉÉ", ""], 3, 2, 1, [], 2, "TWO", 3, "dflt", 3]
+      [["aaaa", "aaaĀ-long-suffix", "aaa～"], ["😀😀😀Ā", "😀😀😀Ā-long-suffix"], True, [5, 8, 19, 18, 2, 22], 52, 14, 1, 14, 17, 53, "～～～Ā😀", True, "😀zz～"] [["zz-long-suffix", "zz～", "éĀ"], ["～～～Ā", "😀😀😀Ā-long-suffix"], True, [5, 2, 4, 3, 0, 1], 8, 6, 1, 14, 17, 9, "～～～Ā😀", True, "😀zz～"] [1, 3, 5] [False, True, 1, 3] [1, False, 2] [38, 1, 4, 7]
+      ["o", "12|", "<\"c\">", "12%", "[\"c\"]", "None", "False|", "1-two", "nc", ["t84", "t96"], True, False, ["c"], 2, False, None, 10, ["t96t96", "c"], ["name", "srcs", "deps"], [("t11", 3), 3], "c: 12 sources, needs o", "c1c2c3c4c", "12/c/12/c/12"] ["3", "1|", "<\"\">", "1%", "[\"\"]", "None", "True|", "()-[]", "n", ["t7", "t8"], True, False, [""], 2, False, None, 10, ["t8t8", ""], ["name", "srcs", "deps"], [("t0", 2), 2], ": 1 source, needs (3,)", "1234", "1//1//1"]
+  # A string's elements are code points; hash is the specification's; equal keys are one
+  # dict key, which keeps its place when stored again and goes last once removed; a float
+  # prints as Go's %g, NaN equals itself; a function is a key by identity.
+  - name: values-are-the-same-on-every-backend
+    source: |
+      print(len("𝄞"), "héllo"[1], "日本語"[::-1], hash("hello"), hash("𝄞"), repr("a\"b\\c\n"))
+      val_d = {1: "a", True: "c", (1, 2): "d", None: "e"}
+      val_d[1.0] = "b"
+      val_d[(1, 2.0)] += "!"
+      val_first = str(val_d)
+      val_d.pop(1)
+      val_d[1] = "again"
+      print(val_first)
+      print(val_d, 1 == 1.0, 1 == True, [1, (2,)] == [1.0, (2,)], (1, 2) < (1, 3), {"a": [1]} == {"a": [1]})
+      def val_in_place():
+          l = [1]
+          alias = l
+          l += [2]
+          t = (1,)
+          keep = t
+          t += (2,)
+          return [alias, keep]
+      print(val_in_place(), 12345678901234567890 * 10, 7 // -2, 7 % -2, 7.5 // 2, 1 << 70 >> 68)
+      print(1e100, 1.23e45 * 1.23e45, 1 / 3, 1000000.0, 100000.0, 0.0001, 1e-5, -0.0, 3.0)
+      val_nan = float("nan")
+      val_inf = float("-Infinity")
+      val_d = {val_nan: 1}
+      val_d[float("NaN")] = 2
+      print(val_inf, -val_inf, val_nan == val_nan, [val_nan] == [val_nan], sorted([val_nan, 1, -val_inf, val_inf]), val_d)
+      print(float("1e3"), float("-1.5E-3"), float(".5"), float("5."), float(True), float(1 << 60), int(2.5e3), (1 << 53) + 1 == float((1 << 53) + 1))
+      print("%e %f %g %E %G %f %g %d" % (1.5, 1.5, 1.5, 1.5e10, 1.5e-10, 1e22, 1e6, 3.7))
+      print(repr("tab\t\x01\x7f\u00a0\u200b\ue000é😀"), "a\r\nb\rc".splitlines(True), "hello wORLD".title())
+      print({val_in_place: 1}[val_in_place], {len: "b"}[len], "ab".elems(), type("ab".elems()), list("ab".elem_ords()), type("é".codepoints()))
+    expected: |
+      1 é 語本日 99162322 1772394 "a\"b\\c\n"
+      {1: "b", True: "c", (1, 2): "d!", None: "e"}
+      {True: "c", (1, 2): "d!", None: "e", 1: "again"} True False True True True
+      [[1, 2], (1,)] 123456789012345678900 -4 -1 3.0 4
+      1e+100 1.5129e+90 0.3333333333333333 1e+06 100000.0 0.0001 1e-05 -0.0 3.0
+      -inf +inf True True [-inf, 1, +inf, nan] {nan: 2}
+      1000.0 -0.0015 0.5 5.0 1.0 1.152921504606847e+18 2500 False
+      1.500000e+00 1.500000 1.5 1.500000E+10 1.5E-10 10000000000000000000000.000000 1e+06 3
+      "tab\t\x01\x7f\u00a0\u200b\ue000é😀" ["a\r\n", "b\r", "c"] Hello World
+      1 b "ab".elems() string.elems [97, 98] string.codepoints
+# A case that is a program of its own, compiled and run alone, per backend. One with an
+# `error` ENDS: it prints stdout, then an uncaught error takes the process down, and every
+# backend must report the same error text. One with `files` is read from a directory
+# holding them, its source as the `entry` file (main.star when absent).
+standalone:
+  # The prototype's divergence: a struct accessor handed another struct was two different
+  # texts on the interpreter and the JVM and a trap on wasm. Every helper tests first.
+  - name: a-method-of-another-type-is-refused-by-name
+    source: |
+      print("before")
+      (1, 2).append(3)
+      print("after")
+    stdout: |
+      before
+    error: tuple has no .append field or method
+  - name: a-list-is-not-mutated-while-a-loop-runs-over-it
+    source: |
+      xs = [1, 2]
+      for x in xs:
+          print(x)
+          xs.append(x)
+    stdout: |
+      1
+    error: cannot append to list during iteration
+  - name: a-call-that-does-not-fit-is-refused-by-the-binder
+    source: |
+      def f(a, b):
+          return a
+      print(f(1, 2))
+      print(len(1, 2))
+    stdout: |
+      1
+    error: len accepts at most 1 positional argument (2 given)
+  # A loop over range counts with no range made, and refuses what range refuses.
+  - name: a-counting-loop-refuses-the-step-range-refuses
+    source: |
+      def count(stop, step):
+          for i in range(1, stop, step):
+              print(i)
+      count(4, 2)
+      count(4, 0)
+    stdout: |
+      1
+      3
+    error: "range: step argument must not be zero"
+  # A top-level def is entered directly from anywhere, but a call above it reads the
+  # global the def statement assigns, which is not assigned yet.
+  - name: a-call-above-its-def-is-a-read-before-the-assignment
+    source: |
+      print("before")
+      print(early(1))
+      def early(n):
+          return n
+    stdout: |
+      before
+    error: global variable early referenced before assignment
+  # --starlark-standard spec: a call while a call of the same declaration runs; one
+  # after another is no recursion.
+  - name: the-spec-standard-refuses-recursion
+    standard: spec
+    source: |
+      def fact(n):
+          return 1 if n <= 1 else n * fact(n - 1)
+      def twice(f, x):
+          return f(f(x))
+      def inc(x):
+          return x + 1
+      print(twice(inc, 1), fact(1))
+      print(fact(3))
+    stdout: |
+      3 1
+    error: function fact called recursively
+  # load: a module runs once however many files load it, where the first load stands;
+  # its globals are its own (three files define helper, and under spec each def has a
+  # flag of its own file); a name starting with an underscore and a name it loaded
+  # itself stay inside; a def above the load statement calls what it binds. When a file
+  # has run, the lists and dicts made meanwhile are frozen: a frozen list is a dict key,
+  # a list a module's function makes later is the caller's, and a default value made
+  # while the module ran refuses mutation.
+  - name: a-module-runs-once-with-globals-of-its-own-and-is-frozen
+    standard: spec
+    files:
+      lib/words.star: |
+        load("tags.star", "tag")
+        print("words runs")
+        COUNT = 2
+        _seen = ["start"]
+        seen = _seen
+        def helper(x):
+            return tag(x.upper())
+        def shout(x):
+            return helper(x) * COUNT
+        def fresh():
+            return [1, 2]
+        def remember(x, into = _seen):
+            into.append(x)
+            return into
+      lib/more.star: |
+        load("../lib/tags.star", "tag")
+        print("more runs")
+        def helper(x):
+            return tag(x.lower())
+        def whisper(x):
+            return helper(x)
+      lib/tags.star: |
+        print("tags runs")
+        def tag(s):
+            return "<" + s + ">"
+    source: |
+      def helper(x):
+          return "main " + shout(x)
+      load("lib/words.star", "shout", count = "COUNT", "fresh", "seen", "remember")
+      load("lib/more.star", "whisper")
+      print(helper("a"), whisper("B"), count, seen, type(shout))
+      own = fresh()
+      own.append(3)
+      keys = {seen: "a frozen list is a key"}
+      print(own, keys[seen], remember(1, []))
+      remember(2)
+    stdout: |
+      tags runs
+      words runs
+      more runs
+      main <A><A> <b> 2 ["start"] function
+      [1, 2, 3] a frozen list is a key [1]
+    error: cannot append to frozen list
+  # A set made while a module ran is frozen as a list is: read, never written.
+  - name: a-set-made-while-a-module-ran-is-frozen
+    files:
+      marks.star: |
+        marks = set(["m"])
+    source: |
+      load("marks.star", "marks")
+      print(marks, "m" in marks, marks | set(["n"]))
+      marks.add("n")
+    stdout: |
+      set(["m"]) True set(["m", "n"])
+    error: cannot insert into frozen set
+  # Across languages nothing is converted. A Common Lisp file loads Starlark files: their
+  # globals are its variables, and rontolisp:starlark-call calls a def, a built-in or a
+  # method value with positional arguments. A Starlark file loads the functions of a
+  # Common Lisp package -- load("@package", name = "symbol") -- and calls them, or a
+  # function it is handed, the same way. A module two files lowered apart load runs once.
+  # A call that ends in an error some handler takes gives back the loop it left counted
+  # and, under spec, the declaration it left active; the file's own values are frozen,
+  # and an augmented assignment to a frozen dict's item is refused as a plain one is.
+  - name: common-lisp-and-starlark-call-each-other
+    standard: spec
+    entry: main.lisp
+    files:
+      rules.star: |
+        load("@cl-user", "emit", twice = "|twice|")
+        load("@cl", "gcd", cl_list = "list")
+        load("common.star", "tag")
+        targets = []
+        def target(name, deps = []):
+            targets.append(name)
+            return emit(name, cl_list(*deps))
+        def describe(*names, sep = ", "):
+            return sep.join(names)
+        def each(xs, f):
+            return [f(x) for x in xs]
+        def kinds(*xs):
+            return [type(x) for x in xs]
+        def fail_at(xs, bad):
+            for x in xs:
+                if x == bad:
+                    fail("stopped at", x)
+            xs.append(bad)
+            return xs
+        def joined(xs):
+            s = ""
+            for x in xs:
+                s += x
+            return s
+        mixed = ["a", 1]
+        counts = {"a": 1}
+        def bump(d, k):
+            d[k] += 1
+            return d
+        def counted():
+            return {"a": 1}
+        text = str
+        print(target("a"), target("b", ["a"]), gcd(12, 18), twice(21), emit, each([1, 2], twice), tag("r"))
+      sub/more.star: |
+        load("../common.star", "tag")
+        def tagged(x):
+            return tag(x)
+      common.star: |
+        print("common runs")
+        def tag(s):
+            return "<" + s + ">"
+    source: |
+      (defun emit (name deps) (format t "emit ~a ~s~%" name deps) (length deps))
+      (defun |twice| (x) (* 2 x))
+      (defun show (x) (format t "~a~%" (rontolisp:starlark-call |text| x)))
+      (load "rules.star")
+      (load "sub/more.star")
+      (show (rontolisp:starlark-call |describe| "x" (rontolisp:starlark-call |tagged| "m")))
+      (show (rontolisp:starlark-call |kinds| :none t nil 1 2.5d0 "s" #'car '(1 2)))
+      (let ((xs (rontolisp:starlark-call |each| |targets| #'string-upcase)))
+        (show (handler-case (rontolisp:starlark-call |fail_at| xs "B") (error (e) (princ-to-string e))))
+        (show (rontolisp:starlark-call |fail_at| xs "none")))
+      (show (handler-case (rontolisp:starlark-call |target| "c") (error (e) (princ-to-string e))))
+      (show (handler-case (rontolisp:starlark-call |joined| |mixed|) (error (e) (princ-to-string e))))
+      (show (rontolisp:starlark-call |bump| (rontolisp:starlark-call |counted|) "a"))
+      (dolist (d (list |counts| (rontolisp:starlark-call |counted|)))
+        (show (handler-case (rontolisp:starlark-call |bump| d "b") (error (e) (princ-to-string e)))))
+      (show (handler-case (rontolisp:starlark-call |bump| |counts| "a") (error (e) (princ-to-string e))))
+    stdout: |
+      common runs
+      emit a NIL
+      emit b ("a")
+      0 1 6 42 <built-in function cl-user:emit> [2, 4] <r>
+      x, <m>
+      ["NoneType", "bool", "bool", "int", "float", "string", "builtin_function_or_method", "unknown"]
+      fail: stopped at B
+      ["A", "B", "none"]
+      cannot append to frozen list
+      unknown binary op: string + int
+      {"a": 2}
+      key "b" not found in dictionary
+      key "b" not found in dictionary
+      cannot insert into frozen dict

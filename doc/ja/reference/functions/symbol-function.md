@@ -1,0 +1,22 @@
+# symbol-function
+
+`(symbol-function symbol)`
+
+関数名前空間で `symbol` に束縛された関数値、つまり `#'name` が表すのと同じ値を返します。結果は `funcall`/`apply` に渡したり保存したりできます。rontolisp は Lisp-2 であるため、これは関数名前空間のみを参照し、同名の変数を参照することはありません。クォートされたシンボルのリテラル (`(symbol-function 'car)`) はコンパイラではコンパイル時に解決されます。実行時に計算されたシンボルはコンパイル済み名前レジストリを通じて遅延解決され、同じ関数値を返します — 結果への `functionp` は真を返し、登録名で印字され、どのバックエンドでも `(eq (symbol-function s) #'name)` は真になります。未定義の名前 (`nil`、`t`、キーワード、[`fmakunbound`](fmakunbound.md) で失効させた名前を含む) は `symbol-function` 自体で `undefined-function` を通知し、どのバックエンドでもそのクラスで捕捉できます。特殊オペレータとマクロ(組み込みまたは `defmacro`)も関数を返します。名前ごとに 1 つで、呼び出すとそのオペレータを名指す `undefined-function` を通知します(SBCL の `(:macro or)` と同じ)。[`macro-function`](macro-function.md) が返す展開関数ではありません。
+
+```lisp
+(funcall (symbol-function 'car) '(1 2 3)) ; => 1
+```
+
+```lisp
+(let ((fn (symbol-function (car (list 'car)))))
+  (funcall fn '(1 2 3))) ; => 1
+```
+
+`symbol-function` は `setf` の place でもあります: `(setf (symbol-function 'name) fn)` は `fn` をそのシンボルのグローバルな関数定義としてインストールします — 既存関数の別名の定義や、置き換えに使えます。クォートした名前に書き込むと、すべての参照が全バックエンドで `fn` を呼びます(計算した名前の場合は [`fdefinition`](fdefinition.md) を参照)。この方法で**のみ**束縛された名前は完全に遅延束縛されます。代入が実行される前は、呼び出し、`#'name`、`symbol-function`、`fdefinition` はその名前を持つ `undefined-function` を通知し、`fboundp` は偽を返します（全バックエンド共通）。代入後の `#'name` はインストールされた関数そのものです。
+
+```lisp
+(defun double (x) (* x 2))
+(setf (symbol-function 'twice) #'double)
+(twice 21) ; => 42
+```

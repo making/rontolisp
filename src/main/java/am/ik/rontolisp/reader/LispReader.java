@@ -1,0 +1,2384 @@
+package am.ik.rontolisp.reader;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.function.Predicate;
+import java.util.function.UnaryOperator;
+
+import org.jspecify.annotations.Nullable;
+
+import am.ik.rontolisp.FloatWidth;
+import am.ik.rontolisp.LispArray;
+import am.ik.rontolisp.LispBigInteger;
+import am.ik.rontolisp.LispChar;
+import am.ik.rontolisp.LispComplex;
+import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispDouble;
+import am.ik.rontolisp.BFloat16;
+import am.ik.rontolisp.LispBFloat16Array;
+import am.ik.rontolisp.LispDoubleFloatArray;
+import am.ik.rontolisp.LispInteger;
+import am.ik.rontolisp.LispNames;
+import am.ik.rontolisp.LispNil;
+import am.ik.rontolisp.LispRatio;
+import am.ik.rontolisp.LispSingleFloatArray;
+import am.ik.rontolisp.LispString;
+import am.ik.rontolisp.LispSymbol;
+import am.ik.rontolisp.LispTrees;
+import am.ik.rontolisp.LispTrue;
+import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.PackageRegistry;
+import am.ik.rontolisp.ReaderSymbols;
+import am.ik.rontolisp.LocatedCons;
+import am.ik.rontolisp.SourceLocation;
+import am.ik.rontolisp.SourceProvenance;
+
+/**
+ * Parser for Lisp expressions. Converts a list of tokens into LispVal AST nodes.
+ */
+public final class LispReader {
+
+	private final List<Token> tokens;
+
+	/**
+	 * The source offset where each {@link #tokens} entry starts, aligned by index; only
+	 * the first {@code tokens.size()} cells are meaningful (an incremental read appends).
+	 */
+	private int[] offsets;
+
+	private final Features features;
+
+	/** The full source text, used to resolve an offset to a line/column on an error. */
+	private final String input;
+
+	/** The origin file, or {@code null} when unknown; used to prefix read errors. */
+	private final @Nullable String file;
+
+	/**
+	 * The source unit every cons of this read is recorded against in the compile path's
+	 * {@link SourceProvenance} table, or {@code null} when the thread has no recording
+	 * scope open (the interpreter, a runtime {@code read}). Built once per read, so a
+	 * non-recording read never even allocates it.
+	 */
+	private final SourceProvenance.@Nullable Unit unit;
+
+	/**
+	 * The origin file every datum's outermost cons is located in ({@link LocatedCons}),
+	 * or {@code null}: set for a provenance-recording read of a NAMED file on a thread
+	 * with no compile-path scope open -- the interpreter's entry file, a {@code load}, an
+	 * ASDF component. A runtime {@code read} of a string has no file and locates nothing.
+	 */
+	private final @Nullable String runtimeFile;
+
+	/** The offset each line starts at, built on the first located datum. */
+	private int @Nullable [] lineStarts;
+
+	/**
+	 * Maps each symbol token's name to its spelling: a runtime read's interning in the
+	 * current package ({@link #readAllRuntime}, {@link Forms#homingSymbols}), or
+	 * {@code null} for a source read, whose symbols {@code PackageResolver} resolves.
+	 */
+	private @Nullable UnaryOperator<String> symbolHome;
+
+	/**
+	 * Whether a token naming {@code T} or {@code NIL} with no qualifier is {@code cl}'s
+	 * constant where a source read happens, which only a package using no {@code cl} can
+	 * deny: such a token then stays a symbol for {@code PackageResolver}, as every other
+	 * token does ({@code .kb/packages.md}). {@code null} folds every one, which a read no
+	 * caller places in a package does (a scan, a data read).
+	 */
+	private @Nullable Predicate<String> clTOrNil;
+
+	/**
+	 * How many backquote templates enclose the datum being read, outside this read's own
+	 * backquotes: zero, but for a reader macro function's recursive read inside a
+	 * template ({@link Forms#withinTemplates}), where a comma reads as the raw marker the
+	 * enclosing template processes ({@link #readOuterComma}).
+	 */
+	private int templateDepth;
+
+	private int pos;
+
+	private LispReader(List<LocatedToken> tokens, Features features, String input, @Nullable String file,
+			boolean recordProvenance) {
+		this.tokens = new ArrayList<>(tokens.size());
+		this.offsets = new int[Math.max(16, tokens.size())];
+		append(tokens);
+		this.features = features;
+		this.input = input;
+		this.file = file;
+		this.unit = recordProvenance ? SourceProvenance.unit(file, input) : null;
+		this.runtimeFile = recordProvenance && this.unit == null ? file : null;
+		this.pos = 0;
+	}
+
+	/**
+	 * A {@link LispReadException} whose message is prefixed with the position of the
+	 * current token (or the end of input when the reader has run past it).
+	 * @param message the error message
+	 * @return the positioned exception
+	 */
+	private LispReadException err(String message) {
+		return errAtToken(this.pos, message);
+	}
+
+	/**
+	 * A {@link LispReadException} positioned at the given token index (or at the end of
+	 * input when the index is past the last token). A list that is never closed is only
+	 * detected at end of input, so it reports the index of its OPENING token instead: in
+	 * a big spliced library the last line of the file says nothing about which paren is
+	 * unbalanced.
+	 * @param tokenIndex the index into {@link #tokens} to report
+	 * @param message the error message
+	 * @return the positioned exception
+	 */
+	private LispReadException errAtToken(int tokenIndex, String message) {
+		SourceLocation location = tokenIndex >= 0 && tokenIndex < this.tokens.size()
+				? SourceLocation.at(this.file, this.offsets[tokenIndex], this.input)
+				: SourceLocation.at(this.file, this.input.length(), this.input);
+		return new LispReadException(message, location);
+	}
+
+	/**
+	 * A {@link LispReadException} for a datum the input ran out in the middle of -- the
+	 * runtime {@code read} family turns it into an {@code end-of-file} condition rather
+	 * than a {@code reader-error}.
+	 * @param message the error message
+	 * @return the positioned exception
+	 */
+	private LispReadException eof(String message) {
+		return eofAtToken(this.pos, message);
+	}
+
+	/**
+	 * A {@link LispReadException} for a list that is never closed, positioned at its
+	 * OPENING token like {@link #errAtToken} (in a big spliced library the last line of
+	 * the file says nothing about which paren is unbalanced), but classified as end of
+	 * input.
+	 * @param tokenIndex the index into the token list to report
+	 * @param message the error message
+	 * @return the positioned exception
+	 */
+	private LispReadException eofAtToken(int tokenIndex, String message) {
+		SourceLocation location = tokenIndex >= 0 && tokenIndex < this.tokens.size()
+				? SourceLocation.at(this.file, this.offsets[tokenIndex], this.input)
+				: SourceLocation.at(this.file, this.input.length(), this.input);
+		return new LispReadException(message, location, true);
+	}
+
+	/**
+	 * Read a single expression from the input string.
+	 * @param input the source code string
+	 * @return the parsed expression
+	 */
+	public static LispVal readFromString(String input) {
+		List<LispVal> exprs = readAllFromString(input);
+		if (exprs.isEmpty()) {
+			return LispNil.INSTANCE;
+		}
+		return exprs.get(0);
+	}
+
+	/**
+	 * Read a single expression from the input string with the given feature set (the
+	 * runtime {@code read}/{@code read-from-string} built-ins pass the evaluator's
+	 * per-run features so the upcase reader mode applies there too).
+	 * @param input the source code string
+	 * @param features the active reader features
+	 * @return the parsed expression
+	 */
+	public static LispVal readFromString(String input, Features features) {
+		List<LispVal> exprs = readAllFromString(input, features);
+		if (exprs.isEmpty()) {
+			return LispNil.INSTANCE;
+		}
+		return exprs.get(0);
+	}
+
+	/**
+	 * Read a single expression from the input string, wrapping each {@code #.}
+	 * read-time-eval datum in a {@code (%read-eval datum)} marker (see
+	 * {@link #readAllWithReadEvalMarkers}). The runtime {@code read} /
+	 * {@code read-from-string} built-ins use this when the evaluator has installed its
+	 * marker resolver, so {@code #.} in runtime-read data evaluates like CL's
+	 * {@code read} under a true {@code *read-eval*}.
+	 * @param input the source code string
+	 * @param features the active reader features
+	 * @return the parsed expression
+	 */
+	public static LispVal readFromStringWithReadEvalMarkers(String input, Features features) {
+		List<LispVal> exprs = readAllWithReadEvalMarkers(input, features);
+		if (exprs.isEmpty()) {
+			return LispNil.INSTANCE;
+		}
+		return exprs.get(0);
+	}
+
+	/**
+	 * Read all expressions from the input string with the interpreter feature set.
+	 * @param input the source code string
+	 * @return the list of parsed expressions
+	 */
+	public static List<LispVal> readAllFromString(String input) {
+		return readAllFromString(input, Features.INTERPRETER);
+	}
+
+	/**
+	 * Read all expressions from the input string. The feature set drives the
+	 * {@code #+}/{@code #-} conditionals and the {@code *features*} substitution, so the
+	 * compile path passes the target backend's features.
+	 * @param input the source code string
+	 * @param features the active reader features
+	 * @return the list of parsed expressions
+	 */
+	public static List<LispVal> readAllFromString(String input, Features features) {
+		return readAll(input, features, LispLexer.ReadEvalMode.ERROR, null, null);
+	}
+
+	/**
+	 * Read all expressions from the input string, prefixing any read error with the given
+	 * origin file (the entry source or a loaded file). The feature set drives the
+	 * {@code #+}/{@code #-} conditionals and the {@code *features*} substitution.
+	 * @param input the source code string
+	 * @param features the active reader features
+	 * @param file the origin file, or {@code null} when unknown
+	 * @return the list of parsed expressions
+	 */
+	public static List<LispVal> readAllFromString(String input, Features features, @Nullable String file) {
+		return readAll(input, features, LispLexer.ReadEvalMode.ERROR, file, null);
+	}
+
+	/**
+	 * Read all expressions from the input string, wrapping each {@code #.} read-time-eval
+	 * datum in a {@code (%read-eval datum)} marker instead of erroring. The consumer (the
+	 * evaluator's {@code load}) resolves each marker by evaluating the datum just before
+	 * the top-level form containing it is evaluated, so a marker sees the definitions of
+	 * every preceding top-level form -- CL's read-eval timing for a form-at-a-time load.
+	 * An unreadable datum is a read error.
+	 * @param input the source code string
+	 * @param features the active reader features
+	 * @return the list of parsed expressions
+	 */
+	public static List<LispVal> readAllWithReadEvalMarkers(String input, Features features) {
+		return readAll(input, features, LispLexer.ReadEvalMode.MARKER, null, null);
+	}
+
+	/**
+	 * Read all expressions from the input string, wrapping each {@code #.} read-time-eval
+	 * datum in a {@code (%read-eval datum)} marker instead of erroring. The consumer (the
+	 * evaluator's {@code load}) resolves each marker by evaluating the datum just before
+	 * the top-level form containing it is evaluated, so a marker sees the definitions of
+	 * every preceding top-level form -- CL's read-eval timing for a form-at-a-time load.
+	 * An unreadable datum is a read error.
+	 * @param input the source code string
+	 * @param features the active reader features
+	 * @param file the origin file, or {@code null} when unknown
+	 * @return the list of parsed expressions
+	 */
+	public static List<LispVal> readAllWithReadEvalMarkers(String input, Features features, @Nullable String file) {
+		return readAll(input, features, LispLexer.ReadEvalMode.MARKER, file, null);
+	}
+
+	/**
+	 * Reads ONLY the first expression of the input, without parsing the rest. Callers
+	 * that want a file's leading declaration read it this way -- building the AST of the
+	 * whole file (plus its provenance entries) just to look at one datum would cost a
+	 * full parse per file, and the ASDF subset opens every source of a package-inferred
+	 * system. Read-time-eval is tolerated the way a {@code .asd} tolerates it: a
+	 * {@code #.} further down the file must not make the file's leading form unreadable,
+	 * since the real load resolves those markers later.
+	 * @param input the source code string
+	 * @param features the active reader features
+	 * @param file the origin file, or {@code null} when unknown
+	 * @return the first expression, or {@code nil} when the input holds none
+	 */
+	public static LispVal readFirstForm(String input, Features features, @Nullable String file) {
+		return readFirstFormMatching(input, features, file, form -> true);
+	}
+
+	/**
+	 * Reads forms until one satisfies {@code predicate}, and answers it -- or {@code nil}
+	 * when the input holds no such form. Same tolerant, provenance-free mode as
+	 * {@link #readFirstForm}, and the same reason for it: a package-inferred system opens
+	 * every source in the system just to look at its package declaration, which real ASDF
+	 * ({@code asdf/package-inferred-system::file-defpackage-form}) locates by skipping
+	 * whatever precedes it -- the {@code (in-package #:cl-user)} header before a
+	 * {@code defpackage} is a common style. Only the forms up to the match are parsed;
+	 * the rest of the file is still the load's business.
+	 * @param input the source code string
+	 * @param features the active reader features
+	 * @param file the origin file, or {@code null} when unknown
+	 * @param predicate the test the wanted form satisfies
+	 * @return the first matching expression, or {@code nil} when there is none
+	 */
+	public static LispVal readFirstFormMatching(String input, Features features, @Nullable String file,
+			Predicate<LispVal> predicate) {
+		List<LocatedToken> tokens = new LispLexer(input, features, LispLexer.ReadEvalMode.SKIP_UNREADABLE, file)
+			.tokenizeWithPositions();
+		// Provenance recording off: these conses are inspected and thrown away, and the
+		// table is first-write-wins -- the real load of the same file must be the one
+		// that
+		// claims its positions.
+		LispReader reader = new LispReader(tokens, features, input, file, false);
+		while (reader.pos < reader.tokens.size()) {
+			LispVal form = reader.readExpr();
+			if (predicate.test(form)) {
+				return form;
+			}
+		}
+		return LispNil.INSTANCE;
+	}
+
+	/**
+	 * The forms a read yields before its first error, and that error. A form-at-a-time
+	 * consumer -- the interpreter's {@code load} -- evaluates the forms and then signals
+	 * the error, which is the order CL's {@code load} gives; every other reader of a
+	 * whole source throws the error instead.
+	 *
+	 * @param forms the top-level forms read before the error, in source order
+	 * @param error the first read error, or {@code null} when the whole input read
+	 */
+	public record ReadPrefix(List<LispVal> forms, @Nullable LispReadException error) {
+	}
+
+	/**
+	 * {@link #readAllFromString(String, Features, String)} up to the first read error
+	 * rather than throwing it.
+	 * @param input the source code string
+	 * @param features the active reader features
+	 * @param file the origin file, or {@code null} when unknown
+	 * @return the forms before the first error, and that error
+	 */
+	public static ReadPrefix readPrefixFromString(String input, Features features, @Nullable String file) {
+		return readPrefix(input, features, LispLexer.ReadEvalMode.ERROR, file, null);
+	}
+
+	/**
+	 * {@link #readAllWithReadEvalMarkers(String, Features, String)} up to the first read
+	 * error rather than throwing it.
+	 * @param input the source code string
+	 * @param features the active reader features
+	 * @param file the origin file, or {@code null} when unknown
+	 * @return the forms before the first error, and that error
+	 */
+	public static ReadPrefix readPrefixWithReadEvalMarkers(String input, Features features, @Nullable String file) {
+		return readPrefix(input, features, LispLexer.ReadEvalMode.MARKER, file, null);
+	}
+
+	/**
+	 * {@link #readPrefixFromString}, or with {@code readEvalMarkers}
+	 * {@link #readPrefixWithReadEvalMarkers}, of a source read in a package: a token
+	 * naming {@code T} or {@code NIL} with no qualifier is {@code cl}'s constant only
+	 * where {@code clTOrNil} answers so ({@link Forms#readingTOrNil}).
+	 * @param input the source code string
+	 * @param features the active reader features
+	 * @param readEvalMarkers whether {@code #.} reads as a {@code (%read-eval datum)}
+	 * marker (else it is a read error)
+	 * @param file the origin file, or {@code null} when unknown
+	 * @param clTOrNil answers, for {@code T} or {@code NIL}, whether the token is
+	 * {@code cl}'s constant
+	 * @return the forms before the first error, and that error
+	 */
+	public static ReadPrefix readPrefixIn(String input, Features features, boolean readEvalMarkers,
+			@Nullable String file, Predicate<String> clTOrNil) {
+		return readPrefix(input, features,
+				readEvalMarkers ? LispLexer.ReadEvalMode.MARKER : LispLexer.ReadEvalMode.ERROR, file, null, null,
+				clTOrNil);
+	}
+
+	/**
+	 * A RUNTIME read of data -- the {@code read} family's. With {@code readTimeEval} set,
+	 * {@code #.} reads as a {@code (%read-eval datum)} marker and a {@code #+}/{@code #-}
+	 * guard whose feature expression holds a {@code #.} is decided while reading, as CL's
+	 * reader decides it; without it {@code #.} is a read error. {@code symbolHome}
+	 * interns each symbol TOKEN as it is read, as CL's reader interns in
+	 * {@code *package*}: a source read leaves that to {@code PackageResolver}, which a
+	 * runtime read never meets. The symbols the reader itself synthesizes ({@code quote},
+	 * the backquote operators) are not tokens and keep their spelling.
+	 * @param input the text
+	 * @param features the active reader features
+	 * @param readTimeEval replaces the {@code (%read-eval datum)} markers of a feature
+	 * expression by their values, or {@code null} for a read refusing {@code #.}
+	 * @param symbolHome maps a symbol token's name to its spelling, or {@code null} to
+	 * keep the name as read
+	 * @return the list of parsed expressions
+	 */
+	public static List<LispVal> readAllRuntime(String input, Features features,
+			@Nullable UnaryOperator<LispVal> readTimeEval, @Nullable UnaryOperator<String> symbolHome) {
+		return readAll(input, features,
+				readTimeEval == null ? LispLexer.ReadEvalMode.ERROR : LispLexer.ReadEvalMode.MARKER, null, readTimeEval,
+				symbolHome);
+	}
+
+	private static List<LispVal> readAll(String input, Features features, LispLexer.ReadEvalMode readEvalMode,
+			@Nullable String file, @Nullable UnaryOperator<LispVal> readTimeEval) {
+		return readAll(input, features, readEvalMode, file, readTimeEval, null);
+	}
+
+	private static List<LispVal> readAll(String input, Features features, LispLexer.ReadEvalMode readEvalMode,
+			@Nullable String file, @Nullable UnaryOperator<LispVal> readTimeEval,
+			@Nullable UnaryOperator<String> symbolHome) {
+		ReadPrefix read = readPrefix(input, features, readEvalMode, file, readTimeEval, symbolHome, null);
+		LispReadException error = read.error();
+		if (error != null) {
+			throw error;
+		}
+		return read.forms();
+	}
+
+	private static ReadPrefix readPrefix(String input, Features features, LispLexer.ReadEvalMode readEvalMode,
+			@Nullable String file, @Nullable UnaryOperator<LispVal> readTimeEval) {
+		return readPrefix(input, features, readEvalMode, file, readTimeEval, null, null);
+	}
+
+	private static ReadPrefix readPrefix(String input, Features features, LispLexer.ReadEvalMode readEvalMode,
+			@Nullable String file, @Nullable UnaryOperator<LispVal> readTimeEval,
+			@Nullable UnaryOperator<String> symbolHome, @Nullable Predicate<String> clTOrNil) {
+		// A source may announce features about ITSELF -- the header
+		// (eval-when (...) (pushnew :F *features*)) idiom -- and the #+F below it must
+		// see them. Real CL gets that free by loading form at a time; here the reader
+		// makes the announcement instead, so every backend agrees without evaluating
+		// anything (FeaturePushes).
+		Features effective = FeaturePushes.widen(input, features, readEvalMode, file);
+		LispLexer.Prefix lexed = new LispLexer(input, effective, readEvalMode, file, readTimeEval).tokenizePrefix();
+		LispReader reader = new LispReader(lexed.tokens(), effective, input, file, true);
+		reader.symbolHome = symbolHome;
+		reader.clTOrNil = clTOrNil;
+		List<LispVal> result = new ArrayList<>();
+		while (reader.pos < reader.tokens.size()) {
+			try {
+				result.add(reader.readExpr());
+			}
+			catch (LispReadException ex) {
+				// A form that ran past the last token was cut off by the lexer's error,
+				// which is the one to report; an error inside the tokens comes first.
+				LispReadException lexError = lexed.error();
+				return new ReadPrefix(result, lexError != null && reader.pos >= reader.tokens.size() ? lexError : ex);
+			}
+		}
+		return new ReadPrefix(result, lexed.error());
+	}
+
+	/**
+	 * One step of a FORM-AT-A-TIME read ({@link #readNextForm}).
+	 *
+	 * @param form the datum read, or {@code null} when the input held no further datum
+	 * (whitespace, comments and dropped {@code #+}/{@code #-} guards only)
+	 * @param end the offset the next step starts at
+	 */
+	public record NextForm(@Nullable LispVal form, int end) {
+	}
+
+	/**
+	 * Reads the next top-level datum of {@code input} at or after {@code offset}, with
+	 * {@code features} deciding its {@code #+}/{@code #-} guards -- CL's {@code load},
+	 * which reads a form, evaluates it, and only then reads the next, so a feature an
+	 * evaluated form pushed decides the conditionals of every later form. Unlike
+	 * {@link Forms}, whose feature set is fixed when it opens, the caller passes a fresh
+	 * set at each step, and no {@link FeaturePushes} widening applies (a push decides
+	 * only what is read after it). A {@code #.} datum is tolerated like a {@code .asd}
+	 * read tolerates it ({@code %read-eval} markers, an unreadable datum included); the
+	 * syntax is the standard one, as real ASDF reads a {@code .asd}; positions are
+	 * recorded against the whole input, so an error names the file's own line.
+	 * @param input the source code string
+	 * @param offset where the step starts
+	 * @param features the features the guards of this datum test
+	 * @param file the origin file, or {@code null} when unknown
+	 * @return the datum read and where the next step starts
+	 */
+	public static NextForm readNextForm(String input, int offset, Features features, @Nullable String file) {
+		LispLexer lexer = new LispLexer(input, features, LispLexer.ReadEvalMode.SKIP_UNREADABLE, file);
+		lexer.seek(offset);
+		Forms forms = new Forms(lexer, new LispReader(List.of(), features, input, file, true));
+		LispVal form = forms.next(null);
+		return new NextForm(form, forms.position());
+	}
+
+	/**
+	 * Every top-level form {@code input} yields to a SCAN ({@link #readAllForScan}): no
+	 * provenance, a {@code #.} datum tolerated, a read error ending the scan quietly. For
+	 * a pre-pass that looks for one shape before the real, positioned read runs.
+	 * @param input the source code string
+	 * @param features the active reader features
+	 * @param file the origin file, or {@code null} when unknown
+	 * @return the forms read before the input ended or a read error stopped the scan
+	 */
+	public static List<LispVal> scanForms(String input, Features features, @Nullable String file) {
+		return readAllForScan(input, features, LispLexer.ReadEvalMode.SKIP_UNREADABLE, file);
+	}
+
+	/**
+	 * Reads as many top-level forms as the input yields, recording NO provenance and
+	 * propagating NO read error -- whatever was read before the failure is the answer.
+	 * This is the shape {@link FeaturePushes} and a pre-pass ({@link #scanForms}) need
+	 * and nothing else should want: its conses are inspected and thrown away, so the real
+	 * read of the same source must be the one that claims its positions (the provenance
+	 * table is first-write-wins), and a source that does not read cleanly is the real
+	 * read's error to report, positioned, rather than a scan's.
+	 * @param input the source code string
+	 * @param features the active reader features
+	 * @param readEvalMode how a {@code #.} datum is treated
+	 * @param file the origin file, or {@code null} when unknown
+	 * @return the forms read before the input ended or a read error stopped the scan
+	 */
+	static List<LispVal> readAllForScan(String input, Features features, LispLexer.ReadEvalMode readEvalMode,
+			@Nullable String file) {
+		List<LocatedToken> tokens;
+		try {
+			tokens = new LispLexer(input, features, readEvalMode, file).tokenizeWithPositions();
+		}
+		catch (RuntimeException ex) {
+			return List.of();
+		}
+		LispReader reader = new LispReader(tokens, features, input, file, false);
+		List<LispVal> result = new ArrayList<>();
+		try {
+			while (reader.pos < reader.tokens.size()) {
+				result.add(reader.readExpr());
+			}
+		}
+		catch (RuntimeException ex) {
+			// Deliberately swallowed; see the contract above.
+		}
+		return result;
+	}
+
+	/**
+	 * Returns whether {@code tokens} parse cleanly as a sequence of expressions. The
+	 * tolerant lexer uses this to validate a re-lexed {@code #.} datum before wrapping it
+	 * in a {@code %read-eval} marker: a datum that lexes but does not parse (e.g. an
+	 * unquote outside a backquote) must fall back to the skipped-with-warning placeholder
+	 * instead of poisoning the whole file's token stream.
+	 * @param tokens the tokens to validate
+	 * @param features the active reader features
+	 * @return {@code true} if the tokens parse as complete expressions
+	 */
+	static boolean parsesAsExpressions(List<LocatedToken> tokens, Features features) {
+		try {
+			readUnrecorded(tokens, features);
+			return true;
+		}
+		catch (LispReadException ex) {
+			return false;
+		}
+	}
+
+	/**
+	 * Reads every expression of tokens lexed out of a FRAGMENT of some source (a
+	 * {@code #.} datum, a feature expression). The fragment holds no source text of its
+	 * own, so the read must not put a bogus position in the provenance table (an entry
+	 * there is first-write-wins).
+	 * @param tokens the tokens to read
+	 * @param features the active reader features
+	 * @return the expressions
+	 */
+	static List<LispVal> readUnrecorded(List<LocatedToken> tokens, Features features) {
+		LispReader reader = new LispReader(tokens, features, "", null, false);
+		List<LispVal> result = new ArrayList<>();
+		while (reader.pos < reader.tokens.size()) {
+			result.add(reader.readExpr());
+		}
+		return result;
+	}
+
+	/**
+	 * Adds tokens behind the ones this reader holds: the next datum of an incremental
+	 * read.
+	 * @param more the positioned tokens
+	 */
+	private void append(List<LocatedToken> more) {
+		int needed = this.tokens.size() + more.size();
+		if (needed > this.offsets.length) {
+			this.offsets = java.util.Arrays.copyOf(this.offsets, Math.max(needed, this.offsets.length * 2));
+		}
+		for (LocatedToken token : more) {
+			this.offsets[this.tokens.size()] = token.offset();
+			this.tokens.add(token.token());
+		}
+	}
+
+	/**
+	 * A source read ONE top-level datum at a time ({@code .kb/readtables.md}): what a
+	 * form-at-a-time {@code load} reads with, because evaluating a form may change the
+	 * readtable the next one is read with -- {@code in-readtable} -- and a reader macro
+	 * function must run when the read reaches it, after the forms before it ran. Each
+	 * {@link #next} reads with the syntax it is handed.
+	 */
+	public static final class Forms {
+
+		private final LispLexer lexer;
+
+		private final LispReader reader;
+
+		private final List<LocatedToken> buffer = new ArrayList<>();
+
+		private Forms(LispLexer lexer, LispReader reader) {
+			this.lexer = lexer;
+			this.reader = reader;
+		}
+
+		/**
+		 * Interns each symbol token this read builds through {@code symbolHome}, as
+		 * {@link #readAllRuntime} does.
+		 * @param symbolHome maps a symbol token's name to its spelling, or {@code null}
+		 * to keep the name as read
+		 * @return this read
+		 */
+		public Forms homingSymbols(@Nullable UnaryOperator<String> symbolHome) {
+			this.reader.symbolHome = symbolHome;
+			return this;
+		}
+
+		/**
+		 * Reads a token naming {@code T} or {@code NIL} with no qualifier as {@code cl}'s
+		 * constant only where {@code clTOrNil} answers that the package the read happens
+		 * in reads it so, asked as the token is read; any other such token stays a symbol
+		 * for {@code PackageResolver}.
+		 * @param clTOrNil answers, for {@code T} or {@code NIL}, whether the token is
+		 * {@code cl}'s constant
+		 * @return this read
+		 */
+		public Forms readingTOrNil(Predicate<String> clTOrNil) {
+			this.reader.clTOrNil = clTOrNil;
+			return this;
+		}
+
+		/**
+		 * Reads as a reader macro function's recursive read does inside {@code depth}
+		 * backquote templates (CLHS 2.4.6): a comma outside the read's own templates
+		 * reads as the raw marker the template the macro character stands in processes
+		 * once the function answers, and a reader macro called in turn is handed its own
+		 * depth ({@code .kb/readtables.md}).
+		 * @param depth how many templates enclose the read
+		 * @return this read
+		 */
+		public Forms withinTemplates(int depth) {
+			this.lexer.withinTemplates(depth);
+			this.reader.templateDepth = depth;
+			return this;
+		}
+
+		/**
+		 * Reads the character the scan stands at by the standard function of {@code as}
+		 * whatever the readtable gives it: a call of that function, which must not
+		 * dispatch back to a reader macro function the readtable installed under the
+		 * character. The datum's elements, and every datum after it, read with the
+		 * readtable ({@code .kb/readtables.md}).
+		 * @param as the standard macro character
+		 * @return this read
+		 */
+		public Forms readingFirstAs(int as) {
+			this.lexer.readingFirstAs(as);
+			return this;
+		}
+
+		/**
+		 * Reads the next top-level datum.
+		 * @param syntax the readtable to read it with, or {@code null} for the standard
+		 * syntax
+		 * @return the datum, or {@code null} at the end of the input
+		 * @throws LispReadException when the datum does not read
+		 */
+		public @Nullable LispVal next(@Nullable ReadSyntax syntax) {
+			this.lexer.setSyntax(syntax);
+			this.buffer.clear();
+			if (this.lexer.tokenizeNextDatum(this.buffer, -1) != LispLexer.Next.DATUM) {
+				return null;
+			}
+			return readBuffered();
+		}
+
+		/**
+		 * Widens the features the guards of the data still to read test: what the forms
+		 * already read pushed when they ran ({@code .kb/reader-features.md}).
+		 * @param pushed the feature names, without the leading colon
+		 */
+		public void widenFeatures(List<String> pushed) {
+			this.lexer.widenFeatures(pushed);
+		}
+
+		/**
+		 * The features the guards of the data still to read test: the source's, widened
+		 * by what it announces and by what the forms already read pushed.
+		 * @return the features
+		 */
+		public Features features() {
+			return this.lexer.features();
+		}
+
+		/**
+		 * Reads datums up to {@code delimiter}, which is consumed -- the body of
+		 * {@code read-delimited-list}.
+		 * @param syntax the readtable to read with
+		 * @param delimiter the character ending the list
+		 * @return the datums
+		 * @throws LispReadException when a datum does not read, or the input ends first
+		 */
+		public List<LispVal> nextDelimited(@Nullable ReadSyntax syntax, int delimiter) {
+			this.lexer.setSyntax(syntax);
+			List<LispVal> items = new ArrayList<>();
+			while (true) {
+				this.buffer.clear();
+				switch (this.lexer.tokenizeNextDatum(this.buffer, delimiter)) {
+					case STOPPED -> {
+						this.lexer.seek(this.lexer.position() + Character.charCount(delimiter));
+						return items;
+					}
+					case END -> throw new LispReadException(
+							"Unexpected end of input, expected " + Character.toString(delimiter),
+							SourceLocation.at(this.reader.file, this.lexer.position(), this.reader.input), true);
+					case DATUM -> items.add(readBuffered());
+				}
+			}
+		}
+
+		private LispVal readBuffered() {
+			this.reader.append(this.buffer);
+			// Reader labels are scoped to the outermost read (CLHS 2.4.8.15).
+			this.reader.labels.clear();
+			return this.reader.readExpr();
+		}
+
+		/**
+		 * Where the scan stands: just behind the last datum read.
+		 * @return the UTF-16 offset
+		 */
+		public int position() {
+			return this.lexer.position();
+		}
+
+	}
+
+	/**
+	 * Opens an incremental read of a source ({@link Forms}).
+	 * @param input the source text
+	 * @param features the active reader features
+	 * @param readEvalMarkers whether {@code #.} reads as a {@code (%read-eval datum)}
+	 * marker (else it is a read error)
+	 * @param file the origin file, or {@code null} when unknown
+	 * @param readTimeEval decides a {@code #+#.(...)} guard while reading, or
+	 * {@code null} to defer it to a marker
+	 * @param start the UTF-16 offset the read starts at
+	 * @param recordProvenance whether the conses read are located (a source read) or not
+	 * (a runtime read of data)
+	 * @return the read
+	 */
+	public static Forms forms(String input, Features features, boolean readEvalMarkers, @Nullable String file,
+			@Nullable UnaryOperator<LispVal> readTimeEval, int start, boolean recordProvenance) {
+		LispLexer.ReadEvalMode mode = readEvalMarkers ? LispLexer.ReadEvalMode.MARKER : LispLexer.ReadEvalMode.ERROR;
+		Features effective = start == 0 ? FeaturePushes.widen(input, features, mode, file) : features;
+		LispLexer lexer = new LispLexer(input, effective, mode, file, readTimeEval);
+		lexer.seek(start);
+		return new Forms(lexer, new LispReader(List.of(), effective, input, file, recordProvenance));
+	}
+
+	/**
+	 * Reads one datum and, when this read records provenance, records the cons it
+	 * produced against the offset the datum STARTS at: in the compile path's
+	 * {@link #unit} table, or -- for the interpreter's {@link #runtimeFile} -- by
+	 * answering a {@link LocatedCons} copy of the outermost cell in its place. Only the
+	 * outermost cons of a datum is recorded here -- every nested one is produced by its
+	 * own {@code readExpr} call, so a list's elements each get their own position while
+	 * the cells that merely chain them share their element's line, which is where an
+	 * error about that element points anyway.
+	 * @return the datum
+	 */
+	private LispVal readExpr() {
+		if (this.unit == null && this.runtimeFile == null) {
+			return readDatum();
+		}
+		int start = this.pos;
+		LispVal datum = readDatum();
+		if (datum instanceof LispCons cons) {
+			// A datum that returns has consumed at least one token, so `start` indexes a
+			// real one; the end-of-input fallback only exists so a future caller cannot
+			// turn a diagnostic into an AIOOBE.
+			int offset = start < this.tokens.size() ? this.offsets[start] : this.input.length();
+			if (this.unit != null) {
+				SourceProvenance.record(cons, this.unit, offset);
+			}
+			else if (!(cons instanceof LocatedCons) && !(this.tokens.get(start) instanceof Token.LabelRef)) {
+				// A #n# reference is a datum read ELSEWHERE (or #n='s placeholder, which
+				// is
+				// patched by identity), and a #n= datum was located by its own inner
+				// read.
+				datum = new LocatedCons(cons.car(), cons.cdr(), java.util.Objects.requireNonNull(this.runtimeFile),
+						lineOf(offset));
+			}
+		}
+		return datum;
+	}
+
+	/**
+	 * The 1-based line an offset is on, through a line-start index built once per read --
+	 * scanning from the start for each datum would make a read quadratic.
+	 */
+	private int lineOf(int offset) {
+		int[] starts = this.lineStarts;
+		if (starts == null) {
+			starts = lineStarts(this.input);
+			this.lineStarts = starts;
+		}
+		int index = java.util.Arrays.binarySearch(starts, offset);
+		return (index >= 0 ? index : -index - 2) + 1;
+	}
+
+	private static int[] lineStarts(String input) {
+		int count = 1;
+		for (int i = 0; i < input.length(); i++) {
+			if (input.charAt(i) == '\n') {
+				count++;
+			}
+		}
+		int[] starts = new int[count];
+		int line = 1;
+		for (int i = 0; i < input.length(); i++) {
+			if (input.charAt(i) == '\n') {
+				starts[line++] = i + 1;
+			}
+		}
+		return starts;
+	}
+
+	private LispVal readDatum() {
+		if (this.pos >= this.tokens.size()) {
+			throw eof("Unexpected end of input");
+		}
+		Token token = this.tokens.get(this.pos);
+		this.pos++;
+		return switch (token) {
+			case Token.NumberToken n -> new LispInteger(n.value());
+			case Token.BigIntegerToken b -> new LispBigInteger(b.value());
+			case Token.RatioToken r -> readRatio(r);
+			case Token.DoubleToken d -> new LispDouble(d.value(), d.doubleSpelled());
+			// A source constant: the same object answers every evaluation of the form,
+			// so an indexed write through it rebinds the place instead of mutating it.
+			case Token.StringToken s -> LispString.literal(s.value());
+			case Token.CharToken ch -> new LispChar(ch.codePoint());
+			case Token.SymbolToken sym -> readSymbol(sym);
+			case Token.LeftParen ignored -> readList();
+			case Token.VectorOpen ignored -> readVector();
+			case Token.BitVectorToken bits -> readBitVector(bits.bits());
+			case Token.ArrayOpen array -> readArray(array.rank());
+			case Token.StructOpen ignored -> readStruct();
+			case Token.PathnameOpen ignored -> readPathname();
+			case Token.FloatArrayOpen open -> readFloatArray(open.width());
+			case Token.IntVectorOpen open -> readIntVector(open.width());
+			case Token.Quote ignored -> readQuote();
+			case Token.FunctionQuote ignored -> readFunctionQuote();
+			case Token.Backquote ignored -> readBackquote();
+			case Token.Unquote ignored -> readOuterComma(BQ_COMMA, "Comma is illegal outside of backquote");
+			case Token.UnquoteSplicing ignored -> readOuterComma(BQ_COMMA_AT, ",@ is illegal outside of backquote");
+			case Token.RightParen ignored -> throw errAtToken(this.pos - 1, "Unexpected ')'");
+			case Token.Dot ignored -> throw errAtToken(this.pos - 1, "Unexpected '.'");
+			case Token.Eof ignored -> throw eof("Unexpected end of input");
+			case Token.SharpL sharp -> readSharpL(sharp.nArgs());
+			case Token.SharpC ignored -> readSharpC();
+			case Token.LabelDef def -> {
+				// #n=: the label has to be visible to a #n# INSIDE its own datum -- that
+				// is the whole point of the syntax (CLHS 2.4.8.3) -- so a placeholder
+				// cell stands for the label while the datum is read and every reference
+				// to it is patched to the finished object afterwards. The placeholder is
+				// compared by IDENTITY, so it can never collide with a datum of its own.
+				LispCons placeholder = new LispCons(LispNil.INSTANCE, LispNil.INSTANCE);
+				this.labels.put(def.label(), placeholder);
+				LispVal datum = readExpr();
+				if (datum == placeholder) {
+					throw err("#" + def.label() + "= labels nothing but its own reference");
+				}
+				this.labels.put(def.label(), datum);
+				patchLabel(datum, placeholder, datum,
+						java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>()));
+				yield datum;
+			}
+			case Token.LabelRef ref -> {
+				LispVal datum = this.labels.get(ref.label());
+				if (datum == null) {
+					throw err("#" + ref.label() + "# references an undefined reader label");
+				}
+				yield datum;
+			}
+			// What a reader macro function answered (ReadSyntax) is the datum itself.
+			case Token.Datum datum -> datum.value();
+		};
+	}
+
+	/**
+	 * A comma outside every template this read's own backquotes open. It is legal only in
+	 * a reader macro function's recursive read inside a template
+	 * ({@link #templateDepth}), where it reads as the raw marker that template's
+	 * backquote processes once the function's datum reaches it
+	 * ({@link #readRawTemplate}), its operand read one template further out.
+	 */
+	private LispVal readOuterComma(LispSymbol marker, String illegal) {
+		if (this.templateDepth == 0) {
+			// The token is already consumed: the error names it, not the one after it.
+			throw errAtToken(this.pos - 1, illegal);
+		}
+		this.templateDepth--;
+		try {
+			return list2(marker, readExpr());
+		}
+		finally {
+			this.templateDepth++;
+		}
+	}
+
+	/** The datums recorded by {@code #n=} reader labels, shared across the read. */
+	private final java.util.Map<String, LispVal> labels = new java.util.HashMap<>();
+
+	/**
+	 * Replaces every reference to a {@code #n=} placeholder inside the finished datum
+	 * with the datum itself, which is what closes a circular structure. The walk carries
+	 * an IDENTITY-visited set because the structure becomes circular while it is running
+	 * -- a structural set would not terminate, and would conflate two equal-but-distinct
+	 * cells.
+	 */
+	private void patchLabel(LispVal node, LispCons placeholder, LispVal value, java.util.Set<LispVal> seen) {
+		// The cdr spine is walked in a loop, so a long list costs no stack.
+		LispVal cur = node;
+		while (cur instanceof LispCons cons) {
+			if (!seen.add(cons)) {
+				return;
+			}
+			if (cons.car() == placeholder) {
+				cons.setCar(value);
+			}
+			else {
+				patchLabel(cons.car(), placeholder, value, seen);
+			}
+			if (cons.cdr() == placeholder) {
+				cons.setCdr(value);
+				return;
+			}
+			cur = cons.cdr();
+		}
+		if (cur instanceof am.ik.rontolisp.LispArray array) {
+			if (!seen.add(array)) {
+				return;
+			}
+			LispVal[] data = array.data();
+			for (int i = 0; i < data.length; i++) {
+				if (data[i] == placeholder) {
+					data[i] = value;
+				}
+				else {
+					patchLabel(data[i], placeholder, value, seen);
+				}
+			}
+		}
+		if (cur instanceof am.ik.rontolisp.LispStructLiteral literal && seen.add(literal)) {
+			java.util.List<LispVal> values = literal.slotValues();
+			for (int i = 0; i < values.size(); i++) {
+				if (values.get(i) == placeholder) {
+					literal.setSlotValue(i, value);
+				}
+				else {
+					patchLabel(values.get(i), placeholder, value, seen);
+				}
+			}
+		}
+	}
+
+	private LispVal readRatio(Token.RatioToken ratio) {
+		if (ratio.denominator().signum() == 0) {
+			throw err("Division by zero in ratio literal: " + ratio.numerator() + "/0");
+		}
+		// Normalization may demote to an integer (e.g., "4/2" reads as 2).
+		return LispRatio.valueOf(ratio.numerator(), ratio.denominator());
+	}
+
+	private LispVal readSymbol(Token.SymbolToken sym) {
+		// Every qualified spelling keeps its prefix for PackageResolver, cl:pi included:
+		// stripped here it would read as the current package's own PI where the package
+		// uses no cl. cl:nil/cl:t read as the constants here, whatever package reads
+		// them.
+		String name = unqualifySelfEval(sym.name());
+		boolean nil = "NIL".equals(name);
+		if (nil || "T".equals(name)) {
+			LispVal constant = nil ? LispNil.INSTANCE : LispTrue.INSTANCE;
+			if (!name.equals(sym.name())) {
+				return constant;
+			}
+			// A bare one is the package's: cl's constant wherever the package reads cl's.
+			UnaryOperator<String> home = this.symbolHome;
+			if (home != null) {
+				return homed(home.apply(name));
+			}
+			Predicate<String> clTOrNil = this.clTOrNil;
+			return clTOrNil == null || clTOrNil.test(name) ? constant : new LispSymbol(name);
+		}
+		// The standard constants (pi, the float-range names, the fixnum and array
+		// limits, char-code-limit, internal-time-units-per-second,
+		// lambda-list-keywords) deliberately read as SYMBOLS here -- including under
+		// quote and in binding positions. Each backend binds the name as a global
+		// with its own value (Environment.createGlobal for the interpreter,
+		// LispMacroExpander.injectMvSpillGlobal on the compile paths), so a
+		// reference in code position answers the constant while a quoted reference
+		// stays the symbol. See .kb/read-time-constants.md.
+		// *features* is deliberately NOT substituted here, unlike pi and the limits
+		// above: it is a VARIABLE, not a constant, and CL programs bind it
+		// ((let ((*features* nil)) ...)), push onto it and read it back. Substituting
+		// the quoted list put a cons where a binding needs a name -- which is a compile
+		// crash, not a fidelity gap -- and made every push a no-op. Every backend now
+		// seeds it as an ordinary special holding this feature set instead (the
+		// interpreter in Environment.createGlobal, the compile paths from
+		// LispMacroExpander.injectMvSpillGlobal). See .kb/reader-features.md.
+		LispVal sourceLiteral = sourceLiteral(name);
+		if (sourceLiteral != null) {
+			return sourceLiteral;
+		}
+		UnaryOperator<String> home = this.symbolHome;
+		return home == null ? new LispSymbol(name) : homed(home.apply(name));
+	}
+
+	/**
+	 * The datum a runtime read's token names, from the spelling its home answered: a bare
+	 * {@code T} or {@code NIL} is {@code cl}'s constant ({@code CL-USER::NIL} homes there
+	 * too), any other spelling a symbol.
+	 */
+	private static LispVal homed(String spelling) {
+		return "NIL".equals(spelling) ? LispNil.INSTANCE
+				: "T".equals(spelling) ? LispTrue.INSTANCE : new LispSymbol(spelling);
+	}
+
+	/**
+	 * The member name of a {@code cl:}-qualified {@code nil}/{@code t}, the keyword a
+	 * {@code keyword:}-qualified name is (no package table holds keywords), or the name
+	 * unchanged when it is neither.
+	 * @param name the symbol name as read (upcased, package prefix intact)
+	 * @return the unqualified name, or {@code name}
+	 */
+	private static String unqualifySelfEval(String name) {
+		PackageRegistry.QualifiedName qualified = PackageRegistry.splitQualified(name);
+		if (qualified != null && "KEYWORD".equals(qualified.pkg())) {
+			return ":" + qualified.member();
+		}
+		if (qualified != null && LispNames.CL_PKG.equals(PackageRegistry.canonicalBuiltinName(qualified.pkg()))
+				&& ("NIL".equals(qualified.member()) || "T".equals(qualified.member()))) {
+			return qualified.member();
+		}
+		return name;
+	}
+
+	/**
+	 * The value of {@code rontolisp:current-file} / {@code rontolisp:current-line} at
+	 * THIS symbol's own position, or {@code null} when the name is neither.
+	 *
+	 * <p>
+	 * Substituted here, next to {@code pi} and {@code *features*}, because the reader is
+	 * the only place that knows where each occurrence stands AND is shared by the
+	 * interpreter and all four backends -- so one implementation gives them identical
+	 * values by construction, and no backend sees anything but a string and an integer.
+	 * The consequence is that these are READ-time literals: inside a {@code defmacro}
+	 * template they name the macro's own definition site, not its call site, so a logging
+	 * macro takes them as arguments at the call site (see
+	 * {@code .kb/source-positions.md}).
+	 * @param name the symbol name as read (upcased, package prefix intact)
+	 * @return the literal, or {@code null} when the symbol is not one of the two
+	 */
+	private @Nullable LispVal sourceLiteral(String name) {
+		PackageRegistry.QualifiedName qualified = PackageRegistry.splitQualified(name);
+		// Qualified spellings only (rontolisp: / rontolisp:: / the rl: nickname): the
+		// reader runs before any in-package tracking, so a bare CURRENT-FILE cannot be
+		// known to mean this one -- and a namespaced symbol is the point (no new CL
+		// surface).
+		if (qualified == null
+				|| !LispNames.RONTOLISP_PKG.equals(PackageRegistry.canonicalBuiltinName(qualified.pkg()))) {
+			return null;
+		}
+		if (LispNames.CURRENT_FILE.equals(qualified.member())) {
+			return this.file == null ? LispNil.INSTANCE : new LispString(this.file);
+		}
+		if (LispNames.CURRENT_LINE.equals(qualified.member())) {
+			// pos - 1 is this symbol's own token: readDatum consumed it before
+			// dispatching.
+			return new LispInteger(SourceLocation.at(this.file, this.offsets[this.pos - 1], this.input).line());
+		}
+		return null;
+	}
+
+	private LispVal readList() {
+		// The '(' was consumed by the caller, so it is the token just behind us -- the
+		// position an unclosed list must report.
+		int open = this.pos - 1;
+		if (this.pos >= this.tokens.size()) {
+			throw eofAtToken(open, "Unexpected end of input, expected ')'");
+		}
+		if (this.tokens.get(this.pos) instanceof Token.RightParen) {
+			this.pos++; // consume ')'
+			return LispNil.INSTANCE;
+		}
+		List<LispVal> elements = new ArrayList<>();
+		LispVal tail = LispNil.INSTANCE;
+		while (this.pos < this.tokens.size() && !(this.tokens.get(this.pos) instanceof Token.RightParen)) {
+			if (this.tokens.get(this.pos) instanceof Token.Dot) {
+				// Dotted pair: (a . b) puts b directly in the final cdr.
+				if (elements.isEmpty()) {
+					throw err("Nothing appears before '.' in list");
+				}
+				this.pos++; // consume '.'
+				tail = readExpr();
+				if (this.pos < this.tokens.size() && !(this.tokens.get(this.pos) instanceof Token.RightParen)) {
+					throw err("More than one object follows '.' in list");
+				}
+				break;
+			}
+			elements.add(readExpr());
+		}
+		if (this.pos >= this.tokens.size()) {
+			throw eofAtToken(open, "Unexpected end of input, expected ')'");
+		}
+		this.pos++; // consume ')'
+		// Build cons chain from right to left
+		LispVal result = tail;
+		for (int i = elements.size() - 1; i >= 0; i--) {
+			result = new LispCons(elements.get(i), result);
+		}
+		return result;
+	}
+
+	// Reads a rank-1 vector literal #(e1 e2 ... en) into a self-evaluating LispArray.
+	// The elements are read as ordinary data (not evaluated), matching Common Lisp.
+	private LispVal readVector() {
+		List<LispVal> elements = readGroupedElements();
+		return new LispArray(new int[] { elements.size() }, elements.toArray(new LispVal[0]));
+	}
+
+	// Builds a #*1010 bit-vector literal: the general vector holding the integers 0/1,
+	// stamped with the remembered element type bit (there is no packed bit
+	// representation, so sbit/aref read it uniformly and bit-vector-p/typep recognize
+	// the stamp).
+	private LispVal readBitVector(String bits) {
+		LispVal[] elements = new LispVal[bits.length()];
+		for (int i = 0; i < bits.length(); i++) {
+			elements[i] = new LispInteger(bits.charAt(i) - '0');
+		}
+		return new LispArray(new int[] { elements.length }, elements, -1, false, am.ik.rontolisp.ArrayElementTypes.BIT);
+	}
+
+	// Reads a rank-n array literal #nA((...) ...) into a self-evaluating LispArray.
+	// The contents are nested lists of depth n whose leaves are the elements in
+	// row-major order; every list at the same depth must have the same length
+	// (ragged contents are a read error), matching Common Lisp.
+	//
+	// #0A is the degenerate case: the contents are ONE datum with no surrounding parens
+	// (#0A5, #0ANIL, #0A(1 2) -- a rank-0 array holding the list (1 2)), so the object
+	// is read whole rather than as a group.
+	private LispVal readArray(int rank) {
+		if (rank == 0) {
+			return new LispArray(new int[0], new LispVal[] { readExpr() });
+		}
+		List<LispVal> rows = readGroupedElements();
+		String label = "#" + rank + "A";
+		int[] dims = arrayDimensions(rows, rank, label);
+		List<LispVal> flat = new ArrayList<>();
+		flattenArrayContents(rows, 0, dims, label, flat);
+		return new LispArray(dims, flat.toArray(new LispVal[0]));
+	}
+
+	// Reads a #f(...) / #d(...) packed float-array literal into a self-evaluating packed
+	// array: #f( yields a single-float (LispSingleFloatArray, f32 backing) and #d( a
+	// double-float (LispDoubleFloatArray, f64 backing). Every leaf is coerced to a double
+	// (narrowed to a float for #f), and the rank is inferred from the nesting depth
+	// (numpy
+	// style): #f(1.0 2.0) is rank-1, #f((1.0 2.0) (3.0 4.0)) is rank-2, and so on. Leaves
+	// must be real numbers and every level must be uniformly shaped (ragged or mixed
+	// number/list contents are a read error), reusing the #nA validation. #f = "float"
+	// (single), #d = "double"; free in CL, not Scheme's #f=false.
+	private LispVal readFloatArray(FloatWidth width) {
+		String label = switch (width) {
+			case SINGLE -> "#f";
+			case DOUBLE -> "#d";
+			case BFLOAT16 -> "#bf16";
+		};
+		List<LispVal> rows = readGroupedElements();
+		int rank = inferFloatArrayRank(rows);
+		int[] dims = arrayDimensions(rows, rank, label);
+		List<LispVal> flat = new ArrayList<>();
+		flattenArrayContents(rows, 0, dims, label, flat);
+		return switch (width) {
+			case SINGLE -> {
+				float[] data = new float[flat.size()];
+				for (int i = 0; i < data.length; i++) {
+					data[i] = (float) coerceFloatLeaf(flat.get(i));
+				}
+				yield new LispSingleFloatArray(data, dims);
+			}
+			case DOUBLE -> {
+				double[] data = new double[flat.size()];
+				for (int i = 0; i < data.length; i++) {
+					data[i] = coerceFloatLeaf(flat.get(i));
+				}
+				yield new LispDoubleFloatArray(data, dims);
+			}
+			case BFLOAT16 -> {
+				short[] data = new short[flat.size()];
+				for (int i = 0; i < data.length; i++) {
+					data[i] = (short) BFloat16.bits(coerceFloatLeaf(flat.get(i)));
+				}
+				yield new LispBFloat16Array(data, dims);
+			}
+		};
+	}
+
+	// Reads a #N@(...) packed integer-vector literal (ironclad's array-reader syntax)
+	// into
+	// a self-evaluating rank-1 LispIntVector of the given width. Leaves must be integers;
+	// each is masked to the width (the packed store semantics).
+	private LispVal readIntVector(int width) {
+		List<LispVal> elements = readGroupedElements();
+		long[] data = new long[elements.size()];
+		for (int i = 0; i < data.length; i++) {
+			LispVal leaf = elements.get(i);
+			data[i] = switch (leaf) {
+				case LispInteger n -> n.value();
+				case am.ik.rontolisp.LispBigInteger b -> b.value().longValue();
+				default -> throw err("#" + width + "@: expected an integer element, got " + leaf.print());
+			};
+		}
+		return am.ik.rontolisp.LispIntVector.of(width, data);
+	}
+
+	// Reads a #S(NAME :SLOT value ...) structure literal into a LispStructLiteral
+	// carrier.
+	// Everything the reader can decide on its own is decided here -- the type name must
+	// be
+	// a symbol, a string or a character -- CLHS 2.4.8.13 coerces each slot
+	// designator with (string slot), so "A" and #\A both name slot A -- and the slot
+	// names/values must pair up -- while whether the type exists
+	// and
+	// whether it has those slots needs the ClosRegistry, so it is left to the fold
+	// (StructLiteralFolder), which runs per top-level form on every backend. Contents are
+	// read as DATA: (make-point) inside a #S stays the literal list, matching Common
+	// Lisp.
+	private LispVal readStruct() {
+		List<LispVal> items = readGroupedElements();
+		if (items.isEmpty()) {
+			throw err("#S(): a structure literal needs a type name");
+		}
+		if (!(items.get(0) instanceof LispSymbol nameSym)) {
+			throw err("#S: expected a structure type name, got " + items.get(0).print());
+		}
+		String typeName = nameSym.name();
+		if ((items.size() - 1) % 2 != 0) {
+			throw err("#S(" + typeName + " ...): odd number of slot name/value items in a structure literal");
+		}
+		List<String> slotNames = new ArrayList<>();
+		List<LispVal> slotValues = new ArrayList<>();
+		for (int i = 1; i < items.size(); i += 2) {
+			LispVal designator = items.get(i);
+			String spelled = switch (designator) {
+				case LispSymbol slotSym -> slotSym.name();
+				case LispString slotStr -> slotStr.value();
+				case LispChar slotChar -> new String(Character.toChars(slotChar.codePoint()));
+				default -> throw err("#S(" + typeName + " ...): expected a slot name, got " + designator.print());
+			};
+			slotNames.add(spelled);
+			slotValues.add(items.get(i + 1));
+		}
+		return new am.ik.rontolisp.LispStructLiteral(typeName, slotNames, slotValues);
+	}
+
+	// #P"namestring": the lexer guarantees a string token follows the dispatch, so the
+	// pathname VALUE is built right here -- the layout is the fixed LispLayout.PATHNAME,
+	// no registry is involved, and the instance is self-evaluating like a folded #S.
+	private LispVal readPathname() {
+		if (this.pos >= this.tokens.size() || !(this.tokens.get(this.pos) instanceof Token.StringToken str)) {
+			throw err("#P must be followed by a string namestring");
+		}
+		this.pos++;
+		return new am.ik.rontolisp.LispInstance(am.ik.rontolisp.LispLayout.PATHNAME,
+				new LispVal[] { new LispString(str.value()) });
+	}
+
+	// Reads the elements of a #(...)/#nA(...)/#f(...) literal up to the closing ')'.
+	private List<LispVal> readGroupedElements() {
+		int open = this.pos - 1;
+		List<LispVal> rows = new ArrayList<>();
+		while (this.pos < this.tokens.size() && !(this.tokens.get(this.pos) instanceof Token.RightParen)) {
+			rows.add(readExpr());
+		}
+		if (this.pos >= this.tokens.size()) {
+			throw eofAtToken(open, "Unexpected end of input, expected ')'");
+		}
+		this.pos++; // consume ')'
+		return rows;
+	}
+
+	// The dimension sizes for a rank-n literal, taken from the first-element chain; an
+	// empty level makes every remaining dimension 0 (e.g., #2A() has dimensions (0 0)).
+	private int[] arrayDimensions(List<LispVal> rows, int rank, String label) {
+		int[] dims = new int[rank];
+		dims[0] = rows.size();
+		List<LispVal> level = rows;
+		for (int d = 1; d < rank; d++) {
+			level = level.isEmpty() ? List.of() : arrayLevelContents(level.get(0), label);
+			dims[d] = level.size();
+		}
+		return dims;
+	}
+
+	// The rank of a #f literal: 1 when the top level holds numbers (leaves), one more per
+	// nested-list level. An empty top level (#f()) is rank-1; an empty nested level caps
+	// the rank there (#f(()) is rank-2 with dimensions (1 0)).
+	private static int inferFloatArrayRank(List<LispVal> rows) {
+		int rank = 1;
+		if (!rows.isEmpty()) {
+			LispVal probe = rows.get(0);
+			while (probe instanceof LispCons || probe instanceof LispNil) {
+				rank++;
+				if (probe instanceof LispCons cons) {
+					probe = cons.car();
+				}
+				else {
+					break; // empty nested level: cannot descend further
+				}
+			}
+		}
+		return rank;
+	}
+
+	// Coerces a #f/#d leaf to a double, or a read error when it is not a real number.
+	private double coerceFloatLeaf(LispVal leaf) {
+		return switch (leaf) {
+			case LispDouble d -> d.value();
+			case LispInteger i -> (double) i.value();
+			case LispBigInteger b -> b.value().doubleValue();
+			case LispRatio r -> r.doubleValue();
+			default -> throw err("packed float array: expected a number, got " + leaf.print());
+		};
+	}
+
+	// Validates one level of #nA/#f contents against the expected dimension and appends
+	// the elements to `out` in row-major order.
+	private void flattenArrayContents(List<LispVal> items, int depth, int[] dims, String label, List<LispVal> out) {
+		if (items.size() != dims[depth]) {
+			throw err(label + ": ragged contents, expected " + dims[depth] + " elements, got " + items.size());
+		}
+		if (depth == dims.length - 1) {
+			out.addAll(items);
+			return;
+		}
+		for (LispVal item : items) {
+			flattenArrayContents(arrayLevelContents(item, label), depth + 1, dims, label, out);
+		}
+	}
+
+	// Converts one nested level of #nA/#f contents (a proper list or nil) to its
+	// elements.
+	private List<LispVal> arrayLevelContents(LispVal level, String label) {
+		if (level instanceof LispNil) {
+			return List.of();
+		}
+		if (!(level instanceof LispCons)) {
+			throw err(label + ": expected a nested list, got " + level.print());
+		}
+		List<LispVal> items = new ArrayList<>();
+		LispVal tail = level;
+		while (tail instanceof LispCons cons) {
+			items.add(cons.car());
+			tail = cons.cdr();
+		}
+		if (!(tail instanceof LispNil)) {
+			throw err(label + ": contents must be proper lists");
+		}
+		return items;
+	}
+
+	private LispVal readQuote() {
+		LispVal quoted = readExpr();
+		return new LispCons(ReaderSymbols.QUOTE, new LispCons(quoted, LispNil.INSTANCE));
+	}
+
+	private LispVal readFunctionQuote() {
+		LispVal quoted = readExpr();
+		return new LispCons(ReaderSymbols.FUNCTION, new LispCons(quoted, LispNil.INSTANCE));
+	}
+
+	/**
+	 * {@code #L} / {@code #nL}: iterate's SharpL abbreviation, a lambda whose arguments
+	 * are named {@code !1}, {@code !2}, ... positionally. {@code #L(list !2 !3)} reads as
+	 * {@code #'(lambda (!1 !2 !3) (list !2 !3))} -- the arity is the highest {@code !n}
+	 * the body mentions unless {@code #nL} spells it out, and a body whose first element
+	 * is itself a cons (other than a {@code lambda} call) is a LIST of forms rather than
+	 * one form, matching iterate's own {@code list-of-forms?}.
+	 *
+	 * <p>
+	 * Native here for the reason {@code #N@(} is: a user dispatch macro cannot extend the
+	 * Java-side reader, so {@code set-dispatch-macro-character} is an accepted no-op and
+	 * iterate's own {@code sharpL-reader} never runs ({@code .kb/reader-features.md}).
+	 * Upstream binds gensyms and redirects the {@code !n} symbols onto them with
+	 * {@code symbol-macrolet}, purely so a macroexpansion inside the body cannot capture
+	 * them; naming the parameters {@code !n} directly is the same lambda, and is what
+	 * iterate's own documentation gives as the equivalence. The {@code (declare (ignore
+	 * ...))} upstream emits for the unmentioned arguments is dropped: it exists to
+	 * suppress a style warning no rontolisp backend emits.
+	 * @param declared the arity of {@code #nL}, or -1 for a bare {@code #L}
+	 * @return the {@code (function (lambda ...))} form
+	 */
+	private LispVal readSharpL(int declared) {
+		return sharpLForm(readExpr(), declared);
+	}
+
+	/**
+	 * {@code #C(real imag)}: a complex literal holding exactly two real numbers -- read
+	 * as data, like every other literal here (the opening parenthesis belongs to the
+	 * dispatch, as with {@code #S(}, so the contents are read grouped up to the closing
+	 * one). The parts fold through the canonicalizing factory, so {@code #C(1 0)} reads
+	 * as the integer {@code 1} and {@code #C(2.0 0)} as the float-parted complex;
+	 * anything else (a missing or extra part, a non-real part such as a nested
+	 * {@code #C}) is a read error, like SBCL.
+	 * @return the canonical complex (or demoted real) value
+	 */
+	private LispVal readSharpC() {
+		List<LispVal> parts = readGroupedElements();
+		if (parts.size() != 2) {
+			throw err("#C must hold exactly two real numbers, got " + parts.size());
+		}
+		if (!LispComplex.isRealPart(parts.get(0)) || !LispComplex.isRealPart(parts.get(1))) {
+			throw err("#C parts must be real numbers, got " + parts.get(0).print() + " " + parts.get(1).print());
+		}
+		return LispComplex.valueOf(parts.get(0), parts.get(1));
+	}
+
+	/**
+	 * The {@code #L} lowering itself, over a datum already read: answers
+	 * {@code (function (lambda (!1 ... !n) . body))}.
+	 * @param datum the datum that followed the {@code #L}
+	 * @param declared the arity of {@code #nL}, or -1 for a bare {@code #L}
+	 * @return the {@code (function (lambda ...))} form
+	 */
+	private LispVal sharpLForm(LispVal datum, int declared) {
+		java.util.TreeSet<Integer> mentioned = new java.util.TreeSet<>();
+		collectBangVars(datum, mentioned);
+		LispVal params = sharpLParams(sharpLArity(declared, mentioned));
+		LispVal body = isListOfForms(datum) ? datum : new LispCons(datum, LispNil.INSTANCE);
+		LispVal lambda = new LispCons(ReaderSymbols.LAMBDA, new LispCons(params, body));
+		return list2(ReaderSymbols.FUNCTION, lambda);
+	}
+
+	/**
+	 * {@code #L} inside a backquote template. The body may itself contain unquotes
+	 * (iterate's
+	 * {@code `(subst (expr var) (delete-if #L(member !1 var :test ,test) ...))} is the
+	 * shape), so the lambda cannot be built as a datum here: the body becomes ordinary
+	 * template construction code and the lambda is assembled around it at run time. The
+	 * arity still comes from a raw pre-read of the same datum, where an unquote is a
+	 * marker cons rather than a hole.
+	 * @param declared the arity of {@code #nL}, or -1 for a bare {@code #L}
+	 * @return construction code yielding the {@code (function (lambda ...))} form
+	 */
+	private LispVal readSharpLTemplate(int declared) {
+		int save = this.pos;
+		boolean sawNested = this.rawNeedsFullProcessing;
+		LispVal raw = readRawTemplate();
+		this.rawNeedsFullProcessing = sawNested;
+		this.pos = save;
+		TemplateElement body = readTemplateElement();
+		if (body.splicing()) {
+			throw err(",@ cannot be the body of #L in a backquote template");
+		}
+		java.util.TreeSet<Integer> mentioned = new java.util.TreeSet<>();
+		collectBangVars(raw, mentioned);
+		LispVal params = list2(ReaderSymbols.QUOTE, sharpLParams(sharpLArity(declared, mentioned)));
+		LispVal lambdaHead = list2(ReaderSymbols.QUOTE, ReaderSymbols.LAMBDA);
+		// A body that is a LIST of forms splices into the lambda (list*), a single form
+		// becomes its one body form (list).
+		LispVal lambda = new LispCons((isListOfForms(raw) ? ReaderSymbols.LIST_STAR : ReaderSymbols.LIST),
+				listOf3(lambdaHead, params, body.form()));
+		return listOf3(ReaderSymbols.LIST, list2(ReaderSymbols.QUOTE, ReaderSymbols.FUNCTION), lambda);
+	}
+
+	/**
+	 * The widest {@code !n} a {@code #L} body may mention. Well past any real use (CL's
+	 * own {@code lambda-parameters-limit} floor is 50); the point is that a symbol like
+	 * {@code !999999999} is a NAME, not a millionth argument.
+	 */
+	private static final int SHARP_L_MAX_ARITY = 4096;
+
+	/**
+	 * The arity of a {@code #L}: the count {@code #nL} spells out, or the highest
+	 * {@code !n} the body mentions. A spelled-out count below that (or above the cap) is
+	 * a read error, as it is upstream.
+	 * @param declared the arity of {@code #nL}, or -1 for a bare {@code #L}
+	 * @param mentioned the {@code !n} numbers the body mentions
+	 * @return the lambda list length
+	 */
+	private int sharpLArity(int declared, java.util.SortedSet<Integer> mentioned) {
+		int highest = mentioned.isEmpty() ? 0 : mentioned.last();
+		if (declared >= 0 && declared < highest) {
+			throw err("#" + declared + "L specifies too few arguments (the body mentions !" + highest + ")");
+		}
+		if (declared > SHARP_L_MAX_ARITY) {
+			throw err("#" + declared + "L specifies more than " + SHARP_L_MAX_ARITY + " arguments");
+		}
+		return declared >= 0 ? declared : highest;
+	}
+
+	/** The {@code (!1 !2 ... !n)} lambda list of a {@code #L} of the given arity. */
+	private static LispVal sharpLParams(int arity) {
+		LispVal params = LispNil.INSTANCE;
+		for (int i = arity; i >= 1; i--) {
+			params = new LispCons(new LispSymbol("!" + i), params);
+		}
+		return params;
+	}
+
+	/**
+	 * iterate's {@code list-of-forms?}: a cons of conses, but not a {@code lambda} call.
+	 */
+	private static boolean isListOfForms(LispVal form) {
+		return form instanceof LispCons cons && cons.car() instanceof LispCons head
+				&& !(head.car() instanceof LispSymbol sym
+						&& LispNames.LAMBDA.equals(LispSymbol.memberName(sym.name())));
+	}
+
+	/** Records every {@code !n} argument symbol reachable in a {@code #L} body. */
+	private static void collectBangVars(LispVal form, java.util.Set<Integer> into) {
+		while (form instanceof LispCons cons) {
+			collectBangVars(cons.car(), into);
+			form = cons.cdr();
+		}
+		if (form instanceof LispSymbol symbol) {
+			String name = LispSymbol.memberName(symbol.name());
+			if (name.length() > 1 && name.charAt(0) == '!') {
+				int n = 0;
+				for (int i = 1; i < name.length(); i++) {
+					char c = name.charAt(i);
+					// Not an argument at all: any non-digit (`!foo`), or a number wider
+					// than a lambda list could hold -- stopping there also keeps the
+					// accumulation from overflowing into a bogus arity.
+					if (c < '0' || c > '9' || n > SHARP_L_MAX_ARITY) {
+						return;
+					}
+					n = n * 10 + (c - '0');
+				}
+				if (n >= 1 && n <= SHARP_L_MAX_ARITY) {
+					into.add(n);
+				}
+			}
+		}
+	}
+
+	// --- Backquote (quasiquote) -------------------------------------------------
+	//
+	// A backquote template is expanded AT READ TIME into ordinary list/append/quote
+	// forms, so the evaluator and both compilers support it with no backend work:
+	// `(a ,b) -> (list (quote a) b)
+	// `(a ,@bs c) -> (append (list (quote a)) bs (list (quote c)))
+	// `,x -> x
+	// A non-nested template uses the optimized single-level expander below
+	// (readTemplateElement/readTemplateList). A template that contains an inner
+	// backquote is routed through the CLtL2/Steele nested-backquote algorithm
+	// (bqCompletelyProcess) which fully expands every level at read time into the
+	// same list/append/cons/quote primitives -- an inner ` increments the
+	// quasiquote level, ,/,@ decrement it, only unquotes that reach level 0 are
+	// evaluated, deeper ones are re-quoted as list-building code (so no runtime
+	// quasiquote marker is left). Because expansion happens entirely in the reader,
+	// the runtime `read` of compiled programs does not understand the backquote
+	// character.
+
+	/** One expanded template element and whether it splices into the enclosing list. */
+	private record TemplateElement(LispVal form, boolean splicing) {
+	}
+
+	/**
+	 * Set by {@link #readRawTemplate} when the template cannot take the single-level
+	 * expander: it nests a backquote, or holds a reader macro function's datum carrying
+	 * one of its commas.
+	 */
+	private boolean rawNeedsFullProcessing;
+
+	private LispVal readBackquote() {
+		// First read the template as a raw marker tree to detect whether it nests an
+		// inner backquote. Non-nested templates keep the optimized single-level
+		// expansion (and its exact output shape); nested ones go through CLtL2. The
+		// flag is the enclosing raw read's again afterwards: a template read whole
+		// inside one (in a vector literal) must not clear what that one saw.
+		int save = this.pos;
+		boolean enclosing = this.rawNeedsFullProcessing;
+		this.rawNeedsFullProcessing = false;
+		try {
+			LispVal raw = readRawTemplate();
+			if (this.rawNeedsFullProcessing) {
+				if (mentions(raw, LispNames.READ_TIME_FEATURE)) {
+					throw err("a #+/#- guard computed by #. is not supported inside a nested backquote template");
+				}
+				return bqCompletelyProcess(raw);
+			}
+			this.pos = save;
+			TemplateElement element = readTemplateElement();
+			if (element.splicing()) {
+				throw err(",@ must appear inside a list in a backquote template");
+			}
+			return element.form();
+		}
+		finally {
+			this.rawNeedsFullProcessing = enclosing;
+		}
+	}
+
+	private TemplateElement readTemplateElement() {
+		if (this.pos >= this.tokens.size()) {
+			throw eof("Unexpected end of input in backquote template");
+		}
+		Token token = this.tokens.get(this.pos);
+		return switch (token) {
+			case Token.Unquote ignored -> {
+				this.pos++;
+				yield new TemplateElement(readExpr(), false);
+			}
+			case Token.UnquoteSplicing ignored -> {
+				this.pos++;
+				yield new TemplateElement(readExpr(), true);
+			}
+			case Token.Backquote ignored -> throw err("Nested backquote is not supported");
+			case Token.LeftParen ignored -> {
+				// A (%read-eval datum) marker (the #. wrapping in marker read mode) must
+				// not be split into template list-construction code: keep it whole as a
+				// call, RENAMED to the %read-eval-template variant -- the load-time
+				// substitution then knows the value is template DATA and wraps it in
+				// quote (a raw cons value in construction-code position would be
+				// evaluated as a call: cl-postgres's `#.*optimize*` inside a declare
+				// template). An unresolved occurrence still evaluates as the identity,
+				// deferring the read-time evaluation to macro-expansion time.
+				if (this.pos + 1 < this.tokens.size() && this.tokens.get(this.pos + 1) instanceof Token.SymbolToken sym
+						&& LispNames.READ_TIME_FEATURE.equals(sym.name())) {
+					yield readTimeFeatureTemplate();
+				}
+				if (this.pos + 1 < this.tokens.size() && this.tokens.get(this.pos + 1) instanceof Token.SymbolToken sym
+						&& LispNames.READ_EVAL.equals(sym.name())) {
+					LispVal marker = readExpr();
+					if (marker instanceof LispCons markerCons) {
+						marker = new LispCons(new LispSymbol(LispNames.READ_EVAL_TEMPLATE), markerCons.cdr());
+					}
+					yield new TemplateElement(marker, false);
+				}
+				this.pos++;
+				yield new TemplateElement(readTemplateList(), false);
+			}
+			case Token.SharpL sharp -> {
+				this.pos++;
+				yield new TemplateElement(readSharpLTemplate(sharp.nArgs()), false);
+			}
+			case Token.Quote ignored -> {
+				this.pos++;
+				yield new TemplateElement(readWrappedTemplate(ReaderSymbols.QUOTE), false);
+			}
+			case Token.FunctionQuote ignored -> {
+				this.pos++;
+				yield new TemplateElement(readWrappedTemplate(ReaderSymbols.FUNCTION), false);
+			}
+			// A reader macro's datum is template DATA whatever it is -- a list it
+			// answered is a constant of the template, not code that builds one.
+			case Token.Datum datum -> {
+				this.pos++;
+				yield new TemplateElement(datum.value() instanceof LispSymbol || datum.value() instanceof LispCons
+						? new LispCons(ReaderSymbols.QUOTE, new LispCons(datum.value(), LispNil.INSTANCE))
+						: datum.value(), false);
+			}
+			// Any other token is constant template data: read it normally and quote
+			// symbols so they stay data (numbers, strings, chars, t/nil, vectors are
+			// self-evaluating and stay as-is).
+			default -> new TemplateElement(quoteIfSymbol(readExpr()), false);
+		};
+	}
+
+	// 'x inside a template is the two-element template (quote x); #'x is (function x).
+	// A deferred #+#. guard inside a template: (%read-time-feature SIGN SET EXPR [FORM])
+	// becomes the SPLICED element (%read-time-feature-template SIGN SET EXPR SEGMENT),
+	// SEGMENT being the guarded element's own segment code -- (list FORM-CODE), or the
+	// ,@ form itself -- so resolving the marker to SEGMENT or to nil splices the element
+	// in or leaves nothing.
+	private TemplateElement readTimeFeatureTemplate() {
+		int open = this.pos;
+		this.pos += 2; // '(' and the marker symbol
+		LispVal sign = readExpr();
+		LispVal set = readExpr();
+		LispVal expr = readExpr();
+		LispVal segment = LispNil.INSTANCE;
+		if (this.pos < this.tokens.size() && !(this.tokens.get(this.pos) instanceof Token.RightParen)) {
+			TemplateElement guarded = readTemplateElement();
+			segment = guarded.splicing() ? guarded.form() : properList(ReaderSymbols.LIST, List.of(guarded.form()));
+		}
+		if (this.pos >= this.tokens.size()) {
+			throw eofAtToken(open, "Unexpected end of input, expected ')'");
+		}
+		this.pos++; // consume ')'
+		return new TemplateElement(
+				properList(new LispSymbol(LispNames.READ_TIME_FEATURE_TEMPLATE), List.of(sign, set, expr, segment)),
+				true);
+	}
+
+	private static boolean mentions(LispVal form, String name) {
+		LispVal node = form;
+		while (node instanceof LispCons cons) {
+			if (mentions(cons.car(), name)) {
+				return true;
+			}
+			node = cons.cdr();
+		}
+		return node instanceof LispSymbol sym && name.equals(sym.name());
+	}
+
+	private LispVal readWrappedTemplate(LispSymbol operator) {
+		TemplateElement inner = readTemplateElement();
+		LispVal quoteSym = new LispCons(ReaderSymbols.QUOTE, new LispCons(operator, LispNil.INSTANCE));
+		if (inner.splicing()) {
+			// ',@xs is the template (quote ,@xs), i.e. construction code
+			// (cons 'quote xs): with the customary single-element splice the result
+			// reads back as 'x (trivia level0's `(equal ,*what* ',@args)).
+			return new LispCons(ReaderSymbols.CONS,
+					new LispCons(quoteSym, new LispCons(inner.form(), LispNil.INSTANCE)));
+		}
+		return new LispCons(ReaderSymbols.LIST, new LispCons(quoteSym, new LispCons(inner.form(), LispNil.INSTANCE)));
+	}
+
+	private LispVal readTemplateList() {
+		int open = this.pos - 1;
+		List<TemplateElement> elements = new ArrayList<>();
+		TemplateElement tail = null;
+		while (this.pos < this.tokens.size() && !(this.tokens.get(this.pos) instanceof Token.RightParen)) {
+			if (this.tokens.get(this.pos) instanceof Token.Dot) {
+				// Dotted tail: `(a . ,b) lowers to nested cons forms.
+				if (elements.isEmpty()) {
+					throw err("Nothing appears before '.' in backquote template");
+				}
+				this.pos++; // consume '.'
+				tail = readTemplateElement();
+				if (tail.splicing()) {
+					throw err(",@ cannot follow '.' in a backquote template");
+				}
+				if (this.pos < this.tokens.size() && !(this.tokens.get(this.pos) instanceof Token.RightParen)) {
+					throw err("More than one object follows '.' in backquote template");
+				}
+				break;
+			}
+			elements.add(readTemplateElement());
+		}
+		if (this.pos >= this.tokens.size()) {
+			throw eofAtToken(open, "Unexpected end of input, expected ')'");
+		}
+		this.pos++; // consume ')'
+		return buildTemplateList(elements, tail);
+	}
+
+	private static LispVal buildTemplateList(List<TemplateElement> elements, @Nullable TemplateElement tail) {
+		boolean anySplicing = elements.stream().anyMatch(TemplateElement::splicing);
+		if (tail != null && !anySplicing) {
+			// (cons f1 (cons f2 ... tail))
+			LispVal result = tail.form();
+			for (int i = elements.size() - 1; i >= 0; i--) {
+				result = properList(ReaderSymbols.CONS, List.of(elements.get(i).form(), result));
+			}
+			return result;
+		}
+		if (elements.isEmpty()) {
+			return LispNil.INSTANCE;
+		}
+		if (!anySplicing) {
+			// (list f1 ... fn)
+			return properList(ReaderSymbols.LIST, elements.stream().map(TemplateElement::form).toList());
+		}
+		// (append seg1 ... segk [tail]): each splicing element is its own segment, runs
+		// of non-splicing elements collapse into (list f...) segments, and a dotted
+		// tail is the last append argument (CLHS 2.4.6.1: `(x1 ... xn . tail) is
+		// (append [x1] ... [xn] tail) -- trivia level2's
+		// `((,head ,@(mappend #'car pairs) . ,(cdr (last args))))).
+		List<LispVal> segments = new ArrayList<>();
+		List<LispVal> run = new ArrayList<>();
+		for (TemplateElement element : elements) {
+			if (element.splicing()) {
+				if (!run.isEmpty()) {
+					segments.add(properList(ReaderSymbols.LIST, run));
+					run = new ArrayList<>();
+				}
+				segments.add(element.form());
+			}
+			else {
+				run.add(element.form());
+			}
+		}
+		if (!run.isEmpty()) {
+			segments.add(properList(ReaderSymbols.LIST, run));
+		}
+		if (tail != null) {
+			segments.add(tail.form());
+		}
+		return properList(ReaderSymbols.APPEND, segments);
+	}
+
+	private static LispVal properList(LispVal head, List<LispVal> elements) {
+		LispVal result = LispNil.INSTANCE;
+		for (int i = elements.size() - 1; i >= 0; i--) {
+			result = new LispCons(elements.get(i), result);
+		}
+		return new LispCons(head, result);
+	}
+
+	private static LispVal quoteIfSymbol(LispVal value) {
+		if (value instanceof LispSymbol) {
+			return new LispCons(ReaderSymbols.QUOTE, new LispCons(value, LispNil.INSTANCE));
+		}
+		return value;
+	}
+
+	// --- Nested backquote: CLtL2/Steele algorithm -------------------------------
+	//
+	// A faithful port of the public-domain backquote implementation from CLtL2
+	// Appendix C (Guy L. Steele Jr.). The template is first read into a raw marker
+	// tree (readRawTemplate), then bqCompletelyProcess lowers it to list/append/
+	// cons/list*/quote forms. Nested backquotes and multiple comma levels are
+	// handled by the recursive BACKQUOTE case (double processing): every level is
+	// expanded at read time, so nothing survives to run time.
+	//
+	// The tokens below are unique sentinel symbols compared by identity (==), never
+	// by name, so they cannot clash with user symbols of the same spelling.
+
+	private static final LispSymbol BQ_COMMA = new LispSymbol("%bq-comma");
+
+	private static final LispSymbol BQ_COMMA_AT = new LispSymbol("%bq-comma-at");
+
+	private static final LispSymbol BQ_COMMA_DOT = new LispSymbol("%bq-comma-dot");
+
+	private static final LispSymbol BQ_BACKQUOTE = new LispSymbol("%bq-backquote");
+
+	private static final LispSymbol BQ_LIST = new LispSymbol("%bq-list");
+
+	private static final LispSymbol BQ_APPEND = new LispSymbol("%bq-append");
+
+	private static final LispSymbol BQ_LIST_STAR = new LispSymbol("%bq-list*");
+
+	private static final LispSymbol BQ_NCONC = new LispSymbol("%bq-nconc");
+
+	private static final LispSymbol BQ_CLOBBERABLE = new LispSymbol("%bq-clobberable");
+
+	private static final LispSymbol BQ_QUOTE = new LispSymbol("%bq-quote");
+
+	// Reads one datum of a backquote template into the raw marker representation,
+	// preserving `/,/,@ as BACKQUOTE/COMMA/COMMA-AT marker conses so the CLtL2
+	// processor can walk the structure. Sets rawNeedsFullProcessing if it reads an
+	// inner backquote, or a reader macro function's datum holding a comma of this
+	// template (the signal that the optimized path cannot be used).
+	private LispVal readRawTemplate() {
+		if (this.pos >= this.tokens.size()) {
+			throw eof("Unexpected end of input in backquote template");
+		}
+		Token token = this.tokens.get(this.pos);
+		switch (token) {
+			case Token.Backquote ignored -> {
+				this.pos++;
+				this.rawNeedsFullProcessing = true;
+				return list2(BQ_BACKQUOTE, readRawTemplate());
+			}
+			case Token.Unquote ignored -> {
+				this.pos++;
+				return list2(BQ_COMMA, readRawTemplate());
+			}
+			case Token.UnquoteSplicing ignored -> {
+				this.pos++;
+				return list2(BQ_COMMA_AT, readRawTemplate());
+			}
+			case Token.LeftParen ignored -> {
+				this.pos++;
+				return readRawList();
+			}
+			case Token.SharpL sharp -> {
+				this.pos++;
+				return sharpLForm(readRawTemplate(), sharp.nArgs());
+			}
+			case Token.Quote ignored -> {
+				this.pos++;
+				return list2(ReaderSymbols.QUOTE, readRawTemplate());
+			}
+			case Token.FunctionQuote ignored -> {
+				this.pos++;
+				return list2(ReaderSymbols.FUNCTION, readRawTemplate());
+			}
+			// A reader macro function's datum is constant template data, unless its
+			// recursive read met a comma of this template (readOuterComma).
+			case Token.Datum datum -> {
+				this.pos++;
+				this.rawNeedsFullProcessing |= holdsComma(datum.value());
+				return datum.value();
+			}
+			// A labelled datum is template too, a comma in it this template's. Each use
+			// of the label stands for that template: this path expands the datums, where
+			// the single-level path has only the tokens.
+			case Token.LabelDef def -> {
+				this.pos++;
+				this.rawNeedsFullProcessing = true;
+				return readRawLabel(def);
+			}
+			case Token.LabelRef ignored -> {
+				this.rawNeedsFullProcessing = true;
+				return readExpr();
+			}
+			// `#(a ,b) is `,(apply #'vector `(a ,b)) (CLHS 2.4.6.1), which needs the full
+			// processing; a vector holding no comma is constant data like an atom.
+			case Token.VectorOpen ignored when vectorHoldsComma() -> {
+				this.pos++;
+				this.rawNeedsFullProcessing = true;
+				return list2(BQ_COMMA,
+						new LispCons(ReaderSymbols.APPLY, list2(list2(ReaderSymbols.FUNCTION, ReaderSymbols.VECTOR),
+								list2(BQ_BACKQUOTE, readRawList()))));
+			}
+			// Any other token (atoms, vectors, arrays) is constant template data: read it
+			// with the ordinary reader.
+			default -> {
+				return readExpr();
+			}
+		}
+	}
+
+	// The raw twin of readExpr's #n=. A template expands by being walked, so one holding
+	// itself has no expansion: a reference to the label inside its datum is refused.
+	private LispVal readRawLabel(Token.LabelDef def) {
+		LispCons placeholder = new LispCons(LispNil.INSTANCE, LispNil.INSTANCE);
+		this.labels.put(def.label(), placeholder);
+		LispVal datum = readRawTemplate();
+		if (datum == placeholder || holdsDatum(datum, placeholder,
+				java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>()))) {
+			throw err("#" + def.label() + "= closes a circle in a backquote template");
+		}
+		this.labels.put(def.label(), datum);
+		return datum;
+	}
+
+	private static boolean holdsDatum(LispVal node, LispVal wanted, java.util.Set<LispCons> seen) {
+		LispVal rest = node;
+		while (rest instanceof LispCons cons && seen.add(cons)) {
+			if (cons.car() == wanted || cons.cdr() == wanted || holdsDatum(cons.car(), wanted, seen)) {
+				return true;
+			}
+			rest = cons.cdr();
+		}
+		return false;
+	}
+
+	// Whether the vector literal opening at the current token has a comma before its
+	// closing paren. Every token that opens a group brings its own paren except a
+	// plain one and these.
+	private boolean vectorHoldsComma() {
+		int depth = 0;
+		for (int i = this.pos; i < this.tokens.size(); i++) {
+			switch (this.tokens.get(i)) {
+				case Token.Unquote ignored -> {
+					return true;
+				}
+				case Token.UnquoteSplicing ignored -> {
+					return true;
+				}
+				case Token.LeftParen ignored -> depth++;
+				case Token.VectorOpen ignored -> depth++;
+				case Token.StructOpen ignored -> depth++;
+				case Token.SharpC ignored -> depth++;
+				case Token.FloatArrayOpen ignored -> depth++;
+				case Token.IntVectorOpen ignored -> depth++;
+				case Token.RightParen ignored -> {
+					if (--depth == 0) {
+						return false;
+					}
+				}
+				default -> {
+				}
+			}
+		}
+		return false;
+	}
+
+	// Whether a reader macro function's datum holds a raw comma marker: the walk is
+	// guarded against a circular datum.
+	private static boolean holdsComma(LispVal datum) {
+		java.util.Set<LispCons> seen = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+		java.util.ArrayDeque<LispVal> pending = new java.util.ArrayDeque<>();
+		pending.push(datum);
+		while (!pending.isEmpty()) {
+			if (pending.pop() instanceof LispCons cons && seen.add(cons)) {
+				if (cons.car() == BQ_COMMA || cons.car() == BQ_COMMA_AT) {
+					return true;
+				}
+				pending.push(cons.cdr());
+				pending.push(cons.car());
+			}
+		}
+		return false;
+	}
+
+	// Reads the elements of a raw template list, preserving a dotted tail.
+	private LispVal readRawList() {
+		int open = this.pos - 1;
+		List<LispVal> elements = new ArrayList<>();
+		LispVal tail = LispNil.INSTANCE;
+		while (this.pos < this.tokens.size() && !(this.tokens.get(this.pos) instanceof Token.RightParen)) {
+			if (this.tokens.get(this.pos) instanceof Token.Dot) {
+				if (elements.isEmpty()) {
+					throw err("Nothing appears before '.' in backquote template");
+				}
+				this.pos++; // consume '.'
+				tail = readRawTemplate();
+				if (this.pos < this.tokens.size() && !(this.tokens.get(this.pos) instanceof Token.RightParen)) {
+					throw err("More than one object follows '.' in backquote template");
+				}
+				break;
+			}
+			elements.add(readRawTemplate());
+		}
+		if (this.pos >= this.tokens.size()) {
+			throw eofAtToken(open, "Unexpected end of input, expected ')'");
+		}
+		this.pos++; // consume ')'
+		LispVal result = tail;
+		for (int i = elements.size() - 1; i >= 0; i--) {
+			result = new LispCons(elements.get(i), result);
+		}
+		return result;
+	}
+
+	// bq-completely-process: process then simplify then strip sentinel tokens.
+	private LispVal bqCompletelyProcess(LispVal x) {
+		return bqRemoveTokens(bqSimplify(bqProcess(x)));
+	}
+
+	// bq-process: remove one level of backquote, producing code in terms of the
+	// sentinel list/append markers. The BACKQUOTE case recursively completely
+	// processes an inner backquote and then re-processes the result, which is how
+	// a deeper comma level survives one round and is consumed by the next.
+	private LispVal bqProcess(LispVal x) {
+		if (!(x instanceof LispCons)) {
+			return list2(BQ_QUOTE, x);
+		}
+		LispVal head = car(x);
+		if (head == BQ_BACKQUOTE) {
+			return bqProcess(bqCompletelyProcess(cadr(x)));
+		}
+		if (head == BQ_COMMA) {
+			return bqExpandEscaped(cadr(x));
+		}
+		if (head == BQ_COMMA_AT) {
+			throw err(",@ has no enclosing list in a backquote template");
+		}
+		if (head == BQ_COMMA_DOT) {
+			throw err(",. has no enclosing list in a backquote template");
+		}
+		List<LispVal> segments = new ArrayList<>();
+		LispVal p = x;
+		while (true) {
+			if (!(p instanceof LispCons)) {
+				segments.add(list2(BQ_QUOTE, p));
+				return cons(BQ_APPEND, fromList(segments));
+			}
+			LispVal ph = car(p);
+			if (ph == BQ_COMMA) {
+				if (!(cddr(p) instanceof LispNil)) {
+					throw err("Malformed ,");
+				}
+				segments.add(bqExpandEscaped(cadr(p)));
+				return cons(BQ_APPEND, fromList(segments));
+			}
+			if (ph == BQ_COMMA_AT) {
+				throw err("Dotted ,@ in a backquote template");
+			}
+			if (ph == BQ_COMMA_DOT) {
+				throw err("Dotted ,. in a backquote template");
+			}
+			segments.add(bracket(car(p)));
+			p = cdr(p);
+		}
+	}
+
+	// bracket: process one list element into an append segment.
+	private LispVal bracket(LispVal x) {
+		if (!(x instanceof LispCons)) {
+			return list2(BQ_LIST, bqProcess(x));
+		}
+		LispVal head = car(x);
+		if (head == BQ_COMMA) {
+			return list2(BQ_LIST, bqExpandEscaped(cadr(x)));
+		}
+		if (head == BQ_COMMA_AT) {
+			return bqExpandEscaped(cadr(x));
+		}
+		if (head == BQ_COMMA_DOT) {
+			return list2(BQ_CLOBBERABLE, bqExpandEscaped(cadr(x)));
+		}
+		return list2(BQ_LIST, bqProcess(x));
+	}
+
+	// Fully expands any inner backquote found in code that has escaped to level 0
+	// (a comma argument). Unlike CLtL2 -- which leaves an inner backquote as a live
+	// macro call to be expanded later -- our runtime has no backquote, so escaped
+	// inner backquotes are expanded here. Comma markers belonging to an outer level
+	// are preserved for the enclosing bqProcess pass.
+	private LispVal bqExpandEscaped(LispVal x) {
+		return LispTrees.rebuildSpine(x, node -> {
+			if (!(node instanceof LispCons cons)) {
+				return node;
+			}
+			return cons.car() == BQ_BACKQUOTE ? bqCompletelyProcess(cadr(node)) : null;
+		}, this::bqExpandEscaped, (cell, car, cdr) -> new LispCons(car, cdr));
+	}
+
+	private boolean bqSplicingFrob(LispVal x) {
+		return x instanceof LispCons && (car(x) == BQ_COMMA_AT || car(x) == BQ_COMMA_DOT);
+	}
+
+	private boolean bqFrob(LispVal x) {
+		return x instanceof LispCons && (car(x) == BQ_COMMA || car(x) == BQ_COMMA_AT || car(x) == BQ_COMMA_DOT);
+	}
+
+	// bq-simplify: fold nested list/append markers into flatter list/list*/append.
+	private LispVal bqSimplify(LispVal x) {
+		if (!(x instanceof LispCons)) {
+			return x;
+		}
+		LispVal simplified = (car(x) == BQ_QUOTE) ? x : bqMaptreeSimplify(x);
+		if (!(simplified instanceof LispCons) || car(simplified) != BQ_APPEND) {
+			return simplified;
+		}
+		return bqSimplifyArgs(simplified);
+	}
+
+	// maptree of bqSimplify over the arguments of a marker form (car unchanged).
+	private LispVal bqMaptreeSimplify(LispVal x) {
+		return LispTrees.rebuildSpine(x, node -> node instanceof LispCons ? null : bqSimplify(node), this::bqSimplify);
+	}
+
+	private LispVal bqSimplifyArgs(LispVal x) {
+		// Iterate over the reversed argument list, attaching each to the result.
+		List<LispVal> args = new ArrayList<>();
+		LispVal p = cdr(x);
+		while (p instanceof LispCons cons) {
+			args.add(cons.car());
+			p = cons.cdr();
+		}
+		LispVal result = LispNil.INSTANCE;
+		for (int i = args.size() - 1; i >= 0; i--) {
+			LispVal arg = args.get(i);
+			if (!(arg instanceof LispCons)) {
+				result = bqAttachAppend(BQ_APPEND, arg, result);
+			}
+			else if (car(arg) == BQ_LIST && !anySplicingFrob(cdr(arg))) {
+				result = bqAttachConses(cdr(arg), result);
+			}
+			else if (car(arg) == BQ_LIST_STAR && !anySplicingFrob(cdr(arg))) {
+				LispVal butlast = butLast(cdr(arg));
+				LispVal last = lastElem(arg);
+				result = bqAttachConses(butlast, bqAttachAppend(BQ_APPEND, last, result));
+			}
+			else if (car(arg) == BQ_QUOTE && cadr(arg) instanceof LispCons && !bqFrob(cadr(arg))
+					&& cddr(arg) instanceof LispNil) {
+				result = bqAttachConses(list1(list2(BQ_QUOTE, car(cadr(arg)))), result);
+			}
+			else if (car(arg) == BQ_CLOBBERABLE) {
+				result = bqAttachAppend(BQ_NCONC, cadr(arg), result);
+			}
+			else {
+				result = bqAttachAppend(BQ_APPEND, arg, result);
+			}
+		}
+		return result;
+	}
+
+	private boolean anySplicingFrob(LispVal list) {
+		LispVal p = list;
+		while (p instanceof LispCons cons) {
+			if (bqSplicingFrob(cons.car())) {
+				return true;
+			}
+			p = cons.cdr();
+		}
+		return false;
+	}
+
+	private boolean nullOrQuoted(LispVal x) {
+		return x instanceof LispNil || (x instanceof LispCons && car(x) == BQ_QUOTE);
+	}
+
+	private LispVal bqAttachAppend(LispSymbol op, LispVal item, LispVal result) {
+		// The constant fold is an `append`, so the ITEM (a non-final argument) has to be
+		// a PROPER list. It is not when the template had a dotted tail: bq-process emits
+		// (bq-append (bq-list 'p) 'q) for `(p . q), and folding 'q as a list would walk
+		// it to nothing and silently drop the tail. Falling through instead leaves the
+		// quoted tail as the result, which the bq-attach-conses below then conses onto --
+		// where a non-list tail IS legal, because there it is `append`'s LAST argument.
+		if (nullOrQuoted(item) && nullOrQuoted(result) && isProperList(quotedValue(item))) {
+			return list2(BQ_QUOTE, appendLists(quotedValue(item), quotedValue(result)));
+		}
+		if (result instanceof LispNil || isQuoteNil(result)) {
+			return bqSplicingFrob(item) ? list2(op, item) : item;
+		}
+		if (result instanceof LispCons && car(result) == op) {
+			return cons(car(result), cons(item, cdr(result)));
+		}
+		return listOf3(op, item, result);
+	}
+
+	private LispVal bqAttachConses(LispVal items, LispVal result) {
+		if (everyNullOrQuoted(items) && nullOrQuoted(result)) {
+			List<LispVal> vals = new ArrayList<>();
+			LispVal p = items;
+			while (p instanceof LispCons cons) {
+				vals.add(quotedValue(cons.car()));
+				p = cons.cdr();
+			}
+			return list2(BQ_QUOTE, appendLists(fromList(vals), quotedValue(result)));
+		}
+		if (result instanceof LispNil || isQuoteNil(result)) {
+			return cons(BQ_LIST, items);
+		}
+		if (result instanceof LispCons && (car(result) == BQ_LIST || car(result) == BQ_LIST_STAR)) {
+			return cons(car(result), appendLists(items, cdr(result)));
+		}
+		return cons(BQ_LIST_STAR, appendLists(items, list1(result)));
+	}
+
+	// bq-remove-tokens: replace the sentinel markers with the real Lisp operators
+	// (list/append/nconc/list*/quote), turning a 2-argument list* into cons.
+	private LispVal bqRemoveTokens(LispVal x) {
+		if (x == BQ_LIST) {
+			return ReaderSymbols.LIST;
+		}
+		if (x == BQ_APPEND) {
+			return ReaderSymbols.APPEND;
+		}
+		if (x == BQ_NCONC) {
+			return ReaderSymbols.NCONC;
+		}
+		if (x == BQ_LIST_STAR) {
+			return ReaderSymbols.LIST_STAR;
+		}
+		if (x == BQ_QUOTE) {
+			return ReaderSymbols.QUOTE;
+		}
+		if (!(x instanceof LispCons)) {
+			return x;
+		}
+		if (car(x) == BQ_CLOBBERABLE) {
+			return bqRemoveTokens(cadr(x));
+		}
+		if (car(x) == BQ_LIST_STAR && cddr(x) instanceof LispCons && cdr(cddr(x)) instanceof LispNil) {
+			// (list* a b) -> (cons a b)
+			return cons(ReaderSymbols.CONS, bqMaptreeRemove(cdr(x)));
+		}
+		return bqMaptreeRemove(x);
+	}
+
+	private LispVal bqMaptreeRemove(LispVal x) {
+		return LispTrees.rebuildSpine(x, node -> node instanceof LispCons ? null : bqRemoveTokens(node),
+				this::bqRemoveTokens);
+	}
+
+	// --- small cons/list helpers for the CLtL2 port -----------------------------
+
+	private static LispVal car(LispVal x) {
+		return ((LispCons) x).car();
+	}
+
+	private static LispVal cdr(LispVal x) {
+		return ((LispCons) x).cdr();
+	}
+
+	private static LispVal cadr(LispVal x) {
+		return car(cdr(x));
+	}
+
+	private static LispVal cddr(LispVal x) {
+		return cdr(cdr(x));
+	}
+
+	private static LispCons cons(LispVal a, LispVal d) {
+		return new LispCons(a, d);
+	}
+
+	private static LispCons list1(LispVal a) {
+		return new LispCons(a, LispNil.INSTANCE);
+	}
+
+	private static LispCons list2(LispVal a, LispVal b) {
+		return new LispCons(a, new LispCons(b, LispNil.INSTANCE));
+	}
+
+	private static LispCons listOf3(LispVal a, LispVal b, LispVal c) {
+		return new LispCons(a, new LispCons(b, new LispCons(c, LispNil.INSTANCE)));
+	}
+
+	private static LispVal fromList(List<LispVal> elements) {
+		LispVal result = LispNil.INSTANCE;
+		for (int i = elements.size() - 1; i >= 0; i--) {
+			result = new LispCons(elements.get(i), result);
+		}
+		return result;
+	}
+
+	// The value inside a (BQ_QUOTE v) form, or nil for nil.
+	private LispVal quotedValue(LispVal x) {
+		if (x instanceof LispNil) {
+			return LispNil.INSTANCE;
+		}
+		return cadr(x);
+	}
+
+	private boolean isQuoteNil(LispVal x) {
+		return x instanceof LispCons && car(x) == BQ_QUOTE && cadr(x) instanceof LispNil && cddr(x) instanceof LispNil;
+	}
+
+	private boolean everyNullOrQuoted(LispVal list) {
+		LispVal p = list;
+		while (p instanceof LispCons cons) {
+			if (!nullOrQuoted(cons.car())) {
+				return false;
+			}
+			p = cons.cdr();
+		}
+		return true;
+	}
+
+	// True for nil and for a cons chain ending in nil (the shape `append` requires of
+	// every argument but the last).
+	private boolean isProperList(LispVal x) {
+		LispVal p = x;
+		while (p instanceof LispCons cons) {
+			p = cons.cdr();
+		}
+		return p instanceof LispNil;
+	}
+
+	// Appends a proper list to any object: like CL's two-argument append, so a non-list
+	// B yields a DOTTED result (used only on constant fold paths).
+	private LispVal appendLists(LispVal a, LispVal b) {
+		List<LispVal> items = new ArrayList<>();
+		LispVal p = a;
+		while (p instanceof LispCons cons) {
+			items.add(cons.car());
+			p = cons.cdr();
+		}
+		LispVal result = b;
+		for (int i = items.size() - 1; i >= 0; i--) {
+			result = new LispCons(items.get(i), result);
+		}
+		return result;
+	}
+
+	// All but the last element of a proper list.
+	private LispVal butLast(LispVal list) {
+		List<LispVal> items = new ArrayList<>();
+		LispVal p = list;
+		while (p instanceof LispCons cons && cons.cdr() instanceof LispCons) {
+			items.add(cons.car());
+			p = cons.cdr();
+		}
+		return fromList(items);
+	}
+
+	// The last element of a proper (non-empty) list.
+	private LispVal lastElem(LispVal list) {
+		LispVal p = list;
+		while (p instanceof LispCons cons && cons.cdr() instanceof LispCons) {
+			p = cons.cdr();
+		}
+		return car(p);
+	}
+
+}

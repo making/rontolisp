@@ -1,0 +1,1299 @@
+package am.ik.rontolisp.reader;
+
+import java.util.List;
+
+import am.ik.rontolisp.LispArray;
+import am.ik.rontolisp.LispChar;
+import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispDouble;
+import am.ik.rontolisp.LispInstance;
+import am.ik.rontolisp.LispInteger;
+import am.ik.rontolisp.LispLayout;
+import am.ik.rontolisp.LispNil;
+import am.ik.rontolisp.LispString;
+import am.ik.rontolisp.LispStructLiteral;
+import am.ik.rontolisp.LispSymbol;
+import am.ik.rontolisp.LispTrue;
+import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.LocatedCons;
+import org.junit.jupiter.api.Test;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.catchThrowableOfType;
+
+class LispReaderTest {
+
+	@Test
+	void readInteger() {
+		LispVal result = LispReader.readFromString("42");
+		assertThat(result).isEqualTo(new LispInteger(42));
+	}
+
+	@Test
+	void readNegativeInteger() {
+		LispVal result = LispReader.readFromString("-5");
+		assertThat(result).isEqualTo(new LispInteger(-5));
+	}
+
+	@Test
+	void readPathnameLiteralYieldsAPathnameValue() {
+		// #P"..." denotes a pathname VALUE -- an instance carrying its namestring.
+		// The reader builds it directly: the layout is fixed
+		// (LispLayout.PATHNAME), so no registry is needed, and like a folded #S(...)
+		// literal it rides quote and backquote as a self-evaluating value.
+		assertThat(LispReader.readFromString("#P\"data/x.dat\""))
+			.isEqualTo(new LispInstance(LispLayout.PATHNAME, new LispVal[] { new LispString("data/x.dat") }));
+		assertThat(LispReader.readFromString("#p\"/abs/path\"").print()).isEqualTo("#P\"/abs/path\"");
+		assertThat(LispReader.readFromString("'#P\"q\"").print()).isEqualTo("'#P\"q\"");
+	}
+
+	@Test
+	void readPathnameDispatchNotFollowedByAStringStaysASymbol() {
+		// The pre-#P tokenization: only #P" is the dispatch.
+		assertThat(LispReader.readFromString("#PFOO")).isEqualTo(new LispSymbol("#PFOO"));
+	}
+
+	@Test
+	void readPathnameLiteralUnderAFailingFeatureConditionalIsSkippedWhole() {
+		// The #+ skip must consume the dispatch AND its string, or the namestring
+		// would surface as a datum of its own.
+		assertThat(LispReader.readFromString("(list #+rontolisp-no-such-feature #P\"skipped\" 1)").print())
+			.isEqualTo("(LIST 1)");
+	}
+
+	@Test
+	void readSymbol() {
+		LispVal result = LispReader.readFromString("foo");
+		assertThat(result).isEqualTo(new LispSymbol("FOO"));
+	}
+
+	@Test
+	void readConstantNamesAsSymbolsEvenUnderQuote() {
+		// Pi and the limit/float constants used to read as their values
+		// wherever the spelling appeared -- including under quote. They read as
+		// symbols now; each backend binds the global with its own value.
+		assertThat(LispReader.readFromString("pi")).isEqualTo(new LispSymbol("PI"));
+		assertThat(LispReader.readFromString("'pi").print()).isEqualTo("'PI");
+		assertThat(LispReader.readFromString("(car '(pi))").print()).isEqualTo("(CAR '(PI))");
+		assertThat(LispReader.readFromString("most-positive-fixnum")).isEqualTo(new LispSymbol("MOST-POSITIVE-FIXNUM"));
+		assertThat(LispReader.readFromString("'single-float-epsilon").print()).isEqualTo("'SINGLE-FLOAT-EPSILON");
+		assertThat(LispReader.readFromString("'lambda-list-keywords").print()).isEqualTo("'LAMBDA-LIST-KEYWORDS");
+		// A cl:-qualified spelling keeps its prefix for the resolver, which makes it the
+		// standard name whatever the current package uses.
+		assertThat(LispReader.readFromString("cl:pi")).isEqualTo(new LispSymbol("CL:PI"));
+		// nil and t stay self-evaluating.
+		assertThat(LispReader.readFromString("nil")).isEqualTo(LispNil.INSTANCE);
+		assertThat(LispReader.readFromString("t")).isEqualTo(LispTrue.INSTANCE);
+	}
+
+	@Test
+	void readPipeEscapedSymbol() {
+		// CL multiple escape: the pipes are dropped, the case is preserved verbatim.
+		assertThat(LispReader.readFromString("|noChange|")).isEqualTo(new LispSymbol("noChange"));
+	}
+
+	@Test
+	void readPipeEscapedSymbolWithWhitespaceAndTerminatingChars() {
+		assertThat(LispReader.readFromString("|when used|")).isEqualTo(new LispSymbol("when used"));
+		assertThat(LispReader.readFromString("|a(b)'c;d|")).isEqualTo(new LispSymbol("a(b)'c;d"));
+	}
+
+	@Test
+	void readPipeEscapeTogglesMidToken() {
+		assertThat(LispReader.readFromString("foo|bar baz|qux")).isEqualTo(new LispSymbol("FOObar bazQUX"));
+	}
+
+	@Test
+	void readPipeEscapedSymbolInsideAList() {
+		LispVal result = LispReader.readFromString("(quote |when used|)");
+		List<LispVal> list = ((LispCons) result).toList();
+		assertThat(list).hasSize(2);
+		assertThat(list.get(1)).isEqualTo(new LispSymbol("when used"));
+	}
+
+	@Test
+	void readPipeEscapedSymbolWithBackslashEscapeInside() {
+		assertThat(LispReader.readFromString("|a\\|b|")).isEqualTo(new LispSymbol("a|b"));
+	}
+
+	@Test
+	void readUnterminatedPipeEscapeFails() {
+		assertThatThrownBy(() -> LispReader.readFromString("|never closed"))
+			.hasMessageContaining("Unterminated |...| symbol escape");
+	}
+
+	@Test
+	void lexerErrorNamesFileAndLineColumn() {
+		// An unterminated string is a lexer-level error; with a known origin file the
+		// message is prefixed file:line:column and the position is exposed structurally.
+		assertThatThrownBy(
+				() -> LispReader.readAllFromString("(print \"never closed)", Features.INTERPRETER, "lib.lisp"))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("lib.lisp:1:")
+			.hasMessageContaining("Unterminated string literal");
+		LispReadException ex = catchThrowableOfType(
+				() -> LispReader.readAllFromString("(print \"never closed)", Features.INTERPRETER, "lib.lisp"),
+				LispReadException.class);
+		assertThat(ex.location()).isNotNull();
+		assertThat(ex.location().line()).isEqualTo(1);
+		assertThat(ex.location().column()).isGreaterThan(1);
+		assertThat(ex.location().file()).isEqualTo("lib.lisp");
+	}
+
+	@Test
+	void readsTheSemiStandardAndTheUnicodeCharacterNames() {
+		// The short names first: #\Vt is the one every implementation spells for
+		// U+000B, and it is what a portable whitespace list is written with.
+		assertThat(LispReader.readFromString("#\\Vt")).isEqualTo(new LispChar(11));
+		assertThat(LispReader.readFromString("#\\vertical-tab")).isEqualTo(new LispChar(11));
+		assertThat(LispReader.readFromString("#\\Bell")).isEqualTo(new LispChar(7));
+		// Then the long one: a character with no short name is spelled by its UNICODE
+		// NAME, with the spaces written as underscores. The table is the host JDK's and
+		// source is read here on every backend, so a name that reads reads on all four.
+		assertThat(LispReader.readFromString("#\\No-break_space")).isEqualTo(new LispChar(0x00A0));
+		assertThat(LispReader.readFromString("#\\Ideographic_space")).isEqualTo(new LispChar(0x3000));
+		assertThat(LispReader.readFromString("#\\GREEK_SMALL_LETTER_ALPHA")).isEqualTo(new LispChar(0x03B1));
+		// A name that is neither still names itself in the error.
+		assertThatThrownBy(() -> LispReader.readFromString("#\\Nope")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Unknown character name: #\\Nope");
+	}
+
+	@Test
+	void readsASupplementaryPlaneCharacterLiteralAsOneCharacter() {
+		// U+1F600 (GRINNING FACE) is a surrogate PAIR in the UTF-16 source. Scanning
+		// the char right after '#\' one UTF-16 unit at a time reads only the high
+		// surrogate and strands the low surrogate to be lexed as its own, unrelated
+		// token -- the bug this test pins.
+		assertThat(LispReader.readFromString("#\\😀")).isEqualTo(new LispChar(0x1F600));
+	}
+
+	@Test
+	void readerErrorOnALaterLineReportsTheRightLine() {
+		// Line/column are counted by newline, so an error on the second line names
+		// line 2, not a flattened single line.
+		assertThatThrownBy(() -> LispReader.readAllFromString("(foo\n  #\\Nope)", Features.INTERPRETER, "lib.lisp"))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("lib.lisp:2:3: ")
+			.hasMessageContaining("Unknown character name: #\\Nope");
+	}
+
+	@Test
+	void unterminatedConstructsPointAtTheirOpeningDelimiter() {
+		// A construct that only fails once the input runs out (string, block comment,
+		// |...| escape) must report where it OPENED: end-of-file names the last line of a
+		// spliced library, which says nothing about which quote or comment is unbalanced.
+		assertThatThrownBy(() -> LispReader.readAllFromString("(a)\n(print \"never closed)\n(b)\n(c)\n",
+				Features.INTERPRETER, "lib.lisp"))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("lib.lisp:2:8: ")
+			.hasMessageContaining("Unterminated string literal");
+		assertThatThrownBy(
+				() -> LispReader.readAllFromString("(a)\n#| open\n(b)\n(c)\n", Features.INTERPRETER, "lib.lisp"))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("lib.lisp:2:1: ")
+			.hasMessageContaining("Unterminated block comment");
+		assertThatThrownBy(
+				() -> LispReader.readAllFromString("(a)\n(foo |never closed\n(b)\n", Features.INTERPRETER, "lib.lisp"))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("lib.lisp:2:6: ")
+			.hasMessageContaining("Unterminated |...| symbol escape");
+	}
+
+	@Test
+	void anUnclosedListPointsAtItsOpeningParen() {
+		// Same for a list: the reader only notices at end of input, so it reports the '('
+		// that was never closed rather than the far-away last line.
+		assertThatThrownBy(
+				() -> LispReader.readAllFromString("(a)\n(defun f (x)\n  (+ x 1)\n", Features.INTERPRETER, "lib.lisp"))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("lib.lisp:2:1: ")
+			.hasMessageContaining("Unexpected end of input, expected ')'");
+	}
+
+	@Test
+	void aStrayCloseParenReportsItsOwnPosition() {
+		// The token is consumed before the error is built, so the position must name the
+		// ')' itself, not the token after it (or the end of input).
+		assertThatThrownBy(() -> LispReader.readAllFromString("(a) )\n(b)\n", Features.INTERPRETER, "lib.lisp"))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("lib.lisp:1:5: Unexpected ')'");
+	}
+
+	@Test
+	void aPrefixReadAnswersTheFormsBeforeTheFirstError() {
+		// A form-at-a-time consumer evaluates what read before it signals the error.
+		LispReader.ReadPrefix stray = LispReader.readPrefixFromString("(a) (b) )\n(c)\n", Features.INTERPRETER,
+				"lib.lisp");
+		assertThat(stray.forms()).extracting(LispVal::print).containsExactly("(A)", "(B)");
+		assertThat(stray.error()).hasMessage("lib.lisp:1:9: Unexpected ')'");
+		assertThat(java.util.Objects.requireNonNull(stray.error()).reason()).isEqualTo("Unexpected ')'");
+		// A lexical error stops the scan: the form it cuts off is not read, and the
+		// lexer's error is the one reported, not the cut-off form's end of input.
+		LispReader.ReadPrefix comment = LispReader.readPrefixFromString("(a) (b #| x\n", Features.INTERPRETER, null);
+		assertThat(comment.forms()).extracting(LispVal::print).containsExactly("(A)");
+		assertThat(comment.error()).hasMessageContaining("Unterminated block comment");
+		assertThat(java.util.Objects.requireNonNull(comment.error()).isEndOfFile()).isTrue();
+		LispReader.ReadPrefix clean = LispReader.readPrefixFromString("(a) (b)", Features.INTERPRETER, null);
+		assertThat(clean.forms()).hasSize(2);
+		assertThat(clean.error()).isNull();
+	}
+
+	@Test
+	void readNil() {
+		LispVal result = LispReader.readFromString("nil");
+		assertThat(result).isSameAs(LispNil.INSTANCE);
+	}
+
+	@Test
+	void readT() {
+		LispVal result = LispReader.readFromString("t");
+		assertThat(result).isSameAs(LispTrue.INSTANCE);
+	}
+
+	@Test
+	void readSimpleList() {
+		LispVal result = LispReader.readFromString("(+ 1 2)");
+		assertThat(result).isInstanceOf(LispCons.class);
+		LispCons cons = (LispCons) result;
+		assertThat(cons.car()).isEqualTo(new LispSymbol("+"));
+		List<LispVal> list = cons.toList();
+		assertThat(list).hasSize(3);
+		assertThat(list.get(1)).isEqualTo(new LispInteger(1));
+		assertThat(list.get(2)).isEqualTo(new LispInteger(2));
+	}
+
+	@Test
+	void readNestedList() {
+		LispVal result = LispReader.readFromString("(+ (* 2 3) 4)");
+		assertThat(result).isInstanceOf(LispCons.class);
+		LispCons outer = (LispCons) result;
+		assertThat(outer.car()).isEqualTo(new LispSymbol("+"));
+		LispCons innerCdr = (LispCons) outer.cdr();
+		LispVal inner = innerCdr.car();
+		assertThat(inner).isInstanceOf(LispCons.class);
+		LispCons innerCons = (LispCons) inner;
+		assertThat(innerCons.car()).isEqualTo(new LispSymbol("*"));
+	}
+
+	@Test
+	void readQuoteSugar() {
+		LispVal result = LispReader.readFromString("'foo");
+		assertThat(result).isInstanceOf(LispCons.class);
+		LispCons cons = (LispCons) result;
+		assertThat(cons.car()).isEqualTo(new LispSymbol("QUOTE"));
+		LispCons inner = (LispCons) cons.cdr();
+		assertThat(inner.car()).isEqualTo(new LispSymbol("FOO"));
+	}
+
+	@Test
+	void readString() {
+		LispVal result = LispReader.readFromString("\"hello\"");
+		assertThat(result).isEqualTo(new LispString("hello"));
+	}
+
+	@Test
+	void readMultipleExpressions() {
+		List<LispVal> results = LispReader.readAllFromString("(+ 1 2) (* 3 4)");
+		assertThat(results).hasSize(2);
+	}
+
+	@Test
+	void readEmptyList() {
+		LispVal result = LispReader.readFromString("()");
+		assertThat(result).isSameAs(LispNil.INSTANCE);
+	}
+
+	@Test
+	void readThrowsOnUnmatchedParen() {
+		assertThatThrownBy(() -> LispReader.readFromString("(+ 1")).isInstanceOf(LispReadException.class);
+	}
+
+	@Test
+	void readVectorLiteral() {
+		LispVal result = LispReader.readFromString("#(1 2 3)");
+		assertThat(result).isInstanceOf(LispArray.class);
+		LispArray array = (LispArray) result;
+		assertThat(array.dimensions()).containsExactly(3);
+		assertThat(array.print()).isEqualTo("#(1 2 3)");
+	}
+
+	@Test
+	void readEmptyVectorLiteral() {
+		LispVal result = LispReader.readFromString("#()");
+		assertThat(result).isInstanceOf(LispArray.class);
+		assertThat(((LispArray) result).dimensions()).containsExactly(0);
+	}
+
+	@Test
+	void readVectorLiteralWithMixedElements() {
+		LispVal result = LispReader.readFromString("#(a \"b\" 3)");
+		assertThat(result).isInstanceOf(LispArray.class);
+		LispArray array = (LispArray) result;
+		assertThat(array.aref(0)).isEqualTo(new LispSymbol("A"));
+		assertThat(array.aref(1)).isEqualTo(new LispString("b"));
+		assertThat(array.aref(2)).isEqualTo(new LispInteger(3));
+	}
+
+	@Test
+	void readRank2ArrayLiteral() {
+		LispVal result = LispReader.readFromString("#2A((1 2 3) (4 5 6))");
+		assertThat(result).isInstanceOf(LispArray.class);
+		LispArray array = (LispArray) result;
+		assertThat(array.dimensions()).containsExactly(2, 3);
+		assertThat(array.aref(0, 0)).isEqualTo(new LispInteger(1));
+		assertThat(array.aref(1, 2)).isEqualTo(new LispInteger(6));
+		assertThat(array.print()).isEqualTo("#2A((1 2 3) (4 5 6))");
+	}
+
+	@Test
+	void readRank2ArrayLiteralLowercase() {
+		LispVal result = LispReader.readFromString("#2a((1 2) (3 4))");
+		assertThat(((LispArray) result).print()).isEqualTo("#2A((1 2) (3 4))");
+	}
+
+	@Test
+	void readRank1ArrayLiteral() {
+		LispVal result = LispReader.readFromString("#1A(1 2 3)");
+		assertThat(result).isInstanceOf(LispArray.class);
+		LispArray array = (LispArray) result;
+		assertThat(array.dimensions()).containsExactly(3);
+		assertThat(array.print()).isEqualTo("#(1 2 3)");
+	}
+
+	@Test
+	void readRank3ArrayLiteral() {
+		LispVal result = LispReader.readFromString("#3A(((1 2) (3 4)) ((5 6) (7 8)))");
+		assertThat(result).isInstanceOf(LispArray.class);
+		LispArray array = (LispArray) result;
+		assertThat(array.dimensions()).containsExactly(2, 2, 2);
+		assertThat(array.aref(1, 0, 1)).isEqualTo(new LispInteger(6));
+		assertThat(array.print()).isEqualTo("#3A(((1 2) (3 4)) ((5 6) (7 8)))");
+	}
+
+	@Test
+	void readEmptyRank2ArrayLiteral() {
+		LispVal result = LispReader.readFromString("#2A()");
+		assertThat(result).isInstanceOf(LispArray.class);
+		assertThat(((LispArray) result).dimensions()).containsExactly(0, 0);
+	}
+
+	@Test
+	void readRank2ArrayLiteralWithEmptyRows() {
+		LispVal result = LispReader.readFromString("#2A(() ())");
+		assertThat(((LispArray) result).dimensions()).containsExactly(2, 0);
+	}
+
+	@Test
+	void readRank2ArrayLiteralWithMixedElements() {
+		LispVal result = LispReader.readFromString("#2A((a \"b\") (1 2.5))");
+		LispArray array = (LispArray) result;
+		assertThat(array.aref(0, 0)).isEqualTo(new LispSymbol("A"));
+		assertThat(array.aref(0, 1)).isEqualTo(new LispString("b"));
+		assertThat(array.aref(1, 0)).isEqualTo(new LispInteger(1));
+		assertThat(array.aref(1, 1)).isEqualTo(new LispDouble(2.5));
+	}
+
+	@Test
+	void readRaggedArrayLiteralThrows() {
+		assertThatThrownBy(() -> LispReader.readFromString("#2A((1 2) (3))")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("ragged");
+	}
+
+	@Test
+	void readArrayLiteralWithNonListRowThrows() {
+		assertThatThrownBy(() -> LispReader.readFromString("#2A(1 2)")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("nested list");
+	}
+
+	@Test
+	void readRank0ArrayLiteralHoldsOneDatumWithoutParens() {
+		// #0A<datum>: the datum follows whole, so #0A(1) is a rank-0 array holding the
+		// LIST (1) -- not a rank-0 array of the element 1.
+		LispVal held = LispReader.readFromString("#0A(1)");
+		assertThat(held).isInstanceOf(LispArray.class);
+		assertThat(((LispArray) held).dimensions()).isEmpty();
+		assertThat(((LispArray) held).aref().print()).isEqualTo("(1)");
+		assertThat(held.print()).isEqualTo("#0A(1)");
+		assertThat(LispReader.readFromString("#0A5").print()).isEqualTo("#0A5");
+		assertThat(LispReader.readFromString("#0aNIL").print()).isEqualTo("#0ANIL");
+	}
+
+	@Test
+	void readUnterminatedArrayLiteralThrows() {
+		assertThatThrownBy(() -> LispReader.readFromString("#2A((1 2)")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Unexpected end of input");
+	}
+
+	@Test
+	void readDouble() {
+		LispVal result = LispReader.readFromString("3.14");
+		assertThat(result).isEqualTo(new LispDouble(3.14));
+	}
+
+	@Test
+	void readNegativeDouble() {
+		LispVal result = LispReader.readFromString("-0.5");
+		assertThat(result).isEqualTo(new LispDouble(-0.5));
+	}
+
+	@Test
+	void readGroupedInteger() {
+		LispVal result = LispReader.readFromString("1,000");
+		assertThat(result).isEqualTo(new LispInteger(1000));
+	}
+
+	@Test
+	void readMultiGroupedInteger() {
+		LispVal result = LispReader.readFromString("1,234,567");
+		assertThat(result).isEqualTo(new LispInteger(1234567));
+	}
+
+	@Test
+	void readGroupedDouble() {
+		LispVal result = LispReader.readFromString("3,000.50");
+		assertThat(result).isEqualTo(new LispDouble(3000.5));
+	}
+
+	@Test
+	void readFloatWithNoIntegerPart() {
+		// CLHS 2.3.1: a leading decimal point with digits after it is a float.
+		assertThat(LispReader.readFromString(".4")).isEqualTo(new LispDouble(0.4));
+		assertThat(LispReader.readFromString("-.5")).isEqualTo(new LispDouble(-0.5));
+		assertThat(LispReader.readFromString("+.25")).isEqualTo(new LispDouble(0.25));
+		assertThat(LispReader.readFromString(".5e1")).isEqualTo(new LispDouble(5.0));
+	}
+
+	@Test
+	void readTrailingDecimalPointIsADecimalInteger() {
+		// CLHS 2.3.1: "1." is the INTEGER 1 -- the trailing dot is a marker, not a
+		// decimal point, while "1.e5" (an exponent right behind the dot) is a float.
+		assertThat(LispReader.readFromString("1.")).isEqualTo(new LispInteger(1));
+		assertThat(LispReader.readFromString("100.")).isEqualTo(new LispInteger(100));
+		assertThat(LispReader.readFromString("-100.")).isEqualTo(new LispInteger(-100));
+		assertThat(LispReader.readFromString("1.e5")).isEqualTo(new LispDouble(100000.0));
+	}
+
+	@Test
+	void aDotBeforeADigitIsANumberNotADottedPair() {
+		// "(a .5)" reads as (A 0.5); the dotted pair must spell the dot bare.
+		assertThat(LispReader.readFromString("(a .5)").print()).isEqualTo("(A 0.5)");
+		LispVal dotted = LispReader.readFromString("(a . 5)");
+		assertThat(dotted).isInstanceOf(LispCons.class);
+		assertThat(((LispCons) dotted).cdr()).isEqualTo(new LispInteger(5));
+	}
+
+	@Test
+	void aSecondDotFallsBackToASymbol() {
+		// "1..", "1.2.3" and ".4.5" are invalid numbers; the dots join the symbol
+		// text rather than silently splitting the token.
+		assertThat(LispReader.readFromString("1..")).isInstanceOf(LispSymbol.class);
+		assertThat(LispReader.readFromString("1.2.3")).isInstanceOf(LispSymbol.class);
+		assertThat(LispReader.readFromString(".4.5")).isInstanceOf(LispSymbol.class);
+	}
+
+	@Test
+	void aLoneDotStillMeansDottedPair() {
+		// The boundaries the number scan must not steal: the dotted-pair marker and
+		// bare signs stay non-numeric. A token of only dots is NOT a symbol (CLHS
+		// 2.3.1 -- see readDotOnlyTokensAreDotsNotSymbols); it is refused wherever
+		// a datum is expected.
+		LispVal dotted = LispReader.readFromString("(1 . 2)");
+		assertThat(((LispCons) dotted).cdr()).isEqualTo(new LispInteger(2));
+		assertThatThrownBy(() -> LispReader.readFromString("...")).isInstanceOf(LispReadException.class);
+		assertThat(LispReader.readFromString("+")).isInstanceOf(LispSymbol.class);
+		assertThat(LispReader.readFromString("-")).isInstanceOf(LispSymbol.class);
+	}
+
+	// --- Backquote (quasiquote): expanded at read time into list/append/quote ---
+
+	@Test
+	void readBackquoteSymbol() {
+		assertThat(LispReader.readFromString("`x").print()).isEqualTo("'X");
+	}
+
+	@Test
+	void readBackquoteSelfEvaluatingAtom() {
+		assertThat(LispReader.readFromString("`42").print()).isEqualTo("42");
+		assertThat(LispReader.readFromString("`\"s\"").print()).isEqualTo("\"s\"");
+	}
+
+	@Test
+	void readBackquoteUnquoteAtTop() {
+		assertThat(LispReader.readFromString("`,(+ 1 2)").print()).isEqualTo("(+ 1 2)");
+	}
+
+	@Test
+	void readBackquoteList() {
+		assertThat(LispReader.readFromString("`(a ,b 3)").print()).isEqualTo("(LIST 'A B 3)");
+	}
+
+	@Test
+	void readBackquoteSplicing() {
+		assertThat(LispReader.readFromString("`(a ,@bs c)").print()).isEqualTo("(APPEND (LIST 'A) BS (LIST 'C))");
+	}
+
+	@Test
+	void readBackquoteLoneSplicing() {
+		assertThat(LispReader.readFromString("`(,@xs)").print()).isEqualTo("(APPEND XS)");
+	}
+
+	@Test
+	void readBackquoteNestedList() {
+		assertThat(LispReader.readFromString("`(a (b ,c))").print()).isEqualTo("(LIST 'A (LIST 'B C))");
+	}
+
+	@Test
+	void readBackquoteEmptyList() {
+		assertThat(LispReader.readFromString("`()").print()).isEqualTo("NIL");
+	}
+
+	@Test
+	void readBackquoteQuoteInTemplate() {
+		assertThat(LispReader.readFromString("`('a ,b)").print()).isEqualTo("(LIST (LIST 'QUOTE 'A) B)");
+	}
+
+	@Test
+	void readBackquoteSplicingIntoQuote() {
+		// ',@xs is the template (quote ,@xs) = (cons 'quote xs); the single-element
+		// splice reads back as 'x (trivia level0's `(equal ,*what* ',@args)).
+		assertThat(LispReader.readFromString("`(equal ,w ',@args)").print())
+			.isEqualTo("(LIST 'EQUAL W (CONS 'QUOTE ARGS))");
+		assertThat(LispReader.readFromString("`(f #',@fns)").print()).isEqualTo("(LIST 'F (CONS 'FUNCTION FNS))");
+		// The trivia site verbatim: a plain quote wrapping the backquote template.
+		assertThat(LispReader.readFromString("(quote `(equal ,*what* ',@args))").print())
+			.isEqualTo("'(LIST 'EQUAL *WHAT* (CONS 'QUOTE ARGS))");
+	}
+
+	@Test
+	void readBackquoteWithoutWhitespaceAroundUnquote() {
+		// ',' terminates a symbol, so `(a ,b) parses the same without the space.
+		assertThat(LispReader.readFromString("`(a,b)").print()).isEqualTo("(LIST 'A B)");
+	}
+
+	@Test
+	void readCommaOutsideBackquoteFails() {
+		assertThatThrownBy(() -> LispReader.readFromString(",x")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("outside of backquote");
+	}
+
+	@Test
+	void readSplicingAtTemplateTopFails() {
+		assertThatThrownBy(() -> LispReader.readFromString("`,@xs")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("inside a list");
+	}
+
+	// --- Nested backquote: the CLtL2/Steele algorithm fully expands every level ---
+
+	@Test
+	void readNestedBackquoteSymbol() {
+		// ``x -> (list 'quote 'x), folded to (quote (quote x)); evaluating once
+		// yields (quote x) = `x, matching an inner backquote whose comma survives.
+		assertThat(LispReader.readFromString("``x").print()).isEqualTo("''X");
+	}
+
+	@Test
+	void readNestedBackquoteDoubleUnquote() {
+		// ``(,,a): the inner comma survives, the outer one evaluates a. Expanding
+		// once builds (list 'list a) -- code that, evaluated with a, rebuilds `(,a).
+		assertThat(LispReader.readFromString("``(,,a)").print()).isEqualTo("(LIST 'LIST A)");
+	}
+
+	@Test
+	void readNestedBackquoteDoubleUnquoteSplicing() {
+		// ``(,,@lst): the ,@ splices lst at the outer level, each element re-quoted.
+		assertThat(LispReader.readFromString("``(,,@lst)").print()).isEqualTo("(CONS 'LIST LST)");
+	}
+
+	@Test
+	void readNestedBackquoteKeepsDottedPairs() {
+		// A CONSTANT dotted pair in a template that also carries a nested backquote (so
+		// the CLtL2 path runs instead of the optimized single-level one). The dotted
+		// tail used to vanish: bq-attach-append's constant fold appended the tail as if
+		// it were a proper list, and a symbol tail walked to nothing. esrap's
+		// *expression-kinds* is exactly this shape -- (terminal . terminal) entries in a
+		// template whose ,@ splices build inner backquotes -- so every alist lookup
+		// answered nil and no grammar expression was recognized.
+		assertThat(LispReader.readFromString("`((p . q) `(a))").print()).isEqualTo("'((P . Q) '(A))");
+		assertThat(LispReader.readFromString("`(o (p . q) ,@(mapcar (lambda (s) `(,s)) xs))").print())
+			.isEqualTo("(LIST* 'O '(P . Q) (MAPCAR (LAMBDA (S) (LIST S)) XS))");
+		// The same template WITHOUT a nested backquote takes the optimized path and
+		// always got this right -- the two paths must agree.
+		assertThat(LispReader.readFromString("`(o (p . q) ,@(mapcar #'list xs))").print())
+			.isEqualTo("(APPEND (LIST 'O (CONS 'P 'Q)) (MAPCAR #'LIST XS))");
+	}
+
+	@Test
+	void readNestedBackquoteInDataPosition() {
+		// The inner backquote sits in a data position, so only its ,(+ 1 2) that
+		// reaches level 0 would evaluate here; ,(+ 1 2) stays at level 1 and is kept.
+		assertThat(LispReader.readFromString("`(a `(b ,(+ 1 2)))").print()).isEqualTo("'(A (LIST 'B (+ 1 2)))");
+	}
+
+	@Test
+	void readTripleNestedBackquote() {
+		// A third level: only the innermost triple-comma reaches level 0. Peeling
+		// all three levels reproduces `a`, verified against SBCL.
+		assertThat(LispReader.readFromString("```(,,,a)").print()).isEqualTo("(LIST 'LIST ''LIST A)");
+	}
+
+	// --- Dotted pairs: (a . b) reads as a cons with a non-list cdr ---
+
+	@Test
+	void readDottedPair() {
+		LispVal result = LispReader.readFromString("(a . 1)");
+		assertThat(result).isInstanceOf(LispCons.class);
+		LispCons cons = (LispCons) result;
+		assertThat(cons.car()).isEqualTo(new LispSymbol("A"));
+		assertThat(cons.cdr()).isEqualTo(new LispInteger(1));
+		assertThat(result.print()).isEqualTo("(A . 1)");
+	}
+
+	@Test
+	void readDottedListWithMultipleElements() {
+		LispVal result = LispReader.readFromString("(a b . c)");
+		assertThat(result.print()).isEqualTo("(A B . C)");
+	}
+
+	@Test
+	void readDottedNilTailIsProperList() {
+		LispVal result = LispReader.readFromString("(a . nil)");
+		assertThat(result.print()).isEqualTo("(A)");
+	}
+
+	@Test
+	void readQuotedAlist() {
+		LispVal result = LispReader.readFromString("'((a . 1) (b . 2))");
+		assertThat(result.print()).isEqualTo("'((A . 1) (B . 2))");
+	}
+
+	@Test
+	void readNestedDottedPair() {
+		LispVal result = LispReader.readFromString("(a . (b . 1))");
+		assertThat(result.print()).isEqualTo("(A B . 1)");
+	}
+
+	@Test
+	void readDotWithoutCarFails() {
+		assertThatThrownBy(() -> LispReader.readFromString("(. 1)")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("before '.'");
+	}
+
+	@Test
+	void readDotWithMultipleTailsFails() {
+		assertThatThrownBy(() -> LispReader.readFromString("(a . 1 2)")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("follows '.'");
+	}
+
+	@Test
+	void readDotWithoutTailFails() {
+		assertThatThrownBy(() -> LispReader.readFromString("(a .)")).isInstanceOf(LispReadException.class);
+	}
+
+	@Test
+	void readLoneDotFails() {
+		assertThatThrownBy(() -> LispReader.readFromString(".")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Unexpected '.'");
+	}
+
+	// --- Dotted tails in backquote templates: `(a . ,b) lowers to cons chains ---
+
+	@Test
+	void readBackquoteDottedUnquoteTail() {
+		assertThat(LispReader.readFromString("`(a . ,b)").print()).isEqualTo("(CONS 'A B)");
+	}
+
+	@Test
+	void readBackquoteDottedSymbolTail() {
+		assertThat(LispReader.readFromString("`(a . b)").print()).isEqualTo("(CONS 'A 'B)");
+	}
+
+	@Test
+	void readBackquoteDottedTailAfterMultipleElements() {
+		assertThat(LispReader.readFromString("`(a ,b . ,c)").print()).isEqualTo("(CONS 'A (CONS B C))");
+	}
+
+	@Test
+	void readBackquoteDottedPairInsideList() {
+		assertThat(LispReader.readFromString("`((a . ,x) (b . 2))").print())
+			.isEqualTo("(LIST (CONS 'A X) (CONS 'B 2))");
+	}
+
+	@Test
+	void readBackquoteSplicingWithDottedUnquoteTail() {
+		// `(x1 ... xn . tail) with splices is (append [x1] ... [xn] tail): the
+		// dotted tail becomes the last append argument (CLHS 2.4.6.1).
+		assertThat(LispReader.readFromString("`(,@xs . ,b)").print()).isEqualTo("(APPEND XS B)");
+		assertThat(LispReader.readFromString("`(a ,@xs . ,b)").print()).isEqualTo("(APPEND (LIST 'A) XS B)");
+	}
+
+	@Test
+	void readBackquoteSplicingWithDottedConstantTail() {
+		assertThat(LispReader.readFromString("`(,@xs . b)").print()).isEqualTo("(APPEND XS 'B)");
+	}
+
+	@Test
+	void readBackquoteSplicingWithDottedTailTriviaShape() {
+		// trivia level2 impl.lisp:224 verbatim shape:
+		// `((,head ,@(mappend #'car pairs) . ,(cdr (last args))))
+		assertThat(LispReader.readFromString("`((,head ,@(mappend #'car pairs) . ,(cdr (last args))))").print())
+			.isEqualTo("(LIST (APPEND (LIST HEAD) (MAPPEND #'CAR PAIRS) (CDR (LAST ARGS))))");
+	}
+
+	@Test
+	void readBackquoteCommaDotSplicing() {
+		// ",." is ",@" with permission to destroy the spliced list (CLHS 2.4.6), so it
+		// reads to the same append. iterate's expand-iterate is written entirely in it:
+		// `(tagbody (progn ,.init-code) ,.(if used (list step)) ...).
+		assertThat(LispReader.readFromString("`(a ,.bs c)").print()).isEqualTo("(APPEND (LIST 'A) BS (LIST 'C))");
+		assertThat(LispReader.readFromString("`(progn ,.body)").print()).isEqualTo("(APPEND (LIST 'PROGN) BODY)");
+		assertThat(LispReader.readFromString("`(x ,.(if flag (list s)))").print())
+			.isEqualTo("(APPEND (LIST 'X) (IF FLAG (LIST S)))");
+	}
+
+	@Test
+	void readBackquoteCommaDotWithDottedUnquoteTail() {
+		// iterate expand-iterate:610 verbatim: `(let* ,binds ,.decls ,(if p
+		// `(unwind-protect
+		// ,body .,prot) body)) -- ",." beside a dotted ".," tail in one template.
+		assertThat(LispReader.readFromString("`(unwind-protect ,body .,prot)").print())
+			.isEqualTo("(CONS 'UNWIND-PROTECT (CONS BODY PROT))");
+		assertThat(LispReader.readFromString("`(f ,.xs .,tail)").print()).isEqualTo("(APPEND (LIST 'F) XS TAIL)");
+	}
+
+	@Test
+	void readBackquoteSplicingTailAfterDotFails() {
+		assertThatThrownBy(() -> LispReader.readFromString("`(a . ,@xs)")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining(",@");
+	}
+
+	@Test
+	void readSharpL() {
+		// #L is iterate's numbered-argument lambda: the arity is the highest !n the
+		// body mentions, and the body is one form unless its first element is itself a
+		// cons (iterate's list-of-forms?).
+		assertThat(LispReader.readFromString("#L(* !1 !1)").print()).isEqualTo("#'(LAMBDA (!1) (* !1 !1))");
+		assertThat(LispReader.readFromString("#L(list !2 !3)").print()).isEqualTo("#'(LAMBDA (!1 !2 !3) (LIST !2 !3))");
+		assertThat(LispReader.readFromString("#L(f)").print()).isEqualTo("#'(LAMBDA NIL (F))");
+		assertThat(LispReader.readFromString("#L((g !1) (h !1))").print()).isEqualTo("#'(LAMBDA (!1) (G !1) (H !1))");
+		// A lambda call in head position is one form, not a list of forms.
+		assertThat(LispReader.readFromString("#L((lambda (x) x) !1)").print())
+			.isEqualTo("#'(LAMBDA (!1) ((LAMBDA (X) X) !1))");
+	}
+
+	@Test
+	void readSharpC() {
+		// #C(real imag) folds to the canonical value: a rational zero imaginary
+		// part demotes, a float zero stays complex.
+		assertThat(LispReader.readFromString("#C(1 2)").print()).isEqualTo("#C(1 2)");
+		assertThat(LispReader.readFromString("#c(1/2 -1/3)").print()).isEqualTo("#C(1/2 -1/3)");
+		assertThat(LispReader.readFromString("#C(1 0)").print()).isEqualTo("1");
+		assertThat(LispReader.readFromString("#C(2.0 0)").print()).isEqualTo("#C(2.0 0.0)");
+		assertThatThrownBy(() -> LispReader.readFromString("#C(1)")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("exactly two");
+		assertThatThrownBy(() -> LispReader.readFromString("#C(1 2 3)")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("exactly two");
+		assertThatThrownBy(() -> LispReader.readFromString("#C(a b)")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("real numbers");
+		assertThatThrownBy(() -> LispReader.readFromString("#C(#C(1 2) 3)")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("real numbers");
+	}
+
+	@Test
+	void readSharpLWithExplicitArity() {
+		assertThat(LispReader.readFromString("#3L(list !1)").print()).isEqualTo("#'(LAMBDA (!1 !2 !3) (LIST !1))");
+		assertThatThrownBy(() -> LispReader.readFromString("#1L(list !2)")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("too few arguments");
+		assertThatThrownBy(() -> LispReader.readFromString("#5000L(list !1)")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("more than");
+		// !n past the cap is a NAME, not an argument: the lambda list stays empty.
+		assertThat(LispReader.readFromString("#L(list !999999999)").print())
+			.isEqualTo("#'(LAMBDA NIL (LIST !999999999))");
+	}
+
+	@Test
+	void readSharpLInsideBackquoteTemplate() {
+		// iterate's unioning clause: `(... (delete-if #L(member !1 var :test ,test)
+		// ...)).
+		// The body carries an unquote, so the lambda is assembled by construction code
+		// rather than read as a datum -- the arity still comes from the raw body.
+		assertThat(LispReader.readFromString("`(delete-if #L(member !1 xs :test ,test))").print()).isEqualTo(
+				"(LIST 'DELETE-IF " + "(LIST 'FUNCTION (LIST 'LAMBDA '(!1) " + "(LIST 'MEMBER '!1 'XS ':TEST TEST))))");
+	}
+
+	@Test
+	void readBlockComment() {
+		List<LispVal> result = LispReader.readAllFromString("(+ 1 #| skipped |# 2)");
+		assertThat(result).hasSize(1);
+		assertThat(result.get(0).print()).isEqualTo("(+ 1 2)");
+	}
+
+	@Test
+	void readNestedBlockComment() {
+		List<LispVal> result = LispReader.readAllFromString("#| outer #| inner |# still outer |# 42");
+		assertThat(result).containsExactly(new LispInteger(42));
+	}
+
+	@Test
+	void readUnterminatedBlockCommentFails() {
+		assertThatThrownBy(() -> LispReader.readAllFromString("#| never closed")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("block comment");
+	}
+
+	@Test
+	void readFeatureConditionalPositiveMatch() {
+		List<LispVal> result = LispReader.readAllFromString("#+rontolisp (print 1) (print 2)");
+		assertThat(result).hasSize(2);
+		assertThat(result.get(0).print()).isEqualTo("(PRINT 1)");
+	}
+
+	@Test
+	void readFeatureConditionalPositiveMiss() {
+		List<LispVal> result = LispReader.readAllFromString("#+sbcl (print 1) (print 2)");
+		assertThat(result).hasSize(1);
+		assertThat(result.get(0).print()).isEqualTo("(PRINT 2)");
+	}
+
+	@Test
+	void readFeatureConditionalNegative() {
+		List<LispVal> result = LispReader.readAllFromString("#-sbcl (print 1) #-rontolisp (print 2)");
+		assertThat(result).hasSize(1);
+		assertThat(result.get(0).print()).isEqualTo("(PRINT 1)");
+	}
+
+	@Test
+	void readFeatureConditionalKeywordSpelling() {
+		List<LispVal> result = LispReader.readAllFromString("#+:rontolisp 1 #+:sbcl 2");
+		assertThat(result).containsExactly(new LispInteger(1));
+	}
+
+	@Test
+	void readFeatureConditionalPerBackend() {
+		assertThat(LispReader.readAllFromString("#+rontolisp-jvm 1", Features.JVM)).containsExactly(new LispInteger(1));
+		assertThat(LispReader.readAllFromString("#+rontolisp-jvm 1", Features.WASM)).isEmpty();
+		assertThat(LispReader.readAllFromString("#+rontolisp-interpreter 1", Features.INTERPRETER))
+			.containsExactly(new LispInteger(1));
+	}
+
+	@Test
+	void readFeatureConditionalCompoundExpression() {
+		assertThat(LispReader.readAllFromString("#+(or sbcl rontolisp) 1")).containsExactly(new LispInteger(1));
+		assertThat(LispReader.readAllFromString("#+(and rontolisp sbcl) 1")).isEmpty();
+		assertThat(LispReader.readAllFromString("#+(not sbcl) 1")).containsExactly(new LispInteger(1));
+		assertThat(LispReader.readAllFromString("#+(:or :sbcl (:and :rontolisp (:not :abcl))) 1"))
+			.containsExactly(new LispInteger(1));
+	}
+
+	@Test
+	void readFeatureConditionalNilIdiom() {
+		// #+nil is the classic "comment out one form" idiom: nil is never a feature.
+		assertThat(LispReader.readAllFromString("#+nil (broken :form) 42")).containsExactly(new LispInteger(42));
+	}
+
+	@Test
+	void readFeatureConditionalSkipsUnsupportedSyntax() {
+		// The skipped form is not tokenized, so syntax rontolisp does not support
+		// (here read-time eval and a nested conditional) must not break the read.
+		List<LispVal> result = LispReader
+			.readAllFromString("#+sbcl (foo #.(bar) #\\) \"str \\\" )\" #+ccl (baz) `(a ,@b)) 42");
+		assertThat(result).containsExactly(new LispInteger(42));
+	}
+
+	@Test
+	void readFeatureConditionalStacked() {
+		assertThat(LispReader.readAllFromString("#+rontolisp #+sbcl 1 2")).containsExactly(new LispInteger(2));
+		assertThat(LispReader.readAllFromString("#+rontolisp #-sbcl 1 2")).containsExactly(new LispInteger(1),
+				new LispInteger(2));
+	}
+
+	@Test
+	void readFeatureConditionalStackedUnderAFailedGuardIsEvaluated() {
+		// Inside the form a failed guard skips, a nested guard is still evaluated (as
+		// SBCL does): a holding one makes the form behind it the skipped datum, a failing
+		// one yields nothing and the skip goes on.
+		assertThat(LispReader.readAllFromString("#+sbcl #+rontolisp 1 2 3")).containsExactly(new LispInteger(2),
+				new LispInteger(3));
+		assertThat(LispReader.readAllFromString("#+sbcl #-rontolisp 1 2 3")).containsExactly(new LispInteger(3));
+		assertThat(LispReader.readAllFromString("#+sbcl #+sbcl 1 2 3")).containsExactly(new LispInteger(3));
+	}
+
+	@Test
+	void readComputedFeatureGuardDefersOnlyWhereAListElementStands() {
+		// #0A takes the next datum with no parenthesis of its own: an earlier, complete
+		// one leaves a later guard in plain lists, while a guard that is (or sits inside)
+		// its datum ends up in an array no marker walk reaches.
+		String guard = "#+#.(if t '(and) '(or)) 1";
+		assertThat(LispReader.readAllWithReadEvalMarkers("#0A5 (a #0A(1 2) " + guard + ") " + guard, Features.JVM))
+			.hasSize(3);
+		for (String refused : List.of("#0A " + guard, "#0A(a " + guard + ")", "'#0A(a (b " + guard + "))")) {
+			assertThatThrownBy(() -> LispReader.readAllWithReadEvalMarkers(refused, Features.JVM)).as(refused)
+				.isInstanceOf(LispReadException.class)
+				.hasMessageContaining("a #+/#- guard computed by #. is supported only");
+		}
+	}
+
+	@Test
+	void readFeatureConditionalAtEndOfInputFails() {
+		assertThatThrownBy(() -> LispReader.readAllFromString("#+sbcl")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("expected a form to skip");
+		assertThatThrownBy(() -> LispReader.readAllFromString("#+")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("feature expression");
+	}
+
+	@Test
+	void readFeaturesVariable() {
+		// *features* stays a SYMBOL on every target: it is a variable, which a program
+		// binds and pushes onto, and every backend seeds it as an ordinary special. The
+		// compile backends used to have the reader substitute the quoted list here,
+		// which put a cons where a binding needs a name.
+		assertThat(LispReader.readFromString("*features*").print()).isEqualTo("*FEATURES*");
+		assertThat(LispReader.readAllFromString("*features*", Features.JVM).get(0).print()).isEqualTo("*FEATURES*");
+		assertThat(LispReader.readAllFromString("(let ((*features* nil)) *features*)", Features.WASM).get(0).print())
+			.isEqualTo("(LET ((*FEATURES* NIL)) *FEATURES*)");
+	}
+
+	@Test
+	void readOwnFeaturePushIsVisibleToTheSameSourcesConditionals() {
+		// The announcement idiom: push in the header, #+ on it below. Real CL sees it
+		// because load/compile-file go form at a time; here the READER makes the
+		// announcement, so every backend agrees without evaluating anything.
+		String source = """
+				(eval-when (:compile-toplevel :load-toplevel :execute)
+				  (pushnew :announced *features*))
+				#+announced (yes)
+				#-announced (no)
+				""";
+		for (Features features : List.of(Features.INTERPRETER, Features.JVM, Features.WASM)) {
+			List<LispVal> forms = LispReader.readAllFromString(source, features);
+			assertThat(forms).hasSize(2);
+			assertThat(forms.get(1).print()).isEqualTo("(YES)");
+		}
+	}
+
+	@Test
+	void readOwnFeaturePushOnlyCountsALiteralPush() {
+		// A push the program COMPUTES is invisible: deciding it means running the
+		// program to decide how the program is read, which a compile backend cannot do
+		// before the program exists (FeaturePushes).
+		String computed = """
+				(eval-when (:compile-toplevel :load-toplevel :execute)
+				  (pushnew (intern "COMPUTED" :keyword) *features*))
+				#+computed (yes)
+				#-computed (no)
+				""";
+		List<LispVal> computedForms = LispReader.readAllFromString(computed);
+		assertThat(computedForms.get(computedForms.size() - 1).print()).isEqualTo("(NO)");
+		// ... and a push onto something that is not *features* is not an announcement.
+		String elsewhere = "(pushnew :announced *my-list*) #+announced (yes) #-announced (no)";
+		List<LispVal> elsewhereForms = LispReader.readAllFromString(elsewhere);
+		assertThat(elsewhereForms.get(elsewhereForms.size() - 1).print()).isEqualTo("(NO)");
+	}
+
+	@Test
+	void readOwnFeaturePushIsSeenThroughAnEarlierPushesConditional() {
+		// The scan runs to a fixpoint, so a push that only becomes readable once an
+		// earlier push has widened the set lands too.
+		String source = """
+				(pushnew :first *features*)
+				#+first (pushnew :second *features*)
+				#+second (both)
+				#-second (only-first)
+				""";
+		List<LispVal> forms = LispReader.readAllFromString(source);
+		assertThat(forms.get(forms.size() - 1).print()).isEqualTo("(BOTH)");
+	}
+
+	@Test
+	void readReadEvalFails() {
+		assertThatThrownBy(() -> LispReader.readAllFromString("#.(+ 1 2)")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("#.");
+	}
+
+	@Test
+	void readNextFormReadsOneTopLevelDatumAtATimeInTolerantMode() {
+		// The .asd read (AsdfSystems.loadAsd): one datum per step, each step with the
+		// features the caller has by then, so a feature an earlier form pushed decides a
+		// later guard. A readable #. datum is wrapped in a (%read-eval datum) marker for
+		// the consumer to resolve; one that does not parse (an unquote outside a
+		// backquote) becomes (%read-eval-unreadable "RAW TEXT") -- one datum either way,
+		// so it cannot shift the surrounding structure, carrying the text the consumer
+		// needs to decide.
+		String input = "#.*string-file* #.,foo\n#+late (late) 42";
+		LispReader.NextForm first = LispReader.readNextForm(input, 0, Features.INTERPRETER, "lib.asd");
+		assertThat(first.form()).isEqualTo(LispReader.readFromString("(%read-eval *string-file*)"));
+		LispReader.NextForm second = LispReader.readNextForm(input, first.end(), Features.INTERPRETER, "lib.asd");
+		assertThat(second.form()).isEqualTo(LispReader.readFromString("(%read-eval-unreadable \",foo\")"));
+		assertThat(LispReader.readNextForm(input, second.end(), Features.INTERPRETER.with(List.of("late")), "lib.asd")
+			.form()).isEqualTo(LispReader.readFromString("(late)"));
+		LispReader.NextForm dropped = LispReader.readNextForm(input, second.end(), Features.INTERPRETER, "lib.asd");
+		assertThat(dropped.form()).isEqualTo(new LispInteger(42));
+		assertThat(LispReader.readNextForm(input, dropped.end(), Features.INTERPRETER, "lib.asd").form()).isNull();
+		// A read error names its line in the whole file.
+		assertThatThrownBy(() -> LispReader.readNextForm("(a)\n(b))", 7, Features.INTERPRETER, "lib.asd"))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("lib.asd:2:");
+	}
+
+	@Test
+	void readReadEvalSingleDatumWithMarkers() {
+		// The runtime read built-ins' entry point: one datum, marker mode.
+		assertThat(LispReader.readFromStringWithReadEvalMarkers("#.(+ 1 2)", Features.INTERPRETER))
+			.isEqualTo(LispReader.readFromString("(%read-eval (+ 1 2))"));
+	}
+
+	@Test
+	void readUninternedSymbol() {
+		// #:foo reads as a plain symbol whose printed name keeps the #: prefix;
+		// package designators strip it (see PackageResolver/AsdfSystems).
+		LispVal result = LispReader.readFromString("#:foo");
+		assertThat(result).isEqualTo(new LispSymbol("#:FOO"));
+	}
+
+	// --- the reader's upcase premise ---
+
+	private static Features upcase() {
+		return Features.INTERPRETER;
+	}
+
+	@Test
+	void readUpcaseModeUpcasesAllSymbols() {
+		// Unescaped symbols upcase like CL's :upcase readtable case, with no fold: the
+		// standard names, lambda-list markers and the user's own symbols all read
+		// uppercase, so a lexed name is already its canonical spelling.
+		List<LispVal> result = LispReader.readAllFromString("(DEFUN Foo (X &OPTIONAL y) (LIST X y))", upcase());
+		assertThat(result.get(0).print()).isEqualTo("(DEFUN FOO (X &OPTIONAL Y) (LIST X Y))");
+	}
+
+	@Test
+	void readUpcaseModeReadsTAndNil() {
+		List<LispVal> result = LispReader.readAllFromString("(T NIL)", upcase());
+		assertThat(result.get(0))
+			.isEqualTo(new LispCons(LispTrue.INSTANCE, new LispCons(LispNil.INSTANCE, LispNil.INSTANCE)));
+	}
+
+	@Test
+	void readUpcaseModeKeepsEscapedCharactersVerbatim() {
+		// |...| protects case like CL: |mixedCase| stays verbatim, while |CAR| is the
+		// standard CAR (the canonical spelling of the standard symbols is uppercase, so
+		// an escaped uppercase name IS the standard symbol; |car| would be a distinct
+		// lowercase symbol).
+		assertThat(LispReader.readAllFromString("|mixedCase|", upcase()).get(0)).isEqualTo(new LispSymbol("mixedCase"));
+		assertThat(LispReader.readAllFromString("|CAR|", upcase()).get(0)).isEqualTo(new LispSymbol("CAR"));
+	}
+
+	@Test
+	void readUpcaseModeUpcasesBuiltinPackagePrefixesAndDesignators() {
+		// Everything upcases with no fold: a built-in package prefix and its member, a
+		// keyword designator, a data keyword and a user package prefix all keep their
+		// upcased spelling self-consistently (the resolver maps the upcased nickname).
+		assertThat(LispReader.readAllFromString("RL:FETCH", upcase()).get(0)).isEqualTo(new LispSymbol("RL:FETCH"));
+		assertThat(LispReader.readAllFromString(":CL-USER", upcase()).get(0)).isEqualTo(new LispSymbol(":CL-USER"));
+		assertThat(LispReader.readAllFromString(":ELEMENTS", upcase()).get(0)).isEqualTo(new LispSymbol(":ELEMENTS"));
+		assertThat(LispReader.readAllFromString("my-pkg:frob", upcase()).get(0))
+			.isEqualTo(new LispSymbol("MY-PKG:FROB"));
+	}
+
+	// -- source position literals -------------------------
+
+	@Test
+	void currentFileAndCurrentLineReadAsTheirOwnPosition() {
+		List<LispVal> forms = LispReader.readAllFromString("""
+				(print rontolisp:current-file)
+				(print rontolisp:current-line)
+				""", Features.INTERPRETER, "app.lisp");
+		assertThat(forms.get(0)).isEqualTo(list(new LispSymbol("PRINT"), new LispString("app.lisp")));
+		// The line of the SYMBOL, not of the form containing it.
+		assertThat(forms.get(1)).isEqualTo(list(new LispSymbol("PRINT"), new LispInteger(2)));
+	}
+
+	@Test
+	void currentFileIsNilWhenTheReadHasNoOriginFile() {
+		// A REPL line or a runtime read-from-string: there is no file to name, and the
+		// line is still meaningful within the string that was read.
+		List<LispVal> forms = LispReader.readAllFromString("\n(list rontolisp:current-file rontolisp:current-line)",
+				Features.INTERPRETER);
+		assertThat(forms.get(0)).isEqualTo(list(new LispSymbol("LIST"), LispNil.INSTANCE, new LispInteger(2)));
+	}
+
+	@Test
+	void everyQualifiedSpellingOfTheSourceLiteralsIsRecognized() {
+		// rontolisp: / rontolisp:: / the rl: nickname all name the same two literals.
+		assertThat(LispReader
+			.readAllFromString("(rontolisp::current-line rl:current-line)", Features.INTERPRETER, "app.lisp")
+			.get(0)).isEqualTo(list(new LispInteger(1), new LispInteger(1)));
+	}
+
+	@Test
+	void anUnqualifiedCurrentFileStaysAnOrdinarySymbol() {
+		// Reading happens before any in-package directive is interpreted, so a bare name
+		// cannot be known to mean the rontolisp one -- and must not be stolen from a user
+		// who defined their own.
+		assertThat(LispReader.readAllFromString("current-file", Features.INTERPRETER, "app.lisp").get(0))
+			.isEqualTo(new LispSymbol("CURRENT-FILE"));
+		assertThat(LispReader.readAllFromString("other:current-file", Features.INTERPRETER, "app.lisp").get(0))
+			.isEqualTo(new LispSymbol("OTHER:CURRENT-FILE"));
+	}
+
+	@Test
+	void readRadixLiteralsAreRATIONALsAndNotOnlyIntegers() {
+		// CLHS 2.3.2.1 spells #b/#o/#x/#nR over "rational", so a denominator is part of
+		// the syntax and is read in the SAME radix; only the numerator carries a sign.
+		assertThat(LispReader.readFromString("#b010001/100").print()).isEqualTo("17/4");
+		assertThat(LispReader.readFromString("#B-1/10").print()).isEqualTo("-1/2");
+		assertThat(LispReader.readFromString("#b-0/10").print()).isEqualTo("0");
+		assertThat(LispReader.readFromString("#O11/10").print()).isEqualTo("9/8");
+		assertThat(LispReader.readFromString("#x-1/10").print()).isEqualTo("-1/16");
+		// A sign is optional on either side of zero, and an explicit + is a sign too.
+		assertThat(LispReader.readFromString("#b+1011").print()).isEqualTo("11");
+		assertThat(LispReader.readFromString("#x-10").print()).isEqualTo("-16");
+	}
+
+	@Test
+	void readSharpRIsTheRadixSpelledOutAsAnInfixArgument() {
+		// #<n>R is the general form the fixed #b/#o/#x abbreviate; the digits above 9
+		// are letters and the spelling is case-insensitive on both halves.
+		assertThat(LispReader.readFromString("#17r11").print()).isEqualTo("18");
+		assertThat(LispReader.readFromString("#12R414A6B2").print()).isEqualTo("12293990");
+		assertThat(LispReader.readFromString("#12r414a6b2").print()).isEqualTo("12293990");
+		assertThat(LispReader.readFromString("#36r0").print()).isEqualTo("0");
+		assertThat(LispReader.readFromString("#3r10/11").print()).isEqualTo("3/4");
+		assertThat(LispReader.readFromString("#5R-10/11").print()).isEqualTo("-5/6");
+		// A radix outside 2..36 names no digits at all, and a digit outside the radix is
+		// a bad token rather than a symbol behind a number.
+		assertThatThrownBy(() -> LispReader.readFromString("#1r0")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Radix must be between 2 and 36");
+		assertThatThrownBy(() -> LispReader.readFromString("#2r2")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Invalid digits");
+		assertThatThrownBy(() -> LispReader.readFromString("#b1012")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Invalid digits");
+	}
+
+	@Test
+	void readALabelIsAnUnboundedDecimalAndMayCloseACircle() {
+		// CLHS 2.4.8.3 bounds neither the digit count nor the nesting: #n= is in scope
+		// INSIDE its own datum, which is the only way a self-referential structure can
+		// be written at all.
+		LispVal wide = LispReader.readFromString("(#123456789123456789=(17) #123456789123456789#)");
+		assertThat(wide).isInstanceOf(LispCons.class);
+		LispCons wideList = (LispCons) wide;
+		assertThat(wideList.car()).isSameAs(((LispCons) wideList.cdr()).car());
+		LispCons circular = (LispCons) LispReader.readFromString("#1=(A B . #1#)");
+		assertThat(((LispCons) circular.cdr()).cdr()).isSameAs(circular);
+		LispArray vector = (LispArray) LispReader.readFromString("#1=#(A B #1#)");
+		assertThat(vector.data()[2]).isSameAs(vector);
+		LispStructLiteral literal = (LispStructLiteral) LispReader.readFromString("#1=#S(P :X #1# :Y (Z #1#))");
+		assertThat(literal.slotValues().get(0)).isSameAs(literal);
+		assertThat(((LispCons) ((LispCons) literal.slotValues().get(1)).cdr()).car()).isSameAs(literal);
+		// A label that stands for nothing but itself has no datum to record.
+		assertThatThrownBy(() -> LispReader.readFromString("#1=#1#")).isInstanceOf(LispReadException.class);
+	}
+
+	@Test
+	void aNamedFilesDatumsAreLocatedAndAStringsAreNot() {
+		// The interpreter's positions: each datum's OUTERMOST cons read from a named file
+		// is a LocatedCons carrying the line it starts on; its chain cells are not, and a
+		// runtime read of a string (no file) locates nothing.
+		List<LispVal> forms = LispReader.readAllFromString("(defun f (x)\n  (car x))\n\n(f '(1 2))\n",
+				Features.INTERPRETER, "app.lisp");
+		LocatedCons defun = (LocatedCons) forms.get(0);
+		assertThat(defun.file()).isEqualTo("app.lisp");
+		assertThat(defun.line()).isEqualTo(1);
+		LispCons body = (LispCons) ((LispCons) ((LispCons) defun.cdr()).cdr()).cdr();
+		assertThat(body).isNotInstanceOf(LocatedCons.class);
+		assertThat(((LocatedCons) body.car()).line()).isEqualTo(2);
+		assertThat(((LocatedCons) forms.get(1)).line()).isEqualTo(4);
+		assertThat(LispReader.readFromString("(car x)")).isNotInstanceOf(LocatedCons.class);
+	}
+
+	@Test
+	void locatingADatumKeepsEveryLabelReferenceToIt() {
+		// A located datum is a COPY of the cell the list reader built, so a #n# must end
+		// up at the copy: inside its own datum (a circle) and after it (sharing).
+		List<LispVal> forms = LispReader.readAllFromString("(#1=(17) #1#)\n#2=(A B . #2#)\n", Features.INTERPRETER,
+				"labels.lisp");
+		LispCons shared = (LispCons) forms.get(0);
+		assertThat(shared.car()).isInstanceOf(LocatedCons.class).isSameAs(((LispCons) shared.cdr()).car());
+		LispCons circular = (LispCons) forms.get(1);
+		assertThat(circular).isInstanceOf(LocatedCons.class);
+		assertThat(((LispCons) circular.cdr()).cdr()).isSameAs(circular);
+	}
+
+	@Test
+	void readSharpNStarRepeatsTheLastBitToFill() {
+		// CLHS 2.4.8.4: fewer bits than n repeat the LAST bit (#2*1 is 1 1, not 1
+		// 0); #0* is the empty vector.
+		assertThat(LispReader.readFromString("#1*0").print()).isEqualTo("#*0");
+		assertThat(LispReader.readFromString("#2*1").print()).isEqualTo("#*11");
+		assertThat(LispReader.readFromString("#5*010").print()).isEqualTo("#*01000");
+		assertThat(LispReader.readFromString("#7*0101").print()).isEqualTo("#*0101111");
+		assertThat(LispReader.readFromString("#10*01").print()).isEqualTo("#*0111111111");
+		assertThat(LispReader.readFromString("#0*").print()).isEqualTo("#*");
+		// Zero bits with n > 0 has no last bit to repeat, more bits than n do not
+		// fit, and a constituent behind the bits invalidates the whole token --
+		// none of them is a symbol plus a leftover.
+		assertThatThrownBy(() -> LispReader.readFromString("#1* X")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("No bits");
+		assertThatThrownBy(() -> LispReader.readFromString("#2*011")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Too many bits");
+		assertThatThrownBy(() -> LispReader.readFromString("#*012")).isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Invalid bit");
+		for (String bad : new String[] { "#1* X", "#2*011", "#*012" }) {
+			LispReadException ex = catchThrowableOfType(() -> LispReader.readFromString(bad), LispReadException.class);
+			assertThat(ex.isEndOfFile()).isFalse();
+		}
+	}
+
+	@Test
+	void readDotOnlyTokensAreDotsNotSymbols() {
+		// CLHS 2.3.1: a token of only dots is not a symbol -- the reader refuses it
+		// wherever a datum is expected, while dots glued to other characters stay
+		// symbols.
+		for (String bad : new String[] { "..", "...", "(1 ..)", "(1 .. 2)", "#(1 . 2)" }) {
+			LispReadException ex = catchThrowableOfType(() -> LispReader.readFromString(bad), LispReadException.class);
+			assertThat(ex.isEndOfFile()).isFalse();
+		}
+		assertThat(LispReader.readFromString("..a")).isEqualTo(new LispSymbol("..A"));
+	}
+
+	@Test
+	void readUninternedSymbolsMustNotNameAPackage() {
+		// CLHS 2.4.8.5: #:a:b is a read error, while an ESCAPED colon stays a
+		// symbol (#:|a:b| and #:a\:b read).
+		LispReadException ex = catchThrowableOfType(() -> LispReader.readFromString("#:a:b"), LispReadException.class);
+		assertThat(ex.isEndOfFile()).isFalse();
+		assertThat(((LispSymbol) LispReader.readFromString("#:|a:b|")).name()).isEqualTo("#:a:b");
+		assertThat(((LispSymbol) LispReader.readFromString("#:a\\:b")).name()).isEqualTo("#:A:B");
+	}
+
+	@Test
+	void readSharpLessThanIsNotReadable() {
+		// #< starts printed-unreadable syntax; it is never readable (CLHS 2.4.8).
+		LispReadException ex = catchThrowableOfType(() -> LispReader.readFromString("#<"), LispReadException.class);
+		assertThat(ex.isEndOfFile()).isFalse();
+	}
+
+	@Test
+	void readFailuresDistinguishEndOfInputFromBadTokens() {
+		// Input that ran out mid-datum (an unterminated string or list, a prefix
+		// with nothing behind it) is end of file; a bad token is not.
+		for (String eof : new String[] { "\"abc", "(a b", "#(", "#'", "\\", "|", "#\\" }) {
+			LispReadException ex = catchThrowableOfType(() -> LispReader.readAllFromString(eof),
+					LispReadException.class);
+			assertThat(ex.isEndOfFile()).as("eof: %s", eof).isTrue();
+		}
+		for (String bad : new String[] { ".", ")", ",", "1/0", "#:a:b", "#<", "( . 1)", "#C(1)" }) {
+			LispReadException ex = catchThrowableOfType(() -> LispReader.readAllFromString(bad),
+					LispReadException.class);
+			assertThat(ex.isEndOfFile()).as("bad: %s", bad).isFalse();
+		}
+	}
+
+	private static LispVal list(LispVal... items) {
+		LispVal result = LispNil.INSTANCE;
+		for (int i = items.length - 1; i >= 0; i--) {
+			result = new LispCons(items[i], result);
+		}
+		return result;
+	}
+
+}

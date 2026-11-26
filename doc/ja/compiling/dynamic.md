@@ -1,0 +1,35 @@
+# 動的バインディング（遅延束縛）
+
+デフォルトでは、JVM コンパイラと WASM コンパイラはすべての呼び出しおよび変数参照を静的に解決し、コンパイル時に見つからないものはすべて拒否します（`Cannot compile: cube`）。リテラルパスを持つトップレベルの `(load "lib.lisp")` は自動的に処理されます。そのフォームはコンパイル時にプログラムへ展開されるため（[コンパイル時インクルード](#compile-time-include)）、そこで定義される関数はネイティブにコンパイルされ、特別な扱いは不要です。しかし、パスがランタイムに計算される `load` や、別のフォームの内側にネストした `load` はランタイムでのみ実行されます。コンパイラはそれらが何を定義するかを知ることができないため、そうした関数への静的な呼び出しは依然としてコンパイルに失敗します。
+
+`--dynamic` フラグはこれを緩和します。静的に解決できない呼び出しや参照は、失敗する代わりにランタイムの `eval` 環境へ委ねられます（遅延束縛）。これにより、計算されたパスでコードを `load` する、あるいはランタイムでしか関数を定義しないようなプログラムを、インタプリタでテストしたまま、`(cube 3)` を `(eval '(cube 3))` に書き換えることなくコンパイルできます。
+
+```bash
+echo '(defun cube (n) (* n n n))' > lib.lisp
+echo '(load (concatenate (quote string) "li" "b.lisp")) (print (cube 3))' > prog.lisp
+rontolisp prog.lisp -o Prog.class --dynamic   # the computed-path load is invisible to the compiler; (cube 3) resolves at runtime
+rontolisp prog.lisp -o prog.wasm  --dynamic
+```
+
+呼び出し `(f a b)` は `_apply(_eval('(function f), null), (list a b))` にコンパイルされます。演算子はランタイムの関数名前空間に対して解決される一方、引数は通常どおりコンパイルされるため、コンパイル対象の外側の関数のローカル変数は引き続き参照可能です（例えば `(defun caller (n) (cube n))` は動作します）。裸の参照 `x` は `_eval('x, null)` にコンパイルされ、これは変数名前空間のみを解決します。このフォールバックは組み込みの `eval` ランタイムを使用するため、`--dynamic` は常にそれを出力します（プログラムが `eval` を使用したかのように）。そしてランタイムで一度も定義されない未知のシンボルは、コンパイル時ではなくそこに到達した時点でエラーになります。この方法で解決された関数はランタイムの `eval` インタプリタ上で実行されるため、上記の [コンパイルされた `eval` の制限](../guides/eval-limitations.md) の対象となります。
+
+## コンパイル時インクルード
+
+プログラムを複数ファイルに分割するためだけに `--dynamic` を使う必要は通常ありません。パスが文字列リテラルである**トップレベル**の `(load "lib.lisp")` は、*コンパイル時インクルード*として扱われます。コンパイラは `lib.lisp` を読み込み、コンパイル前にそのフォームをプログラムへ展開します（再帰的に、循環 load を防ぐガード付きで）。これらの定義はネイティブにコンパイルされ（`--dynamic` も `eval` ランタイムも不要で、速度低下もありません）、ファイルを連結した場合とまったく同じになります。
+
+```bash
+echo '(defun cube (n) (* n n n))' > lib.lisp
+echo '(load "lib.lisp") (print (cube 3))' > prog.lisp
+rontolisp prog.lisp -o Prog.class   # (load "lib.lisp") is inlined; cube compiles natively
+rontolisp prog.lisp -o prog.wasm
+```
+
+インライン展開されるのはリテラルパスを持つトップレベルの `load` のみです。パスが計算される `load` や、別のフォームの内側にネストした `load` はランタイム呼び出しのままとなり、コンパイラがロード先コードへの呼び出しを受け入れるには（上記の）`--dynamic` が必要です。インタプリタはこの影響を受けません（常にランタイムで load します）。また、インクルードはランタイムの `load` と同じ方法でパスを解決します。相対パスはその `load` を書いたファイルのディレクトリ（トップレベルの `load` ならエントリファイル）からの相対で解決されるため、どのワーキングディレクトリからコンパイル・実行しても companion ファイルを見つけられます。
+
+計算されるパスのうち、load を書いたファイル自身の位置から組み立てたパスはリテラルと同じに扱われます。標準の Common Lisp は相対パスの `load` をワーキングディレクトリから解決するため、ほかの Common Lisp でも動かすプログラムはファイルを `*load-truename*` からの相対で指定します。
+
+```console
+(load (merge-pathnames "src/a.lisp" *load-truename*))
+```
+
+load を書いたファイルの中では `*load-truename*` と `*load-pathname*` の値がコンパイル時に決まっており、`*compile-file-truename*` と `*compile-file-pathname*` は `nil` です。そのためコンパイラはパスを計算し、`(load "src/a.lisp")` と同じようにファイルを展開します。対象は、これらの変数に対する `merge-pathnames`、`uiop:merge-pathnames*`、`uiop:subpathname`（`(or *compile-file-truename* *load-truename*)` を含む）と、`require` のパス引数です。コンパイルしたプログラムは自己完結しており、実行時に `src/` を必要としません。マージする先は `*load-pathname*` ではなく `*load-truename*` にしてください。truename は絶対パスですが、`*load-pathname*` は書かれたとおりのパスです。それがディレクトリ部分を持つ場合（`app/main.lisp`）、マージした結果は相対パスになり、相対パスの `load` は読み込み元ファイルのディレクトリから解決されるため、ディレクトリが二重に付きます。

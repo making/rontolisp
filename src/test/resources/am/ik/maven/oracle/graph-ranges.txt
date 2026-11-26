@@ -1,0 +1,24 @@
+# collect test.range:mid:1 test.range:union:1 test.range:open-below:1 test.range:star:1 test.range:exact:1
+test.range:mid:jar::1 scope=compile optional=null
+  test.range:lib:jar::1.0 scope=compile optional=null range=[1.0,1.5]
+  test.range:lib:jar::1.2 scope=compile optional=null range=[1.0,1.5]
+  test.range:lib:jar::1.5 scope=compile optional=null range=[1.0,1.5]
+    test.range:leaf:jar::1 scope=compile optional=null
+test.range:union:jar::1 scope=compile optional=null
+  test.range:lib:jar::1.0 scope=compile optional=null range=[1.0,1.0], [1.7,)
+  test.range:lib:jar::1.7 scope=compile optional=null range=[1.0,1.0], [1.7,)
+  test.range:lib:jar::1.9 scope=compile optional=null range=[1.0,1.0], [1.7,)
+  test.range:lib:jar::2.0 scope=compile optional=null range=[1.0,1.0], [1.7,)
+test.range:open-below:jar::1 scope=compile optional=null
+  test.range:lib:jar::1.0 scope=compile optional=null range=(,1.2]
+  test.range:lib:jar::1.2 scope=compile optional=null range=(,1.2]
+test.range:star:jar::1 scope=compile optional=null
+  test.range:lib:jar::1.0 scope=compile optional=null range=[1.min,1.max]
+  test.range:lib:jar::1.2 scope=compile optional=null range=[1.min,1.max]
+  test.range:lib:jar::1.5 scope=compile optional=null range=[1.min,1.max]
+    test.range:leaf:jar::1 scope=compile optional=null
+  test.range:lib:jar::1.7 scope=compile optional=null range=[1.min,1.max]
+  test.range:lib:jar::1.9 scope=compile optional=null range=[1.min,1.max]
+test.range:exact:jar::1 scope=compile optional=null
+  test.range:lib:jar::1.2 scope=compile optional=null range=[1.2,1.2]
+warning missing test.range:lib:jar:1.7

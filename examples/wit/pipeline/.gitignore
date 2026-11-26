@@ -1,0 +1,7 @@
+# Build artifacts -- reproduce with build.sh
+/*.wasm
+/*.wit
+rust-*/target/
+rust-*/Cargo.lock
+# cargo-component regenerates bindings on every build
+rust-*/src/bindings.rs

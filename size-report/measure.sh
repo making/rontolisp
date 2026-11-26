@@ -1,0 +1,471 @@
+#!/usr/bin/env bash
+# Measure every artifact the size report tracks and regenerate results/.
+#
+# Usage:
+#   ./measure.sh            # both families, rewrite results/
+#   ./measure.sh wasm       # the flag matrix over programs/ only
+#   ./measure.sh workers    # the Cloudflare Worker modules only
+#   ./measure.sh clean      # remove out/
+#
+# The compiler is picked in this order:
+#   $RONTOLISP            # an explicit path, if you set one
+#   target/rontolisp      # the GraalVM native binary (fastest)
+#   target/...-exec.jar   # the executable jar, run with `java -jar`
+#
+# wasmtime is optional; without it the `wasm` family is built and measured but
+# not run. `npx` is optional; without it the jco-transpiled component row is
+# skipped. The worker builds `ql:quickload` clack/lack/tiny-routes/ningle into
+# ~/.rontolisp/quicklisp on first run, so the first invocation needs network.
+set -euo pipefail
+
+here="$(cd "$(dirname "$0")" && pwd)"
+repo_root="$(cd "$here/.." && pwd)"
+out="$here/out"
+results="$here/results"
+# The prose half of each report: what the family measures and how to read it.
+# Kept as plain markdown here and appended verbatim below the generated table,
+# so a regenerated results/ file still explains itself.
+notes="$here/notes"
+
+what="${1:-all}"
+if [[ "$what" == "clean" ]]; then
+  rm -rf "$out"
+  echo "removed $out"
+  exit 0
+fi
+case "$what" in
+  all | wasm | workers) ;;
+  *)
+    echo "usage: $0 [all|wasm|workers|clean]" >&2
+    exit 2
+    ;;
+esac
+
+# --- the compiler -----------------------------------------------------------
+if [[ -n "${RONTOLISP:-}" ]]; then
+  ronto=("$RONTOLISP")
+elif [[ -x "$repo_root/target/rontolisp" ]]; then
+  ronto=("$repo_root/target/rontolisp")
+else
+  jar="$repo_root/target/rontolisp-0.1.0-SNAPSHOT-exec.jar"
+  if [[ ! -f "$jar" ]]; then
+    echo "No rontolisp binary or jar found." >&2
+    echo "Build one from the repo root:" >&2
+    echo "  ./mvnw clean package -DskipTests                 # the jar" >&2
+    echo "  ./mvnw -Pnative clean package -DskipTests        # the native binary" >&2
+    exit 1
+  fi
+  ronto=(java -jar "$jar")
+fi
+echo "compiler: ${ronto[*]}"
+
+have_wasmtime=0
+command -v wasmtime >/dev/null 2>&1 && have_wasmtime=1
+[[ "$have_wasmtime" == 1 ]] || echo "NOTE: wasmtime not on PATH -- measuring only, no run checks."
+
+# A module whose imports come from a host PAGE cannot run under wasmtime at all,
+# so its check runs under node against a stub host (see the `node:` rows below).
+have_node=0
+command -v node >/dev/null 2>&1 && have_node=1
+[[ "$have_node" == 1 ]] || echo "NOTE: node not on PATH -- the host-import rows are measured but not run."
+
+# `rontolisp -v` answers a JSON object; the report only wants the version string.
+version="$("${ronto[@]}" -v 2>/dev/null | sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' | head -1)"
+version="${version:-unknown}"
+# --short=7, not --short: git scales the default abbreviation to the local object
+# count, so a laptop and the CI runner stamp the same commit at different lengths
+# and every hand run conflicts with the scheduled one over a line neither changed.
+commit="$(git -C "$repo_root" rev-parse --short=7 HEAD 2>/dev/null || echo unknown)"
+today="$(date -u +%Y-%m-%d)"
+
+mkdir -p "$out" "$results"
+
+# --- helpers ----------------------------------------------------------------
+# Group digits the way the tables do: 124307 -> 124,307
+commas() { printf '%s' "$1" | rev | sed 's/.\{3\}/&,/g' | rev | sed 's/^,//'; }
+# A flag list as a table cell: `--optimize`, or (none) when there are no flags.
+# No row in wasm_builds omits flags any more -- the unoptimized baseline rows
+# now spell themselves `--optimize=off` rather than an empty cell, since
+# --optimize is on by default and an empty cell would render as the OPTIMIZED
+# build. The (none) branch is dead for now; keep it rather than assume the
+# next row added here will remember to state its flags too.
+flag_cell() {
+  if [[ -n "$1" ]]; then printf '`%s`' "$1"; else printf '(none)'; fi
+}
+bytes_of() { wc -c <"$1" | tr -d ' '; }
+# What a built artifact IS, read back out of the bytes rather than restated from
+# the flags that produced it -- so the row cannot claim a shape the backend has
+# since stopped emitting. Bytes 4..8 are the wasm header: `01 00 00 00` is a core
+# module, `0d 00 01 00` a component. "command" = it starts itself (`_start`, or
+# an exported `wasi:cli/run`); "reactor" = the host calls a named export.
+module_kind() {
+  if [[ "$(od -An -tx1 -j4 -N4 "$1" | tr -d ' \n')" == "0d000100" ]]; then
+    if LC_ALL=C grep -aq 'wasi:cli/run' "$1"; then
+      printf 'component (command)'
+    else
+      printf 'component (reactor)'
+    fi
+  elif LC_ALL=C grep -aq '_start' "$1"; then
+    printf 'core (command)'
+  else
+    printf 'core (reactor)'
+  fi
+}
+# Which WASI the artifact imports, named the one way the whole report names it.
+# The two eras state their version differently -- Preview 1 only as the import
+# module `wasi_snapshot_preview1`, later ones as a `@0.N.x` on every interface --
+# so the minor version is folded back to `Preview N` rather than leaving the
+# column half in release numbers and half in preview names. A component embeds a
+# Preview 1 adapter, so its own versioned imports have to be looked for first.
+module_wasi() {
+  local previews
+  previews="$(LC_ALL=C grep -aoE 'wasi:[a-z0-9-]+/[a-z0-9-]+@0\.[0-9]+\.[0-9]+' "$1" |
+    sed 's/.*@0\.\([0-9]*\)\..*/Preview \1/' | sort -u | paste -sd '/' -)"
+  if [[ -n "$previews" ]]; then
+    printf '%s' "$previews"
+  elif LC_ALL=C grep -aq 'wasi_snapshot_preview1' "$1"; then
+    printf 'Preview 1'
+  else
+    printf 'none'
+  fi
+}
+# -n so the timestamp never lands in the compressed size.
+gzip_of() { gzip -9 -n -c "$1" | wc -c | tr -d ' '; }
+
+json_rows=()
+
+# ============================================================================
+# Family 1: the flag matrix over programs/
+# ============================================================================
+# NAME|SOURCE|COMPILE FLAGS|RUN ARGS|CHECK
+#
+# CHECK is either the module's expected FIRST LINE of output, or the literal
+# token `filter`, which means: feed $zlib_gz on stdin and require the whole
+# output to be $zlib_plain byte for byte. zlib is a filter -- it prints nothing
+# -- so a first line is not what it has, and comparing every octet is the
+# stronger check anyway.
+#
+# zlib's exception-handling run flag is in RUN ARGS, not in the compile flags: chipz uses
+# catch/throw, so the module is built in EH mode and wasmtime needs the feature
+# to run it. Nothing about the build asks for it.
+hello_expected='Hello, World!'
+pi_expected='pi = 3.141591653589774'
+pi_nogc_expected='3.1415916535897743'
+# dom_reactor has no stdout at all: it is a reactor whose four imports come from
+# a host page's `env` module, which wasmtime cannot supply. Its RUN ARGS name a
+# node host instead of wasmtime flags, and that host pins the whole transcript --
+# every string the module hands out, not just the two integers it returns --
+# before printing the line below. Same source on both backends.
+dom_host='node:programs/dom_reactor/host.mjs'
+dom_expected='OK 8 host calls'
+
+wasm_builds=(
+  "hello_world_plain|programs/hello_world/hello_world.lisp|--optimize=off||$hello_expected"
+  "hello_world_optimize|programs/hello_world/hello_world.lisp|--optimize||$hello_expected"
+  "hello_world_size|programs/hello_world/hello_world.lisp|--optimize=size||$hello_expected"
+  "hello_world_component|programs/hello_world/hello_world.lisp|--component --optimize=size||$hello_expected"
+  "hello_world_nogc|programs/hello_world/hello_world-nogc.lisp|--no-gc --optimize=size|--invoke say-hello|$hello_expected"
+  "pi_approx_plain|programs/pi_approx/pi_approx.lisp|--optimize=off||$pi_expected"
+  "pi_approx_optimize|programs/pi_approx/pi_approx.lisp|--optimize||$pi_expected"
+  "pi_approx_size|programs/pi_approx/pi_approx.lisp|--optimize=size||$pi_expected"
+  "pi_approx_component|programs/pi_approx/pi_approx.lisp|--component --optimize=size||$pi_expected"
+  "pi_approx_nogc|programs/pi_approx/pi_approx-nogc.lisp|--no-gc --optimize=size|--invoke approx-pi|$pi_nogc_expected"
+  "zlib_plain|programs/zlib/zlib.lisp|--optimize=off||filter"
+  "zlib_optimize|programs/zlib/zlib.lisp|--optimize||filter"
+  "zlib_size|programs/zlib/zlib.lisp|--optimize=size||filter"
+  "zlib_component|programs/zlib/zlib.lisp|--component --optimize=size||filter"
+  "dom_reactor_plain|programs/dom_reactor/dom_reactor.lisp|--no-wasi --optimize=off|$dom_host|$dom_expected"
+  "dom_reactor_optimize|programs/dom_reactor/dom_reactor.lisp|--no-wasi --optimize|$dom_host|$dom_expected"
+  "dom_reactor_size|programs/dom_reactor/dom_reactor.lisp|--no-wasi --optimize=size|$dom_host|$dom_expected"
+  "dom_reactor_nogc|programs/dom_reactor/dom_reactor.lisp|--no-gc --no-wasi --optimize=size|$dom_host|$dom_expected"
+)
+
+# The gzip stream the zlib rows read from stdin, and the plaintext their output
+# has to equal. Generated rather than checked in: the artifact never sees it (the
+# program reads stdin, so no byte of it is compiled in) and only the run check
+# does. 8 distinct 64-byte lines repeated 128 times = 65536 octets, so the first
+# block runs chipz's literal and short-match paths and the rest runs long
+# back-references through the 32 KB window; it gzips to a few hundred bytes,
+# well inside the program's 8192-byte input buffer.
+zlib_plain="$out/zlib-input.txt"
+zlib_gz="$out/zlib-input.gz"
+
+make_zlib_input() {
+  awk 'BEGIN {
+    for (b = 0; b < 128; b++)
+      for (l = 0; l < 8; l++)
+        printf "rontolisp size-report zlib fixture line %02d --------------------\n", l
+  }' >"$zlib_plain"
+  gzip -9 -n -c "$zlib_plain" >"$zlib_gz"
+}
+
+measure_wasm_family() {
+  echo ""
+  echo "=== Build: programs/ ==="
+  for row in "${wasm_builds[@]}"; do
+    IFS='|' read -r name src flags _runargs _check <<<"$row"
+    printf '%-24s %s\n' "$name" "${flags:-(no flags)}"
+    # shellcheck disable=SC2086 -- flags is a deliberate word list
+    "${ronto[@]}" "$here/$src" -o "$out/$name.wasm" $flags
+  done
+
+  echo ""
+  echo "=== Validate: programs/ ==="
+  make_zlib_input
+  local fail=0
+  for row in "${wasm_builds[@]}"; do
+    IFS='|' read -r name _src _flags runargs check <<<"$row"
+    printf '%-24s ' "$name:"
+    # A `node:<script>` in the RUN ARGS column means the module cannot run under
+    # wasmtime (its imports are a host page's, not WASI's): run the named host
+    # and compare its first line, the same contract as the wasmtime rows.
+    if [[ "$runargs" == node:* ]]; then
+      if [[ "$have_node" != 1 ]]; then
+        echo "SKIP (no node)"
+        continue
+      fi
+      local host_actual
+      host_actual="$(node "$here/${runargs#node:}" "$out/$name.wasm" 2>/dev/null | head -1 || true)"
+      if [[ "$host_actual" == "$check" ]]; then
+        echo "OK ($host_actual)"
+      else
+        echo "FAIL (expected '$check', got '$host_actual')"
+        fail=1
+      fi
+      continue
+    fi
+    if [[ "$have_wasmtime" != 1 ]]; then
+      echo "SKIP (no wasmtime)"
+      continue
+    fi
+    if [[ "$check" == "filter" ]]; then
+      # shellcheck disable=SC2086 -- runargs is a deliberate word list
+      wasmtime run $runargs "$out/$name.wasm" <"$zlib_gz" >"$out/$name.out" 2>/dev/null || true
+      if cmp -s "$zlib_plain" "$out/$name.out"; then
+        echo "OK (gunzipped $(commas "$(bytes_of "$out/$name.out")") bytes, byte for byte)"
+      else
+        echo "FAIL (output differs from $zlib_plain)"
+        fail=1
+      fi
+      continue
+    fi
+    # shellcheck disable=SC2086 -- runargs is a deliberate word list
+    local actual
+    actual="$(wasmtime run $runargs "$out/$name.wasm" 2>/dev/null | head -1 || true)"
+    if [[ "$actual" == "$check" ]]; then
+      echo "OK ($actual)"
+    else
+      echo "FAIL (expected '$check', got '$actual')"
+      fail=1
+    fi
+  done
+  [[ "$fail" -eq 0 ]] || {
+    echo "ERROR: some modules produced the wrong output" >&2
+    exit 1
+  }
+
+  # --- results/wasm-flags.md ---
+  local f="$results/wasm-flags.md"
+  {
+    echo "# Wasm flag matrix"
+    echo ""
+    echo "Generated by \`size-report/measure.sh\` -- do not edit by hand;"
+    echo "the prose below it is [\`../notes/wasm-flags.md\`](../notes/wasm-flags.md)."
+    echo "How the report is built and run: [../README.md](../README.md)."
+    echo ""
+    echo "- measured: $today"
+    echo "- rontolisp: $version (\`$commit\`)"
+    echo "- validated on: ${wasmtime_version:-not run}"
+    echo ""
+    echo "| Program | Flags | Module | WASI | Size (bytes) |"
+    echo "| --- | --- | --- | --- | ---: |"
+    for row in "${wasm_builds[@]}"; do
+      IFS='|' read -r name src flags _runargs _check <<<"$row"
+      local size prog kind wasi
+      size="$(bytes_of "$out/$name.wasm")"
+      kind="$(module_kind "$out/$name.wasm")"
+      wasi="$(module_wasi "$out/$name.wasm")"
+      prog="$(basename "$(dirname "$src")")"
+      [[ "$src" == *-nogc.lisp ]] && prog="$prog (nogc source)"
+      printf '| %s | %s | %s | %s | %s |\n' \
+        "$prog" "$(flag_cell "$flags")" "$kind" "$wasi" "$(commas "$size")"
+      json_rows+=("{\"family\":\"wasm\",\"name\":\"$name\",\"flags\":\"${flags:-}\",\"module\":\"$kind\",\"wasi\":\"$wasi\",\"bytes\":$size}")
+    done
+    echo ""
+    cat "$notes/wasm-flags.md"
+  } >"$f"
+  echo "wrote $f"
+}
+
+# ============================================================================
+# Family 2: the Cloudflare Worker modules
+# ============================================================================
+# NAME|SOURCE (relative to repo root)|COMPILE FLAGS|SED EXPR (empty = build the
+# source as-is; otherwise the source is copied and rewritten first)
+worker_builds=(
+  "hello|examples/cloudflare-workers/hello/worker.lisp|--no-gc --optimize|"
+  "hello-java|examples/cloudflare-workers/hello-java/Worker.java|--no-wasi --optimize=size|"
+  "hello-clack|examples/cloudflare-workers/hello-clack/worker.lisp|--no-wasi --optimize=size|"
+  "hello-tiny-routes|examples/cloudflare-workers/hello-tiny-routes/worker.lisp|--no-wasi --optimize=size|"
+  "hello-tiny-routes (full tiny-routes)|examples/cloudflare-workers/hello-tiny-routes/worker.lisp|--no-wasi --optimize=size|s|tiny-routes/lite|tiny-routes|g"
+  "hello-ningle|examples/cloudflare-workers/hello-ningle/worker.lisp|--no-wasi --optimize=size|"
+  "httpbin|examples/cloudflare-workers/httpbin/worker.lisp|--no-wasi --host-boundary=streaming --optimize=size|"
+  "httpbin-clack|examples/cloudflare-workers/httpbin-clack/worker.lisp|--no-wasi --host-boundary=streaming --optimize=size|"
+  "httpbin-clack-one-source|examples/net/httpbin-clack.lisp|--no-wasi --host-boundary=streaming --optimize=size|"
+  "httpbin-tiny-routes|examples/cloudflare-workers/httpbin-tiny-routes/worker.lisp|--no-wasi --host-boundary=streaming --optimize=size|"
+  "httpbin-tiny-routes (full tiny-routes)|examples/cloudflare-workers/httpbin-tiny-routes/worker.lisp|--no-wasi --host-boundary=streaming --optimize=size|s|tiny-routes/lite|tiny-routes|g"
+  "httpbin-ningle|examples/cloudflare-workers/httpbin-ningle/worker.lisp|--no-wasi --host-boundary=streaming --optimize=size|"
+  "dog-fetcher|examples/cloudflare-workers/dog-fetcher/worker.lisp|--no-wasi --host-fetch --host-boundary=streaming --optimize=size|"
+  "dog-relay|examples/cloudflare-workers/dog-relay/worker.lisp|--no-wasi --host-fetch --host-boundary=streaming --reentrant --optimize=size|"
+  "btc-ticker|examples/cloudflare-workers/btc-ticker/worker.lisp|--no-wasi --host-fetch --optimize=size|"
+  "btc-ticker (streaming boundary)|examples/cloudflare-workers/btc-ticker/worker.lisp|--no-wasi --host-fetch --host-boundary=streaming --optimize=size|"
+  "httpbin-component (core module)|examples/cloudflare-workers/httpbin/worker.lisp|--component --no-wasi --optimize=size|"
+  "java http server (no container)|examples/java/http/Server.java|--no-wasi --optimize=size|"
+  "hello-servlet-one-source|examples/java/hello-servlet/src/main/java/HelloServlet.java|--no-wasi --optimize=size|"
+  "hello-mvcfn-one-source|examples/java/hello-mvcfn/src/main/java/HelloMvcfn.java|--no-wasi --optimize=size|"
+  "hello-session-one-source|examples/java/hello-session/src/main/java/HelloSession.java|--no-wasi --host-random --optimize=size|"
+)
+
+# The libraries a Java Worker is compiled with, by NAME, as its build.sh names
+# them: read as source, this checkout's modules and the Servlet API's sources jar
+# from Maven's local repository or Maven Central. They are no flags of the
+# Worker, so the table does not show them.
+worker_libraries() {
+  local servlet="$repo_root/servlet-httpserver/src/main/java"
+  local api="--java-source-dep jakarta.servlet:jakarta.servlet-api:6.1.0"
+  case "$1" in
+    hello-servlet-one-source) echo "--java-source-path $servlet $api" ;;
+    hello-mvcfn-one-source) echo "--java-source-path $servlet:$repo_root/webmvc-fn-lite/src/main/java $api" ;;
+    hello-session-one-source)
+      local keyvalue="$repo_root/servlet-httpserver-keyvalue/src/main"
+      echo "--java-source-path $servlet:$keyvalue/java:$keyvalue/resources:$repo_root/rontolisp-java-api/src/main/java $api" ;;
+  esac
+}
+
+measure_workers_family() {
+  echo ""
+  echo "=== Build: Cloudflare Worker modules ==="
+  local -a names raws gzips flagsv slugs
+  local i=0
+  for row in "${worker_builds[@]}"; do
+    local name src flags sedexpr
+    name="${row%%|*}"
+    local rest="${row#*|}"
+    src="${rest%%|*}"
+    rest="${rest#*|}"
+    flags="${rest%%|*}"
+    sedexpr="${rest#*|}"
+
+    local slug build_src
+    slug="w$i"
+    build_src="$repo_root/$src"
+    if [[ -n "$sedexpr" ]]; then
+      build_src="$out/$slug.lisp"
+      sed "$sedexpr" "$repo_root/$src" >"$build_src"
+    fi
+
+    printf '%-40s %s\n' "$name" "$flags"
+    # shellcheck disable=SC2086,SC2046 -- flags and libraries are deliberate word lists
+    "${ronto[@]}" "$build_src" -o "$out/$slug.wasm" $flags $(worker_libraries "$name")
+
+    names[i]="$name"
+    slugs[i]="$slug"
+    flagsv[i]="$flags"
+    raws[i]="$(bytes_of "$out/$slug.wasm")"
+    gzips[i]="$(gzip_of "$out/$slug.wasm")"
+    json_rows+=("{\"family\":\"workers\",\"name\":\"$name\",\"flags\":\"$flags\",\"bytes\":${raws[i]},\"gzip\":${gzips[i]}}")
+    i=$((i + 1))
+  done
+
+  # The jco-transpiled glue, when npx is available: the component row's real
+  # cost on a Worker is the core module PLUS the generated JavaScript. The row
+  # is found by its FLAGS, not by its position -- a new Worker appended to the
+  # table above must not silently transpile a core module instead.
+  local jco_js="" component_slug=""
+  local n=${#slugs[@]}
+  for ((i = 0; i < n; i++)); do
+    [[ "${flagsv[i]}" == *--component* ]] && component_slug="${slugs[i]}"
+  done
+  if [[ -z "$component_slug" ]]; then
+    echo "NOTE: no --component row -- skipping the generated-glue row."
+  elif command -v npx >/dev/null 2>&1; then
+    echo "transpiling the component with jco"
+    # The same flags examples/cloudflare-workers/httpbin-component/build.sh uses.
+    if npx -y @bytecodealliance/jco transpile "$out/$component_slug.wasm" \
+      -o "$out/jco" --instantiation sync -b 0 --bindgen-enable-wasm-exnref >/dev/null 2>&1; then
+      jco_js="$(cat "$out"/jco/*.js | wc -c | tr -d ' ')"
+      json_rows+=("{\"family\":\"workers\",\"name\":\"httpbin-component (jco glue, .js)\",\"flags\":\"jco transpile\",\"bytes\":$jco_js}")
+    else
+      echo "NOTE: jco transpile failed -- skipping the generated-glue row."
+    fi
+  else
+    echo "NOTE: npx not on PATH -- skipping the generated-glue row."
+  fi
+
+  local f="$results/cloudflare-workers.md"
+  {
+    echo "# Cloudflare Worker module sizes"
+    echo ""
+    echo "Generated by \`size-report/measure.sh\` -- do not edit by hand;"
+    echo "the prose below it is [\`../notes/cloudflare-workers.md\`](../notes/cloudflare-workers.md)."
+    echo "What each Worker is: [examples/cloudflare-workers/](../../examples/cloudflare-workers/)."
+    echo "How the report is built and run: [../README.md](../README.md)."
+    echo ""
+    echo "- measured: $today"
+    echo "- rontolisp: $version (\`$commit\`)"
+    echo "- gzip: \`gzip -9 -n\` (what Cloudflare counts against the 3 MB compressed bundle limit)"
+    echo ""
+    echo "| Worker | Flags | raw (B) | gzip (B) | % of the 3 MB limit |"
+    echo "| --- | --- | ---: | ---: | ---: |"
+    local n=${#names[@]}
+    for ((i = 0; i < n; i++)); do
+      local pct
+      pct="$(awk -v g="${gzips[i]}" 'BEGIN { printf "%.1f", g * 100 / (3 * 1024 * 1024) }')"
+      printf '| %s | `%s` | %s | %s | %s%% |\n' \
+        "${names[i]}" "${flagsv[i]}" "$(commas "${raws[i]}")" "$(commas "${gzips[i]}")" "$pct"
+    done
+    if [[ -n "$jco_js" ]]; then
+      echo ""
+      echo "The component row is the core module alone. Reached through \`jco transpile\`"
+      echo "a Worker also imports the generated JavaScript: **$(commas "$jco_js") B** of it."
+    fi
+    echo ""
+    cat "$notes/cloudflare-workers.md"
+  } >"$f"
+  echo "wrote $f"
+}
+
+wasmtime_version=""
+if [[ "$have_wasmtime" == 1 ]]; then
+  wasmtime_version="$(wasmtime --version 2>/dev/null | head -1)"
+fi
+
+if [[ "$what" == "all" || "$what" == "wasm" ]]; then
+  measure_wasm_family
+fi
+if [[ "$what" == "all" || "$what" == "workers" ]]; then
+  measure_workers_family
+fi
+
+# --- results/sizes.json -----------------------------------------------------
+# Only a full run can claim to be the whole picture, so a partial run leaves the
+# machine-readable file alone rather than truncating it.
+if [[ "$what" == "all" ]]; then
+  {
+    echo "{"
+    echo "  \"generated\": \"$today\","
+    echo "  \"rontolisp\": \"$version\","
+    echo "  \"commit\": \"$commit\","
+    echo "  \"wasmtime\": \"${wasmtime_version:-}\","
+    echo "  \"artifacts\": ["
+    for ((i = 0; i < ${#json_rows[@]}; i++)); do
+      printf '    %s%s\n' "${json_rows[i]}" "$([[ $i -lt $((${#json_rows[@]} - 1)) ]] && echo , || true)"
+    done
+    echo "  ]"
+    echo "}"
+  } >"$results/sizes.json"
+  echo "wrote $results/sizes.json"
+fi
+
+echo ""
+echo "done."

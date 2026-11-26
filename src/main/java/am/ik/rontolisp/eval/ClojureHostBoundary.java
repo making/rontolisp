@@ -1,0 +1,163 @@
+package am.ik.rontolisp.eval;
+
+import java.io.FileNotFoundException;
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Locale;
+import java.util.Set;
+
+import am.ik.rontolisp.clojure.ClojureBoundary;
+import am.ik.rontolisp.clojure.ClojureFiles;
+import am.ik.rontolisp.compiler.BoundaryType;
+import am.ik.rontolisp.compiler.WitExportDirective;
+import am.ik.rontolisp.compiler.WitImportDirective;
+import am.ik.rontolisp.compiler.WitSource;
+import am.ik.rontolisp.compiler.WitTypeMapper;
+import am.ik.rontolisp.reader.LispReadException;
+import org.jspecify.annotations.Nullable;
+
+/**
+ * The host boundary the Clojure lowering consults while a program lowers
+ * ({@code rontolisp.wasm}, {@code rontolisp.wit}), over the compiler's own front ends:
+ * {@link BoundaryType} for the designators, {@link WitImportDirective#describe} and
+ * {@link WitExportDirective#describe} for a WIT interface's members and a world's
+ * exports. So a member a Clojure var names is the member the emitted
+ * {@code rontolisp:wit-import} binds, under the same name and with the same refusals, and
+ * no WIT is read twice in two dialects. Stateless; one instance serves every read.
+ */
+public final class ClojureHostBoundary implements ClojureBoundary {
+
+	/** The boundary a read through the source-language seam lowers against. */
+	public static final ClojureBoundary INSTANCE = new ClojureHostBoundary();
+
+	private static final Set<String> DESIGNATORS = designatorSet();
+
+	private ClojureHostBoundary() {
+	}
+
+	private static Set<String> designatorSet() {
+		Set<String> out = new LinkedHashSet<>();
+		for (BoundaryType type : BoundaryType.values()) {
+			if (type != BoundaryType.VOID && !type.jvmOnly()) {
+				out.add(type.designator());
+			}
+		}
+		// the house spellings the vocabulary normalizes (BoundaryType's aliases)
+		out.add(":INT");
+		out.add(":LONG");
+		return Set.copyOf(out);
+	}
+
+	@Override
+	public Set<String> designators() {
+		return DESIGNATORS;
+	}
+
+	@Override
+	public WitInterface importInterface(ClojureFiles files, String readPath, String witPath, String iface) {
+		WitSource source = read(files, readPath, witPath);
+		// the reference the emitted directive's parse reads: lowercased, like a bare
+		// symbol (WitImportDirective.parse)
+		WitImportDirective.Directive directive = new WitImportDirective.Directive(witPath,
+				iface.toLowerCase(Locale.ROOT), null, null, WitImportDirective.FieldStyle.CAMEL);
+		WitImportDirective.Description described;
+		try {
+			described = WitImportDirective.describe(directive, source);
+		}
+		catch (UnsupportedOperationException ex) {
+			throw new LispReadException(String.valueOf(ex.getMessage()));
+		}
+		List<Function> members = new ArrayList<>();
+		for (WitImportDirective.Member member : described.members()) {
+			members.add(new Function(member.name(), member.name(), Origin.valueOf(member.origin().name()),
+					params(member.params()), type(member.result()), member.async(), member.at()));
+		}
+		return new WitInterface(described.id(), List.copyOf(members));
+	}
+
+	@Override
+	public WitWorld exportWorld(ClojureFiles files, String readPath, String witPath, @Nullable String world) {
+		WitSource source = read(files, readPath, witPath);
+		WitExportDirective.WorldDescription described;
+		try {
+			described = WitExportDirective.describe(new WitExportDirective.Directive(witPath, world), source);
+		}
+		catch (UnsupportedOperationException ex) {
+			throw new LispReadException(String.valueOf(ex.getMessage()));
+		}
+		List<Function> exports = new ArrayList<>();
+		for (WitExportDirective.Export export : described.exports()) {
+			exports.add(new Function(export.name(), export.key(), Origin.FUNCTION, params(export.params()),
+					type(export.result()), export.async(), export.at()));
+		}
+		return new WitWorld(described.name(), List.copyOf(exports));
+	}
+
+	// The WIT through the one reader every directive reads it with (a file, or a
+	// package directory), a message naming the path as the program wrote it.
+	private static WitSource read(ClojureFiles files, String readPath, String witPath) {
+		SourceLoader loader = new SourceLoader() {
+			@Override
+			public String load(String path) throws IOException {
+				String text = files.read(path);
+				if (text == null) {
+					throw new FileNotFoundException(path);
+				}
+				return text;
+			}
+
+			@Override
+			public @Nullable List<String> listDirectory(String path) {
+				return files.list(path);
+			}
+
+			@Override
+			public @Nullable List<String> listArchive(String path) {
+				return files.archiveEntries(path);
+			}
+
+			@Override
+			public String loadArchiveEntry(String archive, String entry) throws IOException {
+				String text = files.readArchiveEntry(archive, entry);
+				if (text == null) {
+					throw new FileNotFoundException(archive + "!/" + entry);
+				}
+				return text;
+			}
+		};
+		try {
+			return WitFiles.read(loader, readPath).shownAs(witPath);
+		}
+		catch (IOException ex) {
+			throw new LispReadException("cannot read WIT " + witPath + ": " + ex.getMessage());
+		}
+	}
+
+	private static List<Param> params(List<WitTypeMapper.Param> params) {
+		List<Param> out = new ArrayList<>();
+		for (WitTypeMapper.Param param : params) {
+			out.add(new Param(param.name(), java.util.Objects.requireNonNull(type(param.shape()))));
+		}
+		return List.copyOf(out);
+	}
+
+	/**
+	 * A compiler shape as the Clojure lowering's type, every nested shape with it: the
+	 * representation by name (the two enums spell the same members,
+	 * {@code ClojureHostBoundaryTest}).
+	 */
+	static @Nullable Type type(WitTypeMapper.@Nullable Shape shape) {
+		if (shape == null) {
+			return null;
+		}
+		List<Part> parts = new ArrayList<>();
+		for (WitTypeMapper.Part part : shape.parts()) {
+			parts.add(new Part(part.label(), type(part.shape())));
+		}
+		return new Type(Rep.valueOf(shape.rep().name()), type(shape.element()), shape.wit(), type(shape.error()),
+				List.copyOf(parts));
+	}
+
+}

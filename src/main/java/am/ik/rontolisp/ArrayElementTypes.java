@@ -1,0 +1,210 @@
+package am.ik.rontolisp;
+
+import org.jspecify.annotations.Nullable;
+
+/**
+ * The UPGRADED array element types, as a small closed code space shared by every backend.
+ *
+ * <p>
+ * {@code make-array} selects a specialized representation for only a handful of declared
+ * element types, and every other request lands in the general boxed array. The code here
+ * is what a general array REMEMBERS about the type it was asked to hold: it is the answer
+ * {@code array-element-type} gives back and the fill an unsupplied element takes, and it
+ * is stored per array on all four backends (the interpreter in a {@link LispArray} field,
+ * the JVM in an extra header slot, wasm in the meta marker word).
+ *
+ * <p>
+ * The space is closed because the upgrade is: {@code character} (and its base/standard
+ * spellings) upgrades to {@code character}, {@code (unsigned-byte 8|16|32)} and the three
+ * float widths keep their own name, {@code bit} is remembered as {@code bit} over the
+ * general boxed representation (a bit vector IS a general array here, specialized only by
+ * the stamp -- there is no packed bit storage), and EVERYTHING else -- {@code fixnum},
+ * {@code integer}, a class, an unsupported {@code (unsigned-byte 4)} -- upgrades to
+ * {@code t}, which is {@link #T} and is remembered as nothing at all.
+ */
+public final class ArrayElementTypes {
+
+	/** The general element type: {@code t}. Nothing is remembered for it. */
+	public static final int T = 0;
+
+	/** {@code character}. */
+	public static final int CHARACTER = 1;
+
+	/** {@code (unsigned-byte 8)}. */
+	public static final int UNSIGNED_BYTE_8 = 2;
+
+	/** {@code (unsigned-byte 16)}. */
+	public static final int UNSIGNED_BYTE_16 = 3;
+
+	/** {@code (unsigned-byte 32)}. */
+	public static final int UNSIGNED_BYTE_32 = 4;
+
+	/** {@code single-float}. */
+	public static final int SINGLE_FLOAT = 5;
+
+	/** {@code double-float}. */
+	public static final int DOUBLE_FLOAT = 6;
+
+	/**
+	 * {@code bfloat16} -- a rontolisp extension rather than a CL type, remembered here
+	 * because {@code array-element-type} has to answer it like any other specialized
+	 * width.
+	 */
+	public static final int BFLOAT16 = 7;
+
+	/**
+	 * {@code bit} -- a rontolisp bit vector is the general boxed array stamped with this
+	 * code (there is no packed bit storage on any backend): {@code #*1011} and
+	 * {@code (make-array n :element-type 'bit)} remember it, {@code array-element-type}
+	 * answers it, and an unsupplied element is {@code 0}. It IS in
+	 * {@link #specializedCodes()} (the generated {@code %make-array-et} dispatch needs
+	 * the arm, and the per-width gates need the bit) but selects the BOXED representation
+	 * everywhere a packed one is chosen -- the one code the packed constructors decline.
+	 */
+	public static final int BIT = 8;
+
+	/**
+	 * The code point an unsupplied {@code character} element takes: SPACE, not NUL. CLHS
+	 * leaves an uninitialized element's value undefined, so the choice is the project's
+	 * to make, and it is made ONCE here for the whole surface -- {@code make-string},
+	 * {@code (make-array n :element-type 'character)}, a rank-n character array, the
+	 * slots {@code vector-push-extend} and {@code adjust-array} open. SBCL answers
+	 * {@code #\Nul} for the grown slots and {@code #\Space} for {@code make-string}; one
+	 * rule for the whole surface beats matching it on a value the standard does not pin
+	 * ({@code .kb/array-literals.md}).
+	 */
+	public static final int DEFAULT_CHARACTER = ' ';
+
+	/**
+	 * The designator spellings that upgrade to {@link #CHARACTER}. The only code with
+	 * more than one spelling, and the reason a generated dispatch tests it with
+	 * {@code member} rather than {@code eq}.
+	 */
+	public static final java.util.List<String> CHARACTER_SPELLINGS = java.util.List.of("CHARACTER", "BASE-CHAR",
+			"STANDARD-CHAR");
+
+	// Every code but T, in the order a generated dispatch should read.
+	private static final int[] SPECIALIZED = { CHARACTER, UNSIGNED_BYTE_8, UNSIGNED_BYTE_16, UNSIGNED_BYTE_32,
+			SINGLE_FLOAT, DOUBLE_FLOAT, BFLOAT16, BIT };
+
+	/**
+	 * Every code but {@link #T}, as a bit mask -- {@code 1 << code} for each.
+	 *
+	 * <p>
+	 * <b>Derived, not transcribed.</b> A {@code make-array} whose {@code :element-type}
+	 * is a runtime value has to be turned back into literal spellings, one per code, and
+	 * that list was written out by hand in four places -- the mask, the inline lowering's
+	 * arms, and the two {@code %make-array-et*} prelude helpers. All four were documented
+	 * as covering seven codes and all four spelled six: {@code bfloat16} was missing from
+	 * the day the width landed until 2026-09-05, so a runtime designator naming it
+	 * degraded to a BOXED general array on every backend but the interpreter
+	 * ({@code .kb/bfloat16.md}). The set is a fact about THIS class, so every site now
+	 * derives it from {@link #specializedCodes()} and an eighth width is one entry here.
+	 */
+	public static final int ALL_SPECIALIZED_MASK = specializedMask();
+
+	private static int specializedMask() {
+		int mask = 0;
+		for (int code : SPECIALIZED) {
+			mask |= 1 << code;
+		}
+		return mask;
+	}
+
+	/**
+	 * Every code but {@link #T}, in the order a generated dispatch should read them.
+	 * @return a fresh array of the specialized codes
+	 */
+	public static int[] specializedCodes() {
+		return SPECIALIZED.clone();
+	}
+
+	private ArrayElementTypes() {
+	}
+
+	/**
+	 * The code a {@code make-array :element-type} argument upgrades to. The argument is
+	 * the value as written at the call site, so a literal {@code 'character} /
+	 * {@code '(unsigned-byte 8)} quote wrapper is unwrapped and a package qualifier
+	 * ignored; a {@code deftype} alias must already have been resolved by the caller.
+	 * @param elementType the {@code :element-type} argument, or null when absent
+	 * @return one of the codes in this class ({@link #T} when nothing is specialized)
+	 */
+	public static int codeOf(@Nullable LispVal elementType) {
+		LispVal spec = unquote(elementType);
+		if (spec instanceof LispSymbol sym) {
+			return switch (localName(sym.name())) {
+				case "CHARACTER", "BASE-CHAR", "STANDARD-CHAR" -> CHARACTER; // CHARACTER_SPELLINGS
+				case LispNames.SINGLE_FLOAT -> SINGLE_FLOAT;
+				case LispNames.DOUBLE_FLOAT -> DOUBLE_FLOAT;
+				case LispNames.BFLOAT16 -> BFLOAT16;
+				case LispNames.BIT -> BIT;
+				default -> T;
+			};
+		}
+		return switch (LispNames.unsignedByteWidth(spec)) {
+			case 8 -> UNSIGNED_BYTE_8;
+			case 16 -> UNSIGNED_BYTE_16;
+			case 32 -> UNSIGNED_BYTE_32;
+			default -> T;
+		};
+	}
+
+	/**
+	 * The value {@code array-element-type} answers for a code: the boolean {@code t}, a
+	 * type-name symbol, or the list {@code (unsigned-byte n)}.
+	 * @param code one of the codes in this class
+	 * @return the element type value
+	 */
+	public static LispVal valueOf(int code) {
+		return switch (code) {
+			case CHARACTER -> new LispSymbol(LispNames.CHARACTER_TYPE);
+			case UNSIGNED_BYTE_8 -> unsignedByte(8);
+			case UNSIGNED_BYTE_16 -> unsignedByte(16);
+			case UNSIGNED_BYTE_32 -> unsignedByte(32);
+			case SINGLE_FLOAT -> new LispSymbol(LispNames.SINGLE_FLOAT);
+			case DOUBLE_FLOAT -> new LispSymbol(LispNames.DOUBLE_FLOAT);
+			case BFLOAT16 -> new LispSymbol(LispNames.BFLOAT16);
+			case BIT -> new LispSymbol(LispNames.BIT);
+			default -> LispTrue.INSTANCE;
+		};
+	}
+
+	/**
+	 * The element an unsupplied slot of an array of this type takes. Common Lisp leaves
+	 * an uninitialized element undefined, and an array the program asked to hold
+	 * characters, bytes or floats should hold one rather than {@code nil}.
+	 * @param code one of the codes in this class
+	 * @return the default element, or null for {@link #T} (which has no natural zero)
+	 */
+	public static @Nullable LispVal defaultElement(int code) {
+		return switch (code) {
+			case CHARACTER -> new LispChar(DEFAULT_CHARACTER);
+			case UNSIGNED_BYTE_8, UNSIGNED_BYTE_16, UNSIGNED_BYTE_32, BIT -> new LispInteger(0);
+			case SINGLE_FLOAT, DOUBLE_FLOAT, BFLOAT16 -> new LispDouble(0.0);
+			default -> null;
+		};
+	}
+
+	private static LispVal unsignedByte(int width) {
+		return new LispCons(new LispSymbol(LispNames.UNSIGNED_BYTE),
+				new LispCons(new LispInteger(width), LispNil.INSTANCE));
+	}
+
+	// Strips the (quote x) a literal :element-type argument still carries at a call site;
+	// an alias resolved through the deftype registry arrives bare and passes through.
+	private static @Nullable LispVal unquote(@Nullable LispVal elementType) {
+		if (elementType instanceof LispCons cons && cons.car() instanceof LispSymbol q
+				&& LispNames.QUOTE.equals(q.name()) && cons.cdr() instanceof LispCons rest
+				&& rest.cdr() instanceof LispNil) {
+			return rest.car();
+		}
+		return elementType;
+	}
+
+	private static String localName(String name) {
+		int colon = name.lastIndexOf(':');
+		return colon >= 0 ? name.substring(colon + 1) : name;
+	}
+
+}

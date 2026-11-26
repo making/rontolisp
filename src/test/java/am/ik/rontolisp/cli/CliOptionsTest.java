@@ -1,0 +1,195 @@
+package am.ik.rontolisp.cli;
+
+import org.junit.jupiter.api.Test;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+/**
+ * {@link CliOptions} argument parsing. The value-less flags (e.g. {@code --simd},
+ * {@code --optimize}) must be recognized even as the trailing argument: a flag that is
+ * not registered as value-less is parsed as expecting a value and, when it is the last
+ * argument, is dropped entirely -- silently disabling the feature (the {@code --simd}
+ * bug).
+ */
+class CliOptionsTest {
+
+	@Test
+	void trailingValueLessFlagsAreRecognized() {
+		// The reproduction of the --simd bug: --simd trailing after `-o Out.class` must
+		// be
+		// contains-true. Before --simd was registered as value-less it consumed no value
+		// and was dropped, so `contains("--simd")` returned false and the JVM
+		// acceleration
+		// was silently never enabled.
+		CliOptions options = CliOptions.build(new String[] { "prog.lisp", "-o", "Out.class", "--simd" });
+		assertThat(options.contains("--simd")).isTrue();
+		assertThat(options.getNokey()).isEqualTo("prog.lisp");
+		assertThat(options.get("-o")).isEqualTo("Out.class");
+	}
+
+	@Test
+	void everyValueLessFlagIsRecognizedTrailing() {
+		for (String flag : new String[] { "--simd", "--blas", "--gpu", "--parallel", "--optimize", "--no-gc",
+				"--component", "--no-wasi", "--dynamic", "--buffered-output", "--emit-wit", "--nrepl" }) {
+			CliOptions options = CliOptions.build(new String[] { "prog.lisp", "-o", "Out.class", flag });
+			assertThat(options.contains(flag)).as(flag).isTrue();
+			assertThat(options.get("-o")).as(flag).isEqualTo("Out.class");
+		}
+	}
+
+	@Test
+	void aValueLessFlagDoesNotSwallowTheFollowingArgument() {
+		// --simd must not consume the next token as its value.
+		CliOptions options = CliOptions.build(new String[] { "prog.lisp", "--simd", "-o", "Out.class" });
+		assertThat(options.contains("--simd")).isTrue();
+		assertThat(options.get("-o")).isEqualTo("Out.class");
+	}
+
+	@Test
+	void aGluedValueIsReadWithoutMakingTheFlagConsumeAnArgument() {
+		// --optimize=size gives a value-less flag a value without moving it out of
+		// noValueKeys -- which it cannot leave: the space form would then read the
+		// following -o as the level.
+		CliOptions options = CliOptions.build(new String[] { "prog.lisp", "--optimize=size", "-o", "out.wasm" });
+		assertThat(options.contains("--optimize")).isTrue();
+		assertThat(options.get("--optimize")).isEqualTo("size");
+		assertThat(options.get("-o")).isEqualTo("out.wasm");
+		assertThat(options.getNokey()).isEqualTo("prog.lisp");
+	}
+
+	@Test
+	void theBareFlagKeepsItsEmptyValue() {
+		CliOptions options = CliOptions.build(new String[] { "prog.lisp", "--optimize", "-o", "out.wasm" });
+		assertThat(options.contains("--optimize")).isTrue();
+		assertThat(options.get("--optimize")).isEmpty();
+		assertThat(options.get("-o")).isEqualTo("out.wasm");
+	}
+
+	@Test
+	void onlyTheFirstEqualsSignSplitsAGluedValue() {
+		CliOptions options = CliOptions.build(new String[] { "prog.lisp", "--world=ns:pkg/world=v1" });
+		assertThat(options.get("--world")).isEqualTo("ns:pkg/world=v1");
+	}
+
+	@Test
+	void theSpaceFormOfAValuedOptionIsRejectedRatherThanSwallowingTheInputFile() {
+		// --optimize stays a no-value key, so its "value" would land as a second
+		// positional argument and used to REPLACE prog.lisp: the compiler then looked
+		// for a file named "size". Nothing takes a second positional, so say so.
+		assertThatThrownBy(() -> CliOptions.build(new String[] { "prog.lisp", "--optimize", "size", "-o", "out.wasm" }))
+			.isInstanceOf(IllegalArgumentException.class)
+			.hasMessageContaining("unexpected extra argument 'size'")
+			.hasMessageContaining("--optimize=size");
+	}
+
+	@Test
+	void inlineProgramsAccumulateInOrder() {
+		// -e is repeatable: the occurrences form ONE program, joined the way the forms
+		// would be written on separate lines of a file.
+		CliOptions options = CliOptions.build(new String[] { "-e", "(defun f () 1)", "-e", "(print (f))" });
+		assertThat(options.get("-e")).isEqualTo("(defun f () 1)\n(print (f))");
+		assertThat(options.containsNoKey()).isFalse();
+	}
+
+	@Test
+	void theLongSpellingIsTheSameKey() {
+		// --eval is stored as -e, and the two spellings mixed in one command line keep
+		// the order they were written in.
+		assertThat(CliOptions.build(new String[] { "--eval", "(print 42)" }).get("-e")).isEqualTo("(print 42)");
+		assertThat(CliOptions.build(new String[] { "--eval=(print 42)" }).get("-e")).isEqualTo("(print 42)");
+		CliOptions options = CliOptions.build(new String[] { "-e", "(defun f () 1)", "--eval", "(print (f))" });
+		assertThat(options.get("-e")).isEqualTo("(defun f () 1)\n(print (f))");
+	}
+
+	@Test
+	void anInlineProgramIsNotParsedAsOptions() {
+		// The value of -e is taken verbatim, so a program that starts with '-' or
+		// contains '=' survives.
+		assertThat(CliOptions.build(new String[] { "-e", "(- 1 2)" }).get("-e")).isEqualTo("(- 1 2)");
+		assertThat(CliOptions.build(new String[] { "-e", "(print (= 1 1))" }).get("-e")).isEqualTo("(print (= 1 1))");
+	}
+
+	@Test
+	void aTrailingValuedOptionOrAnUnknownOneIsRejected() {
+		// An option no table entry names used to be stored and never read: a misspelt
+		// flag changed nothing, and swallowed the argument after it as its value.
+		assertThatThrownBy(() -> CliOptions.build(new String[] { "--simdd", "prog.lisp" }))
+			.isInstanceOf(IllegalArgumentException.class)
+			.hasMessage("unknown option '--simdd' (try: rontolisp --help)");
+		assertThatThrownBy(() -> CliOptions.build(new String[] { "prog.lisp", "--optimise=size" }))
+			.hasMessageContaining("unknown option '--optimise'");
+		// `test`'s own options are its alone.
+		assertThatThrownBy(() -> CliOptions.build(new String[] { "prog.lisp", "--color" }))
+			.hasMessage("'--color' is an option of rontolisp test (try: rontolisp test --help)");
+		assertThat(CliOptions.build(new String[] { "prog.lisp", "--color", "--reporter", "dot" }, true).get("-r"))
+			.isEqualTo("dot");
+		// It used to be dropped, silently changing the mode: a trailing -e opened the
+		// REPL and a trailing -o interpreted instead of compiling.
+		assertThatThrownBy(() -> CliOptions.build(new String[] { "-e" })).isInstanceOf(IllegalArgumentException.class)
+			.hasMessageContaining("option '-e' requires a value");
+		// The message names the spelling that was typed, not the canonical key.
+		assertThatThrownBy(() -> CliOptions.build(new String[] { "--eval" }))
+			.isInstanceOf(IllegalArgumentException.class)
+			.hasMessageContaining("option '--eval' requires a value");
+		assertThatThrownBy(() -> CliOptions.build(new String[] { "prog.lisp", "-o" }))
+			.isInstanceOf(IllegalArgumentException.class)
+			.hasMessageContaining("option '-o' requires a value");
+	}
+
+	@Test
+	void everythingAfterTheSeparatorBelongsToTheProgram() {
+		// `--` is where rontolisp's options end and the program's arguments begin: that
+		// is how an interpreted program is handed anything at all
+		// ((uiop:command-line-arguments)), and the only way to tell --optimize the
+		// compiler flag from --optimize the argument.
+		CliOptions options = CliOptions.build(new String[] { "prog.lisp", "--simd", "--", "--optimize", "-e", "x" });
+		assertThat(options.getNokey()).isEqualTo("prog.lisp");
+		assertThat(options.contains("--simd")).isTrue();
+		assertThat(options.contains("--optimize")).isFalse();
+		assertThat(options.get("-e")).isNull();
+		assertThat(options.arguments()).containsExactly("--optimize", "-e", "x");
+		// A second separator is an argument like any other, and no separator means no
+		// arguments -- not an empty positional.
+		assertThat(CliOptions.build(new String[] { "prog.lisp", "--", "--", "a" }).arguments()).containsExactly("--",
+				"a");
+		assertThat(CliOptions.build(new String[] { "prog.lisp" }).arguments()).isEmpty();
+		// It is a separator only where an option key would be: as a VALUE it is the
+		// value.
+		assertThat(CliOptions.build(new String[] { "prog.lisp", "-o", "--" }).get("-o")).isEqualTo("--");
+	}
+
+	@Test
+	void aValueGivenAsTheFollowingArgumentKeepsItsEqualsSigns() {
+		// The glued form must not reach into a value the space form supplies.
+		CliOptions options = CliOptions.build(new String[] { "prog.lisp", "--system-path", "/a=b:/c" });
+		assertThat(options.get("--system-path")).isEqualTo("/a=b:/c");
+		assertThat(options.getNokey()).isEqualTo("prog.lisp");
+	}
+
+	@Test
+	void theAliasFlagsAreSpelledAsTheOraclesAndMOrXEndsTheOptions() {
+		// clj's order: the -M/-X aliases first, then every -A's
+		CliOptions options = CliOptions
+			.build(new String[] { "-o", "app.jar", "-A:a", "-A:b/c", "-M:dev:test", "-m", "my.app", "-o", "--", "x" });
+		assertThat(options.get("-o")).isEqualTo("app.jar");
+		assertThat(options.clojureAliases()).containsExactly(":dev", ":test", ":a", ":b/c");
+		CliOptions.ClojureRun run = options.clojureRun();
+		assertThat(run).isNotNull();
+		assertThat(run.exec()).isFalse();
+		assertThat(run.arguments()).containsExactly("-m", "my.app", "-o", "--", "x");
+		assertThat(options.arguments()).isEmpty();
+		CliOptions exec = CliOptions.build(new String[] { "-X", ":k", "1" });
+		assertThat(exec.clojureRun())
+			.isEqualTo(new CliOptions.ClojureRun(true, java.util.List.of(), java.util.List.of(":k", "1")));
+		// -A keeps the ordinary command line; a value or a program argument is no flag
+		CliOptions repl = CliOptions.build(new String[] { "-A:dev", "app.clj", "--world", "-M" });
+		assertThat(repl.clojureRun()).isNull();
+		assertThat(repl.getNokey()).isEqualTo("app.clj");
+		assertThat(repl.get("--world")).isEqualTo("-M");
+		assertThat(CliOptions.build(new String[] { "app.clj", "--", "-M:x" }).clojureRun()).isNull();
+		assertThatThrownBy(() -> CliOptions.build(new String[] { "-A" })).hasMessage("-A requires an alias");
+		assertThatThrownBy(() -> CliOptions.build(new String[] { "-T:tool" })).hasMessageContaining("clj -T");
+	}
+
+}

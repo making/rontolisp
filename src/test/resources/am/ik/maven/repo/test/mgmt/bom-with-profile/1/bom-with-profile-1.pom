@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>test.mgmt</groupId>
+  <artifactId>bom-with-profile</artifactId>
+  <version>1</version>
+  <packaging>pom</packaging>
+  <profiles>
+    <profile><id>p</id><activation><jdk>[11,)</jdk></activation>
+  <dependencyManagement>
+    <dependencies>
+      <dependency><groupId>test.lib</groupId><artifactId>from-bom-profile</artifactId><version>1.0</version></dependency>
+    </dependencies>
+  </dependencyManagement>
+    </profile>
+  </profiles>
+</project>

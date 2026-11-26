@@ -1,0 +1,385 @@
+package am.ik.rontolisp;
+
+import java.util.Objects;
+
+import org.jspecify.annotations.Nullable;
+
+/**
+ * A symbol value: its name, compared by content, so two symbol objects of one name are
+ * the same symbol.
+ *
+ * <p>
+ * <b>The interpreter's note.</b> A symbol object also carries one slot nothing but the
+ * interpreter reads or writes ({@link #evaluatorNote}): what it worked out about the NAME
+ * the last time it met this object, such as the function a call of it reaches
+ * ({@code .kb/interpreter-expansion-memo.md}, "The call-site note"). A fact about a name
+ * holds for every object of that name, so an object shared by several forms keeps one
+ * note for all of them. The slot is free in the native image the CLI ships as (its object
+ * stays 16 bytes) and costs 8 bytes on HotSpot's default layout; a side table keyed by
+ * the form was measured at 6% of an interpreted coalton load, its probes cache misses on
+ * a table of a million entries.
+ */
+public final class LispSymbol implements LispVal {
+
+	private final String name;
+
+	private @Nullable Object evaluatorNote;
+
+	/**
+	 * Creates a symbol.
+	 * @param name the symbol name
+	 */
+	public LispSymbol(String name) {
+		this.name = name;
+	}
+
+	/**
+	 * The symbol's name, as the reader and the resolver spell it.
+	 * @return the name
+	 */
+	public String name() {
+		return this.name;
+	}
+
+	/**
+	 * The interpreter's note on this symbol's name: opaque to everything else.
+	 * @return the note, or null
+	 */
+	public @Nullable Object evaluatorNote() {
+		return this.evaluatorNote;
+	}
+
+	/**
+	 * Replaces the interpreter's note. Racing writers each publish an immutable note, so
+	 * a reader sees one of them whole.
+	 * @param note the note
+	 */
+	public void evaluatorNote(@Nullable Object note) {
+		this.evaluatorNote = note;
+	}
+
+	@Override
+	public boolean equals(@Nullable Object other) {
+		return this == other || other instanceof LispSymbol symbol && Objects.equals(this.name, symbol.name);
+	}
+
+	@Override
+	public int hashCode() {
+		return Objects.hashCode(this.name);
+	}
+
+	@Override
+	public String toString() {
+		return "LispSymbol[name=" + this.name + "]";
+	}
+
+	/**
+	 * The canonical spelling of the {@code cl-user} symbol whose name is empty. Every
+	 * other {@code cl-user} symbol is spelled bare, but a compiled symbol is a bare
+	 * string told from a framed one by its first character, so this one has to have a
+	 * first character. It is the qualified spelling of that very symbol, so every reader
+	 * of a member name and of a symbol's home answers it as it answers {@code FOO::||};
+	 * only the printers know it, because it prints as a bare spelling does
+	 * ({@code .kb/symbol-runtime-api.md}, "The empty name").
+	 */
+	public static final String CL_USER_EMPTY_NAME = "CL-USER::";
+
+	/**
+	 * Returns the canonical spelling of a {@code cl-user} member: bare, except the empty
+	 * name and a name holding a colon, which a bare spelling would read as a package
+	 * marker ({@code |a:b|}). Those two carry the qualifier, and print as a bare spelling
+	 * does ({@link #framedClUserMember}).
+	 * @param member the member name
+	 * @return the member itself, or {@link #CL_USER_EMPTY_NAME} followed by it
+	 */
+	public static String clUserSpelling(String member) {
+		return member.isEmpty() || member.indexOf(':') >= 0 ? CL_USER_EMPTY_NAME + member : member;
+	}
+
+	/**
+	 * The member of a {@code cl-user} symbol {@link #clUserSpelling} had to qualify: the
+	 * empty name or a name holding a colon behind {@link #CL_USER_EMPTY_NAME}. Every
+	 * reader of a member name and of a home answers it as it answers {@code P::|a:b|};
+	 * the printers ask this, since it prints as a bare spelling does.
+	 * @param name the stored symbol name
+	 * @return the member, or {@code null} for any other spelling
+	 */
+	public static @Nullable String framedClUserMember(String name) {
+		if (!name.startsWith(CL_USER_EMPTY_NAME)) {
+			return null;
+		}
+		String member = name.substring(CL_USER_EMPTY_NAME.length());
+		return member.isEmpty() || member.indexOf(':') >= 0 ? member : null;
+	}
+
+	/**
+	 * Returns whether this symbol is a keyword (starts with {@code :}).
+	 * @return {@code true} if the symbol name starts with ':'
+	 */
+	public boolean isKeyword() {
+		return !this.name.isEmpty() && this.name.charAt(0) == ':';
+	}
+
+	/**
+	 * Returns whether this symbol is one of the eight names in
+	 * {@code lambda-list-keywords}. Any other {@code &name} is an ordinary parameter
+	 * name.
+	 * @return {@code true} for a lambda-list keyword
+	 */
+	public boolean isLambdaListKeyword() {
+		return PackageRegistry.isClLambdaListKeyword(this.name);
+	}
+
+	/**
+	 * Returns the symbol name without the leading package marker: a keyword's {@code :}
+	 * and an uninterned symbol's {@code #:} are markers, not part of the name. This is
+	 * what {@code symbol-name}, {@code princ} and {@code ~A} yield (matching CL apart
+	 * from case, which stays as read); {@code prin1} keeps the marker via
+	 * {@link #print()}.
+	 * @param name the stored symbol name
+	 * @return the name without a leading ':' or '#:'
+	 */
+	public static String displayName(String name) {
+		if (name.startsWith("#:")) {
+			return name.substring(2);
+		}
+		if (name.startsWith(":")) {
+			return name.substring(1);
+		}
+		return name;
+	}
+
+	/**
+	 * Returns the CL {@code symbol-name} spelling: the member part of a package-qualified
+	 * name ({@code (symbol-name 'foo::bar)} is {@code "BAR"} -- the qualifier is where
+	 * the symbol lives, not part of its name), and otherwise the {@link #displayName}
+	 * marker-stripped spelling. This is also what {@code princ}/{@code ~A} yield (see
+	 * {@link #display()}, CLHS 22.1.3.3: with {@code *print-escape*} false, only the
+	 * characters of the symbol's name are output); {@code prin1} keeps the qualifier via
+	 * {@link #print()}.
+	 * @param name the stored symbol name
+	 * @return the package-stripped, marker-stripped name
+	 */
+	public static String memberName(String name) {
+		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(name);
+		if (qn != null) {
+			return qn.member();
+		}
+		return displayName(name);
+	}
+
+	/**
+	 * The spelling of a name an expansion generates from a symbol -- a variable it binds
+	 * beside it -- in that symbol's package: the prefix goes on the member, so a
+	 * qualified spelling stays qualified (internal, as nothing exports a generated name)
+	 * and an uninterned one uninterned. Glued in front of a qualified spelling, the
+	 * prefix would name a member of another package ({@code __ll_cell_PKG:X} reads as
+	 * {@code X} in {@code __ll_cell_PKG}), which the compilers' resolver refuses when it
+	 * reads an expansion made at macro time.
+	 * @param prefix the generated part
+	 * @param name the stored name of the symbol the generated one derives from
+	 * @return the generated spelling
+	 */
+	public static String derivedName(String prefix, String name) {
+		if (name.startsWith("#:")) {
+			return "#:" + prefix + name.substring(2);
+		}
+		int colon = name.indexOf(':');
+		if (colon <= 0) {
+			return prefix + name;
+		}
+		int member = colon + 1 < name.length() && name.charAt(colon + 1) == ':' ? colon + 2 : colon + 1;
+		return name.substring(0, colon) + "::" + prefix + name.substring(member);
+	}
+
+	@Override
+	public String print() {
+		if (this.isKeyword()) {
+			return ":" + escape(displayName(this.name));
+		}
+		if (this.name.startsWith("#:")) {
+			return "#:" + escape(this.name.substring(2));
+		}
+		String framed = framedClUserMember(this.name);
+		if (framed != null) {
+			return escape(framed);
+		}
+		int colon = qualifierEnd(this.name);
+		if (colon > 0 && !isInstanceTag(this.name)) {
+			return this.name.substring(0, colon) + escape(this.name.substring(colon));
+		}
+		return escape(this.name);
+	}
+
+	/**
+	 * Whether the name is an instance tag ({@code %struct-PKG::NAME} /
+	 * {@code %class-PKG::NAME}, {@link LispLayout}): one token over an already-canonical
+	 * name, not a package-qualified symbol -- its embedded {@code ::} must not print as a
+	 * qualifier, or the reader reads the tag's prefix as a package name
+	 * ({@code %struct-RONTOLISP}) and the re-read symbol is not the tag the program
+	 * registered.
+	 */
+	private static boolean isInstanceTag(String name) {
+		return name.startsWith(LispLayout.STRUCT_TAG_PREFIX) || name.startsWith(LispLayout.CLASS_TAG_PREFIX);
+	}
+
+	/**
+	 * The end (exclusive) of a {@code pkg:} / {@code pkg::} qualifier prefix in a
+	 * package-qualified name, matching {@link PackageRegistry#splitQualified} closely
+	 * enough for {@link #print()} to leave the qualifier text untouched -- unlike that
+	 * method this keeps the ORIGINAL package spelling (a nickname is not normalized),
+	 * since escaping is only about the member part.
+	 * @param name the stored symbol name
+	 * @return the index just past the qualifier's colon(s), or {@code -1} when
+	 * {@code name} carries no package qualifier
+	 */
+	private static int qualifierEnd(String name) {
+		int idx = name.indexOf(':');
+		if (idx <= 0) {
+			return -1;
+		}
+		return idx + 1 < name.length() && name.charAt(idx + 1) == ':' ? idx + 2 : idx + 1;
+	}
+
+	/**
+	 * The {@code prin1} spelling of one symbol NAME component (a keyword's member, an
+	 * uninterned symbol's member, a package-qualified name's member, or a whole
+	 * unqualified name): wrapped in {@code |...|}, with every {@code |} and {@code \}
+	 * inside escaped by a preceding {@code \}, when {@link #needsEscape} says the bare
+	 * spelling would not read back as this name (CLHS 22.1.3.3). Otherwise returned
+	 * verbatim -- the common case, so this only allocates when escaping is needed.
+	 * @param member the name component to spell
+	 * @return the read-back-safe spelling of {@code member}
+	 */
+	private static String escape(String member) {
+		if (!needsEscape(member)) {
+			return member;
+		}
+		return forceEscape(member);
+	}
+
+	/**
+	 * The {@code |...|} spelling of {@code member}, escaping every {@code |} and
+	 * {@code \} inside -- the shape {@link #escape} takes once {@link #needsEscape} says
+	 * the bare spelling would not read back.
+	 * @param member the name component to spell
+	 * @return the escaped spelling
+	 */
+	private static String forceEscape(String member) {
+		StringBuilder sb = new StringBuilder(member.length() + 2);
+		sb.append('|');
+		for (int i = 0; i < member.length(); i++) {
+			char c = member.charAt(i);
+			if (c == '|' || c == '\\') {
+				sb.append('\\');
+			}
+			sb.append(c);
+		}
+		return sb.append('|').toString();
+	}
+
+	/**
+	 * Whether {@code member} needs {@code |...|} escaping to read back as itself (CLHS
+	 * 22.1.3.3): the empty name, a name holding a character the reader would not accept
+	 * inside a bare symbol token ({@link LispSymbol}'s own mirror of
+	 * {@code LispLexer.isSymbolChar}'s terminating-character set, plus {@code |} and
+	 * {@code \}, which are reader escape syntax rather than terminating characters
+	 * there), a name holding a colon, which a bare re-read takes for a package marker, or
+	 * a name a bare re-read would not reproduce under the reader's {@code :upcase}
+	 * folding. This is independent of the CURRENT {@code *print-case*} binding, which
+	 * only recases an unescaped spelling after this decision is made (CLHS: an escaped
+	 * symbol's spelling is never recased).
+	 *
+	 * <p>
+	 * The case check is scoped to ASCII {@code a}-{@code z} rather than the reader's
+	 * general {@code Character.toUpperCase(char)} fold (which does cover the full Unicode
+	 * range {@code LispLexer.readSymbol} folds by): the compiled backends would otherwise
+	 * need the {@code Character.toUpperCase(int)} range table
+	 * ({@code WasmCaseFoldRuntimeBuilder}) reachable from every program that prints any
+	 * symbol at all, not just one that calls {@code string-upcase}, which is the
+	 * unconditional-emission bloat the printer-control-variable gating elsewhere in this
+	 * file (`.kb/pretty-printer.md`) exists to avoid. A name whose only non-constituent
+	 * characters are non-ASCII lowercase letters (e.g. Latin-1 {@code à}) therefore
+	 * prints unescaped and mis-reads under the default readtable -- a known, narrow gap;
+	 * re-evaluate together with a use for the general fold on a path every printed
+	 * program already pays for.
+	 * @param member the name component to test
+	 * @return {@code true} when {@code member} must be {@code |...|}-escaped
+	 */
+	private static boolean needsEscape(String member) {
+		if (member.isEmpty()) {
+			return true;
+		}
+		for (int i = 0; i < member.length(); i++) {
+			char c = member.charAt(i);
+			// A colon in a member is a package marker to a bare re-read (CLHS 2.3.5).
+			if ((c >= 'a' && c <= 'z') || c == ':' || !isBareConstituent(c)) {
+				return true;
+			}
+		}
+		return readsAsNoSymbol(member);
+	}
+
+	/**
+	 * Whether a bare token of these characters would not read as a symbol (CLHS
+	 * 22.1.3.3.1, 2.3.1.1, measured against SBCL 2.2.9): dots alone, or a potential
+	 * number -- digits, signs, ratio markers, decimal points, extension characters and
+	 * letters no two of which are adjacent, at least one digit, beginning with neither a
+	 * letter nor a ratio marker and not ending in a sign. {@code 1E5} and {@code 1/2/3}
+	 * qualify, {@code 1+}, {@code E1} and {@code 1AB} do not. The digits are decimal,
+	 * whatever {@code *print-base*} says: the compiled twins read no variable. Mirrored
+	 * by {@code JvmRuntimeBuilder.buildSymEscBody} and
+	 * {@code WasmStringRuntimeBuilder.buildSymEscGcBody}.
+	 * @param member the name component to test, a non-empty one with no lower case letter
+	 * @return {@code true} when it must be escaped
+	 */
+	private static boolean readsAsNoSymbol(String member) {
+		boolean digit = false;
+		boolean dots = true;
+		boolean letterBefore = false;
+		for (int i = 0; i < member.length(); i++) {
+			char c = member.charAt(i);
+			boolean letter = c >= 'A' && c <= 'Z';
+			if (letter && letterBefore) {
+				return false;
+			}
+			letterBefore = letter;
+			digit |= c >= '0' && c <= '9';
+			dots &= c == '.';
+			if (!letter && !(c >= '0' && c <= '9') && ".+-/^_".indexOf(c) < 0) {
+				return false;
+			}
+		}
+		char first = member.charAt(0);
+		char last = member.charAt(member.length() - 1);
+		return dots || digit && !(first >= 'A' && first <= 'Z') && first != '/' && last != '+' && last != '-';
+	}
+
+	// Mirrors LispLexer.isSymbolChar's terminating-character set (reader pkg, which
+	// this root package must not depend on -- .kb/pretty-printer.md) restricted to the
+	// ASCII whitespace LispLexer's Character.isWhitespace(c) recognizes for these
+	// characters (see needsEscape's Javadoc on the matching ASCII-only case scope),
+	// plus '|' and '\': reader-special even though isSymbolChar does not exclude them,
+	// since a literal occurrence would otherwise be read as escape syntax rather than
+	// as itself.
+	private static boolean isBareConstituent(char c) {
+		return c != ' ' && c != '\t' && c != '\n' && c != '\r' && c != '\f' && c != '(' && c != ')' && c != '\''
+				&& c != '"' && c != ';' && c != ',' && c != '`' && c != '|' && c != '\\';
+	}
+
+	/**
+	 * The {@code princ}/{@code ~A} spelling: the symbol's NAME, with neither the package
+	 * qualifier nor a keyword/gensym marker. CLHS 22.1.3.3 -- with {@code *print-escape*}
+	 * false only the characters of the name are output -- so {@code (princ 'quri:uri)}
+	 * writes {@code URI}, not {@code QURI:URI}. This is load-bearing beyond printing: a
+	 * library that synthesizes a function name with
+	 * {@code (intern (format nil "~:@(~a-~a~)" name :string))} (quri's
+	 * {@code defun-with-array-parsing}) interns the qualifier into the NAME when
+	 * {@code ~A} leaks it, defining its function under a name no call site resolves to.
+	 */
+	@Override
+	public String display() {
+		return memberName(this.name);
+	}
+
+}

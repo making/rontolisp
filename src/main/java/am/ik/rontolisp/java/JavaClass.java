@@ -1,0 +1,590 @@
+package am.ik.rontolisp.java;
+
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+
+import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.java.JavaSyntax.ClassDeclaration;
+import am.ik.rontolisp.java.JavaType.ClassType;
+import am.ik.rontolisp.java.JavaType.TypeParameter;
+import org.jspecify.annotations.Nullable;
+
+/**
+ * A class or interface of the program's class table: one the program declares, one of the
+ * library written in Java and lowered with the program, or one of the library whose
+ * values are Lisp values and whose members are forms ({@link JavaIntrinsics}).
+ */
+final class JavaClass {
+
+	/**
+	 * Where a class's text comes from, which decides how much of it is lowered and what
+	 * is checked of it.
+	 */
+	enum Origin {
+
+		/** A file of the program: lowered whole, located, checked. */
+		PROGRAM,
+
+		/**
+		 * A file of a library the program uses, read from its source path: lowered as far
+		 * as the program reaches it, located, and trusted to be Java a compiler took.
+		 */
+		DEPENDENCY,
+
+		/** Java source of the front end's own library: lowered as far as reached. */
+		LIBRARY
+
+	}
+
+	/**
+	 * The text a class was read from, for the positions of what is said about it.
+	 *
+	 * @param file the file, or {@code null}
+	 * @param text its text
+	 * @param origin whose it is
+	 */
+	record Source(@Nullable String file, String text, Origin origin) {
+
+		/**
+		 * Whether it is Java source of the front end's library, and no file a program
+		 * names.
+		 */
+		boolean library() {
+			return this.origin == Origin.LIBRARY;
+		}
+
+		/** Whether it is a file of a library the program uses. */
+		boolean dependency() {
+			return this.origin == Origin.DEPENDENCY;
+		}
+
+		/** Whether only what the program reaches of it is lowered. */
+		boolean partial() {
+			return this.origin != Origin.PROGRAM;
+		}
+
+	}
+
+	/**
+	 * Told where the program reaches into a class that could not be read: a class of a
+	 * library the program uses naming a class nobody has, or one whose own file is
+	 * refused. Such a class is a name until something asks what it is made of.
+	 */
+	static final class Absent extends RuntimeException {
+
+		private static final long serialVersionUID = 1L;
+
+		final transient JavaClass named;
+
+		Absent(JavaClass named) {
+			super(java.util.Objects.requireNonNull(named.absent).reason());
+			this.named = named;
+		}
+
+	}
+
+	/** A field. */
+	static final class Field {
+
+		final JavaClass owner;
+
+		final String name;
+
+		/** Its type: a session's variable declared with {@code var} gets one late. */
+		JavaType type;
+
+		final boolean isStatic;
+
+		final boolean isFinal;
+
+		final JavaSyntax.@Nullable Field declaration;
+
+		/** An intrinsic field's value, or {@code null} for a declared field. */
+		final @Nullable LispVal form;
+
+		/**
+		 * An intrinsic field whose value is an object of the library's Java source: the
+		 * static method of that source answering it, called where the field is read, or
+		 * {@code null}.
+		 */
+		JavaClass.@Nullable Accessor accessor;
+
+		/**
+		 * What an intrinsic field is as the receiver of a member its {@link Accessor}'s
+		 * object need not be made for: a value of an intrinsic class holding those
+		 * members, or {@code null}.
+		 */
+		JavaEmitter.@Nullable Typed direct;
+
+		/** What a field the front end adds is initialized with, or {@code null}. */
+		JavaSyntax.@Nullable Expression initializer;
+
+		/** Where it is declared: an enum constant's or a record component's name. */
+		int pos;
+
+		boolean isPrivate;
+
+		/** Whether it is an enum constant. */
+		boolean isConstant;
+
+		/**
+		 * Whether it is a session's variable declared with {@code var}, or the variable a
+		 * session's expression is shown under: its type is its value's.
+		 */
+		boolean inferred;
+
+		/**
+		 * Whether nothing can change what it holds once it is set: the array an enum's
+		 * {@code values()} copies.
+		 */
+		boolean frozen;
+
+		Field(JavaClass owner, String name, JavaType type, boolean isStatic, boolean isFinal,
+				JavaSyntax.@Nullable Field declaration, @Nullable LispVal form) {
+			this.owner = owner;
+			this.name = name;
+			this.type = type;
+			this.isStatic = isStatic;
+			this.isFinal = isFinal;
+			this.declaration = declaration;
+			this.form = form;
+			this.initializer = declaration == null ? null : declaration.initializer();
+			this.pos = declaration == null ? 0 : declaration.pos();
+			this.isPrivate = declaration != null && declaration.modifiers().contains("private");
+		}
+
+		/**
+		 * The structure slot an instance field is. A structure has one slot of a name and
+		 * holds the slots of the classes above it, so a field hiding one of a superclass
+		 * -- or named as a private one there, which it does not even hide -- is a slot of
+		 * its own name: the field's, and how many fields above it have it.
+		 */
+		String slot() {
+			int above = 0;
+			for (JavaClass type = this.owner.superclass; type != null; type = type.superclass) {
+				for (Field field : type.fields) {
+					if (!field.isStatic && field.name.equals(this.name)) {
+						above++;
+					}
+				}
+			}
+			return above == 0 ? this.name : this.name + "%" + above;
+		}
+
+	}
+
+	/**
+	 * The static method of the library's Java source that answers an intrinsic field's
+	 * value.
+	 *
+	 * @param className the class declaring it
+	 * @param method its name; it takes no argument
+	 */
+	record Accessor(String className, String method) {
+	}
+
+	/**
+	 * A local variable of an enclosing method that a local or anonymous class reads: a
+	 * slot of the class, set where an instance is made.
+	 *
+	 * @param name the variable
+	 * @param type its type
+	 * @param slot the slot's name, the class's own
+	 */
+	record Capture(String name, JavaType type, String slot) {
+	}
+
+	/** A method or a constructor. */
+	static final class Method {
+
+		final JavaClass owner;
+
+		final String name;
+
+		final List<JavaType> parameters;
+
+		final JavaType returnType;
+
+		final boolean isStatic;
+
+		final boolean isAbstract;
+
+		final JavaSyntax.@Nullable Method declaration;
+
+		/** An intrinsic member's lowering, or {@code null} for a declared method. */
+		final @Nullable JavaEmitter emitter;
+
+		/** Whether an intrinsic member takes its arguments as they are typed. */
+		final boolean raw;
+
+		/** Whether its last parameter takes the arguments past the ones before it. */
+		boolean varargs;
+
+		/**
+		 * Whether an intrinsic member answering a {@code String} may answer {@code null}:
+		 * every other one's text is concatenated as it is.
+		 */
+		boolean answersNull;
+
+		boolean isPrivate;
+
+		/**
+		 * Whether an intrinsic member is {@code protected}: {@code Object}'s
+		 * {@code clone()} and {@code finalize()}, which a class under it can override.
+		 */
+		boolean isProtected;
+
+		/**
+		 * Whether an intrinsic member is {@code final}: {@code Object}'s monitor members.
+		 */
+		boolean isFinal;
+
+		/**
+		 * How many parameters the front end added ahead of the declared ones: an enum
+		 * constructor's name and ordinal.
+		 */
+		int hidden;
+
+		/**
+		 * The constructor an anonymous class's own hands its arguments to, or
+		 * {@code null}.
+		 */
+		@Nullable Method passesTo;
+
+		/** The type parameters it declares: found at every call. */
+		List<TypeParameter> typeParameters = List.of();
+
+		/** The types of its {@code throws} clause: classes and type variables. */
+		List<JavaType> thrown = List.of();
+
+		/**
+		 * The classes of an intrinsic member's {@code throws} clause, by qualified name:
+		 * read where a call of it is lowered, so that a program calling none of them
+		 * holds no such class.
+		 */
+		List<String> raises = List.of();
+
+		Method(JavaClass owner, String name, List<JavaType> parameters, JavaType returnType, boolean isStatic,
+				boolean isAbstract, JavaSyntax.@Nullable Method declaration, @Nullable JavaEmitter emitter,
+				boolean raw) {
+			this.owner = owner;
+			this.name = name;
+			this.parameters = parameters;
+			this.returnType = returnType;
+			this.isStatic = isStatic;
+			this.isAbstract = isAbstract;
+			this.declaration = declaration;
+			this.emitter = emitter;
+			this.raw = raw;
+			this.varargs = declaration != null && declaration.varargs();
+			this.isPrivate = declaration != null && declaration.modifiers().contains("private");
+		}
+
+		/**
+		 * The type parameters as the method's own body names them, by the declared ones:
+		 * types of their own, so that a call of the method from its body -- whose type
+		 * arguments are found as at any call -- finds them for the declared parameters
+		 * and from types naming these. Made once: a local class of the body keeps them
+		 * over the passes.
+		 */
+		private @Nullable Map<TypeParameter, JavaType> inside;
+
+		/** What each declared type parameter is in the method's own body. */
+		Map<TypeParameter, JavaType> inside() {
+			Map<TypeParameter, JavaType> made = this.inside;
+			if (made == null) {
+				made = new LinkedHashMap<>();
+				List<TypeParameter> named = new ArrayList<>();
+				for (TypeParameter declared : this.typeParameters) {
+					TypeParameter own = new TypeParameter(declared.name, true, false);
+					own.owner = declared.owner;
+					own.method = declared.method;
+					own.intersection = declared.intersection;
+					named.add(own);
+					made.put(declared, new JavaType.Variable(own));
+				}
+				for (int i = 0; i < named.size(); i++) {
+					List<JavaType> bounds = new ArrayList<>();
+					for (JavaType bound : this.typeParameters.get(i).bounds) {
+						bounds.add(JavaTypes.substitute(bound, made));
+					}
+					named.get(i).bounds = List.copyOf(bounds);
+				}
+				this.inside = made;
+			}
+			return made;
+		}
+
+		/** The type parameters the method's body names. */
+		List<TypeParameter> insideParameters() {
+			List<TypeParameter> named = new ArrayList<>();
+			for (JavaType variable : inside().values()) {
+				named.add(((JavaType.Variable) variable).parameter());
+			}
+			return named;
+		}
+
+		/** A type of the method's declaration as its body reads it. */
+		JavaType inside(JavaType declared) {
+			return JavaTypes.substitute(declared, inside());
+		}
+
+		/**
+		 * Whether it is an interface's method with a body an implementing class inherits.
+		 */
+		boolean isDefault() {
+			return this.owner.isInterface && !this.isAbstract && !this.isStatic && !this.isPrivate;
+		}
+
+		boolean isConstructor() {
+			return this.name.equals("<init>");
+		}
+
+		/** Whether it is one of {@code Object}'s methods, which every class has. */
+		boolean isObjectMethod() {
+			String signature = signature();
+			return signature.equals("toString()") || signature.equals("equals(Object)")
+					|| signature.equals("hashCode()");
+		}
+
+		/** The name and the erased parameter types: what an override shares. */
+		String signature() {
+			StringBuilder signature = new StringBuilder(this.name).append('(');
+			for (int i = 0; i < this.parameters.size(); i++) {
+				signature.append(i > 0 ? "," : "").append(this.parameters.get(i).erasure());
+			}
+			return signature.append(')').toString();
+		}
+
+		/** The parameter list alone, for the names of a constructor's two functions. */
+		String parameterList() {
+			return signature().substring(this.name.length());
+		}
+
+	}
+
+	/**
+	 * The name it is found by: its canonical name, {@code pkg.Outer.Inner}; one of its
+	 * own for a local or an anonymous class, which no program can write.
+	 */
+	final String name;
+
+	/** What {@code getClass().getName()} answers: {@code pkg.Outer$Inner}. */
+	final String binaryName;
+
+	/** Its simple name, empty for an anonymous class. */
+	final String simple;
+
+	final boolean isInterface;
+
+	boolean isAbstract;
+
+	boolean isEnum;
+
+	boolean isRecord;
+
+	/** Whether it is an annotation type: an interface an annotation may name. */
+	boolean isAnnotation;
+
+	boolean isFinal;
+
+	/** Whether it is {@code sealed}: its direct subtypes are {@link #permits}. */
+	boolean isSealed;
+
+	/** Whether its values are Lisp values and its members forms. */
+	final boolean intrinsic;
+
+	/**
+	 * Why the class could not be read, or {@code null} for a class that was: a class a
+	 * library names in a declaration and nobody has. Its name stands in the types of the
+	 * members naming it; what it extends and what it holds is refused where asked.
+	 */
+	am.ik.rontolisp.reader.@Nullable LispReadException absent;
+
+	/** Refuses a class that could not be read, where what it is made of is asked. */
+	JavaClass present() {
+		if (this.absent != null) {
+			throw new Absent(this);
+		}
+		return this;
+	}
+
+	/**
+	 * Whether the program can hold a value of an intrinsic class: something other than
+	 * the type of a library class's member named it ({@code JavaClasses.held}).
+	 */
+	boolean held;
+
+	/** The type parameters it declares. */
+	final List<TypeParameter> typeParameters = new ArrayList<>();
+
+	final @Nullable ClassDeclaration declaration;
+
+	final @Nullable Source source;
+
+	/** The class its declaration stands in, or {@code null} for a top-level class. */
+	@Nullable JavaClass outer;
+
+	/**
+	 * Whether an instance holds no instance of {@link #outer}: a top-level class, a
+	 * static member, an interface, an enum, a record, a class declared in a static
+	 * context.
+	 */
+	boolean isStatic = true;
+
+	/** Whether it is a local or an anonymous class: lowered where it is declared. */
+	boolean isLocal;
+
+	/**
+	 * Whether the instance around its superclass, an inner class, is given where an
+	 * instance is made: an anonymous class made with {@code outer.new}.
+	 */
+	boolean superOuterGiven;
+
+	/** The type parameters of the method a local class is declared in. */
+	List<TypeParameter> scope = List.of();
+
+	@Nullable JavaClass superclass;
+
+	/**
+	 * The class it extends when that one's values are Lisp values, or {@code null}:
+	 * {@code Number}. No {@link #superclass}: such a class gives a class under it a type
+	 * and the members it has a form for, and no slot, no constructor and no body.
+	 */
+	@Nullable JavaClass intrinsicSuperclass;
+
+	final List<JavaClass> interfaces = new ArrayList<>();
+
+	/**
+	 * What it extends and implements as written, type arguments and all, by class: a
+	 * supertype that is not here is one with no argument.
+	 */
+	final Map<JavaClass, ClassType> parameterized = new LinkedHashMap<>();
+
+	final List<JavaClass> permits = new ArrayList<>();
+
+	/** Its member types, by simple name. */
+	final Map<String, JavaClass> members = new LinkedHashMap<>();
+
+	final List<Field> fields = new ArrayList<>();
+
+	final List<Method> methods = new ArrayList<>();
+
+	/** The locals of the enclosing methods a local class reads, by name. */
+	final Map<String, Capture> captures = new LinkedHashMap<>();
+
+	JavaClass(String name, boolean isInterface, boolean isAbstract, boolean intrinsic,
+			@Nullable ClassDeclaration declaration, @Nullable Source source) {
+		this(name, name, name.substring(name.lastIndexOf('.') + 1), isInterface, isAbstract, intrinsic, declaration,
+				source);
+	}
+
+	JavaClass(String name, String binaryName, String simple, boolean isInterface, boolean isAbstract, boolean intrinsic,
+			@Nullable ClassDeclaration declaration, @Nullable Source source) {
+		this.name = name;
+		this.binaryName = binaryName;
+		this.simple = simple;
+		this.isInterface = isInterface;
+		this.isAbstract = isAbstract;
+		this.intrinsic = intrinsic;
+		this.declaration = declaration;
+		this.source = source;
+	}
+
+	/** Whether an instance holds the instance of {@link #outer} it was made in. */
+	boolean hasOuterInstance() {
+		return this.outer != null && !this.isStatic;
+	}
+
+	/** The top-level class its declaration stands in: the unit of private access. */
+	JavaClass topLevel() {
+		JavaClass top = this;
+		while (top.outer != null) {
+			top = top.outer;
+		}
+		return top;
+	}
+
+	String simpleName() {
+		return this.simple;
+	}
+
+	/**
+	 * The name the class has in every Lisp name made of it: its qualified name, a
+	 * {@code java.lang} class its simple one, as a program writes it.
+	 */
+	String lispName() {
+		return this.name.startsWith("java.lang.") && this.name.indexOf('.', 10) < 0 ? this.simple : this.name;
+	}
+
+	boolean isSubclassOf(JavaClass other) {
+		if (this == other) {
+			return true;
+		}
+		if (this.absent != null && !other.name.equals("java.lang.Object")) {
+			// what stands above a class nobody has cannot be told
+			throw new Absent(this);
+		}
+		if (this.superclass != null && this.superclass.isSubclassOf(other)) {
+			return true;
+		}
+		if (this.intrinsicSuperclass != null && this.intrinsicSuperclass.isSubclassOf(other)) {
+			return true;
+		}
+		for (JavaClass implemented : this.interfaces) {
+			if (implemented.isSubclassOf(other)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/** A direct supertype as the class's declaration writes it. */
+	ClassType supertype(JavaClass above) {
+		ClassType written = this.parameterized.get(above);
+		return written != null ? written : new ClassType(above, List.of());
+	}
+
+	/**
+	 * The type parameters a type of the class gives arguments to: its own, then, for an
+	 * inner member class, those of the class around it, whose instance it holds -- so
+	 * {@code Outer<String>.Inner} is {@code Inner} with the argument {@code String}. A
+	 * local or an anonymous class reads the parameters around it as they are: no type of
+	 * it is written outside the body declaring it.
+	 */
+	List<TypeParameter> allTypeParameters() {
+		JavaClass around = this.outer;
+		if (around == null || this.isStatic || around.members.get(this.simple) != this) {
+			return this.typeParameters;
+		}
+		List<TypeParameter> outer = around.allTypeParameters();
+		if (outer.isEmpty()) {
+			return this.typeParameters;
+		}
+		List<TypeParameter> all = new ArrayList<>(this.typeParameters);
+		all.addAll(outer);
+		return all;
+	}
+
+	/** The class as a type inside its own body: its parameters are its arguments. */
+	ClassType self() {
+		List<JavaType> arguments = new ArrayList<>();
+		for (TypeParameter parameter : allTypeParameters()) {
+			arguments.add(new JavaType.Variable(parameter));
+		}
+		return new ClassType(this, List.copyOf(arguments));
+	}
+
+	/** How many classes it extends, the order a dispatch tests the classes in. */
+	int depth() {
+		return this.superclass == null ? 0 : 1 + this.superclass.depth();
+	}
+
+	@Override
+	public String toString() {
+		return this.name;
+	}
+
+}

@@ -1,0 +1,1194 @@
+package am.ik.rontolisp.eval;
+
+import java.io.ByteArrayOutputStream;
+import java.io.PrintStream;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayDeque;
+import java.util.Deque;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.TreeSet;
+import java.util.stream.Collectors;
+
+import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispLambda;
+import am.ik.rontolisp.LispNil;
+import am.ik.rontolisp.LispString;
+import am.ik.rontolisp.LispSymbol;
+import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.clojure.Clojure;
+import am.ik.rontolisp.clojure.ClojureArms;
+import am.ik.rontolisp.clojure.ClojureFiles;
+import am.ik.rontolisp.clojure.ClojureRunTime;
+import am.ik.rontolisp.reader.LispReader;
+import org.junit.jupiter.api.Test;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+class ClojureLibraryTest {
+
+	@Test
+	void theLibraryDefinesThePrinterHelpers() {
+		assertThat(ClojureLibrary.isClojureFunction("RONTOLISP::%CLOJURE-STR-OF")).isTrue();
+		assertThat(ClojureLibrary.isClojureFunction("RONTOLISP::%CLOJURE-WRITE-DATUM")).isTrue();
+		assertThat(ClojureLibrary.isClojureFunction("RONTOLISP::%CLOJURE-CALL")).isTrue();
+		assertThat(ClojureLibrary.isClojureFunction("PRINC")).isFalse();
+	}
+
+	@Test
+	void everyLibraryNameIsDefinedOnce() {
+		// a second definition of a name replaces the first for every caller, the first's
+		// own included
+		Set<String> seen = new HashSet<>();
+		Set<String> twice = new TreeSet<>();
+		for (LispVal form : ClojureLibrary.forms()) {
+			if (form instanceof LispCons cons && cons.car() instanceof LispSymbol head
+					&& (head.name().equals("DEFUN") || head.name().equals("DEFMACRO"))
+					&& cons.cdr() instanceof LispCons rest && rest.car() instanceof LispSymbol name
+					&& !seen.add(name.name())) {
+				twice.add(name.name());
+			}
+		}
+		assertThat(seen).contains("RONTOLISP::%CLOJURE-HOST-ENTRIES", "RONTOLISP::%CLOJURE-HOST-VALUE");
+		assertThat(twice).isEmpty();
+	}
+
+	@Test
+	void everyFunctionReachingTheRunTimeLoweringIsAnEntry() {
+		// a program naming one lowers at run time, so the front end must know it to lower
+		// the program open where its target lowers then (ClojureRunTime.ENTRIES): every
+		// library function calling %clojure-lower-at-run-time, at any remove
+		Map<String, Set<String>> callers = new HashMap<>();
+		for (LispVal form : ClojureLibrary.forms()) {
+			if (form instanceof LispCons cons && cons.car() instanceof LispSymbol head && head.name().equals("DEFUN")
+					&& cons.cdr() instanceof LispCons rest && rest.car() instanceof LispSymbol name) {
+				Set<String> named = new HashSet<>();
+				symbolsOf(rest.cdr(), named);
+				for (String callee : named) {
+					callers.computeIfAbsent(callee, ignored -> new HashSet<>()).add(name.name());
+				}
+			}
+		}
+		Set<String> reaching = new TreeSet<>(Set.of("RONTOLISP::%CLOJURE-LOWER-AT-RUN-TIME"));
+		Deque<String> pending = new ArrayDeque<>(reaching);
+		while (!pending.isEmpty()) {
+			for (String caller : callers.getOrDefault(pending.pop(), Set.of())) {
+				if (reaching.add(caller)) {
+					pending.push(caller);
+				}
+			}
+		}
+		assertThat(ClojureRunTime.ENTRIES).containsExactlyInAnyOrderElementsOf(reaching);
+	}
+
+	private static void symbolsOf(LispVal form, Set<String> out) {
+		LispVal rest = form;
+		while (rest instanceof LispCons cons) {
+			symbolsOf(cons.car(), out);
+			rest = cons.cdr();
+		}
+		if (rest instanceof LispSymbol symbol) {
+			out.add(symbol.name());
+		}
+	}
+
+	@Test
+	void aProgramReferencingAPrinterHelperGetsTheLibrarySpliced() {
+		List<LispVal> program = List.of(new am.ik.rontolisp.LispCons(
+				new am.ik.rontolisp.LispSymbol("RONTOLISP::%CLOJURE-STR-OF"),
+				new am.ik.rontolisp.LispCons(new am.ik.rontolisp.LispSymbol("X"), am.ik.rontolisp.LispNil.INSTANCE)));
+		List<LispVal> processed = ClojureLibrary.process(program);
+		assertThat(processed.size()).isGreaterThan(program.size());
+		String text = processed.stream().map(LispVal::print).collect(Collectors.joining("\n"));
+		assertThat(text).contains("DEFUN RONTOLISP::%CLOJURE-STR-OF");
+		// A fragment of a class that lowers as it runs takes only what the classes before
+		// it lack: what the helper reaches when they hold nothing, never the whole
+		// library; nothing when they hold the helper; the helper alone when they hold
+		// every definition it reaches, which it calls there.
+		List<LispVal> reached = ClojureLibrary.process(program, true, true,
+				new LinkedDefinitions(Set.of(), Set.of(), Set.of()));
+		List<String> reachedNames = reached.subList(0, reached.size() - 1)
+			.stream()
+			.map(ClojureLibraryTest::nameOf)
+			.toList();
+		assertThat(reachedNames).contains("RONTOLISP::%CLOJURE-STR-OF")
+			.hasSizeLessThan(ClojureLibrary.forms().size() / 4);
+		assertThat(ClojureLibrary.process(program, true, true,
+				new LinkedDefinitions(Set.of("RONTOLISP::%CLOJURE-STR-OF"), Set.of(), Set.of())))
+			.isEqualTo(program);
+		Set<String> theRest = new HashSet<>(reachedNames);
+		theRest.remove("RONTOLISP::%CLOJURE-STR-OF");
+		assertThat(ClojureLibrary.process(program, true, true, new LinkedDefinitions(theRest, theRest, theRest))
+			.stream()
+			.map(LispVal::print)
+			.filter(form -> form.startsWith("(DEF")))
+			.singleElement(org.assertj.core.api.InstanceOfAssertFactories.STRING)
+			.startsWith("(DEFUN RONTOLISP::%CLOJURE-STR-OF ");
+	}
+
+	private static String nameOf(LispVal definition) {
+		return ((LispSymbol) ((LispCons) ((LispCons) definition).cdr()).car()).name();
+	}
+
+	@Test
+	void aProgramBuildingNoSortedCollectionSplicesTheLibraryWithoutItsSortedArms() {
+		// the interpreter's library keeps every arm (what a session reads next is
+		// unknown); a compiled program that builds no sorted collection gets the library
+		// with its arms folded away, and so its own forms
+		assertThat(defun(ClojureLibrary.forms(), "RONTOLISP::%CLOJURE-STRICT-SEQ"))
+			.contains("(RONTOLISP::%CLOJURE-SORTED-P COLL)");
+		List<LispVal> plain = LispReader
+			.readAllFromString("(rontolisp::%clojure-str-of (if (rontolisp::%clojure-sorted-p x) 1 x) \"\" nil)");
+		List<LispVal> processed = ClojureLibrary.process(plain);
+		assertThat(defun(processed, "RONTOLISP::%CLOJURE-STRICT-SEQ")).doesNotContain("SORTED");
+		assertThat(processed.get(processed.size() - 1).print()).isEqualTo("(RONTOLISP::%CLOJURE-STR-OF X \"\" NIL)");
+		List<LispVal> sorted = LispReader.readAllFromString(
+				"(rontolisp::%clojure-str-of (rontolisp::%clojure-sorted-make t nil (list 1)) \"\" nil)");
+		assertThat(defun(ClojureLibrary.process(sorted), "RONTOLISP::%CLOJURE-STRICT-SEQ"))
+			.contains("(RONTOLISP::%CLOJURE-SORTED-P COLL)");
+	}
+
+	@Test
+	void aProgramStoringNoReducerRowSplicesTheReduceVerbsWithoutTheirProtocolArms() {
+		// only a record's, deftype's or reify's row of CollReduce or IKVReduce makes a
+		// value reduce through its protocol: a program storing none compiles reduce,
+		// reduce-kv and the verbs built on them as before
+		for (String verb : List.of("RONTOLISP::%CLOJURE-REDUCE-INIT", "RONTOLISP::%CLOJURE-REDUCE",
+				"RONTOLISP::%CLOJURE-RUN!")) {
+			assertThat(defun(ClojureLibrary.forms(), verb)).as(verb)
+				.contains("(RONTOLISP::%CLOJURE-COLL-REDUCIBLE-P COLL)");
+		}
+		assertThat(defun(ClojureLibrary.forms(), "RONTOLISP::%CLOJURE-REDUCE-KV"))
+			.contains("(RONTOLISP::%CLOJURE-KV-REDUCIBLE-P COLL)");
+		List<LispVal> plain = ClojureLibrary.process(Clojure.read(
+				"(println (reduce + 0 [1 2]) (reduce-kv (fn [a k v] a) 0 {}) (group-by odd? [1]) (frequencies [1]))",
+				null));
+		for (String verb : List.of("RONTOLISP::%CLOJURE-REDUCE-INIT", "RONTOLISP::%CLOJURE-REDUCE-KV")) {
+			assertThat(defun(plain, verb)).as(verb).doesNotContain("REDUCIBLE").doesNotContain("REDUCER");
+		}
+		assertThat(plain.get(plain.size() - 1).print()).doesNotContain("%CLOJURE-REDUCIBLE-ITEMS");
+		// a protocol program extending CollReduce to a core kind, or nothing typed, folds
+		// them too
+		List<LispVal> core = ClojureLibrary.process(Clojure.read("(require '[clojure.core.protocols :as p])"
+				+ " (extend-protocol p/CollReduce String (coll-reduce ([s f] 1) ([s f i] 2)))"
+				+ " (println (reduce + 0 [1 2]))", null));
+		assertThat(defun(core, "RONTOLISP::%CLOJURE-REDUCE-INIT")).doesNotContain("REDUCIBLE");
+		List<LispVal> reducible = ClojureLibrary.process(Clojure.read("(require '[clojure.core.protocols :as p])"
+				+ " (println (reduce + 0 (reify p/CollReduce (coll-reduce [_ f init] init))))", null));
+		assertThat(defun(reducible, "RONTOLISP::%CLOJURE-REDUCE-INIT"))
+			.contains("(RONTOLISP::%CLOJURE-COLL-REDUCIBLE-P COLL)");
+	}
+
+	@Test
+	void aProgramStoringNoInterfaceRowSplicesTheVerbsWithoutTheirInterfaceArms() {
+		// only the store of a reify's, deftype's or record's row of a clojure.lang
+		// interface (or an Object override) makes a value the verbs read through it: a
+		// program storing none compiles them as before
+		Map<String, String> arms = Map.of("RONTOLISP::%CLOJURE-STRICT-SEQ", "%CLOJURE-SEQABLE-P",
+				"RONTOLISP::%CLOJURE-CALL", "%CLOJURE-INVOKABLE-P", "RONTOLISP::%CLOJURE-NTH", "%CLOJURE-INDEXED-P",
+				"RONTOLISP::%CLOJURE-STR-OF", "%CLOJURE-TO-STRING-P", "RONTOLISP::%CLOJURE-EQUAL", "%CLOJURE-EQUALS-P",
+				"RONTOLISP::%CLOJURE-DEREF-OTHER", "%CLOJURE-DEREFABLE-P", "RONTOLISP::%CLOJURE-META",
+				"%CLOJURE-IMETA-P", "RONTOLISP::%CLOJURE-COLL-REDUCE-3", "%CLOJURE-REDUCE-INIT-P",
+				"RONTOLISP::%CLOJURE-FILTER", "%CLOJURE-LAZY-INPUT-P");
+		arms.forEach((verb, arm) -> assertThat(defun(ClojureLibrary.forms(), verb)).as(verb).contains(arm));
+		List<LispVal> plain = ClojureLibrary
+			.process(Clojure.read("(defprotocol P (m [x]))" + " (def r (reify P (m [_] 1)))"
+					+ " (println (seq [1]) (map :a [{:a 1}]) (nth [1] 0) (str r) (= r r) @(atom 1) (meta r)"
+					+ " (filter odd? [1]) (nth [1 2] 1) (indexed? []) (m r))"
+					+ " (defn lk [x] [(.lock x) (instance? java.io.Closeable x)])", null));
+		arms.forEach((verb, arm) -> assertThat(defun(plain, verb)).as(verb).doesNotContain(arm));
+		String program = plain.get(plain.size() - 1).print();
+		assertThat(program).doesNotContain("%CLOJURE-NTH-2").doesNotContain("%CLOJURE-IS-INDEXED");
+		// nor the host-interface arms of an instance call and of instance?, which the
+		// store of a host interface's row keeps
+		assertThat(plain.stream().map(LispVal::print).collect(java.util.stream.Collectors.joining()))
+			.doesNotContain("(RONTOLISP::%CLOJURE-HOST-INTERFACE-");
+		List<LispVal> host = ClojureLibrary
+			.process(Clojure.read("(defn lk [x] [(.lock x) (instance? java.io.Closeable x)])"
+					+ " (def c (reify java.io.Closeable (close [_] 1)))", null));
+		assertThat(host.stream().map(LispVal::print).collect(java.util.stream.Collectors.joining()))
+			.contains("(RONTOLISP::%CLOJURE-HOST-INTERFACE-METHOD-P ")
+			.contains("(RONTOLISP::%CLOJURE-HOST-INTERFACE-ROW-P ");
+		// a body naming an interface keeps its own family's arms, and no other's
+		List<LispVal> seqable = ClojureLibrary.process(Clojure
+			.read("(println (seq (reify clojure.lang.Seqable (seq [_] (list 1)))) (str 1) (nth [1] 0))", null));
+		assertThat(defun(seqable, "RONTOLISP::%CLOJURE-STRICT-SEQ")).contains("%CLOJURE-SEQABLE-P");
+		assertThat(defun(seqable, "RONTOLISP::%CLOJURE-STR-OF")).doesNotContain("%CLOJURE-TO-STRING-P");
+		assertThat(defun(seqable, "RONTOLISP::%CLOJURE-NTH")).doesNotContain("%CLOJURE-INDEXED-P");
+		// iteration stores a Seqable and an IReduceInit row itself, called or as a value
+		for (String source : List.of("(println (vec (iteration (fn [k] k))))",
+				"(println (map vec [(apply iteration (fn [k] k) [])]))")) {
+			List<LispVal> iteration = ClojureLibrary.process(Clojure.read(source, null));
+			assertThat(defun(iteration, "RONTOLISP::%CLOJURE-STRICT-SEQ")).as(source).contains("%CLOJURE-SEQABLE-P");
+			assertThat(defun(iteration, "RONTOLISP::%CLOJURE-COLL-REDUCE-3")).as(source)
+				.contains("%CLOJURE-REDUCE-INIT-P");
+			assertThat(defun(iteration, "RONTOLISP::%CLOJURE-NTH")).as(source).doesNotContain("%CLOJURE-INDEXED-P");
+		}
+	}
+
+	@Test
+	void aProgramStoringNoCharSequenceRowReadsItsStringsWithoutTheView() {
+		// only the store of a CharSequence row makes a value count, nth, the seq view,
+		// the regex verbs and clojure.string read through its length and charAt: a
+		// program storing none compiles them as before, instance? as the host test
+		String source = "(def s (str \"ab\" 1)) (println (count s) (seq s) (nth s 0) (re-find #\"a\" s)"
+				+ " (clojure.string/upper-case s) (.contains \"xab\" s) (instance? CharSequence s))";
+		Map<String, String> arms = Map.of("RONTOLISP::%CLOJURE-STRICT-SEQ", "%CLOJURE-CHAR-SEQUENCE-P",
+				"RONTOLISP::%CLOJURE-NTH", "%CLOJURE-CHAR-SEQUENCE-P", "RONTOLISP::%CLOJURE-IS-SEQABLE",
+				"%CLOJURE-CHAR-SEQUENCE-P", "RONTOLISP::%CLOJURE-RE-FIND", "%CLOJURE-CHAR-SEQUENCE-P",
+				"RONTOLISP::%CLOJURE-RE-NEXT", "%CLOJURE-RE-LAZY-P");
+		arms.forEach((verb, arm) -> assertThat(defun(ClojureLibrary.forms(), verb)).as(verb).contains(arm));
+		List<LispVal> plain = ClojureLibrary.process(Clojure.read(source, null));
+		arms.forEach((verb, arm) -> assertThat(defun(plain, verb)).as(verb).doesNotContain(arm));
+		String program = plain.get(plain.size() - 1).print();
+		assertThat(program).doesNotContain("%CLOJURE-CHAR-SEQUENCE").contains("(STRINGP ");
+		// a body naming CharSequence keeps every arm, and instance? asks for the type
+		List<LispVal> typed = ClojureLibrary.process(Clojure.read("(deftype Seg [s] CharSequence (length [_] 1)"
+				+ " (charAt [_ i] \\a) (subSequence [_ a b] nil)) " + source, null));
+		arms.forEach((verb, arm) -> assertThat(defun(typed, verb)).as(verb).contains(arm));
+		assertThat(typed.get(typed.size() - 1).print()).contains("%CLOJURE-CHAR-SEQUENCE-TEXT")
+			.contains("%CLOJURE-CHAR-SEQUENCE-INSTANCE-P");
+	}
+
+	@Test
+	void aProgramRegisteringNoFaceHandsJavaItsValuesWithoutTheFaceArm() {
+		// %clojure-host-member asks a deftype or reify for its face only in a program
+		// that registers one: one whose types show Java nothing keeps the clause it had
+		assertThat(defun(ClojureLibrary.forms(), "RONTOLISP::%CLOJURE-HOST-MEMBER")).contains("%CLOJURE-JAVA-FACE-P");
+		List<LispVal> plain = ClojureLibrary
+			.process(Clojure.read("(deftype T [a]) (println (str (java.util.ArrayList. [(T. 1)])))", null));
+		assertThat(defun(plain, "RONTOLISP::%CLOJURE-HOST-MEMBER")).doesNotContain("%CLOJURE-JAVA-FACE-P");
+		List<LispVal> faced = ClojureLibrary.process(Clojure
+			.read("(deftype T [a] Runnable (run [_] nil)) (println (str (java.util.ArrayList. [(T. 1)])))", null));
+		assertThat(defun(faced, "RONTOLISP::%CLOJURE-HOST-MEMBER")).contains("%CLOJURE-JAVA-FACE-P");
+		assertThat(defun(faced, "RONTOLISP::%CLOJURE-JAVA-FACE-TAG")).contains("\"%java\"");
+		// a record implementing no Java interface crosses as its map view, asking for no
+		// face; one implementing one asks first
+		List<LispVal> record = ClojureLibrary
+			.process(Clojure.read("(defrecord R [a]) (println (str (java.util.ArrayList. [(->R 1)])))", null));
+		assertThat(defun(record, "RONTOLISP::%CLOJURE-HOST-MEMBER")).doesNotContain("%CLOJURE-JAVA-FACE-P")
+			.contains("%CLOJURE-HOST-RECORD-VIEW");
+		List<LispVal> facedRecord = ClojureLibrary.process(Clojure
+			.read("(defrecord R [a] Runnable (run [_] nil)) (println (str (java.util.ArrayList. [(->R 1)])))", null));
+		assertThat(defun(facedRecord, "RONTOLISP::%CLOJURE-HOST-MEMBER")).contains("%CLOJURE-JAVA-FACE-P");
+	}
+
+	@Test
+	void aProgramStoringNoCollectionInterfaceRowSplicesTheVerbsWithoutTheirArms() {
+		// only the store of a collection interface's row makes a value the verbs read
+		// through its methods: a program storing none compiles them as before
+		Map<String, String> arms = Map.of("RONTOLISP::%CLOJURE-STRICT-SEQ", "%CLOJURE-ITERABLE-P",
+				"RONTOLISP::%CLOJURE-EQUAL", "%CLOJURE-ICOLLECTION-P", "RONTOLISP::%CLOJURE-WRITE", "%CLOJURE-IMAP-P",
+				"RONTOLISP::%CLOJURE-PEEK", "%CLOJURE-ISTACK-P", "RONTOLISP::%CLOJURE-FIND", "%CLOJURE-IASSOCIATIVE-P",
+				"RONTOLISP::%CLOJURE-COMPARE", "%CLOJURE-ICOMPARABLE-P", "RONTOLISP::%CLOJURE-COLL-REDUCE-3",
+				"%CLOJURE-ITERABLE-P", "RONTOLISP::%CLOJURE-NTH", "%CLOJURE-ISEQUENTIAL-P",
+				"RONTOLISP::%CLOJURE-IS-REALIZED", "%CLOJURE-IPENDING-P", "RONTOLISP::%CLOJURE-SEQABLE-SEQ",
+				"%CLOJURE-ISEQ-P");
+		arms.forEach((verb, arm) -> assertThat(defun(ClojureLibrary.forms(), verb)).as(verb).contains(arm));
+		List<LispVal> plain = ClojureLibrary.process(Clojure.read("(deftype T [] clojure.lang.Seqable (seq [_] nil))"
+				+ " (println (seq [1]) (= [1] [1]) (peek [1]) (find {:a 1} :a) (compare 1 2) (nth [1] 0)"
+				+ " (realized? (lazy-seq nil)) (reduce + [1]) (seq (T.)))", null));
+		arms.forEach((verb, arm) -> assertThat(defun(plain, verb)).as(verb).doesNotContain(arm));
+		String program = plain.get(plain.size() - 1).print();
+		assertThat(program).doesNotContain("%CLOJURE-ICOLLECTION-P").doesNotContain("%CLOJURE-IMAP-P");
+		// a body naming one keeps its family's arms and those of its supers, no other's
+		List<LispVal> map = ClojureLibrary.process(Clojure.read(
+				"(deftype M [] clojure.lang.IPersistentMap (count [_] 0)) (println (count (M.)) (= 1 1) (peek [1]))",
+				null));
+		assertThat(defun(map, "RONTOLISP::%CLOJURE-EQUAL")).contains("%CLOJURE-ICOLLECTION-P");
+		assertThat(defun(map, "RONTOLISP::%CLOJURE-STRICT-SEQ")).contains("%CLOJURE-ITERABLE-P");
+		assertThat(defun(map, "RONTOLISP::%CLOJURE-PEEK")).doesNotContain("%CLOJURE-ISTACK-P");
+	}
+
+	@Test
+	void aProgramGivingNoTypeAHashOfItsOwnSplicesTheStructuralKeysWithoutTheTypedKeyArm() {
+		// only the store of an IHashEq row or of an Object row gives a type a hash of
+		// its own, which a typed key needs: a program storing neither keeps the
+		// structural keys as they were, vector and map keys included
+		List<String> verbs = List.of("RONTOLISP::%CLOJURE-STRUCTURAL-KEY-P", "RONTOLISP::%CLOJURE-HASH",
+				"RONTOLISP::%CLOJURE-KEY-KIND");
+		verbs.forEach((verb) -> assertThat(defun(ClojureLibrary.forms(), verb)).as(verb)
+			.contains("(RONTOLISP::%CLOJURE-TYPED-KEY-P"));
+		List<LispVal> plain = ClojureLibrary.process(Clojure.read(
+				"(deftype T [] clojure.lang.IPersistentCollection (equiv [_ o] true))"
+						+ " (println (get {[1] :v} [1]) (contains? #{{:a 1}} {:a 1}) (= (T.) 1) (get {:k 1} :k))",
+				null));
+		verbs.forEach((verb) -> assertThat(defun(plain, verb)).as(verb).doesNotContain("%CLOJURE-TYPED-KEY-P"));
+		// either store keeps the arm, which a hash row of each family answers through
+		for (String body : List.of("clojure.lang.IHashEq (hasheq [_] 1)", "Object (hashCode [_] 1)")) {
+			List<LispVal> typed = ClojureLibrary.process(
+					Clojure.read("(deftype T [] " + body + " clojure.lang.IPersistentCollection (equiv [_ o] true))"
+							+ " (println (contains? #{(T.)} (T.)))", null));
+			verbs.forEach((verb) -> assertThat(defun(typed, verb)).as(body + " " + verb)
+				.contains("(RONTOLISP::%CLOJURE-TYPED-KEY-P"));
+			boolean object = body.startsWith("Object");
+			assertThat(defun(typed, "RONTOLISP::%CLOJURE-TYPED-KEY-P")).as(body)
+				.contains(object ? "%CLOJURE-HASH-CODE-P" : "%CLOJURE-HASHEQ-P")
+				.doesNotContain(object ? "%CLOJURE-HASHEQ-P" : "%CLOJURE-HASH-CODE-P");
+		}
+	}
+
+	@Test
+	void aProgramMakingNoMatcherSplicesNthWithoutItsMatcherArm() {
+		// only re-matcher makes a matcher: a program naming it keeps nth's group arm,
+		// any other compiles nth as before matchers were read
+		assertThat(defun(ClojureLibrary.forms(), "RONTOLISP::%CLOJURE-NTH"))
+			.contains("(RONTOLISP::%CLOJURE-MATCHER-VALUE-P COLL)");
+		List<LispVal> plain = ClojureLibrary
+			.process(Clojure.read("(println (nth [1 2] 1) (re-find #\"a\" \"a\"))", null));
+		assertThat(defun(plain, "RONTOLISP::%CLOJURE-NTH")).doesNotContain("MATCHER");
+		List<LispVal> matcher = ClojureLibrary
+			.process(Clojure.read("(println (nth (re-matcher #\"(a)\" \"a\") 1))", null));
+		assertThat(defun(matcher, "RONTOLISP::%CLOJURE-NTH")).contains("(RONTOLISP::%CLOJURE-MATCHER-VALUE-P COLL)");
+		// an instance call of a Matcher method reaches the matcher's own only where a
+		// matcher exists; elsewhere it is refused as before
+		String call = "(defn f [m] (.lookingAt m)) (println (f 1))";
+		assertThat(ClojureLibrary.process(Clojure.read(call, null)).stream().map(LispVal::print))
+			.noneMatch(text -> text.contains("(RONTOLISP::%CLOJURE-MATCHER-LOOKING-AT "));
+		assertThat(ClojureLibrary.process(Clojure.read(call + " (f (re-matcher #\"a\" \"a\"))", null))
+			.stream()
+			.map(LispVal::print)).anyMatch(text -> text.contains("(RONTOLISP::%CLOJURE-MATCHER-LOOKING-AT "));
+	}
+
+	@Test
+	void aProgramCarriesTheRegexEnginesTablesOnlyWhereAPatternMayNameWhatReadsThem() {
+		// the engine (regex.lisp) reaches its Unicode tables only through the providers a
+		// pattern is compiled with, so what is left after pruning says what a program
+		// carries: no table for a plain literal; the word characters past ASCII for a
+		// literal naming a word boundary; the properties for one naming \p, \P or U; the
+		// grapheme table for one naming \X or \b{g}; all of them for a pattern made from
+		// a string while the program runs
+		String property = "RONTOLISP::%REGEX-UNI-PROPERTY";
+		String word = "RONTOLISP::%REGEX-CATEGORY-WORD-P";
+		String cluster = "RONTOLISP::%REGEX-GR-NEXT";
+		assertThat(compiledNames("(println (+ 1 2))")).noneMatch(name -> name.contains("%REGEX-"));
+		assertThat(compiledNames("(println (re-find #\"a+\" \"caab\") (re-pattern \"x\"))"))
+			.contains("RONTOLISP::%REGEX-COMPILE")
+			.doesNotContain(property, word, cluster, "RONTOLISP::%REGEX-UNI-PROPS");
+		assertThat(compiledNames("(println (re-find #\"\\ba\" \"a\"))")).contains(word)
+			.doesNotContain(property, cluster);
+		for (String source : List.of("(println (re-find #\"\\p{L}\" \"a\"))", "(println (re-find #\"(?U)\\w\" \"a\"))",
+				"(println (re-pattern \"\\\\pL\"))")) {
+			assertThat(compiledNames(source)).as(source).contains(property, word).doesNotContain(cluster);
+		}
+		for (String source : List.of("(println (re-seq #\"\\X\" \"ab\"))", "(println (re-find #\"\\b{g}a\" \"a\"))",
+				"(println (re-pattern \"\\\\X\"))")) {
+			assertThat(compiledNames(source)).as(source).contains(cluster).doesNotContain(property);
+		}
+		for (String source : List.of("(defn f [s] (re-pattern s)) (println (f \"a\"))",
+				"(println (read-string \"#\\\"a\\\"\"))")) {
+			assertThat(compiledNames(source)).as(source).contains(property, word, cluster);
+		}
+	}
+
+	// The names a Clojure program defines once the whole front end ran: the libraries
+	// spliced and what the program does not reach pruned.
+	private static Set<String> compiledNames(String source) {
+		Set<String> names = new TreeSet<>();
+		for (LispVal form : am.ik.rontolisp.cli.CompileFrontendAccess.clojure(source, true, false).forms()) {
+			if (form instanceof am.ik.rontolisp.LispCons cons && cons.cdr() instanceof am.ik.rontolisp.LispCons rest
+					&& rest.car() instanceof am.ik.rontolisp.LispSymbol name) {
+				names.add(name.name());
+			}
+		}
+		return names;
+	}
+
+	@Test
+	void aProgramGivingNoReferenceAValidatorOrWatchCallsThePlainAtomHelpers() {
+		// only add-watch, set-validator! and an atom's options give a reference either:
+		// every other program builds one-long atom cells, calls the plain helpers and
+		// has the agent's, the transaction's and alter-var-root's watch views folded
+		String source = """
+				(def a (atom 1)) (swap! a inc) (reset! a 2) (compare-and-set! a 2 3) (swap-vals! a inc)
+				(reset-vals! a 0) (def r (ref 0)) (dosync (alter r inc)) (def g (agent 0)) (send g inc)
+				(def x 1) (alter-var-root #'x inc) (prn @a @r @g x)""";
+		List<LispVal> plain = ClojureLibrary.process(Clojure.read(source, null));
+		String own = program(plain, source);
+		assertThat(own).contains("(VECTOR 1)")
+			.contains("RONTOLISP::%CLOJURE-ATOM-SWAP ")
+			.contains("RONTOLISP::%CLOJURE-ATOM-RESET ")
+			.contains("RONTOLISP::%CLOJURE-ATOM-CAS ")
+			.contains("RONTOLISP::%CLOJURE-ATOM-SWAP-VALS ")
+			.contains("RONTOLISP::%CLOJURE-ATOM-RESET-VALS ")
+			.doesNotContain("%CLOJURE-REF-");
+		for (String name : List.of("RONTOLISP::%CLOJURE-AGENT-ACT", "RONTOLISP::%CLOJURE-STM-RUN",
+				"RONTOLISP::%CLOJURE-ALTER-ROOT", "RONTOLISP::%CLOJURE-ATOM-SWAP")) {
+			assertThat(defun(plain, name)).as(name)
+				.doesNotContain("NOTIFIED")
+				.doesNotContain("NOTED")
+				.doesNotContain("VALIDATED");
+		}
+		String watched = source + " (add-watch a :k (fn [k r o n] (prn o n)))";
+		List<LispVal> aware = ClojureLibrary.process(Clojure.read(watched, null));
+		assertThat(program(aware, watched)).contains("(RONTOLISP::%CLOJURE-REF-CELL 1)")
+			.contains("RONTOLISP::%CLOJURE-REF-SWAP ")
+			.doesNotContain("%CLOJURE-ATOM-SWAP");
+		assertThat(defun(aware, "RONTOLISP::%CLOJURE-AGENT-ACT")).contains("RONTOLISP::%CLOJURE-REF-NOTIFIED");
+		assertThat(defun(aware, "RONTOLISP::%CLOJURE-STM-RUN")).contains("RONTOLISP::%CLOJURE-STM-NOTIFIED");
+		assertThat(defun(aware, "RONTOLISP::%CLOJURE-ALTER-ROOT")).contains("RONTOLISP::%CLOJURE-REF-VALIDATED");
+		for (String producer : List.of("(set-validator! a pos?)", "(atom 1 :meta {})", "(map add-watch [] [] [])")) {
+			assertThat(program(ClojureLibrary.process(Clojure.read(source + producer, null)), source + producer))
+				.as(producer)
+				.contains("%CLOJURE-REF-CELL");
+		}
+	}
+
+	@Test
+	void aProgramNamingNoWatchVerbLowersItsVarStoresUnchanged() {
+		// a def, a redefined defn, a dynamic definition, a with-redefs and a defonce
+		// replace the root through the watch arms, which validate and notify like the
+		// oracle's bindRoot; a program naming no watch verb folds every arm back to
+		// the plain store, so it lowers as before watches on redefinition existed
+		String source = "(def x 1) (defn f [] 1) (defn f [] 2) (def ^:dynamic *d* 1) (with-redefs [x 2] x) (defonce y 3) (declare u) (defn u [x] x) (println x (f) *d* y (u 1))";
+		List<LispVal> plain = ClojureLibrary.process(Clojure.read(source, null));
+		String own = program(plain, source);
+		assertThat(own).contains("(SETQ |c%x| 1)")
+			.contains("(DEFPARAMETER |c%*d*| 1)")
+			.contains("(DEFPARAMETER |c%*d*%bound-depth| 0)")
+			.doesNotContain("%CLOJURE-VAR-STORE")
+			.doesNotContain("%CLOJURE-VAR-GUARDED-P")
+			.doesNotContain("%CLOJURE-VAR-VALIDATED")
+			.doesNotContain("%CLOJURE-VAR-NOTIFY-STORED")
+			.doesNotContain("%CLOJURE-VAR-DEFN-NOTIFY");
+		String watched = source + " (add-watch #'x :k (fn [k v o n] nil))";
+		List<LispVal> aware = ClojureLibrary.process(Clojure.read(watched, null));
+		assertThat(program(aware, watched)).contains("(RONTOLISP::%CLOJURE-VAR-STORE (LAMBDA NIL")
+			.contains("(RONTOLISP::%CLOJURE-VAR-GUARDED-P \"user/x\")")
+			.contains("(RONTOLISP::%CLOJURE-VAR-VALIDATED 1 \"user/*d*\")")
+			.contains("(RONTOLISP::%CLOJURE-VAR-NOTIFY-STORED \"user/*d*\" |c%*d*|)")
+			.contains("(RONTOLISP::%CLOJURE-VAR-DEFN-NOTIFY \"user/f\"")
+			.contains("(RONTOLISP::%CLOJURE-VAR-DEFN-NOTIFY \"user/u\"");
+	}
+
+	@Test
+	void aProgramNamingNoWatchVerbLowersItsRedefinedMacroAndTestUnchanged() {
+		// a redefined defmacro and deftest validate and notify like a redefined
+		// defn, through the same statement arm; a program naming no watch verb
+		// folds the arm back, so it lowers as before watches on either existed
+		String source = "(ns wmt (:require [clojure.test :refer :all])) (defmacro wm [] 1) (defmacro wm [] 2) (deftest wt (is true)) (deftest wt (is false)) (println (macroexpand '(wm)) (wt))";
+		List<LispVal> plain = ClojureLibrary.process(Clojure.read(source, null));
+		String own = program(plain, source);
+		assertThat(own).contains("(DEFUN |c%wmt/wt%def2| NIL").doesNotContain("%CLOJURE-VAR-DEFN-NOTIFY");
+		assertThat(own).doesNotContain("%CLOJURE-NOTE-MACRO-EXPANDER");
+		String watched = source + " (add-watch #'wm :k (fn [k v o n] nil))";
+		List<LispVal> aware = ClojureLibrary.process(Clojure.read(watched, null));
+		assertThat(program(aware, watched)).contains("(RONTOLISP::%CLOJURE-VAR-DEFN-NOTIFY \"wmt/wm\"")
+			.contains("(RONTOLISP::%CLOJURE-VAR-DEFN-NOTIFY \"wmt/wt\"")
+			.contains("(RONTOLISP::%CLOJURE-NOTE-MACRO-EXPANDER \"wmt/wm\"");
+	}
+
+	@Test
+	void aProgramMakingNoDelaySplicesDerefAndThePrinterWithoutTheirDelayArms() {
+		// only delay makes a delay: a program naming it keeps deref's and the printer's
+		// delay arms, any other derefs and prints as before delays, and its force and
+		// delay? are the value itself and (progn x false)
+		assertThat(defun(ClojureLibrary.forms(), "RONTOLISP::%CLOJURE-DEREF-OTHER"))
+			.contains("(RONTOLISP::%CLOJURE-DELAY-P X)");
+		List<LispVal> plain = ClojureLibrary
+			.process(Clojure.read("(prn @(atom 1) (deref (reduced 2)) (force 3) (delay? 4) [5])", null));
+		for (String name : List.of("RONTOLISP::%CLOJURE-DEREF-OTHER", "RONTOLISP::%CLOJURE-WRITE",
+				"RONTOLISP::%CLOJURE-IS-REALIZED")) {
+			assertThat(defun(plain, name)).as(name).doesNotContain("DELAY");
+		}
+		assertThat(plain.stream()
+			.map(LispVal::print)
+			.filter(text -> !text.startsWith("(DEFUN ") && !text.startsWith("(DEFVAR ")))
+			.noneMatch(text -> text.contains("%CLOJURE-FORCE") || text.contains("%CLOJURE-IS-DELAY")
+					|| text.contains("%CLOJURE-DELAY-P"));
+		List<LispVal> delayed = ClojureLibrary.process(Clojure.read("(prn @(delay 1) (delay? 2))", null));
+		assertThat(defun(delayed, "RONTOLISP::%CLOJURE-DEREF-OTHER")).contains("(RONTOLISP::%CLOJURE-DELAY-P X)");
+		assertThat(defun(delayed, "RONTOLISP::%CLOJURE-WRITE")).contains("(RONTOLISP::%CLOJURE-DELAY-P X)");
+	}
+
+	@Test
+	void aProgramReadingNoEdnSplicesTheReaderWithoutItsEdnClauses() {
+		// only clojure.edn's entries start an EDN read: a program reading with
+		// read-string
+		// alone compiles every reader clause the EDN grammar decides away
+		assertThat(defun(ClojureLibrary.forms(), "RONTOLISP::%CLOJURE-RD-FORM-AT"))
+			.contains("(RONTOLISP::%CLOJURE-RD-EDN-P)");
+		List<LispVal> plain = ClojureLibrary.process(Clojure.read("(prn (read-string \"[1]\"))", null));
+		for (String reader : List.of("RONTOLISP::%CLOJURE-RD-FORM-AT", "RONTOLISP::%CLOJURE-RD-CHAR",
+				"RONTOLISP::%CLOJURE-RD-META", "RONTOLISP::%CLOJURE-RD-TOKEN-VALID-P")) {
+			assertThat(defun(plain, reader)).as(reader).doesNotContain("%CLOJURE-RD-EDN");
+		}
+		List<LispVal> edn = ClojureLibrary.process(Clojure.read("(prn (clojure.edn/read-string \"[1]\"))", null));
+		assertThat(defun(edn, "RONTOLISP::%CLOJURE-RD-FORM-AT")).contains("(RONTOLISP::%CLOJURE-RD-EDN-P)");
+	}
+
+	@Test
+	void aProgramNamingNoDataReaderSplicesTheReaderWithoutItsDataReaderClause() {
+		// only *data-readers* and *default-data-reader-fn* install a data reader (the
+		// lowering names the first for a program whose data_readers files map a tag): a
+		// plain read-string reads a tag through the two default readers alone
+		assertThat(defun(ClojureLibrary.forms(), "RONTOLISP::%CLOJURE-RD-RECORD-OF"))
+			.contains("(RONTOLISP::%CLOJURE-RD-DATA-READERS-P)");
+		List<LispVal> plain = ClojureLibrary.process(Clojure.read("(prn (read-string \"#inst \\\"1970\\\"\"))", null));
+		assertThat(defun(plain, "RONTOLISP::%CLOJURE-RD-RECORD-OF")).doesNotContain("%CLOJURE-RD-DATA-READ")
+			.contains("No reader function for tag ");
+		for (String named : List.of("*data-readers*", "*default-data-reader-fn*")) {
+			List<LispVal> reading = ClojureLibrary.process(Clojure
+				.read("(prn (binding [" + named + " " + named + "] (read-string \"#inst \\\"1970\\\"\")))", null));
+			assertThat(defun(reading, "RONTOLISP::%CLOJURE-RD-RECORD-OF")).as(named)
+				.contains("(RONTOLISP::%CLOJURE-RD-DATA-READERS-P)");
+		}
+	}
+
+	@Test
+	void aProgramReadingWithoutOptionsSplicesTheReaderWithoutItsPreserveClauses() {
+		// only a read that may take {:read-cond :preserve} and the two constructors make
+		// a reader conditional or tagged literal: a plain read-string compiles the
+		// preserve clauses, the printer's arm and the predicates' tests away
+		List<LispVal> plain = ClojureLibrary
+			.process(Clojure.read("(prn (read-string \"[1]\") (reader-conditional? 1) (= [1] [1]))", null));
+		for (String reader : List.of("RONTOLISP::%CLOJURE-RD-CONDITIONAL", "RONTOLISP::%CLOJURE-RD-RECORD",
+				"RONTOLISP::%CLOJURE-WRITE", "RONTOLISP::%CLOJURE-EQUAL")) {
+			assertThat(defun(plain, reader)).as(reader)
+				.doesNotContain("%CLOJURE-RD-PRESERV")
+				.doesNotContain("%CLOJURE-READER-VALUE");
+		}
+		assertThat(plain.get(plain.size() - 1).print()).doesNotContain("%CLOJURE-IS-READER-CONDITIONAL");
+		List<LispVal> preserving = ClojureLibrary
+			.process(Clojure.read("(prn (read-string {:read-cond :preserve} \"#?(:clj 1)\"))", null));
+		assertThat(defun(preserving, "RONTOLISP::%CLOJURE-RD-CONDITIONAL"))
+			.contains("(RONTOLISP::%CLOJURE-RD-PRESERVE-P MODE)");
+		assertThat(defun(preserving, "RONTOLISP::%CLOJURE-WRITE")).contains("%CLOJURE-READER-VALUE-P");
+	}
+
+	@Test
+	void aProgramMakingNoInstantOrUuidSplicesTheLibraryWithoutTheirArms() {
+		// only an #inst or #uuid literal, a read, the clojure.instant kernels,
+		// random-uuid and parse-uuid make one: a program comparing, printing and asking
+		// inst? and uuid? of other values compiles every arm away, uuid? to the host test
+		List<LispVal> plain = ClojureLibrary.process(Clojure
+			.read("(prn (sort [2 1]) (= [1] [1]) (str 1) (inst? 1) (uuid? 2) (class 3) (get {[1] 2} [1]))", null));
+		for (String verb : List.of("RONTOLISP::%CLOJURE-WRITE", "RONTOLISP::%CLOJURE-STR-OF",
+				"RONTOLISP::%CLOJURE-EQUAL", "RONTOLISP::%CLOJURE-COMPARE", "RONTOLISP::%CLOJURE-HASH",
+				"RONTOLISP::%CLOJURE-IS-INST", "RONTOLISP::%CLOJURE-CLASS-NAME-OF")) {
+			assertThat(defun(plain, verb)).as(verb).doesNotContain("%CLOJURE-INSTANT").doesNotContain("%CLOJURE-UUID");
+		}
+		assertThat(plain.get(plain.size() - 1).print()).doesNotContain("%CLOJURE-IS-UUID")
+			.contains("(RONTOLISP::%CLOJURE-HOST-INSTANCE-P ")
+			.doesNotContain("%CLOJURE-INSTANT-P");
+		List<LispVal> making = ClojureLibrary.process(Clojure.read("(prn #inst \"2020\" (random-uuid))", null));
+		assertThat(defun(making, "RONTOLISP::%CLOJURE-WRITE")).contains("(RONTOLISP::%CLOJURE-INSTANT-P X)")
+			.contains("(RONTOLISP::%CLOJURE-UUID-P X)");
+		// a read may make either
+		List<LispVal> reading = ClojureLibrary.process(Clojure.read("(prn (read-string \"1\"))", null));
+		assertThat(defun(reading, "RONTOLISP::%CLOJURE-RD-RECORD-OF")).contains("RONTOLISP::%CLOJURE-INSTANT-READ-DATE")
+			.contains("RONTOLISP::%CLOJURE-READ-UUID");
+		assertThat(defun(reading, "RONTOLISP::%CLOJURE-WRITE")).contains("%CLOJURE-INSTANT-P");
+	}
+
+	@Test
+	void aDateOrUuidConstructionMakesTheValueUnlessHandedStraightToAMember() {
+		// a construction makes the instant or UUID the literals read, so the printer
+		// keeps their arms; handed straight to a java: member it is the host
+		// construction, which makes none, and a java: program making none crosses no
+		// value made here
+		List<LispVal> made = ClojureLibrary
+			.process(Clojure.read("(prn (java.util.Date. 0) (java.util.UUID/randomUUID))", null));
+		assertThat(defun(made, "RONTOLISP::%CLOJURE-WRITE")).contains("(RONTOLISP::%CLOJURE-INSTANT-P X)")
+			.contains("(RONTOLISP::%CLOJURE-UUID-P X)");
+		String handed = "(prn (.format (java.text.SimpleDateFormat. \"yyyy\") (java.util.Date. 0))"
+				+ " (.add (java.util.HashSet.) #uuid \"1-1-1-1-1\"))";
+		List<LispVal> host = ClojureLibrary.process(Clojure.read(handed, null));
+		assertThat(program(host, handed)).contains("(JAVA:NEW \"java.util.Date(long)\" 0)")
+			.contains("(JAVA:NEW \"java.util.UUID(long,long)\" ")
+			.doesNotContain("%CLOJURE-MAKE-INST")
+			.doesNotContain("%CLOJURE-MAKE-UUID");
+		assertThat(defun(host, "RONTOLISP::%CLOJURE-WRITE")).doesNotContain("%CLOJURE-INSTANT-P")
+			.doesNotContain("%CLOJURE-UUID-P");
+		String crossing = "(defn f [x] (.add (java.util.ArrayList.) x)) (prn (f 1))";
+		assertThat(defun(ClojureLibrary.process(Clojure.read(crossing, null)), "RONTOLISP::%CLOJURE-HOST-VALUE"))
+			.doesNotContain("TIME-VALUE");
+	}
+
+	@Test
+	void vecRefusesANonCollectionAsRuntimeExceptionOnlyWhereAClassIsRead() {
+		// the oracle's vec casts to an array before it seqs: the argument check is the
+		// refusal family's view, so a program reading no class compiles the bare coercion
+		List<LispVal> plain = Clojure.read("(println (vec 5))", null);
+		assertThat(plain.get(plain.size() - 1).print()).contains("%CLOJURE-VEC-ARG");
+		List<LispVal> processed = ClojureLibrary.process(plain);
+		assertThat(processed.get(processed.size() - 1).print()).doesNotContain("%CLOJURE-VEC-ARG")
+			.contains("%CLOJURE-REALIZE-ALL");
+		List<LispVal> reading = ClojureLibrary
+			.process(Clojure.read("(println (try (vec 5) (catch IllegalArgumentException e :x)))", null));
+		assertThat(defun(reading, "RONTOLISP::%CLOJURE-VEC-ARG")).contains("(RONTOLISP::%CLOJURE-RUNTIME-EXCEPTION");
+	}
+
+	@Test
+	void aProgramMakingNoUnboundRootSplicesTheLibraryWithoutItsUnboundArms() {
+		// the unbound-root arms (the printer's, IFn's) go like the sorted ones: only a
+		// program storing an unbound root (a declare, a value-less def) keeps them
+		assertThat(defun(ClojureLibrary.forms(), "RONTOLISP::%CLOJURE-WRITE"))
+			.contains("(RONTOLISP::%CLOJURE-UNBOUND-P X)");
+		List<LispVal> plain = LispReader.readAllFromString("(rontolisp::%clojure-str-of x \"\" nil)");
+		assertThat(defun(ClojureLibrary.process(plain), "RONTOLISP::%CLOJURE-WRITE")).doesNotContain("UNBOUND");
+		List<LispVal> unbound = LispReader.readAllFromString(
+				"(setq x (rontolisp::%clojure-unbound \"user/x\")) (rontolisp::%clojure-str-of x \"\" nil)");
+		assertThat(defun(ClojureLibrary.process(unbound), "RONTOLISP::%CLOJURE-WRITE"))
+			.contains("(RONTOLISP::%CLOJURE-UNBOUND-P X)");
+	}
+
+	@Test
+	void aProgramMakingNoStreamSplicesTheLibraryWithoutItsStreamArms() {
+		// the printer's and str's stream arms go like the unbound ones: only a program
+		// that can hold a stream (a read of *out*, a StringWriter, ...) keeps them
+		assertThat(defun(ClojureLibrary.forms(), "RONTOLISP::%CLOJURE-WRITE"))
+			.contains("(RONTOLISP::%CLOJURE-STREAM-P X)");
+		List<LispVal> plain = Clojure.read("(prn (str 1) (with-out-str (print 2)))", null);
+		List<LispVal> processed = ClojureLibrary.process(plain);
+		assertThat(defun(processed, "RONTOLISP::%CLOJURE-WRITE")).doesNotContain("STREAM-P");
+		assertThat(defun(processed, "RONTOLISP::%CLOJURE-STR-OF")).doesNotContain("%CLOJURE-STREAM-P");
+		List<LispVal> stream = Clojure.read("(prn *out*)", null);
+		assertThat(defun(ClojureLibrary.process(stream), "RONTOLISP::%CLOJURE-WRITE"))
+			.contains("(RONTOLISP::%CLOJURE-STREAM-P X)");
+	}
+
+	@Test
+	void aProgramMakingNoIoValueSplicesTheLibraryWithoutItsIoArms() {
+		// the printer's, str's, ='s, the hash's and slurp's arms for a File, a URL and a
+		// byte stream go like the stream ones: only a program that can hold one (the
+		// clojure.java.io kernels, a java.io.File construction) keeps them
+		assertThat(defun(ClojureLibrary.forms(), "RONTOLISP::%CLOJURE-WRITE")).contains("(RONTOLISP::%CLOJURE-IO-P X)");
+		List<LispVal> plain = Clojure.read("(spit \"f\" (str 1)) (prn (slurp \"f\") (line-seq \"f\"))", null);
+		List<LispVal> processed = ClojureLibrary.process(plain);
+		// the library keeps its own definitions (the tree-shaker prunes them later); the
+		// arms are in the program's forms and the shared verbs
+		assertThat(processed.stream()
+			.map(LispVal::print)
+			.filter(text -> !text.startsWith("(DEFUN ") && !text.startsWith("(DEFVAR ")))
+			.noneMatch(text -> text.contains("%CLOJURE-IO-") || text.contains("%CLOJURE-HOST-FILE-PATH"));
+		for (String name : List.of("RONTOLISP::%CLOJURE-WRITE", "RONTOLISP::%CLOJURE-STR-OF",
+				"RONTOLISP::%CLOJURE-SLURP")) {
+			assertThat(defun(processed, name)).as(name).doesNotContain("%CLOJURE-IO-P");
+		}
+		List<LispVal> file = Clojure.read("(prn (java.io.File. \"a\"))", null);
+		assertThat(defun(ClojureLibrary.process(file), "RONTOLISP::%CLOJURE-WRITE"))
+			.contains("(RONTOLISP::%CLOJURE-IO-P X)");
+	}
+
+	@Test
+	void aProgramReadingNoJarSplicesTheLibraryWithoutTheJarReader() {
+		// the jar reader names read-sequence and a two-argument file-position, which the
+		// Gray streams' rewrite and the prelude's selection read by name before the
+		// pruner runs: only a program looking a computed resource name up over a source
+		// path holding a jar splices it, so any other compiles as before it existed
+		assertThat(defun(ClojureLibrary.forms(), "RONTOLISP::%CLOJURE-IO-JAR-READ")).contains("(READ-SEQUENCE ");
+		List<LispVal> plain = Clojure
+			.read("(ns a (:require [clojure.java.io :as io])) (prn (slurp (io/resource (str \"a\" \".txt\"))))", null);
+		assertThat(ClojureLibrary.process(plain).stream().map(LispVal::print))
+			.noneMatch(text -> text.contains("%CLOJURE-IO-JAR-") || text.contains("READ-SEQUENCE"));
+		List<LispVal> jar = LispReader
+			.readAllFromString("(prn (rontolisp::%clojure-io-jar-resource n '(\"/p/src\" (\"/p/a.jar\"))))");
+		assertThat(defun(ClojureLibrary.process(jar), "RONTOLISP::%CLOJURE-IO-JAR-READ")).contains("(READ-SEQUENCE ");
+	}
+
+	@Test
+	void aProgramCallingNoResetSplicesTheLibraryWithoutTheFileSeek() {
+		// a file mark seeks back through a two-argument file-position, which the Gray
+		// streams' rewrite reads by name before the pruner runs: only a program calling
+		// reset carries the seek, so any other compiles as before it existed
+		assertThat(defun(ClojureLibrary.forms(), "RONTOLISP::%CLOJURE-IO-SEEK-RESET")).contains("(FILE-POSITION ");
+		String io = "(ns a (:require [clojure.java.io :as io])) ";
+		List<LispVal> plain = Clojure.read(io + "(with-open [in (io/input-stream \"a\")] (.mark in 1) (.read in))",
+				null);
+		assertThat(ClojureLibrary.process(plain).stream().map(LispVal::print))
+			.noneMatch(text -> text.contains("%CLOJURE-IO-SEEK-"));
+		List<LispVal> reset = Clojure.read(io + "(with-open [in (io/input-stream \"a\")] (.mark in 1) (.reset in))",
+				null);
+		assertThat(defun(ClojureLibrary.process(reset), "RONTOLISP::%CLOJURE-IO-SEEK-RESET"))
+			.contains("(FILE-POSITION ");
+	}
+
+	@Test
+	void aReaderDecodesAReplyAsItArrivesOnlyInAProgramThatFetchesAndOpensOne() {
+		// the reply reader's definitions name the prelude's Gray class, whose splice
+		// brings the Gray streams' protocol and call-site rewrite in: a program that
+		// fetches and opens no reader, or opens readers and fetches nothing, keeps the
+		// reads that decode a byte stream at once and carries neither
+		assertThat(defun(ClojureLibrary.forms(), "RONTOLISP::%CLOJURE-IO-DECODED-READER"))
+			.contains("(RONTOLISP::%CLOJURE-REPLY-INPUT-P IN)");
+		String client = "(ns a (:require [rontolisp.http-client :as http])) ";
+		String io = "(ns a (:require [clojure.java.io :as io])) ";
+		for (String source : List.of(client + "(println (:body (http/get \"http://x/\")))",
+				io + "(println (line-seq (io/reader \"f\")) (slurp (io/input-stream \"g\")))")) {
+			List<LispVal> processed = ClojureLibrary.process(Clojure.read(source, null));
+			assertThat(processed.stream().map(LispVal::print)).as(source)
+				.noneMatch(text -> text.contains("%CLOJURE-REPLY-") || text.contains("%TEXT-PULL-STREAM"));
+		}
+		List<LispVal> both = ClojureLibrary.process(Clojure.read("(ns a (:require [rontolisp.http-client :as http]"
+				+ " [clojure.java.io :as io])) (println (line-seq (io/reader (:body (http/get \"http://x/\""
+				+ " {:as :stream})))))", null));
+		assertThat(defun(both, "RONTOLISP::%CLOJURE-IO-DECODED-READER"))
+			.contains("(RONTOLISP::%CLOJURE-REPLY-INPUT-P IN)");
+		assertThat(defun(both, "RONTOLISP::%CLOJURE-REPLY-READER")).contains("(RONTOLISP::%MAKE-TEXT-PULL-STREAM ");
+	}
+
+	@Test
+	void aProgramMakingNoByteArraySplicesTheLibraryWithoutItsByteArrayArms() {
+		// aget, aset, alength, bytes? and a String construction lower to the forms they
+		// lowered to before byte arrays, and the printer's, the seq view's and the byte
+		// streams' arms go: only a program that can hold a byte array keeps them -- one
+		// naming byte-array, or, where the host is, a java: operator, since a byte[] Java
+		// answers is one
+		assertThat(defun(ClojureLibrary.forms(), "RONTOLISP::%CLOJURE-WRITE"))
+			.contains("(RONTOLISP::%CLOJURE-BYTES-P X)");
+		String noHostCall = "(def a (make-array String 2)) (aset a 0 \"x\")"
+				+ " (prn (aget a 0) (alength a) (bytes? a) (seq [1]) (String. \"s\"))";
+		assertThat(defun(ClojureLibrary.process(Clojure.read(noHostCall, null), true), "RONTOLISP::%CLOJURE-WRITE"))
+			.doesNotContain("%CLOJURE-BYTES-P");
+		List<LispVal> plain = Clojure
+			.read(noHostCall + " (with-open [o (clojure.java.io/output-stream \"f\")] (.write o 1))", null);
+		// the stream's .write names java:call, whose answer may be a byte[] where the
+		// host
+		// is; compiled for wasm, where a java: call answers nothing, the arms go
+		assertThat(defun(ClojureLibrary.process(plain, true), "RONTOLISP::%CLOJURE-WRITE"))
+			.contains("(RONTOLISP::%CLOJURE-BYTES-P X)");
+		List<LispVal> processed = ClojureLibrary.process(plain, false);
+		assertThat(processed.stream()
+			.map(LispVal::print)
+			.filter(text -> !text.startsWith("(DEFUN ") && !text.startsWith("(DEFVAR ")))
+			.noneMatch(text -> text.contains("%CLOJURE-BYTES") || text.contains("%CLOJURE-AGET")
+					|| text.contains("%CLOJURE-ASET") || text.contains("%CLOJURE-ALENGTH")
+					|| text.contains("%CLOJURE-IS-BYTES") || text.contains("%CLOJURE-STRING-NEW"));
+		for (String name : List.of("RONTOLISP::%CLOJURE-WRITE", "RONTOLISP::%CLOJURE-STRICT-SEQ",
+				"RONTOLISP::%CLOJURE-IO-WRITE-BYTE", "RONTOLISP::%CLOJURE-IO-CLOSE-OUTPUT")) {
+			assertThat(defun(processed, name)).as(name)
+				.doesNotContain("%CLOJURE-BYTES-P")
+				.doesNotContain("%CLOJURE-IO-ARRAY-STREAM-P");
+		}
+		List<LispVal> bytes = Clojure.read("(prn (byte-array 2))", null);
+		assertThat(defun(ClojureLibrary.process(bytes), "RONTOLISP::%CLOJURE-WRITE"))
+			.contains("(RONTOLISP::%CLOJURE-BYTES-P X)");
+	}
+
+	@Test
+	void aProgramNamingNoParserOrTypedArrayPrunesAwayTheirWorkers() {
+		// the parsers and the typed constructors are plain workers, not family
+		// arms: the compile-path pruner drops the ones no kept form reaches, so a
+		// program naming none of them carries none, and one naming one carries
+		// only its own
+		List<String> names = List.of("RONTOLISP::%CLOJURE-PARSE-LONG", "RONTOLISP::%CLOJURE-PARSE-DOUBLE",
+				"RONTOLISP::%CLOJURE-PARSE-BOOLEAN", "RONTOLISP::%CLOJURE-OBJECT-ARRAY", "RONTOLISP::%CLOJURE-TO-ARRAY",
+				"RONTOLISP::%CLOJURE-INTO-ARRAY", "RONTOLISP::%CLOJURE-INT-ARRAY", "RONTOLISP::%CLOJURE-LONG-ARRAY",
+				"RONTOLISP::%CLOJURE-DOUBLE-ARRAY", "RONTOLISP::%CLOJURE-FLOAT-ARRAY",
+				"RONTOLISP::%CLOJURE-SHORT-ARRAY", "RONTOLISP::%CLOJURE-CHAR-ARRAY",
+				"RONTOLISP::%CLOJURE-BOOLEAN-ARRAY", "RONTOLISP::%CLOJURE-TO-ARRAY-2D", "RONTOLISP::%CLOJURE-ASET-INT",
+				"RONTOLISP::%CLOJURE-ASET-LONG", "RONTOLISP::%CLOJURE-ASET-DOUBLE", "RONTOLISP::%CLOJURE-ASET-FLOAT",
+				"RONTOLISP::%CLOJURE-ASET-SHORT", "RONTOLISP::%CLOJURE-ASET-BOOLEAN", "RONTOLISP::%CLOJURE-ASET-CHAR",
+				"RONTOLISP::%CLOJURE-ASET-CHECKED", "RONTOLISP::%CLOJURE-INTS", "RONTOLISP::%CLOJURE-LONGS",
+				"RONTOLISP::%CLOJURE-DOUBLES", "RONTOLISP::%CLOJURE-FLOATS", "RONTOLISP::%CLOJURE-SHORTS",
+				"RONTOLISP::%CLOJURE-CHARS", "RONTOLISP::%CLOJURE-BOOLEANS", "RONTOLISP::%CLOJURE-ARRAY-INDEX",
+				"RONTOLISP::%CLOJURE-ARRAY-BOUNDS", "RONTOLISP::%CLOJURE-CHAR-CAST", "RONTOLISP::%CLOJURE-CAST-REFUSAL",
+				"RONTOLISP::%CLOJURE-ARRAY-MEMBERS", "RONTOLISP::%CLOJURE-BUILD-ARRAY",
+				"RONTOLISP::%CLOJURE-DECIMAL-DIGIT", "RONTOLISP::%CLOJURE-HEX-DIGIT");
+		List<LispVal> plain = Clojure.read("(prn (byte-array 2) (parse-uuid \"1-1-1-1-1\"))", null);
+		assertThat(LibraryDefunPruner.prune(ClojureLibrary.process(plain, false))
+			.stream()
+			.map(LispVal::print)
+			.flatMap(text -> names.stream().filter(text::contains))
+			.toList()).isEmpty();
+		String kept = LibraryDefunPruner
+			.prune(ClojureLibrary.process(Clojure.read("(prn (parse-long \"12\") (int-array [1]))", null), false))
+			.stream()
+			.map(LispVal::print)
+			.collect(Collectors.joining("\n"));
+		assertThat(kept).contains("(DEFUN RONTOLISP::%CLOJURE-PARSE-LONG ")
+			.contains("(DEFUN RONTOLISP::%CLOJURE-INT-ARRAY ")
+			.doesNotContain("%CLOJURE-PARSE-DOUBLE")
+			.doesNotContain("%CLOJURE-DOUBLE-ARRAY");
+	}
+
+	@Test
+	void aProgramNamingNoRangeOrCreateWithCheckPrunesThemAway() {
+		// the infinite range and the duplicate-checking map build are plain
+		// workers, not family arms: the compile-path pruner drops them when no
+		// kept form reaches them, so a program naming neither carries neither,
+		// and one naming one carries only its own
+		List<String> names = List.of("RONTOLISP::%CLOJURE-RANGE", "RONTOLISP::%CLOJURE-RANGE-FROM",
+				"RONTOLISP::%CLOJURE-CREATE-WITH-CHECK");
+		List<LispVal> plain = Clojure.read("(prn (range 3) (into-array [1]))", null);
+		assertThat(LibraryDefunPruner.prune(ClojureLibrary.process(plain, false))
+			.stream()
+			.map(LispVal::print)
+			.flatMap(text -> names.stream().filter(text::contains))
+			.toList()).isEmpty();
+		String kept = LibraryDefunPruner
+			.prune(ClojureLibrary.process(Clojure.read("(prn (take 1 (range)) (map range [[1]]))", null), false))
+			.stream()
+			.map(LispVal::print)
+			.collect(Collectors.joining("\n"));
+		assertThat(kept).contains("(DEFUN RONTOLISP::%CLOJURE-RANGE ")
+			.contains("(DEFUN RONTOLISP::%CLOJURE-RANGE-FROM ")
+			.doesNotContain("%CLOJURE-CREATE-WITH-CHECK");
+		String checked = LibraryDefunPruner.prune(ClojureLibrary.process(
+				Clojure.read("(prn (clojure.lang.PersistentArrayMap/createWithCheck (object-array [1])))", null),
+				false))
+			.stream()
+			.map(LispVal::print)
+			.collect(Collectors.joining("\n"));
+		assertThat(checked).contains("(DEFUN RONTOLISP::%CLOJURE-CREATE-WITH-CHECK ")
+			.doesNotContain("%CLOJURE-RANGE-FROM");
+	}
+
+	@Test
+	void aWholeProgramOnTheInterpreterTakesTheLibraryWithoutTheArmsItCanNeverTake() {
+		// str of a number passes no io test where the program can hold no io value; the
+		// library loaded on first use keeps every arm for what a session reads next
+		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		LispEvaluator whole = new LispEvaluator(new PrintStream(out, true, StandardCharsets.UTF_8));
+		for (LispVal form : whole.clojureProgram(Clojure.read("(println (str 1 :k))", null))) {
+			whole.eval(form);
+		}
+		assertThat(out.toString(StandardCharsets.UTF_8)).isEqualTo("1:k\n");
+		assertThat(strOf(whole)).doesNotContain("%CLOJURE-IO-P").contains("%CLOJURE-RE-PATTERN-P");
+		LispEvaluator lazy = new LispEvaluator(new PrintStream(new ByteArrayOutputStream(), true));
+		for (LispVal form : Clojure.read("(str 1 :k)", null)) {
+			lazy.eval(form);
+		}
+		assertThat(strOf(lazy)).contains("(RONTOLISP::%CLOJURE-IO-P X)");
+		LispEvaluator io = new LispEvaluator(new PrintStream(new ByteArrayOutputStream(), true));
+		io.clojureProgram(Clojure.read("(str (java.io.File. \"a\"))", null));
+		assertThat(strOf(io)).contains("(RONTOLISP::%CLOJURE-IO-P X)");
+		// a later program could make what the first could not
+		assertThatThrownBy(() -> whole.clojureProgram(Clojure.read("(str (java.io.File. \"a\"))", null)))
+			.isInstanceOf(IllegalStateException.class);
+	}
+
+	private static String strOf(LispEvaluator evaluator) {
+		LispVal function = evaluator.eval(LispReader.readAllFromString("#'rontolisp::%clojure-str-of").get(0));
+		return ((LispLambda) function).body().stream().map(LispVal::print).collect(Collectors.joining(" "));
+	}
+
+	@Test
+	void classOfAStreamIsAnArmAProgramMakingNoStreamSheds() {
+		// the library keeps its own defuns (the tree-shaker prunes them later); the arm
+		// is
+		// in the program's forms
+		List<LispVal> plain = Clojure.read("(prn (class 1) (class [1]))", null);
+		assertThat(
+				ClojureLibrary.process(plain).stream().map(LispVal::print).filter(text -> !text.startsWith("(DEFUN ")))
+			.noneMatch(text -> text.contains("%CLOJURE-STREAM-CLASS"));
+		List<LispVal> stream = Clojure.read("(prn (class *out*))", null);
+		assertThat(
+				ClojureLibrary.process(stream).stream().map(LispVal::print).filter(text -> !text.startsWith("(DEFUN ")))
+			.anyMatch(text -> text.contains("(RONTOLISP::%CLOJURE-STREAM-CLASS"));
+	}
+
+	@Test
+	void aProgramReadingNoStreamDepthShedsTheRebindingPairs() {
+		// with-out-str, a binding of *out* and an agent action rebind the counters, which
+		// only a #'*out* / #'*in* / #'*agent* site reads: without one the pairs go and
+		// the
+		// program compiles as before the counters existed
+		List<LispVal> plain = Clojure.read("(println (with-out-str (print 1))) (binding [*out* *out*] (println 2))",
+				null);
+		assertThat(ClojureLibrary.process(plain).stream().map(LispVal::print))
+			.noneMatch(text -> text.contains("%CLOJURE-OUT-DEPTH"));
+		// a program naming no library function goes through the strip too
+		List<LispVal> bare = LispReader.readAllFromString("(defvar rontolisp::%clojure-out-depth 0)"
+				+ " (let ((*standard-output* s) (rontolisp::%clojure-out-depth (+ rontolisp::%clojure-out-depth 1)))"
+				+ " (princ 1))");
+		assertThat(ClojureLibrary.process(bare).stream().map(LispVal::print))
+			.containsExactly("(LET ((*STANDARD-OUTPUT* S)) (PRINC 1))");
+		List<LispVal> read = Clojure.read("(println (with-out-str (print (thread-bound? #'*out*))))", null);
+		assertThat(ClojureLibrary.process(read).stream().map(LispVal::print))
+			.anyMatch(text -> text.contains("(RONTOLISP::%CLOJURE-OUT-DEPTH (+ RONTOLISP::%CLOJURE-OUT-DEPTH 1))"))
+			.anyMatch(text -> text.equals("(DEFVAR RONTOLISP::%CLOJURE-OUT-DEPTH 0)"));
+	}
+
+	@Test
+	void aProgramReadingNoLoadSpecialShedsTheirSwitches() {
+		// ns and in-ns switch *ns*, and a require rebinds *ns*, *file* and *source-path*
+		// around a namespace's init; only a read of one keeps them, so a program reading
+		// none compiles as before they had values
+		List<LispVal> plain = Clojure.read("(ns a) (defn f [] 1) (in-ns 'b) (a/f) (do (in-ns 'c) (println 1))", null);
+		assertThat(plain.stream().map(LispVal::print)).anyMatch(text -> text.contains("RONTOLISP::%CLOJURE-NS"));
+		List<String> processed = ClojureLibrary.process(plain).stream().map(LispVal::print).toList();
+		assertThat(processed).noneMatch(text -> text.matches("(?s).*RONTOLISP::%CLOJURE-NS[ )].*"))
+			.contains("(|c%a/f|)")
+			// a top-level do is lowered as its members (ClojureLowering), so the
+			// stripped in-ns switch and the println stand apart
+			.anyMatch(text -> text.contains("(PROGN (RONTOLISP::%CLOJURE-WRITE-DATUM 1"));
+		List<LispVal> read = Clojure.read("(ns a) (println (str *ns*))", null);
+		assertThat(ClojureLibrary.process(read).stream().map(LispVal::print)).contains(
+				"(DEFVAR RONTOLISP::%CLOJURE-NS (RONTOLISP::%CLOJURE-NS-OBJECT \"user\"))",
+				"(SETQ RONTOLISP::%CLOJURE-NS (RONTOLISP::%CLOJURE-NS-OBJECT \"a\"))");
+	}
+
+	@Test
+	void aProgramNamingNoPrintFlagSplicesTheLibraryWithoutItsPrintArms() {
+		// the printer reads *print-length*, *print-level* and *print-readably* through
+		// arms: the interpreter keeps them, a compiled program naming none of the three
+		// gets the printer it had before they existed
+		assertThat(defun(ClojureLibrary.forms(), "RONTOLISP::%CLOJURE-WRITE")).contains(
+				"(RONTOLISP::%CLOJURE-PRINT-DEEP-P X)", "(RONTOLISP::%CLOJURE-PRINT-CUT-P X)",
+				"RONTOLISP::%CLOJURE-WRITE-NESTED");
+		List<LispVal> plain = LispReader.readAllFromString("(rontolisp::%clojure-str-of x \"\" nil)");
+		List<LispVal> processed = ClojureLibrary.process(plain);
+		assertThat(defun(processed, "RONTOLISP::%CLOJURE-WRITE")).doesNotContain("%CLOJURE-PRINT-",
+				"%CLOJURE-WRITE-NESTED");
+		assertThat(defun(processed, "RONTOLISP::%CLOJURE-PRINT")).doesNotContain("%CLOJURE-PRINT-READABLE");
+		List<LispVal> flagged = Clojure.read("(binding [*print-length* 2] (prn [1 2 3]))", null);
+		assertThat(defun(ClojureLibrary.process(flagged), "RONTOLISP::%CLOJURE-WRITE"))
+			.contains("(RONTOLISP::%CLOJURE-PRINT-CUT-P X)", "RONTOLISP::%CLOJURE-WRITE-NESTED");
+	}
+
+	@Test
+	void aProgramNamingNoPrintMetaAndMakingNoQualifiedKeySplicesThePrinterWithoutTheirArms() {
+		assertThat(defun(ClojureLibrary.forms(), "RONTOLISP::%CLOJURE-WRITE"))
+			.contains("RONTOLISP::%CLOJURE-PRINT-META-P", "(RONTOLISP::%CLOJURE-PRINT-NS-MAP-P X)");
+		String plain = defun(ClojureLibrary.process(Clojure.read("(prn {:a 1} 'b)", null)),
+				"RONTOLISP::%CLOJURE-WRITE");
+		assertThat(plain).doesNotContain("%CLOJURE-PRINT-META-P", "%CLOJURE-PRINT-NS-MAP-P");
+		String meta = defun(ClojureLibrary.process(Clojure.read("(binding [*print-meta* true] (prn [1]))", null)),
+				"RONTOLISP::%CLOJURE-WRITE");
+		assertThat(meta).contains("%CLOJURE-PRINT-META-P").doesNotContain("%CLOJURE-PRINT-NS-MAP-P");
+		for (String qualified : List.of("(prn :a/b)", "(prn 'a/b)", "(prn ::b)", "(prn (keyword \"a\" \"b\"))",
+				"(prn (read-string \"x\"))")) {
+			assertThat(defun(ClojureLibrary.process(Clojure.read(qualified, null)), "RONTOLISP::%CLOJURE-WRITE"))
+				.as(qualified)
+				.contains("%CLOJURE-PRINT-NS-MAP-P")
+				.doesNotContain("%CLOJURE-PRINT-META-P");
+		}
+	}
+
+	@Test
+	void everyLibraryFunctionBuildingAKeywordOrSymbolFromAComputedSpellingMakesANamespaceMap() {
+		// a qualified key reaches a map only through a literal or one of these: a defun
+		// interning a symbol or wrapping a computed spelling as a keyword, or calling one
+		// that does. A program naming one keeps the namespace-map arm.
+		Map<String, LispVal> defuns = new HashMap<>();
+		for (LispVal form : ClojureLibrary.forms()) {
+			if (form instanceof LispCons cons && cons.car() instanceof LispSymbol head && head.name().equals("DEFUN")
+					&& cons.cdr() instanceof LispCons rest && rest.car() instanceof LispSymbol name) {
+				defuns.put(name.name(), rest.cdr());
+			}
+		}
+		Set<String> builders = new TreeSet<>();
+		defuns.forEach((name, body) -> {
+			if (buildsIdent(body)) {
+				builders.add(name);
+			}
+		});
+		// class answers a class name as a keyword, and a class name has no slash (the
+		// class rows' bases neither, nor a host class's keys, nor a designator a
+		// hierarchy
+		// reads as its keyword); ns-name a namespace's name
+		// as a symbol, which has none either; the Ring adapter its options' and request
+		// map's fixed key names and a method or scheme, HTTP tokens that admit no slash;
+		// the HTTP client its options' and response map's fixed key names; Throwable->map
+		// a class name as a symbol; clojure.java.io a value's class name; cast a host
+		// class's kind keyword; a type designator its kind keyword (f96's kinds and,
+		// since f98, nothing else: the Pattern designator reads back as no kind)
+		Set<String> slashless = Set.of("RONTOLISP::%CLOJURE-EXCEPTION-CLASS", "RONTOLISP::%CLOJURE-CLASS-KEYWORDS",
+				"RONTOLISP::%CLOJURE-READER-VALUE-CLASS", "RONTOLISP::%CLOJURE-INSTANT-CLASS",
+				"RONTOLISP::%CLOJURE-HOST-CLASS-KEYS", "RONTOLISP::%CLOJURE-NS-NAME",
+				"RONTOLISP::%CLOJURE-RING-KEYWORD", "RONTOLISP::%CLOJURE-RING-MAP", "RONTOLISP::%CLOJURE-RING-OPTION",
+				"RONTOLISP::%CLOJURE-HTTP-ASSOC", "RONTOLISP::%CLOJURE-HTTP-OPTION",
+				"RONTOLISP::%CLOJURE-THROWABLE-VIA", "RONTOLISP::%CLOJURE-THROWABLE-TO-MAP",
+				"RONTOLISP::%CLOJURE-IO-CLASS-KEY", "RONTOLISP::%CLOJURE-CAST-KIND",
+				"RONTOLISP::%CLOJURE-DESIGNATOR-KIND", "RONTOLISP::%CLOJURE-CLASS-DESIGNATOR-KEY");
+		builders.removeAll(slashless);
+		boolean grew = true;
+		while (grew) {
+			grew = false;
+			for (Map.Entry<String, LispVal> defun : defuns.entrySet()) {
+				if (!builders.contains(defun.getKey()) && !slashless.contains(defun.getKey())
+						&& mentionsAny(defun.getValue(), builders)) {
+					builders.add(defun.getKey());
+					grew = true;
+				}
+			}
+		}
+		assertThat(builders).contains("RONTOLISP::%CLOJURE-KEYWORD-2", "RONTOLISP::%CLOJURE-READ-STRING");
+		assertThat(builders).allSatisfy(name -> assertThat(ClojureArms.Family.NAMESPACE_MAP.isProducer(name))
+			.as(name + " builds a keyword or symbol")
+			.isTrue());
+	}
+
+	/** Whether the code interns a symbol or wraps a computed spelling as a keyword. */
+	private static boolean buildsIdent(LispVal code) {
+		LispVal rest = code;
+		while (rest instanceof LispCons cell) {
+			if (cell.car() instanceof LispSymbol head
+					&& (head.name().equals("INTERN") || head.name().equals(":C%KEYWORD")
+							&& cell.cdr() instanceof LispCons next && !(next.car() instanceof LispString))) {
+				return true;
+			}
+			if (buildsIdent(cell.car())) {
+				return true;
+			}
+			rest = cell.cdr();
+		}
+		return false;
+	}
+
+	private static boolean mentionsAny(LispVal code, Set<String> names) {
+		LispVal rest = code;
+		while (rest instanceof LispCons cell) {
+			if (mentionsAny(cell.car(), names)) {
+				return true;
+			}
+			rest = cell.cdr();
+		}
+		return rest instanceof LispSymbol symbol && names.contains(symbol.name());
+	}
+
+	@Test
+	void aProgramReadingNoConditionsClassSplicesEveryRefusalAsThePlainError() {
+		// a refusal carries the class the oracle throws only where a catch by class,
+		// class or instance? can read it: anywhere else it is the error it signalled
+		// before, and the refusal's condition class is gone with it
+		assertThat(defun(ClojureLibrary.forms(), "RONTOLISP::%CLOJURE-STRICT-SEQ"))
+			.contains("(RONTOLISP::%CLOJURE-ILLEGAL-ARGUMENT-EXCEPTION \"seq needs a collection\")");
+		for (String source : List.of("(println (first 5))", "(println (try (first 5) (catch Throwable e :x)))")) {
+			List<LispVal> plain = ClojureLibrary.process(Clojure.read(source, null));
+			assertThat(defun(plain, "RONTOLISP::%CLOJURE-STRICT-SEQ")).as(source)
+				.contains("(ERROR \"seq needs a collection\")")
+				.doesNotContain("EXCEPTION");
+			assertThat(plain.stream().map(LispVal::print)).as(source)
+				.noneMatch(text -> text.startsWith("(DEFINE-CONDITION RONTOLISP::%CLOJURE-REFUSAL "));
+		}
+		for (String source : List.of("(println (try (first 5) (catch IllegalArgumentException e :x)))",
+				"(println (instance? Exception 5))", "(println (try (first 5) (catch Exception e (class e))))")) {
+			List<LispVal> reading = ClojureLibrary.process(Clojure.read(source, null));
+			assertThat(defun(reading, "RONTOLISP::%CLOJURE-STRICT-SEQ")).as(source)
+				.contains("(RONTOLISP::%CLOJURE-ILLEGAL-ARGUMENT-EXCEPTION \"seq needs a collection\")");
+		}
+	}
+
+	@Test
+	void aProgramNamingNoJavaOperatorComparesWithoutTheHostCollectionArm() {
+		// only a java: operator hands a program a host collection: without one, = and the
+		// sorted = keep the bodies they had before a host collection counted
+		assertThat(defun(ClojureLibrary.forms(), "RONTOLISP::%CLOJURE-EQUAL"))
+			.contains("(RONTOLISP::%CLOJURE-HOST-EQUAL-P A B)");
+		assertThat(defun(ClojureLibrary.forms(), "RONTOLISP::%CLOJURE-SORTED-EQUAL"))
+			.contains("(RONTOLISP::%CLOJURE-HOST-EQUAL-P A B)");
+		List<LispVal> plain = ClojureLibrary.process(Clojure.read("(prn (= [1] (sorted-set 1) (list 1)))", null));
+		assertThat(defun(plain, "RONTOLISP::%CLOJURE-EQUAL")).doesNotContain("HOST").endsWith("(T (EQUAL A B))))");
+		assertThat(defun(plain, "RONTOLISP::%CLOJURE-SORTED-EQUAL")).doesNotContain("HOST");
+		List<LispVal> host = ClojureLibrary.process(Clojure.read("(prn (= [1] (java.util.ArrayList. [1])))", null));
+		assertThat(defun(host, "RONTOLISP::%CLOJURE-EQUAL")).contains("(RONTOLISP::%CLOJURE-HOST-EQUAL-P A B)");
+	}
+
+	@Test
+	void aProgramNamingNoJavaOperatorSeqsAndCountsWithoutTheHostCollectionArms() {
+		// only a java: operator hands a program a host collection: without one, seq and
+		// the lowered count, empty?, get and contains? keep what they lowered to before
+		String verbs = "(prn (seq [1]) (count [1]) (empty? []) (get {1 2} 1) (contains? #{1} 1) (map :a [{:a 1}])"
+				+ " (keys {1 2}) (vals {1 2}))";
+		assertThat(defun(ClojureLibrary.forms(), "RONTOLISP::%CLOJURE-STRICT-SEQ"))
+			.contains("(RONTOLISP::%CLOJURE-HOST-SEQABLE-P COLL)");
+		List<LispVal> plain = ClojureLibrary.process(Clojure.read(verbs, null));
+		assertThat(defun(plain, "RONTOLISP::%CLOJURE-STRICT-SEQ")).doesNotContain("HOST")
+			.endsWith("(T (ERROR \"seq needs a collection\"))))");
+		assertThat(program(plain, verbs)).doesNotContain("HOST");
+		String withJava = "(def al (java.util.ArrayList. [1])) " + verbs;
+		List<LispVal> host = ClojureLibrary.process(Clojure.read(withJava, null));
+		assertThat(defun(host, "RONTOLISP::%CLOJURE-STRICT-SEQ")).contains("(RONTOLISP::%CLOJURE-HOST-SEQABLE-P COLL)");
+		assertThat(program(host, withJava)).contains("(RONTOLISP::%CLOJURE-HOST-COUNT ",
+				"(RONTOLISP::%CLOJURE-HOST-EMPTY-P ", "(RONTOLISP::%CLOJURE-HOST-GET ",
+				"(RONTOLISP::%CLOJURE-HOST-CONTAINS-P ", "(RONTOLISP::%CLOJURE-HOST-KEYS ");
+	}
+
+	@Test
+	void aProgramNamingNoJavaOperatorRunsTheMapVerbsWithoutTheHostMapArms() {
+		// only a java: operator hands a program a host map: without one, find,
+		// select-keys, reduce-kv, conj, merge and merge-with keep what they lowered to
+		String verbs = "(prn (find {1 2} 1) (select-keys {1 2} [1]) (reduce-kv (fn [a k v] (+ a v)) 0 {1 2})"
+				+ " (conj {} {1 2}) (merge {} {1 2}) (merge-with + {} {1 2}) (apply merge-with + [{} {1 2}]))";
+		List<String> library = List.of("RONTOLISP::%CLOJURE-FIND", "RONTOLISP::%CLOJURE-KV-PAIRS",
+				"RONTOLISP::%CLOJURE-MERGE-ENTRY-PLIST");
+		List<LispVal> plain = ClojureLibrary.process(Clojure.read(verbs, null));
+		for (String name : library) {
+			assertThat(defun(ClojureLibrary.forms(), name)).contains("(RONTOLISP::%CLOJURE-HOST-SEQABLE-P ");
+			assertThat(defun(plain, name)).doesNotContain("HOST");
+		}
+		assertThat(program(plain, verbs)).doesNotContain("HOST");
+		String withJava = "(def hm (java.util.HashMap.)) " + verbs;
+		List<LispVal> host = ClojureLibrary.process(Clojure.read(withJava, null));
+		for (String name : library) {
+			assertThat(defun(host, name)).contains("(RONTOLISP::%CLOJURE-HOST-SEQABLE-P ");
+		}
+		assertThat(program(host, withJava)).contains("(RONTOLISP::%CLOJURE-HOST-SELECT-KEYS ",
+				"(RONTOLISP::%CLOJURE-HOST-ENTRY-PLIST ", "(RONTOLISP::%CLOJURE-HOST-TABLE ");
+	}
+
+	@Test
+	void aProgramNamingNoJavaOperatorPrintsWithoutTheHostCollectionArm() {
+		// only a java: operator hands a program a host collection: without one, the
+		// printer keeps what it wrote before and nothing reaches the host writer
+		String print = "(prn [1] {1 2} #{3} '(4))";
+		String arm = "(RONTOLISP::%CLOJURE-HOST-SEQABLE-P X)";
+		assertThat(defun(ClojureLibrary.forms(), "RONTOLISP::%CLOJURE-WRITE")).contains(arm);
+		List<LispVal> plain = ClojureLibrary.process(Clojure.read(print, null));
+		assertThat(defun(plain, "RONTOLISP::%CLOJURE-WRITE")).doesNotContain("HOST-SEQABLE")
+			.doesNotContain("WRITE-HOST");
+		String withJava = "(def al (java.util.ArrayList. [1])) " + print;
+		List<LispVal> host = ClojureLibrary.process(Clojure.read(withJava, null));
+		assertThat(defun(host, "RONTOLISP::%CLOJURE-WRITE")).contains(arm);
+		assertThat(defun(host, "RONTOLISP::%CLOJURE-WRITE-HOST")).isNotEmpty();
+	}
+
+	@Test
+	void aHostExceptionIsMadeOnlyByAJavaOperatorWhereTheHostIs() {
+		// on the JVM a java: operator keeps the host-exception arms: throw signals a host
+		// Throwable as itself, a catch takes a failed host call by the host's class and
+		// binds the host's exception, and the program's exceptions are host-backed;
+		// compiled for wasm, where java: is a call-time error, the same program lowers
+		// and splices as one naming no java: operator
+		String source = "(println (try (Integer/parseInt \"x\") (catch NumberFormatException e (.getMessage e))))"
+				+ " (throw (Exception. \"m\"))";
+		String arm = "(RONTOLISP::%CLOJURE-HOST-THROWABLE-P X)";
+		assertThat(defun(ClojureLibrary.forms(), "RONTOLISP::%CLOJURE-THROW")).contains(arm);
+		List<LispVal> host = ClojureLibrary.process(Clojure.read(source, null, null, ClojureFiles.NONE, true), true);
+		assertThat(defun(host, "RONTOLISP::%CLOJURE-THROW")).contains(arm);
+		assertThat(defun(host, "RONTOLISP::%CLOJURE-CATCHES")).contains("(RONTOLISP::%CLOJURE-HOST-FAILURE-P C)");
+		assertThat(host.stream().map(LispVal::print)).anyMatch(text -> text.contains("(RONTOLISP::%CLOJURE-CAUGHT "))
+			.anyMatch(text -> text.startsWith("(DEFUN C%E-HOST-OF "))
+			.anyMatch(text -> text.startsWith("(DEFINE-CONDITION C%E-EXCEPTION (JAVA:JAVA-EXCEPTION)"));
+		List<LispVal> wasm = ClojureLibrary.process(Clojure.read(source, null, null, ClojureFiles.NONE, false), false);
+		assertThat(defun(wasm, "RONTOLISP::%CLOJURE-THROW")).doesNotContain("HOST");
+		assertThat(defun(wasm, "RONTOLISP::%CLOJURE-CATCHES")).doesNotContain("HOST");
+		assertThat(defun(wasm, "RONTOLISP::%CLOJURE-LISP-VALUE-P")).doesNotContain("INSTANCE");
+		assertThat(defun(wasm, "RONTOLISP::%CLOJURE-CAUGHT")).doesNotContain("HOST");
+		assertThat(wasm.stream().map(LispVal::print)).noneMatch(text -> text.contains("(RONTOLISP::%CLOJURE-CAUGHT "))
+			.noneMatch(text -> text.contains("C%E-HOST"))
+			.anyMatch(text -> text.startsWith("(DEFINE-CONDITION C%E-EXCEPTION (ERROR)"));
+	}
+
+	/** The processed forms of the program itself: the tail past the spliced library. */
+	private static String program(List<LispVal> processed, String source) {
+		int own = Clojure.read(source, null).size();
+		return processed.subList(processed.size() - own, processed.size())
+			.stream()
+			.map(LispVal::print)
+			.collect(Collectors.joining("\n"));
+	}
+
+	private static String defun(List<LispVal> forms, String name) {
+		return forms.stream()
+			.map(LispVal::print)
+			.filter(text -> text.startsWith("(DEFUN " + name + " "))
+			.findFirst()
+			.orElseThrow();
+	}
+
+	@Test
+	void aProgramWithoutAPrinterHelperIsReturnedUnchanged() {
+		List<LispVal> program = List.of(new am.ik.rontolisp.LispCons(new am.ik.rontolisp.LispSymbol("PRINC"),
+				new am.ik.rontolisp.LispCons(new am.ik.rontolisp.LispString("hi"), am.ik.rontolisp.LispNil.INSTANCE)));
+		assertThat(ClojureLibrary.process(program)).isSameAs(program);
+	}
+
+}

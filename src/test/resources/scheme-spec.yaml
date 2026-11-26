@@ -1,0 +1,3458 @@
+# The corpus of the EXPERIMENTAL Scheme front end (SchemeSpecE2eTest): one case per row of
+# the lowering table in .kb/scheme-frontend.md and per procedure group of the subset.
+# Cases run IN ORDER, concatenated into one .scm program per backend (shared global
+# state), and the output is sliced back per case -- the ci-spec.yaml idea. Every case
+# must print the same text on the interpreter, the JVM, wasm and the component.
+cases:
+  - name: identifiers-keep-their-case-and-never-hit-a-common-lisp-name
+    source: |
+      (define (loop list) (car list))
+      (write (loop '(1 2 3)))
+      (newline)
+      (define (remove-if print) (list 'mine print))
+      (write (remove-if '(1 2)))
+      (newline)
+      (define Foo 1)
+      (define foo 2)
+      (define FOO 3)
+      (write (list Foo foo FOO))
+      (newline)
+    expected: |
+      1
+      (mine (1 2))
+      (1 2 3)
+  - name: an-identifier-without-a-lowercase-letter-is-renamed-when-bound
+    source: |
+      (define X 10)
+      (define (CAR x) (list 'mine x X))
+      (write (CAR '(1 2)))
+      (newline)
+      (write (car '(1 2)))
+      (newline)
+      (define (tn T NIL) (list T NIL))
+      (write (tn 1 2))
+      (newline)
+      (define (amp &rest a:b) (list &rest a:b))
+      (write (amp 3 4))
+      (newline)
+      (write (let ((LIST 5) (+ -)) (+ LIST 2)))
+      (newline)
+    expected: |
+      (mine (1 2) 10)
+      1
+      (1 2)
+      (3 4)
+      3
+  - name: symbols-as-data-round-trip-through-their-escaped-spelling
+    source: |
+      (write '(ABC T NIL nil t a:b &rest s%x x%y))
+      (newline)
+      (write (map symbol->string '(ABC T a:b s%x abc)))
+      (newline)
+      (write
+       (list (eq? 'ABC (string->symbol "ABC")) (eq? 'abc (string->symbol "abc"))
+             (eq? 'a:b (string->symbol "a:b")) (eq? 'abc 'ABC)))
+      (newline)
+      (write
+       (list (symbol? 'T) (symbol? 'NIL) (symbol? 'nil) (null? 'NIL) (eq? 'T #t)))
+      (newline)
+      (write
+       (list (eq? (string->symbol "#f") #f) (if (string->symbol "#f") 'true 'false)))
+      (newline)
+    expected: |
+      (ABC T NIL nil t a:b &rest s%x x%y)
+      ("ABC" "T" "a:b" "s%x" "abc")
+      (#t #t #t #f)
+      (#t #t #t #f #f)
+      (#f true)
+  # Gauche 0.9.15 -r7, except that it writes |+inf.0x| where R7RS reads an identifier.
+  - name: vertical-line-identifiers-are-symbols-of-any-spelling
+    source: |
+      (define |hello world| 42)
+      (define (|a.b;c[d]| x) (+ x 1))
+      (write (list |hello world| (|a.b;c[d]| 1) (eq? 'abc '|abc|) (eq? '|#t| #t) (symbol? '|#f|)))
+      (newline)
+      (write '(|foo bar| || |1| |.| |a\x41;b| |a\|b| |a\\b| |\t| ABC |+inf.0| + ... .a))
+      (newline)
+      (display '(|foo bar| || |1| |a\|b|))
+      (newline)
+      (write (map symbol->string '(|foo bar| || |A:b|)))
+      (newline)
+      (write (list (string->symbol "a b") (string->symbol "") (string->symbol "1+") (string->symbol "λx")))
+      (newline)
+      (let ((|#t| #f)) (write (if |#t| 'yes 'no)))
+      (newline)
+    expected: |
+      (42 2 #t #f #t)
+      (|foo bar| || |1| |.| aAb |a\|b| |a\\b| |\x09;| ABC |+inf.0| + ... .a)
+      (foo bar  1 a|b)
+      ("foo bar" "" "A:b")
+      (|a b| || |1+| λx)
+      no
+  # Gauche 0.9.15 -r7. (eqv? +nan.0 +nan.0) is left out: R7RS leaves it unspecified,
+  # Gauche answers #f and every backend here #t (Common Lisp's eql of one bit pattern).
+  - name: infinities-and-nan-read-print-and-compare
+    source: |
+      (write (list +inf.0 -inf.0 +nan.0 -nan.0 +INF.0 #x-inf.0))
+      (newline)
+      (write (list (= +nan.0 +nan.0) (< -inf.0 0 +inf.0) (> +nan.0 0) (< +nan.0 0) (= +inf.0 +inf.0)))
+      (newline)
+      (write (list (* 2 +inf.0) (/ 1. +inf.0) (- +inf.0 +inf.0) (max 1 +inf.0) (min 1 -inf.0) (abs -inf.0)))
+      (newline)
+      (write (list (nan? +nan.0) (infinite? -inf.0) (finite? +inf.0) (exact? +inf.0) (inexact? +nan.0)
+                   (integer? +inf.0) (rational? +nan.0) (real? -inf.0)))
+      (newline)
+      (write (list (floor +inf.0) (ceiling -inf.0) (round +nan.0) (truncate +inf.0) (floor 2.5) (round 2.5)
+                   (floor -2.5)))
+      (newline)
+      (write (list (number->string -inf.0) (string->number "+inf.0") (string->number "-Inf.0")
+                   (string->number "+nan.0") (string->number "inf.0") (string->number "+inf.0" 16)))
+      (newline)
+      (write (guard (e (#t (error-object? e))) (exact +inf.0)))
+      (newline)
+      (write (list (sqrt +inf.0) (exp -inf.0) (atan +inf.0) (eqv? +inf.0 +inf.0) (equal? -inf.0 -inf.0)))
+      (newline)
+    expected: |
+      (+inf.0 -inf.0 +nan.0 +nan.0 +inf.0 -inf.0)
+      (#f #t #f #f #t)
+      (+inf.0 0.0 +nan.0 +inf.0 -inf.0 +inf.0)
+      (#t #t #f #f #t #f #f #t)
+      (+inf.0 -inf.0 +nan.0 +inf.0 2.0 2.0 -3.0)
+      ("-inf.0" +inf.0 -inf.0 +nan.0 #f +inf.0)
+      #t
+      (+inf.0 0.0 1.5707963267948966 #t #t)
+  - name: complex-numbers-read-print-the-tower-and-the-transcendentals
+    source: |
+      (write (list #C(1 2) #c(1.5 -0.25) #C(1 0)))
+      (newline)
+      (write (sqrt -4))
+      (newline)
+      (write (list (sqrt 4) (log -1) (exp #C(0 1))))
+      (newline)
+      (write (list (sin #C(1 1)) (cos 0) (tan #C(0 1)) (atan #C(1 1)) (asin 2) (acos 2)))
+      (newline)
+      (write (list (make-rectangular 1 2) (make-rectangular 1 0) (make-polar 1 0.7853981633974483)))
+      (newline)
+      (write (list (real-part #C(1 2)) (imag-part #C(1 2)) (imag-part 5) (imag-part #C(1.0 0.0))))
+      (newline)
+      (write (list (magnitude #C(3 4)) (magnitude 3) (angle #C(1 1)) (angle 2) (angle -1.0)))
+      (newline)
+      (write (list (+ 1 #C(1 2) 3) (* 2 #C(1 2)) (- #C(1 2)) (/ #C(1 2) #C(3 4)) (expt #C(0 1) 2)
+                   (- 5 #C(0.5 0.5))))
+      (newline)
+      (write (list (= #C(1 2) #C(1 2)) (= #C(1 2) #C(2 2)) (eqv? #C(1 2) #C(1 2)) (equal? #C(1 2) #C(1 2))
+                   (equal? #C(1.0 2.0) #C(1 2))))
+      (newline)
+      (write (list (number? #C(1 2)) (real? #C(1 2)) (exact? #C(1 2)) (exact? #C(1.0 2))
+                   (inexact? #C(1.0 2)) (inexact? #C(1 2)) (zero? #C(0 0)) (zero? #C(0 1))))
+      (newline)
+      (write (list (exact #C(1.0 2.0)) (inexact #C(1 2)) (exact (sqrt -1.0)) (inexact 3)))
+      (newline)
+      (write (list (sqrt #C(1 0)) (sqrt 2.0) (log #C(1 1)) (exp 1) (log 8 2)))
+      (newline)
+    expected: |
+      (#C(1 2) #C(1.5 -0.25) 1)
+      #C(0.0 2.0)
+      (2 #C(0.0 3.141592653589793) #C(0.5403023058681398 0.8414709848078965))
+      (#C(1.2984575814159773 0.6349639147847361) 1 #C(0.0 0.7615941559557649) #C(1.0172219678978514 0.4023594781085251) #C(1.5707963267948966 -1.3169578969248166) #C(0.0 1.3169578969248166))
+      (#C(1 2) 1 #C(0.7071067811865476 0.7071067811865475))
+      (1 2 0 0.0)
+      (5.0 3 0.7853981633974483 0.0 3.141592653589793)
+      (#C(5 2) #C(2 4) #C(-1 -2) #C(11/25 2/25) -1 #C(4.5 -0.5))
+      (#t #f #t #t #f)
+      (#t #f #t #f #t #f #t #f)
+      (#C(1 2) #C(1.0 2.0) #C(0 1) 3.0)
+      (1 1.4142135623730951 #C(0.3465735902799727 0.7853981633974483) 2.7182818284590455 3.0)
+  - name: the-empty-list-is-true-and-false-is-its-own-value
+    source: |
+      (define (truthy x) (if x 'yes 'no))
+      (write (map truthy (list '() #f #t 0 "" 'a (list))))
+      (newline)
+      (write
+       (list (null? '()) (null? #f) (eq? '() #f) (boolean? '()) (boolean? #f)
+             (boolean? #t)))
+      (newline)
+      (write (list #t #f #true #false '#t '#f '(#t #f)))
+      (newline)
+      (write (list (not #f) (not '()) (not 0) (not (not 'a))))
+      (newline)
+    expected: |
+      (yes no yes yes yes yes yes)
+      (#t #f #f #f #t #t)
+      (#t #f #t #f #t #f (#t #f))
+      (#t #f #f #t)
+  - name: a-predicate-fuses-into-a-test-and-converts-as-a-value
+    source: |
+      (define (kind x)
+        (cond ((pair? x) 'pair)
+              ((null? x) 'null)
+              ((and (number? x) (not (zero? x))) 'nonzero)
+              ((or (string? x) (char? x)) 'text)
+              (else 'other)))
+      (write (map kind (list '(1) '() 5 0 "s" #\c 'q)))
+      (newline)
+      (write
+       (list (pair? '(1)) (pair? 1) (and (pair? '(1)) (null? '()))
+             (or (pair? 1) (null? 1))))
+      (newline)
+      (write (map pair? '((1) 2 ())))
+      (newline)
+      (write
+       (list (and) (or) (and 1 2) (and 1 #f 2) (or #f 3) (or #f #f) (and 1 '())))
+      (newline)
+    expected: |
+      (pair null nonzero other text text other)
+      (#t #f #t #f)
+      (#t #f #f)
+      (#t #f 2 #f 3 #f ())
+  - name: a-top-level-define-is-lexical-not-special
+    source: |
+      (define gx 1)
+      (define (get-gx) gx)
+      (write (let ((gx 2)) (get-gx)))
+      (newline)
+      (set! gx 5)
+      (write (get-gx))
+      (newline)
+    expected: |
+      1
+      5
+  - name: lisp-1-over-lisp-2
+    source: |
+      (define (twice f x) (f (f x)))
+      (define (add1 x) (+ x 1))
+      (write (twice add1 5))
+      (newline)
+      (write (twice (lambda (x) (* x x)) 3))
+      (newline)
+      (write (twice cdr '(1 2 3)))
+      (newline)
+      (define op add1)
+      (write (op 1))
+      (newline)
+      (set! op (lambda (x) (* x 10)))
+      (write (op 1))
+      (newline)
+      (define (compose f g) (lambda (x) (f (g x))))
+      (write ((compose car cdr) '(1 2 3)))
+      (newline)
+      (write (map (lambda (p) (p 4)) (list add1 even? - (lambda (x) x))))
+      (newline)
+      (define redefined 1)
+      (define (redefined) 'second)
+      (write (redefined))
+      (newline)
+      (write (let ((list vector)) (list 1 2)))
+      (newline)
+    expected: |
+      7
+      81
+      (3)
+      2
+      10
+      2
+      (5 #t -4 4)
+      second
+      #(1 2)
+  - name: lambda-formals
+    source: |
+      (write ((lambda args args) 1 2 3))
+      (newline)
+      (write ((lambda (a . r) (list a r)) 1 2 3))
+      (newline)
+      (write ((lambda (a b) (list b a)) 1 2))
+      (newline)
+      (define (sum . xs) (apply + xs))
+      (write (list (sum) (sum 1) (sum 1 2 3) (apply sum 1 2 '(3 4))))
+      (newline)
+    expected: |
+      (1 2 3)
+      (1 (2 3))
+      (2 1)
+      (0 1 6 10)
+  - name: a-named-let-is-a-loop-a-million-iterations-deep
+    source: |
+      (define (count n)
+        (let loop ((i 0) (acc 0)) (if (< i n) (loop (+ i 1) (+ acc i)) acc)))
+      (write (count 1000000))
+      (newline)
+      (write (let loop ((i 0)) (cond ((= i 1000000) 'done) (else (loop (+ i 1))))))
+      (newline)
+    expected: |
+      499999500000
+      done
+  - name: a-do-loop-and-a-self-tail-call-are-loops-too
+    source: |
+      (write (do ((i 0 (+ i 1)) (acc '() (cons i acc))) ((= i 5) acc)))
+      (newline)
+      (write (do ((i 0 (+ i 1)) (sum 0 (+ sum i))) ((= i 1000000) sum)))
+      (newline)
+      (define (down n acc) (if (= n 0) acc (down (- n 1) (+ acc 1))))
+      (write (down 1000000 0))
+      (newline)
+      (define (gather n . acc) (if (= n 0) acc (gather (- n 1) n 'x)))
+      (write (gather 3))
+      (newline)
+      (define (walk l)
+        (define (inner l n)
+          (cond ((null? l) n)
+                ((pair? (car l)) (inner (cdr l) (+ n (walk (car l)))))
+                (else (inner (cdr l) (+ n 1)))))
+        (inner l 0))
+      (write (walk '(1 (2 3) ((4)) 5)))
+      (newline)
+      (let ((v (make-vector 3 0)))
+        (do ((i 0 (+ i 1))) ((= i 3))
+          (vector-set! v i (* i i)))
+        (write v)
+        (newline))
+    expected: |
+      (4 3 2 1 0)
+      499999500000
+      1000000
+      (1 x)
+      5
+      #(0 1 4)
+  - name: top-level-procedures-whose-tail-calls-cycle-run-in-constant-stack
+    source: |
+      (define (tc-even? n) (if (= n 0) #t (tc-odd? (- n 1))))
+      (define (tc-odd? n) (if (= n 0) #f (tc-even? (- n 1))))
+      (write (list (tc-even? 100000) (tc-odd? 100001) (tc-even? 7) (map tc-odd? '(0 1 2))))
+      (newline)
+      (define (tc-a n acc) (if (= n 0) (list 'a acc) (tc-b (- n 1) (+ acc 1) 'extra)))
+      (define (tc-b n acc extra) (if (= n 0) (list 'b acc extra) (tc-c (- n 1) acc)))
+      (define (tc-c n . acc) (if (= n 0) (cons 'c acc) (tc-a (- n 1) (car acc))))
+      (write (list (tc-a 30000 0) (tc-a 4 0) (tc-a 5 0) (tc-c 0 1 2)))
+      (newline)
+      (define (tc-collect n acc) (if (= n 0) (map (lambda (f) (f)) acc) (tc-push n acc)))
+      (define (tc-push n acc) (tc-collect (- n 1) (cons (lambda () n) acc)))
+      (write (tc-collect 3 '()))
+      (newline)
+      (define (tc-split n) (if (= n 0) (values 'x 'y) (tc-join (- n 1))))
+      (define (tc-join n) (if (= n 0) (values 1 2 3) (tc-split (- n 1))))
+      (call-with-values (lambda () (tc-split 2)) (lambda args (write args)))
+      (call-with-values (lambda () (tc-split 3)) (lambda args (write args)))
+      (newline)
+      (define (tc-state-a input count)
+        (cond ((null? input) (list 'a count))
+              ((eq? (car input) 'x) (tc-state-b (cdr input) (+ count 1)))
+              (else (tc-state-a (cdr input) count))))
+      (define (tc-state-b input count)
+        (let loop ((rest input))
+          (cond ((null? rest) (list 'b count))
+                ((eq? (car rest) 'y) (tc-state-a (cdr rest) count))
+                (else (loop (cdr rest))))))
+      (define (tc-letters n acc)
+        (if (= n 0) acc (tc-letters (- n 1) (cons 'x (cons 'z (cons 'y acc))))))
+      (write (tc-state-a (tc-letters 30000 '()) 0))
+      (newline)
+    expected: |
+      (#t #t #f (#f #t #f))
+      ((a 10000) (b 2 extra) (c 2) (c 1 2))
+      (1 2 3)
+      (x y)(1 2 3)
+      (a 30000)
+  - name: internal-procedures-whose-tail-calls-cycle-run-in-constant-stack
+    source: |
+      (define (ic-parity n)
+        (define (ev? n) (if (= n 0) #t (od? (- n 1))))
+        (define (od? n) (if (= n 0) #f (ev? (- n 1))))
+        (list (ev? n) (od? (+ n 1)) (map od? '(0 1 2))))
+      (write (list (ic-parity 100000) (ic-parity 7)))
+      (newline)
+      (define (ic-count-xy input)
+        (letrec ((state-a (lambda (rest count)
+                            (cond ((null? rest) (list 'a count))
+                                  ((eq? (car rest) 'x) (state-b (cdr rest) (+ count 1)))
+                                  (else (state-a (cdr rest) count)))))
+                 (state-b (lambda (rest count)
+                            (let loop ((rest rest))
+                              (cond ((null? rest) (list 'b count))
+                                    ((eq? (car rest) 'y) (state-a (cdr rest) count))
+                                    (else (loop (cdr rest))))))))
+          (state-a input 0)))
+      (define (ic-letters n acc)
+        (if (= n 0) acc (ic-letters (- n 1) (cons 'x (cons 'z (cons 'y acc))))))
+      (write (ic-count-xy (ic-letters 30000 '())))
+      (newline)
+      (define (ic-thunks n)
+        (define (collect k acc) (if (= k 0) (map (lambda (f) (f)) acc) (push k acc)))
+        (define (push k acc) (collect (- k 1) (cons (lambda () (list k n)) acc)))
+        (collect n '()))
+      (write (ic-thunks 3))
+      (newline)
+      (define (ic-split n)
+        (define (split n) (if (= n 0) (values 'x 'y) (join (- n 1))))
+        (define (join n) (if (= n 0) (values 1 2 3) (split (- n 1))))
+        (split n))
+      (call-with-values (lambda () (ic-split 2)) (lambda args (write args)))
+      (call-with-values (lambda () (ic-split 3)) (lambda args (write args)))
+      (newline)
+      (define (ic-rest n)
+        (define (p . r) (if (null? r) 'p (q (car r) (cdr r))))
+        (define (q a b) (if (= a 0) (list 'q b) (p (- a 1) b)))
+        (list (q n '(z)) (p 3 'w)))
+      (write (ic-rest 5))
+      (newline)
+      (define (ic-sum-per-row rows)
+        (let loop ((rows rows) (acc '()))
+          (if (null? rows)
+              (reverse acc)
+              (let ()
+                (define (walk xs total) (if (null? xs) total (step xs total)))
+                (define (step xs total) (walk (cdr xs) (+ total (car xs))))
+                (loop (cdr rows) (cons (lambda () (walk (car rows) 0)) acc))))))
+      (write (map (lambda (f) (f)) (ic-sum-per-row '((1 2 3) (4 5) ()))))
+      (newline)
+    expected: |
+      ((#t #t (#f #t #f)) (#f #f (#f #t #f)))
+      (a 30000)
+      ((1 3) (2 3) (3 3))
+      (x y)(1 2 3)
+      ((q ((((((z))))))) (q ((((w))))))
+      (6 9 0)
+  - name: tail-call-through-a-value-jvm
+    source: |
+      (define (vt-self self n) (if (= n 0) 'self-done (self self (- n 1))))
+      (write (vt-self vt-self 100000))
+      (newline)
+      (define (vt-a n) (if (= n 0) 'a-done (vt-b (- n 1))))
+      (define (vt-b n) (if (= n 0) 'b-done (vt-a (- n 1))))
+      (define (vt-pick pick k) (if (= k 0) 'pick-done (pick (- k 1))))
+      (write (list (vt-a 100000) (vt-pick (if (= 1 1) vt-a vt-b) 100000)))
+      (newline)
+      (define (vt-count n acc) (if (= n 0) acc (vt-step n acc)))
+      (define (vt-step n acc) (vt-count (- n 1) (cons n acc)))
+      (write (length (vt-count 30000 '())))
+      (newline)
+    expected: |
+      self-done
+      (a-done b-done)
+      30000
+  - name: lambdas-and-applies-calling-through-a-value-in-tail-position-run-in-constant-stack
+    source: |
+      (define (vl-run n)
+        (let ((f #f))
+          (set! f (lambda (m) (if (= m 0) 'loop-done (f (- m 1)))))
+          (f n)))
+      (write (vl-run 200000))
+      (newline)
+      (define (vl-cps n k) (if (= n 0) (k 0) (vl-cps (- n 1) (lambda (v) (k (+ v 1))))))
+      (write (vl-cps 200000 (lambda (v) v)))
+      (newline)
+      (define (vl-rest n . more) (if (= n 0) (list 'rest-done more) (apply vl-rest (- n 1) more)))
+      (write (vl-rest 200000 1 2))
+      (newline)
+      (define (vl-apply k n) (if (= n 0) 'apply-done (apply k (list k (- n 1)))))
+      (write (vl-apply vl-apply 200000))
+      (newline)
+    expected: |
+      loop-done
+      200000
+      (rest-done (1 2))
+      apply-done
+  - name: a-loop-whose-body-closes-over-its-variables-rebinds-them-per-iteration
+    source: |
+      (define (thunks n)
+        (let loop ((i 0) (acc '()))
+          (if (= i n) (reverse acc) (loop (+ i 1) (cons (lambda () i) acc)))))
+      (write (map (lambda (t) (t)) (thunks 4)))
+      (newline)
+      (write
+       (map (lambda (t) (t))
+        (do ((i 0 (+ i 1)) (acc '() (cons (lambda () (* i i)) acc))) ((= i 3) acc))))
+      (newline)
+      (define (adders n acc)
+        (if (= n 0) acc (adders (- n 1) (cons (lambda (x) (+ x n)) acc))))
+      (write (map (lambda (f) (f 10)) (adders 3 '())))
+      (newline)
+    expected: |
+      (0 1 2 3)
+      (4 1 0)
+      (11 12 13)
+  - name: a-jump-from-where-a-loop-variable-is-shadowed-assigns-the-loop-variable
+    source: |
+      (write
+       (let fill ((path '(3 2 1)) (count 0))
+         (if (null? path) count (let ((count (+ count 1))) (fill (cdr path) count)))))
+      (newline)
+      (write
+       (let outer ((i 0) (acc '()))
+         (if (= (length acc) 3)
+             (list i (reverse acc))
+             (let inner ((i 10) (n 0))
+               (if (= n 2) (outer (+ i 1) (cons i acc)) (inner (+ i 1) (+ n 1)))))))
+      (newline)
+      (define (shadowed-self n total)
+        (if (= n 0)
+            total
+            (let ((m (- n 1))) (let* ((total (+ total n))) (shadowed-self m total)))))
+      (write (shadowed-self 4 0))
+      (newline)
+    expected: |
+      3
+      (13 (12 12 12))
+      10
+  - name: a-named-let-whose-name-escapes-is-a-procedure
+    source: |
+      (write (let fact ((n 10)) (if (= n 0) 1 (* n (fact (- n 1))))))
+      (newline)
+      (write
+       (let walk ((t '(1 (2 (3 4)) 5)))
+         (cond ((null? t) 0) ((pair? t) (+ (walk (car t)) (walk (cdr t)))) (else t))))
+      (newline)
+      (write
+       (let loop ((l '(1 2 3)))
+         (if (null? l) '() (cons (* 2 (car l)) (map (lambda (x) x) (loop (cdr l)))))))
+      (newline)
+      (define (fib n) (if (< n 2) n (+ (fib (- n 1)) (fib (- n 2)))))
+      (write (fib 20))
+      (newline)
+    expected: |
+      3628800
+      15
+      (2 4 6)
+      6765
+  - name: internal-defines-are-letrec-star
+    source: |
+      (define (idef x)
+        (define a (* x 2))
+        (define (even? n) (if (= n 0) #t (odd? (- n 1))))
+        (define (odd? n) (if (= n 0) #f (even? (- n 1))))
+        (define b (+ a 1))
+        (list a b (even? a) (odd? a)))
+      (write (idef 5))
+      (newline)
+      (write
+       (letrec ((ev? (lambda (n) (if (= n 0) #t (od? (- n 1)))))
+                (od? (lambda (n) (if (= n 0) #f (ev? (- n 1))))))
+         (ev? 100)))
+      (newline)
+      (write (letrec* ((a 1) (b (+ a 1))) (list a b)))
+      (newline)
+      (write (let* ((x 1) (x (+ x 1)) (y (* x 10))) (list x y)))
+      (newline)
+      (write (let ((x 1)) (let ((x 2) (y x)) (list x y))))
+      (newline)
+      (write (let ((a 1) (b 2)) (let ((a b) (b a)) (list a b))))
+      (newline)
+      (write
+       (let ((a 1) (b 2))
+         (let swap ((a b) (b a) (n 0)) (if (= n 3) (list a b) (swap b a (+ n 1))))))
+      (newline)
+    expected: |
+      (10 11 #t #f)
+      #t
+      (1 2)
+      (2 20)
+      (2 1)
+      (2 1)
+      (1 2)
+  - name: derived-forms
+    source: |
+      (define (classify n)
+        (case n
+          ((1 2 3) 'small)
+          ((10) 'ten)
+          ((a b) 'letter)
+          ((#\x) 'char)
+          (else 'big)))
+      (write (map classify (list 1 3 10 'a #\x 99 "s")))
+      (newline)
+      (write (case 5 ((1) 'one) (else => (lambda (k) (* k 2)))))
+      (newline)
+      (write (cond ((assv 2 '((1 . a) (2 . b))) => cdr) (else 'none)))
+      (newline)
+      (write (cond ((assv 9 '((1 . a))) => cdr) (#f 'no) ((+ 1 1)) (else 'none)))
+      (newline)
+      (write
+       (list (when (> 1 0)
+               'a
+               'b) (unless (> 1 0) 'c) (when #f 'd)))
+      (newline)
+      (define tally 0)
+      (begin
+        (set! tally (+ tally 1))
+        (set! tally (* tally 10)))
+      (write tally)
+      (newline)
+      (define (shadow if) (or if 'fallback))
+      (write (list (shadow #f) (shadow 1)))
+      (newline)
+    expected: |
+      (small small ten letter char big big)
+      10
+      b
+      2
+      (b #!unspecific #!unspecific)
+      10
+      (fallback 1)
+  - name: an-effect-answers-one-unspecified-object
+    source: |
+      (define (show x)
+        (write x)
+        (newline))
+      (define u-vec (make-vector 1))
+      (define u-var 0)
+      (show
+       (list (if #f #f) (vector-set! u-vec 0 1) (for-each car '()) (set! u-var 1)
+             (display "")))
+      (show (length (list (when #f 1) (cond (#f 1)) (case 1 ((2) 3)))))
+      (show
+       (list (symbol? (if #f #f)) (eq? (if #f #f) (newline))
+             (if (if #f #f) 'true 'false)))
+      (show (eq? (string->symbol "#!unspecific") (if #f #f)))
+      (define (u-loop i) (if (< i 3) (u-loop (+ i 1))))
+      (show
+       (list (u-loop 0) (do ((i 0 (+ i 1))) ((= i 2)))
+             (let loop ((i 0)) (when (< i 2) (loop (+ i 1))))))
+      (show (map (lambda (x) (vector-fill! u-vec x)) '(1 2)))
+    expected: |
+      (#!unspecific #!unspecific #!unspecific #!unspecific #!unspecific)
+      3
+
+      (#f #t true)
+      #f
+      (#!unspecific #!unspecific #!unspecific)
+      (#!unspecific #!unspecific)
+  - name: quote-and-quasiquote
+    source: |
+      (write '(a (b . c) #(1 x "s") "str" #\a 1.5 1/2 ()))
+      (newline)
+      (define n 3)
+      (write `(1 ,n ,(+ n 1) ,@(list 5 6) tail))
+      (newline)
+      (write `(a . ,n))
+      (newline)
+      (write `#(1 ,n ,@(list 4 5)))
+      (newline)
+      (write `(1 `(2 ,(3 ,n))))
+      (newline)
+      (write `(plain list))
+      (newline)
+      (write (quasiquote (x (unquote (* 2 n)))))
+      (newline)
+    expected: |
+      (a (b . c) #(1 x "s") "str" #\a 1.5 1/2 ())
+      (1 3 4 5 6 tail)
+      (a . 3)
+      #(1 3 4 5)
+      (1 (quasiquote (2 (unquote (3 3)))))
+      (plain list)
+      (x 6)
+  - name: call-cc-escapes-and-dynamic-wind-runs-the-exit-half
+    source: |
+      (write
+       (+ 1
+          (call/cc
+           (lambda (k)
+             (map (lambda (x) (if (> x 2) (k x) x)) '(1 2 3 4))
+             99))))
+      (newline)
+      (write (call-with-current-continuation (lambda (k) 'no-escape)))
+      (newline)
+      (write
+       (call/cc
+        (lambda (k)
+          (dynamic-wind (lambda () (display "in ")) (lambda () (k 'escaped))
+                        (lambda () (display "out "))))))
+      (newline)
+      (write
+       (dynamic-wind (lambda () (display "before ")) (lambda () 'normal)
+                     (lambda () (display "after "))))
+      (newline)
+      (define (find-first pred l)
+        (call/cc
+         (lambda (return)
+           (for-each (lambda (x) (if (pred x) (return x))) l)
+           #f)))
+      (write (list (find-first even? '(1 3 4 5)) (find-first even? '(1 3))))
+      (newline)
+      (call-with-values (lambda () (call/cc (lambda (k) (k 1 2))))
+                        (lambda (a b)
+                          (write (list a b))
+                          (newline)))
+    expected: |
+      4
+      no-escape
+      in out escaped
+      before after normal
+      (4 #f)
+      (1 2)
+  - name: multiple-values
+    source: |
+      (define (split l)
+        (let loop ((l l) (evens '()) (odds '()))
+          (cond ((null? l) (values (reverse evens) (reverse odds)))
+                ((even? (car l)) (loop (cdr l) (cons (car l) evens) odds))
+                (else (loop (cdr l) evens (cons (car l) odds))))))
+      (call-with-values (lambda () (split '(1 2 3 4 5)))
+                        (lambda (e o)
+                          (write (list e o))
+                          (newline)))
+      (write (call-with-values (lambda () (values 1 2 3)) list))
+      (newline)
+      (define (producer) (values 'a 'b))
+      (write (call-with-values producer cons))
+      (newline)
+      (write (let-values (((a b) (values 1 2)) ((c) (values 3))) (list a b c)))
+      (newline)
+      (write
+       (let-values (((a . rest) (values 1 2 3)) (all (values 4 5)))
+         (list a rest all)))
+      (newline)
+      (write
+       (let ((a 'outer)) (let-values (((a) (values 1)) ((b) (values a))) (list a b))))
+      (newline)
+      (write (let*-values (((a b) (values 1 2)) ((c) (values (+ a b)))) (list a b c)))
+      (newline)
+      (define-values (q r) (values (quotient 17 5) (remainder 17 5)))
+      (write (list q r))
+      (newline)
+      (write (+ 1 (values 2)))
+      (newline)
+      ; No value is no value, a procedure whose tail is an argument's or a
+      ; variable's answers one, and a loop returning several returns them.
+      (write (call-with-values (lambda () (values)) list))
+      (newline)
+      (define (two) (values 5 6))
+      (write (call-with-values (lambda () (list (two))) list))
+      (newline)
+      (write (call-with-values (lambda () (+ 1 (values 5 6))) list))
+      (newline)
+      (define (count-down n acc)
+        (if (= n 0) (values acc 'done) (count-down (- n 1) (+ acc n))))
+      (write (call-with-values (lambda () (count-down 3 0)) list))
+      (newline)
+      ; A loop that exits through a call answers every value of the call: a named
+      ; let, a self loop, an inner loop storing into the outer one's destination, a
+      ; call of no value, and an exit through a procedure variable.
+      (define (first-even l)
+        (let loop ((l l))
+          (cond ((null? l) (two)) ((even? (car l)) (car l)) (else (loop (cdr l))))))
+      (write (list (call-with-values (lambda () (first-even '(1 3))) list)
+                   (call-with-values (lambda () (first-even '(1 4))) list)))
+      (newline)
+      (define (skip-odd l)
+        (if (and (pair? l) (odd? (car l))) (skip-odd (cdr l)) (two)))
+      (write (call-with-values (lambda () (skip-odd '(1 3))) list))
+      (newline)
+      (define (grid n)
+        (let outer ((i 0))
+          (if (= i n)
+              (values)
+              (let inner ((j 0))
+                (cond ((= j i) (outer (+ i 1)))
+                      ((= (* i j) 6) (values i j (* i j)))
+                      (else (inner (+ j 1))))))))
+      (write (list (call-with-values (lambda () (grid 5)) list)
+                   (call-with-values (lambda () (grid 3)) list)))
+      (newline)
+      (define (nothing) (values))
+      (define (find-or p l)
+        (let loop ((l l))
+          (cond ((null? l) (p)) ((symbol? (car l)) (car l)) (else (loop (cdr l))))))
+      (write (list (call-with-values (lambda () (find-or nothing '(1 2))) list)
+                   (call-with-values (lambda () (find-or two '(1 a))) list)
+                   (call-with-values (lambda () (find-or two '(1 2))) list)))
+      (newline)
+      ; `values` used as a first-class procedure -- applied, through a variable, or
+      ; inside `eval` -- answers every value on every backend.
+      (write (call-with-values (lambda () (apply values '(1 2))) list))
+      (newline)
+      (define first-class-values values)
+      (write (call-with-values (lambda () (first-class-values 1 2)) list))
+      (newline)
+      (write
+       (call-with-values
+        (lambda () (eval '(values 1 2) (interaction-environment)))
+        list))
+      (newline)
+    expected: |
+      ((2 4) (1 3 5))
+      (1 2 3)
+      (a . b)
+      (1 2 3)
+      (1 (2 3) (4 5))
+      (1 outer)
+      (1 2 3)
+      (3 2)
+      3
+      ()
+      ((5))
+      (6)
+      (6 done)
+      ((5 6) (4))
+      (5 6)
+      ((3 2 6) ())
+      (() (a) (5 6))
+      (1 2)
+      (1 2)
+      (1 2)
+  - name: records
+    source: |
+      (define-record-type <point>
+        (make-point x y)
+        point?
+        (x point-x set-point-x!)
+        (y point-y))
+      (define p (make-point 1 2))
+      (set-point-x! p 10)
+      (write (list (point-x p) (point-y p) (point? p) (point? 5) (point? '())))
+      (newline)
+      (write (map point-x (list p (make-point 7 8))))
+      (newline)
+      (write (map point? (list p 1)))
+      (newline)
+      (write (list (equal? p p) (equal? p (make-point 10 2)) (eqv? p p)))
+      (newline)
+      (define-record-type thing
+        (make-thing)
+        thing?
+        (slot thing-slot set-thing-slot!))
+      (define t (make-thing))
+      (set-thing-slot! t 'filled)
+      (write
+       (list (thing-slot t) (thing? t) (point? t) (pair? p) (vector? p)
+             (procedure? make-point)))
+      (newline)
+    expected: |
+      (10 2 #t #f #f)
+      (10 7)
+      (#t #f)
+      (#t #f #t)
+      (filled #t #f #f #f #t)
+  # R7RS leaves generativity unspecified: one type per occurrence here, one per
+  # evaluation in Gauche, so no line below meets instances of two evaluations.
+  - name: internal-record-types-are-local-to-their-body
+    source: |
+      (define (ir-counter-box start)
+        (define-record-type box (new-box value) box? (value box-value set-box-value!))
+        (define b (new-box start))
+        (define (bump!) (set-box-value! b (+ (box-value b) 1)) (box-value b))
+        (list bump! (lambda () (box? b)) (lambda (x) (box? x))))
+      (define ir-counter (ir-counter-box 10))
+      ((car ir-counter))
+      (write (list ((car ir-counter)) ((cadr ir-counter)) ((caddr ir-counter) 5)))
+      (newline)
+      (define (ir-sum-cells xs)
+        (define (total cells) (if (null? cells) 0 (+ (cell-value (car cells)) (total (cdr cells)))))
+        (define-record-type cell (make-cell value) cell? (value cell-value))
+        (total (map make-cell xs)))
+      (write (ir-sum-cells '(1 2 3 4)))
+      (newline)
+      (define (ir-other-cell) (define-record-type cell (make-cell value) cell? (value cell-value)) (make-cell 0))
+      (define (ir-cell-kind x) (define-record-type cell (make-cell value) cell? (value cell-value)) (cell? x))
+      (write (list (ir-cell-kind (ir-other-cell)) (ir-cell-kind 'cell)))
+      (newline)
+      (define ir-x 'outer)
+      (write
+       (let ((ir-point? 'outer))
+         (let ()
+           (define-record-type point (make-point x y) ir-point? (x ir-x) (y point-y))
+           (define p (make-point 3 4))
+           (list (ir-x p) (point-y p) (ir-point? p) (if (ir-point? 7) 'yes 'no)
+                 (map ir-x (list p (make-point 5 6)))))))
+      (newline)
+      (write ir-x)
+      (newline)
+      (write
+       (let loop ((i 0) (acc '()))
+         (define-record-type pair-of (kons a d) pair-of? (a kar) (d kdr))
+         (define k (kons i acc))
+         (if (< i 3) (loop (+ i 1) (cons (kar k) (kdr k))) (list acc (pair-of? k) (pair-of? acc)))))
+      (newline)
+      (define (ir-tagged)
+        (define-record-type tag #f tag?)
+        (list (tag? 1) (procedure? tag?)))
+      (write (ir-tagged))
+      (newline)
+    expected: |
+      (12 #t #f)
+      10
+      (#f #f)
+      (3 4 #t no (3 5))
+      outer
+      ((2 1 0) #t #f)
+      (#f #t)
+  - name: equivalence
+    source: |
+      (write
+       (list (eq? 'a 'a) (eq? '() '()) (eq? (list 1) (list 1)) (eqv? 1.5 1.5)
+             (eqv? 2 2.0) (eqv? (vector) (vector))
+             (eqv? 100000000000000000000 100000000000000000000) (eqv? #\a #\a)))
+      (newline)
+      (write
+       (list (equal? '(1 (2 #(3 "x"))) '(1 (2 #(3 "x")))) (equal? #(1 2) #(1 3))
+             (equal? "ab" "ab") (equal? 2 2.0) (equal? '(1 . 2) '(1 . 2))
+             (equal? #(1) '(1)) (equal? "a" 'a)))
+      (newline)
+    expected: |
+      (#t #t #f #t #f #f #t #t)
+      (#t #f #t #f #t #f #f)
+  - name: numbers
+    source: |
+      (write
+       (list (+ 1 2) (- 10) (- 10 3 2) (* 2 3 4) (/ 6 3) (/ 1 3) (/ 1.0 4) (+) (*)))
+      (newline)
+      (write
+       (list (= 1 1 1) (< 1 2 3) (< 1 3 2) (> 3 2) (<= 1 1 2) (>= 2 2 1) (= 1 1.0)))
+      (newline)
+      (write
+       (list (quotient 17 5) (quotient -17 5) (remainder -17 5) (modulo -17 5)
+             (modulo 17 -5) (floor-quotient -17 5) (floor-remainder -17 5)
+             (truncate-quotient -17 5) (truncate-remainder -17 5)))
+      (newline)
+      (write
+       (list (abs -5) (abs 2.5) (min 3 1 2) (max 3 1 2) (max 3 2.0) (min 1 2.0)
+             (gcd 12 18) (lcm 4 6) (expt 2 100) (expt 2.0 3) (square 5)))
+      (newline)
+      (write
+       (list (zero? 0) (zero? 0.0) (positive? 1) (negative? -1) (odd? 3) (even? 3)))
+      (newline)
+      (write
+       (list (number? 1) (number? 'a) (integer? 2) (integer? 2.0) (integer? 2.5)
+             (integer? 1/2) (rational? 1/2) (real? 1.5) (exact? 1/2) (exact? 1.5)
+             (inexact? 1.5) (exact-integer? 2.0)))
+      (newline)
+      (write
+       (list (exact 2.0) (exact 2.5) (inexact 1/4) (inexact 3) (exact->inexact 1/2)
+             (inexact->exact 0.5)))
+      (newline)
+      (write
+       (list (floor 2.5) (ceiling 2.5) (round 2.5) (round 3.5) (truncate -2.5)
+             (floor 7/2) (round 7/2) (floor 5)))
+      (newline)
+      (write
+       (list (number->string 255) (number->string 255 16) (number->string -10 2)
+             (number->string 1.5) (number->string 1/3) (number->string 0 2)))
+      (newline)
+      (write
+       (list (string->number "42") (string->number "-17") (string->number "+5")
+             (string->number "1/3") (string->number "2.5") (string->number ".5")
+             (string->number "1e3") (string->number "-1.5e-2")
+             (string->number "ff" 16) (string->number "101" 2)
+             (string->number "0.1")))
+      (newline)
+      (write
+       (list (string->number "abc") (string->number "") (string->number "1/0")
+             (string->number "1.2.3") (string->number "12x") (string->number "-")
+             (string->number "1e") (string->number "9" 8)))
+      (newline)
+      (write (list 1e3 -0.5 .25 #xff #b101 #o17 12345678901234567890 -3/6))
+      (newline)
+      (write
+       (list (apply + '(1 2 3)) (apply < '(1 2 3)) (apply < '(1 3 2))
+             (apply max '(1 5 3)) (apply = '(2 2)) (map + '(1 2) '(10 20))
+             (map - '(1 2)) (apply min 4 '(2.0 3))))
+      (newline)
+    expected: |
+      (3 -10 5 24 2 1/3 0.25 0 1)
+      (#t #t #f #t #t #t #t)
+      (3 -3 -2 3 -3 -4 3 -3 -2)
+      (5 2.5 1 3 3.0 1.0 6 12 1267650600228229401496703205376 8.0 25)
+      (#t #t #t #t #t #f)
+      (#t #f #t #t #f #f #t #t #t #f #t #f)
+      (2 5/2 0.25 3.0 0.5 1/2)
+      (2.0 3.0 2.0 4.0 -2.0 3 4 5)
+      ("255" "ff" "-1010" "1.5" "1/3" "0")
+      (42 -17 5 1/3 2.5 0.5 1000.0 -0.015 255 5 0.1)
+      (#f #f #f #f #f #f #f #f)
+      (1000.0 -0.5 0.25 255 5 15 12345678901234567890 -1/2)
+      (6 #t #f 5 #t (11 22) (-1 -2) 2.0)
+  - name: string-to-number-radix-and-exactness-prefixes
+    source: |
+      (write
+       (list (string->number "#xff") (string->number "#b101")
+             (string->number "#o17") (string->number "#d10")))
+      (newline)
+      (write
+       (list (string->number "#x+inf.0") (string->number "#e1.5")
+             (string->number "#i5") (string->number "#e#x10")
+             (string->number "#x#e10")))
+      (newline)
+      (write
+       (list (string->number "#i#o17") (string->number "#e1/3")
+             (string->number "#i1/3") (string->number "#e0.0")
+             (string->number "#e-2.5e2")))
+      (newline)
+      (write
+       (list (string->number "#e1e10") (string->number "#x10" 8)
+             (string->number "10" 16) (string->number "#e+inf.0")
+             (string->number "#i+nan.0")))
+      (newline)
+      (write
+       (list (string->number "#b#x1") (string->number "#e#e1")
+             (string->number "#e") (string->number "#e" 16)
+             (string->number "#z12")))
+      (newline)
+      (write (list #xff #e1.5 #i5 #e#x10 #x+inf.0))
+      (newline)
+    expected: |
+      (255 5 15 10)
+      (+inf.0 3/2 5.0 16 16)
+      (15.0 1/3 0.3333333333333333 0 -250)
+      (10000000000 16 16 +inf.0 +nan.0)
+      (#f #f #f #f #f)
+      (255 3/2 5.0 16 +inf.0)
+  # An inexact decimal is the double nearest its exact value on every backend:
+  # %scheme-decimal floats the exact ratio mantissa * 10^(exponent - scale)
+  # through %decimal-double, the conversion the Clojure reader shares. WASM held a
+  # ratio's numerator and denominator in two i32 fields until 2026-10-03, so
+  # "0.30000000000000004" read as 0.8473649069170281 there; and a huge exponent
+  # built its power of ten on every backend (1e100000000 ran past a minute) until
+  # the range guard answered it from the digit count.
+  - name: decimal-string-to-number-is-the-nearest-double
+    source: |
+      (write
+       (list (string->number "0.30000000000000004") (string->number "3.141592653589793")
+             (string->number "-0.1234567890123456789") (string->number "123456789.123456789")
+             (read (open-input-string "0.1234567890123"))
+             (exact->inexact 30000000000000004/100000000000000000) (/ 3000000000 7)))
+      (newline)
+      (write (list (string->number "1e100000000") (string->number "-1e-100000000")))
+      (newline)
+    expected: |
+      (0.30000000000000004 3.141592653589793 -0.12345678901234568 123456789.12345679 0.1234567890123 0.30000000000000004 3000000000/7)
+      (+inf.0 -0.0)
+  - name: the-inexact-library-keeps-an-exact-answer-exact
+    source: |
+      (write
+       (list (sqrt 16) (sqrt 1/4) (sqrt 0) (sqrt 12345678987654321) (sqrt 2)
+             (sqrt 16.0) (exact? (sqrt 15)) (sqrt 1e100)))
+      (newline)
+      (write
+       (list (exp 0) (log 1) (sin 0) (cos 0) (tan 0) (asin 0) (acos 1) (atan 0)
+             (atan 0 1)))
+      (newline)
+      (write
+       (list (exp 0.0) (log 1.0) (sin 0.0) (atan 1 0) (log 0.0) (exact? (exp 1))
+             (exact? (atan 0 -1))))
+      (newline)
+      (call-with-values (lambda () (exact-integer-sqrt 17))
+                        (lambda (s r) (write (list s r))))
+      (newline)
+      (define (close? a b) (< (abs (- a b)) 1e-9))
+      (write
+       (list (close? (sin 1) 0.8414709848078965) (close? (cos 1) 0.5403023058681398)
+             (close? (tan 1) 1.5574077246549023) (close? (exp 1) 2.718281828459045)
+             (close? (log 100 10) 2) (close? (log 8.0) 2.0794415416798357)
+             (close? (asin 1) 1.5707963267948966)
+             (close? (acos 0.5) 1.0471975511965979)
+             (close? (atan 1) 0.7853981633974483)
+             (close? (atan -1 -1) -2.356194490192345)))
+      (newline)
+      (define (settle f x)
+        (do ((prev x next) (next (f x) (f next)))
+            ((< (abs (- prev next)) 0.00001) next)))
+      (write (close? (settle (lambda (x) (exp (- x))) 0.5) 0.5671407632698067))
+      (newline)
+      (write
+       (list (map sqrt '(4 9 2.25)) (map log '(1)) (apply atan '(0 1))
+             (apply log '(1 10))))
+      (newline)
+      (define (tag-with exp log) (list exp log))
+      (write (list (tag-with 1 2) (let ((sqrt (lambda (x) 'mine))) (sqrt 4))))
+      (newline)
+      (define inf (/ 1.0 0.0))
+      (write
+       (list (finite? 1) (finite? 1.5) (finite? inf) (infinite? (- inf))
+             (infinite? 1/2) (nan? (- inf inf)) (nan? 1) (finite? (- inf inf))))
+      (newline)
+    expected: |
+      (4 1/2 0 111111111 1.4142135623730951 4.0 #f 1e50)
+      (1 0 0 1 0 0 0 0 0)
+      (1.0 0.0 0.0 1.5707963267948966 -inf.0 #f #f)
+      (4 1)
+      (#t #t #t #t #t #t #t #t #t #t)
+      #t
+      ((2 3 1.5) (0) 0 0)
+      ((1 2) mine)
+      (#t #t #f #t #f #t #f #f)
+  - name: flonums-print-positionally-below-1e21-and-with-an-exponent-outside
+    source: |
+      (define inf (/ 1.0 0.0))
+      (write
+       (list 1e21 123456789.123 1e20 1.5e-7 1e-6 1.5e-6 0.001 1e7 -2.5e-10 1.25e22))
+      (newline)
+      (write
+       (list inf (- inf) (- inf inf) -0.0 1.7976931348623157e308 0.1 -3.0 100.0))
+      (newline)
+      (display 123456789.123)
+      (newline)
+      (write
+       (list (number->string 1e21) (number->string 2.5) (number->string 1e-7)
+             (number->string 42) (string->number "-0.0") (string->number "1e21")))
+      (newline)
+    expected: |
+      (1e21 123456789.123 100000000000000000000.0 1.5e-7 0.000001 0.0000015 0.001 10000000.0 -2.5e-10 1.25e22)
+      (+inf.0 -inf.0 +nan.0 -0.0 1.7976931348623157e308 0.1 -3.0 100.0)
+      123456789.123
+      ("1e21" "2.5" "1e-7" "42" -0.0 1e21)
+  - name: pairs-and-lists
+    source: |
+      (define l (list 1 2 3))
+      (set-car! l 'a)
+      (set-cdr! (cddr l) '(4))
+      (write
+       (list l (cons 1 2) (car l) (cdr l) (caar '((1) 2)) (cadr l) (cdar '((1 2) 3))
+             (cddr l)))
+      (newline)
+      (write
+       (list (length l) (length '()) (append) (append '(1)) (append '(1) '(2) '(3 4))
+             (append '(1) 2) (reverse l) (list-tail l 2) (list-ref l 1)
+             (list-copy l) (list-copy '(1 2 . 3)) (list-copy 5) (list-copy '())))
+      (newline)
+      (write
+       (list (memq 'c '(a b c d)) (memq 'z '(a b)) (memv 2.0 '(1 2.0 3))
+             (member "b" '("a" "b" "c")) (member 2.0 '(1 2 3) =)
+             (member '(1) '((0) (1)))))
+      (newline)
+      (write
+       (list (assq 'b '((a 1) (b 2))) (assq 'z '((a 1)))
+             (assv 2 '((1 . one) (2 . two))) (assoc "b" '(("a" . 1) ("b" . 2)))
+             (assoc 2.0 '((1 . a) (2 . b)) =) (assoc #(1) '((#(1) . v)))))
+      (newline)
+      (write
+       (list (null? '()) (null? l) (pair? l) (pair? '()) (list? l) (list? '())
+             (list? '(1 . 2)) (list? 5)))
+      (newline)
+      (write
+       (list (if (memq 'b '(a b)) 'found 'missing)
+             (if (memq 'z '(a b)) 'found 'missing)
+             (if (assq 'z '()) 'found 'missing)))
+      (newline)
+      (write (map (lambda (k) (assq k '((a . 1) (b . 2)))) '(a z)))
+      (newline)
+    expected: |
+      ((a 2 3 4) (1 . 2) a (2 3 4) 1 2 (2) (3 4))
+      (4 0 () (1) (1 2 3 4) (1 . 2) (4 3 2 a) (3 4) 2 (a 2 3 4) (1 2 . 3) 5 ())
+      ((c d) #f (2.0 3) ("b" "c") (2 3) ((1)))
+      ((b 2) #f (2 . two) ("b" . 2) (2 . b) (#(1) . v))
+      (#t #f #t #f #t #t #f #f)
+      (found missing missing)
+      ((a . 1) #f)
+  - name: symbols-and-characters
+    source: |
+      (write
+       (list (symbol? 'a) (symbol? "a") (symbol? '()) (symbol? #t) (symbol? #f)
+             (symbol? car) (symbol->string 'hello) (string->symbol "with space")
+             (string->symbol "MiXed")))
+      (newline)
+      (write
+       (list (char? #\a) (char? "a") (char->integer #\A) (integer->char 97)
+             (char=? #\a #\a) (char=? #\a #\b) (char<? #\a #\b #\c)
+             (char<? #\a #\c #\b) (char>? #\b #\a) (char<=? #\a #\a)
+             (char>=? #\a #\b)))
+      (newline)
+      (write (list #\a #\A #\space #\newline #\tab #\nul #\x41 #\( #\0))
+      (newline)
+      (display (list #\a #\space #\b "s" 'sym))
+      (newline)
+      (write (apply char<? (list #\a #\b)))
+      (newline)
+    expected: |
+      (#t #f #f #f #f #f "hello" |with space| MiXed)
+      (#t #f 65 #\a #t #f #t #f #t #t #f)
+      (#\a #\A #\space #\newline #\tab #\null #\A #\( #\0)
+      (a   b s sym)
+      #t
+  - name: strings
+    source: |
+      (define s (make-string 3 #\a))
+      (string-set! s 1 #\b)
+      (write
+       (list s (string? s) (string? 'a) (string-length s) (string-length "")
+             (string-ref s 1) (string-length (make-string 2)) (string #\x #\y)))
+      (newline)
+      (write
+       (list (string=? "abc" "abc") (string=? "abc" "abd") (string=? "a" "a" "a")
+             (string<? "abc" "abd") (string<? "b" "a") (string>? "b" "a")
+             (string<=? "a" "a") (string>=? "a" "b") (string<? "a" "b" "c")))
+      (newline)
+      (write
+       (list (substring "hello world" 6 11) (string-append)
+             (string-append "a" "b" "c") (string-copy "hello") (string-copy "hello" 1)
+             (string-copy "hello" 1 3) (string->list "abc") (string->list "abcd" 2)
+             (list->string (list #\x #\y)) (apply string-append (list "p" "q"))))
+      (newline)
+      (define copy (string-copy "abc"))
+      (string-set! copy 0 #\z)
+      (write (list copy (equal? copy "zbc")))
+      (newline)
+      (write "quote\" backslash\\ newline\n tab\t")
+      (newline)
+      (display "quote\" backslash\\ tab\t.")
+      (newline)
+      (write (map string-length (list "" "a" "ab")))
+      (newline)
+    expected: |
+      ("aba" #t #f 3 0 #\b 2 "xy")
+      (#t #f #t #t #f #t #t #f #t)
+      ("world" "" "abc" "hello" "ello" "el" (#\a #\b #\c) (#\c #\d) "xy" "pq")
+      ("zbc" #t)
+      "quote\" backslash\\ newline\n tab\t"
+      quote" backslash\ tab	.
+      (0 1 2)
+  - name: vectors
+    source: |
+      (define v (make-vector 3 'x))
+      (vector-set! v 0 1)
+      (write
+       (list v (vector? v) (vector? "str") (vector? '(1)) (vector-length v)
+             (vector-ref v 0) (vector 1 "a" #\b) (vector)
+             (vector-length (make-vector 2))))
+      (newline)
+      (write
+       (list (vector->list #(1 2 3)) (vector->list #(1 2 3) 1)
+             (vector->list #(1 2 3) 1 2) (list->vector '(a b)) (list->vector '())))
+      (newline)
+      (define w (vector 1 2 3 4))
+      (vector-fill! w 0 1 3)
+      (write w)
+      (newline)
+      (vector-fill! w 'z)
+      (write w)
+      (newline)
+      (write (map vector-length (list #() #(1))))
+      (newline)
+      (write #(1 #(2 (3)) "s"))
+      (newline)
+    expected: |
+      (#(1 x x) #t #f #f 3 1 #(1 "a" #\b) #() 2)
+      ((1 2 3) (2 3) (2) #(a b) #())
+      #(1 0 0 4)
+      #(z z z z)
+      (0 1)
+      #(1 #(2 (3)) "s")
+  # Expected output is Gauche 0.9.15's (gosh -r7).
+  - name: bytevectors
+    source: |
+      (define bv (bytevector 1 2 3))
+      (write (list bv (bytevector) (make-bytevector 3 7) (bytevector-length (make-bytevector 2))))
+      (newline)
+      (display bv)
+      (newline)
+      (write
+       (list (bytevector? bv) (bytevector? #(1 2)) (vector? bv) (bytevector? "a")
+             (vector? #(1)) (map bytevector? (list #u8() 1 '() "x"))))
+      (newline)
+      (bytevector-u8-set! bv 0 255)
+      (write (list (bytevector-u8-ref #u8(10 20 30) 1) bv (bytevector-length bv)))
+      (newline)
+      (write
+       (list (bytevector-copy #u8(1 2 3 4 5)) (bytevector-copy #u8(1 2 3 4 5) 2)
+             (bytevector-copy #u8(1 2 3 4 5) 1 3)))
+      (newline)
+      (define bv-a (bytevector 1 2 3 4 5))
+      (bytevector-copy! bv-a 1 #u8(9 8 7) 0 2)
+      (write bv-a)
+      (newline)
+      (bytevector-copy! bv-a 0 #u8(6 6))
+      (write bv-a)
+      (newline)
+      (define bv-s (bytevector 1 2 3 4 5))
+      (bytevector-copy! bv-s 1 bv-s 0 3)
+      (define bv-t (bytevector 1 2 3 4 5))
+      (bytevector-copy! bv-t 0 bv-t 2)
+      (write (list bv-s bv-t))
+      (newline)
+      (write (list (bytevector-append #u8(1) #u8() #u8(2 3)) (bytevector-append)))
+      (newline)
+      (write
+       (list (utf8->string #u8(65 66 67 227 129 130)) (string->utf8 "λx")
+             (utf8->string #u8(65 66 67 68) 1 3) (utf8->string #u8(65 66 67 68) 2)
+             (string->utf8 "abcd" 1 3) (string->utf8 "abcd" 2)
+             (utf8->string (string->utf8 "hé日本"))))
+      (newline)
+      (write
+       (list (equal? #u8(1 2) (bytevector 1 2)) (equal? #u8(1 2) #(1 2))
+             (equal? #u8(1 2) #u8(1 3)) (equal? '(#u8(1)) (list (bytevector 1)))
+             (equal? #(1 2) #u8(1 2))))
+      (newline)
+      (write (list '#u8(1 2) #u8( 1   2 ) #U8(3) #u8(#xff #b101 0) `(1 ,#u8(2))))
+      (newline)
+      (write (vector #u8(1) "x"))
+      (newline)
+      (write (let ((b (bytevector-copy #u8(1 2)))) (bytevector-u8-set! b 1 9) b))
+      (newline)
+      (write
+       (list (map bytevector-length (list #u8() #u8(1 2))) (apply bytevector '(4 5))
+             (map bytevector-u8-ref (list #u8(7 8)) '(1))))
+      (newline)
+      (define bv-shared (bytevector 1 2))
+      (write-shared (list bv-shared bv-shared))
+      (newline)
+      (write
+       (list (eval '(bytevector-length #u8(1 2 3)) (environment '(scheme base)))
+             (eval '(bytevector 1 2) (environment '(scheme base)))
+             (eval #u8(4) (environment '(scheme base)))))
+      (newline)
+    expected: |
+      (#u8(1 2 3) #u8() #u8(7 7 7) 2)
+      #u8(1 2 3)
+      (#t #f #f #f #t (#t #f #f #f))
+      (20 #u8(255 2 3) 3)
+      (#u8(1 2 3 4 5) #u8(3 4 5) #u8(2 3))
+      #u8(1 9 8 4 5)
+      #u8(6 6 8 4 5)
+      (#u8(1 1 2 3 5) #u8(3 4 5 4 5))
+      (#u8(1 2 3) #u8())
+      ("ABCあ" #u8(206 187 120) "BC" "CD" #u8(98 99) #u8(99 100) "hé日本")
+      (#t #f #f #t #f)
+      (#u8(1 2) #u8(1 2) #u8(3) #u8(255 5 0) (1 #u8(2)))
+      #(#u8(1) "x")
+      #u8(1 9)
+      ((0 2) #u8(4 5) (8))
+      (#0=#u8(1 2) #0#)
+      (3 #u8(1 2) #u8(4))
+  - name: control
+    source: |
+      (write
+       (list (procedure? car) (procedure? (lambda () 1)) (procedure? 'car)
+             (procedure? procedure?)))
+      (newline)
+      (write
+       (list (apply + 1 2 '(3)) (apply list '()) (apply apply (list + (list 1 2)))
+             (map (lambda (x y) (* x y)) '(1 2 3) '(4 5 6)) (map car '((a 1) (b 2)))
+             (map (lambda (x) x) '())))
+      (newline)
+      (define seen '())
+      (for-each (lambda (x y) (set! seen (cons (+ x y) seen))) '(1 2) '(10 20))
+      (write seen)
+      (newline)
+      (write (map (lambda (f) (f '(3 1 2))) (list car cdr length reverse list?)))
+      (newline)
+    expected: |
+      (#t #t #f #t)
+      (6 () 3 (4 10 18) (a b) ())
+      (22 11)
+      (3 (1 2) 3 (2 1 3) #t)
+  - name: output
+    source: |
+      (display "text")
+      (write-string " more")
+      (write-char #\!)
+      (newline)
+      (write 'sym)
+      (display " ")
+      (write "str")
+      (display " ")
+      (write #\c)
+      (display " ")
+      (display 42)
+      (newline)
+      (display (list 1 (list 2 "three" #\4) (vector 5 'six) (cons 7 8) #t #f '()))
+      (newline)
+      (write car)
+      (display " ")
+      (display (lambda (x) x))
+      (newline)
+      (display 1.5)
+      (display " ")
+      (display 1/2)
+      (display " ")
+      (display -7)
+      (newline)
+    expected: |
+      text more!
+      sym "str" #\c 42
+      (1 (2 three 4) #(5 six) (7 . 8) #t #f ())
+      #<procedure> #<procedure>
+      1.5 1/2 -7
+  - name: a-cycle-is-written-with-datum-labels-and-sharing-alone-is-not
+    source: |
+      (define ring (list 1 2 3))
+      (set-cdr! (cddr ring) ring)
+      (write ring)
+      (newline)
+      (display ring)
+      (newline)
+      (define self (list 'a 'b))
+      (set-car! self self)
+      (write self)
+      (newline)
+      (define v (vector 1 2))
+      (vector-set! v 1 v)
+      (write v)
+      (newline)
+      (define shared (list "s" #\c))
+      (write (list shared shared (vector shared)))
+      (newline)
+      (write (list ring ring))
+      (newline)
+      (define two (list 'x 'y))
+      (set-cdr! (cdr two) ring)
+      (write (cons two self))
+      (newline)
+      (define long (list 0))
+      (do ((i 1 (+ i 1))) ((= i 3000))
+        (set! long (cons i long)))
+      (write (length long))
+      (newline)
+      (set-cdr! (cddr (cddr long)) long)
+      (display long)
+      (newline)
+      (display (make-vector 1100 0))
+      (newline)
+      (define deep '())
+      (do ((i 0 (+ i 1))) ((= i 1200))
+        (set! deep (list deep)))
+      (write deep)
+      (newline)
+    expected: |
+      #0=(1 2 3 . #0#)
+      #0=(1 2 3 . #0#)
+      #0=(#0# b)
+      #0=#(1 #0#)
+      (("s" #\c) ("s" #\c) #(("s" #\c)))
+      (#0=(1 2 3 . #0#) #0#)
+      ((x y . #0=(1 2 3 . #0#)) . #1=(#1# b))
+      3000
+      #0=(2999 2998 2997 2996 2995 . #0#)
+      #(0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)
+      ((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((()))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))
+  - name: write-shared-labels-every-shared-node-not-only-cycles
+    source: |
+      (define ws-x (list 1 2))
+      (write-shared (list ws-x ws-x))
+      (newline)
+      (define ws-y (list "s"))
+      (define ws-x2 (list ws-y ws-y))
+      (write-shared (list ws-x2 ws-x2))
+      (newline)
+      (define ws-v (vector 1 2))
+      (write-shared (list ws-v ws-v))
+      (newline)
+      (write-shared ws-x)
+      (newline)
+      (define ws-ring (list 1 2 3))
+      (set-cdr! (cddr ws-ring) ws-ring)
+      (write-shared (list ws-ring ws-ring))
+      (newline)
+      (write (list ws-x ws-x))
+      (newline)
+      (display (list ws-x ws-x))
+      (newline)
+    expected: |
+      (#0=(1 2) #0#)
+      (#0=(#1=("s") #1#) #0#)
+      (#0=#(1 2) #0#)
+      (1 2)
+      (#0=(1 2 3 . #0#) #0#)
+      ((1 2) (1 2))
+      ((1 2) (1 2))
+  - name: comments-and-reader-syntax
+    source: |
+      ; a line comment
+      #| a block
+         #| nested |# comment |#
+      (write (list 1 #;(ignored datum) 2 #;3 '(a . b) '(a . (b . (c)))))
+      (newline)
+      (write
+       (list "a\x41;b"
+             "line \
+           continued" (quote x) '`(a ,b ,@c)))
+      (newline)
+    expected: |
+      (1 2 (a . b) (a b c))
+      ("aAb" "line continued" x (quasiquote (a (unquote b) (unquote-splicing c))))
+  - name: fold-case-directive-folds-identifiers-and-character-names-not-strings
+    source: |
+      #!fold-case
+      (DEFINE (INCR X) (+ X 1))
+      (WRITE
+       (LIST (INCR 41) (SYMBOL->STRING (QUOTE Bar)) (CHAR->INTEGER #\NEWLINE)))
+      (NEWLINE)
+      (WRITE (LIST (BYTEVECTOR-LENGTH #U8(1 2)) (BYTEVECTOR #XFF)))
+      (NEWLINE)
+      #!no-fold-case
+      (define (bump x) (+ x 1))
+      (write (list (bump 1) (symbol->string (quote Bar)) "STILL SHOUTING"))
+      (newline)
+    expected: |
+      (42 "bar" 10)
+      (2 #u8(255))
+      (2 "Bar" "STILL SHOUTING")
+  - name: the-sicp-vocabulary-not-r7rs-visible-without-import-like-base-and-write
+    source: |
+      (write (list true false nil))
+      (newline)
+      (write
+       (list (caaar '(((1 2) 3) 4)) (cadddr '(1 2 3 4)) (cddddr '(1 2 3 4 5 6))))
+      (newline)
+      (write (list (filter odd? '(1 2 3 4 5)) (list-index even? '(1 3 5 6 7))))
+      (newline)
+      (write (list (reduce + 0 '()) (reduce + 0 '(1 2 3 4 5))))
+      (newline)
+      (write (list (fold-left cons '() '(1 2 3)) (fold-right cons '() '(1 2 3))))
+      (newline)
+      (write
+       (list (delete 2 '(1 2 3 2 4)) (last-pair '(1 2 3 4))
+             (append! (list 1 2) (list 3 4))))
+      (newline)
+      (write (list (1+ 5) (-1+ 5) (random 1) (>= (runtime) 0)))
+      (newline)
+    expected: |
+      (#t #f ())
+      (1 4 (5 6))
+      ((1 3 5) 3)
+      (0 15)
+      ((((() . 1) . 2) . 3) (1 2 3))
+      ((1 3 4) (4) (1 2 3 4))
+      (6 4 0 #t)
+  - name: a-promise-is-forced-once-and-memoized
+    source: |
+      (define forced 0)
+      (define p
+        (delay
+          (begin
+            (set! forced (+ forced 1))
+            (* 6 7))))
+      (write (list (promise? p) (promise? 5) (procedure? p) forced))
+      (newline)
+      (write (list (force p) (force p) forced (force 9)))
+      (newline)
+      (write
+       (list (force (make-promise 3)) (let ((q (delay 1))) (eq? q (make-promise q)))))
+      (newline)
+      (define reentered 0)
+      (define r
+        (delay
+          (begin
+            (set! reentered (+ reentered 1))
+            (if (> reentered 5) reentered (force r)))))
+      (write (list (force r) (force r)))
+      (newline)
+      (define (countdown n)
+        (delay-force (if (= n 0) (delay 'done) (countdown (- n 1)))))
+      (write (force (countdown 100000)))
+      (newline)
+      (define thunks
+        (let loop ((i 0) (acc '()))
+          (if (= i 3) acc (loop (+ i 1) (cons (delay i) acc)))))
+      (write (map force thunks))
+      (newline)
+      (display (list (delay 1) (cons-stream 1 2)))
+      (newline)
+    expected: |
+      (#t #f #f 0)
+      (42 42 1 9)
+      (3 #t)
+      (6 6)
+      done
+      (2 1 0)
+      (#<promise> (1 . #<promise>))
+  - name: delay-and-cons-stream-are-shadowable
+    source: |
+      (define (after-delay delay action) (list delay action))
+      (write (after-delay 3 'go))
+      (newline)
+      (write (let ((delay (lambda (x) (* x 2)))) (delay 21)))
+      (newline)
+    expected: |
+      (3 go)
+      42
+  - name: infinite-streams-and-the-stream-procedures
+    source: |
+      (define (upward n) (cons-stream n (upward (+ n 1))))
+      (define (without-multiples k s)
+        (stream-filter (lambda (x) (not (= 0 (remainder x k)))) s))
+      (define (coprime-to primes s)
+        (if (null? primes)
+            s
+            (coprime-to (cdr primes) (without-multiples (car primes) s))))
+      (write (stream-ref (coprime-to '(2 3 5 7 11 13) (upward 1)) 50))
+      (newline)
+      (define evaluated 0)
+      (define squares
+        (stream-map (lambda (x)
+                      (set! evaluated (+ evaluated 1))
+                      (* x x)) (upward 0)))
+      (write (list (stream-ref squares 10) (stream-ref squares 10) evaluated))
+      (newline)
+      (write (stream-head (stream-map + (upward 0) (upward 10)) 4))
+      (newline)
+      (write
+       (stream->list
+        (stream-append (stream 1 2) the-empty-stream (list->stream '(3 4)))))
+      (newline)
+      (write (stream->list (stream-tail (upward 0) 5) 3))
+      (newline)
+      (stream-for-each display (stream-first (cons-stream (stream 1 2 3) '())))
+      (newline)
+      (write
+       (list (stream-pair? (upward 0)) (stream-pair? '(1 2))
+             (stream-null? the-empty-stream) (empty-stream? (stream-rest (stream 1)))
+             (stream-car (stream-cdr (upward 7)))))
+      (newline)
+      (write (stream-ref (upward 0) 200000))
+      (newline)
+      (write (stream-head (stream-map * (stream 1 2 3) (stream 4 5 6)) 3))
+      (newline)
+    expected: |
+      263
+      (100 100 11)
+      (10 12 14 16)
+      (1 2 3 4)
+      (5 6 7)
+      123
+      (#t #f #t #t 8)
+      200000
+      (4 10 18)
+  - name: parallel-execute-joins-every-thunk-and-a-lock-over-test-and-set-is-exact
+    source: |
+      (define tas-cell (list false))
+      (write (list (test-and-set! tas-cell) (test-and-set! tas-cell) (car tas-cell)))
+      (newline)
+      ;; A spin lock: a pair whose car is true while some thread holds it.
+      (define (acquire! lock) (let spin () (if (test-and-set! lock) (spin))))
+      (define (release! lock) (set-car! lock false))
+      (define (under lock action)
+        (lambda ()
+          (acquire! lock)
+          (action)
+          (release! lock)))
+      (define guarded-total 0)
+      (define total-lock (list false))
+      (define (add-times n)
+        (lambda ()
+          (do ((i 0 (+ i 1))) ((= i n))
+            ((under total-lock
+                    (lambda () (set! guarded-total (+ guarded-total 1))))))))
+      (parallel-execute (add-times 5000) (add-times 5000) (add-times 5000))
+      (write guarded-total)
+      (newline)
+      (define joined '())
+      (apply parallel-execute
+             (map (lambda (k)
+                    (under total-lock (lambda () (set! joined (cons k joined)))))
+                  '(1 2 3 4)))
+      (write (length joined))
+      (newline)
+    expected: |
+      (#f #t #t)
+      15000
+      4
+  - name: a-builtin-used-before-the-file-redefines-it-means-the-builtin-until-then
+    source: |
+      (define old-caddr caddr)
+      (define (caddr x) (if (null? x) 'empty (old-caddr x)))
+      (write (list (caddr '()) (caddr '(1 2 3))))
+      (newline)
+      (write (cdddr '(1 2 3 4)))
+      (newline)
+      (define (cdddr x) 'mine)
+      (write (cdddr '(1 2 3 4)))
+      (newline)
+      (define (first-of-rest x) (cadar x))
+      (write (first-of-rest '((1 2))))
+      (newline)
+      (define (cadar x) 'mine)
+      (write (first-of-rest '((1 2))))
+      (newline)
+      (define cdadr-before (map cdadr '((1 (2 3)))))
+      (define cdadr 7)
+      (write (list cdadr-before cdadr))
+      (newline)
+    expected: |
+      (empty 3)
+      (4)
+      mine
+      2
+      mine
+      (((3)) 7)
+  - name: eval-evaluates-a-datum-in-the-one-global-environment
+    source: |
+      (define env (interaction-environment))
+      (define (run-op op . args) (apply (eval op user-initial-environment) args))
+      (write (list (run-op '> 5 3) (run-op '< 5 3) (run-op '+ 1 2 3)))
+      (newline)
+      (define (square-it x) (* x x))
+      (define eval-counter 10)
+      (write
+       (list (eval '(square-it 7) env) (eval 'eval-counter env)
+             ((eval 'square-it env) 3) (eval '(if (null? '()) 'empty 'full) env)
+             (eval 5 env) (eval "s" env) (eval ''q env)))
+      (newline)
+      (define (list-copy l) (list 'mine l))
+      (write (list (eval '(list-copy '(1)) env) (eval '(reverse '(1 2)) env)))
+      (newline)
+      (display
+       (list env (eq? env system-global-environment)
+             (eq? env (scheme-report-environment 5))
+             (eq? env (environment '(scheme base) '(only (scheme write) display)))))
+      (newline)
+      (write
+       (map (lambda (e) (eval e env))
+            '((+ 1 1) (string-append "a" "b") (symbol->string 'sym))))
+      (newline)
+    expected: |
+      (#t #f 6)
+      (49 10 9 empty 5 "s" q)
+      ((mine (1)) (2 1))
+      (#[environment] #t #t #t)
+      (2 "ab" "sym")
+  - name: eval-defines-program-globals-and-its-loops-run-in-constant-stack
+    source: |
+      (write
+       (eval '(begin
+               (define (fact n) (if (= n 0) 1 (* n (fact (- n 1)))))
+               (fact 10)) env))
+      (newline)
+      (write
+       (list (eval '(fact 5) env) (eval '(define x-in-eval 1) env)
+             (eval 'x-in-eval env)))
+      (newline)
+      (eval '(set! x-in-eval 2) env)
+      (eval '(set! eval-counter 11) env)
+      (write (list (eval 'x-in-eval env) (eval 'eval-counter env) eval-counter))
+      (newline)
+      ;; What eval defines is a program global: later evals and the program
+      ;; (through eval) read it, and a set! of a program variable reaches it.
+      (eval '(define prog-visible 42) env)
+      (write (list (eval 'prog-visible env) (eval '(+ prog-visible 8) env)))
+      (newline)
+      (write (eval '(let loop ((i 0)) (if (= i 100000) i (loop (+ i 1)))) env))
+      (newline)
+      (write
+       (eval '(begin
+               (define (count-down n acc)
+                 (if (= n 0) acc (count-down (- n 1) (+ acc 1))))
+               (count-down 100000 0)) env))
+      (newline)
+      (write (eval '(do ((i 0 (+ i 1)) (s 0 (+ s i))) ((= i 100000) s)) env))
+      (newline)
+      (write
+       (eval '(let
+               loop
+               ((i 0) (acc '()))
+               (if (= i 3)
+                   (map (lambda (t) (t)) acc)
+                   (loop (+ i 1) (cons (lambda () i) acc)))) env))
+      (newline)
+      (write (eval '(let loop ((i 0)) (if (< i 3) (cons i (loop (+ i 1))) '())) env))
+      (newline)
+      (write (eval '(let loop ((i 0)) (if (< i 3) (loop (+ i 1)) loop)) env))
+      (newline)
+    expected: |
+      3628800
+      (120 #!unspecific 1)
+      (2 11 11)
+      (42 50)
+      100000
+      100000
+      4999950000
+      (2 1 0)
+      (0 1 2)
+      #<procedure>
+  - name: eval-knows-the-derived-forms-quasiquote-and-the-promise-syntax
+    source: |
+      (write
+       (eval '(let*
+               ((a 1) (b (+ a 1)))
+               (letrec ((ev? (lambda (n) (if (= n 0) #t (od? (- n 1)))))
+                        (od? (lambda (n) (if (= n 0) #f (ev? (- n 1))))))
+                 (list a b (ev? 10) (od? 10)))) env))
+      (newline)
+      (write (eval '(cond ((assv 2 '((1 . a) (2 . b))) => cdr) (else 'none)) env))
+      (newline)
+      (write (eval '(case (* 2 3) ((2 3 5 7) 'prime) ((1 4 6 8 9) 'composite)) env))
+      (newline)
+      (write
+       (eval '(list
+               (and 1 2)
+               (and)
+               (or #f 3)
+               (or)
+               (when #t 'w)
+               (unless #t 'u)
+               `(1 ,(+ 1 1) ,@(list 3 4))) env))
+      (newline)
+      (write
+       (eval '(let
+               ((x 1))
+               (define (get) x)
+               (set! x 2)
+               (get)) env))
+      (newline)
+      (write
+       (eval
+        '(list ((lambda args args) 1 2 3) ((lambda (a . rest) (list a rest)) 1 2 3))
+        env))
+      (newline)
+      (write (eval '(let ((if (lambda (a b c) (list a b c)))) (if 1 2 3)) env))
+      (newline)
+      (write
+       (list (force (eval '(delay (+ 1 2)) env))
+             (stream-head (eval '(cons-stream 1 (cons-stream 2 '())) env) 2)))
+      (newline)
+      (write (eval '(call/cc (lambda (k) (+ 1 (k 42)))) env))
+      (newline)
+    expected: |
+      (1 2 #t #f)
+      b
+      composite
+      (2 #t 3 #f w #!unspecific (1 2 3 4))
+      2
+      ((1 2 3) (1 (2 3)))
+      (1 2 3)
+      (3 (1 2))
+      42
+  # Before every other stdin case: those read to the end of the input.
+  - name: read-raises-a-read-error
+    stdin: |
+      ) 7
+    source: |
+      (write (guard (e ((read-error? e) (list 'read-error (error-object? e) (error-object-message e))))
+               (read)))
+      (newline)
+      (write (read))
+      (newline)
+    expected: |
+      (read-error #t "unexpected ')'")
+      7
+  - name: read-answers-what-quoted-data-lowers-to
+    stdin: |
+      quit 42 "hi" #\a #(1 2) (1 . 2) 'a 99 #|b|# 100 #;(1 2) 101 #t #f () 1/2 2.5 #xFF #u8(1 #xff) #U8()
+    source: |
+      (write (read))
+      (newline)
+      (write (read))
+      (newline)
+      (write (read))
+      (newline)
+      (write (read))
+      (newline)
+      (write (read))
+      (newline)
+      (write (read))
+      (newline)
+      (write (read))
+      (newline)
+      (write (read))
+      (newline)
+      (write (read))
+      (newline)
+      (write (read))
+      (newline)
+      (write (read))
+      (newline)
+      (write (read))
+      (newline)
+      (write (read))
+      (newline)
+      (write (read))
+      (newline)
+      (write (read))
+      (newline)
+      (write (read))
+      (newline)
+      (write (read))
+      (newline)
+      (write (read))
+      (newline)
+      (read-line)
+    expected: |
+      quit
+      42
+      "hi"
+      #\a
+      #(1 2)
+      (1 . 2)
+      (quote a)
+      99
+      100
+      101
+      #t
+      #f
+      ()
+      1/2
+      2.5
+      255
+      #u8(1 255)
+      #u8()
+  # Gauche 0.9.15 -r7.
+  - name: read-knows-vertical-lines-and-infinities
+    stdin: |
+      |foo bar| || |a\x41;\|b| +inf.0 -INF.0 +nan.0 (a |b c| . |d|) #(|1| +inf.0)
+    source: |
+      (let* ((a (read)) (b (read)) (c (read)) (d (read)) (e (read)) (f (read)) (g (read)) (h (read)))
+        (write (list a b c d e f g h))
+        (newline)
+        (write (list (symbol->string c) (nan? f) (eq? a (string->symbol "foo bar"))))
+        (newline))
+      (read-line)
+    expected: |
+      (|foo bar| || |aA\|b| +inf.0 -inf.0 +nan.0 (a |b c| . d) #(|1| +inf.0))
+      ("aA|b" #t #t)
+  # The current input port, read with and without a port argument, between reads of a
+  # string port and a parameterized one: one pushback per port (Gauche 0.9.15 -r7).
+  - name: the-current-input-port-mixes-with-string-ports
+    stdin: |
+      (a b) xyz tail
+      line two
+      abcdef
+    source: |
+      (define ci-s (open-input-string "(from string)"))
+      (write (list (peek-char) (read ci-s) (read) (read-char (current-input-port)) (read-char)))
+      (newline)
+      (write (read-line (current-input-port)))
+      (newline)
+      (parameterize ((current-input-port (open-input-string "inner"))) (write (list (read) (eof-object? (read)))))
+      (newline)
+      (write (list (read-line) (read-string 3) (read-string 4 (current-input-port))))
+      (newline)
+    expected: |
+      (#\( (from string) (a b) #\space #\x)
+      "yz tail"
+      (inner #t)
+      ("line two" "abc" "def\n")
+  - name: read-char-peek-char-read-line-and-char-ready-on-the-current-input-port
+    stdin: |
+      ab
+      hello
+    source: |
+      (write (list (read-char) (peek-char) (read-char)))
+      (newline)
+      (write (read-line))
+      (newline)
+      (write (read-line))
+      (newline)
+      (write (list (char-ready?) (eof-object? (read-char)) (char-ready?)))
+      (newline)
+    expected: |
+      (#\a #\b #\b)
+      ""
+      "hello"
+      (#t #t #t)
+  - name: read-at-end-answers-the-eof-object
+    source: |
+      (write (list (eof-object? (read)) (eof-object? (read)) (eof-object? 1)))
+      (newline)
+      (write (list (eq? (eof-object) (eof-object)) (eof-object? (eof-object))))
+      (newline)
+      (write (eof-object))
+      (newline)
+      (display (char-ready?))
+      (newline)
+    expected: |
+      (#t #t #f)
+      (#t #t)
+      #<eof>
+      #t
+  # Each line was a divergence from R7RS (or SRFI-1/MIT for the SICP names) found while
+  # writing the reference, checked against Gauche 0.9.15.
+  - name: numbers-lists-and-records-at-their-r7rs-edges
+    source: |
+      (write
+       (list (quotient 7.0 2) (truncate-quotient 7 2.0) (floor-quotient -7.0 2)
+             (quotient 7 2) (floor-quotient -7 2) (map quotient '(9.0) '(4))))
+      (newline)
+      (write
+       (list (rational? (/ 1 0.0)) (rational? (/ 0.0 0.0)) (rational? 1.5)
+             (rational? 1/3) (integer? (/ 1 0.0)) (integer? 2.0)))
+      (newline)
+      (write (list (number->string 1/3 2) (number->string -7/3 16) (number->string 255 16)))
+      (newline)
+      (write (list (gcd 2.0 4) (lcm 2.0 3) (gcd 12 18) (gcd) (lcm) (apply gcd '(4.0 6))))
+      (newline)
+      (write (list (odd? 3.0) (even? 2.0) (odd? 3) (even? 3) (map odd? '(1 2.0))))
+      (newline)
+      (write
+       (list (case (string #\a) (("a") 'string) (else 'no))
+             (case 2.0 ((2) 'exact) ((2.0) 'inexact) (else 'no))))
+      (newline)
+      (define circular-sample (list 1 2 3))
+      (set-cdr! (cddr circular-sample) circular-sample)
+      (write
+       (list (list? circular-sample) (list? '(1 2)) (list? '(1 . 2)) (list? '())
+             (list? (cdr circular-sample))))
+      (newline)
+      (write
+       (list (reduce - 0 '(1 2 3 4)) (reduce list 0 '(1 2 3 4)) (reduce + 0 '())
+             (reduce + 0 '(5)) (apply reduce (list - 0 '(10 1)))))
+      (newline)
+      (write
+       (list (fold-left list '() '(a b c) '(1 2 3)) (fold-right list '() '(a b c) '(1 2))
+             (fold-left + 0 '(1 2) '(3 4) '(5 6)) (fold-right cons '() '(1 2 3))
+             (apply fold-left (list list '() '(a b) '(1 2)))
+             (apply fold-right (list list 'z '(a) '(1) '(x)))))
+      (newline)
+      (write (list (string #\a #\b) (list->string '(#\c)) (apply string '(#\d)) (string)))
+      (newline)
+      (define-record-type edge-point (make-edge-point x) edge-point? (x edge-point-x set-edge-point-x!))
+      (define edge-p (make-edge-point 1))
+      (write
+       (list (eq? (set-edge-point-x! edge-p 10) (if #f #f)) (edge-point-x edge-p)
+             (eq? (apply set-edge-point-x! (list edge-p 20)) (if #f #f)) (edge-point-x edge-p)))
+      (newline)
+    expected: |
+      (3.0 3.0 -4.0 3 -4 (2.0))
+      (#f #f #t #t #f #t)
+      ("1/11" "-7/3" "ff")
+      (2.0 6.0 6 0 1 2.0)
+      (#t #t #t #f (#t #f))
+      (no inexact)
+      (#f #t #f #t #f)
+      (2 (4 (3 (2 1))) 0 5 -9)
+      ((((() a 1) b 2) c 3) (a 1 (b 2 ())) 21 (1 2 3) ((() a 1) b 2) (a 1 x z))
+      ("ab" "c" "d" "")
+      (#t 10 #t 20)
+  # define-syntax / syntax-rules (.kb/scheme-frontend.md, "Macros"). Expected output is
+  # Gauche 0.9.15's. From here on the concatenated program defines a macro, so every
+  # case above is ALSO run through the expander on the way.
+  - name: syntax-rules-template-binders-capture-nothing-and-free-names-mean-the-definition
+    source: |
+      (define-syntax mac-swap!
+        (syntax-rules ()
+          ((_ a b) (let ((tmp a)) (set! a b) (set! b tmp)))))
+      (define tmp 1)
+      (define mac-other 2)
+      (mac-swap! tmp mac-other)
+      (write (list tmp mac-other))
+      (newline)
+      (define-syntax mac-or
+        (syntax-rules ()
+          ((_) #f)
+          ((_ e) e)
+          ((_ e r ...) (let ((t e)) (if t t (mac-or r ...))))))
+      (define t 5)
+      (write (list (mac-or #f t) (let ((if list)) (mac-or #f 3)) (mac-or)))
+      (newline)
+      (define-syntax mac-while
+        (syntax-rules ()
+          ((_ c body ...) (let lp () (when c body ... (lp))))))
+      (define mac-i 0)
+      (mac-while (< mac-i 3) (display mac-i) (set! mac-i (+ mac-i 1)))
+      (newline)
+      (define-syntax mac-let*
+        (syntax-rules ()
+          ((_ () body ...) (let () body ...))
+          ((_ ((x v) rest ...) body ...) (let ((x v)) (mac-let* (rest ...) body ...)))))
+      (write (mac-let* ((a 1) (b (+ a 1))) (* a b)))
+      (newline)
+      (write (let ((x 'outer))
+               (let-syntax ((m (syntax-rules () ((_) x))))
+                 (let ((x 'inner))
+                   (m)))))
+      (newline)
+    expected: |
+      (2 1)
+      (5 3 #f)
+      012
+      2
+      outer
+  - name: syntax-rules-patterns-ellipses-literals-and-escapes
+    source: |
+      (define-syntax mac-last (syntax-rules () ((_ a ... z) 'z)))
+      (define-syntax mac-vec (syntax-rules () ((_ #(a ...)) (list a ...))))
+      (define-syntax mac-nest (syntax-rules () ((_ (a b ...) ...) '((b ... a) ...))))
+      (define-syntax mac-flat (syntax-rules () ((_ (a ...) ...) '(a ... ...))))
+      (define-syntax mac-dot (syntax-rules () ((_ a . b) '(a b))))
+      (define-syntax mac-tail (syntax-rules () ((_ a ... . r) '((a ...) r))))
+      (define-syntax mac-ell (syntax-rules ::: () ((_ a :::) (list a ::: '...))))
+      (define-syntax mac-esc (syntax-rules () ((_ a) '(a (... ...)))))
+      (define-syntax mac-lit (syntax-rules (=>) ((_ a => b) (list a b)) ((_ a b c) 'no-arrow)))
+      (define-syntax mac-data (syntax-rules () ((_ 1 x) 'one) ((_ "s" x) 'string) ((_ #t x) 'true) ((_ _ x) 'any)))
+      (write (list (mac-last 1 2 3) (mac-vec #(1 2 3)) (mac-nest (1 2 3) (4 5)) (mac-flat (1 2) () (3))))
+      (newline)
+      (write (list (mac-dot 1 2 3) (mac-tail 1 2) (mac-ell 1 2) (mac-esc 1)))
+      (newline)
+      (write (list (mac-lit 1 => 2) (mac-lit 1 2 3) (let ((=> 0)) (mac-lit 1 => 2))))
+      (newline)
+      (write (list (mac-data 1 0) (mac-data "s" 0) (mac-data #t 0) (mac-data 'q 0)))
+      (newline)
+    expected: |
+      (3 (1 2 3) ((2 3 1) (5 4)) (1 2 3))
+      ((1 (2 3)) ((1 2) ()) (1 2 ...) (1 ...))
+      ((1 2) no-arrow no-arrow)
+      (one string true any)
+  - name: syntax-definitions-in-bodies-let-syntax-letrec-syntax-and-expanded-core-forms
+    source: |
+      (define-syntax mac-def-counter
+        (syntax-rules ()
+          ((_ get) (begin (define count 0) (define (get) (set! count (+ count 1)) count)))))
+      (mac-def-counter mac-tick)
+      (mac-tick)
+      (define count 100)
+      (write (list (mac-tick) count))
+      (newline)
+      (define (mac-f x)
+        (define-syntax twice (syntax-rules () ((_ e) (begin e e))))
+        (twice (set! x (* x 2)))
+        x)
+      (write (mac-f 3))
+      (newline)
+      (write (letrec-syntax ((ev? (syntax-rules () ((_ n) (if (= n 0) #t (od? (- n 1))))))
+                             (od? (syntax-rules () ((_ n) (if (= n 0) #f #t)))))
+               (list (ev? 2) (ev? 1))))
+      (newline)
+      (define-syntax mac-quote (syntax-rules () ((_ x) (list 'x `(x ,x y) '#(x z)))))
+      (write (mac-quote 5))
+      (newline)
+      (define-syntax mac-sum (syntax-rules () ((_ n) (do ((i 0 (+ i 1)) (s 0 (+ s i))) ((= i n) s)))))
+      (define i 10)
+      (write (let ((s 1)) (+ s (mac-sum i))))
+      (newline)
+      (define-syntax mac-cond
+        (syntax-rules (else)
+          ((_ (else e)) e)
+          ((_ (c e) rest ...) (if c e (mac-cond rest ...)))))
+      (write (list (mac-cond (#f 1) (else 2)) (mac-cond (#f 1) (#t 3) (else 4))))
+      (newline)
+      (define-syntax mac-values
+        (syntax-rules () ((_ (a b) e body) (let-values (((a b) e)) body))))
+      (write (mac-values (q r) (values 3 1) (list q r)))
+      (newline)
+      (define-syntax mac-case
+        (syntax-rules () ((_ k) (case k ((a) 'is-a) ((b c) 'b-or-c) (else => (lambda (x) (list x 'other)))))))
+      (write (list (mac-case 'a) (mac-case 'c) (mac-case 'z)))
+      (newline)
+    expected: |
+      (2 100)
+      12
+      (#t #f)
+      (5 (5 5 y) #(5 z))
+      46
+      (2 3)
+      (3 1)
+      (is-a b-or-c (z other))
+  # guard (R7RS 4.2.7), raise, error objects; expected output is Gauche 0.9.15's
+  # (gosh -r7). (+ 1 'a) is the built-in error: a type-error on every backend, where
+  # (car 1) is an uncatchable trap on wasm.
+  - name: guard-catches-raised-objects-error-objects-and-built-in-errors
+    source: |
+      (write (guard (e (#t (list 'caught e))) (raise 'boom)))
+      (newline)
+      (write (guard (e ((symbol? e) (list 'sym e)) ((string? e) (list 'str e))) (raise "s")))
+      (newline)
+      (write (list (guard (e ((assq 'a e) => cdr) ((assq 'b e))) (raise (list (cons 'a 42))))
+                   (guard (e ((assq 'a e) => cdr) ((assq 'b e))) (raise (list (cons 'b 23))))))
+      (newline)
+      (write (guard (e (else (list 'else e))) (raise 5)))
+      (newline)
+      (write (guard (e (#t (list 'outer e))) (guard (e ((number? e) 'num)) (raise 'not-a-number))))
+      (newline)
+      (write (guard (e (#t 'x)) (guard (e2 ((begin (display "[test]") #f) 1)) (raise 'r))))
+      (newline)
+      (write (guard (e (#f 1)) 'no-raise))
+      (newline)
+      (write (let ((x (guard (e (#t e)) (raise 1)))) (+ x 1)))
+      (newline)
+      (write (guard (e (#t (display "[handler]") e))
+               (dynamic-wind (lambda () (display "[in]"))
+                             (lambda () (raise 'dw))
+                             (lambda () (display "[out]")))))
+      (newline)
+      (define (guard-loop i acc)
+        (if (= i 5) (reverse acc)
+            (guard-loop (+ i 1) (cons (guard (e ((odd? e) (* e 10)) (else e)) (raise i)) acc))))
+      (write (guard-loop 0 '()))
+      (newline)
+      (write (guard (e ((error-object? e) (list (error-object-message e) (error-object-irritants e))))
+               (error "bad thing" 1 "two" 'three)))
+      (newline)
+      (write (let ((e (guard (e (#t e)) (error "only message"))))
+               (list (error-object? e) (error-object-message e) (error-object-irritants e))))
+      (newline)
+      (write (list (error-object? 5) (error-object? 'x) (guard (e (#t (error-object? e))) (raise 'x))))
+      (newline)
+      (write (guard (e ((string? e) (list 'reraised-caught e)))
+               (guard (e ((number? e) 'num)) (raise "s"))))
+      (newline)
+      (write (let ((first (guard (e (#t e)) (error "inner" 1))))
+               (guard (e (#t (list (eq? e first) (error-object-message e)))) (raise first))))
+      (newline)
+      (write (guard (e ((error-object? e) 'built-in-caught)) (+ 1 (car (list 'a)))))
+      (newline)
+      (write (guard (e ((read-error? e) 'read) ((file-error? e) 'file) (else 'other)) (error "x")))
+      (newline)
+    expected: |
+      (caught boom)
+      (str "s")
+      (42 (b . 23))
+      (else 5)
+      (outer not-a-number)
+      [test]x
+      no-raise
+      2
+      [in][out][handler]dw
+      (0 10 2 30 4)
+      ("bad thing" (1 "two" three))
+      (#t "only message" ())
+      (#f #f #f)
+      (reraised-caught "s")
+      (#t "inner")
+      built-in-caught
+      other
+  - name: with-exception-handler-and-raise-continuable
+    source: |
+      (write (with-exception-handler (lambda (e) 42) (lambda () (+ (raise-continuable 'c) 1))))
+      (newline)
+      (write (call/cc (lambda (k)
+                        (with-exception-handler (lambda (e) (k (list 'escaped e)))
+                                                (lambda () (raise 'x))))))
+      (newline)
+      (write (call/cc (lambda (k)
+                        (with-exception-handler (lambda (e) (k (error-object-message e)))
+                                                (lambda () (error "from error" 1))))))
+      (newline)
+      (write (guard (e (#t (list 'g e)))
+               (with-exception-handler (lambda (e) (raise (list 'wrapped e)))
+                                       (lambda () (raise 'inner)))))
+      (newline)
+      (write (guard (e ((error-object? e) (list 'secondary (error-object-irritants e))))
+               (with-exception-handler (lambda (e) 'returned) (lambda () (raise 'nc)))))
+      (newline)
+      (write (with-exception-handler
+              (lambda (e) (* e 2))
+              (lambda ()
+                (with-exception-handler
+                 (lambda (e) (+ (raise-continuable (+ e 1)) 100))
+                 (lambda () (raise-continuable 5))))))
+      (newline)
+      (write (call/cc (lambda (k)
+                        (with-exception-handler (lambda (e) (k (list 'arith (error-object? e))))
+                                                (lambda () (+ 1 (car (list 'a))))))))
+      (newline)
+      (define weh-handler (lambda (e) (list 'first-class e)))
+      (write (apply with-exception-handler (list weh-handler (lambda () (raise-continuable 7)))))
+      (newline)
+      (write (map (lambda (x) (guard (e (#t (list 'r e))) (if (odd? x) (raise x) x))) '(1 2 3)))
+      (newline)
+    expected: |
+      43
+      (escaped x)
+      "from error"
+      (g (wrapped inner))
+      (secondary ())
+      112
+      (arith #t)
+      (first-class 7)
+      ((r 1) 2 (r 3))
+  - name: guard-in-macros-and-raise-inside-eval
+    source: |
+      (define-syntax try-or
+        (syntax-rules () ((_ body fallback) (guard (e (#t fallback)) body))))
+      (write (let ((e 'user-e)) (try-or (raise 'x) e)))
+      (newline)
+      (define-syntax catching
+        (syntax-rules () ((_ var body) (guard (var ((symbol? var) (list 'sym var))) body))))
+      (write (catching c (raise 'y)))
+      (newline)
+      (write (guard (e (#t (list 'from-eval e))) (eval '(raise 9) (interaction-environment))))
+      (newline)
+      (write (eval '(with-exception-handler (lambda (e) (* e 3)) (lambda () (raise-continuable 4)))
+                   (interaction-environment)))
+      (newline)
+    expected: |
+      user-e
+      (sym y)
+      (from-eval 9)
+      12
+  # parameterize / make-parameter (R7RS 4.2.6): the binding is dynamic, the converter runs
+  # on the initial value and on each parameterize value, and a body is a <body>.
+  - name: parameterize-binds-for-the-dynamic-extent-of-its-body
+    source: |
+      (define prm-p (make-parameter 10))
+      (define prm-q (make-parameter 5 (lambda (x) (* x 2))))
+      (write (list (prm-p) (prm-q)))
+      (newline)
+      (parameterize ((prm-p 1) (prm-q 3))
+        (write (list (prm-p) (prm-q)))
+        (newline))
+      (write (list (prm-p) (prm-q)))
+      (newline)
+      (define (prm-show) (prm-p))
+      (write (parameterize ((prm-p 'inner)) (prm-show)))
+      (newline)
+      (write (parameterize ((prm-p 1)) (parameterize ((prm-p 2)) (prm-p))))
+      (newline)
+      (write (parameterize () 'no-bindings))
+      (newline)
+      (write (parameterize ((prm-p 'body))
+               (define local (list (prm-p) 'defined))
+               local))
+      (newline)
+      (write (list (procedure? prm-p) (prm-p)))
+      (newline)
+      (define prm-traced
+        (make-parameter 1 (lambda (x) (write (list 'convert x)) (newline) x)))
+      (parameterize ((prm-traced 2)) (write (prm-traced)) (newline))
+      (write (prm-traced))
+      (newline)
+      (define (prm-count-down n)
+        (if (= n 0) (prm-p) (parameterize ((prm-p n)) (prm-count-down (- n 1)))))
+      (write (list (prm-count-down 1000) (prm-p)))
+      (newline)
+      (write (parameterize ((prm-q 7)) (map (lambda (x) (+ x (prm-q))) '(1 2))))
+      (newline)
+      (write (call-with-values (lambda () (parameterize ((prm-p 1)) (values (prm-p) 2))) list))
+      (newline)
+      (write (let ((prm-p (lambda () 'shadowed)) (parameterize list)) (parameterize (prm-p))))
+      (newline)
+    expected: |
+      (10 10)
+      (1 6)
+      (10 10)
+      inner
+      2
+      no-bindings
+      (body defined)
+      (#t 10)
+      (convert 1)
+      (convert 2)
+      2
+      1
+      (1 10)
+      (15 16)
+      (1 2)
+      (shadowed)
+  # A raise, a built-in error, a call/cc escape and a converter error each leave the
+  # value as it was; a with-exception-handler handler runs where the raise stands. A
+  # parallel-execute thread starts with the caller's bindings (Gauche's threads do; not
+  # checked against it: Gauche has no parallel-execute).
+  - name: parameterize-is-restored-on-every-exit
+    source: |
+      (define prm-r (make-parameter 'outer))
+      (write (guard (e (#t (list 'caught e (prm-r))))
+        (parameterize ((prm-r 'raised)) (raise (prm-r)))))
+      (newline)
+      (write (prm-r))
+      (newline)
+      (write (guard (e (#t (prm-r))) (parameterize ((prm-r 'built-in)) (+ 1 'a))))
+      (newline)
+      (write (with-exception-handler
+              (lambda (c) (list 'handler-sees (prm-r)))
+              (lambda () (parameterize ((prm-r 'at-raise)) (raise-continuable 1)))))
+      (newline)
+      (write (call-with-current-continuation
+              (lambda (k) (parameterize ((prm-r 'escaped)) (k (prm-r))))))
+      (newline)
+      (write (prm-r))
+      (newline)
+      (write (dynamic-wind (lambda () #f)
+                           (lambda () (parameterize ((prm-r 'wound)) (prm-r)))
+                           (lambda () (write (prm-r)) (newline))))
+      (newline)
+      (define prm-n (make-parameter 0 (lambda (x) (if (number? x) x (error "not a number:" x)))))
+      (write (guard (e ((error-object? e) (list (error-object-message e) (error-object-irritants e))))
+        (parameterize ((prm-r 'never) (prm-n 'a)) (prm-r))))
+      (newline)
+      (write (list (prm-r) (prm-n)))
+      (newline)
+      (define-syntax with-r
+        (syntax-rules () ((_ v body ...) (parameterize ((prm-r v)) body ...))))
+      (write (let ((prm-r (lambda () 'user))) (with-r 'macro (prm-r))))
+      (newline)
+      (write (with-r 'macro (prm-r)))
+      (newline)
+      (define prm-seen 'none)
+      (parameterize ((prm-r 'in-thread))
+        (parallel-execute (lambda () (set! prm-seen (prm-r)))))
+      (write (list prm-seen (prm-r)))
+      (newline)
+    expected: |
+      (caught raised outer)
+      outer
+      outer
+      (handler-sees at-raise)
+      escaped
+      outer
+      outer
+      wound
+      ("not a number:" (a))
+      (outer 0)
+      user
+      macro
+      (in-thread outer)
+  # case-lambda (R7RS 4.2.9): the first clause whose formals accept the argument count
+  # runs, a clause body is a <body>, a self tail call through another clause is a loop,
+  # and a count no clause accepts is an error object (Gauche 0.9.15 -r7 output, except
+  # that its message spells "case lambda"). A macro's template binder stays hygienic.
+  # A top-level one is a defun per clause a direct call picks statically: cl-count's
+  # first clause calls the second, whose self tail call is a loop; cl-pp's clauses call
+  # each other, which keeps the one dispatching procedure and its jumps; apply and a
+  # first-class use go through the dispatch.
+  - name: case-lambda-takes-the-first-clause-that-accepts-the-arguments
+    source: |
+      (define cl-range
+        (case-lambda
+          ((e) (cl-range 0 e))
+          ((b e) (do ((r '() (cons e r)) (e (- e 1) (- e 1))) ((< e b) r)))))
+      (write (list (cl-range 3) (cl-range 3 5)))
+      (newline)
+      (define cl-kind
+        (case-lambda
+          ((x) (list 'one x))
+          ((x . r) (list 'many x r))
+          ((x y) (list 'never x y))
+          (r (list 'none r))))
+      (write (list (cl-kind) (cl-kind 1) (cl-kind 1 2) (cl-kind 1 2 3)))
+      (newline)
+      (define cl-count
+        (case-lambda
+          ((n) (cl-count 0 n))
+          ((i n) (if (= i n) i (cl-count (+ i 1) n)))))
+      (write (cl-count 100000))
+      (newline)
+      (define cl-pp
+        (case-lambda
+          ((n) (if (= n 0) 'pp (cl-pp n 1)))
+          ((n k) (cl-pp (- n k)))))
+      (write (cl-pp 100000))
+      (newline)
+      (write (list (apply cl-kind '(1 2)) (apply cl-kind '()) (map cl-kind '(1 2) '(3 4))))
+      (newline)
+      (define cl-sum
+        (case-lambda
+          ((acc) acc)
+          ((acc x . xs) (apply cl-sum (+ acc x) xs))))
+      (write (cl-sum 0 1 2 3 4))
+      (newline)
+      (write (map (case-lambda ((x) (* x 2)) ((x y) (+ x y))) '(1 2) '(10 20)))
+      (newline)
+      (write (apply (case-lambda ((a b c) (list c b a)) (r r)) '(1 2 3)))
+      (newline)
+      (define (cl-make-acc)
+        (let ((n 0))
+          (case-lambda
+            (() n)
+            ((k) (set! n (+ n k)) n))))
+      (define cl-acc (cl-make-acc))
+      (cl-acc 5)
+      (cl-acc 7)
+      (write (cl-acc))
+      (newline)
+      (define (cl-local x)
+        (define g
+          (case-lambda
+            ((a) (define y (* a 10)) (+ y x))
+            ((a b) (g (+ a b)))))
+        (list (g 1) (g 1 2)))
+      (write (cl-local 100))
+      (newline)
+      (write (letrec ((h (case-lambda ((n) (h n '())) ((n acc) (if (= n 0) acc (h (- n 1) (cons n acc)))))))
+               (h 4)))
+      (newline)
+      (define cl-strict (case-lambda ((x) x) ((x y) y)))
+      (write (guard (e ((error-object? e) (list 'caught (error-object-message e) (error-object-irritants e))))
+               (cl-strict 1 2 3)))
+      (newline)
+      (write (guard (e ((error-object? e) 'caught-none)) (cl-strict)))
+      (newline)
+      (define-syntax cl-opt
+        (syntax-rules ()
+          ((_ name default body)
+           (define name (case-lambda (() (let ((cl-x default)) body)) ((cl-x) body))))))
+      (define cl-x 4)
+      (cl-opt cl-twice 21 (* cl-x 2))
+      (write (list (cl-twice) (cl-twice 5)))
+      (newline)
+      (write (let ((case-lambda list)) (case-lambda 1 2)))
+      (newline)
+      (define cl-p (make-parameter 'outer))
+      (define cl-show (case-lambda (() (cl-p)) ((v) (parameterize ((cl-p v)) (cl-show)))))
+      (write (list (cl-show) (cl-show 'inner) (cl-show)))
+      (newline)
+      (write (guard (e (#t (list 'raised e))) ((case-lambda ((x) (raise x))) 'boom)))
+      (newline)
+      (write (call-with-values (lambda () ((case-lambda ((a b) (values b a))) 1 2)) list))
+      (newline)
+    expected: |
+      ((0 1 2) (3 4))
+      ((none ()) (one 1) (many 1 (2)) (many 1 (2 3)))
+      100000
+      pp
+      ((many 1 (2)) (none ()) ((many 1 (3)) (many 2 (4))))
+      10
+      (11 22)
+      (3 2 1)
+      12
+      (110 130)
+      (1 2 3 4)
+      (caught "wrong number of arguments to case-lambda: (1 2 3)" ())
+      caught-none
+      (8 8)
+      (1 2)
+      (outer inner outer)
+      (raised boom)
+      (2 1)
+  # Ports: string ports, the optional port argument; Gauche 0.9.15 -r7 output.
+  - name: string-ports-write-and-read
+    source: |
+      (define sp-out (open-output-string))
+      (write 'abc sp-out)
+      (display " " sp-out)
+      (write "q\"x" sp-out)
+      (newline sp-out)
+      (write-char #\z sp-out)
+      (write-string "hello" sp-out 1 3)
+      (write-string "!" sp-out)
+      (write (get-output-string sp-out))
+      (newline)
+      (write (string=? (get-output-string sp-out) (get-output-string sp-out)))
+      (newline)
+      (define sp-in (open-input-string "(1 2 . 3) foo \"bar\" #\\a 42 line one\nline two\n"))
+      (write (list (read sp-in) (peek-char sp-in) (read-char sp-in) (read sp-in) (read sp-in)))
+      (newline)
+      (write (list (read sp-in) (read sp-in) (read-line sp-in) (read-line sp-in)))
+      (newline)
+      (write (list (eof-object? (read-line sp-in)) (eof-object? (read-char sp-in))
+                   (eof-object? (peek-char sp-in)) (eof-object? (read sp-in)) (char-ready? sp-in)))
+      (newline)
+      (write (list (read-string 3 (open-input-string "abcdef")) (read-string 10 (open-input-string "ab"))
+                   (eof-object? (read-string 3 (open-input-string ""))) (read-string 0 (open-input-string "abc"))))
+      (newline)
+    expected: |
+      "abc \"q\\\"x\"\nzel!"
+      #t
+      ((1 2 . 3) #\space #\space foo "bar")
+      (#\a 42 " line one" "line two")
+      (#t #t #t #t #t)
+      ("abc" "ab" #t "")
+  # The current ports are parameter objects: parameterize binds the standard stream too,
+  # restored on every exit channel.
+  - name: parameterize-redirects-the-current-ports
+    source: |
+      (define cp-a (open-output-string))
+      (define cp-b (open-output-string))
+      (parameterize ((current-output-port cp-a))
+        (display "a1 ")
+        (parameterize ((current-output-port cp-b)) (display "b1 ") (write "b2" (current-output-port)))
+        (display "a2 ")
+        (guard (e (#t (display "caught ")))
+          (parameterize ((current-output-port cp-b)) (display "b3 ") (raise 'x)))
+        (display "a3"))
+      (write (list (get-output-string cp-a) (get-output-string cp-b)))
+      (newline)
+      (write (list (eq? (current-output-port) (current-output-port)) (output-port? (current-output-port))
+                   (input-port? (current-input-port)) (output-port? (current-error-port))))
+      (newline)
+      (define cp-in (open-input-string "(hello world) 42 rest"))
+      (write (peek-char cp-in))
+      (parameterize ((current-input-port cp-in))
+        (write (list (read-char) (read) (read) (read-line))))
+      (newline)
+      (parameterize ((current-error-port (current-output-port)))
+        (display "via the error port" (current-error-port))
+        (newline (current-error-port)))
+      (flush-output-port)
+      (flush-output-port (current-output-port))
+    expected: |
+      ("a1 a2 caught a3" "b1 \"b2\"b3 ")
+      (#t #t #t #t)
+      #\((#\( hello world ") 42 rest")
+      via the error port
+  - name: port-procedures-are-first-class-and-reach-eval
+    source: |
+      (define fc-out (open-output-string))
+      (for-each (lambda (x) (write x fc-out) (write-char #\, fc-out)) '(1 "two" #\3 sym))
+      (apply display (list "!" fc-out))
+      (write (get-output-string fc-out))
+      (newline)
+      (write (map (lambda (f) (let ((p (open-output-string))) (f '("s" #\c) p) (get-output-string p)))
+                  (list display write write-simple write-shared)))
+      (newline)
+      (write (eval '(let ((p (open-output-string))) (write 'x p) (display " " p) (write-u8 1 (open-output-bytevector))
+                       (get-output-string p))
+                   (environment '(scheme base) '(scheme write))))
+      (newline)
+      (write (eval '(read (open-input-string "(1 . 2)")) (environment '(scheme base) '(scheme read))))
+      (newline)
+    expected: |
+      "1,\"two\",#\\3,sym,!"
+      ("(s c)" "(\"s\" #\\c)" "(\"s\" #\\c)" "(\"s\" #\\c)")
+      "x "
+      (1 . 2)
+  # Pushback and #!fold-case are per port. The read error's message is ours (Gauche names
+  # the port).
+  - name: the-reader-state-belongs-to-the-port
+    source: |
+      (define rs-1 (open-input-string "ab"))
+      (define rs-2 (open-input-string "xy"))
+      (write (list (peek-char rs-1) (read-char rs-2) (read-char rs-1) (read-char rs-2) (read-char rs-1)))
+      (newline)
+      (define rs-f1 (open-input-string "#!fold-case ABC #\\SPACE"))
+      (define rs-f2 (open-input-string "DEF"))
+      (write (list (read rs-f1) (read rs-f2) (read rs-f1)))
+      (newline)
+      (write (list (read (open-input-string "#u8(1 2 255) (a . b)"))
+                   (guard (e ((read-error? e) (error-object-message e))) (read (open-input-string ")")))))
+      (newline)
+    expected: |
+      (#\a #\x #\a #\y #\b)
+      (abc DEF #\space)
+      (#u8(1 2 255) "unexpected ')'")
+  - name: bytevector-ports
+    source: |
+      (define bp-in (open-input-bytevector (bytevector 1 2 3 255)))
+      (write (list (binary-port? bp-in) (input-port? bp-in) (peek-u8 bp-in) (read-u8 bp-in) (read-u8 bp-in) (u8-ready? bp-in)))
+      (newline)
+      (write (read-bytevector 5 bp-in))
+      (newline)
+      (write (list (eof-object? (read-bytevector 2 bp-in)) (eof-object? (read-u8 bp-in)) (eof-object? (peek-u8 bp-in))))
+      (newline)
+      (define bp-out (open-output-bytevector))
+      (write-u8 7 bp-out)
+      (write-bytevector (bytevector 1 2 3 4) bp-out 1 3)
+      (write-bytevector (bytevector 9) bp-out)
+      (write-u8 255 bp-out)
+      (write (list (get-output-bytevector bp-out) (get-output-bytevector bp-out)))
+      (newline)
+      (define bp-buf (make-bytevector 5 0))
+      (write (list (read-bytevector! bp-buf (open-input-bytevector (bytevector 1 2 3)) 1) bp-buf
+                   (eof-object? (read-bytevector! bp-buf (open-input-bytevector (bytevector))))))
+      (newline)
+      (write (utf8->string (let ((p (open-output-bytevector))) (write-bytevector (string->utf8 "héllo") p) (get-output-bytevector p))))
+      (newline)
+    expected: |
+      (#t #t 1 1 2 #t)
+      #u8(3 255)
+      (#t #t #t)
+      (#u8(7 2 3 9 255) #u8(7 2 3 9 255))
+      (3 #u8(0 1 2 3 0) #t)
+      "héllo"
+  # binary-port? of a string port is #f here; Gauche's ports are both textual and binary.
+  - name: port-predicates-and-closing
+    source: |
+      (define pc-in (open-input-string "hi there"))
+      (define pc-out (open-output-string))
+      (write (list (port? pc-in) (port? 1) (port? "s") (textual-port? pc-in) (binary-port? pc-in)
+                   (input-port? pc-out) (output-port? pc-out)))
+      (newline)
+      (write (list (input-port-open? pc-in) (output-port-open? pc-out)))
+      (close-port pc-in)
+      (close-output-port pc-out)
+      (close-output-port pc-out)
+      (write (list (input-port-open? pc-in) (output-port-open? pc-out)))
+      (newline)
+      (write (call-with-port (open-input-string "hi there") read))
+      (newline)
+      (define pc-p (open-output-string))
+      (call-with-values (lambda () (call-with-port pc-p (lambda (q) (write 'z q) (values 1 (output-port-open? q)))))
+        (lambda (x y) (write (list x y (output-port-open? pc-p) (get-output-string pc-p)))))
+      (newline)
+    expected: |
+      (#t #f #f #t #f #f #t)
+      (#t #t)(#f #f)
+      hi
+      (1 #t #f "z")
+  # The refusals, each an error object; the messages are ours.
+  - name: port-errors-are-error-objects
+    source: |
+      (define (pe-message thunk) (guard (e ((error-object? e) (error-object-message e))) (thunk)))
+      (for-each
+       (lambda (thunk) (write (pe-message thunk)) (newline))
+       (list (lambda () (write-u8 1))
+             (lambda () (read-u8))
+             (lambda () (display 1 (open-input-string "")))
+             (lambda () (read-char (open-output-string)))
+             (lambda () (get-output-string (open-input-string "")))
+             (lambda () (write-u8 256 (open-output-bytevector)))
+             (lambda () (let ((p (open-output-string))) (close-port p) (write 1 p)))
+             (lambda () (let ((p (open-input-string "abc"))) (close-input-port p) (read-line p)))
+             (lambda () (close-input-port (open-output-string)))
+             (lambda () (parameterize ((current-output-port 5)) 1))
+             (lambda () (parameterize ((current-input-port (open-output-string))) 1))))
+      (write (list (current-output-port) (open-input-bytevector (bytevector)) (open-output-bytevector) (current-input-port)))
+      (newline)
+    expected: |
+      "write-u8: not a binary output port: #<textual-output-port>"
+      "read-u8: not a binary input port: #<textual-input-port>"
+      "display: not a textual output port: #<textual-input-port>"
+      "read-char: not a textual input port: #<textual-output-port>"
+      "get-output-string: not a string output port: #<textual-input-port>"
+      "write-u8: not a byte: 256"
+      "write: the port is closed: #<textual-output-port>"
+      "read-line: the port is closed: #<textual-input-port>"
+      "close-input-port: not an input port: #<textual-output-port>"
+      "current-output-port: not a textual output port: 5"
+      "current-input-port: not a textual input port: #<textual-output-port>"
+      (#<textual-output-port> #<binary-input-port> #<binary-output-port> #<textual-input-port>)
+  # (scheme file). Every path is built at run time under a random prefix: a
+  # literal one would be folded at compile time (.kb/read-load-streams.md), and two runs
+  # of this corpus at once must not share a file. Gauche 0.9.15 -r7 output.
+  - name: file-ports-write-then-read
+    source: |
+      (define fp-dir (string-append "/tmp/rontolisp-scheme-spec-" (number->string (random 1000000000)) "-"))
+      (define fp-text (string-append fp-dir "text.txt"))
+      (define fp-out (open-output-file fp-text))
+      (write (list (port? fp-out) (output-port? fp-out) (textual-port? fp-out) (input-port? fp-out) (output-port-open? fp-out)))
+      (newline)
+      (write '(a "b" #\c 1.5) fp-out)
+      (newline fp-out)
+      (write-string "second line" fp-out)
+      (write-char #\! fp-out)
+      (close-port fp-out)
+      (close-output-port fp-out)
+      (write (list (output-port-open? fp-out) (file-exists? fp-text)))
+      (newline)
+      (define fp-in (open-input-file fp-text))
+      (write (list (input-port? fp-in) (read fp-in) (read-char fp-in) (peek-char fp-in) (read-line fp-in) (eof-object? (read-char fp-in))))
+      (close-input-port fp-in)
+      (newline)
+      (write (list (input-port-open? fp-in) (call-with-input-file fp-text read-line)))
+      (newline)
+      (write (call-with-output-file fp-text (lambda (p) (display "replaced" p) (output-port-open? p))))
+      (write (call-with-input-file fp-text (lambda (p) (list (read-string 3 p) (read-string 100 p) (eof-object? (read-string 1 p))))))
+      (newline)
+      (delete-file fp-text)
+      (write (file-exists? fp-text))
+      (newline)
+    expected: |
+      (#t #t #t #f #t)
+      (#f #t)
+      (#t (a "b" #\c 1.5) #\newline #\s "second line!" #t)
+      (#f "(a \"b\" #\\c 1.5)")
+      #t("rep" "laced" #t)
+      #f
+  # The current port is the file's for the thunk and is restored, and the file closed, on
+  # every way out. Gauche leaves the file open (and unflushed) on an escape, so it reads
+  # #<eof> where this reads "x".
+  - name: with-output-to-file-restores-the-current-port
+    source: |
+      (define fw-dir (string-append "/tmp/rontolisp-scheme-spec-" (number->string (random 1000000000)) "-"))
+      (define fw-file (string-append fw-dir "with.txt"))
+      (write (with-output-to-file fw-file (lambda () (display "to the file ") (write "q") (newline (current-output-port)) 'done)))
+      (newline)
+      (write (with-input-from-file fw-file (lambda () (list (read) (read) (read-char) (eof-object? (read-char))))))
+      (newline)
+      (display "standard output again")
+      (newline)
+      (write (call/cc (lambda (k) (with-output-to-file fw-file (lambda () (display "partial") (k 'escaped))))))
+      (newline)
+      (write (guard (e ((symbol? e) (list 'caught e))) (with-output-to-file fw-file (lambda () (display "x") (raise 'boom)))))
+      (newline)
+      (display "still standard output")
+      (newline)
+      (define fw-saved #f)
+      (write (with-input-from-file fw-file (lambda () (set! fw-saved (current-input-port)) (read-line))))
+      (write (input-port-open? fw-saved))
+      (newline)
+      (define (fw-values n) (if (= n 0) (with-input-from-file fw-file (lambda () (values (read-char) 2))) (fw-values (- n 1))))
+      (write (call-with-values (lambda () (fw-values 3)) list))
+      (newline)
+      (delete-file fw-file)
+    expected: |
+      done
+      (to the #\space #f)
+      standard output again
+      escaped
+      (caught boom)
+      still standard output
+      "x"#f
+      (#\x 2)
+  # A file port is textual or binary, never both (Gauche's are both). After the EOF peek
+  # Gauche's read-bytevector answers a bytevector; R7RS says the EOF object.
+  - name: binary-file-ports
+    source: |
+      (define fb-file (string-append "/tmp/rontolisp-scheme-spec-" (number->string (random 1000000000)) "-bytes.bin"))
+      (define fb-out (open-binary-output-file fb-file))
+      (write (list (binary-port? fb-out) (textual-port? fb-out) (output-port? fb-out)))
+      (newline)
+      (write-u8 0 fb-out)
+      (write-bytevector (bytevector 1 2 3 255) fb-out 1)
+      (write-bytevector (string->utf8 "hé") fb-out)
+      (close-port fb-out)
+      (define fb-in (open-binary-input-file fb-file))
+      (write (list (binary-port? fb-in) (peek-u8 fb-in) (read-u8 fb-in) (peek-u8 fb-in) (read-bytevector 2 fb-in) (u8-ready? fb-in)))
+      (newline)
+      (define fb-buf (make-bytevector 6 9))
+      (write (list (read-bytevector! fb-buf fb-in 1) fb-buf (eof-object? (read-u8 fb-in)) (eof-object? (peek-u8 fb-in))
+                   (eof-object? (read-bytevector 1 fb-in))))
+      (newline)
+      (write (read-bytevector! (make-bytevector 2 0) fb-in))
+      (newline)
+      (close-input-port fb-in)
+      (delete-file fb-file)
+    expected: |
+      (#t #f #t)
+      (#t 0 0 2 #u8(2 3) #t)
+      (4 #u8(9 255 104 195 169 9) #t #t #t)
+      #<eof>
+  # A failed open or delete raises an error object file-error? answers #t for. Gauche
+  # raises a plain error for an output file it cannot create; R7RS says a file error.
+  - name: a-failed-open-is-a-file-error
+    source: |
+      (define (fe-kind thunk)
+        (guard (e ((file-error? e) 'file-error) ((error-object? e) 'other-error) (#t 'not-an-error-object)) (thunk) 'no-error))
+      (define fe-missing (string-append "/tmp/rontolisp-scheme-spec-" (number->string (random 1000000000)) "-missing/none.txt"))
+      (for-each
+       (lambda (thunk) (write (fe-kind thunk)) (newline))
+       (list (lambda () (open-input-file fe-missing))
+             (lambda () (open-binary-input-file fe-missing))
+             (lambda () (open-output-file fe-missing))
+             (lambda () (open-binary-output-file fe-missing))
+             (lambda () (call-with-input-file fe-missing read))
+             (lambda () (with-input-from-file fe-missing read))
+             (lambda () (delete-file fe-missing))
+             (lambda () (read-char (open-output-string)))
+             (lambda () (raise 'not-a-file-error))))
+      (write (list (file-exists? fe-missing) (file-exists? "/tmp")))
+      (newline)
+      (write (guard (e ((file-error? e) (list (error-object-message e) (equal? (error-object-irritants e) (list fe-missing)))))
+               (open-input-file fe-missing)))
+      (newline)
+    expected: |
+      file-error
+      file-error
+      file-error
+      file-error
+      file-error
+      file-error
+      file-error
+      other-error
+      not-an-error-object
+      (#f #t)
+      ("open-input-file: cannot open file:" #t)
+  # (scheme char): the Unicode answers are the JDK's (the backends' char-upcase tables
+  # come from it), laid out by generated range tables so all four backends agree. The
+  # expected text is Gauche 0.9.15's, except where .kb/scheme-frontend.md, "(scheme
+  # char)", says Gauche departs from Unicode (marked below).
+  - name: char-library-classifies-and-converts-ascii
+    source: |
+      (write
+       (list (char-alphabetic? #\a) (char-alphabetic? #\1) (char-numeric? #\7)
+             (char-numeric? #\x) (char-whitespace? #\space) (char-whitespace? #\tab)
+             (char-whitespace? #\newline) (char-whitespace? #\a) (char-upper-case? #\A)
+             (char-upper-case? #\a) (char-lower-case? #\a) (char-lower-case? #\1)))
+      (newline)
+      (write
+       (list (digit-value #\7) (digit-value #\a) (char-upcase #\a) (char-downcase #\A)
+             (char-foldcase #\Q) (char-upcase #\1)))
+      (newline)
+      (write
+       (list (char-ci=? #\a #\A) (char-ci=? #\a #\A #\b) (char-ci<? #\a #\B #\c)
+             (char-ci>? #\c #\B) (char-ci<=? #\a #\A #\b) (char-ci>=? #\b #\B #\c)
+             (char-ci<? #\Z #\a) (char-ci<? #\_ #\a)))
+      (newline)
+      (write
+       (list (string-ci=? "Hello" "hELLO") (string-ci=? "a" "A" "b")
+             (string-ci<? "apple" "BANANA") (string-ci>? "b" "A") (string-ci<=? "a" "A" "b")
+             (string-ci>=? "b" "B" "a") (string-ci<? "_" "A")))
+      (newline)
+      (write
+       (list (string-upcase "Hello, World") (string-downcase "Hello, World")
+             (string-foldcase "Hello, World")))
+      (newline)
+      (if (char-upper-case? #\A) (display "fused") (display "not fused"))
+      (newline)
+    expected: |
+      (#t #f #t #f #t #t #t #f #t #f #t #f)
+      (7 #f #\A #\a #\q #\1)
+      (#t #f #t #t #t #f #f #t)
+      (#t #f #t #t #t #t #t)
+      ("HELLO, WORLD" "hello, world" "hello, world")
+      fused
+  - name: char-library-follows-unicode
+    source: |
+      (write
+       (list (char-alphabetic? (integer->char #x3BB)) (char-alphabetic? (integer->char #x3042))
+             (char-alphabetic? (integer->char #x2160)) (char-alphabetic? (integer->char #x345))
+             (char-numeric? (integer->char #x664)) (char-numeric? (integer->char #xFF11))
+             (char-numeric? (integer->char #x2155)) (digit-value (integer->char #x664))
+             (digit-value (integer->char #xFF11)) (digit-value (integer->char #x2155))
+             (digit-value (integer->char #x1D7CE))))
+      (newline)
+      (write
+       (list (char-whitespace? (integer->char #xA0)) (char-whitespace? (integer->char #x3000))
+             (char-whitespace? (integer->char #x2028)) (char-whitespace? (integer->char #x1C))
+             (char-whitespace? (integer->char #x200B))))
+      (newline)
+      (write
+       (list (char-upper-case? (integer->char #x1C5)) (char-lower-case? (integer->char #x1C5))
+             (char-lower-case? (integer->char #xAA)) (char-upper-case? (integer->char #x2160))
+             (char-lower-case? (integer->char #xDF)) (char-upper-case? (integer->char #x2102))
+             (char-upper-case? (integer->char #x1D400))))
+      (newline)
+      (write
+       (map char->integer
+            (list (char-upcase (integer->char #xDF)) (char-foldcase (integer->char #x3C2))
+                  (char-downcase (integer->char #x3C2)) (char-foldcase (integer->char #x1E9E))
+                  (char-foldcase (integer->char #x130)) (char-downcase (integer->char #x130))
+                  (char-foldcase (integer->char #x1C5)) (char-foldcase (integer->char #xB5))
+                  (char-upcase (integer->char #x1C5)) (char-foldcase (integer->char #x131)))))
+      (newline)
+      (write
+       (list (string-upcase "straße") (string-foldcase "Straße") (string-downcase "ΧΑΟΣ")
+             (string-downcase "ΧΑΟΣ Σ") (string-foldcase "ΧΑΟΣ") (string-upcase "ﬁx")
+             (string-downcase "İ") (string-downcase "AΣ.") (string-downcase "AΣ'S")))
+      (newline)
+      (write
+       (list (string-ci=? "Straße" "STRASSE") (char-ci=? (integer->char #x3C2) (integer->char #x3A3))
+             (string-ci<? "straße" "STRASSF") (string-ci=? "ΧΑΟΣ" "χαος")))
+      (newline)
+      ;; Unicode, not Gauche: U+0131 has no case folding and U+1E9E's full folding is
+      ;; "ss" (Gauche: "i̇i", "ß"); a Cherokee small letter folds to its capital
+      ;; (Gauche's tables predate Unicode 8: 43888).
+      (write
+       (list (string-foldcase "İı") (string-foldcase (string (integer->char #x1E9E)))
+             (char->integer (char-foldcase (integer->char #xAB70)))))
+      (newline)
+    expected: |
+      (#t #t #t #t #t #t #f 4 1 #f 0)
+      (#t #t #t #f #f)
+      (#f #f #t #t #t #t #t)
+      (223 963 962 223 304 105 454 956 452 305)
+      ("STRASSE" "strasse" "χαος" "χαος σ" "χαοσ" "FIX" "i̇" "aς." "aσ's")
+      (#t #t #t #t)
+      ("i̇ı" "ss" 5024)
+  - name: char-library-procedures-are-first-class-and-reach-eval
+    source: |
+      (write
+       (list (map char-upcase (string->list "abc")) (apply char-ci=? (list #\a #\A))
+             (apply string-ci<? '("a" "B" "c")) (map digit-value (string->list "0x9"))
+             (map string-foldcase '("A" "ß")) (char-whitespace? #\x)))
+      (newline)
+      (write
+       (eval '(list (string-upcase "eval") (char-ci=? #\e #\E) (digit-value #\5))
+             (environment '(scheme base) '(scheme char))))
+      (newline)
+    expected: |
+      ((#\A #\B #\C) #t #t (0 #f 9) ("a" "ss") #f)
+      ("EVAL" #t 5)
+  # R7RS 2.1: #!fold-case folds as string-foldcase does, in the file and on a port.
+  # Gauche folds only ASCII there: it reads (straße #\space ΧΑΟΣ).
+  - name: fold-case-directive-folds-as-string-foldcase
+    source: |
+      #!fold-case
+      (define Straße 1)
+      (write (list STRASSE strasse))
+      #!no-fold-case
+      (newline)
+      (write (read (open-input-string "#!fold-case (Straße #\\SPACE ΧΑΟΣ)")))
+      (newline)
+    expected: |
+      (1 1)
+      (strasse #\space χαοσ)
+  # R7RS 6.1 leaves eq? on numbers unspecified; here it is eqv? on every backend
+  # (.kb/eq-numbers.md), so a flonum is eq? to itself however it was stored.
+  - name: eq-on-numbers-is-eqv
+    source: |
+      (define eqn-n (length '(1 2)))
+      (define eqn-x (* 1.5 eqn-n))
+      (define eqn-pinf (- (log 0)))
+      (write (list (eq? eqn-x eqn-x) (eq? eqn-pinf eqn-pinf) (eq? (/ 1 eqn-n) (/ 1 eqn-n))
+                   (memq (* 1.5 eqn-n) (list 1 3.0)) (assq (/ 1 eqn-n) (list (cons 1/2 'half)))
+                   (eq? 2.0 2)))
+      (newline)
+    expected: |
+      (#t #t #t (3.0) (1/2 . half) #f)
+  # R7RS 4.2.1: the clause taken is decided while the program is lowered, against the
+  # features every backend shares. Gauche 0.9.15 lists its own features and answers
+  # (a other e) for the second line.
+  - name: cond-expand-takes-the-first-clause-whose-requirement-holds
+    source: |
+      (write (features))
+      (newline)
+      (write (list (cond-expand ((and) 'a))
+                   (cond-expand ((or gauche chibi) 'other) ((not rontolisp) 'unknown) (else 'rontolisp))
+                   (cond-expand ((and r7rs (not exact-complex)) 'e) (else 'x))))
+      (newline)
+      (define (sign n)
+        (cond-expand
+          ((library (scheme inexact)) (define magnitude (abs n)))
+          (else (define magnitude n)))
+        (if (= magnitude n) '+ '-))
+      (write (list (sign 2) (sign -2) `(q ,(cond-expand (ratios (/ 1 3))))))
+      (newline)
+    expected: |
+      (r7rs exact-closed exact-complex ieee-float full-unicode ratios rontolisp)
+      (a rontolisp x)
+      (+ - (q 1/3))
+# An uncaught application of a non-procedure ends the program, so these cannot
+# join the concatenated corpus above -- one program per case, per backend, like
+# ci-spec.yaml's standalone: list. The dynamic-wind puts the wasm
+# module in EH mode, where the report is printable at all.
+standalone:
+  - name: applying-false-reports-not-applicable
+    source: |
+      (dynamic-wind (lambda () #t)
+                    (lambda () ((if #t #f car) 1))
+                    (lambda () #t))
+    stdout: |
+    stderr: |
+      Unhandled condition: The object is not applicable: #f
+    fails: true
+  - name: applying-the-unspecified-object-reports-not-applicable
+    source: |
+      (define standalone-unspecified (if #f #f))
+      (dynamic-wind (lambda () #t)
+                    (lambda () ((if #t standalone-unspecified car) 1))
+                    (lambda () #t))
+    stdout: |
+    stderr: |
+      Unhandled condition: The object is not applicable: #!unspecific
+    fails: true
+  - name: applying-a-number-reports-not-applicable
+    source: |
+      (define standalone-number 3)
+      (dynamic-wind (lambda () #t)
+                    (lambda () (standalone-number 1))
+                    (lambda () #t))
+    stdout: |
+    stderr: |
+      Unhandled condition: The object is not applicable: 3
+    fails: true
+  # An uncaught raise reports its object as write spells it; an uncaught error its
+  # message and irritants. A guard no clause of which is taken raises again after its
+  # body is unwound, so a handler's value cannot resume a raise-continuable there (Gauche
+  # prints 11): the stated deviation, a secondary error.
+  - name: an-uncaught-raise-reports-the-object
+    source: |
+      (dynamic-wind (lambda () #t) (lambda () (raise (list 1 "a" 'b))) (lambda () #t))
+    stdout: |
+    stderr: |
+      Unhandled condition: (1 "a" b)
+    fails: true
+  - name: an-uncaught-error-reports-its-message-and-irritants
+    source: |
+      (dynamic-wind (lambda () #t) (lambda () (error "bad thing" 1 "two" 'three)) (lambda () #t))
+    stdout: |
+    stderr: |
+      Unhandled condition: bad thing 1 "two" three
+    fails: true
+  - name: a-guard-reraise-cannot-resume-a-raise-continuable
+    source: |
+      (display (with-exception-handler (lambda (e) 10)
+                 (lambda () (guard (e ((string? e) 's)) (+ 1 (raise-continuable 'y))))))
+    stdout: |
+    stderr: |
+      Unhandled condition: handler returned from non-continuable exception: y
+    fails: true
+  # A parameter object takes no argument (Gauche's sets the value: R7RS leaves it an
+  # error), and parameterize refuses what is not a parameter object by name.
+  - name: a-parameter-object-takes-no-argument
+    source: |
+      (define standalone-parameter (make-parameter 1))
+      (dynamic-wind (lambda () #t) (lambda () (standalone-parameter 5)) (lambda () #t))
+    stdout: |
+    stderr: |
+      Unhandled condition: a parameter object takes no argument: 5
+    fails: true
+  - name: parameterize-refuses-what-is-not-a-parameter-object
+    source: |
+      (dynamic-wind (lambda () #t) (lambda () (parameterize ((5 1)) 'body)) (lambda () #t))
+    stdout: |
+    stderr: |
+      Unhandled condition: parameterize: not a parameter object: 5
+    fails: true
+  # A count no case-lambda clause accepts, uncaught.
+  - name: case-lambda-with-no-matching-clause-is-an-error
+    source: |
+      (define standalone-cl (case-lambda ((x) x) ((x y z) z)))
+      (dynamic-wind (lambda () #t) (lambda () (display (standalone-cl 1)) (newline) (standalone-cl 1 2)) (lambda () #t))
+    stdout: |
+      1
+    stderr: |
+      Unhandled condition: wrong number of arguments to case-lambda: (1 2)
+    fails: true
+  # --scheme-standard: a valid R7RS program means the same under both standards, and
+  # strict R7RS keeps the sicp/r5rs names out of eval's reach too. command-line is the
+  # program's name, then its arguments, and the environment procedures answer a string
+  # or #f and a (name . value) alist (gosh -r7 0.9.15).
+  - name: a-valid-r7rs-program-prints-the-same-under-both-standards
+    standards: [rontolisp, r7rs]
+    arguments: [alpha, "two words", ""]
+    environment: { M09_A: alpha, M09_EMPTY: "", M09_EQ: "a=b=c", M09_SPACE: "two words" }
+    source: |
+      (import (scheme base) (scheme write) (scheme eval) (scheme cxr) (scheme process-context))
+      (define-record-type point (make-point x y) point? (x point-x) (y point-y set-point-y!))
+      (define (norm1 p) (+ (abs (point-x p)) (abs (point-y p))))
+      (define p (make-point 3 -4))
+      (set-point-y! p -5)
+      (define-values (q r) (values (floor-quotient 17 5) (floor-remainder 17 5)))
+      (let loop ((i 0) (acc '()))
+        (if (< i 3) (loop (+ i 1) (cons (square i) acc))
+            (begin (write (reverse acc)) (newline))))
+      (write (list (norm1 p) (point? p) q r (caddr '(1 2 3)) (exact (floor 2.5))))
+      (newline)
+      (write (eval '(let ((x 2)) (* x (+ x 1))) (environment '(scheme base))))
+      (newline)
+      (write (eof-object? (eof-object)))
+      (newline)
+      (write (list (bytevector 1 2) (utf8->string (string->utf8 "ok")) (vector? #u8())))
+      (newline)
+      (write (list (cdr (command-line)) (string? (car (command-line)))))
+      (newline)
+      (define names '("M09_A" "M09_EMPTY" "M09_EQ" "M09_SPACE" "M09_NOPE"))
+      (write (map get-environment-variable names))
+      (newline)
+      (write (map (lambda (n) (assoc n (get-environment-variables))) names))
+      (newline)
+      (write (let loop ((l (get-environment-variables)))
+               (or (null? l)
+                   (and (string? (caar l)) (string? (cdar l)) (loop (cdr l))))))
+      (newline)
+    stdout: |
+      (0 1 4)
+      (8 #t 3 2 3 2)
+      6
+      #t
+      (#u8(1 2) "ok" #f)
+      (("alpha" "two words" "") #t)
+      ("alpha" "" "a=b=c" "two words" #f)
+      (("M09_A" . "alpha") ("M09_EMPTY" . "") ("M09_EQ" . "a=b=c") ("M09_SPACE" . "two words") #f)
+      #t
+  - name: strict-r7rs-imports-case-lambda-from-its-own-library
+    standards: [rontolisp, r7rs]
+    source: |
+      (import (scheme base) (scheme write) (only (scheme case-lambda) case-lambda))
+      (define area (case-lambda ((r) (* 3 r r)) ((w h) (* w h))))
+      (write (list (area 2) (area 2 5)))
+      (newline)
+    stdout: |
+      (12 10)
+  - name: strict-r7rs-imports-scheme-char
+    standards: [rontolisp, r7rs]
+    source: |
+      (import (scheme base) (scheme write) (prefix (scheme char) c:))
+      (write (list (c:char-upcase #\a) (c:string-foldcase "ABC") (c:char-ci=? #\a #\A)))
+      (newline)
+    stdout: |
+      (#\A "abc" #t)
+  - name: strict-r7rs-eval-reaches-no-sicp-procedure
+    standards: [r7rs]
+    source: |
+      (import (scheme base) (scheme write) (scheme eval))
+      (display (eval '(+ 1 2) (environment '(scheme base))))
+      (newline)
+      (display (eval '(1+ 1) (environment '(scheme base))))
+    stdout: |
+      3
+    stderr: |
+      Unhandled condition: Unbound variable: |1+|
+    fails: true
+  - name: strict-r7rs-eval-knows-no-sicp-keyword
+    standards: [r7rs]
+    source: |
+      (import (scheme base) (scheme write) (scheme eval))
+      (display (car (eval '(cons-stream 1 2) (environment '(scheme base)))))
+    stdout: |
+    stderr: |
+      Unhandled condition: Unbound variable: cons-stream
+    fails: true
+  # An argument R7RS makes an error is refused by name on every backend.
+  - name: odd-of-a-non-integer-is-an-error
+    source: |
+      (dynamic-wind (lambda () #t)
+                    (lambda () (display (odd? 3.0)) (newline) (odd? 1.5))
+                    (lambda () #t))
+    stdout: |
+      #t
+    stderr: |
+      Unhandled condition: odd?: not an integer: 1.5
+    fails: true
+  - name: string-of-a-non-character-is-an-error
+    source: |
+      (dynamic-wind (lambda () #t)
+                    (lambda () (display (string #\a)) (newline) (string #\a 1))
+                    (lambda () #t))
+    stdout: |
+      a
+    stderr: |
+      Unhandled condition: string: not a character: 1
+    fails: true
+  # A bytevector element is a byte: a constructor or a store of anything else is refused
+  # by name (the underlying pack would mask it silently).
+  - name: bytevector-of-a-non-byte-is-an-error
+    source: |
+      (dynamic-wind (lambda () #t)
+                    (lambda () (write (bytevector 0 255)) (newline) (bytevector 1 256))
+                    (lambda () #t))
+    stdout: |
+      #u8(0 255)
+    stderr: |
+      Unhandled condition: bytevector: not a byte: 256
+    fails: true
+  - name: bytevector-u8-set-of-a-non-byte-is-an-error
+    source: |
+      (define standalone-bv (make-bytevector 1 0))
+      (dynamic-wind (lambda () #t)
+                    (lambda () (bytevector-u8-set! standalone-bv 0 -1))
+                    (lambda () #t))
+    stdout: |
+    stderr: |
+      Unhandled condition: bytevector-u8-set!: not a byte: -1
+    fails: true
+  # A program that uses no port procedure keeps the reader's one stream-keyed pushback
+  # cell (SchemeLibrary.PORTS_FEATURE); the corpus above uses ports, so this is where the
+  # other variant of the reader runs on the compiled backends.
+  - name: the-reader-without-ports-reads-standard-input
+    stdin: |
+      #!fold-case (ABC #\SPACE #u8(1 2)) ab
+      rest of line
+      last
+    source: |
+      (write (list (peek-char) (read) (read-char) (peek-char) (read-char) (read-line)))
+      (newline)
+      (write (list (read-line) (read-char) (read-line) (eof-object? (read))))
+      (newline)
+    stdout: |
+      (#\# (abc #\space #u8(1 2)) #\space #\a #\a "b")
+      ("rest of line" #\l "ast" #t)
+  - name: writing-to-a-closed-port-is-an-error
+    source: |
+      (define standalone-port (open-output-string))
+      (close-port standalone-port)
+      (dynamic-wind (lambda () #t)
+                    (lambda () (display "open: ") (write (output-port-open? standalone-port)) (newline)
+                               (write 1 standalone-port))
+                    (lambda () #t))
+    stdout: |
+      open: #f
+    stderr: |
+      Unhandled condition: write: the port is closed: #<textual-output-port>
+    fails: true
+  # A library stands before the program that imports it (Gauche -r7 accepts it there), so
+  # these cannot join the concatenated corpus: its leading forms are the program's own.
+  # Expected output Gauche 0.9.15's (gosh -r7 -I.).
+  - name: libraries-in-the-program-file-keep-their-names-private
+    standards: [rontolisp, r7rs]
+    source: |
+      (define-library (stack)
+        (export make-stack stack? push! pop! (rename size stack-size) pushes)
+        (import (scheme base))
+        (begin
+          (define-record-type stack (new-stack items) stack? (items items set-items!))
+          (define pushes 0)
+          (define (make-stack) (new-stack '()))
+          (define (size s) (length (items s)))
+          (define (push! s x) (set! pushes (+ pushes 1)) (set-items! s (cons x (items s))))
+          (define (pop! s) (let ((x (car (items s)))) (set-items! s (cdr (items s))) x))))
+      (define-library (stack util)
+        (export push-all! drain)
+        (import (scheme base) (stack))
+        (begin
+          (define (push-all! s xs) (for-each (lambda (x) (push! s x)) xs))
+          (define (drain s) (if (= (stack-size s) 0) '() (let ((x (pop! s))) (cons x (drain s)))))))
+      (import (scheme base) (scheme write) (stack) (only (stack util) push-all! drain))
+      (define (size x) 'mine)
+      (define s (make-stack))
+      (push-all! s '(1 2 3))
+      (write (list (stack-size s) (size s) pushes (stack? s) (stack? 5)))
+      (newline)
+      (write (map stack? (list s 's)))
+      (newline)
+      (write (drain s))
+      (newline)
+      (write (list (stack-size s) pushes))
+      (newline)
+    stdout: |
+      (3 mine 3 #t #f)
+      (#t #f)
+      (3 2 1)
+      (0 3)
+  # A library's case-lambda export: the importer's direct calls pick the clauses.
+  - name: a-library-exports-a-case-lambda-called-directly
+    standards: [rontolisp, r7rs]
+    source: |
+      (define-library (range)
+        (export range)
+        (import (scheme base) (scheme case-lambda))
+        (begin
+          (define range
+            (case-lambda
+              ((e) (range 0 e))
+              ((b e) (range b e 1))
+              ((b e s) (if (>= b e) '() (cons b (range (+ b s) e s))))))))
+      (import (scheme base) (scheme write) (range))
+      (write (list (range 3) (range 2 4) (range 0 6 2) (apply range '(1 3)) (map range '(1 2))))
+      (newline)
+    stdout: |
+      ((0 1 2) (2 3) (0 2 4) (1 2) ((0) (0 1)))
+  # A library found as a .sld file beside the program, its body included from another
+  # file, its declarations from a third; one library two others import runs once.
+  - name: libraries-and-includes-read-from-files
+    standards: [rontolisp, r7rs]
+    files:
+      shapes/area.sld: |
+        (define-library (shapes area)
+          (export area describe)
+          (import (scheme base) (scheme write) (shapes common))
+          (include "area-body.scm"))
+      shapes/area-body.scm: |
+        (define (area shape)
+          (case (car shape)
+            ((square) (sq (cadr shape)))
+            ((rect) (* (cadr shape) (cadr (cdr shape))))
+            (else 0)))
+        (define (describe shape)
+          (display (car shape))
+          (display ": ")
+          (display (area shape))
+          (newline))
+      shapes/common.sld: |
+        (define-library (shapes common)
+          (export sq)
+          (import (scheme base) (scheme write))
+          (include-library-declarations "common-decls.scm")
+          (begin (display "common instantiated") (newline)))
+      shapes/common-decls.scm: |
+        (include-ci "common-body.scm")
+      shapes/common-body.scm: |
+        (DEFINE (SQ X) (* X X))
+      shapes-list.scm: |
+        (define shapes '((square 3) (rect 2 5) (circle 1)))
+    source: |
+      (import (scheme base) (scheme write) (prefix (shapes area) a:) (shapes common))
+      (include "shapes-list.scm")
+      (for-each a:describe shapes)
+      (write (list (sq 4) (map a:area shapes)))
+      (newline)
+    stdout: |
+      common instantiated
+      square: 9
+      rect: 10
+      circle: 0
+      (16 (9 10 0))
+  # A library exports syntax: a template's free names are the library's (a private
+  # helper called directly, a private variable assigned), its binders capture nothing the
+  # importer wrote, and except/rename/only/prefix select macros; a library in the program
+  # file exports a macro whose template uses a macro it imports.
+  - name: a-library-exports-syntax-hygienically
+    standards: [rontolisp, r7rs]
+    files:
+      tools/counter.sld: |
+        (define-library (tools counter)
+          (export inc! current swap! my-or define-counter (rename with-reset reset-and))
+          (import (scheme base))
+          (begin
+            (define count 0)
+            (define (bump n) (set! count (+ count n)) count)
+            (define (current) count)
+            (define-syntax inc!
+              (syntax-rules ()
+                ((_) (bump 1))
+                ((_ n) (bump n))))
+            (define-syntax swap!
+              (syntax-rules ()
+                ((_ a b) (let ((tmp a)) (set! a b) (set! b tmp)))))
+            (define-syntax my-or
+              (syntax-rules ()
+                ((_) #f)
+                ((_ e) e)
+                ((_ e r ...) (let ((t e)) (if t t (my-or r ...))))))
+            (define-syntax define-counter
+              (syntax-rules ()
+                ((_ name) (define name (let ((n 0)) (lambda () (set! n (+ n 1)) (inc!) n))))))
+            (define-syntax with-reset
+              (syntax-rules ()
+                ((_ body ...) (begin (set! count 100) body ... count))))))
+    source: |
+      (define-library (tools twice)
+        (export twice)
+        (import (scheme base) (only (tools counter) inc!))
+        (begin
+          (define (helper x) (* x 2))
+          (define-syntax twice
+            (syntax-rules ()
+              ((_ e) (begin (inc!) (helper e)))))))
+      (import (scheme base) (scheme write)
+              (except (tools counter) current)
+              (rename (only (tools counter) current) (current counter-value))
+              (prefix (tools twice) t:))
+      (define (bump n) 'mine)
+      (define (helper x) 'mine)
+      (define tmp 1)
+      (define y 2)
+      (swap! tmp y)
+      (define t 5)
+      (define-counter tick)
+      (tick)
+      (inc! 5)
+      (write (list tmp y (my-or #f t) (my-or) (my-or #f #f 7) (bump 1) (helper 1)))
+      (newline)
+      (write (list (tick) (t:twice 21) (counter-value)))
+      (newline)
+      (write (let ((if list)) (my-or #f 3)))
+      (newline)
+      (write (reset-and (inc! 2)))
+      (newline)
+    stdout: |
+      (2 1 5 #f 7 mine mine)
+      (2 42 8)
+      3
+      102
+  # cond-expand around the import declarations, in a body, as a library declaration and
+  # in a macro template; (library ...) of a standard library and of a library file.
+  # Gauche 0.9.15 (gosh -r7 -I.) prints the same, but `other` for the second line.
+  - name: cond-expand-at-the-top-level-in-a-body-in-a-library-and-in-a-template
+    standards: [rontolisp, r7rs]
+    files:
+      tools/greeting.sld: |
+        (define-library (tools greeting)
+          (export greet)
+          (cond-expand
+            (r7rs (import (scheme base) (scheme write)))
+            (else (import (scheme base))))
+          (cond-expand
+            ((library (scheme char))
+             (import (scheme char))
+             (begin (define (shout s) (string-upcase s))))
+            (else
+             (begin (define (shout s) s))))
+          (begin
+            (define (greet who)
+              (display (string-append "hello, " (shout who)))
+              (newline))))
+    source: |
+      (import (scheme base))
+      (cond-expand
+        ((and r7rs (library (scheme write)))
+         (import (scheme write) (scheme eval) (tools greeting)))
+        (else (import (scheme char))))
+      (define-syntax when-ratios
+        (syntax-rules ()
+          ((_ body ...) (cond-expand (ratios body ...) (else 'no-ratios)))))
+      (define (half n)
+        (cond-expand
+          (exact-closed (define result (/ n 2)))
+          (else (define result (inexact (/ n 2)))))
+        result)
+      (write (list (half 3) (when-ratios (/ 1 3)) (cond-expand ((not ieee-float) 'no) (else 2.5))))
+      (newline)
+      (write (cond-expand ((or gauche chibi) 'other) ((not rontolisp) 'unknown) (else 'rontolisp)))
+      (newline)
+      (write (and (memq 'r7rs (features)) (memq 'full-unicode (features)) #t))
+      (newline)
+      (greet "cond-expand")
+      (write (eval '(cond-expand ((library (scheme base)) 'yes) (else 'no)) (environment '(scheme base))))
+      (newline)
+      (write (cond-expand ((library (tools missing)) 'found) (else 'missing)))
+      (newline)
+    stdout: |
+      (3/2 1/3 2.5)
+      rontolisp
+      #t
+      hello, COND-EXPAND
+      yes
+      missing
+  # (scheme load): the file's forms run in the global environment, in order, and its
+  # definitions are the loader's. The compiled legs inline the literal load at compile
+  # time, the file read as Scheme (the per-file language, like every loaded file); the
+  # interpreter leg loads it at run time -- one case, both paths. Under r7rs the loaded
+  # file obeys the same begins-with-import rule as every other file.
+  - name: a-loaded-file-defines-for-the-loader-in-its-order
+    standards: [rontolisp, r7rs]
+    files:
+      loaded.scm: |
+        (import (scheme base) (scheme write) (scheme load))
+        (define loaded-x 41)
+        (define (loaded-twice n) (* n 2))
+        (display "loaded first") (newline)
+    source: |
+      (import (scheme base) (scheme write) (scheme load))
+      (display "before") (newline)
+      (load "loaded.scm")
+      (write (loaded-twice loaded-x)) (newline)
+      (load "loaded.scm")
+      (write loaded-x) (newline)
+    stdout: |
+      before
+      loaded first
+      82
+      loaded first
+      41

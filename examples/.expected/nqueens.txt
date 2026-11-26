@@ -1,0 +1,10 @@
+Solving 6-Queens...
+Total solutions: 4
+
+First solution found:
+. Q . . . . 
+. . . Q . . 
+. . . . . Q 
+Q . . . . . 
+. . Q . . . 
+. . . . Q . 

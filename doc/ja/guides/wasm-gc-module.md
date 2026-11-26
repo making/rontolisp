@@ -1,0 +1,178 @@
+# wasm-GC コアモジュール(デフォルト出力)
+
+デフォルトの出力 — `-o file.wasm` 以外のフラグなし — は、wasm-GC 値モデル上の **WASI Preview 1 コアモジュール**です:
+
+- **wasm-GC** — 整数は `i31ref` として表現されます (fixnum 範囲を超える値は符号付き 64 ビット構造体に、それも超える値はリム表現の多倍長整数にボックス化され、算術は任意の大きさで正確です)。浮動小数点数は `float_struct { f64 }` にボックス化されます。スタック上のすべての値は `(ref eq)` として型付けされます。これが言語全機能(cons セル、シンボル、クロージャ、ハッシュテーブル、`eval` など)を支えるものであり、モジュールが wasmtime 14+、Node 22+、現行ブラウザといった wasm-GC 対応ランタイムを必要とする理由です。
+- **WASI Preview 1** — モジュールは 8 つの `wasi_snapshot_preview1` 関数(標準出力の `fd_write`、`random_get`、クロック、環境変数など)をインポートし、`_start` エントリポイントを公開するため、`wasmtime run` はプログラムのトップレベルをコマンドのように実行します。
+
+```bash
+echo '(print (+ 1 2))' > hello.lisp
+rontolisp hello.lisp -o hello.wasm
+wasmtime run hello.wasm
+# 3
+```
+
+エクスポートされた関数は**生のコア関数**です: スカラー(`:int`/`:float`/`:bool`)は素の数値として境界を渡るため、`wasmtime --invoke` や `instance.exports.fact(5)` が直接使えます。メモリ経由の `:string` と `:s-expr` はモジュールのエクスポートする `memory` を通じて `(ptr, len)` ペアを渡し、ホストが引数バイト列を書き込むための `__ronto_alloc(size)` バンプアロケータも併せてエクスポートされます — このプロトコルはメモリを読み書きできるホスト(JavaScript であって `wasmtime --invoke` ではない)を必要とし、[ブラウザガイドの「リアクターモジュールを手書きで呼ぶ」節](wasm-browser.md#reactor-modules-by-hand)で端から端まで解説します。モジュールのインスタンス化には依然として 8 つの WASI インポートを満たす必要があります。`wasmtime run` は自動で提供し、ブラウザホストは純粋計算関数に対して no-op スタブを供給できます。あるいは [`--no-wasi`](#no-wasi-reactor-mode) で丸ごと取り除けます。
+
+この形状での `wasm-export` の全体像(運ばれる型、`:as` による改名、アリティ一致、void 戻り値)は、[ホスト境界ガイド](wasm-host-boundary.md)を参照してください。
+
+## 値モデルの動作上の注意
+
+wasm-GC 値モデルに関する 2 つの動作上の注意:
+
+- **パラメータ数の上限。** 関数(`defun` または `lambda`)は最大 **10 個のパラメータ**しか取れません(インタプリタと JVM バックエンドにこの制限はありません)。上限を超えた固定アリティの `defun` は、引数を 1 つの `&rest` リストで受け取り個数を自身で検査する形に自動で書き換えられます — そのため幅広いライブラリシグネチャもそのままコンパイルされ、関数は通常の値として扱えます: `#'name`、`funcall`、`apply`、`eval` のいずれからも呼び出せ、引数の個数の誤りはインタプリタと同じ `program-error` を通知します。上限を超えた `lambda`、`flet`/`labels` の局所関数、入れ子の `defun` も同じ形に書き換えられるため、`funcall`、`apply`、局所呼び出しのいずれからも呼び出せます。上限を超えた可変長関数は依然としてエラーになります — その場合は自分で引数をリストにまとめてください。可変長関数の rest リストは 1 パラメータと数えられるため、`&rest` 関数は最大 9 つの必須パラメータを宣言でき、任意個の引数を受け取れます。
+- **浮動小数点数の印字。** 浮動小数点数はすべてのバックエンドでバイト単位に同一のテキストで印字されます: 同じ値に読み戻せる最短の 10 進表現です(`(print 1.21)` は `1.21`、`(print (* 1.5 (expt 10.0 12)))` は `1.5e12`)。`Infinity`、`-Infinity`、`NaN` はその語で印字されます。`rontolisp:json-stringify` も同じテキストになります。
+
+## ホストのバッファの回収(アリーナ API)
+
+Lisp 側が確保するもの — コンスセル、クロージャ、文字列 — はすべてエンジンが回収するため、wasm-GC モジュールの*内側*にメモリ規律は不要です。エンジンから見えない唯一のものが、**ホスト**が引数のバイト列を書き込んだバッファです: それはリニアメモリであり、エンジンが決してトレースしない不透明なバイト配列で、決して解放しないバンプアロケータ `__ronto_alloc` から配られます。したがって、呼び出しごとに新しい入力バッファを確保する常駐ホストは、リニアメモリを際限なく成長させます。
+
+そこで、`memory` をエクスポートするモジュールは、同じヒープポインタ上の対の関数もエクスポートします:
+
+| export | signature | meaning |
+| --- | --- | --- |
+| `__ronto_alloc_mark` | `() -> i32` | snapshot the current bump-heap top |
+| `__ronto_alloc_reset` | `(i32 mark) -> ()` | restore the top to a saved mark |
+
+入力を確保する**前**にスナップショットを取り、結果を読み出した**後**に復元すれば、何回呼び出しても、各入力がどれだけ長くても、常駐インスタンスは平坦なままです:
+
+```js
+const countVowels = (s) => {
+  const b = enc.encode(s);
+  const mark = ex.__ronto_alloc_mark();          // snapshot BEFORE allocating
+  const ptr = ex.__ronto_alloc(b.length);        // a fresh buffer, any length
+  new Uint8Array(ex.memory.buffer, ptr, b.length).set(b);
+  const n = ex['count-vowels'](ptr, b.length);   // scalar result, read out here
+  ex.__ronto_alloc_reset(mark);                  // pop the input buffer
+  return n;
+};
+```
+
+アリーナ一般と同じく、ルールは 2 つです:
+
+- まだ生きているすべてのものより**前**に取ったマークにだけリセットしてください。
+- `:string` を**返す**エクスポートは結果のバイト列をメモリに残します: **リセットする前にデコードしてください**。さもないと次の確保がそれを上書きします。
+
+バックエンド固有のガードが 1 つあります: GC バックエンドでは同じヒープポインタがインターン済みシンボルのバイトプールも保持している(シンボルの同一性がそこでのオフセット*そのもの*)ため、`__ronto_alloc_reset` はそのプールの高水位より下へはポップしません。したがって新しいシンボルをインターンする呼び出し(`read`、`intern`、`gensym`)は入力バッファを保持し、それ以外の呼び出しは最後までポップします。ホスト側ですることはありません。
+
+このブラケットは、[`count-vowels` の例](https://github.com/making/rontolisp/tree/develop/examples/count-vowels)が `--no-gc` について Node と [Endive](https://endive.run)(Java)で示しているものと同一です — 境界のプロトコルはバックエンドで変わらず、変わるのは関数の中に何を書けるかだけです。[`--component`](wasm-component.md) ではアリーナ API はなく、囲むものもありません: 正準 ABI の `post-return` が引数の文字列を解放してくれます。
+
+## No-WASI(リアクター)モード
+
+`--no-wasi` を追加すると、WASI 関数を**一切**インポートしない Preview 1 モジュールが出力され、ホストはインポートオブジェクトなしでインスタンス化できます — エクスポートされた Lisp 関数だけを表面とする「リアクター」/ライブラリモジュールです:
+
+```bash
+rontolisp fact.lisp --no-wasi -o fact.wasm
+wasmtime run --invoke fact fact.wasm 5      # => 120
+```
+
+リアクターは JavaScript からも同様に簡単に駆動できます: **インポートオブジェクトがない**ため、ホスト側は「インスタンス化してからエクスポートを呼び出す」だけです(`WebAssembly.instantiate(bytes).then(({ instance }) => instance.exports.fact(5))`)。コピー＆ペーストして実行できる完全な Node + ブラウザの例は、[ブラウザガイドのリアクターモジュールの節](wasm-browser.md#reactor-modules-by-hand)にあります。
+
+WASI インポートスロットは内部のスタブで埋められるため、すべての関数インデックスは固定のままです(他のコード生成に変更はありません)。それらのスタブの振る舞いは 1 つのルールに従います: **答えがそのモジュールにとって真であるときスタブは答え、答えることが「本物と区別できない値の捏造」になるときは拒否する。** ただし**ホストが渡してきた値は捏造ではなく**、時計と乱数はそれで供給されます。リアクターには実際に出力先も環境変数もファイルも存在しないので、それらには答えます。一方、入力のバイトはリアクターだからといって真になるわけではないので、そちらには答えません。
+
+| プログラムがすること | `--no-wasi` での結果 |
+| --- | --- |
+| `print`、`format t`、`*error-output*` への書き込み | **破棄**(シンク)。呼び出しは正常に返る。`--host-output` ならホストへ渡す |
+| `(uiop:getenv "X")` | `nil` — 環境変数は空 |
+| `probe-file`、`directory`、`load` | 何も見つからない(`nil`、または捕捉可能なエラー) |
+| `with-open-file`、`open` | WASI を名指しする**捕捉可能なエラーをシグナル** |
+| `(random n)`、`(random 1.0)` | 動く — どのビルドも使う同じ組み込み生成器。ここではホストがシードしない限り(`__ronto_seed_random`、または `--host-random`)シードなしで動きます |
+| `rontolisp:random-bytes` | `--host-random` で本物のエントロピーを供給しない限り**シグナル** |
+| `rontolisp:fetch` | `--host-fetch` でホスト自身の HTTP クライアントへ経路付けしない限り**コンパイルエラー** |
+| `rontolisp:tcp-connect` などのソケット関数 | `--host-sockets` でホストのソケットへ経路付けしない限り**シグナル** |
+| `get-universal-time` などの時計 | ホストが `__ronto_set_time` で設定した時刻。設定されるまでは**シグナル** |
+| `(sleep n)` | **シグナル** — ここでは時間を経過させる手段がない。`--host-timer` ならホストのタイマーで待つ |
+| `read`、`read-line`、`read-char`(標準入力) | **トラップ** |
+
+シグナルするものはすべて呼び出し時に signal するので、`ignore-errors` や `handler-case` で囲めばそのまま動き、ファイル読み込みや時計参照の分岐がデッドコードであるライブラリはコンパイル・実行できます。トラップするのは標準入力だけで、トラップは捕捉できません — `--no-wasi` モジュールが報告ではなく死ぬのはここだけです。
+
+出力がシンクであることは、ロード時にログを出すライブラリをリアクターに quickload できる理由そのものです — 代替案はログ 1 行のためにインスタンスを落とすことでした。テキストが必要なら、エクスポートの戻り値として返すか、[`--host-output`](#output-to-the-host---host-output) でビルドしてください。
+
+同じ理由で、エラーのメッセージはプログラムが読まない限りどこからも読まれません。ハンドラがコンディションを見ないリアクター — `(handler-case (parse x) (error () 0))` — はどのエラーのメッセージも作らず、そのためのプリンタも持ちません。コンディションを使うハンドラ `(error (c) (princ-to-string c))` を書くと、モジュールがシグナルするどのエラーも手にできるので、どちらも戻ります。
+
+選択の余地があるサービスは時計と乱数の 2 つです。どちらもモジュールが自分では作れない値だからです。コアモジュールはそれぞれにフックを 1
+つずつエクスポートします — `__ronto_set_time`(Unix エポックからのナノ秒)と `__ronto_seed_random` —
+これらを **`_initialize` の前に**呼ぶことが、ロード中にタイムスタンプを取ったり draw
+したりするライブラリをそもそもロード可能にします(`--optimize` では、各フックはプログラムがそれを使えるモジュールにだけ現れます)。また
+`--host-random` は生成器をホストのインポートからシードします。シードを与えなければ生成器は同じ列を繰り返し、時刻を設定しなければ時計は
+1970 年を報告するのではなくシグナルし、次に書き込むまで書き込んだ値を保持します(そのため `(sleep n)`
+はここではシグナルします — 時間を経過させる手段がありません。[`--host-timer`](#waits-in-the-host---host-timer)
+ならホストが待ちます)。**リアクターコンポーネント**にはどちらのフックもありません:
+トップレベルがインスタンス化時に走るので、ホストが先回りできる隙間が存在しないためです。JavaScript
+を含む全体は[時計と乱数のガイド](clock-and-random.md)にあります。
+
+`--component` と組み合わせると、同じ契約が**リアクターコンポーネント**を生成します — 何もインポートせず、トップレベルフォームをインスタンス化時に実行するコンポーネントです。[コンポーネントガイド](wasm-component.md#reactor-components---component---no-wasi)を参照してください。
+
+**外向き HTTP** も時計・乱数と同じ形です: ホストにしか生成できない値。`--host-fetch` は [`rontolisp:fetch`](../reference/functions/rontolisp-fetch.md) を注入される 2 つのホストインポート — リクエストとレスポンスのヘッドを運ぶ `env.fetch(request-json) -> response-head-json` と、ボディをモジュールが渡すバッファへ 1 チャンクずつ引き込む `env.readResponseBody(ptr, cap) -> i32` — へ経路付けします。オプションも `(:status :headers :body)` の答えも他のバックエンドと同一で、`:body` も同じ非同期ストリームです。JavaScript ホストは自身の `fetch()` を `WebAssembly.Suspending` (JSPI — promise が確定するまで wasm スタック全体が停止するため、Lisp 側は普通の同期的な `(await (fetch ...))` のまま) の背後で実装し、その場合はすべてのエクスポートを `WebAssembly.promising` 経由で呼び、呼び出しを直列化しなければなりません([`--reentrant`](wasm-host-boundary.md#overlapping-calls---reentrant) でコンパイルすればオーバーラップできます) — 再入されたエクスポートは両方の呼び出しを壊す代わりにトラップで拒否します。同期ホスト (JSPI のない node、テストスタブ) はそのまま答えれば済みます。ビルドはこの義務をそのまま出力します。実例は [`examples/cloudflare-workers/dog-fetcher`](https://github.com/making/rontolisp/tree/develop/examples/cloudflare-workers/dog-fetcher) です。
+
+`--no-wasi` コンパイルはソースを `:rontolisp-reactor` フィーチャー有効で読みます。`clack:clackup ... :server :rontolisp` のプログラムがここで **serve する**リアクターになるのはこの仕組みです: ハンドラバックエンドがアプリケーションを保存し、コンパイラがホストがリクエストごとに呼ぶ `handle-request` エクスポートを合成します — [Clack ガイド](clack.md)の「ホストから呼ばれる場合」を参照してください。素の [`rontolisp:http-handler`](../reference/functions/rontolisp-http-handler.md) ディレクティブも同じトランスポートに下ろされます (リアクターはソケットを持たないため、「このハンドラで serve する」はホスト駆動のエンベロープしか意味し得ません)。つまり 1 つの `http-handler` ソースが、インタプリタ／JVM ではソケットを、`--component` では `wasi:http` を、ここでは `handle-request` エクスポートを serve します。
+
+モジュールはリアクター(WASI コマンドではない)なので、トップレベルの初期化子は `_start` ではなく **`_initialize`** としてエクスポートされます。ホストはインスタンス化後に一度 `_initialize` を呼んでトップレベルフォーム(エクスポートされた関数が読む `defvar`/`defparameter`/`setq` のグローバル)を実行すべきです。トップレベル状態を持たない純粋計算リアクターは省略できます。
+
+### ホストへの出力(`--host-output`)
+
+`--host-output` は標準出力と標準エラーを 1 つのホストインポート `env.fd_write(fd, iovs, iovs_len, nwritten) -> errno` へ経路付けします。シグネチャは preview1 のものそのままなので、WASI 実装を持つホストはその関数をそのまま渡せます。記述子 1 が標準出力、2 が標準エラーです。書き込まないモジュールは今まで通り何もインポートしません。このフラグがあるとリアクターはトップレベルから漏れたものをトラップの前に報告します(Preview 1 モジュールと同じ)。フラグがなければホストに見えるのは `RuntimeError: unreachable` だけです。
+
+`--emit-js-glue` はこのインポートを実装します: 標準出力を `console.log` へ、標準エラーを `console.error` へ、1 行ずつ。つまり Worker のログです。モジュールがまだ終えていない行は制御がホストへ戻った時点で表示されるので、トラップする前に書いたものも失われません。
+
+```bash
+rontolisp app.lisp --no-wasi --host-output --emit-js-glue -o app.wasm
+```
+
+このフラグは `--no-wasi` を必要とし、`--component`(リアクターコンポーネントは何もインポートせず、通常のコンポーネントはすでに `wasi:cli` で書く)と `--no-gc`(出力するモジュールは `--no-wasi` でない限り preview1 の `fd_write` を自分でインポートする)とは組み合わせられません。
+
+### ホストのソケット(`--host-sockets`)
+
+`--host-sockets` は、[`rontolisp:tcp-connect`](tcp-sockets.md) と、そのソケットに対するストリーム関数を、ホストのソケットへ経路付けします。usocket シムと、Java プログラムの `java.net.Socket` も同じ経路を通ります。モジュールはソケットの関数(`tcp.socket`、`tcp.begin`、`tcp.end`、`tcp.read`、`tcp.write`、`tcp.flush`、`tcp.close`、`tcp.wait` など)をインポートします。ソケットを開かないプログラムは何もインポートしません。`--emit-js-glue` はこれらのインポートを `cloudflare:sockets` の `connect()` で実装するので、このフラグを付けても `worker(module)` だけで Worker になります。
+
+```bash
+rontolisp app.lisp --no-wasi --host-sockets --emit-js-glue -o app.wasm
+```
+
+- **ホストにできるのは接続だけです。** `tcp-listen` と `tcp-accept` は、その旨のエラーをシグナルします。TLS にはまだ対応していません。`tls-connect` と `tls-upgrade` はシグナルします。
+- **待つのはホストの中です。** 読むものがまだ届いていない読み込み、接続、`force-output` は、モジュールをホストの中でサスペンドします(JSPI)。そのため、すべてのエクスポートは `WebAssembly.promising` を通して呼ばれ、呼び出しは直列化されます。モジュールのロード中はソケットを待てません(`--host-timer` も付けたビルドでは待てます)。`tcp-set-timeout` は読み込みに期限を与えます。モジュールの時計は、サスペンドから戻るたびに書き直されます。
+- **`worker()` の下では、ソケットはリクエストと一緒に終わります。** Worker のソケットは、それを開いたリクエストより長くは使えません。そのため、呼び出しが開いたままにしたソケットは呼び出しの終わりに閉じられ、次に使うと `Socket closed: the request that opened it has ended` をシグナルします。接続は、それを使うリクエストの中で開いてください。
+
+`worker(module, { connect })` には、同じ形(`({ hostname, port }) => { opened, readable, writable, close() }`)の別の `connect` を渡せます。Worker 以外のホストは、これでソケットを用意します。`instantiate` を自分で呼ぶホストは `defaultHost(hostSockets(connect))` を渡します。このフラグは `--no-wasi` を必要とし、`--component`(ソケットは `wasi:sockets`)、`--no-gc`、`--reentrant` とは組み合わせられません。
+
+### ホストでの待機(`--host-timer`)
+
+`--host-timer` はモジュールの待機をホストに任せます。インポートは最大 3 つで、JSPI を持つホストだけが応えられます。
+
+- `env.sleep(ms)` — `sleep`。ホストは呼び出しを中断し(`WebAssembly.Suspending`)、タイマーが発火したら時計(`__ronto_set_time`)を進めて戻ります。その間もモジュールはこの呼び出しのものです。
+- `env.idle(token, at)` と `env.ring(token)` — Java サーバーのリクエストで、どのスレッドも進めないとき。呼び出しはホストで待機し、その間ホストは別のリクエストでモジュールを呼べます。`env.ring(token)` か、`at` が 0 でなければその時刻(Unix エポックからのナノ秒)まで待ち、それから順番を取り直します。あるリクエストが別のリクエストを待てます。時刻を待つスレッドは、待機中のリクエストを通して起こされます([Java サブセット](../java/index.md))。
+
+`_initialize` とすべてのエクスポートは `WebAssembly.promising` 経由で入るので、トップレベルも待てます。`--emit-js-glue` は 3 つとも実装します。`instantiate` は promise を返し、呼び出しは 1 つのキューで順番を取ります。待機に入った呼び出しは順番を次へ譲ります。
+
+```bash
+rontolisp app.lisp --no-wasi --host-timer --emit-js-glue -o app.wasm
+```
+
+このフラグは `--no-wasi` を必要とし、`--component`(コンポーネントは自分のホストのタイマーで待つ)、`--no-gc`(待つものがない)、`--reentrant`(中断中のどこでも呼び出しが重なる)とは組み合わせられません。フラグなしのモジュールは従来と同じです。
+
+### 実行する前にビルドが教えてくれること
+
+**トップレベルフォーム**から到達する拒否だけは、ここまでのすべての例外です:
+コンディションを捕捉する呼び出し元がなく、メッセージは出力シンクに消えるため、インスタンスは `_initialize`
+の中で、誰も名指ししない素の `RuntimeError: unreachable`
+で死にます。ロード経路がどの原始関数に到達しうるかはビルドが既に知っている事実なので、ビルドがそれを述べます — 原始関数ごとに 1 行、そこへ至った呼び出し連鎖つきで:
+
+```console
+$ rontolisp app.lisp --no-wasi -o app.wasm
+.../session/state/cookie.lisp:25:12: warning: GET-UNIVERSAL-TIME is reachable from a top-level
+form of this --no-wasi module (the top-level (DEFSTRUCT COOKIE-STATE)), so it can run while the
+module LOADS -- where nothing catches it and the host sees only RuntimeError: unreachable. The
+module imports no clock: its time is whatever the host writes through the exported
+__ronto_set_time hook (nanoseconds since the Unix epoch), so call that BEFORE _initialize --
+until something does, reading it signals
+```
+
+持っておく価値が最も高いのは時計の行です: ロード中に時計を読むプログラムは — 先に時刻を設定するホストの上でなら —
+*ロードできる*ので、これは拒否ではなく**ホスト側の義務**であり、事前に教えられるのはビルドだけです。エントロピーも同じ読み方で、`--host-random`
+を名指しします。
+
+**エクスポート**からしか到達できない原始関数については何も言いません。それは呼び出し元が捕捉できる通常の呼び出し時コンディションだからです。到達可能性は静的ですが、**引数**に対して盲目ではありません:
+呼び出しは各引数について呼び出し側が述べていること — `#'app`、リテラル、`(defvar *app* (make-instance 'ningle:app))` — を持ち回るので、その値が取り得ない型の
+`typecase` 分岐はロードパス上にありません。`clack` プログラムがどれも `clackup` の `(clackup "app.lisp")`
+ファイル分岐(リアクターが通ることはない分岐)について沈黙するのはこの仕組みです。呼び出し側が何も述べていなければ何も除外されず、行はそのまま出ます。`handler-case` や `ignore-errors`
+で囲まれた拒否はそもそも報告されません。プログラムが既に対処しているからです。

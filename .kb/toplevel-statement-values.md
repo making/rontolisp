@@ -1,0 +1,79 @@
+# A top-level form is a STATEMENT: nothing may be emitted only to be dropped
+
+Scope: both compile paths (`codegen.wasm`, `codegen.jvm`); the interpreter is unaffected.
+`_start` (wasm) and `main` (JVM) drop every top-level form's value, so a value produced only
+because a form has to produce something is code no run can observe.
+`am.ik.rontolisp.compiler.ToplevelStatements` recognizes the two such shapes once, for both
+backends:
+
+- **the form IS a constant** -- `'CHIPZ` (what `PackageResolver` leaves for `defpackage` and the
+  `%push-package` marker), `nil` (an unselected `eval-when`, a `declaim`), a stray docstring, a
+  keyword: `ToplevelStatements.prune` deletes the form. (`in-package` leaves
+  `(setq *package* :CHIPZ)`, dropped wholesale by `LispMacroExpander.injectMvSpillGlobal` when
+  nothing reads `*package*` -- [[packages]].)
+- **name-valued definer** -- `defvar`/`defparameter`/`defconstant`: the top-level emitter OFFERS
+  the form the chance to emit no name; the defvar compiler takes it.
+- **a reference that cannot fail** -- `(function name)` of a registered function with no cell and
+  no namespace read: `ToplevelStatements.pruneFunctionReferences`, once the last gate has read the
+  spelling, since the wrapper gates are what these are appended for
+  (`FunctionDesignators.withDataCalledReferences`, `EvalReferences`). Evaluated, it made a value for a
+  dispatcher arm (`optimize-dead-code-elimination.md`, "What a `funcall` brought into a small module").
+
+## The offer protocol
+- The definer still compiles through the ordinary `compileExpr`, keeping source-position
+  attribution (`SourceProvenance.noteFailure`) and, on wasm, async-spine handling.
+- `Ctx.valueDropped` is set to the form itself just before the call;
+  `Wasm`/`JvmDefvarCompiler` clears it and skips the name; the emitter reads it back and emits
+  `drop`/`pop` only if the offer was NOT taken. `fresh-line` takes the same offer, there and from
+  `compileForEffect` in every statement position (`ToplevelStatements.isFreshLine`): its `t` would keep
+  `_t_sym` reachable from every `~&`.
+- **The read-back is load-bearing.** The offer is keyed on the operator name while special-form
+  dispatch switches on the RAW symbol name, so a spelling that passes the offer's test but is
+  not routed to the defvar compiler (package-qualified, a future user-macro interception) leaves
+  its value on the stack. Getting it wrong emits an INVALID MODULE, not a mis-optimization.
+- The identity key is `== cons`, so a definer nested in an init expression cannot take its
+  parent's offer.
+
+## Rules
+- **Not behind `--optimize`**: neither shape is a trade-off. Same standing as [[pure-builtin-fold]].
+- **Only constants are pruned.** A bare non-keyword symbol can signal unbound-variable, and
+  signalling is an effect; a call with literal arguments is `PureBuiltinFolder`'s question and
+  arrives here already constant.
+- `prune` only DELETES, so [[source-positions]]' cons-identity rule holds trivially.
+- A NEW definer whose value is nothing but the name it bound belongs in `isNameValuedDefiner`,
+  and its backend compiler must take the offer or the name gets built and dropped.
+- A top-level `defvar`'s staging tee is emitted only when `WasmSetqCompiler.mirrorsTopLevelGlobal(ctx)`
+  says `mirrorTopLevelGlobal` will read it back. `setq` keeps its tee unconditionally -- there the
+  staged value is the form's own result.
+
+## Inside a body: a statement-position inert form emits nothing
+The same rule one level down. A non-final form of a defun/lambda/`let`/`progn` body (and a
+tagbody statement, a `while` body, a cleanup) is a statement; when it is a self-evaluating
+literal or a `(declare ...)`, the backend emits nothing for it.
+- JVM: `JvmExprCompiler.isInertStatement`, read by `compileForEffect` and by
+  `JvmBodyOutliner`'s `EffectForm`; a function body's non-final forms are `EffectForm`s like a
+  `let` body's (so a statement `setq` there stores and stops too). Before 2026-10-04 every
+  defun docstring was `ldc`/`pop` plus a constant-pool string, and every leading `declare` an
+  `aconst_null`/`pop`.
+- wasm: `WasmExprCompiler.compileForEffectHere` drops the literals (not `declare`, not under
+  an async resume).
+- `documentation` is nil on every backend (`LispMacroExpander.expandDocumentation`), so no
+  backend needs a docstring kept.
+- A changed docstring no longer changes the class (checked 2026-10-04 by `-o X.class` over
+  `examples/`, `size-report/programs/` and `bench-report/programs/`, 231 programs that compile).
+
+## User-visible corollary: a run's EXIT CODE
+The last top-level form's value is dropped on every backend, so `(rove:run-suite *package*)` at
+the end of a file says nothing to the shell and a red suite exits 0 -- as `sbcl --script`
+behaves, deliberately kept. A program wanting status calls `uiop:quit`; a rove suite gets one
+from the `rontolisp test` subcommand ([[asdf]]).
+
+## Tests
+`ToplevelStatementsTest`; `WasmLispCompilerTest.aTopLevelFormThatIsNothingButAConstantEmitsNothing`,
+`.aTopLevelDefinerDoesNotBuildTheNameSymbolItReturns`;
+`JvmLispCompilerTest.aDefinerWhoseValueIsReadStillYieldsTheNameSymbol`,
+`.aStatementPositionLiteralLeavesNoTraceInTheClass`.
+
+## Related
+[[pure-builtin-fold]], [[optimize-dead-code-elimination]], [[wasm-gc-strings]],
+[[wasm-function-body-size]], [[packed-integer-vectors]].

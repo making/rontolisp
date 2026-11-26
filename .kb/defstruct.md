@@ -1,0 +1,300 @@
+# `defstruct` — expansion into plain defuns, instance-object representation
+
+User behavior: `doc/en/reference/special-forms/defstruct.md`. `#S(...)` print/read and the
+six `%obj-*` primitives: [instance-syntax.md](instance-syntax.md).
+
+**Invariant: `LispMacroExpander.expandDefstruct(cons, structAccessors)` is the one expansion
+for every backend; no `Jvm`/`Wasm` defstruct compiler exists.** `(defstruct point x (y 10))`
+becomes top-level defuns `make-point` (`&key`), `point-p`, `copy-point` and one accessor per
+slot, over a registered `LispLayout`: `%obj-new`, `%obj-is`, `%obj-ref`, `%obj-set` as the setf
+place, copier a fresh `%obj-new` (shallow). Instances are not `consp`/`listp`; `equal` compares
+slot-wise (deliberate CL deviation); `#S(...)` source reads back via `StructLiteralFolder`.
+
+- Options: `:constructor`/`:conc-name`/`:predicate`/`:copier`/`:include`/`:type`/`:named`/
+  `:print-object`/`:print-function`, a dropped docstring, parsed-but-ignored slot
+  `:type`, a `:read-only` slot (below); anything else throws "DEFSTRUCT option is not supported".
+- BOA `(:constructor name (lambda-list))`: a slot matching a parameter (`boaParameterSymbols`) reads
+  it, others evaluate their initform. An `&optional` or `&key` parameter written without a default takes
+  the initform of the slot it names (`boaLambdaListOverInitforms`, CLHS 3.4.6; fset's
+  `tuple-key` type was nil where `t` was meant, measured 2026-11-05); `&aux` does not. ci-spec
+  `esrap-enablement-language-group`.
+- A copier is `copy-structure` (2026-11-05): an `:include` child handed to the parent's copier keeps its
+  type and slots (coalton's `(:copier %copy-node)`, `No applicable method ... on NODE`). ci-spec
+  `esrap-enablement-language-group`.
+- A struct name is a valid `defmethod` specializer (`ClosRegistry.registerStruct` /
+  `findStructTag`; `structAncestorCount` ranks it, band 100-199, deeper first).
+- `:conc-name` takes a STRING DESIGNATOR (`structConcName`, one parser for the expander and both
+  walkers): a symbol's name with its package, `:` or `#:` stripped (cxml's `#:entdef-`), a string, a
+  character. A bare `:conc-name` option outside a list stays refused. **Trap: keeping the colon yields
+  accessors no call site can name, surfacing as `The function X is undefined` (a place: `(SETF
+  X)`, at run time, with a compile-time warning on the compile paths).**
+
+## Hook points
+- Interpreter `LispEvaluator.evalDefstruct`.
+- Compilers: `LispMacroExpander.expandTopLevelDefstructs`, between `PackageResolver` and
+  `LambdaLists.desugarProgram` (the `&key` constructor must precede desugaring). It SPLICES
+  into several top-level defuns, not one form, because Pass 1 does not descend into `progn`.
+- Non-top-level defstruct errors in `Jvm/WasmExprCompiler.compileCons`; `NoGcWasmCompiler`
+  rejects it outright.
+- Bundled libraries expand earlier, on `LibraryDefunPruner.prune`, leaving a
+  `(%struct-definition (defstruct ...))` marker `expandTopLevelDefinitions` consumes for
+  registration only ([library-defun-pruning.md](library-defun-pruning.md)). Explicit option
+  names (`(:predicate torch:tensorp)`) are the robust spelling for an exported API.
+- `UserMacroExpander`'s walker has a defstruct case, so a user macro may expand into one.
+
+## Accessors check their object
+**Invariant: an accessor, its `setf` place and the copier given a non-instance signal a
+`type-error` reporting `POINT-X: The value 42 is not of type POINT` (`(SETF POINT-X): ...`,
+`COPY-POINT: ...`) whose datum is the object and expected-type the struct name -- the same line on
+all four backends, wasm-GC in EH mode.** Pinned by ci-spec
+`defstruct-accessors-signal-a-type-error-on-a-non-instance` and standalone
+`uncaught-struct-accessor-report`, `cli/UncaughtReportParityTest`, and one test per backend
+(`LispEvaluatorTest`, `JvmLispCompilerTest`, `WasmLispCompilerIntegrationTest`, the last also
+pinning the unchecked module). Until 2026-09-26 the interpreter reported `%OBJ-REF expects an
+instance, got 42` (a `simple-error`), the JVM a `ClassCastException` -- and, a cons being an
+`Object[]`, READ and WROTE a field of `(cons 1 2)` -- and wasm-GC trapped even in EH mode.
+
+- **The check rides the primitive, as a FAILURE operand**: the accessor body is `(%obj-ref obj i
+  (%struct-type-error obj "POINT-X" 'POINT nil))`, the place `(%obj-set tgt i v (%struct-type-error
+  tgt "POINT-X" 'POINT t))` (`LispMacroExpander.checkedStructRead` / `checkedStructWrite`), and each
+  backend folds the test into the access it makes anyway: interpreter `evalCons` (the operand is
+  evaluated only for a non-instance), JVM `JvmObjCompiler.emitChecked` (the instance guard; the
+  failure form on its reject arm), wasm-GC `WasmInstanceCompiler.emitChecked` (ONE
+  `br_on_cast_fail`, the failure form on its miss). **Not `(if (%obj-p obj) ...)` in the
+  expansion**: that was the first cut and cost a second type test per access, which the operand
+  form avoids. The JVM JIT
+  did not care either way.
+- **The store checks after the value** (`let`-bound unless the object is a symbol and the value an
+  atom), CL's order: `(incf (point-x "s"))` reports the READ, `POINT-X`.
+- **`%struct-type-error` is one generated defun** (`structTypeErrorDefun`, injected when referenced;
+  the interpreter defines it on first resolution). The report is rendered at the signal
+  (`formatMessagePieces`) into a VARIABLE whose text control is the `:format-control`, never stored
+  as a control with arguments: a runtime control drags the format renderer in. The
+  variable is what makes the unrouted message the text itself ([error-handling.md](error-handling.md),
+  `signalsItsTextControl`): with the text control of the rendered EXPRESSION, a compiled program
+  routing no report printed `The value "a~~b"` -- the control, every `~` doubled -- where the
+  interpreter printed `"a~b"` (standalone `uncaught-struct-accessor-report-prints-the-datum-as-written`).
+  The variable costs a few bytes per class or module carrying the defun; no
+  program lost the renderer, since the defun is injected after the routing answer. The operator travels as a string (a
+  store builds `(SETF ...)` from the reader's), the type as `%unspelled-quote`. The owner a place
+  needs is `ClosRegistry.structOfAccessor`, registered only by a checked expansion.
+- **Unchecked where nothing reads the report**: under `SignalMessages.LAZY` (wasm-GC outside EH
+  mode) `expandTopLevelDefinitions` expands unchecked, so the module is byte-identical; a
+  pruner-expanded library struct (`LibraryDefunPruner`, which cannot know the mode) keeps the
+  operand and wasm-GC ignores it outside EH mode (`checkedFailure`).
+- **ANY instance passes**, not the struct's own tags: a later `:include` child widens the tag set
+  after the accessor exists (the predicate regeneration below), so `(point-x <another struct>)`
+  still reads a slot. Deliberate; revisit with a per-accessor tag test the predicate refresh also
+  rebuilds. Past the other struct's slots the backends part (measured 2026-11-15, `(b-r (mk-a 1))`
+  with one slot against the third): the interpreter signals `%OBJ-REF: slot index 2 is outside
+  %struct-A`, the JVM `index out of bounds`, and wasm-GC traps `out of bounds array access`, in EH
+  mode too. A library that takes values of several structs tests the predicate first
+  (`.kb/starlark-frontend.md`, "The run-time library's rules").
+- Cost, wasm-GC EH mode (2026-09-26, `--optimize=size`): every checked site pays
+  the failure call's two literals and the blocks, plus the operator strings. A module already carrying
+  the printer pays little. Outside EH mode: nothing.
+- **The interpreter's call of a reader on an instance reads the slot without the body**
+  (since 2026-11-06): a global function whose body is the checked read of its one parameter
+  carries the slot in its binding (`FunctionCell.Binding.slotRead`), and a call its head notes
+  ([interpreter-expansion-memo.md](interpreter-expansion-memo.md), "The call-site note") answers
+  `inst.slot(N)`. Any other argument, and every call under a debugger, runs the body, so the
+  report is the body's. A struct-read loop ran 1.5x faster.
+
+## A call of a predicate or a reader is the primitive (wasm-GC, speed levels)
+**Invariant: on wasm-GC at the speed levels a call `(point-p x)` / `(point-x p)` of a name with ONE definition that nothing can replace while the program runs compiles as the type test or the slot read the definition's body is (`WasmStructAccess`), not as a call of it.** Since 2026-11-16. A structure's predicate and one accessor were 15 ns in a loop whose step is 9; a true predicate also called `_t_sym`.
+
+- **Which names**: a one-parameter defun whose whole body is `(%obj-is p 'tag..)` or `(%obj-ref p <literal> [failure])` (`isAccessDefun`, read through the tail's clear) -- what `expandDefstruct` generates, and any other definition of that shape. Not under `--dynamic`, not a name defined twice, not an async defun, not a name with a cell (`WasmFunctionCells`: every defun of a program holding `eval`, a name `(setf fdefinition)` writes) unless a leaf's copy runs with it empty, not a forwarder.
+- **A test position is the raw i32** (`WasmConditionCompiler`: `%obj-is` and a predicate's call): one `br_on_cast_fail` and the layout address compare, no `t`. A value position boxes it.
+- **A reader handed anything but an instance calls the definition**, whose check and report it is: `br_on_cast_fail` to the instance, the slot read, and on the miss `call` of the defun -- so the report, the datum and the expected type are the definition's ("Accessors check their object"), and the site carries no report text.
+- **The argument is evaluated once, then the multiple-value channel is cleared where the definition's settled tail clears it** (`clearOf`), as the call did; a test position clears nothing, no consumer reads the channel behind a test (`.kb/multiple-values.md`). A reader's and a predicate's settled tail is `clearBefore` (`%obj-ref`/`%obj-is` are one-value quiet operators, the checked read's `%struct-type-error` never returns), so in a program with a multiple-value consumer each site emits `ref.null eq; global.set` (2026-11-16: 20 structs x 5 slots, wasm 31066 -> 31470 B, JVM classes 51219 -> 51935 B; a 50M-read loop unchanged within noise on both).
+- **The slots field is of the slots array's own type** (`TYPE_INSTANCE` field 1, `(ref null $buckets)`, 2026-11-16): a slot read or store is the instance's cast and no second one, at every level and in `%obj-ref` / `%obj-set` alike. `WasmEmitHelper.emitNewInstance` casts what the site holds (one test per instance made); the field is never stored again. A predicate and a reader, 30M times: 0.39 -> 0.32 s; `listidx.star` 1.51 -> 1.35 s (five slot reads per element store).
+- **Not made, measured (2026-11-16): one instance test for several readers of one variable.** Each reader casts its argument again (five in a Starlark element store). On a hand-written index helper pair the repeated casts and their channel clears were 0.01 s of `listidx.star`'s 0.79; a typed local holding the narrowed instance would also have to ride every landing pad's refresh (`.kb/wasm-landing-pad-refresh.md`).
+- The definition stays for `#'point-x` and the tree-shaker drops it when nothing reaches it. The size level keeps the call.
+- Cost: 34 B a site over the call for a reader, 23 B for a predicate in a test (one type test where the smaller shape makes two). Measured: `listidx.star` 3.15 -> 2.82 s on wasm with the array arm already in (four structure reads per element store, two per read).
+- Pinned by `WasmLispCompilerIntegrationTest.ehAStructAccessorOnANonInstanceSignalsATypeError` (every level and the component; a program holding `eval` replaces a reader and a predicate at run time and the call answers the replacement; the fuel budget) and ci-spec `a-vector-element-and-a-structure-slot-through-a-parameter`.
+
+## `:include` (single inheritance)
+Parent slots (in ITS layout order) are PREPENDED, so an inherited slot keeps one index in every
+descendant and the parent's baked `%obj-ref` accessors read a child. `ClosRegistry.structAncestors`
+/ `descendantStructTags(name)` is the tag set `typep`, the predicate and a specializer test.
+`(:include parent (slot new-default))` re-defaults in THIS child's layout only, index kept,
+matched on the UNQUALIFIED slot name; an unknown slot throws.
+
+- **Predicates are REGENERATED as later children appear**, else `(base-p child)` tests too few
+  tags: `LispMacroExpander.structPredicateDefun` rebuilds; the interpreter re-evaluates each
+  ancestor's predicate (`ClosRegistry.structAncestorNames`), the compile path calls
+  `refreshStructPredicates` in the "registry is complete" phase, replacing ONLY where the body
+  is still the generated `(%obj-is __struct ...)` shape. `ClosRegistry.structPredicates` records
+  what to rebuild; `(:predicate nil)` and `:type` structs never enter it.
+- No such refresh for CLASSES -- a `defmethod` on a `defclass` class bakes the tags known when
+  the dispatcher is generated. Gap: a compiled program registering a class via runtime `eval`.
+
+## `:type (vector ...)`
+A typed struct IS a plain vector: no tag, NOT registered as a type (no specializer, no `typep`,
+not a `structure-object`, as in CL). Constructor `(vector v...)`, copier `copy-seq`, accessor an
+`aref`, plus a generated `%setf-<accessor>` writer. `:include` is rejected.
+`(:type list)` (rutils' `pair`, h58) shares the path (`typedList` beside `typedVector`): `list`
+constructor, `nth` accessor, the writer registered as `SETF_FUNCTION_MARKER` (no inline store).
+
+- A declared `(vector (unsigned-byte 8|16|32))` element type is KEPT, so the constructor's
+  `make-array` is packed on every backend and stores MASK to the declared width.
+- `:named` (2026-11-06, queues' `node`): beside `:type` the name is element 0 (an
+  `%unspelled-quote`, `typedOffset` shifts every slot index) and the predicate tests it, `(and
+  (consp x) (eq (car x) 'name))` / `(and (vectorp x) (plusp (length x)) (eq (aref x 0) 'name))`
+  as in SBCL 2.2.9; not in `structPredicates`, nothing widens it. Without `:type` a no-op. A packed
+  element type refuses it. `defstructSlotFlow` treats it as a reader (the `:type` beside it is
+  opaque anyway). ci-spec `defstruct-options`.
+- Stores ride `LispMacroExpander.TYPED_VECTOR_SLOT_BASE`: the accessor registers in
+  `structAccessors` as `TYPED_VECTOR_SLOT_BASE - index` (below the `-1` setf-function marker;
+  `expandSetf` is the sole reader) and `(setf (acc obj) v)` becomes `(setf (aref obj i) v)`.
+
+## `(:print-object fn)` / `(:print-function fn)`
+Both take a function DESIGNATOR and lower to ONE synthesized
+`(defmethod print-object ((obj <struct>) stream) (funcall fn obj stream [0]))`, appended LAST so
+its accessor calls read defuns generated above it. `:print-function` is the CLtL1 spelling,
+differing only in that third `depth` argument, the literal `0`. Rides the `print-object` seam
+([clos.md](clos.md)) on all four backends, firing for a value nested in a printed list,
+general rank-1 vector or instance slot.
+
+- Mutually exclusive with `:type`, and both spellings at once is an error -- rejected, not
+  ignored.
+- **Trap: the forms must go through `addExpandedDefinition`; routed past it, the raw `defmethod`
+  reaches Pass 1 as an unknown top-level form.**
+- `print-unreadable-object`'s `:type t` spelling follows `*print-escape*`
+  (`LispMacroExpander.typeNameOf`); its expansion runs in Pass 2, AFTER `injectMvSpillGlobal`'s
+  reference scan, so that scan counts the UN-EXPANDED operator as the declaring reference.
+
+## setf on accessors, and setf-functions
+`LispMacroExpander.expandSetf`'s place list is a hard-coded switch (`defsetf` /
+`define-setf-expander` places are rewritten before it), and
+`expandDefstruct` records accessor -> 1-based slot position in a registry that is per-evaluator
+(`LispEvaluator.structAccessors`) and per-compilation (`Ctx.structAccessors`, threaded through
+`Ctx.Builder`), passed by the three dispatch sites. `push`/`pop`/`incf`/`decf`/`remf` emit
+un-expanded `(setf ...)` that re-dispatches there. The zero-arg `expandSetf(cons)` used by
+`macroexpand-1` sees an EMPTY registry, so it expands a struct place as the `(setf name)` call.
+
+`(defun (setf name) ...)` reuses that registry with sentinel
+`LispMacroExpander.SETF_FUNCTION_MARKER` (`-1`; real positions are `>= 1`). The writer installs
+as `setfFunctionName(name)` = `%setf-<name>`, NOT in the ordinary function namespace;
+`expandSetf`'s default branch expands `(setf (name arg...) val)` to
+`(funcall #'%setf-name val arg...)` -- **new value FIRST** in the call, the arguments
+evaluated before it where that is observable ([argument-evaluation-order.md](argument-evaluation-order.md)).
+`#'(setf name)` resolves in `evalFunction` and both `Jvm/WasmFunctionFormCompiler`s (`setfFunctionPlaceName`); registration
+is `evalDefun` / `expandTopLevelDefinitions`, the latter also rewriting the defun name so Pass 1
+collects it ordinarily. A `(defun (setf name) ...)` BELOW the top level (over a `let`, in a
+function body) is renamed and registered the same way first thing in `expandTopLevelDefinitions`
+(`renameNestedSetfFunctionDefuns`), so it lowers like any nested `defun` (a global holding the
+closure, `.kb/core-representation.md`); with the list as its name it reached that lowering and
+failed a cast (`LispCons cannot be cast to LispSymbol`) on the JVM, P1 and the component, measured
+2026-10-07. Pinned by `SetfFunctionNameFixture.NESTED_DEFINITION`
+(`aSetfFunctionDefinedBelowTheTopLevelIsAPlaceAndAFunction` in the three backend suites). `fdefinition`/`fboundp`/`fmakunbound` of a `(setf ...)` name:
+[symbol-runtime-api.md](symbol-runtime-api.md).
+
+**A place nothing registers is the `(setf name)` call, late-bound** (CL): the default branch's
+last arm yields `(funcall #'(setf name) val arg...)`, new value first like the marker arm, so a
+writer defined after the expansion (the interpreter expands lazily and memoizes), installed by
+`(setf (fdefinition '(setf name)) fn)`, or absent -- `undefined-function` naming `(SETF NAME)` when
+the form runs, the compilers' undefined-function warning at compile time -- all behave as in
+SBCL. Two keep the expansion-time refusal `setf does not support place: X`: a name the `cl`
+package answers (`PackageRegistry.isClMemberName`; no program may define `(setf length)`, so
+it is a place rontolisp lacks), and every unknown place on `--no-gc` (`expandScalarSetf`: no
+function values there). Checked 2026-10-07: `(setf (zz-t 3) 5)` of an undefined `zz-t` was SBCL
+2.2.9 `(SETF ZZ-T)` at run time; interpreter, JVM, P1 and component refused at expansion.
+Pinned by `SetfFunctionNameFixture.UNKNOWN_PLACE`
+(`aPlaceNoDefinitionMakesCallsTheSetfFunctionWhenTheFormRuns` in the three backend suites) and
+`LispMacroExpanderTest#aPlaceNoDefinitionMakesIsTheSetfFunctionCall`.
+
+**`(setf (apply #'name arg...) val)` is that call through `apply`** (CLHS 5.1.2.5):
+`(apply #'%setf-name val arg...)` for a writer a definition makes, `(apply #'(setf name) val arg...)`
+otherwise, the arguments ahead of the value as above. Refused at expansion: a designator that is not
+`#'symbol` (SBCL refuses too), a `cl` name with no writer (`#'length`; CLHS names only `aref`, `bit`,
+`sbit` for standard functions, SBCL also takes the ones it has a `(setf name)` function for, such as
+`#'car`), and every `apply` place on `--no-gc`. `aref`/`svref` have no `(setf name)` function and go
+through the row-major place (`setfApplyArrayPlace`), whose lazily injected
+`#'array-row-major-index` the wrapper gate is told about by `appliesArrayAccessor`. The writer's
+on-demand sources see the applied name: `referencedStructWriterDefuns` (the `(apply #'acc ...)` itself,
+position-blind, because `incf`/`push`/`the` reach the place too), and the interpreter's
+`ensurePreludeSetfPlacesLoaded` and its uiop/usocket twins (`setfPlaceFunction`). Measured 2026-11-04
+against SBCL 2.2.9, ci-spec `setf-apply-place-of-any-function` and `SetfFunctionNameFixture.UNKNOWN_PLACE`
+(an undefined `(setf name)` warns at compile time, which the corpus tests forbid); ningle's `(defmethod (setf route) ...)`
+in the shapes caveman2's `defroute` expands to answers `(200 NIL ("hi bob"))` and the 404 on the
+interpreter and the JVM.
+
+**A writable slot's accessor has a `(setf accessor)` function; a `:read-only` one has none.**
+`structWriterDefun` is `(defun %setf-ACC (new obj) <the place's checked store>)`, so it reports a
+non-instance as `(SETF ACC): ...` like the place. NOT in `expandDefstruct`'s output: the
+interpreter's `evalDefstruct` evaluates it beside each reader (a binding, and it keeps
+`fboundp`/`fmakunbound` exact); the compile path appends it in `expandTopLevelDefinitions`, ahead
+of the `%struct-type-error` scan, only for an accessor whose `(setf ACC)` list or `%setf-ACC`
+symbol the expanded program spells (`referencedStructWriterDefuns`) and no defun already
+defines -- a place is the inline `%obj-set`, so a program that only writes through places carries
+no writer. A program that maps a `(setf place)` list built at run time (it defines the prelude's
+`%function-name`, `.kb/symbol-runtime-api.md` "A `(setf name)` function name") gets every
+writable slot's writer, since a computed `(fdefinition (list 'setf 'acc))` can name any. A `:read-only`
+slot (its own option, an `:include` override's, or the parent's -- `ClosRegistry.structReadOnlySlots`)
+registers `READ_ONLY_SLOT_MARKER` (`0`): a reader, no writer, and its place falls through to the
+late-bound call above, so `(setf (ro o) v)` signals `undefined-function` `(SETF RO)` as in SBCL. A
+`:type vector` struct already emitted its `%setf-` writer per slot; a read-only one now skips it.
+Checked 2026-10-07: `(fboundp '(setf zz-s-b))` / `#'(setf zz-s-b)` were SBCL T / a function,
+interpreter, JVM, P1 and component NIL / `The function (SETF ZZ-S-B) is undefined` (wasm outside
+EH mode: a trap); `(setf (ro o) v)` stored on all four. Pinned by
+`SetfFunctionNameFixture.STRUCT_WRITER` (`aDefstructSlotAccessorHasASetfFunction` in the three
+backend suites) and `LispMacroExpanderTest#aDefstructSlotWriterFunctionIsEmittedOnlyForAProgramThatTakesIt`.
+
+## The package of the derived names
+CL interns the derived constructor/predicate/copier/accessor names in `*package*` at the form.
+Expansion is POST-resolution and sees only the resolved name, so:
+
+- **A name that resolves to another package's symbol** (inherited, imported, written qualified)
+  gets `(:%intern-package "CUR")` appended to its header
+  (`PackageResolver.withDefstructInternPackage`, `LispNames.DEFSTRUCT_INTERN_PACKAGE`). Until
+  2026-10-30 the derived names went to the NAME's package: optima's `(defstruct and-pattern)`
+  in `optima`, the name exported by `optima.core`, defined `optima.core::and-pattern-p` and
+  `(optima:match ...)` failed `OPTIMA::AND-PATTERN-P is undefined`. Pinned by ci-spec
+  `defstruct-derived-names-intern-in-the-current-package` (`:include` and `:conc-name` too).
+- **A bundled library spells the option itself**: `(defstruct (torch::%tensor (:%intern-package "TORCH") ...))`.
+  The shipped sources are written in `cl-user` and call `torch::%tensor-...`, which is what a qualified
+  name did for everyone until 2026-11-05 (SBCL 2.2.9 interns `MAKE-Q` in `cl-user` for
+  `(defstruct other-pkg::q r)`, and a program's `cl-user::make-q` was undefined here). A header
+  already naming a package is left alone. **A new bundled struct with a qualified name needs the option**;
+  without it `LibraryDefunPrunerTest` and the library's own calls report `TORCH::X-A is undefined`.
+- **The interpreter does not resolve a macro's expansion again**, so `evalDefstruct` asks
+  `PackageResolver.defstructInternedIn` with the package current at the form (a function body: the one it was
+  read in, `Environment.lexicalPackage`). The compile paths resolve an expansion like any form.
+- **Spelling**: `PackageResolver.internedSpelling(pkg, member)`, the bare reference's resolution
+  with `pkg` current (CL `intern`): the package's own symbol by its declared export (quri's
+  exported `uri-p`), or an accessible symbol of a used package (an exported `make-ap` of the
+  package the name comes from IS that symbol). A name only `cl` provides stays the package's own,
+  as before (defining it would redefine a standard operator). It mints nothing.
+- Constructor keywords use the unqualified slot base name via the explicit
+  `((:x foo::x) default)` `&key` form.
+- The resolver-less summaries (`defstructDefinedNames`, `defstructSlotFlow`) spell a derived
+  name in the name's package AND the intern package: an over-approximation, since a missed
+  name drops a definition a kept call site needs.
+
+## The case of the derived names
+The affixes are the literal `MAKE-`, `-P`, `COPY-` (a class's `%MAKE-`), and the struct and slot names are
+taken as they are, as in SBCL 2.2.9: `(defstruct |low| |x|)` defines `|MAKE-low|`, `|low-P|`, `|COPY-low|`,
+`|low-x|`, and `(defstruct pt |y|)` defines `|PT-y|`. Until 2026-11-05 `LispMacroExpander.affixFor` guessed a
+case from the name, for lowercase-authored internal sources; none remained (every reader upcases, and the
+lowerings that build a `defstruct` give explicit names), so nothing has to tell them from an escaped name.
+Pinned by ci-spec `defstruct-derived-names-intern-in-the-current-package`.
+
+## Gaps
+No `structurep` (not standard CL). Compiled runtime `eval` cannot define structs or setf
+accessor places (`doc/en/guides/eval-limitations.md`).
+
+## Tests
+- `LispEvaluatorTest#defstruct*` / `#evalDefstructPrint*` / `#evalDefstructAcceptsAKeywordConcName`
+  / `#evalDefstructRejectsBothPrinterOptions` / `#setfFunction*` /
+  `#defstructIncludeInheritsSlotsAndTypeTests`
+- `JvmLispCompilerTest#compileAndRunDefstruct*` + `compileNestedDefstructFails`;
+  ci-spec `defstruct-include-predicate-matches-later-children`, `setf-function-definition`,
+  `defstruct-print-object-and-print-function-options`
+- `UserMacroExpanderTest#defstructNamesAreNotMistakenForMacroCalls*` /
+  `macroExpandingToDefstructIsKept`
+- ci-spec `defstruct-constructor-accessors-predicate-copier`,
+  `defstruct-setf-places-and-first-class-accessors`, `defstruct-keyword-conc-name`,
+  `defstruct-derived-names-intern-in-the-current-package`,
+  `defstruct-print-object-and-print-function`, `setf-function-definitions`,
+  `ironclad-residue-features`; `DocExamplesTest`.

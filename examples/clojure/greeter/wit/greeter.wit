@@ -1,0 +1,12 @@
+package example:greeter@0.1.0;
+
+/// What greeter.clj implements: the WIT is the one place its exports' types are
+/// written.
+world greeter {
+  /// "Hello, NAME!"
+  export greet: func(name: string) -> string;
+  /// The greeting upper-cased, with two more exclamation marks when excited.
+  export shout: func(name: string, excited: bool) -> string;
+  /// Whether the name has fewer than five characters.
+  export is-short: func(name: string) -> bool;
+}

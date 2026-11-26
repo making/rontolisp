@@ -1,0 +1,2929 @@
+package am.ik.rontolisp.codegen.jvm;
+
+import java.lang.classfile.Opcode;
+import java.lang.classfile.constantpool.FieldRefEntry;
+import java.lang.classfile.constantpool.MethodRefEntry;
+import java.util.List;
+
+import am.ik.jvm.MethodCode;
+import am.ik.rontolisp.LispBigInteger;
+import am.ik.rontolisp.LispChar;
+import am.ik.rontolisp.LispComplex;
+import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispDouble;
+import am.ik.rontolisp.LispInteger;
+import am.ik.rontolisp.SourceProvenance;
+import am.ik.rontolisp.macro.IgnoredArgument;
+import am.ik.rontolisp.macro.LispMacroExpander;
+import am.ik.rontolisp.macro.StreamElementType;
+import am.ik.rontolisp.LispNames;
+import am.ik.rontolisp.LispNil;
+import am.ik.rontolisp.LispRatio;
+import am.ik.rontolisp.LispString;
+import am.ik.rontolisp.LispSymbol;
+import am.ik.rontolisp.LispTrue;
+import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.PackageRegistry;
+import am.ik.rontolisp.UiopExports;
+import am.ik.rontolisp.compiler.BuiltinCallArity;
+import am.ik.rontolisp.compiler.BuiltinFunctionWrappers;
+import am.ik.rontolisp.compiler.ClRedefinitionWarnings;
+import am.ik.rontolisp.compiler.CompileWarnings;
+import am.ik.rontolisp.compiler.ConcatenateForms;
+import am.ik.rontolisp.compiler.MutableStringProducers;
+import am.ik.rontolisp.compiler.NestedDefunNamespace;
+import am.ik.rontolisp.compiler.OpenModes;
+import am.ik.rontolisp.compiler.RuntimeFunctionNames;
+import am.ik.rontolisp.compiler.SplicedComponentGroups;
+import am.ik.rontolisp.compiler.StreamDesignators;
+import am.ik.rontolisp.compiler.UncaughtReport;
+
+import org.jspecify.annotations.Nullable;
+
+/**
+ * Compiles Lisp expressions to JVM bytecode. Serves as the entry point and dispatcher,
+ * delegating to specialized compiler classes for each built-in function and special form.
+ */
+final class JvmExprCompiler {
+
+	private JvmExprCompiler() {
+	}
+
+	/**
+	 * Compiles a printing operator, routed through {@code print-object} when the program
+	 * defines a method on it and through {@code %print-cased} when it mentions a
+	 * printer-control variable; compiled as it always was otherwise -- the gate that
+	 * keeps every program using neither byte-identical.
+	 */
+	private static void compilePrintOperator(LispCons cons, JvmLispCompiler.Ctx ctx, String className, Runnable plain) {
+		LispVal hooked = LispMacroExpander.expandPrintObjectHook(cons, ctx.closRegistry, ctx.printControls);
+		if (hooked == null) {
+			plain.run();
+			return;
+		}
+		compileExpr(hooked, ctx, className);
+	}
+
+	/**
+	 * {@code (%arity-surplus-message max required rest [name])}: the operator the report
+	 * names ({@link BuiltinFunctionWrappers#arityOperator} of the function's name, null
+	 * for {@code Function}), the two literal counts and the rest list handed to the
+	 * shared {@code _aritySurplus} helper ({@link JvmAritySurplusRuntimeBuilder}).
+	 */
+	private static void compileAritySurplusMessage(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		List<LispVal> args = cons.toList();
+		String operator = BuiltinFunctionWrappers
+			.arityOperator(am.ik.rontolisp.LambdaLists.aritySurplusFunctionName(cons));
+		if (operator == null) {
+			ctx.body.aconst_null();
+		}
+		else {
+			JvmEmitHelper.compileUnspelledLiteral(operator, ctx);
+		}
+		JvmEmitHelper.emitIntConst(ctx, (int) ((LispInteger) args.get(1)).value());
+		JvmEmitHelper.emitIntConst(ctx, (int) ((LispInteger) args.get(2)).value());
+		compileExpr(args.get(3), ctx, className);
+		MethodRefEntry ref = ctx.cp.methodRef(ctx.cp.classEntry(className), JvmAritySurplusRuntimeBuilder.METHOD,
+				JvmAritySurplusRuntimeBuilder.DESC);
+		ctx.body.invokestatic(ref);
+	}
+
+	/**
+	 * {@code (%supplied-p param)} as a value: {@code t} unless the parameter holds the
+	 * UNSUPPLIED marker ({@link JvmPhysicalArgs}). The prologue's own test position --
+	 * {@code (if (%supplied-p p) p default)} -- branches on the reference comparison
+	 * directly ({@link #compileSuppliedPTest}).
+	 */
+	private static void compileSuppliedP(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		MethodCode.Label supplied = ctx.body.newLabel();
+		compileSuppliedPTest(cons, ctx, className, supplied);
+		ctx.body.aconst_null();
+		MethodCode.Label gotoEndPos = ctx.body.newLabel();
+		ctx.body.goto_(gotoEndPos);
+		ctx.body.labelBinding(supplied);
+		JvmEmitHelper.compileTrue(ctx);
+		ctx.body.labelBinding(gotoEndPos);
+	}
+
+	/**
+	 * Emits {@code (%supplied-p param)}'s comparison and a branch taken when the
+	 * parameter holds an argument, falling through when it holds the UNSUPPLIED marker.
+	 * @param cons the {@code %supplied-p} form
+	 * @param ctx the compilation context
+	 * @param className the class being emitted
+	 * @param supplied where the branch jumps when the parameter holds an argument
+	 */
+	static void compileSuppliedPTest(LispCons cons, JvmLispCompiler.Ctx ctx, String className,
+			MethodCode.Label supplied) {
+		compileExpr(cons.toList().get(1), ctx, className);
+		JvmPhysicalArgs.emitUnsupplied(ctx, className);
+		ctx.body.if_acmpne(supplied);
+	}
+
+	/**
+	 * Whether a form is {@code (%supplied-p param)}.
+	 * @param form the form
+	 * @return whether it is the supplied-p test
+	 */
+	static boolean isSuppliedP(LispVal form) {
+		return form instanceof LispCons cons && cons.car() instanceof LispSymbol head
+				&& LispNames.SUPPLIED_P_INTERNAL.equals(head.name()) && cons.cdr() instanceof LispCons args
+				&& args.cdr() instanceof LispNil;
+	}
+
+	/**
+	 * {@code (%arity-missing-message required got)}: both counts are literals, answered
+	 * by the shared {@code _arityMissing} helper ({@link JvmAritySurplusRuntimeBuilder},
+	 * emitted unconditionally and shaken out when unused) -- no printer, no length walk.
+	 * The helper answers the QUOTE-FRAMED string, the same convention as
+	 * {@code _aritySurplus}: the message lands in a condition's {@code format-control}
+	 * slot, and an unframed {@code java.lang.String} fails {@code stringp} on this
+	 * backend, which would route the report through the function-control arm and invoke
+	 * the message as a function.
+	 */
+	private static void compileArityMissingMessage(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		List<LispVal> args = cons.toList();
+		JvmEmitHelper.emitIntConst(ctx, (int) ((LispInteger) args.get(1)).value());
+		JvmEmitHelper.emitIntConst(ctx, (int) ((LispInteger) args.get(2)).value());
+		MethodRefEntry ref = ctx.cp.methodRef(ctx.cp.classEntry(className),
+				JvmAritySurplusRuntimeBuilder.MISSING_METHOD, JvmAritySurplusRuntimeBuilder.MISSING_DESC);
+		ctx.body.invokestatic(ref);
+	}
+
+	/**
+	 * Compiles a form in STATEMENT position -- a body form that is not the body's last, a
+	 * tagbody form, a cleanup -- leaving nothing on the operand stack. The default is the
+	 * value emission plus a {@code pop}; a form that can skip pushing the value skips it
+	 * ({@link JvmSetqCompiler#compileForEffect}).
+	 * @param expr the form whose value is discarded
+	 * @param ctx the compilation context
+	 * @param className the class being generated
+	 */
+	static void compileForEffect(LispVal expr, JvmLispCompiler.Ctx ctx, String className) {
+		if (isInertStatement(expr) || compileStatementSetq(expr, ctx, className)) {
+			return;
+		}
+		// A special let's binding restore is always a statement (the cleanup of its
+		// protected region): the restore alone, no nil to pop.
+		if (expr instanceof LispCons cons && cons.car() instanceof LispSymbol head
+				&& LispNames.DYN_RESTORE_INTERNAL.equals(head.name())) {
+			JvmLetCompiler.emitRestoreForEffect(cons, ctx);
+			return;
+		}
+		// A let whose value is discarded compiles its WHOLE body for effect, so a final
+		// body form that is a raw-local assignment stores and stops -- the shape every
+		// loop body ends with once its accumulators live in raw slots
+		// (.kb/jvm-double-arithmetic.md). The recursion covers let* (nested lets).
+		if (expr instanceof LispCons cons && cons.isProperList() && cons.car() instanceof LispSymbol head
+				&& LispNames.LET.equals(head.name()) && cons.toList().size() > 2) {
+			// Past compileCons, so the form's site is entered here.
+			int site = ctx.enterSite(cons);
+			try {
+				JvmLetCompiler.compileForEffect(cons, ctx, className);
+			}
+			finally {
+				ctx.leaveSite(site);
+			}
+			return;
+		}
+		// A fresh-line's answer is built only for a site that reads it, and the offer is
+		// read back: a call the dispatch routes elsewhere leaves its value for the pop.
+		if (am.ik.rontolisp.compiler.ToplevelStatements.isFreshLine(expr)) {
+			LispVal outer = ctx.valueDropped;
+			ctx.valueDropped = expr;
+			compileExpr(expr, ctx, className);
+			boolean taken = ctx.valueDropped == null;
+			ctx.valueDropped = outer;
+			if (!taken) {
+				ctx.body.pop();
+			}
+			return;
+		}
+		compileExpr(expr, ctx, className);
+		ctx.body.pop();
+	}
+
+	/**
+	 * {@return whether the form has no effect, so in statement position -- no consumer
+	 * either -- it compiles to nothing} A self-evaluating literal or a {@code declare}
+	 * (always nil). A defun docstring is the common case: emitted, it was an
+	 * {@code ldc}/{@code pop} at the head of the method and a constant-pool string in the
+	 * class; {@code documentation} answers nil without reading it, on every backend. The
+	 * wasm backend drops the literals too ({@code WasmExprCompiler.compileForEffect}).
+	 */
+	static boolean isInertStatement(LispVal expr) {
+		return switch (expr) {
+			case LispString ignored -> true;
+			case LispInteger ignored -> true;
+			case LispBigInteger ignored -> true;
+			case LispRatio ignored -> true;
+			case LispDouble ignored -> true;
+			case LispComplex ignored -> true;
+			case LispChar ignored -> true;
+			case LispNil ignored -> true;
+			case LispTrue ignored -> true;
+			case LispSymbol sym -> sym.isKeyword();
+			case LispCons cons -> cons.car() instanceof LispSymbol head && LispNames.DECLARE.equals(head.name());
+			default -> false;
+		};
+	}
+
+	/**
+	 * {@return true when the form was an assignment that stored and stopped there} The
+	 * statement half of {@link #compileForEffect}, split out so the tail-spine driver
+	 * ({@link JvmBodyOutliner}) can take it before falling back to "value, then pop".
+	 */
+	static boolean compileStatementSetq(LispVal expr, JvmLispCompiler.Ctx ctx, String className) {
+		if (!(expr instanceof LispCons cons && cons.car() instanceof LispSymbol head
+				&& LispNames.SETQ.equals(head.name()))) {
+			return false;
+		}
+		// Past compileCons, so the form's site is entered here.
+		int site = ctx.enterSite(cons);
+		try {
+			return JvmSetqCompiler.compileForEffect(cons, ctx, className);
+		}
+		finally {
+			ctx.leaveSite(site);
+		}
+	}
+
+	/**
+	 * Compiles an {@code if}/{@code while} test through the fused-comparison path
+	 * ({@link JvmIntFusionCompiler#tryCompileCondition}), which emits the test form
+	 * without passing through {@link #compileCons}: the form's site is entered here.
+	 * @param test the test form
+	 * @param ctx the compilation context
+	 * @param className the class being generated
+	 * @return whether the test compiled as a raw truth value
+	 */
+	static boolean tryCompileFusedCondition(LispVal test, JvmLispCompiler.Ctx ctx, String className) {
+		int site = test instanceof LispCons cons ? ctx.enterSite(cons) : -1;
+		try {
+			return JvmIntFusionCompiler.tryCompileCondition(test, ctx, className);
+		}
+		finally {
+			ctx.leaveSite(site);
+		}
+	}
+
+	static void compileExpr(LispVal expr, JvmLispCompiler.Ctx ctx, String className) {
+		// The tail spine (JvmBodyOutliner) reaches exactly one form at a time: it is
+		// handed over here and taken away again, so a nested form never inherits it.
+		JvmBodyOutliner.@Nullable Tail tail = ctx.tailBody;
+		ctx.tailBody = null;
+		switch (expr) {
+			case LispInteger i -> JvmEmitHelper.compileLong(i.value(), ctx);
+			case LispBigInteger b -> JvmEmitHelper.compileBigInteger(b.value(), ctx);
+			case LispRatio r -> JvmEmitHelper.compileRatio(r, ctx);
+			case LispDouble d -> JvmEmitHelper.compileDouble(d.value(), ctx);
+			case LispComplex c -> JvmComplexCompiler.compileLiteral(c, ctx, className);
+			case LispNil ignored -> ctx.body.aconst_null();
+			case LispTrue ignored -> JvmEmitHelper.compileTrue(ctx);
+			case LispString s -> JvmEmitHelper.compileStringLiteral(s.literal(), ctx);
+			case LispChar c -> JvmEmitHelper.compileCharLiteral(c.codePoint(), ctx);
+			case LispSymbol sym -> {
+				if (sym.isKeyword()) {
+					JvmEmitHelper.compileStringLiteral(sym.name(), ctx);
+				}
+				else {
+					compileSymbolRef(sym, ctx);
+				}
+			}
+			case LispCons cons -> {
+				ctx.tailBody = tail;
+				compileCons(cons, ctx, className);
+			}
+			case am.ik.rontolisp.LispArray array -> JvmQuoteCompiler.compileLiteralArray(array, ctx, className);
+			case am.ik.rontolisp.LispCircularLiteral literal ->
+				JvmQuoteCompiler.compileCircularLiteral(literal, ctx, className);
+			// An instance is self-evaluating (CLHS 3.1.2.1.3: neither a symbol nor a
+			// cons), so a #S(...) literal in code position builds the same
+			// Object[]{layout, slots...} %obj-new does.
+			case am.ik.rontolisp.LispInstance inst -> JvmQuoteCompiler.compileLiteralInstance(inst, ctx, className);
+			// A packed #d(...) double-float literal compiles to a native double[] with a
+			// dimension header (the packed representation), disjoint from the general
+			// array.
+			case am.ik.rontolisp.LispDoubleFloatArray fa -> JvmQuoteCompiler.compilePackedLiteral(fa, ctx);
+			// A packed #f(...) single-float literal compiles to a native float[] with a
+			// dimension header (the single-float packed representation), disjoint from
+			// the
+			// general array and from the double[] packed representation.
+			case am.ik.rontolisp.LispSingleFloatArray fa -> JvmQuoteCompiler.compileSinglePackedLiteral(fa, ctx);
+			// A packed #bf16(...) bfloat16 literal compiles to a native short[] with the
+			// two-slot dimension header (JvmPackedFloatWidth.BFLOAT16).
+			case am.ik.rontolisp.LispBFloat16Array fa -> JvmQuoteCompiler.compileBFloat16PackedLiteral(fa, ctx);
+			// A packed integer-vector literal compiles to the native packed
+			// representation, a bare array with a width header.
+			case am.ik.rontolisp.LispIntVector iv -> JvmQuoteCompiler.compileLiteralIntVector(iv, ctx, className);
+			default -> throw new UnsupportedOperationException("Cannot compile: " + expr.print());
+		}
+	}
+
+	/**
+	 * Compiles the expansion a pass-through lowering answers for {@code cons}, where the
+	 * form stood: the expansion's value is the form's, so when the form is the method's
+	 * tail, the expansion is ({@link JvmSelfTailCall}, {@link JvmTailBounce}), and when
+	 * the form is on the exit chain, so is the expansion ({@code Ctx.exitMark}). Only an
+	 * arm that emits nothing after the expansion may call this.
+	 * @param cons the form
+	 * @param expansion what it lowers to
+	 * @param ctx the compilation context
+	 * @param className the class being generated
+	 */
+	static void compileExpansion(LispCons cons, LispVal expansion, JvmLispCompiler.Ctx ctx, String className) {
+		LispVal savedMark = ctx.tailMark;
+		LispVal savedExit = ctx.exitMark;
+		if (JvmReturnCompiler.onExitChain(cons, ctx)) {
+			ctx.exitMark = expansion;
+		}
+		if (savedMark == cons) {
+			ctx.tailMark = expansion;
+		}
+		compileExpr(expansion, ctx, className);
+		ctx.tailMark = savedMark;
+		ctx.exitMark = savedExit;
+	}
+
+	static void compileSymbolRef(LispSymbol sym, JvmLispCompiler.Ctx ctx) {
+		String name = sym.name();
+		if (ctx.mvChannel == null && LispNames.MV_SPILL.equals(name)) {
+			// A program without the spill global publishes nothing, so an expansion's
+			// read of the channel answers nil (.kb/multiple-values.md).
+			ctx.body.aconst_null();
+			return;
+		}
+		// An unboxed dual-representation local (.kb/jvm-int-fusion.md): never special,
+		// never captured, never in ctx.locals -- resolved first. (A raw GLOBAL is
+		// resolved in compileSpecialRead, below every lexical binding of the name.)
+		JvmIntFusionCompiler.RawLocal rawLocal = ctx.rawLocals.get(name);
+		if (rawLocal != null) {
+			JvmIntFusionCompiler.emitRawLocalBoxedRead(rawLocal, ctx);
+			return;
+		}
+		// A declared-float local kept in a raw double slot
+		// (.kb/jvm-double-arithmetic.md): like a raw local, never special, never
+		// captured, never in ctx.locals. A read outside the routed double path boxes
+		// fresh -- the slot is always authoritative.
+		Integer rawDoubleSlot = ctx.rawDoubleLocals.get(name);
+		if (rawDoubleSlot != null) {
+			ctx.body.dload(rawDoubleSlot);
+			JvmEmitHelper.boxDouble(ctx);
+			return;
+		}
+		// A special is never a lexical (JvmLetCompiler binds it in its global field or
+		// its dynamic cell alone), so it reaches the globals arm below wherever it is
+		// read: the active binding, in a closure as in the binding method.
+		Integer slot = ctx.locals.get(name);
+		if (slot != null) {
+			if (ctx.boxedVars.contains(name)) {
+				ctx.body.aload(slot).checkcast(ctx.objectArrayClass).iconst_0().aaload();
+			}
+			else {
+				ctx.body.aload(slot);
+			}
+		}
+		else if (ctx.captures.containsKey(name)) {
+			int captureIdx = ctx.captures.get(name);
+			ctx.body.aload(ctx.closureEnvSlot);
+			JvmEmitHelper.emitIntConst(ctx, 1 + captureIdx);
+			ctx.body.aaload().checkcast(ctx.objectArrayClass).iconst_0().aaload();
+		}
+		else if (ctx.globals.contains(name)) {
+			// A top-level global variable: read from its dedicated static field. Works
+			// from any method body (main, defun, lambda), so a function can reference a
+			// defvar/defparameter global. A dynamically-bound special reads its
+			// thread's binding first (compileSpecialRead).
+			compileSpecialRead(name, ctx);
+		}
+		else if (LispNames.REPL_VARIABLES.contains(name)) {
+			// A REPL history variable the program never assigns: nil, as outside any
+			// REPL.
+			ctx.body.aconst_null();
+		}
+		else if (ctx.dynamic) {
+			JvmDynamicCallCompiler.compileVarRef(name, ctx);
+		}
+		else if (LispNames.STANDARD_OUTPUT_VAR.equals(name) || LispNames.STANDARD_INPUT_VAR.equals(name)) {
+			// The standard stream variables hold the designator t (the interpreter's
+			// permanent value; the program never binds this one, so print/read-family
+			// redirection through it does not exist here).
+			JvmEmitHelper.compileTrue(ctx);
+		}
+		else if (LispNames.ERROR_OUTPUT_VAR.equals(name)) {
+			// *error-output* is the process standard ERROR, which t does not name: it is
+			// the stream VALUE over the reserved handle 2, the same value the interpreter
+			// holds. A program that names the variable gives it a global seeded once
+			// (JvmLispCompiler), so this arm is reached only by a read the source scan
+			// cannot see. Mentioning the variable is what turns the stream-value gate on
+			// (LispMacroExpander.mayCreateStreamValues), so the constructor form always
+			// compiles here.
+			JvmExprCompiler.compileExpr(StreamDesignators.standardError(), ctx, ctx.className);
+		}
+		else {
+			// Lisp-2: a bare symbol is a variable reference only; functions must be
+			// referenced via (function name) / #'name.
+			throw new UnsupportedOperationException(
+					"Cannot compile symbol reference: " + name + PackageRegistry.standardNameAdvice(name));
+		}
+	}
+
+	/**
+	 * Reads a global variable. A special whose dynamic binding is thread-scoped
+	 * ({@code Ctx.threadScopedSpecials}) reads DYNAMIC-FIRST through {@code _dget} (this
+	 * thread's binding when one is active, else the {@code _g$} global default); every
+	 * other global -- a special a shallow binding sets, one that is never
+	 * {@code let}-bound -- stays a single {@code getstatic}. A global whose field carries
+	 * its bound-ness ({@link JvmDynVarRuntimeBuilder#unboundMarker}) passes the value
+	 * through {@code _bound} with its name, which signals the {@code unbound-variable}
+	 * naming it for the UNBOUND marker.
+	 */
+	static void compileSpecialRead(String name, JvmLispCompiler.Ctx ctx) {
+		if (ctx.mvChannel != null && LispNames.MV_SPILL.equals(name)) {
+			ctx.mvChannel.emitLoad(ctx);
+			return;
+		}
+		// A promoted global carrying the unboxed dual representation (JvmRawGlobals):
+		// the raw field when the flag is set, the _g$ shadow otherwise. Never a
+		// dynamically bound special, so this cannot skip the _dget path.
+		JvmIntFusionCompiler.RawLocal rawGlobal = ctx.rawGlobals.get(name);
+		if (rawGlobal != null) {
+			JvmIntFusionCompiler.emitRawLocalBoxedRead(rawGlobal, ctx);
+			return;
+		}
+		JvmDynVarRuntimeBuilder.DynVarRuntime dyn = ctx.dynVars;
+		java.lang.classfile.constantpool.FieldRefEntry tlField = dyn == null ? null : dyn.fields().get(name);
+		if (tlField != null) {
+			ctx.body.getstatic(tlField);
+			ctx.body.getstatic(java.util.Objects.requireNonNull(ctx.globalFields.get(name)));
+			ctx.body.invokestatic(java.util.Objects.requireNonNull(dyn).dget());
+		}
+		else {
+			ctx.body.getstatic(java.util.Objects.requireNonNull(ctx.globalFields.get(name)));
+		}
+		// A global whose field carries its bound-ness: the UNBOUND marker signals.
+		JvmDynVarRuntimeBuilder.UnboundMarker marker = ctx.unboundMarker;
+		if (marker != null && marker.globals().contains(name)) {
+			JvmEmitHelper.compileUnspelledLiteral(name, ctx);
+			ctx.body.invokestatic(marker.bound());
+		}
+	}
+
+	private static void compileCons(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		// The innermost form's operator names a wrong-type operand's report
+		// (JvmOperandTypeRuntime): a numeric helper called while compiling THIS form
+		// goes through its operator's wrapper, one called while compiling an argument
+		// form through that form's.
+		@Nullable String outerOperator = ctx.operator;
+		ctx.operator = cons.car() instanceof LispSymbol head ? head.name() : null;
+		// The code this form compiles to reports the form's site when it fails
+		// (JvmSourceSites): the innermost located form wins, as in the interpreter.
+		int site = ctx.enterSite(cons);
+		// A warning about a form a macro built is placed at this one when it is the
+		// innermost located form around it (CompileWarnings).
+		LispCons enclosing = SourceProvenance.enterForm(cons);
+		try {
+			compileConsLocated(cons, ctx, className);
+		}
+		catch (RuntimeException ex) {
+			// The innermost cons that came from source names the position; the exception
+			// itself is rethrown untouched, since passes above catch it by type.
+			throw SourceProvenance.noteFailure(cons, ex);
+		}
+		finally {
+			ctx.operator = outerOperator;
+			ctx.leaveSite(site);
+			SourceProvenance.leaveForm(enclosing);
+		}
+	}
+
+	/**
+	 * A non-top-level {@code defun}: the {@code (setq name (lambda ...))} it lowers to,
+	 * with the lambda keeping the name for the uncaught report -- the interpreter
+	 * installs a nested defun as a named function, and an anonymous lambda would hand its
+	 * failures to whatever function called it. A name the run-time function namespace
+	 * holds ({@code compiler/NestedDefunNamespace}) installs the lambda there instead.
+	 */
+	private static void compileNestedDefun(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		LispVal lowered = LispMacroExpander.expandDefun(cons);
+		UncaughtReport.NestedDefun nested = UncaughtReport.nestedDefun(lowered);
+		if (nested != null) {
+			ctx.lambdaReportNames.put(nested.lambda(), nested.name());
+			if (ctx.fenvForwarders.contains(nested.name())) {
+				lowered = NestedDefunNamespace.install(nested);
+			}
+		}
+		compileExpr(lowered, ctx, className);
+	}
+
+	private static void compileConsLocated(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		JvmBodyOutliner.@Nullable Tail tail = ctx.tailBody;
+		ctx.tailBody = null;
+		LispVal head = cons.car();
+		// A dotted tail is only meaningful as data (inside quote); in call position it
+		// would otherwise be silently dropped by the toList() walks below.
+		if (!(head instanceof LispSymbol qhead && LispNames.QUOTE.equals(qhead.name())) && !cons.isProperList()) {
+			throw new UnsupportedOperationException("Improper list in call position: " + cons.print());
+		}
+		if (head instanceof LispSymbol sym) {
+			if (LispNames.RUN_TOP_GROUP.equals(sym.name())) {
+				// A top-level group's forms, run where this thunk body stands: Pass 2b
+				// compiled them into chunk methods main does not call
+				// (compiler/SplicedComponentGroups). Lambda bodies compile after Pass 2b,
+				// so the chunks are known here.
+				for (MethodRefEntry chunk : ctx.topGroupChunks
+					.getOrDefault(SplicedComponentGroups.runTopGroupIndex(cons), List.of())) {
+					ctx.body.invokestatic(chunk);
+				}
+				ctx.body.aconst_null();
+				return;
+			}
+			// A wrapped built-in called with a count its lambda list rules out never
+			// reaches a lowering, which would drop the surplus or index past the form: it
+			// evaluates its arguments and signals the interpreter's program-error
+			// (compiler/BuiltinCallArity). A program's own definition of the name keeps
+			// its own call path -- unless it is a native built-in's and its lambda list
+			// takes the built-in's own counts (a library's implementation of it), which
+			// reports as the built-in.
+			boolean builtinCall = !ctx.userDefunNames.contains(sym.name())
+					|| ctx.builtinShapedDefuns.contains(sym.name());
+			LispVal wrongCount = builtinCall ? BuiltinCallArity.wrongCountSignal(cons) : null;
+			if (wrongCount != null) {
+				compileExpr(wrongCount, ctx, className);
+				return;
+			}
+			// A count the shape admits that no lowering takes: the argument the operator
+			// accepts and ignores (read's recursive-p, subtypep's environment) is
+			// evaluated in its place and the call compiled without it.
+			LispVal withoutIgnored = builtinCall ? IgnoredArgument.drop(cons) : cons;
+			if (withoutIgnored != cons) {
+				compileExpr(withoutIgnored, ctx, className);
+				return;
+			}
+			PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(sym.name());
+			if (qn != null && LispNames.RONTOLISP_PKG.equals(qn.pkg())) {
+				if (LispNames.VERSION.equals(qn.member())) {
+					JvmVersionCompiler.compile(cons, ctx, className);
+					return;
+				}
+				if (LispNames.OPEN_STREAM_P_RAW_INTERNAL.equals(qn.member())) {
+					JvmOpenStreamPCompiler.compile(cons, ctx, className);
+					return;
+				}
+				if (JvmRunTimeLinkCompiler.handles(qn.member())) {
+					// A Clojure lowering verb at run time, and the forms compiled for it
+					// (JvmLinkage).
+					JvmRunTimeLinkCompiler.compile(qn.member(), cons, ctx, className);
+					return;
+				}
+				if (LispNames.FETCH.equals(qn.member())) {
+					JvmFetchCompiler.compile(cons, ctx, className);
+					return;
+				}
+				if (LispNames.AWAIT.equals(qn.member())) {
+					JvmAwaitCompiler.compile(cons, ctx, className);
+					return;
+				}
+				if (LispNames.FUTURE_FORCE_INTERNAL.equals(qn.member())) {
+					// The function spelling of the resolve: same _await emission, legal
+					// outside async bodies (the http-reactor transport's boundary).
+					JvmAwaitCompiler.compile("rontolisp::" + LispNames.FUTURE_FORCE_INTERNAL, cons, ctx, className);
+					return;
+				}
+				if (JvmAsyncOpsCompiler.handles(qn.member())) {
+					JvmAsyncOpsCompiler.compile(qn.member(), cons, ctx, className);
+					return;
+				}
+				if (LispNames.ASYNC.equals(qn.member())) {
+					// normally rewritten by the compile() pre-pass; a stray nested
+					// wrapper expands to async-defun/async-lambda and re-dispatches here
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandAsync(cons), ctx, className);
+					return;
+				}
+				if (LispNames.ASYNC_DEFUN.equals(qn.member())) {
+					// normally lowered by the compile() pre-pass; a stray nested form
+					// (e.g. macro-synthesized after the pre-pass) lowers here
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandAsyncDefun(cons), ctx, className);
+					return;
+				}
+				if (LispNames.ASYNC_LAMBDA.equals(qn.member())) {
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandAsyncLambda(cons), ctx, className);
+					return;
+				}
+				if (LispNames.TCP_CONNECT.equals(qn.member()) || LispNames.TCP_LISTEN.equals(qn.member())
+						|| LispNames.TCP_ACCEPT.equals(qn.member()) || LispNames.TCP_LOCAL_PORT.equals(qn.member())
+						|| LispNames.TCP_LOCAL_ADDRESS.equals(qn.member())
+						|| LispNames.TCP_PEER_ADDRESS.equals(qn.member()) || LispNames.TCP_PEER_PORT.equals(qn.member())
+						|| LispNames.TCP_SET_TIMEOUT.equals(qn.member()) || LispNames.TLS_CONNECT.equals(qn.member())
+						|| LispNames.TLS_UPGRADE.equals(qn.member()) || LispNames.TLS_LISTEN.equals(qn.member())
+						|| LispNames.TLS_LISTEN_P12.equals(qn.member())
+						|| LispNames.TCP_READ_SOME_INTERNAL.equals(qn.member())
+						|| LispNames.TCP_SOCKET_INTERNAL.equals(qn.member())
+						|| LispNames.TCP_CONNECT_SOCKET_INTERNAL.equals(qn.member())
+						|| LispNames.TCP_SHUTDOWN_INTERNAL.equals(qn.member())
+						|| LispNames.TCP_OPTION_INTERNAL.equals(qn.member())) {
+					JvmTcpCompiler.compile(qn.member(), cons, ctx, className);
+					return;
+				}
+				if (LispNames.HTTP_HANDLER.equals(qn.member())) {
+					JvmHttpHandlerCompiler.compile(cons, ctx, className);
+					return;
+				}
+				if (JvmHttpServerSeamCompiler.handles(qn.member())) {
+					JvmHttpServerSeamCompiler.compile(qn.member(), cons, ctx, className);
+					return;
+				}
+				if (LispNames.COPY_EQUAL_TABLE_INTERNAL.equals(qn.member())) {
+					// The copy every Clojure map verb takes: _hashCopy, which shares an
+					// equal table's structure.
+					JvmHashTableCompiler.compileCopy(cons, ctx, className);
+					return;
+				}
+				if (LispNames.OCTETS_TO_STRING_PACKED_INTERNAL.equals(qn.member())) {
+					// The native half of the prelude's lenient octet decoder: a packed
+					// octet vector decoded (the JDK's strict decode, else a transcode by
+					// the lenient arms), or nil for any other value (_octetsToString,
+					// emitted because the reference gated it).
+					if (cons.toList().size() != 2) {
+						throw new UnsupportedOperationException(
+								"%octets-to-string-packed expects 1 argument, got " + (cons.toList().size() - 1));
+					}
+					compileExpr(cons.toList().get(1), ctx, className);
+					ctx.body.invokestatic(ctx.cp.methodRef(ctx.cp.classEntry(className),
+							JvmAsyncRuntimeBuilder.OCTETS_PACKED_METHOD, JvmAsyncRuntimeBuilder.UNARY_DESC));
+					return;
+				}
+				if (LispNames.CONS_CAS_CAR_INTERNAL.equals(qn.member())
+						|| LispNames.CONS_CAS_CDR_INTERNAL.equals(qn.member())) {
+					compileConsCas(qn.member(), cons, ctx, className);
+					return;
+				}
+				if (JvmLispCompiler.CONDITION_VARIABLE_METHODS.containsKey(qn.member())) {
+					compileConditionVariable(qn.member(), cons, ctx, className);
+					return;
+				}
+				if (LispNames.RUN_PROGRAM_INTERNAL.equals(qn.member())) {
+					compileRunProgram(cons, ctx, className);
+					return;
+				}
+				if (JvmLispCompiler.INFLATE_METHODS.containsKey(qn.member())) {
+					// The streaming DEFLATE decoder of a compressed HTTP reply:
+					// runtime/RontoInflate, which travels with the class (the wasm
+					// targets
+					// splice the Lisp decoder instead, eval/InflateLibrary).
+					List<LispVal> items = cons.toList();
+					int arity = LispNames.INFLATE_UPDATE_INTERNAL.equals(qn.member()) ? 3 : 1;
+					if (items.size() != arity + 1) {
+						throw new UnsupportedOperationException(
+								qn.member().toLowerCase(java.util.Locale.ROOT) + " expects " + arity + " argument"
+										+ (arity == 1 ? "" : "s") + ", got " + (items.size() - 1));
+					}
+					for (int i = 1; i <= arity; i++) {
+						compileExpr(items.get(i), ctx, className);
+					}
+					ctx.body.invokestatic(ctx.cp.methodRef(ctx.cp.classEntry(JvmLispCompiler.INFLATE_CLASS),
+							JvmLispCompiler.INFLATE_METHODS.get(qn.member()),
+							(arity == 1) ? JvmAsyncRuntimeBuilder.UNARY_DESC
+									: "(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"));
+					return;
+				}
+				if (LispNames.RANDOM_BYTE_INTERNAL.equals(qn.member())) {
+					// One cryptographically strong byte from the lazily created
+					// SecureRandom (_randomByte, emitted because the reference gated it).
+					if (cons.toList().size() != 1) {
+						throw new UnsupportedOperationException(
+								"%random-byte expects 0 arguments, got " + (cons.toList().size() - 1));
+					}
+					ctx.body.invokestatic(ctx.cp.methodRef(ctx.cp.classEntry(className),
+							JvmSecureRandomRuntimeBuilder.METHOD, JvmSecureRandomRuntimeBuilder.DESC));
+					return;
+				}
+				if (LispNames.WASM_EXPORT.equals(qn.member())) {
+					// rontolisp:wasm-export marks a function for direct WASM export; the
+					// JVM
+					// backend has no notion of it, so it is a no-op that yields nil.
+					ctx.body.aconst_null();
+					return;
+				}
+				if (LispNames.JVM_EXPORT.equals(qn.member())) {
+					// A top-level (rontolisp:jvm-export ...) was consumed in Pass 1;
+					// reaching this compiler means the directive is nested inside a
+					// body, where it cannot declare anything.
+					throw new UnsupportedOperationException(
+							"rontolisp:jvm-export is a top-level directive; it cannot appear inside a function body");
+				}
+				if (LispNames.WASM_IMPORT.equals(qn.member())) {
+					// rontolisp:wasm-import declares a host function imported into WASM
+					// output; on the JVM the error-signalling stub defun was registered
+					// in pass 1, so the directive itself is a no-op that yields nil.
+					ctx.body.aconst_null();
+					return;
+				}
+				if (LispNames.WITH_ARENA.equals(qn.member())) {
+					// A reclamation boundary for --no-gc; the JVM heap is
+					// garbage-collected, so the body runs as a plain progn.
+					compileExpr(LispMacroExpander.expandWithArena(cons), ctx, className);
+					return;
+				}
+				if (LispNames.WITH_MUTEX.equals(qn.member())) {
+					compileExpr(LispMacroExpander.expandWithMutex(cons), ctx, className);
+					return;
+				}
+				if (LispNames.BFLOAT16_BITS.equals(qn.member())) {
+					JvmBFloat16Compiler.compileBits(cons, ctx, className);
+					return;
+				}
+				if (LispNames.BITS_BFLOAT16.equals(qn.member())) {
+					JvmBFloat16Compiler.compileFromBits(cons, ctx, className);
+					return;
+				}
+				if (LispNames.MAKE_MUTEX.equals(qn.member()) || LispNames.MUTEX_ACQUIRE.equals(qn.member())
+						|| LispNames.MUTEX_RELEASE.equals(qn.member())) {
+					// A real ReentrantLock, handed out as the handle itself
+					// (JvmMutexRuntimeBuilder, emitted because the reference gated it).
+					compileMutex(qn.member(), cons, ctx, className);
+					return;
+				}
+				if (LispNames.MAKE_THREAD.equals(qn.member()) || LispNames.JOIN_THREAD.equals(qn.member())
+						|| LispNames.THREADP.equals(qn.member()) || LispNames.THREAD_ALIVE_P.equals(qn.member())
+						|| LispNames.DESTROY_THREAD.equals(qn.member()) || LispNames.CURRENT_THREAD.equals(qn.member())
+						|| LispNames.THREAD_NAME_INTERNAL.equals(qn.member())) {
+					// A real virtual thread behind a marker-headed opaque handle
+					// (JvmThreadRuntimeBuilder, emitted because the reference gated it).
+					compileThread(qn.member(), cons, ctx, className);
+					return;
+				}
+				if (LispNames.FLOAT16_BITS.equals(qn.member())) {
+					JvmFloat16Compiler.compileFloat16Bits(cons, ctx, className);
+					return;
+				}
+				if (LispNames.BITS_FLOAT16.equals(qn.member())) {
+					JvmFloat16Compiler.compileBitsFloat16(cons, ctx, className);
+					return;
+				}
+				if (LispNames.WIDEN_FLOAT_BITS.equals(qn.member())) {
+					JvmFloat16Compiler.compileWiden(cons, ctx, className);
+					return;
+				}
+				if (LispNames.NARROW_FLOAT_BITS.equals(qn.member())) {
+					JvmFloat16Compiler.compileNarrow(cons, ctx, className);
+					return;
+				}
+				if (JvmQuantizedMatrixCompiler.handles(qn.member())) {
+					// The block-quantized weight matrix (.kb/quantized-matrix.md).
+					JvmQuantizedMatrixCompiler.compile(qn.member(), cons, ctx, className);
+					return;
+				}
+				// Other rontolisp: members (user defuns in that package) fall through.
+			}
+			if (qn != null && LispNames.JAVA_PKG.equals(qn.pkg()) && JvmJavaInteropCompiler.handles(qn.member())) {
+				JvmJavaInteropCompiler.compile(qn.member(), cons, ctx, className);
+				return;
+			}
+			if (qn != null && LispNames.OBJC_PKG.equals(qn.pkg())
+					&& LispNames.OBJC_WITH_AUTORELEASE_POOL.equals(qn.member())) {
+				compileExpr(LispMacroExpander.expandObjcWithAutoreleasePool(cons), ctx, className);
+				return;
+			}
+			if (qn != null && JvmObjcPrimitivesCompiler.handles(sym.name())) {
+				JvmObjcPrimitivesCompiler.compile(sym.name(), cons, ctx, className);
+				return;
+			}
+			if (qn != null && LispNames.FFI_PKG.equals(qn.pkg()) && JvmFfiInteropCompiler.handles(qn.member())) {
+				JvmFfiInteropCompiler.compile(qn.member(), cons, ctx, className);
+				return;
+			}
+			// The uiop MACROS with real expansions. A macro cannot reach the uiop stub
+			// lowering (which only sees function-call shapes), and these are not stubs:
+			// smart-buffer's disk-spill path runs with-temporary-file, and the
+			// definition wrappers (with-deprecation / with-upgradability) reach here for
+			// the occurrences nested in an expression -- the flattening pass has already
+			// spliced the top-level ones. One dispatcher shared with the interpreter,
+			// the WASM compiler and FreeVarAnalyzer.
+			if (qn != null && UiopExports.isUiopFamily(qn.pkg())) {
+				// Other uiop members fall through to the stub lowering.
+				LispVal uiopMacro = LispMacroExpander.expandUiopMacro(cons, true);
+				if (uiopMacro != null) {
+					compileExpr(uiopMacro, ctx, className);
+					return;
+				}
+				// A uiop MACRO nothing implements yet, lowered HERE rather than in
+				// JvmFunctionCallCompiler: its synthesized stub is a real variadic defun
+				// (so the name is fboundp), which means the ordinary call path finds it
+				// and compiles its ARGUMENT FORMS before signalling -- and a macro that
+				// does nothing must not evaluate what it was handed. The stub lowering
+				// further down only runs for a name with no defun at all.
+				LispVal uiopStub = LispMacroExpander.expandUnimplementedUiopMacro(cons);
+				if (uiopStub != null) {
+					compileExpr(uiopStub, ctx, className);
+					return;
+				}
+			}
+			// The usocket with-* convenience macros are built-in LispMacroExpander
+			// expansions (the rontolisp:with-arena pattern) over the usocket.lisp defuns.
+			if (qn != null && LispNames.USOCKET_PKG.equals(qn.pkg())) {
+				switch (qn.member()) {
+					case LispNames.USOCKET_WITH_CLIENT_SOCKET -> {
+						compileExpr(LispMacroExpander.expandUsocketWithClientSocket(cons), ctx, className);
+						return;
+					}
+					case LispNames.USOCKET_WITH_CONNECTED_SOCKET, LispNames.USOCKET_WITH_SERVER_SOCKET -> {
+						compileExpr(LispMacroExpander.expandUsocketWithConnectedSocket(cons), ctx, className);
+						return;
+					}
+					case LispNames.USOCKET_WITH_SOCKET_LISTENER -> {
+						compileExpr(LispMacroExpander.expandUsocketWithSocketListener(cons), ctx, className);
+						return;
+					}
+					case LispNames.USOCKET_GUARD -> {
+						compileExpr(LispMacroExpander.expandUsocketGuard(cons, true), ctx, className);
+						return;
+					}
+					default -> {
+						// Other usocket: members (the usocket.lisp defuns) fall through
+						// to
+						// the ordinary qualified-call path.
+					}
+				}
+			}
+			// bordeaux-threads:with-lock-held -- and its recursive twin, the shim's
+			// lock being reentrant -- is the same built-in expansion as
+			// rontolisp:with-mutex; the rest of the bt shim is bordeaux-threads.lisp
+			// defuns, which fall through to the ordinary qualified-call path.
+			if (qn != null && LispNames.BORDEAUX_THREADS_PKG.equals(qn.pkg())
+					&& (LispNames.WITH_LOCK_HELD.equals(qn.member())
+							|| LispNames.WITH_RECURSIVE_LOCK_HELD.equals(qn.member()))) {
+				compileExpr(LispMacroExpander.expandWithMutex(cons), ctx, className);
+				return;
+			}
+			// torch:no-grad is a built-in LispMacroExpander expansion (the usocket with-*
+			// pattern): a let that dynamically rebinds the spliced torch.lisp
+			// defparameter torch::*grad-enabled*. The other torch: members are the
+			// torch.lisp defuns and fall through to the ordinary qualified-call path.
+			if (qn != null && LispNames.TORCH_PKG.equals(qn.pkg()) && LispNames.TORCH_NO_GRAD.equals(qn.member())) {
+				compileExpr(LispMacroExpander.expandTorchNoGrad(cons), ctx, className);
+				return;
+			}
+			// --gpu / --blas: the two vec: members that are a matrix product -- matvec
+			// and matvec-into -- have accelerators above the lane kernel, and neither
+			// flag implies --simd. Their call site is therefore a CHAIN over one set of
+			// temps: the device attempt (the allocating form only, .kb/gpu.md), then the
+			// library GEMV (.kb/linalg-blas.md), then the lane kernel when --simd emitted
+			// one, else the spliced defun. Claimed whenever either of those bridges was
+			// emitted, with or without --simd; a --simd-only build keeps the bare
+			// INVOKESTATIC of the arm below.
+			if (qn != null && LispNames.VEC_PKG.equals(qn.pkg())
+					&& (ctx.blasOps != null && JvmLinalgBlas.vecKernelKey(qn.member()) != null
+							|| ctx.gpuOps != null && LispNames.VEC_MATVEC.equals(qn.member()))) {
+				JvmSimdCompiler.compileMatvecChain(qn.member(), cons, ctx, className);
+				return;
+			}
+			// --vec: route the six vectorizable vec: kernels to the embedded Vector API
+			// bridge instead of the scalar vec.lisp defun. Only when the runtime was
+			// emitted (ctx.simdOps != null); otherwise this falls through to the ordinary
+			// qualified-call path and runs the spliced scalar reference.
+			if (qn != null && LispNames.VEC_PKG.equals(qn.pkg()) && ctx.simdOps != null
+					&& JvmSimdCompiler.handles(qn.member())) {
+				JvmSimdCompiler.compile(qn.member(), cons, ctx, className);
+				return;
+			}
+			// --simd / --blas: the accelerated linalg: kernels. Unlike vec:, each bridge
+			// call is guarded -- a kernel that declines the operands (a general array, a
+			// mixed width, a shape error) returns null and the emitted call site tries
+			// the next attempt, ending at the scalar linalg.lisp defun over the same
+			// temps.
+			if (qn != null && LispNames.LINALG_PKG.equals(qn.pkg())
+					&& JvmLinalgKernelCompiler.claims(qn.member(), ctx)) {
+				JvmLinalgKernelCompiler.compile(qn.member(), cons, ctx, className);
+				return;
+			}
+			// The geom: kernels behind a model file's load: the same guarded chain, one
+			// attempt deep and with no flag in front of it -- the bridge is emitted only
+			// when the program calls one of the four (JvmGeomKernelCompiler).
+			if (qn != null && LispNames.GEOM_PKG.equals(qn.pkg())
+					&& JvmGeomKernelCompiler.claims(JvmGeomKernelCompiler.qualifiedName(qn.member()), ctx)) {
+				JvmGeomKernelCompiler.compile(JvmGeomKernelCompiler.qualifiedName(qn.member()), cons, ctx, className);
+				return;
+			}
+			// A program that defines its own function on a cl name loses every call site
+			// the operator dispatch below claims -- silently, until this. Armed here and
+			// disarmed in the default arm (the ordinary call path, which DOES resolve
+			// the defun), so a cl name this backend never intercepts stays quiet:
+			// compile-runtime.lisp's `compile`, a deliberate Lisp-source definition of a
+			// standard function. See compiler/ClRedefinitionWarnings for why the answer
+			// is a diagnostic rather than honouring the definition.
+			boolean redefinedClFunction = ClRedefinitionWarnings.redefinesClFunction(sym.name(), ctx.userDefunNames);
+			// A rontolisp:-qualified name never reaches this switch -- sym.name() for one
+			// is the QUALIFIED spelling ("RONTOLISP:FOO"), which matches none of the case
+			// labels below (those are cl:/bare names). Add a rontolisp: primitive's case
+			// to the qn.pkg()-keyed if-chain ABOVE instead (see rontolisp:version,
+			// rontolisp:tcp-connect, rontolisp:bfloat16-bits for the shape); a case added
+			// here compiles clean and then silently falls through to "undefined function"
+			// at the call site.
+			//
+			// The dispatch is sliced across compileOperator1..5 because one switch over
+			// every operator made this method ~27 KB of bytecode: past HotSpot's
+			// HugeMethodLimit (8,000 B) a method is never JIT-compiled, and this one runs
+			// once per compiled cons. HugeMethodTest pins every slice under the limit.
+			if (!compileOperator1(sym, cons, ctx, className, tail) && !compileOperator2(sym, cons, ctx, className, tail)
+					&& !compileOperator3(sym, cons, ctx, className, tail)
+					&& !compileOperator4(sym, cons, ctx, className, tail)
+					&& !compileOperator5(sym, cons, ctx, className, tail)) {
+				// The ordinary call path resolves the program's own defun, so
+				// nothing was overridden here.
+				redefinedClFunction = false;
+				if (LispNames.isCarCdrComposition(sym.name())) {
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandCarCdrComposition(cons), ctx, className);
+				}
+				// A ROOT-position call to a fusion-inlinable defun fuses like a call
+				// inside a tree would (.kb/jvm-int-fusion.md); anything else takes
+				// the ordinary call path.
+				else if (!JvmIntFusionCompiler.tryCompileDefunCall(cons, ctx, className)) {
+					JvmFunctionCallCompiler.compileDefault(sym.name(), cons, ctx, className);
+				}
+			}
+			if (redefinedClFunction) {
+				warnClRedefinition(sym.name(), cons, ctx);
+			}
+		}
+		else if (head instanceof LispCons headCons && headCons.car() instanceof LispSymbol headSym
+				&& LispNames.LAMBDA.equals(headSym.name())) {
+			JvmLambdaCompiler.compileCall(headCons, cons, ctx, className);
+		}
+		else {
+			JvmFunctionCallCompiler.compileGeneralIndirect(cons, ctx, className);
+		}
+	}
+
+	/**
+	 * One slice of the operator dispatch of {@link #compileConsLocated} (see there).
+	 * @param sym the operator
+	 * @param cons the whole form
+	 * @param ctx the compilation context
+	 * @param className the class being generated
+	 * @param tail the tail spine the form inherits, if any
+	 * @return whether {@code sym} names an operator of this slice (the form is then
+	 * compiled)
+	 */
+	private static boolean compileOperator1(LispSymbol sym, LispCons cons, JvmLispCompiler.Ctx ctx, String className,
+			JvmBodyOutliner.@Nullable Tail tail) {
+		switch (sym.name()) {
+			// The integer expression-tree fusion tries first on the arithmetic and
+			// bitwise heads (.kb/jvm-int-fusion.md); when it declines (a single op
+			// over plain leaves, a double literal, --optimize=size) nothing was
+			// emitted and the per-op path below runs exactly as before.
+			case LispNames.ADD -> {
+				if (!JvmIntFusionCompiler.tryCompile(cons, ctx, className)) {
+					JvmArithCompiler.compile(cons, ctx, JvmNumericRuntimeBuilder.ADD, Opcode.DADD, className);
+				}
+			}
+			case LispNames.SUB -> {
+				if (!JvmIntFusionCompiler.tryCompile(cons, ctx, className)) {
+					JvmArithCompiler.compile(cons, ctx, JvmNumericRuntimeBuilder.SUB, Opcode.DSUB, className);
+				}
+			}
+			case LispNames.MUL -> {
+				if (!JvmIntFusionCompiler.tryCompile(cons, ctx, className)) {
+					JvmArithCompiler.compile(cons, ctx, JvmNumericRuntimeBuilder.MUL, Opcode.DMUL, className);
+				}
+			}
+			case LispNames.DIV ->
+				JvmArithCompiler.compile(cons, ctx, JvmNumericRuntimeBuilder.DIV, Opcode.DDIV, className);
+			case LispNames.MOD -> {
+				if (!JvmIntFusionCompiler.tryCompile(cons, ctx, className)) {
+					JvmArithCompiler.compile(cons, ctx, JvmNumericRuntimeBuilder.MOD, Opcode.DREM, className);
+				}
+			}
+			case LispNames.REM -> {
+				if (!JvmIntFusionCompiler.tryCompile(cons, ctx, className)) {
+					JvmArithCompiler.compile(cons, ctx, JvmNumericRuntimeBuilder.REM, Opcode.DREM, className);
+				}
+			}
+			case LispNames.EQ -> compileComparison(cons, ctx, className, Opcode.IFEQ);
+			case LispNames.LT -> compileComparison(cons, ctx, className, Opcode.IFLT);
+			case LispNames.GT -> compileComparison(cons, ctx, className, Opcode.IFGT);
+			case LispNames.LE -> compileComparison(cons, ctx, className, Opcode.IFLE);
+			case LispNames.GE -> compileComparison(cons, ctx, className, Opcode.IFGE);
+			case LispNames.PRINT ->
+				compilePrintOperator(cons, ctx, className, () -> JvmPrintCompiler.compile(cons, ctx, className));
+			case LispNames.PRIN1 ->
+				compilePrintOperator(cons, ctx, className, () -> JvmPrin1Compiler.compile(cons, ctx, className));
+			case LispNames.PRINC ->
+				compilePrintOperator(cons, ctx, className, () -> JvmPrincCompiler.compile(cons, ctx, className));
+			case LispNames.TERPRI -> JvmTerpriCompiler.compile(cons, ctx, className);
+			case LispNames.FRESH_LINE -> JvmFreshLineCompiler.compile(cons, ctx, className);
+			// The public print-to-string names finish with the mutable-result wrap
+			// every flipped producer emits (a no-op unless the producer flip is on);
+			// the %princ-piece / %prin1-piece aliases the expander builds its own
+			// pieces with are the same routed conversion WITHOUT it
+			// (.kb/string-write-runtime.md, "Allocated strings are mutable with
+			// identity").
+			case LispNames.PRINC_TO_STRING -> {
+				compilePrintOperator(cons, ctx, className,
+						() -> JvmPrincToStringCompiler.compile(cons, ctx, className));
+				JvmArrayCompiler.emitToMutStr(ctx, className);
+			}
+			case LispNames.PRIN1_TO_STRING -> {
+				compilePrintOperator(cons, ctx, className,
+						() -> JvmPrin1ToStringCompiler.compile(cons, ctx, className));
+				JvmArrayCompiler.emitToMutStr(ctx, className);
+			}
+			case LispNames.PRINC_PIECE_INTERNAL -> compilePrintOperator(cons, ctx, className,
+					() -> JvmPrincToStringCompiler.compile(cons, ctx, className));
+			case LispNames.PRIN1_PIECE_INTERNAL -> compilePrintOperator(cons, ctx, className,
+					() -> JvmPrin1ToStringCompiler.compile(cons, ctx, className));
+			// The print-object-free aliases the generated renderer's fallback calls.
+			case LispNames.PRINC_TO_STRING_RAW -> JvmPrincToStringCompiler.compile(cons, ctx, className);
+			case LispNames.PRIN1_TO_STRING_RAW -> JvmPrin1ToStringCompiler.compile(cons, ctx, className);
+			case LispNames.STRING_CONCAT -> JvmStringConcatCompiler.compile(cons, ctx, className);
+			// A fold-produced fresh-string constant: the literal, plus one
+			// mutable-copy wrap so each evaluation answers a fresh mutable string
+			// (PureBuiltinFolder's %str-fresh spelling).
+			case LispNames.STR_FRESH -> {
+				JvmExprCompiler.compileExpr(cons.toList().get(1), ctx, className);
+				JvmArrayCompiler.emitToMutStr(ctx, className);
+			}
+			case LispNames.FIXED_DECIMAL -> JvmFixedDecimalCompiler.compile(cons, ctx, className);
+			case LispNames.TEXT_CONTROL_INTERNAL -> JvmTextControlCompiler.compile(cons, ctx, className, false);
+			case LispNames.CONTROL_TEXT_INTERNAL -> JvmTextControlCompiler.compile(cons, ctx, className, true);
+			case LispNames.GENSYM -> JvmGensymCompiler.compile(cons, ctx, className);
+			case LispNames.STRING -> JvmSymbolApiCompiler.compileString(cons, ctx, className);
+			// The transport boundary's explicit render: normalize a mutable
+			// character vector into its framed string, anything else through
+			// unchanged (a no-op unless the array runtime is emitted -- without
+			// it no character vector can exist).
+			case LispNames.NORMALIZE_STRING -> {
+				JvmExprCompiler.compileExpr(cons.toList().get(1), ctx, className);
+				JvmArrayCompiler.emitStrvNormalize(ctx, className);
+			}
+			case LispNames.SUBSTRING_INTERNAL -> JvmSubseqCompiler.compileSubstring(cons, ctx, className);
+			// The case functions and the stream capture without the mutable-string wrap
+			// their public names finish with (.kb/string-write-runtime.md).
+			case LispNames.STRING_UPCASE_PIECE -> JvmStringUpcaseCompiler
+				.compileUpcase(LispMacroExpander.normalizeStringDesignatorArg(cons, 1), ctx, className);
+			case LispNames.STRING_DOWNCASE_PIECE -> JvmStringUpcaseCompiler
+				.compileDowncase(LispMacroExpander.normalizeStringDesignatorArg(cons, 1), ctx, className);
+			case LispNames.STRING_STREAM_PIECE -> JvmStringStreamCompiler.compileContents(cons, ctx, className);
+			case LispNames.STRING_ORDER -> {
+				// each operand into a temp as it is evaluated: nothing of this form is on
+				// the stack while the next one runs
+				java.util.List<LispVal> operands = cons.toList();
+				JvmExprCompiler.compileExpr(operands.get(1), ctx, className);
+				int first = ctx.allocTemp();
+				ctx.body.astore(first);
+				JvmExprCompiler.compileExpr(operands.get(2), ctx, className);
+				int second = ctx.allocTemp();
+				ctx.body.astore(second);
+				ctx.body.aload(first);
+				ctx.body.aload(second);
+				ctx.body.invokestatic(JvmEmitHelper.selfMethod(ctx, className,
+						JvmStringIndexRuntimeBuilder.ORDER_METHOD, JvmStringIndexRuntimeBuilder.ORDER_DESC));
+			}
+			case LispNames.STRING_CODE ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandStringCode(cons), ctx, className);
+			case LispNames.SYMBOL_NAME -> JvmSymbolApiCompiler.compileSymbolName(cons, ctx, className);
+			case LispNames.INTERN -> JvmSymbolApiCompiler.compileIntern(cons, ctx, className);
+			case LispNames.FIND_SYMBOL -> JvmSymbolApiCompiler.compileFindSymbol(cons, ctx, className);
+			case LispNames.FIND_SYMBOL_STATUS -> JvmSymbolApiCompiler.compileFindSymbolStatus(cons, ctx, className);
+			// A runtime export/unexport/import/use-package/unuse-package (inside a
+			// defun body): the compiled package registry is frozen, so evaluate the
+			// arguments and yield t. The use-list pair goes together -- a literal
+			// top-level use-package is consumed at compile time and has no runtime
+			// form here, so its inverse must not have one either.
+			case LispNames.EXPORT, LispNames.UNEXPORT, LispNames.IMPORT, LispNames.USE_PACKAGE,
+					LispNames.UNUSE_PACKAGE ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandRuntimeExport(cons, ctx.usesRuntimePackages), ctx,
+						className);
+			// The package-registry queries: answered from the use table baked in at
+			// compile time (the compiled runtimes have no registry), plus the
+			// runtime table when the program can create packages (see
+			// .kb/packages.md).
+			case LispNames.LIST_ALL_PACKAGES, LispNames.PACKAGE_USE_LIST, LispNames.PACKAGE_USED_BY_LIST ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandPackageQuery(cons, ctx.packageTable,
+						ctx.packageUseTable, ctx.usesRuntimePackages), ctx, className);
+			// The printer's accessibility question (CLHS 22.1.3.3.1), answered from
+			// the
+			// table baked in at compile time (.kb/pretty-printer.md).
+			case LispNames.SYMBOL_PRINT_BARE_P_INTERNAL -> JvmExprCompiler
+				.compileExpr(LispMacroExpander.expandSymbolPrintBareP(cons, ctx.symbolPrintTable), ctx, className);
+			case LispNames.HOME_SPELLING_INTERNAL ->
+				JvmExprCompiler.compileExpr(((LispCons) cons.cdr()).car(), ctx, className);
+			case LispNames.SYMBOL_PRINT_PREFIX_INTERNAL -> JvmExprCompiler.compileExpr(
+					LispMacroExpander.expandSymbolPrintPrefix(cons, ctx.symbolPrintTable, ctx.functions::containsKey),
+					ctx, className);
+			case LispNames.PRINT_PACKAGE_RAW_P_INTERNAL -> JvmExprCompiler
+				.compileExpr(LispMacroExpander.expandPrintPackageRawP(ctx.symbolPrintTable), ctx, className);
+			case LispNames.PRINT_CASED_QUALIFIER_INTERNAL -> JvmExprCompiler
+				.compileExpr(LispMacroExpander.expandPrintQualifier(cons, ctx.functions::containsKey), ctx, className);
+			case LispNames.PRINT_CASED_FOLD_LEAF_INTERNAL, LispNames.PRINT_CASED_RADIXED_LEAF_INTERNAL ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandPrintCasedLeaf(cons, ctx.printControlVariables),
+						ctx, className);
+			case LispNames.DECIMAL_PIECE_INTERNAL, LispNames.DECIMAL_PRINC_INTERNAL ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandDecimalLeaf(cons,
+						ctx.functions.containsKey(LispNames.DECIMAL_TEXT_INTERNAL)), ctx, className);
+			case LispNames.PRINT_CASED_RAW_LEAF_INTERNAL, LispNames.PRINT_CASED_TEXT_LEAF_INTERNAL,
+					LispNames.PRINT_CASED_INSTANCE_CHECK_INTERNAL, LispNames.PRINT_WITHOUT_READABLY_INTERNAL ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandPrintReadableLeaf(cons,
+						ctx.functions.containsKey(LispNames.PRINT_NOT_READABLE_INTERNAL)), ctx, className);
+			case LispNames.PRINT_CASED_TYPE_NAME_INTERNAL ->
+				JvmExprCompiler.compileExpr(
+						LispMacroExpander.expandPrintedTypeName(cons.toList().get(1),
+								ctx.printControls
+										&& ctx.functions.containsKey(LispNames.PRINT_CASED_UNQUALIFIED_INTERNAL)),
+						ctx, className);
+			case LispNames.PRINT_OBJECT_DEFAULT_INTERNAL ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandPrintObjectDefault(cons.toList().get(1),
+						ctx.functions.containsKey(LispMacroExpander.POS_DEFAULT)), ctx, className);
+			case LispNames.MAKE_SYMBOL -> JvmSymbolApiCompiler.compileMakeSymbol(cons, ctx, className);
+			case LispNames.BOUNDP -> JvmSymbolApiCompiler.compileBoundp(cons, ctx, className);
+			case LispNames.FBOUNDP -> JvmSymbolApiCompiler.compileFboundp(cons, ctx, className);
+			case LispNames.FMAKUNBOUND -> JvmSymbolApiCompiler.compileFmakunbound(cons, ctx, className);
+			case LispNames.SET_SYMBOL_FUNCTION_INTERNAL ->
+				JvmSymbolApiCompiler.compileSetSymbolFunction(cons, ctx, className);
+			case LispNames.FENV_FUNCTION_INTERNAL -> JvmSymbolApiCompiler.compileFenvFunction(cons, ctx, className);
+			case LispNames.RESTORE_COMPILED_DEFINITION_INTERNAL ->
+				JvmSymbolApiCompiler.compileRestoreCompiledDefinition(cons, ctx, className);
+			case LispNames.SETF_FUNCTION_SYMBOL_INTERNAL ->
+				JvmSymbolApiCompiler.compileSetfFunctionSymbol(cons, ctx, className);
+			case LispNames.UNDEFINED_SETF_FUNCTION_INTERNAL ->
+				JvmSymbolApiCompiler.compileUndefinedSetfFunction(cons, ctx, className);
+			case LispNames.SYMBOL_VALUE -> JvmSymbolApiCompiler.compileSymbolValue(cons, ctx, className);
+			case LispNames.SET -> JvmSymbolApiCompiler.compileSet(cons, ctx, className);
+			case LispNames.MAKUNBOUND -> JvmSymbolApiCompiler.compileMakunbound(cons, ctx, className);
+			// Only a COMPUTED designator reaches here: PackageResolver folds a
+			// literal
+			// one to the quoted package keyword before the compiler ever sees it
+			// (unless the program can create packages at run time, in which case
+			// an unknown literal stays a call and is answered from the baked
+			// table plus the runtime table).
+			case LispNames.FIND_PACKAGE ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandRuntimeFindPackage(cons.toList().get(1),
+						ctx.packageTable, ctx.usesRuntimePackages, ctx.functions::containsKey), ctx, className);
+			case LispNames.CONCATENATE -> {
+				JvmExprCompiler.compileExpr(ConcatenateForms.expand(cons, ctx.usesSeqString, ctx.closRegistry), ctx,
+						className);
+				// The string family's fresh result carries a writable identity
+				// (a no-op unless the producer flip is on -- see _toMutStr).
+				if (ConcatenateForms.literalResultFamily(cons.toList().get(1),
+						ctx.closRegistry) == ConcatenateForms.ResultFamily.STRING) {
+					JvmArrayCompiler.emitToMutStr(ctx, className);
+				}
+			}
+			case LispNames.READ_LINE -> {
+				LispVal typed = LispMacroExpander.expandReadEofSignal(cons, false);
+				LispVal compat = typed == null ? LispMacroExpander.expandReadLineCompat(cons) : null;
+				if (typed != null) {
+					JvmExprCompiler.compileExpr(typed, ctx, className);
+				}
+				else if (compat != null) {
+					// (read-line s nil eof-value) -> (or (read-line s) eof-value).
+					// Compiling the rewrite here rather than below the wrap keeps
+					// the wrap on the LINE only: the eof-value is the caller's own
+					// object and must come back by identity, not as a copy of it.
+					JvmExprCompiler.compileExpr(compat, ctx, className);
+				}
+				else {
+					JvmReadLineCompiler.compile(cons, ctx, className);
+					JvmArrayCompiler.emitToMutStr(ctx, className);
+				}
+			}
+			case LispNames.READ_LINE_PAIR_INTERNAL -> JvmReadLineCompiler.compilePair(cons, ctx, className);
+			case LispNames.READ_CHAR -> {
+				LispVal typed = LispMacroExpander.expandReadEofSignal(cons, true);
+				if (typed != null) {
+					JvmExprCompiler.compileExpr(typed, ctx, className);
+				}
+				else {
+					JvmReadCharCompiler.compile(cons, ctx, className);
+				}
+			}
+			case LispNames.PEEK_CHAR ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandPeekChar(cons), ctx, className);
+			case LispNames.READ_CHAR_NO_HANG ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandReadCharNoHang(cons), ctx, className);
+			case LispNames.UNREAD_CHAR ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandUnreadChar(cons), ctx, className);
+			case LispNames.PEEK_CHAR_INTERNAL -> {
+				LispVal typed = LispMacroExpander.expandReadEofSignal(cons, true);
+				if (typed != null) {
+					JvmExprCompiler.compileExpr(typed, ctx, className);
+				}
+				else {
+					JvmPeekCharCompiler.compile(cons, ctx, className);
+				}
+			}
+			case LispNames.MAKE_SYNONYM_STREAM ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandMakeSynonymStream(cons), ctx, className);
+			case LispNames.OPEN -> {
+				// A failure signals a file-error (expandOpenFileErrorSignal), which
+				// unwraps a pathname designator itself. A computed option -- or an
+				// :if-exists / :if-does-not-exist the mode cannot express -- lowers
+				// onto literal open LEAVES first, and each leaf comes back through
+				// this case, so that shape is already a stream value and must NOT be
+				// wrapped again: the existence guard around it answers nil or an
+				// already-wrapped closed stream, and a second wrap would turn the
+				// nil into a stream.
+				LispVal recording = recordsStreamPaths(ctx) ? LispMacroExpander.recordingStreamPath(cons) : null;
+				if (recording != null) {
+					// The namestring on the stream value, so it is a pathname
+					// designator; the inner open comes back here unrecorded.
+					JvmExprCompiler.compileExpr(recording, ctx, className);
+					break;
+				}
+				LispVal lowered = OpenModes.lowerRuntimeOptions(cons);
+				if (lowered != null) {
+					JvmExprCompiler.compileExpr(lowered, ctx, className);
+					break;
+				}
+				LispVal checked = LispMacroExpander.expandOpenFileErrorSignal(cons, ctx.mayUseInstances);
+				LispVal registered = registeredOpenLeaf(cons, checked, ctx);
+				if (registered != null) {
+					// Already the stream VALUE (%file-stream-register answers it).
+					JvmExprCompiler.compileExpr(registered, ctx, className);
+					break;
+				}
+				if (checked != null && ctx.usesStreamValues) {
+					// The stream VALUE, with what this open can do.
+					JvmExprCompiler.compileExpr(
+							LispMacroExpander.fileStreamValue(checked,
+									OpenModes.abilities(OpenModes.normalizeKeywordForm(cons).toList())),
+							ctx, className);
+					break;
+				}
+				if (checked != null) {
+					JvmExprCompiler.compileExpr(checked, ctx, className);
+				}
+				else {
+					JvmOpenCompiler.compile(coercePathArgWhenGated(cons, 0, ctx), ctx, className);
+				}
+				wrapStreamValue(ctx, className, am.ik.rontolisp.LispLayout.Kinds.FILE);
+			}
+			case LispNames.OPEN_OR_NIL_INTERNAL -> JvmOpenCompiler.compile(cons, ctx, className);
+			case LispNames.FILE_ERROR_INTERNAL -> JvmExprCompiler.compileExpr(
+					LispMacroExpander.lowerFileError(cons, ctx.closRegistry, ctx.hasLandingPad && ctx.mayUseInstances),
+					ctx, className);
+			case LispNames.PACKAGE_ERROR_INTERNAL -> JvmExprCompiler.compileExpr(LispMacroExpander
+				.lowerPackageError(cons, ctx.closRegistry, ctx.hasLandingPad && ctx.mayUseInstances), ctx, className);
+			case LispNames.CLOSE -> {
+				// t answers t and a non-stream is close's type-error before anything
+				// is closed (LispMacroExpander.checkedClose); the inner call, over the
+				// checked temporary, comes back here.
+				LispVal checkedClose = LispMacroExpander.checkedClose(cons);
+				if (checkedClose != null) {
+					JvmExprCompiler.compileExpr(checkedClose, ctx, className);
+					break;
+				}
+				// Closing a SYNONYM stream closes the synonym, not what it forwards
+				// to -- which is nothing to do; an OPEN stream resolves to its
+				// handle. The guard is emitted only when the program can build one
+				// of the two; %close is the raw-handle close it falls through to.
+				LispVal forgetting = (ctx.usesSynonymStreams || ctx.usesStreamValues)
+						&& ctx.functions.containsKey(LispNames.FILE_STREAM_FORGET_INTERNAL)
+								? LispMacroExpander.forgettingClose(cons,
+										c -> LispMacroExpander.expandCloseOverStream(c, ctx.usesSynonymStreams,
+												ctx.functions.containsKey(LispNames.STREAM_TARGET)))
+								: null;
+				if (forgetting != null) {
+					// The element-type registry forgets the stream first
+					// (.kb/read-load-streams.md, "Element types wider and narrower
+					// than one octet").
+					JvmExprCompiler.compileExpr(forgetting, ctx, className);
+				}
+				else if (ctx.usesSynonymStreams || ctx.usesStreamValues) {
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandCloseOverStream(cons, ctx.usesSynonymStreams,
+							ctx.functions.containsKey(LispNames.STREAM_TARGET)), ctx, className);
+				}
+				else {
+					JvmCloseCompiler.compile(cons, ctx, className);
+				}
+			}
+			case LispNames.CLOSE_INTERNAL -> JvmCloseCompiler.compile(cons, ctx, className);
+			case LispNames.PROBE_FILE_INTERNAL -> JvmProbeFileCompiler.compile(cons, ctx, className);
+			// The environment primitives behind uiop:getenv / uiop:getcwd. The public
+			// names are Lisp (uiop-os.lisp): getenv consults the override map a
+			// (setf (uiop:getenv ...)) wrote before falling back here, and getcwd
+			// turns a nil answer into its not-implemented-error.
+			case LispNames.HOST_GETENV -> {
+				JvmGetenvCompiler.compile(cons, ctx, className);
+				// The host's answer is a fresh string, so it carries the same
+				// writable identity the other producers do; a missing variable
+				// answers nil and passes the wrap through.
+				JvmArrayCompiler.emitToMutStr(ctx, className);
+			}
+			case LispNames.HOST_GETCWD -> JvmGetcwdCompiler.compile(cons, ctx, className);
+			// The command-line primitive behind the uiop/image family (the public
+			// five are Lisp over it, uiop-image.lisp): main's own String[] behind
+			// the class name, through the _argv helper.
+			case LispNames.HOST_ARGV -> JvmArgvCompiler.compile(cons, ctx, className);
+			// The whole environment behind Scheme's get-environment-variables, as
+			// "NAME=value" strings, through the _environ helper.
+			case LispNames.HOST_ENVIRON -> JvmEnvironCompiler.compile(cons, ctx, className);
+			// The local zone behind the universal time codec: the _localTimeOffset
+			// helper over java.time (emitted because the reference gated it).
+			case LispNames.LOCAL_TIME_OFFSET -> {
+				List<LispVal> parts = cons.toList();
+				if (parts.size() != 2) {
+					throw new UnsupportedOperationException(
+							LispNames.LOCAL_TIME_OFFSET + " expects 1 argument, got " + (parts.size() - 1));
+				}
+				compileExpr(parts.get(1), ctx, className);
+				ctx.body.invokestatic(ctx.cp.methodRef(ctx.cp.classEntry(className), JvmLocalTimeRuntimeBuilder.METHOD,
+						JvmLocalTimeRuntimeBuilder.DESC));
+			}
+			// %target-machine-type: the ABI this artifact targets, the one thing the
+			// environment-enquiry family (machine-type, a prelude defun over it)
+			// answers differently per backend. A class file is CPU-independent, so
+			// the answer names the ABI and not the host processor -- the same rule
+			// uiop:architecture follows. A literal, so it folds like any constant.
+			case LispNames.TARGET_MACHINE_TYPE -> JvmExprCompiler.compileExpr(new LispString("JVM"), ctx, className);
+			// The exit primitive behind uiop:quit (uiop-image.lisp finishes the
+			// output streams first, on every backend).
+			case LispNames.HOST_EXIT -> JvmExitCompiler.compile(cons, ctx, className);
+			default -> {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	/**
+	 * One slice of the operator dispatch of {@link #compileConsLocated} (see there).
+	 * @param sym the operator
+	 * @param cons the whole form
+	 * @param ctx the compilation context
+	 * @param className the class being generated
+	 * @param tail the tail spine the form inherits, if any
+	 * @return whether {@code sym} names an operator of this slice (the form is then
+	 * compiled)
+	 */
+	private static boolean compileOperator2(LispSymbol sym, LispCons cons, JvmLispCompiler.Ctx ctx, String className,
+			JvmBodyOutliner.@Nullable Tail tail) {
+		switch (sym.name()) {
+			case LispNames.LIST_DIRECTORY -> JvmListDirectoryCompiler.compile(cons, ctx, className);
+			case LispNames.SLEEP -> JvmExprCompiler.compileExpr(LispMacroExpander.expandSleep(cons), ctx, className);
+			case LispNames.SLEEP_MS -> JvmSleepCompiler.compile(cons, ctx, className);
+			case LispNames.WRITE_LINE -> {
+				LispVal bounded = LispMacroExpander.lowerWriteLineBounds(cons);
+				if (bounded != null) {
+					JvmExprCompiler.compileExpr(bounded, ctx, className);
+				}
+				else {
+					JvmWriteLineCompiler.compile(cons, ctx, className);
+				}
+			}
+			case LispNames.WRITE_STRING -> {
+				LispVal bounded = LispMacroExpander.lowerWriteStringBounds(cons);
+				if (bounded != null) {
+					JvmExprCompiler.compileExpr(bounded, ctx, className);
+				}
+				else {
+					JvmStringStreamCompiler.compileWriteString(cons, ctx, className);
+				}
+			}
+			case LispNames.WRITE_TO_STRING -> {
+				// A keyword tail binds the printer variables around the one-argument
+				// primitive (LispMacroExpander.expandWriteToStringKeywords).
+				LispVal conversion = cons.isProperList()
+						? LispMacroExpander.expandWriteToStringConversion(cons, ctx.specialVars) : null;
+				if (cons.isProperList() && cons.toList().size() > 2) {
+					compileExpr(LispMacroExpander.expandWriteToStringKeywords(cons), ctx, className);
+				}
+				else if (conversion != null) {
+					compileExpr(conversion, ctx, className);
+				}
+				else {
+					compilePrintOperator(cons, ctx, className,
+							() -> JvmPrin1ToStringCompiler.compile(cons, ctx, className));
+					JvmArrayCompiler.emitToMutStr(ctx, className);
+				}
+			}
+			case LispNames.MAKE_STRING_OUTPUT_STREAM_INTERNAL ->
+				JvmStringStreamCompiler.compileMakeOutputStream(cons, ctx, className);
+			case LispNames.MAKE_STRING_OUTPUT_STREAM ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandMakeStringOutputStream(cons), ctx, className);
+			case LispNames.GET_OUTPUT_STREAM_STRING ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandGetOutputStreamString(cons), ctx, className);
+			case LispNames.MAKE_STRING_INPUT_STREAM_INTERNAL ->
+				JvmStringStreamCompiler.compileMakeInputStream(cons, ctx, className);
+			case LispNames.MAKE_STRING_INPUT_STREAM ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandMakeStringInputStream(cons), ctx, className);
+			case LispNames.STRING_STREAM_CONTENTS_INTERNAL -> {
+				// The with-output-to-string / get-output-stream-string capture.
+				JvmStringStreamCompiler.compileContents(cons, ctx, className);
+				JvmArrayCompiler.emitToMutStr(ctx, className);
+			}
+			case LispNames.WITH_OUTPUT_TO_STRING -> JvmExprCompiler.compileExpr(
+					LispMacroExpander.expandWithOutputToString(cons, true, ctx.usesStreamValues), ctx, className);
+			case LispNames.PPRINT_LOGICAL_BLOCK ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandPprintLogicalBlock(cons), ctx, className);
+			case LispNames.WITH_INPUT_FROM_STRING ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandWithInputFromString(cons), ctx, className);
+			case LispNames.PUSHNEW ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandPushnew(cons), ctx, className);
+			case LispNames.DEFTYPE ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandDeftype(cons), ctx, className);
+			case LispNames.DEFINE_CONDITION ->
+				// Like defclass: top-level define-conditions are spliced into their
+				// generated defuns before Pass 1; one reaching this compiler is
+				// nested.
+				throw new UnsupportedOperationException(
+						LispNames.DEFINE_CONDITION + " is only supported as a top-level form");
+			case LispNames.DEFINE_SETF_EXPANDER ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandDefineSetfExpander(cons), ctx, className);
+			case LispNames.DEFINE_COMPILER_MACRO ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandDefineCompilerMacro(cons), ctx, className);
+			case LispNames.RESTART_CASE ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandRestartCase(cons), ctx, className);
+			case LispNames.RESTART_BIND ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandRestartBind(cons), ctx, className);
+			case LispNames.WITH_SIMPLE_RESTART ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandWithSimpleRestart(cons), ctx, className);
+			case LispNames.MAKE_CONDITION -> JvmExprCompiler
+				.compileExpr(LispMacroExpander.expandMakeCondition(cons, ctx.closRegistry), ctx, className);
+			case LispNames.DOCUMENTATION ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandDocumentation(cons), ctx, className);
+			case LispNames.WITH_OPEN_STREAM ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandWithOpenStream(cons, true), ctx, className);
+			case LispNames.WITH_OPEN_FILE ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandWithOpenFile(cons), ctx, className);
+			case LispNames.READ_BYTE -> {
+				LispVal wide = ctx.functions.containsKey(LispNames.WIDE_READ_BYTE_INTERNAL)
+						? LispMacroExpander.expandWideReadByte(cons) : null;
+				LispVal typed = wide != null ? wide : LispMacroExpander.expandReadEofSignal(cons, true);
+				if (typed != null) {
+					JvmExprCompiler.compileExpr(typed, ctx, className);
+				}
+				else {
+					JvmReadByteCompiler.compile(cons, ctx, className);
+				}
+			}
+			// The one-octet primitives the wide-element helpers compose from: the
+			// unlowered read-byte / write-byte (.kb/read-load-streams.md, "Element
+			// types wider and narrower than one octet").
+			case LispNames.READ_OCTET_INTERNAL -> JvmReadByteCompiler.compile(cons, ctx, className);
+			case LispNames.WRITE_BYTE -> {
+				LispVal wide = ctx.functions.containsKey(LispNames.WIDE_WRITE_BYTE_INTERNAL)
+						? LispMacroExpander.expandWideWriteByte(cons) : null;
+				if (wide != null) {
+					JvmExprCompiler.compileExpr(wide, ctx, className);
+				}
+				else {
+					JvmWriteByteCompiler.compile(cons, ctx, className);
+				}
+			}
+			case LispNames.WRITE_OCTET_INTERNAL -> JvmWriteByteCompiler.compile(cons, ctx, className);
+			case LispNames.FORCE_OUTPUT, LispNames.FINISH_OUTPUT ->
+				JvmForceOutputCompiler.compile(cons, ctx, className);
+			case LispNames.CLEAR_OUTPUT ->
+				// Nothing is buffered in a discardable way on any backend, so
+				// clear-output evaluates its designator for effect and answers nil
+				// (.kb/gray-streams.md). A Gray instance never reaches here -- the
+				// pre-pass rewrote that call onto the dispatch helper.
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandClearOutput(cons), ctx, className);
+			case LispNames.LISTEN -> JvmListenCompiler.compile(cons, ctx, className);
+			case LispNames.OPEN_STREAM_P -> JvmOpenStreamPCompiler.compile(cons, ctx, className);
+			case LispNames.ABILITIES_HOLD_INTERNAL -> JvmObjCompiler.compileAbilitiesHold(cons, ctx, className);
+			case LispNames.CLOSED_STREAM_ERROR_INTERNAL -> JvmExprCompiler.compileExpr(
+					LispMacroExpander.lowerClosedStreamError(cons, ctx.hasLandingPad && ctx.mayUseInstances), ctx,
+					className);
+			case LispNames.READ_SEQUENCE -> JvmExprCompiler.compileExpr(guardPackedForWideStreams(
+					LispMacroExpander.expandReadSequence(cons, false, characterStreams(ctx), boundsCheck(ctx)), ctx),
+					ctx, className);
+			case LispNames.WRITE_SEQUENCE -> JvmExprCompiler.compileExpr(guardPackedForWideStreams(
+					LispMacroExpander.expandWriteSequence(cons, false, characterStreams(ctx), boundsCheck(ctx)), ctx),
+					ctx, className);
+			case LispNames.READ_SEQUENCE_PACKED, LispNames.WRITE_SEQUENCE_PACKED ->
+				JvmSequencePackedCompiler.compile(cons, ctx, className);
+			case LispNames.READ_SEQUENCE_CHARS -> JvmSequenceCharsCompiler.compile(cons, ctx, className);
+			case LispNames.MAKE_STRING ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandMakeString(cons), ctx, className);
+			case LispNames.REPLACE -> JvmExprCompiler.compileExpr(LispMacroExpander.expandReplace(cons, ctx.usesArrays,
+					ctx.functions.containsKey(LispNames.REPLACE_RUNTIME)), ctx, className);
+			case LispNames.FILL -> JvmExprCompiler.compileExpr(
+					LispMacroExpander.expandFill(cons, ctx.functions.containsKey(LispNames.FILL_RUNTIME)), ctx,
+					className);
+			case LispNames.SCHAR_SET ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandScharSetFunctional(cons), ctx, className);
+			case LispNames.LOWER_CASE_P -> JvmCharCompiler.compileLowerCaseP(cons, ctx, className);
+			case LispNames.UPPER_CASE_P -> JvmCharCompiler.compileUpperCaseP(cons, ctx, className);
+			case LispNames.CONSTANTP -> JvmExprCompiler
+				.compileExpr(LispMacroExpander.expandConstantp(cons, ctx.closRegistry.constantNames()), ctx, className);
+			case LispNames.STREAMP -> JvmExprCompiler.compileExpr(LispMacroExpander.expandStreamp(cons,
+					ctx.usesSynonymStreams, ctx.usesStreamValues, ctx.closRegistry), ctx, className);
+			case LispNames.SIMPLE_STRING_P ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandSimpleStringP(cons), ctx, className);
+			case LispNames.INPUT_STREAM_P, LispNames.OUTPUT_STREAM_P ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandStreamDirectionP(cons, ctx.usesSynonymStreams,
+						ctx.usesStreamValues, ctx.asksStreamDirection), ctx, className);
+			case LispNames.FILE_POSITION -> {
+				// CL's two position DESIGNATORS are a call-site rewrite shared with
+				// the WASM backends, so no primitive learns a keyword.
+				LispVal positioned = LispMacroExpander.rewriteFilePositionArg(cons);
+				LispVal wide = positioned == cons && ctx.functions.containsKey(LispNames.WIDE_ELEMENTS_INTERNAL)
+						? LispMacroExpander.expandWideFilePosition(cons) : null;
+				if (wide != null) {
+					JvmExprCompiler.compileExpr(wide, ctx, className);
+				}
+				else if (positioned == cons) {
+					JvmFilePositionCompiler.compile(cons, ctx, className);
+				}
+				else {
+					JvmExprCompiler.compileExpr(positioned, ctx, className);
+				}
+			}
+			case LispNames.FILE_OCTET_POSITION_INTERNAL -> JvmFilePositionCompiler.compile(cons, ctx, className);
+			case LispNames.PATHNAMEP ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandPathnamep(cons), ctx, className);
+			case LispNames.FILE_WRITE_DATE ->
+				JvmFileMetaCompiler.compile(coercePathArgWhenGated(cons, 0, ctx), ctx, className, sym.name());
+			case LispNames.MAKE_DIRECTORIES, LispNames.DELETE_FILE_INTERNAL, LispNames.RENAME_FILE_INTERNAL,
+					LispNames.READ_LINK_INTERNAL, LispNames.FILE_STAT_INTERNAL, LispNames.FILE_SET_TIMES_INTERNAL,
+					LispNames.MAKE_LINK_INTERNAL ->
+				JvmFileMetaCompiler.compile(cons, ctx, className, sym.name());
+			case LispNames.FILE_ACCESS_INTERNAL, LispNames.FILE_SPACE_INTERNAL, LispNames.FILE_SET_MODE_INTERNAL,
+					LispNames.FILE_MAKE_INTERNAL ->
+				compileFileModes(sym.name(), cons, ctx, className);
+			case LispNames.TERMINAL_P_INTERNAL -> {
+				// isatty through runtime/RontoTerminal, which travels with the class.
+				if (cons.toList().size() != 2) {
+					throw new UnsupportedOperationException(
+							"%terminal-p expects 1 argument, got " + (cons.toList().size() - 1));
+				}
+				compileExpr(cons.toList().get(1), ctx, className);
+				ctx.body.invokestatic(ctx.cp.methodRef(ctx.cp.classEntry(JvmLispCompiler.TERMINAL_CLASS), "terminalP",
+						JvmAsyncRuntimeBuilder.UNARY_DESC));
+			}
+			case LispNames.FILE_LENGTH -> {
+				LispVal wide = ctx.functions.containsKey(LispNames.WIDE_ELEMENTS_INTERNAL)
+						? LispMacroExpander.expandWideFileLength(cons) : null;
+				if (wide != null) {
+					JvmExprCompiler.compileExpr(wide, ctx, className);
+				}
+				else {
+					JvmFileMetaCompiler.compile(cons, ctx, className, LispNames.FILE_LENGTH);
+				}
+			}
+			case LispNames.FILE_OCTET_LENGTH_INTERNAL ->
+				JvmFileMetaCompiler.compile(cons, ctx, className, LispNames.FILE_LENGTH);
+			case LispNames.STREAM_ELEMENT_TYPE ->
+				JvmExprCompiler.compileExpr(
+						LispMacroExpander.expandStreamElementType(cons,
+								ctx.functions.containsKey(LispNames.FILE_STREAM_ELEMENT_TYPE_INTERNAL)),
+						ctx, className);
+			case LispNames.MAKE_BROADCAST_STREAM ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandMakeBroadcastStream(cons), ctx, className);
+			case LispNames.FDEFINITION -> {
+				// A name built at run time may be a (setf place) list.
+				LispCons computed = RuntimeFunctionNames.fdefinitionCall(cons,
+						ctx.functions.containsKey(LispNames.FDEFINITION_INTERNAL));
+				JvmExprCompiler.compileExpr(computed != null ? computed : LispMacroExpander.expandFdefinition(cons),
+						ctx, className);
+			}
+			case LispNames.MASK_FIELD ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandMaskField(cons), ctx, className);
+			case LispNames.SCALE_FLOAT ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandScaleFloat(cons), ctx, className);
+			case LispNames.CLASS_OF ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandClassOf(cons, ctx.usesHashTables,
+						ctx.usesSynonymStreams, ctx.usesStreamValues, ctx.closRegistry), ctx, className);
+			case LispNames.CLASS_DESIGNATOR_INTERNAL ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandClassDesignator(cons, ctx.usesHashTables,
+						ctx.usesSynonymStreams, ctx.usesStreamValues, ctx.closRegistry), ctx, className);
+			case LispNames.CLASS_SLOT_DEFS_INTERNAL -> JvmExprCompiler
+				.compileExpr(LispMacroExpander.expandClassSlotDefs(cons, ctx.closRegistry), ctx, className);
+			case LispNames.SLOT_BOUNDP ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandSlotBoundp(cons, ctx.closRegistry), ctx, className);
+			case LispNames.SLOT_EXISTS_P -> JvmExprCompiler
+				.compileExpr(LispMacroExpander.expandSlotExistsP(cons, ctx.closRegistry), ctx, className);
+			case LispNames.SLOT_MAKUNBOUND -> JvmExprCompiler
+				.compileExpr(LispMacroExpander.expandSlotMakunbound(cons, ctx.closRegistry), ctx, className);
+			case LispNames.SIMPLE_CONDITION_FORMAT_CONTROL -> JvmExprCompiler.compileExpr(
+					LispMacroExpander.expandSimpleConditionFormatControl(cons, ctx.closRegistry), ctx, className);
+			case LispNames.SIMPLE_CONDITION_FORMAT_ARGUMENTS -> JvmExprCompiler.compileExpr(
+					LispMacroExpander.expandSimpleConditionFormatArguments(cons, ctx.closRegistry), ctx, className);
+			case LispNames.IEEE754_DOUBLE_BITS -> JvmIeee754Compiler.compileDoubleBits(cons, ctx, className);
+			case LispNames.IEEE754_DOUBLE_FROM_BITS -> JvmIeee754Compiler.compileDoubleFromBits(cons, ctx, className);
+			case LispNames.IEEE754_SINGLE_BITS -> JvmIeee754Compiler.compileSingleBits(cons, ctx, className);
+			case LispNames.IEEE754_SINGLE_FROM_BITS -> JvmIeee754Compiler.compileSingleFromBits(cons, ctx, className);
+			case LispNames.SINGLE_FLOAT_P_INTERNAL -> JvmIeee754Compiler.compileSingleFloatP(cons, ctx, className);
+			case LispNames.SINGLE_FLOAT_INTERNAL -> JvmIeee754Compiler.compileSingleFloat(cons, ctx, className);
+			case LispNames.IDENTITY_HASH -> JvmIdentityHashCompiler.compile(cons, ctx, className);
+			case LispNames.STRICT_MATH_INTERNAL -> JvmStrictMathCompiler.compile(cons, ctx, className);
+			case LispNames.READ_EVAL, LispNames.READ_EVAL_TEMPLATE ->
+				// Identity: a #. marker split into code position by a backquote
+				// template
+				// arrives here with its (already evaluated) argument.
+				JvmExprCompiler.compileExpr(cons.toList().get(1), ctx, className);
+			case LispNames.STRING_UPCASE -> {
+				LispVal bounded = LispMacroExpander.expandBoundedCaseConversion(cons);
+				if (bounded != null) {
+					JvmExprCompiler.compileExpr(bounded, ctx, className);
+				}
+				else {
+					JvmStringUpcaseCompiler.compileUpcase(LispMacroExpander.normalizeStringDesignatorArg(cons, 1), ctx,
+							className);
+					JvmArrayCompiler.emitToMutStr(ctx, className);
+				}
+			}
+			case LispNames.STRING_DOWNCASE -> {
+				LispVal bounded = LispMacroExpander.expandBoundedCaseConversion(cons);
+				if (bounded != null) {
+					JvmExprCompiler.compileExpr(bounded, ctx, className);
+				}
+				else {
+					JvmStringUpcaseCompiler.compileDowncase(LispMacroExpander.normalizeStringDesignatorArg(cons, 1),
+							ctx, className);
+					JvmArrayCompiler.emitToMutStr(ctx, className);
+				}
+			}
+			case LispNames.STRING_CAPITALIZE -> {
+				LispVal bounded = LispMacroExpander.expandBoundedCaseConversion(cons);
+				if (bounded != null) {
+					JvmExprCompiler.compileExpr(bounded, ctx, className);
+				}
+				else {
+					JvmStringCapitalizeCompiler.compile(LispMacroExpander.normalizeStringDesignatorArg(cons, 1), ctx,
+							className);
+					JvmArrayCompiler.emitToMutStr(ctx, className);
+				}
+			}
+			case LispNames.SUBSEQ, LispNames.SUBSEQ_CORE -> JvmSubseqCompiler.compile(cons, ctx, className);
+			case LispNames.SUBSEQ_END -> JvmSubseqCompiler.compileEnd(cons, ctx, className);
+			case LispNames.CHAR, LispNames.SCHAR -> JvmCharCompiler.compileChar(cons, ctx, className);
+			case LispNames.CHAR_CODE -> JvmCharCompiler.compileCharCode(cons, ctx, className);
+			case LispNames.CHAR_INT -> JvmCharCompiler.compileCharInt(cons, ctx, className);
+			case LispNames.CODE_CHAR -> JvmCharCompiler.compileCodeChar(cons, ctx, className);
+			case LispNames.CHAR_UPCASE -> JvmCharCompiler.compileUpcase(cons, ctx, className);
+			case LispNames.CHAR_DOWNCASE -> JvmCharCompiler.compileDowncase(cons, ctx, className);
+			case LispNames.CHARACTERP -> JvmCharCompiler.compileCharacterp(cons, ctx, className);
+			case LispNames.ALPHA_CHAR_P -> JvmCharCompiler.compileAlphaCharP(cons, ctx, className);
+			case LispNames.DIGIT_CHAR_P -> JvmCharCompiler.compileDigitCharP(cons, ctx, className);
+			case LispNames.CHAR_EQ -> JvmCharCompiler.compileEq(cons, ctx, className);
+			case LispNames.CHAR_LT -> JvmCharCompiler.compileLt(cons, ctx, className);
+			case LispNames.CHAR_LE -> JvmCharCompiler.compileLe(cons, ctx, className);
+			case LispNames.CHAR_GT -> JvmCharCompiler.compileGt(cons, ctx, className);
+			case LispNames.CHAR_GE -> JvmCharCompiler.compileGe(cons, ctx, className);
+			case LispNames.CHAR_NE -> JvmCharCompiler.compileNe(cons, ctx, className);
+			case LispNames.CHAR_EQUAL -> JvmCharCompiler.compileEqual(cons, ctx, className);
+			case LispNames.PARSE_INTEGER ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandParseInteger(cons), ctx, className);
+			case LispNames.VALUES_LIST ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandValuesList(cons), ctx, className);
+			case LispNames.COMPLEX -> JvmComplexCompiler.compileComplex(cons, ctx, className);
+			case LispNames.NE ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandNumericNotEqual(cons), ctx, className);
+			case LispNames.READ_FROM_STRING -> {
+				// More than the string: the prelude defun's whole lambda list.
+				LispVal full = LispMacroExpander.expandReadFromString(cons);
+				if (full != cons) {
+					JvmExprCompiler.compileExpr(full, ctx, className);
+				}
+				else {
+					// Malformed text signals (expandReadFromStringFailure).
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandReadFromStringFailure(cons,
+							ctx.hasLandingPad && ctx.mayUseInstances), ctx, className);
+				}
+			}
+			case LispNames.READ_FROM_STRING_RAW_INTERNAL -> JvmReadFromStringCompiler.compile(cons, ctx, className);
+			case LispNames.READ_FAILURE_INTERNAL -> JvmReadFromStringCompiler.compileFailure(ctx, className);
+			case LispNames.READ_FROM_STRING_END -> JvmReadFromStringCompiler.compileEnd(cons, ctx, className);
+			// A string=/string-equal call with the bounding-index keywords is lowered
+			// onto subseq first, so the intrinsic below always sees two strings.
+			case LispNames.STRING_EQ -> {
+				if (LispMacroExpander.hasStringComparisonBounds(cons)) {
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandStringComparisonBounds(cons), ctx, className);
+				}
+				else {
+					JvmStringEqCompiler.compileEq(
+							(LispCons) LispMacroExpander.normalizeStringComparisonDesignators(cons), ctx, className);
+				}
+			}
+			default -> {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	/**
+	 * One slice of the operator dispatch of {@link #compileConsLocated} (see there).
+	 * @param sym the operator
+	 * @param cons the whole form
+	 * @param ctx the compilation context
+	 * @param className the class being generated
+	 * @param tail the tail spine the form inherits, if any
+	 * @return whether {@code sym} names an operator of this slice (the form is then
+	 * compiled)
+	 */
+	private static boolean compileOperator3(LispSymbol sym, LispCons cons, JvmLispCompiler.Ctx ctx, String className,
+			JvmBodyOutliner.@Nullable Tail tail) {
+		switch (sym.name()) {
+			case LispNames.STRING_EQUAL -> {
+				if (LispMacroExpander.hasStringComparisonBounds(cons)) {
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandStringComparisonBounds(cons), ctx, className);
+				}
+				else {
+					JvmStringEqCompiler.compileEqual(
+							(LispCons) LispMacroExpander.normalizeStringComparisonDesignators(cons), ctx, className);
+				}
+			}
+			// The trim family answers a fresh string, so its result carries the same
+			// writable identity every other flipped producer's does.
+			case LispNames.STRING_TRIM -> {
+				JvmStringTrimCompiler.compileTrim(LispMacroExpander.normalizeStringTrimArgs(cons), ctx, className);
+				JvmArrayCompiler.emitToMutStr(ctx, className);
+			}
+			case LispNames.STRING_LEFT_TRIM -> {
+				JvmStringTrimCompiler.compileLeft(LispMacroExpander.normalizeStringTrimArgs(cons), ctx, className);
+				JvmArrayCompiler.emitToMutStr(ctx, className);
+			}
+			case LispNames.STRING_RIGHT_TRIM -> {
+				JvmStringTrimCompiler.compileRight(LispMacroExpander.normalizeStringTrimArgs(cons), ctx, className);
+				JvmArrayCompiler.emitToMutStr(ctx, className);
+			}
+			case LispNames.QUOTE -> JvmQuoteCompiler.compile(cons, ctx, className);
+			// quote for a compiler-synthesized name: same value, but the spelling is
+			// not recorded as program-spelled (see LispNames.UNSPELLED_QUOTE).
+			case LispNames.UNSPELLED_QUOTE ->
+				JvmEmitHelper.compileUnspelledLiteral(((LispSymbol) ((LispCons) cons.cdr()).car()).name(), ctx);
+			case LispNames.IF -> JvmIfCompiler.compile(cons, ctx, className);
+			case LispNames.WHILE -> JvmWhileCompiler.compile(cons, ctx, className);
+			case LispNames.LET -> JvmLetCompiler.compile(cons, ctx, className, tail);
+			case LispNames.PROGV ->
+				// The symbols are runtime-computed, but the candidate SPECIALS are
+				// static: lower to a loop dispatching each name over that set, with
+				// an unwind-protect carrying the restores (.kb/dynamic-special-
+				// variables.md).
+				JvmExprCompiler
+					.compileExpr(
+							LispMacroExpander.expandProgvForCompile(cons, ctx.specialVars, ctx.evalStoreRef != null,
+									ctx.functions.containsKey(LispNames.PROGV_BIND_RUNTIME)
+											&& ctx.functions.containsKey(LispNames.PROGV_UNBIND_RUNTIME)),
+							ctx, className);
+			case LispNames.PROGV_DYN_BIND -> JvmProgvCompiler.compileDynBind(cons, ctx, className);
+			case LispNames.PROGV_DYN_UNBIND -> JvmProgvCompiler.compileDynUnbind(cons, ctx, className);
+			case LispNames.PROGV_UNBOUND -> JvmProgvCompiler.compileUnbound(ctx);
+			case LispNames.PROGV_GENV -> JvmProgvCompiler.compileGenvRead(ctx, className);
+			case LispNames.PROGV_GENV_SET -> JvmProgvCompiler.compileGenvWrite(cons, ctx, className);
+			case LispNames.SYMBOL_VALUE_RAW -> JvmSymbolApiCompiler.compileSymbolValueRaw(cons, ctx, className);
+			case LispNames.BOUNDP_RAW -> JvmSymbolApiCompiler.compileBoundpRaw(cons, ctx, className);
+			case LispNames.GLOBAL_BOUNDP -> JvmSymbolApiCompiler.compileGlobalBoundp(cons, ctx);
+			case LispNames.SYMBOL_IS -> JvmSymbolApiCompiler.compileSymbolIs(cons, ctx, className);
+			case LispNames.GLOBAL_STORE_SET -> JvmSymbolApiCompiler.compileGlobalStoreSet(cons, ctx, className);
+			case LispNames.SET_MIRROR -> JvmSymbolApiCompiler.compileSetMirror(cons, ctx, className);
+			case LispNames.PROGN -> JvmPrognCompiler.compile(cons, ctx, className, tail);
+			case LispNames.TAGBODY -> JvmTagbodyCompiler.compile(cons, ctx, className);
+			case LispNames.GO -> JvmGoCompiler.compile(cons, ctx, className);
+			case LispNames.PRINT_UNREADABLE_OBJECT ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandPrintUnreadableObject(cons,
+						ctx.functions.containsKey(LispNames.PRINT_NOT_READABLE_INTERNAL)), ctx, className);
+			case LispNames.WITH_PACKAGE_ITERATOR ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandWithPackageIterator(cons), ctx, className);
+			case LispNames.WITH_HASH_TABLE_ITERATOR ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandWithHashTableIterator(cons), ctx, className);
+			case LispNames.DO_EXTERNAL_SYMBOLS ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandDoSymbols(cons, true), ctx, className);
+			case LispNames.DO_SYMBOLS ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandDoSymbols(cons, false), ctx, className);
+			case LispNames.DO_ALL_SYMBOLS ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandDoAllSymbols(cons), ctx, className);
+			case LispNames.PROG -> compileExpansion(cons, LispMacroExpander.expandProg(cons, false), ctx, className);
+			case LispNames.PROG_STAR ->
+				compileExpansion(cons, LispMacroExpander.expandProg(cons, true), ctx, className);
+			case LispNames.SETQ -> JvmSetqCompiler.compile(cons, ctx, className);
+			case LispNames.LAMBDA -> JvmLambdaCompiler.compileValue(cons, ctx, className);
+			case LispNames.DEFUN -> compileNestedDefun(cons, ctx, className);
+			case LispNames.DEFSTRUCT ->
+				// Top-level defstructs are spliced into defuns before Pass 1; one
+				// reaching this compiler is nested inside another form.
+				throw new UnsupportedOperationException(LispNames.DEFSTRUCT + " is only supported as a top-level form");
+			case LispNames.DEFCLASS, LispNames.DEFGENERIC, LispNames.DEFMETHOD ->
+				// Like defstruct: the CLOS forms are spliced before Pass 1.
+				throw new UnsupportedOperationException(sym.name() + " is only supported as a top-level form");
+			case LispNames.MAKE_INSTANCE -> JvmExprCompiler
+				.compileExpr(LispMacroExpander.expandMakeInstance(cons, ctx.closRegistry, true), ctx, className);
+			case LispNames.SLOT_VALUE ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandSlotValue(cons, ctx.closRegistry), ctx, className);
+			case LispNames.WITH_SLOTS ->
+				compileExpansion(cons, LispMacroExpander.expandWithSlots(cons), ctx, className);
+			case LispNames.SYMBOL_MACROLET ->
+				// No user-macro hook: UserMacroExpander has already expanded every
+				// user
+				// macro on the compile path.
+				compileExpansion(cons, LispMacroExpander.expandSymbolMacrolet(cons), ctx, className);
+			case LispNames.WITH_ACCESSORS ->
+				compileExpansion(cons, LispMacroExpander.expandWithAccessors(cons), ctx, className);
+			case LispNames.CHANGE_CLASS -> JvmExprCompiler
+				.compileExpr(LispMacroExpander.expandChangeClass(cons, ctx.closRegistry, true), ctx, className);
+			case LispNames.DEFVAR -> JvmDefvarCompiler.compile(cons, ctx, className, false);
+			case LispNames.DEFPARAMETER, LispNames.DEFCONSTANT -> JvmDefvarCompiler.compile(cons, ctx, className, true);
+			case LispNames.LIST -> JvmListCompiler.compile(cons, ctx, className);
+			case LispNames.CAR -> JvmCarCompiler.compile(cons, ctx, className);
+			case LispNames.CDR -> JvmCdrCompiler.compile(cons, ctx, className);
+			case LispNames.CONS -> JvmConsCompiler.compile(cons, ctx, className);
+			case LispNames.NTHCDR -> JvmNthcdrCompiler.compile(cons, ctx, className);
+			case LispNames.ELT_CELL -> JvmEltCellCompiler.compile(cons, ctx, className);
+			case LispNames.RPLACA -> JvmRplacaCompiler.compile(cons, ctx, className);
+			case LispNames.RPLACD -> JvmRplacdCompiler.compile(cons, ctx, className);
+			case LispNames.SETF -> JvmExprCompiler
+				.compileExpr(LispMacroExpander.expandSetf(cons, ctx.structAccessors, ctx.closRegistry), ctx, className);
+			case LispNames.PUSH -> JvmExprCompiler.compileExpr(LispMacroExpander.expandPush(cons), ctx, className);
+			case LispNames.POP -> JvmExprCompiler.compileExpr(LispMacroExpander.expandPop(cons), ctx, className);
+			case LispNames.REMF -> JvmExprCompiler.compileExpr(LispMacroExpander.expandRemf(cons), ctx, className);
+			case LispNames.LET_STAR -> {
+				// A pass-through lowering: the expansion sits where this form sat, so
+				// it inherits the tail spine (JvmBodyOutliner) and the tail mark.
+				ctx.tailBody = tail;
+				compileExpansion(cons, LispMacroExpander.expandLetStar(cons), ctx, className);
+			}
+			// The loops: their block ends the expansion, so a return out of the body to
+			// it is the form's value (JvmReturnCompiler.isTailExit).
+			case LispNames.DOLIST -> compileExpansion(cons, LispMacroExpander.expandDolist(cons), ctx, className);
+			case LispNames.DO -> compileExpansion(cons, LispMacroExpander.expandDo(cons), ctx, className);
+			case LispNames.DO_STAR -> compileExpansion(cons, LispMacroExpander.expandDoStar(cons), ctx, className);
+			case LispNames.LOOP -> compileExpansion(cons, LispMacroExpander.expandLoop(cons), ctx, className);
+			case LispNames.BLOCK_INTERNAL -> JvmBlockCompiler.compile(cons, ctx, className);
+			case LispNames.BLOCK -> JvmBlockCompiler.compileNamed(cons, ctx, className);
+			case LispNames.FN_BLOCK_INTERNAL -> JvmBlockCompiler.compileFnBlock(cons, ctx, className);
+			case LispNames.NLX_TAG_INTERNAL -> JvmNlxCompiler.compileTag(ctx);
+			case LispNames.NLX_CATCH_INTERNAL -> JvmNlxCompiler.compileCatch(cons, ctx, className);
+			case LispNames.NLX_THROW_INTERNAL -> JvmNlxCompiler.compileThrow(cons, ctx, className);
+			case LispNames.CATCH -> JvmNlxCompiler.compileTagCatch(cons, ctx, className);
+			case LispNames.THROW -> JvmNlxCompiler.compileTagThrow(cons, ctx, className);
+			case LispNames.RETURN_FROM -> JvmReturnFromCompiler.compile(cons, ctx, className);
+			case LispNames.UNWIND_PROTECT -> JvmUnwindProtectCompiler.compile(cons, ctx, className);
+			case LispNames.RETURN -> JvmReturnCompiler.compile(cons, ctx, className);
+			case LispNames.INCF -> JvmExprCompiler.compileExpr(LispMacroExpander.expandIncf(cons), ctx, className);
+			case LispNames.DECF -> JvmExprCompiler.compileExpr(LispMacroExpander.expandDecf(cons), ctx, className);
+			case LispNames.FORMAT -> {
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandFormat(cons), ctx, className);
+				// A literal-nil destination is a string PRODUCER: its capture
+				// carries a writable identity (a computed destination stays
+				// un-flipped, see MutableStringProducers).
+				if (MutableStringProducers.isFormatToString(cons)) {
+					JvmArrayCompiler.emitToMutStr(ctx, className);
+				}
+			}
+			case LispNames.LENGTH -> JvmLengthCompiler.compile(cons, ctx, className);
+			case LispNames.REVERSE ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandReverse(cons, ctx.usesArrays), ctx, className);
+			case LispNames.MEMBER -> JvmExprCompiler.compileExpr(LispMacroExpander.expandMember(cons), ctx, className);
+			case LispNames.FIND ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandFind(cons, ctx.usesArrays), ctx, className);
+			case LispNames.FIND_IF ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandFindIf(cons, ctx.usesArrays), ctx, className);
+			case LispNames.FIND_IF_NOT ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandFindIfNot(cons, ctx.usesArrays), ctx, className);
+			case LispNames.MEMBER_IF ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandMemberIf(cons), ctx, className);
+			case LispNames.POSITION ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandPosition(cons, ctx.usesArrays), ctx, className);
+			case LispNames.POSITION_IF ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandPositionIf(cons, ctx.usesArrays), ctx, className);
+			case LispNames.POSITION_IF_NOT -> JvmExprCompiler
+				.compileExpr(LispMacroExpander.expandPositionIfNot(cons, ctx.usesArrays), ctx, className);
+			case LispNames.COMPLEMENT ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandComplement(cons), ctx, className);
+			case LispNames.COUNT -> JvmExprCompiler.compileExpr(LispMacroExpander.expandCount(cons), ctx, className);
+			case LispNames.COUNT_IF ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandCountIf(cons), ctx, className);
+			case LispNames.ASSOC -> JvmExprCompiler.compileExpr(LispMacroExpander.expandAssoc(cons), ctx, className);
+			case LispNames.ASSOC_IF ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandAssocIf(cons), ctx, className);
+			case LispNames.RASSOC_IF ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandRassocIf(cons), ctx, className);
+			case LispNames.GETF -> JvmExprCompiler.compileExpr(LispMacroExpander.expandGetf(cons), ctx, className);
+			case LispNames.EVERY -> JvmExprCompiler.compileExpr(LispMacroExpander.expandEvery(cons), ctx, className);
+			case LispNames.SOME -> JvmExprCompiler.compileExpr(LispMacroExpander.expandSome(cons), ctx, className);
+			case LispNames.REMOVE ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandRemove(cons, ctx.usesArrays), ctx, className);
+			case LispNames.REMOVE_IF ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandRemoveIf(cons, ctx.usesArrays), ctx, className);
+			case LispNames.REMOVE_IF_NOT ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandRemoveIfNot(cons, ctx.usesArrays), ctx, className);
+			case LispNames.DELETE ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandDelete(cons, ctx.usesArrays), ctx, className);
+			case LispNames.DELETE_IF ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandDeleteIf(cons, ctx.usesArrays), ctx, className);
+			case LispNames.DELETE_IF_NOT ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandDeleteIfNot(cons, ctx.usesArrays), ctx, className);
+			case LispNames.SUBSTITUTE ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandSubstitute(cons, ctx.usesArrays), ctx, className);
+			case LispNames.NSUBSTITUTE ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandNsubstitute(cons, ctx.usesArrays), ctx, className);
+			case LispNames.SUBSTITUTE_IF -> JvmExprCompiler
+				.compileExpr(LispMacroExpander.expandSubstituteIf(cons, ctx.usesArrays, false), ctx, className);
+			case LispNames.SUBSTITUTE_IF_NOT -> JvmExprCompiler
+				.compileExpr(LispMacroExpander.expandSubstituteIf(cons, ctx.usesArrays, true), ctx, className);
+			case LispNames.NSUBSTITUTE_IF -> JvmExprCompiler
+				.compileExpr(LispMacroExpander.expandNsubstituteIf(cons, ctx.usesArrays), ctx, className);
+			case LispNames.NSUBSTITUTE_IF_NOT -> JvmExprCompiler
+				.compileExpr(LispMacroExpander.expandNsubstituteIfNot(cons, ctx.usesArrays), ctx, className);
+			case LispNames.REMOVE_DUPLICATES, LispNames.DELETE_DUPLICATES -> JvmExprCompiler
+				.compileExpr(LispMacroExpander.expandRemoveDuplicates(cons, ctx.usesArrays), ctx, className);
+			case LispNames.NCONC -> JvmExprCompiler.compileExpr(LispMacroExpander.expandNconc(cons), ctx, className);
+			case LispNames.LAST -> JvmExprCompiler.compileExpr(LispMacroExpander.expandLast(cons), ctx, className);
+			case LispNames.BUTLAST ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandButlast(cons), ctx, className);
+			case LispNames.IDENTITY ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandIdentity(cons), ctx, className);
+			case LispNames.COPY_LIST -> JvmExprCompiler.compileExpr(
+					LispMacroExpander.expandCopyList(cons, ctx.functions.containsKey(LispNames.COPY_LIST_RUNTIME)), ctx,
+					className);
+			case LispNames.NREVERSE -> {
+				// A string/vector sequence reverses via a coerced list and is
+				// rebuilt in its own representation; null when the call is already
+				// the inner list reversal (wrapSortForStringSeq precedent).
+				LispVal wrappedNreverse = LispMacroExpander.wrapNreverseForStringSeq(cons, ctx.usesArrays);
+				if (wrappedNreverse != null) {
+					JvmExprCompiler.compileExpr(wrappedNreverse, ctx, className);
+				}
+				else {
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandNreverse(cons), ctx, className);
+				}
+			}
+			case LispNames.MAKE_LIST ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandMakeList(cons), ctx, className);
+			case LispNames.UNION -> JvmExprCompiler.compileExpr(LispMacroExpander.expandUnion(cons), ctx, className);
+			case LispNames.INTERSECTION ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandIntersection(cons), ctx, className);
+			case LispNames.SET_DIFFERENCE ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandSetDifference(cons), ctx, className);
+			case LispNames.ADJOIN -> JvmExprCompiler.compileExpr(LispMacroExpander.expandAdjoin(cons), ctx, className);
+			case LispNames.SUBSETP ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandSubsetp(cons), ctx, className);
+			case LispNames.EQ_GENERAL, LispNames.EQL -> JvmEqGeneralCompiler.compile(cons, ctx, className);
+			case LispNames.EQUAL -> JvmEqualCompiler.compile(cons, ctx, className);
+			case LispNames.REMF_TAIL -> JvmRemfTailCompiler.compile(cons, ctx, className);
+			case LispNames.MAKE_HASH_TABLE -> JvmHashTableCompiler.compileMake(cons, ctx, className);
+			case LispNames.GETHASH -> JvmHashTableCompiler.compileGet(cons, ctx, className);
+			case LispNames.PUTHASH -> JvmHashTableCompiler.compilePut(cons, ctx, className);
+			case LispNames.REMHASH -> JvmHashTableCompiler.compileRem(cons, ctx, className);
+			case LispNames.CLRHASH -> JvmHashTableCompiler.compileClr(cons, ctx, className);
+			case LispNames.HASH_TABLE_COUNT ->
+				JvmHashTableCompiler.compileCount(cons, ctx, className, LispNames.HASH_TABLE_COUNT);
+			case LispNames.HASH_TABLE_TEST -> JvmHashTableCompiler.compileTest(cons, ctx, className);
+			case LispNames.HASH_TABLE_SIZE ->
+				JvmHashTableCompiler.compileCount(cons, ctx, className, LispNames.HASH_TABLE_SIZE);
+			case LispNames.HASH_TABLE_REHASH_SIZE ->
+				JvmHashTableCompiler.compileGrowthConstant(cons, ctx, className, LispNames.HASH_TABLE_REHASH_SIZE, 1.5);
+			case LispNames.HASH_TABLE_REHASH_THRESHOLD -> JvmHashTableCompiler.compileGrowthConstant(cons, ctx,
+					className, LispNames.HASH_TABLE_REHASH_THRESHOLD, 1.0);
+			case LispNames.HASH_TABLE_P -> JvmHashTableCompiler.compileP(cons, ctx, className);
+			case LispNames.MAPHASH -> JvmHashTableCompiler.compileMaphash(cons, ctx, className);
+			case LispNames.MAKE_ARRAY -> JvmArrayCompiler.compileMake(cons, ctx, className);
+			case LispNames.AREF -> JvmArrayCompiler.compileAref(cons, ctx, className);
+			case LispNames.ASET -> JvmArrayCompiler.compileAset(cons, ctx, className);
+			case LispNames.ARRAY_DIMENSIONS -> JvmArrayCompiler.compileDims(cons, ctx, className);
+			case LispNames.ROW_MAJOR_AREF -> JvmArrayCompiler.compileRowMajorAref(cons, ctx, className);
+			case LispNames.ROW_MAJOR_ASET -> JvmArrayCompiler.compileRowMajorAset(cons, ctx, className);
+			// The primitives that take a whole sequence (.kb/bulk-primitives.md): one
+			// call of JvmBulkRuntimeBuilder's method each, null where it decides
+			// nothing and the caller's loop runs.
+			case LispNames.REPLACE_BULK ->
+				compileBulkCall(cons, ctx, className, JvmBulkRuntimeBuilder.COPY, JvmBulkRuntimeBuilder.COPY_DESC, 5);
+			case LispNames.STRING_SEARCH -> compileBulkCall(cons, ctx, className, JvmBulkRuntimeBuilder.SEARCH,
+					JvmBulkRuntimeBuilder.SEARCH_DESC, 6);
+			case LispNames.STRING_SPLIT ->
+				compileBulkCall(cons, ctx, className, JvmBulkRuntimeBuilder.SPLIT, JvmBulkRuntimeBuilder.SPLIT_DESC, 3);
+			case LispNames.STRING_JOIN ->
+				compileBulkCall(cons, ctx, className, JvmBulkRuntimeBuilder.JOIN, JvmBulkRuntimeBuilder.JOIN_DESC, 2);
+			case LispNames.STRING_COUNT ->
+				compileBulkCall(cons, ctx, className, JvmBulkRuntimeBuilder.COUNT, JvmBulkRuntimeBuilder.COUNT_DESC, 4);
+			case LispNames.SORT_BY_KEYS ->
+				compileBulkCall(cons, ctx, className, JvmBulkRuntimeBuilder.SORT, JvmBulkRuntimeBuilder.SORT_DESC, 4);
+			case LispNames.ARRAY_ROW_MAJOR_INDEX ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandArrayRowMajorIndex(cons), ctx, className);
+			case LispNames.VECTOR -> JvmExprCompiler.compileExpr(LispMacroExpander.expandVector(cons), ctx, className);
+			case LispNames.SVREF -> JvmExprCompiler.compileExpr(LispMacroExpander.expandSvref(cons), ctx, className);
+			default -> {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	/**
+	 * A call of a {@link JvmBulkRuntimeBuilder} method over the form's {@code count}
+	 * operands, each into a temp as it is evaluated: nothing of the form is on the stack
+	 * while the next one runs.
+	 * @param cons the whole form
+	 * @param ctx the compilation context
+	 * @param className the class being generated
+	 * @param name the method
+	 * @param desc its descriptor, {@code count} objects to an object
+	 * @param count how many operands the primitive takes
+	 */
+	private static void compileBulkCall(LispCons cons, JvmLispCompiler.Ctx ctx, String className, String name,
+			String desc, int count) {
+		java.util.List<LispVal> operands = cons.toList();
+		if (operands.size() != count + 1) {
+			throw new IllegalArgumentException(operands.get(0).print() + " takes " + count + " arguments");
+		}
+		int[] temps = new int[count];
+		for (int i = 0; i < count; i++) {
+			JvmExprCompiler.compileExpr(operands.get(i + 1), ctx, className);
+			temps[i] = ctx.allocTemp();
+			ctx.body.astore(temps[i]);
+		}
+		for (int temp : temps) {
+			ctx.body.aload(temp);
+		}
+		ctx.body.invokestatic(JvmEmitHelper.selfMethod(ctx, className, name, desc));
+	}
+
+	/**
+	 * One slice of the operator dispatch of {@link #compileConsLocated} (see there).
+	 * @param sym the operator
+	 * @param cons the whole form
+	 * @param ctx the compilation context
+	 * @param className the class being generated
+	 * @param tail the tail spine the form inherits, if any
+	 * @return whether {@code sym} names an operator of this slice (the form is then
+	 * compiled)
+	 */
+	private static boolean compileOperator4(LispSymbol sym, LispCons cons, JvmLispCompiler.Ctx ctx, String className,
+			JvmBodyOutliner.@Nullable Tail tail) {
+		switch (sym.name()) {
+			case LispNames.ARRAY_RANK ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandArrayRank(cons), ctx, className);
+			case LispNames.ARRAY_DIMENSION ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandArrayDimension(cons), ctx, className);
+			case LispNames.ARRAY_TOTAL_SIZE ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandArrayTotalSize(cons), ctx, className);
+			case LispNames.FILL_POINTER -> JvmArrayCompiler.compileFillPointer(cons, ctx, className);
+			case LispNames.SET_FILL_POINTER -> JvmArrayCompiler.compileSetFillPointer(cons, ctx, className);
+			case LispNames.ARRAY_HAS_FILL_POINTER_P -> JvmArrayCompiler.compileHasFillPointer(cons, ctx, className);
+			case LispNames.ADJUSTABLE_ARRAY_P -> JvmArrayCompiler.compileAdjustableArrayP(cons, ctx, className);
+			case LispNames.ARRAY_ELEMENT_TYPE -> {
+				// In a java: program the full form too, where an array can exist: its
+				// guard refuses a host ArrayList with the java: text. Without the array
+				// runtime nothing but a string is an array, which the lite expansion
+				// answers exactly (a host ArrayList fails its %arrayp).
+				if (ctx.usesArrays
+						&& (ctx.usesFloatArray || ctx.usesIntArray || ctx.usesTypedArray || ctx.javaSites != null)) {
+					JvmArrayCompiler.compileElementType(cons, ctx, className);
+				}
+				else {
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandArrayElementType(cons), ctx, className);
+				}
+			}
+			case LispNames.VECTOR_PUSH -> JvmArrayCompiler.compileVectorPush(cons, ctx, className);
+			case LispNames.VECTOR_POP -> JvmArrayCompiler.compileVectorPop(cons, ctx, className);
+			case LispNames.VECTOR_PUSH_EXTEND -> JvmArrayCompiler.compileVectorPushExtend(cons, ctx, className);
+			case LispNames.ADJUST_ARRAY ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandAdjustArray(cons), ctx, className);
+			case LispNames.ARRAY_BECOME -> JvmArrayCompiler.compileArrayBecome(cons, ctx, className);
+			case LispNames.ARRAY_BECOME_DISPLACED -> JvmArrayCompiler.compileArrayBecomeDisplaced(cons, ctx, className);
+			case LispNames.ARRAY_DEFAULT_ELEMENT -> JvmArrayCompiler.compileArrayDefaultElement(cons, ctx, className);
+			case LispNames.ARRAY_ADOPT_ELEMENT_TYPE ->
+				JvmArrayCompiler.compileArrayAdoptElementType(cons, ctx, className);
+			case LispNames.ARRAY_JAVA_COMPONENT -> JvmArrayCompiler.compileArrayJavaComponent(cons, ctx, className);
+			case LispNames.ARRAY_ALIKE -> JvmArrayCompiler.compileArrayAlike(cons, ctx, className);
+			case LispNames.ARRAY_DISPLACEMENT ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandArrayDisplacement(cons), ctx, className);
+			case LispNames.ARRAY_DISP_TARGET -> JvmArrayCompiler.compileDispTarget(cons, ctx, className);
+			case LispNames.ARRAY_DISP_OFFSET -> JvmArrayCompiler.compileDispOffset(cons, ctx, className);
+			case LispNames.ARRAY_UNDISPLACE -> JvmArrayCompiler.compileArrayUndisplace(cons, ctx, className);
+			case LispNames.COERCE -> {
+				// A packed (unsigned-byte 8|16|32) result type lowers through the
+				// shared %seq-int-vector helper, exactly as concatenate's does;
+				// everything else is expandCoerce as before.
+				LispVal packed = ConcatenateForms.packedVectorCoerce(cons, ctx.closRegistry);
+				JvmExprCompiler.compileExpr(packed != null ? packed : LispMacroExpander.expandCoerce(cons,
+						ctx.usesArrays, ctx.functions.containsKey(LispNames.SEQ_TO_LIST),
+						ctx.functions.containsKey(LispNames.DEFTYPE_ALIAS_RUNTIME), null,
+						ctx.functions.containsKey(LispNames.COMPILE), ctx.functions.containsKey(LispNames.CONCATENATE)),
+						ctx, className);
+			}
+			case LispNames.MAP_INTO -> JvmExprCompiler.compileExpr(
+					LispMacroExpander.expandMapInto(cons,
+							ctx.functions.containsKey(LispNames.mapIntoRuntime(cons.toList().size() - 3))),
+					ctx, className);
+			case LispNames.APPEND -> JvmAppendCompiler.compile(cons, ctx, className);
+			case LispNames.EVAL -> JvmEvalCompiler.compile(cons, ctx, className);
+			case LispNames.LOAD -> JvmLoadCompiler.compile(cons, ctx, className);
+			// A literal top-level require/provide (and the asdf directives) was
+			// consumed by the compile-time LoadInliner pass, which also lowers a
+			// require written below the top level; anything left is nested or
+			// non-literal (a require: one a macro expanded to), which the compiled
+			// runtime reader cannot execute (unlike a runtime load).
+			// Same for the dist directives: which dists ql:quickload downloads
+			// from is decided while the LoadInliner splices, so a nested/computed
+			// one has nothing left to configure by the time the program runs.
+			// defpackage is here for a different reason: a NESTED one registers a
+			// runtime-tier package on the interpreter, and a compiled program has
+			// no registry to register into -- every spelling it could affect was
+			// already baked. The resolver leaves the form for this refusal.
+			case LispNames.REQUIRE, LispNames.PROVIDE, LispNames.ASDF_DEFSYSTEM, LispNames.QL_DIST_INSTALL_DIST,
+					LispNames.QL_UPDATE_DIST, LispNames.DEFPACKAGE ->
+				throw new UnsupportedOperationException(
+						sym.name() + " is only supported as a literal top-level form on the compile path");
+			// A nested/computed load reached at run time: the CLI pipeline splices
+			// the asdf runtime (AsdfRuntimeLibrary) whenever these names occur, so
+			// the calls resolve to its defuns -- an already-spliced system is a nil
+			// no-op, anything else the call-time error. The stub below serves only
+			// a direct backend compile with no LoadInliner in front (a test seam),
+			// where nothing spliced the defuns.
+			case LispNames.ASDF_LOAD_SYSTEM, LispNames.QL_QUICKLOAD -> {
+				if (ctx.functions.containsKey(sym.name())) {
+					JvmFunctionCallCompiler.compileDefault(sym.name(), cons, ctx, className);
+				}
+				else {
+					JvmExprCompiler.compileExpr(LispMacroExpander.callTimeUnsupportedStub(
+							sym.name() + " cannot load a system at run time on the compiled backends"
+									+ " (systems are spliced at compile time)"),
+							ctx, className);
+				}
+			}
+			// asdf:find-system / asdf:test-system: real defuns whenever the asdf
+			// runtime was spliced (the CLI pipeline splices it on any reference).
+			// Without the splice, find-system keeps the historical nil lowering
+			// ("no such system" after evaluating its arguments) so a direct backend
+			// compile of the probe shape still builds.
+			case LispNames.ASDF_FIND_SYSTEM -> {
+				if (ctx.functions.containsKey(sym.name())) {
+					JvmFunctionCallCompiler.compileDefault(sym.name(), cons, ctx, className);
+				}
+				else {
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandRuntimeFindSystem(cons), ctx, className);
+				}
+			}
+			case LispNames.FUNCALL -> {
+				// A funcall of a fusion-eligible flet lambda substitutes its body
+				// into a fused tree (.kb/jvm-int-fusion.md); anything else takes
+				// the ordinary dispatch.
+				if (!JvmIntFusionCompiler.tryCompileLocalCall(cons, ctx, className)) {
+					JvmFunctionCallCompiler.compileFuncall(cons, ctx, className);
+				}
+			}
+			case LispNames.FUNCTION -> JvmFunctionFormCompiler.compile(cons, ctx, className);
+			case LispNames.SYMBOL_FUNCTION -> JvmFunctionFormCompiler.compileSymbolFunction(cons, ctx, className);
+			case LispNames.MAP -> {
+				LispVal resolved = ConcatenateForms.resolvedMap(cons, ctx.closRegistry);
+				if (resolved != cons) {
+					JvmExprCompiler.compileExpr(resolved, ctx, className);
+				}
+				else {
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandMap(cons, ctx.usesArrays), ctx, className);
+					// (map 'string ...) builds a fresh string, so its result carries a
+					// writable identity. (coerce seq 'string) reaches this through the
+					// same form, and a STRING input passes through un-built and so
+					// un-wrapped -- which is exactly what identity wants.
+					if (MutableStringProducers.isMapToString(cons)) {
+						JvmArrayCompiler.emitToMutStr(ctx, className);
+					}
+				}
+			}
+			case LispNames.MAPCAR -> JvmMapcarCompiler.compile(cons, ctx, className);
+			case LispNames.MAPC -> JvmMapcCompiler.compile(cons, ctx, className);
+			case LispNames.MAPCAN -> JvmMapcanCompiler.compile(cons, ctx, className);
+			case LispNames.REDUCE -> {
+				// :from-end/:key lower to a plain reduce first; then a string
+				// sequence
+				// folds over a list of its characters (the wrapper is null when the
+				// call
+				// is already the inner list fold).
+				LispVal loweredReduce = LispMacroExpander.expandReduce(cons);
+				if (loweredReduce != null) {
+					JvmExprCompiler.compileExpr(loweredReduce, ctx, className);
+				}
+				else {
+					LispVal wrappedReduce = LispMacroExpander.wrapReduceForStringSeq(cons);
+					if (wrappedReduce != null) {
+						JvmExprCompiler.compileExpr(wrappedReduce, ctx, className);
+					}
+					else {
+						JvmReduceCompiler.compile(cons, ctx, className);
+					}
+				}
+			}
+			case LispNames.SORT -> {
+				// (sort seq pred :key ...) routes through stable-sort; otherwise a
+				// string sequence sorts as a list of its characters and is coerced
+				// back
+				// to a string; null when the call is already the inner sort.
+				LispVal keyedSort = LispMacroExpander.expandSortWithKey(cons, ctx.usesArrays);
+				if (keyedSort != null) {
+					JvmExprCompiler.compileExpr(keyedSort, ctx, className);
+				}
+				else {
+					LispVal wrappedSort = LispMacroExpander.wrapSortForStringSeq(cons, ctx.usesArrays);
+					if (wrappedSort != null) {
+						JvmExprCompiler.compileExpr(wrappedSort, ctx, className);
+					}
+					else {
+						// The list sort itself: the shared merge sort when the
+						// program carries it, else the inline one (.kb/sort.md).
+						LispVal sharedSort = LispMacroExpander.sortRuntimeCall(cons,
+								ctx.functions.containsKey(LispNames.SORT_RUNTIME));
+						if (sharedSort != null) {
+							JvmExprCompiler.compileExpr(sharedSort, ctx, className);
+						}
+						else {
+							JvmSortCompiler.compile(cons, ctx, className);
+						}
+					}
+				}
+			}
+			case LispNames.STABLE_SORT ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandStableSort(cons, ctx.usesArrays), ctx, className);
+			case LispNames.COPY_SEQ ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandCopySeq(cons), ctx, className);
+			case LispNames.VECTORP ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandVectorp(cons, ctx.usesArrays), ctx, className);
+			case LispNames.ARRAYP -> JvmExprCompiler.compileExpr(LispMacroExpander.expandArrayp(cons), ctx, className);
+			case LispNames.APPLY -> JvmApplyCompiler.compile(cons, ctx, className);
+			case LispNames.NULL -> JvmNullPredCompiler.compile(cons, ctx, className);
+			case LispNames.ATOM -> JvmAtomCompiler.compile(cons, ctx, className);
+			case LispNames.NUMBERP -> JvmNumberpCompiler.compile(cons, ctx, className);
+			case LispNames.COMPLEXP -> JvmComplexCompiler.compileComplexp(cons, ctx, className);
+			case LispNames.REALP -> JvmComplexCompiler.compileRealp(cons, ctx, className);
+			case LispNames.REALPART -> JvmComplexCompiler.compileRealpart(cons, ctx, className);
+			case LispNames.IMAGPART -> JvmComplexCompiler.compileImagpart(cons, ctx, className);
+			case LispNames.CONJUGATE -> JvmComplexCompiler.compileConjugate(cons, ctx, className);
+			case LispNames.PHASE -> JvmComplexCompiler.compilePhase(cons, ctx, className);
+			case LispNames.INTEGERP -> JvmIntegerpCompiler.compile(cons, ctx, className);
+			case LispNames.FLOATP -> JvmFloatpCompiler.compile(cons, ctx, className);
+			case LispNames.RATIONALP -> JvmRationalpCompiler.compile(cons, ctx, className);
+			case LispNames.NUMERATOR -> JvmRatioAccessorCompiler.compileNumerator(cons, ctx, className);
+			case LispNames.DENOMINATOR -> JvmRatioAccessorCompiler.compileDenominator(cons, ctx, className);
+			case LispNames.RATIONAL -> JvmRationalCompiler.compile(cons, ctx, className);
+			case LispNames.SYMBOLP -> JvmSymbolpCompiler.compile(cons, ctx, className);
+			case LispNames.STRINGP -> JvmStringpCompiler.compile(cons, ctx, className);
+			case LispNames.LISTP -> JvmListpCompiler.compile(cons, ctx, className);
+			case LispNames.CONSP -> JvmConspCompiler.compile(cons, ctx, className);
+			case LispNames.OBJ_NEW -> JvmObjCompiler.compileNew(cons, ctx, className);
+			case LispNames.OBJ_REF -> JvmObjCompiler.compileRef(cons, ctx, className);
+			case LispNames.OBJ_SET -> JvmObjCompiler.compileSet(cons, ctx, className);
+			case LispNames.OBJ_BECOME -> JvmObjCompiler.compileBecome(cons, ctx, className);
+			case LispNames.OBJ_IS -> JvmObjCompiler.compileIs(cons, ctx, className);
+			case LispNames.OBJ_TAG -> JvmObjCompiler.compileTag(cons, ctx, className);
+			case LispNames.OBJ_P -> JvmObjCompiler.compileP(cons, ctx, className);
+			case LispNames.OBJ_SLOTS -> JvmObjCompiler.compileSlots(cons, ctx, className);
+			case LispNames.OBJ_PRINT_FRAME -> JvmObjCompiler.compilePrintFrame(cons, ctx, className);
+			case LispNames.COPY_STRUCTURE -> JvmObjCompiler.compileCopyStructure(cons, ctx, className);
+			case LispNames.FUNCTIONP -> JvmFunctionpCompiler.compile(cons, ctx, className);
+			case LispNames.ARRAYP_INTERNAL -> JvmArraypCompiler.compile(cons, ctx, className);
+			case LispNames.SIMPLE_ARRAY_P_INTERNAL -> JvmSimpleArrayPCompiler.compile(cons, ctx, className);
+			case LispNames.STRING_DIMENSION_INTERNAL -> JvmStringDimensionCompiler.compile(cons, ctx, className);
+			case LispNames.KEYWORDP -> JvmKeywordpCompiler.compile(cons, ctx, className);
+			case LispNames.FLOAT ->
+				JvmFloatConvCompiler.compile(LispMacroExpander.normalizeFloatCall(cons), ctx, className);
+			case LispNames.TRUNCATE, LispNames.FLOOR, LispNames.CEILING, LispNames.ROUND -> {
+				// (floor a b) -> (floor (/ a b)); the one-argument form compiles
+				// natively.
+				LispVal withDivisor = LispMacroExpander.expandFloorFamilyDivisor(cons);
+				if (withDivisor != null) {
+					JvmExprCompiler.compileExpr(withDivisor, ctx, className);
+				}
+				else {
+					switch (sym.name()) {
+						case LispNames.TRUNCATE -> JvmIntConvCompiler.compileTruncate(cons, ctx, className);
+						case LispNames.FLOOR -> JvmIntConvCompiler.compileFloor(cons, ctx, className);
+						case LispNames.CEILING -> JvmIntConvCompiler.compileCeiling(cons, ctx, className);
+						default -> JvmIntConvCompiler.compileRound(cons, ctx, className);
+					}
+				}
+			}
+			case LispNames.FFLOOR, LispNames.FCEILING, LispNames.FROUND, LispNames.FTRUNCATE ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandFFamily(cons), ctx, className);
+			case LispNames.COND -> compileExpansion(cons, LispMacroExpander.expandCond(cons), ctx, className);
+			case LispNames.CASE -> compileExpansion(cons, LispMacroExpander.expandCase(cons), ctx, className);
+			case LispNames.ECASE -> compileExpansion(cons, LispMacroExpander.expandEcase(cons), ctx, className);
+			case LispNames.CCASE -> JvmExprCompiler.compileExpr(LispMacroExpander.expandCcase(cons), ctx, className);
+			case LispNames.ERROR -> JvmExprCompiler.compileExpr(
+					LispMacroExpander.expandError(cons, ctx.closRegistry, false, ctx.restartMode), ctx, className);
+			case LispNames.CERROR -> JvmExprCompiler
+				.compileExpr(LispMacroExpander.expandCerror(cons, ctx.closRegistry, ctx.restartMode), ctx, className);
+			case LispNames.ERROR_INTERNAL -> JvmErrorCompiler.compile(cons, ctx, className);
+			case LispNames.ERROR_COND_INTERNAL -> JvmErrorCondCompiler.compile(cons, ctx, className);
+			case LispNames.WARN -> JvmExprCompiler.compileExpr(
+					LispMacroExpander.expandWarn(cons, ctx.closRegistry, ctx.restartMode, ctx.signalClauseMatch), ctx,
+					className);
+			case LispNames.WARN_INTERNAL -> JvmWarnCompiler.compile(cons, ctx, className);
+			case LispNames.SIGNAL -> JvmExprCompiler.compileExpr(
+					LispMacroExpander.expandSignalMacro(cons, ctx.closRegistry, ctx.restartMode), ctx, className);
+			case LispNames.SIGNAL_COND_INTERNAL -> JvmSignalCondCompiler.compile(cons, ctx, className);
+			case LispNames.HANDLER_CASE -> JvmHandlerCaseCompiler.compile(cons, ctx, className);
+			case LispNames.HANDLER_BIND -> {
+				JvmInterruptPoll.emitListen(cons, ctx);
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandHandlerBind(cons, ctx.closRegistry), ctx,
+						className);
+			}
+			case LispNames.INTERRUPT_TAKE_INTERNAL -> JvmInterruptPoll.compileTake(ctx);
+			case LispNames.IGNORE_ERRORS ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandIgnoreErrors(cons), ctx, className);
+			case LispNames.HC_DEPTH_DEC_INTERNAL -> JvmHandlerCaseCompiler.compileDepthDec(ctx, className);
+			case LispNames.DYN_RESTORE_INTERNAL -> JvmLetCompiler.compileDynRestore(cons, ctx);
+			case LispNames.HB_GUARD_INTERNAL -> JvmHandlerCaseCompiler.compileGuard(cons, ctx, className);
+			// main's last handler reads the reporter off the program
+			// (JvmUncaughtHandler);
+			// where it is written, the form is its body.
+			case LispNames.REPORTING_UNCAUGHT_INTERNAL ->
+				JvmExprCompiler.compileExpr(UncaughtReport.reportingBody(cons), ctx, className);
+			case LispNames.PROGRAM_ERROR_INTERNAL -> {
+				CompileWarnings.warnStaticProgramError(cons);
+				JvmExprCompiler.compileExpr(LispMacroExpander.lowerProgramError(cons, ctx.closRegistry,
+						ctx.hasLandingPad && ctx.mayUseInstances), ctx, className);
+			}
+			case LispNames.COMPILE_WARNING_INTERNAL ->
+				JvmExprCompiler.compileExpr(CompileWarnings.warnedForm(cons), ctx, className);
+			case LispNames.PARSE_ERROR_INTERNAL -> JvmExprCompiler.compileExpr(
+					LispMacroExpander.lowerParseError(cons, ctx.hasLandingPad && ctx.mayUseInstances), ctx, className);
+			case LispNames.ARITY_SURPLUS_MESSAGE_INTERNAL -> compileAritySurplusMessage(cons, ctx, className);
+			case LispNames.ARITY_MISSING_MESSAGE_INTERNAL -> compileArityMissingMessage(cons, ctx, className);
+			case LispNames.SUPPLIED_P_INTERNAL -> compileSuppliedP(cons, ctx, className);
+			case LispNames.AND -> compileExpansion(cons, LispMacroExpander.expandAnd(cons), ctx, className);
+			case LispNames.OR -> compileExpansion(cons, LispMacroExpander.expandOr(cons), ctx, className);
+			case LispNames.WHEN -> compileExpansion(cons, LispMacroExpander.expandWhen(cons), ctx, className);
+			default -> {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	/**
+	 * One slice of the operator dispatch of {@link #compileConsLocated} (see there).
+	 * @param sym the operator
+	 * @param cons the whole form
+	 * @param ctx the compilation context
+	 * @param className the class being generated
+	 * @param tail the tail spine the form inherits, if any
+	 * @return whether {@code sym} names an operator of this slice (the form is then
+	 * compiled)
+	 */
+	private static boolean compileOperator5(LispSymbol sym, LispCons cons, JvmLispCompiler.Ctx ctx, String className,
+			JvmBodyOutliner.@Nullable Tail tail) {
+		switch (sym.name()) {
+			case LispNames.DOTIMES -> {
+				// A numeric loop over packed float arrays compiles to a guarded
+				// primitive loop first; anything outside that subset takes the
+				// ordinary expansion (.kb/jvm-typed-loops.md). Either way the loop
+				// head has to sit at operand stack depth 0 -- the typed emitter
+				// writes its backedge itself, and the expansion's `while` head is
+				// one too -- so both run inside the spill
+				// (JvmEmitHelper.inLoopScope).
+				JvmEmitHelper.inLoopScope(ctx, () -> {
+					if (!JvmTypedLoopCompiler.tryCompile(cons, ctx, className)) {
+						compileExpansion(cons, LispMacroExpander.expandDotimes(cons), ctx, className);
+					}
+				});
+			}
+			case LispNames.PROG1 -> JvmExprCompiler.compileExpr(LispMacroExpander.expandProg1(cons), ctx, className);
+			case LispNames.TIME -> JvmExprCompiler.compileExpr(LispMacroExpander.expandTime(cons), ctx, className);
+			case LispNames.UNLESS -> compileExpansion(cons, LispMacroExpander.expandUnless(cons), ctx, className);
+			case LispNames.ONE_PLUS ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandOnePlus(cons), ctx, className);
+			case LispNames.ONE_MINUS ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandOneMinus(cons), ctx, className);
+			case LispNames.ZEROP -> JvmExprCompiler.compileExpr(LispMacroExpander.expandZerop(cons), ctx, className);
+			case LispNames.PLUSP -> JvmExprCompiler.compileExpr(LispMacroExpander.expandPlusp(cons), ctx, className);
+			case LispNames.MINUSP -> JvmExprCompiler.compileExpr(LispMacroExpander.expandMinusp(cons), ctx, className);
+			case LispNames.EVENP -> JvmExprCompiler.compileExpr(LispMacroExpander.expandEvenp(cons), ctx, className);
+			case LispNames.ODDP -> JvmExprCompiler.compileExpr(LispMacroExpander.expandOddp(cons), ctx, className);
+			case LispNames.ABS -> JvmAbsCompiler.compile(cons, ctx, className);
+			case LispNames.MIN -> {
+				if (isBinaryCall(cons)) {
+					JvmMinCompiler.compile(cons, ctx, className);
+				}
+				else {
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandReduction(cons), ctx, className);
+				}
+			}
+			case LispNames.MAX -> {
+				if (isBinaryCall(cons)) {
+					JvmMaxCompiler.compile(cons, ctx, className);
+				}
+				else {
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandReduction(cons), ctx, className);
+				}
+			}
+			case LispNames.SQRT -> JvmComplexCompiler.compileSqrt(cons, ctx, className);
+			case LispNames.CIS, LispNames.ASINH, LispNames.ACOSH, LispNames.ATANH ->
+				JvmMathFnCompiler.compileAlwaysComplex(cons, ctx, className, sym.name());
+			case LispNames.EXP, LispNames.LOG, LispNames.SIN, LispNames.COS, LispNames.TAN, LispNames.ASIN,
+					LispNames.ACOS, LispNames.ATAN, LispNames.SINH, LispNames.COSH, LispNames.TANH ->
+				JvmMathFnCompiler.compile(cons, ctx, className, sym.name());
+			case LispNames.RANDOM -> {
+				if (cons.toList().size() == 3) {
+					// The optional random-state argument: normalized away (state
+					// evaluated for effect, backend entropy draws).
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandRandomWithState(cons), ctx, className);
+				}
+				else {
+					JvmRandomCompiler.compile(cons, ctx, className);
+				}
+			}
+			case LispNames.GET_UNIVERSAL_TIME, LispNames.GET_INTERNAL_REAL_TIME, LispNames.GET_INTERNAL_RUN_TIME,
+					LispNames.NANO_TIME, LispNames.UNIX_NANO_TIME ->
+				JvmTimeCompiler.compile(cons, ctx, sym.name());
+			case LispNames.ISQRT -> JvmIsqrtCompiler.compile(cons, ctx, className);
+			case LispNames.EXPT -> JvmExptCompiler.compile(cons, ctx, className);
+			case LispNames.GCD -> {
+				if (isBinaryCall(cons)) {
+					JvmGcdCompiler.compile(cons, ctx, className);
+				}
+				else {
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandReduction(cons), ctx, className);
+				}
+			}
+			case LispNames.LCM -> {
+				if (isBinaryCall(cons)) {
+					JvmLcmCompiler.compile(cons, ctx, className);
+				}
+				else {
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandReduction(cons), ctx, className);
+				}
+			}
+			case LispNames.SIGNUM -> JvmSignumCompiler.compile(cons, ctx, className);
+			case LispNames.LOGAND -> {
+				if (JvmIntFusionCompiler.tryCompile(cons, ctx, className)) {
+					// fused (.kb/jvm-int-fusion.md)
+				}
+				else if (isBinaryCall(cons)) {
+					JvmBitwiseCompiler.compileLogand(cons, ctx, className);
+				}
+				else {
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandReduction(cons), ctx, className);
+				}
+			}
+			case LispNames.LOGIOR -> {
+				if (JvmIntFusionCompiler.tryCompile(cons, ctx, className)) {
+					// fused (.kb/jvm-int-fusion.md)
+				}
+				else if (isBinaryCall(cons)) {
+					JvmBitwiseCompiler.compileLogior(cons, ctx, className);
+				}
+				else {
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandReduction(cons), ctx, className);
+				}
+			}
+			case LispNames.LOGXOR -> {
+				if (JvmIntFusionCompiler.tryCompile(cons, ctx, className)) {
+					// fused (.kb/jvm-int-fusion.md)
+				}
+				else if (isBinaryCall(cons)) {
+					JvmBitwiseCompiler.compileLogxor(cons, ctx, className);
+				}
+				else {
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandReduction(cons), ctx, className);
+				}
+			}
+			case LispNames.LOGNOT -> {
+				if (!JvmIntFusionCompiler.tryCompile(cons, ctx, className)) {
+					JvmBitwiseCompiler.compileLognot(cons, ctx, className);
+				}
+			}
+			case LispNames.ASH -> {
+				if (!JvmIntFusionCompiler.tryCompile(cons, ctx, className)) {
+					JvmBitwiseCompiler.compileAsh(cons, ctx, className);
+				}
+			}
+			case LispNames.MASK_SIGNED_FIELD -> {
+				if (!JvmIntFusionCompiler.tryCompile(cons, ctx, className)) {
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandMaskSignedField(cons), ctx, className);
+				}
+			}
+			case LispNames.INTEGER_LENGTH -> JvmBitwiseCompiler.compileIntegerLength(cons, ctx, className);
+			case LispNames.LOGBITP -> JvmBitwiseCompiler.compileLogbitp(cons, ctx, className);
+			case LispNames.LIST_STAR -> JvmListCompiler.compileStar(cons, ctx, className);
+			case LispNames.ACONS -> JvmExprCompiler.compileExpr(LispMacroExpander.expandAcons(cons), ctx, className);
+			case LispNames.ENDP -> JvmNullPredCompiler.compileEndp(cons, ctx, className);
+			case LispNames.CHECK_LIST_INTERNAL -> JvmNullPredCompiler.compileCheckList(cons, ctx, className);
+			case LispNames.CHECK_STRING_INTERNAL -> JvmCharCompiler.compileCheckString(cons, ctx, className);
+			case LispNames.CHECK_INDEX_INTERNAL -> JvmCharCompiler.compileCheckIndex(cons, ctx, className);
+			case LispNames.CHECK_DIMENSION_INTERNAL -> JvmArrayCompiler.compileCheckDimension(cons, ctx, className);
+			case LispNames.OPERAND_TYPE_ERROR_INTERNAL -> JvmCharCompiler.compileOperandTypeError(cons, ctx, className);
+			case LispNames.CHECK_SEQUENCE_INTERNAL -> JvmCharCompiler.compileCheckSequence(cons, ctx, className);
+			case LispNames.CHECK_STREAM_INTERNAL -> JvmCharCompiler.compileCheckStream(cons, ctx, className);
+			case LispNames.CHECK_BOUNDS_INTERNAL -> JvmSubseqCompiler.compileCheckBounds(cons, ctx, className);
+			case LispNames.CHECK_CHARACTER_INTERNAL -> JvmCharCompiler.compileCheckCharacter(cons, ctx, className);
+			case LispNames.ELT ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandElt(cons, ctx.usesArrays), ctx, className);
+			case LispNames.RASSOC -> JvmExprCompiler.compileExpr(LispMacroExpander.expandRassoc(cons), ctx, className);
+			case LispNames.PAIRLIS ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandPairlis(cons), ctx, className);
+			case LispNames.COPY_ALIST ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandCopyAlist(cons), ctx, className);
+			case LispNames.REVAPPEND ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandRevappend(cons), ctx, className);
+			case LispNames.NRECONC ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandNreconc(cons), ctx, className);
+			case LispNames.MAPLIST ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandMaplist(cons), ctx, className);
+			case LispNames.MAPCON -> JvmExprCompiler.compileExpr(LispMacroExpander.expandMapcon(cons), ctx, className);
+			case LispNames.MAPL -> JvmExprCompiler.compileExpr(LispMacroExpander.expandMapl(cons), ctx, className);
+			case LispNames.NOTANY -> JvmExprCompiler.compileExpr(LispMacroExpander.expandNotany(cons), ctx, className);
+			case LispNames.NOTEVERY ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandNotevery(cons), ctx, className);
+			case LispNames.PROG2 -> JvmExprCompiler.compileExpr(LispMacroExpander.expandProg2(cons), ctx, className);
+			case LispNames.PSETQ -> JvmExprCompiler.compileExpr(LispMacroExpander.expandPsetq(cons), ctx, className);
+			case LispNames.PSETF -> JvmExprCompiler.compileExpr(LispMacroExpander.expandPsetf(cons), ctx, className);
+			case LispNames.TYPECASE ->
+				compileExpansion(cons, LispMacroExpander.expandTypecase(cons, ctx.closRegistry), ctx, className);
+			case LispNames.ETYPECASE ->
+				compileExpansion(cons, LispMacroExpander.expandEtypecase(cons, ctx.closRegistry), ctx, className);
+			case LispNames.CTYPECASE ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandCtypecase(cons, ctx.closRegistry), ctx, className);
+			case LispNames.TYPEP -> JvmExprCompiler
+				.compileExpr(LispMacroExpander.expandTypep(cons, ctx.closRegistry, false), ctx, className);
+			case LispNames.SUBTYPEP ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandSubtypep(cons, ctx.closRegistry), ctx, className);
+			case LispNames.SUBTYPEP_VALID -> JvmExprCompiler
+				.compileExpr(LispMacroExpander.expandSubtypepValid(cons, ctx.closRegistry), ctx, className);
+			case LispNames.UPGRADED_COMPLEX_PART_TYPE ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandUpgradedComplexPartType(cons), ctx, className);
+			case LispNames.CHECK_TYPE ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandCheckType(cons, ctx.closRegistry), ctx, className);
+			case LispNames.ASSERT -> JvmExprCompiler.compileExpr(LispMacroExpander.expandAssert(cons), ctx, className);
+			case LispNames.DECLARE ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandDeclare(cons), ctx, className);
+			case LispNames.DECLAIM ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandDeclaim(cons), ctx, className);
+			case LispNames.PROCLAIM ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandProclaim(cons), ctx, className);
+			case LispNames.THE -> compileExpansion(cons, LispMacroExpander.expandThe(cons), ctx, className);
+			case LispNames.EVAL_WHEN ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandEvalWhen(cons), ctx, className);
+			case LispNames.WITH_COMPILATION_UNIT ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandWithCompilationUnit(cons), ctx, className);
+			case LispNames.FORMATTER ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandFormatter(cons), ctx, className);
+			case LispNames.LOCALLY -> {
+				// A pass-through lowering: the expansion sits where this form sat, so
+				// it inherits the tail spine (JvmBodyOutliner) and the tail mark.
+				ctx.tailBody = tail;
+				compileExpansion(cons, LispMacroExpander.expandLocally(cons), ctx, className);
+			}
+			case LispNames.WITH_STANDARD_IO_SYNTAX -> JvmExprCompiler
+				.compileExpr(LispMacroExpander.expandWithStandardIoSyntax(cons, ctx.specialVars), ctx, className);
+			case LispNames.WRITE_CHAR ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandWriteChar(cons), ctx, className);
+			case LispNames.FLET -> {
+				// A pass-through lowering: the expansion sits where this form sat, so
+				// it inherits the tail spine (JvmBodyOutliner) and the tail mark.
+				ctx.tailBody = tail;
+				compileExpansion(cons, LispMacroExpander.expandFlet(cons), ctx, className);
+			}
+			case LispNames.LABELS -> {
+				// A pass-through lowering: the expansion sits where this form sat, so
+				// it inherits the tail spine (JvmBodyOutliner) and the tail mark.
+				ctx.tailBody = tail;
+				LispVal expansion = LispMacroExpander.expandLabels(cons);
+				// Functions whose tail calls to each other cycle are a tail group, and
+				// each such call is a jump (JvmTailGroup).
+				ctx.tailGroupMembers.putAll(JvmTailGroup.ofLabels(expansion, ctx.specialVars));
+				compileExpansion(cons, expansion, ctx, className);
+			}
+			case LispNames.VALUES -> JvmExprCompiler.compileExpr(LispMacroExpander.expandValues(cons), ctx, className);
+			case LispNames.MULTIPLE_VALUE_BIND ->
+				compileExpansion(cons, LispMacroExpander.expandMultipleValueBind(cons), ctx, className);
+			case LispNames.MULTIPLE_VALUE_LIST ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandMultipleValueList(cons), ctx, className);
+			case LispNames.MULTIPLE_VALUE_CALL ->
+				compileExpansion(cons, LispMacroExpander.expandMultipleValueCall(cons), ctx, className);
+			case LispNames.NTH_VALUE ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandNthValue(cons), ctx, className);
+			case LispNames.MULTIPLE_VALUE_SETQ ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandMultipleValueSetq(cons), ctx, className);
+			case LispNames.MULTIPLE_VALUE_PROG1 ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandMultipleValueProg1(cons), ctx, className);
+			case LispNames.ROTATEF ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandRotatef(cons), ctx, className);
+			case LispNames.SHIFTF -> JvmExprCompiler.compileExpr(LispMacroExpander.expandShiftf(cons), ctx, className);
+			case LispNames.LOAD_TIME_VALUE ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandLoadTimeValue(cons), ctx, className);
+			case LispNames.BYTE -> JvmExprCompiler.compileExpr(LispMacroExpander.expandByte(cons), ctx, className);
+			case LispNames.BYTE_SIZE ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandByteSize(cons), ctx, className);
+			case LispNames.BYTE_POSITION ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandBytePosition(cons), ctx, className);
+			case LispNames.LDB -> JvmExprCompiler.compileExpr(LispMacroExpander.expandLdb(cons), ctx, className);
+			case LispNames.DPB -> JvmExprCompiler.compileExpr(LispMacroExpander.expandDpb(cons), ctx, className);
+			case LispNames.DEPOSIT_FIELD ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandDepositField(cons), ctx, className);
+			case LispNames.LOGANDC1, LispNames.LOGANDC2, LispNames.LOGORC1, LispNames.LOGORC2, LispNames.LOGNAND,
+					LispNames.LOGNOR ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandLogComplement(cons), ctx, className);
+			case LispNames.LOGEQV -> JvmExprCompiler.compileExpr(LispMacroExpander.expandLogEqv(cons), ctx, className);
+			case LispNames.FLOAT_RADIX ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandFloatRadix(cons), ctx, className);
+			case LispNames.LOGTEST ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandLogtest(cons), ctx, className);
+			case LispNames.MAKE_SEQUENCE ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandMakeSequence(cons), ctx, className);
+			case LispNames.DESTRUCTURING_BIND ->
+				compileExpansion(cons, LispMacroExpander.expandDestructuringBind(cons), ctx, className);
+			case LispNames.FIRST -> JvmExprCompiler.compileExpr(LispMacroExpander.expandFirst(cons), ctx, className);
+			case LispNames.REST -> JvmExprCompiler.compileExpr(LispMacroExpander.expandRest(cons), ctx, className);
+			case LispNames.NTH -> JvmExprCompiler.compileExpr(LispMacroExpander.expandNth(cons), ctx, className);
+			case LispNames.SECOND -> JvmExprCompiler.compileExpr(LispMacroExpander.expandSecond(cons), ctx, className);
+			case LispNames.THIRD -> JvmExprCompiler.compileExpr(LispMacroExpander.expandThird(cons), ctx, className);
+			case LispNames.FOURTH -> JvmExprCompiler.compileExpr(LispMacroExpander.expandFourth(cons), ctx, className);
+			case LispNames.FIFTH -> JvmExprCompiler.compileExpr(LispMacroExpander.expandFifth(cons), ctx, className);
+			case LispNames.SIXTH -> JvmExprCompiler.compileExpr(LispMacroExpander.expandSixth(cons), ctx, className);
+			case LispNames.SEVENTH ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandSeventh(cons), ctx, className);
+			case LispNames.EIGHTH -> JvmExprCompiler.compileExpr(LispMacroExpander.expandEighth(cons), ctx, className);
+			case LispNames.NINTH -> JvmExprCompiler.compileExpr(LispMacroExpander.expandNinth(cons), ctx, className);
+			case LispNames.TENTH -> JvmExprCompiler.compileExpr(LispMacroExpander.expandTenth(cons), ctx, className);
+			case LispNames.NOT -> JvmNullPredCompiler.compile(cons, ctx, className);
+			default -> {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	/**
+	 * Reports, ONCE per compile attempt and per name, that an operator interception
+	 * overrode the program's own {@code defun} of a {@code cl} function. The first call
+	 * site names the position, and the rest of them stay quiet -- a program that
+	 * redefines {@code length} and then calls it fifty times has one thing wrong with it,
+	 * not fifty.
+	 */
+	private static void warnClRedefinition(String name, LispCons cons, JvmLispCompiler.Ctx ctx) {
+		if (ctx.warnedClRedefinitions.add(name)) {
+			CompileWarnings.warn(cons, ClRedefinitionWarnings.message(name));
+		}
+	}
+
+	/**
+	 * Compiles a numeric comparison. The binary form uses the dedicated comparison
+	 * compiler; any other arity is desugared into nested binary comparisons.
+	 */
+	private static void compileComparison(LispCons cons, JvmLispCompiler.Ctx ctx, String className,
+			Opcode branchOpcode) {
+		if (isBinaryCall(cons)) {
+			// A comparison whose side is an integer tree fuses into one outlined raw
+			// long compare (.kb/jvm-int-fusion.md); the both-plain shape keeps the
+			// generic emission.
+			if (!JvmIntFusionCompiler.tryCompileCompareValue(cons, ctx, className, branchOpcode)) {
+				JvmComparisonCompiler.compile(cons, ctx, branchOpcode, className);
+			}
+		}
+		else {
+			JvmExprCompiler.compileExpr(LispMacroExpander.expandComparison(cons), ctx, className);
+		}
+	}
+
+	/**
+	 * Returns whether the call has exactly two arguments (operator plus two operands).
+	 */
+	private static boolean isBinaryCall(LispCons cons) {
+		return cons.toList().size() == 3;
+	}
+
+	/**
+	 * Compiles one of the {@code %condition-} primitives behind the bordeaux-threads
+	 * shim's condition variables onto its {@code runtime/RontoConditionVariable} method,
+	 * which travels with the class.
+	 */
+	private static void compileConditionVariable(String member, LispCons cons, JvmLispCompiler.Ctx ctx,
+			String className) {
+		List<LispVal> items = cons.toList();
+		int arity = switch (member) {
+			case LispNames.CONDITION_VARIABLE_NEW_INTERNAL -> 0;
+			case LispNames.CONDITION_WAIT_INTERNAL -> 3;
+			default -> 2;
+		};
+		if (items.size() != arity + 1) {
+			throw new UnsupportedOperationException(member.toLowerCase(java.util.Locale.ROOT) + " expects " + arity
+					+ " arguments, got " + (items.size() - 1));
+		}
+		for (int i = 1; i <= arity; i++) {
+			compileExpr(items.get(i), ctx, className);
+		}
+		String desc = "(" + "Ljava/lang/Object;".repeat(arity) + ")Ljava/lang/Object;";
+		if (ctx.interruptPolls && LispNames.CONDITION_WAIT_INTERNAL.equals(member)) {
+			ctx.body.invokestatic(ctx.cp.methodRef(ctx.cp.classEntry(JvmInterruptPoll.CLASS), "waitOn", desc));
+			JvmInterruptPoll.emit(ctx, className);
+			return;
+		}
+		ctx.body.invokestatic(ctx.cp.methodRef(ctx.cp.classEntry(JvmLispCompiler.CONDITION_VARIABLE_CLASS),
+				java.util.Objects.requireNonNull(JvmLispCompiler.CONDITION_VARIABLE_METHODS.get(member)), desc));
+	}
+
+	/**
+	 * Compiles {@code %run-program} onto {@code runtime/RontoProcess.run}, which travels
+	 * with the class: the five string arguments rendered from a character vector first (a
+	 * {@code format nil} result is one), the mode word as it is.
+	 */
+	private static void compileRunProgram(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		List<LispVal> items = cons.toList();
+		if (items.size() != 7) {
+			throw new UnsupportedOperationException("%run-program expects 6 arguments, got " + (items.size() - 1));
+		}
+		for (int i = 1; i <= 6; i++) {
+			compileExpr(items.get(i), ctx, className);
+			if (i < 6) {
+				JvmArrayCompiler.emitStrvNormalize(ctx, className);
+			}
+		}
+		ctx.body.invokestatic(ctx.cp.methodRef(ctx.cp.classEntry(JvmLispCompiler.PROCESS_CLASS), "run",
+				"(" + "Ljava/lang/Object;".repeat(6) + ")Ljava/lang/Object;"));
+	}
+
+	/**
+	 * Compiles a permission primitive -- {@code %file-access}, {@code %file-space},
+	 * {@code %file-set-mode}, {@code %file-make} -- onto its
+	 * {@code runtime/RontoFileModes} method, which travels with the class. The path is
+	 * the first argument.
+	 */
+	private static void compileFileModes(String name, LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		List<LispVal> items = cons.toList();
+		int arity = LispNames.FILE_MAKE_INTERNAL.equals(name) ? 3 : 2;
+		if (items.size() != arity + 1) {
+			throw new UnsupportedOperationException(name.toLowerCase(java.util.Locale.ROOT) + " expects " + arity
+					+ " arguments, got " + (items.size() - 1));
+		}
+		for (int i = 1; i <= arity; i++) {
+			compileExpr(items.get(i), ctx, className);
+			if (i == 1) {
+				JvmArrayCompiler.emitStrvNormalize(ctx, className);
+			}
+		}
+		String method = switch (name) {
+			case LispNames.FILE_ACCESS_INTERNAL -> "fileAccess";
+			case LispNames.FILE_SPACE_INTERNAL -> "fileSpace";
+			case LispNames.FILE_SET_MODE_INTERNAL -> "fileSetMode";
+			default -> "fileMake";
+		};
+		ctx.body.invokestatic(ctx.cp.methodRef(ctx.cp.classEntry(JvmLispCompiler.FILE_MODES_CLASS), method,
+				"(" + "Ljava/lang/Object;".repeat(arity) + ")Ljava/lang/Object;"));
+	}
+
+	/**
+	 * Compiles {@code %cons-cas-car} or {@code %cons-cas-cdr} onto its
+	 * {@code runtime/RontoConsCas} method, which travels with the class.
+	 */
+	private static void compileConsCas(String member, LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		List<LispVal> items = cons.toList();
+		if (items.size() != 4) {
+			throw new UnsupportedOperationException(
+					member.toLowerCase(java.util.Locale.ROOT) + " expects 3 arguments, got " + (items.size() - 1));
+		}
+		for (int i = 1; i <= 3; i++) {
+			compileExpr(items.get(i), ctx, className);
+		}
+		ctx.body.invokestatic(ctx.cp.methodRef(ctx.cp.classEntry(JvmLispCompiler.CONS_CAS_CLASS),
+				LispNames.CONS_CAS_CAR_INTERNAL.equals(member) ? "car" : "cdr",
+				"(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"));
+	}
+
+	/**
+	 * Compiles one of the three mutex primitives onto its {@link JvmMutexRuntimeBuilder}
+	 * helper. {@code make-mutex} takes no arguments and yields a fresh
+	 * {@code ReentrantLock}; acquire and release take the handle and return it, so a
+	 * value-position call is still well typed.
+	 */
+	private static void compileMutex(String member, LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		List<LispVal> args = cons.toList();
+		int arity = LispNames.MAKE_MUTEX.equals(member) ? 0 : 1;
+		if (args.size() != arity + 1) {
+			throw new UnsupportedOperationException(
+					"rontolisp:" + member + " expects " + arity + " argument(s), got " + (args.size() - 1));
+		}
+		String method = switch (member) {
+			case LispNames.MAKE_MUTEX -> JvmMutexRuntimeBuilder.NEW_METHOD;
+			case LispNames.MUTEX_ACQUIRE -> JvmMutexRuntimeBuilder.ACQUIRE_METHOD;
+			default -> JvmMutexRuntimeBuilder.RELEASE_METHOD;
+		};
+		String desc = arity == 0 ? JvmMutexRuntimeBuilder.NEW_DESC : JvmMutexRuntimeBuilder.UNARY_DESC;
+		if (arity == 1) {
+			compileExpr(args.get(1), ctx, className);
+		}
+		ctx.body.invokestatic(ctx.cp.methodRef(ctx.cp.classEntry(className), method, desc));
+	}
+
+	/**
+	 * Compiles one of the five thread primitives onto its {@link JvmThreadRuntimeBuilder}
+	 * helper. {@code make-thread} takes the function and an optional bindings alist
+	 * (compiled as nil when absent); the other four take the handle (or, for
+	 * {@code threadp}, any value).
+	 */
+	private static void compileThread(String member, LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		List<LispVal> args = cons.toList();
+		String method;
+		String desc;
+		if (LispNames.CURRENT_THREAD.equals(member)) {
+			if (args.size() != 1) {
+				throw new UnsupportedOperationException(
+						"rontolisp:" + member + " expects no arguments, got " + (args.size() - 1));
+			}
+			method = JvmThreadRuntimeBuilder.CURRENT_METHOD;
+			desc = JvmThreadRuntimeBuilder.CURRENT_DESC;
+		}
+		else if (LispNames.MAKE_THREAD.equals(member)) {
+			if (args.size() < 2 || args.size() > 4) {
+				throw new UnsupportedOperationException(
+						"rontolisp:" + member + " expects 1 to 3 argument(s), got " + (args.size() - 1));
+			}
+			for (int i = 1; i <= 3; i++) {
+				if (i < args.size()) {
+					compileExpr(args.get(i), ctx, className);
+				}
+				else {
+					ctx.body.aconst_null();
+				}
+			}
+			method = JvmThreadRuntimeBuilder.SPAWN_METHOD;
+			desc = JvmThreadRuntimeBuilder.SPAWN_DESC;
+		}
+		else {
+			if (args.size() != 2) {
+				throw new UnsupportedOperationException(
+						"rontolisp:" + member + " expects 1 argument(s), got " + (args.size() - 1));
+			}
+			compileExpr(args.get(1), ctx, className);
+			method = switch (member) {
+				case LispNames.JOIN_THREAD -> JvmThreadRuntimeBuilder.JOIN_METHOD;
+				case LispNames.THREADP -> JvmThreadRuntimeBuilder.THREADP_METHOD;
+				case LispNames.THREAD_ALIVE_P -> JvmThreadRuntimeBuilder.ALIVE_METHOD;
+				case LispNames.THREAD_NAME_INTERNAL -> JvmThreadRuntimeBuilder.NAME_METHOD;
+				default -> JvmThreadRuntimeBuilder.DESTROY_METHOD;
+			};
+			desc = JvmThreadRuntimeBuilder.UNARY_DESC;
+		}
+		ctx.body.invokestatic(ctx.cp.methodRef(ctx.cp.classEntry(className), method, desc));
+	}
+
+	/**
+	 * Wraps a path-taking builtin's path argument in the pathname-to-namestring unwrap
+	 * ({@link LispMacroExpander#coercePathArg}) -- but ONLY when this compilation's
+	 * instance gate is on. With the gate off no pathname value can exist, and skipping
+	 * the wrap keeps every instance-free program byte-identical to a build that never
+	 * knew about pathnames (the {@code .kb/instance-syntax.md} rule).
+	 */
+	/**
+	 * Wraps the raw handle a stream PRODUCER just left on the stack into the open stream
+	 * VALUE, when a stream value can exist in this class at all. With the gate off no
+	 * producer is wrapped and no consumer unwraps, so such a program keeps raw handles --
+	 * and its exact bytes.
+	 */
+	/**
+	 * The registering shape of a literal BINARY {@code open} leaf, or null when the leaf
+	 * compiles as it always did: a character leaf, a program that never asks about
+	 * element types (no {@code %file-stream-register} spliced), or no stream values. A
+	 * WIDE leaf in a program without the registry is refused at call time rather than
+	 * silently opened as octets.
+	 */
+	private static @Nullable LispVal registeredOpenLeaf(LispCons cons, @Nullable LispVal checked,
+			JvmLispCompiler.Ctx ctx) {
+		StreamElementType type = OpenModes.staticElementType(OpenModes.normalizeKeywordForm(cons).toList());
+		if (type == null || type.isCharacter()) {
+			return null;
+		}
+		if (checked == null || !ctx.usesStreamValues
+				|| !ctx.functions.containsKey(LispNames.FILE_STREAM_REGISTER_INTERNAL)) {
+			return type.isWide() ? LispMacroExpander.wideElementTypeUnavailableStub() : null;
+		}
+		return LispMacroExpander.registeredOpen(checked, type,
+				OpenModes.abilities(OpenModes.normalizeKeywordForm(cons).toList()));
+	}
+
+	/**
+	 * {@link LispMacroExpander#guardPackedSequenceForWideStreams} when the program opens
+	 * a wide stream.
+	 */
+	// Whether a string stream can reach a read-sequence / write-sequence site, so the
+	// expansion asks %character-stream-p (.kb/read-load-streams.md, "The stream picks
+	// the element").
+	private static boolean characterStreams(JvmLispCompiler.Ctx ctx) {
+		return ctx.usesStreamValues && ctx.functions.containsKey(LispNames.CHARACTER_STREAM_P_INTERNAL);
+	}
+
+	// Whether the read-sequence / write-sequence expansion runs its
+	// %check-sequence-bounds call: only when the prelude defun is spliced into the
+	// program -- a direct compile of reader output (a backend unit test without the
+	// front end) never spliced it, and the call would dangle.
+	private static boolean boundsCheck(JvmLispCompiler.Ctx ctx) {
+		return ctx.functions.containsKey(LispNames.CHECK_SEQUENCE_BOUNDS_INTERNAL);
+	}
+
+	private static LispVal guardPackedForWideStreams(LispVal expansion, JvmLispCompiler.Ctx ctx) {
+		return ctx.functions.containsKey(LispNames.WIDE_WIDTH_INTERNAL)
+				? LispMacroExpander.guardPackedSequenceForWideStreams(expansion) : expansion;
+	}
+
+	// Whether every open records its namestring on the stream value it answers
+	// (LispMacroExpander.recordingStreamPath): only where a stream value and a
+	// pathname reader can both exist.
+	private static boolean recordsStreamPaths(JvmLispCompiler.Ctx ctx) {
+		return ctx.usesStreamValues && ctx.mayUseInstances
+				&& LispMacroExpander.recordsStreamPaths(ctx.functions::containsKey);
+	}
+
+	private static void wrapStreamValue(JvmLispCompiler.Ctx ctx, String className, String kind) {
+		if (ctx.usesStreamValues) {
+			JvmObjCompiler.emitWrapStream(ctx, className, kind);
+		}
+	}
+
+	private static LispCons coercePathArgWhenGated(LispCons cons, int argIndex, JvmLispCompiler.Ctx ctx) {
+		return ctx.mayUseInstances ? LispMacroExpander.coercePathArg(cons, argIndex) : cons;
+	}
+
+}

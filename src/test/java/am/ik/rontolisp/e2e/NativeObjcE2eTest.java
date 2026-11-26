@@ -1,0 +1,405 @@
+package am.ik.rontolisp.e2e;
+
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.io.PrintStream;
+import java.net.InetSocketAddress;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Objects;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+
+import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.cli.RontoLispCli;
+import am.ik.rontolisp.eval.LispEvaluator;
+import am.ik.rontolisp.eval.ObjcExceptionTest;
+import am.ik.rontolisp.eval.ObjcInterop;
+import am.ik.rontolisp.reader.LispReader;
+import com.sun.net.httpserver.HttpServer;
+import org.jspecify.annotations.Nullable;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.EnabledOnOs;
+import org.junit.jupiter.api.condition.OS;
+import org.junit.jupiter.api.io.TempDir;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.junit.jupiter.api.Assumptions.abort;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
+
+/**
+ * An {@code objc:} program as a {@code --native} executable (.kb/objc.md, "--native"):
+ * the headless corpora print byte for byte what the interpreter prints -- sends of every
+ * result kind, classes whose methods are Lisp functions, blocks, exceptions, the argument
+ * refusals -- and {@code sleep} turns thread 0's event loop, so a timer's closure runs
+ * while the program waits, as does a fetch's wait once the application started. No window
+ * is opened (CI has no display); a window is verified by hand with
+ * {@code examples/macos/counter.lisp}.
+ *
+ * <p>
+ * macOS on Apple silicon only, where the runner answers the {@code rlobjc} imports; the
+ * compiler is this JVM's {@link RontoLispCli} or {@code -Drontolisp.binary}, as in
+ * {@link NativeOutputE2eTest}, and a compiler without the host's pair skips (fails under
+ * {@code -Drontolisp.native.required=true}).
+ */
+@EnabledOnOs(value = OS.MAC, architectures = "aarch64")
+class NativeObjcE2eTest {
+
+	private static final @Nullable String BINARY = System.getProperty("rontolisp.binary");
+
+	private static final boolean REQUIRED = Boolean.getBoolean("rontolisp.native.required");
+
+	private static final String NOT_AVAILABLE = "--native is not available for ";
+
+	@TempDir
+	Path tempDir;
+
+	@Test
+	void theExceptionCorpusPrintsWhatTheInterpreterPrints() throws Exception {
+		// An NSException inside a send stops at rl_objc_call (call.rs) and is
+		// objc:objc-exception; invoke-with-error's ns-error (eval/ObjcExceptionTest pins
+		// the output).
+		assumeTrue(ObjcInterop.available(), ObjcInterop.description());
+		String source;
+		try (InputStream in = NativeObjcE2eTest.class.getResourceAsStream("/objc-exception-corpus.lisp")) {
+			source = new String(Objects.requireNonNull(in).readAllBytes(), StandardCharsets.UTF_8);
+		}
+		Run actual = nativeOutput(source);
+		assertThat(actual.exit()).as("stderr: %s", actual.stderr()).isZero();
+		String expected;
+		try (InputStream in = NativeObjcE2eTest.class.getResourceAsStream("/objc-exception-corpus.expected")) {
+			expected = new String(Objects.requireNonNull(in).readAllBytes(), StandardCharsets.UTF_8);
+		}
+		assertThat(actual.stdout()).isEqualTo(expected);
+		assertThat(actual.stderr()).isEqualTo(ObjcExceptionTest.ESCAPED);
+	}
+
+	@Test
+	void theCorpusPrintsWhatTheInterpreterPrints() throws Exception {
+		// objc.lisp over the p_* imports: the same conversions, ownership, value
+		// identity and byte copies as the interpreter's primitives (eval/ObjcBaseTest
+		// pins
+		// the output).
+		assumeTrue(ObjcInterop.available(), ObjcInterop.description());
+		String source;
+		try (InputStream in = NativeObjcE2eTest.class.getResourceAsStream("/objc-base-corpus.lisp")) {
+			source = new String(Objects.requireNonNull(in).readAllBytes(), StandardCharsets.UTF_8);
+		}
+		Run actual = nativeOutput(source);
+		assertThat(actual.exit()).as("stderr: %s", actual.stderr()).isZero();
+		assertThat(actual.stdout()).isEqualTo(interpret(source));
+		assertThat(actual.stderr()).isEmpty();
+	}
+
+	@Test
+	void theClassCorpusPrintsWhatTheInterpreterPrints() throws Exception {
+		// objc-class.lisp over class.rs: methods of every shape through one IMP, super
+		// sends, instance variables, the lifecycle generics (eval/ObjcClassTest pins the
+		// output).
+		assumeTrue(ObjcInterop.available(), ObjcInterop.description());
+		String source;
+		try (InputStream in = NativeObjcE2eTest.class.getResourceAsStream("/objc-class-corpus.lisp")) {
+			source = new String(Objects.requireNonNull(in).readAllBytes(), StandardCharsets.UTF_8);
+		}
+		Run actual = nativeOutput(source);
+		assertThat(actual.exit()).as("stderr: %s", actual.stderr()).isZero();
+		assertThat(actual.stdout()).isEqualTo(interpret(source));
+		assertThat(actual.stderr()).isEqualTo("objc: error in a callback: no 9\n");
+	}
+
+	@Test
+	void theBlockCorpusPrintsItsOwnExpectedOutput() throws Exception {
+		// block.rs: a block arriving inside a host call on thread 0 re-enters the module;
+		// one arriving on another thread waits for thread 0's event loop, so a
+		// completion handler and a dispatch_async run on thread 0 during the program's
+		// sleep -- the lines where this file differs from the interpreter's
+		// (eval/ObjcBlockTest pins that).
+		assumeTrue(ObjcInterop.available(), ObjcInterop.description());
+		String source;
+		try (InputStream in = NativeObjcE2eTest.class.getResourceAsStream("/objc-block-corpus.lisp")) {
+			source = new String(Objects.requireNonNull(in).readAllBytes(), StandardCharsets.UTF_8);
+		}
+		String expected;
+		try (InputStream in = NativeObjcE2eTest.class.getResourceAsStream("/objc-block-corpus-native.expected")) {
+			expected = new String(Objects.requireNonNull(in).readAllBytes(), StandardCharsets.UTF_8);
+		}
+		Run actual = nativeOutput(source);
+		assertThat(actual.exit()).as("stderr: %s", actual.stderr()).isZero();
+		assertThat(actual.stdout()).isEqualTo(expected);
+		assertThat(actual.stderr()).isEqualTo("objc: error in a callback: no 9\n");
+	}
+
+	@Test
+	void aBlockAnsweringAValueOnAnotherThreadIsRefused() throws Exception {
+		// Nobody can answer for the module on a libdispatch worker: dispatch_async_f
+		// calls the block's invoke function there, and the block answers zero with the
+		// reason printed; the program goes on.
+		Run run = nativeOutput("""
+				(fli:define-foreign-function (dispatch-queue-create "dispatch_queue_create")
+				    ((label objc:objc-c-string) (attributes :pointer))
+				  :result-type objc:objc-object-pointer)
+				(fli:define-foreign-function (dispatch-async-f "dispatch_async_f")
+				    ((queue objc:objc-object-pointer) (context :pointer) (work :pointer))
+				  :result-type :void)
+				(fli:define-foreign-function (dispatch-sync "dispatch_sync")
+				    ((queue objc:objc-object-pointer) (work objc:objc-at-question-mark))
+				  :result-type :void)
+				(defvar *q* (dispatch-queue-create "rontolisp.refused" nil))
+				(defvar *ran* nil)
+				(objc:with-objc-block (b '(:int ()) (lambda () (setq *ran* t) 42))
+				  (let ((address (objc:objc-block-pointer b)))
+				    (dispatch-async-f *q* address (objc::%peek (+ address 16) "^v")))
+				  (objc:with-objc-block (done '(:void ()) (lambda () nil))
+				    (dispatch-sync *q* done)))
+				(sleep 0.05)
+				(format t "~a~%" *ran*)
+				""");
+		assertThat(run.exit()).as("stderr: %s", run.stderr()).isZero();
+		assertThat(run.stdout()).isEqualTo("NIL\n");
+		assertThat(run.stderr()).isEqualTo("objc: error in a callback: a block answering a value was called on "
+				+ "another thread, where a --native program cannot run; it answers zero\n");
+	}
+
+	@Test
+	void aPointerThatDiesReleasesWhatItHeld() throws Exception {
+		// A pointer value's collector share rides on the externref p_new_handle hands
+		// out: when values die, their references are released, so 300,000 answers of one
+		// object leave a small count outstanding rather than 300,000.
+		Run run = nativeOutput("""
+				(let ((o (objc:alloc-init-object "NSObject")))
+				  (dotimes (i 300000) (objc:invoke o "self"))
+				  (format t "~a~%" (< (objc:retain-count o) 100000)))
+				""");
+		assertThat(run.exit()).as("stderr: %s", run.stderr()).isZero();
+		assertThat(run.stdout()).isEqualTo("T\n");
+	}
+
+	@Test
+	void sleepTurnsTheEventLoopSoATimerRunsWhileTheProgramWaits() throws Exception {
+		Run run = nativeOutput("""
+				(defvar *ticks* 0)
+				(appkit:timer 0.02 (lambda () (setq *ticks* (+ *ticks* 1)) (< *ticks* 3)))
+				(format t "before ~a~%" *ticks*)
+				(sleep 0.5)
+				(format t "after ~a~%" *ticks*)
+				""");
+		assertThat(run.exit()).as("stderr: %s", run.stderr()).isZero();
+		assertThat(run.stdout()).isEqualTo("before 0\nafter 3\n");
+	}
+
+	@Test
+	void aFetchsWaitTurnsTheEventLoopOnceTheApplicationStarted() throws Exception {
+		// A window stays live while the program awaits a fetch (.kb/objc.md, "--native"):
+		// the runner's wait pumps thread 0. A timer counts the turns, and an event posted
+		// before the fetch is gone from the queue after it -- only a pump that dequeues
+		// and
+		// dispatches takes it. The application is started the way appkit::%app starts it
+		// (a performSelectorOnMainThread: of run is what the runner keys on), with the
+		// prohibited activation policy so that no Dock icon appears; no window is opened.
+		HttpServer origin = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+		origin.createContext("/slow", exchange -> {
+			try {
+				Thread.sleep(500);
+			}
+			catch (InterruptedException ex) {
+				Thread.currentThread().interrupt();
+			}
+			byte[] body = "slow".getBytes(StandardCharsets.UTF_8);
+			exchange.sendResponseHeaders(200, body.length);
+			try (OutputStream out = exchange.getResponseBody()) {
+				out.write(body);
+			}
+		});
+		origin.setExecutor(Executors.newVirtualThreadPerTaskExecutor());
+		origin.start();
+		try {
+			Run run = nativeOutput(
+					"""
+							(defvar *app* (objc:invoke "NSApplication" "sharedApplication"))
+							(objc:invoke *app* "setActivationPolicy:" 2)
+							(objc:invoke *app* "finishLaunching")
+							(objc:invoke *app* "performSelectorOnMainThread:withObject:waitUntilDone:" "run" nil nil)
+							(defvar *ticks* 0)
+							(defvar *fetching* nil)
+							(appkit:timer 0.02 (lambda () (when *fetching* (setq *ticks* (+ *ticks* 1))) t))
+							(sleep 0.1)
+							(setq *fetching* t)
+							(objc:invoke *app* "postEvent:atStart:"
+							             (objc:invoke "NSEvent"
+							                          "otherEventWithType:location:modifierFlags:timestamp:windowNumber:context:subtype:data1:data2:"
+							                          15 #(0.0d0 0.0d0) 0 0.0d0 0 nil 0 0 0)
+							             nil)
+							(let ((reply (rontolisp:await (rontolisp:fetch "http://127.0.0.1:%d/slow"))))
+							  (setq *fetching* nil)
+							  (format t "~a~%%" (getf reply :status)))
+							(format t "~a~%%" (> *ticks* 5))
+							(format t "~a~%%" (null (objc:invoke *app* "nextEventMatchingMask:untilDate:inMode:dequeue:"
+							                                     (ash 1 15) nil "kCFRunLoopDefaultMode" nil)))
+							"""
+						.formatted(origin.getAddress().getPort()));
+			assertThat(run.exit()).as("stderr: %s", run.stderr()).isZero();
+			assertThat(run.stdout()).isEqualTo("200\nT\nT\n");
+		}
+		finally {
+			origin.stop(0);
+		}
+	}
+
+	@Test
+	void aSceneRenderedOffscreenHasTheInterpretersPixels() throws Exception {
+		// scene over metal over objc, with geom and linalg under it: the whole macOS
+		// stack in one frame, read back through objc:bytes (no window).
+		assumeTrue(ObjcInterop.available(), ObjcInterop.description());
+		String source = """
+				(defvar *v* (scene:offscreen :width 160 :height 120))
+				(scene:grid *v* :extent nil)
+				(scene:axes *v* nil)
+				(scene:shading *v* :solid)
+				(scene:add *v* (geom:box '(200 200 200) :color (geom:vec3 1.0 0.2 0.2)))
+				(scene:camera *v* :azimuth 0.9 :elevation 0.45 :distance 700.0)
+				(let ((px (scene:snapshot *v*)) (sum 0))
+				  (dotimes (i (length px)) (setq sum (+ sum (* (+ 1 (mod i 7)) (aref px i)))))
+				  (format t "~a ~a~%" (length px) sum))
+				""";
+		String expected;
+		try {
+			expected = interpret(source);
+		}
+		catch (RuntimeException ex) {
+			abort("no Metal device for the interpreter: " + ex.getMessage());
+			return;
+		}
+		Run actual = nativeOutput(source);
+		assertThat(actual.exit()).as("stderr: %s", actual.stderr()).isZero();
+		assertThat(actual.stdout()).startsWith("76800 ").isEqualTo(expected);
+	}
+
+	@Test
+	void aThrowOutOfACallbackIsContainedAsOnTheInterpreter() throws Exception {
+		// The catch is outside the native frame the callback runs under: the interpreter
+		// prints the escaping throw and answers nil, and so does the executable.
+		String source = """
+				(objc:define-objc-class nlx-target () () (:objc-class-name "NativeE2eNlx"))
+				(objc:define-objc-method ("jump:" :void) ((self nlx-target) (x objc:objc-object-pointer))
+				  (declare (ignore x))
+				  (throw 'out 42))
+				(let ((obj (make-instance 'nlx-target)))
+				  (print (catch 'out (objc:invoke obj "performSelector:withObject:" "jump:" nil) :fell-through))
+				  (print :after))
+				""";
+		Run run = nativeOutput(source);
+		assertThat(run.exit()).as("stderr: %s", run.stderr()).isZero();
+		assertThat(run.stdout()).isEqualTo(interpret(source));
+		assertThat(run.stderr()).startsWith("objc: error in a callback: ");
+	}
+
+	@Test
+	void anExitInsideACallbackEndsTheProcessWithItsCode() throws Exception {
+		Run run = nativeOutput("""
+				(objc:define-objc-class exit-target () () (:objc-class-name "NativeE2eExit"))
+				(objc:define-objc-method ("bye:" :void) ((self exit-target) (x objc:objc-object-pointer))
+				  (declare (ignore x))
+				  (format t "bye~%") (finish-output) (uiop:quit 7))
+				(objc:invoke (make-instance 'exit-target) "performSelector:withObject:" "bye:" nil)
+				(format t "not reached~%")
+				""");
+		assertThat(run.stdout()).isEqualTo("bye\n");
+		assertThat(run.exit()).as("stderr: %s", run.stderr()).isEqualTo(7);
+	}
+
+	@Test
+	void anExitInsideACallbackEndsTheProcessWithItsCodeOnTheInterpreter() throws Exception {
+		// Same program, run through the interpreter's own path -- a forked JVM, never
+		// in-process: the fix calls System.exit for real (am.ik.objc.ObjcMethods#fail),
+		// which would kill this test's JVM if it ran there. The upcall guard used to
+		// catch LispExitSignal along with every other Throwable, print "objc: error in
+		// a callback: ..." and answer zero, letting the program run past the quit.
+		assumeTrue(ObjcInterop.available(), ObjcInterop.description());
+		Path dir = Files.createDirectories(this.tempDir.resolve("interpreter"));
+		Path src = dir.resolve("prog.lisp");
+		Files.writeString(src, """
+				(objc:define-objc-class exit-target () () (:objc-class-name "InterpreterE2eExit"))
+				(objc:define-objc-method ("bye:" :void) ((self exit-target) (x objc:objc-object-pointer))
+				  (declare (ignore x))
+				  (format t "bye~%") (finish-output) (uiop:quit 7))
+				(objc:invoke (make-instance 'exit-target) "performSelector:withObject:" "bye:" nil)
+				(format t "not reached~%")
+				""");
+		String java = ProcessHandle.current().info().command().orElse("java");
+		List<String> command = List.of(java, "--enable-native-access=ALL-UNNAMED", "-cp",
+				System.getProperty("java.class.path"), "am.ik.rontolisp.cli.RontoLispCli", src.toString());
+		Run run = exec(dir, command);
+		assertThat(run.stdout()).isEqualTo("bye\n");
+		assertThat(run.exit()).as("stderr: %s", run.stderr()).isEqualTo(7);
+	}
+
+	private String interpret(String source) {
+		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(out, true, StandardCharsets.UTF_8));
+		for (LispVal form : LispReader.readAllFromString(source)) {
+			evaluator.eval(form);
+		}
+		return out.toString(StandardCharsets.UTF_8);
+	}
+
+	private Run nativeOutput(String source) throws Exception {
+		Path dir = Files.createDirectories(this.tempDir.resolve("native"));
+		Path src = dir.resolve("prog.lisp");
+		Files.writeString(src, source);
+		Path exe = dir.resolve("prog");
+		List<String> args = new ArrayList<>(List.of(src.toString(), "-o", exe.toString(), "--native"));
+		try {
+			compile(src, args);
+		}
+		catch (UnsupportedOperationException ex) {
+			String message = String.valueOf(ex.getMessage());
+			if (message.contains(NOT_AVAILABLE) && !REQUIRED) {
+				abort(message);
+			}
+			throw ex;
+		}
+		return exec(Files.createDirectories(dir.resolve("run")), List.of(exe.toString()));
+	}
+
+	private static void compile(Path src, List<String> args) throws Exception {
+		if (BINARY == null) {
+			new RontoLispCli(new ByteArrayInputStream(new byte[0]),
+					new PrintStream(new ByteArrayOutputStream(), true, StandardCharsets.UTF_8))
+				.run(args.toArray(String[]::new));
+			return;
+		}
+		List<String> command = new ArrayList<>(args);
+		command.addFirst(Path.of(BINARY).toAbsolutePath().toString());
+		Run run = exec(Objects.requireNonNull(src.toAbsolutePath().getParent()), command);
+		if (run.exit() != 0) {
+			if (run.stderr().contains(NOT_AVAILABLE)) {
+				throw new UnsupportedOperationException(run.stderr().strip());
+			}
+			throw new IllegalStateException("compile failed (" + run.exit() + "): " + run.stderr());
+		}
+	}
+
+	private static Run exec(Path dir, List<String> command) throws Exception {
+		Path stdout = dir.resolve("stdout.log");
+		Path stderr = dir.resolve("stderr.log");
+		Process process = new ProcessBuilder(command).directory(dir.toFile())
+			.redirectInput(ProcessBuilder.Redirect.from(Path.of("/dev/null").toFile()))
+			.redirectOutput(stdout.toFile())
+			.redirectError(stderr.toFile())
+			.start();
+		if (!process.waitFor(120, TimeUnit.SECONDS)) {
+			process.destroyForcibly().waitFor();
+			throw new IllegalStateException("timed out: " + String.join(" ", command));
+		}
+		return new Run(Files.readString(stdout), Files.readString(stderr), process.exitValue());
+	}
+
+	private record Run(String stdout, String stderr, int exit) {
+	}
+
+}

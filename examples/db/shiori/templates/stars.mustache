@@ -1,0 +1,11 @@
+<span class="stars" id="stars">
+  {{#book}}
+  {{#editable}}
+  <form class="stars-form" method="post" action="/books/{{id}}/rating"
+        hx-post="/books/{{id}}/rating" hx-target="#stars" hx-swap="outerHTML"
+        hx-status:422="swap:none">
+    {{#stars}}<button type="submit" name="rating" value="{{n}}" class="star{{#on}} on{{/on}}" aria-label="{{n}}つ星にする">{{#on}}★{{/on}}{{^on}}☆{{/on}}</button>{{/stars}}
+  </form>
+  {{/editable}}
+  {{/book}}
+</span>

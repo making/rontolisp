@@ -1,0 +1,34 @@
+name: DCO
+
+# Every commit of a pull request must carry a `Signed-off-by:` trailer (git commit -s),
+# the sign-off of the Developer Certificate of Origin in CONTRIBUTING.md. Direct pushes
+# are not checked.
+on:
+  pull_request:
+    branches:
+    - develop
+    - main
+
+permissions:
+  contents: read
+
+jobs:
+  sign-off:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v7
+      with:
+        fetch-depth: 0
+    - name: Check that every commit is signed off
+      env:
+        BASE: ${{ github.event.pull_request.base.sha }}
+        HEAD: ${{ github.event.pull_request.head.sha }}
+      run: |
+        missing=0
+        for sha in $(git rev-list --no-merges "$BASE..$HEAD"); do
+          if ! git show -s --format=%B "$sha" | grep -Eq '^Signed-off-by: .+ <.+>$'; then
+            echo "::error::Commit $sha has no Signed-off-by trailer (git commit -s)"
+            missing=1
+          fi
+        done
+        exit $missing

@@ -1,0 +1,1260 @@
+# The corpus of the experimental Java subset's sockets, java.net.Socket and ServerSocket
+# (FetchSpecE2eTest#javaSockets): each program is a Java file run under the JDK running the
+# test and on every target with sockets -- the interpreter, the JVM, a --native output and a
+# --component -- each its own server in the same program, on the loopback. Written here;
+# nothing is copied or translated from a JDK or its tests (.kb/java-frontend-provenance.md).
+#
+# A program prints a line `== name` ahead of each case, and its output is cut into cases at
+# those lines, so a failure names its case and its leg. `expected` is what a JDK 25 prints,
+# and the JDK leg checks that it still is; a port, which differs from run to run, is shown
+# as <n>. @HELD@ is the port of a loopback listener of the test's whose queue is full: a
+# connect to it waits until its time limit or a close. A plain Preview 1 module has no
+# socket: every program is also run there, and must end at its first socket with the
+# refusal's words (doc/*/java/deviations.md, "Sockets").
+programs:
+  # one thread: an unconnected socket, a server socket in each state, a connection whose
+  # server end the same thread accepts (the connection waits in the backlog), a deadline
+  - name: sockets
+    file: Sockets.java
+    source: |
+      import java.io.BufferedReader;
+      import java.io.DataInputStream;
+      import java.io.DataOutputStream;
+      import java.io.IOException;
+      import java.io.InputStream;
+      import java.io.InputStreamReader;
+      import java.io.InterruptedIOException;
+      import java.io.OutputStream;
+      import java.io.PrintWriter;
+      import java.net.InetAddress;
+      import java.net.InetSocketAddress;
+      import java.net.ServerSocket;
+      import java.net.Socket;
+      import java.net.SocketAddress;
+      import java.net.SocketTimeoutException;
+      import java.nio.charset.StandardCharsets;
+      import javax.net.ServerSocketFactory;
+      import javax.net.SocketFactory;
+
+      public class Sockets {
+
+          // a listener whose queue is full: a connect to it waits
+          static final InetSocketAddress HELD = new InetSocketAddress("127.0.0.1", Integer.parseInt("@HELD@"));
+
+          interface Asked {
+              Object run() throws Exception;
+          }
+
+          static String ports(Object value, int... ports) {
+              String text = String.valueOf(value);
+              for (int i = 0; i < ports.length; i++) {
+                  text = text.replace(":" + ports[i], ":<" + i + ">").replace("=" + ports[i], "=<" + i + ">");
+              }
+              return text.replaceAll("@[0-9a-f]+$", "@");
+          }
+
+          static void ask(String what, Asked asked, int... ports) {
+              try {
+                  System.out.println(what + ": " + ports(asked.run(), ports));
+              }
+              catch (Exception e) {
+                  System.out.println(what + ": " + ports(e, ports));
+              }
+          }
+
+          static ServerSocket loopback() throws IOException {
+              return new ServerSocket(0, 50, InetAddress.getByName("127.0.0.1"));
+          }
+
+          static void unconnected() throws Exception {
+              System.out.println("== an-unconnected-socket-answers-keeps-its-options-and-refuses");
+              Socket s = new Socket();
+              ask("text", () -> s);
+              ask("states", () -> s.isConnected() + " " + s.isBound() + " " + s.isClosed() + " " + s.isInputShutdown() + " "
+                      + s.isOutputShutdown());
+              ask("ends", () -> s.getInetAddress() + " " + s.getPort() + " " + s.getLocalPort() + " " + s.getLocalAddress()
+                      + " " + s.getRemoteSocketAddress() + " " + s.getLocalSocketAddress());
+              ask("options", () -> s.getSoTimeout() + " " + s.getTcpNoDelay() + " " + s.getKeepAlive() + " "
+                      + s.getReuseAddress() + " " + (s.getSendBufferSize() > 0) + " " + (s.getReceiveBufferSize() > 0));
+              ask("input", s::getInputStream);
+              ask("output", s::getOutputStream);
+              ask("timeout -1", () -> { s.setSoTimeout(-1); return "set"; });
+              ask("send size 0", () -> { s.setSendBufferSize(0); return "set"; });
+              ask("receive size -5", () -> { s.setReceiveBufferSize(-5); return "set"; });
+              s.setSoTimeout(250);
+              s.setTcpNoDelay(true);
+              s.setKeepAlive(true);
+              s.setReuseAddress(true);
+              s.setSendBufferSize(4096);
+              s.setReceiveBufferSize(4096);
+              ask("options set", () -> s.getSoTimeout() + " " + s.getTcpNoDelay() + " " + s.getKeepAlive() + " "
+                      + s.getReuseAddress());
+              ask("connect null", () -> { s.connect(null); return "connected"; });
+              ask("connect -1", () -> { s.connect(new InetSocketAddress("127.0.0.1", 1), -1); return "connected"; });
+              ask("connect another kind", () -> { s.connect(new SocketAddress() { }); return "connected"; });
+              ask("still open", s::isClosed);
+              ask("connect unresolved", () -> { s.connect(InetSocketAddress.createUnresolved("db.invalid", 5432)); return "connected"; });
+              ask("closed by it", s::isClosed);
+              Socket t = new Socket();
+              t.close();
+              t.close();
+              ask("closed text", () -> t + " " + t.isClosed() + " " + t.getLocalAddress() + " " + t.getLocalSocketAddress());
+              ask("closed timeout", t::getSoTimeout);
+              ask("closed no delay", () -> { t.setTcpNoDelay(true); return "set"; });
+              ask("closed send size 0", () -> { t.setSendBufferSize(0); return "set"; });
+              ask("closed send size", () -> { t.setSendBufferSize(10); return "set"; });
+              ask("closed input", t::getInputStream);
+              ask("closed connect", () -> { t.connect(new InetSocketAddress("127.0.0.1", 1)); return "connected"; });
+              ask("closed connect null", () -> { t.connect(null); return "connected"; });
+              ask("closed bind", () -> { t.bind(null); return "bound"; });
+              ask("port past", () -> new Socket("127.0.0.1", 65536));
+              ask("address null", () -> new Socket((InetAddress) null, 1));
+          }
+
+          static void listener() throws Exception {
+              System.out.println("== a-server-socket-unbound-bound-and-closed");
+              ServerSocket server = new ServerSocket();
+              ask("unbound", () -> server + " " + server.isBound() + " " + server.isClosed() + " " + server.getInetAddress()
+                      + " " + server.getLocalPort() + " " + server.getLocalSocketAddress() + " " + server.getReuseAddress()
+                      + " " + (server.getReceiveBufferSize() > 0));
+              ask("accept unbound", server::accept);
+              ask("bind another kind", () -> { server.bind(new SocketAddress() { }); return "bound"; });
+              ask("bind unresolved", () -> { server.bind(InetSocketAddress.createUnresolved("db.invalid", 0)); return "bound"; });
+              ask("receive size 0", () -> { server.setReceiveBufferSize(0); return "set"; });
+              server.bind(new InetSocketAddress("127.0.0.1", 0));
+              int port = server.getLocalPort();
+              ask("bound", () -> server + " " + server.isBound() + " " + server.getInetAddress() + " "
+                      + server.getLocalSocketAddress(), port);
+              ask("bind again", () -> { server.bind(new InetSocketAddress("127.0.0.1", 0)); return "bound"; });
+              ask("in use", () -> new ServerSocket(port, 50, InetAddress.getByName("127.0.0.1")), port);
+              server.setReuseAddress(false);
+              ask("reuse", server::getReuseAddress);
+              server.close();
+              ask("closed", () -> server + " " + server.isBound() + " " + server.isClosed() + " " + server.getInetAddress(),
+                      port);
+              ask("closed accept", server::accept);
+              ask("closed bind", () -> { server.bind(null); return "bound"; });
+              ask("closed reuse", server::getReuseAddress);
+              ask("port -1", () -> new ServerSocket(-1));
+              ask("port past", () -> new ServerSocket(65536));
+              ServerSocket named = new ServerSocket();
+              named.bind(new InetSocketAddress("localhost", 0), 5);
+              ask("by name", () -> named + " " + named.getInetAddress(), named.getLocalPort());
+              named.close();
+              ServerSocket made = ServerSocketFactory.getDefault().createServerSocket(0, 50, InetAddress.getByName("127.0.0.1"));
+              ask("factories", () -> SocketFactory.getDefault().getClass().getName() + " "
+                      + ServerSocketFactory.getDefault().getClass().getName() + " "
+                      + (SocketFactory.getDefault() == SocketFactory.getDefault()) + " "
+                      + SocketFactory.getDefault().createSocket() + " " + made, made.getLocalPort());
+              made.close();
+              ask("unbound from a factory", () -> ServerSocketFactory.getDefault().createServerSocket());
+              SocketFactory plain = new SocketFactory() {
+                  public Socket createSocket(String host, int port) {
+                      return null;
+                  }
+
+                  public Socket createSocket(String host, int port, InetAddress local, int localPort) {
+                      return null;
+                  }
+
+                  public Socket createSocket(InetAddress host, int port) {
+                      return null;
+                  }
+
+                  public Socket createSocket(InetAddress host, int port, InetAddress local, int localPort) {
+                      return null;
+                  }
+              };
+              ask("unconnected not made", plain::createSocket);
+          }
+
+          static void carried() throws Exception {
+              System.out.println("== a-connection-carries-bytes-both-ways");
+              ServerSocket server = loopback();
+              int port = server.getLocalPort();
+              Socket client = SocketFactory.getDefault().createSocket("127.0.0.1", port);
+              Socket served = server.accept();
+              int local = client.getLocalPort();
+              ask("client", () -> client + " " + client.getInetAddress() + " " + client.getRemoteSocketAddress() + " "
+                      + client.getLocalSocketAddress() + " " + client.isConnected() + " " + client.isBound(), port, local);
+              ask("served", () -> served + " " + served.getInetAddress() + " " + served.getLocalAddress() + " "
+                      + (served.getPort() == local) + " " + (served.getLocalPort() == port), local, port);
+              ask("connect again", () -> { client.connect(new InetSocketAddress("127.0.0.1", port)); return "connected"; });
+              ask("bind connected", () -> { client.bind(null); return "bound"; });
+              InputStream in = client.getInputStream();
+              OutputStream out = client.getOutputStream();
+              ask("same streams", () -> (in == client.getInputStream()) + " " + (out == client.getOutputStream()));
+              InputStream sin = served.getInputStream();
+              OutputStream sout = served.getOutputStream();
+              sout.write("hello".getBytes(StandardCharsets.UTF_8));
+              ask("first", in::read);
+              byte[] buffer = new byte[100];
+              ask("what is there", () -> {
+                  int n = in.read(buffer, 10, 50);
+                  return n + " " + new String(buffer, 10, n, StandardCharsets.UTF_8);
+              });
+              ask("nothing there", in::available);
+              ask("none asked", () -> in.read(buffer, 0, 0));
+              ask("read off -1", () -> in.read(buffer, -1, 1));
+              ask("read past", () -> in.read(buffer, 99, 2));
+              ask("write past", () -> { out.write(buffer, 99, 2); return "written"; });
+              sout.write(new byte[] { (byte) 0xff, (byte) 0x80, 0, 0x7f });
+              sout.write(0x141);
+              ask("octets", () -> in.read() + " " + in.read() + " " + in.read() + " " + in.read() + " " + in.read());
+              sout.write("abcdef".getBytes(StandardCharsets.UTF_8));
+              ask("one of six", in::read);
+              ask("five there", () -> {
+                  long deadline = System.currentTimeMillis() + 60000;
+                  while (in.available() < 5 && System.currentTimeMillis() < deadline) {
+                      Thread.sleep(1);
+                  }
+                  return in.available();
+              });
+              ask("skip 2", () -> in.skip(2));
+              ask("skip none", () -> in.skip(-1));
+              ask("rest", () -> {
+                  int n = in.read(buffer);
+                  return n + " " + new String(buffer, 0, n, StandardCharsets.UTF_8);
+              });
+              PrintWriter writer = new PrintWriter(sout, true);
+              writer.println("one line");
+              writer.println("two");
+              BufferedReader reader = new BufferedReader(new InputStreamReader(in, StandardCharsets.UTF_8));
+              ask("lines", () -> reader.readLine() + " | " + reader.readLine());
+              DataOutputStream data = new DataOutputStream(out);
+              data.writeInt(123456789);
+              data.writeUTF("héllo");
+              DataInputStream read = new DataInputStream(sin);
+              ask("data", () -> read.readInt() + " " + read.readUTF());
+              served.close();
+              ask("end", () -> in.read() + " " + in.read(buffer, 0, 5) + " " + in.available());
+              client.close();
+              ask("end after close", () -> in.read() + " " + in.read(buffer, 0, 5) + " " + in.skip(3));
+              ask("available after close", in::available);
+              ask("write after close", () -> { out.write(1); return "written"; });
+              ask("flush after close", () -> { out.flush(); return "flushed"; });
+              ask("closed", () -> client + " " + client.isConnected() + " " + client.getLocalAddress() + " "
+                      + client.getLocalSocketAddress() + " " + client.getRemoteSocketAddress(), port, local);
+              Socket other = new Socket("127.0.0.1", port);
+              Socket otherServed = server.accept();
+              InputStream otherIn = other.getInputStream();
+              otherServed.getOutputStream().write(new byte[] { 1, 2, 3 });
+              ask("one of three", otherIn::read);
+              other.close();
+              ask("bytes left after close", otherIn::read);
+              Socket third = new Socket(InetAddress.getByName("127.0.0.1"), port);
+              Socket thirdServed = server.accept();
+              third.getInputStream().close();
+              ask("its stream closes it", () -> third.isClosed() + " " + thirdServed.getInputStream().read());
+              otherServed.close();
+              thirdServed.close();
+              server.close();
+          }
+
+          static void deadline() throws Exception {
+              System.out.println("== a-read-past-its-deadline-and-after-it");
+              ServerSocket server = loopback();
+              Socket client = new Socket("127.0.0.1", server.getLocalPort());
+              Socket served = server.accept();
+              InputStream in = client.getInputStream();
+              client.setSoTimeout(50);
+              ask("timed", in::read);
+              ask("timed array", () -> in.read(new byte[4]));
+              ask("open", client::isClosed);
+              served.getOutputStream().write(7);
+              ask("after it", in::read);
+              ask("what it is", () -> {
+                  try {
+                      in.read();
+                      return "read";
+                  }
+                  catch (SocketTimeoutException e) {
+                      InterruptedIOException interrupted = e;
+                      return interrupted.bytesTransferred + " " + e.getMessage() + " " + (e instanceof IOException);
+                  }
+              });
+              client.setSoTimeout(0);
+              ask("cleared", client::getSoTimeout);
+              client.close();
+              served.close();
+              server.close();
+          }
+
+          // what failed, by its class alone: the words of some failures are the host's
+          static void kind(String what, Asked asked) {
+              try {
+                  System.out.println(what + ": " + asked.run());
+              }
+              catch (Exception e) {
+                  System.out.println(what + ": " + e.getClass().getName());
+              }
+          }
+
+          static void bound() throws Exception {
+              System.out.println("== a-socket-bound-before-it-connects");
+              ServerSocket server = loopback();
+              int port = server.getLocalPort();
+              Socket s = new Socket();
+              s.bind(new InetSocketAddress("127.0.0.1", 0));
+              int local = s.getLocalPort();
+              ask("bound", () -> s + " " + s.isBound() + " " + s.isConnected() + " " + s.getLocalAddress() + " "
+                      + s.getLocalSocketAddress() + " " + s.getInetAddress() + " " + (local > 0), local);
+              ask("bind again", () -> { s.bind(null); return "bound"; });
+              s.connect(new InetSocketAddress("127.0.0.1", port));
+              Socket served = server.accept();
+              ask("connected from it", () -> (s.getLocalPort() == local) + " " + (served.getPort() == local) + " " + s,
+                      port, local);
+              s.close();
+              served.close();
+              ask("closed", () -> s.isBound() + " " + s.getLocalSocketAddress(), local);
+              Socket wild = new Socket();
+              wild.bind(null);
+              int wildPort = wild.getLocalPort();
+              ask("every interface", () -> wild.getLocalAddress() + " " + wild.getLocalSocketAddress() + " "
+                      + (wildPort > 0), wildPort);
+              wild.connect(new InetSocketAddress("127.0.0.1", port));
+              Socket wildServed = server.accept();
+              ask("its address once connected", () -> wild.getLocalAddress() + " " + (wild.getLocalPort() == wildPort)
+                      + " " + (wildServed.getPort() == wildPort));
+              wild.close();
+              wildServed.close();
+              Socket taken = new Socket();
+              ask("in use", () -> { taken.bind(new InetSocketAddress("127.0.0.1", port)); return "bound"; });
+              ask("left open and unbound", () -> taken.isClosed() + " " + taken.isBound() + " " + taken.getLocalPort());
+              kind("an address no interface has", () -> { taken.bind(new InetSocketAddress("192.0.2.1", 0)); return "bound"; });
+              ask("bound after", () -> { taken.bind(new InetSocketAddress("localhost", 0)); return taken.getLocalAddress(); });
+              taken.close();
+              ask("a local port in use", () -> new Socket("127.0.0.1", port, InetAddress.getByName("127.0.0.1"), port));
+              Socket from = new Socket(InetAddress.getByName("127.0.0.1"), port, InetAddress.getByName("127.0.0.1"), 0);
+              Socket fromServed = server.accept();
+              ask("from a local address", () -> from.isConnected() + " " + from.getLocalAddress() + " "
+                      + (fromServed.getPort() == from.getLocalPort()));
+              from.close();
+              fromServed.close();
+              server.close();
+          }
+
+          static void limited() throws Exception {
+              System.out.println("== a-connect-within-a-time-limit");
+              Socket late = new Socket();
+              ask("past it", () -> { late.connect(HELD, 200); return "connected"; });
+              ask("closed by it", () -> late.isClosed() + " " + late.isConnected() + " " + late.isBound() + " " + late);
+              ask("what it is", () -> {
+                  Socket again = new Socket();
+                  try {
+                      again.connect(HELD, 50);
+                      return "connected";
+                  }
+                  catch (SocketTimeoutException e) {
+                      InterruptedIOException interrupted = e;
+                      return interrupted.bytesTransferred + " " + e.getMessage() + " " + again.isClosed();
+                  }
+              });
+              Socket bound = new Socket();
+              bound.bind(new InetSocketAddress("127.0.0.1", 0));
+              int local = bound.getLocalPort();
+              ask("bound past it", () -> { bound.connect(HELD, 50); return "connected"; });
+              ask("its port kept", () -> bound.isBound() + " " + bound.isClosed() + " " + (bound.getLocalPort() == local)
+                      + " " + bound.getLocalSocketAddress(), local);
+              ServerSocket server = loopback();
+              Socket within = new Socket();
+              within.connect(server.getLocalSocketAddress(), 5000);
+              Socket served = server.accept();
+              ask("within it", () -> within.isConnected() + " " + within.getSoTimeout() + " "
+                      + (served.getPort() == within.getLocalPort()));
+              within.close();
+              served.close();
+              Socket longest = new Socket();
+              longest.connect(new InetSocketAddress("127.0.0.1", server.getLocalPort()), Integer.MAX_VALUE);
+              server.accept().close();
+              longest.setSoTimeout(Integer.MAX_VALUE);
+              ask("the longest", () -> longest.isConnected() + " " + longest.getSoTimeout());
+              longest.close();
+              server.close();
+          }
+
+          static void halves() throws Exception {
+              System.out.println("== half-a-connection-ended");
+              ServerSocket server = loopback();
+              Socket client = new Socket("127.0.0.1", server.getLocalPort());
+              Socket served = server.accept();
+              OutputStream out = client.getOutputStream();
+              InputStream in = client.getInputStream();
+              InputStream sin = served.getInputStream();
+              out.write(new byte[] { 1, 2, 3 });
+              client.shutdownOutput();
+              ask("output ended", () -> client.isOutputShutdown() + " " + client.isInputShutdown() + " "
+                      + client.isClosed() + " " + client.isConnected());
+              ask("the peer reads what came and the end", () -> sin.read() + " " + sin.read() + " " + sin.read() + " "
+                      + sin.read() + " " + sin.read());
+              ask("output again", () -> { client.shutdownOutput(); return "shut"; });
+              ask("its output stream", client::getOutputStream);
+              ask("a write after it", () -> { out.write(9); return "written"; });
+              ask("an array after it", () -> { out.write(new byte[] { 9, 9 }); return "written"; });
+              ask("a flush after it", () -> { out.flush(); return "flushed"; });
+              OutputStream sout = served.getOutputStream();
+              sout.write(new byte[] { 7, 8 });
+              ask("the other half carries on", () -> in.read() + " " + in.read());
+              sout.write(new byte[] { 4, 5 });
+              ask("come before the input ends", () -> {
+                  long deadline = System.currentTimeMillis() + 60000;
+                  while (in.available() < 2 && System.currentTimeMillis() < deadline) {
+                      Thread.sleep(1);
+                  }
+                  return in.available();
+              });
+              client.shutdownInput();
+              ask("input ended", () -> client.isInputShutdown() + " " + in.available() + " " + in.read() + " "
+                      + in.read(new byte[4]) + " " + in.skip(3) + " " + in.read(new byte[4], 0, 0));
+              ask("input again", () -> { client.shutdownInput(); return "shut"; });
+              ask("its input stream", client::getInputStream);
+              client.close();
+              ask("closed", () -> client.isInputShutdown() + " " + client.isOutputShutdown() + " " + in.read());
+              ask("closed output", () -> { client.shutdownOutput(); return "shut"; });
+              ask("closed input", () -> { client.shutdownInput(); return "shut"; });
+              Socket unconnected = new Socket();
+              ask("unconnected input", () -> { unconnected.shutdownInput(); return "shut"; });
+              ask("unconnected output", () -> { unconnected.shutdownOutput(); return "shut"; });
+              served.close();
+              Socket other = new Socket("127.0.0.1", server.getLocalPort());
+              Socket otherServed = server.accept();
+              InputStream otherIn = other.getInputStream();
+              other.shutdownInput();
+              other.close();
+              ask("closed before the end was read", otherIn::read);
+              otherServed.close();
+              server.close();
+          }
+
+          static void acceptDeadline() throws Exception {
+              System.out.println("== an-accept-past-its-deadline");
+              ServerSocket server = loopback();
+              ask("none", server::getSoTimeout);
+              ask("less than none", () -> { server.setSoTimeout(-1); return "set"; });
+              server.setSoTimeout(100);
+              ask("set", server::getSoTimeout);
+              ask("past it", server::accept);
+              ask("what it is", () -> {
+                  try {
+                      server.accept();
+                      return "accepted";
+                  }
+                  catch (SocketTimeoutException e) {
+                      InterruptedIOException interrupted = e;
+                      return interrupted.bytesTransferred + " " + e.getMessage() + " " + server.isClosed();
+                  }
+              });
+              Socket client = new Socket("127.0.0.1", server.getLocalPort());
+              Socket served = server.accept();
+              ask("a connection within it", () -> (served.getPort() == client.getLocalPort()) + " "
+                      + served.getSoTimeout());
+              client.close();
+              served.close();
+              ServerSocket later = new ServerSocket();
+              later.setSoTimeout(50);
+              later.bind(new InetSocketAddress("127.0.0.1", 0));
+              ask("set before the bind", later::accept);
+              later.close();
+              server.close();
+              ask("closed", server::getSoTimeout);
+              ask("closed set", () -> { server.setSoTimeout(-1); return "set"; });
+          }
+
+          public static void main(String[] args) throws Exception {
+              unconnected();
+              listener();
+              carried();
+              deadline();
+              bound();
+              limited();
+              halves();
+              acceptDeadline();
+          }
+      }
+    expected: |
+      == an-unconnected-socket-answers-keeps-its-options-and-refuses
+      text: Socket[unconnected]
+      states: false false false false false
+      ends: null 0 -1 0.0.0.0/0.0.0.0 null null
+      options: 0 false false false true true
+      input: java.net.SocketException: Socket is not connected
+      output: java.net.SocketException: Socket is not connected
+      timeout -1: java.lang.IllegalArgumentException: timeout can't be negative
+      send size 0: java.lang.IllegalArgumentException: negative send size
+      receive size -5: java.lang.IllegalArgumentException: invalid receive size
+      options set: 250 true true true
+      connect null: java.lang.IllegalArgumentException: connect: The address can't be null
+      connect -1: java.lang.IllegalArgumentException: connect: timeout can't be negative
+      connect another kind: java.lang.IllegalArgumentException: Unsupported address type
+      still open: false
+      connect unresolved: java.net.UnknownHostException: db.invalid
+      closed by it: true
+      closed text: Socket[unconnected] true 0.0.0.0/0.0.0.0 null
+      closed timeout: java.net.SocketException: Socket is closed
+      closed no delay: java.net.SocketException: Socket is closed
+      closed send size 0: java.lang.IllegalArgumentException: negative send size
+      closed send size: java.net.SocketException: Socket is closed
+      closed input: java.net.SocketException: Socket is closed
+      closed connect: java.net.SocketException: Socket is closed
+      closed connect null: java.lang.IllegalArgumentException: connect: The address can't be null
+      closed bind: java.net.SocketException: Socket is closed
+      port past: java.lang.IllegalArgumentException: port out of range:65536
+      address null: java.lang.NullPointerException
+      == a-server-socket-unbound-bound-and-closed
+      unbound: ServerSocket[unbound] false false null -1 null true true
+      accept unbound: java.net.SocketException: Socket is not bound yet
+      bind another kind: java.lang.IllegalArgumentException: Unsupported address type
+      bind unresolved: java.net.SocketException: Unresolved address
+      receive size 0: java.lang.IllegalArgumentException: negative receive size
+      bound: ServerSocket[addr=/127.0.0.1,localport=<0>] true /127.0.0.1 /127.0.0.1:<0>
+      bind again: java.net.SocketException: Already bound
+      in use: java.net.BindException: Address already in use
+      reuse: false
+      closed: ServerSocket[addr=/127.0.0.1,localport=<0>] true true /127.0.0.1
+      closed accept: java.net.SocketException: Socket is closed
+      closed bind: java.net.SocketException: Socket is closed
+      closed reuse: java.net.SocketException: Socket is closed
+      port -1: java.lang.IllegalArgumentException: Port value out of range: -1
+      port past: java.lang.IllegalArgumentException: Port value out of range: 65536
+      by name: ServerSocket[addr=localhost/127.0.0.1,localport=<0>] localhost/127.0.0.1
+      factories: javax.net.DefaultSocketFactory javax.net.DefaultServerSocketFactory true Socket[unconnected] ServerSocket[addr=/127.0.0.1,localport=<0>]
+      unbound from a factory: ServerSocket[unbound]
+      unconnected not made: java.net.SocketException: Unconnected sockets not implemented
+      == a-connection-carries-bytes-both-ways
+      client: Socket[addr=/127.0.0.1,port=<0>,localport=<1>] /127.0.0.1 /127.0.0.1:<0> /127.0.0.1:<1> true true
+      served: Socket[addr=/127.0.0.1,port=<0>,localport=<1>] /127.0.0.1 /127.0.0.1 true true
+      connect again: java.net.SocketException: Already connected
+      bind connected: java.net.SocketException: Already bound
+      same streams: true true
+      first: 104
+      what is there: 4 ello
+      nothing there: 0
+      none asked: 0
+      read off -1: java.lang.IndexOutOfBoundsException: Range [-1, -1 + 1) out of bounds for length 100
+      read past: java.lang.IndexOutOfBoundsException: Range [99, 99 + 2) out of bounds for length 100
+      write past: java.lang.IndexOutOfBoundsException: Range [99, 99 + 2) out of bounds for length 100
+      octets: 255 128 0 127 65
+      one of six: 97
+      five there: 5
+      skip 2: 2
+      skip none: 0
+      rest: 3 def
+      lines: one line | two
+      data: 123456789 héllo
+      end: -1 -1 0
+      end after close: -1 -1 0
+      available after close: java.net.SocketException: Socket closed
+      write after close: java.net.SocketException: Socket closed
+      flush after close: flushed
+      closed: Socket[addr=/127.0.0.1,port=<0>,localport=<1>] true 0.0.0.0/0.0.0.0 0.0.0.0/0.0.0.0:<1> /127.0.0.1:<0>
+      one of three: 1
+      bytes left after close: java.net.SocketException: Socket closed
+      its stream closes it: true -1
+      == a-read-past-its-deadline-and-after-it
+      timed: java.net.SocketTimeoutException: Read timed out
+      timed array: java.net.SocketTimeoutException: Read timed out
+      open: false
+      after it: 7
+      what it is: 0 Read timed out true
+      cleared: 0
+      == a-socket-bound-before-it-connects
+      bound: Socket[unconnected] true false /127.0.0.1 /127.0.0.1:<0> null true
+      bind again: java.net.SocketException: Already bound
+      connected from it: true true Socket[addr=/127.0.0.1,port=<0>,localport=<1>]
+      closed: true 0.0.0.0/0.0.0.0:<0>
+      every interface: 0.0.0.0/0.0.0.0 0.0.0.0/0.0.0.0:<0> true
+      its address once connected: /127.0.0.1 true true
+      in use: java.net.BindException: Address already in use
+      left open and unbound: false false -1
+      an address no interface has: java.net.BindException
+      bound after: /127.0.0.1
+      a local port in use: java.net.BindException: Address already in use
+      from a local address: true /127.0.0.1 true
+      == a-connect-within-a-time-limit
+      past it: java.net.SocketTimeoutException: Connect timed out
+      closed by it: true false false Socket[unconnected]
+      what it is: 0 Connect timed out true
+      bound past it: java.net.SocketTimeoutException: Connect timed out
+      its port kept: true true true 0.0.0.0/0.0.0.0:<0>
+      within it: true 0 true
+      the longest: true 2147483647
+      == half-a-connection-ended
+      output ended: true false false true
+      the peer reads what came and the end: 1 2 3 -1 -1
+      output again: java.net.SocketException: Socket output is already shutdown
+      its output stream: java.net.SocketException: Socket output is shutdown
+      a write after it: java.net.SocketException: Broken pipe
+      an array after it: java.net.SocketException: Broken pipe
+      a flush after it: flushed
+      the other half carries on: 7 8
+      come before the input ends: 2
+      input ended: true 0 -1 -1 0 0
+      input again: java.net.SocketException: Socket input is already shutdown
+      its input stream: java.net.SocketException: Socket input is shutdown
+      closed: true true -1
+      closed output: java.net.SocketException: Socket is closed
+      closed input: java.net.SocketException: Socket is closed
+      unconnected input: java.net.SocketException: Socket is not connected
+      unconnected output: java.net.SocketException: Socket is not connected
+      closed before the end was read: java.net.SocketException: Socket closed
+      == an-accept-past-its-deadline
+      none: 0
+      less than none: java.lang.IllegalArgumentException: timeout < 0
+      set: 100
+      past it: java.net.SocketTimeoutException: Accept timed out
+      what it is: 0 Accept timed out false
+      a connection within it: true 0
+      set before the bind: java.net.SocketTimeoutException: Accept timed out
+      closed: java.net.SocketException: Socket is closed
+      closed set: java.net.SocketException: Socket is closed
+  # threads: a server thread answering a client of the same program, a thread waiting for
+  # its bytes while the others go on, a socket and a server socket closed under the threads
+  # waiting in them -- on one stack each wait is a thread's, never the program's
+  - name: threads
+    file: Threads.java
+    source: |
+      import java.io.BufferedReader;
+      import java.io.InputStream;
+      import java.io.InputStreamReader;
+      import java.io.PrintWriter;
+      import java.net.InetAddress;
+      import java.net.InetSocketAddress;
+      import java.net.ServerSocket;
+      import java.net.Socket;
+      import java.nio.charset.StandardCharsets;
+      import java.util.concurrent.CountDownLatch;
+
+      public class Threads {
+
+          // a listener whose queue is full: a connect to it waits
+          static final InetSocketAddress HELD = new InetSocketAddress("127.0.0.1", Integer.parseInt("@HELD@"));
+
+          static ServerSocket loopback() throws Exception {
+              return new ServerSocket(0, 50, InetAddress.getByName("127.0.0.1"));
+          }
+
+          // A server of the program's own answers each line until its client closes.
+          static void echo() throws Exception {
+              System.out.println("== a-server-thread-answers-a-client-of-the-same-program");
+              ServerSocket server = loopback();
+              String[] said = new String[1];
+              Thread serving = new Thread(() -> {
+                  try (Socket s = server.accept()) {
+                      BufferedReader in = new BufferedReader(new InputStreamReader(s.getInputStream(), StandardCharsets.UTF_8));
+                      PrintWriter out = new PrintWriter(s.getOutputStream(), true);
+                      String line;
+                      int lines = 0;
+                      while ((line = in.readLine()) != null) {
+                          out.println(line.toUpperCase());
+                          lines++;
+                      }
+                      said[0] = lines + " lines";
+                  }
+                  catch (Exception e) {
+                      said[0] = e.toString();
+                  }
+              });
+              serving.start();
+              // the client waits before it connects: the server's accept is no wait of the program's
+              Thread.sleep(20);
+              try (Socket c = new Socket("127.0.0.1", server.getLocalPort())) {
+                  PrintWriter out = new PrintWriter(c.getOutputStream(), true);
+                  BufferedReader in = new BufferedReader(new InputStreamReader(c.getInputStream(), StandardCharsets.UTF_8));
+                  for (String word : new String[] { "one", "two", "three" }) {
+                      out.println(word);
+                      System.out.println(in.readLine());
+                  }
+              }
+              serving.join();
+              System.out.println("server: " + said[0]);
+              server.close();
+          }
+
+          // A thread reading waits while the others go on; the bytes another thread sends
+          // after a sleep end its wait.
+          static void waiting() throws Exception {
+              System.out.println("== a-thread-waits-for-its-bytes-while-the-others-go-on");
+              ServerSocket server = loopback();
+              Socket client = new Socket("127.0.0.1", server.getLocalPort());
+              Socket served = server.accept();
+              CountDownLatch reading = new CountDownLatch(1);
+              int[] got = new int[2];
+              Thread reader = new Thread(() -> {
+                  try {
+                      InputStream in = served.getInputStream();
+                      reading.countDown();
+                      got[0] = in.read();
+                      got[1] = in.read();
+                  }
+                  catch (Exception e) {
+                      got[0] = -2;
+                  }
+              });
+              reader.start();
+              reading.await();
+              int counted = 0;
+              for (int i = 0; i < 5; i++) {
+                  Thread.sleep(5);
+                  counted++;
+              }
+              System.out.println("counted " + counted + " while it waited");
+              client.getOutputStream().write(new byte[] { 42, 43 });
+              reader.join();
+              System.out.println("read " + got[0] + " " + got[1]);
+              client.close();
+              served.close();
+              server.close();
+          }
+
+          // A socket closed under a read, a server socket under an accept: each wait ends
+          // with the exception of a closed socket, whichever came first.
+          static void closedUnder() throws Exception {
+              System.out.println("== a-socket-closed-under-a-thread-that-waits-in-it");
+              ServerSocket server = loopback();
+              Socket client = new Socket("127.0.0.1", server.getLocalPort());
+              Socket served = server.accept();
+              // each thread notes what it saw in its own element of one array
+              String[] seen = new String[2];
+              CountDownLatch waiting = new CountDownLatch(2);
+              Thread reader = new Thread(() -> {
+                  try {
+                      InputStream in = client.getInputStream();
+                      waiting.countDown();
+                      seen[0] = "read " + in.read();
+                  }
+                  catch (Exception e) {
+                      seen[0] = e.getClass().getName();
+                  }
+              });
+              ServerSocket idle = loopback();
+              Thread acceptor = new Thread(() -> {
+                  try {
+                      waiting.countDown();
+                      seen[1] = "accepted " + idle.accept();
+                  }
+                  catch (Exception e) {
+                      seen[1] = e.getClass().getName();
+                  }
+              });
+              reader.start();
+              acceptor.start();
+              waiting.await();
+              Thread.sleep(100);
+              client.close();
+              idle.close();
+              reader.join();
+              acceptor.join();
+              System.out.println("read: " + seen[0]);
+              System.out.println("accept: " + seen[1]);
+              served.close();
+              server.close();
+          }
+
+          // A read past its deadline, a connect past its limit and an accept past its
+          // deadline, each a thread's: the others go on meanwhile, and each ends at its
+          // own time.
+          static void limits() throws Exception {
+              System.out.println("== a-thread-waits-for-a-socket-until-its-time-while-the-others-go-on");
+              ServerSocket server = loopback();
+              Socket client = new Socket("127.0.0.1", server.getLocalPort());
+              Socket served = server.accept();
+              client.setSoTimeout(100);
+              server.setSoTimeout(100);
+              String[] seen = new String[3];
+              Thread reader = new Thread(() -> {
+                  try {
+                      seen[0] = "read " + client.getInputStream().read();
+                  }
+                  catch (Exception e) {
+                      seen[0] = e.toString();
+                  }
+              });
+              Socket late = new Socket();
+              Thread connecting = new Thread(() -> {
+                  try {
+                      late.connect(HELD, 100);
+                      seen[1] = "connected";
+                  }
+                  catch (Exception e) {
+                      seen[1] = e + " " + late.isClosed();
+                  }
+              });
+              Thread accepting = new Thread(() -> {
+                  try {
+                      seen[2] = "accepted " + server.accept();
+                  }
+                  catch (Exception e) {
+                      seen[2] = e.toString();
+                  }
+              });
+              reader.start();
+              connecting.start();
+              accepting.start();
+              int counted = 0;
+              while (reader.isAlive() || connecting.isAlive() || accepting.isAlive()) {
+                  Thread.sleep(5);
+                  counted++;
+              }
+              System.out.println("read: " + seen[0]);
+              System.out.println("connect: " + seen[1]);
+              System.out.println("accept: " + seen[2]);
+              System.out.println("counted meanwhile: " + (counted > 0));
+              client.close();
+              served.close();
+              server.close();
+          }
+
+          // A read another thread waits in answers the end once the input is shut.
+          static void shutUnder() throws Exception {
+              System.out.println("== an-input-shut-under-a-thread-that-reads-it");
+              ServerSocket server = loopback();
+              Socket client = new Socket("127.0.0.1", server.getLocalPort());
+              Socket served = server.accept();
+              String[] seen = new String[1];
+              CountDownLatch reading = new CountDownLatch(1);
+              Thread reader = new Thread(() -> {
+                  try {
+                      InputStream in = client.getInputStream();
+                      reading.countDown();
+                      seen[0] = "read " + in.read();
+                  }
+                  catch (Exception e) {
+                      seen[0] = e.toString();
+                  }
+              });
+              reader.start();
+              reading.await();
+              Thread.sleep(100);
+              client.shutdownInput();
+              reader.join();
+              System.out.println("read: " + seen[0] + " " + client.isClosed());
+              client.close();
+              served.close();
+              server.close();
+          }
+
+          // A connect with no limit ends with the close another thread makes.
+          static void closedConnecting() throws Exception {
+              System.out.println("== a-socket-closed-under-a-thread-that-connects-in-it");
+              Socket under = new Socket();
+              under.bind(new InetSocketAddress("127.0.0.1", 0));
+              String[] seen = new String[1];
+              CountDownLatch going = new CountDownLatch(1);
+              Thread connecting = new Thread(() -> {
+                  try {
+                      going.countDown();
+                      under.connect(HELD);
+                      seen[0] = "connected";
+                  }
+                  catch (Exception e) {
+                      seen[0] = e + " " + under.isClosed();
+                  }
+              });
+              connecting.start();
+              going.await();
+              int counted = 0;
+              for (int i = 0; i < 5; i++) {
+                  Thread.sleep(20);
+                  counted++;
+              }
+              System.out.println("counted " + counted + " while it connected");
+              under.close();
+              connecting.join();
+              System.out.println("connect: " + seen[0]);
+          }
+
+          public static void main(String[] args) throws Exception {
+              echo();
+              waiting();
+              closedUnder();
+              limits();
+              closedConnecting();
+              shutUnder();
+          }
+      }
+    expected: |
+      == a-server-thread-answers-a-client-of-the-same-program
+      ONE
+      TWO
+      THREE
+      server: 3 lines
+      == a-thread-waits-for-its-bytes-while-the-others-go-on
+      counted 5 while it waited
+      read 42 43
+      == a-socket-closed-under-a-thread-that-waits-in-it
+      read: java.net.SocketException
+      accept: java.net.SocketException
+      == a-thread-waits-for-a-socket-until-its-time-while-the-others-go-on
+      read: java.net.SocketTimeoutException: Read timed out
+      connect: java.net.SocketTimeoutException: Connect timed out true
+      accept: java.net.SocketTimeoutException: Accept timed out
+      counted meanwhile: true
+      == a-socket-closed-under-a-thread-that-connects-in-it
+      counted 5 while it connected
+      connect: java.net.SocketException: Socket closed true
+      == an-input-shut-under-a-thread-that-reads-it
+      read: read -1 false
+  # the options: what a socket and a server socket keep and refuse in each state, the
+  # standard options by name, a connected socket's given to the host
+  - name: options
+    file: Options.java
+    source: |
+      import java.io.IOException;
+      import java.net.InetAddress;
+      import java.net.InetSocketAddress;
+      import java.net.ServerSocket;
+      import java.net.Socket;
+      import java.net.SocketOption;
+      import java.net.StandardSocketOptions;
+      import java.util.List;
+      import java.util.Set;
+
+      public class Options {
+
+          interface Asked {
+              Object run() throws Exception;
+          }
+
+          static void ask(String what, Asked asked) {
+              try {
+                  System.out.println(what + ": " + asked.run());
+              }
+              catch (Exception e) {
+                  System.out.println(what + ": " + e);
+              }
+          }
+
+          static final List<SocketOption<?>> STANDARD = List.of(StandardSocketOptions.IP_MULTICAST_LOOP,
+                  StandardSocketOptions.IP_MULTICAST_TTL, StandardSocketOptions.IP_TOS, StandardSocketOptions.SO_BROADCAST,
+                  StandardSocketOptions.SO_KEEPALIVE, StandardSocketOptions.SO_LINGER, StandardSocketOptions.SO_RCVBUF,
+                  StandardSocketOptions.SO_REUSEADDR, StandardSocketOptions.SO_REUSEPORT, StandardSocketOptions.SO_SNDBUF,
+                  StandardSocketOptions.TCP_NODELAY);
+
+          // which of the standard options a set holds
+          static String held(Set<SocketOption<?>> set) {
+              StringBuilder text = new StringBuilder();
+              for (SocketOption<?> option : STANDARD) {
+                  if (set.contains(option)) {
+                      text.append(text.length() == 0 ? "" : " ").append(option.name());
+                  }
+              }
+              return text.toString();
+          }
+
+          static String getters(Socket s) throws IOException {
+              return s.getTcpNoDelay() + " " + s.getKeepAlive() + " " + s.getSoLinger() + " " + s.getOOBInline() + " "
+                      + s.getTrafficClass() + " " + s.getReuseAddress();
+          }
+
+          static String options(Socket s) throws IOException {
+              return s.getOption(StandardSocketOptions.TCP_NODELAY) + " " + s.getOption(StandardSocketOptions.SO_KEEPALIVE)
+                      + " " + s.getOption(StandardSocketOptions.SO_LINGER) + " " + s.getOption(StandardSocketOptions.IP_TOS)
+                      + " " + s.getOption(StandardSocketOptions.SO_REUSEADDR) + " "
+                      + s.getOption(StandardSocketOptions.SO_REUSEPORT);
+          }
+
+          static void constants() {
+              System.out.println("== the-standard-options-are-named-and-typed");
+              for (SocketOption<?> option : STANDARD) {
+                  System.out.println(option + " " + option.name() + " " + option.type().getName() + " "
+                          + (option == StandardSocketOptions.TCP_NODELAY) + " " + option.equals(StandardSocketOptions.SO_LINGER));
+              }
+          }
+
+          @SuppressWarnings({ "unchecked", "rawtypes" })
+          static void unconnected() throws Exception {
+              System.out.println("== an-unconnected-socket-keeps-its-options-and-refuses-what-is-out-of-range");
+              Socket s = new Socket();
+              ask("getters", () -> getters(s));
+              ask("options", () -> options(s));
+              ask("linger -1", () -> { s.setSoLinger(true, -1); return "set"; });
+              ask("linger 0", () -> { s.setSoLinger(true, 0); return s.getSoLinger(); });
+              ask("linger 65536", () -> { s.setSoLinger(true, 65536); return s.getSoLinger(); });
+              ask("linger off", () -> { s.setSoLinger(false, 5); return s.getSoLinger(); });
+              ask("inline", () -> { s.setOOBInline(true); return s.getOOBInline(); });
+              ask("class -1", () -> { s.setTrafficClass(-1); return "set"; });
+              ask("class 256", () -> { s.setTrafficClass(256); return "set"; });
+              ask("class 184", () -> { s.setTrafficClass(184); return s.getTrafficClass(); });
+              ask("supported", () -> held(s.supportedOptions()));
+              ask("supported same", () -> s.supportedOptions() == s.supportedOptions());
+              ask("supported add", () -> s.supportedOptions().add(StandardSocketOptions.SO_BROADCAST));
+              ask("get null", () -> s.getOption(null));
+              ask("set null", () -> s.setOption((SocketOption) null, 1));
+              ask("get broadcast", () -> s.getOption(StandardSocketOptions.SO_BROADCAST));
+              ask("set ttl", () -> s.setOption(StandardSocketOptions.IP_MULTICAST_TTL, 1));
+              ask("set loop null", () -> s.setOption(StandardSocketOptions.IP_MULTICAST_LOOP, null));
+              ask("set no delay null", () -> s.setOption(StandardSocketOptions.TCP_NODELAY, null));
+              ask("set no delay 1", () -> s.setOption((SocketOption) StandardSocketOptions.TCP_NODELAY, 1));
+              ask("set linger true", () -> s.setOption((SocketOption) StandardSocketOptions.SO_LINGER, true));
+              SocketOption<Integer> own = new SocketOption<>() {
+                  public String name() {
+                      return "OWN";
+                  }
+
+                  public Class<Integer> type() {
+                      return Integer.class;
+                  }
+
+                  public String toString() {
+                      return "own";
+                  }
+              };
+              ask("set own", () -> s.setOption(own, 1));
+              ask("get own", () -> s.getOption(own));
+              ask("tos -1", () -> s.setOption(StandardSocketOptions.IP_TOS, -1));
+              ask("tos 256", () -> s.setOption(StandardSocketOptions.IP_TOS, 256));
+              ask("send size -1", () -> s.setOption(StandardSocketOptions.SO_SNDBUF, -1));
+              ask("receive size -1", () -> s.setOption(StandardSocketOptions.SO_RCVBUF, -1));
+              ask("send size 4096", () -> s.setOption(StandardSocketOptions.SO_SNDBUF, 4096).getSendBufferSize());
+              ask("receive size 4096", () -> s.setOption(StandardSocketOptions.SO_RCVBUF, 4096).getOption(StandardSocketOptions.SO_RCVBUF));
+              ask("linger option -2", () -> s.setOption(StandardSocketOptions.SO_LINGER, -2).getSoLinger());
+              ask("linger option 70000", () -> s.setOption(StandardSocketOptions.SO_LINGER, 70000).getSoLinger());
+              s.setOption(StandardSocketOptions.TCP_NODELAY, true).setOption(StandardSocketOptions.SO_KEEPALIVE, true)
+                  .setOption(StandardSocketOptions.SO_LINGER, 3).setOption(StandardSocketOptions.IP_TOS, 8)
+                  .setOption(StandardSocketOptions.SO_REUSEADDR, true).setOption(StandardSocketOptions.SO_REUSEPORT, true);
+              ask("options set", () -> options(s));
+              ask("getters set", () -> getters(s));
+              ask("urgent", () -> { s.sendUrgentData(1); return "sent"; });
+              s.close();
+              ask("closed getters", () -> getters(s));
+              ask("closed class", s::getTrafficClass);
+              ask("closed linger", s::getSoLinger);
+              ask("closed set linger", () -> { s.setSoLinger(true, 1); return "set"; });
+              ask("closed class 256", () -> { s.setTrafficClass(256); return "set"; });
+              ask("closed class 8", () -> { s.setTrafficClass(8); return "set"; });
+              ask("closed inline", () -> { s.setOOBInline(true); return "set"; });
+              ask("closed supported", () -> held(s.supportedOptions()));
+              ask("closed get null", () -> s.getOption(null));
+              ask("closed get broadcast", () -> s.getOption(StandardSocketOptions.SO_BROADCAST));
+              ask("closed set no delay null", () -> s.setOption(StandardSocketOptions.TCP_NODELAY, null));
+              ask("closed set own", () -> s.setOption(own, 1));
+              ask("closed urgent", () -> { s.sendUrgentData(1); return "sent"; });
+          }
+
+          @SuppressWarnings({ "unchecked", "rawtypes" })
+          static void server() throws Exception {
+              System.out.println("== a-server-socket-answers-its-own-options");
+              ServerSocket server = new ServerSocket();
+              ask("supported", () -> held(server.supportedOptions()));
+              ask("supported same", () -> server.supportedOptions() == server.supportedOptions());
+              ask("options", () -> server.getOption(StandardSocketOptions.SO_REUSEADDR) + " "
+                      + server.getOption(StandardSocketOptions.SO_REUSEPORT) + " " + server.getOption(StandardSocketOptions.IP_TOS)
+                      + " " + (server.getOption(StandardSocketOptions.SO_RCVBUF) > 0));
+              ask("get no delay", () -> server.getOption(StandardSocketOptions.TCP_NODELAY));
+              ask("set linger", () -> server.setOption(StandardSocketOptions.SO_LINGER, 1));
+              ask("get null", () -> server.getOption(null));
+              ask("set null", () -> server.setOption((SocketOption) null, 1));
+              ask("set reuse null", () -> server.setOption(StandardSocketOptions.SO_REUSEADDR, null));
+              ask("set receive -1", () -> server.setOption(StandardSocketOptions.SO_RCVBUF, -1));
+              ask("set tos 256", () -> server.setOption(StandardSocketOptions.IP_TOS, 256));
+              ask("set", () -> server.setOption(StandardSocketOptions.SO_REUSEADDR, false)
+                  .setOption(StandardSocketOptions.SO_REUSEPORT, true).setOption(StandardSocketOptions.IP_TOS, 8)
+                  .setOption(StandardSocketOptions.SO_RCVBUF, 4096).getReceiveBufferSize());
+              ask("options set", () -> server.getOption(StandardSocketOptions.SO_REUSEADDR) + " " + server.getReuseAddress()
+                      + " " + server.getOption(StandardSocketOptions.SO_REUSEPORT) + " "
+                      + server.getOption(StandardSocketOptions.IP_TOS));
+              server.close();
+              ask("closed supported", () -> held(server.supportedOptions()));
+              ask("closed get no delay", () -> server.getOption(StandardSocketOptions.TCP_NODELAY));
+              ask("closed set reuse null", () -> server.setOption(StandardSocketOptions.SO_REUSEADDR, null));
+              ask("closed get null", () -> server.getOption(null));
+          }
+
+          static void connected() throws Exception {
+              System.out.println("== a-connected-socket-gives-its-options-to-the-host");
+              ServerSocket server = new ServerSocket(0, 50, InetAddress.getByName("127.0.0.1"));
+              Socket before = new Socket();
+              before.setTcpNoDelay(true);
+              before.setKeepAlive(true);
+              before.setSoLinger(true, 7);
+              before.setOOBInline(true);
+              before.setTrafficClass(32);
+              before.connect(new InetSocketAddress("127.0.0.1", server.getLocalPort()));
+              Socket served = server.accept();
+              ask("set before", () -> getters(before));
+              ask("served", () -> getters(served));
+              ask("served options", () -> options(served));
+              ask("set after", () -> {
+                  served.setTcpNoDelay(true);
+                  served.setKeepAlive(true);
+                  served.setSoLinger(true, 0);
+                  served.setOOBInline(true);
+                  served.setTrafficClass(184);
+                  return getters(served);
+              });
+              ask("unset", () -> {
+                  served.setTcpNoDelay(false);
+                  served.setKeepAlive(false);
+                  served.setSoLinger(false, 0);
+                  served.setOOBInline(false);
+                  served.setTrafficClass(0);
+                  return getters(served);
+              });
+              before.getOutputStream().write('a');
+              ask("read", () -> served.getInputStream().read());
+              before.shutdownOutput();
+              ask("urgent after the output's end", () -> { before.sendUrgentData(1); return "sent"; });
+              ask("no delay after the output's end", () -> { before.setTcpNoDelay(false); return before.getTcpNoDelay(); });
+              before.close();
+              served.close();
+              server.close();
+          }
+
+          public static void main(String[] args) throws Exception {
+              constants();
+              unconnected();
+              server();
+              connected();
+          }
+      }
+    expected: |
+      == the-standard-options-are-named-and-typed
+      IP_MULTICAST_LOOP IP_MULTICAST_LOOP java.lang.Boolean false false
+      IP_MULTICAST_TTL IP_MULTICAST_TTL java.lang.Integer false false
+      IP_TOS IP_TOS java.lang.Integer false false
+      SO_BROADCAST SO_BROADCAST java.lang.Boolean false false
+      SO_KEEPALIVE SO_KEEPALIVE java.lang.Boolean false false
+      SO_LINGER SO_LINGER java.lang.Integer false true
+      SO_RCVBUF SO_RCVBUF java.lang.Integer false false
+      SO_REUSEADDR SO_REUSEADDR java.lang.Boolean false false
+      SO_REUSEPORT SO_REUSEPORT java.lang.Boolean false false
+      SO_SNDBUF SO_SNDBUF java.lang.Integer false false
+      TCP_NODELAY TCP_NODELAY java.lang.Boolean true false
+      == an-unconnected-socket-keeps-its-options-and-refuses-what-is-out-of-range
+      getters: false false -1 false 0 false
+      options: false false -1 0 false false
+      linger -1: java.lang.IllegalArgumentException: invalid value for SO_LINGER
+      linger 0: 0
+      linger 65536: 65535
+      linger off: -1
+      inline: true
+      class -1: java.lang.IllegalArgumentException: tc is not in range 0 -- 255
+      class 256: java.lang.IllegalArgumentException: tc is not in range 0 -- 255
+      class 184: 184
+      supported: IP_TOS SO_KEEPALIVE SO_LINGER SO_RCVBUF SO_REUSEADDR SO_REUSEPORT SO_SNDBUF TCP_NODELAY
+      supported same: true
+      supported add: java.lang.UnsupportedOperationException
+      get null: java.lang.NullPointerException
+      set null: java.lang.NullPointerException
+      get broadcast: java.lang.UnsupportedOperationException: 'SO_BROADCAST' not supported
+      set ttl: java.lang.UnsupportedOperationException: 'IP_MULTICAST_TTL' not supported
+      set loop null: java.lang.UnsupportedOperationException: 'IP_MULTICAST_LOOP' not supported
+      set no delay null: java.lang.IllegalArgumentException: Invalid value 'null'
+      set no delay 1: java.lang.IllegalArgumentException: Invalid value '1'
+      set linger true: java.lang.IllegalArgumentException: Invalid value 'true'
+      set own: java.lang.UnsupportedOperationException: 'own' not supported
+      get own: java.lang.UnsupportedOperationException: 'own' not supported
+      tos -1: java.lang.IllegalArgumentException: Invalid IP_TOS value
+      tos 256: java.lang.IllegalArgumentException: Invalid IP_TOS value
+      send size -1: java.lang.IllegalArgumentException: Invalid send/receive buffer size
+      receive size -1: java.lang.IllegalArgumentException: Invalid send/receive buffer size
+      send size 4096: 4096
+      receive size 4096: 4096
+      linger option -2: -1
+      linger option 70000: 65535
+      options set: true true 3 8 true true
+      getters set: true true 3 true 8 true
+      urgent: java.net.SocketException: Not connected
+      closed getters: java.net.SocketException: Socket is closed
+      closed class: java.net.SocketException: Socket closed
+      closed linger: java.net.SocketException: Socket is closed
+      closed set linger: java.net.SocketException: Socket is closed
+      closed class 256: java.lang.IllegalArgumentException: tc is not in range 0 -- 255
+      closed class 8: java.net.SocketException: Socket is closed
+      closed inline: java.net.SocketException: Socket is closed
+      closed supported: IP_TOS SO_KEEPALIVE SO_LINGER SO_RCVBUF SO_REUSEADDR SO_REUSEPORT SO_SNDBUF TCP_NODELAY
+      closed get null: java.lang.NullPointerException
+      closed get broadcast: java.net.SocketException: Socket is closed
+      closed set no delay null: java.net.SocketException: Socket is closed
+      closed set own: java.net.SocketException: Socket is closed
+      closed urgent: java.net.SocketException: Socket closed
+      == a-server-socket-answers-its-own-options
+      supported: IP_TOS SO_RCVBUF SO_REUSEADDR SO_REUSEPORT
+      supported same: true
+      options: true false 0 true
+      get no delay: java.lang.UnsupportedOperationException: 'TCP_NODELAY' not supported
+      set linger: java.lang.UnsupportedOperationException: 'SO_LINGER' not supported
+      get null: java.lang.NullPointerException
+      set null: java.lang.NullPointerException
+      set reuse null: java.lang.IllegalArgumentException: Invalid value 'null'
+      set receive -1: java.lang.IllegalArgumentException: Invalid send/receive buffer size
+      set tos 256: java.lang.IllegalArgumentException: Invalid IP_TOS value
+      set: 4096
+      options set: false false true 8
+      closed supported: IP_TOS SO_RCVBUF SO_REUSEADDR SO_REUSEPORT
+      closed get no delay: java.net.SocketException: Socket is closed
+      closed set reuse null: java.net.SocketException: Socket is closed
+      closed get null: java.lang.NullPointerException
+      == a-connected-socket-gives-its-options-to-the-host
+      set before: true true 7 true 32 false
+      served: false false -1 false 0 true
+      served options: false false -1 0 true false
+      set after: true true 0 true 184 true
+      unset: false false -1 false 0 true
+      read: 97
+      urgent after the output's end: java.io.IOException: Broken pipe
+      no delay after the output's end: false
+  # what only the host's socket shows: urgent data, out of band or inline, and a close that
+  # lingers for no time; a component's host has neither (doc/*/java/deviations.md, "Sockets")
+  - name: urgent
+    file: Urgent.java
+    skip:
+      component: wasi:sockets has no urgent data and no linger
+    source: |
+      import java.io.InputStream;
+      import java.io.OutputStream;
+      import java.net.InetAddress;
+      import java.net.ServerSocket;
+      import java.net.Socket;
+
+      public class Urgent {
+
+          // what the peer reads up to the byte b, one byte a read
+          static String through(InputStream in, int b) throws Exception {
+              StringBuilder text = new StringBuilder();
+              int c;
+              do {
+                  c = in.read();
+                  text.append(text.length() == 0 ? "" : " ").append(c);
+              } while (c != b && c >= 0);
+              return text.toString();
+          }
+
+          public static void main(String[] args) throws Exception {
+              ServerSocket server = new ServerSocket(0, 50, InetAddress.getByName("127.0.0.1"));
+              Socket client = new Socket("127.0.0.1", server.getLocalPort());
+              client.setTcpNoDelay(true);
+              Socket served = server.accept();
+              OutputStream out = client.getOutputStream();
+              InputStream in = served.getInputStream();
+
+              System.out.println("== urgent-data-is-out-of-band-unless-the-peer-takes-it-inline");
+              out.write('a');
+              client.sendUrgentData('U');
+              out.write('b');
+              System.out.println("apart: " + through(in, 'b'));
+              served.setOOBInline(true);
+              out.write('a');
+              client.sendUrgentData(0x155);
+              out.write('b');
+              System.out.println("inline: " + through(in, 'b'));
+
+              System.out.println("== a-close-that-lingers-for-no-time-resets-the-connection");
+              client.setSoLinger(true, 0);
+              client.close();
+              try {
+                  System.out.println("read: " + in.read());
+              }
+              catch (Exception e) {
+                  System.out.println("read: " + e);
+              }
+              served.close();
+              server.close();
+          }
+      }
+    expected: |
+      == urgent-data-is-out-of-band-unless-the-peer-takes-it-inline
+      apart: 97 98
+      inline: 97 85 98
+      == a-close-that-lingers-for-no-time-resets-the-connection
+      read: java.net.SocketException: Connection reset

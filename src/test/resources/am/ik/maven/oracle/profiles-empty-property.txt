@@ -1,0 +1,4 @@
+# descriptor -Dflag -Dmode=fast test.profiles:props:1
+artifact test.profiles:props:jar:1
+dep test.lib:no-flag:jar::1 scope=compile optional=null
+dep test.lib:mode-fast:jar::1 scope=compile optional=null

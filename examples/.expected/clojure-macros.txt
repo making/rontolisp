@@ -1,0 +1,10 @@
+Release Notes / Getting Started
+3 km = 3000 m, 250 cm = 5/2 m
+primes below 30: [2 3 5 7 11 13 17 19 23 29]
+clamped: 10 0
+answer: 42
+shape: [call-shape 1 [a b]] 3
+my-and: true 3 nil
+(macros/clamp* 0 1 (do x))
+(clojure.core/* 2 1000)
+(macros/clamp* 0 (clojure.core/* 1 1000) (do b))

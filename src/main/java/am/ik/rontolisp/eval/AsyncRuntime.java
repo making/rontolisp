@@ -1,0 +1,185 @@
+package am.ik.rontolisp.eval;
+
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
+import java.util.function.Consumer;
+import java.util.function.Function;
+import java.util.function.Supplier;
+
+import am.ik.rontolisp.LispFuture;
+import am.ik.rontolisp.LispNil;
+import am.ik.rontolisp.LispThread;
+import am.ik.rontolisp.LispVal;
+
+/**
+ * The interpreter's asynchronous execution mechanism -- and deliberately the ONLY
+ * LispEvaluator-reachable place that touches threads, so the browser playground can
+ * substitute it wholesale (see {@code src/web/java/.../eval/Target_AsyncRuntime.java},
+ * where GraalVM Web Image has no thread support and bodies run synchronously to
+ * completion instead).
+ *
+ * <p>
+ * {@link #run(Function)} implements the cross-backend <em>eager-start</em> contract of
+ * {@code rontolisp:async-defun}: the body starts on a virtual thread, but the caller does
+ * not resume until the body reaches its first suspension point (an await of a future the
+ * program does not know settled, {@link LispFuture#knownSettled()}, which calls
+ * {@link #releaseHandoffIfPending()} first) or completes, whichever is first. Output and
+ * side effects up to the first suspension are therefore ordered identically on every
+ * backend, and where it falls depends on no thread's timing; after it, the body
+ * progresses in parallel with the caller (the interpreter's documented concurrency
+ * model).
+ */
+final class AsyncRuntime {
+
+	/** The handoff latch of the asynchronous body running on the current thread. */
+	private static final ThreadLocal<CountDownLatch> HANDOFF = new ThreadLocal<>();
+
+	private AsyncRuntime() {
+	}
+
+	/**
+	 * Runs an asynchronous body: eagerly to its first suspension on the calling thread's
+	 * clock, then concurrently on its virtual thread.
+	 * @param body the body (the {@code %async-run} thunk applied by the evaluator),
+	 * handed the future it settles so it can record its extra values there
+	 * ({@link LispFuture#settleExtras}) before answering its primary value
+	 * @param starting told the body's thread before it starts, which it may refuse by
+	 * throwing
+	 * @return a future settling with the body's value, or exceptionally with what it
+	 * threw
+	 * @throws RuntimeException the control transfer that left the body before its first
+	 * suspension: that part of the body is a call, so the exit goes on from here. A
+	 * condition stays the future's, for the await to signal.
+	 */
+	static LispFuture run(Function<LispFuture, LispVal> body, Consumer<Thread> starting) {
+		CompletableFuture<LispVal> result = new CompletableFuture<>();
+		LispFuture future = LispFuture.of(result);
+		CountDownLatch handoff = new CountDownLatch(1);
+		RuntimeException[] exit = new RuntimeException[1];
+		Thread thread = Thread.ofVirtual().unstarted(() -> {
+			HANDOFF.set(handoff);
+			try {
+				LispVal value = body.apply(future);
+				arrive(future, handoff);
+				result.complete(value);
+			}
+			catch (Throwable ex) {
+				if (handoff.getCount() > 0 && ex instanceof RuntimeException transfer
+						&& LispEvaluator.isControlTransfer(transfer)) {
+					exit[0] = transfer;
+				}
+				arrive(future, handoff);
+				result.completeExceptionally(ex);
+			}
+			finally {
+				HANDOFF.remove();
+				handoff.countDown();
+			}
+		});
+		starting.accept(thread);
+		thread.start();
+		try {
+			handoff.await();
+		}
+		catch (InterruptedException ex) {
+			Thread.currentThread().interrupt();
+			throw new LispEvalException("async body interrupted before its first suspension");
+		}
+		if (exit[0] != null) {
+			throw exit[0];
+		}
+		return future;
+	}
+
+	// A body that settles its future before its first suspension hands its caller a
+	// future known settled. Only this thread counts the latch down, so the test cannot
+	// race.
+	private static void arrive(LispFuture future, CountDownLatch handoff) {
+		if (handoff.getCount() > 0) {
+			future.markKnownSettled();
+		}
+	}
+
+	/**
+	 * Spawns a plain (non-async) virtual thread running the given body:
+	 * {@code rontolisp:make-thread}. Unlike {@link #run(Function)} there is no
+	 * eager-start handoff -- the caller resumes immediately, because a spawned body (a
+	 * server accept loop, say) may neither await nor complete. Kept HERE so the browser
+	 * playground's wholesale substitution of this class covers thread creation too (Web
+	 * Image has no threads; the substituted spawn runs the body synchronously to
+	 * completion). The new thread's {@link #currentThreadHandle()} is the handle returned
+	 * here, so a spawned body finds itself {@code eq} to what its spawner holds.
+	 * @param body the zero-argument thread function
+	 * @param name the thread's name ({@code nil} for none)
+	 * @param starting told the thread before it starts, which it may refuse by throwing
+	 * @return the thread handle carrying the thread and its result future
+	 */
+	static LispThread spawnThread(Supplier<LispVal> body, LispVal name, Consumer<Thread> starting) {
+		CompletableFuture<LispVal> result = new CompletableFuture<>();
+		LispThread[] self = new LispThread[1];
+		Thread thread = Thread.ofVirtual().unstarted(() -> {
+			CURRENT_THREAD_HANDLE.set(self[0]);
+			try {
+				result.complete(body.get());
+			}
+			catch (Throwable ex) {
+				result.completeExceptionally(ex);
+			}
+		});
+		self[0] = new LispThread(thread, result, name);
+		starting.accept(thread);
+		thread.start();
+		return self[0];
+	}
+
+	/**
+	 * The calling thread's own EQ-stable handle ({@code rontolisp:current-thread}):
+	 * lazily wraps the current {@code Thread} on first ask and caches it, so repeated
+	 * calls from one thread return the SAME record and can key an {@code eq} hash table
+	 * (dbi's per-thread connection cache). Works for any thread, not only
+	 * {@code spawnThread} spawns; the never-completed result future means joining your
+	 * own handle blocks forever, which is what joining yourself means anyway. Kept HERE
+	 * for the same reason as {@link #spawnThread}: the playground substitutes this class
+	 * wholesale.
+	 */
+	private static final ThreadLocal<LispThread> CURRENT_THREAD_HANDLE = new ThreadLocal<>();
+
+	static LispThread currentThreadHandle() {
+		LispThread handle = CURRENT_THREAD_HANDLE.get();
+		if (handle == null) {
+			handle = new LispThread(Thread.currentThread(), new CompletableFuture<>(), LispNil.INSTANCE);
+			CURRENT_THREAD_HANDLE.set(handle);
+		}
+		return handle;
+	}
+
+	/**
+	 * Starts a timer: the returned future settles to {@code nil} after the given number
+	 * of milliseconds ({@code rontolisp:wait-for}). Uses
+	 * {@link CompletableFuture#completeOnTimeout} so the delay rides the JDK's shared
+	 * delayer thread -- kept HERE (not in Environment) so the browser playground's
+	 * wholesale substitution of this class also covers the timer (Web Image has no
+	 * threads; the substituted timer settles immediately).
+	 * @param millis the delay in milliseconds
+	 * @return a future settling to {@code nil} once the delay elapsed
+	 */
+	static LispFuture timer(long millis) {
+		return LispFuture.of(new CompletableFuture<LispVal>().completeOnTimeout(am.ik.rontolisp.LispNil.INSTANCE,
+				millis, java.util.concurrent.TimeUnit.MILLISECONDS));
+	}
+
+	/**
+	 * Releases the caller of the asynchronous body running on this thread, if it is still
+	 * waiting for the eager-start handoff. Called by {@code rontolisp:await} before
+	 * joining a future the program does not know settled (the body's first suspension
+	 * point), whether or not it has settled meanwhile, and idempotent afterwards. A no-op
+	 * on threads that are not an asynchronous body.
+	 */
+	static void releaseHandoffIfPending() {
+		CountDownLatch handoff = HANDOFF.get();
+		if (handoff != null) {
+			handoff.countDown();
+		}
+	}
+
+}

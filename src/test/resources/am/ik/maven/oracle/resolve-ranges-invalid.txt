@@ -1,0 +1,2 @@
+# resolve test.range:bad:1
+error Failed to collect dependencies at test.range:bad:jar:1 -> test.range:lib:jar:[1.0,2.0 <- Failed to resolve version range for test.range:lib:jar:[1.0,2.0: Unbounded version range [1.0,2.0 <- Unbounded version range [1.0,2.0

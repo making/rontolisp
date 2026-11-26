@@ -1,0 +1,22 @@
+{
+  // https://developers.cloudflare.com/workers/wrangler/configuration/
+  "name": "rontolisp-hello-jdbc",
+  "main": "src/index.js",
+  "compatibility_date": "2026-01-01",
+
+  // The database: a Hyperdrive configuration, which keeps the connections to the
+  // origin and hands the Worker a connection string (env.HYPERDRIVE.connectionString).
+  // `wrangler dev` connects straight to localConnectionString; a deploy needs the id
+  // of a configuration of yours (npx wrangler hyperdrive create ..).
+  "hyperdrive": [
+    {
+      "binding": "HYPERDRIVE",
+      "id": "<the id of your Hyperdrive configuration>",
+      "localConnectionString": "postgresql://postgres:secret@127.0.0.1:5432/postgres"
+    }
+  ],
+
+  "observability": {
+    "enabled": true
+  }
+}

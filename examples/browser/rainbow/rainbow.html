@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>rontolisp rainbow text (WASM)</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --fg: #1a1a1a;
+        --bg: #fafafa;
+        --accent: #2d6cdf;
+        --card: #fff;
+        --border: #ddd;
+      }
+      body {
+        font-family: system-ui, -apple-system, sans-serif;
+        max-width: 760px;
+        margin: 2rem auto;
+        padding: 0 1rem;
+        color: var(--fg);
+        background: var(--bg);
+        line-height: 1.5;
+      }
+      h1 {
+        font-size: 1.5rem;
+      }
+      p.lead {
+        color: #555;
+      }
+      label {
+        display: block;
+        font-size: 0.9rem;
+        color: #555;
+        margin: 1.5rem 0 0.4rem;
+      }
+      input[type="text"] {
+        width: 100%;
+        box-sizing: border-box;
+        font-size: 1.25rem;
+        padding: 0.6rem 0.8rem;
+        border: 1px solid #bbb;
+        border-radius: 8px;
+      }
+      #output {
+        margin-top: 1.5rem;
+        padding: 2rem 1rem;
+        min-height: 4rem;
+        text-align: center;
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        font-weight: 800;
+        font-size: clamp(2rem, 9vw, 4rem);
+        line-height: 1.2;
+        overflow-wrap: anywhere;
+        word-break: break-word;
+      }
+      #error {
+        margin-top: 1rem;
+        color: #b00020;
+        white-space: pre-wrap;
+        font-size: 0.9rem;
+      }
+      code {
+        background: #00000010;
+        padding: 0.1rem 0.3rem;
+        border-radius: 4px;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Rainbow text, compiled from Lisp to WebAssembly</h1>
+    <p class="lead">
+      As you type, each character is colored along a rainbow gradient. The work
+      is done by <code>rainbow-html</code> from
+      <a href="https://github.com/making/rontolisp/blob/develop/examples/browser/rainbow/rainbow.lisp"
+        >rainbow.lisp</a
+      >, compiled ahead of time to a WebAssembly reactor with
+      <code>--no-wasi</code> (no imports, no GC host flags needed beyond
+      WebAssembly GC support). This page just feeds your text into the module's
+      <code>rainbow-html(string) -&gt; string</code> export and drops the
+      returned HTML below. No server framework, no JavaScript color math.
+    </p>
+
+    <label for="input">Text</label>
+    <input id="input" type="text" value="GOOOOOAL!!" autocomplete="off"
+      spellcheck="false" autofocus />
+
+    <div id="output">(loading WebAssembly...)</div>
+    <div id="error"></div>
+
+    <script type="module">
+      const input = document.getElementById("input");
+      const output = document.getElementById("output");
+      const errorBox = document.getElementById("error");
+
+      let exports = null;
+
+      // Run the input through the WASM rainbow-html(string) -> string export.
+      // The :string ABI: write the UTF-8 bytes into the module's linear memory
+      // via the exported __ronto_alloc bump allocator, pass (ptr, len), and read
+      // the returned (ptr, len) back out. memory.buffer is re-read after the
+      // call because the allocation may have grown (and detached) the buffer.
+      function rainbow(text) {
+        const bytes = new TextEncoder().encode(text);
+        const ptr = exports.__ronto_alloc(bytes.length);
+        new Uint8Array(exports.memory.buffer, ptr, bytes.length).set(bytes);
+        const [rptr, rlen] = exports["rainbow-html"](ptr, bytes.length);
+        return new TextDecoder().decode(
+          new Uint8Array(exports.memory.buffer, rptr, rlen),
+        );
+      }
+
+      function render() {
+        if (!exports) return;
+        // The module already HTML-escapes the input (see html-escape in
+        // rainbow.lisp), so the returned markup is safe to assign as innerHTML.
+        output.innerHTML = rainbow(input.value) || "&nbsp;";
+      }
+
+      async function init() {
+        try {
+          const bytes = await fetch("./rainbow.wasm").then((r) => {
+            if (!r.ok) throw new Error("could not fetch rainbow.wasm (" + r.status + ")");
+            return r.arrayBuffer();
+          });
+          const { instance } = await WebAssembly.instantiate(bytes, {});
+          exports = instance.exports;
+          // A --no-wasi reactor exports _initialize (run once after instantiation).
+          if (exports._initialize) exports._initialize();
+          render();
+        } catch (e) {
+          output.textContent = "";
+          errorBox.textContent =
+            "Error: " + e.message + "\n\n" +
+            "This page needs WebAssembly GC support (Chrome 119+, Firefox 120+, " +
+            "or Safari 18.2+) and must be served over http:// -- e.g. run " +
+            "`jwebserver -p 8000` (or any static server) in this directory, then " +
+            "open http://localhost:8000/rainbow.html (opening the file directly " +
+            "will fail the fetch).";
+        }
+      }
+
+      input.addEventListener("input", render);
+      init();
+    </script>
+  </body>
+</html>

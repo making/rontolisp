@@ -1,0 +1,266 @@
+# Gray Streams (user-defined streams)
+
+rontolisp ships its own small Gray-stream extension, mirroring how real
+implementations expose their native Gray support: a user class extends one of
+the `rontolisp:fundamental-*-stream` base classes and defines methods on the
+`rontolisp:stream-*` generics, and the stream-taking built-ins dispatch to
+those methods when handed such an instance instead of a stream handle. This
+works on every backend (interpreter, JVM, both WASM variants).
+
+The base classes form the CL-shaped hierarchy: `fundamental-stream` at the
+root, the direction classes `fundamental-input-stream` /
+`fundamental-output-stream` and the element classes
+`fundamental-character-stream` / `fundamental-binary-stream` below it, and
+`fundamental-character-input-stream` / `fundamental-character-output-stream` /
+`fundamental-binary-input-stream` / `fundamental-binary-output-stream` as the
+leaves, each under one direction and one element class (all in the
+`rontolisp` package). A class may also combine a direction class and an
+element class itself.
+
+| built-in | dispatches to |
+| --- | --- |
+| `write-char` | `rontolisp:stream-write-char` |
+| `write-string`, `format` (stream destination) | `rontolisp:stream-write-string` |
+| `princ`, `prin1`, `print` | `rontolisp:stream-write-string` of the rendered text (`print` then `stream-terpri`) |
+| `terpri` | `rontolisp:stream-terpri` (default method writes a newline through `stream-write-char`) |
+| `fresh-line` | `rontolisp:stream-fresh-line` (default method: `stream-terpri` unless `stream-start-line-p`) |
+| `write-line` | `rontolisp:stream-write-string` then `rontolisp:stream-terpri` |
+| `force-output` / `finish-output` / `clear-output` | `rontolisp:stream-force-output` / `-finish-output` / `-clear-output` (default methods answer `nil`) |
+| `close` | answers `t` -- see below |
+| `write-byte` | `rontolisp:stream-write-byte` |
+| `read-byte` | `rontolisp:stream-read-byte` |
+| `read-char` | `rontolisp:stream-read-char` |
+| `read-char-no-hang` | `rontolisp:stream-read-char-no-hang` (default method IS `stream-read-char`) |
+| `peek-char` | `rontolisp:stream-peek-char` (default method: read one, hand it back through `stream-unread-char`); the `peek-type` skipping forms loop over it |
+| `unread-char` | `rontolisp:stream-unread-char` (default method parks the character on the instance) |
+| `read-line` | `rontolisp:stream-read-line` (default method loops `stream-read-char`) |
+| `listen` | `rontolisp:stream-listen` (default method answers `nil`) |
+| `clear-input` | `rontolisp:stream-clear-input`, and answers `nil` whatever the method does (default method on `fundamental-character-input-stream` answers `nil`) |
+| `open-stream-p` | answers `t` -- like `close`, a name a program may own |
+| `streamp`, `(typep x 'stream)` | answer `t` -- a Gray stream IS a stream, so a library that dispatches on the type routes it to its Lisp-stream arm |
+| `stream-element-type` | `character`, or `(unsigned-byte 8)` below `fundamental-binary-stream` -- a class subclassing BOTH (a bivalent stream) answers `character`, because the answer is which buffer to allocate. A name a program may own |
+| `read-sequence` / `write-sequence` | `rontolisp:stream-read-sequence` / `-write-sequence` (default methods loop the element generics; a string goes to `stream-write-string` in one call) |
+| `file-position` | `rontolisp:stream-file-position`; the two-argument form calls the `(setf rontolisp:stream-file-position)` writer generic |
+
+An instance bound to `*standard-output*` or `*standard-input*` is the stream
+the stream-less calls designate, as in SBCL: `(princ x)`, `(read-char)`, a `nil`
+stream argument and `format t` reach its methods like an explicit stream does.
+
+```lisp
+(defclass shout-stream (rontolisp:fundamental-character-output-stream)
+  ((acc :initform "")))
+(defmethod rontolisp:stream-write-char ((s shout-stream) c)
+  (setf (slot-value s 'acc) (concatenate 'string (slot-value s 'acc) (string (char-upcase c))))
+  c)
+(let ((s (make-instance 'shout-stream)))
+  (let ((*standard-output* s))
+    (princ "hi ")
+    (format t "~a" 42))
+  (slot-value s 'acc)) ; => "HI 42"
+```
+
+A character output stream defines **`stream-write-char` or `stream-write-string`
+-- either one is enough**. Each has a default method written in terms of the
+other, so the rest of the output protocol composes out of whichever you wrote.
+(Defining neither is the one broken shape: the two defaults then call each
+other.) As in SBCL, `stream-write-string` is always called with integer `start`
+and `end`, so a method takes `(stream string &optional start end)` and writes
+that range.
+
+Two more generics have no built-in of their own but are what the line-oriented
+operators consult: `rontolisp:stream-line-column` answers the stream's current
+column, or `nil` (the default) for a stream that tracks none, and
+`rontolisp:stream-start-line-p` answers from it. A stream with no column cannot
+tell whether it is at the start of a line, so `fresh-line` on it always writes
+the newline, and answers what `rontolisp:stream-fresh-line` answers: by default
+`t` when it wrote, nil when it did not. `rontolisp:stream-advance-to-column` rounds
+out the protocol for a program that calls it directly.
+
+Closing a Gray stream answers `t` and does nothing else -- there is nothing to
+release. A stream that DOES hold something writes CL's own spelling, a method on
+`close` itself:
+
+```lisp
+(defclass closing-stream (rontolisp:fundamental-character-output-stream)
+  ((acc :initform "") (openp :initform t)))
+(defmethod rontolisp:stream-write-char ((s closing-stream) c)
+  (setf (slot-value s 'acc) (concatenate 'string (slot-value s 'acc) (string c)))
+  c)
+(defmethod close ((s closing-stream) &key abort)
+  (declare (ignore abort))
+  (setf (slot-value s 'openp) nil)
+  t)
+(let ((s (make-instance 'closing-stream)))
+  (write-string "bye" s)
+  (list (close s) (slot-value s 'openp))) ; => (T NIL)
+```
+
+Such a method dispatches on every backend. A program that defines one owns
+`close` outright: the Gray default steps aside for it, into a method on
+`rontolisp:fundamental-stream` (as in SBCL), so a Gray stream of another class
+still closes with `t`. The same holds for `open-stream-p`, `input-stream-p`,
+`output-stream-p` and `stream-element-type`.
+
+A character INPUT stream defines **`stream-read-char` -- that one method is
+enough** (a binary one defines `stream-read-byte`). Everything else on the read
+side is written over it: `stream-read-line` and `stream-read-sequence` loop it,
+`stream-read-char-no-hang` is it, and `stream-peek-char` reads one character and
+hands it back through `stream-unread-char`, whose own default parks the
+character on the instance itself. A class that can rewind its own source
+defines `stream-unread-char` and owns the pushback instead — the parking cell
+is then never written.
+
+On the read side the methods answer the keyword `:eof` at end of stream; the
+built-ins translate that through the usual `eof-error-p` / `eof-value`
+contract. `stream-read-line` answers `(values line missing-newline-p)`, a
+partial last line with a true second value, and `:eof` when no characters are
+left at all; a method of your own may also end the stream the standard Gray way,
+with `("" t)`. `read-line` passes the method's second value on as its own.
+
+```lisp
+(defclass upcase-stream (rontolisp:fundamental-character-output-stream)
+  ((acc :initform "")))
+(defmethod rontolisp:stream-write-string ((s upcase-stream) str &optional (start 0) end)
+  (setf (slot-value s 'acc)
+        (concatenate 'string (slot-value s 'acc) (string-upcase (subseq str start end))))
+  str)
+(let ((s (make-instance 'upcase-stream)))
+  (write-string "hello" s)
+  (write-char #\! s)
+  (slot-value s 'acc)) ; => "HELLO!"
+```
+
+A `stream-write-char`-only stream that tracks its column, so `fresh-line` can
+tell whether it has to break the line:
+
+```lisp
+(defclass column-stream (rontolisp:fundamental-character-output-stream)
+  ((acc :initform "") (col :initform 0)))
+(defmethod rontolisp:stream-write-char ((s column-stream) c)
+  (setf (slot-value s 'acc) (concatenate 'string (slot-value s 'acc) (string c)))
+  (setf (slot-value s 'col) (if (char= c #\Newline) 0 (+ (slot-value s 'col) 1)))
+  c)
+(defmethod rontolisp:stream-line-column ((s column-stream)) (slot-value s 'col))
+(let ((s (make-instance 'column-stream)))
+  (princ "one" s)
+  (fresh-line s)      ; column 3 -> writes the newline
+  (fresh-line s)      ; column 0 -> writes nothing
+  (write-line "two" s)
+  ;; newlines shown as / so the whole answer fits on one line
+  (substitute #\/ #\Newline (slot-value s 'acc))) ; => "one/two/"
+```
+
+A binary input stream with the `file-position` protocol:
+
+```lisp
+(defclass byte-source (rontolisp:fundamental-binary-input-stream)
+  ((items :initarg :items) (pos :initform 0)))
+(defmethod rontolisp:stream-read-byte ((s byte-source))
+  (let ((items (slot-value s 'items)) (pos (slot-value s 'pos)))
+    (if (>= pos (length items))
+        :eof
+        (progn (setf (slot-value s 'pos) (+ pos 1)) (nth pos items)))))
+(defmethod rontolisp:stream-file-position ((s byte-source)) (slot-value s 'pos))
+(defmethod (setf rontolisp:stream-file-position) (position (s byte-source))
+  (setf (slot-value s 'pos) position))
+(let ((in (make-instance 'byte-source :items (list 10 20 30))))
+  (read-byte in)                          ; 10
+  (file-position in)                      ; 1
+  (file-position in 0)
+  (list (read-byte in) (read-byte in nil :done))) ; => (10 20)
+```
+
+A character input stream defining only `stream-read-char`, driven through the
+rest of the read protocol:
+
+```lisp
+(defclass text-source (rontolisp:fundamental-character-input-stream)
+  ((text :initarg :text) (pos :initform 0)))
+(defmethod rontolisp:stream-read-char ((s text-source))
+  (let ((text (slot-value s 'text)) (pos (slot-value s 'pos)))
+    (if (>= pos (length text))
+        :eof
+        (progn (setf (slot-value s 'pos) (+ pos 1)) (char text pos)))))
+(let ((in (make-instance 'text-source :text "ab  cd")))
+  (list (peek-char nil in)                ; look, do not consume
+        (read-char in)
+        (progn (unread-char #\a in) (read-char in))
+        (read-char-no-hang in)
+        (peek-char t in)                  ; skip whitespace
+        (read-line in)
+        (open-stream-p in)
+        (stream-element-type in))) ; => (#\a #\a #\a #\b #\c "cd" T CHARACTER)
+```
+
+## The trivial-gray-streams shim
+
+Portable libraries are written against
+[trivial-gray-streams](https://github.com/trivial-gray-streams/trivial-gray-streams)
+rather than an implementation's own protocol. rontolisp bundles a built-in
+`trivial-gray-streams` ASDF system adapting the portable API onto the protocol
+above (see [Systems](asdf-systems.md#built-in-shim-systems)): the
+`trivial-gray-streams` package mirrors every base class (plus
+`trivial-gray-stream-mixin`) and every generic of the real package, including
+`stream-read-char-no-hang` / `stream-peek-char` / `stream-clear-input`,
+`stream-read-sequence` / `stream-write-sequence` `(stream sequence start end
+&key)`, `stream-file-position` with its `(setf ...)` writer, and the output
+family `stream-line-column` / `stream-start-line-p` / `stream-terpri` /
+`stream-fresh-line` / `stream-advance-to-column` / `stream-force-output` /
+`stream-finish-output` / `stream-clear-output` — this is how
+jzon's `:stream` writer API runs, and the class shape fast-io and
+circular-streams define loads unchanged. The defaults are the same ones the
+rontolisp protocol has, so a portable class that defines only
+`trivial-gray-streams:stream-write-char` still answers every operator above.
+
+```lisp
+(asdf:load-system "trivial-gray-streams")
+
+(defclass upcase-stream (trivial-gray-streams:fundamental-character-output-stream)
+  ((acc :initform "")))
+(defmethod trivial-gray-streams:stream-write-string
+    ((s upcase-stream) str &optional (start 0) end)
+  (setf (slot-value s 'acc)
+        (concatenate 'string (slot-value s 'acc) (string-upcase (subseq str start end))))
+  str)
+(defmethod trivial-gray-streams:stream-write-char ((s upcase-stream) c)
+  (trivial-gray-streams:stream-write-string s (string c) 0 1)
+  c)
+(let ((s (make-instance 'upcase-stream)))
+  (write-string "hello" s)
+  (write-char #\! s)
+  (slot-value s 'acc)) ; => "HELLO!"
+```
+
+## Limits
+
+- `rontolisp:stream-advance-to-column` exists as a protocol generic but no
+  built-in dispatches to it (`format`'s `~T` does not consult the column).
+- The protocol's pushback holds ONE character per stream, on the instance
+  itself, which is what CL promises for `unread-char`: two instances each hold
+  one, and an instance dropped with one parked affects no other. The cell is no
+  slot: the class's slot list, the printers and `equal` do not see it. It is
+  drained by every read that goes
+  through the protocol's own defaults; a class that overrides
+  `stream-read-line` or `stream-read-sequence` outright reads past it, so such a
+  class should define `stream-unread-char` too.
+- `input-stream-p` / `output-stream-p` answer the DIRECTION base class the
+  instance extends, not a predicate method per class: a
+  `fundamental-input-stream` descendant answers `t` to the first and `nil` to
+  the second, and a subclass of the bare `fundamental-stream` answers `nil` to
+  both. A class may still define a method on either name and own the answer.
+- `unread-char` on a stream HANDLE — a file, a string input stream, a socket —
+  parks the character on that stream, and `read-char`, `peek-char` and
+  `read-line` on it drain it. Every stream holds its own character, so a stream
+  closed or dropped with one parked does not affect any other; a second
+  `unread-char` on a stream whose character is still parked signals.
+  `read-byte`, `read-sequence` and `read` do not consult it.
+- `listen` on a Gray instance works on the interpreter and the JVM; the
+  Preview 1 WASM backend rejects any `listen` call at compile time (a
+  pre-existing platform limit, Gray or not).
+- `write-string` and `write-line` with `:start` / `:end` check the bounds before the
+  method runs, as SBCL does: a `nil`, negative or non-integer `:start`, a bound past
+  the string's length and a `:start` after the `:end` are a `type-error` with nothing
+  written. The method then receives integer `start` and `end` (a `nil` or omitted
+  `:end` is the length).
+- The operators above dispatch as function values too (`(funcall #'read-byte
+  instance)`, `(apply #'write-line args)`, `(funcall #'write-char #\x instance)`).

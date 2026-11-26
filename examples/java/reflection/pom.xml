@@ -1,0 +1,179 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+		 xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+		 xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+	<modelVersion>4.0.0</modelVersion>
+
+	<groupId>com.example</groupId>
+	<artifactId>reflection</artifactId>
+	<version>1.0.0-SNAPSHOT</version>
+
+	<!--
+		target/reflection.wasm (Preview 1) and target/reflection-component.wasm for `wasmtime run`;
+		`mvn exec:exec` runs the program on the JDK, `mvn -Pgraalvm package` builds it with
+		GraalVM's native-image as target/reflection-graalvm. The reflection metadata both read is
+		src/main/resources/META-INF/native-image/com.example/reflection/reachability-metadata.json.
+	-->
+
+	<properties>
+		<java.version>25</java.version>
+		<maven.compiler.release>${java.version}</maven.compiler.release>
+		<project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+		<rontolisp.version>0.1.0-SNAPSHOT</rontolisp.version>
+		<rontolisp.mainClass>com.example.reflection.Reflection</rontolisp.mainClass>
+		<yavi.version>0.18.1</yavi.version>
+		<native-build-tools.version>1.1.14</native-build-tools.version>
+	</properties>
+
+	<dependencies>
+		<dependency>
+			<groupId>am.ik.yavi</groupId>
+			<artifactId>yavi</artifactId>
+			<version>${yavi.version}</version>
+		</dependency>
+	</dependencies>
+
+	<!-- The SNAPSHOTs: the plugin, the rontolisp it embeds. -->
+	<pluginRepositories>
+		<pluginRepository>
+			<id>central-snapshots</id>
+			<url>https://central.sonatype.com/repository/maven-snapshots/</url>
+			<releases>
+				<enabled>false</enabled>
+			</releases>
+			<snapshots>
+				<enabled>true</enabled>
+			</snapshots>
+		</pluginRepository>
+	</pluginRepositories>
+
+	<build>
+		<!-- target/reflection.wasm, ... -->
+		<finalName>${project.artifactId}</finalName>
+		<plugins>
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-resources-plugin</artifactId>
+				<version>3.4.0</version>
+			</plugin>
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-compiler-plugin</artifactId>
+				<version>3.13.0</version>
+			</plugin>
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-surefire-plugin</artifactId>
+				<version>3.5.2</version>
+			</plugin>
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-jar-plugin</artifactId>
+				<version>3.5.0</version>
+			</plugin>
+			<plugin>
+				<groupId>am.ik.rontolisp</groupId>
+				<artifactId>rontolisp-maven-plugin</artifactId>
+				<version>${rontolisp.version}</version>
+				<executions>
+					<execution>
+						<id>reflection</id>
+						<goals>
+							<goal>wasm</goal>
+						</goals>
+					</execution>
+					<execution>
+						<id>reflection-component</id>
+						<goals>
+							<goal>wasm</goal>
+						</goals>
+						<configuration>
+							<component>true</component>
+							<outputFile>${project.build.directory}/reflection-component.wasm</outputFile>
+						</configuration>
+					</execution>
+				</executions>
+			</plugin>
+			<!--
+				`mvn exec:exec`: the main class on the JDK running Maven, with the compile
+				class path (a war's `provided` dependencies included, which a servlet container
+				would bring) and the environment Maven has.
+			-->
+			<plugin>
+				<groupId>org.codehaus.mojo</groupId>
+				<artifactId>exec-maven-plugin</artifactId>
+				<version>3.6.3</version>
+				<configuration>
+					<executable>${java.home}/bin/java</executable>
+					<classpathScope>compile</classpathScope>
+					<arguments>
+						<argument>-classpath</argument>
+						<classpath/>
+						<argument>${rontolisp.mainClass}</argument>
+					</arguments>
+				</configuration>
+			</plugin>
+		</plugins>
+	</build>
+
+	<profiles>
+		<!--
+			`mvn -Pnative package` adds a native executable, target/<finalName>. It needs a
+			rontolisp carrying the native toolchain for this machine, which the jar on Maven
+			Central does not: one installed from a checkout after rontolisp-native/build.sh
+			(`./mvnw install -DskipTests`).
+		-->
+		<profile>
+			<id>native</id>
+			<build>
+				<plugins>
+					<plugin>
+						<groupId>am.ik.rontolisp</groupId>
+						<artifactId>rontolisp-maven-plugin</artifactId>
+						<executions>
+							<execution>
+								<id>native</id>
+								<goals>
+									<goal>wasm</goal>
+								</goals>
+								<configuration>
+									<native>true</native>
+								</configuration>
+							</execution>
+						</executions>
+					</plugin>
+				</plugins>
+			</build>
+		</profile>
+		<!--
+			`mvn -Pgraalvm package` adds target/reflection-graalvm, built by GraalVM's native-image
+			from the same classes and the same reachability metadata; it needs a GraalVM as the
+			JDK running Maven.
+		-->
+		<profile>
+			<id>graalvm</id>
+			<build>
+				<plugins>
+					<plugin>
+						<groupId>org.graalvm.buildtools</groupId>
+						<artifactId>native-maven-plugin</artifactId>
+						<version>${native-build-tools.version}</version>
+						<executions>
+							<execution>
+								<id>build-native</id>
+								<goals>
+									<goal>compile-no-fork</goal>
+								</goals>
+								<phase>package</phase>
+							</execution>
+						</executions>
+						<configuration>
+							<mainClass>${rontolisp.mainClass}</mainClass>
+							<imageName>${project.artifactId}-graalvm</imageName>
+						</configuration>
+					</plugin>
+				</plugins>
+			</build>
+		</profile>
+	</profiles>
+</project>

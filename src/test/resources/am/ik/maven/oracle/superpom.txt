@@ -1,0 +1,18 @@
+# descriptor test.superpom:no-model-version:1 test.superpom:jar-parent-child:1 test.superpom:build-child:1 test.superpom:build-exprs:1 test.interp:build-directory:1
+artifact test.superpom:no-model-version:jar:1
+warning invalid test.superpom:no-model-version:jar:1: 1 problem was encountered while building the effective model for test.superpom:no-model-version:1 [ERROR] 'modelVersion' is missing. @
+artifact test.superpom:jar-parent-child:jar:1
+warning invalid test.superpom:jar-parent-child:jar:1: 1 problem was encountered while building the effective model for test.superpom:jar-parent-child:1 [ERROR] Invalid packaging for parent POM test.superpom:jar-parent:1, must be "pom" but is "jar" @ test.superpom:jar-parent:1
+artifact test.superpom:build-child:jar:1
+dep test.lib:d1:jar::out scope=compile optional=null
+dep test.lib:d2:jar::out/classes scope=compile optional=null
+dep test.lib:d3:jar::build-child-final scope=compile optional=null
+artifact test.superpom:build-exprs:jar:1
+dep test.lib:d1:jar::${project.basedir}/target scope=compile optional=null
+dep test.lib:d2:jar::build-exprs-1 scope=compile optional=null
+dep test.lib:d3:jar::${project.basedir}/src/main/java scope=compile optional=null
+dep test.lib:d4:jar::${project.basedir}/target/test-classes scope=compile optional=null
+dep test.lib:d5:jar::${project.basedir}/src/main/scripts scope=compile optional=null
+dep test.lib:d6:jar::${project.build.defaultGoal} scope=compile optional=null
+artifact test.interp:build-directory:jar:1
+dep test.lib:d:jar::${project.basedir}/target scope=compile optional=null

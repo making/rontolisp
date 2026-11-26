@@ -1,0 +1,180 @@
+# rontolisp:fetch
+
+`(rontolisp:fetch url &optional options)`
+
+Starts an outgoing HTTP request, modeled on the JavaScript `fetch` API, and
+immediately returns a **future** while the request runs asynchronously. A
+future is an opaque value (it prints as `#<FUTURE>` and satisfies
+[`rontolisp:futurep`](rontolisp-futurep.md)); pass it to
+[`rontolisp:await`](../special-forms/rontolisp-await.md) to suspend until the
+response arrives and obtain the result property list
+`(:status <integer> :headers <alist> :body <stream>)`; the `:body` stream is
+drained with [`rontolisp:read-all`](rontolisp-read-all.md).
+
+```lisp
+(let ((p (rontolisp:fetch "https://httpbin.ik.am/get")))
+  (getf (rontolisp:await p) :status))   ; => 200
+```
+
+Because the request is already in flight when `fetch` returns, several requests
+can overlap:
+
+```console
+(let ((p1 (rontolisp:fetch "https://httpbin.ik.am/status/200"))
+      (p2 (rontolisp:fetch "https://httpbin.ik.am/status/201")))  ; both requests running
+  (list (rontolisp:await p1) (rontolisp:await p2)))
+```
+
+## Options
+
+The optional second argument is an options property list. Recognized keys:
+
+- `:method` — the HTTP method as a string (default `"GET"`). Supported methods
+  are `GET`, `HEAD`, `POST`, `PUT`, `DELETE`, `OPTIONS` and `PATCH`, matched
+  case-insensitively; any other method is an error.
+- `:headers` — request headers, an alist of `(name . value)` string pairs.
+- `:body` — the request body: a string, sent as its UTF-8, or an `(unsigned-byte 8)`
+  vector, sent as its octets (omit for no body).
+- `:connect-timeout` — how long the connection may take to be established, a
+  positive integer of milliseconds (omit, or `nil`, for no limit).
+- `:first-byte-timeout` — how long the response may take to start arriving,
+  counted from the call: a positive integer of milliseconds. The head — status
+  and headers — is due within it; the body is not.
+
+A request whose timeout passes fails like any other failed request: awaiting its
+future signals an error.
+
+```console
+(handler-case
+    (getf (rontolisp:await (rontolisp:fetch "https://httpbin.ik.am/delay/3"
+                                            '(:first-byte-timeout 500)))
+          :status)
+  (error () :timed-out))   ; => :TIMED-OUT
+```
+
+Every request carries `User-Agent: rontolisp/<version> (<git-commit>)` — the version
+and abbreviated commit [`rontolisp:version`](rontolisp-version.md) reports, the
+commit omitted when the build had no git repository — unless `:headers` already names
+that field (matched case-insensitively, so your own spelling and value win). The
+browser playground and a `--host-fetch` reactor leave the field to the host, which
+owns it there.
+
+The options are validated when `fetch` is called (like the JavaScript `fetch`,
+which throws synchronously on invalid arguments).
+
+```console
+;; GET with request headers (an alist of (name . value) string pairs)
+(rontolisp:fetch "https://httpbin.ik.am/get"
+                 '(:headers (("Accept" . "application/json"))))
+
+;; POST with a request body
+(rontolisp:fetch "https://httpbin.ik.am/post"
+                 '(:method "POST"
+                   :headers (("Content-Type" . "application/json"))
+                   :body "{\"name\":\"rontolisp\"}"))
+```
+
+## Result
+
+`fetch` itself returns the future. Awaiting it yields the property list
+`(:status <integer> :headers <alist> :body <stream>)`, where `:headers` is an
+alist of `(name . value)` response-header pairs — names lowercased, one pair
+per value (a repeated field such as `set-cookie` keeps each), in ascending name
+order — and `:body` is an
+**asynchronous stream** of the body's octet chunks (`(unsigned-byte 8)`
+vectors, the bytes as they arrive) — drain it to one decoded string with
+[`rontolisp:read-all`](rontolisp-read-all.md), take the chunks one at a
+time with [`rontolisp:stream-read`](rontolisp-stream-read.md), or answer the
+stream itself as a served response body to relay the reply byte-exact:
+
+```console
+(let ((res (rontolisp:await (rontolisp:fetch "https://httpbin.ik.am/get"))))
+  (print (getf res :status))    ; => 200
+  (print (rontolisp:await (rontolisp:read-all (getf res :body))))
+                                ; => "{...}"
+  (print (getf res :headers)))  ; => (("content-type" . "application/json") ...)
+```
+
+`:body` is that stream on every backend, its chunks arriving after the head.
+Awaiting the same future again answers the same list, whose body stream a first
+drain has already consumed.
+
+A JSON response body parses into Lisp values with
+[`rontolisp:json-parse`](rontolisp-json-parse.md), and
+[`rontolisp:json-stringify`](rontolisp-json-stringify.md) builds a JSON
+request `:body` from an s-expression.
+
+## Backend support
+
+- **Interpreter** and **JVM**: use the JDK `java.net.http.HttpClient`; the
+  request runs on a background thread from the moment `fetch` returns. An
+  `http:` URL is requested over HTTP/1.1 (no `h2c` upgrade offer); `https:`
+  negotiates HTTP/2 where the server offers it. A `GET`, `HEAD` or `DELETE`
+  without a `:body` sends no `Content-Length`.
+- **WASM**: component-only, over the async `wasi:http@0.3.0` — fetch is
+  ordinary Lisp glue calling the wit-imported `wasi:http/client@0.3.0`, so the
+  component is uniformly WASI 0.3. The future wraps the in-flight async
+  `client.send` subtask, so multiple requests genuinely overlap. Compile with
+  `--component` and run with
+  `wasmtime run -S http=y`
+  (wasmtime 46+; `-S http=y` makes the host provide `wasi:http`). fetch remains
+  a compile error in a Preview 1 (core-module) `.wasm`, which has no host
+  `wasi:http`; the generic future operations (`await`, `then`, `futurep`)
+  compile in every mode. fetch also works inside a
+  [`rontolisp:http-handler`](rontolisp-http-handler.md) serve component (a
+  proxy-style handler): run it with `wasmtime serve` —
+  the serve host provides `wasi:http/client` by default, no `-S http=y` needed.
+- **`--no-wasi` reactor with `--host-fetch`**: the same source compiles on a
+  reactor (which imports no WASI), lowered onto two injected host imports —
+  `env.fetch(request-json) -> response-head-json` and
+  `env.readResponseBody(ptr, cap) -> i32` — over the host's own HTTP client
+  (a Cloudflare Worker's `fetch` behind JSPI, or any synchronous
+  implementation). The result plist is the same, `:body` the same asynchronous
+  stream: the head arrives with the call and the body is pulled a chunk at a
+  time as the drain asks for it, so a large or binary reply never becomes a
+  JSON string. The future is settled at creation (the host call blocked the
+  stack until the headers): requests never overlap, and a transport failure
+  before the head signals at the `fetch` call rather than at `await` — one
+  during the body signals at the drain, as on every other backend. Without the
+  flag, `--no-wasi` keeps the compile error. A JavaScript `fetch` decodes a
+  `gzip`, `deflate` or `br` reply itself, so the generated host answers the
+  decoded octets and leaves that reply's `content-encoding` and
+  `content-length` out of `:headers`; every other backend answers a coded
+  body's octets as they arrived.
+- **Native executable** (`--native`): the executable's runner makes the
+  request on a thread of its own from the moment `fetch` returns, over HTTP/1.1
+  (HTTPS trusting Mozilla's root certificates, which the executable carries, or
+  the PEM bundle `SSL_CERT_FILE` names), so requests overlap and a transport
+  failure signals at `await`, as on the JVM. See
+  [HTTP](../../compiling/native.md#http).
+- **Browser playground**: truly asynchronous. The interpreter runs in a Web
+  Worker; `fetch` hands the request to the page's main thread, which runs the
+  real browser `fetch()` (subject to CORS) while the program continues, so
+  requests overlap, and `await` blocks the worker until the response arrives.
+  When cross-origin isolation is unavailable (`SharedArrayBuffer` disabled)
+  the playground falls back to a synchronous request per fetch — programs
+  behave the same, requests simply do not overlap. The browser decodes a
+  compressed reply, so, as under `--host-fetch`, its `content-encoding` and
+  `content-length` are not in `:headers`.
+
+## Limitations
+
+- The method must be one of `GET`, `HEAD`, `POST`, `PUT`, `DELETE`, `OPTIONS`,
+  `PATCH`. An unsupported `:method` is an error when `fetch` is called, on
+  every backend; on WASM a literal one is already a compile error.
+- A failed request (for example a refused connection) surfaces when the future
+  is awaited — the same timing as a JavaScript `await` rejection: every backend
+  signals an error there (on WASM it is a `rontolisp:wit-error` condition,
+  catchable with `handler-case`), and again at every later await of the same
+  future. A URL no request can be built for (for example one with a space in
+  its path) fails the same way: `fetch` returns a future, and awaiting it
+  signals.
+- A reply whose transfer fails part-way (the connection closes before the
+  body it announced has arrived) signals an error instead of reading as a
+  shorter body, when its `:body` is drained.
+- `:connect-timeout` and `:first-byte-timeout` are an error when `fetch` is
+  called on a `--no-wasi` reactor with `--host-fetch` (the host owns the
+  connection) and in a component that serves requests
+  ([`rontolisp:http-handler`](rontolisp-http-handler.md)), and fail the request
+  in the browser playground. The words of a timeout's error are the
+  transport's, so they differ between backends; nothing times the body.

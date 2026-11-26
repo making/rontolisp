@@ -1,0 +1,20 @@
+# rontolisp:hash-table-alist
+
+`(rontolisp:hash-table-alist table)`
+
+Returns an association list of the hash table's key/value pairs — the inverse of
+[`rontolisp:alist-hash-table`](rontolisp-alist-hash-table.md). A lightweight
+subset of `alexandria:hash-table-alist`.
+
+```lisp
+(rontolisp:hash-table-alist (rontolisp:alist-hash-table '(("k" . 7))))   ; => (("k" . 7))
+```
+
+The pairs come newest first -- the reverse of `maphash`'s order -- on every
+backend.
+
+## Backend support
+
+Works on every backend and in every WASM mode (Preview 1 included): the function
+is written in rontolisp itself (part of the prelude) and is compiled into the
+program when used.

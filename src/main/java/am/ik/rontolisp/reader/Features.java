@@ -1,0 +1,429 @@
+package am.ik.rontolisp.reader;
+
+import java.util.List;
+import java.util.Locale;
+
+import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispNil;
+import am.ik.rontolisp.LispSymbol;
+import am.ik.rontolisp.LispVal;
+
+/**
+ * The set of active READER features, consulted by the {@code #+}/{@code #-} feature
+ * conditionals in {@link LispLexer}, the {@code :if-feature} component option of the ASDF
+ * subset, and -- as its starting point -- the {@code *features*} global every backend
+ * seeds at run time. Every backend has {@code :rontolisp} plus one backend-identifying
+ * feature ({@code :rontolisp-interpreter}, {@code :rontolisp-jvm} or
+ * {@code :rontolisp-wasm}), {@code :unicode} and {@code :common-lisp}. CLHS names
+ * {@code :common-lisp} the feature of the language FAMILY and {@code :ansi-cl} the
+ * conformance claim, so the first is announced and the second is not: portable code
+ * writes {@code #+common-lisp} as its "any CL" fallback (named-readtables' every
+ * {@code define-cruft}), which is exactly the branch rontolisp needs.
+ * <p>
+ * A read-time feature set and the run-time {@code *features*} list are two different
+ * things, and keeping them apart is the whole point: this set is what {@code #+} tests
+ * while the source is being READ -- widened only by a declaration the reader can see for
+ * itself ({@link #with}: an ASDF {@code :rontolisp-features} option, or the file's own
+ * literal top-level push, see {@link FeaturePushes}) and by what the forms read before a
+ * form pushed when they ran, in its file or in a file read earlier. {@code *features*} is
+ * an ordinary special variable holding a list, initialized to these names on every
+ * backend, and a program may {@code push}/{@code setq} it at run time like any other. See
+ * {@code .kb/reader-features.md}.
+ * <p>
+ * Every set here is machine-INDEPENDENT, and deliberately: the names describing the host
+ * a program will run on ({@code :darwin}/{@code :linux}, {@code :arm64}/{@code :x86-64})
+ * are carried by the trivial-features ANNOUNCEMENT instead
+ * ({@code BuiltinSystems.hostFeatures}, {@code .kb/asdf.md}), so a {@code Features}
+ * constant -- and the {@code *features*} list a program that asked for nothing sees -- is
+ * the same on every build machine.
+ * <p>
+ * {@code :unicode} is the portable spelling (CLISP / ECL / CMUCL / LispWorks) of "this
+ * implementation's characters are Unicode code points, not octets", which is true of
+ * every rontolisp backend. A library that branches on it selects its UTF-8 string path --
+ * cl-postgres, whose non-unicode branch would talk {@code SQL_ASCII} to the server and
+ * send one octet per code point.
+ * <p>
+ * {@code :asdf} and its version family ({@link #ASDF}) are what real ASDF pushes when it
+ * loads, and here it is always loaded: a library's guard ({@code hu.dwim.def.asd}'s
+ * {@code #+asdf3}, {@code fare-quasiquote.asd}'s {@code #-asdf3 (error ...)}) reads them,
+ * and prove picks the {@code uiop:} spellings by them.
+ */
+public final class Features {
+
+	/** What ASDF 3.3 announces, as SBCL 2.2.9's {@code (require :asdf)} leaves them. */
+	private static final List<String> ASDF = List.of("asdf", "asdf2", "asdf3", "asdf3.1", "asdf3.2", "asdf3.3",
+			"asdf-unicode");
+
+	private static List<String> withAsdf(String... names) {
+		List<String> all = new java.util.ArrayList<>(List.of(names));
+		all.addAll(ASDF);
+		return List.copyOf(all);
+	}
+
+	/**
+	 * The features active when interpreting (and in the REPL). {@code :thread-support} is
+	 * the ecosystem's portable spelling of "this image spawns threads" -- upstream
+	 * bordeaux-threads pushes it from its {@code .asd} at load time, and the push can
+	 * never reach a read-time conditional here, so the backends that really spawn threads
+	 * ({@code rontolisp:make-thread} on the interpreter and the JVM,
+	 * {@code .kb/threads.md}) declare it statically like {@code :unicode}. Both WASM
+	 * backends are single-threaded by construction and stay without it -- which is what
+	 * makes {@code clack:clackup}'s {@code #+thread-support} default {@code :use-thread}
+	 * to t here and to nil there.
+	 */
+	public static final Features INTERPRETER = new Features(
+			withAsdf("rontolisp", "rontolisp-interpreter", "unicode", "thread-support", "common-lisp"));
+
+	/** The features active when compiling to JVM bytecode. */
+	public static final Features JVM = new Features(
+			withAsdf("rontolisp", "rontolisp-jvm", "unicode", "thread-support", "common-lisp"));
+
+	/**
+	 * The features active when compiling to JVM bytecode in SERVLET mode -- a
+	 * {@code -o app.war} output, where the servlet container owns the port and the
+	 * {@code rontolisp:http-handler} directive registers its handler and RETURNS instead
+	 * of binding and blocking. {@code :rontolisp-servlet} is a target-describing feature
+	 * exactly like {@code :rontolisp-reactor}: it is what lets the
+	 * {@code clack-handler-rontolisp} shim choose the register-and-return transport per
+	 * target and on nothing else, so one {@code clackup} source runs on every host
+	 * ({@code .kb/clack.md}).
+	 */
+	public static final Features JVM_SERVLET = new Features(
+			withAsdf("rontolisp", "rontolisp-jvm", "unicode", "thread-support", "common-lisp", "rontolisp-servlet"));
+
+	/** The features active when compiling to WASM (Preview 1, component and no-gc). */
+	public static final Features WASM = new Features(withAsdf("rontolisp", "rontolisp-wasm", "unicode", "common-lisp"));
+
+	/**
+	 * The features active when compiling to WASM in REACTOR mode -- {@code --no-wasi}
+	 * (Preview 1 only: the compiler ignores that flag under {@code --component}, so this
+	 * set is not selected there either), and {@code --no-gc}, which is a pure-compute
+	 * reactor with or without the component wrap. The module owns no WASI world; its
+	 * entry points are exports a host calls. {@code :rontolisp-reactor} is a
+	 * target-describing feature like {@code :thread-support}, not a flag echo: it is what
+	 * lets a shim choose its transport per target -- the {@code clack-handler-rontolisp}
+	 * backend's {@code run} serves through the {@code rontolisp:http-handler} directive
+	 * on the WASI targets and leaves the {@code rontolisp::%http-reactor} marker (the
+	 * synthesized {@code handle-request} export) here, which is what makes ONE
+	 * {@code clackup} source run on every host ({@code .kb/clack.md}).
+	 */
+	public static final Features WASM_REACTOR = new Features(
+			withAsdf("rontolisp", "rontolisp-wasm", "unicode", "common-lisp", "rontolisp-reactor"));
+
+	/**
+	 * The feature naming the component BOUNDARY, added to whichever WASM set is in force
+	 * under {@code --component} ({@link #with}). It describes a boundary rather than a
+	 * backend, and that is why the reactor features above cannot stand in for it: a
+	 * {@code --component --no-wasi} build IS a reactor and carries
+	 * {@code :rontolisp-reactor} too, while its host functions cross the canonical ABI
+	 * instead of core imports -- so {@code rontolisp:wasm-import} (and the {@code :bytes}
+	 * boundary type) is refused there, and a source that declares one says
+	 * {@code #-rontolisp-component} to keep compiling as a component
+	 * ({@code examples/cloudflare-workers/httpbin/worker.lisp}, built both ways).
+	 */
+	public static final String COMPONENT = "rontolisp-component";
+
+	/**
+	 * The feature naming the {@code :bytes} BODY IMPORTS a reactor's HTTP boundary can
+	 * take its request and response bodies through, added to the WASM set exactly where
+	 * they exist: a {@code --no-wasi} wasm-GC core module built with
+	 * {@code --host-boundary=streaming} (the default; {@link #with}). It is what a
+	 * HAND-WRITTEN reactor -- one that spells out its own envelope adapter instead of
+	 * going through {@code clack:clackup} -- guards its own
+	 * {@code env.readRequestBody}/{@code env.writeResponseBody} declarations with, so a
+	 * source can follow the boundary the build chose.
+	 *
+	 * <p>
+	 * It replaces the double negative such a source had to write before:
+	 * {@code #+(and rontolisp-reactor (not rontolisp-component))} spelled out the two
+	 * targets that CANNOT carry the imports (a component's host functions cross the
+	 * canonical ABI; a WASI command module has no host to import from) and quietly got
+	 * {@code --no-gc} wrong, which is a reactor with no packed-array representation for
+	 * {@code :bytes} at all. Naming the thing itself makes the guard mean what it says --
+	 * and makes it follow the flag, which no combination of target features could.
+	 */
+	public static final String BODY_IMPORTS = "rontolisp-body-imports";
+
+	/**
+	 * The feature naming the RUNNER a {@code --native} executable's wasm-GC module runs
+	 * inside, added to the WASM set exactly there ({@link #with}). A native output is
+	 * still the Preview 1 module ({@link #WASM} as is: no reactor, no component, no
+	 * scalar backend -- the CLI refuses those beside {@code --native}), but the runner
+	 * around it answers imports Preview 1 alone does not have -- {@code rontolisp:fetch}
+	 * through {@code rlrun-net}, and {@code objc:}/{@code appkit:}/{@code metal:}/
+	 * {@code scene:} through {@code rlobjc} on {@code macos-aarch64} -- so no existing
+	 * feature can tell the two builds apart and one source cannot say "fetch on native,
+	 * fall back on Preview 1" without it. Deliberately silent on OS/architecture: those
+	 * would have to come from {@code --native-target} and never the compile host's
+	 * {@code os.name} (a cross build would lie), and they flip {@code #+unix}/
+	 * {@code #+darwin} branches in shipped libraries ({@code .kb/uiop.md}).
+	 */
+	public static final String NATIVE = "rontolisp-native";
+
+	/**
+	 * The feature naming a build that hands a program's log records to its HOST's log
+	 * ({@code --wasi-logging}), added to the WASM set exactly there ({@link #with}): a
+	 * component then imports {@code wasi:logging/logging}, which a host without it
+	 * (wasmtime 51) cannot instantiate, so it follows the flag and never the target
+	 * alone. The Java front end's root logger hands its records to that log instead of
+	 * the console ({@code .kb/java-frontend.md}, "java.util.logging"); a source of
+	 * another language can test it with {@code #+rontolisp-wasi-logging}.
+	 */
+	public static final String WASI_LOGGING = "rontolisp-wasi-logging";
+
+	/**
+	 * The feature naming a {@code --no-wasi} module whose {@code rontolisp:tcp-*} sockets
+	 * are its HOST's ({@code --host-sockets}), added to the reactor set exactly there
+	 * ({@link #with}): the module then imports the host's socket functions, which break
+	 * the zero-import contract, so it follows the flag and never the target alone. The
+	 * socket provider reads its host's shape with it, and the Java front end's run time
+	 * the wait of a thread for a socket ({@code .kb/tcp-sockets.md}, "A reactor's
+	 * sockets").
+	 */
+	public static final String HOST_SOCKETS = "rontolisp-host-sockets";
+
+	/**
+	 * The feature naming a {@code --no-wasi} wasm-GC core module whose host waits for it
+	 * ({@code --host-timer}), added to the reactor set exactly there ({@link #with}): a
+	 * wait for a time suspends in the host's timer, and a call with nothing to do idles
+	 * in the host, which calls the module for others meanwhile (JSPI). It follows the
+	 * flag, which no target feature can: the Java front end's threads wait through the
+	 * host there instead of ending the instance ({@code .kb/java-frontend.md}, "A server
+	 * as a reactor").
+	 */
+	public static final String HOST_TIMER = "rontolisp-host-timer";
+
+	private static final String STATIC_SPELLING = "static";
+
+	private static final String RUNTIME_SPELLING = "runtime";
+
+	private final List<String> names;
+
+	/**
+	 * Whether a name in {@link #names} is a SYMBOL DESIGNATOR that carries its own
+	 * keyword-ness (a leading {@code :}) rather than a bare feature name. True only for
+	 * {@link #ofRuntimeList(List)}: the static sets spell their names bare, and stripping
+	 * a query's colon is the whole of the comparison there.
+	 */
+	private final boolean designators;
+
+	private Features(List<String> names) {
+		this(names, false);
+	}
+
+	private Features(List<String> names, boolean designators) {
+		this.names = names;
+		this.designators = designators;
+	}
+
+	/**
+	 * Creates a custom feature set (primarily for tests).
+	 * @param names the feature names, without the leading colon
+	 * @return the feature set
+	 */
+	public static Features of(String... names) {
+		return new Features(List.of(names));
+	}
+
+	/**
+	 * The feature set a RUNTIME {@code read} / {@code read-from-string} tests: the live
+	 * value of the {@code *features*} variable, which a program may rebind or push onto
+	 * at will. The names arrive as the list holds them -- {@code ":X"} for a keyword,
+	 * {@code "X"} for a symbol read in some other package -- and the comparison KEEPS
+	 * that distinction, because Common Lisp's does: a feature expression is read with
+	 * {@code *package*} bound to {@code KEYWORD} (CLHS 24.1.2.1.1), so the unqualified
+	 * {@code #+X} asks about {@code :X} and only a qualified {@code #+FOO::X} asks about
+	 * a symbol in another package. The static sets above cannot make that distinction and
+	 * do not need to: every name in them is a keyword.
+	 * @param names the {@code *features*} entries, each printed as the symbol reads
+	 * ({@code ":X"} or {@code "X"})
+	 * @return the feature set
+	 */
+	public static Features ofRuntimeList(List<String> names) {
+		return new Features(List.copyOf(names), true);
+	}
+
+	/**
+	 * Returns this feature set widened by the given names, or {@code this} when they are
+	 * all present already. Four kinds of caller. Two are a feature ANNOUNCEMENT the
+	 * reader can see for itself: {@link FeaturePushes}, for a source's own literal
+	 * top-level push, and {@code AsdfSystems}, for a {@code .asd}'s
+	 * {@code :rontolisp-features} declaration -- what reaches the component files of the
+	 * systems a {@code .asd} defines, which its pushes do not. The third is the USER,
+	 * through the {@code --feature} command line option
+	 * ({@code RontoLispCli.declaredFeatures}), for the names a portable library's
+	 * {@code #+sbcl}/{@code #+clisp} chain expects from the host implementation and that
+	 * no announcement of ours could honestly make. The fourth is a read going form at a
+	 * time, for what the forms run before the next one pushed onto {@code *features*}.
+	 * Deliberately additive only -- nothing may switch OFF a backend feature and claim to
+	 * be that backend, and {@code --feature} additionally refuses to name one at all.
+	 * @param extra the feature names to add, without the leading colon
+	 * @return the widened feature set
+	 */
+	public Features with(List<String> extra) {
+		// A read widens its set before every form it reads, and the names are mostly
+		// there already: nothing is copied until one is not.
+		List<String> widened = null;
+		for (String name : extra) {
+			String canonical = featureName(name);
+			if ((widened == null ? this.names : widened).stream().noneMatch(canonical::equalsIgnoreCase)) {
+				if (widened == null) {
+					widened = new java.util.ArrayList<>(this.names);
+				}
+				widened.add(canonical);
+			}
+		}
+		return widened == null ? this : new Features(List.copyOf(widened));
+	}
+
+	/**
+	 * Returns the active feature names (without the leading colon), in a fixed order.
+	 * @return the feature names
+	 */
+	public List<String> names() {
+		return this.names;
+	}
+
+	/**
+	 * Returns the names no target claims: what {@code --feature} added over a target's
+	 * set. The target's own are the interpreter's names and its {@code rontolisp-*} ones,
+	 * which that option refuses. The compile-time evaluator's {@code *features*} starts
+	 * at the interpreter's set plus these, whatever the target.
+	 * @return the declared feature names
+	 */
+	public List<String> declaredNames() {
+		return this.names.stream()
+			.filter(name -> !INTERPRETER.contains(name)
+					&& !name.toLowerCase(java.util.Locale.ROOT).startsWith("rontolisp"))
+			.toList();
+	}
+
+	/**
+	 * Spells this set as strings, for a {@code %read-time-feature} marker to carry the
+	 * set its deferred guard is tested against; {@link #decode} reads it back.
+	 * @return the kind of set, then its names
+	 */
+	public List<String> encode() {
+		List<String> spelling = new java.util.ArrayList<>();
+		spelling.add(this.designators ? RUNTIME_SPELLING : STATIC_SPELLING);
+		spelling.addAll(this.names);
+		return spelling;
+	}
+
+	/**
+	 * Reads back a set {@link #encode} spelled.
+	 * @param spelling the kind of set, then its names
+	 * @return the set
+	 */
+	public static Features decode(List<String> spelling) {
+		if (spelling.isEmpty()
+				|| !RUNTIME_SPELLING.equals(spelling.get(0)) && !STATIC_SPELLING.equals(spelling.get(0))) {
+			throw new IllegalArgumentException("not an encoded feature set: " + spelling);
+		}
+		return new Features(List.copyOf(spelling.subList(1, spelling.size())),
+				RUNTIME_SPELLING.equals(spelling.get(0)));
+	}
+
+	/**
+	 * Returns whether the named feature is active. The comparison is case-insensitive and
+	 * tolerates a leading {@code :} or {@code #:} (feature expressions are keywords in
+	 * Common Lisp source).
+	 * @param feature the feature name
+	 * @return {@code true} if the feature is active
+	 */
+	public boolean contains(String feature) {
+		if (this.designators) {
+			String name = queriedDesignator(feature);
+			for (String candidate : this.names) {
+				if (listedDesignator(candidate).equals(name)) {
+					return true;
+				}
+			}
+			return false;
+		}
+		String name = featureName(feature);
+		for (String candidate : this.names) {
+			if (candidate.equalsIgnoreCase(name)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Evaluates a feature expression against this feature set: a symbol tests a single
+	 * feature, and {@code (and ...)}/{@code (or ...)}/{@code (not X)} (spelled bare or as
+	 * keywords) combine sub-expressions, mirroring Common Lisp.
+	 * @param expr the feature expression, as plain data
+	 * @return {@code true} if the expression is satisfied
+	 * @throws LispReadException if the expression is not a valid feature expression
+	 */
+	public boolean isEnabled(LispVal expr) {
+		return switch (expr) {
+			case LispSymbol sym -> contains(sym.name());
+			// nil never names an active feature (the #+nil comment idiom), and () is
+			// an empty (or).
+			case LispNil ignored -> false;
+			case LispCons cons -> isCompoundEnabled(cons);
+			default -> throw new LispReadException("Invalid feature expression: " + expr.print());
+		};
+	}
+
+	private boolean isCompoundEnabled(LispCons cons) {
+		if (!(cons.car() instanceof LispSymbol op) || !cons.isProperList()) {
+			throw new LispReadException("Invalid feature expression: " + cons.print());
+		}
+		List<LispVal> items = cons.toList();
+		List<LispVal> args = items.subList(1, items.size());
+		// The operator by its member name: a computed expression (#+#.(...)) spells it
+		// qualified, as swank's '(cl:and) does.
+		return switch (featureName(op.name().substring(op.name().lastIndexOf(':') + 1))) {
+			case "and" -> args.stream().allMatch(this::isEnabled);
+			case "or" -> args.stream().anyMatch(this::isEnabled);
+			case "not" -> {
+				if (args.size() != 1) {
+					throw new LispReadException("not expects exactly one feature expression: " + cons.print());
+				}
+				yield !isEnabled(args.get(0));
+			}
+			default ->
+				throw new LispReadException("Unknown feature expression operator " + op.name() + ": " + cons.print());
+		};
+	}
+
+	/**
+	 * A name out of the {@code *features*} list, normalized for comparison: the
+	 * upper-cased member name, prefixed with {@code ":"} when the entry IS a keyword --
+	 * which, for a list entry, is exactly when it prints with a leading colon. A package
+	 * prefix is dropped because a rontolisp symbol does not carry its package
+	 * ({@code .kb/reader-features.md}), so {@code FOO::X} and {@code BAR::X} are one name
+	 * here.
+	 */
+	private static String listedDesignator(String name) {
+		String text = name.startsWith("#:") ? name.substring(2) : name;
+		return text.startsWith(":") ? ":" + memberOf(text) : memberOf(text);
+	}
+
+	/**
+	 * A name out of a {@code #+}/{@code #-} feature EXPRESSION, normalized the same way
+	 * -- except that an UNQUALIFIED name is a keyword here, because the expression is
+	 * read with {@code *package*} bound to {@code KEYWORD} (CLHS 24.1.2.1.1). That is the
+	 * whole difference between the two sides, and the thing that makes {@code #+X} ask
+	 * about {@code :X} while a {@code *features*} holding the symbol {@code X} answers
+	 * no.
+	 */
+	private static String queriedDesignator(String feature) {
+		String text = feature.startsWith("#:") ? feature.substring(2) : feature;
+		return text.indexOf(':') < 0 || text.startsWith(":") ? ":" + memberOf(text) : memberOf(text);
+	}
+
+	private static String memberOf(String text) {
+		return text.substring(text.lastIndexOf(':') + 1).toUpperCase(Locale.ROOT);
+	}
+
+	private static String featureName(String name) {
+		String stripped = name.startsWith("#:") ? name.substring(2) : name.startsWith(":") ? name.substring(1) : name;
+		return stripped.toLowerCase(Locale.ROOT);
+	}
+
+}

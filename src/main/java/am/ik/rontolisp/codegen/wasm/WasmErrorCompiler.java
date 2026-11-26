@@ -1,0 +1,207 @@
+package am.ik.rontolisp.codegen.wasm;
+
+import java.util.List;
+
+import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.macro.LispMacroExpander;
+import am.ik.wasm.Instruction;
+import am.ik.wasm.Type;
+
+/**
+ * Compiles the internal {@code (%error message)} and {@code (%error-cond condition
+ * message)} primitives.
+ *
+ * <p>
+ * Outside EH mode both abort execution with a WASM trap: {@code unreachable} is
+ * stack-polymorphic, so it type-checks in any context (including a typed {@code if}
+ * branch that expects a result value). The arguments are not evaluated (a WASM trap
+ * carries no message).
+ *
+ * <p>
+ * In EH mode (the program uses {@code handler-case}/{@code ignore-errors}/
+ * {@code unwind-protect}) both evaluate their arguments, build the {@code $lisp-cond}
+ * payload -- a cons {@code (condition-instance . message-string)}, the instance being nil
+ * for a plain {@code %error} -- and {@code throw} it, so an enclosing
+ * {@code handler-case} (or an unwind-protect cleanup pass) can intercept it.
+ * {@code throw} is stack-polymorphic like {@code unreachable}, so the call sites need no
+ * change. An uncaught throw is converted back into a trap by the entry functions'
+ * catch_all wrapper (see {@link WasmEmitHelper#emitCatchAllPrologue}).
+ */
+final class WasmErrorCompiler {
+
+	private WasmErrorCompiler() {
+	}
+
+	/**
+	 * Compiles {@code (%error message)}: the condition instance slot is nil. The message
+	 * operand IS the payload a handler-case landing synthesizes its {@code simple-error}
+	 * from, and the only text the entry landing pad has, so it always compiles.
+	 */
+	static void compile(LispCons cons, WasmLispCompiler.Ctx ctx) {
+		if (!ctx.ehMode) {
+			ctx.writer.write(Instruction.UNREACHABLE);
+			return;
+		}
+		List<LispVal> parts = cons.toList();
+		ctx.writer.write(Instruction.REF_NULL);
+		ctx.writer.writeHeapType(Type.EQ.code());
+		if (ctx.unreadReports) {
+			emitUnreadMessage(parts.get(1), ctx);
+		}
+		else {
+			WasmExprCompiler.compileExpr(parts.get(1), ctx);
+		}
+		emitThrowPayload(ctx);
+	}
+
+	/**
+	 * Pushes nil for a message nothing reads, past whatever evaluating it would do but
+	 * build text: a message rendered from a signal's arguments reads their temporaries.
+	 */
+	private static void emitUnreadMessage(LispVal message, WasmLispCompiler.Ctx ctx) {
+		if (!LispMacroExpander.buildsTextOnly(message)) {
+			WasmExprCompiler.compileForEffect(message, ctx);
+		}
+		ctx.writer.write(Instruction.REF_NULL);
+		ctx.writer.writeHeapType(Type.EQ.code());
+	}
+
+	/**
+	 * Compiles {@code (%error-cond condition message)}. The payload cdr carries only what
+	 * the entry landing pad cannot rebuild from the instance: the handler-case landing
+	 * reads the cdr only to synthesize a {@code simple-error} when the instance (car) is
+	 * nil -- and every {@code %error-cond} site passes a real instance -- so the cdr's
+	 * one reader here is that pad ({@link WasmUncaughtReportCompiler}), which renders the
+	 * text through {@code %signal-text} itself. A message that IS the report (a class
+	 * with its own {@code :report}) therefore compiles to nil; of a message
+	 * {@link LispMacroExpander#conditionReportFallback} recognizes only the fallback
+	 * compiles -- what a report-less class says of itself, its {@code (TYPE :INITARG v)}
+	 * as written, gone once the instance is built -- which {@code %signal-text} renders
+	 * when the instance reports nothing. A program with NO report renderer
+	 * ({@code routesConditionReports} off) constructs no condition at a source site, so
+	 * the only {@code %error-cond} is the {@code %program-error} lowering's, whose
+	 * message rides the cdr exactly as a plain {@code %error}'s does.
+	 */
+	static void compileCond(LispCons cons, WasmLispCompiler.Ctx ctx) {
+		if (!ctx.ehMode) {
+			ctx.writer.write(Instruction.UNREACHABLE);
+			return;
+		}
+		List<LispVal> parts = cons.toList();
+		WasmExprCompiler.compileExpr(parts.get(1), ctx);
+		LispVal text = !ctx.closRegistry.routesConditionReports() ? parts.get(2)
+				: LispMacroExpander.conditionReportFallback(parts.get(2));
+		emitThrowPayload(ctx, LispMacroExpander.handlersRan(parts), () -> {
+			if (text != null && ctx.unreadReports) {
+				emitUnreadMessage(text, ctx);
+			}
+			else if (text != null) {
+				WasmExprCompiler.compileExpr(text, ctx);
+			}
+			else {
+				ctx.writer.write(Instruction.REF_NULL);
+				ctx.writer.writeHeapType(Type.EQ.code());
+			}
+		});
+	}
+
+	/**
+	 * Emits the payload construction and throw: the stack holds (instance, message); they
+	 * are consed and thrown on the {@code $lisp-cond} tag.
+	 * @param ctx the compilation context
+	 */
+	static void emitThrowPayload(WasmLispCompiler.Ctx ctx) {
+		WasmEmitHelper.emitNewCons(ctx);
+		ctx.writer.write(Instruction.THROW);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TAG_LISP_COND);
+	}
+
+	/**
+	 * Emits the payload construction and throw over the instance on the stack, the
+	 * message being what {@code message} pushes -- in the payload saying the
+	 * {@code handler-bind} handlers already ran for the instance when
+	 * {@code handlersRan}: {@code (instance . (nil . message))}. Its cdr is then a cons
+	 * opening on nil, which no message is (a string, a character vector or nil), so a
+	 * {@code %hb-guard} pad tells the two shapes apart ({@link #emitSaysHandlersRan}) and
+	 * passes such a payload on untouched, and the entry pad reads the message out of it
+	 * ({@link #emitUnwrapMessage}). The message rides a CDR, as in every other payload:
+	 * in a car it would be a string where the module's type-test fold
+	 * ({@code .kb/wasm-ref-type-fold.md}) proved no cons car holds one, and the string
+	 * and sequence runtime it had pruned came back (+1,066 B on a minimal restart-mode
+	 * module, measured 2026-09-27). The fact rides the payload wherever the condition
+	 * goes (a failed future, an unwind-protect's rethrow, a handler-case that declines
+	 * it), since a cleanup may signal and handle a condition of its own while this one is
+	 * on its way out.
+	 * @param ctx the compilation context
+	 * @param handlersRan whether the payload says the handlers ran
+	 * @param message pushes the message
+	 */
+	static void emitThrowPayload(WasmLispCompiler.Ctx ctx, boolean handlersRan, Runnable message) {
+		if (handlersRan) {
+			ctx.writer.write(Instruction.REF_NULL);
+			ctx.writer.writeHeapType(Type.EQ.code());
+		}
+		message.run();
+		if (handlersRan) {
+			WasmEmitHelper.emitNewCons(ctx);
+		}
+		emitThrowPayload(ctx);
+	}
+
+	/**
+	 * Emits the unwrapping of a payload message read into {@code messageSlot} (the
+	 * payload's cdr): when the payload says the handlers ran
+	 * ({@link #emitThrowPayload(WasmLispCompiler.Ctx, boolean, Runnable)}) the slot holds
+	 * {@code (nil . message)} and is replaced by the message. Only a restart-mode program
+	 * throws that shape, so a reader emits this under restart mode alone.
+	 * @param ctx the compilation context
+	 * @param messageSlot the local holding the payload's cdr
+	 */
+	static void emitUnwrapMessage(WasmLispCompiler.Ctx ctx, int messageSlot) {
+		emitSaysHandlersRan(ctx, messageSlot);
+		ctx.writer.write(Instruction.IF, WasmLispCompiler.BLOCKTYPE_EMPTY);
+		ctx.wasmCtrlDepth++;
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(messageSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.writeUnsignedLeb128(1);
+		ctx.writer.write(Instruction.SET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(messageSlot);
+		ctx.wasmCtrlDepth--;
+		ctx.writer.write(Instruction.END);
+	}
+
+	/**
+	 * Pushes whether a payload's cdr, in a local, says the handlers ran: a cons whose car
+	 * is nil. A site's {@code (type initarg value ...)} is a cons too, but opens on its
+	 * type.
+	 * @param ctx the compilation context
+	 * @param slot the local holding the payload's cdr
+	 */
+	static void emitSaysHandlersRan(WasmLispCompiler.Ctx ctx, int slot) {
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(slot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.write(Instruction.IF, Type.I32.code());
+		ctx.wasmCtrlDepth++;
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(slot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.writeUnsignedLeb128(0);
+		ctx.writer.write(Instruction.REF_IS_NULL);
+		ctx.writer.write(Instruction.ELSE);
+		ctx.writer.write(Instruction.I32_CONST);
+		ctx.writer.writeSignedLeb128(0);
+		ctx.wasmCtrlDepth--;
+		ctx.writer.write(Instruction.END);
+	}
+
+}

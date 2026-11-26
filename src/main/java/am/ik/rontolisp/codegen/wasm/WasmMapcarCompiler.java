@@ -1,0 +1,152 @@
+package am.ik.rontolisp.codegen.wasm;
+
+import java.util.ArrayList;
+import java.util.List;
+
+import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispNames;
+import am.ik.rontolisp.LispVal;
+import am.ik.wasm.Instruction;
+import am.ik.wasm.Type;
+
+/**
+ * Compiles the {@code mapcar} built-in function. Generates a block/loop that applies a
+ * function to the parallel elements of one or more lists, building a new list using the
+ * sentinel/tail-mutation pattern. With multiple lists the loop stops at the shortest list
+ * (Common Lisp semantics).
+ */
+final class WasmMapcarCompiler {
+
+	private WasmMapcarCompiler() {
+	}
+
+	static void compile(LispCons cons, WasmLispCompiler.Ctx ctx) {
+		List<LispVal> args = cons.toList();
+		int nLists = args.size() - 2;
+		if (nLists < 1) {
+			throw new UnsupportedOperationException(LispNames.MAPCAR
+					+ " expects at least 2 arguments (a function and one list), got " + (args.size() - 1));
+		}
+		// Compile the function designator: a literal one is called directly, anything
+		// else goes through the arity dispatcher.
+		WasmDesignatorCall call = WasmDesignatorCall.prepare(args.get(1), nLists,
+				() -> WasmLispCompiler.mapDispatchFuncIndex(LispNames.MAPCAR, nLists, ctx), ctx);
+
+		// Compile each list expression; the walk's end checks it is a list.
+		List<Integer> listSlots = new ArrayList<>();
+		for (int i = 0; i < nLists; i++) {
+			WasmExprCompiler.compileExpr(args.get(2 + i), ctx);
+			int listSlot = ctx.allocTemp();
+			ctx.writer.write(Instruction.SET_LOCAL);
+			ctx.writer.writeUnsignedLeb128(listSlot);
+			listSlots.add(listSlot);
+		}
+
+		// Create sentinel cons: struct.new TYPE_CONS (null, null)
+		ctx.writer.write(Instruction.REF_NULL);
+		ctx.writer.writeHeapType(Type.EQ.code());
+		ctx.writer.write(Instruction.REF_NULL);
+		ctx.writer.writeHeapType(Type.EQ.code());
+		WasmEmitHelper.emitNewCons(ctx);
+		int headSlot = ctx.allocTemp();
+		ctx.writer.write(Instruction.SET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(headSlot);
+
+		// tail = head (sentinel)
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(headSlot);
+		int tailSlot = ctx.allocTemp();
+		ctx.writer.write(Instruction.SET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(tailSlot);
+
+		// block $exit / loop $cont
+		ctx.writer.write(Instruction.BLOCK, 0x40);
+		ctx.writer.write(Instruction.LOOP, 0x40);
+
+		// Break to $exit as soon as any list is no longer a cons (shortest list stops).
+		for (int listSlot : listSlots) {
+			ctx.writer.write(Instruction.GET_LOCAL);
+			ctx.writer.writeUnsignedLeb128(listSlot);
+			ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+			ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CONS);
+			ctx.writer.write(Instruction.I32_EQZ);
+			ctx.writer.write(Instruction.BR_IF, 1); // break to $exit
+		}
+
+		// Call the function with the car of each list
+		List<Runnable> cars = new ArrayList<>();
+		for (int listSlot : listSlots) {
+			cars.add(() -> emitCar(ctx, listSlot));
+		}
+		call.emitCall(ctx, cars);
+
+		// Create new cons: struct.new TYPE_CONS (mapped, null)
+		ctx.writer.write(Instruction.REF_NULL);
+		ctx.writer.writeHeapType(Type.EQ.code());
+		WasmEmitHelper.emitNewCons(ctx);
+		int newConsSlot = ctx.allocTemp();
+		ctx.writer.write(Instruction.SET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(newConsSlot);
+
+		// tail.cdr = newCons (struct.set)
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(tailSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(newConsSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_SET);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.writeUnsignedLeb128(1); // cdr
+
+		// tail = newCons
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(newConsSlot);
+		ctx.writer.write(Instruction.SET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(tailSlot);
+
+		// advance each list: list = cdr(list)
+		for (int listSlot : listSlots) {
+			ctx.writer.write(Instruction.GET_LOCAL);
+			ctx.writer.writeUnsignedLeb128(listSlot);
+			ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+			ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CONS);
+			ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+			ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+			ctx.writer.writeUnsignedLeb128(1); // cdr
+			ctx.writer.write(Instruction.SET_LOCAL);
+			ctx.writer.writeUnsignedLeb128(listSlot);
+		}
+
+		// br 0 (continue loop)
+		ctx.writer.write(Instruction.BR, 0);
+		ctx.writer.write(Instruction.END); // end loop
+		ctx.writer.write(Instruction.END); // end block
+		// Every cursor must be a list: nil ends one, any other atom -- an argument that
+		// was no list, a dotted list's tail -- is the operator's type-error (EH mode; a
+		// trap outside it).
+		for (int listSlot : listSlots) {
+			WasmEmitHelper.emitListCheck(ctx, listSlot, true);
+		}
+
+		// Result: head.cdr (cdr of sentinel)
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(headSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.writeUnsignedLeb128(1); // cdr
+	}
+
+	private static void emitCar(WasmLispCompiler.Ctx ctx, int slot) {
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(slot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.writeUnsignedLeb128(0); // car
+	}
+
+}

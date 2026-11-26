@@ -1,0 +1,188 @@
+# CL library loadability probes — ecosystem enablement over bespoke libraries
+
+Strategic decision (user, 2026-07-18): rontolisp's leverage is that real
+Common Lisp libraries load verbatim (split-sequence, cl-who, cl-base64,
+parse-number, cl-utilities, jzon in progress). For common needs — UUIDs,
+hashing, compression, markdown, pattern matching, URL resolution, routing —
+do NOT grow bespoke rontolisp-only libraries; instead, probe the widely-used
+community library for each need, record what blocks it, and fix the
+blocking INFRASTRUCTURE. Each fixed gap unlocks many libraries; a bespoke
+library unlocks one need.
+
+## Probe list (rough ascending expected difficulty; dependency claims need
+verification against the actual Quicklisp dist at probe time)
+
+| Need | Library to probe | Expected gates |
+|---|---|---|
+| UUID v4/v7 | `frugal-uuid` | small; good first probe |
+| inflate/gzip | `chipz` | `(unsigned-byte 8)` typed arrays, declaim idioms |
+| deflate | `salza2` | same family as chipz |
+| URL parse + RFC 3986 relative resolution | `puri` | small pure CL |
+| float bit encoding | `ieee-floats` | small; useful for later binary formats |
+| utility substrate | `alexandria` | THE most-depended-on library; every symbol that fails is high-leverage |
+| regex | `cl-ppcre` | large macro-generated dispatch; second-biggest unlock |
+| pattern matching | `trivia` | `symbol-macrolet` (known gate, same as anaphora) + alexandria |
+| markdown | `3bmd` | `esrap` (PEG parser, macro-heavy — a good stress test on its own) |
+| crypto/hashing | `ironclad` | heavy typed 32-bit arithmetic idioms; farthest out |
+
+## Method per probe
+
+1. `(ql:quickload "<system>")` on the interpreter against the live dist.
+2. Record the FIRST failure verbatim; classify: missing CL operator /
+   numeric model (bignum, 64-bit) / CLOS-MOP / reader feature / declaration
+   idiom.
+3. Recurring gaps become their own todos (precedent: `symbol-macrolet` from
+   anaphora, `tagbody`/`#.` compile path from jzon in `.todo/146`).
+4. A library that loads follows the integration checklist: E2E test via
+   `AsdfLibraryE2eSupport`, `guides/asdf-systems.md` entry (en+ja),
+   `examples/asdf` demo + README row — then the interpreter -> JVM -> WASM
+   wiring order for any language feature it forced.
+
+## Known gates already on record (do not rediscover)
+
+- `symbol-macrolet` — blocks anaphora, likely trivia.
+- 64-bit/bignum numerics — blocks jzon's float parse/print path.
+- `tagbody`/`go` + `#.` on the compile path — `.todo/146`.
+- Gray streams — `GrayStreamsLibrary` exists (jzon work); flexi-streams
+  would test its generality.
+
+## Probe results
+
+- **`alexandria` — DONE (2026-07-30).** It became loadable during the
+  cl-postgres pass (`.todo/115`) and every dependent since (cl-postgres, s-sql,
+  postmodern, quri) has ridden on it, but nothing pinned it on its own. The
+  integration checklist above is now complete: the sources are vendored
+  unmodified under `src/test/resources/alexandria`, `AlexandriaE2eTest` runs the
+  public API of both packages on all four backends via `AsdfLibraryE2eSupport`,
+  `examples/asdf/alexandria-demo.lisp` + the README row are the same program, and
+  the guide (en+ja) carries the row with its limitation list. Full account:
+  `.kb/asdf.md`'s alexandria entry.
+  - One correctness bug fell out of it: **`#'mapcar` as a first-class value
+    dropped every list but the first on both compile backends** (silently --
+    `alexandria:mappend` is `(apply #'mapcar function lists)`). Fixed in the same
+    pass (`BuiltinFunctionWrappers.mapcarWrapper`); the rest of the map family
+    stays divergent, `.todo/218`.
+  - Those four missing primitives (`coerce` to a computed result type,
+    `(last list n)`, multi-sequence `every`, `read-sequence` into a character
+    buffer) are CLOSED -- `.todo/219`, 2026-07-30. Only `type=` is still dark
+    (`subtypep`'s secondary value, `.todo/214`).
+- **`cl-ppcre`, `ironclad` — DONE** (see `.kb/asdf.md`); both are on the guide's
+  loadable list.
+- **`chipz` — DONE (2026-08-10).** The real 0.8 sources load and inflate gzip /
+  zlib / deflate on all four backends; the CRC32-only `AsdOverrides` slice is
+  retired (`.kb/asdf.md`, `.kb/mito.md`), `ChipzE2eTest` pins it,
+  `examples/asdf/chipz-demo.lisp` + the guide row are in, and
+  `size-report/programs/zlib` is built on it. Three infrastructure gaps fell out,
+  each fixed for everyone rather than for chipz:
+  - **`fill` did not exist.** A standard CL function; now a shared macro
+    expansion over `%row-major-aset`/`rplaca` with the `replace` string
+    deviation. salza2 wanted it too.
+  - **`make-array :element-type` ignored a `deftype` alias**, so
+    `:element-type 'octet` built a general array of `nil` instead of a packed
+    vector of `0` (`.kb/packed-integer-vectors.md`). md5's `ub32` buffers and
+    flexi-streams' `octet` buffers pack now as a side effect.
+  - **The wasm Gray-streams pre-pass rewrote a defclass SLOT named after a
+    stream built-in as if it were a call** (`.kb/gray-streams.md`), and **a
+    `funcall` past `MAX_CALLABLE_ARITY` compiled to a call-time signal** instead
+    of routing through `apply`'s spread dispatcher.
+- **`jose` (JWT/JOSE) + `cl-json` + `trivial-utf-8` — DONE (2026-08-18,
+  `.todo/419`).** All three are vendored and load UNPATCHED; `encode` / `decode`
+  / `inspect-token` over HS256/384/512, RS*/PS* and `none` answer identically on
+  all four backends and identically to SBCL on the same sources, and upstream's
+  own `jose/tests/jwt` suite runs green under `rontolisp test`. The six blockers
+  the probe found each closed on their own child todo (420 `.asd` widenings, 411
+  `unread-char` on a handle, 421 `logtest`, 422 `loop for VAR fixnum =`, 423
+  `progv` on the compile paths, 424 the ironclad SHA-384/512 + RSA slice); the
+  two found while finishing were general too — `with-input-from-string` over a
+  mutable character vector on the JVM, and a multi-pair `setq` whose later value
+  form builds a closure. See the jose section of `.kb/asdf.md`.
+- **`salza2` (deflate) — verified loadable, deliberately not kept.** 2.1 gzips
+  correctly on all four backends once the `deftype`-alias fix above is in (it was
+  the library that surfaced it). It is not vendored: nothing in the repo consumes
+  compression, and the size-report row wanted the DECOMPRESSOR to be comparable
+  with the cross-language table. `(ql:quickload "salza2")` is all it takes to
+  bring back; known limits at the time: `salza2:reset` needs `fill` (now present,
+  unretested), and `stream.lisp`'s `compressing-stream` compiles with an
+  undefined `stream-error-stream` (a condition accessor no part of the Gray
+  protocol supplies, `.kb/gray-streams.md`; unowned).
+
+- **Probe round 2026-10-30 (interpreter, live dist).** First failure per library, and the
+  todo that owns it:
+  - `yason` -- DONE: pinned (ci-spec `yason-enablement-language-group`), guide row, `.kb/asdf.md`.
+    Fell out: `check-type` now signals a `simple-type-error`.
+  - `fiveam` -- loads unpatched and runs on the interpreter, asdf-flv's file-local `*suite*`
+    included (h30, h31 done). Compiled: the JVM stops on a `nil` hash key (h56); wasm loads,
+    then `run!` needs the run-time `compile` of a test body.
+  - `parachute`, `plump` -- `compiler-macro-function` (documentation-utils, h32). parachute
+    then runs. plump then needed a symbol that was only read (h34, done): it matches SBCL on
+    the interpreter, and on the JVM through the home packages' names (`plump:` re-exports
+    by a run-time `do-external-symbols` loop, 386); both WASM backends trap in `parse` (h63).
+  - `log4cl` -- `makunbound` (h32), then bt `thread-name` / semaphores (h37), then its deprecated
+    forwarders' `(setf (macro-function ...) (lambda ...))` (i03). It loads and logs on the
+    interpreter. Compiled to a class, it stops on a closure over a `handler-case` clause variable
+    (i35). Measured 2026-11-04.
+  - `parachute` runs compiled on all four backends, `with-fixtures` and `define-test` (i16,
+    measured 2026-11-05).
+  - `lparallel` -- bt condition variables (h37).
+  - `serapeum` loads and matches SBCL on the interpreter (measured 2026-11-05). `spinneret` too, since i89
+    (2026-11-07); its JVM compile stops in serapeum on i99.
+  - `cl-interpol`, `cl-csv` -- named-readtables: `:common-lisp` feature (h31), then the
+    `readtable` class (h53). cl-csv's `.asd` first (h35).
+- **Probe round 2 (2026-10-30), compared against SBCL 2.2.9 on the same sources.**
+  - Load and match SBCL: `metabang-bind`, `arrow-macros`, `cl-slug`, `do-urlencode`,
+    `cl-yaml` (cffi + libyaml; only the table test differs, h47), `trivial-types`
+    (parameterized types since h42, interpreter and JVM; wasm does not compile it, h61).
+  - Load, wrong result: `3bmd` (warning, h39), `optima` (h40 done: `match` runs on the interpreter), `zpng` (h41),
+    `lisp-unit` (h45), `cl-markup` (h46), `st-json` (h51), `uuid` v5 (h48), `cl-annot` (h53),
+    `lass` (a block keeps only its first property: h46; `~&` inside `~@[`: `.todo/001`).
+  - Do not load: `fset` (h43), `vecto` (h44), `djula` (h49, h59, h72, h73, i44 done: loads and renders on
+    the interpreter, measured 2026-11-05), `hunchentoot` (h50 done:
+    `cl-fad` loads and runs; next `flex:make-external-format`, h52),
+    `cl-smtp` (h48), `drakma` (h52), `cl-csv`/`function-cache`/
+    `cl-containers`/`cl-pdf` (h35), `jonathan`/`cl-redis`/`parenscript` (h53),
+    `cl-store` (implementation guard), `screamer` (not in the dist).
+- **Probe round 3 (2026-10-31), interpreter first; SBCL 2.2.9 loads all ten over the same tree.**
+  - Load and run on all four: `cl-dot` (`generate-graph-from-roots` + `print-graph`).
+  - Interpreter only: `cl-heap` (JVM/WASM: h84), `lquery` (`$ ... (text)` answers `#("x")` as
+    SBCL; JVM/WASM: `plump:node` not external, the computed re-export of 386).
+  - Load, report fails: `trivial-benchmark` (`with-timing`'s table, h85).
+  - Do not load: `cl-qrencode` (h82, then h83 compiled), `cl-ansi-text` (h81), `cl-graph`
+    (h79), `fare-quasiquote` (no `:asdf3`; loads as of 2026-11-05), `contextl`, `lisp-binary` (h80).
+- **Probe round 4 (2026-11-04), chosen for how they use ASDF; SBCL 2.2.9 loads all ten over the same
+  releases.** None loads unpatched. "Walked" = a scratch copy of the source patched past each stop;
+  the order is what each library stops on in turn.
+  - `prove`: h95 (`load-source-op`). Walked: runs on the interpreter. `:test-file` h93; compiled h96.
+  - `clingon`: h94 (`#P`), i07. Walked: matches SBCL on the interpreter. Compiled i08, then 386.
+  - `caveman2`: i04 (`character`), h95 (`*central-registry*`), i02. Walked: routes answer as SBCL on
+    the interpreter. Compiled h96.
+  - `cxml`: i06, i00, h95 (slot read). Walked: loads, then i01 on every parse. Compiled i09.
+  - `opticl`: i04 (`compile`), h94 (`:encoding`), h99. Walked without pngload: writes the PNG SBCL writes.
+  - `coalton`: h94 (`:around-compile`), h98. Further unmeasured.
+  - `clim`: i05, i06, h97. Further unmeasured.
+  - `sento`: i03, h97 (both in log4cl). Further unmeasured.
+  - `hu.dwim.def`: the `:asdf3` features and `asdf` as a system (both there since), h93, h95. Further unmeasured.
+  - `clsql`: i07 (`uffi`), i06. Further unmeasured.
+  - Not usable as probes: `april` (its `cape` dependency is not in the dist index); `cl-protobufs` and
+    `numcl` (not in the index); `iolib` (needs libfixposix, not installed).
+- **Probe round 5 (2026-11-06), ten libraries no earlier round touched; interpreter first, compared
+  with SBCL 2.2.9 over the same cached releases.**
+  - Load and match SBCL: `chanl` (bounded/unbounded channels, `select`, `pexec`; JVM too),
+    `deploy` (`deploy-op` over `program-op`; `asdf:make` refuses, i83).
+  - Load, wrong result: `cl-conspack` (doubles encoded as float32, i90; JVM the same).
+  - Since loaded: `snooze` (since i91, 2026-11-07: a `defroute`'s `handle-request` results as
+    SBCL on all four and `--native`; `.kb/clos.md`, "A class defined below the top level"),
+    `cl-unification` (all four, as SBCL; `.kb/asdf.md`, "Libraries that load"),
+    `sycamore` (since i85: ropes, tree sets / maps, hash sets and `cgen`'s `|?:|` as SBCL on the
+    interpreter, the JVM and P1), `40ants-doc` (interpreter, as SBCL, since i87; the compile paths
+    stop in serapeum on i99).
+  - Interpreter only: `generic-cl` (since i88, 2026-11-07; JVM i97).
+  - Do not load: `petalisp` (i86 in queues, then i90 and j01 in typo, which now stops on
+    j03), `osicat` (cffi-grovel refused, i84).
+  - Side results: `lparallel` loads now (its h37 stop is gone); `asdf:load-system` of a
+    `:defsystem-depends-on` that only Quicklisp holds is `.todo/418`.
+
+## Deliverable
+
+Per probe: either the library loads end-to-end (checklist complete), or a
+concrete gap list feeding new todos. Track probe results in this file as
+they happen.

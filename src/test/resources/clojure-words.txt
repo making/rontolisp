@@ -1,0 +1,7 @@
+apple
+Banana
+fig
+cherry
+DATE
+kiwi
+

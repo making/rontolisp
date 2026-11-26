@@ -1,0 +1,23 @@
+package root:logging;
+
+// The wasi:logging surface logging.lisp binds under --component --wasi-logging, an
+// APPENDED USER IMPORT as exit.wit's is: only a program built with the flag that logs
+// imports it. The names and the types of the logging interface of wasi:logging
+// 0.1.0-draft (github.com/WebAssembly/wasi-logging, which states no licence), written
+// here: they are what an implementation has to share, and no text of the proposal is
+// taken (.kb/java-frontend-provenance.md).
+
+package wasi:logging@0.1.0-draft {
+  interface logging {
+    enum level {
+      trace,
+      debug,
+      info,
+      warn,
+      error,
+      critical,
+    }
+
+    log: func(level: level, context: string, message: string);
+  }
+}

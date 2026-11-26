@@ -1,0 +1,19415 @@
+package am.ik.rontolisp.codegen.jvm;
+
+import am.ik.rontolisp.CharacterFilePositionFixture;
+import am.ik.rontolisp.HelperWrapperFixture;
+import am.ik.rontolisp.MethodedBuiltinFixture;
+import am.ik.rontolisp.BuiltinFunctionValueCountFixture;
+import am.ik.rontolisp.MethodedBuiltinTailFixture;
+import am.ik.rontolisp.OutputStreamStringKindFixture;
+import am.ik.rontolisp.PeekPushbackFixture;
+import am.ik.rontolisp.IgnoredArgumentFixture;
+import am.ik.rontolisp.SequenceBoundsFixture;
+import am.ik.rontolisp.StringComparisonBoundsFixture;
+import am.ik.rontolisp.SearchMismatchBoundsFixture;
+import am.ik.rontolisp.ParseIntegerBoundsFixture;
+import am.ik.rontolisp.ParseIntegerSyntaxFixture;
+import am.ik.rontolisp.RadixRangeFixture;
+import am.ik.rontolisp.ReadFeatureGuardFixture;
+import am.ik.rontolisp.ReadFromStringLambdaListFixture;
+import am.ik.rontolisp.ReadFromStringMalformedFixture;
+import am.ik.rontolisp.ReadLineValuesFixture;
+import am.ik.rontolisp.ScaleFloatOperandsFixture;
+import am.ik.rontolisp.StreamOperandErrorsFixture;
+import am.ik.rontolisp.FormatSpelledNumbersFixture;
+import am.ik.rontolisp.StringNilStartFixture;
+import am.ik.rontolisp.SubseqBoundsFixture;
+import am.ik.rontolisp.BoundedStringBoundsFixture;
+import am.ik.rontolisp.runtime.RontoHttpServer;
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.PrintStream;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
+import java.net.URL;
+import java.net.URLClassLoader;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.stream.IntStream;
+
+import static java.util.stream.Collectors.joining;
+
+import am.ik.rontolisp.FastPathEvaluationOrderFixture;
+import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.compiler.OptimizeLevel;
+import am.ik.rontolisp.macro.FoldDifferential;
+import am.ik.rontolisp.reader.LispReader;
+import am.ik.rontolisp.testsupport.CliStackExtension;
+import am.ik.rontolisp.testsupport.CorpusFixtures;
+import am.ik.rontolisp.testsupport.DeclaredArityReportPrograms;
+import am.ik.rontolisp.testsupport.DeclaredIntegerProgram;
+import am.ik.rontolisp.testsupport.HashTableCopyPrograms;
+import am.ik.rontolisp.testsupport.HashTableKeyPrograms;
+import am.ik.rontolisp.testsupport.LoweredBuiltinValues;
+import am.ik.rontolisp.testsupport.MaskSignedFieldProgram;
+import am.ik.rontolisp.testsupport.RunProgramPrograms;
+import am.ik.rontolisp.testsupport.SocketTest;
+import am.ik.rontolisp.testsupport.StringStreamPrograms;
+import am.ik.rontolisp.testsupport.ThreadStdio;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.api.parallel.Execution;
+import org.junit.jupiter.api.parallel.ExecutionMode;
+import org.junit.jupiter.api.parallel.ResourceAccessMode;
+import org.junit.jupiter.api.parallel.ResourceLock;
+import org.junit.jupiter.api.parallel.Resources;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.catchThrowable;
+import static org.assertj.core.api.Assertions.within;
+
+@Execution(ExecutionMode.CONCURRENT)
+@ExtendWith(CliStackExtension.class)
+class JvmLispCompilerTest {
+
+	@TempDir
+	Path tempDir;
+
+	private String compileAndRun(String lispCode) throws Exception {
+		// mirror the CLI pipeline's prelude splice (equalp/string</read-all) so the
+		// prelude-backed built-ins resolve like they do in a real compile
+		return compileAndRun(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString(lispCode)));
+	}
+
+	// The compile-path twin of
+	// LispEvaluatorTest#readWriteSequenceMovesABfloat16ArrayAsItsStoredPatterns: a #bf16
+	// array moves as its stored patterns, two little-endian bytes an element, in ONE
+	// bulk transfer through _readSeqPacked / _writeSeqPacked's short[] arm -- whose data
+	// offset is 1 + 2 * rank, the only arm in that method where it is not 1 + rank
+	// (JvmPackedFloatWidth's two-slots-per-dimension header). The value is chosen so a
+	// byte swap could not pass: bf16 0x3F80 is exactly 1.0, swapped 0x803F is a tiny
+	// negative denormal (.kb/bfloat16.md).
+	@Test
+	void compileAndRunReadWriteSequenceMovesABfloat16ArrayAsItsStoredPatterns() throws Exception {
+		String file = this.tempDir.resolve("bf16.dat").toString().replace("\\", "\\\\");
+		assertThat(compileAndRun("""
+				(defvar *src* (make-array 3 :element-type 'bfloat16))
+				(setf (aref *src* 0) 1.0)
+				(setf (aref *src* 1) -2.0)
+				(setf (aref *src* 2) 0.5)
+				(with-open-file (out "%s" :direction :output :element-type '(unsigned-byte 8)
+				                 :if-exists :supersede)
+				  (write-sequence *src* out))
+				(defvar *bits* (make-array 3 :element-type '(unsigned-byte 16)))
+				(with-open-file (in "%s" :element-type '(unsigned-byte 8))
+				  (read-sequence *bits* in))
+				(defvar *back* (make-array 3 :element-type 'bfloat16))
+				(with-open-file (in "%s" :element-type '(unsigned-byte 8))
+				  (print (read-sequence *back* in)))
+				(print (aref *bits* 0))
+				(print (aref *back* 0))
+				(print (aref *back* 1))
+				(print (aref *back* 2))
+				""".formatted(file, file, file)))
+			.as("bf16 1.0 is 0x3F80 = 16256; a byte swap would read 0x803F = 32831")
+			.isEqualTo("3\n16256\n1.0\n-2.0\n0.5");
+	}
+
+	// A make-array whose :element-type is a RUNTIME value must pick the same
+	// representation the literal spelling picks -- this backend decides from the literal
+	// designator at the call site, so the runtime one is lowered back into literal arms,
+	// one per ArrayElementTypes code. The widths are taken FROM the enum rather than
+	// listed here: four hand-written copies of that list existed, all documented as
+	// covering seven codes and all spelling six, so bfloat16 through a runtime
+	// designator answered a BOXED general array. A list of seven in this
+	// test would have been the fifth copy.
+	//
+	// Both lowerings are covered. compileAndRun(String) splices the prelude, so the site
+	// becomes one call to %make-array-et; compileAndRun(List) does not, so the arms are
+	// spelled inline. The two must answer the same thing.
+	@Test
+	void compileAndRunMakeArrayWithARuntimeElementTypeMatchesTheLiteralSpelling() throws Exception {
+		StringBuilder program = new StringBuilder("(defun mk (n et) (make-array n :element-type et))\n");
+		StringBuilder expected = new StringBuilder();
+		for (int code : am.ik.rontolisp.ArrayElementTypes.specializedCodes()) {
+			String designator = am.ik.rontolisp.ArrayElementTypes.valueOf(code).print();
+			program.append("(print (array-element-type (mk 4 '").append(designator).append(")))\n");
+			program.append("(print (array-element-type (make-array 4 :element-type '")
+				.append(designator)
+				.append(")))\n");
+			expected.append(designator).append('\n').append(designator).append('\n');
+		}
+		String want = expected.toString().stripTrailing();
+		assertThat(compileAndRun(program.toString())).as("through the %make-array-et prelude helper").isEqualTo(want);
+		assertThat(compileAndRun(LispReader.readAllFromString(program.toString())))
+			.as("with the arms spelled inline at the call site")
+			.isEqualTo(want);
+	}
+
+	@Test
+	void aFoldedCallPrintsWhatTheRuntimeWouldHave() throws Exception {
+		// The pure-builtin fold renders in JAVA at compile time what the emitted class
+		// would have computed at run time, so the two have to agree character for
+		// character. Hiding the arguments behind a function parameter is what keeps the
+		// runtime in the picture; every table entry has a row
+		// (am.ik.rontolisp.macro.FoldDifferential).
+		FoldDifferential.assertNoDivergence(compileAndRun(FoldDifferential.program()));
+	}
+
+	// Gray-stream tests pre-process with LispPreludeLibrary.process +
+	// GrayStreamsLibrary.process, in the CLI pipeline's order: the dispatch helpers
+	// gray.lisp splices resolve their stream through the prelude's %stream-target.
+	private String compileAndRunGray(String lispCode) throws Exception {
+		return compileAndRun(am.ik.rontolisp.eval.GrayStreamsLibrary
+			.process(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString(lispCode))));
+	}
+
+	// unread-char tests pre-process with UnreadCharLibrary.process, in the CLI
+	// pipeline's order: it runs LAST, over the Gray rewrite's output, because a Gray
+	// dispatch helper's handle FALLBACK is itself a call site that must reach the cell.
+	private String compileAndRunUnread(String lispCode) throws Exception {
+		return compileAndRun(am.ik.rontolisp.eval.UnreadCharLibrary.process(am.ik.rontolisp.eval.GrayStreamsLibrary
+			.process(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString(lispCode)))));
+	}
+
+	// JSON tests pre-process with JsonLibrary.process, mirroring the compile-path
+	// pre-pass run by RontoLispCli.
+	private String compileAndRunJson(String lispCode) throws Exception {
+		return compileAndRun(am.ik.rontolisp.eval.JsonLibrary.process(LispReader.readAllFromString(lispCode)));
+	}
+
+	// linalg tests pre-process with LinalgLibrary.process, mirroring the compile-path
+	// pre-pass run by RontoLispCli.
+	private String compileAndRunLinalg(String lispCode) throws Exception {
+		return compileAndRun(am.ik.rontolisp.eval.LinalgLibrary.process(LispReader.readAllFromString(lispCode)));
+	}
+
+	// torch tests pre-process with TorchLibrary.process then LinalgLibrary.process,
+	// mirroring the compile-path pre-pass order run by RontoLispCli (torch first, so
+	// the linalg references inside the spliced torch defuns pull linalg in too).
+	private String compileAndRunTorch(String lispCode) throws Exception {
+		return compileAndRun(am.ik.rontolisp.eval.LinalgLibrary
+			.process(am.ik.rontolisp.eval.TorchLibrary.process(LispReader.readAllFromString(lispCode))));
+	}
+
+	// URL tests pre-process with UrlLibrary.process, mirroring the compile-path
+	// pre-pass run by RontoLispCli.
+	private String compileAndRunUrl(String lispCode) throws Exception {
+		return compileAndRun(am.ik.rontolisp.eval.UrlLibrary.process(LispReader.readAllFromString(lispCode)));
+	}
+
+	// usocket tests pre-process with UsocketLibrary.process, mirroring the compile-path
+	// pre-pass run by RontoLispCli.
+	private String compileAndRunUsocket(String lispCode) throws Exception {
+		return compileAndRun(am.ik.rontolisp.eval.UsocketLibrary.process(LispReader.readAllFromString(lispCode)));
+	}
+
+	private String compileAndRun(List<LispVal> program) throws Exception {
+		return compileAndRun(program, "");
+	}
+
+	private String compileAndRun(List<LispVal> program, String stdin) throws Exception {
+		JvmLispCompiler compiler = new JvmLispCompiler("Test");
+		byte[] classBytes = compiler.compile(program);
+		Path classFile = tempDir.resolve("Test.class");
+		Files.write(classFile, classBytes);
+		// Whatever travels beside the class -- a split program's Test$PartN classes
+		// included -- goes where the loader below looks.
+		for (Map.Entry<String, byte[]> travelling : compiler.runtimeClassFiles().entrySet()) {
+			Path target = tempDir.resolve(travelling.getKey());
+			Files.createDirectories(Objects.requireNonNull(target.getParent()));
+			Files.write(target, travelling.getValue());
+		}
+
+		try (URLClassLoader loader = new URLClassLoader(new URL[] { tempDir.toUri().toURL() },
+				ClassLoader.getSystemClassLoader())) {
+			Class<?> clazz = loader.loadClass("Test");
+			Method main = clazz.getMethod("main", String[].class);
+
+			ByteArrayOutputStream baos = new ByteArrayOutputStream();
+			try (var _ = ThreadStdio.out(baos);
+					var _ = ThreadStdio.in(new ByteArrayInputStream(stdin.getBytes(StandardCharsets.UTF_8)))) {
+				main.invoke(null, (Object) new String[0]);
+			}
+			return baos.toString().trim();
+		}
+	}
+
+	// The CLI pipeline's order: UserMacroExpander first (it is what expands a user
+	// macro, and what substitutes a spliced literal object's make-load-form), then the
+	// prelude splice.
+	private String compileAndRunExpanded(String lispCode) throws Exception {
+		return compileAndRun(am.ik.rontolisp.eval.LispPreludeLibrary
+			.process(am.ik.rontolisp.eval.UserMacroExpander.expand(LispReader.readAllFromString(lispCode))));
+	}
+
+	// The reference half of a differential: the same source through the INTERPRETER, so a
+	// compiled answer can be pinned against the implementation it must mirror instead of
+	// against a digit string the platform's Math rounding owns (.kb/jvm-complex.md).
+	private String interpret(String lispCode) {
+		ByteArrayOutputStream baos = new ByteArrayOutputStream();
+		am.ik.rontolisp.eval.LispEvaluator evaluator = new am.ik.rontolisp.eval.LispEvaluator(new PrintStream(baos));
+		for (LispVal expr : LispReader.readAllFromString(lispCode)) {
+			evaluator.eval(expr);
+		}
+		return baos.toString().trim();
+	}
+
+	// warn writes its "WARNING: ..." line to standard ERROR, which compileAndRun drops.
+	private String compileAndRunCapturingErr(String lispCode) throws Exception {
+		ByteArrayOutputStream err = new ByteArrayOutputStream();
+		try (var _ = ThreadStdio.err(err)) {
+			compileAndRun(lispCode);
+		}
+		return err.toString().trim();
+	}
+
+	@Test
+	void anUncaughtConditionReportsOneLineAndRethrowsWithoutATrace() throws Exception {
+		// The generated main's last exception-table entry: one line on standard error
+		// (the same one the interpreter and the wasm-GC landing pad write), then the
+		// SAME exception rethrown with an emptied trace, so the launcher's echo is one
+		// line and an in-process caller still observes the failure. Every reader sees the
+		// one rendering: a report is program code, and this one counts its runs.
+		ByteArrayOutputStream err = new ByteArrayOutputStream();
+		Throwable cause;
+		try (var _ = ThreadStdio.err(err)) {
+			cause = catchThrowable(() -> compileAndRun("""
+					(defvar *uc-runs* 0)
+					(define-condition uc-db (error) ((text :initarg :text :reader uc-db-text))
+					  (:report (lambda (c s) (format s "database error ~a: ~a" (incf *uc-runs*) (uc-db-text c)))))
+					(error 'uc-db :text "password authentication failed")
+					"""));
+		}
+		assertThat(err.toString().trim())
+			.isEqualTo("Unhandled condition: database error 1: password authentication failed");
+		assertThat(cause).isInstanceOf(InvocationTargetException.class);
+		Throwable signaled = ((InvocationTargetException) cause).getTargetException();
+		assertThat(signaled).isInstanceOf(RuntimeException.class)
+			.hasMessage("database error 1: password authentication failed")
+			.hasToString("java.lang.RuntimeException: database error 1: password authentication failed");
+		assertThat(signaled.getStackTrace()).isEmpty();
+	}
+
+	@Test
+	void anUncaughtReportlessInstanceNamesItsClass() throws Exception {
+		// (error c) over an instance whose class reports nothing: the same line the
+		// interpreter and the wasm-GC landing pad write.
+		ByteArrayOutputStream err = new ByteArrayOutputStream();
+		try (var _ = ThreadStdio.err(err)) {
+			catchThrowable(() -> compileAndRun("""
+					(define-condition uc-plain (error) ())
+					(error (identity (make-condition 'uc-plain)))
+					"""));
+		}
+		assertThat(err.toString().trim()).isEqualTo("Unhandled condition: Condition of type UC-PLAIN was signalled.");
+	}
+
+	@Test
+	void compileSetfFindClassRegistersAnAliasNameForTheSameClass() throws Exception {
+		// The alias joins the registry in the definition walk, so it is an extra SPELLING
+		// of the target's %class-meta-table% entry: the runtime %find-class memoizes one
+		// metaobject for both names, and the static make-instance / typep / handler-case
+		// resolutions see the target's class.
+		assertThat(compileAndRun("""
+				(defclass fca-shape () ((n :initarg :n :reader fca-n)))
+				(setf (find-class '<fca-shape>) (find-class 'fca-shape))
+				(define-condition fca-error (error) ((code :initarg :code :reader fca-code)))
+				(setf (find-class '<fca-error>) (find-class 'fca-error))
+				(print (list (eq (find-class '<fca-shape>) (find-class 'fca-shape))
+				             (fca-n (make-instance '<fca-shape> :n 7))
+				             (typep (make-instance 'fca-shape :n 1) '<fca-shape>)
+				             (class-name (find-class '<fca-shape>))
+				             (handler-case (error 'fca-error :code 42) (<fca-error> (e) (fca-code e)))))
+				""")).isEqualTo("(T 7 T FCA-SHAPE 42)");
+	}
+
+	@Test
+	void compileFindClassAnswersForTheBuiltInClassLatticeAndClassOfNarrowsArrays() throws Exception {
+		// The generated resolver's built-in fallback covers the INTERIOR of the lattice
+		// too (array/vector/bit-vector, number/real/rational, sequence/list,
+		// structure-object, built-in-class), and class-of narrows what the lite
+		// designator answers t for: a rank-1 array is a vector, anything else an array.
+		assertThat(compileAndRun("""
+				(print (list (mapcar (lambda (n) (class-name (find-class n)))
+				                     '(array vector bit-vector number real rational
+				                       sequence list structure-object built-in-class))
+				             (typep #(1 2) (find-class 'array))
+				             (typep 1 (find-class 'array))
+				             (typep 1 (find-class 'number))
+				             (subtypep (find-class 'vector) 'array)
+				             (class-name (class-of (make-array 3)))
+				             (class-name (class-of #2a((1 2) (3 4))))
+				             (class-name (class-of "ab"))
+				             (eq (class-of (make-array 3)) (find-class 'vector))))
+				"""))
+			.isEqualTo("((ARRAY VECTOR BIT-VECTOR NUMBER REAL RATIONAL SEQUENCE LIST STRUCTURE-OBJECT BUILT-IN-CLASS)"
+					+ " T NIL T T VECTOR ARRAY STRING T)");
+	}
+
+	@Test
+	void compileRuntimeErrorDispatchScalesPastTheBranchLimit() throws Exception {
+		// %error-runtime used to be ONE cond over every condition class, and
+		// past ~140 the outermost arm's else-branch overflowed the signed-16-bit
+		// branch encoding. The dispatch is chained now (%error-runtime -> %er-1 ->
+		// ...); 200 classes leave headroom past the old threshold, and the computed
+		// (error ty :initarg v) at the END of the chain must still dispatch -- RUN, not
+		// just compile: a segmentation bug is a VerifyError at class-load time.
+		StringBuilder program = new StringBuilder();
+		for (int i = 0; i < 200; i++) {
+			program.append("(define-condition big-e").append(i).append(" (simple-error) ())\n");
+		}
+		program.append("""
+				(define-condition big-last (error) ((who :initarg :who :reader big-last-who)))
+				(print (handler-case (error (car (list 'big-last)) :who 7)
+				         (big-last (e) (list :caught (big-last-who e)))))
+				""");
+		assertThat(compileAndRun(program.toString())).isEqualTo("(:CAUGHT 7)");
+	}
+
+	@Test
+	void compileRuntimeClassDesignatorResolvesAnInternedNonExportedName() throws Exception {
+		// rove's make-reporter is (make-instance (intern (format nil "~A-~A" style
+		// '#:reporter) package) ...): the compile paths have no package registry at run
+		// time, so intern always builds the single-colon EXTERNAL spelling
+		// (RCD-PKG:SPEC-REP) while the class is registered as RCD-PKG::SPEC-REP. Every
+		// generated designator dispatch matches both spellings, so the class need not be
+		// exported for make-instance / find-class / typep / subtypep / the
+		// condition-class arm of error to resolve it -- the interpreter's registry folds
+		// the same two spellings (ClosRegistry.normalize).
+		assertThat(compileAndRun("""
+				(defpackage :rcd-pkg (:use :cl))
+				(in-package :rcd-pkg)
+				(defclass spec-rep () ((s :initarg :s)))
+				(defclass sub-rep (spec-rep) ())
+				(define-condition rcd-err (error) ((k :initarg :k)))
+				(defun make-rep (style package)
+				  (make-instance (intern (format nil "~A-~A" style '#:rep) package) :s 7))
+				(in-package :cl-user)
+				(let ((n (intern "SPEC-REP" :rcd-pkg)))
+				  (print (slot-value (rcd-pkg::make-rep '#:spec (find-package :rcd-pkg)) 's))
+				  (print (eq (find-class n) (find-class 'rcd-pkg::spec-rep)))
+				  (print (typep (make-instance n :s 1) n))
+				  (print (subtypep (intern "SUB-REP" :rcd-pkg) n))
+				  (print (handler-case (error (intern "RCD-ERR" :rcd-pkg) :k 5)
+				           (rcd-pkg::rcd-err (c) (slot-value c 'k)))))
+				""")).isEqualTo("7\nT\nT\nT\n5");
+	}
+
+	@Test
+	void compileTypeOfAnswersAForeignPackageClassNameUnqualifiedByTheCurrentPackage() throws Exception {
+		// The JVM half of the type-of spelling contract (rove prints (type-of
+		// (assertion-reason f)) in its failure report): type-of interns the remainder of
+		// the %class- / %struct- tag, which for a class defined in another package is
+		// already a canonical PKG:NAME spelling, and the compile paths' intern is
+		// package-blind so it keeps that spelling. The interpreter used to home it into
+		// the CURRENT package instead (TOF-APP::TOF-LIB:WIDGET) -- pinned here so the
+		// four backends stay one answer
+		// (LispEvaluatorTest#evalTypeOfAnswersAForeignPackageClassNameUnqualifiedByTheCurrentPackage).
+		assertThat(compileAndRun("""
+				(defpackage :tof-lib (:use :cl) (:export :widget :make-w))
+				(in-package :tof-lib)
+				(defclass widget () ())
+				(defclass gadget () ())
+				(defstruct point x y)
+				(defun make-w () (make-instance 'widget))
+				(defun make-g () (make-instance 'gadget))
+				(defpackage :tof-app (:use :cl))
+				(in-package :tof-app)
+				(print (list (type-of (tof-lib:make-w))
+				             (type-of (tof-lib::make-g))
+				             (type-of (tof-lib::make-point :x 1 :y 2))))
+				(print (list (eq (type-of (tof-lib:make-w)) 'tof-lib:widget)
+				             (eq (type-of (tof-lib::make-g)) 'tof-lib::gadget)
+				             (eq (type-of (tof-lib::make-point :x 1 :y 2)) 'tof-lib::point)
+				             (eq (type-of (tof-lib:make-w)) (class-name (class-of (tof-lib:make-w))))
+				             (type-of 42)))
+				""")).isEqualTo("(TOF-LIB:WIDGET TOF-LIB::GADGET TOF-LIB::POINT)\n(T T T T INTEGER)");
+	}
+
+	@Test
+	void compileTypeOfAndTypepAnswerTheCompoundArraySpecifier() throws Exception {
+		// The JVM half of the array type lattice: type-of builds the compound specifier
+		// and the compound specifier is testable. Same program, same answers, as
+		// LispEvaluatorTest#evalTypeOfAndTypepAnswerTheCompoundArraySpecifier and
+		// WasmLispCompilerIntegrationTest#typeOfAndTypepAnswerTheCompoundArraySpecifier.
+		assertThat(compileAndRun("""
+				(print (list (type-of (make-array 4))
+				             (type-of (make-array '(2 3)))
+				             (type-of (make-array nil))
+				             (type-of (make-array 4 :element-type 'single-float))
+				             (type-of (make-array '(2 2) :element-type 'double-float))
+				             (type-of (make-array 4 :element-type '(unsigned-byte 8)))
+				             (type-of (make-array 4 :fill-pointer 0))
+				             (type-of (make-array 4 :adjustable t))
+				             (type-of "abc")))
+				(print (list (typep (make-array '(2 2) :element-type 'single-float) '(simple-array single-float (2 2)))
+				             (typep (make-array '(2 2) :element-type 'single-float) '(simple-array single-float (2 3)))
+				             (typep (make-array 4) '(simple-vector 4))
+				             (typep (make-array 4) '(simple-vector 3))
+				             (typep (make-array nil) '(simple-array t nil))
+				             (typep (make-array '(2 2)) '(simple-vector 4))
+				             (typep (make-array 4) '(simple-array t 1))
+				             (typep "abc" '(array * (3)))
+				             (typep "abc" '(simple-array t (3)))
+				             (typep (make-array 4 :element-type '(unsigned-byte 8)) '(vector (unsigned-byte 8) 4))
+				             (typep (make-array 4) '(vector (unsigned-byte 8)))))
+				(print (eq (array-element-type (make-array 4)) t))
+				""")).isEqualTo("((SIMPLE-VECTOR 4) (SIMPLE-ARRAY T (2 3)) (SIMPLE-ARRAY T NIL)"
+				+ " (SIMPLE-ARRAY SINGLE-FLOAT (4)) (SIMPLE-ARRAY DOUBLE-FLOAT (2 2))"
+				+ " (SIMPLE-ARRAY (UNSIGNED-BYTE 8) (4)) (VECTOR T 4) (VECTOR T 4) STRING)"
+				+ "\n(T NIL T NIL T NIL T T NIL T NIL)\nT");
+	}
+
+	@Test
+	void compileComputedCompoundTypeSpecifiers() throws Exception {
+		// The JVM half of the computed-COMPOUND type specifier: %typep-runtime routes a
+		// CONS specifier to %typep-compound-runtime, which reads the head and the
+		// arguments out of the specifier VALUE. Same program, same answers (SBCL
+		// 2.2.9's), as LispEvaluatorTest#evalComputedCompoundTypeSpecifiers and
+		// WasmLispCompilerIntegrationTest#computedCompoundTypeSpecifiers.
+		assertThat(compileAndRun("""
+				(defstruct tpc-pt x y)
+				(defun tpc (v s) (typep v s))
+				(print
+				  (list (list (let ((a (make-array 4))) (tpc a (type-of a)))
+				              (let ((a (make-array '(2 3)))) (tpc a (type-of a)))
+				              (let ((a (make-array nil))) (tpc a (type-of a)))
+				              (let ((a (make-array 4 :element-type 'double-float))) (tpc a (type-of a)))
+				              (let ((a (make-array 4 :element-type '(unsigned-byte 8)))) (tpc a (type-of a)))
+				              (let ((a (make-array 4 :fill-pointer 0))) (tpc a (type-of a)))
+				              (tpc "abc" (type-of "abc"))
+				              (tpc 42 (type-of 42))
+				              (tpc 5 '(integer 0 10))
+				              (tpc 50 '(integer 0 10))
+				              (tpc 6 '(integer (5) 10))
+				              (tpc 5 '(integer (5) 10))
+				              (tpc 3.0d0 '(double-float 0.0d0 10.0d0))
+				              (tpc 200 '(unsigned-byte 8))
+				              (tpc 300 '(unsigned-byte 8))
+				              (tpc -5 '(signed-byte 8))
+				              (tpc -500 '(signed-byte 8)))
+				        (list (tpc "x" '(or (integer 0 10) string))
+				              (tpc 'sym '(or (integer 0 10) string))
+				              (tpc 3 '(and integer (satisfies oddp)))
+				              (tpc 4 '(and integer (satisfies oddp)))
+				              (tpc 4 '(not (integer 0 3)))
+				              (tpc 2 '(member 1 2 3))
+				              (tpc 9 '(member 1 2 3))
+				              (tpc 3 '(eql 3))
+				              (tpc '(1 2) '(cons integer))
+				              (tpc "ab" '(string 2))
+				              (tpc "ab" '(string 3))
+				              (tpc (make-tpc-pt) '(or string tpc-pt))
+				              (tpc (make-tpc-pt) '(or string integer)))
+				        (list (tpc (make-array 4) '(simple-vector 4))
+				              (tpc (make-array 4) '(simple-vector 5))
+				              (tpc (make-array '(2 2)) '(simple-vector 4))
+				              (tpc (make-array '(2 2)) '(simple-array t (2 2)))
+				              (tpc (make-array '(2 2)) '(simple-array t 2))
+				              (tpc (make-array '(2 2)) '(array))
+				              (tpc "abc" '(vector character))
+				              (tpc (make-array 4) '(vector (unsigned-byte 8))))))
+				""")).isEqualTo("((T T T T T T T T T NIL T NIL T T NIL T NIL)"
+				+ " (T NIL T NIL T T NIL T T T NIL T NIL) (T NIL NIL T T T T NIL))");
+	}
+
+	@Test
+	void compileQuotedDesignatorsOfReferenceGatedBuiltins() throws Exception {
+		// 'concatenate and 'format are the same designators as #'concatenate and
+		// #'format, but only the #' spelling used to open their wrappers' gate: the
+		// quoted one failed with "Cannot compile: CONCATENATE" (postmodern's
+		// escape-sql-expression). A case clause's keys stay data.
+		assertThat(compileAndRun("""
+				(defun qd-cat (parts) (apply 'concatenate 'string parts))
+				(defun qd-fmt (args) (apply 'format nil "~a-~a" args))
+				(defun qd-key (op) (case op (funcall 'format) (t 'other)))
+				(print (list (qd-cat '("a" "b")) (qd-fmt '(1 2)) (mapcar 'class-of '()) (qd-key 'funcall)))
+				""")).isEqualTo("(\"ab\" \"1-2\" NIL FORMAT)");
+	}
+
+	@Test
+	void compileWarnOfAConditionClassInAThreadUsingProgram() throws Exception {
+		// A thread-using program makes *error-output* a global without naming it, which
+		// routes warn through the stream table -- that the stream gate had left out
+		// ("_streams is null"; cl-postgres's postgresql-warning under postmodern).
+		assertThat(compileAndRun("""
+				(define-condition tw-warning (simple-warning) ())
+				(defun tw-warn () (warn 'tw-warning :format-control "x ~a" :format-arguments (list 1)))
+				(rontolisp:join-thread (rontolisp:make-thread (lambda () 1)))
+				(tw-warn)
+				(print :done)
+				""")).isEqualTo(":DONE");
+	}
+
+	@Test
+	void compileComputedCompoundSubtypepSpecifiers() throws Exception {
+		// The JVM half of the compound subtypep: %subtypep-runtime routes a CONS on
+		// either side through the head reduction before scanning the by-NAME ancestor
+		// table, so a computed compound answers exactly what the interpreter's Java
+		// subtypep answers. Same program, same answers, as
+		// LispEvaluatorTest#evalComputedCompoundSubtypepSpecifiers and
+		// WasmLispCompilerIntegrationTest#computedCompoundSubtypepSpecifiers.
+		assertThat(compileAndRun("""
+				(defstruct stc-pt x y)
+				(deftype stc-num () '(or integer float))
+				(defun stp (a b) (subtypep a b))
+				(print
+				  (list (list (stp '(or fixnum ratio) 'number)
+				              (stp '(integer 0 10) 'integer)
+				              (stp '(integer 0 10) 'number)
+				              (stp 'integer '(integer 0 10))
+				              (stp '(unsigned-byte 8) 'integer)
+				              (stp '(and integer ratio) 'number)
+				              (stp 'fixnum '(and integer real))
+				              (stp 'fixnum '(and integer string))
+				              (stp '(vector t 3) '(or array hash-table))
+				              (stp 'nil '(integer 0 10))
+				              (stp '(integer 0 10) t))
+				        (list (stp '(simple-array t (2 2)) 'array)
+				              (stp '(simple-vector 4) 'vector)
+				              (stp '(simple-vector 4) 'sequence)
+				              (stp '(string 2) 'string)
+				              (stp (type-of (make-array 4)) 'vector)
+				              (stp (type-of (make-array '(2 3))) 'array)
+				              (stp (type-of "abc") 'sequence)
+				              (stp (type-of (make-hash-table)) 'hash-table)
+				              (stp (type-of (make-stc-pt)) 'structure-object)
+				              (stp (type-of (make-array 4)) (type-of (make-array 4))))
+				        (list (stp 'stc-num 'number)
+				              (stp 'fixnum '(and))
+				              (stp '(not integer) 'number)
+				              (stp '(satisfies oddp) 'number)
+				              (stp '(and) 'number)
+				              (stp '(member 1 2) 'number)
+				              (stp '(eql 1) 'number))))
+				""")).isEqualTo("((T T T NIL T T T NIL T T T) (T T T T T T T T T T) (T T NIL NIL NIL NIL NIL))");
+	}
+
+	@Test
+	void compileArrayPredicatesAndInBounds() throws Exception {
+		// The JVM half of LispEvaluatorTest#evalArrayPredicatesAndInBounds: the
+		// three predicates and the bounds check are prelude defuns, so the
+		// program takes the CLI pipeline's prelude splice on this backend too.
+		assertThat(compileAndRun("""
+				(defvar *abp-sv* (make-array 4))
+				(defvar *abp-fp* (make-array 4 :fill-pointer 0))
+				(defvar *abp-m2* (make-array '(2 3)))
+				(defvar *abp-r0* (make-array nil))
+				(defvar *abp-st* "abc")
+				(print
+				  (list (list (simple-vector-p *abp-sv*)
+				              (simple-vector-p *abp-fp*)
+				              (simple-vector-p *abp-m2*)
+				              (simple-vector-p *abp-r0*)
+				              (simple-vector-p *abp-st*)
+				              (simple-vector-p '(1 2)))
+				        (list (bit-vector-p *abp-sv*)
+				              (bit-vector-p *abp-st*)
+				              (simple-bit-vector-p *abp-sv*)
+				              (simple-bit-vector-p 0))
+				        (list (array-in-bounds-p *abp-sv* 0)
+				              (array-in-bounds-p *abp-sv* 3)
+				              (array-in-bounds-p *abp-sv* 4)
+				              (array-in-bounds-p *abp-sv* -1)
+				              (array-in-bounds-p *abp-m2* 1 2)
+				              (array-in-bounds-p *abp-m2* 2 0)
+				              (array-in-bounds-p *abp-m2* 1))
+				        (list (array-in-bounds-p *abp-st* 2)
+				              (array-in-bounds-p *abp-st* 3)
+				              (array-in-bounds-p *abp-r0*)
+				              (array-in-bounds-p *abp-r0* 0)
+				              (array-in-bounds-p 5 0)
+				              (array-in-bounds-p *abp-sv* 1.0)
+				              (array-in-bounds-p *abp-fp* 3))
+				        (list (funcall #'simple-vector-p *abp-sv*)
+				              (funcall #'array-in-bounds-p *abp-sv* 2)
+				              (funcall #'bit-vector-p *abp-sv*))))
+				""")).isEqualTo(
+				"((T NIL NIL NIL NIL NIL) (NIL NIL NIL NIL) (T T NIL NIL T NIL NIL) (T NIL T NIL NIL NIL T) (T T NIL))");
+	}
+
+	@Test
+	void compileBitVectorsAndBitOps() throws Exception {
+		// The JVM half of LispEvaluatorTest#evalBitVectorsAndBitOps: a bit vector is
+		// the general boxed array stamped with the remembered element type bit, and
+		// the eleven bit-* operators validate through bit-vector-p over
+		// row-major-aref.
+		assertThat(compileAndRun("""
+				(defvar *bv-a* (make-array 4 :element-type 'bit :initial-contents '(0 1 1 0)))
+				(defvar *bv-b* (make-array 4 :element-type 'bit :initial-contents '(1 1 0 0)))
+				(defvar *bv-fp* (make-array 4 :element-type 'bit :fill-pointer 2))
+				(defvar *bv-m2* (make-array '(2 2) :element-type 'bit :initial-contents '((0 1) (1 0))))
+				(print
+				  (list
+				    (list (bit-vector-p *bv-a*)
+				          (simple-bit-vector-p *bv-a*)
+				          (bit-vector-p #*0110)
+				          (simple-bit-vector-p #*0110)
+				          (bit-vector-p #(0 1))
+				          (simple-bit-vector-p #(0 1))
+				          (bit-vector-p "01")
+				          (bit-vector-p *bv-fp*)
+				          (simple-bit-vector-p *bv-fp*)
+				          (bit-vector-p *bv-m2*))
+				    (list (typep *bv-a* 'bit-vector)
+				          (typep *bv-a* 'simple-bit-vector)
+				          (typep *bv-a* '(vector bit))
+				          (typep *bv-a* '(vector bit 4))
+				          (typep *bv-a* '(bit-vector 4))
+				          (typep *bv-a* '(simple-bit-vector 4))
+				          (typep *bv-a* '(bit-vector 3))
+				          (typep *bv-fp* 'simple-bit-vector)
+				          (typep *bv-m2* 'bit-vector)
+				          (typep *bv-m2* '(array bit (2 2))))
+				    (list (array-element-type *bv-a*)
+				          (array-element-type #*0110)
+				          (type-of *bv-a*)
+				          (type-of *bv-fp*)
+				          (type-of *bv-m2*)
+				          (subtypep 'bit-vector 'vector)
+				          (subtypep 'simple-bit-vector 'bit-vector)
+				          (subtypep 'simple-bit-vector 'simple-array)
+				          (subtypep 'vector 'bit-vector))
+				    (list (bit-and *bv-a* *bv-b*)
+				          (bit-ior *bv-a* *bv-b*)
+				          (bit-xor *bv-a* *bv-b*)
+				          (bit-eqv *bv-a* *bv-b*)
+				          (bit-nand *bv-a* *bv-b*)
+				          (bit-nor *bv-a* *bv-b*)
+				          (bit-andc1 *bv-a* *bv-b*)
+				          (bit-andc2 *bv-a* *bv-b*)
+				          (bit-orc1 *bv-a* *bv-b*)
+				          (bit-orc2 *bv-a* *bv-b*)
+				          (bit-not *bv-a*))
+				    (list (bit-vector-p (bit-and *bv-a* *bv-b*))
+				          (funcall #'bit-ior *bv-a* *bv-b*)
+				          (bit-and *bv-m2* *bv-m2*))
+				    (list (array-element-type (coerce '(1 0) '(vector bit)))
+				        (array-element-type (concatenate '(vector bit) '(1) #(0)))
+				        (bit-vector-p (coerce '(1 0) 'bit-vector))
+				        (bit-vector-p (concatenate 'bit-vector '(1) #(0)))
+				        (let ((s 'bit-vector)) (array-element-type (coerce '(1 0) s))))))
+				""")).isEqualTo(
+				"((T T T T NIL NIL NIL T NIL NIL) (T T T T T T NIL NIL NIL T) (BIT BIT (SIMPLE-BIT-VECTOR 4) (BIT-VECTOR 4) (SIMPLE-ARRAY BIT (2 2)) T T T NIL) (#*0100 #*1110 #*1010 #*0101 #*1011 #*0001 #*1000 #*0010 #*1101 #*0111 #*1001) (T #*1110 #2A((0 1) (1 0))) (BIT BIT T T BIT))");
+	}
+
+	@Test
+	void compileBitVectorPreservationAcrossSequenceOps() throws Exception {
+		// The JVM half of LispEvaluatorTest#evalBitVectorPreservationAcrossSequenceOps.
+		assertThat(compileAndRun("""
+				(print
+				  (list
+				    (list (bit-vector-p (subseq #*1010 0 2))
+				          (array-element-type (subseq #*1010 0 2))
+				          (aref (subseq #*1010 0 2) 0)
+				          (aref (subseq #*1010 0 2) 1)
+				          (bit-vector-p (subseq #*1010 2))
+				          (length (subseq #*1010 1 3)))
+				    (list (let ((s '(vector bit))) (bit-vector-p (coerce '(1 0) s)))
+				          (let ((s '(vector bit))) (array-element-type (coerce '(1 0) s)))
+				          (let ((s '(vector bit))) (aref (coerce '(1 0) s) 1)))
+				    (list (bit-vector-p (map 'bit-vector #'identity '(1 0 1)))
+				          (array-element-type (map 'bit-vector #'identity '(1 0)))
+				          (bit-vector-p (map '(vector bit) #'identity '(1 0)))
+				          (bit-vector-p (make-sequence 'bit-vector 3))
+				          (array-element-type (make-sequence 'bit-vector 3))
+				          (aref (make-sequence 'bit-vector 2 :initial-element 1) 1))
+				    (list (prin1-to-string #*101)
+				          (bit-vector-p (read-from-string (prin1-to-string #*101)))
+				          (prin1-to-string (make-sequence 'bit-vector 0)))
+				    (list (eq (class-of #*01) (find-class 'bit-vector))
+				          (class-name (class-of #*01)))))
+				""")).isEqualTo("((T BIT 1 0 T 2) (T BIT 0) (T BIT T T BIT 1) (\"#*101\" T \"#*\") (T BIT-VECTOR))");
+	}
+
+	@Test
+	void compileSimpleTypeNameTypepChecksSimplicity() throws Exception {
+		// The JVM half of LispEvaluatorTest#evalSimpleTypeNameTypepChecksSimplicity: the
+		// LITERAL specifiers fold into a %simple-array-p call beside the general test,
+		// and
+		// the COMPUTED ones (through tps) take the same decisions out of the specifier
+		// value at run time.
+		assertThat(compileAndRun("""
+				(defvar *tps-sv* (make-array 4))
+				(defvar *tps-fp* (make-array 4 :fill-pointer 0))
+				(defvar *tps-ad* (make-array 4 :adjustable t))
+				(defvar *tps-dp* (make-array 2 :displaced-to *tps-sv*))
+				(defvar *tps-pk* (make-array 4 :element-type 'single-float))
+				(defvar *tps-m2* (make-array '(2 3)))
+				(defvar *tps-st* "abc")
+				(defvar *tps-cs* (make-array 3 :element-type 'character))
+				(defvar *tps-cv* (make-array 4 :element-type 'character :fill-pointer 0))
+				(defun tps (v s) (typep v s))
+				(print
+				 (list
+				  (list (typep *tps-sv* 'simple-vector) (typep *tps-fp* 'simple-vector)
+				        (typep *tps-ad* 'simple-vector) (typep *tps-dp* 'simple-vector)
+				        (typep *tps-pk* 'simple-vector) (typep *tps-st* 'simple-vector))
+				  (list (typep *tps-sv* 'simple-array) (typep *tps-fp* 'simple-array)
+				        (typep *tps-dp* 'simple-array) (typep *tps-pk* 'simple-array)
+				        (typep *tps-m2* 'simple-array) (typep *tps-st* 'simple-array))
+				  (list (typep *tps-st* 'simple-string) (typep *tps-cs* 'simple-string)
+				        (typep *tps-cv* 'simple-string) (typep *tps-cv* 'string)
+				        (typep *tps-sv* 'simple-string))
+				  (list (typep *tps-fp* '(simple-vector 4)) (typep *tps-fp* '(simple-array t (4)))
+				        (typep *tps-fp* '(vector t 4)) (typep *tps-fp* '(array t (4))))
+				  (list (type-of *tps-fp*) (type-of *tps-ad*) (type-of *tps-dp*) (type-of *tps-sv*))
+				  (list (typep *tps-sv* (type-of *tps-sv*)) (typep *tps-fp* (type-of *tps-fp*))
+				        (typep *tps-dp* (type-of *tps-dp*)) (typep *tps-pk* (type-of *tps-pk*))
+				        (typep *tps-m2* (type-of *tps-m2*)))
+				  (list (tps *tps-sv* 'simple-vector) (tps *tps-fp* 'simple-vector)
+				        (tps *tps-st* 'simple-string) (tps *tps-cv* 'simple-string)
+				        (tps *tps-fp* '(simple-vector 4)) (tps *tps-sv* '(simple-vector 4)))
+				  (list (simple-string-p *tps-st*) (simple-string-p *tps-cs*)
+				        (simple-string-p *tps-cv*)
+				        (simple-string-p (coerce *tps-cv* 'simple-string))
+				        (simple-string-p (coerce *tps-cv* 'string))
+				        (let ((ty 'simple-string))
+				          (simple-string-p (coerce *tps-cv* ty))))
+				  (list (typep *tps-cv* '(string 4)) (typep *tps-cv* '(string 0))
+				        (typep *tps-cv* '(simple-string 4)) (typep *tps-cv* '(vector character 4))
+				        (typep *tps-cv* '(simple-array character (4)))
+				        (typep *tps-cv* '(array character (4)))
+				        (typep *tps-st* '(string 3)) (typep *tps-cs* '(simple-string 3)))
+				  (list (tps *tps-cv* '(string 4)) (tps *tps-cv* '(string 0))
+				        (tps *tps-cv* '(vector character 4)) (tps *tps-cv* '(array character (4)))
+				        (tps *tps-st* '(string 3)) (tps *tps-sv* '(string 4)))))
+				""")).isEqualTo(
+				"((T NIL NIL NIL NIL NIL) (T NIL NIL T T T) (T T NIL T NIL) (NIL NIL T T) ((VECTOR T 4) (VECTOR T 4) (VECTOR T 2) (SIMPLE-VECTOR 4)) (T T T T T) (T NIL T NIL NIL T) (T T NIL T NIL T) (T NIL NIL T NIL T T T) (T NIL T T T NIL))");
+	}
+
+	@Test
+	void compileCloserMopShimAnswersOverClassMetaobjectsAndLegacyTagDesignators() throws Exception {
+		// The closer-mop system is spliced by the compile-time LoadInliner pass (cli),
+		// mirroring the CLI pipeline; the shim serves BOTH generations, exactly like the
+		// interpreter
+		// (LispEvaluatorTest#closerMopShimAnswersOverClassMetaobjectsAndLegacyTagDesignators).
+		List<LispVal> program = am.ik.rontolisp.cli.LoadInliner.inline(
+				LispReader.readAllFromString(
+						"""
+								(asdf:load-system "closer-mop")
+								(defclass cmm-p () ((name :initarg :name) (age :initarg :age :type integer)))
+								(defclass cmm-q (cmm-p) ((age :initform 3) (zip :writer set-zip :accessor q-zip)))
+								(defclass cmm-r () ((hits :allocation :class) (id)))
+								(let ((c (find-class 'cmm-p)) (q (find-class 'cmm-q)) (r (find-class 'cmm-r)))
+								  (print (list (closer-mop:classp c)
+								               (closer-mop:classp 42)
+								               (closer-mop:class-name c)
+								               (closer-mop:class-finalized-p c)
+								               (mapcar #'closer-mop:slot-definition-name (closer-mop:class-slots c))
+								               (mapcar #'closer-mop:slot-definition-type (closer-mop:class-slots c))
+								               (mapcar #'closer-mop:slot-definition-initargs (closer-mop:class-slots c))
+								               (mapcar #'closer-mop:slot-definition-name
+								                       (closer-mop:class-slots (class-of (make-instance 'cmm-p :name "x"))))
+								               (list (mapcar #'closer-mop:slot-definition-name (closer-mop:class-direct-slots q))
+								                     (mapcar #'closer-mop:slot-definition-initform (closer-mop:class-direct-slots q))
+								                     (mapcar #'closer-mop:slot-definition-writers (closer-mop:class-direct-slots q))
+								                     (mapcar #'closer-mop:slot-definition-writers (closer-mop:class-slots q))
+								                     (mapcar #'closer-mop:slot-definition-initargs (closer-mop:class-direct-slots c))
+								                     (let ((d (first (closer-mop:class-direct-slots c))) (e (first (closer-mop:class-slots c))))
+								                       (list (typep d 'closer-mop:direct-slot-definition) (typep d 'closer-mop:effective-slot-definition)
+								                             (typep e 'closer-mop:effective-slot-definition) (typep e 'closer-mop:direct-slot-definition)
+								                             (typep e 'closer-mop:slot-definition) (typep d 'closer-mop:standard-direct-slot-definition)
+								                             (typep c 'closer-mop:slot-definition)))
+								                     (list (mapcar #'closer-mop:slot-definition-allocation (closer-mop:class-direct-slots r))
+								                           (mapcar #'closer-mop:slot-definition-allocation (closer-mop:class-slots r))
+								                           (closer-mop:slot-definition-allocation (first (closer-mop:class-slots c))))))))
+								"""),
+				path -> {
+					throw new java.io.FileNotFoundException(path);
+				});
+		assertThat(compileAndRun(am.ik.rontolisp.eval.LispPreludeLibrary.process(program)))
+			.isEqualTo("(T NIL CMM-P T (NAME AGE) (T INTEGER) ((:NAME) (:AGE)) (NAME AGE) "
+					+ "((AGE ZIP) (3 NIL) (NIL ((SETF Q-ZIP) SET-ZIP)) (NIL NIL NIL) ((:NAME) (:AGE)) (T NIL T NIL T T NIL) ((:CLASS :INSTANCE) (:CLASS :INSTANCE) :INSTANCE)))");
+	}
+
+	@Test
+	void compileAllocateInstanceAnswersAnAllSlotsUnboundInstance() throws Exception {
+		// The generated allocate-instance runtime (injected when referenced) resolves a
+		// metaobject OR a name designator to the per-class construction arm; every
+		// slot starts unbound, mirroring the interpreter built-in.
+		assertThat(compileAndRun("""
+				(defclass ai-pt () ((x :initarg :x :initform 7) (y :initarg :y)))
+				(let ((p (allocate-instance (find-class 'ai-pt))))
+				  (print (list (typep p 'ai-pt)
+				               (slot-boundp p 'x)
+				               (slot-boundp p 'y)
+				               (progn (setf (slot-value p 'x) 10) (slot-value p 'x))
+				               (let ((q (allocate-instance 'ai-pt))) (slot-boundp q 'x)))))
+				""")).isEqualTo("(T NIL NIL 10 NIL)");
+	}
+
+	@Test
+	void compileAllocateInstanceRejectsNonClosClasses() throws Exception {
+		assertThat(compileAndRun("""
+				(defclass ai-ok () ((v :initarg :v)))
+				(defstruct ai-node value)
+				(print (list (handler-case (allocate-instance (find-class 'integer)) (error (e) :signaled))
+				             (handler-case (allocate-instance 'ai-node) (error (e) :signaled))
+				             (typep (allocate-instance (find-class 'ai-ok) :v 1 :junk 2) 'ai-ok)))
+				""")).isEqualTo("(:SIGNALED :SIGNALED T)");
+	}
+
+	@Test
+	void compileDefclassMetaclassRunsTheClassDefinitionProtocol() throws Exception {
+		// The postmodern dao-class shape on the compile path, mirroring
+		// LispEvaluatorTest#defclassMetaclassRunsTheClassDefinitionProtocol: the
+		// MopProtocol defaults and the %mop-make-instance/%register-class-metaobject
+		// runtime are injected by the :metaclass gate, the driver call runs at program
+		// start in top-level order, and find-class/class-of answer the driver-built
+		// metaclass instance from then on.
+		assertThat(compileAndRun("""
+				(defvar *direct-column-slot* nil)
+				(defclass mc-dao-class (standard-class)
+				  ((direct-keys :initarg :keys :initform nil :accessor mc-direct-keys)
+				   (table-name)))
+				(defclass mc-direct-column-slot (closer-mop:standard-direct-slot-definition)
+				  ((col-type :initarg :col-type :accessor mc-column-type)))
+				(defclass mc-effective-column-slot (closer-mop:standard-effective-slot-definition)
+				  ((direct-slot :initform *direct-column-slot* :reader mc-slot-column)))
+				(defmethod closer-mop:validate-superclass ((class mc-dao-class) (super standard-class)) t)
+				(defmethod shared-initialize :before ((class mc-dao-class) slot-names
+				                                      &key table-name &allow-other-keys)
+				  (if table-name
+				      (setf (slot-value class 'table-name) (car table-name))
+				      (slot-makunbound class 'table-name)))
+				(defmethod closer-mop:direct-slot-definition-class ((class mc-dao-class) &rest initargs
+				                                                    &key col-type &allow-other-keys)
+				  (if col-type (find-class 'mc-direct-column-slot) (call-next-method)))
+				(defmethod closer-mop:compute-effective-slot-definition ((class mc-dao-class) name dsds)
+				  (let ((*direct-column-slot* (find-if (lambda (s) (typep s 'mc-direct-column-slot)) dsds)))
+				    (call-next-method)))
+				(defmethod closer-mop:effective-slot-definition-class ((class mc-dao-class) &rest initargs)
+				  (if *direct-column-slot* (find-class 'mc-effective-column-slot) (call-next-method)))
+				(defvar *mc-finalized* nil)
+				(defmethod closer-mop:finalize-inheritance :after ((class mc-dao-class))
+				  (setq *mc-finalized* (cons (%obj-ref class 0) *mc-finalized*)))
+				(defclass mc-user ()
+				  ((id :col-type integer :initarg :id :accessor mc-user-id)
+				   (note :initarg :note :initform "n/a"))
+				  (:metaclass mc-dao-class)
+				  (:table-name "users")
+				  (:keys id))
+				(print (list (let ((c (find-class 'mc-user)))
+				               (list (%obj-ref c 0)
+				                     (typep c 'mc-dao-class)
+				                     (eq (class-of c) (find-class 'mc-dao-class))
+				                     (slot-value c 'table-name)
+				                     (mc-direct-keys c)
+				                     *mc-finalized*
+				                     (%obj-ref c 4)))
+				             (let ((u (make-instance 'mc-user :id 7)))
+				               (list (mc-user-id u) (slot-value u 'note) (eq (class-of u) (find-class 'mc-user))))
+				             (mapcar (lambda (s)
+				                       (list (%obj-ref s 0)
+				                             (if (typep s 'mc-effective-column-slot)
+				                                 (mc-column-type (mc-slot-column s))
+				                                 :plain)))
+				                     (%obj-ref (find-class 'mc-user) 3))))
+				"""))
+			.isEqualTo("((MC-USER T T \"users\" (ID) (MC-USER) T) (7 \"n/a\" T) ((ID INTEGER) (NOTE :PLAIN)))");
+	}
+
+	@Test
+	void compileDefclassMetaclassEnsureClassUsingClassAndInitargMunging() throws Exception {
+		// Mirrors
+		// LispEvaluatorTest#defclassMetaclassEnsureClassUsingClassAndInitargMunging
+		// on the compile path (the mito shape): e-c-u-c routing +
+		// chain-fill initarg munging + initfunction + same-name redefinition (the
+		// second defclass reinitializes the SAME metaobject at runtime while the
+		// static tables keep the last definition).
+		assertThat(compileAndRun(am.ik.rontolisp.MopWideningFixture.MITO_SHAPE_SOURCE + """
+				(print (list *mt-first*
+				             (let ((c (find-class 'mt-user)))
+				               (list *mt-ecuc*
+				                     (slot-value c 'table-name)
+				                     (mapcar (lambda (s) (%obj-ref s 0)) (%obj-ref c 2))
+				                     (slot-value c 'col-count)
+				                     (mt-user-id (make-instance 'mt-user :id 1))))))
+				""")).isEqualTo(am.ik.rontolisp.MopWideningFixture.MITO_SHAPE_EXPECTED);
+	}
+
+	@Test
+	void compileInterceptsDefinitionTimeMethodConstruction() throws Exception {
+		// The build-dao-methods idiom on the compile path, mirroring
+		// LispEvaluatorTest#compileInterceptsDefinitionTimeMethodConstruction. The
+		// program routes through UserMacroExpander (the CLI pipeline): the :metaclass
+		// defclass activates the pass, its macro-time evaluation runs the
+		// class-definition protocol, the (compile nil `(lambda () ,code)) inside the
+		// finalize-inheritance :after hook is intercepted, and the folded method
+		// definitions are spliced after the defclass -- where the nested defmethods
+		// register statically and their bodies close over the let*/labels lexicals.
+		// At run time the driver re-runs the hook and the generated compile runtime
+		// answers a no-op for the already-spliced construction.
+		List<LispVal> program = am.ik.rontolisp.eval.UserMacroExpander.expand(LispReader.readAllFromString("""
+				(defclass ce-tbl-class (standard-class)
+				  ((table-name :initform nil)))
+				(defmethod shared-initialize :before ((class ce-tbl-class) slot-names
+				                                      &key table-name &allow-other-keys)
+				  (if table-name (setf (slot-value class 'table-name) (car table-name)) nil))
+				(defgeneric ce-row-tag (obj))
+				(defgeneric ce-fetch-row (type key))
+				(defun ce-eval (code)
+				  (funcall (compile nil (list 'lambda nil code))))
+				(defun ce-build-methods (class)
+				  (ce-eval
+				   `(let* ((tname (slot-value ,class 'table-name)))
+				      (labels ((prefix (s) (concatenate 'string tname ":" s)))
+				        (defmethod ce-row-tag ((object ,class))
+				          (prefix "row"))
+				        (defmethod ce-fetch-row ((type (eql (class-name ,class))) key)
+				          (prefix key))))))
+				(defmethod closer-mop:finalize-inheritance :after ((class ce-tbl-class))
+				  (ce-build-methods class))
+				(defclass ce-user ()
+				  ((id :initarg :id))
+				  (:metaclass ce-tbl-class)
+				  (:table-name "users"))
+				(print (list (ce-row-tag (make-instance 'ce-user :id 1))
+				             (ce-fetch-row 'ce-user "k7")))
+				"""));
+		assertThat(compileAndRun(am.ik.rontolisp.eval.LispPreludeLibrary.process(program)))
+			.isEqualTo("(\"users:row\" \"users:k7\")");
+	}
+
+	@Test
+	void compileRuntimeScansLongFlatDefinitionsOnTheCdrLoop() throws Exception {
+		// %compile-defines-methods-p iterates the CDR spine (only the CAR direction
+		// recurses), so a definition with ten thousand body forms -- an ordinary flat
+		// list -- answers instead of overflowing the stack. The first call has no
+		// defmethod anywhere and takes the eval branch; the second finds one on the
+		// spine and answers the no-op function, which must not evaluate the defmethod.
+		assertThat(compileAndRun(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString("""
+				(let ((body nil))
+				  (dotimes (i 10000) (setq body (cons '(quote nil) body)))
+				  (print (functionp (compile nil (cons 'lambda (cons nil body))))))
+				(print (null (funcall (compile nil (list 'lambda nil '(defmethod cx-noop ()))))))
+				""")))).isEqualTo("""
+				T
+				T""");
+	}
+
+	@Test
+	void compileCloserCommonLispPackageServesTheDaoPackageShape() throws Exception {
+		// (:use :closer-common-lisp) implies cl, and the closer-mop members inherit
+		// through the re-export -- the postmodern DAO package shape on the compile
+		// path (shim spliced by LoadInliner, like the closer-mop test above).
+		List<LispVal> program = am.ik.rontolisp.cli.LoadInliner.inline(LispReader.readAllFromString("""
+				(asdf:load-system "closer-mop")
+				(defpackage :ccl-probe (:use :closer-common-lisp))
+				(in-package :ccl-probe)
+				(defclass ccl-pt () ((x :initarg :x) (y :initarg :y)))
+				(let ((c (find-class 'ccl-pt)))
+				  (print (list (classp c)
+				               (mapcar #'slot-definition-name (class-slots c))
+				               (c2cl:class-name c)
+				               (car (c2cl:list 1 2)))))
+				"""), path -> {
+			throw new java.io.FileNotFoundException(path);
+		});
+		assertThat(compileAndRun(am.ik.rontolisp.eval.LispPreludeLibrary.process(program)))
+			.isEqualTo("(T (X Y) CCL-PT 1)");
+	}
+
+	@Test
+	void compileAndRunNonNumberArithmeticOperandsSignalCatchableTypeErrors() throws Exception {
+		// The numeric runtime's _big/_dbl throw where a bare checkcast used to let null
+		// through to an NPE naming BigInteger internals, and the operator's wrapper
+		// names the report after the operator and the type IT accepts
+		// (JvmOperandTypeRuntime). The evaluator twin is
+		// nonNumberArithmeticOperandsSignalCatchableTypeErrors.
+		assertThat(compileAndRun("""
+				(defun te-print (thunk)
+				  (handler-case (funcall thunk) (type-error (e) (princ-to-string e))))
+				(print (list (te-print (lambda () (+ 1 nil)))
+				             (te-print (lambda () (< 1 nil)))
+				             (te-print (lambda () (* 2 "x")))
+				             (te-print (lambda () (max 1 'sym)))
+				             (te-print (lambda () (+ 1.5 nil)))))
+				""")).isEqualTo("(\"+: The value NIL is not of type NUMBER\" \"<: The value NIL is not of type REAL\""
+				+ " \"*: The value \\\"x\\\" is not of type NUMBER\" \"MAX: The value SYM is not of type REAL\""
+				+ " \"+: The value NIL is not of type NUMBER\")");
+	}
+
+	@Test
+	void argumentTypeErrorsNameTheOperatorBeyondArithmetic() throws Exception {
+		// The evaluator twin is argumentTypeErrorsNameTheOperatorBeyondArithmetic:
+		// car/cdr
+		// used to report the landing pad's generic text, an index nil an NPE, numerator
+		// of nil answered nil and a one-argument lcm/gcd reported ABS.
+		assertThat(compileAndRun(
+				"""
+						(defun te (thunk)
+						  (handler-case (funcall thunk)
+						    (type-error (e) (list (princ-to-string e) (type-error-datum e) (type-error-expected-type e)))
+						    (error (e) (list :not-a-type-error (princ-to-string e)))))
+						(defvar *te-n* nil)
+						(print (te (lambda () (car 5))))
+						(print (te (lambda () (cdr "s"))))
+						(print (te (lambda () (first 5))))
+						(print (te (lambda () (rest 5))))
+						(print (te (lambda () (nth *te-n* '(1 2)))))
+						(print (te (lambda () (nthcdr 1.5 '(1 2)))))
+						(print (te (lambda () (aref #(1 2) *te-n*))))
+						(print (te (lambda () (svref #(1 2) *te-n*))))
+						(print (te (lambda () (let ((v (vector 1 2))) (setf (aref v *te-n*) 3)))))
+						(print (te (lambda () (setf (aref #d(1.0) 0) "x"))))
+						(print (te (lambda () (let ((v (make-array 2 :element-type 'double-float))) (setf (aref v 0) "y") :unreached))))
+						(print (te (lambda () (random *te-n*))))
+						(print (te (lambda () (numerator *te-n*))))
+						(print (te (lambda () (denominator 1.5))))
+						(print (te (lambda () (lcm *te-n*))))
+						(print (te (lambda () (gcd 1.5))))
+						(print (te (lambda () (complex #c(1 2) 3))))
+						"""))
+			.isEqualTo("""
+					("CAR: The value 5 is not of type LIST" 5 LIST)
+					("CDR: The value \\"s\\" is not of type LIST" "s" LIST)
+					("CAR: The value 5 is not of type LIST" 5 LIST)
+					("CDR: The value 5 is not of type LIST" 5 LIST)
+					("NTHCDR: The value NIL is not of type INTEGER" NIL INTEGER)
+					("NTHCDR: The value 1.5 is not of type INTEGER" 1.5 INTEGER)
+					("AREF: The value NIL is not of type INTEGER" NIL INTEGER)
+					("AREF: The value NIL is not of type INTEGER" NIL INTEGER)
+					("(SETF AREF): The value NIL is not of type INTEGER" NIL INTEGER)
+					("(SETF AREF): The value \\"x\\" is not of type REAL" "x" REAL)
+					("(SETF AREF): The value \\"y\\" is not of type REAL" "y" REAL)
+					("RANDOM: The value NIL is not of type REAL" NIL REAL)
+					("NUMERATOR: The value NIL is not of type RATIONAL" NIL RATIONAL)
+					("DENOMINATOR: The value 1.5 is not of type RATIONAL" 1.5 RATIONAL)
+					("LCM: The value NIL is not of type INTEGER" NIL INTEGER)
+					("GCD: The value 1.5 is not of type INTEGER" 1.5 INTEGER)
+					("COMPLEX: The value #C(1 2) is not of type REAL" #C(1 2) REAL)""");
+	}
+
+	@Test
+	void randomLimitDomainViolationsSignalATypeError() throws Exception {
+		// The evaluator twin is randomLimitDomainViolationsSignalATypeError.
+		// JvmIntFusionCompiler fuses (random <int>) into surrounding arithmetic --
+		// literal or through a variable -- and used to skip this check entirely: a
+		// non-positive limit silently produced a wrong value instead of signaling.
+		assertThat(compileAndRun("""
+				(defun te (thunk)
+				  (handler-case (funcall thunk)
+				    (type-error (e) (list (princ-to-string e) (type-error-datum e) (type-error-expected-type e)))
+				    (error (e) (list :not-a-type-error (princ-to-string e)))))
+				(print (te (lambda () (random 1/2))))
+				(print (te (lambda () (random -1))))
+				(print (te (lambda () (random 0))))
+				(print (te (lambda () (random -1.5))))
+				(print (te (lambda () (random 0.0))))
+				(let ((x -1.0)) (print (te (lambda () (random x)))))
+				(print (te (lambda () (+ 100 (random -1)))))
+				(print (te (lambda () (+ 100 (random 0)))))
+				(let ((x -1)) (print (te (lambda () (+ 100 (random x))))))
+				(let ((r (+ 100 (random 3)))) (print (and (integerp r) (>= r 100) (< r 103))))
+				""")).isEqualTo("""
+				("RANDOM: The value 1/2 is not of type REAL" 1/2 REAL)
+				("RANDOM: The value -1 is not of type REAL" -1 REAL)
+				("RANDOM: The value 0 is not of type REAL" 0 REAL)
+				("RANDOM: The value -1.5 is not of type REAL" -1.5 REAL)
+				("RANDOM: The value 0.0 is not of type REAL" 0.0 REAL)
+				("RANDOM: The value -1.0 is not of type REAL" -1.0 REAL)
+				("RANDOM: The value -1 is not of type REAL" -1 REAL)
+				("RANDOM: The value 0 is not of type REAL" 0 REAL)
+				("RANDOM: The value -1 is not of type REAL" -1 REAL)
+				T""");
+	}
+
+	@Test
+	void aBignumDimensionOrRandomLimitIsCheckedOrDrawnInFull() throws Exception {
+		// The evaluator twin is aBignumDimensionOrRandomLimitIsCheckedOrDrawnInFull. A
+		// bignum or non-integer dimension parsed as an empty list (a rank-0 array), a
+		// long one was truncated to an int, and a bignum random limit saturated at
+		// Long.MAX_VALUE.
+		assertThat(compileAndRun("""
+				(defun te (thunk)
+				  (handler-case (progn (funcall thunk) :no-error)
+				    (type-error (e) (list (princ-to-string e) (type-error-datum e) (type-error-expected-type e)))
+				    (error (e) (list :not-a-type-error (princ-to-string e)))))
+				(defvar *big* (expt 2 100))
+				(print (te (lambda () (make-array *big*))))
+				(print (te (lambda () (make-array (list 2 *big*)))))
+				(print (te (lambda () (make-array -1))))
+				(print (te (lambda () (make-array 1.5))))
+				(print (te (lambda () (make-array (list 1073741819 3)))))
+				(print (te (lambda () (make-array '(2 . 3)))))
+				(print (te (lambda () (make-array *big* :element-type 'double-float))))
+				(print (te (lambda () (make-array (expt 2 40) :element-type '(unsigned-byte 8)))))
+				(let ((ok t) (odd nil) (even nil))
+				  (dotimes (i 64)
+				    (let ((r (random *big*)))
+				      (unless (and (integerp r) (<= 0 r) (< r *big*)) (setq ok nil))
+				      (if (oddp r) (setq odd t) (setq even t))))
+				  (print (list ok odd even)))
+				(print (te (lambda () (random (- *big*)))))
+				""")).isEqualTo(
+				"""
+						("MAKE-ARRAY: The value 1267650600228229401496703205376 is not of type (INTEGER 0 (2147483639))" 1267650600228229401496703205376 (INTEGER 0 (2147483639)))
+						("MAKE-ARRAY: The value 1267650600228229401496703205376 is not of type (INTEGER 0 (2147483639))" 1267650600228229401496703205376 (INTEGER 0 (2147483639)))
+						("MAKE-ARRAY: The value -1 is not of type (INTEGER 0 (2147483639))" -1 (INTEGER 0 (2147483639)))
+						("MAKE-ARRAY: The value 1.5 is not of type (INTEGER 0 (2147483639))" 1.5 (INTEGER 0 (2147483639)))
+						("MAKE-ARRAY: The value 3221225457 is not of type (INTEGER 0 (2147483639))" 3221225457 (INTEGER 0 (2147483639)))
+						("MAKE-ARRAY: The value 3 is not of type LIST" 3 LIST)
+						("MAKE-ARRAY: The value 1267650600228229401496703205376 is not of type (INTEGER 0 (2147483639))" 1267650600228229401496703205376 (INTEGER 0 (2147483639)))
+						("MAKE-ARRAY: The value 1099511627776 is not of type (INTEGER 0 (2147483639))" 1099511627776 (INTEGER 0 (2147483639)))
+						(T T T)
+						("RANDOM: The value -1267650600228229401496703205376 is not of type REAL" -1267650600228229401496703205376 REAL)""");
+	}
+
+	@Test
+	void aMakeListLengthOutsideTheLimitIsATypeError() throws Exception {
+		// The evaluator twin is aMakeListLengthOutsideTheLimitIsATypeError. The length
+		// counted down a do loop: a bignum ran out of heap, a negative answered nil, a
+		// float counted past zero and a symbol was <='s REAL type-error; an
+		// :initial-element form ran before the length.
+		assertThat(compileAndRun(
+				"""
+						(defun te (thunk)
+						  (handler-case (progn (funcall thunk) :no-error)
+						    (type-error (e) (list (princ-to-string e) (type-error-datum e) (type-error-expected-type e)))
+						    (error (e) (list :not-a-type-error (princ-to-string e)))))
+						(defvar *big* (expt 2 100))
+						(defvar *x* 'a)
+						(defvar *n* 3)
+						(print (te (lambda () (make-list *big*))))
+						(print (te (lambda () (make-list -1))))
+						(print (te (lambda () (make-list (- *n* 4)))))
+						(print (te (lambda () (make-list 2.5 :initial-element *x*))))
+						(print (te (lambda () (make-list *x*))))
+						(print (te (lambda () (make-list array-dimension-limit))))
+						(print (te (lambda () (funcall #'make-list *big* :initial-element *x*))))
+						(print (list (make-list *n* :initial-element *x*) (make-list 0) (make-list (- *n* 1))))
+						(defvar *log* nil)
+						(print (te (lambda () (make-list (progn (push :len *log*) -1) :initial-element (progn (push :elem *log*) *x*)))))
+						(print (reverse *log*))
+						"""))
+			.isEqualTo(
+					"""
+							("MAKE-LIST: The value 1267650600228229401496703205376 is not of type (INTEGER 0 (2147483639))" 1267650600228229401496703205376 (INTEGER 0 (2147483639)))
+							("MAKE-LIST: The value -1 is not of type (INTEGER 0 (2147483639))" -1 (INTEGER 0 (2147483639)))
+							("MAKE-LIST: The value -1 is not of type (INTEGER 0 (2147483639))" -1 (INTEGER 0 (2147483639)))
+							("MAKE-LIST: The value 2.5 is not of type (INTEGER 0 (2147483639))" 2.5 (INTEGER 0 (2147483639)))
+							("MAKE-LIST: The value A is not of type (INTEGER 0 (2147483639))" A (INTEGER 0 (2147483639)))
+							("MAKE-LIST: The value 2147483639 is not of type (INTEGER 0 (2147483639))" 2147483639 (INTEGER 0 (2147483639)))
+							("MAKE-LIST: The value 1267650600228229401496703205376 is not of type (INTEGER 0 (2147483639))" 1267650600228229401496703205376 (INTEGER 0 (2147483639)))
+							((A A A) NIL (NIL NIL))
+							("MAKE-LIST: The value -1 is not of type (INTEGER 0 (2147483639))" -1 (INTEGER 0 (2147483639)))
+							(:LEN :ELEM)""");
+	}
+
+	@Test
+	void oneArgumentCallsCheckTheirArgument() throws Exception {
+		// The evaluator twin is oneArgumentCallsCheckTheirArgument.
+		assertThat(compileAndRun("""
+				(defun te (thunk)
+				  (handler-case (funcall thunk)
+				    (type-error (e) (list (princ-to-string e) (type-error-datum e) (type-error-expected-type e)))
+				    (error (e) (list :not-a-type-error (princ-to-string e)))))
+				(defvar *x* 'a)
+				(defvar *c* 1)
+				(print (te (lambda () (+ *x*))))
+				(print (te (lambda () (* *x*))))
+				(print (te (lambda () (logand 1.5))))
+				(print (te (lambda () (logeqv *x*))))
+				(print (te (lambda () (> *x*))))
+				(print (te (lambda () (= *x*))))
+				(print (te (lambda () (/= *x*))))
+				(print (te (lambda () (min #c(1 2)))))
+				(print (te (lambda () (funcall #'max *x*))))
+				(print (te (lambda () (if (<= *x*) :y :n))))
+				(print (te (lambda () (char= *c*))))
+				(print (te (lambda () (char/= #\\a #\\b *c*))))
+				(print (te (lambda () (char>= #\\b #\\a *c*))))
+				(print (te (lambda () (if (char< *c* #\\a) :y :n))))
+				(print (te (lambda () (char-equal *c*))))
+				(print (te (lambda () (char-not-lessp *c*))))
+				(print (te (lambda () (funcall #'char= *c*))))
+				(print (list (+ 5) (* 2.5) (< 3) (= #c(1 2)) (/= 1) (max -0.0) (logand 6)
+				             (char= #\\a) (char/= #\\a #\\b #\\a) (char> #\\c #\\b #\\a) (char-equal #\\A #\\a #\\a)))
+				(let ((n 0)) (print (list (char= #\\a #\\b (progn (incf n) #\\c)) n)))
+				""")).isEqualTo("""
+				("+: The value A is not of type NUMBER" A NUMBER)
+				("*: The value A is not of type NUMBER" A NUMBER)
+				("LOGAND: The value 1.5 is not of type INTEGER" 1.5 INTEGER)
+				("LOGXOR: The value A is not of type INTEGER" A INTEGER)
+				(">: The value A is not of type REAL" A REAL)
+				("=: The value A is not of type NUMBER" A NUMBER)
+				("=: The value A is not of type NUMBER" A NUMBER)
+				("MIN: The value #C(1 2) is not of type REAL" #C(1 2) REAL)
+				("MAX: The value A is not of type REAL" A REAL)
+				("<=: The value A is not of type REAL" A REAL)
+				("CHAR=: The value 1 is not of type CHARACTER" 1 CHARACTER)
+				("CHAR/=: The value 1 is not of type CHARACTER" 1 CHARACTER)
+				("CHAR>=: The value 1 is not of type CHARACTER" 1 CHARACTER)
+				("CHAR<: The value 1 is not of type CHARACTER" 1 CHARACTER)
+				("CHAR-EQUAL: The value 1 is not of type CHARACTER" 1 CHARACTER)
+				("CHAR-NOT-LESSP: The value 1 is not of type CHARACTER" 1 CHARACTER)
+				("CHAR=: The value 1 is not of type CHARACTER" 1 CHARACTER)
+				(5 2.5 T T T -0.0 6 T NIL T T)
+				(NIL 1)""");
+	}
+
+	@Test
+	void characterBuiltInsCheckTheirArgument() throws Exception {
+		// The evaluator twin is characterBuiltInsCheckTheirArgument. The unboxing's
+		// checkcast failed here with the generic report and a NIL datum.
+		assertThat(compileAndRun(
+				"""
+						(defun te (thunk)
+						  (handler-case (funcall thunk)
+						    (type-error (e) (list (princ-to-string e) (type-error-datum e) (type-error-expected-type e)))
+						    (error (e) (list :not-a-type-error (princ-to-string e)))))
+						(defvar *c* 1)
+						(defvar *x* 'a)
+						(print (te (lambda () (char-code *c*))))
+						(print (te (lambda () (char-code 1))))
+						(print (te (lambda () (char-int *c*))))
+						(print (te (lambda () (char-upcase *c*))))
+						(print (te (lambda () (char-downcase *c*))))
+						(print (te (lambda () (alpha-char-p *c*))))
+						(print (te (lambda () (if (alpha-char-p *c*) :y :n))))
+						(print (te (lambda () (digit-char-p *c*))))
+						(print (te (lambda () (digit-char-p #\\a *x*))))
+						(print (te (lambda () (upper-case-p *c*))))
+						(print (te (lambda () (if (lower-case-p *c*) :y :n))))
+						(print (te (lambda () (both-case-p *c*))))
+						(print (te (lambda () (alphanumericp *c*))))
+						(print (te (lambda () (char-name *c*))))
+						(print (te (lambda () (graphic-char-p *c*))))
+						(print (te (lambda () (standard-char-p *c*))))
+						(print (te (lambda () (funcall #'char-code *c*))))
+						(print (te (lambda () (mapcar #'char-upcase (list #\\a *c*)))))
+						(print (te (lambda () (funcall #'lower-case-p *c*))))
+						(print (te (lambda () (funcall #'digit-char-p *c* 16))))
+						(print (list (char-code #\\a) (char-int #\\a) (char-upcase #\\a) (char-downcase #\\A) (alpha-char-p #\\a) (digit-char-p #\\7)
+						             (digit-char-p #\\f 16) (upper-case-p #\\A) (lower-case-p #\\A) (both-case-p #\\1)
+						             (alphanumericp #\\x) (char-name #\\Space) (graphic-char-p #\\a) (standard-char-p #\\Newline)))
+						"""))
+			.isEqualTo("""
+					("CHAR-CODE: The value 1 is not of type CHARACTER" 1 CHARACTER)
+					("CHAR-CODE: The value 1 is not of type CHARACTER" 1 CHARACTER)
+					("CHAR-INT: The value 1 is not of type CHARACTER" 1 CHARACTER)
+					("CHAR-UPCASE: The value 1 is not of type CHARACTER" 1 CHARACTER)
+					("CHAR-DOWNCASE: The value 1 is not of type CHARACTER" 1 CHARACTER)
+					("ALPHA-CHAR-P: The value 1 is not of type CHARACTER" 1 CHARACTER)
+					("ALPHA-CHAR-P: The value 1 is not of type CHARACTER" 1 CHARACTER)
+					("DIGIT-CHAR-P: The value 1 is not of type CHARACTER" 1 CHARACTER)
+					("DIGIT-CHAR-P: The value A is not of type (INTEGER 2 36)" A (INTEGER 2 36))
+					("UPPER-CASE-P: The value 1 is not of type CHARACTER" 1 CHARACTER)
+					("LOWER-CASE-P: The value 1 is not of type CHARACTER" 1 CHARACTER)
+					("BOTH-CASE-P: The value 1 is not of type CHARACTER" 1 CHARACTER)
+					("ALPHANUMERICP: The value 1 is not of type CHARACTER" 1 CHARACTER)
+					("CHAR-NAME: The value 1 is not of type CHARACTER" 1 CHARACTER)
+					("GRAPHIC-CHAR-P: The value 1 is not of type CHARACTER" 1 CHARACTER)
+					("STANDARD-CHAR-P: The value 1 is not of type CHARACTER" 1 CHARACTER)
+					("CHAR-CODE: The value 1 is not of type CHARACTER" 1 CHARACTER)
+					("CHAR-UPCASE: The value 1 is not of type CHARACTER" 1 CHARACTER)
+					("LOWER-CASE-P: The value 1 is not of type CHARACTER" 1 CHARACTER)
+					("DIGIT-CHAR-P: The value 1 is not of type CHARACTER" 1 CHARACTER)
+					(97 97 #\\A #\\a T 7 15 T NIL NIL T "Space" T T)""");
+	}
+
+	@Test
+	void listWalksAndStringIndicesNameTheOperator() throws Exception {
+		// A list walk over a non-list and a string index that is no integer name their
+		// operator as the other wrong-type arguments do (compiler/OperandTypes): nthcdr's
+		// walk (and so nth and second..tenth), endp and so dolist -- which checks its
+		// list's end once after the loop, CL's endp -- and char/schar.
+		// The walks used to report the landing pad's generic text or answer NIL, an index
+		// nil a NullPointerException.
+		assertThat(compileAndRun("""
+				(defun te (thunk)
+				  (handler-case (funcall thunk)
+				    (type-error (e) (list (princ-to-string e) (type-error-datum e) (type-error-expected-type e)))
+				    (error (e) (list :not-a-type-error (princ-to-string e)))))
+				(defvar *te-n* nil)
+				(defvar *te-five* 5)
+				(print (te (lambda () (nthcdr 1 *te-five*))))
+				(print (te (lambda () (nthcdr 1 5))))
+				(print (te (lambda () (nthcdr 2 '(1 . 2)))))
+				(print (te (lambda () (nth 1 *te-five*))))
+				(print (te (lambda () (second *te-five*))))
+				(print (te (lambda () (third '(1 . 2)))))
+				(print (te (lambda () (funcall #'nthcdr 1 *te-five*))))
+				(print (te (lambda () (funcall #'nth 1 *te-five*))))
+				(print (te (lambda () (funcall #'second *te-five*))))
+				(print (te (lambda () (funcall #'second '(1 . 5)))))
+				(print (te (lambda () (dolist (x *te-five*) x))))
+				(print (te (lambda () (dolist (x 5) x))))
+				(print (te (lambda () (dolist (x *te-five*)))))
+				(let ((seen nil))
+				  (print (list (te (lambda () (dolist (x '(1 2 . 3)) (push x seen)))) seen)))
+				(print (te (lambda () (endp *te-five*))))
+				(print (te (lambda () (funcall #'endp *te-five*))))
+				(print (list (endp nil) (endp '(1)) (dolist (x '(1 2) :done) x)))
+				(print (te (lambda () (char "ab" *te-n*))))
+				(print (te (lambda () (schar "ab" *te-n*))))
+				(print (te (lambda () (char "ab" 1.5))))
+				(print (te (lambda () (funcall #'char "ab" *te-n*))))
+				""")).isEqualTo("""
+				("NTHCDR: The value 5 is not of type LIST" 5 LIST)
+				("NTHCDR: The value 5 is not of type LIST" 5 LIST)
+				("NTHCDR: The value 2 is not of type LIST" 2 LIST)
+				("NTHCDR: The value 5 is not of type LIST" 5 LIST)
+				("NTHCDR: The value 5 is not of type LIST" 5 LIST)
+				("NTHCDR: The value 2 is not of type LIST" 2 LIST)
+				("NTHCDR: The value 5 is not of type LIST" 5 LIST)
+				("NTHCDR: The value 5 is not of type LIST" 5 LIST)
+				("NTHCDR: The value 5 is not of type LIST" 5 LIST)
+				("CAR: The value 5 is not of type LIST" 5 LIST)
+				("ENDP: The value 5 is not of type LIST" 5 LIST)
+				("ENDP: The value 5 is not of type LIST" 5 LIST)
+				("ENDP: The value 5 is not of type LIST" 5 LIST)
+				(("ENDP: The value 3 is not of type LIST" 3 LIST) (2 1))
+				("ENDP: The value 5 is not of type LIST" 5 LIST)
+				("ENDP: The value 5 is not of type LIST" 5 LIST)
+				(T NIL :DONE)
+				("CHAR: The value NIL is not of type INTEGER" NIL INTEGER)
+				("SCHAR: The value NIL is not of type INTEGER" NIL INTEGER)
+				("CHAR: The value 1.5 is not of type INTEGER" 1.5 INTEGER)
+				("CHAR: The value NIL is not of type INTEGER" NIL INTEGER)""");
+	}
+
+	@Test
+	void listConsumersNameTheOperator() throws Exception {
+		// A list consumer over a non-list names its operator as the list walks do
+		// (compiler/OperandTypes): length of a non-sequence (SEQUENCE), last and the map*
+		// family of a non-list (LIST), rplaca/rplacd of a non-cons (CONS), and loop's
+		// for-in, which checks its list's end as endp does.
+		// length and last answered wrong values here (0, and the argument itself), rplaca
+		// the landing pad's generic text.
+		assertThat(compileAndRun("""
+				(defun te (thunk)
+				  (handler-case (funcall thunk)
+				    (type-error (e) (list (princ-to-string e) (type-error-datum e) (type-error-expected-type e)))
+				    (error (e) (list :not-a-type-error (princ-to-string e)))))
+				(defvar *te-five* 5)
+				(defvar *te-sym* 'foo)
+				(defvar *te-nil* nil)
+				(print (te (lambda () (length *te-five*))))
+				(print (te (lambda () (length *te-sym*))))
+				(print (te (lambda () (length (make-hash-table)))))
+				(print (te (lambda () (funcall #'length *te-five*))))
+				(print (list (length nil) (length '(1 2)) (length "ab") (length (vector 1 2 3))))
+				(print (te (lambda () (last *te-five*))))
+				(print (te (lambda () (last *te-five* 1))))
+				(print (te (lambda () (funcall #'last *te-five*))))
+				(print (list (last nil) (last '(1 2 . 3)) (last '(1 2 3) 2)))
+				(print (te (lambda () (rplaca *te-five* 0))))
+				(print (te (lambda () (rplacd *te-nil* 0))))
+				(print (te (lambda () (funcall #'rplaca *te-five* 0))))
+				(print (te (lambda () (setf (car *te-five*) 0))))
+				(print (te (lambda () (mapcar #'1+ *te-five*))))
+				(print (te (lambda () (mapcar #'+ '(1 2) *te-five*))))
+				(print (te (lambda () (mapc #'1+ *te-five*))))
+				(print (te (lambda () (mapcan #'list *te-five*))))
+				(print (te (lambda () (maplist #'car *te-five*))))
+				(print (te (lambda () (mapl #'car *te-five*))))
+				(print (te (lambda () (mapcon #'list *te-five*))))
+				(print (te (lambda () (funcall #'mapcar #'1+ *te-five*))))
+				(print (te (lambda () (loop for x in *te-five* collect x))))
+				(let ((seen nil))
+				  (print (list (te (lambda () (loop for x in '(1 2 . 3) do (push x seen)))) seen)))
+				(print (list (loop for x in '(1 2) collect x) (loop for x in nil collect x) (mapcar #'1+ nil)))
+				""")).isEqualTo(
+				"""
+						("LENGTH: The value 5 is not of type SEQUENCE" 5 SEQUENCE)
+						("LENGTH: The value FOO is not of type SEQUENCE" FOO SEQUENCE)
+						("LENGTH: The value #<HASH-TABLE :TEST EQUAL :COUNT 0> is not of type SEQUENCE" #<HASH-TABLE :TEST EQUAL :COUNT 0> SEQUENCE)
+						("LENGTH: The value 5 is not of type SEQUENCE" 5 SEQUENCE)
+						(0 2 2 3)
+						("LAST: The value 5 is not of type LIST" 5 LIST)
+						("LAST: The value 5 is not of type LIST" 5 LIST)
+						("LAST: The value 5 is not of type LIST" 5 LIST)
+						(NIL (2 . 3) (2 3))
+						("RPLACA: The value 5 is not of type CONS" 5 CONS)
+						("RPLACD: The value NIL is not of type CONS" NIL CONS)
+						("RPLACA: The value 5 is not of type CONS" 5 CONS)
+						("RPLACA: The value 5 is not of type CONS" 5 CONS)
+						("MAPCAR: The value 5 is not of type LIST" 5 LIST)
+						("MAPCAR: The value 5 is not of type LIST" 5 LIST)
+						("MAPC: The value 5 is not of type LIST" 5 LIST)
+						("MAPCAN: The value 5 is not of type LIST" 5 LIST)
+						("MAPLIST: The value 5 is not of type LIST" 5 LIST)
+						("MAPL: The value 5 is not of type LIST" 5 LIST)
+						("MAPCON: The value 5 is not of type LIST" 5 LIST)
+						("MAPCAR: The value 5 is not of type LIST" 5 LIST)
+						("ENDP: The value 5 is not of type LIST" 5 LIST)
+						(("ENDP: The value 3 is not of type LIST" 3 LIST) (2 1))
+						((1 2) NIL NIL)""");
+	}
+
+	@Test
+	void consAccessorsRejectEveryObjectArrayThatIsNoCons() throws Exception {
+		// An instance, a ratio and a function reference are Object[]s like a cons cell;
+		// car/cdr/endp/rplaca/rplacd/nthcdr and the inline map walks read them as one:
+		// the instance's layout for its car, its first slot overwritten by rplacd.
+		assertThat(compileAndRun("""
+				(defun te (thunk)
+				  (handler-case (funcall thunk)
+				    (type-error (e) (list (princ-to-string e) (type-error-expected-type e)))
+				    (error (e) (list :not-a-type-error (princ-to-string e)))))
+				(defun id (x) x)
+				(defstruct pt x y)
+				(defvar *pt* (make-pt :x 1 :y 2))
+				(print (te (lambda () (car (id *pt*)))))
+				(print (te (lambda () (cdr (id *pt*)))))
+				(print (te (lambda () (endp (id *pt*)))))
+				(print (te (lambda () (dolist (x (id *pt*) :walked) x))))
+				(print (te (lambda () (rplaca (id *pt*) 9))))
+				(print (te (lambda () (rplacd (id *pt*) 9))))
+				(print (te (lambda () (nthcdr 1 (id *pt*)))))
+				(print (te (lambda () (mapcar #'id (id *pt*)))))
+				(print (te (lambda () (car (id 1/2)))))
+				(print (te (lambda () (cdr (id #'id)))))
+				(print *pt*)
+				(print (te (lambda () (handler-bind ((error (lambda (c) (car c)))) (error "first")))))
+				(print (list (car (id '(1 . 2))) (cdr (id '(1 . 2))) (endp (id '(1))) (nthcdr 1 (id '(1 2)))))
+				""")).isEqualTo(
+				"""
+						("CAR: The value #S(PT :X 1 :Y 2) is not of type LIST" LIST)
+						("CDR: The value #S(PT :X 1 :Y 2) is not of type LIST" LIST)
+						("ENDP: The value #S(PT :X 1 :Y 2) is not of type LIST" LIST)
+						("ENDP: The value #S(PT :X 1 :Y 2) is not of type LIST" LIST)
+						("RPLACA: The value #S(PT :X 1 :Y 2) is not of type CONS" CONS)
+						("RPLACD: The value #S(PT :X 1 :Y 2) is not of type CONS" CONS)
+						("NTHCDR: The value #S(PT :X 1 :Y 2) is not of type LIST" LIST)
+						("MAPCAR: The value #S(PT :X 1 :Y 2) is not of type LIST" LIST)
+						("CAR: The value 1/2 is not of type LIST" LIST)
+						("CDR: The value #<function ID> is not of type LIST" LIST)
+						#S(PT :X 1 :Y 2)
+						("CAR: The value #<SIMPLE-ERROR :FORMAT-CONTROL \\"first\\" :FORMAT-ARGUMENTS NIL> is not of type LIST" LIST)
+						(1 2 NIL (2))""");
+		// Without an instance the program tests for none, and still excludes a ratio
+		// and a function reference.
+		assertThat(compileAndRun("""
+				(defun id (x) x)
+				(defun te (thunk)
+				  (handler-case (funcall thunk)
+				    (type-error (e) (list (princ-to-string e) (type-error-expected-type e)))))
+				(print (te (lambda () (car (id #'id)))))
+				(print (te (lambda () (endp (id 1/2)))))
+				(print (te (lambda () (mapc #'print (id #'id)))))
+				(print (te (lambda () (mapcan #'list (id 1/2)))))
+				(print (te (lambda () (mapcar #'+ '(1 2) (id #'id)))))
+				(print (list (mapcar #'1+ (id '(1 2))) (mapcan #'list (id '(1 2))) (mapc #'id (id '(1)))))
+				""")).isEqualTo("""
+				("CAR: The value #<function ID> is not of type LIST" LIST)
+				("ENDP: The value 1/2 is not of type LIST" LIST)
+				("MAPC: The value #<function ID> is not of type LIST" LIST)
+				("MAPCAN: The value 1/2 is not of type LIST" LIST)
+				("MAPCAR: The value #<function ID> is not of type LIST" LIST)
+				((2 3) (1 2) (1))""");
+		// A stream is an Object[3] headed by its marker.
+		assertThat(compileAndRun("""
+				(defun id (x) x)
+				(defvar *s* (rontolisp::%stream-new (lambda () nil) (lambda () nil)))
+				(defun te (thunk)
+				  (handler-case (funcall thunk)
+				    (type-error (e) (type-error-expected-type e))))
+				(print (list (te (lambda () (car (id *s*)))) (te (lambda () (rplaca (id *s*) 1)))
+				             (te (lambda () (nthcdr 1 (id *s*)))) (te (lambda () (mapcar #'id (id *s*))))))
+				(print (car (id (list (id *s*) 2))))
+				""")).isEqualTo("""
+				(LIST CONS LIST LIST)
+				#<STREAM>""");
+	}
+
+	@Test
+	void stringAccessesNameTheOperator() throws Exception {
+		// A string access names its operator (compiler/OperandTypes): char/schar of a
+		// non-string (STRING), and a (setf char|schar) place's string and subscript --
+		// under (SETF CHAR) / (SETF SCHAR); a string-holding aref/elt place's subscript
+		// is
+		// (SETF AREF)'s, as its array arm's is, and row-major-aref's (SETF
+		// ROW-MAJOR-AREF)'s.
+		// The twins are LispEvaluatorTest, JvmLispCompilerTest and
+		// WasmLispCompilerIntegrationTest's stringAccessesNameTheOperator.
+		// A non-string reported the landing pad's generic text (a symbol read as its
+		// name), a (setf char) subscript a NullPointerException.
+		assertThat(compileAndRun("""
+				(defun te (thunk)
+				  (handler-case (funcall thunk)
+				    (type-error (e) (list (princ-to-string e) (type-error-datum e) (type-error-expected-type e)))
+				    (error (e) (list :not-a-type-error (princ-to-string e)))))
+				(defvar *te-n* nil)
+				(defvar *te-five* 5)
+				(defvar *te-sym* 'foo)
+				(print (te (lambda () (char *te-five* 0))))
+				(print (te (lambda () (schar *te-five* 0))))
+				(print (te (lambda () (char *te-sym* 0))))
+				(print (te (lambda () (char (vector #\\a) 0))))
+				(print (te (lambda () (funcall #'char *te-five* 0))))
+				(print (te (lambda () (char *te-five* *te-n*))))
+				(print (te (lambda () (let ((s (copy-seq "ab"))) (setf (char s *te-n*) #\\x)))))
+				(print (te (lambda () (let ((s (make-string 2))) (setf (schar s 1.5) #\\x)))))
+				(print (te (lambda () (let ((s *te-five*)) (setf (char s 0) #\\x)))))
+				(print (te (lambda () (let ((s *te-sym*)) (setf (schar s 0) #\\x)))))
+				(print (te (lambda () (let ((s (copy-seq "ab"))) (setf (aref s *te-n*) #\\x)))))
+				(print (te (lambda () (let ((s (copy-seq "ab"))) (setf (elt s *te-n*) #\\x)))))
+				(print (te (lambda () (let ((s (copy-seq "ab"))) (setf (row-major-aref s *te-n*) #\\x)))))
+				(let ((s (copy-seq "ab")) (m (make-string 2 :initial-element #\\z)))
+				  (setf (char s 0) #\\x)
+				  (setf (schar m 1) #\\y)
+				  (print (list s m (char s 0) (schar m 1) (char "héllo" 1))))
+				""")).isEqualTo("""
+				("CHAR: The value 5 is not of type STRING" 5 STRING)
+				("SCHAR: The value 5 is not of type STRING" 5 STRING)
+				("CHAR: The value FOO is not of type STRING" FOO STRING)
+				("CHAR: The value #(#\\\\a) is not of type STRING" #(#\\a) STRING)
+				("CHAR: The value 5 is not of type STRING" 5 STRING)
+				("CHAR: The value NIL is not of type INTEGER" NIL INTEGER)
+				("(SETF CHAR): The value NIL is not of type INTEGER" NIL INTEGER)
+				("(SETF SCHAR): The value 1.5 is not of type INTEGER" 1.5 INTEGER)
+				("(SETF CHAR): The value 5 is not of type STRING" 5 STRING)
+				("(SETF SCHAR): The value FOO is not of type STRING" FOO STRING)
+				("(SETF AREF): The value NIL is not of type INTEGER" NIL INTEGER)
+				("(SETF AREF): The value NIL is not of type INTEGER" NIL INTEGER)
+				("(SETF ROW-MAJOR-AREF): The value NIL is not of type INTEGER" NIL INTEGER)
+				("xb" "zy" #\\x #\\y #\\é)""");
+	}
+
+	@Test
+	void stringStoresAndRowMajorSubscriptsNameTheOperator() throws Exception {
+		// A string store's value and row-major-aref's subscript name the operator
+		// (compiler/OperandTypes): a non-character stored through a char/schar/aref/elt/
+		// row-major-aref place is its store's CHARACTER type-error, and a row-major-aref
+		// subscript that is no integer ROW-MAJOR-AREF's / (SETF ROW-MAJOR-AREF)'s INTEGER
+		// one, on every arm. The twins are LispEvaluatorTest, JvmLispCompilerTest and
+		// WasmLispCompilerIntegrationTest's
+		// stringStoresAndRowMajorSubscriptsNameTheOperator.
+		// The store succeeded and printing the string threw a ClassCastException; a
+		// row-major-aref subscript was a NullPointerException.
+		assertThat(compileAndRun(
+				"""
+						(defun te (thunk)
+						  (handler-case (funcall thunk)
+						    (type-error (e) (list (princ-to-string e) (type-error-datum e) (type-error-expected-type e)))
+						    (error (e) (list :not-a-type-error (princ-to-string e)))))
+						(defvar *te-nil* nil)
+						(defvar *te-five* 5)
+						(defvar *te-sym* 'foo)
+						(let ((s (copy-seq "ab")))
+						  (print (te (lambda () (setf (char s 0) *te-five*))))
+						  (print (te (lambda () (setf (schar s 1) *te-sym*))))
+						  (print (te (lambda () (setf (aref s 0) *te-five*))))
+						  (print (te (lambda () (setf (elt s 0) *te-five*))))
+						  (print (te (lambda () (setf (row-major-aref s 0) *te-five*))))
+						  (print s))
+						(let ((v (vector 1 2 3)) (s (copy-seq "ab")) (m (make-array '(2 2) :initial-element 0))
+						      (u (make-array 3 :element-type '(unsigned-byte 8))) (d (make-array 2 :element-type 'double-float)))
+						  (print (te (lambda () (row-major-aref v *te-nil*))))
+						  (print (te (lambda () (setf (row-major-aref v *te-nil*) 0))))
+						  (print (te (lambda () (row-major-aref s *te-nil*))))
+						  (print (te (lambda () (setf (row-major-aref s *te-nil*) #\\x))))
+						  (print (te (lambda () (row-major-aref m 1.5))))
+						  (print (te (lambda () (setf (row-major-aref m *te-sym*) 1))))
+						  (print (te (lambda () (row-major-aref u *te-nil*))))
+						  (print (te (lambda () (setf (row-major-aref d 0) *te-sym*))))
+						  (setf (row-major-aref m 3) 7 (row-major-aref s 1) #\\y (row-major-aref d 1) 2)
+						  (print (list (row-major-aref m 3) s (row-major-aref d 1) (row-major-aref v 2))))
+						"""))
+			.isEqualTo("""
+					("(SETF CHAR): The value 5 is not of type CHARACTER" 5 CHARACTER)
+					("(SETF SCHAR): The value FOO is not of type CHARACTER" FOO CHARACTER)
+					("(SETF AREF): The value 5 is not of type CHARACTER" 5 CHARACTER)
+					("(SETF AREF): The value 5 is not of type CHARACTER" 5 CHARACTER)
+					("(SETF ROW-MAJOR-AREF): The value 5 is not of type CHARACTER" 5 CHARACTER)
+					"ab"
+					("ROW-MAJOR-AREF: The value NIL is not of type INTEGER" NIL INTEGER)
+					("(SETF ROW-MAJOR-AREF): The value NIL is not of type INTEGER" NIL INTEGER)
+					("ROW-MAJOR-AREF: The value NIL is not of type INTEGER" NIL INTEGER)
+					("(SETF ROW-MAJOR-AREF): The value NIL is not of type INTEGER" NIL INTEGER)
+					("ROW-MAJOR-AREF: The value 1.5 is not of type INTEGER" 1.5 INTEGER)
+					("(SETF ROW-MAJOR-AREF): The value FOO is not of type INTEGER" FOO INTEGER)
+					("ROW-MAJOR-AREF: The value NIL is not of type INTEGER" NIL INTEGER)
+					("(SETF ROW-MAJOR-AREF): The value FOO is not of type REAL" FOO REAL)
+					(7 "ay" 2.0 3)""");
+	}
+
+	@Test
+	void eltOfAListOutsideItIsATypeErrorNamingItsLength() throws Exception {
+		// elt of a LIST outside it -- past its end, negative, a bignum -- is ELT's
+		// type-error naming the list's length as its bound, as an out-of-range aref
+		// subscript names its dimension (.kb/error-handling.md, "An out-of-range
+		// subscript is a type-error naming its bound"); so is a (setf elt) place's. A
+		// non-list met on the walk is ELT's LIST type-error. The twins are
+		// LispEvaluatorTest, JvmLispCompilerTest and WasmLispCompilerIntegrationTest's
+		// eltOfAListOutsideItIsATypeErrorNamingItsLength. It answered nil past the end,
+		// the first element for -1, and (setf (elt l -1) v) stored into the first cell.
+		assertThat(compileAndRun("""
+				(defun te (thunk)
+				  (handler-case (funcall thunk)
+				    (type-error (e) (list (princ-to-string e) (type-error-datum e) (type-error-expected-type e)))
+				    (error (e) (list :not-a-type-error (princ-to-string e)))))
+				(defvar *l* (list 1 2 3))
+				(print (list (elt *l* 0) (elt *l* 2) (funcall #'elt *l* 1)))
+				(print (te (lambda () (elt *l* 3))))
+				(print (te (lambda () (elt *l* -1))))
+				(print (te (lambda () (elt *l* (expt 2 70)))))
+				(print (te (lambda () (elt nil 0))))
+				(print (te (lambda () (funcall #'elt *l* 3))))
+				(print (te (lambda () (elt '(1 . 2) 1))))
+				(print (te (lambda () (elt *l* "x"))))
+				(print (te (lambda () (setf (elt *l* 3) 0))))
+				(print (te (lambda () (setf (elt *l* -1) 0))))
+				(setf (elt *l* 1) 20)
+				(print *l*)
+				""")).isEqualTo(
+				"""
+						(1 3 2)
+						("ELT: The value 3 is not of type (INTEGER 0 (3))" 3 (INTEGER 0 (3)))
+						("ELT: The value -1 is not of type (INTEGER 0 (3))" -1 (INTEGER 0 (3)))
+						("ELT: The value 1180591620717411303424 is not of type (INTEGER 0 (3))" 1180591620717411303424 (INTEGER 0 (3)))
+						("ELT: The value 0 is not of type (INTEGER 0 (0))" 0 (INTEGER 0 (0)))
+						("ELT: The value 3 is not of type (INTEGER 0 (3))" 3 (INTEGER 0 (3)))
+						("ELT: The value 2 is not of type LIST" 2 LIST)
+						("ELT: The value \\"x\\" is not of type INTEGER" "x" INTEGER)
+						("ELT: The value 3 is not of type (INTEGER 0 (3))" 3 (INTEGER 0 (3)))
+						("ELT: The value -1 is not of type (INTEGER 0 (3))" -1 (INTEGER 0 (3)))
+						(1 20 3)""");
+	}
+
+	@Test
+	void outOfRangeSubscriptsAreTypeErrorsNamingTheirBound() throws Exception {
+		// A subscript outside its dimension is the access's type-error naming its bound:
+		// "OP: The value S is not of type (INTEGER 0 (D))", the datum the subscript and
+		// the expected type the list (.kb/error-handling.md, "An out-of-range subscript
+		// is
+		// a type-error naming its bound") -- per axis, the total size for a row-major
+		// access, a bignum out of range, a store's value checked before its bound and its
+		// value form run first. The twins are LispEvaluatorTest, JvmLispCompilerTest and
+		// WasmLispCompilerIntegrationTest's
+		// outOfRangeSubscriptsAreTypeErrorsNamingTheirBound.
+		// The JVM reported "index out of bounds" with neither slot (the host's
+		// "Index 5 out of bounds for length 3" uncaught) and read (aref m 0 3) as
+		// m[1][0].
+		assertThat(compileAndRun(
+				"""
+						(defun te (thunk)
+						  (handler-case (funcall thunk)
+						    (type-error (e) (list (princ-to-string e) (type-error-datum e) (type-error-expected-type e)))
+						    (error (e) (list :not-a-type-error (princ-to-string e)))))
+						(defvar *te-big* (expt 2 70))
+						(defvar *te-side* 0)
+						(let ((v (vector 1 2 3)) (d (make-array 3 :element-type 'double-float))
+						      (f (make-array 3 :element-type 'single-float)) (u (make-array 3 :element-type '(unsigned-byte 8)))
+						      (m (make-array '(2 3) :initial-element 0)) (dm (make-array '(2 3) :element-type 'double-float))
+						      (c (make-array '(2 2 2) :initial-element 0)) (fp (make-array 5 :fill-pointer 2 :initial-element 0))
+						      (dv (make-array 2 :displaced-to (make-array 10 :initial-element 7) :displaced-index-offset 3)))
+						  (print (te (lambda () (aref v 3))))
+						  (print (te (lambda () (aref v -1))))
+						  (print (te (lambda () (svref v 3))))
+						  (print (te (lambda () (elt v 3))))
+						  (print (te (lambda () (aref v *te-big*))))
+						  (print (te (lambda () (aref d 3))))
+						  (print (te (lambda () (aref d -1))))
+						  (print (te (lambda () (aref f 3))))
+						  (print (te (lambda () (aref u 3))))
+						  (print (list (aref fp 4) (te (lambda () (aref fp 5)))))
+						  (print (te (lambda () (aref dv 2))))
+						  (print (te (lambda () (aref m 0 3))))
+						  (print (te (lambda () (aref m 2 0))))
+						  (print (te (lambda () (aref dm 0 3))))
+						  (print (te (lambda () (aref c 0 2 0))))
+						  (print (te (lambda () (row-major-aref m 6))))
+						  (print (te (lambda () (row-major-aref u 3))))
+						  (print (te (lambda () (setf (aref v 3) 0))))
+						  (print (te (lambda () (setf (aref d 3) 1d0))))
+						  (print (te (lambda () (setf (aref d 3) "x"))))
+						  (print (te (lambda () (setf (aref u 3) (progn (incf *te-side*) 1)))))
+						  (print (te (lambda () (setf (aref m 0 3) 1))))
+						  (print (te (lambda () (setf (aref dm 2 0) 1d0))))
+						  (print (te (lambda () (setf (row-major-aref m 6) 0))))
+						  (print (te (lambda () (setf (row-major-aref d 3) 0d0))))
+						  (print (list *te-side* (aref m 1 2) (row-major-aref m 5) (equal (third (te (lambda () (aref v 9)))) '(integer 0 (3))))))
+						"""))
+			.isEqualTo(
+					"""
+							("AREF: The value 3 is not of type (INTEGER 0 (3))" 3 (INTEGER 0 (3)))
+							("AREF: The value -1 is not of type (INTEGER 0 (3))" -1 (INTEGER 0 (3)))
+							("AREF: The value 3 is not of type (INTEGER 0 (3))" 3 (INTEGER 0 (3)))
+							("AREF: The value 3 is not of type (INTEGER 0 (3))" 3 (INTEGER 0 (3)))
+							("AREF: The value 1180591620717411303424 is not of type (INTEGER 0 (3))" 1180591620717411303424 (INTEGER 0 (3)))
+							("AREF: The value 3 is not of type (INTEGER 0 (3))" 3 (INTEGER 0 (3)))
+							("AREF: The value -1 is not of type (INTEGER 0 (3))" -1 (INTEGER 0 (3)))
+							("AREF: The value 3 is not of type (INTEGER 0 (3))" 3 (INTEGER 0 (3)))
+							("AREF: The value 3 is not of type (INTEGER 0 (3))" 3 (INTEGER 0 (3)))
+							(0 ("AREF: The value 5 is not of type (INTEGER 0 (5))" 5 (INTEGER 0 (5))))
+							("AREF: The value 2 is not of type (INTEGER 0 (2))" 2 (INTEGER 0 (2)))
+							("AREF: The value 3 is not of type (INTEGER 0 (3))" 3 (INTEGER 0 (3)))
+							("AREF: The value 2 is not of type (INTEGER 0 (2))" 2 (INTEGER 0 (2)))
+							("AREF: The value 3 is not of type (INTEGER 0 (3))" 3 (INTEGER 0 (3)))
+							("AREF: The value 2 is not of type (INTEGER 0 (2))" 2 (INTEGER 0 (2)))
+							("ROW-MAJOR-AREF: The value 6 is not of type (INTEGER 0 (6))" 6 (INTEGER 0 (6)))
+							("ROW-MAJOR-AREF: The value 3 is not of type (INTEGER 0 (3))" 3 (INTEGER 0 (3)))
+							("(SETF AREF): The value 3 is not of type (INTEGER 0 (3))" 3 (INTEGER 0 (3)))
+							("(SETF AREF): The value 3 is not of type (INTEGER 0 (3))" 3 (INTEGER 0 (3)))
+							("(SETF AREF): The value \\"x\\" is not of type REAL" "x" REAL)
+							("(SETF AREF): The value 3 is not of type (INTEGER 0 (3))" 3 (INTEGER 0 (3)))
+							("(SETF AREF): The value 3 is not of type (INTEGER 0 (3))" 3 (INTEGER 0 (3)))
+							("(SETF AREF): The value 2 is not of type (INTEGER 0 (2))" 2 (INTEGER 0 (2)))
+							("(SETF ROW-MAJOR-AREF): The value 6 is not of type (INTEGER 0 (6))" 6 (INTEGER 0 (6)))
+							("(SETF ROW-MAJOR-AREF): The value 3 is not of type (INTEGER 0 (3))" 3 (INTEGER 0 (3)))
+							(1 0 0 T)""");
+	}
+
+	@Test
+	void aTypedLoopReportsAnOutOfRangeSubscriptAsTheBoxedPathDoes() throws Exception {
+		// A typed loop (.kb/jvm-typed-loops.md) checks each subscript against its own
+		// dimension through the access's wrapper, so an out-of-range one reports exactly
+		// what the boxed accessor would -- caught with the accumulator the boxed path
+		// leaves, and uncaught as the one report line; it rethrew the raw DALOAD's
+		// "Index 5 out of bounds for length 5", its length counting the header.
+		String source = """
+				(defun f (v n)
+				  (declare (type (simple-array double-float (*)) v) (fixnum n))
+				  (let ((s 0d0)) (declare (double-float s))
+				    (handler-case (dotimes (i n) (setf s (+ s (aref v i))))
+				      (type-error (e) (list (princ-to-string e) s)))))
+				(defun g (m n)
+				  (declare (type (simple-array double-float (* *)) m) (fixnum n))
+				  (dotimes (i n) (dotimes (j n) (setf (aref m i j) 1d0))))
+				(print (f (make-array 3 :element-type 'double-float :initial-element 1d0) 5))
+				(print (handler-case (g (make-array '(2 3) :element-type 'double-float) 3)
+				         (type-error (e) (princ-to-string e))))
+				""";
+		String expected = """
+				("AREF: The value 3 is not of type (INTEGER 0 (3))" 3.0)
+				"(SETF AREF): The value 2 is not of type (INTEGER 0 (2))\"""";
+		List<LispVal> program = am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString(source));
+		byte[] fast = JvmLispCompiler.builder()
+			.className("Test")
+			.optimize(OptimizeLevel.DEFAULT)
+			.build()
+			.compile(program);
+		byte[] small = JvmLispCompiler.builder()
+			.className("Test")
+			.optimize(OptimizeLevel.SIZE)
+			.build()
+			.compile(program);
+		assertThat(small).isNotEqualTo(fast);
+		assertThat(runClass(fast)).isEqualTo(expected);
+		assertThat(runClass(small)).isEqualTo(expected);
+	}
+
+	@Test
+	void compileAndRunDivisionByZeroIsACatchableCondition() throws Exception {
+		// The interpreter twin is LispEvaluatorTest#divisionByZeroIsACatchableCondition:
+		// _mod/_rem (and the fused trees that bail to them) reported the host's
+		// "/ by zero" / "BigInteger divide by zero".
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess
+			.corpus(am.ik.rontolisp.DivisionByZeroFixture.SOURCE, am.ik.rontolisp.reader.Features.JVM, false, false)))
+			.isEqualTo(am.ik.rontolisp.DivisionByZeroFixture.EXPECTED);
+	}
+
+	@Test
+	void compileAndRunARunawayAshCountSignalsASimpleError() throws Exception {
+		// The interpreter twin is LispEvaluatorTest#aRunawayAshCountSignalsASimpleError:
+		// _ash threw an arithmetic-error without the count, and a count at the int
+		// range's edge reported BigInteger's own text.
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess
+			.corpus(am.ik.rontolisp.AshCountFixture.SOURCE, am.ik.rontolisp.reader.Features.JVM, false, false)))
+			.isEqualTo(am.ik.rontolisp.AshCountFixture.EXPECTED);
+	}
+
+	@Test
+	void compileAndRunZeroBaseToAComplexPower() throws Exception {
+		// The interpreter twin is LispEvaluatorTest#zeroBaseToAComplexPower: _cpow's
+		// exp(w*log z) answered #C(NaN NaN) for a zero base and every power.
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(
+				am.ik.rontolisp.ZeroBaseComplexPowerFixture.SOURCE, am.ik.rontolisp.reader.Features.JVM, false, false)))
+			.isEqualTo(am.ik.rontolisp.ZeroBaseComplexPowerFixture.EXPECTED);
+	}
+
+	@Test
+	void compileAndRunComplexBaseToARationalPower() throws Exception {
+		// The interpreter twin is LispEvaluatorTest#complexBaseToARationalPower: _cpow
+		// took exp(p*log z) for a float complex to an integer and lost a -0.0 part.
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(
+				am.ik.rontolisp.ComplexRationalPowerFixture.SOURCE, am.ik.rontolisp.reader.Features.JVM, false, false)))
+			.isEqualTo(am.ik.rontolisp.ComplexRationalPowerFixture.EXPECTED);
+	}
+
+	@Test
+	void compileAndRunComplexThroughAVariable() throws Exception {
+		// The interpreter twin is LispEvaluatorTest#complexThroughAVariable: a call site
+		// with no complex in its own text reached _add/_mul/_pow/StrictMath with a holder
+		// and reported it as a wrong-type operand, and an ordering answered nil.
+		assertThat(compileAndRun(
+				am.ik.rontolisp.cli.CompileFrontendAccess.corpus(am.ik.rontolisp.ComplexThroughAVariableFixture.SOURCE,
+						am.ik.rontolisp.reader.Features.JVM, false, false)))
+			.isEqualTo(am.ik.rontolisp.ComplexThroughAVariableFixture.EXPECTED);
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(
+				am.ik.rontolisp.ComplexThroughAVariableFixture.SIGNALS_SOURCE, am.ik.rontolisp.reader.Features.JVM,
+				false, false)))
+			.isEqualTo(am.ik.rontolisp.ComplexThroughAVariableFixture.SIGNALS_EXPECTED);
+	}
+
+	@Test
+	void compileAndRunArefChecksItsArraysRankAndItsSubscriptsType() throws Exception {
+		// The twin of LispEvaluatorTest#arefChecksItsArraysRankAndItsSubscriptsType. A
+		// fused tree's aref read a rank-2 array's flat storage as rank 1, and its
+		// fallback checked a non-integer subscript only against the bound; a call
+		// checked the rank before it evaluated its subscripts and signalled a
+		// simple-error. Both levels: size declines fusion.
+		List<LispVal> program = fixtureProgram(am.ik.rontolisp.ArefRankAndSubscriptChecksFixture.SOURCE);
+		List<LispVal> order = fixtureProgram(am.ik.rontolisp.ArefRankAndSubscriptChecksFixture.ORDER_SOURCE);
+		for (OptimizeLevel level : List.of(OptimizeLevel.DEFAULT, OptimizeLevel.SIZE)) {
+			assertThat(compileAndRun(program, level)).as("level %s", level)
+				.isEqualTo(am.ik.rontolisp.ArefRankAndSubscriptChecksFixture.EXPECTED);
+			assertThat(compileAndRun(order, level)).as("order, level %s", level)
+				.isEqualTo(am.ik.rontolisp.ArefRankAndSubscriptChecksFixture.ORDER_EXPECTED);
+		}
+	}
+
+	@Test
+	void compileAndRunFastPathsKeepTheInterpretersEvaluationOrder() throws Exception {
+		// The twin of LispEvaluatorTest#fastPathsKeepTheInterpretersEvaluationOrder. The
+		// unboxed double path converted an operand before the operation's later operands
+		// ran and reported an inner operation under the outer one's operator, a fused
+		// tree evaluated every leaf before applying anything -- after a later leaf's
+		// output, exit or store -- and the two-argument log took the number's logarithm
+		// before its base was evaluated. Both levels: size declines fusion.
+		String[][] fixtures = {
+				{ FastPathEvaluationOrderFixture.SIGNALS_SOURCE, FastPathEvaluationOrderFixture.SIGNALS_EXPECTED },
+				{ FastPathEvaluationOrderFixture.VALUES_SOURCE, FastPathEvaluationOrderFixture.VALUES_EXPECTED },
+				{ FastPathEvaluationOrderFixture.COMPLEX_SOURCE, FastPathEvaluationOrderFixture.COMPLEX_EXPECTED } };
+		for (OptimizeLevel level : List.of(OptimizeLevel.DEFAULT, OptimizeLevel.SIZE)) {
+			for (String[] fixture : fixtures) {
+				assertThat(compileAndRun(fixtureProgram(fixture[0]), level)).as("level %s", level)
+					.isEqualTo(fixture[1]);
+			}
+		}
+	}
+
+	private static List<LispVal> fixtureProgram(String source) {
+		return am.ik.rontolisp.cli.CompileFrontendAccess.corpus(source, am.ik.rontolisp.reader.Features.JVM, false,
+				false);
+	}
+
+	private String compileAndRun(List<LispVal> program, OptimizeLevel level) throws Exception {
+		JvmLispCompiler compiler = JvmLispCompiler.builder().className("Test").optimize(level).build();
+		byte[] classBytes = compiler.compile(program);
+		Files.write(tempDir.resolve("Test.class"), classBytes);
+		for (Map.Entry<String, byte[]> travelling : compiler.runtimeClassFiles().entrySet()) {
+			Path target = tempDir.resolve(travelling.getKey());
+			Files.createDirectories(Objects.requireNonNull(target.getParent()));
+			Files.write(target, travelling.getValue());
+		}
+		return runClass(classBytes);
+	}
+
+	@Test
+	void compileAndRunComplexBesideAFloatLiteral() throws Exception {
+		// The interpreter twin is LispEvaluatorTest#complexBesideAFloatLiteral: a float
+		// literal routed (* 2.0 z) and its consumers onto the unboxed double path, whose
+		// _dbl reported the holder as a wrong-type operand, and an operand's wrong type
+		// was reported before a later operand ran.
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(
+				am.ik.rontolisp.ComplexBesideAFloatLiteralFixture.SOURCE, am.ik.rontolisp.reader.Features.JVM, false,
+				false)))
+			.isEqualTo(am.ik.rontolisp.ComplexBesideAFloatLiteralFixture.EXPECTED);
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(
+				am.ik.rontolisp.ComplexBesideAFloatLiteralFixture.SIGNALS_SOURCE, am.ik.rontolisp.reader.Features.JVM,
+				false, false)))
+			.isEqualTo(am.ik.rontolisp.ComplexBesideAFloatLiteralFixture.SIGNALS_EXPECTED);
+	}
+
+	@Test
+	void compileAndRunComplexProductSignedZero() throws Exception {
+		// The interpreter twin is LispEvaluatorTest#complexProductSignedZero.
+		assertThat(compileAndRun(
+				am.ik.rontolisp.cli.CompileFrontendAccess.corpus(am.ik.rontolisp.ComplexProductSignedZeroFixture.SOURCE,
+						am.ik.rontolisp.reader.Features.JVM, false, false)))
+			.isEqualTo(am.ik.rontolisp.ComplexProductSignedZeroFixture.EXPECTED);
+	}
+
+	@Test
+	void compileAndRunComplexSumQuotient() throws Exception {
+		// The interpreter twin is LispEvaluatorTest#complexSumQuotient.
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(
+				am.ik.rontolisp.ComplexSumQuotientFixture.SOURCE, am.ik.rontolisp.reader.Features.JVM, false, false)))
+			.isEqualTo(am.ik.rontolisp.ComplexSumQuotientFixture.EXPECTED);
+	}
+
+	@Test
+	void compileAndRunExactPrefixFloatFold() throws Exception {
+		// The interpreter twin is LispEvaluatorTest#exactPrefixFloatFold. The unboxed
+		// double fold converted every operand first, a site whose float only a call
+		// showed answered a float for exact operands, and the fused double path widened
+		// its leading integer constants one by one. Both levels: size declines fusion.
+		for (OptimizeLevel level : List.of(OptimizeLevel.DEFAULT, OptimizeLevel.SIZE)) {
+			assertThat(compileAndRun(fixtureProgram(am.ik.rontolisp.ExactPrefixFloatFoldFixture.SOURCE), level))
+				.as("level %s", level)
+				.isEqualTo(am.ik.rontolisp.ExactPrefixFloatFoldFixture.EXPECTED);
+			assertThat(compileAndRun(fixtureProgram(am.ik.rontolisp.ExactPrefixFloatFoldFixture.COMPLEX_SOURCE), level))
+				.as("complex, level %s", level)
+				.isEqualTo(am.ik.rontolisp.ExactPrefixFloatFoldFixture.COMPLEX_EXPECTED);
+		}
+	}
+
+	@Test
+	void compileAndRunOneOperandFloatSite() throws Exception {
+		// The interpreter twin is LispEvaluatorTest#oneOperandFloatSite. (- x), (/ x),
+		// abs, signum, expt and random converted their operand whenever a float literal
+		// appeared anywhere in it, so an exact operand answered a float.
+		for (OptimizeLevel level : List.of(OptimizeLevel.DEFAULT, OptimizeLevel.SIZE)) {
+			assertThat(compileAndRun(fixtureProgram(am.ik.rontolisp.OneOperandFloatSiteFixture.SOURCE), level))
+				.as("level %s", level)
+				.isEqualTo(am.ik.rontolisp.OneOperandFloatSiteFixture.EXPECTED);
+			assertThat(compileAndRun(fixtureProgram(am.ik.rontolisp.OneOperandFloatSiteFixture.COMPLEX_SOURCE), level))
+				.as("complex, level %s", level)
+				.isEqualTo(am.ik.rontolisp.OneOperandFloatSiteFixture.COMPLEX_EXPECTED);
+		}
+	}
+
+	@Test
+	void compileAndRunFloatComparisonOperand() throws Exception {
+		// The interpreter twin is LispEvaluatorTest#floatComparisonOperand.
+		for (OptimizeLevel level : List.of(OptimizeLevel.DEFAULT, OptimizeLevel.SIZE)) {
+			assertThat(compileAndRun(fixtureProgram(am.ik.rontolisp.FloatComparisonOperandFixture.SOURCE), level))
+				.as("level %s", level)
+				.isEqualTo(am.ik.rontolisp.FloatComparisonOperandFixture.EXPECTED);
+			assertThat(
+					compileAndRun(fixtureProgram(am.ik.rontolisp.FloatComparisonOperandFixture.COMPLEX_SOURCE), level))
+				.as("complex, level %s", level)
+				.isEqualTo(am.ik.rontolisp.FloatComparisonOperandFixture.COMPLEX_EXPECTED);
+		}
+	}
+
+	@Test
+	void compileAndRunSequenceAndAccessorOperatorsNameTheirWrongTypeArgument() throws Exception {
+		// Through the CLI's front end, which splices the prelude defuns (mismatch,
+		// search, count-if-not) the program reaches. The interpreter twin is
+		// LispEvaluatorTest#sequenceAndAccessorOperatorsNameTheirWrongTypeArgument.
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(
+				am.ik.rontolisp.WrongTypeArgumentFixture.SOURCE, am.ik.rontolisp.reader.Features.JVM, false, false)))
+			.isEqualTo(am.ik.rontolisp.WrongTypeArgumentFixture.EXPECTED);
+	}
+
+	@Test
+	void compileAndRunFillPointerSurfaceRefusesAVectorWithoutOne() throws Exception {
+		// The interpreter twin is
+		// LispEvaluatorTest#fillPointerSurfaceRefusesAVectorWithoutOne.
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(
+				am.ik.rontolisp.FillPointerVectorFixture.SOURCE, am.ik.rontolisp.reader.Features.JVM, false, false)))
+			.isEqualTo(am.ik.rontolisp.FillPointerVectorFixture.EXPECTED);
+	}
+
+	@Test
+	void listConsumersBeyondTheFirstSetNameTheOperator() throws Exception {
+		// The list consumers beyond the first set name their operator as the first set
+		// does (compiler/OperandTypes): reverse/nreverse over a non-sequence (SEQUENCE),
+		// append, the member/assoc/rassoc scans and list-length over a non-list (LIST), a
+		// dotted list's tail wherever a walk reaches it (length, the map* walks), a
+		// mapcan/mapcon piece that is no list, and the multi-list map* value path, which
+		// reported CAR. The twins are LispEvaluatorTest, JvmLispCompilerTest and
+		// WasmLispCompilerIntegrationTest's
+		// listConsumersBeyondTheFirstSetNameTheOperator.
+		assertThat(compileAndRun("""
+				(defun te (thunk)
+				  (handler-case (funcall thunk)
+				    (type-error (e) (list (princ-to-string e) (type-error-datum e) (type-error-expected-type e)))
+				    (error (e) (list :not-a-type-error (princ-to-string e)))))
+				(defvar *te-five* 5)
+				(defvar *te-dotted* '(1 2 . 3))
+				(print (te (lambda () (length *te-dotted*))))
+				(print (te (lambda () (reverse *te-five*))))
+				(print (te (lambda () (reverse *te-dotted*))))
+				(print (te (lambda () (nreverse *te-five*))))
+				(print (te (lambda () (funcall #'reverse *te-five*))))
+				(print (te (lambda () (append *te-five* nil))))
+				(print (te (lambda () (append *te-dotted* '(4)))))
+				(print (te (lambda () (funcall #'append *te-five* nil))))
+				(print (te (lambda () (copy-list *te-five*))))
+				(print (te (lambda () (funcall #'copy-list *te-five*))))
+				(print (te (lambda () (member 1 *te-five*))))
+				(print (te (lambda () (member 9 *te-dotted*))))
+				(print (te (lambda () (funcall #'member 1 *te-five*))))
+				(print (te (lambda () (member-if #'evenp *te-five*))))
+				(print (te (lambda () (assoc 1 *te-five*))))
+				(print (te (lambda () (assoc-if #'evenp *te-five*))))
+				(print (te (lambda () (rassoc 1 *te-five*))))
+				(print (te (lambda () (rassoc-if #'evenp *te-five*))))
+				(print (te (lambda () (list-length *te-five*))))
+				(print (te (lambda () (list-length *te-dotted*))))
+				(print (te (lambda () (mapcar #'1+ *te-dotted*))))
+				(print (te (lambda () (mapc #'1+ *te-dotted*))))
+				(print (te (lambda () (mapcan #'list *te-dotted*))))
+				(print (te (lambda () (maplist #'car *te-dotted*))))
+				(print (te (lambda () (mapcan (lambda (x) x) '(1 2)))))
+				(print (te (lambda () (mapcon (lambda (x) 5) '(1 2)))))
+				(print (te (lambda () (funcall #'mapcar #'+ '(1 2) *te-five*))))
+				(print (te (lambda () (funcall #'mapcar #'+ '(1 2) *te-dotted*))))
+				(print (te (lambda () (funcall #'mapcan (lambda (x y) x) '(1 2) '(3 4)))))
+				(print (list (reverse '(1 2)) (member 1 *te-dotted*) (member 3 '(1 2)) (assoc 2 '((1 . a) (2 . b)))
+				             (append '(1) 2) (mapcan #'list '(1 2)) (list-length '(1 2)) (mapcar #'+ '(1 2 3) '(1 2))))
+				""")).isEqualTo("""
+				("LENGTH: The value 3 is not of type SEQUENCE" 3 SEQUENCE)
+				("REVERSE: The value 5 is not of type SEQUENCE" 5 SEQUENCE)
+				("REVERSE: The value 3 is not of type SEQUENCE" 3 SEQUENCE)
+				("NREVERSE: The value 5 is not of type SEQUENCE" 5 SEQUENCE)
+				("REVERSE: The value 5 is not of type SEQUENCE" 5 SEQUENCE)
+				("APPEND: The value 5 is not of type LIST" 5 LIST)
+				("APPEND: The value 3 is not of type LIST" 3 LIST)
+				("APPEND: The value 5 is not of type LIST" 5 LIST)
+				("COPY-LIST: The value 5 is not of type LIST" 5 LIST)
+				("COPY-LIST: The value 5 is not of type LIST" 5 LIST)
+				("MEMBER: The value 5 is not of type LIST" 5 LIST)
+				("MEMBER: The value 3 is not of type LIST" 3 LIST)
+				("MEMBER: The value 5 is not of type LIST" 5 LIST)
+				("MEMBER-IF: The value 5 is not of type LIST" 5 LIST)
+				("ASSOC: The value 5 is not of type LIST" 5 LIST)
+				("ASSOC-IF: The value 5 is not of type LIST" 5 LIST)
+				("RASSOC: The value 5 is not of type LIST" 5 LIST)
+				("RASSOC-IF: The value 5 is not of type LIST" 5 LIST)
+				("LIST-LENGTH: The value 5 is not of type LIST" 5 LIST)
+				("LIST-LENGTH: The value 3 is not of type LIST" 3 LIST)
+				("MAPCAR: The value 3 is not of type LIST" 3 LIST)
+				("MAPC: The value 3 is not of type LIST" 3 LIST)
+				("MAPCAN: The value 3 is not of type LIST" 3 LIST)
+				("MAPLIST: The value 3 is not of type LIST" 3 LIST)
+				("MAPCAN: The value 1 is not of type LIST" 1 LIST)
+				("MAPCON: The value 5 is not of type LIST" 5 LIST)
+				("MAPCAR: The value 5 is not of type LIST" 5 LIST)
+				("MAPCAR: The value 3 is not of type LIST" 3 LIST)
+				("MAPCAN: The value 1 is not of type LIST" 1 LIST)
+				((2 1) (1 2 . 3) NIL (2 . B) (1 . 2) (1 2) 2 (2 4))""");
+	}
+
+	@Test
+	void compileAndRunHandlerCaseUnmatchedErrorAborts() {
+		assertThatThrownBy(() -> compileAndRun("(handler-case (error \"boom\") (warning (w) :w))"))
+			.hasRootCauseMessage("boom");
+	}
+
+	@Test
+	void compileAndRunARestartCaseInALambdaOfAProgramWithoutAMultipleValueOperator() throws Exception {
+		// No multiple-value operator anywhere, so the program has no %mv-spill global --
+		// yet the restart-case expansion reads the channel for a primary form that may
+		// pass values along (a signal, a user call). Inside a lambda that read used to
+		// be taken for a free variable to capture.
+		assertThat(compileAndRun("""
+				(handler-bind ((error (lambda (c) (invoke-restart 'use-value 100))))
+				  (print (funcall (lambda () (restart-case (error "bad") (use-value (v) v))))))
+				""")).isEqualTo("100");
+		assertThat(compileAndRun("""
+				(defun rl-h () 4)
+				(print (mapcar (lambda (x) (restart-case (rl-h) (use-value (v) (+ v x)))) (list 1 2)))
+				(print (funcall (lambda () (with-simple-restart (rl-skip "s") (rl-h)))))
+				""")).isEqualTo("(4 4)\n4");
+	}
+
+	@Test
+	void compileAndRunAHandlerFailingInABuiltInDoesNotRunItself() throws Exception {
+		// CLHS 9.1.4.1: a handler runs with its own cluster disabled, so a built-in
+		// failing inside it reaches only the enclosing handlers -- never the failing
+		// handler again, which the handler-bind's own landing pad used to rerun.
+		assertThat(compileAndRun("""
+				(defun hb-id (x) x)
+				(print (let ((n 0))
+				         (handler-case
+				             (handler-bind ((error (lambda (c) (setq n (+ n 1)) (car (hb-id 5)))))
+				               (error "first"))
+				           (error (e) (list (type-of e) n)))))
+				(print (let ((log nil))
+				         (handler-case
+				             (handler-bind ((error (lambda (c) (setq log (cons (type-of c) log)))))
+				               (handler-bind ((error (lambda (c) (setq log (cons :inner log)) (car (hb-id 5)))))
+				                 (error "first")))
+				           (error (e) (list (type-of e) log)))))
+				""")).isEqualTo("(TYPE-ERROR 1)\n(TYPE-ERROR (TYPE-ERROR :INNER))");
+	}
+
+	@Test
+	void compileAndRunArgumentShapeErrorsSignalACatchableProgramError() throws Exception {
+		// A call whose keyword tail is malformed used to fail the COMPILE with the
+		// expander's raw exception; it now compiles to a call-time program-error (the
+		// undefined-function precedent), so the program behaves as it does interpreted
+		// (.kb/error-handling.md, "Argument-shape errors signal a catchable
+		// program-error"). The evaluator twin is
+		// argumentShapeErrorsSignalACatchableProgramError.
+		assertThat(compileAndRun(
+				"""
+						(print (handler-case (remove 1 '(1 2 3) :bogus 4) (program-error (c) :program-error) (error (c) :plain)))
+						(print (handler-case (remove 1 '(1 2 3) :bogus 4) (error (c) (princ-to-string c))))
+						(print (handler-case (find 1 '(1 2) :key) (program-error (c) :odd-tail)))
+						(print (handler-case (remove 'a nil 'bad t) (program-error (c) :not-a-keyword)))
+						(print (handler-case (remove-duplicates '(1 1 2) :bogus t) (program-error (c) :rd)))
+						(print (handler-case (position 1 '(1 2) :bogus 4) (program-error (c) :pos)))
+						(print (handler-case (make-string-output-stream 1) (program-error (c) :positional)))
+						(print (handler-case (funcall (lambda (x &key y) (list x y)) 1 :z 2) (program-error (c) :unknown-key)))
+						(print (remove 'a '(a b c a d) :bad t :allow-other-keys t))
+						(print (remove 'a '(a b c a d) :bad1 t :allow-other-keys t :bad2 t :allow-other-keys nil :bad3 t))
+						(print (remove 'a '(a b c a d) :allow-other-keys nil))
+						(print (handler-case (remove 'a '(a b) :allow-other-keys nil :bad t) (program-error (c) :checked)))
+						(print (funcall (lambda (x &key y) (list x y)) 1 :z 2 :allow-other-keys t))
+						"""))
+			.isEqualTo("""
+					:PROGRAM-ERROR
+					"REMOVE expects keyword arguments :TEST/:TEST-NOT/:KEY/:START/:END/:COUNT/:FROM-END, got: :BOGUS"
+					:ODD-TAIL
+					:NOT-A-KEYWORD
+					:RD
+					:POS
+					:POSITIONAL
+					:UNKNOWN-KEY
+					(B C D)
+					(B C D)
+					(B C D)
+					:CHECKED
+					(1 NIL)""");
+	}
+
+	@Test
+	void compileAndRunAnUncaughtArgumentShapeErrorReportsTheSameLine() throws Exception {
+		// No handler anywhere: the class is unobservable, the signal takes the plain
+		// channel, and the top level prints the cross-backend line -- after the
+		// compile-time warning the lowering leaves behind.
+		ByteArrayOutputStream err = new ByteArrayOutputStream();
+		Throwable cause;
+		try (var _ = ThreadStdio.err(err)) {
+			cause = catchThrowable(() -> compileAndRun("""
+					(print (length (remove 1 '(1 2 3) :bogus 4)))
+					"""));
+		}
+		assertThat(err.toString().trim()).isEqualTo(
+				"""
+						warning: REMOVE expects keyword arguments :TEST/:TEST-NOT/:KEY/:START/:END/:COUNT/:FROM-END, got: :BOGUS; compiled as a call-time program-error
+						Unhandled condition: REMOVE expects keyword arguments :TEST/:TEST-NOT/:KEY/:START/:END/:COUNT/:FROM-END, got: :BOGUS""");
+		assertThat(cause).isInstanceOf(InvocationTargetException.class);
+		assertThat(((InvocationTargetException) cause).getTargetException()).hasMessage(
+				"REMOVE expects keyword arguments :TEST/:TEST-NOT/:KEY/:START/:END/:COUNT/:FROM-END, got: :BOGUS");
+	}
+
+	@Test
+	void compileAndRunAnUncaughtWrongBuiltinCountWarnsAndReportsTheSameLine() throws Exception {
+		ByteArrayOutputStream err = new ByteArrayOutputStream();
+		Throwable cause;
+		try (var _ = ThreadStdio.err(err)) {
+			cause = catchThrowable(() -> compileAndRun("""
+					(print (car '(1 2) 2))
+					"""));
+		}
+		assertThat(err.toString().trim()).isEqualTo("""
+				warning: CAR expects 1 argument, got 2; compiled as a call-time program-error
+				Unhandled condition: CAR expects 1 argument, got 2""");
+		assertThat(cause).isInstanceOf(InvocationTargetException.class);
+	}
+
+	@Test
+	void compileAndRunSignalFallsThroughAHandlerCaseWhoseClausesDoNotMatch() throws Exception {
+		// CLHS 9.1.4.1: signal runs the applicable handlers and, if none transfers
+		// control, returns nil. A handler-case whose clauses do not match the
+		// condition is not an applicable handler, so it must decline and the forms
+		// after the signal still run (cl-mustache's read-partial shape).
+		assertThat(compileAndRun("""
+				(define-condition note () ())
+				(defun boom () (signal 'note) :returned)
+				(print (handler-case (boom) (error (e) :err)))
+				(print (handler-case (progn (signal 'note) :after) (type-error (e) :te)))
+				""")).isEqualTo(":RETURNED\n:AFTER");
+	}
+
+	@Test
+	void compileAndRunAnUnmatchedSignalLeavesTheHandlerCaseArmedForALaterCondition() throws Exception {
+		assertThat(compileAndRun("""
+				(define-condition note () ())
+				(print (handler-case (progn (signal 'note) (error "boom")) (error (e) :err)))
+				(print (handler-case (progn (signal 'note) :after) (note (e) :caught)))
+				""")).isEqualTo(":ERR\n:CAUGHT");
+	}
+
+	@Test
+	void compileAndRunHandlerBindHandlersStillRunWhenAnUnmatchedHandlerCaseDeclines() throws Exception {
+		// Restart mode: the intervening handler-bind handler runs at the signal
+		// point and declines; the unmatched handler-case then declines too, so the
+		// form after the signal still runs.
+		assertThat(compileAndRun("""
+				(define-condition note () ())
+				(defvar *log* nil)
+				(print (handler-bind ((note (lambda (c) (setq *log* (cons :hb *log*)))))
+				         (handler-case (progn (signal 'note) (setq *log* (cons :after *log*)) :done)
+				           (error (e) :err))))
+				(print *log*)
+				""")).isEqualTo(":DONE\n(:AFTER :HB)");
+	}
+
+	@Test
+	void compileAndRunAnErrorStillUnwindsThroughAnUnmatchedHandlerCase() throws Exception {
+		// The decline applies to signal only: error (and cerror, here real under
+		// restart mode) must keep unwinding through a handler-case that does not
+		// match, and a restart-case arm changes nothing about the decline.
+		assertThat(compileAndRun("""
+				(define-condition note () ())
+				(print (handler-case
+				           (handler-case (cerror "Continue." "boom") (type-error (e) :te))
+				         (error (e) :outer)))
+				(print (handler-case (restart-case (progn (signal 'note) :after) (continue () :c))
+				         (error (e) :err)))
+				""")).isEqualTo(":OUTER\n:AFTER");
+	}
+
+	@Test
+	void compileAndRunHandlerCaseInArgumentPosition() throws Exception {
+		// Entering the handler clears the operand stack, so the values the enclosing
+		// call had already evaluated must be spilled around the protected region.
+		assertThat(compileAndRun("""
+				(defun hc-arg-risky () (error "boom"))
+				(print (list "result:" (handler-case (hc-arg-risky) (error (e) e "caught"))))
+				""")).isEqualTo("(\"result:\" \"caught\")");
+	}
+
+	@Test
+	void handlerCaseLandingsCallOneSharedConditionSynthesis() throws Exception {
+		// The synthesis of a condition-less throw's instance depends only on the caught
+		// throwable, so it is one method per class (_hcSynth) that every landing -- and
+		// the %hb-guard pad -- calls. Inline it made each landing ~450 bytecodes larger.
+		// The program runs every raw-failure class through landings in three functions.
+		List<LispVal> forms = am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString("""
+				(defun hcs-f (x) (car x))
+				(defun hcs-g (x) (ignore-errors (hcs-f x)))
+				(defun hcs-h (x) (handler-case (hcs-f x) (type-error () :type)))
+				(defun hcs-k (thunk)
+				  (handler-case (funcall thunk)
+				    (division-by-zero () :div)
+				    (arithmetic-error () :arith)
+				    (unbound-variable () :unbound)
+				    (undefined-function () :undefined)
+				    (program-error () :program)
+				    (simple-error (c) (list :simple (princ-to-string c)))))
+				(print (hcs-g 1))
+				(print (hcs-g '(1 2)))
+				(print (hcs-h 1))
+				(print (hcs-k (lambda () (/ 1 (length (hcs-g nil))))))
+				(print (hcs-k (lambda () (error "boom ~a" 1))))
+				(print (handler-bind ((type-error (lambda (c) c))) (hcs-h "s")))
+				"""));
+		byte[] classBytes = new JvmLispCompiler("Test").compile(forms);
+		java.util.Map<String, Integer> sizes = new java.util.LinkedHashMap<>();
+		for (java.lang.classfile.MethodModel method : java.lang.classfile.ClassFile.of().parse(classBytes).methods()) {
+			sizes.merge(method.methodName().stringValue(),
+					method.findAttribute(java.lang.classfile.Attributes.code()).orElseThrow().codeLength(),
+					Integer::sum);
+		}
+		assertThat(sizes).containsKey("_hcSynth");
+		// HCS-H was 667 bytes with the synthesis inline, 235 without it.
+		assertThat(sizes.get("HCS-H")).as("the landing calls the synthesis rather than holding it").isLessThan(400);
+		assertThat(compileAndRun(forms)).isEqualTo("NIL\n1\n:TYPE\n:DIV\n(:SIMPLE \"boom 1\")\n:TYPE");
+	}
+
+	@Test
+	void compileAndRunLongQuotedLiteralStaysWithinTheLocalSlots() throws Exception {
+		// A quoted list costs locals by its nesting depth, not its length: one temp per
+		// cons cell would walk past slot 255, which a one-byte load/store operand cannot
+		// name.
+		StringBuilder items = new StringBuilder();
+		for (int i = 0; i < 400; i++) {
+			items.append(i).append(' ');
+		}
+		String source = "(print (length '(%s))) (print (car '(%s))) (print (nth 399 '(%s)))".formatted(items, items,
+				items);
+		assertThat(compileAndRun(source)).isEqualTo("400\n0\n399");
+	}
+
+	@Test
+	void anArrayLiteralOfAnyFamilyIsHeldToNoMethodLimit() throws Exception {
+		// One store per element put a table past 65535 bytes at around 8,000 elements:
+		// cxml's two 55,296-bit name tables were 497,828 bytes each. The numbers change
+		// at every element, so no run shortens them; the bit table is mostly runs.
+		String numbers = IntStream.range(0, 12000).mapToObj(i -> Integer.toString(i % 100)).collect(joining(" "));
+		String floats = IntStream.range(0, 12000).mapToObj(i -> (i % 100) + ".5").collect(joining(" "));
+		String bits = "01".repeat(6000) + "0".repeat(21000) + "1".repeat(22296);
+		String source = """
+				(defun show (a) (print (list (length a) (aref a 11999))))
+				(defun general () '#(%1$s))
+				(print (eq (general) (general)))
+				(show (general))
+				(show #(%1$s))
+				(show '#*%2$s)
+				(show '#8@(%1$s))
+				(show #32@(%1$s))
+				(show #f(%3$s))
+				(show #d(%3$s))
+				(show #bf16(%3$s))
+				""".formatted(numbers, bits, floats);
+		assertThat(compileAndRun(source).lines().toList()).containsExactly("T", "(12000 99)", "(12000 99)", "(55296 1)",
+				"(12000 99)", "(12000 99)", "(12000 99.5)", "(12000 99.5)", "(12000 99.5)");
+	}
+
+	@Test
+	void compileAndRunABodyPastTheOneByteLocalSlotIndex() throws Exception {
+		// A straight-line run of statements burns a local slot per temporary, so a few
+		// hundred of them walk past slot 255 -- which a one-byte load/store operand
+		// cannot name. Wrapping used to alias a live `let` variable SILENTLY: `keep`
+		// sits in a low slot, the temporary whose number wrapped onto it overwrote it,
+		// and the compiled program answered 0 where the interpreter answers 7.
+		StringBuilder body = new StringBuilder();
+		for (int i = 0; i < 300; i++) {
+			body.append("             (setq acc (logxor acc (car (list 1 0))))\n");
+		}
+		String source = """
+				(defun slot-overflow ()
+				  (flet ((run ()
+				           (let ((keep (list 7)) (acc 0))
+				%s             (list (car keep) acc))))
+				    (run)))
+				(print (slot-overflow))
+				""".formatted(body);
+		assertThat(compileAndRun(source)).isEqualTo("(7 0)");
+	}
+
+	@Test
+	void compileAndRunABodyPastTheOneByteLocalSlotIndexUnderAnUnsplittableTail() throws Exception {
+		// The same overflow where the frame walk notices instead of the answer being
+		// silently wrong: `flet` wraps its body in a `block`, so JvmBodyOutliner finds
+		// no tail spine to cut and the whole run lands in one frame. The truncated
+		// `astore 0` overwrote the closure environment, which surfaced as "aaload on
+		// non-array type" out of the frame pass then.
+		StringBuilder body = new StringBuilder();
+		for (int i = 0; i < 300; i++) {
+			body.append("                  (setq acc (+ acc 1))\n");
+			body.append("                  (setq acc (logxor acc (car (list 1 0))))\n");
+		}
+		String source = """
+				(defun tree (x)
+				  (let ((acc 0) (hit nil))
+				    (block done
+				      (tagbody
+				         (flet ((a0 ()
+				%s                  (go finish)))
+				           (a0))
+				       finish
+				         (return-from done (list acc hit))))))
+				(print (tree 1))
+				""".formatted(body);
+		assertThat(compileAndRun(source)).isEqualTo("(0 NIL)");
+	}
+
+	@Test
+	void aMaphashWhoseCounterLandsPastSlot255IncrementsItsOwnLocal() throws Exception {
+		// maphash counts its pairs in a temporary int local. Its increment was written
+		// with a one-byte slot whatever the slot, so past 255 it named slot N mod 256 --
+		// here a reference, which the verifier refused ("Bad local variable type");
+		// landing on an int it would have looped forever. The same unsplittable frame as
+		// above puts the counter past 255.
+		StringBuilder body = new StringBuilder();
+		for (int i = 0; i < 300; i++) {
+			body.append("                  (setq acc (+ acc 1))\n");
+			body.append("                  (setq acc (logxor acc (car (list 1 0))))\n");
+		}
+		String source = """
+				(defun tree (x)
+				  (let ((acc 0) (hit nil) (h (make-hash-table)))
+				    (setf (gethash 'a h) 10)
+				    (setf (gethash 'b h) 20)
+				    (block done
+				      (tagbody
+				         (flet ((a0 ()
+				%s                  (maphash (lambda (k v) (setq hit (cons k hit)) (setq acc (+ acc v))) h)
+				                  (go finish)))
+				           (a0))
+				       finish
+				         (return-from done (list acc (length hit)))))))
+				(print (tree 1))
+				""".formatted(body);
+		assertThat(compileAndRun(source)).isEqualTo("(30 2)");
+	}
+
+	@Test
+	void anObjSlotsWalkWhoseCursorLandsPastSlot255DecrementsItsOwnLocal() throws Exception {
+		// %obj-slots (equalp's instance walk) counts its cursor down with iinc, written
+		// with the same one-byte slot as maphash's counter above.
+		StringBuilder body = new StringBuilder();
+		for (int i = 0; i < 300; i++) {
+			body.append("                  (setq acc (+ acc 1))\n");
+			body.append("                  (setq acc (logxor acc (car (list 1 0))))\n");
+		}
+		String source = """
+				(defstruct pt x y)
+				(defun tree (x)
+				  (let ((acc 0) (hit nil) (p (make-pt :x 1 :y 2)))
+				    (block done
+				      (tagbody
+				         (flet ((a0 ()
+				%s                  (setq hit (%%obj-slots p))
+				                  (go finish)))
+				           (a0))
+				       finish
+				         (return-from done (list acc hit))))))
+				(print (tree 1))
+				""".formatted(body);
+		assertThat(compileAndRun(source)).isEqualTo("(0 (1 2))");
+	}
+
+	@Test
+	void compileAndRunReturnInArgumentPosition() throws Exception {
+		// A return abandons the operands the enclosing call had already evaluated, so
+		// the block exit is reached with the same operand stack on every path.
+		assertThat(compileAndRun("""
+				(print (dolist (x (list 1 2 3))
+				         (print (list "seen" x (if (= x 2) (return (list "early" x)) x)))))
+				""")).isEqualTo("(\"seen\" 1 1)\n(\"early\" 2)");
+	}
+
+	@Test
+	void compileAndRunHandlerCaseCatchesUsocketSocketError() throws Exception {
+		// A connection failure is re-signaled as a typed usocket:socket-error, catchable
+		// by type on the JVM backend (.kb/error-handling.md). Port 0 refuses on every
+		// host; a closed ephemeral port may be another test's by the time of the connect.
+		assertThat(compileAndRunUsocket("""
+				(print (handler-case (usocket:socket-connect "127.0.0.1" 0)
+				         (usocket:socket-error (e) :refused)))
+				""")).isEqualTo(":REFUSED");
+	}
+
+	@Test
+	void compileAndRunUsocketHostToHostnameRendersEveryDesignatorShape() throws Exception {
+		// The clack.handler:run address-normalization pair. Pure Lisp in the shim, so
+		// the compiled answer must equal the interpreter's for every input shape.
+		assertThat(compileAndRunUsocket("""
+				(print (usocket:host-to-hostname nil))
+				(print (usocket:host-to-hostname #(192 168 0 1)))
+				(print (usocket:host-to-hostname 2130706433))
+				(print (usocket:host-to-hostname (usocket:get-host-by-name "example.com")))
+				""")).isEqualTo("\"0.0.0.0\"\n\"192.168.0.1\"\n\"127.0.0.1\"\n\"example.com\"");
+	}
+
+	@Test
+	void compileAndRunTypedErrorKeepsLegacyUncaughtMessage() {
+		assertThatThrownBy(() -> compileAndRun(
+				"(define-condition my-cond-err (error) ((v :initarg :v))) (error 'my-cond-err :v 42)"))
+			.hasRootCauseMessage("Condition (MY-COND-ERR :V 42) was signalled.");
+	}
+
+	@Test
+	void compileAndRunTypedErrorReportStringMessage() {
+		assertThatThrownBy(() -> compileAndRun(
+				"(define-condition my-cond-rep (error) () (:report \"it broke\")) (error 'my-cond-rep)"))
+			.hasRootCauseMessage("it broke");
+	}
+
+	@Test
+	void compileAndRunTypedErrorReportLambdaMessage() {
+		assertThatThrownBy(() -> compileAndRun("""
+				(define-condition my-cond-lam (error) ((v :initarg :v :reader my-cond-lam-v))
+				  (:report (lambda (c s) (format s "bad value ~a" (my-cond-lam-v c)))))
+				(error 'my-cond-lam :v 42)
+				""")).hasRootCauseMessage("bad value 42");
+	}
+
+	@Test
+	void anUncaughtErrorWhoseLiteralControlOnlyTheRendererCanLowerReportsItsMessage() throws Exception {
+		// ~:p is renderer-only, so the literal control's message is a %fmt-render call.
+		// With no handler-case in the program nothing else injects the renderer: the
+		// gate must count the literal site itself, or the report is "The function
+		// %FMT-RENDER is undefined".
+		ByteArrayOutputStream err = new ByteArrayOutputStream();
+		try (var _ = ThreadStdio.err(err)) {
+			catchThrowable(() -> compileAndRun("""
+					(defun g (x) (if x (error "x ~a takes ~a argument~:p, got ~a" 1 2 3) 5))
+					(print (g nil))
+					(print (g t))
+					"""));
+		}
+		assertThat(err.toString()).doesNotContain("%FMT-RENDER")
+			.contains("Unhandled condition: x 1 takes 2 arguments, got 3");
+		// The other signal operators share the gate: cerror carries its datum one place
+		// later.
+		err.reset();
+		try (var _ = ThreadStdio.err(err)) {
+			catchThrowable(() -> compileAndRun("""
+					(warn "~d thing~:p" 1)
+					(signal "~d sig~:p" 3)
+					(cerror "go on" "~d item~:p" 4)
+					"""));
+		}
+		assertThat(err.toString()).doesNotContain("%FMT-RENDER")
+			.startsWith("WARNING: 1 thing")
+			.contains("Unhandled condition: 4 items");
+	}
+
+	@Test
+	void compileAndRunUsesTheStandardOperatorWhenAProgramRedefinesACommonLispFunction() throws Exception {
+		// The compiled call site is the standard LENGTH, not the definition above it --
+		// the interpreter would answer 42. That divergence is CL-legal (CLHS 11.1.2.1.2)
+		// and stays; what changed is that the compile paths no longer do it in silence.
+		// #'LENGTH still names the definition, which is why the warning says so.
+		String source = """
+				(defun length (&rest args) (declare (ignore args)) 42)
+				(print (length '(1 2 3)))
+				(print (funcall #'length '(1 2 3)))
+				""";
+		assertThat(compileAndRun(source)).isEqualTo("3\n42");
+		assertThat(compileAndRunCapturingErr(source)).contains("redefines the COMMON-LISP function LENGTH");
+	}
+
+	@Test
+	void compileAndRunRuntimeControlStringDatumRendersItsFormatArgumentsUnderWarn() throws Exception {
+		assertThat(compileAndRunCapturingErr("(let ((c \"rt ~a/~a\")) (warn c 1 2))")).isEqualTo("WARNING: rt 1/2");
+	}
+
+	@Test
+	void compileAndRunWarnRendersTheFormatControlArguments() throws Exception {
+		assertThat(compileAndRunCapturingErr(
+				"(warn 'simple-warning :format-control \"sw ~A/~A\" :format-arguments (list 1 2))"))
+			.isEqualTo("WARNING: sw 1/2");
+	}
+
+	@Test
+	void compileAndRunPrintObjectMethodWinsOverTheConditionReport() throws Exception {
+		assertThat(compileAndRun("""
+				(define-condition cr-po (error) () (:report "report text"))
+				(defmethod print-object ((c cr-po) s) (format s "PO"))
+				(print (list (princ-to-string (make-condition 'cr-po)) (prin1-to-string (make-condition 'cr-po))))
+				""")).isEqualTo("(\"PO\" \"PO\")");
+	}
+
+	@Test
+	void compileAndRunSymbolMacrolet() throws Exception {
+		// Basic substitution and let-shadowing (trivia's match expansions rely on it).
+		assertThat(compileAndRun("(symbol-macrolet ((x 42)) (print x))")).isEqualTo("42");
+		assertThat(compileAndRun("(symbol-macrolet ((x 42)) (print (list (let ((x 1)) x) x)))")).isEqualTo("(1 42)");
+		// Nested symbol-macrolet: the inner binding shadows the outer one.
+		assertThat(compileAndRun("(symbol-macrolet ((x 1)) (symbol-macrolet ((x 2)) (print x)))")).isEqualTo("2");
+		// setq of a symbol-macro target writes through the expansion place.
+		assertThat(compileAndRun(
+				"(let ((cell (list 1 2))) (symbol-macrolet ((head (car cell))) (setq head 99) (print cell)))"))
+			.isEqualTo("(99 2)");
+		// A reference inside a lambda body substitutes (closure over the expansion).
+		assertThat(compileAndRun("(let ((n 10)) (symbol-macrolet ((big (* n n))) (print (funcall (lambda () big)))))"))
+			.isEqualTo("100");
+		// The same shape inside a defun. The lambda body spells only the macro name, so
+		// the capture of n is visible only THROUGH the substitution: the capture walk
+		// expands it (FreeVarAnalyzer.collectCapturedVars), or the binding is left with
+		// no cell for the closure to load.
+		assertThat(compileAndRun("""
+				(defun sm-square () (let ((n 10)) (symbol-macrolet ((big (* n n))) (funcall (lambda () big)))))
+				(print (sm-square))
+				""")).isEqualTo("100");
+	}
+
+	@Test
+	void compileAndRunSymbolMacroletSetfThroughSlotValuePlace() throws Exception {
+		// The dbi driver shape: the body assigns through a slot-value expansion.
+		assertThat(compileAndRun("""
+				(defclass conn () ((auto-commit :initform nil)))
+				(defvar *c* (make-instance 'conn))
+				(symbol-macrolet ((auto-commit (slot-value *c* 'auto-commit)))
+				  (setf auto-commit 'on)
+				  (print auto-commit))
+				""")).isEqualTo("ON");
+	}
+
+	@Test
+	void compileAndRunDefineSymbolMacro() throws Exception {
+		// The global symbol macro is a COMPILE-TIME fact: UserMacroExpander drops the
+		// definition and substitutes every later top-level form, so the backend never
+		// sees the form. A reference reads the expansion and setq/setf/incf write
+		// through it as a place.
+		List<LispVal> program = am.ik.rontolisp.eval.UserMacroExpander.expand(LispReader.readAllFromString("""
+				(defvar *buf* (make-array 3 :initial-element 0))
+				(define-symbol-macro *slot0* (aref *buf* 0))
+				(setf *slot0* 42)
+				(setq *slot0* (+ *slot0* 1))
+				(defun bump () (incf *slot0*))
+				(bump)
+				(print (list *slot0* *buf*))
+				(print (let ((*slot0* 7)) *slot0*))
+				"""));
+		assertThat(compileAndRun(program)).isEqualTo("(44 #(44 0 0))\n7");
+	}
+
+	@Test
+	void compileAndRunDefineSymbolMacroEmittedByUserMacro() throws Exception {
+		// The cffi defcvar shape: a user macro expands into a progn whose eval-when
+		// carries the definition, and the accessor defun it generates is what the
+		// reference resolves to. Under a package, as every binding defines it: a form
+		// the macro pass leaves alone still spells the reference bare.
+		List<LispVal> program = am.ik.rontolisp.eval.UserMacroExpander.expand(LispReader.readAllFromString("""
+				(defpackage :binding (:use :cl))
+				(in-package :binding)
+				(defvar *cell* (list 1 2))
+				(defmacro defhead (name place)
+				  `(progn (defun ,(intern (concatenate 'string "%ACCESS-" (symbol-name name))) () ,place)
+				          (defun (setf ,(intern (concatenate 'string "%ACCESS-" (symbol-name name)))) (value)
+				            (setf ,place value))
+				          (eval-when (:compile-toplevel :load-toplevel :execute)
+				            (define-symbol-macro ,name
+				              (,(intern (concatenate 'string "%ACCESS-" (symbol-name name))))))))
+				(defhead head (car *cell*))
+				(setf head 99)
+				(print (list head *cell*))
+				"""));
+		assertThat(compileAndRun(program)).isEqualTo("(99 (99 2))");
+	}
+
+	@Test
+	void compileAndRunSymbolMacroletEmittedByUserMacro() throws Exception {
+		// The trivia shape: a user macro EXPANDS INTO symbol-macrolet, and user macro
+		// calls inside the binding expansions and the body are expanded away by
+		// UserMacroExpander before the compilers run the substitution.
+		List<LispVal> program = am.ik.rontolisp.eval.UserMacroExpander.expand(LispReader.readAllFromString("""
+				(defmacro sq (x) `(* ,x ,x))
+				(defmacro with-head (var place &body body) `(symbol-macrolet ((,var (car ,place))) ,@body))
+				(let ((cell (list 3 0)))
+				  (with-head h cell
+				    (setq h (sq h))
+				    (print cell)))
+				(symbol-macrolet ((s (sq 4))) (print s))
+				"""));
+		JvmLispCompiler compiler = new JvmLispCompiler("Test");
+		byte[] classBytes = compiler.compile(program);
+		Path classFile = tempDir.resolve("Test.class");
+		Files.write(classFile, classBytes);
+		try (URLClassLoader loader = new URLClassLoader(new URL[] { tempDir.toUri().toURL() },
+				ClassLoader.getSystemClassLoader())) {
+			Class<?> clazz = loader.loadClass("Test");
+			Method main = clazz.getMethod("main", String[].class);
+			ByteArrayOutputStream baos = new ByteArrayOutputStream();
+			try (var _ = ThreadStdio.out(baos)) {
+				main.invoke(null, (Object) new String[0]);
+			}
+			assertThat(baos.toString().trim()).isEqualTo("(9 0)\n16");
+		}
+	}
+
+	@Test
+	void compileAndRunUnwindProtectCleanupOnErrorUnwind() throws Exception {
+		// The error propagates out of main after the cleanup ran, so the output is
+		// captured before asserting the throw (compileAndRun would lose it).
+		JvmLispCompiler compiler = new JvmLispCompiler("Test");
+		byte[] classBytes = compiler.compile(LispReader.readAllFromString(
+				"(defun up-thrower () (error \"boom\")) (unwind-protect (up-thrower) (print :cleaned))"));
+		Path classFile = tempDir.resolve("Test.class");
+		Files.write(classFile, classBytes);
+		try (URLClassLoader loader = new URLClassLoader(new URL[] { tempDir.toUri().toURL() },
+				ClassLoader.getSystemClassLoader())) {
+			Class<?> clazz = loader.loadClass("Test");
+			Method main = clazz.getMethod("main", String[].class);
+			ByteArrayOutputStream baos = new ByteArrayOutputStream();
+			try (var _ = ThreadStdio.out(baos)) {
+				assertThatThrownBy(() -> main.invoke(null, (Object) new String[0])).hasRootCauseMessage("boom");
+			}
+			assertThat(baos.toString().trim()).isEqualTo(":CLEANED");
+		}
+	}
+
+	@Test
+	void compileAndRunWasmExportIsNoOp() throws Exception {
+		// rontolisp:wasm-export is a directive for the WASM backend; on the JVM it is a
+		// no-op and
+		// the
+		// marked function still compiles and runs normally.
+		assertThat(compileAndRun("(defun fact (n) (if (<= n 1) 1 (* n (fact (- n 1)))))"
+				+ "(rontolisp:wasm-export 'fact :params '(:int) :returns :int)" + "(print (fact 5))"))
+			.isEqualTo("120");
+	}
+
+	@Test
+	void compileAndRunWasmImportDirectiveIsNoOpUntilCalled() throws Exception {
+		// The directive registers an error-signalling stub; a program that never calls
+		// the import still compiles and runs.
+		assertThat(compileAndRun(
+				"(rontolisp:wasm-import 'add :from \"host\" :params '(:int :int) :returns :int)" + "(print (+ 1 2))"))
+			.isEqualTo("3");
+		// :async t (the host may suspend; WASM answers a future) compiles unchanged
+		// here: the host does not exist off WASM, so the stub is the same either way.
+		assertThat(compileAndRun(
+				"(rontolisp:wasm-import 'pull :params '(:string) :returns :string :async t)" + "(print (+ 1 2))"))
+			.isEqualTo("3");
+	}
+
+	@Test
+	void compileAndRunWasmImportStubSignalsErrorWhenCalled() {
+		assertThatThrownBy(() -> compileAndRun(
+				"(rontolisp:wasm-import 'add :from \"host\" :params '(:int :int) :returns :int)" + "(print (add 1 2))"))
+			.hasRootCauseMessage(
+					"ADD is a host function declared by rontolisp:wasm-import; it can only be called from a compiled WASM module");
+	}
+
+	@Test
+	void compileAndRunWasmImportStubCarriesTheBytesReceiveBufferArity() {
+		// A :returns :bytes import takes one extra trailing argument (the caller-passed
+		// receive buffer), so the stub must load with that arity: the call below reaches
+		// the host-function error, not an arity mismatch.
+		assertThatThrownBy(() -> compileAndRun("(rontolisp:wasm-import 'pull :params '() :returns :bytes)"
+				+ "(print (pull (make-array 3 :element-type '(unsigned-byte 8))))"))
+			.hasRootCauseMessage(
+					"PULL is a host function declared by rontolisp:wasm-import; it can only be called from a compiled WASM module");
+	}
+
+	// defmacro is handled by the compile-path pass (eval.UserMacroExpander, run by the
+	// CLI before this compiler), which consumes the definitions and fully expands every
+	// call site -- the compiler itself never sees a macro form.
+	@Test
+	void compileAndRunUserMacroAfterExpansionPass() throws Exception {
+		List<LispVal> program = am.ik.rontolisp.eval.UserMacroExpander.expand(LispReader.readAllFromString("""
+				(defmacro my-when2 (test &body body) `(if ,test (progn ,@body) nil))
+				(defmacro swap! (a b) `(let ((__tmp ,a)) (setq ,a ,b) (setq ,b __tmp)))
+				(print (my-when2 (> 3 1) 10 20))
+				(setq p 1)
+				(setq q 2)
+				(swap! p q)
+				(print (list p q))
+				"""));
+		JvmLispCompiler compiler = new JvmLispCompiler("Test");
+		byte[] classBytes = compiler.compile(program);
+		Path classFile = tempDir.resolve("Test.class");
+		Files.write(classFile, classBytes);
+		try (URLClassLoader loader = new URLClassLoader(new URL[] { tempDir.toUri().toURL() },
+				ClassLoader.getSystemClassLoader())) {
+			Class<?> clazz = loader.loadClass("Test");
+			Method main = clazz.getMethod("main", String[].class);
+			ByteArrayOutputStream baos = new ByteArrayOutputStream();
+			try (var _ = ThreadStdio.out(baos)) {
+				main.invoke(null, (Object) new String[0]);
+			}
+			assertThat(baos.toString().trim()).isEqualTo("20\n(2 1)");
+		}
+	}
+
+	// macro-function / special-operator-p partition the operators with no function value
+	// between them on the compile path too: the pass appends the program's own
+	// macro-function over its macro names and the prelude carries the built-in half, so
+	// the answers match the interpreter's (LispEvaluatorTest, SBCL-checked) name for
+	// name. The expander VALUE is a stub here -- non-nil for the predicate, a signal when
+	// called -- because a compiled program has no macro table left.
+	@Test
+	void compileAndRunMacroFunctionAndSpecialOperatorP() throws Exception {
+		List<LispVal> program = am.ik.rontolisp.eval.LispPreludeLibrary
+			.process(am.ik.rontolisp.eval.UserMacroExpander.expand(LispReader.readAllFromString("""
+					(defmacro mfp-mac (x) `(list ,x))
+					(defun mfp-probe (form)
+					  (cond ((special-operator-p (first form)) :special)
+					        ((macro-function (first form)) :macro)
+					        (t :function)))
+					(print (list (mfp-probe '(if a b)) (mfp-probe '(quote a)) (mfp-probe '(mfp-mac 1))
+					             (mfp-probe '(when a b)) (mfp-probe '(handler-case a)) (mfp-probe '(car x))
+					             (mfp-probe '(+ 1 2))))
+					(print (list (special-operator-p 'defun) (and (macro-function 'defun) t)
+					             (and (macro-function (intern "WHEN")) t)
+					             (macro-function 'car) (macro-function 'if)))
+					(print (list (multiple-value-list (macroexpand-1 '(mfp-mac 1)))
+					             (multiple-value-list (macroexpand-1 '(+ 1 2)))))
+					""")));
+		assertThat(compileAndRun(program)).isEqualTo("(:SPECIAL :SPECIAL :MACRO :MACRO :MACRO :FUNCTION :FUNCTION)\n"
+				+ "(NIL T T NIL NIL)\n" + "(((LIST 1) T) ((+ 1 2) NIL))");
+	}
+
+	// The compiled stub's arity check is the ORDINARY lambda-list check every compiled
+	// function gets, not a bespoke one: %macro-expander-stub's lambda list carries no
+	// &optional, so 0, 1 or 4 arguments signal a program-error before the body's own
+	// "cannot expand at run time" is ever reached for the correct 2-argument call --
+	// pinned the same way as the interpreter's real expander
+	// (LispEvaluatorTest#macroFunctionIsTheRealExpanderOnTheInterpreter, SBCL-checked).
+	@Test
+	void compileAndRunMacroFunctionValueArityMismatch() throws Exception {
+		List<LispVal> program = am.ik.rontolisp.eval.LispPreludeLibrary
+			.process(am.ik.rontolisp.eval.UserMacroExpander.expand(LispReader.readAllFromString(
+					"""
+							(defmacro mfva-mac (x) `(list ,x))
+							(print (list (handler-case (progn (funcall (macro-function 'mfva-mac)) :no-error)
+							               (program-error (c) :program-error))
+							             (handler-case (progn (funcall (macro-function 'mfva-mac) '(mfva-mac 1)) :no-error)
+							               (program-error (c) :program-error))
+							             (handler-case (funcall (macro-function 'mfva-mac) '(mfva-mac 1) nil)
+							               (error (c) :signalled))
+							             (handler-case (progn (funcall (macro-function 'mfva-mac) '(mfva-mac 1) nil 2 3) :no-error)
+							               (program-error (c) :program-error))))
+							""")));
+		assertThat(compileAndRun(program)).isEqualTo("(:PROGRAM-ERROR :PROGRAM-ERROR :SIGNALLED :PROGRAM-ERROR)");
+	}
+
+	// A COMPUTED macroexpand-1 argument is the one shape the fold cannot decide, and the
+	// answer has to agree with macro-function's: a macro call signals (a compiled program
+	// has no macro table left), anything else comes back unchanged with expanded-p nil.
+	// Answering a macro call with ITSELF would spin the standard "expand until it stops
+	// expanding" loop forever, since macro-function keeps saying "macro".
+	@Test
+	void compileAndRunMacroexpandOfAComputedArgument() throws Exception {
+		List<LispVal> program = am.ik.rontolisp.eval.LispPreludeLibrary
+			.process(am.ik.rontolisp.eval.UserMacroExpander.expand(LispReader.readAllFromString("""
+					(defmacro mxc-mac (x) `(list ,x))
+					(defun mxc-steps (form)
+					  (do ((step form (macroexpand-1 step)))
+					      ((or (special-operator-p (first step)) (not (macro-function (first step)))) step)))
+					(print (mxc-steps (list 'car 'x)))
+					(print (handler-case (mxc-steps (list 'mxc-mac 9)) (error (e) :no-runtime-macro-table)))
+					(print (handler-case (mxc-steps (list 'when 'a 'b)) (error (e) :no-runtime-macro-table)))
+					(print (multiple-value-list (macroexpand-1 (list '+ 1 2))))
+					""")));
+		assertThat(compileAndRun(program))
+			.isEqualTo("(CAR X)\n" + ":NO-RUNTIME-MACRO-TABLE\n" + ":NO-RUNTIME-MACRO-TABLE\n" + "((+ 1 2) NIL)");
+	}
+
+	// (setf (macro-function 'new) (macro-function 'existing)) is a macro-TABLE write, so
+	// the same pass carries it out and drops the form: the compiler sees only the
+	// expanded call site, exactly as for the defmacro it aliases (lisp-namespace's
+	// nslet / namespace-let).
+	@Test
+	void compileAndRunSetfMacroFunctionAliasAfterExpansionPass() throws Exception {
+		List<LispVal> program = am.ik.rontolisp.eval.UserMacroExpander.expand(LispReader.readAllFromString("""
+				(defmacro sfmf-greet (x) `(list :hello ,x))
+				(setf (macro-function 'sfmf-hi) (macro-function 'sfmf-greet))
+				(print (sfmf-hi 1))
+				(print (sfmf-greet 2))
+				(setf (macro-function 'sfmf-fn) (lambda (form env) (declare (ignore env)) `(list :fn ,@(cdr form))))
+				(print (sfmf-fn 3))
+				"""));
+		JvmLispCompiler compiler = new JvmLispCompiler("Test");
+		byte[] classBytes = compiler.compile(program);
+		Path classFile = tempDir.resolve("Test.class");
+		Files.write(classFile, classBytes);
+		try (URLClassLoader loader = new URLClassLoader(new URL[] { tempDir.toUri().toURL() },
+				ClassLoader.getSystemClassLoader())) {
+			Class<?> clazz = loader.loadClass("Test");
+			Method main = clazz.getMethod("main", String[].class);
+			ByteArrayOutputStream baos = new ByteArrayOutputStream();
+			try (var _ = ThreadStdio.out(baos)) {
+				main.invoke(null, (Object) new String[0]);
+			}
+			assertThat(baos.toString().trim()).isEqualTo("(:HELLO 1)\n(:HELLO 2)\n(:FN 3)");
+		}
+	}
+
+	// A loop destructuring pattern with a dotted sublist is data, not a call form; the
+	// expansion pass (active because a user defmacro exists) must leave it intact
+	// (s-sql's `loop for ((x . y) . rest) on args`).
+	@Test
+	void compileAndRunLoopDottedPatternWithUserMacroPresent() throws Exception {
+		List<LispVal> program = am.ik.rontolisp.eval.UserMacroExpander.expand(LispReader.readAllFromString("""
+				(defmacro my-id (x) x)
+				(print (my-id (loop for ((x . y) . rest) on '((1 . 2) (3 . 4))
+				                    append (list x y (length rest)))))
+				"""));
+		JvmLispCompiler compiler = new JvmLispCompiler("Test");
+		byte[] classBytes = compiler.compile(program);
+		Path classFile = tempDir.resolve("Test.class");
+		Files.write(classFile, classBytes);
+		try (URLClassLoader loader = new URLClassLoader(new URL[] { tempDir.toUri().toURL() },
+				ClassLoader.getSystemClassLoader())) {
+			Class<?> clazz = loader.loadClass("Test");
+			Method main = clazz.getMethod("main", String[].class);
+			ByteArrayOutputStream baos = new ByteArrayOutputStream();
+			try (var _ = ThreadStdio.out(baos)) {
+				main.invoke(null, (Object) new String[0]);
+			}
+			assertThat(baos.toString().trim()).isEqualTo("(1 2 1 3 4 0)");
+		}
+	}
+
+	// once-only exercises three levels of read-time backquote through the compile
+	// path: the nested backquote is fully expanded by the reader, so the JVM
+	// compiler only sees ordinary list/cons/quote calls.
+	@Test
+	void compileAndRunSharpLAndCommaDotAndWithHashTableIterator() throws Exception {
+		// The three iterate-shaped surfaces that are pure front-end work: #L lowers in
+		// the reader, ",." is ",@", and with-hash-table-iterator expands to a snapshot
+		// alist plus an flet, so the backend sees only ordinary forms.
+		List<LispVal> program = am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString("""
+				(print (mapcar #L(* !1 !1) '(1 2 3)))
+				(print (funcall #L(list !2 !3) 'a 'b 'c))
+				(let ((xs '(1 2))) (print `(f ,.xs g)))
+				(print (ldiff '(1 2 3 4) nil))
+				(print (sublis '((a . 1)) '(a b)))
+				(let ((h (make-hash-table)))
+				  (setf (gethash 'a h) 1)
+				  (with-hash-table-iterator (next h)
+				    (multiple-value-bind (more k v) (next)
+				      (print (list more k v)))))
+				"""));
+		JvmLispCompiler compiler = new JvmLispCompiler("Test");
+		byte[] classBytes = compiler.compile(program);
+		Path classFile = tempDir.resolve("Test.class");
+		Files.write(classFile, classBytes);
+		try (URLClassLoader loader = new URLClassLoader(new URL[] { tempDir.toUri().toURL() },
+				ClassLoader.getSystemClassLoader())) {
+			Class<?> clazz = loader.loadClass("Test");
+			Method main = clazz.getMethod("main", String[].class);
+			ByteArrayOutputStream baos = new ByteArrayOutputStream();
+			try (var _ = ThreadStdio.out(baos)) {
+				main.invoke(null, (Object) new String[0]);
+			}
+			assertThat(baos.toString().trim()).isEqualTo("(1 4 9)\n(B C)\n(F 1 2 G)\n(1 2 3 4)\n(1 B)\n(T A 1)");
+		}
+	}
+
+	@Test
+	void compileAndRunNestedBackquoteOnceOnly() throws Exception {
+		List<LispVal> program = am.ik.rontolisp.eval.UserMacroExpander.expand(LispReader.readAllFromString("""
+				(defmacro once-only (names &body body)
+				  (let ((gensyms (loop for name in names collect (gensym (symbol-name name)))))
+				    `(let (,@(loop for g in gensyms
+				                   for name in names
+				                   collect `(,g (gensym ,(symbol-name name)))))
+				       `(let (,,@(loop for g in gensyms for n in names
+				                       collect ``(,,g ,,n)))
+				          ,(let (,@(loop for n in names for g in gensyms
+				                         collect `(,n ,g)))
+				             ,@body)))))
+				(defmacro square (x) (once-only (x) `(* ,x ,x)))
+				(defvar *calls* 0)
+				(defun bump () (setq *calls* (+ *calls* 1)) 5)
+				(print (square (bump)))
+				(print *calls*)
+				"""));
+		JvmLispCompiler compiler = new JvmLispCompiler("Test");
+		byte[] classBytes = compiler.compile(program);
+		Path classFile = tempDir.resolve("Test.class");
+		Files.write(classFile, classBytes);
+		try (URLClassLoader loader = new URLClassLoader(new URL[] { tempDir.toUri().toURL() },
+				ClassLoader.getSystemClassLoader())) {
+			Class<?> clazz = loader.loadClass("Test");
+			Method main = clazz.getMethod("main", String[].class);
+			ByteArrayOutputStream baos = new ByteArrayOutputStream();
+			try (var _ = ThreadStdio.out(baos)) {
+				main.invoke(null, (Object) new String[0]);
+			}
+			assertThat(baos.toString().trim()).isEqualTo("25\n1");
+		}
+	}
+
+	@Test
+	void compileAndRunGensym() throws Exception {
+		assertThat(compileAndRun("(print (gensym)) (print (gensym \"tmp\")) (print (eq (gensym) (gensym)))"
+				+ "(print (symbolp (gensym))) (print (symbolp (funcall #'gensym)))"))
+			.isEqualTo("#:G1\n#:|tmp2|\nNIL\nT\nT");
+	}
+
+	@Test
+	void compileGensymAcceptsAComputedPrefix() throws Exception {
+		// A computed prefix lowers to string construction over the literal-prefix
+		// gensym, so the name keeps the "#:" shape and the fresh counter suffix
+		// (alexandria's format-symbol passes one).
+		assertThat(compileAndRun("(setq p \"tmp\") (print (gensym p)) (print (gensym p))"))
+			.isEqualTo("#:|tmp1|\n#:|tmp2|");
+	}
+
+	@Test
+	void compileGensymAcceptsANonNegativeIntegerSuffix() throws Exception {
+		// The JVM twin of LispEvaluatorTest#gensymAcceptsANonNegativeIntegerSuffix: a
+		// literal integer argument used to lower through the computed-prefix path
+		// unchecked, e.g. (gensym 5) printed "#:51".
+		assertThat(
+				compileAndRun("(print (list (symbol-name (gensym)) (symbol-name (gensym 42)) (symbol-name (gensym))))"))
+			.isEqualTo("(\"G1\" \"G42\" \"G2\")");
+	}
+
+	@Test
+	void compileAndRunSymbolNameStripsThePackageMarker() throws Exception {
+		assertThat(compileAndRun("(print (symbol-name 'foo)) (print (symbol-name :bar))"
+				+ "(print (symbol-name (gensym))) (print (symbol-name nil))"
+				+ "(print (funcall #'symbol-name 'xyz)) (print (mapcar #'symbol-name '(a b)))"))
+			.isEqualTo("\"FOO\"\n\"BAR\"\n\"G1\"\n\"NIL\"\n\"XYZ\"\n(\"A\" \"B\")");
+	}
+
+	@Test
+	void compileAndRunString() throws Exception {
+		assertThat(compileAndRun("(print (string \"foo\")) (print (string 'foo)) (print (string :bar))"
+				+ "(print (string #\\a)) (print (string t)) (print (string nil))"
+				+ "(print (funcall #'string 'xyz)) (print (mapcar #'string '(a b)))"))
+			.isEqualTo("\"foo\"\n\"FOO\"\n\"BAR\"\n\"a\"\n\"T\"\n\"NIL\"\n\"XYZ\"\n(\"A\" \"B\")");
+	}
+
+	@Test
+	void compileAndRunIntern() throws Exception {
+		assertThat(compileAndRun("(print (intern \"hello\")) (print (eq (intern \"FOO\") 'foo))"
+				+ "(print (symbolp (intern \"hello\"))) (print (intern (symbol-name 'round-trip)))"
+				+ "(print (funcall #'intern \"abc\"))"))
+			.isEqualTo("|hello|\nT\nT\nROUND-TRIP\n|abc|");
+	}
+
+	@Test
+	void findSymbolInAMissingPackageSignalsACatchablePackageError() throws Exception {
+		// A literal and a computed designator naming no package (nil included) signal a
+		// catchable package-error for either value arity and create nothing.
+		assertThat(compileAndRun("""
+				(defun fse-in (p) (find-symbol "X" p))
+				(print (handler-case (find-symbol "X" "FSE-NOPKG") (error () :caught)))
+				(print (handler-case (fse-in "FSE-NOPKG")
+				         (package-error (e) (list (package-error-package e) (princ-to-string e)))))
+				(print (handler-case (fse-in nil) (package-error () :caught)))
+				(print (handler-case (find-symbol "X" nil) (package-error () :caught)))
+				(print (handler-case (multiple-value-list (find-symbol "X" :fse-nopkg))
+				         (package-error () :caught)))
+				(print (handler-case (multiple-value-list (fse-in "FSE-NOPKG")) (package-error () :caught)))
+				(print (find-package "FSE-NOPKG"))
+				"""))
+			.isEqualTo(":CAUGHT\n(:FSE-NOPKG \"No such package: FSE-NOPKG\")\n:CAUGHT\n:CAUGHT\n:CAUGHT\n:CAUGHT\nNIL");
+	}
+
+	@Test
+	void findSymbolInAMissingPackageSignalsWithRuntimePackages() throws Exception {
+		// The same with runtime packages in the program; a runtime package answers
+		// from its member table.
+		assertThat(compileAndRun("""
+				(defun fse-in (p) (find-symbol "X" p))
+				(print (handler-case (find-symbol "X" "FSE-NOPKG") (error () :caught)))
+				(print (handler-case (fse-in "FSE-NOPKG")
+				         (package-error (e) (list (package-error-package e) (princ-to-string e)))))
+				(print (handler-case (fse-in nil) (package-error () :caught)))
+				(print (handler-case (find-symbol "X" nil) (package-error () :caught)))
+				(print (handler-case (multiple-value-list (find-symbol "X" :fse-nopkg))
+				         (package-error () :caught)))
+				(print (handler-case (multiple-value-list (fse-in "FSE-NOPKG")) (package-error () :caught)))
+				(print (find-package "FSE-NOPKG"))
+				(print (fse-in (make-package "FSE-RT" :use nil)))
+				""")).isEqualTo(
+				":CAUGHT\n(:FSE-NOPKG \"No such package: FSE-NOPKG\")\n:CAUGHT\n:CAUGHT\n:CAUGHT\n:CAUGHT\nNIL\nNIL");
+	}
+
+	@Test
+	void internIntoAMissingPackageSignalsACatchablePackageError() throws Exception {
+		// A literal and a computed designator naming no package signal a catchable
+		// package-error and create nothing.
+		assertThat(compileAndRun("""
+				(defun ipe-in (p) (intern "X" p))
+				(print (handler-case (intern "X" "IPE-NOPKG") (error () :caught)))
+				(print (handler-case (ipe-in "IPE-NOPKG")
+				         (package-error (e) (list (package-error-package e) (princ-to-string e)))))
+				(print (handler-case (ipe-in nil) (package-error () :caught)))
+				(print (find-package "IPE-NOPKG"))
+				""")).isEqualTo(":CAUGHT\n(:IPE-NOPKG \"No such package: IPE-NOPKG\")\n:CAUGHT\nNIL");
+	}
+
+	@Test
+	void internIntoAMissingPackageSignalsWithRuntimePackages() throws Exception {
+		// A literal and a computed designator naming no package signal a catchable
+		// package-error and create nothing (with runtime packages in the program).
+		assertThat(compileAndRun("""
+				(defun ipe-in (p) (intern "X" p))
+				(print (handler-case (intern "X" "IPE-NOPKG") (error () :caught)))
+				(print (handler-case (ipe-in "IPE-NOPKG")
+				         (package-error (e) (list (package-error-package e) (princ-to-string e)))))
+				(print (handler-case (ipe-in nil) (package-error () :caught)))
+				(print (find-package "IPE-NOPKG"))
+				(print (ipe-in (make-package "IPE-RT" :use nil)))
+				""")).isEqualTo(":CAUGHT\n(:IPE-NOPKG \"No such package: IPE-NOPKG\")\n:CAUGHT\nNIL\nIPE-RT::X");
+	}
+
+	@Test
+	void compileInternIntoAnUnknownPackageSignalsAtCallTime() {
+		// find-symbol folds an unknown literal package to nil, but intern must
+		// SIGNAL there (interpreter parity: PackageResolver.internSpellingIn).
+		assertThatThrownBy(() -> compileAndRun("(print (intern \"X\" :rt-no-such-pkg))"))
+			.hasRootCauseInstanceOf(RuntimeException.class)
+			.rootCause()
+			.hasMessageContaining("No such package: RT-NO-SUCH-PKG");
+	}
+
+	@Test
+	void compileAndRunComputedSymbolFunctionResolvesLate() throws Exception {
+		// the jzon :key-fn shape: (funcall (symbol-function sym) x) with a runtime
+		// symbol. The computed designator lowers to the symbol itself, which the
+		// dispatchers resolve through the _lookup registry.
+		assertThat(compileAndRun("(defun sf-f (x) (* x 2)) (setq s (intern \"SF-F\"))"
+				+ "(print (funcall (symbol-function s) 21)) (print (funcall (fdefinition s) 5))"))
+			.isEqualTo("42\n10");
+	}
+
+	@Test
+	void compileAndRunComputedSymbolFunctionAnswersTheCanonicalBox() throws Exception {
+		// A computed (symbol-function x) / (fdefinition x) answers the SAME object
+		// #'name denotes (SBCL: (T T) for both lines): the resolution boxes through
+		// the canonical per-defun _funcref instead of fresh per evaluation, like the
+		// interpreter's function namespace does. The eval leg pins the runtime's own
+		// registry hit answering through it too.
+		assertThat(compileAndRun("(defun csf-f (x) (+ x 1)) (let ((s 'csf-f))"
+				+ " (print (list (eq (symbol-function s) #'csf-f) (eq (symbol-function s) (symbol-function s)))))"
+				+ " (let ((s 'csf-f))"
+				+ " (print (list (eq (fdefinition s) #'csf-f) (eq (fdefinition s) (symbol-function s)))))"
+				+ " (print (list (eq (eval '(symbol-function 'csf-f)) #'csf-f)))"))
+			.isEqualTo("(T T)\n(T T)\n(T)");
+	}
+
+	@Test
+	void compileAndRunUiopSymbolCall() throws Exception {
+		// REAL on the compile paths (used to be a call-time error, see
+		// .kb/asdf.md): lowers to (funcall (intern (string name) (find-package pkg))
+		// args...), late-bound through the registry like the interpreter's
+		// resolveFunction.
+		assertThat(compileAndRun("(defpackage :usc-pkg (:use :cl) (:export :usc-fn))"
+				+ "(in-package :usc-pkg) (defun usc-fn (a b) (+ a b)) (in-package :cl-user)"
+				+ "(print (uiop:symbol-call :usc-pkg :usc-fn 40 2))" + "(print (uiop:symbol-call :cl :list 1 2))"))
+			.isEqualTo("42\n(1 2)");
+	}
+
+	@Test
+	void compileAndRunUiopPackageLookupHalf() throws Exception {
+		// The interpreter twin is
+		// LispEvaluatorTest#evalUiopPackageLookupHalfAnswersFromTheRegistry: the
+		// registry answers are baked at compile time, so the name-level questions
+		// agree. The absent-name find-symbol* deviation is NOT pinned here (the
+		// compiled lowering builds the spelling where the interpreter answers nil).
+		assertThat(compileAndRun("""
+				(print (uiop:find-package* :cl))
+				(print (uiop:find-package* :no-such-pkg nil))
+				(print (handler-case (uiop:find-package* :no-such-pkg)
+				         (uiop:no-such-package-error (c)
+				           (list (typep c 'type-error) (uiop:package-designator c)))))
+				(print (typep :cl 'uiop:package-designator))
+				(print (typep "CL" 'uiop:package-designator))
+				(print (typep 42 'uiop:package-designator))
+				(print (uiop:find-symbol* "CAR" :cl))
+				(print (multiple-value-list (uiop:find-symbol* "CAR" :cl)))
+				(print (uiop:intern* "JU-NEW" :cl-user))
+				(print (uiop:make-symbol* "JU-X"))
+				(print (symbol-name (uiop:make-symbol* 'car)))
+				""")).isEqualTo(":CL\nNIL\n(T :NO-SUCH-PKG)\nT\nT\nNIL\nCAR\n(CAR :EXTERNAL)\nJU-NEW\n#:JU-X\n\"CAR\"");
+	}
+
+	@Test
+	void compileAndRunUiopPackageNamePredicates() throws Exception {
+		// Only the cases every backend answers alike: symbol-package cannot tell
+		// cl from cl-user on the WASM backend, so no cl member is asked about its
+		// home here (LispEvaluatorTest pins the interpreter's answers).
+		assertThat(compileAndRun("""
+				(print (uiop:symbol-package-name '#:ju-u))
+				(print (uiop:standard-common-lisp-symbol-p 'car))
+				(print (uiop:standard-common-lisp-symbol-p 'ju-definitely-not-cl))
+				(print (uiop:standard-common-lisp-symbol-p "CAR"))
+				(print (uiop:home-package-p :car :keyword))
+				(print (uiop:home-package-p 'ju-own :cl-user))
+				(print (uiop:home-package-p 'car nil))
+				(print (uiop:symbol-shadowing-p 'car :cl))
+				(print (uiop:package-names :cl))
+				(print (uiop:packages-from-names '(:cl :cl :cl-user :no-such-pkg)))
+				(print (null (find-package (uiop:fresh-package-name))))
+				(print (uiop:fresh-package-name :prefix "JU-" :separator "-" :index 3))
+				"""))
+			.isEqualTo("NIL\nT\nNIL\nNIL\nT\nT\nNIL\nNIL\n(\"COMMON-LISP\" \"CL\")\n(:CL :CL-USER)\nT\n\"JU--3\"");
+	}
+
+	@Test
+	void compileAndRunUiopPackageMutationsAndSurgery() throws Exception {
+		// export* and import* inherit exactly what CL's own operators do on the
+		// compiled backends (arguments for effect plus t, the registry being
+		// frozen); rename-package-away is a fresh name plus rename-package, which
+		// the runtime-package gate keeps visible; the surgery family signals with
+		// the same report as on the interpreter.
+		assertThat(compileAndRun("""
+				(defpackage #:ju-ei (:use #:cl) (:export #:ei-foo))
+				(in-package #:ju-ei)
+				(defun ei-foo () 42)
+				(in-package #:cl-user)
+				(uiop:add-package-local-nickname '#:ju-nick '#:ju-ei)
+				(print (list (uiop:export* "EI-BAR" :ju-ei) (uiop:import* 'cl:car :ju-ei)))
+				(print (ju-nick:ei-foo))
+				(print (uiop:package-local-nicknames :cl-user))
+				(print (let ((renamed (uiop:rename-package-away
+				                        (make-package "JU-RPA" :use '(:cl)))))
+				         (list (null (find-package "JU-RPA"))
+				               (search "__JU-RPA__" (package-name renamed)))))
+				(print (handler-case (uiop:rehome-symbol 'a :cl)
+				         (uiop:not-implemented-error (c) (princ-to-string c))))
+				(print (handler-case (uiop:ensure-package :cl)
+				         (uiop:not-implemented-error (c) (princ-to-string c))))
+				(print (handler-case (uiop:delete-package* :cl)
+				         (uiop:not-implemented-error (c) (princ-to-string c))))
+				""")).isEqualTo("(T T)\n42\n((\"JU-NICK\" . :JU-EI))\n(T 0)\n"
+				+ "\"Not (currently) implemented on rontolisp: UIOP/PACKAGE:REHOME-SYMBOL moving a symbol between packages needs symbol identity, and rontolisp has no image to upgrade\"\n"
+				+ "\"Not (currently) implemented on rontolisp: UIOP/PACKAGE:ENSURE-PACKAGE redefining a package at run time is upgrade surgery needing symbol identity, and rontolisp has no image to upgrade -- define the package with uiop:define-package or defpackage instead\"\n"
+				+ "\"Not (currently) implemented on rontolisp: UIOP/PACKAGE:DELETE-PACKAGE* deleting a package out from under a running image is upgrade surgery, and rontolisp has no image to upgrade\"");
+	}
+
+	@Test
+	void compileAndRunUiopRemovePackageLocalNickname() throws Exception {
+		// A literal top-level add and remove stand where they stand in the program, so a
+		// listing answers the state at that point, and a symbol prints with the nickname
+		// while there is one. A computed call is the same function, with SBCL's refusals.
+		assertThat(compileAndRun("""
+				(defpackage #:ju-rm (:use #:cl) (:export #:rm-foo))
+				(in-package #:ju-rm)
+				(defun rm-foo () 9)
+				(in-package #:cl-user)
+				(uiop:add-package-local-nickname '#:ju-rm-nick '#:ju-rm)
+				(print (ju-rm-nick:rm-foo))
+				(print 'ju-rm-nick:rm-foo)
+				(print (uiop:package-local-nicknames :cl-user))
+				(uiop:remove-package-local-nickname '#:ju-rm-nick)
+				(print 'ju-rm:rm-foo)
+				(print (uiop:package-local-nicknames :cl-user))
+				(print (uiop:package-names :ju-rm))
+				(defun ju-rm-computed () "JU-RM-COMPUTED")
+				(print (uiop:add-package-local-nickname (ju-rm-computed) :ju-rm))
+				(print (list (find-package (ju-rm-computed)) (find-package "JU-RM-COMPUTED")))
+				(print (read-from-string "ju-rm-computed:rm-foo"))
+				(print (handler-case (uiop:add-package-local-nickname "CL" :ju-rm)
+				         (package-error (c) (princ-to-string c))))
+				(print (uiop:remove-package-local-nickname (ju-rm-computed)))
+				(print (find-package (ju-rm-computed)))
+				"""))
+			.isEqualTo("9\nJU-RM-NICK:RM-FOO\n((\"JU-RM-NICK\" . :JU-RM))\nJU-RM:RM-FOO\nNIL\n(\"JU-RM\")\n:CL-USER\n"
+					+ "(:JU-RM :JU-RM)\nJU-RM-COMPUTED:RM-FOO\n"
+					+ "\"Attempt to use CL as a package local nickname (for JU-RM).\"\nT\nNIL");
+	}
+
+	@Test
+	void compileAndRunUiopPackageParseAndDefinitionForm() throws Exception {
+		// Byte-identical with the interpreter (smoke-pinned on all four backends):
+		// the parse is pure list surgery, and the definition form walks the baked
+		// enumeration the interpreter's own walk agrees with.
+		assertThat(compileAndRun("""
+				(defpackage #:ju-pdf (:use #:cl) (:export #:pdf-e1 #:pdf-e2))
+				(print (uiop:parse-define-package-form
+				        ':uiop/package*
+				        '((:use-reexport :uiop/package)
+				          (:import-from :uiop/package #:define-package-style-warning
+				                       #:no-such-package-error #:package-designator)
+				          (:export #:define-package-style-warning #:no-such-package-error
+				                   #:package-designator))))
+				(print (uiop:package-definition-form :ju-pdf))
+				(print (uiop:package-definition-form :ju-pdf :exportp nil :internp t))
+				(print (uiop:package-definition-form :no-such-pkg :error nil))
+				""")).isEqualTo(
+				"(':UIOP/PACKAGE* :NICKNAMES 'NIL :DOCUMENTATION 'NIL :USE '(:UIOP/PACKAGE) :SHADOW 'NIL :SHADOWING-IMPORT-FROM 'NIL :IMPORT-FROM '((:UIOP/PACKAGE #:DEFINE-PACKAGE-STYLE-WARNING #:NO-SUCH-PACKAGE-ERROR #:PACKAGE-DESIGNATOR)) :EXPORT '(#:DEFINE-PACKAGE-STYLE-WARNING #:NO-SUCH-PACKAGE-ERROR #:PACKAGE-DESIGNATOR) :INTERN 'NIL :RECYCLE '(:UIOP/PACKAGE*) :MIX 'NIL :REEXPORT '(:UIOP/PACKAGE) :UNINTERN 'NIL)\n"
+						+ "(DEFPACKAGE \"JU-PDF\" (:USE \"COMMON-LISP\") (:EXPORT \"PDF-E1\" \"PDF-E2\"))\n"
+						+ "(DEFPACKAGE \"JU-PDF\" (:USE \"COMMON-LISP\"))\n" + "NIL");
+	}
+
+	@Test
+	void compileAndRunUiopSymbolCallAsAFirstClassValueOverUninternedDesignators() throws Exception {
+		// dexador's backend dispatch, verbatim in shape: the operator is a VALUE
+		// (#'uiop:symbol-call applied to a runtime argument list) and both designators
+		// are uninterned symbols. The value needs uiop's own definition of symbol-call
+		// (the fold only covers call position); the '#:name designator needs the
+		// dispatch gate to probe the "#:member" spelling, or the registry has no row
+		// for the target and the call dies undefined.
+		assertThat(compileAndRun("(defpackage :dex-usocket (:use :cl) (:export :request))"
+				+ "(in-package :dex-usocket) (defun request (uri &rest args) (list uri args))"
+				+ "(in-package :cl-user) (defvar *backend* :usocket)"
+				+ "(defun dex-request (uri &rest args) (ecase *backend*"
+				+ "  (:usocket (apply #'uiop:symbol-call '#:dex-usocket '#:request uri args))"
+				+ "  (:winhttp (apply #'uiop:symbol-call '#:dex-winhttp '#:request uri args))))"
+				+ "(print (dex-request \"http://x\" :method :get))"
+				+ "(print (uiop:symbol-call '#:dex-usocket '#:request \"u\"))"))
+			.isEqualTo("(\"http://x\" (:METHOD :GET))\n(\"u\" NIL)");
+	}
+
+	@Test
+	void compileAndRunUiopBindingMacrosAndWithDeprecation() throws Exception {
+		// with-deprecation wraps top-level defuns in the wild, so its expansion has to
+		// SPLICE at top level -- burying them in an expression would stop Pass 1 from
+		// collecting them at all.
+		assertThat(compileAndRun("""
+				(uiop:with-deprecation (:style-warning)
+				  (defun dep-a (x) (* x 2))
+				  (defun dep-b (x) (+ x 1)))
+				(eval-when (:compile-toplevel :load-toplevel :execute)
+				  (uiop:with-deprecation (:style-warning)
+				    (defun dep-c (x) (- x 1))))
+				(print (list (uiop:if-let ((a 1) (b 2)) (list a b) 0)
+				             (uiop:if-let ((a 1) (b nil)) (list a b) 0)
+				             (uiop:if-let (x (+ 1 2)) (* x 10) 0)
+				             (uiop:if-let ((a nil)) 7)
+				             (uiop:when-let ((a 3) (b 4)) (+ a b) (* a b))
+				             (uiop:when-let ((a 3) (b nil)) (+ a 1))
+				             (uiop:when-let* ((a 5) (b (* a 2))) (+ a b))
+				             (uiop:when-let* ((a nil) (b (error "no"))) b)
+				             (dep-a 3) (dep-b 3) (dep-c 3)))
+				""")).isEqualTo("((1 2) 0 30 NIL 12 NIL 15 NIL 6 4 2)");
+	}
+
+	@Test
+	void compileAndRunUiopVersionComparisonAndDeprecation() throws Exception {
+		// The version table and the deprecation signalling, compiled: version< over
+		// lexicographic< ("1.2" < "1.10", equal-prefix, malformed input non-signalling),
+		// version-deprecation's mapping, and a with-deprecation at :delete signalling
+		// deprecated-function-should-be-deleted on the first call (caught by
+		// handler-case, which reads the name slot). A :delete level is pinned so the
+		// compiled backends can catch it -- a typed WARNING is not routed to handlers
+		// on the compile paths (.kb/uiop.md). The WASM twin is
+		// WasmLispCompilerIntegrationTest#uiopVersionComparisonAndDeprecationCompileAndRun.
+		assertThat(compileAndRun("""
+				(print (list (uiop:version< "1.2" "1.10")
+				             (uiop:version< "1.2" "1.2.3")
+				             (uiop:version< "1.10" "1.2")
+				             (uiop:version< "1.0" "garbage")
+				             (uiop:version<= "1.2" "1.2")
+				             (uiop:version= "1.2" "1.2")
+				             (uiop:next-version "1.2")
+				             uiop:*uiop-version*))
+				(print (uiop:version-deprecation "1.1" :warning "1.1"))
+				(uiop:with-deprecation ((uiop:version-deprecation "1.1" :delete "1.1"))
+				  (defun old-gone () 1))
+				(print (handler-case (old-gone)
+				         (uiop:deprecated-function-should-be-deleted (c)
+				           (list :caught (uiop:deprecated-function-name c)))))
+				""")).isEqualTo("""
+				(T T NIL NIL T T "1.3" "3.3.7")
+				:WARNING
+				(:CAUGHT OLD-GONE)""");
+	}
+
+	@Test
+	void compileAndRunUiopUtilityHelpers() throws Exception {
+		// The four uiop/utility members with real codegen shape: strcat (a &rest call
+		// into the spliced reduce/strcat), string-prefix-p (string= with :end2), nest (a
+		// pure syntactic rearrangement) and while-collecting (a let + flet whose
+		// collector functions mutate the accumulators they close over). Selection is the
+		// other half of what this pins: the compile path splices only the definitions the
+		// program reaches, so a missing edge shows up here as "the function
+		// UIOP/UTILITY:X is undefined".
+		assertThat(compileAndRun("""
+				(print (uiop:strcat "a" nil #\\b "c"))
+				(print (list (uiop:string-prefix-p "ab" "abc") (uiop:string-prefix-p "b" "abc")))
+				(print (uiop:nest (list 1) (list 2) (list 3)))
+				(print (multiple-value-list
+				        (uiop:while-collecting (foo bar)
+				          (dolist (x (list (list 'a 1) (list 'b 2)))
+				            (foo (first x))
+				            (bar (second x))))))
+				(print (uiop:access-at (list :a (list 10 20)) (list :a 1)))
+				(print (list (uiop:timestamp< 1 2) (uiop:latest-timestamp 3 1 2)))
+				(print (let ((l (list 1))) (uiop:appendf l (list 2 3)) l))
+				""")).isEqualTo("""
+				"abc"
+				(T NIL)
+				(1 (2 (3)))
+				((A B) (1 2))
+				20
+				(T 3)
+				(1 2 3)""");
+	}
+
+	@Test
+	void compileAndRunUiopPathnameAlgebra() throws Exception {
+		// The uiop/pathname family is pure computation over the flat namestring
+		// (uiop-pathname.lisp), so the compiled program must answer exactly what the
+		// interpreter does -- including the two macros (with-pathname-defaults binds
+		// the *default-pathname-defaults* special, with-enough-pathname lowers onto
+		// call-with-enough-pathname) and get-pathname-defaults reading the special.
+		assertThat(compileAndRun("""
+				(print (namestring (uiop:subpathname #P"/tmp/foo/" "bar/baz.txt")))
+				(print (namestring (uiop:subpathp (pathname "/tmp/foo/bar.txt") (pathname "/tmp/"))))
+				(print (uiop:subpathp #P"/other/x" #P"/tmp/"))
+				(print (namestring (uiop:enough-pathname #P"/tmp/a/b.txt" #P"/tmp/")))
+				(print (namestring (uiop:parse-unix-namestring "a//b/./c.txt")))
+				(print (namestring (uiop:parse-unix-namestring "foo/bar" :type "lisp")))
+				(print (list (if (uiop:absolute-pathname-p "/a/b") t nil)
+				             (if (uiop:relative-pathname-p "a/b") t nil)
+				             (if (uiop:directory-pathname-p "/a/b/") t nil)
+				             (if (uiop:file-pathname-p "/a/b") t nil)
+				             (uiop:hidden-pathname-p ".gitignore")
+				             (uiop:pathname-equal "/a/b" #P"/a/b")))
+				(print (namestring (uiop:pathname-parent-directory-pathname #P"/a/b/c.txt")))
+				(print (multiple-value-list (uiop:split-name-type "foo.lisp")))
+				(print (namestring (uiop:wilden #P"/tmp/foo")))
+				(print (namestring (uiop:translate-pathname* #P"/src/a/b.lisp" #P"/src/**/*.*" #P"/out/**/*.*")))
+				(print (namestring (uiop:ensure-pathname "a/b" :ensure-directory t)))
+				(print (handler-case (uiop:ensure-pathname "/a/b" :want-relative t) (error () :err)))
+				(print (namestring (uiop:get-pathname-defaults)))
+				(uiop:with-pathname-defaults (#P"/wpd/") (print (namestring *default-pathname-defaults*)))
+				(let ((p #P"/tmp/a/b.txt"))
+				  (uiop:with-enough-pathname (p :defaults #P"/tmp/") (print (namestring p))))
+				(print (namestring uiop:*wild-path*))
+				""")).isEqualTo("""
+				"/tmp/foo/bar/baz.txt"
+				"foo/bar.txt"
+				NIL
+				"a/b.txt"
+				"a/b/c.txt"
+				"foo/bar.lisp"
+				(T T T T T T)
+				"/a/"
+				("foo" "lisp")
+				"/tmp/**/*.*"
+				"/out/a/b.lisp"
+				"a/b/"
+				:ERR
+				""
+				"/wpd/"
+				"a/b.txt"
+				"**/*.*\"""");
+	}
+
+	@Test
+	void compileAndRunUiopOsHostIdentityAndGetenvOverride() throws Exception {
+		// The whole uiop/os family on the JVM. The pipeline mirrors the CLI's: the
+		// program AND the uiop resources are read with the TARGET feature set, which is
+		// what makes featurep -- and architecture / implementation-identifier, derived
+		// from it -- answer for the backend being compiled instead of for the
+		// interpreter. getenv is a Lisp definition over the %host-getenv primitive here,
+		// so the override map a (setf (uiop:getenv x) v) writes is read back on this
+		// backend exactly as on the interpreter; getcwd is real (user.dir) and chdir
+		// signals. The .lnk parsers are upstream's bodies and seek a binary file
+		// stream, which this backend supports, so the shortcut parses the fixture.
+		String lnk = CorpusFixtures.lnkFixturePath().toString().replace("\\", "\\\\");
+		assertThat(compileAndRun(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString("""
+				(print (list (uiop:featurep :rontolisp) (uiop:featurep :rontolisp-jvm)
+				             (uiop:featurep :rontolisp-interpreter)
+				             (uiop:featurep '(:and :rontolisp :unicode)) (uiop:featurep '(:not :nope))))
+				(print (list (uiop:os-unix-p) (uiop:os-macosx-p) (uiop:os-windows-p) (uiop:os-genera-p)))
+				(print (list (uiop:detect-os) (uiop:operating-system) (uiop:implementation-type)
+				             uiop:*implementation-type* (uiop:architecture) (uiop:hostname)))
+				(print (uiop:os-cond ((uiop:os-windows-p) :win) ((uiop:os-unix-p) :unix) (t :other)))
+				(setf (uiop:getenv "CI_JVM_UIOP_OS") "one")
+				(print (list (uiop:getenv "CI_JVM_UIOP_OS") (uiop:getenvp "CI_JVM_UIOP_OS")))
+				(setf (uiop:getenv "CI_JVM_UIOP_OS") nil)
+				(print (list (uiop:getenv "CI_JVM_UIOP_OS") (uiop:getenvp "CI_JVM_UIOP_OS")))
+				(print (list (stringp (uiop:getenv "PATH")) (pathnamep (uiop:getcwd))))
+				(print (handler-case (uiop:chdir "/tmp") (uiop:not-implemented-error () :chdir-signals)))
+				(print (handler-case (uiop:parse-windows-shortcut "%s")
+				         (uiop:not-implemented-error () :lnk-not-implemented)))
+				""".formatted(lnk), am.ik.rontolisp.reader.Features.JVM), am.ik.rontolisp.reader.Features.JVM)))
+			.isEqualTo("""
+					(T T NIL T T)
+					(T NIL NIL NIL)
+					(:OS-UNIX :UNIX :RONTOLISP :RONTOLISP :JVM NIL)
+					:UNIX
+					("one" "one")
+					(NIL NIL)
+					(T T)
+					:CHDIR-SIGNALS
+					"app.exe\"""");
+	}
+
+	@Test
+	void compileAndRunUiopImageHooksBacktracesAndTheImageItself() throws Exception {
+		// The uiop/image family that does not exit, on the JVM. The hooks are real lists
+		// (only the act of DUMPING is impossible), fatal-condition is a deftype over
+		// serious-condition that a runtime typep matches, the backtrace family prints the
+		// condition and no frames -- no backend carries a Lisp-level call stack -- a
+		// compiled program has no compiler to dump an image with and no object files to
+		// create one from, and restore-image is upstream's start.
+		assertThat(compileAndRun(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString("""
+				(uiop:register-image-dump-hook 'a)
+				(uiop:register-image-dump-hook 'b)
+				(uiop:register-image-dump-hook 'a)
+				(defvar *ran* nil)
+				(uiop:register-image-restore-hook (lambda () (push :restored *ran*)) nil)
+				(uiop:call-image-restore-hook)
+				(print (list uiop:*image-dump-hook* *ran* uiop:*image-dumped-p* uiop:*lisp-interaction*))
+				(print (list (uiop:fatal-condition-p (make-condition 'error))
+				             (uiop:fatal-condition-p (make-condition 'warning))
+				             (uiop:fatal-condition-p 42)))
+				(print (with-output-to-string (s)
+				         (uiop:print-condition-backtrace (make-condition 'simple-error :format-control "boom")
+				                                         :stream s)
+				         (uiop:print-backtrace :stream s :condition "second")
+				         (uiop:raw-print-backtrace :stream s)))
+				(print (list (handler-case (uiop:dump-image "x.img")
+				               (uiop:not-implemented-error () :dump-image))
+				             (handler-case (uiop:create-image "x" nil)
+				               (uiop:not-implemented-error () :create-image))
+				             (multiple-value-list
+				              (uiop:restore-image :lisp-interaction t :entry-point (lambda () (values :entered 2))))
+				             (uiop:restore-image :lisp-interaction t :if-already-restored nil
+				                                 :entry-point (lambda () :again))))
+				""", am.ik.rontolisp.reader.Features.JVM), am.ik.rontolisp.reader.Features.JVM))).isEqualTo("""
+				((B A) (:RESTORED) NIL NIL)
+				(T NIL NIL)
+				"boom
+				second
+				"
+				(:DUMP-IMAGE :CREATE-IMAGE (:ENTERED 2) NIL)""");
+	}
+
+	@Test
+	void compileAndRunUiopImageQuitEndsTheProcessWithItsCode() throws Exception {
+		// quit is System.exit on this backend -- the one place a generated class ends the
+		// JVM it runs in, and deliberately so: the uncaught-condition handler rethrows
+		// because the program did NOT ask to stop, while quit is the program asking for
+		// exactly that. Which is why this case runs in a CHILD JVM and every other case
+		// here is reflective.
+		//
+		// Nothing runs after it: not the handler-case around it (it is not a condition)
+		// and not the unwind-protect cleanup (System.exit / proc_exit / wasi:cli/exit all
+		// end the process where they stand). All four backends print :BEFORE and exit 3.
+		Run quit = compileAndRunInChildJvm("""
+				(print :before)
+				(unwind-protect
+				     (handler-case (uiop:quit 3) (error (e) (print :caught)))
+				  (print :cleanup))
+				(print :after)
+				""");
+		assertThat(quit.out()).isEqualTo(":BEFORE");
+		assertThat(quit.code()).isEqualTo(3);
+		// die reports on standard error and quits with the code it was given;
+		// shell-boolean-exit is 0 for true and 1 for false.
+		Run die = compileAndRunInChildJvm("(uiop:die 7 \"no such thing: ~A\" :widget)");
+		assertThat(die.out()).isEqualTo("no such thing: WIDGET");
+		assertThat(die.code()).isEqualTo(7);
+		assertThat(compileAndRunInChildJvm("(uiop:shell-boolean-exit nil)").code()).isEqualTo(1);
+		assertThat(compileAndRunInChildJvm("(uiop:shell-boolean-exit :yes)").code()).isEqualTo(0);
+		// The code is masked to eight bits, which is what a POSIX host does with it
+		// anyway and what wasi:cli/exit's u8 accepts.
+		assertThat(compileAndRunInChildJvm("(uiop:quit 300)").code()).isEqualTo(44);
+		// handle-fatal-condition reports and dies with upstream's own status 99; there is
+		// no debugger to enter, which is why *lisp-interaction* is nil here.
+		Run fatal = compileAndRunInChildJvm("""
+				(print :start)
+				(uiop:with-fatal-condition-handler () (error "the sky is falling"))
+				(print :unreachable)
+				""");
+		assertThat(fatal.code()).isEqualTo(99);
+		assertThat(fatal.out()).isEqualTo("""
+				:START
+				Fatal condition:
+				the sky is falling
+				the sky is falling
+				the sky is falling""");
+	}
+
+	/**
+	 * What a compiled class printed (stdout and stderr merged) and the code it exited
+	 * with.
+	 */
+	private record Run(String out, int code) {
+	}
+
+	// Runs the compiled class in a CHILD JVM: a program calling uiop:quit ends the JVM it
+	// runs in, so the reflective compileAndRun above would take the test runner with it.
+	private Run compileAndRunInChildJvm(String lispCode, String... arguments) throws Exception {
+		List<LispVal> program = am.ik.rontolisp.eval.LispPreludeLibrary.process(
+				LispReader.readAllFromString(lispCode, am.ik.rontolisp.reader.Features.JVM),
+				am.ik.rontolisp.reader.Features.JVM);
+		Files.write(this.tempDir.resolve("Test.class"), new JvmLispCompiler("Test").compile(program));
+		List<String> command = new java.util.ArrayList<>(
+				List.of(Path.of(System.getProperty("java.home"), "bin", "java").toString(), "-cp",
+						this.tempDir.toString(), "Test"));
+		command.addAll(List.of(arguments));
+		Process process = new ProcessBuilder(command).redirectErrorStream(true).start();
+		String out = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+		return new Run(out.trim(), process.waitFor());
+	}
+
+	@Test
+	void compileAndRunUiopImageTheCommandLine() throws Exception {
+		// main(String[]) carries the user arguments and no argv0, so the CLASS NAME is
+		// prepended: it is what stood on the command line, and it makes the vector the
+		// same (program-name user-arg ...) shape the other three backends answer. The
+		// arguments have to come from a REAL command line, so this case runs in a child
+		// JVM like the quitting ones do.
+		Run run = compileAndRunInChildJvm("""
+				(print (uiop:raw-command-line-arguments))
+				(print (uiop:argv0))
+				(print (uiop:command-line-arguments))
+				(print uiop:*command-line-arguments*)
+				""", "alpha", "beta");
+		assertThat(run.out()).isEqualTo("""
+				("Test" "alpha" "beta")
+				"Test"
+				("alpha" "beta")
+				("alpha" "beta")""");
+		assertThat(run.code()).isZero();
+		// No arguments is the vector with argv0 alone, not nil: the program was still
+		// started from a command line.
+		assertThat(compileAndRunInChildJvm("(print (uiop:command-line-arguments))").out()).isEqualTo("NIL");
+	}
+
+	@Test
+	void compileAndRunUiopOsOctetReaders() throws Exception {
+		// read-little-endian / read-null-terminated-string are portable stream work over
+		// read-byte, so the compiled program must answer what the interpreter does. The
+		// stream is flexi-streams' in-memory octet stream, the one binary input every
+		// backend can build without a filesystem. Through the CLI's front end: the Gray
+		// splice is what routes read-byte on a CLOS instance stream to the protocol, and
+		// the shim defines macros.
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess.withSystemPath("""
+				(asdf:load-system "flexi-streams")
+				(let* ((v (make-array 7 :element-type '(unsigned-byte 8)
+				                        :initial-contents '(1 2 0 0 104 105 0)))
+				       (s (flex:make-in-memory-input-stream v)))
+				  (print (uiop:read-little-endian s))
+				  (print (uiop:read-null-terminated-string s)))
+				""", List.of(), false, false).forms())).isEqualTo("513\n\"hi\"");
+	}
+
+	@Test
+	void compileAndRunUiopUnimplementedMacroDropsItsArgumentForms() throws Exception {
+		// A macro nothing implements yet must not evaluate what it was handed. Its
+		// synthesized stub is a real variadic defun (the name has to be fboundp), so
+		// the ordinary call path FINDS it and compiles the argument forms first --
+		// which is why the lowering has to happen in the expression compiler's uiop
+		// branch, ahead of the call path. The spec list here is non-empty on purpose:
+		// with (), the arguments are the nil literal and the bug is invisible. The
+		// probe used to be with-current-directory; it grew its own expansion over
+		// call-with-current-directory, so the probe moved to a stream macro nothing
+		// implements yet -- with-input-file until it got one over
+		// call-with-input-file, then with-null-input until it got one too --
+		// with-saved-deferred-warnings (a deferred-warnings stub) now.
+		assertThat(compileAndRun("""
+				(print (handler-case (uiop:with-saved-deferred-warnings () (defun um-probe () 1))
+				         (uiop:not-implemented-error () :signalled)))
+				(print (fboundp 'um-probe))
+				""")).isEqualTo("""
+				:SIGNALLED
+				NIL""");
+	}
+
+	@Test
+	void compileAndRunUiopMuffledConditionsAndStyleWarn() throws Exception {
+		// with-muffled-conditions expands into call-with-muffled-conditions, a spliced
+		// defun the program never names -- the surface-form rule in UiopLibrary is what
+		// selects it, and without that this compiled to a call-time "undefined function".
+		// style-warn signals uiop's own simple-style-warning, which really is a
+		// style-warning, so a handler for the CL supertype catches it.
+		assertThat(compileAndRun("""
+				(print (uiop:with-muffled-conditions ('(warning)) (warn "quiet") :muffled))
+				(print (handler-bind ((style-warning (lambda (c) (muffle-warning c))))
+				         (uiop:style-warn "styled ~A" 2)
+				         :sw-done))
+				""")).isEqualTo("""
+				:MUFFLED
+				:SW-DONE""");
+	}
+
+	@Test
+	void compileAndRunUiopRegisterHookFunction() throws Exception {
+		// Upstream's body over the symbol-value place, so the program is a set site:
+		// the hook lands in an active binding of the variable, as on the interpreter
+		// (LispEvaluatorTest#uiopRegisterHookFunctionPushesOntoAVariableNamedAtRunTime).
+		assertThat(compileAndRun(am.ik.rontolisp.RegisterHookFunctionFixture.SOURCE))
+			.isEqualTo(am.ik.rontolisp.RegisterHookFunctionFixture.EXPECTED);
+	}
+
+	@Test
+	void compileAndRunUiopLispBuildPortableHalf() throws Exception {
+		// The portable half of uiop/lisp-build -- the muffled-conditions
+		// macros (Java expansions over the call-with- defuns, selected by the
+		// surface-form rule), call-around-hook, reify-simple-sexp round trip, the
+		// warnings-file plumbing and the condition classes -- runs on the compile
+		// path; the compile-file*/deferred-warnings machinery signals
+		// not-implemented-error naming the operation.
+		assertThat(compileAndRun("""
+				(print (uiop:with-muffled-compiler-conditions () :c))
+				(print (uiop:with-muffled-loader-conditions () :l))
+				(print (uiop:call-around-hook nil (lambda () 5)))
+				(print (uiop:unreify-simple-sexp (uiop:reify-simple-sexp '(1 "two" (3 4)))))
+				(print (uiop:warnings-file-type :sbcl))
+				(print (handler-case (uiop:compile-file* "x.lisp")
+				         (uiop:not-implemented-error (c) :nie)))
+				""")).isEqualTo("""
+				:C
+				:L
+				5
+				(1 "two" (3 4))
+				"sbcl-warnings"
+				:NIE""");
+	}
+
+	@Test
+	void compileAndRunApplyOfAnUndefinedRuntimeSymbolSignals() {
+		// _apply's symbol-designator miss used to return nil SILENTLY; it must fail
+		// loudly like the funcall dispatcher (the tree-shaker carve-out contract:
+		// a shaken-out or unknown name errors, never silent wrong output).
+		assertThatThrownBy(() -> compileAndRun("(defun rt-a (x) x) (print (apply (intern \"RT-NOPE\") (list 1)))"))
+			.hasRootCauseInstanceOf(RuntimeException.class)
+			.rootCause()
+			.hasMessageContaining("The function RT-NOPE is undefined");
+	}
+
+	@Test
+	void compileAndRunMakeSymbol() throws Exception {
+		assertThat(compileAndRun("(print (make-symbol \"temp\")) (print (symbolp (make-symbol \"temp\")))"
+				+ "(print (eq (make-symbol \"foo\") 'foo)) (print (funcall #'make-symbol \"m\"))"))
+			.isEqualTo("#:|temp|\nT\nNIL\n#:|m|");
+	}
+
+	@Test
+	void compileAndRunFindSymbolFoldsLiterals() throws Exception {
+		assertThat(compileAndRun("(print (find-symbol \"car\")) (print (find-symbol \"cond\"))"
+				+ "(print (find-symbol \"no-such-name\")) (defun fs-fn (x) x) (print (find-symbol \"FS-FN\"))"))
+			.isEqualTo("NIL\nNIL\nNIL\nFS-FN");
+	}
+
+	@Test
+	void compileAndRunFindSymbolWithAComputedArgumentInterns() throws Exception {
+		// A computed name cannot be folded, so it lowers to intern: a symbol IS its
+		// canonical spelling here, and "already interned" is knowledge only an intern
+		// table could hold (.kb/symbol-runtime-api.md).
+		assertThat(compileAndRun(
+				"(setq n \"CAR\") (print (find-symbol n))" + "(setq m \"NO-SUCH-NAME\") (print (find-symbol m))"))
+			.isEqualTo("CAR\nNO-SUCH-NAME");
+	}
+
+	@Test
+	void compileAndRunFindSymbolStatusSecondValue() throws Exception {
+		// Same answers as the interpreter, folded at compile time (the literal name and
+		// the literal designator are what the fold reads, so the mv lowering must not
+		// hide either behind a temporary).
+		assertThat(compileAndRun("(print (multiple-value-list (find-symbol \"CAR\" 'common-lisp)))"
+				+ "(print (multiple-value-list (find-symbol \"CAR\" \"COMMON-LISP\")))"
+				+ "(print (multiple-value-list (find-symbol \"NO-SUCH-NAME\" 'common-lisp)))"
+				+ "(print (multiple-value-list (find-symbol \"CAR\")))"
+				+ "(print (multiple-value-list (find-symbol \"FOO\" :keyword)))"
+				+ "(print (multiple-value-list (intern \"CAR\" 'common-lisp)))"))
+			.isEqualTo("(CAR :EXTERNAL)\n(CAR :EXTERNAL)\n(NIL NIL)\n(CAR :INHERITED)\n"
+					+ "(:FOO :EXTERNAL)\n(CAR :EXTERNAL)");
+	}
+
+	@Test
+	void compileAndRunFindSymbolAnswersForTheExportedOnlyStandardNames() throws Exception {
+		// The interpreter twin is
+		// LispEvaluatorTest#findSymbolAnswersForTheStandardNamesClExportsWithoutImplementing:
+		// the fold reads the same name list, so the four backends cannot disagree.
+		assertThat(compileAndRun("(print (multiple-value-list (find-symbol \"FUNCTION-KEYWORDS\" 'common-lisp)))"
+				+ "(print (multiple-value-list (find-symbol \"&AUX\" :cl)))"
+				+ "(print (multiple-value-list (find-symbol \"NO-SUCH-NAME\" 'common-lisp)))"
+				+ "(print (fboundp 'function-keywords))"))
+			.isEqualTo("(FUNCTION-KEYWORDS :EXTERNAL)\n(&AUX :EXTERNAL)\n(NIL NIL)\nNIL");
+	}
+
+	@Test
+	void compileAndRunBoundp() throws Exception {
+		assertThat(compileAndRun("(defvar *bp-var* 1) (print (boundp '*bp-var*)) (print (boundp '*bp-nope*))"
+				+ "(print (boundp :kw)) (print (boundp T)) (print (boundp nil))"
+				+ "(let ((lex 1)) (print (boundp 'lex)))"))
+			.isEqualTo("T\nNIL\nT\nT\nT\nNIL");
+	}
+
+	@Test
+	void compileAndRunBoundpSeesAnAssignmentMadeInsideALambda() throws Exception {
+		// Every store to a global feeds the eval mirror, so a runtime boundp
+		// answers what a lambda body assigned -- the mirror used to see top-level
+		// stores only and read stale forever after. The probes survive the
+		// compile-time fold (the init's own assignment poisons the name).
+		assertThat(compileAndRun("(setq assign-init (lambda () (setq assigned-in-lambda 42) nil))"
+				+ " (print (boundp (intern \"ASSIGNED-IN-LAMBDA\"))) (print (boundp 'assigned-in-lambda))"
+				+ " (funcall assign-init)"
+				+ " (print (boundp (intern \"ASSIGNED-IN-LAMBDA\"))) (print (boundp 'assigned-in-lambda))"
+				+ " (print (symbol-value (intern \"ASSIGNED-IN-LAMBDA\"))) (print assigned-in-lambda)"))
+			.isEqualTo("NIL\nNIL\nT\nT\n42\n42");
+	}
+
+	@Test
+	void compileAndRunQuotedConstantsStaySymbolsWhileCodePositionAnswersTheValue() throws Exception {
+		// 'pi used to read as a double wherever the spelling appeared.
+		// The names read as symbols now; this backend seeds the globals with its
+		// own values (see ClConstants), so code position still answers.
+		assertThat(compileAndRun("(print (symbolp (car '(pi)))) (print 'pi)"
+				+ " (print (car '(most-positive-fixnum))) (print (boundp 'pi)) (print (symbol-value 'pi))"
+				+ " (print pi) (print (> most-positive-fixnum 1000000))"
+				+ " (print (< most-negative-fixnum -1000000000)) (print (constantp 'pi))"
+				+ " (print (let ((x 'double-float-epsilon)) x)) (print lambda-list-keywords)"
+				+ " (print (symbolp (car '(cl:pi))))"))
+			.isEqualTo("T\nPI\nMOST-POSITIVE-FIXNUM\nT\n3.141592653589793\n3.141592653589793\nT\nT\nT\n"
+					+ "DOUBLE-FLOAT-EPSILON\n"
+					+ "(&ALLOW-OTHER-KEYS &AUX &BODY &ENVIRONMENT &KEY &OPTIONAL &REST &WHOLE)\nT");
+	}
+
+	@Test
+	void theDefineConstantGuardCompilesToTheBareDefinition() {
+		// The portable define-constant guard compiles to exactly the class the bare
+		// definition compiles to: the probe was decided at compile time
+		// (compiler/CompileTimeBoundp), so the boundp its usesEval OR-chain arm reads is
+		// not in the program any more, and neither is the guard that wrapped it.
+		byte[] guarded = new JvmLispCompiler("Test")
+			.compile(LispReader.readAllFromString("(unless (boundp '+bpk+) (defconstant +bpk+ 5)) (print +bpk+)"));
+		byte[] bare = new JvmLispCompiler("Test")
+			.compile(LispReader.readAllFromString("(defconstant +bpk+ 5) (print +bpk+)"));
+		assertThat(guarded).isEqualTo(bare);
+		// A computed designator is not decidable and keeps its probe, so the two programs
+		// stay different classes. What that costs is NOT readable here: this backend's
+		// gate is deliberately wide (the injected wrapper bodies reference _apply) and
+		// the class shaker is what trims the runtime, so the size pin lives on the WASM
+		// side, whose gate is exact -- .kb/eval-runtime.md.
+		byte[] computed = new JvmLispCompiler("Test")
+			.compile(LispReader.readAllFromString("(defconstant +bpk+ 5) (print (boundp (intern \"+BPK+\")))"));
+		assertThat(computed).isNotEqualTo(bare);
+	}
+
+	@Test
+	void compileAndRunSymbolValue() throws Exception {
+		assertThat(compileAndRun("(defvar *sv-var* 42) (print (symbol-value '*sv-var*))"
+				+ "(setq *sv-var2* 7) (print (symbol-value (intern \"*SV-VAR2*\")))"
+				+ "(print (symbol-value :kw)) (print (symbol-value T)) (print (symbol-value nil))"))
+			.isEqualTo("42\n7\n:KW\nT\nNIL");
+	}
+
+	@Test
+	void standardStreamVariablesAreBoundToTheirDefaultsThroughTheSymbolApi() throws Exception {
+		// The two homes of a special -- the global field a direct read uses and the eval
+		// runtime's _genv mirror symbol-value/boundp probe -- seed from one table, so the
+		// three stream variables answer here exactly what the interpreter answers.
+		assertThat(compileAndRun("(print (boundp '*error-output*)) (print (symbol-value '*error-output*))"
+				+ "(print (boundp '*standard-output*)) (print (symbol-value '*standard-output*))"
+				+ "(print (boundp '*standard-input*)) (print (symbol-value '*standard-input*))"))
+			.isEqualTo("T\n#<STREAM>\nT\nT\nT\nT");
+	}
+
+	@Test
+	void standardStreamVariablesResolveThroughAComputedSymbolAndAfterAssignment() throws Exception {
+		// lack's backtrace middleware carries the SYMBOL '*error-output* in a variable,
+		// reporting through (symbol-value output). A top-level assignment must still
+		// win over the seeded default: the seed IS the binding cell _store mutates.
+		assertThat(compileAndRun("(defvar *sv-stream-name* '*error-output*)"
+				+ "(print (boundp *sv-stream-name*)) (print (symbol-value *sv-stream-name*))"
+				+ "(setq *error-output* t) (print (symbol-value '*error-output*))"))
+			.isEqualTo("T\n#<STREAM>\nT");
+	}
+
+	@Test
+	void functionValuesPrintTheSameNamedTextTheInterpreterAnswers() throws Exception {
+		// The generated class carries a _funName table over the dispatchable defuns, so
+		// a named function value prints #<function NAME> and an anonymous one #<lambda>
+		// -- the same text the interpreter answers (LispEvaluatorTest's pin of the same
+		// program), with no identity hash or address. Streams print the plain opaque tag.
+		assertThat(compileAndRun("""
+				(defun my-double (x) (* x 2))
+				(defpackage :pin-pkg (:use :cl) (:export :visible))
+				(defun pin-pkg::visible (x) x)
+				(defun pin-pkg::%hidden (x) x)
+				(defmethod pin-gf ((x number)) x)
+				(defun (setf widget) (v o) v)
+				(print (princ-to-string #'car))
+				(print (princ-to-string #'my-double))
+				(print (princ-to-string (symbol-function 'car)))
+				(print (princ-to-string #'(lambda () 1)))
+				(print (princ-to-string (coerce #'(lambda () 1) 'function)))
+				(print (princ-to-string #'pin-pkg:visible))
+				(print (princ-to-string #'pin-pkg::%hidden))
+				(print (princ-to-string #'pin-gf))
+				(print (princ-to-string #'(setf widget)))
+				(print (princ-to-string (flet ((inner () 1)) #'inner)))
+				(print (princ-to-string (labels ((loop1 () 1)) #'loop1)))
+				(print (princ-to-string (make-string-output-stream)))
+				""")).isEqualTo("\"#<function CAR>\"\n" + "\"#<function MY-DOUBLE>\"\n" + "\"#<function CAR>\"\n"
+				+ "\"#<lambda>\"\n" + "\"#<lambda>\"\n" + "\"#<function PIN-PKG:VISIBLE>\"\n"
+				+ "\"#<function PIN-PKG::%HIDDEN>\"\n" + "\"#<function PIN-GF>\"\n" + "\"#<function %setf-WIDGET>\"\n"
+				+ "\"#<lambda>\"\n" + "\"#<lambda>\"\n" + "\"#<STREAM>\"");
+	}
+
+	@Test
+	void compileAndRunRuntimeResolvedDesignatorsAreFunctionValues() throws Exception {
+		// A run-time name resolution boxes the resolved funcId as a function value, so
+		// functionp answers t, the value prints its registered name through _funName,
+		// and funcall dispatches -- the interpreter's answer on every shape
+		// (LispEvaluatorTest#runtimeResolvedDesignatorsAreFunctionValues).
+		// The print-only leg needs the registry without any call site spelling it.
+		assertThat(compileAndRun("""
+				(defun rrd-add (a b) (+ a b))
+				(defun rrd-mul (a b) (* a b))
+				(defun rrd-sub (a b) (- a b))
+				(defun rrd-div (a b) (/ a b))
+				(print (symbol-function (car (list 'car))))
+				(let ((fn (symbol-function (car (list 'rrd-add)))))
+				  (print (functionp fn)) (print fn) (print (funcall fn 2 3)))
+				(let ((fn (fdefinition (car (list 'rrd-mul)))))
+				  (print (functionp fn)) (print fn) (print (funcall fn 2 3)))
+				(let ((fn (coerce (car (list 'rrd-sub)) 'function)))
+				  (print (functionp fn)) (print fn) (print (funcall fn 5 3)))
+				(let ((ty 'function))
+				  (let ((fn (coerce (car (list 'rrd-div)) ty)))
+				    (print (functionp fn)) (print fn) (print (funcall fn 6 3))))
+				(print (princ-to-string (coerce 'car 'function)))
+				(print (funcall (coerce 'car 'function) '(7 8)))
+				(print (funcall (coerce #'(lambda (x) (* x x)) 'function) 9))
+				(print (funcall (coerce '(lambda (x) (* x x)) 'function) 9))
+				""")).isEqualTo("#<function CAR>\n" + "T\n" + "#<function RRD-ADD>\n" + "5\n" + "T\n"
+				+ "#<function RRD-MUL>\n" + "6\n" + "T\n" + "#<function RRD-SUB>\n" + "2\n" + "T\n"
+				+ "#<function RRD-DIV>\n" + "2\n" + "\"#<function CAR>\"\n" + "7\n" + "81\n" + "81");
+	}
+
+	@Test
+	void compileAndRunSymbolValueThrowsOnUnbound() {
+		assertThatThrownBy(() -> compileAndRun("(print (symbol-value 'nope))"))
+			.hasRootCauseInstanceOf(RuntimeException.class)
+			.rootCause()
+			.hasMessageContaining("The variable NOPE is unbound");
+	}
+
+	@Test
+	void compileAndRunFboundp() throws Exception {
+		// literal arguments fold at compile time (macros/special forms included);
+		// computed arguments probe the runtime _fenv/_lookup registries (functions only)
+		assertThat(compileAndRun("(print (fboundp 'car)) (print (fboundp 'cond)) (print (fboundp 'defun))"
+				+ "(print (fboundp 'cadr)) (print (fboundp 'no-such-fn))"
+				+ "(defun fb-fn (x) x) (print (fboundp 'fb-fn))"
+				+ "(print (fboundp (intern \"FB-FN\"))) (print (fboundp (intern \"car\")))"
+				+ "(print (fboundp (intern \"nothing\")))"))
+			.isEqualTo("T\nT\nT\nT\nNIL\nT\nT\nNIL\nNIL");
+	}
+
+	@Test
+	void compileAndRunFmakunbound() throws Exception {
+		// The tombstone in _fenv shadows the compiled-function registry, so a retired
+		// name answers nil at a LITERAL fboundp too (that fold is emitted behind the
+		// probe whenever the program calls fmakunbound); an unknown name is a no-op.
+		assertThat(compileAndRun("(defun fmk-fn (x) x) (print (fboundp 'fmk-fn))"
+				+ "(print (fmakunbound 'fmk-fn)) (print (fboundp 'fmk-fn))"
+				+ "(print (fboundp (intern \"FMK-FN\"))) (print (fmakunbound 'fmk-never-defined))"))
+			.isEqualTo("T\nFMK-FN\nNIL\nNIL\nFMK-NEVER-DEFINED");
+	}
+
+	@Test
+	void compileAndRunFindSymbolAnswersNilForAPackageThatDoesNotExist() throws Exception {
+		assertThat(compileAndRun("(print (find-package :simple-date))"
+				+ "(defun probe (p) (find-package p)) (print (probe :simple-date)) (print (probe nil))"
+				+ "(print (probe :cl)) (print (probe :keyword))"))
+			.isEqualTo("NIL\nNIL\nNIL\n:CL\n:KEYWORD");
+	}
+
+	@Test
+	void compileAndRunFindPackageWithAComputedDesignator() throws Exception {
+		// A literal designator folds in PackageResolver; a computed one is answered from
+		// the package table the backend bakes in from the resolver's final registry.
+		assertThat(
+				compileAndRun("(defpackage :mypkg (:use :cl) (:nicknames :mp))" + "(defun probe (p) (find-package p))"
+						+ "(print (probe :mypkg)) (print (probe \"MP\")) (print (probe \"mypkg\"))"))
+			.isEqualTo(":MYPKG\n:MYPKG\nNIL");
+	}
+
+	@Test
+	void compileAndRunFindSymbolWithAComputedPackageDesignator() throws Exception {
+		// (find-symbol name pkg) with pkg in a variable: keyword/cl/cl-user need no
+		// qualifier, anything else gets the external "PKG:" spelling; nil names no
+		// package, so it signals.
+		assertThat(compileAndRun(
+				"(defun fs (n p) (find-symbol n p))" + "(print (fs \"FOO\" :keyword)) (print (fs \"CAR\" :cl))"
+						+ "(print (handler-case (fs \"BAR\" nil) (package-error () :caught)))"))
+			.isEqualTo(":FOO\nCAR\n:CAUGHT");
+	}
+
+	@Test
+	void aComputedFindPackageSiteDoesNotCarryItsOwnCopyOfThePackageTable() {
+		// A computed find-package is one call to the %find-package helper the backend
+		// injects with the baked package table, not the table built at every site
+		// (~2.5 KB of class per site, ~3 KB with runtime packages, measured 2026-09-26).
+		assertThat(findPackageBytes(3, false) - findPackageBytes(2, false)).isLessThan(100);
+		assertThat(findPackageBytes(3, true) - findPackageBytes(2, true)).isLessThan(100);
+	}
+
+	private int findPackageBytes(int sites, boolean runtimePackages) {
+		StringBuilder source = new StringBuilder("(defvar *p* :cl)\n");
+		if (runtimePackages) {
+			source.append("(defvar *q* (make-package \"FPB-RT\"))\n");
+		}
+		for (int k = 0; k < sites; k++) {
+			source.append("(print (find-package *p*))\n");
+		}
+		return compileToBytes(source.toString()).length;
+	}
+
+	// macroexpand/macroexpand-1 with a literal quoted argument are folded to the
+	// expansion by the compile-path pass (eval.UserMacroExpander); the compiler itself
+	// never sees them.
+	@Test
+	void compileAndRunMacroexpandAfterExpansionPass() throws Exception {
+		List<LispVal> program = am.ik.rontolisp.eval.UserMacroExpander.expand(LispReader.readAllFromString("""
+				(defmacro my-when2 (test &body body) `(if ,test (progn ,@body) nil))
+				(print (macroexpand-1 '(my-when2 (> 2 1) 'a 'b)))
+				(print (macroexpand-1 '(unless c x)))
+				(print (macroexpand-1 '(+ 1 2)))
+				"""));
+		JvmLispCompiler compiler = new JvmLispCompiler("Test");
+		byte[] classBytes = compiler.compile(program);
+		Path classFile = tempDir.resolve("Test.class");
+		Files.write(classFile, classBytes);
+		try (URLClassLoader loader = new URLClassLoader(new URL[] { tempDir.toUri().toURL() },
+				ClassLoader.getSystemClassLoader())) {
+			Class<?> clazz = loader.loadClass("Test");
+			Method main = clazz.getMethod("main", String[].class);
+			ByteArrayOutputStream baos = new ByteArrayOutputStream();
+			try (var _ = ThreadStdio.out(baos)) {
+				main.invoke(null, (Object) new String[0]);
+			}
+			assertThat(baos.toString().trim()).isEqualTo("(IF (> 2 1) (PROGN 'A 'B) NIL)\n(IF C NIL X)\n(+ 1 2)");
+		}
+	}
+
+	@Test
+	void compileAndRunDefvarDefinesGlobal() throws Exception {
+		assertThat(compileAndRun("(defvar *x* 42) (print *x*)")).isEqualTo("42");
+	}
+
+	@Test
+	void compileAndRunDefvarReturnsName() throws Exception {
+		assertThat(compileAndRun("(print (defvar *x* 42))")).isEqualTo("*X*");
+	}
+
+	@Test
+	void compileAndRunDefvarIsIdempotent() throws Exception {
+		assertThat(compileAndRun("(defvar *x* 1) (defvar *x* 2) (print *x*)")).isEqualTo("1");
+	}
+
+	@Test
+	void compileAndRunDefparameterAlwaysAssigns() throws Exception {
+		assertThat(compileAndRun("(defparameter *x* 1) (defparameter *x* 2) (print *x*)")).isEqualTo("2");
+	}
+
+	@Test
+	void aDefinerWhoseValueIsReadStillYieldsTheNameSymbol() throws Exception {
+		// A TOP-LEVEL definer is compiled for effect -- main() pops what it returns, so
+		// the name symbol is never built (compiler/ToplevelStatements). That is a
+		// statement-position decision and nothing else: read the value and the form is
+		// still the CL form that answers its own name.
+		assertThat(compileAndRun("(print (defparameter *nested-name* 7))")).isEqualTo("*NESTED-NAME*");
+	}
+
+	@Test
+	void compileAndRunGlobalReadInsideFunction() throws Exception {
+		// A defparameter global referenced inside a defun body must resolve (previously
+		// failed to compile: "Cannot compile symbol reference: *k*").
+		assertThat(compileAndRun("(defparameter *k* 3) (defun f (x) (* x *k*)) (print (f 5))")).isEqualTo("15");
+	}
+
+	@Test
+	void compileAndRunGlobalAssignInsideFunctionVisibleAtTopLevel() throws Exception {
+		// setq of a global inside a function mutates the shared backing store, so a
+		// top-level read sees the update.
+		assertThat(compileAndRun(
+				"(defvar *acc* 0) (defun bump () (setq *acc* (+ *acc* 1))) (bump) (bump) (bump) (print *acc*)"))
+			.isEqualTo("3");
+	}
+
+	@Test
+	void compileAndRunLargeTopLevelBodySplitsAcrossMethods() throws Exception {
+		// A top-level body that exceeds the JVM 64 KB per-method bytecode limit must be
+		// split across several helper methods, called in order from main(), without
+		// losing cross-form shared state. *n* is a top-level global (a static field), so
+		// the running total survives the method boundaries.
+		StringBuilder sb = new StringBuilder("(setq *n* 0)\n");
+		int forms = 6000;
+		for (int i = 0; i < forms; i++) {
+			sb.append("(setq *n* (+ *n* 1))\n");
+		}
+		sb.append("(print *n*)\n");
+		assertThat(compileAndRun(sb.toString())).isEqualTo(String.valueOf(forms));
+	}
+
+	@Test
+	void aBranchArmPastTheMethodSizeBudgetBecomesItsOwnMethod() throws Exception {
+		// The shape the tail-spine splitter cannot cut: the whole body is one BRANCH, so
+		// there are never two items to split between (.kb/hot-path-method-size.md).
+		// compiler/AstOutliner moves the arm into a local function instead, and the two
+		// splitters then COMPOSE -- the arm is a run of statements, which is exactly
+		// what JvmBodyOutliner cuts once the arm is a method's own tail spine. The
+		// program pins what the move has to preserve: the arm ASSIGNS a variable of the
+		// enclosing frame that is read after the arm returns (it travels as a cell, not
+		// a value), and it LEAVES through a go to a label of the tagbody it sits in,
+		// which stops being a jump and becomes a non-local exit.
+		int rounds = 200;
+		StringBuilder sb = new StringBuilder();
+		sb.append("(defun tree (x)\n  (let ((acc 0) (hit nil))\n    (block done\n      (tagbody\n");
+		sb.append("         (if (= x 0)\n             (progn\n");
+		long acc = 0;
+		for (int k = 1; k <= rounds; k++) {
+			sb.append("               (setq acc (+ acc ").append(k).append("))\n");
+			sb.append("               (setq acc (logxor acc (car (list ").append(k * 7).append(" 0))))\n");
+			acc = (acc + k) ^ (k * 7L);
+		}
+		sb.append("               (setq hit 'zero)\n               (go finish))\n");
+		sb.append("             (progn\n               (setq acc 42)\n");
+		sb.append("               (setq hit 'other)\n               (go finish)))\n");
+		sb.append("       finish\n         (return-from done (list acc hit))))))\n");
+		sb.append("(print (tree 0))\n(print (tree 1))\n");
+		List<LispVal> forms = am.ik.rontolisp.eval.LispPreludeLibrary
+			.process(LispReader.readAllFromString(sb.toString()));
+		byte[] classBytes = new JvmLispCompiler("Test").compile(forms);
+		java.util.Map<String, Integer> sizes = new java.util.LinkedHashMap<>();
+		for (java.lang.classfile.MethodModel method : java.lang.classfile.ClassFile.of().parse(classBytes).methods()) {
+			sizes.put(method.methodName().stringValue(),
+					method.findAttribute(java.lang.classfile.Attributes.code()).orElseThrow().codeLength());
+		}
+		assertThat(sizes.get("TREE")).as("the branch was cut, so the function fits under the cliff").isLessThan(8000);
+		// The source builds no closure of its own, so a local function in the class is
+		// one this pass introduced.
+		assertThat(sizes.keySet()).as("the arm became a method of its own").anyMatch(n -> n.startsWith("_lambda_"));
+		assertThat(sizes.entrySet()
+			.stream()
+			.filter(e -> !e.getKey().equals("main") && !e.getKey().startsWith("_top$") && !e.getKey().equals("<clinit>")
+					&& e.getValue() > 8000)
+			.toList()).as("no method that runs per evaluated form crosses the limit").isEmpty();
+		assertThat(compileAndRun(forms)).isEqualTo("(" + acc + " ZERO)\n(42 OTHER)");
+	}
+
+	@Test
+	void aFlatCondPastTheMethodSizeBudgetSplitsItsClauseList() throws Exception {
+		// The generated %condition-report-str shape: one cond of many clauses, each too
+		// small to be worth a method, so no branch cut helps and the tail-spine splitter
+		// sees one item. The clause list itself is cut: the clauses past a prefix move
+		// into a (t ...) clause whose body is the rest of the cond, as its own method.
+		// The program pins that every clause still answers -- first, middle, last, the
+		// default, and multiple values out of a clause that ends up pieces deep.
+		int clauses = 600;
+		StringBuilder sb = new StringBuilder("(defun classify (x)\n  (cond");
+		for (int k = 0; k < clauses; k++) {
+			sb.append("\n    ((eql x ").append(k).append(") (list ").append(k).append(" (* x 2) \"c").append(k);
+			sb.append("\"))");
+		}
+		sb.append("\n    ((eql x -1) (values 'a 'b))\n    (t 'none)))\n");
+		sb.append("(print (classify 0))\n(print (classify 300))\n(print (classify 599))\n");
+		sb.append("(print (classify 1000))\n(print (multiple-value-list (classify -1)))\n");
+		List<LispVal> forms = am.ik.rontolisp.eval.LispPreludeLibrary
+			.process(LispReader.readAllFromString(sb.toString()));
+		byte[] classBytes = new JvmLispCompiler("Test").compile(forms);
+		java.util.Map<String, Integer> sizes = new java.util.LinkedHashMap<>();
+		for (java.lang.classfile.MethodModel method : java.lang.classfile.ClassFile.of().parse(classBytes).methods()) {
+			sizes.put(method.methodName().stringValue(),
+					method.findAttribute(java.lang.classfile.Attributes.code()).orElseThrow().codeLength());
+		}
+		assertThat(sizes.get("CLASSIFY")).as("the clause list was cut").isLessThan(8000);
+		assertThat(sizes.entrySet()
+			.stream()
+			.filter(e -> !e.getKey().equals("main") && !e.getKey().startsWith("_top$") && !e.getKey().equals("<clinit>")
+					&& e.getValue() > 8000)
+			.toList()).as("no piece of it crosses the limit either").isEmpty();
+		assertThat(compileAndRun(forms))
+			.isEqualTo("(0 0 \"c0\")\n(300 600 \"c300\")\n(599 1198 \"c599\")\nNONE\n(A B)");
+	}
+
+	@Test
+	void aTopLevelFormOrAnInitializerPastTheMethodSizeLimitIsCut() throws Exception {
+		// f64: the top level is chunked only BETWEEN forms, so one form whose own code
+		// passes the 64 KB per-method cap has nowhere to go. Its branches become
+		// methods of their own instead (compiler/AstOutliner over the form's evaluated
+		// arguments, .kb/jvm-method-size-limits.md). The program pins that the compile
+		// succeeds, that every emitted method fits the cap, and that the answer is
+		// what the interpreter prints.
+		int branchCount = 8;
+		int ops = 800;
+		StringBuilder sb = new StringBuilder("(defvar k 3)\n(print (case k\n");
+		for (int b = 0; b < branchCount; b++) {
+			sb.append("  (").append(b).append(" (progn\n");
+			for (int i = 0; i < ops; i++) {
+				sb.append("    (setq k (+ k ").append(i + b * ops).append("))\n");
+			}
+			sb.append("    (list 'branch-").append(b).append(" k)))\n");
+		}
+		sb.append("  (otherwise (list 'other k))))\n");
+		// A top-level let whose body is a run of small statements has no branch or
+		// argument to cut: the form becomes a method whose run the tail-spine splitter
+		// cuts (coalton's environment updates, a statement each in one let).
+		sb.append("(let ((r 0))\n");
+		for (int i = 0; i < 6000; i++) {
+			sb.append("  (setq r (+ r (car (list ").append(i % 7).append(" 0))))\n");
+		}
+		sb.append("  (print r))\n");
+		// <clinit> sets each global of no value to the UNBOUND marker, 6 bytes a global:
+		// 12,000 of them were 72,011 bytes in that one method until the settings were
+		// cut into methods of their own (JvmClinitSteps)
+		for (int i = 0; i < 12000; i++) {
+			sb.append("(defvar *v").append(i).append("*)\n");
+		}
+		sb.append("(print (list (boundp '*v0*) (setq *v11999* 7)))\n");
+		List<LispVal> forms = am.ik.rontolisp.eval.LispPreludeLibrary
+			.process(LispReader.readAllFromString(sb.toString()));
+		byte[] classBytes = new JvmLispCompiler("Test").compile(forms);
+		java.util.Map<String, Integer> sizes = new java.util.LinkedHashMap<>();
+		for (java.lang.classfile.MethodModel method : java.lang.classfile.ClassFile.of().parse(classBytes).methods()) {
+			sizes.put(method.methodName().stringValue(),
+					method.findAttribute(java.lang.classfile.Attributes.code()).orElseThrow().codeLength());
+		}
+		assertThat(sizes.values()).as("every emitted method fits the JVM's 64 KB Code limit")
+			.allSatisfy(size -> assertThat(size).isLessThanOrEqualTo(65535));
+		// The source builds no closure of its own, so a lambda method in the class is
+		// one the outlining introduced for a branch.
+		assertThat(sizes.keySet()).as("a branch became a method of its own").anyMatch(n -> n.startsWith("_lambda_"));
+		assertThat(sizes.keySet()).as("the globals' settings were cut").contains("_clinit$unbound$5");
+		assertThat(compileAndRun(forms)).isEqualTo("(BRANCH-3 2239603)\n17997\n(NIL 7)");
+	}
+
+	@Test
+	void theStructDirectoryThatARunTimeReadResolvesIsCutPastOneMethod() throws Exception {
+		// <clinit> fills one directory entry (~40 bytes) per struct type of a program
+		// that
+		// reads; 2,100 of them were one <clinit> past the 64 KB cap
+		StringBuilder sb = new StringBuilder();
+		for (int i = 0; i < 2100; i++) {
+			sb.append("(defstruct st").append(i).append(" a)\n");
+		}
+		sb.append("(print (st2099-a (read-from-string \"#S(ST2099 :A 5)\")))\n");
+		List<LispVal> forms = am.ik.rontolisp.eval.LispPreludeLibrary
+			.process(LispReader.readAllFromString(sb.toString()));
+		java.util.Set<String> methods = new java.util.HashSet<>();
+		for (java.lang.classfile.MethodModel method : java.lang.classfile.ClassFile.of()
+			.parse(new JvmLispCompiler("Test").compile(forms))
+			.methods()) {
+			methods.add(method.methodName().stringValue());
+		}
+		assertThat(methods).contains("_clinit$structs$1");
+		assertThat(compileAndRun(forms)).isEqualTo("5");
+	}
+
+	@Test
+	void aFunctionNameTablePastTheMethodSizeBudgetIsSegmented() throws Exception {
+		// _funName is the funcId -> name table behind #<function NAME>: one 11-byte row
+		// per
+		// function that is taken as a value. 1000 of them is 11,000 bytes as one chain,
+		// past
+		// HotSpot's HugeMethodLimit, so the rows are cut into segments behind a router
+		// (.kb/hot-path-method-size.md). The program pins that the first, a middle, one
+		// on
+		// each side of a segment boundary and the last function still print their own
+		// name.
+		int functions = 1000;
+		StringBuilder sb = new StringBuilder();
+		for (int k = 0; k < functions; k++) {
+			sb.append("(defun fn").append(k).append(" (x) (+ x ").append(k).append("))\n");
+		}
+		sb.append("(defvar *fs* (list");
+		for (int k = 0; k < functions; k++) {
+			sb.append(" #'fn").append(k);
+		}
+		sb.append("))\n");
+		int[] probes = { 0, 1, 499, 500, 998, 999 };
+		StringBuilder expected = new StringBuilder();
+		for (int probe : probes) {
+			sb.append("(print (nth ").append(probe).append(" *fs*))\n");
+			expected.append("#<function FN").append(probe).append(">\n");
+		}
+		sb.append("(print (funcall (nth 999 *fs*) 1))\n");
+		expected.append("1000");
+		List<LispVal> forms = am.ik.rontolisp.eval.LispPreludeLibrary
+			.process(LispReader.readAllFromString(sb.toString()));
+		byte[] classBytes = new JvmLispCompiler("Test").compile(forms);
+		java.util.Map<String, Integer> sizes = new java.util.LinkedHashMap<>();
+		for (java.lang.classfile.MethodModel method : java.lang.classfile.ClassFile.of().parse(classBytes).methods()) {
+			sizes.put(method.methodName().stringValue(),
+					method.findAttribute(java.lang.classfile.Attributes.code()).orElseThrow().codeLength());
+		}
+		assertThat(sizes).as("the name table is emitted").containsKey("_funName");
+		assertThat(sizes.entrySet()
+			.stream()
+			.filter(e -> !e.getKey().equals("main") && !e.getKey().startsWith("_top$") && !e.getKey().equals("<clinit>")
+					&& e.getValue() > 8000)
+			.toList()).as("no method that runs per printed function crosses the limit").isEmpty();
+		assertThat(compileAndRun(forms)).isEqualTo(expected.toString());
+	}
+
+	@Test
+	void aFunctionBodyPastTheMethodSizeBudgetSplitsIntoTailContinuations() throws Exception {
+		// A defun body that would compile past HotSpot's 8000-bytecode HugeMethodLimit
+		// is split into _k$N tail continuations (.kb/hot-path-method-size.md). The
+		// program pins what the split has to preserve, all of it ACROSS the boundary:
+		// the running values of the let variables (they travel as the continuation's
+		// arguments), a closure built BEFORE the split reading variables mutated AFTER
+		// it (a captured variable travels as its cell, not its value), and a special
+		// binding established on the spine whose restore is emitted in the caller, past
+		// the continuation's return.
+		int rounds = 400;
+		StringBuilder sb = new StringBuilder("""
+				(defvar *depth* 0)
+				(defun spine (n)
+				  (let ((a 0) (b 1) (peek nil))
+				    (setq peek (lambda () (+ (* 1000 a) b)))
+				    (let ((*depth* (+ n 100)))
+				      (setq a (+ a *depth*))
+				""");
+		long a = 107;
+		long b = 1;
+		for (int k = 1; k <= rounds; k++) {
+			sb.append("      (setq a (+ a ").append(k).append("))\n");
+			sb.append("      (setq b (logxor b (car (list ").append(k).append(" 0))))\n");
+			a += k;
+			b ^= k;
+		}
+		sb.append("""
+				      (list a b *depth* (funcall peek)))))
+				(print (spine 7))
+				(print *depth*)
+				""");
+		String program = sb.toString();
+		List<LispVal> forms = am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString(program));
+		byte[] classBytes = new JvmLispCompiler("Test").compile(forms);
+		java.util.Map<String, Integer> sizes = new java.util.LinkedHashMap<>();
+		for (java.lang.classfile.MethodModel method : java.lang.classfile.ClassFile.of().parse(classBytes).methods()) {
+			sizes.put(method.methodName().stringValue(),
+					method.findAttribute(java.lang.classfile.Attributes.code()).orElseThrow().codeLength());
+		}
+		assertThat(sizes).as("the split actually happened").containsKey("_k$0");
+		assertThat(sizes.get("SPINE")).as("the body kept the callable half under the cliff").isLessThan(8000);
+		assertThat(sizes.get("_k$0")).isLessThan(8000);
+		assertThat(compileAndRun(forms)).isEqualTo("(" + a + " " + b + " 107 " + (1000 * a + b) + ")\n0");
+	}
+
+	@Test
+	void aSplitFunctionBodyCarriesItsUnboxedLocalsAcross() throws Exception {
+		// The other representation a live local can have at a split point: an unboxed
+		// dual-representation local (.kb/jvm-int-fusion.md), whose raw slot has no
+		// parameter to travel in. It crosses boxed and lands in the continuation as an
+		// ordinary local, so its value -- and every later assignment to it -- has to
+		// come out the same. The padding forms allocate rather than assign, so the
+		// let body stays under the raw-local assignment-site caps while its bytecode
+		// crosses the budget.
+		StringBuilder sb = new StringBuilder("""
+				(defun counted (n)
+				  (let ((c n))
+				""");
+		for (int k = 1; k <= 90; k++) {
+			sb.append("    (nth 3 (list n 2 ").append(k).append(" 4 5 6 7 8 9 10 n 12 13 14 15 16))\n");
+			if (k % 10 == 0) {
+				sb.append("    (setq c (+ c ").append(k).append("))\n");
+			}
+		}
+		sb.append("""
+				    c))
+				(print (counted 5))
+				""");
+		// 10 + 20 + ... + 90 = 450, plus the initial 5.
+		assertThat(compileAndRun(sb.toString())).isEqualTo("455");
+	}
+
+	@Test
+	void compileAndRunNestedFreeSetqSurvivesTopLevelSplit() throws Exception {
+		// A variable assigned by a setq nested inside a top-level form (never a direct
+		// top-level setq) is, per Common Lisp, a global. It must get a persistent backing
+		// store so a value set in one chunk is visible from a later chunk, even when the
+		// body is split. The padding forms force more than 64 KB of bytecode so the two
+		// references to *m* land in different methods.
+		StringBuilder sb = new StringBuilder("(progn (setq *m* 7) nil)\n(setq *pad* 0)\n");
+		for (int i = 0; i < 6000; i++) {
+			sb.append("(setq *pad* (+ *pad* 1))\n");
+		}
+		sb.append("(print *m*)\n");
+		assertThat(compileAndRun(sb.toString())).isEqualTo("7");
+	}
+
+	@Test
+	void nestedDefunsShareTheEnclosingLetsBindingRatherThanEachTakingACopy() throws Exception {
+		// The CL closure-over-let idiom (cl-ppcre spells its scanner caches this way).
+		// A nested defun is NOT a definition on this backend: it lowers to
+		// (setq name (lambda ...)), a closure over the let variables
+		// (LispMacroExpander.expandCallThroughVariable). The capture analysis used to
+		// SKIP defun, so the binding stayed unboxed and every nested definition's
+		// closure was handed a FRESH one-element cell -- a private copy. bump's
+		// increments then never reached peek and retag's write reached neither: the
+		// compiled answer was (0 START) where the interpreter says (2 LATER).
+		assertThat(compileAndRun("(let ((counter 0) (tag 'start))" + "  (defun bump () (setq counter (+ counter 1)))"
+				+ "  (defun retag (v) (setq tag v))" + "  (defun peek () (list counter tag)))"
+				+ "(bump) (bump) (retag 'later) (print (peek))"))
+			.isEqualTo("(2 LATER)");
+	}
+
+	@Test
+	void aDefunNestedInADefunBodyIsReachableByName() throws Exception {
+		// The same lowering as the closure-over-let idiom above, one level deeper: the
+		// nested defun becomes (setq read-seed (lambda () seed)) inside install's body,
+		// so the NAME needs the same global backing store for a call site to dispatch
+		// through it. Collecting it only from top-level non-defun forms left the call
+		// compiled as "The function READ-SEED is undefined".
+		assertThat(compileAndRun("(defun install (seed)" + "  (defun read-seed () seed)"
+				+ "  (lambda () (setq seed (+ seed 1)) seed))" + "(setq *step* (install 10))" + "(funcall *step*)"
+				+ "(funcall *step*)" + "(print (list (read-seed) (funcall *step*)))"))
+			.isEqualTo("(12 13)");
+	}
+
+	@Test
+	void aDefunNestedInADefunBodyRedefinesAnExistingTopLevelDefun() throws Exception {
+		// The NAME half's last spelling: the redefined name has BOTH a top-level defun
+		// and a nested one, and every call site resolved the compiled function first --
+		// so the nested definition was written to a store nothing read and the call
+		// after (redefiner) still answered TOP. The top-level definition is renamed and
+		// its function value assigned to the global in its place, so the one variable
+		// carries both answers in order (.kb/core-representation.md, "Three-pass
+		// compilation").
+		assertThat(compileAndRun("(defun over () 'top)" + "(defun redefiner () (defun over () 'nested) 'done)"
+				+ "(print (over)) (print (redefiner)) (print (over))"))
+			.isEqualTo("TOP\nDONE\nNESTED");
+	}
+
+	@Test
+	void aRedefinedDefunIsAlsoRedefinedForFunctionReferencesAndCallers() throws Exception {
+		// #'over and a caller compiled BEFORE the redefinition must see it too: both
+		// read the same global variable, and the call is a funcall rather than a fixed
+		// direct call, so the two definitions need not share an arity.
+		assertThat(compileAndRun("(defun over (x) (list 'top x))" + "(defun call-it (x) (over x))"
+				+ "(defun redefiner () (defun over (x) (list 'nested x)) 'done)"
+				+ "(print (call-it 1)) (print (funcall #'over 2)) (redefiner)"
+				+ "(print (call-it 3)) (print (funcall #'over 4))"))
+			.isEqualTo("(TOP 1)\n(TOP 2)\n(NESTED 3)\n(NESTED 4)");
+	}
+
+	@Test
+	void aNestedDefunIsReachableByNameUnderDynamicMode() throws Exception {
+		// --dynamic defers an unresolved name to the runtime FUNCTION namespace, which a
+		// nested defun never enters (it assigns the global VARIABLE): the call answered
+		// nil instead of the closure's value. The variable is asked first for exactly
+		// the names that are non-top-level defuns.
+		assertThat(compileAndRunDynamic(
+				"(defun install (seed) (defun read-seed () seed) 'ok)" + "(print (install 7)) (print (read-seed))"))
+			.isEqualTo("OK\n7");
+	}
+
+	@Test
+	void aTopLevelDefunRedefinedByANestedOneMayNotAlsoBeAGlobalVariable() {
+		// One cell cannot hold both the function value the redefinition needs and the
+		// variable's own value, and picking either silently is what this whole shape was
+		// about -- so the compile says which name and which declaration.
+		assertThatThrownBy(() -> compileAndRun("(defvar over 1)" + "(defun over () 'top)"
+				+ "(defun redefiner () (defun over () 'nested) 'done)" + "(print (over))"))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("OVER");
+	}
+
+	@Test
+	void aTopLevelDefunRedefinedByANestedOneMayNotBeExported() {
+		// An export binds one static definition, which a name resolved through a global
+		// variable does not have. Refused HERE so the message names the real conflict:
+		// the export directive's own check would have said GREET is not a top-level
+		// defun, about a name that plainly is one.
+		assertThatThrownBy(() -> compileAndRun(
+				"(defun greet (n) n)" + "(rontolisp:jvm-export 'greet :params '(:string) :returns :string)"
+						+ "(defun swap () (defun greet (n) n) 'done)" + "(print (greet \"a\"))"))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("GREET")
+			.hasMessageContaining("exported");
+	}
+
+	@Test
+	void aCapturedLetVariableAssignedInlineInASiblingBranchKeepsOneCell() throws Exception {
+		// One arm builds a closure over acc/hit, the sibling arm assigns them INLINE in
+		// the enclosing frame -- the shape compiler/AstOutliner creates on purpose when
+		// it cuts a branch, at a size that crosses both the tail-spine body splitter and
+		// that cut. Both arms must reach the one cell, and the unboxed
+		// dual-representation local must never be chosen for a name a closure reads
+		// (.kb/jvm-int-fusion.md).
+		StringBuilder inline = new StringBuilder();
+		StringBuilder captured = new StringBuilder();
+		for (int i = 0; i < 90; i++) {
+			inline.append("(setq acc (+ acc 2)) (setq acc (logxor acc (car (list 1 0)))) ");
+			captured.append("(setq acc (+ acc 1)) (setq acc (logxor acc (car (list 1 0)))) ");
+		}
+		String program = "(defun tree (x)" + "  (let ((acc 0) (hit nil))" + "    (block done" + "      (tagbody"
+				+ "         (if (= x 0)" + "             (let ((a0 (lambda () " + captured
+				+ " (setq hit 'zero) (go finish))))" + "               (funcall a0))" + "             (progn " + inline
+				+ " (setq hit 'other) (go finish)))" + "       finish"
+				+ "         (return-from done (list acc hit))))))" + "(print (tree 0)) (print (tree 1))";
+		assertThat(compileAndRun(program)).isEqualTo("(0 ZERO)\n(180 OTHER)");
+	}
+
+	@Test
+	void anInlineLambdaCallBoxesAParameterItsBodyClosesOver() throws Exception {
+		// ((lambda (n) ...) 0) binds n in the CALLER's frame, and that binder never
+		// asked whether the body closes over it -- so the nested lambda was handed a
+		// snapshot cell and its assignments never reached n. Answered 0, not 2.
+		assertThat(compileAndRun(
+				"(print ((lambda (n)" + " (let ((g (lambda () (setq n (+ n 1))))) (funcall g) (funcall g) n)) 0))"))
+			.isEqualTo("2");
+	}
+
+	@Test
+	void aCapturedLetVariableAssignedInlineInASiblingBranchPastTheSlotCeiling() throws Exception {
+		// One arm closes over acc/hit, the SIBLING arm assigns
+		// them inline -- and because both are captured, every inline setq mints a temp
+		// that ctx.nextLocal never reuses, so the frame passes 255 slots at ~4 KB of
+		// code, far under the HugeMethodLimit that would have made AstOutliner cut it.
+		// It was filed as a raw-store bug in the dual-representation machinery; it is
+		// the one-byte local index (astore 256/257/258 -> 0/1/2, over the parameter and
+		// the two capture cells, so the next read of hit's cell found a Long). Fusion
+		// off reproduced it byte for byte, which is what ruled the raw store out.
+		// .kb/jvm-method-size-limits.md carries the measurement.
+		StringBuilder inline = new StringBuilder();
+		for (int i = 0; i < 300; i++) {
+			inline.append("(setq hit ").append(i % 5).append(") ");
+		}
+		assertThat(compileAndRun("(defun tree (x)" + "  (let ((acc 0) (hit nil))" + "    (if (= x 0)"
+				+ "        (let ((a0 (lambda () (setq acc (+ acc 1)) (setq hit 'zero))))" + "          (funcall a0))"
+				+ "        (progn " + inline + " (setq acc (+ acc 2)) (setq hit 'other)))" + "    (list acc hit)))"
+				+ "(print (tree 0)) (print (tree 1))"))
+			.isEqualTo("(1 ZERO)\n(2 OTHER)");
+	}
+
+	@Test
+	void compileAndRunGlobalReadInsideLambda() throws Exception {
+		// A global referenced from a lambda nested in a defun (it must be resolved from
+		// its static field, not captured as a free variable).
+		assertThat(compileAndRun(
+				"(defparameter *base* 10) (defun adders (xs) (mapcar (lambda (x) (+ x *base*)) xs)) (print (adders '(1 2 3)))"))
+			.isEqualTo("(11 12 13)");
+	}
+
+	// The four primitives alexandria forced, each one a CL conformance gap that failed
+	// identically on all four backends (so none was a backend divergence). They are
+	// grouped because one library -- alexandria -- is the first caller of all four.
+	@Test
+	void compileAndRunLastWithACount() throws Exception {
+		assertThat(compileAndRun("(print (last '(1 2 3) 2))")).isEqualTo("(2 3)");
+		assertThat(compileAndRun("(print (last '(1 2 3) 0))")).isEqualTo("NIL");
+		assertThat(compileAndRun("(print (last '(1 2 3) 5))")).isEqualTo("(1 2 3)");
+		assertThat(compileAndRun("(print (last '(1 2 . 3) 1))")).isEqualTo("(2 . 3)");
+		assertThat(compileAndRun("(print (last '(1 2 3)))")).isEqualTo("(3)");
+		// As a value the count is optional, so the wrapper dispatches on its presence.
+		assertThat(compileAndRun("(print (funcall #'last '(1 2 3) 2))")).isEqualTo("(2 3)");
+		assertThat(compileAndRun("(print (funcall #'last '(1 2 3)))")).isEqualTo("(3)");
+	}
+
+	@Test
+	void compileAndRunCoerceWithAComputedResultType() throws Exception {
+		String cs = "(defun cs (type seq) (coerce seq type))\n";
+		assertThat(compileAndRun(cs + "(print (cs 'list (vector 1 2)))")).isEqualTo("(1 2)");
+		assertThat(compileAndRun(cs + "(print (cs 'vector '(1 2)))")).isEqualTo("#(1 2)");
+		assertThat(compileAndRun(cs + "(print (cs 'string '(#\\a #\\b)))")).isEqualTo("\"ab\"");
+		assertThat(compileAndRun(cs + "(print (cs '(vector t) '(1 2)))")).isEqualTo("#(1 2)");
+		assertThat(compileAndRun(cs + "(print (cs t '(1 2)))")).isEqualTo("(1 2)");
+		assertThat(compileAndRun(cs + "(print (cs 'double-float 3))")).isEqualTo("3.0");
+	}
+
+	@Test
+	void compileAndRunReadSequenceIntoACharacterBuffer() throws Exception {
+		assertThat(compileAndRun("""
+				(with-input-from-string (s "abcdef")
+				  (let ((buf (make-array 4 :element-type 'character)))
+				    (print (list (read-sequence buf s) buf))))
+				""")).isEqualTo("(4 \"abcd\")");
+		// The element type may be COMPUTED, which is how alexandria allocates the buffer
+		// -- make-array then picks the character-vector representation at run time.
+		assertThat(compileAndRun("""
+				(with-input-from-string (s "xyz")
+				  (let ((buf (make-array 3 :element-type (stream-element-type s))))
+				    (print (list (read-sequence buf s) buf))))
+				""")).isEqualTo("(3 \"xyz\")");
+	}
+
+	@Test
+	void compileAndRunWriteCharWriteByteAndUnreadCharAreFunctionValues() throws Exception {
+		// The JVM twin of
+		// LispEvaluatorTest#writeCharWriteByteAndUnreadCharAreFunctionValues:
+		// #'write-char / #'write-byte did not compile and #'unread-char signalled.
+		String program = StringStreamPrograms.writeAndUnreadValueProgram(this.tempDir.resolve("value.bin").toString());
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(program,
+				am.ik.rontolisp.reader.Features.JVM, false, false)))
+			.isEqualTo(StringStreamPrograms.WRITE_AND_UNREAD_VALUE_EXPECTED);
+	}
+
+	@Test
+	void compileAndRunWriteCharWriteByteAndUnreadCharValuesReachAGrayStream() throws Exception {
+		// The JVM twin of
+		// LispEvaluatorTest#writeCharWriteByteAndUnreadCharValuesReachAGrayStream.
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(
+				am.ik.rontolisp.GrayStreamCallFixture.WRITE_AND_UNREAD_VALUE_PROGRAM,
+				am.ik.rontolisp.reader.Features.JVM, false, false)))
+			.isEqualTo(am.ik.rontolisp.GrayStreamCallFixture.WRITE_AND_UNREAD_VALUE_EXPECTED);
+	}
+
+	@Test
+	void compileAndRunDirectionPredicatesAnswerTheStreamsRealDirection() throws Exception {
+		// The interpreter twin is
+		// LispEvaluatorTest#directionPredicatesAnswerTheStreamsRealDirection.
+		String program = StringStreamPrograms.directionProgram(this.tempDir.resolve("dir.txt").toString());
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(program,
+				am.ik.rontolisp.reader.Features.JVM, false, false)))
+			.isEqualTo(StringStreamPrograms.DIRECTION_EXPECTED);
+	}
+
+	@Test
+	void compileAndRunUiopRunProgramStartsAProgram() throws Exception {
+		// The interpreter twin is
+		// LispEvaluatorTest#evalUiopRunProgramStartsAProgramAndWaitsForIt: one spawn,
+		// runtime/RontoProcess, behind both.
+		String program = RunProgramPrograms.program(this.tempDir.resolve("appended.txt").toString());
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(program,
+				am.ik.rontolisp.reader.Features.JVM, false, false)))
+			.isEqualTo(RunProgramPrograms.EXPECTED);
+	}
+
+	@Test
+	void compileAndRunFilePositionOfAStringStreamQueriesAndSeeks() throws Exception {
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(StringStreamPrograms.POSITION_PROGRAM,
+				am.ik.rontolisp.reader.Features.JVM, false, false)))
+			.isEqualTo(StringStreamPrograms.POSITION_EXPECTED);
+	}
+
+	@Test
+	void compileAndRunWithInputFromStringIndexCountsAParkedCharacterAsUnread() throws Exception {
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess
+			.corpus(StringStreamPrograms.INDEX_PUSHBACK_PROGRAM, am.ik.rontolisp.reader.Features.JVM, false, false)))
+			.isEqualTo(StringStreamPrograms.INDEX_PUSHBACK_EXPECTED);
+	}
+
+	@Test
+	void compileAndRunUnreadCharPushbackBelongsToItsStream() throws Exception {
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(
+				StringStreamPrograms.PER_STREAM_PUSHBACK_PROGRAM, am.ik.rontolisp.reader.Features.JVM, false, false)))
+			.isEqualTo(StringStreamPrograms.PER_STREAM_PUSHBACK_EXPECTED);
+	}
+
+	@Test
+	void compileAndRunUnreadCharPushbackBelongsToTheStreamItsDesignatorDenotes() throws Exception {
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(
+				StringStreamPrograms.DESIGNATOR_PUSHBACK_PROGRAM, am.ik.rontolisp.reader.Features.JVM, false, false)))
+			.isEqualTo(StringStreamPrograms.DESIGNATOR_PUSHBACK_EXPECTED);
+	}
+
+	@Test
+	void compileAndRunReadLineAnswersMissingNewlineP() throws Exception {
+		// The JVM twin of LispEvaluatorTest#readLineAnswersMissingNewlineP.
+		String file = this.tempDir.resolve("rl.txt").toString().replace("\\", "\\\\");
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess
+			.withSystemPath(ReadLineValuesFixture.program(file), List.of(), false, false)
+			.forms())).isEqualTo(ReadLineValuesFixture.EXPECTED);
+		String kinds = this.tempDir.resolve("rk.txt").toString().replace("\\", "\\\\");
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess
+			.withSystemPath(ReadLineValuesFixture.fileKindsProgram(kinds), List.of(), false, false)
+			.forms())).isEqualTo(ReadLineValuesFixture.FILE_KINDS_EXPECTED);
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess
+			.corpus(ReadLineValuesFixture.TAIL_AND_SOCKET_PROGRAM, am.ik.rontolisp.reader.Features.JVM, false, false)))
+			.isEqualTo(ReadLineValuesFixture.TAIL_AND_SOCKET_EXPECTED);
+	}
+
+	@Test
+	void compileAndRunReadLineEndsALineAtLineFeedAloneAndDropsOneCarriageReturnBeforeIt() throws Exception {
+		// The JVM twin of
+		// LispEvaluatorTest#readLineEndsALineAtLineFeedAloneAndDropsOneCarriageReturnBeforeIt.
+		String file = this.tempDir.resolve("cr.dat").toString().replace("\\", "\\\\");
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess
+			.withSystemPath(ReadLineValuesFixture.carriageReturnProgram(file), List.of(), false, false)
+			.forms())).isEqualTo(ReadLineValuesFixture.CARRIAGE_RETURN_EXPECTED);
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess
+			.withSystemPath(ReadLineValuesFixture.carriageReturnFileKindsProgram(file), List.of(), false, false)
+			.forms())).isEqualTo(ReadLineValuesFixture.CARRIAGE_RETURN_FILE_KINDS_EXPECTED);
+	}
+
+	@Test
+	void compileAndRunReadLineAnswersMissingNewlinePAfterAnUnreadCharacter() throws Exception {
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(ReadLineValuesFixture.UNREAD_PROGRAM,
+				am.ik.rontolisp.reader.Features.JVM, false, false)))
+			.isEqualTo(ReadLineValuesFixture.UNREAD_EXPECTED);
+	}
+
+	@Test
+	void compileAndRunReadLineAnswersMissingNewlinePOfAGrayStream() throws Exception {
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(ReadLineValuesFixture.GRAY_PROGRAM,
+				am.ik.rontolisp.reader.Features.JVM, false, false)))
+			.isEqualTo(ReadLineValuesFixture.GRAY_EXPECTED);
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess
+			.corpus(ReadLineValuesFixture.GRAY_EOF_PROGRAM, am.ik.rontolisp.reader.Features.JVM, false, false)))
+			.isEqualTo(ReadLineValuesFixture.GRAY_EOF_EXPECTED);
+	}
+
+	@Test
+	void compileAndRunReadLineAnswersMissingNewlinePOfStandardInput() throws Exception {
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(ReadLineValuesFixture.STDIN_PROGRAM,
+				am.ik.rontolisp.reader.Features.JVM, false, false), ReadLineValuesFixture.STDIN))
+			.isEqualTo(ReadLineValuesFixture.STDIN_EXPECTED);
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess
+			.corpus(ReadLineValuesFixture.ASYNC_STDIN_PROGRAM, am.ik.rontolisp.reader.Features.JVM, false, false),
+				ReadLineValuesFixture.STDIN))
+			.isEqualTo(ReadLineValuesFixture.ASYNC_STDIN_EXPECTED);
+	}
+
+	@Test
+	void compileAndRunAnEofArgumentReadSharesTheStandardInputOfAPlainRead() throws Exception {
+		for (String[] c : new String[][] {
+				{ ReadLineValuesFixture.ASYNC_STDIN_EOF_LINES_PROGRAM,
+						ReadLineValuesFixture.ASYNC_STDIN_EOF_LINES_EXPECTED },
+				{ ReadLineValuesFixture.ASYNC_STDIN_EOF_CHARS_PROGRAM,
+						ReadLineValuesFixture.ASYNC_STDIN_EOF_CHARS_EXPECTED },
+				{ ReadLineValuesFixture.ASYNC_STDIN_EOF_TOP_LEVEL_PROGRAM,
+						ReadLineValuesFixture.ASYNC_STDIN_EOF_TOP_LEVEL_EXPECTED } }) {
+			assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(c[0],
+					am.ik.rontolisp.reader.Features.JVM, false, false), ReadLineValuesFixture.STDIN))
+				.isEqualTo(c[1]);
+		}
+	}
+
+	@Test
+	void compileAndRunStringStreamMacroOptions() throws Exception {
+		// with-input-from-string's :index/:start/:end and with-output-to-string's
+		// fill-pointer string and :element-type, which used to be refused at expansion.
+		assertThat(compileAndRun("""
+				(defvar *wi* nil)
+				(print (list (with-input-from-string (s "abcdef" :index *wi* :start 1 :end 5)
+				               (list (read-char s) (read-char s) *wi*))
+				             *wi*))
+				(print (with-input-from-string (s "abcdef" :start 1 :end nil) (read-line s)))
+				(let ((i 2))
+				  (print (list (with-input-from-string (s "abcdef" :index i :start i) (read-char s)) i)))
+				(let ((str (make-array 10 :fill-pointer 0 :element-type 'character)))
+				  (print (with-output-to-string (s str) (write-string "abc" s) (princ 12 s) :body))
+				  (with-output-to-string (s str :element-type 'character) (write-char #\\! s))
+				  (print str))
+				(print (multiple-value-list
+				        (with-output-to-string (s (make-array 4 :fill-pointer 0 :element-type 'character))
+				          (values 'a 'b))))
+				""")).isEqualTo("((#\\b #\\c NIL) 3)\n\"bcdef\"\n(#\\c 3)\n:BODY\n\"abc12!\"\n(A B)");
+	}
+
+	@Test
+	void compileAndRunWithInputFromStringOverAMutableCharacterVector() throws Exception {
+		// The string handed to with-input-from-string may be a MUTABLE character vector
+		// (make-string + setf char), which is a different runtime representation here --
+		// trivial-utf-8's utf-8-bytes-to-string builds every string that way, so jose
+		// fed one straight into cl-json's decode-json-from-string.
+		assertThat(compileAndRun("""
+				(defun mk ()
+				  (let ((s (make-string 3 :element-type 'character)))
+				    (setf (char s 0) #\\a)
+				    (setf (char s 1) #\\b)
+				    (setf (char s 2) #\\c)
+				    s))
+				(print (with-input-from-string (in (mk)) (read-line in)))
+				""")).isEqualTo("\"abc\"");
+	}
+
+	// A designator the compiler can READ is called directly by funcall / the map family /
+	// reduce / sort instead of through the arity dispatcher (JvmDesignatorCall). Every
+	// answer here has to be the one the dispatching route gives, including the shapes the
+	// direct call has to build itself: a variadic callee reached at exactly its required
+	// count (the empty rest list) and wider than it (the surplus linked into one).
+	@Test
+	void compileAndRunLiteralFunctionDesignators() throws Exception {
+		String defs = "(defun dbl (x) (* x 2)) (defun addall (&rest xs) (reduce #'+ xs :initial-value 0)) ";
+		assertThat(compileAndRun(defs + "(print (mapcar #'dbl '(1 2 3)))")).isEqualTo("(2 4 6)");
+		assertThat(compileAndRun(defs + "(print (mapcar 'dbl '(1 2 3)))")).isEqualTo("(2 4 6)");
+		assertThat(compileAndRun(defs + "(print (mapcar #'addall '(1 2) '(10 20)))")).isEqualTo("(11 22)");
+		assertThat(compileAndRun(defs + "(print (mapcar #'addall '(1 2)))")).isEqualTo("(1 2)");
+		assertThat(compileAndRun(defs + "(print (mapc #'dbl '(1 2)))")).isEqualTo("(1 2)");
+		assertThat(compileAndRun(defs + "(print (mapcan #'list '(1 2 3)))")).isEqualTo("(1 2 3)");
+		assertThat(compileAndRun(defs + "(print (reduce #'+ '(1 2 3 4)))")).isEqualTo("10");
+		assertThat(compileAndRun(defs + "(print (reduce #'addall '(1 2 3) :initial-value 10))")).isEqualTo("16");
+		assertThat(compileAndRun(defs + "(print (sort (list 3 1 2) #'<))")).isEqualTo("(1 2 3)");
+		assertThat(compileAndRun(defs + "(print (funcall #'dbl 21))")).isEqualTo("42");
+		assertThat(compileAndRun(defs + "(print (funcall #'addall 1 2 3))")).isEqualTo("6");
+		assertThat(compileAndRun(defs + "(print (funcall #'addall))")).isEqualTo("0");
+		// The same designator through a variable keeps the dispatching route, and both
+		// routes answer alike.
+		assertThat(compileAndRun(defs + "(let ((f #'dbl)) (print (mapcar f '(1 2 3))))")).isEqualTo("(2 4 6)");
+		assertThat(compileAndRun(defs + "(let ((f #'addall)) (print (funcall f 1 2 3)))")).isEqualTo("6");
+	}
+
+	// An arity the callee cannot take is NOT a compile error at these sites: the arity
+	// contract of funcall and the map family is a RUN-time one, so such a site keeps the
+	// dispatcher and behaves exactly as the computed-designator spelling of it does --
+	// which means the dispatcher's no-match arm, a program-error spelled as the
+	// interpreter spells it.
+	@Test
+	void compileAndRunLiteralDesignatorOfTheWrongArityKeepsTheDispatcher() throws Exception {
+		String defs = "(defun dbl (x) (* x 2)) ";
+		String caught = "(print (handler-case %s (program-error (c) (princ-to-string c))))";
+		assertThat(compileAndRun(defs + caught.formatted("(funcall #'dbl 1 2)")))
+			.isEqualTo("\"Function expects 1 argument, got 2\"")
+			.isEqualTo(compileAndRun(defs + caught.formatted("(let ((f #'dbl)) (funcall f 1 2))")));
+		assertThat(compileAndRun(caught.formatted("(mapcar #'cons '(1 2))")))
+			.isEqualTo("\"CONS expects 2 arguments, got 1\"")
+			.isEqualTo(compileAndRun(caught.formatted("(let ((f #'cons)) (mapcar f '(1 2)))")));
+	}
+
+	// A wrong argument COUNT through a function value signals a catchable program-error
+	// on
+	// every backend, spelled by ClosRegistry.arityMessage -- the dispatcher's no-match
+	// arm
+	// used to answer nil, so an ANSI signals-error test passed interpreted and returned a
+	// wrong value compiled (.kb/error-handling.md).
+	@Test
+	void compileAndRunApplyingANonFunctionSignalsTheInterpretersCondition() throws Exception {
+		// The dispatchers used to leak a ClassCastException (a NullPointerException for
+		// nil), and _apply answered nil for anything it could not call.
+		String defs = "(defun try (f) (handler-case (funcall f 1) (type-error (c) (list :type (princ-to-string c)))"
+				+ " (undefined-function (c) (list :undefined (princ-to-string c))) (error (c) :plain))) ";
+		assertThat(compileAndRun(defs + "(print (list (try 3) (try \"s\") (try '(1 2)) (try nil) (try 'nosuch)))"))
+			.isEqualTo("((:TYPE \"Not a function: 3\") (:TYPE \"Not a function: \\\"s\\\"\")"
+					+ " (:TYPE \"Not a function: (1 2)\") (:UNDEFINED \"The function NIL is undefined\")"
+					+ " (:UNDEFINED \"The function NOSUCH is undefined\"))");
+		assertThat(compileAndRun(defs + "(print (list (try #'1+) (handler-case (apply (car (list 3)) '(1 2))"
+				+ " (type-error (c) (princ-to-string c)))))"))
+			.isEqualTo("(2 \"Not a function: 3\")");
+	}
+
+	@Test
+	void anUndefinedFunctionCarriesItsNameInTheCellErrorNameSlot() throws Exception {
+		// Interpreter parity (the LispEvaluatorTest twin): the landing pad reads the name
+		// back out of the text it recovers the class from, and a direct call's stub
+		// throws that text raw, so restart mode classifies it at the pad as well
+		// (.kb/error-handling.md).
+		assertThat(compileAndRun(am.ik.rontolisp.UndefinedFunctionNameFixture.PLAIN))
+			.isEqualTo(am.ik.rontolisp.UndefinedFunctionNameFixture.PLAIN_EXPECTED);
+		assertThat(compileAndRun(am.ik.rontolisp.UndefinedFunctionNameFixture.RESTART))
+			.isEqualTo(am.ik.rontolisp.UndefinedFunctionNameFixture.RESTART_EXPECTED);
+		assertThat(compileAndRun(am.ik.rontolisp.UndefinedFunctionNameFixture.SPELLING))
+			.isEqualTo(am.ik.rontolisp.UndefinedFunctionNameFixture.SPELLING_EXPECTED);
+	}
+
+	@Test
+	void anUndefinedNameTakenAsAFunctionSignalsWhenTheReferenceRuns() throws Exception {
+		// Interpreter parity (the LispEvaluatorTest twin): #'name compiles to the direct
+		// call's raw throw at the reference, a quoted designator stays the symbol the
+		// dispatcher reports when the call runs (.kb/error-handling.md).
+		assertThat(compileAndRun(am.ik.rontolisp.UndefinedFunctionNameFixture.REFERENCE))
+			.isEqualTo(am.ik.rontolisp.UndefinedFunctionNameFixture.REFERENCE_EXPECTED);
+		assertThat(compileAndRun(am.ik.rontolisp.UndefinedFunctionNameFixture.REFERENCE_RESTART))
+			.isEqualTo(am.ik.rontolisp.UndefinedFunctionNameFixture.REFERENCE_RESTART_EXPECTED);
+	}
+
+	@Test
+	void aMacroOrSpecialOperatorTakenAsAFunctionIsUndefined() throws Exception {
+		// Interpreter parity (the LispEvaluatorTest twin); the user macro goes through
+		// the macro-expansion pass the CLI runs first.
+		assertThat(compileAndRunExpanded(am.ik.rontolisp.UndefinedFunctionNameFixture.MACRO_OPERATOR))
+			.isEqualTo(am.ik.rontolisp.UndefinedFunctionNameFixture.MACRO_OPERATOR_EXPECTED);
+		assertThat(compileAndRunExpanded(am.ik.rontolisp.UndefinedFunctionNameFixture.MACRO_OPERATOR_RESTART))
+			.isEqualTo(am.ik.rontolisp.UndefinedFunctionNameFixture.MACRO_OPERATOR_RESTART_EXPECTED);
+	}
+
+	@Test
+	void aSetfFunctionNameIsAFunctionNameInsideAClosure() throws Exception {
+		// Interpreter parity (the LispEvaluatorTest twin): the closure's free-variable
+		// walk read (setf name) as a call and refused to capture NAME.
+		assertThat(compileAndRun(am.ik.rontolisp.SetfFunctionNameFixture.CLOSURE))
+			.isEqualTo(am.ik.rontolisp.SetfFunctionNameFixture.CLOSURE_EXPECTED);
+	}
+
+	@Test
+	void theFunctionNameOperatorsTakeASetfFunctionName() throws Exception {
+		// Interpreter parity (the LispEvaluatorTest twin).
+		assertThat(compileAndRun(am.ik.rontolisp.SetfFunctionNameFixture.DESIGNATOR))
+			.isEqualTo(am.ik.rontolisp.SetfFunctionNameFixture.DESIGNATOR_EXPECTED);
+	}
+
+	@Test
+	void theFunctionNameOperatorsTakeASetfFunctionNameBuiltAtRunTime() throws Exception {
+		// Interpreter parity (the LispEvaluatorTest twin): the list reached the symbol
+		// runtime as it was and failed a cast to String.
+		assertThat(compileAndRun(am.ik.rontolisp.SetfFunctionNameFixture.COMPUTED_DESIGNATOR))
+			.isEqualTo(am.ik.rontolisp.SetfFunctionNameFixture.COMPUTED_DESIGNATOR_EXPECTED);
+	}
+
+	@Test
+	void aPlaceNoDefinitionMakesCallsTheSetfFunctionWhenTheFormRuns() throws Exception {
+		// Interpreter parity (the LispEvaluatorTest twin): the place was refused when
+		// the program compiled.
+		assertThat(compileAndRun(am.ik.rontolisp.SetfFunctionNameFixture.UNKNOWN_PLACE))
+			.isEqualTo(am.ik.rontolisp.SetfFunctionNameFixture.UNKNOWN_PLACE_EXPECTED);
+	}
+
+	@Test
+	void aDefstructSlotAccessorHasASetfFunction() throws Exception {
+		// Interpreter parity (the LispEvaluatorTest twin).
+		assertThat(compileAndRun(am.ik.rontolisp.SetfFunctionNameFixture.STRUCT_WRITER))
+			.isEqualTo(am.ik.rontolisp.SetfFunctionNameFixture.STRUCT_WRITER_EXPECTED);
+	}
+
+	@Test
+	void aSetfFunctionPlaceEvaluatesItsArgumentsBeforeTheValue() throws Exception {
+		// Interpreter parity (the LispEvaluatorTest twin): the value ran first.
+		assertThat(compileAndRun(am.ik.rontolisp.SetfFunctionNameFixture.EVALUATION_ORDER))
+			.isEqualTo(am.ik.rontolisp.SetfFunctionNameFixture.EVALUATION_ORDER_EXPECTED);
+	}
+
+	@Test
+	void aGethashPlaceEvaluatesItsSubformsLeftToRightIncludingTheDefault() throws Exception {
+		// Interpreter parity (the LispEvaluatorTest twin).
+		assertThat(compileAndRun(am.ik.rontolisp.GethashPlaceOrderFixture.EVALUATION_ORDER))
+			.isEqualTo(am.ik.rontolisp.GethashPlaceOrderFixture.EVALUATION_ORDER_EXPECTED);
+	}
+
+	@Test
+	void aFunctionANameBuiltAtRunTimeInstallsIsCalledByName() throws Exception {
+		// Interpreter parity (the LispEvaluatorTest twin): a direct call, a place and #'
+		// of such a name compiled as undefined.
+		assertThat(compileAndRun(am.ik.rontolisp.SetfFunctionNameFixture.COMPUTED_INSTALL))
+			.isEqualTo(am.ik.rontolisp.SetfFunctionNameFixture.COMPUTED_INSTALL_EXPECTED);
+	}
+
+	@Test
+	void aNestedDefunIsReachedByARunTimeNameAndRetiredByFmakunbound() throws Exception {
+		// Interpreter parity (the LispEvaluatorTest twin): the function lived in a global
+		// only the compile-time references read, so a computed name missed it and
+		// fmakunbound left it callable.
+		assertThat(compileAndRun(am.ik.rontolisp.NestedDefunNamespaceFixture.COMPUTED))
+			.isEqualTo(am.ik.rontolisp.NestedDefunNamespaceFixture.COMPUTED_EXPECTED);
+		assertThat(compileAndRun(am.ik.rontolisp.NestedDefunNamespaceFixture.RETIRED))
+			.isEqualTo(am.ik.rontolisp.NestedDefunNamespaceFixture.RETIRED_EXPECTED);
+		assertThat(compileAndRun(am.ik.rontolisp.NestedDefunNamespaceFixture.EVALUATED))
+			.isEqualTo(am.ik.rontolisp.NestedDefunNamespaceFixture.EVALUATED_EXPECTED);
+	}
+
+	@Test
+	void aNestedDefunIsFboundOnceItRunsAndNamedWhenTakenBefore() throws Exception {
+		// Interpreter parity (the LispEvaluatorTest twin): a literal fboundp folded NIL
+		// for the name, and a call or reference before the definition ran read the
+		// empty global, naming NIL.
+		assertThat(compileAndRun(am.ik.rontolisp.NestedDefunNameFixture.PLAIN))
+			.isEqualTo(am.ik.rontolisp.NestedDefunNameFixture.PLAIN_EXPECTED);
+		assertThat(compileAndRun(am.ik.rontolisp.NestedDefunNameFixture.RESTART))
+			.isEqualTo(am.ik.rontolisp.NestedDefunNameFixture.RESTART_EXPECTED);
+	}
+
+	@Test
+	void aSetfFunctionDefinedBelowTheTopLevelIsAPlaceAndAFunction() throws Exception {
+		// Interpreter parity (the LispEvaluatorTest twin): the nested definition reached
+		// the defun lowering with its (setf name) list and failed a cast.
+		assertThat(compileAndRun(am.ik.rontolisp.SetfFunctionNameFixture.NESTED_DEFINITION))
+			.isEqualTo(am.ik.rontolisp.SetfFunctionNameFixture.NESTED_DEFINITION_EXPECTED);
+	}
+
+	@Test
+	void anUndefinedSetfFunctionIsReportedAsTheNameTheProgramWrote() throws Exception {
+		// Interpreter parity (the LispEvaluatorTest twin): the call's raw throw spells
+		// (setf name) and the landing pad reads the list back as the name.
+		assertThat(compileAndRun(am.ik.rontolisp.UndefinedFunctionNameFixture.SETF_FUNCTION))
+			.isEqualTo(am.ik.rontolisp.UndefinedFunctionNameFixture.SETF_FUNCTION_EXPECTED);
+		assertThat(compileAndRun(am.ik.rontolisp.UndefinedFunctionNameFixture.SETF_FUNCTION_RESTART))
+			.isEqualTo(am.ik.rontolisp.UndefinedFunctionNameFixture.SETF_FUNCTION_RESTART_EXPECTED);
+	}
+
+	@Test
+	void aStandardGenericWithOnlyItsStandardMethodsIsAValueThatSignalsNoApplicableMethod() throws Exception {
+		// Interpreter parity (the LispEvaluatorTest twin), through the CLI's front end.
+		for (String[] program : new String[][] {
+				{ am.ik.rontolisp.StandardGenericFunctionValueFixture.VALUES,
+						am.ik.rontolisp.StandardGenericFunctionValueFixture.VALUES_EXPECTED },
+				{ am.ik.rontolisp.StandardGenericFunctionValueFixture.NO_METHOD,
+						am.ik.rontolisp.StandardGenericFunctionValueFixture.NO_METHOD_EXPECTED },
+				{ am.ik.rontolisp.StandardGenericFunctionValueFixture.WITH_CLASS,
+						am.ik.rontolisp.StandardGenericFunctionValueFixture.WITH_CLASS_EXPECTED } }) {
+			assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(program[0],
+					am.ik.rontolisp.reader.Features.JVM, false, false)))
+				.isEqualTo(program[1]);
+		}
+	}
+
+	@Test
+	void aStandardFunctionTakenAsAValueAnswersAsItsCall() throws Exception {
+		// Interpreter parity (the LispEvaluatorTest twin), through the CLI's front end:
+		// a standard function lowered only in call position is a value through its
+		// call-shape wrapper, and #'symbol-function boxes the name it resolves.
+		assertThat(compileAndRun(
+				am.ik.rontolisp.cli.CompileFrontendAccess.corpus(am.ik.rontolisp.StandardFunctionValueFixture.PROGRAM,
+						am.ik.rontolisp.reader.Features.JVM, false, false)))
+			.isEqualTo(am.ik.rontolisp.StandardFunctionValueFixture.EXPECTED);
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(
+				am.ik.rontolisp.StandardFunctionValueFixture.COMPUTED_SYNONYM, am.ik.rontolisp.reader.Features.JVM,
+				false, false)))
+			.isEqualTo(am.ik.rontolisp.StandardFunctionValueFixture.COMPUTED_SYNONYM_EXPECTED);
+	}
+
+	@Test
+	void anUnboundVariableCarriesItsNameInTheCellErrorNameSlot() throws Exception {
+		// Interpreter parity (the LispEvaluatorTest twin): the landing pad reads the name
+		// back out of the text it recovers the class from, in restart mode as well
+		// (.kb/error-handling.md).
+		assertThat(compileAndRun(am.ik.rontolisp.UnboundVariableNameFixture.PLAIN))
+			.isEqualTo(am.ik.rontolisp.UnboundVariableNameFixture.PLAIN_EXPECTED);
+		assertThat(compileAndRun(am.ik.rontolisp.UnboundVariableNameFixture.RESTART))
+			.isEqualTo(am.ik.rontolisp.UnboundVariableNameFixture.RESTART_EXPECTED);
+		assertThat(compileAndRun(am.ik.rontolisp.UnboundVariableNameFixture.MESSAGE))
+			.isEqualTo(am.ik.rontolisp.UnboundVariableNameFixture.MESSAGE_EXPECTED);
+		assertThat(compileAndRun(am.ik.rontolisp.UnboundVariableNameFixture.SPELLING))
+			.isEqualTo(am.ik.rontolisp.UnboundVariableNameFixture.SPELLING_EXPECTED);
+	}
+
+	@Test
+	void aDolistOverACoercedListWithAResultFormKeepsTheLetsScope() throws Exception {
+		// Interpreter parity (the LispEvaluatorTest twin): the in-scope shape answers
+		// through the result form, the out-of-scope one signals the unbound-variable
+		// naming it.
+		assertThat(compileAndRun(am.ik.rontolisp.DolistResultScopeFixture.SCOPED))
+			.isEqualTo(am.ik.rontolisp.DolistResultScopeFixture.SCOPED_EXPECTED);
+		assertThat(compileAndRun(am.ik.rontolisp.DolistResultScopeFixture.UNSCOPED))
+			.isEqualTo(am.ik.rontolisp.DolistResultScopeFixture.UNSCOPED_EXPECTED);
+	}
+
+	@Test
+	void aProgvShortOfValuesLeavesTheExtraSymbolsUnbound() throws Exception {
+		// Interpreter parity (the LispEvaluatorTest twin): every symbol a progv had no
+		// value for used to be bound to nil (.kb/dynamic-special-variables.md, "A progv
+		// short of values"). Shallow bindings here; the thread-scoped store below.
+		assertThat(compileAndRun(am.ik.rontolisp.ProgvShortOfValuesFixture.SOURCE))
+			.isEqualTo(am.ik.rontolisp.ProgvShortOfValuesFixture.EXPECTED);
+	}
+
+	@Test
+	void aProgvShortOfValuesLeavesTheExtraSymbolsUnboundInAThreadScopedBinding() throws Exception {
+		// A thread primitive makes every binding a _d$ cell: the cell holds the UNBOUND
+		// marker for the extent, which the read and _dbound test like the global's.
+		assertThat(compileAndRun(am.ik.rontolisp.ProgvShortOfValuesFixture.SOURCE
+				+ "(rontolisp:join-thread (rontolisp:make-thread (lambda () 1)))\n"))
+			.isEqualTo(am.ik.rontolisp.ProgvShortOfValuesFixture.EXPECTED);
+	}
+
+	@Test
+	void aGlobalReadBeforeItsFirstStoreSignalsUnboundVariable() throws Exception {
+		// Interpreter parity (the LispEvaluatorTest twin): such a global's field used to
+		// start as nil, so every read before the store answered NIL and the arithmetic
+		// over it failed with a type error (.kb/dynamic-special-variables.md, "A read of
+		// a
+		// global before its first store").
+		assertThat(compileAndRun(am.ik.rontolisp.ReadBeforeStoreFixture.SOURCE))
+			.isEqualTo(am.ik.rontolisp.ReadBeforeStoreFixture.EXPECTED);
+	}
+
+	@Test
+	void compileAndRunWrongArityThroughAFunctionValueSignalsProgramError() throws Exception {
+		String defs = "(defun f (x) x) (defun g (x &rest r) (list x r)) ";
+		String caught = "(print (handler-case %s (program-error (c) (princ-to-string c)) (error (c) :plain)))";
+		assertThat(compileAndRun(defs + caught.formatted("(funcall (lambda (x) x) 1 2)")))
+			.isEqualTo("\"Function expects 1 argument, got 2\"");
+		assertThat(compileAndRun(defs + caught.formatted("(funcall #'f 1 2)")))
+			.isEqualTo("\"Function expects 1 argument, got 2\"");
+		assertThat(compileAndRun(defs + caught.formatted("(funcall #'f)")))
+			.isEqualTo("\"Function expects 1 argument, got 0\"");
+		assertThat(compileAndRun(defs + caught.formatted("(funcall #'g)")))
+			.isEqualTo("\"Function expects at least 1 argument, got 0\"");
+		// apply reaches no dispatch miss -- the LITERAL target compiles to a physical
+		// direct call and a computed one to the spread dispatcher, which has a case for
+		// every callable -- so both sites carry a _arityChk count guard instead
+		// (.kb/error-handling.md).
+		assertThat(compileAndRun(defs + caught.formatted("(apply #'f '(1 2))")))
+			.isEqualTo("\"Function expects 1 argument, got 2\"");
+		assertThat(compileAndRun(defs + caught.formatted("(apply #'f '())")))
+			.isEqualTo("\"Function expects 1 argument, got 0\"");
+		assertThat(compileAndRun(defs + caught.formatted("(apply #'g '())")))
+			.isEqualTo("\"Function expects at least 1 argument, got 0\"");
+		assertThat(compileAndRun(defs + caught.formatted("(let ((h #'f)) (apply h '(1 2)))")))
+			.isEqualTo("\"Function expects 1 argument, got 2\"");
+		assertThat(compileAndRun(defs + caught.formatted("(let ((h #'g)) (apply h '()))")))
+			.isEqualTo("\"Function expects at least 1 argument, got 0\"");
+		// The right count still runs, through every route.
+		assertThat(compileAndRun(defs + "(print (list (funcall #'f 1) (apply #'f '(2)) (funcall #'g 3 4)"
+				+ " (apply #'g 5 '(6)) (let ((h #'f)) (apply h '(7)))))"))
+			.isEqualTo("(1 2 (3 (4)) (5 (6)) 7)");
+	}
+
+	// A function declaring its own wrong-count report refuses in its words through a
+	// dispatch miss, a literal and a computed apply and a direct call
+	// (DeclaredArityReportPrograms, pinned on all four backends).
+	@Test
+	void compileAndRunAFunctionDeclaringItsArityReportRefusesInItsWords() throws Exception {
+		assertThat(compileAndRun(DeclaredArityReportPrograms.PROGRAM + "(print (ar-all))"))
+			.isEqualTo(DeclaredArityReportPrograms.ANSWER);
+	}
+
+	// More declared reports than the dispatch-miss table's cells hold operator indices
+	// for (nine bits): the indices move to a table of their own, and the 600th function
+	// still refuses in its words.
+	@Test
+	void compileAndRunSixHundredDeclaredReportsEachRefuseInTheirWords() throws Exception {
+		StringBuilder program = new StringBuilder();
+		StringBuilder values = new StringBuilder("(defparameter *wd* (list");
+		for (int i = 1; i <= 600; i++) {
+			program.append("(defun wd-")
+				.append(i)
+				.append(" (x) (declare (rontolisp::%arity-report \"W(\" \") wd-")
+				.append(i)
+				.append("\")) x)\n");
+			values.append(" #'wd-").append(i);
+		}
+		program.append(values).append("))\n");
+		program.append("(print (handler-case (funcall (nth 599 *wd*)) (program-error (c) (princ-to-string c))))\n")
+			.append("(print (handler-case (funcall (nth 0 *wd*) 1 2) (program-error (c) (princ-to-string c))))\n")
+			.append("(print (handler-case (funcall #'cons 1) (program-error (c) (princ-to-string c))))\n")
+			.append("(print (funcall (nth 299 *wd*) 7))\n");
+		assertThat(compileAndRun(program.toString())).isEqualTo("""
+				"W(0) wd-600"
+				"W(2) wd-1"
+				"CONS expects 2 arguments, got 1"
+				7""");
+	}
+
+	// More distinct declared reports than the operator-names budget holds (60,000
+	// joined bytes, g49): every function still refuses in its words, the names
+	// riding a second constant past the budget rather than the late callees
+	// reporting as Function. Every one of the 1,200 is probed: the registry
+	// iterates in hash order, so which entries the budget drops is not the
+	// definition order.
+	@Test
+	void compileAndRunDeclaredReportsPastTheOperatorNamesBudgetRefuseInTheirWords() throws Exception {
+		int count = 1200;
+		StringBuilder program = new StringBuilder();
+		StringBuilder values = new StringBuilder("(defparameter *bp* (list");
+		StringBuilder expected = new StringBuilder();
+		for (int i = 1; i <= count; i++) {
+			program.append("(defun bp-")
+				.append(i)
+				.append(" (x) (declare (rontolisp::%arity-report \"BUDGET-")
+				.append(i)
+				.append("-0123456789-0123456789\" \") tail-")
+				.append(i)
+				.append("-0123456789\")) x)\n");
+			values.append(" #'bp-").append(i);
+			expected.append("\"BUDGET-")
+				.append(i)
+				.append("-0123456789-01234567890) tail-")
+				.append(i)
+				.append("-0123456789\"\n");
+		}
+		program.append(values).append("))\n");
+		for (int i = 1; i <= count; i++) {
+			program.append("(print (handler-case (funcall (nth ")
+				.append(i - 1)
+				.append(" *bp*)) (program-error (c) (princ-to-string c))))\n");
+		}
+		program.append("(print (handler-case (funcall #'cons 1) (program-error (c) (princ-to-string c))))\n")
+			.append("(print (funcall (nth 599 *bp*) 7))\n");
+		expected.append("""
+				"CONS expects 2 arguments, got 1"
+				7""");
+		assertThat(compileAndRun(program.toString())).isEqualTo(expected.toString());
+	}
+
+	// A declared entry embedding a newline (g53: one built-in operator name registering
+	// first flips the parity and a prefix lands on index 10, so the entry holds a raw
+	// (char) 10 and the newline-joined names would split in two): its chunk joins on a
+	// separator no entry holds, and every one of twelve still refuses in its words.
+	@Test
+	void compileAndRunDeclaredReportsWithANewlineHoldingEntryRefuseInTheirWords() throws Exception {
+		StringBuilder program = new StringBuilder();
+		StringBuilder values = new StringBuilder("(defparameter *g53-fns* (list");
+		for (int i = 1; i <= 12; i++) {
+			program.append("(defun g53-a")
+				.append(i)
+				.append(" (x) (declare (rontolisp::%arity-report \"G53-A")
+				.append(i)
+				.append("(\" \")\")) x)\n");
+			values.append(" #'g53-a").append(i);
+		}
+		program.append(values).append("))\n");
+		program
+			.append("(defun g53-try (thunk) (handler-case (funcall thunk) (program-error (c) (princ-to-string c))))\n");
+		StringBuilder expected = new StringBuilder();
+		for (int i = 0; i < 12; i++) {
+			program.append("(print (g53-try (lambda () (funcall (nth ").append(i).append(" *g53-fns*)))))\n");
+			expected.append("\"G53-A").append(i + 1).append("(0)\"\n");
+		}
+		program.append("(print (g53-try (lambda () (funcall (nth 0 *g53-fns*) 1 2))))\n")
+			.append("(print (g53-try (lambda () (funcall #'cons 1))))\n");
+		expected.append("\"G53-A1(2)\"\n\"CONS expects 2 arguments, got 1\"");
+		assertThat(compileAndRun(program.toString())).isEqualTo(expected.toString());
+	}
+
+	// A native built-in outside the wrapper catalog (compiler/NativeCallShapes) called
+	// with a wrong count is the same run-time report: its lowering used to fail the
+	// compile ((boundp)), answer ((export 'x p 3) was T) or, for a prelude defun, say
+	// Function -- and the surplus past a library defun's &optional tail (find-class)
+	// said so from inside the callee.
+	@Test
+	void compileAndRunADirectNativeBuiltinCallWithAWrongCountSignalsAtCallTime() throws Exception {
+		assertThat(compileAndRun("""
+				(defun nb-report (thunk) (handler-case (funcall thunk) (program-error (c) (princ-to-string c))))
+				(print (nb-report (lambda () (boundp))))
+				(print (nb-report (lambda () (export 'nb-x *package* 3))))
+				(print (nb-report (lambda () (get-universal-time 1))))
+				(print (nb-report (lambda () (row-major-aref #(1)))))
+				(print (nb-report (lambda () (char-name))))
+				(print (nb-report (lambda () (find-class 'nb-x nil nil 4))))
+				(print (nb-report (lambda () (rontolisp:version 1))))
+				(print (list (boundp 'nb-unbound) (row-major-aref #(7) 0) (char-name #\\Space)))
+				""")).isEqualTo("""
+				"BOUNDP expects 1 argument, got 0"
+				"EXPORT expects at most 2 arguments, got 3"
+				"GET-UNIVERSAL-TIME expects 0 arguments, got 1"
+				"ROW-MAJOR-AREF expects 2 arguments, got 1"
+				"CHAR-NAME expects 1 argument, got 0"
+				"FIND-CLASS expects at most 3 arguments, got 4"
+				"VERSION expects 0 arguments, got 1"
+				(NIL 7 "Space")""");
+	}
+
+	// A built-in's function VALUE takes the operator's standard lambda list: the
+	// optional and keyword arguments a direct call takes reach the call-position
+	// lowering through the wrapper (compiler/BuiltinFunctionWrappers), and a direct
+	// string-upcase :start / :end and typep's environment are lowered rather than
+	// dropped or refused. The comparisons and the logand trio take their second (and
+	// first) argument as an OPTIONAL, which a two-argument call passes as a parameter
+	// (LambdaLists.toNative), so one or zero arguments answer as the interpreter does
+	// and the sort predicate's call still conses no rest list.
+	@Test
+	void compileAndRunBuiltinFunctionValuesTakeTheStandardLambdaList() throws Exception {
+		assertThat(compileAndRun(
+				"""
+						(defun wv-call (f &rest a) (apply f a))
+						(print (list (wv-call #'< 1 2 3) (wv-call #'< 1 3 2) (wv-call #'/= 1 2 1) (wv-call #'char< #\\a #\\b #\\c)
+						             (wv-call #'char-equal #\\a #\\A #\\a) (wv-call #'logand 1 3 7) (wv-call #'logxor 1 2 4 8)))
+						(print (list (wv-call #'digit-char-p #\\f 16) (wv-call #'float 1 1.0d0) (wv-call #'gethash 1 (make-hash-table) 'none)
+						             (wv-call #'pairlis '(a) '(1) '((b . 2))) (wv-call #'typep 1 'integer nil)
+						             (wv-call #'constantp 1 nil) (wv-call #'upgraded-complex-part-type 'double-float nil)))
+						(print (list (wv-call #'parse-integer "ff" :radix 16) (wv-call #'parse-integer "a12b" :start 1 :end 3)
+						             (wv-call #'make-string 2 :initial-element #\\z) (wv-call #'string-upcase "abcd" :start 1 :end 3)
+						             (wv-call #'string-capitalize "one two" :start 4) (string-downcase "ABCD" :end 2) (typep 1 'integer nil)))
+						(print (list (let ((v (make-array 0 :fill-pointer 0 :adjustable t)))
+						               (wv-call #'vector-push-extend 1 v 8)
+						               (array-total-size v))
+						             (wv-call #'adjust-array (vector 1 2) 3 :initial-element 0)
+						             (wv-call #'adjust-array (vector 1 2) 3 :initial-contents '(a b c))
+						             (wv-call #'adjust-array (make-array 2 :adjustable t) 2 :displaced-to (vector 7 8 9)
+						                      :displaced-index-offset 1)))
+						(print (list (with-output-to-string (s) (wv-call #'write-string "abcdef" s :start 1 :end 3))
+						             (with-input-from-string (s "") (wv-call #'read-char-no-hang s nil :eof))
+						             (symbolp (wv-call #'gensym "WV")) (symbol-name (wv-call #'intern "WV-SYM" "KEYWORD"))))
+						(print (list (wv-call #'< 1) (wv-call #'logand)))
+						"""))
+			.isEqualTo("""
+					(T NIL NIL T T 1 15)
+					(15 1.0 NONE ((A . 1) (B . 2)) T T DOUBLE-FLOAT)
+					(255 12 "zz" "aBCd" "one Two" "abCD" T)
+					(8 #(1 2 0) #(A B C) #(8 9))
+					("bc" :EOF T "WV-SYM")
+					(T -1)""");
+	}
+
+	// #'make-broadcast-stream builds the Gray broadcast stream and #'write-to-string
+	// binds the printer variables its runtime keyword tail names, through the CLI's
+	// front end (the prelude entries each wrapper calls are spliced there). The
+	// interpreter twin is LispEvaluatorTest#helperWrappedFunctionValues.
+	@Test
+	void compileAndRunHelperWrappedFunctionValues() throws Exception {
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(HelperWrapperFixture.PROGRAM,
+				am.ik.rontolisp.reader.Features.JVM, false, false)))
+			.isEqualTo(HelperWrapperFixture.EXPECTED);
+	}
+
+	@Test
+	void compileAndRunRankThreeArrayRefSetAndPrint() throws Exception {
+		assertThat(compileAndRun("""
+				(defparameter *t* (make-array (list 2 2 2) :initial-element 0))
+				(setf (aref *t* 0 0 0) 1)
+				(setf (aref *t* 0 1 1) 4)
+				(setf (aref *t* 1 0 1) 6)
+				(print (list (aref *t* 0 0 0) (aref *t* 0 1 1) (aref *t* 1 0 1) (aref *t* 1 1 0)))
+				(print *t*)
+				""")).isEqualTo("(1 4 6 0)\n#3A(((1 0) (0 4)) ((0 6) (0 0)))");
+	}
+
+	@Test
+	void compileAndRunArefRejectsAWrongSubscriptCount() throws Exception {
+		// A packed float array: the JVM's _fvAref2 used to apply 2 subscripts
+		// positionally to a rank-3 array (0 * 2 + 1 = flat index 1, silently 1.0) instead
+		// of checking the count against the array's own rank, the way the interpreter's
+		// LispFloatArray#flatIndex does.
+		// The mismatch is AREF's type-error over the array, the expected type the array
+		// of the rank the subscripts spell (ArefRankAndSubscriptChecksFixture).
+		assertThatThrownBy(() -> compileAndRunLinalg("(print (aref (linalg:reshape (linalg:arange 8) '(2 2 2)) 0 1))"))
+			.hasRootCauseMessage("AREF: The value #d(((0.0 1.0) (2.0 3.0)) ((4.0 5.0) (6.0 7.0)))"
+					+ " is not of type (ARRAY * (* *))");
+		// The same hole existed for a general (non-packed) array and for %aset -- both
+		// went through the identical arity-picks-the-helper dispatch in
+		// JvmArrayCompiler#compileAref/#compileAset.
+		assertThatThrownBy(() -> compileAndRun("(print (aref (make-array (list 2 2 2) :initial-element 0) 0 1))"))
+			.hasRootCauseMessage("AREF: The value #3A(((0 0) (0 0)) ((0 0) (0 0))) is not of type (ARRAY * (* *))");
+		assertThatThrownBy(() -> compileAndRun("(setf (aref (make-array (list 2 2 2) :initial-element 0) 0 1) 9)"))
+			.hasRootCauseMessage(
+					"(SETF AREF): The value #3A(((0 0) (0 0)) ((0 0) (0 0))) is not of type (ARRAY * (* *))");
+		assertThatThrownBy(() -> compileAndRun("(print (aref (make-array (list 2 2) :initial-element 0)))"))
+			.hasRootCauseMessage("AREF: The value #2A((0 0) (0 0)) is not of type (ARRAY * NIL)");
+		assertThatThrownBy(() -> compileAndRun("(print (aref #(1 2 3) 0 1))"))
+			.hasRootCauseMessage("AREF: The value #(1 2 3) is not of type (ARRAY * (* *))");
+		// row-major-aref/%row-major-aset intentionally accept any rank (flat indexing
+		// under the hood), so a mismatched subscript COUNT never applies to them; this is
+		// not retested here -- compileAndRunRowMajorArefReadsAndWritesFlat already pins
+		// it.
+	}
+
+	@Test
+	void compileAndRunFunctionValueArefChecksRankAndBounds() throws Exception {
+		// #'aref used as a FUNCTION VALUE (apply/funcall, not call position) is a
+		// synthetic wrapper (BuiltinFunctionWrappers#arefFoldBody): a Horner fold of the
+		// subscript list over array-dimensions that used to check only the total size,
+		// never the subscript count or each axis's own bound -- (apply #'aref m '(0 2))
+		// on a 2x2 array silently answered m's row-major element 3 instead of naming the
+		// out-of-range column, and (apply #'aref m '(1)) silently answered the row-major
+		// element at index 1 instead of rejecting the short subscript list. Call position
+		// ((aref m 0 2)) already reported both correctly on every backend; this pins the
+		// function-value path to the same report. #'array-row-major-index
+		// shares the same fold and needs the same checks.
+		assertThat(compileAndRun("""
+				(defun te (thunk)
+				  (handler-case (funcall thunk)
+				    (type-error (e) (list (princ-to-string e) (type-error-datum e) (type-error-expected-type e)))
+				    (error (e) (list :not-a-type-error (princ-to-string e)))))
+				(defparameter *m* (make-array '(2 2) :initial-contents '((1 2) (3 4))))
+				(print (apply #'aref *m* '(1 1)))
+				(print (te (lambda () (apply #'aref *m* '(0 2)))))
+				(print (te (lambda () (apply #'aref *m* '(1)))))
+				(print (apply #'array-row-major-index *m* '(1 1)))
+				(print (te (lambda () (apply #'array-row-major-index *m* '(0 2)))))
+				(print (te (lambda () (apply #'array-row-major-index *m* '(1)))))
+				""")).isEqualTo("""
+				4
+				("AREF: The value 2 is not of type (INTEGER 0 (2))" 2 (INTEGER 0 (2)))
+				("AREF: The value #2A((1 2) (3 4)) is not of type VECTOR" #2A((1 2) (3 4)) VECTOR)
+				3
+				("ARRAY-ROW-MAJOR-INDEX: The value 2 is not of type (INTEGER 0 (2))" 2 (INTEGER 0 (2)))
+				("ARRAY-ROW-MAJOR-INDEX: The value #2A((1 2) (3 4)) is not of type VECTOR" #2A((1 2) (3 4)) VECTOR)""");
+	}
+
+	@Test
+	void compileAndRunRowMajorArefReadsAndWritesFlat() throws Exception {
+		assertThat(compileAndRun("""
+				(defparameter *m* (make-array (list 2 3) :initial-element 0))
+				(setf (row-major-aref *m* 4) 9)
+				(print (list (row-major-aref *m* 4) (aref *m* 1 1) (array-row-major-index *m* 1 1)))
+				(defparameter *t* (make-array (list 2 2 2) :initial-element 0))
+				(setf (aref *t* 1 0 1) 7)
+				(print (list (row-major-aref *t* 5) (array-row-major-index *t* 1 0 1)
+				             (row-major-aref #(10 20 30) 2)))
+				""")).isEqualTo("(9 9 4)\n(7 5 30)");
+	}
+
+	@Test
+	void compileAndRunClosureWritesLetVarShadowingGlobal() throws Exception {
+		// A setq inside the lambda must write the captured cell, and the global must
+		// stay untouched.
+		assertThat(
+				compileAndRun("(setq d 666) (print (let ((d 5)) (funcall (lambda () (setq d (+ d 1)) d)))) (print d)"))
+			.isEqualTo("6\n666");
+	}
+
+	@Test
+	void compileAndRunClosureCapturesParamShadowingGlobal() throws Exception {
+		// A lambda capturing an enclosing defun parameter must not resolve it to a
+		// same-named global.
+		assertThat(compileAndRun("(setq e2 555) (defun g (e2) (funcall (lambda () e2))) (print (g 42))"))
+			.isEqualTo("42");
+	}
+
+	@Test
+	void compileAndRunTime() throws Exception {
+		// time prints the elapsed real time and returns the form's value (here printed).
+		String output = compileAndRun("(print (time (+ 1 2)))");
+		assertThat(output).contains("; Elapsed real time: ").contains(" ms").endsWith("3");
+	}
+
+	@Test
+	void compileAndRunDeleteAndNsubstituteFamilyOnVectorsAndStrings() throws Exception {
+		// These five were silent no-ops on a vector/string (only their
+		// cons-splice/rplaca arm existed) -- CLHS lets a destructive form answer a fresh
+		// sequence, so they now route through remove/substitute's own vector/string
+		// handling.
+		assertThat(compileAndRun("(print (delete 1 (vector 3 1 2)))")).isEqualTo("#(3 2)");
+		assertThat(compileAndRun("(print (delete #\\a (copy-seq \"aba\")))")).isEqualTo("\"b\"");
+		assertThat(compileAndRun("(print (delete-if #'oddp (vector 1 2 3 4)))")).isEqualTo("#(2 4)");
+		assertThat(compileAndRun("(print (delete-if-not #'oddp (vector 1 2 3)))")).isEqualTo("#(1 3)");
+		assertThat(compileAndRun("(print (nsubstitute 9 1 (vector 1 2 1)))")).isEqualTo("#(9 2 9)");
+		assertThat(compileAndRun("(print (nsubstitute-if 0 #'oddp (vector 1 2 3)))")).isEqualTo("#(0 2 0)");
+		assertThat(compileAndRun("(print (nsubstitute-if-not 0 #'oddp (vector 1 2 3)))")).isEqualTo("#(1 0 3)");
+		assertThat(compileAndRun("(print (funcall #'delete-if #'oddp (vector 1 2 3 4)))")).isEqualTo("#(2 4)");
+		assertThat(compileAndRun("(print (funcall #'nsubstitute-if 0 #'oddp (vector 1 2 3)))")).isEqualTo("#(0 2 0)");
+	}
+
+	@Test
+	void compileAndRunSleep() throws Exception {
+		assertThat(compileAndRun("""
+				(setq s (get-internal-real-time))
+				(sleep 0.05)
+				(print (if (>= (- (get-internal-real-time) s) 40) "slept" "too-fast"))
+				(print (sleep 0))
+				""")).isEqualTo("\"slept\"\nNIL");
+	}
+
+	@Test
+	void compileAndRunFileWriteDateAndFileLength() throws Exception {
+		String file = tempDir.resolve("meta.txt").toString().replace("\\", "\\\\");
+		java.nio.file.Path old = tempDir.resolve("old.txt");
+		CorpusFixtures.writePre1970File(old);
+		assertThat(compileAndRun("""
+				(with-open-file (out "%s" :direction :output) (write-line "hello" out))
+				(print (integerp (file-write-date "%s")))
+				(print (file-write-date "%s.missing"))
+				(print (file-write-date "%s"))
+				(with-open-file (in "%s") (print (file-length in)))
+				(setq h (open "%s"))
+				(close h)
+				(print (file-length h))
+				(print (handler-case (file-length "not-a-stream") (type-error () :type-error)))
+				""".formatted(file, file, file, old.toString().replace("\\", "\\\\"), file, file)))
+			.isEqualTo("T\nNIL\n1906502401\n6\nNIL\n:TYPE-ERROR");
+	}
+
+	@Test
+	void compileAndRunFileLengthOverEveryStreamKind() throws Exception {
+		// The cross-backend shape (.kb/read-load-streams.md): a real file answers its
+		// byte count -- from the OUTPUT stream that wrote it as well, so the answer
+		// counts what was written rather than what happened to reach the disk -- and
+		// everything with no file behind it answers nil. The trailing (min 4096 ...) is
+		// the caller shape the WASM backends used to trap on.
+		String file = tempDir.resolve("len.bin").toString().replace("\\", "\\\\");
+		assertThat(compileAndRun("""
+				(with-open-file (out "%s" :direction :output :if-exists :supersede
+				                     :element-type '(unsigned-byte 8))
+				  (dotimes (i 300) (write-byte (mod i 256) out))
+				  (print (file-length out)))
+				(with-open-file (in "%s" :element-type '(unsigned-byte 8))
+				  (print (file-length in)))
+				(with-input-from-string (s "abcdef") (print (file-length s)))
+				(print (file-length *standard-output*))
+				(print (file-length t))
+				(with-open-file (in "%s" :element-type '(unsigned-byte 8))
+				  (print (min 4096 (file-length in))))
+				""".formatted(file, file, file))).isEqualTo("300\n300\nNIL\nNIL\nNIL\n300");
+	}
+
+	@Test
+	void compileAndRunEnsureDirectoriesExist() throws Exception {
+		String base = tempDir.toString().replace("\\", "\\\\");
+		assertThat(compileAndRun("""
+				(print (ensure-directories-exist "%s/a/b/app.log"))
+				(print (if (uiop:directory-exists-p "%s/a/b/") "made" "missing"))
+				(print (probe-file "%s/a/b/app.log"))
+				""".formatted(base, base, base))).isEqualTo("\"" + base + "/a/b/app.log\"\n\"made\"\nNIL");
+	}
+
+	@Test
+	void compileAndRunEnsureDirectoriesExistSignalsFileErrorWhenTheHostRefuses() throws Exception {
+		// SBCL-verified: /proc refuses mkdir, so this signals a file-error carrying the
+		// designator GIVEN -- the delete-file / rename-file shape, not a bare
+		// SIMPLE-ERROR (the JVM used to ignore mkdirs' result and answer success). The
+		// path is computed so no literal-path folding applies.
+		assertThat(compileAndRun("""
+				(defvar *ede-path* (concatenate 'string "/proc/" "no-such-dir-fixture/x/y.txt"))
+				(handler-case
+				    (progn (ensure-directories-exist *ede-path*) :no-error)
+				  (file-error (e) (print (namestring (file-error-pathname e))))
+				  (error () (print :other-error)))""")).isEqualTo("\"/proc/no-such-dir-fixture/x/y.txt\"");
+	}
+
+	@Test
+	void compileAndRunExportAndUnexport() throws Exception {
+		// A literal top-level export is consumed by the PackageResolver, which is what
+		// makes it work here at all: the compiled output has no package registry.
+		assertThat(compileAndRun("""
+				(defpackage :expkg (:use :cl))
+				(in-package :expkg)
+				(export '(run))
+				(defun run () 42)
+				(in-package :cl-user)
+				(print (expkg:run))
+				(defpackage :unexpkg (:use :cl) (:export #:a #:b))
+				(in-package :unexpkg)
+				(unexport 'b)
+				(defun a () 1)
+				(defun b () 2)
+				(in-package :cl-user)
+				(print (+ (unexpkg:a) (unexpkg::b)))
+				""")).isEqualTo("42\n3");
+	}
+
+	@Test
+	void compileAndRunExportAfterTheDefinitions() throws Exception {
+		// export grants ACCESSIBILITY and never re-keys the symbol, so the function, the
+		// value and the setf-function cells defined BEFORE the export are all reachable
+		// through the external spelling afterwards.
+		assertThat(compileAndRun("""
+				(defpackage :latepkg (:use :cl))
+				(defun latepkg::my-fn (x) (* x 2))
+				(defvar latepkg::*v* 7)
+				(defun (setf latepkg::slot) (v c) (rplaca c v) v)
+				(export '(latepkg::my-fn latepkg::*v* latepkg::slot) :latepkg)
+				(print (latepkg:my-fn 21))
+				(print latepkg:*v*)
+				(let ((c (list 1 2)))
+				  (setf (latepkg:slot c) 9)
+				  (print (car c)))
+				""")).isEqualTo("42\n7\n9");
+	}
+
+	@Test
+	void compileAndRunPackageRegistryQueries() throws Exception {
+		// Answered from the use table baked in at compile time -- same values the
+		// interpreter reads off its live registry.
+		assertThat(compileAndRun("""
+				(defpackage :pql-a (:use :cl) (:export #:hi))
+				(defpackage :pql-b (:use :cl :pql-a))
+				(print (package-use-list :pql-b))
+				(print (package-used-by-list :pql-a))
+				(print (package-use-list :cl))
+				(print (package-shadowing-symbols :cl-user))
+				(print (car (member :pql-a (list-all-packages))))
+				(defun q (p) (package-use-list p))
+				(print (q (find-package "CL-USER")))
+				(print (mapcar #'package-name (funcall #'package-use-list :cl-user)))
+				(print (handler-case (package-use-list :no-such-package) (error (e) :signalled)))
+				""")).isEqualTo("(:CL :PQL-A)\n(:PQL-B)\nNIL\nNIL\n:PQL-A\n(:CL)\n(\"COMMON-LISP\")\n:SIGNALLED");
+	}
+
+	@Test
+	void compileAndRunRempropDropsOnePropertyFromThePlist() throws Exception {
+		assertThat(compileAndRun("""
+				(setf (get 'rp 'a) 1)
+				(setf (get 'rp 'b) 2)
+				(setf (get 'rp 'c) 3)
+				(print (list (remprop 'rp 'b) (symbol-plist 'rp) (remprop 'rp 'zz)
+				             (remprop 'rp 'c) (symbol-plist 'rp) (get 'rp 'a)))
+				(print (remprop 'nothing 'x))
+				""")).isEqualTo("(T (C 3 A 1) NIL T (A 1) 1)\nNIL");
+	}
+
+	@Test
+	void compileAndRunASplicedFileGetsItsOwnLoadContext() throws Exception {
+		// The (%begin-file PATHNAME TRUENAME) brackets LoadInliner puts around every
+		// spliced file (LoadInlinerTest) lower to assignments of the two variables here,
+		// with the enclosing file's values assigned back at the end -- so a top-level
+		// form of a spliced file reads its own file, a nested load reads the nested
+		// file, and a function called after the load reads nil, exactly like the
+		// interpreter's dynamic binding around the same file.
+		assertThat(compileAndRun("""
+				(defun ctx () (list *load-pathname* *load-truename*))
+				(%begin-file "a.lisp" "/tmp/a.lisp")
+				(print (ctx))
+				(%begin-file "b.lisp" "/tmp/b.lisp")
+				(print (ctx))
+				(%end-file)
+				(print (ctx))
+				(%end-file)
+				(print (ctx))
+				""")).isEqualTo("""
+				("a.lisp" "/tmp/a.lisp")
+				("b.lisp" "/tmp/b.lisp")
+				("a.lisp" "/tmp/a.lisp")
+				(NIL NIL)""");
+	}
+
+	@Test
+	void aLoadContextBracketCostsNothingWhenTheProgramNeverReadsIt() throws Exception {
+		// The gate: a program that mentions neither variable has the brackets dropped
+		// and is byte-identical to the same program without them, so splicing a file
+		// into a program that does not care about its own path changes no output.
+		byte[] bracketed = new JvmLispCompiler("Test").compile(LispReader.readAllFromString("""
+				(%begin-file "a.lisp" "/tmp/a.lisp")
+				(defun f () 42)
+				(%end-file)
+				(print (f))
+				"""));
+		byte[] plain = new JvmLispCompiler("Test").compile(LispReader.readAllFromString("""
+				(defun f () 42)
+				(print (f))
+				"""));
+		assertThat(bracketed).isEqualTo(plain);
+	}
+
+	@Test
+	void withOpenFileWriteThenRead() throws Exception {
+		String file = tempDir.resolve("wof.txt").toString().replace("\\", "\\\\");
+		assertThat(compileAndRun("""
+				(with-open-file (out "%s" :direction :output)
+				  (write-line "hello" out)
+				  (write-line "world" out))
+				(with-open-file (in "%s")
+				  (print (read-line in))
+				  (print (read-line in))
+				  (print (read-line in)))
+				""".formatted(file, file))).isEqualTo("\"hello\"\n\"world\"\nNIL");
+	}
+
+	@Test
+	void probeFileAnswersTheTruenameOrNil() throws Exception {
+		// The truename, as SBCL's (macOS's /var resolves); the first-class function and
+		// uiop:file-exists-p answer the same.
+		String file = tempDir.resolve("probe.txt").toString().replace("\\", "\\\\");
+		String missing = tempDir.resolve("absent.txt").toString().replace("\\", "\\\\");
+		String real = "#P\"" + tempDir.toRealPath().resolve("probe.txt") + "\"";
+		assertThat(compileAndRun("""
+				(with-open-file (out "%1$s" :direction :output) (write-line "x" out))
+				(print (probe-file "%1$s"))
+				(print (if (probe-file "%2$s") 'yes 'no))
+				(print (mapcar #'probe-file (list "%1$s" "%2$s")))
+				(print (uiop:file-exists-p "%1$s"))
+				(print (uiop:file-exists-p "%2$s"))
+				""".formatted(file, missing))).isEqualTo(real + "\nNO\n(" + real + " NIL)\n" + real + "\nNIL");
+	}
+
+	@Test
+	void truenameResolvesEverySymbolicLinkInThePath() throws Exception {
+		// The interpreter's tree and answers
+		// (LispEvaluatorTest#truenameResolvesEverySymbolicLinkInThePath), over the
+		// emitted _readLink.
+		java.nio.file.Path base = tempDir.toRealPath().resolve("tlj");
+		java.nio.file.Files.createDirectories(base.resolve("tl/d/e"));
+		java.nio.file.Files.writeString(base.resolve("tl/a.txt"), "a\n");
+		java.nio.file.Files.writeString(base.resolve("tl/d/f.txt"), "f\n");
+		java.nio.file.Files.createSymbolicLink(base.resolve("tl/in"), java.nio.file.Path.of("a.txt"));
+		java.nio.file.Files.createSymbolicLink(base.resolve("tl/dl"), java.nio.file.Path.of("d"));
+		java.nio.file.Files.createSymbolicLink(base.resolve("tl/up"), java.nio.file.Path.of("../tl/d"));
+		java.nio.file.Files.createSymbolicLink(base.resolve("tl/dang"), java.nio.file.Path.of("none"));
+		java.nio.file.Files.createSymbolicLink(base.resolve("tl/de"), java.nio.file.Path.of("d/e"));
+		assertThat(compileAndRun(TRUENAME_THROUGH_LINKS.formatted(base + "/"))).isEqualTo(TRUENAME_THROUGH_LINKS_OUT);
+		// A relative truename is placed below the working directory (user.dir).
+		assertThat(compileAndRun("(print (list (truename \"\") (probe-file \"pom.xml\")"
+				+ " (directory \"pom.xml\" :resolve-symlinks nil)))"))
+			.isEqualTo("(#P\"%1$s/\" #P\"%1$s/pom.xml\" (#P\"%2$s/pom.xml\"))"
+				.formatted(java.nio.file.Path.of("").toRealPath(), java.nio.file.Path.of("").toAbsolutePath()));
+	}
+
+	private static final String TRUENAME_THROUGH_LINKS = """
+			(defvar *b* "%s")
+			(defun tl (x) (concatenate 'string *b* "tl/" x))
+			(defun rel (x) (subseq (namestring x) (length *b*)))
+			(print (rel (truename (tl "in"))))
+			(print (rel (truename (tl "dl/f.txt"))))
+			(print (rel (truename (tl "dl/../a.txt"))))
+			(print (rel (truename (concatenate 'string *b* "./tl/up/../in"))))
+			(print (rel (truename (tl "de/../f.txt"))))
+			(print (rel (let ((*default-pathname-defaults* (pathname (tl "")))) (truename "in"))))
+			(print (rel (probe-file (tl "in"))))
+			(print (rel (uiop:directory-exists-p (tl "dl"))))
+			(print (with-open-file (s (tl "in")) (read-line s)))
+			(print (handler-case (truename (tl "none")) (file-error () :missing)))
+			(print (rel (uiop:resolve-symlinks (tl "dl/new.txt"))))
+			(print (rel (truename (tl "dl"))))
+			(print (rel (probe-file (tl "dang"))))
+			(print (list (uiop:file-exists-p (tl "dl")) (rel (uiop:file-exists-p (tl "dang")))))
+			(print (mapcar #'rel (directory (tl "*"))))
+			(print (mapcar #'rel (directory (tl "*") :resolve-symlinks nil)))
+			(print (mapcar #'rel (directory (tl "de/../*.txt"))))
+			(print (mapcar #'rel (directory (tl "de/../*.txt") :resolve-symlinks nil)))
+			(print (mapcar #'rel (uiop:subdirectories (tl ""))))
+			""";
+
+	private static final String TRUENAME_THROUGH_LINKS_OUT = """
+			"tl/a.txt"
+			"tl/d/f.txt"
+			"tl/a.txt"
+			"tl/a.txt"
+			"tl/d/f.txt"
+			"tl/a.txt"
+			"tl/a.txt"
+			"tl/d/"
+			"a"
+			:MISSING
+			"tl/d/new.txt"
+			"tl/d/"
+			"tl/dang"
+			(NIL "tl/dang")
+			("tl/a.txt" "tl/d/" "tl/d/e/" "tl/dang")
+			("tl/d/" "tl/de/" "tl/dl/" "tl/in" "tl/up/")
+			("tl/a.txt")
+			("tl/a.txt")
+			("tl/d/" "tl/de/" "tl/dl/" "tl/up/")""";
+
+	@Test
+	void compileAndRunUiopFilesystemProbeWalkAndMutate() throws Exception {
+		// The uiop/filesystem read side over probe-file and directory, the getenv
+		// family over the override map, symlinks resolved, and the write side
+		// for real -- same shape and expectations as the interpreter test
+		// (LispEvaluatorTest#evalUiopFilesystemProbeWalkAndMutate).
+		java.nio.file.Path root = java.nio.file.Files.createDirectory(tempDir.resolve("fs"));
+		String dir = root.toString().replace("\\", "\\\\");
+		java.nio.file.Files.writeString(root.resolve("p.txt"), "p\n");
+		String d = root + "/";
+		// a truename resolves the links above the directory too (macOS's /var)
+		String real = root.toRealPath() + "/";
+		assertThat(compileAndRun("""
+					(print (uiop:probe-file* "%1$s/p.txt"))
+					(print (uiop:probe-file* "%1$s/p.txt" :truename t))
+					(print (uiop:probe-file* "%1$s/missing"))
+					(print (uiop:truename* "%1$s/p.txt"))
+					(print (uiop:truename* "%1$s/missing"))
+					(print (uiop:directory* "%1$s/*.txt"))
+					(print (if (uiop:safe-file-write-date "%1$s/p.txt") 'dated 'undated))
+					(print (uiop:safe-file-write-date "%1$s/missing"))
+					(print (uiop:parse-native-namestring "/tmp/x"))
+					(print (string (uiop:inter-directory-separator)))
+					(print (uiop:split-native-pathnames-string "a:b::c"))
+					(progn (setf (uiop:getenv "JVM_UIOP_FS_TEST") "/tmp")
+					       (setf (uiop:getenv "JVM_UIOP_FS_PATHS") "/tmp:/var")
+					       (print (uiop:getenv-pathname "JVM_UIOP_FS_TEST"))
+					       (print (uiop:getenv-absolute-directories "JVM_UIOP_FS_PATHS")))
+					(print (list uiop:*resolve-symlinks* (uiop:resolve-symlinks "/a/b")
+					               (uiop:lisp-implementation-directory)))
+					(let ((base "%1$s/j-"))
+					  (uiop:ensure-all-directories-exist (list (concatenate 'string base "d/sub/f.txt")))
+					  (with-open-file (out (concatenate 'string base "d/sub/f.txt") :direction :output)
+					    (write-line "x" out))
+					  (print (if (uiop:probe-file* (concatenate 'string base "d/sub/f.txt")) 'made 'absent))
+					  (uiop:delete-directory-tree (concatenate 'string base "d/") :validate (constantly t))
+					  (print (uiop:directory-exists-p (concatenate 'string base "d/"))))
+				(print (uiop:with-current-directory () :here))
+				(print (handler-case (uiop:with-current-directory ("/tmp") :never)
+				         (uiop:not-implemented-error () :signalled)))
+				""".formatted(dir))).isEqualTo("""
+				#P"%1$sp.txt"
+				#P"%2$sp.txt"
+				NIL
+				#P"%2$sp.txt"
+				NIL
+				(#P"%1$sp.txt")
+				DATED
+				NIL
+				#P"/tmp/x"
+				":"
+				(#P"a" #P"b" NIL #P"c")
+				#P"/tmp"
+				(#P"/tmp/" #P"/var/")
+				(T #P"/a/b" NIL)
+				MADE
+				NIL
+				:HERE
+				:SIGNALLED""".formatted(d, real));
+	}
+
+	@Test
+	void compileAndRunUiopStreamFileContentsAndSafeIo() throws Exception {
+		// The "give me the contents" half of uiop/stream -- the openers
+		// over the computed-option lowering, the designator coercions, the slurp
+		// family over prelude read, the safe-IO syntax, the eval thunks and the
+		// print helpers. Same shape and expectations as the interpreter test
+		// (LispEvaluatorTest#evalUiopStreamFileContentsAndSafeIo); paths are built
+		// at run time so no literal absolute path is bundled at compile time.
+		java.nio.file.Path root = java.nio.file.Files.createDirectory(tempDir.resolve("ucont"));
+		String dir = root.toString().replace("\\", "\\\\");
+		assertThat(compileAndRunRead("""
+				(let ((base "%1$s/"))
+				  (uiop:with-output-file (out (concatenate 'string base "s.txt"))
+				    (write-line "hello" out) (write-line "world" out))
+				  (print (uiop:read-file-lines (concatenate 'string base "s.txt")))
+				  (print (uiop:read-file-line (concatenate 'string base "s.txt") :at 1))
+				  (uiop:with-output-file (out (concatenate 'string base "f.txt"))
+				    (write-line "(defun ucont-f (x) (* x 2))" out)
+				    (write-line "42" out))
+				  (print (uiop:read-file-forms (concatenate 'string base "f.txt")))
+				  (print (uiop:safe-read-file-form (concatenate 'string base "f.txt") :at 1))
+				  (print (uiop:with-output (o nil) (write-string "xyz" o)))
+				  (print (uiop:with-input (s "ab") (read-char s)))
+				  (uiop:copy-file (concatenate 'string base "s.txt") (concatenate 'string base "c.txt"))
+				  (print (uiop:read-file-string (concatenate 'string base "c.txt")))
+				  (print (uiop:safe-read-from-string "(+ 1 2)"))
+				  (print (uiop:eval-input "(+ 1 2) (* 3 4)"))
+				  (print (uiop:eval-thunk "(+ 1 2)"))
+				  (print (uiop:standard-eval-thunk "(+ 1 2)"))
+				  (print (uiop:with-safe-io-syntax (:package :cl) *package*))
+				  (uiop:with-output-file (out (concatenate 'string base "o.txt"))
+				    (uiop:println "a" out)
+				    (uiop:writeln '(1 2) :stream out)
+				    (uiop:format! out "n=~A~%%" 7))
+				  (print (uiop:read-file-lines (concatenate 'string base "o.txt")))
+				  (print (uiop:with-output (o nil) (write-string "q" o)))
+				  (uiop:with-input-file (in (concatenate 'string base "o.txt"))
+				    (print (list (uiop:file-stream-p in) (uiop:file-or-synonym-stream-p in)))))
+				""".formatted(dir))).isEqualTo("""
+				("hello" "world")
+				"world"
+				((DEFUN UCONT-F (X) (* X 2)) 42)
+				42
+				"xyz"
+				#\\a
+				"hello
+				world
+				"
+				(+ 1 2)
+				12
+				3
+				3
+				:CL
+				("a" "(1 2)" "n=7")
+				"q"
+				(T T)""");
+	}
+
+	@Test
+	void compileAndRunUiopTemporaryFilesStagingAndNullStreams() throws Exception {
+		// The temporary-file / staging / null-stream half of uiop/stream --
+		// call-with-temporary-file over %temp-file-name, with-temporary-file as its
+		// wrapper, tmpize-pathname, with-staging-pathname over a rename, and the null
+		// streams. Same shape as the interpreter test
+		// (LispEvaluatorTest#evalUiopTemporaryFilesStagingAndNullStreams); paths are
+		// built at run time so no literal absolute path is bundled at compile time.
+		java.nio.file.Path root = java.nio.file.Files.createDirectory(tempDir.resolve("u360"));
+		String dir = root.toString().replace("\\", "\\\\");
+		assertThat(compileAndRunUnread("""
+				(let ((base "%1$s/"))
+				  (print (let ((p (uiop:with-temporary-file (:stream s :pathname p :directory base :keep t)
+				                    (write-string "kept" s) p)))
+				          (and (probe-file p) t)))
+				  (print (let ((p (uiop:with-temporary-file (:stream s :pathname p :directory base)
+				                    (write-string "gone" s) p)))
+				          (and (probe-file p) t)))
+				  (print (let ((p (uiop:call-with-temporary-file
+				                  (lambda (pn) pn)
+				                  :want-stream-p nil :want-pathname-p t
+				                  :directory base)))
+				          (and (probe-file p) t)))
+				  (let* ((p (concatenate 'string base "staged.txt"))
+				         (tp (uiop:tmpize-pathname p)))
+				    (print (subseq (pathname-name tp) 0 10))
+				    (print (pathname-type tp)))
+				  (let ((p (concatenate 'string base "final.txt")))
+				    (uiop:with-staging-pathname (s p)
+				      (with-open-file (out s :direction :output) (write-line "hello" out)))
+				    (print (uiop:read-file-line p)))
+				  (print (uiop:add-pathname-suffix
+				          (pathname (concatenate 'string base "b.txt")) "-x"))
+				  (print (uiop:with-null-input (s) (read-char s nil :eof)))
+				  (print (uiop:with-null-output (o) (write-string "gone" o)))
+				  (print (uiop:null-device-pathname)))
+				""".formatted(dir))).isEqualTo("""
+				T
+				NIL
+				NIL
+				"staged-tmp"
+				"txt"
+				"hello"
+				#P"%1$s/b-x.txt"
+				:EOF
+				"gone"
+				#P"/dev/null"
+				""".stripTrailing().formatted(dir));
+	}
+
+	@Test
+	void directoryMatchesPathnamesAndDrivesTheUiopWalkers() throws Exception {
+		// A subdirectory of its own: the compiled class lands in tempDir and would
+		// otherwise show up in the listing.
+		java.nio.file.Path root = java.nio.file.Files.createDirectory(tempDir.resolve("tree"));
+		String dir = root.toString().replace("\\", "\\\\");
+		java.nio.file.Files.writeString(root.resolve("b.txt"), "b\n");
+		java.nio.file.Files.writeString(root.resolve("a.txt"), "a\n");
+		java.nio.file.Files.createDirectory(root.resolve("sub"));
+		java.nio.file.Files.writeString(root.resolve("sub/c.txt"), "c\n");
+		String d = root + "/";
+		String r = root.toRealPath() + "/";
+		// Same shape as the interpreter test, whose expectations were checked against
+		// SBCL.
+		assertThat(compileAndRun("""
+				(print (directory "%s/*.*"))
+				(print (directory "%s/*.txt"))
+				(print (directory "%s/*"))
+				(print (directory "%s"))
+				(print (directory "%s/nope/*.*"))
+				(print (uiop:directory-exists-p "%s"))
+				(print (uiop:directory-exists-p "%s/a.txt"))
+				(print (uiop:directory-files "%s"))
+				(print (uiop:subdirectories "%s"))
+				(let ((acc nil))
+				  (uiop:collect-sub*directories "%s" (constantly t) (constantly t)
+				                                (lambda (x) (setq acc (cons x acc))))
+				  (print (reverse acc)))
+				""".formatted(dir, dir, dir, dir, dir, dir, dir, dir, dir, dir)))
+			.isEqualTo(("(#P\"%sa.txt\" #P\"%sb.txt\" #P\"%ssub/\")\n" + "(#P\"%sa.txt\" #P\"%sb.txt\")\n"
+					+ "(#P\"%ssub/\")\n" + "(#P\"%s\")\n" + "NIL\n" + "#P\"%s\"\n" + "NIL\n"
+					+ "(#P\"%sa.txt\" #P\"%sb.txt\")\n" + "(#P\"%ssub/\")\n" + "(#P\"%s\" #P\"%ssub/\")")
+				// directory and uiop:directory-exists-p answer truenames (macOS's /var
+				// resolves); the uiop walkers keep the spelling they listed
+				.formatted(r, r, r, r, r, r, r, r, d, d, d, d, d));
+	}
+
+	@Test
+	void wildPathnameComponentsBuildMatchTranslateAndWalk() throws Exception {
+		// Same shape and the same SBCL-checked expectations as the interpreter test.
+		java.nio.file.Path root = java.nio.file.Files.createDirectory(tempDir.resolve("tree"));
+		java.nio.file.Files.createDirectories(root.resolve("a/b/c"));
+		java.nio.file.Files.createDirectories(root.resolve("a/d"));
+		java.nio.file.Files.writeString(root.resolve("a/top.lisp"), "1\n");
+		java.nio.file.Files.writeString(root.resolve("a/b/mid.lisp"), "2\n");
+		java.nio.file.Files.writeString(root.resolve("a/b/c/deep.lisp"), "3\n");
+		java.nio.file.Files.writeString(root.resolve("a/d/x.txt"), "4\n");
+		String dir = root.toString().replace("\\", "\\\\");
+		String d = root.toRealPath() + "/";
+		assertThat(compileAndRun("""
+				(print (namestring (make-pathname :directory '(:absolute "a" :wild-inferiors)
+				                                  :name :wild :type "lisp")))
+				(print (namestring (make-pathname :name :wild :type :wild)))
+				(print (list (pathname-directory "/a/**/x.lisp") (pathname-directory "/a/*/x.lisp")
+				             (pathname-directory "../a/")))
+				(print (list (pathname-name "/a/**/*.lisp") (pathname-type "/a/**/*.lisp")))
+				(print (list (wild-pathname-p "/a/**/x.lisp" :directory)
+				             (wild-pathname-p "/a/**/x.lisp" :name)))
+				(print (namestring (translate-pathname "/a/b/d/c.lisp" "/a/**/*.lisp" "/x/**/*.fasl")))
+				(print (namestring (translate-pathname "/a/c.lisp" "/a/**/*.lisp" "/x/**/*.fasl")))
+				(print (directory "%s/a/**/*.lisp"))
+				(print (directory "%s/a/*/*.lisp"))
+				(print (directory "%s/a/**/"))
+				(print (directory "%s/nope/**/*.lisp"))
+				""".formatted(dir, dir, dir, dir))).isEqualTo(("\"/a/**/*.lisp\"\n" + "\"*.*\"\n"
+				+ "((:ABSOLUTE \"a\" :WILD-INFERIORS)" + " (:ABSOLUTE \"a\" :WILD) (:RELATIVE :UP \"a\"))\n"
+				+ "(:WILD \"lisp\")\n" + "(T NIL)\n" + "\"/x/b/d/c.fasl\"\n" + "\"/x/c.fasl\"\n"
+				+ "(#P\"%sa/b/c/deep.lisp\" #P\"%sa/b/mid.lisp\" #P\"%sa/top.lisp\")\n" + "(#P\"%sa/b/mid.lisp\")\n"
+				+ "(#P\"%sa/\" #P\"%sa/b/\" #P\"%sa/b/c/\" #P\"%sa/d/\")\n" + "NIL")
+			.formatted(d, d, d, d, d, d, d, d));
+	}
+
+	@Test
+	void pathnameAlgebraOverTheFlatNamestring() throws Exception {
+		// The pathname operators that are pure computation over the namestring: the
+		// three components rontolisp does not model, wild-pathname-p per field,
+		// enough-namestring (with the *default-pathname-defaults* special BOUND) and
+		// translate-pathname. Same expectations as the interpreter suite, SBCL-checked.
+		assertThat(compileAndRun("""
+				(print (list (pathname-host "d/a.txt") (pathname-device #P"d/a.txt")
+				             (pathname-version #P"d/a.txt")))
+				(print (list (wild-pathname-p "d/*.txt") (wild-pathname-p "d/a.txt")
+				             (wild-pathname-p "d/*.txt" :name) (wild-pathname-p "d/*.txt" :type)
+				             (wild-pathname-p "*/a.txt" :directory) (wild-pathname-p "d/*.txt" :host)))
+				(print (enough-namestring "/a/b/c.lisp" "/a/"))
+				(print (enough-namestring "/a/b/c.lisp" "/x/"))
+				(print (namestring *default-pathname-defaults*))
+				(print (let ((*default-pathname-defaults* #P"/a/b/")) (enough-namestring "/a/b/c.lisp")))
+				(print (translate-pathname "src/foo.lisp" "src/*.lisp" "build/*.fasl"))
+				(print (namestring (translate-pathname "a/b.c" "*/*.*" "x/*-y.*")))
+				(print (translate-logical-pathname "d/a.txt"))
+				(print (handler-case (logical-pathname "SYS:SRC;") (error () :signalled)))
+				(print (list (pathname-match-p "x/y/a.l" "x/*/a.l") (pathname-match-p "x/a.l" "x/*/a.l")
+				             (pathname-match-p "a" "*.lisp") (pathname-match-p "b.lisp" "/**/*.lisp")))
+				(setf (logical-pathname-translations "LP") '(("SRC;**;*.*.*" "/opt/src/**/*.*")))
+				(print (list (translate-logical-pathname "lp:src;a;foo.lisp.newest")
+				             (handler-case (logical-pathname-translations "NOPE") (type-error () :type-error))))
+				""")).isEqualTo("""
+				(NIL NIL NIL)
+				(T NIL T NIL T NIL)
+				"b/c.lisp"
+				"/a/b/c.lisp"
+				""
+				"c.lisp"
+				#P"build/foo.fasl"
+				"x/b-y.c"
+				#P"d/a.txt"
+				:SIGNALLED
+				(T NIL NIL T)
+				(#P"/opt/src/a/foo.lisp" :TYPE-ERROR)""");
+	}
+
+	@Test
+	void namestringHalvesNstringCaseAndEnvironmentEnquiry() throws Exception {
+		// The three prelude-Lisp families: the string-valued halves of
+		// a namestring, the destructive case family, and the environment-enquiry
+		// constants. Same expectations as the interpreter suite except the one noted
+		// below, the machine-type target name.
+		assertThat(compileAndRun("""
+				(print (list (file-namestring #P"/a/b/c.txt") (directory-namestring #P"/a/b/c.txt")
+				             (host-namestring #P"/a/b/c.txt")))
+				(print (list (file-namestring "a.txt") (directory-namestring "a.txt")))
+				(print (list (file-namestring "/a/b/") (directory-namestring "/a/b/")))
+				(print (list (file-namestring "/a/.bashrc") (directory-namestring "/a/.bashrc")))
+				(print (nstring-upcase (copy-seq "hello world")))
+				(print (nstring-downcase (copy-seq "ABC")))
+				(print (nstring-capitalize (copy-seq "hello world")))
+				(print (funcall #'nstring-upcase (copy-seq "ab")))
+				;; A mutable character vector IS written in place, on every backend.
+				(print (let ((s (make-string 3 :initial-element #\\a)))
+				         (list (eq s (nstring-upcase s)) s)))
+				;; A copy-seq result is a mutable character vector too, so the
+				;; destructive case family writes it in place like the interpreter.
+				(print (let ((s (copy-seq "ab"))) (nstring-upcase s) s))
+				(print (list (lisp-implementation-type) (software-type) (software-version)))
+				(print (list (machine-type) (machine-version) (machine-instance)))
+				(print (list (short-site-name) (long-site-name)))
+				(print (equal (lisp-implementation-version) (getf (rontolisp:version) :version)))
+				""")).isEqualTo("""
+				("c.txt" "/a/b/" "")
+				("a.txt" "")
+				("" "/a/b/")
+				(".bashrc" "/a/")
+				"HELLO WORLD"
+				"abc"
+				"Hello World"
+				"AB"
+				(T "AAA")
+				"AB"
+				("rontolisp" "Unix" NIL)
+				("JVM" NIL NIL)
+				(NIL NIL)
+				T""");
+	}
+
+	@Test
+	void renameFileMovesTheFileOnDisk() throws Exception {
+		java.nio.file.Path root = java.nio.file.Files.createDirectory(tempDir.resolve("rn"));
+		java.nio.file.Files.writeString(root.resolve("a.txt"), "hi\n");
+		String dir = root.toString().replace("\\", "\\\\");
+		assertThat(compileAndRun("""
+				(print (rename-file "%s/a.txt" "b.txt"))
+				(print (probe-file "%s/a.txt"))
+				(print (probe-file "%s/b.txt"))
+				(print (handler-case (rename-file "%s/nope.txt" "c.txt") (error () :signalled)))
+				""".formatted(dir, dir, dir, dir)))
+			.isEqualTo(("#P\"%s/b.txt\"\nNIL\n#P\"%s/b.txt\"\n:SIGNALLED").formatted(root, root.toRealPath()));
+	}
+
+	@Test
+	void withOpenFileReturnsBodyValue() throws Exception {
+		String file = tempDir.resolve("wof-ret.txt").toString().replace("\\", "\\\\");
+		assertThat(compileAndRun(
+				"(print (with-open-file (out \"" + file + "\" :direction :output) (write-line \"x\" out) 42))"))
+			.isEqualTo("42");
+	}
+
+	@Test
+	void openCloseExplicitStreams() throws Exception {
+		String file = tempDir.resolve("manual.txt").toString().replace("\\", "\\\\");
+		assertThat(compileAndRun("""
+				(setq out (open "%s" :output))
+				(write-line "line1" out)
+				(close out)
+				(setq in (open "%s" :input))
+				(print (read-line in))
+				(close in)
+				""".formatted(file, file))).isEqualTo("\"line1\"");
+	}
+
+	@Test
+	void listenAtTheEndOfAStringStreamAnswersNil() throws Exception {
+		// A character remains, or it does not -- and an unread character counts as
+		// one that remains (through the %unread-listen rewrite, like every other
+		// read-side operator).
+		assertThat(compileAndRun("""
+				(print (with-input-from-string (s "") (listen s)))
+				(print (with-input-from-string (s "x") (listen s)))
+				(print (with-input-from-string (s "x") (read-char s) (listen s)))
+				""")).isEqualTo("NIL\nT\nNIL");
+		assertThat(compileAndRunUnread("""
+				(print (with-input-from-string (s "x")
+				         (list (read-char s)
+				               (listen s)
+				               (unread-char #\\x s)
+				               (not (not (listen s)))
+				               (read-char s))))
+				""")).isEqualTo("(#\\x NIL NIL T #\\x)");
+	}
+
+	@Test
+	void echoStreamPeekDoesNotEcho() throws Exception {
+		// Only what is READ echoes -- a peek looks at the input component without
+		// writing, so the output stream's position does not move.
+		assertThat(compileAndRunGray("""
+				(let ((o (make-string-output-stream)))
+				  (let ((es (make-echo-stream (make-string-input-stream "ab") o)))
+				    (print (list (file-position o)
+				                 (peek-char nil es nil)
+				                 (file-position o)
+				                 (read-char es)
+				                 (file-position o)
+				                 (get-output-stream-string o)))))
+				""")).isEqualTo("(0 #\\a 0 #\\a 1 \"a\")");
+	}
+
+	@Test
+	void funcallOfPrintFamilyForwardsItsStreamArgument() throws Exception {
+		// A #' reference to the print family used as a first-class value with the
+		// optional stream: the wrapper defun the compile paths build for the
+		// reference dropped the second argument (stdout on the JVM, an arity trap on
+		// wasm). An omitted stream and an explicit nil are the SAME designator
+		// (.kb/standard-output-redirect.md), so the wrapper forwards the parameter
+		// unconditionally and its nil default needs no branch of its own.
+		assertThat(compileAndRun("""
+				(princ (with-output-to-string (s) (funcall #'princ 'foo s)))
+				(princ "|")
+				(princ (with-output-to-string (s) (funcall #'prin1 '(a b) s)))
+				(princ "|")
+				(princ (with-output-to-string (s) (funcall #'print 'z s)))
+				(princ "|")
+				(princ (with-output-to-string (s) (funcall #'terpri s)))
+				(princ "|")
+				(princ (with-output-to-string (s)
+				          (funcall #'princ "ab" s)
+				          (funcall #'fresh-line s)
+				          (funcall #'princ "-c" s)))
+				(princ "|")
+				(princ (with-output-to-string (s) (funcall #'write-line "hi" s)))
+				(princ "|")
+				(princ (with-output-to-string (s) (funcall #'write-string "xyz" s)))
+				(princ "|")
+				(princ (with-output-to-string (s) (funcall #'write-string "a-long-string" s :start 2 :end 5)))
+				(princ "|")
+				(funcall #'force-output nil)
+				(funcall #'finish-output nil)
+				(funcall #'clear-output nil)
+				(princ (with-input-from-string (s "one\\ncp\\n") (funcall #'read-line s)))
+				(princ "|")
+				(princ (with-input-from-string (s "c") (funcall #'read-char s)))
+				(princ "|")
+				(princ (with-input-from-string (s "p") (funcall #'peek-char nil s)))
+				(princ "|")
+				(princ (with-input-from-string (s "l") (if (funcall #'listen s) "ready" "empty")))
+				(princ "|")
+				(princ (with-output-to-string (*standard-output*) (funcall #'princ 'dyn)))
+				(princ "|done")""")).isEqualTo("FOO|(A B)|Z\n|\n|ab\n-c|hi\n|xyz|lon|one|c|p|ready|DYN|done");
+	}
+
+	@Test
+	void errorOutputIsOneStreamValue() throws Exception {
+		// A program that never binds the variable reads the seeded value, not a value
+		// constructed per read; symbol-value's global-environment mirror holds the same
+		// object.
+		assertThat(compileAndRun("""
+				(print (list (eq *error-output* *error-output*)
+				             (let ((a *error-output*) (b *error-output*)) (eq a b))
+				             (eq *error-output* (symbol-value '*error-output*))))""")).isEqualTo("(T T T)");
+		assertThat(compileAndRun("""
+				(defun eo-rebind () (let ((*error-output* *error-output*)) *error-output*))
+				(print (list (eq (eo-rebind) *error-output*)
+				             (eq *error-output* (symbol-value '*error-output*))))""")).isEqualTo("(T T)");
+	}
+
+	@Test
+	void streamDirectionPredicatesAtTheTopLevel() throws Exception {
+		assertThat(compileAndRun("""
+				(print (list (input-stream-p *error-output*)
+				             (output-stream-p *error-output*)
+				             (output-stream-p (make-string-input-stream "a"))
+				             (input-stream-p (make-string-output-stream))))""")).isEqualTo("(NIL T NIL NIL)");
+	}
+
+	@Test
+	void errorOutputIsTheProcessErrorStream() throws Exception {
+		// *error-output* is the standard ERROR designator (the reserved handle 2), so a
+		// diagnostic written through it stays off the program's standard output.
+		assertThat(compileAndRunCapturingErr("""
+				(format *error-output* "diag ~a~%" 1)
+				(write-line "line" *error-output*)
+				(princ "on-stdout")""")).isEqualTo("diag 1\nline");
+		assertThat(compileAndRun("""
+				(format *error-output* "diag~%")
+				(princ "on-stdout")""")).isEqualTo("on-stdout");
+		assertThat(compileAndRunCapturingErr(am.ik.rontolisp.LineStartFixture.ERROR_OUTPUT_PROGRAM))
+			.isEqualTo(am.ik.rontolisp.LineStartFixture.ERROR_OUTPUT_EXPECTED);
+	}
+
+	@Test
+	void onlyAProgramThatCanAskALineStartKeepsThem() {
+		// What a write owes fresh-line rides the census, and a call it missed comes back
+		// as a forced re-run: the class never calls a _freshLine it does not declare.
+		String keeps = JvmIoRuntimeBuilder.MID_LINE_FIELD;
+		String writes = "(let ((s (make-string-output-stream))) (write-string \"x\" s) (print s))";
+		assertThat(classText(writes)).doesNotContain(keeps);
+		assertThat(classText("(let ((c \"~&x\")) (print (format nil c)))")).doesNotContain(keeps);
+		assertThat(classText("(princ \"x\") (fresh-line)")).doesNotContain(keeps);
+		assertThat(classText("(defun f (s) (fresh-line s)) (print #'f)")).contains(keeps);
+		assertThat(classText("(defun f (s) (format s \"~&x\")) (print #'f)")).contains(keeps);
+		assertThat(classText("(defun f (s c) (format s c)) (print #'f)")).contains(keeps);
+		assertThat(classText("(print #'format)")).contains(keeps);
+		assertThat(classText("(defun f (s) (funcall (read-from-string \"fresh-line\") s)) (print #'f)"))
+			.contains(keeps);
+		// A report's body lives in the class registry, out of the census's sight.
+		assertThat(classText("""
+				(define-condition als-c (error) () (:report (lambda (c s) (declare (ignore c)) (format s "~&x"))))
+				(print (handler-case (error 'als-c) (error (e) (princ-to-string e))))""")).contains(keeps);
+	}
+
+	private static String classText(String source) {
+		return new String(new JvmLispCompiler("Test").compile(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(source,
+				am.ik.rontolisp.reader.Features.JVM, false, false)), StandardCharsets.ISO_8859_1);
+	}
+
+	@Test
+	void bindingErrorOutputCapturesWarnAndRestores() throws Exception {
+		// CL's warning-capture idiom: warn's report defaults to *error-output*, so a
+		// binding captures it -- and the unbound default still reaches stderr.
+		assertThat(compileAndRun("""
+				(princ (with-output-to-string (*error-output*)
+				  (warn "captured")
+				  (format *error-output* "diag~%")))
+				(princ "|")
+				(princ (open-stream-p *error-output*))""")).isEqualTo("WARNING: captured\ndiag\n|T");
+		assertThat(compileAndRunCapturingErr("""
+				(let ((s (%make-string-output-stream)))
+				  (let ((*error-output* s)) (warn "hidden")))
+				(warn "visible")""")).isEqualTo("WARNING: visible");
+	}
+
+	// ...and a control ASSEMBLED at run time gets the stub, which says so instead of
+	// silently dropping the directive's output. The narrowing is compile-path only: the
+	// interpreter always carries the real arm. Reporting the condition renders its
+	// message as a control string again, so this also pins that the stub's own message
+	// carries no directive to re-enter it with.
+	@Test
+	void formatUserFunctionDirectiveSignalsWhenTheCompileNeverSawTheDirective() throws Exception {
+		assertThat(compileAndRun("""
+				(defun fmt-slash-brackets (s x c a) (princ (if c "[" "<") s) (princ x s) (princ (if a "]" ">") s))
+				; The control must be built from a value the compile path cannot know, or the
+				; pure-builtin literal fold reduces it back to a literal directive.
+				(defun fmt-control (tilde) (concatenate 'string tilde "/fmt-slash-brackets/"))
+				(princ (handler-case (format nil (fmt-control "~") 1)
+				         (error (e) (if (search "--dynamic" (format nil "~a" e)) "signalled" "no-hint"))))
+				""")).isEqualTo("signalled");
+	}
+
+	@Test
+	void aFailedFileOperationSignalsFileErrorCarryingThePathname() throws Exception {
+		// The run-time path keeps every literal-path folding out of the way; nothing
+		// here creates the missing directory, so every operation fails for real.
+		assertThat(compileAndRun("""
+				(defvar *fe-path* (concatenate 'string "ferr-missing/" "x.txt"))
+				(defun fe-probe (thunk)
+				  (handler-case (progn (funcall thunk) :no-error)
+				    (file-error (e) (list :file-error (namestring (file-error-pathname e))))
+				    (error () :other-error)))
+				(print (fe-probe (lambda () (open *fe-path*))))
+				(print (fe-probe (lambda () (open *fe-path* :direction :output))))
+				(print (fe-probe (lambda () (with-open-file (s *fe-path*) (read-line s)))))
+				(print (fe-probe (lambda () (delete-file *fe-path*))))
+				(print (fe-probe (lambda () (rename-file *fe-path* "y.txt"))))
+				(print (fe-probe (lambda () (truename *fe-path*))))
+				(terpri)
+				(handler-case (open *fe-path*) (file-error (e) (princ e) (terpri)))
+				(handler-case (delete-file *fe-path*) (file-error (e) (princ e) (terpri)))
+				(with-input-from-string (s "")
+				  (handler-case (read-char s) (end-of-file (e) (princ e) (terpri))))""")).isEqualTo("""
+				(:FILE-ERROR "ferr-missing/x.txt")
+				(:FILE-ERROR "ferr-missing/x.txt")
+				(:FILE-ERROR "ferr-missing/x.txt")
+				(:FILE-ERROR "ferr-missing/x.txt")
+				(:FILE-ERROR "ferr-missing/x.txt")
+				(:FILE-ERROR "ferr-missing/x.txt")
+
+				OPEN: cannot open file ferr-missing/x.txt
+				DELETE-FILE: cannot delete ferr-missing/x.txt
+				end of file""");
+	}
+
+	@Test
+	void aConditionCarryingRenderedTextReportsItOnce() throws Exception {
+		// The evaluator twin is aConditionCarryingRenderedTextReportsItOnce. The probes
+		// alone leave the condition narrowing free to decline the format renderer, so
+		// the report's control goes through %control-text; the explicit :format-control
+		// appended forces the renderer back, and the text must read the same.
+		String probes = """
+				(defun te (thunk) (handler-case (funcall thunk) (type-error (e) (princ-to-string e))))
+				(print (handler-case (error "a~~b") (error (e) (princ-to-string e))))
+				(print (handler-case (car "~a") (error (e) (princ-to-string e))))
+				(print (te (lambda () (+ 1 "~a"))))
+				(print (handler-case (error "a~~b") (error (e) (simple-condition-format-control e))))
+				(print (handler-case (error "~a" "~/x/ 100~%") (error (e) (princ-to-string e))))
+				(print (handler-case (signal "s~~t") (condition (e) (princ-to-string e))))
+				""";
+		String expected = """
+				"a~b"
+				"CAR: The value \\"~a\\" is not of type LIST"
+				"+: The value \\"~a\\" is not of type NUMBER"
+				"a~~b"
+				"~/x/ 100~%"
+				"s~t\"""";
+		assertThat(compileAndRun(probes)).isEqualTo(expected);
+		assertThat(compileAndRun(
+				probes + """
+						(print (princ-to-string (make-condition 'simple-error :format-control "~a!" :format-arguments (list 1))))
+						"""))
+			.isEqualTo(expected + "\n\"1!\"");
+	}
+
+	@Test
+	void readCharEndOfFileIsCatchableAsEndOfFile() throws Exception {
+		assertThat(compileAndRun("""
+				(with-input-from-string (s "")
+				  (princ (handler-case (read-char s) (end-of-file () 'caught))))
+				(with-input-from-string (s "")
+				  (princ (handler-case (read-char s) (error () 'as-error))))""")).isEqualTo("CAUGHTAS-ERROR");
+	}
+
+	@Test
+	void makeSynonymStreamResolvesTheNamedVariable() throws Exception {
+		assertThat(
+				compileAndRun("(defvar *sink* (make-synonym-stream '*standard-output*)) (write-string \"via\" *sink*)"))
+			.isEqualTo("via");
+	}
+
+	@Test
+	void makeSynonymStreamIsAStreamValue() throws Exception {
+		// A synonym stream is a VALUE, not the nil designator: it answers true, it is a
+		// stream in both directions, close is a no-op t, and it prints the symbol it
+		// forwards to.
+		assertThat(compileAndRun("""
+				(defvar *sink* (make-synonym-stream '*standard-output*))
+				(princ (if *sink* "yes" "no"))
+				(princ (streamp *sink*))
+				(princ (input-stream-p *sink*))
+				(princ (output-stream-p *sink*))
+				(princ (close *sink*))
+				(princ (synonym-stream-symbol *sink*))
+				(princ *sink*)""")).isEqualTo("yesTTTT*STANDARD-OUTPUT*#<SYNONYM-STREAM :SYMBOL *STANDARD-OUTPUT*>");
+	}
+
+	@Test
+	void synonymStreamOverAUserSpecialFollowsALaterBinding() throws Exception {
+		// The re-evaluation trigger the lite lowering left behind: a synonym over a
+		// NON-standard symbol forwards per operation too, so a binding established after
+		// the synonym was built redirects it. A Gray stream on either side of the
+		// synonym is carried as well (rove's reporter shape).
+		assertThat(compileAndRunGray("""
+				(defvar *port* t)
+				(defvar *syn* (make-synonym-stream '*port*))
+				(defclass upcaser (rontolisp:fundamental-character-output-stream)
+				  ((target :initarg :target :reader upcaser-target)))
+				(defmethod rontolisp:stream-write-string ((s upcaser) str &optional (start 0) end)
+				  (write-string (string-upcase (subseq str start end)) (upcaser-target s))
+				  str)
+				(princ (with-output-to-string (s) (let ((*port* s)) (write-string "user" *syn*))))
+				(princ "|")
+				(princ (with-output-to-string (s)
+				  (let ((*port* s)) (write-string "wrap" (make-instance 'upcaser :target *syn*)))))
+				(princ "|")
+				(princ (with-output-to-string (s)
+				  (let ((*port* (make-instance 'upcaser :target s))) (write-string "under" *syn*))))"""))
+			.isEqualTo("user|WRAP|UNDER");
+	}
+
+	@Test
+	void synonymStreamOverStandardOutputFollowsALaterBinding() throws Exception {
+		// The synonym stream resolves its symbol at WRITE time, so a binding
+		// established after it was built still captures.
+		assertThat(compileAndRun("""
+				(defvar *sink* (make-synonym-stream '*standard-output*))
+				(princ (with-output-to-string (*standard-output*)
+				  (write-line "captured" *sink*)))
+				(princ "|")
+				(write-line "plain" *sink*)""")).isEqualTo("captured\n|plain"); // compileAndRun
+																				// strips
+																				// the
+																				// trailing
+																				// newline
+	}
+
+	@Test
+	void bindingStandardInputRedirectsTheStreamlessReadFamily() throws Exception {
+		// The input mirror of the *standard-output* redirect: binding *standard-input*
+		// redirects read-line / read-char / read, including inside called functions, and
+		// an explicit nil argument is the same designator.
+		assertThat(compileAndRun("""
+				(defun slurp (&optional stream) (princ (read-line stream)) (princ "|"))
+				(with-input-from-string (*standard-input* "one")
+				  (slurp))
+				(princ (with-input-from-string (*standard-input* "abc") (read-char)))
+				(princ (with-input-from-string (*standard-input* "(1 2 3)") (read)))
+				(princ (with-input-from-string (*standard-input* "x") (read-line nil)))""")).isEqualTo("one|a(1 2 3)x");
+	}
+
+	@Test
+	void makeSynonymStreamOverStandardInputFollowsALaterBinding() throws Exception {
+		assertThat(compileAndRun("""
+				(defvar *src* (make-synonym-stream '*standard-input*))
+				(princ (with-input-from-string (*standard-input* "later")
+				  (read-line *src*)))""")).isEqualTo("later");
+	}
+
+	@Test
+	void explicitNilStreamArgumentIsTheStandardOutputDesignator() throws Exception {
+		// CL's stream designator rule: a forwarded optional that arrives as nil reaches
+		// the CURRENT *standard-output*, not raw stdout.
+		assertThat(compileAndRun("""
+				(defun emit (x &optional stream)
+				  (princ x stream)
+				  (write-string "|" stream)
+				  (write-line "" stream)
+				  (fresh-line stream)
+				  (terpri stream))
+				(princ (with-output-to-string (*standard-output*)
+				  (emit "a")
+				  (print 1 nil)))
+				(princ "-")
+				(emit "b")""")).isEqualTo("a|\n\n1\n-b|"); // compileAndRun strips the
+															// trailing newlines
+	}
+
+	@Test
+	void readLinesInLoop() throws Exception {
+		String file = tempDir.resolve("loop.txt").toString().replace("\\", "\\\\");
+		assertThat(compileAndRun("""
+				(with-open-file (out "%s" :direction :output)
+				  (write-line "a" out)
+				  (write-line "b" out)
+				  (write-line "c" out))
+				(with-open-file (in "%s")
+				  (setq line (read-line in))
+				  (while line
+				    (princ line)
+				    (setq line (read-line in))))
+				""".formatted(file, file))).isEqualTo("abc");
+	}
+
+	@Test
+	void withOpenFileBinaryRoundTrip() throws Exception {
+		String file = tempDir.resolve("bin.dat").toString().replace("\\", "\\\\");
+		assertThat(compileAndRun("""
+				(with-open-file (out "%s" :direction :output :element-type '(unsigned-byte 8))
+				  (write-byte 0 out)
+				  (write-byte 10 out)
+				  (write-byte 34 out)
+				  (write-byte 255 out))
+				(with-open-file (in "%s" :element-type '(unsigned-byte 8))
+				  (print (read-byte in))
+				  (print (read-byte in))
+				  (print (read-byte in))
+				  (print (read-byte in))
+				  (print (read-byte in nil nil)))
+				""".formatted(file, file))).isEqualTo("0\n10\n34\n255\nNIL");
+	}
+
+	@Test
+	void readByteEofValueReturned() throws Exception {
+		String file = tempDir.resolve("eofv.dat").toString().replace("\\", "\\\\");
+		assertThat(compileAndRun("""
+				(with-open-file (out "%s" :direction :output :element-type '(unsigned-byte 8)))
+				(with-open-file (in "%s" :element-type '(unsigned-byte 8))
+				  (print (read-byte in nil -1)))
+				""".formatted(file, file))).isEqualTo("-1");
+	}
+
+	@Test
+	void binaryStandardStreamsAreByteTransparent() throws Exception {
+		// The compiled twin of
+		// LispEvaluatorTest#evalBinaryStandardStreamsAreByteTransparent:
+		// a NUL, a high byte and a newline survive stdin -> stdout unchanged, and the
+		// trailing 'z' (no newline after it) is what pins the end-of-main flush -- an
+		// auto-flushing PrintStream drains a single-byte write only on '\n'.
+		byte[] octets = { 'h', 'i', 0, (byte) 0xE6, (byte) 0x97, (byte) 0xA5, (byte) 0xFF, '\n', 'z' };
+		assertThat(compileAndRunBinary("""
+				(let ((b (read-byte *standard-input* nil nil)))
+				  (while b
+				    (write-byte b *standard-output*)
+				    (setq b (read-byte *standard-input* nil nil))))
+				""", octets)).isEqualTo(octets);
+	}
+
+	@Test
+	void binaryStandardStreamDesignators() throws Exception {
+		assertThat(compileAndRunBinary("""
+				(setq buf (make-array 4 :initial-element 0))
+				(setq filled (read-sequence buf t))
+				(write-byte 62 nil)
+				(write-sequence buf t :end filled)
+				(write-byte 60 *standard-output*)
+				(print (read-byte *standard-input* nil :eof))
+				""", new byte[] { 65, 66, 67 })).isEqualTo(">ABC<:EOF\n".getBytes(StandardCharsets.UTF_8));
+	}
+
+	@Test
+	void aNumericStreamHandleIsNeverAStandardStream() throws Exception {
+		// The table reserves handles 0/1/2 only for a program that names
+		// *error-output*, so here the string stream IS handle 0 and the file handle 1.
+		// A byte helper that read 0 as standard input or wrote 1 to standard output
+		// would hijack both -- which is what it did to cl-postgres' handshake, whose
+		// socket is the first stream its program opens.
+		String file = tempDir.resolve("handles.dat").toString().replace("\\", "\\\\");
+		assertThat(compileAndRun("""
+				(print (with-output-to-string (s) (princ "captured" s)))
+				(with-open-file (out "%s" :direction :output :element-type '(unsigned-byte 8))
+				  (write-byte 65 out)
+				  (write-byte 66 out))
+				(with-open-file (in "%s" :element-type '(unsigned-byte 8))
+				  (print (read-byte in))
+				  (print (read-byte in))
+				  (print (read-byte in nil :eof)))
+				""".formatted(file, file))).isEqualTo("\"captured\"\n65\n66\n:EOF");
+	}
+
+	/** Runs a compiled program over RAW stdin bytes and answers its raw stdout bytes. */
+	private byte[] compileAndRunBinary(String lispCode, byte[] stdin) throws Exception {
+		List<LispVal> program = LispReader.readAllFromString(lispCode);
+		JvmLispCompiler compiler = new JvmLispCompiler("Test");
+		Path classFile = tempDir.resolve("Test.class");
+		Files.write(classFile, compiler.compile(program));
+		try (URLClassLoader loader = new URLClassLoader(new URL[] { tempDir.toUri().toURL() },
+				ClassLoader.getSystemClassLoader())) {
+			Method main = loader.loadClass("Test").getMethod("main", String[].class);
+			ByteArrayOutputStream baos = new ByteArrayOutputStream();
+			try (var _ = ThreadStdio.out(baos); var _ = ThreadStdio.in(new ByteArrayInputStream(stdin))) {
+				main.invoke(null, (Object) new String[0]);
+			}
+			return baos.toByteArray();
+		}
+	}
+
+	@Test
+	void writeByteReturnsByte() throws Exception {
+		String file = tempDir.resolve("wb.dat").toString().replace("\\", "\\\\");
+		assertThat(compileAndRun("""
+				(with-open-file (out "%s" :direction :output :element-type '(unsigned-byte 8))
+				  (print (write-byte 65 out)))
+				""".formatted(file))).isEqualTo("65");
+	}
+
+	@Test
+	void readWriteSequenceRoundTrip() throws Exception {
+		String file = tempDir.resolve("seq.dat").toString().replace("\\", "\\\\");
+		assertThat(compileAndRun("""
+				(setq buf (make-array 4))
+				(setf (aref buf 0) 65)
+				(setf (aref buf 1) 0)
+				(setf (aref buf 2) 10)
+				(setf (aref buf 3) 34)
+				(with-open-file (out "%s" :direction :output :element-type '(unsigned-byte 8))
+				  (write-sequence buf out))
+				(setq buf2 (make-array 8 :initial-element 99))
+				(with-open-file (in "%s" :element-type '(unsigned-byte 8))
+				  (print (read-sequence buf2 in)))
+				(print (aref buf2 0))
+				(print (aref buf2 1))
+				(print (aref buf2 2))
+				(print (aref buf2 3))
+				(print (aref buf2 4))
+				""".formatted(file, file))).isEqualTo("4\n65\n0\n10\n34\n99");
+	}
+
+	@Test
+	void readWriteSequenceStartEnd() throws Exception {
+		String file = tempDir.resolve("se.dat").toString().replace("\\", "\\\\");
+		assertThat(compileAndRun("""
+				(setq buf (make-array 4))
+				(setf (aref buf 0) 1)
+				(setf (aref buf 1) 2)
+				(setf (aref buf 2) 3)
+				(setf (aref buf 3) 4)
+				(with-open-file (out "%s" :direction :output :element-type '(unsigned-byte 8))
+				  (write-sequence buf out :start 1 :end 3))
+				(setq buf2 (make-array 4 :initial-element 0))
+				(with-open-file (in "%s" :element-type '(unsigned-byte 8))
+				  (print (read-sequence buf2 in :start 2)))
+				(print (aref buf2 2))
+				(print (aref buf2 3))
+				""".formatted(file, file))).isEqualTo("4\n2\n3");
+	}
+
+	// The compile-path twin of
+	// LispEvaluatorTest#readAndWriteSequenceReadTheirKeywordTailTheWayALambdaListDoes.
+	@Test
+	void compileAndRunReadAndWriteSequenceKeywordTails() throws Exception {
+		assertThat(compileAndRunExpanded("""
+				(defmacro pe (form) `(handler-case ,form (program-error () :program-error)))
+				(print (list (let ((s (copy-seq "     ")))
+				               (with-input-from-string (is "abcdefghijk")
+				                 (list (read-sequence s is :allow-other-keys t :foo 'bar) s)))
+				             (let ((s (copy-seq "     ")))
+				               (with-input-from-string (is "abcdefghijk")
+				                 (list (read-sequence s is :end 5 :end 3 :start 0 :start 1) s)))
+				             (pe (read-sequence (make-string 5) (make-string-input-stream "abc") :foo 1))
+				             (with-output-to-string (os)
+				               (write-sequence "abcde" os :start 1 :end 4 :start 3 :allow-other-keys t :x 1))
+				             (pe (write-sequence "abcde" (make-string-output-stream) :foo 1))))
+				""")).isEqualTo("((5 \"abcde\") (5 \"abcde\") :PROGRAM-ERROR \"bcd\" :PROGRAM-ERROR)");
+	}
+
+	// The compile-path twin of
+	// LispEvaluatorTest#readAndWriteSequenceMoveTheElementTheStreamCarries.
+	@Test
+	void compileAndRunReadAndWriteSequenceMoveTheElementTheStreamCarries() throws Exception {
+		String dir = this.tempDir.toString().replace("\\", "\\\\");
+		assertThat(compileAndRunExpanded("""
+				(print (let ((v (vector nil nil nil nil nil)))
+				         (with-input-from-string (is "abc") (list (read-sequence v is :start 1) v))))
+				(print (let ((l (make-list 5)))
+				         (with-input-from-string (is "abcdefg") (list (read-sequence l is :start 1 :end 4) l))))
+				(print (let ((f (make-array 10 :initial-element nil :fill-pointer 3)))
+				         (with-input-from-string (is "xyz!") (list (read-sequence f is) f))))
+				(print (with-output-to-string (os)
+				         (write-sequence (vector #\\a #\\b #\\c) os :start 1)
+				         (write-sequence (list #\\d #\\e #\\f) os :end 2)))
+				(with-open-file (o "%1$s/rs.dat" :direction :output :element-type '(unsigned-byte 8)
+				                 :if-exists :supersede)
+				  (write-sequence (list 1 2 3) o))
+				(print (with-open-file (i "%1$s/rs.dat" :element-type '(unsigned-byte 8))
+				         (let ((v (make-array 3 :initial-element 0)) (l (make-list 2)))
+				           (list (read-sequence v i :end 1) v (read-sequence l i) l))))
+				""".formatted(dir))).isEqualTo("""
+				(4 #(NIL #\\a #\\b #\\c NIL))
+				(4 (NIL #\\a #\\b #\\c NIL))
+				(3 #(#\\x #\\y #\\z))
+				"bcde"
+				(1 #(1 0 0) 2 (2 3))""");
+	}
+
+	// A program using the Gray protocol reaches every read-sequence / write-sequence
+	// through gray.lisp's dispatchers, which must hand the built-in the stream VALUE --
+	// its kind is what says "string stream" -- not the resolved handle (the ci-spec
+	// corpus went red on exactly this).
+	@Test
+	void compileAndRunAStringStreamPicksTheElementThroughTheGrayDispatchers() throws Exception {
+		assertThat(compileAndRunGray(
+				"""
+						(defclass upcaser (rontolisp:fundamental-character-output-stream) ())
+						(defmethod rontolisp:stream-write-string ((s upcaser) str &optional start end) (declare (ignore start end)) str)
+						(print (let ((l (make-list 3)))
+						         (with-input-from-string (is "abc") (list (read-sequence l is) l))))
+						(print (with-output-to-string (os) (write-sequence (vector #\\x #\\y) os)))
+						"""))
+			.isEqualTo("(3 (#\\a #\\b #\\c))\n\"xy\"");
+	}
+
+	// A NARROWED site (a let-bound byte buffer) in a program that opens a wide stream:
+	// its packed arm moves raw octets, so it must be guarded by %wide-width like every
+	// other site. The narrowing pass sees only the top-level forms -- never the spliced
+	// %wide-width defun -- so it has to be told the program is wide, or an
+	// (unsigned-byte 16) stream read into an octet buffer answered its raw octets (1 0)
+	// where the interpreter answers the elements (1 2).
+	@Test
+	void compileAndRunANarrowedSiteKeepsTheWideGuard() throws Exception {
+		String file = this.tempDir.resolve("w16.dat").toString().replace("\\", "\\\\");
+		assertThat(compileAndRunExpanded("""
+				(with-open-file (o "%1$s" :direction :output :element-type '(unsigned-byte 16)
+				                 :if-exists :supersede)
+				  (write-byte 1 o)
+				  (write-byte 2 o))
+				(let ((buf (make-array 2 :element-type '(unsigned-byte 8) :initial-element 9)))
+				  (with-open-file (s "%1$s" :element-type '(unsigned-byte 16))
+				    (print (list (read-sequence buf s) buf))))
+				""".formatted(file))).isEqualTo("(2 #(1 2))");
+	}
+
+	@Test
+	void readWriteSequenceOverLetBoundByteBuffersTakesTheByteArm() throws Exception {
+		// compiler/SequenceIoNarrowing: a let-bound non-string buffer
+		// skips the runtime stringp test and the character arm. The element stores
+		// below do not stand the narrowing down (they rebind nothing), while the
+		// string buffer over a character stream keeps the shared expansion -- both
+		// spellings in one program.
+		String file = tempDir.resolve("nb.dat").toString().replace("\\", "\\\\");
+		String chars = tempDir.resolve("nc.txt").toString().replace("\\", "\\\\");
+		assertThat(compileAndRun("""
+				(with-open-file (out "%s" :direction :output :element-type '(unsigned-byte 8))
+				  (let ((buf (make-array 4 :element-type '(unsigned-byte 8))))
+				    (setf (aref buf 0) 65)
+				    (setf (aref buf 1) 66)
+				    (setf (aref buf 2) 67)
+				    (setf (aref buf 3) 68)
+				    (write-sequence buf out)))
+				(let ((buf2 (make-array 4 :element-type '(unsigned-byte 8) :initial-element 0)))
+				  (with-open-file (in "%s" :element-type '(unsigned-byte 8))
+				    (print (read-sequence buf2 in)))
+				  (print (aref buf2 0))
+				  (print (aref buf2 3)))
+				(with-open-file (out "%s" :direction :output)
+				  (write-string "AB" out))
+				(let ((s (make-string 2 :initial-element #\\A)))
+				  (with-open-file (in "%s")
+				    (print (read-sequence s in)))
+				  (print s))
+				""".formatted(file, file, chars, chars))).isEqualTo("4\n65\n68\n2\n\"AB\"");
+	}
+
+	@Test
+	void readWriteSequencePackedBuffersMoveRawLittleEndianElements() throws Exception {
+		// The _readSeqPacked / _writeSeqPacked helpers (.kb/binary-sequence-io.md): a
+		// packed float array of any rank and a packed (unsigned-byte 8|16|32) vector move
+		// as raw little-endian elements in one bulk transfer; a general vector still
+		// receives one byte per element.
+		String file = tempDir.resolve("pk.dat").toString().replace("\\", "\\\\");
+		assertThat(compileAndRun(
+				"""
+						(with-open-file (out "%s" :direction :output :element-type '(unsigned-byte 8))
+						  (write-sequence #f(1.5 -2.25 3.0e10) out)
+						  (write-sequence #d((0.5 -0.0) (0.1 42.0)) out)
+						  (write-sequence (make-array 3 :element-type '(unsigned-byte 16) :initial-contents '(1 65535 258)) out)
+						  (write-sequence (make-array 2 :element-type '(unsigned-byte 32) :initial-contents '(65536 4294967295)) out))
+						(with-open-file (in "%s" :element-type '(unsigned-byte 8))
+						  (let ((f (make-array 3 :element-type 'single-float :initial-element 0.0))
+						        (d (make-array '(2 2) :element-type 'double-float :initial-element 0.0))
+						        (u16 (make-array 3 :element-type '(unsigned-byte 16)))
+						        (u32 (make-array 2 :element-type '(unsigned-byte 32))))
+						    (print (list (read-sequence f in) (read-sequence d in) (read-sequence u16 in) (read-sequence u32 in)))
+						    (print f) (print d) (print u16) (print u32)))
+						(with-open-file (in "%s" :element-type '(unsigned-byte 8))
+						  (let ((b (make-array 4 :element-type '(unsigned-byte 8))))
+						    (read-sequence b in)
+						    (print b)))
+						(with-open-file (in "%s" :element-type '(unsigned-byte 8))
+						  (let ((f (make-array 6 :element-type 'single-float :initial-element 9.0)))
+						    (print (read-sequence f in :start 1 :end 3))
+						    (print f)))
+						(with-open-file (in "%s" :element-type '(unsigned-byte 8))
+						  (let ((g (make-array 4)))
+						    (print (read-sequence g in))
+						    (print g)))
+						"""
+					.formatted(file, file, file, file, file)))
+			.isEqualTo(
+					"(3 4 3 2)\n#f(1.5 -2.25 3.0e10)\n#d((0.5 -0.0) (0.1 42.0))\n#(1 65535 258)\n#(65536 4294967295)\n#(0 0 192 63)\n3\n#f(9.0 1.5 -2.25 9.0 9.0 9.0)\n4\n#(0 0 192 63)");
+	}
+
+	@Test
+	void readSequenceOverACharacterBufferDecodesABlockAtATime() throws Exception {
+		// The _readSeqChars helper (.kb/character-sequence-io.md): the character arm of
+		// read-sequence moves a block of UTF-16 units per read and must answer exactly
+		// what the per-character loop answered -- one code point per slot whatever its
+		// encoded width, a surrogate pair split by the end of the block completed rather
+		// than lost, :start/:end honoured, and the stream left exactly where the last
+		// character ended. The 8,191 leading characters put the non-BMP one ON the
+		// 8,192-unit block boundary, which is the case the block read can get wrong.
+		// Since the loop answers the same characters, what proves the block arm took the
+		// read is its protocol state, not a clock: the expansion routes a read-sequence
+		// that may see characters through _readSeqChars, and the primitive answers this
+		// buffer and stream with a fill position where a decline would answer NIL.
+		String file = tempDir.resolve("cs.txt").toString().replace("\\", "\\\\");
+		assertThat(compileAndRun("""
+				(with-open-file (out "%s" :direction :output :if-exists :supersede)
+				  (write-string (make-string 8191 :initial-element #\\x) out)
+				  (write-string (concatenate 'string (string (code-char 128512)) "a"
+				                             (string (code-char 12354)) "b")
+				                out))
+				(with-open-file (in "%s")
+				  (let ((buf (make-string 8196 :initial-element #\\.)))
+				    (print (read-sequence buf in))
+				    (print (list (char-code (char buf 8190)) (char-code (char buf 8191))
+				                 (char buf 8192) (char-code (char buf 8193)) (char buf 8194)
+				                 (char buf 8195)))))
+				(with-open-file (in "%s")
+				  (let ((head (make-string 3 :initial-element #\\.))
+				        (tail (make-string 5 :initial-element #\\.)))
+				    (print (read-sequence head in))
+				    (print (read-sequence tail in :start 1 :end 4))
+				    (print (list head tail))
+				    (print (%%read-sequence-chars (make-string 2) in 0 nil))))
+				""".formatted(file, file, file)))
+			.isEqualTo("8195\n(120 128512 #\\a 12354 #\\b #\\.)\n3\n4\n(\"xxx\" \".xxx.\")\n2");
+		assertThat(ownCallsIn(compileToBytes("""
+				(defun fill-chars (buf in) (read-sequence buf in))
+				(print (fill-chars (make-string 1) *standard-input*))
+				"""), "FILL-CHARS", "_readSeqChars")).isOne();
+	}
+
+	@Test
+	void openNonLiteralElementTypeThrows() {
+		String file = tempDir.resolve("nl.dat").toString().replace("\\", "\\\\");
+		assertThatThrownBy(() -> compileAndRun("(open \"" + file + "\" :input (list 'unsigned-byte 8))"))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("element type");
+	}
+
+	@Test
+	void aBignumLiteralIsBuiltOnceAndLoadedFromAField() throws Exception {
+		// A BigInteger is immutable, so every use of one literal is the same value: the
+		// compiler interns it into a static field built once in <clinit> and each use
+		// site is a GETSTATIC, not a fresh allocation plus a decimal-string parse. Two
+		// uses of the SAME literal share one field; a second, different literal gets its
+		// own.
+		String source = """
+				(defun mask (x) (logand x 18446744073709551615))
+				(defun mask2 (x) (logand x 18446744073709551615))
+				(print (mask 12345678901234567890))
+				(print (mask2 99999999999999999999))
+				""";
+		byte[] classBytes = compileToBytes(source);
+		assertThat(bignumPoolFieldNames(classBytes)).containsExactly("_bi$0", "_bi$1", "_bi$2");
+		assertThat(compileAndRun(source)).isEqualTo("""
+				12345678901234567890
+				7766279631452241919""");
+	}
+
+	@Test
+	void aProgramWithoutABignumLiteralGetsNoPool() throws Exception {
+		// The pool must not perturb a program that has no bignum literal: no
+		// field, and no pool byte anywhere in the class. No <clinit> assertion:
+		// this program still gets one, but from the canonical function-value
+		// table (f94 fills _funcrefs there), not from the pool -- the pool's
+		// half of <clinit> is empty and mints no constant.
+		byte[] classBytes = compileToBytes("(print (+ 1 2))");
+		assertThat(bignumPoolFieldNames(classBytes)).isEmpty();
+		assertThat(countOccurrences(classBytes, "_bi$")).isZero();
+	}
+
+	private byte[] compileToBytes(String lispCode) {
+		return new JvmLispCompiler("Test")
+			.compile(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString(lispCode)));
+	}
+
+	// The pooled bignum field names, in emission order, read back off the class file
+	// through the class loader (the fields are private static, so reflection sees them).
+	private List<String> bignumPoolFieldNames(byte[] classBytes) throws Exception {
+		Path dir = Files.createDirectories(this.tempDir.resolve("pool"));
+		Files.write(dir.resolve("Test.class"), classBytes);
+		try (URLClassLoader loader = new URLClassLoader(new URL[] { dir.toUri().toURL() },
+				ClassLoader.getSystemClassLoader())) {
+			return java.util.Arrays.stream(loader.loadClass("Test").getDeclaredFields())
+				.filter(f -> f.getName().startsWith("_bi$"))
+				.map(java.lang.reflect.Field::getName)
+				.toList();
+		}
+	}
+
+	private static int countOccurrences(byte[] classBytes, String needle) {
+		byte[] pattern = needle.getBytes(StandardCharsets.UTF_8);
+		int count = 0;
+		outer: for (int i = 0; i + pattern.length <= classBytes.length; i++) {
+			for (int j = 0; j < pattern.length; j++) {
+				if (classBytes[i + j] != pattern[j]) {
+					continue outer;
+				}
+			}
+			count++;
+		}
+		return count;
+	}
+
+	@Test
+	void compileAndRunFeaturesIsAnOrdinarySpecialVariable() throws Exception {
+		// *features* is a VARIABLE on this backend too: seeded with the set the frontend
+		// read the program with, pushed onto and bound like any other special. The
+		// reader used to substitute the symbol with the quoted list, which made every
+		// push a no-op -- and in a BINDING position put a cons where the variable name
+		// goes, so clack:clackup's (let* ((*features* (cons :clackup *features*))) ...)
+		// failed to compile at all.
+		assertThat(compileAndRun("(print (car *features*))")).isEqualTo(":RONTOLISP");
+		assertThat(
+				compileAndRun("(pushnew :my-feature *features*)" + "(print (and (member :my-feature *features*) t))"))
+			.isEqualTo("T");
+		assertThat(compileAndRun("(defun f (a) (let ((*features* (cons :inner *features*))) (list a (car *features*))))"
+				+ "(print (f 1))(print (car *features*))"))
+			.isEqualTo("(1 :INNER)\n:RONTOLISP");
+		// ... and the binding is DYNAMIC, so it reaches a callee reading the variable
+		// -- the shape upstream uiop:featurep's own parameter list invites.
+		assertThat(compileAndRun("(defun g (&optional (fs *features*)) (car fs))"
+				+ "(print (let ((*features* '(:rebound))) (g)))(print (g))"))
+			.isEqualTo(":REBOUND\n:RONTOLISP");
+	}
+
+	@Test
+	void compileAndRunMultipleDefuns() throws Exception {
+		assertThat(compileAndRun("""
+				(defun double (x) (* x 2))
+				(defun add1 (x) (+ x 1))
+				(print (add1 (double 5)))
+				""")).isEqualTo("11");
+	}
+
+	@Test
+	void compileAndRunMultiPairSetqBuildsAClosureInALaterPair() throws Exception {
+		// setq takes place/value PAIRS, and a lambda in a pair after the first is a
+		// closure like any other. The free-variable walk used to look at the first pair
+		// only, so every later pair's captures went unrecorded: this printed 0 (the
+		// closure wrote a copy) instead of 42. cl-json's set-custom-vars expands to a
+		// multi-pair setq whose values ARE lambdas, which is how json-rpc found it.
+		assertThat(compileAndRun("""
+				(defvar *a* nil)
+				(defvar *b* nil)
+				(defun f ()
+				  (let ((g 0))
+				    (setq *a* 1 *b* (lambda (v) (setq g v) nil))
+				    (funcall *b* 42)
+				    g))
+				(print (f))
+				""")).isEqualTo("42");
+	}
+
+	@Test
+	void compileAndRunSetqLambdaFactorial() throws Exception {
+		// Lisp-2: a recursive function must be defined with defun (a lambda bound by
+		// setq cannot refer to itself through the variable namespace in compiled code).
+		assertThat(compileAndRun("""
+				(defun fact (n) (if (<= n 1) 1 (* n (fact (- n 1)))))
+				(setq fact5 #'fact)
+				(print (funcall fact5 5))
+				""")).isEqualTo("120");
+	}
+
+	@Test
+	void compileAndRunMixedDefunAndSetqLambda() throws Exception {
+		assertThat(compileAndRun("""
+				(defun double (x) (* x 2))
+				(setq add1 (lambda (x) (+ x 1)))
+				(print (funcall add1 (double 5)))
+				""")).isEqualTo("11");
+	}
+
+	@Test
+	void compileAndRunFormatNestedConditionalClauses() throws Exception {
+		// A ~:[ nested inside another ~:[ clause, whose two clauses consume a different
+		// number of arguments -- expandFormat distributes the control string remainder
+		// over both branches. postmodern's deftable constraint strings end with this.
+		String deferrable = "~:[NOT DEFERRABLE~;DEFERRABLE INITIALLY ~:[IMMEDIATE~;DEFERRED~]~]";
+		assertThat(compileAndRun("(format t \"" + deferrable + "\" nil nil)")).isEqualTo("NOT DEFERRABLE");
+		assertThat(compileAndRun("(format t \"" + deferrable + "\" t nil)"))
+			.isEqualTo("DEFERRABLE INITIALLY IMMEDIATE");
+		assertThat(compileAndRun("(format t \"" + deferrable + "\" t t)")).isEqualTo("DEFERRABLE INITIALLY DEFERRED");
+		// A directive after the divergent conditional: each branch continues from its
+		// own argument position.
+		assertThat(compileAndRun("(format t \"[~:[x~;y~a~]|~a]\" nil \"P\" \"Q\")")).isEqualTo("[x|P]");
+		assertThat(compileAndRun("(format t \"[~:[x~;y~a~]|~a]\" t \"P\" \"Q\")")).isEqualTo("[yP|Q]");
+	}
+
+	@Test
+	void compileAndRunPrintOfACyclicInstanceGraphIsFinite() throws Exception {
+		// Two instances pointing at each other used to StackOverflowError the emitted
+		// _instToString: the default instance renderer had no cycle guard. An instance
+		// already on the current rendering path -- or past the 256-frame depth cap --
+		// prints as "#", CL's *print-level* cutoff marker, byte-identical to the
+		// interpreter (LispEvaluatorTest.evalPrintOfACyclicInstanceGraphIsFinite).
+		assertThat(compileAndRun("""
+				(defclass cyc () ((next :initform nil :accessor cyc-next)
+				                  (tag :initarg :tag :reader cyc-tag)))
+				(let ((p (make-instance 'cyc :tag 1)) (q (make-instance 'cyc :tag 2)))
+				  (setf (cyc-next p) q)
+				  (setf (cyc-next q) p)
+				  (print p)
+				  (princ p))
+				(terpri)
+				(defstruct knot next)
+				(let ((k (make-knot)))
+				  (setf (knot-next k) k)
+				  (prin1 k))
+				""")).isEqualTo("""
+				#<CYC :NEXT #<CYC :NEXT # :TAG 2> :TAG 1>
+				#<CYC :NEXT #<CYC :NEXT # :TAG 2> :TAG 1>
+				#S(KNOT :NEXT #)""");
+	}
+
+	@Test
+	void compileAndRunPrintOfACyclicConsIsFinite() throws Exception {
+		// A cons whose cdr chain re-enters itself used to loop the emitted
+		// _consToString without end; a car cycle overflowed the stack. The chain's
+		// cycle-start cell prints as the improper tail " . #" on its second arrival
+		// (every element exactly once), a cons or vector already on the current
+		// rendering path prints as "#" -- byte-identical to the interpreter
+		// (LispEvaluatorTest.evalPrintOfACyclicConsIsFinite).
+		assertThat(compileAndRun("""
+				(let ((x (list 1)))
+				  (setf (cdr x) x)
+				  (prin1 x)
+				  (terpri)
+				  (princ x))
+				(terpri)
+				(let ((x (list 1 2 3)))
+				  (setf (cdr (cdr (cdr x))) (cdr x))
+				  (prin1 x))
+				(terpri)
+				(let ((x (list 1 2)))
+				  (setf (car x) x)
+				  (prin1 x))
+				(terpri)
+				(let ((v (vector 1 2)))
+				  (setf (aref v 0) v)
+				  (prin1 v))
+				(terpri)
+				(let ((s (list 9)))
+				  (prin1 (list s s)))
+				""")).isEqualTo("""
+				(1 . #)
+				(1 . #)
+				(1 2 3 . #)
+				(# 2)
+				#(# 2)
+				((9) (9))""");
+	}
+
+	@Test
+	void compileAndRunPrintOfACyclicConsIsFiniteThroughTheWalks() throws Exception {
+		// With a print-object method defined the operators render through the
+		// %print-object-str walk; a program that binds *print-case* without methods
+		// renders through %print-cased. Both walks carry the same guard as the raw
+		// renderers, so the text is identical.
+		assertThat(compileAndRun("""
+				(defclass tagged () ())
+				(defmethod print-object ((o tagged) s) (write-string "#<TAGGED>" s))
+				(let ((x (list 1 (make-instance 'tagged))))
+				  (setf (cdr (cdr x)) x)
+				  (prin1 x))
+				""")).isEqualTo("(1 #<TAGGED> . #)");
+		assertThat(compileAndRun("""
+				(let ((*print-case* :downcase))
+				  (let ((x (list 'a)))
+				    (setf (cdr x) x)
+				    (prin1 x)))
+				""")).isEqualTo("(a . #)");
+	}
+
+	@Test
+	void compileAndRunPrintCase() throws Exception {
+		// *print-case* converts the case of every SYMBOL the printer spells, on the
+		// compile path as on the interpreter (the shared %print-cased renderer, spliced
+		// because the program mentions the variable). Values verified against SBCL 2.2.9.
+		assertThat(compileAndRun("""
+				(dolist (m (list :upcase :downcase :capitalize))
+				  (let ((*print-case* m))
+				    (princ (princ-to-string 'add-test)) (princ "|")
+				    (princ (prin1-to-string '(foo "Str" nil t 1))) (princ "|")
+				    (princ (write-to-string (vector 'a 'b))) (terpri)))
+				(let ((*print-case* :downcase))
+				  (princ (format nil "~a ~s ~a" 'foo :foo (princ-to-string nil))) (terpri)
+				  (princ 'foo) (princ "|") (prin1 :foo) (terpri))
+				(let ((*print-case* :capitalize))
+				  (princ (princ-to-string (intern "*FOO*"))) (princ "|")
+				  (princ (princ-to-string (intern "foo-BAR"))) (terpri))
+				""")).isEqualTo("""
+				ADD-TEST|(FOO "Str" NIL T 1)|#(A B)
+				add-test|(foo "Str" nil t 1)|#(a b)
+				Add-Test|(Foo "Str" Nil T 1)|#(A B)
+				foo :foo nil
+				foo|:foo
+				*Foo*|foo-Bar""");
+	}
+
+	@Test
+	void compileAndRunPrintControls() throws Exception {
+		// *print-length* / *print-level* / *print-gensym* / *print-base* / *print-radix*
+		// are honored on the compile path through the same shared %print-cased walk
+		// *print-case* rides, spliced because the program mentions one of them; write
+		// and write-to-string accept the keyword that binds each. Values verified
+		// against SBCL 2.2.9 (the 'x abbreviation is transparent to *print-level*).
+		assertThat(compileAndRun("""
+				(let ((*print-length* 3))
+				  (princ (prin1-to-string '(1 2 3 4 5 6))) (princ "|")
+				  (princ (prin1-to-string '(1 2 3 . 4))) (princ "|")
+				  (princ (prin1-to-string '(1 2 3 4 . 5))) (princ "|")
+				  (princ (prin1-to-string (vector 1 2 3 4))) (princ "|")
+				  (princ (prin1-to-string '(a (b c d e) (f)))) (terpri))
+				(let ((*print-level* 1))
+				  (princ (prin1-to-string (list 1 '(2) (vector 3)))) (princ "|")
+				  (princ (prin1-to-string '(a 'b #'c))) (princ "|")
+				  (princ (prin1-to-string '(a '(b)))) (princ "|")
+				  (princ (prin1-to-string ''(b))) (terpri))
+				(let ((*print-level* 0) (*print-length* 0))
+				  (princ (prin1-to-string '(1))) (princ "|")
+				  (princ (prin1-to-string 'a)) (princ "|")
+				  (princ (prin1-to-string (vector 1))) (terpri))
+				(let ((*print-gensym* nil))
+				  (princ (prin1-to-string (list (make-symbol "G114")))) (princ "|")
+				  (princ (princ-to-string (make-symbol "G114"))) (terpri))
+				(let ((*print-base* 16))
+				  (princ (prin1-to-string (list 255 -255 1/255 1.5 "ff"))) (princ "|")
+				  (let ((*print-radix* t)) (princ (prin1-to-string (list 255 1/255)))) (terpri))
+				(let ((*print-radix* t))
+				  (princ (prin1-to-string (list 255 1/2))) (princ "|")
+				  (let ((*print-base* 2)) (princ (prin1-to-string -5))) (princ "|")
+				  (let ((*print-base* 8)) (princ (prin1-to-string 8))) (princ "|")
+				  (let ((*print-base* 36)) (princ (prin1-to-string 255))) (terpri))
+				(write '(foo "Bar" #\\c) :case :downcase :length 2) (princ "|")
+				(write 255 :base 2 :radix t) (princ "|")
+				(write (list 1 (list 2 (list 3))) :level 2 :length 1) (princ "|")
+				(princ (write-to-string '(1 2 3 4) :length 2)) (princ "|")
+				(princ (write-to-string "hi" :escape nil)) (princ "|")
+				(princ (write-to-string 'foo :case :downcase :escape nil)) (princ "|")
+				(princ (write-to-string (make-symbol "G1") :gensym nil)) (terpri)
+				(let ((*print-length* 1)) (princ (format nil "~s ~a" '(1 2) '(3 4)))) (terpri)
+				""")).isEqualTo("""
+				(1 2 3 ...)|(1 2 3 . 4)|(1 2 3 ...)|#(1 2 3 ...)|(A (B C D ...) (F))
+				(1 # #)|(A 'B #'C)|(A '#)|'(B)
+				#|A|#
+				(G114)|G114
+				(FF -FF 1/FF 1.5 "ff")|(#xFF #x1/FF)
+				(255. #10r1/2)|#b-101|#o10|#36r73
+				(foo "Bar" ...)|#b11111111|(1 ...)|(1 2 ...)|hi|foo|G1
+				(1 ...) (3 ...)""");
+		// A program with a print-object method walks through %print-object-str
+		// instead, which carries the same truncation.
+		assertThat(compileAndRun("""
+				(defclass tagged () ())
+				(defmethod print-object ((o tagged) s) (write-string "#<TAGGED>" s))
+				(let ((*print-length* 1)) (prin1 (list (make-instance 'tagged) 2)))
+				(let ((*print-level* 1)) (prin1 (list (make-instance 'tagged) (list 2))))
+				""")).isEqualTo("(#<TAGGED> ...)(#<TAGGED> #)");
+	}
+
+	@Test
+	void compileAndRunErrorOutputInsideALambda() throws Exception {
+		// The standard stream variables are GLOBAL, not lexicals a lambda captures:
+		// postmodern's generate-prepared reports its reconnect with
+		// (format *error-output* ...) from inside a handler-bind handler, which used to
+		// fail the compile with "Cannot capture variable: *ERROR-OUTPUT*". The report
+		// lands on standard ERROR (the designator's default), not on standard output.
+		assertThat(compileAndRunCapturingErr("""
+				(defun report (f) (funcall f "x"))
+				(report (lambda (m) (format *error-output* "seen ~a" m)))
+				""")).isEqualTo("seen x");
+	}
+
+	@Test
+	void compileAndRunDefunClosingOverAWithMutexLock() throws Exception {
+		// with-mutex puts a VALUE in its one-element spec, the opposite of the with-*
+		// stream macros, so FreeVarAnalyzer has to expand it before it can see that the
+		// defun captures the top-level let's lock. postmodern's prepare.lisp guards its
+		// statement-id counter exactly this way.
+		assertThat(compileAndRun("""
+				(let ((n 0) (lock (rontolisp:make-mutex)))
+				  (defun next-id () (rontolisp:with-mutex (lock) (setf n (1+ n)) n)))
+				(next-id)
+				(print (next-id))
+				""")).isEqualTo("2");
+	}
+
+	@Test
+	void compileAndRunConcatenateAsFunctionValue() throws Exception {
+		assertThat(compileAndRun("(print (apply #'concatenate '(vector (unsigned-byte 8)) (list #(1) #(2 3))))"))
+			.isEqualTo("#(1 2 3)");
+		assertThat(compileAndRun("(print (apply #'concatenate 'list (list '(1) '(2 3))))")).isEqualTo("(1 2 3)");
+		assertThat(compileAndRun("(print (apply #'concatenate 'string (list \"a\" \"b\")))")).isEqualTo("\"ab\"");
+	}
+
+	@Test
+	void compileAndRunARedefinedDefunKeepsTheLastDefinition() throws Exception {
+		// A class may not hold two methods of the same name and descriptor, so a
+		// redefined defun (fast-http redefines 11 struct readers as plain defuns)
+		// emits only its LAST definition -- which every by-name call resolves to
+		// anyway on the compile backends.
+		assertThat(compileAndRun("""
+				(defun f (x) x)
+				(defun f (x) (+ x 1))
+				(print (f 41))
+				""")).isEqualTo("42");
+	}
+
+	@Test
+	void compileAndRunABranchSpanningPastTheSigned16BitOffset() throws Exception {
+		// A single if whose then-branch outgrows the signed 16-bit branch offset:
+		// fast-http's generated parse-header-field-and-value state machine is the
+		// real-world shape (36 KB body). The relaxation pass rewrites each
+		// out-of-range branch as an inverted-condition short branch over a goto_w
+		// (.kb/jvm-method-size-limits.md); a method with only in-range branches keeps
+		// byte-identical output.
+		StringBuilder wide = new StringBuilder();
+		for (int i = 0; i < 2800; i++) {
+			wide.append("(setq acc (+ acc 1))");
+		}
+		String program = """
+				(defun big (flag)
+				  (let ((acc 0))
+				    (if flag (progn %s acc) -1)))
+				(print (list (big t) (big nil)))
+				""".formatted(wide);
+		assertThat(compileAndRun(program)).isEqualTo("(2800 -1)");
+	}
+
+	@Test
+	void compileAndRunCoerceKeepsThePackedElementType() throws Exception {
+		// coerce reads the SAME result-type designator concatenate does, so a packed
+		// element type means a packed vector there too. Both routes are exercised: a
+		// LITERAL sequence, which PureBuiltinFolder reduces to the packed literal at
+		// compile time, and one behind a function parameter, which goes through the
+		// injected %seq-int-vector at run time. They must agree.
+		assertThat(compileAndRun("""
+				(defun %id (x) x)
+				(let ((v (coerce '(1 2 260) '(vector (unsigned-byte 8)))))
+				  (print (list (array-element-type v) (typep v '(simple-array (unsigned-byte 8) (*))) v)))
+				(let ((v (coerce (%id '(1 2 260)) '(vector (unsigned-byte 8)))))
+				  (print (list (array-element-type v) (typep v '(simple-array (unsigned-byte 8) (*))) v)))
+				(print (array-element-type (coerce #(1) '(simple-array (unsigned-byte 16) (*)))))
+				(print (array-element-type (coerce '(1) '(vector (unsigned-byte 32) *))))
+				(print (array-element-type (coerce '(1 2) '(simple-vector 2))))
+				(print (array-element-type (coerce '(1 2) 'vector)))
+				""")).isEqualTo("""
+				((UNSIGNED-BYTE 8) T #(1 2 4))
+				((UNSIGNED-BYTE 8) T #(1 2 4))
+				(UNSIGNED-BYTE 16)
+				(UNSIGNED-BYTE 32)
+				T
+				T""");
+	}
+
+	@Test
+	void compileAndRunCoerceAndConcatenateKeepThePackedFloatElementType() throws Exception {
+		// The packed families are a closed code space and the float widths are members of
+		// it, so the very same designator rule builds the packed FLOAT array here -- and
+		// a source that is ALREADY packed at another width converts rather than being
+		// answered unchanged, which is what dropping the element type looked like from
+		// that direction. bfloat16 is on this backend, so all three widths
+		// run; only wasm refuses one.
+		assertThat(compileAndRun("""
+				(defun %id (x) x)
+				(let ((v (coerce (%id '(1 2)) '(vector single-float))))
+				  (print (list (array-element-type v) (typep v '(simple-array single-float (*))) v)))
+				(print (coerce (%id '(1.0 2.5)) '(simple-array double-float (*))))
+				(print (coerce (%id #f(1.0 -2.0 0.5)) '(array bfloat16)))
+				(print (coerce (%id #bf16(1.0 2.0)) '(vector single-float)))
+				(print (concatenate '(vector single-float) '(1.0 2.0) #(3.0)))
+				(print (array-element-type (concatenate '(simple-array double-float (*)) #d(1.0))))
+				(print (funcall #'concatenate '(vector single-float) '(1.0) '(2.0)))
+				(print (array-element-type (apply #'concatenate '(array bfloat16) (list '(1.0)))))
+				(print (array-element-type (funcall #'concatenate '(vector (unsigned-byte 8)) '(1))))
+				(print (array-element-type (funcall #'concatenate 'vector '(1))))
+				""")).isEqualTo("""
+				(SINGLE-FLOAT T #f(1.0 2.0))
+				#d(1.0 2.5)
+				#bf16(1.0 -2.0 0.5)
+				#f(1.0 2.0)
+				#f(1.0 2.0 3.0)
+				DOUBLE-FLOAT
+				#f(1.0 2.0)
+				BFLOAT16
+				(UNSIGNED-BYTE 8)
+				T""");
+	}
+
+	@Test
+	void compileAndRunCoerceAndConcatenateToVectorCharacterBuildAString() throws Exception {
+		// (vector character) names the same representation make-array builds for the
+		// element type -- a mutable string -- so coerce/concatenate answer a value that
+		// IS a string, not a general vector that merely holds characters.
+		assertThat(compileAndRun("""
+				(defun %id (x) x)
+				(let ((v (coerce (%id '(#\\a #\\b)) '(vector character))))
+				  (print (list (array-element-type v) (typep v '(simple-array character (*))) (stringp v) v)))
+				(print (concatenate '(vector character) "ab" (%id '(#\\c))))
+				(print (array-element-type (concatenate '(vector character) "ab")))
+				(print (funcall #'concatenate '(vector character) "ab" '(#\\c)))
+				(print (array-element-type (apply #'concatenate '(vector character) (list "ab"))))
+				""")).isEqualTo("""
+				(CHARACTER T T "ab")
+				"abc"
+				CHARACTER
+				"abc"
+				CHARACTER""");
+	}
+
+	@Test
+	void compileAndRunTheLoweredOnlyBuiltinsAsFunctionValues() throws Exception {
+		// The sweep: every CL FUNCTION the expression compiler lowers in operator
+		// position must also have a wrapper, or #'name is undefined here while the
+		// interpreter answers. Each of these used to be "The function NAME is
+		// undefined" on all four backends.
+		assertThat(compileAndRun(LoweredBuiltinValues.PROGRAM)).isEqualTo(LoweredBuiltinValues.OUTPUT);
+	}
+
+	@Test
+	void compileAndRunStringCaseOpsAreFullUnicodeAndLengthPreserving() throws Exception {
+		// Same contract as the interpreter: char-upcase / char-downcase per character,
+		// so sharp s stays one character and a final sigma is not context-folded.
+		assertThat(compileAndRun("(princ (string-downcase \"ÉΛΩ\"))")).isEqualTo("éλω");
+		assertThat(compileAndRun("(princ (string-upcase \"éλω\"))")).isEqualTo("ÉΛΩ");
+		assertThat(compileAndRun("(princ (string-upcase \"straße\"))")).isEqualTo("STRAßE");
+		assertThat(compileAndRun("(princ (length (string-upcase \"straße\")))")).isEqualTo("6");
+		assertThat(compileAndRun("(princ (string-downcase \"ΑΣ\"))")).isEqualTo("ασ");
+		assertThat(compileAndRun("(princ (string-upcase \"𐐨𐐩\"))")).isEqualTo("𐐀𐐁");
+		assertThat(compileAndRun("(princ (string-downcase \"𐐀𐐁\"))")).isEqualTo("𐐨𐐩");
+		assertThat(compileAndRun("(princ (string-capitalize \"élan vital\"))")).isEqualTo("Élan Vital");
+		assertThat(compileAndRun("(princ (string-capitalize \"aあb 42x\"))")).isEqualTo("Aあb 42x");
+	}
+
+	@Test
+	void compileAndRunSubseqSignalsInvalidBounds() throws Exception {
+		// The JVM twin of LispEvaluatorTest#subseqSignalsInvalidBoundsOnEveryBackend: a
+		// raw StringIndexOutOfBoundsException, a ClassCastException, a truncated list or
+		// an AREF report used to answer instead.
+		assertThat(compileAndRun(SubseqBoundsFixture.PROGRAM)).isEqualTo(SubseqBoundsFixture.EXPECTED);
+	}
+
+	@Test
+	void compileAndRunBoundedStringOperatorsRefuseABadRangeAsATypeError() throws Exception {
+		// The JVM twin of
+		// LispEvaluatorTest#boundedStringOperatorsRefuseABadRangeAsATypeError.
+		assertThat(compileAndRunGray(BoundedStringBoundsFixture.PROGRAM))
+			.isEqualTo(BoundedStringBoundsFixture.EXPECTED);
+	}
+
+	@Test
+	void compileAndRunSubseqWithoutTheArrayRuntimeChecksItsBounds() throws Exception {
+		// A program naming no array operator compiles subseq's string and list lanes
+		// without the array runtime (no _subseqCv); they refuse a bad range too, rather
+		// than answering a truncated list or raising String#substring's exception. A
+		// negative end is refused, not read as an omitted one, and a bound that is no
+		// integer is refused like one outside the range.
+		assertThat(compileAndRun("""
+				(defun f (s i j) (%subseq-core s i j))
+				(print (f "abcd" 1 3))
+				(print (f (list 1 2 3) 1 nil))
+				(defun g (s i j)
+				  (handler-case (f s i j) (type-error (c) (list (type-error-datum c) (type-error-expected-type c)))))
+				(print (g "abc" 2 1))
+				(print (g (list 1 2 3) 1 5))
+				(print (g (list 1 2 3) 4 nil))
+				(print (g (list 1 2 3) -1 nil))
+				(print (g "abc" 0 -1))
+				(print (g (list 1 2 3) 0 -1))
+				(print (g "abc" "a" nil))
+				(print (g (list 1 2 3) 1 1.5))
+				"""))
+			.isEqualTo("\"bc\"\n(2 3)\n(1 (INTEGER 2 3))\n(5 (INTEGER 1 3))\n(4 (INTEGER 0 3))\n(-1 (INTEGER 0 3))"
+					+ "\n(-1 (INTEGER 0 3))\n(-1 (INTEGER 0 3))\n(\"a\" (INTEGER 0 3))\n(1.5 (INTEGER 1 3))");
+	}
+
+	@Test
+	void compileAndRunSequenceBoundingKeywords() throws Exception {
+		// CLHS 17.2.1's :start/:end/:count/:from-end over the count/remove/substitute
+		// family (.kb/sequence-bounding-keywords.md). :from-end is the interesting half:
+		// it reverses the WALK, which decides which matches a :count keeps and the order
+		// the :key designator is called in (the counting :key below), and a destructive
+		// spelling must still rewrite the argument's own cells -- which is why the list
+		// is read back. The first-class calls at the end go through the family's
+		// keyword-forwarding wrapper.
+		String source = """
+				(print (remove 'a '(a b a c a) :count 2 :from-end t))
+				(print (remove 'a '(a b a c a) :start 1 :end 3))
+				(print (remove-if-not #'evenp '(1 2 3 4 5 6) :count 2 :from-end t))
+				(print (substitute 'x 'a '(a b a c a) :count 1 :from-end t))
+				(print (substitute-if 'x #'evenp '(1 2 3 4) :count 1 :from-end t))
+				(print (substitute #\\x #\\a "abaa" :count 1 :from-end t))
+				(print (count 1 '(1 1 1 1 1 2 1 1) :start 2 :end 7))
+				(print (count-if-not #'evenp '(1 2 3 4 5 6) :start 2))
+				(let ((c 0))
+				  (print (count 1 '(1 2 3 7 4 5 7 6 2 8) :from-end t
+				                :key (lambda (x) (prog1 (- x c) (setq c (+ c 1)))))))
+				(let ((l (list 'a 'b 'a)))
+				  (print (nsubstitute 'x 'a l :count 1 :from-end t))
+				  (print l))
+				(print (delete-if #'evenp (list 1 2 3 4) :count 1 :from-end t))
+				(print (funcall #'remove 'a '(a b a) :count 1 :from-end t))
+				(print (apply #'substitute 'x 'a '(a b a) '(:count 1 :from-end t)))
+				""";
+		assertThat(compileAndRun(source)).isEqualTo("""
+				(A B C)
+				(A B C A)
+				(1 2 4 6)
+				(A B A C X)
+				(1 2 3 X)
+				"abax"
+				4
+				2
+				3
+				(A B X)
+				(A B X)
+				(1 2 3)
+				(A B)
+				(A B X)""");
+	}
+
+	@Test
+	void compileAndRunConsSetAndTreeOperators() throws Exception {
+		// The cons set / tree family: the n-prefixed spellings are aliases for the
+		// non-destructive siblings (CLHS makes the destructive promise a licence),
+		// nbutlast is the one that really cuts the argument's spine, and the first-class
+		// calls at the end ride the keyword-forwarding wrapper rather than a second
+		// implementation (.kb/cons-set-and-tree-operators.md).
+		String source = """
+				(print (nunion (list 1 2 3) (list 2 3 4)))
+				(print (nintersection (list 1 2 3) (list 2 3 4) :test #'eql))
+				(print (nset-difference (list 1 2 3) (list 2) :key #'identity))
+				(print (nset-exclusive-or (list 1 2 3) (list 2 3 4)))
+				(print (subst 9 'a '(a (b a)) :test-not (lambda (x y) (not (eql x y)))))
+				(print (subst-if 0 #'numberp '(1 (2 x) 3)))
+				(print (subst-if-not 0 #'listp '(1 (2))))
+				(print (nsubst 'x 'a (list 'a (list 'b 'a))))
+				(print (nsubst-if 0 #'numberp (list 1 (list 2 'x))))
+				(print (nsublis (list (cons 'a 1)) (list 'a (list 'b 'a))))
+				(print (sublis (list (cons "a" 1)) (list "a" 'b) :test #'equal))
+				(print (member-if-not #'numberp '(1 2 a b)))
+				            (print (member-if #'oddp '(1 2 3) :key #'1+))
+				(print (assoc-if-not #'numberp '((1 . a) (b . c))))
+				(print (rassoc-if #'oddp '((a . 1) (b . 2)) :key #'1+))
+				(print (butlast '(1 2 3 4) 2))
+				(print (butlast '(1 2 3 4) 99))
+				(let ((cst-l (list 1 2 3 4))) (print (nbutlast cst-l 2)) (print cst-l))
+				(print (list-length '(a b c)))
+				(print (tailp 'e '(a b . e)))
+				(print (multiple-value-list (get-properties '(a 1 b 2) '(b))))
+				(print (apply #'set-difference (list (list 1 2 3) (list 2) :test #'eql)))
+				(print (funcall #'subsetp '(1 2) '(1 2 3) :test #'eql))
+				(print (funcall #'intersection '((1 a)) '((1 b)) :key #'car))
+				(print (funcall #'adjoin 1 '(1 2) :key #'identity))
+				(print (funcall #'member-if #'oddp '(1 2 3) :key #'1+))
+				(print (funcall #'butlast '(1 2 3 4) 2))
+				(print (apply #'nunion (list (list 1 2) (list 2 3))))
+				""";
+		assertThat(compileAndRun(source)).isEqualTo("""
+				(4 1 2 3)
+				(3 2)
+				(3 1)
+				(1 4)
+				(9 (B 9))
+				(0 (0 X) 0)
+				(0 (0))
+				(X (B X))
+				(0 (0 X))
+				(1 (B 1))
+				(1 B)
+				(A B)
+				(2 3)
+				(B . C)
+				(B . 2)
+				(1 2)
+				NIL
+				(1 2)
+				(1 2)
+				3
+				T
+				(B 2 (B 2))
+				(3 1)
+				T
+				((1 A))
+				(1 2)
+				(2 3)
+				(1 2)
+				(3 1 2)""");
+	}
+
+	@Test
+	void compileAndRunComplementAppliesBeyondThreeArguments() throws Exception {
+		// The 0-3 arms stay funcall-dispatch; a fourth argument takes the &rest arm
+		// through apply, and apply spreads any count through the negation. The
+		// callee is a true &rest defun: n-ary spellings of binary built-ins (like
+		// <) expand pairwise at the call site, which apply bypasses.
+		assertThat(compileAndRun("""
+				(defun ci-cpl-fourp (&rest xs) (eql (length xs) 4))
+				(print (funcall (complement #'ci-cpl-fourp) 1 2 3 4))
+				(print (funcall (complement #'ci-cpl-fourp) 1 2 3))
+				(print (apply (complement #'ci-cpl-fourp) (list 1 2 3 4 5)))
+				(print (apply (complement #'ci-cpl-fourp) (list 1 2 3 4)))
+				(print (funcall (complement #'evenp) 3))
+				""")).isEqualTo("NIL\nT\nT\nNIL\nT");
+	}
+
+	@Test
+	void compileAndRunRemoveDuplicatesBoundingKeywords() throws Exception {
+		// remove-duplicates takes the same 17.2.1 set, but its window bounds which
+		// elements are CONSIDERED: one outside :start/:end is kept verbatim rather than
+		// dropped from the answer (.kb/sequence-bounding-keywords.md). The duplicate is
+		// looked for inside the window by index, on whichever side of the element the
+		// direction picks -- and the direction may be COMPUTED, which is one loop over
+		// two index bounds rather than two loops.
+		String source = """
+				(print (remove-duplicates '(0 1 2 3 1 2 3 9) :start 2 :end 6))
+				(print (remove-duplicates '(0 1 2 3 1 2 3 9) :start 2 :end 6 :from-end t))
+				(print (remove-duplicates '(0 1 2 3 1 2 3 9) :end 6))
+				(print (remove-duplicates "abcabc" :start 1))
+				(print (remove-duplicates '(a b c d a e f d g) :test-not #'eql))
+				(print (delete-duplicates (list 1 2 3 1 3 1 2 4) :start 0 :end nil))
+				(print (remove-duplicates '(1 2 1 3 2) :from-end (> 1 0)))
+				(print (apply #'remove-duplicates '(0 1 2 3 1 2 3 9) '(:start 2 :end 6)))
+				(print (funcall #'remove-duplicates '((1 a) (1 b) (2 c)) :test-not #'= :key #'car))
+				(print (apply #'delete-duplicates (list 1 2 3 1 3 1 2 4) '(:from-end t)))
+				(print (funcall #'remove-duplicates '(1 2 1 3 2)))
+				""";
+		assertThat(compileAndRun(source)).isEqualTo("""
+				(0 1 3 1 2 3 9)
+				(0 1 2 3 1 3 9)
+				(0 3 1 2 3 9)
+				"aabc"
+				(G)
+				(3 1 2 4)
+				(1 2 3)
+				(0 1 3 1 2 3 9)
+				((2 C))
+				(1 2 3 4)
+				(1 3 2)""");
+	}
+
+	@Test
+	void compileAndRunReplaceIntoAList() throws Exception {
+		// A list destination is rewritten through its cons cells, like the interpreter's
+		// native replace. It used to fall through to the immutable-string rebuild here
+		// and die with a ClassCastException -- and (setf (subseq l ...)) on a list with
+		// it (.kb/sequence-op-runtimes.md).
+		assertThat(compileAndRun("(print (replace (list 1 2 3 4 5) '(9 9) :start1 1))")).isEqualTo("(1 9 9 4 5)");
+		assertThat(compileAndRun("(print (replace (list 0 0 0 0) #(7 8 9) :start1 1 :end1 3 :start2 1))"))
+			.isEqualTo("(0 8 9 0)");
+		assertThat(compileAndRun("(print (replace (list 1 2) '(5 6 7 8)))")).isEqualTo("(5 6)");
+		assertThat(compileAndRun("(let ((l (list 1 2 3 4 5))) (setf (subseq l 1) '(9 9)) (print l))"))
+			.isEqualTo("(1 9 9 4 5)");
+	}
+
+	@Test
+	void compileAndRunAListIntoAListReplaceReadsItsSourceWithACursor() throws Exception {
+		// The list-DESTINATION arm was the one arm still spelling (elt source (+ start2
+		// k)), so a list-into-list replace stayed quadratic here long after the array arm
+		// took a cursor. It reads through a cursor now, with a fallback to the same elt
+		// call for everything the cursor cannot reach, so no answer moved.
+		assertThat(compileAndRun("(print (replace (list 0 0 0 0 0) (list 1 2 3 4 5) :start1 1 :start2 2))"))
+			.isEqualTo("(0 3 4 5 0)");
+		assertThat(compileAndRun("(print (replace (list 0 0 0 0) (list 7 8) :start1 2))")).isEqualTo("(0 0 7 8)");
+		assertThat(compileAndRun("(print (replace (list 0 0 0) \"xy\"))")).isEqualTo("(#\\x #\\y 0)");
+		assertThat(compileAndRun("(print (replace (list 0 0 0) (coerce (list 4 5 6) 'vector)))")).isEqualTo("(4 5 6)");
+		// A :start2 past the source is refused before anything is written, where the
+		// cursor used to stop and answer the destination untouched.
+		assertThat(compileAndRun(
+				"(print (handler-case (replace (list 0 0 0 0) (list 1 2) :start2 9) (type-error () :refused)))"))
+			.isEqualTo(":REFUSED");
+		assertThat(compileAndRun("(let ((l (list 1 2 3 4))) (replace l l :start1 1) (print l))"))
+			.isEqualTo("(1 1 2 3)");
+		// Long enough that the head-walk showed.
+		assertThat(compileAndRun("""
+				(let* ((long (let ((out nil))
+				               (dotimes (i 2000) (setq out (cons (mod i 7) out)))
+				               (nreverse out)))
+				       (dst (let ((out nil)) (dotimes (i 2000) (setq out (cons 0 out))) out)))
+				  (replace dst long)
+				  (print (list (first dst) (nth 1999 dst) (length dst))))
+				""")).isEqualTo("(0 4 2000)");
+	}
+
+	@Test
+	void compileAndRunMakeArrayInitialContentsWalksAListWithACursor() throws Exception {
+		// The fill indexed the contents with elt so it could serve ANY sequence, and elt
+		// on a list is an nth walk from the head: the whole fill was quadratic here (12.2
+		// ms at n=4000 against the interpreter's native 0.045). A cons cursor beside the
+		// index serves a list in O(1) and pins itself to a non-cons for every other
+		// representation, which keeps indexing exactly as before.
+		assertThat(compileAndRun("(let ((c (list 1 2 3 4))) (print (make-array 4 :initial-contents c)))"))
+			.isEqualTo("#(1 2 3 4)");
+		assertThat(compileAndRun(
+				"(let ((c (list 1 2 3 4))) (print (make-array 4 :element-type '(unsigned-byte 8) :initial-contents c)))"))
+			.isEqualTo("#(1 2 3 4)");
+		assertThat(
+				compileAndRun("(let ((c (coerce (list 1 2 3) 'vector))) (print (make-array 3 :initial-contents c)))"))
+			.isEqualTo("#(1 2 3)");
+		assertThat(compileAndRun("(print (make-array 3 :initial-contents \"xyz\"))")).isEqualTo("#(#\\x #\\y #\\z)");
+		assertThat(compileAndRun(
+				"(print (make-array 3 :element-type 'character :initial-contents (list #\\a #\\b #\\c)))"))
+			.isEqualTo("\"abc\"");
+		// Rank >= 2 has one cursor per LEVEL, re-seeded per iteration of the level above.
+		assertThat(compileAndRun(
+				"(let ((c (list (list 1 2 3) (list 4 5 6)))) (print (make-array '(2 3) :initial-contents c)))"))
+			.isEqualTo("#2A((1 2 3) (4 5 6))");
+		assertThat(compileAndRun(
+				"(print (make-array '(2 3) :initial-contents (list (coerce (list 1 2 3) 'vector) (list 4 5 6))))"))
+			.isEqualTo("#2A((1 2 3) (4 5 6))");
+		assertThat(compileAndRun(
+				"(print (make-array '(2 3) :initial-contents (coerce (list (list 1 2 3) (list 4 5 6)) 'vector)))"))
+			.isEqualTo("#2A((1 2 3) (4 5 6))");
+		assertThat(compileAndRun("""
+				(print (make-array '(2 2 2) :initial-contents
+					(list (list (list 1 2) (list 3 4)) (list (list 5 6) (list 7 8)))))
+				""")).isEqualTo("#3A(((1 2) (3 4)) ((5 6) (7 8)))");
+		// A row shorter than the dimension, and a row the contents do not have, are
+		// shape mismatches the fill checks before it reads a row.
+		assertThat(compileAndRun(
+				"(print (handler-case (make-array '(2 3) :initial-contents (list (list 1 2) (list 4 5 6)))"
+						+ " (error () :error)))"))
+			.isEqualTo(":ERROR");
+		assertThat(compileAndRun("(print (handler-case (make-array '(2 3) :initial-contents (list (list 1 2 3)))"
+				+ " (error () :error)))"))
+			.isEqualTo(":ERROR");
+	}
+
+	@Test
+	void compileAndRunMakeArrayInitialContentsChecksItsShape() throws Exception {
+		// CL requires the contents' shape to match the dimensions. The fill used to run
+		// to
+		// the contents' length (a short list padded with NIL, a long one overran into the
+		// store's bound check) and read each row with elt (a short row signalled elt's
+		// type-error); it now checks each level's length and signals the interpreter's
+		// simple-error text.
+		assertThat(compileAndRun(shapeError("(make-array 3 :initial-contents (list 1 2))")))
+			.isEqualTo(shapeMessage(0, 2, 3));
+		assertThat(compileAndRun(shapeError("(make-array 2 :initial-contents (list 1 2 3))")))
+			.isEqualTo(shapeMessage(0, 3, 2));
+		assertThat(compileAndRun(
+				shapeError("(make-array 3 :element-type '(unsigned-byte 8) :initial-contents (vector 1 2))")))
+			.isEqualTo(shapeMessage(0, 2, 3));
+		assertThat(compileAndRun(shapeError("(make-array 3 :element-type 'character :initial-contents \"ab\")")))
+			.isEqualTo(shapeMessage(0, 2, 3));
+		assertThat(
+				compileAndRun(shapeError("(make-array '(3) :element-type 'character :initial-contents (list #\\a))")))
+			.isEqualTo(shapeMessage(0, 1, 3));
+		assertThat(compileAndRun(shapeError("(make-array '(2 3) :initial-contents (list (list 1 2) (list 4 5 6)))")))
+			.isEqualTo(shapeMessage(1, 2, 3));
+		assertThat(
+				compileAndRun(shapeError("(make-array '(2 3) :initial-contents (list (list 1 2 3) (list 4 5 6 7)))")))
+			.isEqualTo(shapeMessage(1, 4, 3));
+		assertThat(compileAndRun(shapeError("(make-array '(2 3) :initial-contents (list (list 1 2 3)))")))
+			.isEqualTo(shapeMessage(0, 1, 2));
+		// A list that runs out stores each remaining slot's own value back, which is of
+		// the element type whatever it is, so a packed array reports the shape too.
+		assertThat(compileAndRun(shapeError(
+				"(make-array '(2 3) :element-type '(unsigned-byte 8) :initial-contents (list (list 1 2 3) (list 4)))")))
+			.isEqualTo(shapeMessage(1, 1, 3));
+		assertThat(compileAndRun(
+				shapeError("(make-array 4 :element-type 'double-float :initial-contents (list 1d0 2d0))")))
+			.isEqualTo(shapeMessage(0, 2, 4));
+		assertThat(compileAndRun(shapeError("(make-array 5 :fill-pointer 1 :initial-contents (list 1 2))")))
+			.isEqualTo(shapeMessage(0, 2, 5));
+		assertThat(compileAndRun(shapeError("(let ((n 3)) (make-array n :initial-contents (list 1 2)))")))
+			.isEqualTo(shapeMessage(0, 2, 3));
+		// A run-time :element-type fills once over its whole dispatch; the character arm
+		// keeps its string copy. #'adjust-array's wrapper is that shape.
+		assertThat(compileAndRun(
+				shapeError("(make-array 3 :element-type (identity '(unsigned-byte 8)) :initial-contents (list 1 2))")))
+			.isEqualTo(shapeMessage(0, 2, 3));
+		assertThat(compileAndRun(
+				shapeError("(make-array 3 :element-type (identity 'character) :initial-contents \"ab\")")))
+			.isEqualTo(shapeMessage(0, 2, 3));
+		assertThat(compileAndRun("(print (make-array 2 :element-type (identity 'character) :initial-contents \"ab\"))"))
+			.isEqualTo("\"ab\"");
+		assertThat(compileAndRun("(print (= 3 (aref (make-array '(2 2) :element-type (identity 'double-float)"
+				+ " :initial-contents '((1d0 2d0) (3d0 4d0))) 1 0)))"))
+			.isEqualTo("T");
+		assertThat(compileAndRun(shapeError("(funcall #'adjust-array (make-array 2) 3 :initial-contents (list 7 8))")))
+			.isEqualTo(shapeMessage(0, 2, 3));
+		assertThat(compileAndRun("(print (funcall #'adjust-array (make-array 2) 3 :initial-contents (list 7 8 9)))"))
+			.isEqualTo("#(7 8 9)");
+		// A fill pointer does not shorten the dimension the contents must match.
+		assertThat(compileAndRun("(print (make-array 5 :fill-pointer 2 :initial-contents (list 1 2 3 4 5)))"))
+			.isEqualTo("#(1 2)");
+		// A rank-0 array's contents are its one element, not a sequence.
+		assertThat(compileAndRun("(print (make-array '() :initial-contents 5))")).isEqualTo("#0A5");
+		// No handler anywhere: the check must not need a condition layout the program
+		// never asked for.
+		assertThat(compileAndRun("(print (make-array '(2 2) :initial-contents (list (list 1 2) (list 3 4))))"))
+			.isEqualTo("#2A((1 2) (3 4))");
+	}
+
+	@Test
+	void compileAndRunMakeArrayInitialContentsFillsARunTimeRank() throws Exception {
+		// A dims list that exists only at run time took the rank-1 fill, whose store
+		// rejects a rank >= 2 array (its rank mismatch). It fills
+		// row-major and checks every level, in the interpreter's depth-first order.
+		assertThat(compileAndRun(
+				"(print (let ((d (list 2 3))) (make-array d :initial-contents (list (list 1 2 3) (list 4 5 6)))))"))
+			.isEqualTo("#2A((1 2 3) (4 5 6))");
+		assertThat(compileAndRun(
+				"(print (let ((d (list 2 2 2))) (make-array d :initial-contents '(((1 2) (3 4)) ((5 6) (7 8))))))"))
+			.isEqualTo("#3A(((1 2) (3 4)) ((5 6) (7 8)))");
+		assertThat(
+				compileAndRun("(print (let ((d (list 2 2))) (make-array d :initial-contents (vector \"ab\" \"cd\"))))"))
+			.isEqualTo("#2A((#\\a #\\b) (#\\c #\\d))");
+		assertThat(compileAndRun(
+				shapeError("(let ((d (list 2 3))) (make-array d :initial-contents (list (list 1 2) (list 4 5 6))))")))
+			.isEqualTo(shapeMessage(1, 2, 3));
+		assertThat(compileAndRun(
+				shapeError("(let ((d (list 2 3))) (make-array d :initial-contents (list (list 1 2 3))))")))
+			.isEqualTo(shapeMessage(0, 1, 2));
+		assertThat(compileAndRun(shapeError(
+				"(let ((d (list 2 3))) (make-array d :initial-contents (list (list 1 2 3) (list 4 5 6 7))))")))
+			.isEqualTo(shapeMessage(1, 4, 3));
+		// Depth first: the short leaf row of the first plane reports before the short
+		// second plane.
+		assertThat(compileAndRun(
+				shapeError("(let ((d (list 2 2 2))) (make-array d :initial-contents '(((1 2) (3)) ((5 6)))))")))
+			.isEqualTo(shapeMessage(2, 1, 2));
+		assertThat(compileAndRun("(print (let ((d nil)) (make-array d :initial-contents 5)))")).isEqualTo("#0A5");
+		assertThat(compileAndRun("(print (let ((d (list 3))) (make-array d :initial-contents \"abc\")))"))
+			.isEqualTo("#(#\\a #\\b #\\c)");
+		assertThat(compileAndRun("(print (let ((d (list 2 2))) (make-array d :element-type '(unsigned-byte 8)"
+				+ " :initial-contents '((1 2) (3 4)))))"))
+			.isEqualTo("#2A((1 2) (3 4))");
+		assertThat(compileAndRun(shapeError("(let ((d (list 2 2))) (make-array d :element-type '(unsigned-byte 8)"
+				+ " :initial-contents '((1 2) (3))))")))
+			.isEqualTo(shapeMessage(1, 1, 2));
+		assertThat(compileAndRun(
+				"(print (let ((d (list 2 2))) (= 3 (aref (make-array d :element-type (identity 'double-float)"
+						+ " :initial-contents '((1d0 2d0) (3d0 4d0))) 1 0))))"))
+			.isEqualTo("T");
+		// A character array above rank 1 is no string.
+		assertThat(compileAndRun("(print (let ((d (list 2 2))) (make-array d :element-type 'character"
+				+ " :initial-contents (list \"ab\" \"cd\"))))"))
+			.isEqualTo("#2A((#\\a #\\b) (#\\c #\\d))");
+		assertThat(compileAndRun("(print (let ((d (list 2 2))) (make-array d :element-type (identity 'character)"
+				+ " :initial-contents (list \"ab\" \"cd\"))))"))
+			.isEqualTo("#2A((#\\a #\\b) (#\\c #\\d))");
+		assertThat(
+				compileAndRun("(print (let ((n 2)) (make-array n :element-type 'character :initial-contents \"ab\")))"))
+			.isEqualTo("\"ab\"");
+		assertThat(
+				compileAndRun("(print (adjust-array (make-array '(2 2)) '(2 3) :initial-contents '((1 2 3) (4 5 6))))"))
+			.isEqualTo("#2A((1 2 3) (4 5 6))");
+		assertThat(compileAndRun(
+				"(print (funcall #'adjust-array (make-array '(2 2)) '(2 3) :initial-contents '((1 2 3) (4 5 6))))"))
+			.isEqualTo("#2A((1 2 3) (4 5 6))");
+	}
+
+	private static String shapeError(String form) {
+		// A simple-error clause: a condition of any other type (elt's or a store's
+		// type-error) escapes it and fails the run.
+		return "(print (handler-case " + form + " (simple-error (e) (princ-to-string e))))";
+	}
+
+	private static String shapeMessage(int dimension, int length, int expected) {
+		return "\"MAKE-ARRAY :initial-contents dimension " + dimension + " has " + length + " elements, expected "
+				+ expected + "\"";
+	}
+
+	@Test
+	void compileAndRunTheMapIntoWrapperWalksAListDestinationWithACursor() throws Exception {
+		// #'map-into as a VALUE stored with (setf (elt r i) v), an O(i) head-walk for a
+		// list destination; the wrapper now carries the result cursor its call-position
+		// lowering has always had, and every other representation keeps the indexed
+		// store. Same answers, and the same object comes back.
+		assertThat(compileAndRun("""
+				(print (list (funcall #'map-into (list 0 0 0 0) #'+ '(1 2 3) '(10 20 30 40))
+				             (funcall #'map-into (make-array 3) #'* #(2 3 4) #(5 6 7))
+				             (funcall #'map-into (list 0 0 0) (lambda () 42))
+				             (funcall #'map-into (list 0 0 0) #'+ #(1 2 3) '(10 20 30))
+				             (funcall #'map-into nil #'1+ '(1 2 3))
+				             (funcall #'map-into (list 0) #'1+ '(1 2 3))
+				             (funcall #'map-into (copy-seq "xxxxx") #'char-upcase "abc")
+				             (funcall #'map-into (make-array 6 :fill-pointer 3 :initial-element 0)
+				                      #'1+ '(1 2 3 4 5 6))))
+				""")).isEqualTo("((11 22 33 0) #(10 18 28) (42 42 42) (11 22 33) NIL (2) \"ABCxx\" #(2 3 4))");
+		assertThat(
+				compileAndRun("(let ((d (list 0 0 0))) (print (list (eq (funcall #'map-into d #'1+ '(1 2 3)) d) d)))"))
+			.isEqualTo("(T (2 3 4))");
+		assertThat(compileAndRun("(let ((l (list 1 2 3 4))) (print (list (funcall #'map-into l #'1+ l) l)))"))
+			.isEqualTo("((2 3 4 5) (2 3 4 5))");
+		// Long enough that the head-walk showed: 2.84 ms a call at n = 2000 before.
+		assertThat(compileAndRun("""
+				(let* ((n 2000)
+				       (src (let ((out nil))
+				              (dotimes (i n) (setq out (cons (mod i 7) out)))
+				              (nreverse out)))
+				       (dst (make-list n)))
+				  (funcall #'map-into dst #'1+ src)
+				  (print (list (car dst) (car (last dst)) (length dst))))
+				""")).isEqualTo("(1 5 2000)");
+	}
+
+	@Test
+	void compileAndRunStringEquality() throws Exception {
+		assertThat(compileAndRun("(print (string= \"abc\" \"abc\"))")).isEqualTo("T");
+		assertThat(compileAndRun("(print (string= \"abc\" \"abd\"))")).isEqualTo("NIL");
+		assertThat(compileAndRun("(print (string-equal \"ABC\" \"abc\"))")).isEqualTo("T");
+		// The bounding-index keywords lower onto subseq; the two-string intrinsic is
+		// unchanged.
+		assertThat(compileAndRun("(print (string= \"together\" \"frog\" :start1 1 :end1 3 :start2 2))")).isEqualTo("T");
+		assertThat(compileAndRun("(print (string= \"abc\" \"xabc\" :start2 1))")).isEqualTo("T");
+		assertThat(compileAndRun("(print (string-equal \"TOGETHER\" \"frog\" :start1 1 :end1 3 :start2 2))"))
+			.isEqualTo("T");
+		// ... and through the first-class value, whose wrapper re-reads the keywords
+		// from its &rest list (an ordinary two-argument :test #'string= stays direct).
+		assertThat(compileAndRun("(print (funcall #'string= \"xabc\" \"abc\" :start1 1)) "
+				+ "(print (apply #'string-equal \"XABC\" \"abc\" '(:start1 1))) "
+				+ "(print (find \"b\" '(\"a\" \"b\" \"c\") :test #'string=))"))
+			.isEqualTo("T\nT\n\"b\"");
+	}
+
+	@Test
+	void compileAndRunStringOrderingPredicates() throws Exception {
+		// The prelude splice mirrors the CLI pipeline (the whole comparison family are
+		// prelude defuns over %string-compare, pulled in transitively).
+		assertThat(compileAndRun("""
+				(print (list (string< "aaaa" "aaab") (string< "abc" "abc")))
+				(print (list (string> "abcd" "abc") (string> "abc" "abd")))
+				(print (list (string<= "abc" "abc") (string<= "abd" "abc")))
+				(print (list (string>= "aaaaa" "aaaa") (string>= "abc" "abd")))
+				(print (list (string/= "abc" "abd") (string/= "abc" "abc")))
+				(print (list (string-lessp "ABC" "abd") (string-greaterp "ABD" "abc")))
+				(print (list (string-not-greaterp "Abcde" "abcdE") (string-not-lessp "Abcde" "abcdE")))
+				(print (list (string-not-equal "AAAA" "aaaA") (string-not-equal "AAAB" "aaaa")))
+				(print (string-lessp "012AAAA789" "01aaab6" :start1 3 :end1 7 :start2 2 :end2 6))
+				(print (sort (list "pear" "Apple" "banana") #'string-lessp))
+				""")).isEqualTo("""
+				(3 NIL)
+				(3 NIL)
+				(3 NIL)
+				(4 NIL)
+				(2 NIL)
+				(2 2)
+				(5 5)
+				(NIL 3)
+				6
+				("Apple" "banana" "pear")""");
+	}
+
+	@Test
+	void compileAndRunStringDesignators() throws Exception {
+		// CL coerces a string DESIGNATOR -- a string, a symbol (nil and t included) or a
+		// character -- wherever a string is expected. A LITERAL designator folds to a
+		// constant; a computed one goes through the shared, type-checking (string ...).
+		assertThat(compileAndRun("(princ (string-trim \"*\" '*foo*))")).isEqualTo("FOO");
+		assertThat(compileAndRun("(princ (string-left-trim \"F\" '|FOO|))")).isEqualTo("OO");
+		assertThat(compileAndRun("(princ (string-right-trim \"O\" '|FOO|))")).isEqualTo("F");
+		assertThat(compileAndRun("(princ (string-trim \"N\" nil))")).isEqualTo("IL");
+		assertThat(compileAndRun("(princ (string-trim \"K\" :key))")).isEqualTo("EY");
+		assertThat(compileAndRun("(princ (string-trim \"A\" #\\a))")).isEqualTo("a");
+		assertThat(compileAndRun("(defun id (x) x) (princ (string-trim \"*\" (id '*foo*)))")).isEqualTo("FOO");
+		assertThat(compileAndRun("(defun id (x) x) (princ (string-upcase (id #\\a)))")).isEqualTo("A");
+		assertThat(compileAndRun("(princ (string-capitalize nil))")).isEqualTo("Nil");
+		// A non-designator still signals: the widening is per POSITION, not "stringify
+		// anything". Before this, the compile paths took the symbol's runtime spelling
+		// for a quoted string and answered a silently wrong substring.
+		assertThat(compileAndRun(
+				"(defun id (x) x) (princ (handler-case (string-trim \"*\" (id 42)) (error () :signalled)))"))
+			.isEqualTo("SIGNALLED");
+		assertThat(
+				compileAndRun("(defun id (x) x) (princ (handler-case (string-upcase (id 42)) (error () :signalled)))"))
+			.isEqualTo("SIGNALLED");
+		assertThat(compileAndRun(
+				"(defun id (x) x) (princ (handler-case (string-trim (id #\\*) \"*x*\") (error () :signalled)))"))
+			.isEqualTo("SIGNALLED");
+		// ... but ANY sequence of characters is a bag, a general vector included.
+		assertThat(compileAndRun("(defun id (x) x) (princ (string-trim (id (vector #\\x)) \"xhellox\"))"))
+			.isEqualTo("hello");
+	}
+
+	@Test
+	void compileAndRunCarCdrOfNil() throws Exception {
+		assertThat(compileAndRun("(print (car nil))")).isEqualTo("NIL");
+		assertThat(compileAndRun("(print (cdr nil))")).isEqualTo("NIL");
+		assertThat(compileAndRun("(print (car '()))")).isEqualTo("NIL");
+		assertThat(compileAndRun("(print (cdr '()))")).isEqualTo("NIL");
+	}
+
+	@Test
+	void compileAndRunHigherOrderFunction() throws Exception {
+		assertThat(compileAndRun("""
+				(defun square (x) (* x x))
+				(defun apply-twice (f x) (funcall f (funcall f x)))
+				(print (apply-twice #'square 3))
+				""")).isEqualTo("81");
+	}
+
+	@Test
+	void compileAndRunLambdaAsArgument() throws Exception {
+		assertThat(compileAndRun("""
+				(defun apply-twice (f x) (funcall f (funcall f x)))
+				(print (apply-twice (lambda (x) (+ x 10)) 5))
+				""")).isEqualTo("25");
+	}
+
+	@Test
+	void compileAndRunDynamicFunctionSelection() throws Exception {
+		assertThat(compileAndRun("""
+				(defun square (x) (* x x))
+				(defun forty-two (x) 42)
+				(setq f (if t #'square #'forty-two))
+				(print (funcall f 6))
+				""")).isEqualTo("36");
+	}
+
+	@Test
+	void compileAndRunFuncall() throws Exception {
+		assertThat(compileAndRun("""
+				(defun square (x) (* x x))
+				(print (funcall #'square 7))
+				""")).isEqualTo("49");
+	}
+
+	@Test
+	void compileAndRunVariadicBuiltinWrappers() throws Exception {
+		// Regression guard: funcall/apply of a variadic builtin wrapper with an arity
+		// other than the old fixed one used to return nil silently on the JVM.
+		assertThat(compileAndRun("(print (funcall #'+ 1 2 3))")).isEqualTo("6");
+		assertThat(compileAndRun("(print (funcall #'+))")).isEqualTo("0");
+		assertThat(compileAndRun("(print (apply #'+ (list 1 2 3 4)))")).isEqualTo("10");
+		assertThat(compileAndRun("(print (funcall #'* 2 3 4))")).isEqualTo("24");
+		assertThat(compileAndRun("(print (funcall #'- 10 1 2))")).isEqualTo("7");
+		assertThat(compileAndRun("(print (funcall #'- 5))")).isEqualTo("-5");
+		assertThat(compileAndRun("(print (funcall #'/ 100 2 5))")).isEqualTo("10");
+		assertThat(compileAndRun("(print (funcall #'list 1 2 3))")).isEqualTo("(1 2 3)");
+		assertThat(compileAndRun("(print (funcall #'max 3 7 2))")).isEqualTo("7");
+		assertThat(compileAndRun("(print (funcall #'min 3 7 2))")).isEqualTo("2");
+	}
+
+	@Test
+	void compileAndRunFunctionInList() throws Exception {
+		assertThat(compileAndRun("""
+				(defun square (x) (* x x))
+				(print (funcall (car (list #'square)) 5))
+				""")).isEqualTo("25");
+	}
+
+	@Test
+	void gensymCounterAndRandomStateAnswerTheInterpreterBindings() throws Exception {
+		// *gensym-counter* and *random-state* are bound by the compile-path defvar
+		// seeding with the interpreter's initial values, so a reference answers 0 / a
+		// random-state and a setq updates the global (the operations they name use
+		// internal state).
+		assertThat(compileAndRun("(print *gensym-counter*) (print *random-state*)"
+				+ " (setq *gensym-counter* 5) (print *gensym-counter*) (gensym) (random 10)"))
+			.isEqualTo("0\n#<RANDOM-STATE>\n5");
+	}
+
+	@Test
+	void compileAndRunFloatExactComparison() throws Exception {
+		// A float against an exact number compares exact values, like the
+		// interpreter: 1 plus a sub-ulp ratio is NOT = to 1.0. The literal-double
+		// shapes pin the call-site gate (a double literal beside a computed exact
+		// operand must go through _cmpb, not the unboxed DCMPL); the lambda shapes
+		// pin the variable-carried runtime path.
+		assertThat(compileAndRun("(print (= 1.0 (+ 1 (/ 1 (ash 1 60)))))")).isEqualTo("NIL");
+		assertThat(compileAndRun("(print (< 1.0 (+ 1 (/ 1 (ash 1 60)))))")).isEqualTo("T");
+		assertThat(compileAndRun("(print (> 1.0 (- 1 (/ 1 (ash 1 60)))))")).isEqualTo("T");
+		assertThat(compileAndRun("(print (= (+ 1 (/ 1 (ash 1 60))) 1.0))")).isEqualTo("NIL");
+		assertThat(compileAndRun("(print ((lambda (d) (= d (+ 1 (/ 1 (ash 1 60))))) 1.0))")).isEqualTo("NIL");
+		assertThat(compileAndRun("(print ((lambda (d) (< d (+ 1 (/ 1 (ash 1 60))))) 1.0))")).isEqualTo("T");
+		assertThat(compileAndRun("(print (= 9007199254740992.0 9007199254740993))")).isEqualTo("NIL");
+		assertThat(compileAndRun("(print (< 9007199254740992.0 9007199254740993))")).isEqualTo("T");
+		assertThat(compileAndRun("(print (< 3.4028234663852886e38 (+ (ceiling (rational 3.4028234663852886e38)) 5)))"))
+			.isEqualTo("T");
+		assertThat(compileAndRun("(print (= -0.0 0))")).isEqualTo("T");
+		assertThat(compileAndRun("(print (< 5 (/ 1.0 0.0)))")).isEqualTo("T");
+		assertThat(compileAndRun("(print (= (/ 1.0 0.0) (ash 1 10000)))")).isEqualTo("NIL");
+		assertThat(compileAndRun("(print (= (/ 0.0 0.0) (/ 0.0 0.0)))")).isEqualTo("NIL");
+		assertThat(compileAndRun("(print (> (max 1.0 (+ 1 (/ 1 (ash 1 60)))) 1.0))")).isEqualTo("T");
+		// The float arm's funnel: a non-number beside a float is named after the
+		// operator, like the interpreter.
+		assertThat(compileAndRun("""
+				(print (handler-case (< 1.0 nil) (type-error (e) (princ-to-string e))))
+				""")).isEqualTo("\"<: The value NIL is not of type REAL\"");
+	}
+
+	@Test
+	void compileAndRunAbsOnFloatThroughAVariable() throws Exception {
+		// Regression: abs of a float reaching it through a variable (no compile-time
+		// double literal in the argument) used to take the integer runtime path and trap
+		// with "Double cannot be cast to BigInteger". _abs now dispatches on the runtime
+		// type and handles a Double.
+		assertThat(compileAndRun("(let ((x -0.5)) (print (abs x)))")).isEqualTo("0.5");
+		assertThat(compileAndRun("(let ((x 0.5)) (print (abs x)))")).isEqualTo("0.5");
+		assertThat(compileAndRun("""
+				(defun g (a) (abs a))
+				(print (g -2.5))
+				""")).isEqualTo("2.5");
+		// A literal-double argument (the compile-time fast path) still works.
+		assertThat(compileAndRun("(print (abs -2.5))")).isEqualTo("2.5");
+	}
+
+	@Test
+	void compileAndRunComplexConstructorRejectsNonRealParts() throws Exception {
+		assertThatThrownBy(() -> compileAndRun("(print (complex #c(1 2) 3))")).isInstanceOf(Exception.class);
+		assertThatThrownBy(() -> compileAndRun("(print (complex 1 \"a\"))")).isInstanceOf(Exception.class);
+		assertThat(compileAndRun("(print (handler-case (complex #c(1 2) 3) (type-error (e) :caught)))"))
+			.isEqualTo(":CAUGHT");
+	}
+
+	private static final String COMPLEX_FLOAT_DIVISION_PROGRAM = """
+			(print (/ #c(2.0794415416798357d0 3.141592653589793d0) 0.6931471805599453d0))
+			(print (/ #c(1d0 2d0) 3d0))
+			(print (/ #c(1d200 1d200) #c(1d200 1d200)))
+			(print (/ #c(1d-200 1d-200) #c(1d-200 1d-200)))
+			(print (/ #c(1d0 2d0) #c(1d300 1d300)))
+			(print (/ #c(1d0 2d0) #c(1d-300 1d-300)))
+			(print (/ #c(1d0 2d0) #c(3d0 4d0)))
+			(print (/ #c(1d0 2d0) #c(4d0 3d0)))
+			(print (/ #c(1d0 2d0) #c(0d0 1d0)))
+			(print (/ 3d0 #c(1d0 2d0)))
+			(print (/ #c(1d0 2d0) 0d0))
+			(print (/ #c(1 2) #c(3 4)))
+			(print (/ #c(1 2) 2))
+			(print (log -8d0 2d0))
+			""";
+
+	@Test
+	void compileAndRunComplexFloatDivisionIsSbclsForm() throws Exception {
+		// _cdiv is the interpreter's divComplexPair term for term -- so the pin is the
+		// interpreter's own output, which is the only one the platform's rounding
+		// cannot invalidate. The exact arm is in the program too.
+		assertThat(compileAndRun(COMPLEX_FLOAT_DIVISION_PROGRAM)).isEqualTo(interpret(COMPLEX_FLOAT_DIVISION_PROGRAM));
+		// The rows that no rounding can blur: a real divisor is one division per part
+		// (SBCL's answer), and the fold never squares the larger part (a c^2+d^2
+		// denominator answers #C(NaN NaN) for both range cases).
+		assertThat(compileAndRun("(print (/ #c(2.0794415416798357d0 3.141592653589793d0) 0.6931471805599453d0))"))
+			.isEqualTo("#C(3.0 4.532360141827194)");
+		assertThat(compileAndRun("(print (/ #c(1d200 1d200) #c(1d200 1d200)))")).isEqualTo("#C(1.0 0.0)");
+		assertThat(compileAndRun("(print (/ #c(1d-200 1d-200) #c(1d-200 1d-200)))")).isEqualTo("#C(1.0 0.0)");
+	}
+
+	@Test
+	void compileAndRunCisAndInverseHyperbolicReal() throws Exception {
+		// The interpreter's hand-rolled real formulas, bytecode term for term --
+		// these pins are the interpreter's measured bits, not ideals.
+		assertThat(compileAndRun("(print (cis 0d0))")).isEqualTo("#C(1.0 0.0)");
+		assertThat(compileAndRun("(print (cis 1d0))")).isEqualTo("#C(0.5403023058681398 0.8414709848078965)");
+		assertThat(compileAndRun("(print (asinh -2d0))")).isEqualTo("-1.4436354751788103");
+		assertThat(compileAndRun("(print (asinh 0d0))")).isEqualTo("0.0");
+		assertThat(compileAndRun("(print (asinh 1d0))")).isEqualTo("0.881373587019543");
+		assertThat(compileAndRun("(print (acosh 1d0))")).isEqualTo("0.0");
+		assertThat(compileAndRun("(print (acosh 2d0))")).isEqualTo("1.3169578969248166");
+		assertThat(compileAndRun("(print (acosh 1.0d18))")).isEqualTo("42.13967885445277");
+		assertThat(compileAndRun("(print (atanh -0.5d0))")).isEqualTo("-0.5493061443340548");
+		assertThat(compileAndRun("(print (atanh 0d0))")).isEqualTo("0.0");
+		assertThat(compileAndRun("(print (atanh 0.5d0))")).isEqualTo("0.5493061443340548");
+		// Domain escape: the real arm crosses into the plane like sqrt of a negative.
+		// The real part is the plane path's (log 3)/2, whose last ulp is the
+		// PLATFORM's Math.log (x64 rounds ln 3 correctly, aarch64 one low --
+		// .kb/jvm-complex.md), so the pin spells the call the emitted code makes.
+		assertThat(compileAndRun("(print (acosh 0d0))")).isEqualTo("#C(0.0 1.5707963267948966)");
+		assertThat(compileAndRun("(print (atanh 2d0))"))
+			.isEqualTo("#C(" + StrictMath.log(3.0) / 2 + " 1.5707963267948966)");
+		// First-class references reach the same _cu1 helpers the direct calls emit.
+		assertThat(compileAndRun("(print (funcall #'acosh 2d0))")).isEqualTo("1.3169578969248166");
+		assertThat(compileAndRun("(print (mapcar #'cis (list 0d0 1d0)))"))
+			.isEqualTo("(#C(1.0 0.0) #C(0.5403023058681398 0.8414709848078965))");
+	}
+
+	@Test
+	void compileAndRunInverseHyperbolicComplex() throws Exception {
+		assertThat(compileAndRun("(print (asinh #c(1d0 1d0)))")).isEqualTo("#C(1.0612750619050357 0.6662394324925153)");
+		assertThat(compileAndRun("(print (asinh #c(0d0 2d0)))")).isEqualTo("#C(1.3169578969248166 1.5707963267948966)");
+		// The sheet flip: without the -log(s - z) branch this lands on +2.06..., the
+		// wrong side of the cut.
+		assertThat(compileAndRun("(print (asinh #c(0d0 -4d0)))"))
+			.isEqualTo("#C(-2.0634370688955608 -1.5707963267948966)");
+		// 2*log of the sqrt sum's modulus: the modulus is the same double on every
+		// platform, its log's last ulp is the platform's (x64 lands on SBCL's ...357).
+		assertThat(compileAndRun("(print (acosh #c(1d0 1d0)))"))
+			.isEqualTo("#C(" + 2 * StrictMath.log(1.7000157758867898) + " 0.9045568943023813)");
+		// The signed zero of the imaginary part picks the sheet at the cut.
+		assertThat(compileAndRun("(print (acosh #c(0d0 0d0)))")).isEqualTo("#C(0.0 1.5707963267948966)");
+		assertThat(compileAndRun("(print (acosh #c(0d0 -0d0)))")).isEqualTo("#C(0.0 -1.5707963267948966)");
+		assertThat(compileAndRun("(print (acosh #c(-4d0 0d0)))")).isEqualTo("#C(2.0634370688955603 3.141592653589793)");
+		assertThat(compileAndRun("(print (atanh #c(1d0 1d0)))")).isEqualTo("#C(0.4023594781085251 1.0172219678978514)");
+		assertThat(compileAndRun("(print (atanh #c(2d0 0d0)))"))
+			.isEqualTo("#C(" + StrictMath.log(3.0) / 2 + " 1.5707963267948966)");
+		assertThat(compileAndRun("(print (atanh #c(2d0 -0d0)))"))
+			.isEqualTo("#C(" + StrictMath.log(3.0) / 2 + " -1.5707963267948966)");
+	}
+
+	@Test
+	void aComplexFreeArangeProgramRunsStandaloneWithoutTheHolder() throws Exception {
+		// The spliced linalg.lisp mentions sqrt in defuns this program never
+		// calls (%la-fsqrt and friends), which opens the complex gate for a program
+		// that can never observe a complex. The lone class still carries the pool
+		// reference, but no executed path may resolve it: the holder-presence probe
+		// steers every type test to its holder-less shape when the travelling
+		// RontoComplex.class file is absent. The device-gated twin is
+		// JvmLinalgGpuAccelCompilerTest#aLazyResultAllocatesNoHostArrayOnTheCompiledBackend.
+		List<LispVal> program = am.ik.rontolisp.eval.LinalgLibrary
+			.process(LispReader.readAllFromString("(print (linalg:arange 1 5 :element-type 'single-float))"));
+		byte[] classBytes = new JvmLispCompiler("Test").compile(program);
+		Path dir = Files.createDirectories(this.tempDir.resolve("standalone-757"));
+		Files.write(dir.resolve("Test.class"), classBytes);
+		Process process = new ProcessBuilder(Path.of(System.getProperty("java.home"), "bin", "java").toString(), "-cp",
+				dir.toString(), "Test")
+			.redirectErrorStream(true)
+			.start();
+		String out = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+		assertThat(process.waitFor()).as("standalone run:%n%s", out).isZero();
+		assertThat(out.trim()).isEqualTo("#f(1.0 2.0 3.0 4.0)");
+	}
+
+	@Test
+	void compileAndRunComplexOrderingSignalsCatchableTypeErrors() throws Exception {
+		assertThat(compileAndRun("""
+				(defun te-print (thunk)
+				  (handler-case (funcall thunk) (type-error (e) (princ-to-string e))))
+				(print (list (te-print (lambda () (minusp #c(1 2))))
+				             (te-print (lambda () (plusp #c(1 2))))
+				             (te-print (lambda () (< #c(1 2) #c(3 4))))
+				             (te-print (lambda () (> #c(1 2) 1)))
+				             (te-print (lambda () (min #c(1 2) 3)))
+				             (te-print (lambda () (max 3 #c(1 2))))))
+				""")).isEqualTo("(\"<: The value #C(1 2) is not of type REAL\""
+				+ " \">: The value #C(1 2) is not of type REAL\"" + " \"<: The value #C(1 2) is not of type REAL\""
+				+ " \">: The value #C(1 2) is not of type REAL\"" + " \"MIN: The value #C(1 2) is not of type REAL\""
+				+ " \"MAX: The value #C(1 2) is not of type REAL\")");
+	}
+
+	@Test
+	void compileAndRunComplexAccessors() throws Exception {
+		assertThat(compileAndRun("(print (conjugate #c(1 2)))")).isEqualTo("#C(1 -2)");
+		assertThat(compileAndRun("(print (conjugate 5))")).isEqualTo("5");
+		assertThat(compileAndRun("(print (realpart #c(1 2)))")).isEqualTo("1");
+		assertThat(compileAndRun("(print (realpart 5))")).isEqualTo("5");
+		assertThat(compileAndRun("(print (realpart #c(1.0 2)))")).isEqualTo("1.0");
+		assertThat(compileAndRun("(print (imagpart #c(1 2)))")).isEqualTo("2");
+		assertThat(compileAndRun("(print (imagpart 5))")).isEqualTo("0");
+		assertThat(compileAndRun("(print (imagpart 5.5))")).isEqualTo("0.0");
+		assertThat(compileAndRun("(print (phase #c(1 1)))")).isEqualTo("0.7853981633974483");
+		assertThat(compileAndRun("(print (phase 5))")).isEqualTo("0.0");
+		assertThat(compileAndRun("(print (phase -5))")).isEqualTo("3.141592653589793");
+		assertThatThrownBy(() -> compileAndRun("(print (realpart nil))")).isInstanceOf(Exception.class);
+	}
+
+	@Test
+	void compileAndRunComplexExptExpLogTrig() throws Exception {
+		// The float parts are pinned against the interpreter's own Math.exp/sin/cos/log
+		// values, not against a printed spelling: StrictMath.exp(1.0) is 1 ulp apart
+		// between x64 and aarch64 (2.718281828459045 and 2.7182818284590455), so a
+		// literal expected here is the digit string of whichever box took it
+		// (.kb/jvm-complex.md). The exact answers keep their literal form.
+		assertThat(compileAndRun("(print (expt #c(1 1) 2))")).isEqualTo("#C(0 2)");
+		assertThat(compileAndRun("(print (expt #c(1 1) -1))")).isEqualTo("#C(1/2 -1/2)");
+		assertThat(compileAndRun("(print (expt #c(0 1) 2))")).isEqualTo("-1");
+		assertThat(compileAndRun("(print (realpart (exp #c(0 1))))")).isEqualTo(Double.toString(StrictMath.cos(1)));
+		assertThat(compileAndRun("(print (imagpart (exp #c(0 1))))")).isEqualTo(Double.toString(StrictMath.sin(1)));
+		assertThat(compileAndRun("(print (realpart (log #c(1 1))))"))
+			.isEqualTo(Double.toString(StrictMath.log(StrictMath.hypot(1, 1))));
+		assertThat(compileAndRun("(print (imagpart (log #c(1 1))))"))
+			.isEqualTo(Double.toString(StrictMath.atan2(1, 1)));
+		assertThat(compileAndRun("(print (realpart (sin #c(1 1))))"))
+			.isEqualTo(Double.toString(StrictMath.sin(1) * StrictMath.cosh(1)));
+		assertThat(compileAndRun("(print (imagpart (sin #c(1 1))))"))
+			.isEqualTo(Double.toString(StrictMath.cos(1) * StrictMath.sinh(1)));
+		assertThat(compileAndRun("(print (exp 1))")).isEqualTo(Double.toString(StrictMath.exp(1)));
+		assertThat(compileAndRun("(print (expt 2 3))")).isEqualTo("8");
+	}
+
+	@Test
+	void compileAndRunComplexAsinAcosOnTheBranchCut() throws Exception {
+		// The mirror of LispEvaluatorTest#evalComplexAsinAcosOnTheBranchCut: the side of
+		// the cut is decided by the REAL part (quadrant IV above +1, quadrant II below
+		// -1) and an imaginary ZERO's sign does not move it. Both signs are pinned so
+		// the _cu1 arms cannot drift back. The real parts are atan2's exact on-axis
+		// answers; the imaginary magnitudes spell the platform's own Math.log through
+		// asinh, which x64 and aarch64 round differently in the last ulp.
+		String above = Double.toString(StrictMath.log(3.7320508075688767));
+		String below = Double.toString(StrictMath.log(7.872983346207417));
+		assertThat(compileAndRun("""
+				(print (asin #c(2d0 0d0)))
+				(print (asin #c(2d0 -0d0)))
+				(print (asin #c(-4d0 0d0)))
+				(print (asin #c(-4d0 -0d0)))
+				(print (acos #c(2d0 0d0)))
+				(print (acos #c(2d0 -0d0)))
+				(print (acos #c(-4d0 0d0)))
+				(print (acos #c(-4d0 -0d0)))
+				""")).isEqualTo(String.join("\n", "#C(1.5707963267948966 -" + above + ")",
+				"#C(1.5707963267948966 -" + above + ")", "#C(-1.5707963267948966 " + below + ")",
+				"#C(-1.5707963267948966 " + below + ")", "#C(0.0 " + above + ")", "#C(0.0 " + above + ")",
+				"#C(3.141592653589793 -" + below + ")", "#C(3.141592653589793 -" + below + ")"));
+	}
+
+	@Test
+	void compileAndRunComplexAsinAcosOfARealArgumentAnswerAnExactZero() throws Exception {
+		// The mirror of
+		// LispEvaluatorTest#evalComplexAsinAcosOfARealArgumentAnswerAnExactZero: inside
+		// [-1, 1] the imaginary part is an EXACT zero, and the #c(1 1) rows agree to the
+		// bit with the asinh/acosh pins above (asin z = -i*asinh(i*z), acos z = -i*acosh
+		// z).
+		String oneOne = Double.toString(StrictMath.log(2.890053638263964));
+		assertThat(compileAndRun("""
+				(print (asin (complex -0.5d0 0d0)))
+				(print (asin (complex 0.5d0 0d0)))
+				(print (asin (complex 0d0 0d0)))
+				(print (asin (complex 1d0 0d0)))
+				(print (acos (complex -0.5d0 0d0)))
+				(print (acos (complex 0.5d0 0d0)))
+				(print (acos (complex 1d0 0d0)))
+				(print (asin #c(0d0 1d0)))
+				(print (asin #c(1d0 1d0)))
+				(print (acos #c(0d0 1d0)))
+				(print (acos #c(1d0 1d0)))
+				""")).isEqualTo(String.join("\n", "#C(-0.5235987755982989 0.0)", "#C(0.5235987755982989 0.0)",
+				"#C(0.0 0.0)", "#C(1.5707963267948966 0.0)", "#C(2.0943951023931953 0.0)", "#C(1.0471975511965979 0.0)",
+				"#C(0.0 0.0)", "#C(0.0 0.881373587019543)", "#C(0.6662394324925153 " + oneOne + ")",
+				"#C(1.5707963267948966 -0.881373587019543)", "#C(0.9045568943023813 -" + oneOne + ")"));
+	}
+
+	/** The fifteen unary math functions {@code _cu1} dispatches, in selector order. */
+	private static final List<String> COMPLEX_UNARY_FUNCTIONS = List.of("exp", "log", "sin", "cos", "tan", "asin",
+			"acos", "atan", "sinh", "cosh", "tanh", "asinh", "acosh", "atanh", "cis");
+
+	/**
+	 * Arguments that separate the arms: two general points, the two degenerate axes, a
+	 * negative real and a real outside the asin/acos/atanh cut.
+	 */
+	private static final List<String> COMPLEX_UNARY_ARGUMENTS = List.of("#c(1d0 1d0)", "#c(-1.5d0 0.25d0)",
+			"#c(0.5d0 -2d0)", "#c(0d0 1d0)", "#c(1d0 0d0)", "#c(-4d0 0d0)", "#c(2d0 0d0)");
+
+	@Test
+	void compileAndRunComplexUnaryMathMirrorsTheInterpreterArmForArm() throws Exception {
+		// _cu1's fifteen arms share ONE frame -- slots 6/8/10/12/14 are scratch -- and an
+		// arm that writes a second quantity over a slot it still needs answers a
+		// plausible number rather than failing. tan and tanh did exactly that for as long
+		// as they existed: |cos z|^2 landed on cos z's real part, so both degenerated to
+		// their numerator on the real axis and (tan #c(1d0 0d0)) answered sin 1. Every
+		// arm
+		// is therefore pinned against the INTERPRETER's own value, point by point, which
+		// no per-arm literal could do: the digits are the PLATFORM's Math rounding
+		// (.kb/jvm-complex.md), not a constant.
+		StringBuilder program = new StringBuilder();
+		for (String function : COMPLEX_UNARY_FUNCTIONS) {
+			for (String argument : COMPLEX_UNARY_ARGUMENTS) {
+				program.append("(print (").append(function).append(' ').append(argument).append("))\n");
+			}
+		}
+		String source = program.toString();
+		assertThat(compileAndRun(source)).isEqualTo(interpret(source));
+		// An anchor the mirror cannot supply: agreeing on a wrong value is still
+		// agreement, so each axis is checked against the REAL function it must be.
+		assertThat(compileAndRun("""
+				(print (< (abs (- (realpart (tan #c(1d0 0d0))) (tan 1d0))) 1d-15))
+				(print (< (abs (- (imagpart (tan #c(0d0 1d0))) (tanh 1d0))) 1d-15))
+				(print (< (abs (- (realpart (tanh #c(1d0 0d0))) (tanh 1d0))) 1d-15))
+				(print (< (abs (- (imagpart (tanh #c(0d0 1d0))) (tan 1d0))) 1d-15))
+				""")).isEqualTo(String.join("\n", "T", "T", "T", "T"));
+	}
+
+	/**
+	 * Every real-domain escape, spelled as a literal AND carried through a variable --
+	 * the second is what makes the answer's TYPE a run-time property, which no syntactic
+	 * steering gate can see, so it is the case the escape exists for.
+	 */
+	private static final String REAL_DOMAIN_ESCAPE_PROGRAM = """
+			(print (log -1d0))
+			(print (log -100d0))
+			(print (log -1))
+			(print (log -1/2))
+			(print (log 0d0))
+			(print (log 1d0))
+			(print (asin 2d0))
+			(print (asin -2d0))
+			(print (asin 2))
+			(print (acos 2d0))
+			(print (acos -2d0))
+			(print (acos -4d0))
+			(print (asin 0.5d0))
+			(print (asin 1d0))
+			(print (acos 1d0))
+			(print (acosh 0d0))
+			(print (atanh 2d0))
+			(print (expt -8d0 (/ 1d0 3d0)))
+			(print (expt -8 1/3))
+			(print (expt -2d0 0.5d0))
+			(print (expt -2 2))
+			(print (expt -8d0 2d0))
+			(print (expt -8d0 -2d0))
+			(print (expt 2 -1))
+			(let ((x -1d0)) (print (log x)))
+			(let ((x 2d0)) (print (asin x)))
+			(let ((x -2d0)) (print (asin x)))
+			(let ((x 2d0)) (print (acos x)))
+			(let ((x -4d0)) (print (acos x)))
+			(let ((x 0d0)) (print (acosh x)))
+			(let ((x 2d0)) (print (atanh x)))
+			(let ((b -8d0) (e (/ 1d0 3d0))) (print (expt b e)))
+			(let ((b -8d0) (e 2d0)) (print (expt b e)))
+			(let ((b 8d0) (e 0.5d0)) (print (expt b e)))
+			""";
+
+	@Test
+	void compileAndRunRealDomainEscapesMirrorTheInterpreter() throws Exception {
+		// log of a negative, asin/acos beyond [-1, 1] and a negative base to a
+		// fractional power answer the plane instead of NaN, and the pin is the
+		// INTERPRETER's own output: these are Math.log/Math.pow values whose last bit
+		// is the platform's (.kb/jvm-complex.md), so no literal could stand for them.
+		assertThat(compileAndRun(REAL_DOMAIN_ESCAPE_PROGRAM)).isEqualTo(interpret(REAL_DOMAIN_ESCAPE_PROGRAM));
+	}
+
+	@Test
+	void compileAndRunRealDomainEscapesKeepANaNArgumentReal() throws Exception {
+		// A NaN is outside every one of these domains under a naive comparison, and
+		// answering a complex there would be wrong twice over: CL answers the NaN back.
+		// Each test therefore picks the DCMP variant a NaN fails.
+		String source = """
+				(let ((nan (/ 0d0 0d0)))
+				  (print (list (complexp (log nan)) (complexp (asin nan)) (complexp (acos nan))
+				               (complexp (acosh nan)) (complexp (atanh nan)) (complexp (sqrt nan))
+				               (complexp (expt nan 0.5d0)))))
+				""";
+		assertThat(compileAndRun(source)).isEqualTo(interpret(source));
+		assertThat(compileAndRun(source)).isEqualTo("(NIL NIL NIL NIL NIL NIL NIL)");
+	}
+
+	private static final String ATAN2_AND_LOG_BASE_PROGRAM = """
+			(print (atan 1d0 1d0))
+			(print (atan 0d0 1d0))
+			(print (atan 1d0 0d0))
+			(print (atan 1d0 -1d0))
+			(print (atan 0d0 -1d0))
+			(print (atan -0d0 -1d0))
+			(print (atan -1d0 1d0))
+			(print (atan -1d0 0d0))
+			(print (atan -1d0 -1d0))
+			(print (atan 0d0 0d0))
+			(print (atan -0d0 0d0))
+			(print (atan 1 1))
+			(print (atan 3 4))
+			(print (atan 1d0))
+			(print (log 8 2))
+			(print (log 100 10))
+			(print (log 1024 2))
+			(print (log 8d0 2d0))
+			(print (log 1000d0 10d0))
+			(print (log -8d0 2d0))
+			(print (log #c(1d0 1d0) 2d0))
+			(print (log #c(1d0 1d0) #c(2d0 1d0)))
+			(print (log 8d0))
+			(let ((y 1d0) (x -1d0)) (print (atan y x)))
+			(let ((y -0d0) (x -1d0)) (print (atan y x)))
+			(let ((n 8d0) (b 2d0)) (print (log n b)))
+			(let ((n -8d0) (b 2d0)) (print (log n b)))
+			(let ((z #c(1d0 1d0)) (b 2d0)) (print (log z b)))
+			(print (funcall #'log 8 2))
+			(print (funcall #'atan 1d0 -1d0))
+			(print (funcall #'log 8d0))
+			(print (funcall #'atan 1d0))
+			""";
+
+	@Test
+	void compileAndRunAtan2AndLogBaseMirrorTheInterpreter() throws Exception {
+		// (atan y x) is Math.atan2 and (log n base) the quotient of two logarithms;
+		// both are platform-rounded Math values, so the pin is the INTERPRETER's own
+		// output rather than a digit string.
+		assertThat(compileAndRun(ATAN2_AND_LOG_BASE_PROGRAM)).isEqualTo(interpret(ATAN2_AND_LOG_BASE_PROGRAM));
+	}
+
+	@Test
+	void compileAndRunAtan2OfAComplexSignals() throws Exception {
+		// CLHS: both arguments of the two-argument atan must be REAL. A complex
+		// reaching the f64 coercion is not silently reduced to its real part.
+		String source = """
+				(print (handler-case (atan #c(1d0 1d0) 1d0) (error (e) (princ-to-string e))))
+				""";
+		assertThat(compileAndRun(source)).contains("ATAN: The value #C(1.0 1.0) is not of type REAL");
+		assertThat(compileAndRun(source)).isEqualTo(interpret(source));
+	}
+
+	@Test
+	void aLiteralProvenRealBaseKeepsTheComplexGateShut() throws Exception {
+		// (log n base) is TWO logarithms, so the gate stays shut only when both
+		// literals prove themselves non-negative -- and (atan y x) never opens it at
+		// all, being Math.atan2 over two reals.
+		String holderClassConstant = "am/ik/rontolisp/runtime/RontoComplex";
+		byte[] shut = new JvmLispCompiler("Test").compile(LispReader.readAllFromString("""
+				(defun f (y x) (+ (atan y x) (log 8 2)))
+				(print (f 1d0 2d0))
+				"""));
+		assertThat(new String(shut, StandardCharsets.ISO_8859_1)).doesNotContain(holderClassConstant)
+			.doesNotContain("_ccomplex")
+			.doesNotContain("_cu1")
+			.doesNotContain("_cdiv");
+		byte[] open = new JvmLispCompiler("Test").compile(LispReader.readAllFromString("""
+				(defun f (n) (log n 2))
+				(print (f 8d0))
+				"""));
+		assertThat(new String(open, StandardCharsets.ISO_8859_1)).contains(holderClassConstant)
+			.contains("_cu1")
+			.contains("_cdiv");
+	}
+
+	@Test
+	void aStatementPositionLiteralLeavesNoTraceInTheClass() throws Exception {
+		// A docstring (defun, lambda) or any self-evaluating literal whose value is
+		// discarded compiles to nothing: no ldc/pop in the method, no string in the
+		// constant pool. A lone docstring-shaped body is the function's VALUE and stays.
+		String source = """
+				(defun doc-f (x) "doc-f-marker" (declare (type fixnum x)) "mid-marker" 42 (* x 2))
+				(defun doc-only () "value-marker")
+				(print (doc-f 3))
+				(print (doc-only))
+				(print (documentation 'doc-f 'function))
+				(print (funcall (lambda (y) "lambda-marker" (+ y 1)) 1))
+				(print (let ((z (doc-f 1))) "let-marker" #\\c 1.5 :kw z))
+				""";
+		String classText = new String(new JvmLispCompiler("Test").compile(LispReader.readAllFromString(source)),
+				StandardCharsets.ISO_8859_1);
+		assertThat(classText).doesNotContain("doc-f-marker")
+			.doesNotContain("mid-marker")
+			.doesNotContain("lambda-marker")
+			.doesNotContain("let-marker")
+			.contains("value-marker");
+		assertThat(compileAndRun(source)).isEqualTo("6\n\"value-marker\"\nNIL\n2\n2").isEqualTo(interpret(source));
+	}
+
+	@Test
+	void aLiteralProvenRealDomainKeepsTheComplexGateShut() throws Exception {
+		// The gate's trigger for these four is the CALL, not the mention: an argument
+		// the source already proves inside the real domain cannot build a holder, so a
+		// program made only of those still emits without the _c* group and without the
+		// travelling RontoComplex.class beside it (.kb/jvm-complex.md's byte-identity
+		// promise). (expt x 2) and (expt 10.0 n) are the shapes that decide whether an
+		// ordinary numeric program pays for this escape.
+		// The holder's CLASS constant (the internal, slash-separated name) is what the
+		// gate owns; the dotted STRING beside it is the _hasComplex probe's
+		// Class.forName argument, which every class carries.
+		String holderClassConstant = "am/ik/rontolisp/runtime/RontoComplex";
+		byte[] shut = new JvmLispCompiler("Test").compile(LispReader.readAllFromString("""
+				(defun f (n) (+ (expt n 2) (expt 10.0 n) (log 2) (asin 1) (acos 0)))
+				(print (f 3))
+				"""));
+		assertThat(new String(shut, StandardCharsets.ISO_8859_1)).doesNotContain(holderClassConstant)
+			.doesNotContain("_ccomplex")
+			.doesNotContain("_cu1")
+			.doesNotContain("_cpowr");
+		byte[] open = new JvmLispCompiler("Test").compile(LispReader.readAllFromString("""
+				(defun f (n) (log n))
+				(print (f 3))
+				"""));
+		assertThat(new String(open, StandardCharsets.ISO_8859_1)).contains(holderClassConstant).contains("_cu1");
+		byte[] openPow = new JvmLispCompiler("Test").compile(LispReader.readAllFromString("""
+				(defun f (b e) (expt b e))
+				(print (f -8d0 2d0))
+				"""));
+		assertThat(new String(openPow, StandardCharsets.ISO_8859_1)).contains(holderClassConstant).contains("_cpowr");
+	}
+
+	@Test
+	void compileAndRunComplexTypep() throws Exception {
+		// SBCL parity: a complex is of type complex (and of type
+		// number) but not of type real; a real is not of type complex.
+		assertThat(compileAndRun("(print (typep #c(1 2) 'complex))")).isEqualTo("T");
+		assertThat(compileAndRun("(print (typep #c(1 2) 'real))")).isEqualTo("NIL");
+		assertThat(compileAndRun("(print (typep #c(1 2) 'number))")).isEqualTo("T");
+		assertThat(compileAndRun("(print (typep 5 'complex))")).isEqualTo("NIL");
+		assertThat(compileAndRun("(print (typep 5 'real))")).isEqualTo("T");
+		assertThat(compileAndRun("(print (typep #c(1 2) '(complex integer)))")).isEqualTo("T");
+		assertThat(compileAndRun("(print (typep #c(1.0 2.0) '(complex integer)))")).isEqualTo("NIL");
+		assertThat(compileAndRun("(print (typep #c(1.0 2.0) '(complex single-float)))")).isEqualTo("T");
+		assertThat(compileAndRun("(print (typep #c(1 2) '(complex *)))")).isEqualTo("T");
+		assertThat(compileAndRun("(print (typep 5 '(complex *)))")).isEqualTo("NIL");
+		assertThat(compileAndRun("(print (typep #c(1 2) '(complex rational)))")).isEqualTo("T");
+		assertThat(compileAndRun("(print (typecase #c(1 2) (real :real) (complex :complex)))")).isEqualTo(":COMPLEX");
+		assertThat(compileAndRun("(print (typecase 5 (complex :complex) (real :real)))")).isEqualTo(":REAL");
+		assertThatThrownBy(() -> compileAndRun("(print (check-type 5 complex))")).isInstanceOf(Exception.class);
+	}
+
+	@Test
+	void compileAndRunUpgradedComplexPartType() throws Exception {
+		assertThat(compileAndRun("(print (upgraded-complex-part-type 'integer))")).isEqualTo("INTEGER");
+		assertThat(compileAndRun("(print (upgraded-complex-part-type 'single-float))")).isEqualTo("SINGLE-FLOAT");
+		assertThat(compileAndRun("(print (upgraded-complex-part-type 'real))")).isEqualTo("REAL");
+		assertThat(compileAndRun("(print (upgraded-complex-part-type '(integer 0 10)))")).isEqualTo("INTEGER");
+		assertThat(compileAndRun("(print (funcall #'upgraded-complex-part-type 'integer))")).isEqualTo("INTEGER");
+		assertThat(compileAndRun("(print (handler-case (upgraded-complex-part-type 'string) (error (e) :caught)))"))
+			.isEqualTo(":CAUGHT");
+		assertThatThrownBy(() -> compileAndRun("(print (upgraded-complex-part-type 'complex))"))
+			.isInstanceOf(Exception.class);
+	}
+
+	@Test
+	void compileAndRunCoerceToComplex() throws Exception {
+		assertThat(compileAndRun("(print (coerce 5 'complex))")).isEqualTo("5");
+		assertThat(compileAndRun("(print (coerce 5.0 'complex))")).isEqualTo("#C(5.0 0.0)");
+		assertThat(compileAndRun("(print (coerce #c(1 2) 'complex))")).isEqualTo("#C(1 2)");
+		assertThat(compileAndRun("(print (coerce 5 '(complex single-float)))")).isEqualTo("#C(5.0 0.0)");
+		assertThat(compileAndRun("(print (coerce #c(1 2) '(complex single-float)))")).isEqualTo("#C(1.0 2.0)");
+		assertThat(compileAndRun("(print (coerce 5 'real))")).isEqualTo("5");
+		assertThat(compileAndRun("""
+				(defun pick-complex-type () 'complex)
+				(print (coerce 5.0 (pick-complex-type)))
+				""")).isEqualTo("#C(5.0 0.0)");
+		assertThat(compileAndRun("(print (handler-case (coerce #c(1 2) 'real) (type-error (e) :caught)))"))
+			.isEqualTo(":CAUGHT");
+		assertThat(compileAndRun("(print (handler-case (coerce #c(1 2) 'single-float) (type-error (e) :caught)))"))
+			.isEqualTo(":CAUGHT");
+	}
+
+	@Test
+	void compileAndRunComplexRealOnlyOperationsSignalCatchableTypeErrors() throws Exception {
+		assertThat(compileAndRun("""
+				(defun te-print (thunk)
+				  (handler-case (funcall thunk) (type-error (e) (princ-to-string e))))
+				(print (list (te-print (lambda () (floor #c(1 2))))
+				             (te-print (lambda () (truncate #c(1 2))))
+				             (te-print (lambda () (ceiling #c(1 2))))
+				             (te-print (lambda () (round #c(1 2))))
+				             (te-print (lambda () (float #c(1 2))))
+				             (te-print (lambda () (numerator #c(1 2))))
+				             (te-print (lambda () (denominator #c(1 2))))))
+				""")).isEqualTo("(\"FLOOR: The value #C(1 2) is not of type REAL\""
+				+ " \"TRUNCATE: The value #C(1 2) is not of type REAL\""
+				+ " \"CEILING: The value #C(1 2) is not of type REAL\""
+				+ " \"ROUND: The value #C(1 2) is not of type REAL\""
+				+ " \"FLOAT: The value #C(1 2) is not of type REAL\""
+				+ " \"NUMERATOR: The value #C(1 2) is not of type RATIONAL\""
+				+ " \"DENOMINATOR: The value #C(1 2) is not of type RATIONAL\")");
+		assertThat(compileAndRun("""
+				(defun te-print (thunk)
+				  (handler-case (funcall thunk) (type-error (e) (princ-to-string e))))
+				(print (list (te-print (lambda () (isqrt #c(1 2))))
+				             (te-print (lambda () (mod #c(1 2) 3)))
+				             (te-print (lambda () (rem #c(1 2) 3)))
+				             (te-print (lambda () (gcd #c(1 2) 3)))
+				             (te-print (lambda () (lcm 4 #c(1 2))))
+				             (te-print (lambda () (logand #c(1 2) 3)))
+				             (te-print (lambda () (ash #c(1 2) 1)))))
+				""")).isEqualTo("(\"ISQRT: The value #C(1 2) is not of type INTEGER\""
+				+ " \"MOD: The value #C(1 2) is not of type REAL\"" + " \"REM: The value #C(1 2) is not of type REAL\""
+				+ " \"GCD: The value #C(1 2) is not of type INTEGER\""
+				+ " \"LCM: The value #C(1 2) is not of type INTEGER\""
+				+ " \"LOGAND: The value #C(1 2) is not of type INTEGER\""
+				+ " \"ASH: The value #C(1 2) is not of type INTEGER\")");
+	}
+
+	@Test
+	void compileAndRunGcdLcmNumeratorDenominatorAsFirstClass() throws Exception {
+		// #'gcd / #'lcm are variadic like the call: (gcd) is 0, (lcm) is 1, a single
+		// argument is its absolute value.
+		assertThat(compileAndRun("(print (funcall #'gcd))")).isEqualTo("0");
+		assertThat(compileAndRun("(print (funcall #'gcd -6))")).isEqualTo("6");
+		assertThat(compileAndRun("(print (apply #'gcd (list 24 36 48)))")).isEqualTo("12");
+		assertThat(compileAndRun("(print (funcall #'lcm))")).isEqualTo("1");
+		assertThat(compileAndRun("(print (funcall #'lcm -6))")).isEqualTo("6");
+		assertThat(compileAndRun("(print (apply #'lcm (list 4 6 10)))")).isEqualTo("60");
+		// #'numerator / #'denominator must compile as function values too.
+		assertThat(compileAndRun("(print (funcall #'numerator 1/2))")).isEqualTo("1");
+		assertThat(compileAndRun("(print (funcall #'denominator 1/2))")).isEqualTo("2");
+		assertThat(compileAndRun("(print (mapcar #'numerator (list 1/2 2/3)))")).isEqualTo("(1 2)");
+		// The wrong-type report through the first-class value still names the operator,
+		// the same as a direct call.
+		assertThat(compileAndRun("""
+				(defun te-print (thunk)
+				  (handler-case (funcall thunk) (type-error (e) (princ-to-string e))))
+				(print (list (te-print (lambda () (funcall #'gcd #c(1 2) 3)))
+				             (te-print (lambda () (funcall #'numerator #c(1 2))))))
+				""")).isEqualTo("(\"GCD: The value #C(1 2) is not of type INTEGER\""
+				+ " \"NUMERATOR: The value #C(1 2) is not of type RATIONAL\")");
+	}
+
+	@Test
+	void compileAndRunFloatArithmeticOnNonLiteralOperands() throws Exception {
+		// Float values reaching an operator through variables/parameters (not as a
+		// literal) must still use float arithmetic, with integer contagion.
+		assertThat(compileAndRun("(defun f (a b) (+ a b)) (print (f 1.5 2.5))")).isEqualTo("4.0");
+		assertThat(compileAndRun("(defun f (a b) (- a b)) (print (f 1.0 0.25))")).isEqualTo("0.75");
+		assertThat(compileAndRun("(defun f (a b) (* a b)) (print (f 1.5 2.5))")).isEqualTo("3.75");
+		assertThat(compileAndRun("(defun f (a b) (/ a b)) (print (f 3.0 2.0))")).isEqualTo("1.5");
+		assertThat(compileAndRun("(defun f (a b) (+ a b)) (print (f 1 2.0))")).isEqualTo("3.0");
+		assertThat(compileAndRun("(defun neg (a) (- a)) (print (neg 2.5))")).isEqualTo("-2.5");
+		// Comparisons on non-literal float operands.
+		assertThat(compileAndRun("(defun lt (a b) (if (< a b) 1 0)) (print (lt 1.5 2.5))")).isEqualTo("1");
+		assertThat(compileAndRun("(defun gt (a b) (if (> a b) 1 0)) (print (gt 1.5 2.5))")).isEqualTo("0");
+		assertThat(compileAndRun("(defun eq2 (a b) (if (= a b) 1 0)) (print (eq2 2.0 2.0))")).isEqualTo("1");
+		// Operators as first-class values over floats.
+		assertThat(compileAndRun("(print (reduce #'+ (list 1.0 2.0 3.0) :initial-value 0))")).isEqualTo("6.0");
+		assertThat(compileAndRun("(print (funcall #'* 1.5 2.0))")).isEqualTo("3.0");
+		// Integer, big-integer and ratio paths are unaffected by the float fast path.
+		assertThat(compileAndRun("(defun f (a b) (+ a b)) (print (f 1 2))")).isEqualTo("3");
+		assertThat(compileAndRun("(defun f (a b) (* a b)) (print (f 1000000000000 1000000000000))"))
+			.isEqualTo("1000000000000000000000000");
+		assertThat(compileAndRun("(defun f (a b) (/ a b)) (print (f 1 3))")).isEqualTo("1/3");
+	}
+
+	@Test
+	void compileAndRunGetenv() throws Exception {
+		// PATH is set in the test environment; an unset variable yields nil.
+		assertThat(compileAndRun("(print (stringp (uiop:getenv \"PATH\")))")).isEqualTo("T");
+		assertThat(compileAndRun("(print (uiop:getenv \"RONTOLISP_DEFINITELY_UNSET_VAR\"))")).isEqualTo("NIL");
+	}
+
+	@Test
+	void compileAndRunUnless() throws Exception {
+		assertThat(compileAndRun("(print (unless nil 42))")).isEqualTo("42");
+		assertThat(compileAndRun("(print (unless t 42))")).isEqualTo("NIL");
+	}
+
+	@Test
+	void compileAndRunProg1() throws Exception {
+		assertThat(compileAndRun("(print (prog1 1 2 3))")).isEqualTo("1");
+		assertThat(compileAndRun("(print (prog1 99))")).isEqualTo("99");
+		assertThat(compileAndRun("(print (let ((x (list 1 2 3))) (prog1 (car x) (setq x (cdr x)))))")).isEqualTo("1");
+	}
+
+	@Test
+	void compileAndRunFifthThroughTenth() throws Exception {
+		assertThat(compileAndRun("(print (fifth '(1 2 3 4 5)))")).isEqualTo("5");
+		assertThat(compileAndRun("(print (sixth '(1 2 3 4 5 6)))")).isEqualTo("6");
+		assertThat(compileAndRun("(print (seventh '(1 2 3 4 5 6 7)))")).isEqualTo("7");
+		assertThat(compileAndRun("(print (eighth '(1 2 3 4 5 6 7 8)))")).isEqualTo("8");
+		assertThat(compileAndRun("(print (ninth '(1 2 3 4 5 6 7 8 9)))")).isEqualTo("9");
+		assertThat(compileAndRun("(print (tenth '(1 2 3 4 5 6 7 8 9 10)))")).isEqualTo("10");
+	}
+
+	@Test
+	void compileAndRunMemberWithTest() throws Exception {
+		assertThat(compileAndRun("(print (member '(a d) '((a b) (a c) (a d) (a e)) :test 'equal)) "
+				+ "(print (member '(a d) '((a b) (a c) (a d) (a e))))"))
+			.isEqualTo("((A D) (A E))\nNIL");
+	}
+
+	@Test
+	void compileAndRunAssocWithTest() throws Exception {
+		assertThat(compileAndRun("(print (assoc \"b\" '((\"a\" . 1) (\"b\" . 2)) :test #'equal)) "
+				+ "(print (assoc \"z\" '((\"a\" . 1)) :test 'equal)) (print (funcall #'assoc 'b '((a . 1) (b . 2))))"))
+			.isEqualTo("(\"b\" . 2)\nNIL\n(B . 2)");
+	}
+
+	@Test
+	void compileAndRunRassocWithTest() throws Exception {
+		assertThat(compileAndRun("(print (rassoc \"x\" '((a . \"w\") (b . \"x\")) :test #'equal)) "
+				+ "(print (rassoc \"z\" '((a . \"w\")) :test 'equal)) (print (funcall #'rassoc 2 '((a . 1) (b . 2))))"))
+			.isEqualTo("(B . \"x\")\nNIL\n(B . 2)");
+	}
+
+	@Test
+	void compileAndRunAssocWithKey() throws Exception {
+		assertThat(compileAndRun("(print (assoc 2 '((1 . a) (2 . b) (3 . c)) :key (lambda (k) (+ k 1)))) "
+				+ "(print (member 3 '((1 2) (3 4) (5 6)) :key #'car)) "
+				+ "(print (rassoc 2 '((a . 1) (b . 3)) :key (lambda (v) (- v 1))))"))
+			.isEqualTo("(1 . A)\n((3 4) (5 6))\n(B . 3)");
+	}
+
+	@Test
+	void compileAndRunSequenceFunctionsWithTest() throws Exception {
+		assertThat(compileAndRun("(print (find \"b\" '(\"a\" \"b\" \"c\") :test #'string=)) "
+				+ "(print (position \"b\" '(\"a\" \"b\" \"c\") :test #'string=)) "
+				+ "(print (count \"a\" '(\"a\" \"b\" \"a\") :test #'string=)) "
+				+ "(print (remove \"b\" '(\"a\" \"b\" \"c\") :test #'string=)) "
+				+ "(print (delete \"b\" (list \"a\" \"b\" \"c\") :test #'string=)) "
+				+ "(print (remove-duplicates '(\"a\" \"b\" \"a\" \"c\") :test #'string=)) "
+				+ "(print (substitute \"X\" \"b\" '(\"a\" \"b\" \"c\") :test #'string=)) "
+				+ "(print (nsubstitute \"X\" \"b\" (list \"a\" \"b\") :test #'string=)) "
+				+ "(print (union '(\"a\" \"b\") '(\"b\" \"c\") :test #'string=)) "
+				+ "(print (intersection '(\"a\" \"b\") '(\"b\" \"c\") :test #'string=)) "
+				+ "(print (set-difference '(\"a\" \"b\") '(\"b\" \"c\") :test #'string=)) "
+				+ "(print (adjoin \"a\" '(\"a\" \"b\") :test #'string=)) "
+				+ "(print (adjoin \"z\" '(\"a\" \"b\") :test #'string=))"))
+			.isEqualTo("\"b\"\n1\n2\n(\"a\" \"c\")\n(\"a\" \"c\")\n(\"b\" \"a\" \"c\")\n(\"a\" \"X\" \"c\")\n"
+					+ "(\"a\" \"X\")\n(\"c\" \"a\" \"b\")\n(\"b\")\n(\"a\")\n(\"a\" \"b\")\n(\"z\" \"a\" \"b\")");
+	}
+
+	@Test
+	void compileAndRunSequenceFunctionsWithKey() throws Exception {
+		assertThat(compileAndRun("(print (find 4 '((1 2) (3 4)) :key #'cadr)) "
+				+ "(print (position 3 '(1 2 3 4) :key (lambda (x) (- x 1)))) "
+				+ "(print (count 2 '((1) (2) (2) (3)) :key #'car)) "
+				+ "(print (remove 1 '((1 a) (2 b) (1 c)) :key #'car)) "
+				+ "(print (delete 1 (list '(1 a) '(2 b)) :key #'car)) "
+				+ "(print (remove-duplicates '((1 a) (2 b) (1 c)) :key #'car)) "
+				+ "(print (substitute 'x 2 '((1) (2) (3)) :key #'car)) "
+				+ "(print (nsubstitute 'x 2 (list '(1) '(2)) :key #'car)) "
+				+ "(print (union '((1)) '((1) (2)) :test #'equal :key #'car)) "
+				+ "(print (intersection '((1) (2)) '((2) (3)) :key #'car)) "
+				+ "(print (set-difference '((1) (2)) '((2) (3)) :key #'car)) "
+				+ "(print (adjoin '(1 x) '((1 a) (2 b)) :key #'car))"))
+			.isEqualTo("(3 4)\n3\n2\n((2 B))\n((2 B))\n((2 B) (1 C))\n((1) X (3))\n((1) X)\n((2) (1))\n"
+					+ "((2))\n((1))\n((1 A) (2 B))");
+	}
+
+	@Test
+	void compileImproperCallFormFails() {
+		assertThatThrownBy(() -> compileAndRun("(+ 1 . 2)")).isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("Improper list in call position");
+		assertThatThrownBy(() -> compileAndRun("(print (list 1 . 2))"))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("Improper list in call position");
+	}
+
+	@Test
+	void compileAndRunPairlis() throws Exception {
+		assertThat(compileAndRun("(print (pairlis '(a b c) '(1 2 3))) (print (pairlis '(a b) '(1 2) '((c . 3)))) "
+				+ "(print (pairlis nil nil)) (print (pairlis '(a b) '(1))) (print (funcall #'pairlis '(a) '(1)))"))
+			.isEqualTo("((A . 1) (B . 2) (C . 3))\n((A . 1) (B . 2) (C . 3))\nNIL\n((A . 1))\n((A . 1))");
+	}
+
+	@Test
+	void compileAndRunCallNextMethodOverAStructIncludeChain() throws Exception {
+		// A method on an :include PARENT struct joins the child's chain, and an
+		// :around on t wraps struct-specialized primaries (sxql's yield tree).
+		assertThat(compileAndRun("""
+				(defstruct cnm-base (name "b"))
+				(defstruct (cnm-child (:include cnm-base)))
+				(defgeneric cnm-render (x))
+				(defmethod cnm-render ((x cnm-base)) (list :base (cnm-base-name x) (next-method-p)))
+				(defmethod cnm-render ((x cnm-child)) (cons :child (call-next-method)))
+				(defmethod cnm-render :around ((x t)) (cons :around (call-next-method)))
+				(defgeneric cnm-kind (x))
+				(defmethod cnm-kind ((x structure-object)) :struct)
+				(defmethod cnm-kind ((x t)) :other)
+				(defstruct cnm-late)
+				(print (cnm-render (make-cnm-child)))
+				(print (list (cnm-kind (make-cnm-late)) (cnm-kind 42)))
+				""")).isEqualTo("(:AROUND :CHILD :BASE \"b\" NIL)\n(:STRUCT :OTHER)");
+	}
+
+	@Test
+	void compileAndRunSubsetp() throws Exception {
+		assertThat(compileAndRun(
+				"(print (subsetp '(1 2) '(1 2 3))) (print (subsetp '(1 2) '(2 3 4))) (print (subsetp nil '(1 2))) "
+						+ "(print (subsetp '(\"a\" \"z\") '(\"a\" \"b\") :test #'string=)) "
+						+ "(print (subsetp '((1 x)) '((1 a) (2 b)) :key #'car)) "
+						+ "(print (funcall #'subsetp '(1 2) '(1 2 3)))"))
+			.isEqualTo("T\nNIL\nT\nNIL\nT\nT");
+	}
+
+	@Test
+	void compileAndRunBitwiseOps() throws Exception {
+		assertThat(compileAndRun(
+				"(print (logand 12 10)) (print (logior 12 10)) (print (logxor 12 10)) (print (lognot 5)) (print (ash 1 4)) (print (ash 255 -4))"))
+			.isEqualTo("8\n14\n6\n-6\n16\n15");
+		// A count outside the int range still saturates a right shift to the sign
+		// (MISC.47/.48). The count must stay runtime-computed (via a parameter):
+		// a literal huge count takes the clamped literal-ash path. Compared with =
+		// so a regressed build never prints the monster bignum (quadratic print
+		// hang).
+		assertThat(compileAndRun(
+				"(defun ashc (a c) (ash a c)) (defun ashmin (a) (ash a (min 0 a))) (defun ashminnor (a) (lognor (ash a (min 0 a)) a)) (defun ashbig (a) (ash a (- (ash 1 64)))) (defun ashwide (a) (ash a -70)) (print (= (ash 5 -64) 0)) (print (= (ash -5 -64) -1)) (print (= (ashc 5 -2878148992) 0)) (print (= (ashc -5 -2878148992) -1)) (print (= (ashmin -2878148992) -1)) (print (= (ashminnor -2878148992) 0)) (print (= (ashbig (- (ash 1 64))) -1)) (print (= (ashwide (- (ash 1 100))) (- (ash 1 30))))"))
+			.isEqualTo("T\nT\nT\nT\nT\nT\nT\nT");
+	}
+
+	@Test
+	void compileAndRunIntegerLengthAndLogbitp() throws Exception {
+		assertThat(compileAndRun(
+				"(print (integer-length 0)) (print (integer-length 5)) (print (integer-length 255)) (print (integer-length -1)) (print (integer-length -5))"))
+			.isEqualTo("0\n3\n8\n0\n3");
+		assertThat(compileAndRun(
+				"(print (logbitp 0 5)) (print (logbitp 1 5)) (print (logbitp 2 5)) (print (logbitp 3 -1)) (print (funcall #'integer-length 8)) (print (funcall #'logbitp 1 2))"))
+			.isEqualTo("T\nNIL\nT\nT\n4\nT");
+	}
+
+	@Test
+	void compileAndRunDepositFieldAndFloatRadix() throws Exception {
+		assertThat(compileAndRun(
+				"(print (deposit-field 0 (byte 4 0) 255)) (print (deposit-field 5 (byte 4 4) 0)) (print (deposit-field 240 (byte 4 4) 0)) (print (deposit-field -1 (byte 0 0) 5)) (print (deposit-field 255 (byte 4 (+ 2 2)) 0)) (print (funcall #'deposit-field 0 (byte 4 0) 255)) (print (funcall #'deposit-field 5 (byte 4 4) 0))"))
+			.isEqualTo("240\n0\n240\n5\n240\n240\n0");
+		assertThat(compileAndRun(
+				"(print (float-radix 1.0)) (print (float-radix -0.5)) (print (funcall #'float-radix 1.0))"))
+			.isEqualTo("2\n2\n2");
+	}
+
+	@Test
+	void compileAndRunByteFieldOps() throws Exception {
+		assertThat(compileAndRun(
+				"(print (byte-size (byte 8 3))) (print (byte-position (byte 8 3))) (print (ldb (byte 8 0) 255)) (print (ldb (byte 4 4) 255)) (print (ldb (byte 8 8) 65535))"))
+			.isEqualTo("8\n3\n255\n15\n255");
+		assertThat(compileAndRun(
+				"(print (dpb 0 (byte 4 0) 255)) (print (dpb 5 (byte 4 4) 0)) (print (funcall #'ldb (byte 4 4) 255)) (print (funcall #'dpb 0 (byte 4 0) 255)) (print (funcall #'byte-size (byte 6 2)))"))
+			.isEqualTo("240\n80\n15\n240\n6");
+	}
+
+	@Test
+	void compileAndRunNamedBlockReturnFrom() throws Exception {
+		// Lexical named blocks: the return-from crosses the dotimes loop's %block
+		// (which does not catch the named exit) straight to the named block, so the
+		// after-loop code never runs -- matching the interpreter.
+		assertThat(compileAndRun("""
+				(print (block scan
+				         (dotimes (i 10)
+				           (when (= i 4) (return-from scan (* i 100))))
+				         :fell-through))
+				(print (block nil (return 7) 9))
+				(print (block direct (return-from direct 42) 9))
+				""")).isEqualTo("400\n7\n42");
+	}
+
+	@Test
+	void compileAndRunReturnFromExitsDefunAcrossLoop() throws Exception {
+		// The %fn-block function boundary: a return-from naming the defun exits the
+		// function from inside a loop whose after-loop code must not run.
+		assertThat(compileAndRun("""
+				(defun find-first-even (xs)
+				  (dolist (x xs)
+				    (when (evenp x) (return-from find-first-even x)))
+				  :none)
+				(print (find-first-even '(1 3 6 7)))
+				(print (find-first-even '(1 3 5)))
+				(defun nested-blocks ()
+				  (block outer
+				    (block inner
+				      (return-from outer :from-inner))
+				    :unreachable))
+				(print (nested-blocks))
+				""")).isEqualTo("6\n:NONE\n:FROM-INNER");
+	}
+
+	@Test
+	void compileAndRunReturnFromInsideLambdaExitsOuterDefun() throws Exception {
+		// A return-from inside a lambda whose name matches an enclosing defun exits that
+		// defun as a non-local exit -- matching the interpreter and CL. The lowering keys
+		// on a dynamic block-instance id the lambda closes over, thrown to the
+		// establishing
+		// block's %nlx-catch. (Was a pinned compile-path deviation that stayed
+		// lambda-local.)
+		assertThat(compileAndRun("""
+				(defun probe (xs)
+				  (mapcar #'(lambda (x) (if (evenp x) (return-from probe :even) x)) xs))
+				(print (probe '(1 2 3)))
+				""")).isEqualTo(":EVEN");
+	}
+
+	@Test
+	void compileAndRunCrossLambdaReturnFromMidExpression() throws Exception {
+		// The cross-lambda exit value is consumed mid-expression: the abandoned outer
+		// (list :head ... :tail) operands are discarded, like a plain return.
+		assertThat(compileAndRun("""
+				(defun probe (xs)
+				  (list :head (mapcar #'(lambda (x) (if (evenp x) (return-from probe :even) x)) xs) :tail))
+				(print (probe '(1 2 3)))
+				(print (probe '(1 3 5)))
+				""")).isEqualTo(":EVEN\n(:HEAD (1 3 5) :TAIL)");
+	}
+
+	@Test
+	void compileAndRunCrossLambdaReturnFromUserBlockAndFlet() throws Exception {
+		// A cross-lambda return-from to a user (block name ...) in argument position
+		// (spilling), plus one that also crosses an flet local function holding the
+		// lambda
+		// (the id is captured through both closure levels).
+		assertThat(compileAndRun("""
+				(defun f (v)
+				  (+ 100 (block b (mapcar #'(lambda (x) (if (evenp x) (return-from b x) 0)) v) 7)))
+				(print (f '(1 4 5)))
+				(print (f '(1 3 5)))
+				(defun g (xs)
+				  (flet ((h () (mapcar #'(lambda (x) (return-from g (* x 10))) xs)))
+				    (h)))
+				(print (g '(3 4)))
+				""")).isEqualTo("104\n107\n30");
+	}
+
+	@Test
+	void compileAndRunCrossLambdaReturnFromThroughHandlerCase() throws Exception {
+		// A cross-lambda return-from unwinding through a handler-case is NOT intercepted
+		// by it (it is a non-local exit, not a signaled condition) -- the handler-case
+		// depth/spill machinery must let it pass.
+		assertThat(compileAndRun("""
+				(defun probe (xs)
+				  (handler-case
+				      (mapcar #'(lambda (x) (if (evenp x) (return-from probe :even) x)) xs)
+				    (error (e) :caught)))
+				(print (probe '(1 2 3)))
+				(print (probe '(1 3 5)))
+				""")).isEqualTo(":EVEN\n(1 3 5)");
+	}
+
+	@Test
+	void compileAndRunGoInsideLambdaReentersOuterTagbody() throws Exception {
+		// A go whose tag belongs to a tagbody in the ENCLOSING function -- the shape a
+		// handler-bind handler resuming its loop produces (quri's :lenient
+		// percent-decoding). The lowering throws the target label's re-entry index to
+		// the tagbody's catch, which re-dispatches into the tagbody at that label and
+		// carries on. (Was a call-time "no lexically enclosing tagbody" error.)
+		assertThat(compileAndRun("""
+				(define-condition my-err (error) ())
+				(defun f (x)
+				  (tagbody
+				   top
+				     (handler-bind ((my-err (lambda (e) (declare (ignore e)) (go done))))
+				       (when (> x 0) (error 'my-err))
+				       (princ "no-error"))
+				   done)
+				  :ok)
+				(print (f 1))
+				(print (f 0))
+				""")).isEqualTo(":OK\nno-error:OK");
+	}
+
+	@Test
+	void compileAndRunIntegerTagbodyTag() throws Exception {
+		// CLHS 5.3: a tagbody tag is an integer or a symbol, compared with eql -- the
+		// suite's handler-case idiom aborts with (go 10) to a numeric label. Includes
+		// the crossing shape, where the lowering re-enters the tagbody at the integer
+		// label. (Was a compile-time "GO expects a tag".)
+		assertThat(compileAndRun("""
+				(print (let ((result nil))
+				         (tagbody (go 10) (setq result 'bad) 10 (setq result 'ok))
+				         result))
+				(print (let ((i 0))
+				         (tagbody 5 (setq i (+ i 1)) (if (< i 3) (go 5)))
+				         i))
+				(defun countdown (n)
+				  (let ((out nil))
+				    (tagbody
+				     7
+				       (setq out (cons n out))
+				       (setq n (- n 1))
+				       (funcall (lambda () (if (> n 0) (go 7)))))
+				    (reverse out)))
+				(print (countdown 4))
+				""")).isEqualTo("OK\n3\n(4 3 2 1)");
+	}
+
+	@Test
+	void compileAndRunCrossLambdaGoResumesAndLoops() throws Exception {
+		// The re-entry keeps the tagbody running: a crossing go lands on its label and
+		// falls through the rest of the body, and a BACKWARD one re-runs the loop.
+		assertThat(compileAndRun("""
+				(defun scan (items)
+				  (let ((seen nil) (skipped 0))
+				    (tagbody
+				     start
+				       (mapcar (lambda (x) (if (eq x :skip) (go bump)) (setq seen (cons x seen))) items)
+				       (go done)
+				     bump
+				       (setq skipped (+ skipped 1))
+				     done)
+				    (list (reverse seen) skipped)))
+				(print (scan '(1 2 3)))
+				(print (scan '(1 :skip 3)))
+				(defun countdown (n)
+				  (let ((out nil))
+				    (tagbody
+				     again
+				       (setq out (cons n out))
+				       (setq n (- n 1))
+				       (funcall (lambda () (if (> n 0) (go again)))))
+				    (reverse out)))
+				(print (countdown 4))
+				""")).isEqualTo("((1 2 3) 0)\n((1) 1)\n(4 3 2 1)");
+	}
+
+	@Test
+	void compileAndRunCrossLambdaGoInProgKeepsTheReturnBlock() throws Exception {
+		// prog establishes BOTH the tags a go targets and the nil block a (return)
+		// exits: the re-entry loop replaces the body items, so both still work.
+		assertThat(compileAndRun("""
+				(defun via-prog (x)
+				  (prog ((acc nil))
+					 (funcall (lambda () (if (eq x :jump) (go later))))
+					 (setq acc (cons :first acc))
+					 (return (cons :early acc))
+				   later
+					 (setq acc (cons :later acc))
+					 (return acc)))
+				(print (via-prog :plain))
+				(print (via-prog :jump))
+				""")).isEqualTo("(:EARLY :FIRST)\n(:LATER)");
+	}
+
+	@Test
+	void compileAndRunCatchThrow() throws Exception {
+		// catch/throw: a DYNAMIC non-local exit -- the throw need not be lexically inside
+		// the catch, only within its dynamic extent, and the tag is a runtime value
+		// compared with eq. The innermost matching catcher wins; a non-matching one lets
+		// the exit through.
+		assertThat(compileAndRun("""
+				(print (catch 'done (+ 1 2)))
+				(print (catch 'done (throw 'done :thrown) :not-reached))
+				(defun deep (n) (if (= n 0) (throw 'bottom :hit) (deep (- n 1))))
+				(print (catch 'bottom (deep 5)))
+				(print (catch 'outer (catch 'inner (throw 'outer :to-outer)) :not-reached))
+				(print (list :a (catch 'k (throw 'k :b)) :c))
+				(let ((tag (list 1)))
+				  (print (catch tag (throw tag :computed-tag))))
+				(print (catch 'outer (catch (list 1) (throw 'outer :not-eq-to-inner))))
+				""")).isEqualTo("3\n:THROWN\n:HIT\n:TO-OUTER\n(:A :B :C)\n:COMPUTED-TAG\n:NOT-EQ-TO-INNER");
+	}
+
+	@Test
+	void compileAndRunNestedNonLocalExitInACleanupDoesNotLoseTheOuterOne() throws Exception {
+		// An unwind-protect cleanup that itself completes a non-local exit runs WHILE the
+		// outer exit is still travelling, so the two share the exit channel. The inner
+		// one must not consume the outer one's entry: after the cleanup returns, the
+		// outer exit still has to reach its own block, and it must not be intercepted as
+		// a synthesized condition by an intervening handler-case/handler-bind.
+		assertThat(compileAndRun("""
+				(defun run-protected (thunk cleanup)
+				  (unwind-protect (funcall thunk) (funcall cleanup)))
+				(defun inner-block-exit ()
+				  (block in (mapcar (lambda (x) (return-from in x)) '(:inner))))
+				(defun catch-throw-cleanup () (catch 'tag (throw 'tag :cleaned)))
+				(defun probe (cleanup)
+				  (block done
+				    (run-protected (lambda () (return-from done :from-inner)) cleanup)))
+				(print (probe #'catch-throw-cleanup))
+				(print (probe #'inner-block-exit))
+				(print (handler-case (probe #'catch-throw-cleanup) (error (e) :swallowed)))
+				(print (block done
+				         (handler-bind ((error (lambda (e) e)))
+				           (run-protected (lambda () (return-from done :past-guard))
+				                          #'catch-throw-cleanup))))
+				""")).isEqualTo(":FROM-INNER\n:FROM-INNER\n:FROM-INNER\n:PAST-GUARD");
+	}
+
+	/**
+	 * The condition-carrying twin of the nested-exit case above: what a throwable carries
+	 * -- a typed condition, a wrong-type operand's datum -- is recorded under the
+	 * throwable itself, so a failure handled inside an unwind-protect cleanup while
+	 * another is on its way out neither reads the outer one's record as its own nor takes
+	 * it away. One per-thread slot served every throwable until 2026-09-26: the inner
+	 * landing read the typed condition, and the outer one arrived as a synthesized
+	 * simple-error.
+	 */
+	static final String CONDITION_ON_ITS_WAY_OUT = """
+			(define-condition cw-typed (error) ())
+			(define-condition cw-other (error) ())
+			(define-condition cw-reporting (error) ()
+			  (:report (lambda (c s)
+			             (declare (ignore c))
+			             (format s "reported ~a"
+			                     (handler-case (error "inner")
+			                       (cw-reporting () :read-as-the-outer-one)
+			                       (error () :plain))))))
+			(defvar *cw-list* 5)
+			(defun cw-bad (x) (+ 1 x))
+			(print (handler-case
+			           (unwind-protect (error 'cw-typed)
+			             (print (handler-case (error "plain") (cw-typed () :read-as-the-typed-one) (error () :plain))))
+			         (cw-typed () :typed)
+			         (error () :lost-its-type)))
+			(print (handler-case
+			           (unwind-protect (error 'cw-typed)
+			             (print (handler-case (car *cw-list*) (cw-typed () :read-as-the-typed-one) (error () :raw))))
+			         (cw-typed () :typed)
+			         (error () :lost-its-type)))
+			(print (handler-case
+			           (unwind-protect (error 'cw-typed)
+			             (print (handler-case (error 'cw-other) (cw-typed () :read-as-the-typed-one) (cw-other () :other))))
+			         (cw-typed () :typed)
+			         (error () :lost-its-type)))
+			(print (handler-case
+			           (unwind-protect (cw-bad "a")
+			             (print (handler-case (cw-bad "b") (type-error (e) (list :inner (type-error-datum e))))))
+			         (type-error (e) (list :typed (type-error-datum e)))
+			         (error () :lost-its-type)))
+			(print (handler-case (error 'cw-reporting)
+			         (cw-reporting (c) (format nil "~a" c))
+			         (error () :lost-its-type)))
+			""";
+
+	/** What {@link #CONDITION_ON_ITS_WAY_OUT} prints, the interpreter's answer. */
+	static final String CONDITION_ON_ITS_WAY_OUT_OUTPUT = String.join("\n", ":PLAIN", ":TYPED", ":RAW", ":TYPED",
+			":OTHER", ":TYPED", "(:INNER \"b\")", "(:TYPED \"a\")", "\"reported PLAIN\"");
+
+	@Test
+	void aConditionOnItsWayOutKeepsItsRecordWhenACleanupHandlesAnother() throws Exception {
+		assertThat(compileAndRun(CONDITION_ON_ITS_WAY_OUT)).isEqualTo(CONDITION_ON_ITS_WAY_OUT_OUTPUT);
+	}
+
+	@Test
+	void aConditionWhoseMessageIsNoStringIsStillSignalled() throws Exception {
+		// The message of a typed signal is its uncaught report text, and a nil
+		// :format-control makes it nil: the throw site cast it and failed with a
+		// NullPointerException, which the unkeyed channel passed off as the condition
+		// recorded before the message ran. Keyed, the failure was nobody's -- the handler
+		// saw a simple-error made of the NullPointerException's text.
+		assertThat(compileAndRun("""
+				(defun nm-signal (type) (error type :format-control nil))
+				(print (handler-case (error 'simple-error :format-control nil)
+				         (simple-error (c) (list :literal (simple-condition-format-control c)))))
+				(print (handler-case (nm-signal 'simple-error)
+				         (simple-error (c) (list :computed (simple-condition-format-control c)))))
+				""")).isEqualTo("(:LITERAL NIL)\n(:COMPUTED NIL)");
+	}
+
+	@Test
+	void aConditionOnItsWayOutKeepsItsRecordInRestartMode() throws Exception {
+		// A handler-bind anywhere puts the program in restart mode, where a string
+		// designator's error carries a simple-error instance of its own and every
+		// handler-bind body runs in a %hb-guard pad: the pad takes the record of the
+		// throwable it caught and puts it back for the next landing.
+		assertThat(compileAndRun(CONDITION_ON_ITS_WAY_OUT + """
+				(defvar *cw-runs* nil)
+				(print (handler-case
+				         (handler-bind ((error (lambda (c) (push (list :outer (type-of c)) *cw-runs*))))
+				           (handler-bind ((error (lambda (c) (push (list :inner (type-of c)) *cw-runs*))))
+				             (unwind-protect (cw-bad "a")
+				               (handler-case (cw-bad "b") (error () nil)))))
+				         (type-error (e) (list :typed (type-error-datum e)))
+				         (error () :lost-its-type)))
+				(print (reverse *cw-runs*))
+				"""))
+			.isEqualTo(CONDITION_ON_ITS_WAY_OUT_OUTPUT + "\n(:TYPED \"a\")\n((:INNER TYPE-ERROR) (:OUTER TYPE-ERROR))");
+	}
+
+	@Test
+	void handlerBindHandlersRunOnceWhileACleanupSignals() throws Exception {
+		// Whether the handlers ran is recorded under the throwable (_condRan) and read by
+		// every %hb-guard pad, a handler-case that declines the condition putting the
+		// record back as it came -- where one global mark answered, a condition handled,
+		// declined or abandoned in a cleanup (or in a report) replaced it and the outer
+		// pair ran twice. The interpreter twin is
+		// LispEvaluatorTest#handlerBindHandlersRunOnceWhileACleanupSignals.
+		assertThat(compileAndRun(am.ik.rontolisp.HandlersRunOnceFixture.SOURCE))
+			.isEqualTo(am.ik.rontolisp.HandlersRunOnceFixture.EXPECTED);
+	}
+
+	// The %remf-tail walk compares with the eql helper, not the key's Object.equals,
+	// which threw on a nil key and never found a character. The interpreter twin is
+	// LispEvaluatorTest#remfPastTheFirstKeyComparesWithEq.
+	@Test
+	void remfPastTheFirstKeyComparesWithEq() throws Exception {
+		assertThat(compileAndRun(am.ik.rontolisp.RemfIndicatorFixture.SOURCE))
+			.isEqualTo(am.ik.rontolisp.RemfIndicatorFixture.EXPECTED);
+	}
+
+	@Test
+	void compileAndRunInitializeInstanceAfterMethod() throws Exception {
+		assertThat(compileAndRun("""
+				(defclass counted () ((n :initarg :n :accessor n)))
+				(defmethod initialize-instance :after ((c counted) &rest init-args)
+				  (setf (n c) (* 10 (n c))))
+				(print (list (n (make-instance 'counted :n 4)) (n (make-instance 'counted :n 5))))
+				""")).isEqualTo("(40 50)");
+	}
+
+	@Test
+	void compileAndRunEcase() throws Exception {
+		assertThat(compileAndRun(
+				"(print (ecase 2 (1 \"one\") (2 \"two\") (3 \"three\"))) (print (ecase 'b ((a) \"A\") ((b c) \"BC\")))"))
+			.isEqualTo("\"two\"\n\"BC\"");
+		assertThatThrownBy(() -> compileAndRun("(print (ecase 9 (1 \"one\") (2 \"two\")))"))
+			.hasRootCauseMessage("ECASE: no clause matches 9");
+	}
+
+	@Test
+	void compileAndRunCcase() throws Exception {
+		assertThat(compileAndRun("(print (ccase 1 (1 \"one\") (2 \"two\")))")).isEqualTo("\"one\"");
+		assertThatThrownBy(() -> compileAndRun("(print (ccase 9 (1 \"one\")))"))
+			.hasRootCauseMessage("ECASE: no clause matches 9");
+	}
+
+	@Test
+	void compileAndRunEtypecase() throws Exception {
+		assertThat(compileAndRun(
+				"(print (etypecase 42 (string \"s\") (integer \"i\"))) (print (etypecase \"x\" (string \"s\") (integer \"i\")))"))
+			.isEqualTo("\"i\"\n\"s\"");
+		assertThatThrownBy(() -> compileAndRun("(print (etypecase 'sym (string \"s\") (integer \"i\")))"))
+			.hasRootCauseMessage("ETYPECASE: no clause matches SYM");
+	}
+
+	@Test
+	void compileAndRunCtypecase() throws Exception {
+		assertThat(compileAndRun(
+				"(print (ctypecase 42 (string \"s\") (integer \"i\"))) (print (ctypecase \"x\" (string \"s\") (integer \"i\")))"))
+			.isEqualTo("\"i\"\n\"s\"");
+		assertThatThrownBy(() -> compileAndRun("(print (ctypecase 'sym (string \"s\") (integer \"i\")))"))
+			.hasRootCauseMessage("ETYPECASE: no clause matches SYM");
+	}
+
+	@Test
+	void compileAndRunEtypecaseInsideACapturingLambda() throws Exception {
+		// The lack-middleware-backtrace shape: an etypecase whose clause heads include
+		// (or pathname string), inside a lambda that captures the scrutinee. The
+		// free/captured-variable analysis must read the clause HEADS as type
+		// specifiers, not variable references -- it used to try to capture PATHNAME.
+		assertThat(compileAndRun("""
+				(defparameter *mw*
+				  (lambda (app &key (output '*error-output*) result-on-error)
+				    (check-type output (or symbol stream pathname string))
+				    (flet ((classify ()
+				             (etypecase output
+				               (symbol :symbol)
+				               (stream :stream)
+				               ((or pathname string) :path))))
+				      (lambda (env)
+				        (list (classify) (funcall app env))))))
+				(print (funcall (funcall *mw* (lambda (e) (* e 2))) 21))
+				""")).isEqualTo("(:SYMBOL 42)");
+	}
+
+	@Test
+	void compileAndRunCtypecaseInsideACapturingLambda() throws Exception {
+		// The ctypecase twin of the etypecase shape above: the free/captured-variable
+		// analysis must read the clause HEADS as type specifiers, not variable
+		// references.
+		assertThat(compileAndRun("""
+				(defparameter *mw*
+				  (lambda (app &key (output '*error-output*) result-on-error)
+				    (check-type output (or symbol stream pathname string))
+				    (flet ((classify ()
+				            (ctypecase output
+				              (symbol :symbol)
+				              (stream :stream)
+				              ((or pathname string) :path))))
+				      (lambda (env)
+				        (list (classify) (funcall app env))))))
+				(print (funcall (funcall *mw* (lambda (e) (* e 2))) 21))
+				""")).isEqualTo("(:SYMBOL 42)");
+	}
+
+	@Test
+	void compileAndRunError() throws Exception {
+		assertThatThrownBy(() -> compileAndRun("(error \"boom\")")).hasRootCauseMessage("boom");
+		assertThatThrownBy(() -> compileAndRun("(error \"bad value: ~a\" (+ 1 2))"))
+			.hasRootCauseMessage("bad value: 3");
+	}
+
+	@Test
+	void compileAndRunDeclarations() throws Exception {
+		assertThat(compileAndRun("(declaim (optimize (speed 3))) (proclaim '(special *x*))"
+				+ " (defun decl-fn (x) (declare (ignore x)) 42) (print (decl-fn 1))"
+				+ " (print (let ((y 1)) (declare (type integer y)) (+ y 1)))"))
+			.isEqualTo("42\n2");
+	}
+
+	@Test
+	void compileAndRunEvalWhen() throws Exception {
+		assertThat(compileAndRun("(eval-when (:compile-toplevel :load-toplevel :execute)"
+				+ " (defun ew-fn (x) (* x 2))) (print (ew-fn 21))"
+				+ " (print (let () (eval-when (:load-toplevel) 1))) (print (let () (eval-when (:execute) 2)))"
+				+ " (symbol-macrolet ((ew-s 3)) (eval-when (:load-toplevel) (print ew-s)))"))
+			.isEqualTo("42\nNIL\n2\n3");
+	}
+
+	@Test
+	void compileAndRunEvalWhenWrappedDefmacroThroughUserMacroExpander() throws Exception {
+		// The CLI runs UserMacroExpander before the compiler; mirror that here so the
+		// eval-when-wrapped defmacro is consumed at compile time.
+		List<LispVal> program = am.ik.rontolisp.eval.UserMacroExpander
+			.expand(LispReader.readAllFromString("(eval-when (:compile-toplevel :load-toplevel :execute)"
+					+ " (defmacro ew-twice (x) (list '+ x x))) (print (ew-twice 21))"));
+		assertThat(compileAndRun(program)).isEqualTo("42");
+	}
+
+	@Test
+	void compileAndRunCheckType() throws Exception {
+		assertThat(compileAndRun("(let ((n 5)) (check-type n (integer 0 9)) (print \"ok\"))"
+				+ " (let ((s \"x\")) (check-type s (or null string)) (print \"ok2\"))"))
+			.isEqualTo("\"ok\"\n\"ok2\"");
+		assertThatThrownBy(() -> compileAndRun("(let ((n \"5\")) (check-type n integer))"))
+			.hasRootCauseMessage("The value of N is \"5\", which is not of type INTEGER.");
+		assertThat(compileAndRun("(print (handler-case (let ((n \"5\")) (check-type n integer))"
+				+ " (type-error (c) (list (type-error-datum c) (type-error-expected-type c)))))"))
+			.isEqualTo("(\"5\" INTEGER)");
+	}
+
+	@Test
+	void compileAndRunAssert() throws Exception {
+		assertThat(compileAndRun("(assert (= 1 1)) (print \"ok\")")).isEqualTo("\"ok\"");
+		assertThatThrownBy(() -> compileAndRun("(assert (= 1 2))"))
+			.hasRootCauseMessage("The assertion (= 1 2) failed.");
+		assertThatThrownBy(() -> compileAndRun("(let ((x 0)) (assert (> x 0) (x) \"x must be positive, got ~a\" x))"))
+			.hasRootCauseMessage("x must be positive, got 0");
+	}
+
+	@Test
+	void compileAndRunFlet() throws Exception {
+		assertThat(compileAndRun("(flet ((add1 (x) (+ x 1))) (print (add1 41)))")).isEqualTo("42");
+		assertThat(compileAndRun("(flet ((sq (x) (* x x)) (dbl (x) (* 2 x)))"
+				+ " (print (mapcar #'sq '(1 2 3))) (print (funcall #'dbl 21)) (print (sq (dbl 3))))"))
+			.isEqualTo("(1 4 9)\n42\n36");
+		// The definition body sees the OUTER function binding, not itself.
+		assertThat(compileAndRun("(defun shadow-fn (x) (* 100 x))"
+				+ " (print (flet ((shadow-fn (x) (if (= x 0) 'zero (shadow-fn 0)))) (shadow-fn 5)))"))
+			.isEqualTo("0");
+		assertThat(compileAndRun("(print (flet () 'ok))")).isEqualTo("OK");
+	}
+
+	// macrolet is consumed by the compile-path pass (eval.UserMacroExpander); the
+	// compiler
+	// itself never sees it, so the test mirrors the CLI by running the pass first.
+	@Test
+	void compileAndRunMacroletThroughUserMacroExpander() throws Exception {
+		List<LispVal> program = am.ik.rontolisp.eval.UserMacroExpander.expand(LispReader.readAllFromString("""
+				(macrolet ((sq (x) `(* ,x ,x)) (twice (x) `(+ ,x ,x)))
+				  (print (+ (sq 5) (twice 5))))
+				(defun apply-in-body (n)
+				  (macrolet ((mklist (&rest xs) `(list ,@xs)))
+				    (mklist n (sq-outer n))))
+				(defun sq-outer (x) (* x x))
+				(print (apply-in-body 4))
+				"""));
+		assertThat(compileAndRun(program)).isEqualTo("35\n(4 16)");
+	}
+
+	@Test
+	void compileAndRunDefineCompilerMacroRewritesCallSites() throws Exception {
+		// define-compiler-macro is consumed by the compile-path pass
+		// (eval.UserMacroExpander), which the CLI runs before the compiler; mirror that
+		// here. The macro rewrites the call site; returning the &whole form declines (and
+		// must not loop); an error in the body leaves the ordinary call alone.
+		List<LispVal> program = am.ik.rontolisp.eval.UserMacroExpander
+			.expand(LispReader.readAllFromString("(defun myinc (x) (+ x 1))"
+					+ " (define-compiler-macro myinc (x) `(+ ,x 100)) (print (myinc 10))" + " (defun mydec (x) (- x 1))"
+					+ " (define-compiler-macro mydec (&whole form x) (declare (ignore x)) form) (print (mydec 10))"
+					+ " (defun mysafe (x) (+ x 1))"
+					+ " (define-compiler-macro mysafe (x) (error \"no\")) (print (mysafe 10))"));
+		assertThat(compileAndRun(program)).isEqualTo("110\n9\n11");
+	}
+
+	@Test
+	void compileAndRunFletLambdaListExtensionsAndClosure() throws Exception {
+		assertThat(compileAndRun(
+				"(flet ((opt (a &optional (b 10) &rest r) (list a b r)))" + " (print (opt 1)) (print (opt 1 2 3 4)))"))
+			.isEqualTo("(1 10 NIL)\n(1 2 (3 4))");
+		assertThat(compileAndRun("(let ((base 100)) (flet ((offs (x) (+ base x))) (print (offs 5))))"))
+			.isEqualTo("105");
+	}
+
+	@Test
+	void compileAndRunFletNestedShadowingAndDataPositions() throws Exception {
+		assertThat(compileAndRun("(flet ((g () 1)) (flet ((h () (g))) (flet ((g () 2)) (print (list (g) (h))))))"))
+			.isEqualTo("(2 1)");
+		assertThat(compileAndRun("(flet ((k (x) (* x 10)))"
+				+ " (print (case 2 ((1 2) (k 3)) (t 'other))) (print (car '(k 1))) (print (let ((k 5)) (k k))))"))
+			.isEqualTo("30\nK\n50");
+	}
+
+	@Test
+	void compileAndRunLabelsRecursion() throws Exception {
+		assertThat(compileAndRun("(labels ((fact (n) (if (= n 0) 1 (* n (fact (- n 1)))))) (print (fact 6)))"))
+			.isEqualTo("720");
+		assertThat(compileAndRun("(labels ((ev (n) (if (= n 0) t (od (- n 1))))"
+				+ " (od (n) (if (= n 0) nil (ev (- n 1))))) (print (list (ev 10) (od 10))))"))
+			.isEqualTo("(T NIL)");
+		assertThat(compileAndRun("(labels ((tri (n) (if (= n 0) 0 (+ n (tri (- n 1))))))"
+				+ " (print (reduce #'+ (mapcar #'tri '(1 2 3)))))"))
+			.isEqualTo("10");
+	}
+
+	@Test
+	void compileAndRunFletInsideDefun() throws Exception {
+		assertThat(compileAndRun("(defun poly (x) (flet ((sq (v) (* v v))) (+ (sq x) x))) (print (poly 5))"))
+			.isEqualTo("30");
+		assertThat(compileAndRun(
+				"(defun count-down (n) (labels ((go-down (i acc) (if (= i 0) acc (go-down (- i 1) (cons i acc)))))"
+						+ " (go-down n nil))) (print (count-down 4))"))
+			.isEqualTo("(1 2 3 4)");
+	}
+
+	@Test
+	void compileAndRunValuesInSingleValueContext() throws Exception {
+		// Extra values are discarded but still evaluated (prog1 semantics);
+		// (values) reads as nil; #'values yields the primary value.
+		assertThat(compileAndRun("(setq mv-side 0) (setq mv-primary (values 1 (setq mv-side 9)))"
+				+ " (print (list mv-primary mv-side)) (print (values)) (print (funcall #'values 1 2))"))
+			.isEqualTo("(1 9)\nNIL\n1");
+	}
+
+	@Test
+	void compileAndRunMultipleValueBind() throws Exception {
+		assertThat(compileAndRun("(multiple-value-bind (a b c) (values 1 2) (print (list a b c)))"))
+			.isEqualTo("(1 2 NIL)");
+		assertThat(compileAndRun("(multiple-value-bind (q r) (floor 7 2) (print (list q r)))"
+				+ " (multiple-value-bind (q r) (truncate -7 2) (print (list q r)))"
+				+ " (multiple-value-bind (q r) (ceiling 7 2) (print (list q r)))"
+				+ " (multiple-value-bind (q r) (round 7 2) (print (list q r)))"
+				+ " (multiple-value-bind (q r) (floor 7.5) (print (list q r)))"))
+			.isEqualTo("(3 1)\n(-3 -1)\n(4 -1)\n(4 -1)\n(7 0.5)");
+		// A single-value producer supplies its primary value only.
+		assertThat(compileAndRun("(multiple-value-bind (a b) (+ 1 2) (print (list a b)))")).isEqualTo("(3 NIL)");
+		// (floor a b) in a single-value context yields the quotient.
+		assertThat(compileAndRun("(print (floor 7 2)) (print (ceiling 7 2)) (print (round 7 2))"
+				+ " (print (truncate -7 2)) (print (floor 7.5 2))"))
+			.isEqualTo("3\n4\n4\n-3\n3");
+		// Inside a defun and a lambda.
+		assertThat(compileAndRun("(defun mv-q100r (n) (multiple-value-bind (q r) (floor n 3) (+ (* 100 q) r)))"
+				+ " (print (mv-q100r 17))"
+				+ " (print (mapcar (lambda (n) (multiple-value-list (floor n 4))) '(9 10 11)))"))
+			.isEqualTo("502\n((2 1) (2 2) (2 3))");
+	}
+
+	@Test
+	void compileAndRunMultipleValueBindGethash() throws Exception {
+		assertThat(compileAndRun(
+				"(setq mv-h (make-hash-table))" + " (setf (gethash 'x mv-h) nil) (setf (gethash 'y mv-h) 42)"
+						+ " (multiple-value-bind (v p) (gethash 'y mv-h) (print (list v p)))"
+						+ " (multiple-value-bind (v p) (gethash 'x mv-h) (print (list v p)))"
+						+ " (multiple-value-bind (v p) (gethash 'z mv-h) (print (list v p)))"
+						+ " (multiple-value-bind (v p) (gethash 'z mv-h 'dflt) (print (list v p)))"))
+			.isEqualTo("(42 T)\n(NIL T)\n(NIL NIL)\n(DFLT NIL)");
+	}
+
+	@Test
+	void compileAndRunSyntacticMvProducerTailPublishesThroughAFunctionReturn() throws Exception {
+		// A syntactic producer (gethash / floor family / find-symbol / intern /
+		// array-displacement) in a defun's tail publishes through %mv-spill, so the
+		// secondary value survives the function return -- including a defmethod, the
+		// shape that found this (cl-mustache's context-get IS a gethash). Shared
+		// verbatim with LispEvaluatorTest / WasmLispCompilerIntegrationTest and the
+		// mv-producer-function-return ci-spec case.
+		assertThat(compileAndRun("""
+				(defun f-gethash (h) (gethash "K" h))
+				(defun f-floor (a b) (floor a b))
+				(defun f-disp (a) (array-displacement a))
+				(defmethod ctx-get ((key string) (context hash-table))
+				  (gethash (string-upcase key) context))
+				(defun f-cond (h k) (cond (k (gethash "K" h)) (t nil)))
+				(defun my-user-fn (x) x)
+				(defun f-find (n) (find-symbol n))
+				(defun f-intern (n) (intern n))
+				(defun f-nontail (h) (let ((v (gethash "K" h))) v))
+				(setq mvr-tbl (make-hash-table :test 'equal))
+				(setf (gethash "K" mvr-tbl) "V")
+				(print (multiple-value-list (f-gethash mvr-tbl)))
+				(print (multiple-value-list (f-gethash (make-hash-table))))
+				(print (multiple-value-list (f-floor 7 2)))
+				(print (multiple-value-list (f-find "MY-USER-FN")))
+				(print (multiple-value-list (f-intern "MY-USER-FN")))
+				(print (multiple-value-list (f-disp (make-array 3))))
+				(print (multiple-value-list (ctx-get "k" mvr-tbl)))
+				(print (multiple-value-list (f-cond mvr-tbl t)))
+				(print (multiple-value-list (f-cond mvr-tbl nil)))
+				(multiple-value-bind (v f) (ctx-get "k" mvr-tbl) (print (list v f)))
+				(print (multiple-value-list (f-nontail mvr-tbl)))
+				""")).isEqualTo("(\"V\" T)\n(NIL NIL)\n(3 1)\n(MY-USER-FN :INTERNAL)\n(MY-USER-FN :INTERNAL)\n(NIL 0)\n"
+				+ "(\"V\" T)\n(\"V\" T)\n(NIL)\n(\"V\" T)\n(\"V\")");
+	}
+
+	@Test
+	void compileAndRunSyntacticMvProducerTailPublishesThroughALambdaReturn() throws Exception {
+		// A syntactic producer in a lambda's tail keeps its secondary value through
+		// the call. Shared verbatim with LispEvaluatorTest.MV_PRODUCER_LAMBDA_TAIL and
+		// the mv-producer-lambda-tail ci-spec case; every line is SBCL's.
+		assertThat(compileAndRun("""
+				(defvar ci-mvl-h (make-hash-table :test 'equal))
+				(setf (gethash "K" ci-mvl-h) 5)
+				(defvar ci-mvl-f (lambda (x) (floor x 3)))
+				(defun ci-mvl-in-defun (x) (funcall (lambda () (truncate x 4))))
+				(defun ci-mvl-flet (x) (flet ((g (y) (ceiling y 2))) (multiple-value-list (g x))))
+				(defun ci-mvl-maker () (lambda (x) (round x 2)))
+				(print (multiple-value-list (funcall (lambda () (floor 7 2)))))
+				(print (multiple-value-list (funcall (lambda () (floor 7.5)))))
+				(print (multiple-value-list (funcall (lambda (x) (truncate x)) 7.5)))
+				(print (multiple-value-list (funcall (lambda (x) (ceiling x 2)) 7)))
+				(print (multiple-value-list (funcall (lambda (x) (round x 2)) 7)))
+				(print (multiple-value-list (funcall (lambda () (gethash "K" ci-mvl-h)))))
+				(print (multiple-value-list (funcall (lambda () (gethash "Z" ci-mvl-h)))))
+				(print (multiple-value-list (funcall (lambda () (let ((a 1)) (if a (floor 9 4) 0))))))
+				(print (multiple-value-list (funcall ci-mvl-f 10)))
+				(print (mapcar (lambda (x) (multiple-value-list (funcall ci-mvl-f x))) '(1 5 9)))
+				(print (multiple-value-list (ci-mvl-in-defun 9)))
+				(print (ci-mvl-flet 5))
+				(print (multiple-value-list (funcall (ci-mvl-maker) 7)))
+				(print (flet ((g (x) (floor x 2))) (multiple-value-list (g 5))))
+				(print (labels ((g (x) (if (> x 10) (g (- x 10)) (truncate x 3)))) (multiple-value-list (g 25))))
+				(print (multiple-value-bind (q r) (funcall (lambda () (floor 17 5))) (list q r)))
+				(print (multiple-value-list (funcall (lambda () (subtypep 'fixnum 'integer)))))
+				(print (multiple-value-list (funcall (lambda () (read-from-string "abc")))))
+				(print (multiple-value-list (funcall (lambda () (find-symbol "CAR")))))
+				(print (multiple-value-list (funcall (lambda () (floor 7 2) 3))))
+				(print (multiple-value-list (funcall (lambda () (list (floor 7 2))))))
+				(print (multiple-value-list (funcall (lambda () (let ((v (floor 7 2))) v)))))
+				(print (multiple-value-list (car (mapcar (lambda (x) (floor x 2)) '(5)))))
+				""")).isEqualTo(String.join("\n", "(3 1)", "(7 0.5)", "(7 0.5)", "(4 -1)", "(4 -1)", "(5 T)",
+				"(NIL NIL)", "(2 1)", "(3 1)", "((0 1) (1 2) (3 0))", "(2 1)", "(3 -1)", "(4 -1)", "(2 1)", "(1 2)",
+				"(3 2)", "(T T)", "(ABC 3)", "(CAR :INHERITED)", "(3)", "((3))", "(3)", "(2)"));
+	}
+
+	@Test
+	void compileAndRunFloorFamilyFunctionObjectTakesADivisorAndAnswersBothValues() throws Exception {
+		// The floor family as a function object: an optional divisor, and both values
+		// through a funcall, an apply, a variable and a function return. Shared verbatim
+		// with LispEvaluatorTest.FLOOR_FAMILY_FUNCTION_OBJECT and the
+		// floor-family-function-object ci-spec case; every line is SBCL's.
+		assertThat(compileAndRun("""
+				(defun ci-ffo-call (g a b) (funcall g a b))
+				(defun ci-ffo-tail (x) (funcall #'floor x))
+				(print (funcall #'floor 7 2))
+				(print (mapcar #'truncate '(7 9) '(2 4)))
+				(print (multiple-value-list (funcall #'floor 7.5)))
+				(print (multiple-value-list (let ((g #'floor)) (funcall g 7.5))))
+				(print (multiple-value-list (let ((g #'floor)) (funcall g 7 2))))
+				(print (multiple-value-list (funcall #'round 5 2)))
+				(print (multiple-value-list (apply #'ceiling '(7 2))))
+				(print (mapcar #'ffloor '(7 9) '(2 4)))
+				(print (multiple-value-list (funcall #'ftruncate 7 2)))
+				(print (multiple-value-list (let ((g #'fround)) (funcall g 7.5))))
+				(print (multiple-value-list (ci-ffo-call #'floor -7 2)))
+				(print (multiple-value-list (ci-ffo-call #'round 7 2)))
+				(print (multiple-value-list (ci-ffo-call #'ceiling 7 2)))
+				(print (multiple-value-list (ci-ffo-tail 7.5)))
+				(print (multiple-value-list (funcall #'truncate 7/2)))
+				(print (multiple-value-list (car (mapcar #'floor '(7) '(2)))))
+				(print (multiple-value-list (1+ (funcall #'floor 7 2))))
+				(multiple-value-bind (q r) (funcall #'floor 17 5) (print (list q r)))
+				(print (mapcar (lambda (x) (multiple-value-list (funcall #'ceiling x))) '(-0.0 0.5 -2.5)))
+				(print (mapcar (lambda (x) (multiple-value-list (funcall #'fround x))) '(-0.0 2.5 -7/2)))
+				""")).isEqualTo(String.join("\n", "3", "(3 2)", "(7 0.5)", "(7 0.5)", "(3 1)", "(2 1)", "(4 -1)",
+				"(3.0 2.0)", "(3.0 1)", "(8.0 -0.5)", "(-4 1)", "(4 -1)", "(4 -1)", "(7 0.5)", "(3 1/2)", "(3)", "(4)",
+				"(3 2)", "((0 -0.0) (1 -0.5) (-2 -0.5))", "((0.0 -0.0) (2.0 0.5) (-4.0 1/2))"));
+		// Without a multiple-value operator anywhere in the program.
+		assertThat(compileAndRun("""
+				(print (funcall #'floor 7 2))
+				(print (mapcar #'truncate '(7 9) '(2 4)))
+				(print (mapcar #'fceiling '(7 9) '(2 4)))
+				(print (let ((g #'round)) (funcall g 7 2)))
+				(print (funcall #'floor 7.5))
+				""")).isEqualTo(String.join("\n", "3", "(3 2)", "(4.0 3.0)", "4", "7"));
+	}
+
+	@Test
+	void compileAndRunMultipleValueBuiltinsFunctionObjectsAnswerBothValues() throws Exception {
+		// gethash/find-symbol/intern/subtypep/read-from-string/array-displacement as
+		// function objects answer both values. Shared verbatim with
+		// LispEvaluatorTest.MV_BUILTINS_FUNCTION_OBJECT and the
+		// multiple-value-builtins-function-object ci-spec case; every line is SBCL's.
+		assertThat(compileAndRun("""
+				(defvar *ci-mvf-h* (make-hash-table))
+				(setf (gethash 1 *ci-mvf-h*) 'one)
+				(defun ci-mvf-call (g a b) (funcall g a b))
+				(defun ci-mvf-tail (k) (funcall #'gethash k *ci-mvf-h*))
+				(print (multiple-value-list (funcall #'gethash 1 *ci-mvf-h*)))
+				(print (multiple-value-list (funcall #'gethash 2 *ci-mvf-h*)))
+				(print (multiple-value-list (funcall #'gethash 2 *ci-mvf-h* 'none)))
+				(print (multiple-value-list (let ((g #'gethash)) (funcall g 1 *ci-mvf-h*))))
+				(print (multiple-value-list (apply #'gethash (list 1 *ci-mvf-h*))))
+				(print (multiple-value-list (ci-mvf-call #'gethash 2 *ci-mvf-h*)))
+				(print (multiple-value-list (ci-mvf-tail 1)))
+				(print (mapcar #'gethash '(1 2) (list *ci-mvf-h* *ci-mvf-h*)))
+				(print (multiple-value-list (car (mapcar #'gethash '(1) (list *ci-mvf-h*)))))
+				(multiple-value-bind (v p) (funcall #'gethash 1 *ci-mvf-h*) (print (list v p)))
+				(print (multiple-value-list (let ((g #'find-symbol)) (funcall g "CAR" "CL"))))
+				(print (multiple-value-list (apply #'find-symbol (list "CAR" "CL"))))
+				(print (multiple-value-list (funcall #'intern "CAR" "CL")))
+				(print (multiple-value-list (let ((g #'intern)) (funcall g "CAR" "CL"))))
+				(print (multiple-value-list (funcall #'subtypep 'integer 'number)))
+				(print (multiple-value-list (let ((g #'subtypep)) (funcall g 'string 'number))))
+				(print (multiple-value-list (funcall #'subtypep 'integer 'number nil)))
+				(print (multiple-value-list (funcall #'read-from-string "(a b) c")))
+				(print (multiple-value-list (let ((g #'read-from-string)) (funcall g "42 x"))))
+				(print (multiple-value-list (funcall #'array-displacement (make-array 3))))
+				(let* ((a (make-array 5)) (b (make-array 2 :displaced-to a :displaced-index-offset 1)))
+				  (multiple-value-bind (x o) (funcall #'array-displacement b) (print (list (eq x a) o))))
+				(let ((g1 (gensym)))
+				  (multiple-value-bind (v p) (gethash 1 *ci-mvf-h*) (print (list v p)))
+				  (print (multiple-value-list (funcall #'gethash 2 *ci-mvf-h*)))
+				  (print (- (parse-integer (symbol-name (gensym)) :start 1) (parse-integer (symbol-name g1) :start 1))))
+				""")).isEqualTo(String.join("\n", "(ONE T)", "(NIL NIL)", "(NONE NIL)", "(ONE T)", "(ONE T)",
+				"(NIL NIL)", "(ONE T)", "(ONE NIL)", "(ONE)", "(ONE T)", "(CAR :EXTERNAL)", "(CAR :EXTERNAL)",
+				"(CAR :EXTERNAL)", "(CAR :EXTERNAL)", "(T T)", "(NIL T)", "(T T)", "((A B) 6)", "(42 3)", "(NIL 0)",
+				"(T 1)", "(ONE T)", "(NIL NIL)", "1"));
+		// Without a multiple-value operator anywhere in the program.
+		assertThat(compileAndRun("""
+				(defvar *h* (make-hash-table))
+				(setf (gethash 1 *h*) 'one)
+				(print (funcall #'gethash 2 *h* 'none))
+				(print (mapcar #'gethash '(1 2) (list *h* *h*)))
+				(print (funcall #'subtypep 'integer 'number))
+				(print (let ((g #'find-symbol)) (funcall g "CAR" "CL")))
+				(print (funcall #'read-from-string "(a b) c"))
+				""")).isEqualTo(String.join("\n", "NONE", "(ONE NIL)", "T", "CAR", "(A B)"));
+	}
+
+	@Test
+	void compileAndRunMultipleValueChannelIsExactInSingleValueContexts() throws Exception {
+		// The tail discipline (LispMacroExpander.settleMvTail): a single-valued tail --
+		// of a defun, a lambda, a flet function, a consumer's producer form -- clears
+		// what an argument, a let initform, a form before the last, a setq or a
+		// callback published, so a consumer reads the callee's own values and nothing
+		// older; (values) and an empty values-list are no value at all. Shared verbatim
+		// with LispEvaluatorTest / WasmLispCompilerIntegrationTest and the
+		// multiple-values-single-value-contexts ci-spec case; every line is SBCL's.
+		assertThat(compileAndRun("""
+				(defvar ci-svc-q nil)
+				(defun ci-svc-floor () (floor 7 2))
+				(defun ci-svc-none () (values))
+				(defun ci-svc-inc (x) (+ x 1))
+				(defun ci-svc-two () (values 5 6))
+				(defun ci-svc-two1 (x) (values x 6))
+				(defun ci-svc-let () (let ((x (values 1 2))) x))
+				(defun ci-svc-progn () (progn (values 1 2) 3))
+				(defun ci-svc-setq () (setq ci-svc-q (values 1 2)))
+				(defun ci-svc-if () (if (values t 2) t nil))
+				(defun ci-svc-or () (or (values nil 2) nil))
+				(defun ci-svc-dotimes () (dotimes (i 2) (ci-svc-two)))
+				(defun ci-svc-dolist () (let ((r nil)) (dolist (x '(1 2) r) (setq r (ci-svc-two)))))
+				(defun ci-svc-cond () (cond ((values 1 2))))
+				(defun ci-svc-case (x) (case x (1 (values 1 2))))
+				(defun ci-svc-lambda () (funcall (lambda (x) (* x (values 2 3))) 5))
+				(defun ci-svc-mapcar () (mapcar #'ci-svc-two1 '(1)))
+				(defun ci-svc-sort () (sort (list 3 1 2) (lambda (a b) (values (< a b) 9))))
+				(defun ci-svc-prog1 () (prog1 (values 1 2) (ci-svc-two)))
+				(defun ci-svc-mvp1 () (multiple-value-prog1 (ci-svc-none) (ci-svc-two)))
+				(defun ci-svc-handler () (handler-case (values 1 2) (error () nil)))
+				(defun ci-svc-flet () (flet ((inner (x) (+ x 1))) (inner (values 1 2))))
+				(print (multiple-value-list (+ 1 (values 5 6))))
+				(print (multiple-value-list (list (ci-svc-floor))))
+				(print (multiple-value-list (ci-svc-inc (values 1 2))))
+				(print (multiple-value-list (funcall #'+ (values 5 6) 1)))
+				(print (multiple-value-list (car (list (values 5 6)))))
+				(print (multiple-value-list (ci-svc-flet)))
+				(print (multiple-value-list (let ((x (values 1 2))) x)))
+				(print (multiple-value-list (progn (values 1 2) 3)))
+				(print (multiple-value-list (ci-svc-let)))
+				(print (multiple-value-list (ci-svc-progn)))
+				(print (multiple-value-list (ci-svc-setq)))
+				(print (multiple-value-list (ci-svc-if)))
+				(print (multiple-value-list (ci-svc-or)))
+				(print (multiple-value-list (ci-svc-dotimes)))
+				(print (multiple-value-list (ci-svc-dolist)))
+				(print (multiple-value-list (ci-svc-cond)))
+				(print (multiple-value-list (ci-svc-case 1)))
+				(print (multiple-value-list (ci-svc-case 2)))
+				(print (multiple-value-list (ci-svc-lambda)))
+				(print (multiple-value-list (ci-svc-mapcar)))
+				(print (multiple-value-list (ci-svc-sort)))
+				(print (multiple-value-list (ci-svc-prog1)))
+				(print (multiple-value-list (ci-svc-handler)))
+				(print (multiple-value-list (ci-svc-none)))
+				(print (multiple-value-list (funcall #'values)))
+				(print (multiple-value-list (apply #'values '())))
+				(print (multiple-value-list (funcall #'values 1 2)))
+				(print (multiple-value-list (values-list nil)))
+				(print (multiple-value-list (ci-svc-mvp1)))
+				(print (multiple-value-list (eval '(values 1 2))))
+				(print (multiple-value-list (eval '(values))))
+				(print (multiple-value-call #'list (values) (ci-svc-none) 1))
+				(print (multiple-value-call #'list (values 1 2) (ci-svc-none) (ci-svc-two)))
+				(multiple-value-bind (a b) (ci-svc-none) (print (list a b)))
+				(print (multiple-value-list (multiple-value-prog1 (values 1 2) (ci-svc-two))))
+				(multiple-value-bind (p q) (loop for a = 3 for b = 5 until t finally (return (values a b)))
+				  (print (list p q)))
+				(print (multiple-value-list (block b (return-from b (values 1 2)))))
+				(print (multiple-value-list (catch 'c (throw 'c (values 1 2)))))
+				(print (multiple-value-list (dolist (x '(1 2)) (when (= x 2) (return (values x 9))))))
+				""")).isEqualTo(String.join("\n", "(6)", "((3))", "(2)", "(6)", "(5)", "(2)", "(1)", "(3)", "(1)",
+				"(3)", "(1)", "(T)", "(NIL)", "(NIL)", "(5)", "(1)", "(1 2)", "(NIL)", "(10)", "((1))", "((1 2 3))",
+				"(1)", "(1 2)", "NIL", "NIL", "NIL", "(1 2)", "NIL", "NIL", "(1 2)", "NIL", "(1)", "(1 2 5 6)",
+				"(NIL NIL)", "(1 2)", "(3 5)", "(1 2)", "(1 2)", "(2 9)"));
+	}
+
+	@Test
+	void compileAndRunLoadTimeValue() throws Exception {
+		assertThat(compileAndRun("(print (+ (load-time-value (* 2 3)) 4))")).isEqualTo("10");
+		assertThat(compileAndRun("(print (load-time-value 7 t))")).isEqualTo("7");
+		// Hoisted into a lazily filled slot: one evaluation per occurrence, however many
+		// times the enclosing function runs; a second occurrence gets its own slot, and a
+		// nil result still counts as computed. Printed one call per form -- the argument
+		// evaluation order of a single call is a separate cross-backend question.
+		assertThat(compileAndRun("(defvar ltv-n 0)" + " (defun ltv-bump () (setq ltv-n (+ ltv-n 1)) ltv-n)"
+				+ " (defun ltv-probe () (load-time-value (ltv-bump)))"
+				+ " (defun ltv-other () (load-time-value (ltv-bump)))" + " (print (ltv-probe)) (print (ltv-probe))"
+				+ " (print (ltv-probe)) (print (ltv-other)) (print ltv-n)" + " (defvar ltv-m 0)"
+				+ " (defun ltv-nil () (load-time-value (progn (setq ltv-m (+ ltv-m 1)) nil)))"
+				+ " (print (ltv-nil)) (print (ltv-nil)) (print ltv-m)"))
+			.isEqualTo("1\n1\n1\n2\n2\nNIL\nNIL\n1");
+	}
+
+	@Test
+	void compileAndRunTypep() throws Exception {
+		assertThat(compileAndRun("(print (typep 1 'integer))")).isEqualTo("T");
+		assertThat(compileAndRun("(print (typep \"s\" 'string))")).isEqualTo("T");
+		assertThat(compileAndRun("(print (typep 1 'string))")).isEqualTo("NIL");
+		assertThat(compileAndRun("(print (typep 1.5 'number))")).isEqualTo("T");
+		assertThat(compileAndRun("(print (typep nil 'null))")).isEqualTo("T");
+		assertThat(compileAndRun(
+				"(defclass pt () ((x :initarg :x))) (print (typep (make-instance 'pt :x 1) 'pt)) (print (typep 1 'pt))"))
+			.isEqualTo("T\nNIL");
+	}
+
+	@Test
+	void compileAndRunTypepWithComputedSpecifier() throws Exception {
+		// A computed specifier lowers to the shared %typep-runtime defun (its data
+		// table is a top-level defvar): the inline per-class dispatch overflowed the
+		// JVM's 16-bit branch offsets at cl-postgres scale (ironclad's pbkdf1
+		// shared-initialize). The answers must match the literal-specifier expansion.
+		assertThat(compileAndRun("""
+				(defclass animal () ((name :initarg :name)))
+				(defclass dog (animal) ())
+				(defstruct point x y)
+				(let ((d (make-instance 'dog)) (p (make-point :x 1 :y 2)))
+				  (let ((ty 'dog)) (print (typep d ty)))
+				  (let ((ty 'animal)) (print (typep d ty)))
+				  (let ((ty 'point)) (print (typep p ty)))
+				  (let ((ty 'integer)) (print (typep 42 ty)))
+				  (let ((ty 'string)) (print (typep d ty)))
+				  (let ((ty 'standard-object)) (print (typep d ty)))
+				  (let ((ty 'structure-object)) (print (typep p ty)))
+				  (let ((ty 'no-such-type)) (print (typep 1 ty)))
+				  (let ((ty t)) (print (typep 1 ty))))
+				""")).isEqualTo("T\nT\nT\nT\nNIL\nT\nT\nNIL\nT");
+	}
+
+	@Test
+	void compileAndRunErrorWithComputedConditionType() throws Exception {
+		// A computed condition-type datum WITH initargs lowers to the shared
+		// %error-runtime dispatch (one construction helper per condition class):
+		// inlining every class's typed expansion at the call site grew cl-postgres'
+		// get-error to 90 KB, past the JVM's 64 KB hard method limit.
+		assertThat(compileAndRun("""
+				(define-condition my-err (error) ((code :initarg :code :reader my-err-code)))
+				(defun boom (ty) (error ty :code 42))
+				(print (handler-case (boom 'my-err) (my-err (c) (list :caught (my-err-code c)))))
+				(print (handler-case (boom 'type-error) (type-error (c) :caught-type-error)))
+				""")).isEqualTo("(:CAUGHT 42)\n:CAUGHT-TYPE-ERROR");
+		// cerror's datum stands one place later; restart mode lowers it after the scan
+		// that decides the injection.
+		assertThat(compileAndRun("""
+				(define-condition my-err (error) ((code :initarg :code :reader my-err-code)))
+				(defun boom (ty) (cerror "Go on." ty :code 7))
+				(print (handler-bind ((my-err (lambda (c) (continue)))) (list (boom 'my-err) :went-on)))
+				""")).isEqualTo("(NIL :WENT-ON)");
+	}
+
+	// define-setf-expander / defsetf are handled by the compile-path pass
+	// (eval.UserMacroExpander): the definition is consumed and each (setf (place ...) v)
+	// call site is rewritten to primitives, so the compiler never sees the expander.
+	@Test
+	void compileAndRunDefineSetfExpander() throws Exception {
+		List<LispVal> program = am.ik.rontolisp.eval.LispPreludeLibrary
+			.process(am.ik.rontolisp.eval.UserMacroExpander.expand(LispReader.readAllFromString("""
+					(defun aget (alist key) (cdr (assoc key alist :test #'equal)))
+					(defun %aput (alist key value)
+					  (let ((kv (assoc key alist :test #'equal)))
+					    (if kv (progn (rplacd kv value) alist) (cons (cons key value) alist))))
+					(define-setf-expander aget (alist key &environment env)
+					  (multiple-value-bind (d v n setter getter) (get-setf-expansion alist env)
+					    (let ((nv (first n)))
+					      (values d v n `(let ((,nv (%aput ,alist ,key ,nv))) ,setter ,nv) `(aget ,getter ,key)))))
+					(let ((d (list (cons :a 1))))
+					  (setf (aget d :a) 100)
+					  (setf (aget d :b) 2)
+					  (incf (aget d :a) 5)
+					  (print (list (aget d :a) (aget d :b))))
+					""")));
+		assertThat(compileAndRun(program)).isEqualTo("(105 2)");
+	}
+
+	@Test
+	void compileAndRunDefsetf() throws Exception {
+		List<LispVal> program = am.ik.rontolisp.eval.LispPreludeLibrary.process(am.ik.rontolisp.eval.UserMacroExpander
+			.expand(LispReader.readAllFromString("(defun ref (box) (car box)) (defsetf ref rplaca)"
+					+ " (defun head (x) (car x)) (defsetf head (lst) (v) `(progn (rplaca ,lst ,v) ,v))"
+					+ " (print (let ((b (list 1))) (setf (ref b) 9) b))"
+					+ " (print (let ((l (list 7 8))) (setf (head l) 70) l))")));
+		assertThat(compileAndRun(program)).isEqualTo("(9)\n(70 8)");
+	}
+
+	@Test
+	void compileAndRunSubtypep() throws Exception {
+		assertThat(compileAndRun("(print (subtypep 'cons 'list))")).isEqualTo("T");
+		assertThat(compileAndRun("(print (subtypep 'integer 'number))")).isEqualTo("T");
+		assertThat(compileAndRun("(print (subtypep 'string 'number))")).isEqualTo("NIL");
+		assertThat(compileAndRun("(print (subtypep 'single-float 'float))")).isEqualTo("T");
+		assertThat(
+				compileAndRun("(defclass base () ()) (defclass derived (base) ()) (print (subtypep 'derived 'base))"))
+			.isEqualTo("T");
+	}
+
+	@Test
+	void compileAndRunTagbodyGo() throws Exception {
+		// Backward go: a plain counting loop.
+		assertThat(compileAndRun("(let ((i 0)) (tagbody top (setq i (+ i 1)) (if (< i 3) (go top))) (print i))"))
+			.isEqualTo("3");
+		// Forward go skips a form.
+		assertThat(compileAndRun("(tagbody (print 1) (go skip) (print 2) skip (print 3))")).isEqualTo("1\n3");
+		// go from a nested if arm, plus fall-through over a label.
+		assertThat(compileAndRun("(let ((n 0) (acc nil)) (tagbody loop (setq n (+ n 1)) (push n acc)"
+				+ " (if (< n 4) (go loop)) done) (print acc))"))
+			.isEqualTo("(4 3 2 1)");
+		// Nested tagbody: the inner go resolves innermost-first, the outer tag is
+		// reachable from the inner body.
+		assertThat(compileAndRun("(let ((x 0)) (tagbody outer (setq x (+ x 10))"
+				+ " (tagbody (if (> x 10) (go end)) (go outer)) end) (print x))"))
+			.isEqualTo("20");
+		// tagbody value is nil.
+		assertThat(compileAndRun("(print (tagbody (print 1)))")).isEqualTo("1\nNIL");
+		// go in an argument position abandons the outer call.
+		assertThat(
+				compileAndRun("(let ((i 0)) (tagbody top (setq i (+ i 1)) (print (+ 100 (if (< i 3) (go top) i)))))"))
+			.isEqualTo("103");
+	}
+
+	@Test
+	void compileAndRunGoEscapesUnwindProtect() throws Exception {
+		assertThat(compileAndRun("(let ((i 0)) (tagbody top (setq i (+ i 1))"
+				+ " (unwind-protect (if (< i 3) (go top)) (print (list :cleanup i)))) (print i))"))
+			.isEqualTo("(:CLEANUP 1)\n(:CLEANUP 2)\n(:CLEANUP 3)\n3");
+	}
+
+	@Test
+	void scaleFloatRoundsOnceIntoTheSubnormalRange() throws Exception {
+		// Math.scalb's answers: the product rounds once. A first chunk of 2^-1000 that
+		// lands in the subnormal range rounded there, and the 2^-50 after it rounded
+		// again: 2^-1075 + 2^-1127 came out as 2^-1075 exactly, a tie that goes to 0.
+		assertThat(compileAndRun("(print (scale-float (+ (expt 2d0 -25) (expt 2d0 -77)) -1050))"))
+			.isEqualTo("4.9e-324");
+		assertThat(compileAndRun("(print (scale-float -2.3779429016845906d285 -2004))")).isEqualTo("-1.294467e-318");
+	}
+
+	@Test
+	void compileAndRunLiteStreamBuiltins() throws Exception {
+		// pathnamep answers T only for a pathname VALUE -- a string is NOT
+		// one -- and it agrees with (typep x 'pathname) as CL requires.
+		assertThat(compileAndRun("(print (file-position t)) (print (file-length t)) (print (pathnamep \"/tmp/x\"))"
+				+ " (print (pathnamep #P\"/tmp/x\")) (print (stream-element-type t))"))
+			.isEqualTo("NIL\nNIL\nNIL\nT\nCHARACTER");
+		assertThat(compileAndRun("(print (input-stream-p t)) (print (output-stream-p (make-string-output-stream)))"
+				+ " (print (handler-case (input-stream-p \"s\") (type-error () :type-error)))"))
+			.isEqualTo("T\nT\n:TYPE-ERROR");
+	}
+
+	@Test
+	void compileAndRunBinaryFileStreamPositionQueriesAndSeeks() throws Exception {
+		// file-position is REAL for a binary file stream on the JVM backend: the query is
+		// the byte offset the byte primitives advanced, and the set reopens the file at
+		// the offset -- what uiop:parse-windows-shortcut needs.
+		String file = this.tempDir.resolve("pos.bin").toString().replace("\\", "\\\\");
+		assertThat(compileAndRun("""
+				(with-open-file (out "%s" :direction :output :if-exists :supersede
+				                     :element-type '(unsigned-byte 8))
+				  (dotimes (i 10) (write-byte i out))
+				  (print (file-position out)))
+				(with-open-file (in "%s" :element-type '(unsigned-byte 8))
+				  (print (file-position in))
+				  (print (read-byte in))
+				  (print (file-position in))
+				  (print (file-position in 5))
+				  (print (file-position in))
+				  (print (read-byte in))
+				  (print (file-position in)))
+				;; A character file stream answers its byte offset too.
+				(with-open-file (in "%s")
+				  (print (file-position in)))
+				""".formatted(file, file, file))).isEqualTo("10\n0\n0\n1\nT\n5\n5\n6\n0");
+	}
+
+	@Test
+	void compileAndRunCharacterFileStreamPositionIsTheByteOffset() throws Exception {
+		// The JVM twin of LispEvaluatorTest#characterFileStreamPositionIsTheByteOffset,
+		// through the CLI's front end (the program uses unread-char).
+		String file = this.tempDir.resolve("pos.txt").toString().replace("\\", "\\\\");
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess
+			.withSystemPath(CharacterFilePositionFixture.program(file), List.of(), false, false)
+			.forms())).isEqualTo(CharacterFilePositionFixture.EXPECTED);
+	}
+
+	@Test
+	void compileAndRunAUserMethodOnAnExpandedOrValueLoweredBuiltinIsDispatched() throws Exception {
+		// The JVM twin of
+		// LispEvaluatorTest#aUserMethodOnAnExpandedOrValueLoweredBuiltinIsDispatched,
+		// through the CLI's front end.
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess
+			.withSystemPath(MethodedBuiltinFixture.PROGRAM, List.of(), false, false)
+			.forms())).isEqualTo(MethodedBuiltinFixture.EXPECTED);
+	}
+
+	@Test
+	void compileAndRunABuiltinFunctionValueReportsAWrongCountWithItsCallShape() throws Exception {
+		// The JVM twin of
+		// LispEvaluatorTest#aBuiltinFunctionValueReportsAWrongCountWithItsCallShape.
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess
+			.withSystemPath(BuiltinFunctionValueCountFixture.PROGRAM, List.of(), false, false)
+			.forms())).isEqualTo(BuiltinFunctionValueCountFixture.EXPECTED);
+	}
+
+	@Test
+	void compileAndRunTheArgumentsAnOperatorIgnoresAreTaken() throws Exception {
+		// The JVM twin of LispEvaluatorTest#theArgumentsAnOperatorIgnoresAreTaken.
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess
+			.withSystemPath(IgnoredArgumentFixture.PROGRAM, List.of(), false, false)
+			.forms())).isEqualTo(IgnoredArgumentFixture.EXPECTED);
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess
+			.withSystemPath(IgnoredArgumentFixture.PUSHBACK_PROGRAM, List.of(), false, false)
+			.forms())).isEqualTo(IgnoredArgumentFixture.PUSHBACK_EXPECTED);
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess
+			.withSystemPath(IgnoredArgumentFixture.GRAY_PROGRAM, List.of(), false, false)
+			.forms())).isEqualTo(IgnoredArgumentFixture.GRAY_EXPECTED);
+	}
+
+	@Test
+	void compileAndRunAMethodedBuiltinTakesTheWholeTailWhenNoMethodApplies() throws Exception {
+		// The JVM twin of
+		// LispEvaluatorTest#aMethodedBuiltinTakesTheWholeTailWhenNoMethodApplies.
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess
+			.withSystemPath(MethodedBuiltinTailFixture.PROGRAM, List.of(), false, false)
+			.forms())).isEqualTo(MethodedBuiltinTailFixture.EXPECTED);
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess
+			.withSystemPath(MethodedBuiltinTailFixture.CLOSE_PROGRAM, List.of(), false, false)
+			.forms())).isEqualTo(MethodedBuiltinTailFixture.CLOSE_EXPECTED);
+	}
+
+	@Test
+	void compileAndRunPeekCharPushbackSurvivesReadLineAndRead() throws Exception {
+		// The JVM twin of LispEvaluatorTest#peekCharPushbackSurvivesReadLineAndRead,
+		// through the CLI's front end (the program uses unread-char through read).
+		String file = this.tempDir.resolve("peek.txt").toString().replace("\\", "\\\\");
+		String rdFile = this.tempDir.resolve("peek-rd.txt").toString().replace("\\", "\\\\");
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess
+			.withSystemPath(PeekPushbackFixture.program(file, rdFile), List.of(), false, false)
+			.forms())).isEqualTo(PeekPushbackFixture.EXPECTED);
+	}
+
+	@Test
+	void compileAndRunReadAndWriteSequenceSignalTypeErrorForABadSequenceOrBound() throws Exception {
+		// The JVM twin of
+		// LispEvaluatorTest#readAndWriteSequenceSignalTypeErrorForABadSequenceOrBound.
+		assertThat(compileAndRunExpanded(SequenceBoundsFixture.PROGRAM)).isEqualTo(SequenceBoundsFixture.EXPECTED);
+	}
+
+	@Test
+	void compileAndRunSequenceOperatorsRefuseANilStart() throws Exception {
+		// The JVM twin of LispEvaluatorTest#sequenceOperatorsRefuseANilStart.
+		assertThat(compileAndRunExpanded(SequenceBoundsFixture.NIL_START_PROGRAM))
+			.isEqualTo(SequenceBoundsFixture.NIL_START_EXPECTED);
+	}
+
+	@Test
+	void compileAndRunAGrayStreamWriteChecksItsBounds() throws Exception {
+		// The JVM twin of LispEvaluatorTest#aGrayStreamWriteChecksItsBounds.
+		// Through the CLI's front end: the program defines a user macro and a Gray class.
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess
+			.corpus(SequenceBoundsFixture.GRAY_BOUNDS_PROGRAM, am.ik.rontolisp.reader.Features.JVM, false, false)))
+			.isEqualTo(SequenceBoundsFixture.GRAY_BOUNDS_EXPECTED);
+	}
+
+	@Test
+	void compileAndRunAGrayStreamWriteWithoutABoundPassesIntegerBounds() throws Exception {
+		// The JVM twin of
+		// LispEvaluatorTest#aGrayStreamWriteWithoutABoundPassesIntegerBounds.
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(
+				am.ik.rontolisp.GrayStreamCallFixture.UNBOUNDED_WRITE_PROGRAM, am.ik.rontolisp.reader.Features.JVM,
+				false, false)))
+			.isEqualTo(am.ik.rontolisp.GrayStreamCallFixture.UNBOUNDED_WRITE_EXPECTED);
+	}
+
+	@Test
+	void compileAndRunGrayDefaultUnreadCharParksOnItsInstance() throws Exception {
+		// The JVM twin of LispEvaluatorTest#grayDefaultUnreadCharParksOnItsInstance.
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(
+				am.ik.rontolisp.GrayStreamCallFixture.PER_INSTANCE_PUSHBACK_PROGRAM,
+				am.ik.rontolisp.reader.Features.JVM, false, false)))
+			.isEqualTo(am.ik.rontolisp.GrayStreamCallFixture.PER_INSTANCE_PUSHBACK_EXPECTED);
+	}
+
+	@Test
+	void compileAndRunAGrayStandardStreamReceivesTheStreamlessFamilies() throws Exception {
+		// The JVM twin of
+		// LispEvaluatorTest#aGrayStandardStreamReceivesTheStreamlessFamilies.
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(
+				am.ik.rontolisp.GrayStreamCallFixture.STANDARD_STREAM_PROGRAM, am.ik.rontolisp.reader.Features.JVM,
+				false, false)))
+			.isEqualTo(am.ik.rontolisp.GrayStreamCallFixture.STANDARD_STREAM_EXPECTED);
+	}
+
+	@Test
+	void compileAndRunAFormatTInAPackageReachesAGrayStandardStream() throws Exception {
+		// The JVM twin of
+		// LispEvaluatorTest#aFormatTInAPackageReachesAGrayStandardStream.
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(
+				am.ik.rontolisp.GrayStreamCallFixture.STANDARD_STREAM_IN_A_PACKAGE_PROGRAM,
+				am.ik.rontolisp.reader.Features.JVM, false, false)))
+			.isEqualTo(am.ik.rontolisp.GrayStreamCallFixture.STANDARD_STREAM_IN_A_PACKAGE_EXPECTED);
+	}
+
+	@Test
+	void compileAndRunUnreadCharInAGrayProgramParksOnTheOpenStream() throws Exception {
+		// The JVM twin of LispEvaluatorTest#unreadCharInAGrayProgramParksOnTheOpenStream.
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(
+				am.ik.rontolisp.GrayStreamCallFixture.OPEN_STREAM_PUSHBACK_PROGRAM, am.ik.rontolisp.reader.Features.JVM,
+				false, false)))
+			.isEqualTo(am.ik.rontolisp.GrayStreamCallFixture.OPEN_STREAM_PUSHBACK_EXPECTED);
+	}
+
+	@Test
+	void compileAndRunStreamOperatorsAsFunctionValuesReachAGrayStream() throws Exception {
+		// The JVM twin of
+		// LispEvaluatorTest#streamOperatorsAsFunctionValuesReachAGrayStream: the
+		// injected wrappers call the Gray dispatch helpers.
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(
+				am.ik.rontolisp.GrayStreamCallFixture.FUNCTION_VALUE_PROGRAM, am.ik.rontolisp.reader.Features.JVM,
+				false, false)))
+			.isEqualTo(am.ik.rontolisp.GrayStreamCallFixture.FUNCTION_VALUE_EXPECTED);
+	}
+
+	@Test
+	void compileAndRunSequenceOperatorsRefuseABadBound() throws Exception {
+		// The JVM twin of LispEvaluatorTest#sequenceOperatorsRefuseABadBound.
+		assertThat(compileAndRunExpanded(SequenceBoundsFixture.BAD_BOUND_PROGRAM))
+			.isEqualTo(SequenceBoundsFixture.BAD_BOUND_EXPECTED);
+	}
+
+	@Test
+	void compileAndRunSequenceOperatorsRefuseANonIntegerCount() throws Exception {
+		// The JVM twin of LispEvaluatorTest#sequenceOperatorsRefuseANonIntegerCount.
+		assertThat(compileAndRunExpanded(SequenceBoundsFixture.BAD_COUNT_PROGRAM))
+			.isEqualTo(SequenceBoundsFixture.BAD_COUNT_EXPECTED);
+	}
+
+	@Test
+	void compileAndRunABadSequenceBoundReportsAsSubseqDoes() throws Exception {
+		// The JVM twin of LispEvaluatorTest#aBadSequenceBoundReportsAsSubseqDoes.
+		assertThat(compileAndRunExpanded(SequenceBoundsFixture.BOUND_REPORT_PROGRAM))
+			.isEqualTo(SequenceBoundsFixture.BOUND_REPORT_EXPECTED);
+	}
+
+	@Test
+	void compileAndRunACountedDeleteOrNsubstituteReportsUnderItsOwnName() throws Exception {
+		// The JVM twin of
+		// LispEvaluatorTest#aCountedDeleteOrNsubstituteReportsUnderItsOwnName.
+		assertThat(compileAndRunExpanded(SequenceBoundsFixture.OPERATOR_REPORT_PROGRAM))
+			.isEqualTo(SequenceBoundsFixture.OPERATOR_REPORT_EXPECTED);
+	}
+
+	@Test
+	void compileAndRunFormatRWithoutARadixSpellsTheNumber() throws Exception {
+		// The JVM twin of LispEvaluatorTest#formatRWithoutARadixSpellsTheNumber.
+		assertThat(compileAndRunExpanded(FormatSpelledNumbersFixture.PROGRAM))
+			.isEqualTo(FormatSpelledNumbersFixture.EXPECTED);
+	}
+
+	@Test
+	void compileAndRunStringOperatorsRefuseANilStart() throws Exception {
+		// The JVM twin of LispEvaluatorTest#stringOperatorsRefuseANilStart.
+		assertThat(compileAndRunExpanded(StringNilStartFixture.PROGRAM)).isEqualTo(StringNilStartFixture.EXPECTED);
+	}
+
+	@Test
+	void compileAndRunStringComparisonsRefuseABadBound() throws Exception {
+		// The JVM twin of LispEvaluatorTest#stringComparisonsRefuseABadBound.
+		assertThat(compileAndRunExpanded(StringComparisonBoundsFixture.PROGRAM))
+			.isEqualTo(StringComparisonBoundsFixture.EXPECTED);
+	}
+
+	@Test
+	void compileAndRunABadStringComparisonBoundReportsAsSubseqDoes() throws Exception {
+		// The JVM twin of LispEvaluatorTest#aBadStringComparisonBoundReportsAsSubseqDoes.
+		assertThat(compileAndRunExpanded(StringComparisonBoundsFixture.REPORT_PROGRAM))
+			.isEqualTo(StringComparisonBoundsFixture.REPORT_EXPECTED);
+	}
+
+	@Test
+	void compileAndRunSearchAndMismatchRefuseABadBound() throws Exception {
+		// The JVM twin of LispEvaluatorTest#searchAndMismatchRefuseABadBound.
+		assertThat(compileAndRunExpanded(SearchMismatchBoundsFixture.PROGRAM))
+			.isEqualTo(SearchMismatchBoundsFixture.EXPECTED);
+	}
+
+	@Test
+	void compileAndRunABadSearchOrMismatchBoundReportsAsSubseqDoes() throws Exception {
+		// The JVM twin of LispEvaluatorTest#aBadSearchOrMismatchBoundReportsAsSubseqDoes.
+		assertThat(compileAndRunExpanded(SearchMismatchBoundsFixture.REPORT_PROGRAM))
+			.isEqualTo(SearchMismatchBoundsFixture.REPORT_EXPECTED);
+	}
+
+	@Test
+	void compileAndRunParseIntegerRefusesABadBound() throws Exception {
+		// The JVM twin of LispEvaluatorTest#parseIntegerRefusesABadBound.
+		assertThat(compileAndRunExpanded(ParseIntegerBoundsFixture.PROGRAM))
+			.isEqualTo(ParseIntegerBoundsFixture.EXPECTED);
+	}
+
+	@Test
+	void compileAndRunABadParseIntegerBoundReportsAsSubseqDoes() throws Exception {
+		// The JVM twin of LispEvaluatorTest#aBadParseIntegerBoundReportsAsSubseqDoes.
+		assertThat(compileAndRunExpanded(ParseIntegerBoundsFixture.REPORT_PROGRAM))
+			.isEqualTo(ParseIntegerBoundsFixture.REPORT_EXPECTED);
+	}
+
+	@Test
+	void compileAndRunLoadAndTheStreamOperatorsSignalTheirCondition() throws Exception {
+		// The JVM twin of
+		// LispEvaluatorTest#loadAndTheStreamOperatorsSignalTheirCondition.
+		assertThat(compileAndRunExpanded(StreamOperandErrorsFixture.PROGRAM))
+			.isEqualTo(StreamOperandErrorsFixture.EXPECTED);
+		assertThat(compileAndRunExpanded(StreamOperandErrorsFixture.REPORT_PROGRAM))
+			.isEqualTo(StreamOperandErrorsFixture.REPORT_EXPECTED);
+	}
+
+	@Test
+	void compileAndRunGetOutputStreamStringRefusesAnotherKindOfStream() throws Exception {
+		// The JVM twin of
+		// LispEvaluatorTest#getOutputStreamStringRefusesAnotherKindOfStream, through
+		// the whole front end (the Gray class).
+		assertThat(compileAndRun(fixtureProgram(OutputStreamStringKindFixture.PROGRAM)))
+			.isEqualTo(OutputStreamStringKindFixture.EXPECTED);
+		assertThat(compileAndRun(fixtureProgram(OutputStreamStringKindFixture.REPORT_PROGRAM)))
+			.isEqualTo(OutputStreamStringKindFixture.REPORT_EXPECTED);
+	}
+
+	@Test
+	void compileAndRunGetOutputStreamStringRefusesAClosedStringOutputStream() throws Exception {
+		// The JVM twin of
+		// LispEvaluatorTest#getOutputStreamStringRefusesAClosedStringOutputStream.
+		assertThat(compileAndRun(fixtureProgram(OutputStreamStringKindFixture.CLOSED_PROGRAM)))
+			.isEqualTo(OutputStreamStringKindFixture.CLOSED_EXPECTED);
+	}
+
+	@Test
+	void compileAndRunComputedTypepOfAStreamTypeName() throws Exception {
+		// The JVM twin of
+		// LispEvaluatorTest#computedTypepOfAStreamTypeNameAnswersAsTheLiteralDoes.
+		assertThat(compileAndRun(fixtureProgram(am.ik.rontolisp.ComputedStreamTypepFixture.PROGRAM)))
+			.isEqualTo(am.ik.rontolisp.ComputedStreamTypepFixture.EXPECTED);
+	}
+
+	@Test
+	void compileAndRunTypeOfClassOfAndSubtypepPlaceAStreamInTheStreamLattice() throws Exception {
+		// The JVM twin of
+		// LispEvaluatorTest#typeOfClassOfAndSubtypepPlaceAStreamInTheStreamLattice.
+		assertThat(compileAndRun(fixtureProgram(am.ik.rontolisp.StreamTypeLatticeFixture.PROGRAM)))
+			.isEqualTo(am.ik.rontolisp.StreamTypeLatticeFixture.EXPECTED);
+		assertThat(compileAndRun(fixtureProgram(am.ik.rontolisp.StreamTypeLatticeFixture.UNSPELLED_PROGRAM)))
+			.isEqualTo(am.ik.rontolisp.StreamTypeLatticeFixture.UNSPELLED_EXPECTED);
+	}
+
+	@Test
+	void compileAndRunAGrayBaseClassNamedFirstIsKnown() throws Exception {
+		// The JVM twin of LispEvaluatorTest#aGrayBaseClassNamedFirstIsKnown.
+		for (am.ik.rontolisp.GrayBaseClassNamedFirstFixture.Case c : am.ik.rontolisp.GrayBaseClassNamedFirstFixture.CASES) {
+			assertThat(compileAndRun(fixtureProgram(c.program()))).as(c.program()).isEqualTo(c.expected());
+		}
+	}
+
+	@Test
+	void compileAndRunStreampOfACompositeStreamBuiltInTheSameForm() throws Exception {
+		// The JVM twin of LispEvaluatorTest#streampOfACompositeStreamBuiltInTheSameForm.
+		assertThat(compileAndRun(fixtureProgram(am.ik.rontolisp.CompositeStreampFixture.STREAMP_PROGRAM)))
+			.isEqualTo(am.ik.rontolisp.CompositeStreampFixture.EXPECTED);
+		assertThat(compileAndRun(fixtureProgram(am.ik.rontolisp.CompositeStreampFixture.TYPEP_PROGRAM)))
+			.isEqualTo(am.ik.rontolisp.CompositeStreampFixture.EXPECTED);
+		assertThat(compileAndRun(fixtureProgram(am.ik.rontolisp.CompositeStreampFixture.STANDARD_STREAMS_PROGRAM)))
+			.isEqualTo(am.ik.rontolisp.CompositeStreampFixture.EXPECTED);
+	}
+
+	@Test
+	void compileAndRunScaleFloatRefusesANonFloatOrNonIntegerArgument() throws Exception {
+		// The JVM twin of
+		// LispEvaluatorTest#scaleFloatRefusesANonFloatOrNonIntegerArgument.
+		assertThat(compileAndRunExpanded(ScaleFloatOperandsFixture.PROGRAM))
+			.isEqualTo(ScaleFloatOperandsFixture.EXPECTED);
+	}
+
+	@Test
+	void compileAndRunDigitCharPAndParseIntegerRefuseARadixOutside2To36() throws Exception {
+		// The JVM twin of
+		// LispEvaluatorTest#digitCharPAndParseIntegerRefuseARadixOutside2To36.
+		assertThat(compileAndRunExpanded(RadixRangeFixture.PROGRAM)).isEqualTo(RadixRangeFixture.EXPECTED);
+	}
+
+	@Test
+	void compileAndRunReadFromStringRefusesMalformedText() throws Exception {
+		// The JVM twin of LispEvaluatorTest#readFromStringRefusesMalformedText.
+		assertThat(compileAndRunExpanded(ReadFromStringMalformedFixture.PROGRAM))
+			.isEqualTo(ReadFromStringMalformedFixture.EXPECTED);
+		assertThat(compileAndRunExpanded(ReadFromStringMalformedFixture.RESTART_PROGRAM))
+			.isEqualTo(ReadFromStringMalformedFixture.RESTART_EXPECTED);
+		assertThat(compileAndRunExpanded(ReadFromStringMalformedFixture.REPORT_PROGRAM))
+			.isEqualTo(ReadFromStringMalformedFixture.REPORT_EXPECTED);
+	}
+
+	@Test
+	void compileAndRunParseIntegerSignalsAParseErrorOverNoIntegerSyntax() throws Exception {
+		// The JVM twin of
+		// LispEvaluatorTest#parseIntegerSignalsAParseErrorOverNoIntegerSyntax.
+		assertThat(compileAndRunExpanded(ParseIntegerSyntaxFixture.PROGRAM))
+			.isEqualTo(ParseIntegerSyntaxFixture.EXPECTED);
+		assertThat(compileAndRunExpanded(ParseIntegerSyntaxFixture.REPORT_PROGRAM))
+			.isEqualTo(ParseIntegerSyntaxFixture.REPORT_EXPECTED);
+		assertThat(compileAndRunExpanded(ParseIntegerSyntaxFixture.RESTART_PROGRAM))
+			.isEqualTo(ParseIntegerSyntaxFixture.RESTART_EXPECTED);
+	}
+
+	@Test
+	void compileAndRunStringEqualityEvaluatesItsArgumentsInTheCallsOrder() throws Exception {
+		// The JVM twin of
+		// LispEvaluatorTest#stringEqualityEvaluatesItsArgumentsInTheCallsOrder.
+		assertThat(compileAndRunExpanded(StringComparisonBoundsFixture.ORDER_PROGRAM))
+			.isEqualTo(StringComparisonBoundsFixture.ORDER_EXPECTED);
+	}
+
+	@Test
+	void compileAndRunParseIntegerEvaluatesItsArgumentsInTheCallsOrder() throws Exception {
+		// The JVM twin of
+		// LispEvaluatorTest#parseIntegerEvaluatesItsArgumentsInTheCallsOrder.
+		assertThat(compileAndRunExpanded(ParseIntegerBoundsFixture.ORDER_PROGRAM))
+			.isEqualTo(ParseIntegerBoundsFixture.ORDER_EXPECTED);
+	}
+
+	@Test
+	void compileAndRunReadFromStringTakesItsWholeLambdaList() throws Exception {
+		// The JVM twin of LispEvaluatorTest#readFromStringTakesItsWholeLambdaList,
+		// through the CLI's front end: the prelude defun reads through the pushback cell
+		// (UnreadCharLibrary).
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess
+			.corpus(ReadFromStringLambdaListFixture.PROGRAM, am.ik.rontolisp.reader.Features.JVM, false, false)))
+			.isEqualTo(ReadFromStringLambdaListFixture.EXPECTED);
+	}
+
+	@Test
+	void compileAndRunReadSkipsAFailedFeatureGuardInFrontOfTheDatum() throws Exception {
+		// The JVM twin of
+		// LispEvaluatorTest#readSkipsAFailedFeatureGuardInFrontOfTheDatum: the emitted
+		// reader knows no #+, so the prelude scanner resolving the guard is what reads.
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(ReadFeatureGuardFixture.PROGRAM,
+				am.ik.rontolisp.reader.Features.JVM, false, false)))
+			.isEqualTo(ReadFeatureGuardFixture.EXPECTED);
+	}
+
+	@Test
+	void compileAndRunABadReadFromStringBoundReportsAsSubseqDoes() throws Exception {
+		// The JVM twin of LispEvaluatorTest#aBadReadFromStringBoundReportsAsSubseqDoes.
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess
+			.corpus(ReadFromStringLambdaListFixture.REPORT_PROGRAM, am.ik.rontolisp.reader.Features.JVM, false, false)))
+			.isEqualTo(ReadFromStringLambdaListFixture.REPORT_EXPECTED);
+	}
+
+	@Test
+	void compileAndRunReadSequenceOnAGrayStreamValidatesItsBoundsToo() throws Exception {
+		// The JVM twin of
+		// LispEvaluatorTest#readSequenceOnAGrayStreamValidatesItsBoundsToo,
+		// through the Gray splices (the expansion check runs before the dispatch).
+		assertThat(compileAndRunGray("""
+				(defclass gw-bounds-in (rontolisp:fundamental-character-input-stream)
+				  ((s :initarg :s)))
+				(defmethod rontolisp:stream-read-char ((s gw-bounds-in))
+				  (read-char (slot-value s 's)))
+				(print (list (handler-case
+				                 (read-sequence (make-array 3)
+				                                (make-instance 'gw-bounds-in :s (make-string-input-stream "abc"))
+				                                :start -1)
+				               (type-error () :type-error) (error () :other-error))
+				             (handler-case
+				                 (read-sequence '(a . b)
+				                                (make-instance 'gw-bounds-in :s (make-string-input-stream "abc")))
+				               (type-error () :type-error) (error () :other-error))))
+				""")).isEqualTo("(:TYPE-ERROR :TYPE-ERROR)");
+	}
+
+	@Test
+	void compileAndRunClassOf() throws Exception {
+		// class-of answers the metaobject view: class-name reads the name of the
+		// memoized standard-class instance, eq to what find-class yields -- for
+		// built-ins, CLOS instances and struct instances alike.
+		assertThat(compileAndRun("(print (class-name (class-of 42))) (print (class-name (class-of \"s\")))"
+				+ " (print (class-name (class-of 'foo))) (print (class-name (class-of :k)))"
+				+ " (print (class-name (class-of 1.5))) (print (class-name (class-of (CONS 1 2))))"
+				+ " (print (class-name (class-of nil))) (print (class-name (class-of t)))"
+				+ " (print (class-name (class-of (make-hash-table)))) (print (class-name (class-of #'car)))"
+				+ " (print (class-name (class-of (make-array 1))))"))
+			.isEqualTo("INTEGER\nSTRING\nSYMBOL\nKEYWORD\nFLOAT\nCONS\nNULL\nBOOLEAN\nHASH-TABLE\nFUNCTION\nVECTOR");
+		assertThat(compileAndRun("""
+				(defclass co-pt () ((x :initarg :x)))
+				(defstruct co-node value)
+				(print (list (eq (class-of (make-instance 'co-pt :x 1)) (find-class 'co-pt))
+				             (eq (class-of (make-co-node :value 1)) (find-class 'co-node))
+				             (eq (class-of 42) (find-class 'integer))
+				             (class-name (class-of (make-instance 'co-pt :x 1)))
+				             (class-name (class-of (make-co-node :value 2)))))
+				""")).isEqualTo("(T T T CO-PT CO-NODE)");
+	}
+
+	@Test
+	void compileAndRunSlotShadowingChangeClassWithAccessorsAndPrintObject() throws Exception {
+		assertThat(compileAndRun("""
+				(defclass jc-base () ((open-p :initform t :reader jc-open-p) (conn :initarg :conn :reader jc-conn)))
+				(defclass jc-sub (jc-base) ((open-p :initform :maybe :accessor jc-sub-open-p)
+				                            (extra :initarg :extra :initform :none :accessor jc-extra)))
+				(defstruct jc-node value)
+				(defmethod print-object ((n jc-node) stream)
+				  (print-unreadable-object (n stream :type t) (princ (jc-node-value n) stream)))
+				(let* ((b (make-instance 'jc-base :conn "c")) (alias b))
+				  (print (jc-open-p b))
+				  (change-class b 'jc-sub :extra :pooled)
+				  (print (list (type-of alias) (jc-conn alias) (jc-extra alias) (jc-sub-open-p alias)))
+				  (with-accessors ((e jc-extra)) alias (setf e (list e :seen)))
+				  (print (jc-extra alias)))
+				(print (format nil "~a|~s" (make-jc-node :value 1) (make-jc-node :value 2)))
+				""")).isEqualTo("T\n(JC-SUB \"c\" :POOLED T)\n(:POOLED :SEEN)\n\"#<JC-NODE 1>|#<JC-NODE 2>\"");
+	}
+
+	@Test
+	void compileAndRunPrintObjectForANestedObject() throws Exception {
+		// The method decides the text wherever the instance sits, and the walk that makes
+		// that true reproduces the raw renderer exactly for everything it does not route.
+		assertThat(compileAndRun("""
+				(defclass jpn-c () ((x :initarg :x)))
+				(defmethod print-object ((o jpn-c) s) (format s "#<C custom>"))
+				(let ((i (make-instance 'jpn-c :x 1)))
+				  (print i)
+				  (print (list i))
+				  (format t "~S~%" (list i))
+				  (print (vector i))
+				  (print (list 1 "s" (list i) 2))
+				  (print (cons 1 i))
+				  (print '(1 2 . 3))
+				  (princ (list 1 "s" 'sym))
+				  (terpri))
+				""")).isEqualTo("#<C custom>\n(#<C custom>)\n(#<C custom>)\n#(#<C custom>)\n(1 \"s\" (#<C custom>) 2)\n"
+				+ "(1 . #<C custom>)\n(1 2 . 3)\n(1 s SYM)");
+	}
+
+	@Test
+	void compileAndRunSlotBoundpAndSlotMakunbound() throws Exception {
+		// Real unboundness: a slot written with no :initform starts UNBOUND,
+		// slot-makunbound puts it back, and a read of an unbound slot signals
+		// unbound-slot.
+		assertThat(compileAndRun("(defclass sb-pt () ((x :initarg :x) (y :initform 9)))"
+				+ " (let ((p (make-instance 'sb-pt)))" + " (print (slot-boundp p 'x)) (print (slot-boundp p 'y))"
+				+ " (print (slot-boundp p 'sb-absent))" + " (setf (slot-value p 'x) 1) (print (slot-boundp p 'x))"
+				+ " (slot-makunbound p 'x) (print (slot-boundp p 'x))"
+				+ " (print (handler-case (slot-value p 'x) (unbound-slot (e) (list :unbound (slot-value e 'name))))))"))
+			.isEqualTo("NIL\nT\nNIL\nT\nNIL\n(:UNBOUND X)");
+	}
+
+	@Test
+	void compileAndRunSimpleConditionFormatAccessors() throws Exception {
+		// The built-in simple-* condition tags carry the rendered message at slot 1.
+		assertThat(compileAndRun(
+				"(handler-case (error \"boom ~a\" 1)" + " (error (c) (print (simple-condition-format-control c))"
+						+ " (print (simple-condition-format-arguments c))))"))
+			.isEqualTo("\"boom 1\"\nNIL");
+		// A user condition class reads its declared slots.
+		assertThat(compileAndRun("(define-condition sc-err (error)"
+				+ " ((format-control :initarg :format-control) (format-arguments :initarg :format-arguments)))"
+				+ " (handler-case (error 'sc-err :format-control \"ctl\" :format-arguments '(1 2))"
+				+ " (error (c) (print (simple-condition-format-control c))"
+				+ " (print (simple-condition-format-arguments c))))"))
+			.isEqualTo("\"ctl\"\n(1 2)");
+	}
+
+	@Test
+	void compileAndRunWriteStringBoundsAndReplaceNilBounds() throws Exception {
+		assertThat(compileAndRun("(write-string \"hello\" t :start 1 :end 3) (terpri)"
+				+ " (write-string \"hello\" t :start 1 :end nil) (terpri) (print (write-string \"xy\"))"))
+			.isEqualTo("el\nello\nxy\"xy\"");
+		assertThat(compileAndRun("(let ((s \"abcdef\")) (print (replace s \"XYZ\" :start1 1 :end1 nil)))"))
+			.isEqualTo("\"aXYZef\"");
+	}
+
+	@Test
+	void compileAndRunUiopAddPackageLocalNickname() throws Exception {
+		// The literal top-level call is consumed by the PackageResolver like a
+		// defpackage clause, so the nickname works on the compiled backends too.
+		assertThat(compileAndRun("""
+				(defpackage #:com.example.deeply.nested (:use #:cl) (:export #:apn-answer))
+				(in-package #:com.example.deeply.nested)
+				(defun apn-answer () 42)
+				(in-package #:cl-user)
+				(uiop:add-package-local-nickname '#:apn-nick '#:com.example.deeply.nested)
+				(print (apn-nick:apn-answer))
+				""")).isEqualTo("42");
+	}
+
+	@Test
+	void compileAndRunUsePackage() throws Exception {
+		// The literal top-level (use-package P) is consumed by the PackageResolver, so
+		// the inherited bare names resolve at compile time -- nothing reaches runtime.
+		assertThat(compileAndRun("""
+				(defpackage #:up-greeter (:use #:cl) (:export #:up-hello))
+				(in-package #:up-greeter)
+				(defun up-hello () "hi")
+				(in-package #:cl-user)
+				(use-package '#:up-greeter)
+				(print (up-hello))
+				""")).isEqualTo("\"hi\"");
+	}
+
+	@Test
+	void compileAndRunGrayStreamInstanceDispatch() throws Exception {
+		// The GrayStreamsLibrary pre-pass splices gray.lisp and rewrites the
+		// write-string/write-char call sites onto the dispatch helpers, mirroring the
+		// CLI pipeline.
+		assertThat(compileAndRun(am.ik.rontolisp.eval.GrayStreamsLibrary
+			.process(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString(
+					"""
+							(defclass gs-upcase (rontolisp:fundamental-character-output-stream)
+							  ((acc :initform "")))
+							(defmethod rontolisp:stream-write-string ((s gs-upcase) str &optional (start 0) end)
+							  (setf (slot-value s 'acc) (concatenate 'string (slot-value s 'acc) (string-upcase (subseq str start end))))
+							  str)
+							(let ((s (make-instance 'gs-upcase)))
+							  (write-string "hello" s)
+							  (write-char #\\! s)
+							  (print (slot-value s 'acc)))
+							(write-string "still-works" t)
+							(terpri)
+							""")))))
+			.isEqualTo("\"HELLO!\"\nstill-works");
+	}
+
+	@Test
+	void compileAndRunGrayOutputProtocolWidening() throws Exception {
+		// the line-oriented and print-family operators reach a Gray
+		// instance on the compile path too. A class defining ONLY stream-write-char
+		// (rove's indent-stream shape) answers all of them, and its column protocol
+		// is what fresh-line consults.
+		assertThat(compileAndRun(am.ik.rontolisp.eval.GrayStreamsLibrary
+			.process(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString("""
+					(defclass gw-col (rontolisp:fundamental-character-output-stream)
+					  ((acc :initform "") (col :initform 0)))
+					(defmethod rontolisp:stream-write-char ((s gw-col) c)
+					  (setf (slot-value s 'acc) (concatenate 'string (slot-value s 'acc) (string c)))
+					  (setf (slot-value s 'col) (if (char= c #\\Newline) 0 (+ (slot-value s 'col) 1)))
+					  c)
+					(defmethod rontolisp:stream-line-column ((s gw-col)) (slot-value s 'col))
+					(let ((s (make-instance 'gw-col)))
+					  (write-char #\\a s)
+					  (write-string "bc" s)
+					  (princ "-" s)
+					  (prin1 :k s)
+					  (fresh-line s)
+					  (fresh-line s)
+					  (terpri s)
+					  (write-line "l" s)
+					  (print 7 s)
+					  (format s "f~a" 1)
+					  (force-output s)
+					  (finish-output s)
+					  (clear-output s)
+					  (print (list (slot-value s 'acc) (close s))))
+					(write-line "past" t)
+					"""))))).isEqualTo("(\"abc-:K\n\nl\n7\nf1\" T)\npast");
+	}
+
+	@Test
+	void compileAndRunCompositeStreamConstructors() throws Exception {
+		// The composite-stream constructors are prelude Lisp over the Gray protocol, so
+		// the same process pipeline that splices the broadcast stream carries them.
+		assertThat(compileAndRun(am.ik.rontolisp.eval.GrayStreamsLibrary
+			.process(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString("""
+					(print (let ((o (make-string-output-stream)))
+					         (let ((tw (make-two-way-stream (make-string-input-stream "AB") o)))
+					           (write-string "hi" tw)
+					           (write-char #\\! tw)
+					           (get-output-stream-string o))))
+					(print (let ((o (make-string-output-stream)))
+					         (let ((es (make-echo-stream (make-string-input-stream "ab") o)))
+					           (list (read-char es) (read-char es) (get-output-stream-string o)))))
+					(print (let ((cs (make-concatenated-stream (make-string-input-stream "AB")
+					                                            (make-string-input-stream "CD"))))
+					         (list (read-char cs) (read-char cs) (read-char cs) (read-char cs)
+					               (read-char cs nil :eof))))
+					(print (let ((i (make-string-input-stream "x")) (o (make-string-output-stream)))
+					         (let ((tw (make-two-way-stream i o)))
+					           (list (eq (two-way-stream-input-stream tw) i)
+					                 (eq (two-way-stream-output-stream tw) o)))))
+					(print (let ((tw (funcall #'make-two-way-stream (make-string-input-stream "x")
+					                           (make-string-output-stream))))
+					         (list (read-char tw) (read-char tw nil :eof))))
+					"""))))).isEqualTo("\"hi!\"\n(#\\a #\\b \"ab\")\n(#\\A #\\B #\\C #\\D :EOF)\n(T T)\n(#\\x :EOF)");
+	}
+
+	@Test
+	void compileAndRunGrayCloseStandsDownForAProgramThatMethodsClose() throws Exception {
+		// close is CL's own generic: a program that defines a method on it owns the
+		// operator, so the Gray rewrite leaves every close call site alone and the
+		// shadowed-built-in dispatcher answers -- for the Gray class AND for a
+		// handle. Another Gray class gets the Gray default, a method on the base
+		// class, rather than the built-in, which rejects an instance.
+		assertThat(compileAndRun(am.ik.rontolisp.eval.GrayStreamsLibrary
+			.process(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString("""
+					(defclass gc-s (rontolisp:fundamental-character-output-stream)
+					  ((acc :initform "")))
+					(defclass gc-plain (rontolisp:fundamental-binary-input-stream) ())
+					(defmethod rontolisp:stream-write-char ((s gc-s) c) c)
+					(defmethod close ((s gc-s) &key abort)
+					  (declare (ignore abort))
+					  :by-method)
+					(print (list (close (make-instance 'gc-s)) (close (make-instance 'gc-plain))
+					             (close (make-string-output-stream))))
+					"""))))).isEqualTo("(:BY-METHOD T T)");
+	}
+
+	@Test
+	void grayRewriteLeavesASlotNamedAfterAStreamBuiltinAlone() throws Exception {
+		// A defclass/define-condition SLOT SPEC is data whose head is the slot name.
+		// chipz's (format :initarg :format :reader invalid-format) slot was read as a
+		// (format stream ctrl args...) call and handed back as the format rewrite's
+		// let, which defclass then rejected with "expects a keyword slot option, got
+		// ((__gray_fmt_stream :INITARG))". The :report body after the slot list is
+		// ordinary code and still rewrites -- it prints through this very protocol.
+		assertThat(compileAndRun(am.ik.rontolisp.eval.GrayStreamsLibrary
+			.process(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString("""
+					(defclass gs-sink (rontolisp:fundamental-character-output-stream)
+					  ((format :initarg :format :reader sink-format)
+					   (acc :initform "")))
+					(defmethod rontolisp:stream-write-string ((s gs-sink) str &optional (start 0) end)
+					  (setf (slot-value s 'acc) (concatenate 'string (slot-value s 'acc) (subseq str start end)))
+					  str)
+					(define-condition bad-format (error)
+					  ((format :initarg :format :reader bad-format-name))
+					  (:report (lambda (condition stream)
+					             (format stream "Invalid format ~a" (bad-format-name condition)))))
+					(let ((s (make-instance 'gs-sink :format :gzip)))
+					  (format s "to ~a" (sink-format s))
+					  (print (list (sink-format s) (slot-value s 'acc))))
+					(print (handler-case (error 'bad-format :format :bzip2) (error (e) (princ-to-string e))))
+					"""))))).isEqualTo("(:GZIP \"to GZIP\")\n\"Invalid format BZIP2\"");
+	}
+
+	@Test
+	void compileAndRunGrayBinaryStreamDispatchAndFilePosition() throws Exception {
+		// The read side of the Gray pre-pass: read-byte/write-byte and
+		// file-position call sites with a non-literal stream rewrite onto the
+		// %gray-*-dispatch helpers; only the helpers a rewrite produced are spliced.
+		assertThat(compileAndRun(am.ik.rontolisp.eval.GrayStreamsLibrary
+			.process(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString("""
+					(defclass gbs-sink (rontolisp:fundamental-binary-output-stream)
+					  ((bytes :initform nil)))
+					(defmethod rontolisp:stream-write-byte ((s gbs-sink) byte)
+					  (setf (slot-value s 'bytes) (cons byte (slot-value s 'bytes)))
+					  byte)
+					(defclass gbs-source (rontolisp:fundamental-binary-input-stream)
+					  ((items :initarg :items) (pos :initform 0)))
+					(defmethod rontolisp:stream-read-byte ((s gbs-source))
+					  (let ((items (slot-value s 'items)) (pos (slot-value s 'pos)))
+					    (if (>= pos (length items))
+					        :eof
+					        (progn (setf (slot-value s 'pos) (+ pos 1)) (nth pos items)))))
+					(defmethod rontolisp:stream-file-position ((s gbs-source)) (slot-value s 'pos))
+					(defmethod (setf rontolisp:stream-file-position) (position (s gbs-source))
+					  (setf (slot-value s 'pos) position))
+					(let ((out (make-instance 'gbs-sink)))
+					  (write-byte 7 out)
+					  (write-byte 250 out)
+					  (print (reverse (slot-value out 'bytes))))
+					(let ((in (make-instance 'gbs-source :items (list 10 20 30))))
+					  (print (read-byte in))
+					  (print (file-position in))
+					  (file-position in 0)
+					  (print (read-byte in))
+					  (print (read-byte in nil :done))
+					  (print (read-byte in nil :done))
+					  (print (read-byte in nil :done)))
+					"""))))).isEqualTo("(7 250)\n10\n1\n10\n20\n30\n:DONE");
+	}
+
+	@Test
+	void compileAndRunGrayInputStreamReadLineAndSequenceDefaults() throws Exception {
+		// read-char/read-line and the sequence built-ins on a character input
+		// class defining only stream-read-char: the default element loops of
+		// gray.lisp answer read-line (nil at EOF, the lite default) and
+		// read-sequence, exactly like the interpreter.
+		assertThat(compileAndRun(am.ik.rontolisp.eval.GrayStreamsLibrary
+			.process(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString("""
+					(defclass gcs-source (rontolisp:fundamental-character-input-stream)
+					  ((text :initarg :text) (pos :initform 0)))
+					(defmethod rontolisp:stream-read-char ((s gcs-source))
+					  (let ((text (slot-value s 'text)) (pos (slot-value s 'pos)))
+					    (if (>= pos (length text))
+					        :eof
+					        (progn (setf (slot-value s 'pos) (+ pos 1)) (char text pos)))))
+					(let ((in (make-instance 'gcs-source :text (format nil "ab~%cd")))
+					      (buf (make-string 2)))
+					  (print (read-char in))
+					  (print (read-line in))
+					  (print (read-line in))
+					  (print (read-line in))
+					  (print (read-line in nil :end))
+					  (setf (slot-value in 'pos) 0)
+					  (print (read-sequence buf in))
+					  (print buf))
+					"""))))).isEqualTo("#\\a\n\"b\"\n\"cd\"\nNIL\n:END\n2\n\"ab\"");
+	}
+
+	@Test
+	void compileAndRunGrayInputStreamPeekUnreadAndStreamQueries() throws Exception {
+		// The rest of the input protocol on the compile path: peek-char (all three
+		// peek-type forms, looped inside the dispatch helper), unread-char through
+		// the protocol's pushback, read-char-no-hang, open-stream-p and
+		// stream-element-type (character, octets for a binary base class, and
+		// character again for a BIVALENT class subclassing both). Same answers as
+		// the interpreter, character by character.
+		assertThat(compileAndRun(am.ik.rontolisp.eval.GrayStreamsLibrary
+			.process(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString("""
+					(defclass gin-source (rontolisp:fundamental-character-input-stream)
+					  ((text :initarg :text) (pos :initform 0)))
+					(defmethod rontolisp:stream-read-char ((s gin-source))
+					  (let ((text (slot-value s 'text)) (pos (slot-value s 'pos)))
+					    (if (>= pos (length text))
+					        :eof
+					        (progn (setf (slot-value s 'pos) (+ pos 1)) (char text pos)))))
+					(defclass gin-bytes (rontolisp:fundamental-binary-input-stream) ())
+					(defclass gin-both (rontolisp:fundamental-binary-input-stream
+					                    rontolisp:fundamental-character-input-stream)
+					  ())
+					(let ((in (make-instance 'gin-source :text (format nil "ab~%  cd"))))
+					  (print (peek-char nil in))
+					  (print (read-char in))
+					  (print (unread-char #\\a in))
+					  (print (read-char in))
+					  (print (read-char-no-hang in))
+					  (print (read-line in))
+					  (print (peek-char t in))
+					  (print (peek-char #\\d in))
+					  (print (read-line in))
+					  (print (peek-char nil in nil :done))
+					  (print (open-stream-p in))
+					  (print (stream-element-type in))
+					  (print (stream-element-type (make-instance 'gin-bytes)))
+					  (print (stream-element-type (make-instance 'gin-both))))
+					"""))))).isEqualTo(
+					"#\\a\n#\\a\nNIL\n#\\a\n#\\b\n\"\"\n#\\c\n#\\d\n\"d\"\n:DONE\nT\nCHARACTER\n(UNSIGNED-BYTE 8)\nCHARACTER");
+	}
+
+	@Test
+	void compileAndRunGrayStreamDirectionPredicates() throws Exception {
+		// input-stream-p / output-stream-p reach a Gray instance on the compile path
+		// too, through the same typep-against-the-base-class helpers the interpreter
+		// wraps. A string input stream answers its real direction.
+		assertThat(compileAndRunGray(
+				"""
+						(defclass gdp-in (rontolisp:fundamental-character-input-stream) ())
+						(defclass gdp-out (rontolisp:fundamental-character-output-stream) ())
+						(defmethod rontolisp:stream-read-char ((s gdp-in)) :eof)
+						(defmethod rontolisp:stream-write-string ((s gdp-out) str &optional start end) (declare (ignore start end)) str)
+						(let ((in (make-instance 'gdp-in)) (out (make-instance 'gdp-out))
+						      (handle (make-string-input-stream "z")))
+						  (print (list (input-stream-p in) (output-stream-p in)))
+						  (print (list (input-stream-p out) (output-stream-p out)))
+						  (print (list (input-stream-p handle) (output-stream-p handle)))
+						  (print (handler-case (input-stream-p 3) (type-error () :type-error))))
+						"""))
+			.isEqualTo("""
+					(T NIL)
+					(NIL T)
+					(T NIL)
+					:TYPE-ERROR""");
+	}
+
+	@Test
+	void compileAndRunGrayStreamIsAStream() throws Exception {
+		// streamp / (typep x 'stream) answer t for a Gray instance on the compile path
+		// too: the lowering gains an instance arm over the registry's
+		// fundamental-stream descendants, so an etypecase that splits "file descriptor"
+		// from "Lisp stream" picks the same arm the interpreter picks.
+		assertThat(compileAndRunGray(
+				"""
+						(defclass gsp-out (rontolisp:fundamental-character-output-stream) ())
+						(defclass gsp-in (rontolisp:fundamental-character-input-stream) ())
+						(defclass gsp-other () ())
+						(defmethod rontolisp:stream-write-string ((s gsp-out) str &optional start end) (declare (ignore start end)) str)
+						(defmethod rontolisp:stream-read-char ((s gsp-in)) :eof)
+						(defun gsp-typep (x ty) (typep x ty))
+						(let ((out (make-instance 'gsp-out)) (in (make-instance 'gsp-in))
+						      (other (make-instance 'gsp-other)))
+						  (print (list (streamp out) (streamp in) (streamp other)))
+						  (print (list (typep out 'stream) (typep in 'stream) (typep other 'stream)))
+						  (print (mapcar #'streamp (list out other 3 t nil)))
+						  (print (etypecase out (integer :fd) (stream :lisp-stream)))
+						  (print (list (gsp-typep out 'stream) (gsp-typep other 'stream) (gsp-typep 3 'stream))))
+						"""))
+			.isEqualTo("""
+					(T T NIL)
+					(T T NIL)
+					(T NIL NIL T NIL)
+					:LISP-STREAM
+					(T NIL NIL)""");
+	}
+
+	@Test
+	void compileAndRunUnreadCharOnAStreamHandleRoundTrips() throws Exception {
+		// The handle-side pushback of unread-char is ordinary Lisp
+		// (unread-char.lisp), spliced and wired to the call sites by the
+		// eval/UnreadCharLibrary pre-pass the CLI pipeline runs -- so read-char,
+		// peek-char and read-line all drain the same one-slot cell, and a second
+		// unread with the cell still full signals.
+		assertThat(compileAndRunUnread("""
+				(let ((s (make-string-input-stream (format nil "ab~%cd"))))
+				  (print (read-char s))
+				  (print (unread-char #\\a s))
+				  (print (peek-char nil s))
+				  (print (read-char s))
+				  (print (read-line s))
+				  (print (read-line s)))
+				(print (handler-case
+				           (let ((s (make-string-input-stream "xy")))
+				             (read-char s)
+				             (unread-char #\\x s)
+				             (unread-char #\\x s))
+				         (error (e) (princ-to-string e))))
+				""")).isEqualTo("""
+				#\\a
+				NIL
+				#\\a
+				#\\a
+				"b"
+				"cd"
+				"UNREAD-CHAR without an intervening READ-CHAR\"""");
+	}
+
+	@Test
+	void compileAndRunReadTimeEval() throws Exception {
+		// The CLI pipeline: marker read -> UserMacroExpander resolves each marker
+		// against the macro-time evaluator -> the compilers see plain forms.
+		assertThat(compileAndRun(am.ik.rontolisp.eval.UserMacroExpander.expand(LispReader.readAllWithReadEvalMarkers(
+				"(defvar +re-six+ #.(* 2 3)) (print +re-six+)" + " (print #.(+ 40 2)) (print '(a #.(+ 1 2) c))"
+						+ " (defmacro re-stamp (&rest body) `(list #.(* 7 6) ,@body)) (print (re-stamp 1 2))",
+				am.ik.rontolisp.reader.Features.JVM))))
+			.isEqualTo("6\n42\n(A 3 C)\n(42 1 2)");
+	}
+
+	@Test
+	void compileAndRunReadTimeEvalGeneratedDefconstants() throws Exception {
+		// fast-http's multipart-parser idiom: #. generates the state defconstants via
+		// a backquoted eval-when whose datum value is CODE, evaluated in place.
+		assertThat(compileAndRun(am.ik.rontolisp.eval.UserMacroExpander.expand(LispReader.readAllWithReadEvalMarkers("""
+				#.`(eval-when (:compile-toplevel :load-toplevel :execute)
+				     ,@(loop for i from 0
+				             for state in '(re-state-alpha re-state-beta re-state-gamma)
+				             collect `(defconstant ,(intern (format nil "+~A+" state)) ,i)))
+				(print +re-state-beta+)
+				(print +re-state-gamma+)
+				""", am.ik.rontolisp.reader.Features.JVM)))).isEqualTo("1\n2");
+	}
+
+	@Test
+	void compileAndRunIeee754Bits() throws Exception {
+		assertThat(compileAndRun("(print (%ieee754-double-bits 1.0)) (print (%ieee754-double-bits -2.5))"
+				+ " (print (%ieee754-double-from-bits 4607182418800017408))"
+				+ " (print (%ieee754-single-bits 1.0)) (print (%ieee754-single-bits -2.5))"
+				+ " (print (%ieee754-single-from-bits 1065353216))"
+				+ " (print (%ieee754-double-from-bits (%ieee754-double-bits -0.5)))"
+				+ " (print (%ieee754-single-from-bits (%ieee754-single-bits -0.5)))"))
+			.isEqualTo("4607182418800017408\n13836183955189006336\n1.0\n1065353216\n3223322624\n1.0\n-0.5\n-0.5");
+	}
+
+	@Test
+	void compileAndRunBfloat16Bits() throws Exception {
+		assertThat(compileAndRun("(print (rontolisp:bfloat16-bits 1.0)) (print (rontolisp:bfloat16-bits -2.5))"
+				+ " (print (rontolisp:bits-bfloat16 16256))"
+				+ " (print (rontolisp:bits-bfloat16 (rontolisp:bfloat16-bits 0.1)))"
+				+ " (print (rontolisp:bfloat16-bits 1.00390625)) (print (rontolisp:bfloat16-bits 1.01171875))"
+				+ " (print (let ((bad 0)) (dotimes (i 65536 bad)"
+				+ " (unless (= i (rontolisp:bfloat16-bits (rontolisp:bits-bfloat16 i))) (incf bad)))))"
+				+ " (print (mapcar #'rontolisp:bfloat16-bits (list 1.0 2.0)))"
+				+ " (print (mapcar #'rontolisp:bits-bfloat16 (list 16256 16384)))"))
+			.isEqualTo("16256\n49184\n1.0\n0.10009765625\n16256\n16258\n0\n(16256 16384)\n(1.0 2.0)");
+	}
+
+	@Test
+	void compileAndRunBfloat16BulkAgreesWithTheScalarPair() throws Exception {
+		// The bulk pair and the scalar pair are ONE rounding (.kb/bfloat16.md): widening
+		// every pattern into an f32 array and narrowing it straight back is the plain
+		// identity over all 65536 patterns, NaN payloads included. widen-float-bits
+		// stores the bit pattern verbatim (a bfloat16 pattern IS an f32's top half
+		// already, so widening is one shift, never a double), and this backend's
+		// narrow emits the same rounding this file's own bfloat16-bits case pins,
+		// applied to the float's raw bits directly rather than through
+		// BFloat16#bits(double) (whose parameter would auto-widen a float argument
+		// first) -- so nothing here touches a double, and nothing quiets a signalling
+		// NaN.
+		assertThat(compileAndRun("""
+				(let* ((n 65536)
+				       (patterns (make-array n :element-type '(unsigned-byte 16)))
+				       (values (make-array n :element-type 'single-float))
+				       (back (make-array n :element-type '(unsigned-byte 16)))
+				       (bad 0))
+				  (dotimes (i n) (setf (aref patterns i) i))
+				  (rontolisp:widen-float-bits patterns :bfloat16 values)
+				  (rontolisp:narrow-float-bits values :bfloat16 back)
+				  (dotimes (i n)
+				    (unless (= i (aref back i)) (incf bad)))
+				  (print bad)
+				  (print (list (aref back 16256) (rontolisp:bfloat16-bits (aref values 16256)))))
+				""")).isEqualTo("0\n(16256 16256)");
+	}
+
+	@Test
+	void compileAndRunNarrowFloatBitsReadsARankNSourceLikeTheInterpreter() throws Exception {
+		// narrow-float-bits reads the source's TOTAL SIZE. This backend used to ask
+		// _fvLength for it, whose rank-n arm goes through _fvToGeneral and _length --
+		// and _length refuses a multidimensional array, so a rank-2 source threw
+		// "argument is not a sequence" here while the interpreter narrowed it happily,
+		// at every width. It is the header's dimension product now, which is exactly
+		// what LispFloatArray.totalSize answers.
+		assertThat(compileAndRun("""
+				(let ((src (make-array '(2 3) :element-type 'single-float))
+				      (dsrc (make-array '(2 3) :element-type 'double-float))
+				      (back (make-array 6 :element-type '(unsigned-byte 16)))
+				      (dback (make-array 6 :element-type '(unsigned-byte 16))))
+				  (dotimes (i 2)
+				    (dotimes (j 3)
+				      (setf (aref src i j) (+ 1.0 j (* 3 i)))
+				      (setf (aref dsrc i j) (+ 1.0 j (* 3 i)))))
+				  (rontolisp:narrow-float-bits src :bfloat16 back)
+				  (rontolisp:narrow-float-bits dsrc :bfloat16 dback)
+				  (print (list (aref back 5) (aref dback 5)))
+				  (print (= (aref back 5) (rontolisp:bfloat16-bits 6.0))))
+				""")).isEqualTo("(16576 16576)\nT");
+	}
+
+	@Test
+	void compileAndRunFloat16Bits() throws Exception {
+		assertThat(compileAndRun("(print (rontolisp:float16-bits 1.0)) (print (rontolisp:float16-bits -2.5))"
+				+ " (print (rontolisp:bits-float16 15360))"
+				+ " (print (rontolisp:bits-float16 (rontolisp:float16-bits 1.5)))"
+				// The identity for every FINITE pattern (NaN aside: the JDK's own
+				// floatToFloat16/float16ToFloat pair does not itself round-trip a
+				// signalling NaN, unlike bfloat16-bits above).
+				+ " (print (let ((bad 0)) (dotimes (i 65536 bad)" + "   (let ((v (rontolisp:bits-float16 i)))"
+				+ "     (when (= v v) (unless (= i (rontolisp:float16-bits v)) (incf bad)))))))"
+				+ " (print (mapcar #'rontolisp:float16-bits (list 1.0 2.0)))"
+				+ " (print (mapcar #'rontolisp:bits-float16 (list 15360 16384)))"))
+			.isEqualTo("15360\n49408\n1.0\n1.5\n0\n(15360 16384)\n(1.0 2.0)");
+	}
+
+	@Test
+	void compileAndRunDestructuringBind() throws Exception {
+		assertThat(compileAndRun("(destructuring-bind (a (b c) d) '(1 (2 3) 4) (print (+ a b c d)))")).isEqualTo("10");
+		assertThat(compileAndRun("(destructuring-bind (a &optional (b 10) c) '(1) (print (list a b c)))"))
+			.isEqualTo("(1 10 NIL)");
+		assertThat(compileAndRun("(destructuring-bind (a &rest r) '(1 2 3) (print (list a r)))"))
+			.isEqualTo("(1 (2 3))");
+		assertThat(compileAndRun("(destructuring-bind (a &key k (j 5)) '(1 :k 2) (print (list a k j)))"))
+			.isEqualTo("(1 2 5)");
+		assertThat(compileAndRun("(destructuring-bind ((a &key k) b) '((1 :k 2) 3) (print (list a k b)))"))
+			.isEqualTo("(1 2 3)");
+		// Inside a defun and a lambda (the pattern variables are lambda-local).
+		assertThat(compileAndRun(
+				"(defun db-sum (pair) (destructuring-bind (x y) pair (+ x y)))" + " (print (db-sum '(1 2)))"
+						+ " (print (mapcar (lambda (p) (destructuring-bind (x y) p (* x y))) '((1 2) (3 4))))"))
+			.isEqualTo("3\n(2 12)");
+	}
+
+	@Test
+	void compileAndRunDestructuringBindSurplusElementsSignalProgramError() throws Exception {
+		assertThat(compileAndRun("""
+				(print (handler-case (destructuring-bind (a b) '(1 2 3) (list a b)) (program-error () :pe)))
+				(print (handler-case (destructuring-bind (a (b c)) '(1 (2 3 4)) (list a b c)) (program-error () :pe)))
+				(print (handler-case (destructuring-bind (a &optional b) '(1 2 3) (list a b)) (program-error () :pe)))
+				(print (handler-case (destructuring-bind (a &aux (x 2)) '(1 2) (list a x)) (program-error () :pe)))
+				(print (handler-case (destructuring-bind (a &optional b) '(1 2 3 4) a) (error (e) (princ-to-string e))))
+				(print (destructuring-bind (a . b) '(1 2 3) (list a b)))
+				(print (destructuring-bind (a &optional (b 7)) '(1) (list a b)))
+				"""))
+			.isEqualTo(":PE\n:PE\n:PE\n:PE\n\"Function expects at most 2 arguments, got 4\"\n(1 (2 3))\n(1 7)");
+	}
+
+	@Test
+	void compileAndRunDestructuringBindMissingElementsSignalProgramError() throws Exception {
+		assertThat(compileAndRun("""
+				(print (handler-case (destructuring-bind (a b) '(1) (list a b)) (program-error () :pe)))
+				(print (handler-case (destructuring-bind (a (b c)) '(1 (2)) (list a b c)) (program-error () :pe)))
+				(print (handler-case (destructuring-bind (a . b) '() (list a b)) (program-error () :pe)))
+				(print (handler-case (destructuring-bind (a b &optional c) '(1) (list a b c)) (program-error () :pe)))
+				(print (handler-case (destructuring-bind (a &rest r) '() (list a r)) (program-error () :pe)))
+				(print (handler-case (destructuring-bind (a &key b) '(:b 2) (list a b)) (program-error () :pe)))
+				(print (handler-case (destructuring-bind (a b) '(1) a) (error (e) (princ-to-string e))))
+				;; A non-list source signals here (car of an atom); on WASM the same
+				;; form traps -- car parity, unchanged by the check, so not pinned there.
+				(print (handler-case (destructuring-bind (a) 5 a) (error () :signalled)))
+				(print (destructuring-bind (a &optional (b 7)) '(1) (list a b)))
+				(print (destructuring-bind (a &rest r) '(1 2 3) (list a r)))
+				""")).isEqualTo(
+				":PE\n:PE\n:PE\n:PE\n:PE\n:PE\n\"Function expects at least 2 arguments, got 1\"\n:SIGNALLED\n(1 7)\n(1 (2 3))");
+	}
+
+	@Test
+	void theDestructuringSurplusCheckCarriesNeitherTheStringRuntimeNorGenericLength() throws Exception {
+		// The destructuring surplus check reuses the &optional check's shared message
+		// helper: no mutable-string wrap, no generic length, no nthcdr runtime.
+		byte[] classBytes = new JvmLispCompiler("Test").compile(LispReader
+			.readAllFromString("(defun f (l) (destructuring-bind (a &optional (b 2)) l (+ a b))) (print (f '(1)))"));
+		assertThat(declaredMethodNames(classBytes)).doesNotContain("_toMutStr", "_strToCharVec", "_length", "_scount",
+				"_nthcdr");
+		assertThat(runClass(classBytes)).isEqualTo("3");
+	}
+
+	@Test
+	void theDestructuringMissingCheckCarriesNeitherTheStringRuntimeNorGenericLength() throws Exception {
+		// The destructuring missing-element check reports through the shared
+		// _arityMissing helper (the framed twin of _aritySurplus, not the dispatchers'
+		// _arityMsg: the message lands in a condition's format-control slot and an
+		// unframed string fails stringp, which routes the report into a funcall of the
+		// message). No mutable-string wrap, no generic length, no nthcdr runtime -- and
+		// a program that never destructures keeps neither helper (the shaker drops
+		// both), so it stays byte-identical.
+		byte[] classBytes = new JvmLispCompiler("Test").compile(
+				LispReader.readAllFromString("(defun f (l) (destructuring-bind (a b) l (+ a b))) (print (f '(1 2)))"));
+		assertThat(declaredMethodNames(classBytes)).contains("_arityMissing");
+		assertThat(declaredMethodNames(classBytes)).doesNotContain("_toMutStr", "_strToCharVec", "_length", "_scount",
+				"_nthcdr");
+		assertThat(runClass(classBytes)).isEqualTo("3");
+		byte[] plainBytes = new JvmLispCompiler("Test")
+			.compile(LispReader.readAllFromString("(defun f (a b) (+ a b)) (print (f 1 2))"));
+		assertThat(declaredMethodNames(plainBytes)).doesNotContain("_arityMissing", "_aritySurplus");
+		assertThat(runClass(plainBytes)).isEqualTo("3");
+	}
+
+	// defmacro destructuring/extended lambda lists go through the same compile-path
+	// pass as plain defmacro (eval.UserMacroExpander).
+	@Test
+	void compileAndRunUserMacroWithDestructuringLambdaList() throws Exception {
+		List<LispVal> program = am.ik.rontolisp.eval.UserMacroExpander.expand(LispReader.readAllFromString("""
+				(defmacro with-pair ((a b) &body body) `(let ((,a 1) (,b 2)) ,@body))
+				(defmacro scaled (x &key (by 1)) `(* ,x ,by))
+				(print (with-pair (p q) (+ p q)))
+				(print (scaled 5 :by 3))
+				"""));
+		JvmLispCompiler compiler = new JvmLispCompiler("Test");
+		byte[] classBytes = compiler.compile(program);
+		Path classFile = tempDir.resolve("Test.class");
+		Files.write(classFile, classBytes);
+		try (URLClassLoader loader = new URLClassLoader(new URL[] { tempDir.toUri().toURL() },
+				ClassLoader.getSystemClassLoader())) {
+			Class<?> clazz = loader.loadClass("Test");
+			Method main = clazz.getMethod("main", String[].class);
+			ByteArrayOutputStream baos = new ByteArrayOutputStream();
+			try (var _ = ThreadStdio.out(baos)) {
+				main.invoke(null, (Object) new String[0]);
+			}
+			assertThat(baos.toString().trim()).isEqualTo("3\n15");
+		}
+	}
+
+	@Test
+	void compileAndRunMultipleValueListAndNthValue() throws Exception {
+		assertThat(compileAndRun("(print (multiple-value-list (values 1 2 3)))"
+				+ " (print (multiple-value-list (floor 17 5)))" + " (print (multiple-value-list (+ 1 2)))"
+				+ " (print (nth-value 1 (floor 7 2)))" + " (print (nth-value 0 (values 'a 'b)))"))
+			.isEqualTo("(1 2 3)\n(3 2)\n(3)\n1\nA");
+	}
+
+	@Test
+	void compileAndRunMultipleValueCall() throws Exception {
+		assertThat(
+				compileAndRun("(print (multiple-value-call #'+ (values 1 2)))" + " (defun mv-collect (&rest args) args)"
+						+ " (print (multiple-value-call #'mv-collect 1 (values 2 3) (floor 9 4)))"))
+			.isEqualTo("3\n(1 2 3 2 1)");
+	}
+
+	@Test
+	void compileAndRunMapFamilyErrorsOnNonList() throws Exception {
+		// The map* family operates on lists; a non-list (e.g. a string) is the operator's
+		// LIST type-error rather than a silent nil, matching the interpreter.
+		assertThatThrownBy(() -> compileAndRun("(mapcar #'identity \"abc\")"))
+			.hasRootCauseMessage("MAPCAR: The value \"abc\" is not of type LIST");
+		assertThatThrownBy(() -> compileAndRun("(mapc #'identity \"abc\")"))
+			.hasRootCauseMessage("MAPC: The value \"abc\" is not of type LIST");
+		assertThatThrownBy(() -> compileAndRun("(mapcan #'list \"abc\")"))
+			.hasRootCauseMessage("MAPCAN: The value \"abc\" is not of type LIST");
+		assertThatThrownBy(() -> compileAndRun("(maplist #'identity \"abc\")"))
+			.hasRootCauseMessage("MAPLIST: The value \"abc\" is not of type LIST");
+		assertThatThrownBy(() -> compileAndRun("(mapcon #'list \"abc\")"))
+			.hasRootCauseMessage("MAPCON: The value \"abc\" is not of type LIST");
+		// nil (the empty list) and proper lists stay accepted.
+		assertThat(compileAndRun("(print (mapcar #'1+ '(1 2 3))) (print (mapcar #'1+ nil))")).isEqualTo("(2 3 4)\nNIL");
+		assertThat(compileAndRun("(print (maplist #'identity nil))")).isEqualTo("NIL");
+	}
+
+	// The _append copy is built iteratively: a first argument far past
+	// any plausible stack answers instead of overflowing.
+	@Test
+	void compileAndRunAppendLongFirstArgument() throws Exception {
+		assertThat(compileAndRun("(print (length (append (make-list 100000) nil)))")).isEqualTo("100000");
+		assertThat(compileAndRun("(print (length (append (make-list 100000) '(a b c))))")).isEqualTo("100003");
+		assertThat(compileAndRun("(print (car (nthcdr 99999 (append (make-list 100000 :initial-element 7) nil))))"))
+			.isEqualTo("7");
+	}
+
+	// mapcan/mapcon accumulate through a tail pointer: a long input
+	// list is linear rather than a stack overflow (and rather than quadratic).
+	@Test
+	void compileAndRunMapcanMapconLongInput() throws Exception {
+		assertThat(compileAndRun("(print (length (mapcan #'list (make-list 100000 :initial-element 9))))"))
+			.isEqualTo("100000");
+		assertThat(
+				compileAndRun("(print (length (mapcan (lambda (x) (list x x)) (make-list 50000 :initial-element 9))))"))
+			.isEqualTo("100000");
+		assertThat(compileAndRun("""
+				(print (length (let ((n 0))
+				                (mapcon (lambda (tail)
+				                          (setq n (1+ n))
+				                          (if (evenp n) (list (car tail)) nil))
+				                        (make-list 100000 :initial-element 9)))))""")).isEqualTo("50000");
+	}
+
+	@Test
+	void compileAndRunSortNreverseStableSortKeepFillPointerAdjustableAndIdentity() throws Exception {
+		// sort/nreverse/stable-sort permute a vector/string in place, so a
+		// fill-pointered or adjustable argument must keep its fill pointer, its
+		// adjustable flag AND its own identity -- not just the right values.
+		assertThat(compileAndRun("""
+				(let ((v (make-array 3 :adjustable t :fill-pointer 3 :initial-contents '(3 1 2))))
+				  (let ((s (sort v #'<)))
+				    (print (list (fill-pointer s) (adjustable-array-p s) (eq v s)))))""")).isEqualTo("(3 T T)");
+		assertThat(compileAndRun("""
+				(let ((v (make-array 5 :adjustable t :fill-pointer 3 :initial-contents '(3 1 2 99 99))))
+				  (let ((s (sort v #'<)))
+				    (print (list s (fill-pointer s) (array-total-size s) (eq v s)))))"""))
+			.isEqualTo("(#(1 2 3) 3 5 T)");
+		assertThat(compileAndRun("(let ((v (vector 3 1 2))) (print (eq v (sort v #'<))))")).isEqualTo("T");
+		assertThat(
+				compileAndRun("(let ((v (copy-seq \"dcba\"))) (let ((s (sort v #'char<))) (print (list s (eq v s)))))"))
+			.isEqualTo("(\"abcd\" T)");
+		assertThat(compileAndRun("(let ((v (vector 3 1 2))) (print (eq v (nreverse v))))")).isEqualTo("T");
+		assertThat(compileAndRun("""
+				(let ((v (make-array 4 :adjustable t :fill-pointer 4 :initial-contents '(1 2 3 4))))
+				  (let ((s (stable-sort v #'<)))
+				    (print (list (fill-pointer s) (adjustable-array-p s) (eq v s)))))""")).isEqualTo("(4 T T)");
+	}
+
+	@Test
+	void compileAndRunApplyAlignedVariadicTarget() throws Exception {
+		// The aligned fast path: a literal #'f target whose required parameters are all
+		// covered by the leading arguments takes them directly -- the rest parameter is
+		// the tail verbatim (same list object) or the excess consed onto it. Fewer
+		// leading arguments than required parameters keeps the build-then-unpack path.
+		assertThat(compileAndRun("(defun g (a b &rest r) (list a b r)) (print (apply #'g 1 2 '(3 4)))"))
+			.isEqualTo("(1 2 (3 4))");
+		assertThat(compileAndRun("(defun g (a b &rest r) (list a b r)) (print (apply #'g 1 2 3 '(4)))"))
+			.isEqualTo("(1 2 (3 4))");
+		assertThat(compileAndRun("(defun g (a b &rest r) (list a b r)) (print (apply #'g 1 '(2 3)))"))
+			.isEqualTo("(1 2 (3))");
+		assertThat(compileAndRun(
+				"(defun tailof (a &rest r) r) (defvar *l* (list 1 2)) (print (eq *l* (apply #'tailof 0 *l*)))"))
+			.isEqualTo("T");
+		assertThat(compileAndRun(
+				"(defvar *o* nil) (defun n (x) (setq *o* (cons x *o*)) x)" + " (defun g (a &rest r) (cons a r))"
+						+ " (print (apply #'g (n 1) (n 2) (list (n 3)))) (print (reverse *o*))"))
+			.isEqualTo("(1 2 3)\n(1 2 3)");
+	}
+
+	// Lisp-2 (separate function/variable namespaces) tests
+
+	@Test
+	void compileBareFunctionNameInValuePositionThrows() {
+		assertThatThrownBy(() -> compileAndRun("(print car)")).isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("Cannot compile symbol reference: CAR");
+		// Under a package using no cl it is the package's own variable, and the refusal
+		// says what to write -- as a read and as a capture.
+		assertThatThrownBy(() -> compileAndRun("(defpackage :rv-nocl (:use)) (in-package :rv-nocl) (cl:print car)"))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("Cannot compile symbol reference: RV-NOCL::CAR (use CL:CAR)");
+		assertThatThrownBy(() -> compileAndRun(
+				"(defpackage :rv-nocl (:use)) (in-package :rv-nocl) (cl:print (cl:funcall (cl:lambda () pi)))"))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("Cannot capture variable: RV-NOCL::PI (use CL:PI)");
+	}
+
+	@Test
+	void compileRequireOrProvideNotConsumedByInlinerThrows() {
+		// A literal top-level require/provide is consumed by the compile-time
+		// LoadInliner pass (cli); one that reaches the compiler (nested, or a unit test
+		// bypassing the pass) is a hard error -- unlike load, the compiled runtime
+		// reader cannot execute it.
+		assertThatThrownBy(() -> compileAndRun("(if t (require :util))"))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("REQUIRE is only supported as a literal top-level form");
+		assertThatThrownBy(() -> compileAndRun("(if t (provide :util))"))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("PROVIDE is only supported as a literal top-level form");
+	}
+
+	// read is prelude rontolisp over read-char / unread-char, so a program that calls
+	// it needs the prelude splice AND the pushback-cell rewrite, in the CLI's order.
+	private String compileAndRunRead(String lispCode) throws Exception {
+		return compileAndRun(am.ik.rontolisp.eval.UnreadCharLibrary
+			.process(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString(lispCode))));
+	}
+
+	// read-line tests. The pre-passes are the CLI pipeline's: read is prelude
+	// rontolisp over read-char / unread-char, and its scanner's own call sites reach
+	// the pushback cell only through UnreadCharLibrary -- exactly the order
+	// CompileFrontend runs them in. A program naming neither is returned unchanged.
+	private String compileAndRunWithStdin(String lispCode, String stdin) throws Exception {
+		List<LispVal> program = am.ik.rontolisp.eval.UnreadCharLibrary
+			.process(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString(lispCode)));
+		JvmLispCompiler compiler = new JvmLispCompiler("Test");
+		byte[] classBytes = compiler.compile(program);
+		Path classFile = tempDir.resolve("Test.class");
+		Files.write(classFile, classBytes);
+
+		try (URLClassLoader loader = new URLClassLoader(new URL[] { tempDir.toUri().toURL() },
+				ClassLoader.getSystemClassLoader())) {
+			Class<?> clazz = loader.loadClass("Test");
+			Method main = clazz.getMethod("main", String[].class);
+
+			ByteArrayOutputStream baos = new ByteArrayOutputStream();
+			try (var _ = ThreadStdio.out(baos);
+					var _ = ThreadStdio.in(new ByteArrayInputStream(stdin.getBytes(StandardCharsets.UTF_8)))) {
+				main.invoke(null, (Object) new String[0]);
+			}
+			return baos.toString().trim();
+		}
+	}
+
+	@Test
+	void compileAndRunReadLine() throws Exception {
+		assertThat(compileAndRunWithStdin("(print (read-line))", "hello\n")).isEqualTo("\"hello\"");
+	}
+
+	@Test
+	void compileAndRunReadLineEof() throws Exception {
+		assertThat(compileAndRunWithStdin("(print (null (read-line)))", "")).isEqualTo("T");
+	}
+
+	@Test
+	void compileAndRunReadLineStringp() throws Exception {
+		assertThat(compileAndRunWithStdin("(print (stringp (read-line)))", "hello\n")).isEqualTo("T");
+	}
+
+	// === read ===
+
+	@Test
+	void compileAndRunReadInteger() throws Exception {
+		assertThat(compileAndRunWithStdin("(print (read))", "42\n")).isEqualTo("42");
+	}
+
+	@Test
+	void compileAndRunReadNegativeInteger() throws Exception {
+		assertThat(compileAndRunWithStdin("(print (read))", "-7\n")).isEqualTo("-7");
+	}
+
+	@Test
+	void compileAndRunReadBigInteger() throws Exception {
+		assertThat(compileAndRunWithStdin("(print (read))", "100000000000000000000\n"))
+			.isEqualTo("100000000000000000000");
+	}
+
+	@Test
+	void compileAndRunReadFloat() throws Exception {
+		assertThat(compileAndRunWithStdin("(print (read))", "3.14\n")).isEqualTo("3.14");
+	}
+
+	@Test
+	void compileAndRunReadSymbol() throws Exception {
+		assertThat(compileAndRunWithStdin("(print (read))", "foo\n")).isEqualTo("FOO");
+	}
+
+	@Test
+	void compileAndRunReadString() throws Exception {
+		assertThat(compileAndRunWithStdin("(print (read))", "\"hello\"\n")).isEqualTo("\"hello\"");
+	}
+
+	@Test
+	void compileAndRunReadList() throws Exception {
+		assertThat(compileAndRunWithStdin("(print (read))", "(+ 1 2)\n")).isEqualTo("(+ 1 2)");
+	}
+
+	@Test
+	void compileAndRunReadCarList() throws Exception {
+		assertThat(compileAndRunWithStdin("(print (car (read)))", "(a b c)\n")).isEqualTo("A");
+	}
+
+	@Test
+	void compileAndRunReadQuote() throws Exception {
+		assertThat(compileAndRunWithStdin("(print (read))", "'x\n")).isEqualTo("'X");
+	}
+
+	@Test
+	void compileAndRunReadNil() throws Exception {
+		assertThat(compileAndRunWithStdin("(print (null (read)))", "nil\n")).isEqualTo("T");
+	}
+
+	@Test
+	void compileAndRunReadThenEval() throws Exception {
+		assertThat(compileAndRunWithStdin("(print (eval (read)))", "(+ 1 2 3)\n")).isEqualTo("6");
+	}
+
+	@Test
+	void compileEvalResolvesTopLevelGlobalVariable() throws Exception {
+		// A top-level setq/defvar global must be visible to the embedded eval runtime
+		// (its value is mirrored into the runtime's global environment).
+		assertThat(compileAndRun("(setq foo 42) (print (eval (quote foo)))")).isEqualTo("42");
+		assertThat(compileAndRun("(defvar *g* 99) (print (eval (quote *g*)))")).isEqualTo("99");
+		assertThat(compileAndRun("(defparameter *p* 7) (print (eval (quote *p*)))")).isEqualTo("7");
+		// A closure stored in a top-level global, then funcall'd through eval.
+		assertThat(compileAndRun(
+				"(defun make-adder (n) (lambda (x) (+ x n))) (setq add10 (make-adder 10)) (print (eval (quote (funcall add10 100))))"))
+			.isEqualTo("110");
+	}
+
+	@Test
+	void compileEvalResolvesGlobalClosureViaReadFuncall() throws Exception {
+		// The exact playground scenario: define a closure global, then funcall it from
+		// an expression read at runtime.
+		assertThat(compileAndRunWithStdin(
+				"(defun make-adder (n) (lambda (x) (+ x n))) (setq add10 (make-adder 10)) (print (eval (read)))",
+				"(funcall add10 100)\n"))
+			.isEqualTo("110");
+	}
+
+	@Test
+	void compileAndRunReadEof() throws Exception {
+		// eof-error-p defaults to t, so a bare read at end of input
+		// signals end-of-file; an explicit nil still answers the eof-value.
+		assertThat(compileAndRunWithStdin("(print (null (read nil nil)))", "")).isEqualTo("T");
+		assertThat(compileAndRunWithStdin("(print (handler-case (read) (end-of-file () :caught)))", ""))
+			.isEqualTo(":CAUGHT");
+	}
+
+	@Test
+	void compileAndRunReadSharpQuote() throws Exception {
+		assertThat(compileAndRunWithStdin("(print (read))", "#'car\n")).isEqualTo("#'CAR");
+	}
+
+	@Test
+	void compileAndRunReadSharpQuoteThenEvalFuncall() throws Exception {
+		assertThat(compileAndRunWithStdin("(print (eval (read)))", "(funcall #'+ 1 2)\n")).isEqualTo("3");
+	}
+
+	@Test
+	void compileAndRunReadSharpQuoteLambdaThenEval() throws Exception {
+		assertThat(compileAndRunWithStdin("(print (eval (read)))", "(mapcar #'(lambda (x) (* x x)) '(1 2 3))\n"))
+			.isEqualTo("(1 4 9)");
+	}
+
+	@Test
+	void compileAndRunReadSkipsBlankAndCommentLines() throws Exception {
+		assertThat(compileAndRunWithStdin("(print (read))", "\n   \n; comment only\n42\n")).isEqualTo("42");
+	}
+
+	@Test
+	void compileAndRunReadEvalPrintLoop() throws Exception {
+		String repl = "(setq form (read nil nil)) (while form (print (eval form)) (setq form (read nil nil)))";
+		assertThat(
+				compileAndRunWithStdin(repl, "(defun square (x) (* x x))\n(square 7)\n\n(mapcar #'square '(1 2 3))\n"))
+			.isEqualTo("SQUARE\n49\n(1 4 9)");
+	}
+
+	// === load ===
+
+	@Test
+	void compileAndRunLoadDefun() throws Exception {
+		Path lib = tempDir.resolve("lib.lisp");
+		Files.writeString(lib, "(defun square (x) (* x x))\n(setq base 10)\n");
+		// Definitions from the loaded file live in the eval runtime's global env, so they
+		// are used through eval.
+		String code = "(load \"" + lib + "\") (print (eval '(square base)))";
+		assertThat(compileAndRun(code)).isEqualTo("100");
+	}
+
+	@Test
+	void compileAndRunLoadMultipleForms() throws Exception {
+		Path lib = tempDir.resolve("lib2.lisp");
+		Files.writeString(lib, "(defun inc (x) (+ x 1))\n(defun dbl (x) (* x 2))\n");
+		String code = "(load \"" + lib + "\") (print (eval '(dbl (inc 4))))";
+		assertThat(compileAndRun(code)).isEqualTo("10");
+	}
+
+	@Test
+	void compileAndRunLoadRefusesAFormTheTextEndsInsideOrAStrayCloseParen() throws Exception {
+		// The forms before the bad one are evaluated, then the load signals -- a ')' that
+		// closes nothing, an unfinished list, an unterminated block comment.
+		String[][] cases = { { "(print 1) )\n(print 9)\n", "Unexpected ')'" }, { "(print 1) (print 2", "end of file" },
+				{ "(print 1) #| x", "end of file" },
+				{ "(print 1) ( . a) (print 9)", "Nothing appears before '.' in list" },
+				{ "(print 1) (a . b c) (print 9)", "More than one object follows '.' in list" } };
+		for (int i = 0; i < cases.length; i++) {
+			Path lib = tempDir.resolve("bad" + i + ".lisp");
+			Files.writeString(lib, cases[i][0]);
+			String code = "(print (handler-case (load \"" + lib + "\") (error (c) (princ-to-string c))))";
+			assertThat(compileAndRun(code)).isEqualTo("1\n\"" + cases[i][1] + "\"");
+		}
+	}
+
+	// === dynamic mode (late binding) ===
+
+	private String compileAndRunDynamic(String lispCode) throws Exception {
+		List<LispVal> program = LispReader.readAllFromString(lispCode);
+		JvmLispCompiler compiler = JvmLispCompiler.builder().className("Test").dynamic(true).build();
+		byte[] classBytes = compiler.compile(program);
+		Path classFile = tempDir.resolve("Test.class");
+		Files.write(classFile, classBytes);
+
+		try (URLClassLoader loader = new URLClassLoader(new URL[] { tempDir.toUri().toURL() },
+				ClassLoader.getSystemClassLoader())) {
+			Class<?> clazz = loader.loadClass("Test");
+			Method main = clazz.getMethod("main", String[].class);
+
+			ByteArrayOutputStream baos = new ByteArrayOutputStream();
+			try (var _ = ThreadStdio.out(baos)) {
+				main.invoke(null, (Object) new String[0]);
+			}
+			return baos.toString().trim();
+		}
+	}
+
+	@Test
+	void dynamicCallToLoadDefinedFunction() throws Exception {
+		Path lib = tempDir.resolve("fn.lisp");
+		Files.writeString(lib, "(defun cube (x) (* x x x))\n");
+		// (cube 3) is unknown at compile time; --dynamic resolves it at runtime.
+		String code = "(load \"" + lib + "\") (print (cube 3))";
+		assertThat(compileAndRunDynamic(code)).isEqualTo("27");
+	}
+
+	@Test
+	void dynamicCallFromCompiledFunctionSeesLocals() throws Exception {
+		Path lib = tempDir.resolve("fn2.lisp");
+		Files.writeString(lib, "(defun cube (x) (* x x x))\n(defun square (x) (* x x))\n");
+		// caller is compiled; its local n must reach the runtime-resolved cube/square.
+		String code = "(load \"" + lib + "\") (defun caller (n) (+ (cube n) (square n))) (print (caller 5))";
+		assertThat(compileAndRunDynamic(code)).isEqualTo("150");
+	}
+
+	@Test
+	void dynamicReferenceToLoadDefinedVariable() throws Exception {
+		Path lib = tempDir.resolve("var.lisp");
+		Files.writeString(lib, "(setq base 7)\n");
+		String code = "(load \"" + lib + "\") (print base)";
+		assertThat(compileAndRunDynamic(code)).isEqualTo("7");
+	}
+
+	// === eval ===
+
+	@Test
+	void evalIf() throws Exception {
+		assertThat(compileAndRun("(print (eval '(if (= 1 1) 10 20)))")).isEqualTo("10");
+	}
+
+	@Test
+	void evalUserDefinedFunction() throws Exception {
+		assertThat(compileAndRun("(defun double (x) (* x 2)) (print (eval '(double 21)))")).isEqualTo("42");
+	}
+
+	@Test
+	void bigIntegerFactorialPromotesOnOverflow() throws Exception {
+		String code = """
+				(defun fact (n) (if (= n 0) 1 (* n (fact (- n 1)))))
+				(print (fact 32))
+				""";
+		assertThat(compileAndRun(code)).isEqualTo("263130836933693530167218012160000000");
+	}
+
+	@Test
+	void bigIntegerResultDemotedWhenFitsInLong() throws Exception {
+		// (fact 32) / (fact 31) = 32 fits in a long again.
+		String code = """
+				(defun fact (n) (if (= n 0) 1 (* n (fact (- n 1)))))
+				(print (/ (fact 32) (fact 31)))
+				""";
+		assertThat(compileAndRun(code)).isEqualTo("32");
+	}
+
+	@Test
+	void bigIntegerComparison() throws Exception {
+		String code = """
+				(defun fact (n) (if (= n 0) 1 (* n (fact (- n 1)))))
+				(print (> (fact 30) (fact 25)))
+				(print (< (fact 30) (fact 25)))
+				""";
+		// A true boolean is the symbol t, like the interpreter.
+		assertThat(compileAndRun(code)).isEqualTo("T\nNIL");
+	}
+
+	@Test
+	void bigIntegerIntegerp() throws Exception {
+		String code = """
+				(defun fact (n) (if (= n 0) 1 (* n (fact (- n 1)))))
+				(print (integerp (fact 25)))
+				""";
+		// A true boolean is the symbol t, like the interpreter.
+		assertThat(compileAndRun(code)).isEqualTo("T");
+	}
+
+	@Test
+	void bigIntegerEvenp() throws Exception {
+		String code = """
+				(defun fact (n) (if (= n 0) 1 (* n (fact (- n 1)))))
+				(print (evenp (fact 25)))
+				""";
+		// A true boolean is the symbol t, like the interpreter.
+		assertThat(compileAndRun(code)).isEqualTo("T");
+	}
+
+	@Test
+	void bigIntegerMod() throws Exception {
+		String code = """
+				(defun fact (n) (if (= n 0) 1 (* n (fact (- n 1)))))
+				(print (mod (fact 25) 1000000007))
+				""";
+		assertThat(compileAndRun(code)).isEqualTo("440732388");
+	}
+
+	@Test
+	void bigIntegerAbsAndNegation() throws Exception {
+		String code = """
+				(defun fact (n) (if (= n 0) 1 (* n (fact (- n 1)))))
+				(print (abs (- (fact 25))))
+				""";
+		assertThat(compileAndRun(code)).isEqualTo("15511210043330985984000000");
+	}
+
+	@Test
+	void bigIntegerMax() throws Exception {
+		String code = """
+				(defun fact (n) (if (= n 0) 1 (* n (fact (- n 1)))))
+				(print (max (fact 25) (fact 30)))
+				""";
+		assertThat(compileAndRun(code)).isEqualTo("265252859812191058636308480000000");
+	}
+
+	@Test
+	void compileAndRunRontolispVersion() throws Exception {
+		assertThat(compileAndRun("(print (rontolisp:version))")).contains(":VERSION")
+			.contains(am.ik.rontolisp.Version.getVersion());
+	}
+
+	@Test
+	void compileAndRunAVectorKeyHashesByIdentity() throws Exception {
+		// equal on a vector is identity, so its hash is too: a vector holding itself is a
+		// key, and one grown after it was stored still finds its entry.
+		assertThat(compileAndRun("""
+				(let ((h (make-hash-table :test 'eq))
+				      (v (vector 1 2))
+				      (w (make-array 0 :adjustable t :fill-pointer 0)))
+				  (setf (aref v 1) v)
+				  (setf (gethash v h) 'self)
+				  (setf (gethash w h) 'grown)
+				  (vector-push-extend 1 w)
+				  (print (list (gethash v h) (gethash w h) (gethash (vector 1 2) h))))
+				""")).isEqualTo("(SELF GROWN NIL)");
+	}
+
+	@Test
+	void compileAndRunAHashTableKeyHashesAndComparesByIdentity() throws Exception {
+		// A hash table is a LinkedHashMap, whose own hashCode and equals walk its
+		// entries: a table filled after it was stored as a key lost its entry under
+		// every test, and two empty tables were eq.
+		assertThat(compileAndRun("""
+				(let ((a (make-hash-table)) (b (make-hash-table)))
+				  (print (list (eq a b) (eql a b) (equal a b) (equalp a b) (eq a a)))
+				  (dolist (test (list (make-hash-table :test 'eq) (make-hash-table :test 'eql)
+				                      (make-hash-table) (make-hash-table :test 'equalp)))
+				    (let ((k (make-hash-table)))
+				      (setf (gethash k test) 'found)
+				      (print (gethash (make-hash-table) test))
+				      (setf (gethash 'x k) 1)
+				      (setf (gethash 'self k) k)
+				      (print (gethash k test)))))
+				""")).isEqualTo("(NIL NIL NIL NIL T)\nNIL\nFOUND\nNIL\nFOUND\nNIL\nFOUND\nNIL\nFOUND");
+	}
+
+	@Test
+	void compileAndRunRemhashKeepsCountOrderAndReuse() throws Exception {
+		// Removing every other entry of a 1,000-entry table, oldest first: the count
+		// drops, maphash walks the survivors in insertion order, a removed key stays
+		// gone, removing a missing key answers NIL, re-storing a removed key appends
+		// it, and clr resets everything (the tombstone representation).
+		assertThat(compileAndRun("""
+				(let ((h (make-hash-table :test 'eq)) (keys nil))
+				  (dotimes (i 1000)
+				    (let ((k (cons i i)))
+				      (push k keys)
+				      (setf (gethash k h) i)))
+				  (dolist (k (reverse keys)) (when (evenp (car k)) (remhash k h)))
+				  (let ((seen nil))
+				    (maphash (lambda (k v) (push (car k) seen)) h)
+				    (print (list (hash-table-count h) (nreverse seen)))))
+				""")).startsWith("(500 (1 3 5 7").endsWith("997 999))");
+		assertThat(compileAndRun("""
+				(let ((h (make-hash-table :test 'eq)) (k0 (cons 0 0)) (k1 (cons 1 1)))
+				  (setf (gethash k0 h) 'a)
+				  (setf (gethash k1 h) 'b)
+				  (print (list (remhash k0 h) (remhash :missing h) (hash-table-count h)))
+				  (print (gethash k0 h :gone))
+				  (setf (gethash k0 h) 'c)
+				  (let ((seen nil))
+				    (maphash (lambda (k v) (push k seen)) h)
+				    (print (list (hash-table-count h) (gethash k0 h) (mapcar #'car seen))))
+				  (clrhash h)
+				  (print (hash-table-count h))
+				  (setf (gethash k1 h) 'd)
+				  (print (list (hash-table-count h) (gethash k1 h))))
+				""")).isEqualTo("(T NIL 1)\n:GONE\n(2 C (0 1))\n0\n(1 D)");
+	}
+
+	@Test
+	void compileAndRunPackageVarIsReadWhenTheFormRuns() throws Exception {
+		// CL's *package* is dynamic: a defun reads the package current at CALL time,
+		// (in-package P) assigns it, a let of it binds it for the extent and
+		// with-standard-io-syntax binds it to CL-USER. The rove shape: a registry keyed
+		// on *package* read inside set-test, filled from a test file in its own package
+		// (the pre-2026-08-15 fold registered everything under set-test's package).
+		assertThat(compileAndRun(
+				"""
+						(defvar *suites* (make-hash-table :test 'eq))
+						(defun package-suite (package) (or (gethash package *suites*) (setf (gethash package *suites*) (list :suite (package-name package)))))
+						(defun set-test (name) (push name (cdr (package-suite *package*))) name)
+						(defun cur () *package*)
+						(defpackage :my-app/tests (:use :cl))
+						(in-package :my-app/tests)
+						(cl-user::set-test 'test-a)
+						(cl-user::set-test 'test-b)
+						(print (cl-user::cur))
+						(print (let ((*package* (find-package :cl-user))) (cl-user::cur)))
+						(print (cl-user::cur))
+						(print (with-standard-io-syntax (cl-user::cur)))
+						(print (gethash (find-package "MY-APP/TESTS") cl-user::*suites*))
+						(print (eq *package* (find-package :my-app/tests)))
+						(in-package :cl-user)
+						(print (cur))
+						(print (package-name *package*))
+						"""))
+			.isEqualTo("""
+					:MY-APP/TESTS
+					:CL-USER
+					:MY-APP/TESTS
+					:CL-USER
+					(:SUITE TEST-B TEST-A "MY-APP/TESTS")
+					T
+					:CL-USER
+					"COMMON-LISP-USER\"""");
+	}
+
+	@Test
+	void compileAndRunInPackageThenUnqualifiedVersion() throws Exception {
+		String code = """
+				(in-package rontolisp)
+				(cl:print (cl:cadr (version)))
+				""";
+		assertThat(compileAndRun(code)).isEqualTo("\"" + am.ik.rontolisp.Version.getVersion() + "\"");
+	}
+
+	@Test
+	void compileAndRunSymbolBuildersAnswerTheTAndNilSingletons() throws Exception {
+		// t and nil are singletons, not symbols spelled "T" / "NIL": every operator that
+		// answers a symbol by NAME maps those spellings back, as the interpreter does.
+		// The WasmLispCompilerIntegrationTest twin pins the same lines; every one is
+		// SBCL's.
+		assertThat(compileAndRun(am.ik.rontolisp.TAndNilSingletonCorpus.SOURCE))
+			.isEqualTo(am.ik.rontolisp.TAndNilSingletonCorpus.EXPECTED);
+	}
+
+	@Test
+	void compileAndRunRuntimePackageApi() throws Exception {
+		// The runtime tier (.kb/packages.md) on the JVM backend: the prelude defuns over
+		// the injected baked table plus the mutable runtime table answer exactly
+		// like the interpreter's live-registry natives, failures included.
+		assertThat(compileAndRun("""
+				(print (make-package :jt-pkg :use '(:cl) :nicknames '(:jtp)))
+				(print (find-package :jtp))
+				(print (package-nicknames :jt-pkg))
+				(print (package-use-list :jt-pkg))
+				(print (if (member :jt-pkg (package-used-by-list :cl)) t nil))
+				(print (rename-package :jtp :jt-pkg2 :jtp2))
+				(print (delete-package :jt-pkg2))
+				(print (find-package :jt-pkg2))
+				(print (handler-case (make-package :cl)
+				        (package-error (c) (list (type-of c) (package-error-package c)))))
+				(print (handler-case (delete-package :cl) (package-error (c) (package-error-package c))))
+				(print (length (find-all-symbols 'car)))
+				(print (member 'car (find-all-symbols 'car)))
+				(print (apropos-list "CAR" :cl))
+				(print (do-all-symbols (s nil) (when (eq s 'car) (return s))))
+				(print (do-symbols (s :cl-user "jt-done")
+				        (when (string= (symbol-name s) "CAR") (return :found))))
+				(print (packagep :cl))
+				(print (packagep :nope-jt-zzz))
+				""")).isEqualTo("""
+				:JT-PKG
+				:JT-PKG
+				("JTP")
+				(:CL)
+				T
+				:JT-PKG2
+				T
+				NIL
+				(PACKAGE-ERROR :CL)
+				:CL
+				1
+				(CAR)
+				(CAR MAPCAR)
+				CAR
+				:FOUND
+				T
+				NIL""");
+	}
+
+	@Test
+	void compileAndRunALonePackageOperation() throws Exception {
+		// Each program's only package operation is delete-package / shadow /
+		// shadowing-import / unintern, through the CLI's front end: the helpers their
+		// prelude defuns reach (the baked package table, string<) must arrive without
+		// another package operation to bring them. The interpreter twin is
+		// LispEvaluatorTest#lonePackageOperation.
+		for (Map.Entry<String, String> lone : am.ik.rontolisp.LonePackageOperationFixture.PROGRAMS.entrySet()) {
+			assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(lone.getKey(),
+					am.ik.rontolisp.reader.Features.JVM, false, false)))
+				.as(lone.getKey())
+				.isEqualTo(lone.getValue());
+		}
+	}
+
+	@Test
+	void compileAndRunFindSymbolOfAnInheritedNameAnswersTheProvidingPackagesSymbol() throws Exception {
+		// A name a defpackage package reaches through :use / :import-from / a re-export
+		// answers the symbol homed where it is provided, not one homed in the asking
+		// package -- literal and computed names and designators alike. The twins are
+		// LispEvaluatorTest#findSymbolOfAnInheritedNameAnswersTheProvidingPackagesSymbol
+		// and WasmLispCompilerIntegrationTest#findSymbolOfAnInheritedName.
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(
+				am.ik.rontolisp.InheritedFindSymbolFixture.PROGRAM, am.ik.rontolisp.reader.Features.JVM, false, false)))
+			.isEqualTo(am.ik.rontolisp.InheritedFindSymbolFixture.EXPECTED);
+	}
+
+	@Test
+	void compileAndRunASymbolAPackageWalkProducesCallsItsFunction() throws Exception {
+		// The name registry answers the names the baked package universes carry, so a
+		// symbol do-external-symbols or apropos-list hands back calls its function --
+		// one only ever called directly, one taken as a value, one taken as a value only
+		// in dead code. The twins are
+		// LispEvaluatorTest#aSymbolAPackageWalkProducesCallsItsFunction and
+		// WasmLispCompilerIntegrationTest#aSymbolAPackageWalkProducesCallsItsFunction.
+		assertThat(compileAndRun(
+				am.ik.rontolisp.cli.CompileFrontendAccess.corpus(am.ik.rontolisp.PackageWalkDesignatorFixture.PROGRAM,
+						am.ik.rontolisp.reader.Features.JVM, false, false)))
+			.isEqualTo(am.ik.rontolisp.PackageWalkDesignatorFixture.EXPECTED);
+	}
+
+	@Test
+	void compileAndRunAComputedLookupOfAStandardNameAnswersTheClSymbol() throws Exception {
+		// A standard name reached through a computed name or package designator, or
+		// asked of symbol-package, answers the cl symbol -- the compiled runtime carries
+		// the table of the standard names for it. The twins are
+		// LispEvaluatorTest#aComputedLookupOfAStandardNameAnswersTheClSymbol and
+		// WasmLispCompilerIntegrationTest#computedLookupOfAStandardName.
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(
+				am.ik.rontolisp.StandardNameLookupFixture.PROGRAM, am.ik.rontolisp.reader.Features.JVM, false, false)))
+			.isEqualTo(am.ik.rontolisp.StandardNameLookupFixture.EXPECTED);
+	}
+
+	@Test
+	void compileAndRunAnExportOfAnInheritedStandardNameReExportsTheClSymbol() throws Exception {
+		// (:use :cl) + (:export #:car) exports cl's CAR: pkg:car is the bare symbol and a
+		// package using pkg inherits it, without cl too. The twins are
+		// LispEvaluatorTest#anExportOfAnInheritedStandardNameReExportsTheClSymbol and
+		// WasmLispCompilerIntegrationTest#exportOfAnInheritedStandardName.
+		assertThat(compileAndRun(
+				am.ik.rontolisp.cli.CompileFrontendAccess.corpus(am.ik.rontolisp.ReExportedStandardNameFixture.PROGRAM,
+						am.ik.rontolisp.reader.Features.JVM, false, false)))
+			.isEqualTo(am.ik.rontolisp.ReExportedStandardNameFixture.EXPECTED);
+	}
+
+	@Test
+	void compileAndRunPackageWalksListTheCarCdrCompositions() throws Exception {
+		// The 28 car/cdr compositions are external symbols of cl: every enumeration of
+		// its
+		// universe lists them. The twins are
+		// LispEvaluatorTest#packageWalksListTheCarCdrCompositions and
+		// WasmLispCompilerIntegrationTest#packageWalksListTheCarCdrCompositions.
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess
+			.corpus(am.ik.rontolisp.CarCdrUniverseFixture.PROGRAM, am.ik.rontolisp.reader.Features.JVM, false, false)))
+			.isEqualTo(am.ik.rontolisp.CarCdrUniverseFixture.EXPECTED);
+	}
+
+	@Test
+	void compileAndRunALongStringConstant() throws Exception {
+		// A string constant past the 65,535 bytes of one CONSTANT_Utf8 -- a long literal,
+		// and the packed symbol universe of a wide defpackage -- is loaded in pieces and
+		// joined once: the compile used to refuse it. The interpreter twin is
+		// LispEvaluatorTest#longStringConstant.
+		for (Map.Entry<String, String> program : am.ik.rontolisp.LongStringConstantFixture.PROGRAMS.entrySet()) {
+			assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(program.getKey(),
+					am.ik.rontolisp.reader.Features.JVM, false, false)))
+				.as(program.getKey().substring(0, 60))
+				.isEqualTo(program.getValue());
+		}
+	}
+
+	@Test
+	void compileAndRunRuntimePackageMemberTable() throws Exception {
+		// The runtime package MEMBER table on the JVM backend (.kb/packages.md): the
+		// %runtime-packages% entry records what intern / export / shadowing-import /
+		// shadow put in it and what unintern takes out, and the find-symbol / intern /
+		// export / use-package lowerings consult it -- the same answers as the
+		// interpreter's live registry
+		// (LispEvaluatorTest#internRecordsAMemberOfARuntimePackage
+		// and its siblings) and the runtime-package-member-table ci-spec case.
+		assertThat(compileAndRun("""
+				(let ((p (make-package "JT-MT1" :use nil)))
+				  (print (multiple-value-list (find-symbol "FOO" p)))
+				  (print (multiple-value-list (intern "FOO" p)))
+				  (print (multiple-value-list (intern "FOO" p)))
+				  (print (eq (intern "FOO" p) (find-symbol "FOO" p)))
+				  (print (symbol-package (find-symbol "FOO" p)))
+				  (print (export (intern "FOO" p) p))
+				  (print (multiple-value-list (find-symbol "FOO" p)))
+				  (let ((q (make-package "JT-MT2" :use nil)))
+				    (print (use-package p q))
+				    (print (multiple-value-list (find-symbol "FOO" q)))
+				    (print (shadow "FOO" q))
+				    (print (multiple-value-list (find-symbol "FOO" q)))
+				    (print (package-shadowing-symbols q))
+				    (print (unintern (find-symbol "FOO" q) q))
+				    (print (multiple-value-list (find-symbol "FOO" q)))
+				    (print (unuse-package p q))
+				    (print (find-symbol "FOO" q))
+				    (print (shadowing-import (intern "BAR" p) q))
+				    (print (multiple-value-list (find-symbol "BAR" q)))
+				    (let (acc) (do-symbols (s q) (push s acc)) (print acc))
+				    (intern "BAZ" q)
+				    (let (acc)
+				      (with-package-iterator (next q :internal :external :inherited)
+				        (loop (multiple-value-bind (more sym status pkg) (next)
+				                (unless more (return))
+				                (push (list sym status pkg) acc))))
+				      (print (sort acc #'string< :key (lambda (e) (symbol-name (car e))))))
+				    (print (delete-package q)))
+				  (print (delete-package p)))
+				""")).isEqualTo("""
+				(NIL NIL)
+				(JT-MT1::FOO NIL)
+				(JT-MT1::FOO :INTERNAL)
+				T
+				:JT-MT1
+				T
+				(JT-MT1::FOO :EXTERNAL)
+				T
+				(JT-MT1::FOO :INHERITED)
+				T
+				(JT-MT2::FOO :INTERNAL)
+				(JT-MT2::FOO)
+				T
+				(JT-MT1::FOO :INHERITED)
+				T
+				NIL
+				T
+				(JT-MT1::BAR :INTERNAL)
+				(JT-MT1::BAR)
+				((JT-MT1::BAR :INTERNAL :JT-MT2) (JT-MT2::BAZ :INTERNAL :JT-MT2))
+				T
+				T""");
+	}
+
+	@Test
+	void compileAndRunDefpackageDefunAndCallAcrossPackages() throws Exception {
+		String code = """
+				(defpackage :mypkg (:use :cl) (:export :greet :twice))
+				(in-package :mypkg)
+				(defun greet (name) (concatenate 'string "hello, " name))
+				(defun twice (x) (* x 2))
+				(defun helper () 42)
+				(in-package :cl-user)
+				(print (mypkg:greet "world"))
+				(print (mapcar #'mypkg:twice '(1 2 3)))
+				(print (mypkg::helper))
+				""";
+		assertThat(compileAndRun(code)).isEqualTo("\"hello, world\"\n(2 4 6)\n42");
+	}
+
+	@Test
+	void compileAndRunFetchReturnsStatusBodyAndHeaders() throws Exception {
+		com.sun.net.httpserver.HttpServer server = com.sun.net.httpserver.HttpServer
+			.create(new java.net.InetSocketAddress("127.0.0.1", 0), 0);
+		server.createContext("/echo", exchange -> {
+			String received = exchange.getRequestHeaders().getFirst("X-Custom");
+			byte[] body = ("got:" + received).getBytes(StandardCharsets.UTF_8);
+			exchange.getResponseHeaders().add("X-Test", "ok");
+			exchange.sendResponseHeaders(200, body.length);
+			exchange.getResponseBody().write(body);
+			exchange.close();
+		});
+		server.start();
+		try {
+			int port = server.getAddress().getPort();
+			String url = "http://127.0.0.1:" + port + "/echo";
+			assertThat(compileAndRun("(print (getf (rontolisp:await (rontolisp:fetch \"" + url
+					+ "\" (list :headers (list (cons \"X-Custom\" \"abc\"))))) " + ":status))"))
+				.isEqualTo("200");
+			assertThat(compileAndRun(
+					"(print (rontolisp:await (rontolisp:read-all (getf (rontolisp:await" + " (rontolisp:fetch \"" + url
+							+ "\" (list :headers (list (cons \"X-Custom\" \"abc\")))))" + " :body))))"))
+				.isEqualTo("\"got:abc\"");
+			assertThat(compileAndRun(
+					"(print (rontolisp:streamp (getf (rontolisp:await (rontolisp:fetch \"" + url + "\")) :body)))"))
+				.isEqualTo("T");
+			String headers = compileAndRun(
+					"(print (getf (rontolisp:await (rontolisp:fetch \"" + url + "\")) :headers))");
+			assertThat(headers).contains("x-test");
+			// a settled promise can be awaited more than once, and two in-flight promises
+			// resolve independently
+			assertThat(compileAndRun("(let ((p1 (rontolisp:fetch \"" + url + "\")) (p2 (rontolisp:fetch \"" + url
+					+ "\"))) (rontolisp:await p1)"
+					+ " (print (list (getf (rontolisp:await p2) :status) (getf (rontolisp:await p1) :status))))"))
+				.isEqualTo("(200 200)");
+			// a fetch future prints opaquely and satisfies futurep
+			assertThat(compileAndRun("(let ((p (rontolisp:fetch \"" + url + "\")))"
+					+ " (print (rontolisp:futurep p)) (print p)" + " (print (getf (rontolisp:await p) :status)))"))
+				.isEqualTo("T\n#<FUTURE>\n200");
+		}
+		finally {
+			server.stop(0);
+		}
+	}
+
+	@Test
+	void compileAndRunFetchSendsMethodAndBody() throws Exception {
+		com.sun.net.httpserver.HttpServer server = com.sun.net.httpserver.HttpServer
+			.create(new java.net.InetSocketAddress("127.0.0.1", 0), 0);
+		server.createContext("/post", exchange -> {
+			String received = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+			byte[] body = (exchange.getRequestMethod() + ":" + received).getBytes(StandardCharsets.UTF_8);
+			exchange.sendResponseHeaders(200, body.length);
+			exchange.getResponseBody().write(body);
+			exchange.close();
+		});
+		server.start();
+		try {
+			int port = server.getAddress().getPort();
+			assertThat(compileAndRun("(print (rontolisp:await (rontolisp:read-all (getf (rontolisp:await"
+					+ " (rontolisp:fetch \"http://127.0.0.1:" + port
+					+ "/post\" (list :method \"post\" :body \"hello\"))) :body))))"))
+				.isEqualTo("\"POST:hello\"");
+		}
+		finally {
+			server.stop(0);
+		}
+	}
+
+	@Test
+	void compileAndRunFetchSendsADefaultUserAgent() throws Exception {
+		// The emitted _fetch sets the agent EXPLICITLY, overriding the JDK's
+		// Java-http-client/<jdk> default, so a compiled program sends the same request as
+		// the interpreter and the component
+		// (LispEvaluatorTest#fetchSendsADefaultUserAgent).
+		com.sun.net.httpserver.HttpServer server = com.sun.net.httpserver.HttpServer
+			.create(new java.net.InetSocketAddress("127.0.0.1", 0), 0);
+		server.createContext("/agent", exchange -> {
+			java.util.List<String> received = exchange.getRequestHeaders().get("User-Agent");
+			byte[] body = String.join("|", (received == null) ? java.util.List.<String>of() : received)
+				.getBytes(StandardCharsets.UTF_8);
+			exchange.sendResponseHeaders(200, body.length);
+			exchange.getResponseBody().write(body);
+			exchange.close();
+		});
+		server.start();
+		try {
+			String url = "http://127.0.0.1:" + server.getAddress().getPort() + "/agent";
+			assertThat(compileAndRun("(print (rontolisp:await (rontolisp:read-all (getf (rontolisp:await"
+					+ " (rontolisp:fetch \"" + url + "\")) :body))))"))
+				.isEqualTo("\"" + am.ik.rontolisp.compiler.FetchResponseShape.defaultUserAgent() + "\"");
+			// The caller's own spelling wins, and only the caller's value is sent.
+			assertThat(compileAndRun(
+					"(print (rontolisp:await (rontolisp:read-all (getf (rontolisp:await" + " (rontolisp:fetch \"" + url
+							+ "\" (list :headers (list (cons \"user-agent\" \"custom/1\")))))" + " :body))))"))
+				.isEqualTo("\"custom/1\"");
+		}
+		finally {
+			server.stop(0);
+		}
+	}
+
+	@Test
+	void compileAndRunFetchRejectsUnsupportedMethod() throws Exception {
+		com.sun.net.httpserver.HttpServer server = com.sun.net.httpserver.HttpServer
+			.create(new java.net.InetSocketAddress("127.0.0.1", 0), 0);
+		server.createContext("/x", exchange -> {
+			exchange.sendResponseHeaders(200, 0);
+			exchange.close();
+		});
+		server.start();
+		try {
+			int port = server.getAddress().getPort();
+			assertThatThrownBy(
+					() -> compileAndRun("(rontolisp:fetch \"http://127.0.0.1:" + port + "/x\" (list :method \"FOO\"))"))
+				.hasStackTraceContaining("unsupported method");
+		}
+		finally {
+			server.stop(0);
+		}
+	}
+
+	// A wrong count of a native built-in outside the wrapper catalog is the
+	// interpreter's run-time program-error, not a failed compile
+	// (compiler/NativeCallShapes).
+	@Test
+	void compileAndRunAWrongCountFetchOrAwaitSignalsAtCallTime() throws Exception {
+		assertThat(compileAndRun("""
+				(print (handler-case (rontolisp:fetch) (program-error (c) (princ-to-string c))))
+				(print (handler-case (rontolisp:fetch "http://x" nil 3) (program-error (c) (princ-to-string c))))
+				(print (handler-case (rontolisp:await) (program-error (c) (princ-to-string c))))
+				""")).isEqualTo("""
+				"FETCH expects at least 1 argument, got 0"
+				"FETCH expects at most 2 arguments, got 3"
+				"AWAIT expects 1 argument, got 0\"""");
+	}
+
+	// The serving round trip lives in HttpHandlerJvmTest (eval package, where the test
+	// server shutdown seam is accessible); this pins the class-level design: the
+	// generated class itself implements RontoHttpServer.Handler (like the
+	// tls-connect X509TrustManager trick) so RontoHttpServer.serve can drive it.
+	@Test
+	void compileHttpHandlerImplementsHandlerInterface() throws Exception {
+		JvmLispCompiler compiler = new JvmLispCompiler("Test");
+		// The injected handle() calls the compiled %http-normalize-response, so this
+		// harness must splice http-server.lisp like the CLI (and every other
+		// compiler-driving serve harness) does.
+		byte[] classBytes = compiler.compile(am.ik.rontolisp.eval.HttpServerLibrary.process(LispReader
+			.readAllFromString("(defun h (env) (list 200 nil (list \"ok\"))) (rontolisp:http-handler 'h)"), false));
+		Path classFile = tempDir.resolve("Test.class");
+		Files.write(classFile, classBytes);
+		try (URLClassLoader loader = new URLClassLoader(new URL[] { tempDir.toUri().toURL() },
+				ClassLoader.getSystemClassLoader())) {
+			Class<?> clazz = loader.loadClass("Test");
+			assertThat(am.ik.rontolisp.runtime.RontoHttpServer.Handler.class).isAssignableFrom(clazz);
+			assertThat(clazz.getMethod("handle", am.ik.rontolisp.runtime.RontoHttpServer.Request.class)).isNotNull();
+		}
+	}
+
+	@Test
+	void compileHttpHandlerRejectsUnquotedHandlerName() {
+		assertThatThrownBy(() -> compileAndRun("(defun h (r) nil) (rontolisp:http-handler h)"))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("quoted handler name");
+	}
+
+	@Test
+	void compileAndRunFetchFailureSignalsAtAwaitTime() throws Exception {
+		// fetch itself returns the future even for a request that will fail; the
+		// failure surfaces when the future is awaited (JavaScript await-rejection
+		// timing)
+		assertThat(
+				compileAndRun("(let ((p (rontolisp:fetch \"http://127.0.0.1:1/x\"))) (print (rontolisp:futurep p)))"))
+			.isEqualTo("T");
+		assertThatThrownBy(() -> compileAndRun("(rontolisp:await (rontolisp:fetch \"http://127.0.0.1:1/x\"))"))
+			.hasStackTraceContaining("java.net.ConnectException");
+	}
+
+	@SocketTest
+	void compileAndRunTcpEchoRoundTripOnLoopback() throws Exception { // Single-threaded
+																		// choreography on
+																		// port 0: connect
+																		// before accept
+																		// (the connection
+		// sits in the listen backlog) and write before the peer reads (small payloads
+		// sit in the kernel socket buffers), so nothing deadlocks.
+		assertThat(compileAndRun("""
+				(let* ((listener (rontolisp:tcp-listen 0 "127.0.0.1"))
+				       (port (rontolisp:tcp-local-port listener))
+				       (client (rontolisp:tcp-connect "127.0.0.1" port)))
+				  (write-line "hello" client)
+				  (let* ((server (rontolisp:tcp-accept listener))
+				         (line (read-line server)))
+				    (write-line line server)
+				    (let ((reply (read-line client)))
+				      (close server)
+				      (close client)
+				      (close listener)
+				      (print reply))))
+				""")).isEqualTo("\"hello\"");
+		// The output buffer against a counting peer; what the program never flushes goes
+		// out on main's return (_flushStreams).
+		try (am.ik.rontolisp.TcpOutputBufferFixture peer = am.ik.rontolisp.TcpOutputBufferFixture.start()) {
+			assertThat(compileAndRun(peer.program())).isEqualTo(am.ik.rontolisp.TcpOutputBufferFixture.EXPECTED_OUTPUT);
+			assertThat(peer.received()).isEqualTo(am.ik.rontolisp.TcpOutputBufferFixture.EXPECTED_RECEIVED);
+		}
+	}
+
+	@Test
+	void compileAndRunGrayWriteLineHonorsItsBounds() throws Exception {
+		// The Gray rewriter forwards :start / :end onto the dispatch helper, which
+		// honors them for an instance and carries them back into write-line for any
+		// other stream.
+		assertThat(compileAndRun(am.ik.rontolisp.eval.GrayStreamsLibrary
+			.process(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString("""
+					(defclass gw-wl (rontolisp:fundamental-character-output-stream) ((acc :initform "")))
+					(defmethod rontolisp:stream-write-string ((s gw-wl) str &optional start end)
+					  (setf (slot-value s 'acc)
+					        (concatenate 'string (slot-value s 'acc)
+					                     (subseq str (or start 0) (or end (length str)))))
+					  str)
+					(let ((s (make-instance 'gw-wl)))
+					  (print (write-line "hello" s :start 1 :end 3))
+					  (print (slot-value s 'acc)))
+					"""))))).isEqualTo("\"hello\"\n\"el\n\"");
+	}
+
+	@SocketTest
+	void compileAndRunTcpByteOpsOnSocket() throws Exception {
+		// _tcpReadSome and read-sequence's _sockReadSeq (the interpreter's twin is
+		// tcpByteOpsOnSocket).
+		assertThat(compileAndRun(am.ik.rontolisp.TcpReadSomeFixture.PROGRAM))
+			.isEqualTo(am.ik.rontolisp.TcpReadSomeFixture.EXPECTED);
+	}
+
+	@SocketTest
+	void compileAndRunTcpCharacterOpsOnSocket() throws Exception {
+		// write-string / write-char / read-char on a socket handle: the
+		// _writeString / _readChar stream helpers grow the socket arm the byte and line
+		// ops always had. Same program and same answers as
+		// LispEvaluatorTest#tcpCharacterOpsOnSocket and the component's
+		// componentTcpBinaryBytesAreWireTransparent -- 199 184 is the ONE code point
+		// U+01F8 (504), not two.
+		assertThat(compileAndRun("""
+				(let* ((listener (rontolisp:tcp-listen 0 "127.0.0.1"))
+				       (port (rontolisp:tcp-local-port listener))
+				       (client (rontolisp:tcp-connect "127.0.0.1" port))
+				       (server (rontolisp:tcp-accept listener)))
+				  (write-string "AÇB" client)
+				  (let* ((b1 (read-byte server))
+				         (b2 (read-byte server))
+				         (b3 (read-byte server))
+				         (b4 (read-byte server)))
+				    (write-byte 199 client)
+				    (write-byte 184 client)
+				    (let ((multi (char-code (read-char server))))
+				      (write-char #\\Z client)
+				      (write-string "xyz" client :start 1 :end 2)
+				      (let* ((ch (char-code (read-char server)))
+				             (bounded (char-code (read-char server))))
+				        (close client)
+				        (close server)
+				        (close listener)
+				        (print (list b1 b2 b3 b4 multi ch bounded))))))
+				""")).isEqualTo("(65 195 135 66 504 90 121)");
+	}
+
+	@SocketTest
+	void compileAndRunTcpTerpriOnSocket() throws Exception {
+		// terpri carries the socket arm write-string and write-line already had: a
+		// bounded write-line lowers to write-string plus terpri, so a bounded
+		// write-line to a socket needs BOTH halves on the wire. Same answer as
+		// LispEvaluatorTest#tcpTerpriOnSocket; the _writeString route -- not
+		// _writeStr, which the print family shares -- is what grows the arm.
+		assertThat(compileAndRun("""
+				(let* ((listener (rontolisp:tcp-listen 0 "127.0.0.1"))
+				       (port (rontolisp:tcp-local-port listener))
+				       (client (rontolisp:tcp-connect "127.0.0.1" port))
+				       (server (rontolisp:tcp-accept listener)))
+				  (write-string "a" client)
+				  (print (terpri client))
+				  (print (read-byte server))
+				  (print (read-byte server))
+				  (close client)
+				  (close server)
+				  (close listener))
+				""")).isEqualTo("NIL\n97\n10");
+	}
+
+	@SocketTest
+	void compileAndRunTcpReadCharAtPeerCloseHonoursTheEofArguments() throws Exception {
+		assertThat(compileAndRun("""
+				(let* ((listener (rontolisp:tcp-listen 0 "127.0.0.1"))
+				       (port (rontolisp:tcp-local-port listener))
+				       (client (rontolisp:tcp-connect "127.0.0.1" port))
+				       (server (rontolisp:tcp-accept listener)))
+				  (close client)
+				  (let ((c (read-char server nil :eof)))
+				    (close server)
+				    (close listener)
+				    (print c)))
+				""")).isEqualTo(":EOF");
+		assertThat(compileAndRun("""
+				(let* ((listener (rontolisp:tcp-listen 0 "127.0.0.1"))
+				       (port (rontolisp:tcp-local-port listener))
+				       (client (rontolisp:tcp-connect "127.0.0.1" port))
+				       (server (rontolisp:tcp-accept listener)))
+				  (close client)
+				  (print (handler-case (read-char server)
+				           (end-of-file () :signalled))))
+				""")).isEqualTo(":SIGNALLED");
+		// The bare read-byte carries the same eof-error-p t default, and the component
+		// answers the same (componentTcpBareReadCharSignalsAtPeerClose).
+		assertThat(compileAndRun("""
+				(let* ((listener (rontolisp:tcp-listen 0 "127.0.0.1"))
+				       (port (rontolisp:tcp-local-port listener))
+				       (client (rontolisp:tcp-connect "127.0.0.1" port))
+				       (server (rontolisp:tcp-accept listener)))
+				  (close client)
+				  (print (handler-case (read-byte server)
+				           (end-of-file () :signalled))))
+				""")).isEqualTo(":SIGNALLED");
+	}
+
+	@SocketTest
+	void compileAndRunTcpReadLineReturnsNilAfterPeerClose() throws Exception {
+		assertThat(compileAndRun("""
+				(let* ((listener (rontolisp:tcp-listen 0 "127.0.0.1"))
+				       (port (rontolisp:tcp-local-port listener))
+				       (client (rontolisp:tcp-connect "127.0.0.1" port))
+				       (server (rontolisp:tcp-accept listener)))
+				  (close client)
+				  (let ((line (read-line server)))
+				    (close server)
+				    (close listener)
+				    (print line)))
+				""")).isEqualTo("NIL");
+	}
+
+	@SocketTest
+	void compileAndRunAWrongCountTcpCallSignalsAtCallTime() throws Exception {
+		assertThat(compileAndRun("""
+				(defun tcp-report (thunk) (handler-case (funcall thunk) (program-error (c) (princ-to-string c))))
+				(print (tcp-report (lambda () (rontolisp:tcp-connect "127.0.0.1"))))
+				(print (tcp-report (lambda () (rontolisp:tcp-listen))))
+				(print (tcp-report (lambda () (rontolisp:tcp-listen 0 "127.0.0.1" 3))))
+				(print (tcp-report (lambda () (rontolisp:tcp-accept))))
+				(print (tcp-report (lambda () (rontolisp:tcp-local-port 1 2))))
+				(print (tcp-report (lambda () (rontolisp:tcp-peer-address))))
+				(print (tcp-report (lambda () (rontolisp:tcp-peer-port 1 2))))
+				(print (tcp-report (lambda () (rontolisp:tcp-local-address))))
+				""")).isEqualTo("""
+				"TCP-CONNECT expects 2 arguments, got 1"
+				"TCP-LISTEN expects at least 1 argument, got 0"
+				"TCP-LISTEN expects at most 2 arguments, got 3"
+				"TCP-ACCEPT expects 1 argument, got 0"
+				"TCP-LOCAL-PORT expects 1 argument, got 2"
+				"TCP-PEER-ADDRESS expects 1 argument, got 0"
+				"TCP-PEER-PORT expects 1 argument, got 2"
+				"TCP-LOCAL-ADDRESS expects 1 argument, got 0\"""");
+	}
+
+	@SocketTest
+	void compileAndRunTcpAddressAccessorsOnLoopback() throws Exception {
+		assertThat(compileAndRun("""
+				(let* ((listener (rontolisp:tcp-listen 0 "127.0.0.1"))
+				       (port (rontolisp:tcp-local-port listener))
+				       (client (rontolisp:tcp-connect "127.0.0.1" port))
+				       (server (rontolisp:tcp-accept listener)))
+				  (print (rontolisp:tcp-local-address listener))
+				  (print (rontolisp:tcp-peer-address client))
+				  (print (= (rontolisp:tcp-peer-port client) port))
+				  (print (rontolisp:tcp-peer-address server))
+				  (close server)
+				  (close client)
+				  (close listener))
+				""")).isEqualTo("\"127.0.0.1\"\n\"127.0.0.1\"\nT\n\"127.0.0.1\"");
+	}
+
+	@SocketTest
+	void compileAndRunUsocketEchoOverLoopback() throws Exception {
+		// The Postmodern (cl-postgres) shape on the compiled backend: socket-connect
+		// with :element-type, socket-stream, stream I/O, socket-close.
+		assertThat(compileAndRunUsocket("""
+				(let* ((listener (usocket:socket-listen "127.0.0.1" usocket:*auto-port*))
+				       (port (usocket:get-local-port listener))
+				       (client (usocket:socket-connect "127.0.0.1" port :element-type '(unsigned-byte 8))))
+				  (write-line "hello" (usocket:socket-stream client))
+				  (let* ((server (usocket:socket-accept listener))
+				         (line (read-line (usocket:socket-stream server))))
+				    (usocket:socket-close server)
+				    (usocket:socket-close client)
+				    (usocket:socket-close listener)
+				    (print line)))
+				""")).isEqualTo("\"hello\"");
+	}
+
+	@SocketTest
+	void compileAndRunUsocketAddressAccessors() throws Exception {
+		// The wildcard listener only listens: a connection to 127.0.0.1:P would go to
+		// another test's 127.0.0.1:P listener before this one (.kb/tcp-sockets.md,
+		// "Socket tests").
+		assertThat(compileAndRunUsocket("""
+				(let ((w (usocket:socket-listen usocket:*wildcard-host* 0)))
+				  (print (> (usocket:get-local-port w) 0))
+				  (usocket:socket-close w))
+				(let* ((listener (usocket:socket-listen "127.0.0.1" 0))
+				       (port (usocket:get-local-port listener))
+				       (client (usocket:socket-connect "127.0.0.1" port))
+				       (server (usocket:socket-accept listener)))
+				  (print (usocket:get-peer-address client))
+				  (print (= (usocket:get-peer-port client) port))
+				  (print (usocket:get-peer-name server))
+				  (usocket:socket-close server)
+				  (usocket:socket-close client)
+				  (usocket:socket-close listener))
+				""")).isEqualTo("T\n\"127.0.0.1\"\nT\n\"127.0.0.1\"");
+	}
+
+	@SocketTest
+	void compileAndRunUsocketReceiveTimeoutAndWaitForInputAreReal() throws Exception {
+		// The interpreter twin is usocketReceiveTimeoutAndWaitForInputAreReal: the setf
+		// place rides the emitted _tcpSetTimeout (Socket.setSoTimeout) and FIRES, and
+		// listen probes the kernel receive buffer, so wait-for-input on a quiet socket
+		// waits its timeout.
+		assertThat(compileAndRunUsocket(am.ik.rontolisp.UsocketWaitFixture.PROGRAM))
+			.isEqualTo(am.ik.rontolisp.UsocketWaitFixture.EXPECTED);
+	}
+
+	@SocketTest
+	void compileAndRunUsocketWithMacrosEchoOverLoopback() throws Exception {
+		assertThat(compileAndRunUsocket("""
+				(usocket:with-socket-listener (listener "127.0.0.1" 0)
+				  (usocket:with-client-socket (client stream "127.0.0.1" (usocket:get-local-port listener))
+				    (write-line "ping" stream)
+				    (usocket:with-connected-socket (server (usocket:socket-accept listener))
+				      (print (read-line server)))))
+				""")).isEqualTo("\"ping\"");
+	}
+
+	@SocketTest
+	@ResourceLock(Resources.SYSTEM_PROPERTIES)
+	void compileAndRunTlsEchoRoundTripOnLoopback() throws Exception {
+		// A TLS handshake needs the server to participate concurrently, so the echo
+		// peer runs on a background thread. The compiled class runs in-process, so
+		// pointing javax.net.ssl.trustStore at the test keystore makes the emitted
+		// _tlsConnect (which initializes a fresh SSLContext per call) trust the
+		// self-signed certificate.
+		am.ik.rontolisp.TlsTestSupport.withTrustStore(() -> {
+			try (javax.net.ssl.SSLServerSocket server = am.ik.rontolisp.TlsTestSupport.newServerSocket()) {
+				Thread echo = am.ik.rontolisp.TlsTestSupport.startOneShotEchoServer(server);
+				assertThat(compileAndRun("""
+						(let ((client (rontolisp:tls-connect "127.0.0.1" %d)))
+						  (write-line "hello over tls" client)
+						  (let ((reply (read-line client)))
+						    (close client)
+						    (print reply)))
+						""".formatted(server.getLocalPort()))).isEqualTo("\"hello over tls\"");
+				echo.join();
+			}
+		});
+	}
+
+	@SocketTest
+	@ResourceLock(value = Resources.SYSTEM_PROPERTIES, mode = ResourceAccessMode.READ)
+	void compileAndRunTlsUntrustedCertificateThrows() throws Exception {
+		// Without the trust-store override the JDK default trust store does not trust
+		// the self-signed server certificate, so the handshake must fail. The override is
+		// a process-wide system property, hence the lock: its writers take it
+		// exclusively.
+		try (javax.net.ssl.SSLServerSocket server = am.ik.rontolisp.TlsTestSupport.newServerSocket()) {
+			am.ik.rontolisp.TlsTestSupport.startOneShotEchoServer(server);
+			assertThatThrownBy(
+					() -> compileAndRun("(rontolisp:tls-connect \"127.0.0.1\" " + server.getLocalPort() + ")"))
+				.hasStackTraceContaining("tls-connect: cannot connect to 127.0.0.1:")
+				.hasStackTraceContaining("PKIX path building failed");
+		}
+	}
+
+	@SocketTest
+	@ResourceLock(value = Resources.SYSTEM_PROPERTIES, mode = ResourceAccessMode.READ)
+	void compileAndRunTlsListenEchoRoundTripOnLoopback() throws Exception {
+		// The compiled program is the TLS *server* (tls-listen + the plain
+		// tcp-accept); the peer is a Java client thread that trusts the self-signed
+		// certificate directly and connects to the port the program reports.
+		Path portFile = this.tempDir.resolve("tls.port");
+		Thread client = am.ik.rontolisp.TlsTestSupport.startOneShotEchoClient(portFile, "hello over server tls");
+		assertThat(compileAndRun("""
+				(let ((listener (rontolisp:tls-listen "%s" "%s" 0 "127.0.0.1")))
+				  %s
+				  (let* ((client (rontolisp:tcp-accept listener))
+				         (line (read-line client)))
+				    (write-line line client)
+				    (close client)
+				    (close listener)
+				    (print line)))
+				""".formatted(am.ik.rontolisp.TlsTestSupport.keyStore(), am.ik.rontolisp.TlsTestSupport.STORE_PASSWORD,
+				am.ik.rontolisp.TlsTestSupport.reportPortForm(portFile, "listener"))))
+			.isEqualTo("\"hello over server tls\"");
+		client.join();
+	}
+
+	@SocketTest
+	@ResourceLock(value = Resources.SYSTEM_PROPERTIES, mode = ResourceAccessMode.READ)
+	void compileAndRunTlsListenP12EchoRoundTripOnLoopback() throws Exception {
+		// The compiled program is the TLS server configured from an embedded PKCS12
+		// keystore (the shape the tls-listen-pem inliner produces). The keystore is
+		// built from the shared PEM material; the peer trusts the same certificate.
+		Path portFile = this.tempDir.resolve("tls.port");
+		java.nio.file.Path[] pem = am.ik.rontolisp.TlsTestSupport.pemFiles();
+		String base64 = am.ik.rontolisp.eval.TlsPemSupport.pemToBase64Pkcs12(pem[0].toString(), pem[1].toString());
+		String password = am.ik.rontolisp.eval.TlsPemSupport.KEYSTORE_PASSWORD;
+		Thread client = am.ik.rontolisp.TlsTestSupport.startOneShotEchoClient(portFile, "hello over p12 tls");
+		assertThat(compileAndRun("""
+				(let ((listener (rontolisp:%%tls-listen-p12 "%s" "%s" 0 "127.0.0.1")))
+				  %s
+				  (let* ((client (rontolisp:tcp-accept listener))
+				         (line (read-line client)))
+				    (write-line line client)
+				    (close client)
+				    (close listener)
+				    (print line)))
+				""".formatted(base64, password, am.ik.rontolisp.TlsTestSupport.reportPortForm(portFile, "listener"))))
+			.isEqualTo("\"hello over p12 tls\"");
+		client.join();
+	}
+
+	@Test
+	void tlsListenP12ReportsItsArgumentsAsTlsListenPem() throws Exception {
+		// The operator a program spells is tls-listen-pem (the inliner rewrites it into
+		// %tls-listen-p12), so a bad port or host is ITS type-error, before any keystore
+		// is read.
+		assertThat(compileAndRun("""
+				(defun p12-report (thunk) (handler-case (funcall thunk) (type-error (c) (princ-to-string c))))
+				(print (p12-report (lambda () (rontolisp:%tls-listen-p12 "AA==" "pw" (read-from-string "70000")))))
+				(print (p12-report (lambda () (rontolisp:%tls-listen-p12 "AA==" "pw" 0 (read-from-string "h")))))
+				""")).isEqualTo("""
+				"TLS-LISTEN-PEM: The value 70000 is not of type (INTEGER 0 65535)"
+				"TLS-LISTEN-PEM: The value H is not of type STRING\"""");
+	}
+
+	// A wrong COUNT is the interpreter's run-time program-error; an option keyword the
+	// operator does not take stays a compile error, the keyword check being the
+	// operator's own.
+	@Test
+	void compileTlsReportsAWrongCountAtCallTimeAndRejectsAnUnknownOption() throws Exception {
+		assertThat(compileAndRun("""
+				(defun tls-report (thunk) (handler-case (funcall thunk) (program-error (c) (princ-to-string c))))
+				(print (tls-report (lambda () (rontolisp:tls-connect "127.0.0.1"))))
+				(print (tls-report (lambda () (rontolisp:tls-connect "127.0.0.1" 443 :insecure))))
+				(print (tls-report (lambda () (rontolisp:tls-listen "ks.p12" "pw"))))
+				(print (tls-report (lambda () (rontolisp:tls-upgrade 99))))
+				""")).isEqualTo("""
+				"TLS-CONNECT expects 2 or 4 arguments, got 1"
+				"TLS-CONNECT expects 2 or 4 arguments, got 3"
+				"TLS-LISTEN expects at least 3 arguments, got 2"
+				"TLS-UPGRADE expects 2 or 4 arguments, got 1\"""");
+		assertThatThrownBy(() -> compileAndRun("(rontolisp:tls-connect \"127.0.0.1\" 443 :verify t)"))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("expects :insecure");
+	}
+
+	@SocketTest
+	@ResourceLock(value = Resources.SYSTEM_PROPERTIES, mode = ResourceAccessMode.READ)
+	void compileAndRunTlsInsecureSkipsCertificateVerification() throws Exception {
+		// The self-signed server certificate is NOT trusted here; :insecure t makes
+		// the emitted _tlsConnect trust any chain (the generated class itself is the
+		// X509TrustManager) and skip the hostname check.
+		try (javax.net.ssl.SSLServerSocket server = am.ik.rontolisp.TlsTestSupport.newServerSocket()) {
+			Thread echo = am.ik.rontolisp.TlsTestSupport.startOneShotEchoServer(server);
+			assertThat(compileAndRun("""
+					(let ((client (rontolisp:tls-connect "127.0.0.1" %d :insecure t)))
+					  (write-line "hello insecurely" client)
+					  (let ((reply (read-line client)))
+					    (close client)
+					    (print reply)))
+					""".formatted(server.getLocalPort()))).isEqualTo("\"hello insecurely\"");
+			echo.join();
+		}
+	}
+
+	@SocketTest
+	@ResourceLock(value = Resources.SYSTEM_PROPERTIES, mode = ResourceAccessMode.READ)
+	void compileAndRunTlsInsecureNilStillVerifies() throws Exception {
+		// :insecure nil is the verifying default, so the untrusted certificate must
+		// still fail the handshake.
+		try (javax.net.ssl.SSLServerSocket server = am.ik.rontolisp.TlsTestSupport.newServerSocket()) {
+			am.ik.rontolisp.TlsTestSupport.startOneShotEchoServer(server);
+			assertThatThrownBy(() -> compileAndRun(
+					"(rontolisp:tls-connect \"127.0.0.1\" " + server.getLocalPort() + " :insecure nil)"))
+				.hasStackTraceContaining("tls-connect: cannot connect to 127.0.0.1:")
+				.hasStackTraceContaining("PKIX path building failed");
+		}
+	}
+
+	@SocketTest
+	@ResourceLock(Resources.SYSTEM_PROPERTIES)
+	void compileAndRunTlsUpgradeEchoRoundTripOnLoopback() throws Exception {
+		// _tlsUpgrade wraps an ALREADY-CONNECTED _streams entry (the cl+ssl
+		// make-ssl-client-stream shape): plain _tcpConnect first, then the upgrade
+		// handshakes over that connection and stores the SSLSocket as a NEW entry.
+		am.ik.rontolisp.TlsTestSupport.withTrustStore(() -> {
+			try (javax.net.ssl.SSLServerSocket server = am.ik.rontolisp.TlsTestSupport.newServerSocket()) {
+				Thread echo = am.ik.rontolisp.TlsTestSupport.startOneShotEchoServer(server);
+				assertThat(compileAndRun("""
+						(let* ((sock (rontolisp:tcp-connect "127.0.0.1" %d))
+						       (tls (rontolisp:tls-upgrade sock "127.0.0.1")))
+						  (write-line "hello over upgraded tls" tls)
+						  (let ((reply (read-line tls)))
+						    (close tls)
+						    (print reply)))
+						""".formatted(server.getLocalPort()))).isEqualTo("\"hello over upgraded tls\"");
+				echo.join();
+			}
+		});
+	}
+
+	@SocketTest
+	@ResourceLock(value = Resources.SYSTEM_PROPERTIES, mode = ResourceAccessMode.READ)
+	void compileAndRunTlsUpgradeInsecureSkipsCertificateVerification() throws Exception {
+		// No trust store here; :insecure t makes _tlsUpgrade install the generated
+		// class as the trust-all X509TrustManager (the _tlsConnect mechanism).
+		try (javax.net.ssl.SSLServerSocket server = am.ik.rontolisp.TlsTestSupport.newServerSocket()) {
+			Thread echo = am.ik.rontolisp.TlsTestSupport.startOneShotEchoServer(server);
+			assertThat(compileAndRun("""
+					(let* ((sock (rontolisp:tcp-connect "127.0.0.1" %d))
+					       (tls (rontolisp:tls-upgrade sock "127.0.0.1" :insecure t)))
+					  (write-line "hello insecurely upgraded" tls)
+					  (let ((reply (read-line tls)))
+					    (close tls)
+					    (print reply)))
+					""".formatted(server.getLocalPort()))).isEqualTo("\"hello insecurely upgraded\"");
+			echo.join();
+		}
+	}
+
+	@Test
+	void compileTlsUpgradeRejectsAnUnknownOption() {
+		assertThatThrownBy(() -> compileAndRun("(rontolisp:tls-upgrade 99 \"h\" :verify t)"))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("expects :insecure");
+	}
+
+	// The compiled twin of LispEvaluatorTest#rontolispNativesAreFunctionValues: each
+	// #'rontolisp:NAME was "The function RONTOLISP:NAME is undefined".
+	@SocketTest
+	void compileAndRunRontolispNativesAreFunctionValues() throws Exception {
+		for (String[] pair : new String[][] {
+				{ am.ik.rontolisp.RontolispNativeValueFixture.PORTABLE_PROGRAM,
+						am.ik.rontolisp.RontolispNativeValueFixture.PORTABLE_EXPECTED },
+				{ am.ik.rontolisp.RontolispNativeValueFixture.THREAD_PROGRAM,
+						am.ik.rontolisp.RontolispNativeValueFixture.THREAD_EXPECTED },
+				{ am.ik.rontolisp.RontolispNativeValueFixture.SOCKET_PROGRAM,
+						am.ik.rontolisp.RontolispNativeValueFixture.SOCKET_EXPECTED },
+				{ am.ik.rontolisp.LineStartFixture.SOCKET_PROGRAM, am.ik.rontolisp.LineStartFixture.SOCKET_EXPECTED },
+				{ am.ik.rontolisp.LineStartFixture.SOCKET_FORMAT_PROGRAM,
+						am.ik.rontolisp.LineStartFixture.SOCKET_FORMAT_EXPECTED },
+				{ am.ik.rontolisp.RontolispNativeValueFixture.ASYNC_PROGRAM,
+						am.ik.rontolisp.RontolispNativeValueFixture.ASYNC_EXPECTED },
+				{ am.ik.rontolisp.RontolispNativeValueFixture.TLS_PROGRAM,
+						am.ik.rontolisp.RontolispNativeValueFixture.TLS_EXPECTED } }) {
+			assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(pair[0],
+					am.ik.rontolisp.reader.Features.JVM, false, false)))
+				.isEqualTo(pair[1]);
+		}
+	}
+
+	// The TLS natives as function values over a real handshake: tls-listen serves,
+	// tls-connect and tls-upgrade connect (:insecure, so no trust store is needed).
+	@SocketTest
+	@ResourceLock(value = Resources.SYSTEM_PROPERTIES, mode = ResourceAccessMode.READ)
+	void compileAndRunTlsNativesAreFunctionValues() throws Exception {
+		try (javax.net.ssl.SSLServerSocket server = am.ik.rontolisp.TlsTestSupport.newServerSocket()) {
+			Thread echo = am.ik.rontolisp.TlsTestSupport.startOneShotEchoServer(server);
+			assertThat(compileAndRun("""
+					(let ((client (apply #'rontolisp:tls-connect (list "127.0.0.1" %d :insecure t))))
+					  (write-line "hello through a value" client)
+					  (let ((reply (read-line client)))
+					    (close client)
+					    (print reply)))
+					""".formatted(server.getLocalPort()))).isEqualTo("\"hello through a value\"");
+			echo.join();
+		}
+		try (javax.net.ssl.SSLServerSocket server = am.ik.rontolisp.TlsTestSupport.newServerSocket()) {
+			Thread echo = am.ik.rontolisp.TlsTestSupport.startOneShotEchoServer(server);
+			assertThat(compileAndRun("""
+					(let* ((sock (rontolisp:tcp-connect "127.0.0.1" %d))
+					       (tls (funcall #'rontolisp:tls-upgrade sock "127.0.0.1" :insecure t)))
+					  (write-line "upgraded through a value" tls)
+					  (let ((reply (read-line tls)))
+					    (close tls)
+					    (print reply)))
+					""".formatted(server.getLocalPort()))).isEqualTo("\"upgraded through a value\"");
+			echo.join();
+		}
+		Path portFile = this.tempDir.resolve("tls.port");
+		Thread client = am.ik.rontolisp.TlsTestSupport.startOneShotEchoClient(portFile, "served through a value");
+		assertThat(compileAndRun("""
+				(let ((listener (funcall #'rontolisp:tls-listen "%s" "%s" 0 "127.0.0.1")))
+				  %s
+				  (let* ((client (rontolisp:tcp-accept listener))
+				         (line (read-line client)))
+				    (write-line line client)
+				    (close client)
+				    (close listener)
+				    (print line)))
+				""".formatted(am.ik.rontolisp.TlsTestSupport.keyStore(), am.ik.rontolisp.TlsTestSupport.STORE_PASSWORD,
+				am.ik.rontolisp.TlsTestSupport.reportPortForm(portFile, "listener"))))
+			.isEqualTo("\"served through a value\"");
+		client.join();
+	}
+
+	// #'rontolisp:tls-listen-pem is a call with computed paths, which the JVM refuses:
+	// the
+	// certificate is baked into the output at compile time.
+	@Test
+	void compileTlsListenPemAsAFunctionValueIsRefusedAsAComputedCall() {
+		assertThatThrownBy(() -> compileAndRun("(print (functionp #'rontolisp:tls-listen-pem))"))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining(
+					am.ik.rontolisp.compiler.BuiltinFunctionWrappers.TLS_LISTEN_PEM_COMPUTED_PATH_MESSAGE);
+	}
+
+	@SocketTest
+	@ResourceLock(Resources.SYSTEM_PROPERTIES)
+	void compileAndRunClSslShimHttpsRequestAgainstLocalTlsServer() throws Exception {
+		// The cl+ssl shim on the compile path, the dexador shape: the shim is
+		// spliced by LoadInliner (like the closer-mop test above), usocket by the
+		// UsocketLibrary pre-pass, and make-ssl-client-stream upgrades the
+		// connected stream over _tlsUpgrade.
+		am.ik.rontolisp.TlsTestSupport.withTrustStore(() -> {
+			try (javax.net.ssl.SSLServerSocket server = am.ik.rontolisp.TlsTestSupport.newServerSocket()) {
+				Thread echo = am.ik.rontolisp.TlsTestSupport.startOneShotEchoServer(server);
+				List<LispVal> program = am.ik.rontolisp.cli.LoadInliner.inline(LispReader.readAllFromString("""
+						(asdf:load-system "cl+ssl")
+						(cl+ssl:with-global-context ((cl+ssl:make-context) :auto-free-p t)
+						  (let* ((sock (usocket:socket-connect "127.0.0.1" %d))
+						         (tls (cl+ssl:make-ssl-client-stream (usocket:socket-stream sock)
+						                                             :hostname "127.0.0.1"
+						                                             :verify (cl+ssl:ssl-check-verify-p))))
+						    (write-line "GET / HTTP/1.1" tls)
+						    (let ((reply (read-line tls)))
+						      (close tls)
+						      (print reply))))
+						""".formatted(server.getLocalPort())), path -> {
+					throw new java.io.FileNotFoundException(path);
+				});
+				// The CLI pre-pass order: UserMacroExpander first (the shim's
+				// with-global-context is a defmacro), then prelude, then usocket.
+				assertThat(compileAndRun(
+						am.ik.rontolisp.eval.UsocketLibrary.process(am.ik.rontolisp.eval.LispPreludeLibrary
+							.process(am.ik.rontolisp.eval.UserMacroExpander.expand(program)))))
+					.isEqualTo("\"GET / HTTP/1.1\"");
+				echo.join();
+			}
+		});
+	}
+
+	@SocketTest
+	@ResourceLock(value = Resources.SYSTEM_PROPERTIES, mode = ResourceAccessMode.READ)
+	void compileAndRunTlsInsecureSurvivesOptimize() throws Exception {
+		// --optimize (the writer's shake) must keep the X509TrustManager methods of the
+		// generated class: JSSE invokes them through the interface, which the shaker
+		// cannot see as references.
+		try (javax.net.ssl.SSLServerSocket server = am.ik.rontolisp.TlsTestSupport.newServerSocket()) {
+			Thread echo = am.ik.rontolisp.TlsTestSupport.startOneShotEchoServer(server);
+			List<LispVal> program = LispReader.readAllFromString("""
+					(let ((client (rontolisp:tls-connect "127.0.0.1" %d :insecure t)))
+					  (write-line "hello optimized" client)
+					  (let ((reply (read-line client)))
+					    (close client)
+					    (print reply)))
+					""".formatted(server.getLocalPort()));
+			byte[] classBytes = JvmLispCompiler.builder()
+				.className("Test")
+				.optimize(OptimizeLevel.DEFAULT)
+				.build()
+				.compile(program);
+			Path classFile = tempDir.resolve("Test.class");
+			Files.write(classFile, classBytes);
+			try (URLClassLoader loader = new URLClassLoader(new URL[] { tempDir.toUri().toURL() },
+					ClassLoader.getSystemClassLoader())) {
+				Class<?> clazz = loader.loadClass("Test");
+				Method main = clazz.getMethod("main", String[].class);
+				ByteArrayOutputStream baos = new ByteArrayOutputStream();
+				try (var _ = ThreadStdio.out(baos)) {
+					main.invoke(null, (Object) new String[0]);
+				}
+				assertThat(baos.toString().trim()).isEqualTo("\"hello optimized\"");
+			}
+			echo.join();
+		}
+	}
+
+	@Test
+	void compileAndRunAwaitPassesNonPromiseThrough() throws Exception {
+		// like JavaScript await, a non-promise value is returned unchanged
+		assertThat(compileAndRun(
+				"(print (rontolisp:await 42)) (print (rontolisp:await \"p\"))" + " (print (rontolisp:await nil))"))
+			.isEqualTo("42\n\"p\"\nNIL");
+	}
+
+	@Test
+	void promisepIsGoneOnTheJvm() {
+		// The promise-era promisep was deleted in the async/await redesign (futurep is
+		// the one predicate). The name rontolisp:then was later restored as a
+		// future-as-value combinator on top of the async surface -- exercised by
+		// JvmAsyncCompilerTest -- so only promisep is expected to fail resolution.
+		assertThatThrownBy(() -> compileAndRun("(rontolisp:promisep 42)"))
+			.hasMessageContaining("not external in the RONTOLISP package");
+	}
+
+	// Characters and string/number parsing
+
+	// A CHARACTER is a Unicode code point on every backend: (code-char 128512) survives
+	// as U+1F600 (not truncated to a lone surrogate) and prints as its glyph. Pins the
+	// JVM int[]{cp} widening; see .kb/characters-code-points.md.
+	@Test
+	void compileCharBeyondBmpCodePoint() throws Exception {
+		assertThat(compileAndRun("""
+				(print (char-code (code-char 128512)))
+				(print (string (code-char 128512)))
+				(print (char-code (code-char 233)))
+				(print (string (code-char 233)))
+				""")).isEqualTo("128512\n\"😀\"\n233\n\"é\"");
+	}
+
+	// A character index costs the same wherever it lands, in both string representations
+	// (.kb/string-index-cost.md), and what makes it so is pinned as protocol state rather
+	// than a clock. A MUTABLE CHARACTER VECTOR (a make-string buffer) reads its ELEMENT:
+	// every (char s i) site is one call of _charRef, which reaches the vector through
+	// _rmGet -- the site used to render the whole vector per index (_strv), which made a
+	// scan of a make-string buffer O(n^2). The correctness half: char/schar/elt/aref
+	// agree on a character vector, non-ASCII elements included, and a displaced string
+	// view reads through the same element path.
+	@Test
+	void compileACharacterVectorIndexAgreesAcrossTheFourSpellings() throws Exception {
+		assertThat(compileAndRun("""
+				(defvar *cv* (make-string 4 :initial-element #\\a))
+				(setf (char *cv* 1) #\\é)
+				(setf (char *cv* 2) (code-char 128512))
+				(print (list (char-code (char *cv* 1)) (char-code (schar *cv* 1))
+				             (char-code (elt *cv* 2)) (char-code (aref *cv* 2))))
+				(defvar *cvv* (make-array 2 :element-type 'character :displaced-to *cv*
+				                            :displaced-index-offset 1))
+				(print (char-code (char *cvv* 1)))
+				""")).isEqualTo("(233 233 128512 128512)\n128512");
+		byte[] site = compileToBytes("""
+				(defun cv-at (s i) (char s i))
+				(print (char-code (cv-at (make-string 2 :initial-element #\\a) 1)))
+				""");
+		// The site's call is the operator-named wrapper of _charRef.
+		assertThat(invokedMethodNames(site, "CV-AT")).filteredOn(name -> name.startsWith("_charRef")).hasSize(1);
+		assertThat(invokedMethodNames(site, "CV-AT")).noneMatch(name -> name.startsWith("_strv"));
+		assertThat(ownCallsIn(site, "_charRef", "_rmGet")).isOne();
+		assertThat(ownCallsIn(site, "_charRef", "_cpoff")).isOne();
+	}
+
+	// The immutable string's half of the invariant above. Its character i sits at code
+	// unit 1 + i unless a surrogate pair precedes, and the helpers every index reads
+	// through (_cpoff / _scount over _cpidx) REMEMBER what a walk found, in two pairs of
+	// static slots. Driven directly on the compiled class, so the state is the evidence:
+	// - a string the JVM cannot store as LATIN1 is proven flat once and remembered, and
+	// the memory keeps the LONGER string: under the old "keep the two most recent" rule
+	// two short strings indexed between two indexes into a long one evicted it, so a JSON
+	// parse re-proved its document every few characters and never finished;
+	// - a string holding a surrogate pair gets a BREAKPOINT TABLE, built once and kept
+	// under the same rule -- it used to walk offsetByCodePoints from the start on every
+	// index, 45x its own chunked scan.
+	// An ASCII / Latin-1 string needs no memory: the flat probe is constant time there.
+	@Test
+	void compileAStringIndexRemembersTheLongestStringsItWalked() throws Exception {
+		Path dir = Files.createDirectories(this.tempDir.resolve("index"));
+		Files.write(dir.resolve("Test.class"), compileToBytes("(defun at (s i) (char s i)) (print (at \"ab\" 1))"));
+		try (URLClassLoader loader = new URLClassLoader(new URL[] { dir.toUri().toURL() },
+				ClassLoader.getSystemClassLoader())) {
+			Class<?> program = loader.loadClass("Test");
+			Method index = program.getDeclaredMethod("_cpidx", String.class);
+			index.setAccessible(true);
+			String wideLong = "\"😀" + "0123456789abcde".repeat(2048) + "\"";
+			int[] table = (int[]) index.invoke(null, wideLong);
+			int count = 1 + 15 * 2048;
+			assertThat(table[0]).isEqualTo(count);
+			assertThat(table).hasSize((count >>> 5) + 2);
+			for (int k = 0; k <= count >>> 5; k++) {
+				assertThat(table[1 + k]).as("breakpoint %d", k).isEqualTo(wideLong.offsetByCodePoints(1, k << 5));
+			}
+			String flatLong = "\"" + "あ".repeat(4096) + "\"";
+			assertThat(index.invoke(null, flatLong)).isNull();
+			for (String shorter : List.of("\"😀a\"", "\"😀b\"", "\"いい\"", "\"うう\"")) {
+				index.invoke(null, shorter);
+			}
+			assertThat(index.invoke(null, wideLong) == table).as("the table, kept past two shorter wide strings")
+				.isTrue();
+			assertThat(staticField(program, "_cpsimple0") == flatLong || staticField(program, "_cpsimple1") == flatLong)
+				.as("the flat memory, kept past two shorter flat strings")
+				.isTrue();
+		}
+	}
+
+	private static Object staticField(Class<?> owner, String name) throws ReflectiveOperationException {
+		java.lang.reflect.Field field = owner.getDeclaredField(name);
+		field.setAccessible(true);
+		return field.get(null);
+	}
+
+	// read-from-string's SECOND value, CL's stop index, on the compiled backend too: the
+	// emitted reader's cursor after the datum. The multiple-value lowering is what asks
+	// for it, so a plain (read-from-string s) still parses once. See
+	// .kb/read-load-streams.md.
+	@Test
+	void compileReadFromStringStopIndex() throws Exception {
+		assertThat(compileAndRun("""
+				(print (multiple-value-list (read-from-string "abc")))
+				(print (multiple-value-list (read-from-string "(1 2) x")))
+				(print (nth-value 1 (read-from-string "42")))
+				(multiple-value-bind (v i) (read-from-string "(a b)") (print v) (print i))
+				""")).isEqualTo("(ABC 3)\n((1 2) 6)\n2\n(A B)\n5");
+	}
+
+	// The stop index counts CHARACTERS: a supplementary-plane character is one, not two
+	// UTF-16 units. See .kb/read-load-streams.md.
+	@Test
+	void compileReadFromStringStopIndexCountsCharacters() throws Exception {
+		assertThat(compileAndRun("""
+				(print (multiple-value-list (read-from-string "日本 x")))
+				(print (multiple-value-list (read-from-string "\\"日本\\" x")))
+				(print (multiple-value-list (read-from-string "(日本 a) x")))
+				(print (multiple-value-list (read-from-string "   日本 x")))
+				(print (multiple-value-list (read-from-string "😀 x")))
+				(print (nth-value 1 (read-from-string "日本語")))
+				""")).isEqualTo("(日本 3)\n(\"日本\" 5)\n((日本 A) 7)\n(日本 6)\n(😀 2)\n3");
+	}
+
+	@Test
+	void compileReadFromStringDottedPair() throws Exception {
+		assertThat(compileAndRun("(print (read-from-string \"(a . 1)\")) (print (read-from-string \"(a b . c)\")) "
+				+ "(print (read-from-string \"((a . 1) (b . 2))\")) (print (read-from-string \"3.5\"))"))
+			.isEqualTo("(A . 1)\n(A B . C)\n((A . 1) (B . 2))\n3.5");
+	}
+
+	@Test
+	void compileReadFromStringExponentFloats() throws Exception {
+		// The emitted reader's number scanner knows the CL exponent markers
+		// (e/s/f/d/l, either case, optional signed integer exponent) like the frontend
+		// lexer, so a run-time-scanned "2e3" is a float on every backend, not a symbol
+		// whose print coincides with one. Tokens that are NOT valid floats ("1e", "e5",
+		// "1.2.3", ...) stay symbols.
+		assertThat(compileAndRun("""
+				(print (floatp (read-from-string "1e-8")))
+				(print (floatp (read-from-string "1E5")))
+				(print (floatp (read-from-string "2e3")))
+				(print (floatp (read-from-string "1d-8")))
+				(print (floatp (read-from-string "1.5f3")))
+				(print (floatp (read-from-string ".5e2")))
+				(print (floatp (read-from-string "1.e5")))
+				(print (= (read-from-string "1E5") 100000.0))
+				(print (= (read-from-string "1e-8") 0.00000001))
+				(print (= (read-from-string "-2d-3") -0.002))
+				(print (= (read-from-string "1.5e3") 1500.0))
+				(print (= (read-from-string "1.0e10") 10000000000))
+				(print (symbolp (read-from-string "1e")))
+				(print (symbolp (read-from-string "1e+")))
+				(print (symbolp (read-from-string "e5")))
+				(print (symbolp (read-from-string "1.2.3")))
+				(print (symbolp (read-from-string "5e")))
+				(print (symbolp (read-from-string "1d0x")))
+				""")).isEqualTo("T\n".repeat(17) + "T");
+	}
+
+	// === the emitted reader's # dispatch (frontend parity) ===
+
+	@Test
+	void compileReadFromStringStructLiterals() throws Exception {
+		assertThat(compileAndRun("""
+				(defstruct rdpt x y)
+				(print (read-from-string (prin1-to-string (make-rdpt :x 1 :y 2))))
+				(print (rdpt-y (read-from-string "#S(RDPT :X 5 :Y 6)")))
+				(print (read-from-string "#S(RDPT :X 5)"))
+				(defstruct rdcfg (retries 3) (host "h") (tag 'none))
+				(print (read-from-string "#S(RDCFG)"))
+				"""))
+			.isEqualTo("#S(RDPT :X 1 :Y 2)\n6\n#S(RDPT :X 5 :Y NIL)\n#S(RDCFG :RETRIES 3 :HOST \"h\" :TAG NONE)");
+	}
+
+	@Test
+	void compileReadFromStringStructUnlicensedUnknownSlotSignals() throws Exception {
+		assertThat(compileAndRun("""
+				(defstruct skpt a b)
+				(defun try (s)
+				  (handler-case (progn (read-from-string s) "no-error")
+				    (error (e) (simple-condition-format-control e))))
+				(print (try "#S(SKPT :Z 1)"))
+				(print (try "#S(SKPT :Z 1 :ALLOW-OTHER-KEYS NIL)"))
+				(print (try "#S(SKPT 1 X)"))
+				""")).isEqualTo("""
+				"#S(SKPT ...): SKPT has no slot named :Z"
+				"#S(SKPT ...): SKPT has no slot named :Z"
+				"#S(SKPT ...): expected a slot name, got 1"
+				""".trim());
+	}
+
+	@Test
+	void compileReadFromStringReaderErrorsMatchTheFrontend() throws Exception {
+		assertThat(compileAndRun("""
+				(defstruct rdpt x y)
+				(defun try (s)
+				  (handler-case (progn (read-from-string s) "no-error")
+				    (error (e) (simple-condition-format-control e))))
+				(print (try "#\\\\Foo"))
+				(print (try "#xZZ"))
+				(print (try "#S(NOSUCH :X 1)"))
+				(print (try "#S(SIMPLE-ERROR)"))
+				(print (try "#S(RDPT :Z 1)"))
+				(print (try "#2A((1 2) (3))"))
+				(print (try "1/0"))
+				(print (try "#.(+ 1 2)"))
+				(print (try "#1=(a b)"))
+				""")).isEqualTo(
+				"""
+						"Unknown character name: #\\\\Foo"
+						"Invalid digits after #x: Z"
+						"#S(NOSUCH ...): NOSUCH is not a defined structure type"
+						"#S(SIMPLE-ERROR ...): SIMPLE-ERROR is not a defined structure type (it names a class; #S reads defstruct types only)"
+						"#S(RDPT ...): RDPT has no slot named :Z"
+						"#2A: ragged contents, expected 2 elements, got 1"
+						"Division by zero in ratio literal: 1/0"
+						"#. read-time evaluation is not supported"
+						"reader labels (#N=/#N#) are not supported by the compiled runtime reader"
+						"""
+					.trim());
+	}
+
+	@Test
+	void compileHashTablePutGet() throws Exception {
+		assertThat(compileAndRun("""
+				(defparameter *h* (make-hash-table :test 'equal))
+				(setf (gethash "a" *h*) 1)
+				(setf (gethash "b" *h*) 2)
+				(print (list (gethash "a" *h*) (gethash "b" *h*) (gethash "c" *h*)))
+				""")).isEqualTo("(1 2 NIL)");
+	}
+
+	@Test
+	void compileHashTablePrintsAsUnreadableTagWithCount() throws Exception {
+		// The compiled table is a host map, so without a printer arm of its own it used
+		// to
+		// reach Object.toString and print Java's container syntax -- including an
+		// IDENTITY
+		// HASH, i.e. different text on two runs (.kb/emitted-output-determinism.md).
+		// It prints the interpreter's unreadable tag instead, nested positions included,
+		// with the LIVE ENTRY COUNT read from the same size() call _hashCount makes.
+		assertThat(compileAndRun("""
+				(defparameter *h* (make-hash-table :test 'equal))
+				(setf (gethash "a" *h*) 1)
+				(setf (gethash "b" *h*) 2)
+				(princ *h*)
+				(terpri)
+				(prin1 *h*)
+				(terpri)
+				(format t "~a ~s~%" *h* *h*)
+				(print (list *h*))
+				(remhash "a" *h*)
+				(print *h*)
+				""")).isEqualTo("""
+				#<HASH-TABLE :TEST EQUAL :COUNT 2>
+				#<HASH-TABLE :TEST EQUAL :COUNT 2>
+				#<HASH-TABLE :TEST EQUAL :COUNT 2> #<HASH-TABLE :TEST EQUAL :COUNT 2>
+				(#<HASH-TABLE :TEST EQUAL :COUNT 2>)
+				#<HASH-TABLE :TEST EQUAL :COUNT 1>""");
+	}
+
+	@Test
+	void compileHashTableListKeysWithEqual() throws Exception {
+		assertThat(compileAndRun("""
+				(defparameter *q* (make-hash-table :test 'equal))
+				(setf (gethash (list 0 1 2) *q*) 7)
+				(print (gethash (list 0 1 2) *q* 0))
+				""")).isEqualTo("7");
+	}
+
+	@Test
+	// A key is placed by a DEPTH-CAPPED structural hash and decided by equal, not by
+	// the key's printed text: a cyclic key stores and retrieves (printing one never
+	// terminated), two equal keys deeper than the cap are still ONE key, and a general
+	// vector key is compared by identity -- which is what equal does to a vector.
+	void compileHashTableCyclicDeepAndVectorKeys() throws Exception {
+		assertThat(compileAndRun("""
+				(let ((h (make-hash-table)) (k (list 1 2)))
+				  (setf (cdr (last k)) k)
+				  (setf (gethash k h) :cyclic)
+				  (print (list (gethash k h) (hash-table-count h))))
+				(let ((h (make-hash-table)) (deep (loop for i from 1 to 200 collect i)))
+				  (setf (gethash deep h) :deep)
+				  (print (list (gethash (loop for i from 1 to 200 collect i) h)
+				               (gethash (loop for i from 1 to 199 collect i) h))))
+				(let ((h (make-hash-table)) (v (vector 1 2)))
+				  (setf (gethash v h) :self)
+				  (print (list (gethash v h) (gethash (vector 1 2) h))))
+				""")).isEqualTo("(:CYCLIC 1)\n(:DEEP NIL)\n(:SELF NIL)");
+	}
+
+	@Test
+	// The depth cap bounds the hash's HEIGHT and nothing about its SIZE, which a WORK
+	// budget does. Both keys here have SHARED substructure: a DAG of 60 conses holds 60
+	// cells and 2^60 root-to-leaf paths, and an instance that knows its parent is worse
+	// still. An un-budgeted hash could not place either one inside this suite's lifetime,
+	// so a regression shows up as a HANG rather than as a slow number -- the only way to
+	// pin "terminates SOON" without a flaky wall-clock assertion.
+	void compileHashTableSharedGraphKeysArePlacedInBoundedWork() throws Exception {
+		assertThat(compileAndRun("""
+				(defun shared-dag (n)
+				  (let ((node :leaf))
+				    (dotimes (i n node) (setq node (cons node node)))))
+				(defclass linked-node ()
+				  ((up :initarg :up :initform nil)
+				   (down :initform nil :accessor node-down)))
+				(defun linked-chain (n)
+				  (let ((node (make-instance 'linked-node)))
+				    (dotimes (i n node)
+				      (let ((next (make-instance 'linked-node :up node)))
+				        (setf (node-down node) (cons next (node-down node)))
+				        (setq node next)))))
+				(let ((h (make-hash-table :test 'equal))
+				      (dag (shared-dag 60))
+				      (node (linked-chain 8)))
+				  (setf (gethash dag h) :dag)
+				  (setf (gethash node h) :node)
+				  (print (list (gethash dag h) (gethash node h) (hash-table-count h))))
+				(let ((e (make-hash-table :test 'eq)))
+				  (print (list (gethash (shared-dag 60) e) (gethash (linked-chain 8) e))))
+				(let ((p (make-hash-table :test 'equalp)))
+				  (setf (gethash "cs" p) 1)
+				  (print (list (gethash "CS" p) (gethash (shared-dag 60) p))))
+				""")).isEqualTo("(:DAG :NODE 2)\n(NIL NIL)\n(1 NIL)");
+	}
+
+	@Test
+	// The same 300,000 identity-keyed aggregates every backend places by an identity
+	// hash (System.identityHashCode here); the WASM twin is the one that used to chain
+	// them all in bucket 0 (.kb/hash-tables.md).
+	void compileEqHashTableWithManyAggregateKeysStaysHashed() throws Exception {
+		assertThat(compileAndRun("""
+				(defstruct wkey id)
+				(defun many-aggregate-keys (n)
+				  (let ((h (make-hash-table :test 'eq)) (v (make-hash-table :test 'equal))
+				        (conses nil) (vectors nil) (structs nil))
+				    (dotimes (i n)
+				      (push (cons i i) conses)
+				      (push (vector i) vectors)
+				      (push (make-wkey :id i) structs))
+				    (dolist (k conses) (setf (gethash k h) 1))
+				    (dolist (k vectors) (setf (gethash k h) 2) (setf (gethash k v) 4))
+				    (dolist (k structs) (setf (gethash k h) 3))
+				    (dolist (k conses) (setf (car k) :moved))
+				    (let ((sum 0) (misses 0) (i 0))
+				      (dolist (k conses) (incf sum (gethash k h 0)))
+				      (dolist (k vectors) (incf sum (gethash k h 0)) (incf sum (gethash k v 0)))
+				      (dolist (k structs) (incf sum (gethash k h 0)))
+				      (dotimes (j 10)
+				        (unless (gethash (cons :moved j) h) (incf misses))
+				        (unless (gethash (vector j) h) (incf misses))
+				        (unless (gethash (vector j) v) (incf misses))
+				        (unless (gethash (make-wkey :id j) h) (incf misses)))
+				      (dolist (k conses) (when (evenp i) (remhash k h)) (incf i))
+				      (list (hash-table-count h) (hash-table-count v) sum misses))))
+				(print (many-aggregate-keys 100000))
+				""")).isEqualTo("(250000 100000 1000000 40)");
+	}
+
+	@Test
+	// An equalp table places its keys by the equalp FOLD -- upper case for a string and a
+	// character, the exact rational value for a float, element-wise for a cons -- so the
+	// four backends agree on which keys are one key (.kb/hash-tables.md). An equal table
+	// in the same program keeps placing structurally, and the fold reaches neither.
+	void compileEqualpHashTableFoldsItsKeys() throws Exception {
+		assertThat(compileAndRun("""
+				(let ((h (make-hash-table :test 'equalp)))
+				  (setf (gethash "CS" h) 1)
+				  (print (list (gethash "Cs" h) (gethash "cs" h) (hash-table-count h))))
+				(let ((h (make-hash-table :test 'equalp)))
+				  (setf (gethash 1 h) :one)
+				  (setf (gethash #\\a h) :a)
+				  (setf (gethash (list "x" 2) h) :pair)
+				  (print (list (gethash 1.0 h) (gethash 2/2 h) (gethash #\\A h)
+				               (gethash (list "X" 2.0) h) (hash-table-count h))))
+				(let ((h (make-hash-table :test 'equal)))
+				  (setf (gethash "CS" h) 1)
+				  (print (list (gethash "Cs" h) (hash-table-count h))))
+				(let ((h (make-hash-table :test 'equalp)) (acc nil))
+				  (setf (gethash "cs" h) 1)
+				  (setf (gethash #\\b h) 2)
+				  (maphash (lambda (k v) (setq acc (cons (princ-to-string k) acc))) h)
+				  (print (sort acc #'string<)))
+				""")).isEqualTo("(1 1 1)\n(:ONE :ONE :A :PAIR 3)\n(NIL 1)\n(\"b\" \"cs\")");
+	}
+
+	@Test
+	void compileAndRunAHashTableHandsBackTheKeyAsFirstStored() throws Exception {
+		// The interpreter twin is
+		// LispEvaluatorTest#aHashTableHandsBackTheKeyAsFirstStored.
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(HashTableKeyPrograms.PROGRAM,
+				am.ik.rontolisp.reader.Features.JVM, false, false)))
+			.isEqualTo(HashTableKeyPrograms.EXPECTED);
+	}
+
+	@Test
+	void compileAndRunAHashTableWalksInInsertionOrderAndACopySharesItsStructure() throws Exception {
+		// The interpreter twin is
+		// LispEvaluatorTest#aHashTableWalksInInsertionOrderAndACopySharesItsStructure.
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(HashTableCopyPrograms.PROGRAM,
+				am.ik.rontolisp.reader.Features.JVM, false, false)))
+			.isEqualTo(HashTableCopyPrograms.EXPECTED);
+	}
+
+	@Test
+	// A float with a fraction folds to the ratio it equals -- the exact mantissa over a
+	// power of two, a limb denominator for the least subnormal -- so the float stored
+	// and its ratio looked up, or the other way round, are one key, as on the
+	// interpreter (.kb/hash-tables.md).
+	void compileEqualpHashTableFoldsAFloatWithAFractionToItsRatio() throws Exception {
+		assertThat(compileAndRun("""
+				(let ((h (make-hash-table :test 'equalp)))
+				  (setf (gethash 0.5d0 h) 'half)
+				  (setf (gethash 0.1d0 h) 'tenth)
+				  (setf (gethash -0.75d0 h) 'neg)
+				  (setf (gethash 3/4 h) 'pos)
+				  (setf (gethash 4.9406564584124654d-324 h) 'tiny)
+				  (setf (gethash 1/2 h) 'half-again)
+				  (print (list (gethash 1/2 h) (gethash 3602879701896397/36028797018963968 h)
+				               (gethash -3/4 h) (gethash 0.75d0 h) (gethash (/ 1 (expt 2 1074)) h)
+				               (gethash 1/3 h) (gethash 0.3d0 h) (hash-table-count h))))
+				""")).isEqualTo("(HALF-AGAIN TENTH NEG POS TINY NIL NIL 5)");
+	}
+
+	@Test
+	// The printed :TEST field and hash-table-test report the test lookup implements, a
+	// computed :test included (a variable, or the initargs #'make-hash-table is applied
+	// to). The interpreter twin is
+	// LispEvaluatorTest#aHashTableReportsAndPrintsTheTestItImplements.
+	void compileEqualpHashTablePrintsAndReportsItsTest() throws Exception {
+		assertThat(compileAndRun("""
+				(defun htc-make (test) (make-hash-table :test test))
+				(defun htc-probe (h) (setf (gethash "A" h) 1) (list (hash-table-test h) (gethash "a" h)))
+				(let ((p (make-hash-table :test 'equalp)) (q (make-hash-table :test 'equal)))
+				  (setf (gethash "a" p) 1)
+				  (print (list (hash-table-test p) (hash-table-test q)))
+				  (princ p)
+				  (terpri)
+				  (princ q)
+				  (terpri))
+				(print (list (htc-probe (htc-make #'equalp)) (htc-probe (htc-make 'eq))
+				             (htc-probe (apply #'make-hash-table (list :size 4 :test #'equalp)))))
+				"""))
+			.isEqualTo("(EQUALP EQUAL)\n#<HASH-TABLE :TEST EQUALP :COUNT 1>\n#<HASH-TABLE :TEST EQUAL :COUNT 0>\n"
+					+ "((EQUALP 1) (EQ NIL) (EQUALP 1))");
+	}
+
+	@Test
+	// An eq table keys aggregates by identity: two instances with equal slots are two
+	// keys, and a key mutated after insertion still finds its entry -- on every
+	// backend (.kb/hash-tables.md).
+	void compileEqHashTableKeysAggregatesByIdentity() throws Exception {
+		assertThat(compileAndRun("""
+				(defstruct jpt x y)
+				(let ((h (make-hash-table :test 'eq)))
+				  (let ((p (make-jpt :x 1 :y 2))
+				        (r (make-jpt :x 1 :y 2)))
+				    (setf (gethash p h) 'pee)
+				    (setf (gethash r h) 'arr)
+				    (setf (jpt-x p) 99)
+				    (print (list (gethash p h) (gethash r h) (gethash (make-jpt :x 99 :y 2) h nil)
+				                 (hash-table-count h) (hash-table-test h)))))
+				(let ((h (make-hash-table :test 'eq)))
+				  (setf (gethash 1 h) :one)
+				  (setf (gethash 'sym h) :sym)
+				  (print (list (gethash 1 h) (gethash 'sym h) (hash-table-test h)))
+				  (princ h))
+				""")).isEqualTo("(PEE ARR NIL 2 EQ)\n(:ONE :SYM EQ)\n#<HASH-TABLE :TEST EQ :COUNT 2>");
+	}
+
+	@Test
+	// An eql table compares numbers by type and value but aggregates by identity: a
+	// freshly built cons with equal contents is a MISS -- on every backend
+	// (.kb/hash-tables.md).
+	void compileEqlHashTableKeysNumbersByValueButAggregatesByIdentity() throws Exception {
+		assertThat(compileAndRun("""
+				(let ((h (make-hash-table :test 'eql)))
+				  (setf (gethash 1.5 h) 'one-half)
+				  (setf (gethash 1 h) 'one)
+				  (let ((a (list 1)) (b (list 1)))
+				    (setf (gethash a h) 'ay)
+				    (print (list (gethash 1.5 h) (gethash 1 h) (gethash a h) (gethash b h nil)
+				                 (hash-table-count h) (hash-table-test h)))))
+				(let ((h (make-hash-table :test 'eql)))
+				  (setf (gethash "k" h) 1)
+				  (remhash "k" h)
+				  (print (list (hash-table-count h) (gethash "k" h nil)))
+				  (setf (gethash "k" h) 2)
+				  (clrhash h)
+				  (setf (gethash "K" h) 3)
+				  (print (list (gethash "k" h nil) (gethash "K" h) (hash-table-test h)))
+				  (princ h))
+				""")).isEqualTo("(ONE-HALF ONE AY NIL 3 EQL)\n(0 NIL)\n(NIL 3 EQL)\n#<HASH-TABLE :TEST EQL :COUNT 1>");
+	}
+
+	@Test
+	void compileHashTableIncf() throws Exception {
+		assertThat(compileAndRun("""
+				(defparameter *h* (make-hash-table :test 'equal))
+				(dolist (w (list "a" "b" "a" "a" "b"))
+				  (incf (gethash w *h* 0)))
+				(print (list (gethash "a" *h*) (gethash "b" *h*)))
+				""")).isEqualTo("(3 2)");
+	}
+
+	@Test
+	void compileHashTableCountRemhashAndPredicate() throws Exception {
+		assertThat(compileAndRun("""
+				(defparameter *h* (make-hash-table))
+				(setf (gethash 1 *h*) 'a)
+				(setf (gethash 2 *h*) 'b)
+				(remhash 1 *h*)
+				(print (list (hash-table-count *h*) (gethash 1 *h*) (gethash 2 *h*)
+				             (hash-table-p *h*) (hash-table-p 5) (consp *h*)))
+				""")).isEqualTo("(1 NIL B T NIL NIL)");
+	}
+
+	@Test
+	void compileHashTableMaphashSumsValues() throws Exception {
+		assertThat(compileAndRun("""
+				(defun sum-values (h)
+				  (let ((acc 0))
+				    (maphash (lambda (k v) (setq acc (+ acc v))) h)
+				    acc))
+				(defparameter *h* (make-hash-table :test 'equal))
+				(setf (gethash "a" *h*) 10)
+				(setf (gethash "b" *h*) 20)
+				(setf (gethash "c" *h*) 30)
+				(print (sum-values *h*))
+				""")).isEqualTo("60");
+	}
+
+	@Test
+	void compileHashTableFunctionsAsFirstClassValues() throws Exception {
+		assertThat(compileAndRun("""
+				(defparameter *h* (make-hash-table :test 'equal))
+				(setf (gethash "a" *h*) 1)
+				(setf (gethash "b" *h*) 2)
+				(print (list (funcall #'gethash "a" *h*)
+				             (mapcar #'hash-table-p (list *h* 5))
+				             (funcall #'hash-table-count *h*)))
+				""")).isEqualTo("(1 (T NIL) 2)");
+	}
+
+	@Test
+	void compileMakeArrayVectorRefAndSet() throws Exception {
+		assertThat(compileAndRun("""
+				(defparameter *v* (make-array 5 :initial-element 0))
+				(setf (aref *v* 0) 10)
+				(setf (aref *v* 4) 40)
+				(incf (aref *v* 0) 5)
+				(print (list (aref *v* 0) (aref *v* 1) (aref *v* 4)))
+				""")).isEqualTo("(15 0 40)");
+	}
+
+	@Test
+	void compileMakeArrayTwoDimensional() throws Exception {
+		assertThat(compileAndRun("""
+				(defparameter *m* (make-array (list 2 3) :initial-element 7))
+				(setf (aref *m* 0 0) 1)
+				(setf (aref *m* 1 2) 99)
+				(print (list (aref *m* 0 0) (aref *m* 0 1) (aref *m* 1 2)))
+				""")).isEqualTo("(1 7 99)");
+	}
+
+	@Test
+	void compileMakeArraySingleElementListIsRankOne() throws Exception {
+		assertThat(compileAndRun("""
+				(defparameter *w* (make-array (list 3) :initial-element 2))
+				(setf (aref *w* 1) 8)
+				(print (list (aref *w* 0) (aref *w* 1) (aref *w* 2)))
+				""")).isEqualTo("(2 8 2)");
+	}
+
+	@Test
+	void compileArrayCapturedInClosure() throws Exception {
+		// Each bump is sequenced through a top-level defparameter so the result does not
+		// depend on argument evaluation order within a single call form.
+		assertThat(compileAndRun("""
+				(defun make-counter (vec)
+				  (lambda (i) (setf (aref vec i) (+ 1 (aref vec i))) (aref vec i)))
+				(defparameter *c* (make-array 2 :initial-element 0))
+				(defparameter *bump* (make-counter *c*))
+				(defparameter *a* (funcall *bump* 0))
+				(defparameter *b* (funcall *bump* 0))
+				(defparameter *d* (funcall *bump* 1))
+				(print (list *a* *b* *d*))
+				""")).isEqualTo("(1 2 1)");
+	}
+
+	@Test
+	void compileTwoDimensionalArrayPrintsAsHash2A() throws Exception {
+		assertThat(compileAndRun("""
+				(defparameter *m* (make-array (list 2 3) :initial-element 0))
+				(setf (aref *m* 0 0) 1)
+				(setf (aref *m* 1 2) 9)
+				(print *m*)
+				""")).isEqualTo("#2A((1 0 0) (0 0 9))");
+	}
+
+	@Test
+	void compileVectorSvrefAndArrayIntrospection() throws Exception {
+		assertThat(compileAndRun("""
+				(print (vector 1 2 3))
+				(print (svref (vector 10 20 30) 1))
+				(defparameter *v* (vector 1 2 3))
+				(setf (svref *v* 0) 99)
+				(print *v*)
+				(print (array-dimensions (make-array '(2 3) :initial-element 0)))
+				(print (array-dimensions (vector 1 2)))
+				(print (array-rank (make-array '(2 3))))
+				(print (array-rank (vector 1)))
+				(print (array-dimension (make-array '(2 3)) 1))
+				(print (array-total-size (make-array '(2 3))))
+				(print (array-total-size (vector 1 2 3)))
+				""")).isEqualTo("#(1 2 3)\n20\n#(99 2 3)\n(2 3)\n(2)\n2\n1\n3\n6\n3");
+	}
+
+	@Test
+	void compileFillPointerLengthAndAccessors() throws Exception {
+		assertThat(compileAndRun("""
+				(defparameter *v* (make-array 5 :fill-pointer 2 :initial-element 0))
+				(print (list (length *v*) (fill-pointer *v*) (array-has-fill-pointer-p *v*) (adjustable-array-p *v*)))
+				""")).isEqualTo("(2 2 T NIL)");
+	}
+
+	@Test
+	void compilePackedGeneralArrayWidensInvisiblyOnANonIntegerStore() throws Exception {
+		// A plain (make-array n) starts PACKED (a long[] behind the header); the
+		// first non-integer store widens it in place, and an alias created before the
+		// widening still sees every element -- including one stored after the
+		// integers -- because the ArrayList is the identity.
+		assertThat(compileAndRun("""
+				(defparameter *a* (make-array 6))
+				(defparameter *alias* *a*)
+				(dotimes (i 6) (setf (aref *a* i) (* i 10)))
+				(setf (aref *a* 3) "mid")
+				(setf (aref *a* 5) 'end)
+				(print (list (aref *alias* 0) (aref *alias* 3) (aref *alias* 5) (aref *a* 4)))
+				""")).isEqualTo("(0 \"mid\" END 40)");
+	}
+
+	@Test
+	void compilePackedGeneralArrayNilAndSentinelInteger() throws Exception {
+		// A fresh element reads nil (the packed sentinel), an explicit nil store
+		// reads back nil, and storing the sentinel integer itself (most-negative
+		// long) widens rather than aliasing nil.
+		assertThat(compileAndRun("""
+				(defparameter *a* (make-array 3 :initial-element 1))
+				(setf (aref *a* 0) nil)
+				(setf (aref *a* 1) -9223372036854775808)
+				(print (list (aref *a* 0) (aref *a* 1) (aref *a* 2) (array-element-type *a*)))
+				""")).isEqualTo("(NIL -9223372036854775808 1 T)");
+	}
+
+	@Test
+	void compilePackedGeneralArrayRankNAndDisplacedView() throws Exception {
+		// The packed store is flat, so rank-n subscripts and a displaced view over a
+		// packed target read the same storage.
+		assertThat(compileAndRun("""
+				(defparameter *m* (make-array '(2 3) :initial-element 0))
+				(setf (aref *m* 1 2) 42)
+				(defparameter *row* (make-array 3 :displaced-to *m* :displaced-index-offset 3))
+				(print (list (aref *row* 2) (row-major-aref *m* 5) (array-displacement *row*)))
+				""")).isEqualTo("(42 42 #2A((0 0 0) (0 0 42)))");
+	}
+
+	@Test
+	void compileFillPointerTIsTheVectorSize() throws Exception {
+		assertThat(compileAndRun("""
+				(defparameter *v* (make-array 4 :fill-pointer t :initial-element 1))
+				(print (list (length *v*) (fill-pointer *v*)))
+				""")).isEqualTo("(4 4)");
+	}
+
+	@Test
+	void compileVectorPushStoresAndReturnsIndexOrNil() throws Exception {
+		// Each push is sequenced through a top-level defparameter: the compilers
+		// evaluate list argument forms right-to-left, so side-effecting forms must
+		// not share one list form.
+		assertThat(compileAndRun("""
+				(defparameter *v* (make-array 3 :fill-pointer 0))
+				(defparameter *a* (vector-push 10 *v*))
+				(defparameter *b* (vector-push 20 *v*))
+				(defparameter *c* (vector-push 30 *v*))
+				(defparameter *d* (vector-push 40 *v*))
+				(print (list *a* *b* *c* *d*))
+				""")).isEqualTo("(0 1 2 NIL)");
+	}
+
+	@Test
+	void compileVectorPushThenReadBack() throws Exception {
+		assertThat(compileAndRun("""
+				(defparameter *v* (make-array 3 :fill-pointer 0))
+				(vector-push 10 *v*)
+				(vector-push 20 *v*)
+				(print (list (length *v*) (aref *v* 0) (aref *v* 1)))
+				""")).isEqualTo("(2 10 20)");
+	}
+
+	@Test
+	void compileVectorPop() throws Exception {
+		// The pop is sequenced before the length read: the compile path evaluates
+		// argument forms right-to-left.
+		assertThat(compileAndRun("""
+				(defparameter *v* (make-array 5 :fill-pointer 3 :initial-element 0))
+				(setf (aref *v* 2) 99)
+				(defparameter *p* (vector-pop *v*))
+				(print (list *p* (length *v*)))
+				""")).isEqualTo("(99 2)");
+	}
+
+	@Test
+	void compileVectorPushExtendGrowsBeyondCapacity() throws Exception {
+		assertThat(compileAndRun("""
+				(defparameter *v* (make-array 2 :fill-pointer 0 :adjustable t))
+				(vector-push-extend 1 *v*)
+				(vector-push-extend 2 *v*)
+				(vector-push-extend 3 *v*)
+				(print (list (length *v*) (adjustable-array-p *v*) (aref *v* 2)))
+				""")).isEqualTo("(3 T 3)");
+	}
+
+	@Test
+	void compileAnAdjustedCopyKeepsTheElementType() throws Exception {
+		// adjust-array does not change an array's element type (CLHS), and a
+		// NON-adjustable adjustment answers a FRESH array, so the copy has to remember
+		// what the original did -- otherwise an adjusted character vector stops
+		// answering stringp. A literal (immutable) string is the same question over the
+		// one array shape that carries no header at all, and the string shape readers
+		// below are what its adjustment goes through. Pinned here, in the other three
+		// backends' twins and in the adjusted-copy-element-type-cross-backend ci-spec
+		// case.
+		assertThat(compileAndRun("""
+				(defun adjusted-copy-keeps-type ()
+				  (let* ((s (make-array 3 :element-type 'character :initial-element #\\x))
+				         (r (adjust-array s 5)))
+				    (list (stringp r) (array-element-type r) (char-code (aref r 4)))))
+				(defun adjusted-literal-string ()
+				  (let ((r (adjust-array "abc" 5)))
+				    (list (stringp r) (array-element-type r) (length r))))
+				(defun adjusted-rank-2-keeps-type ()
+				  (let* ((a (make-array '(2 2) :element-type 'character :initial-element #\\y))
+				         (r (adjust-array a '(3 3))))
+				    (list (array-element-type r) (stringp r) (aref r 2 2))))
+				(defun adjusted-typed-keeps-type ()
+				  (let* ((f (make-array 3 :element-type 'double-float :fill-pointer 0))
+				         (b (make-array '(2 2) :element-type '(unsigned-byte 8)))
+				         (rf (adjust-array f 5))
+				         (rb (adjust-array b '(3 3))))
+				    (list (array-element-type rf) (aref rf 4) (array-element-type rb) (aref rb 2 2))))
+				(defun string-is-a-rank-1-array ()
+				  (list (array-rank "abc") (array-dimensions "abc") (array-total-size "abc")
+				        (array-displacement "abc")))
+				(print (list (adjusted-copy-keeps-type) (adjusted-literal-string) (adjusted-rank-2-keeps-type)
+				             (adjusted-typed-keeps-type) (string-is-a-rank-1-array)))
+				""")).isEqualTo("((T CHARACTER 32) (T CHARACTER 5) (CHARACTER NIL #\\Space)"
+				+ " (DOUBLE-FLOAT 0.0 (UNSIGNED-BYTE 8) 0) (1 (3) 3 NIL))");
+	}
+
+	@Test
+	void compileTheArrayShapeReadersAcceptEveryStringRepresentation() throws Exception {
+		// A string IS a rank-1 character array, so every array-info reader answers for
+		// one: array-dimensions and the three that lower through it (array-rank /
+		// array-total-size / array-dimension, and array-row-major-index with them),
+		// plus array-has-fill-pointer-p and adjustable-array-p. All three string
+		// representations are asked -- the quote-framed immutable string that carries
+		// no header, the mutable character vector, and the displaced string view --
+		// because they are distinct shapes here. The DIMENSION is the CAPACITY, so it
+		// stays 5 for a fill-pointered character vector whose length is 2. Every answer
+		// is SBCL 2.2.9's on this very program except the displaced view's
+		// adjustable-array-p: SBCL answers T for any non-simple array, while rontolisp
+		// reports the :adjustable argument verbatim (.kb/adjustable-arrays.md). Pinned
+		// here, in the other three backends' twins and in the
+		// string-array-shape-readers-cross-backend ci-spec case.
+		assertThat(compileAndRun("""
+				(defun string-shape (x)
+				  (list (array-dimensions x) (array-rank x) (array-total-size x)
+				        (array-dimension x 0) (array-row-major-index x 1) (length x)
+				        (array-has-fill-pointer-p x) (adjustable-array-p x)))
+				(defun string-shapes ()
+				  (let ((cv (make-array 5 :element-type 'character :fill-pointer 2 :adjustable t
+				                          :initial-element #\\a))
+				        (adj (make-array 3 :element-type 'character :adjustable t :initial-element #\\b))
+				        (view (make-array 3 :element-type 'character :displaced-to "hello"
+				                            :displaced-index-offset 1)))
+				    (list (string-shape "abc")
+				          (string-shape (make-string 4 :initial-element #\\c))
+				          (string-shape cv)
+				          (string-shape adj)
+				          (string-shape view))))
+				(print (string-shapes))
+				""")).isEqualTo("(((3) 1 3 3 1 3 NIL NIL) ((4) 1 4 4 1 4 NIL NIL)"
+				+ " ((5) 1 5 5 1 2 T T) ((3) 1 3 3 1 3 NIL T) ((3) 1 3 3 1 3 NIL NIL))");
+	}
+
+	@Test
+	void compileSetfFillPointer() throws Exception {
+		assertThat(compileAndRun("""
+				(defparameter *v* (make-array 5 :fill-pointer 5 :initial-element 7))
+				(setf (fill-pointer *v*) 2)
+				(print (list (length *v*) (fill-pointer *v*)))
+				""")).isEqualTo("(2 2)");
+	}
+
+	@Test
+	void compileSimpleVectorHasNoFillPointer() throws Exception {
+		assertThat(compileAndRun("""
+				(defparameter *v* (make-array 3 :initial-element 0))
+				(print (list (array-has-fill-pointer-p *v*) (adjustable-array-p *v*) (array-element-type *v*)))
+				""")).isEqualTo("(NIL NIL T)");
+	}
+
+	@Test
+	void compileFillPointerFirstClassWrappers() throws Exception {
+		// The fill-pointer read is sequenced before the mutating pop, the compile path
+		// evaluating argument forms right-to-left.
+		assertThat(compileAndRun("""
+				(defparameter *v* (make-array 3 :fill-pointer 0))
+				(funcall #'vector-push 5 *v*)
+				(defparameter *fp* (funcall #'fill-pointer *v*))
+				(defparameter *popped* (funcall #'vector-pop *v*))
+				(print (list *fp* *popped* (funcall #'array-has-fill-pointer-p *v*)))
+				""")).isEqualTo("(1 5 T)");
+	}
+
+	@Test
+	void compileClUtilitiesCopyArray() throws Exception {
+		// The cl-utilities copy-array definition verbatim, the headline adjustable-array
+		// exercise, on the JVM backend: array-element-type, make-array
+		// :adjustable/:fill-pointer,
+		// array-has-fill-pointer-p, fill-pointer, adjustable-array-p, array-total-size
+		// and row-major-aref cooperating.
+		assertThat(compileAndRun("""
+				(defun copy-array (array &key
+				                   (element-type (array-element-type array))
+				                   (fill-pointer (and (array-has-fill-pointer-p array)
+				                                      (fill-pointer array)))
+				                   (adjustable (adjustable-array-p array)))
+				  (let* ((dimensions (array-dimensions array))
+				         (new-array (make-array dimensions
+				                                :element-type element-type
+				                                :adjustable adjustable
+				                                :fill-pointer fill-pointer)))
+				    (dotimes (i (array-total-size array))
+				      (setf (row-major-aref new-array i)
+				            (row-major-aref array i)))
+				    new-array))
+				(defparameter *v* (make-array 4 :fill-pointer 3 :adjustable t :initial-element 5))
+				(setf (aref *v* 1) 8)
+				(defparameter *c* (copy-array *v*))
+				(setf (aref *c* 0) 99)
+				(print (list *c* *v* (fill-pointer *c*) (adjustable-array-p *c*)))
+				""")).isEqualTo("(#(99 8 5) #(5 8 5) 3 T)");
+	}
+
+	@Test
+	void compileCharVectorAccumulator() throws Exception {
+		// A fill-pointered/adjustable character vector is a mutable string on the JVM
+		// backend: stringp, length, string=, princ (bare content) and prin1 (quoted)
+		// all treat it as a string.
+		assertThat(compileAndRun("""
+				(defparameter *s* (make-array 4 :element-type 'character :fill-pointer 0 :adjustable t))
+				(vector-push-extend #\\a *s*)
+				(vector-push-extend #\\b *s*)
+				(print (list (stringp *s*) (length *s*) (string= *s* "ab")))
+				(princ *s*)
+				(terpri)
+				(prin1 *s*)
+				""")).isEqualTo("(T 2 T)\nab\n\"ab\"");
+	}
+
+	@Test
+	void compileCharVectorReplaceMutatesInPlace() throws Exception {
+		// replace on a character vector mutates IN PLACE (visible through an alias
+		// made before the write), unlike the functional rebuild on an immutable string.
+		assertThat(compileAndRun("""
+				(defparameter *s* (make-array 8 :element-type 'character :fill-pointer 0 :adjustable t))
+				(vector-push-extend #\\h *s*)
+				(vector-push-extend #\\e *s*)
+				(vector-push-extend #\\l *s*)
+				(vector-push-extend #\\l *s*)
+				(vector-push-extend #\\o *s*)
+				(setf (fill-pointer *s*) 5)
+				(defparameter *alias* *s*)
+				(replace *s* "xyz" :start1 1 :start2 0 :end2 2)
+				(print (list (string= *alias* "hxylo") (subseq *alias* 0)))
+				""")).isEqualTo("(T \"hxylo\")");
+	}
+
+	@Test
+	void compileCharVectorAdjustArrayGrows() throws Exception {
+		// adjust-array on an adjustable character vector grows it in place: the
+		// mutable-string marker survives, the fill pointer carries over, and pushes
+		// beyond the old capacity land after the kept content.
+		assertThat(compileAndRun("""
+				(defparameter *s* (make-array 2 :element-type 'character :fill-pointer 0 :adjustable t))
+				(vector-push-extend #\\a *s*)
+				(vector-push-extend #\\b *s*)
+				(adjust-array *s* 6)
+				(vector-push-extend #\\c *s*)
+				(print (list (stringp *s*) (string= (subseq *s* 0) "abc") (length *s*)))
+				""")).isEqualTo("(T T 3)");
+	}
+
+	@Test
+	void compileCharVectorInitialContentsCopies() throws Exception {
+		// (make-array n :element-type 'character :initial-contents charvec) yields a
+		// fresh simple string of the ACTIVE content, unaffected by later pushes.
+		assertThat(compileAndRun("""
+				(defparameter *s* (make-array 4 :element-type 'character :fill-pointer 0 :adjustable t))
+				(vector-push-extend #\\a *s*)
+				(vector-push-extend #\\b *s*)
+				(defparameter *copy* (make-array (fill-pointer *s*) :element-type 'character :initial-contents *s*))
+				(vector-push-extend #\\c *s*)
+				(print (list *copy* (stringp *copy*) (string= *copy* "ab") (string= *s* "abc")))
+				""")).isEqualTo("(\"ab\" T T T)");
+	}
+
+	@Test
+	void compileCharVectorEqualAndHashKey() throws Exception {
+		// equal compares a character vector to a string by content, and an
+		// equal-test hash table finds a string-keyed entry through it.
+		assertThat(compileAndRun("""
+				(defparameter *s* (make-array 2 :element-type 'character :fill-pointer 0))
+				(vector-push #\\a *s*)
+				(vector-push #\\b *s*)
+				(defparameter *h* (make-hash-table :test 'equal))
+				(setf (gethash "ab" *h*) 1)
+				(print (list (equal *s* "ab") (gethash *s* *h*)))
+				""")).isEqualTo("(T 1)");
+	}
+
+	@Test
+	void compileScharSetfMutatesCharVectorInPlace() throws Exception {
+		// (setf (schar cv i) ch) writes the character vector IN PLACE, so an alias
+		// made before the write sees the update (an immutable string place only
+		// rebinds the variable).
+		assertThat(compileAndRun("""
+				(defparameter *s* (make-array 3 :element-type 'character :fill-pointer 3 :initial-element #\\a))
+				(defparameter *alias* *s*)
+				(setf (schar *s* 1) #\\z)
+				(print (list (string= *alias* "aza") (schar *s* 1)))
+				""")).isEqualTo("(T #\\z)");
+	}
+
+	@Test
+	void compileSetfEltOnAStringMutatesIt() throws Exception {
+		// (setf (elt seq i) v) dispatches at run time over all three sequence
+		// representations: rplaca for a list, the schar-set rebuild for a string,
+		// %aset for a vector. The string arm is what makes this the worked example of
+		// NOTHING in the source is an array operator, yet the expansion
+		// reaches the array runtime (%arrayp / %row-major-aset inside the schar-set
+		// rebuild). With the gate still a source scan the class called _aset1 without
+		// declaring it and died with NoSuchMethodError; the gate is now a consequence
+		// of what the bodies reference (.kb/adjustable-arrays.md).
+		assertThat(compileAndRun("""
+				(let ((s "abc")) (setf (elt s 0) #\\z) (print s))
+				""")).isEqualTo("\"zbc\"");
+	}
+
+	@Test
+	void aQuotedDatumCostsNoConstantPoolEntryOfItsOwn() {
+		// Every quoted datum is a slot of ONE table, named by an int operand: the pool
+		// holds the table's fixed entries, not three per datum (a per-datum Fieldref
+		// once filled 16% of the ci-spec corpus class's pool, .kb/quoted-data.md).
+		// Each '(1) below is a distinct datum by identity, so each gets its own slot.
+		java.util.function.IntFunction<Integer> poolEntries = n -> {
+			String quotes = String.join(" ", java.util.Collections.nCopies(n, "'(1)"));
+			byte[] classBytes = new JvmLispCompiler("Test").compile(am.ik.rontolisp.eval.LispPreludeLibrary
+				.process(LispReader.readAllFromString("(print (length (list " + quotes + ")))")));
+			return (((classBytes[8] & 0xff) << 8) | (classBytes[9] & 0xff)) - 1;
+		};
+		assertThat(poolEntries.apply(300)).isEqualTo(poolEntries.apply(3));
+	}
+
+	@Test
+	void aRacingFirstBuildOfAQuotedDatumAnswersTheDatumThatWon() throws Exception {
+		// Two threads can both see a quoted datum's slot empty and both build it. The
+		// fill (_qdSet) settles it under the class monitor: the first datum stored stays,
+		// and a later fill answers THAT one instead of its own, so the site hands every
+		// caller one object (.kb/quoted-data.md).
+		byte[] classBytes = new JvmLispCompiler("Test").compile(am.ik.rontolisp.eval.LispPreludeLibrary
+			.process(LispReader.readAllFromString("(defun %q () '(1 2)) (print (length (%q)))")));
+		Files.write(tempDir.resolve("Test.class"), classBytes);
+		try (URLClassLoader loader = new URLClassLoader(new URL[] { tempDir.toUri().toURL() },
+				ClassLoader.getSystemClassLoader())) {
+			Class<?> clazz = loader.loadClass("Test");
+			Method read = clazz.getDeclaredMethod("_qd", int.class);
+			Method fill = clazz.getDeclaredMethod("_qdSet", Object.class, int.class);
+			read.setAccessible(true);
+			fill.setAccessible(true);
+			Object winner = new Object();
+			Object loser = new Object();
+			assertThat(read.invoke(null, 0)).isNull();
+			assertThat(fill.invoke(null, winner, 0)).isSameAs(winner);
+			assertThat(fill.invoke(null, loser, 0)).isSameAs(winner);
+			assertThat(read.invoke(null, 0)).isSameAs(winner);
+		}
+	}
+
+	@Test
+	void anArrayFreeProgramReferencesNoArrayRuntimeHelper() {
+		// the injected built-in wrappers used to carry an array arm each
+		// (#'+ / #'reverse / #'sort / #'subseq / #'string= ... all fold or scan through
+		// the sequence dispatch), so a class as small as this one named _aref1 /
+		// _arrayMake / _aset1 without declaring them -- harmless at run time, but it
+		// forced the gate check to ignore every wrapper-only dangling call. Each of
+		// those lowerings is gated on Ctx.usesArrays now, so nothing dangles and the
+		// check applies to wrappers too (.kb/adjustable-arrays.md).
+		byte[] classBytes = new JvmLispCompiler("Test")
+			.compile(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString("(print (+ 1 2))")));
+		assertThat(unresolvedOwnCalls(classBytes)).isEmpty();
+	}
+
+	/**
+	 * The own-class methods a class file's code invokes but the class does not declare.
+	 */
+	private static java.util.Set<String> unresolvedOwnCalls(byte[] classBytes) {
+		java.lang.classfile.ClassModel model = java.lang.classfile.ClassFile.of().parse(classBytes);
+		String self = model.thisClass().asInternalName();
+		java.util.Set<String> declared = new java.util.HashSet<>();
+		java.util.Set<String> called = new java.util.TreeSet<>();
+		for (java.lang.classfile.MethodModel method : model.methods()) {
+			declared.add(method.methodName().stringValue() + method.methodType().stringValue());
+			method.code().ifPresent(code -> code.forEach(element -> {
+				if (element instanceof java.lang.classfile.instruction.InvokeInstruction invoke
+						&& self.equals(invoke.owner().asInternalName())) {
+					called.add(invoke.name().stringValue() + invoke.type().stringValue());
+				}
+			}));
+		}
+		called.removeAll(declared);
+		return called;
+	}
+
+	@Test
+	void aProgramThatNeverNamesAnArrayOperatorCarriesNoArrayRuntime() throws Exception {
+		// fill/coerce/vector/read-sequence/write-sequence/svref/array-rank/
+		// array-dimension/array-total-size/array-row-major-index each has an injected
+		// wrapper whose body reaches _aset1/_charVecMake/_arrayMake/_aref1/_arrayDims --
+		// so every program carried those ten wrappers regardless of its own source, the
+		// finished class called methods it never declared, and the post-compile
+		// self-check answered that by forcing the array gate on and re-running the whole
+		// compile, for a program with no array in it (.todo history: 13,654 B for this
+		// exact program before the fix).
+		byte[] classBytes = new JvmLispCompiler("Test")
+			.compile(LispReader.readAllFromString("(print (mapcar (lambda (x) (* x x)) '(1 2 3)))"));
+		assertThat(declaredMethodNames(classBytes)).doesNotContain("_aset1", "_aref1", "_arrayMake", "_charVecMake",
+				"_arrayDims");
+		// 8,295: _dbl's ratio arm is the correctly-rounded _ratToDouble (a BigInteger
+		// quotient plus its sticky bit, denormalizing down to signed zero), which every
+		// numeric program carries beside _dbl. A may-produce-a-ratio gate would buy the
+		// ~300 bytes back, but a missed source is a NoSuchMethodError in a program that
+		// divides and then floats -- the complex gate needs its recompile net for the
+		// same reason, and that machinery is disproportionate here. The budget still
+		// catches what it was built for (no array runtime; far below the 13,654 above).
+		// 8,604 since the dispatcher reports a non-function (_notFn and the
+		// representation
+		// test in front of the id read, .kb/error-handling.md): +309 B.
+		// 9,421 since main runs the program on a sized worker thread
+		// (.kb/interpreter-stack.md): +817 B, in every class with a main.
+		// 9,986 since a wrong-type operand's report names the operator
+		// (JvmOperandTypeRuntime): _teRaw, _opTypeErr and the (* x x) wrapper, +565 B.
+		// 10,129 since car/cdr name themselves (_car/_cdr, and _opTypeErr's
+		// funnel-typed arm): +143 B.
+		// 10,238 since mapcar's list argument is checked (_ckList and MAPCAR's wrapper,
+		// replacing the inline guard's message): +109 B.
+		// 10,403 since mapcar's walk tells a cons from a ratio or a function reference
+		// (_isCons, and the same test in _ckList): +165 B.
+		// 10,474 since an out-of-range subscript's compound type (INTEGER 0 (d)) rides
+		// _opTypeErr verbatim: +71 B.
+		// 10,686 since a built-in's wrong-count report names the operator: the thrown
+		// class the landing pad recognizes, the names of the runtime's own dispatchable
+		// defaults (#'identity, #'eql) and their decode in _arityMsg/_arityErr: +152 B.
+		// 11,035 since the quoted '(1 2 3) is a slot of the quoted-datum table
+		// (JvmQuotePool, .kb/quoted-data.md), not a field of its own: the table's two
+		// helpers and names, +355 B once per class, paid back past ~15 datums.
+		// 16,431 since the value-tail trampoline (JvmTailBounce): a class with it keeps
+		// the two-argument complement closures and the arity-0/2 dispatchers reachable
+		// through _tramp, +5,321 B here; mapcar's per-element call makes this program
+		// trampolined while the &optional probe below stays direct.
+		// 10,651 (from 15,542) since the trampoline is written only when a method the
+		// shake keeps bounces: nothing here does, so _unw answers its argument and
+		// _tramp goes with what only it reached.
+		assertThat(classBytes.length).isLessThan(11_000);
+		assertThat(runClass(classBytes)).isEqualTo("(1 4 9)");
+	}
+
+	@Test
+	void namingOneOfTheArrayWrappersBringsTheArrayRuntimeBack() throws Exception {
+		// The wrappers are gated on the reference, not deleted: a program that takes
+		// one of the ten as a value still works, and its wrapper's array arm is real.
+		byte[] classBytes = new JvmLispCompiler("Test")
+			.compile(LispReader.readAllFromString("(print (funcall #'fill (make-array 3 :initial-element 0) 9))"));
+		assertThat(declaredMethodNames(classBytes)).contains("_aset1");
+		assertThat(runClass(classBytes)).isEqualTo("#(9 9 9)");
+	}
+
+	@Test
+	void compileCharVectorEltAndCoerce() throws Exception {
+		assertThat(compileAndRun("""
+				(defparameter *s* (make-array 3 :element-type 'character :fill-pointer 0))
+				(vector-push #\\x *s*)
+				(vector-push #\\y *s*)
+				(vector-push #\\z *s*)
+				(print (list (elt *s* 1) (coerce *s* 'list)))
+				""")).isEqualTo("(#\\y (#\\x #\\y #\\z))");
+	}
+
+	@Test
+	void compileJzonAccumulatorPattern() throws Exception {
+		// The jzon writer shape: a reusable adjustable accumulator filled with
+		// vector-push-extend, snapshotted via make-array :initial-contents, and reset
+		// with (setf (fill-pointer a) 0) between uses.
+		assertThat(compileAndRun("""
+				(defun make-adjustable-string ()
+				  (make-array 256 :element-type 'character :fill-pointer 0 :adjustable t))
+				(defparameter *acc* (make-adjustable-string))
+				(dolist (ch (coerce "hello" 'list))
+				  (vector-push-extend ch *acc*))
+				(defparameter *out1* (make-array (fill-pointer *acc*) :element-type 'character :initial-contents *acc*))
+				(setf (fill-pointer *acc*) 0)
+				(dolist (ch (coerce "world" 'list))
+				  (vector-push-extend ch *acc*))
+				(defparameter *out2* (make-array (fill-pointer *acc*) :element-type 'character :initial-contents *acc*))
+				(print (list *out1* *out2*))
+				""")).isEqualTo("(\"hello\" \"world\")");
+	}
+
+	@Test
+	void compilePlainCharacterMakeArrayIsStillAString() throws Exception {
+		// Without :fill-pointer/:adjustable a rank-1 character array keeps the
+		// make-string lowering: an immutable simple string.
+		assertThat(compileAndRun("""
+				(defparameter *s* (make-array 3 :element-type 'character :initial-element #\\x))
+				(print (list *s* (stringp *s*)))
+				""")).isEqualTo("(\"xxx\" T)");
+	}
+
+	@Test
+	void compileAdjustArray() throws Exception {
+		// Non-adjustable -> fresh array; :adjustable -> adjusted in place (eq);
+		// rank-2 keeps the elements at their subscripts; the fill pointer carries
+		// over without an explicit :fill-pointer.
+		assertThat(compileAndRun("""
+				(defparameter *v* (make-array 3 :initial-element 7))
+				(defparameter *v2* (adjust-array *v* 5 :initial-element 0))
+				(print (list *v2* (eq *v* *v2*)))
+				(defparameter *w* (make-array 3 :adjustable t :initial-element 1))
+				(defparameter *w2* (adjust-array *w* 5 :initial-element 9))
+				(print (list (eq *w* *w2*) *w*))
+				(defparameter *m* (make-array '(2 2) :initial-element 0))
+				(setf (aref *m* 0 0) 1) (setf (aref *m* 0 1) 2)
+				(setf (aref *m* 1 0) 3) (setf (aref *m* 1 1) 4)
+				(print (adjust-array *m* '(3 3) :initial-element 0))
+				(defparameter *fv* (make-array 4 :fill-pointer 2 :initial-element 5))
+				(print (fill-pointer (adjust-array *fv* 8)))
+				""")).isEqualTo("(#(7 7 7 0 0) NIL)\n(T #(1 1 1 9 9))\n#2A((1 2 0) (3 4 0) (0 0 0))\n2");
+	}
+
+	@Test
+	void compileAdjustArrayInitialContentsAndDisplacedTo() throws Exception {
+		// :initial-contents fills the WHOLE result (like make-array); :displaced-to
+		// builds
+		// a FRESH displaced view over the target (a NON-adjustable source is left alone).
+		assertThat(compileAndRun("""
+				(defparameter *v* (make-array 5 :initial-contents (list 'a 'b 'c 'd 'e)))
+				(print (adjust-array *v* 4 :initial-contents (list 'w 'x 'y 'z)))
+				(defparameter *a0* (make-array 7 :initial-contents (list 1 2 3 4 5 6 7)))
+				(defparameter *a1* (make-array 5 :initial-contents (list 'a 'b 'c 'd 'e)))
+				(defparameter *a2* (adjust-array *a1* 4 :displaced-to *a0*))
+				(print (list *a2* (eq (array-displacement *a2*) *a0*) (array-dimensions *a1*)))
+				(defparameter *s* (make-array 3 :element-type 'character :adjustable t
+				                             :initial-contents "abc"))
+				(print (adjust-array *s* 4 :initial-contents "wxyz"))
+				""")).isEqualTo("#(W X Y Z)\n(#(1 2 3 4) T (5))\n\"wxyz\"");
+	}
+
+	@Test
+	void compileAdjustArrayDisplacedToKeepsAdjustableIdentity() throws Exception {
+		// adjust-array with :displaced-to on an :adjustable SOURCE turns the source
+		// into the displaced view IN PLACE (eq), like any other adjustable adjustment,
+		// matching the interpreter and SBCL -- a NON-adjustable source still answers a
+		// FRESH displaced array.
+		assertThat(compileAndRun("""
+				(defparameter *a0* (make-array 7 :initial-contents (list 1 2 3 4 5 6 7)))
+				(defparameter *a1* (make-array 5 :adjustable t :initial-contents (list 'a 'b 'c 'd 'e)))
+				(defparameter *a2* (adjust-array *a1* 4 :displaced-to *a0*))
+				(print (list (eq *a1* *a2*) *a2* (array-dimensions *a1*) (adjustable-array-p *a1*)
+				             (multiple-value-list (array-displacement *a1*))))
+				(defparameter *s* (make-array 3 :element-type 'character :adjustable t
+				                             :initial-contents "abc"))
+				(defparameter *tg* (make-array 4 :element-type 'character :initial-contents "wxyz"))
+				(defparameter *ss* (adjust-array *s* 2 :displaced-to *tg*))
+				(print (list (eq *s* *ss*) *ss* (stringp *ss*) (array-dimensions *s*)
+				             (adjustable-array-p *s*)
+				             (multiple-value-list (array-displacement *s*))))
+				""")).isEqualTo("""
+				(T #(1 2 3 4) (4) T (#(1 2 3 4 5 6 7) 0))
+				(T "wx" T (2) T ("wxyz" 0))""");
+	}
+
+	@Test
+	void compileDisplacedArrays() throws Exception {
+		// A displaced view aliases the target's storage in both directions, prints and
+		// measures with its own dims, works over a rank-2 target, and keeps following
+		// an adjustable target grown in place by adjust-array.
+		assertThat(compileAndRun("""
+				(defparameter *base* (make-array 6 :initial-element 0))
+				(dotimes (i 6) (setf (aref *base* i) (* i 10)))
+				(defparameter *view* (make-array 3 :displaced-to *base* :displaced-index-offset 2))
+				(setf (aref *view* 0) 99)
+				(print (aref *base* 2))
+				(setf (aref *base* 4) 111)
+				(print (list *view* (aref *view* 2) (length *view*)))
+				(defparameter *mat* (make-array '(2 3) :initial-element 0))
+				(dotimes (i 6) (setf (row-major-aref *mat* i) i))
+				(print (make-array 3 :displaced-to *mat* :displaced-index-offset 3))
+				(defparameter *tgt* (make-array 4 :adjustable t :initial-element 1))
+				(defparameter *dv* (make-array 2 :displaced-to *tgt* :displaced-index-offset 1))
+				(adjust-array *tgt* 6 :initial-element 8)
+				(setf (aref *tgt* 1) 55)
+				(print (aref *dv* 0))
+				""")).isEqualTo("99\n(#(99 30 111) 111 3)\n#(3 4 5)\n55");
+	}
+
+	@Test
+	void compileArrayDisplacementValues() throws Exception {
+		assertThat(compileAndRun("""
+				(defparameter *base* (make-array 5))
+				(defparameter *view* (make-array 2 :displaced-to *base* :displaced-index-offset 3))
+				(multiple-value-bind (tgt off) (array-displacement *view*)
+				  (print (list (eq tgt *base*) off)))
+				(multiple-value-bind (tgt off) (array-displacement *base*)
+				  (print (list tgt off)))
+				""")).isEqualTo("(T 3)\n(NIL 0)");
+	}
+
+	@Test
+	void compileSubtypepIntegerIntervals() throws Exception {
+		// subtypep decides INTEGER INTERVALS: (unsigned-byte n), (signed-byte n),
+		// (integer lo hi), (mod n), bit and the unsized byte names each denote an
+		// interval, and one interval is a subtype of another exactly when it is
+		// contained -- literal or computed, identical on all four backends.
+		assertThat(compileAndRun(
+				"""
+						(defun probe (a b) (subtypep a b))
+						(print (list (subtypep '(unsigned-byte 1) '(unsigned-byte 8)) (subtypep '(unsigned-byte 9) '(unsigned-byte 8))
+						             (subtypep '(signed-byte 5) '(signed-byte 8)) (subtypep '(integer 0 5) '(unsigned-byte 8))
+						             (subtypep 'bit '(unsigned-byte 8)) (subtypep '(or (integer 0 1) (integer 100 200)) '(unsigned-byte 8))
+						             (subtypep '(integer -1 5) '(unsigned-byte 8)) (subtypep '(mod 256) '(unsigned-byte 8))
+						             (subtypep '(unsigned-byte 8) '(integer 0 (256)))))
+						(print (list (probe '(unsigned-byte 1) '(unsigned-byte 8)) (probe '(unsigned-byte 9) '(unsigned-byte 8))
+						             (probe '(integer 0 5) '(signed-byte 8)) (probe 'bit '(integer 0 1))
+						             (probe '(signed-byte 8) 'unsigned-byte)
+						           (probe '(or (integer 0 1) (integer 100 200)) '(unsigned-byte 8))
+						           (probe '(integer 2 99) '(or (integer 0 1) (integer 100 200)))))
+						"""))
+			.isEqualTo("(T NIL T T T T NIL T T)\n(T NIL T T NIL T NIL)");
+	}
+
+	@Test
+	void compileSubtypepValidP() throws Exception {
+		// The valid-p twin of LispEvaluatorTest.subtypepAnswersCommonLispValidP: a
+		// LITERAL pair folds to a constant here, a COMPUTED one goes through the
+		// injected %subtypep-valid-runtime beside the %subtypep-runtime dispatch, and
+		// the two must answer alike.
+		assertThat(compileAndRun("""
+				(defun probe (a b) (multiple-value-list (subtypep a b)))
+				(print (multiple-value-list (subtypep 'integer 'number)))
+				(print (multiple-value-list (subtypep 'number 'integer)))
+				(print (multiple-value-list (subtypep '(satisfies foo) 'integer)))
+				(print (multiple-value-list (subtypep '(and (cons symbol *) (cons * symbol)) '(cons symbol symbol))))
+				(print (probe 'string 'sequence))
+				(print (probe 'number 'integer))
+				(print (probe '(member 1 2) 'integer))
+				(print (probe '(integer 0 10) 'integer))
+				""")).isEqualTo("(T T)\n(NIL T)\n(NIL NIL)\n(NIL NIL)\n(T T)\n(NIL T)\n(NIL NIL)\n(T T)");
+	}
+
+	@Test
+	void compileDisplacedStringView() throws Exception {
+		// Displacing onto a STRING answers a string VIEW, not a bare array view: it is
+		// stringp, prints and measures as a string, and aliases the target's characters
+		// in both directions -- including a view of a view.
+		assertThat(compileAndRun("""
+				(defparameter *s* (make-string 6 :initial-element #\\a))
+				(dotimes (i 6) (setf (char *s* i) (char "abcdef" i)))
+				(defparameter *v* (make-array 3 :element-type 'character :displaced-to *s*
+				                                :displaced-index-offset 1))
+				(print (list (stringp *v*) (length *v*) *v* (char *v* 0) (subseq *v* 1)))
+				(setf (char *v* 0) #\\X)
+				(print (list *v* *s*))
+				(setf (char *s* 3) #\\Y)
+				(print (list *v* *s* (string= *v* "XcY")))
+				(multiple-value-bind (tgt off) (array-displacement *v*)
+				  (print (list (eq tgt *s*) off)))
+				(defparameter *w* (make-array 2 :element-type 'character :displaced-to *v*
+				                                :displaced-index-offset 1))
+				(setf (char *w* 1) #\\Q)
+				(print (list *w* *v* *s*))
+				""")).isEqualTo("""
+				(T 3 "bcd" #\\b "cd")
+				("Xcd" "aXcdef")
+				("XcY" "aXcYef" T)
+				(T 1)
+				("cQ" "XcQ" "aXcQef")""");
+	}
+
+	@Test
+	void compileDisplacedStringViewOverACopySeqResultWritesThrough() throws Exception {
+		// A copy-seq/subseq result is a MUTABLE character vector, so
+		// a displaced view over it aliases real storage and a write through the view
+		// reaches the target -- the same answer the interpreter and SBCL give. The
+		// promote-on-write fallback this test used to pin applied only while such a
+		// string was an immutable value here.
+		assertThat(compileAndRun("""
+				(defparameter *s* (copy-seq "abcdef"))
+				(defparameter *v* (make-array 3 :element-type 'character :displaced-to *s*
+				                                :displaced-index-offset 1))
+				(print (list *v* (length *v*) (string= *v* "bcd")))
+				(setf (char *v* 0) #\\X)
+				(print (list *v* *s*))
+				""")).isEqualTo("(\"bcd\" 3 T)\n(\"Xcd\" \"aXcdef\")");
+	}
+
+	@Test
+	void compileAFlippedStringProducerResultHasWritableIdentity() throws Exception {
+		// The remaining producers flipped after copy-seq/subseq: concatenate 'string,
+		// the case family, format nil, the string-stream capture and read-line answer
+		// a MUTABLE character vector, so an alias sees a write, a callee's write
+		// reaches its caller, and replace/fill land in place -- matching the
+		// interpreter and SBCL (.kb/string-write-runtime.md).
+		assertThat(compileAndRun("""
+				(let* ((s (string-upcase "abc")) (a s)) (setf (char s 0) #\\x) (print (list s a)))
+				(let ((s (concatenate 'string "ab" "cd"))) (replace s "XY") (print s))
+				(let ((s (format nil "~a" 42))) (fill s #\\9) (print s))
+				(defun t596f (x) (setf (char x 0) #\\Z) x)
+				(let ((s (with-output-to-string (o) (princ "hi" o)))) (print (list (t596f s) s)))
+				(with-input-from-string (in "hello")
+				  (let* ((s (read-line in nil)) (a s)) (setf (char s 0) #\\J) (print (list s a))))
+				(let* ((s (string-capitalize "foo bar")) (a s)) (setf (char s 3) #\\!) (print (list s a)))
+				(let* ((s (string-trim " " "  ab  ")) (a s)) (setf (char s 0) #\\x) (print (list s a)))
+				(let* ((s (map 'string #'char-upcase "abc")) (a s)) (setf (char s 0) #\\x) (print (list s a)))
+				(let* ((s (coerce (list #\\a #\\b) 'string)) (a s)) (setf (char s 0) #\\x) (print (list s a)))
+				(let ((s (funcall #'concatenate 'string "ab" "cd"))) (print (list (t596f s) s)))
+				(print (let ((s (copy-seq "abc"))) (eq s (coerce s 'string))))
+				(print (with-input-from-string (in "")
+				  (let ((e (copy-seq "eof"))) (eq (read-line in nil e) e))))
+				(let* ((s (princ-to-string 12345)) (a s)) (setf (char s 0) #\\X) (print (list s a)))
+				(let ((s (prin1-to-string 'foo))) (fill s #\\z) (print s))
+				(let ((s (write-to-string 'bar))) (replace s "Q") (print s))
+				""")).isEqualTo(
+				"(\"xBC\" \"xBC\")\n\"XYcd\"\n\"99\"\n(\"Zi\" \"Zi\")\n(\"Jello\" \"Jello\")\n(\"Foo!Bar\" \"Foo!Bar\")"
+						+ "\n(\"xb\" \"xb\")\n(\"xBC\" \"xBC\")\n(\"xb\" \"xb\")\n(\"Zbcd\" \"Zbcd\")\nT\nT"
+						+ "\n(\"X2345\" \"X2345\")\n\"zzz\"\n\"QAR\"");
+	}
+
+	@Test
+	void compileAPrintObjectRoutedPrincToStringResultHasWritableIdentity() throws Exception {
+		// The fourth round's wrap sits OUTSIDE the print-object routing hook: a
+		// princ-to-string that renders through a user method answers the same mutable
+		// identity as the unrouted one, and the ~a piece INSIDE the method (a
+		// %princ-piece form) is not the value the program receives.
+		assertThat(compileAndRun("""
+				(defstruct t600pt x)
+				(defmethod print-object ((p t600pt) s) (format s "<pt ~a>" (t600pt-x p)))
+				(let* ((s (princ-to-string (make-t600pt :x 7))) (a s)) (setf (char s 0) #\\[) (print (list s a)))
+				(let ((s (prin1-to-string (make-t600pt :x 8)))) (fill s #\\-) (print s))
+				""")).isEqualTo("(\"[pt 7>\" \"[pt 7>\")\n\"------\"");
+	}
+
+	@Test
+	void compileMakeArrayDisplacedKeywordComboIsACompileError() {
+		// Only :initial-element / :initial-contents are refused beside :displaced-to (the
+		// view owns no storage to initialize); :fill-pointer / :adjustable are legal --
+		// ci-spec a-displaced-view-carries-its-own-fill-pointer-and-adjustable-flag.
+		assertThatThrownBy(
+				() -> compileAndRun("(print (make-array 3 :displaced-to (make-array 5) :initial-element 0))"))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("cannot be combined");
+	}
+
+	@Test
+	void compileCoerceConversions() throws Exception {
+		assertThat(compileAndRun("""
+				(print (coerce '(1 2 3) 'vector))
+				(print (coerce (vector 1 2 3) 'list))
+				(print (coerce "ab" 'list))
+				(print (coerce '(#\\a #\\b) 'string))
+				(print (coerce '(1 2) 'list))
+				(print (coerce "hi" 'string))
+				""")).isEqualTo("#(1 2 3)\n(1 2 3)\n(#\\a #\\b)\n\"ab\"\n(1 2)\n\"hi\"");
+	}
+
+	@Test
+	void compileSequenceCoerceAnswersTheSameForEveryRepresentation() throws Exception {
+		// The interpreter converts these in Java rather than through the expansion's
+		// (map 'list #'identity ...) loop (.kb/seq-coerce-runtime.md); the compile paths
+		// keep the expansion. Both must answer the same thing for every representation
+		// the walk reaches -- and for the ones the interpreter's fast arm DECLINES, which
+		// is where a divergence would hide.
+		assertThat(compileAndRun("""
+				(print (length (coerce (string (code-char 128512)) 'list)))
+				(let ((s (make-array 5 :element-type 'character :fill-pointer 2 :initial-element #\\z)))
+				  (print (coerce s 'list)))
+				(let ((a (make-array 5 :fill-pointer 2 :initial-element 7)))
+				  (print (coerce a 'list)))
+				(print (coerce (make-array 3 :element-type '(unsigned-byte 8) :initial-contents '(1 2 3)) 'list))
+				(print (coerce (make-array 2 :element-type 'double-float :initial-contents '(1d0 2d0)) 'list))
+				(print (coerce #(#\\p #\\q) 'string))
+				(print (coerce nil 'string))
+				(print (coerce nil 'vector))
+				(print (handler-case (coerce '(1 2) 'string) (error () :not-a-character)))
+				(print (handler-case (coerce 5 'vector) (type-error (e) (type-error-expected-type e))))
+				(print (handler-case (coerce 5 'list) (type-error (e) (type-error-expected-type e))))
+				(print (position #\\Space "a b c"))
+				(print (position #\\Space "a b c" :from-end t))
+				(print (count #\\a "banana"))
+				(print (remove #\\a "banana"))
+				""")).isEqualTo(
+				"1\n(#\\z #\\z)\n(7 7)\n(1 2 3)\n(1.0 2.0)\n\"pq\"\n\"\"\n#()\n:NOT-A-CHARACTER\nSEQUENCE\nSEQUENCE\n1\n3\n3\n\"bnn\"");
+	}
+
+	@Test
+	void compileSearchAndMismatchAnswerTheSameAsTheInterpretersNativeArm() throws Exception {
+		// search and mismatch are Lisp-source prelude defuns, and only the INTERPRETER
+		// answers them natively (.kb/seq-coerce-runtime.md): this backend runs the defun.
+		// Both must answer the same thing for every representation and keyword the arm
+		// serves -- and for the ones it DECLINES, which is where a divergence would hide.
+		assertThat(compileAndRun("""
+				(print (search "bc" "abcd"))
+				(print (search "x" "abcd"))
+				(print (search "" "abcd"))
+				(print (search "ab" "ab-ab" :from-end t))
+				(print (search "" "abcd" :from-end t))
+				(print (search "xxabyy" "ab-ab" :start1 2 :end1 4 :start2 1 :end2 5 :from-end t))
+				(print (search '(3 4) '(1 2 3 4 5)))
+				(print (search "bc" (coerce "abcd" 'vector)))
+				(print (search '(#\\b #\\c) "abcd"))
+				(print (search nil "abcd"))
+				(print (search #(2 3) (make-array 4 :element-type '(unsigned-byte 8)
+				                                 :initial-contents '(1 2 3 4))))
+				(print (search '(2.0d0) (make-array 3 :element-type 'double-float
+				                                   :initial-contents '(1d0 2d0 3d0))))
+				(let ((s (make-array 6 :element-type 'character :fill-pointer 3
+				                       :initial-contents '(#\\a #\\b #\\c #\\d #\\e #\\f))))
+				  (print (list (search "bc" s) (search "cd" s))))
+				(print (search (string (code-char 128512))
+				               (concatenate 'string "ab" (string (code-char 128512)) "cd")))
+				(print (search "bc" "abcd" :test #'char=))
+				(print (search "BC" "abcd" :test #'char-equal))
+				(print (search "BC" "abcd" :key #'char-upcase))
+				(print (handler-case (search "ab" "xab" :end2 99) (type-error (e) (princ-to-string e))))
+				(print (handler-case (search "abcd" "xab" :start1 3 :end1 1) (type-error (e) (princ-to-string e))))
+				(print (mismatch "abc" "abd"))
+				(print (mismatch "abc" "abc"))
+				(print (mismatch "abc" "ab"))
+				(print (mismatch '(1 2 3) '(1 2 4)))
+				(print (mismatch "xxabyy" "zzab" :start1 2 :end1 4 :start2 2))
+				(print (mismatch "abcd" "xbcd" :from-end t))
+				""")).isEqualTo("1\nNIL\n0\n3\n4\n3\n2\n1\n1\n0\n1\n1\n(1 NIL)\n2\n1\n1\n1\n"
+				+ "\"SUBSEQ: invalid bounds 0, 99 for string of length 3\"\n"
+				+ "\"SUBSEQ: invalid bounds 3, 1 for string of length 4\"\n2\nNIL\n2\n2\nNIL\n1");
+	}
+
+	@Test
+	void compileSearchAndMismatchWalkAListWithACursor() throws Exception {
+		// This backend runs the prelude defun, which used to index a LIST operand with
+		// (elt seq i) -- an nth walk from the head, so O(n^2*m) for search and O(n^2)
+		// for mismatch. It reads a list through a cons cursor now; every answer in range
+		// is the one the elt-indexed body gave, and an out-of-range or negative bound is
+		// subseq's type-error, checked before the cursor is seeded.
+		assertThat(compileAndRun(
+				"""
+						(print (search '(3 4) '(1 2 3 4 5)))
+						(print (search '(3 4) '(1 2 3 4 5) :start2 3))
+						(print (search '(3 4) '(1 2 3 4 3 4) :from-end t))
+						(print (search '(9 3 4 9) '(1 2 3 4 5) :start1 1 :end1 3))
+						(print (search '(3 4) '(1 2 3 4 5) :end2 3))
+						(print (search '(#\\b #\\c) "abcd"))
+						(print (search "bc" '(#\\a #\\b #\\c #\\d)))
+						(print (handler-case (search '(1 2) '(1 2 3) :end2 99) (type-error (e) (princ-to-string e))))
+						(print (handler-case (search '(1 2) '(1 2 3) :start2 99) (type-error (e) (princ-to-string e))))
+						(print (handler-case (search '(1 2 3) '(1 2 3) :start1 99) (type-error (e) (princ-to-string e))))
+						(print (handler-case (search '(1 2 3) '(1 2 3) :start1 1 :end1 99) (type-error (e) (princ-to-string e))))
+						(print (handler-case (search '(1 2 3) '(1 2 3) :start2 -1) (type-error (e) (princ-to-string e))))
+						(print (handler-case (search '(1 2 3) '(1 2 3) :start1 -1) (type-error (e) (princ-to-string e))))
+						(print (handler-case (search '(1) '(1 2 . 3)) (type-error (e) (princ-to-string e))))
+						(print (search '(3 4) '(1 2 3 4 5) :key #'identity))
+						(print (mismatch '(1 2 3) '(1 2 4)))
+						(print (handler-case (mismatch '(1 2 3) '(1 2 3) :end1 99) (type-error (e) (princ-to-string e))))
+						(print (handler-case (mismatch '(1 2 3) '(1 2 3) :end2 99) (type-error (e) (princ-to-string e))))
+						(print (mismatch '(1 2 3) "abc"))
+						(print (mismatch '(9 1 2 3) '(1 2 3) :start1 1))
+						(print (mismatch '(1 2 3) '(1 2 4) :from-end t))
+						(let ((long (let ((out nil))
+						              (dotimes (i 400) (setq out (cons (mod i 7) out)))
+						              (nreverse out))))
+						  (print (list (search '(3 5) long) (search '(5 6) long)
+						               (search '(5 6) long :from-end t) (mismatch long long)
+						               (mismatch long (append (butlast long) (list 99))))))
+						"""))
+			.isEqualTo("2\nNIL\n4\n2\nNIL\n1\n1\n\"SUBSEQ: invalid bounds 0, 99 for list of length 3\"\n"
+					+ "\"SUBSEQ: invalid bounds 99, 3 for list of length 3\"\n"
+					+ "\"SUBSEQ: invalid bounds 99, 3 for list of length 3\"\n"
+					+ "\"SUBSEQ: invalid bounds 1, 99 for list of length 3\"\n"
+					+ "\"SUBSEQ: invalid bounds -1, 3 for list of length 3\"\n"
+					+ "\"SUBSEQ: invalid bounds -1, 3 for list of length 3\"\n"
+					+ "\"LENGTH: The value 3 is not of type SEQUENCE\"\n" + "2\n2\n"
+					+ "\"SUBSEQ: invalid bounds 0, 99 for list of length 3\"\n"
+					+ "\"SUBSEQ: invalid bounds 0, 99 for list of length 3\"\n0\nNIL\n3\n" + "(NIL 5 397 NIL 399)");
+	}
+
+	@Test
+	void compileAndRunLinalgConstructorsAndShape() throws Exception {
+		assertThat(compileAndRunLinalg("""
+				(print (linalg:zeros 3))
+				(print (linalg:eye 2))
+				(print (linalg:arange 2 10 2))
+				(print (linalg:linspace 0 1 5))
+				(print (linalg:from-list '((1 2) (3 4))))
+				(print (linalg:shape (linalg:from-list '((1 2 3) (4 5 6)))))
+				(print (linalg:reshape (linalg:arange 6) '(2 3)))
+				(print (linalg:transpose (linalg:from-list '((1 2 3) (4 5 6)))))
+				"""))
+			.isEqualTo("#d(0.0 0.0 0.0)\n#d((1.0 0.0) (0.0 1.0))\n#d(2.0 4.0 6.0 8.0)\n#d(0.0 0.25 0.5 0.75 1.0)\n"
+					+ "#d((1.0 2.0) (3.0 4.0))\n(2 3)\n#d((0.0 1.0 2.0) (3.0 4.0 5.0))\n#d((1.0 4.0) (2.0 5.0) (3.0 6.0))");
+	}
+
+	@Test
+	void compileAndRunLinalgArithmeticAndReductions() throws Exception {
+		assertThat(compileAndRunLinalg("""
+				(print (linalg:add (linalg:from-list '(1 2 3)) 10))
+				(print (linalg:mul (linalg:from-list '((1 2) (3 4))) (linalg:from-list '((5 6) (7 8)))))
+				(print (linalg:emap (lambda (x) (* x x)) (linalg:arange 4)))
+				(print (linalg:dot (linalg:from-list '(1 2 3)) (linalg:from-list '(4 5 6))))
+				(print (linalg:matmul (linalg:from-list '((1 2) (3 4))) (linalg:from-list '((5 6) (7 8)))))
+				(print (linalg:sum (linalg:from-list '((1 2) (3 4)))))
+				(print (linalg:mean (linalg:from-list '(1 2 3 4))))
+				(print (linalg:argmax (linalg:from-list '(1 9 3))))
+				(print (linalg:norm (linalg:from-list '(3 4))))
+				""")).isEqualTo("#d(11.0 12.0 13.0)\n#d((5.0 12.0) (21.0 32.0))\n#d(0.0 1.0 4.0 9.0)\n32.0\n"
+				+ "#d((19.0 22.0) (43.0 50.0))\n10.0\n2.5\n1\n5.0");
+	}
+
+	@Test
+	void compileAndRunLinalgLinearAlgebra() throws Exception {
+		// linalg computes in packed double-float (speed over exactness); inv/solve use
+		// power-of-two matrices whose float results are exact and print identically on
+		// every backend (a general 2x2 inverse would carry roundoff that WASM prints at
+		// fewer significant digits). det of a non-singular matrix stays a clean double.
+		assertThat(compileAndRunLinalg("""
+				(print (linalg:det (linalg:from-list '((1 2) (3 4)))))
+				(print (linalg:inv (linalg:from-list '((4 0) (2 4)))))
+				(print (linalg:solve (linalg:from-list '((4 0) (2 4))) (linalg:from-list '(8 8))))
+				(print (linalg:array-equal (linalg:matmul (linalg:from-list '((4 0) (2 4)))
+				                                          (linalg:inv (linalg:from-list '((4 0) (2 4)))))
+				                           (linalg:eye 2)))
+				""")).isEqualTo("-2.0\n#d((0.25 0.0) (-0.125 0.25))\n#d(2.0 1.0)\nT");
+	}
+
+	@Test
+	void compileExptWithRuntimeDoubleBase() throws Exception {
+		// hasDoubleLiteral only sees literals: a double base arriving through a
+		// variable or slot used to hit the exact-rational _pow and cast Double to
+		// BigInteger. _pow now short-circuits a Double base to Math.pow.
+		assertThat(compileAndRun("""
+				(defparameter *b* 0.999)
+				(defparameter *i* 0)
+				(setq *i* (+ *i* 1))
+				(print (expt *b* *i*))
+				(print (expt *b* 3))
+				(defparameter *db* 2.0)
+				(print (expt *db* -2))
+				(defparameter *ib* 2)
+				(print (expt *ib* 10))
+				(print (expt *ib* -1))
+				""")).isEqualTo("0.999\n0.997002999\n0.25\n1024\n1/2");
+	}
+
+	@Test
+	void compileExptWithRuntimeFloatOrRatioExponent() throws Exception {
+		// hasDoubleLiteral only sees literals: a float or ratio EXPONENT arriving
+		// through a variable or a call used to be unboxed as a Long and die
+		// (ClassCastException). _pow now dispatches on the run-time
+		// exponent: a non-Long takes Math.pow over the float contagion, exactly the
+		// interpreter's answers. The negative base to a fractional power answers the
+		// PLANE rather than NaN, so its two digit strings are Math.pow/Math.cos values
+		// and the interpreter's own line is what pins them.
+		String source = """
+				(defun give (x) x)
+				(print (expt 4 (give 1/2)))
+				(print (expt 2 (give 0.5)))
+				(print (expt (give 10000.0) (give 0.75)))
+				(print (expt 2 (give 3.0)))
+				(print (expt (give -2.0) (give 0.5)))
+				(print (expt (give 0.0) (give -1.0)))
+				(print (* 1.5 (expt 10 (give 0.0))))
+				(print (expt (give 2) (give 10)))
+				""";
+		assertThat(compileAndRun(source)).isEqualTo(interpret(source))
+			.startsWith("2.0\n1.4142135623730951\n1000.0\n8.0\n#C(")
+			.endsWith("1.4142135623730951)\nInfinity\n1.5\n1024");
+	}
+
+	@Test
+	void compileLambdaCapturesAcrossDotimesAndDoStar() throws Exception {
+		// FreeVarAnalyzer must expand dotimes/do* before the free-variable walk;
+		// without the cases their loop variables were misread as free references
+		// ("Cannot capture variable: k" from a maphash callback).
+		assertThat(compileAndRun("""
+				(defparameter *h* (make-hash-table :test 'equal))
+				(setf (gethash "a" *h*) 10)
+				(setf (gethash "b" *h*) 20)
+				(let ((scale 2)
+				      (total 0))
+				  (maphash (lambda (key v)
+				             (dotimes (k 2)
+				               (setq total (+ total (* scale v)))))
+				           *h*)
+				  (print total))
+				(let ((acc 0))
+				  (funcall (lambda ()
+				             (do* ((i 1 (+ i 1))
+				                   (s i (+ s i)))
+				                  ((> i 3))
+				               (setq acc (+ acc s)))))
+				  (print acc))
+				""")).isEqualTo("120\n10");
+	}
+
+	@Test
+	void compileAndRunLinalgAxisReductionsAndRandom() throws Exception {
+		// The deep-learning-from-scratch additions: numpy axis/keepdims reductions,
+		// reshape -1 inference, the seeded Wichmann-Hill RNG (bit-identical on every
+		// backend), and the indexing/selection/comparison helpers.
+		assertThat(compileAndRunLinalg("""
+				(defparameter *m* (linalg:from-list '((1 2 3) (4 5 6))))
+				(print (linalg:sum *m* :axis 0))
+				(print (linalg:sum *m* :axis -1 :keepdims t))
+				(print (linalg:mean *m* :axis 0))
+				(print (linalg:amax *m* :axis 1))
+				(print (linalg:amin *m* :axis 0 :keepdims t))
+				(print (linalg:argmax *m* :axis 1))
+				(print (linalg:argmin *m* :axis 0))
+				(print (linalg:sum (linalg:reshape (linalg:arange 24) '(2 3 4)) :axis 1))
+				(print (linalg:shape (linalg:reshape (linalg:arange 12) '(3 -1))))
+				(linalg:seed 42)
+				(print (linalg:choice 60000 4))
+				(linalg:seed 9)
+				(print (linalg:permutation 10))
+				(linalg:seed 1)
+				(print (linalg:emap (lambda (x) (truncate (* 1024 x))) (linalg:rand '(2 2))))
+				(linalg:seed 7)
+				(print (linalg:emap (lambda (x) (truncate (* 1024 x))) (linalg:randn 4)))
+				(print (linalg:take-rows *m* #(1 0)))
+				(print (linalg:row *m* 1))
+				(print (linalg:gather *m* #(2 0)))
+				(print (linalg:one-hot #(1 0 2) 3))
+				(print (linalg:greater *m* 3))
+				(print (linalg:equal (linalg:argmax *m* :axis 1) #(2 2)))
+				(print (linalg:zeros-like (linalg:ones 2 :element-type 'single-float)))
+				""")).isEqualTo("#d(5.0 7.0 9.0)\n#d((6.0) (15.0))\n#d(2.5 3.5 4.5)\n#d(3.0 6.0)\n#d((1.0 2.0 3.0))\n"
+				+ "#d(2.0 2.0)\n#d(0.0 0.0 0.0)\n#d((12.0 15.0 18.0 21.0) (48.0 51.0 54.0 57.0))\n(3 4)\n"
+				+ "#d(26833.0 11120.0 29256.0 22347.0)\n#d(4.0 5.0 6.0 2.0 9.0 7.0 1.0 0.0 8.0 3.0)\n"
+				+ "#d((317.0 637.0) (949.0 376.0))\n#d(284.0 -21.0 221.0 -1653.0)\n"
+				+ "#d((4.0 5.0 6.0) (1.0 2.0 3.0))\n#d(4.0 5.0 6.0)\n#d(3.0 4.0)\n"
+				+ "#d((0.0 1.0 0.0) (1.0 0.0 0.0) (0.0 0.0 1.0))\n#d((0.0 0.0 0.0) (1.0 1.0 1.0))\n"
+				+ "#d(1.0 1.0)\n#f(0.0 0.0)");
+	}
+
+	@Test
+	void compileAndRunLinalgTransposeAxesPadIm2col() throws Exception {
+		// The ch07 CNN additions: transpose with an axes list (rank-n
+		// permutation; the 2-argument call declines the --simd transpose kernel),
+		// np.pad's constant-0 mode, and the internal rank-4 %la-im2col/%la-col2im
+		// pair behind the convolution examples.
+		assertThat(compileAndRunLinalg(
+				"""
+						(defparameter *x* (linalg:reshape (linalg:arange 24) '(2 3 4)))
+						(print (linalg:shape (linalg:transpose *x* '(1 0 2))))
+						(print (linalg:transpose (linalg:from-list '((1 2) (3 4))) '(1 0)))
+						(print (linalg:array-equal (linalg:transpose (linalg:transpose *x* '(1 2 0)) '(2 0 1)) *x*))
+						(print (linalg:pad (linalg:from-list '((1 2) (3 4))) '((1 1) (2 2))))
+						(print (linalg:pad #(1 2) 1))
+						(defparameter *img* (linalg:reshape (linalg:arange 16) '(1 1 4 4)))
+						(defparameter *col* (linalg::%la-im2col *img* 2 2 2 0))
+						(print *col*)
+						(print (linalg:array-equal (linalg::%la-col2im *col* '(1 1 4 4) 2 2 2 0) *img*))
+						(print (linalg::%la-col2im (linalg::%la-im2col (linalg:ones '(1 1 3 3)) 2 2 1 0) '(1 1 3 3) 2 2 1 0))
+						(print (array-element-type (linalg:transpose (linalg:ones '(2 2 2) :element-type 'single-float) '(2 1 0))))
+						(print (array-element-type (linalg:pad (linalg:ones 2 :element-type 'single-float) 1)))
+						"""))
+			.isEqualTo("(3 2 4)\n#d((1.0 3.0) (2.0 4.0))\nT\n"
+					+ "#d((0.0 0.0 0.0 0.0 0.0 0.0) (0.0 0.0 1.0 2.0 0.0 0.0) (0.0 0.0 3.0 4.0 0.0 0.0)"
+					+ " (0.0 0.0 0.0 0.0 0.0 0.0))\n#d(0.0 1.0 2.0 0.0)\n"
+					+ "#d((0.0 1.0 4.0 5.0) (2.0 3.0 6.0 7.0) (8.0 9.0 12.0 13.0) (10.0 11.0 14.0 15.0))\nT\n"
+					+ "#d((((1.0 2.0 1.0) (2.0 4.0 2.0) (1.0 2.0 1.0))))\nSINGLE-FLOAT\nSINGLE-FLOAT");
+	}
+
+	@Test
+	void compileAndRunLinalgRankNShapesAndStackedMatmul() throws Exception {
+		// The rank-N round: expand-dims / squeeze / concatenate / stack / slice /
+		// triu / tril, the stacked (rank >= 3) matmul, var / std / power / where and
+		// the softmax pair. The last softmax is the masked-attention idiom -- an
+		// -infinity through where -> amax -> exp -> div must weigh exactly 0.0.
+		assertThat(compileAndRunLinalg("""
+				(defparameter *m* (linalg:reshape (linalg:arange 6) '(2 3)))
+				(print (linalg:expand-dims #(1 2 3) 0))
+				(print (linalg:squeeze #2A((1 2 3))))
+				(print (linalg:concatenate (list *m* *m*) :axis 1))
+				(print (linalg:stack (list #(1 2) #(3 4)) :axis 1))
+				(print (linalg:slice *m* '(nil (0 2))))
+				(print (linalg:slice #(0 1 2 3 4 5) '((nil nil -1))))
+				(print (linalg:triu (linalg:ones '(3 3)) :k 1))
+				(print (linalg:tril #2A((1 2 3) (4 5 6) (7 8 9)) :k -1))
+				(print (linalg:matmul (linalg:reshape (linalg:arange 12) '(2 2 3))
+				                      (linalg:reshape (linalg:arange 12) '(2 3 2))))
+				(print (linalg:matmul (linalg:reshape (linalg:arange 12) '(2 2 3)) #(1 1 1)))
+				(print (linalg:shape (linalg:matmul (linalg:zeros '(2 1 3 4)) (linalg:zeros '(5 4 2)))))
+				(print (linalg:var #(1 2 3 4)))
+				(print (linalg:std *m* :axis 0 :keepdims t))
+				(print (linalg:power 2 #(1 2 3)))
+				(print (linalg:where #(1 0 1) 10 20))
+				(print (linalg:softmax #(1 1 1 1)))
+				(print (linalg:softmax #2A((0 0) (1 1)) :axis 1))
+				(print (linalg:log-softmax #(0 0)))
+				(print (linalg:softmax (linalg:where (linalg:from-list '((1 0) (0 1)))
+				                                     (linalg:from-list '((1.0 2.0) (3.0 4.0)))
+				                                     (/ -1.0 0.0))
+				                       :axis 1))
+				(print (array-element-type (linalg:slice (linalg:ones 4 :element-type 'single-float) '((0 2)))))
+				"""))
+			.isEqualTo("#d((1.0 2.0 3.0))\n#d(1.0 2.0 3.0)\n#d((0.0 1.0 2.0 0.0 1.0 2.0) (3.0 4.0 5.0 3.0 4.0 5.0))\n"
+					+ "#d((1.0 3.0) (2.0 4.0))\n#d((0.0 1.0) (3.0 4.0))\n#d(5.0 4.0 3.0 2.0 1.0 0.0)\n"
+					+ "#d((0.0 1.0 1.0) (0.0 0.0 1.0) (0.0 0.0 0.0))\n#d((0.0 0.0 0.0) (4.0 0.0 0.0) (7.0 8.0 0.0))\n"
+					+ "#d(((10.0 13.0) (28.0 40.0)) ((172.0 193.0) (244.0 274.0)))\n#d((3.0 12.0) (21.0 30.0))\n"
+					+ "(2 5 3 2)\n1.25\n#d((1.5 1.5 1.5))\n#d(2.0 4.0 8.0)\n#d(10.0 20.0 10.0)\n"
+					+ "#d(0.25 0.25 0.25 0.25)\n#d((0.5 0.5) (0.5 0.5))\n#d(-0.6931471805599453 -0.6931471805599453)\n"
+					+ "#d((1.0 0.0) (0.0 1.0))\nSINGLE-FLOAT");
+	}
+
+	@Test
+	void compileAndRunLinalgRankThreeElementwise() throws Exception {
+		assertThat(compileAndRunLinalg("""
+				(defparameter *c* (linalg:reshape (linalg:arange 8) '(2 2 2)))
+				(print *c*)
+				(print (linalg:add *c* 10))
+				(print (linalg:mul *c* *c*))
+				(print (linalg:sum *c*))
+				(print (linalg:amax *c*))
+				(print (linalg:array-equal (linalg:flatten *c*) (linalg:arange 8)))
+				(print (linalg:zeros '(2 2 2)))
+				(print (linalg:ndim *c*))
+				(print (linalg:ndim 5))
+				""")).isEqualTo("#d(((0.0 1.0) (2.0 3.0)) ((4.0 5.0) (6.0 7.0)))\n"
+				+ "#d(((10.0 11.0) (12.0 13.0)) ((14.0 15.0) (16.0 17.0)))\n"
+				+ "#d(((0.0 1.0) (4.0 9.0)) ((16.0 25.0) (36.0 49.0)))\n28.0\n7.0\nT\n"
+				+ "#d(((0.0 0.0) (0.0 0.0)) ((0.0 0.0) (0.0 0.0)))\n3\n0");
+	}
+
+	@Test
+	void compileAndRunLinalgNumpyStyleBroadcasting() throws Exception {
+		// numpy general broadcasting between arrays of different shapes: trailing
+		// axes align, and an axis of extent 1 (or a missing leading axis) stretches.
+		// The result keeps the FIRST array operand's width.
+		assertThat(compileAndRunLinalg("""
+				(print (linalg:mul #2A((1 2) (3 4)) #(10 20)))
+				(print (linalg:add #2A((1 2) (3 4)) #2A((100) (200))))
+				(print (linalg:sub #(1 2) #d(1.0)))
+				(print (linalg:maximum #2A((1 5) (4 2)) #(3 3)))
+				(print (linalg:mul (linalg:from-list '((1 2) (3 4)) :element-type 'single-float) #(10 20)))
+				(print (linalg:div #3A(((2.0 4.0) (6.0 8.0))) #(2 4)))
+				""")).isEqualTo("#d((10.0 40.0) (30.0 80.0))\n#d((101.0 102.0) (203.0 204.0))\n#d(0.0 1.0)\n"
+				+ "#d((3.0 5.0) (4.0 3.0))\n#f((10.0 40.0) (30.0 80.0))\n#d(((1.0 1.0) (3.0 2.0)))");
+	}
+
+	@Test
+	void compileAndRunLinalgDiffAndGradient() throws Exception {
+		// numpy calculus parity: diff = n-th discrete difference along the last axis
+		// (numpy's docs example values), gradient = second-order central differences
+		// with first-order one-sided ends over a uniform scalar spacing or a
+		// non-uniform coordinate vector. All sample values differentiate exactly,
+		// so the printed doubles are identical on every backend.
+		assertThat(compileAndRunLinalg("""
+				(print (linalg:diff #(1 2 4 7 0)))
+				(print (linalg:diff #(1 2 4 7 0) :n 2))
+				(print (linalg:diff #2A((1 3 6) (0 5 6))))
+				(print (linalg:gradient #(0 1 4 9 16)))
+				(print (linalg:gradient #(0 1 4 9 16) 2))
+				(print (linalg:gradient #(0 1 9) #(0 1 3)))
+				(print (array-element-type (linalg:gradient (linalg:arange 0 4 :element-type 'single-float))))
+				""")).isEqualTo("#d(1.0 2.0 3.0 -7.0)\n#d(1.0 1.0 -10.0)\n#d((2.0 3.0) (5.0 1.0))\n"
+				+ "#d(1.0 2.0 4.0 6.0 7.0)\n#d(0.5 1.0 2.0 3.0 3.5)\n#d(1.0 2.0 4.0)\nSINGLE-FLOAT");
+	}
+
+	@Test
+	void compileAndRunLinalgSingleFloatWidthPolymorphism() throws Exception {
+		// linalg is width-polymorphic -- a constructor opts into single-float
+		// (#f) with an :element-type keyword, and every transform PRESERVES the input
+		// width, so a #f value is never silently widened to double (which would force a
+		// mixed-width --simd error on a following vec:matvec). Double stays the default.
+		// f32-exact values (integers / halves) so the printed form is byte-identical to
+		// the interpreter and WASM.
+		assertThat(compileAndRunLinalg("""
+				(print (linalg:zeros '(2 2) :element-type 'single-float))
+				(print (linalg:zeros '(2 2)))
+				(print (linalg:arange 0 8 2 :element-type 'single-float))
+				(print (linalg:from-list '((1 2) (3 4)) :element-type 'single-float))
+				(let ((w (linalg:from-list '((1 2) (3 4)) :element-type 'single-float)))
+				  (print (linalg:sub w (linalg:mul (linalg:ones '(2 2) :element-type 'single-float) 0.5)))
+				  (print (array-element-type (linalg:transpose w)))
+				  (print (linalg:matmul w (linalg:eye 2 :element-type 'single-float))))
+				(print (array-element-type (linalg:add (linalg:from-list '(1 2 3)) 10)))
+				(print (linalg:dot (linalg:from-list '(1 2 3) :element-type 'single-float)
+				                   (linalg:from-list '(1 2 3) :element-type 'single-float)))
+				""")).isEqualTo("#f((0.0 0.0) (0.0 0.0))\n#d((0.0 0.0) (0.0 0.0))\n#f(0.0 2.0 4.0 6.0)\n"
+				+ "#f((1.0 2.0) (3.0 4.0))\n#f((0.5 1.5) (2.5 3.5))\nSINGLE-FLOAT\n"
+				+ "#f((1.0 2.0) (3.0 4.0))\nDOUBLE-FLOAT\n14.0");
+	}
+
+	@Test
+	void compileAndRunTorchAutogradSmallGraph() throws Exception {
+		// A multi-step graph (matmul -> broadcasting add -> mul -> sum) with backward:
+		// the broadcast bias gets its unbroadcast (summed) gradient, and torch:no-grad
+		// keeps a result off the tape. All values exact, so the output is
+		// byte-identical on every backend.
+		assertThat(compileAndRunTorch("""
+				(defparameter *w* (torch:tensor '(1.0 2.0) :requires-grad t))
+				(defparameter *b* (torch:tensor 0.5 :requires-grad t))
+				(defparameter *x* (torch:tensor #2A((1.0 2.0) (3.0 4.0))))
+				(defparameter *y* (torch:add (torch:matmul *x* *w*) *b*))
+				(print (torch:data *y*))
+				(defparameter *loss* (torch:sum (torch:mul *y* *y*)))
+				(print (torch:item *loss*))
+				(torch:backward *loss*)
+				(print (torch:grad *w*))
+				(print (torch:grad *b*))
+				(torch:no-grad
+				  (print (torch:requires-grad-p (torch:mul *w* 2))))
+				(print (torch:requires-grad-p (torch:mul *w* 2)))
+				""")).isEqualTo("#f(5.5 11.5)\n162.5\n#f(80.0 114.0)\n34.0\nNIL\nT");
+	}
+
+	@Test
+	void compileAndRunTorchTrainingLoopWithNoGrad() throws Exception {
+		// Fit y = 2x by gradient descent on the MSE: ten forward/backward/update
+		// steps, the update inside torch:no-grad. The tensors are single-float
+		// (torch's default width, .kb/torch.md), and a #f element prints at its
+		// stored width, so the printed result is byte-identical on every backend
+		// (also the ci-spec torch-fit-cross-backend case).
+		assertThat(compileAndRunTorch("""
+				(defparameter *w* (torch:tensor '(0.0) :requires-grad t))
+				(defparameter *x* (torch:tensor '(1.0 2.0)))
+				(defparameter *y* (torch:tensor '(2.0 4.0)))
+				(dotimes (i 10)
+				  (let* ((diff (torch:sub (torch:mul *x* *w*) *y*))
+				         (loss (torch:mean (torch:mul diff diff))))
+				    (torch:backward loss)
+				    (torch:no-grad
+				      (setq *w* (torch:tensor (linalg:sub (torch:data *w*)
+				                                          (linalg:mul 0.125 (torch:grad *w*)))
+				                              :requires-grad t)))))
+				(print (torch:data *w*))
+				""")).isEqualTo("#f(1.9998901)");
+	}
+
+	@Test
+	void compileAndRunTorchGradcheckTable() throws Exception {
+		// The shared table-driven gradient check (TorchGradcheck): the analytic
+		// gradient of every differentiable op matches central differences. The
+		// closures the tape is made of are the part most likely to diverge between
+		// backends, so the whole table runs compiled too.
+		assertThat(compileAndRunTorch(am.ik.rontolisp.testsupport.TorchGradcheck.PROGRAM))
+			.isEqualTo(am.ik.rontolisp.testsupport.TorchGradcheck.EXPECTED);
+	}
+
+	@Test
+	void compileAndRunTorchModuleTrainingLoop() throws Exception {
+		// The nn acceptance program (TorchGradcheck.NN_TRAINING_PROGRAM): a
+		// torch:sequential MLP trained for 200 SGD steps over torch:parameters. It
+		// exercises the whole module layer compiled -- the fields walk, the forward
+		// closures, torch:zero-grad on a module and the in-place torch:set-data
+		// update inside torch:no-grad.
+		assertThat(compileAndRunTorch(am.ik.rontolisp.testsupport.TorchGradcheck.NN_TRAINING_PROGRAM))
+			.isEqualTo(am.ik.rontolisp.testsupport.TorchGradcheck.NN_TRAINING_EXPECTED);
+	}
+
+	@Test
+	void compileAndRunTorchRecordPrinting() throws Exception {
+		// TorchGradcheck.RECORD_PRINT_PROGRAM, shared verbatim with the interpreter and
+		// the WASM backends: the records are defstructs carrying a (:print-object ...),
+		// so a tensor renders identically everywhere -- which the tagged vectors they
+		// replaced could not do (one slot is a backward closure). The identity lines
+		// pin eq/eql/member on a record instance.
+		assertThat(compileAndRunTorch(am.ik.rontolisp.testsupport.TorchGradcheck.RECORD_PRINT_PROGRAM))
+			.isEqualTo(am.ik.rontolisp.testsupport.TorchGradcheck.RECORD_PRINT_EXPECTED);
+	}
+
+	@Test
+	void compileAndRunTorchElementTypes() throws Exception {
+		// TorchGradcheck.ELEMENT_TYPE_PROGRAM: torch originates every array at
+		// torch::*default-element-type* (single-float), and the width is inherited
+		// through a full forward and backward pass, while linalg keeps its double
+		// default. Compiled, the packed representation is picked statically, so a
+		// missed origination site shows up as a DOUBLE-FLOAT line here.
+		assertThat(compileAndRunTorch(am.ik.rontolisp.testsupport.TorchGradcheck.ELEMENT_TYPE_PROGRAM))
+			.isEqualTo(am.ik.rontolisp.testsupport.TorchGradcheck.ELEMENT_TYPE_EXPECTED);
+	}
+
+	@Test
+	void compileAndRunTorchFusedCompositions() throws Exception {
+		// TorchGradcheck.FUSED_PROGRAM: the fused torch nodes (.kb/torch.md) against the
+		// compositions they replaced, bit for bit, on the compiled backend.
+		assertThat(compileAndRunTorch(am.ik.rontolisp.testsupport.TorchGradcheck.FUSED_PROGRAM))
+			.isEqualTo(am.ik.rontolisp.testsupport.TorchGradcheck.FUSED_EXPECTED);
+	}
+
+	@Test
+	void compileAndRunTorchAttentionViews() throws Exception {
+		// TorchGradcheck.ATTENTION_PROGRAM: the scale and mask views torch:softmax folds
+		// into one node (2026-09-02) against the materialized chain, bit for bit, on the
+		// compiled backend.
+		assertThat(compileAndRunTorch(am.ik.rontolisp.testsupport.TorchGradcheck.ATTENTION_PROGRAM))
+			.isEqualTo(am.ik.rontolisp.testsupport.TorchGradcheck.ATTENTION_EXPECTED);
+	}
+
+	@Test
+	void compileAndRunTorchTransposeView() throws Exception {
+		// TorchGradcheck.VIEW_PROGRAM: the transpose view torch:matmul reads in place
+		// against the materialized transpose, bit for bit, on the compiled backend.
+		assertThat(compileAndRunTorch(am.ik.rontolisp.testsupport.TorchGradcheck.VIEW_PROGRAM))
+			.isEqualTo(am.ik.rontolisp.testsupport.TorchGradcheck.VIEW_EXPECTED);
+	}
+
+	@Test
+	void compileAndRunTorchOptimizerRules() throws Exception {
+		// The optimizer acceptance program (TorchGradcheck.OPTIMIZER_PROGRAM): the
+		// SGD/Adam rules against hand-computed values, the batching and mask helpers,
+		// and the residual-vs-plain identity-learning experiment -- the in-place
+		// element-wise parameter update compiled, plus the step-fn closure the
+		// optimizer record dispatches through.
+		assertThat(compileAndRunTorch(am.ik.rontolisp.testsupport.TorchGradcheck.OPTIMIZER_PROGRAM))
+			.isEqualTo(am.ik.rontolisp.testsupport.TorchGradcheck.OPTIMIZER_EXPECTED);
+	}
+
+	@Test
+	void compileAndRunJsonParseReturnsHashTablesAndVectors() throws Exception {
+		assertThat(compileAndRunJson("""
+				(let ((h (rontolisp:json-parse "{\\"name\\": \\"rontolisp\\", \\"n\\": 2}")))
+				  (print (list (gethash "name" h) (gethash "n" h))))
+				""")).isEqualTo("(\"rontolisp\" 2)");
+		assertThat(compileAndRunJson(
+				"(print (gethash \"b\" (gethash \"a\" (rontolisp:json-parse \"{\\\"a\\\": {\\\"b\\\": [1, true, null]}}\"))))"))
+			.isEqualTo("#(1 T NULL)");
+	}
+
+	@Test
+	void compileAndRunBuiltinNicknamesTriggerLibrarySplice() throws Exception {
+		// rl:/la: are built-in nicknames for rontolisp/linalg; the library pre-passes
+		// scan the program before package resolution, so they must recognize the
+		// nickname spellings or the splice never fires and compilation fails.
+		assertThat(compileAndRunJson("(print (gethash \"a\" (rl:json-parse \"{\\\"a\\\": 7}\")))")).isEqualTo("7");
+		assertThat(compileAndRunLinalg("(print (la:to-list (la:from-list '(1 2 3))))")).isEqualTo("(1.0 2.0 3.0)");
+	}
+
+	@Test
+	void compileAndRunJsonParseScalarsAndEscapes() throws Exception {
+		assertThat(compileAndRunJson("""
+				(print (rontolisp:json-parse "42"))
+				(print (rontolisp:json-parse "-3.5"))
+				(print (rontolisp:json-parse "1e3"))
+				(print (rontolisp:json-parse "1234567890123"))
+				(print (floatp (rontolisp:json-parse "1234567890123456789")))
+				(print (rontolisp:json-parse "[1, [2, \\"x\\"], null]"))
+				(print (rontolisp:json-parse "\\"\\\\u0041\\\\u3042\\""))
+				""")).isEqualTo("42\n-3.5\n1000.0\n1234567890123\nT\n#(1 #(2 \"x\") NULL)\n\"A\u3042\"");
+	}
+
+	@Test
+	void compileAndRunJsonParseObjectsAreHashTables() throws Exception {
+		assertThat(compileAndRunJson("""
+				(print (gethash "content-type"
+				                (rontolisp:json-parse "{\\"content-type\\": \\"text/html\\"}")))
+				""")).isEqualTo("\"text/html\"");
+	}
+
+	@Test
+	void compileAndRunJsonStringify() throws Exception {
+		assertThat(compileAndRunJson("""
+				(print (rontolisp:json-stringify (list 1 (list 2 3) nil)))
+				(print (rontolisp:json-stringify (vector t 'null 1.5)))
+				(print (rontolisp:json-stringify 3/2))
+				(let ((h (make-hash-table :test 'equal)))
+				  (setf (gethash "x" h) (list 1 2))
+				  (print (rontolisp:json-stringify h)))
+				""")).isEqualTo("\"[1,[2,3],false]\"\n\"[true,null,1.5]\"\n\"1.5\"\n\"{\\\"x\\\":[1,2]}\"");
+	}
+
+	@Test
+	void compileAndRunJsonRoundTrip() throws Exception {
+		assertThat(compileAndRunJson(
+				"(print (rontolisp:json-stringify (rontolisp:json-parse \"{\\\"deep\\\": {\\\"list\\\": [{\\\"k\\\": \\\"v\\\"}, 2.5, true]}}\")))"))
+			.isEqualTo("\"{\\\"deep\\\":{\\\"list\\\":[{\\\"k\\\":\\\"v\\\"},2.5,true]}}\"");
+	}
+
+	@Test
+	void compileAndRunJsonFunctionsAreFirstClass() throws Exception {
+		assertThat(compileAndRunJson("""
+				(print (funcall #'rontolisp:json-stringify (list 1 2)))
+				(print (funcall #'rontolisp:json-parse "[7]"))
+				""")).isEqualTo("\"[1,2]\"\n#(7)");
+	}
+
+	@Test
+	void compileAndRunJsonDoubleColonQualifierNamesTheSameFunctions() throws Exception {
+		assertThat(compileAndRunJson("""
+				(print (rontolisp::json-stringify (list 1 2 3)))
+				(print (gethash "n" (rontolisp::json-parse "{\\"n\\": 5}")))
+				""")).isEqualTo("\"[1,2,3]\"\n5");
+	}
+
+	@Test
+	void compileAndRunPlistAndAlistHashTable() throws Exception {
+		// single-key objects: hash-table iteration order is backend-specific
+		List<LispVal> program = am.ik.rontolisp.eval.JsonLibrary
+			.process(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString("""
+					(print (rontolisp:json-stringify (rontolisp:plist-hash-table (list :name "x"))))
+					(print (rontolisp:hash-table-plist (rontolisp:plist-hash-table (list :a 5))))
+					(print (rontolisp:json-stringify (rontolisp:alist-hash-table (list (cons "msg" "hi")))))
+					(print (rontolisp:hash-table-alist (rontolisp:alist-hash-table (list (cons "k" 7)))))
+					""")));
+		assertThat(compileAndRun(program))
+			.isEqualTo("\"{\\\"name\\\":\\\"x\\\"}\"\n(:A 5)\n\"{\\\"msg\\\":\\\"hi\\\"}\"\n((\"k\" . 7))");
+	}
+
+	@Test
+	void compileAndRunAlistPlistAndPlistAlist() throws Exception {
+		// no hash table in between, so the order is deterministic on every backend
+		List<LispVal> program = am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString("""
+				(print (rontolisp:alist-plist (list (cons :a 1) (cons :b 2))))
+				(print (rontolisp:plist-alist (list :a 1 :b 2)))
+				(print (rontolisp:alist-plist (rontolisp:plist-alist (list :x 1 :y 2))))
+				"""));
+		assertThat(compileAndRun(program)).isEqualTo("(:A 1 :B 2)\n((:A . 1) (:B . 2))\n(:X 1 :Y 2)");
+	}
+
+	@Test
+	void compileAndRunJsonStringifyClosInstance() throws Exception {
+		// CLOS instance -> object (slots in definition order), a hash-table slot
+		// nests as an object, a list slot as an array -- matching jzon
+		assertThat(compileAndRunJson("""
+				(defclass json-resp () ((status :initarg :status) (headers :initarg :headers) (items :initarg :items)))
+				(let ((h (make-hash-table :test 'equal)))
+				  (setf (gethash "content-type" h) "application/json")
+				  (print (rontolisp:json-stringify
+				          (make-instance 'json-resp :status 200 :headers h :items (list 1 2 3)))))
+				""")).isEqualTo(
+				"\"{\\\"status\\\":200,\\\"headers\\\":{\\\"content-type\\\":\\\"application/json\\\"},\\\"items\\\":[1,2,3]}\"");
+	}
+
+	@Test
+	void compileAndRunUrlDecodeAndEncode() throws Exception {
+		assertThat(compileAndRunUrl("""
+				(print (rontolisp:url-decode "Will+it+work%3F"))
+				(print (rontolisp:url-decode "%E3%81%82%E3%81%84"))
+				(print (rontolisp:url-encode "a b/c~d"))
+				(print (rontolisp:url-encode "あ"))
+				(print (rontolisp:url-decode (rontolisp:url-encode "日本語 text?&=")))
+				""")).isEqualTo("\"Will it work?\"\n\"あい\"\n\"a%20b%2Fc~d\"\n\"%E3%81%82\"\n\"日本語 text?&=\"");
+	}
+
+	@Test
+	void compileAndRunQueryParamsAndQueryParam() throws Exception {
+		assertThat(compileAndRunUrl("""
+				(print (rontolisp:query-params "a=1&b=two&flag"))
+				(print (rontolisp:query-params nil))
+				(print (rontolisp:query-param "a=1&name=ronto%20lisp" "name"))
+				(print (rontolisp:query-param "a=1" "missing"))
+				""")).isEqualTo("((\"a\" . \"1\") (\"b\" . \"two\") (\"flag\" . \"\"))\nNIL\n\"ronto lisp\"\nNIL");
+	}
+
+	@Test
+	void compileAndRunUrlPathAndUrlQuery() throws Exception {
+		assertThat(compileAndRunUrl("""
+				(print (rontolisp:url-path "/get?a=1"))
+				(print (rontolisp:url-query "/get?a=1"))
+				(print (rontolisp:url-query "/get"))
+				""")).isEqualTo("\"/get\"\n\"a=1\"\nNIL");
+	}
+
+	@Test
+	void compileAndRunUrlFunctionsAreFirstClass() throws Exception {
+		assertThat(compileAndRunUrl("""
+				(print (mapcar #'rontolisp:url-decode (list "a%2Bb" "1+2")))
+				(print (funcall #'rontolisp:url-encode "x y"))
+				""")).isEqualTo("(\"a+b\" \"1 2\")\n\"x%20y\"");
+	}
+
+	@Test
+	void compileAndRunDefunRest() throws Exception {
+		assertThat(compileAndRun("""
+				(defun f (a &rest r) (list a r))
+				(print (f 1 2 3))
+				(print (f 1))
+				""")).isEqualTo("(1 (2 3))\n(1 NIL)");
+	}
+
+	@Test
+	void compileAndRunExtraArgumentsPastAnOptionalTailSignalProgramError() throws Exception {
+		// Arguments past the lambda list are a program-error, not silently dropped --
+		// through a direct call, funcall, apply, a lambda, &aux and a built-in wrapper.
+		assertThat(compileAndRun(
+				"""
+						(defun ll-extra-opt (a &optional (b 2)) (list a b))
+						(print (ll-extra-opt 1 5))
+						(print (handler-case (ll-extra-opt 1 2 3) (program-error () :program-error)))
+						(print (handler-case (funcall #'ll-extra-opt 1 2 3) (program-error () :program-error)))
+						(print (handler-case (apply #'ll-extra-opt '(1 2 3)) (program-error () :program-error)))
+						(print (handler-case (funcall (lambda (&optional x y) (list x y)) 1 2 3) (program-error () :program-error)))
+						(print (handler-case (ll-extra-opt 1 2 3 4) (error (e) (princ-to-string e))))
+						(defun ll-extra-aux (a &aux (b (+ a 1))) (list a b))
+						(print (ll-extra-aux 1))
+						(print (handler-case (funcall #'ll-extra-aux 1 2) (program-error () :program-error)))
+						(print (handler-case (funcall #'princ 1 t 3) (program-error () :program-error)))
+						"""))
+			.isEqualTo(
+					"(1 5)\n:PROGRAM-ERROR\n:PROGRAM-ERROR\n:PROGRAM-ERROR\n:PROGRAM-ERROR\n\"Function expects at most 2 arguments, got 4\"\n(1 2)\n:PROGRAM-ERROR\n:PROGRAM-ERROR");
+	}
+
+	@Test
+	void theSurplusArgumentCheckCarriesNeitherTheStringRuntimeNorGenericLength() throws Exception {
+		// The &optional surplus-argument check renders its count through one shared
+		// runtime helper; spelled as prin1-to-string over (+ req (length rest)) it pulled
+		// the mutable-string wrap, the generic length and the code-point helpers into
+		// a program that uses none of them: 7,708 -> 12,394 B for this program (CLI
+		// -o). The helper costs 8,112 there, 8,102 here; 8,713 since a wrong-type
+		// operand's report names the operator (JvmOperandTypeRuntime: _teRaw, _opTypeErr
+		// and the (+ a b) wrapper); 8,940 since car/cdr name themselves (the &optional
+		// walk's _car/_cdr, and _opTypeErr's funnel-typed arm); 9,011 since an
+		// out-of-range subscript's compound type rides _opTypeErr verbatim.
+		byte[] classBytes = new JvmLispCompiler("Test")
+			.compile(LispReader.readAllFromString("(defun f (a &optional (b 2)) (+ a b)) (print (f 1))"));
+		assertThat(declaredMethodNames(classBytes)).doesNotContain("_toMutStr", "_strToCharVec", "_length", "_scount");
+		assertThat(classBytes.length).isLessThan(9_100);
+		assertThat(runClass(classBytes)).isEqualTo("3");
+	}
+
+	@Test
+	void theUnknownKeywordCheckCarriesNoMutableStringWrap() throws Exception {
+		// %ll-check-keys renders the offending key with the unwrapped %prin1-piece: its
+		// text only feeds %string-concat, and prin1-to-string's mutable-result wrap
+		// brought the array runtime along -- 14,218 -> 10,138 B for this program (CLI
+		// -o).
+		byte[] classBytes = new JvmLispCompiler("Test")
+			.compile(LispReader.readAllFromString("(defun k (a &key (b 2)) (+ a b)) (print (k 1 :b 3))"));
+		assertThat(declaredMethodNames(classBytes)).doesNotContain("_toMutStr", "_strToCharVec");
+		assertThat(runClass(classBytes)).isEqualTo("4");
+		assertThat(compileAndRun("""
+				(defun k (a &key (b 2)) (+ a b))
+				(print (handler-case (k 1 :c 3) (program-error (e) (princ-to-string e))))
+				(print (handler-case (k 1 :b) (program-error (e) (princ-to-string e))))
+				""")).isEqualTo("\"Unknown keyword argument: :C\"\n\"Odd number of keyword arguments: :B\"");
+	}
+
+	@Test
+	void compileAndRunALegalCallAtTheFullClArityStillRuns() throws Exception {
+		// Now that a surplus argument signals, a wrapper or prelude defun SHORTER than
+		// CL's lambda list would refuse a legal call: the read family's first-class
+		// wrappers take the whole optional tail, merge-pathnames its default-version,
+		// parse-namestring its keywords.
+		assertThat(compileAndRun("""
+				(with-input-from-string (s "ab")
+				  (print (list (funcall #'read-line s nil :eof) (funcall #'read-line s nil :eof)
+				               (funcall #'read-char s nil :done) (funcall #'peek-char nil s nil :peof))))
+				(with-input-from-string (s "xy")
+				  (print (list (funcall #'read-char s) (funcall #'peek-char nil s) (funcall #'read-line s)
+				               (handler-case (funcall #'read-char s) (end-of-file () :eof-signalled)))))
+				(print (namestring (merge-pathnames "a.txt" "/tmp/" nil)))
+				(print (multiple-value-list (parse-namestring "xx/tmp/abc.lisp" nil nil :start 2)))
+				""")).isEqualTo(
+				"(\"ab\" :EOF :DONE :PEOF)\n(#\\x #\\y \"y\" :EOF-SIGNALLED)\n\"/tmp/a.txt\"\n(#P\"/tmp/abc.lisp\" 15)");
+	}
+
+	@Test
+	void compileAndRunDefunOptional() throws Exception {
+		assertThat(compileAndRun("""
+				(defun f (x &optional (y 10) (z (* y 2) zp)) (list x y z zp))
+				(print (f 1))
+				(print (f 1 2))
+				(print (f 1 2 3))
+				""")).isEqualTo("(1 10 20 NIL)\n(1 2 4 NIL)\n(1 2 3 T)");
+	}
+
+	@Test
+	void anOptionalIsAParameterOfTheCompiledMethodAndTheMarkerTravelsOnlyWithOne() throws Exception {
+		// (a &optional b c) compiles to a method of a, b, c and the rest list the surplus
+		// check reads, so a call that passes b conses nothing; the UNSUPPLIED marker a
+		// short call passes lives behind _unsupp, which a class without an optional
+		// never declares (JvmUnsupplied).
+		byte[] withOptionals = new JvmLispCompiler("Test").compile(LispReader.readAllFromString(
+				"(defun opt-f (a &optional b (c 3)) (list a b c)) (print (list (opt-f 1) (opt-f 1 2 4)))"));
+		assertThat(java.lang.classfile.ClassFile.of()
+			.parse(withOptionals)
+			.methods()
+			.stream()
+			.filter(method -> method.methodName().equalsString("OPT-F"))
+			.map(method -> method.methodType().stringValue())
+			.toList()).containsExactly("(" + "Ljava/lang/Object;".repeat(4) + ")Ljava/lang/Object;");
+		assertThat(declaredMethodNames(withOptionals)).contains("_unsupp", "_unsuppInit");
+		assertThat(runClass(withOptionals)).isEqualTo("((1 NIL 3) (1 2 4))");
+		byte[] withoutOptionals = new JvmLispCompiler("Test")
+			.compile(LispReader.readAllFromString("(defun opt-g (a &rest r) (list a r)) (print (opt-g 1 2))"));
+		assertThat(declaredMethodNames(withoutOptionals)).doesNotContain("_unsupp", "_unsuppInit");
+		assertThat(declaredFieldNames(withoutOptionals)).doesNotContain("_unsupplied");
+	}
+
+	@Test
+	void compileAndRunTestsCompiledAsTests() throws Exception {
+		// The shared expander's and/cond shapes (an and is nested ifs, a cond's constant
+		// clause is folded) on the JVM: the same program and answers as
+		// WasmLispCompilerIntegrationTest#compileAndRunTestsCompiledAsTests.
+		assertThat(compileAndRun(
+				"""
+						(defun p (x) (print x))
+						(p (list (and) (and 1) (and 1 2) (and nil 2) (and 1 nil 3) (and 1 2 3)))
+						(p (list (or) (or 1) (or nil 2) (or nil nil) (or nil 1 (error "no"))))
+						(p (list (cond) (cond (t)) (cond (t 1 2)) (cond (nil 1) (t 2)) (cond ((consp 1) 1) (5) (t 9)) (cond ((atom 1) 'a 'b) (t 'c))))
+						(defun f (x) (if (and (consp x) (eq (car x) 'a)) :a (if (or (null x) (atom x)) :atom :other)))
+						(p (list (f '(a 1)) (f '(b 1)) (f nil) (f 3)))
+						(defun g (x) (list (not (consp x)) (null (cdr x)) (not (not x)) (not (and x (consp x))) (not (or (null x) (eql (car x) 1)))))
+						(p (list (g '(1)) (g '(2 3)) (g nil)))
+						(defun h (l) (let ((n 0)) (while (and l (< n 3)) (setq n (+ n 1)) (setq l (cdr l))) n))
+						(p (list (h '(1 2 3 4 5)) (h '(1)) (h nil)))
+						(defun k (l) (do ((c l (cdr c))) ((or (atom c) (eql (car c) 'stop)) (if (consp c) :stopped :end)) nil))
+						(p (list (k '(1 2 stop 3)) (k '(1 2)) (k 'x)))
+						(defun r (l) (block b (if (or (null l) (return-from b :early)) :nil :cons)))
+						(p (list (r nil) (r '(1))))
+						(defun s (x) (if (not (or (eq x 'a) (eq x 'b))) :other :ab))
+						(p (list (s 'a) (s 'b) (s 'c)))
+						(defun u (x) (case x ((a b) 1) (c 2) (otherwise 3)))
+						(p (list (u 'a) (u 'b) (u 'c) (u 'd)))
+						(defun v (x y) (if (and (numberp x) (numberp y) (< x y)) :lt :not))
+						(p (list (v 1 2) (v 2 1) (v 'a 1) (v 1 'b)))
+						(defun w (x) (if x (if t 1 2) (if nil 3 4)))
+						(p (list (w t) (w nil) (if t 5) (if nil 5)))
+						(p (list (and 1 (or nil 2) (and 3 4)) (or (and 1 nil) (and 2 3)) (not (and 1 (or nil nil)))))
+						(p (let ((i 0) (acc nil)) (while (or (< i 2) (and (< i 4) (evenp i))) (push i acc) (setq i (+ i 1))) acc))
+						(p (list (eql 1.5 1.5) (eq 'a 'a) (eql #\\a #\\a) (eq 1 1) (eql (expt 2 70) (expt 2 70)) (if (eql 3/4 3/4) 1 2) (if (eq 3.0 3.0) 1 2) (if (eql 3.0 3.0) 1 2)))
+						(defun tst (x) (if (and (stringp x) (string= x "hi")) :hi (if (or (eql x 1) (eql x 2)) :onetwo :no)))
+						(p (list (tst "hi") (tst "ho") (tst 1) (tst 2) (tst 3)))
+						"""))
+			.isEqualTo("(T 1 2 NIL NIL 3)\n(NIL 1 2 NIL 1)\n(NIL T 2 2 5 B)\n(:A :OTHER :ATOM :ATOM)\n"
+					+ "((NIL T T NIL NIL) (NIL NIL T NIL T) (T T NIL T NIL))\n(3 1 0)\n(:STOPPED :END :END)\n"
+					+ "(:NIL :EARLY)\n(:AB :AB :OTHER)\n(1 1 2 3)\n(:LT :NOT :NOT :NOT)\n(1 4 5 NIL)\n(4 3 T)\n"
+					+ "(2 1 0)\n(T T T T T 1 1 1)\n(:HI :NO :ONETWO :ONETWO :NO)");
+	}
+
+	@Test
+	void compileAndRunDefunKeywordArguments() throws Exception {
+		assertThat(compileAndRun("""
+				(defun f (a &key (k 1 kp) m) (list a k kp m))
+				(print (f 0))
+				(print (f 0 :k 5))
+				(print (f 0 :m 7 :k 9))
+				(print (f 0 :bogus 1 :allow-other-keys t))
+				""")).isEqualTo("(0 1 NIL NIL)\n(0 5 T NIL)\n(0 9 T 7)\n(0 1 NIL NIL)");
+	}
+
+	@Test
+	void compileAndRunDefunOptionalRestKeyCombined() throws Exception {
+		assertThat(compileAndRun("""
+				(defun f (a &optional b &rest r &key c &allow-other-keys) (list a b r c))
+				(print (f 1 2 :c 3 :d 4))
+				(defun g (x &aux (y (+ x 1)) z) (list x y z))
+				(print (g 5))
+				""")).isEqualTo("(1 2 (:C 3 :D 4) 3)\n(5 6 NIL)");
+	}
+
+	@Test
+	void compileAndRunVariadicFirstClass() throws Exception {
+		assertThat(compileAndRun("""
+				(defun f (a &rest r) (list a r))
+				(print (funcall (lambda (&rest xs) xs) 1 2 3))
+				(print (funcall #'f 1 2 3))
+				(print (apply #'f 1 (list 2 3)))
+				(print (mapcar (lambda (x &optional (y 100)) (+ x y)) (list 1 2 3)))
+				(print ((lambda (a &rest r) (list a r)) 1 2 3))
+				""")).isEqualTo("(1 2 3)\n(1 (2 3))\n(1 (2 3))\n(101 102 103)\n(1 (2 3))");
+	}
+
+	// A direct call of the program's own function with a count its lambda list rules
+	// out is the interpreter's program-error when it RUNS, its arguments evaluated first
+	// (compiler/DefinedCallArity): it failed the compile, so a program whose wrong call
+	// sat in a branch never taken or under a program-error handler did not compile. The
+	// dispatcher a defmethod on a built-in is renamed to reports as the built-in, on the
+	// direct and the function-value path alike, as the interpreter's does.
+	@Test
+	void compileAndRunADirectCallOfAProgramFunctionWithAWrongCountSignalsAtCallTime() throws Exception {
+		assertThat(compileAndRun("""
+				(defun ud (a b) (list a b))
+				(defun ur (a &rest r) (list a r))
+				(defun uo (a &optional b) (list a b))
+				(defclass wc-box () ())
+				(defmethod length ((b wc-box)) 42)
+				(defun wc-rep (thunk) (handler-case (funcall thunk) (program-error (c) (princ-to-string c))))
+				(print (wc-rep (lambda () (ud 1))))
+				(print (let ((n 0)) (list (wc-rep (lambda () (ud (incf n) (incf n) (incf n)))) n)))
+				(print (wc-rep (lambda () (ur))))
+				(print (wc-rep (lambda () (uo 1 2 3))))
+				(print (wc-rep (lambda () ((lambda (a) a) 1 2))))
+				(print (wc-rep (lambda () (length '(1) 2))))
+				(print (wc-rep (lambda () (funcall #'length '(1) 2))))
+				(print (list (ud 1 2) (ur 1 2 3) (length (make-instance 'wc-box)) (length '(1 2))))
+				""")).isEqualTo("""
+				"Function expects 2 arguments, got 1"
+				("Function expects 2 arguments, got 3" 3)
+				"Function expects at least 1 argument, got 0"
+				"Function expects at most 2 arguments, got 3"
+				"Function expects 1 argument, got 2"
+				"LENGTH expects 1 argument, got 2"
+				"LENGTH expects 1 argument, got 2"
+				((1 2) (1 (2 3)) 42 2)""");
+	}
+
+	@Test
+	void compileAndRunAMethodNotCongruentWithItsGenericIsRefusedWhereItIsAdded() throws Exception {
+		// The JVM twin of
+		// LispEvaluatorTest#aMethodNotCongruentWithItsGenericIsRefusedWhereItIsAdded.
+		assertThat(compileAndRun(
+				am.ik.rontolisp.cli.CompileFrontendAccess.corpus(am.ik.rontolisp.LambdaListCongruenceFixture.PROGRAM,
+						am.ik.rontolisp.reader.Features.JVM, false, false)))
+			.isEqualTo(am.ik.rontolisp.LambdaListCongruenceFixture.EXPECTED);
+	}
+
+	@Test
+	void compileAndRunAnUncaughtLambdaListRefusalWarnsAndEndsTheProgramAtItsForm() throws Exception {
+		// A refusal the compile can see is a call-time program-error at the defmethod,
+		// warned about like any static program-error; the macro-time evaluator leaves the
+		// refused definition out instead of failing the compile.
+		for (String[] program : new String[][] {
+				{ am.ik.rontolisp.LambdaListCongruenceFixture.UNCAUGHT_PROGRAM,
+						am.ik.rontolisp.LambdaListCongruenceFixture.UNCAUGHT_REPORT },
+				{ am.ik.rontolisp.LambdaListCongruenceFixture.DEFGENERIC_PROGRAM,
+						am.ik.rontolisp.LambdaListCongruenceFixture.DEFGENERIC_REPORT } }) {
+			ByteArrayOutputStream err = new ByteArrayOutputStream();
+			Throwable cause;
+			try (var _ = ThreadStdio.err(err)) {
+				cause = catchThrowable(() -> compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(program[0],
+						am.ik.rontolisp.reader.Features.JVM, false, false)));
+			}
+			String report = program[1].substring("Unhandled condition: ".length());
+			assertThat(err.toString()).contains("warning: " + report + "; compiled as a call-time program-error")
+				.contains(program[1]);
+			assertThat(cause).isInstanceOf(InvocationTargetException.class);
+		}
+	}
+
+	@Test
+	void compileRefusesRedefiningAGenericWithADifferentRequiredCount() {
+		// The interpreter redefines in place (LispEvaluatorTest
+		// #aDefgenericAnExistingMethodIsNotCongruentWithIsRefused); a compiled program
+		// has one dispatcher per generic.
+		assertThatThrownBy(() -> compileAndRun("""
+				(defgeneric rd-g (a) (:method (a) (list :one a)))
+				(defgeneric rd-g (a b))
+				""")).hasMessageContaining(
+				"DEFGENERIC RD-G: redefining a generic function with a different number of required parameters");
+	}
+
+	@Test
+	void compileAndRunAnUncaughtWrongDefunCountWarnsAndReportsTheSameLine() throws Exception {
+		ByteArrayOutputStream err = new ByteArrayOutputStream();
+		Throwable cause;
+		try (var _ = ThreadStdio.err(err)) {
+			cause = catchThrowable(() -> compileAndRun("""
+					(defun ud (a b) (+ a b))
+					(print (ud 1))
+					"""));
+		}
+		assertThat(err.toString().trim()).isEqualTo("""
+				warning: Function expects 2 arguments, got 1; compiled as a call-time program-error
+				Unhandled condition: Function expects 2 arguments, got 1""");
+		assertThat(cause).isInstanceOf(InvocationTargetException.class);
+	}
+
+	// The instance tag is written with |...| because the reader upcases every ordinary
+	// symbol: a source-written '%struct-POINT reads as %STRUCT-POINT and can never match
+	// a real tag, which is what stops a program forging an instance.
+	@Test
+	void compileAndRunInstancePrimitives() throws Exception {
+		assertThat(compileAndRun("""
+				(defstruct point x y)
+				(setq p (%obj-new '|%struct-POINT| 10 20))
+				(print (%obj-ref p 0))
+				(print (%obj-set p 1 99))
+				(print (%obj-ref p 1))
+				(print (%obj-is p '|%struct-POINT|))
+				(print (%obj-is p '|%struct-OTHER| '|%struct-POINT|))
+				(print (%obj-is p '|%struct-OTHER|))
+				(print (%obj-tag p))
+				(print (%obj-p p))
+				(print (%obj-ref (%obj-new '|%struct-POINT| 1) 1))
+				""")).isEqualTo("10\n99\n99\nT\nT\nNIL\n|%struct-POINT|\nT\nNIL");
+	}
+
+	@Test
+	void compileAndRunInstancePredicateRejectsEveryOtherShape() throws Exception {
+		assertThat(compileAndRun("""
+				(defstruct point x y)
+				(print (list (%obj-p nil) (%obj-p (cons 1 2)) (%obj-p '(1 2 3)) (%obj-p 1/2)
+				             (%obj-p #\\a) (%obj-p "s") (%obj-p 5) (%obj-p 1.5)
+				             (%obj-p (make-array 2)) (%obj-p (make-hash-table)) (%obj-p #'car)
+				             (%obj-p (cons #'car 2)) (%obj-p (cons "x" 2))))
+				(print (%obj-tag (cons 1 2)))
+				""")).isEqualTo("(NIL NIL NIL NIL NIL NIL NIL NIL NIL NIL NIL NIL NIL)\nNIL");
+	}
+
+	// CLHS 3.2.4.4: a literal object a macro spliced into its expansion is dumped
+	// through its own make-load-form method, not by structure -- which is the only way
+	// an object with an unspellable slot (the hash table here, a cffi foreign type's
+	// keyword map in the real case) can travel into compiled code at all.
+	@Test
+	void compileAndRunLiteralObjectDumpedByMakeLoadForm() throws Exception {
+		assertThat(compileAndRunExpanded("""
+				(defclass box () ((name :initarg :name :accessor box-name) (cache :initarg :cache)))
+				(defmethod make-load-form ((b box) &optional env)
+				  (declare (ignore env))
+				  (list 'make-instance ''box :name (box-name b)))
+				(defparameter *box* (make-instance 'box :name "dumped" :cache (make-hash-table)))
+				(defmacro splice-box () *box*)
+				(princ (box-name (splice-box)))
+				""")).isEqualTo("dumped");
+	}
+
+	// The built-in default is unchanged: a type nobody wrote a method for is still
+	// dumped by STRUCTURE, so an unspellable slot still fails the compile. This is the
+	// half that keeps every #S(...) literal in every other program travelling as before.
+	@Test
+	void compileRefusesALiteralObjectWithNoMakeLoadFormMethod() {
+		assertThatThrownBy(() -> compileAndRunExpanded("""
+				(defclass box () ((name :initarg :name :accessor box-name) (cache :initarg :cache)))
+				(defparameter *box* (make-instance 'box :name "dumped" :cache (make-hash-table)))
+				(defmacro splice-box () *box*)
+				(princ (box-name (splice-box)))
+				""")).hasMessageContaining("Cannot quote");
+	}
+
+	// make-load-form-saving-slots answers the same creation form the quote compilers
+	// dump an instance as, so a method delegating to it (cl-ppcre's charmap/charset)
+	// gets the built-in answer rather than an error.
+	@Test
+	void compileAndRunMakeLoadFormSavingSlots() throws Exception {
+		assertThat(compileAndRunExpanded("""
+				(defstruct pt x y)
+				(defmethod make-load-form ((p pt) &optional env)
+				  (make-load-form-saving-slots p :environment env))
+				(defparameter *p* (make-pt :x 3 :y "four"))
+				(defmacro splice-pt () *p*)
+				(princ (make-load-form *p*))
+				(terpri)
+				(princ (list (pt-x (splice-pt)) (pt-y (splice-pt))))
+				""")).isEqualTo("(%OBJ-NEW '%struct-PT '3 'four)\n(3 four)");
+	}
+
+	@Test
+	void compileAndRunInstanceSlotsAndEqualp() throws Exception {
+		assertThat(compileAndRun("""
+				(defstruct point x y)
+				(defstruct empty)
+				(defclass box () ((w :initarg :w)))
+				(print (list (%obj-slots (%obj-new '|%struct-POINT| 1 "hi"))
+				             (%obj-slots (%obj-new '|%struct-EMPTY|))
+				             (%obj-slots '(1 2)) (%obj-slots 5)))
+				(print (list (equalp (make-point :x 1 :y "A") (make-point :x 1 :y "a"))
+				             (equalp (make-point :x 1 :y "A") (make-point :x 2 :y "a"))
+				             (equalp (make-point :x 1 :y 2) (make-point :x 1.0 :y 2))
+				             (equalp (make-instance 'box :w 1) (make-instance 'box :w 1))
+				             (equalp (make-point :x 1 :y 2) (make-instance 'box :w 1))))
+				(print (list (equal (make-point :x 1 :y 2) (make-point :x 1 :y 2))
+				             (equal (make-point :x 1 :y 2) (make-point :x 1 :y 9))
+				             (equal (make-point :x 1 :y 2) (list 1 2))))
+				""")).isEqualTo("((1 \"hi\") NIL NIL NIL)\n(T NIL T T NIL)\n(NIL NIL NIL)");
+		assertThat(compileAndRun("""
+				(defstruct point x y)
+				(defstruct empty)
+				(defclass box () ((w :initarg :w)))
+				(print (list (%obj-print-frame (make-point)) (%obj-print-frame (make-empty))
+				             (%obj-print-frame (make-instance 'box)) (%obj-print-frame '(1 2)) (%obj-print-frame 5)))
+				""")).isEqualTo("((NIL \"POINT\" \"X\" \"Y\") (NIL \"EMPTY\") (T \"BOX\" \"W\") NIL NIL)");
+	}
+
+	// A program with BOTH a layout constant and a condition channel shares one <clinit>;
+	// an under-declared max_stack there is a load-time VerifyError, so this must RUN.
+	@Test
+	void compileAndRunInstancePrimitivesAlongsideHandlerCase() throws Exception {
+		assertThat(compileAndRun("""
+				(defstruct point x y)
+				(setq p (%obj-new '|%struct-POINT| 1 2))
+				(print (handler-case (error "boom") (error (e) (%obj-ref p 1))))
+				""")).isEqualTo("2");
+	}
+
+	// A #S(...) source literal is folded into an instance before compilation, so it must
+	// print and behave exactly like the constructed one. The printer's max_stack is
+	// hand-written, so this RUNS the class.
+	@Test
+	void compileAndRunStructLiteral() throws Exception {
+		assertThat(compileAndRun("""
+				(defstruct point x y)
+				(print #S(POINT :X 1 :Y "hi"))
+				(print (list (point-p #S(POINT :X 1 :Y 2)) (consp #S(POINT :X 1 :Y 2)) (point-x #S(POINT :X 7 :Y 2))))
+				(print (equal #S(POINT :X 1 :Y 2) (make-point :x 1 :y 2)))
+				""")).isEqualTo("#S(POINT :X 1 :Y \"hi\")\n(T NIL 7)\nNIL");
+	}
+
+	@Test
+	void compileAndRunStructLiteralShapes() throws Exception {
+		assertThat(compileAndRun("""
+				(defstruct point (x 10) (y 20))
+				(defstruct empty)
+				(defstruct outer i)
+				(print '#S(POINT :X 1 :Y 2))
+				(print `(a #S(POINT :X 3 :Y 4)))
+				(print (aref #(#S(POINT :X 5 :Y 6)) 0))
+				(print #s(point :y 2))
+				(print #S(POINT :X 1 :Y 2 :X 99))
+				(print #S(EMPTY))
+				(print #S(OUTER :I #S(EMPTY)))
+				(print (point-x #S(POINT :X (+ 1 2))))
+				""")).isEqualTo("""
+				#S(POINT :X 1 :Y 2)
+				(A #S(POINT :X 3 :Y 4))
+				#S(POINT :X 5 :Y 6)
+				#S(POINT :X 10 :Y 2)
+				#S(POINT :X 1 :Y 2)
+				#S(EMPTY)
+				#S(OUTER :I #S(EMPTY))
+				(+ 1 2)""");
+	}
+
+	@Test
+	void compileStructLiteralOfAnUnknownTypeFails() {
+		assertThatThrownBy(() -> compileAndRun("(print #S(NOPE :X 1))"))
+			.hasMessageContaining("NOPE is not a defined structure type");
+	}
+
+	@Test
+	void compileStructLiteralOfAnUnknownSlotFails() {
+		assertThatThrownBy(() -> compileAndRun("(defstruct point x y) (print #S(POINT :Z 1))"))
+			.hasMessageContaining("POINT has no slot named :Z");
+	}
+
+	@Test
+	void compileStructLiteralBeforeItsDefstructFails() {
+		assertThatThrownBy(() -> compileAndRun("(print #S(POINT :X 1)) (defstruct point x)"))
+			.hasMessageContaining("POINT is not a defined structure type");
+	}
+
+	@Test
+	void compileAndRunDefstructBasics() throws Exception {
+		assertThat(compileAndRun("""
+				(defstruct point x (y 10))
+				(setq p (make-point :x 1))
+				(print (point-x p))
+				(print (point-y p))
+				(print (point-p p))
+				(print (point-p '(1 2)))
+				(setq q (copy-point p))
+				(setf (point-x q) 100)
+				(print (point-x p))
+				(print (point-x q))
+				""")).isEqualTo("1\n10\nT\nNIL\n1\n100");
+	}
+
+	@Test
+	void compileAndRunDefstructAccessorsSignalATypeErrorOnANonInstance() throws Exception {
+		// A non-instance fails the instance guard -- a cons is an Object[] too, and
+		// the accessor read (and the setf wrote) one of its fields -- and signals the
+		// accessor's type-error, not a ClassCastException.
+		assertThat(compileAndRun("""
+				(defstruct point x y)
+				(defvar *v* nil)
+				(defun te (thunk)
+				  (handler-case (funcall thunk)
+				    (type-error (e) (list (type-error-datum e) (eq (type-error-expected-type e) 'point)
+				                          (princ-to-string e)))))
+				(print (te (lambda () (point-x 42))))
+				(print (te (lambda () (point-y (cons 1 2)))))
+				(print (te (lambda () (setf (point-y (cons 1 2)) (progn (setq *v* :v) 0)))))
+				(print *v*)
+				(print (te (lambda () (incf (point-x "s")))))
+				(print (te (lambda () (copy-point nil))))
+				(let ((p (make-point :x 1))) (setf (point-y p) 2) (incf (point-x p)) (print (list p (copy-point p))))
+				""")).isEqualTo("""
+				(42 T "POINT-X: The value 42 is not of type POINT")
+				((1 . 2) T "POINT-Y: The value (1 . 2) is not of type POINT")
+				((1 . 2) T "(SETF POINT-Y): The value (1 . 2) is not of type POINT")
+				:V
+				("s" T "POINT-X: The value \\"s\\" is not of type POINT")
+				(NIL T "COPY-POINT: The value NIL is not of type POINT")
+				(#S(POINT :X 2 :Y 2) #S(POINT :X 2 :Y 2))""");
+	}
+
+	@Test
+	void compileAndRunAPrunedBundledDefstructThroughTheRegistrationMarker() throws Exception {
+		// The pruner expands a bundled-library defstruct into its defuns ahead of
+		// pruning and leaves a %struct-definition marker in the stream; this pass
+		// re-runs the registration from the marker, so setf places, the predicate and
+		// construction still compile with the unreferenced accessors pruned.
+		java.util.List<LispVal> pruned = am.ik.rontolisp.eval.LibraryDefunPruner.prune(LispReader.readAllFromString("""
+				(defstruct (torch::rec (:%intern-package "TORCH")) a b c)
+				(setq r (torch::make-rec :a 1 :b 2 :c 3))
+				(setf (torch::rec-a r) 10)
+				(print (torch::rec-a r))
+				(print (torch::rec-p r))
+				"""));
+		assertThat(compileAndRun(pruned)).isEqualTo("10\nT");
+	}
+
+	@Test
+	void compileAndRunDefstructSetfPlacesAndFirstClassAccessors() throws Exception {
+		assertThat(compileAndRun("""
+				(defstruct point x y)
+				(setq p (make-point :x 1 :y 2))
+				(setf (point-x p) 99)
+				(incf (point-y p) 5)
+				(print (list (point-x p) (point-y p)))
+				(print (mapcar #'point-x (list (make-point :x 10) (make-point :x 20))))
+				(defun shift (pt dx) (incf (point-x pt) dx) pt)
+				(print (point-x (shift p 1)))
+				""")).isEqualTo("(99 7)\n(10 20)\n100");
+	}
+
+	@Test
+	void compileAndRunDefstructInUserPackage() throws Exception {
+		assertThat(compileAndRun("""
+				(defpackage :geo (:use :cl))
+				(in-package :geo)
+				(defstruct pt x y)
+				(defun dist2 (p) (+ (* (pt-x p) (pt-x p)) (* (pt-y p) (pt-y p))))
+				(in-package :cl-user)
+				(setq p (geo::make-pt :x 3 :y 4))
+				(print (geo::dist2 p))
+				(print (geo::pt-p p))
+				""")).isEqualTo("25\nT");
+	}
+
+	@Test
+	void compileNestedDefstructFails() {
+		assertThatThrownBy(() -> compileAndRun("(defun f () (defstruct point x y)) (f)"))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("DEFSTRUCT is only supported as a top-level form");
+	}
+
+	@Test
+	void aSpecialReadByNameAnswersTheActiveBinding() throws Exception {
+		// Interpreter parity (the LispEvaluatorTest twin): symbol-value and eval resolve
+		// a special through its variable -- this thread's active _d$ cell, else _g$ --
+		// never through the eval runtime's _genv mirror, which no binding restores; an
+		// eval'd setq stores where setq does.
+		assertThat(compileAndRun(am.ik.rontolisp.SpecialReadByNameFixture.SOURCE))
+			.isEqualTo(am.ik.rontolisp.SpecialReadByNameFixture.EXPECTED);
+		assertThat(compileAndRun(am.ik.rontolisp.SpecialReadByNameFixture.SET_SOURCE))
+			.isEqualTo(am.ik.rontolisp.SpecialReadByNameFixture.SET_EXPECTED);
+	}
+
+	@Test
+	void boundpAnswersInsideABindingOfASpecialWithoutAValue() throws Exception {
+		// Interpreter parity (the LispEvaluatorTest twin): such a special's _g$ starts as
+		// the UNBOUND marker, so boundp answers t for this thread's _d$ binding and nil
+		// again after it, instead of the _genv mirror's entry, which no binding writes
+		// and
+		// a callee's setq inside one writes for good.
+		assertThat(compileAndRun(am.ik.rontolisp.BoundpInBindingFixture.SOURCE))
+			.isEqualTo(am.ik.rontolisp.BoundpInBindingFixture.EXPECTED);
+		assertThat(compileAndRun(am.ik.rontolisp.BoundpInBindingFixture.STORE_SOURCE))
+			.isEqualTo(am.ik.rontolisp.BoundpInBindingFixture.STORE_EXPECTED);
+		assertThat(compileAndRun(am.ik.rontolisp.BoundpInBindingFixture.LITERAL_SOURCE))
+			.isEqualTo(am.ik.rontolisp.BoundpInBindingFixture.LITERAL_EXPECTED);
+		// A read of it while it has no value signals the unbound-variable naming it,
+		// never answering the marker.
+		assertThat(compileAndRun(am.ik.rontolisp.BoundpInBindingFixture.UNBOUND_READ_SOURCE))
+			.isEqualTo(am.ik.rontolisp.BoundpInBindingFixture.UNBOUND_READ_EXPECTED);
+		// A user definition under the shared dispatch's name (its segments extend it)
+		// keeps the runtime out, and each site spells the dispatch.
+		assertThat(compileAndRun(
+				"(defun %boundp-dynamic-shadow () :user)\n" + am.ik.rontolisp.BoundpInBindingFixture.SOURCE))
+			.isEqualTo(am.ik.rontolisp.BoundpInBindingFixture.EXPECTED);
+	}
+
+	@Test
+	void boundpAndFboundpAreFunctionValues() throws Exception {
+		// #'boundp / #'fboundp are reference-gated wrappers over the computed probes, so
+		// they reach mapcar, funcall and apply and answer a special bound by a let.
+		assertThat(compileAndRun(am.ik.rontolisp.BoundpFunctionValueFixture.SOURCE))
+			.isEqualTo(am.ik.rontolisp.BoundpFunctionValueFixture.EXPECTED);
+	}
+
+	@Test
+	void theFunctionNamespaceOfTNilAndAKeywordIsUnbound() throws Exception {
+		// The JVM twin of
+		// LispEvaluatorTest#theFunctionNamespaceOfTNilAndAKeywordIsUnbound.
+		assertThat(compileAndRun(am.ik.rontolisp.UnboundFunctionDesignatorFixture.SOURCE))
+			.isEqualTo(am.ik.rontolisp.UnboundFunctionDesignatorFixture.EXPECTED);
+	}
+
+	@Test
+	void aCallThroughAComputedNameSeesTheRuntimeFunctionNamespace() throws Exception {
+		// The JVM twin of
+		// LispEvaluatorTest#aCallThroughAComputedNameSeesTheRuntimeFunctionNamespace: the
+		// dispatchers probe _fenv before the registry.
+		assertThat(compileAndRun(am.ik.rontolisp.RuntimeFunctionNamespaceCallFixture.SOURCE))
+			.isEqualTo(am.ik.rontolisp.RuntimeFunctionNamespaceCallFixture.EXPECTED);
+	}
+
+	@Test
+	void aNameOnlySetfSymbolFunctionBindsIsUndefinedUntilTheSetfRuns() throws Exception {
+		// The JVM twin of
+		// LispEvaluatorTest#aNameOnlySetfSymbolFunctionBindsIsUndefinedUntilTheSetfRuns:
+		// #'name
+		// reads _fenv instead of answering the forwarder defun.
+		assertThat(compileAndRun(am.ik.rontolisp.SetfSymbolFunctionReferenceFixture.SOURCE))
+			.isEqualTo(am.ik.rontolisp.SetfSymbolFunctionReferenceFixture.EXPECTED);
+	}
+
+	@Test
+	void theFunctionNamespaceOfARetiredNameIsUnbound() throws Exception {
+		// The JVM twin of
+		// LispEvaluatorTest#theFunctionNamespaceOfARetiredNameIsUnbound.
+		assertThat(compileAndRun(am.ik.rontolisp.RetiredFunctionDesignatorFixture.SOURCE))
+			.isEqualTo(am.ik.rontolisp.RetiredFunctionDesignatorFixture.EXPECTED);
+	}
+
+	@Test
+	void aSpecialWithoutAValueCarriesTheUnboundMarkerAndOnlyAProbedBoundOneAsksDbound() throws Exception {
+		// A literal probe of a bound special no definer gives a value reads its variable
+		// and never the mirror: on one thread its _g$ field, which the shallow binding
+		// sets, against the marker; where another thread can run Lisp code (here a host,
+		// through the export) _dbound over its ThreadLocal and global. Every special
+		// without a value carries the marker in its _g$ field, probed or not, and its
+		// read passes the value through _bound, which signals for the marker; a special
+		// a definer gives a value keeps the plain representation and the plain read, so
+		// such a program compiles as it did.
+		String probe = "(defvar *ub*) (defun ub-p () (boundp '*ub*)) (print (let ((*ub* 1)) (ub-p)))";
+		byte[] tracked = new JvmLispCompiler("Test")
+			.compile(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString(probe)));
+		assertThat(declaredFieldNames(tracked)).contains("_unbound");
+		assertThat(declaredMethodNames(tracked)).doesNotContain("_dbound", "_envLookup");
+		assertThat(fieldReadsIn(tracked, "UB-P", "_unbound")).isOne();
+		assertThat(runClass(tracked)).isEqualTo("T");
+		byte[] threaded = new JvmLispCompiler("Test").compile(am.ik.rontolisp.eval.LispPreludeLibrary
+			.process(LispReader.readAllFromString(probe + " (rontolisp:jvm-export 'ub-p :params '() :returns :bool)")));
+		assertThat(declaredFieldNames(threaded)).contains("_unbound");
+		assertThat(declaredMethodNames(threaded)).contains("_dbound");
+		assertThat(ownCallsIn(threaded, "UB-P", "_dbound")).isOne();
+		assertThat(ownCallsIn(threaded, "UB-P", "_envLookup")).isZero();
+		assertThat(runClass(threaded)).isEqualTo("T");
+		byte[] neverBound = new JvmLispCompiler("Test").compile(am.ik.rontolisp.eval.LispPreludeLibrary
+			.process(LispReader.readAllFromString("(defvar *ub*) (defun ub-p () (boundp '*ub*)) (print (ub-p))")));
+		assertThat(declaredFieldNames(neverBound)).contains("_unbound");
+		assertThat(declaredMethodNames(neverBound)).doesNotContain("_dbound", "_envLookup");
+		String unprobed = "(defvar *ub*) (defun ub-p () *ub*) (print (let ((*ub* 1)) (ub-p)))";
+		byte[] read = new JvmLispCompiler("Test")
+			.compile(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString(unprobed)));
+		assertThat(declaredFieldNames(read)).contains("_unbound");
+		assertThat(declaredMethodNames(read)).contains("_bound").doesNotContain("_dbound");
+		assertThat(ownCallsIn(read, "UB-P", "_bound")).isOne();
+		assertThat(runClass(read)).isEqualTo("1");
+		byte[] valued = new JvmLispCompiler("Test").compile(am.ik.rontolisp.eval.LispPreludeLibrary
+			.process(LispReader.readAllFromString("(defvar *ub* 0) (defun ub-p () (boundp '*ub*)) (defun ub-r () *ub*)"
+					+ " (print (let ((*ub* 1)) (list (ub-p) (ub-r))))")));
+		assertThat(declaredFieldNames(valued)).doesNotContain("_unbound");
+		assertThat(declaredMethodNames(valued)).doesNotContain("_dbound", "_bound");
+		assertThat(runClass(valued)).isEqualTo("(T 1)");
+	}
+
+	@Test
+	void aGlobalCarriesTheUnboundMarkerOnlyWhereAReadCanComeBeforeItsFirstStore() throws Exception {
+		// A global the top level assigns before anything can read it keeps the plain
+		// field -- and the unboxed pair beside it an integer accumulator gets
+		// (JvmRawGlobals) -- and the plain read, so such a program compiles as it did.
+		// Read first from a function the top level calls before that store, its field
+		// starts as the UNBOUND marker and the read passes the value through _bound,
+		// which signals the unbound-variable naming it (compiler/ReadBeforeStore).
+		String assigned = "(setq *rb* 0) (defun rb-inc () (setq *rb* (+ *rb* 1))) (rb-inc) (rb-inc) (print *rb*)";
+		byte[] plain = new JvmLispCompiler("Test")
+			.compile(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString(assigned)));
+		assertThat(declaredFieldNames(plain)).contains("_gr$*RB*").doesNotContain("_unbound");
+		assertThat(declaredMethodNames(plain)).doesNotContain("_bound");
+		assertThat(runClass(plain)).isEqualTo("2");
+		String early = "(defun rb-inc () (setq *rb* (+ *rb* 1)))"
+				+ " (print (handler-case (rb-inc) (unbound-variable () :unbound)))"
+				+ " (setq *rb* 0) (rb-inc) (rb-inc) (print *rb*)";
+		byte[] checked = new JvmLispCompiler("Test")
+			.compile(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString(early)));
+		assertThat(declaredFieldNames(checked)).contains("_unbound").doesNotContain("_gr$*RB*");
+		assertThat(declaredMethodNames(checked)).contains("_bound");
+		assertThat(ownCallsIn(checked, "RB-INC", "_bound")).isOne();
+		assertThat(runClass(checked)).isEqualTo(":UNBOUND\n2");
+	}
+
+	@Test
+	void aProgramWhoseEveryBoundpReadsAVariableCarriesNoEvalRuntime() throws Exception {
+		// A literal probe of a special whose variable carries its bound-ness reads that
+		// variable alone (its field against the UNBOUND marker), so a program whose
+		// every boundp is one carries neither the eval runtime nor its mirror writes. A
+		// literal probe of a global a definer gives a value, here from a function, still
+		// reads the mirror and brings both back.
+		byte[] literal = new JvmLispCompiler("Test").compile(am.ik.rontolisp.eval.LispPreludeLibrary
+			.process(LispReader.readAllFromString(am.ik.rontolisp.BoundpInBindingFixture.LITERAL_SOURCE)));
+		assertThat(declaredFieldNames(literal)).contains("_unbound");
+		assertThat(declaredMethodNames(literal)).doesNotContain("_eval", "_store", "_envLookup");
+		byte[] mixed = new JvmLispCompiler("Test").compile(am.ik.rontolisp.eval.LispPreludeLibrary
+			.process(LispReader.readAllFromString("(defvar *ub*) (defvar *nb* 0)"
+					+ " (defun ub-p () (list (boundp '*ub*) (boundp '*nb*))) (print (let ((*ub* 1)) (ub-p)))")));
+		assertThat(declaredMethodNames(mixed)).contains("_envLookup");
+		assertThat(fieldReadsIn(mixed, "UB-P", "_unbound")).isOne();
+		assertThat(runClass(mixed)).isEqualTo("(T T)");
+	}
+
+	@Test
+	void computedBoundpSitesDoNotEachPayForTheTrackedSpecials() throws Exception {
+		// A computed boundp of a program with specials whose variable carries their
+		// bound-ness calls the one shared dispatch over them, which no dispatcher row
+		// reaches; a site does not spell the set.
+		StringBuilder source = new StringBuilder();
+		for (int i = 0; i < 200; i++) {
+			source.append("(defvar *cb").append(i).append("*)\n");
+			source.append("(defun cb-bind")
+				.append(i)
+				.append(" (f) (let ((*cb")
+				.append(i)
+				.append("* ")
+				.append(i)
+				.append(")) (funcall f)))\n");
+		}
+		source.append("(defun cb-four (a b c d) (list (boundp a) (boundp b) (boundp c) (boundp d)))\n");
+		source.append("(print (cb-bind7 (lambda () (cb-four '*cb7* '*cb8* '*cb199* (intern \"*CB7*\")))))\n");
+		source.append("(print (cb-four '*cb7* '*cb8* '*cb199* 'cb-none))\n");
+		byte[] classBytes = new JvmLispCompiler("Test")
+			.compile(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString(source.toString())));
+		assertThat(codeLengthOf(classBytes, "CB-FOUR")).isLessThan(200);
+		assertThat(ownCallsIn(classBytes, "CB-FOUR", "$pctBOUNDP-DYNAMIC")).isEqualTo(4);
+		List<String> dispatchers = declaredMethodNames(classBytes).stream()
+			.filter(m -> m.startsWith("_invoke_"))
+			.toList();
+		assertThat(dispatchers.stream().mapToInt(m -> ownCallsIn(classBytes, m, "$pctBOUNDP-DYNAMIC")).sum()).isZero();
+		assertThat(compileAndRun(source.toString())).isEqualTo("(T NIL NIL T)\n(NIL NIL NIL NIL)");
+	}
+
+	@Test
+	void aNameDispatchAnswersEveryNameItsChainDoes() throws Exception {
+		// Interpreter parity (the LispEvaluatorTest twin): a name dispatch searches the
+		// names' hashCodes, so *XO* / *Y0* and *A_* / *B@*, whose hashes are equal, land
+		// in one leaf and are told apart by equals. Shared and inline dispatches alike.
+		assertThat(compileAndRun(am.ik.rontolisp.NameDispatchFixture.SOURCE))
+			.isEqualTo(am.ik.rontolisp.NameDispatchFixture.EXPECTED);
+		assertThat(compileAndRun(am.ik.rontolisp.NameDispatchFixture.INLINE_SOURCE))
+			.isEqualTo(am.ik.rontolisp.NameDispatchFixture.EXPECTED);
+	}
+
+	@Test
+	void setWritesTheActiveDynamicBinding() throws Exception {
+		// Interpreter parity (the LispEvaluatorTest twin): a set arm writes the
+		// thread's active _d$ cell when one exists and falls to the _g$ default
+		// otherwise, like setq; symbol-value in a set-using program -- a modify macro
+		// over a symbol-value place is a set site too -- reads dynamic-first.
+		assertThat(compileAndRun(am.ik.rontolisp.SetInDynamicBindingFixture.SOURCE))
+			.isEqualTo(am.ik.rontolisp.SetInDynamicBindingFixture.EXPECTED);
+		assertThat(compileAndRun(am.ik.rontolisp.SetInDynamicBindingFixture.PLACE_SOURCE))
+			.isEqualTo(am.ik.rontolisp.SetInDynamicBindingFixture.PLACE_EXPECTED);
+		assertThat(compileAndRun(am.ik.rontolisp.SetInDynamicBindingFixture.PROGV_SOURCE))
+			.isEqualTo(am.ik.rontolisp.SetInDynamicBindingFixture.PROGV_EXPECTED);
+	}
+
+	@Test
+	void compileAndRunSetOfAConstantSignals() throws Exception {
+		assertThat(compileAndRun("""
+				(print (handler-case (set nil 1) (error (e) :nil)))
+				(print (handler-case (set t 2) (error (e) :t)))
+				(print (handler-case (set :kw 3) (error (e) :kw)))
+				(print (handler-case (set (intern "NIL") 4) (error (e) :computed-nil)))
+				(print (handler-case (set 5 6) (error (e) :not-symbol)))
+				""")).isEqualTo(":NIL\n:T\n:KW\n:COMPUTED-NIL\n:NOT-SYMBOL");
+	}
+
+	@Test
+	void compileAndRunTheMissingStandardNames() throws Exception {
+		// The batch on the JVM: with-compilation-unit is a progn, the load
+		// switches are bound nil, a cl:-qualified read-time constant answers the
+		// constant, the three new type names resolve, and the prelude-backed names
+		// exist (the four unsupported ones signal rather than answering a fabrication).
+		assertThat(compileAndRun("""
+				(print (with-compilation-unit (:override t) 1 2 3))
+				(print (list *load-verbose* *load-print*))
+				(print (> cl:most-positive-fixnum 1000000))
+				(print (list (typep (make-synonym-stream '*standard-output*) 'synonym-stream)
+				             (typep *readtable* 'readtable)
+				             (typep 3 'file-stream)
+				             (typep "s" 'file-stream)))
+				(print (let ((s (make-string-input-stream "z")))
+				         (list (typep s 'file-stream) (typep s 'string-stream) (typep s 'stream))))
+				(print (symbol-name (copy-symbol 'jcs-name)))
+				(print (let ((h (user-homedir-pathname))) (or (null h) (pathnamep h))))
+				(print (list (handler-case (compile-file "x") (error (e) :cf))
+				             (handler-case (compile-file-pathname "x") (error (e) :cfp))
+				             (handler-case (invoke-debugger (make-condition 'simple-error :format-control "b"))
+				               (error (e) :dbg))))
+				""")).isEqualTo("3\n(NIL NIL)\nT\n(T T NIL NIL)\n(NIL T T)\n\"JCS-NAME\"\nT\n(:CF :CFP :DBG)");
+	}
+
+	@Test
+	void compileWarnWritesToAGrayErrorOutput() throws Exception {
+		// A broadcast stream is a Gray instance, and mito silences a statement by binding
+		// *error-output* to (make-broadcast-stream): the report went past it to standard
+		// output. Same program, same answer, as
+		// LispEvaluatorTest#warnWritesToAGrayErrorOutput and
+		// WasmLispCompilerIntegrationTest#warnWritesToAGrayErrorOutput.
+		assertThat(compileAndRun(am.ik.rontolisp.eval.GrayStreamsLibrary
+			.process(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString("""
+					(defun quiet () (let ((*error-output* (make-broadcast-stream))) (warn "dropped") :quiet))
+					(print (quiet))
+					(print (with-output-to-string (s)
+					         (let ((*error-output* (make-broadcast-stream s))) (warn "kept ~a" 1))))
+					"""))))).isEqualTo(":QUIET\n\"WARNING: kept 1\n\"");
+	}
+
+	@Test
+	void compileAndRunCompositeStreamTypeNames() throws Exception {
+		// broadcast-stream / two-way-stream / echo-stream / concatenated-stream are
+		// CL type names over the prelude Gray classes -- and a zero-component
+		// broadcast stream is a real broadcast stream, not the discarding sink.
+		// The Gray pre-pass splices the protocol the composite classes subclass,
+		// mirroring the CLI pipeline.
+		assertThat(compileAndRun(am.ik.rontolisp.eval.GrayStreamsLibrary
+			.process(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString("""
+					(let ((b0 (make-broadcast-stream))
+					      (b1 (make-broadcast-stream (make-string-output-stream)))
+					      (tw (make-two-way-stream (make-string-input-stream "a")
+					                               (make-string-output-stream)))
+					      (es (make-echo-stream (make-string-input-stream "a")
+					                            (make-string-output-stream)))
+					      (cs (make-concatenated-stream (make-string-input-stream "a"))))
+					  (print (list (typep b0 'broadcast-stream)
+					               (typep b1 'broadcast-stream)
+					               (typep tw 'two-way-stream)
+					               (typep es 'echo-stream)
+					               (typep cs 'concatenated-stream)
+					               (typep b0 'two-way-stream)
+					               (typep tw 'broadcast-stream)
+					               (typep "s" 'broadcast-stream)
+					               (typep b0 'stream)
+					               (typep tw 'stream)
+					               (broadcast-stream-streams b0))))
+					(let ((b0 (make-broadcast-stream)))
+					  (print (list (file-length b0)
+					               (file-position b0)
+					               (file-string-length b0 "antidisestablishmentarianism")
+					               (stream-external-format b0))))
+					"""))))).isEqualTo("(T T T T T NIL NIL NIL T T NIL)\n(0 0 1 :DEFAULT)");
+	}
+
+	@Test
+	void compileAndRunPrintObjectCalledDirectly() throws Exception {
+		// print-object is callable directly with no user method anywhere (CL supplies a
+		// system method for every object), and defining one on a class must not lose
+		// the printer for every other class.
+		assertThat(compileAndRun("(print-object 42 *standard-output*)")).isEqualTo("42");
+		assertThat(compileAndRun("""
+				(defclass jpo-p () ())
+				(defmethod print-object ((x jpo-p) s) (write-string "#<JPO!>" s))
+				(print-object 42 *standard-output*)
+				(terpri)
+				(print-object (make-instance 'jpo-p) *standard-output*)
+				(terpri)
+				(print (make-instance 'jpo-p))
+				""")).isEqualTo("42\n#<JPO!>\n#<JPO!>");
+	}
+
+	@Test
+	void compileAndRunDefmethodOnABuiltinNameKeepsTheBuiltinAsTheDefaultMethod() throws Exception {
+		// (close X) is compiler-lowered, so the generated dispatcher defun used to be
+		// dead under its own name and the user method was silently ignored
+		// (ClassCastException on an instance). ShadowedBuiltins renames the dispatcher,
+		// rewrites the call sites and keeps the built-in as the default method.
+		assertThat(compileAndRun("""
+				(defclass sbm-cls () ())
+				(defmethod length ((x sbm-cls)) 42)
+				(print (list (length (make-instance 'sbm-cls)) (length "abc") (length '(1 2 3))))
+				""")).isEqualTo("(42 3 3)");
+	}
+
+	@Test
+	void compileAndRunDefmethodOnAVariadicBuiltinNameForwardsThroughTheDispatcher() throws Exception {
+		// fast-io's gray.lisp shape: a (close (s cls) &key abort) method must not
+		// poison close for real stream handles -- with-open-file (whose expansion
+		// spells (close f)) still closes, and an explicit (close s :abort t) reaches
+		// the built-in through the dispatcher's %gf-rest tail.
+		String file = tempDir.resolve("sbm-closed.txt").toString().replace("\\", "\\\\");
+		assertThat(compileAndRun("""
+				(defclass sbm-stream () ())
+				(defmethod close ((s sbm-stream) &key abort) (declare (ignore abort)) :closed)
+				(print (close (make-instance 'sbm-stream)))
+				(with-open-file (out "%s" :direction :output) (write-line "hi" out))
+				(print (with-open-file (in "%s") (read-line in)))
+				(let ((s (open "%s"))) (print (close s :abort t)))
+				""".formatted(file, file, file))).isEqualTo(":CLOSED\n\"hi\"\nT");
+	}
+
+	@Test
+	void compileAndRunDefgenericOnABuiltinNameKeepsTheBuiltinAsTheDefaultMethod() throws Exception {
+		assertThat(compileAndRun("""
+				(defgeneric length (x))
+				(print (length "abc"))
+				""")).isEqualTo("3");
+	}
+
+	@Test
+	void compileAndRunDefmethodOnABuiltinNameQualifiersAndFirstClassReference() throws Exception {
+		// A :before-only branch composes with the built-in default method instead of
+		// "No applicable primary method", call-next-method out of the least specific
+		// user primary reaches the built-in, and #'length is rewritten onto the
+		// dispatcher so a funcall dispatches too.
+		assertThat(compileAndRun("""
+				(defclass sbq-cls () ())
+				(defparameter *sbq-log* nil)
+				(defmethod length :before ((x string)) (push :before *sbq-log*))
+				(defmethod length ((x sbq-cls)) (call-next-method))
+				(print (list (length "abc") (reverse *sbq-log*)))
+				(print (funcall #'length "abcd"))
+				""")).isEqualTo("(3 (:BEFORE))\n4");
+	}
+
+	@Test
+	void compileAndRunWithSlotsWriteOnlyUnboundSlot() throws Exception {
+		// with-slots binds, it never reads: a body that only ASSIGNS a slot declared
+		// without an :initform must not signal on entry (fast-io's initialize-instance).
+		assertThat(compileAndRun("""
+				(defclass wsu-box () ((buffer)))
+				(defmethod initialize-instance ((self wsu-box) &key)
+				  (call-next-method)
+				  (with-slots (buffer) self
+				    (setf buffer (list 1 2))))
+				(print (slot-value (make-instance 'wsu-box) 'buffer))
+				""")).isEqualTo("(1 2)");
+	}
+
+	@Test
+	void compileAndRunListSpecializedMethodExcludesClassInstances() throws Exception {
+		// An instance is a tagged cons internally, but must dispatch to the
+		// standard-object/default method, not a list/cons/sequence-specialized one.
+		assertThat(compileAndRun("""
+				(defgeneric spx-kind (x)
+				  (:method (x) :object)
+				  (:method ((x list)) :list)
+				  (:method ((x standard-object)) :instance))
+				(defclass spx-thing () ((v :initarg :v)))
+				(print (list (spx-kind (make-instance 'spx-thing :v 1)) (spx-kind '(1 2)) (spx-kind 5)))
+				""")).isEqualTo("(:INSTANCE :LIST :OBJECT)");
+	}
+
+	@Test
+	void compileAndRunFormatAsFirstClassFunction() throws Exception {
+		assertThat(compileAndRun("""
+				(print (apply #'format nil "x=~a y=~d" '(5 7)))
+				(funcall #'format t "to-stdout ~a~%" "ok")
+				(print (funcall #'format nil "~s" "q"))
+				""")).isEqualTo("\"x=5 y=7\"\nto-stdout ok\n\"\\\"q\\\"\"");
+	}
+
+	@Test
+	void compileAndRunDefmethodBeforeDefclassSubclassStillDispatches() throws Exception {
+		// The pre-pass collects the whole program before generating dispatchers, so a
+		// subclass defined AFTER the method still matches its class specializer.
+		assertThat(compileAndRun("""
+				(defclass animal () ())
+				(defgeneric speak (x))
+				(defmethod speak ((x animal)) :animal)
+				(defclass cat (animal) ())
+				(print (speak (make-instance 'cat)))
+				""")).isEqualTo(":ANIMAL");
+	}
+
+	@Test
+	void compileAndRunClosInUserPackage() throws Exception {
+		assertThat(compileAndRun("""
+				(defpackage :zoo (:use :cl) (:export :speak :make-dog))
+				(in-package :zoo)
+				(defclass dog () ((name :initarg :name :accessor dog-name)))
+				(defgeneric speak (x))
+				(defmethod speak ((x dog)) (list :woof (dog-name x)))
+				(defmethod speak (x) :silence)
+				(defun make-dog (name) (make-instance 'dog :name name))
+				(in-package :cl-user)
+				(print (zoo:speak (zoo:make-dog "Rex")))
+				(print (zoo:speak 42))
+				""")).isEqualTo("(:WOOF \"Rex\")\n:SILENCE");
+	}
+
+	@Test
+	void compileAndRunMacroCallingGenericAtExpansionTime() throws Exception {
+		// The cl-who pattern: a defmacro whose expansion-time helper chain calls a
+		// generic function (with an eql-specialized method). Pre-processed with
+		// UserMacroExpander like the CLI compile path.
+		assertThat(compileAndRun(am.ik.rontolisp.eval.UserMacroExpander.expand(LispReader.readAllFromString("""
+				(defgeneric convert-tag (tag body)
+				  (:documentation "Convert a tag."))
+				(defmethod convert-tag (tag body)
+				  "The standard method which is not specialized."
+				  (declare (optimize speed space))
+				  (list "<" tag ">" body "</" tag ">"))
+				(defmethod convert-tag ((tag (eql :br)) body)
+				  (list "<br/>"))
+				(defun process-tag (tag body) (convert-tag tag body))
+				(defmacro html (tag body) `(list ,@(process-tag tag body)))
+				(print (html "p" "hi"))
+				(print (html :br nil))
+				""")))).isEqualTo("(\"<\" \"p\" \">\" \"hi\" \"</\" \"p\" \">\")\n(\"<br/>\")");
+	}
+
+	@Test
+	void compileAndRunMethodQualifiersAndCallNextMethod() throws Exception {
+		assertThat(compileAndRun("""
+				(defclass animal () ())
+				(defclass dog (animal) ())
+				(defparameter *log* nil)
+				(defgeneric touch (x))
+				(defmethod touch ((x animal)) (push :primary-animal *log*) :done)
+				(defmethod touch ((x dog)) (push :primary-dog *log*) (call-next-method))
+				(defmethod touch :before ((x animal)) (push :before-animal *log*))
+				(defmethod touch :before ((x dog)) (push :before-dog *log*))
+				(defmethod touch :after ((x animal)) (push :after-animal *log*))
+				(defmethod touch :after ((x dog)) (push :after-dog *log*))
+				(print (touch (make-instance 'dog)))
+				(print (reverse *log*))
+				""")).isEqualTo(
+				":DONE\n" + "(:BEFORE-DOG :BEFORE-ANIMAL :PRIMARY-DOG :PRIMARY-ANIMAL :AFTER-ANIMAL :AFTER-DOG)");
+	}
+
+	@Test
+	void compileAndRunAroundMethodAndNextMethodP() throws Exception {
+		assertThat(compileAndRun("""
+				(defclass thing () ())
+				(defclass gadget (thing) ())
+				(defgeneric render (x))
+				(defmethod render ((x thing)) (list :thing (next-method-p)))
+				(defmethod render ((x gadget)) (cons :gadget (call-next-method)))
+				(defmethod render :around ((x thing)) (list :around (call-next-method)))
+				(print (render (make-instance 'gadget)))
+				""")).isEqualTo("(:AROUND (:GADGET :THING NIL))");
+	}
+
+	@Test
+	void compilePrintObjectMethodDefinedBelowItsFirstUse() throws Exception {
+		// A print-object method defined BELOW its first use used to crash
+		// with a raw NullPointerException (the whole-program registry routes the
+		// printer through the generic from the start, but the body global is assigned
+		// only when the defmethod form runs). The dispatcher now skips the
+		// not-yet-assigned body, so the first print renders the built-in text.
+		assertThat(compileAndRun("""
+				(defclass po-late () ())
+				(let ((o (make-instance 'po-late)))
+				  (print o)
+				  (defmethod print-object ((x po-late) s) (format s "#<LATE!>"))
+				  (print o))
+				""")).isEqualTo("#<PO-LATE>\n#<LATE!>");
+	}
+
+	// --- Dynamic (special) variable binding ---
+
+	@Test
+	void specialVarLetHasDynamicExtent() throws Exception {
+		assertThat(compileAndRun("""
+				(defvar *x* 10)
+				(print (list *x* (let ((*x* 20)) *x*) *x*))
+				""")).isEqualTo("(10 20 10)");
+	}
+
+	@Test
+	void specialVarLetBindsAfterEveryInit() throws Exception {
+		// let is parallel: an init that CALLS code reading a special runs before an
+		// earlier binding of that special, so it sees the outer value.
+		assertThat(compileAndRun("""
+				(defvar *x* 0)
+				(defun peek () *x*)
+				(print (let ((*x* 1) (y (peek))) (list *x* y)))
+				(defun in-defun () (let ((a 5) (*x* 2) (b (peek)) (c 7)) (list a *x* b c)))
+				(print (in-defun))
+				(print (let ((*x* 3) (y (symbol-value '*x*))) (list *x* y)))
+				(print (let ((z 1)) (declare (special z))
+				         (let ((z 2) (w (symbol-value 'z))) (declare (special z)) (list z w))))
+				(print (do ((*x* 4 (1+ *x*)) (n (peek) n)) ((> *x* 5) (list *x* n))))
+				""")).isEqualTo("(1 0)\n(5 2 0 7)\n(3 0)\n(2 1)\n(6 0)");
+	}
+
+	@Test
+	void specialVarNestedBindingsStackAndSetq() throws Exception {
+		assertThat(compileAndRun("""
+				(defvar *x* 1)
+				(print (list *x* (let ((*x* 2)) (let ((*x* 3)) *x*)) (let ((*x* 5)) (setq *x* 6) *x*) *x*))
+				""")).isEqualTo("(1 3 6 1)");
+	}
+
+	@Test
+	void specialVarLetStarIsSequential() throws Exception {
+		assertThat(compileAndRun("""
+				(defvar *a* 1)
+				(print (let* ((*a* 2) (b *a*)) (list *a* b)))
+				""")).isEqualTo("(2 2)");
+	}
+
+	@Test
+	void specialLetRestoresOnEveryExit() throws Exception {
+		// Interpreter parity (LispEvaluatorTest.specialLetRestoresOnEveryExit): a special
+		// let's binding is restored on EVERY exit channel, not only normal completion
+		// and a same-function return -- an error caught outside the let (in this frame
+		// and across a callee's frame), a catch/throw, a go across the binding, a plain
+		// return crossing an unwind-protect region in either nesting order (the cleanup
+		// sees the binding when it is inside the let and the restored value when it is
+		// outside), and a return-from crossing a lambda boundary -- cl-ppcre's scanner
+		// shape, whose leaked register array corrupted every later zero-register scan
+		// (.kb/dynamic-special-variables.md).
+		assertThat(compileAndRun("""
+				(defvar *sx* :top)
+				(defun sx-inner () (let ((*sx* :deep)) (error "deep")))
+				(print (handler-case (let ((*sx* :err)) (error "boom")) (error () *sx*)))
+				(print (handler-case (sx-inner) (error () *sx*)))
+				(print (list (catch 'sx-tag (let ((*sx* :thrown)) (throw 'sx-tag *sx*))) *sx*))
+				(defun sx-go ()
+				  (let ((r nil))
+				    (tagbody
+				       (let ((*sx* :go)) (setq r *sx*) (go out))
+				     out)
+				    (list r *sx*)))
+				(print (sx-go))
+				(defun sx-ret ()
+				  (let ((seen nil))
+				    (dolist (i '(1 2))
+				      (let ((*sx* i))
+				        (unwind-protect (return) (push *sx* seen))))
+				    (dolist (i '(1 2))
+				      (unwind-protect (let ((*sx* i)) (return)) (push *sx* seen)))
+				    (list seen *sx*)))
+				(print (sx-ret))
+				(defvar *sx-box* (make-array 0))
+				(defun sx-mk (n)
+				  (lambda (s)
+				    (block scan
+				      (let ((*sx-box* *sx-box*))
+				        (when (plusp n) (setq *sx-box* (make-array n :initial-element nil)))
+				        (funcall (lambda () (when (string= s "miss") (return-from scan nil))))
+				        (values 1 *sx-box*)))))
+				(defparameter *sx-c1* (sx-mk 1))
+				(defparameter *sx-c2* (sx-mk 0))
+				(print (multiple-value-list (funcall *sx-c1* "hit")))
+				(print (multiple-value-list (funcall *sx-c1* "miss")))
+				(print (multiple-value-list (funcall *sx-c2* "hit")))
+				""")).isEqualTo("""
+				:TOP
+				:TOP
+				(:THROWN :TOP)
+				(:GO :TOP)
+				((:TOP 1) :TOP)
+				(1 #(NIL))
+				(NIL)
+				(1 #())""");
+	}
+
+	@Test
+	void aParameterNamedLikeASpecialBindsItDynamically() throws Exception {
+		// Interpreter parity (the LispEvaluatorTest twin): a required or rest parameter
+		// named like a special is renamed and bound by a special let around the whole
+		// body (LambdaLists.toNative), so a callee reads the argument, a default sees it,
+		// every exit restores it and a setq writes the binding, not the global; the
+		// optionals, keys and auxes are the let* prologue's bindings, and an only-tested
+		// special supplied-p variable keeps its binding
+		// (.kb/dynamic-special-variables.md).
+		assertThat(compileAndRun(am.ik.rontolisp.SpecialParameterFixture.SOURCE))
+			.isEqualTo(am.ik.rontolisp.SpecialParameterFixture.EXPECTED);
+	}
+
+	@Test
+	void specialBindingsAreNeverCapturedAndLocalDeclarationsAreScoped() throws Exception {
+		// Interpreter parity (the LispEvaluatorTest twin), through the front end: a
+		// special binding is the _d$ cell alone, so a closure reads the binding active
+		// when it runs, and a lexical binding of a name declared special elsewhere is
+		// renamed apart before the compile (SpecialDeclarationScoping), so its closure
+		// captures it (.kb/dynamic-special-variables.md).
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(
+				am.ik.rontolisp.SpecialBindingScopeFixture.SOURCE, am.ik.rontolisp.reader.Features.JVM, false, false)))
+			.isEqualTo(am.ik.rontolisp.SpecialBindingScopeFixture.EXPECTED);
+	}
+
+	@Test
+	void aGlobalAssignedOnlyInsideAFunctionIsAGlobal() throws Exception {
+		// Interpreter parity (the LispEvaluatorTest twin): a name a function body assigns
+		// with no lexical binding in scope gets a static field like a top-level setq's,
+		// so another defun and a top-level form read it and boundp sees the store
+		// (GlobalVarCollector.collectFreeAssigned).
+		assertThat(compileAndRun(am.ik.rontolisp.FunctionAssignedGlobalFixture.SOURCE))
+			.isEqualTo(am.ik.rontolisp.FunctionAssignedGlobalFixture.EXPECTED);
+	}
+
+	@Test
+	void aLiteralBoundpOfAGlobalWithoutAValueAnswersTheStoresMadeSoFar() throws Exception {
+		// Interpreter parity (the LispEvaluatorTest twin). Every probe names a global no
+		// definer gives a value and no binding covers, so its _g$ field holds the UNBOUND
+		// marker until the first store and the class carries no eval runtime -- no
+		// _dbound either: no ThreadLocal is involved.
+		assertThat(compileAndRun(am.ik.rontolisp.ProbedUnboundGlobalFixture.SOURCE))
+			.isEqualTo(am.ik.rontolisp.ProbedUnboundGlobalFixture.EXPECTED);
+		byte[] classBytes = new JvmLispCompiler("Test").compile(am.ik.rontolisp.eval.LispPreludeLibrary
+			.process(LispReader.readAllFromString(am.ik.rontolisp.ProbedUnboundGlobalFixture.SOURCE)));
+		assertThat(declaredFieldNames(classBytes)).contains("_unbound");
+		assertThat(declaredMethodNames(classBytes)).doesNotContain("_eval", "_store", "_envLookup", "_dbound");
+	}
+
+	@Test
+	void defparameterAndDeclaimSpecialAreDynamic() throws Exception {
+		assertThat(compileAndRun("""
+				(defparameter *p* 5)
+				(print (list (let ((*p* 6)) *p*) *p*))
+				""")).isEqualTo("(6 5)");
+		assertThat(compileAndRun("""
+				(declaim (special *s*))
+				(setq *s* 100)
+				(print (list (let ((*s* 7)) *s*) *s*))
+				""")).isEqualTo("(7 100)");
+	}
+
+	@Test
+	void progvBindsRestoresAndNests() throws Exception {
+		// Interpreter parity for the progv lowering (.kb/dynamic-special-variables.md):
+		// a declared special gets a true dynamic binding visible through a called defun,
+		// nested binds stack, an UNDECLARED name is readable via symbol-value for the
+		// extent (and unbound again after), and extra symbols are unbound for the extent.
+		assertThat(compileAndRun("""
+				(defvar *a* 1)
+				(defvar *b* 2)
+				(defun peek () (list *a* *b*))
+				(progv '(*a* *b*) '(10 20) (print (peek)))
+				(print (peek))
+				(print (progv (list '*a*) (list 5)
+				         (progv (list '*a* '*c*) (list (* *a* 2) 7)
+				           (list *a* (symbol-value '*c*)))))
+				(print (list *a* (boundp '*c*)))
+				(print (handler-case (progv '(*a*) '() *a*) (unbound-variable () :unbound)))
+				""")).isEqualTo("""
+				(10 20)
+				(1 2)
+				(10 7)
+				(1 NIL)
+				:UNBOUND""");
+	}
+
+	@Test
+	void progvRestoresOnEveryExit() throws Exception {
+		// The lowering rides the unwind-protect cleanup emitter, so a return-from, a go
+		// and an error caught OUTSIDE the progv all restore the binding -- the exits
+		// limitation 1 of .kb/dynamic-special-variables.md still leaves open for a
+		// special `let`.
+		assertThat(compileAndRun("""
+				(defvar *x* :top)
+				(defun f ()
+				  (progv '(*x*) '(:in)
+				    (return-from f *x*)))
+				(print (list (f) *x*))
+				(defun g ()
+				  (let ((r nil))
+				    (tagbody
+				       (progv '(*x*) '(:go)
+				         (setq r *x*)
+				         (go out))
+				     out)
+				    (list r *x*)))
+				(print (g))
+				(print (handler-case (progv '(*x*) '(:err) (error "boom"))
+				         (error () *x*)))
+				""")).isEqualTo("""
+				(:IN :TOP)
+				(:GO :TOP)
+				:TOP""");
+	}
+
+	@Test
+	void progvSymbolValueSeesTheSetqInsideTheExtent() throws Exception {
+		// The cl-json aggregate-scope shape: (progv vars (mapcar #'symbol-value vars))
+		// re-binds each scope variable to its CURRENT value, where "current" includes a
+		// setq made inside an enclosing progv extent -- symbol-value compiles
+		// dynamic-first in a progv-using program.
+		assertThat(compileAndRun("""
+				(defvar *acc* nil)
+				(progv '(*acc*) (list (symbol-value '*acc*))
+				  (setq *acc* (cons 1 *acc*))
+				  (progv '(*acc*) (list (symbol-value '*acc*))
+				    (setq *acc* (cons 2 *acc*))
+				    (print *acc*))
+				  (print *acc*))
+				(print *acc*)
+				""")).isEqualTo("""
+				(2 1)
+				(1)
+				NIL""");
+	}
+
+	@Test
+	void symbolValueSitesDoNotEachPayForTheSpecialSet() throws Exception {
+		// symbol-value reads a special through its variable: a literal name folds to the
+		// variable read, a computed one calls one shared runtime over the global
+		// accessor, cut into segments the JIT still compiles. Each site used to spell the
+		// 300-arm dispatch inline, ~10 KB, so the eight-site defun and top-level form
+		// overflowed the 64 KB method limit (.kb/dynamic-special-variables.md).
+		byte[] classBytes = new JvmLispCompiler("Test").compile(am.ik.rontolisp.eval.LispPreludeLibrary
+			.process(LispReader.readAllFromString(am.ik.rontolisp.SymbolValueSiteFixture.SOURCE)));
+		String entry = "$pctSYMBOL-VALUE-DYNAMIC";
+		String dispatch = "$pctGLOBAL-ACCESS";
+		assertThat(codeLengthOf(classBytes, "SVS-EIGHT")).isLessThan(500);
+		assertThat(ownCallsIn(classBytes, "SVS-EIGHT", entry)).isEqualTo(8);
+		assertThat(ownCallsIn(classBytes, "SVS-LITERAL", entry)).isZero();
+		assertThat(ownCallsIn(classBytes, "SVS-LITERAL", dispatch)).isZero();
+		List<String> segments = declaredMethodNames(classBytes).stream().filter(m -> m.startsWith(dispatch)).toList();
+		assertThat(segments).hasSizeGreaterThan(1);
+		for (String segment : segments) {
+			assertThat(codeLengthOf(classBytes, segment)).as(segment).isLessThan(8_000);
+		}
+		assertThat(compileAndRun(am.ik.rontolisp.SymbolValueSiteFixture.SOURCE))
+			.isEqualTo(am.ik.rontolisp.SymbolValueSiteFixture.EXPECTED);
+	}
+
+	@Test
+	void progvAndSetSitesDoNotEachPayForTheSpecialSet() throws Exception {
+		// progv dispatches each runtime name over the special set and set over the
+		// global set, both through shared runtimes cut into segments the JIT still
+		// compiles. Each site used to spell its dispatch inline, ~30 KB a progv over
+		// 300 specials, so the four-site top-level form overflowed the 64 KB method
+		// limit (.kb/dynamic-special-variables.md).
+		byte[] classBytes = new JvmLispCompiler("Test").compile(am.ik.rontolisp.eval.LispPreludeLibrary
+			.process(LispReader.readAllFromString(am.ik.rontolisp.ProgvSetSiteFixture.SOURCE)));
+		assertThat(codeLengthOf(classBytes, "PVS-FOUR")).isLessThan(1_000);
+		assertThat(ownCallsIn(classBytes, "PVS-FOUR", "$pctPROGV-BIND")).isEqualTo(4);
+		assertThat(codeLengthOf(classBytes, "PVS-SET-FOUR")).isLessThan(300);
+		assertThat(ownCallsIn(classBytes, "PVS-SET-FOUR", "$pctSET-GLOBAL")).isEqualTo(4);
+		for (String runtime : List.of("$pctPROGV-BIND-NAME", "$pctPROGV-UNBIND-NAME", "$pctGLOBAL-ACCESS")) {
+			List<String> segments = declaredMethodNames(classBytes).stream()
+				.filter(m -> m.equals(runtime) || m.startsWith(runtime + "-"))
+				.toList();
+			assertThat(segments).as(runtime).hasSizeGreaterThan(1);
+			for (String segment : segments) {
+				assertThat(codeLengthOf(classBytes, segment)).as(segment).isLessThan(8_000);
+			}
+		}
+		assertThat(compileAndRun(am.ik.rontolisp.ProgvSetSiteFixture.SOURCE))
+			.isEqualTo(am.ik.rontolisp.ProgvSetSiteFixture.EXPECTED);
+	}
+
+	@Test
+	void anEvaldSetfFindsItsSetfFunctionThroughSegmentsTheJitCompiles() throws Exception {
+		// An eval'd place no table row holds calls the (setf name) function it names,
+		// found over every one the program defines: one chain over dexador's 451 was a
+		// method past the 64 KB limit (159 bytes an arm, 2026-11-06).
+		String source = IntStream.range(0, 500)
+			.mapToObj(i -> "(defun (setf esf-" + i + ") (v c) (setf (car c) (list " + i + " v)))")
+			.collect(joining("\n", "", "\n"))
+				+ "(print (eval '(let ((c (list 0 0))) (setf (esf-0 c) :a) (setf (esf-499 (cdr c)) :z) c)))\n";
+		byte[] classBytes = new JvmLispCompiler("Test")
+			.compile(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString(source)));
+		List<String> segments = declaredMethodNames(classBytes).stream()
+			.filter(m -> m.startsWith("$pctEVAL-SETF-"))
+			.toList();
+		assertThat(segments).hasSizeGreaterThan(2);
+		for (String segment : segments) {
+			assertThat(codeLengthOf(classBytes, segment)).as(segment).isLessThan(8_000);
+		}
+		assertThat(compileAndRun(source)).isEqualTo("((0 :A) (499 :Z))");
+	}
+
+	@Test
+	void theSharedNameDispatchesAreNeverDispatcherTargets() throws Exception {
+		// A program whose names resolve at run time (read-from-string) gives every defun
+		// a dispatcher case -- but not the shared set runtime, which only the sites
+		// lowered onto it call. A library holding a set site the shaker drops would
+		// otherwise keep the whole runtime alive through the dispatchers.
+		String source = """
+				(defvar *nd-a* 1)
+				(defun nd-g (n) (set n 2))
+				(defun nd-h (s) (if (stringp s) (funcall (read-from-string s) 5) (nd-g s)))
+				(print (nd-h "identity"))
+				""";
+		byte[] classBytes = new JvmLispCompiler("Test")
+			.compile(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString(source)));
+		List<String> dispatchers = declaredMethodNames(classBytes).stream()
+			.filter(m -> m.startsWith("_invoke_"))
+			.toList();
+		assertThat(dispatchers.stream().mapToInt(m -> ownCallsIn(classBytes, m, "ND-G")).sum()).isPositive();
+		assertThat(dispatchers.stream().mapToInt(m -> ownCallsIn(classBytes, m, "$pctSET-GLOBAL")).sum()).isZero();
+		assertThat(dispatchers.stream().mapToInt(m -> ownCallsIn(classBytes, m, "$pctGLOBAL-ACCESS")).sum()).isZero();
+		assertThat(compileAndRun(source)).isEqualTo("5");
+	}
+
+	@Test
+	void specialVarBindingIsThreadScoped() throws Exception {
+		// Interpreter parity (LispEvaluatorTest.specialVariablesAreThreadScoped): a
+		// dynamic binding belongs to the thread that established it. A thread spawned
+		// during the extent reads the GLOBAL value, its own binding is invisible to the
+		// spawner, and its exit restore must not clobber the spawner's still-active
+		// binding. Thread.start/join make every step deterministic (no sleeps).
+		assertThat(compileAndRun("""
+				(defvar *v* :none)
+				(defun peek () *v*)
+				(defun run-thread (f)
+				  (let ((th (java:new "java.lang.Thread" f)))
+				    (java:call th "start")
+				    (java:call th "join")))
+				(let ((*v* :outer))
+				  (run-thread (lambda (m) (print (list :spawned (peek)))))
+				  (run-thread (lambda (m) (let ((*v* :inner)) (print (list :rebound (peek))))))
+				  (print (list :outer (peek))))
+				(print (list :global (peek)))
+				""")).isEqualTo("""
+				(:SPAWNED :NONE)
+				(:REBOUND :INNER)
+				(:OUTER :OUTER)
+				(:GLOBAL :NONE)""");
+	}
+
+	@Test
+	void boundpOfASpecialWithoutAValueIsThreadScoped() throws Exception {
+		// The UNBOUND marker lives in the shared _g$ and a binding in this thread's _d$
+		// cell, so a spawned thread sees no binding of the spawner's and the spawner none
+		// of its own (the interpreter answers the same, as SBCL's threads do).
+		assertThat(compileAndRun("""
+				(defvar *tv*)
+				(defun tv-p () (boundp '*tv*))
+				(defun run-thread (f)
+				  (let ((th (java:new "java.lang.Thread" f)))
+				    (java:call th "start")
+				    (java:call th "join")))
+				(let ((*tv* :outer))
+				  (run-thread (lambda (m) (print (list :spawned (tv-p)))))
+				  (run-thread (lambda (m) (let ((*tv* :inner)) (print (list :rebound (tv-p))))))
+				  (print (list :outer (tv-p))))
+				(print (list :global (tv-p)))
+				""")).isEqualTo("""
+				(:SPAWNED NIL)
+				(:REBOUND T)
+				(:OUTER T)
+				(:GLOBAL NIL)""");
+	}
+
+	@Test
+	void aSpecialIsBoundShallowUnlessAnotherThreadCanRunLispCode() throws Exception {
+		// A program that runs Lisp code on one thread only binds a special by saving,
+		// setting and restoring its _g$ field, so a read is one getstatic -- in a closure
+		// built inside the binding as in a callee -- and the class carries no ThreadLocal
+		// for it (.kb/dynamic-special-variables.md, "JVM"). Every way another thread can
+		// run the program's Lisp code keeps the per-thread _d$ store and the _dget read.
+		String binding = """
+				(defvar *who* :global)
+				(defun who () *who*)
+				(defun bound () (let ((*who* :bound)) (list (who) (funcall (lambda () *who*)))))
+				""";
+		byte[] alone = new JvmLispCompiler("Test").compile(am.ik.rontolisp.eval.LispPreludeLibrary
+			.process(LispReader.readAllFromString(binding + "(print (list (bound) (who)))")));
+		assertThat(declaredFieldNames(alone)).noneMatch(name -> name.startsWith("_d$"));
+		assertThat(declaredMethodNames(alone)).doesNotContain("_dget", "_dbind", "_dset");
+		assertThat(countOccurrences(alone, "java/lang/ThreadLocal")).isZero();
+		assertThat(fieldReadsIn(alone, "WHO", "_g$*WHO*")).isOne();
+		assertThat(runClass(alone)).isEqualTo("((:BOUND :BOUND) :GLOBAL)");
+		Map<String, String> entries = new java.util.LinkedHashMap<>();
+		entries.put("a thread primitive", "(print (rontolisp:join-thread (rontolisp:make-thread #'bound)))");
+		entries.put("an async body", "(rontolisp:async-defun job () (bound)) (print (rontolisp:await (job)))");
+		entries.put("a jvm-export wrapper",
+				"(defun bound-count () (length (bound))) (rontolisp:jvm-export 'bound-count :params '() :returns :s64)");
+		entries.put("a function Java calls back",
+				"(java:call (java:new \"java.lang.Thread\" (lambda (m) (print (bound)))) \"run\")");
+		entries.put("a java:proxy",
+				"(java:call (java:proxy \"java.lang.Runnable\" (lambda (m) (print (bound)))) \"run\")");
+		entries.put("the java: bridge", "(defun poke (o) (java:call o \"frobnicate\")) (print (bound))");
+		entries.put("an ffi: upcall", "(print (list (ffi:size :int) (bound)))");
+		for (Map.Entry<String, String> entry : entries.entrySet()) {
+			byte[] classBytes = new JvmLispCompiler("Test").compile(am.ik.rontolisp.eval.LispPreludeLibrary
+				.process(LispReader.readAllFromString(binding + entry.getValue())));
+			assertThat(declaredFieldNames(classBytes)).as(entry.getKey()).contains("_d$*WHO*");
+			assertThat(declaredMethodNames(classBytes)).as(entry.getKey()).contains("_dget", "_dbind");
+			assertThat(fieldReadsIn(classBytes, "WHO", "_g$*WHO*")).as(entry.getKey()).isOne();
+			assertThat(ownCallsIn(classBytes, "WHO", "_dget")).as(entry.getKey()).isOne();
+		}
+		byte[] objc = new JvmLispCompiler("Test").compile(
+				am.ik.rontolisp.cli.CompileFrontendAccess.corpus(binding + "(print (list (objc:objectp nil) (bound)))",
+						am.ik.rontolisp.reader.Features.JVM, false, false));
+		assertThat(declaredFieldNames(objc)).as("an objc: callback").contains("_d$*WHO*");
+	}
+
+	@Test
+	void specialVarSetqOutsideAnyBindingReachesTheGlobal() throws Exception {
+		// A setq of a dynamically-bound special with NO binding active must write the
+		// global cell (and a later binding still save/restores over it).
+		assertThat(compileAndRun("""
+				(defvar *w* 1)
+				(defun poke (v) (setq *w* v))
+				(poke 2)
+				(print (list *w* (let ((*w* 3)) (poke 4) *w*) *w*))
+				""")).isEqualTo("(2 4 2)");
+	}
+
+	// ---- IEEE-754 float edge semantics: literal-path and comparison groups ----
+
+	@Test
+	void theFloatRemainderMatchesTheInterpreterOverAMagnitudeSweep() throws Exception {
+		// The JVM twin of the wasm sweep: every ordered pair of the values below --
+		// spanning 2^53 and 2^63 in both directions plus subnormals and both signed
+		// zeros -- against the interpreter, whose float remainder is Java's DREM (the
+		// exact IEEE fmod) and whose mod correction compares the two signs directly.
+		double[] dividends = { 1e18, 1e300, -1e300, 12345.678, -12345.678, 3.0, -3.0, 0.5, -0.5, 1e-300, 4.9e-324, 1.0,
+				-1.0, -0.0, 0.0, 1e30, 2.5, -7.5, 1e-10, 123456789.0 };
+		double[] divisors = { 7.0, -7.0, 3.0, 0.1, -0.1, 1e-300, 4.9e-324, 2.5, 1e300, 1.0, -1.0, 0.5 };
+		StringBuilder source = new StringBuilder("""
+				(defun mr (a b) (rem a b))
+				(defun mm (a b) (mod a b))
+				""");
+		for (double a : dividends) {
+			for (double b : divisors) {
+				String x = Double.toString(a).replace('E', 'e');
+				String y = Double.toString(b).replace('E', 'e');
+				source.append("(print (list (mr %s %s) (mm %s %s)))%n".formatted(x, y, x, y));
+			}
+		}
+		String program = source.toString();
+		ByteArrayOutputStream interpreted = new ByteArrayOutputStream();
+		am.ik.rontolisp.eval.LispEvaluator evaluator = new am.ik.rontolisp.eval.LispEvaluator(
+				new PrintStream(interpreted, true, StandardCharsets.UTF_8));
+		for (LispVal form : LispReader.readAllFromString(program)) {
+			evaluator.eval(form);
+		}
+		assertThat(compileAndRun(program)).isEqualTo(interpreted.toString(StandardCharsets.UTF_8).trim());
+	}
+
+	@Test
+	void roundingOrDecodingAnInfinityOrANanSignalsTheInterpretersText() throws Exception {
+		// The floor family narrowed a NaN or an infinity with D2L -- (floor inf) was
+		// Long.MAX_VALUE, and a NaN passed the DCMPL range guard into D2L's 0 -- and
+		// decode-float of an infinity never returned (ci-spec
+		// rounding-or-decoding-an-infinity-or-a-nan-signals).
+		String program = """
+				(defvar *inf* (/ 1.0 0.0))
+				(defvar *nan* (- *inf* *inf*))
+				(defmacro try (form) `(handler-case (multiple-value-list ,form) (error (e) (princ-to-string e))))
+				(defun fl (a) (floor a))
+				(print (list (try (fl *inf*)) (try (round *nan*))
+				             (try (ffloor (- *inf*))) (try (floor *inf* 2))))
+				(print (list (try (truncate *nan* 0.0)) (try (funcall #'fround *nan*))
+				             (try (floor 5 *inf*))))
+				(print (list (try (rational *nan*)) (try (rationalize *inf*))
+				             (try (decode-float *inf*))))
+				(print (list (try (integer-decode-float *nan*)) (try (fl 2.5))
+				             (try (floor 1d300 1d299))))
+				""";
+		String rounding = "\"rounding a non-finite float to an integer is undefined\"";
+		String expected = """
+				(%1$s %1$s %1$s %1$s)
+				(%1$s %1$s (0 5.0))
+				("rational of a non-finite float is undefined" "rationalize of a non-finite float is undefined" \
+				"decode-float of a non-finite float is undefined")
+				("integer-decode-float of a non-finite float is undefined" (2 0.5) (10 0.0))""".formatted(rounding);
+		ByteArrayOutputStream interpreted = new ByteArrayOutputStream();
+		am.ik.rontolisp.eval.LispEvaluator evaluator = new am.ik.rontolisp.eval.LispEvaluator(
+				new PrintStream(interpreted, true, StandardCharsets.UTF_8));
+		for (LispVal form : LispReader.readAllFromString(program)) {
+			evaluator.eval(form);
+		}
+		assertThat(interpreted.toString(StandardCharsets.UTF_8).trim()).isEqualTo(expected);
+		assertThat(compileAndRun(am.ik.rontolisp.cli.CompileFrontendAccess.corpus(program,
+				am.ik.rontolisp.reader.Features.JVM, false, false)))
+			.isEqualTo(expected);
+	}
+
+	@Test
+	void theFloorFamilyQuotientIsExactPastTheLongRange() throws Exception {
+		// The quotient used to be computed as a double and narrowed into a long, so it
+		// clamped past 2^63 and the remainder derived from it came back equal to the
+		// dividend. _fdiv divides the two operands as the exact rationals they are.
+		assertThat(compileAndRun("""
+				(defun ft (a b) (multiple-value-bind (q r) (truncate a b) (list q r)))
+				(defun ff (a b) (multiple-value-bind (q r) (floor a b) (list q r)))
+				(print (ft 1d18 7.0))
+				(print (ff 1d18 7.0))
+				(print (ft 1d30 3.0))
+				(print (floor 1d300))
+				""")).isEqualTo("""
+				(142857142857142857 1.0)
+				(142857142857142857 1.0)
+				(333333333333333339961541612885 1.0)
+				"""
+				+ "1000000000000000052504760255204420248704468581108159154915854115511802457988908195786371375080447864043704443832883878176942523235360430575644792184786706982848387200926575803737830233794788090059368953234970799945081119038967640880074652742780142494579258788820056842838115669472196386865459400540160");
+	}
+
+	@Test
+	void theFloorFamilyMatchesTheInterpreterOverAMagnitudeSweep() throws Exception {
+		// Both values of all four operators, over pairs that cross 2^53 and 2^63 in both
+		// directions, against the interpreter -- whose quotient is the exact rational
+		// rounding and whose remainder is rem/mod (LispEvaluatorTest pins both against an
+		// exact-rational oracle of their own).
+		double[] dividends = { 1e18, 1e300, -1e300, 1e30, 12345.678, -12345.678, 3.0, -3.0, 0.5, 1e-300, 1.0, -1.0,
+				-0.0, 0.0, 2.5, -7.5, 5.0, 7.0, 1.8446744073709552e19 };
+		double[] divisors = { 7.0, -7.0, 3.0, 0.1, -0.1, 2.5, 1.0, -1.0, 0.5, 2.0, -2.0 };
+		StringBuilder source = new StringBuilder("""
+				(defun ftr (a b) (multiple-value-bind (q r) (truncate a b) (list q r)))
+				(defun ffl (a b) (multiple-value-bind (q r) (floor a b) (list q r)))
+				(defun fce (a b) (multiple-value-bind (q r) (ceiling a b) (list q r)))
+				(defun fro (a b) (multiple-value-bind (q r) (round a b) (list q r)))
+				""");
+		for (double a : dividends) {
+			for (double b : divisors) {
+				String x = Double.toString(a).replace('E', 'e');
+				String y = Double.toString(b).replace('E', 'e');
+				source.append("(print (list (ftr %s %s) (ffl %s %s) (fce %s %s) (fro %s %s)))%n".formatted(x, y, x, y,
+						x, y, x, y));
+			}
+		}
+		String program = source.toString();
+		ByteArrayOutputStream interpreted = new ByteArrayOutputStream();
+		am.ik.rontolisp.eval.LispEvaluator evaluator = new am.ik.rontolisp.eval.LispEvaluator(
+				new PrintStream(interpreted, true, StandardCharsets.UTF_8));
+		for (LispVal form : LispReader.readAllFromString(program)) {
+			evaluator.eval(form);
+		}
+		assertThat(compileAndRun(program)).isEqualTo(interpreted.toString(StandardCharsets.UTF_8).trim());
+	}
+
+	@Test
+	void theFFamilyMatchesTheInterpreter() throws Exception {
+		// ffloor/fceiling/fround/ftruncate: the same exact quotient the plain
+		// family answers, only floated for the primary value, and the same remainder.
+		assertThat(compileAndRun("""
+				(defun q (a b) (multiple-value-list (ffloor a b)))
+				(print (q 7 2))
+				(print (multiple-value-list (fceiling 7 2)))
+				(print (multiple-value-list (ftruncate -7 2)))
+				(print (multiple-value-list (fround 7 2)))
+				(print (multiple-value-list (ffloor 1d300 7.0)))
+				(print (ffloor 1d300))
+				(print (funcall #'ffloor 7))
+				(print (mapcar #'ffloor '(7 8 9)))
+				""")).isEqualTo("""
+				(3.0 1)
+				(4.0 -1)
+				(-3.0 -1)
+				(4.0 -1)
+				(1.4285714285714286e299 1.0)
+				1.0e300
+				7.0
+				(7.0 8.0 9.0)""");
+	}
+
+	@Test
+	void theFloorFamilyQuotientWithAnInfiniteDivisorMatchesTheInterpreter() throws Exception {
+		// The one regime the sweep above declines on purpose (an infinite
+		// divisor), checked the same way -- against the interpreter, whose _fdiv-free
+		// route (ExactRounding.infiniteDivisorQuotient) and this one (_fdiv's own
+		// infinite-divisor arm) were written from the same sign formula independently
+		// of each other.
+		double[] dividends = { 3.0, -3.0, 0.5, -0.5, 1e300, -1e300, 0.0, -0.0 };
+		String[] divisors = { "(/ 1.0 0.0)", "(/ -1.0 0.0)" };
+		StringBuilder source = new StringBuilder("""
+				(defun ftr (a b) (multiple-value-bind (q r) (truncate a b) (list q r)))
+				(defun ffl (a b) (multiple-value-bind (q r) (floor a b) (list q r)))
+				(defun fce (a b) (multiple-value-bind (q r) (ceiling a b) (list q r)))
+				(defun fro (a b) (multiple-value-bind (q r) (round a b) (list q r)))
+				""");
+		for (double a : dividends) {
+			String x = Double.toString(a).replace('E', 'e');
+			for (String y : divisors) {
+				source.append("(print (list (ftr %s %s) (ffl %s %s) (fce %s %s) (fro %s %s)))%n".formatted(x, y, x, y,
+						x, y, x, y));
+			}
+		}
+		// An exact-integer dividend, not just a double.
+		for (String y : divisors) {
+			source.append("(print (list (ftr -3 %1$s) (ffl -3 %1$s) (fce -3 %1$s) (fro -3 %1$s)))%n".formatted(y));
+		}
+		String program = source.toString();
+		ByteArrayOutputStream interpreted = new ByteArrayOutputStream();
+		am.ik.rontolisp.eval.LispEvaluator evaluator = new am.ik.rontolisp.eval.LispEvaluator(
+				new PrintStream(interpreted, true, StandardCharsets.UTF_8));
+		for (LispVal form : LispReader.readAllFromString(program)) {
+			evaluator.eval(form);
+		}
+		assertThat(compileAndRun(program)).isEqualTo(interpreted.toString(StandardCharsets.UTF_8).trim());
+	}
+
+	@Test
+	void minMaxSelectByIeeeComparisonOnBothTheLiteralAndTheVariablePath() throws Exception {
+		// min(a,b) = (a <= b) ? a : b, max(a,b) = (a >= b) ? a : b, NOT Math.min/
+		// Math.max, which resolve a signed-zero tie by SIGN whichever way round the
+		// arguments come and propagate NaN from either side. The unboxed fast path
+		// (JvmMinCompiler/JvmMaxCompiler's isDefinitelyDouble branch, below) and the
+		// general boxed path agree on this select, with the other three backends and
+		// upstream Common Lisp -- unlike float CONTAGION, where they used to differ:
+		// the fast path used to gate on ANY operand merely CONTAINING a double
+		// literal, unbox both, compute this select on raw doubles and rebox the
+		// winner as a double regardless, which forced contagion onto a mixed
+		// rational/float call. It is now gated on isDefinitelyDouble instead, which
+		// requires each operand's VALUE (not just some literal nested in it) to be
+		// proven double, so it agrees with the general path on type as well as
+		// select.
+
+		// An equal-value tie keeps the LEFT operand.
+		assertThat(compileAndRun("(print (list (min -0.0 0.0) (min 0.0 -0.0)))")).isEqualTo("(-0.0 0.0)");
+		assertThat(compileAndRun("(print (list (max -0.0 0.0) (max 0.0 -0.0)))")).isEqualTo("(-0.0 0.0)");
+		assertThat(compileAndRun("(let ((nz -0.0) (pz 0.0)) (print (list (min nz pz) (min pz nz))))"))
+			.isEqualTo("(-0.0 0.0)");
+		assertThat(compileAndRun("(let ((nz -0.0) (pz 0.0)) (print (list (max nz pz) (max pz nz))))"))
+			.isEqualTo("(-0.0 0.0)");
+
+		// NaN is unordered, so the comparison fails and the RIGHT operand is taken.
+		assertThat(compileAndRun("(print (list (min (/ 0.0 0.0) 1.0) (min 1.0 (/ 0.0 0.0))))")).isEqualTo("(1.0 NaN)");
+		assertThat(compileAndRun("(print (list (max (/ 0.0 0.0) 1.0) (max 1.0 (/ 0.0 0.0))))")).isEqualTo("(1.0 NaN)");
+		assertThat(compileAndRun("(let ((n (/ 0.0 0.0)) (one 1.0)) (print (list (min n one) (min one n))))"))
+			.isEqualTo("(1.0 NaN)");
+		assertThat(compileAndRun("(let ((n (/ 0.0 0.0)) (one 1.0)) (print (list (max n one) (max one n))))"))
+			.isEqualTo("(1.0 NaN)");
+
+		// ordinary selections and integers are untouched
+		assertThat(compileAndRun("(print (list (min 1.0 2.0) (max 1.0 2.0) (min 3 1 2) (max 3 1 2)))"))
+			.isEqualTo("(1.0 2.0 1 3)");
+
+		// No float contagion: the winning operand comes back as it stands, on the
+		// literal path and the variable path alike, so a mixed rational/float call
+		// keeps the rational -- matching the interpreter and both wasm backends.
+		assertThat(compileAndRun("(print (list (min 1 2.0) (min 2.0 1) (max 1 2.0) (max 2.0 1)))"))
+			.isEqualTo("(1 1 2.0 2.0)");
+		assertThat(compileAndRun(
+				"(defun mmc-min (a b) (min a b)) (defun mmc-max (a b) (max a b)) (print (list (mmc-min 1 2.0) (mmc-min 2.0 1) (mmc-max 1 2.0) (mmc-max 2.0 1)))"))
+			.isEqualTo("(1 1 2.0 2.0)");
+		assertThat(compileAndRun("(print (floatp (min 1 2.0)))")).isEqualTo("NIL");
+
+		// The unboxed fast path still fires when it is actually SOUND to: both
+		// operands independently proven double, including through a nested
+		// contagious +/-/*/mod/rem tree (2.0 proves the whole (* 2.0 1) provably
+		// double, whatever type the OTHER factor turns out to be, since * really
+		// does coerce to double regardless -- unlike min/max's own select).
+		assertThat(compileAndRun("(print (min (* 2.0 1) (+ 1 3.0)))")).isEqualTo("2.0");
+		// The other operand, the bare integer literal 1, is not provably double
+		// (there is nothing to prove double about it), so the general path is
+		// used: the integer 1 -- not 1.0 -- comes back, since (* 2.0 1) is 2.0
+		// and 1 <= 2.0.
+		assertThat(compileAndRun("(print (min 1 (* 2.0 1)))")).isEqualTo("1");
+	}
+
+	// ---- Method name mangling ----
+
+	@Test
+	void percentInAFunctionNameIsMangledAway() throws Exception {
+		// '%' is legal in a JVM method name, but JVMCI passes a message containing the
+		// name as the format string of BailoutException: under a JVMCI compiler, a hot
+		// method whose name contains e.g. '%l' kills its own JIT compilation
+		// (UnknownFormatConversionException) and prints a systemic-compilation-failure
+		// warning into the program's stdout.
+		assertThat(JvmLispCompiler.mangleMethodName("linalg::%la-matmul")).isEqualTo("linalg$colon$colon$pctla-matmul");
+		byte[] classBytes = new JvmLispCompiler("Test")
+			.compile(LispReader.readAllFromString("(defun %la-double (x) (* 2 x)) (print (%la-double 21))"));
+		assertThat(new String(classBytes, StandardCharsets.ISO_8859_1)).doesNotContain("%la-double")
+			.contains("$pctLA-DOUBLE");
+		assertThat(compileAndRun("(defun %la-double (x) (* 2 x)) (print (%la-double 21))")).isEqualTo("42");
+	}
+
+	@Test
+	void bracketAndSemicolonInAFunctionNameAreMangledAway() throws Exception {
+		// Both are illegal in a JVM unqualified name (JVMS 4.2.2): the class failed to
+		// load with ClassFormatError "Illegal method name".
+		assertThat(JvmLispCompiler.mangleMethodName("a[b];c")).isEqualTo("a$lbrackb]$semic");
+		assertThat(compileAndRun("(defun |f[1];x| (x) (* 2 x)) (defvar |*g[;]*| 3) (print (|f[1];x| |*g[;]*|))"))
+			.isEqualTo("6");
+	}
+
+	@Test
+	void percentGlobalVariableNameIsMangledAway() throws Exception {
+		// Static field names go through the same mangler ("_g$" + mangleMethodName).
+		byte[] classBytes = new JvmLispCompiler("Test")
+			.compile(LispReader.readAllFromString("(defvar *%p* 7) (print *%p*)"));
+		assertThat(new String(classBytes, StandardCharsets.ISO_8859_1)).doesNotContain("_g$*%p*");
+		assertThat(compileAndRun("(defvar *%p* 7) (print *%p*)")).isEqualTo("7");
+	}
+
+	// ---- rontolisp:wit-import: one WIT, a provider per backend ----
+	//
+	// The JVM half of the boundary: the very programs LispEvaluatorTest interprets are
+	// COMPILED and RUN here, and must answer the same. The Preview 1 WASM half -- where
+	// the
+	// host is the provider and the directive lowers to a rontolisp:wasm-import block
+	// byte-identical to a hand-written one -- is pinned by WitImportInlinerTest.
+
+	/**
+	 * The interface the tests bind: a wasi:keyvalue-shaped store, whose {@code bucket} is
+	 * a WIT resource (so its methods bind as {@code bucket-get} / {@code bucket-set} /
+	 * ... taking the handle as their first argument), with a {@code variant} error arm
+	 * and a freestanding opener.
+	 */
+	private static final String KEYVALUE_WIT = """
+			package wasi:keyvalue@0.2.0;
+
+			interface store {
+			  variant error {
+			    no-such-store,
+			    access-denied,
+			    other(string),
+			  }
+
+			  resource bucket {
+			    get: func(key: string) -> result<option<list<u8>>, error>;
+			    set: func(key: string, value: list<u8>) -> result<_, error>;
+			    delete: func(key: string) -> result<_, error>;
+			    exists: func(key: string) -> result<bool, error>;
+			    list-keys: func() -> result<list<string>, error>;
+			  }
+
+			  open: func(identifier: string) -> result<bucket, error>;
+			}
+			""";
+
+	/**
+	 * A second interface, bound by the test that pins what a call with NO provider does.
+	 */
+	private static final String WEBGL_WIT = """
+			package local:webgl;
+
+			interface gl {
+			  create-shader: func(kind: s32) -> s32;
+			}
+			""";
+
+	/**
+	 * The store the tests bind -- an in-memory wasi:keyvalue/store, the shape of
+	 * {@code examples/wit/keyvalue/memory-store.lisp}, and character for character the
+	 * one {@code LispEvaluatorTest} interprets.
+	 *
+	 * <p>
+	 * rontolisp ships NO provider for any concrete interface: the core knows the provider
+	 * MECHANISM, and nothing about what wasi:keyvalue is. Implementing a WIT interface is
+	 * ordinary user code, so it is ordinary Lisp -- which means it COMPILES into the
+	 * class like any other defun, and the provider a {@code %wit-call} dispatches through
+	 * is one this program itself defined.
+	 */
+	private static final String MEMORY_STORE = """
+			(defvar *buckets* (make-hash-table :test #'eql))
+			(defvar *next-handle* 1)
+			(defun store-bucket (handle)
+			  (let ((bucket (gethash handle *buckets*)))
+			    (if (null bucket)
+			        (error 'rontolisp:wit-error :payload :no-such-store
+			               :message "memory store: not an open bucket handle")
+			        bucket)))
+			(defun memory-store (member &rest args)
+			  (cond ((string= member "open")
+			         (let ((handle *next-handle*))
+			           (setq *next-handle* (+ handle 1))
+			           (setf (gethash handle *buckets*) (make-hash-table :test #'equal))
+			           handle))
+			        ((string= member "bucket-get")
+			         (gethash (nth 1 args) (store-bucket (nth 0 args))))
+			        ((string= member "bucket-set")
+			         (setf (gethash (nth 1 args) (store-bucket (nth 0 args))) (nth 2 args))
+			         nil)
+			        ((string= member "bucket-delete")
+			         (remhash (nth 1 args) (store-bucket (nth 0 args)))
+			         nil)
+			        ((string= member "bucket-exists")
+			         (if (gethash (nth 1 args) (store-bucket (nth 0 args))) t nil))
+			        ((string= member "bucket-list-keys")
+			         (let ((keys nil))
+			           (maphash (lambda (key value) value (push key keys))
+			                    (store-bucket (nth 0 args)))
+			           (nreverse keys)))
+			        (t (error 'rontolisp:wit-error :payload (list :other member)
+			                  :message "memory store: no such member"))))
+			(rontolisp:wit-provide "wasi:keyvalue/store@0.2.0" #'memory-store)
+			""";
+
+	// wit-import tests run the compile-path pre-passes the CLI runs, in the CLI's order:
+	// WitImportInliner lowers the directive into ordinary defuns dispatching through the
+	// interface's provider (BEFORE macro expansion -- the (defpackage kv ...) it
+	// synthesizes
+	// must exist before any pass resolves a kv: call site), and WitLibrary then splices
+	// the
+	// WIT runtime those %wit-call bodies land in. The prelude carries string<.
+	private String compileAndRunWit(String lispCode) throws Exception {
+		List<LispVal> lowered = am.ik.rontolisp.eval.WitImportInliner.inline(LispReader.readAllFromString(lispCode),
+				tempDir.toString(), am.ik.rontolisp.compiler.WitExportDirective.Backend.OTHER,
+				am.ik.rontolisp.eval.SourceLoader.fileSystem());
+		return compileAndRun(am.ik.rontolisp.eval.WitLibrary.process(am.ik.rontolisp.eval.LispPreludeLibrary
+			.process(am.ik.rontolisp.eval.UserMacroExpander.expand(lowered))));
+	}
+
+	// Writes a WIT into the temp dir -- the base directory compileAndRunWit resolves the
+	// directive's relative path against, exactly as the CLI resolves it against the
+	// source
+	// file's own directory -- and returns the directive that binds it.
+	private String witImport(String file, String wit, String iface, String pkg) throws Exception {
+		Files.writeString(tempDir.resolve(file), wit);
+		return "(rontolisp:wit-import \"" + file + "\" :interface \"" + iface + "\" :package " + pkg + ")\n";
+	}
+
+	private String keyvalueImport() throws Exception {
+		return witImport("kv.wit", KEYVALUE_WIT, "wasi:keyvalue/store@0.2.0", "kv");
+	}
+
+	@Test
+	void compileAndRunWitImportAgainstTheProviderTheProgramBinds() throws Exception {
+		// The whole interface, driven end to end through a store the PROGRAM binds -- and
+		// the store is plain Lisp, so it compiles into the class alongside the bindings
+		// that dispatch through it: a resource is an opaque integer handle, a value is a
+		// byte string (list<u8>), and a missing key is nil (option<list<u8>> =
+		// value-or-nil,
+		// not an error). Same source, same answer as the interpreter.
+		assertThat(compileAndRunWit(keyvalueImport() + MEMORY_STORE + """
+				(defvar *b* (kv:open "cache"))
+				(kv:bucket-set *b* "greeting" "hello")
+				(kv:bucket-set *b* "count" "3")
+				(defvar *stored* (list (integerp *b*)
+				                       (kv:bucket-get *b* "greeting")
+				                       (kv:bucket-get *b* "absent")
+				                       (kv:bucket-exists *b* "greeting")
+				                       (sort (kv:bucket-list-keys *b*) #'string<)))
+				(kv:bucket-delete *b* "greeting")
+				(print (append *stored* (list (kv:bucket-exists *b* "greeting")
+				                              (sort (kv:bucket-list-keys *b*) #'string<))))
+				""")).isEqualTo("(T \"hello\" NIL T (\"count\" \"greeting\") NIL (\"count\"))");
+	}
+
+	@Test
+	void compileAndRunWitImportBindingsAreOrdinaryDefunsSoTheyWorkAsValues() throws Exception {
+		// The property most likely to regress: a binding is an ORDINARY defun, so it is
+		// collected in Pass 1 like any other and #'kv:bucket-get / funcall / apply /
+		// mapcar
+		// work with no extra wiring.
+		assertThat(compileAndRunWit(keyvalueImport() + MEMORY_STORE + """
+				(defvar *b* (kv:open "cache"))
+				(kv:bucket-set *b* "a" "1")
+				(kv:bucket-set *b* "b" "2")
+				(print (list (functionp #'kv:bucket-get)
+				             (funcall #'kv:bucket-get *b* "a")
+				             (apply #'kv:bucket-get (list *b* "b"))
+				             (mapcar (lambda (k) (funcall #'kv:bucket-get *b* k)) '("a" "b" "zz"))))
+				""")).isEqualTo("(T \"1\" \"2\" (\"1\" \"2\" NIL))");
+	}
+
+	@Test
+	void compileAndRunASecondWitProvideReplacesTheFirst() throws Exception {
+		// Binding a provider REPLACES whatever was bound for the interface before it, and
+		// that is what makes a store swappable: examples/wit/keyvalue develops against an
+		// in-memory store and then, on THIS backend, binds a
+		// java.util.LinkedHashMap-backed
+		// one over the top of it -- one line, and not a character of the program changes.
+		// Here the memory store is bound first and a stub replaces it, so every call
+		// below
+		// lands in the stub.
+		assertThat(compileAndRunWit(keyvalueImport() + MEMORY_STORE + """
+				(defvar *writes* nil)
+				(defun stub-store (member &rest args)
+				  (cond ((string= member "open") 7)
+				        ((string= member "bucket-set")
+				         (setq *writes* (cons (nth 1 args) *writes*))
+				         nil)
+				        ((string= member "bucket-get")
+				         (concatenate 'string "stub:" (nth 1 args)))
+				        (t (error 'rontolisp:wit-error :payload (list :other member)
+				                  :message "the stub store does not implement it"))))
+				(rontolisp:wit-provide "wasi:keyvalue/store@0.2.0" #'stub-store)
+				(defvar *b* (kv:open "cache"))
+				(kv:bucket-set *b* "k" "v")
+				(print (list *b* (kv:bucket-get *b* "k") *writes*))
+				""")).isEqualTo("(7 \"stub:k\" (\"k\"))");
+	}
+
+	@Test
+	void compileAndRunWitErrorArmSignalsWitErrorCarryingTheMappedPayload() throws Exception {
+		// The settled mapping: a WIT result<T, E>'s ok arm is the value and its error arm
+		// SIGNALS rontolisp:wit-error, whose payload is the mapped E. The PROVIDER is
+		// what
+		// signals it -- so both arms below come out of a store written in the test: the
+		// memory store's `no-such-store` for a handle it never handed out (an enum-shaped
+		// variant arm = a keyword), and a stub's own `other(string)` (a payload-carrying
+		// arm = a tagged list). Every handler-case stays in a defvar initform: in
+		// argument
+		// position it would meet a non-empty operand stack, which this backend cannot
+		// compile.
+		assertThat(compileAndRunWit(keyvalueImport() + MEMORY_STORE + """
+				(defvar *bad-handle* (handler-case (kv:bucket-get 424242 "k")
+				                       (rontolisp:wit-error (e) (rontolisp:wit-error-payload e))))
+				(defun stub-store (member &rest args)
+				  (if (string= member "open")
+				      7
+				      (error 'rontolisp:wit-error :payload (list :other member)
+				             :message "the stub store does not implement it")))
+				(rontolisp:wit-provide "wasi:keyvalue/store@0.2.0" #'stub-store)
+				(defvar *stub* (handler-case (kv:bucket-set (kv:open "cache") "k" "v")
+				                 (rontolisp:wit-error (e) (rontolisp:wit-error-payload e))))
+				(print (list *bad-handle* *stub*))
+				""")).isEqualTo("(:NO-SUCH-STORE (:OTHER \"bucket-set\"))");
+	}
+
+	@Test
+	void compileAndRunWitImportWithNoProviderBoundSignalsAClearWitError() throws Exception {
+		// The honest statement of what the core does with a wit-import: it binds the
+		// WIT's
+		// functions, and NOTHING ELSE. rontolisp knows the provider mechanism; it does
+		// not
+		// know what any concrete interface means, and it ships an implementation of none
+		// --
+		// so a bound function with no provider behind it does not quietly answer a
+		// default,
+		// it says so, and names the one thing that fixes it.
+		assertThat(compileAndRunWit(witImport("gl.wit", WEBGL_WIT, "local:webgl/gl", "gl") + """
+				(defvar *r* (handler-case (gl:create-shader 35633)
+				              (rontolisp:wit-error (e)
+				                (list (rontolisp:wit-error-payload e) (format nil "~a" e)))))
+				(print (car *r*))
+				(print (car (cdr *r*)))
+				"""))
+			// The payload is the interface nothing was bound for, and the report says
+			// what
+			// to do about it.
+			.contains("\"local:webgl/gl\"")
+			.contains("No provider is bound for the WIT interface local:webgl/gl")
+			.contains("rontolisp:wit-provide");
+	}
+
+	@Test
+	void compileAndRunUpcaseReaderMode() throws Exception {
+		// The reader's upcase premise is a frontend concern: the compiler sees the
+		// folded token stream, so mixed-case operators, upcased user symbols, upcased
+		// keyword arguments and upcased data keywords all behave as on the
+		// interpreter.
+		am.ik.rontolisp.reader.Features upcase = am.ik.rontolisp.reader.Features.JVM;
+		String output = compileAndRun(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString("""
+				(DEFUN ADD2 (X) (+ X 2))
+				(PRINT (add2 40))
+				(PRINT (CDR (ASSOC "x" '(("x" . 1)) :TEST #'EQUAL)))
+				(PRINT (CDR (ASSOC :b '((:A . 1) (:B . 2)))))
+				(PRINT (SYMBOL-NAME :foo))
+				""", upcase)));
+		assertThat(output).isEqualTo("42\n1\n2\n\"FOO\"");
+	}
+
+	@Test
+	void compileRuntimeElementTypePicksTheSameArrayAsALiteralOne() throws Exception {
+		// Same contract as the interpreter's
+		// evalRuntimeElementTypePicksTheSameArrayAsALiteralOne, and the same program:
+		// a :element-type held in a VARIABLE reaches the representation, the remembered
+		// type and the zero fill a literal spelling would. This backend gets there
+		// through the %make-array-et prelude helper (compileAndRun splices the prelude
+		// like the CLI pipeline does), so both helper shapes are exercised -- the plain
+		// one and the :fill-pointer one.
+		assertThat(compileAndRun("""
+				(defun mk (et) (make-array 4 :element-type et))
+				(defun mk2 (et) (make-array '(2 2) :element-type et))
+				(defun mkfp (et) (make-array 4 :element-type et :fill-pointer 2))
+				(defun mki (et x) (make-array 3 :element-type et :initial-element x))
+				(print (list (array-element-type (mk '(unsigned-byte 8)))
+				             (type-of (mk '(unsigned-byte 8)))
+				             (aref (mk '(unsigned-byte 8)) 0)
+				             (zerop (aref (mk 'double-float) 3))
+				             (array-element-type (mk2 'character))
+				             (stringp (mk 'character))
+				             (array-element-type (mkfp 'double-float))
+				             (type-of (mkfp 'double-float))))
+				(print (list (array-element-type (mk 'fixnum)) (type-of (mk 'bit)) (aref (mk 'fixnum) 0)))
+				(print (list (aref (mki '(unsigned-byte 8) 7) 0) (aref (mki 'character #\\z) 0)
+				             (aref (mki t 'a) 0)))
+				""")).isEqualTo(
+				"""
+						((UNSIGNED-BYTE 8) (SIMPLE-ARRAY (UNSIGNED-BYTE 8) (4)) 0 T CHARACTER T DOUBLE-FLOAT (VECTOR DOUBLE-FLOAT 4))
+						(T (SIMPLE-BIT-VECTOR 4) NIL)
+						(7 #\\z A)""");
+	}
+
+	@Test
+	void compileRuntimeTypepResolvesADeftypeAlias() throws Exception {
+		// Same contract as the interpreter's evalRuntimeTypepResolvesADeftypeAlias, and
+		// the same program: a typep designator held in a VALUE resolves the user deftype
+		// it names, through the injected %deftype-alias resolver the runtime dispatch
+		// normalizes with. A computed coerce result type rides the same resolution.
+		assertThat(compileAndRun("""
+				(deftype octet () '(unsigned-byte 8))
+				(deftype byte-buffer () 'octet)
+				(deftype str () 'string)
+				(defun tp (x ty) (typep x ty))
+				(print (list (tp 3 'octet) (tp 300 'octet) (tp 3 'byte-buffer) (tp "ab" 'str) (tp 3 'str)
+				             (tp 3 (list 'or 'octet 'null)) (tp "x" (list 'or 'octet 'null))
+				             (coerce 3 (car (list 'octet))) (coerce (list #\\a #\\b) (car (list 'str)))
+				             (typep 3 'octet) (tp 3 'no-such-type)))
+				""")).isEqualTo("(T NIL T T NIL T NIL 3 \"ab\" T NIL)");
+	}
+
+	@Test
+	void compileRuntimeElementTypeResolvesADeftypeAlias() throws Exception {
+		// Same contract as the interpreter's
+		// evalRuntimeElementTypeResolvesADeftypeAlias, and the same program: a deftype
+		// alias held in a VARIABLE picks the representation its expansion designates.
+		// The designator goes through the injected %make-array-et-alias resolver before
+		// the %make-array-et dispatch, so a chain and the :fill-pointer shape are
+		// covered too.
+		assertThat(compileAndRun("""
+				(deftype octet () '(unsigned-byte 8))
+				(deftype byte-buffer () 'octet)
+				(deftype char-buf () 'character)
+				(defun mk (et n) (make-array n :element-type et))
+				(defun mkfp (et) (make-array 4 :element-type et :fill-pointer 2))
+				(print (list (array-element-type (mk 'octet 4))
+				             (aref (mk 'octet 4) 0)
+				             (type-of (mk 'byte-buffer 4))
+				             (stringp (mk 'char-buf 3))
+				             (array-element-type (mkfp 'octet))
+				             (array-element-type (mk 'double-float 2))))
+				"""))
+			.isEqualTo("((UNSIGNED-BYTE 8) 0 (SIMPLE-ARRAY (UNSIGNED-BYTE 8) (4)) T (UNSIGNED-BYTE 8) DOUBLE-FLOAT)");
+		// A designator naming no alias is left alone, and a self-referential deftype
+		// terminates on the hop bound instead of spinning.
+		assertThat(compileAndRun("""
+				(deftype loopy () 'loopy)
+				(defun mk (et) (make-array 2 :element-type et))
+				(print (list (array-element-type (mk 'not-a-type)) (array-element-type (mk 'loopy))))
+				""")).isEqualTo("(T T)");
+	}
+
+	@Test
+	void compileSubseqOfAPackedFloatArrayKeepsTheWidth() throws Exception {
+		// %array-alike over a packed float array: the copy comes back packed at the
+		// SAME width, all three of them. It used to come back a general simple-vector
+		// -- _ivAlike tested only the long[] marker, and a float-only program did not
+		// even emit it.
+		assertThat(compileAndRun("""
+				(let ((d (make-array 3 :element-type 'double-float :initial-element 1.5d0)))
+				  (print (list (type-of (subseq d 0 2)) (array-element-type (copy-seq d)) (subseq d 1))))
+				""")).isEqualTo("((SIMPLE-ARRAY DOUBLE-FLOAT (2)) DOUBLE-FLOAT #d(1.5 1.5))");
+		assertThat(compileAndRun("""
+				(let ((s (make-array 3 :element-type 'single-float :initial-element 1.5)))
+				  (print (list (type-of (subseq s 0 2)) (subseq s 1))))
+				""")).isEqualTo("((SIMPLE-ARRAY SINGLE-FLOAT (2)) #f(1.5 1.5))");
+		assertThat(compileAndRun("""
+				(let ((b (make-array 3 :element-type 'bfloat16 :initial-element 1.5)))
+				  (print (list (type-of (subseq b 0 2)) (subseq b 1))))
+				""")).isEqualTo("((SIMPLE-ARRAY BFLOAT16 (2)) #bf16(1.5 1.5))");
+	}
+
+	@Test
+	void compileSubseqOfAnAdjustablePackedVectorKeepsTheWidth() throws Exception {
+		// A fill-pointer / adjustable packed vector is the general boxed representation
+		// that only REMEMBERS its width (.kb/adjustable-arrays.md), so %array-alike has
+		// to read the element type rather than the runtime class -- every width of both
+		// packed families. The masked store proves the copy really is packed.
+		assertThat(compileAndRun("""
+				(let ((v (make-array 4 :element-type '(unsigned-byte 8) :fill-pointer 0 :adjustable t)))
+				  (vector-push-extend 65 v)
+				  (vector-push-extend 66 v)
+				  (let ((s (subseq v 0 2)))
+				    (setf (aref s 0) 300)
+				    (print (list (type-of s) s))))
+				""")).isEqualTo("((SIMPLE-ARRAY (UNSIGNED-BYTE 8) (2)) #(44 66))");
+		assertThat(compileAndRun("""
+				(let ((v (make-array 4 :element-type '(unsigned-byte 16) :fill-pointer 0 :adjustable t)))
+				  (vector-push-extend 65 v)
+				  (print (type-of (subseq v 0 1))))
+				""")).isEqualTo("(SIMPLE-ARRAY (UNSIGNED-BYTE 16) (1))");
+		assertThat(compileAndRun("""
+				(let ((v (make-array 4 :element-type '(unsigned-byte 32) :fill-pointer 0 :adjustable t)))
+				  (vector-push-extend 65 v)
+				  (print (type-of (subseq v 0 1))))
+				""")).isEqualTo("(SIMPLE-ARRAY (UNSIGNED-BYTE 32) (1))");
+		assertThat(compileAndRun("""
+				(let ((v (make-array 4 :element-type 'single-float :fill-pointer 0 :adjustable t)))
+				  (vector-push-extend 1.0 v)
+				  (vector-push-extend 2.0 v)
+				  (print (list (type-of (subseq v 0 2)) (subseq v 0 2))))
+				""")).isEqualTo("((SIMPLE-ARRAY SINGLE-FLOAT (2)) #f(1.0 2.0))");
+		assertThat(compileAndRun("""
+				(let ((v (make-array 4 :element-type 'double-float :fill-pointer 0 :adjustable t)))
+				  (vector-push-extend 1.0d0 v)
+				  (print (list (type-of (subseq v 0 1)) (subseq v 0 1))))
+				""")).isEqualTo("((SIMPLE-ARRAY DOUBLE-FLOAT (1)) #d(1.0))");
+		assertThat(compileAndRun("""
+				(let ((v (make-array 4 :element-type 'bfloat16 :fill-pointer 0 :adjustable t)))
+				  (vector-push-extend 1.0 v)
+				  (print (list (type-of (subseq v 0 1)) (subseq v 0 1))))
+				""")).isEqualTo("((SIMPLE-ARRAY BFLOAT16 (1)) #bf16(1.0))");
+		// A displaced view answers its chain end's element type, so its subseq is
+		// packed too; a plain fill-pointer vector and a character vector are unchanged.
+		assertThat(compileAndRun("""
+				(let* ((tgt (make-array 3 :element-type 'double-float :initial-element 2.5d0))
+				       (view (make-array 2 :element-type 'double-float :displaced-to tgt :displaced-index-offset 1)))
+				  (print (list (type-of (subseq view 0 2)) (subseq view 0 2))))
+				""")).isEqualTo("((SIMPLE-ARRAY DOUBLE-FLOAT (2)) #d(2.5 2.5))");
+		assertThat(compileAndRun("""
+				(let ((g (make-array 3 :fill-pointer 2 :initial-element 7))
+				      (c (make-array 3 :element-type 'character :fill-pointer 2 :initial-element #\\a)))
+				  (print (list (type-of (subseq g 0 2)) (subseq g 0 2) (type-of (subseq c 0 2)) (subseq c 0 2))))
+				""")).isEqualTo("((SIMPLE-VECTOR 2) #(7 7) STRING \"aa\")");
+	}
+
+	@Test
+	void compilePackedIntVectorRejectsNonIntegerStoresAndFillPointerSurface() {
+		assertThatThrownBy(() -> compileAndRun("(setf (aref (make-array 2 :element-type '(unsigned-byte 8)) 0) 1.5)"))
+			.rootCause()
+			.hasMessageContaining("integer");
+		assertThatThrownBy(() -> compileAndRun("(aref (make-array 2 :element-type '(unsigned-byte 8)) 5)")).rootCause()
+			.hasMessageContaining("AREF: The value 5 is not of type (INTEGER 0 (2))");
+		assertThatThrownBy(() -> compileAndRun("(vector-push 1 (make-array 2 :element-type '(unsigned-byte 8)))"))
+			.rootCause()
+			.hasMessageContaining(
+					"VECTOR-PUSH: The value #(0 0) is not of type (AND VECTOR (SATISFIES ARRAY-HAS-FILL-POINTER-P))");
+	}
+
+	@Test
+	void compilePackedFloatArrayRejectsAdjustArray() {
+		// A packed float array has no fill-pointer/adjustability/displacement surface,
+		// same as a packed integer vector; adjust-array's %array-disp-target probe used
+		// to reach a bare checkcast ArrayList on the double[]/float[] representation
+		// (ClassCastException) instead of this clear error.
+		assertThatThrownBy(() -> compileAndRun("(adjust-array (make-array 3 :element-type 'double-float) 5)"))
+			.rootCause()
+			.hasMessageContaining("packed float array");
+		assertThatThrownBy(() -> compileAndRun("(adjust-array (make-array 3 :element-type 'single-float) 5)"))
+			.rootCause()
+			.hasMessageContaining("packed float array");
+	}
+
+	@Test
+	void compileAndRunOpenAppend(@TempDir Path tempDir) throws Exception {
+		String file = tempDir.resolve("append.txt").toString().replace("\\", "\\\\");
+		assertThat(compileAndRun("""
+				(with-open-file (out "%s" :direction :output) (write-string "one" out))
+				(with-open-file (out "%s" :direction :output :if-exists :append) (write-string "two" out))
+				(with-open-file (in "%s") (print (read-line in)))
+				""".formatted(file, file, file))).isEqualTo("\"onetwo\"");
+	}
+
+	@Test
+	void compileAndRunOpenExistenceOptions(@TempDir Path tempDir) throws Exception {
+		// The interpreter's twin is LispEvaluatorTest#openReadsTheWholeIfExistsAndIf
+		// DoesNotExistTable: :if-exists is read only on an output open, :error and nil
+		// answer instead of opening, and an appending output open does NOT create the
+		// file unless :if-does-not-exist :create says so. On the compile paths the
+		// whole table is one shared lowering over probe-file + %file-error
+		// (LispMacroExpander.lowerRuntimeOpenOptions), so there is no new runtime.
+		String here = tempDir.toString().replace("\\", "\\\\");
+		assertThat(compileAndRun("""
+				(defun p (n) (concatenate 'string "%s/" n))
+				(defun try (f) (handler-case (funcall f) (file-error () :file-error)))
+				(with-open-file (s (p "a") :direction :output) (write-string "abc" s))
+				(print (with-open-file (s (p "a") :if-exists :error) (read-line s)))
+				(print (try (lambda () (open (p "a") :direction :output :if-exists :error))))
+				(print (open (p "a") :direction :output :if-exists nil))
+				(print (try (lambda () (open (p "missing") :direction :input))))
+				(print (open (p "missing") :direction :input :if-does-not-exist nil))
+				(print (try (lambda () (open (p "missing") :direction :output :if-exists :append))))
+				(let ((probed (open (p "a") :direction :probe)))
+				  (print (list (and probed t) (open-stream-p probed) (typep probed 'file-stream))))
+				(print (open (p "missing") :direction :probe))
+				""".formatted(here)))
+			.isEqualTo("\"abc\"\n:FILE-ERROR\nNIL\n:FILE-ERROR\nNIL\n:FILE-ERROR\n(T NIL T)\nNIL");
+	}
+
+	@Test
+	void compileAndRunOpenDirectionIoAndOverwrite(@TempDir Path tempDir) throws Exception {
+		// The interpreter's twin is
+		// LispEvaluatorTest#openDirectionIoReadsBackWhatItJustWroteThroughOneCursor.
+		// Both run the SAME class -- runtime/RontoIoFileStream, which travels beside the
+		// compiled output -- so the two readings of :direction :io cannot drift.
+		String here = tempDir.toString().replace("\\", "\\\\");
+		assertThat(compileAndRun("""
+				(defun p (n) (concatenate 'string "%s/" n))
+				(with-open-file (out (p "io.txt") :direction :output) (write-string "abcdefghij" out))
+				(let ((s (open (p "io.txt") :direction :io :if-exists :overwrite)))
+				  (write-string "wxyz" s)
+				  (print (file-position s))
+				  (file-position s :start)
+				  (print (read-line s nil))
+				  (print (file-length s))
+				  (close s))
+				(let ((s (open (p "io.txt") :direction :io)))
+				  (write-string "abc" s)
+				  (file-position s :start)
+				  (print (read-line s nil))
+				  (close s))
+				(let ((s (open (p "io.dat") :direction :io :element-type '(unsigned-byte 8))))
+				  (dotimes (i 4) (write-byte (+ 65 i) s))
+				  (file-position s :start)
+				  (print (list (read-byte s) (read-byte s) (file-position s)))
+				  (close s))
+				(let ((s (open (p "io.txt") :direction :output :if-exists :overwrite)))
+				  (write-string "Z" s)
+				  (close s))
+				(print (with-open-file (in (p "io.txt")) (read-line in)))
+				""".formatted(here))).isEqualTo("4\n\"wxyzefghij\"\n10\n\"abc\"\n(65 66 2)\n\"Zbc\"");
+	}
+
+	@Test
+	void compileAndRunComputedOpenOptions(@TempDir Path tempDir) throws Exception {
+		String file = tempDir.resolve("computed.txt").toString().replace("\\", "\\\\");
+		// The options arrive as ARGUMENTS -- the shape a portable file wrapper has --
+		// so the mode cannot be folded; the compiled code dispatches onto the literal
+		// open shapes instead. Byte-identical output for a literal spec is what
+		// compileAndRunOpenAppend above pins.
+		assertThat(compileAndRun("""
+				(defun wr (path text dir ie)
+				  (with-open-file (out path :direction dir :if-exists ie) (write-string text out)))
+				(defun rd (path et)
+				  (with-open-file (in path :element-type et) (read-line in)))
+				(defun rd1 (path et)
+				  (with-open-file (in path :element-type et) (read-byte in)))
+				(wr "%s" "one" :output :supersede)
+				(wr "%s" "two" :output :append)
+				(print (rd "%s" 'character))
+				(print (rd1 "%s" (list 'unsigned-byte 8)))
+				""".formatted(file, file, file, file))).isEqualTo("\"onetwo\"\n111");
+	}
+
+	@Test
+	void anErrorCaughtInTheSameMethodLeavesTheSpilledArgumentsAlone() throws Exception {
+		// The %error message rides in ONE cached local per method. It was allocated on
+		// first use and then handed out again after its scope ended, so a later
+		// argument spilled around a handler-case could land in the same slot -- and the
+		// error inside that handler-case, caught IN THE SAME METHOD, overwrote the
+		// argument with its message before the list was built. First seen as the
+		// ci-spec find-class-metaobject-substrate case printing its condition report
+		// in place of a T.
+		assertThat(compileAndRun("""
+				(define-condition zz-error (error) ((code :initarg :code :reader zz-code)))
+				(defun zz-id (x) x)
+				(print (let ((q 5)) (handler-case (error "first ~a" q) (error () q))))
+				(print (list (zz-id 1) (zz-id 2) (zz-id 3) (zz-id 4) (zz-id 5) (zz-id 6) (zz-id 7) (zz-id 8)
+				             (handler-case (error 'zz-error :code 42) (zz-error (e) (zz-code e)))))
+				""")).isEqualTo("5\n(1 2 3 4 5 6 7 8 42)");
+	}
+
+	@Test
+	void compileAndRunStreamElementTypeOfAnOctetFileStream(@TempDir Path tempDir) throws Exception {
+		// The registry without the wide helpers: a program that asks
+		// stream-element-type and opens a file answers (unsigned-byte 8) for an octet
+		// stream, CHARACTER for every other (the WASM twin is
+		// streamElementTypeOfAnOctetFileStreamOnPreview1).
+		String here = tempDir.toString().replace("\\", "\\\\");
+		assertThat(compileAndRun(
+				"""
+						(with-open-file (o "%1$s/e919.bin" :direction :output :element-type '(unsigned-byte 8) :if-exists :supersede)
+						  (write-byte 7 o)
+						  (print (list (stream-element-type o) (typep o 'file-stream))))
+						(with-open-file (i "%1$s/e919.bin" :element-type 'unsigned-byte)
+						  (print (list (stream-element-type i) (read-byte i) (read-byte i nil :eof))))
+						(with-open-file (i "%1$s/e919.bin")
+						  (print (stream-element-type i)))
+						(print (with-output-to-string (s) (princ (stream-element-type s) s)))
+						"""
+					.formatted(here)))
+			.isEqualTo("""
+					((UNSIGNED-BYTE 8) T)
+					((UNSIGNED-BYTE 8) 7 :EOF)
+					CHARACTER
+					\"CHARACTER\"""");
+	}
+
+	@Test
+	void compileAndRunWideElementTypesThroughTheGrayDispatchers(@TempDir Path tempDir) throws Exception {
+		// A program that uses the Gray protocol reaches read-byte / stream-element-type /
+		// file-length / file-position through gray.lisp's dispatchers, which hand the
+		// built-in a RESOLVED HANDLE rather than the stream value -- so the registry is
+		// keyed by the handle, and a close forgets the entry (closing a SYNONYM does
+		// not). First seen red in the ci-spec E2E corpus, whose concatenated program
+		// defines Gray classes.
+		String here = tempDir.toString().replace("\\", "\\\\");
+		assertThat(compileAndRunGray(
+				"""
+						(defclass wbin-sink (rontolisp:fundamental-character-output-stream) ())
+						(with-open-file (o "%1$s/gbin.bin" :direction :output :element-type '(signed-byte 16) :if-exists :supersede)
+						  (write-byte -2 o)
+						  (write-byte 513 o))
+						(print (with-open-file (i "%1$s/gbin.bin" :element-type '(signed-byte 16))
+						         (list (stream-element-type i) (read-byte i) (read-byte i) (file-length i) (file-position i))))
+						(defvar *gbin* (open "%1$s/gbin.bin" :element-type '(unsigned-byte 16)))
+						(defvar *gbin-syn* (make-synonym-stream '*gbin*))
+						(close *gbin-syn*)
+						(print (list (stream-element-type *gbin*) (read-byte *gbin*)))
+						(close *gbin*)
+						(print (stream-element-type *gbin*))
+						"""
+					.formatted(here)))
+			.isEqualTo("""
+					((SIGNED-BYTE 16) -2 513 2 2)
+					((UNSIGNED-BYTE 16) 65534)
+					CHARACTER""");
+	}
+
+	@Test
+	void compileAndRunWideAndNarrowElementTypes(@TempDir Path tempDir) throws Exception {
+		// The twin of
+		// LispEvaluatorTest#wideAndNarrowElementTypesRoundTripTheWaySbclStoresThem and
+		// WasmLispCompilerIntegrationTest#wideAndNarrowElementTypesOnPreview1. A wide
+		// element composes above the octet primitive through the prelude registry; the
+		// output is sbcl's.
+		String here = tempDir.toString().replace("\\", "\\\\");
+		assertThat(compileAndRun(
+				"""
+						(defun wbin-drain (s)
+						  (do ((b (read-byte s nil :eof) (read-byte s nil :eof)) (r nil (cons b r)))
+						      ((eq b :eof) (nreverse r))))
+						(defun wbin-octets ()
+						  (with-open-file (i "%1$s/wbin.bin" :element-type '(unsigned-byte 8)) (wbin-drain i)))
+						(with-open-file (o "%1$s/wbin.bin" :direction :output :element-type '(unsigned-byte 1) :if-exists :supersede)
+						  (dolist (v '(0 1 1)) (write-byte v o)))
+						(print (list (with-open-file (i "%1$s/wbin.bin" :element-type '(unsigned-byte 1))
+						               (list (stream-element-type i) (file-length i) (wbin-drain i)))
+						             (wbin-octets)))
+						(with-open-file (o "%1$s/wbin.bin" :direction :output :element-type '(unsigned-byte 16) :if-exists :supersede)
+						  (dolist (v '(1 258)) (write-byte v o)))
+						(print (list (with-open-file (i "%1$s/wbin.bin" :element-type '(unsigned-byte 16))
+						               (list (stream-element-type i) (file-length i) (wbin-drain i)))
+						             (wbin-octets)))
+						(with-open-file (o "%1$s/wbin.bin" :direction :output :element-type '(signed-byte 8) :if-exists :supersede)
+						  (dolist (v '(-1 5)) (write-byte v o)))
+						(print (list (with-open-file (i "%1$s/wbin.bin" :element-type '(signed-byte 8))
+						               (list (stream-element-type i) (file-length i) (wbin-drain i)))
+						             (wbin-octets)))
+						(with-open-file (o "%1$s/wbin.bin" :direction :output :element-type '(signed-byte 64) :if-exists :supersede)
+						  (dolist (v '(-9223372036854775808 9223372036854775807)) (write-byte v o)))
+						(print (list (with-open-file (i "%1$s/wbin.bin" :element-type '(signed-byte 64))
+						               (list (stream-element-type i) (file-length i) (wbin-drain i)))
+						             (wbin-octets)))
+						(with-open-file (o "%1$s/wbin.bin" :direction :output :element-type '(integer 100 200) :if-exists :supersede)
+						  (write-byte 150 o))
+						(print (list (with-open-file (i "%1$s/wbin.bin" :element-type '(integer 100 200))
+						               (list (stream-element-type i) (file-length i) (wbin-drain i)))
+						             (wbin-octets)))
+						(print (with-open-file (i "%1$s/wbin.bin" :element-type '(unsigned-byte 16))
+						         (list (file-length i) (read-byte i nil :partial))))
+						(with-open-file (o "%1$s/wbin.bin" :direction :output :element-type '(unsigned-byte 16) :if-exists :supersede)
+						  (write-sequence (vector 1 2 65535) o))
+						(print (with-open-file (i "%1$s/wbin.bin" :element-type '(unsigned-byte 16))
+						         (list (read-byte i) (file-position i) (file-position i 0) (read-byte i)
+						               (file-position i :end) (read-byte i nil :eof))))
+						(print (with-open-file (i "%1$s/wbin.bin" :element-type '(unsigned-byte 16))
+						         (let ((v (make-array 3 :element-type '(unsigned-byte 16))))
+						           (list (read-sequence v i) (aref v 0) (aref v 2)))))
+						(print (with-open-file (s "%1$s/wbin.bin" :direction :io :element-type '(signed-byte 16) :if-exists :overwrite)
+						         (list (read-byte s) (progn (write-byte -2 s) (file-position s)) (file-position s 1) (read-byte s))))
+						(print (with-open-file (s "%1$s/wbin.bin") (stream-element-type s)))
+						"""
+					.formatted(here)))
+			.isEqualTo(
+					"""
+							(((UNSIGNED-BYTE 8) 3 (0 1 1)) (0 1 1))
+							(((UNSIGNED-BYTE 16) 2 (1 258)) (1 0 2 1))
+							(((SIGNED-BYTE 8) 2 (-1 5)) (255 5))
+							(((SIGNED-BYTE 64) 2 (-9223372036854775808 9223372036854775807)) (0 0 0 0 0 0 0 128 255 255 255 255 255 255 255 127))
+							(((UNSIGNED-BYTE 8) 1 (150)) (150))
+							(0 :PARTIAL)
+							(1 1 T 1 T :EOF)
+							(3 1 65535)
+							(1 2 T -2)
+							CHARACTER""");
+	}
+
+	@Test
+	void theOctetElementTypeSpellingsCompileToTheSameBytesAsUnsignedByte8() {
+		// bit, unsigned-byte, (unsigned-byte 3) and (integer 0 200) are all ONE octet,
+		// unsigned (StreamElementType): the leaf carries the widened '(unsigned-byte 8)
+		// and the class is the one the octet spelling always compiled to.
+		byte[] octet = JvmLispCompiler.builder().className("SameOctet").build().compile(LispReader.readAllFromString("""
+				(with-open-file (s "f.bin" :direction :output :element-type '(unsigned-byte 8)) (write-byte 65 s))
+				"""));
+		for (String spelling : List.of("'bit", "'unsigned-byte", "'(unsigned-byte 3)", "'(integer 0 200)")) {
+			assertThat(JvmLispCompiler.builder()
+				.className("SameOctet")
+				.build()
+				.compile(LispReader.readAllFromString("(with-open-file (s \"f.bin\" :direction :output :element-type "
+						+ spelling + ") (write-byte 65 s))")))
+				.as(spelling)
+				.isEqualTo(octet);
+		}
+	}
+
+	@Test
+	void aLiteralWithOpenFileSpecCompilesToTheSameBytesAsBefore(@TempDir Path tempDir) {
+		// The runtime dispatch must cost a LITERAL spec nothing: the fold is what every
+		// existing program and every size-report number was measured on. A spec of
+		// literals and the positional open it folds to must therefore emit the same
+		// class.
+		List<LispVal> keyword = LispReader.readAllFromString("""
+				(with-open-file (s "f.txt" :direction :output :element-type '(unsigned-byte 8))
+				  (write-byte 65 s))
+				""");
+		List<LispVal> positional = LispReader.readAllFromString("""
+				(let ((s (open "f.txt" :output '(unsigned-byte 8))))
+				  (unwind-protect (write-byte 65 s) (close s)))
+				""");
+		byte[] folded = JvmLispCompiler.builder()
+			.className("SameOpen")
+			.optimize(OptimizeLevel.DEFAULT)
+			.build()
+			.compile(keyword);
+		assertThat(folded).isEqualTo(JvmLispCompiler.builder()
+			.className("SameOpen")
+			.optimize(OptimizeLevel.DEFAULT)
+			.build()
+			.compile(positional));
+	}
+
+	@Test
+	void theSizeLevelChangesNothingWithoutASpeedForSizeTrade() {
+		// --optimize=size is accepted everywhere so a build script need not be
+		// backend-specific. The emissions it declines on this backend are the typed
+		// numeric loop (JvmTypedLoopCompiler), integer expression-tree fusion
+		// (JvmIntFusionCompiler) and the value tails' dispatcher copy (JvmTailBounce);
+		// a program with none of those shapes compiles to the same class at both
+		// levels, which the docs say -- this is what makes that
+		// statement checkable, and what fails the day someone gives the JVM backend
+		// another speed-for-size trade without saying so.
+		List<LispVal> program = LispReader.readAllFromString("""
+				(defun pair (x) (list x x))
+				(print (pair 'hey))
+				""");
+		byte[] fast = JvmLispCompiler.builder()
+			.className("Same")
+			.optimize(OptimizeLevel.DEFAULT)
+			.build()
+			.compile(program);
+		byte[] small = JvmLispCompiler.builder()
+			.className("Same")
+			.optimize(OptimizeLevel.SIZE)
+			.build()
+			.compile(program);
+		assertThat(small).isEqualTo(fast);
+	}
+
+	@Test
+	void theFlaglessBuildIsTheOptimizedOneAndOffIsTheWayBack() {
+		// The whole promise of --optimize being on by default: a build that passes no
+		// flag compiles what --optimize compiles, and the unoptimized shape has to be
+		// asked for by name. One half is OptimizeLevel.parse(null) -> DEFAULT (pinned
+		// in OptimizeLevelTest); the other half is here, because "the levels agree"
+		// would satisfy the first half just as well and would mean the flip changed
+		// nothing.
+		List<LispVal> program = LispReader.readAllFromString("""
+				(defun never-called (x) (* x x))
+				(print (+ 1 2))
+				""");
+		byte[] flagless = JvmLispCompiler.builder()
+			.className("Same")
+			.optimize(OptimizeLevel.parse(null))
+			.build()
+			.compile(program);
+		byte[] optimized = JvmLispCompiler.builder()
+			.className("Same")
+			.optimize(OptimizeLevel.DEFAULT)
+			.build()
+			.compile(program);
+		byte[] off = JvmLispCompiler.builder()
+			.className("Same")
+			.optimize(OptimizeLevel.parse("off"))
+			.build()
+			.compile(program);
+		assertThat(flagless).isEqualTo(optimized);
+		assertThat(off).isNotEqualTo(optimized);
+		assertThat(off.length).isGreaterThan(optimized.length);
+	}
+
+	/**
+	 * The typed-loop program: every shape {@code JvmTypedLoopCompiler} takes (a softmax
+	 * with assigned accumulators, rank-2 stores, a nested rope-shaped loop whose index
+	 * math goes through let temporaries, a result form, a zero-trip loop, a store whose
+	 * value is used) and the guard failures it must survive (a general array, a Long in a
+	 * double-speculated slot, NaN under when/unless, an out-of-bounds access caught by
+	 * handler-case with the accumulators written back).
+	 */
+	private static final String TYPED_LOOP_PROGRAM = """
+			(defun tl-softmax (att scores pos inv)
+			  (let ((top -1e30) (z 0.0))
+			    (dotimes (u (+ pos 1))
+			      (let ((sc (* (aref scores u) inv)))
+			        (setf (aref att u) sc)
+			        (when (> sc top) (setq top sc))))
+			    (dotimes (u (+ pos 1))
+			      (let ((e (exp (- (aref att u) top))))
+			        (setf (aref att u) e)
+			        (setq z (+ z e))))
+			    (dotimes (u (+ pos 1)) (setf (aref att u) (/ (aref att u) z)))
+			    (list top z)))
+			(let ((att (make-array 8 :element-type 'single-float :initial-element 0.0))
+			      (scores (make-array 8 :element-type 'single-float :initial-element 0.0)))
+			  (dotimes (i 8) (setf (aref scores i) (* i 0.7)))
+			  (print (tl-softmax att scores 5 0.25))
+			  (print att)
+			  (print (tl-softmax att scores 7 2)))
+			(let ((kc (make-array '(4 3) :element-type 'single-float :initial-element 0.0))
+			      (vt (make-array '(3 4) :element-type 'double-float :initial-element 0.0))
+			      (k (make-array 6 :element-type 'single-float :initial-element 1.5))
+			      (hs 3) (pos 2) (base 3))
+			  (dotimes (i hs) (setf (aref kc pos i) (aref k (+ base i))))
+			  (print kc)
+			  (dotimes (i hs) (setf (aref vt i pos) (* 2 (aref k (+ base i)))))
+			  (print vt)
+			  (let ((v (make-array 6 :element-type 'single-float :initial-element 0.0))
+			        (rc (make-array '(4 2) :element-type 'single-float :initial-element 0.5))
+			        (rs (make-array '(4 2) :element-type 'single-float :initial-element 0.25))
+			        (half 1) (n-heads 3))
+			    (dotimes (i 6) (setf (aref v i) (+ i 1)))
+			    (dotimes (h n-heads)
+			      (dotimes (i half)
+			        (let* ((j (+ (* h 2) (* 2 i)))
+			               (fcr (aref rc pos i)) (fci (aref rs pos i))
+			               (v0 (aref v j)) (v1 (aref v (+ j 1))))
+			          (setf (aref v j) (- (* v0 fcr) (* v1 fci)))
+			          (setf (aref v (+ j 1)) (+ (* v0 fci) (* v1 fcr))))))
+			    (print v)))
+			(let ((cnt 0) (acc 0.0) (a (make-array 4 :element-type 'double-float :initial-element 2.0)) (n 0))
+			  (print (dotimes (i 4 i) (setq acc (+ acc (aref a i)))))
+			  (print acc)
+			  (print (dotimes (i n) (setq acc (+ acc 1.0))))
+			  (print acc)
+			  (print (dotimes (i 3 cnt) (setq cnt (+ cnt 2))))
+			  (print (dotimes (i 2) (setq acc (setf (aref a i) 0.1))))
+			  (print acc))
+			(let ((g (make-array 3 :initial-element 1)) (s 0.0))
+			  (dotimes (i 3) (setq s (+ s (aref g i))))
+			  (print s))
+			(let ((a (make-array 3 :element-type 'double-float :initial-element 0.0)) (hits 0.0))
+			  (setf (aref a 1) (/ 0.0 0.0))
+			  (dotimes (i 3) (unless (< (aref a i) 1.0) (setq hits (+ hits 1.0))))
+			  (print hits)
+			  (dotimes (i 3) (when (> (aref a i) -1.0) (setq hits (+ hits 10.0))))
+			  (print hits))
+			(let ((z 0.0) (n 0) (a (make-array 3 :element-type 'single-float :initial-element 1.0)))
+			  (handler-case (dotimes (i 10) (setq z (+ z (aref a i))) (setq n (+ n 1)))
+			    (error (e) (print 'caught)))
+			  (print z)
+			  (print n))
+			(defun tl-dsum (v n)
+			  (let ((sum 0.0d0))
+			    (declare (type double-float sum))
+			    (dotimes (i n)
+			      (setq sum (+ sum (* (aref v i) (aref v i)))))
+			    sum))
+			(let ((dv (make-array 4 :element-type 'double-float :initial-element 0.0d0))
+			      (sv (make-array 4 :element-type 'single-float :initial-element 0.0)))
+			  (dotimes (i 4) (setf (aref dv i) (+ i 1.5d0)))
+			  (dotimes (i 4) (setf (aref sv i) (+ i 1.5)))
+			  (print (tl-dsum dv 4))
+			  (print (tl-dsum sv 4)))
+			(let ((a (make-array 3 :element-type 'double-float :initial-element 1.0d0)))
+			  (let ((acc 0.0d0) (scale 2.0d0))
+			    (declare (type double-float acc scale))
+			    (dotimes (i 3) (setq acc (+ acc (* scale (aref a i)))))
+			    (print acc)
+			    (dotimes (i 3) (setq acc (+ acc 1)))
+			    (print acc)
+			    (handler-case (dotimes (i 10) (setq acc (+ acc (* scale (aref a i)))))
+			      (error (e) (print 'caught-raw)))
+			    (print acc)))
+			(defun tl-silu (v)
+			  (dotimes (c (length v))
+			    (let ((u (aref v c))) (setf (aref v c) (/ u (+ 1.0 (exp (- u))))))))
+			(let ((sv (make-array 4 :element-type 'single-float :initial-element 0.0))
+			      (dv (make-array 3 :element-type 'double-float :initial-element 0.0d0))
+			      (gv (make-array 3 :initial-element 0.0))
+			      (ev (make-array 0 :element-type 'single-float :initial-element 0.0)))
+			  (dotimes (i 4) (setf (aref sv i) (- i 2.0)))
+			  (tl-silu sv)
+			  (print sv)
+			  (dotimes (i 3) (setf (aref dv i) (+ i 1.0d0)))
+			  (tl-silu dv)
+			  (print dv)
+			  (tl-silu gv)
+			  (print gv)
+			  (tl-silu ev)
+			  (print ev)
+			  (print (dotimes (i (length sv) i) (setf (aref sv i) (+ (aref sv i) (length sv)))))
+			  (print sv)
+			  (print (let ((n 0)) (dotimes (i (length (list 1 2 3))) (setq n (+ n i))) n)))
+			""";
+
+	private static final String TYPED_LOOP_EXPECTED = """
+			(0.875 4.049147766510589)
+			#f(0.10295056 0.12263946 0.1460938 0.17403367 0.20731696 0.24696554 0.0 0.0)
+			(9.800000190734863 1.32729250931335)
+			#f((0.0 0.0 0.0) (0.0 0.0 0.0) (1.5 1.5 1.5) (0.0 0.0 0.0))
+			#d((0.0 0.0 3.0 0.0) (0.0 0.0 3.0 0.0) (0.0 0.0 3.0 0.0))
+			#f(0.0 1.25 0.5 2.75 1.0 4.25)
+			4
+			8.0
+			NIL
+			8.0
+			6
+			NIL
+			0.1
+			3.0
+			1.0
+			21.0
+			CAUGHT
+			3.0
+			3
+			41.0
+			41.0
+			6.0
+			9.0
+			CAUGHT-RAW
+			15.0
+			#f(-0.23840584 -0.26894143 0.0 0.7310586)
+			#d(0.7310585786300049 1.7615941559557646 2.8577223804672998)
+			#(0.0 0.0 0.0)
+			#f()
+			4
+			#f(3.761594 3.7310586 4.0 4.7310586)
+			3""";
+
+	@Test
+	void typedLoopsMatchTheBoxedPathAndTheSizeLevelDeclinesThem() throws Exception {
+		// The typed dotimes emission is a speculation with the ordinary expansion as its
+		// fallback; this pins that it answers what the fallback answers, bit for bit,
+		// across the shapes it takes and the guards it fails -- and that --optimize=size
+		// (which declines the speed-for-size trades) compiles the same program to
+		// different bytes, i.e. the default build really did emit the typed loops.
+		List<LispVal> program = am.ik.rontolisp.eval.LispPreludeLibrary
+			.process(LispReader.readAllFromString(TYPED_LOOP_PROGRAM));
+		byte[] fast = JvmLispCompiler.builder()
+			.className("Test")
+			.optimize(OptimizeLevel.DEFAULT)
+			.build()
+			.compile(program);
+		byte[] small = JvmLispCompiler.builder()
+			.className("Test")
+			.optimize(OptimizeLevel.SIZE)
+			.build()
+			.compile(program);
+		assertThat(small).isNotEqualTo(fast);
+		assertThat(runClass(fast)).isEqualTo(TYPED_LOOP_EXPECTED);
+		assertThat(runClass(small)).isEqualTo(TYPED_LOOP_EXPECTED);
+	}
+
+	/**
+	 * The integer-fusion program: every shape {@code JvmIntFusionCompiler} takes (the
+	 * masked-wrap mod32+/rol32 pair through inlinable-defun substitution, a fused loop
+	 * over them, overflow promotion past {@code long}, float and nil leaves bailing to
+	 * the generic path, the mod/rem/ash sign semantics and strength reductions, a fused
+	 * flet-lambda call, side-effects-once under substitution, the raw-local nil re-read
+	 * that pins the sentinel design, packed integer-vector raw reads and their
+	 * out-of-range error shape, NaN comparisons in condition and value position, the
+	 * zero-divisor error shape, 1+/1- normalization, a literal ldb, and a loop head's
+	 * fused compare).
+	 */
+	private static final String DOUBLE_ARITH_PROGRAM = """
+			(let ((x 3.0d0) (y 2.0d0) (z 1.0d0))
+			  (print (+ (* 2.0d0 x y) z))
+			  (print (- (/ 1.0d0 x) y))
+			  (print (- (* x y) z))
+			  (print (+ (- x y) z))
+			  (print (> (+ (* x x) (* y y)) 4.0d0))
+			  (print (< (+ (* x x) (* y y)) 4.0d0)))
+			(print (* 3 1.5d0))
+			(print (+ 1/2 1.0d0))
+			(print (- 0.0d0))
+			(print (+ -0.0d0 0.0d0))
+			(let ((nan (/ 0.0d0 0.0d0)))
+			  (print (list (> nan 4.0d0) (< nan 4.0d0) (= nan nan) (>= nan nan))))
+			(let ((a 5) (b 2) (c 1.5d0))
+			  (print (+ (- a b) c)))
+			(let ((big 100000000000000000000) (f 1.0d0))
+			  (print (+ (* big 2) 1))
+			  (print (+ big f)))
+			(let ((z 0.0d0))
+			  (dotimes (i 3) (setq z (+ z 1.5d0)))
+			  (print z))
+			(let ((n 0))
+			  (dotimes (i 5) (setq n (+ n i)))
+			  (print n))
+			(let ((a 0) (b 0))
+			  (dotimes (i 3) (setq a (+ a 1) b (+ b 2)))
+			  (print (list a b)))
+			(let ((q 0))
+			  (print (progn (setq q 1) (setq q 2)))
+			  (print q))
+			(print (max 1.5d0 (+ 1 1.0d0)))
+			(print (min 1.5d0 (* 2 1.0d0)))
+			(print (abs (- 0.0d0 2.5d0)))
+			(print (sqrt (* 2.0d0 8.0d0)))
+			(print (expt (+ 1.0d0 1.0d0) 10))
+			(let ((a 7.5d0) (b -7.5d0))
+			  (print (mod a 2))
+			  (print (mod b 2))
+			  (print (rem a 2))
+			  (print (rem b 2)))
+			(print (mod (+ 7.0d0 0.0d0) 3))
+			(print (rem -7.5d0 2))
+			""";
+
+	private static final String DOUBLE_ARITH_EXPECTED = """
+			13.0
+			-1.6666666666666667
+			5.0
+			2.0
+			T
+			NIL
+			4.5
+			1.5
+			-0.0
+			0.0
+			(NIL NIL NIL NIL)
+			4.5
+			200000000000000000001
+			1.0e20
+			4.5
+			10
+			(3 6)
+			2
+			2
+			2.0
+			1.5
+			2.5
+			4.0
+			1024.0
+			1.5
+			0.5
+			1.5
+			-1.5
+			1.0
+			-1.5""";
+
+	@Test
+	void doubleArithmeticMatchesTheInterpreterOnBothOptimizeLevels() throws Exception {
+		// The double-literal path emits raw IEEE arithmetic and the fused methods carry
+		// an all-Double fast path beside the all-Long one; both are optimizations whose
+		// fallback is the generic helper, so every shape here must answer exactly what
+		// the interpreter and the wasm backends answer -- literal widening, -0.0, the
+		// NaN comparison rule, a mixed Long/Double tree that BAILS off both fast paths,
+		// a bignum leaf, and mod/rem over floats (the generic helpers' own double
+		// branch, which the fused fallback lands in).
+		List<LispVal> program = am.ik.rontolisp.eval.LispPreludeLibrary
+			.process(LispReader.readAllFromString(DOUBLE_ARITH_PROGRAM));
+		byte[] fast = JvmLispCompiler.builder()
+			.className("Test")
+			.optimize(OptimizeLevel.DEFAULT)
+			.build()
+			.compile(program);
+		byte[] small = JvmLispCompiler.builder()
+			.className("Test")
+			.optimize(OptimizeLevel.SIZE)
+			.build()
+			.compile(program);
+		assertThat(runClass(fast)).isEqualTo(DOUBLE_ARITH_EXPECTED);
+		assertThat(runClass(small)).isEqualTo(DOUBLE_ARITH_EXPECTED);
+	}
+
+	private static final String DECLARED_FLOAT_PROGRAM = """
+			(defun dcl-acc (a b)
+			  (declare (type double-float a b))
+			  (let ((acc 0.0d0) (tmp 0.0d0))
+			    (declare (type double-float acc tmp))
+			    (dotimes (i 5)
+			      (setq tmp (* a b))
+			      (setq acc (+ acc tmp (- a b) (/ a b) (mod a b))))
+			    acc))
+			(defun udl-acc (a b)
+			  (let ((acc 0.0d0) (tmp 0.0d0))
+			    (dotimes (i 5)
+			      (setq tmp (* a b))
+			      (setq acc (+ acc tmp (- a b) (/ a b) (mod a b))))
+			    acc))
+			(print (dcl-acc 3.5d0 -1.25d0))
+			(print (= (dcl-acc 3.5d0 -1.25d0) (udl-acc 3.5d0 -1.25d0)))
+			(let ((z 0.0d0))
+			  (declare (type double-float z))
+			  (print (- z)))
+			(let ((nan (/ 0.0d0 0.0d0)) (c 0))
+			  (declare (type double-float nan))
+			  (if (< nan 1.0d0) (setq c 1) (setq c 2))
+			  (print c)
+			  (print (>= nan 0.0d0))
+			  (print (= nan nan)))
+			(let ((x 1.5d0))
+			  (declare (type double-float x))
+			  (print (+ x 1/2))
+			  (print (+ x 200000000000000000000))
+			  (print (* x 4)))
+			(defun dcl-capture (x)
+			  (declare (type double-float x))
+			  (let ((s x))
+			    (declare (type double-float s))
+			    (let ((fn (lambda () s)))
+			      (setq s (+ s 1.0d0))
+			      (funcall fn))))
+			(print (dcl-capture 2.0d0))
+			(defvar *dspec* 1.5d0)
+			(defun dspec-read () *dspec*)
+			(print (let ((*dspec* 2.5d0)) (declare (type double-float *dspec*)) (dspec-read)))
+			(let ((v 1.0d0))
+			  (declare (type double-float v))
+			  (let ((v "str")) (print (length v)))
+			  (print v))
+			(let ((w 3.0d0))
+			  (declare (type double-float w))
+			  (print ((lambda (w) (length w)) "abcd"))
+			  (print w))
+			(let* ((p 1.5d0) (q (+ p 1.0d0)))
+			  (declare (type double-float p q))
+			  (print (+ p q)))
+			(let ((m 2.0d0) (n 0.0d0))
+			  (declare (type double-float m n))
+			  (print (setq m 4.5d0 n (* m 2.0d0)))
+			  (print m))
+			(let ((acc 1.0d0))
+			  (declare (type double-float acc))
+			  (print (dotimes (i 10 acc) (when (> acc 5.0d0) (return acc)) (setq acc (* acc 2.0d0)))))
+			(let ((acc 0.0d0))
+			  (declare (type double-float acc))
+			  (print (handler-case (progn (setq acc 5.5d0) (error "boom")) (error (e) acc))))
+			(let ((acc 1.0d0))
+			  (declare (type double-float acc))
+			  (incf acc 1.5d0)
+			  (setf acc (* acc 2.0d0))
+			  (print acc))
+			(let ((r 0.5d0))
+			  (declare (type single-float r))
+			  (print (* r 2)))
+			(defun dcl-widen ()
+			  (let ((x 2.0d0)) (declare (type double-float x)) (setq x 1) x))
+			(print (dcl-widen))
+			(defun dcl-store-trap ()
+			  (let ((x 1.0d0)) (declare (type double-float x)) (setq x (car (list 5))) x))
+			(print (handler-case (dcl-store-trap) (error (e) :store-trap)))
+			(print (handler-case
+			         (let ((tlx 1.0d0)) (declare (type double-float tlx)) (setq tlx (car (list 5))) tlx)
+			         (error (e) :top-level-store-trap)))
+			(defun dcl-read-trap (x) (declare (type double-float x)) (* x x))
+			(print (handler-case (dcl-read-trap (car (list 3))) (error (e) :read-trap)))
+			(print (dcl-read-trap 3.0d0))
+			(let ((k 2.5d0))
+			  (declare (type double-float k))
+			  (print (round (* k 2)))
+			  (print (sqrt (* k k))))
+			(defun dcl-hc-shadow ()
+			  (let ((d 1.0d0))
+			    (declare (type double-float d))
+			    (setq d 2.0d0)
+			    (handler-case (error "boom") (error (d) (format nil "~a" d)))))
+			(print (dcl-hc-shadow))
+			(defun int-hc-shadow ()
+			  (let ((n 1))
+			    (setq n 2)
+			    (handler-case (error "boom") (error (n) (format nil "~a" n)))))
+			(print (int-hc-shadow))
+			""";
+
+	private static final String DECLARED_FLOAT_EXPECTED = """
+			-13.375
+			T
+			-0.0
+			2
+			NIL
+			NIL
+			2.0
+			2.0e20
+			6.0
+			3.0
+			2.5
+			3
+			1.0
+			4
+			3.0
+			4.0
+			9.0
+			4.5
+			8.0
+			5.5
+			5.0
+			1.0
+			1.0
+			:STORE-TRAP
+			5
+			:READ-TRAP
+			9.0
+			5
+			2.5
+			"boom"
+			"boom"\
+			""";
+
+	@Test
+	void declaredFloatLocalsMatchTheUndeclaredEmissionOnBothOptimizeLevels() throws Exception {
+		// A (declare (type double-float ...)) routes the emitters the double-literal
+		// path routes and keeps the declared let locals in raw double slots
+		// (.kb/jvm-double-arithmetic.md). A TRUE declaration never changes an answer:
+		// the declared accumulator equals its undeclared twin, -0.0 and the NaN rules
+		// survive, a captured or special or shadowed declared name keeps the boxed
+		// semantics, and ratio/bignum operands keep float contagion. A FALSE
+		// declaration is the pinned UB shape (.kb/declarations-type-checks.md): a
+		// deterministic catchable error at the declared store or routed read inside a
+		// function (:STORE-TRAP / :READ-TRAP), the interpreter's answer at top level
+		// (bindings there keep the boxed representation), and compile-time widening for
+		// an integer LITERAL assigned to a declared float.
+		List<LispVal> program = am.ik.rontolisp.eval.LispPreludeLibrary
+			.process(LispReader.readAllFromString(DECLARED_FLOAT_PROGRAM));
+		byte[] fast = JvmLispCompiler.builder()
+			.className("Test")
+			.optimize(OptimizeLevel.DEFAULT)
+			.build()
+			.compile(program);
+		byte[] small = JvmLispCompiler.builder()
+			.className("Test")
+			.optimize(OptimizeLevel.SIZE)
+			.build()
+			.compile(program);
+		assertThat(runClass(fast)).isEqualTo(DECLARED_FLOAT_EXPECTED);
+		assertThat(runClass(small)).isEqualTo(DECLARED_FLOAT_EXPECTED);
+	}
+
+	private static final String INT_FUSION_PROGRAM = """
+			(defun mod32+ (a b) (logand (+ a b) 4294967295))
+			(defun rol32 (x s) (logand (logior (ash x s) (ash x (- s 32))) 4294967295))
+			(print (mod32+ 4294967295 10))
+			(print (rol32 2882400001 8))
+			(defun mix32 (x y) (mod32+ (rol32 x 8) y))
+			(print (mix32 2882400001 4294967295))
+			(print (multiple-value-list (mod32+ (values 4294967295 7) 10)))
+			(let ((s 0))
+			  (dotimes (i 64) (setq s (mod32+ s (rol32 (+ i 12345) (mod i 31)))))
+			  (print s))
+			(let ((big 3037000500))
+			  (print (* big big))
+			  (print (+ (* big big) 1)))
+			(let ((x 1.5))
+			  (print (+ x 2))
+			  (print (< x 2)))
+			(let ((v nil))
+			  (setq v 7)
+			  (setq v nil)
+			  (print v))
+			(print (mod -7 3))
+			(print (mod 7 -3))
+			(print (rem -7 3))
+			(print (rem 7 -3))
+			(print (ash -17 -2))
+			(print (ash 3 62))
+			(print (lognot 0))
+			(flet ((mix (a b) (logand (+ (* a 31) b) 65535)))
+			  (let ((h 0))
+			    (dotimes (i 20) (setq h (mix h i)))
+			    (print h)))
+			(defvar *calls* 0)
+			(defun bump () (setq *calls* (+ *calls* 1)) *calls*)
+			(print (mod32+ (bump) (bump)))
+			(print *calls*)
+			(let ((v (make-array 8 :element-type '(unsigned-byte 32))))
+			  (dotimes (i 8) (setf (aref v i) (* i 1000000007)))
+			  (let ((s 0))
+			    (dotimes (i 8) (setq s (+ s (aref v i))))
+			    (print s))
+			  (handler-case (print (+ (aref v 100) 1)) (error (e) (print 'oob))))
+			(let ((nan (/ 0.0 0.0)) (c 0))
+			  (if (< nan 1) (setq c 1) (setq c 2))
+			  (print c)
+			  (print (>= nan 0)))
+			(let ((z 0))
+			  (handler-case (print (mod (+ z 5) z)) (error (e) (print 'divzero))))
+			(let ((k 10))
+			  (print (1+ (* k k)))
+			  (print (1- (* k k))))
+			(print (ldb (byte 8 8) 305419896))
+			(print (loop for i from 1 to 10 sum i))
+			(let ((a (make-array 5)))
+			  (dotimes (i 5) (setf (aref a i) (* i 7)))
+			  (print (+ (aref a 3) 1))
+			  (print (+ (aref a (random 1)) 100))
+			  (let ((k 4)) (print (+ (aref a k) 2)))
+			  (handler-case (print (+ (aref a 9) 1)) (error (e) (print 'aref-oob)))
+			  (handler-case (print (+ (aref a 1.0) 1)) (error (e) (print 'aref-float))))
+			(let ((a (make-array 3)))
+			  (handler-case (print (+ (aref a 0) 1)) (error (e) (print 'aref-nil))))
+			(let ((a (make-array 3)))
+			  (setf (aref a 0) "s")
+			  (setf (aref a 1) 5)
+			  (print (+ (aref a 1) 1)))
+			(let ((base (make-array 5)))
+			  (dotimes (i 5) (setf (aref base i) (* i 3)))
+			  (let ((d (make-array 2 :displaced-to base :displaced-index-offset 1)))
+			    (print (+ (aref d 1) 0))))
+			(handler-case (print (+ 1 (aref "abc" 1))) (error (e) (print 'aref-string)))
+			(print (+ 100 (random 1)))
+			(let ((lim 1)) (print (+ 200 (random lim))))
+			(let ((lim 1.0)) (print (floatp (random lim))))
+			(let ((r (random 1000))) (print (and (>= r 0) (< r 1000))))
+			(print (* 4611686018427387904 (+ 2 (random 1))))
+			(let ((v (make-array 4 :element-type '(unsigned-byte 8))))
+			  (dotimes (i 4) (setf (aref v i) (* i 3)))
+			  (print (+ (aref v (random 1)) 50)))
+			(defun fused-dif (x) (- x x))
+			(let ((flim 1000000.0)) (print (fused-dif (random flim))))
+			(let ((ilim 1000000)) (print (fused-dif (random ilim))))
+			""";
+
+	private static final String INT_FUSION_EXPECTED = """
+			9
+			3454992811
+			3454992810
+			(9)
+			2147508531
+			9223372037000250000
+			9223372037000250001
+			3.5
+			T
+			NIL
+			2
+			-2
+			-1
+			1
+			-5
+			13835058055282163712
+			-1
+			46090
+			3
+			2
+			15115098308
+			OOB
+			2
+			NIL
+			DIVZERO
+			101
+			99
+			86
+			55
+			22
+			100
+			30
+			AREF-OOB
+			AREF-FLOAT
+			AREF-NIL
+			6
+			6
+			AREF-STRING
+			100
+			200
+			T
+			T
+			9223372036854775808
+			50
+			0.0
+			0""";
+
+	private static final String RAW_GLOBAL_PROGRAM = """
+			(defparameter s 0)
+			(defvar v 10)
+			(defvar v 99)
+			(dotimes (i 5) (setq s (+ s i)))
+			(print s)
+			(print v)
+			(setq s 1.5d0)
+			(print s)
+			(setq s (+ s 1))
+			(print s)
+			(setq s "str")
+			(print s)
+			(setq s nil)
+			(print s)
+			(setq s 7)
+			(print s)
+			(print (let ((s 100)) (setq s (+ s 1)) s))
+			(print s)
+			(defparameter big 0)
+			(setq big (* 4611686018427387904 4))
+			(print big)
+			(setq big (+ big 1))
+			(print big)
+			(defun bump () (setq s (+ s 10)) s)
+			(print (bump))
+			(print s)
+			(defparameter arr (make-array 3))
+			(defparameter acc 0)
+			(dotimes (i 3) (setf (aref arr i) (* i i)))
+			(dotimes (i 3) (setq acc (+ acc (aref arr i))))
+			(print acc)
+			(setq g 0)
+			(dotimes (i 3) (setq g (+ g i)))
+			(print g)
+			(print (let ((g 100)) (setq g (+ g 1)) g))
+			(print g)
+			""";
+
+	private static final String RAW_GLOBAL_EXPECTED = """
+			10
+			10
+			1.5
+			2.5
+			"str"
+			NIL
+			7
+			101
+			7
+			18446744073709551616
+			18446744073709551617
+			17
+			17
+			5
+			3
+			101
+			3""";
+
+	@Test
+	void unboxedTopLevelGlobalsAnswerWhatTheBoxedStaticFieldAnswers() throws Exception {
+		// A promoted top-level global carrying the dual representation
+		// (.kb/jvm-int-fusion.md): a raw long field and an int flag beside the _g$
+		// field, which stays the boxed shadow. Every tier the shadow used to hold has
+		// to read back unchanged -- a float, a string, nil, a bignum promotion out of
+		// long range -- and a LEXICAL binding of the same name (g, promoted by a
+		// top-level setq, so not special) must still win over the global, both to read
+		// and to assign. In the same program s declines, because the let that names it
+		// binds it DYNAMICALLY (a defparameter name is special), which pins that one
+		// global's representation does not follow another's. --optimize=size declines
+		// the trade, so the same program compiles without the extra fields and answers
+		// the same.
+		List<LispVal> program = am.ik.rontolisp.eval.LispPreludeLibrary
+			.process(LispReader.readAllFromString(RAW_GLOBAL_PROGRAM));
+		byte[] fast = JvmLispCompiler.builder()
+			.className("Test")
+			.optimize(OptimizeLevel.DEFAULT)
+			.build()
+			.compile(program);
+		byte[] small = JvmLispCompiler.builder()
+			.className("Test")
+			.optimize(OptimizeLevel.SIZE)
+			.build()
+			.compile(program);
+		assertThat(declaredFieldNames(fast)).contains("_gr$G", "_gk$G", "_gr$ACC", "_gr$BIG", "_g$S");
+		assertThat(declaredFieldNames(fast)).noneMatch(name -> name.equals("_gr$S"));
+		assertThat(declaredFieldNames(small)).noneMatch(name -> name.startsWith("_gr$"));
+		assertThat(runClass(fast)).isEqualTo(RAW_GLOBAL_EXPECTED);
+		assertThat(runClass(small)).isEqualTo(RAW_GLOBAL_EXPECTED);
+	}
+
+	@Test
+	void aDynamicallyBoundSpecialAndAnEvaldGlobalDeclineTheUnboxedRepresentation() throws Exception {
+		// The two seams a let local does not have. A special some let binds keeps its
+		// save/restore over the ONE _g$ field, and an eval runtime mirrors the BOX into
+		// _genv -- so neither name may split into a triple. Both programs assign an
+		// integer in a loop, which is the shape that would otherwise qualify.
+		List<LispVal> dynamicBinding = am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString("""
+				(defparameter *n* 0)
+				(defun show () *n*)
+				(setq *n* (+ *n* 1))
+				(print (show))
+				(let ((*n* 100))
+				  (print (show))
+				  (setq *n* (+ *n* 1))
+				  (print (show)))
+				(print (show))
+				"""));
+		byte[] dynamicBindingClass = JvmLispCompiler.builder()
+			.className("Test")
+			.optimize(OptimizeLevel.DEFAULT)
+			.build()
+			.compile(dynamicBinding);
+		assertThat(declaredFieldNames(dynamicBindingClass)).noneMatch(name -> name.startsWith("_gr$"));
+		assertThat(runClass(dynamicBindingClass)).isEqualTo("""
+				1
+				100
+				101
+				1""");
+		List<LispVal> evaluated = am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString("""
+				(defparameter s 0)
+				(dotimes (i 5) (setq s (+ s i)))
+				(print (eval 's))
+				(setq s (+ s 100))
+				(print (eval 's))
+				"""));
+		byte[] evaluatedClass = JvmLispCompiler.builder()
+			.className("Test")
+			.optimize(OptimizeLevel.DEFAULT)
+			.build()
+			.compile(evaluated);
+		assertThat(declaredFieldNames(evaluatedClass)).noneMatch(name -> name.startsWith("_gr$"));
+		assertThat(runClass(evaluatedClass)).isEqualTo("""
+				10
+				110""");
+	}
+
+	@Test
+	void fusedIntegerExpressionTreesMatchTheGenericPath() throws Exception {
+		// The fused emission is an optimization with a total fallback; this pins that
+		// it answers what the generic per-op path answers, bit for bit, across the
+		// shapes it takes and the bails it survives -- and that --optimize=size (which
+		// declines the speed-for-size trades) compiles the same program to different
+		// bytes, i.e. the default build really did emit the fused methods. Its
+		// multiple-value-list settles every defun tail, so mod32+ and rol32 arrive
+		// wrapped in the channel's clear (LispMacroExpander.clearedForm): mix32 still
+		// calls neither, and the fused call clears what (values ... 7) published. A
+		// program holding eval gives every defun a cell, which the fused sites check:
+		// mix32
+		// calls rol32 in no way, and mod32+, its tail, through the tail entry that keeps
+		// a
+		// call through a replaced name proper.
+		List<LispVal> program = am.ik.rontolisp.eval.LispPreludeLibrary
+			.process(LispReader.readAllFromString(INT_FUSION_PROGRAM));
+		byte[] fast = JvmLispCompiler.builder()
+			.className("Test")
+			.optimize(OptimizeLevel.DEFAULT)
+			.build()
+			.compile(program);
+		byte[] small = JvmLispCompiler.builder()
+			.className("Test")
+			.optimize(OptimizeLevel.SIZE)
+			.build()
+			.compile(program);
+		byte[] celled = JvmLispCompiler.builder()
+			.className("Test")
+			.optimize(OptimizeLevel.DEFAULT)
+			.build()
+			.compile(am.ik.rontolisp.eval.LispPreludeLibrary
+				.process(LispReader.readAllFromString("(defun eval-it (x) (eval x))\n" + INT_FUSION_PROGRAM)));
+		assertThat(small).isNotEqualTo(fast);
+		assertThat(declaredMethodNames(fast)).anyMatch(name -> name.startsWith("_fx$"));
+		assertThat(declaredMethodNames(small)).noneMatch(name -> name.startsWith("_fx$"));
+		assertThat(ownCallsIn(fast, "MIX32", "MOD32+") + ownCallsIn(fast, "MIX32", "ROL32")).isZero();
+		assertThat(ownCallsIn(small, "MIX32", "MOD32+") + ownCallsIn(small, "MIX32", "ROL32")).isEqualTo(2);
+		assertThat(ownCallsIn(celled, "MIX32", "ROL32") + ownCallsIn(celled, "MIX32", "_n$ROL32")
+				+ ownCallsIn(celled, "MIX32", "_n$MOD32+"))
+			.isZero();
+		assertThat(ownCallsIn(celled, "MIX32", "_nt$MOD32+")).isOne();
+		assertThat(runClass(fast)).isEqualTo(INT_FUSION_EXPECTED);
+		assertThat(runClass(small)).isEqualTo(INT_FUSION_EXPECTED);
+		assertThat(runClass(celled)).isEqualTo(INT_FUSION_EXPECTED);
+	}
+
+	@Test
+	void aMaskedSignedFieldOverAProductMultipliesInOneUncheckedLong() throws Exception {
+		// The fused root of (%mask-signed-field 64 (* a b)) keeps only the low 64 bits,
+		// which a wrapping LMUL computes exactly -- so an operand pair whose product
+		// leaves the long range never builds the bignum the lowering would mask back
+		// down. The size level (no fused site) must answer the same.
+		List<LispVal> program = am.ik.rontolisp.eval.LispPreludeLibrary
+			.process(LispReader.readAllFromString(MaskSignedFieldProgram.PROGRAM));
+		byte[] fast = JvmLispCompiler.builder()
+			.className("Test")
+			.optimize(OptimizeLevel.DEFAULT)
+			.build()
+			.compile(program);
+		byte[] small = JvmLispCompiler.builder()
+			.className("Test")
+			.optimize(OptimizeLevel.SIZE)
+			.build()
+			.compile(program);
+		assertThat(fusedMethodsUsing(fast, java.lang.classfile.Opcode.LMUL)).isNotEmpty();
+		assertThat(declaredMethodNames(small)).noneMatch(name -> name.startsWith("_fx$"));
+		assertThat(runClass(fast)).isEqualTo(MaskSignedFieldProgram.EXPECTED);
+		assertThat(runClass(small)).isEqualTo(MaskSignedFieldProgram.EXPECTED);
+	}
+
+	@Test
+	void aDeclaredIntegerLeafIsCastAndAMethodWithNothingElseToBailOnHasNoFallback() throws Exception {
+		// .kb/declarations-type-checks.md, "Declared integer ranges": step32's fused
+		// method
+		// takes its declared parameters with a cast and keeps no fallback and no handler;
+		// the size level fuses nothing and answers the same. A non-integer passed as a
+		// declared one is a catchable type-error.
+		String source = DeclaredIntegerProgram.PROGRAM + """
+				(print (handler-case (step32 1.5 2) (type-error () :caught)))
+				""";
+		String expected = DeclaredIntegerProgram.EXPECTED + "\n:CAUGHT";
+		List<LispVal> program = am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString(source));
+		byte[] fast = JvmLispCompiler.builder()
+			.className("Test")
+			.optimize(OptimizeLevel.DEFAULT)
+			.build()
+			.compile(program);
+		byte[] small = JvmLispCompiler.builder()
+			.className("Test")
+			.optimize(OptimizeLevel.SIZE)
+			.build()
+			.compile(program);
+		java.lang.classfile.ClassModel model = java.lang.classfile.ClassFile.of().parse(fast);
+		List<String> stepCalls = new java.util.ArrayList<>();
+		for (java.lang.classfile.MethodModel method : model.methods()) {
+			if (method.methodName().equalsString("STEP32")) {
+				for (java.lang.classfile.CodeElement element : method.code().orElseThrow()) {
+					if (element instanceof java.lang.classfile.instruction.InvokeInstruction invoke
+							&& invoke.name().stringValue().startsWith("_fx$")) {
+						stepCalls.add(invoke.name().stringValue());
+					}
+				}
+			}
+		}
+		assertThat(stepCalls).hasSize(1);
+		for (java.lang.classfile.MethodModel method : model.methods()) {
+			if (stepCalls.contains(method.methodName().stringValue())) {
+				assertThat(
+						((java.lang.classfile.attribute.CodeAttribute) method.code().orElseThrow()).exceptionHandlers())
+					.isEmpty();
+			}
+		}
+		// .kb/jvm-int-fusion.md, "Exact locals": rho's declared locals are raw long
+		// slots, those bound once as those reassigned, so its loop boxes nothing -- each
+		// tree over them is computed where it stands, with no fused method to call and
+		// no shadow to read back through _ubRead. Lanes' y, over a declared parameter,
+		// is a fused method's raw long.
+		List<String> rhoCalls = new java.util.ArrayList<>();
+		List<String> lanesFused = new java.util.ArrayList<>();
+		for (java.lang.classfile.MethodModel method : model.methods()) {
+			boolean rho = method.methodName().equalsString("RHO");
+			if (!rho && !method.methodName().equalsString("LANES")) {
+				continue;
+			}
+			for (java.lang.classfile.CodeElement element : method.code().orElseThrow()) {
+				if (element instanceof java.lang.classfile.instruction.InvokeInstruction invoke) {
+					String callee = invoke.name().stringValue();
+					if (rho && (callee.startsWith("_fx$") || callee.equals("_ubRead"))) {
+						rhoCalls.add(callee);
+					}
+					if (!rho && callee.startsWith("_fx$")) {
+						lanesFused.add(invoke.typeSymbol().returnType().descriptorString());
+					}
+				}
+			}
+		}
+		assertThat(rhoCalls).isEmpty();
+		assertThat(lanesFused).first().isEqualTo("J");
+		assertThat(runClass(fast)).isEqualTo(expected);
+		assertThat(runClass(small)).isEqualTo(expected);
+	}
+
+	private static List<String> fusedMethodsUsing(byte[] classBytes, java.lang.classfile.Opcode opcode) {
+		List<String> names = new java.util.ArrayList<>();
+		for (java.lang.classfile.MethodModel method : java.lang.classfile.ClassFile.of().parse(classBytes).methods()) {
+			String name = method.methodName().stringValue();
+			if (name.startsWith("_fx$") && method.code()
+				.orElseThrow()
+				.elementStream()
+				.anyMatch(e -> e instanceof java.lang.classfile.Instruction i && i.opcode() == opcode)) {
+				names.add(name);
+			}
+		}
+		return names;
+	}
+
+	private static final String GENERAL_ARRAY_LEAF_PROGRAM = """
+			(defparameter *a* (make-array 6))
+			(dotimes (i 6) (setf (aref *a* i) (* i 11)))
+			(let ((s 0))
+			  (dotimes (i 6) (setq s (+ s (aref *a* i))))
+			  (print s))
+			(print (+ (aref *a* 5) (aref *a* (random 1))))
+			(let ((fp (make-array 4 :fill-pointer 0)))
+			  (vector-push 3 fp)
+			  (print (+ (aref fp 0) 1)))
+			(let ((adj (make-array 2 :adjustable t :initial-element 4)))
+			  (print (+ (aref adj 1) 1)))
+			(print (+ 7 (random 1)))
+			""";
+
+	private static final String GENERAL_ARRAY_LEAF_EXPECTED = """
+			165
+			55
+			4
+			5
+			7""";
+
+	@Test
+	void fusedArefLeavesReadTheGeneralArraysPackedShapeAndBailForEveryOther() throws Exception {
+		// The packed-aref leaf's OTHER representation: the general array's length-6
+		// header over a flat long[] (.kb/adjustable-arrays.md), in a program that holds
+		// no packed integer vector at all -- so the leaf emits only the ArrayList
+		// dispatch. A fill-pointered, an adjustable and a non-packed array all take the
+		// bail into the same _aref1 the unfused emission would have called, and answer
+		// what the size level (which emits no fused site) answers.
+		List<LispVal> program = am.ik.rontolisp.eval.LispPreludeLibrary
+			.process(LispReader.readAllFromString(GENERAL_ARRAY_LEAF_PROGRAM));
+		byte[] fast = JvmLispCompiler.builder()
+			.className("Test")
+			.optimize(OptimizeLevel.DEFAULT)
+			.build()
+			.compile(program);
+		byte[] small = JvmLispCompiler.builder()
+			.className("Test")
+			.optimize(OptimizeLevel.SIZE)
+			.build()
+			.compile(program);
+		assertThat(declaredMethodNames(fast)).anyMatch(name -> name.startsWith("_fx$"));
+		assertThat(declaredMethodNames(small)).noneMatch(name -> name.startsWith("_fx$"));
+		assertThat(runClass(fast)).isEqualTo(GENERAL_ARRAY_LEAF_EXPECTED);
+		assertThat(runClass(small)).isEqualTo(GENERAL_ARRAY_LEAF_EXPECTED);
+	}
+
+	private static final String ARITHMETIC_INDEX_PROGRAM = """
+			(defun two-octets (v i) (logior (ash (logand (aref v i) 31) 6) (logand (aref v (+ i 1)) 63)))
+			(defun indirect (v w i) (+ 1 (aref v (aref w (+ i 1)))))
+			(defun next (v i) (* 2 (aref v (+ i 1))))
+			(defun report (thunk) (handler-case (funcall thunk) (error (e) (princ-to-string e))))
+			(defparameter *u8* (make-array 4 :element-type '(unsigned-byte 8) :initial-contents '(195 169 2 1)))
+			(defparameter *g* (vector 195 169 2 1))
+			(print (list (two-octets *u8* 0) (two-octets *g* 0) (indirect *u8* *u8* 1) (indirect *g* *u8* 2)))
+			(print (list (next *u8* 2) (next *g* -1) (next (make-array 2 :fill-pointer 2 :initial-contents '(5 6)) 0)))
+			(print (report (lambda () (next *u8* 3))))
+			(print (report (lambda () (next *u8* 9223372036854775807))))
+			(print (report (lambda () (next *u8* "a"))))
+			(print (report (lambda () (next "abcd" 0))))
+			(print (report (lambda () (indirect *u8* *g* 2))))""";
+
+	private static final String ARITHMETIC_INDEX_EXPECTED = """
+			(233 233 3 170)
+			(2 390 12)
+			"AREF: The value 4 is not of type (INTEGER 0 (4))"
+			"AREF: The value 9223372036854775808 is not of type (INTEGER 0 (4))"
+			"+: The value \\"a\\" is not of type NUMBER"
+			"*: The value #\\\\b is not of type NUMBER"
+			170""";
+
+	@Test
+	void anArithmeticArefIndexIsComputedInsideTheFusedTree() throws Exception {
+		// (aref v (+ i 1)) inside a fused tree: the index is part of the tree, computed
+		// raw before the read, so the call site neither computes it through a fused site
+		// of its own nor checks its variables in front of it (a probe). An index that
+		// overflows, is no integer or is out of range answers through the fallback what
+		// the size level (no fused site) answers.
+		List<LispVal> program = am.ik.rontolisp.eval.LispPreludeLibrary
+			.process(LispReader.readAllFromString(ARITHMETIC_INDEX_PROGRAM));
+		byte[] fast = JvmLispCompiler.builder()
+			.className("Test")
+			.optimize(OptimizeLevel.DEFAULT)
+			.build()
+			.compile(program);
+		byte[] small = JvmLispCompiler.builder()
+			.className("Test")
+			.optimize(OptimizeLevel.SIZE)
+			.build()
+			.compile(program);
+		for (String function : List.of("TWO-OCTETS", "INDIRECT", "NEXT")) {
+			List<String> called = invokedMethodNames(fast, function);
+			assertThat(called).as(function).filteredOn(name -> name.startsWith("_fx$")).hasSize(1);
+			assertThat(called).as(function).noneMatch(name -> name.startsWith("_fxp$"));
+		}
+		assertThat(runClass(fast)).isEqualTo(ARITHMETIC_INDEX_EXPECTED);
+		assertThat(runClass(small)).isEqualTo(ARITHMETIC_INDEX_EXPECTED);
+	}
+
+	/** The methods {@code method}'s body invokes, in order. */
+	private static List<String> invokedMethodNames(byte[] classBytes, String method) {
+		return java.lang.classfile.ClassFile.of()
+			.parse(classBytes)
+			.methods()
+			.stream()
+			.filter(m -> m.methodName().stringValue().equals(method))
+			.flatMap(m -> m.code().orElseThrow().elementStream())
+			.filter(java.lang.classfile.instruction.InvokeInstruction.class::isInstance)
+			.map(e -> ((java.lang.classfile.instruction.InvokeInstruction) e).name().stringValue())
+			.toList();
+	}
+
+	private static final String COUNTED_STEP_PROGRAM = """
+			(defun step-up (n)
+			  (let ((i (- 9223372036854775807 2)))
+			    (dotimes (k n) (setq i (+ i 1)))
+			    i))
+			(defun step-down (n)
+			  (let ((i (+ -9223372036854775808 2)))
+			    (dotimes (k n) (setq i (- i 1)))
+			    i))
+			(print (step-up 2))
+			(print (step-up 3))
+			(print (step-up 5))
+			(print (step-down 2))
+			(print (step-down 3))
+			(print (step-down 5))
+			(let ((i 1))
+			  (dotimes (k 5) (setq i (* i 1000000000000)))
+			  (setq i (+ i 1))
+			  (print i))
+			(print (loop for i from 1 to 5 collect (1+ i)))
+			(print (loop for i from 5 downto 1 collect (1- i)))
+			(let ((i 0))
+			  (setq i (+ i 3))
+			  (setq i (- i 5))
+			  (setq i (+ 7 i))
+			  (print i))
+			(let ((i 0))
+			  (dotimes (k 3) (setq i (+ i 1)) (setq i (- i 2)))
+			  (print i))
+			(defparameter *g* (- 9223372036854775807 2))
+			(dotimes (k 5) (setq *g* (+ *g* 1)))
+			(print *g*)
+			(defparameter *h* 0)
+			(dotimes (k 4) (setq *h* (- *h* 3)))
+			(print *h*)
+			""";
+
+	private static final String COUNTED_STEP_EXPECTED = """
+			9223372036854775807
+			9223372036854775808
+			9223372036854775810
+			-9223372036854775808
+			-9223372036854775809
+			-9223372036854775811
+			1000000000000000000000000000000000000000000000000000000000001
+			(2 3 4 5 6)
+			(4 3 2 1 0)
+			5
+			-3
+			9223372036854775810
+			-12""";
+
+	@Test
+	void aCountedLoopStepPromotesAtTheFixnumBoundaryAndKeepsSteppingOnABignum() throws Exception {
+		// The counted-loop step (+ i c) / (- i c) into an unboxed local is emitted
+		// inline as raw long arithmetic, with the outlined fused method kept as the
+		// fallback for the two cases the inline form declines: a raw slot the flag says
+		// is stale, and a step that would overflow (.kb/jvm-int-fusion.md). Both are
+		// crossed here -- a counter walked ACROSS most-positive-fixnum and
+		// most-negative-fixnum in both directions, and a local that already holds a
+		// bignum when the next step runs -- and the answer must stay what the generic
+		// path (--optimize=size, which emits no fused site at all) answers. The last
+		// two loops step a PROMOTED GLOBAL, whose triple lives in class fields rather
+		// than local slots: the inline step must read the flag and the raw half through
+		// the field-aware emitters, not as slots.
+		List<LispVal> program = am.ik.rontolisp.eval.LispPreludeLibrary
+			.process(LispReader.readAllFromString(COUNTED_STEP_PROGRAM));
+		byte[] fast = JvmLispCompiler.builder()
+			.className("Test")
+			.optimize(OptimizeLevel.DEFAULT)
+			.build()
+			.compile(program);
+		byte[] small = JvmLispCompiler.builder()
+			.className("Test")
+			.optimize(OptimizeLevel.SIZE)
+			.build()
+			.compile(program);
+		assertThat(runClass(fast)).isEqualTo(COUNTED_STEP_EXPECTED);
+		assertThat(runClass(small)).isEqualTo(COUNTED_STEP_EXPECTED);
+	}
+
+	private String runClass(byte[] classBytes) throws Exception {
+		Path classFile = tempDir.resolve("Test.class");
+		Files.write(classFile, classBytes);
+		try (URLClassLoader loader = new URLClassLoader(new URL[] { tempDir.toUri().toURL() },
+				ClassLoader.getSystemClassLoader())) {
+			Class<?> clazz = loader.loadClass("Test");
+			Method main = clazz.getMethod("main", String[].class);
+			ByteArrayOutputStream baos = new ByteArrayOutputStream();
+			try (var _ = ThreadStdio.out(baos)) {
+				main.invoke(null, (Object) new String[0]);
+			}
+			return baos.toString().trim();
+		}
+	}
+
+	@Test
+	void aTopLevelLexicalIsNotMirroredIntoTheEvalGlobalEnv() throws Exception {
+		// The eval mirror (_store into _genv) exists so an eval'd form can read a
+		// variable the compiled program assigned at top level. A LEXICAL of a top-level
+		// form is not one: CL's eval resolves against the null lexical environment, so
+		// no eval'd form can name a top-level let/loop variable -- nor the temporaries
+		// the macro expanders generate, which are symbols in no package at all. Each
+		// mirror costs an _envLookup, a linear walk of the eval global alist, per
+		// assignment -- so a top-level loop paid one per iteration per assigned name.
+		String program = """
+				(setq mirrored-global 0)
+				(let ((probe-lexical 0)) (setq probe-lexical 1) (print probe-lexical))
+				(print (loop for probe-counter from 1 to 3 sum probe-counter))
+				(eval '(print mirrored-global))
+				""";
+		byte[] classBytes = new JvmLispCompiler("Test").compile(LispReader.readAllFromString(program));
+		// Exactly one: the top-level (setq mirrored-global 0). The let variable, the
+		// loop counter and the loop's accumulator temporary emit none.
+		assertThat(evalStoreCallsInTopLevel(classBytes)).isEqualTo(1);
+		assertThat(runClass(classBytes)).isEqualTo("1\n6\n0");
+		// Nor is a compiler channel a variable an eval'd form can name: the
+		// multiple-value spill nearly every function return writes was mirrored, so
+		// each call paid a walk of the eval global alist and 4,000 program globals
+		// made a package walk 300x slower. A function assigning a real global still
+		// mirrors it.
+		byte[] functions = compileToBytes("""
+				(defun mv-two () (values 1 2))
+				(defun set-global () (setq mirrored-global 2))
+				(print (multiple-value-list (mv-two)))
+				(set-global)
+				(eval '(print mirrored-global))
+				""");
+		assertThat(ownCallsIn(functions, "MV-TWO", "_store")).isZero();
+		assertThat(ownCallsIn(functions, "SET-GLOBAL", "_store")).isOne();
+	}
+
+	@Test
+	void aProgramThatNeverMentionsEvalCarriesNoEvalRuntime() throws Exception {
+		// The map*/every/some wrapper bodies are (apply f ...), so injecting them into
+		// every program left the finished class calling an _apply it had not declared --
+		// and the post-compile self-check answered that by forcing the eval runtime on.
+		// Free while --optimize shook the unreferenced wrappers back out, and anything
+		// but free once the program had a top-level global: the forced gate made the
+		// mirror real, so one setq turned a 4 KB class into a 34 KB one.
+		String program = """
+				(defvar *counter* 0)
+				(setq *counter* 1)
+				(print *counter*)
+				""";
+		byte[] classBytes = new JvmLispCompiler("Test").compile(LispReader.readAllFromString(program));
+		assertThat(declaredMethodNames(classBytes)).doesNotContain("_eval", "_apply", JvmTailBounce.APPLY_RAW_NAME,
+				"_store", "_envLookup", "_lookup");
+		assertThat(classBytes.length).isLessThan(8_000);
+		assertThat(runClass(classBytes)).isEqualTo("1");
+	}
+
+	@Test
+	void namingOneOfTheApplyingWrappersBringsTheEvalRuntimeBack() throws Exception {
+		// The wrappers are gated on the reference, not deleted: both spellings of the
+		// designator inject the wrapper AND force the runtime its body calls, so a
+		// program that takes one as a value still works. #'name is the one the reader
+		// writes; 'name is the one FunctionDesignators normalizes into it.
+		for (String designator : List.of("#'mapcar", "'mapcar")) {
+			byte[] classBytes = new JvmLispCompiler("Test")
+				.compile(LispReader.readAllFromString("(print (funcall " + designator + " #'1+ '(1 2 3)))"));
+			assertThat(declaredMethodNames(classBytes)).contains("_apply");
+			assertThat(runClass(classBytes)).isEqualTo("(2 3 4)");
+		}
+	}
+
+	@Test
+	void aComputedFuncallTargetCarriesNoApplyOrEvalRuntime() throws Exception {
+		// A symbol reaching a computed target resolves through the registry, which
+		// answers only names the program spells as values -- so without a spelled
+		// map*/every/some name no applying wrapper can be reached, and the runtime its
+		// body calls is dead weight. Counting every computed target made any
+		// higher-order function 49 KB of class instead of 10. A variable named like
+		// set/symbol-value/fboundp calls none of them, so it forces no eval runtime.
+		String program = """
+				(defun app (f x) (funcall f x))
+				(defun pick (set symbol-value fboundp) (list set symbol-value fboundp))
+				(print (pick 1 2 3))
+				(print (app (lambda (y) (+ y 1)) 2))
+				(print (app 'car '(9 8)))
+				""";
+		byte[] classBytes = new JvmLispCompiler("Test").compile(LispReader.readAllFromString(program));
+		assertThat(declaredMethodNames(classBytes)).doesNotContain("_eval", "_apply", JvmTailBounce.APPLY_RAW_NAME,
+				"_store", "_envLookup");
+		assertThat(runClass(classBytes)).isEqualTo("(1 2 3)\n3\n9");
+	}
+
+	@Test
+	void aComputedTargetBesideAQuotedWrapperNameStillReachesTheWrapper() throws Exception {
+		// The name spelled inside quoted data is a registry row a computed target can
+		// resolve, so the wrapper -- and the _apply its body calls -- stays.
+		String program = """
+				(defvar *f* (car '(mapcar)))
+				(print (funcall *f* #'1+ '(1 2)))
+				""";
+		byte[] classBytes = new JvmLispCompiler("Test").compile(LispReader.readAllFromString(program));
+		assertThat(declaredMethodNames(classBytes)).contains("_apply");
+		assertThat(runClass(classBytes)).isEqualTo("(2 3)");
+	}
+
+	@Test
+	void aRuntimeApplyGetsTheApplyTierNotTheInterpreter() throws Exception {
+		// The raw apply and the spread dispatcher, but no _eval/_store/_envLookup: an
+		// eval-free program holds no interpreted closure and no _fenv binding. Through a
+		// symbol, past the per-arity ceiling, and through multiple-value-call's spread.
+		// AP's tail apply bounces, so the trampoline is what re-enters the raw apply.
+		String program = """
+				(defun ap (f l) (apply f l))
+				(print (ap 'list '(1 2)))
+				(print (ap #'+ '(1 2 3 4 5 6 7 8 9 10 11 12)))
+				(print (multiple-value-call (car (list #'list)) (values 1 2) (floor 7 2)))
+				""";
+		byte[] classBytes = new JvmLispCompiler("Test").compile(LispReader.readAllFromString(program));
+		assertThat(declaredMethodNames(classBytes)).contains(JvmTailBounce.APPLY_RAW_NAME)
+			.doesNotContain("_eval", "_store", "_envLookup");
+		assertThat(runClass(classBytes)).isEqualTo("(1 2)\n78\n(1 2 3 1)");
+	}
+
+	@Test
+	void anApplyOfALiteralCompiledTargetNeedsNoApplyRuntime() throws Exception {
+		String program = """
+				(defun k (&rest r) r)
+				(print (apply #'k 1 2 '(3)))
+				(print (multiple-value-call #'k (values 1 2) 3))
+				""";
+		byte[] classBytes = new JvmLispCompiler("Test").compile(LispReader.readAllFromString(program));
+		assertThat(declaredMethodNames(classBytes)).doesNotContain("_apply", JvmTailBounce.APPLY_RAW_NAME, "_eval");
+		assertThat(runClass(classBytes)).isEqualTo("(1 2 3)\n(1 2 3)");
+	}
+
+	@Test
+	void aComputedDesignatorStillResolvesASymbolThroughTheRegistry() throws Exception {
+		// The name registry used to ride along on the always-on eval gate. It is now
+		// gated on the arities Pass 2 dispatched through, because an operator that calls
+		// a designator it cannot read -- mapcar here, but sort/remove-if/find-if are the
+		// same site -- may be handed a SYMBOL at run time, and only _lookup answers one.
+		String program = """
+				(defun pred (x) (evenp x))
+				(print (mapcar (car (list 'pred)) '(2 3 4)))
+				""";
+		byte[] classBytes = new JvmLispCompiler("Test").compile(LispReader.readAllFromString(program));
+		assertThat(runClass(classBytes)).isEqualTo("(T NIL T)");
+	}
+
+	@Test
+	void theValueTailTrampolineIsEmittedOnlyWhereATailLeavesThroughAValue() throws Exception {
+		// A tail that stays direct -- a self call the lowering made a loop -- carries no
+		// trampoline at all: no _tramp, no value tail, no unwrap, the class the
+		// pre-trampoline emitter wrote (.kb/scheme-frontend.md, "Tail-call groups"). One
+		// whose tail leaves through the variable the callee arrived in is a value tail,
+		// and the same program runs a depth the plain call chain overflows on the JVM's
+		// sized worker.
+		byte[] direct = new JvmLispCompiler("Test").compile(LispReader.readAllFromString("""
+				(defun f (n) (if (= n 0) 'done (f (- n 1))))
+				(print (f 100000))
+				"""));
+		assertThat(declaredMethodNames(direct)).doesNotContain("_tramp", "_vtc2", "_vtcb2");
+		assertThat(runClass(direct)).isEqualTo("DONE");
+		byte[] bounced = new JvmLispCompiler("Test").compile(LispReader.readAllFromString("""
+				(defun g (self n) (if (= n 0) 'done (funcall self self (- n 1))))
+				(print (g (function g) 300000))
+				"""));
+		assertThat(declaredMethodNames(bounced)).contains("_tramp", "_vtc2", "_vtcb2");
+		assertThat(valueTailSitesIn(bounced, "G")).isEqualTo(1);
+		assertThat(runClass(bounced)).isEqualTo("DONE");
+	}
+
+	@Test
+	void theUnwrapCheckAtACallSiteIsOneCallToASharedHelper() throws Exception {
+		// Every dispatcher call site in a trampolined class checks its result for a
+		// bounce. Inline, the check cost ~22 bytes per site and pushed the ci-spec
+		// corpus's largest top-level form past the 64 KB method limit
+		// (.kb/jvm-method-size-limits.md); as a call to _unw it costs one invokestatic.
+		int sites = 200;
+		StringBuilder calls = new StringBuilder("(let ((f (car (list #'1+))) (acc 0))\n");
+		for (int i = 0; i < sites; i++) {
+			calls.append("  (setq acc (funcall f acc))\n");
+		}
+		calls.append("  (print acc))\n");
+		String bouncing = "(defun g (self n) (if (= n 0) 'done (funcall self self (- n 1))))\n"
+				+ "(print (g (function g) 3))\n";
+		byte[] direct = new JvmLispCompiler("Test").compile(LispReader.readAllFromString(calls.toString()));
+		byte[] trampolined = new JvmLispCompiler("Test").compile(LispReader.readAllFromString(calls + bouncing));
+		assertThat(declaredMethodNames(trampolined)).contains("_tramp", "_unw");
+		int growth = topLevelCodeLength(trampolined) - topLevelCodeLength(direct);
+		assertThat(growth).as("bytes the unwrap adds over %d call sites", sites).isLessThan(sites * 4 + 100);
+		assertThat(runClass(trampolined)).isEqualTo("200\nDONE");
+	}
+
+	/**
+	 * The closures whose tail calls go through a value, as the ci-spec case runs them.
+	 */
+	private static final String CLOSURE_TAIL_CALLS = """
+			(let ((ctv-f nil))
+			  (setq ctv-f (lambda (n) (if (= n 0) :done (funcall ctv-f (- n 1)))))
+			  (print (funcall ctv-f 1000000)))
+			(let ((ctv-ev nil) (ctv-od nil))
+			  (setq ctv-ev (lambda (n) (if (= n 0) t (funcall ctv-od (- n 1)))))
+			  (setq ctv-od (lambda (n) (if (= n 0) nil (funcall ctv-ev (- n 1)))))
+			  (print (list (funcall ctv-ev 1000000) (funcall ctv-ev 1000001))))
+			(defun ctv-hop (n k) (if (= n 0) (funcall k :landed) (funcall k n)))
+			(let ((ctv-k nil))
+			  (setq ctv-k (lambda (v) (if (eq v :landed) :finished (ctv-hop (- v 1) ctv-k))))
+			  (print (funcall ctv-k 1000000)))
+			(let ((ctv-states (make-array 2)))
+			  (setf (aref ctv-states 0)
+			        (lambda (n acc) (if (= n 0) acc (funcall (aref ctv-states 1) (- n 1) (+ acc 1)))))
+			  (setf (aref ctv-states 1)
+			        (lambda (n acc) (if (= n 0) acc (funcall (aref ctv-states 0) (- n 1) acc))))
+			  (print (funcall (aref ctv-states 0) 1000000 0)))
+			""";
+
+	@Test
+	void aLambdasTailCallThroughAValueRunsInConstantStack() throws Exception {
+		// A closure's tail call through a value -- itself through the variable holding
+		// it, a partner closure, a defun handed the closure as its continuation, a state
+		// machine of closures in a vector -- is a value tail as a defun's is
+		// (JvmTailBounce): its _vtc<n> bounces once the chain fills the limit, so a depth
+		// the frame-per-call chain overflowed on the 16 MiB worker runs, and no lambda
+		// builds a bounce itself. The continuation's tail call of CTV-HOP is a direct
+		// call whose bounce passes on as the closure's own answer: unwrapped there, each
+		// round would keep the closure's frame under the trampoline it drives.
+		List<LispVal> forms = am.ik.rontolisp.eval.LispPreludeLibrary
+			.process(LispReader.readAllFromString(CLOSURE_TAIL_CALLS));
+		byte[] classBytes = new JvmLispCompiler("Test").compile(forms);
+		List<String> lambdas = declaredMethodNames(classBytes).stream().filter(n -> n.startsWith("_lambda_")).toList();
+		assertThat(lambdas.stream().filter(n -> valueTailSitesIn(classBytes, n) > 0).count())
+			.as("the self loop, the pair and the two states call through a value")
+			.isGreaterThanOrEqualTo(5);
+		assertThat(lambdas.stream().mapToInt(n -> markerReadsIn(classBytes, n)).sum()).isZero();
+		List<String> hopCallers = lambdas.stream().filter(n -> ownCallsIn(classBytes, n, "CTV-HOP") > 0).toList();
+		assertThat(hopCallers).hasSize(1);
+		assertThat(unwrapsAfterCallsTo(classBytes, hopCallers.get(0), "CTV-HOP")).isZero();
+		assertThat(runClass(classBytes)).isEqualTo(":DONE\n(T NIL)\n:FINISHED\n500000");
+	}
+
+	@Test
+	void everyFormTheTailMarkPassesHandsABounceOnAndAPlainTailNeedsNoCheck() throws Exception {
+		// A defun answers a bounce where the tail mark reaches a call through a value --
+		// through every form that hands its value on (JvmTailGroup.tailCalls) -- and
+		// where its tail calls such a defun directly (RB-HOP hands RB-IF's on): each runs
+		// a chain through a closure 300,000 rounds deep. A tail the mark reaches no such
+		// call through answers no bounce, so its callers carry no check.
+		List<LispVal> forms = am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString("""
+				(defun rb-if (f n) (if (> n -1) (funcall f n) :if))
+				(defun rb-progn (f n) (progn 1 (funcall f n)))
+				(defun rb-let (f n) (let ((m n)) (funcall f m)))
+				(defun rb-let* (f n) (let* ((m n) (k m)) (funcall f k)))
+				(defun rb-cond (f n) (cond ((< n 0) :neg) (t (funcall f n))))
+				(defun rb-case (f n) (case n (-1 :neg) (otherwise (funcall f n))))
+				(defun rb-typecase (f n) (typecase n (integer (funcall f n)) (t :other)))
+				(defun rb-and (f n) (and (>= n 0) (funcall f n)))
+				(defun rb-or (f n) (or (< n -5) (funcall f n)))
+				(defun rb-when (f n) (when (>= n 0) (funcall f n)))
+				(defun rb-unless (f n) (unless (< n 0) (funcall f n)))
+				(defun rb-block (f n) (block b (when (< n 0) (return-from b :neg)) (funcall f n)))
+				(defun rb-return-from (f n) (block b (return-from b (funcall f n))))
+				(defun rb-the (f n) (the t (funcall f n)))
+				(defun rb-locally (f n) (locally (funcall f n)))
+				(defun rb-flet (f n) (flet ((g (m) (funcall f m))) (g n)))
+				(defun rb-hop (f n) (rb-if f n))
+				(defun rb-run (op)
+				  (let ((k nil))
+				    (setq k (lambda (m) (if (= m 0) :done (funcall op k (- m 1)))))
+				    (funcall k 300000)))
+				(print (mapcar #'rb-run (list #'rb-if #'rb-progn #'rb-let #'rb-let* #'rb-cond #'rb-case #'rb-typecase
+				                              #'rb-and #'rb-or #'rb-when #'rb-unless #'rb-block #'rb-return-from
+				                              #'rb-the #'rb-locally #'rb-flet #'rb-hop)))
+				(defun rb-plain (n) (do ((i 0 (1+ i))) ((>= i n) i)))
+				(defun rb-callers (f) (list (rb-plain 3) (rb-if f -2)))
+				(print (rb-callers #'identity))
+				"""));
+		byte[] classBytes = new JvmLispCompiler("Test").compile(forms);
+		assertThat(unwrapsAfterCallsTo(classBytes, "RB-HOP", "RB-IF")).as("RB-IF's bounce passes on").isZero();
+		assertThat(unwrapsAfterCallsTo(classBytes, "RB-CALLERS", "RB-PLAIN")).isZero();
+		assertThat(unwrapsAfterCallsTo(classBytes, "RB-CALLERS", "RB-IF")).isEqualTo(1);
+		assertThat(runClass(classBytes)).isEqualTo("(" + ":DONE ".repeat(16) + ":DONE)\n(3 :IF)");
+	}
+
+	@Test
+	void aTailApplyThroughAValueBouncesWithItsArgumentListUnspread() throws Exception {
+		// (apply f ...) over a computed designator in tail position calls _vtcv, which
+		// applies the list through the raw apply or, past the limit, bounces it as
+		// {FALSE, f, list}, and the trampoline re-enters the raw apply with it
+		// (JvmTailBounce.emitSpreadValueTail): a closure applying itself and a defun
+		// applying the closure that calls it run 1,000,000 deep. _apply itself still
+		// answers a real value, to a Java caller among others.
+		List<LispVal> forms = am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString("""
+				(let ((f nil))
+				  (setq f (lambda (n &rest more) (if (= n 0) (list :done more) (apply f (- n 1) more))))
+				  (print (funcall f 1000000 :a :b)))
+				(defun ap-step (g n) (if (= n 0) :stepped (apply g (list (- n 1)))))
+				(let ((k nil))
+				  (setq k (lambda (n) (ap-step k n)))
+				  (print (funcall k 1000000)))
+				(print (apply (car (list #'list)) 1 '(2 3)))
+				"""));
+		byte[] classBytes = new JvmLispCompiler("Test").compile(forms);
+		assertThat(ownCallsIn(classBytes, "_tramp", JvmTailBounce.APPLY_RAW_NAME)).isEqualTo(1);
+		assertThat(ownCallsIn(classBytes, "_apply", JvmTailBounce.APPLY_RAW_NAME)).isEqualTo(1);
+		assertThat(ownCallsIn(classBytes, JvmTailBounce.VALUE_TAIL_SPREAD_NAME, JvmTailBounce.APPLY_RAW_NAME))
+			.isEqualTo(1);
+		assertThat(ownCallsIn(classBytes, "AP-STEP", "_apply")).isZero();
+		assertThat(ownCallsIn(classBytes, "AP-STEP", JvmTailBounce.VALUE_TAIL_SPREAD_NAME)).isEqualTo(1);
+		assertThat(runClass(classBytes)).isEqualTo("(:DONE (:A :B))\n:STEPPED\n(1 2 3)");
+		// The Clojure front end calls every value through %clojure-call's apply.
+		byte[] clojure = new am.ik.rontolisp.cli.JvmSourceCompiler("Test").sourceLanguage("clojure").compile("""
+				(defn run [n] (let [f (atom nil)] (reset! f (fn [m] (if (= m 0) :done (@f (dec m))))) (@f n)))
+				(println (run 1000000))
+				""", null).classBytes();
+		assertThat(runClass(clojure)).isEqualTo(":done");
+	}
+
+	@Test
+	void aTailCallOfALiteralDesignatorIsADirectCallNotABounce() throws Exception {
+		// (funcall #'name ...) names its target: the call is the direct invokestatic its
+		// head-position spelling compiles to (JvmDesignatorCall), never a bounce, in a
+		// defun's tail and a closure's alike. A bounce of the callee passes on.
+		List<LispVal> forms = am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString("""
+				(defun lit-b (x) (list :b x))
+				(defun lit-a (x) (funcall #'lit-b x))
+				(defun lit-v (f x) (funcall f x))
+				(defun lit-c (f x) (if x (funcall #'lit-v f x) :none))
+				(print (list (lit-a 1) (funcall (lambda (y) (funcall #'lit-b y)) 2)
+				             (lit-c #'lit-a 3) (lit-c #'lit-a nil)))
+				"""));
+		byte[] classBytes = new JvmLispCompiler("Test").compile(forms);
+		assertThat(valueTailSitesIn(classBytes, "LIT-A")).isZero();
+		assertThat(ownCallsIn(classBytes, "LIT-A", "LIT-B")).isEqualTo(1);
+		assertThat(valueTailSitesIn(classBytes, "LIT-C")).isZero();
+		assertThat(ownCallsIn(classBytes, "LIT-C", "LIT-V")).isEqualTo(1);
+		assertThat(unwrapsAfterCallsTo(classBytes, "LIT-C", "LIT-V")).as("LIT-V's bounce passes on").isZero();
+		assertThat(runClass(classBytes)).isEqualTo("((:B 1) (:B 2) (:B 3) :NONE)");
+	}
+
+	@Test
+	void theTrampolineIsWrittenOnlyWhenAMethodThatBouncesSurvivesTheShake() throws Exception {
+		// Every dispatcher call site checks for a bounce, and the class carries _tramp
+		// only when a method the shake keeps can make one: otherwise _unw answers its
+		// argument and _tramp -- with every dispatcher arity it names and the closures
+		// only those reach -- goes away, and the value tails' _vtc<n> with it, and the
+		// _vtcb<n> that makes their bounce.
+		byte[] none = new JvmLispCompiler("Test")
+			.compile(LispReader.readAllFromString("(print (mapcar (lambda (x) (* x x)) '(1 2 3)))"));
+		assertThat(declaredMethodNames(none)).contains("_unw").doesNotContain("_tramp", "_vtc1", "_vtcb1");
+		assertThat(codeLengthOf(none, "_unw")).isEqualTo(2);
+		assertThat(runClass(none)).isEqualTo("(1 4 9)");
+		byte[] live = new JvmLispCompiler("Test").compile(LispReader.readAllFromString("""
+				(let ((f nil)) (setq f (lambda (n) (if (= n 0) :done (funcall f (- n 1))))) (print (funcall f 300000)))
+				"""));
+		assertThat(declaredMethodNames(live)).contains("_unw", "_tramp", "_vtc1", "_vtcb1");
+		assertThat(runClass(live)).isEqualTo(":DONE");
+	}
+
+	@Test
+	void aShallowValueTailIsACallAndAChainPastTheLimitBouncesIntoTheTrampoline() throws Exception {
+		// The value-tail depth is an argument (JvmTailBounce): a lambda that reads it
+		// takes
+		// it last, its value tail hands _vtc<n> its own, and _vtc<n> -- a forwarder --
+		// hands the dispatcher copy one more. The copy answers a depth past the limit
+		// with
+		// the bounce _vtcb<n> makes, the ordinary call that starts a chain passes 0, and
+		// _tramp re-enters with the limit, so the chain it drives keeps bouncing. Every
+		// chain length around the limit answers, and the class holds no count.
+		String program = """
+				(defun vtl-chain (n)
+				  (let ((f (lambda (x) (list :end x))))
+				    (dotimes (i n f) (let ((next f)) (setq f (lambda (x) (funcall next (+ x 1))))))))
+				(print (mapcar (lambda (n) (second (funcall (vtl-chain n) 0))) '(0 1 63 64 65 128 129 100000)))
+				""";
+		byte[] classBytes = new JvmLispCompiler("Test").compile(LispReader.readAllFromString(program));
+		assertThat(ownCallsIn(classBytes, "_vtc1", "_vtcd1")).isEqualTo(1);
+		assertThat(codeLengthOf(classBytes, "_vtc1")).as("load, add one, call, return").isEqualTo(9);
+		assertThat(ownCallsIn(classBytes, "_vtcd1", "_vtcb1")).as("the bounce past the limit").isEqualTo(1);
+		assertThat(markerReadsIn(classBytes, "_vtcb1")).isEqualTo(1);
+		assertThat(intsPassedTo(classBytes, "_tramp", "_invoke_1")).containsExactly(JvmTailBounce.VALUE_TAIL_LIMIT);
+		List<String> lambdas = declaredMethodNames(classBytes).stream()
+			.filter(name -> name.startsWith("_lambda_"))
+			.toList();
+		assertThat(lambdas.stream().filter(name -> valueTailSitesIn(classBytes, name) > 0)).as("the forwarders")
+			.isNotEmpty()
+			.allSatisfy(name -> assertThat(descriptorOf(classBytes, name)).endsWith("I)Ljava/lang/Object;"));
+		assertThat(lambdas).as("the chain's end, which reads no depth, takes none")
+			.anySatisfy(name -> assertThat(descriptorOf(classBytes, name)).endsWith(";)Ljava/lang/Object;"));
+		assertThat(declaredFieldNames(classBytes)).noneMatch(name -> name.startsWith("_vtc"));
+		assertThat(runClass(classBytes)).isEqualTo("(0 1 63 64 65 128 129 100000)");
+	}
+
+	@Test
+	void aValueTailCallsThroughADispatcherOfItsOwnWhileItsArityFitsOneSegment() throws Exception {
+		// A value tail's real call goes through _vtcd<n>, a copy of the arity's
+		// dispatcher only value tails call (JvmTailBounce): a JIT inlining the call
+		// sees the functions value tails reach, not every function the program's
+		// other indirect calls reach too. The trampoline re-enters the shared
+		// dispatcher. An arity whose dispatcher is routed past one segment keeps the
+		// shared one -- the copy would double the largest dispatchers -- and the
+		// segments are counted after the shake: 300 lambdas in a defun nothing calls
+		// leave the copy in place.
+		String chain = """
+				(defparameter *vtd-g* (lambda (x) (+ x 1)))
+				(defparameter *vtd-f* (lambda (x) (funcall *vtd-g* x)))
+				(defun vtd-run (n h) (let ((acc 0)) (dotimes (i n acc) (setq acc (funcall h acc)))))
+				(print (vtd-run 1000 *vtd-f*))
+				""";
+		StringBuilder lambdas = new StringBuilder();
+		for (int k = 0; k < 300; k++) {
+			lambdas.append(" (lambda (x) (+ x ").append(k).append("))");
+		}
+		byte[] own = new JvmLispCompiler("Test").compile(LispReader.readAllFromString(chain));
+		assertThat(ownCallsIn(own, "_vtc1", "_vtcd1")).isEqualTo(1);
+		assertThat(ownCallsIn(own, "_vtc1", "_invoke_1")).isZero();
+		assertThat(ownCallsIn(own, "_tramp", "_invoke_1")).isEqualTo(1);
+		assertThat(ownCallsIn(own, "_tramp", "_vtcd1")).isZero();
+		assertThat(runClass(own)).isEqualTo("1000");
+		// The copy spends bytes on speed: --optimize=size declines it.
+		byte[] small = JvmLispCompiler.builder()
+			.className("Test")
+			.optimize(OptimizeLevel.SIZE)
+			.build()
+			.compile(LispReader.readAllFromString(chain));
+		assertThat(declaredMethodNames(small)).doesNotContain("_vtcd1");
+		assertThat(ownCallsIn(small, "_vtc1", "_invoke_1")).isEqualTo(1);
+		assertThat(runClass(small)).isEqualTo("1000");
+		byte[] routed = new JvmLispCompiler("Test").compile(LispReader.readAllFromString(
+				chain + "(defvar *vtd-many* (list" + lambdas + "))\n(print (funcall (nth 299 *vtd-many*) 1))\n"));
+		assertThat(declaredMethodNames(routed)).contains("_invoke_1$0").doesNotContain("_vtcd1");
+		assertThat(ownCallsIn(routed, "_vtc1", "_invoke_1")).isEqualTo(1);
+		assertThat(runClass(routed)).isEqualTo("1000\n300");
+		byte[] shaken = new JvmLispCompiler("Test")
+			.compile(LispReader.readAllFromString(chain + "(defun vtd-unused () (list" + lambdas + "))\n"));
+		assertThat(declaredMethodNames(shaken)).doesNotContain("_invoke_1$0");
+		assertThat(ownCallsIn(shaken, "_vtc1", "_vtcd1")).isEqualTo(1);
+		assertThat(runClass(shaken)).isEqualTo("1000");
+	}
+
+	@Test
+	void aNonLocalExitLeavesAChainOfValueTailsFromEitherSideOfTheLimit() throws Exception {
+		// A throw, a return-from out of a closure and an error each leave a chain of
+		// value tails from deeper than the limit -- out of the trampoline -- and from
+		// shallower, out of the real calls. The depth is an argument, so no exit leaves
+		// anything to restore: the next chain counts from its own call.
+		String program = """
+				(defun vte-thrower (d)
+				  (let ((f nil))
+				    (setq f (lambda (n) (if (= n 0) (throw 'vte-out d) (funcall f (- n 1)))))
+				    (catch 'vte-out (funcall f d))))
+				(defun vte-finder (d)
+				  (block found
+				    (let ((g nil))
+				      (setq g (lambda (n) (if (= n 0) (return-from found d) (funcall g (- n 1)))))
+				      (funcall g d))))
+				(defun vte-erring (d)
+				  (handler-case
+				      (let ((h nil)) (setq h (lambda (n) (if (= n 0) (error "deep") (funcall h (- n 1))))) (funcall h d))
+				    (error () d)))
+				(print (loop for d in '(500 65 64 63 3) collect (list (vte-thrower d) (vte-finder d) (vte-erring d))))
+				""";
+		byte[] classBytes = new JvmLispCompiler("Test").compile(LispReader.readAllFromString(program));
+		assertThat(runClass(classBytes)).isEqualTo("((500 500 500) (65 65 65) (64 64 64) (63 63 63) (3 3 3))");
+	}
+
+	@Test
+	void aClosuresValueTailInsideASpecialParametersBindingStaysACall() throws Exception {
+		// The binding a parameter named like a special makes is undone after the body
+		// returns, so the call in the body's tail runs inside it: no bounce, and the
+		// callee reads the argument (LambdaLists.toNative).
+		List<LispVal> forms = am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString("""
+				(defvar *ctv-depth* :top)
+				(defun ctv-depth () *ctv-depth*)
+				(let ((reader (lambda () (ctv-depth))))
+				  (print (list (funcall (lambda (*ctv-depth*) (funcall reader)) 7) (ctv-depth))))
+				"""));
+		byte[] classBytes = new JvmLispCompiler("Test").compile(forms);
+		List<String> binders = declaredMethodNames(classBytes).stream()
+			.filter(n -> n.startsWith("_lambda_") && ownCallsIn(classBytes, n, "_invoke_0") > 0)
+			.toList();
+		assertThat(binders).hasSize(1);
+		assertThat(valueTailSitesIn(classBytes, binders.get(0))).isZero();
+		assertThat(runClass(classBytes)).isEqualTo("(7 :TOP)");
+	}
+
+	@Test
+	void aSelfTailCallJumpsBackToTheMethodsFirstInstruction() throws Exception {
+		// A defun's tail call of itself and a labels function's tail call through its
+		// own variable store the arguments into the parameter slots and jump back to the
+		// method's first instruction (.kb/jvm-self-tail-calls.md): no call is left, and
+		// a depth the frame-per-call chain overflowed on the 16 MiB worker runs.
+		List<LispVal> forms = am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString("""
+				(defun down (n) (if (= n 0) 'done (down (- n 1))))
+				(print (down 1000000))
+				(print (labels ((step (n acc) (if (= n 0) acc (step (- n 1) (+ acc 1))))) (step 1000000 0)))
+				"""));
+		byte[] classBytes = new JvmLispCompiler("Test").compile(forms);
+		assertThat(ownCallsIn(classBytes, "DOWN", "DOWN")).isZero();
+		assertThat(jumpsToEntry(classBytes, "DOWN")).isEqualTo(1);
+		assertThat(declaredMethodNames(classBytes).stream()
+			.filter(name -> name.startsWith("_lambda_") && jumpsToEntry(classBytes, name) == 1)
+			.count()).as("the labels function's method loops").isEqualTo(1);
+		assertThat(compileAndRun(forms)).isEqualTo("DONE\n1000000");
+	}
+
+	@Test
+	void everyTailTransparentFormHandsTheJumpOnAndADynamicExtentKeepsItsCall() throws Exception {
+		// The jump re-enters ahead of the prologue that boxes a captured parameter, so a
+		// closure keeps its own round's binding; every argument reads the round it was
+		// written in; a lambda list's defaults, keys and rest list are re-derived from
+		// the physical arguments a call would pass. The tail mark passes block,
+		// return-from, labels, let*, the, a literal #'name and a values tail. A call
+		// inside a special binding, an unwind-protect, a handler-case or a catch is no
+		// tail: the restore, the cleanup and the handler belong to its extent, so it
+		// stays a call.
+		List<LispVal> forms = am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString(
+				"""
+						(defun collect (n acc) (if (= n 0) acc (collect (- n 1) (cons (lambda () n) acc))))
+						(print (mapcar #'funcall (collect 3 nil)))
+						(defun swap-loop (a b n) (if (= n 0) (list a b) (swap-loop b a (- n 1))))
+						(print (swap-loop 1 2 1000001))
+						(defun opt (n &optional (k 1)) (if (<= n 0) k (opt (- n k))))
+						(print (opt 1000000))
+						(defun key (n &key (k 1) acc) (if (<= n 0) (length acc) (key (- n k) :acc (cons n acc))))
+						(print (key 1000000))
+						(defun rst (n &rest r) (if (= n 0) r (rst (- n 1) n)))
+						(print (rst 1000000))
+						(defun ret (n) (if (= n 0) 'ret (return-from ret (ret (- n 1)))))
+						(print (ret 1000000))
+						(defun inner (n) (labels ((dec (x) (- x 1))) (let* ((m (dec n))) (the t (if (< m 0) 'inner (inner m))))))
+						(print (inner 1000000))
+						(defun fc (n) (block b (if (= n 0) (return-from b 'funcall)) (funcall #'fc (- n 1))))
+						(print (fc 1000000))
+						(defun mv (n) (if (= n 0) (values 1 2) (mv (- n 1))))
+						(print (multiple-value-list (mv 1000000)))
+						(defvar *depth* 'outer)
+						(defun show () *depth*)
+						(defun spec (n) (if (= n 0) (show) (let ((*depth* n)) (spec (- n 1)))))
+						(print (list (spec 3) *depth*))
+						(defvar *cleanups* 0)
+						(defun up (n) (if (= n 0) 'up (unwind-protect (up (- n 1)) (setq *cleanups* (+ *cleanups* 1)))))
+						(print (list (up 3) *cleanups*))
+						(defun hc (n) (if (= n 0) (error "boom") (handler-case (hc (- n 1)) (error () n))))
+						(print (hc 3))
+						(defun ct (n) (if (= n 0) (throw 'tag 'thrown) (catch 'tag (ct (- n 1)))))
+						(print (ct 3))
+						"""));
+		byte[] classBytes = new JvmLispCompiler("Test").compile(forms);
+		for (String looping : List.of("COLLECT", "SWAP-LOOP", "OPT", "KEY", "RST", "RET", "INNER", "FC", "MV")) {
+			assertThat(jumpsToEntry(classBytes, looping)).as(looping).isEqualTo(1);
+			assertThat(ownCallsIn(classBytes, looping, looping)).as(looping).isZero();
+		}
+		for (String calling : List.of("SPEC", "UP", "HC", "CT")) {
+			assertThat(jumpsToEntry(classBytes, calling)).as(calling).isZero();
+			assertThat(ownCallsIn(classBytes, calling, calling)).as(calling).isEqualTo(1);
+		}
+		assertThat(compileAndRun(forms)).isEqualTo("""
+				(1 2 3)
+				(2 1)
+				1
+				1000000
+				(1)
+				RET
+				INNER
+				FUNCALL
+				(1 2)
+				(1 OUTER)
+				(UP 3)
+				1
+				THROWN""");
+	}
+
+	@Test
+	void anExpansionALambdaHeadAndALoopExitInTailPositionHandTheJumpOn() throws Exception {
+		// multiple-value-bind, destructuring-bind, symbol-macrolet, a multiple-value-call
+		// of a literal #'name, an inline lambda's body and the value of a return out of
+		// a loop body all sit where the form's value is the method's result, so the self
+		// call there is a jump, a call to a sibling is a jump inside the tail group, and
+		// a call through a value bounces. A special bound by a multiple-value-bind or by
+		// a lambda head's parameter, and a catch inside the loop body, keep the call.
+		List<LispVal> forms = am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString(
+				"""
+						(defun vmvb (n) (multiple-value-bind (a b) (values n 1) (if (= a 0) :mvb (vmvb (- a b)))))
+						(defun vdb (n) (destructuring-bind (a b) (list n 1) (if (= a 0) :db (vdb (- a b)))))
+						(defun vsm (n) (symbol-macrolet ((m (- n 1))) (if (= n 0) :sm (vsm m))))
+						(defun vmvc (n) (if (= n 0) :mvc (multiple-value-call #'vmvc (- n 1))))
+						(defun vhead (n) (if (= n 0) :head ((lambda (k &optional (d 1)) (vhead (- k d))) n)))
+						(defun vdolist (n) (dolist (x (list 1)) (return (if (= n 0) :dolist (vdolist (- n 1))))))
+						(defun vloop (n) (loop for x in (list 1) do (return-from vloop (if (= n 0) :loop (vloop (- n 1))))))
+						(defun vprog (n) (prog ((m n)) (return (if (= m 0) :prog (vprog (- m 1))))))
+						(defun vdotimes (n) (dotimes (i 1) (return (if (= n 0) :dotimes (vdotimes (- n 1))))))
+						(print (list (vmvb 1000000) (vdb 1000000) (vsm 1000000) (vmvc 1000000) (vhead 1000000)
+						             (vdolist 1000000) (vloop 1000000) (vprog 1000000) (vdotimes 1000000)))
+						(defun mev? (n) (multiple-value-bind (m) (values n) (if (= m 0) t ((lambda (k) (mod? k)) (- m 1)))))
+						(defun mod? (n) (destructuring-bind (m) (list n) (if (= m 0) nil (mev? (- m 1)))))
+						(print (list (mev? 1000000) (mod? 1000000)))
+						(defun vval (f n) (destructuring-bind (m) (list n) (if (= m 0) :val (funcall f f (- m 1)))))
+						(print (vval #'vval 1000000))
+						(defvar *vd* 'outer)
+						(defun vshow () *vd*)
+						(defun vspec (n) (multiple-value-bind (*vd*) (values n) (if (= n 0) (vshow) (vspec (- n 1)))))
+						(print (list (vspec 3) *vd*))
+						(defun vhspec (n) (if (= n 0) (vshow) ((lambda (*vd*) (vhspec (- *vd* 1))) n)))
+						(print (list (vhspec 3) *vd*))
+						(defun vcatch (n) (dolist (x (list 1)) (catch 'k (return (if (= n 0) (throw 'k :caught) (vcatch (- n 1)))))))
+						(print (vcatch 3))
+						"""));
+		byte[] classBytes = new JvmLispCompiler("Test").compile(forms);
+		for (String looping : List.of("VMVB", "VDB", "VSM", "VMVC", "VHEAD", "VDOLIST", "VLOOP", "VPROG", "VDOTIMES")) {
+			assertThat(jumpsToEntry(classBytes, looping)).as(looping).isEqualTo(1);
+			assertThat(ownCallsIn(classBytes, looping, looping)).as(looping).isZero();
+		}
+		assertThat(ownCallsIn(classBytes, "MEV?", "MOD?")).isZero();
+		assertThat(ownCallsIn(classBytes, "MOD?", "MEV?")).isZero();
+		assertThat(ownCallsIn(classBytes, "VVAL", "_invoke_2")).as("a bounce, not a dispatcher call").isZero();
+		for (String calling : List.of("VSPEC", "VHSPEC", "VCATCH")) {
+			assertThat(jumpsToEntry(classBytes, calling)).as(calling).isZero();
+			assertThat(ownCallsIn(classBytes, calling, calling)).as(calling).isEqualTo(1);
+		}
+		assertThat(compileAndRun(forms)).isEqualTo("""
+				(:MVB :DB :SM :MVC :HEAD :DOLIST :LOOP :PROG :DOTIMES)
+				(T NIL)
+				:VAL
+				(0 OUTER)
+				(1 OUTER)
+				NIL""");
+	}
+
+	@Test
+	void aTailCallInsideASpecialParametersBindingStaysACall() throws Exception {
+		// A parameter named like a special is bound by a let around the whole body
+		// (LambdaLists.toNative), and a call inside that binding is no tail call: the
+		// restore runs after it returns. So a defun's self call, a labels function's
+		// self call and SPT-EV's call to SPT-OD stay calls -- no jump, and no tail group
+		// (JvmTailGroup ends the walk at the binding: a defun's lowered body, a labels
+		// lambda's parameter list) -- and every round reads its own binding. SPT-OD's
+		// tail call back into SPT-EV is then an ordinary call too.
+		List<LispVal> forms = am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString("""
+				(defvar *spt* :top)
+				(defun spt-show () *spt*)
+				(defun spt-self (*spt* n) (if (= n 0) (spt-show) (spt-self (cons n *spt*) (- n 1))))
+				(print (spt-self nil 3))
+				(print (labels ((spt-lb (*spt* n) (if (= n 0) (spt-show) (spt-lb (cons n *spt*) (- n 1)))))
+				         (spt-lb nil 3)))
+				(defun spt-ev (*spt* n) (if (= n 0) (spt-show) (spt-od n (- n 1))))
+				(defun spt-od (k n) (if (= n 0) (list k (spt-show)) (spt-ev n (- n 1))))
+				(print (list (spt-ev :e 4) (spt-ev :e 5) (spt-show)))
+				"""));
+		byte[] classBytes = new JvmLispCompiler("Test").compile(forms);
+		assertThat(jumpsToEntry(classBytes, "SPT-SELF")).isZero();
+		assertThat(ownCallsIn(classBytes, "SPT-SELF", "SPT-SELF")).isEqualTo(1);
+		assertThat(ownCallsIn(classBytes, "SPT-EV", "SPT-OD")).isEqualTo(1);
+		assertThat(ownCallsIn(classBytes, "SPT-OD", "SPT-EV")).isEqualTo(1);
+		assertThat(declaredMethodNames(classBytes).stream()
+			.filter(name -> name.startsWith("_lambda_") && jumpsToEntry(classBytes, name) > 0)
+			.toList()).as("no labels function's method loops").isEmpty();
+		assertThat(compileAndRun(forms)).isEqualTo("""
+				(1 2 3)
+				(1 2 3)
+				(1 (1 2) :TOP)""");
+	}
+
+	@Test
+	void aSelfTailCallInASplitOffContinuationStaysACall() throws Exception {
+		// A body past the method-size budget moves its tail into a _k$N continuation
+		// (JvmBodyOutliner): a different method, which cannot jump to the defun's
+		// first instruction, so the tail call there stays a call -- correct, one frame
+		// a round. The defun's own method has no jump either.
+		StringBuilder sb = new StringBuilder("(defun big (n acc)\n  (let ((a 0))\n");
+		for (int k = 0; k < 400; k++) {
+			sb.append("    (setq a (+ a (car (list 1 ").append(k).append("))))\n");
+		}
+		sb.append("    (if (= n 0) (+ acc a) (big (- n 1) (+ acc a)))))\n(print (big 50 0))\n");
+		List<LispVal> forms = am.ik.rontolisp.eval.LispPreludeLibrary
+			.process(LispReader.readAllFromString(sb.toString()));
+		byte[] classBytes = new JvmLispCompiler("Test").compile(forms);
+		assertThat(declaredMethodNames(classBytes)).as("the split actually happened").contains("_k$0");
+		assertThat(jumpsToEntry(classBytes, "BIG")).isZero();
+		assertThat(compileAndRun(forms)).isEqualTo(String.valueOf(51 * 400));
+	}
+
+	@Test
+	void aTailThroughAValueInASplitOffContinuationHandsItsBounceOn() throws Exception {
+		// A closure's body past the method-size budget ends in a _k$N continuation whose
+		// tail calls through a value: the continuation bounces, and the closure, whose
+		// callers all check, answers the bounce unchecked -- no frame a round, 1,000,000
+		// deep (JvmTailBounce).
+		StringBuilder sb = new StringBuilder("(let ((f nil))\n  (setq f (lambda (n acc)\n    (let ((a 0))\n");
+		for (int k = 0; k < 400; k++) {
+			sb.append("      (setq a (+ a (car (list 1 ").append(k).append("))))\n");
+		}
+		sb.append("      (if (= n 0) (list :done acc) (funcall f (- n 1) (mod (+ acc a) 7))))))\n");
+		sb.append("  (print (funcall f 1000000 0)))\n");
+		List<LispVal> forms = am.ik.rontolisp.eval.LispPreludeLibrary
+			.process(LispReader.readAllFromString(sb.toString()));
+		byte[] classBytes = new JvmLispCompiler("Test").compile(forms);
+		List<String> split = declaredMethodNames(classBytes).stream()
+			.filter(n -> n.startsWith("_lambda_") && ownCallsIn(classBytes, n, "_k$0") > 0)
+			.toList();
+		assertThat(split).as("the split actually happened").hasSize(1);
+		assertThat(unwrapsAfterCallsTo(classBytes, split.get(0), "_k$0")).isZero();
+		assertThat(runClass(classBytes)).isEqualTo("(:DONE 1)");
+	}
+
+	private static final String MUTUAL_PAIRS = """
+			(defun ev? (n) (if (= n 0) t (od? (- n 1))))
+			(defun od? (n) (if (= n 0) nil (ev? (- n 1))))
+			(print (ev? 1000000))
+			(print (labels ((lev? (n) (if (= n 0) t (lod? (- n 1))))
+			                (lod? (n) (if (= n 0) nil (lev? (- n 1)))))
+			         (lev? 1000001)))
+			""";
+
+	@Test
+	void aMutualTailCallAmongDefunsOrLabelsFunctionsIsAJump() throws Exception {
+		// Functions whose tail calls to each other cycle -- two defuns, two labels
+		// functions -- are a tail group (JvmTailGroup, .kb/jvm-self-tail-calls.md,
+		// "Mutual tail calls"): the method a call names holds the whole group, its own
+		// code at the entry, so every such call is a jump and the pair runs 1,000,000
+		// deep. Nothing but EV?'s tail calls OD?, so OD? has no method left at all.
+		List<LispVal> forms = am.ik.rontolisp.eval.LispPreludeLibrary
+			.process(LispReader.readAllFromString(MUTUAL_PAIRS));
+		byte[] classBytes = new JvmLispCompiler("Test").compile(forms);
+		assertThat(ownCallsIn(classBytes, "EV?", "OD?")).isZero();
+		assertThat(jumpsToEntry(classBytes, "EV?")).as("OD?'s tail call back").isEqualTo(1);
+		assertThat(declaredMethodNames(classBytes)).doesNotContain("OD?");
+		// The labels pair: the closure method the dispatcher enters at LEV? holds
+		// LOD?'s code too, which jumps back to its start; no dispatcher call is left.
+		List<String> looping = declaredMethodNames(classBytes).stream()
+			.filter(name -> name.startsWith("_lambda_") && jumpsToEntry(classBytes, name) == 1)
+			.toList();
+		assertThat(looping).hasSize(1);
+		assertThat(ownCallsIn(classBytes, looping.get(0), "_invoke_1")).isZero();
+		assertThat(compileAndRun(forms)).isEqualTo("T\nNIL");
+	}
+
+	@Test
+	void aMutualTailCallRunsInConstantStackWithNoJitToInlineItAway() throws Exception {
+		// Before the tail groups two defuns passed 1,000,000 only when C2 inlined one
+		// into
+		// the other; with no JIT at all (-Xint) every frame is real, so this is the run
+		// that pins the depth.
+		Path dir = Files.createDirectories(this.tempDir.resolve("xint"));
+		Files.write(dir.resolve("Test.class"), new JvmLispCompiler("Test")
+			.compile(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString(MUTUAL_PAIRS))));
+		// Into files, not pipes: a program that hangs must fail the test, not hang it.
+		Path out = dir.resolve("stdout.txt");
+		Path err = dir.resolve("stderr.txt");
+		Process process = new ProcessBuilder(Path.of(System.getProperty("java.home"), "bin", "java").toString(),
+				"-Xint", "-cp", dir.toString(), "Test")
+			.redirectOutput(out.toFile())
+			.redirectError(err.toFile())
+			.start();
+		if (!process.waitFor(2, java.util.concurrent.TimeUnit.MINUTES)) {
+			process.destroyForcibly().waitFor();
+			throw new AssertionError("-Xint run still going after 2 minutes");
+		}
+		assertThat(Files.readString(out).trim()).as(Files.readString(err)).isEqualTo("T\nNIL");
+		assertThat(process.exitValue()).isZero();
+	}
+
+	@Test
+	void everyShapeOfAMutualTailCallJumpsAndADynamicExtentKeepsItsCall() throws Exception {
+		// The jump stores the target's physical arguments (its defaults, keys and rest
+		// list re-derived by its own prologue), a closure's round keeps its own binding,
+		// values pass through, a tail return-from hands the jump on, three members cycle
+		// with self calls among them, and a member passed as a value enters the group
+		// through its dispatcher. A defun whose value tail bounces answers through every
+		// member (JvmTailBounce). A special binding and an unwind-protect keep their
+		// calls; a count the lambda list rules out signals, as a call would.
+		List<LispVal> forms = am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString("""
+				(print (labels ((a (n acc) (if (= n 0) acc (b (- n 1) (+ acc 1) 0)))
+				                (b (n acc extra &optional (k 2)) (if (= n 0) (+ acc extra k) (c (- n 1) acc)))
+				                (c (n acc &rest r) (if (= n 0) (list acc r) (a (- n 1) (+ acc (length r))))))
+				         (a 300001 0)))
+				(print (mapcar #'funcall
+				               (labels ((p (n acc) (if (= n 0) acc (q (- n 1) (cons (lambda () n) acc))))
+				                        (q (n acc) (if (= n 0) acc (p (- n 1) (cons (lambda () (* 10 n)) acc)))))
+				                 (p 5 nil))))
+				(defun s1 (n) (cond ((= n 0) 's1) ((evenp n) (s2 (- n 1))) (t (s1 (- n 1)))))
+				(defun s2 (n) (if (= n 0) 's2 (s3 (- n 1))))
+				(defun s3 (n) (if (= n 0) 's3 (s1 (- n 1))))
+				(print (list (s1 1000000) (s1 7) (s2 3)))
+				(defun ka (n &key (step 1) acc) (if (<= n 0) (length acc) (kb (- n step) acc)))
+				(defun kb (n &optional acc (more 1)) (if (<= n 0) (list :kb more) (ka n :step 2 :acc (cons n acc))))
+				(print (ka 1000001))
+				(defun mv-a (n) (if (= n 0) (values 1 2 3) (mv-b (- n 1))))
+				(defun mv-b (n) (if (= n 0) (values :b) (mv-a (- n 1))))
+				(print (list (multiple-value-list (mv-a 100000)) (multiple-value-list (mv-a 100001))))
+				(print (labels ((r1 (n) (if (= n 0) (return-from r1 :r1) (return-from r1 (r2 (- n 1)))))
+				                (r2 (n) (labels ((dec (x) (- x 1))) (if (= n 0) :r2 (r1 (dec n))))))
+				         (r1 1000000)))
+				(print (labels ((ga (n) (if (= n 0) :ga (gb (- n 1)))) (gb (n) (if (= n 0) :gb (ga (- n 1)))))
+				         (list (mapcar #'ga '(0 1 2 3)) (funcall #'gb 1000001))))
+				(defun tb-a (n f) (if (= n 0) (funcall f n) (tb-b (- n 1) f)))
+				(defun tb-b (n f) (if (= n 0) :b (tb-a (- n 1) f)))
+				(print (list (tb-a 1000000 (lambda (x) (list :done x))) (tb-b 3 #'identity)))
+				(defvar *lvl* 0)
+				(defun sp-a (n) (if (= n 0) *lvl* (let ((*lvl* n)) (sp-b (- n 1)))))
+				(defun sp-b (n) (if (= n 0) *lvl* (sp-a (- n 1))))
+				(print (list (sp-a 5) *lvl*))
+				(defvar *ups* 0)
+				(defun up-a (n) (if (= n 0) :up (unwind-protect (up-b (- n 1)) (incf *ups*))))
+				(defun up-b (n) (if (= n 0) :up (up-a (- n 1))))
+				(print (list (up-a 6) *ups*))
+				(defun wa (n) (if (= n 0) :wa (wb n 1 2)))
+				(defun wb (n) (if (= n 0) :wb (wa (- n 1))))
+				(print (handler-case (wa 3) (error () :signalled)))
+				"""));
+		byte[] classBytes = new JvmLispCompiler("Test").compile(forms);
+		for (String[] jump : new String[][] { { "S1", "S2" }, { "S1", "S3" }, { "S2", "S3" }, { "S2", "S1" },
+				{ "KA", "KB" }, { "MV-A", "MV-B" }, { "TB-A", "TB-B" }, { "TB-B", "TB-A" } }) {
+			assertThat(ownCallsIn(classBytes, jump[0], jump[1])).as(jump[0] + " -> " + jump[1]).isZero();
+		}
+		for (String[] call : new String[][] { { "SP-A", "SP-B" }, { "UP-A", "UP-B" } }) {
+			assertThat(ownCallsIn(classBytes, call[0], call[1])).as(call[0] + " -> " + call[1]).isEqualTo(1);
+		}
+		assertThat(compileAndRun(forms)).isEqualTo("""
+				100003
+				(1 20 3 40 5)
+				(S1 S3 S1)
+				(:KB 1)
+				((1 2 3) (:B))
+				:R1
+				((:GA :GB :GA :GB) :GA)
+				((:DONE 0) 0)
+				(1 0)
+				(:UP 3)
+				:SIGNALLED""");
+	}
+
+	@Test
+	void aCycleTheRootDoesNotCloseDispatchesOnAMemberIndex() throws Exception {
+		// R reaches A and B, and A and B also cycle between themselves: rooted at R, that
+		// cycle would have two entries, which Graal's on-stack replacement cannot
+		// compile. R's method stores the target's index and re-enters a switch instead
+		// (its first instructions); rooted at A every cycle passes A, so A's jumps are
+		// direct. The defuns DR, DA and DB are such a group, of members taking one and
+		// two parameters, DB keeping a local where DA's second parameter is: every slot
+		// a member takes a parameter in holds an object on each way into the switch,
+		// as the verifier asks (met by the reversed views of the Java front end's
+		// lists, whose next and previous call each other's).
+		List<LispVal> forms = am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString("""
+				(print (labels ((r (n acc) (cond ((= n 0) (list :r acc))
+				                                 ((evenp n) (a (- n 1) (+ acc 1)))
+				                                 (t (b (- n 1) (+ acc 1)))))
+				                (a (n acc) (cond ((= n 0) (list :a acc))
+				                                 ((= (mod n 3) 0) (r (- n 1) (+ acc 10)))
+				                                 (t (b (- n 1) (+ acc 10)))))
+				                (b (n acc) (if (= n 0) (list :b acc) (a (- n 1) (+ acc 100)))))
+				         (list (r 1000000 0) (r 7 0) (funcall #'a 5 0) (funcall #'b 1000001 0))))
+				(defun dr (n) (cond ((= n 0) :dr) ((evenp n) (da (- n 1) 1)) (t (db (- n 1)))))
+				(defun da (n k) (cond ((= n 0) (list :da k)) ((= (mod n 3) 0) (dr (- n 1))) (t (db (- n 1)))))
+				(defun db (n) (let ((i (* n 2))) (if (= n 0) :db (da (- n 1) i))))
+				(print (list (dr 1000000) (dr 7)))
+				"""));
+		byte[] classBytes = new JvmLispCompiler("Test").compile(forms);
+		java.util.function.Predicate<String> dispatches = name -> {
+			List<java.lang.classfile.Opcode> first = firstOpcodes(classBytes, name, 2);
+			return first.size() == 2 && first.get(0) == java.lang.classfile.Opcode.ICONST_0
+					&& first.get(1).name().startsWith("ISTORE");
+		};
+		assertThat(declaredMethodNames(classBytes).stream()
+			.filter(name -> name.startsWith("_lambda_") && dispatches.test(name))
+			.count()).isEqualTo(1);
+		assertThat(dispatches.test("DR")).isTrue();
+		assertThat(compileAndRun(forms)).isEqualTo("((:B 38499868) (:B 232) (:B 131) (:B 38500067))\n(:DB :DB)");
+	}
+
+	@Test
+	void aGroupPastTheMethodSizeLimitKeepsAMethodPerMember() throws Exception {
+		// Rooted, the pair would cross HotSpot's 8000-bytecode HugeMethodLimit, so each
+		// defun keeps its own code and its tail call to the other is a direct call --
+		// one frame a round, as before the groups.
+		StringBuilder sb = new StringBuilder();
+		for (String[] pair : new String[][] { { "big-a", "big-b" }, { "big-b", "big-a" } }) {
+			sb.append("(defun ").append(pair[0]).append(" (n acc)\n  (let ((a 0))\n");
+			// About 4,400 bytecodes each: under the body splitter's budget, past the
+			// limit together.
+			for (int k = 0; k < 90; k++) {
+				sb.append("    (setq a (+ a (car (list 1 ").append(k).append("))))\n");
+			}
+			sb.append("    (if (= n 0) (+ acc a) (").append(pair[1]).append(" (- n 1) (+ acc a)))))\n");
+		}
+		sb.append("(print (big-a 9 0))\n");
+		List<LispVal> forms = am.ik.rontolisp.eval.LispPreludeLibrary
+			.process(LispReader.readAllFromString(sb.toString()));
+		byte[] classBytes = new JvmLispCompiler("Test").compile(forms);
+		assertThat(declaredMethodNames(classBytes)).as("no body was split").noneMatch(name -> name.startsWith("_k$"));
+		assertThat(jumpsToEntry(classBytes, "BIG-A")).isZero();
+		assertThat(ownCallsIn(classBytes, "BIG-A", "BIG-B")).isEqualTo(1);
+		assertThat(ownCallsIn(classBytes, "BIG-B", "BIG-A")).isEqualTo(1);
+		assertThat(compileAndRun(forms)).isEqualTo("900");
+	}
+
+	/** The first {@code count} opcodes of method {@code method}. */
+	private static List<java.lang.classfile.Opcode> firstOpcodes(byte[] classBytes, String method, int count) {
+		List<java.lang.classfile.Opcode> opcodes = new java.util.ArrayList<>();
+		for (java.lang.classfile.MethodModel model : java.lang.classfile.ClassFile.of().parse(classBytes).methods()) {
+			if (!model.methodName().equalsString(method)) {
+				continue;
+			}
+			for (java.lang.classfile.CodeElement element : model.code().orElseThrow()) {
+				if (element instanceof java.lang.classfile.Instruction instruction && opcodes.size() < count) {
+					opcodes.add(instruction.opcode());
+				}
+			}
+		}
+		return opcodes;
+	}
+
+	/** The calls method {@code method} makes to the class's own method {@code callee}. */
+	private static int ownCallsIn(byte[] classBytes, String method, String callee) {
+		int calls = 0;
+		for (java.lang.classfile.MethodModel model : java.lang.classfile.ClassFile.of().parse(classBytes).methods()) {
+			if (!model.methodName().equalsString(method)) {
+				continue;
+			}
+			for (java.lang.classfile.CodeElement element : model.code().orElseThrow()) {
+				if (element instanceof java.lang.classfile.instruction.InvokeInstruction invoke
+						&& invoke.name().equalsString(callee)) {
+					calls++;
+				}
+			}
+		}
+		return calls;
+	}
+
+	/** The branches of method {@code method} that jump back to its first instruction. */
+	private static int jumpsToEntry(byte[] classBytes, String method) {
+		int jumps = 0;
+		for (java.lang.classfile.MethodModel model : java.lang.classfile.ClassFile.of().parse(classBytes).methods()) {
+			if (!model.methodName().equalsString(method)) {
+				continue;
+			}
+			java.lang.classfile.attribute.CodeAttribute code = (java.lang.classfile.attribute.CodeAttribute) model
+				.code()
+				.orElseThrow();
+			for (java.lang.classfile.CodeElement element : code) {
+				if (element instanceof java.lang.classfile.instruction.BranchInstruction branch
+						&& code.labelToBci(branch.target()) == 0) {
+					jumps++;
+				}
+			}
+		}
+		return jumps;
+	}
+
+	/**
+	 * The tail calls through a value method {@code method} makes: its calls of a
+	 * {@code _vtc<n>} or {@code _vtcv}, each of which answers a bounce past the limit.
+	 */
+	private static int valueTailSitesIn(byte[] classBytes, String method) {
+		int sites = 0;
+		for (java.lang.classfile.MethodModel model : java.lang.classfile.ClassFile.of().parse(classBytes).methods()) {
+			if (!model.methodName().equalsString(method)) {
+				continue;
+			}
+			for (java.lang.classfile.CodeElement element : model.code().orElseThrow()) {
+				if (element instanceof java.lang.classfile.instruction.InvokeInstruction invoke
+						&& invoke.name().stringValue().matches("_vtc(\\d+|v)")) {
+					sites++;
+				}
+			}
+		}
+		return sites;
+	}
+
+	/**
+	 * The bounce arrays method {@code method} builds itself: its reads of the marker a
+	 * bounce carries in slot 0.
+	 */
+	private static int markerReadsIn(byte[] classBytes, String method) {
+		int reads = 0;
+		for (java.lang.classfile.MethodModel model : java.lang.classfile.ClassFile.of().parse(classBytes).methods()) {
+			if (!model.methodName().equalsString(method)) {
+				continue;
+			}
+			for (java.lang.classfile.CodeElement element : model.code().orElseThrow()) {
+				if (element instanceof java.lang.classfile.instruction.FieldInstruction field
+						&& field.owner().asInternalName().equals("java/lang/Boolean")) {
+					reads++;
+				}
+			}
+		}
+		return reads;
+	}
+
+	/** The reads method {@code method} makes of the static field {@code field}. */
+	private static int fieldReadsIn(byte[] classBytes, String method, String field) {
+		int reads = 0;
+		for (java.lang.classfile.MethodModel model : java.lang.classfile.ClassFile.of().parse(classBytes).methods()) {
+			if (!model.methodName().equalsString(method)) {
+				continue;
+			}
+			for (java.lang.classfile.CodeElement element : model.code().orElseThrow()) {
+				if (element instanceof java.lang.classfile.instruction.FieldInstruction read
+						&& read.opcode() == java.lang.classfile.Opcode.GETSTATIC && read.name().equalsString(field)) {
+					reads++;
+				}
+			}
+		}
+		return reads;
+	}
+
+	/**
+	 * The int constants method {@code method} pushes immediately before each of its calls
+	 * to {@code callee}: the depth argument a call passes when it is a constant.
+	 */
+	private static List<Integer> intsPassedTo(byte[] classBytes, String method, String callee) {
+		List<Integer> passed = new java.util.ArrayList<>();
+		for (java.lang.classfile.MethodModel model : java.lang.classfile.ClassFile.of().parse(classBytes).methods()) {
+			if (!model.methodName().equalsString(method)) {
+				continue;
+			}
+			java.lang.classfile.Instruction previous = null;
+			for (java.lang.classfile.CodeElement element : model.code().orElseThrow()) {
+				if (!(element instanceof java.lang.classfile.Instruction instruction)) {
+					continue;
+				}
+				if (instruction instanceof java.lang.classfile.instruction.InvokeInstruction invoke
+						&& invoke.name().equalsString(callee)
+						&& previous instanceof java.lang.classfile.instruction.ConstantInstruction constant
+						&& constant.constantValue() instanceof Integer value) {
+					passed.add(value);
+				}
+				previous = instruction;
+			}
+		}
+		return passed;
+	}
+
+	/** The descriptor of method {@code method}. */
+	private static String descriptorOf(byte[] classBytes, String method) {
+		for (java.lang.classfile.MethodModel model : java.lang.classfile.ClassFile.of().parse(classBytes).methods()) {
+			if (model.methodName().equalsString(method)) {
+				return model.methodType().stringValue();
+			}
+		}
+		throw new AssertionError("no method " + method);
+	}
+
+	/**
+	 * The calls method {@code method} makes to {@code callee} whose result {@code _unw}
+	 * checks next.
+	 */
+	private static int unwrapsAfterCallsTo(byte[] classBytes, String method, String callee) {
+		int unwraps = 0;
+		for (java.lang.classfile.MethodModel model : java.lang.classfile.ClassFile.of().parse(classBytes).methods()) {
+			if (!model.methodName().equalsString(method)) {
+				continue;
+			}
+			boolean afterCall = false;
+			for (java.lang.classfile.CodeElement element : model.code().orElseThrow()) {
+				if (!(element instanceof java.lang.classfile.Instruction)) {
+					continue;
+				}
+				boolean unwrap = element instanceof java.lang.classfile.instruction.InvokeInstruction invoke
+						&& invoke.name().equalsString("_unw");
+				if (afterCall && unwrap) {
+					unwraps++;
+				}
+				afterCall = element instanceof java.lang.classfile.instruction.InvokeInstruction invoke
+						&& invoke.name().equalsString(callee);
+			}
+		}
+		return unwraps;
+	}
+
+	/** The code length of method {@code method}. */
+	private static int codeLengthOf(byte[] classBytes, String method) {
+		for (java.lang.classfile.MethodModel model : java.lang.classfile.ClassFile.of().parse(classBytes).methods()) {
+			if (model.methodName().equalsString(method)) {
+				return model.findAttribute(java.lang.classfile.Attributes.code()).orElseThrow().codeLength();
+			}
+		}
+		throw new AssertionError("no method " + method);
+	}
+
+	/** The code length summed over {@code main} and the {@code _top$N} chunks. */
+	private static int topLevelCodeLength(byte[] classBytes) {
+		int total = 0;
+		for (java.lang.classfile.MethodModel method : java.lang.classfile.ClassFile.of().parse(classBytes).methods()) {
+			String name = method.methodName().stringValue();
+			if (name.equals("main") || name.startsWith("_top$")) {
+				total += method.findAttribute(java.lang.classfile.Attributes.code()).orElseThrow().codeLength();
+			}
+		}
+		return total;
+	}
+
+	/** Every method the class declares, in declaration order. */
+	private static List<String> declaredFieldNames(byte[] classBytes) {
+		return java.lang.classfile.ClassFile.of()
+			.parse(classBytes)
+			.fields()
+			.stream()
+			.map(field -> field.fieldName().stringValue())
+			.toList();
+	}
+
+	private static List<String> declaredMethodNames(byte[] classBytes) {
+		return java.lang.classfile.ClassFile.of()
+			.parse(classBytes)
+			.methods()
+			.stream()
+			.map(method -> method.methodName().stringValue())
+			.toList();
+	}
+
+	/**
+	 * Counts the {@code _store} calls the top-level body emits -- the eval-global mirror.
+	 * Only the top-level methods are walked ({@code main} plus the {@code _top$N} chunks
+	 * it is split into): the eval runtime's own {@code _eval}/{@code _apply} bodies call
+	 * {@code _store} too, and always will.
+	 */
+	private static int evalStoreCallsInTopLevel(byte[] classBytes) {
+		int calls = 0;
+		for (java.lang.classfile.MethodModel method : java.lang.classfile.ClassFile.of().parse(classBytes).methods()) {
+			String name = method.methodName().stringValue();
+			if (!name.equals("main") && !name.startsWith("_top$")) {
+				continue;
+			}
+			for (java.lang.classfile.CodeElement element : method.code().orElseThrow()) {
+				if (element instanceof java.lang.classfile.instruction.InvokeInstruction invoke
+						&& invoke.name().equalsString("_store")) {
+					calls++;
+				}
+			}
+		}
+		return calls;
+	}
+
+	@Test
+	void compileAndRunStringOfASymbolIsNotFoldedByPrintCase() throws Exception {
+		// (string x) answers the symbol's NAME: it is not a printing operator, so a
+		// *print-case* in effect must not recase it (SBCL: "FOO" under :downcase). It
+		// did on both compile paths until the computed-designator lowering took the raw
+		// princ conversion instead of the routed %princ-piece.
+		assertThat(compileAndRun("""
+				(defun f (x)
+				  (let ((*print-case* :downcase))
+				    (list (symbol-name x) (string x) (concatenate 'string (string x) "!"))))
+				(print (f 'foo))
+				(print (f :foo))
+				""")).isEqualTo("""
+				("FOO" "FOO" "FOO!")
+				("FOO" "FOO" "FOO!")""");
+	}
+
+	@Test
+	void compileAndRunWriteToStringKeywordAloneBindsThePrinterVariable() throws Exception {
+		// A write-to-string keyword is the ONLY binding of *print-length* here: the
+		// Pass-2 lowering turns it into a let of the variable, which the dynamic-binding
+		// collector must see where the binding is thread-scoped -- here a host can call
+		// in through the export -- or the JVM compile fails with "dynamically bound here
+		// but has no thread-local store".
+		assertThat(compileAndRun("(print (write-to-string (list 'a 'b) :length 1))")).isEqualTo("\"(A ...)\"");
+		assertThat(compileAndRun("(defun ab () (write-to-string (list 'a 'b) :length 1))"
+				+ " (rontolisp:jvm-export 'ab :params '() :returns :string) (print (ab))"))
+			.isEqualTo("\"(A ...)\"");
+	}
+
+	@Test
+	void compileAndRunLetBindsInParallel() throws Exception {
+		// CLHS 3.1.2.1.2.1 / let: every init form is evaluated BEFORE any variable is
+		// bound, so a later init reads the OUTER binding of an earlier variable's name.
+		assertThat(compileAndRun("""
+				(print (let ((a 1) (b 2)) (let ((a b) (b a)) (list a b))))
+				(defun swap (a b) (let ((a b) (b a)) (list a b)))
+				(print (swap 1 2))
+				(defun shadow (x) (let ((x (+ x 1)) (y x)) (list x y)))
+				(print (shadow 1))
+				(defun captured (x) (let ((x (* x 10)) (f (lambda () x))) (list x (funcall f))))
+				(print (captured 1))
+				(defun typed (n) (let ((n (+ n 1)) (m (* n 2))) (+ n m)))
+				(print (typed 5))
+				""")).isEqualTo("(2 1)\n(2 1)\n(2 1)\n(10 1)\n16");
+	}
+
+	@Test
+	void compileAndRunEmptyBodyLetReturnsNil() throws Exception {
+		// CLHS: a let/let* with no body forms returns nil. Was an operand-stack
+		// underflow at compile time (the body lowering pushed no value for an empty
+		// body): (let ((p 1))) and (let ()) both failed to compile.
+		assertThat(compileAndRun("""
+				(print (let ((p 1))))
+				(print (let* ((p 1))))
+				(print (let ()))
+				(defun f () (let ((p 1))))
+				(print (f))
+				""")).isEqualTo("NIL\nNIL\nNIL\nNIL");
+	}
+
+}

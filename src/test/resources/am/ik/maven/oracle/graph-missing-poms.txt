@@ -1,0 +1,7 @@
+# collect test.graph2:missing-poms:1
+test.graph2:missing-poms:jar::1 scope=compile optional=null
+  test.lib:no-pom-anywhere:jar::1 scope=compile optional=null
+  test.desc:bad-xml:jar::1 scope=compile optional=null
+  test.lib:after-reloc:jar::1 scope=compile optional=null
+warning missing test.lib:no-pom-anywhere:jar:1
+warning invalid test.desc:bad-xml:jar:1: 1 problem was encountered while building the effective model [FATAL] Non-readable POM <local>/test/desc/bad-xml/1/bad-xml-1.pom: no more data available - expected end tag </project> to close start tag <project> from line 1, parser stopped on END_TAG seen ...</dependencies>\n... @2:1 @

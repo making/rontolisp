@@ -1,0 +1,231 @@
+# uiop/image
+
+`uiop/image` is what a program does at its edges: end the process with a status
+code, report a condition nobody handled, and register work to run when an image
+is restored or dumped, and read the command line it was started with. **All 30
+exports are implemented.**
+
+Every name is reachable through either spelling: `uiop:quit` and
+`uiop/image:quit` are the same function
+([The uiop Package](../uiop.md#sub-packages)).
+
+Three decisions here are rontolisp's own, and each is a decision rather than a
+gap:
+
+- **`uiop:quit` is the host's exit on all four backends**, and nothing runs after
+  it — see [Exiting](#exiting).
+- **Backtraces carry no frames.** No backend keeps a Lisp-level call stack, so
+  the honest rendering of "the backtrace for this condition" is the condition and
+  nothing else. Real UIOP's own fallback for an implementation without a
+  backtrace API has the same shape.
+- **An image is a program.** No backend can save its heap, so the interpreter
+  dumps an image by compiling it, and a compiled program starts the way a
+  restored image does. See [Dumping an image](#dumping-an-image).
+- **The argument vector has one shape everywhere**, `(program-name user-arg
+  ...)`, and an interpreted program's arguments follow a `--` separator. See
+  [The command line](#the-command-line).
+
+## Exiting
+
+| Function | What it does |
+|----------|--------------|
+| `uiop:quit` | end the process with a status code (`0` by default), after finishing the standard output streams |
+| `uiop:die` | report a `format` message on `*error-output*`, then quit with the given code |
+| `uiop:shell-boolean-exit` | quit with `0` when the argument is true and `1` when it is `nil` — a shell's idea of a boolean |
+
+```console
+$ cat quit.lisp
+(print :before)
+(uiop:quit 3)
+(print :after)
+$ rontolisp quit.lisp
+:BEFORE
+$ echo $?
+3
+```
+
+The same program compiled to a class, to a Preview 1 module or to a component
+prints the same line and exits `3`: the primitive underneath is `System.exit`
+on the JVM, `proc_exit` on WASM Preview 1 and `wasi:cli/exit`'s
+`exit-with-code` under `--component`, and the interpreter raises an exit signal
+the CLI turns into the process code.
+
+Two consequences follow from that being a real host exit, and they hold on every
+backend:
+
+- **Nothing runs afterwards.** An `unwind-protect` cleanup around a `quit` does
+  not run — the process ends where the call stands.
+- **It is not a condition.** `handler-case`, `ignore-errors` and a `catch` tag
+  cannot see it, so a `quit` inside a library's error handling still quits.
+
+The status code is masked to eight bits, which is what a POSIX host does with it
+anyway and what `wasi:cli/exit`'s `u8` accepts: `(uiop:quit 300)` exits `44`
+everywhere rather than 300 on one backend and 44 on another.
+
+A test runner's exit code is the usual reason to reach for this:
+
+```console
+$ cat run-tests.lisp
+(uiop:quit (if (rove:run :my-app/tests) 0 1))
+```
+
+`uiop:quit` needs a host process to end, so it is **refused at compile time**
+under `--no-wasi` and `--no-gc`: those emit a reactor whose entry points are
+exports a host calls, and a reactor returns from an export rather than exiting.
+
+## Fatal conditions
+
+A *fatal condition* is a `serious-condition` — the type is a `deftype` alias, so
+`typep` and a `handler-bind` clause both match it.
+
+| Name | What it does |
+|------|--------------|
+| `uiop:fatal-condition` | the type: `serious-condition` |
+| `uiop:fatal-condition-p` | `(typep c 'uiop:fatal-condition)` |
+| `uiop:handle-fatal-condition` | report the condition on `*error-output*` and `uiop:die` with status `99` |
+| `uiop:call-with-fatal-condition-handler` | call a thunk with that handler bound |
+| `uiop:with-fatal-condition-handler` | the macro over it: `(uiop:with-fatal-condition-handler () body...)` |
+| `uiop:*lisp-interaction*` | `nil` |
+
+```lisp
+(list (uiop:fatal-condition-p (make-condition 'error))
+      (uiop:fatal-condition-p (make-condition 'warning))
+      (uiop:fatal-condition-p 42))   ; => (T NIL NIL)
+```
+
+`uiop:*lisp-interaction*` is `nil` here where upstream defaults to `t`. It asks
+"is this an interactive Lisp environment, or is it batch processing?", and every
+rontolisp backend runs a program and ends: there is no debugger to enter and no
+REPL underneath a compiled artifact. That value is what makes
+`uiop:handle-fatal-condition` report and exit rather than call an
+`invoke-debugger` that does not exist.
+
+```console
+$ cat fatal.lisp
+(print :start)
+(uiop:with-fatal-condition-handler ()
+  (error "the sky is falling"))
+(print :unreachable)
+$ rontolisp fatal.lisp
+:START
+Fatal condition:
+the sky is falling
+the sky is falling
+the sky is falling
+$ echo $?
+99
+```
+
+The condition appears three times because upstream prints it three times — once
+as the report, once with the backtrace, once as `die`'s message — and the middle
+one has no frames above it here.
+
+## Backtraces
+
+| Function | What it prints |
+|----------|----------------|
+| `uiop:raw-print-backtrace` | the `:condition` argument, when there is one |
+| `uiop:print-backtrace` | the same, through `uiop:raw-print-backtrace` |
+| `uiop:print-condition-backtrace` | its condition argument, on `:stream` (`*error-output*` by default) |
+
+```lisp
+(let ((report (with-output-to-string (s)
+                (uiop:print-condition-backtrace
+                 (make-condition 'simple-error :format-control "boom")
+                 :stream s))))
+  (string-right-trim (list #\Newline) report))   ; => "boom"
+```
+
+`:count` is accepted and ignored: there are no frames to limit.
+`lack-middleware-backtrace` is the library that reaches for this — its error
+report opens with `uiop/image:print-condition-backtrace`, and here that report
+is one line long.
+
+## Image hooks
+
+| Name | What it does |
+|------|--------------|
+| `uiop:register-image-restore-hook` | push a function onto `uiop:*image-restore-hook*`, calling it now unless the second argument is `nil` |
+| `uiop:register-image-dump-hook` | push a function onto `uiop:*image-dump-hook*`, calling it now only if the second argument is true |
+| `uiop:call-image-restore-hook` | call the restore hooks, in registration order |
+| `uiop:call-image-dump-hook` | call the dump hooks |
+| `uiop:*image-restore-hook*` / `uiop:*image-dump-hook*` | the two lists |
+| `uiop:*image-prelude*` / `uiop:*image-entry-point*` / `uiop:*image-postlude*` / `uiop:*image-dumped-p*` | `nil` |
+
+The hooks are **real**: a library may register into one while it loads, the dump
+calls the dump hooks, and a dumped program's start calls the restore hooks.
+
+```lisp
+(defvar *log* nil)
+(uiop:register-image-restore-hook (lambda () (push :restored *log*)) nil)
+(uiop:call-image-restore-hook)
+*log*   ; => (:RESTORED)
+```
+
+`uiop:*image-dumped-p*` is `nil` in a program that was started and `:executable`
+in one an image was dumped to.
+
+## Dumping an image
+
+| Function | What it does |
+|----------|--------------|
+| `uiop:dump-image` | on the interpreter the rontolisp command line started, with `:executable t`: runs the postlude and the dump hooks, then compiles the image into the executable its file names. Without `:executable t` (a heap image, which no backend can start), in a compiled program, and in an evaluator nothing gave the command line's compilers: `uiop:not-implemented-error`, before any hook runs |
+| `uiop:restore-image` | upstream's start: the restore hooks, the prelude, then the entry point, whose first value is the exit status (0 for true, 1 for `nil`) unless `:lisp-interaction` is true. A program calling it without `:lisp-interaction t` ends there |
+| `uiop:create-image` | `uiop:not-implemented-error` — there are no Lisp object files to link |
+
+rontolisp has no heap to save, so the dump is a compile: each system the image
+loaded, read again for the target, then `uiop:restore-image` of
+`uiop:*image-entry-point*`. The file's name decides what the executable is -- no
+type is a native executable, `.jar` a JVM program, `.wasm` a module. This is
+what `asdf:make` of a `program-op` system does; see
+[Build an Executable from an ASDF System](../../compiling/asdf-programs.md).
+
+## The command line
+
+| Name | What it answers |
+|------|-----------------|
+| `uiop:raw-command-line-arguments` | the whole vector: the program name, then the user arguments |
+| `uiop:command-line-arguments` | the user arguments — the vector's rest (or the rest of a vector passed explicitly) |
+| `uiop:argv0` | the program name — the vector's first |
+| `uiop:*command-line-arguments*` | the user arguments, seeded before the program runs |
+| `uiop:setup-command-line-arguments` | seed that variable again from the vector |
+
+```console
+$ cat args.lisp
+(print (uiop:argv0))
+(print (uiop:command-line-arguments))
+$ rontolisp args.lisp -- alpha beta
+"args.lisp"
+("alpha" "beta")
+```
+
+**`--` is where rontolisp's own options end and the program's arguments begin.**
+Nothing else could tell `--optimize` the compiler flag from `--optimize` the
+argument a program wants to be handed, so an interpreted program's arguments
+always follow the separator.
+
+A compiled artifact has no such ambiguity: it takes its arguments the way its
+host hands them over.
+
+```console
+$ rontolisp args.lisp -o Args.class --class-name Args && java Args alpha beta
+"Args"
+("alpha" "beta")
+$ rontolisp args.lisp -o args.wasm && wasmtime run args.wasm alpha beta
+"args.wasm"
+("alpha" "beta")
+```
+
+The SHAPE is the same on all four backends, which is what lets
+`uiop:command-line-arguments` be the vector's rest and `uiop:argv0` its first
+with no per-backend rule. Only the program NAME differs, because only the host
+knows it: the input file under the interpreter, the class name on the JVM (what
+stood on the `java` command line) or the path of the jar the class came from
+(`java -jar app.jar`), and whatever the host put in `args[0]` on both WASM
+backends — the module path, for `wasmtime run`.
+
+Upstream UIOP answers this way only for an image that was dumped as an
+executable, and otherwise hunts for a `--` inside a vector that still carries
+the implementation's own arguments. rontolisp is always the executable case:
+the CLI splits at the separator itself, and a compiled artifact never sees a
+rontolisp option at all.

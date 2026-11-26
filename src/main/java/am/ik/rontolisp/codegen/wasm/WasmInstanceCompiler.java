@@ -1,0 +1,869 @@
+package am.ik.rontolisp.codegen.wasm;
+
+import java.util.List;
+
+import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispInteger;
+import am.ik.rontolisp.LispLayout;
+import am.ik.rontolisp.LispNames;
+import am.ik.rontolisp.LispSymbol;
+import am.ik.rontolisp.LispVal;
+import am.ik.wasm.Instruction;
+import am.ik.wasm.Type;
+import org.jspecify.annotations.Nullable;
+
+/**
+ * Compiles the instance primitives -- {@code %obj-new}, {@code %obj-ref},
+ * {@code %obj-set}, {@code %obj-is}, {@code %obj-tag}, {@code %obj-p}, {@code %obj-slots}
+ * and {@code copy-structure} -- through which every
+ * {@code defstruct}/{@code defclass}/condition instance is built, read, written,
+ * type-tested and (shallow-)copied.
+ *
+ * <p>
+ * An instance is a {@code TYPE_INSTANCE} struct: field 0 is the absolute linear address
+ * of the layout record {@code WasmInstanceLayouts} baked, field 1 a
+ * {@code TYPE_HASH_BUCKETS} array of slot values. Everything is emitted INLINE, so no
+ * {@code FUNC_*} index moves and a program without instances stays byte-identical.
+ *
+ * <p>
+ * {@code %obj-is} compares layout ADDRESSES: the table interns exactly one record per tag
+ * per compilation, so address equality is tag equality and the test is a single
+ * {@code i32.eq}.
+ */
+final class WasmInstanceCompiler {
+
+	private WasmInstanceCompiler() {
+	}
+
+	/** {@code (%obj-new '<tag> v1 ... vn)}. */
+	static void compileNew(LispCons cons, WasmLispCompiler.Ctx ctx) {
+		requireGate(ctx, LispNames.OBJ_NEW);
+		List<LispVal> args = cons.toList();
+		String tag = quotedTag(args.get(1), LispNames.OBJ_NEW);
+		LispLayout layout = ctx.closRegistry.findLayoutByTag(tag);
+		if (layout == null) {
+			throw new UnsupportedOperationException(LispNames.OBJ_NEW + ": unknown instance type " + tag);
+		}
+		int address = layoutAddress(ctx, tag);
+		int slotCount = layout.capacity();
+		// slots = array.new $buckets (ref.null eq) capacity -- every element nil, so
+		// missing trailing values need no store. capacity, not slotCount, for the stores
+		// too: a class a change-class can widen reserves the target's slot count up front
+		// (so the ONE allocation shape serves both layouts), and a type keeping machinery
+		// beside its declared slots (LispLayout.SYNONYM_STREAM's reader closure) is
+		// handed
+		// that cell as an ordinary trailing argument.
+		refNull(ctx);
+		i32Const(ctx, layout.capacity());
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_NEW);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		int slotsSlot = ctx.allocTemp();
+		setLocal(ctx, slotsSlot);
+		for (int i = 2; i < args.size(); i++) {
+			int index = i - 2;
+			if (index < slotCount) {
+				getLocal(ctx, slotsSlot);
+				castBuckets(ctx);
+				i32Const(ctx, index);
+				WasmExprCompiler.compileExpr(args.get(i), ctx);
+				ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_SET);
+				ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+			}
+			else {
+				// A surplus argument is still evaluated, left to right, then dropped --
+				// the interpreter evaluates every argument before taking slotCount.
+				WasmExprCompiler.compileExpr(args.get(i), ctx);
+				ctx.writer.write(Instruction.DROP);
+			}
+		}
+		i32Const(ctx, address);
+		getLocal(ctx, slotsSlot);
+		WasmEmitHelper.emitNewInstance(ctx);
+	}
+
+	/**
+	 * Wraps the raw stream HANDLE already on the stack into the OPEN stream value of
+	 * {@link am.ik.rontolisp.LispLayout#STREAM}. Emitted at every stream producer when
+	 * {@code ctx.usesStreamValues} is on -- which is exactly when
+	 * {@code WasmEmitHelper.streamDesignator} emits the matching unwrap, so the two
+	 * halves cannot disagree.
+	 * @param ctx the compile context (two temporaries are allocated)
+	 * @param kind one of {@code LispLayout.Kinds}
+	 */
+	static void emitWrapStream(WasmLispCompiler.Ctx ctx, String kind) {
+		requireGate(ctx, LispNames.OBJ_NEW);
+		int address = layoutAddress(ctx, LispLayout.STREAM_TAG);
+		int handleSlot = ctx.allocTemp();
+		setLocal(ctx, handleSlot);
+		refNull(ctx);
+		i32Const(ctx, LispLayout.STREAM.capacity());
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_NEW);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		int slotsSlot = ctx.allocTemp();
+		setLocal(ctx, slotsSlot);
+		getLocal(ctx, slotsSlot);
+		castBuckets(ctx);
+		i32Const(ctx, 0);
+		getLocal(ctx, handleSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_SET);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		getLocal(ctx, slotsSlot);
+		castBuckets(ctx);
+		i32Const(ctx, 1);
+		// Through the ordinary keyword compilation, so the KIND slot holds exactly what
+		// the makeTypeTest kind comparison reads back.
+		WasmExprCompiler.compileExpr(new LispSymbol(kind), ctx);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_SET);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		int abilities = LispLayout.Abilities.ofKind(kind);
+		if (abilities != 0) {
+			getLocal(ctx, slotsSlot);
+			castBuckets(ctx);
+			i32Const(ctx, LispLayout.STREAM_ABILITY_CELL);
+			WasmExprCompiler.compileExpr(new LispInteger(abilities), ctx);
+			ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_SET);
+			ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		}
+		i32Const(ctx, address);
+		getLocal(ctx, slotsSlot);
+		WasmEmitHelper.emitNewInstance(ctx);
+	}
+
+	/**
+	 * {@code (%abilities-hold-p held needed)} over two fixnums:
+	 * {@code (~held & needed) == 0}.
+	 */
+	static void compileAbilitiesHold(LispCons cons, WasmLispCompiler.Ctx ctx) {
+		List<LispVal> args = cons.toList();
+		WasmExprCompiler.compileExpr(args.get(1), ctx);
+		WasmEmitHelper.castI31GetS(ctx);
+		i32Const(ctx, -1);
+		ctx.writer.write(Instruction.I32_XOR);
+		WasmExprCompiler.compileExpr(args.get(2), ctx);
+		WasmEmitHelper.castI31GetS(ctx);
+		ctx.writer.write(Instruction.I32_AND);
+		ctx.writer.write(Instruction.I32_EQZ);
+		ctx.writer.write(Instruction.IF);
+		ctx.writer.writeRefType(true, Type.EQ.code());
+		WasmEmitHelper.emitTrue(ctx);
+		ctx.writer.write(Instruction.ELSE);
+		refNull(ctx);
+		ctx.writer.write(Instruction.END);
+	}
+
+	/** {@code (%obj-ref obj <k>)}. */
+	static void compileRef(LispCons cons, WasmLispCompiler.Ctx ctx) {
+		List<LispVal> args = cons.toList();
+		LispVal failure = checkedFailure(args, 3, ctx);
+		if (gateOff(ctx)) {
+			// No instance can exist in this module: the object is still evaluated for
+			// effect, and the read answers nil -- or fails, when it checks.
+			evaluateForEffectThenNil(args.get(1), ctx);
+			if (failure != null) {
+				ctx.writer.write(Instruction.DROP);
+				WasmExprCompiler.compileExpr(failure, ctx);
+			}
+			return;
+		}
+		WasmExprCompiler.compileExpr(args.get(1), ctx);
+		if (failure == null) {
+			pushSlots(ctx);
+			if (args.get(2) instanceof LispInteger literal) {
+				pushCellIndex(ctx, (int) literal.value());
+			}
+			else {
+				// A computed index (standard-instance-access) counts from the front only.
+				WasmExprCompiler.compileExpr(args.get(2), ctx);
+				WasmEmitHelper.castI31GetS(ctx);
+			}
+			ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET);
+			ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+			return;
+		}
+		int index = literalIndex(args.get(2), LispNames.OBJ_REF);
+		emitChecked(ctx, failure, () -> {
+			pushCellIndex(ctx, index);
+			ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET);
+			ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		});
+	}
+
+	/**
+	 * Over the slots array on the stack, pushes the i32 index of slot {@code k}:
+	 * {@code k} itself, or, for a negative {@code k}, counted back from the array's end
+	 * ({@link am.ik.rontolisp.LispLayout#TAIL_CELL}). Leaves {@code [slots, index]}.
+	 */
+	private static void pushCellIndex(WasmLispCompiler.Ctx ctx, int k) {
+		if (k >= 0) {
+			i32Const(ctx, k);
+			return;
+		}
+		int slotsSlot = ctx.allocTemp();
+		setLocal(ctx, slotsSlot);
+		getLocal(ctx, slotsSlot);
+		castBuckets(ctx);
+		getLocal(ctx, slotsSlot);
+		castBuckets(ctx);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_LEN);
+		i32Const(ctx, k);
+		ctx.writer.write(Instruction.I32_ADD);
+	}
+
+	/**
+	 * The failure form of a {@code defstruct} accessor's checked {@code %obj-ref} /
+	 * {@code %obj-set} (the operand at {@code position}), or null when the site does not
+	 * check or nothing could read what it signals: outside exception-handling mode the
+	 * non-instance traps either way, so the site keeps the plain trapping cast.
+	 */
+	private static @Nullable LispVal checkedFailure(List<LispVal> args, int position, WasmLispCompiler.Ctx ctx) {
+		return args.size() > position && ctx.ehMode ? args.get(position) : null;
+	}
+
+	/**
+	 * Over the object on the stack: its slots array, then {@code access} (which leaves
+	 * one value), when it is an instance -- in the ONE type test the plain site's cast
+	 * makes -- else the {@code failure} form's value:
+	 * {@code block (eqref -> eqref) block (eqref -> eqref) br_on_cast_fail 0 eqref
+	 * (ref $instance); struct.get $instance 1; <access>; br 1 end drop <failure> end}.
+	 */
+	private static void emitChecked(WasmLispCompiler.Ctx ctx, LispVal failure, Runnable access) {
+		ctx.writer.write(Instruction.BLOCK);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CALLABLE_BASE);
+		ctx.writer.write(Instruction.BLOCK);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CALLABLE_BASE);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.BR_ON_CAST_FAIL);
+		ctx.writer.write(0x01); // the operand nullable, the cast not
+		ctx.writer.writeUnsignedLeb128(0);
+		ctx.writer.writeHeapType(Type.EQ.code());
+		ctx.writer.writeHeapType(ctx.instanceTypeIndex);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		ctx.writer.writeUnsignedLeb128(ctx.instanceTypeIndex);
+		ctx.writer.writeUnsignedLeb128(1);
+		access.run();
+		ctx.writer.write(Instruction.BR);
+		ctx.writer.writeUnsignedLeb128(1);
+		ctx.writer.write(Instruction.END);
+		ctx.writer.write(Instruction.DROP);
+		WasmExprCompiler.compileExpr(failure, ctx);
+		ctx.writer.write(Instruction.END);
+	}
+
+	/**
+	 * {@code (copy-structure s)} (CLHS 18.3): a FRESH {@code TYPE_INSTANCE} struct
+	 * sharing the source's layout ADDRESS and an {@code array.copy} of its slots array --
+	 * shares slot VALUES, not slot storage, with the original. Unlike the
+	 * {@code copy-<name>} copier {@code expandDefstruct} generates per type, this
+	 * argument's type is not known until run time, so it cannot go through
+	 * {@code %obj-new}'s literal-tag path -- it reads the source's own layout address and
+	 * clones its slots array directly instead, the one case in this file building an
+	 * instance without a compile-time-known tag.
+	 */
+	static void compileCopyStructure(LispCons cons, WasmLispCompiler.Ctx ctx) {
+		List<LispVal> args = cons.toList();
+		if (gateOff(ctx)) {
+			evaluateForEffectThenNil(args.get(1), ctx);
+			return;
+		}
+		WasmExprCompiler.compileExpr(args.get(1), ctx);
+		int objSlot = ctx.allocTemp();
+		setLocal(ctx, objSlot);
+		getLocal(ctx, objSlot);
+		pushSlots(ctx);
+		// srcSlot/dstSlot are declared eqref like every temp local here (`pushSlots`
+		// narrowed the value to $buckets only for the ONE instruction that consumed it
+		// off the stack); every later use re-narrows with `castBuckets`, exactly as
+		// `compileNew`'s `slotsSlot` does before each `ARRAY_SET`.
+		int srcSlot = ctx.allocTemp();
+		setLocal(ctx, srcSlot);
+		getLocal(ctx, srcSlot);
+		castBuckets(ctx);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_LEN);
+		refI31(ctx);
+		int lenSlot = ctx.allocTemp();
+		setLocal(ctx, lenSlot);
+		// dst = array.new $buckets (ref.null eq) len
+		refNull(ctx);
+		getIndex(ctx, lenSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_NEW);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		int dstSlot = ctx.allocTemp();
+		setLocal(ctx, dstSlot);
+		// array.copy $buckets $buckets dst 0 src 0 len
+		getLocal(ctx, dstSlot);
+		castBuckets(ctx);
+		i32Const(ctx, 0);
+		getLocal(ctx, srcSlot);
+		castBuckets(ctx);
+		i32Const(ctx, 0);
+		getIndex(ctx, lenSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_COPY);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		getLocal(ctx, objSlot);
+		pushLayoutAddress(ctx);
+		getLocal(ctx, dstSlot);
+		WasmEmitHelper.emitNewInstance(ctx);
+	}
+
+	/**
+	 * {@code (%obj-become obj '<tag>)}: stores the new layout address into field 0, so
+	 * the instance IS one of the new type from here on, and yields the instance. The
+	 * slots array is untouched -- construction reserved
+	 * {@link am.ik.rontolisp.LispLayout#capacity()} elements for exactly this, which is
+	 * why field 0 is mutable (see {@code WasmLispCompiler.INSTANCE_TYPE_COUNT}).
+	 */
+	static void compileBecome(LispCons cons, WasmLispCompiler.Ctx ctx) {
+		requireGate(ctx, LispNames.OBJ_BECOME);
+		List<LispVal> args = cons.toList();
+		int address = layoutAddress(ctx, quotedTag(args.get(2), LispNames.OBJ_BECOME));
+		WasmExprCompiler.compileExpr(args.get(1), ctx);
+		int objSlot = ctx.allocTemp();
+		setLocal(ctx, objSlot);
+		getLocal(ctx, objSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		ctx.writer.writeHeapType(ctx.instanceTypeIndex);
+		i32Const(ctx, address);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_SET);
+		ctx.writer.writeUnsignedLeb128(ctx.instanceTypeIndex);
+		ctx.writer.writeUnsignedLeb128(0);
+		getLocal(ctx, objSlot);
+	}
+
+	/**
+	 * {@code (%obj-set obj <k> v)}, returning the value written; with a fifth operand, a
+	 * {@code defstruct} accessor place's checked store ({@link #compileRef}), whose check
+	 * follows the object AND the value.
+	 *
+	 * <p>
+	 * The unchecked store compiles with the gate off too: no operand can be an instance
+	 * then, so the operands are evaluated and the store traps, as the instance cast traps
+	 * on a non-instance with the gate on. A library may so write a reserved cell behind
+	 * an {@code %obj-is} test without knowing whether the module builds instances.
+	 */
+	static void compileSet(LispCons cons, WasmLispCompiler.Ctx ctx) {
+		List<LispVal> args = cons.toList();
+		if (gateOff(ctx) && args.size() <= 4) {
+			WasmExprCompiler.compileExpr(args.get(1), ctx);
+			ctx.writer.write(Instruction.DROP);
+			WasmExprCompiler.compileExpr(args.get(3), ctx);
+			ctx.writer.write(Instruction.DROP);
+			ctx.writer.write(Instruction.UNREACHABLE);
+			return;
+		}
+		requireGate(ctx, LispNames.OBJ_SET);
+		LispVal failure = checkedFailure(args, 4, ctx);
+		// The object is evaluated before the index and the value, as in the interpreter.
+		WasmExprCompiler.compileExpr(args.get(1), ctx);
+		int objSlot = ctx.allocTemp();
+		setLocal(ctx, objSlot);
+		boolean computedIndex = !(args.get(2) instanceof LispInteger) && failure == null;
+		int indexSlot = -1;
+		if (computedIndex) {
+			WasmExprCompiler.compileExpr(args.get(2), ctx);
+			indexSlot = ctx.allocTemp();
+			setLocal(ctx, indexSlot);
+		}
+		WasmExprCompiler.compileExpr(args.get(3), ctx);
+		int valSlot = ctx.allocTemp();
+		setLocal(ctx, valSlot);
+		getLocal(ctx, objSlot);
+		int computedSlot = indexSlot;
+		Runnable store = () -> {
+			if (computedIndex) {
+				getLocal(ctx, computedSlot);
+				WasmEmitHelper.castI31GetS(ctx);
+			}
+			else {
+				pushCellIndex(ctx, literalIndex(args.get(2), LispNames.OBJ_SET));
+			}
+			getLocal(ctx, valSlot);
+			ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_SET);
+			ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+			getLocal(ctx, valSlot);
+		};
+		if (failure == null) {
+			pushSlots(ctx);
+			store.run();
+		}
+		else {
+			emitChecked(ctx, failure, store);
+		}
+	}
+
+	/** {@code (%obj-is obj '<tag1> '<tag2> ...)}. */
+	static void compileIs(LispCons cons, WasmLispCompiler.Ctx ctx) {
+		if (gateOff(ctx)) {
+			evaluateForEffectThenNil(cons.toList().get(1), ctx);
+			return;
+		}
+		emitIsI32(cons, ctx);
+		WasmEmitHelper.emitBoolFromI32(ctx);
+	}
+
+	/**
+	 * {@link #compileIs} as the raw i32 truth a test position consumes
+	 * ({@link WasmConditionCompiler}): non-0 exactly when the object is an instance of
+	 * one of the tags.
+	 * @param cons the {@code %obj-is} form
+	 * @param ctx the compile context
+	 */
+	static void emitIsI32(LispCons cons, WasmLispCompiler.Ctx ctx) {
+		List<LispVal> args = cons.toList();
+		WasmExprCompiler.compileExpr(args.get(1), ctx);
+		int objSlot = ctx.allocTemp();
+		setLocal(ctx, objSlot);
+		emitIsI32(ctx, objSlot, args.subList(2, args.size()));
+	}
+
+	/**
+	 * Whether the object in {@code objSlot} is an instance of one of the quoted
+	 * {@code tags}, as an i32. At the speed levels one tag is one type test, five bytes
+	 * more than the test and the cast it replaces:
+	 * {@code block (result i32) block (result eqref) local.get obj; br_on_cast_fail 0
+	 * eqref (ref $instance); struct.get $instance 0; i32.const address; i32.eq; br 1 end
+	 * drop; i32.const 0 end}. A module no instance can exist in answers 0.
+	 * @param ctx the compile context
+	 * @param objSlot the local holding the object
+	 * @param tags the quoted tags
+	 */
+	static void emitIsI32(WasmLispCompiler.Ctx ctx, int objSlot, List<LispVal> tags) {
+		List<Integer> addresses = new java.util.ArrayList<>();
+		for (LispVal tag : tags) {
+			// A tag no registered layout carries can never match; the interpreter
+			// answers nil for it too.
+			Integer address = gateOff(ctx) ? null : ctx.layoutAddresses.get(quotedTag(tag, LispNames.OBJ_IS));
+			if (address != null) {
+				addresses.add(address);
+			}
+		}
+		if (addresses.isEmpty()) {
+			i32Const(ctx, 0);
+			return;
+		}
+		if (addresses.size() == 1 && WasmIntFusionCompiler.speedTradesEnabled(ctx)) {
+			ctx.writer.write(Instruction.BLOCK);
+			ctx.writer.write(Type.I32);
+			ctx.writer.write(Instruction.BLOCK);
+			ctx.writer.writeRefType(true, Type.EQ.code());
+			getLocal(ctx, objSlot);
+			ctx.writer.write(Instruction.GC_PREFIX, Instruction.BR_ON_CAST_FAIL);
+			ctx.writer.write(0x01); // the operand nullable, the cast not
+			ctx.writer.writeUnsignedLeb128(0);
+			ctx.writer.writeHeapType(Type.EQ.code());
+			ctx.writer.writeHeapType(ctx.instanceTypeIndex);
+			ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+			ctx.writer.writeUnsignedLeb128(ctx.instanceTypeIndex);
+			ctx.writer.writeUnsignedLeb128(0);
+			i32Const(ctx, addresses.get(0));
+			ctx.writer.write(Instruction.I32_EQ);
+			ctx.writer.write(Instruction.BR);
+			ctx.writer.writeUnsignedLeb128(1);
+			ctx.writer.write(Instruction.END);
+			ctx.writer.write(Instruction.DROP);
+			i32Const(ctx, 0);
+			ctx.writer.write(Instruction.END);
+			return;
+		}
+		getLocal(ctx, objSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		ctx.writer.writeHeapType(ctx.instanceTypeIndex);
+		ctx.writer.write(Instruction.IF);
+		ctx.writer.write(Type.I32);
+		for (int i = 0; i < addresses.size(); i++) {
+			getLocal(ctx, objSlot);
+			pushLayoutAddress(ctx);
+			i32Const(ctx, addresses.get(i));
+			ctx.writer.write(Instruction.I32_EQ);
+			if (i > 0) {
+				ctx.writer.write(Instruction.I32_OR);
+			}
+		}
+		ctx.writer.write(Instruction.ELSE);
+		i32Const(ctx, 0);
+		ctx.writer.write(Instruction.END);
+	}
+
+	/**
+	 * Slot {@code index} of the object in {@code objSlot} when it is an instance, in one
+	 * type test, else what {@code miss} leaves: {@link #emitChecked}'s shape over a
+	 * local.
+	 * @param ctx the compile context
+	 * @param objSlot the local holding the object
+	 * @param index the slot's index
+	 * @param miss emits the value of a read of anything else
+	 */
+	static void emitReadOr(WasmLispCompiler.Ctx ctx, int objSlot, int index, Runnable miss) {
+		ctx.writer.write(Instruction.BLOCK);
+		ctx.writer.writeRefType(true, Type.EQ.code());
+		ctx.writer.write(Instruction.BLOCK);
+		ctx.writer.writeRefType(true, Type.EQ.code());
+		getLocal(ctx, objSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.BR_ON_CAST_FAIL);
+		ctx.writer.write(0x01); // the operand nullable, the cast not
+		ctx.writer.writeUnsignedLeb128(0);
+		ctx.writer.writeHeapType(Type.EQ.code());
+		ctx.writer.writeHeapType(ctx.instanceTypeIndex);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		ctx.writer.writeUnsignedLeb128(ctx.instanceTypeIndex);
+		ctx.writer.writeUnsignedLeb128(1);
+		pushCellIndex(ctx, index);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		ctx.writer.write(Instruction.BR);
+		ctx.writer.writeUnsignedLeb128(1);
+		ctx.writer.write(Instruction.END);
+		ctx.writer.write(Instruction.DROP);
+		miss.run();
+		ctx.writer.write(Instruction.END);
+	}
+
+	/**
+	 * {@return whether an instance can exist in this module}
+	 * @param ctx the compile context
+	 */
+	static boolean instancesExist(WasmLispCompiler.Ctx ctx) {
+		return !gateOff(ctx);
+	}
+
+	/** {@code (%obj-tag obj)}: the tag symbol, or nil for a non-instance. */
+	static void compileTag(LispCons cons, WasmLispCompiler.Ctx ctx) {
+		List<LispVal> args = cons.toList();
+		if (gateOff(ctx)) {
+			evaluateForEffectThenNil(args.get(1), ctx);
+			return;
+		}
+		WasmExprCompiler.compileExpr(args.get(1), ctx);
+		int objSlot = ctx.allocTemp();
+		setLocal(ctx, objSlot);
+		getLocal(ctx, objSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		ctx.writer.writeHeapType(ctx.instanceTypeIndex);
+		ctx.writer.write(Instruction.IF);
+		ctx.writer.writeRefType(true, Type.EQ.code());
+		// _str_build (NOT _str_fresh): the tag text was interned by
+		// WasmInstanceLayouts, so the symbol's id is the interned offset and two reads
+		// of the same tag stay eq, exactly like a quoted symbol literal.
+		getLocal(ctx, objSlot);
+		pushLayoutAddress(ctx);
+		ctx.writer.write(Instruction.I32_LOAD, 0x02, WasmInstanceLayouts.OFF_TAG_OFF);
+		getLocal(ctx, objSlot);
+		pushLayoutAddress(ctx);
+		ctx.writer.write(Instruction.I32_LOAD, 0x02, WasmInstanceLayouts.OFF_TAG_LEN);
+		WasmEmitHelper.emitStrBuildCall(ctx.writer);
+		ctx.writer.write(Instruction.ELSE);
+		refNull(ctx);
+		ctx.writer.write(Instruction.END);
+	}
+
+	/**
+	 * {@code (%obj-slots obj)}: a FRESH list of the slot values in layout order, nil for
+	 * a non-instance. Built back to front so each cons closes as it is made -- one loop,
+	 * no tail pointer. Every local here is an {@code eqref} (the only local type the
+	 * emitted functions declare), so the cursor rides as an i31.
+	 */
+	static void compileSlots(LispCons cons, WasmLispCompiler.Ctx ctx) {
+		List<LispVal> args = cons.toList();
+		if (gateOff(ctx)) {
+			evaluateForEffectThenNil(args.get(1), ctx);
+			return;
+		}
+		WasmExprCompiler.compileExpr(args.get(1), ctx);
+		int objSlot = ctx.allocTemp();
+		setLocal(ctx, objSlot);
+		int listSlot = ctx.allocTemp();
+		int idxSlot = ctx.allocTemp();
+		getLocal(ctx, objSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		ctx.writer.writeHeapType(ctx.instanceTypeIndex);
+		ctx.writer.write(Instruction.IF);
+		ctx.writer.writeRefType(true, Type.EQ.code());
+		refNull(ctx);
+		setLocal(ctx, listSlot);
+		// The cursor starts at the LAYOUT's slot count, not at array.len: a
+		// change-class-reserved slots array is longer than the layout describes.
+		getLocal(ctx, objSlot);
+		pushLayoutAddress(ctx);
+		ctx.writer.write(Instruction.I32_LOAD, 0x02, WasmInstanceLayouts.OFF_SLOT_COUNT);
+		i32Const(ctx, 1);
+		ctx.writer.write(Instruction.I32_SUB);
+		refI31(ctx);
+		setLocal(ctx, idxSlot);
+		ctx.writer.write(Instruction.BLOCK, 0x40);
+		ctx.writer.write(Instruction.LOOP, 0x40);
+		getIndex(ctx, idxSlot);
+		i32Const(ctx, 0);
+		ctx.writer.write(Instruction.I32_LT_S);
+		ctx.writer.write(Instruction.BR_IF, 1);
+		getLocal(ctx, objSlot);
+		pushSlots(ctx);
+		getIndex(ctx, idxSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		getLocal(ctx, listSlot);
+		WasmEmitHelper.emitNewCons(ctx);
+		setLocal(ctx, listSlot);
+		getIndex(ctx, idxSlot);
+		i32Const(ctx, 1);
+		ctx.writer.write(Instruction.I32_SUB);
+		refI31(ctx);
+		setLocal(ctx, idxSlot);
+		ctx.writer.write(Instruction.BR, 0);
+		ctx.writer.write(Instruction.END); // end loop
+		ctx.writer.write(Instruction.END); // end block
+		getLocal(ctx, listSlot);
+		ctx.writer.write(Instruction.ELSE);
+		refNull(ctx);
+		ctx.writer.write(Instruction.END);
+	}
+
+	/**
+	 * {@code (%obj-print-frame obj)}: the fresh list {@code (class-p name slot...)} of
+	 * what the instance renderer writes around the slot values, read off the layout
+	 * record; nil where it writes no slot syntax (a non-instance, a pathname, a stream).
+	 * Each name reaches a string through the {@code HEAP_PTR} scratch with its frame
+	 * quotes added: the record's bytes are bare.
+	 */
+	static void compilePrintFrame(LispCons cons, WasmLispCompiler.Ctx ctx) {
+		List<LispVal> args = cons.toList();
+		if (gateOff(ctx)) {
+			evaluateForEffectThenNil(args.get(1), ctx);
+			return;
+		}
+		WasmExprCompiler.compileExpr(args.get(1), ctx);
+		int objSlot = ctx.allocTemp();
+		setLocal(ctx, objSlot);
+		int listSlot = ctx.allocTemp();
+		int idxSlot = ctx.allocTemp();
+		refNull(ctx);
+		setLocal(ctx, listSlot);
+		getLocal(ctx, objSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		ctx.writer.writeHeapType(ctx.instanceTypeIndex);
+		ctx.writer.write(Instruction.IF, 0x40);
+		pushLayoutWord(ctx, objSlot, WasmInstanceLayouts.OFF_KIND);
+		i32Const(ctx, WasmInstanceLayouts.KIND_CLASS);
+		ctx.writer.write(Instruction.I32_LE_U);
+		ctx.writer.write(Instruction.IF, 0x40);
+		pushLayoutWord(ctx, objSlot, WasmInstanceLayouts.OFF_SLOT_COUNT);
+		i32Const(ctx, 1);
+		ctx.writer.write(Instruction.I32_SUB);
+		refI31(ctx);
+		setLocal(ctx, idxSlot);
+		ctx.writer.write(Instruction.BLOCK, 0x40);
+		ctx.writer.write(Instruction.LOOP, 0x40);
+		getIndex(ctx, idxSlot);
+		i32Const(ctx, 0);
+		ctx.writer.write(Instruction.I32_LT_S);
+		ctx.writer.write(Instruction.BR_IF, 1);
+		emitFramedString(ctx, () -> pushSlotEntryWord(ctx, objSlot, idxSlot, 0),
+				() -> pushSlotEntryWord(ctx, objSlot, idxSlot, 4));
+		getLocal(ctx, listSlot);
+		WasmEmitHelper.emitNewCons(ctx);
+		setLocal(ctx, listSlot);
+		getIndex(ctx, idxSlot);
+		i32Const(ctx, 1);
+		ctx.writer.write(Instruction.I32_SUB);
+		refI31(ctx);
+		setLocal(ctx, idxSlot);
+		ctx.writer.write(Instruction.BR, 0);
+		ctx.writer.write(Instruction.END); // end loop
+		ctx.writer.write(Instruction.END); // end block
+		emitFramedString(ctx, () -> pushLayoutWord(ctx, objSlot, WasmInstanceLayouts.OFF_NAME_OFF),
+				() -> pushLayoutWord(ctx, objSlot, WasmInstanceLayouts.OFF_NAME_LEN));
+		getLocal(ctx, listSlot);
+		WasmEmitHelper.emitNewCons(ctx);
+		setLocal(ctx, listSlot);
+		// (class-p . list)
+		pushLayoutWord(ctx, objSlot, WasmInstanceLayouts.OFF_KIND);
+		ctx.writer.write(Instruction.IF);
+		ctx.writer.writeRefType(true, Type.EQ.code());
+		WasmEmitHelper.emitTrue(ctx);
+		ctx.writer.write(Instruction.ELSE);
+		refNull(ctx);
+		ctx.writer.write(Instruction.END);
+		getLocal(ctx, listSlot);
+		WasmEmitHelper.emitNewCons(ctx);
+		setLocal(ctx, listSlot);
+		ctx.writer.write(Instruction.END); // end kind test
+		ctx.writer.write(Instruction.END); // end instance test
+		getLocal(ctx, listSlot);
+	}
+
+	// Pushes one word of the instance's layout record.
+	private static void pushLayoutWord(WasmLispCompiler.Ctx ctx, int objSlot, int offset) {
+		getLocal(ctx, objSlot);
+		pushLayoutAddress(ctx);
+		ctx.writer.write(Instruction.I32_LOAD, 0x02, offset);
+	}
+
+	// Pushes one word of the slot-name entry the i31-boxed cursor selects.
+	private static void pushSlotEntryWord(WasmLispCompiler.Ctx ctx, int objSlot, int idxSlot, int offset) {
+		getLocal(ctx, objSlot);
+		pushLayoutAddress(ctx);
+		getIndex(ctx, idxSlot);
+		i32Const(ctx, WasmInstanceLayouts.SLOT_ENTRY_BYTES);
+		ctx.writer.write(Instruction.I32_MUL);
+		ctx.writer.write(Instruction.I32_ADD);
+		ctx.writer.write(Instruction.I32_LOAD, 0x02, WasmInstanceLayouts.OFF_SLOTS + offset);
+	}
+
+	/**
+	 * Pushes a fresh string over {@code linear[off..off+len)}, quote-framed as a string's
+	 * bytes are. The bytes are staged at {@code HEAP_PTR}, which does not advance: the
+	 * string's own copy lives on the GC heap. Both pushes must be side-effect free.
+	 */
+	private static void emitFramedString(WasmLispCompiler.Ctx ctx, Runnable pushOff, Runnable pushLen) {
+		Runnable pushHeap = () -> {
+			i32Const(ctx, WasmLispCompiler.HEAP_PTR_ADDR);
+			ctx.writer.write(Instruction.I32_LOAD, 0x02, 0x00);
+		};
+		WasmEmitHelper.emitGrowHeapTo(ctx.writer, () -> {
+			pushHeap.run();
+			pushLen.run();
+			ctx.writer.write(Instruction.I32_ADD);
+			i32Const(ctx, 2);
+			ctx.writer.write(Instruction.I32_ADD);
+		});
+		pushHeap.run();
+		i32Const(ctx, '"');
+		ctx.writer.write(Instruction.I32_STORE8, 0x00, 0x00);
+		pushHeap.run();
+		i32Const(ctx, 1);
+		ctx.writer.write(Instruction.I32_ADD);
+		pushOff.run();
+		pushLen.run();
+		ctx.writer.write(Instruction.MISC_PREFIX);
+		ctx.writer.writeUnsignedLeb128(Instruction.MEMORY_COPY);
+		ctx.writer.write(0x00, 0x00);
+		pushHeap.run();
+		pushLen.run();
+		ctx.writer.write(Instruction.I32_ADD);
+		i32Const(ctx, '"');
+		ctx.writer.write(Instruction.I32_STORE8, 0x00, 0x01);
+		pushHeap.run();
+		pushLen.run();
+		i32Const(ctx, 2);
+		ctx.writer.write(Instruction.I32_ADD);
+		WasmEmitHelper.emitStrFreshCall(ctx.writer);
+	}
+
+	// Pushes the i32 value of the i31-boxed cursor in the given local.
+	private static void getIndex(WasmLispCompiler.Ctx ctx, int slot) {
+		getLocal(ctx, slot);
+		WasmEmitHelper.castI31GetS(ctx);
+	}
+
+	private static void refI31(WasmLispCompiler.Ctx ctx) {
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+	}
+
+	/** {@code (%obj-p x)}. */
+	static void compileP(LispCons cons, WasmLispCompiler.Ctx ctx) {
+		List<LispVal> args = cons.toList();
+		if (gateOff(ctx)) {
+			evaluateForEffectThenNil(args.get(1), ctx);
+			return;
+		}
+		WasmExprCompiler.compileExpr(args.get(1), ctx);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		ctx.writer.writeHeapType(ctx.instanceTypeIndex);
+		WasmEmitHelper.emitBoolFromI32(ctx);
+	}
+
+	// --- helpers -------------------------------------------------------------
+
+	// The gate says whether an instance can EXIST in this module. Only construction
+	// needs it to be on; the four reading primitives answer nil without it, which is
+	// exactly right (there is nothing to read) and keeps an instance-free module
+	// byte-identical to a build that never knew about instances. A %obj-new that gets
+	// here with the gate off is a gate/expansion disagreement -- it would emit a
+	// negative heap type, which validates as garbage rather than failing loudly.
+	private static void requireGate(WasmLispCompiler.Ctx ctx, String name) {
+		if (ctx.instanceTypeIndex < 0) {
+			throw new UnsupportedOperationException(name + " reached the compiler with no instance type emitted");
+		}
+	}
+
+	private static boolean gateOff(WasmLispCompiler.Ctx ctx) {
+		return ctx.instanceTypeIndex < 0;
+	}
+
+	/** Compiles the operand for its side effects and leaves nil on the stack. */
+	private static void evaluateForEffectThenNil(LispVal operand, WasmLispCompiler.Ctx ctx) {
+		WasmExprCompiler.compileExpr(operand, ctx);
+		ctx.writer.write(Instruction.DROP);
+		refNull(ctx);
+	}
+
+	private static int layoutAddress(WasmLispCompiler.Ctx ctx, String tag) {
+		Integer address = ctx.layoutAddresses.get(tag);
+		if (address == null) {
+			throw new UnsupportedOperationException("no layout was baked for instance type " + tag);
+		}
+		return address;
+	}
+
+	/**
+	 * The instance tag named by a literal quoted symbol, verbatim: the prefix is the
+	 * lowercase {@code %struct-}/{@code %class-} the expander synthesizes, which the
+	 * upcasing reader cannot produce, so nothing is folded or package-stripped.
+	 */
+	private static String quotedTag(LispVal form, String name) {
+		if (form instanceof LispCons cons && cons.car() instanceof LispSymbol q && LispNames.QUOTE.equals(q.name())
+				&& cons.cdr() instanceof LispCons rest && rest.car() instanceof LispSymbol tag) {
+			return tag.name();
+		}
+		throw new UnsupportedOperationException(name + " expects a literal quoted instance tag, got " + form.print());
+	}
+
+	private static int literalIndex(LispVal form, String name) {
+		if (form instanceof LispInteger i) {
+			return (int) i.value();
+		}
+		throw new UnsupportedOperationException(name + " expects a literal integer slot index, got " + form.print());
+	}
+
+	// Consumes an instance on the stack, pushes its slots array (the field's own type).
+	private static void pushSlots(WasmLispCompiler.Ctx ctx) {
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		ctx.writer.writeHeapType(ctx.instanceTypeIndex);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		ctx.writer.writeUnsignedLeb128(ctx.instanceTypeIndex);
+		ctx.writer.writeUnsignedLeb128(1);
+	}
+
+	// Consumes an instance on the stack, pushes its i32 layout address.
+	private static void pushLayoutAddress(WasmLispCompiler.Ctx ctx) {
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		ctx.writer.writeHeapType(ctx.instanceTypeIndex);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		ctx.writer.writeUnsignedLeb128(ctx.instanceTypeIndex);
+		ctx.writer.writeUnsignedLeb128(0);
+	}
+
+	private static void castBuckets(WasmLispCompiler.Ctx ctx) {
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_HASH_BUCKETS);
+	}
+
+	private static void getLocal(WasmLispCompiler.Ctx ctx, int slot) {
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(slot);
+	}
+
+	private static void setLocal(WasmLispCompiler.Ctx ctx, int slot) {
+		ctx.writer.write(Instruction.SET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(slot);
+	}
+
+	private static void i32Const(WasmLispCompiler.Ctx ctx, int value) {
+		ctx.writer.write(Instruction.I32_CONST);
+		ctx.writer.writeSignedLeb128(value);
+	}
+
+	private static void refNull(WasmLispCompiler.Ctx ctx) {
+		ctx.writer.write(Instruction.REF_NULL);
+		ctx.writer.writeHeapType(Type.EQ.code());
+	}
+
+}

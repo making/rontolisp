@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>test.graph</groupId>
+  <artifactId>keep</artifactId>
+  <version>1</version>
+  <dependencies>
+      <dependency><groupId>test.graph</groupId><artifactId>gone</artifactId><version>2</version></dependency>
+      <dependency><groupId>test.graph</groupId><artifactId>kept-child</artifactId><version>1</version></dependency>
+  </dependencies>
+</project>

@@ -1,0 +1,34 @@
+> (2 3 + 4 *)
+  [20]
+> (drop)
+  []
+> ((square) (dup *) define)
+  []
+> (7 square 1 +)
+  [50]
+> ((factorial) (dup 1 > (dup 1 - factorial *) (drop 1) if) define)
+  [50]
+> (drop 20 factorial)
+  [2432902008176640000]
+> ((fib) (dup 2 < () (dup 1 - fib swap 2 - fib +) if) define)
+  [2432902008176640000]
+> (drop 15 fib)
+  [610]
+> (drop 1 10 (2 *) times)
+  [1024]
+> ((countdown) (dup print dup 0 > (1 - countdown) () if) define)
+  [1024]
+> (drop 3 countdown)
+3
+2
+1
+0
+  [0]
+> (drop 22 7 /)
+  [22/7]
+> (drop drop)
+  error: stack underflow
+  []
+> (1 nothing)
+  error: unknown word nothing
+  [1]

@@ -1,0 +1,969 @@
+package am.ik.rontolisp.cli;
+
+import java.io.BufferedInputStream;
+import java.io.BufferedOutputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.io.PrintStream;
+import java.net.ConnectException;
+import java.net.InetAddress;
+import java.net.ServerSocket;
+import java.net.Socket;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.Deque;
+import java.util.List;
+import java.util.Objects;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.TimeUnit;
+import java.util.function.Predicate;
+
+import am.ik.rontolisp.cli.SwankWire.Keyword;
+import am.ik.rontolisp.cli.SwankWire.Symbol;
+import am.ik.rontolisp.eval.CommonLispSwank;
+import am.ik.rontolisp.eval.LispEvaluator;
+import org.jspecify.annotations.Nullable;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+/**
+ * The SWANK server against a client replaying what SLIME 2.32 ({@code slime-fancy}) sent
+ * it, each reply checked against the one SWANK 2.32 on SBCL 2.2.9 answers the same
+ * request with (recorded through a logging proxy, 2026-10-30), the request id and the
+ * writing thread's id left out. Where the two differ the reply is rontolisp's: no
+ * presentation markers around a REPL result, a package printed as its keyword, the
+ * implementation's own names ({@code CL-USER}, {@code CL:MAPC}), no SBCL compiler output
+ * or unused-variable note, a macro expansion on one line, a condition printed with its
+ * report, and a debugger's frames the interpreter's own: each function waiting, the
+ * request's top-level form and the request.
+ */
+class SwankServerTest {
+
+	@TempDir
+	Path tempDir;
+
+	@Test
+	void aSlimeSessionEvaluatesCompilesAndDocumentsAnsweringWhatSwankAnswers() throws Exception {
+		try (SwankServer server = start(); Client client = new Client(server.port())) {
+			List<String> info = client.rex("(swank:connection-info)", "COMMON-LISP-USER", "t");
+			assertThat(info.getLast()).contains(":style :spawn")
+				.contains(":lisp-implementation (:type \"rontolisp\" :name \"rontolisp\"")
+				.contains(":package (:name \"CL-USER\" :prompt \"CL-USER\") :version \"2.32\")) id)");
+			assertThat(client.rex("(swank:swank-require '(swank-presentations swank-repl))", "COMMON-LISP-USER", "t")
+				.getLast()).contains("\"SWANK-REPL\"").contains("\"SWANK-PRESENTATIONS\"");
+			assertThat(client.rex("(swank-repl:create-repl nil)", "COMMON-LISP-USER", "t"))
+				.containsExactly("(:return (:ok (\"CL-USER\" \"CL-USER\")) id)");
+			// each value a REPL result, output before them and ended by a fresh line
+			assertThat(client.repl("(+ 1 2)")).containsExactly("(:write-string \"3\n\" :repl-result)",
+					"(:return (:ok nil) id)");
+			assertThat(client.repl("(progn (format t \"hello~%\") (values 1 \"two\"))")).containsExactly(
+					"(:write-string \"hello\n\" nil tid)", "(:write-string \"1\n\" :repl-result)",
+					"(:write-string \"\\\"two\\\"\n\" :repl-result)", "(:return (:ok nil) id)");
+			assertThat(client.repl("(values)")).containsExactly("(:write-string \"; No value\" :repl-result)",
+					"(:return (:ok nil) id)");
+			assertThat(client.repl("(princ \"no newline\")")).containsExactly(
+					"(:write-string \"no newline\n\" nil tid)", "(:write-string \"\\\"no newline\\\"\n\" :repl-result)",
+					"(:return (:ok nil) id)");
+			client.repl("(defvar *drv* 10)");
+			assertThat(client.repl("(list *drv* * ** ***)")).first()
+				.isEqualTo("(:write-string \"(10 *DRV* \\\"no newline\\\" NIL)\n\" :repl-result)");
+			// standard input reads what the REPL types
+			client.input.add("typed\n");
+			assertThat(client.repl("(read-line)")).containsExactly("(:write-string \"\\\"typed\\\"\n\" :repl-result)",
+					"(:write-string \"NIL\n\" :repl-result)", "(:return (:ok nil) id)");
+			// a package switch is announced, and the next request names the new package
+			client.repl("(defpackage :drv-pkg (:use :cl) (:export #:hello))");
+			assertThat(client.repl("(in-package :drv-pkg)")).containsExactly(
+					"(:write-string \":DRV-PKG\n\" :repl-result)", "(:new-package \"DRV-PKG\" \"DRV-PKG\")",
+					"(:return (:ok nil) id)");
+			client.rex("(swank-repl:listener-eval \"(defun hello () 'hi)\n\")", "DRV-PKG", ":repl-thread");
+			assertThat(client.rex("(swank-repl:listener-eval \"(in-package :cl-user)\n\")", "DRV-PKG", ":repl-thread"))
+				.contains("(:new-package \"CL-USER\" \"CL-USER\")");
+			assertThat(client.repl("(drv-pkg:hello)")).first()
+				.isEqualTo("(:write-string \"DRV-PKG::HI\n\" :repl-result)");
+			assertThat(client.rex("(swank:set-package \"DRV-PKG\")", "CL-USER", ":repl-thread"))
+				.containsExactly("(:return (:ok (\"DRV-PKG\" \"DRV-PKG\")) id)");
+			// the editor's evaluations, a buffer's in-package naming the package
+			assertThat(client.rex("(swank:interactive-eval \"(+ 2 3)\" 6 80)", "CL-USER", "t"))
+				.containsExactly("(:return (:ok \"=> 5 (3 bits, #x5, #o5, #b101)\") id)");
+			assertThat(client.rex("(swank:interactive-eval \"(values 1 2)\" 6 80)", "CL-USER", "t"))
+				.containsExactly("(:return (:ok \"=> 1, 2\") id)");
+			assertThat(client.rex("(swank:interactive-eval \"(values)\" 6 80)", "CL-USER", "t"))
+				.containsExactly("(:return (:ok \"\") id)");
+			assertThat(client.rex("(swank:interactive-eval \"(hello)\n\" 6 80)", ":drv-pkg", "t"))
+				.containsExactly("(:return (:ok \"=> HI\") id)");
+			assertThat(client.rex("(swank:eval-and-grab-output \"(progn (princ \\\"x\\\") (values 42 43))\")",
+					"CL-USER", "t"))
+				.containsExactly("(:return (:ok (\"x\" \"42\n43\")) id)");
+			// C-c C-c: a call nothing defines is a style warning at the call
+			assertThat(client
+				.rex("(swank:compile-string-for-emacs \"(defun drv-add (a b)\n  (+ a b))\n\""
+						+ " \"drv-compile.lisp\" '((:position 1) (:line 1 1)) nil 'nil)", "CL-USER", "t")
+				.getLast()).startsWith("(:return (:ok (:compilation-result nil t ");
+			assertThat(client
+				.rex("(swank:compile-string-for-emacs \"(defun drv-bad ()\n  (drv-undefined-fn 1))\n\""
+						+ " \"drv-compile.lisp\" '((:position 34) (:line 4 1)) nil 'nil)", "CL-USER", "t")
+				.getLast())
+				.startsWith("(:return (:ok (:compilation-result ((:message"
+						+ " \"undefined function: CL-USER::DRV-UNDEFINED-FN\" :severity :style-warning :location"
+						+ " (:location (:buffer \"drv-compile.lisp\") (:offset 34 20) nil) :references nil)) t ");
+			// C-c C-k: loading the file is compiling it, the notes at file positions
+			Path file = this.tempDir.resolve("drv-file.lisp");
+			Files.writeString(file, "(defun drv-file-fn (x)\n  (* x 2))\n\n(defun drv-file-warn ()\n"
+					+ "  (let ((unused 1))\n    (drv-other-undefined)))\n");
+			assertThat(client.rex("(swank:compile-file-for-emacs " + string(file.toString()) + " t)", "CL-USER", "t")
+				.getLast())
+				.startsWith("(:return (:ok (:compilation-result ((:message"
+						+ " \"undefined function: CL-USER::DRV-OTHER-UNDEFINED\" :severity :style-warning :location"
+						+ " (:location (:file " + string(file.toString()) + ") (:position 84) nil) :references nil))"
+						+ " t ")
+				.endsWith(" nil nil)) id)");
+			assertThat(client.repl("(drv-file-fn 21)")).first().isEqualTo("(:write-string \"42\n\" :repl-result)");
+			assertThat(client.rex("(swank:load-file " + string(file.toString()) + ")", "CL-USER", "t"))
+				.containsExactly("(:return (:ok \"T\") id)");
+			// M-.: where the editor compiled a definition, else where a load read it
+			Path nav = this.tempDir.resolve("drv-nav.lisp");
+			Files.writeString(nav,
+					"(defvar *drv-var* 1)\n\n(defmacro drv-mac (x)\n  `(list ,x *drv-var*))\n\n"
+							+ "(defun drv-callee (a)\n  \"Callee doc.\"\n  (* a 2))\n\n(defun drv-caller (b)\n"
+							+ "  (let ((*drv-var* 2))\n    (setq *drv-var* 3)\n    (drv-mac (drv-callee b))))\n\n"
+							+ "(defgeneric drv-gen (o))\n\n"
+							+ "(defclass drv-point () ((x :initarg :x :accessor drv-point-x) (y :initform 5)))\n\n"
+							+ "(defmethod drv-gen ((o drv-point)) (drv-callee 1))\n\n(defstruct drv-st a b)\n");
+			String navFile = string(nav.toString());
+			client.rex("(swank:compile-file-for-emacs " + navFile + " t)", "CL-USER", "t");
+			Path nav2 = this.tempDir.resolve("drv-nav2.lisp");
+			client.rex("(swank:compile-string-for-emacs \"(defun drv-buf-fn ()\n  (drv-callee 7))\n\" \"drv-nav2.lisp\""
+					+ " '((:position 2) (:line 2 1)) " + string(nav2.toString()) + " 'nil)", "CL-USER", "t");
+			Path loaded = this.tempDir.resolve("drv-load.lisp");
+			Files.writeString(loaded,
+					"(defvar *unused*)\n\n#+(or) (defun drv-never () 0)\n  (defun drv-loaded () (drv-callee 1))\n"
+							+ "(progn (in-package :cl-user) (defun drv-loaded-member () 1))\n");
+			assertThat(client.rex("(swank:load-file " + string(loaded.toString()) + ")", "CL-USER", "t"))
+				.containsExactly("(:return (:ok \"T\") id)");
+			client.repl("(defun drv-repl-fn () (drv-callee 3))");
+			assertThat(client.rex("(swank:find-definitions-for-emacs \"drv-callee\")", "CL-USER", "t"))
+				.containsExactly("(:return (:ok ((\"(DEFUN DRV-CALLEE)\" (:location (:file " + navFile
+						+ ") (:position 70) (:snippet \"(defun drv-callee (a)\n  \\\"Callee doc.\\\"\n  (* a 2))\n\n"
+						+ "(defun drv-caller (b)\n  (let ((*drv-var* 2))\n    (setq *drv-var* 3)\n"
+						+ "    (drv-mac (drv-callee b))))\n\n(defgeneric drv-gen (o))\n\n(defclass drv-point () ((x"
+						+ " :initarg :x :accessor drv-point-x) (y :initform 5)))\n\"))))) id)");
+			assertThat(definitions(client, "drv-gen")).containsExactly("(DEFGENERIC DRV-GEN (O)) (:position 220)",
+					"(DEFMETHOD DRV-GEN DRV-POINT) (:position 327)");
+			assertThat(definitions(client, "drv-point")).containsExactly("(DEFCLASS DRV-POINT) (:position 246)");
+			assertThat(definitions(client, "(setf drv-point-x)"))
+				.containsExactly("(DEFMETHOD (SETF DRV-POINT-X) T DRV-POINT) (:position 270)");
+			assertThat(definitions(client, "make-drv-st")).containsExactly("(DEFUN MAKE-DRV-ST) (:position 379)");
+			assertThat(definitions(client, "*drv-var*,")).containsExactly("(DEFVAR *DRV-VAR*) (:position 1)");
+			assertThat(definitions(client, "drv-loaded")).containsExactly("(DEFUN DRV-LOADED) (:position 52)");
+			assertThat(client.rex("(swank:find-definitions-for-emacs \"drv-buf-fn\")", "CL-USER", "t")).containsExactly(
+					"(:return (:ok ((\"(DEFUN DRV-BUF-FN)\" (:location (:buffer-and-file \"drv-nav2.lisp\" "
+							+ string(nav2.toString()) + ") (:offset 2 0) (:snippet \"(defun drv-buf-fn ()\n"
+							+ "  (drv-callee 7))\"))))) id)");
+			assertThat(client.rex("(swank:find-definitions-for-emacs \"drv-repl-fn\")", "CL-USER", "t"))
+				.containsExactly("(:return (:ok ((\"(DEFUN DRV-REPL-FN)\" (:error \"Error: DEFINITION-SOURCE of"
+						+ " function DRV-REPL-FN did not contain meaningful information.\")))) id)");
+			assertThat(client.rex("(swank:find-definitions-for-emacs \"mapcar\")", "CL-USER", "t"))
+				.containsExactly("(:return (:ok nil) id)");
+			// cross references: each use, labelled with the definition it is in
+			// a loaded file's uses too, and a REPL definition's, which has no place
+			assertThat(xref(client, ":calls", "drv-callee")).containsExactly("DRV-CALLER (:position 201)",
+					"(DEFMETHOD DRV-GEN (DRV-POINT)) (:position 362)", "DRV-BUF-FN (:offset 2 23)",
+					"DRV-LOADED (:position 73)",
+					"DRV-REPL-FN Error: DEFINITION-SOURCE of function DRV-REPL-FN did not contain meaningful information.");
+			assertThat(xref(client, ":callers", "drv-callee")).containsExactly("DRV-CALLER (:position 120)",
+					"(DEFMETHOD DRV-GEN (DRV-POINT)) (:position 327)", "DRV-BUF-FN (:offset 2 0)",
+					"DRV-LOADED (:position 52)",
+					"DRV-REPL-FN Error: DEFINITION-SOURCE of function DRV-REPL-FN did not contain meaningful information.");
+			assertThat(xref(client, ":calls-who", "drv-caller")).containsExactly("DRV-CALLEE (:position 70)");
+			assertThat(xref(client, ":references", "*drv-var*")).containsExactly("DRV-CALLER (:position 192)");
+			assertThat(xref(client, ":binds", "*drv-var*")).containsExactly("DRV-CALLER (:position 144)");
+			assertThat(xref(client, ":sets", "*drv-var*")).containsExactly("DRV-CALLER (:position 169)");
+			assertThat(xref(client, ":macroexpands", "drv-mac")).containsExactly("DRV-CALLER (:position 192)");
+			assertThat(xref(client, ":specializes", "drv-point")).containsExactly("(DEFMETHOD DRV-GEN) (:position 327)",
+					"(DEFMETHOD DRV-POINT-X) (:position 270)", "(DEFMETHOD (SETF DRV-POINT-X)) (:position 270)");
+			assertThat(client.rex("(swank:xref :who-knows \"drv-callee\")", "CL-USER", "t"))
+				.containsExactly("(:return (:ok :not-implemented) id)");
+			assertThat(client.rex("(swank:xrefs '(:calls :binds) \"drv-buf-fn\")", "CL-USER", "t"))
+				.containsExactly("(:return (:ok nil) id)");
+			// the inspector: a value's parts, each inspected in turn, and back
+			assertThat(client.rex("(swank:init-inspector \"(list 1 \\\"two\\\" 'three)\")", "CL-USER", "t").getLast())
+				.matches("\\(:return \\(:ok \\(:title \"#<CONS \\{[0-9A-F]+\\}>\" :id 0 :content \\(\\(\"A proper"
+						+ " list:\" \"\n\" \"0\" \": \" \\(:value \"1\" 1\\) \"\n\" \"1\" \": \" \\(:value \"\\\\\"two"
+						+ "\\\\\"\" 2\\) \"\n\" \"2\" \": \" \\(:value \"THREE\" 3\\) \"\n\"\\) 14 0 500\\)\\)\\) id\\)");
+			assertThat(client.rex("(swank:inspect-nth-part 1)", "CL-USER", "t").getLast())
+				.contains(":content ((\"Value: 1 = #x00000001 = #o1 = #b1 = 1.0e+0\" \"\n\"")
+				.contains("\"Integer-length\" \": \" (:value \"@1=1\" 2)");
+			assertThat(client.rex("(swank:inspector-pop)", "CL-USER", "t").getLast())
+				.contains(":id 4 :content ((\"A proper list:\" \"\n\" \"0\" \": \" (:value \"@1=1\" 5)");
+			assertThat(client.rex("(swank:inspector-range 0 2)", "CL-USER", "t"))
+				.containsExactly("(:return (:ok ((\"A proper list:\" \"\n\") 1002 0 2)) id)");
+			assertThat(client.rex("(swank:inspector-eval \"(length *)\")", "CL-USER", "t"))
+				.containsExactly("(:return (:ok \"3\") id)");
+			assertThat(client.rex("(swank:describe-inspectee)", "CL-USER", "t"))
+				.containsExactly("(:return (:ok \"(1 \\\"two\\\" THREE)\n  [list]\n\") id)");
+			// an action changes the value and shows its page again
+			client.rex("(swank:init-inspector \"(let ((h (make-hash-table))) (setf (gethash :a h) 1) h)\")", "CL-USER",
+					"t");
+			assertThat(client.rex("(swank:inspector-call-nth-action 1)", "CL-USER", "t").getLast())
+				.contains("(\"Count\" \": \" (:value \"0\" ")
+				.doesNotContain("[remove entry]");
+			assertThat(
+					client.rex("(swank:init-inspector \"(make-instance 'drv-point :x 1)\")", "CL-USER", "t").getLast())
+				.contains(
+						" \" Group slots by inheritance \" (:action \"[ ]\" 0) \"\n\" \" Sort slots alphabetically  \""
+								+ " (:action \"[X]\" 1) \"\n\" \"\n\" \"All Slots:\" \"\n\" (:action \"[ ]\" 2) \"  \" (:value"
+								+ " \"X\" 2) \"\" \" = \" (:value \"1\" 3) \"\n\" (:action \"[ ]\" 3) \"  \" (:value \"Y\" 4)"
+								+ " \"\" \" = \" (:value \"5\" 5) \"\n\" \"\n\" (:action \"[set value]\" 4) \"  \" (:action"
+								+ " \"[make unbound]\" 5) \"\n\") 33 0 500)");
+			assertThat(client.rex("(swank:init-inspector \"'drv-callee\")", "CL-USER", "t").getLast())
+				.contains("\"It is a function: \" (:value \"#<function DRV-CALLEE>\" 2) \" \" (:action \"[unbind]\" 0)"
+						+ " \"\n\" \"Function documentation\" \": \" \"Callee doc.\" \"\n\" \"It is \" \"internal\"");
+			// a class, a slot definition, a generic function and its method, a package
+			// and its symbols, a pathname: the fancy inspector's pages for them
+			assertThat(client.rex("(swank:init-inspector \"(find-class 'drv-point)\")", "CL-USER", "t").getLast())
+				.contains(":content ((\"Name: \" (:value \"DRV-POINT\" 1) \"\n\" \"Super classes: \" \"\n\""
+						+ " \"Direct Slots: \" (:value \"X\" 2) \", \" (:value \"Y\" 3) \"\n\" \"Effective Slots: \""
+						+ " (:value \"X\" 4) \", \" (:value \"Y\" 5) \"\n\" \"Sub classes: \" \"\n\" \"Precedence List: \""
+						+ " (:value \"DRV-POINT\" 6) \"\n\" \"It is used as a direct specializer in the following"
+						+ " methods:\" \"\n\" \"  \" (:value \"(DRV-GEN DRV-POINT)\" 7) \"\n\"")
+				.contains("\"Prototype: \" (:value \"#<DRV-POINT ");
+			assertThat(client.rex("(swank:inspect-nth-part 3)", "CL-USER", "t").getLast())
+				.contains(":content ((\"Name: \" (:value \"Y\" 1) \"\n\" \"Init args: \" (:value \"(:Y)\" 2) \"\n\""
+						+ " \"Init form: \" (:value \"5\" 3) \"\n\" \"Init function: \" (:value \"NIL\" 4) \"\n\""
+						+ " \"--------------------\"");
+			assertThat(client.rex("(swank:init-inspector \"#'drv-gen\")", "CL-USER", "t").getLast())
+				.matches("\\(:return \\(:ok \\(:title \"#<STANDARD-GENERIC-FUNCTION \\{[0-9A-F]+\\}>\" :id 0 :content"
+						+ " \\(\\(\"Name\" \": \" \\(:value \"DRV-GEN\" 1\\) \"\n\" \"Arguments\" \": \" \\(:value \"\\(O\\)\""
+						+ " 2\\) \"\n\" \"Method combination\" \": \" \\(:value \"STANDARD\" 3\\) \"\n\" \"Methods: \" \"\n\""
+						+ " \\(:value \"\\(DRV-POINT\\)\" 4\\) \" \" \\(:action \"\\[remove method\\]\" 0\\) \"\n\" \"\n\"\\)"
+						+ " 19 0 500\\)\\)\\) id\\)");
+			assertThat(client.rex("(swank:inspect-nth-part 4)", "CL-USER", "t").getLast())
+				.matches("\\(:return \\(:ok \\(:title \"#<STANDARD-METHOD \\{[0-9A-F]+\\}>\" :id 0 :content"
+						+ " \\(\\(\"Method defined on the generic function \" \\(:value \"DRV-GEN\" 1\\) \"\n\""
+						+ " \"Lambda List: \" \\(:value \"\\(O\\)\" 2\\) \"\n\" \"Specializers: \" \\(:value"
+						+ " \"\\(DRV-POINT\\)\" 3\\) \"\n\" \"Qualifiers: \" \\(:value \"NIL\" 4\\) \"\n\""
+						+ " \"Method function: \" \\(:value \"#<function %DRV-GEN--m0>\" 5\\) \"\n\"\\) 15 0 500\\)\\)\\) id\\)");
+			client.rex("(swank:inspector-pop)", "CL-USER", "t");
+			assertThat(client.rex("(swank:inspector-call-nth-action 1)", "CL-USER", "t"))
+				.containsExactly("(:return (:ok nil) id)");
+			// the method removed, the call enters the debugger
+			long removed = client.send("(swank-repl:listener-eval \"(drv-gen (make-instance 'drv-point))\n\")",
+					"CL-USER", ":repl-thread");
+			assertThat(client.upTo("debug-activate").getFirst()).startsWith("(:debug tid 1 (");
+			assertThat(client.sldb("(swank:throw-to-toplevel)", removed).getLast()).startsWith("(:return (:abort ");
+			// DRV-PKG's present symbols: HELLO, exported, and HI, which the REPL read
+			// there
+			assertThat(client.rex("(swank:init-inspector \"(find-package :drv-pkg)\")", "CL-USER", "t").getLast())
+				.contains(":content ((\"\" \"Name: \" (:value \"\\\"DRV-PKG\\\"\" 1) \"\n\" \"Nicknames: \" \"\n\""
+						+ " \"Use list: \" (:value \"COMMON-LISP\" 2) \"\n\" \"Used by list: \" \"\n\" (:value \"2 present"
+						+ " symbols.\" 3) \"\n\" (:value \"1 external symbol.\" 4) \"\n\" (:value \"1 internal"
+						+ " symbol.\" 5) \"\n\"");
+			assertThat(client.rex("(swank:inspect-nth-part 3)", "CL-USER", "t").getLast())
+				.contains(":content ((\"All present symbols of package \\\"DRV-PKG\\\"\" \"\n\" \"\n\" \"A symbol is"
+						+ " considered present in a package if it's\" \"\n\"")
+				.contains("\"  \" (:action \"[Group by classification]\" 0) \"\n\" \"\n\" \"\" \"Symbols:\" \"       \""
+						+ " \"Flags:\" \"\n\" \"-------------- ---------\" \"\n\" (:value \"HELLO          \" 1)"
+						+ " \"-f-------\" \"\n\" (:value \"HI             \" 2) \"---------\" \"\n\")");
+			assertThat(client.rex("(swank:inspector-call-nth-action 0)", "CL-USER", "t").getLast())
+				.contains("\"  \" (:action \"[Group by symbol]\" 1) \"\n\" \"\n\" \"FUNCTION\" \"\n\" \""
+						+ "-".repeat(64) + "\" \"\n\" (:value \"HELLO\" 4) \"\n\" \"\n\" \"MISC\" \"\n\" \""
+						+ "-".repeat(64) + "\" \"\n\" (:value \"HI\" 5) \"\n\" \"\n\")");
+			assertThat(client.rex("(swank:init-inspector \"#p\\\"/no/such/drv.lisp\\\"\")", "CL-USER", "t").getLast())
+				.contains(":content ((\"A pathname.\" \"\n\" \"Namestring\" \": \" (:value"
+						+ " \"\\\"/no/such/drv.lisp\\\"\" 1) \"\n\" \"Host\" \": \" (:value \"NIL\" 2) \"\n\" \"Device\""
+						+ " \": \" (:value \"NIL\" 3) \"\n\" \"Directory\" \": \" (:value \"(:ABSOLUTE \\\"no\\\""
+						+ " \\\"such\\\")\" 4) \"\n\" \"Name\" \": \" (:value \"\\\"drv\\\"\" 5) \"\n\" \"Type\" \": \""
+						+ " (:value \"\\\"lisp\\\"\" 6) \"\n\" \"Version\" \": \" (:value \"NIL\" 7) \"\n\") 30 0 500)");
+			assertThat(client.rex("(swank:quit-inspector)", "CL-USER", "t")).containsExactly("(:return (:ok nil) id)");
+			// macrostep: one step of a macro form, the macro forms it holds placed
+			assertThat(client.rex("(swank-macrostep:macro-form-p \"(drv-mac 1)\" nil nil)", "CL-USER", "t"))
+				.containsExactly("(:return (:ok (:ok :macro)) id)");
+			assertThat(client.rex("(swank-macrostep:macro-form-p \"(+ 1 2)\" nil nil)", "CL-USER", "t"))
+				.containsExactly("(:return (:ok (:ok nil)) id)");
+			assertThat(
+					client.rex("(swank-macrostep:macrostep-expand-1 \"(drv-mac (when x y))\" nil nil)", "CL-USER", "t"))
+				.containsExactly("(:return (:ok (:ok \"(LIST (WHEN X Y) *DRV-VAR*)\" ((\"WHEN\" :macro 6)))) id)");
+			assertThat(client.rex("(swank-macrostep:macrostep-expand-1 \"(+ 1 2)\" t nil)", "CL-USER", "t"))
+				.containsExactly("(:return (:ok (:error \"Not a macro or compiler-macro form\")) id)");
+			// completion, argument lists, descriptions, expansions
+			assertThat(client.rex("(swank:simple-completions \"mapc\" \"COMMON-LISP-USER\")", "CL-USER", "t"))
+				.containsExactly("(:return (:ok ((\"mapc\" \"-f-------\" \"CL:MAPC\") (\"mapcan\" \"-f-------\""
+						+ " \"CL:MAPCAN\") (\"mapcar\" \"-f-------\" \"CL:MAPCAR\") (\"mapcon\" \"-f-------\""
+						+ " \"CL:MAPCON\"))) id)");
+			assertThat(client.rex("(swank:simple-completions \"drv-pkg:he\" \"COMMON-LISP-USER\")", "CL-USER", "t"))
+				.containsExactly("(:return (:ok ((\"drv-pkg:hello\" \"-f-------\" \"DRV-PKG:HELLO\"))) id)");
+			assertThat(client.rex("(swank:completions \"m-v-b\" \"COMMON-LISP-USER\")", "CL-USER", "t"))
+				.containsExactly(
+						"(:return (:ok ((\"multiple-value-bind\" \"-f---m---\" \"CL:MULTIPLE-VALUE-BIND\"))) id)");
+			assertThat(client.rex(
+					"(swank:fuzzy-completions \"mvbind\" \"COMMON-LISP-USER\" :limit 5" + " :time-limit-in-msec 1500)",
+					"CL-USER", "t"))
+				.containsExactly("(:return (:ok (((\"multiple-value-bind\" \"-f---m---\" \"CL:MULTIPLE-VALUE-BIND\""
+						+ " ((0 \"m\") (9 \"v\") (15 \"bind\")))) nil)) id)");
+			assertThat(client.rex("(swank:autodoc '(\"mapcar\" \"\" swank::%cursor-marker%) :print-right-margin 80)",
+					"CL-USER", "t"))
+				.containsExactly("(:return (:ok (\"(mapcar ===> function <=== list &rest more-lists)\" t)) id)");
+			assertThat(client.rex("(swank:autodoc '(\"drv-add\" \"1\" swank::%cursor-marker%) :print-right-margin 80)",
+					"CL-USER", "t"))
+				.containsExactly("(:return (:ok (\"(drv-add ===> a <=== b)\" t)) id)");
+			assertThat(client.rex("(swank:operator-arglist \"mapcar\" \"COMMON-LISP-USER\")", "CL-USER", "t"))
+				.containsExactly("(:return (:ok \"(mapcar FUNCTION LIST &REST MORE-LISTS)\") id)");
+			assertThat(client.rex("(swank:describe-symbol \"drv-add\")", "CL-USER", "t")).containsExactly(
+					"(:return (:ok \"CL-USER::DRV-ADD\n  [symbol]\n\nDRV-ADD names a function:\n  Lambda-list: (A B)\n\") id)");
+			assertThat(client.rex("(swank:swank-macroexpand-1 \"(when a b)\")", "CL-USER", "t"))
+				.containsExactly("(:return (:ok \"(IF A B NIL)\") id)");
+			assertThat(client.rex("(swank:swank-macroexpand-all \"(when a (unless b c))\")", "CL-USER", "t"))
+				.containsExactly("(:return (:ok \"(IF A (IF B NIL C) NIL)\") id)");
+			// a function SWANK does not define here aborts
+			assertThat(client.rex("(swank:profile-report)", "CL-USER", "t")).containsExactly(
+					"(:return (:abort \"#<SIMPLE-ERROR \\\"The function SWANK:PROFILE-REPORT is undefined.\\\">\") id)");
+		}
+	}
+
+	/**
+	 * SLY 1.0.43 against Slynk and Lem 2.3.0 against micros, recorded the same way
+	 * (2026-10-30): one server answers both, each request in the dialect of its
+	 * function's package, SLY's REPL a channel with a thread of its own.
+	 */
+	@Test
+	void aSlyAndALemSessionAreAnsweredInTheirOwnDialects() throws Exception {
+		Path file = this.tempDir.resolve("drv-lem.lisp");
+		Files.writeString(file, "(defun drv-lem () 42)\n");
+		try (SwankServer server = start();
+				Client sly = new Client(server.port());
+				Client lem = new Client(server.port())) {
+			assertThat(sly.rex("(slynk:connection-info)", null, "t").getLast())
+				.contains(":modules (\"SLYNK/COMPLETION\")")
+				.contains(":version \"1.0.43\")) id)");
+			assertThat(sly.rex("(slynk:slynk-require '(\"slynk/mrepl\"))", null, "t"))
+				.containsExactly("(:return (:ok ((\"SLYNK/COMPLETION\" \"SLYNK/MREPL\") (\"slynk/mrepl\"))) id)");
+			List<String> created = sly.rex("(slynk-mrepl:create-mrepl 1)", null, "t");
+			assertThat(created).startsWith("(:channel-send 1 (:write-string \"; SLY 1.0.43 (#<MREPL mrepl-1-1>)\n\"))",
+					"(:channel-send 1 (:prompt \"CL-USER\" \"CL-USER\" 0 0))");
+			assertThat(created.getLast()).startsWith("(:return (:ok (1 ");
+			String thread = created.getLast().replaceAll("^\\(:return \\(:ok \\(1 (\\d+)\\)\\) id\\)$", "$1");
+			// the REPL answers on its channel: output, the values with their history
+			// entry
+			// and what reads back as each, then a prompt with the history's length
+			assertThat(sly.mrepl("(progn (format t \"hello~%\") (values 1 \"two\"))")).containsExactly(
+					"(:channel-send 1 (:write-string \"hello\n\"))",
+					"(:channel-send 1 (:write-values ((\"1 (1 bit, #x1, #o1, #b1)\" 0 \"1\") (\"\\\"two\\\"\" 0 nil))))",
+					"(:channel-send 1 (:prompt \"CL-USER\" \"CL-USER\" 0 1))");
+			sly.mrepl("(defpackage :drv-sly (:use :cl))");
+			assertThat(sly.mrepl("(in-package :drv-sly)")).containsExactly(
+					"(:channel-send 1 (:write-values ((\":DRV-SLY\" 2 \":drv-sly\"))))",
+					"(:channel-send 1 (:prompt \"DRV-SLY\" \"DRV-SLY\" 0 3))");
+			// a read asks the editor's REPL for its next input
+			sly.write("(:emacs-channel-send 1 (:process \"(list (read-line) 7)\"))");
+			assertThat(sly.until("(:channel-send 1 (:set-read-mode :read))")).hasSize(1);
+			assertThat(sly.mrepl("typed\n")).containsExactly("(:channel-send 1 (:set-read-mode :finished-reading))",
+					"(:channel-send 1 (:write-values ((\"(\\\"typed\\\" 7)\" 3 nil))))",
+					"(:channel-send 1 (:prompt \"DRV-SLY\" \"DRV-SLY\" 0 4))");
+			// an error opens the debugger on the REPL's thread, a prompt naming the level
+			// and the condition first; the REPL reads on inside it, and q aborts the
+			// input
+			sly.write("(:emacs-channel-send 1 (:process \"(error \\\"boom\\\")\"))");
+			assertThat(sly.upTo("debug-activate")).containsExactly(
+					"(:channel-send 1 (:prompt \"DRV-SLY\" \"DRV-SLY\" 1 4 \"#<SIMPLE-ERROR \\\"boom\\\">\"))",
+					"(:debug tid 1 (\"boom\" \"   [Condition of type SIMPLE-ERROR]\" nil)"
+							+ " ((\"RETRY\" \"Retry SLY mREPL evaluation request.\")"
+							+ " (\"*ABORT\" \"Return to SLY's top level.\") (\"ABORT\""
+							+ " \"abort thread (#<THREAD \\\"sly-channel-1-mrepl-remote-1\\\" RUNNING {tid}>)\"))"
+							+ " ((0 \"(EVAL (ERROR \\\"boom\\\"))\")"
+							+ " (1 \"(SLYNK-MREPL::MREPL-EVAL \\\"(error \\\\\\\"boom\\\\\\\")\\\")\")) nil)",
+					"(:debug-activate tid 1)");
+			assertThat(sly.mrepl("(+ 1 1)")).containsExactly(
+					"(:channel-send 1 (:write-values ((\"2 (2 bits, #x2, #o2, #b10)\" 4 \"2\"))))",
+					"(:channel-send 1 (:prompt \"DRV-SLY\" \"DRV-SLY\" 1 5))");
+			sly.send("(slynk:throw-to-toplevel)", null, thread);
+			assertThat(sly.until("(:channel-send 1 (:prompt")).containsExactly("(:return (:abort \"NIL\") id)",
+					"(:debug-return tid 1 nil)",
+					"(:channel-send 1 (:evaluation-aborted \"#<SIMPLE-ERROR \\\"boom\\\">\"))",
+					"(:channel-send 1 (:prompt \"DRV-SLY\" \"DRV-SLY\" 0 5))");
+			// a history entry inspected, and read back by #v
+			assertThat(sly
+				.rex("(slynk:eval-for-inspector nil nil 'slynk-mrepl:inspect-entry 1 4 0)", "common-lisp-user", thread)
+				.getFirst()).startsWith("(:return (:ok (:title \"#<INTEGER {")
+				.contains(" :id 0 :content ((\"Value: 2 = #x00000002 = #o2 = #b10 = 2.0e+0\" ");
+			assertThat(sly.mrepl("(list #v4:0 #v4)")).first()
+				.isEqualTo("(:channel-send 1 (:write-values ((\"(2 2)\" 5 nil))))");
+			// a worker's error: SLY's restarts, a: its top level
+			long car = sly.send("(slynk:interactive-eval \"(car 1)\")", null, "t");
+			assertThat(sly.upTo("debug-activate")).containsExactly(
+					"(:debug tid 1 (\"CAR: The value 1 is not of type LIST\" \"   [Condition of type TYPE-ERROR]\" nil)"
+							+ " ((\"RETRY\" \"Retry SLY interactive evaluation request.\")"
+							+ " (\"*ABORT\" \"Return to SLY's top level.\")"
+							+ " (\"ABORT\" \"abort thread (#<THREAD \\\"slynk-worker\\\" RUNNING {tid}>)\"))"
+							+ " ((0 \"(CAR 1)\") (1 \"(EVAL (CAR 1))\") (2 \"(SLYNK:INTERACTIVE-EVAL \\\"(car 1)\\\")\"))"
+							+ " (id))",
+					"(:debug-activate tid 1)");
+			// the level's condition in SLY's inspector
+			assertThat(sly.sldb("(slynk:eval-for-inspector nil nil 'slynk:inspect-current-condition)", "return")
+				.getFirst()).contains(" :content ((\"The object is a CONDITION of type TYPE-ERROR.\" ");
+			assertThat(sly.sldb("(slynk:sly-db-abort)", car)).containsExactly("(:return (:abort \"NIL\") id)",
+					"(:debug-return tid 1 nil)",
+					"(:return (:abort \"#<TYPE-ERROR \\\"CAR: The value 1 is not of type LIST\\\">\") id)");
+			// a package set on the REPL's thread, Slynk's own echo area and completions
+			assertThat(sly.rex("(slynk-mrepl:eval-for-mrepl 1 'slynk-mrepl:guess-and-set-package \"CL-USER\")", null,
+					thread))
+				.containsExactly("(:return (:ok ((\"CL-USER\" \"CL-USER\" 0 6) (t))) id)");
+			assertThat(sly.rex("(slynk:interactive-eval \"(+ 2 3)\")", null, "t"))
+				.containsExactly("(:return (:ok \"5 (3 bits, #x5, #o5, #b101)\") id)");
+			assertThat(sly.rex("(slynk:interactive-eval \"(values)\")", null, "t"))
+				.containsExactly("(:return (:ok \"; No value\") id)");
+			assertThat(sly.rex("(slynk-completion:simple-completions \"mapc\" \"COMMON-LISP-USER\")", null, "t"))
+				.containsExactly("(:return (:ok ((\"mapc\" \"mapcan\" \"mapcar\" \"mapcon\") \"mapc\")) id)");
+			assertThat(sly.rex("(slynk-completion:flex-completions \"mvbind\" \"COMMON-LISP-USER\")", null, "t"))
+				.containsExactly("(:return (:ok (((\"multiple-value-bind\" 0.009072388522326946"
+						+ " ((0 \"M\") (9 \"V\") (15 \"BIND\")) \"macro\")) nil)) id)");
+			// an interrupt names the REPL's thread: a level with no prompt, continued,
+			// then quit on no condition
+			sly.write("(:emacs-channel-send 1 (:process \"(loop)\"))");
+			Thread.sleep(200);
+			sly.write("(:emacs-interrupt " + thread + ")");
+			assertThat(sly.upTo("debug-activate").getFirst()).startsWith("(:debug tid 1 (\"Interrupt from client\" ")
+				.contains(" ((\"CONTINUE\" \"Continue from break.\") (\"RETRY\" ");
+			sly.send("(slynk:sly-db-continue)", null, thread);
+			assertThat(sly.upTo("debug-return")).containsExactly("(:return (:abort \"NIL\") id)",
+					"(:debug-return tid 1 nil)");
+			sly.write("(:emacs-interrupt " + thread + ")");
+			sly.upTo("debug-activate");
+			sly.send("(slynk:throw-to-toplevel)", null, thread);
+			assertThat(sly.until("(:channel-send 1 (:prompt")).containsExactly("(:return (:abort \"NIL\") id)",
+					"(:debug-return tid 1 nil)", "(:channel-send 1 (:evaluation-aborted \"T\"))",
+					"(:channel-send 1 (:prompt \"CL-USER\" \"CL-USER\" 0 6))");
+
+			assertThat(lem.rex("(micros:connection-info)", "COMMON-LISP-USER", "T").getLast())
+				.contains(":version \"0.0.0\")) id)");
+			assertThat(lem.rex("(micros/repl:create-repl nil :coding-system \"utf-8-unix\")", "CL-USER", "T"))
+				.containsExactly("(:return (:ok (\"CL-USER\" \"CL-USER\")) id)");
+			// each value a printed object, output asking for no :write-done
+			assertThat(
+					lem.rex("(micros/repl:listener-eval \"(progn (format t \\\"hello~%\\\") (values 1 \\\"two\\\"))\""
+							+ " :window-width 148)", "CL-USER", ":repl-thread"))
+				.containsExactly("(:write-string \"hello\n\")", "(:write-object \"1\" 1 :repl-result)",
+						"(:write-string \"\n\" :repl-result)", "(:write-object \"\\\"two\\\"\" 2 :repl-result)",
+						"(:write-string \"\n\" :repl-result)", "(:return (:ok nil) id)");
+			assertThat(lem.rex("(micros/pretty-eval:pretty-eval \"(* 6 7)\")", "CL-USER", "T"))
+				.containsExactly("(:return (:ok (:value \"=> 42 (6 bits, #x2A, #o52, #b101010)\" :id 1)) id)");
+			// Lem's inspector asks for an evaluated value and a printed object by id
+			assertThat(lem.rex("(micros/pretty-eval:inspect-evaluation-value 1)", "CL-USER", "T").getFirst())
+				.startsWith("(:return (:ok (:title \"#<INTEGER {")
+				.contains(" :id 0 :content ((\"Value: 42 = #x0000002A = #o52 = #b101010 = 4.2e+1\" ");
+			assertThat(lem.rex("(micros:inspect-printed-object 1)", "CL-USER", "T").getFirst())
+				.contains(" :id 0 :content ((\"Value: 1 = #x00000001 = #o1 = #b1 = 1.0e+0\" ");
+			// an error's level: SWANK's restarts and no :debug-activate
+			long boom = lem.send("(micros/repl:listener-eval \"(error \\\"boom\\\")\" :window-width 148)", "CL-USER",
+					":repl-thread");
+			assertThat(lem.upTo("debug"))
+				.containsExactly("(:debug tid 1 (\"boom\" \"   [Condition of type SIMPLE-ERROR]\""
+						+ " nil) ((\"RETRY\" \"Retry SLIME REPL evaluation request.\")"
+						+ " (\"*ABORT\" \"Return to SLIME's top level.\")"
+						+ " (\"ABORT\" \"abort thread (#<THREAD \\\"repl-thread\\\" RUNNING {tid}>)\"))"
+						+ " ((0 \"(EVAL (ERROR \\\"boom\\\"))\")"
+						+ " (1 \"(MICROS/REPL:LISTENER-EVAL \\\"(error \\\\\\\"boom\\\\\\\")\\\" :WINDOW-WIDTH 148)\")) (id))");
+			assertThat(lem.sldb("(micros:throw-to-toplevel)", boom)).containsExactly("(:return (:abort \"NIL\") id)",
+					"(:debug-return tid 1 nil)", "(:return (:abort \"#<SIMPLE-ERROR \\\"boom\\\">\") id)");
+			long looping = lem.send("(micros/repl:listener-eval \"(loop)\" :window-width 148)", "CL-USER",
+					":repl-thread");
+			Thread.sleep(200);
+			lem.write("(:emacs-interrupt :repl-thread)");
+			assertThat(lem.upTo("debug").getFirst()).startsWith("(:debug tid 1 (\"Interrupt from Editor\" ");
+			assertThat(lem.sldb("(micros:throw-to-toplevel)", looping)).containsExactly("(:return (:abort \"NIL\") id)",
+					"(:debug-return tid 1 nil)", "(:return (:abort \"NIL\") id)");
+			assertThat(lem.rex("(micros:interactive-eval \"(values)\")", "CL-USER", "T"))
+				.containsExactly("(:return (:ok \"; No value\") id)");
+			// C-c C-l calls micros:load-file in a form of Lem's own
+			assertThat(lem.rex(
+					"(micros:interactive-eval " + string("(MICROS:LOAD-FILE " + string(file.toString()) + ")") + ")",
+					"CL-USER", "T"))
+				.containsExactly("(:return (:ok \"=> \\\"T\\\"\") id)");
+			assertThat(lem.rex("(micros/lsp-api:completions \"drv-le\" \"CL-USER\")", "CL-USER", "T"))
+				.containsExactly("(:return (:ok ((\"drv-lem\" ((0 \"drv-le\")) \"function\" \"(drv-lem)\""
+						+ " \"## Function\n```lisp\n(drv-lem)\n```\" \"0000000000\"))) id)");
+			assertThat(lem.rex("(micros/lsp-api:hover-symbol \"mapcar\")", "CL-USER", "T")).containsExactly(
+					"(:return (:ok \"## Function\n```lisp\n(mapcar function list &rest more-lists)\n```\") id)");
+			assertThat(lem.rex("(micros/macrostep:macrostep-expand-1 \"(when a b)\" t '(\"\" \"(when a b)\"))",
+					"CL-USER", "T"))
+				.containsExactly("(:return (:ok (:ok \"(IF A B NIL)\" nil)) id)");
+		}
+	}
+
+	@Test
+	void anInterruptEntersTheDebuggerWhoseContinueGoesOnWhileAnotherRequestRunsInItsOwnPackage() throws Exception {
+		try (SwankServer server = start(); Client client = new Client(server.port())) {
+			client.repl("(defpackage :drv-loop (:use :cl))");
+			// the REPL thread loops in its own package...
+			long looping = client.send(
+					"(swank-repl:listener-eval \"(in-package :drv-loop)\n"
+							+ "(progn (princ (package-name *package*)) (finish-output) (loop))\n\")",
+					"CL-USER", ":repl-thread");
+			assertThat(client.output()).isEqualTo("DRV-LOOP");
+			// ...while a worker reads and runs in the package its request names
+			assertThat(client.rex("(swank:interactive-eval \"(package-name *package*)\" 6 80)", "CL-USER", "t"))
+				.containsExactly("(:return (:ok \"=> \\\"COMMON-LISP-USER\\\"\") id)");
+			// the interrupt stops the loop in SWANK's simple-break, whose continue goes
+			// on
+			String interrupted = "(:debug tid 1 (\"Interrupt from Emacs\" \"   [Condition of type SIMPLE-ERROR]\" nil)"
+					+ " ((\"CONTINUE\" \"Continue from break.\") (\"RETRY\" \"Retry SLIME REPL evaluation request.\")"
+					+ " (\"*ABORT\" \"Return to SLIME's top level.\")"
+					+ " (\"ABORT\" \"abort thread (#<THREAD \\\"repl-thread\\\" RUNNING {tid}>)\"))"
+					+ " ((0 \"(EVAL (PROGN (PRINC (PACKAGE-NAME *PACKAGE*)) (FINISH-OUTPUT) (LOOP)))\")"
+					+ " (1 \"(SWANK-REPL:LISTENER-EVAL \\\"(in-package :drv-loop) ..)\")) (id))";
+			client.write("(:emacs-interrupt t)");
+			assertThat(client.upTo("debug-activate")).containsExactly(interrupted, "(:debug-activate tid 1 nil)");
+			assertThat(client.sldb("(swank:sldb-continue)", "debug-return"))
+				.containsExactly("(:return (:abort \"NIL\") id)", "(:debug-return tid 1 nil)");
+			client.write("(:emacs-interrupt t)");
+			assertThat(client.upTo("debug-activate")).containsExactly(interrupted, "(:debug-activate tid 1 nil)");
+			// q leaves the loop for SWANK's top level: the request aborts on no condition
+			assertThat(client.sldb("(swank:throw-to-toplevel)", looping)).containsExactly(
+					"(:return (:abort \"NIL\") id)", "(:debug-return tid 1 nil)", "(:return (:abort \"NIL\") id)");
+			// the REPL thread goes on, its package switch never announced
+			assertThat(client.repl("(list (package-name *package*) (+ 40 2))")).first()
+				.isEqualTo("(:write-string \"(\\\"COMMON-LISP-USER\\\" 42)\n\" :repl-result)");
+			// a sleep the interrupt woke sleeps on after the continue
+			long sleeping = client.send(
+					"(swank-repl:listener-eval \"(progn (princ 'zz) (finish-output) (sleep 1) :slept)\n\")", "CL-USER",
+					":repl-thread");
+			assertThat(client.output()).isEqualTo("ZZ");
+			client.write("(:emacs-interrupt t)");
+			assertThat(client.upTo("debug-activate").getFirst()).contains(" (\"Interrupt from Emacs\" ")
+				.contains(" ((0 \"(EVAL (PROGN (PRINC 'ZZ) (FINISH-OUTPUT) (SLEEP 1) :SLEPT))\") (1 ");
+			assertThat(client.sldb("(swank:sldb-continue)", sleeping)).containsExactly("(:return (:abort \"NIL\") id)",
+					"(:debug-return tid 1 nil)", "(:write-string \"\n\" nil tid)",
+					"(:write-string \":SLEPT\n\" :repl-result)", "(:return (:ok nil) id)");
+		}
+	}
+
+	@Test
+	void anErrorEntersTheDebuggerWhoseRestartsFramesAndLevelsAnswerAsSwanksDo() throws Exception {
+		try (SwankServer server = start(); Client client = new Client(server.port())) {
+			// SLDB opens where the error is signalled, with SWANK's restarts and the
+			// frames
+			// down to the request; c with no continue restart answers nil, q leaves
+			long boom = client.send("(swank-repl:listener-eval \"(error \\\"boom ~a\\\" 1)\n\")", "CL-USER",
+					":repl-thread");
+			assertThat(client.upTo("debug-activate")).containsExactly(
+					"(:debug tid 1 (\"boom 1\" \"   [Condition of type SIMPLE-ERROR]\" nil) ((\"RETRY\""
+							+ " \"Retry SLIME REPL evaluation request.\") (\"*ABORT\" \"Return to SLIME's top level.\")"
+							+ " (\"ABORT\" \"abort thread (#<THREAD \\\"repl-thread\\\" RUNNING {tid}>)\"))"
+							+ " ((0 \"(EVAL (ERROR \\\"boom ~a\\\" 1))\")"
+							+ " (1 \"(SWANK-REPL:LISTENER-EVAL \\\"(error \\\\\\\"boom ~a\\\\\\\" 1) ..)\")) (id))",
+					"(:debug-activate tid 1 nil)");
+			assertThat(client.sldb("(swank:sldb-continue)", "return")).containsExactly("(:return (:ok nil) id)");
+			assertThat(client.sldb("(swank:throw-to-toplevel)", boom)).containsExactly("(:return (:abort \"NIL\") id)",
+					"(:debug-return tid 1 nil)", "(:return (:abort \"#<SIMPLE-ERROR \\\"boom 1\\\">\") id)");
+			// a numbered restart: the program's own, the request answering its value; a
+			// with-simple-restart report formats its arguments
+			long pick = client.send(
+					"(swank-repl:listener-eval \"(with-simple-restart (skip \\\"Skip ~a.\\\" 'it)"
+							+ " (restart-case (error \\\"pick ~a\\\" 2)"
+							+ " (use-five () :report \\\"Return five.\\\" 5) (use-ten () 10)))\n\")",
+					"CL-USER", ":repl-thread");
+			assertThat(client.upTo("debug-activate").getFirst()).contains(" (\"pick 2\" ")
+				.contains(" ((\"USE-FIVE\" \"Return five.\") (\"USE-TEN\" \"USE-TEN\") (\"SKIP\" \"Skip IT.\")"
+						+ " (\"RETRY\" ");
+			assertThat(client.sldb("(swank:invoke-nth-restart-for-emacs 1 0)", pick)).containsExactly(
+					"(:return (:abort \"NIL\") id)", "(:debug-return tid 1 nil)",
+					"(:write-string \"5\n\" :repl-result)", "(:return (:ok nil) id)");
+			// c: cerror's continue, its report formatted with the error's arguments
+			long cerror = client.send(
+					"(swank-repl:listener-eval"
+							+ " \"(progn (cerror \\\"Use ~a.\\\" \\\"Cerror ~a\\\" 3) :went-on)\n\")",
+					"CL-USER", ":repl-thread");
+			assertThat(client.upTo("debug-activate").getFirst()).contains(" (\"Cerror 3\" ")
+				.contains(" ((\"CONTINUE\" \"Use 3.\") (\"RETRY\" ");
+			assertThat(client.sldb("(swank:sldb-continue)", cerror)).containsExactly("(:return (:abort \"NIL\") id)",
+					"(:debug-return tid 1 nil)", "(:write-string \":WENT-ON\n\" :repl-result)",
+					"(:return (:ok nil) id)");
+			// a: a worker's first abort restart, SWANK's top level
+			long car = client.send("(swank:interactive-eval \"(car 1)\" 6 80)", "CL-USER", "t");
+			assertThat(client.upTo("debug-activate")).containsExactly(
+					"(:debug tid 1 (\"CAR: The value 1 is not of type LIST\" \"   [Condition of type TYPE-ERROR]\" nil)"
+							+ " ((\"RETRY\" \"Retry SLIME interactive evaluation request.\")"
+							+ " (\"*ABORT\" \"Return to SLIME's top level.\")"
+							+ " (\"ABORT\" \"abort thread (#<THREAD \\\"worker\\\" RUNNING {tid}>)\"))"
+							+ " ((0 \"(CAR 1)\") (1 \"(EVAL (CAR 1))\") (2 \"(SWANK:INTERACTIVE-EVAL \\\"(car 1)\\\" 6 80)\"))"
+							+ " (id))",
+					"(:debug-activate tid 1 nil)");
+			assertThat(client.sldb("(swank:sldb-abort)", car)).containsExactly("(:return (:abort \"NIL\") id)",
+					"(:debug-return tid 1 nil)",
+					"(:return (:abort \"#<TYPE-ERROR \\\"CAR: The value 1 is not of type LIST\\\">\") id)");
+			// the functions waiting are frames, restartable, each with its locals and
+			// catch tags and the source form it waits in (a C-c C-c'd function's in its
+			// buffer, a REPL one's printed and marked); an expression evaluates in a
+			// frame; i, C and a local's RET inspect what the level holds
+			client.repl("(defun drv-g (z) (list (error \"deep ~a\" z)))");
+			client.rex("(swank:compile-string-for-emacs"
+					+ " \"(defun drv-f (x) (let ((y (* x 2))) (catch 'drv-tag (list (drv-g y)))))\" \"drv.lisp\""
+					+ " '((:position 1) (:line 1 1)) \"/tmp/drv.lisp\" 'nil)", "CL-USER", "t");
+			long deep = client.send("(swank-repl:listener-eval \"(drv-f 21)\n\")", "CL-USER", ":repl-thread");
+			assertThat(client.upTo("debug-activate").getFirst())
+				.endsWith(" ((0 \"(DRV-G 42)\" (:restartable t)) (1 \"(DRV-F 21)\" (:restartable t))"
+						+ " (2 \"(EVAL (DRV-F 21))\") (3 \"(SWANK-REPL:LISTENER-EVAL \\\"(drv-f 21) ..)\")) (id))");
+			assertThat(client.sldb("(swank:frame-locals-and-catch-tags 0)", "return"))
+				.containsExactly("(:return (:ok (((:name \"Z\" :id 0 :value \"42\")) nil)) id)");
+			assertThat(client.sldb("(swank:frame-locals-and-catch-tags 1)", "return"))
+				.containsExactly("(:return (:ok (((:name \"X\" :id 0 :value \"21\") (:name \"Y\" :id 0 :value \"42\"))"
+						+ " (\"DRV-TAG\"))) id)");
+			assertThat(client.sldb("(swank:frame-source-location 0)", "return"))
+				.containsExactly("(:return (:ok (:location (:source-form \"(LAMBDA (Z) (BLOCK DRV-G"
+						+ " (LIST (#:***HERE*** (ERROR \\\"deep ~a\\\" Z)))))\") (:position 1) nil)) id)");
+			assertThat(client.sldb("(swank:frame-source-location 1)", "return")).containsExactly(
+					"(:return (:ok (:location (:buffer-and-file \"drv.lisp\" \"/tmp/drv.lisp\") (:offset 1 58)"
+							+ " (:snippet \"(drv-g y)\"))) id)");
+			assertThat(client.sldb("(swank:frame-source-location 2)", "return"))
+				.containsExactly("(:return (:ok (:error \"No source location\")) id)");
+			assertThat(client.sldb("(swank:inspect-in-frame \"(list x y)\" 1)", "return").getFirst())
+				.contains(" :content ((\"A proper list:\" \"\n\" \"0\" \": \" (:value \"21\" 1) \"\n\" \"1\" \": \""
+						+ " (:value \"42\" 2) ");
+			assertThat(client.sldb("(swank:inspect-frame-var 1 1)", "return").getFirst())
+				.contains(" :content ((\"Value: 42 = #x0000002A = #o52 = #b101010 = 4.2e+1\" ");
+			assertThat(client.sldb("(swank:inspect-current-condition)", "return").getFirst())
+				.contains(" :content ((\"The object is a CONDITION of type SIMPLE-ERROR.\" \"\n\" \"FORMAT-CONTROL\" ");
+			assertThat(client.sldb("(swank:frame-package-name 1)", "return"))
+				.containsExactly("(:return (:ok \"CL-USER\") id)");
+			assertThat(client.sldb("(swank:eval-string-in-frame \"(* x 2)\" 1 \"COMMON-LISP-USER\" 6 80)", "return"))
+				.containsExactly("(:return (:ok \"=> 42 (6 bits, #x2A, #o52, #b101010)\") id)");
+			assertThat(client.sldb("(swank:backtrace 1 3)", "return"))
+				.containsExactly("(:return (:ok ((1 \"(DRV-F 21)\" (:restartable t)) (2 \"(EVAL (DRV-F 21))\"))) id)");
+			// R: a frame returns what an expression evaluated in it answers; a marker
+			// cannot
+			assertThat(client.sldb("(swank:sldb-return-from-frame 2 \"1\")", "return"))
+				.containsExactly("(:return (:ok \"(\\\"Cannot return from frame: (EVAL (DRV-F 21))\\\")\") id)");
+			assertThat(client.sldb("(swank:sldb-return-from-frame 0 \"(+ 40 z)\")", deep)).containsExactly(
+					"(:return (:abort \"NIL\") id)", "(:debug-return tid 1 nil)",
+					"(:write-string \"(82)\n\" :repl-result)", "(:return (:ok nil) id)");
+			// r: a frame's function called again with its arguments
+			client.repl("(defvar *drv-n* 0)");
+			client.repl("(defun drv-h (a) (if (< (incf *drv-n*) 2) (error \"once\") (list :done a *drv-n*)))");
+			long once = client.send("(swank-repl:listener-eval \"(list (drv-h 7))\n\")", "CL-USER", ":repl-thread");
+			client.upTo("debug-activate");
+			assertThat(client.sldb("(swank:restart-frame 1)", "return"))
+				.containsExactly("(:return (:ok \"Cannot restart frame: (EVAL (LIST (DRV-H 7)))\") id)");
+			assertThat(client.sldb("(swank:restart-frame 0)", once)).containsExactly("(:return (:abort \"NIL\") id)",
+					"(:debug-return tid 1 nil)", "(:write-string \"((:DONE 7 2))\n\" :repl-result)",
+					"(:return (:ok nil) id)");
+			// an error in a level opens the next, whose restarts return to the one below:
+			// that level shows itself again, twice as SWANK does
+			long outer = client.send("(swank-repl:listener-eval \"(error \\\"outer\\\")\n\")", "CL-USER",
+					":repl-thread");
+			String level1 = client.upTo("debug-activate").getFirst();
+			long inner = client.send("(swank-repl:listener-eval \"(error \\\"inner\\\")\n\")", "CL-USER",
+					":repl-thread");
+			assertThat(client.upTo("debug-activate"))
+				.containsExactly("(:debug tid 2 (\"inner\" \"   [Condition of type SIMPLE-ERROR]\" nil) ((\"RETRY\""
+						+ " \"Retry SLIME REPL evaluation request.\") (\"ABORT\" \"Return to sldb level 1.\") (\"RETRY\""
+						+ " \"Retry SLIME REPL evaluation request.\") (\"*ABORT\" \"Return to SLIME's top level.\")"
+						+ " (\"ABORT\" \"abort thread (#<THREAD \\\"repl-thread\\\" RUNNING {tid}>)\"))"
+						+ " ((0 \"(EVAL (ERROR \\\"inner\\\"))\")"
+						+ " (1 \"(SWANK-REPL:LISTENER-EVAL \\\"(error \\\\\\\"inner\\\\\\\") ..)\")"
+						+ " (2 \"(SWANK::SLDB-LOOP 1)\") (3 \"(EVAL (ERROR \\\"outer\\\"))\")"
+						+ " (4 \"(SWANK-REPL:LISTENER-EVAL \\\"(error \\\\\\\"outer\\\\\\\") ..)\")) (id id))",
+						"(:debug-activate tid 2 nil)");
+			assertThat(client.sldb("(swank:invoke-nth-restart-for-emacs 2 1)", inner)).containsExactly(
+					"(:return (:abort \"NIL\") id)", "(:debug-return tid 2 nil)",
+					"(:return (:abort \"#<SIMPLE-ERROR \\\"inner\\\">\") id)");
+			assertThat(client.upTo("debug-activate")).containsExactly(level1, "(:debug-activate tid 1 nil)");
+			assertThat(client.upTo("debug-activate")).containsExactly(level1, "(:debug-activate tid 1 nil)");
+			// the request aborts on the last condition it entered a debugger for
+			assertThat(client.sldb("(swank:throw-to-toplevel)", outer)).containsExactly("(:return (:abort \"NIL\") id)",
+					"(:debug-return tid 1 nil)", "(:return (:abort \"#<SIMPLE-ERROR \\\"inner\\\">\") id)");
+			assertThat(client.repl("(+ 40 2)")).containsExactly("(:write-string \"42\n\" :repl-result)",
+					"(:return (:ok nil) id)");
+		}
+	}
+
+	@Test
+	void aProgramStartsTheServerOnItsOwnEvaluatorAndGoesOn() throws Exception {
+		int waiting;
+		try (ServerSocket probe = new ServerSocket(0, 50, InetAddress.getLoopbackAddress())) {
+			waiting = probe.getLocalPort();
+		}
+		BlockingQueue<String> lines = new LinkedBlockingQueue<>();
+		OutputStream sink = new OutputStream() {
+			private final ByteArrayOutputStream line = new ByteArrayOutputStream();
+
+			@Override
+			public synchronized void write(int b) {
+				if (b == '\n') {
+					lines.add(this.line.toString(StandardCharsets.UTF_8));
+					this.line.reset();
+				}
+				else {
+					this.line.write(b);
+				}
+			}
+		};
+		RontoLispCli cli = new RontoLispCli(InputStream.nullInputStream(), new PrintStream(sink, true));
+		// :dont-close t returns at once; SWANK's default waits for one connection, then
+		// closes the port
+		Thread program = Thread.ofPlatform().start(() -> cli.run(new String[] { "-e", """
+				(asdf:load-system "swank")
+				(defvar *state* 41)
+				(format t "port ~a~%%" (swank:create-server :port 0 :dont-close t))
+				(finish-output)
+				(swank:create-server :port %d)
+				(format t "went on~%%")
+				""".formatted(waiting) }));
+		String announced = Objects.requireNonNull(lines.poll(60, TimeUnit.SECONDS));
+		assertThat(announced).startsWith("port ");
+		int port = Integer.parseInt(announced.substring("port ".length()));
+		try (Client client = new Client(port); Client first = connect(waiting)) {
+			assertThat(lines.poll(60, TimeUnit.SECONDS)).isEqualTo("went on");
+			program.join();
+			// both serve the program's own evaluator
+			assertThat(client.repl("(1+ *state*)")).first().isEqualTo("(:write-string \"42\n\" :repl-result)");
+			assertThat(first.repl("*state*")).first().isEqualTo("(:write-string \"41\n\" :repl-result)");
+			assertThatThrownBy(() -> new Socket(InetAddress.getLoopbackAddress(), waiting).close())
+				.isInstanceOf(ConnectException.class);
+			// stop-server closes the port, the connection going on
+			client.repl("(swank:stop-server " + port + ")");
+			assertThatThrownBy(() -> new Socket(InetAddress.getLoopbackAddress(), port).close())
+				.isInstanceOf(ConnectException.class);
+			assertThat(client.repl("(+ 1 2)")).first().isEqualTo("(:write-string \"3\n\" :repl-result)");
+		}
+	}
+
+	/** Connects to a port a program is about to listen on. */
+	private static Client connect(int port) throws IOException, InterruptedException {
+		for (int attempt = 0;; attempt++) {
+			try {
+				return new Client(port);
+			}
+			catch (ConnectException ex) {
+				if (attempt == 600) {
+					throw ex;
+				}
+				Thread.sleep(100);
+			}
+		}
+	}
+
+	private static SwankServer start() throws IOException {
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(OutputStream.nullOutputStream()),
+				InputStream.nullInputStream());
+		SwankServer server = new SwankServer(new CommonLispSwank(evaluator), evaluator,
+				InetAddress.getLoopbackAddress(), 0, SizedThread.WORKER_STACK_BYTES);
+		Thread.ofVirtual().start(() -> {
+			try {
+				server.serve();
+			}
+			catch (IOException ex) {
+				// the test closed it
+			}
+		});
+		return server;
+	}
+
+	private static String string(String text) {
+		return SwankWire.print(text);
+	}
+
+	/** Each of a name's definitions as its label and its position, the file left out. */
+	private static List<String> definitions(Client client, String name) throws IOException {
+		return places(client.rex("(swank:find-definitions-for-emacs " + string(name) + ")", "CL-USER", "t"));
+	}
+
+	/** Each use an {@code xref} answers as its label and its position. */
+	private static List<String> xref(Client client, String type, String name) throws IOException {
+		return places(client.rex("(swank:xref " + type + " " + string(name) + ")", "CL-USER", "t"));
+	}
+
+	private static List<String> places(List<String> replies) throws IOException {
+		List<?> reply = (List<?>) SwankWire.parse(replies.getLast());
+		List<String> out = new ArrayList<>();
+		for (Object entry : (List<?>) Objects.requireNonNull(((List<?>) Objects.requireNonNull(reply.get(1))).get(1))) {
+			List<?> pair = (List<?>) Objects.requireNonNull(entry);
+			List<?> where = (List<?>) Objects.requireNonNull(pair.get(1));
+			// a place's position, or the error a definition with none answers
+			out.add(pair.getFirst() + " " + (where.size() > 2 ? SwankWire.print(where.get(2)) : where.get(1)));
+		}
+		return out;
+	}
+
+	/**
+	 * A client sending one request at a time, as SLIME does: it answers each output with
+	 * {@code :write-done} and each read with the next queued input line.
+	 */
+	private static final class Client implements AutoCloseable {
+
+		final Deque<String> input = new ArrayDeque<>();
+
+		private final Socket socket;
+
+		private final InputStream in;
+
+		private final OutputStream out;
+
+		private long ids;
+
+		/** The thread the last {@code :debug} named. */
+		private long debugged;
+
+		Client(int port) throws IOException {
+			this.socket = new Socket(InetAddress.getLoopbackAddress(), port);
+			// a server that answers nothing fails the test rather than hanging it
+			this.socket.setSoTimeout(120_000);
+			this.in = new BufferedInputStream(this.socket.getInputStream());
+			this.out = new BufferedOutputStream(this.socket.getOutputStream());
+		}
+
+		/** Reads up to the next output, answering it, and answers its text. */
+		String output() throws IOException {
+			while (true) {
+				List<?> message = (List<?>) Objects.requireNonNull(SwankWire.read(this.in));
+				if (((Keyword) message.getFirst()).name().equals("write-string") && message.size() > 3) {
+					write("(:write-done " + message.get(3) + ")");
+					return (String) message.get(1);
+				}
+			}
+		}
+
+		void write(String message) throws IOException {
+			byte[] payload = message.getBytes(StandardCharsets.UTF_8);
+			this.out.write(String.format("%06x", payload.length).getBytes(StandardCharsets.US_ASCII));
+			this.out.write(payload);
+			this.out.flush();
+		}
+
+		/** Sends an {@code :emacs-rex}, answering its id. */
+		long send(String form, @Nullable String pkg, String thread) throws IOException {
+			long id = ++this.ids;
+			write("(:emacs-rex " + form + " " + (pkg == null ? "nil" : string(pkg)) + " " + thread + " " + id + ")");
+			return id;
+		}
+
+		/** Sends a request and answers its messages up to its {@code :return}. */
+		List<String> rex(String form, @Nullable String pkg, String thread) throws IOException {
+			return replies(send(form, pkg, thread));
+		}
+
+		/**
+		 * An input to SLY's REPL on channel 1, and its messages up to the next prompt.
+		 */
+		List<String> mrepl(String input) throws IOException {
+			write("(:emacs-channel-send 1 (:process " + string(input) + "))");
+			return until("(:channel-send 1 (:prompt");
+		}
+
+		/** The messages up to the first that starts with a text, as {@link #replies}. */
+		List<String> until(String prefix) throws IOException {
+			return readUntil(message -> SwankWire.print(message).startsWith(prefix));
+		}
+
+		/** A REPL input, as {@code slime-repl-return} sends it. */
+		List<String> repl(String input) throws IOException {
+			return rex("(swank-repl:listener-eval " + string(input + "\n") + ")", "CL-USER", ":repl-thread");
+		}
+
+		/**
+		 * The messages up to the {@code :return} of a request, printed as {@link #show}
+		 * prints them. Output that arrived in several messages in a row is shown as one:
+		 * where a flush falls depends on time.
+		 */
+		List<String> replies(long id) throws IOException {
+			return readUntil(
+					message -> kind(message).equals("return") && ((Number) message.getLast()).longValue() == id);
+		}
+
+		/** The messages up to the first of a kind, as {@link #replies} reads them. */
+		List<String> upTo(String kind) throws IOException {
+			return readUntil(message -> kind(message).equals(kind));
+		}
+
+		/**
+		 * Sends a request to the thread the last {@code :debug} named, as SLDB does, and
+		 * answers the messages up to the first of a kind.
+		 */
+		List<String> sldb(String form, String kind) throws IOException {
+			send(form, "CL-USER", Long.toString(this.debugged));
+			return upTo(kind);
+		}
+
+		/**
+		 * Sends a request to the thread the last {@code :debug} named and answers the
+		 * messages up to the {@code :return} of another request.
+		 */
+		List<String> sldb(String form, long id) throws IOException {
+			send(form, "CL-USER", Long.toString(this.debugged));
+			return replies(id);
+		}
+
+		private List<String> readUntil(Predicate<List<?>> last) throws IOException {
+			List<String> messages = new ArrayList<>();
+			String output = null;
+			while (true) {
+				List<?> message = (List<?>) Objects.requireNonNull(SwankWire.read(this.in));
+				String kind = kind(message);
+				if (kind.equals("write-string") && message.size() > 3) {
+					write("(:write-done " + message.get(3) + ")");
+					output = (output == null ? "" : output) + message.get(1);
+					continue;
+				}
+				if (output != null) {
+					messages.add(SwankWire
+						.print(List.of(new Keyword("write-string"), output, List.of(), new Symbol("tid"))));
+					output = null;
+				}
+				if (kind.equals("read-string")) {
+					write("(:emacs-return-string " + message.get(1) + " " + message.get(2) + " "
+							+ string(this.input.removeFirst()) + ")");
+					continue;
+				}
+				if (kind.equals("debug")) {
+					this.debugged = ((Number) message.get(1)).longValue();
+				}
+				messages.add(show(message));
+				if (last.test(message)) {
+					return messages;
+				}
+			}
+		}
+
+		private static String kind(List<?> message) {
+			return ((Keyword) message.getFirst()).name();
+		}
+
+		/**
+		 * A message as the test reads it: a request's id printed {@code id}, a thread's
+		 * {@code tid}, in a reply and a debugger level's messages, and in the thread a
+		 * level's restarts print.
+		 */
+		private static String show(List<?> message) {
+			List<Object> shown = new ArrayList<>(message);
+			switch (kind(message)) {
+				case "return" -> shown.set(shown.size() - 1, new Symbol("id"));
+				case "debug" -> {
+					shown.set(1, new Symbol("tid"));
+					shown.set(shown.size() - 1,
+							((List<?>) message.getLast()).stream().map(each -> new Symbol("id")).toList());
+					return SwankWire.print(shown).replaceAll("\\{[0-9A-F]+}>\\)", "{tid}>)");
+				}
+				case "debug-activate", "debug-return" -> shown.set(1, new Symbol("tid"));
+				default -> {
+					// as it came
+				}
+			}
+			return SwankWire.print(shown);
+		}
+
+		@Override
+		public void close() throws IOException {
+			this.socket.close();
+		}
+
+	}
+
+}

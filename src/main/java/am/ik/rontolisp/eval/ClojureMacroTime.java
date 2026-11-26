@@ -1,0 +1,281 @@
+package am.ik.rontolisp.eval;
+
+import java.io.OutputStream;
+import java.io.PrintStream;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.function.BiFunction;
+
+import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispFunction;
+import am.ik.rontolisp.LispNil;
+import am.ik.rontolisp.LispSymbol;
+import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.clojure.ClojureLowering;
+import am.ik.rontolisp.clojure.ClojureMacroEvaluator;
+import am.ik.rontolisp.reader.LispReadException;
+import org.jspecify.annotations.Nullable;
+
+/**
+ * The Clojure front end's macro-time evaluator: what a {@code defmacro} body runs against
+ * when a call site expands at lower time. One evaluator per file or session, created
+ * lazily on the first expansion (a macro-free program never pays for it), holding the
+ * false value, the spliced {@code clojure.lisp} library and every per-program runtime
+ * beside the core builtins -- the same environment every backend's expansion agrees on,
+ * since expansion happens before the backends.
+ * <p>
+ * The program's top-level definitions join it as the lowering hands them over, like the
+ * oracle's form-by-form load: they queue, and run in order before the next evaluation, so
+ * a macro body calls a helper {@code defn} above it -- its own file's, a required
+ * namespace's, an earlier session buffer's. A {@code def}'s value form runs only when an
+ * expansion reads the var.
+ * <p>
+ * {@code eval} and {@code resolve} of a computed symbol, which the run-time library
+ * refuses, call back into the lowering here ({@link ClojureMacroEvaluator.Lowering}): the
+ * form lowers in the namespace of the expansion and evaluates in this environment, like
+ * the oracle's {@code eval} inside a macro body. Its {@code intern} tells the lowering of
+ * the var, which the program's names below may then resolve to.
+ */
+public final class ClojureMacroTime {
+
+	private ClojureMacroTime() {
+	}
+
+	/**
+	 * A macro evaluator over a fresh macro-time evaluator, built on first use, its Java
+	 * classes rontolisp's own.
+	 * @return the evaluator
+	 */
+	public static ClojureMacroEvaluator create() {
+		return new LazyEvaluator(SourceLoader.class.getClassLoader());
+	}
+
+	/**
+	 * A macro evaluator over a fresh macro-time evaluator, built on first use, whose
+	 * {@code java:} calls resolve through the program's Java class loader -- the one its
+	 * lowering asks, which the jars of its dependencies join -- so a helper a macro body
+	 * calls reaches the classes the program does.
+	 * @param javaClasses the program's Java class loader
+	 * @return the evaluator
+	 */
+	public static ClojureMacroEvaluator create(ClassLoader javaClasses) {
+		return new LazyEvaluator(javaClasses);
+	}
+
+	/** One handed-over definition waiting for the next evaluation. */
+	private sealed interface Pending {
+
+	}
+
+	private record Eager(LispVal form) implements Pending {
+	}
+
+	private record Lazy(LispSymbol var, LispVal value, boolean special, boolean once) implements Pending {
+	}
+
+	/** The run-time library's {@code eval}, refused there. */
+	private static final LispSymbol EVAL = new LispSymbol("RONTOLISP::%CLOJURE-EVAL");
+
+	/** The run-time library's {@code resolve} of a computed symbol, refused there. */
+	private static final LispSymbol RESOLVE = new LispSymbol("RONTOLISP::%CLOJURE-RESOLVE");
+
+	/**
+	 * The var a type body's group symbol names, which the type expanders read a
+	 * protocol's interface off: nil where the program runs, resolved like {@code resolve}
+	 * here.
+	 */
+	private static final LispSymbol TYPES_PROTOCOL_VAR = new LispSymbol("RONTOLISP::%CLOJURE-TYPES-PROTOCOL-VAR");
+
+	/**
+	 * The run-time library's {@code find-var} of a computed qualified symbol, refused
+	 * there; resolved like {@code resolve} here.
+	 */
+	private static final LispSymbol FIND_VAR_RESOLVE = new LispSymbol("RONTOLISP::%CLOJURE-FIND-VAR-RESOLVE");
+
+	/**
+	 * The run-time library's {@code ns-resolve} of a computed namespace or symbol,
+	 * refused there.
+	 */
+	private static final LispSymbol NS_RESOLVE_IN = new LispSymbol("RONTOLISP::%CLOJURE-NS-RESOLVE-IN");
+
+	/**
+	 * The macro runtime's scopes by namespace name, a constant in a program: here the
+	 * lowering's as they stand when a macro body expands.
+	 */
+	private static final LispSymbol MACRO_SCOPE = new LispSymbol(ClojureLowering.MACRO_SCOPE);
+
+	/**
+	 * The run-time library's {@code intern} of a bare name, answering the var: here it
+	 * tells the lowering too.
+	 */
+	private static final LispSymbol INTERN_BARE = new LispSymbol("RONTOLISP::%CLOJURE-INTERN-BARE");
+
+	/** The run-time library's value as a form, every lazy seq in it realized. */
+	private static final LispSymbol FORM_OF = new LispSymbol("RONTOLISP::%CLOJURE-FORM-OF");
+
+	/** The run-time library's {@code meta} of a value. */
+	private static final LispSymbol META = new LispSymbol("RONTOLISP::%CLOJURE-META");
+
+	/** The quote of a value. */
+	private static final LispSymbol QUOTE = new LispSymbol("QUOTE");
+
+	/** The list of values. */
+	private static final LispSymbol LIST = new LispSymbol("LIST");
+
+	private static final class LazyEvaluator implements ClojureMacroEvaluator {
+
+		private final ClassLoader javaClasses;
+
+		private @Nullable LispEvaluator evaluator;
+
+		private final List<Pending> pending = new ArrayList<>();
+
+		private ClojureMacroEvaluator.@Nullable Lowering lowering;
+
+		LazyEvaluator(ClassLoader javaClasses) {
+			this.javaClasses = javaClasses;
+		}
+
+		@Override
+		public synchronized LispVal evaluate(LispVal form) {
+			LispEvaluator macroEval = this.evaluator;
+			if (macroEval == null) {
+				macroEval = new LispEvaluator(new PrintStream(OutputStream.nullOutputStream()));
+				macroEval.setSourceLoader(SourceLoader.fileSystem(this.javaClasses));
+				for (LispVal library : ClojureLibrary.forms()) {
+					macroEval.eval(library);
+				}
+				macroEval.eval(ClojureLowering.falseBindingForm());
+				for (LispVal counter : ClojureLowering.coreSpecialForms()) {
+					macroEval.eval(counter);
+				}
+				for (LispVal runtime : ClojureLowering.macroTimeRuntimeForms()) {
+					macroEval.eval(runtime);
+				}
+				macroEval.eval(callingBack(EVAL, ClojureMacroEvaluator.Lowering::evalForm, true));
+				macroEval.eval(callingBack(RESOLVE, ClojureMacroEvaluator.Lowering::resolveForm, false));
+				macroEval.eval(callingBack(FIND_VAR_RESOLVE, ClojureMacroEvaluator.Lowering::resolveForm, false));
+				macroEval.eval(callingBack(TYPES_PROTOCOL_VAR, ClojureMacroEvaluator.Lowering::resolveForm, false));
+				macroEval.eval(callingBack(NS_RESOLVE_IN, ClojureMacroEvaluator.Lowering::nsResolveForm, false));
+				macroEval.eval(callingBack(MACRO_SCOPE, ClojureMacroEvaluator.Lowering::macroScopeForm, false));
+				macroEval.eval(tellingInterns(macroEval.eval(list(new LispSymbol("FUNCTION"), INTERN_BARE))));
+				this.evaluator = macroEval;
+			}
+			for (Pending definition : this.pending) {
+				switch (definition) {
+					case Eager eager -> {
+						try {
+							macroEval.eval(eager.form());
+						}
+						catch (RuntimeException ex) {
+							// only the run time can make it; an expansion reading it
+							// reports what it misses
+						}
+					}
+					case Lazy lazy ->
+						macroEval.defineLazyGlobal(lazy.var().name(), lazy.value(), lazy.special(), lazy.once());
+				}
+			}
+			this.pending.clear();
+			return macroEval.eval(form);
+		}
+
+		/**
+		 * The definition replacing a run-time library function that refuses at run time
+		 * by one evaluating the form the lowering answers for its argument -- realized as
+		 * a form first when {@code realized} ({@code eval}'s, whose lazy seqs no datum
+		 * spells). A lowering error becomes an ordinary error, so the macro body may
+		 * catch it.
+		 */
+		private LispVal callingBack(LispSymbol name, BiFunction<ClojureMacroEvaluator.Lowering, LispVal, LispVal> form,
+				boolean realized) {
+			LispFunction body = new LispFunction(name.name(), args -> {
+				ClojureMacroEvaluator.Lowering current = this.lowering;
+				if (current == null) {
+					throw new LispEvalException(name.name() + ": no lowering drives this macro-time evaluator");
+				}
+				LispVal lowered;
+				try {
+					lowered = form.apply(current, args.get(0));
+				}
+				catch (LispReadException ex) {
+					throw new LispEvalException(ex.getMessage() == null ? ex.toString() : ex.getMessage());
+				}
+				return evaluate(lowered);
+			});
+			LispSymbol arg = new LispSymbol("FORM");
+			LispVal passed = realized ? list(FORM_OF, arg) : arg;
+			return list(new LispSymbol("DEFUN"), name, list(arg),
+					list(new LispSymbol("FUNCALL"), list(new LispSymbol("QUOTE"), body), passed));
+		}
+
+		/**
+		 * The definition replacing the run-time library's {@code intern} of a bare name
+		 * by one handing the var it answers -- found or made, so a later pass hears of it
+		 * again -- to the lowering, after the library's own definition ran.
+		 */
+		private LispVal tellingInterns(LispVal original) {
+			LispFunction tell = new LispFunction(INTERN_BARE.name(), args -> {
+				ClojureMacroEvaluator.Lowering current = this.lowering;
+				if (current != null) {
+					current.interned(args.get(0));
+				}
+				return args.get(0);
+			});
+			LispSymbol[] params = { new LispSymbol("NS"), new LispSymbol("NAME"), new LispSymbol("VAL"),
+					new LispSymbol("VAL-P") };
+			return list(new LispSymbol("DEFUN"), INTERN_BARE, list(params),
+					list(new LispSymbol("FUNCALL"), list(QUOTE, tell), list(new LispSymbol("FUNCALL"),
+							list(QUOTE, original), params[0], params[1], params[2], params[3])));
+		}
+
+		private static LispVal list(LispVal... items) {
+			LispVal out = LispNil.INSTANCE;
+			for (int i = items.length - 1; i >= 0; i--) {
+				out = new LispCons(items[i], out);
+			}
+			return out;
+		}
+
+		@Override
+		public synchronized void lowerThrough(ClojureMacroEvaluator.Lowering lowering) {
+			this.lowering = lowering;
+		}
+
+		@Override
+		public synchronized void define(LispVal form) {
+			this.pending.add(new Eager(form));
+		}
+
+		@Override
+		public synchronized void defineLazy(LispSymbol var, LispVal value, boolean special, boolean once) {
+			this.pending.add(new Lazy(var, value, special, once));
+		}
+
+		@Override
+		public synchronized @Nullable List<LispVal> metasOf(List<LispVal> values) {
+			if (values.isEmpty()) {
+				return List.of();
+			}
+			// one evaluation for the whole expansion: the metadata of every
+			// quoted value in order (nil where it carries none)
+			LispVal reads = LispNil.INSTANCE;
+			for (int i = values.size() - 1; i >= 0; i--) {
+				reads = new LispCons(
+						new LispCons(META, new LispCons(
+								new LispCons(QUOTE, new LispCons(values.get(i), LispNil.INSTANCE)), LispNil.INSTANCE)),
+						reads);
+			}
+			LispVal answered = evaluate(new LispCons(LIST, reads));
+			List<LispVal> metas = new ArrayList<>();
+			LispVal run = answered;
+			while (run instanceof LispCons cell) {
+				metas.add(cell.car());
+				run = cell.cdr();
+			}
+			return run instanceof LispNil && metas.size() == values.size() ? List.copyOf(metas) : null;
+		}
+
+	}
+
+}

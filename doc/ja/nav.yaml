@@ -1,0 +1,375 @@
+title: rontolisp
+lang_name: 日本語
+sections:
+  - title: はじめに
+    pages:
+      - file: index.md
+        title: 概要
+      - file: getting-started/build.md
+        title: ビルドとインストール
+      - file: getting-started/repl.md
+        title: REPL
+      - file: getting-started/swank.md
+        title: SWANK (SLIME、SLY、Lem)
+      - file: getting-started/file-interpretation.md
+        title: ファイルのインタプリタ実行
+      - file: getting-started/command-line.md
+        title: コマンドラインオプション
+      - file: getting-started/format.md
+        title: ソースコードのフォーマット
+      - file: getting-started/agent-skill.md
+        title: エージェントスキル
+  - title: コンパイル
+    pages:
+      - file: compiling/jvm.md
+        title: JVMバイトコードへのコンパイル
+      - file: compiling/wasm.md
+        title: WASMへのコンパイル
+      - file: compiling/native.md
+        title: ネイティブ実行ファイルへのコンパイル
+      - file: compiling/asdf-programs.md
+        title: ASDF システムから実行ファイルをビルドする
+      - file: compiling/maven-plugin.md
+        title: Maven プラグイン
+      - file: compiling/licenses.md
+        title: コンパイルしたプログラムのライセンス
+      - file: compiling/dynamic.md
+        title: 動的（遅延束縛）
+      - file: compiling/warnings.md
+        title: コンパイル時の警告
+      - file: compiling/ir-dump.md
+        title: IR のダンプ（`--dump-ir`）
+      - file: compiling/self-hosted-repl.md
+        title: セルフホスティングREPL
+  - title: 言語リファレンス
+    pages:
+      - file: reference/data-types.md
+        title: データ型
+      - file: reference/special-forms.md
+        title: 特殊形式
+      - file: reference/macros.md
+        title: マクロ
+      - file: reference/functions.md
+        title: 関数
+        subpages:
+          - file: reference/functions/cl.md
+            title: cl パッケージの関数
+          - file: reference/functions/rontolisp.md
+            title: rontolisp パッケージの関数
+          - file: reference/functions/linalg.md
+            title: linalg パッケージの関数
+          - file: reference/functions/torch.md
+            title: torch パッケージの関数
+          - file: reference/functions/java.md
+            title: java パッケージの関数
+          - file: reference/functions/ffi.md
+            title: ffi パッケージの関数
+          - file: reference/functions/objc.md
+            title: objc パッケージの関数
+          - file: reference/functions/cocoa.md
+            title: cocoa パッケージの関数
+          - file: reference/functions/fli.md
+            title: fli パッケージの関数
+          - file: reference/functions/appkit.md
+            title: appkit パッケージの関数
+          - file: reference/functions/checkpoint.md
+            title: checkpoint パッケージの関数
+          - file: reference/functions/safetensors.md
+            title: safetensors パッケージの関数
+          - file: reference/functions/geom.md
+            title: geom パッケージの関数
+          - file: reference/functions/tokenizer.md
+            title: tokenizer パッケージの関数
+          - file: reference/functions/gguf.md
+            title: gguf パッケージの関数
+          - file: reference/functions/metal.md
+            title: metal パッケージの関数
+          - file: reference/functions/scene.md
+            title: scene パッケージの関数
+          - file: reference/functions/asdf.md
+            title: asdf パッケージの関数
+          - file: reference/uiop.md
+            title: uiop パッケージ
+            subpages:
+              - file: reference/uiop/utility.md
+                title: uiop/utility
+              - file: reference/uiop/os.md
+                title: uiop/os
+              - file: reference/uiop/pathname.md
+                title: uiop/pathname
+              - file: reference/uiop/filesystem.md
+                title: uiop/filesystem
+              - file: reference/uiop/image.md
+                title: uiop/image
+          - file: reference/functions/ql-and-ql-dist.md
+            title: ql / ql-dist パッケージの関数
+          - file: reference/functions/usocket.md
+            title: usocket パッケージの関数
+      - file: reference/packages.md
+        title: パッケージ
+      - file: reference/function-namespace.md
+        title: 関数名前空間
+  - title: ガイド
+    pages:
+      - file: guides/linear-algebra.md
+        title: ベクトルと行列（linalg）
+      - file: guides/simd-acceleration.md
+        title: ベクトルカーネルと SIMD（vec, linalg）
+      - file: guides/blas-acceleration.md
+        title: チューニング済み BLAS による高速化（--blas）
+      - file: guides/gpu-acceleration.md
+        title: GPU による高速化（--gpu）
+      - file: guides/neural-networks.md
+        title: ニューラルネットワーク（torch）
+      - file: guides/running-a-checkpoint.md
+        title: モデルチェックポイントを読む（gguf, safetensors）
+      - file: guides/solid-modeling.md
+        title: ソリッドモデリング（geom）
+      - file: guides/java-interop.md
+        title: Java 連携
+      - file: guides/objc-appkit.md
+        title: macOS GUI（objc / appkit）
+      - file: guides/cffi.md
+        title: Cライブラリ（cffi）
+      - file: guides/jvm-library.md
+        title: JVM ライブラリのエクスポート（jvm-export / --no-main）
+      - file: guides/async.md
+        title: 非同期プログラミング（async / await）
+      - file: guides/http-fetch.md
+        title: HTTPリクエスト（fetch）
+      - file: guides/http-handler.md
+        title: HTTPサーバ（http-handler）
+      - file: guides/tcp-sockets.md
+        title: TCPソケット
+      - file: guides/gray-streams.md
+        title: Gray ストリーム
+      - file: guides/asdf-systems.md
+        title: システム（asdf）
+      - file: guides/clack.md
+        title: Clack Web アプリケーション
+      - file: guides/mito.md
+        title: O/R マッピング（mito, sxql）
+      - file: guides/dexador.md
+        title: HTTPクライアント（dexador）
+      - file: guides/testing.md
+        title: テスト（rove）
+      - file: guides/reader-case.md
+        title: リーダーのケース（大文字化）
+      - file: guides/readtables.md
+        title: リードテーブル
+      - file: guides/math-backends.md
+        title: 数学関数のバックエンド
+      - file: guides/clock-and-random.md
+        title: 時計と乱数
+      - file: guides/wasm-host-boundary.md
+        title: WASM ホスト境界（wasm-export / wasm-import）
+      - file: guides/wit-contracts.md
+        title: WIT 契約（wit-export / wit-import）
+      - file: guides/wasm-gc-module.md
+        title: wasm-GC コアモジュール（デフォルト出力）
+      - file: guides/wasm-component.md
+        title: WASI 0.3 コンポーネント（--component）
+      - file: guides/wasm-nogc.md
+        title: WASM 非 GC 出力（--no-gc）
+      - file: guides/wasm-browser.md
+        title: ブラウザでの WASM 実行
+      - file: guides/missing-features.md
+        title: 未対応のCL機能
+      - file: guides/eval-limitations.md
+        title: コンパイル時evalの制限
+      - file: guides/read-load-limitations.md
+        title: コンパイル時read/loadの制限
+  - title: Scheme（実験的）
+    pages:
+      - file: scheme/index.md
+        title: 概要
+      - file: scheme/repl.md
+        title: REPL
+      - file: scheme/standards.md
+        title: 規格
+      - file: scheme/syntax.md
+        title: 構文
+      - file: scheme/libraries.md
+        title: ライブラリ
+      - file: scheme/sicp.md
+        title: SICP 互換
+      - file: scheme/eval.md
+        title: eval
+      - file: scheme/deviations.md
+        title: 仕様との差異
+      - file: scheme/common-lisp.md
+        title: Common Lisp との混在
+      - file: scheme/reference.md
+        title: リファレンス
+        subpages:
+          - file: scheme/reference/syntax.md
+            title: "構文"
+          - file: scheme/reference/library-base.md
+            title: "(scheme base)"
+          - file: scheme/reference/library-write.md
+            title: "(scheme write)"
+          - file: scheme/reference/library-read.md
+            title: "(scheme read)"
+          - file: scheme/reference/library-char.md
+            title: "(scheme char)"
+          - file: scheme/reference/library-inexact.md
+            title: "(scheme inexact)"
+          - file: scheme/reference/library-complex.md
+            title: "(scheme complex)"
+          - file: scheme/reference/library-cxr.md
+            title: "(scheme cxr)"
+          - file: scheme/reference/library-lazy.md
+            title: "(scheme lazy)"
+          - file: scheme/reference/library-case-lambda.md
+            title: "(scheme case-lambda)"
+          - file: scheme/reference/library-process-context.md
+            title: "(scheme process-context)"
+          - file: scheme/reference/library-eval.md
+            title: "(scheme eval)"
+          - file: scheme/reference/library-repl.md
+            title: "(scheme repl)"
+          - file: scheme/reference/library-load.md
+            title: "(scheme load)"
+          - file: scheme/reference/library-file.md
+            title: "(scheme file)"
+          - file: scheme/reference/library-r5rs.md
+            title: "(scheme r5rs)"
+          - file: scheme/reference/library-sicp.md
+            title: "SICP 互換の名前"
+  - title: Clojure（実験的）
+    pages:
+      - file: clojure/index.md
+        title: 概要
+      - file: clojure/repl.md
+        title: REPL
+      - file: clojure/nrepl.md
+        title: nREPL
+      - file: clojure/syntax.md
+        title: 構文
+      - file: clojure/semantics.md
+        title: セマンティクス
+      - file: clojure/deviations.md
+        title: 仕様との差異
+      - file: clojure/reference.md
+        title: リファレンス
+        subpages:
+          - file: clojure/reference/syntax.md
+            title: "構文と定義"
+          - file: clojure/reference/threading.md
+            title: "スレッディング"
+          - file: clojure/reference/seqs.md
+            title: "seq"
+          - file: clojure/reference/iteration.md
+            title: "反復"
+          - file: clojure/reference/collections.md
+            title: "マップ・セット・ベクター"
+          - file: clojure/reference/numbers.md
+            title: "数値と述語"
+          - file: clojure/reference/predicates.md
+            title: "型・コレクション述語"
+          - file: clojure/reference/instants.md
+            title: "インスタントと UUID"
+          - file: clojure/reference/state.md
+            title: "状態"
+          - file: clojure/reference/multimethods.md
+            title: "マルチメソッドと階層"
+          - file: clojure/reference/protocols.md
+            title: "プロトコル、レコード、型"
+          - file: clojure/reference/errors.md
+            title: "エラー"
+          - file: clojure/reference/namespaces.md
+            title: "名前空間"
+          - file: clojure/reference/names.md
+            title: "名前とキーワード"
+          - file: clojure/reference/string.md
+            title: "(clojure.string)"
+          - file: clojure/reference/clojure-set.md
+            title: "(clojure.set)"
+          - file: clojure/reference/clojure-walk.md
+            title: "(clojure.walk)"
+          - file: clojure/reference/clojure-zip.md
+            title: "(clojure.zip)"
+          - file: clojure/reference/clojure-data.md
+            title: "(clojure.data)"
+          - file: clojure/reference/clojure-datafy.md
+            title: "(clojure.datafy)"
+          - file: clojure/reference/clojure-core-reducers.md
+            title: "(clojure.core.reducers)"
+          - file: clojure/reference/clojure-edn.md
+            title: "(clojure.edn)"
+          - file: clojure/reference/clojure-instant.md
+            title: "(clojure.instant)"
+          - file: clojure/reference/clojure-java-io.md
+            title: "(clojure.java.io)"
+          - file: clojure/reference/clojure-java-shell.md
+            title: "(clojure.java.shell)"
+          - file: clojure/reference/clojure-main.md
+            title: "(clojure.main)"
+          - file: clojure/reference/clojure-math.md
+            title: "(clojure.math)"
+          - file: clojure/reference/clojure-pprint.md
+            title: "(clojure.pprint)"
+          - file: clojure/reference/clojure-reflect.md
+            title: "(clojure.reflect)"
+          - file: clojure/reference/clojure-repl.md
+            title: "(clojure.repl)"
+          - file: clojure/reference/clojure-stacktrace.md
+            title: "(clojure.stacktrace)"
+          - file: clojure/reference/clojure-template.md
+            title: "(clojure.template)"
+          - file: clojure/reference/clojure-xml.md
+            title: "(clojure.xml)"
+          - file: clojure/reference/regex.md
+            title: "正規表現"
+          - file: clojure/reference/higher-order.md
+            title: "高階関数"
+          - file: clojure/reference/transducers.md
+            title: "トランスデューサー"
+          - file: clojure/reference/io.md
+            title: "入出力"
+          - file: clojure/reference/ring.md
+            title: "Ring アダプター"
+          - file: clojure/reference/ring-util.md
+            title: "Ring ユーティリティ"
+          - file: clojure/reference/http-client.md
+            title: "HTTP クライアント (rontolisp.http-client)"
+          - file: clojure/reference/wasm.md
+            title: "WASM ホスト関数 (rontolisp.wasm)"
+          - file: clojure/reference/wit.md
+            title: "WIT 契約 (rontolisp.wit)"
+          - file: clojure/reference/interop.md
+            title: "Java interop"
+          - file: clojure/reference/test.md
+            title: "テスト (clojure.test)"
+          - file: clojure/reference/macros.md
+            title: "マクロ"
+          - file: clojure/reference/riddley.md
+            title: "コードの走査 (riddley)"
+  - title: Starlark（実験的）
+    pages:
+      - file: starlark/index.md
+        title: 概要
+      - file: starlark/common-lisp.md
+        title: Common Lisp との混在
+      - file: starlark/deviations.md
+        title: 仕様との差異
+  - title: Java 言語のサブセット（実験的）
+    pages:
+      - file: java/index.md
+        title: 概要
+      - file: java/classes.md
+        title: 使える JDK のクラス
+      - file: java/servlet.md
+        title: Servlet アプリケーション
+      - file: java/webmvc-fn.md
+        title: WebMvc.fn アプリケーション
+      - file: java/jdbc.md
+        title: PostgreSQL に JDBC でつなぐ
+      - file: java/wit.md
+        title: WIT のインタフェースと world
+      - file: java/logging.md
+        title: ログ
+      - file: java/testing.md
+        title: Java のプログラムをテストする
+      - file: java/deviations.md
+        title: 言語との差異

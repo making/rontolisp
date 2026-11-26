@@ -1,0 +1,1006 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>rontolisp playground</title>
+<style>
+	/* Match the "Marginalia" direction of the docs theme (doc/assets/docs.css):
+	   hairlines, one parchment identity accent on the (paren) mark, no rounded
+	   structural elements. Two secondary functional colors are kept for the
+	   two compile-target buttons (copper for JVM, signal blue for WASM), so
+	   the tool still communicates its dispatch. */
+	:root {
+		--paper:      #16181f;
+		--paper-2:    #12141c;
+		--paper-3:    #1c1f28;
+		--ink:        #dbdde5;
+		--ink-strong: #f0f2f8;
+		--muted:      #6a7085;
+		--muted-2:    #8c92a8;
+		--rule:       #24273a;
+		--rule-strong: #363b52;
+		--accent:     #d0b48e;
+		--copper:     #c78e5a;
+		--signal:     #7aa2f7;
+		--signal-ok:  #9ece6a;
+		--signal-err: #f7768e;
+		--serif: "Iowan Old Style", "Charter", "Palatino Linotype", "Palatino", "Georgia", serif;
+		--sans:  -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", "Segoe UI", sans-serif;
+		--mono:  "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+	}
+
+	* { box-sizing: border-box; }
+
+	body {
+		margin: 0;
+		background: var(--paper);
+		color: var(--ink);
+		font-family: var(--sans);
+		height: 100vh;
+		display: flex;
+		flex-direction: column;
+		-webkit-font-smoothing: antialiased;
+		-moz-osx-font-smoothing: grayscale;
+	}
+
+	header {
+		padding: 14px 24px;
+		border-bottom: 1px solid var(--rule);
+		display: flex;
+		align-items: baseline;
+		gap: 16px;
+		background: var(--paper);
+	}
+
+	/* The (rontolisp) title-imprint mark, same as the docs. */
+	header h1 {
+		font-family: var(--serif);
+		font-size: 19px;
+		margin: 0;
+		font-weight: 600;
+		letter-spacing: 0.01em;
+		color: var(--ink);
+	}
+	header h1 .paren {
+		color: var(--accent);
+		font-weight: 500;
+		font-style: italic;
+	}
+
+	header .sub {
+		color: var(--muted);
+		font-size: 12.5px;
+		font-family: var(--sans);
+	}
+	header .sub a {
+		color: var(--muted-2);
+		text-decoration: none;
+		transition: color 0.12s ease;
+	}
+	header .sub a:hover { color: var(--ink); text-decoration: underline; text-decoration-color: var(--accent); text-underline-offset: 3px; }
+
+	#status {
+		margin-left: auto;
+		font-size: 11.5px;
+		font-family: var(--mono);
+		letter-spacing: 0.03em;
+		padding: 4px 10px;
+		border: 1px solid var(--rule-strong);
+		border-radius: 3px;
+		color: var(--muted);
+		white-space: nowrap;
+		flex-shrink: 0;
+	}
+
+	#status.ready { color: var(--signal-ok); border-color: var(--signal-ok); }
+	#status.error { color: var(--signal-err); border-color: var(--signal-err); }
+
+	footer {
+		padding: 10px 24px;
+		border-top: 1px solid var(--rule);
+		color: var(--muted);
+		font-size: 11.5px;
+		font-family: var(--sans);
+		letter-spacing: 0.02em;
+		display: flex;
+		align-items: center;
+		gap: 10px;
+		flex-wrap: wrap;
+		background: var(--paper);
+	}
+
+	footer a { color: var(--muted-2); text-decoration: none; }
+	footer a:hover { color: var(--ink); text-decoration: underline; text-decoration-color: var(--accent); text-underline-offset: 3px; }
+
+	main {
+		flex: 1;
+		display: flex;
+		background: var(--rule);
+		min-height: 0;
+	}
+
+	.pane {
+		background: var(--paper);
+		display: flex;
+		flex-direction: column;
+		min-height: 0;
+		min-width: 0;
+	}
+
+	#pane-source {
+		width: 50%;
+		flex: none;
+		min-width: 220px;
+	}
+
+	#pane-repl {
+		flex: 1;
+		min-width: 220px;
+	}
+
+	#splitter {
+		flex: 0 0 1px;
+		cursor: col-resize;
+		background: var(--rule);
+		position: relative;
+		touch-action: none;
+	}
+	/* Widen the hit target without adding visual weight. */
+	#splitter::after {
+		content: "";
+		position: absolute;
+		top: 0;
+		bottom: 0;
+		left: -3px;
+		right: -3px;
+	}
+	#splitter:hover, #splitter.dragging { background: var(--accent); }
+
+	body.resizing { user-select: none; cursor: col-resize; }
+
+	.pane-head {
+		padding: 10px 16px;
+		font-size: 10.5px;
+		font-weight: 600;
+		text-transform: uppercase;
+		letter-spacing: 0.18em;
+		color: var(--muted);
+		border-bottom: 1px solid var(--rule);
+		display: flex;
+		align-items: center;
+		gap: 12px;
+		background: var(--paper);
+	}
+
+	.pane-head .spacer { flex: 1; }
+
+	textarea#source {
+		flex: 1;
+		border: none;
+		outline: none;
+		resize: none;
+		background: var(--paper);
+		color: var(--ink);
+		font-family: var(--mono);
+		font-size: 14px;
+		line-height: 1.6;
+		padding: 16px 18px;
+		tab-size: 2;
+	}
+
+	#repl-log {
+		flex: 1;
+		overflow-y: auto;
+		font-family: var(--mono);
+		font-size: 13px;
+		line-height: 1.6;
+		padding: 14px 18px;
+		white-space: pre-wrap;
+		word-break: break-word;
+	}
+
+	.entry { margin-bottom: 10px; }
+	.entry .in { color: var(--accent); }
+	.entry .in::before { content: "› "; color: var(--muted); }
+	.entry .out { color: var(--ink); }
+	.entry .out.err { color: var(--signal-err); }
+
+	.repl-input-row {
+		display: flex;
+		align-items: flex-start;
+		border-top: 1px solid var(--rule);
+		background: var(--paper-3);
+	}
+
+	.repl-input-row .prompt {
+		padding: 10px 8px 10px 16px;
+		color: var(--accent);
+		font-family: var(--mono);
+		font-size: 14px;
+	}
+
+	#repl-input {
+		flex: 1;
+		border: none;
+		outline: none;
+		resize: none;
+		background: transparent;
+		color: var(--ink);
+		font-family: var(--mono);
+		font-size: 14px;
+		line-height: 1.5;
+		padding: 10px 16px 10px 0;
+		height: 41px;
+	}
+
+	#repl-hsplitter {
+		flex: 0 0 1px;
+		cursor: row-resize;
+		background: var(--rule);
+		position: relative;
+		touch-action: none;
+	}
+	#repl-hsplitter::after {
+		content: "";
+		position: absolute;
+		left: 0;
+		right: 0;
+		top: -3px;
+		bottom: -3px;
+	}
+	#repl-hsplitter:hover, #repl-hsplitter.dragging { background: var(--accent); }
+
+	body.resizing-v { user-select: none; cursor: row-resize; }
+
+	.toolbar {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 8px;
+		align-items: center;
+		padding: 10px 16px;
+		border-top: 1px solid var(--rule);
+		background: var(--paper-3);
+		font-family: var(--sans);
+	}
+
+	button {
+		background: transparent;
+		color: var(--muted-2);
+		border: 1px solid var(--rule-strong);
+		border-radius: 3px;
+		padding: 5px 12px;
+		font-family: var(--sans);
+		font-size: 12px;
+		font-weight: 600;
+		letter-spacing: 0.04em;
+		cursor: pointer;
+		transition: border-color 0.12s ease, color 0.12s ease, background 0.12s ease;
+	}
+
+	button:hover:not(:disabled) { border-color: var(--accent); color: var(--ink); }
+	button:disabled { opacity: 0.4; cursor: not-allowed; }
+
+	/* Functional accents on the two compile targets so the dispatch is visible
+	   at a glance. Copper reads as JVM's warm/enterprise tone; signal blue as
+	   WASM's modern web/binary tone. Both are outline-only. */
+	button.jvm { border-color: var(--copper); color: var(--copper); }
+	button.jvm:hover:not(:disabled) { background: var(--copper); color: var(--paper); }
+	button.wasm { border-color: var(--signal); color: var(--signal); }
+	button.wasm:hover:not(:disabled) { background: var(--signal); color: var(--paper); }
+	button.primary { border-color: var(--accent); color: var(--accent); }
+	button.primary:hover:not(:disabled) { background: var(--accent); color: var(--paper); }
+
+	input[type="text"] {
+		background: var(--paper);
+		border: 1px solid var(--rule-strong);
+		border-radius: 3px;
+		color: var(--ink);
+		font-family: var(--mono);
+		font-size: 13px;
+		padding: 5px 10px;
+		width: 110px;
+		outline: none;
+		transition: border-color 0.12s ease;
+	}
+	input[type="text"]:focus { border-color: var(--accent); }
+
+	label {
+		font-size: 11px;
+		font-weight: 600;
+		letter-spacing: 0.1em;
+		text-transform: uppercase;
+		color: var(--muted);
+	}
+
+	select {
+		background: var(--paper);
+		border: 1px solid var(--rule-strong);
+		border-radius: 3px;
+		color: var(--ink);
+		font-family: var(--sans);
+		font-size: 12px;
+		padding: 4px 8px;
+		outline: none;
+	}
+	select:focus { border-color: var(--accent); }
+
+	#compile-status {
+		font-family: var(--mono);
+		font-size: 11.5px;
+		color: var(--muted);
+		padding: 6px 16px 12px;
+		background: var(--paper-3);
+		white-space: pre-wrap;
+		word-break: break-word;
+		border-top: 1px solid var(--rule);
+	}
+	#compile-status.ok { color: var(--signal-ok); }
+	#compile-status.err { color: var(--signal-err); }
+
+	.tabs { display: flex; gap: 6px; }
+	.tab {
+		padding: 4px 10px;
+		font-size: 10.5px;
+		font-weight: 600;
+		text-transform: uppercase;
+		letter-spacing: 0.14em;
+		border-radius: 0;
+		cursor: pointer;
+		color: var(--muted);
+		border-bottom: 2px solid transparent;
+	}
+	.tab.active {
+		color: var(--ink);
+		background: transparent;
+		border: none;
+		border-bottom: 2px solid var(--accent);
+	}
+	.tabview { display: none; flex: 1; flex-direction: column; min-height: 0; }
+	.tabview.active { display: flex; }
+
+	/* File input styling to match the outlined-button aesthetic. */
+	input[type="file"] {
+		font-family: var(--sans);
+		font-size: 12px;
+		color: var(--muted-2);
+	}
+	input[type="file"]::-webkit-file-upload-button {
+		background: transparent;
+		color: var(--muted-2);
+		border: 1px solid var(--rule-strong);
+		border-radius: 3px;
+		padding: 4px 10px;
+		font-family: var(--sans);
+		font-size: 11.5px;
+		font-weight: 600;
+		letter-spacing: 0.04em;
+		cursor: pointer;
+		transition: border-color 0.12s ease, color 0.12s ease;
+		margin-right: 8px;
+	}
+	input[type="file"]::-webkit-file-upload-button:hover { border-color: var(--accent); color: var(--ink); }
+</style>
+</head>
+<body>
+	<header>
+		<h1><span class="paren">(</span>rontolisp<span class="paren">)</span></h1>
+		<span class="sub">playground &mdash; interpret in WASM, compile to JVM / WASM
+			&middot; <a href="./docs/en/index.html">documentation &rarr;</a>
+			&middot; <a href="./compile-run.html">compile &amp; run WASM in the browser &rarr;</a>
+				&middot; <a href="./wasm-browser/">prebuilt WASM in plain HTML/JS &rarr;</a>
+				&middot; <a href="./hiragana/">handwritten hiragana recognition &rarr;</a>
+				&middot; <a href="./minesweeper/">minesweeper &rarr;</a></span>
+		<span id="status">loading runtime&hellip;</span>
+	</header>
+
+	<main id="main">
+		<section class="pane" id="pane-source">
+			<div class="pane-head">
+				<span>source</span>
+				<span class="spacer"></span>
+				<label for="language">language</label>
+				<select id="language" disabled>
+					<option value="lisp">Common Lisp</option>
+					<option value="scheme">Scheme (experimental)</option>
+					<option value="clojure">Clojure (experimental)</option>
+					<option value="starlark">Starlark (experimental)</option>
+					<option value="java">Java (an experimental subset)</option>
+				</select>
+				<label for="samples">sample</label>
+				<select id="samples">
+					<option value="">&mdash;</option>
+				</select>
+			</div>
+			<textarea id="source" spellcheck="false"></textarea>
+			<div class="toolbar">
+				<label for="classname">class</label>
+				<input type="text" id="classname" value="Main">
+				<button class="jvm" id="btn-jvm" disabled>Compile &rarr; .class</button>
+				<button class="wasm" id="btn-wasm" disabled>Compile &rarr; .wasm</button>
+			</div>
+			<div class="toolbar">
+				<label for="file-upload">load files</label>
+				<input type="file" id="file-upload" multiple accept=".lisp,.lsp,.txt,.scm,.clj,.star,.java,.wit" disabled>
+				<span id="file-list" style="opacity:.7;font-size:.85em">none uploaded &mdash; then use <code id="file-hint">(load "name.lisp")</code></span>
+			</div>
+			<div id="compile-status">Compile output appears here. The downloaded file runs on a real JVM / wasm runtime.</div>
+		</section>
+
+		<div id="splitter"></div>
+
+		<section class="pane" id="pane-repl">
+			<div class="pane-head">
+				<div class="tabs">
+					<div class="tab active" data-tab="repl">REPL</div>
+				</div>
+				<span class="spacer"></span>
+				<button id="btn-run-source" disabled>Run source &rarr; REPL</button>
+				<button id="btn-clear">Clear</button>
+			</div>
+			<div class="tabview active" data-view="repl">
+				<div id="repl-log"></div>
+				<div id="repl-hsplitter"></div>
+				<div class="repl-input-row">
+					<span class="prompt">&rsaquo;</span>
+					<textarea id="repl-input" rows="1" placeholder="(+ 1 2 3)" spellcheck="false" disabled></textarea>
+				</div>
+			</div>
+		</section>
+	</main>
+
+	<footer>
+		<span>rontolisp playground &mdash; runs entirely in your browser via WebAssembly</span>
+		<span>&middot;</span>
+		<a href="https://github.com/making/rontolisp" target="_blank" rel="noopener">github.com/making/rontolisp</a>
+	</footer>
+
+	<!-- GitHub Pages cannot send the COOP/COEP headers that SharedArrayBuffer (used for
+	     truly asynchronous rontolisp:fetch) requires; coi-serviceworker supplies them via
+	     a service worker, reloading the page once on first visit. Without cross-origin
+	     isolation everything still works -- fetch just falls back to synchronous
+	     requests. -->
+	<script src="coi-serviceworker.min.js"></script>
+	<script>
+		const LISP_SAMPLES = {
+			"hello": '(print "hello, rontolisp")',
+			"factorial": '(defun fact (n)\n  (if (= n 0) 1 (* n (fact (- n 1)))))\n(print (fact 10))',
+			"fibonacci": '(defun fib (n)\n  (if (< n 2) n (+ (fib (- n 1)) (fib (- n 2)))))\n(print (fib 20))',
+			"fizzbuzz": '(defun fizzbuzz (n)\n  (cond ((= (mod n 15) 0) "FizzBuzz")\n        ((= (mod n 3) 0) "Fizz")\n        ((= (mod n 5) 0) "Buzz")\n        (t n)))\n(dotimes (i 15)\n  (format t "~a~%" (fizzbuzz (1+ i))))',
+			"tarai": ';; Takeuchi function -- a classic benchmark\n(defun tarai (x y z)\n  (if (<= x y)\n      y\n      (tarai (tarai (- x 1) y z)\n             (tarai (- y 1) z x)\n             (tarai (- z 1) x y))))\n(print (tarai 10 5 0))',
+			"higher-order": '(print (mapcar #\'(lambda (x) (* x x)) (list 1 2 3 4 5)))\n(print (reduce #\'+ (list 1 2 3 4 5 6 7 8 9 10)))\n(print (mapcar #\'string-upcase (list "foo" "bar" "baz")))',
+			"closures": '(defun make-adder (n)\n  (lambda (x) (+ x n)))\n(setq add10 (make-adder 10))\n(print (funcall add10 5))\n(print (mapcar (make-adder 100) (list 1 2 3)))',
+			"string-ops": '(print (string-upcase "hello"))\n(print (string-capitalize "hello world"))\n(print (concatenate \'string "fee fi " "fo fum"))\n(print (subseq "hello, world" 7))\n(print (string-trim " " "  spaces  "))\n(print (string= "abc" "abc"))',
+			"format": '(format t "Hello ~a, you are ~d!~%" \'world 42)\n(format t "~s and ~a~%" "quoted" "plain")\n(format t "list=~a~%" (list 1 2 3))\n(print (format nil "~a + ~a = ~a" 1 2 (+ 1 2)))',
+			"list-ops": '(setq xs (list 1 2 3 4 5))\n(print (reverse xs))\n(print (append xs (list 6 7 8)))\n(print (length xs))\n(print (member 3 xs))\n(print (subseq xs 1 4))\n(print (nth 2 xs))',
+			"assoc-list": "(setq capitals (list (list 'japan 'tokyo)\n                     (list 'france 'paris)\n                     (list 'italy 'rome)))\n(print (second (assoc 'france capitals)))\n(dolist (entry capitals)\n  (format t \"~a: ~a~%\" (first entry) (second entry)))",
+			"setf-push-pop": '(setq xs (list 1 2 3))\n(setf (second xs) 99)\n(print xs)\n(push 0 xs)\n(print xs)\n(print (pop xs))\n(print xs)',
+			"math": '(print (expt 2 10))\n(print (sqrt 2))\n(print (gcd 12 18))\n(print (lcm 4 6))\n(print (max 1 5 3))\n(print (/ 1 3))\n(print (+ (/ 1 3) (/ 1 6)))',
+			"eval": "(print (eval (list '+ 10 20 30)))",
+			"loop": '(dotimes (i 5)\n  (print (* i i)))\n(dolist (x (list "a" "b" "c"))\n  (princ x))\n(terpri)\n(let ((n 1))\n  (while (< n 100)\n    (setq n (* n 2)))\n  (print n))',
+		};
+
+		// The experimental Scheme front end (R7RS-small subset): see the docs' Scheme section.
+		const SCHEME_SAMPLES = {
+			"hello": '(display "hello, rontolisp")\n(newline)',
+			"factorial": '(define (fact n)\n  (if (= n 0) 1 (* n (fact (- n 1)))))\n(display (fact 20))\n(newline)',
+			"fibonacci": '(define (fib n)\n  (if (< n 2) n (+ (fib (- n 1)) (fib (- n 2)))))\n(display (fib 20))\n(newline)',
+			"named-let": '(define (count-up n)\n  (let loop ((i 0) (acc \'()))\n    (if (= i n)\n        (reverse acc)\n        (loop (+ i 1) (cons (* i i) acc)))))\n(write (count-up 10))\n(newline)',
+			"higher-order": '(write (map (lambda (x) (* x x)) \'(1 2 3 4 5)))\n(newline)\n(write (apply + \'(1 2 3 4 5 6 7 8 9 10)))\n(newline)\n(for-each (lambda (s) (display (string-upcase s)) (newline)) \'("foo" "bar"))',
+			"closures": '(define (make-counter)\n  (let ((n 0))\n    (lambda () (set! n (+ n 1)) n)))\n(define c (make-counter))\n(c)\n(c)\n(display (c))\n(newline)',
+			"records": '(define-record-type point\n  (make-point x y)\n  point?\n  (x point-x)\n  (y point-y))\n(define p (make-point 3 4))\n(write (list (point? p) (point-x p) (point-y p)))\n(newline)',
+			"call/cc": '(define (find-first pred xs)\n  (call/cc\n    (lambda (return)\n      (for-each (lambda (x) (if (pred x) (return x))) xs)\n      #f)))\n(write (find-first even? \'(1 3 4 5 6)))\n(newline)',
+			"streams": '(define (integers-from n)\n  (cons-stream n (integers-from (+ n 1))))\n(define (take s k)\n  (if (= k 0) \'() (cons (stream-car s) (take (stream-cdr s) (- k 1)))))\n(write (take (integers-from 1) 10))\n(newline)',
+		};
+
+		// The experimental Clojure front end: see the docs' Clojure section.
+		const CLOJURE_SAMPLES = {
+			"hello": '(println "hello, rontolisp")',
+			"factorial": '(defn fact [n]\n  (if (= n 0) 1 (* n (fact (- n 1)))))\n(println (fact 20))',
+			"fibonacci": '(defn fib [n]\n  (if (< n 2) n (+ (fib (- n 1)) (fib (- n 2)))))\n(println (fib 20))',
+			"higher-order": '(println (map #(* % %) [1 2 3 4 5]))\n(println (reduce + [1 2 3 4 5 6 7 8 9 10]))\n(println (map clojure.string/upper-case ["foo" "bar"]))\n(ns foo (:require clojure.string))',
+			"threading": '(defn fizzbuzz [n]\n  (cond\n    (= (mod n 15) 0) "FizzBuzz"\n    (= (mod n 3) 0) "Fizz"\n    (= (mod n 5) 0) "Buzz"\n    :else n))\n(println (map fizzbuzz (range 1 16)))',
+			"destructuring": '(defn greet [{:keys [name]}]\n  (str "hello, " name))\n(println (greet {:name "rontolisp"}))\n(let [[a b :as all] [1 2 3 4 5]]\n  (println [a b all]))',
+			"maps": '(def capitals {"japan" "tokyo", "france" "paris"})\n(println (get capitals "france"))\n(println (:japan capitals))\n(println (count capitals))\n(println (keys capitals))\n(println (assoc capitals "italy" "rome"))',
+			"loop-recur": '(loop [i 5]\n  (when (pos? i)\n    (println i)\n    (recur (dec i))))',
+		};
+
+		// The experimental Starlark front end: see the docs' Starlark section. At the REPL a
+		// buffer is read whole, so a def and a call may share one.
+		const STARLARK_SAMPLES = {
+			"hello": 'print("hello, rontolisp")',
+			"factorial": 'def fact(n):\n    r = 1\n    for i in range(2, n + 1):\n        r *= i\n    return r\n\nprint(fact(20))',
+			"fibonacci": 'def fib(n):\n    a, b = 0, 1\n    for _ in range(n):\n        a, b = b, a + b\n    return a\n\nprint(fib(20))',
+			"comprehensions": 'squares = [x * x for x in range(1, 6)]\nprint(squares)\nprint({k: len(k) for k in ["foo", "quux"]})\nprint(sorted(["pear", "fig", "apple"], key = len))',
+			"strings": 'print("a,b,c".split(","))\nprint("-".join(["x", "y", "z"]))\nprint("{} + {} = {}".format(1, 2, 1 + 2))\nprint("%s is %d" % ("answer", 42))',
+			"kwargs": 'def describe(name, *args, sep = ", ", **kwargs):\n    parts = [str(a) for a in args] + ["%s=%r" % (k, v) for k, v in kwargs.items()]\n    return "{}({})".format(name, sep.join(parts))\n\nprint(describe("f", 1, 2, mode = "fast"))',
+		};
+
+		// An experimental subset of the Java language: see the docs' Java section. "Run
+		// source" runs a whole program; at the REPL a buffer is a statement, an expression
+		// or a declaration, and a statement needs no ";".
+		const JAVA_SAMPLES = {
+			"hello": 'void main() {\n    IO.println("hello, rontolisp");\n}',
+			"fibonacci": 'int fib(int n) {\n    return n < 2 ? n : fib(n - 1) + fib(n - 2);\n}\n\nvoid main() {\n    IO.println(fib(20));\n}',
+			"records": 'sealed interface Shape permits Circle, Rect { }\nrecord Circle(double r) implements Shape { }\nrecord Rect(double w, double h) implements Shape { }\n\ndouble area(Shape s) {\n    return switch (s) {\n        case Circle c -> 3.0 * c.r() * c.r();\n        case Rect(double w, double h) -> w * h;\n    };\n}\n\nvoid main() {\n    for (Shape s : new Shape[] { new Circle(1), new Rect(2, 3) }) {\n        IO.println(s + " " + area(s));\n    }\n}',
+			"collections": 'void main() {\n    Map<String, Integer> counts = new HashMap<>();\n    for (String w : "the cat and the hat".split(" ")) {\n        counts.merge(w, 1, Integer::sum);\n    }\n    IO.println(counts);\n    List<String> words = new ArrayList<>(counts.keySet());\n    words.sort(Comparator.comparing(String::length));\n    IO.println(words);\n}',
+		};
+
+		// Per language: the samples, the REPL placeholder and how an uploaded file is used.
+		const LANGUAGES = {
+			lisp: { samples: LISP_SAMPLES, first: "fibonacci", placeholder: "(+ 1 2 3)", fileHint: '(load "name.lisp")' },
+			scheme: { samples: SCHEME_SAMPLES, first: "fibonacci", placeholder: "(+ 1 2 3)", fileHint: '(include "name.scm")' },
+			clojure: { samples: CLOJURE_SAMPLES, first: "fibonacci", placeholder: "(+ 1 2 3)", fileHint: '(load "name.clj")' },
+			starlark: { samples: STARLARK_SAMPLES, first: "fibonacci", placeholder: "1 + 2 + 3", fileHint: 'load("name.star", "f")' },
+			java: { samples: JAVA_SAMPLES, first: "fibonacci", placeholder: "1 + 2 + 3", fileHint: 'new Place() of Place.java' },
+		};
+		const LANGUAGE_KEY = "rontolisp-language";
+
+		const $ = (id) => document.getElementById(id);
+		const statusEl = $("status");
+		const log = $("repl-log");
+
+		// --- language pick and sample dropdown ---
+		// The pick is the runtime's (rontoSetLanguage): the REPL, "Run source" and both
+		// compile buttons read the picked language. Switching keeps every definition.
+		const languageSel = $("language");
+		const samplesSel = $("samples");
+		let language = "lisp";
+		try { if (LANGUAGES[localStorage.getItem(LANGUAGE_KEY)]) language = localStorage.getItem(LANGUAGE_KEY); } catch (e) { /* ignore */ }
+		languageSel.value = language;
+
+		function showLanguage(lang) {
+			const spec = LANGUAGES[lang];
+			samplesSel.innerHTML = "";
+			const none = document.createElement("option");
+			none.value = ""; none.innerHTML = "&mdash;";
+			samplesSel.appendChild(none);
+			for (const name of Object.keys(spec.samples)) {
+				const opt = document.createElement("option");
+				opt.value = name; opt.textContent = name;
+				samplesSel.appendChild(opt);
+			}
+			$("source").value = spec.samples[spec.first];
+			$("repl-input").placeholder = spec.placeholder;
+			$("file-hint").textContent = spec.fileHint;
+		}
+		showLanguage(language);
+		samplesSel.addEventListener("change", () => {
+			if (samplesSel.value) $("source").value = LANGUAGES[language].samples[samplesSel.value];
+		});
+
+		// --- REPL log helpers ---
+		function appendEntry(input, output, isErr) {
+			const e = document.createElement("div");
+			e.className = "entry";
+			if (input != null) {
+				const i = document.createElement("div");
+				i.className = "in"; i.textContent = input;
+				e.appendChild(i);
+			}
+			if (output != null && output !== "") {
+				const o = document.createElement("div");
+				o.className = "out" + (isErr ? " err" : "");
+				o.textContent = output;
+				e.appendChild(o);
+			}
+			log.appendChild(e);
+			log.scrollTop = log.scrollHeight;
+		}
+
+		function refreshFileList(listStr) {
+			const names = (listStr || "").split("\n").filter(Boolean);
+			$("file-list").textContent = names.length ? ("loaded: " + names.join(", ")) : "none uploaded";
+		}
+
+		function uploadFiles(files) {
+			for (const file of files) {
+				const reader = new FileReader();
+				reader.onload = async () => {
+					const listStr = await vmCall("rontoPutFile", file.name, String(reader.result));
+					refreshFileList(listStr);
+					appendEntry(null, `uploaded ${file.name} (${file.size} bytes) \u2014 use (load "${file.name}")`, false);
+				};
+				reader.onerror = () => appendEntry(null, "ERROR reading " + file.name, true);
+				reader.readAsText(file);
+			}
+		}
+
+		// A buffer typed at the REPL joins the session. "Run source" does too, but for
+		// Java, where the source pane holds a whole program: a session would only
+		// declare its main, so the program runs as one, on a fresh interpreter.
+		let replBusy = false;
+		async function runRepl(src, program) {
+			if (replBusy) return;
+			replBusy = true;
+			$("repl-input").disabled = true;
+			try {
+				const res = program ? await vmCall("rontoRunProgram", src, "") : await vmCall("rontoEval", src);
+				const isErr = typeof res === "string" && res.startsWith("ERROR:");
+				appendEntry(src, isErr ? res.slice(6).trim() : res, isErr);
+			} finally {
+				replBusy = false;
+				$("repl-input").disabled = false;
+				$("repl-input").focus();
+			}
+		}
+
+		// --- REPL history (persisted to localStorage, navigated with Up/Down) ---
+		const HISTORY_KEY = "rontolisp-repl-history";
+		const HISTORY_MAX = 200;
+		let history = [];
+		try {
+			const saved = JSON.parse(localStorage.getItem(HISTORY_KEY));
+			if (Array.isArray(saved)) history = saved.filter((s) => typeof s === "string");
+		} catch (e) { /* corrupted or unavailable storage: start fresh */ }
+		let historyIdx = history.length;
+		let historyDraft = "";
+
+		function pushHistory(cmd) {
+			if (history[history.length - 1] !== cmd) {
+				history.push(cmd);
+				if (history.length > HISTORY_MAX) history = history.slice(-HISTORY_MAX);
+				try { localStorage.setItem(HISTORY_KEY, JSON.stringify(history)); } catch (e) { /* ignore */ }
+			}
+			historyIdx = history.length;
+			historyDraft = "";
+		}
+
+		function navigateHistory(input, dir) {
+			const next = historyIdx + dir;
+			if (next < 0 || next > history.length) return;
+			if (historyIdx === history.length) historyDraft = input.value;
+			historyIdx = next;
+			input.value = historyIdx === history.length ? historyDraft : history[historyIdx];
+			input.setSelectionRange(input.value.length, input.value.length);
+		}
+
+		// --- resizable split between source and REPL panes ---
+		const SPLIT_KEY = "rontolisp-split-pct";
+		const splitter = $("splitter");
+		const paneSource = $("pane-source");
+		{
+			const saved = parseFloat(localStorage.getItem(SPLIT_KEY));
+			if (saved >= 20 && saved <= 80) paneSource.style.width = saved + "%";
+		}
+		let splitDragging = false;
+		splitter.addEventListener("pointerdown", (e) => {
+			e.preventDefault();
+			splitDragging = true;
+			try { splitter.setPointerCapture(e.pointerId); } catch (err) { /* ignore */ }
+			splitter.classList.add("dragging");
+			document.body.classList.add("resizing");
+		});
+		splitter.addEventListener("pointermove", (e) => {
+			if (!splitDragging) return;
+			const rect = $("main").getBoundingClientRect();
+			const pct = Math.min(80, Math.max(20, ((e.clientX - rect.left) / rect.width) * 100));
+			paneSource.style.width = pct + "%";
+		});
+		const endSplitDrag = () => {
+			if (!splitDragging) return;
+			splitDragging = false;
+			splitter.classList.remove("dragging");
+			document.body.classList.remove("resizing");
+			try { localStorage.setItem(SPLIT_KEY, parseFloat(paneSource.style.width).toFixed(1)); } catch (err) { /* ignore */ }
+		};
+		splitter.addEventListener("pointerup", endSplitDrag);
+		splitter.addEventListener("pointercancel", endSplitDrag);
+
+		// --- resizable REPL input height (horizontal bar above the input row) ---
+		const INPUT_H_KEY = "rontolisp-repl-input-h";
+		const hsplitter = $("repl-hsplitter");
+		const replInput = $("repl-input");
+		{
+			const saved = parseFloat(localStorage.getItem(INPUT_H_KEY));
+			if (saved >= 41 && saved <= 600) replInput.style.height = saved + "px";
+		}
+		let inputDragging = false;
+		let inputDragStartY = 0;
+		let inputDragStartH = 0;
+		hsplitter.addEventListener("pointerdown", (e) => {
+			e.preventDefault();
+			inputDragging = true;
+			inputDragStartY = e.clientY;
+			inputDragStartH = replInput.getBoundingClientRect().height;
+			try { hsplitter.setPointerCapture(e.pointerId); } catch (err) { /* ignore */ }
+			hsplitter.classList.add("dragging");
+			document.body.classList.add("resizing-v");
+		});
+		hsplitter.addEventListener("pointermove", (e) => {
+			if (!inputDragging) return;
+			const paneH = $("pane-repl").getBoundingClientRect().height;
+			const maxH = Math.max(41, paneH - 160);
+			const h = Math.min(maxH, Math.max(41, inputDragStartH + (inputDragStartY - e.clientY)));
+			replInput.style.height = h + "px";
+		});
+		const endInputDrag = () => {
+			if (!inputDragging) return;
+			inputDragging = false;
+			hsplitter.classList.remove("dragging");
+			document.body.classList.remove("resizing-v");
+			try { localStorage.setItem(INPUT_H_KEY, String(Math.round(replInput.getBoundingClientRect().height))); } catch (err) { /* ignore */ }
+		};
+		hsplitter.addEventListener("pointerup", endInputDrag);
+		hsplitter.addEventListener("pointercancel", endInputDrag);
+
+		// --- download helpers ---
+		function decodeBase64(b64) {
+			const bin = atob(b64);
+			const bytes = new Uint8Array(bin.length);
+			for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+			return bytes;
+		}
+
+		function downloadBytes(bytes, filename, mime) {
+			const blob = new Blob([bytes], { type: mime });
+			const url = URL.createObjectURL(blob);
+			const a = document.createElement("a");
+			a.href = url; a.download = filename;
+			document.body.appendChild(a); a.click(); a.remove();
+			URL.revokeObjectURL(url);
+			return bytes.length;
+		}
+
+		function downloadBase64(b64, filename, mime) {
+			return downloadBytes(decodeBase64(b64), filename, mime);
+		}
+
+		// A jar of uncompressed (STORED) entries: a class that needs files beside it
+		// (a hash table's runtime, a shipped bridge) is handed over as one jar, with the
+		// manifest the CLI's -o prog.jar writes. Every entry is stamped 1980-01-01.
+		const CRC_TABLE = (() => {
+			const table = new Uint32Array(256);
+			for (let n = 0; n < 256; n++) {
+				let c = n;
+				for (let k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+				table[n] = c >>> 0;
+			}
+			return table;
+		})();
+
+		function crc32(bytes) {
+			let c = 0xFFFFFFFF;
+			for (let i = 0; i < bytes.length; i++) c = CRC_TABLE[(c ^ bytes[i]) & 0xFF] ^ (c >>> 8);
+			return (c ^ 0xFFFFFFFF) >>> 0;
+		}
+
+		// One manifest header, folded at the format's 72-byte line limit.
+		function manifestHeader(name, value) {
+			const text = name + ": " + value;
+			let out = text.slice(0, 72) + "\r\n";
+			for (let i = 72; i < text.length; i += 71) out += " " + text.slice(i, i + 71) + "\r\n";
+			return out;
+		}
+
+		function buildJar(files, mainClass) {
+			const utf8 = new TextEncoder();
+			const manifest = manifestHeader("Manifest-Version", "1.0") + manifestHeader("Created-By", "rontolisp playground")
+				+ manifestHeader("Enable-Native-Access", "ALL-UNNAMED") + manifestHeader("Main-Class", mainClass) + "\r\n";
+			const entries = [["META-INF/MANIFEST.MF", utf8.encode(manifest)], ...files];
+			const DOS_DATE = (1 << 5) | 1; // 1980-01-01; the DOS time is 0
+			const locals = [], centrals = [];
+			let offset = 0;
+			for (const [path, data] of entries) {
+				const name = utf8.encode(path);
+				const crc = crc32(data);
+				const local = new DataView(new ArrayBuffer(30));
+				local.setUint32(0, 0x04034b50, true);
+				local.setUint16(4, 10, true);
+				local.setUint16(6, 0x0800, true); // UTF-8 names
+				local.setUint16(12, DOS_DATE, true);
+				local.setUint32(14, crc, true);
+				local.setUint32(18, data.length, true);
+				local.setUint32(22, data.length, true);
+				local.setUint16(26, name.length, true);
+				locals.push(new Uint8Array(local.buffer), name, data);
+				const central = new DataView(new ArrayBuffer(46));
+				central.setUint32(0, 0x02014b50, true);
+				central.setUint16(4, 20, true);
+				central.setUint16(6, 10, true);
+				central.setUint16(8, 0x0800, true);
+				central.setUint16(14, DOS_DATE, true);
+				central.setUint32(16, crc, true);
+				central.setUint32(20, data.length, true);
+				central.setUint32(24, data.length, true);
+				central.setUint16(28, name.length, true);
+				central.setUint32(42, offset, true);
+				centrals.push(new Uint8Array(central.buffer), name);
+				offset += 30 + name.length + data.length;
+			}
+			const centralSize = centrals.reduce((n, part) => n + part.length, 0);
+			const end = new DataView(new ArrayBuffer(22));
+			end.setUint32(0, 0x06054b50, true);
+			end.setUint16(8, entries.length, true);
+			end.setUint16(10, entries.length, true);
+			end.setUint32(12, centralSize, true);
+			end.setUint32(16, offset, true);
+			const parts = [...locals, ...centrals, new Uint8Array(end.buffer)];
+			const jar = new Uint8Array(parts.reduce((n, part) => n + part.length, 0));
+			let at = 0;
+			for (const part of parts) { jar.set(part, at); at += part.length; }
+			return jar;
+		}
+
+		function setCompileStatus(msg, kind) {
+			const el = $("compile-status");
+			el.textContent = msg;
+			el.className = kind || "";
+		}
+
+		// --- the interpreter runs in a Web Worker (ronto-worker.js) so that long
+		// evaluations do not freeze the page and rontolisp:fetch can be truly
+		// asynchronous: the worker posts {type:"ronto-fetch"} messages here and blocks
+		// on Atomics.wait; this thread performs the real browser fetch()es concurrently
+		// (multiple requests overlap) and writes each response into the request's
+		// SharedArrayBuffer. SharedArrayBuffer requires cross-origin isolation (see the
+		// coi-serviceworker note above); without it the worker falls back to a
+		// synchronous XHR per request.
+		const worker = new Worker("ronto-worker.js?fetch=broker");
+		const pendingCalls = new Map();
+		let callSeq = 0;
+		function vmCall(fn, ...args) {
+			return new Promise((resolve) => {
+				const id = callSeq++;
+				pendingCalls.set(id, resolve);
+				worker.postMessage({ type: "call", id, fn, args });
+			});
+		}
+
+		// Fetch broker: run the real fetch() for a worker request and write the
+		// response into its SharedArrayBuffer as [i32 state, i32 length, utf8 bytes...]
+		// (payload at byte offset 8), then wake the worker.
+		async function brokerFetch(m) {
+			const i32 = new Int32Array(m.sab, 0, 2);
+			let payload;
+			try {
+				const headers = {};
+				const hs = (m.reqHeaders || "").split("\n");
+				for (let i = 0; i + 1 < hs.length; i += 2) {
+					if (hs[i].length > 0) headers[hs[i]] = hs[i + 1];
+				}
+				const resp = await fetch(m.url, { method: m.method, headers, body: m.body === null ? undefined : m.body });
+				const text = await resp.text();
+				// The browser decodes a content coding it knows, so the text is the decoded
+				// one: the head drops the field naming the coding, and the length with it.
+				const coding = resp.headers.get("content-encoding");
+				const decoded = coding !== null
+					&& coding.split(",").every((c) => /^\s*(x-gzip|gzip|deflate|br)\s*$/i.test(c));
+				let headerLines = "";
+				resp.headers.forEach((v, k) => {
+					if (!decoded || (k !== "content-encoding" && k !== "content-length")) headerLines += k + ": " + v + "\r\n";
+				});
+				payload = new TextEncoder().encode(resp.status + "\u0001" + headerLines + "\u0001" + text);
+			} catch (err) {
+				payload = new TextEncoder().encode("ERR\u0001" + (err && err.message ? err.message : "request failed"));
+			}
+			const needed = 8 + payload.length;
+			if (m.sab.byteLength < needed) m.sab.grow(needed);
+			new Uint8Array(m.sab).set(payload, 8);
+			i32[1] = payload.length;
+			Atomics.store(i32, 0, 1);
+			Atomics.notify(i32, 0);
+		}
+
+		worker.onmessage = (e) => {
+			const m = e.data;
+			if (m.type === "result") {
+				const resolve = pendingCalls.get(m.id);
+				pendingCalls.delete(m.id);
+				if (resolve) resolve(m.value);
+			}
+			else if (m.type === "ronto-fetch") {
+				brokerFetch(m);
+			}
+			else if (m.type === "ready") {
+				onRuntimeReady(m);
+			}
+			else if (m.type === "init-error") {
+				onRuntimeError(m.error);
+			}
+		};
+		worker.onerror = (e) => onRuntimeError(e.message || String(e));
+
+		function onRuntimeError(msg) {
+			statusEl.textContent = "runtime failed";
+			statusEl.className = "error";
+			appendEntry(null, "Failed to start the WebAssembly runtime. A recent browser with WebAssembly GC and exception handling is required.\n\n" + msg, true);
+		}
+
+		// --- wire up after the GraalVM runtime is ready ---
+		function onRuntimeReady(readyMsg) {
+			statusEl.textContent = "runtime ready";
+			statusEl.className = "ready";
+			$("repl-input").disabled = false;
+			$("btn-jvm").disabled = false;
+			$("btn-wasm").disabled = false;
+			$("btn-run-source").disabled = false;
+			$("file-upload").disabled = false;
+			languageSel.disabled = false;
+			vmCall("rontoSetLanguage", language);
+			appendEntry(null, "rontolisp interpreter running in WebAssembly. Type an expression below.", false);
+			if (!readyMsg.crossOriginIsolated) {
+				appendEntry(null, "note: cross-origin isolation is unavailable, so rontolisp:fetch falls back to synchronous requests (promises settle at fetch time; no overlap).", false);
+			}
+
+			$("file-upload").addEventListener("change", (ev) => { uploadFiles(ev.target.files); ev.target.value = ""; });
+			const dropTarget = $("source");
+			["dragover", "dragenter"].forEach((t) => dropTarget.addEventListener(t, (e) => {
+				if (e.dataTransfer && e.dataTransfer.types.includes("Files")) e.preventDefault();
+			}));
+			dropTarget.addEventListener("drop", (e) => {
+				if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length) {
+					e.preventDefault();
+					uploadFiles(e.dataTransfer.files);
+				}
+			});
+
+			$("repl-input").addEventListener("keydown", (ev) => {
+				const el = ev.target;
+				if (ev.key === "Enter" && !ev.shiftKey) {
+					ev.preventDefault();
+					const v = el.value.trim();
+					if (v) { pushHistory(v); runRepl(v); el.value = ""; }
+				}
+				else if (ev.key === "ArrowUp") {
+					// navigate history only when the caret is on the first line
+					if (!el.value.slice(0, el.selectionStart).includes("\n")) {
+						ev.preventDefault();
+						navigateHistory(el, -1);
+					}
+				}
+				else if (ev.key === "ArrowDown") {
+					// navigate history only when the caret is on the last line
+					if (!el.value.slice(el.selectionEnd).includes("\n")) {
+						ev.preventDefault();
+						navigateHistory(el, 1);
+					}
+				}
+			});
+
+			languageSel.addEventListener("change", async () => {
+				const picked = languageSel.value;
+				const res = await vmCall("rontoSetLanguage", picked);
+				if (res.startsWith("ERROR:")) { appendEntry(null, res.slice(6).trim(), true); languageSel.value = language; return; }
+				language = picked;
+				try { localStorage.setItem(LANGUAGE_KEY, picked); } catch (e) { /* ignore */ }
+				showLanguage(picked);
+				appendEntry(null, "language: " + languageSel.options[languageSel.selectedIndex].textContent + " (definitions so far are kept)", false);
+			});
+
+			$("btn-run-source").addEventListener("click", () => {
+				const src = $("source").value.trim();
+				if (src) runRepl(src, language === "java");
+			});
+
+			$("btn-jvm").addEventListener("click", async () => {
+				const src = $("source").value;
+				const name = $("classname").value.trim() || "Main";
+				const res = await vmCall("rontoCompileJvm", src, name);
+				if (res.startsWith("ERROR:")) { setCompileStatus(res.slice(6).trim(), "err"); return; }
+				if (res.startsWith("FILES:")) {
+					// The class needs files beside it: path / Base64 line pairs, class first.
+					const lines = res.slice(6).trim().split("\n");
+					const files = [];
+					for (let i = 0; i + 1 < lines.length; i += 2) files.push([lines[i], decodeBase64(lines[i + 1])]);
+					const n = downloadBytes(buildJar(files, name.replaceAll("/", ".")), name + ".jar", "application/java-archive");
+					setCompileStatus(`Compiled ${name}.jar (${n} bytes, ${files.length} classes). Run: java -jar ${name}.jar`, "ok");
+					return;
+				}
+				const n = downloadBase64(res, name + ".class", "application/java-vm");
+				setCompileStatus(`Compiled ${name}.class (${n} bytes). Run: java ${name}`, "ok");
+			});
+
+			$("btn-wasm").addEventListener("click", async () => {
+				const src = $("source").value;
+				const res = await vmCall("rontoCompileWasm", src);
+				if (res.startsWith("ERROR:")) { setCompileStatus(res.slice(6).trim(), "err"); return; }
+				const n = downloadBase64(res, "output.wasm", "application/wasm");
+				setCompileStatus(`Compiled output.wasm (${n} bytes). Run: wasmtime output.wasm`, "ok");
+			});
+		}
+
+		$("btn-clear").addEventListener("click", () => { log.innerHTML = ""; });
+	</script>
+</body>
+</html>

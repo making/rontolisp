@@ -1,0 +1,25 @@
+// Written for rontolisp's experimental Java subset from the API specification's names
+// and behaviour; nothing here is copied or translated from a JDK
+// (.kb/java-frontend-provenance.md). Lowered with every program that names it.
+package java.util;
+
+public interface Enumeration<E> {
+
+    boolean hasMoreElements();
+
+    E nextElement();
+
+    // an iterator over what is left of this enumeration, which removes nothing
+    default Iterator<E> asIterator() {
+        Enumeration<E> self = this;
+        return new Iterator<E>() {
+            public boolean hasNext() {
+                return self.hasMoreElements();
+            }
+
+            public E next() {
+                return self.nextElement();
+            }
+        };
+    }
+}

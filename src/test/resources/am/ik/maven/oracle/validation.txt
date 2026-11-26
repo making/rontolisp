@@ -1,0 +1,24 @@
+# descriptor test.desc:system-relative:1 test.desc:system-missing-path:1 test.desc:system-path-not-system:1 test.desc:system-basedir:1 test.desc:system-java-home:1 test.desc:no-model-version:1 test.desc:no-group:1 test.desc:bad-dep-id:1 test.desc:expr-dep-id:1 test.desc:modules-jar:1 test.desc:self-parent:1
+artifact test.desc:system-relative:jar:1
+warning invalid test.desc:system-relative:jar:1: 1 problem was encountered while building the effective model for test.desc:system-relative:1 [ERROR] 'dependencies.dependency.systemPath' for test.lib:s:jar must specify an absolute path but is lib/s.jar @
+artifact test.desc:system-missing-path:jar:1
+warning invalid test.desc:system-missing-path:jar:1: 1 problem was encountered while building the effective model for test.desc:system-missing-path:1 [ERROR] 'dependencies.dependency.systemPath' for test.lib:s:jar is missing. @
+artifact test.desc:system-path-not-system:jar:1
+warning invalid test.desc:system-path-not-system:jar:1: 1 problem was encountered while building the effective model for test.desc:system-path-not-system:1 [ERROR] 'dependencies.dependency.systemPath' for test.lib:s:jar must be omitted. This field may only be specified for a dependency with system scope. @
+artifact test.desc:system-basedir:jar:1
+warning invalid test.desc:system-basedir:jar:1: 1 problem was encountered while building the effective model for test.desc:system-basedir:1 [ERROR] 'dependencies.dependency.systemPath' for test.lib:s:jar must specify an absolute path but is ${basedir}/lib/s.jar @
+artifact test.desc:system-java-home:jar:1
+dep test.lib:a:jar::1 scope=compile optional=null
+dep test.lib:s:jar::1 scope=system optional=null
+artifact test.desc:no-model-version:jar:1
+warning invalid test.desc:no-model-version:jar:1: 1 problem was encountered while building the effective model for test.desc:no-model-version:1 [ERROR] 'modelVersion' is missing. @
+artifact test.desc:no-group:jar:1
+warning invalid test.desc:no-group:jar:1: 1 problem was encountered while building the effective model for :no-group:1 [ERROR] 'groupId' is missing. @ [unknown-group-id]:no-group:1
+artifact test.desc:bad-dep-id:jar:1
+warning invalid test.desc:bad-dep-id:jar:1: 1 problem was encountered while building the effective model for test.desc:bad-dep-id:1 [ERROR] 'dependencies.dependency.artifactId' for test.lib:has space:jar with value 'has space' does not match a valid id pattern. @
+artifact test.desc:expr-dep-id:jar:1
+warning invalid test.desc:expr-dep-id:jar:1: 1 problem was encountered while building the effective model for test.desc:expr-dep-id:1 [ERROR] 'dependencies.dependency.artifactId' for test.lib:${undefined.id}:jar with value '${undefined.id}' does not match a valid id pattern. @
+artifact test.desc:modules-jar:jar:1
+warning invalid test.desc:modules-jar:jar:1: 1 problem was encountered while building the effective model for test.desc:modules-jar:1 [ERROR] 'packaging' with value 'jar' is invalid. Aggregator projects require 'pom' as packaging. @
+artifact test.desc:self-parent:jar:1
+warning invalid test.desc:self-parent:jar:1: 1 problem was encountered while building the effective model for test.desc:self-parent:1 [FATAL] 'parent.artifactId' must be changed, the parent element cannot have the same groupId:artifactId as the project. @

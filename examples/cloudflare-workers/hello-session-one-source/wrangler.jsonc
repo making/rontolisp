@@ -1,0 +1,20 @@
+{
+  // https://developers.cloudflare.com/workers/wrangler/configuration/
+  "name": "rontolisp-hello-session-one-source",
+  "main": "src/index.js",
+  "compatibility_date": "2026-01-01",
+
+  // The store of wasi:keyvalue the sessions are kept in: the default store ("")
+  // is the binding KEYVALUE. `wrangler dev` keeps it in .wrangler/; a deploy
+  // creates the namespace on the first deploy (or: npx wrangler kv namespace
+  // create KEYVALUE, and its id here).
+  "kv_namespaces": [
+    {
+      "binding": "KEYVALUE"
+    }
+  ],
+
+  "observability": {
+    "enabled": true
+  }
+}

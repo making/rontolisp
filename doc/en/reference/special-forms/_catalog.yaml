@@ -1,0 +1,34 @@
+index_page: reference/special-forms.md
+categories:
+  - title: Special Forms
+    functions:
+      - { slug: quote, name: quote }
+      - { slug: if, name: if }
+      - { slug: let, name: let }
+      - { slug: progv, name: progv }
+      - { slug: lambda, name: lambda }
+      - { slug: progn, name: progn }
+      - { slug: setq, name: setq }
+      - { slug: define-symbol-macro, name: define-symbol-macro }
+      - { slug: while, name: while }
+      - { slug: return, name: return }
+      - { slug: unwind-protect, name: unwind-protect }
+      - { slug: defun, name: defun }
+      - { slug: defmacro, name: defmacro }
+      - { slug: defstruct, name: defstruct }
+      - { slug: defclass, name: defclass }
+      - { slug: defgeneric, name: defgeneric }
+      - { slug: defmethod, name: defmethod }
+      - { slug: defvar, name: defvar }
+      - { slug: defparameter, name: defparameter }
+      - { slug: defconstant, name: defconstant }
+      - { slug: function, name: function }
+      - { slug: defpackage, name: defpackage }
+      - { slug: rontolisp-async, name: "rontolisp:async" }
+      - { slug: rontolisp-async-defun, name: "rontolisp:async-defun" }
+      - { slug: rontolisp-async-lambda, name: "rontolisp:async-lambda" }
+      - { slug: rontolisp-await, name: "rontolisp:await" }
+      - { slug: tagbody, name: tagbody }
+      - { slug: go, name: go }
+      - { slug: catch, name: catch }
+      - { slug: throw, name: throw }

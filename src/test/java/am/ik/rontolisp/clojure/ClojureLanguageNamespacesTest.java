@@ -1,0 +1,290 @@
+package am.ik.rontolisp.clojure;
+
+import java.util.HashMap;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.stream.Collectors;
+
+import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.compiler.StrictMathFunction;
+import am.ik.rontolisp.eval.ClojureMacroTime;
+import am.ik.rontolisp.reader.LispReadException;
+import org.junit.jupiter.api.Test;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+/**
+ * Where the clojure.jar namespaces the front end ships as Clojure source
+ * ({@link ClojureBuiltinNamespaces}) come from: a namespace the oracle loads before the
+ * program is reached by a qualified name alone and is never a project file, any other
+ * shipped one follows the source path like a dependency, and a {@code clojure.*}
+ * namespace clojure.jar does not define is an ordinary library. What each namespace
+ * answers is pinned against the oracle on all four backends by {@code clojure-spec.yaml}.
+ */
+class ClojureLanguageNamespacesTest {
+
+	@Test
+	void aStartupNamespaceLoadsOnItsFirstQualifiedName() {
+		String out = lowered("(defn f [x] (clojure.walk/postwalk identity x)) (f [1])", Map.of());
+		assertThat(out).contains("(DEFUN |c%clojure.walk/postwalk|").contains("(DEFUN |c%clojure.walk/walk|");
+	}
+
+	@Test
+	void aProjectFileNeverShadowsAStartupNamespace() {
+		Map<String, String> files = Map.of("src/clojure/walk.clj", "(ns clojure.walk) (defn walk [i o f] :mine)");
+		assertThat(lowered("(ns a (:require [clojure.walk :as w])) (w/walk inc identity [1])", files))
+			.doesNotContain("mine")
+			.contains("(DEFUN |c%clojure.walk/walk|");
+		// nor the core macros' expanders, which no program requires
+		Map<String, String> expanders = Map.of("src/rontolisp/internal/core_macros.clj",
+				"(ns rontolisp.internal.core-macros) (defn expand-when [f e & r] :mine)");
+		assertThat(lowered("(macroexpand-1 '(when a b))", expanders)).doesNotContain("mine")
+			.contains("(DEFUN |c%rontolisp.internal.core-macros/expand-when|");
+		assertThatThrownBy(() -> Clojure.read("(require 'rontolisp.internal.core-macros)", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("rontolisp.internal.core-macros is the lowering's own namespace, no user surface");
+	}
+
+	@Test
+	void aContribClojureNamespaceIsFoundOnTheSourcePath() {
+		Map<String, String> files = Map.of("src/clojure/data/json.clj",
+				"(ns clojure.data.json) (defn write-str [x] (str \"json:\" x))");
+		assertThat(lowered("(ns a (:require [clojure.data.json :as json])) (json/write-str 1)", files))
+			.contains("(DEFUN |c%clojure.data.json/write-str|");
+		assertThatThrownBy(() -> Clojure.read("(ns a (:require [clojure.data.csv :as csv]))", null, null,
+				new MemoryClojureFiles(Map.of())))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Could not locate clojure/data/csv.clj or clojure/data/csv.cljc on the source path");
+	}
+
+	@Test
+	void clojureSetAndTestNeedTheirRequire() {
+		// g12: set and test are no oracle-boot namespace (ClassNotFoundException
+		// there). With no require the use falls through to the host lookup, which
+		// refuses at run time like an unloaded file namespace -- so lowering
+		// answers the host form, never the direct worker. Required anywhere, the
+		// fully-qualified spelling resolves: a loaded namespace is globally
+		// visible. string and edn stay reachable, like the oracle's boot set.
+		assertThat(lowered("(clojure.set/union #{1} #{2})", Map.of()))
+			.contains("(JAVA:STATIC \"clojure.set\" \"union\"")
+			.doesNotContain("RONTOLISP::%CLOJURE-SET-UNION");
+		assertThat(lowered("(map clojure.set/union [#{1}])", Map.of()))
+			.contains("(JAVA:FIELD \"clojure.set\" \"union\"")
+			.doesNotContain("RONTOLISP::%CLOJURE-SET-UNION");
+		assertThat(lowered("(clojure.test/run-tests)", Map.of())).contains("(JAVA:FIELD \"clojure.test\" \"run-tests\"")
+			.doesNotContain("RONTOLISP::%CLOJURE-TEST-RUN-TESTS");
+		assertThatThrownBy(() -> Clojure.read("(def v #'clojure.set/union)", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Unable to resolve var: clojure.set/union");
+		// required, the fully-qualified spelling keeps resolving
+		assertThat(
+				lowered("(require '[clojure.set :as s]) (s/union #{1} #{2}) (clojure.set/union #{1} #{3})", Map.of()))
+			.contains("RONTOLISP::%CLOJURE-SET-UNION");
+		assertThat(lowered("(require 'clojure.test) (clojure.test/run-tests)", Map.of()))
+			.contains("(RONTOLISP::%CLOJURE-TEST-RUN-TESTS");
+	}
+
+	@Test
+	void clojureEdnIsALoweringReachedWithoutARequire() {
+		assertThat(lowered("(clojure.edn/read-string \"1\")", Map.of()))
+			.contains("(RONTOLISP::%CLOJURE-EDN-READ-STRING-1 \"1\")");
+		assertThat(
+				lowered("(ns a (:require [clojure.edn :as e])) (map e/read-string [\"1\"]) (e/read {} *in*)", Map.of()))
+			.contains("#'RONTOLISP::%CLOJURE-EDN-READ-STRING-V")
+			.contains("(RONTOLISP::%CLOJURE-EDN-READ ");
+		assertThatThrownBy(() -> Clojure.read("(clojure.edn/read-string {} \"x\" \"y\")", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("Wrong number of args (3) passed to: clojure.edn/read-string");
+		assertThatThrownBy(() -> Clojure.read("(clojure.edn/read-str \"x\")", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("unknown name: clojure.edn/read-str");
+	}
+
+	@Test
+	void clojurePprintLaysOutThroughItsKernelNamespace() {
+		String pprint = Clojure
+			.read("(ns a (:require [clojure.pprint :as pp])) (pp/pprint [1])", null, ClojureMacroTime.create())
+			.stream()
+			.map(LispVal::print)
+			.collect(Collectors.joining("\n"));
+		assertThat(pprint).contains("(DEFUN |c%clojure.pprint/pprint|").contains("(RONTOLISP::%CLOJURE-PP-CALL ");
+		assertThatThrownBy(() -> Clojure.read("(ns a (:require [rontolisp.internal.pprint :as k]))", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("rontolisp.internal.pprint is internal to clojure.pprint");
+	}
+
+	@Test
+	void clFormatIsClojureSourceOverTheNumberAndCaseKernels() {
+		String program = Clojure
+			.read("(ns a (:require [clojure.pprint :as pp])) (pp/cl-format nil \"~,2F ~:R ~:(~a~)\" 1.5 2 \"x\")"
+					+ " ((pp/formatter \"~a\") nil 1) ((pp/formatter-out \"~a\") 1)", null, ClojureMacroTime.create())
+			.stream()
+			.map(LispVal::print)
+			.collect(Collectors.joining("\n"));
+		assertThat(program).contains("(DEFUN |c%clojure.pprint/cl-format|")
+			.contains("(RONTOLISP::%CLOJURE-PP-FIXED ")
+			.contains("(RONTOLISP::%CLOJURE-PP-ENGLISH ")
+			.contains("(RONTOLISP::%CLOJURE-PP-CASE-CONVERT ")
+			.contains("|c%clojure.pprint/formatter-fn|")
+			.contains("|c%clojure.pprint/formatter-out-fn|");
+	}
+
+	@Test
+	void coreProtocolsLoadsAtStartupAndRefusesItsIteratorReduction() {
+		assertThat(lowered("(clojure.core.protocols/datafy 1)", Map.of()))
+			.contains("(DEFUN |c%clojure.core.protocols/datafy|");
+		assertThat(lowered("(require '[clojure.core.protocols :as p]) (p/coll-reduce [1] + 0)", Map.of()))
+			.contains("(DEFUN |c%clojure.core.protocols/coll-reduce|");
+		assertThatThrownBy(
+				() -> Clojure.read("(require '[clojure.core.protocols :as p]) (p/iterator-reduce! nil +)", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining(
+					"clojure.core.protocols/iterator-reduce! is not built in: it reduces a java.util.Iterator");
+	}
+
+	@Test
+	void clojureCoreReducersLoadsAtItsRequireAndRefusesTheForkJoinPool() {
+		String out = lowered("(ns a (:require [clojure.core.reducers :as r])) (r/fold + (r/map inc [1 2]))", Map.of());
+		assertThat(out).contains("(DEFUN |c%clojure.core.reducers/fold|")
+			.contains("(DEFUN |c%clojure.core.reducers/coll-fold|")
+			.contains("(RONTOLISP::%CLOJURE-COLL-REDUCER-ROW ");
+		// clj -M has not loaded clojure.core.reducers: a qualified name alone does not
+		// reach it.
+		assertThat(lowered("(defn f [x] (clojure.edn/read-string x))", Map.of())).doesNotContain("reducers");
+		for (String var : new String[] { "pool", "fjtask", "->Cat" }) {
+			assertThatThrownBy(
+					() -> Clojure.read("(ns a (:require [clojure.core.reducers :as r])) (r/" + var + ")", null))
+				.as(var)
+				.isInstanceOf(LispReadException.class)
+				.hasMessageContaining("clojure.core.reducers/" + var + " is not built in: ");
+		}
+		assertThatThrownBy(() -> Clojure.read("(ns a (:require [rontolisp.internal.reducers :as k]))", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("rontolisp.internal.reducers is internal to clojure.core.reducers");
+	}
+
+	@Test
+	void clojureMathLowersEachDoubleFunctionToOneStrictMathCallAtItsRequire() {
+		String out = lowered("(ns a (:require [clojure.math :as m])) (m/sin 1.0) (m/scalb 1.0 2) (m/floor-div 7 2)",
+				Map.of());
+		assertThat(out).contains("(DEFUN |c%clojure.math/sin|")
+			.contains("(%STRICT-MATH :SIN (RONTOLISP::%CLOJURE-DOUBLE ")
+			.contains("(%STRICT-MATH :SCALB (RONTOLISP::%CLOJURE-DOUBLE |c%d|) (RONTOLISP::%CLOJURE-INT-CAST ")
+			.contains("(RONTOLISP::%CLOJURE-MATH-FLOOR-DIV ");
+		// clj -M has not loaded clojure.math: a qualified name alone does not reach it.
+		assertThat(lowered("(defn f [x] (clojure.edn/read-string x))", Map.of())).doesNotContain("clojure.math");
+		assertThatThrownBy(() -> Clojure.read("(ns a (:require [rontolisp.internal.math :as k]))", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("rontolisp.internal.math is internal to clojure.math");
+	}
+
+	@Test
+	void everyStrictMathFunctionIsAClojureMathKernelOfItsArity() {
+		// The lowering spells %strict-math's keywords itself (it may not import the
+		// compiler package): each kernel names a StrictMath function, and every
+		// function has its clojure.math var.
+		Map<String, Integer> expected = new HashMap<>();
+		for (StrictMathFunction fn : StrictMathFunction.values()) {
+			expected.put(fn.keyword(), fn.shape().arity());
+		}
+		Map<String, Integer> kernels = new HashMap<>();
+		ClojureKernelLowering.STRICT_MATH
+			.forEach((name, arity) -> kernels.put(":" + name.toUpperCase(Locale.ROOT), arity));
+		assertThat(kernels).isEqualTo(expected);
+	}
+
+	@Test
+	void clojureMainLoadsOnItsFirstQualifiedNameAndClojureReplAtItsRequire() {
+		// clj -M has loaded clojure.main before the program, not clojure.repl
+		assertThat(lowered("(clojure.main/demunge \"a_b\")", Map.of())).contains("(DEFUN |c%clojure.main/demunge|");
+		assertThat(lowered("(ns a (:require [clojure.repl :as r])) (r/demunge \"a_b\")", Map.of()))
+			.contains("(DEFUN |c%clojure.repl/demunge|")
+			.contains("(DEFUN |c%clojure.main/demunge|");
+		assertThatThrownBy(() -> Clojure.read("(ns a (:require [rontolisp.internal.throwable :as t]))", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining(
+					"rontolisp.internal.throwable is internal to clojure.stacktrace, clojure.repl and clojure.main");
+	}
+
+	@Test
+	void theReplAndMainVarsThatNeedRunTimeNamespacesOrACompilerAreRefusedByName() {
+		Map<String, String> refusals = Map.of("(ns a (:require [clojure.repl :as r])) (r/dir clojure.string)",
+				"clojure.repl/dir is not built in: a namespace's vars are known only while the program is lowered",
+				"(ns a (:require [clojure.repl :as r])) (r/source-fn 'map)",
+				"clojure.repl/source-fn is not built in: a definition's text is not kept at run time",
+				"(ns a (:require [clojure.repl :as r])) (r/set-break-handler!)",
+				"clojure.repl/set-break-handler! is not built in: there is no INT signal handler",
+				"(clojure.main/repl)",
+				"clojure.main/repl is not built in: no compiler runs at run time, so eval and load are not built in",
+				"(clojure.main/skip-whitespace *in*)",
+				"clojure.main/skip-whitespace is not built in: it is part of clojure.main/repl",
+				"(ns a (:require [clojure.xml :as x])) x/content-handler",
+				"clojure.xml/content-handler is not built in: parse hands a startparse function a ContentHandler");
+		refusals.forEach((source, message) -> assertThatThrownBy(() -> Clojure.read(source, null)).as(source)
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining(message));
+	}
+
+	@Test
+	void clojureJavaShellIsRefusedWhileLoweringForATargetWithoutTheHost() {
+		String source = "(ns a (:require [clojure.java.shell :as sh])) (sh/sh \"true\")";
+		assertThat(Clojure.read(source, null, null, new MemoryClojureFiles(Map.of()), true)
+			.stream()
+			.map(LispVal::print)
+			.collect(Collectors.joining("\n"))).contains("(DEFUN |c%clojure.java.shell/sh|");
+		assertThatThrownBy(() -> Clojure.read(source, null, null, new MemoryClojureFiles(Map.of()), false))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("clojure.java.shell is not built in on this target: sh launches a host process");
+		// a project file of the name is the project's, on any target
+		Map<String, String> files = Map.of("src/clojure/java/shell.clj",
+				"(ns clojure.java.shell) (defn sh [& args] 42424)");
+		assertThat(Clojure.read(source, null, null, new MemoryClojureFiles(files), false)
+			.stream()
+			.map(LispVal::print)
+			.collect(Collectors.joining("\n"))).contains("42424");
+	}
+
+	@Test
+	void clojureXmlReadsADocumentThroughItsKernelNamespace() {
+		assertThat(lowered("(ns a (:require [clojure.xml :as x])) (x/parse \"a.xml\")", Map.of()))
+			.contains("(DEFUN |c%clojure.xml/parse|")
+			.contains("(RONTOLISP::%CLOJURE-XML-EVENTS ");
+		assertThatThrownBy(() -> Clojure.read("(ns a (:require [rontolisp.internal.xml :as k]))", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("rontolisp.internal.xml is internal to clojure.xml");
+	}
+
+	@Test
+	void aLanguageNamespaceNotBuiltInIsRefused() {
+		assertThatThrownBy(() -> Clojure.read("(ns a (:require [clojure.inspector :as i]))", null))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("unknown namespace: clojure.inspector");
+	}
+
+	@Test
+	void persistentQueueIsADeftypeOfTheClojureLangNamespaceLoadedWhereAProgramFirstNamesIt() {
+		String empty = "(DEFUN |c%clojure.lang/->PersistentQueue|";
+		for (String source : List.of("(defn q [] clojure.lang.PersistentQueue/EMPTY) (q)",
+				"(ns a (:import (clojure.lang PersistentQueue))) (prn PersistentQueue/EMPTY)",
+				"(prn (clojure.lang.PersistentQueue/EMPTY))", "(prn (. clojure.lang.PersistentQueue EMPTY))",
+				"(defn queue? [x] (instance? clojure.lang.PersistentQueue x)) (queue? 1)")) {
+			assertThat(lowered(source, Map.of())).as(source).contains(empty);
+		}
+		assertThat(lowered("(prn clojure.lang.PersistentQueue/EMPTY)", Map.of()))
+			.contains("|c%clojure.lang/PersistentQueue-EMPTY|");
+		// a program naming no clojure.lang class carries none
+		assertThat(
+				lowered("(defn f [x] (conj x 1)) (prn (f [0]) (instance? clojure.lang.IPersistentList ()))", Map.of()))
+			.doesNotContain("clojure.lang/");
+	}
+
+	private static String lowered(String source, Map<String, String> files) {
+		return Clojure.read(source, null, null, new MemoryClojureFiles(files))
+			.stream()
+			.map(LispVal::print)
+			.collect(Collectors.joining("\n"));
+	}
+
+}

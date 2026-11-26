@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Required, and not because anything in it is: its PRESENCE is what makes
+     the Java buildpack treat this directory as a web application and start
+     Jetty over it. Without the file the buildpack looks for an executable jar
+     instead and the deployment fails to build.
+
+     <app-engine-apis> stays false: a rontolisp war calls no App Engine API, so
+     nothing needs the appengine-api-1.0-sdk jar that flag pulls in. -->
+<appengine-web-app xmlns="http://appengine.google.com/ns/1.0">
+  <runtime>java25</runtime>
+  <app-engine-apis>false</app-engine-apis>
+</appengine-web-app>

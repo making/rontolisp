@@ -1,0 +1,16 @@
+<li class="note{{#vertical}} vertical{{/vertical}}{{#quote}} is-quote{{/quote}}" id="note-{{id}}">
+  {{#quote}}<blockquote class="quote"><p>{{body}}</p></blockquote>{{/quote}}
+  {{^quote}}<p class="memo">{{body}}</p>{{/quote}}
+  <p class="note-meta">
+    {{#show-source}}<a href="/books/{{book-id}}">『{{title}}』</a>{{/show-source}}
+    {{#page}}<span>p.{{page}}</span>{{/page}}
+    <time>{{created}}</time>
+    {{^show-source}}
+    <form method="post" action="/notes/{{id}}/delete"
+          hx-post="/notes/{{id}}/delete" hx-target="#note-{{id}}" hx-swap="delete swap:200ms"
+          hx-confirm="この{{#quote}}引用{{/quote}}{{^quote}}メモ{{/quote}}を削除しますか？">
+      <button class="note-delete" type="submit">削除</button>
+    </form>
+    {{/show-source}}
+  </p>
+</li>

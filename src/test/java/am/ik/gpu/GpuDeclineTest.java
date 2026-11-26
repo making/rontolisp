@@ -1,0 +1,712 @@
+package am.ik.gpu;
+
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
+import java.util.HashMap;
+import java.util.Map;
+
+import org.junit.jupiter.api.Test;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
+
+/**
+ * What {@code am.ik.gpu} must do on EVERY machine, with a GPU or without one: answer,
+ * quietly, and never throw. {@link GpuTest} is the half that needs a device; this is the
+ * half that must never regress, because it is the half a machine with no NVIDIA driver --
+ * which is most machines, and every CI runner this project has -- actually runs.
+ *
+ * <p>
+ * Nothing here is conditional and nothing here asserts a number that only a GPU can
+ * produce. Two things are pinned: the probe and the decline path are total (every
+ * question has an answer, no exception escapes, no matter what the machine is), and the
+ * checked-in PTX is the artifact the loader expects to find.
+ */
+class GpuDeclineTest {
+
+	@Test
+	void theProbeAnswersWithoutThrowingOnAnyMachine() {
+		assertThatCode(Gpu::available).doesNotThrowAnyException();
+		assertThat(Gpu.description()).isNotBlank();
+		// Twice, because the answer is cached and the cache must not be a second code
+		// path: a machine with no driver pays one failed dlopen and then answers from a
+		// field.
+		assertThat(Gpu.available()).isEqualTo(Gpu.available());
+		assertThat(Gpu.description()).isEqualTo(Gpu.description());
+	}
+
+	@Test
+	void aProductBelowTheSizeThresholdIsNeverOffered() {
+		// The threshold is the whole reason an intercepted call is allowed to be
+		// unconditional: a small product declines and the caller's own kernel runs.
+		assertThat(Gpu.worth(1, 1, 1)).isFalse();
+		assertThat(Gpu.worth(8, 8, 8)).isFalse();
+		assertThat(Gpu.worth(32, 32, 32)).isFalse();
+		assertThat(Gpu.worth(256, 256, 256)).isTrue();
+		// A degenerate shape is not "small work", it is not a product at all.
+		assertThat(Gpu.worth(0, 1024, 1024)).isFalse();
+		assertThat(Gpu.worth(-1, 1024, 1024)).isFalse();
+	}
+
+	@Test
+	void everyDeclineConditionDeclinesRatherThanThrows() {
+		double[] a = new double[64 * 64], b = new double[64 * 64];
+		float[] af = new float[64 * 64], bf = new float[64 * 64];
+		// Too small to be worth a round trip.
+		assertThat(Gpu.multiply(a, 0, b, 0, 4, 4, 4)).isNull();
+		assertThat(Gpu.multiply(af, 0, bf, 0, 4, 4, 4)).isNull();
+		// Dimensions that do not fit the arrays they were claimed for.
+		assertThat(Gpu.multiply(a, 0, b, 0, 1024, 1024, 1024)).isNull();
+		assertThat(Gpu.multiply(af, 0, bf, 0, 1024, 1024, 1024)).isNull();
+		// An offset past the end, and a negative one.
+		assertThat(Gpu.multiply(a, 4096, b, 0, 64, 64, 64)).isNull();
+		assertThat(Gpu.multiply(a, -1, b, 0, 64, 64, 64)).isNull();
+		// A degenerate shape.
+		assertThat(Gpu.multiply(a, 0, b, 0, 0, 64, 64)).isNull();
+		assertThat(Gpu.multiply(a, 0, b, 0, 64, 64, -64)).isNull();
+		// A row count past the 16-bit grid axis, on arrays that could never hold it.
+		assertThat(Gpu.multiply(a, 0, b, 0, Integer.MAX_VALUE, 64, 64)).isNull();
+		// A product bigger than any device's memory: declined by the size check on a
+		// machine without a GPU, and by the pre-flight against free device memory on one
+		// with. Neither may throw, and on a real device neither may cost the device
+		// anything (GpuTest.aDeclinedProductCostsTheDeviceNothing).
+		double[] tiny = new double[1];
+		assertThat(Gpu.multiply(tiny, 0, tiny, 0, 100_000, 100_000, 100_000)).isNull();
+	}
+
+	@Test
+	void theDestinationTakingFormDeclinesOnTheSameConditions() {
+		// The form an interceptor will actually call: it writes into the caller's array
+		// at the caller's offset, so it has a third set of bounds to refuse.
+		double[] a = new double[64 * 64], b = new double[64 * 64], out = new double[64 * 64];
+		float[] af = new float[64 * 64], bf = new float[64 * 64], outF = new float[64 * 64];
+		assertThat(Gpu.multiply(a, 0, b, 0, out, 0, 4, 4, 4)).isFalse();
+		assertThat(Gpu.multiply(af, 0, bf, 0, outF, 0, 4, 4, 4)).isFalse();
+		// The result would not fit: one element short, and a negative offset.
+		assertThat(Gpu.multiply(a, 0, b, 0, out, 1, 64, 64, 64)).isFalse();
+		assertThat(Gpu.multiply(a, 0, b, 0, out, -1, 64, 64, 64)).isFalse();
+		assertThat(Gpu.multiply(af, 0, bf, 0, new float[64], 0, 64, 64, 64)).isFalse();
+		// And a declined call leaves the destination alone.
+		assertThat(out).containsOnly(0.0);
+	}
+
+	@Test
+	void anElementWiseMapBelowTheSizeThresholdIsNeverOffered() {
+		// The element-wise threshold counts ELEMENTS, not multiply-adds, so it is four
+		// orders of magnitude below the product's: a map is one libm call per element.
+		assertThat(Gpu.worthMap(1)).isFalse();
+		assertThat(Gpu.worthMap(4096)).isFalse();
+		assertThat(Gpu.worthMap(16383)).isFalse();
+		assertThat(Gpu.worthMap(16384)).isTrue();
+		assertThat(Gpu.worthMap(0)).isFalse();
+		assertThat(Gpu.worthMap(-1)).isFalse();
+	}
+
+	@Test
+	void everyElementWiseDeclineConditionDeclinesRatherThanThrows() {
+		int n = (int) Gpu.mapMinElements() * 2;
+		double[] a = new double[n], out = new double[n];
+		float[] af = new float[n], outF = new float[n];
+		assertThatCode(() -> {
+			// Below the threshold, at every width.
+			assertThat(Gpu.map(Gpu.MAP_EXP, a, 0, out, 0, 8)).isFalse();
+			assertThat(Gpu.map(Gpu.MAP_EXP, af, 0, outF, 0, 8)).isFalse();
+			// An op code this library does not name. It must NOT quietly compute some
+			// other member: the kernel's default case is the identity and this is the
+			// guard in front of it.
+			assertThat(Gpu.map(-1, a, 0, out, 0, n)).isFalse();
+			assertThat(Gpu.map(Gpu.MAP_OPS, a, 0, out, 0, n)).isFalse();
+			assertThat(Gpu.map(Integer.MAX_VALUE, af, 0, outF, 0, n)).isFalse();
+			// Elements that are not inside the arrays they were promised in.
+			assertThat(Gpu.map(Gpu.MAP_EXP, a, 1, out, 0, n)).isFalse();
+			assertThat(Gpu.map(Gpu.MAP_EXP, a, 0, out, 1, n)).isFalse();
+			assertThat(Gpu.map(Gpu.MAP_EXP, a, -1, out, 0, n)).isFalse();
+			assertThat(Gpu.map(Gpu.MAP_EXP, a, 0, new double[8], 0, n)).isFalse();
+			assertThat(Gpu.map(Gpu.MAP_EXP, af, 0, new float[8], 0, n)).isFalse();
+			// A degenerate count.
+			assertThat(Gpu.map(Gpu.MAP_EXP, a, 0, out, 0, 0)).isFalse();
+			assertThat(Gpu.map(Gpu.MAP_EXP, a, 0, out, 0, -1)).isFalse();
+		}).doesNotThrowAnyException();
+		// A declined map leaves the destination alone, on a machine with a device and on
+		// one without.
+		assertThat(out).containsOnly(0.0);
+		assertThat(outF).containsOnly(0.0f);
+	}
+
+	@Test
+	void aStackBelowTheSizeThresholdIsNeverOffered() {
+		// A batch is ONE round trip and one launch, so the threshold is over the TOTAL
+		// work: what the device has to beat is the CPU's cost for the whole stack, and
+		// the floor it has to clear is paid once. Measured, that is the same crossover
+		// the unbatched product has (.kb/gpu.md).
+		assertThat(Gpu.worth(1, 32, 32, 32)).isFalse();
+		assertThat(Gpu.worth(3, 32, 32, 32)).isFalse();
+		assertThat(Gpu.worth(4, 32, 32, 32)).isTrue();
+		assertThat(Gpu.worth(256, 8, 8, 8)).isTrue();
+		assertThat(Gpu.worth(64, 64, 64, 64)).isTrue();
+		// A batch and a single product of the same total work agree, and the unbatched
+		// predicate is the batch-of-one.
+		assertThat(Gpu.worth(1, 64, 64, 64)).isEqualTo(Gpu.worth(64, 64, 64));
+		// A degenerate batch is not small work, it is not a product at all.
+		assertThat(Gpu.worth(0, 1024, 1024, 1024)).isFalse();
+		assertThat(Gpu.worth(-1, 1024, 1024, 1024)).isFalse();
+	}
+
+	@Test
+	void everyBatchedDeclineConditionDeclinesRatherThanThrows() {
+		double[] a = new double[8 * 64 * 64], b = new double[8 * 64 * 64], out = new double[8 * 64 * 64];
+		float[] af = new float[8 * 64 * 64], bf = new float[8 * 64 * 64], outF = new float[8 * 64 * 64];
+		// Below the threshold, an empty batch, and one past the 16-bit gridDim.z.
+		assertThat(Gpu.multiply(a, 0, 16, b, 0, 16, out, 0, 8, 4, 4, 4)).isFalse();
+		assertThat(Gpu.multiply(a, 0, 4096, b, 0, 4096, out, 0, 0, 64, 64, 64)).isFalse();
+		assertThat(Gpu.multiply(a, 0, 0, b, 0, 0, out, 0, 70_000, 64, 64, 64)).isFalse();
+		// Strides that walk off the end of an operand, and negative ones.
+		assertThat(Gpu.multiply(a, 0, 4096, b, 0, 4096, out, 0, 9, 64, 64, 64)).isFalse();
+		assertThat(Gpu.multiply(af, 0, -4096, bf, 0, 4096, outF, 0, 8, 64, 64, 64)).isFalse();
+		// A destination that cannot hold the whole stack.
+		assertThat(Gpu.multiply(a, 0, 4096, b, 0, 4096, new double[4096], 0, 8, 64, 64, 64)).isFalse();
+		// And a declined call leaves the destination alone, on a machine with a device
+		// as much as on one without.
+		assertThat(out).containsOnly(0.0);
+	}
+
+	@Test
+	void anUnaskableShapeIsNotLaunchable() {
+		assertThat(CudaGemm.launchable(64, 64, 64)).isTrue();
+		assertThat(CudaGemm.launchable(0, 64, 64)).isFalse();
+		assertThat(CudaGemm.launchable(64, 0, 64)).isFalse();
+		// gridDim.y is 16 bits, so more than 65535 tiles of rows cannot be launched.
+		assertThat(CudaGemm.launchable(65535L * 16, 1, 1)).isTrue();
+		assertThat(CudaGemm.launchable(65536L * 16, 1, 1)).isFalse();
+		// The result has to be indexable as a Java array.
+		assertThat(CudaGemm.launchable(1 << 20, 1, 1 << 20)).isFalse();
+		// A stack rides on gridDim.z, which is 16 bits too, and the whole stack has to be
+		// one Java array.
+		assertThat(CudaGemm.launchable(65535, 64, 64, 64)).isTrue();
+		assertThat(CudaGemm.launchable(65536, 64, 64, 64)).isFalse();
+		assertThat(CudaGemm.launchable(0, 64, 64, 64)).isFalse();
+		assertThat(CudaGemm.launchable(1 << 16, 1 << 16, 1, 1 << 16)).isFalse();
+	}
+
+	@Test
+	void theResultTableIsTotalAndNeverThrows() {
+		assertThat(CuResult.of(0)).isEqualTo(CuResult.CUDA_SUCCESS);
+		assertThat(CuResult.of(700)).isEqualTo(CuResult.CUDA_ERROR_ILLEGAL_ADDRESS);
+		// A status a newer driver invents is not an error condition of its own.
+		assertThat(CuResult.of(123456)).isNull();
+		assertThat(CuResult.describe(123456)).isEqualTo("CUresult 123456");
+		assertThat(CuResult.describe(2)).isEqualTo("CUDA_ERROR_OUT_OF_MEMORY (2)");
+		for (CuResult result : CuResult.values()) {
+			assertThat(CuResult.describe(result.code())).contains(result.name());
+		}
+	}
+
+	@Test
+	void everyStatusCodeIsDistinct() {
+		Map<Integer, CuResult> seen = new HashMap<>();
+		for (CuResult result : CuResult.values()) {
+			assertThat(seen.put(result.code(), result)).as("duplicate code %d", result.code()).isNull();
+		}
+		assertThat(seen).hasSameSizeAs(CuResult.values());
+	}
+
+	@Test
+	void onlyTheStatusesThatCorruptTheContextAreSticky() {
+		// The decline-on-error rule turns the feature OFF for the rest of the process on
+		// a
+		// sticky status, so the classification has to be narrow: a product too big for
+		// device memory must not retire a working GPU.
+		assertThat(CuResult.CUDA_ERROR_OUT_OF_MEMORY.sticky()).isFalse();
+		assertThat(CuResult.CUDA_ERROR_INVALID_VALUE.sticky()).isFalse();
+		assertThat(CuResult.CUDA_ERROR_NO_DEVICE.sticky()).isFalse();
+		assertThat(CuResult.CUDA_ERROR_LAUNCH_FAILED.sticky()).isTrue();
+		assertThat(CuResult.CUDA_ERROR_ILLEGAL_ADDRESS.sticky()).isTrue();
+		assertThat(CuResult.CUDA_ERROR_ECC_UNCORRECTABLE.sticky()).isTrue();
+		assertThat(CuResult.isSticky(CuResult.SUCCESS)).isFalse();
+		// An unrecognised failure is assumed to be the dangerous kind.
+		assertThat(CuResult.isSticky(123456)).isTrue();
+	}
+
+	@Test
+	void theCheckedInPtxIsTheArtifactTheLoaderExpects() throws IOException {
+		String ptx = resource(CudaGemm.PTX_RESOURCE);
+		// The virtual architecture is not a free choice -- CUDA 13 refuses to target
+		// anything below compute_75 -- and it is what the probe's capability check is
+		// written against, so the two must not drift apart.
+		assertThat(ptx).contains(".target sm_" + CudaGemm.PTX_COMPUTE_CAPABILITY);
+		assertThat(ptx).contains(".visible .entry " + CudaGemm.KERNEL_F64);
+		assertThat(ptx).contains(".visible .entry " + CudaGemm.KERNEL_F32);
+		// The stacked siblings regenerate from the same source, so a regeneration that
+		// dropped them would leave a build whose probe declines on every machine.
+		assertThat(ptx).contains(".visible .entry " + CudaGemm.KERNEL_BATCHED_F64);
+		assertThat(ptx).contains(".visible .entry " + CudaGemm.KERNEL_BATCHED_F32);
+		assertThat(ptx).contains(".visible .entry " + CudaGemm.KERNEL_BATCHED_F32_T4);
+		assertThat(ptx).contains(".visible .entry " + CudaGemm.KERNEL_BATCHED_F32_T8);
+		// And the element-wise pair, whose op codes are the other half of a mirror
+		// nothing links: Gpu.MAP_* names them and gemm.cu switches on them.
+		assertThat(ptx).contains(".visible .entry " + CudaGemm.KERNEL_MAP_F64);
+		assertThat(ptx).contains(".visible .entry " + CudaGemm.KERNEL_MAP_F32);
+		assertThat(resource("gemm.cu")).contains("case " + Gpu.MAP_ERF + ": return erf(x);");
+		// The strided tier's six, whose op codes are a THREE-way mirror -- Gpu.BIN_* /
+		// Gpu.FOLD_* here, the switches in gemm.cu, and LinalgSimdKernels.BOP_* as the
+		// oracle they must agree with.
+		for (String kernel : CudaGemm.KERNELS_STRIDED) {
+			assertThat(ptx).contains(".visible .entry " + kernel);
+		}
+		assertThat(resource("gemm.cu")).contains("case " + Gpu.BIN_DIV + ": return x / y;");
+		// The GEMV pair behind vec:matvec, the one member outside linalg:.
+		assertThat(ptx).contains(".visible .entry " + CudaGemm.KERNEL_GEMV_F64);
+		assertThat(ptx).contains(".visible .entry " + CudaGemm.KERNEL_GEMV_F32);
+		// And the bfloat16 one, which decodes in its lane loop and is
+		// otherwise gemv_f32 -- the source says so with the one shift that widens.
+		assertThat(ptx).contains(".visible .entry " + CudaGemm.KERNEL_GEMV_BF16);
+		assertThat(resource("gemm.cu")).contains("__uint_as_float(((unsigned) p) << 16)")
+			.contains("gemv_ff<unsigned short>(W, x, y, rows, cols)")
+			.contains("gemv_ff<float>(W, x, y, rows, cols)");
+		// And the Q8_0 one, which is the CPU contract's bits: the source
+		// spells the pinned f32 step with the _rn intrinsics (no FMA whatever the
+		// toolchain) and the defun's fold.
+		assertThat(ptx).contains(".visible .entry " + CudaGemm.KERNEL_GEMV_Q8);
+		assertThat(resource("gemm.cu")).contains("__fadd_rn(acc, __fmul_rn(__int2float_rn(s), p))")
+			.contains("__double2float_rn(__dmul_rn((double) __half2float(__ushort_as_half(d)), sx))");
+		// The resident tier's eight, and the mirrors it added: the four maps past the
+		// libm ones and the five comparison masks.
+		for (String kernel : CudaGemm.KERNELS_RESIDENT) {
+			assertThat(ptx).contains(".visible .entry " + kernel);
+		}
+		assertThat(resource("gemm.cu")).contains("case " + Gpu.MAP_SQRT + ": {").contains("sqrt((double) x)");
+		// The fused tier's fourteen.
+		for (String kernel : CudaGemm.KERNELS_FUSED) {
+			assertThat(ptx).contains(".visible .entry " + kernel);
+		}
+		assertThat(resource("gemm.cu")).contains("case " + Gpu.BIN_EQ + ": return x == y ? 1.0 : 0.0;");
+		// The regeneration command travels with the artifact: without it the .ptx is an
+		// unreproducible blob.
+		assertThat(ptx).contains("nvcc -arch=compute_" + CudaGemm.PTX_COMPUTE_CAPABILITY + " -ptx");
+		assertThat(resource("gemm.cu")).contains("nvcc -arch=compute_" + CudaGemm.PTX_COMPUTE_CAPABILITY + " -ptx");
+	}
+
+	@Test
+	void aStridedCallBelowTheSizeThresholdIsNeverOffered() {
+		// The pure size predicates, which must answer without touching a driver.
+		assertThat(Gpu.worthStrided(1L << 15)).isTrue();
+		assertThat(Gpu.worthStrided((1L << 15) - 1)).isFalse();
+		assertThat(Gpu.worthFold(1L << 17)).isTrue();
+		assertThat(Gpu.worthFold((1L << 17) - 1)).isFalse();
+		double[] small = new double[64], out = new double[64];
+		int[] dims = { 8, 8 };
+		int[] strides = { 8, 1 };
+		assertThat(Gpu.bcast(Gpu.BIN_ADD, small, 0, strides, small, 0, strides, out, 0, dims)).isFalse();
+		assertThat(Gpu.gather(small, 0, strides, out, 0, dims)).isFalse();
+		assertThat(Gpu.fold(Gpu.FOLD_SUM, small, 0, out, 0, 8, 8, 1)).isFalse();
+		assertThat(out).containsOnly(0.0);
+	}
+
+	@Test
+	void aGeneratorFillBelowTheSizeThresholdIsNeverOffered() {
+		assertThat(Gpu.worthRng(1L << 13)).isTrue();
+		assertThat(Gpu.worthRng((1L << 13) - 1)).isFalse();
+		double[] small = new double[64];
+		float[] smallF = new float[64];
+		assertThat(Gpu.rngFill(small, 0, 64, 0, 0.0, 1.0, 1, 2, 3)).isFalse();
+		assertThat(Gpu.rngFill(smallF, 0, 64, 1, 0.0, 1.0, 1, 2, 3)).isFalse();
+		assertThat(small).containsOnly(0.0);
+		assertThat(smallF).containsOnly(0.0f);
+	}
+
+	@Test
+	void aMatrixByVectorProductBelowTheSizeThresholdIsNeverOffered() {
+		assertThat(Gpu.worthMatvec(512, 256)).isTrue();
+		assertThat(Gpu.worthMatvec(511, 256)).isFalse();
+		assertThat(Gpu.worthMatvec(0, 512)).isFalse();
+		double[] w = new double[64 * 64], x = new double[64], y = new double[64];
+		float[] wf = new float[64 * 64], xf = new float[64], yf = new float[64];
+		assertThat(Gpu.matvec(w, 0, x, 0, y, 0, 64, 64)).isFalse();
+		assertThat(Gpu.matvec(wf, 0, xf, 0, yf, 0, 64, 64)).isFalse();
+		short[] wb = new short[64 * 64];
+		assertThat(Gpu.matvec(wb, 0, xf, 0, yf, 0, 64, 64)).isFalse();
+		byte[] wq = new byte[64 * 2 * 34];
+		assertThat(Gpu.matvec(wq, 0, xf, 0, yf, 0, 64, 64)).isFalse();
+		assertThat(y).containsOnly(0.0);
+		assertThat(yf).containsOnly(0.0f);
+	}
+
+	@Test
+	void everyMatrixByVectorDeclineConditionDeclinesRatherThanThrows() {
+		// A vector shorter than the matrix is wide, a result shorter than it is tall, an
+		// offset that overruns, a negative one, an empty extent: each declines with the
+		// result untouched -- on a machine with a device as on one without. (With a
+		// device the well-formed call on a matrix seen for the first time declines too,
+		// by design; GpuTest pins the second sight.)
+		int rows = 512, cols = 256;
+		double[] w = new double[rows * cols], x = new double[cols], y = new double[rows];
+		assertThat(Gpu.matvec(w, 0, new double[cols - 1], 0, y, 0, rows, cols)).isFalse();
+		assertThat(Gpu.matvec(w, 0, x, 0, new double[rows - 1], 0, rows, cols)).isFalse();
+		assertThat(Gpu.matvec(w, 1, x, 0, y, 0, rows, cols)).isFalse();
+		assertThat(Gpu.matvec(w, 0, x, 1, y, 0, rows, cols)).isFalse();
+		assertThat(Gpu.matvec(w, 0, x, 0, y, 1, rows, cols)).isFalse();
+		assertThat(Gpu.matvec(w, -1, x, 0, y, 0, rows, cols)).isFalse();
+		assertThat(Gpu.matvec(w, 0, x, 0, y, 0, 0, cols)).isFalse();
+		assertThat(Gpu.matvec(w, 0, x, 0, y, 0, rows, 0)).isFalse();
+		assertThat(y).containsOnly(0.0);
+		// The bfloat16 form: the same conditions over a short[] matrix and an
+		// f32 vector, declining rather than throwing -- and on a machine whose device
+		// has no bf16 kernel (Metal), declining at every shape.
+		short[] wb = new short[rows * cols];
+		float[] xf = new float[cols], yf = new float[rows];
+		assertThat(Gpu.matvec(wb, 0, new float[cols - 1], 0, yf, 0, rows, cols)).isFalse();
+		assertThat(Gpu.matvec(wb, 0, xf, 0, new float[rows - 1], 0, rows, cols)).isFalse();
+		assertThat(Gpu.matvec(wb, 1, xf, 0, yf, 0, rows, cols)).isFalse();
+		assertThat(Gpu.matvec(wb, 0, xf, 1, yf, 0, rows, cols)).isFalse();
+		assertThat(Gpu.matvec(wb, 0, xf, 0, yf, 1, rows, cols)).isFalse();
+		assertThat(Gpu.matvec(wb, -1, xf, 0, yf, 0, rows, cols)).isFalse();
+		assertThat(Gpu.matvec(wb, 0, xf, 0, yf, 0, 0, cols)).isFalse();
+		assertThat(Gpu.matvec(wb, 0, xf, 0, yf, 0, rows, 0)).isFalse();
+		assertThat(yf).containsOnly(0.0f);
+		// The Q8_0 form: the same conditions over a byte[] of blocks -- whose
+		// extent is a BYTE count, rows * cols / 32 * 34 -- plus a column count that is
+		// not whole blocks, declining rather than throwing; and on a device without the
+		// kernel (Metal), at every shape.
+		byte[] wq = new byte[rows * (cols / 32) * 34];
+		assertThat(Gpu.matvec(wq, 0, new float[cols - 1], 0, yf, 0, rows, cols)).isFalse();
+		assertThat(Gpu.matvec(wq, 0, xf, 0, new float[rows - 1], 0, rows, cols)).isFalse();
+		assertThat(Gpu.matvec(wq, 1, xf, 0, yf, 0, rows, cols)).isFalse();
+		assertThat(Gpu.matvec(wq, 0, xf, 1, yf, 0, rows, cols)).isFalse();
+		assertThat(Gpu.matvec(wq, 0, xf, 0, yf, 1, rows, cols)).isFalse();
+		assertThat(Gpu.matvec(wq, -1, xf, 0, yf, 0, rows, cols)).isFalse();
+		assertThat(Gpu.matvec(wq, 0, xf, 0, yf, 0, 0, cols)).isFalse();
+		assertThat(Gpu.matvec(wq, 0, xf, 0, yf, 0, rows, 0)).isFalse();
+		assertThat(Gpu.matvec(new byte[wq.length - 1], 0, xf, 0, yf, 0, rows, cols)).isFalse();
+		assertThat(Gpu.matvec(new byte[rows * 8 * 34], 0, new float[250], 0, yf, 0, rows, 250)).isFalse();
+		assertThat(yf).containsOnly(0.0f);
+	}
+
+	@Test
+	void theQuantizedActivationIsTheCpuContractsQuantizerBlockForBlock() {
+		// The host half of the Q8_0 GEMV, on every machine: what the device
+		// is handed is the CPU contract's activation (.kb/quantized-matrix.md) -- amax
+		// over |x| with a strict > (a NaN never raises it), sx = amax / 127 in double,
+		// q = rint(x / sx) half to even, all zero where sx is -- packed as nb
+		// little-endian doubles then the quants with each block's 32 in the kernel's
+		// thread order: word t holds columns 4 * (4 * (t >> 2) + m) + (t & 3).
+		int cols = 128, nb = cols / 32;
+		float[] x = new float[3 + cols];
+		for (int j = 0; j < 32; j++) {
+			x[3 + j] = (float) Math.sin(j * 0.7) * 3.0f;
+		}
+		// Block 1: sx exactly 1 (amax 127), so the ties are exact and rint's half-to-even
+		// shows: 2.5 -> 2, 3.5 -> 4, -2.5 -> -2, -0.5 -> 0.
+		x[3 + 32] = 127.0f;
+		x[3 + 33] = 2.5f;
+		x[3 + 34] = 3.5f;
+		x[3 + 35] = -2.5f;
+		x[3 + 36] = -0.5f;
+		x[3 + 37] = -127.0f;
+		// Block 2: all zero.
+		// Block 3: a NaN among finite values, which the strict compare skips.
+		x[3 + 96] = Float.NaN;
+		x[3 + 97] = 5.0f;
+		x[3 + 98] = -1.25f;
+		byte[] packed = Gpu.quantizeActivationQ8(x, 3, cols);
+		assertThat(packed).hasSize(nb * 8 + cols);
+		for (int b = 0; b < nb; b++) {
+			double amax = 0.0;
+			for (int k = 0; k < 32; k++) {
+				double v = Math.abs((double) x[3 + b * 32 + k]);
+				if (v > amax) {
+					amax = v;
+				}
+			}
+			double sx = amax / 127.0;
+			long bits = 0;
+			for (int k = 0; k < 8; k++) {
+				bits |= (packed[b * 8 + k] & 0xffL) << (8 * k);
+			}
+			assertThat(Double.longBitsToDouble(bits)).as("sx of block %d", b).isEqualTo(sx);
+			for (int t = 0; t < 8; t++) {
+				for (int m = 0; m < 4; m++) {
+					int column = 4 * (4 * (t >> 2) + m) + (t & 3);
+					int expected = sx == 0.0 ? 0 : (int) Math.rint(x[3 + b * 32 + column] / sx);
+					assertThat((int) packed[nb * 8 + b * 32 + 4 * t + m]).as("block %d word %d byte %d", b, t, m)
+						.isEqualTo(expected);
+				}
+			}
+		}
+		// The ties, spelled out; a NaN quantizes to 0 (rint's NaN cast to int).
+		assertThat(Double.longBitsToDouble(((long) packed[8] & 0xff) | ((long) packed[9] & 0xff) << 8
+				| ((long) packed[10] & 0xff) << 16 | ((long) packed[11] & 0xff) << 24 | ((long) packed[12] & 0xff) << 32
+				| ((long) packed[13] & 0xff) << 40 | ((long) packed[14] & 0xff) << 48
+				| ((long) packed[15] & 0xff) << 56))
+			.isEqualTo(1.0);
+		int block1 = nb * 8 + 32;
+		// Column c of a block sits at word (c & 3) + 4 * ((c >> 2) >> 2), byte (c >> 2) &
+		// 3.
+		assertThat(packed[block1 + 4 * (1 + 0) + 0]).isEqualTo((byte) 2); // column 1: 2.5
+		assertThat(packed[block1 + 4 * (2 + 0) + 0]).isEqualTo((byte) 4); // column 2: 3.5
+		assertThat(packed[block1 + 4 * (3 + 0) + 0]).isEqualTo((byte) -2); // column 3:
+																			// -2.5
+		assertThat(packed[block1 + 4 * (0 + 0) + 1]).isEqualTo((byte) 0); // column 4:
+																			// -0.5
+		assertThat(packed[block1 + 4 * (1 + 0) + 1]).isEqualTo((byte) -127); // column 5
+		int block2 = nb * 8 + 64;
+		for (int k = 0; k < 32; k++) {
+			assertThat(packed[block2 + k]).isEqualTo((byte) 0);
+		}
+		int block3 = nb * 8 + 96;
+		assertThat(packed[block3]).as("a NaN quantizes to 0").isEqualTo((byte) 0);
+		assertThat(packed[block3 + 4 * 1]).as("column 1 of block 3 is the amax, 127").isEqualTo((byte) 127);
+	}
+
+	@Test
+	void everyGeneratorFillDeclineConditionDeclinesRatherThanThrows() {
+		// A mode outside 0..2, a state word outside the generator's range, a fill that
+		// does not fit inside the destination: each declines with the destination
+		// untouched -- on a machine with a device as on one without.
+		int n = 1 << 14;
+		double[] out = new double[n];
+		assertThat(Gpu.rngFill(out, 0, n, 3, 0.0, 1.0, 1, 2, 3)).isFalse();
+		assertThat(Gpu.rngFill(out, 0, n, -1, 0.0, 1.0, 1, 2, 3)).isFalse();
+		assertThat(Gpu.rngFill(out, 0, n, 0, 0.0, 1.0, -1, 2, 3)).isFalse();
+		assertThat(Gpu.rngFill(out, 0, n, 0, 0.0, 1.0, 1, 1 << 23, 3)).isFalse();
+		assertThat(Gpu.rngFill(out, 1, n, 0, 0.0, 1.0, 1, 2, 3)).isFalse();
+		assertThat(Gpu.rngFill(out, 0, n + 1, 0, 0.0, 1.0, 1, 2, 3)).isFalse();
+		assertThat(Gpu.rngFill(out, -1, n, 0, 0.0, 1.0, 1, 2, 3)).isFalse();
+		assertThat(out).containsOnly(0.0);
+	}
+
+	@Test
+	void theClosedFormAdvanceIsTheSequentialWalksEndState() {
+		// Pure integer arithmetic, so it runs on every machine: the end state the device
+		// fill reports must be the state a sequential walk of the same length reaches,
+		// including across a wrap of every modulus and from the seed words linalg:seed
+		// produces.
+		int[] st = { 4321, 8765, 2468 };
+		int[] walk = st.clone();
+		for (long steps = 0; steps <= 100_000; steps++) {
+			if (steps % 997 == 0 || steps < 20) {
+				assertThat(Gpu.rngAdvance(st[0], st[1], st[2], steps)).as("after %d steps", steps).isEqualTo(walk);
+			}
+			walk[0] = 171 * walk[0] % 30269;
+			walk[1] = 172 * walk[1] % 30307;
+			walk[2] = 170 * walk[2] % 30323;
+		}
+		assertThat(Gpu.rngAdvance(1, 1, 1, 0)).isEqualTo(new int[] { 1, 1, 1 });
+		assertThat(Gpu.rngAdvance(0, 5, 7, 12))
+			.isEqualTo(new int[] { 0, 5 * pow(172, 12, 30307) % 30307, 7 * pow(170, 12, 30323) % 30323 });
+	}
+
+	private static int pow(long a, int e, int m) {
+		long r = 1;
+		for (int i = 0; i < e; i++) {
+			r = r * a % m;
+		}
+		return (int) r;
+	}
+
+	@Test
+	void everyStridedDeclineConditionDeclinesRatherThanThrows() {
+		// The bounds are what stop a kernel indexing outside the caller's array: the
+		// kernel walks strides freely, so the library has to bound the whole reachable
+		// span rather than the element count.
+		int rows = 1 << 12, cols = 64, n = rows * cols;
+		double[] x = new double[n], y = new double[rows], out = new double[n];
+		int[] dims = { rows, cols };
+		int[] sx = { cols, 1 };
+		int[] sy = { 1, 0 };
+		assertThat(Gpu.bcast(Gpu.BIN_OPS, x, 0, sx, y, 0, sy, out, 0, dims)).isFalse();
+		assertThat(Gpu.bcast(-1, x, 0, sx, y, 0, sy, out, 0, dims)).isFalse();
+		// An operand whose span runs past its array, a negative stride, a mismatched
+		// stride vector, an empty or absurdly deep shape, an offset that does not fit.
+		assertThat(Gpu.bcast(Gpu.BIN_ADD, x, 1, sx, y, 0, sy, out, 0, dims)).isFalse();
+		assertThat(Gpu.bcast(Gpu.BIN_ADD, x, 0, new int[] { cols, -1 }, y, 0, sy, out, 0, dims)).isFalse();
+		assertThat(Gpu.bcast(Gpu.BIN_ADD, x, 0, new int[] { cols }, y, 0, sy, out, 0, dims)).isFalse();
+		assertThat(Gpu.bcast(Gpu.BIN_ADD, x, 0, sx, y, 0, sy, out, 0, new int[0])).isFalse();
+		assertThat(Gpu.bcast(Gpu.BIN_ADD, x, 0, sx, y, 0, sy, out, 0, new int[] { rows, 0 })).isFalse();
+		assertThat(Gpu.gather(x, 0, sx, out, 1, dims)).isFalse();
+		assertThat(Gpu.gather(x, -1, sx, out, 0, dims)).isFalse();
+		// A fold with too few OUTPUT cells is a single-threaded device loop and declines
+		// however big its input is; so does an empty extent and an unnamed op.
+		assertThat(Gpu.fold(Gpu.FOLD_OPS, x, 0, out, 0, rows, cols, 1)).isFalse();
+		assertThat(Gpu.fold(Gpu.FOLD_SUM, x, 0, out, 0, 1, n, 1)).isFalse();
+		assertThat(Gpu.fold(Gpu.FOLD_SUM, x, 0, out, 0, rows, 0, 1)).isFalse();
+		assertThat(Gpu.fold(Gpu.FOLD_SUM, x, 0, out, 0, rows, cols, 1) && out[0] == 0.0).isIn(true, false);
+		float[] xf = new float[n], yf = new float[rows], outf = new float[n];
+		assertThat(Gpu.bcast(Gpu.BIN_ADD, xf, 0, new int[] { cols, -1 }, yf, 0, sy, outf, 0, dims)).isFalse();
+		assertThat(Gpu.gather(xf, 0, sx, outf, 1, dims)).isFalse();
+		assertThat(Gpu.fold(Gpu.FOLD_SUM, xf, 0, outf, 0, 1, n, 1)).isFalse();
+	}
+
+	@Test
+	void theFusedTierDeclinesRatherThanThrowsOnEveryMachine() {
+		// Fresh (never resident) arrays below every threshold: on a machine with a device
+		// each member declines on size, on one without it declines on the probe; either
+		// way nothing throws and nothing is written.
+		int rows = 8, len = 16, n = rows * len;
+		double[] x = new double[n], c = new double[n];
+		float[] xf = new float[n], cf = new float[n];
+		assertThat(Gpu.gelu(x, 0, c, 0, n)).isFalse();
+		assertThat(Gpu.gelu(xf, 0, cf, 0, n)).isFalse();
+		assertThat(Gpu.geluGrad(x, 0, x, 0, null, 0, c, 0, n)).isFalse();
+		assertThat(Gpu.geluGrad(xf, 0, xf, 0, xf, 0, cf, 0, n)).isFalse();
+		assertThat(Gpu.softmax(x, 0, c, 0, rows, len)).isFalse();
+		assertThat(Gpu.softmax(xf, 0, cf, 0, rows, len)).isFalse();
+		assertThat(Gpu.softmaxGrad(x, 0, x, 0, c, 0, rows, len)).isFalse();
+		assertThat(Gpu.softmaxGrad(xf, 0, xf, 0, cf, 0, rows, len)).isFalse();
+		assertThat(Gpu.softmax(x, 0, x, 0, len, c, 0, rows, len, Gpu.BIN_DIV, 8.0, -1.0)).isFalse();
+		assertThat(Gpu.softmax(xf, 0, xf, 0, len, cf, 0, rows, len, Gpu.BIN_DIV, 8.0, -1.0)).isFalse();
+		assertThat(Gpu.softmaxGrad(x, 0, x, 0, x, 0, len, c, 0, rows, len, Gpu.BIN_DIV, 8.0)).isFalse();
+		assertThat(Gpu.softmaxGrad(xf, 0, xf, 0, xf, 0, len, cf, 0, rows, len, Gpu.BIN_DIV, 8.0)).isFalse();
+		assertThat(Gpu.logSoftmax(x, 0, c, 0, rows, len)).isFalse();
+		assertThat(Gpu.logSoftmax(xf, 0, cf, 0, rows, len)).isFalse();
+		assertThat(Gpu.logSoftmaxGrad(x, 0, x, 0, c, 0, rows, len)).isFalse();
+		assertThat(Gpu.logSoftmaxGrad(xf, 0, xf, 0, cf, 0, rows, len)).isFalse();
+		assertThat(Gpu.layerNorm(x, 0, c, 0, rows, len, 1e-5)).isFalse();
+		assertThat(Gpu.layerNorm(xf, 0, cf, 0, rows, len, 1e-5)).isFalse();
+		assertThat(Gpu.layerNormGrad(x, 0, x, 0, null, 0, c, 0, rows, len, 1e-5)).isFalse();
+		assertThat(Gpu.layerNormGrad(xf, 0, xf, 0, xf, 0, cf, 0, rows, len, 1e-5)).isFalse();
+		// Layer-norm's affine pair, whose parameters are a row long.
+		double[] par = new double[len];
+		float[] parf = new float[len];
+		assertThat(Gpu.layerNormAffine(x, 0, par, 0, par, 0, c, 0, rows, len, 1e-5)).isFalse();
+		assertThat(Gpu.layerNormAffine(xf, 0, parf, 0, parf, 0, cf, 0, rows, len, 1e-5)).isFalse();
+		assertThat(Gpu.layerNormAffineGrad(x, 0, x, 0, par, 0, null, 0, c, 0, c, 0, rows, len, 1e-5)).isFalse();
+		assertThat(Gpu.layerNormAffineGrad(xf, 0, xf, 0, parf, 0, xf, 0, cf, 0, cf, 0, rows, len, 1e-5)).isFalse();
+		assertThat(Gpu.dropoutMask(c, 0, n, 0.1, 0.9, 1, 2, 3)).isFalse();
+		assertThat(Gpu.dropoutMask(cf, 0, n, 0.1, 0.9, 1, 2, 3)).isFalse();
+		assertThat(c).containsOnly(0.0);
+		assertThat(cf).containsOnly(0.0f);
+	}
+
+	@Test
+	void theCheckedInMetalSourceIsTheArtifactTheLoaderExpects() throws IOException {
+		// gemm.metal's counterpart of the PTX assertion above, and it has to hold on a
+		// Linux CI runner too: the MSL text travels in every --gpu class whichever
+		// machine
+		// emitted it, so a source that named the wrong kernels would break Apple users of
+		// a class compiled anywhere.
+		String msl = resource(MetalGemm.KERNEL_RESOURCE);
+		assertThat(msl).contains("kernel void " + MetalGemm.KERNEL_BATCHED_F32);
+		assertThat(msl).contains("kernel void " + MetalGemm.KERNEL_MAP_F32);
+		assertThat(msl).contains("kernel void " + MetalGemm.KERNEL_BCAST_F32);
+		assertThat(msl).contains("kernel void " + MetalGemm.KERNEL_GATHER_F32);
+		assertThat(msl).contains("kernel void " + MetalGemm.KERNEL_GEMV_F32);
+		for (String kernel : MetalGemm.KERNELS_RESIDENT) {
+			assertThat(msl).contains("kernel void " + kernel);
+		}
+		for (String kernel : MetalGemm.KERNELS_FUSED) {
+			assertThat(msl).contains("kernel void " + kernel);
+		}
+		// The op-code mirrors, the third copy of the table gemm.cu and Gpu.MAP_* /
+		// Gpu.BIN_* hold the other two of.
+		assertThat(msl).contains("case " + Gpu.MAP_ERF + ": return erf1(x);");
+		assertThat(msl).contains("case " + Gpu.MAP_SQRT + ": {");
+		assertThat(msl).contains("case " + Gpu.BIN_DIV + ": return x / y;");
+		assertThat(msl).contains("case " + Gpu.BIN_EQ + ": return x == y ? 1.0f : 0.0f;");
+		// MSL rejects `double` outright, so a `double` in the CODE is a source that
+		// cannot
+		// compile on any Mac -- which no machine without one would notice. The comments
+		// discuss the word at length and are stripped first.
+		assertThat(msl.lines().filter(line -> !line.strip().startsWith("//")).toList())
+			.as("no declared double survives the comments")
+			.noneMatch(line -> line.contains("double"));
+	}
+
+	@Test
+	void suppliedMetalKernelsAreAcceptedWithoutProbingAndWithoutThrowing() throws IOException {
+		// useKernels' Apple sibling, and the same rule applies: the REAL checked-in text
+		// and nothing else, because the override is process-wide and read at probe time.
+		Gpu.useMetalKernels(resource(MetalGemm.KERNEL_RESOURCE));
+		assertThat(Gpu.description()).isNotBlank();
+	}
+
+	@Test
+	void suppliedKernelsAreAcceptedWithoutProbingAndWithoutThrowing() throws IOException {
+		// The seam an embedder that carries the CLASSES but not the resources needs:
+		// rontolisp's JVM backend renames these classes into a compiled program's own
+		// package, where getResourceAsStream can never find gemm.ptx again
+		// (.kb/gpu.md). It is deliberately handed the REAL checked-in text here and
+		// nowhere else -- a test that poisoned it with a placeholder would decide what
+		// the whole suite's probe compiles, whichever class ran first.
+		Gpu.useKernels(resource(CudaGemm.PTX_RESOURCE));
+		assertThat(Gpu.description()).isNotBlank();
+	}
+
+	private String resource(String name) throws IOException {
+		try (InputStream in = CudaGemm.class.getResourceAsStream(name)) {
+			assertThat(in).as("resource %s", name).isNotNull();
+			return new String(in.readAllBytes(), StandardCharsets.US_ASCII);
+		}
+	}
+
+	@Test
+	void theResidentTierAndTheLazyHooksDeclineOrDoNothingOnAMachineWithoutADevice() {
+		// The hooks the interceptors call from every packed-array read and write never
+		// throw, never probe and never touch a driver -- a program that writes a double
+		// into an array must not pay for a dlopen.
+		assertThatCode(() -> {
+			Gpu.written(new double[4]);
+			Gpu.materialize(new double[4]);
+			Gpu.materialize("not an array");
+			assertThat(Gpu.resident(new float[4])).isFalse();
+			Gpu.lazyResults(true);
+			Gpu.lazyResults(false);
+		}).doesNotThrowAnyException();
+		// The resident tier is offered over a resident operand only, and with no device
+		// nothing is ever resident: every member declines, whatever its arguments.
+		int n = 1 << 16;
+		double[] a = new double[n], b = new double[n], out = new double[n];
+		float[] af = new float[n], bf = new float[n], outF = new float[n];
+		double[] rule = { 0.01, 0.001, 0.1, 0.9, 0.1, 0.999, 0.001, 1e-8, 0.19, 0.001999, 0.0 };
+		assertThatCode(() -> {
+			assertThat(Gpu.zip(Gpu.BIN_ADD, a, 0, b, 0, out, 0, n)).isFalse();
+			assertThat(Gpu.zip(Gpu.BIN_MUL, af, 0, bf, 0, outF, 0, n)).isFalse();
+			assertThat(Gpu.scale(Gpu.BIN_DIV, a, 0, 2.0, false, out, 0, n)).isFalse();
+			assertThat(Gpu.scale(Gpu.BIN_SUB, af, 0, 2.0, true, outF, 0, n)).isFalse();
+			assertThat(Gpu.map(Gpu.MAP_SQRT, a, 0, out, 0, n)).isFalse();
+			assertThat(Gpu.map(Gpu.MAP_SIGN, af, 0, outF, 0, n)).isFalse();
+			assertThat(Gpu.where(a, 0, new int[] { 1 }, 0.0, b, 0, new int[] { 1 }, 0.0, null, 0, new int[] { 0 }, 1.0,
+					out, 0, new int[] { n }))
+				.isFalse();
+			assertThat(Gpu.where(af, 0, new int[] { 1 }, 0.0, bf, 0, new int[] { 1 }, 0.0, null, 0, new int[] { 0 },
+					1.0, outF, 0, new int[] { n }))
+				.isFalse();
+			assertThat(Gpu.adamStep(a, 0, b, 0, out, 0, new double[n], 0, n, rule)).isFalse();
+			assertThat(Gpu.adamStep(af, 0, bf, 0, outF, 0, new float[n], 0, n, rule)).isFalse();
+			assertThat(Gpu.copy(a, 0, new int[] { 1 }, new int[] { 0, n }, out, 0, new int[] { 1 }, new int[] { 0, n },
+					new int[] { n }))
+				.isFalse();
+			assertThat(Gpu.copy(af, 0, new int[] { 1 }, new int[] { 0, n }, outF, 0, new int[] { 1 },
+					new int[] { 0, n }, new int[] { n }))
+				.isFalse();
+			// The index tier and the clip norm, resident-only in the same
+			// way: with nothing resident every one of them declines, and the sum answers
+			// null rather than a number the caller would have believed.
+			int[] idx = new int[n / 16];
+			assertThat(Gpu.takeRows(a, 0, n, out, 0, idx, 16)).isFalse();
+			assertThat(Gpu.takeRows(af, 0, n, outF, 0, idx, 16)).isFalse();
+			assertThat(Gpu.pick(a, 0, out, 0, idx, 16)).isFalse();
+			assertThat(Gpu.pick(af, 0, outF, 0, idx, 16)).isFalse();
+			assertThat(Gpu.scatterRows(a, 0, b, 0, idx, n / 16, 16)).isFalse();
+			assertThat(Gpu.scatterRows(af, 0, bf, 0, idx, n / 16, 16)).isFalse();
+			assertThat(Gpu.sumSquares(a, 0, n, 0.5)).isNull();
+			assertThat(Gpu.sumSquares(af, 0, n, 0.5)).isNull();
+		}).doesNotThrowAnyException();
+	}
+
+	@Test
+	void onlyAPowerOfTwoNormalAtBothWidthsHasAnExactReciprocalOnEveryMachine() {
+		// The predicate behind the scale kernel's divide rewrite: a / s is launched as
+		// a * (1 / s) exactly when the two are the same real number AND the reciprocal is
+		// normal at BOTH widths, because a backend that computes in float (Metal) would
+		// otherwise multiply by a reciprocal that underflowed to zero there.
+		for (double s : new double[] { 1.0, 2.0, 8.0, 0.125, -4.0, 1024.0, 0x1p126, 0x1p-126 }) {
+			assertThat(Gpu.exactReciprocal(s)).as("%s", s).isEqualTo(1.0 / s);
+		}
+		for (double s : new double[] { 0.0, -0.0, 3.0, 0.1, 1.4142135623730951, Double.NaN, Double.POSITIVE_INFINITY,
+				Double.MIN_VALUE, 0x1p127, 0x1p-127, 0x1p1000, 0x1p-1000 }) {
+			assertThat(Gpu.exactReciprocal(s)).as("%s", s).isEqualTo(0.0);
+		}
+	}
+
+}

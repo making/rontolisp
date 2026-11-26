@@ -1,0 +1,3345 @@
+package am.ik.rontolisp.compiler;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+
+import am.ik.rontolisp.ArrayElementTypes;
+import am.ik.rontolisp.ClosRegistry;
+import am.ik.rontolisp.LispChar;
+import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispInteger;
+import am.ik.rontolisp.LispNames;
+import am.ik.rontolisp.PackageRegistry;
+import am.ik.rontolisp.LispNil;
+import am.ik.rontolisp.LispString;
+import am.ik.rontolisp.LispSymbol;
+import am.ik.rontolisp.LispTrue;
+import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.macro.LispMacroExpander;
+import org.jspecify.annotations.Nullable;
+
+/**
+ * Generates synthetic {@code (setq name (lambda ...))} wrapper defuns for built-in
+ * operators. These wrappers allow built-in operators like {@code +}, {@code car} to be
+ * used as first-class function values (passed to {@code map}, {@code reduce},
+ * {@code funcall}).
+ *
+ * <p>
+ * The wrapper body uses the operator in call position, where {@code compileCons} inlines
+ * it directly. User defuns with the same name take priority since wrappers are only
+ * injected for names not already defined by the user.
+ */
+public final class BuiltinFunctionWrappers {
+
+	private BuiltinFunctionWrappers() {
+	}
+
+	/**
+	 * Built-in operators the WASM backends have no lowering for: the {@code rontolisp:}
+	 * thread primitives, interpreter and JVM only. The WASM compiler passes these to
+	 * {@link #generate(Set, Set)} so that no wrapper defun is injected for them (its body
+	 * would call the wrapper itself), and compiles a {@code #'} of one as a name no
+	 * definition has: the undefined-function signalled where the reference runs, as a
+	 * call of one is.
+	 */
+	public static final Set<String> WASM_UNSUPPORTED = Set.of(rontolisp(LispNames.MAKE_THREAD),
+			rontolisp(LispNames.JOIN_THREAD), rontolisp(LispNames.THREADP), rontolisp(LispNames.THREAD_ALIVE_P),
+			rontolisp(LispNames.DESTROY_THREAD), rontolisp(LispNames.CURRENT_THREAD));
+
+	/**
+	 * Built-in operators the JVM backend compiles a call of but has no function value
+	 * for: {@code rontolisp:tls-listen-pem}, whose call compiles only with literal paths
+	 * (the {@code cli} pre-pass bakes the files into the output). A value is a call with
+	 * computed paths, so a {@code #'} of it is refused with that call's text
+	 * ({@link #noFunctionValueMessage}).
+	 */
+	public static final Set<String> JVM_UNSUPPORTED = Set.of(rontolisp(LispNames.TLS_LISTEN_PEM));
+
+	/**
+	 * What the JVM backend reports for a {@code rontolisp:tls-listen-pem} call whose
+	 * certificate or key path is no string literal.
+	 */
+	public static final String TLS_LISTEN_PEM_COMPUTED_PATH_MESSAGE = LispNames.TLS_LISTEN_PEM
+			+ ": cert-file and key-file must be string literals when compiling"
+			+ " (compiled output embeds the certificate; use the interpreter for runtime paths)";
+
+	/**
+	 * Hash-table operator wrappers whose compiled bodies reference runtime helpers (JVM)
+	 * or inline code (WASM) that each backend emits only when the program actually uses a
+	 * hash table. They are injected as first-class wrappers only when the program uses
+	 * any hash-table operator, so the wrapper and its helpers stay gated together (see
+	 * the {@code wrapperExcludes} handling in {@code Jvm/WasmLispCompiler}).
+	 * {@code %puthash} is internal and intentionally excluded; {@code make-hash-table}
+	 * takes keyword arguments and is exposed here only as the DEFAULT table -- it accepts
+	 * the initargs as a {@code &rest} tail and drops them, rather than declaring itself
+	 * nullary, so {@code (apply #'make-hash-table initargs)} is not a wrong argument
+	 * count.
+	 */
+	public static final Set<String> HASH_FUNCTIONS = Set.of(LispNames.MAKE_HASH_TABLE, LispNames.GETHASH,
+			LispNames.REMHASH, LispNames.CLRHASH, LispNames.HASH_TABLE_COUNT, LispNames.HASH_TABLE_P,
+			LispNames.MAPHASH);
+
+	/**
+	 * Fill-pointer array wrappers, gated like {@link #HASH_FUNCTIONS}: their compiled
+	 * bodies reference the array runtime helpers (JVM) that are emitted only when the
+	 * program uses an array operator, so each backend injects them only for programs that
+	 * do. {@code %set-fill-pointer} is internal and intentionally excluded;
+	 * {@code vector-push-extend} is exposed in its 2-argument form (no extension).
+	 * {@code make-string} is on the list because it lowers to the character-vector
+	 * {@code make-array} ({@code .kb/adjustable-arrays.md}); both backends' array gate
+	 * names it, so the wrapper is injected exactly when the runtime it calls is emitted.
+	 *
+	 * <p>
+	 * {@code fill}/{@code coerce}/{@code vector}/{@code read-sequence}/
+	 * {@code write-sequence}/{@code svref}/{@code array-rank}/{@code array-dimension}/
+	 * {@code array-total-size}/{@code array-row-major-index} are on the list for the same
+	 * reason: their wrapper bodies reach {@code _aset1}/{@code _charVecMake}/
+	 * {@code _arrayMake}/{@code _aref1}/{@code _arrayDims}, which JVM emits only under
+	 * the array gate. Left off, every non-array program still carried these ten wrappers
+	 * (nothing gated them), the finished class called methods it never declared, and the
+	 * post-compile self-check answered that by forcing the array gate on and re-running
+	 * the whole compile -- for a program with no array in it. Every one of the ten is
+	 * already a name the array gate itself scans for on the JVM
+	 * ({@code LispMacroExpander.usesGeneralArrayOp}) and on WASM
+	 * ({@code WasmLispCompiler.programUsesAnyArrayOp}), so a program that takes one of
+	 * them as a value keeps its wrapper: the same reference that would otherwise leave it
+	 * excluded is what turns the gate on.
+	 */
+	public static final Set<String> ARRAY_FILL_POINTER_FUNCTIONS = Set.of(LispNames.FILL_POINTER,
+			LispNames.ARRAY_HAS_FILL_POINTER_P, LispNames.ADJUSTABLE_ARRAY_P, LispNames.ARRAY_ELEMENT_TYPE,
+			LispNames.VECTOR_PUSH, LispNames.VECTOR_POP, LispNames.VECTOR_PUSH_EXTEND, LispNames.ADJUST_ARRAY,
+			LispNames.ARRAY_DISPLACEMENT, LispNames.MAKE_ARRAY, LispNames.AREF, LispNames.MAKE_STRING, LispNames.FILL,
+			LispNames.COERCE, LispNames.VECTOR, LispNames.READ_SEQUENCE, LispNames.WRITE_SEQUENCE, LispNames.SVREF,
+			LispNames.ARRAY_RANK, LispNames.ARRAY_DIMENSION, LispNames.ARRAY_TOTAL_SIZE,
+			LispNames.ARRAY_ROW_MAJOR_INDEX);
+
+	/**
+	 * Signal-operator wrappers ({@code #'error}/{@code #'cerror}/{@code #'signal}/
+	 * {@code #'warn}), injected only when the program takes the operator as a first-class
+	 * value (see {@link #referencesFunctionValue}) so ordinary programs stay
+	 * byte-identical. The wrapper forwards the datum and the arguments after it to the
+	 * run-time dispatch a computed datum goes through
+	 * ({@code LispMacroExpander.runtimeSignalDefuns}), which the reference injects.
+	 */
+	public static final Set<String> SIGNAL_FUNCTIONS = Set.of(LispNames.ERROR, LispNames.CERROR, LispNames.SIGNAL,
+			LispNames.WARN);
+
+	/**
+	 * The native built-ins ({@link NativeCallShapes}) the compiled backends lower in call
+	 * position and have no defun for, in injection order. The interpreter binds each as a
+	 * Java {@code LispFunction}; the compile paths' function value is a wrapper derived
+	 * from the operator's call shape ({@code FunctionValueWrappers}), so {@code #'arrayp}
+	 * and {@code (funcall 'close s)} answer as the call does and a count the shape rules
+	 * out reports the interpreter's text. Reference-gated like
+	 * {@link #REFERENCE_GATED_FUNCTIONS}: several bodies reach a runtime (the eval
+	 * mirror, the stream and hash-table helpers, the run-time function box) that a gate
+	 * scanning the source program turns on for the operator's name. {@code require} and
+	 * {@code provide} are not here: the compile path has them only as literal top-level
+	 * forms ({@link #noFunctionValueMessage}).
+	 */
+	public static final List<String> NATIVE_VALUE_FUNCTIONS = List.of(LispNames.ARRAY_DIMENSIONS, LispNames.ARRAYP,
+			LispNames.CLOSE, LispNames.EVAL, LispNames.EXPORT, LispNames.FDEFINITION, LispNames.FMAKUNBOUND,
+			LispNames.GET_INTERNAL_REAL_TIME, LispNames.GET_INTERNAL_RUN_TIME, LispNames.GET_OUTPUT_STREAM_STRING,
+			LispNames.GET_UNIVERSAL_TIME, LispNames.HASH_TABLE_REHASH_SIZE, LispNames.HASH_TABLE_REHASH_THRESHOLD,
+			LispNames.HASH_TABLE_SIZE, LispNames.HASH_TABLE_TEST, LispNames.IMPORT, LispNames.LOAD,
+			LispNames.MAKE_STRING_INPUT_STREAM, LispNames.MAKE_STRING_OUTPUT_STREAM, LispNames.MAKE_SYNONYM_STREAM,
+			LispNames.OPEN_STREAM_P, LispNames.RATIONALP, LispNames.ROW_MAJOR_AREF, LispNames.SYMBOL_FUNCTION,
+			LispNames.UNEXPORT, LispNames.UNUSE_PACKAGE, LispNames.USE_PACKAGE,
+			// The rontolisp: natives. Each body is the call position, so it reaches the
+			// backend's lowering and the runtime whose gate scans for the operator's name
+			// -- which the #' reference is. Where a call refuses the program (on a wasm
+			// backend: make-stream, stream-write, fetch, wait-for and the tls-* names),
+			// so does the value; where a spliced library defun is the call (the
+			// component's sockets, tls client, fetch and wait-for), that defun is the
+			// value and no wrapper is injected. The thread primitives have no wasm
+			// wrapper (WASM_UNSUPPORTED), tls-listen-pem no JVM one (JVM_UNSUPPORTED).
+			rontolisp(LispNames.ASYNC_STREAMP), rontolisp(LispNames.FUTUREP), rontolisp(LispNames.STREAM_READ),
+			rontolisp(LispNames.STREAM_CLOSE), rontolisp(LispNames.MAKE_STREAM), rontolisp(LispNames.STREAM_WRITE),
+			rontolisp(LispNames.MAKE_MUTEX), rontolisp(LispNames.MUTEX_ACQUIRE), rontolisp(LispNames.MUTEX_RELEASE),
+			rontolisp(LispNames.VERSION), rontolisp(LispNames.MAKE_THREAD), rontolisp(LispNames.JOIN_THREAD),
+			rontolisp(LispNames.THREADP), rontolisp(LispNames.THREAD_ALIVE_P), rontolisp(LispNames.DESTROY_THREAD),
+			rontolisp(LispNames.CURRENT_THREAD), rontolisp(LispNames.WAIT_FOR), rontolisp(LispNames.FETCH),
+			rontolisp(LispNames.TCP_CONNECT), rontolisp(LispNames.TCP_LISTEN), rontolisp(LispNames.TCP_ACCEPT),
+			rontolisp(LispNames.TCP_LOCAL_PORT), rontolisp(LispNames.TCP_LOCAL_ADDRESS),
+			rontolisp(LispNames.TCP_PEER_ADDRESS), rontolisp(LispNames.TCP_PEER_PORT),
+			rontolisp(LispNames.TCP_SET_TIMEOUT), rontolisp(LispNames.TLS_CONNECT), rontolisp(LispNames.TLS_UPGRADE),
+			rontolisp(LispNames.TLS_LISTEN), rontolisp(LispNames.TLS_LISTEN_PEM));
+
+	/**
+	 * The CL functions the expander rewrites in call position whose catalog wrapper is
+	 * reference-gated ({@link #REFERENCE_GATED_FUNCTIONS}).
+	 */
+	public static final List<String> INLINE_EXPANDED_VALUE_FUNCTIONS = List.of(LispNames.COMPLEMENT,
+			LispNames.MAKE_CONDITION, LispNames.MAKE_SEQUENCE, LispNames.DOCUMENTATION, LispNames.PROCLAIM,
+			LispNames.CHANGE_CLASS, LispNames.SLOT_VALUE, LispNames.SLOT_BOUNDP, LispNames.SLOT_EXISTS_P,
+			LispNames.SLOT_MAKUNBOUND);
+
+	/**
+	 * Wrappers injected only when the program takes the operator as a first-class value
+	 * (see {@link #referencesFunctionValue}), so ordinary programs stay byte-identical:
+	 * the signal operators plus {@code format}. The {@code #'format} wrapper renders
+	 * through the shared runtime control renderer (the same fallback {@code expandFormat}
+	 * uses for computed control strings, so the runtime directive subset applies); a nil
+	 * destination returns the string, any other destination is written to with one
+	 * {@code write-string} call and yields nil ({@code t} designates standard output
+	 * there).
+	 */
+	public static final Set<String> REFERENCE_GATED_FUNCTIONS;
+	static {
+		Set<String> gated = new java.util.HashSet<>(SIGNAL_FUNCTIONS);
+		gated.add(LispNames.FORMAT);
+		gated.add(LispNames.CONCATENATE);
+		gated.add(LispNames.OPEN);
+		// The read family whose end of file SIGNALS: their wrappers construct the
+		// end-of-file condition, which is machinery a program that never takes them as
+		// values should not carry (and which the mayCreateInstances gate would not see
+		// coming -- it scans the source program, not the injected wrappers).
+		gated.add(LispNames.READ_CHAR);
+		gated.add(LispNames.READ_CHAR_NO_HANG);
+		gated.add(LispNames.PEEK_CHAR);
+		gated.add(LispNames.READ_BYTE);
+		// #'write-byte: a write to standard output reaches the JVM's _writeByte, whose
+		// raw octets main drains only for a program whose source names write-byte -- one
+		// scan for both sides.
+		gated.add(LispNames.WRITE_BYTE);
+		// #'read-sequence / #'write-sequence for the same reason: their
+		// boundedSequenceIo bodies re-enter the operator's own expansion, whose bounds
+		// check constructs a type-error instance -- machinery a program that never
+		// takes them as values should not carry (and which the mayCreateInstances
+		// gate would not see coming -- it scans the source program, not the injected
+		// wrappers; taking one as a value forces instances through the FUNCTION
+		// case of constructsInstance instead).
+		gated.add(LispNames.READ_SEQUENCE);
+		gated.add(LispNames.WRITE_SEQUENCE);
+		// #'class-of resolves through the generated %find-class metaobject runtime,
+		// which LispMacroExpander injects only for a program that references class-of
+		// (or find-class) itself -- the injected wrapper body is outside that scan.
+		gated.add(LispNames.CLASS_OF);
+		// #'make-instance forwards to the generated %mop-make-instance runtime-class
+		// construction defun, which LispMacroExpander injects (with arms widened to
+		// every registered class) exactly when the program takes make-instance as a
+		// value -- the (apply #'make-instance class args) idiom of postmodern's
+		// make-dao.
+		gated.add(LispNames.MAKE_INSTANCE);
+		// #'file-length / #'file-write-date call JVM runtime helpers the compiler emits
+		// only for a program that NAMES the operator -- and that gate scans the source
+		// program, not the injected wrappers, so an ungated wrapper would call a method
+		// the class does not declare (the self-call check catches it, loudly). Gating the
+		// wrappers on the same reference puts both sides on one scan.
+		gated.add(LispNames.FILE_LENGTH);
+		gated.add(LispNames.FILE_WRITE_DATE);
+		// #'file-position joins them for the same reason: its wrapper body lowers to the
+		// gated _filePosition JVM helper.
+		gated.add(LispNames.FILE_POSITION);
+		// #'sleep for a sharper reason: under --component `sleep` lowers to
+		// (await (wait-for ms)), which puts the module in async (and therefore EH) mode.
+		// An ungated wrapper would do that to EVERY component -- changing the wasmtime
+		// flags of programs that never sleep -- and the mode gate, which scans the source
+		// program, would not even see it coming.
+		gated.add(LispNames.SLEEP);
+		// #'find-symbol: the wrapper body lowers to intern (the computed-name
+		// deviation, .kb/symbol-runtime-api.md), and the WASM _intern runtime is
+		// gated -- so the wrapper is injected only for a program that actually takes
+		// find-symbol as a value (trivia level2's (remove-if-not #'find-symbol ...)).
+		gated.add(LispNames.FIND_SYMBOL);
+		// #'typep: the wrapper's specifier is a PARAMETER, so its body compiles to a
+		// call of the shared %typep-runtime dispatch defun -- injected by
+		// expandTopLevelDefinitions only for a program whose own source needs it
+		// (LispMacroExpander.needsRuntimeTypep, which counts a (function typep) for
+		// exactly this reason). Ungated, every program carried a wrapper calling a defun
+		// it does not have.
+		gated.add(LispNames.TYPEP);
+		// #'subtypep for the same reason: its specifiers are parameters, so the body
+		// calls the %subtypep-runtime dispatch defun, injected only for a program whose
+		// own source needs it (LispMacroExpander.needsRuntimeSubtypep, which counts a
+		// (function subtypep)).
+		gated.add(LispNames.SUBTYPEP);
+		// #'coerce for the same reason, one step removed: the wrapper's result type is a
+		// PARAMETER, so its body takes the computed-coerce dispatch, whose "already of
+		// that type" arm is a computed typep -- the same %typep-runtime defun, gated by
+		// the same scan (which counts a (function coerce) beside the (function typep)).
+		gated.add(LispNames.COERCE);
+		// #'map-into for the same shape: the wrapper stores through (setf (elt ...)),
+		// whose string arm calls the gated %schar-set-runtime helper
+		// (LispMacroExpander's reachesScharSet scan, which names map-into).
+		gated.add(LispNames.MAP_INTO);
+		// #'symbol-value: the wrapper body is the raw eval-mirror probe (or, in a program
+		// with specials, the dispatch over them first), and the _genv/_env_lookup
+		// machinery it calls is real only under usesEval -- whose scan sees the source
+		// program, not the injected wrappers. The (function symbol-value) spelling that
+		// injects this wrapper is ALSO a symbol occurrence that scan counts, so gating
+		// on the reference puts both sides on one scan (cl-json's aggregate-scope
+		// (mapcar #'symbol-value scope-variables) is the consumer).
+		gated.add(LispNames.SYMBOL_VALUE);
+		// #'set for the same reason: the wrapper body is the backing-store chain plus
+		// the _store mirror call, real only under usesEval, and the (function set)
+		// spelling fires the same scan.
+		gated.add(LispNames.SET);
+		gated.add(LispNames.MAKUNBOUND);
+		// #'boundp / #'fboundp: the wrapper body is a COMPUTED probe, which reads the
+		// eval
+		// mirror (real only under usesEval) and, for a special declared without a value,
+		// the shared %boundp-dynamic dispatch that LispMacroExpander.boundpProbes sees
+		// only
+		// once the injected wrapper is among the forms it scans. A program that never
+		// names
+		// either keeps the output it always had.
+		gated.add(LispNames.BOUNDP);
+		gated.add(LispNames.FBOUNDP);
+		// #'widen-float-bits / #'narrow-float-bits: the wrapper bodies call
+		// the JVM's _widenFloatBits/_narrowFloatBits helpers, emitted only for a
+		// program whose OWN source names widen-float-bits/narrow-float-bits
+		// (JvmLispCompiler's usesFloat16Bits scan) -- a program that only calls
+		// float16-bits/bits-float16 (the scalar pair, which needs no helper) would
+		// otherwise carry an ungated wrapper calling a method the class does not
+		// declare, exactly FILE_LENGTH/FILE_WRITE_DATE's reason above.
+		gated.add(PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.WIDEN_FLOAT_BITS));
+		gated.add(PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.NARROW_FLOAT_BITS));
+		// The quantized-matrix primitives for the same reason: their JVM helpers are
+		// emitted only for a program that can build one (JvmLispCompiler's
+		// usesQuantized scan), and the WASM backends refuse two of them at compile time.
+		gated.add(PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.QUANTIZE));
+		gated.add(PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.DEQUANTIZE));
+		gated.add(PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.MAKE_QUANTIZED_MATRIX));
+		gated.add(PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.QUANTIZED_ROWS));
+		gated.add(PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.QUANTIZED_MATRIX_P));
+		// #'aref / #'array-row-major-index: the shared fold's per-axis bound
+		// check and subscript-count check construct a type-error/simple-error instance --
+		// machinery a program that never takes either operator as a value should not
+		// carry (and which the mayCreateInstances gate would not see coming -- it scans
+		// the source program, not the injected wrappers). Call position is unaffected:
+		// its own bound check is a separate, already-gated backend intrinsic.
+		gated.add(LispNames.AREF);
+		gated.add(LispNames.ARRAY_ROW_MAJOR_INDEX);
+		// The CL functions lowered only in call position: the slot and class bodies reach
+		// runtime dispatches LispMacroExpander generates only for a program naming the
+		// operator, #'make-condition and #'make-sequence construct (or signal), and
+		// #'complement's body applies. A program that never takes one as a value keeps
+		// the output it always had.
+		gated.addAll(INLINE_EXPANDED_VALUE_FUNCTIONS);
+		gated.addAll(NATIVE_VALUE_FUNCTIONS);
+		REFERENCE_GATED_FUNCTIONS = Set.copyOf(gated);
+	}
+
+	/**
+	 * The catalog wrappers the JVM backend injects only for a program naming the operator
+	 * as a function designator: each body calls a gated {@code _c*} complex helper (or,
+	 * for {@code upgraded-complex-part-type}, the gated {@code %subtypep-runtime}), and
+	 * the bodies of {@code log}/{@code asin}/{@code acos}/{@code expt} take the argument
+	 * from a parameter no literal proves real, so ungated they would open the complex
+	 * gate for every program. The wasm backends gate {@code upgraded-complex-part-type}
+	 * alone.
+	 */
+	public static final List<String> COMPLEX_GATED_FUNCTIONS = List.of(LispNames.COMPLEX, LispNames.CONJUGATE,
+			LispNames.SQRT, LispNames.PHASE, LispNames.UPGRADED_COMPLEX_PART_TYPE, LispNames.CIS, LispNames.ASINH,
+			LispNames.ACOSH, LispNames.ATANH, LispNames.LOG, LispNames.ASIN, LispNames.ACOS, LispNames.EXPT);
+
+	/**
+	 * Whether the name is a built-in some compiled function value stands for: a catalog
+	 * wrapper or a reference-gated one. Such a name is never undefined on the compile
+	 * paths -- a {@code #'name} of it injects its wrapper.
+	 * @param name the operator name
+	 * @return whether a wrapper backs the name
+	 */
+	public static boolean isWrappedBuiltin(String name) {
+		return WRAPPER_NAMES.contains(name) || REFERENCE_GATED_FUNCTIONS.contains(name);
+	}
+
+	/**
+	 * What a compile path reports for a {@code #'name} of a standard function it has no
+	 * function value for: {@code require} and {@code provide} exist on the compile path
+	 * only as literal top-level forms, spliced before anything runs, so neither has a
+	 * value -- the refusal a nested or computed call of either gets. A
+	 * {@link #JVM_UNSUPPORTED} name is refused with its computed call's text. Any other
+	 * name is a standard function the backend has no wrapper for.
+	 * @param name the function name
+	 * @return the refusal message
+	 */
+	public static String noFunctionValueMessage(String name) {
+		if (LispNames.REQUIRE.equals(name) || LispNames.PROVIDE.equals(name)) {
+			return name + " is only supported as a literal top-level form on the compile path";
+		}
+		if (JVM_UNSUPPORTED.contains(name)) {
+			return TLS_LISTEN_PEM_COMPUTED_PATH_MESSAGE;
+		}
+		return "Cannot compile: " + name + " as a function value (this backend has none for the built-in)";
+	}
+
+	/**
+	 * The wrappers whose BODY calls {@code apply}: the {@code map*} family, {@code every}
+	 * / {@code some}, {@code funcall} and {@code apply} themselves, and
+	 * {@code complement}, whose expansion applies past three arguments. All of them
+	 * forward a runtime number of arguments, which is what {@code apply} is for.
+	 *
+	 * <p>
+	 * They are injected ungated, but a backend that GATES its {@code apply} runtime on
+	 * the source program using {@code apply} would not see them -- the gate scans the
+	 * program, not the injected wrappers. On WASM that gate is {@code usesEval}, and
+	 * missing it did not fail loudly: {@code _apply} degrades to a stub answering nil, so
+	 * {@code (funcall #'mapcar #'list '(1 2) '(3 4))} answered {@code (NIL NIL)} in a
+	 * program that used {@code apply} nowhere else. Use
+	 * {@link #referencesApplyingWrapper(LispVal)} in such a gate.
+	 */
+	public static final Set<String> APPLY_USING_FUNCTIONS = Set.of(LispNames.MAPCAR, LispNames.MAPC, LispNames.MAPCAN,
+			LispNames.MAPLIST, LispNames.MAPCON, LispNames.MAPL, LispNames.EVERY, LispNames.SOME, LispNames.NOTANY,
+			LispNames.NOTEVERY, LispNames.MAP, LispNames.MAP_INTO, LispNames.FUNCALL, LispNames.APPLY,
+			LispNames.COMPLEMENT);
+
+	/**
+	 * Whether the expression takes any {@link #APPLY_USING_FUNCTIONS} member as a
+	 * first-class function value, i.e. whether an injected wrapper body calling
+	 * {@code apply} can actually be reached at run time.
+	 * @param expr the expression to scan
+	 * @return true when one of those wrappers is reachable
+	 */
+	public static boolean referencesApplyingWrapper(LispVal expr) {
+		for (String name : APPLY_USING_FUNCTIONS) {
+			if (referencesFunctionValue(expr, name)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * The multiple-value producers other than the floor family -- the operators whose
+	 * wrapper publishes its second value ({@code LispMacroExpander.settleWrapperLambdas})
+	 * only in a program that names it as a designator.
+	 */
+	public static final Set<String> VALUE_PUBLISHING_PRODUCERS = Set.of(LispNames.GETHASH, LispNames.FIND_SYMBOL,
+			LispNames.INTERN, LispNames.SUBTYPEP, LispNames.READ_FROM_STRING, LispNames.ARRAY_DISPLACEMENT,
+			LispNames.READ_LINE);
+
+	/**
+	 * The {@link #VALUE_PUBLISHING_PRODUCERS} a program names as a function designator
+	 * ({@link #referencesFunctionDesignator}), or all of them where it runs forms at run
+	 * time, whose calls reach these wrappers -- the ones whose wrapper publishes its
+	 * second value. Every other program carries the one-value wrapper it always did, so
+	 * its output stays byte-identical; what it gives up is the second value of a wrapper
+	 * reached through a designator computed at run time.
+	 * @param program the top-level forms
+	 * @param extraForms further forms that count as the program's (a condition's
+	 * {@code :report} lambdas)
+	 * @return the named producers
+	 */
+	public static Set<String> designatedValueProducers(List<LispVal> program,
+			java.util.Collection<LispVal> extraForms) {
+		if (LispMacroExpander.runsFormsAtRunTime(program)) {
+			return VALUE_PUBLISHING_PRODUCERS;
+		}
+		Set<String> spelled = functionDesignatorNames(program);
+		spelled.addAll(functionDesignatorNames(extraForms));
+		Set<String> named = new java.util.HashSet<>();
+		for (String op : VALUE_PUBLISHING_PRODUCERS) {
+			if (spelled.contains(op)) {
+				named.add(op);
+			}
+		}
+		return named;
+	}
+
+	/**
+	 * Whether a program can reach {@code fresh-line}'s wrapper through a name it spells:
+	 * {@code #'fresh-line}, the symbol in quoted data, or a symbol builder over a string
+	 * ({@link RuntimeNameProducers}). The wrapper's body asks a stream, and a compiled
+	 * ask is what has every character write of the program keep a line start
+	 * ({@code .kb/standard-output-redirect.md}, "A stream's line start"); a program that
+	 * only calls the operator cannot reach it. The caller adds what lets a program name
+	 * anything.
+	 * @param program the top-level forms
+	 * @param extraForms further forms that count as the program's (a condition's
+	 * {@code :report} lambdas)
+	 * @return whether it can
+	 */
+	public static boolean reachesFreshLineValue(List<LispVal> program, java.util.Collection<LispVal> extraForms) {
+		Set<String> names = Set.of(LispNames.FRESH_LINE);
+		return RuntimeNameProducers.anySymbolBuilder(program)
+				|| program.stream().anyMatch(form -> spellsSymbolConstant(form, names))
+				|| extraForms.stream().anyMatch(form -> spellsSymbolConstant(form, names));
+	}
+
+	/**
+	 * Whether the expression names the operator as a function DESIGNATOR -- either the
+	 * {@code #'name} shape {@link #referencesFunctionValue} scans for or the
+	 * {@code 'name} one, which {@code compiler.FunctionDesignators.normalize} turns into
+	 * the first in designator position. A gate that decides whether to inject a wrapper
+	 * AT ALL has to count both: dropping the wrapper leaves
+	 * {@code (funcall 'mapcar #'1+ l)} with no function to call, and the failure is a
+	 * compile error, not a fallback.
+	 *
+	 * <p>
+	 * Deliberately blind to POSITION -- a {@code 'name} inside quoted data counts too.
+	 * The cost of over-counting is one injected wrapper; the cost of under-counting is a
+	 * program that no longer compiles.
+	 * @param expr the expression to scan
+	 * @param name the operator name
+	 * @return {@code true} when a {@code (function name)} or {@code (quote name)} occurs
+	 */
+	public static boolean referencesFunctionDesignator(LispVal expr, String name) {
+		LispVal node = expr;
+		while (node instanceof LispCons cons) {
+			if (cons.car() instanceof LispSymbol op
+					&& (LispNames.FUNCTION.equals(op.name()) || LispNames.QUOTE.equals(op.name()))
+					&& cons.cdr() instanceof LispCons arg && arg.car() instanceof LispSymbol sym
+					&& name.equals(sym.name())) {
+				return true;
+			}
+			if (referencesFunctionDesignator(cons.car(), name)) {
+				return true;
+			}
+			node = cons.cdr();
+		}
+		return false;
+	}
+
+	/**
+	 * Whether the expression spells one of the names as a SYMBOL CONSTANT: anywhere
+	 * inside a {@code (quote ...)} datum, at any depth (list, dotted tail or vector
+	 * element), or as {@code (function name)}. That is exactly how a symbol designator
+	 * naming a built-in can exist at run time in a program with no symbol builder and no
+	 * data evaluator -- the name registry answers only names the program loads as values
+	 * -- so a computed {@code funcall} target can reach one of the names' wrappers only
+	 * when this answers true.
+	 * @param expr the expression to scan
+	 * @param names the operator names
+	 * @return {@code true} when one of the names occurs as a symbol constant
+	 */
+	public static boolean spellsSymbolConstant(LispVal expr, Set<String> names) {
+		LispVal node = expr;
+		while (node instanceof LispCons cons) {
+			if (cons.car() instanceof LispSymbol op
+					&& (LispNames.QUOTE.equals(op.name()) || LispNames.FUNCTION.equals(op.name()))) {
+				return mentionsSymbol(cons.cdr(), names);
+			}
+			if (spellsSymbolConstant(cons.car(), names)) {
+				return true;
+			}
+			node = cons.cdr();
+		}
+		return false;
+	}
+
+	private static boolean mentionsSymbol(LispVal datum, Set<String> names) {
+		while (datum instanceof LispCons cons) {
+			if (mentionsSymbol(cons.car(), names)) {
+				return true;
+			}
+			datum = cons.cdr();
+		}
+		if (datum instanceof LispSymbol sym) {
+			return names.contains(sym.name());
+		}
+		if (datum instanceof am.ik.rontolisp.LispArray array) {
+			for (LispVal element : array.data()) {
+				if (mentionsSymbol(element, names)) {
+					return true;
+				}
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Every name the forms take as a first-class function value: the answers of
+	 * {@link #referencesFunctionValue} for all names in one walk, for a gate that asks
+	 * about many operators (each asking walked the whole program again).
+	 * @param forms the expressions to scan
+	 * @return the names some {@code (function name)} form spells
+	 */
+	public static Set<String> functionValueNames(Iterable<? extends LispVal> forms) {
+		Set<String> names = new java.util.HashSet<>();
+		for (LispVal form : forms) {
+			collectDesignatorNames(form, false, names);
+		}
+		return names;
+	}
+
+	/**
+	 * Every name the forms spell as a function designator: the answers of
+	 * {@link #referencesFunctionDesignator} for all names in one walk.
+	 * @param forms the expressions to scan
+	 * @return the names some {@code (function name)} or {@code (quote name)} form spells
+	 */
+	public static Set<String> functionDesignatorNames(Iterable<? extends LispVal> forms) {
+		Set<String> names = new java.util.HashSet<>();
+		for (LispVal form : forms) {
+			collectDesignatorNames(form, true, names);
+		}
+		return names;
+	}
+
+	// The walk of referencesFunctionValue / referencesFunctionDesignator (every cons
+	// reachable through car and cdr), collecting instead of matching one name.
+	private static void collectDesignatorNames(LispVal expr, boolean quoted, Set<String> names) {
+		LispVal x = expr;
+		while (x instanceof LispCons cons) {
+			if (cons.car() instanceof LispSymbol op
+					&& (LispNames.FUNCTION.equals(op.name()) || quoted && LispNames.QUOTE.equals(op.name()))
+					&& cons.cdr() instanceof LispCons arg && arg.car() instanceof LispSymbol sym) {
+				names.add(sym.name());
+			}
+			collectDesignatorNames(cons.car(), quoted, names);
+			x = cons.cdr();
+		}
+	}
+
+	/**
+	 * Whether the expression takes the named operator as a first-class function value --
+	 * a {@code (function name)} form (the {@code #'name} reader shape).
+	 * @param expr the expression to scan
+	 * @param name the operator name
+	 * @return {@code true} when a {@code (function name)} reference occurs
+	 */
+	public static boolean referencesFunctionValue(LispVal expr, String name) {
+		LispVal node = expr;
+		while (node instanceof LispCons cons) {
+			if (cons.car() instanceof LispSymbol op && LispNames.FUNCTION.equals(op.name())
+					&& cons.cdr() instanceof LispCons arg && arg.car() instanceof LispSymbol sym
+					&& name.equals(sym.name())) {
+				return true;
+			}
+			if (referencesFunctionValue(cons.car(), name)) {
+				return true;
+			}
+			node = cons.cdr();
+		}
+		return false;
+	}
+
+	/**
+	 * Every wrapped operator name -- by construction a built-in FUNCTION both expression
+	 * compilers lower in call position (each wrapper body uses its operator exactly
+	 * there). {@code ShadowedBuiltins} unions this with {@link #LOWERED_WITHOUT_WRAPPER}
+	 * to decide when a user {@code defmethod} shadows a built-in.
+	 * @return the wrapped operator names
+	 */
+	public static Set<String> names() {
+		return WRAPPER_NAMES;
+	}
+
+	/**
+	 * Compiler-lowered built-in FUNCTIONS with no catalog entry a {@code defmethod} can
+	 * shadow. Only names whose lowering accepts general (non-literal) arguments belong
+	 * here: the forwarder defun's body hands the generic's parameters straight to the
+	 * lowered call, so a literal-only lowering ({@code find-symbol},
+	 * {@code symbol-function}) or one that leans on a runtime injected by a gate that has
+	 * already run ({@code typep}/{@code subtypep} inside
+	 * {@code expandTopLevelDefinitions}) cannot be spelled as a fallback and keeps the
+	 * old shadowing behavior.
+	 */
+	static final Set<String> LOWERED_WITHOUT_WRAPPER = Set.of(LispNames.CLOSE, LispNames.LISTEN,
+			LispNames.OPEN_STREAM_P, LispNames.WRITE_LINE, LispNames.GET_OUTPUT_STREAM_STRING, LispNames.FORCE_OUTPUT,
+			LispNames.FINISH_OUTPUT, LispNames.CLEAR_OUTPUT, LispNames.ARRAYP, LispNames.ARRAY_DIMENSIONS,
+			LispNames.RATIONALP, LispNames.NUMERATOR, LispNames.DENOMINATOR, LispNames.RPLACA, LispNames.RPLACD,
+			LispNames.HASH_TABLE_TEST, LispNames.HASH_TABLE_SIZE, LispNames.HASH_TABLE_REHASH_SIZE,
+			LispNames.HASH_TABLE_REHASH_THRESHOLD);
+
+	/**
+	 * The name a function value of this name prints as: a dispatcher's is the built-in's,
+	 * as the interpreter's dispatcher, which keeps that name, prints.
+	 * @param functionName the compiled function's name
+	 * @return the built-in's name for a dispatcher, else {@code functionName}
+	 */
+	public static String printedName(String functionName) {
+		return ShadowedDispatchers.OPERATORS.getOrDefault(functionName, functionName);
+	}
+
+	/**
+	 * The operator a wrong-argument-count report names for a function of this name: the
+	 * name itself when it is a wrapped built-in, the interpreter's name for a native one
+	 * ({@link NativeCallShapes#operator}) -- a spliced library defun that implements it
+	 * on a compiled backend reports as the built-in, not as {@code Function} -- and
+	 * {@code null} (reported as {@code ClosRegistry.ARITY_ANONYMOUS_OPERATOR}) for
+	 * anything else. One rule for all four backends -- the interpreter asks it of a
+	 * lambda's name, the compiled backends of a callable's -- decided by the NAME,
+	 * because the interpreter's catalog lambda and the compilers' injected wrapper defun
+	 * are the same function under it. The compile paths' dispatcher of a built-in a
+	 * {@code defmethod} shadows ({@code ShadowedBuiltins},
+	 * {@link LispMacroExpander#shadowedDispatcherName}) reports as the built-in, as the
+	 * interpreter's dispatcher, which keeps the built-in's name, does.
+	 * @param functionName the callee's name, or {@code null} for an anonymous one
+	 * @return the operator to report, or {@code null}
+	 */
+	public static @Nullable String arityOperator(@Nullable String functionName) {
+		if (functionName == null) {
+			return null;
+		}
+		if (WRAPPER_NAMES.contains(functionName)) {
+			return functionName;
+		}
+		String nativeOperator = NativeCallShapes.operator(functionName);
+		return nativeOperator != null ? nativeOperator : ShadowedDispatchers.OPERATORS.get(functionName);
+	}
+
+	/**
+	 * {@link LispMacroExpander#shadowedDispatcherName} of every wrapped name and every
+	 * {@link #LOWERED_WITHOUT_WRAPPER} -&gt; the name, built on first use rather than in
+	 * this class's initializer, which the expander's may be running.
+	 */
+	private static final class ShadowedDispatchers {
+
+		static final Map<String, String> OPERATORS;
+		static {
+			Map<String, String> operators = new java.util.HashMap<>();
+			for (String name : WRAPPER_NAMES) {
+				operators.put(LispMacroExpander.shadowedDispatcherName(name), name);
+			}
+			for (String name : LOWERED_WITHOUT_WRAPPER) {
+				operators.put(LispMacroExpander.shadowedDispatcherName(name), name);
+			}
+			OPERATORS = Map.copyOf(operators);
+		}
+
+		private ShadowedDispatchers() {
+		}
+
+	}
+
+	/**
+	 * Generates wrapper defuns for built-in operators that are not already defined by the
+	 * user.
+	 * @param userDefinedNames names already defined by user defuns
+	 * @return list of {@code (setq name (lambda ...))} expressions
+	 */
+	public static List<LispVal> generate(Set<String> userDefinedNames) {
+		return generate(userDefinedNames, Set.of());
+	}
+
+	/**
+	 * Every wrapper catalog name, for the apply-runtime gate
+	 * ({@code LispMacroExpander.needsApplyRuntime}): an {@code apply} whose literal
+	 * target is one of these compiles to a direct call of the injected wrapper. The
+	 * caller subtracts its backend's exclusions.
+	 * @return the names of every {@code WRAPPER_DEFS} entry
+	 */
+	public static Set<String> wrapperNames() {
+		Set<String> names = new java.util.HashSet<>();
+		for (WrapperDef def : WRAPPER_DEFS) {
+			names.add(def.name);
+		}
+		return names;
+	}
+
+	/**
+	 * The {@code (setq name (lambda ...))} wrapper forms to splice, one per
+	 * {@code WRAPPER_DEFS} entry the program does not define itself and the caller has
+	 * not excluded.
+	 * @param userDefinedNames names the program defines (its own definition wins)
+	 * @param excludedNames names the caller's gates keep out (e.g. wrappers whose bodies
+	 * would force a runtime tier the program otherwise avoids)
+	 * @return the wrapper forms
+	 */
+	public static List<LispVal> generate(Set<String> userDefinedNames, Set<String> excludedNames) {
+		List<LispVal> wrappers = new ArrayList<>();
+		for (WrapperDef def : WRAPPER_DEFS) {
+			if (!userDefinedNames.contains(def.name) && !excludedNames.contains(def.name)) {
+				HelperWrapper helper = HELPER_WRAPPERS.get(def.name);
+				WrapperDef chosen = helper != null && !userDefinedNames.contains(helper.helper()) ? helper.narrow()
+						: def;
+				DispatchWrapper pushback = PUSHBACK_WRAPPERS.get(def.name);
+				if (pushback != null && userDefinedNames.containsAll(pushback.helpers())) {
+					chosen = pushback.dispatching();
+				}
+				DispatchWrapper gray = GRAY_WRAPPERS.get(def.name);
+				if (gray != null && userDefinedNames.containsAll(gray.helpers())) {
+					chosen = gray.dispatching();
+				}
+				// Over the Gray twin: %format-write's own write is a site the Gray
+				// rewrite
+				// has already sent to its dispatch.
+				if (LispNames.FORMAT.equals(def.name) && userDefinedNames.contains(LispNames.FORMAT_WRITE_INTERNAL)) {
+					chosen = formatThroughDestinationWrapper();
+				}
+				if (LispNames.MAP.equals(def.name) && excludedNames.contains(LispNames.CONCATENATE)) {
+					chosen = mapWrapper(false);
+				}
+				wrappers.add(chosen.toSetqLambda());
+			}
+		}
+		return wrappers;
+	}
+
+	/**
+	 * {@code (setq name (lambda params body...))}, in the catalog's parameter spelling
+	 * ({@code "e=t"}, {@code "b?bp"}): a wrapper form built outside the catalog
+	 * ({@link FunctionValueWrappers}).
+	 */
+	static LispVal setqLambda(String name, List<String> params, List<LispVal> body) {
+		return new WrapperDef(name, params, body).toSetqLambda();
+	}
+
+	/**
+	 * A catalog wrapper whose body calls a PRELUDE defun, and the narrower function the
+	 * compile paths inject where that defun was not spliced.
+	 *
+	 * <p>
+	 * The prelude pass decides what to splice from the program's own spelling, before any
+	 * wrapper exists, and so do the scans that gate what the defun needs (the CLOS
+	 * instance gates and the Gray rewrite for {@code %make-broadcast-stream}; the printer
+	 * variables' {@code defvar}s and renderer for {@code %write-to-string-keyed}, which
+	 * name them). The wrapper therefore takes its full shape exactly where the defun is
+	 * in the program -- one fact, read after the splice, so the two cannot disagree --
+	 * and otherwise the narrow one, reachable only through a designator the surface does
+	 * not show ({@code eval}, a symbol built at run time). The interpreter, which loads
+	 * prelude entries on first call, always has the full shape ({@link #lambdaFor}), as
+	 * {@link BuiltinCallArity} does.
+	 *
+	 * @param helper the prelude defun the full body calls
+	 * @param narrow the wrapper injected without it
+	 */
+	private record HelperWrapper(String helper, WrapperDef narrow) {
+	}
+
+	/**
+	 * {@code #'make-array} takes the keyword tail the call position does where the two
+	 * {@code %make-array-et} entries are spliced -- a program that can hand the value
+	 * more than one argument -- and the dimensions alone otherwise.
+	 * {@code #'make-broadcast-stream} is the Gray broadcast stream where its entry is
+	 * spliced -- which the prelude does for any program naming the operator -- and the
+	 * discarding sink otherwise. {@code #'write-to-string} binds the printer variables
+	 * its keyword tail names where {@code %write-to-string-keyed} is spliced -- a program
+	 * that can hand the value more than one argument -- and is the one-argument
+	 * {@code prin1-to-string} alias otherwise. {@code #'read-from-string} takes CL's
+	 * whole lambda list through {@code %read-from-string-full} under the same condition,
+	 * and the one-argument read otherwise.
+	 */
+	private static final Map<String, HelperWrapper> HELPER_WRAPPERS = Map
+		.of(LispNames.MAKE_ARRAY, new HelperWrapper(LispNames.MAKE_ARRAY_ET_FP_INTERNAL, variadicMakeArray()),
+				LispNames.MAKE_BROADCAST_STREAM,
+				new HelperWrapper(LispNames.MAKE_BROADCAST_STREAM_INTERNAL,
+						new WrapperDef(LispNames.MAKE_BROADCAST_STREAM, List.of(),
+								List.of(call(LispNames.MAKE_STRING_OUTPUT_STREAM_INTERNAL)))),
+				LispNames.WRITE_TO_STRING,
+				new HelperWrapper(LispNames.WRITE_TO_STRING_KEYED_INTERNAL,
+						new WrapperDef(LispNames.WRITE_TO_STRING, List.of("a"),
+								List.of(call(LispNames.WRITE_TO_STRING, "a")))),
+				LispNames.READ_FROM_STRING,
+				new HelperWrapper(LispNames.READ_FROM_STRING_FULL_INTERNAL, unary(LispNames.READ_FROM_STRING)));
+
+	/**
+	 * A stream operator's wrapper in a program whose pre-pass rewrites that operator's
+	 * call sites onto spliced defuns: the catalog wrapper's lambda list, its body calling
+	 * the defuns a call-position site is rewritten to, so the function value answers as
+	 * the call does. A function value has no call site for the rewrite to see, and the
+	 * wrapper is synthesized by the backend after every pre-pass. Chosen exactly where
+	 * every helper it names is in the program -- one fact, read after the splice.
+	 *
+	 * @param helpers the qualified names of the defuns the body calls
+	 * @param dispatching the wrapper calling them
+	 */
+	private record DispatchWrapper(List<String> helpers, WrapperDef dispatching) {
+	}
+
+	/**
+	 * The Gray twins: the bodies call the {@code gray.lisp} dispatch helpers, so a
+	 * function value handed a Gray stream instance reaches the class's methods
+	 * ({@code .kb/gray-streams.md}, "Function values").
+	 * {@code GrayStreamsLibrary.process} splices the helpers for an operator the program
+	 * designates ({@link #grayDispatchHelpers}). A Gray twin wins over a pushback twin:
+	 * its handle fallback is a call site {@code UnreadCharLibrary} has already rewritten.
+	 */
+	private static final Map<String, DispatchWrapper> GRAY_WRAPPERS = grayWrappers();
+
+	/**
+	 * The pushback twins: the bodies call the {@code unread-char.lisp} defuns
+	 * {@code UnreadCharLibrary} splices into a program naming {@code unread-char}, so
+	 * {@code #'unread-char} parks the character and the read family taken as values
+	 * drains it ({@code .kb/gray-streams.md}, "Handle-side pushback of
+	 * {@code unread-char}"). Elsewhere {@code #'unread-char} is the catalog wrapper,
+	 * which signals: no call site names the operator there, so it is reachable only
+	 * through a symbol built at run time.
+	 */
+	private static final Map<String, DispatchWrapper> PUSHBACK_WRAPPERS = pushbackWrappers();
+
+	/**
+	 * The dispatch helpers a function value of the operator calls in a program carrying
+	 * the Gray protocol, by their names in {@code gray.lisp}; empty for an operator with
+	 * no Gray twin.
+	 * @param name the operator
+	 * @return the qualified helper names
+	 */
+	public static List<String> grayDispatchHelpers(String name) {
+		DispatchWrapper gray = GRAY_WRAPPERS.get(name);
+		return gray == null ? List.of() : gray.helpers();
+	}
+
+	private static Map<String, DispatchWrapper> grayWrappers() {
+		Map<String, DispatchWrapper> table = new java.util.LinkedHashMap<>();
+		LispVal start = getfKwDefault(LispNames.START_KEYWORD, new LispInteger(0));
+		LispVal end = getfKw(LispNames.END_KEYWORD);
+		// (s &optional st &key start end): the bounds helper, which checks a spelled
+		// bound and hands the method integers.
+		for (String[] op : new String[][] { { LispNames.WRITE_STRING, "%GRAY-WRITE-STRING-BOUNDS-DISPATCH" },
+				{ LispNames.WRITE_LINE, "%GRAY-WRITE-LINE-BOUNDS-DISPATCH" } }) {
+			String helper = rontolispInternal(op[1]);
+			table.put(op[0],
+					new DispatchWrapper(List.of(helper),
+							new WrapperDef(op[0],
+									List.of("s", LispNames.LAMBDA_OPTIONAL, "st", LispNames.LAMBDA_REST, "kw"),
+									List.of(callV(helper, new LispSymbol("s"), new LispSymbol("st"), start, end)))));
+		}
+		// (seq stream &key start end).
+		for (String[] op : new String[][] { { LispNames.READ_SEQUENCE, "%GRAY-READ-SEQUENCE-DISPATCH" },
+				{ LispNames.WRITE_SEQUENCE, "%GRAY-WRITE-SEQUENCE-DISPATCH" } }) {
+			String helper = rontolispInternal(op[1]);
+			table.put(op[0],
+					new DispatchWrapper(List.of(helper),
+							new WrapperDef(op[0], List.of("seq", "st", LispNames.LAMBDA_REST, "kw"),
+									List.of(callV(helper, new LispSymbol("seq"), new LispSymbol("st"), start, end)))));
+		}
+		// (value &optional stream).
+		for (String[] op : new String[][] { { LispNames.PRINC, "%GRAY-PRINC-DISPATCH" },
+				{ LispNames.PRIN1, "%GRAY-PRIN1-DISPATCH" }, { LispNames.PRINT, "%GRAY-PRINT-DISPATCH" } }) {
+			String helper = rontolispInternal(op[1]);
+			table.put(op[0], new DispatchWrapper(List.of(helper), new WrapperDef(op[0],
+					List.of("a", LispNames.LAMBDA_OPTIONAL, "s"), List.of(call(helper, "a", "s")))));
+		}
+		// (&optional stream).
+		for (String[] op : new String[][] { { LispNames.TERPRI, "%GRAY-TERPRI-DISPATCH" },
+				{ LispNames.FRESH_LINE, "%GRAY-FRESH-LINE-DISPATCH" },
+				{ LispNames.FORCE_OUTPUT, "%GRAY-FORCE-OUTPUT-DISPATCH" },
+				{ LispNames.FINISH_OUTPUT, "%GRAY-FINISH-OUTPUT-DISPATCH" },
+				{ LispNames.CLEAR_OUTPUT, "%GRAY-CLEAR-OUTPUT-DISPATCH" },
+				{ LispNames.LISTEN, "%GRAY-LISTEN-DISPATCH" } }) {
+			String helper = rontolispInternal(op[1]);
+			table.put(op[0], new DispatchWrapper(List.of(helper),
+					new WrapperDef(op[0], List.of(LispNames.LAMBDA_OPTIONAL, "s"), List.of(call(helper, "s")))));
+		}
+		// (&optional stream (eof-error-p t) eof-value recursive-p).
+		for (String[] op : new String[][] { { LispNames.READ_CHAR, "%GRAY-READ-CHAR-DISPATCH" },
+				{ LispNames.READ_CHAR_NO_HANG, "%GRAY-READ-CHAR-NO-HANG-DISPATCH" },
+				{ LispNames.READ_LINE, "%GRAY-READ-LINE-DISPATCH" } }) {
+			String helper = rontolispInternal(op[1]);
+			table.put(op[0],
+					new DispatchWrapper(List.of(helper),
+							new WrapperDef(op[0], List.of(LispNames.LAMBDA_OPTIONAL, "s", "e" + DEFAULT_TRUE, "v", "r"),
+									List.of(call(helper, "s", "e", "v")))));
+		}
+		String peekChar = rontolispInternal("%GRAY-PEEK-CHAR-DISPATCH");
+		table.put(LispNames.PEEK_CHAR,
+				new DispatchWrapper(List.of(peekChar),
+						new WrapperDef(LispNames.PEEK_CHAR,
+								List.of(LispNames.LAMBDA_OPTIONAL, "a", "b", "e" + DEFAULT_TRUE, "v", "r"),
+								List.of(call(peekChar, "a", "b", "e", "v")))));
+		// (character &optional stream): a nil stream is the current *standard-output* /
+		// *standard-input*, which the helper resolves.
+		for (String[] op : new String[][] { { LispNames.WRITE_CHAR, "%GRAY-WRITE-CHAR-DISPATCH" },
+				{ LispNames.UNREAD_CHAR, "%GRAY-UNREAD-CHAR-DISPATCH" } }) {
+			String helper = rontolispInternal(op[1]);
+			table.put(op[0], new DispatchWrapper(List.of(helper), new WrapperDef(op[0],
+					List.of("c", LispNames.LAMBDA_OPTIONAL, "s"), List.of(call(helper, "c", "s")))));
+		}
+		String writeByte = rontolispInternal("%GRAY-WRITE-BYTE-DISPATCH");
+		table.put(LispNames.WRITE_BYTE, new DispatchWrapper(List.of(writeByte),
+				new WrapperDef(LispNames.WRITE_BYTE, List.of("b", "s"), List.of(call(writeByte, "b", "s")))));
+		String readByte = rontolispInternal("%GRAY-READ-BYTE-DISPATCH");
+		table.put(LispNames.READ_BYTE,
+				new DispatchWrapper(List.of(readByte),
+						new WrapperDef(LispNames.READ_BYTE,
+								List.of("s", LispNames.LAMBDA_OPTIONAL, "e" + DEFAULT_TRUE, "v"),
+								List.of(call(readByte, "s", "e", "v")))));
+		// (stream): the stream queries. A program owning one with a defmethod defines
+		// the name itself, and its catalog wrapper is not injected at all.
+		for (String[] op : new String[][] { { LispNames.INPUT_STREAM_P, "%GRAY-INPUT-STREAM-P-DISPATCH" },
+				{ LispNames.OUTPUT_STREAM_P, "%GRAY-OUTPUT-STREAM-P-DISPATCH" },
+				{ LispNames.STREAM_ELEMENT_TYPE, "%GRAY-STREAM-ELEMENT-TYPE-DISPATCH" },
+				{ LispNames.FILE_LENGTH, "%GRAY-BROADCAST-FILE-LENGTH" } }) {
+			String helper = rontolispInternal(op[1]);
+			table.put(op[0], new DispatchWrapper(List.of(helper),
+					new WrapperDef(op[0], List.of("a"), List.of(call(helper, "a")))));
+		}
+		String position = rontolispInternal("%GRAY-FILE-POSITION-DISPATCH");
+		String positionSet = rontolispInternal("%GRAY-FILE-POSITION-SET-DISPATCH");
+		table.put(LispNames.FILE_POSITION,
+				new DispatchWrapper(List.of(position, positionSet),
+						new WrapperDef(LispNames.FILE_POSITION, List.of("a", LispNames.LAMBDA_OPTIONAL, "b"),
+								List.of(listToCons(List.of(new LispSymbol(LispNames.IF), new LispSymbol("b"),
+										call(positionSet, "a", "b"), call(position, "a")))))));
+		String writeString = rontolispInternal("%GRAY-WRITE-STRING-DISPATCH");
+		String freshLine = rontolispInternal("%GRAY-FRESH-LINE-DISPATCH");
+		table.put(LispNames.FORMAT,
+				new DispatchWrapper(List.of(writeString, freshLine), formatWrapper(writeString, freshLine)));
+		return java.util.Collections.unmodifiableMap(table);
+	}
+
+	private static Map<String, DispatchWrapper> pushbackWrappers() {
+		Map<String, DispatchWrapper> table = new java.util.LinkedHashMap<>();
+		String push = rontolispInternal(LispNames.UNREAD_CHAR_PUSH_INTERNAL);
+		table.put(LispNames.UNREAD_CHAR, new DispatchWrapper(List.of(push), new WrapperDef(LispNames.UNREAD_CHAR,
+				List.of("c", LispNames.LAMBDA_OPTIONAL, "s"), List.of(call(push, "c", "s")))));
+		// read-char-no-hang IS read-char here, at a call site and as a value.
+		String readChar = rontolispInternal(LispNames.UNREAD_READ_CHAR_INTERNAL);
+		for (String op : List.of(LispNames.READ_CHAR, LispNames.READ_CHAR_NO_HANG)) {
+			table.put(op,
+					new DispatchWrapper(List.of(readChar),
+							new WrapperDef(op, List.of(LispNames.LAMBDA_OPTIONAL, "s", "e" + DEFAULT_TRUE, "v", "r"),
+									List.of(call(readChar, "s", "e", "v")))));
+		}
+		String peekChar = rontolispInternal(LispNames.UNREAD_PEEK_CHAR_INTERNAL);
+		table.put(LispNames.PEEK_CHAR,
+				new DispatchWrapper(List.of(peekChar),
+						new WrapperDef(LispNames.PEEK_CHAR,
+								List.of(LispNames.LAMBDA_OPTIONAL, "a", "b", "e" + DEFAULT_TRUE, "v", "r"),
+								List.of(call(peekChar, "a", "b", "e", "v")))));
+		// read-line keeps the catalog wrapper's lite eof convention (readLineWrapper):
+		// a true eof-error-p is the one-argument call, which the call-site rewrite
+		// sends to the pushback defun with eof-error-p nil.
+		String readLine = rontolispInternal(LispNames.UNREAD_READ_LINE_INTERNAL);
+		LispVal readLineBody = listToCons(List.of(new LispSymbol(LispNames.IF), new LispSymbol("e"),
+				callV(readLine, new LispSymbol("s"), LispNil.INSTANCE, LispNil.INSTANCE),
+				callV(readLine, new LispSymbol("s"), LispNil.INSTANCE, new LispSymbol("v"))));
+		table.put(LispNames.READ_LINE, new DispatchWrapper(List.of(readLine), new WrapperDef(LispNames.READ_LINE,
+				List.of(LispNames.LAMBDA_OPTIONAL, "s", "e" + DEFAULT_TRUE, "v", "r"), List.of(readLineBody))));
+		String listen = rontolispInternal(LispNames.UNREAD_LISTEN_INTERNAL);
+		table.put(LispNames.LISTEN, new DispatchWrapper(List.of(listen),
+				new WrapperDef(LispNames.LISTEN, List.of(LispNames.LAMBDA_OPTIONAL, "s"), List.of(call(listen, "s")))));
+		// Both file-position defuns are spliced only where the program names
+		// file-position, which #'file-position does.
+		String position = rontolispInternal(LispNames.UNREAD_FILE_POSITION_INTERNAL);
+		String positionSet = rontolispInternal(LispNames.UNREAD_FILE_POSITION_SET_INTERNAL);
+		table.put(LispNames.FILE_POSITION,
+				new DispatchWrapper(List.of(position, positionSet),
+						new WrapperDef(LispNames.FILE_POSITION, List.of("a", LispNames.LAMBDA_OPTIONAL, "b"),
+								List.of(listToCons(List.of(new LispSymbol(LispNames.IF), new LispSymbol("b"),
+										call(positionSet, "a", "b"), call(position, "a")))))));
+		return java.util.Collections.unmodifiableMap(table);
+	}
+
+	private static String rontolispInternal(String member) {
+		return LispNames.RONTOLISP_PKG + "::" + member;
+	}
+
+	private static String rontolisp(String member) {
+		return PackageRegistry.qualify(LispNames.RONTOLISP_PKG, member);
+	}
+
+	/**
+	 * {@code #'read-from-string}: {@code (lambda (s &rest r) (if r (apply
+	 * #'%read-from-string-full s r) (read-from-string s)))} -- more than the string is
+	 * the prelude defun's whole lambda list, as in call position
+	 * ({@code LispMacroExpander.expandReadFromString}).
+	 */
+	private static WrapperDef readFromStringWrapper() {
+		LispVal full = callV(LispNames.APPLY,
+				listToCons(List.of(new LispSymbol(LispNames.FUNCTION),
+						new LispSymbol(LispNames.READ_FROM_STRING_FULL_INTERNAL))),
+				new LispSymbol("s"), new LispSymbol("r"));
+		LispVal body = listToCons(List.of(new LispSymbol(LispNames.IF), new LispSymbol("r"), full,
+				call(LispNames.READ_FROM_STRING, "s")));
+		return new WrapperDef(LispNames.READ_FROM_STRING, List.of("s", LispNames.LAMBDA_REST, "r"), List.of(body));
+	}
+
+	/**
+	 * {@code #'write-to-string}: {@code (lambda (a &rest kw) (if kw
+	 * (%write-to-string-keyed a kw) (write-to-string a)))} -- a keyword tail binds the
+	 * printer variables around the print, as the call-position lowering does with a
+	 * literal one.
+	 */
+	private static WrapperDef writeToStringWrapper() {
+		LispVal body = listToCons(List.of(new LispSymbol(LispNames.IF), new LispSymbol("kw"),
+				call(LispNames.WRITE_TO_STRING_KEYED_INTERNAL, "a", "kw"), call(LispNames.WRITE_TO_STRING, "a")));
+		return new WrapperDef(LispNames.WRITE_TO_STRING, List.of("a", LispNames.LAMBDA_REST, "kw"), List.of(body));
+	}
+
+	private static final String DEFAULT_TRUE = "=t";
+
+	/**
+	 * Separates an optional parameter's name from an integer default in a
+	 * {@link WrapperDef} lambda list: {@code "a=0"} is {@code (a 0)}.
+	 */
+	private static final String DEFAULT = "=";
+
+	/**
+	 * Separates an optional parameter's name from its supplied-p variable in a
+	 * {@link WrapperDef} lambda list: {@code "b?bp"} is {@code (b nil bp)}.
+	 */
+	private static final String SUPPLIED_P = "?";
+
+	// (read-char &optional s (e t) v r) -- CL's whole optional tail: the eof-error-p
+	// default is true and recursive-p is accepted and dropped. read-char's wrapper is
+	// REFERENCE_GATED, so the end-of-file construction a computed eof-error-p implies
+	// is gated with it.
+	private static WrapperDef optionalStreamEof(String name) {
+		return new WrapperDef(name, List.of(LispNames.LAMBDA_OPTIONAL, "s", "e" + DEFAULT_TRUE, "v", "r"),
+				List.of(call(name, "s", "e", "v")));
+	}
+
+	// (read-line &optional s (e t) v r): read-line's wrapper is NOT reference-gated, so a
+	// computed eof-error-p -- an end-of-file construction the instance gate cannot see
+	// coming -- must not reach its body. A true one keeps the one-argument call (the
+	// wrapper's shape before it took the tail), a false one the literal-nil call that
+	// answers the eof-value.
+	private static WrapperDef readLineWrapper() {
+		LispVal dispatch = listToCons(List.of(new LispSymbol(LispNames.IF), new LispSymbol("e"),
+				call(LispNames.READ_LINE, "s"), listToCons(List.of(new LispSymbol(LispNames.READ_LINE),
+						new LispSymbol("s"), LispNil.INSTANCE, new LispSymbol("v")))));
+		return new WrapperDef(LispNames.READ_LINE,
+				List.of(LispNames.LAMBDA_OPTIONAL, "s", "e" + DEFAULT_TRUE, "v", "r"), List.of(dispatch));
+	}
+
+	private record WrapperDef(String name, List<String> params, List<LispVal> body) {
+
+		// (lambda (params...) body...) -- the function VALUE itself, without the setq
+		// that binds it to the operator's name on the compile paths.
+		LispVal toLambda() {
+			LispVal paramList = listToCons(params.stream().map(WrapperDef::param).toList());
+			List<LispVal> lambdaParts = new ArrayList<>();
+			lambdaParts.add(new LispSymbol(LispNames.LAMBDA));
+			lambdaParts.add(paramList);
+			lambdaParts.addAll(body);
+			return listToCons(lambdaParts);
+		}
+
+		// A parameter spelled "name=t" is the optional (name t): the read family's
+		// eof-error-p, whose omitted default is TRUE, unlike a bound nil; one spelled
+		// "name=0" takes that integer (an identity fold's). One spelled
+		// "name?supplied" is (name nil supplied): an optional whose absence, not its
+		// value, picks the arm -- (funcall #'max 1 nil) is a type error, not 1.
+		private static LispVal param(String p) {
+			if (p.endsWith(DEFAULT_TRUE)) {
+				return listToCons(
+						List.of(new LispSymbol(p.substring(0, p.length() - DEFAULT_TRUE.length())), LispTrue.INSTANCE));
+			}
+			int defaulted = p.indexOf(DEFAULT);
+			if (defaulted > 0) {
+				return listToCons(List.of(new LispSymbol(p.substring(0, defaulted)),
+						new LispInteger(Long.parseLong(p.substring(defaulted + DEFAULT.length())))));
+			}
+			int supplied = p.indexOf(SUPPLIED_P);
+			if (supplied > 0) {
+				return listToCons(List.of(new LispSymbol(p.substring(0, supplied)), LispNil.INSTANCE,
+						new LispSymbol(p.substring(supplied + SUPPLIED_P.length()))));
+			}
+			return new LispSymbol(p);
+		}
+
+		LispVal toSetqLambda() {
+			// Build (setq name (lambda (params...) body...))
+			return listToCons(List.of(new LispSymbol(LispNames.SETQ), new LispSymbol(name), toLambda()));
+		}
+
+	}
+
+	/**
+	 * The {@code (lambda ...)} form of one wrapper, or {@code null} when the name has no
+	 * entry. This is the INTERPRETER's half of the catalog: {@code LispEvaluator}
+	 * evaluates the form on the first {@code #'name} / {@code (symbol-function 'name)}
+	 * resolution of a built-in it lowers in {@code evalCons} but never binds as a
+	 * {@code LispFunction}, so one table answers "what is the function value of this
+	 * built-in" on all four backends instead of the compile paths having a catalog and
+	 * the interpreter a separate list of Java builtins that drifted from it
+	 * ({@code .kb/core-representation.md}).
+	 * @param name the operator name
+	 * @return the wrapper lambda form, or {@code null} when there is no wrapper
+	 */
+	public static @org.jspecify.annotations.Nullable LispVal lambdaFor(String name) {
+		for (WrapperDef def : WRAPPER_DEFS) {
+			if (def.name.equals(name)) {
+				return def.toLambda();
+			}
+		}
+		return null;
+	}
+
+	/**
+	 * {@code #'reduce}: {@code (lambda (f seq &rest kw) ...)}, the runtime keywords fed
+	 * back into the call-position expansion ({@code LispMacroExpander.expandReduce}),
+	 * which already folds a COMPUTED
+	 * {@code :key}/{@code :from-end}/{@code :start}/{@code :end}. A call with no keyword
+	 * is the plain fold, and {@code :initial-value} is told apart from an absent one by a
+	 * {@code getf} default no value can be (the fresh rest list itself), since nil is a
+	 * legal initial value. It is also what the compiled {@code eval} reaches for
+	 * {@code reduce}: the registry names the operator in a wrong count
+	 * ({@code REDUCE expects at least 2 arguments}) and serves every keyword.
+	 *
+	 * <pre>
+	 * (if kw
+	 *     (let ((iv (getf kw :initial-value kw)))
+	 *       (if (eq iv kw)
+	 *           (reduce f seq :key k :from-end e :start s :end n)
+	 *           (reduce f seq :key k :from-end e :start s :end n :initial-value iv)))
+	 *     (reduce f seq))
+	 * </pre>
+	 */
+	private static WrapperDef reduceWrapper() {
+		LispSymbol kw = new LispSymbol("kw");
+		LispSymbol iv = new LispSymbol("iv");
+		List<LispVal> keyed = new ArrayList<>(List.of(new LispSymbol(LispNames.REDUCE), new LispSymbol("f"),
+				new LispSymbol("seq"), new LispSymbol(LispNames.KEY_KEYWORD), getfKw(LispNames.KEY_KEYWORD),
+				new LispSymbol(LispNames.FROM_END_KEYWORD), getfKw(LispNames.FROM_END_KEYWORD),
+				new LispSymbol(LispNames.START_KEYWORD), getfKwDefault(LispNames.START_KEYWORD, new LispInteger(0)),
+				new LispSymbol(LispNames.END_KEYWORD), getfKw(LispNames.END_KEYWORD)));
+		LispVal withoutInit = listToCons(keyed);
+		keyed.add(new LispSymbol(LispNames.INITIAL_VALUE_KEYWORD));
+		keyed.add(iv);
+		LispVal withInit = listToCons(keyed);
+		LispVal pick = listToCons(
+				List.of(new LispSymbol(LispNames.IF), callV(LispNames.EQ_GENERAL, iv, kw), withoutInit, withInit));
+		LispVal keywords = listToCons(List.of(new LispSymbol(LispNames.LET),
+				listToCons(List.of((LispVal) listToCons(
+						List.of(iv, callV(LispNames.GETF, kw, new LispSymbol(LispNames.INITIAL_VALUE_KEYWORD), kw))))),
+				pick));
+		LispVal body = listToCons(
+				List.of(new LispSymbol(LispNames.IF), kw, keywords, call(LispNames.REDUCE, "f", "seq")));
+		return new WrapperDef(LispNames.REDUCE, List.of("f", "seq", LispNames.LAMBDA_REST, "kw"), List.of(body));
+	}
+
+	/**
+	 * {@code #'apply}: {@code (lambda (f a &rest r) ...)} spreads its LAST argument -- a
+	 * when r is empty, else the last of r -- behind the arguments in front of it, and
+	 * refuses a last argument that is no proper list with the interpreter's text (a
+	 * dotted one would otherwise reach the dispatcher's list walk). Its lambda list is
+	 * what a wrong count is reported from ({@code APPLY expects at least 2 arguments}),
+	 * which is also how the compiled {@code eval} reaches it: through the registry, like
+	 * any other catalog name.
+	 *
+	 * <pre>
+	 * (let ((l (if r (car (last r)) a)))
+	 *   (if (do ((c l (cdr c))) ((atom c) (null c)))
+	 *       (apply f (if r (cons a (append (butlast r) l)) l))
+	 *       (error "APPLY: last argument must be a list")))
+	 * </pre>
+	 */
+	private static WrapperDef applyWrapper() {
+		LispSymbol f = new LispSymbol("f");
+		LispSymbol a = new LispSymbol("a");
+		LispSymbol r = new LispSymbol("r");
+		LispSymbol l = new LispSymbol("l");
+		LispSymbol c = new LispSymbol("c");
+		LispVal last = listToCons(
+				List.of(new LispSymbol(LispNames.IF), r, callV(LispNames.CAR, callV(LispNames.LAST, r)), a));
+		LispVal proper = listToCons(List.of(new LispSymbol(LispNames.DO),
+				listToCons(List.of((LispVal) listToCons(List.of(c, l, callV(LispNames.CDR, c))))),
+				listToCons(List.of(callV(LispNames.ATOM, c), callV(LispNames.NULL, c)))));
+		LispVal spread = listToCons(List.of(new LispSymbol(LispNames.IF), r,
+				callV(LispNames.CONS, a, callV(LispNames.APPEND, callV(LispNames.BUTLAST, r), l)), l));
+		LispVal checked = listToCons(List.of(new LispSymbol(LispNames.IF), proper, callV(LispNames.APPLY, f, spread),
+				callV(LispNames.ERROR, new LispString(ClosRegistry.APPLY_IMPROPER_LIST_MESSAGE))));
+		LispVal body = listToCons(List.of(new LispSymbol(LispNames.LET),
+				listToCons(List.of((LispVal) listToCons(List.of(l, last)))), checked));
+		return new WrapperDef(LispNames.APPLY, List.of("f", "a", LispNames.LAMBDA_REST, "r"), List.of(body));
+	}
+
+	// Helper to build a call expression: (op args...)
+	static LispVal call(String op, String... args) {
+		List<LispVal> parts = new ArrayList<>();
+		parts.add(new LispSymbol(op));
+		for (String arg : args) {
+			parts.add(new LispSymbol(arg));
+		}
+		return listToCons(parts);
+	}
+
+	// Helper to build a call with LispVal args
+	static LispVal callV(String op, LispVal... args) {
+		List<LispVal> parts = new ArrayList<>();
+		parts.add(new LispSymbol(op));
+		for (LispVal arg : args) {
+			parts.add(arg);
+		}
+		return listToCons(parts);
+	}
+
+	// The Horner fold of a RUNTIME subscript list over the array's dimensions -- the
+	// shape both #'aref and #'array-row-major-index need, because CL gives each of them
+	// one subscript per dimension and the rank is static only in call position. A
+	// subscript COUNT that does not match the rank is the operator's type-error over the
+	// array before the loop runs -- its expected type the array of the rank the
+	// subscripts spell (OperandTypes#rankType: VECTOR, (ARRAY * NIL), (ARRAY * (* *))),
+	// computed at run time like the bound below -- and each subscript is checked against
+	// its OWN dimension as the loop steps onto it (.kb/error-handling.md, "An
+	// out-of-range subscript is a type-error naming its bound"):
+	// (let ((__aref_dims (array-dimensions a)))
+	// (if (/= (length idx) (length __aref_dims))
+	// <signal a (if (= (length idx) 1) 'vector
+	// (list 'array '* (do ((s nil (cons '* s)) (k idx (cdr k))) ((null k) s))))>
+	// (do ((rm 0) (ds __aref_dims) (is idx))
+	// ((null is) <result>)
+	// (if (or (< (car is) 0) (>= (car is) (car ds))) <signal> nil)
+	// (setq rm (+ (* rm (car ds)) (car is)))
+	// (setq ds (cdr ds))
+	// (setq is (cdr is)))))
+	private static LispVal rowMajorFoldBody(LispVal result, String operator) {
+		LispSymbol dims0 = new LispSymbol("__aref_dims");
+		LispVal countMismatch = listToCons(List.of(new LispSymbol(LispNames.NE),
+				callV(LispNames.LENGTH, new LispSymbol("idx")), callV(LispNames.LENGTH, dims0)));
+		LispVal countError = typeErrorForm(new LispSymbol("a"), rankTypeForm(), operator);
+		LispVal bindings = listToCons(
+				List.of(callV("rm", new LispInteger(0)), callV("ds", dims0), callV("is", new LispSymbol("idx"))));
+		LispVal exit = listToCons(List.of(call(LispNames.NULL, "is"), result));
+		LispVal boundCheck = subscriptBoundCheckForm(operator);
+		LispVal step = callV(LispNames.SETQ, new LispSymbol("rm"), callV(LispNames.ADD,
+				callV(LispNames.MUL, new LispSymbol("rm"), call(LispNames.CAR, "ds")), call(LispNames.CAR, "is")));
+		LispVal stepDs = callV(LispNames.SETQ, new LispSymbol("ds"), call(LispNames.CDR, "ds"));
+		LispVal stepIs = callV(LispNames.SETQ, new LispSymbol("is"), call(LispNames.CDR, "is"));
+		LispVal loop = listToCons(
+				List.of(new LispSymbol(LispNames.DO), bindings, exit, boundCheck, step, stepDs, stepIs));
+		LispVal guarded = listToCons(List.of(new LispSymbol(LispNames.IF), countMismatch, countError, loop));
+		return listToCons(List.of(new LispSymbol(LispNames.LET),
+				listToCons(List.of((LispVal) listToCons(List.of(dims0, call(LispNames.ARRAY_DIMENSIONS, "a"))))),
+				guarded));
+	}
+
+	// The rank type of the subscript list idx, built at run time (OperandTypes#rankType):
+	// (if (= (length idx) 1) 'vector
+	// (list 'array '* (do ((s nil (cons '* s)) (k idx (cdr k))) ((null k) s))))
+	private static LispVal rankTypeForm() {
+		LispVal wildcard = callV(LispNames.QUOTE, new LispSymbol(OperandTypes.WILDCARD));
+		LispVal stars = listToCons(List.of(new LispSymbol(LispNames.DO),
+				listToCons(List.of(
+						listToCons(List.of(new LispSymbol("s"), LispNil.INSTANCE,
+								callV(LispNames.CONS, wildcard, new LispSymbol("s")))),
+						listToCons(List.of(new LispSymbol("k"), new LispSymbol("idx"), call(LispNames.CDR, "k"))))),
+				listToCons(List.of(call(LispNames.NULL, "k"), new LispSymbol("s")))));
+		LispVal list = callV(LispNames.LIST, callV(LispNames.QUOTE, new LispSymbol(OperandTypes.ARRAY_TYPE)), wildcard,
+				stars);
+		LispVal one = listToCons(List.of(new LispSymbol(LispNames.EQ), callV(LispNames.LENGTH, new LispSymbol("idx")),
+				new LispInteger(1)));
+		return listToCons(List.of(new LispSymbol(LispNames.IF), one,
+				callV(LispNames.QUOTE, new LispSymbol(OperandTypes.VECTOR_TYPE)), list));
+	}
+
+	// The check every subscript gets before the array is looked at, as a call-position
+	// access orders them: one that is no integer is the operator's INTEGER type-error.
+	// (do ((is idx (cdr is))) ((null is) nil)
+	// (if (integerp (car is)) nil <signal (car is) 'integer>))
+	private static LispVal subscriptTypeCheckForm(String operator) {
+		LispVal binding = listToCons(List.of(new LispSymbol("is"), new LispSymbol("idx"), call(LispNames.CDR, "is")));
+		LispVal exit = listToCons(List.of(call(LispNames.NULL, "is"), LispNil.INSTANCE));
+		LispVal check = listToCons(
+				List.of(new LispSymbol(LispNames.IF), callV(LispNames.INTEGERP, call(LispNames.CAR, "is")),
+						LispNil.INSTANCE, typeErrorForm(call(LispNames.CAR, "is"),
+								callV(LispNames.QUOTE, new LispSymbol(OperandTypes.Kind.INTEGER.name())), operator)));
+		return listToCons(List.of(new LispSymbol(LispNames.DO), listToCons(List.of(binding)), exit, check));
+	}
+
+	// The per-axis check the fold's loop runs before folding a subscript in: the
+	// operator's type-error over the subscript, naming the axis's own dimension --
+	// (INTEGER 0 (dim)) -- exactly the shape OperandTypeException#outOfRange signals for
+	// the call-position path (compiler/OperandTypes), built here directly since the
+	// dimension is a RUNTIME value no static %operand-type-error kind carries.
+	// (if (or (< (car is) 0) (>= (car is) (car ds)))
+	// <signal (car is) (list 'integer 0 (list (car ds)))>
+	// nil)
+	private static LispVal subscriptBoundCheckForm(String operator) {
+		LispVal outOfRange = listToCons(List.of(new LispSymbol(LispNames.OR),
+				listToCons(List.of(new LispSymbol(LispNames.LT), call(LispNames.CAR, "is"), new LispInteger(0))),
+				listToCons(
+						List.of(new LispSymbol(LispNames.GE), call(LispNames.CAR, "is"), call(LispNames.CAR, "ds")))));
+		LispVal expectedType = callV(LispNames.LIST,
+				callV(LispNames.QUOTE, new LispSymbol(OperandTypes.Kind.INTEGER.name())), new LispInteger(0),
+				callV(LispNames.LIST, call(LispNames.CAR, "ds")));
+		return listToCons(List.of(new LispSymbol(LispNames.IF), outOfRange,
+				typeErrorForm(call(LispNames.CAR, "is"), expectedType, operator), LispNil.INSTANCE));
+	}
+
+	// The operator's type-error over datum (a variable or a car of one: it is evaluated
+	// twice), whose expected type the form type builds -- the report every backend's
+	// call position words, OP: The value X is not of type T:
+	// (let ((__aref_type <type>))
+	// (error 'type-error :datum <datum> :expected-type __aref_type
+	// :format-control (%string-concat "OP: The value " (%string-concat
+	// (prin1-to-string <datum>) (%string-concat " is not of type "
+	// (prin1-to-string __aref_type))))))
+	private static LispVal typeErrorForm(LispVal datum, LispVal type, String operator) {
+		LispSymbol typeVar = new LispSymbol("__aref_type");
+		String prefix = operator + OperandTypes.OPERATOR_SEPARATOR + OperandTypes.VALUE_PREFIX;
+		LispVal message = stringConcatAll(List.of(new LispString(prefix), callV(LispNames.PRIN1_TO_STRING, datum),
+				new LispString(OperandTypes.TYPE_INFIX), callV(LispNames.PRIN1_TO_STRING, typeVar)));
+		LispVal signal = callV(LispNames.ERROR,
+				callV(LispNames.QUOTE, new LispSymbol(ClosRegistry.TYPE_ERROR_CLASS_NAME)), new LispSymbol(":DATUM"),
+				datum, new LispSymbol(":EXPECTED-TYPE"), typeVar, new LispSymbol(":FORMAT-CONTROL"), message);
+		return listToCons(List.of(new LispSymbol(LispNames.LET),
+				listToCons(List.of((LispVal) listToCons(List.of(typeVar, type)))), signal));
+	}
+
+	// Right-associates a %string-concat chain over the given pieces, at least one.
+	private static LispVal stringConcatAll(List<LispVal> parts) {
+		LispVal result = parts.get(parts.size() - 1);
+		for (int i = parts.size() - 2; i >= 0; i--) {
+			result = callV(LispNames.STRING_CONCAT, parts.get(i), result);
+		}
+		return result;
+	}
+
+	// The #'aref wrapper body: every subscript's type, then the fold of the subscript
+	// list into the row-major index and the read there -- once the operand is known to
+	// be an array, since the fold's first step reads its dimensions and a value that is
+	// none would be ARRAY-DIMENSIONS' type-error rather than AREF's, which the call
+	// names: (progn <subscript types> (if (arrayp a) <fold> (%operand-type-error a 'aref
+	// 'array))).
+	private static List<LispVal> arefFoldBody() {
+		return List.of(subscriptTypeCheckForm(LispNames.AREF),
+				listToCons(List.of(new LispSymbol(LispNames.IF), call(LispNames.ARRAYP, "a"),
+						rowMajorFoldBody(call(LispNames.ROW_MAJOR_AREF, "a", "rm"), LispNames.AREF),
+						callV(LispNames.OPERAND_TYPE_ERROR_INTERNAL, new LispSymbol("a"),
+								callV(LispNames.QUOTE, new LispSymbol(LispNames.AREF)),
+								callV(LispNames.QUOTE, new LispSymbol(OperandTypes.Kind.ARRAY.typeName()))))));
+	}
+
+	// #'array-row-major-index: the same checks and fold, answering the index itself.
+	private static WrapperDef arrayRowMajorIndexWrapper() {
+		return new WrapperDef(LispNames.ARRAY_ROW_MAJOR_INDEX, List.of("a", LispNames.LAMBDA_REST, "idx"),
+				List.of(subscriptTypeCheckForm(LispNames.ARRAY_ROW_MAJOR_INDEX),
+						rowMajorFoldBody(new LispSymbol("rm"), LispNames.ARRAY_ROW_MAJOR_INDEX)));
+	}
+
+	// #'vector: (lambda (&rest r) (coerce r 'vector)). The element COUNT is static in
+	// call position (expandVector emits one %aset per element) and a runtime property
+	// here, so the rest list is converted rather than spliced.
+	private static WrapperDef vectorWrapper() {
+		return new WrapperDef(LispNames.VECTOR, List.of(LispNames.LAMBDA_REST, "r"), List.of(coerceTo("r", "VECTOR")));
+	}
+
+	// #'list*: (lambda (a &rest r) ...) -- CL's (object &rest objects), which is the
+	// call shape. The last argument is the TAIL, the preceding ones are consed onto it,
+	// so the fold runs right to left over the reversed argument list. expandListStar can
+	// only do that with a static argument count.
+	//
+	// (let ((__ls_r (reverse (cons a r))))
+	// (do ((__ls_tail (cdr __ls_r) (cdr __ls_tail))
+	// (__ls_acc (car __ls_r) (cons (car __ls_tail) __ls_acc)))
+	// ((null __ls_tail) __ls_acc)))
+	private static WrapperDef listStarWrapper() {
+		LispSymbol reversed = new LispSymbol("__ls_r");
+		LispSymbol tail = new LispSymbol("__ls_tail");
+		LispSymbol acc = new LispSymbol("__ls_acc");
+		LispVal bindings = listToCons(List
+			.of(listToCons(List.of(tail, callV(LispNames.CDR, reversed), callV(LispNames.CDR, tail))), listToCons(List
+				.of(acc, callV(LispNames.CAR, reversed), callV(LispNames.CONS, callV(LispNames.CAR, tail), acc)))));
+		LispVal exit = listToCons(List.of(callV(LispNames.NULL, tail), acc));
+		LispVal loop = listToCons(List.of(new LispSymbol(LispNames.DO), bindings, exit));
+		LispVal body = listToCons(List.of(new LispSymbol(LispNames.LET),
+				listToCons(List.of(listToCons(List.of(reversed,
+						callV(LispNames.REVERSE, callV(LispNames.CONS, new LispSymbol("a"), new LispSymbol("r"))))))),
+				loop));
+		return new WrapperDef(LispNames.LIST_STAR, List.of("a", LispNames.LAMBDA_REST, "r"), List.of(body));
+	}
+
+	// #'map: (lambda (type f s &rest more) ...). Both of the operator's static facts are
+	// runtime values here -- the result type (a literal designator in call position) and
+	// the sequence COUNT -- so the wrapper walks the sequences itself, in the
+	// everySomeWrapper shape, and converts the collected list through the same runtime
+	// family dispatch a computed coerce uses. A nil result type means "for effect", which
+	// coerce has no designator for, so it is tested first.
+	//
+	// (lambda (type f s &rest more)
+	// (let ((__map_r (do ((ss (mapcar (lambda (x) (coerce x 'list)) (cons s more))) (acc
+	// nil))
+	// ((member nil ss) (reverse acc))
+	// (setq acc (cons (apply f (mapcar (lambda (x) (car x)) ss)) acc))
+	// (setq ss (mapcar (lambda (x) (cdr x)) ss)))))
+	// (if (null type) nil
+	// (let ((__map_t (if (consp type) (car type) type)))
+	// (if (member __map_t '(string ...)) (coerce __map_r 'string)
+	// (if (member __map_t '(list cons)) (coerce __map_r 'list)
+	// (coerce __map_r 'vector)))))))
+	private static WrapperDef mapWrapper(boolean concatenatePresent) {
+		LispSymbol seqs = new LispSymbol("__map_ss");
+		LispSymbol acc = new LispSymbol("__map_acc");
+		LispSymbol collected = new LispSymbol("__map_r");
+		LispVal asLists = callV(LispNames.MAPCAR, coerceToListLambda(LispNames.MAP),
+				callV(LispNames.CONS, new LispSymbol("s"), new LispSymbol("more")));
+		LispVal bindings = listToCons(
+				List.of(listToCons(List.of(seqs, asLists)), listToCons(List.of(acc, LispNil.INSTANCE))));
+		LispVal exit = listToCons(
+				List.of(callV(LispNames.MEMBER, LispNil.INSTANCE, seqs), callV(LispNames.REVERSE, acc)));
+		LispVal apply = callV(LispNames.APPLY, new LispSymbol("f"),
+				callV(LispNames.MAPCAR, projection(LispNames.CAR), seqs));
+		LispVal collect = callV(LispNames.SETQ, acc, callV(LispNames.CONS, apply, acc));
+		LispVal advance = callV(LispNames.SETQ, seqs, callV(LispNames.MAPCAR, projection(LispNames.CDR), seqs));
+		LispVal walk = listToCons(List.of(new LispSymbol(LispNames.DO), bindings, exit, collect, advance));
+		// The result type is dispatched HERE, onto three LITERAL coerces, rather than
+		// handed to coerce as a computed designator. map's result type is a sequence
+		// designator by contract, so the three arms are the whole surface -- and a
+		// computed coerce would end in its "already of that type" arm, which is a
+		// computed typep, i.e. the %typep-runtime defun; that defun's gate scans the
+		// SOURCE program and would never see this wrapper body. The (function typep)
+		// rule in LispMacroExpander.needsRuntimeTypep answers the same problem by
+		// counting the reference that injects the wrapper -- which cannot work here,
+		// where the map wrapper rides the eval runtime's gate instead of a name.
+		LispSymbol head = new LispSymbol("__map_t");
+		LispVal headOf = listToCons(List.of(new LispSymbol(LispNames.IF), call(LispNames.CONSP, "type"),
+				callV(LispNames.CAR, new LispSymbol("type")), new LispSymbol("type")));
+		// A compound type carries an element type only the #'concatenate wrapper can
+		// dispatch over, where that wrapper is in the program (generate).
+		LispVal toGeneralVector = coerceTo(collected.name(), "VECTOR");
+		LispVal toVector = concatenatePresent ? listToCons(List.of(new LispSymbol(LispNames.IF),
+				call(LispNames.CONSP, "type"),
+				callV(LispNames.FUNCALL,
+						listToCons(List.of(new LispSymbol(LispNames.FUNCTION), new LispSymbol(LispNames.CONCATENATE))),
+						new LispSymbol("type"), collected),
+				toGeneralVector)) : toGeneralVector;
+		LispVal toList = coerceTo(collected.name(), "LIST");
+		LispVal toString = coerceTo(collected.name(), "STRING");
+		LispVal byFamily = listToCons(List.of(new LispSymbol(LispNames.IF),
+				memberOf(head, "STRING", "SIMPLE-STRING", "BASE-STRING", "SIMPLE-BASE-STRING"), toString,
+				listToCons(List.of(new LispSymbol(LispNames.IF), memberOf(head, "LIST", "CONS"), toList, toVector))));
+		LispVal convert = listToCons(List.of(new LispSymbol(LispNames.IF), call(LispNames.NULL, "type"),
+				LispNil.INSTANCE, listToCons(List.of(new LispSymbol(LispNames.LET),
+						listToCons(List.of(listToCons(List.of(head, headOf)))), byFamily))));
+		LispVal body = listToCons(List.of(new LispSymbol(LispNames.LET),
+				listToCons(List.of(listToCons(List.of(collected, walk)))), convert));
+		return new WrapperDef(LispNames.MAP, List.of("type", "f", "s", LispNames.LAMBDA_REST, "more"), List.of(body));
+	}
+
+	// #'map-into: (lambda (r f &rest seqs) ...). The sequence count is a runtime property
+	// here too, so the wrapper walks the sources in lockstep and stores through the
+	// runtime-dispatching (setf (elt ...) ...) place expandMapInto uses. With NO source
+	// sequence the function is called with no arguments for every element of the result,
+	// which is exactly what (member nil nil) answering nil makes the loop do.
+	//
+	// The RESULT is walked with a cons cursor beside the index, the shape
+	// LispMacroExpander.mapIntoDispatch has carried since it was written: (setf (elt r i)
+	// v) lowers to (rplaca (nthcdr i r) v), an O(i) head-walk, so a LIST destination made
+	// this wrapper O(n^2) where the call-position lowering beside it was linear. The
+	// cursor holds the remaining conses of a list destination and stays pinned to a
+	// non-cons for a vector one, whose (setf (elt ...)) store is O(1) and is kept exactly
+	// as it was -- so nothing but the list arm moves.
+	//
+	// (lambda (r f &rest seqs)
+	// (let ((__mi_ss (mapcar (lambda (x) (coerce x 'list)) seqs))
+	// (__mi_i 0) (__mi_n (length r)) (__mi_rc r))
+	// (do () ((if (member nil __mi_ss) t (>= __mi_i __mi_n)) r)
+	// (let ((__mi_v (apply f (mapcar (lambda (x) (car x)) __mi_ss))))
+	// (if (consp __mi_rc) (rplaca __mi_rc __mi_v) (setf (elt r __mi_i) __mi_v)))
+	// (setq __mi_ss (mapcar (lambda (x) (cdr x)) __mi_ss))
+	// (setq __mi_rc (if (consp __mi_rc) (cdr __mi_rc) __mi_rc))
+	// (setq __mi_i (+ __mi_i 1)))))
+	private static WrapperDef mapIntoWrapper() {
+		LispSymbol seqs = new LispSymbol("__mi_ss");
+		LispSymbol index = new LispSymbol("__mi_i");
+		LispSymbol limit = new LispSymbol("__mi_n");
+		LispSymbol rcur = new LispSymbol("__mi_rc");
+		LispSymbol value = new LispSymbol("__mi_v");
+		LispVal asLists = callV(LispNames.MAPCAR, coerceToListLambda(LispNames.MAP_INTO), new LispSymbol("seqs"));
+		LispVal bindings = listToCons(
+				List.of(listToCons(List.of(seqs, asLists)), listToCons(List.of(index, new LispInteger(0))),
+						listToCons(List.of(limit,
+								callV(LispNames.LENGTH,
+										LispMacroExpander.checkedSequenceOf(new LispSymbol("r"), LispNames.MAP_INTO)))),
+						listToCons(List.of(rcur, new LispSymbol("r")))));
+		LispVal done = listToCons(List.of(new LispSymbol(LispNames.IF), callV(LispNames.MEMBER, LispNil.INSTANCE, seqs),
+				LispTrue.INSTANCE, callV(LispNames.GE, index, limit)));
+		LispVal exit = listToCons(List.of(done, new LispSymbol("r")));
+		LispVal apply = callV(LispNames.APPLY, new LispSymbol("f"),
+				callV(LispNames.MAPCAR, projection(LispNames.CAR), seqs));
+		LispVal storeList = callV(LispNames.RPLACA, rcur, value);
+		LispVal storeVec = callV(LispNames.SETF, callV(LispNames.ELT, new LispSymbol("r"), index), value);
+		LispVal store = listToCons(List.of(new LispSymbol(LispNames.LET),
+				listToCons(List.of(listToCons(List.of(value, apply)))),
+				listToCons(List.of(new LispSymbol(LispNames.IF), callV(LispNames.CONSP, rcur), storeList, storeVec))));
+		LispVal advance = callV(LispNames.SETQ, seqs, callV(LispNames.MAPCAR, projection(LispNames.CDR), seqs));
+		LispVal stepCursor = callV(LispNames.SETQ, rcur, listToCons(
+				List.of(new LispSymbol(LispNames.IF), callV(LispNames.CONSP, rcur), callV(LispNames.CDR, rcur), rcur)));
+		LispVal bump = callV(LispNames.SETQ, index, callV(LispNames.ADD, index, new LispInteger(1)));
+		LispVal walk = listToCons(
+				List.of(new LispSymbol(LispNames.DO), LispNil.INSTANCE, exit, store, advance, stepCursor, bump));
+		LispVal body = listToCons(List.of(new LispSymbol(LispNames.LET), bindings, walk));
+		return new WrapperDef(LispNames.MAP_INTO, List.of("r", "f", LispNames.LAMBDA_REST, "seqs"), List.of(body));
+	}
+
+	// The bounding-index shape of #'read-sequence / #'write-sequence: the operator reads
+	// :start / :end as LITERAL keywords (parseSequenceArgs), so the wrapper re-extracts
+	// the runtime plist with getf and feeds the values back into the literal spelling.
+	// An absent :end must not become an explicit nil -- the expansion defaults it to
+	// (length seq) -- so it selects a different call shape rather than a nil argument.
+	private static WrapperDef boundedSequenceIo(String name) {
+		// ONE call: an :end of nil is the whole sequence in every expansion this reaches,
+		// so the absent keyword needs no second copy of the (large) inline expansion.
+		LispVal start = getfKwDefault(LispNames.START_KEYWORD, new LispInteger(0));
+		LispVal body = listToCons(List.of(new LispSymbol(name), new LispSymbol("seq"), new LispSymbol("st"),
+				new LispSymbol(LispNames.START_KEYWORD), start, new LispSymbol(LispNames.END_KEYWORD),
+				getfKw(LispNames.END_KEYWORD)));
+		return new WrapperDef(name, List.of("seq", "st", LispNames.LAMBDA_REST, "kw"), List.of(body));
+	}
+
+	// write-line: the same runtime keyword re-extraction boundedSequenceIo does for
+	// write-string, but the stream stays optional -- a one-argument funcall keeps
+	// working, and an omitted stream forwards as nil, the standard-output designator
+	// the call position treats like the omitted argument.
+	private static WrapperDef writeLineWrapper() {
+		return optionalStreamBounded(LispNames.WRITE_LINE);
+	}
+
+	// (name s &optional st &key start end), write-line's and write-string's lambda list.
+	private static WrapperDef optionalStreamBounded(String name) {
+		LispVal start = getfKwDefault(LispNames.START_KEYWORD, new LispInteger(0));
+		LispVal body = listToCons(List.of(new LispSymbol(name), new LispSymbol("s"), new LispSymbol("st"),
+				new LispSymbol(LispNames.START_KEYWORD), start, new LispSymbol(LispNames.END_KEYWORD),
+				getfKw(LispNames.END_KEYWORD)));
+		return new WrapperDef(name, List.of("s", LispNames.LAMBDA_OPTIONAL, "st", LispNames.LAMBDA_REST, "kw"),
+				List.of(body));
+	}
+
+	/**
+	 * What a map* family wrapper does with the value of each call. See mapFamilyWrapper.
+	 */
+	private enum MapAccumulation {
+
+		COLLECT, CONCATENATE, DISCARD
+
+	}
+
+	/**
+	 * The first-class wrapper for one member of the {@code map*} family. In CALL position
+	 * every member takes any number of lists, but the expansion needs that count
+	 * STATICALLY, so a fixed-arity wrapper cannot forward the extra lists -- and dropping
+	 * them silently returned a one-list result for {@code (apply #'mapcar f lists)},
+	 * alexandria's {@code mappend}/{@code map-product} shape (the interpreter answered
+	 * correctly, both compile backends did not). The wrapper therefore walks the
+	 * list-of-lists itself, here in its {@code mapcar} instance:
+	 *
+	 * <pre>
+	 * (lambda (f l &amp;rest more)
+	 *   (if (null more)
+	 *       (mapcar f l)                              ; one list: the primitive
+	 *       (do ((ls (mapcar (lambda (x) (%check-list x 'mapcar)) (cons l more)))
+	 *            (acc nil))                        ; N lists: shortest-list walk
+	 *           ((member nil ls) (reverse acc))
+	 *         (setq acc (cons (apply f (mapcar (lambda (x) (car x)) ls)) acc))
+	 *         (setq ls (mapcar (lambda (x) (%check-list (cdr x) 'mapcar)) ls)))))
+	 * </pre>
+	 *
+	 * The inner {@code mapcar}s are single-list, so they compile as the primitive. Every
+	 * cursor is checked to be a list as it is taken, so {@code (member nil ls)} is
+	 * exactly "some list is exhausted", CL's termination rule, and a list that is no list
+	 * or ends dotted is the operator's type-error, as in call position.
+	 *
+	 * <p>
+	 * The six members differ only in the two axes below, which is why they share one
+	 * wrapper: {@code mapcar}/{@code maplist} collect the values,
+	 * {@code mapcan}/{@code mapcon} concatenate them, {@code mapc}/{@code mapl} discard
+	 * them and answer the first list; and the {@code -l}/{@code -list}/{@code -con}
+	 * members hand the function the successive cdrs themselves rather than their cars.
+	 * @param name the operator, called in the single-list case and named by the wrapper
+	 * @param tails whether the function receives the successive cdrs ({@code maplist})
+	 * rather than their cars ({@code mapcar})
+	 * @param accumulation what to do with each call's value
+	 */
+	private static WrapperDef mapFamilyWrapper(String name, boolean tails, MapAccumulation accumulation) {
+		List<LispVal> bindings = new ArrayList<>();
+		bindings.add(callV("ls", callV(LispNames.MAPCAR, checkedProjection(name, null),
+				callV(LispNames.CONS, new LispSymbol("l"), new LispSymbol("more")))));
+		if (accumulation != MapAccumulation.DISCARD) {
+			bindings.add(callV("acc", LispNil.INSTANCE));
+		}
+		LispVal result = switch (accumulation) {
+			case COLLECT -> call(LispNames.REVERSE, "acc");
+			case CONCATENATE -> new LispSymbol("acc");
+			case DISCARD -> new LispSymbol("l");
+		};
+		LispVal exit = listToCons(List.of(callV(LispNames.MEMBER, LispNil.INSTANCE, new LispSymbol("ls")), result));
+		// The arguments of one call: the cursors themselves, or their cars.
+		LispVal callArgs = tails ? new LispSymbol("ls")
+				: callV(LispNames.MAPCAR, projection(LispNames.CAR), new LispSymbol("ls"));
+		LispVal apply = callV(LispNames.APPLY, new LispSymbol("f"), callArgs);
+		LispVal step = switch (accumulation) {
+			case COLLECT ->
+				callV(LispNames.SETQ, new LispSymbol("acc"), callV(LispNames.CONS, apply, new LispSymbol("acc")));
+			case CONCATENATE -> callV(LispNames.SETQ, new LispSymbol("acc"),
+					callV(LispNames.APPEND, new LispSymbol("acc"), checkList(apply, name)));
+			case DISCARD -> apply;
+		};
+		LispVal advance = callV(LispNames.SETQ, new LispSymbol("ls"),
+				callV(LispNames.MAPCAR, checkedProjection(name, LispNames.CDR), new LispSymbol("ls")));
+		LispVal walk = listToCons(List.of(new LispSymbol(LispNames.DO), listToCons(bindings), exit, step, advance));
+		LispVal dispatch = listToCons(
+				List.of(new LispSymbol(LispNames.IF), call(LispNames.NULL, "more"), call(name, "f", "l"), walk));
+		return new WrapperDef(name, List.of("f", "l", LispNames.LAMBDA_REST, "more"), List.of(dispatch));
+	}
+
+	/**
+	 * The {@code #'every} / {@code #'some} wrapper. Like the {@code map*} family, the
+	 * sequence count is a RUNTIME property here, so a fixed-arity wrapper cannot forward
+	 * the extra sequences -- and unlike the {@code map*} family the arguments are
+	 * SEQUENCES, so each is coerced to a list before the lockstep walk.
+	 *
+	 * <pre>
+	 * (lambda (p s &amp;rest more)
+	 *   (if (null more)
+	 *       (every p s)                                        ; one sequence: the primitive
+	 *       (do ((ss (mapcar (lambda (x) (coerce x 'list)) (cons s more)))
+	 *            (r nil))
+	 *           ((member nil ss) t)                            ; shortest-sequence exit
+	 *         (setq r (apply p (mapcar (lambda (x) (car x)) ss)))
+	 *         (if r nil (return nil))                          ; some: (if r (return r) nil)
+	 *         (setq ss (mapcar (lambda (x) (cdr x)) ss)))))
+	 * </pre>
+	 * @param name the operator, called in the single-sequence case and named by the
+	 * wrapper
+	 * @param every true for {@code every}, false for {@code some}
+	 */
+	private static WrapperDef everySomeWrapper(String name, boolean every) {
+		return everySomeWrapper(name, every, false);
+	}
+
+	/**
+	 * As {@link #everySomeWrapper(String, boolean)}, with {@code notany} /
+	 * {@code notevery} riding on the same walk: each is the complement of a member of the
+	 * pair ({@code (notany p s) = (not (some p s))}), exactly as
+	 * {@code LispMacroExpander.expandNotany} lowers it in call position, so only the
+	 * value of the multi-sequence walk is negated.
+	 * @param name the operator, called in the single-sequence case and named by the
+	 * wrapper
+	 * @param every true when the walk is {@code every}'s, false when it is {@code some}'s
+	 * @param negated true for the {@code not-} member of the pair
+	 */
+	private static WrapperDef everySomeWrapper(String name, boolean every, boolean negated) {
+		LispVal asLists = callV(LispNames.MAPCAR, coerceToListLambda(name),
+				callV(LispNames.CONS, new LispSymbol("s"), new LispSymbol("more")));
+		List<LispVal> bindings = List.of(callV("ss", asLists), callV("r", LispNil.INSTANCE));
+		LispVal exit = listToCons(List.of(callV(LispNames.MEMBER, LispNil.INSTANCE, new LispSymbol("ss")),
+				every ? LispTrue.INSTANCE : LispNil.INSTANCE));
+		LispVal apply = callV(LispNames.APPLY, new LispSymbol("p"),
+				callV(LispNames.MAPCAR, projection(LispNames.CAR), new LispSymbol("ss")));
+		LispVal record = callV(LispNames.SETQ, new LispSymbol("r"), apply);
+		LispVal check = every
+				? listToCons(List.of(new LispSymbol(LispNames.IF), new LispSymbol("r"), LispNil.INSTANCE,
+						listToCons(List.of(new LispSymbol(LispNames.RETURN), LispNil.INSTANCE))))
+				: listToCons(List.of(new LispSymbol(LispNames.IF), new LispSymbol("r"),
+						listToCons(List.of(new LispSymbol(LispNames.RETURN), new LispSymbol("r"))), LispNil.INSTANCE));
+		LispVal advance = callV(LispNames.SETQ, new LispSymbol("ss"),
+				callV(LispNames.MAPCAR, projection(LispNames.CDR), new LispSymbol("ss")));
+		LispVal walk = listToCons(
+				List.of(new LispSymbol(LispNames.DO), listToCons(bindings), exit, record, check, advance));
+		LispVal multi = negated ? callV(LispNames.NOT, walk) : walk;
+		LispVal dispatch = listToCons(
+				List.of(new LispSymbol(LispNames.IF), call(LispNames.NULL, "more"), call(name, "p", "s"), multi));
+		return new WrapperDef(name, List.of("p", "s", LispNames.LAMBDA_REST, "more"), List.of(dispatch));
+	}
+
+	// (lambda (x) (coerce x 'list)) -- a string or vector sequence becomes a list of its
+	// elements, a list passes through, and anything else is the operator's SEQUENCE
+	// type-error.
+	private static LispVal coerceToListLambda(String operator) {
+		return listToCons(List.of(new LispSymbol(LispNames.LAMBDA), listToCons(List.of((LispVal) new LispSymbol("x"))),
+				coerceChecked("x", "LIST", operator)));
+	}
+
+	// (lambda (x) (op x)) -- spelled inline rather than as #'car / #'cdr so the wrapper
+	// body does not depend on another wrapper's setq having run first.
+	/**
+	 * {@code (lambda (x) (%check-list (op x) 'operator))}, or of {@code x} itself without
+	 * an {@code op}: a {@code map*} wrapper's cursors, each checked to be a list under
+	 * the operator the wrapper stands for.
+	 */
+	private static LispVal checkedProjection(String operator, @Nullable String op) {
+		LispVal x = new LispSymbol("x");
+		return listToCons(List.of(new LispSymbol(LispNames.LAMBDA), listToCons(List.of(x)),
+				checkList(op == null ? x : callV(op, x), operator)));
+	}
+
+	/** {@code (%check-list form 'operator)}. */
+	private static LispVal checkList(LispVal form, String operator) {
+		return callV(LispNames.CHECK_LIST_INTERNAL, form, callV(LispNames.QUOTE, new LispSymbol(operator)));
+	}
+
+	private static LispVal projection(String op) {
+		return listToCons(List.of(new LispSymbol(LispNames.LAMBDA), listToCons(List.of((LispVal) new LispSymbol("x"))),
+				call(op, "x")));
+	}
+
+	private static WrapperDef unary(String name) {
+		return new WrapperDef(name, List.of("a"), List.of(call(name, "a")));
+	}
+
+	private static WrapperDef binary(String name) {
+		return new WrapperDef(name, List.of("a", "b"), List.of(call(name, "a", "b")));
+	}
+
+	/**
+	 * A comparison ({@code = < > <= >= /=}, the {@code char} family): the operator's own
+	 * {@code (a &rest r)}, spelled with the second argument as an optional so that the
+	 * two-argument call -- every sort predicate's -- passes it as a parameter and conses
+	 * no rest list ({@code LambdaLists.toNative}), and a longer call walks the chain:
+	 *
+	 * <pre>
+	 * (lambda (a &amp;optional (b nil bp) &amp;rest r)
+	 *   (if bp
+	 *       (if (op a b)                                  ; adjacent pairs
+	 *           (do ((x b (car l)) (l r (cdr l))) ((null l) t)
+	 *             (if (op x (car l)) nil (return nil)))
+	 *           nil)
+	 *       (op a)))
+	 * </pre>
+	 *
+	 * {@code /=} and {@code char/=} compare every pair instead, and only a third argument
+	 * builds the list their walk needs. The one-argument call is the call position's own
+	 * one-argument form. {@code bp} is only ever a test, so it costs no boxed {@code t}
+	 * ({@code LambdaLists}). A plain {@code (a &amp;rest r)} consed the rest list on
+	 * EVERY call: sorting 200,000 fixnums ten times through a variable predicate took
+	 * 21.7 s on wasmtime against 2.4 s for {@code (a b)} (2026-09-26).
+	 * @param name the operator
+	 * @param allPairs whether every pair must satisfy it ({@code /=}), not only adjacent
+	 * ones
+	 */
+	private static WrapperDef comparison(String name, boolean allPairs) {
+		LispSymbol a = new LispSymbol("a");
+		LispSymbol b = new LispSymbol("b");
+		LispSymbol r = new LispSymbol("r");
+		LispSymbol l = new LispSymbol("l");
+		LispVal fromTwo;
+		if (allPairs) {
+			LispSymbol m = new LispSymbol("m");
+			LispSymbol ok = new LispSymbol("ok");
+			LispVal test = listToCons(
+					List.of(new LispSymbol(LispNames.IF), callV(name, callV(LispNames.CAR, l), callV(LispNames.CAR, m)),
+							LispNil.INSTANCE, callV(LispNames.SETQ, ok, LispNil.INSTANCE)));
+			LispVal inner = listToCons(List.of(new LispSymbol(LispNames.DO),
+					listToCons(List.of(callV("m", callV(LispNames.CDR, l), callV(LispNames.CDR, m)))),
+					listToCons(List.of(orNull(m, ok), LispNil.INSTANCE)), test));
+			LispVal outer = listToCons(List.of(
+					new LispSymbol(LispNames.DO), listToCons(List.of(callV("l",
+							callV(LispNames.CONS, a, callV(LispNames.CONS, b, r)), callV(LispNames.CDR, l)))),
+					listToCons(List.of(orNull(l, ok), ok)), inner));
+			LispVal chain = listToCons(
+					List.of(new LispSymbol(LispNames.LET), listToCons(List.of(callV("ok", LispTrue.INSTANCE))), outer));
+			fromTwo = listToCons(List.of(new LispSymbol(LispNames.IF), r, chain, call(name, "a", "b")));
+		}
+		else {
+			LispSymbol x = new LispSymbol("x");
+			LispVal test = listToCons(List.of(new LispSymbol(LispNames.IF), callV(name, x, callV(LispNames.CAR, l)),
+					LispNil.INSTANCE, callV(LispNames.RETURN, LispNil.INSTANCE)));
+			LispVal walk = listToCons(List.of(new LispSymbol(LispNames.DO),
+					listToCons(List.of(callV("x", b, callV(LispNames.CAR, l)), callV("l", r, callV(LispNames.CDR, l)))),
+					listToCons(List.of(callV(LispNames.NULL, l), LispTrue.INSTANCE)), test));
+			fromTwo = listToCons(List.of(new LispSymbol(LispNames.IF), call(name, "a", "b"), walk, LispNil.INSTANCE));
+		}
+		LispVal body = listToCons(
+				List.of(new LispSymbol(LispNames.IF), new LispSymbol("bp"), fromTwo, call(name, "a")));
+		return new WrapperDef(name,
+				List.of("a", LispNames.LAMBDA_OPTIONAL, "b" + SUPPLIED_P + "bp", LispNames.LAMBDA_REST, "r"),
+				List.of(body));
+	}
+
+	// (or (null list) (null ok)) -- the end test of comparison's all-pairs walk.
+	private static LispVal orNull(LispSymbol list, LispSymbol ok) {
+		return listToCons(
+				List.of(new LispSymbol(LispNames.OR), callV(LispNames.NULL, list), callV(LispNames.NULL, ok)));
+	}
+
+	/**
+	 * {@code logand} / {@code logior} / {@code logxor}: an identity fold
+	 * ({@link #identityFold}). The operator's own {@code (&rest r)} consed the rest list
+	 * on every call, and a two-argument call -- a {@code reduce}'s -- is the one these
+	 * are made in.
+	 * @param name the operator
+	 * @param identity the operator's identity
+	 */
+	private static WrapperDef bitwiseFold(String name, long identity) {
+		return identityFold(name, new LispInteger(identity));
+	}
+
+	/**
+	 * A left fold over an associative operator with an identity ({@code + * gcd lcm}, the
+	 * bitwise ones): every argument optional and defaulting to the identity, so the
+	 * two-argument call -- a {@code reduce}'s, a sort key's -- passes both as parameters
+	 * and conses no rest list ({@code LambdaLists.toNative}):
+	 *
+	 * <pre>
+	 * (lambda (&amp;optional (a identity) (b identity) &amp;rest r)
+	 *   (do ((v (op a b) (op v (car l))) (l r (cdr l))) ((null l) v)))
+	 * </pre>
+	 *
+	 * Fewer arguments fold the identity in, as the operator's own left fold does -- the
+	 * empty call answers {@code (op identity identity)}, the identity; one answers
+	 * {@code (op a identity)}, so a non-number is the same type error there -- and the
+	 * operator is inlined twice, where a supplied-p arm would have been a third copy.
+	 * {@code (reduce #'+ data)} over a million fixnums ran 13 s on wasmtime through the
+	 * {@code (&amp;rest r)} shape, 0.24 s through this (2026-09-26).
+	 * @param name the operator
+	 * @param identity the operator's identity
+	 */
+	private static WrapperDef identityFold(String name, LispVal identity) {
+		return new WrapperDef(
+				name, List.of(LispNames.LAMBDA_OPTIONAL, "a" + DEFAULT + identity.print(),
+						"b" + DEFAULT + identity.print(), LispNames.LAMBDA_REST, "r"),
+				List.of(leftFold(name, call(name, "a", "b"))));
+	}
+
+	/**
+	 * {@code (do ((v first (op v (car l))) (l r (cdr l))) ((null l) v))}: {@code first}
+	 * folded left over the rest list {@code r} -- a two-argument call's is nil, so its
+	 * answer is {@code first} itself.
+	 */
+	private static LispVal leftFold(String op, LispVal first) {
+		LispSymbol v = new LispSymbol("v");
+		LispSymbol l = new LispSymbol("l");
+		return listToCons(List.of(new LispSymbol(LispNames.DO),
+				listToCons(List.of(callV("v", first, callV(op, v, callV(LispNames.CAR, l))),
+						callV("l", new LispSymbol("r"), callV(LispNames.CDR, l)))),
+				listToCons(List.of(callV(LispNames.NULL, l), v))));
+	}
+
+	/**
+	 * An operator whose last optional parameter is an ENVIRONMENT ({@code constantp},
+	 * {@code typep}, {@code upgraded-complex-part-type}): accepted and not forwarded, as
+	 * the call position drops it ({@code LispMacroExpander.withEnvironmentEvaluated}).
+	 * @param name the operator
+	 * @param required the operator's required parameter count (1 or 2)
+	 */
+	private static WrapperDef ignoringEnvironment(String name, int required) {
+		List<String> params = new ArrayList<>(List.of("a", "b").subList(0, required));
+		List<String> lambdaList = new ArrayList<>(params);
+		lambdaList.add(LispNames.LAMBDA_OPTIONAL);
+		lambdaList.add("e");
+		return new WrapperDef(name, lambdaList, List.of(call(name, params.toArray(new String[0]))));
+	}
+
+	/**
+	 * {@code string-upcase} / {@code string-downcase} / {@code string-capitalize}:
+	 * {@code (lambda (s &rest kw) (if kw (op s :start (getf kw :start 0) :end (getf kw
+	 * :end)) (op s)))} -- a keyword call reaches the bounded lowering
+	 * ({@code LispMacroExpander.expandBoundedCaseConversion}), a plain one the conversion
+	 * alone.
+	 * @param name the operator
+	 */
+	private static WrapperDef boundedCaseConversion(String name) {
+		LispVal bounded = listToCons(List.of(new LispSymbol(name), new LispSymbol("s"),
+				new LispSymbol(LispNames.START_KEYWORD), getfKwDefault(LispNames.START_KEYWORD, new LispInteger(0)),
+				new LispSymbol(LispNames.END_KEYWORD), getfKw(LispNames.END_KEYWORD)));
+		LispVal body = listToCons(
+				List.of(new LispSymbol(LispNames.IF), new LispSymbol("kw"), bounded, call(name, "s")));
+		return new WrapperDef(name, List.of("s", LispNames.LAMBDA_REST, "kw"), List.of(body));
+	}
+
+	/**
+	 * {@code (make-string n &key initial-element element-type)}: the element defaults to
+	 * the space the call position fills with
+	 * ({@code LispMacroExpander.expandMakeString}), and the element type is ignored there
+	 * as here.
+	 */
+	private static WrapperDef makeStringWrapper() {
+		LispVal body = listToCons(List.of(new LispSymbol(LispNames.MAKE_STRING), new LispSymbol("n"),
+				new LispSymbol(LispNames.INITIAL_ELEMENT_KEYWORD),
+				getfWithDefault(new LispSymbol("kw"), LispNames.INITIAL_ELEMENT_KEYWORD, new LispChar(' '))));
+		return new WrapperDef(LispNames.MAKE_STRING, List.of("n", LispNames.LAMBDA_REST, "kw"), List.of(body));
+	}
+
+	/**
+	 * {@code (parse-integer s &key start end radix junk-allowed)}: a keyword call passes
+	 * every keyword with its default, a plain one stays the one-argument parse.
+	 */
+	private static WrapperDef parseIntegerWrapper() {
+		LispSymbol kw = new LispSymbol("kw");
+		LispVal keyed = listToCons(List.of(new LispSymbol(LispNames.PARSE_INTEGER), new LispSymbol("s"),
+				new LispSymbol(LispNames.START_KEYWORD),
+				getfWithDefault(kw, LispNames.START_KEYWORD, new LispInteger(0)), new LispSymbol(LispNames.END_KEYWORD),
+				getfWithDefault(kw, LispNames.END_KEYWORD, LispNil.INSTANCE), new LispSymbol(LispNames.RADIX_KEYWORD),
+				getfWithDefault(kw, LispNames.RADIX_KEYWORD, new LispInteger(10)),
+				new LispSymbol(LispNames.JUNK_ALLOWED_KEYWORD),
+				getfWithDefault(kw, LispNames.JUNK_ALLOWED_KEYWORD, LispNil.INSTANCE)));
+		LispVal body = listToCons(List.of(new LispSymbol(LispNames.IF), kw, keyed, call(LispNames.PARSE_INTEGER, "s")));
+		return new WrapperDef(LispNames.PARSE_INTEGER, List.of("s", LispNames.LAMBDA_REST, "kw"), List.of(body));
+	}
+
+	/**
+	 * {@code (op src format dst &key (start 0))}, the bulk float-bits pair.
+	 * @param name the package-qualified operator
+	 */
+	private static WrapperDef floatBitsBulk(String name) {
+		LispVal body = listToCons(List.of(new LispSymbol(name), new LispSymbol("a"), new LispSymbol("b"),
+				new LispSymbol("c"), new LispSymbol(LispNames.START_KEYWORD),
+				getfWithDefault(new LispSymbol("kw"), LispNames.START_KEYWORD, new LispInteger(0))));
+		return new WrapperDef(name, List.of("a", "b", "c", LispNames.LAMBDA_REST, "kw"), List.of(body));
+	}
+
+	/**
+	 * {@code (adjust-array array dims &key element-type initial-element initial-contents
+	 * fill-pointer displaced-to displaced-index-offset)}. The call position picks its
+	 * expansion by which keywords are WRITTEN, so the wrapper picks at run time between
+	 * the displaced one and the undisplaced one, whose fill -- contents or element -- the
+	 * internal {@code LispMacroExpander.ADJUST_CONTENTS_P_KEYWORD} chooses inside ONE
+	 * expansion; each absent keyword gets the value the expansion would have used for it
+	 * (the old fill pointer, the array's own default element):
+	 *
+	 * <pre>
+	 * (lambda (a d &amp;rest kw)
+	 *   (let ((a (let ((v a)) (if (arrayp v) v (%operand-type-error v 'adjust-array 'array)))))
+	 *   (let ((fp (getf kw :fill-pointer (if (array-has-fill-pointer-p a) (fill-pointer a) nil)))
+	 *         (dt (getf kw :displaced-to nil)))
+	 *     (if dt
+	 *         (adjust-array a d :displaced-to dt
+	 *                           :displaced-index-offset (getf kw :displaced-index-offset 0)
+	 *                           :fill-pointer fp)
+	 *         (let ((ic (getf kw :initial-contents kw)))
+	 *           (adjust-array a d :initial-contents ic
+	 *                             :initial-element (getf kw :initial-element (%array-default-element a))
+	 *                             :%contents-p (not (eq ic kw)) :fill-pointer fp))))))
+	 * </pre>
+	 */
+	private static WrapperDef adjustArrayWrapper() {
+		LispSymbol a = new LispSymbol("a");
+		LispSymbol d = new LispSymbol("d");
+		LispSymbol kw = new LispSymbol("kw");
+		LispSymbol fp = new LispSymbol("fp");
+		LispSymbol dt = new LispSymbol("dt");
+		LispSymbol ic = new LispSymbol("ic");
+		LispVal oldFillPointer = listToCons(List.of(new LispSymbol(LispNames.IF),
+				callV(LispNames.ARRAY_HAS_FILL_POINTER_P, a), callV(LispNames.FILL_POINTER, a), LispNil.INSTANCE));
+		LispVal displaced = listToCons(
+				List.of(new LispSymbol(LispNames.ADJUST_ARRAY), a, d, new LispSymbol(LispNames.DISPLACED_TO_KEYWORD),
+						dt, new LispSymbol(LispNames.DISPLACED_INDEX_OFFSET_KEYWORD),
+						getfWithDefault(kw, LispNames.DISPLACED_INDEX_OFFSET_KEYWORD, new LispInteger(0)),
+						new LispSymbol(LispNames.FILL_POINTER_KEYWORD), fp));
+		LispVal filled = listToCons(List.of(new LispSymbol(LispNames.ADJUST_ARRAY), a, d,
+				new LispSymbol(LispNames.INITIAL_CONTENTS_KEYWORD), ic,
+				new LispSymbol(LispNames.INITIAL_ELEMENT_KEYWORD),
+				getfWithDefault(kw, LispNames.INITIAL_ELEMENT_KEYWORD, callV(LispNames.ARRAY_DEFAULT_ELEMENT, a)),
+				new LispSymbol(LispMacroExpander.ADJUST_CONTENTS_P_KEYWORD),
+				callV(LispNames.NOT, callV(LispNames.EQ_GENERAL, ic, kw)),
+				new LispSymbol(LispNames.FILL_POINTER_KEYWORD), fp));
+		LispVal undisplaced = listToCons(List.of(new LispSymbol(LispNames.LET),
+				listToCons(List.of(callV("ic", getfWithDefault(kw, LispNames.INITIAL_CONTENTS_KEYWORD, kw)))), filled));
+		LispVal adjusted = listToCons(List.of(new LispSymbol(LispNames.LET),
+				listToCons(List.of(callV("fp", getfWithDefault(kw, LispNames.FILL_POINTER_KEYWORD, oldFillPointer)),
+						callV("dt", getfWithDefault(kw, LispNames.DISPLACED_TO_KEYWORD, LispNil.INSTANCE)))),
+				listToCons(List.of(new LispSymbol(LispNames.IF), dt, displaced, undisplaced))));
+		// The array is ADJUST-ARRAY's to refuse before the fill-pointer default reads it
+		// (which would name ARRAY-HAS-FILL-POINTER-P).
+		LispVal body = listToCons(List.of(new LispSymbol(LispNames.LET),
+				listToCons(
+						List.of(listToCons(List.of(a, LispMacroExpander.checkedArrayOf(a, LispNames.ADJUST_ARRAY))))),
+				adjusted));
+		return new WrapperDef(LispNames.ADJUST_ARRAY, List.of("a", "d", LispNames.LAMBDA_REST, "kw"), List.of(body));
+	}
+
+	// (lambda (a b &rest kw) (name a b :k1 (getf kw :k1) ...)) -- a two-operand operator
+	// whose keywords are all bounds. An end is nil -- the sequence's length -- in the
+	// call-position lowering, so an absent one forwards as nil; an absent start forwards
+	// as 0 and a given one as written, since a nil start is no bound.
+	private static WrapperDef boundingKeywords(String name, String... keywords) {
+		List<LispVal> callParts = new ArrayList<>(
+				List.of(new LispSymbol(name), new LispSymbol("a"), new LispSymbol("b")));
+		for (String keyword : keywords) {
+			callParts.add(new LispSymbol(keyword));
+			callParts.add(isStartKeyword(keyword) ? getfKwDefault(keyword, new LispInteger(0)) : getfKw(keyword));
+		}
+		return new WrapperDef(name, List.of("a", "b", LispNames.LAMBDA_REST, "kw"), List.of(listToCons(callParts)));
+	}
+
+	private static WrapperDef ternary(String name) {
+		return new WrapperDef(name, List.of("a", "b", "c"), List.of(call(name, "a", "b", "c")));
+	}
+
+	// (name a &optional b) dispatching on b's presence -- the CL (last list &optional n)
+	// shape. The dispatch is on b being non-nil, which is exact here: an omitted count
+	// and an explicit nil one are not both legal, and 0 -- the one count that could be
+	// mistaken for "absent" in another language -- is true in Lisp.
+	private static WrapperDef unaryOptionalSecond(String name) {
+		LispVal dispatch = listToCons(
+				List.of(new LispSymbol(LispNames.IF), new LispSymbol("b"), call(name, "a", "b"), call(name, "a")));
+		return new WrapperDef(name, List.of("a", LispNames.LAMBDA_OPTIONAL, "b"), List.of(dispatch));
+	}
+
+	// (name a &optional s) where the optional argument is a STREAM DESIGNATOR: an omitted
+	// stream and an explicit nil are the SAME designator
+	// (.kb/standard-output-redirect.md),
+	// so the body forwards the parameter unconditionally and no presence test is needed
+	// --
+	// a bound nil reaches the operator's own *standard-output* / *standard-input*
+	// resolution, exactly like the (defun emit (x &optional stream) (princ x stream))
+	// forwarding StreamDesignators was written for (unlike unaryOptionalSecond, whose nil
+	// is not a legal value and whose presence dispatch is therefore required).
+	private static WrapperDef unaryOptionalStream(String name) {
+		return new WrapperDef(name, List.of("a", LispNames.LAMBDA_OPTIONAL, "s"), List.of(call(name, "a", "s")));
+	}
+
+	// (name &optional s) -- the stream-only operators: terpri, fresh-line, force-output,
+	// finish-output, clear-output, read-line, read-char, listen. Same designator rule as
+	// unaryOptionalStream: the omitted and the nil stream are one designator.
+	private static WrapperDef optionalStream(String name) {
+		return new WrapperDef(name, List.of(LispNames.LAMBDA_OPTIONAL, "s"), List.of(call(name, "s")));
+	}
+
+	// (name a b &optional c) dispatching on c's presence -- the CL subseq shape, whose
+	// wrapper must accept the optional end (cl-ppcre funcalls #'subseq with 3 args).
+	// Also getf's default, where the nil dispatch is exact: an omitted default and an
+	// explicit nil one both answer nil on a miss.
+	private static WrapperDef binaryOptionalThird(String name) {
+		LispVal dispatch = listToCons(List.of(new LispSymbol(LispNames.IF), new LispSymbol("c"),
+				call(name, "a", "b", "c"), call(name, "a", "b")));
+		return new WrapperDef(name, List.of("a", "b", LispNames.LAMBDA_OPTIONAL, "c"), List.of(dispatch));
+	}
+
+	// Variadic wrapper for an associative operator with an identity (+ -> 0, * -> 1): an
+	// identity fold (identityFold), whose two-argument call conses nothing.
+	private static WrapperDef variadicIdentity(String name, LispVal identity) {
+		return identityFold(name, identity);
+	}
+
+	// Variadic wrapper for min/max (needs at least one argument; a single argument
+	// returns itself, checked to be a real as the call's one-argument form checks it):
+	// (lambda (n &optional (b nil bp) &rest r) (if bp <fold> (op n))), the fold starting
+	// at (op n b), so a two-argument call conses nothing. The required n is what makes
+	// (funcall #'min) the count report the interpreter gives (MIN expects at least 1
+	// argument, got 0); with a bare &rest it folded over nil and answered nil.
+	private static WrapperDef variadicNonEmpty(String name) {
+		LispVal body = listToCons(List.of(new LispSymbol(LispNames.IF), new LispSymbol("bp"),
+				leftFold(name, call(name, "n", "b")), call(name, "n")));
+		return new WrapperDef(name,
+				List.of("n", LispNames.LAMBDA_OPTIONAL, "b" + SUPPLIED_P + "bp", LispNames.LAMBDA_REST, "r"),
+				List.of(body));
+	}
+
+	// Variadic wrapper for append, the same shape as nconc's below. It has to be
+	// variadic, not binary: CL's (append) with ZERO arguments is nil, and that call is
+	// REACHABLE -- reduce over an empty sequence with no :initial-value calls its
+	// function with no arguments, which is exactly how esrap's
+	// (reduce #'append all-children) answers nil for a result node with no children.
+	private static WrapperDef variadicAppend() {
+		return foldReturningLone(LispNames.APPEND);
+	}
+
+	// Variadic wrapper for nconc, append's shape. A left fold over the 2-arg nconc yields
+	// correct CL semantics -- each pair links the accumulator's last cdr to the next
+	// argument and the fold returns the first non-nil argument.
+	private static WrapperDef variadicNconc() {
+		return foldReturningLone(LispNames.NCONC);
+	}
+
+	// (lambda (&optional a (b nil bp) &rest r) (if bp <fold from (op a b)> a)): a lone
+	// argument comes back as it is -- not copied, not type-checked, as CL's (append x)
+	// -- none answers a's default, nil, and a two-argument call conses nothing.
+	private static WrapperDef foldReturningLone(String name) {
+		LispVal body = listToCons(List.of(new LispSymbol(LispNames.IF), new LispSymbol("bp"),
+				leftFold(name, call(name, "a", "b")), new LispSymbol("a")));
+		return new WrapperDef(name,
+				List.of(LispNames.LAMBDA_OPTIONAL, "a", "b" + SUPPLIED_P + "bp", LispNames.LAMBDA_REST, "r"),
+				List.of(body));
+	}
+
+	// Variadic wrapper for - and /, which have distinct one-argument semantics
+	// ((- x) = -x, (/ x) = 1/x) from the multi-argument left fold:
+	// (lambda (n &optional (b nil bp) &rest r) <fold from (op (if bp n unaryLeft) (if bp
+	// b n))>)
+	// -- the one call covers both, so the operator is inlined twice, and a two-argument
+	// call conses nothing. Neither has an identity, so the first argument is required:
+	// (funcall #'-) is the interpreter's - expects at least 1 argument, got 0, not a
+	// type-error on nil.
+	private static WrapperDef variadicUnaryLeft(String name, LispVal unaryLeft) {
+		LispSymbol bp = new LispSymbol("bp");
+		LispVal left = listToCons(List.of(new LispSymbol(LispNames.IF), bp, new LispSymbol("n"), unaryLeft));
+		LispVal right = listToCons(List.of(new LispSymbol(LispNames.IF), bp, new LispSymbol("b"), new LispSymbol("n")));
+		return new WrapperDef(name,
+				List.of("n", LispNames.LAMBDA_OPTIONAL, "b" + SUPPLIED_P + "bp", LispNames.LAMBDA_REST, "r"),
+				List.of(leftFold(name, callV(name, left, right))));
+	}
+
+	// (getf kw :indicator) -- runtime keyword extraction from the wrapper's rest list.
+	private static LispVal getfKw(String indicator) {
+		// getf is plain data matching, and applied keyword plists read UPCASED under
+		// the reader premise while these wrapper ASTs are authored lowercase: probe
+		// the lowercase spelling first, then the upcased twin (getf is pure).
+		LispVal lower = callV(LispNames.GETF, new LispSymbol("kw"), new LispSymbol(indicator));
+		String upper = indicator.toUpperCase(java.util.Locale.ROOT);
+		if (upper.equals(indicator)) {
+			return lower;
+		}
+		LispVal upperGet = callV(LispNames.GETF, new LispSymbol("kw"), new LispSymbol(upper));
+		return listToCons(List.of(new LispSymbol(LispNames.IF), lower, lower, upperGet));
+	}
+
+	// (getf kw :indicator default) -- the default stands for an ABSENT indicator only: an
+	// indicator present with a nil value stays nil, which a bound that is no bound
+	// (:start nil) must reach the operator as. getfKwOr cannot tell the two apart.
+	static LispVal getfKwDefault(String indicator, LispVal dflt) {
+		String upper = indicator.toUpperCase(java.util.Locale.ROOT);
+		LispVal fallback = upper.equals(indicator) ? dflt
+				: callV(LispNames.GETF, new LispSymbol("kw"), new LispSymbol(upper), dflt);
+		return callV(LispNames.GETF, new LispSymbol("kw"), new LispSymbol(indicator), fallback);
+	}
+
+	private static boolean isStartKeyword(String keyword) {
+		return LispNames.START_KEYWORD.equals(keyword) || LispNames.START1_KEYWORD.equals(keyword)
+				|| LispNames.START2_KEYWORD.equals(keyword);
+	}
+
+	// (if (getf kw :indicator) (getf kw :indicator) default) -- getf is pure, so the
+	// double extraction is safe. A present nil reads as the default.
+	private static LispVal getfKwOr(String indicator, LispVal dflt) {
+		return listToCons(List.of(new LispSymbol(LispNames.IF), getfKw(indicator), getfKw(indicator), dflt));
+	}
+
+	// #'name
+	private static LispVal sharpQuote(String fn) {
+		return callV(LispNames.FUNCTION, new LispSymbol(fn));
+	}
+
+	/**
+	 * Variadic wrapper for the {@code count} / {@code remove} / {@code substitute}
+	 * family, on {@code positionFamily}'s model: the runtime keywords are re-extracted
+	 * with {@code getf} and fed back into the CALL-POSITION expansion, so first-class use
+	 * through {@code apply} carries the whole
+	 * {@code :test}/{@code :test-not}/{@code :key}/{@code :start}/{@code :end}/
+	 * {@code :count}/{@code :from-end} set instead of the two or three fixed arguments
+	 * the wrapper used to take. A {@code :test-not} is normalized to a complemented
+	 * {@code :test}; the {@code -if}/{@code -if-not} spellings take neither ({@code item}
+	 * false), and {@code count} itself has no {@code :count} ({@code counted} false).
+	 *
+	 * <p>
+	 * {@code remove-duplicates} / {@code delete-duplicates} ride the same wrapper with
+	 * {@code operands} 0 -- they read the same keyword set minus {@code :count}, only
+	 * with the window meaning their own expansion gives it. The {@code :start} defaulted
+	 * to 0 and the computed {@code :from-end} this emits both land in that expansion's
+	 * GENERAL rendering rather than its index-free one, which is correct but never the
+	 * cheap shape: it is the price of one scan form per surface, paid only by a program
+	 * that names the function rather than calling it.
+	 * @param name the operator
+	 * @param item whether the operator compares an ITEM (so takes :test / :test-not)
+	 * @param counted whether the operator takes :count
+	 * @param operands how many arguments precede the sequence (2 for the substitute
+	 * family's new item plus its item/predicate, 0 for the duplicates pair)
+	 */
+	private static WrapperDef sequenceScanFamily(String name, boolean item, boolean counted, int operands) {
+		List<String> lambdaList = new ArrayList<>();
+		List<LispVal> callParts = new ArrayList<>();
+		callParts.add(new LispSymbol(name));
+		for (int i = 0; i < operands; i++) {
+			String arg = "a" + i;
+			lambdaList.add(arg);
+			callParts.add(new LispSymbol(arg));
+		}
+		lambdaList.add("seq");
+		lambdaList.add(LispNames.LAMBDA_REST);
+		lambdaList.add("kw");
+		callParts.add(new LispSymbol("seq"));
+		if (item) {
+			callParts.add(new LispSymbol(LispNames.TEST_KEYWORD));
+			callParts.add(listToCons(List.of(new LispSymbol(LispNames.IF), getfKw(LispNames.TEST_NOT_KEYWORD),
+					LispMacroExpander.twoArgumentComplement(getfKw(LispNames.TEST_NOT_KEYWORD)),
+					getfKwOr(LispNames.TEST_KEYWORD, sharpQuote(LispNames.EQL)))));
+		}
+		callParts.add(new LispSymbol(LispNames.KEY_KEYWORD));
+		callParts.add(getfKwOr(LispNames.KEY_KEYWORD, sharpQuote(LispNames.IDENTITY)));
+		callParts.add(new LispSymbol(LispNames.START_KEYWORD));
+		callParts.add(getfKwDefault(LispNames.START_KEYWORD, new LispInteger(0)));
+		callParts.add(new LispSymbol(LispNames.END_KEYWORD));
+		callParts.add(getfKw(LispNames.END_KEYWORD));
+		if (counted) {
+			callParts.add(new LispSymbol(LispNames.COUNT_KEYWORD));
+			callParts.add(getfKw(LispNames.COUNT_KEYWORD));
+		}
+		callParts.add(new LispSymbol(LispNames.FROM_END_KEYWORD));
+		callParts.add(getfKw(LispNames.FROM_END_KEYWORD));
+		return new WrapperDef(name, lambdaList, List.of(listToCons(callParts)));
+	}
+
+	/**
+	 * Variadic wrapper for the DESIGNATOR-only scans: {@code member}/{@code assoc}/
+	 * {@code rassoc}, the five set operations, and -- with {@code item} false -- the
+	 * {@code -if} spellings, which take {@code :key} alone because the predicate IS the
+	 * test. Same shape as {@link #sequenceScanFamily} minus CLHS 17.2.1's bounding set:
+	 * the runtime keywords are re-extracted with {@code getf} and fed back into the
+	 * CALL-POSITION expansion, so the expansion stays the only implementation and a
+	 * {@code (apply #'set-difference x y :test f)} decides the way the call form does. A
+	 * {@code :test-not} is normalized to a complemented {@code :test} the
+	 * {@code twoArgumentComplement} way, so no {@code apply} reaches the injected body
+	 * ({@code .kb/sequence-designator-evaluation.md}).
+	 * @param name the operator
+	 * @param item whether the operator compares an ITEM (so takes :test / :test-not)
+	 */
+	private static WrapperDef designatorFamily(String name, boolean item) {
+		List<LispVal> callParts = new ArrayList<>();
+		callParts.add(new LispSymbol(name));
+		callParts.add(new LispSymbol("a"));
+		callParts.add(new LispSymbol("b"));
+		if (item) {
+			callParts.add(new LispSymbol(LispNames.TEST_KEYWORD));
+			callParts.add(listToCons(List.of(new LispSymbol(LispNames.IF), getfKw(LispNames.TEST_NOT_KEYWORD),
+					LispMacroExpander.twoArgumentComplement(getfKw(LispNames.TEST_NOT_KEYWORD)),
+					getfKwOr(LispNames.TEST_KEYWORD, sharpQuote(LispNames.EQL)))));
+		}
+		callParts.add(new LispSymbol(LispNames.KEY_KEYWORD));
+		callParts.add(getfKw(LispNames.KEY_KEYWORD));
+		return new WrapperDef(name, List.of("a", "b", LispNames.LAMBDA_REST, "kw"), List.of(listToCons(callParts)));
+	}
+
+	// Variadic wrapper for the position family: the runtime keywords are re-extracted
+	// with getf and fed back into the call-position expansion, so first-class use
+	// through apply supports the full :test/:test-not/:key/:start/:end/:from-end set
+	// (e.g. cl-utilities' split-sequence does (apply #'position item seq :end r ...)).
+	// A :test-not is normalized to a complemented :test; the -if/-if-not variants take
+	// no :test/:test-not (CL semantics).
+	private static WrapperDef positionFamily(String name, boolean item) {
+		List<LispVal> callParts = new ArrayList<>();
+		callParts.add(new LispSymbol(name));
+		callParts.add(new LispSymbol("a"));
+		callParts.add(new LispSymbol("seq"));
+		if (item) {
+			callParts.add(new LispSymbol(LispNames.TEST_KEYWORD));
+			callParts.add(listToCons(List.of(new LispSymbol(LispNames.IF), getfKw(LispNames.TEST_NOT_KEYWORD),
+					LispMacroExpander.twoArgumentComplement(getfKw(LispNames.TEST_NOT_KEYWORD)),
+					getfKwOr(LispNames.TEST_KEYWORD, sharpQuote(LispNames.EQL)))));
+		}
+		callParts.add(new LispSymbol(LispNames.KEY_KEYWORD));
+		callParts.add(getfKwOr(LispNames.KEY_KEYWORD, sharpQuote(LispNames.IDENTITY)));
+		callParts.add(new LispSymbol(LispNames.START_KEYWORD));
+		callParts.add(getfKwDefault(LispNames.START_KEYWORD, new LispInteger(0)));
+		callParts.add(new LispSymbol(LispNames.END_KEYWORD));
+		callParts.add(getfKw(LispNames.END_KEYWORD));
+		callParts.add(new LispSymbol(LispNames.FROM_END_KEYWORD));
+		callParts.add(getfKw(LispNames.FROM_END_KEYWORD));
+		return new WrapperDef(name, List.of("a", "seq", LispNames.LAMBDA_REST, "kw"), List.of(listToCons(callParts)));
+	}
+
+	/**
+	 * Variadic wrapper for {@code find} / {@code find-if} / {@code find-if-not}. A call
+	 * with no keyword is the plain two-argument scan; a keyword call hands the keywords
+	 * to the {@code position} wrapper of the same kind and answers the element at the
+	 * index it finds. {@code find} is {@code position} answering the element
+	 * ({@code expandFind} and {@code expandPosition} are one scan), and delegating keeps
+	 * ONE copy of the general keyword scan -- inlined into each of the three it cost a
+	 * JVM program naming {@code #'find} 12 KB, and every compiled {@code eval} all three.
+	 *
+	 * <pre>
+	 * (if kw
+	 *     (let ((i (funcall #'position a seq :test ... :key ... :start ... :end ... :from-end ...)))
+	 *       (if i (elt seq i) nil))
+	 *     (find a seq))
+	 * </pre>
+	 * @param name the operator
+	 * @param item whether the operator compares an ITEM (so takes :test / :test-not)
+	 */
+	private static WrapperDef findFamily(String name, boolean item) {
+		String position = switch (name) {
+			case LispNames.FIND -> LispNames.POSITION;
+			case LispNames.FIND_IF -> LispNames.POSITION_IF;
+			case LispNames.FIND_IF_NOT -> LispNames.POSITION_IF_NOT;
+			default -> throw new IllegalArgumentException(name);
+		};
+		List<LispVal> callParts = new ArrayList<>(List.of(new LispSymbol(LispNames.FUNCALL), sharpQuote(position),
+				new LispSymbol("a"), new LispSymbol("seq")));
+		List<String> keywords = new ArrayList<>();
+		if (item) {
+			keywords.add(LispNames.TEST_KEYWORD);
+			keywords.add(LispNames.TEST_NOT_KEYWORD);
+		}
+		keywords.addAll(List.of(LispNames.KEY_KEYWORD, LispNames.START_KEYWORD, LispNames.END_KEYWORD,
+				LispNames.FROM_END_KEYWORD));
+		for (String keyword : keywords) {
+			callParts.add(new LispSymbol(keyword));
+			// An absent :start forwards as 0: the position wrapper refuses a present nil.
+			callParts.add(isStartKeyword(keyword) ? getfKwDefault(keyword, new LispInteger(0)) : getfKw(keyword));
+		}
+		LispSymbol i = new LispSymbol("i");
+		LispVal element = listToCons(List.of(new LispSymbol(LispNames.IF), i,
+				callV(LispNames.ELT, new LispSymbol("seq"), i), LispNil.INSTANCE));
+		LispVal keyed = listToCons(List.of(new LispSymbol(LispNames.LET),
+				listToCons(List.of((LispVal) listToCons(List.of(i, listToCons(callParts))))), element));
+		LispVal body = listToCons(
+				List.of(new LispSymbol(LispNames.IF), new LispSymbol("kw"), keyed, call(name, "a", "seq")));
+		return new WrapperDef(name, List.of("a", "seq", LispNames.LAMBDA_REST, "kw"), List.of(body));
+	}
+
+	/**
+	 * {@code #'sort}: {@code (lambda (seq pred &rest kw) ...)}. A {@code :key} sorts with
+	 * the predicate composed over it; the shared merge sort is stable
+	 * ({@code .kb/sort.md}), so this is the permutation the call position's
+	 * {@code stable-sort} decoration answers, without inlining that expansion into every
+	 * program naming {@code #'sort} (+19 KB on the JVM). One {@code sort} site serves
+	 * both shapes -- a second would repeat its string/vector dispatch -- and the
+	 * two-argument call, every sort's hot path, pays one test of {@code kw}.
+	 *
+	 * <pre>
+	 * (sort seq (if kw
+	 *               (let ((k (getf kw :key ... #'identity)))
+	 *                 (lambda (x y) (funcall pred (funcall k x) (funcall k y))))
+	 *               pred))
+	 * </pre>
+	 */
+	private static WrapperDef sortWrapper() {
+		LispSymbol k = new LispSymbol("k");
+		LispSymbol pred = new LispSymbol("pred");
+		LispSymbol x = new LispSymbol("x");
+		LispSymbol y = new LispSymbol("y");
+		LispVal composed = listToCons(List.of(new LispSymbol(LispNames.LAMBDA), listToCons(List.of(x, y)),
+				callV(LispNames.FUNCALL, pred, callV(LispNames.FUNCALL, k, x), callV(LispNames.FUNCALL, k, y))));
+		LispVal keyed = listToCons(List.of(new LispSymbol(LispNames.LET), listToCons(List
+			.of((LispVal) listToCons(List.of(k, getfKwOr(LispNames.KEY_KEYWORD, sharpQuote(LispNames.IDENTITY)))))),
+				composed));
+		LispVal predicate = listToCons(List.of(new LispSymbol(LispNames.IF), new LispSymbol("kw"), keyed, pred));
+		return new WrapperDef(LispNames.SORT, List.of("seq", "pred", LispNames.LAMBDA_REST, "kw"),
+				List.of(callV(LispNames.SORT, new LispSymbol("seq"), predicate)));
+	}
+
+	/**
+	 * {@code #'make-list}: {@code (lambda (n &rest kw) (make-list n :initial-element
+	 * (getf kw :initial-element)))} -- an absent {@code :initial-element} is nil, which
+	 * is also the default.
+	 */
+	private static WrapperDef makeListWrapper() {
+		LispVal body = listToCons(List.of(new LispSymbol(LispNames.MAKE_LIST), new LispSymbol("n"),
+				new LispSymbol(LispNames.INITIAL_ELEMENT_KEYWORD), getfKw(LispNames.INITIAL_ELEMENT_KEYWORD)));
+		return new WrapperDef(LispNames.MAKE_LIST, List.of("n", LispNames.LAMBDA_REST, "kw"), List.of(body));
+	}
+
+	// Variadic wrapper for make-array (gated with the fill-pointer array group):
+	// runtime keywords are re-extracted with getf and the call-position shapes chosen by
+	// which are there. A :displaced-to argument selects the bare-view shape (a displaced
+	// array cannot combine with the other options), :initial-contents the call position's
+	// computed element-type lowering, and everything else the prelude's dispatch on the
+	// element type: %make-array-et-fp where a fill pointer or adjustability forces a
+	// general array, else %make-array-et, whose arms can pack. cl-utilities' copy-array
+	// idiom is (apply #'make-array (list* dims options...)).
+	private static WrapperDef fullMakeArray() {
+		LispVal elementType = getfKwOr(LispNames.ELEMENT_TYPE_KEYWORD, LispTrue.INSTANCE);
+		LispVal displaced = listToCons(List.of(new LispSymbol(LispNames.MAKE_ARRAY), new LispSymbol("dims"),
+				new LispSymbol(LispNames.DISPLACED_TO_KEYWORD), getfKw(LispNames.DISPLACED_TO_KEYWORD),
+				new LispSymbol(LispNames.DISPLACED_INDEX_OFFSET_KEYWORD),
+				getfKwOr(LispNames.DISPLACED_INDEX_OFFSET_KEYWORD, new LispInteger(0)),
+				new LispSymbol(LispNames.ADJUSTABLE_KEYWORD), getfKw(LispNames.ADJUSTABLE_KEYWORD),
+				new LispSymbol(LispNames.FILL_POINTER_KEYWORD), getfKw(LispNames.FILL_POINTER_KEYWORD)));
+		LispVal contents = listToCons(List.of(new LispSymbol(LispNames.MAKE_ARRAY), new LispSymbol("dims"),
+				new LispSymbol(LispNames.ELEMENT_TYPE_KEYWORD), elementType,
+				new LispSymbol(LispNames.INITIAL_CONTENTS_KEYWORD), getfKw(LispNames.INITIAL_CONTENTS_KEYWORD),
+				new LispSymbol(LispNames.ADJUSTABLE_KEYWORD), getfKw(LispNames.ADJUSTABLE_KEYWORD),
+				new LispSymbol(LispNames.FILL_POINTER_KEYWORD), getfKw(LispNames.FILL_POINTER_KEYWORD)));
+		LispVal given = listToCons(List.of(new LispSymbol(LispNames.NOT), kwAbsent(LispNames.INITIAL_ELEMENT_KEYWORD)));
+		LispVal element = getfKw(LispNames.INITIAL_ELEMENT_KEYWORD);
+		LispVal general = listToCons(List.of(new LispSymbol(LispNames.IF),
+				listToCons(List.of(new LispSymbol(LispNames.OR), getfKw(LispNames.FILL_POINTER_KEYWORD),
+						getfKw(LispNames.ADJUSTABLE_KEYWORD))),
+				callV(LispNames.MAKE_ARRAY_ET_FP_INTERNAL, new LispSymbol("dims"), elementType, element, given,
+						getfKw(LispNames.FILL_POINTER_KEYWORD), getfKw(LispNames.ADJUSTABLE_KEYWORD)),
+				callV(LispNames.MAKE_ARRAY_ET_INTERNAL, new LispSymbol("dims"), elementType, element, given)));
+		LispVal undisplaced = listToCons(
+				List.of(new LispSymbol(LispNames.IF), kwAbsent(LispNames.INITIAL_CONTENTS_KEYWORD), general, contents));
+		LispVal body = listToCons(
+				List.of(new LispSymbol(LispNames.IF), getfKw(LispNames.DISPLACED_TO_KEYWORD), displaced, undisplaced));
+		return new WrapperDef(LispNames.MAKE_ARRAY, List.of("dims", LispNames.LAMBDA_REST, "kw"), List.of(body));
+	}
+
+	// Whether the keyword is not in the tail, whatever a supplied one holds:
+	// (eq (getf kw KEY kw) kw).
+	private static LispVal kwAbsent(String keyword) {
+		LispSymbol kw = new LispSymbol("kw");
+		return callV(LispNames.EQ_GENERAL, callV(LispNames.GETF, kw, new LispSymbol(keyword), kw), kw);
+	}
+
+	// #'make-array where the %make-array-et entries are not in the program, reachable
+	// only
+	// through a designator the surface does not show: the dimensions, the fill-pointer
+	// group's keywords, an :element-type accepted and ignored.
+	private static WrapperDef variadicMakeArray() {
+		LispVal displaced = listToCons(List.of(new LispSymbol(LispNames.MAKE_ARRAY), new LispSymbol("dims"),
+				new LispSymbol(LispNames.DISPLACED_TO_KEYWORD), getfKw(LispNames.DISPLACED_TO_KEYWORD),
+				new LispSymbol(LispNames.DISPLACED_INDEX_OFFSET_KEYWORD),
+				getfKwOr(LispNames.DISPLACED_INDEX_OFFSET_KEYWORD, new LispInteger(0)),
+				new LispSymbol(LispNames.ADJUSTABLE_KEYWORD), getfKw(LispNames.ADJUSTABLE_KEYWORD),
+				new LispSymbol(LispNames.FILL_POINTER_KEYWORD), getfKw(LispNames.FILL_POINTER_KEYWORD)));
+		LispVal general = listToCons(List.of(new LispSymbol(LispNames.MAKE_ARRAY), new LispSymbol("dims"),
+				new LispSymbol(LispNames.ADJUSTABLE_KEYWORD), getfKw(LispNames.ADJUSTABLE_KEYWORD),
+				new LispSymbol(LispNames.FILL_POINTER_KEYWORD), getfKw(LispNames.FILL_POINTER_KEYWORD),
+				new LispSymbol(LispNames.INITIAL_ELEMENT_KEYWORD), getfKw(LispNames.INITIAL_ELEMENT_KEYWORD)));
+		LispVal body = listToCons(
+				List.of(new LispSymbol(LispNames.IF), getfKw(LispNames.DISPLACED_TO_KEYWORD), displaced, general));
+		return new WrapperDef(LispNames.MAKE_ARRAY, List.of("dims", LispNames.LAMBDA_REST, "kw"), List.of(body));
+	}
+
+	// Variadic wrapper for string= / string-equal: a plain two-argument call (the hot
+	// :test #'string= shape) stays a direct call, and a first-class call carrying the
+	// bounding-index keywords re-extracts them with getf and compares the designated
+	// substrings of the coerced designators -- the same (subseq (string x) ...) lowering
+	// the compilers apply to a literal call
+	// (LispMacroExpander.expandStringComparisonBounds), so #'string= agrees with
+	// string= and with the interpreter's Java-side keyword parsing.
+	private static WrapperDef stringEquality(String name) {
+		LispVal boundedA = callV(LispNames.SUBSEQ, call(LispNames.STRING, "a"),
+				getfKwDefault(LispNames.START1_KEYWORD, new LispInteger(0)), getfKw(LispNames.END1_KEYWORD));
+		LispVal boundedB = callV(LispNames.SUBSEQ, call(LispNames.STRING, "b"),
+				getfKwDefault(LispNames.START2_KEYWORD, new LispInteger(0)), getfKw(LispNames.END2_KEYWORD));
+		LispVal bounded = listToCons(List.of(new LispSymbol(name), boundedA, boundedB));
+		LispVal body = listToCons(
+				List.of(new LispSymbol(LispNames.IF), new LispSymbol("kw"), bounded, call(name, "a", "b")));
+		return new WrapperDef(name, List.of("a", "b", LispNames.LAMBDA_REST, "kw"), List.of(body));
+	}
+
+	// Variadic wrapper for stable-sort: only :key is supported, extracted at runtime
+	// like the position family.
+	private static WrapperDef variadicStableSort() {
+		LispVal body = listToCons(List.of(new LispSymbol(LispNames.STABLE_SORT), new LispSymbol("seq"),
+				new LispSymbol("pred"), new LispSymbol(LispNames.KEY_KEYWORD),
+				getfKwOr(LispNames.KEY_KEYWORD, sharpQuote(LispNames.IDENTITY))));
+		return new WrapperDef(LispNames.STABLE_SORT, List.of("seq", "pred", LispNames.LAMBDA_REST, "kw"),
+				List.of(body));
+	}
+
+	// Signal-operator wrapper: (lambda (datum &rest r) (%op-runtime datum r)), described
+	// on SIGNAL_FUNCTIONS.
+	private static WrapperDef signalDatum(String name, String runtime) {
+		return new WrapperDef(name, List.of("datum", LispNames.LAMBDA_REST, "r"), List.of(call(runtime, "datum", "r")));
+	}
+
+	// cerror's wrapper additionally hands over the leading continue format control.
+	private static WrapperDef cerrorWrapper() {
+		return new WrapperDef(LispNames.CERROR, List.of("cfc", "datum", LispNames.LAMBDA_REST, "r"),
+				List.of(call(LispNames.CERROR_RUNTIME, "cfc", "datum", "r")));
+	}
+
+	// #'format wrapper (gated by REFERENCE_GATED_FUNCTIONS): renders through the shared
+	// runtime control renderer, then dispatches on the destination -- nil returns the
+	// string, anything else (the t designator or a stream handle) gets one write-string
+	// call and nil.
+	private static WrapperDef formatWrapper() {
+		return formatWrapper(LispNames.WRITE_STRING, LispNames.FRESH_LINE);
+	}
+
+	// writer: the (writer string destination) call that writes the rendered text.
+	// freshLine: the (freshLine destination) call a ~& opening the control makes.
+	private static WrapperDef formatWrapper(String writer, String freshLine) {
+		LispSymbol strVar = new LispSymbol("__fmt_str");
+		LispVal rendered = am.ik.rontolisp.macro.FormatRenderer.call(new LispSymbol("ctrl"), new LispSymbol("r"));
+		LispVal bindings = listToCons(List.of((LispVal) listToCons(List.of(strVar, rendered))));
+		LispVal writeForm = listToCons(List.of(new LispSymbol(LispNames.PROGN),
+				listToCons(List.of(new LispSymbol(LispNames.IF), call(LispNames.FMT_STARTS_FRESH, "ctrl"),
+						call(freshLine, "dest"), LispNil.INSTANCE)),
+				callV(writer, strVar, new LispSymbol("dest")), LispNil.INSTANCE));
+		LispVal ifForm = listToCons(
+				List.of(new LispSymbol(LispNames.IF), call(LispNames.NULL, "dest"), strVar, writeForm));
+		LispVal body = listToCons(List.of(new LispSymbol(LispNames.LET), bindings, ifForm));
+		return new WrapperDef(LispNames.FORMAT, List.of("dest", "ctrl", LispNames.LAMBDA_REST, "r"),
+				List.of(StreamOperandChecks.checkedFormatDestination(new LispSymbol("dest")), body));
+	}
+
+	// #'format in a program that can hold a string with a fill pointer, where the prelude
+	// spliced %format-write (StreamOperandChecks.formatThroughDestination).
+	private static WrapperDef formatThroughDestinationWrapper() {
+		return new WrapperDef(LispNames.FORMAT, List.of("dest", "ctrl", LispNames.LAMBDA_REST, "r"),
+				List.of(callV(LispNames.FORMAT_WRITE_INTERNAL, call(LispNames.FORMAT_DESTINATION_INTERNAL, "dest"),
+						am.ik.rontolisp.macro.FormatRenderer.call(new LispSymbol("ctrl"), new LispSymbol("r")),
+						call(LispNames.FMT_STARTS_FRESH, "ctrl"))));
+	}
+
+	// #'concatenate wrapper (gated by REFERENCE_GATED_FUNCTIONS): the result type is a
+	// RUNTIME value here, so the family dispatch that ConcatenateForms performs at
+	// expansion time is re-done with member over the designator (its head, for a compound
+	// spec like '(vector (unsigned-byte 8))). Every family accepts any sequence argument,
+	// exactly like the call-position lowering: the string family normalizes each argument
+	// before the %string-concat fold, the list / vector families walk elements through
+	// (coerce x 'list). An unsupported designator signals, matching the interpreter. A
+	// deftype alias reaches here resolved (ConcatenateForms.wrappersReadingAliases).
+	private static WrapperDef concatenateWrapper() {
+		LispSymbol head = new LispSymbol("__cc_head");
+		LispVal headOfSpec = listToCons(List.of(new LispSymbol(LispNames.IF), call(LispNames.CONSP, "type"),
+				call(LispNames.CAR, "type"), new LispSymbol("type")));
+		LispVal strings = stringFamilyBuild();
+		// The vector arm honours an (unsigned-byte 8|16|32) element type, a packed FLOAT
+		// one and CHARACTER, exactly like the call-position lowering: (apply
+		// #'concatenate '(simple-array (unsigned-byte 8) (*)) ...) is http-body's own
+		// spelling and ironclad's HKDF, and a designator must not mean two different
+		// things depending on the call form. The element type sits in position 1 of
+		// (vector T ...) / (array T ...) / (simple-array T ...); (simple-vector SIZE)
+		// carries a SIZE there, which no (unsigned-byte N) list, no width NAME and no
+		// CHARACTER spelling can be equal to, so one test per member covers every head
+		// without reading the shape. The float tests are DERIVED from the closed code
+		// space (packedFloatElementTypeCodes), so this dispatch and
+		// %seq-float-vector's allocations cannot name different sets.
+		LispSymbol elements = new LispSymbol("__cc_elts");
+		LispSymbol elementType = new LispSymbol("__cc_elt");
+		LispSymbol width = new LispSymbol("__cc_w");
+		LispSymbol floatCode = new LispSymbol("__cc_f");
+		LispVal widthOfElementType = new LispInteger(0);
+		for (int bits : new int[] { 32, 16, 8 }) {
+			LispVal unsignedByte = listToCons(List.of(new LispSymbol(LispNames.QUOTE),
+					listToCons(List.of(new LispSymbol(LispNames.UNSIGNED_BYTE), new LispInteger(bits)))));
+			widthOfElementType = listToCons(List.of(new LispSymbol(LispNames.IF),
+					callV(LispNames.EQUAL, elementType, unsignedByte), new LispInteger(bits), widthOfElementType));
+		}
+		LispVal floatCodeOfElementType = new LispInteger(0);
+		for (int code : packedFloatElementTypeCodes()) {
+			LispVal name = listToCons(List.of(new LispSymbol(LispNames.QUOTE), ArrayElementTypes.valueOf(code)));
+			floatCodeOfElementType = listToCons(List.of(new LispSymbol(LispNames.IF),
+					callV(LispNames.EQUAL, elementType, name), new LispInteger(code), floatCodeOfElementType));
+		}
+		LispVal vectorBindings = listToCons(List.of(listToCons(List.of(elements, concatenatedElements())),
+				listToCons(List.of(elementType,
+						listToCons(List.of(new LispSymbol(LispNames.IF), call(LispNames.CONSP, "type"),
+								callV(LispNames.CAR, call(LispNames.CDR, "type")), LispNil.INSTANCE)))),
+				listToCons(List.of(width, widthOfElementType)),
+				listToCons(List.of(floatCode, floatCodeOfElementType))));
+		LispVal isCharacter = memberOf(elementType, ArrayElementTypes.CHARACTER_SPELLINGS.toArray(new String[0]));
+		LispVal generalOrFloat = listToCons(
+				List.of(new LispSymbol(LispNames.IF), callV(LispNames.EQ, floatCode, new LispInteger(0)),
+						listToCons(List.of(new LispSymbol(LispNames.COERCE), elements,
+								listToCons(List.of(new LispSymbol(LispNames.QUOTE), new LispSymbol("VECTOR"))))),
+						callV(LispNames.SEQ_FLOAT_VECTOR, elements, floatCode)));
+		LispVal characterOrGeneralOrFloat = listToCons(List.of(new LispSymbol(LispNames.IF), isCharacter,
+				callV(LispNames.SEQ_STRING, elements), generalOrFloat));
+		LispVal vector = listToCons(List.of(new LispSymbol(LispNames.LET_STAR), vectorBindings,
+				listToCons(List.of(new LispSymbol(LispNames.IF), callV(LispNames.EQ, width, new LispInteger(0)),
+						characterOrGeneralOrFloat, callV(LispNames.SEQ_INT_VECTOR, elements, width)))));
+		LispVal unsupported = listToCons(
+				List.of(new LispSymbol(LispNames.ERROR), new LispString("concatenate: unsupported result type")));
+		LispVal dispatch = listToCons(
+				List.of(new LispSymbol(LispNames.IF),
+						memberOf(head, "STRING", "SIMPLE-STRING", "BASE-STRING", "SIMPLE-BASE-STRING"), strings,
+						listToCons(List.of(new LispSymbol(LispNames.IF), memberOf(head, "LIST", "CONS"),
+								concatenatedElements(),
+								listToCons(List.of(
+										new LispSymbol(LispNames.IF), memberOf(head, "VECTOR", "SIMPLE-VECTOR", "ARRAY",
+												"SIMPLE-ARRAY", "BIT-VECTOR", "SIMPLE-BIT-VECTOR"),
+										vector, unsupported))))));
+		LispVal bindings = listToCons(List.of((LispVal) listToCons(List.of(head, headOfSpec))));
+		LispVal body = listToCons(List.of(new LispSymbol(LispNames.LET), bindings, dispatch));
+		return new WrapperDef(LispNames.CONCATENATE, List.of("type", LispNames.LAMBDA_REST, "seqs"), List.of(body));
+	}
+
+	// %seq-string (gated by ConcatenateForms.needsSeqString in the backend compilers):
+	// one
+	// character sequence as a string. It exists so the concatenate 'string lowering can
+	// normalize an argument with a CALL rather than an inlined (coerce x 'string) loop --
+	// json.lisp / url.lisp alone hold dozens of concatenate sites, and no single emitted
+	// body may grow without bound (.kb/wasm-function-body-size.md). A string passes
+	// through untouched, so the fast path is one stringp test.
+	private static WrapperDef seqStringWrapper() {
+		// The INTERNAL string designator: this normalizer feeds %string-concat, not the
+		// program, so its result must not pick up the mutable-result wrap a
+		// program-written (coerce x 'string) gets -- every concatenate argument would
+		// pay a conversion for nothing.
+		// A concatenate 'string argument that is no sequence is CONCATENATE's type-error
+		// (the conversion would name COERCE): every other caller hands it a sequence.
+		LispVal body = listToCons(List.of(new LispSymbol(LispNames.IF), call(LispNames.STRINGP, "x"),
+				new LispSymbol("x"), coerceChecked("x", LispNames.SEQ_STRING_RESULT, LispNames.CONCATENATE)));
+		return new WrapperDef(LispNames.SEQ_STRING, List.of("x"), List.of(body));
+	}
+
+	// %seq-int-vector (gated by ConcatenateForms.needsSeqIntVector, plus a #'concatenate
+	// reference -- the wrapper above calls it): one sequence of integers as a PACKED
+	// (unsigned-byte 8|16|32) vector. It exists for the same reason %seq-string does --
+	// the concatenate lowering must not plant an allocate-and-fill loop at every call
+	// site (.kb/wasm-function-body-size.md) -- and it additionally walks the element list
+	// LINEARLY, which the equivalent inline (make-array n :element-type '(unsigned-byte
+	// 8) :initial-contents list) would not: that lowering indexes its contents with elt,
+	// which is O(n) on a list.
+	//
+	// (lambda (seq w)
+	// (let* ((l (coerce seq 'list))
+	// (v (if (= w 8) (make-array (length l) :element-type '(unsigned-byte 8))
+	// (if (= w 16) (make-array (length l) :element-type '(unsigned-byte 16))
+	// (make-array (length l) :element-type '(unsigned-byte 32))))))
+	// (do ((tail l (cdr tail)) (i 0 (+ i 1))) ((null tail) v)
+	// (%aset v i (car tail)))))
+	//
+	// The three make-array calls are what makes the representation packed at all: the
+	// element type has to be a LITERAL for every backend's recognizer to pick the packed
+	// representation, so the runtime width dispatches onto three literal allocations
+	// rather than passing the designator along.
+	private static WrapperDef seqIntVectorWrapper() {
+		LispSymbol list = new LispSymbol("__iv_l");
+		LispSymbol vec = new LispSymbol("__iv_v");
+		LispSymbol tail = new LispSymbol("__iv_tail");
+		LispSymbol index = new LispSymbol("__iv_i");
+		LispVal alloc = makeIntVectorAlloc(list, 32);
+		for (int bits : new int[] { 16, 8 }) {
+			alloc = listToCons(List.of(new LispSymbol(LispNames.IF),
+					callV(LispNames.EQ, new LispSymbol("w"), new LispInteger(bits)), makeIntVectorAlloc(list, bits),
+					alloc));
+		}
+		LispVal fill = listToCons(List.of(new LispSymbol(LispNames.DO),
+				listToCons(List.of(listToCons(List.of(tail, list, callV(LispNames.CDR, tail))),
+						listToCons(
+								List.of(index, new LispInteger(0), callV(LispNames.ADD, index, new LispInteger(1)))))),
+				listToCons(List.of(callV(LispNames.NULL, tail), vec)),
+				callV(LispNames.ASET, vec, index, callV(LispNames.CAR, tail))));
+		LispVal bindings = listToCons(
+				List.of(listToCons(List.of(list, coerceTo("seq", "LIST"))), listToCons(List.of(vec, alloc))));
+		LispVal body = listToCons(List.of(new LispSymbol(LispNames.LET_STAR), bindings, fill));
+		return new WrapperDef(LispNames.SEQ_INT_VECTOR, List.of("seq", "w"), List.of(body));
+	}
+
+	// (make-array (length l) :element-type '(unsigned-byte BITS))
+	private static LispVal makeIntVectorAlloc(LispSymbol list, int bits) {
+		return listToCons(List.of(new LispSymbol(LispNames.MAKE_ARRAY), callV(LispNames.LENGTH, list),
+				new LispSymbol(LispNames.ELEMENT_TYPE_KEYWORD), listToCons(List.of(new LispSymbol(LispNames.QUOTE),
+						listToCons(List.of(new LispSymbol(LispNames.UNSIGNED_BYTE), new LispInteger(bits)))))));
+	}
+
+	// %seq-float-vector (gated by ConcatenateForms.needsSeqFloatVector, plus a
+	// #'concatenate reference -- the wrapper above calls it): one sequence of reals as a
+	// PACKED FLOAT array of the width an ArrayElementTypes code names. The exact shape of
+	// %seq-int-vector above, for the exact same reasons (one call site's worth of body,
+	// and a LINEAR walk of the element list), with the code standing in for the width:
+	//
+	// (lambda (seq c)
+	// (let* ((l (coerce seq 'list))
+	// (v (if (= c 5) (make-array (length l) :element-type 'single-float)
+	// (if (= c 7) (make-array (length l) :element-type 'bfloat16)
+	// (make-array (length l) :element-type 'double-float)))))
+	// (do ((tail l (cdr tail)) (i 0 (+ i 1))) ((null tail) v)
+	// (%aset v i (car tail)))))
+	//
+	// The arms are DERIVED, one per packed float code of ArrayElementTypes, and each
+	// spells the element type that code answers -- so a fourth width is reachable here
+	// the moment it is reachable from make-array, with nothing to add. The allocations
+	// have to be LITERAL for every backend's recognizer to pick the packed representation
+	// (the make-array element type is read statically), which is why the runtime code
+	// dispatches onto one allocation per width rather than passing the designator along.
+	//
+	// The bfloat16 arm is compiled on every backend and is DEAD on the ones that do not
+	// carry the width: wasm-GC lowers its make-array to the call-time signal
+	// UnsupportedFloatWidth names (WasmArrayCompiler), so a program that never asks for
+	// bfloat16 builds and runs exactly as before while one that does gets that sentence
+	// at the call -- the same shape vec.lisp's width-dispatching cond already has
+	// (.kb/bfloat16.md).
+	private static WrapperDef seqFloatVectorWrapper() {
+		LispSymbol list = new LispSymbol("__fv_l");
+		LispSymbol vec = new LispSymbol("__fv_v");
+		LispSymbol tail = new LispSymbol("__fv_tail");
+		LispSymbol index = new LispSymbol("__fv_i");
+		int[] codes = packedFloatElementTypeCodes();
+		LispVal alloc = makeFloatVectorAlloc(list, codes[codes.length - 1]);
+		for (int i = codes.length - 2; i >= 0; i--) {
+			alloc = listToCons(List.of(new LispSymbol(LispNames.IF),
+					callV(LispNames.EQ, new LispSymbol("c"), new LispInteger(codes[i])),
+					makeFloatVectorAlloc(list, codes[i]), alloc));
+		}
+		LispVal fill = listToCons(List.of(new LispSymbol(LispNames.DO),
+				listToCons(List.of(listToCons(List.of(tail, list, callV(LispNames.CDR, tail))),
+						listToCons(
+								List.of(index, new LispInteger(0), callV(LispNames.ADD, index, new LispInteger(1)))))),
+				listToCons(List.of(callV(LispNames.NULL, tail), vec)),
+				callV(LispNames.ASET, vec, index, callV(LispNames.CAR, tail))));
+		LispVal bindings = listToCons(
+				List.of(listToCons(List.of(list, coerceTo("seq", "LIST"))), listToCons(List.of(vec, alloc))));
+		LispVal body = listToCons(List.of(new LispSymbol(LispNames.LET_STAR), bindings, fill));
+		return new WrapperDef(LispNames.SEQ_FLOAT_VECTOR, List.of("seq", "c"), List.of(body));
+	}
+
+	// (make-array (length l) :element-type '<the name the code answers>)
+	private static LispVal makeFloatVectorAlloc(LispSymbol list, int elementTypeCode) {
+		return listToCons(List.of(new LispSymbol(LispNames.MAKE_ARRAY), callV(LispNames.LENGTH, list),
+				new LispSymbol(LispNames.ELEMENT_TYPE_KEYWORD),
+				listToCons(List.of(new LispSymbol(LispNames.QUOTE), ArrayElementTypes.valueOf(elementTypeCode)))));
+	}
+
+	// The packed FLOAT members of the closed element-type code space, in the order a
+	// generated dispatch reads them. Filtered out of ArrayElementTypes.specializedCodes()
+	// by asking the representation itself (ConcatenateForms.isPackedFloat), never by a
+	// list written here -- a hand-written list in this file once left the float widths
+	// out.
+	private static int[] packedFloatElementTypeCodes() {
+		int[] all = ArrayElementTypes.specializedCodes();
+		int[] floats = new int[all.length];
+		int n = 0;
+		for (int code : all) {
+			if (ConcatenateForms.isPackedFloat(code)) {
+				floats[n++] = code;
+			}
+		}
+		return java.util.Arrays.copyOf(floats, n);
+	}
+
+	// The string family, built in ONE pass over a result sized once:
+	//
+	// (let* ((__cc_strs (mapcar (lambda (x) (if (stringp x) x (coerce x
+	// '%seq-string-result))) seqs))
+	// (__cc_out (make-string (reduce (lambda (n s) (+ n (length s))) __cc_strs
+	// :initial-value 0))))
+	// (reduce (lambda (i s) (replace __cc_out s :start1 i) (+ i (length s))) __cc_strs
+	// :initial-value 0)
+	// __cc_out)
+	//
+	// NOT a fold through %string-concat: an append copies its accumulator, so folding n
+	// arguments costs the sum of the prefixes -- quadratic in the total length, and
+	// (apply #'concatenate 'string lines) over a file's lines is exactly that shape
+	// (.kb/string-accumulate-cost.md). The per-argument normalization keeps the INTERNAL
+	// %seq-string-result designator (it feeds replace, never the program). make-string
+	// already answers a fresh mutable buffer, so no %str-fresh wrap is needed for the
+	// mutable-result contract the call-position lowering satisfies
+	// (.kb/string-write-runtime.md); the reduce's own accumulator carries the write
+	// offset, so nothing setqs a captured variable.
+	private static LispVal stringFamilyBuild() {
+		LispSymbol strs = new LispSymbol("__cc_strs");
+		LispSymbol out = new LispSymbol("__cc_out");
+		LispVal normalize = listToCons(List.of(new LispSymbol(LispNames.LAMBDA),
+				listToCons(List.of(new LispSymbol("x"))),
+				listToCons(List.of(new LispSymbol(LispNames.IF), call(LispNames.STRINGP, "x"), new LispSymbol("x"),
+						coerceChecked("x", LispNames.SEQ_STRING_RESULT, LispNames.CONCATENATE)))));
+		LispVal normalized = callV(LispNames.MAPCAR, normalize, new LispSymbol("seqs"));
+		LispVal sumStep = listToCons(
+				List.of(new LispSymbol(LispNames.LAMBDA), listToCons(List.of(new LispSymbol("n"), new LispSymbol("s"))),
+						callV(LispNames.ADD, new LispSymbol("n"), call(LispNames.LENGTH, "s"))));
+		LispVal total = listToCons(List.of(new LispSymbol(LispNames.REDUCE), sumStep, strs,
+				new LispSymbol(LispNames.INITIAL_VALUE_KEYWORD), new LispInteger(0)));
+		LispVal copyStep = listToCons(
+				List.of(new LispSymbol(LispNames.LAMBDA), listToCons(List.of(new LispSymbol("i"), new LispSymbol("s"))),
+						listToCons(List.of(new LispSymbol(LispNames.REPLACE), out, new LispSymbol("s"),
+								new LispSymbol(LispNames.START1_KEYWORD), new LispSymbol("i"))),
+						callV(LispNames.ADD, new LispSymbol("i"), call(LispNames.LENGTH, "s"))));
+		LispVal copyAll = listToCons(List.of(new LispSymbol(LispNames.REDUCE), copyStep, strs,
+				new LispSymbol(LispNames.INITIAL_VALUE_KEYWORD), new LispInteger(0)));
+		LispVal bindings = listToCons(List.of(listToCons(List.of(strs, normalized)),
+				listToCons(List.of(out, callV(LispNames.MAKE_STRING, total)))));
+		return listToCons(List.of(new LispSymbol(LispNames.LET_STAR), bindings, copyAll, out));
+	}
+
+	// Every argument's elements, in order, in a FRESH list:
+	// (reduce (lambda (x a) (append (coerce x 'list) a)) seqs :from-end t :initial-value
+	// nil)
+	// -- a RIGHT fold, so each step's append copies only that argument's own elements and
+	// the whole build is linear in the total length; a left fold re-copies the
+	// accumulator per argument and is quadratic, the list family's twin of the string
+	// one (.kb/string-accumulate-cost.md). The nil seed is what copies the LAST argument
+	// too. Built per use so the two dispatch arms never share one AST node.
+	private static LispVal concatenatedElements() {
+		LispVal step = listToCons(List.of(new LispSymbol(LispNames.LAMBDA),
+				listToCons(List.of(new LispSymbol("x"), new LispSymbol("a"))),
+				callV(LispNames.APPEND, coerceChecked("x", "LIST", LispNames.CONCATENATE), new LispSymbol("a"))));
+		return listToCons(List.of(new LispSymbol(LispNames.REDUCE), step, new LispSymbol("seqs"),
+				new LispSymbol(LispNames.FROM_END_KEYWORD), LispTrue.INSTANCE,
+				new LispSymbol(LispNames.INITIAL_VALUE_KEYWORD), LispNil.INSTANCE));
+	}
+
+	// (coerce <checked var> '<type>): the conversion of a value checked to be a sequence
+	// first, so one that is not is the operator's own SEQUENCE type-error rather than
+	// coerce's.
+	private static LispVal coerceChecked(String var, String type, String operator) {
+		return listToCons(List.of(new LispSymbol(LispNames.COERCE),
+				LispMacroExpander.checkedSequenceOf(new LispSymbol(var), operator),
+				listToCons(List.of(new LispSymbol(LispNames.QUOTE), new LispSymbol(type)))));
+	}
+
+	// (coerce <var> '<type>)
+	private static LispVal coerceTo(String var, String type) {
+		return listToCons(List.of(new LispSymbol(LispNames.COERCE), new LispSymbol(var),
+				listToCons(List.of(new LispSymbol(LispNames.QUOTE), new LispSymbol(type)))));
+	}
+
+	// (member x '(name...))
+	private static LispVal memberOf(LispSymbol x, String... names) {
+		List<LispVal> symbols = new ArrayList<>();
+		for (String name : names) {
+			symbols.add(new LispSymbol(name));
+		}
+		return callV(LispNames.MEMBER, x, listToCons(List.of(new LispSymbol(LispNames.QUOTE), listToCons(symbols))));
+	}
+
+	/**
+	 * The {@code #'open} wrapper: {@code (apply #'open path plist)} is the portable way
+	 * to build an option list at run time (alexandria's {@code with-input-from-file}),
+	 * but the compiled {@code open} needs its direction and element type as LITERALS (the
+	 * file mode is picked statically). The wrapper therefore hands the plist to the SAME
+	 * runtime dispatch a computed {@code with-open-file} option lowers to
+	 * ({@code LispMacroExpander.lowerRuntimeOpenOptions}) instead of re-deriving one:
+	 * that is what gives the wrapper {@code :if-exists :append}, the unsized
+	 * {@code unsigned-byte} element type and the refusal of an option value the native
+	 * behavior does not implement, none of which its own two-way dispatch had.
+	 */
+	private static WrapperDef openWrapper() {
+		LispSymbol opts = new LispSymbol("o");
+		// getf's DEFAULT is what makes an absent option mean the CL default rather than
+		// nil -- the dispatch rejects nil like any other unsupported value.
+		List<LispVal> options = List.of(new LispSymbol(LispNames.DIRECTION_KEYWORD),
+				getfWithDefault(opts, LispNames.DIRECTION_KEYWORD, new LispSymbol(LispNames.INPUT_KEYWORD)),
+				new LispSymbol(LispNames.ELEMENT_TYPE_KEYWORD),
+				getfWithDefault(opts, LispNames.ELEMENT_TYPE_KEYWORD,
+						listToCons(List.of(new LispSymbol(LispNames.QUOTE), new LispSymbol(LispNames.CHARACTER_TYPE)))),
+				new LispSymbol(":IF-EXISTS"), getfWithDefault(opts, ":IF-EXISTS", new LispSymbol(":SUPERSEDE")),
+				new LispSymbol(":IF-DOES-NOT-EXIST"),
+				// CL's default depends on the DIRECTION: an output open creates the file,
+				// an input open signals. Passing one fixed keyword down made the dispatch
+				// read the wrong half of the table for whichever direction it was not.
+				getfWithDefault(opts, ":IF-DOES-NOT-EXIST",
+						listToCons(List.of(new LispSymbol(LispNames.IF),
+								listToCons(List.of(new LispSymbol(LispNames.EQ_GENERAL),
+										getfWithDefault(opts, LispNames.DIRECTION_KEYWORD,
+												new LispSymbol(LispNames.INPUT_KEYWORD)),
+										new LispSymbol(LispNames.OUTPUT_KEYWORD))),
+								new LispSymbol(":CREATE"), new LispSymbol(":ERROR")))),
+				new LispSymbol(":EXTERNAL-FORMAT"),
+				getfWithDefault(opts, ":EXTERNAL-FORMAT", new LispSymbol(":UTF-8")));
+		LispVal body = LispMacroExpander.lowerRuntimeOpenOptions(LispNames.OPEN, new LispSymbol("p"), options);
+		return new WrapperDef(LispNames.OPEN, List.of("p", LispNames.LAMBDA_REST, "o"), List.of(body));
+	}
+
+	// (getf o :option <default>)
+	private static LispVal getfWithDefault(LispSymbol plist, String option, LispVal fallback) {
+		return listToCons(List.of(new LispSymbol(LispNames.GETF), plist, new LispSymbol(option), fallback));
+	}
+
+	// #'find-symbol: (lambda (n &optional (p nil pp)) (if pp (find-symbol n p)
+	// (find-symbol n))) -- both branches are call positions the backends lower, and the
+	// lambda list is CL's (string &optional package), which is the call shape.
+	private static WrapperDef findSymbolWrapper() {
+		LispSymbol n = new LispSymbol("n");
+		LispSymbol p = new LispSymbol("p");
+		LispVal body = listToCons(List.of(new LispSymbol(LispNames.IF), new LispSymbol("pp"),
+				callV(LispNames.FIND_SYMBOL, n, p), callV(LispNames.FIND_SYMBOL, n)));
+		return new WrapperDef(LispNames.FIND_SYMBOL, List.of("n", LispNames.LAMBDA_OPTIONAL, "p" + SUPPLIED_P + "pp"),
+				List.of(body));
+	}
+
+	// #'make-sequence: the call position needs a literal result type, so the wrapper
+	// classifies the runtime type the way expandMakeSequence classifies the literal one
+	// and takes that family's call position, forwarding :initial-element only when the
+	// tail carries one (an omitted element is not a nil one).
+	//
+	// (lambda (type size &rest kw)
+	// (let ((h (if (consp type) (car type) type)))
+	// (cond ((member h '(string ...)) <'string arm>)
+	// ((eq h 'list) <'list arm>)
+	// ((or (member h '(bit-vector simple-bit-vector))
+	// (and (member h '(vector array simple-array)) (eq (car (cdr type)) 'bit)))
+	// <'bit-vector arm>)
+	// ((member h '(vector simple-vector array simple-array)) <'vector arm>)
+	// (t (error "make-sequence: unsupported result type ~S" type)))))
+	private static WrapperDef makeSequenceWrapper() {
+		LispSymbol type = new LispSymbol("type");
+		LispSymbol head = new LispSymbol("h");
+		LispVal headOf = callV(LispNames.IF, callV(LispNames.CONSP, type), callV(LispNames.CAR, type), type);
+		LispVal bitElement = callV(LispNames.AND, memberOf(head, "VECTOR", "ARRAY", "SIMPLE-ARRAY"),
+				callV(LispNames.EQ_GENERAL, callV(LispNames.CAR, callV(LispNames.CDR, type)),
+						callV(LispNames.QUOTE, new LispSymbol(LispNames.BIT))));
+		LispVal cond = callV(LispNames.COND,
+				listToCons(List.of(memberOf(head, "STRING", "SIMPLE-STRING", "BASE-STRING", "SIMPLE-BASE-STRING"),
+						makeSequenceArm("STRING"))),
+				listToCons(List.of(
+						callV(LispNames.EQ_GENERAL, head, callV(LispNames.QUOTE, new LispSymbol(LispNames.LIST))),
+						makeSequenceArm(LispNames.LIST))),
+				listToCons(List.of(
+						callV(LispNames.OR, memberOf(head, "BIT-VECTOR", "SIMPLE-BIT-VECTOR"),
+								callV(LispNames.AND, callV(LispNames.CONSP, type), bitElement)),
+						makeSequenceArm("BIT-VECTOR"))),
+				listToCons(List.of(memberOf(head, "VECTOR", "SIMPLE-VECTOR", "ARRAY", "SIMPLE-ARRAY"),
+						makeSequenceArm("VECTOR"))),
+				listToCons(List.of(LispTrue.INSTANCE,
+						callV(LispNames.ERROR, new LispString("make-sequence: unsupported result type ~S"), type))));
+		LispVal body = listToCons(List.of(new LispSymbol(LispNames.LET),
+				listToCons(List.of((LispVal) listToCons(List.of(head, headOf)))), cond));
+		return new WrapperDef(LispNames.MAKE_SEQUENCE, List.of("type", "size", LispNames.LAMBDA_REST, "kw"),
+				List.of(body));
+	}
+
+	// (if kw (make-sequence 'family size :initial-element (getf kw :initial-element))
+	// (make-sequence 'family size))
+	private static LispVal makeSequenceArm(String family) {
+		LispVal quoted = callV(LispNames.QUOTE, new LispSymbol(family));
+		LispSymbol size = new LispSymbol("size");
+		return callV(LispNames.IF, new LispSymbol("kw"),
+				callV(LispNames.MAKE_SEQUENCE, quoted, size, new LispSymbol(LispNames.INITIAL_ELEMENT_KEYWORD),
+						callV(LispNames.GETF, new LispSymbol("kw"), new LispSymbol(LispNames.INITIAL_ELEMENT_KEYWORD))),
+				callV(LispNames.MAKE_SEQUENCE, quoted, size));
+	}
+
+	private static final List<WrapperDef> WRAPPER_DEFS = List.of(
+			// Signal operators and format (gated by REFERENCE_GATED_FUNCTIONS in the
+			// backend compilers)
+			signalDatum(LispNames.ERROR, LispNames.ERROR_RUNTIME),
+			signalDatum(LispNames.SIGNAL, LispNames.SIGNAL_RUNTIME),
+			signalDatum(LispNames.WARN, LispNames.WARN_RUNTIME), cerrorWrapper(), formatWrapper(), concatenateWrapper(),
+			// %seq-string: injected only when a concatenate 'string lowering needs it
+			// (gated on ConcatenateForms.needsSeqString, not on a #'name reference).
+			seqStringWrapper(),
+			// %seq-int-vector: the packed (unsigned-byte 8|16|32) vector builder the
+			// concatenate vector family calls (gated on
+			// ConcatenateForms.needsSeqIntVector OR a #'concatenate reference, since the
+			// wrapper above calls it too).
+			seqIntVectorWrapper(),
+			// %seq-float-vector: the same for the packed float widths, on its own gate
+			// (ConcatenateForms.needsSeqFloatVector OR a #'concatenate reference), so a
+			// program that asks for one packed family never carries the other's
+			// allocations.
+			seqFloatVectorWrapper(),
+			// #'open (reference-gated): dispatches an option plist onto the four literal
+			// direction/element-type shapes the compiled open needs.
+			openWrapper(),
+			// #'find-symbol (reference-gated): dispatches on argument count onto the
+			// two call-position lowerings; the computed name lowers to intern, so the
+			// documented unknown-name-yields-a-symbol deviation applies to the wrapper
+			// too (harmless in trivia's visibility filter, the driving consumer).
+			findSymbolWrapper(),
+			// Arithmetic: +/-/*// are variadic in CL, so their wrappers accept any arity
+			// (a fixed-arity wrapper returned nil on the JVM / trapped on WASM when
+			// funcall/apply passed a different argument count). - and / keep their
+			// one-argument semantics.
+			variadicIdentity(LispNames.ADD, new LispInteger(0)), variadicUnaryLeft(LispNames.SUB, new LispInteger(0)),
+			variadicIdentity(LispNames.MUL, new LispInteger(1)), variadicUnaryLeft(LispNames.DIV, new LispInteger(1)),
+			binary(LispNames.MOD), binary(LispNames.REM),
+			// Comparison (arity 2)
+			comparison(LispNames.EQ, false), comparison(LispNames.LT, false), comparison(LispNames.GT, false),
+			comparison(LispNames.LE, false), comparison(LispNames.GE, false), comparison(LispNames.NE, true),
+			// List/utility (arity 2)
+			binary(LispNames.CONS), binary(LispNames.EQ_GENERAL), binary(LispNames.EQL), binary(LispNames.EQUAL),
+			// min/max are variadic (need at least one argument)
+			variadicNonEmpty(LispNames.MIN), variadicNonEmpty(LispNames.MAX), binary(LispNames.NTHCDR),
+			variadicAppend(),
+			// List access (arity 1; first/rest/second/... compile via macro expansion)
+			unary(LispNames.CAR), unary(LispNames.CDR), unary(LispNames.FIRST), unary(LispNames.REST),
+			unary(LispNames.SECOND), unary(LispNames.THIRD), unary(LispNames.FOURTH), unary(LispNames.FIFTH),
+			unary(LispNames.SIXTH), unary(LispNames.SEVENTH), unary(LispNames.EIGHTH), unary(LispNames.NINTH),
+			unary(LispNames.TENTH), binary(LispNames.NTH), binary(LispNames.RPLACA), binary(LispNames.RPLACD),
+			// Sequence operations (compiled via macro expansion in call position)
+			unary(LispNames.LENGTH), unary(LispNames.REVERSE), unaryOptionalSecond(LispNames.LAST),
+			unaryOptionalSecond(LispNames.BUTLAST), designatorFamily(LispNames.MEMBER, true),
+			designatorFamily(LispNames.MEMBER_IF, false), findFamily(LispNames.FIND, true),
+			findFamily(LispNames.FIND_IF, false), findFamily(LispNames.FIND_IF_NOT, false),
+			positionFamily(LispNames.POSITION, true), positionFamily(LispNames.POSITION_IF, false),
+			positionFamily(LispNames.POSITION_IF_NOT, false), sequenceScanFamily(LispNames.COUNT, true, false, 1),
+			sequenceScanFamily(LispNames.COUNT_IF, false, false, 1), designatorFamily(LispNames.ASSOC, true),
+			designatorFamily(LispNames.ASSOC_IF, false), designatorFamily(LispNames.RASSOC, true),
+			designatorFamily(LispNames.RASSOC_IF, false), ternary(LispNames.ACONS),
+			binaryOptionalThird(LispNames.PAIRLIS), unary(LispNames.COPY_ALIST), binaryOptionalThird(LispNames.GETF),
+			sequenceScanFamily(LispNames.REMOVE_DUPLICATES, true, false, 0),
+			sequenceScanFamily(LispNames.DELETE_DUPLICATES, true, false, 0), variadicNconc(), unary(LispNames.IDENTITY),
+			unary(LispNames.COPY_LIST), unary(LispNames.COPY_STRUCTURE), unary(LispNames.NREVERSE), makeListWrapper(),
+			designatorFamily(LispNames.UNION, true), designatorFamily(LispNames.INTERSECTION, true),
+			designatorFamily(LispNames.SET_DIFFERENCE, true), designatorFamily(LispNames.ADJOIN, true),
+			designatorFamily(LispNames.SUBSETP, true),
+			// every/some carry ANY number of sequences, the same as in call position,
+			// and notany/notevery are their complements over the same walk.
+			everySomeWrapper(LispNames.EVERY, true), everySomeWrapper(LispNames.SOME, false),
+			everySomeWrapper(LispNames.NOTANY, false, true), everySomeWrapper(LispNames.NOTEVERY, true, true),
+			sequenceScanFamily(LispNames.REMOVE, true, true, 1),
+			sequenceScanFamily(LispNames.REMOVE_IF, false, true, 1),
+			sequenceScanFamily(LispNames.REMOVE_IF_NOT, false, true, 1),
+			sequenceScanFamily(LispNames.DELETE, true, true, 1),
+			sequenceScanFamily(LispNames.DELETE_IF, false, true, 1),
+			sequenceScanFamily(LispNames.DELETE_IF_NOT, false, true, 1),
+			sequenceScanFamily(LispNames.SUBSTITUTE, true, true, 2),
+			sequenceScanFamily(LispNames.NSUBSTITUTE, true, true, 2),
+			sequenceScanFamily(LispNames.SUBSTITUTE_IF, false, true, 2),
+			sequenceScanFamily(LispNames.SUBSTITUTE_IF_NOT, false, true, 2),
+			sequenceScanFamily(LispNames.NSUBSTITUTE_IF, false, true, 2),
+			sequenceScanFamily(LispNames.NSUBSTITUTE_IF_NOT, false, true, 2), reduceWrapper(), sortWrapper(),
+			variadicStableSort(), unary(LispNames.COPY_SEQ),
+			// The mapping family as first-class values (alexandria hands #'mapcar to
+			// its own combinators). Every member carries ANY number of lists, the same
+			// as in call position -- see mapFamilyWrapper.
+			mapFamilyWrapper(LispNames.MAPCAR, false, MapAccumulation.COLLECT),
+			mapFamilyWrapper(LispNames.MAPC, false, MapAccumulation.DISCARD),
+			mapFamilyWrapper(LispNames.MAPCAN, false, MapAccumulation.CONCATENATE),
+			mapFamilyWrapper(LispNames.MAPLIST, true, MapAccumulation.COLLECT),
+			mapFamilyWrapper(LispNames.MAPCON, true, MapAccumulation.CONCATENATE),
+			mapFamilyWrapper(LispNames.MAPL, true, MapAccumulation.DISCARD),
+			// funcall is variadic: (lambda (f &rest r) (apply f r)) -- e.g.
+			// cl-utilities' compose folds with (reduce #'funcall fns ...).
+			new WrapperDef(LispNames.FUNCALL, List.of("f", LispNames.LAMBDA_REST, "r"),
+					List.of(callV(LispNames.APPLY, new LispSymbol("f"), new LispSymbol("r")))),
+			applyWrapper(),
+			// #'make-instance (gated by REFERENCE_GATED_FUNCTIONS): forwards to the
+			// generated %mop-make-instance runtime-class construction defun.
+			new WrapperDef(LispNames.MAKE_INSTANCE, List.of("class", LispNames.LAMBDA_REST, "r"),
+					List.of(callV(LispNames.APPLY,
+							listToCons(List.of(new LispSymbol(LispNames.FUNCTION),
+									new LispSymbol(LispNames.MOP_MAKE_INSTANCE))),
+							new LispSymbol("class"), new LispSymbol("r")))),
+			// Predicates (arity 1)
+			unary(LispNames.NULL), unary(LispNames.NOT), unary(LispNames.ATOM),
+			// Type predicates (arity 1)
+			unary(LispNames.NUMBERP), unary(LispNames.INTEGERP), unary(LispNames.FLOATP), unary(LispNames.REALP),
+			unary(LispNames.COMPLEXP), unary(LispNames.SYMBOLP), unary(LispNames.STRINGP), unary(LispNames.LISTP),
+			unary(LispNames.CONSP), unary(LispNames.KEYWORDP), unary(LispNames.FUNCTIONP), unary(LispNames.VALUES_LIST),
+			unary(LispNames.VECTORP),
+			// Type conversion (arity 1)
+			unaryOptionalSecond(LispNames.FLOAT), unary(LispNames.RATIONAL), unary(LispNames.NUMERATOR),
+			unary(LispNames.DENOMINATOR),
+			// The floor family takes its optional divisor as a function too; with the
+			// spill global present, LispMacroExpander.settleWrapperLambdas makes the
+			// tail publish the remainder (.kb/multiple-values.md).
+			unaryOptionalSecond(LispNames.TRUNCATE), unaryOptionalSecond(LispNames.FLOOR),
+			unaryOptionalSecond(LispNames.CEILING), unaryOptionalSecond(LispNames.ROUND),
+			unaryOptionalSecond(LispNames.FFLOOR), unaryOptionalSecond(LispNames.FCEILING),
+			unaryOptionalSecond(LispNames.FROUND), unaryOptionalSecond(LispNames.FTRUNCATE),
+			// Math/IO/list (arity 1)
+			// print / prin1 / princ carry the optional stream: the wrapper forwards it
+			// unconditionally, since an omitted stream and an explicit nil are the same
+			// designator (.kb/standard-output-redirect.md).
+			unary(LispNames.ABS), unaryOptionalStream(LispNames.PRINT), unaryOptionalStream(LispNames.PRIN1),
+			unaryOptionalStream(LispNames.PRINC), unary(LispNames.PRINC_TO_STRING), unary(LispNames.PRIN1_TO_STRING),
+			// list is variadic: the rest list IS the result
+			new WrapperDef(LispNames.LIST, List.of(LispNames.LAMBDA_REST, "r"), List.of(new LispSymbol("r"))),
+			// Complex numbers: (complex real &optional imag), the accessors and the
+			// predicates above. The wrapper calls the function, so #'complex works
+			// before any backend compiles the call itself.
+			unaryOptionalSecond(LispNames.COMPLEX), unary(LispNames.REALPART), unary(LispNames.IMAGPART),
+			unary(LispNames.CONJUGATE), unary(LispNames.PHASE),
+			ignoringEnvironment(LispNames.UPGRADED_COMPLEX_PART_TYPE, 1),
+			// Math functions (arity 1)
+			unary(LispNames.SQRT), unary(LispNames.ISQRT), unary(LispNames.SIGNUM), unary(LispNames.EXP),
+			// log and atan carry the optional SECOND argument (the logarithm's base,
+			// atan's atan2 x): the dispatch on its presence is exact, since neither an
+			// omitted base nor an omitted x can be spelled nil.
+			unaryOptionalSecond(LispNames.LOG), unary(LispNames.SIN), unary(LispNames.COS), unary(LispNames.TAN),
+			unary(LispNames.ASIN), unary(LispNames.ACOS), unaryOptionalSecond(LispNames.ATAN), unary(LispNames.SINH),
+			unary(LispNames.COSH), unary(LispNames.TANH), unary(LispNames.CIS), unary(LispNames.ASINH),
+			unary(LispNames.ACOSH), unary(LispNames.ATANH), unaryOptionalSecond(LispNames.RANDOM),
+			// Math functions (arity 2)
+			// gcd/lcm are variadic in Common Lisp -- (gcd) is 0, (lcm) is 1, a single
+			// argument is its absolute value -- unlike the compiled call-position form,
+			// which is always binary (LispMacroExpander.expandReduction folds a variadic
+			// call into nested binary ones before either backend ever sees it). The
+			// wrapper has to fold the same way so a #'gcd/#'lcm VALUE answers what the
+			// call answers, rather than requiring exactly two arguments.
+			binary(LispNames.EXPT), variadicIdentity(LispNames.GCD, new LispInteger(0)),
+			variadicIdentity(LispNames.LCM, new LispInteger(1)),
+			// Bitwise integer operations
+			bitwiseFold(LispNames.LOGAND, -1), bitwiseFold(LispNames.LOGIOR, 0), bitwiseFold(LispNames.LOGXOR, 0),
+			unary(LispNames.LOGNOT), binary(LispNames.LOGANDC1), binary(LispNames.LOGANDC2), binary(LispNames.LOGORC1),
+			binary(LispNames.LOGORC2), binary(LispNames.LOGNAND), binary(LispNames.LOGNOR),
+			variadicIdentity(LispNames.LOGEQV, new LispInteger(-1)), binary(LispNames.ASH),
+			unary(LispNames.INTEGER_LENGTH), binary(LispNames.LOGBITP), binary(LispNames.LOGTEST),
+			// Byte-field operations (macro-lowered to list/car/ash/logand/logior/lognot)
+			binary(LispNames.BYTE), unary(LispNames.BYTE_SIZE), unary(LispNames.BYTE_POSITION), binary(LispNames.LDB),
+			ternary(LispNames.DPB), ternary(LispNames.DEPOSIT_FIELD), binary(LispNames.MASK_FIELD),
+			binary(LispNames.SCALE_FLOAT), unary(LispNames.FLOAT_RADIX),
+			// bfloat16 bit reinterpretation, a real function on all four backends --
+			// unlike the %ieee754-* quartet, which WASM cannot carry. The only
+			// PACKAGE-QUALIFIED entries here: the pair belongs to rontolisp, not to cl,
+			// so the wrapper has to spell the name the resolver leaves behind or a
+			// #'reference would bind a lambda nothing calls.
+			unary(PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.BFLOAT16_BITS)),
+			unary(PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.BITS_BFLOAT16)),
+			// The IEEE binary16 scalar pair, same reasoning as bfloat16-bits above
+			// widen-float-bits/narrow-float-bits forward their :start.
+			unary(PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.FLOAT16_BITS)),
+			unary(PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.BITS_FLOAT16)),
+			floatBitsBulk(PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.WIDEN_FLOAT_BITS)),
+			floatBitsBulk(PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.NARROW_FLOAT_BITS)),
+			// The block-quantized weight matrix (.kb/quantized-matrix.md).
+			binary(PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.QUANTIZE)),
+			binary(PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.DEQUANTIZE)),
+			binary(PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.MAKE_QUANTIZED_MATRIX)),
+			binary(PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.QUANTIZED_ROWS)),
+			unary(PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.QUANTIZED_MATRIX_P)),
+			// open as a first-class value: (apply #'open path options) is the portable
+			// way to build an option list at run time (alexandria's
+			// with-input-from-file).
+			// The wrapper takes the positional shape the built-in compiles.
+			// Lite stream/type introspection stubs (macro-lowered; slot-boundp and
+			// slot-makunbound are omitted -- their expansions need a literal slot name).
+			// probe-file is NOT here: it is a prelude defun now now, so
+			// #'probe-file
+			// resolves to the real definition.
+			unary(LispNames.SLEEP), unaryOptionalSecond(LispNames.FILE_POSITION), unary(LispNames.FILE_LENGTH),
+			unary(LispNames.FILE_WRITE_DATE), unary(LispNames.PATHNAMEP),
+			// make-broadcast-stream: the Gray broadcast stream the call position
+			// builds, over the components as they arrive (HELPER_WRAPPERS).
+			new WrapperDef(LispNames.MAKE_BROADCAST_STREAM, List.of(LispNames.LAMBDA_REST, "c"),
+					List.of(call(LispNames.MAKE_BROADCAST_STREAM_INTERNAL, "c"))),
+			unary(LispNames.INPUT_STREAM_P), unary(LispNames.OUTPUT_STREAM_P), unary(LispNames.STREAM_ELEMENT_TYPE),
+			unary(LispNames.CLASS_OF), unary(LispNames.SIMPLE_CONDITION_FORMAT_CONTROL),
+			unary(LispNames.SIMPLE_CONDITION_FORMAT_ARGUMENTS),
+			// 1+ and 1-: body is (+ a 1) and (- a 1)
+			new WrapperDef(LispNames.ONE_PLUS, List.of("a"),
+					List.of(callV(LispNames.ADD, new LispSymbol("a"), new LispInteger(1)))),
+			new WrapperDef(LispNames.ONE_MINUS, List.of("a"),
+					List.of(callV(LispNames.SUB, new LispSymbol("a"), new LispInteger(1)))),
+			// zerop: (= a 0)
+			new WrapperDef(LispNames.ZEROP, List.of("a"),
+					List.of(callV(LispNames.EQ, new LispSymbol("a"), new LispInteger(0)))),
+			// plusp: (> a 0)
+			new WrapperDef(LispNames.PLUSP, List.of("a"),
+					List.of(callV(LispNames.GT, new LispSymbol("a"), new LispInteger(0)))),
+			// minusp: (< a 0)
+			new WrapperDef(LispNames.MINUSP, List.of("a"),
+					List.of(callV(LispNames.LT, new LispSymbol("a"), new LispInteger(0)))),
+			// evenp: (= (mod a 2) 0)
+			new WrapperDef(LispNames.EVENP, List.of("a"),
+					List.of(callV(LispNames.EQ, callV(LispNames.MOD, new LispSymbol("a"), new LispInteger(2)),
+							new LispInteger(0)))),
+			// oddp: (not (= (mod a 2) 0))
+			new WrapperDef(LispNames.ODDP, List.of("a"),
+					List.of(callV(LispNames.NOT,
+							callV(LispNames.EQ, callV(LispNames.MOD, new LispSymbol("a"), new LispInteger(2)),
+									new LispInteger(0))))),
+			// String operations
+			unary(LispNames.STRING), boundedCaseConversion(LispNames.STRING_UPCASE),
+			boundedCaseConversion(LispNames.STRING_DOWNCASE), boundedCaseConversion(LispNames.STRING_CAPITALIZE),
+			makeStringWrapper(),
+			boundingKeywords(LispNames.REPLACE, LispNames.START1_KEYWORD, LispNames.END1_KEYWORD,
+					LispNames.START2_KEYWORD, LispNames.END2_KEYWORD),
+			boundingKeywords(LispNames.FILL, LispNames.START_KEYWORD, LispNames.END_KEYWORD),
+			binaryOptionalThird(LispNames.SUBSEQ), stringEquality(LispNames.STRING_EQ),
+			stringEquality(LispNames.STRING_EQUAL), binary(LispNames.STRING_TRIM), binary(LispNames.STRING_LEFT_TRIM),
+			binary(LispNames.STRING_RIGHT_TRIM),
+			// Character operations
+			binary(LispNames.CHAR), binary(LispNames.SCHAR), unary(LispNames.CHAR_CODE), unary(LispNames.CHAR_INT),
+			unary(LispNames.CODE_CHAR), unary(LispNames.CHAR_UPCASE), unary(LispNames.CHAR_DOWNCASE),
+			unary(LispNames.CHARACTERP), unary(LispNames.ALPHA_CHAR_P), unary(LispNames.LOWER_CASE_P),
+			unary(LispNames.UPPER_CASE_P), ignoringEnvironment(LispNames.CONSTANTP, 1), unary(LispNames.STREAMP),
+			unary(LispNames.SIMPLE_STRING_P), unaryOptionalSecond(LispNames.DIGIT_CHAR_P),
+			comparison(LispNames.CHAR_EQ, false), comparison(LispNames.CHAR_LT, false),
+			comparison(LispNames.CHAR_LE, false), comparison(LispNames.CHAR_GT, false),
+			comparison(LispNames.CHAR_GE, false), comparison(LispNames.CHAR_NE, true),
+			comparison(LispNames.CHAR_EQUAL, false),
+			// parse-integer / read-from-string: their compiled bodies pull in runtime
+			// helpers emitted only when the program uses the operator, so each backend
+			// excludes these wrappers (via excludedNames) unless the program references
+			// the
+			// symbol -- keeping the wrapper and its helper gated together.
+			parseIntegerWrapper(), readFromStringWrapper(),
+			// Hash-table operators: gated like parse-integer/read-from-string (see
+			// HASH_FUNCTIONS). %puthash is internal and omitted.
+			// #'make-hash-table takes its initargs as a &rest tail --
+			// (apply #'make-hash-table initargs) is how alexandria's
+			// alist-hash-table/plist-hash-table construct -- and passes their :test
+			// through as a computed one, which the make-hash-table compilers lower onto
+			// %make-hash-table-by-test (.kb/hash-tables.md). Every other initarg is
+			// ignored, as at a call site.
+			new WrapperDef(LispNames.MAKE_HASH_TABLE, List.of(LispNames.LAMBDA_REST, "initargs"),
+					List.of(callV(LispNames.MAKE_HASH_TABLE, new LispSymbol(LispNames.TEST_KEYWORD),
+							callV(LispNames.GETF, new LispSymbol("initargs"),
+									new LispSymbol(LispNames.TEST_KEYWORD))))),
+			binaryOptionalThird(LispNames.GETHASH), binary(LispNames.REMHASH), unary(LispNames.CLRHASH),
+			unary(LispNames.HASH_TABLE_COUNT), unary(LispNames.HASH_TABLE_P), binary(LispNames.MAPHASH),
+			// #'aref: variadic (CL aref takes one subscript per dimension) -- fold the
+			// subscripts into the row-major index over the array's dimensions. Gated
+			// with the fill-pointer array group so array-free programs stay
+			// byte-identical.
+			new WrapperDef(LispNames.AREF, List.of("a", LispNames.LAMBDA_REST, "idx"), arefFoldBody()),
+			// Fill-pointer array operators: gated like the hash-table group (see
+			// ARRAY_FILL_POINTER_FUNCTIONS). %set-fill-pointer is internal and omitted.
+			unary(LispNames.FILL_POINTER), unary(LispNames.ARRAY_HAS_FILL_POINTER_P),
+			unary(LispNames.ADJUSTABLE_ARRAY_P), unary(LispNames.ARRAY_ELEMENT_TYPE), binary(LispNames.VECTOR_PUSH),
+			unary(LispNames.VECTOR_POP), binaryOptionalThird(LispNames.VECTOR_PUSH_EXTEND),
+			// array-displacement yields its primary value (the target) -- the offset
+			// needs a direct mv consumer.
+			adjustArrayWrapper(), unary(LispNames.ARRAY_DISPLACEMENT), fullMakeArray(),
+			// terpri / fresh-line / read-line: the optional stream, forwarded
+			// unconditionally (omitted == nil == the standard stream designator).
+			optionalStream(LispNames.TERPRI), optionalStream(LispNames.FRESH_LINE), readLineWrapper(),
+			// write-line: the optional stream plus the :start / :end keyword bounds,
+			// the same runtime keyword re-extraction boundedSequenceIo does for
+			// write-string. force-output / finish-output / clear-output keep the
+			// plain optional stream. WASM flushes nothing (every write goes out
+			// synchronously) and clear-output evaluates its designator for effect,
+			// but every backend accepts the argument in call position, so the
+			// wrapper body compiles everywhere.
+			writeLineWrapper(), optionalStream(LispNames.FORCE_OUTPUT), optionalStream(LispNames.FINISH_OUTPUT),
+			optionalStream(LispNames.CLEAR_OUTPUT),
+			// listen: the interpreter and the JVM probe the designator. On WASM any
+			// listen
+			// CALL SITE lowers to the compiler's call-time unsupported stub, and the
+			// --component sockets rewrite runs before this catalog is injected, so
+			// #'listen reaches that stub on WASM even where (listen s) in call position
+			// would reach %io-listen (the same WASM-side limit as the read family).
+			optionalStream(LispNames.LISTEN),
+			// The signalling read family (all three REFERENCE_GATED_FUNCTIONS): read-line
+			// and read-char carry CL's whole optional tail, peek-char the peek-type in
+			// front of it -- a wrapper shorter than the operator's lambda list is a
+			// program-error on a legal funcall -- and read-byte's stream argument is
+			// mandatory.
+			optionalStreamEof(LispNames.READ_CHAR),
+			new WrapperDef(LispNames.PEEK_CHAR,
+					List.of(LispNames.LAMBDA_OPTIONAL, "a", "b", "e" + DEFAULT_TRUE, "v", "r"),
+					List.of(call(LispNames.PEEK_CHAR, "a", "b", "e", "v"))),
+			// read-char-no-hang takes read-char's tail (its call position IS read-char).
+			// #'unread-char's catalog body signals on the compile paths: the pushback is
+			// a splice, and a program naming the operator gets the PUSHBACK_WRAPPERS
+			// twin calling it -- what is left is a symbol built at run time.
+			optionalStreamEof(LispNames.READ_CHAR_NO_HANG),
+			new WrapperDef(LispNames.UNREAD_CHAR, List.of("c", LispNames.LAMBDA_OPTIONAL, "s"),
+					List.of(call(LispNames.UNREAD_CHAR, "c", "s"))),
+			new WrapperDef(LispNames.READ_BYTE, List.of("s", LispNames.LAMBDA_OPTIONAL, "e" + DEFAULT_TRUE, "v"),
+					List.of(call(LispNames.READ_BYTE, "s", "e", "v"))),
+			// gensym: the optional prefix or counter (macroexpand/macroexpand-1 have no
+			// wrapper at all -- the macro table does not exist at runtime in compiled
+			// output)
+			new WrapperDef(LispNames.GENSYM, List.of(LispNames.LAMBDA_OPTIONAL, "x"),
+					List.of(listToCons(List.of(new LispSymbol(LispNames.IF), new LispSymbol("x"),
+							call(LispNames.GENSYM, "x"), call(LispNames.GENSYM))))),
+			// values: variadic; the function value spreads its arguments like the
+			// operator does -- values-list publishes the rest through %mv-spill and
+			// says "no value" for an empty list -- so (funcall #'values 1 2) and
+			// (apply #'values '()) answer to a consumer exactly as (values 1 2) and
+			// (values) do (.kb/multiple-values.md)
+			new WrapperDef(LispNames.VALUES, List.of(LispNames.LAMBDA_REST, "r"),
+					List.of(call(LispNames.VALUES_LIST, "r"))),
+			// write-string: write-line's (string &optional stream &key start end).
+			// write-to-string: a prin1-to-string alias without keywords, the printer
+			// variables bound around it with them (HELPER_WRAPPERS).
+			optionalStreamBounded(LispNames.WRITE_STRING), writeToStringWrapper(),
+			// write-char: (character &optional stream), the same designator rule as
+			// princ. write-byte: (byte stream), both required.
+			unaryOptionalStream(LispNames.WRITE_CHAR), binary(LispNames.WRITE_BYTE),
+			// symbol runtime API: the pure string<->symbol converters get plain
+			// wrappers. find-symbol folds at compile time (literal-only, like
+			// symbol-function); boundp/fboundp need the eval runtime, which is only
+			// emitted when the program names them, so their wrappers are reference-gated.
+			unary(LispNames.SYMBOL_NAME), unary(LispNames.MAKE_SYMBOL), unaryOptionalSecond(LispNames.INTERN),
+			// symbol-value is the exception among those four since the progv work: its
+			// wrapper is REFERENCE-GATED (see above), and the #'symbol-value reference
+			// that injects it also fires the usesEval scan that makes its body real.
+			unary(LispNames.SYMBOL_VALUE),
+			// boundp and fboundp likewise (reference-gated): computed probes of the
+			// bound-ness of a variable and a function.
+			unary(LispNames.BOUNDP), unary(LispNames.FBOUNDP),
+			// set beside it, reference-gated for the same reason: the body is the
+			// backing-store chain plus the mirror store.
+			binary(LispNames.SET),
+			// makunbound beside it, reference-gated likewise: the body is the
+			// computed-name chain plus the mirror unlink.
+			unary(LispNames.MAKUNBOUND),
+			// find-package IS one of them, because its wrapper body is a COMPUTED
+			// designator and that already has a real lowering: the per-expression
+			// compilers rewrite it to a lookup in the package table the backend bakes in
+			// (LispMacroExpander.expandRuntimeFindPackage), which is exactly what
+			// #'find-package must answer. esrap's resolve-function reaches it with
+			// (mapcar #'find-package '(#:cl #:esrap)).
+			unary(LispNames.FIND_PACKAGE),
+			// The three package-registry queries, for the same reason: their bodies are
+			// the plain calls, which the per-expression compilers answer from the baked
+			// use table (LispMacroExpander.expandPackageQuery).
+			new WrapperDef(LispNames.LIST_ALL_PACKAGES, List.of(), List.of(call(LispNames.LIST_ALL_PACKAGES))),
+			unary(LispNames.PACKAGE_USE_LIST), unary(LispNames.PACKAGE_USED_BY_LIST),
+			// CL FUNCTIONS both expression compilers lower in operator position that
+			// had no wrapper, so #'name answered "undefined" on every backend -- a
+			// whole-catalog sweep, not two fixes, and the pin that keeps the catalog
+			// closed is BuiltinFunctionWrapperCatalogTest. Each body is the plain call
+			// the compilers lower; where the operator reads something STATICALLY that
+			// is a runtime value here, the wrapper does the work itself instead (see
+			// the builders above).
+			//
+			// coerce and typep need no such treatment even though their second argument
+			// is a type DESIGNATOR: both lowerings already have a computed-designator
+			// arm (expandComputedCoerce / %typep-runtime), and a wrapper parameter is
+			// exactly that shape.
+			binary(LispNames.ELT), binary(LispNames.COERCE), ignoringEnvironment(LispNames.TYPEP, 2),
+			// #'subtypep (gated by REFERENCE_GATED_FUNCTIONS): its specifiers are
+			// parameters, so the body is the computed %subtypep-runtime dispatch; the
+			// optional environment is accepted and ignored, as in call position.
+			new WrapperDef(LispNames.SUBTYPEP, List.of("a", "b", LispNames.LAMBDA_OPTIONAL, "e"),
+					List.of(call(LispNames.SUBTYPEP, "a", "b"))),
+			// The CL functions the expander rewrites in call position
+			// (PackageRegistry.inlineExpandedClFunctions), all REFERENCE_GATED_FUNCTIONS.
+			// Each body is the call with its arguments as parameters: a computed slot
+			// name lowers to the %slot-*-runtime dispatches, documentation and proclaim
+			// answer nil as their calls do. The two whose call position needs a literal
+			// type or class with literal initargs forward to a runtime dispatch over a
+			// plist instead: %make-condition-runtime and %change-class-runtime, which
+			// LispMacroExpander generates for a program naming the operator as a value.
+			unary(LispNames.COMPLEMENT), binary(LispNames.DOCUMENTATION), unary(LispNames.PROCLAIM),
+			binary(LispNames.SLOT_VALUE), binary(LispNames.SLOT_BOUNDP), binary(LispNames.SLOT_EXISTS_P),
+			binary(LispNames.SLOT_MAKUNBOUND), makeSequenceWrapper(),
+			new WrapperDef(LispNames.MAKE_CONDITION, List.of("type", LispNames.LAMBDA_REST, "r"),
+					List.of(call(LispNames.MAKE_CONDITION_RUNTIME, "type", "r"))),
+			new WrapperDef(LispNames.CHANGE_CLASS, List.of("o", "c", LispNames.LAMBDA_REST, "r"),
+					List.of(call(LispNames.CHANGE_CLASS_RUNTIME, "o", "c", "r"))),
+			unary(LispNames.ENDP), listStarWrapper(), binary(LispNames.REVAPPEND), binary(LispNames.NRECONC),
+			vectorWrapper(), binary(LispNames.SVREF), unary(LispNames.ARRAY_RANK), binary(LispNames.ARRAY_DIMENSION),
+			unary(LispNames.ARRAY_TOTAL_SIZE), arrayRowMajorIndexWrapper(), mapWrapper(true), mapIntoWrapper(),
+			boundedSequenceIo(LispNames.READ_SEQUENCE), boundedSequenceIo(LispNames.WRITE_SEQUENCE));
+
+	/** Backing set of {@link #names()}; initialized after {@code WRAPPER_DEFS}. */
+	private static final Set<String> WRAPPER_NAMES;
+	static {
+		Set<String> names = new java.util.HashSet<>();
+		for (WrapperDef def : WRAPPER_DEFS) {
+			names.add(def.name());
+		}
+		WRAPPER_NAMES = Set.copyOf(names);
+	}
+
+	private static LispVal listToCons(List<LispVal> elements) {
+		LispVal result = LispNil.INSTANCE;
+		for (int i = elements.size() - 1; i >= 0; i--) {
+			result = new LispCons(elements.get(i), result);
+		}
+		return result;
+	}
+
+}

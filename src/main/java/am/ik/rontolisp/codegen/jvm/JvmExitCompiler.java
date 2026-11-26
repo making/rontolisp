@@ -1,0 +1,59 @@
+package am.ik.rontolisp.codegen.jvm;
+
+import java.lang.classfile.constantpool.MethodRefEntry;
+import java.util.List;
+
+import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispNames;
+import am.ik.rontolisp.LispVal;
+
+/**
+ * Compiles the {@code %host-exit} internal primitive: {@code System.exit(status)}. The
+ * public {@code uiop:quit} is Lisp over this ({@code uiop-image.lisp}) and finishes the
+ * output streams before calling it, so the four backends share one definition of what
+ * quitting means.
+ *
+ * <p>
+ * This is the one place a generated class ends the JVM it runs in, and it is deliberate:
+ * the uncaught-condition handler ({@link JvmUncaughtHandler}) rethrows instead of exiting
+ * because the program did NOT ask to stop the process, while {@code quit} is the program
+ * asking for exactly that. A caller embedding a compiled {@code main} therefore has to
+ * know that a program calling {@code quit} takes the JVM with it -- which is what
+ * {@code quit} means on every other backend too.
+ *
+ * <p>
+ * The constant-pool entries are minted HERE rather than in the compiler's fixed
+ * {@code systemOps} table ({@link JvmSleepCompiler}'s rule), so a program that never
+ * quits emits the same bytes as before.
+ */
+final class JvmExitCompiler {
+
+	private JvmExitCompiler() {
+	}
+
+	static void compile(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() != 2) {
+			throw new UnsupportedOperationException(
+					LispNames.HOST_EXIT + " expects 1 argument, got " + (parts.size() - 1));
+		}
+		JvmExprCompiler.compileExpr(parts.get(1), ctx, className);
+		// Number.intValue rather than Long.intValue: uiop:quit's code is whatever
+		// arithmetic produced it, and a ClassCastException is not the diagnostic anybody
+		// wants out of an exit status.
+		MethodRefEntry intValue = ctx.cp.methodRef(ctx.numberClass, "intValue", "()I");
+		ctx.body.checkcast(ctx.numberClass).invokevirtual(intValue);
+		// System.exit runs no finally and main's return is never reached, so the output
+		// files the program never closed are flushed here (a program that opens none has
+		// no _flushStreams and keeps its bytes).
+		if (ctx.flushStreams != null) {
+			ctx.body.invokestatic(ctx.flushStreams);
+		}
+		MethodRefEntry exit = ctx.cp.methodRef(ctx.cp.classEntry("java/lang/System"), "exit", "(I)V");
+		ctx.body.invokestatic(exit);
+		// Never reached, but the verifier types this expression like any other: it leaves
+		// one value behind.
+		ctx.body.aconst_null();
+	}
+
+}

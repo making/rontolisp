@@ -1,0 +1,103 @@
+Running a test file 't/prove.lisp'
+1..22
+
+Successful OK
+✓ "✓ T is expected to be T" is expected to be "✓ T is expected to be T"
+
+Failed ok without description
+✓ "× NIL is expected to be T" is expected to be "× NIL is expected to be T"
+
+Failed ok with description
+✓ "× This supposed to be failed
+NIL is expected to be T" is expected to be "× This supposed to be failed
+NIL is expected to be T"
+
+Simple number equality check
+✓ "✓ 1 is expected to be 1" is expected to be "✓ 1 is expected to be 1"
+
+String and number shouldn't be equal
+✓ "× \"1\" is expected to be 1" is expected to be "× \"1\" is expected to be 1"
+
+String and number are not equal and isnt assertion returns OK
+✓ "✓ \"1\" is not expected to be 1" is expected to be "✓ \"1\" is not expected to be 1"
+
+Subtest with diagnostic message
+✓ "Subtest
+in subtest
+✓ #\\a is expected to be #\\a
+× \"truth\" is expected to be like \"^true\"" is expected to be "Subtest
+in subtest
+✓ #\\a is expected to be #\\a
+× \"truth\" is expected to be like \"^true\""
+
+Check if (is-values ...) works propertly
+✓ "✓ (1 2 NIL 3) is expected to be (1 2 NIL 3)" is expected to be "✓ (1 2 NIL 3) is expected to be (1 2 NIL 3)"
+
+Standalone diagnostic message
+✓ "comment" is expected to be "comment"
+
+Just a pass
+✓ "✓ pass" is expected to be "✓ pass"
+
+Fail
+✓ "× fail
+T is expected to be NIL" is expected to be "× fail
+T is expected to be NIL"
+
+Pass with parameter
+✓ "✓ <~S>" is expected to be "✓ <~S>"
+
+Equality for strings with formatting
+✓ "✓ \"<~S>\" is expected to be \"<~S>\"" is expected to be "✓ \"<~S>\" is expected to be \"<~S>\""
+
+"Skip" with reason as control-string with arguments should substitute arguments
+✓ "- Because 42 (Skipped)" is expected to be "- Because 42 (Skipped)"
+
+"Skip" without reason have default message "skipping"
+✓ "- skipping (Skipped)" is expected to be "- skipping (Skipped)"
+
+Assert is-print compares form's output to standart-output
+✓ "× (PRINC \"ABCDEFGH\") is expected to output \"ABCDEFGHIJKLMNO\" (got \"ABCDEFGH\")" is expected to be "× (PRINC \"ABCDEFGH\") is expected to output \"ABCDEFGHIJKLMNO\" (got \"ABCDEFGH\")"
+
+Type assertion fails if type mismatch
+✓ "× 1 is expected to be a type of STRING" is expected to be "× 1 is expected to be a type of STRING"
+
+Assertion "is-error" checks if condition of given type was thrown
+✓ "✓ (ERROR \"Raising an error\") is expected to raise a condition SIMPLE-ERROR (got #<SIMPLE-ERROR>)" is expected to be like "(?s)✓ \\(ERROR \"Raising an error\"\\) is expected to raise a condition SIMPLE-ERROR \\(got #<(a )?SIMPLE-ERROR.*>\\)"
+
+If condition type mismatch, "is-error" fails
+✓ "× (ERROR 'MY-CONDITION) is expected to raise a condition SIMPLE-ERROR (got #<MY-CONDITION>)" is expected to be like "(?s)× \\(ERROR ('MY-CONDITION|\\(QUOTE MY-CONDITION\\))\\) is expected to raise a condition SIMPLE-ERROR \\(got #<(a T.PROVE::)?MY-CONDITION.*>\\)"
+
+All lines of multiline description should be indented
+✓ "✓ Blah with multiline
+description!" is expected to be "✓ Blah with multiline
+description!"
+
+Multiline indentation should work for nested tests
+✓ "Outer testcase
+with multiline
+description.
+✓ Blah with multiline
+description!
+Inner testcase
+with multiline description.
+✓ Foo with multiline
+description!" is expected to be "Outer testcase
+with multiline
+description.
+✓ Blah with multiline
+description!
+Inner testcase
+with multiline description.
+✓ Foo with multiline
+description!"
+
+Check finalize's output without a plan
+✓ "△ Tests were run but no plan was declared.
+✓ 0 tests completed" is expected to be "△ Tests were run but no plan was declared.
+✓ 0 tests completed"
+
+✓ 22 tests completed
+
+Summary:
+All 1 file passed.

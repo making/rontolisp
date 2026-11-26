@@ -1,0 +1,120 @@
+package am.ik.rontolisp.codegen.wasm;
+
+import java.util.List;
+
+import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispVal;
+import am.ik.wasm.Instruction;
+import am.ik.wasm.Type;
+
+/**
+ * Compiles the {@code abs} built-in function: {@code f64.abs} when the argument is proven
+ * a float ({@link WasmLispCompiler#isDefinitelyDouble}), a test of the value's type
+ * otherwise -- a float literal elsewhere in the argument ({@code (abs (if c 1.5 -2))})
+ * does not make an exact value a float.
+ */
+final class WasmAbsCompiler {
+
+	private WasmAbsCompiler() {
+	}
+
+	static void compile(LispCons cons, WasmLispCompiler.Ctx ctx) {
+		List<LispVal> args = cons.toList();
+		WasmComplexBlock complexBlock = ctx.complexBlock;
+		boolean provenFloat = WasmLispCompiler.isDefinitelyDouble(args.get(1));
+		if (complexBlock != null && provenFloat && WasmFloatOperands.guards(args.subList(1, 2), ctx)) {
+			// The argument may hold a complex the form does not spell ((abs (* 2.0 z))):
+			// its modulus comes from the complex block, a real takes f64.abs.
+			WasmFloatOperands.Operands operands = WasmFloatOperands.evaluate(args.subList(1, 2), ctx);
+			operands.emitHoldsComplex(ctx);
+			ctx.writer.write(Instruction.IF);
+			ctx.writer.writeRefType(true, Type.EQ.code());
+			operands.pushBoxed(0, ctx);
+			complexBlock.emitCall(ctx, WasmComplexBlock.Fn.ABS);
+			ctx.writer.write(Instruction.ELSE);
+			operands.pushRaw(0, ctx);
+			ctx.writer.write(Instruction.F64_ABS);
+			WasmEmitHelper.boxF64(ctx);
+			ctx.writer.write(Instruction.END);
+			return;
+		}
+		WasmExprCompiler.compileExpr(args.get(1), ctx);
+		if (provenFloat) {
+			// Double path: f64.abs is a native WASM instruction
+			WasmEmitHelper.castFloatGetF64(ctx);
+			ctx.writer.write(Instruction.F64_ABS);
+			ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+			ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_FLOAT);
+		}
+		else {
+			int tmpSlot = ctx.allocTemp();
+			ctx.writer.write(Instruction.SET_LOCAL);
+			ctx.writer.writeUnsignedLeb128(tmpSlot);
+			// Float path FIRST, even for an argument not proven a float: |x| on a
+			// float is the sign bit cleared, which is what f64.abs and Math.abs both
+			// do. The compare-and-subtract ladder below returns -0.0 unchanged (the
+			// comparison is false), so a signed zero reaching abs through a VARIABLE
+			// used to print differently here than on the interpreter and the JVM.
+			ctx.writer.write(Instruction.GET_LOCAL);
+			ctx.writer.writeUnsignedLeb128(tmpSlot);
+			ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+			ctx.writer.writeHeapType(WasmLispCompiler.TYPE_FLOAT);
+			ctx.writer.write(Instruction.IF);
+			ctx.writer.writeRefType(true, Type.EQ.code());
+			ctx.writer.write(Instruction.GET_LOCAL);
+			ctx.writer.writeUnsignedLeb128(tmpSlot);
+			ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+			ctx.writer.writeHeapType(WasmLispCompiler.TYPE_FLOAT);
+			ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+			ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_FLOAT);
+			ctx.writer.writeUnsignedLeb128(0);
+			ctx.writer.write(Instruction.F64_ABS);
+			ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+			ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_FLOAT);
+			ctx.writer.write(Instruction.ELSE);
+			if (complexBlock != null) {
+				// A program that may observe a complex: one arriving here answers its
+				// modulus through the complex block, ahead of _rat_cmp's landing.
+				ctx.writer.write(Instruction.GET_LOCAL);
+				ctx.writer.writeUnsignedLeb128(tmpSlot);
+				ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+				ctx.writer.writeHeapType(WasmLispCompiler.TYPE_COMPLEX);
+				ctx.writer.write(Instruction.IF);
+				ctx.writer.writeRefType(true, Type.EQ.code());
+				ctx.writer.write(Instruction.GET_LOCAL);
+				ctx.writer.writeUnsignedLeb128(tmpSlot);
+				complexBlock.emitCall(ctx, WasmComplexBlock.Fn.ABS);
+				ctx.writer.write(Instruction.ELSE);
+			}
+			// Integer/ratio path: x < 0 (via _rat_cmp against 0) ? 0 - x : x
+			ctx.writer.write(Instruction.GET_LOCAL);
+			ctx.writer.writeUnsignedLeb128(tmpSlot);
+			ctx.writer.write(Instruction.I32_CONST);
+			ctx.writer.writeSignedLeb128(0);
+			ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+			WasmOperandTypes.emitCall(ctx, WasmLispCompiler.FUNC_RAT_CMP);
+			ctx.writer.write(Instruction.I32_CONST);
+			ctx.writer.writeSignedLeb128(0);
+			ctx.writer.write(Instruction.I32_LT_S);
+			// if x < 0: return (0 - x)
+			ctx.writer.write(Instruction.IF);
+			ctx.writer.writeRefType(true, Type.EQ.code());
+			ctx.writer.write(Instruction.I32_CONST);
+			ctx.writer.writeSignedLeb128(0);
+			ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+			ctx.writer.write(Instruction.GET_LOCAL);
+			ctx.writer.writeUnsignedLeb128(tmpSlot);
+			WasmOperandTypes.emitCall(ctx, WasmLispCompiler.FUNC_RAT_SUB);
+			// else: return x as-is
+			ctx.writer.write(Instruction.ELSE);
+			ctx.writer.write(Instruction.GET_LOCAL);
+			ctx.writer.writeUnsignedLeb128(tmpSlot);
+			ctx.writer.write(Instruction.END);
+			if (complexBlock != null) {
+				ctx.writer.write(Instruction.END);
+			}
+			ctx.writer.write(Instruction.END);
+		}
+	}
+
+}

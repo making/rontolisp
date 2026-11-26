@@ -1,0 +1,2 @@
+# The sessions in wasi:keyvalue, found by the server with no call of the application.
+am.ik.servlet.httpserver.keyvalue.KeyValueSessionStore

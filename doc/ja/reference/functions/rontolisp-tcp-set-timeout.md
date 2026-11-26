@@ -1,0 +1,58 @@
+# rontolisp:tcp-set-timeout
+
+`(rontolisp:tcp-set-timeout handle milliseconds)`
+
+接続済みソケットハンドルの読み取りデッドラインを設定します: 以降のこのハンドル
+に対するブロッキング読み取り(`read-line`、`read-char`、`read-byte` など)は、
+データが `milliseconds` ミリ秒間届かないと、永久に待つ代わりにエラーを通知する
+ようになります。リスナーハンドルでは accept のデッドラインになります。
+`milliseconds` ミリ秒のあいだ接続が来ない
+[`rontolisp:tcp-accept`](rontolisp-tcp-accept.md) は
+`tcp-accept: Accept timed out` を通知します。`milliseconds` は非負整数
+([`rontolisp:wait-for`](rontolisp-wait-for.md) と同じ規約)で、`nil` は
+デッドラインを解除します。戻り値は `milliseconds` 引数です。
+
+```lisp
+(let* ((listener (rontolisp:tcp-listen 0 "127.0.0.1"))
+       (port (rontolisp:tcp-local-port listener))
+       (sock (rontolisp:tcp-connect "127.0.0.1" port)))
+  (rontolisp:tcp-set-timeout sock 200)
+  (prog1 (handler-case (progn (read-line sock) :read)
+           (error (e) :timed-out))   ; nothing is ever written -> the deadline fires
+    (close sock)
+    (close listener)))   ; => :TIMED-OUT
+```
+
+タイムアウトのエラーは、タイムアウトした読み取りをメッセージに含む通常の
+捕捉可能な `error` で、専用のコンディションクラスではありません。デッドライン
+は生のソケット側にあるため、あとから
+[`rontolisp:tls-upgrade`](rontolisp-tls-upgrade.md) でアップグレードした接続にも
+効き続けます。これは usocket シムの
+`(setf (usocket:socket-option sock :receive-timeout) seconds)` を支える
+プリミティブです
+([TCP ソケットガイド](../../guides/tcp-sockets.md#the-usocket-compatible-shim)
+を参照)。
+
+## バックエンドのサポート
+
+- **インタプリタ**と **JVM**: 実装済み。`Socket.setSoTimeout` と
+  `ServerSocket.setSoTimeout` を使用します。2147483647 を超える値は 2147483647
+  ミリ秒として扱います。`(OR NULL (INTEGER 0))` の範囲外の `milliseconds` は
+  その演算子の `type-error` を、開いたソケットまたはリスナーのハンドルでない値は
+  `simple-error` を通知します。
+- **WASM component**: こちらも実際の読み取りデッドラインです。
+  `wasi:sockets@0.3.0` 自体には受信タイムアウトがないため、データを待つ必要の
+  ある読み取りはタイマーと競わせます。デッドラインを過ぎた読み取りは
+  `read-line: Read timed out`(インタプリタと同じテキスト)を通知し、その後も
+  インタプリタや JVM と同じくソケットを読み続けられます。accept も同じように
+  タイマーと競わせます。`0` は `nil` と同じくデッドラインを解除します。開いた
+  ソケットでもリスナーでもない値には `nil` を返し(コンポーネントのエラー規約)、
+  `nil` でも非負整数でもない `milliseconds` は `simple-error` を通知します。
+  Preview 1(コアモジュール)モードでは他の tcp 組み込みと同様、呼び出し時
+  エラーです。
+- **ネイティブ実行ファイル**(`--native`): インタプリタ/JVM と同じく実際の
+  読み取りと accept のデッドラインです。デッドラインを過ぎた読み取りは
+  `read-line: Read timed out` を通知します
+  ([ネイティブ実行ファイルの TCP ソケット](../../compiling/native.md#tcp-sockets))。
+  1073741823 を超える値は 1073741823 ミリ秒(約 12 日)として扱います。
+- **ブラウザプレイグラウンド**: 非対応。

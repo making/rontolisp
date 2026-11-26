@@ -1,0 +1,2982 @@
+package am.ik.rontolisp.clojure;
+
+import java.io.ByteArrayOutputStream;
+import java.io.PrintStream;
+import java.lang.reflect.Method;
+import java.nio.charset.StandardCharsets;
+
+import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.cli.JvmSourceCompiler;
+import am.ik.rontolisp.eval.LispEvaluator;
+import am.ik.rontolisp.eval.SourceLanguage;
+import am.ik.rontolisp.eval.SourceLoader;
+import am.ik.rontolisp.eval.SourceStandards;
+import am.ik.rontolisp.reader.Features;
+import am.ik.rontolisp.testsupport.CliStack;
+import am.ik.rontolisp.testsupport.JavaLibraryJar;
+import am.ik.rontolisp.testsupport.ThreadStdio;
+import org.junit.jupiter.api.Test;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+/**
+ * The interop lowering ({@code .}, {@code ..}, {@code Class/member}, {@code Class.},
+ * {@code new}) over the {@code java:} surface, on the interpreter and the JVM. The wasm
+ * backends reject {@code java:} outright, so these cases cannot live in
+ * {@code clojure-spec.yaml}.
+ */
+class ClojureInteropTest {
+
+	@Test
+	void instanceCallsOnStringsAnswerCoreValues() throws Exception {
+		assertBothEqual("(println (.toUpperCase \"hi\"))", "HI\n");
+		assertBothEqual("(println (. \"hi\" toUpperCase))", "HI\n");
+		assertBothEqual("(println (. \"hi\" (toUpperCase)))", "HI\n");
+		assertBothEqual("(println (. \"hi\" (substring 1)))", "i\n");
+		assertBothEqual("(println (.. \"hi\" (toUpperCase) (substring 1)))", "I\n");
+		assertBothEqual("(println (.length \"hi\"))", "2\n");
+		assertBothEqual("(println (. \"hihi\" (indexOf \"i\")))", "1\n");
+		assertBothEqual("(println (. \"hihi\" (indexOf \"z\")))", "-1\n");
+	}
+
+	@Test
+	void aHostIteratorStepsThroughIteratorSeqAndAnIterableTypesVerbs() throws Exception {
+		// answers measured against clj 1.12.6: iterator-seq steps a host Iterator, and an
+		// Iterable type's iterator may hand one on to seq, reduce and into
+		assertBothEqual("(println (iterator-seq (.iterator (java.util.ArrayList. [1 2 3]))))", "(1 2 3)\n");
+		assertBothEqual("(deftype H [l] java.lang.Iterable (iterator [_] (.iterator l)))"
+				+ " (println (seq (H. (java.util.ArrayList. [4 5]))) (reduce + (H. (java.util.ArrayList. [4 5])))"
+				+ " (into [] (H. (java.util.ArrayList. [6]))))", "(4 5) 9 [6]\n");
+	}
+
+	@Test
+	void unmappedMethodsCallAStringNumberOrCharacterAsItsHostObject() throws Exception {
+		// answers measured against clj 1.12.6
+		assertBothEqual("(println (.codePointAt \"abc\" 0))", "97\n");
+		assertBothEqual("(println (.compareTo \"a\" \"b\"))", "-1\n");
+		assertBothEqual("(println (String/.compareToIgnoreCase \"a\" \"B\"))", "-1\n");
+		assertBothEqual("(println (.matches \"abc\" \"a.c\") (.matches \"abc\" \"x\"))", "true false\n");
+		assertBothEqual("(println (.regionMatches \"abc\" 1 \"bc\" 0 2) (.hashCode \"ab\") (.repeat \"ab\" 2))",
+				"true 3105 abab\n");
+		assertBothEqual("(println (.codePointAt (str \"a\" \"b\") 1) (let [s \"hello\"] (.codePointAt s 1))"
+				+ " (map #(.codePointAt % 0) [\"a\" \"b\"]))", "98 101 (97 98)\n");
+		assertBothEqual("(println (.compareTo 1 2) (.doubleValue 3) (.isNaN 1.5) (.compareTo \\a \\b))",
+				"-1 3.0 false -1\n");
+		assertBothEqual("(println (.equals 1 1) (.equals 1 2) (.intValue 2.7) (.toString \\a))", "true false 2 a\n");
+	}
+
+	@Test
+	void collectionKeywordSymbolAndRatioReceiversAnswerTheirCommonMethods() throws Exception {
+		// answers measured against clj 1.12.6; a host object of the same method name
+		// still reaches java:call
+		assertBothEqual("(defn sz [x] (.size x)) (println (sz [1 2 3]) (sz (java.util.ArrayList. [1 2])) (sz {:a 1}))",
+				"3 2 1\n");
+		assertBothEqual("(defn g [x k] (.get x k)) (println (g {\"a\" 1} \"a\")"
+				+ " (g (doto (java.util.HashMap.) (.put \"a\" 2)) \"a\") (g [5 6] 1) (g (java.util.ArrayList. [7 8]) 0))",
+				"1 2 6 7\n");
+		assertBothEqual(
+				"(defn nm [x] (.getName x))"
+						+ " (println (nm :k) (nm 'sym) (nm (java.io.File. \"/tmp/x.txt\")) (nm String))",
+				"k sym x.txt java.lang.String\n");
+		assertBothEqual("(println (.count [1 2 3]) (.get {:a 1} :a) (.contains #{1} 1) (.getName :abc)"
+				+ " (.getNamespace :a/b) (.numerator 1/3))", "3 1 true abc a 1\n");
+		// a method no value class has is refused in the oracle's words, one the
+		// oracle's class may have and nothing here answers by name
+		assertBothEqual("(println (try (.hashCode2 [1 2]) (catch Exception e (.getMessage e))))",
+				"No matching field found: hashCode2 for class clojure.lang.PersistentVector\n");
+		assertBothEqual("(println (try (.size {:a 1} 2) (catch Exception e (.getMessage e))))",
+				"No matching method size found taking 1 args for class clojure.lang.PersistentArrayMap\n");
+		assertBothEqual("(println (try (.reduce [1 2] +) (catch Exception e (.getMessage e))))",
+				"Method reduce taking 1 args is not supported for class clojure.lang.PersistentVector\n");
+	}
+
+	@Test
+	void aMethodNoRowNamesReachesTheValuesJavaObject() throws Exception {
+		// measured against clj 1.12.6: a method of a JDK interface the oracle's class
+		// implements answers as that class's object does, read-only as the oracle's is
+		assertBothEqual(
+				"(prn (vec (.toArray [1 2])) (.containsAll [1 2] [1]) (count (.entrySet {:a 1}))"
+						+ " (vec (.toArray #{:k})) (.getOrDefault {:a 1} :b 9) (.byteValue 7/2) (.getLast '(5 6)))",
+				"[1 2] true 1 [:k] 9 3 6\n");
+		assertBothEqual("(defn uoe [f] (try (f) (catch UnsupportedOperationException e [:uoe (.getMessage e)])))"
+				+ " (prn (uoe #(let [v [3 1 2]] (.sort v nil))) (uoe #(.put {:a 1} :b 2)) (uoe #(.removeIf [1 2] odd?))"
+				+ " (uoe #(let [it (.iterator [1 2])] (.next it) (.remove it))))",
+				"[:uoe nil] [:uoe nil] [:uoe nil] [:uoe nil]\n");
+		// a seq iterator is its Iterator face, a fn the Consumer
+		assertBothEqual("(let [it (.iterator [1 2 3])] (.next it) (.forEachRemaining it println))", "2\n3\n");
+		// a kind whose class lacks the method keeps the oracle's refusal
+		assertBothEqual("(println (try (.toArray :k) (catch Exception e (.getMessage e))))",
+				"No matching field found: toArray for class clojure.lang.Keyword\n");
+		assertBothEqual("(println (try (.toArray nil) (catch NullPointerException e :npe)))", ":npe\n");
+	}
+
+	@Test
+	void staticsConstructorsAndFields() throws Exception {
+		assertBothEqual("(println (Integer/parseInt \"42\"))", "42\n");
+		assertBothEqual("(println (Math/max 3 7))", "7\n");
+		assertBothEqual("(println (. Math max 3 7))", "7\n");
+		assertBothEqual("(println (String. \"hi\"))", "hi\n");
+		assertBothEqual("(println (new String \"hi\"))", "hi\n");
+		assertBothEqual("(println (Integer/MAX_VALUE))", "2147483647\n");
+		assertBothEqual("(println (.-x (java.awt.Point. 1 2)))", "1\n");
+		assertBothEqual("(ns pointns (:import (java.awt Point))) (println (Point. 3 4))", "#<java java.awt.Point>\n");
+	}
+
+	@Test
+	void everyDefaultImportedJavaLangClassResolvesWithoutAnImport() throws Exception {
+		// the oracle's default imports (clj 1.12.6): the common throwables construct and
+		// catch by name
+		assertBothEqual("(println (.getMessage (IllegalStateException. \"boo\")))", "boo\n");
+		assertBothEqual("(println (.getMessage (new IllegalArgumentException \"boo\")))", "boo\n");
+		assertBothEqual("(println (.getMessage (ArithmeticException. \"boo\")))", "boo\n");
+		assertBothEqual("(println (.getMessage (UnsupportedOperationException. \"boo\")))", "boo\n");
+		assertBothEqual("(println (.getMessage (IndexOutOfBoundsException. \"boo\")))", "boo\n");
+		assertBothEqual("(println (.getMessage (NullPointerException. \"boo\")))", "boo\n");
+		assertBothEqual("(println (.getMessage (ClassCastException. \"boo\")))", "boo\n");
+		assertBothEqual("(println (.getMessage (Throwable. \"boo\")))", "boo\n");
+		assertBothEqual(
+				"(println (try (throw (IllegalStateException. \"boo\")) (catch IllegalStateException e :caught)))",
+				":caught\n");
+		assertBothEqual("(println (.getMessage (NumberFormatException. \"boo\")) (.length (StringBuffer. \"ab\")))",
+				"boo 2\n");
+	}
+
+	@Test
+	void aThrownHostThrowableKeepsItsClassAndMessage() throws Exception {
+		// answers measured against clj 1.12.6: a throwable with members of its own
+		// stays a host object, and throw hands catch an exception carrying its
+		// class, message and cause
+		assertBothEqual(
+				"(prn (try (throw (java.net.URISyntaxException. \"in\" \"bad\"))"
+						+ " (catch Exception e [(.getMessage e) (ex-message e) (str e) (ex-data e)])))",
+				"[\"bad: in\" \"bad: in\" \"java.net.URISyntaxException: bad: in\" nil]\n");
+		assertBothEqual(
+				"(prn (ex-message (java.net.URISyntaxException. \"in\" \"bad\"))"
+						+ " (ex-message (ex-cause (Exception. \"o\" (java.net.URISyntaxException. \"in\" \"bad\")))))",
+				"\"bad: in\" \"bad: in\"\n");
+		assertBothEqual("(require '[clojure.test :refer [is]])"
+				+ " (prn (ex-message (is (thrown-with-msg? Exception #\"bad\" (throw (java.net.URISyntaxException. \"in\" \"bad\"))))))",
+				"\"bad: in\"\n");
+		// a host object of another kind keeps its own getMessage
+		assertBothEqual("(prn (try (.getMessage (java.io.File. \"x\")) (catch Exception e :refused)))", ":refused\n");
+	}
+
+	@Test
+	void aHostThrowableAnswersInstanceAndItsStackTraceFromTheHost() throws Exception {
+		// measured against clj 1.12.6: a host throwable is no condition, so instance?
+		// asks the host and getStackTrace answers the host's frames
+		assertBothEqual(
+				"(println (instance? Exception (java.net.URISyntaxException. \"in\" \"bad\"))"
+						+ " (instance? RuntimeException (java.net.URISyntaxException. \"in\" \"bad\"))"
+						+ " (pos? (count (.getStackTrace (java.net.URISyntaxException. \"in\" \"bad\")))))",
+				"true false true\n");
+	}
+
+	@Test
+	void aFailedHostCallIsCaughtAsTheExceptionTheHostThrew() throws Exception {
+		// measured against clj 1.12.6: the class of what the member threw decides the
+		// catch, and the catch binds that exception -- its message, class, cause and
+		// members are the host's
+		assertBothEqual(
+				"(println (try (Integer/parseInt \"x\") (catch NumberFormatException e"
+						+ " [(.getMessage e) (ex-message e) (.getLocalizedMessage e)])))",
+				"[For input string: \"x\" For input string: \"x\" For input string: \"x\"]\n");
+		assertBothEqual("(println (try (Integer/parseInt \"x\") (catch Exception e [(class e)"
+				+ " (instance? IllegalArgumentException e) (str e) (.toString e) (ex-data e) (ex-cause e) (.getCause e)])))",
+				"[java.lang.NumberFormatException true java.lang.NumberFormatException: For input string: \"x\""
+						+ " java.lang.NumberFormatException: For input string: \"x\" nil nil nil]\n");
+		assertBothEqual("(println (try (Class/forName \"no.Such\") (catch RuntimeException e :rt)"
+				+ " (catch ClassNotFoundException e [:cnf (.getMessage e)])))", "[:cnf no.Such]\n");
+		assertBothEqual("(println (try (try (Integer/parseInt \"x\") (catch ArithmeticException e :arith))"
+				+ " (catch IllegalArgumentException e :iae)))", ":iae\n");
+		assertBothEqual("(println (try (Thread/sleep -1) (catch IllegalArgumentException e (.getMessage e))))",
+				"timeout value is negative\n");
+		assertBothEqual("(println (try (.get (java.util.ArrayList.) 0) (catch IndexOutOfBoundsException e (class e))))",
+				"java.lang.IndexOutOfBoundsException\n");
+		assertBothEqual(
+				"(println (try (java.net.URI. \"a b\") (catch java.net.URISyntaxException e [(.getIndex e) (.getReason e)])))",
+				"[1 Illegal character in path]\n");
+		assertBothEqual("(println (try (Integer/parseInt \"x\") (catch Throwable e (class e))))",
+				"java.lang.NumberFormatException\n");
+		assertBothEqual("(println (try (Integer/parseInt \"x\") (catch clojure.lang.ExceptionInfo e :info)"
+				+ " (catch Exception e :exc)))", ":exc\n");
+	}
+
+	@Test
+	void aClassThatCannotLinkIsACatchableRefusalNamingTheMissingClass() throws Exception {
+		// the fixture jar holds a class compiled against a type it omits: calling it or
+		// constructing it refuses, naming the missing class, on the interpreter and the
+		// JVM (.kb/clojure-frontend.md, "Classes compiled against `clojure.lang`")
+		java.nio.file.Path jar = unlinkableJar();
+		String staticCall = "(println (try (fixture.unlinkable.Unlinkable/identify nil)"
+				+ " (catch Exception e (ex-message e))))";
+		assertThat(interpretWithClasses(staticCall, jar))
+			.isEqualTo("Cannot link class fixture.unlinkable.Unlinkable: missing class fixture.unlinkable.Missing\n");
+		assertThat(runOnJvmWithClasses(staticCall, jar, java.util.List.of(jar.toUri().toURL())))
+			.isEqualTo("Cannot link class fixture.unlinkable.Unlinkable: missing class fixture.unlinkable.Missing\n");
+		String construction = "(println (try (fixture.unlinkable.Unlinkable. nil)"
+				+ " (catch Exception e (ex-message e))))";
+		assertThat(interpretWithClasses(construction, jar))
+			.isEqualTo("Cannot link class fixture.unlinkable.Unlinkable: missing class fixture.unlinkable.Missing\n");
+		assertThat(runOnJvmWithClasses(construction, jar, java.util.List.of(jar.toUri().toURL())))
+			.isEqualTo("Cannot link class fixture.unlinkable.Unlinkable: missing class fixture.unlinkable.Missing\n");
+		// a class whose superclass is the missing one never loads at all, which is no
+		// absent class either (persistent-sorted-set's PersistentSortedSet over
+		// clojure.lang.APersistentSet)
+		String subclass = "(println (try (fixture.unlinkable.Sub.) (catch Exception e (ex-message e))))";
+		assertThat(interpretWithClasses(subclass, jar))
+			.isEqualTo("Cannot link class fixture.unlinkable.Sub: missing class fixture.unlinkable.Missing\n");
+		assertThat(runOnJvmWithClasses(subclass, jar, java.util.List.of(jar.toUri().toURL())))
+			.isEqualTo("Cannot link class fixture.unlinkable.Sub: missing class fixture.unlinkable.Missing\n");
+	}
+
+	@Test
+	void aClassWhoseInitializerNeedsAMissingClassIsACatchableRefusal() throws Exception {
+		// beside aClassThatCannotLinkIsACatchableRefusalNamingTheMissingClass: the
+		// fixture jar holds a class whose static initializer needs the omitted type
+		// (the census's field-only classes, such as sci.impl.FISupport), so any use
+		// initializes with ExceptionInInitializerError -- the same refusal, naming
+		// the missing class, on the interpreter and the JVM
+		// (.kb/clojure-frontend.md, "Classes compiled against `clojure.lang`")
+		java.nio.file.Path jar = unlinkableJar();
+		String staticCall = "(println (try (fixture.unlinkable.Holder/hello)" + " (catch Exception e (ex-message e))))";
+		assertThat(interpretWithClasses(staticCall, jar))
+			.isEqualTo("Cannot link class fixture.unlinkable.Holder: missing class fixture.unlinkable.Missing\n");
+		assertThat(runOnJvmWithClasses(staticCall, jar, java.util.List.of(jar.toUri().toURL())))
+			.isEqualTo("Cannot link class fixture.unlinkable.Holder: missing class fixture.unlinkable.Missing\n");
+		String construction = "(println (try (fixture.unlinkable.Holder.)" + " (catch Exception e (ex-message e))))";
+		assertThat(interpretWithClasses(construction, jar))
+			.isEqualTo("Cannot link class fixture.unlinkable.Holder: missing class fixture.unlinkable.Missing\n");
+		assertThat(runOnJvmWithClasses(construction, jar, java.util.List.of(jar.toUri().toURL())))
+			.isEqualTo("Cannot link class fixture.unlinkable.Holder: missing class fixture.unlinkable.Missing\n");
+		String fieldRead = "(println (try (fixture.unlinkable.Holder/VALUE)" + " (catch Exception e (ex-message e))))";
+		assertThat(interpretWithClasses(fieldRead, jar))
+			.isEqualTo("Cannot link class fixture.unlinkable.Holder: missing class fixture.unlinkable.Missing\n");
+		assertThat(runOnJvmWithClasses(fieldRead, jar, java.util.List.of(jar.toUri().toURL())))
+			.isEqualTo("Cannot link class fixture.unlinkable.Holder: missing class fixture.unlinkable.Missing\n");
+	}
+
+	@Test
+	void aGenuinelyBrokenInitializerKeepsPropagating() throws Exception {
+		// an ExceptionInInitializerError whose cause chain holds no missing class is
+		// no refusal: the initializer's own failure propagates as it did, on the
+		// interpreter and the JVM
+		java.nio.file.Path jar = unlinkableJar();
+		String staticCall = "(fixture.unlinkable.Broken/hello)";
+		assertThatThrownBy(() -> interpretWithClasses(staticCall, jar)).isInstanceOf(ExceptionInInitializerError.class);
+		assertThatThrownBy(() -> runOnJvmWithClasses(staticCall, jar, java.util.List.of(jar.toUri().toURL())))
+			.isInstanceOf(IllegalStateException.class)
+			.hasStackTraceContaining("ExceptionInInitializerError");
+	}
+
+	@Test
+	void aCompiledProgramFindsADependencyJarOnItsRunClasspath() throws Exception {
+		// a -o Prog.class output carries no dependency jar: with the fixture jar on the
+		// run class path the call refuses as it does in process, without it the class is
+		// missing (.kb/java-interop.md, "The program's Java class path";
+		// .kb/clojure-frontend.md, "Classes compiled against `clojure.lang`")
+		java.nio.file.Path jar = unlinkableJar();
+		String program = "(println (try (fixture.unlinkable.Unlinkable/identify nil)"
+				+ " (catch Exception e (ex-message e))))";
+		assertThat(runOnJvmWithClasses(program, jar, java.util.List.of(jar.toUri().toURL())))
+			.isEqualTo("Cannot link class fixture.unlinkable.Unlinkable: missing class fixture.unlinkable.Missing\n");
+		assertThat(runOnJvmWithClasses(program, jar, java.util.List.of()))
+			.isEqualTo("No such class: fixture.unlinkable.Unlinkable\n");
+	}
+
+	/** The fixture sources: a class compiled against a type the jar omits. */
+	private static final java.util.Map<String, String> UNLINKABLE_SOURCES = java.util.Map
+		.of("fixture/unlinkable/Unlinkable.java", """
+				package fixture.unlinkable;
+				public class Unlinkable {
+					public Unlinkable(Missing value) {
+					}
+					public static Missing identify(Missing value) {
+						return value;
+					}
+				}
+				""", "fixture/unlinkable/Sub.java", """
+				package fixture.unlinkable;
+				public class Sub extends Missing {
+					public Sub() {
+					}
+				}
+				""", "fixture/unlinkable/Missing.java", """
+				package fixture.unlinkable;
+				public class Missing {
+				}
+				""", "fixture/unlinkable/Holder.java", """
+				package fixture.unlinkable;
+				public class Holder {
+					public static final Object VALUE = new Missing();
+					public Holder() {
+					}
+					public static String hello() {
+						return "hi";
+					}
+				}
+				""", "fixture/unlinkable/Broken.java", """
+				package fixture.unlinkable;
+				public class Broken {
+					static {
+						if (System.currentTimeMillis() >= 0) {
+							throw new RuntimeException("broken");
+						}
+					}
+					public Broken() {
+					}
+					public static String hello() {
+						return "hi";
+					}
+				}
+				""");
+
+	// A jar holding a class that loads but never links: the fixture sources compiled
+	// together, minus the missing type.
+	private static java.nio.file.Path unlinkableJar() throws Exception {
+		java.nio.file.Path dir = java.nio.file.Files.createTempDirectory(workDir, "unlinkable");
+		return JavaLibraryJar.build(dir, "unlinkable-lib.jar", UNLINKABLE_SOURCES,
+				entry -> !entry.startsWith("fixture/unlinkable/Missing"));
+	}
+
+	// As interpret, but the program's Java classes come from the jars: the read and the
+	// run both see the fixture, never its missing type.
+	private static String interpretWithClasses(String program, java.nio.file.Path jar) throws Exception {
+		try (var loader = new java.net.URLClassLoader(new java.net.URL[] { jar.toUri().toURL() },
+				LispEvaluator.class.getClassLoader())) {
+			SourceLoader sources = SourceLoader.fileSystem(loader);
+			ByteArrayOutputStream out = new ByteArrayOutputStream();
+			CliStack.call("clojure-interop", () -> {
+				LispEvaluator evaluator = new LispEvaluator(new PrintStream(out, true, StandardCharsets.UTF_8));
+				evaluator.setSourceLoader(sources);
+				for (LispVal form : SourceLanguage.CLOJURE.read(program, Features.INTERPRETER, "test.clj",
+						SourceStandards.DEFAULT, sources)) {
+					evaluator.eval(form);
+				}
+				return null;
+			});
+			return out.toString(StandardCharsets.UTF_8);
+		}
+	}
+
+	@Test
+	void aCaughtHostExceptionRethrowsAndWrapsAsItself() throws Exception {
+		// measured against clj 1.12.6: rethrown, it is the same object; as a cause, the
+		// host's own
+		assertBothEqual(
+				"(println (try (try (Integer/parseInt \"x\") (catch Exception e (throw e)))"
+						+ " (catch NumberFormatException e [:outer (.getMessage e)])))",
+				"[:outer For input string: \"x\"]\n");
+		assertBothEqual(
+				"(println (let [c (atom nil)] (try (try (Integer/parseInt \"x\")"
+						+ " (catch Exception e (reset! c e) (throw e))) (catch Exception e (identical? e @c)))))",
+				"true\n");
+		assertBothEqual(
+				"(println (try (try (Integer/parseInt \"x\") (catch Exception e (throw (RuntimeException."
+						+ " \"wrapped\" e)))) (catch RuntimeException e [(.getMessage e) (class (.getCause e))"
+						+ " (ex-message (ex-cause e))])))",
+				"[wrapped java.lang.NumberFormatException For input string: \"x\"]\n");
+		assertBothEqual(
+				"(println (try (Integer/parseInt \"x\") (catch Exception e (let [i (ex-info \"wrap\" {:a 1} e)]"
+						+ " [(ex-message i) (ex-data i) (identical? e (ex-cause i)) (ex-message (ex-cause i))]))))",
+				"[wrap {:a 1} true For input string: \"x\"]\n");
+		assertBothEqual(
+				"(println (try (try (Integer/parseInt \"x\") (catch Exception e (throw (ex-info \"wrap\""
+						+ " {:a 1} e)))) (catch clojure.lang.ExceptionInfo e [(ex-message e) (class (ex-cause e))])))",
+				"[wrap java.lang.NumberFormatException]\n");
+		assertBothEqual("(def u (java.net.URISyntaxException. \"a\" \"b\"))"
+				+ " (println (try (throw u) (catch Exception e [(identical? e u) (class e)])))"
+				+ " (println (identical? u (ex-cause (ex-info \"w\" {} u))) (class (ex-cause (Exception. \"m\" u))))",
+				"[true java.net.URISyntaxException]\ntrue java.net.URISyntaxException\n");
+		assertBothEqual(
+				"(require '[clojure.test :refer [is]])"
+						+ " (println (class (is (thrown? NumberFormatException (Integer/parseInt \"x\")))))"
+						+ " (println (.getMessage (is (thrown-with-msg? NumberFormatException #\"input string\""
+						+ " (Integer/parseInt \"x\")))))",
+				"java.lang.NumberFormatException\nFor input string: \"x\"\n");
+	}
+
+	@Test
+	void anExceptionPassedToAHostMemberIsAHostThrowableOfItsClass() throws Exception {
+		// measured against clj 1.12.6: an exception the program built crosses into Java
+		// as a host throwable of its class, with its message and cause
+		assertBothEqual("(let [u (java.io.UncheckedIOException. \"u\" (java.io.IOException. \"io\"))]"
+				+ " (println [(.getMessage u) (.getMessage (.getCause u)) (class (.getCause u)) (ex-message (ex-cause u))]))",
+				"[u io java.io.IOException io]\n");
+		assertBothEqual(
+				"(let [c (java.io.IOException. \"io\") u (java.io.UncheckedIOException. \"u\" c)]"
+						+ " (println [(.getMessage (.getCause u)) (class (.getCause u))]))",
+				"[io java.io.IOException]\n");
+		assertBothEqual(
+				"(println (.getMessage (java.util.concurrent.ExecutionException. (IllegalStateException. \"s\"))))",
+				"java.lang.IllegalStateException: s\n");
+		assertBothEqual("(println (let [f (java.util.concurrent.CompletableFuture.)]"
+				+ " (.completeExceptionally f (ArithmeticException. \"boom\")) (try (.get f)"
+				+ " (catch java.util.concurrent.ExecutionException e [(class (.getCause e)) (.getMessage (.getCause e))]))))",
+				"[java.lang.ArithmeticException boom]\n");
+		assertBothEqual("(println (try (Integer/parseInt \"x\") (catch Exception e (.getMessage (.getCause"
+				+ " (java.io.UncheckedIOException. \"u\" (java.io.IOException. \"io\" e)))))))", "io\n");
+		assertBothEqual("(println (try (throw (java.io.UncheckedIOException. \"u\" (java.io.IOException. \"io\")))"
+				+ " (catch java.io.UncheckedIOException e [(ex-message e) (ex-message (ex-cause e)) (class (ex-cause e))])))",
+				"[u io java.io.IOException]\n");
+		assertBothEqual("(println (.getMessage (.getCause (java.util.concurrent.ExecutionException. \"x\""
+				+ " (ex-info \"info\" {:a 1})))))", "info\n");
+		assertBothEqual(
+				"(println (let [e (Exception.)] (.getMessage (.getCause (java.util.concurrent.ExecutionException."
+						+ " \"x\" e)))))",
+				"nil\n");
+		assertBothEqual("(println (let [e (Exception. \"outer\" (IllegalStateException. \"inner\"))] (.getMessage"
+				+ " (.getCause (.getCause (java.util.concurrent.ExecutionException. \"x\" e))))))", "inner\n");
+		// a host method of the exception reaches that host throwable, the same one each
+		// time
+		assertBothEqual("(println (let [e (Exception. \"x\")] (.addSuppressed e (IllegalStateException. \"s\"))"
+				+ " [(count (.getSuppressed e)) (.getMessage (first (.getSuppressed e)))]))", "[1 s]\n");
+		assertBothEqual("(println (let [e (ex-info \"i\" {:a 1})] (.addSuppressed e (Exception. \"s\"))"
+				+ " [(count (.getSuppressed e)) (ex-data e)]))", "[1 {:a 1}]\n");
+	}
+
+	@Test
+	void aThrownHostThrowableIsCaughtByItsOwnClassChain() throws Exception {
+		// measured against clj 1.12.6: the host class's superclasses, read at run time,
+		// decide the catch -- a checked exception passes a RuntimeException catch
+		assertBothEqual("(println (try (throw (java.net.URISyntaxException. \"in\" \"bad\"))"
+				+ " (catch java.net.URISyntaxException e (.getMessage e))))", "bad: in\n");
+		assertBothEqual("(println (try (try (throw (java.net.URISyntaxException. \"in\" \"bad\"))"
+				+ " (catch RuntimeException e :rte)) (catch Exception e :ex)))", ":ex\n");
+	}
+
+	@Test
+	void theClassOfAHostThrowableNoConstructionNamesTakesItsSupersFromTheHost() throws Exception {
+		// measured against clj 1.12.6: the program names no ZipException, so no row of
+		// the lowering holds it; the host answers its supers
+		assertBothEqual("(def z (try (throw (.newInstance (Class/forName \"java.util.zip.ZipException\")))"
+				+ " (catch Exception e e)))"
+				+ " (println (isa? (class z) java.io.IOException) (isa? (class z) Exception) (isa? (class z) Object))"
+				+ " (println (sort (map #(apply str (remove #{\\:} (pr-str %))) (ancestors (class z)))))",
+				"true true true\n"
+						+ "(java.io.IOException java.io.Serializable java.lang.Exception java.lang.Object java.lang.Throwable)\n");
+	}
+
+	@Test
+	void aHostClassObjectWalksJavaInheritanceInAHierarchy() throws Exception {
+		// measured against clj 1.12.6: class of a host object is its class object, which
+		// isa? the classes it extends and implements, Object among them; java.util.List
+		// lowers to :list in a hierarchy position, which the host class still reaches (a
+		// java.net.URI: a java.io.File is clojure.java.io's own value on every backend).
+		// A one-argument StringBuilder is no host object anymore (a string output
+		// stream on every backend, clojure-spec.yaml), so the CharSequence case spells
+		// (String. "x").
+		assertBothEqual("(println (isa? (class (java.net.URI. \"x\")) Object)"
+				+ " (isa? (class (java.util.ArrayList.)) java.util.List)"
+				+ " (isa? (class (java.util.ArrayList.)) java.util.Map)"
+				+ " (isa? (class (java.util.ArrayList.)) Exception)"
+				+ " (isa? (class (java.net.URI. \"x\")) java.io.Serializable)"
+				+ " (isa? (class (String. \"x\")) CharSequence))", "true true false false true true\n");
+		// a class object parent: the class's own spelling, or one of a value's class
+		assertBothEqual("(let [p java.util.List] (println (isa? (class (java.util.ArrayList.)) p)"
+				+ " (isa? (class (java.util.ArrayList.)) java.util.AbstractList)"
+				+ " (isa? (class \"x\") (class (StringBuilder.)))"
+				+ " (isa? [(class (java.util.ArrayList.))] [java.util.List])))", "true true false true\n");
+		// parents and ancestors answer class objects, a program spelling no class too
+		assertBothEqual(
+				"(println (sort (map str (parents (class (java.util.ArrayList.))))))"
+						+ " (println (sort (map str (ancestors (class (java.net.URI. \"x\"))))))"
+						+ " (println (parents (class (Object.))) (ancestors (class (Object.))))",
+				"(class java.util.AbstractList interface java.io.Serializable interface java.lang.Cloneable"
+						+ " interface java.util.List interface java.util.RandomAccess)\n"
+						+ "(class java.lang.Object interface java.io.Serializable interface java.lang.Comparable)\n"
+						+ "nil nil\n");
+		// what a super derives from, under any spelling of it, and descendants' refusal
+		assertBothEqual(
+				"(derive java.util.List ::seqy) (derive java.util.AbstractList ::abs)"
+						+ " (def c (class (java.util.ArrayList.)))"
+						+ " (println (isa? c ::seqy) (isa? c ::abs) (contains? (ancestors c) ::seqy)"
+						+ " (contains? (ancestors c) ::abs))"
+						+ " (println (try (descendants c) (catch UnsupportedOperationException e (ex-message e))))",
+				"true true true true\nCan't get descendants of classes\n");
+		// a class multimethod dispatches a host object through its interfaces
+		assertBothEqual("(defmulti f class) (defmethod f java.util.List [x] :list) (defmethod f java.util.Map [x] :map)"
+				+ " (defmethod f :default [x] :default)"
+				+ " (println (f (java.util.ArrayList.)) (f (java.util.HashMap.)) (f (java.io.File. \"x\")) (f '(1)))",
+				":list :map :default :list\n");
+	}
+
+	@Test
+	void aMultimethodDispatchesOnAHostClassOfNoKind() throws Exception {
+		// measured against clj 1.12.6: a class no kind or chain names is a dispatch value
+		// of its own, found exactly and through Java inheritance, the most specific first
+		assertBothEqual("(defmulti f class) (defmethod f java.io.File [x] :file)"
+				+ " (defmethod f java.util.AbstractList [x] :alist)"
+				+ " (defmethod f java.util.AbstractCollection [x] :acoll) (defmethod f java.util.List [x] :list)"
+				+ " (defmethod f :default [x] :default)"
+				+ " (println (f (java.io.File. \"x\")) (f (java.util.ArrayList.)) (f (java.util.ArrayDeque.))"
+				+ " (f (java.util.LinkedList.)) (f 1))"
+				+ " (println (some? (get-method f java.io.File)) (= (get-method f java.util.HashMap) (get-method f :default))"
+				+ " (= (get-method f java.util.ArrayList) (get-method f java.util.AbstractList)))"
+				+ " (remove-method f java.io.File) (println (f (java.io.File. \"x\")))",
+				":file :alist :acoll :alist :default\ntrue true true\n:default\n");
+		// a class value dispatched on itself, a dispatch vector, and prefer-method
+		assertBothEqual("(defmulti g identity) (defmethod g java.util.AbstractMap [x] :amap)"
+				+ " (defmethod g :default [x] :default)"
+				+ " (println (g java.util.AbstractMap) (g java.util.HashMap) (g java.util.Map))"
+				+ " (defmulti h (fn [a b] [(class a) (class b)])) (defmethod h [java.io.File String] [a b] :fs)"
+				+ " (defmethod h :default [a b] :default) (println (h (java.io.File. \"x\") \"s\") (h \"s\" \"s\"))"
+				+ " (defmulti k class) (defmethod k java.util.RandomAccess [x] :ra)"
+				+ " (defmethod k java.util.AbstractList [x] :al) (prefer-method k java.util.RandomAccess java.util.AbstractList)"
+				+ " (println (k (java.util.ArrayList.)))", ":amap :amap :default\n:fs :default\n:ra\n");
+	}
+
+	@Test
+	void instanceOfAHostClassTestsTheValuesKindAndTheHostObjectsClass() throws Exception {
+		// measured against clj 1.12.6: a class no kind or chain names tests a host object
+		// by its host class, and an interface a Clojure value implements tests the kind
+		assertBothEqual("(println (instance? java.io.File (java.io.File. \"x\")) (instance? java.util.List [1])"
+				+ " (instance? java.util.AbstractList (java.util.ArrayList.)))", "true true true\n");
+		assertBothEqual(
+				"(println (instance? java.util.Map (java.util.HashMap.)) (instance? java.util.Map {:a 1})"
+						+ " (instance? java.util.Map [1]) (instance? java.io.File \"x\")"
+						+ " (instance? java.util.RandomAccess (java.util.ArrayList.)))",
+				"true true false false true\n");
+		// a core class a host object may also be: Number, CharSequence. A one-argument
+		// StringBuilder is no host object anymore (a string output stream on every
+		// backend, clojure-spec.yaml), so the CharSequence case spells (String. "a").
+		assertBothEqual(
+				"(println (instance? Number (java.math.BigDecimal. \"1.5\")) (instance? Number 1)"
+						+ " (instance? Number \"1\") (instance? CharSequence (String. \"a\"))"
+						+ " (instance? CharSequence \"a\") (instance? CharSequence 1))",
+				"true true false true true false\n");
+		assertBothEqual(
+				"(println (instance? Comparable (java.io.File. \"x\")) (instance? Comparable :k)"
+						+ " (instance? Iterable (java.util.ArrayDeque.)) (instance? Iterable #{1}))",
+				"true true true true\n");
+		// the value is evaluated once
+		assertBothEqual("(let [f (fn [] (println :made) (java.util.LinkedList.))]"
+				+ " (println (instance? java.util.Deque (f)) (instance? java.util.AbstractList (f))"
+				+ " (instance? Boolean (f))))", ":made\n:made\n:made\ntrue true false\n");
+		assertBothEqual("(println (instance? java.io.Serializable (Exception. \"x\"))"
+				+ " (instance? java.io.Serializable (java.io.File. \"x\")) (instance? Object (java.io.File. \"x\")))",
+				"true true true\n");
+	}
+
+	@Test
+	void instanceOfAHostClassObjectAsksTheHost() throws Exception {
+		// measured against clj 1.12.6: a class spelled as a value is a host class object,
+		// whose isInstance takes a Clojure value through the boundary's view of it
+		assertBothEqual("(def hs String) (def hl java.util.List)"
+				+ " (println (instance? hs \"t\") (instance? hs 1) (instance? hl [1]) (instance? hl '(1))"
+				+ " (instance? hl {}) (instance? hl nil))", "true false true true false false\n");
+		assertBothEqual("(println (instance? (class (java.util.ArrayList.)) (java.util.ArrayList.))"
+				+ " (instance? (class (java.util.ArrayList.)) (java.util.LinkedList.))"
+				+ " (instance? (class (java.io.File. \"x\")) (java.io.File. \"y\"))"
+				+ " (let [m java.util.Map] (instance? m {:a 1})))", "true false true true\n");
+		assertBothEqual("(println (instance? (class (Exception. \"x\")) (java.io.IOException. \"y\")))", "true\n");
+	}
+
+	@Test
+	void hostObjectsChainThroughCalls() throws Exception {
+		assertBothEqual("(println (.toString (. (StringBuilder. \"a\") (append \"b\"))))", "ab\n");
+		assertBothEqual("(println (try (Integer/parseInt \"xx\") (catch Exception e \"bad\")))", "bad\n");
+	}
+
+	@Test
+	void stringWriterBindsToOutAndStrAnswersWithoutClearing() throws Exception {
+		// A zero-argument (new java.io.StringWriter) lowers to a string
+		// output stream (never a host Writer), so binding *out* to it captures
+		// printing, and str/.toString answer the text so far WITHOUT clearing it
+		// (the oracle prints 12 12 12). The all-four-backend pin is the
+		// clojure-spec.yaml case; the (Class.) spelling and the excerpt macro live
+		// here with the other interop pins.
+		assertBothEqual("(let [s (new java.io.StringWriter)] (binding [*out* s] (print 1) (print 2))"
+				+ " (println (str s) (str s) (.toString s)))", "12 12 12\n");
+		assertBothEqual(
+				"(let [w (java.io.StringWriter.)] (. w write \"ab\") (. w flush)" + " (println (str w)) (. w close))",
+				"ab\n");
+		assertBothEqual(
+				"(defmacro with-out-str [& body] `(let [s# (new java.io.StringWriter)]"
+						+ " (binding [*out* s#] ~@body (str s#)))) (println (with-out-str (print 1) (print 2)))",
+				"12\n");
+	}
+
+	@Test
+	void stringWriterConstructionWithACapacityStartsEmptyWithTheOracleRefusals() throws Exception {
+		// A one-argument (java.io.StringWriter.) is an empty string output stream:
+		// a number is a capacity (ignored), anything else the oracle's
+		// ClassCastException to Number, nil its NullPointerException (a
+		// StringWriter has no String constructor). The all-four-backend pin is the
+		// clojure-spec.yaml case; the spellings and the refusal messages live here
+		// with the other interop pins.
+		assertBothEqual("(println (str (java.io.StringWriter. 16)))", "\n");
+		assertBothEqual("(println (str (new java.io.StringWriter 8)))", "\n");
+		assertBothEqual("(println (str (java.io.StringWriter/new 4)))", "\n");
+		assertBothEqual("(println (str (java.io.StringWriter. 1.5)))", "\n");
+		assertBothEqual("(println (let [w (java.io.StringWriter. 16)] (.append w \"c\") (str w)))", "c\n");
+		assertBothEqual(
+				"(println (try (str (java.io.StringWriter. \"ab\"))" + " (catch ClassCastException e (ex-message e))))",
+				"class java.lang.String cannot be cast to class java.lang.Number\n");
+		assertBothEqual(
+				"(println (try (str (new java.io.StringWriter :k))" + " (catch ClassCastException e (ex-message e))))",
+				"class clojure.lang.Keyword cannot be cast to class java.lang.Number\n");
+		assertBothEqual(
+				"(println (try (str (java.io.StringWriter/new nil))"
+						+ " (catch NullPointerException e (ex-message e))))",
+				"Cannot invoke \"java.lang.Character.charValue()\" because \"x\" is null\n");
+	}
+
+	@Test
+	void writerAppendOfARangeWritesItAndAnswersTheWriter() throws Exception {
+		// .append of a string range writes the part and answers the stream
+		// (data.json's write-string slow path): a whole, partial or empty range,
+		// nil spelling "null" like the host, chained through doto. The
+		// all-four-backend pin is the clojure-spec.yaml case; the spellings live
+		// here with the other interop pins.
+		assertBothEqual("(let [w (java.io.StringWriter.)] (println (identical? w (.append w \"hello\" 0 5)))"
+				+ " (println (str w)))", "true\nhello\n");
+		assertBothEqual("(let [w (java.io.StringWriter.)] (.append w \"hello\" 1 3) (println (str w)))", "el\n");
+		assertBothEqual("(let [w (java.io.StringWriter.)] (.append w nil 0 4) (println (str w)))", "null\n");
+		assertBothEqual("(println (str (doto (java.io.StringWriter.) (.append \"abcdef\" 2 5))))", "cde\n");
+		assertBothEqual("(let [sb (StringBuilder.)] (.append sb \"hello\" 1 4) (println (str sb)))", "ell\n");
+	}
+
+	@Test
+	void classNamesAnswerAsValuesAndStringsAnswerGetClass() throws Exception {
+		assertBothEqual("(println (= String (Class/forName \"java.lang.String\")))", "true\n");
+		assertBothEqual("(println (.getName String))", "java.lang.String\n");
+		assertBothEqual("(println (= String (.getClass \"s\")))", "true\n");
+		assertBothEqual("(ns importsns (:import (java.util ArrayList))) (println (.getName ArrayList))",
+				"java.util.ArrayList\n");
+		assertBothEqual("(println (.getName (.getClass \"s\")))", "java.lang.String\n");
+		assertBothEqual("(println (= java.util.ArrayList (.getClass (java.util.ArrayList.))))", "true\n");
+		assertBothEqual("(defmulti m class) (defmethod m String [_] :s) (println (m \"a\"))", ":s\n");
+		assertBothEqual("(println (instance? String \"a\"))", "true\n");
+		assertThatThrownBy(() -> interpret("(println NoSuchClass)")).hasMessageContaining("unknown name");
+	}
+
+	@Test
+	void aClassObjectPrintsItsNameAndStrSpellsItsToString() throws Exception {
+		// the oracle's print-method for a Class writes getName; str is toString
+		assertBothEqual("(println String)", "java.lang.String\n");
+		assertBothEqual("(print String) (prn String)", "java.lang.Stringjava.lang.String\n");
+		assertBothEqual("(println (pr-str String) (str String))", "java.lang.String class java.lang.String\n");
+		assertBothEqual("(pr [String \"a\"]) (println {String 1} (str [String]))",
+				"[java.lang.String \"a\"]{java.lang.String 1} [java.lang.String]\n");
+		assertBothEqual("(println Long/TYPE (str Long/TYPE))", "long long\n");
+		assertBothEqual("(println (class (java.net.URI. \"foo\")))", "java.net.URI\n");
+	}
+
+	@Test
+	void strOfAHostObjectIsItsToStringWhilePrintingStaysUnreadable() throws Exception {
+		assertBothEqual("(println (str (StringBuilder. \"ab\") \"|\" (java.net.URI. \"foo\")))", "ab|foo\n");
+		assertBothEqual("(println (str (java.util.ArrayList. [1 2])))", "[1, 2]\n");
+		assertBothEqual("(println (str 1 :k [1 \"a\"] nil 's))", "1:k[1 \"a\"]s\n");
+		assertBothEqual("(println (java.net.URI. \"foo\"))", "#<java java.net.URI>\n");
+	}
+
+	@Test
+	void classOfAHostObjectIsItsHostClassSoDispatchReachesTheDefault() throws Exception {
+		assertBothEqual("(println (= java.net.URI (class (java.net.URI. \"foo\"))))", "true\n");
+		assertBothEqual("(println (.getName (class (java.net.URI. \"foo\"))))", "java.net.URI\n");
+		assertBothEqual("(println (.getName ((comp class identity) (java.net.URI. \"foo\"))))", "java.net.URI\n");
+		// a host object misses every class row of a class-dispatched multimethod and
+		// lands on
+		// :default, whose .toString reaches the host method (oracle #<foo>)
+		assertBothEqual("(defmulti mp class) (defmethod mp String [s] s)"
+				+ " (defmethod mp Number [n] (str \"n\" (.toString n)))"
+				+ " (defmethod mp :default [x] (str \"#<\" (.toString x) \">\"))"
+				+ " (println (mp 42) (mp (java.net.URI. \"foo\")))", "n42 #<foo>\n");
+		assertBothEqual(
+				"(defmulti mo class) (defmethod mo Object [x] :object)" + " (println (mo (java.net.URI. \"foo\")))",
+				":object\n");
+	}
+
+	@Test
+	void aJavaIoFileCrossesTheJavaBoundaryAsTheHostFile() throws Exception {
+		// oracle-identical (clj 1.12.6, 2026-10-08): a File clojure.java.io makes is a
+		// java.io.File to a Java member -- an argument (Objects/toString, compareTo), the
+		// receiver of a member the namespace leaves to the host (toPath) -- and a host
+		// File a member answers is a File to slurp, spit, the namespace's functions and
+		// a protocol extended to java.io.File
+		assertBothEqual("(def f (clojure.java.io/file \"a/b.txt\"))"
+				+ " (prn (str (.toPath f)) (str (.getFileName (.toPath f))) (java.util.Objects/toString f))"
+				+ " (prn (.compareTo (.getParentFile (java.io.File/createTempFile \"jio\" \".tmp\"))"
+				+ " (clojure.java.io/file (System/getProperty \"java.io.tmpdir\"))))"
+				+ " (def t (java.io.File/createTempFile \"jio\" \".txt\")) (spit t \"one\\ntwo\")"
+				+ " (prn (slurp t) (with-open [r (clojure.java.io/reader t)] (doall (line-seq r))))"
+				+ " (prn (= (clojure.java.io/file (str t)) (clojure.java.io/as-file t)) (instance? java.io.File t))"
+				+ " (defprotocol Jp (jp [x])) (extend-protocol Jp java.io.File (jp [x] :file))"
+				+ " (prn (jp t) (jp f) (clojure.java.io/delete-file t) (.exists (clojure.java.io/file (str t))))",
+				"\"a/b.txt\" \"b.txt\" \"a/b.txt\"\n0\n\"one\\ntwo\" (\"one\" \"two\")\ntrue true\n:file :file true false\n");
+	}
+
+	@Test
+	void aByteArrayCrossesTheJavaBoundaryAsItsBytes() throws Exception {
+		// oracle-identical (clj 1.12.6, 2026-10-09): a byte array is a byte[] to a Java
+		// member -- Arrays/toString, Base64's encoder, a MessageDigest -- and a host
+		// Charset names the charset of .getBytes and of a String construction
+		assertBothEqual(
+				"(def b (.getBytes \"héllo\" java.nio.charset.StandardCharsets/UTF_8))"
+						+ " (prn (java.util.Arrays/toString b) (.encodeToString (java.util.Base64/getEncoder) b)"
+						+ " (String. b java.nio.charset.StandardCharsets/ISO_8859_1)"
+						+ " (java.util.Arrays/equals b (.getBytes \"héllo\")))"
+						+ " (prn (count (.digest (java.security.MessageDigest/getInstance \"SHA-256\") b)))",
+				"\"[104, -61, -87, 108, 108, 111]\" \"aMOpbGxv\" \"hÃ©llo\" true\n32\n");
+	}
+
+	@Test
+	void aByteArrayAJavaMemberAnswersIsAByteArray() throws Exception {
+		// oracle-identical (clj 1.12.6, 2026-10-10): a byte[] a member answers is a byte
+		// array -- a host ByteArrayOutputStream's, a MessageDigest's at an unknown
+		// receiver, Files/readAllBytes', Base64's -- and so is one a host collection
+		// holds,
+		// read by get, seq and toArray (before: a list of its bytes, bytes? false)
+		assertBothEqual("(let [o (^[] java.io.ByteArrayOutputStream/new)] (.write o 65)"
+				+ " (prn [(bytes? (.toByteArray o)) (vec (.toByteArray o))]))"
+				+ " (defn digest [md data] (.digest md data))"
+				+ " (let [d (digest (java.security.MessageDigest/getInstance \"SHA-256\") (.getBytes \"abc\"))]"
+				+ " (prn (bytes? d) (alength d) (aget d 0) (vec (take 4 d))))"
+				+ " (let [p (java.nio.file.Files/createTempFile \"rl\" \".bin\""
+				+ " (make-array java.nio.file.attribute.FileAttribute 0))]"
+				+ " (java.nio.file.Files/write p (byte-array [1 2 -3]) (make-array java.nio.file.OpenOption 0))"
+				+ " (let [r (java.nio.file.Files/readAllBytes p)] (java.nio.file.Files/delete p) (prn (bytes? r) (vec r))))"
+				+ " (let [e (.encode (java.util.Base64/getEncoder) (.getBytes \"hi\"))] (prn (bytes? e) (String. e)))"
+				+ " (let [m (java.util.HashMap.)] (.put m \"k\" (.getBytes \"xyz\"))"
+				+ " (prn (bytes? (get m \"k\")) (vec (.get m \"k\")) (map (comp vec val) m)"
+				+ " (map #(alength %) (.toArray (.values m)))))",
+				"[true [65]]\ntrue 32 -70 [-70 120 22 -65]\ntrue [1 2 -3]\ntrue \"aGk=\"\n"
+						+ "true [120 121 122] ([120 121 122]) (3)\n");
+	}
+
+	@Test
+	void aByteArrayReachesJavaAsTheByteArrayJavaStoresInto() throws Exception {
+		// oracle-identical (clj 1.12.6, 2026-10-10): a byte array is a byte[] to any
+		// parameter one fits, Object's included, and what Java stores into it -- a host
+		// stream's read at an unknown receiver, Random's nextBytes, System/arraycopy, the
+		// same array twice -- the program reads after the call (before: Java read a copy
+		// of its elements, which an Object parameter took as a List)
+		assertBothEqual(
+				"(prn (subs (java.util.Objects/toString (byte-array 1)) 0 3)"
+						+ " (java.lang.reflect.Array/getLength (byte-array 3)))"
+						+ " (defn read-into [in buf] (.read in buf))" + " (let [buf (byte-array 8)]"
+						+ " (prn (read-into (java.io.StringBufferInputStream. \"hello\") buf) (vec buf)))"
+						+ " (let [buf (byte-array 4)] (.nextBytes (java.util.Random. 42) buf) (prn (vec buf)))"
+						+ " (let [src (byte-array [1 2 3]) dst (byte-array 3)] (System/arraycopy src 0 dst 0 3)"
+						+ " (prn (vec dst)))" + " (let [b (byte-array [1 2 3])] (System/arraycopy b 0 b 1 2)"
+						+ " (prn (vec b) (java.util.Objects/equals b b)))"
+						+ " (let [b (byte-array 2) l (java.util.ArrayList.)] (.add l b)"
+						+ " (prn (bytes? (.get l 0)) (map bytes? l)))",
+				"\"[B@\" 3\n5 [104 101 108 108 111 0 0 0]\n[53 -99 65 -70]\n[1 2 3]\n[1 1 2] true\n" + "true (true)\n");
+	}
+
+	@Test
+	void aByteArrayJavaHandsAProxyIsOneItStoresInto() throws Exception {
+		// oracle-identical (clj 1.12.6, 2026-10-10): a byte[] Java hands an interface or
+		// a
+		// class proxy is a byte array, what the body stores Java reads when it returns --
+		// a host InputStream's readNBytes, a HashMap handing one array as key and value
+		// --
+		// and the body hands it on to proxy-super as the byte[] (before: a list of its
+		// bytes, and aset refused it as no array)
+		assertBothEqual(
+				"(.write (proxy [java.io.OutputStream] [] (write [bs off len] (prn (bytes? bs) (vec bs) off len)))"
+						+ " (byte-array [1 2 3]) 0 3)" + " (def b (byte-array 2))"
+						+ " (prn (.read (proxy [java.io.InputStream] [] (read [buf off len] (aset buf off (byte 7)) 1))"
+						+ " b 0 2) (vec b))"
+						+ " (let [n (atom 0) in (proxy [java.io.InputStream] [] (read [buf off len]"
+						+ " (if (pos? @n) -1 (do (swap! n inc) (aset buf off (byte 7)) (aset buf (inc off) (byte 8)) 2))))]"
+						+ " (prn (vec (.readNBytes in 4))))" + " (let [m (java.util.HashMap.) k (byte-array [1])]"
+						+ " (.put m k k) (.forEach m (proxy [java.util.function.BiConsumer] []"
+						+ " (accept [a v] (aset a 0 (byte 4)) (prn (aget v 0))))) (prn (vec (first (keys m)))))"
+						+ " (let [p (proxy [java.io.ByteArrayOutputStream] []"
+						+ " (write [bs off len] (proxy-super write bs off len)))]"
+						+ " (.write p (byte-array [1 2 3]) 0 3) (prn (vec (.toByteArray p))))",
+				"true [1 2 3] 0 3\n1 [7 0]\n[7 8]\n4\n[4]\n[1 2 3]\n");
+	}
+
+	@Test
+	void aByteArrayJavaHandsAFnIsOneItStoresInto() throws Exception {
+		// oracle-identical (clj 1.12.6, 2026-10-10): a byte[] Java hands a fn converted
+		// to
+		// its interface is a byte array -- a fn form, a defn, a local, a var of several
+		// arities -- what the fn stores Java reads after it returns or throws, and a byte
+		// array the fn answers Java takes as the byte[] (before: bytes? false, and the
+		// answer refused as no Object)
+		assertBothEqual("(.forEach (java.util.List/of (byte-array [5])) (fn [b] (prn (bytes? b))))"
+				+ " (defn show [b] (prn :show (bytes? b) (vec b))) (.forEach (java.util.List/of (byte-array [6])) show)"
+				+ " (let [g (fn [b] (prn :local (bytes? b)))] (.forEach (java.util.List/of (byte-array [7])) g))"
+				+ " (def h (fn ([b] (prn :var (bytes? b))) ([a b] (prn :two))))"
+				+ " (.forEach (java.util.List/of (byte-array [8])) h)"
+				+ " (let [r (.computeIfAbsent (java.util.HashMap.) \"a\" (fn [k] (byte-array [1 2])))]"
+				+ " (prn (bytes? r) (vec r)))"
+				+ " (let [l (java.util.ArrayList.)] (.add l (byte-array 2)) (.forEach l (fn [x] (aset x 0 (byte 9))))"
+				+ " (prn (vec (.get l 0))))" + " (let [l (java.util.ArrayList.)] (.add l (byte-array [1]))"
+				+ " (prn (try (.forEach l (fn [x] (aset x 0 (byte 2)) (throw (ex-info \"boom\" {}))))"
+				+ " (catch Exception e (ex-message e))) (vec (.get l 0))))",
+				"true\n:show true [6]\n:local true\n:var true\ntrue [1 2]\n[9 0]\n\"boom\" [2]\n");
+	}
+
+	@Test
+	void aFnsAnswerReachesJavaAsTheOraclesOwnObject() throws Exception {
+		// oracle-identical (clj 1.12.6, 2026-10-11): what a fn Java calls answers a
+		// method
+		// answering an object is the value's own object -- a map, a keyword, a vector
+		// Java
+		// hands back as a vector, a set, a ratio, a symbol, a lazy seq, a fn, an atom --
+		// whether the fn is a form, a defn or a parameter of a site left to run time; an
+		// answer a void method drops is never converted (an infinite seq is not
+		// realized); and a fn converted to a Comparator is the fn Java hands back, while
+		// one converted to another interface is not (before: "cannot return" for a map, a
+		// keyword, a set, a ratio, a symbol, a fn, an atom; a vector or a lazy seq an
+		// ArrayList copy; the comparator a host object)
+		assertBothEqual("(prn (.computeIfAbsent (java.util.HashMap.) \"a\" (fn [k] {:a 1}))"
+				+ " (.computeIfAbsent (java.util.HashMap.) \"a\" (fn [k] :kw))"
+				+ " (let [m (java.util.HashMap.)] (.computeIfAbsent m \"b\" (fn [k] [1 2])) (vector? (.get m \"b\")))"
+				+ " (let [f (fn [a b] 0)] (identical? f (.comparator (java.util.TreeSet. f)))))",
+				"{:a 1} :kw true true\n");
+		assertBothEqual("(let [o (java.util.Optional/empty)]"
+				+ " (prn (.orElseGet o (fn [] #{1})) (.orElseGet o (fn [] 1/2)) (.orElseGet o (fn [] 'abc))"
+				+ " (seq? (.orElseGet o (fn [] (map inc [1 2])))) (fn? (.orElseGet o (fn [] inc)))"
+				+ " (let [a (atom 1)] (identical? a (.orElseGet o (fn [] a))))))"
+				+ " (prn (vec (.toList (.map (.stream [1 2 3]) (fn [x] {:v x})))))"
+				+ " (defn mk [k] {:k k}) (prn (.computeIfAbsent (java.util.HashMap.) \"a\" mk))"
+				+ " (defn get-or [o f] (.orElseGet o f))"
+				+ " (prn (get-or (java.util.Optional/empty) (fn [] {:a 1})) (get-or (java.util.Optional/empty) (fn [] [:x])))"
+				+ " (.forEach [1 2] (fn [x] (iterate inc x))) (prn :void-done)",
+				"#{1} 1/2 abc true true true\n[{:v 1} {:v 2} {:v 3}]\n{:k \"a\"}\n{:a 1} [:x]\n:void-done\n");
+		assertBothEqual(
+				"(prn (let [f (fn [a b] (compare a b))] (identical? f (.comparator (java.util.PriorityQueue. 10 f))))"
+						+ " (let [f (fn [t e] nil) t (Thread. (fn []))] (.setUncaughtExceptionHandler t f)"
+						+ " (identical? f (.getUncaughtExceptionHandler t)))"
+						+ " ((.comparator (java.util.TreeSet. (fn [a b] (compare b a)))) 1 2)"
+						+ " (let [t (java.util.concurrent.FutureTask. (fn [] {:a 1}))] (.run t) (.get t)))",
+				"true false 1 {:a 1}\n");
+	}
+
+	// Oracle-identical (clj 1.12.6, measured 2026-10-11) but the ClassCastException's
+	// module tail: a fn's answer where the method answers a primitive is cast as the
+	// oracle's functional interface adapter casts it -- an int, a long and a double by
+	// RT's intCast, longCast and doubleCast of an object (a ratio or a double truncated,
+	// out of range the IllegalArgumentException, past the int range "integer overflow", a
+	// character its code, anything else the Character or Number cast's failure); a
+	// boolean by a (Boolean) cast where the oracle's compiler resolved the call (a site
+	// resolved here to one member, or dispatched over its only overload: nil the
+	// message-less NullPointerException, any other value the ClassCastException) and by
+	// RT.booleanCast where its reflector does (a receiver of no known class: nil false,
+	// anything else true). Before, measured 2026-10-11 on the interpreter and the JVM:
+	// "java:reify: cannot return 1/2 as int ...", "cannot return 1.9 as int", nil false
+	// for removeIf, 4294967297 its low 32 bits.
+	@Test
+	void aFnsPrimitiveAnswerReachesJavaCastAsTheOraclesAdapterCastsIt() throws Exception {
+		String row = "(defmacro row [label form] `(try (println ~label (pr-str ~form))"
+				+ " (catch Throwable e# (println ~label (.getName (class e#)) (ex-message e#)))))";
+		assertBothEqual(
+				row + " (row :remove-nil (let [l (java.util.ArrayList. [1 2 3])] (.removeIf l (fn [x] nil)) (vec l)))"
+						+ " (row :remove-kw (.removeIf (java.util.ArrayList. [1]) (fn [x] :kw)))"
+						+ " (row :remove-param (let [l (java.util.ArrayList. [1 2 3]) f (identity (fn [x] nil))]"
+						+ " (.removeIf l f) (vec l)))" + " (defn rm [l f] (.removeIf l f) (vec l))"
+						+ " (row :reflected-nil (rm (java.util.ArrayList. [1 2 3]) (fn [x] nil)))"
+						+ " (row :reflected-kw (rm (java.util.ArrayList. [1 2 3]) (fn [x] :kw)))"
+						+ " (row :int-pred (.count (.filter (java.util.stream.IntStream/range 0 3) (fn [a] nil))))",
+				":remove-nil java.lang.NullPointerException nil\n"
+						+ ":remove-kw java.lang.ClassCastException class clojure.lang.Keyword cannot be cast to class java.lang.Boolean\n"
+						+ ":remove-param java.lang.NullPointerException nil\n:reflected-nil [1 2 3]\n"
+						+ ":reflected-kw []\n:int-pred java.lang.NullPointerException nil\n");
+		assertBothEqual(
+				row + " (defn ints [f] (.sum (.mapToInt (.stream [1 2 3]) f)))"
+						+ " (row :ratio (ints (fn [x] (/ x 2)))) (row :double (ints (fn [x] 1.9)))"
+						+ " (row :negative (ints (fn [x] -2.5))) (row :nan (ints (fn [x] ##NaN)))"
+						+ " (row :char (ints (fn [x] \\a))) (row :overflow (ints (fn [x] 4294967297)))"
+						+ " (row :past-long (ints (fn [x] 99999999999999999999))) (row :huge (ints (fn [x] 1e30)))"
+						+ " (row :nil (ints (fn [x] nil))) (row :kw (ints (fn [x] :kw)))"
+						+ " (row :pair (.reduce (java.util.stream.IntStream/range 0 4) 0 (fn [a b] (/ (+ a b) 2))))",
+				":ratio 2\n:double 3\n:negative -6\n:nan 0\n:char 291\n"
+						+ ":overflow java.lang.ArithmeticException integer overflow\n"
+						+ ":past-long java.lang.IllegalArgumentException Value out of range for long: 99999999999999999999\n"
+						+ ":huge java.lang.IllegalArgumentException Value out of range for long: 1.0E30\n"
+						+ ":nil java.lang.NullPointerException Cannot invoke \"java.lang.Character.charValue()\" because \"x\" is null\n"
+						+ ":kw java.lang.ClassCastException class clojure.lang.Keyword cannot be cast to class java.lang.Character\n"
+						+ ":pair 2\n");
+		assertBothEqual(
+				row + " (defn longs [f] (.sum (.mapToLong (.stream [1]) f)))"
+						+ " (defn doubles [f] (.sum (.mapToDouble (.stream [1]) f)))"
+						+ " (row :long-ratio (longs (fn [x] 7/2))) (row :long-char (longs (fn [x] \\a)))"
+						+ " (row :long-big (longs (fn [x] 4294967297))) (row :long-nil (longs (fn [x] nil)))"
+						+ " (row :long-kw (longs (fn [x] :kw))) (row :double-ratio (doubles (fn [x] 1/2)))"
+						+ " (row :double-int (doubles (fn [x] 3))) (row :double-char (doubles (fn [x] \\a)))"
+						+ " (row :double-nil (doubles (fn [x] nil)))",
+				":long-ratio 3\n:long-char 97\n:long-big 4294967297\n"
+						+ ":long-nil java.lang.NullPointerException Cannot invoke \"java.lang.Number.doubleValue()\" because \"x\" is null\n"
+						+ ":long-kw java.lang.ClassCastException class clojure.lang.Keyword cannot be cast to class java.lang.Number\n"
+						+ ":double-ratio 0.5\n:double-int 3.0\n"
+						+ ":double-char java.lang.ClassCastException class java.lang.Character cannot be cast to class java.lang.Number\n"
+						+ ":double-nil java.lang.NullPointerException Cannot invoke \"java.lang.Number.doubleValue()\" because \"x\" is null\n");
+	}
+
+	// Oracle-identical (clj 1.12.6, measured 2026-10-11) but the ClassCastException's
+	// module tail: a proxy body's answer where the method answers a primitive is unboxed
+	// as the oracle's proxy class unboxes it -- a (Boolean) or (Character) cast, any
+	// number's unchecked intValue, longValue or doubleValue (a long's low 32 bits, a
+	// double or ratio truncated, a double past the int range its edge) -- nil the
+	// NullPointerException naming the fn's invoke, anything else the cast's
+	// ClassCastException, a Comparator's compare a number's intValue too. Before,
+	// measured 2026-10-11 on the interpreter and the JVM: nil false for a boolean,
+	// "cannot
+	// return" for a ratio, a double, nil or a keyword where an int is expected.
+	@Test
+	void aProxysPrimitiveAnswerIsUnboxedAsTheOraclesProxyClassUnboxesIt() throws Exception {
+		String row = "(defmacro row [label form] `(try (println ~label (pr-str ~form))"
+				+ " (catch Throwable e# (println ~label (.getName (class e#)) (ex-message e#)))))";
+		assertBothEqual(row + " (defn as-int [v] (.applyAsInt (proxy [java.util.function.ToIntFunction] []"
+				+ " (applyAsInt [x] v)) 1))"
+				+ " (row :long (as-int 4294967297)) (row :ratio (as-int 7/2)) (row :double (as-int 1.9))"
+				+ " (row :edge (as-int 3.0e9)) (row :big (as-int 99999999999999999999))"
+				+ " (row :nil (as-int nil)) (row :char (as-int \\a))"
+				+ " (row :long-edge (.applyAsLong (proxy [java.util.function.ToLongFunction] [] (applyAsLong [x] 1e30)) 1))"
+				+ " (row :test-nil (.test (proxy [java.util.function.Predicate] [] (test [x] nil)) 1))"
+				+ " (row :test-kw (.test (proxy [java.util.function.Predicate] [] (test [x] :kw)) 1))"
+				+ " (row :read-nil (.read (proxy [java.io.InputStream] [] (read [] nil))))"
+				+ " (row :compare (.compare (proxy [java.util.Comparator] [] (compare [a b] 7/2)) 1 2))"
+				+ " (row :compare-true (.compare (proxy [java.util.Comparator] [] (compare [a b] true)) 1 2))",
+				":long 1\n:ratio 3\n:double 1\n:edge 2147483647\n:big 1661992959\n"
+						+ ":nil java.lang.NullPointerException Cannot invoke \"java.lang.Number.intValue()\" because the return value of \"clojure.lang.IFn.invoke(Object, Object)\" is null\n"
+						+ ":char java.lang.ClassCastException class java.lang.Character cannot be cast to class java.lang.Number\n"
+						+ ":long-edge 9223372036854775807\n"
+						+ ":test-nil java.lang.NullPointerException Cannot invoke \"java.lang.Boolean.booleanValue()\" because the return value of \"clojure.lang.IFn.invoke(Object, Object)\" is null\n"
+						+ ":test-kw java.lang.ClassCastException class clojure.lang.Keyword cannot be cast to class java.lang.Boolean\n"
+						+ ":read-nil java.lang.NullPointerException Cannot invoke \"java.lang.Number.intValue()\" because the return value of \"clojure.lang.IFn.invoke(Object)\" is null\n"
+						+ ":compare 3\n"
+						+ ":compare-true java.lang.ClassCastException class java.lang.Boolean cannot be cast to class java.lang.Number\n");
+	}
+
+	// Oracle-identical (clj 1.12.6, measured 2026-10-11) but the text the fn's object
+	// spells (the oracle's class is the fn's own, user$f): a fn Java takes as an Object
+	// is the fn -- a list, a map, a set and Optional hold it and hand it back, identical?
+	// to it, one object however many calls hand it over -- and it is a Runnable Java
+	// checks (a checked list of Runnable takes it); an Object overload takes it before an
+	// interface it is none of (StringBuilder.append(Object) over a tagged construction,
+	// an untagged one being a string output stream on every backend since f71).
+	// Before, measured 2026-10-11
+	// on the interpreter and the JVM: "No matching method java.util.ArrayList.add with 1
+	// argument(s)".
+	@Test
+	void aFnWhereJavaExpectsAnObjectIsTheFnItself() throws Exception {
+		assertBothEqual("(def f (fn [] 1))"
+				+ " (prn (let [l (java.util.ArrayList.)] (.add l f) (identical? f (.get l 0)))"
+				+ " (let [g (fn [] 2) l (java.util.ArrayList.)] (.add l g) (identical? g (.get l 0)))"
+				+ " (let [add (fn [l x] (.add l x)) l (java.util.ArrayList.)] (add l f) (identical? f (.get l 0)))"
+				+ " (let [m (java.util.HashMap.)] (.put m \"k\" f) (.put m f 1) [(identical? f (.get m \"k\")) (.get m f)])"
+				+ " (let [s (java.util.HashSet.)] (.add s f) (.add s f) [(.size s) (.contains s f)])"
+				+ " (identical? f (.get (java.util.Optional/of f)))" + " (java.util.Objects/equals f f)"
+				+ " (let [l (java.util.Collections/checkedList (java.util.ArrayList.) Runnable)] (.add l f)"
+				+ " (identical? f (.get l 0))))"
+				+ " (let [a (atom 0) l (java.util.ArrayList.)] (.add l (fn [] (swap! a inc)))"
+				+ " (.run ^Runnable (.get l 0)) (prn @a))"
+				+ " (prn (.contains (str (.append (^[String] StringBuilder/new \"x\") f)) \"clojure.lang.AFunction@\")"
+				+ " (.startsWith (String/valueOf f) \"clojure.lang.AFunction@\"))",
+				"true true true [true 1] [1 true] true true true\n1\ntrue true\n");
+	}
+
+	// Oracle-identical (clj 1.12.6, measured 2026-10-11): a fn inside a collection Java
+	// receives -- a vector, a list, a set -- and a fn a fn answers Java are the object
+	// the
+	// fn is, as a fn Java receives itself is: a Callable an executor calls, a Runnable,
+	// Callable and Comparator a checked list takes, handed back as the fn, equal both
+	// ways
+	// to the object a fn Java receives itself is, and no Comparable. Before, measured
+	// 2026-10-11 on the interpreter and the JVM: an identity handle, "class
+	// am.ik.rontolisp.runtime.RontoJavaHandle cannot be cast to class
+	// java.util.concurrent.Callable" and the checked list's "Attempt to insert class
+	// am.ik.rontolisp.runtime.RontoJavaHandle element".
+	@Test
+	void aFnInsideACollectionJavaReceivesIsTheFnItself() throws Exception {
+		assertBothEqual("(import '(java.util.concurrent Executors)) (def pool (Executors/newFixedThreadPool 2))"
+				+ " (def f (fn [] 1))"
+				+ " (prn (mapv #(.get %) (.invokeAll pool [(fn [] 1) (fn [] 2)])) (.invokeAny pool [(fn [] 3)]))"
+				+ " (prn (let [l (java.util.Collections/checkedList (java.util.ArrayList.) Runnable)] (.addAll l [f])"
+				+ " (identical? f (.get l 0)))"
+				+ " (let [l (java.util.Collections/checkedList (java.util.ArrayList.) java.util.concurrent.Callable)]"
+				+ " (.addAll l (list f)) (identical? f (.get l 0)))"
+				+ " (let [l (java.util.Collections/checkedList (java.util.ArrayList.) java.util.Comparator)]"
+				+ " (.addAll l #{f}) (identical? f (.get l 0))))"
+				+ " (prn (mapv #(.get %) (.invokeAll pool (-> (.stream (java.util.ArrayList. [1 2]))"
+				+ " (.map (fn [x] (fn [] (* x 10)))) (.toList)))))"
+				+ " (prn (let [l (java.util.ArrayList.)] (.add l f) (.addAll l [f]) [(.indexOf l f) (.lastIndexOf l f)])"
+				+ " (.equals (java.util.ArrayList. [f]) (doto (java.util.ArrayList.) (.add f)))"
+				+ " (.equals (doto (java.util.ArrayList.) (.add f)) (java.util.ArrayList. [f]))"
+				+ " (= (.hashCode (java.util.ArrayList. [f])) (.hashCode (doto (java.util.ArrayList.) (.add f)))))"
+				+ " (prn (try (java.util.TreeSet. [f]) (catch ClassCastException e :cce)))" + " (.shutdown pool)",
+				"[1 2] 3\ntrue true true\n[10 20]\n[0 1] true true true\n:cce\n");
+	}
+
+	// Oracle (clj 1.12.6, measured 2026-10-11): a fn is an AFunction, so Comparator's
+	// default methods are the fn's own, its compare read as AFunction.compare. Before,
+	// measured the same day on the interpreter: "Method reversed taking 0 args is not
+	// supported for class clojure.lang.AFunction", and the same for thenComparing; a
+	// map's thenComparing or reversed was unsupported too, where the oracle's class
+	// lacks it.
+	@Test
+	void aFnReceiverAnswersComparatorsDefaultMethods() throws Exception {
+		assertBothEqual("(def c (fn [a b] (- a b))) (defn by-desc [a b] (> a b))"
+				+ " (prn (.compare (.reversed c) 1 2))" + " (prn (.compare (.thenComparing c c) 1 2))"
+				+ " (prn (let [l (java.util.ArrayList. [3 1 2])] (.sort l (.reversed c)) (vec l)))"
+				+ " (prn (let [l (java.util.ArrayList. [3 1 2])] (.sort l (.reversed by-desc)) (vec l)))"
+				+ " (def by-first (fn [x y] (compare (first x) (first y))))"
+				+ " (def by-second (fn [x y] (compare (second x) (second y))))"
+				+ " (prn (let [l (java.util.ArrayList. [[1 2] [0 2] [1 1]])] (.sort l (.thenComparing by-first by-second))"
+				+ " (vec l)))" + " (prn (.compare (.thenComparingInt (fn [a b] 0) (fn [x] (- x))) 1 2))"
+				+ " (defn msg [f] (try (f) (catch Exception e (ex-message e))))"
+				+ " (println (msg #(.thenComparing {:a 1} compare)) \"|\" (msg #(.reversed {:a 1})))",
+				"1\n-1\n[3 2 1]\n[1 2 3]\n[[0 2] [1 1] [1 2]]\n1\n"
+						+ "No matching method thenComparing found taking 1 args for class clojure.lang.PersistentArrayMap"
+						+ " | No matching field found: reversed for class clojure.lang.PersistentArrayMap\n");
+	}
+
+	// Oracle-identical (clj 1.12.6, measured 2026-10-13): sort, sort-by and the
+	// sorted constructors take a java.util.Comparator -- a host one or a reify or
+	// deftype implementing it -- and calling a host one as a function stays the
+	// oracle's ClassCastException. Before, on the interpreter and the JVM: "not a
+	// function" and "a sorted collection needs a comparator function", and the
+	// interface was refused by name at the reify and deftype.
+	@Test
+	void aHostComparatorSortsAndConstructsSortedCollections() throws Exception {
+		assertBothEqual("(println (sort (java.util.Comparator/naturalOrder) [3 1 2]))", "(1 2 3)\n");
+		assertBothEqual("(println (sort-by count (java.util.Comparator/reverseOrder) [\"a\" \"ccc\" \"bb\"]))",
+				"(ccc bb a)\n");
+		assertBothEqual("(println (sorted-set-by (java.util.Comparator/reverseOrder) 1 3 2))", "#{3 2 1}\n");
+		assertBothEqual("(println (sorted-map-by (java.util.Comparator/reverseOrder) 1 :a 2 :b))", "{2 :b, 1 :a}\n");
+		assertBothEqual("(println (sort (java.util.Comparator/comparing count) [\"ccc\" \"a\" \"bb\"]))",
+				"(a bb ccc)\n");
+		assertBothEqual("(println (sort (reify java.util.Comparator (compare [_ a b] (compare b a))) [1 3 2]))",
+				"(3 2 1)\n");
+		assertBothEqual("(println (sorted-set-by (reify java.util.Comparator (compare [_ a b] (compare b a))) 1 3 2))",
+				"#{3 2 1}\n");
+		assertBothEqual("(deftype D [] java.util.Comparator (compare [_ a b] (compare b a)))"
+				+ " (println (sort (D.) [1 3 2]) (sorted-set-by (D.) 1 3 2)"
+				+ " (instance? java.util.Comparator (D.)) (.compare (D.) 1 2))", "(3 2 1) #{3 2 1} true 1\n");
+		assertBothEqual("(println (try ((java.util.Comparator/naturalOrder) 1 2) (catch ClassCastException e :cce)))",
+				":cce\n");
+	}
+
+	@Test
+	void aProxyOrTypeIsHandedAByteArrayAndAnswersJavaTheOraclesObject() throws Exception {
+		// oracle-identical (clj 1.12.6, 2026-10-10): a proxy's answer reaches Java as the
+		// value's own object -- a byte array the byte[], a vector a List, a map a Map, a
+		// keyword one Java hands back -- and a deftype's Comparable face is handed a
+		// byte[]
+		// as a byte array (before: a proxy's byte array or map "cannot return", a vector
+		// an ArrayList copy)
+		assertBothEqual("(let [r (.get (proxy [java.util.function.Supplier] [] (get [] (byte-array [1 2]))))]"
+				+ " (prn (bytes? r) (vec r)))" + " (prn (.get (proxy [java.util.function.Supplier] [] (get [] [1 2])))"
+				+ " (vector? (.get (proxy [java.util.function.Supplier] [] (get [] [1 2])))))"
+				+ " (prn (.get (proxy [java.util.function.Supplier] [] (get [] {:a 1}))))"
+				+ " (prn (.apply (proxy [java.util.function.Function] [] (apply [x] x)) :k))"
+				+ " (prn (bytes? (.apply (proxy [java.util.function.Function] [] (apply [x] x)) (byte-array [3]))))"
+				+ " (deftype C [] java.lang.Comparable (compareTo [_ o] (if (bytes? o) -1 1)))"
+				+ " (prn (java.util.Collections/binarySearch [(C.)] (byte-array 1)))",
+				"true [1 2]\n[1 2] true\n{:a 1}\n:k\ntrue\n-2\n");
+	}
+
+	@Test
+	void anArrayJavaKeepsIsTheByteArrayItself() throws Exception {
+		// oracle-identical (clj 1.12.6, 2026-10-10): a ByteBuffer wraps the array it is
+		// handed and writes it after the call, and the array it answers is the one it
+		// writes later; a function Java hands its array to reads what Java writes while
+		// it runs, and stores into that array. A byte array is the byte[] itself on both
+		// backends (before, the JVM held copies behind a width: [0 0 0 0] and [0 0] for
+		// the first two). The single-element writes spell putChar: a (byte x) cast
+		// answers a plain integer here (g02, measured clj 1.12.6 2026-10-13), which the
+		// oracle's reflector refuses where a byte is expected (as it refuses a long),
+		// while a character unboxes to a char there and here -- so (.put bb (byte 7))
+		// stays refused by design, like (.put bb 7), and the workaround stays.
+		assertBothEqual("(let [b (byte-array 4) bb (java.nio.ByteBuffer/wrap b)] (.putInt bb 42) (prn (vec b)))"
+				+ " (let [bb (java.nio.ByteBuffer/allocate 2) a (.array bb)] (.putChar bb \\a) (prn (vec a)))"
+				+ " (let [bb (java.nio.ByteBuffer/allocate 2) l (java.util.ArrayList. [(.array bb)])]"
+				+ " (.forEach l (proxy [java.util.function.Consumer] [] (accept [x] (.putChar bb \\a) (prn (vec x)))))"
+				+ " (prn (vec (.array bb))))"
+				+ " (let [bb (java.nio.ByteBuffer/allocate 2) l (java.util.ArrayList. [(.array bb)])]"
+				+ " (.forEach l (fn [x] (.putChar bb \\a) (aset-byte x 1 5))) (prn (vec (.array bb))))",
+				"[0 0 0 42]\n[0 97]\n[0 97]\n[0 97]\n[0 5]\n");
+	}
+
+	@Test
+	void narrowingCastsBehaveAsPlainIntegersAtTheCallLayer() throws Exception {
+		// g02 (measured clj 1.12.6 2026-10-13): (byte x), (short x) and (int x)
+		// answer plain integers -- the oracle answers Byte/Short/Integer -- so at a
+		// host call a cast behaves exactly like the integer it answers. (.put bb
+		// (byte 7)) is refused like (.put bb 7): a byte parameter takes only a Byte
+		// there, while a lone short, int or long member converts its fixnum argument
+		// as the oracle converts its number (the singleFixed rule both share: one
+		// candidate of the arity takes its arguments however they convert). instance?
+		// tells the same story: a cast is no Byte, Short or Integer here (it is a
+		// Long), where the oracle's boxes are; Number still takes one. .compareTo
+		// reads the cast as its Long (the oracle throws handing a Long to
+		// Byte.compareTo). A single byte still crosses through a one-element byte
+		// array (the last row).
+		assertBothEqual(
+				"(let [bb (java.nio.ByteBuffer/allocate 2)]"
+						+ " (prn (try (do (.put bb (byte 7)) :ok) (catch Exception e :refused))"
+						+ " (try (do (.put bb 7) :ok) (catch Exception e :refused))))"
+						+ " (let [bb (java.nio.ByteBuffer/allocate 2)]"
+						+ " (prn (try (do (.putShort bb 7) (vec (.array bb))) (catch Exception e :refused))))"
+						+ " (prn (instance? Byte (byte 7)) (instance? Long (byte 7))"
+						+ " (instance? Short (short 5)) (instance? Integer (int 5)) (instance? Number (byte 7)))"
+						+ " (prn (.compareTo (byte 7) 7))"
+						+ " (let [bb (java.nio.ByteBuffer/allocate 2)] (.put bb (byte-array [7]))"
+						+ " (prn (vec (.array bb))))",
+				":refused :refused\n[0 7]\nfalse true false false true\n0\n[7 0]\n");
+	}
+
+	@Test
+	void aHostRandomDrawAnswersTheOraclesDraws() throws Exception {
+		// g27 (measured clj 1.12.6 2026-10-21): (java.util.Random. seed) and its
+		// draws keep the host's own where the host is (the interpreter, the JVM):
+		// seeded draws print the oracle's numbers. A bare (.nextFloat r) answers
+		// the float's exact value as a double (the host call's unmarshal), where
+		// the oracle answers a Float; through a ^double wrapper both print the
+		// same (data.generators' float). Where the host is not the portable LCG
+		// answers them instead (clojure-spec, ClojureWasmInteropRefusalTest).
+		assertBothEqual(
+				"(defn hfloat ^double [] (.nextFloat (java.util.Random. 42)))"
+						+ " (println (.nextInt (java.util.Random. 42)) (.nextLong (java.util.Random. 42))"
+						+ " (.nextDouble (java.util.Random. 42)) (hfloat) (.nextBoolean (java.util.Random. 42))"
+						+ " (.nextInt (java.util.Random. 42) 16))",
+				"-1170105035 -5025562857975149833 0.7275636800328681 0.7275636792182922 true 11\n");
+		assertBothEqual("(println (.nextFloat (java.util.Random. 42)))", "0.7275636792182922\n");
+		assertBothEqual(
+				"(println (let [r (java.util.Random. 42)] [(.nextGaussian r) (.nextGaussian r)]))"
+						+ " (println (let [r (java.util.Random. 42)] (.setSeed r 99) [(.nextInt r) (.nextInt r)]))",
+				"[1.1419053154730547 0.9194079489827879]\n[-1192035722 1672896916]\n");
+		// the seed, bound and Math double casts refuse with the oracle's classes
+		// (pinned at the class: the message's module tail names no JVM here)
+		assertBothEqual(
+				"(defmacro h-rfc [cls form]"
+						+ " `(try (try ~form :none) (catch ~cls e# :ok) (catch Throwable e# (class e#))))"
+						+ " (println [(h-rfc ClassCastException (java.util.Random. \"a\"))"
+						+ " (h-rfc NullPointerException (java.util.Random. nil))"
+						+ " (h-rfc IllegalArgumentException (java.util.Random. 9999999999999999999999N))])"
+						+ " (println [(h-rfc IllegalArgumentException (.nextInt (java.util.Random. 42) 0))"
+						+ " (h-rfc ClassCastException (.nextInt (java.util.Random. 42) \"a\"))"
+						+ " (h-rfc NullPointerException (.nextInt (java.util.Random. 42) nil))])"
+						+ " (println [(h-rfc ClassCastException (Math/floor \"a\"))"
+						+ " (h-rfc NullPointerException (Math/log nil))])",
+				"[:ok :ok :ok]\n[:ok :ok :ok]\n[:ok :ok]\n");
+	}
+
+	@Test
+	void printTraceElementSpellsAHostStackTraceElementLikeTheOracle() throws Exception {
+		// oracle-identical (clj 1.12.6, 2026-10-08); a throwable built here has no frames
+		// (clojure-spec clojure-stacktrace-prints-no-frames), so only a host element
+		// reaches clojure.stacktrace/print-trace-element
+		assertBothEqual("(require '[clojure.stacktrace :as st])"
+				+ " (st/print-trace-element (StackTraceElement. \"my.ns$f__123\" \"invoke\" \"f.clj\" 10)) (newline)"
+				+ " (st/print-trace-element (StackTraceElement. \"a.b$c\" \"doInvoke\" nil -1)) (newline)",
+				"my.ns/f (f.clj:10)\na.b$c.doInvoke (:-1)\n");
+	}
+
+	@Test
+	void stackTraceElementVecAnswersTheOraclesVector() throws Exception {
+		// g26, oracle-identical (clj 1.12.6, 2026-10-20): [class method file line],
+		// the class and the method as symbols, the file nil when the element names
+		// none. Only a host element reaches it (clojure-spec
+		// stack-trace-element-vec-refuses-nil-and-foreign-values pins nil and the
+		// foreign values on all four backends).
+		assertBothEqual(
+				"(prn (StackTraceElement->vec (StackTraceElement. \"my.ns$f__123\" \"invoke\" \"f.clj\" 10)))"
+						+ " (prn (StackTraceElement->vec (StackTraceElement. \"a.b$c\" \"doInvoke\" nil -1)))"
+						+ " (prn (map StackTraceElement->vec [(StackTraceElement. \"C\" \"m\" \"F.clj\" 42)]))",
+				"[my.ns$f__123 invoke \"f.clj\" 10]\n[a.b$c doInvoke nil -1]\n([C m \"F.clj\" 42])\n");
+	}
+
+	@Test
+	void printThrowableSpellsTheClassOfACaughtHostException() throws Exception {
+		// oracle-identical (clj 1.12.6, 2026-10-09): a caught host exception is the
+		// host's
+		// throwable, whose class is a host class object, not a class-name keyword
+		assertBothEqual(
+				"(require '[clojure.stacktrace :as st])"
+						+ " (st/print-throwable (try (Integer/parseInt \"x\") (catch Exception e e))) (newline)",
+				"java.lang.NumberFormatException: For input string: \"x\"\n");
+	}
+
+	@Test
+	void clojureJavaShellRunsAHostProcessLikeTheOracle() throws Exception {
+		// oracle-identical (clj 1.12.6, 2026-10-09): the exit code, the output decoded
+		// from :out-enc or as a byte array, the error output, :in as a string, a File, a
+		// reader, a byte array and a byte stream, :dir, :env and the two binding macros;
+		// the error output of 100,000 bytes goes to a file, so a full pipe never stalls
+		// the process. Host-neutral: :dir names no link (macOS's /tmp is one, which pwd
+		// prints resolved) and the octets come back as bytes, not through od's layout
+		assertBothEqual("(require '[clojure.java.shell :refer [sh with-sh-dir with-sh-env]] '[clojure.java.io :as io])"
+				+ " (defn show [m] (prn (:exit m) (:out m) (:err m)))" + " (show (sh \"echo\" \"hello\"))"
+				+ " (show (sh \"sh\" \"-c\" \"echo out; echo err 1>&2; exit 3\"))"
+				+ " (show (sh \"cat\" :in \"x\\u25bax\\n\"))" + " (show (sh \"pwd\" :dir \"/usr\"))"
+				+ " (show (with-sh-dir \"/\" (sh \"pwd\")))"
+				+ " (show (sh \"sh\" \"-c\" \"echo $FOO-$HOME\" :env {\"FOO\" \"bar\"}))"
+				+ " (show (with-sh-env {:FOO \"baz\"} (sh \"sh\" \"-c\" \"echo $FOO\")))"
+				+ " (show (sh \"echo\" \"x\\u25bax\" :out-enc \"ISO-8859-1\"))"
+				+ " (let [m (sh \"sh\" \"-c\" \"head -c 100000 /dev/zero | tr '\\\\0' e 1>&2; echo done\")]"
+				+ " (prn (:exit m) (:out m) (count (:err m))))"
+				+ " (def in-file (str \"/tmp/rontolisp-sh-\" (rand-int 1000000000) \".txt\"))"
+				+ " (spit in-file \"from a file\\n\")" + " (show (sh \"cat\" :in (io/file in-file)))"
+				+ " (io/delete-file in-file)"
+				+ " (show (sh \"cat\" :in (java.io.BufferedReader. (java.io.StringReader. \"from a reader\\n\"))))"
+				+ " (show (sh \"cat\" :in \"\\u00e9\" :in-enc \"ISO-8859-1\" :out-enc \"ISO-8859-1\"))"
+				+ " (let [m (sh \"printf\" \"\\\\377\\\\000A\" :out-enc :bytes)]"
+				+ " (prn (:exit m) (bytes? (:out m)) (vec (:out m)) (:err m)))"
+				+ " (prn (vec (:out (sh \"true\" :out-enc :bytes))))"
+				+ " (defn octets [m] (prn (:exit m) (vec (:out m)) (:err m)))"
+				+ " (octets (sh \"cat\" :in (byte-array [-1 0 65 -61 -87]) :in-enc \"ISO-8859-1\" :out-enc :bytes))"
+				+ " (octets (sh \"cat\" :in (java.io.ByteArrayInputStream. (byte-array [-1 0 65])) :out-enc :bytes))"
+				+ " (prn (try (sh \"no-such-command-rontolisp\") (catch java.io.IOException e :io-exception)))", """
+						0 "hello\\n" ""
+						3 "out\\n" "err\\n"
+						0 "x\u25bax\\n" ""
+						0 "/usr\\n" ""
+						0 "/\\n" ""
+						0 "bar-\\n" ""
+						0 "baz\\n" ""
+						0 "x\u00e2\u0096\u00bax\\n" ""
+						0 "done\\n" 100000
+						0 "from a file\\n" ""
+						0 "from a reader\\n" ""
+						0 "\u00e9" ""
+						0 true [-1 0 65] ""
+						[]
+						0 [-1 0 65 -61 -87] ""
+						0 [-1 0 65] ""
+						:io-exception
+						""");
+	}
+
+	@Test
+	void clojureXmlHandsAHostSourceAndAStartparseToTheHostsSaxParser() throws Exception {
+		// oracle-identical (clj 1.12.6, 2026-10-09): a host InputStream (a param-tagged
+		// construction) is read by startparse-sax-safe, a byte stream here by rontolisp's
+		// reader, and a startparse function is handed the source and a host
+		// ContentHandler, like the oracle's
+		assertBothEqual("(require '[clojure.xml :as xml])"
+				+ " (prn (xml/parse (^[bytes] java.io.ByteArrayInputStream/new (.getBytes \"<a x='1'>t<b/></a>\" \"UTF-8\"))))"
+				+ " (prn (xml/parse (java.io.ByteArrayInputStream. (.getBytes \"<a x='1'>t<b/></a>\" \"UTF-8\"))))"
+				+ " (def f (str \"/tmp/rontolisp-xml-\" (rand-int 1000000000) \".xml\"))"
+				+ " (spit f \"<r a='1'>  <c>text</c>  </r>\")"
+				+ " (prn (xml/parse (java.io.File. f) xml/startparse-sax))"
+				+ " (prn (xml/parse f (fn [s ch] (.parse (.newSAXParser (javax.xml.parsers.SAXParserFactory/newInstance)) s ch))))"
+				+ " (clojure.java.io/delete-file f)", """
+						{:tag :a, :attrs {:x "1"}, :content ["t" {:tag :b, :attrs nil, :content nil}]}
+						{:tag :a, :attrs {:x "1"}, :content ["t" {:tag :b, :attrs nil, :content nil}]}
+						{:tag :r, :attrs {:a "1"}, :content [{:tag :c, :attrs nil, :content ["text"]}]}
+						{:tag :r, :attrs {:a "1"}, :content [{:tag :c, :attrs nil, :content ["text"]}]}
+						""");
+	}
+
+	@Test
+	void hostKindPredicatesTestTheHostClass() throws Exception {
+		// oracle-identical (clj 1.12.6); a Lisp value is no host object, so a string
+		// is no uri? or inst? (the all-four-backend false answers are clojure-spec's)
+		assertBothEqual("(def hu (java.util.UUID/nameUUIDFromBytes (.getBytes \"x\")))"
+				+ " (prn (class? String) (class? \"a\") (class? 1) (inst? (java.util.Date/from (java.time.Instant/now)))"
+				+ " (inst? (java.time.Instant/now)) (inst? \"2020\") (uuid? hu) (uuid? \"x\")"
+				+ " (uri? (java.net.URI. \"http://a\")) (uri? \"http://a\") (map uuid? [hu 1]))",
+				"true false false true true false true false true false (true false)\n");
+	}
+
+	@Test
+	void instMsReadsAHostDateOrInstantBesideTheProgramsOwnInstants() throws Exception {
+		// oracle-identical (clj 1.12.6): the Inst protocol's host rows beside a Date the
+		// program read, whose class instance? names as the host's
+		assertBothEqual("(def hd (java.util.Date/from (java.time.Instant/ofEpochMilli 5)))"
+				+ " (prn (inst? hd) (inst-ms hd) (inst-ms (java.time.Instant/ofEpochMilli 7)) (inst-ms* hd)"
+				+ " (map inst-ms [hd #inst \"1970-01-01T00:00:00.009Z\"]) (instance? java.util.Date hd)"
+				+ " (instance? java.util.Date #inst \"2020\") (uuid? (java.util.UUID/randomUUID)) (uuid? #uuid \"1-1-1-1-1\"))",
+				"true 5 7 5 (5 9) true true true true\n");
+	}
+
+	@Test
+	void aDateOrUuidMadeHereCrossesTheJavaBoundaryAsTheHostObject() throws Exception {
+		// oracle-identical (clj 1.12.6): a construction makes the value #inst or #uuid
+		// reads, which a java: member is handed as the host Date, Timestamp or UUID,
+		// and whose class's other methods the host object answers -- a Date it answers
+		// coming back as one made here
+		assertBothEqual(
+				"(defn utc [p] (doto (java.text.SimpleDateFormat. p)"
+						+ " (.setTimeZone (java.util.TimeZone/getTimeZone \"UTC\"))))"
+						+ " (prn (.format (utc \"yyyy-MM-dd HH:mm:ss.SSS\") (java.util.Date. 1577934245678))"
+						+ " (.format (utc \"yyyy\") #inst \"2020\") (map #(.format (utc \"yyyy-MM-dd\") %)"
+						+ " [(java.sql.Timestamp. 0) #inst \"1999-12-31\"]))",
+				"\"2020-01-02 03:04:05.678\" \"2020\" (\"1970-01-01\" \"1999-12-31\")\n");
+		assertBothEqual(
+				"(prn (str (.toInstant (java.util.Date. 1500))) (str (.toInstant (java.sql.Timestamp. 1500)))"
+						+ " (.hashCode (java.util.Date. 1577836800000)) (.hashCode (java.util.UUID. -1 -2))"
+						+ " (.getYear (java.util.Date. 1592222400000)) (.clone (java.util.Date. 5))"
+						+ " (= (.clone (java.util.Date. 5)) (java.util.Date. 5)))",
+				"\"1970-01-01T00:00:01.500Z\" \"1970-01-01T00:00:01.500Z\" 1583802735 1 120"
+						+ " #inst \"1970-01-01T00:00:00.005-00:00\" true\n");
+		assertBothEqual("(let [s (java.util.HashSet.) l (java.util.ArrayList.) m (java.util.HashMap.)"
+				+ " c (java.util.Calendar/getInstance (java.util.TimeZone/getTimeZone \"UTC\"))]"
+				+ " (.add s #uuid \"1-1-1-1-1\") (.add l (java.util.Date. 3)) (.put m (java.util.UUID. 1 2) \"v\")"
+				+ " (.setTime c (java.util.Date. 86400000))"
+				+ " (prn (.contains s (java.util.UUID/fromString \"1-1-1-1-1\")) (map inst-ms l) (= (.get l 0) (java.util.Date. 3))"
+				+ " (.get m #uuid \"00000000-0000-0001-0000-000000000002\") (.get c java.util.Calendar/DAY_OF_MONTH)))",
+				"true (3) true \"v\" 2\n");
+		// a mutator but setTime would change a copy: refused by name (the oracle mutates)
+		assertBothEqual("(prn (try (.setYear (java.util.Date. 0) 100) (catch Exception e (.getMessage e))))",
+				"\"Method setYear taking 1 args is not supported for class java.util.Date\"\n");
+	}
+
+	@Test
+	void aDecimalCrossesTheJavaBoundaryBothWays() throws Exception {
+		// oracle-identical (clj 1.12.6): a decimal is handed to a member as its
+		// BigDecimal, a BigDecimal method no kernel answers runs on that object, and a
+		// BigDecimal a member answers is a decimal -- where the member declares one
+		// always, where it declares a supertype (DecimalFormat.parse's Number) in a
+		// program making decimals
+		assertBothEqual(
+				"(def x (.parse (doto (java.text.DecimalFormat.) (.setParseBigDecimal true)) \"1.50\"))"
+						+ " (prn x (decimal? x) (+ x 1M) (.scale x) (.max x 3M) (.sqrt 2M (java.math.MathContext. 5))"
+						+ " (.format (java.text.DecimalFormat. \"#,##0.00\") 1234.5M))",
+				"1.50M true 2.50M 2 3M 1.4142M \"1,234.50\"\n");
+		assertBothEqual("(prn (.nextBigDecimal (java.util.Scanner. \"1.50 2\")))", "1.50M\n");
+		// a program making no decimal: the view folds and the host object stays one (the
+		// oracle prints 1.50M; the deviation keeps every java: call of such a program
+		// free of a test)
+		assertBothEqual("(prn (.parse (doto (java.text.DecimalFormat.) (.setParseBigDecimal true)) \"1.50\"))",
+				"#<java java.math.BigDecimal>\n");
+	}
+
+	@Test
+	void aCharsetNamedHereCrossesTheJavaBoundaryAsTheHostCharset() throws Exception {
+		// oracle-identical (clj 1.12.6): a StandardCharsets field or Charset/forName of a
+		// literal is a value of this front end's own (clojure-spec.yaml pins it on every
+		// backend), which a java: member is handed as the host Charset -- a named
+		// argument
+		// at once, a local through the io family's view -- and whose other methods the
+		// host Charset answers
+		assertBothEqual(
+				"(let [p (java.nio.file.Files/createTempFile \"f14\" \".txt\" (make-array java.nio.file.attribute.FileAttribute 0))"
+						+ " cs java.nio.charset.StandardCharsets/UTF_8]"
+						+ " (java.nio.file.Files/writeString p \"héllo\" cs (make-array java.nio.file.OpenOption 0))"
+						+ " (prn (java.nio.file.Files/readString p cs)"
+						+ " (java.nio.file.Files/readString p java.nio.charset.StandardCharsets/ISO_8859_1)"
+						+ " (java.nio.file.Files/readString p (java.nio.charset.Charset/forName \"utf8\")))"
+						+ " (java.nio.file.Files/delete p))",
+				"\"héllo\" \"hÃ©llo\" \"héllo\"\n");
+		assertBothEqual(
+				"(def cs java.nio.charset.StandardCharsets/UTF_8)"
+						+ " (prn (sort (.aliases cs)) (.canEncode cs) (.contains cs cs))",
+				"(\"UTF8\" \"unicode-1-1-utf-8\") true true\n");
+	}
+
+	@Test
+	void aHostDateOrUuidIsEqualToAndComparesBesideOneMadeHere() throws Exception {
+		// oracle-identical (clj 1.12.6) but the printed form: a Date or UUID a member
+		// answers stays the host object, = to the value made here by the first one's
+		// equals and ordered beside it by compareTo -- a host Comparable's compareTo
+		// orders it -- and printed as the host object, where the oracle's print-method
+		// writes #inst and #uuid
+		String host = "(def hd (java.util.Date/from (java.time.Instant/ofEpochMilli 5)))"
+				+ " (def hu (java.util.UUID/nameUUIDFromBytes (.getBytes \"abc\")))";
+		assertBothEqual(
+				host + " (prn (inst-ms hd) (str hu) (= hd (java.util.Date. 5)) (= (java.util.Date. 5) hd)"
+						+ " (= #uuid \"90015098-3cd2-3fb0-9696-3f7d28e17f72\" hu) (= hd (java.sql.Timestamp. 5))"
+						+ " (= (java.sql.Timestamp. 5) hd) (not= hd (java.util.Date. 6)))",
+				"5 \"90015098-3cd2-3fb0-9696-3f7d28e17f72\" true true true true false true\n");
+		assertBothEqual(
+				host + " (prn (compare hd (java.util.Date. 6)) (compare (java.util.Date. 6) hd) (compare hd hd)"
+						+ " (compare hu (java.util.UUID. 0 0)) (compare (java.util.UUID. 0 0) hu)"
+						+ " (map inst-ms (sort [(java.util.Date. 9) hd (java.util.Date. 1)]))"
+						+ " (map inst-ms (sorted-set (java.util.Date. 9) hd))"
+						+ " (compare (java.time.Instant/ofEpochMilli 1) (java.time.Instant/ofEpochMilli 2))"
+						+ " (map str (sort [(java.time.Instant/ofEpochMilli 3) (java.time.Instant/ofEpochMilli 1)])))",
+				"-1 1 0 -1 1 (1 5 9) (5 9) -1000000 (\"1970-01-01T00:00:00.001Z\" \"1970-01-01T00:00:00.003Z\")\n");
+		assertBothEqual(host + " (prn hd (pr-str [hu]))", "#<java java.util.Date> \"[#<java java.util.UUID>]\"\n");
+		// a program's print-method or print-dup of a host class writes a host object
+		// of it or of a subclass (tools.reader's #inst reader answers a host Date),
+		// up to the class of an oracle's own method (a Timestamp is not a Date
+		// here); oracle-identical but the host Timestamp and UUID, which the
+		// oracle's own methods print, and the Date made here, which keeps its own
+		// printing where the oracle takes the program's method
+		assertBothEqual(
+				host + " (defmethod print-method java.util.Date [d ^java.io.Writer w]"
+						+ " (.write w (str \"#d \" (.getTime d))))"
+						+ " (defmethod print-dup java.util.Date [d ^java.io.Writer w] (.write w \"#dup\"))"
+						+ " (defmethod print-method java.util.Calendar [c ^java.io.Writer w] (.write w \"#cal\"))"
+						+ " (prn hd [(java.sql.Timestamp/from (java.time.Instant/ofEpochMilli 7))]"
+						+ " (java.util.Calendar/getInstance) hu) (print-dup hd *out*) (prn (java.util.Date. 5))",
+				"#d 5 [#<java java.sql.Timestamp>] #cal #<java java.util.UUID>\n#dup"
+						+ "#inst \"1970-01-01T00:00:00.005-00:00\"\n");
+	}
+
+	@Test
+	void classOfAnExceptionIsItsClassKeywordWithOrWithoutInterop() throws Exception {
+		// an ex-info condition is no host object: the same keyword whether the program
+		// uses interop (the host arm behind the exception arm) or not (no java: at all)
+		String plain = "(println (try (class (ex-info \"a\" {})) (catch Exception e (ex-message e))))";
+		assertBothEqual(plain, ":clojure.lang.ExceptionInfo\n");
+		assertBothEqual("(println (.getName String)) " + plain, "java.lang.String\n:clojure.lang.ExceptionInfo\n");
+	}
+
+	@Test
+	void theHostArmsAddNoJavaReferenceToAProgramWithoutInterop() {
+		// a java: reference changes the JVM output (the bridge, the host guards on
+		// every accessor), so class's, the printer's, str's and the host-kind
+		// predicates' host arms exist only where the program has one; the
+		// java:-free stand-ins take their names
+		for (boolean wasm : new boolean[] { false, true }) {
+			var forms = am.ik.rontolisp.cli.CompileFrontendAccess
+				.clojure(
+						"(defmulti k class) (defmethod k :default [x] x)"
+								+ " (println (k 1) (class [1]) (str [1] 2) (pr-str 3) (uuid? 4) (inst? 5))",
+						wasm, false)
+				.forms()
+				.stream()
+				.map(LispVal::print)
+				.toList();
+			assertThat(forms).noneMatch(text -> text.contains("JAVA:"));
+			assertThat(forms).anyMatch(text -> text.contains("%CLOJURE-HOST-CLASS-NAME"));
+			assertThat(forms).anyMatch(text -> text.contains("%CLOJURE-HOST-STRING"));
+			assertThat(forms).anyMatch(text -> text.contains("%CLOJURE-HOST-INSTANCE-P"));
+		}
+	}
+
+	@Test
+	void staticFieldsAnswerAsValues() throws Exception {
+		// a static field read through an import
+		assertBothEqual("(ns awtns (:import (java.awt.event KeyEvent))) (println KeyEvent/VK_LEFT)", "37\n");
+		assertBothEqual("(println Math/PI)", "3.141592653589793\n");
+		assertBothEqual("(println java.lang.Math/PI)", "3.141592653589793\n");
+		assertBothEqual("(ns mathns (:import java.lang.Math)) (println Math/PI)", "3.141592653589793\n");
+		assertBothEqual("(println (Math/PI))", "3.141592653589793\n");
+		assertBothEqual("(println (. Math PI))", "3.141592653589793\n");
+	}
+
+	@Test
+	void zeroArgStaticCallsReachTheMethod() throws Exception {
+		// a zero-argument (Class/member) is the static method, not the field read
+		assertBothEqual("(println (> (System/currentTimeMillis) 0))", "true\n");
+		assertBothEqual("(println (> (System/nanoTime) 0))", "true\n");
+		assertBothEqual("(println (> (. System currentTimeMillis) 0))", "true\n");
+		// a field in call position keeps answering the field
+		assertBothEqual("(println (Integer/MAX_VALUE))", "2147483647\n");
+	}
+
+	@Test
+	void staticMembersAnswerAsValues() throws Exception {
+		// a static method as a function value: the member over every?
+		assertBothEqual("(defn all-ws? [s] (every? Character/isWhitespace s)) (println (all-ws? \"   \"))", "true\n");
+		assertBothEqual("(println (every? Character/isWhitespace \"   \"))", "true\n");
+		assertBothEqual("(println (every? Character/isWhitespace \" a \"))", "false\n");
+		assertBothEqual("(println (map Integer/toString [1 2]))", "(1 2)\n");
+		assertBothEqual("(println (map Character/isWhitespace \" a\"))", "(true false)\n");
+		assertBothEqual("(let [isws Character/isWhitespace] (println (isws \\space)))", "true\n");
+	}
+
+	@Test
+	void memberValuesRefuseAWrongArgumentCount() throws Exception {
+		// like a multi-arity defn dispatch: any other count signals, on both backends
+		assertThatThrownBy(() -> interpret("(println ((fn [f] (f 1 2)) Character/isWhitespace))"))
+			.isInstanceOf(Exception.class);
+		assertThatThrownBy(() -> runOnJvm("(println ((fn [f] (f 1 2)) Character/isWhitespace))"))
+			.isInstanceOf(Exception.class);
+	}
+
+	@Test
+	void aSubstringOfABuiltStringRefusesARangeOutsideIt() throws Exception {
+		// .substring lowers to subseq; a string built at run time is the mutable
+		// representation, whose lane used to crash on the JVM instead of refusing.
+		assertBothEqual("""
+				(defn f [s i j] (try (.substring s i j) (catch Exception e :refused)))
+				(println (f (str "ab" "c") 1 2))
+				(println (f (str "ab" "c") 2 1))
+				(println (f (str "ab" "c") -1 2))
+				(println (f (str "ab" "c") 1 5))
+				""", "b\n:refused\n:refused\n:refused\n");
+	}
+
+	@Test
+	void qualifiedInstanceMethodsTakeTheTargetFirst() throws Exception {
+		// Clojure 1.12 Class/.method, answers measured against clj 1.12.6
+		assertBothEqual("(println (String/.toUpperCase \"abc\"))", "ABC\n");
+		assertBothEqual("(println (String/.substring \"hello\" 1 3))", "el\n");
+		assertBothEqual("(println (map String/.length [\"ab\" \"abcd\"]))", "(2 4)\n");
+		assertBothEqual("(prn ((fn [f] (f \"x\" 0)) String/.charAt))", "\\x\n");
+		assertBothEqual("(prn (map String/.indexOf [\"abc\"] [\"c\"] [1]))", "(2)\n");
+		assertBothEqual("(prn (apply String/.substring [\"hello\" 1]))", "\"ello\"\n");
+		assertBothEqual("(prn ((comp String/.length String/.trim) \" ab \"))", "2\n");
+		assertBothEqual("(prn (Object/.toString 5))", "\"5\"\n");
+		assertBothEqual("(ns qi (:import (java.util ArrayList)))"
+				+ " (let [a (ArrayList/new)] (.add a 1) (println (ArrayList/.size a) (ArrayList/.isEmpty a)"
+				+ " (map ArrayList/.isEmpty [(ArrayList/new)])))", "1 false (true)\n");
+		assertBothEqual("(println (str (StringBuilder/.append (StringBuilder/new \"a\") \"b\")))", "ab\n");
+	}
+
+	@Test
+	void qualifiedConstructorsConstruct() throws Exception {
+		assertBothEqual("(prn (String/new \"q\"))", "\"q\"\n");
+		assertBothEqual("(prn (map String/new [\"a\"]))", "(\"a\")\n");
+		assertBothEqual("(prn (map (comp str StringBuilder/new) [\"a\" \"b\"]))", "(\"a\" \"b\")\n");
+		assertBothEqual("(ns qc (:import (java.util ArrayList)))"
+				+ " (let [a (ArrayList/new 4)] (ArrayList/.add a \"x\") (println (str a)))", "[x]\n");
+		assertBothEqual("(defrecord R [a b]) (prn (R/new 1 2) (map R/new [3] [4]))",
+				"#user.R{:a 1, :b 2} (#user.R{:a 3, :b 4})\n");
+		assertBothEqual("(let [w (java.io.StringWriter/new)] (.write w \"hi\") (println (str w)))", "hi\n");
+		assertBothEqual("(prn (read (java.io.PushbackReader/new (java.io.StringReader/new \"(1 2)\"))))", "(1 2)\n");
+	}
+
+	@Test
+	void paramTagsSelectTheOverload() throws Exception {
+		// ^[double] picks abs(double) over the cost rule's abs(long), like the oracle
+		assertBothEqual("(prn (map ^[double] Math/abs [-1 2]) (^[double] Math/abs -1))", "(1.0 2.0) 1.0\n");
+		assertBothEqual("(prn (^[long] Long/toString 5) (map ^[long] Long/toString [1 2]))", "\"5\" (\"1\" \"2\")\n");
+		assertBothEqual("(prn (map ^[int] String/.charAt [\"ab\"] [1]))", "(\\b)\n");
+		assertBothEqual("(prn (^[int int] String/.substring \"hello\" 1 3))", "\"el\"\n");
+		assertBothEqual("(prn (map ^[_ _] String/.substring [\"hello\"] [1] [3]))", "(\"el\")\n");
+		assertBothEqual("(prn (map ^[] String/.length [\"abc\"]) (^[] String/new))", "(3) \"\"\n");
+		assertBothEqual("(println (.capacity (^[int] StringBuilder/new 64)) (str (^[String] StringBuilder/new \"z\")))",
+				"64 z\n");
+		assertBothEqual("(let [b (^[int] StringBuilder/new 64)] (println (StringBuilder/.capacity b)))", "64\n");
+		assertBothEqual("(ns qt (:import (java.util ArrayList Collection)))"
+				+ " (println (map ^[Collection] ArrayList/new [[1 2]]))", "(#<java java.util.ArrayList>)\n");
+		assertBothEqual("(println (^[objects] java.util.Arrays/toString (make-array Object 2))"
+				+ " (^[Object/1] java.util.Arrays/toString (make-array Object 1)))", "[null, null] [null]\n");
+		// on a name a var claims, the tags stay plain reader metadata
+		assertBothEqual("(println (^[long] clojure.string/upper-case \"a\"))", "A\n");
+	}
+
+	@Test
+	void qualifiedMethodRefusals() {
+		// the oracle refuses these at compile time
+		assertThatThrownBy(() -> interpret("(println (map String/.foo [\"x\"]))"))
+			.hasMessageContaining("no matches found for instance method foo in class java.lang.String");
+		assertThatThrownBy(() -> runOnJvm("(println (map Math/.abs [1]))"))
+			.hasMessageContaining("no matches found for instance method abs in class java.lang.Math");
+		assertThatThrownBy(() -> interpret("(println (^[int] String/.substring \"hello\" 1 3))"))
+			.hasMessageContaining("expected 1 arguments, but received 2");
+		assertThatThrownBy(() -> runOnJvm("(println (^[int] String/.substring \"hello\" 1 3))"))
+			.hasMessageContaining("expected 1 arguments, but received 2");
+		assertThatThrownBy(() -> interpret("(println ((fn [f] (f \"x\" 0 1)) String/.charAt))"))
+			.hasMessageContaining("wrong number of arguments passed to: String/.charAt");
+	}
+
+	@Test
+	void arraysRoundTripThroughMakeArrayAgetAsetAlength() throws Exception {
+		// the class spells the element type and is ignored, every array here is general
+		assertBothEqual("(let [a (make-array String 3)] (aset a 0 \"x\") (println (aget a 0)))", "x\n");
+		assertBothEqual("(let [a (make-array String 3)] (aset a 0 \"x\") (println (alength a)))", "3\n");
+		assertBothEqual(
+				"(let [b (make-array String 2 2)] (aset b 0 1 \"y\") (println (aget b 0 1)) (println (alength b)))",
+				"y\n2\n");
+	}
+
+	@Test
+	void typedArraysStoreCheckedValuesThroughAsetStar() throws Exception {
+		// a typed array is a vector here: each aset-* verb stores the value
+		// cast as its primitive casts it, and answers the value itself
+		assertBothEqual("(let [a (int-array [1 2])] (println (aset-int a 0 9)) (println (vec a)))", "9\n[9 2]\n");
+		assertBothEqual("(let [a (int-array [1 2])] (aset-int a 1 1.9) (println (vec a)))", "[1 1]\n");
+		assertBothEqual("(let [a (char-array [\\a \\b])] (aset-char a 0 66) (println (mapv int a)))", "[66 98]\n");
+		assertBothEqual("(let [a (boolean-array [true false])] (aset-boolean a 1 1) (println (vec a)))",
+				"[true true]\n");
+		assertBothEqual("(println (mapv vec (to-array-2d [[1 2] [3]])))", "[[1 2] [3]]\n");
+		assertBothEqual("(println (vec (ints (int-array [1 2]))))", "[1 2]\n");
+	}
+
+	@Test
+	void inIsBoundAndReadsThroughBinding() throws Exception {
+		// *in* is bound (never
+		// real stdin here) and rebinding it feeds (.readLine *in*)
+		assertBothEqual("(println (nil? *in*))", "false\n");
+		assertBothEqual(
+				"(binding [*in* (java.io.BufferedReader. (java.io.StringReader. \"hello\"))] (println (.readLine *in*)))",
+				"hello\n");
+	}
+
+	@Test
+	void hostBooleansPrintFalse() throws Exception {
+		// a host-object boolean answers T-or-false whatever the receiver (every host
+		// call ends in :java-false), like the oracle
+		assertBothEqual("(println (.contains (java.util.ArrayList. [1]) 2))", "false\n");
+		assertBothEqual("(println (.isEmpty (java.util.ArrayList. [1])))", "false\n");
+		assertBothEqual("(println (.isEmpty (java.util.ArrayList.)))", "true\n");
+		assertBothEqual("(let [al (java.util.ArrayList. [1])] (println (.contains al 2)))", "false\n");
+		assertBothEqual("(let [al (java.util.ArrayList.)] (println (.isEmpty al)))", "true\n");
+		assertBothEqual("(println (if-let [al (java.util.ArrayList. [1])] (.isEmpty al) :e))", "false\n");
+		assertBothEqual("(println (when-let [al (java.util.ArrayList. [1])] (.contains al 2)))", "false\n");
+		assertBothEqual("(println (.. (java.util.ArrayList. [1]) (subList 0 1) (isEmpty)))", "false\n");
+		assertBothEqual("(println (.. (java.util.ArrayList.) (subList 0 0) (isEmpty)))", "true\n");
+		// if/eq/str see the false object, like the oracle
+		assertBothEqual("(println (if (.isEmpty (java.util.ArrayList. [1])) :empty :full))", ":full\n");
+		assertBothEqual("(println (= (.contains (java.util.ArrayList. [1]) 2) false))", "true\n");
+		assertBothEqual("(println (str (.contains (java.util.ArrayList. [1]) 2)))", "false\n");
+		// non-boolean answers are untouched
+		assertBothEqual("(println (.size (java.util.ArrayList. [1 2])))", "2\n");
+		assertBothEqual("(println (.toString (java.util.ArrayList. [1])))", "[1]\n");
+		assertBothEqual("(println (.. (java.util.ArrayList. [1]) (subList 0 1) (size)))", "1\n");
+	}
+
+	@Test
+	void memfnCallsHostMethods() throws Exception {
+		assertBothEqual("(println (.toString ((memfn append x) (StringBuilder. \"a\") \"b\")))", "ab\n");
+		assertBothEqual("(println (map (memfn toString) [(StringBuilder. \"a\")]))", "(a)\n");
+	}
+
+	@Test
+	void proxyImplementsASingleInterface() throws Exception {
+		assertBothEqual("(println (.get (proxy [java.util.function.Supplier] [] (get [] 42))))", "42\n");
+		assertBothEqual("(println (.get (proxy [java.util.function.Supplier] [] (get [] (+ 40 2)))))", "42\n");
+		assertBothEqual("(println (let [p (proxy [java.util.function.Supplier] [] (get [] \"hi\"))] (.get p)))",
+				"hi\n");
+	}
+
+	// Oracle (clj 1.12.6.1673): one proxy implements every interface of its vector; a
+	// name two interfaces declare (Consumer.accept(Object), IntConsumer.accept(int))
+	// runs the one body; Java takes the object as either listener; a method left out is
+	// refused when it is called.
+	@Test
+	void proxyImplementsSeveralInterfaces() throws Exception {
+		assertBothEqual("""
+				(def p (proxy [java.util.function.Consumer java.util.function.IntConsumer] []
+				         (accept [x] (println :got x))))
+				(.forEach (java.util.List/of "s") p)
+				(.forEach (java.util.stream.IntStream/range 3 4) p)
+				""", ":got s\n:got 3\n");
+		assertBothEqual("""
+				(ns listenersns (:import (java.awt.event ActionListener KeyListener)))
+				(def q (proxy [ActionListener KeyListener] []
+				         (actionPerformed [e] (println :clicked e))
+				         (keyTyped [e])))
+				(.actionPerformed q nil)
+				(.keyTyped q nil)
+				(println (count (.getActionListeners (javax.swing.Timer. 10 q))))
+				(println (try (.keyPressed q nil) (catch Exception e (ex-message e))))
+				""", ":clicked nil\n1\nno proxy method: keyPressed\n");
+	}
+
+	// Oracle: a proxy over a class extends it -- the sequences test's File shape:
+	// the constructor arguments choose the superclass constructor, a named method
+	// runs its body, an unnamed one is inherited.
+	@Test
+	void proxyOverAClassExtendsIt() throws Exception {
+		assertBothEqual("""
+				(def p (proxy [java.io.File] ["recent"] (lastModified [] 42)))
+				(println (.lastModified p))
+				(println (.getName p))
+				(println (.toString p))
+				""", "42\nrecent\nrecent\n");
+	}
+
+	// Oracle: toString/equals/hashCode run their bodies; this is the proxy object;
+	// proxy-super calls the superclass implementation.
+	@Test
+	void proxyOverAClassSeesThisAndSuper() throws Exception {
+		assertBothEqual("""
+				(ns thisns (:import (java.io File)))
+				(def p (proxy [File] ["x"]
+				         (toString [] (str "super-was:" (proxy-super toString)))
+				         (equals [o] true)
+				         (hashCode [] 7)))
+				(println (.toString p))
+				(println (.equals p p))
+				(println (.hashCode p))
+				(println (.getName p))
+				""", "super-was:x\ntrue\n7\nx\n");
+	}
+
+	// Oracle (clj 1.12.6): identical? on host objects is ==, while = asks equals -- a
+	// host collection included, and so do a set's and a map's lookups. A proxy whose
+	// equals answers true is not identical? to true or 1 and str shows its toString.
+	// Before, measured 2026-10-04: the JVM answered equals for identical? (the proxy was
+	// identical? to true and printed "true"), the interpreter for two Files.
+	// Oracle (clj 1.12.6, measured 2026-10-08): a fn passed where a functional interface
+	// is expected implements its method by the method's arguments -- a literal fn (a
+	// resolved site), a local of a known receiver (a dispatched site), a var on a
+	// receiver of unknown class (run time) and a static call alike -- and the interface's
+	// default methods keep their bodies (Predicate/not calls negate on it). Before,
+	// measured 2026-10-08 on the interpreter and the JVM, every call passed the method's
+	// name first: "Function expects 0 arguments, got 1".
+	@Test
+	void aFnPassedWhereAnInterfaceIsExpectedImplementsItsMethodByItsArguments() throws Exception {
+		assertBothEqual("(let [t (Thread. (fn [] (println \"ran\")))] (.start t) (.join t))", "ran\n");
+		assertBothEqual("(.forEach (java.util.ArrayList. [1 2]) (fn [x] (println x)))", "1\n2\n");
+		assertBothEqual("(println (.compute (doto (java.util.HashMap.) (.put \"a\" 1)) \"a\" (fn [k v] (inc v))))",
+				"2\n");
+		assertBothEqual("(defn each [coll f] (.forEach coll f)) (each (java.util.ArrayList. [3]) println)", "3\n");
+		assertBothEqual("(defn each2 [f] (.forEach (java.util.ArrayList. [5]) f)) (each2 println)", "5\n");
+		assertBothEqual("(println (.test (java.util.function.Predicate/not (fn [x] (odd? x))) 2))", "true\n");
+		assertBothEqual("(println (.test (java.util.function.Predicate/not odd?) 2))", "true\n");
+		// ... and a boolean answer that is no boolean is the oracle's cast failure at a
+		// call its compiler resolves (Predicate/not of a fn form; before 2026-10-11 nil
+		// was false here: aFnsPrimitiveAnswerReachesJavaCastAsTheOraclesAdapterCastsIt)
+		assertBothEqual("(println (try (.test (java.util.function.Predicate/not (fn [x] (when (odd? x) true))) 2)"
+				+ " (catch NullPointerException e [:npe (ex-message e)])))", "[:npe nil]\n");
+		assertBothEqual(
+				"(let [l (java.util.ArrayList. [3 1 2])]"
+						+ " (java.util.Collections/sort l (fn [a b] (compare a b))) (println (vec l))"
+						+ " (.sort l (java.util.Comparator/comparing (fn [x] (- x)))) (println (vec l)))",
+				"[1 2 3]\n[3 2 1]\n");
+		assertBothEqual("(println (.get (.map (java.util.Optional/of 4) (fn [x] (* 2 x)))))", "8\n");
+		// A fn takes ExecutorService.submit(Callable), whose future keeps its answer, as
+		// the oracle's reflector picks; an argument's :tag -- its own, a hinted local's
+		// or
+		// parameter's, a local's init's -- picks the overload where the receiver's class
+		// is known, as the oracle's compiler does (a tag no overload takes picks none),
+		// and a reflective call reads none (clj 1.12.6, 2026-10-29). Before, both were
+		// submit(Runnable): nil.
+		assertBothEqual("""
+				(def pool (java.util.concurrent.Executors/newFixedThreadPool 1))
+				(println @(.submit pool (fn [] 1)) @(.submit pool ^Runnable (fn [] 2)))
+				(let [e (java.util.concurrent.Executors/newFixedThreadPool 1)]
+				  (println @(.submit e ^java.util.concurrent.Callable (fn [] 3)) @(.submit e ^Runnable (fn [] 4))
+				           @(.submit e ^String (fn [] 5)))
+				  (let [^Runnable r (fn [] 6) r2 r] (println @(.submit e r) @(.submit e r2)))
+				  (println ((fn [^Runnable r] @(.submit e r)) (fn [] 7)))
+				  (.shutdown e))
+				(.shutdown pool)
+				""", "1 2\n3 nil 5\nnil nil\nnil\n");
+		// a fn of the wrong arity is called with the method's arguments, and refuses them
+		// in
+		// the oracle's words
+		assertThatThrownBy(() -> interpret("(.forEach (java.util.ArrayList. [2]) (fn [] 1))"))
+			.hasStackTraceContaining("Wrong number of args (1) passed to: user/fn");
+		assertThatThrownBy(() -> runOnJvm("(.forEach (java.util.ArrayList. [2]) (fn [] 1))"))
+			.hasStackTraceContaining("Wrong number of args (1) passed to: user/fn");
+		// Deviation: the oracle converts a fn only to an interface annotated
+		// @FunctionalInterface (a PropertyChangeListener or a DocumentListener is a
+		// ClassCastException there); here every abstract method of any interface calls
+		// it.
+		assertBothEqual("""
+				(let [s (java.beans.PropertyChangeSupport. "b")]
+				  (.addPropertyChangeListener s (fn [e] (println "pc" (.getNewValue e))))
+				  (.firePropertyChange s "size" 1 2))
+				(let [d (javax.swing.text.PlainDocument.)]
+				  (.addDocumentListener d (fn [e] (println "doc" (str (.getType e)))))
+				  (.insertString d 0 "x" nil))
+				""", "pc 2\ndoc INSERT\n");
+	}
+
+	// Oracle (clj 1.12.6, measured 2026-10-08): false crosses to Java as Java's false --
+	// an argument (a Boolean where an Object is expected) and a fn's or a proxy body's
+	// answer for a boolean -- a map as a java.util.Map, and a fn is a Callable, a
+	// Runnable
+	// and a Comparator itself (clojure-spec pins the receiver half on every backend); a
+	// proxy's constructor arguments convert a fn as every call does. Before, measured
+	// 2026-10-08 on the interpreter and the JVM: "No matching method
+	// java.util.ArrayList.add with 1 argument(s)", "java:reify: cannot return |false| as
+	// boolean ...", "No matching constructor for java.util.HashMap", "java:call expects a
+	// java object as the first argument, got #<lambda>". A map a Java collection holds
+	// spells as Clojure's since 2026-10-09 (a read-only view of it; until then a copy's
+	// {k=false}).
+	@Test
+	void falseAMapAndAFnCrossTheJavaBoundaryAsTheOraclesDo() throws Exception {
+		assertBothEqual("(let [l (java.util.ArrayList.)] (.add l false) (.add l true) (.add l nil) (println (str l)))",
+				"[false, true, null]\n");
+		assertBothEqual("(println (Boolean/toString false) (java.util.Objects/toString false))", "false false\n");
+		assertBothEqual("(let [l (java.util.ArrayList. [1 2 3])] (.removeIf l odd?) (println (vec l)))", "[2]\n");
+		assertBothEqual("(println (.test (proxy [java.util.function.Predicate] [] (test [x] false)) 1))", "false\n");
+		assertBothEqual("(let [p (proxy [java.util.function.Predicate] [] (test [x] (odd? x)))]"
+				+ " (println (.test p 1) (.test p 2)))", "true false\n");
+		assertBothEqual("(println (.booleanValue false) (.booleanValue true) (.equals false false))",
+				"false true true\n");
+		assertBothEqual("(println (str (java.util.HashMap. {\"a\" 1})) (str (java.util.TreeMap. {\"b\" 2 \"a\" 1})))",
+				"{a=1} {a=1, b=2}\n");
+		assertBothEqual("(let [l (java.util.ArrayList.)] (.add l {\"k\" false}) (println (str l)))",
+				"[{\"k\" false}]\n");
+		assertBothEqual("(println (.call (fn [] 5)) (.run (fn [] 5)) (.compare (fn [a b] (< a b)) 2 1))", "5 nil 1\n");
+		assertBothEqual("(let [t (proxy [Thread] [(fn [] (println \"ran\"))])] (.start t) (.join t))", "ran\n");
+	}
+
+	// Oracle (clj 1.12.6, measured 2026-10-08): Java's false is Clojure's false wherever
+	// it comes back -- a host collection's element read by vec/seq/first/into/nth, a
+	// Map's value by .get and get, an Object or boolean answer of a receiver of no known
+	// class, a static field and a static method's Boolean, an array's elements, an
+	// argument a fn or a proxy body receives from Java. Before, measured 2026-10-08 on
+	// the interpreter and the JVM, every one was nil ((vec l) of a list holding false
+	// [nil]).
+	@Test
+	void aHostFalseComesBackAsFalse() throws Exception {
+		assertBothEqual(
+				"(let [l (java.util.ArrayList.)] (.add l false) (println (vec l) (seq l) (first l) (into [] l)))",
+				"[false] (false) false [false]\n");
+		assertBothEqual("(println (.get (doto (java.util.HashMap.) (.put \"x\" false)) \"x\"))", "false\n");
+		assertBothEqual(
+				"(defn e? [l] (.isEmpty l)) (println (e? (java.util.ArrayList. [1])) (e? (java.util.ArrayList.)))",
+				"false true\n");
+		assertBothEqual(
+				"(println (Boolean/FALSE) Boolean/FALSE (Boolean/valueOf \"false\") (Boolean/parseBoolean \"x\"))",
+				"false false false false\n");
+		assertBothEqual(
+				"(let [l (java.util.ArrayList. [true false nil])] (println (seq l) (into [] l) (second l) (nth l 2)))",
+				"(true false nil) [true false nil] false nil\n");
+		assertBothEqual("(println (seq (.toArray (java.util.ArrayList. [false true]))))", "(false true)\n");
+		assertBothEqual("(.forEach (java.util.ArrayList. [false]) (fn [x] (println :each x)))", ":each false\n");
+		assertBothEqual("(let [m (java.util.HashMap. {\"a\" false})]"
+				+ " (println (get m \"a\") (if (get m \"a\") :yes :no) (= false (get m \"a\")) (find m \"a\")))",
+				"false :no true [a false]\n");
+		assertBothEqual(
+				"(println (.test (proxy [java.util.function.Predicate] [] (test [x] (println :proxy-arg x) true)) false))",
+				":proxy-arg false\ntrue\n");
+		assertBothEqual("(println (.getOrDefault (java.util.HashMap.) \"q\" false)"
+				+ " (str (.get (doto (java.util.HashMap.) (.put \"x\" false)) \"x\")))", "false false\n");
+		assertBothEqual(
+				"(println (= [false] (java.util.List/of false)) (= {\"a\" false} (java.util.Map/of \"a\" false)))",
+				"true true\n");
+		assertBothEqual("(prn (java.util.ArrayList. [false]) (java.util.HashMap. {\"a\" false}))",
+				"[false] {\"a\" false}\n");
+	}
+
+	// Oracle (clj 1.12.6, measured 2026-10-08): a fn is a Comparator whose compare is
+	// AFunction.compare -- a true answer -1, a false one 1 when the fn answers true for
+	// the arguments swapped and else 0, a number its intValue (a double or ratio
+	// truncated, a long's or bigint's low 32 bits) -- whether Java calls it through
+	// List.sort, Collections.sort or a TreeMap. Before, measured 2026-10-08 on the
+	// interpreter and the JVM: "java:reify: cannot return T as int from
+	// java.util.Comparator.compare" (a double or a ratio was refused too). A fn answering
+	// nil or a non-number is the oracle's NullPointerException or ClassCastException
+	// since 2026-10-09 (aClojureValueReachesJavaAsTheOraclesOwnObject).
+	@Test
+	void aFnPassedAsAComparatorComparesLikeTheOraclesAFunction() throws Exception {
+		assertBothEqual("(let [l (java.util.ArrayList. [3 1 2])] (.sort l <) (println (vec l)))", "[1 2 3]\n");
+		assertBothEqual("(let [l (java.util.ArrayList. [3 1 2])] (java.util.Collections/sort l >) (println (vec l)))",
+				"[3 2 1]\n");
+		assertBothEqual("(defn by-desc [a b] (> a b)) (let [l (java.util.ArrayList. [3 1 2])] (.sort l by-desc)"
+				+ " (println (vec l)))", "[3 2 1]\n");
+		assertBothEqual("(defn sorted [cmp] (let [l (java.util.ArrayList. [3 1 2])] (java.util.Collections/sort l cmp)"
+				+ " (vec l))) (println (sorted compare) (sorted (fn [a b] (* 0.5 (- a b)))) (sorted (fn [a b] (/ (- b a) 2)))"
+				+ " (sorted (fn [a b] (* (- a b) 4294967296))))", "[1 2 3] [1 3 2] [3 1 2] [3 1 2]\n");
+		assertBothEqual("(let [t (java.util.TreeMap. >)] (.put t 1 \"a\") (.put t 2 \"b\") (println (keys t)))",
+				"(2 1)\n");
+		// a constructor taking a Comparator or a Collection takes the fn as the
+		// Comparator, a functional interface (before, measured 2026-10-08: as the
+		// Collection, "Function expects 2 arguments, got 0")
+		assertBothEqual("(let [s (java.util.TreeSet. (fn [a b] (< a b)))] (.add s 2) (.add s 1) (.add s 3)"
+				+ " (println (seq s)))", "(1 2 3)\n");
+		assertBothEqual("(let [q (java.util.PriorityQueue. compare)] (.add q 2) (.add q 1) (println (.peek q)))",
+				"1\n");
+		assertBothEqual("(let [s (java.util.concurrent.ConcurrentSkipListSet. >)] (.add s 2) (.add s 3)"
+				+ " (println (seq s)))", "(3 2)\n");
+		assertBothEqual("(let [l (java.util.ArrayList. [\"b\" \"a\" \"c\"])] (.sort l (fn [a b] (neg? (compare a b))))"
+				+ " (println (vec l)))", "[a b c]\n");
+		assertBothEqual("(let [l (java.util.ArrayList. [3 1 2])] (println (try (.sort l (fn [a b] nil)) :sorted"
+				+ " (catch Exception e :refused))))", ":refused\n");
+	}
+
+	// Oracle (clj 1.12.6, measured 2026-10-08): Java is handed the Clojure value itself
+	// -- a set is a java.util.Set; a map, a record or a sorted map a java.util.Map; a
+	// sorted set or a lazy seq a collection; a keyword or a symbol an object Java keys,
+	// finds and orders by its spelling -- and a keyword or symbol Java hands back is
+	// itself. Before, measured 2026-10-08 on the interpreter and the JVM: "No matching
+	// constructor for java.util.HashSet with 1 argument(s)" (a record, a sorted set
+	// alike), "No matching method java.util.HashMap.put with 2 argument(s)" (a keyword).
+	// What Java is handed is the read-only view of the value since 2026-10-09
+	// (aClojureValueReachesJavaAsTheOraclesOwnObject).
+	@Test
+	void aSetAKeywordAndARecordCrossTheJavaBoundaryAsTheOraclesDo() throws Exception {
+		assertBothEqual("(println (str (java.util.HashSet. #{1 2})) (str (java.util.HashMap. {:a 1})))",
+				"[1, 2] {:a=1}\n");
+		assertBothEqual(
+				"(let [m (java.util.HashMap.)] (.put m :k 1) (prn (.get m :k) (get m :k) (keys m)"
+						+ " (= :k (first (keys m))) (contains? m :k) (find m :k) (:k m)))",
+				"1 1 (:k) true true [:k 1] 1\n");
+		assertBothEqual("(let [s (java.util.HashSet.)] (.add s :a) (prn (str s) (contains? s :a) (.contains s :a)"
+				+ " (seq s)))", "\"[:a]\" true true (:a)\n");
+		assertBothEqual("(let [l (java.util.ArrayList.)] (.add l 'sym) (.add l 'ns/q) (prn (str l) (first l)"
+				+ " (symbol? (first l)) (= 'ns/q (second l))))", "\"[sym, ns/q]\" sym true true\n");
+		// a record's class crosses as one object per class, so a Java map keys it
+		// like the oracle's Class, a WeakHashMap too (schema's class-schema registry)
+		assertBothEqual(
+				"(defrecord R [a]) (println (str (java.util.HashMap. (->R 1))))"
+						+ " (let [m (java.util.WeakHashMap.)] (.put m R 1) (System/gc) (prn (.get m R)"
+						+ " (.get m (class (->R 2))) (str (first (.keySet m))) (= R (first (.keySet m)))))",
+				"{:a=1}\n1 1 \"class user.R\" true\n");
+		assertBothEqual("(println (str (java.util.ArrayList. (sorted-set 3 1 2)))"
+				+ " (str (java.util.TreeMap. (sorted-map :b 1 :a 2))) (str (java.util.ArrayList. (map inc [1 2]))))",
+				"[1, 2, 3] {:a=2, :b=1} [2, 3]\n");
+		assertBothEqual("(let [l (java.util.ArrayList. [:b :a :c/d])] (java.util.Collections/sort l) (prn (vec l)))",
+				"[:a :b :c/d]\n");
+		assertBothEqual("(println (.equals (java.util.HashSet. [1 2]) #{1 2}) (java.util.Objects/toString :a)"
+				+ " (java.util.Objects/toString 'x))", "true :a x\n");
+		assertBothEqual("(let [s (java.util.HashSet. #{:x})] (prn (first s) (keyword? (first s)) (= #{:x} (set s))))",
+				":x true true\n");
+		assertBothEqual("(let [m (java.util.HashMap.)] (.put m :k false) (prn (get m :k) (.get m :k)"
+				+ " (.containsKey m :k) (.containsValue m false)))", "false false true true\n");
+	}
+
+	// Oracle (clj 1.12.6, measured 2026-10-09): Java is handed the Clojure value as its
+	// own object. A vector, list, set or map is a read-only java.util collection whose
+	// toString is Clojure's printer, whose writes throw UnsupportedOperationException,
+	// whose equals and hashCode are the java.util contract's, and which comes back as the
+	// value itself (identical?); a vector is Comparable as compare orders vectors. A
+	// ratio
+	// is a Number and a Comparable by value; an atom, a deftype, a fn is an object of its
+	// own class, equal only to itself, spelled as Object's toString spells it (a type's
+	// own toString when it has one); a Comparator fn answering nil or a non-number throws
+	// the NullPointerException or ClassCastException AFunction.compare does; a keyword
+	// and
+	// a symbol do not compare. Before, measured 2026-10-09 on the interpreter and the
+	// JVM: "[[1], {:a=[1, 2]}]", "[1, 2]", the sort of a copy, "No matching method
+	// java.util.Collections.max", "No matching constructor for java.util.ArrayList" (an
+	// atom, a deftype), "java:reify: cannot return NIL as int", [:a b] sorted together.
+	// The ClassCastException messages lack the JDK's module tail.
+	@Test
+	void aClojureValueReachesJavaAsTheOraclesOwnObject() throws Exception {
+		assertBothEqual(
+				"""
+						(defn kind [f]
+						  (try (f) (catch UnsupportedOperationException e :uoe) (catch NullPointerException e [:npe (.getMessage e)])
+						       (catch ClassCastException e [:cce (.getMessage e)])))
+						(println (str (java.util.ArrayList. [#{1} {:a [1 2]}])) (str (java.util.Collections/unmodifiableSet #{1 2}))
+						         (str (java.util.HashMap. {:a [1 2]})) (java.util.Objects/toString [1 "a" nil])
+						         (str (java.util.ArrayList. [(sorted-map :b 1 :a 2) (sorted-set 2 1) '(1 2) [] {} #{}])))
+						(let [v [3 1 2]]
+						  (println (kind #(java.util.Collections/sort v)) v (kind #(.put (java.util.Collections/unmodifiableMap {:b 1}) :a 1))
+						           (kind #(.add (java.util.Collections/unmodifiableCollection #{1}) 2))))
+						(println (java.util.Collections/max [1/2 1/3]) (vec (java.util.TreeSet. [1 1/2 1/3])) (java.util.Objects/hashCode 1/2)
+						         (java.util.Objects/hashCode -12345678901234567890/7) (.equals (java.util.HashSet. [1/2]) #{1/2}))
+						(deftype T1 [a])
+						(deftype T2 [a] Object (toString [_] "custom"))
+						(println (.startsWith (str (java.util.ArrayList. [(atom 1)])) "[clojure.lang.Atom@")
+						         (.startsWith (str (java.util.ArrayList. [(T1. 1)])) "[user.T1@") (str (java.util.ArrayList. [(T2. 1) #"re" #'kind])))
+						(let [a (atom 1) v [1 2] m {:a 1} s #{1} t (T1. 1) r 1/2 l (java.util.ArrayList.)]
+						  (doseq [x [a v m s t r]] (.add l x))
+						  (println (map identical? [a v m s t r] (seq l)) (conj (.get l 1) 3) (.get l 5)))
+						(println (kind #(let [l (java.util.ArrayList. [2 1])] (.sort l (fn [a b] nil))))
+						         (kind #(let [l (java.util.ArrayList. [2 1])] (.sort l (fn [a b] "x")))))
+						(println (kind #(java.util.TreeSet. [:a 'b])) (kind #(java.util.TreeSet. ["b" :a])) (vec (java.util.TreeSet. [[2] [1 0] [1]])))
+						(println (String/valueOf [\\a \\b]) (vec (java.util.List/of [1 2])) (String/join "," ["a" "b"])
+						         (java.util.Objects/hashCode [1 2]) (java.util.Objects/hashCode {:a 1}) (java.util.Objects/hashCode #{1 2})
+						         (.equals (java.util.ArrayList. [1 2]) [1 2]) (.containsAll (java.util.ArrayList. [1 2 3]) #{1 2}))
+						(let [m (java.util.HashMap.)] (.put m [1 2] :v) (.put m {:a 1} :w) (println (.get m [1 2]) (get m '(1 2)) (.get m {:a 1})))
+						(println (.get (java.util.Collections/unmodifiableMap {:a 1}) :a) (str (java.util.UUID/nameUUIDFromBytes (.getBytes "x"))))
+						""",
+				"""
+						[#{1}, {:a [1 2]}] #{1 2} {:a=[1 2]} [1 "a" nil] [{:a 2, :b 1}, #{1 2}, (1 2), [], {}, #{}]
+						:uoe [3 1 2] :uoe :uoe
+						1/2 [1/3 1/2 1] 3 1436577085 true
+						true true [custom, re, #'user/kind]
+						(true true true true true true) [1 2 3] 1/2
+						[:npe Cannot invoke "java.lang.Number.intValue()" because "n" is null] [:cce class java.lang.String cannot be cast to class java.lang.Number]
+						[:cce class clojure.lang.Keyword cannot be cast to class clojure.lang.Symbol] [:cce class java.lang.String cannot be cast to class clojure.lang.Keyword] [[1] [2] [1 0]]
+						[\\a \\b] [[1 2]] a,b 994 1013910568 3 true true
+						:v :v :w
+						1 9dd4e461-268c-3034-b5c8-564e155c67a6
+						""");
+	}
+
+	// Oracle (clj 1.12.6, measured 2026-10-10): a deftype or reify is an instance of
+	// every
+	// Java interface its body implements, so Java calls its methods -- a Thread runs a
+	// Runnable, an executor calls a Callable, String/join walks an Iterable through the
+	// iterator its body answers (a Clojure collection's seq iterator too) --, a TreeSet,
+	// a TreeMap and Collections/sort order it by its compareTo, a HashSet and a HashMap
+	// key it by its equals and hashCode, Object's toString spells its own hashCode, a
+	// java.util.List or java.util.Map type is a List or a Map to Java (a Map's entries
+	// Java's Map.Entry, a default method the body leaves out Java's), and Java hands it
+	// back as itself. A reify closing over a local is one too. Before,
+	// measured 2026-10-09 on the interpreter and the JVM: "No matching constructor for
+	// java.lang.Thread with 1 argument(s)", "class user.Box cannot be cast to class
+	// java.lang.Comparable", a HashSet of two equal Ps of size 2.
+	@Test
+	void aDeftypeOrReifyReachesJavaAsAnImplementationOfItsInterfaces() throws Exception {
+		assertBothEqual(
+				"""
+						(deftype Task [] Runnable (run [_] (println "ran")))
+						(doto (Thread. (Task.)) .start .join)
+						(doto (Thread. (reify Runnable (run [_] (println "ran too")))) .start .join)
+						(defn task [msg] (reify Runnable (run [_] (println msg))))
+						(doto (Thread. (task "closed over")) .start .join)
+						(deftype Box [x] Comparable (compareTo [_ o] (compare x (.-x o))))
+						(println (vec (map #(.-x %) (java.util.TreeSet. [(Box. 2) (Box. 1)]))))
+						(let [l (java.util.ArrayList. [(Box. 3) (Box. 1) (Box. 2)])]
+						  (java.util.Collections/sort l)
+						  (println (map #(.-x %) l)))
+						(let [m (java.util.TreeMap.)]
+						  (.put m (Box. 2) :two)
+						  (.put m (Box. 1) :one)
+						  (println (vals m) (.-x (.firstKey m))))
+						(deftype P [x] Object
+						  (equals [_ o] (and (instance? P o) (= x (.-x o))))
+						  (hashCode [_] (hash x)))
+						(println (.size (java.util.HashSet. [(P. 1) (P. 1)])))
+						(let [m (java.util.HashMap.)]
+						  (.put m (P. 1) :a)
+						  (println (.get m (P. 1)) (.containsKey m (P. 2)) (.size m)))
+						(println (.equals (java.util.ArrayList. [(P. 1)]) (java.util.ArrayList. [(P. 1)]))
+						         (.contains (java.util.ArrayList. [(P. 1)]) "x"))
+						(deftype C [] java.util.concurrent.Callable (call [_] :done))
+						(let [ex (java.util.concurrent.Executors/newSingleThreadExecutor)]
+						  (println (.get (.submit ex (C.))))
+						  (.shutdown ex))
+						(deftype Bag [items] Iterable (iterator [_] (.iterator items)))
+						(println (String/join ", " (Bag. ["a" "b"])))
+						(deftype H [l] java.lang.Iterable (iterator [_] (.iterator l)))
+						(println (String/join "," (H. (java.util.ArrayList. ["x" "y"]))))
+						(let [t (Task.) l (java.util.ArrayList.)]
+						  (.add l t)
+						  (println (identical? t (.get l 0)) (.contains l t) (.indexOf l t)))
+						(deftype Q [x] Object (hashCode [_] 255))
+						(println (str (java.util.ArrayList. [(Q. 1)])) (str (java.util.ArrayList. [(reify Object (toString [_] "r"))])))
+						(deftype L [v] java.util.List
+						  (size [_] (count v))
+						  (get [_ i] (nth v i))
+						  (isEmpty [_] (empty? v))
+						  (iterator [_] (.iterator v))
+						  (contains [_ x] (boolean (some #{x} v))))
+						(println (java.util.Collections/max (L. [1 5 3])) (String/join "-" (L. ["a" "b"]))
+						         (.containsAll (java.util.ArrayList. [1 2]) (L. [2 1])) (.equals (java.util.ArrayList. [1 2]) (L. [1 2])))
+						(deftype M [m] java.util.Map
+						  (size [_] (count m))
+						  (get [_ k] (get m k))
+						  (containsKey [_ k] (contains? m k))
+						  (entrySet [_] (set (seq m)))
+						  (isEmpty [_] (empty? m)))
+						(println (.get (java.util.HashMap. (M. {"a" 1})) "a")
+						         (.getOrDefault (java.util.Collections/unmodifiableMap (M. {"a" 1})) "z" :none))
+						(def made (atom 0))
+						(let [tf (reify java.util.concurrent.ThreadFactory
+						           (newThread [_ r] (swap! made inc) (doto (Thread. r) (.setName "tf-1"))))
+						      ex (java.util.concurrent.Executors/newFixedThreadPool 1 tf)]
+						  (println (.get (.submit ex (reify java.util.concurrent.Callable
+						                               (call [_] (.getName (Thread/currentThread))))))
+						           @made)
+						  (.shutdown ex))
+						""",
+				"""
+						ran
+						ran too
+						closed over
+						[1 2]
+						(1 2 3)
+						(:one :two) 1
+						1
+						:a false 1
+						true false
+						:done
+						a, b
+						x,y
+						true true 0
+						[user.Q@ff] [r]
+						5 a-b true true
+						1 :none
+						tf-1 1
+						""");
+	}
+
+	// Oracle (clj 1.12.6, measured 2026-10-10): a record's class implements java.util.Map
+	// and every Java interface its body names, so a TreeSet orders it by its compareTo, a
+	// Thread runs it, a HashMap copies its entries, Java keys it by the Map's equals and
+	// hashCode (equal to a plain map of its entries), a record implementing no Comparable
+	// is refused by a TreeSet naming its class, and Java hands it back as itself. Before,
+	// measured 2026-10-10 on the interpreter: "class
+	// am.ik.rontolisp.runtime.RontoJavaMapView cannot be cast to class
+	// java.lang.Comparable", "No matching constructor for java.lang.Thread with 1
+	// argument(s)".
+	@Test
+	void aRecordReachesJavaAsAMapImplementingItsBodysInterfaces() throws Exception {
+		assertBothEqual(
+				"""
+						(defrecord Person [name age] Comparable (compareTo [_ o] (compare age (:age o))))
+						(println (vec (map :name (java.util.TreeSet. [(->Person "b" 2) (->Person "a" 1)]))))
+						(defrecord Job [] Runnable (run [_] (println "job")))
+						(doto (Thread. (->Job)) .start .join)
+						(let [p (->Person "c" 3) m (java.util.HashMap. p) l (java.util.ArrayList. [p])]
+						  (println (.get m :name) (.size m) (.containsKey m :age) (.get (java.util.HashMap. (assoc p :x false)) :x))
+						  (println (identical? p (.get l 0)) (.contains l (->Person "c" 3))))
+						(println (.contains (java.util.HashSet. [(->Person "c" 3)]) {:name "c" :age 3})
+						         (.contains (java.util.HashSet. [{:name "c" :age 3}]) (->Person "c" 3)))
+						(defrecord T [a] Object (toString [_] "T!") Runnable (run [_] nil))
+						(println (str (java.util.ArrayList. [(->T 1)])) (.get (java.util.HashMap. (->T 1)) :a))
+						(println (try (java.util.TreeSet. [(->Job) (->Job)]) (catch ClassCastException e (.getMessage e))))
+						""",
+				"""
+						[a b]
+						job
+						c 2 true false
+						true true
+						true true
+						[T!] 1
+						class user.Job cannot be cast to class java.lang.Comparable
+						""");
+	}
+
+	// Oracle (clj 1.12.6, measured 2026-10-10): a deftype implementing CharSequence (the
+	// shape of instaparse's Segment) is one to Java: a host Pattern matches it through
+	// its
+	// charAt and length, a StringBuilder appends it, String.join and contentEquals read
+	// it, and its defaults (isEmpty) keep Java's bodies.
+	@Test
+	void aCharSequenceTypeReachesJavaAsACharSequence() throws Exception {
+		assertBothEqual(
+				"""
+						(deftype Seg [s offset count]
+						  CharSequence
+						  (length [_] count)
+						  (subSequence [_ a b] (Seg. s (+ offset a) (- b a)))
+						  (charAt [_ i] (.charAt s (+ offset i)))
+						  (toString [_] (subs s offset (+ offset count))))
+						(def g (Seg. "hello world" 6 5))
+						(println (java.util.regex.Pattern/matches "w.*d" g) (.find (.matcher (java.util.regex.Pattern/compile "r.") g)))
+						(let [m (.matcher (java.util.regex.Pattern/compile "o(r)") g)]
+						  (println (.lookingAt m) (.find m) (.group m 1)))
+						(println (String/join "+" [g "x"]) (.toString (doto (java.lang.StringBuilder.) (.append g) (.append "!"))))
+						(println (.contentEquals "world" g) (String/valueOf g) (CharSequence/compare g "world") (.isEmpty g))
+						""",
+				"""
+						true true
+						false true r
+						world+x world!
+						true world 0 false
+						""");
+	}
+
+	// Oracle (clj 1.12.6, measured 2026-10-10): a TreeSet of a deftype implementing no
+	// Comparable throws the cast failure naming the type, an Object override or not; a
+	// face is Comparable only to say so.
+	@Test
+	void aTypeImplementingNoComparableRefusesATreeSetInTheOraclesWords() throws Exception {
+		assertBothEqual("""
+				(deftype T1 [a])
+				(deftype T2 [a] Object (toString [_] "custom"))
+				(deftype T3 [a] Runnable (run [_] nil))
+				(println (try (java.util.TreeSet. [(T1. 1) (T1. 2)]) (catch ClassCastException e (.getMessage e))))
+				(println (try (java.util.TreeSet. [(T2. 1) (T2. 2)]) (catch ClassCastException e (.getMessage e))))
+				(println (try (java.util.TreeSet. [(T3. 1)]) (catch ClassCastException e (.getMessage e))))
+				""", """
+				class user.T1 cannot be cast to class java.lang.Comparable
+				class user.T2 cannot be cast to class java.lang.Comparable
+				class user.T3 cannot be cast to class java.lang.Comparable
+				""");
+	}
+
+	// Oracle (clj 1.12.6, measured 2026-10-09): a keyword hashes as Keyword.hashCode and
+	// a
+	// symbol as Symbol.hashCode (Util.hashCombine of the name's and the namespace's
+	// String hashCode, a keyword 0x9e3779b9 more), so a host HashMap or HashSet of them
+	// iterates in the oracle's order, and they sort as their compareTo: no namespace
+	// first, then by namespace, then by name. Before, measured 2026-10-09 on the
+	// interpreter and the JVM (a handle hashing and ordering by its spelling): "{:j=10,
+	// :a=1, :b=2, ...}", "[:beta, :alpha, ...]", [:a/b :m :z].
+	@Test
+	void aKeywordOrSymbolHashesAndSortsInJavaAsTheOraclesDo() throws Exception {
+		assertBothEqual("(prn (str (java.util.HashMap. {:a 1 :b 2 :c 3 :d 4 :e 5 :f 6 :g 7 :h 8 :i 9 :j 10})))",
+				"\"{:d=4, :g=7, :f=6, :b=2, :c=3, :a=1, :h=8, :i=9, :j=10, :e=5}\"\n");
+		assertBothEqual(
+				"(prn (str (java.util.HashSet. [:alpha :beta :gamma :delta :epsilon :zeta]))"
+						+ " (str (java.util.HashSet. ['alpha 'beta 'gamma 'delta 'epsilon 'zeta])))",
+				"\"[:alpha, :delta, :beta, :gamma, :zeta, :epsilon]\" \"[alpha, beta, gamma, epsilon, zeta, delta]\"\n");
+		assertBothEqual("(prn (str (java.util.HashSet. [:a/x :b/y 'c/z 'd :e])))", "\"[d, :a/x, :b/y, c/z, :e]\"\n");
+		assertBothEqual("(prn (vec (java.util.TreeSet. [:z :a/b :m :a/a])) (vec (java.util.TreeSet. ['b/x 'y 'a/z])))",
+				"[:m :z :a/a :a/b] [y a/z b/x]\n");
+	}
+
+	// Oracle (clj 1.12.6, measured 2026-10-09): hash of a host object is Util.hasheq --
+	// a BigDecimal's of its value stripped of trailing zeros (zero's 0, though the
+	// JVM's numberp takes one), anything else's own hashCode --, and hash-combine and
+	// .hashCode read its hashCode; a Clojure collection's .hashCode is its Java one.
+	@Test
+	void aHostObjectHashesAsTheHostDoes() throws Exception {
+		assertBothEqual("(println (hash (java.util.ArrayList. [1 2])) (hash (java.math.BigDecimal. \"1.50\"))"
+				+ " (hash (java.math.BigDecimal. \"0.00\")) (.hashCode (java.math.BigDecimal. \"1.50\"))"
+				+ " (hash-combine 0 (java.math.BigDecimal. \"1.50\")) (hash-combine 0 (java.util.ArrayList. [1 2]))"
+				+ " (hash (java.util.HashMap. {\"a\" 1})) (hash [(java.util.ArrayList. [3])])"
+				+ " (.hashCode (java.util.ArrayList. [1 2])) (.hashCode [1 2]))",
+				"994 466 0 4652 -1640526875 -1640530533 96 1271738775 994 994\n");
+		assertBothEqual("(let [o (java.lang.Object.)] (println (= (hash o) (hash o) (.hashCode o) (.hashCode o))))",
+				"true\n");
+	}
+
+	@Test
+	void lockingExcludesTheOtherThreadsOnTheInterpreterAndTheJvm() throws Exception {
+		// four threads each run 2000 read-yield-write steps on one atom: without the
+		// lock the steps interleave and updates are lost (2389 of 8000, measured
+		// 2026-10-08); under it every step lands, like the oracle's monitor
+		assertBothEqual("""
+				(def lock (atom 0))
+				(def plain (atom 0))
+				(defn work []
+				  (dotimes [_ 2000]
+				    (locking lock (let [v @plain] (Thread/yield) (reset! plain (inc v))))))
+				(def ts (doall (repeatedly 4 #(doto (Thread. work) (.start)))))
+				(doseq [t ts] (.join t))
+				(println @plain)
+				""", "8000\n");
+	}
+
+	@Test
+	void identicalOnHostObjectsIsIdentity() throws Exception {
+		assertBothEqual("""
+				(def f1 (java.io.File. "x"))
+				(def f2 (java.io.File. "x"))
+				(def p (proxy [Object] [] (equals [o] true) (toString [] "P")))
+				(def l1 (java.util.ArrayList.))
+				(def l2 (java.util.ArrayList.))
+				(println (identical? f1 f2) (= f1 f2) (identical? f1 f1))
+				(println (identical? p true) (identical? p 1) (identical? true p))
+				(println (str p))
+				(println (identical? l1 l2) (= l1 l2))
+				(println (contains? #{f1} f2) (get {f1 1} f2) (count (distinct [f1 f2])))
+				""", "false true true\nfalse false false\nP\nfalse true\ntrue 1 1\n");
+	}
+
+	// Oracle (clj 1.12.6): = asks the left operand, so a proxy whose equals answers
+	// true is = to a number, a string, nil, true and a character, while none of them
+	// is = to it; a vector is compared as a collection, never handed to equals. Before,
+	// measured 2026-10-04: the interpreter answered false for the first row, the JVM
+	// true for (= p [1]).
+	@Test
+	void equalsOfAHostObjectAndAValueAsksTheLeftOperand() throws Exception {
+		assertBothEqual("""
+				(def p (proxy [Object] [] (equals [o] true) (toString [] "P")))
+				(println (= p 1) (= p "s") (= p nil) (= p true) (= p \\a) (= p 1.5))
+				(println (= 1 p) (= "s" p) (= nil p) (= p [1]))
+				""", "true true true true true true\nfalse false false false\n");
+	}
+
+	// Oracle (clj 1.12.6, 2026-10-04): Util.equiv sends a pair holding a Clojure
+	// collection to its equiv, which compares a java.util.List element by element with a
+	// sequential, a Map entry by entry with a map and a Set member by member with a set,
+	// either operand first; a host collection inside a set is still found by its hash
+	// (the last answer of the sixth row). Before, every row answered false.
+	@Test
+	void aHostCollectionIsEqualToAClojureCollectionOfItsKind() throws Exception {
+		assertBothEqual("""
+				(def al (java.util.ArrayList. [1 2]))
+				(def hm (doto (java.util.HashMap.) (.put "a" 1) (.put "b" (java.util.ArrayList. [1 2]))))
+				(def hs (doto (java.util.HashSet.) (.add 1) (.add "x")))
+				(defrecord R [a])
+				(println (= al [1 2]) (= [1 2] al) (= al '(1 2)) (= '(1 2) al) (= al (map inc [0 1]))
+				         (= (map inc [0 1]) al) (= al (range 1 3)))
+				(println (= al [1 3]) (= al [1 2 3]) (= al []) (= (java.util.ArrayList.) [])
+				         (= (java.util.ArrayList.) ()) (= al (iterate inc 1)) (= (iterate inc 1) al))
+				(println (= hm {"a" 1 "b" [1 2]}) (= {"a" 1 "b" [1 2]} hm) (= hm {"a" 1 "b" '(1 2)})
+				         (= hm {"a" 1}) (= hm {"a" 2 "b" [1 2]}) (= hm {"a" 1 "c" [1 2]}))
+				(println (= hs #{1 "x"}) (= #{1 "x"} hs) (= hs #{1}) (= hs #{1 "y"}) (= hs [1 "x"])
+				         (= al #{1 2}) (= hm [1 2]) (= al {1 2}))
+				(println (= hm (sorted-map "a" 1 "b" [1 2])) (= (sorted-map "a" 1 "b" [1 2]) hm)
+				         (= (doto (java.util.HashSet.) (.add 1) (.add 2)) (sorted-set 1 2))
+				         (= (sorted-set 2 1) (doto (java.util.HashSet.) (.add 1) (.add 2))))
+				(println (= (java.util.ArrayList. [al [3]]) [[1 2] [3]]) (= [[1 2] [3]] (java.util.ArrayList. [al [3]]))
+				         (= [al] [[1 2]]) (= [[1 2]] [al]) (= {:k al} {:k [1 2]}) (= #{al} #{[1 2]}))
+				(println (not= al [1 2]) (= al [1 2] '(1 2)) (= al (java.util.ArrayList. [1 2])) (apply = [al [1 2]])
+				         (= hm (->R 1)) (= (->R 1) hm))
+				(println (= (java.util.LinkedList. [1 2]) [1 2]) (= (java.util.ArrayList. [1.0 2]) [1 2])
+				         (= (doto (java.util.TreeMap.) (.put "a" 1)) {"a" 1}) (= al (vector-of :long 1 2))
+				         (= al 1) (= 1 al) (= al "x"))
+				""", """
+				true true true true true true true
+				false false false true true false false
+				true true true false false false
+				true true false false false false false false
+				true true true true
+				true true true true true false
+				false true true true false false
+				true false true true false false false
+				""");
+	}
+
+	// Oracle (clj 1.12.6, 2026-10-04): RT.seq takes any Iterable (a Map through its
+	// entries, a CharSequence through its characters), RT.count a Collection, a Map or a
+	// CharSequence, RT.get a Map, RT.contains a Map or a Set, each by the host's own
+	// lookup (a key a Java method cannot take is in no host map); contains? of a List
+	// and count of an Iterable that is no Collection are refused. Before, every seq verb
+	// signalled "seq needs a collection" and count a LENGTH type error.
+	@Test
+	void aHostCollectionSeqsCountsAndLooksUpLikeAClojureOne() throws Exception {
+		assertBothEqual(
+				"""
+						(def al (java.util.ArrayList. [1 2]))
+						(def hm (doto (java.util.HashMap.) (.put "a" 1)))
+						(def tm (doto (java.util.TreeMap.) (.put "a" 1) (.put "b" (java.util.ArrayList. [3]))))
+						(def ts (doto (java.util.TreeSet.) (.add 3) (.add 1)))
+						(def ea (java.util.ArrayList.))
+						(def path (.toPath (java.io.File. "a/b")))
+						(println (seq al) (vec al) (first al) (rest al) (next al) (last al) (nth al 1) (seq ea))
+						(println (map inc al) (filter odd? al) (reduce + al) (reduce + 10 al) (apply + al) (mapv inc al))
+						(println (into {} hm) (into [] al) (into #{} ts) (seq ts) (sort ts) (set al) (frequencies al))
+						(println (count al) (count hm) (count ts) (count ea) (count (String. "abc")))
+						(println (empty? al) (empty? ea) (empty? hm) (empty? (java.util.HashMap.)) (seq (java.util.HashMap.)))
+						(println (get hm "a") (get hm "z") (get hm "z" :none) (vec (get tm "b")) (get al 0) (get al 0 :d))
+						(println (contains? hm "a") (contains? hm "z") (contains? ts 3) (contains? ts 2))
+						(println (keys tm) (first (vals tm)) (map key tm) (for [[k v] hm] (str k v)) (= (vec (second (vals tm))) [3]))
+						(println (seq (String. "ab")) (map str path) (map count [al hm]))
+						(println (let [[a b] al] (+ a b)) (zipmap al [:x :y]) (clojure.string/join "," al) (concat al [3]))
+						(println (try (contains? al 0) (catch Exception e (.getMessage e))))
+						(println (try (count path) (catch Exception e (.getMessage e))))
+						(def vk (doto (java.util.HashMap.) (.put [1 2] "v") (.put nil 0) (.put \\c 1.5)))
+						(def hs (doto (java.util.HashSet.) (.add [1]) (.add "x")))
+						(println (get vk [1 2]) (get vk '(1 2)) (get vk nil) (get vk \\c) (get vk :a :none) (get vk {:a 1})
+						         (contains? vk {:a 1}) (contains? vk nil))
+						(println (contains? hs [1]) (contains? hs "x") (contains? hs :x) (contains? hs #{1}) (get hs "x"))
+						""",
+				"""
+						(1 2) [1 2] 1 (2) (2) 2 2 nil
+						(2 3) (1) 3 13 3 [2 3]
+						{a 1} [1 2] #{1 3} (1 3) (1 3) #{1 2} {1 1, 2 1}
+						2 1 2 0 3
+						false true false true nil
+						1 nil :none [3] nil :d
+						true false true false
+						(a b) 1 (a b) (a1) true
+						(a b) (a b) (2 1)
+						3 {1 :x, 2 :y} 1,2 (1 2 3)
+						contains? not supported on type: java.util.ArrayList
+						count not supported on this type: UnixPath
+						v v 0 1.5 :none nil false true
+						true true false false nil
+						""");
+	}
+
+	// Oracle (clj 1.12.6): deref of a host Future is its get (a failure surfaces as the
+	// ExecutionException, a cancelled one as CancellationException), and the
+	// three-argument deref is get with a timeout in milliseconds answering the third
+	// argument on TimeoutException; anything that is no Future refuses the timed form
+	// with a ClassCastException (nil a NullPointerException), after both extra
+	// arguments ran.
+	@Test
+	void derefOfAHostFutureIsItsGetWithAnOptionalTimeout() throws Exception {
+		assertBothEqual(
+				"""
+						(import '(java.util.concurrent CompletableFuture ExecutionException CancellationException FutureTask Callable))
+						(def done (CompletableFuture/completedFuture 1))
+						(def failed (CompletableFuture/failedFuture (Exception. "x")))
+						(def pending (CompletableFuture.))
+						(def cancelled (doto (CompletableFuture.) (.cancel true)))
+						(defn kind [f] (try (f) (catch ClassCastException e :cce) (catch NullPointerException e :npe)))
+						(println @done (deref done) (deref done 10 :timeout) (deref pending 10 :timeout) (deref (CompletableFuture/completedFuture nil) 10 :t))
+						(println (try @failed (catch ExecutionException e (.getMessage (.getCause e)))) (try (deref failed 10 :t) (catch ExecutionException e (.getMessage (.getCause e)))))
+						(println (try @cancelled (catch CancellationException e :cancelled)) (try (deref cancelled 10 :t) (catch CancellationException e :cancelled)))
+						(println (map deref [done (CompletableFuture/completedFuture 2)]) (let [ft (FutureTask. (proxy [Callable] [] (call [] 7)))] (.run ft) [@ft (deref ft 1 :t)]))
+						(println [(kind #(deref (atom 1) 10 :t)) (kind #(deref (volatile! 1) 10 :t)) (kind #(deref (java.util.ArrayList.) 10 :t)) (kind #(deref (java.util.ArrayList.))) (kind #(deref nil 10 :t)) (kind #(deref 1 10 :t)) (kind #(deref done :a :t))])
+						(println (deref done 10.7 :t) (deref pending 0 :t) (deref pending -5 :t))
+						(def n (atom 0))
+						(println (deref done (do (swap! n inc) 10) (do (swap! n inc) :t)) @n (kind #(deref (atom 5) (do (swap! n inc) 10) (do (swap! n inc) :t))) @n)
+						""",
+				"""
+						1 1 1 :timeout nil
+						x x
+						:cancelled :cancelled
+						(1 2) [7 7]
+						[:cce :cce :cce :cce :npe :cce :cce]
+						1 :t :t
+						1 2 :cce 4
+						""");
+	}
+
+	// Oracle (clj 1.12.6): a host Future is a future for future?, future-done?,
+	// future-cancelled? and future-cancel (isDone, isCancelled, cancel(true)); a value
+	// that
+	// is no Future is a ClassCastException (nil a NullPointerException) for the three
+	// verbs, and realized? of a host Future a ClassCastException.
+	@Test
+	void theFuturePredicatesReadAHostFuture() throws Exception {
+		assertBothEqual(
+				"""
+						(import '(java.util.concurrent CompletableFuture FutureTask Callable))
+						(def done (CompletableFuture/completedFuture 1))
+						(def pending (CompletableFuture.))
+						(def cancelled (doto (CompletableFuture.) (.cancel true)))
+						(defn kind [f] (try (f) (catch ClassCastException e :cce) (catch NullPointerException e :npe)))
+						(println [(future? done) (future? pending) (future? (FutureTask. (proxy [Callable] [] (call [] 1)))) (future? 1) (future? nil) (future? (atom 1)) (future? [done]) (future? "s")])
+						(println [(future-done? done) (future-done? pending) (future-done? cancelled) (future-cancelled? done) (future-cancelled? pending) (future-cancelled? cancelled)])
+						(println [(kind #(future-done? 1)) (kind #(future-done? nil)) (kind #(future-done? (atom 1))) (kind #(future-cancelled? "s")) (kind #(future-cancelled? nil)) (kind #(future-cancel 1)) (kind #(future-cancel nil)) (kind #(future-cancel [done])) (kind #(realized? done))])
+						(println (future-cancel done) (future-done? done) (future-cancelled? done))
+						(println (future-cancel pending) (future-done? pending) (future-cancelled? pending) (future-cancel pending) (future-cancel cancelled))
+						(println (map future? [done 1]) (map future-done? [done pending]) (map future-cancelled? [done]) (apply future-done? [done]) (map future-cancel [(CompletableFuture.)]))
+						(def n (atom 0))
+						(println (future? (do (swap! n inc) done)) (future-done? (do (swap! n inc) done)) (future-cancel (CompletableFuture.)) @n)
+						(println (if (future? done) @done :no) (if (future? 5) @5 :no))
+						""",
+				"""
+						[true true true false false false false false]
+						[true false true false false true]
+						[:cce :npe :cce :cce :npe :cce :npe :cce :cce]
+						false true false
+						true true true true true
+						(true false) (true true) (false) true (true)
+						true true true 2
+						1 :no
+						""");
+	}
+
+	// Oracle (clj 1.12.6): future/future-call run the body on another thread,
+	// conveying the creation-time bindings; deref blocks for the value and a
+	// failure surfaces as ExecutionException over the body's condition, a
+	// cancelled one as CancellationException; a promise blocks until delivered
+	// (deliver answers the promise and keeps the first value), and the timed
+	// deref answers its default while neither has settled.
+	@Test
+	void futuresPromisesAndDeliverMatchTheOracle() throws Exception {
+		assertBothEqual(
+				"""
+						(def ^:dynamic *g35-x* 1)
+						(println @(future (do 1 2)))
+						(binding [*g35-x* 5] (println @(future *g35-x*)))
+						(println @(future-call (fn [] 11)) (map deref [(future 1) (future 2)]))
+						(println @(future))
+						(println (try @(future-call 1) (catch java.util.concurrent.ExecutionException e :exec)))
+						(let [p (promise)]
+						  (println [(future? p) (realized? p)])
+						  (deliver p 7)
+						  (println [(realized? p) @p])
+						  (deliver p 8)
+						  (println @p))
+						(let [p (promise)] (println (deref p 100 :dflt)))
+						(let [p (promise)] (deliver p :v) (println [(deref p 100 :dflt) (deref p 0 :dflt2)]))
+						(let [p (promise)] (println (deref p -5 :d)))
+						(println (deref (future 5) 1000 :d) (deref (future 5) 1000.9 :d))
+						(let [p (promise)] (future (do (Thread/sleep 100) (deliver p :late))) (println (deref p 5000 :early)))
+						(let [f (future 1)] (println [@f (future? f) (future-done? f) (future-cancelled? f) (future-cancel f) (realized? f)]))
+						(let [f (future 1)] (println [@f (future-cancel f) @f]))
+						(let [p (promise) f (future @p)]
+						  (println [(future-cancel f) (future-cancelled? f) (realized? f)])
+						  (println (try @f (catch java.util.concurrent.CancellationException e :cancelled)))
+						  (deliver p 9)
+						  (println (future-done? f)))
+						(let [f (future (throw (ex-info "boom" {:k 1})))]
+						  (println (try @f (catch java.util.concurrent.ExecutionException e [(ex-message (ex-cause e)) (ex-data (ex-cause e))]))))
+						(let [ps (repeatedly 2 promise)] (deliver (first ps) :a) (deliver (second ps) :b) (println (map deref ps)))
+						(let [d deliver p (promise)] (d p 5) (println @p))
+						(println (map deref (map future-call [(fn [] 21)])) @(apply future-call [(fn [] 22)]))
+						(println [(try (deliver 1 2) (catch ClassCastException e :cce)) (try (deliver nil 1) (catch NullPointerException e :npe))])
+						""",
+				"""
+						2
+						5
+						11 (1 2)
+						nil
+						:exec
+						[false false]
+						[true 7]
+						7
+						:dflt
+						[:v :v]
+						:d
+						5 5
+						:late
+						[1 true true false false true]
+						[1 false 1]
+						[true true true]
+						:cancelled
+						true
+						[boom {:k 1}]
+						(:a :b)
+						5
+						(21) 22
+						[:cce :npe]
+						""");
+	}
+
+	// Oracle (clj 1.12.6): pmap runs one future per element and pvalues one per
+	// expression, so two branches that each wait for the other both finish; the
+	// values keep order and print like the sequential forms (realized? stays
+	// false for pmap, like the oracle's lazy seq), and a failure surfaces at
+	// the deref in order.
+	@Test
+	void pmapAndPvaluesRunBranchesConcurrentlyInOrder() throws Exception {
+		assertBothEqual(
+				"""
+						(println (pmap inc [1 2 3]))
+						(println (pmap + [1 2] [10 20 30]))
+						(println (pmap inc nil))
+						(println (pmap inc []))
+						(def ^:dynamic *g36-pm* 1)
+						(binding [*g36-pm* 20] (println (pmap (fn [x] (+ x *g36-pm*)) [1 2])))
+						(println (take 3 (pmap inc (iterate inc 1))))
+						(println (realized? (pmap inc [1 2])))
+						(println (try (doall (pmap (fn [x] (if (= x 2) (throw (ex-info "pmap-boom" {})) x)) [1 2 3])) (catch Exception e (ex-message (ex-cause e)))))
+						(let [order (atom [])]
+						  (println (pvalues (do (swap! order conj :a) 1) (do (swap! order conj :b) 2)))
+						  (println (sort @order)))
+						(println (pvalues 1 (+ 1 2) "x"))
+						(println (pvalues))
+						(println (seq? (pvalues 1 2)) (= (pvalues 1 2) '(1 2)))
+						(println (with-local-vars [a 5] (pvalues @a @a @a)))
+						(def ^:dynamic *g36-pv* 1)
+						(binding [*g36-pv* 7] (println (pvalues *g36-pv* *g36-pv*)))
+						(println ((fn [f] (f inc [1 2])) pmap))
+						""",
+				"""
+						(2 3 4)
+						(11 22)
+						nil
+						nil
+						(21 22)
+						(2 3 4)
+						false
+						pmap-boom
+						(1 2)
+						(:a :b)
+						(1 3 x)
+						nil
+						true true
+						(5 5 5)
+						(7 7)
+						(2 3)
+						""");
+		// Each branch counts a two-party latch down and then waits for the other: run
+		// in order, the first wait could only time out and answer false. The minute is
+		// a hang guard, not a measurement. Not on the WASM legs, which stay sequential.
+		String overlap = """
+				(def g36-await
+				  (fn [l] (.countDown l) (.await l 60 java.util.concurrent.TimeUnit/SECONDS)))
+				(let [l (java.util.concurrent.CountDownLatch. 2)]
+				  (println (doall (pmap (fn [x] (g36-await l)) [1 2]))))
+				(let [l (java.util.concurrent.CountDownLatch. 2)]
+				  (println (pvalues (g36-await l) (g36-await l))))
+				""";
+		assertThat(interpret(overlap)).as("on the interpreter").isEqualTo("(true true)\n(true true)\n");
+		assertThat(runOnJvm(overlap)).as("on the JVM").isEqualTo("(true true)\n(true true)\n");
+	}
+
+	// Oracle (clj 1.12.6, 2026-10-04): print-method under *print-readably* writes a
+	// RandomAccess List as a vector, any other List as a list, a Map as a map and a Set
+	// as a set, each member readably and under *print-length* / *print-level*; another
+	// Collection (ArrayDeque, a Map's values) and any host object not readably is
+	// print-object (here the #<java C> deviation, without hash and toString). The
+	// members follow the host's own order. Before, every host collection printed as
+	// #<java C>.
+	@Test
+	void aHostCollectionPrintsReadablyLikeItsClojureKind() throws Exception {
+		assertBothEqual(
+				"""
+						(def al (java.util.ArrayList. [1 2]))
+						(def ll (java.util.LinkedList. [1 "s"]))
+						(def hm (doto (java.util.HashMap.) (.put "a" 1)))
+						(def hs (doto (java.util.HashSet.) (.add "x")))
+						(def tm (doto (java.util.TreeMap.) (.put "b" al) (.put "a" nil)))
+						(def ts (java.util.TreeSet. [3 1 2]))
+						(def nested (java.util.ArrayList. [al ll hm hs "s" \\c nil true 1.5]))
+						(prn al ll hm hs tm ts)
+						(prn nested (java.util.Vector. [1 "q"]) (java.util.Collections/singletonList 7) (java.util.Collections/unmodifiableList ll) (.keySet tm))
+						(prn (java.util.ArrayList.) (java.util.LinkedList.) (java.util.HashMap.) (java.util.HashSet.))
+						(println (pr-str al) (pr-str [al hm]) (str [ll]) (str {:k hs}) (str al) (str hm))
+						(println (prn-str tm) (with-out-str (pr ts)) (pr-str (list al)))
+						(binding [*print-length* 1] (prn al ll tm ts [al]))
+						(binding [*print-level* 1] (prn nested [al] tm))
+						(println (pr-str (java.util.ArrayDeque. [1 2])) (str [(.values tm)]))
+						(println al [hm])
+						(binding [*print-readably* false] (prn ll))
+						(def big (java.util.TreeSet. (map #(* 7 %) (range 30))))
+						(prn big (java.util.ArrayList. [(doto (java.util.HashMap.) (.put nil 1)) (doto (java.util.HashSet.) (.add nil))]))
+						(binding [*print-level* 0] (prn (java.util.LinkedList.) (java.util.ArrayList.)))
+						(binding [*print-length* 0] (prn (java.util.LinkedList.) (java.util.LinkedList. [1])))
+						""",
+				"""
+						[1 2] (1 "s") {"a" 1} #{"x"} {"a" nil, "b" [1 2]} #{1 2 3}
+						[[1 2] (1 "s") {"a" 1} #{"x"} "s" \\c nil true 1.5] [1 "q"] [7] (1 "s") #{"a" "b"}
+						[] () {} #{}
+						[1 2] [[1 2] {"a" 1}] [(1 "s")] {:k #{"x"}} [1, 2] {a=1}
+						{"a" nil, "b" [1 2]}
+						 #{1 2 3} ([1 2])
+						[1 ...] (1 ...) {"a" nil, ...} #{1 ...} [[1 ...]]
+						[# # # # "s" \\c nil true 1.5] [#] {"a" nil, "b" #}
+						#<java java.util.ArrayDeque> [#<java java.util.TreeMap$Values>]
+						#<java java.util.ArrayList> [#<java java.util.HashMap>]
+						#<java java.util.LinkedList>
+						#{0 7 14 21 28 35 42 49 56 63 70 77 84 91 98 105 112 119 126 133 140 147 154 161 168 175 182 189 196 203} [{nil 1} #{nil}]
+						# #
+						() (...)
+						""");
+	}
+
+	// Oracle (clj 1.12.6, 2026-10-04): RT.find (and select-keys over it) takes a Map by
+	// its own containsKey and refuses any other host object, kv-reduce reads a Map's
+	// entries (reduce-kv, update-vals, update-keys, map-invert), and a map's cons takes
+	// any seq of Map.Entry (conj, merge, merge-with, into). Before, each signalled.
+	@Test
+	void aHostMapIsAMapToTheMapVerbs() throws Exception {
+		assertBothEqual(
+				"""
+						(require 'clojure.set)
+						(def hm (doto (java.util.TreeMap.) (.put "a" 1) (.put "b" 2)))
+						(def al (java.util.ArrayList. [1 2]))
+						(def hh (java.util.HashMap. hm))
+						(println (find hm "a") (find hm "z") (apply find [hm "b"]) (select-keys hm ["a" "z"]) (select-keys hm []) (apply select-keys [hm ["b"]]))
+						(println (reduce-kv (fn [a k v] (+ a v)) 0 hm) (reduce-kv (fn [a k v] (conj a k)) [] hm) (apply reduce-kv [(fn [a k v] (+ a v)) 0 hm]) (update-vals hm inc) (update-keys hm keyword))
+						(println (merge {} hm) (merge {"c" 3} hm nil) (conj {} hm) (conj {"a" 0} hm) (apply merge [{} hm]) (apply conj [{} hm]) (into {} hm))
+						(println (merge-with + {"a" 10} hm) (apply merge-with + [{"a" 10} hm]) (clojure.set/map-invert hm) (clojure.set/rename-keys {"a" 5} hm))
+						(println (merge (sorted-map "z" 0) hm) (conj (sorted-map "z" 0) hm) (merge-with + (sorted-map "a" 10) hm))
+						(println (conj {} (.entrySet hm)) (reduce-kv (fn [a k v] (+ a v)) 0 (.entrySet hm)) (conj {} (java.util.ArrayList.)) (find hh :a) (select-keys hh [:a {:b 1} "a"]))
+						(println (try (find al 0) (catch Exception e (.getMessage e))))
+						(println (try (select-keys al [0]) (catch Exception e (.getMessage e))))
+						""",
+				"""
+						[a 1] nil [b 2] {a 1} {} {b 2}
+						3 [a b] 3 {a 2, b 3} {:a 1, :b 2}
+						{a 1, b 2} {c 3, a 1, b 2} {a 1, b 2} {a 1, b 2} {a 1, b 2} {a 1, b 2} {a 1, b 2}
+						{a 11, b 2} {a 11, b 2} {1 a, 2 b} {1 5}
+						{a 1, b 2, z 0} {a 1, b 2, z 0} {a 11, b 2}
+						{a 1, b 2} 3 {} nil {a 1}
+						find not supported on type: java.util.ArrayList
+						find not supported on type: java.util.ArrayList
+						""");
+	}
+
+	// Oracle: a protected method overrides -- paintComponent records -- while an
+	// unnamed one is inherited.
+	@Test
+	void proxyOverAClassOverridesProtectedMethods() throws Exception {
+		assertBothEqual("""
+				(ns paintns (:import (javax.swing JPanel)))
+				(def seen (atom []))
+				(def p (proxy [JPanel] [] (paintComponent [g] (swap! seen conj :painted))))
+				(.paintComponent p nil)
+				(println @seen)
+				(println (.isOpaque p))
+				""", "[:painted]\ntrue\n");
+	}
+
+	// A class with interfaces over a constructor without
+	// arguments, this with a type hint, and an inherited method beside the bodies.
+	@Test
+	void proxyOverAClassWithInterfacesRunsItsBodies() throws Exception {
+		assertBothEqual("""
+				(ns panelns (:import (javax.swing JPanel) (java.awt.event ActionListener KeyListener)))
+				(def p (proxy [JPanel ActionListener KeyListener] []
+				         (actionPerformed [e] (.repaint ^JPanel this))
+				         (keyPressed [e] nil)
+				         (keyReleased [e] nil)
+				         (keyTyped [e] nil)
+				         (toString [] "panel!")))
+				(println (.toString p))
+				(.actionPerformed p nil)
+				(println :repaint-ok)
+				(println (.isOpaque p))
+				""", "panel!\n:repaint-ok\ntrue\n");
+	}
+
+	// A SAX handler proxy receives parser callbacks.
+	@Test
+	void proxyOverAClassHandlesSaxCallbacks() throws Exception {
+		java.nio.file.Path fixture = workDir.resolve("sax.xml");
+		java.nio.file.Files.writeString(fixture, "<a><b/></a>");
+		String path = "\"" + fixture.toString().replace("\\", "\\\\") + "\"";
+		assertBothEqual(
+				"(ns saxns (:import (org.xml.sax.helpers DefaultHandler)))" + "(def seen (atom []))"
+						+ "(def h (proxy [DefaultHandler] []"
+						+ " (startElement [uri local qname attrs] (swap! seen conj qname))"
+						+ " (endElement [uri local qname] (swap! seen conj (str \"/\" qname)))))"
+						+ "(let [f (javax.xml.parsers.SAXParserFactory/newInstance)]"
+						+ " (.parse (.newSAXParser f) (java.io.File. " + path + ") h))" + "(println @seen)",
+				"[a b /b /a]\n");
+	}
+
+	// An unnamed abstract method throws with the method's name when it is called; a
+	// final superclass, an unknown method, a second class, a duplicate method, an
+	// argument vector that is no vector and a proxy-super outside a method are
+	// refused by name.
+	@Test
+	void proxyOverAClassRefusals() throws Exception {
+		assertBothEqual("""
+				(ns uoens (:import (java.util AbstractList)) (:require [clojure.string :as s]))
+				(def a (proxy [AbstractList] [] (size [] 0)))
+				(println (.size a))
+				(println (try (.get a 0)
+				           (catch UnsupportedOperationException e [(class e) (ex-message e)])))
+				""", "0\n[java.lang.UnsupportedOperationException get]\n");
+		assertThatThrownBy(
+				() -> interpret("(ns proxyns (:import (java.lang String))) (proxy [String] [] (toString [] \"x\"))"))
+			.isInstanceOf(Exception.class)
+			.hasMessageContaining("proxy cannot extend final class java.lang.String");
+		assertThatThrownBy(
+				() -> runOnJvm("(ns proxyns (:import (java.lang String))) (proxy [String] [] (toString [] \"x\"))"))
+			.isInstanceOf(Exception.class)
+			.hasMessageContaining("proxy cannot extend final class java.lang.String");
+		assertThatThrownBy(() -> interpret("(proxy [java.io.File] [\"x\"] (nope [] 1))")).isInstanceOf(Exception.class)
+			.hasMessageContaining("has no method nope");
+		assertThatThrownBy(() -> runOnJvm("(proxy [java.io.File] [\"x\"] (nope [] 1))")).isInstanceOf(Exception.class)
+			.hasStackTraceContaining("java:subclass java.io.File is left to run time");
+		assertThatThrownBy(() -> interpret("(proxy [java.io.File java.lang.String] [] (toString [] \"x\"))"))
+			.isInstanceOf(Exception.class)
+			.hasMessageContaining("is a class, not an interface");
+		assertThatThrownBy(() -> interpret("(proxy [java.io.File] [\"x\"] (getName [] 1) (getName [] 2))"))
+			.isInstanceOf(Exception.class)
+			.hasMessageContaining("proxy defines method getName twice");
+		assertThatThrownBy(() -> interpret("(proxy [java.io.File] \"x\" (getName [] 1))")).isInstanceOf(Exception.class)
+			.hasMessageContaining("proxy takes an argument vector, not");
+		assertThatThrownBy(() -> interpret("(proxy-super toString)")).isInstanceOf(Exception.class)
+			.hasMessageContaining("proxy-super outside a proxy method");
+	}
+
+	@Test
+	void stringSplitStaysLiteral() throws Exception {
+		assertBothEqual("(println (.split \"aaa\" \".\"))", "[aaa]\n");
+		assertBothEqual("(println (.split \"a,b\" \",\"))", "[a b]\n");
+	}
+
+	@Test
+	void filesRoundTripThroughSpitSlurpAndLineSeq() throws Exception {
+		// File IO lives here with the interop cases for the interpreter and the
+		// JVM; the wasm legs (a --dir preopen) live in ClojureWasmFileIoTest and
+		// the un-preopened refusal in ClojureWasmFileRefusalTest.
+		String path = "\"" + workDir.resolve("io.txt").toString().replace("\\", "\\\\") + "\"";
+		assertBothEqual("(spit " + path + " \"a\\nb\") (println (slurp " + path + "))", "a\nb\n");
+		assertBothEqual("(spit " + path + " \"a\\nb\") (println (line-seq " + path + "))", "(a b)\n");
+		assertBothEqual(
+				"(spit " + path + " \"a\\nb\") (spit " + path + " \"c\" :append true) (println (slurp " + path + "))",
+				"a\nbc\n");
+		assertBothEqual("(spit " + path + " \"a\\nb\") (println (map slurp [" + path + "]))", "(a\nb)\n");
+	}
+
+	@Test
+	void spitWritesStrSpellingOfNonStrings() throws Exception {
+		// spit writes (str content): a list, vector, map, number and record
+		// go through the str spelling, nil writes nothing, a string is written
+		// as before; :append included. The wasm legs (a --dir preopen) live in
+		// ClojureWasmFileIoTest.
+		String path = "\"" + workDir.resolve("spit.txt").toString().replace("\\", "\\\\") + "\"";
+		assertBothEqual("(spit " + path + " '(1 2)) (println (slurp " + path + "))", "(1 2)\n");
+		assertBothEqual("(spit " + path + " [1 2]) (println (slurp " + path + "))", "[1 2]\n");
+		assertBothEqual("(spit " + path + " {:a 1}) (println (slurp " + path + "))", "{:a 1}\n");
+		assertBothEqual("(spit " + path + " 42) (println (slurp " + path + "))", "42\n");
+		assertBothEqual("(spit " + path + " nil) (println (pr-str (slurp " + path + ")))", "\"\"\n");
+		assertBothEqual(
+				"(spit " + path + " \"s\") (spit " + path + " '(9) :append true) (println (slurp " + path + "))",
+				"s(9)\n");
+		assertBothEqual("(defrecord SpitR [a b]) (spit " + path + " (->SpitR 1 2)) (println (slurp " + path + "))",
+				"#user.SpitR{:a 1, :b 2}\n");
+		assertBothEqual("(defrecord SpitS [a b]) (spit " + path + " \"s\") (spit " + path
+				+ " (->SpitS 1 2) :append true)" + " (println (slurp " + path + "))", "s#user.SpitS{:a 1, :b 2}\n");
+	}
+
+	@Test
+	void readTakesBackWhatSpitWrote() throws Exception {
+		// spit a list of records, read it back through a PushbackReader over
+		// clojure.java.io/reader -- answers = to
+		// what was written, like the oracle; read leaves the reader right after the
+		// datum. The wasm legs (a --dir preopen) live in ClojureWasmFileIoTest.
+		String path = "\"" + workDir.resolve("backup.clj").toString().replace("\\", "\\\\") + "\"";
+		String prelude = "(ns backupio (:require [clojure.java.io :refer [reader]]))"
+				+ " (defrecord Message [sender text]) (def msg (->Message \"unit test\" \"test message\"))";
+		assertBothEqual(
+				prelude + " (spit " + path + " (list msg)) (println (slurp " + path + "))"
+						+ " (println (= (read (java.io.PushbackReader. (reader " + path + "))) (list msg)))",
+				"(#backupio.Message{:sender \"unit test\", :text \"test message\"})\ntrue\n");
+		assertBothEqual(prelude + " (spit " + path + " \"[1 2] :k\\nnext line\")"
+				+ " (with-open [r (java.io.PushbackReader. (reader " + path + "))]"
+				+ " (prn (read r) (read r) (.readLine r) (read r false :eof)))", "[1 2] :k \"\" next\n");
+		// a StringReader lowers to a string input stream, so read takes a
+		// PushbackReader over it
+		assertBothEqual("(prn (read (java.io.PushbackReader. (java.io.StringReader. \"1\"))))", "1\n");
+	}
+
+	@Test
+	void filesRoundTripThroughReaderAndLineSeq() throws Exception {
+		// clojure.java.io/reader opens a buffered file-stream reader: line-seq reads
+		// it without closing (with-open owns closing, like the oracle), over the
+		// vendored words fixture. Interpreter and
+		// JVM here; the wasm preopen leg is in ClojureWasmFileIoTest.
+		java.nio.file.Path fixture = workDir.resolve("reader-words.txt");
+		try (java.io.InputStream in = ClojureInteropTest.class.getResourceAsStream("/clojure-words.txt")) {
+			assertThat(in).isNotNull();
+			java.nio.file.Files.copy(in, fixture);
+		}
+		String path = "\"" + fixture.toString().replace("\\", "\\\\") + "\"";
+		String prelude = "(ns wordsio (:require [clojure.java.io :as jio] [clojure.string :as s])) ";
+		// the hangman available-words shape: lowercase-only words survive, like the
+		// oracle
+		assertBothEqual(
+				prelude + "(with-open [r (jio/reader " + path + ")]"
+						+ " (println (apply vector (filter (fn [w] (= w (s/lower-case w))) (line-seq r)))))",
+				"[apple fig cherry kiwi ]\n");
+		// the eager.clj non-blank-lines count over the same fixture
+		assertBothEqual(prelude + "(println (count (remove s/blank? (line-seq (jio/reader " + path + ")))))", "6\n");
+		// the eager.clj transducer shapes: non-blank-lines pours the lines
+		// through (filter non-blank?) into a vector, line-count reduces an eduction
+		String eager = prelude + "(defn non-blank? [s] (not (s/blank? s)))";
+		assertBothEqual(eager + "(with-open [r (jio/reader " + path + ")]"
+				+ " (println (count (into [] (filter non-blank?) (line-seq r)))))", "6\n");
+		assertBothEqual(
+				eager + "(with-open [r (jio/reader " + path + ")]"
+						+ " (println (reduce (fn [cnt el] (inc cnt)) 0 (eduction (filter non-blank?) (line-seq r)))))",
+				"6\n");
+		// the sequences.clj with-open shape over a referred reader, answering the line
+		// count
+		assertBothEqual("(ns refns (:require [clojure.java.io :refer [reader]]))" + "(with-open [r (reader " + path
+				+ ")] (println (count (line-seq r))))", "7\n");
+		// with-open closes: reading after the close signals, like the oracle
+		assertBothEqual(prelude + "(def closed (jio/reader " + path + "))" + "(with-open [r closed] (line-seq r))"
+				+ "(println (try (line-seq closed) (catch Exception e :closed)))", ":closed\n");
+		// slurp closes the file reader it read, like the oracle: a later read is its
+		// IOException, and the with-open's own close does nothing
+		assertBothEqual(
+				prelude + "(with-open [r (jio/reader " + path + ")] (println (count (slurp r)))"
+						+ " (println (try (.read r) (catch java.io.IOException e (ex-message e)))))",
+				"35\nStream closed\n");
+		// class of a file reader names its host class like the printer does
+		assertBothEqual(prelude + "(with-open [r (jio/reader " + path + ")] (println (class r)))",
+				":java.io.BufferedReader\n");
+		// the line-seq path form keeps answering strictly
+		assertBothEqual(prelude + "(println (line-seq " + path + "))", "(apple Banana fig cherry DATE kiwi )\n");
+	}
+
+	@Test
+	void quotedRequiresWireTheBookShapes() throws Exception {
+		// life_without_multi.clj's my-print-vector and sequences.clj's non-blank?
+		// spell their libspecs quoted (the oracle's bare-require spelling): a
+		// quoted :as over .write/str-join, and quoted :refer of reader/blank? over
+		// with-open/line-seq and the vendored fixture. Interpreter and JVM only
+		// (files), like the pins above; the wasm preopen leg is in
+		// ClojureWasmFileIoTest.
+		java.nio.file.Path fixture = workDir.resolve("libspec-words.txt");
+		try (java.io.InputStream in = ClojureInteropTest.class.getResourceAsStream("/clojure-words.txt")) {
+			assertThat(in).isNotNull();
+			java.nio.file.Files.copy(in, fixture);
+		}
+		String path = "\"" + fixture.toString().replace("\\", "\\\\") + "\"";
+		assertBothEqual(
+				"(require '[clojure.string :as s])" + "(defn my-print-vector [ob] (.write *out* \"[\")"
+						+ " (.write *out* (s/join \" \" ob)) (.write *out* \"]\"))" + "(my-print-vector [\"a\" \"b\"])",
+				"[a b]");
+		assertBothEqual("(require '[clojure.java.io :refer [reader]])" + "(require '[clojure.string :refer [blank?]])"
+				+ "(defn non-blank? [line] (not (blank? line)))" + "(with-open [r (reader " + path + ")]"
+				+ " (println (count (filter non-blank? (line-seq r)))))", "6\n");
+	}
+
+	@Test
+	void regexRuntimeSignalsLikeTheOracle() throws Exception {
+		// re-groups past no match, a bad group reference, a dangling $, an
+		// unsupported construct and non-pattern arguments all signal, on both
+		// backends. Value legs run too (re-find/re-seq/re-matches as values).
+		assertBothEqual("(println (map re-pattern [\"a+\" \"b+\"]))", "(#\"a+\" #\"b+\")\n");
+		assertBothEqual("(println (map #(re-find #\"a\" %) [\"xa\" \"y\"]))", "(a nil)\n");
+		assertThatThrownBy(() -> interpret("(println (re-groups (re-matcher #\"a\" \"a\")))"))
+			.isInstanceOf(Exception.class)
+			.hasMessageContaining("No match found");
+		assertThatThrownBy(() -> runOnJvm("(println (re-groups (re-matcher #\"a\" \"a\")))"))
+			.isInstanceOf(Exception.class);
+		assertThatThrownBy(() -> interpret("(println (clojure.string/replace \"a\" #\"a\" \"$\"))"))
+			.isInstanceOf(Exception.class);
+		assertThatThrownBy(() -> runOnJvm("(println (clojure.string/replace \"a\" #\"a\" \"$\"))"))
+			.isInstanceOf(Exception.class);
+		assertThatThrownBy(() -> interpret("(println (re-find \"a+\" \"aaab\"))")).isInstanceOf(Exception.class);
+		assertThatThrownBy(() -> runOnJvm("(println (re-find \"a+\" \"aaab\"))")).isInstanceOf(Exception.class);
+		assertThatThrownBy(() -> interpret("(println (re-find #\"(?c)[a]\" \"ab\"))")).isInstanceOf(Exception.class)
+			.hasMessageContaining("unsupported regex");
+		assertThatThrownBy(() -> runOnJvm("(println (re-find #\"(?c)[a]\" \"ab\"))")).isInstanceOf(Exception.class);
+		assertBothEqual("(println (re-seq #\"\\X\" \"e\u0301x\"))", "(e\u0301 x)\n");
+		assertBothEqual("(println (re-find #\"\\p{L}+\" \"1ab\"))", "ab\n");
+		assertBothEqual("(println (re-find #\"a(?=b)\" \"ab\"))", "a\n");
+	}
+
+	@Test
+	void keepAndUpdateSignalInsteadOfSkipping() {
+		// (keep inc [1 nil 2]) throws on the oracle (nil is not a number): the
+		// signal is pinned here, not a silent skip. Same for a missing update key.
+		assertThatThrownBy(() -> interpret("(println (keep inc [1 nil 2]))")).isInstanceOf(Exception.class);
+		assertThatThrownBy(() -> runOnJvm("(println (keep inc [1 nil 2]))")).isInstanceOf(Exception.class);
+		assertThatThrownBy(() -> interpret("(println (update {:a 1} :missing inc))")).isInstanceOf(Exception.class);
+		assertThatThrownBy(() -> runOnJvm("(println (update {:a 1} :missing inc))")).isInstanceOf(Exception.class);
+	}
+
+	@Test
+	void castOfAComputedHostClassTakesValuesOfItsKind() throws Exception {
+		// f75: cast of a computed host class casts by the kind its name has here
+		// (answers measured against clj 1.12.6); a host class object evaluates
+		// through java:static, so wasm has no equivalent there
+		assertBothEqual(
+				"(println ((fn [c] (cast c 5)) Long) ((fn [c x] (cast c x)) String \"s\"))"
+						+ " (println (try ((fn [c x] (cast c x)) Long \"s\") (catch ClassCastException e :cce)))",
+				"5 s\n:cce\n");
+	}
+
+	@Test
+	void clojureLangCollectionStaticsLowerPortably() throws Exception {
+		// LazilyPersistentVector/createOwning takes ownership of the array, which
+		// is already the vector here, and PersistentArrayMap/createWithCheck
+		// builds checking duplicate keys (malli's entry parsers); answers measured
+		// against clj 1.12.6
+		assertBothEqual("(println (clojure.lang.LazilyPersistentVector/createOwning (object-array [1 2])))", "[1 2]\n");
+		assertBothEqual(
+				"(println (pr-str (clojure.lang.PersistentArrayMap/createWithCheck (object-array [:a 1 :b 2]))))",
+				"{:a 1, :b 2}\n");
+		assertBothEqual("(println (try (clojure.lang.PersistentArrayMap/createWithCheck (object-array [:a 1 :a 2]))"
+				+ " (catch IllegalArgumentException e :dup)))", ":dup\n");
+		assertBothEqual("(println (pr-str (clojure.lang.PersistentArrayMap/createWithCheck (object-array []))))",
+				"{}\n");
+		assertBothEqual("(println (count (clojure.lang.PersistentArrayMap/createWithCheck (object-array [:a 1 :b]))))",
+				"1\n");
+		assertBothEqual("(println (try (clojure.lang.PersistentArrayMap/createWithCheck nil)"
+				+ " (catch NullPointerException e :nil)))", ":nil\n");
+	}
+
+	private static void assertBothEqual(String source, String expected) throws Exception {
+		assertThat(interpret(source)).isEqualTo(expected);
+		assertThat(runOnJvm(source)).isEqualTo(expected);
+	}
+
+	private static String interpret(String program) throws Exception {
+		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		CliStack.call("clojure-interop", () -> {
+			LispEvaluator evaluator = new LispEvaluator(new PrintStream(out, true, StandardCharsets.UTF_8));
+			for (LispVal form : evaluator
+				.clojureProgram(SourceLanguage.CLOJURE.read(program, Features.INTERPRETER, "test.clj"))) {
+				evaluator.eval(form);
+			}
+			return null;
+		});
+		return out.toString(StandardCharsets.UTF_8);
+	}
+
+	@org.junit.jupiter.api.io.TempDir
+	static java.nio.file.Path workDir;
+
+	private static String runOnJvm(String program) throws Exception {
+		String name = "ClojureInterop";
+		JvmSourceCompiler.Result result = new JvmSourceCompiler(name).sourceLanguage("clojure").compile(program, null);
+		java.nio.file.Files.write(workDir.resolve(name + ".class"), result.classBytes());
+		for (var file : result.runtimeClasses().entrySet()) {
+			java.nio.file.Path target = workDir.resolve(file.getKey());
+			java.nio.file.Files.createDirectories(target.getParent());
+			java.nio.file.Files.write(target, file.getValue());
+		}
+		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		try (var loader = new java.net.URLClassLoader(new java.net.URL[] { workDir.toUri().toURL() },
+				ClassLoader.getSystemClassLoader()); var _ = ThreadStdio.out(out)) {
+			CliStack.call("clojure-interop", () -> {
+				try {
+					Method main = loader.loadClass(name).getMethod("main", String[].class);
+					main.invoke(null, (Object) new String[0]);
+				}
+				catch (ReflectiveOperationException ex) {
+					throw new IllegalStateException(ex);
+				}
+				return null;
+			});
+		}
+		return out.toString(StandardCharsets.UTF_8);
+	}
+
+	// As runOnJvm, but the program is compiled against the jars and runs under a loader
+	// with no parent: what -cp hands it is all it sees, like `java -cp dep.jar:. Prog`.
+	private static String runOnJvmWithClasses(String program, java.nio.file.Path classes,
+			java.util.List<java.net.URL> runJars) throws Exception {
+		String name = "ClojureInteropIsolated";
+		JvmSourceCompiler.Result result = new JvmSourceCompiler(name).sourceLanguage("clojure")
+			.javaClasspath(java.util.List.of(classes))
+			.compile(program, null);
+		java.nio.file.Path dir = java.nio.file.Files.createTempDirectory(workDir, "isolated");
+		java.nio.file.Files.write(dir.resolve(name + ".class"), result.classBytes());
+		for (var file : result.runtimeClasses().entrySet()) {
+			java.nio.file.Path target = dir.resolve(file.getKey());
+			java.nio.file.Files.createDirectories(target.getParent());
+			java.nio.file.Files.write(target, file.getValue());
+		}
+		java.util.List<java.net.URL> urls = new java.util.ArrayList<>(runJars.size() + 1);
+		urls.add(dir.toUri().toURL());
+		urls.addAll(runJars);
+		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		try (var loader = new java.net.URLClassLoader(urls.toArray(java.net.URL[]::new), null);
+				var _ = ThreadStdio.out(out)) {
+			CliStack.call("clojure-interop", () -> {
+				try {
+					Method main = loader.loadClass(name).getMethod("main", String[].class);
+					main.invoke(null, (Object) new String[0]);
+				}
+				catch (ReflectiveOperationException ex) {
+					throw new IllegalStateException(ex);
+				}
+				return null;
+			});
+		}
+		return out.toString(StandardCharsets.UTF_8);
+	}
+
+}

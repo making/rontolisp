@@ -1,0 +1,81 @@
+# WASM backend: the callable-type arity limit, and the two ways past it
+
+Scope: GC WASM backend (`codegen.wasm`), Preview 1 and `--component`; JVM and interpreter
+have no such limit and their answers must not change.
+
+**Invariant: a wasm DEFUN/LAMBDA takes at most `WasmLispCompiler.MAX_CALLABLE_ARITY` (10)
+wasm parameters, a CALL SITE at most `callArityCeiling()` (10 + what the program asked for,
+capped at `MAX_EXTRA_CALL_ARITY` = 4), and no program may observe either.** Fixed per-arity
+dispatchers are `FUNC_DISPATCH_BASE + 0..10`. Rewrites happen at AST level in
+`WasmArityBundler`, before the apply-runtime scan.
+
+- DEFUN >10 params (fixed arity): rewritten to `(&rest %arity-bundle)`, its parameters bound
+  by `nth` in a `let*` whose first init checks `(length %arity-bundle)` and signals the
+  interpreter's `program-error` (`Function expects 11 arguments, got 12`) -- concatenated,
+  not formatted: a `:format-arguments` list needs the format runtime, which a program that
+  formats nothing lacks (the report then printed `got ~D`). Call sites are untouched: every
+  path packs a variadic callee's rest list, so `#'f`, `funcall`, `apply` and the compiled
+  `eval` (SPREAD dispatcher) all reach it (2026-09-26). The earlier shape -- nine params plus
+  one explicit list, direct calls rewritten to pass `(list ...)` -- served direct calls only:
+  `#'f` was a compile error and `(eval '(f ...))` trapped on the cast of an argument that was
+  no list. Keeping nine REQUIRED params beside the rest list would make a short call report
+  `at least 9`, so none are kept; the cost is one cons per argument per call. A DIRECT call
+  with a wrong count is a run-time report too (the compiler sees only the rest list), where
+  the JVM refuses it at compile time.
+- CALL SITE 11..14 args through a function value: its own appended per-arity dispatcher.
+- Past that: spread -- `(funcall f a1 .. a15)` -> `(apply f (list ...))`, which `_apply`
+  hands to `FUNC_DISPATCH_SPREAD` (`WasmArityBundler.spreadOverArityFuncalls`).
+- Call-site count != callee param count: keywords pass VERBATIM, so 3 required + 4 keywords =
+  ELEVEN args. Without the spread rule such a site compiles to
+  `LispMacroExpander.overArityFuncallStub` -- a call-time signal, a bare `unreachable` in a
+  non-EH module, no compile-time warning.
+
+- A callee with `&optional` takes each optional as a wasm parameter of its own, plus the rest
+  list, within `LambdaLists.MAX_PHYSICAL_PARAMS` (10, which `MAX_CALLABLE_ARITY` may not
+  undercut: `WasmLispCompiler`'s static check); optionals past it ride the rest list, so a
+  lambda list never needs the bundler ([lambda-lists.md](lambda-lists.md), "Optional
+  arguments travel as parameters").
+- LAMBDA >10 plain params (a value, a `flet`/`labels` clause, a non-top-level `defun`,
+  which Pass 2 lowers to a closure): rewritten like a defun (`WasmArityBundler.bundleLambdas`,
+  2026-10-13, f83 -- dynaload's 11-20-arity `IFn` invokes are reify method lambdas of this
+  shape). Callers already pack a variadic callee's rest list, so no call site is rewritten;
+  a `lambda` in call position stays inlined (it never becomes a function). A body-declared
+  report (`DeclaredArityReport`, what a Clojure `fn` lowers to) stays at the rewritten head
+  and the check names the enclosing lambda through the context, so the refusal keeps its
+  words. A direct call a nested defun or a local takes becomes a `funcall` only in Pass 2,
+  past the ceiling pre-scan, so the scan counts those by name (a head spelling a nested
+  definition or a local, unless a top-level defun of the name stays direct).
+
+## Traps
+- `MAX_CALLABLE_ARITY` is an index ORIGIN, never raised: the extra tier is APPENDED, at
+  `extraDispatchFuncBase()` (shifts `userFuncBase()` only) and `extraCallableTypeBase()`
+  (shifts `fixedTypeCount()` only). `extraCallArity` comes from
+  `WasmArityBundler.widestDispatchArity`; past the cap the WHOLE program falls back to 10.
+- `mapcar`/`mapc`/`mapcan` pick a dispatcher by LIST COUNT via
+  `WasmLispCompiler.mapDispatchFuncIndex`, which holds their ceiling check; an unchecked
+  `FUNC_DISPATCH_BASE + nLists` addresses the next runtime helper and emits a non-validating
+  module. A literal `#'name`/`'name` designator of compatible arity is a direct call
+  (`WasmDesignatorCall`,
+  [optimize-dead-code-elimination.md](optimize-dead-code-elimination.md)) and skips all this.
+- The spread pass must run BEFORE `LispMacroExpander.needsApplyRuntime`
+  ([eval-runtime.md](eval-runtime.md)), which builds the spread dispatcher's BODY only when it
+  sees `apply`. The injected designator is a VARIABLE, caught by its computed-designator arm.
+- The ceiling must be known before Pass 2 (`userFuncBase()`-relative indices) -- hence the AST
+  pre-scan; a `funcall` synthesized DURING Pass 2 out of nothing is invisible to it. One a
+  lowering turns a VISIBLE direct call into (a nested defun's, a `flet`/`labels` local's) is
+  counted by name instead (`collectValueNames`).
+- `WasmAsyncEmit.freshCtx` also builds the SYNCHRONOUS top level, so it must carry the ceiling;
+  it inherits every `Ctx.Builder` field since 2026-10-04 (before, a field-by-field copy).
+
+## Tests
+- `WasmLispCompilerIntegrationTest`: `compileFuncallWiderThanTheCallableLimitGoesThroughApply`,
+  `compileFuncallEitherSideOfTheDerivedArityCeilingAnswersTheSame` (the `freshCtx` pin),
+  `compileMapcarOverMoreListsThanTheFixedDispatcherBlockWorks`,
+  `compileLambdaPastTheCallableLimitBundlesLikeAWideDefun`
+- `WasmLispCompilerTest.aFuncallPastTheFixedDispatcherBlockCostsALadderAndNotTheSpreadDispatcher`,
+  `aLambdaPastTheCallableLimitCompilesWhileAVariadicOnePastItStillRefuses`
+- ci-spec `fill-and-over-arity-funcall`, `lambdas-past-ten-parameters-bundle-like-wide-defuns`,
+  `eval-inline-operators-check-their-argument-count`
+  (the rest-bundled defun through `eval` and `#'`); `ChipzE2eTest`.
+- clojure-spec `a-fn-past-ten-parameters-answers-through-every-call-shape`,
+  `a-reify-invoke-past-ten-parameters-answers` (dynaload's shape).

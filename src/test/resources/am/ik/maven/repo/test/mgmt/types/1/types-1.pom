@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>test.mgmt</groupId>
+  <artifactId>types</artifactId>
+  <version>1</version>
+  <dependencyManagement>
+    <dependencies>
+      <dependency><groupId>test.lib</groupId><artifactId>t</artifactId><version>1.0</version></dependency>
+      <dependency><groupId>test.lib</groupId><artifactId>t</artifactId><version>2.0</version><type>test-jar</type></dependency>
+      <dependency><groupId>test.lib</groupId><artifactId>k</artifactId><version>3.0</version><classifier>cls</classifier></dependency>
+      <dependency><groupId>test.lib</groupId><artifactId>k</artifactId><version>4.0</version></dependency>
+    </dependencies>
+  </dependencyManagement>
+  <dependencies>
+      <dependency><groupId>test.lib</groupId><artifactId>t</artifactId><type>test-jar</type></dependency>
+      <dependency><groupId>test.lib</groupId><artifactId>t</artifactId></dependency>
+      <dependency><groupId>test.lib</groupId><artifactId>k</artifactId><classifier>cls</classifier></dependency>
+      <dependency><groupId>test.lib</groupId><artifactId>k</artifactId><type>test-jar</type><classifier>tests</classifier><version>5.0</version></dependency>
+  </dependencies>
+</project>

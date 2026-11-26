@@ -1,0 +1,17 @@
+Fatal error: com.oracle.graal.pointsto.util.AnalysisError$ParsingError: Error encountered while parsing BuildTimeHandle.lambda$main$0(BuildTimeHandle.java:43) 
+...
+Caused by: com.oracle.svm.core.util.VMError$HostedError: should not reach here: unexpected input could not be handled: linkToNative
+	at org.graalvm.nativeimage.builder/com.oracle.svm.core.util.VMError.shouldNotReachHereUnexpectedInput(VMError.java:97)
+	at org.graalvm.nativeimage.builder/com.oracle.svm.hosted.substitute.PolymorphicSignatureWrapperMethod.buildGraph(PolymorphicSignatureWrapperMethod.java:170)
+	at org.graalvm.nativeimage.builder/com.oracle.svm.hosted.substitute.SubstitutionMethod.buildGraph(SubstitutionMethod.java:122)
+	at org.graalvm.nativeimage.pointsto/com.oracle.graal.pointsto.meta.AnalysisMethod.buildGraph(AnalysisMethod.java:757)
+	at org.graalvm.nativeimage.pointsto/com.oracle.graal.pointsto.flow.AnalysisParsedGraph.parseBytecodeForStage(AnalysisParsedGraph.java:174)
+	at org.graalvm.nativeimage.pointsto/com.oracle.graal.pointsto.flow.AnalysisParsedGraph.createFinalStage(AnalysisParsedGraph.java:243)
+	at org.graalvm.nativeimage.pointsto/com.oracle.graal.pointsto.meta.AnalysisMethod.lambda$static$2(AnalysisMethod.java:1204)
+	at org.graalvm.nativeimage.pointsto/com.oracle.graal.pointsto.meta.AnalysisMethod.setGraph(AnalysisMethod.java:1273)
+	at org.graalvm.nativeimage.pointsto/com.oracle.graal.pointsto.meta.AnalysisMethod.createAnalysisParsedGraph(AnalysisMethod.java:1256)
+	at org.graalvm.nativeimage.pointsto/com.oracle.graal.pointsto.meta.AnalysisMethod.ensureGraphParsedHelper(AnalysisMethod.java:1162)
+	at org.graalvm.nativeimage.pointsto/com.oracle.graal.pointsto.meta.AnalysisMethod.ensureGraphParsed(AnalysisMethod.java:1023)
+	at org.graalvm.nativeimage.pointsto/com.oracle.graal.pointsto.meta.AnalysisMethod.ensureGraphParsed(AnalysisMethod.java:1015)
+	at org.graalvm.nativeimage.pointsto/com.oracle.graal.pointsto.phases.InlineBeforeAnalysisGraphDecoder.lookupEncodedGraph(InlineBeforeAnalysisGraphDecoder.java:181)
+	at jdk.graal.compiler/jdk.graal.compiler.replacements.PEGraphDecoder.doInline(PEGraphDecoder.java:1215)

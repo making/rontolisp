@@ -1,0 +1,21 @@
+// Written for rontolisp's experimental Java subset from the API specification's names
+// and behaviour; nothing here is copied or translated from a JDK
+// (.kb/java-frontend-provenance.md). Lowered with every program that names it.
+package java.util.function;
+
+public interface LongUnaryOperator {
+
+    long applyAsLong(long operand);
+
+    default LongUnaryOperator compose(LongUnaryOperator before) {
+        return operand -> applyAsLong(before.applyAsLong(operand));
+    }
+
+    default LongUnaryOperator andThen(LongUnaryOperator after) {
+        return operand -> after.applyAsLong(applyAsLong(operand));
+    }
+
+    static LongUnaryOperator identity() {
+        return operand -> operand;
+    }
+}

@@ -1,0 +1,7 @@
+# resolve test.resolve:nearest:1
+test.resolve:nearest:jar::1 scope=compile optional=false
+  test.resolve:a:jar::1 scope=compile optional=false
+    test.resolve:c:jar::1 scope=compile optional=false
+  test.resolve:b:jar::1 scope=compile optional=false
+    test.resolve:d:jar::2 scope=compile optional=false
+      test.resolve:d-child:jar::2 scope=compile optional=false

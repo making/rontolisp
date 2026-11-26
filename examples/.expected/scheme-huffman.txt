@@ -1,0 +1,18 @@
+message: "she sells sea shells by the sea shore"
+code (symbol count length bits):
+  #\space 7 2 00
+  #\s 8 2 01
+  #\e 7 3 100
+  #\h 4 3 101
+  #\a 2 4 1100
+  #\l 4 4 1101
+  #\o 1 5 11100
+  #\r 1 5 11101
+  #\t 1 5 11110
+  #\b 1 6 111110
+  #\y 1 6 111111
+encoded: 011011000001100110111010100011001100000110110011011101010011111011111100111101011000001100110000011011110011101100
+length: 114 bits, against 296 at 8 bits a character
+Kraft sum: 1
+decoded: "she sells sea shells by the sea shore"
+round trip ok

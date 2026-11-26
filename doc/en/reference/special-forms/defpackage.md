@@ -1,0 +1,31 @@
+# defpackage
+
+`(defpackage name (:use package...) (:export symbol...) (:nicknames name...) (:import-from package symbol...) (:local-nicknames (nick actual)...))`
+
+Defines a new package named `name` and returns the package -- its keyword, the same object [`find-package`](../functions/find-package.md) and [`make-package`](../functions/make-package.md) answer. Like `in-package`, it is a literal, top-level directive consumed at read/compile time, so packages are defined in source order. The name and the clause arguments are keywords, bare symbols, strings, or uninterned symbols (`:mypkg`, `mypkg`, `"mypkg"`, `#:mypkg` — the last is the portable defpackage idiom). A symbol stands for its name only, so a package-qualified one names the same thing as its bare name: `(:shadow cl:let)` shadows `let`.
+
+- `(:use package...)` makes the external (exported) symbols of the listed packages visible unqualified. The used packages must already exist. Without a `:use` clause **nothing** is visible unqualified — write `(:use :cl)` to use the standard symbols without a `cl:` prefix. `common-lisp` and `common-lisp-user` are built-in nicknames for `cl` and `cl-user`, so `(:use #:common-lisp)` works too.
+- `(:export symbol...)` declares the package's external symbols: they are reachable as `name:symbol` from other packages, and inherited by packages that use this one. Symbols interned later (for example `defun`s made under `(in-package name)` that are not in the `:export` clause) are internal and require the double colon, `name::symbol`. A name the package inherits rather than defines (a standard name through `cl`, or a used package's export) is re-exported, so `(:use :cl) (:export #:car)` makes `name:car` the standard `car`.
+- `(:nicknames name...)` registers alternate names for the package; a nickname resolves everywhere the canonical name does. A nickname that collides with an existing package (or nickname) is an error; the built-in nicknames — `common-lisp` and `common-lisp-user` (`cl`/`cl-user`), `rl` (`rontolisp`), `la` (`linalg`) and `quicklisp` (`ql`) — are reserved the same way.
+- `(:import-from package symbol...)` makes the named symbols of `package` visible unqualified without using the whole package. Resolution is textual: an imported name resolves to the source package's canonical spelling, so `(:import-from #:common-lisp #:car)` gives a use-nothing package just `car`.
+- `(:local-nicknames (nick actual)...)` gives **this package** a name of its own for another package (the SBCL extension; outside a `defpackage`, [`uiop:add-package-local-nickname`](../functions/uiop-add-package-local-nickname.md)). With this package current, `nick:symbol` reads as `actual:symbol`, the package designator `nick` names `actual`, and a symbol of `actual` prints as `nick:symbol`. The nickname means nothing in any other package, so two packages can use one nickname for different packages, and it may be named like another package or nickname (`bt`, `uiop`): inside this package it comes first. `actual` must already exist or be this package. `cl`, `common-lisp`, `keyword` and this package's own name are refused, and so is a second target for one nickname.
+- `(:shadow symbol...)` and `(:shadowing-import-from package symbol...)` make the named symbols resolve to this package's own (or the named package's) symbol inside it, ahead of the `cl` table and the use list. `(:intern symbol...)` adds a name the package **owns** without exporting it, so `name::symbol` reaches it and `name:symbol` does not.
+- `(:documentation "...")` and `(:size n)` are accepted and ignored.
+
+A `defpackage` naming a package that already exists **modifies** it, as Common Lisp requires: the clauses are merged into what is there, so nothing the earlier definition declared is lost, except its local nicknames, which each definition states in full: without the clause it has none. (A name that is another package's *nickname* is still an error — adjusting through it would silently apply the definition to a package of a different name.) Any other clause is an error. A `defpackage` that is **not** top-level registers its package when the form around it runs — on the interpreter only; the compiled backends have no registry at run time and refuse it. See [Packages](../packages.md#user-defined-packages-defpackage) for the full rules.
+
+```lisp
+(defpackage :util (:use :cl) (:export :trim)) ; => :UTIL
+```
+
+```lisp
+(defpackage #:mypkg
+  (:use #:common-lisp)
+  (:nicknames #:mp)
+  (:import-from #:rontolisp #:version)
+  (:export #:greet))
+(in-package :mypkg)
+(defun greet (name) (concatenate 'string "hello, " name))
+(in-package :cl-user)
+(mp:greet "world") ; => "hello, world"
+```

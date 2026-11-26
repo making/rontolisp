@@ -1,0 +1,7 @@
+200 text/plain | hello Ada Lovelace
+post | application/x-www-form-urlencoded | {"lang" "clojure", "n" "1"}
+put | application/json | {"id": 7}
+[{"n":0} {"n":1} {"n":2}]
+[Exceptional status code: 404 404 no such page]
+404
+true hello async

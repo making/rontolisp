@@ -1,0 +1,61 @@
+# `loop` iteration heads: what is assigned BEFORE vs AFTER the termination test
+
+Shared expansion `LispMacroExpander.LoopExpander` (interpreter + all three compile dispatchers),
+so everything here moves on all four backends at once. A loop a compiled `eval` runs is the same
+parser ported to Lisp (`%eval-loop-*` in `macro/eval-macros.lisp`, `.kb/eval-runtime.md`): a change to
+the clause order or a clause moves there too, and ci-spec `eval-runs-the-keyword-clauses-of-loop`
+pins it. `head-k` =
+`(if (not (or <clause k's end tests>)) (progn <clause k's assignments> t) nil)`, ANDed in SOURCE
+order inside the `while`; a terminating clause short-circuits, so no later clause's assignments
+run. Cursors step at the END of the body; heads only test them.
+
+**A `for`/`with` variable's simple type** is `of-type TYPE`, `t`, `nil` or one of the standard type
+symbols SBCL's loop universe takes (`LoopExpander.LOOP_SIMPLE_TYPES`, the same list in
+`%eval-loop-skip-type`: `short-float`, `vector`, `hash-table` ...; `unsigned-byte` is no simple type
+there either). CLHS 6.1.1.7 names `fixnum` and `float` only, and until 2026-11-07 that was all both
+parsers took: petalisp's test suite (`for u short-float = ...`, a macro's expansion) stopped every
+compile path at `loop: incomplete for clause`, while the interpreter, expanding it only when called,
+loaded it. Pins: ci-spec `loop-macro-type-spec` and `eval-runs-the-keyword-clauses-of-loop`.
+
+**Invariant: an assignment nobody is supposed to observe must not happen.** Element variables
+(`for x in`, destructuring `in`/`on ... by`, `for x across`) are assigned in the head AFTER their
+own end test passed (`ForPiece.headSyncs`), never at end of body. A loop variable is ONE binding
+stepped in place: at exit it holds the last element, which is what a body closure, `finally` and a
+later clause's head see. Do NOT make it a fresh binding per iteration — `dolist` binds freshly,
+`loop` steps one; both match SBCL.
+
+- Clauses that legitimately end at nil keep the end-of-body assignment (`ForPiece.postSteps`):
+  `for c on LIST` without destructuring, `for k being the hash-key/hash-value`, and
+  `for s being the [external-|present-]symbols of P` -- since 2026-10-31 a snapshot of what
+  `do-symbols` / `do-external-symbols` (`%do-symbols-list`) or `with-package-iterator`'s
+  `:internal :external` (`%package-iterator-entries`) enumerate; it iterated nothing before.
+  The compile paths splice those prelude helpers on `loopIteratesPackageSymbols`. On the compile
+  paths a package's INTERNAL symbols are not in the baked universe, so `present-symbols` (and
+  `symbols`) miss them there, as `do-symbols` does. ci-spec
+  `package-walks-list-the-car-cdr-compositions`, `loop-being-symbols` (properties only: what
+  `cl-user` holds depends on what the program read before -- on SBCL the reader interns every
+  symbol there). Until 2026-11-01 the compiled `%package-iterator-entries` tested `cl-user`'s
+  inherited names by `find-symbol`'s PRIMARY value, so cl's `NIL` came back `:internal` --
+  `cl-user`'s present symbols were `(NIL)`; it reads the status now.
+- `for VAR = INIT [then STEP]` is a `bodyPrefix` record, assigned in the head.
+- `parseRepeat` places its head at its OWN position in clause order, like `for`. **Trap**: from
+  the trailing `endTests` bucket instead, a later clause runs one extra time on the exhausting pass.
+- A `while`/`until` before any body clause is a head at its own position too:
+  `(loop while s for x = (pop s) collect x)` tests before popping, `(1 2 3)` (SBCL; cl-markup's
+  `map-group-if` relies on it). CLHS calls it nonconforming. Same trap as `repeat`: a bucket ANDed
+  after every head pops the last element and drops it.
+- Divergence: the outer `let*` binds an element variable to its first element (`guardedElt`), not
+  nil, so a later clause's setup form can reference it; SBCL binds nil. Ours is the lenient superset.
+- `parseForNumeric` splices literal step/limit in place (`isSelfEvaluatingNumber`), binding gensyms
+  only for computed ones — that is what lets the wasm fused paths see the constant.
+- `for VAR from A to B [by S]` = literal-bound `let*` + `while` against a literal + body ending in
+  `(setq VAR (+ VAR S))`; `WasmCountedLoopCompiler` proves that sandwich into an unboxed `i64`
+  counter (`.kb/wasm-counted-loops.md`). **Trap**: moving the step out of the `while` body,
+  re-hiding a literal behind a gensym, or a second assignment silently stops it firing — never
+  wrong, just slow; re-measure `counted-numeric-for` when touching `parseForNumeric`.
+
+## Tests
+`LispEvaluatorTest#evalLoopVariableKeepsLastValueAfterTermination`,
+`#evalLoopRepeatAndWhileAreClauseOrdered`, `#evalLoopSequentialDriverStepping`; ci-spec
+`loop-variable-after-termination`. Expectations were measured against SBCL 2.6.5 — measure new
+forms there too.

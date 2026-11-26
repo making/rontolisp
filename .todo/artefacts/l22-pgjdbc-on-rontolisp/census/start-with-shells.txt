@@ -1,0 +1,39 @@
+# 19 refusals
+/org/postgresql/util/GT.java:35: Locale.Category is not supported by the experimental Java subset yet
+  in org.postgresql.util.GT.<init>()
+/org/postgresql/util/LazyCleanerImpl.java:123: cannot find symbol: class ForkJoinPool.ManagedBlocker
+  in org.postgresql.jdbc.PgConnection.<init>(org.postgresql.util.HostSpec[],java.util.Properties,String)
+/org/postgresql/jdbcurlresolver/PgServiceConfParser.java:107: System.getenv() is not supported by the experimental Java subset yet
+  in org.postgresql.jdbcurlresolver.PgServiceConfParser.findPgServiceConfResourceName()
+/org/postgresql/jdbcurlresolver/PgServiceConfParser.java:132: System.getenv() is not supported by the experimental Java subset yet
+  in org.postgresql.jdbcurlresolver.PgServiceConfParser.findPgServiceConfResourceName()
+/org/postgresql/jdbcurlresolver/PgPassParser.java:120: System.getenv() is not supported by the experimental Java subset yet
+  in org.postgresql.jdbcurlresolver.PgPassParser.findPgPasswordResourceName()
+/org/postgresql/ssl/LibPQFactory.java:58: a receiver parameter is not supported by the experimental Java subset yet
+  in org.postgresql.ssl.MakeSSL.convert(org.postgresql.core.PGStream,java.util.Properties)
+/org/postgresql/core/QueryExecutorCloseAction.java:28: newUpdater but of class literals and a constant name is not supported by the experimental Java subset yet
+  in org.postgresql.core.QueryExecutorCloseAction.<clinit>
+/org/postgresql/jdbc/PgStatement.java:56: Boolean.getBoolean(String) is not supported by the experimental Java subset yet
+  in org.postgresql.jdbc.PgStatement.<clinit>
+/org/postgresql/ssl/LibPQFactory.java:58: a receiver parameter is not supported by the experimental Java subset yet
+  in org.postgresql.core.SocketFactoryFactory.getSslSocketFactory(java.util.Properties)
+/org/postgresql/util/internal/JvmHeapAccess.java:24: MemoryMXBean.getHeapMemoryUsage() is not supported by the experimental Java subset yet
+  in org.postgresql.util.internal.JvmHeapAccess.maxHeapBytes()
+/org/postgresql/jdbc/EscapedFunctions2.java:721: StringBuilder.ensureCapacity(int) is not supported by the experimental Java subset yet
+  in org.postgresql.jdbc.EscapedFunctions2.appendCall(StringBuilder,String,String,String,java.util.List)
+/org/postgresql/util/PGInterval.java:294: StringBuilder.insert(int,String,int,int) is not supported by the experimental Java subset yet
+  in org.postgresql.util.PGInterval.getValue()
+/com/ongres/scram/common/ScramMechanism.java:89: incompatible types: inference variable R has incompatible bounds
+  in com.ongres.scram.common.ScramMechanism.<clinit>
+/com/ongres/stringprep/Stringprep.java:225: StringBuilder.getChars(int,int,char[],int) is not supported by the experimental Java subset yet
+  in com.ongres.stringprep.Stringprep.map(char[])
+/org/postgresql/util/SharedTimer.java:62: Thread.setContextClassLoader(<null>) is not supported by the experimental Java subset yet
+  in org.postgresql.util.SharedTimer.getTimer()
+/org/postgresql/util/LazyCleanerImpl.java:123: cannot find symbol: class ForkJoinPool.ManagedBlocker
+  in org.postgresql.util.SharedTimer.getTimer()
+/org/postgresql/util/SharedTimer.java:67: Thread.setContextClassLoader(ClassLoader) is not supported by the experimental Java subset yet
+  in org.postgresql.util.SharedTimer.getTimer()
+/org/postgresql/jdbc/TimestampUtils.java:1019: StringBuilder.insert(int,char[],int,int) is not supported by the experimental Java subset yet
+  in org.postgresql.jdbc.TimestampUtils.appendTime(StringBuilder,int,int,int,int)
+/org/postgresql/jdbc/TimestampUtils.java:971: StringBuilder.insert(int,char[],int,int) is not supported by the experimental Java subset yet
+  in org.postgresql.jdbc.TimestampUtils.appendDate(StringBuilder,int,int,int)

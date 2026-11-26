@@ -1,0 +1,863 @@
+// Written for rontolisp's experimental Java subset from the API specification's names
+// and behaviour; nothing here is copied or translated from a JDK
+// (.kb/java-frontend-provenance.md). Lowered with every program that names it.
+package rontolisp.internal;
+
+import java.io.UnsupportedEncodingException;
+import java.nio.charset.Charset;
+import java.util.Iterator;
+
+// The members of String, the boxes and Math that are written in Java: the ones that
+// throw the library's exceptions or walk its collections.
+public final class Support {
+
+    private Support() {
+    }
+
+    // What a text that is no number of a radix is refused with; the radix is named
+    // when it is not ten.
+    private static NumberFormatException malformed(String s, int radix) {
+        return new NumberFormatException("For input string: \"" + s + "\"" + (radix == 10 ? "" : " under radix " + radix));
+    }
+
+    // A text there is and a radix that is one, before any digit is read.
+    private static void parseable(String s, int radix) {
+        if (s == null) {
+            throw new NumberFormatException("Cannot parse null string");
+        }
+        if (radix < 2) {
+            throw new NumberFormatException("radix " + radix + " less than Character.MIN_RADIX");
+        }
+        if (radix > 36) {
+            throw new NumberFormatException("radix " + radix + " greater than Character.MAX_RADIX");
+        }
+    }
+
+    public static long parseLong(String s, int radix) {
+        return parse(s, radix, Long.MIN_VALUE, Long.MAX_VALUE);
+    }
+
+    public static int parseInt(String s, int radix) {
+        return (int) parse(s, radix, Integer.MIN_VALUE, Integer.MAX_VALUE);
+    }
+
+    // The digits are accumulated as a negative number, whose range is the larger one.
+    private static long parse(String s, int radix, long least, long most) {
+        parseable(s, radix);
+        int n = s.length();
+        int i = 0;
+        boolean negative = false;
+        if (n > 0 && (s.charAt(0) == '-' || s.charAt(0) == '+')) {
+            negative = s.charAt(0) == '-';
+            i = 1;
+        }
+        if (i == n) {
+            throw malformed(s, radix);
+        }
+        long limit = negative ? least : -most;
+        long edge = limit / radix;
+        long value = 0;
+        while (i < n) {
+            int digit = Character.digit(s.charAt(i++), radix);
+            if (digit < 0 || value < edge) {
+                throw malformed(s, radix);
+            }
+            value *= radix;
+            if (value < limit + digit) {
+                throw malformed(s, radix);
+            }
+            value -= digit;
+        }
+        return negative ? value : -value;
+    }
+
+    // Integer.decode and Long.decode: a sign, then 0x, 0X or # ahead of hexadecimal
+    // digits or 0 ahead of octal ones, else decimal digits. The digits are parsed with
+    // the sign in front of them, which is the text a refusal names.
+    public static long decode(String s, long least, long most) {
+        if (s == null) {
+            throw new NullPointerException();
+        }
+        if (s.isEmpty()) {
+            throw new NumberFormatException("Zero length string");
+        }
+        boolean negative = s.charAt(0) == '-';
+        int i = negative || s.charAt(0) == '+' ? 1 : 0;
+        int radix = 10;
+        if (s.startsWith("0x", i) || s.startsWith("0X", i)) {
+            i += 2;
+            radix = 16;
+        } else if (s.startsWith("#", i)) {
+            i++;
+            radix = 16;
+        } else if (s.startsWith("0", i) && s.length() > i + 1) {
+            i++;
+            radix = 8;
+        }
+        if (s.startsWith("-", i) || s.startsWith("+", i)) {
+            throw new NumberFormatException("Sign character in wrong position");
+        }
+        String digits = s.substring(i);
+        return parse(negative ? "-" + digits : digits, radix, least, most);
+    }
+
+    // Integer.parseUnsignedInt and Long.parseUnsignedLong: no sign but a +, the digits
+    // read from the left, a value past the type's bits refused at the digit that
+    // reaches it. The value is the number of its bits; most is the largest one.
+    private static long parseUnsigned(String s, int radix, long most, String type) {
+        parseable(s, radix);
+        int n = s.length();
+        if (n > 0 && s.charAt(0) == '-') {
+            throw new NumberFormatException("Illegal leading minus sign on unsigned string " + s + ".");
+        }
+        int i = n > 0 && s.charAt(0) == '+' ? 1 : 0;
+        if (i == n) {
+            throw malformed(s, radix);
+        }
+        long edge = Long.divideUnsigned(most, radix);
+        long last = Long.remainderUnsigned(most, radix);
+        long value = 0;
+        while (i < n) {
+            int digit = Character.digit(s.charAt(i++), radix);
+            if (digit < 0) {
+                throw malformed(s, radix);
+            }
+            int order = Long.compareUnsigned(value, edge);
+            if (order > 0 || (order == 0 && digit > last)) {
+                throw new NumberFormatException("String value " + s + " exceeds range of unsigned " + type + ".");
+            }
+            value = value * radix + digit;
+        }
+        return value;
+    }
+
+    public static long parseUnsignedLong(String s, int radix) {
+        return parseUnsigned(s, radix, -1L, "long");
+    }
+
+    public static int parseUnsignedInt(String s, int radix) {
+        return (int) parseUnsigned(s, radix, 0xFFFFFFFFL, "int");
+    }
+
+    // StringBuilder.append(CharSequence, int, int), the text made already.
+    public static StringBuilder appendRange(StringBuilder to, String text, int start, int end) {
+        if (start < 0 || start > end || end > text.length()) {
+            throw new IndexOutOfBoundsException(
+                    "Range [" + start + ", " + end + ") out of bounds for length " + text.length());
+        }
+        return to.append(text.substring(start, end));
+    }
+
+    // new String(int[], int, int): the code points of a range as a text.
+    public static String codePoints(int[] points, int offset, int count) {
+        if (offset < 0 || count < 0 || offset > points.length - count) {
+            throw new StringIndexOutOfBoundsException(
+                    "Range [" + offset + ", " + offset + " + " + count + ") out of bounds for length " + points.length);
+        }
+        StringBuilder text = new StringBuilder();
+        for (int i = offset; i < offset + count; i++) {
+            if (!Character.isValidCodePoint(points[i])) {
+                throw new IllegalArgumentException(String.valueOf(points[i]));
+            }
+            text.appendCodePoint(points[i]);
+        }
+        return text.toString();
+    }
+
+    // StringBuilder.append(char[], int, int).
+    public static StringBuilder appendChars(StringBuilder to, char[] chars, int offset, int count) {
+        if (offset < 0 || count < 0 || offset > chars.length - count) {
+            throw new IndexOutOfBoundsException(
+                    "Range [" + offset + ", " + (offset + count) + ") out of bounds for length " + chars.length);
+        }
+        return to.append(new String(chars, offset, count));
+    }
+
+    // Where a builder takes text in: its length at most.
+    private static void insertable(StringBuilder to, int at) {
+        if (at < 0 || at > to.length()) {
+            throw new StringIndexOutOfBoundsException(
+                    "Range [" + at + ", " + to.length() + ") out of bounds for length " + to.length());
+        }
+    }
+
+    // StringBuilder.insert(int, CharSequence, int, int), the text made already.
+    public static StringBuilder insertRange(StringBuilder to, int at, String text, int start, int end) {
+        insertable(to, at);
+        if (start < 0 || start > end || end > text.length()) {
+            throw new IndexOutOfBoundsException(
+                    "Range [" + start + ", " + end + ") out of bounds for length " + text.length());
+        }
+        return to.insert(at, text.substring(start, end));
+    }
+
+    // StringBuilder.insert(int, char[], int, int).
+    public static StringBuilder insertChars(StringBuilder to, int at, char[] chars, int offset, int count) {
+        insertable(to, at);
+        if (offset < 0 || count < 0 || offset > chars.length - count) {
+            throw new StringIndexOutOfBoundsException(
+                    "Range [" + offset + ", " + (offset + count) + ") out of bounds for length " + chars.length);
+        }
+        return to.insert(at, new String(chars, offset, count));
+    }
+
+    // StringBuilder.getChars: the builder's range first, then the array's.
+    public static void builderChars(StringBuilder from, int begin, int end, char[] into, int at) {
+        if (begin < 0 || begin > end || end > from.length()) {
+            throw new StringIndexOutOfBoundsException(
+                    "Range [" + begin + ", " + end + ") out of bounds for length " + from.length());
+        }
+        int count = end - begin;
+        if (at < 0 || at > into.length - count) {
+            throw new IndexOutOfBoundsException(
+                    "Range [" + at + ", " + (at + count) + ") out of bounds for length " + into.length);
+        }
+        for (int i = 0; i < count; i++) {
+            into[at + i] = from.charAt(begin + i);
+        }
+    }
+
+    // String.contentEquals: the characters of a text of any kind.
+    public static boolean contentEquals(String s, Object text) {
+        if (text == null) {
+            throw new NullPointerException();
+        }
+        return s.equals(text.toString());
+    }
+
+    // String.indent: every line ended by a line feed, with n spaces ahead of it or, for
+    // a negative n, without as many of its leading white space characters as it has.
+    public static String indent(String s, int n) {
+        StringBuilder indented = new StringBuilder();
+        int length = s.length();
+        int i = 0;
+        while (i < length) {
+            int end = i;
+            while (end < length && s.charAt(end) != '\n' && s.charAt(end) != '\r') {
+                end++;
+            }
+            for (int k = 0; k < n; k++) {
+                indented.append(' ');
+            }
+            for (int k = n; k < 0 && i < end && Character.isWhitespace(s.charAt(i)); k++) {
+                i++;
+            }
+            indented.append(s, i, end).append('\n');
+            i = end + (s.startsWith("\r\n", end) ? 2 : 1);
+        }
+        return indented.toString();
+    }
+
+    // The digits of a fraction as hexadecimal, as many as hold it and no zero after
+    // them but one.
+    private static String fraction(long bits, int digits) {
+        String text = Long.toHexString(bits);
+        while (text.length() < digits) {
+            text = "0" + text;
+        }
+        int end = digits;
+        while (end > 1 && text.charAt(end - 1) == '0') {
+            end--;
+        }
+        return text.substring(0, end);
+    }
+
+    // Double.toHexString: the sign, 0x1. or, for a subnormal, 0x0., the fraction's
+    // hexadecimal digits and the exponent of two.
+    public static String hexString(double d) {
+        if (d != d) {
+            return "NaN";
+        }
+        long bits = Double.doubleToLongBits(d);
+        String sign = bits < 0 ? "-" : "";
+        int exponent = (int) ((bits >>> 52) & 0x7ff);
+        long mantissa = bits & 0xfffffffffffffL;
+        if (exponent == 0x7ff) {
+            return sign + "Infinity";
+        }
+        if (exponent == 0) {
+            return sign + (mantissa == 0 ? "0x0.0p0" : "0x0." + fraction(mantissa, 13) + "p-1022");
+        }
+        return sign + "0x1." + fraction(mantissa, 13) + "p" + (exponent - 1023);
+    }
+
+    // Float.toHexString: the same over the float's bits, whose twenty-three of the
+    // fraction are six digits.
+    public static String hexStringOfFloat(float f) {
+        if (f != f) {
+            return "NaN";
+        }
+        int bits = Float.floatToIntBits(f);
+        String sign = bits < 0 ? "-" : "";
+        int exponent = (bits >>> 23) & 0xff;
+        long mantissa = (long) (bits & 0x7fffff) << 1;
+        if (exponent == 0xff) {
+            return sign + "Infinity";
+        }
+        if (exponent == 0) {
+            return sign + (mantissa == 0 ? "0x0.0p0" : "0x0." + fraction(mantissa, 6) + "p-126");
+        }
+        return sign + "0x1." + fraction(mantissa, 6) + "p" + (exponent - 127);
+    }
+
+    // System.getProperty: what every target can answer -- the separators and the
+    // encodings; any other key has no value. The lowering knows the keys too
+    // (JavaIntrinsics.PROPERTIES): a library asking whether another is null is answered
+    // where the program is compiled. user.dir named by a constant is the host's working
+    // directory (Disk.workingDirectory). java.io.tmpdir has none: a library reads that as
+    // no directory to write in (servlet-httpserver keeps a request's parts in memory).
+    public static String property(String key) {
+        if (key == null) {
+            throw new NullPointerException("key can't be null");
+        }
+        if (key.isEmpty()) {
+            throw new IllegalArgumentException("key can't be empty");
+        }
+        if (key.equals("line.separator")) {
+            return "\n";
+        }
+        if (key.equals("file.separator")) {
+            return "/";
+        }
+        if (key.equals("path.separator")) {
+            return ":";
+        }
+        if (key.equals("file.encoding") || key.equals("native.encoding") || key.equals("stdin.encoding")
+                || key.equals("stdout.encoding") || key.equals("stderr.encoding")) {
+            return "UTF-8";
+        }
+        return null;
+    }
+
+    // System.setSecurityManager: refused, as a JDK since 24 refuses it
+    @SuppressWarnings("removal")
+    public static void setSecurityManager(SecurityManager manager) {
+        throw new UnsupportedOperationException("Setting a Security Manager is not supported");
+    }
+
+    public static String propertyOr(String key, String otherwise) {
+        String value = property(key);
+        return value == null ? otherwise : value;
+    }
+
+    // Boolean.getBoolean: whether a property is "true" in any case; no name or an empty
+    // one is no property.
+    public static boolean flag(String key) {
+        return key != null && !key.isEmpty() && "true".equalsIgnoreCase(property(key));
+    }
+
+    // Integer.getInteger and Long.getLong: a property's value as decode reads it, else
+    // the default; no name, an empty one or a value that is no number is no value.
+    public static Integer intProperty(String key, Integer otherwise) {
+        String value = key == null || key.isEmpty() ? null : property(key);
+        if (value != null) {
+            try {
+                return Integer.valueOf((int) decode(value, Integer.MIN_VALUE, Integer.MAX_VALUE));
+            }
+            catch (NumberFormatException e) {
+                // the default stands
+            }
+        }
+        return otherwise;
+    }
+
+    public static Long longProperty(String key, Long otherwise) {
+        String value = key == null || key.isEmpty() ? null : property(key);
+        if (value != null) {
+            try {
+                return Long.valueOf(decode(value, Long.MIN_VALUE, Long.MAX_VALUE));
+            }
+            catch (NumberFormatException e) {
+                // the default stands
+            }
+        }
+        return otherwise;
+    }
+
+    // The charset of a name, for the members that take a name and not a Charset.
+    public static Charset charset(String name) throws UnsupportedEncodingException {
+        Charset found = Charset.find(name);
+        if (found == null) {
+            throw new UnsupportedEncodingException(name);
+        }
+        return found;
+    }
+
+    public static boolean isUtf8(Charset charset) {
+        return charset == Charset.utf8();
+    }
+
+    // Object.clone() of an instance of a class that is Cloneable: its fields as they are,
+    // in a new object. What the library's own clone() methods start from.
+    public static native Object copy(Object o);
+
+    public static native byte[] utf8(String s);
+
+    public static native String utf8String(byte[] b, int offset, int count);
+
+    // String.getBytes(Charset) and new String(byte[], .., Charset): the charset's codec.
+    public static byte[] encode(String s, Charset charset) {
+        return charset.bytes(s);
+    }
+
+    public static byte[] encodeNamed(String s, String charsetName) throws UnsupportedEncodingException {
+        if (charsetName == null) {
+            throw new NullPointerException();
+        }
+        return charset(charsetName).bytes(s);
+    }
+
+    public static String decode(byte[] b, Charset charset) {
+        return charset.text(b, 0, b.length);
+    }
+
+    public static String decode(byte[] b, int offset, int count, Charset charset) {
+        return charset.text(b, offset, count);
+    }
+
+    public static String decodeNamed(byte[] b, String charsetName) throws UnsupportedEncodingException {
+        return decodeNamed(b, 0, b.length, charsetName);
+    }
+
+    public static String decodeNamed(byte[] b, int offset, int count, String charsetName)
+            throws UnsupportedEncodingException {
+        if (charsetName == null) {
+            throw new NullPointerException("charsetName");
+        }
+        return charset(charsetName).text(b, offset, count);
+    }
+
+    private static native Double readDouble(String s);
+
+    // Float.hashCode: the bits of the float, one NaN
+    public static native int floatHash(float f);
+
+    private static native Float readFloat(String s);
+
+    public static float parseFloat(String s) {
+        if (s == null) {
+            throw new NullPointerException();
+        }
+        Float value = readFloat(s);
+        if (value == null) {
+            throw new NumberFormatException(s.isBlank() ? "empty String" : "For input string: \"" + s + "\"");
+        }
+        return value;
+    }
+
+    public static byte parseByte(String s, int radix) {
+        int value = parseInt(s, radix);
+        if (value < -128 || value > 127) {
+            throw new NumberFormatException("Value out of range. Value:\"" + s + "\" Radix:" + radix);
+        }
+        return (byte) value;
+    }
+
+    public static short parseShort(String s, int radix) {
+        int value = parseInt(s, radix);
+        if (value < -32768 || value > 32767) {
+            throw new NumberFormatException("Value out of range. Value:\"" + s + "\" Radix:" + radix);
+        }
+        return (short) value;
+    }
+
+    public static double parseDouble(String s) {
+        if (s == null) {
+            throw new NullPointerException();
+        }
+        Double value = readDouble(s);
+        if (value == null) {
+            throw new NumberFormatException(s.isBlank() ? "empty String" : "For input string: \"" + s + "\"");
+        }
+        return value;
+    }
+
+    public static String join(String delimiter, Iterable<?> elements) {
+        StringBuilder text = new StringBuilder();
+        boolean first = true;
+        for (Object element : elements) {
+            if (!first) {
+                text.append(delimiter);
+            }
+            first = false;
+            text.append(element);
+        }
+        return text.toString();
+    }
+
+    public static int addExact(int a, int b) {
+        long sum = (long) a + b;
+        if (sum != (int) sum) {
+            throw new ArithmeticException("integer overflow");
+        }
+        return (int) sum;
+    }
+
+    public static int subtractExact(int a, int b) {
+        long difference = (long) a - b;
+        if (difference != (int) difference) {
+            throw new ArithmeticException("integer overflow");
+        }
+        return (int) difference;
+    }
+
+    public static int multiplyExact(int a, int b) {
+        long product = (long) a * b;
+        if (product != (int) product) {
+            throw new ArithmeticException("integer overflow");
+        }
+        return (int) product;
+    }
+
+    public static int negateExact(int a) {
+        if (a == Integer.MIN_VALUE) {
+            throw new ArithmeticException("integer overflow");
+        }
+        return -a;
+    }
+
+    public static int toIntExact(long value) {
+        if (value != (int) value) {
+            throw new ArithmeticException("integer overflow");
+        }
+        return (int) value;
+    }
+
+    public static int absExact(int a) {
+        if (a == Integer.MIN_VALUE) {
+            throw new ArithmeticException("Overflow to represent absolute value of Integer.MIN_VALUE");
+        }
+        return a < 0 ? -a : a;
+    }
+
+    public static long absExactLong(long a) {
+        if (a == Long.MIN_VALUE) {
+            throw new ArithmeticException("Overflow to represent absolute value of Long.MIN_VALUE");
+        }
+        return a < 0 ? -a : a;
+    }
+
+    public static int incrementExact(int a) {
+        if (a == Integer.MAX_VALUE) {
+            throw new ArithmeticException("integer overflow");
+        }
+        return a + 1;
+    }
+
+    public static long incrementExactLong(long a) {
+        if (a == Long.MAX_VALUE) {
+            throw new ArithmeticException("long overflow");
+        }
+        return a + 1;
+    }
+
+    public static int decrementExact(int a) {
+        if (a == Integer.MIN_VALUE) {
+            throw new ArithmeticException("integer overflow");
+        }
+        return a - 1;
+    }
+
+    public static long decrementExactLong(long a) {
+        if (a == Long.MIN_VALUE) {
+            throw new ArithmeticException("long overflow");
+        }
+        return a - 1;
+    }
+
+    public static long negateExactLong(long a) {
+        if (a == Long.MIN_VALUE) {
+            throw new ArithmeticException("long overflow");
+        }
+        return -a;
+    }
+
+    // Math.clamp: the value kept between two bounds, which have to be in order.
+    public static int clamp(long value, int min, int max) {
+        if (min > max) {
+            throw new IllegalArgumentException(min + " > " + max);
+        }
+        return (int) (value < min ? min : value > max ? max : value);
+    }
+
+    public static long clampLong(long value, long min, long max) {
+        if (min > max) {
+            throw new IllegalArgumentException(min + " > " + max);
+        }
+        return value < min ? min : value > max ? max : value;
+    }
+
+    public static double clampDouble(double value, double min, double max) {
+        if (min != min) {
+            throw new IllegalArgumentException("min is NaN");
+        }
+        if (max != max) {
+            throw new IllegalArgumentException("max is NaN");
+        }
+        if (Double.compare(min, max) > 0) {
+            throw new IllegalArgumentException(min + " > " + max);
+        }
+        return Math.min(max, Math.max(value, min));
+    }
+
+    public static float clampFloat(float value, float min, float max) {
+        if (min != min) {
+            throw new IllegalArgumentException("min is NaN");
+        }
+        if (max != max) {
+            throw new IllegalArgumentException("max is NaN");
+        }
+        if (Float.compare(min, max) > 0) {
+            throw new IllegalArgumentException(min + " > " + max);
+        }
+        return Math.min(max, Math.max(value, min));
+    }
+
+    public static long addExactLong(long a, long b) {
+        long sum = a + b;
+        if ((a >= 0) == (b >= 0) && (sum >= 0) != (a >= 0)) {
+            throw new ArithmeticException("long overflow");
+        }
+        return sum;
+    }
+
+    public static long subtractExactLong(long a, long b) {
+        long difference = a - b;
+        if ((a >= 0) != (b >= 0) && (difference >= 0) != (a >= 0)) {
+            throw new ArithmeticException("long overflow");
+        }
+        return difference;
+    }
+
+    public static long multiplyExactLong(long a, long b) {
+        long product = a * b;
+        if (a != 0 && (product / a != b || (a == -1 && b == Long.MIN_VALUE))) {
+            throw new ArithmeticException("long overflow");
+        }
+        return product;
+    }
+
+    // Math's exact quotients: the one division that leaves the type is refused.
+    private static void quotient(int x, int y) {
+        if (x == Integer.MIN_VALUE && y == -1) {
+            throw new ArithmeticException("integer overflow");
+        }
+    }
+
+    private static void quotient(long x, long y) {
+        if (x == Long.MIN_VALUE && y == -1) {
+            throw new ArithmeticException("long overflow");
+        }
+    }
+
+    public static int divideExact(int x, int y) {
+        quotient(x, y);
+        return x / y;
+    }
+
+    public static long divideExactLong(long x, long y) {
+        quotient(x, y);
+        return x / y;
+    }
+
+    public static int floorDivExact(int x, int y) {
+        quotient(x, y);
+        return Math.floorDiv(x, y);
+    }
+
+    public static long floorDivExactLong(long x, long y) {
+        quotient(x, y);
+        return Math.floorDiv(x, y);
+    }
+
+    public static int ceilDivExact(int x, int y) {
+        quotient(x, y);
+        return Math.ceilDiv(x, y);
+    }
+
+    public static long ceilDivExactLong(long x, long y) {
+        quotient(x, y);
+        return Math.ceilDiv(x, y);
+    }
+
+    // A range of a string a member reads: its refusal is a class of the member's choosing.
+    private static String outside(int begin, int end, int length) {
+        return "Range [" + begin + ", " + end + ") out of bounds for length " + length;
+    }
+
+    // String.codePointCount: a string's elements are code points, so a range holds as
+    // many as it is long.
+    public static int codePointCount(String s, int beginIndex, int endIndex) {
+        if (beginIndex < 0 || beginIndex > endIndex || endIndex > s.length()) {
+            throw new IndexOutOfBoundsException(outside(beginIndex, endIndex, s.length()));
+        }
+        return endIndex - beginIndex;
+    }
+
+    public static int offsetByCodePoints(String s, int index, int codePointOffset) {
+        int moved = index + codePointOffset;
+        if (index < 0 || index > s.length() || moved < 0 || moved > s.length()) {
+            throw new IndexOutOfBoundsException();
+        }
+        return moved;
+    }
+
+    // String.indexOf within a range: of a character, and of a text that has to end
+    // inside the range.
+    public static int indexOfChar(String s, int ch, int beginIndex, int endIndex) {
+        if (beginIndex < 0 || beginIndex > endIndex || endIndex > s.length()) {
+            throw new StringIndexOutOfBoundsException(outside(beginIndex, endIndex, s.length()));
+        }
+        int at = s.indexOf(ch, beginIndex);
+        return at < endIndex ? at : -1;
+    }
+
+    public static int indexOfText(String s, String str, int beginIndex, int endIndex) {
+        if (str == null) {
+            throw new NullPointerException();
+        }
+        if (beginIndex < 0 || beginIndex > endIndex || endIndex > s.length()) {
+            throw new StringIndexOutOfBoundsException(outside(beginIndex, endIndex, s.length()));
+        }
+        int at = s.substring(beginIndex, endIndex).indexOf(str);
+        return at < 0 ? -1 : at + beginIndex;
+    }
+
+    // Character.toChars into an array: the count of chars written, the low surrogate
+    // of a pair first.
+    public static int toChars(int codePoint, char[] dst, int dstIndex) {
+        if (codePoint < 0 || codePoint > 0x10FFFF) {
+            throw new IllegalArgumentException(
+                    "Not a valid Unicode code point: 0x" + Integer.toHexString(codePoint).toUpperCase());
+        }
+        if (codePoint < 0x10000) {
+            dst[dstIndex] = (char) codePoint;
+            return 1;
+        }
+        dst[dstIndex + 1] = Character.lowSurrogate(codePoint);
+        dst[dstIndex] = Character.highSurrogate(codePoint);
+        return 2;
+    }
+
+    // Character.codePointAt of a sequence: its element there, which is a code point here,
+    // or the character a high surrogate and the low one after it spell.
+    public static int sequenceCodePointAt(CharSequence seq, int index) {
+        char c = seq.charAt(index);
+        if (Character.isHighSurrogate(c) && index + 1 < seq.length() && Character.isLowSurrogate(seq.charAt(index + 1))) {
+            return Character.toCodePoint(c, seq.charAt(index + 1));
+        }
+        return c;
+    }
+
+    // Character.codePointCount of a sequence: as String.codePointCount.
+    public static int sequenceCodePointCount(CharSequence seq, int beginIndex, int endIndex) {
+        int length = seq.length();
+        if (beginIndex < 0 || beginIndex > endIndex || endIndex > length) {
+            throw new IndexOutOfBoundsException(outside(beginIndex, endIndex, length));
+        }
+        return endIndex - beginIndex;
+    }
+
+    // How many characters of white space a line starts with.
+    private static int leading(String line) {
+        int at = 0;
+        while (at < line.length() && Character.isWhitespace(line.charAt(at))) {
+            at++;
+        }
+        return at;
+    }
+
+    // String.stripIndent: the lines -- cut at a \n, a \r or the two, the one after the
+    // last cut a line too -- lose as much leading white space as every line that is not
+    // blank has, and the last line, and all their trailing white space; a blank line is
+    // empty; they are joined by \n.
+    public static String stripIndent(String s) {
+        java.util.List<String> lines = new java.util.ArrayList<>();
+        int length = s.length();
+        int start = 0;
+        for (int i = 0; i < length; i++) {
+            char c = s.charAt(i);
+            if (c == '\n' || c == '\r') {
+                lines.add(s.substring(start, i));
+                if (c == '\r' && i + 1 < length && s.charAt(i + 1) == '\n') {
+                    i++;
+                }
+                start = i + 1;
+            }
+        }
+        lines.add(s.substring(start));
+        int least = Integer.MAX_VALUE;
+        for (int k = 0; k < lines.size(); k++) {
+            String line = lines.get(k);
+            int lead = leading(line);
+            if (lead < line.length() || k == lines.size() - 1) {
+                least = Math.min(least, lead);
+            }
+        }
+        StringBuilder stripped = new StringBuilder();
+        for (int k = 0; k < lines.size(); k++) {
+            String line = lines.get(k);
+            if (k > 0) {
+                stripped.append('\n');
+            }
+            if (leading(line) < line.length()) {
+                int end = line.length();
+                while (Character.isWhitespace(line.charAt(end - 1))) {
+                    end--;
+                }
+                stripped.append(line, least, end);
+            }
+        }
+        return stripped.toString();
+    }
+
+    // String.translateEscapes: the escapes of a literal but a Unicode one -- b t n f r s,
+    // a quote, a backslash, an octal number of up to three digits (two where the first
+    // is above 3), a backslash and a line's end dropped together; any other is refused,
+    // naming what follows the backslash (U+0000 where nothing does) and its code.
+    public static String translateEscapes(String s) {
+        StringBuilder translated = new StringBuilder();
+        int length = s.length();
+        int i = 0;
+        while (i < length) {
+            char c = s.charAt(i++);
+            if (c != '\\') {
+                translated.append(c);
+                continue;
+            }
+            char e = i < length ? s.charAt(i++) : (char) 0;
+            if (e >= '0' && e <= '7') {
+                int value = e - '0';
+                for (int more = e <= '3' ? 2 : 1; more > 0 && i < length && s.charAt(i) >= '0' && s.charAt(i) <= '7'; more--) {
+                    value = value * 8 + s.charAt(i++) - '0';
+                }
+                translated.append((char) value);
+            }
+            else if (e == '\r') {
+                if (i < length && s.charAt(i) == '\n') {
+                    i++;
+                }
+            }
+            else if (e != '\n') {
+                int at = "btnfrs\"'\\".indexOf(e);
+                if (at < 0) {
+                    String code = Integer.toHexString(e).toUpperCase();
+                    throw new IllegalArgumentException(
+                            "Invalid escape sequence: \\" + e + " \\\\u" + "0000".substring(Math.min(4, code.length())) + code);
+                }
+                translated.append("\b\t\n\f\r \"'\\".charAt(at));
+            }
+        }
+        return translated.toString();
+    }
+
+    // Character.codePointAt of an array: a high surrogate and the low one after it are
+    // the character they spell.
+    public static int codePointAt(char[] a, int index) {
+        char c = a[index];
+        if (Character.isHighSurrogate(c) && index + 1 < a.length && Character.isLowSurrogate(a[index + 1])) {
+            return Character.toCodePoint(c, a[index + 1]);
+        }
+        return c;
+    }
+}

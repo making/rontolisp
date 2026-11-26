@@ -1,0 +1,1174 @@
+package am.ik.rontolisp.codegen.wasm;
+
+import java.util.ArrayList;
+import java.util.List;
+
+import am.ik.rontolisp.LispArray;
+import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispDouble;
+import am.ik.rontolisp.LispInteger;
+import am.ik.rontolisp.LispNil;
+import am.ik.rontolisp.LispString;
+import am.ik.rontolisp.LispSymbol;
+import am.ik.rontolisp.LispTrue;
+import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.compiler.LiteralArrayRuns;
+import am.ik.rontolisp.compiler.QuotedGraph;
+import am.ik.rontolisp.compiler.QuotedSharing;
+import am.ik.wasm.Instruction;
+import am.ik.wasm.Type;
+
+/**
+ * Compiles the {@code quote} special form.
+ */
+final class WasmQuoteCompiler {
+
+	private WasmQuoteCompiler() {
+	}
+
+	static void compile(LispCons cons, WasmLispCompiler.Ctx ctx) {
+		LispVal quoted = am.ik.rontolisp.LispCircularLiteral.unwrapped(((LispCons) cons.cdr()).car());
+		// A quoted AGGREGATE is one shared constant (.kb/quoted-data.md): the site
+		// caches its build in a dedicated module global -- global.get; build and
+		// global.set when still null; global.get -- so every evaluation answers the
+		// SAME object, like the interpreter, whose evalQuote hands back the reader's
+		// datum. Lazy rather than start-time because the global count is only known
+		// once every body has compiled; wasm is single-threaded here, so the first
+		// evaluation wins with no race. Keyed by datum IDENTITY
+		// (WasmLispCompiler.QuoteGlobals), so a macro expansion splicing one template
+		// datum into several sites shares one constant across them too. An atom keeps
+		// the inline emission below; a BARE array literal never comes here and stays a
+		// constructor (.kb/array-literals.md), which is what PureBuiltinFolder's
+		// packed-table fold rests on.
+		if (isSharedAggregate(quoted)) {
+			emitSharedConstant(quoted, ctx, () -> compileDatum(quoted, ctx));
+			return;
+		}
+		compileQuotedVal(quoted, ctx);
+	}
+
+	/**
+	 * Compiles a literal holding a circle in code position: as what it holds would
+	 * compile there, an array a constructor and anything else one shared constant.
+	 * @param literal the literal
+	 * @param ctx the compilation context
+	 */
+	static void compileCircularLiteral(am.ik.rontolisp.LispCircularLiteral literal, WasmLispCompiler.Ctx ctx) {
+		LispVal datum = literal.datum();
+		if (datum instanceof LispArray array) {
+			compileLiteralArray(array, ctx);
+		}
+		else {
+			emitSharedConstant(datum, ctx, () -> compileDatum(datum, ctx));
+		}
+	}
+
+	/**
+	 * Emits the build of a whole datum. A tree is built where it stands. A datum whose
+	 * nodes are shared or closed into a circle ({@link QuotedGraph}) keeps its named
+	 * nodes in a bucket array for the length of the build: every one made empty, then
+	 * every one filled, so a named node inside a filling answers the one object.
+	 */
+	private static void compileDatum(LispVal datum, WasmLispCompiler.Ctx ctx) {
+		QuotedGraph graph = ctx.quoteGlobals.graphOf(datum);
+		if (graph == null) {
+			buildQuotedVal(datum, ctx);
+			return;
+		}
+		QuotedGraph savedGraph = ctx.quotedGraph;
+		int savedNames = ctx.quotedNames;
+		emitNamedNodes(graph, ctx);
+		if (graph.nameOf(datum) >= 0) {
+			emitNamedNode(graph.nameOf(datum), ctx);
+		}
+		else {
+			buildQuotedVal(datum, ctx);
+		}
+		ctx.quotedGraph = savedGraph;
+		ctx.quotedNames = savedNames;
+	}
+
+	/**
+	 * Reads a node from the unit it is an entry of ({@link QuotedSharing}): the unit's
+	 * global holds the bucket array of its named nodes, built whole by whichever site
+	 * runs first, through the unit's one builder function ({@link #unitBuilder}).
+	 */
+	private static void emitUnitRead(LispVal node, QuotedGraph unit, WasmLispCompiler.Ctx ctx) {
+		// Built at every site, a unit as wide as the types coalton's environment updates
+		// share made the module a copy of it per literal reaching it.
+		int builder = builderFunction(unit, ctx, 0, b -> {
+			emitNamedNodes(unit, b);
+			getLocal(b, b.quotedNames);
+		});
+		emitSlot(unit.named().getFirst(), ctx, () -> callBuilder(builder, ctx));
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		i32Const(ctx, unit.nameOf(node));
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+	}
+
+	/**
+	 * The quoted nodes a function body builds inline, about: past them the next aggregate
+	 * is built by a function of its own ({@link #builderFunction}) -- a subtree, the rest
+	 * of a list, the rest of a named build -- so no body grows with a literal (coalton's
+	 * environment updates: a unit of the types they share, a tree of types per update).
+	 * Wasmtime compiled the megabyte bodies that made in tens of gigabytes.
+	 */
+	static final int BUILD_NODES_BUDGET = 2048;
+
+	/**
+	 * The index of the function that answers what {@code emit} leaves on the stack, made
+	 * the first time {@code key} asks: called directly like a top-level chunk
+	 * ({@code WasmToplevelEmit}), its body compiled here. With one parameter it takes the
+	 * current build's named nodes, which the body reads as its {@code quotedNames}; with
+	 * two, a named build's storage too, in local 2.
+	 */
+	private static int builderFunction(Object key, WasmLispCompiler.Ctx ctx, int params,
+			java.util.function.Consumer<WasmLispCompiler.Ctx> emit) {
+		Integer known = ctx.quoteGlobals.builder(key);
+		if (known != null) {
+			return known;
+		}
+		int funcId = ctx.nextFuncId[0]++;
+		int funcIndex = ctx.userFuncBase + ctx.numDefuns + ctx.lambdaDecls.size();
+		int lambdaIdx = ctx.lambdaDecls.size();
+		ctx.lambdaDecls.add(builderInfo(funcId, funcIndex, params, new byte[] { 0x00, 0x00, 0x0b }));
+		ctx.quoteGlobals.builder(key, funcIndex);
+		java.io.ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
+		am.ik.wasm.WasmWriter writer = new am.ik.wasm.WasmWriter(body);
+		WasmLispCompiler.Ctx builder = WasmAsyncEmit.freshCtx(ctx, writer, body);
+		builder.closureEnvSlot = 0;
+		builder.nextLocal = 1 + params;
+		if (params > 0) {
+			builder.quotedGraph = ctx.quotedGraph;
+			builder.quotedNames = 1;
+		}
+		emit.accept(builder);
+		writer.write(Instruction.END);
+		ctx.lambdaDecls.set(lambdaIdx, builderInfo(funcId, funcIndex, params,
+				WasmLispCompiler.buildLocalsAndPatch(builder, 1 + params, body)));
+		return funcIndex;
+	}
+
+	private static WasmLispCompiler.LambdaInfo builderInfo(int funcId, int funcIndex, int params, byte[] precompiled) {
+		List<String> paramNames = new ArrayList<>();
+		for (int i = 0; i < params; i++) {
+			paramNames.add("%build-" + i);
+		}
+		return new WasmLispCompiler.LambdaInfo(funcId, "_quoted_build_" + funcId, paramNames, false, List.of(),
+				List.of(), funcIndex, precompiled);
+	}
+
+	/** Calls a builder over the null environment and the locals it takes. */
+	private static void callBuilder(int funcIndex, WasmLispCompiler.Ctx ctx, int... locals) {
+		refNull(ctx);
+		for (int local : locals) {
+			getLocal(ctx, local);
+		}
+		ctx.writer.write(Instruction.CALL);
+		ctx.writer.writeUnsignedLeb128(funcIndex);
+	}
+
+	/**
+	 * Makes a graph current, with its named nodes in a new local: every one made empty,
+	 * then every one filled. The storage a named array or instance is filled through
+	 * travels in a second array, so the steps can continue in another function.
+	 */
+	private static void emitNamedNodes(QuotedGraph graph, WasmLispCompiler.Ctx ctx) {
+		int count = graph.named().size();
+		ctx.quotedGraph = graph;
+		ctx.quotedNames = ctx.allocTemp();
+		refNull(ctx);
+		i32Const(ctx, count);
+		arrayNew(ctx);
+		setLocal(ctx, ctx.quotedNames);
+		int storage = ctx.allocTemp();
+		refNull(ctx);
+		i32Const(ctx, count);
+		arrayNew(ctx);
+		setLocal(ctx, storage);
+		emitNamedSteps(graph, 0, storage, ctx);
+	}
+
+	/**
+	 * Steps {@code from} on of a named build: step {@code i} below the name count makes
+	 * node {@code i} empty, and past it fills the node it counts to. Once this body has
+	 * built its budget the rest is a function of its own, given the names and the
+	 * storage.
+	 */
+	private static void emitNamedSteps(QuotedGraph graph, int from, int storage, WasmLispCompiler.Ctx ctx) {
+		List<LispVal> named = graph.named();
+		for (int step = from; step < 2 * named.size(); step++) {
+			if (step > from && ctx.quotedBuildNodes > BUILD_NODES_BUDGET) {
+				int next = step;
+				int builder = builderFunction(new Object(), ctx, 2, b -> {
+					emitNamedSteps(graph, next, 2, b);
+					refNull(b);
+				});
+				callBuilder(builder, ctx, ctx.quotedNames, storage);
+				ctx.writer.write(Instruction.DROP);
+				return;
+			}
+			ctx.quotedBuildNodes++;
+			if (step < named.size()) {
+				emitEmptyNamedNode(named.get(step), step, storage, ctx);
+			}
+			else {
+				emitNamedFilling(named.get(step - named.size()), step - named.size(), storage, ctx);
+			}
+		}
+	}
+
+	private static void emitEmptyNamedNode(LispVal node, int name, int storage, WasmLispCompiler.Ctx ctx) {
+		int data = -1;
+		if (node instanceof LispArray array) {
+			data = emitArrayData(array, ctx);
+		}
+		else if (node instanceof am.ik.rontolisp.LispInstance inst) {
+			data = emitInstanceSlots(inst, ctx);
+		}
+		if (data >= 0) {
+			getBuckets(ctx, storage);
+			i32Const(ctx, name);
+			getLocal(ctx, data);
+			arraySet(ctx);
+		}
+		getBuckets(ctx, ctx.quotedNames);
+		i32Const(ctx, name);
+		switch (node) {
+			case LispCons ignored -> {
+				refNull(ctx);
+				refNull(ctx);
+				WasmEmitHelper.emitNewCons(ctx);
+			}
+			case LispArray array -> emitArrayCell(array, data, ctx);
+			case am.ik.rontolisp.LispInstance inst -> emitInstanceStruct(inst, data, ctx);
+			// A packed array holds no reference: it is finished here.
+			default -> buildQuotedVal(node, ctx);
+		}
+		arraySet(ctx);
+	}
+
+	private static void emitNamedFilling(LispVal node, int name, int storage, WasmLispCompiler.Ctx ctx) {
+		switch (node) {
+			case LispCons cell -> {
+				emitConsFieldSet(name, 0, cell.car(), ctx);
+				emitConsFieldSet(name, 1, cell.cdr(), ctx);
+			}
+			case LispArray array -> emitArrayFilling(array, storedData(name, storage, ctx), ctx);
+			case am.ik.rontolisp.LispInstance inst -> emitInstanceFilling(inst, storedData(name, storage, ctx), ctx);
+			default -> {
+			}
+		}
+	}
+
+	/** The storage a named node keeps, in a new local. */
+	private static int storedData(int name, int storage, WasmLispCompiler.Ctx ctx) {
+		getBuckets(ctx, storage);
+		i32Const(ctx, name);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		int data = ctx.allocTemp();
+		setLocal(ctx, data);
+		return data;
+	}
+
+	private static void emitConsFieldSet(int name, int field, LispVal value, WasmLispCompiler.Ctx ctx) {
+		emitNamedNode(name, ctx);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		compileQuotedVal(value, ctx);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_SET);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.writeUnsignedLeb128(field);
+	}
+
+	private static void emitNamedNode(int name, WasmLispCompiler.Ctx ctx) {
+		getBuckets(ctx, ctx.quotedNames);
+		i32Const(ctx, name);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+	}
+
+	private static boolean isNamed(LispVal val, WasmLispCompiler.Ctx ctx) {
+		QuotedGraph graph = ctx.quotedGraph;
+		return graph != null && graph.stopsAt(val);
+	}
+
+	/**
+	 * Emits one datum's build behind its lazy module global, so every evaluation of the
+	 * site answers the same object. Shared by the {@code quote} path and the
+	 * bare-instance-literal path, which have the same identity rule and differ only in
+	 * what they build.
+	 * @param datum the datum the global is keyed by (identity, not equality)
+	 * @param ctx the compilation context
+	 * @param build emits the construction, leaving exactly one value on the stack
+	 */
+	private static void emitSharedConstant(LispVal datum, WasmLispCompiler.Ctx ctx, Runnable build) {
+		QuotedGraph unit = ctx.quoteGlobals.unitOf(datum);
+		if (unit != null) {
+			emitUnitRead(datum, unit, ctx);
+			return;
+		}
+		if (ctx.quotedGraph == null && largerThan(datum, OUT_OF_LINE_NODES)) {
+			// A large build is a function of its own the site calls: a form holding
+			// many literals (coalton's environment updates, one let) is their sum.
+			int builder = builderFunction(datum, ctx, 0, b -> compileDatum(datum, b));
+			emitSlot(datum, ctx, () -> callBuilder(builder, ctx));
+			return;
+		}
+		emitSlot(datum, ctx, build);
+	}
+
+	/** The nodes a literal's site builds inline, at most. */
+	private static final int OUT_OF_LINE_NODES = 32;
+
+	/**
+	 * Whether a datum holds more than {@code limit} conses, array elements and instance
+	 * slots, counting no node twice and stopping at the limit.
+	 */
+	private static boolean largerThan(LispVal datum, int limit) {
+		java.util.Set<LispVal> seen = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+		java.util.ArrayDeque<LispVal> pending = new java.util.ArrayDeque<>();
+		pending.push(datum);
+		int count = 0;
+		while (!pending.isEmpty()) {
+			LispVal node = am.ik.rontolisp.LispCircularLiteral.unwrapped(pending.pop());
+			switch (node) {
+				case LispCons cons -> {
+					if (seen.add(cons)) {
+						pending.push(cons.car());
+						pending.push(cons.cdr());
+						count++;
+					}
+				}
+				case LispArray array -> {
+					if (seen.add(array)) {
+						for (LispVal element : array.data()) {
+							if (element != null) {
+								pending.push(element);
+							}
+						}
+						count += 1 + array.data().length;
+					}
+				}
+				case am.ik.rontolisp.LispInstance inst -> {
+					if (seen.add(inst)) {
+						for (int i = 0; i < inst.slotCount(); i++) {
+							LispVal slot = inst.slot(i);
+							if (slot != null) {
+								pending.push(slot);
+							}
+						}
+						count += 1 + inst.slotCount();
+					}
+				}
+				default -> {
+				}
+			}
+			if (count > limit) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private static void emitSlot(LispVal key, WasmLispCompiler.Ctx ctx, Runnable build) {
+		int global = ctx.quoteGlobals.indexFor(key);
+		ctx.writer.write(Instruction.GET_GLOBAL);
+		ctx.writer.writeUnsignedLeb128(global);
+		ctx.writer.write(Instruction.REF_IS_NULL);
+		ctx.writer.write(Instruction.IF, 0x40);
+		build.run();
+		ctx.writer.write(Instruction.SET_GLOBAL);
+		ctx.writer.writeUnsignedLeb128(global);
+		ctx.writer.write(Instruction.END);
+		ctx.writer.write(Instruction.GET_GLOBAL);
+		ctx.writer.writeUnsignedLeb128(global);
+	}
+
+	/**
+	 * Pushes the canonical function-value box of a named function: one closure struct
+	 * {@code {funcId, null env}} per funcId, built once into a shared module global on
+	 * first evaluation, so every {@code (function name)} site of one definition answers
+	 * the SAME object -- like the interpreter's function namespace, where the reference
+	 * below always found one object. Lazy (not start-seeded) for the same reason the
+	 * quoted constants are: the global count is only known once every body has compiled,
+	 * and wasm is single-threaded here, so the first evaluation wins with no race. A
+	 * module carrying {@code _funcref} asks it instead, so a computed resolution and this
+	 * site answer one object. A lambda value never comes here: each evaluation of a
+	 * lambda form stays a distinct closure on every backend.
+	 * @param funcId the named function's funcId
+	 * @param ctx the compilation context
+	 */
+	static void compileSharedFunctionBox(int funcId, WasmLispCompiler.Ctx ctx) {
+		if (ctx.symfuncrefFuncIndex >= 0) {
+			ctx.writer.write(Instruction.I32_CONST);
+			ctx.writer.writeSignedLeb128(funcId);
+			ctx.writer.write(Instruction.CALL);
+			ctx.writer.writeUnsignedLeb128(ctx.symfuncrefFuncIndex);
+			return;
+		}
+		emitSharedConstant(ctx.quoteGlobals.funcBoxTokenFor(funcId), ctx, () -> {
+			ctx.writer.write(Instruction.I32_CONST);
+			ctx.writer.writeSignedLeb128(funcId);
+			ctx.writer.write(Instruction.REF_NULL);
+			ctx.writer.writeHeapType(Type.EQ.code());
+			WasmEmitHelper.emitNewClosure(ctx);
+		});
+	}
+
+	/**
+	 * Whether a quoted datum is memoized into one shared constant. Exactly the mutable
+	 * aggregates: an atom (a number, a string, a symbol, a character, nil, t) has no
+	 * identity a program can observe diverging, so it keeps its inline emission.
+	 * @param val the quoted datum
+	 * @return true when the datum gets a shared module global
+	 */
+	private static boolean isSharedAggregate(LispVal val) {
+		return val instanceof LispCons || val instanceof LispArray || val instanceof am.ik.rontolisp.LispInstance
+				|| val instanceof am.ik.rontolisp.LispDoubleFloatArray
+				|| val instanceof am.ik.rontolisp.LispSingleFloatArray || val instanceof am.ik.rontolisp.LispIntVector;
+	}
+
+	/**
+	 * Emits the construction of a self-evaluating array literal ({@code #(...)}). Shared
+	 * by the {@code quote} path and the bare-literal path in {@link WasmExprCompiler}.
+	 * @param array the literal array
+	 * @param ctx the compilation context
+	 */
+	static void compileLiteralArray(LispArray array, WasmLispCompiler.Ctx ctx) {
+		compileDatum(array, ctx);
+	}
+
+	/**
+	 * Emits a packed float-array literal ({@code #d(...)}) as a {@code TYPE_FARRAY}
+	 * struct {@code (dims . data)}: {@code dims} a {@code TYPE_HASH_BUCKETS} of i31
+	 * dimension sizes (as for a general array), {@code data} a {@code TYPE_F64ARR} of the
+	 * unboxed row-major {@code f64} elements. This is the native packed representation,
+	 * disjoint from the general array's {@code TYPE_CELL}. Shared by the {@code quote}
+	 * path and the bare-literal path in {@link WasmExprCompiler}.
+	 * @param fa the packed literal
+	 * @param ctx the compilation context
+	 */
+	static void compilePackedLiteral(am.ik.rontolisp.LispDoubleFloatArray fa, WasmLispCompiler.Ctx ctx) {
+		double[] data = fa.data();
+		int[] dims = fa.dims();
+		if (ctx.simd) {
+			compilePackedVblockLiteral(ctx, dims, data.length, false, group -> {
+				byte[] bytes = new byte[16];
+				for (int lane = 0; lane < 2; lane++) {
+					int i = group * 2 + lane;
+					long bits = i < data.length ? Double.doubleToRawLongBits(data[i]) : 0L;
+					for (int b = 0; b < 8; b++) {
+						bytes[lane * 8 + b] = (byte) (bits >>> (8 * b));
+					}
+				}
+				return bytes;
+			});
+			return;
+		}
+		// data: array.new TYPE_F64ARR (0.0, data.length), then array.set each element.
+		f64Const(ctx, 0.0);
+		i32Const(ctx, data.length);
+		f64ArrayNew(ctx);
+		int dataSlot = ctx.allocTemp();
+		setLocal(ctx, dataSlot);
+		for (int i = 0; i < data.length; i++) {
+			getF64Arr(ctx, dataSlot);
+			i32Const(ctx, i);
+			f64Const(ctx, data[i]);
+			f64ArraySet(ctx);
+		}
+		// dims: array.new TYPE_HASH_BUCKETS (null, dims.length), filled with i31 sizes.
+		refNull(ctx);
+		i32Const(ctx, dims.length);
+		arrayNew(ctx);
+		int dimsSlot = ctx.allocTemp();
+		setLocal(ctx, dimsSlot);
+		for (int d = 0; d < dims.length; d++) {
+			getBuckets(ctx, dimsSlot);
+			i32Const(ctx, d);
+			i32Const(ctx, dims[d]);
+			ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+			arraySet(ctx);
+		}
+		// struct.new TYPE_FARRAY (dims, data)
+		getLocal(ctx, dimsSlot);
+		getLocal(ctx, dataSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_FARRAY);
+	}
+
+	/**
+	 * Compiles a packed integer-vector literal (ironclad's {@code #N@(...)} table syntax,
+	 * or a table the {@code PureBuiltinFolder} reduced a literal
+	 * {@code coerce}/{@code make-array} to) into its native representation: a bare
+	 * {@code TYPE_I8ARR/I16ARR/I32ARR} array of the pre-masked elements. Shared by the
+	 * {@code quote} path and the bare-literal path in {@link WasmExprCompiler}.
+	 *
+	 * <p>
+	 * <b>Two emissions, and the cheaper one wins.</b> A literal can be allocated zeroed
+	 * with {@code array.new_default} and filled with {@code array.set} -- around 12 bytes
+	 * an element, but no fixed cost and a ZERO element costs nothing at all -- or its
+	 * elements can go into the module's static data, little-endian at the element width,
+	 * with the site a copy loop over them: {@code w/8} bytes an element (4 for a CRC
+	 * table, 1 for a byte table) plus a fixed ~55. {@link #prefersDataSegment} counts
+	 * both and picks, so a real lookup table is baked (that is the whole point of the
+	 * fold that produces these -- chipz's ~700 constant-table elements were 11.8 bytes
+	 * each as the cons list the {@code coerce} spelling built) while a short one, and a
+	 * mostly-zero one of any length, keeps the emission it always had.
+	 *
+	 * <p>
+	 * The array is still allocated and filled AT THE SITE, so each evaluation of the
+	 * literal yields a fresh, independently mutable vector -- the property the fold rests
+	 * on. The blob is registered as a droppable data range, so {@code --optimize} cuts
+	 * the bytes when the last body holding their address dies.
+	 * @param iv the packed literal
+	 * @param ctx the compilation context
+	 */
+	static void compileIntVectorLiteral(am.ik.rontolisp.LispIntVector iv, WasmLispCompiler.Ctx ctx) {
+		long[] data = iv.toLongArray();
+		int type = WasmArrayCompiler.intArrType(iv.width());
+		// An async resume body declares its own locals and never resolves an i64 scratch
+		// placeholder, which is why every other i64-local user (fusion, the raw let
+		// locals, the counted dotimes) stands down there too; the array.set run needs no
+		// counter, so it is the fallback rather than a missing case.
+		if (ctx.asyncResume == null && prefersDataSegment(data, iv.width())) {
+			compileIntVectorFromData(iv, type, ctx);
+			return;
+		}
+		i32Const(ctx, data.length);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_NEW_DEFAULT);
+		ctx.writer.writeUnsignedLeb128(type);
+		int dataSlot = ctx.allocTemp();
+		setLocal(ctx, dataSlot);
+		for (int i = 0; i < data.length; i++) {
+			if (data[i] == 0) {
+				continue;
+			}
+			getLocal(ctx, dataSlot);
+			ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+			ctx.writer.writeHeapType(type);
+			i32Const(ctx, i);
+			i32Const(ctx, (int) data[i]);
+			ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_SET);
+			ctx.writer.writeUnsignedLeb128(type);
+		}
+		getLocal(ctx, dataSlot);
+	}
+
+	/**
+	 * The copy loop's fixed cost in bytes: the allocation, the two counter locals, the
+	 * cast, the two scaled reads of the counter, the load, the store, the increment, the
+	 * bound test and the branch. Counted from the emitter below (~55 with a four-byte
+	 * base address), and used only to CHOOSE between two correct emissions, so being a
+	 * few bytes off moves the crossover by one element and nothing else.
+	 */
+	private static final int DATA_SEGMENT_FIXED_BYTES = 55;
+
+	/**
+	 * Whether baking the elements as static data beats storing them one {@code array.set}
+	 * at a time. Counting rather than thresholding matters in one direction that a
+	 * threshold gets wrong: the {@code array.set} run SKIPS a zero element entirely, so a
+	 * long mostly-zero literal is nearly free that way and would pay its full width per
+	 * element as data.
+	 */
+	private static boolean prefersDataSegment(long[] data, int width) {
+		// array.new_default + the two slot accesses, then per stored element:
+		// local.get, ref.cast, the index, the value, array.set.
+		long inline = 9;
+		for (int i = 0; i < data.length; i++) {
+			if (data[i] != 0) {
+				inline += 10 + signedLebLength(i) + signedLebLength((int) data[i]);
+			}
+		}
+		return DATA_SEGMENT_FIXED_BYTES + (long) data.length * (width / 8) < inline;
+	}
+
+	/** The byte length of a signed LEB128 encoding, as {@code WasmWriter} emits it. */
+	private static int signedLebLength(int value) {
+		int length = 1;
+		for (int remaining = value >> 6; remaining != 0 && remaining != -1; remaining >>= 7) {
+			length++;
+		}
+		return length;
+	}
+
+	// arr = array.new_default T (count); for (n = 0; n < count; n++)
+	// arr[n] = load_u<width>(base + (n << log2 bytes)); arr
+	//
+	// The loop counter is an i64 scratch local -- the only raw local flavour a body has,
+	// and the watermark is restored afterwards so the slot is reused like a fused site's.
+	// The base is an explicit i32.const rather than the load's memarg offset ON PURPOSE:
+	// the tree shaker's droppable-range probe reads i32.const values out of the surviving
+	// bodies and skips memargs, so a base hidden in a memarg would let it cut a table its
+	// own reader still addresses.
+	//
+	// Elements are stored little-endian, which is what the load reads back on every host:
+	// wasm's linear memory is little-endian by definition.
+	private static void compileIntVectorFromData(am.ik.rontolisp.LispIntVector iv, int type, WasmLispCompiler.Ctx ctx) {
+		long[] data = iv.toLongArray();
+		int bytes = iv.width() / 8;
+		int shift = Integer.numberOfTrailingZeros(bytes);
+		byte[] blob = new byte[data.length * bytes];
+		for (int i = 0; i < data.length; i++) {
+			for (int b = 0; b < bytes; b++) {
+				blob[i * bytes + b] = (byte) (data[i] >>> (8 * b));
+			}
+		}
+		int base = ctx.stringTable.appendShakeableBlob(blob);
+		int arrSlot = ctx.allocTemp();
+		int savedI64Locals = ctx.nextI64Local;
+		int counter = ctx.allocI64Temp();
+		i32Const(ctx, data.length);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_NEW_DEFAULT);
+		ctx.writer.writeUnsignedLeb128(type);
+		setLocal(ctx, arrSlot);
+		i64Const(ctx, 0);
+		setI64Local(ctx, counter);
+		ctx.writer.write(Instruction.LOOP, 0x40);
+		getLocal(ctx, arrSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		ctx.writer.writeHeapType(type);
+		getI64Local(ctx, counter);
+		ctx.writer.write(Instruction.I32_WRAP_I64);
+		getI64Local(ctx, counter);
+		ctx.writer.write(Instruction.I32_WRAP_I64);
+		if (shift > 0) {
+			i32Const(ctx, shift);
+			ctx.writer.write(Instruction.I32_SHL);
+		}
+		i32Const(ctx, base);
+		ctx.writer.write(Instruction.I32_ADD);
+		ctx.writer.write(switch (bytes) {
+			case 1 -> Instruction.I32_LOAD8_U;
+			case 2 -> Instruction.I32_LOAD16_U;
+			default -> Instruction.I32_LOAD;
+		});
+		ctx.writer.writeUnsignedLeb128(shift); // alignment hint: the natural one
+		ctx.writer.writeUnsignedLeb128(0); // offset
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_SET);
+		ctx.writer.writeUnsignedLeb128(type);
+		getI64Local(ctx, counter);
+		i64Const(ctx, 1);
+		ctx.writer.write(Instruction.I64_ADD);
+		setI64Local(ctx, counter);
+		getI64Local(ctx, counter);
+		i64Const(ctx, data.length);
+		ctx.writer.write(Instruction.I64_LT_U);
+		ctx.writer.write(Instruction.BR_IF);
+		ctx.writer.writeUnsignedLeb128(0);
+		ctx.writer.write(Instruction.END);
+		getLocal(ctx, arrSlot);
+		ctx.nextI64Local = savedI64Locals;
+	}
+
+	private static void i64Const(WasmLispCompiler.Ctx ctx, long value) {
+		ctx.writer.write(Instruction.I64_CONST);
+		ctx.writer.writeSignedLeb128(value);
+	}
+
+	private static void getI64Local(WasmLispCompiler.Ctx ctx, int slot) {
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writeI64LocalIndex(slot);
+	}
+
+	private static void setI64Local(WasmLispCompiler.Ctx ctx, int slot) {
+		ctx.writer.write(Instruction.SET_LOCAL);
+		ctx.writeI64LocalIndex(slot);
+	}
+
+	// --- --simd packed literals (v128 lane groups) --------------------------------
+	//
+	// Under --simd a packed literal allocates a zeroed TYPE_VBLOCK at the point of
+	// evaluation (so a literal inside a loop body allocates once per iteration, exactly
+	// as
+	// the GC path's array.new does) and fills it a whole lane group at a time with
+	// v128.const -- the element bytes are known at compile time. An all-zero group (and
+	// the trailing zero sentinel) is skipped: _v_new already wrote it.
+
+	/** Supplies the sixteen little-endian bytes of lane group {@code g}. */
+	private interface GroupBytes {
+
+		byte[] of(int group);
+
+	}
+
+	// vb = _v_new(count, kind); vb.groups[g] = v128.const <bytes(g)>; the TYPE_FARRAY.
+	private static void compilePackedVblockLiteral(WasmLispCompiler.Ctx ctx, int[] dims, int count, boolean single,
+			GroupBytes bytes) {
+		i32Const(ctx, count);
+		i32Const(ctx, single ? 1 : 0);
+		ctx.writer.write(Instruction.CALL);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_VEC_BASE + WasmVecSimdRuntimeBuilder.V_NEW);
+		int vbSlot = ctx.allocTemp();
+		setLocal(ctx, vbSlot);
+		int lanes = single ? 4 : 2;
+		int groupCount = (count + lanes - 1) / lanes;
+		if (groupCount > 0) {
+			int groupsSlot = ctx.allocTemp();
+			getLocal(ctx, vbSlot);
+			ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+			ctx.writer.writeHeapType(WasmLispCompiler.TYPE_VBLOCK);
+			ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+			ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_VBLOCK);
+			ctx.writer.writeUnsignedLeb128(2);
+			setLocal(ctx, groupsSlot);
+			for (int g = 0; g < groupCount; g++) {
+				byte[] groupBytes = bytes.of(g);
+				if (isZero(groupBytes)) {
+					continue; // _v_new zeroed it
+				}
+				getLocal(ctx, groupsSlot);
+				ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+				ctx.writer.writeHeapType(WasmLispCompiler.TYPE_V128ARR);
+				i32Const(ctx, g);
+				ctx.writer.write(Instruction.SIMD_PREFIX);
+				ctx.writer.writeUnsignedLeb128(Instruction.V128_CONST);
+				ctx.writer.write((Object) groupBytes);
+				ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_SET);
+				ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_V128ARR);
+			}
+		}
+		// dims buckets, then struct.new TYPE_FARRAY (dims, vb)
+		refNull(ctx);
+		i32Const(ctx, dims.length);
+		arrayNew(ctx);
+		int dimsSlot = ctx.allocTemp();
+		setLocal(ctx, dimsSlot);
+		for (int d = 0; d < dims.length; d++) {
+			getBuckets(ctx, dimsSlot);
+			i32Const(ctx, d);
+			i32Const(ctx, dims[d]);
+			ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+			arraySet(ctx);
+		}
+		getLocal(ctx, dimsSlot);
+		getLocal(ctx, vbSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_FARRAY);
+	}
+
+	private static boolean isZero(byte[] bytes) {
+		for (byte b : bytes) {
+			if (b != 0) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	/**
+	 * Emits a packed single-float array literal ({@code #f(...)}) as a
+	 * {@code TYPE_FARRAY} struct {@code (dims . data)} whose {@code data} is a
+	 * {@code TYPE_F32ARR} ({@code array (mut f32)}) of the unboxed row-major {@code f32}
+	 * elements -- the same struct type as the double width, distinguished at read time by
+	 * {@code ref.test $f32arr}. Each element is emitted as its widening {@code f64}
+	 * constant narrowed with {@code f32.demote_f64} (an exact round-trip), so no f32
+	 * immediate encoding is needed (mirrors the JVM {@code d2f} literal trick). Shared by
+	 * the {@code quote} path and the bare-literal path in {@link WasmExprCompiler}.
+	 * @param fa the packed single-float literal
+	 * @param ctx the compilation context
+	 */
+	static void compileSinglePackedLiteral(am.ik.rontolisp.LispSingleFloatArray fa, WasmLispCompiler.Ctx ctx) {
+		float[] data = fa.data();
+		int[] dims = fa.dims();
+		if (ctx.simd) {
+			compilePackedVblockLiteral(ctx, dims, data.length, true, group -> {
+				byte[] bytes = new byte[16];
+				for (int lane = 0; lane < 4; lane++) {
+					int i = group * 4 + lane;
+					int bits = i < data.length ? Float.floatToRawIntBits(data[i]) : 0;
+					for (int b = 0; b < 4; b++) {
+						bytes[lane * 4 + b] = (byte) (bits >>> (8 * b));
+					}
+				}
+				return bytes;
+			});
+			return;
+		}
+		// data: array.new TYPE_F32ARR (0.0, data.length), then array.set each element.
+		f32Const(ctx, 0.0f);
+		i32Const(ctx, data.length);
+		f32ArrayNew(ctx);
+		int dataSlot = ctx.allocTemp();
+		setLocal(ctx, dataSlot);
+		for (int i = 0; i < data.length; i++) {
+			getF32Arr(ctx, dataSlot);
+			i32Const(ctx, i);
+			f32Const(ctx, data[i]);
+			f32ArraySet(ctx);
+		}
+		// dims: array.new TYPE_HASH_BUCKETS (null, dims.length), filled with i31 sizes.
+		refNull(ctx);
+		i32Const(ctx, dims.length);
+		arrayNew(ctx);
+		int dimsSlot = ctx.allocTemp();
+		setLocal(ctx, dimsSlot);
+		for (int d = 0; d < dims.length; d++) {
+			getBuckets(ctx, dimsSlot);
+			i32Const(ctx, d);
+			i32Const(ctx, dims[d]);
+			ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+			arraySet(ctx);
+		}
+		// struct.new TYPE_FARRAY (dims, data)
+		getLocal(ctx, dimsSlot);
+		getLocal(ctx, dataSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_FARRAY);
+	}
+
+	private static void compileQuotedVal(LispVal val, WasmLispCompiler.Ctx ctx) {
+		QuotedGraph graph = ctx.quotedGraph;
+		if (graph != null) {
+			int name = graph.nameOf(val);
+			if (name >= 0) {
+				emitNamedNode(name, ctx);
+				return;
+			}
+			QuotedGraph unit = graph.unitOf(val);
+			if (unit != null) {
+				emitUnitRead(val, unit, ctx);
+				return;
+			}
+		}
+		if (ctx.quotedBuildNodes > BUILD_NODES_BUDGET && (val instanceof LispCons || val instanceof LispArray
+				|| val instanceof am.ik.rontolisp.LispInstance)) {
+			// This body has built its budget: the aggregate is a function of its own,
+			// given the build's named nodes when it has some.
+			if (graph != null) {
+				callBuilder(builderFunction(val, ctx, 1, b -> buildQuotedVal(val, b)), ctx, ctx.quotedNames);
+			}
+			else {
+				callBuilder(builderFunction(val, ctx, 0, b -> buildQuotedVal(val, b)), ctx);
+			}
+			return;
+		}
+		buildQuotedVal(val, ctx);
+	}
+
+	private static void buildQuotedVal(LispVal val, WasmLispCompiler.Ctx ctx) {
+		switch (val) {
+			case LispInteger i -> WasmEmitHelper.compileIntegerLiteral(i.value(), ctx);
+			case am.ik.rontolisp.LispBigInteger bi -> WasmEmitHelper.compileBigIntegerLiteral(bi.value(), ctx);
+			case am.ik.rontolisp.LispRatio r -> WasmEmitHelper.compileRatioLiteral(r, ctx);
+			case LispDouble d -> {
+				ctx.writer.write(Instruction.F64_CONST);
+				ctx.writer.writeF64(d.value());
+				ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+				ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_FLOAT);
+			}
+			// A quoted complex is one inline construction: the reader already
+			// canonicalized it, so its parts plus struct.new are the value (an atom,
+			// so no shared-constant global -- it keeps the inline emission above).
+			case am.ik.rontolisp.LispComplex c -> WasmComplexCompiler.compileLiteral(c, ctx);
+			case LispNil ignored -> {
+				ctx.writer.write(Instruction.REF_NULL);
+				ctx.writer.writeHeapType(Type.EQ.code());
+			}
+			case LispTrue ignored -> WasmEmitHelper.emitTrue(ctx);
+			case LispString s -> WasmEmitHelper.compileStringLiteral(s.literal(), ctx);
+			case am.ik.rontolisp.LispChar c -> {
+				ctx.writer.write(Instruction.I32_CONST);
+				ctx.writer.writeSignedLeb128(c.codePoint());
+				ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+				ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CHAR);
+			}
+			case LispSymbol sym -> WasmEmitHelper.compileStringLiteral(sym.name(), ctx);
+			case LispCons cons -> compileQuotedCons(cons, ctx);
+			case am.ik.rontolisp.LispCircularLiteral literal -> compileQuotedVal(literal.datum(), ctx);
+			case LispArray array -> compileQuotedArray(array, ctx);
+			case am.ik.rontolisp.LispDoubleFloatArray fa -> compilePackedLiteral(fa, ctx);
+			case am.ik.rontolisp.LispSingleFloatArray fa -> compileSinglePackedLiteral(fa, ctx);
+			// Named rather than left to the generic "Cannot quote" default below, so the
+			// message says which width and which backend (.kb/bfloat16.md).
+			case am.ik.rontolisp.LispBFloat16Array ignored -> throw am.ik.rontolisp.compiler.UnsupportedFloatWidth
+				.refuse(am.ik.rontolisp.FloatWidth.BFLOAT16, "the wasm-GC backend");
+			case am.ik.rontolisp.LispIntVector iv -> compileIntVectorLiteral(iv, ctx);
+			// An instance inside quoted data (a #S(...) literal) builds the same
+			// TYPE_INSTANCE struct %obj-new does; it is self-evaluating, so it also
+			// reaches here from the bare-literal arm of compileExpr.
+			case am.ik.rontolisp.LispInstance inst -> compileQuotedInstance(inst, ctx);
+			default -> throw new UnsupportedOperationException("Cannot quote: " + val.print());
+		}
+	}
+
+	/**
+	 * The most cells one run of a quoted list keeps on the operand stack
+	 * (.kb/quoted-data.md, "A long list is built in runs").
+	 */
+	static final int QUOTED_RUN = 16;
+
+	// Every car in order, then the tail, then one cons per cell: the bytes the recursive
+	// car / cdr / cons emission produced, without a Java frame per element. A list
+	// longer than one run is built from its tail, a run at a time, the list so far
+	// carried through a local -- so no more than a run's cars are live across the calls
+	// a symbol or a string makes, whatever the list's length.
+	private static void compileQuotedCons(LispCons cons, WasmLispCompiler.Ctx ctx) {
+		List<LispVal> cars = new ArrayList<>();
+		LispVal rest = cons;
+		// A named cell is the tail of the spine that reaches it, and so is the cell past
+		// a budget of them: counted first, the rest of the list is a function of its own
+		// (compileQuotedVal).
+		while (rest instanceof LispCons cell && !isNamed(cell, ctx) && cars.size() < BUILD_NODES_BUDGET) {
+			cars.add(cell.car());
+			rest = cell.cdr();
+		}
+		ctx.quotedBuildNodes += cars.size();
+		if (cars.size() <= QUOTED_RUN) {
+			for (LispVal car : cars) {
+				compileQuotedVal(car, ctx);
+			}
+			compileQuotedVal(rest, ctx);
+			for (int i = 0; i < cars.size(); i++) {
+				WasmEmitHelper.emitNewCons(ctx);
+			}
+			return;
+		}
+		compileQuotedVal(rest, ctx);
+		int tail = ctx.allocTemp();
+		setLocal(ctx, tail);
+		for (int end = cars.size(); end > 0; end -= QUOTED_RUN) {
+			int start = Math.max(0, end - QUOTED_RUN);
+			for (int i = start; i < end; i++) {
+				compileQuotedVal(cars.get(i), ctx);
+			}
+			getLocal(ctx, tail);
+			for (int i = start; i < end; i++) {
+				WasmEmitHelper.emitNewCons(ctx);
+			}
+			if (start > 0) {
+				setLocal(ctx, tail);
+			}
+		}
+	}
+
+	// Builds the runtime array representation: a TYPE_CELL box wrapping a header
+	// cons (dims . (meta . data)), where dims and data are both TYPE_HASH_BUCKETS
+	// arrays and meta is a (fillPointer . (adjustable . offset)) chain. dims holds the
+	// dimension sizes as i31 integers, data holds the row-major elements; a literal
+	// array never has a fill pointer, is not adjustable and is not displaced, so the
+	// meta fields stay null with a 0 offset. This mirrors the layout produced by
+	// WasmArrayCompiler.compileMake.
+	private static void compileQuotedArray(LispArray array, WasmLispCompiler.Ctx ctx) {
+		ctx.quotedBuildNodes += 1 + array.data().length;
+		int dataSlot = emitArrayData(array, ctx);
+		emitArrayFilling(array, dataSlot, ctx);
+		emitArrayCell(array, dataSlot, ctx);
+	}
+
+	// data array: array.new TYPE_HASH_BUCKETS (null, data.length), in a local of its own.
+	private static int emitArrayData(LispArray array, WasmLispCompiler.Ctx ctx) {
+		refNull(ctx);
+		i32Const(ctx, array.data().length);
+		arrayNew(ctx);
+		int dataSlot = ctx.allocTemp();
+		setLocal(ctx, dataSlot);
+		return dataSlot;
+	}
+
+	private static void emitArrayFilling(LispArray array, int dataSlot, WasmLispCompiler.Ctx ctx) {
+		LispVal[] data = array.data();
+		int run;
+		for (int i = 0; i < data.length; i += run) {
+			run = LiteralArrayRuns.length(data, i);
+			getBuckets(ctx, dataSlot);
+			i32Const(ctx, i);
+			compileQuotedVal(LiteralArrayRuns.element(data, i), ctx);
+			if (run == 1) {
+				arraySet(ctx);
+			}
+			else {
+				i32Const(ctx, run);
+				ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_FILL);
+				ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+			}
+		}
+	}
+
+	// The TYPE_CELL over the data array in dataSlot, left on the stack.
+	private static void emitArrayCell(LispArray array, int dataSlot, WasmLispCompiler.Ctx ctx) {
+		int[] dims = array.dimensions();
+		// dims array: array.new TYPE_HASH_BUCKETS (null, dims.length), then fill with
+		// i31s.
+		refNull(ctx);
+		i32Const(ctx, dims.length);
+		arrayNew(ctx);
+		int dimsSlot = ctx.allocTemp();
+		setLocal(ctx, dimsSlot);
+		for (int d = 0; d < dims.length; d++) {
+			getBuckets(ctx, dimsSlot);
+			i32Const(ctx, d);
+			i32Const(ctx, dims[d]);
+			ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+			arraySet(ctx);
+		}
+		// header = cons(dims, cons(cons(null, cons(null, marker)), data));
+		// cell = struct.new TYPE_CELL(header). The marker is 0 (nothing remembered),
+		// except a bit-vector literal (#*1011), which is stamped with the remembered
+		// element type bit like the frontend's lowering.
+		getBuckets(ctx, dimsSlot);
+		refNull(ctx);
+		refNull(ctx);
+		i32Const(ctx, array.elementTypeCode() == am.ik.rontolisp.ArrayElementTypes.BIT
+				? WasmArrayCompiler.elementTypeMarker(am.ik.rontolisp.ArrayElementTypes.BIT) : 0);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+		WasmEmitHelper.emitNewCons(ctx);
+		WasmEmitHelper.emitNewCons(ctx);
+		getBuckets(ctx, dataSlot);
+		WasmEmitHelper.emitNewCons(ctx);
+		WasmEmitHelper.emitNewCons(ctx);
+		WasmEmitHelper.emitNewArrayCell(ctx);
+	}
+
+	/**
+	 * Compiles a self-evaluating instance literal in code position (an instance is
+	 * neither a symbol nor a cons, CLHS 3.1.2.1.3).
+	 * <p>
+	 * It is one SHARED constant, exactly as under {@code quote} (.kb/quoted-data.md): the
+	 * interpreter's {@code LispInstance} arm hands the reader's own instance back at
+	 * every evaluation, so the site memoizes into the same lazy module global a quoted
+	 * datum uses. This is the one literal family that does NOT follow the
+	 * fresh-per-evaluation rule of an array literal (.kb/array-literals.md): there the
+	 * interpreter could be moved, here it cannot -- the same arm carries every live
+	 * instance the evaluator splices back through {@code (quote <value>)}.
+	 * @param inst the instance literal
+	 * @param ctx the compilation context
+	 */
+	static void compileLiteralInstance(am.ik.rontolisp.LispInstance inst, WasmLispCompiler.Ctx ctx) {
+		emitSharedConstant(inst, ctx, () -> compileDatum(inst, ctx));
+	}
+
+	// Builds a TYPE_INSTANCE over the layout the value already carries: the slots array
+	// first, then the baked layout address, then struct.new.
+	private static void compileQuotedInstance(am.ik.rontolisp.LispInstance inst, WasmLispCompiler.Ctx ctx) {
+		ctx.quotedBuildNodes += 1 + inst.slotCount();
+		int slotsSlot = emitInstanceSlots(inst, ctx);
+		emitInstanceFilling(inst, slotsSlot, ctx);
+		emitInstanceStruct(inst, slotsSlot, ctx);
+	}
+
+	// The slots array, in a local of its own.
+	private static int emitInstanceSlots(am.ik.rontolisp.LispInstance inst, WasmLispCompiler.Ctx ctx) {
+		if (ctx.layoutAddresses.get(inst.layout().tag()) == null || ctx.instanceTypeIndex < 0) {
+			throw new UnsupportedOperationException(
+					"Cannot quote an instance of an unregistered type: " + inst.layout().tag());
+		}
+		refNull(ctx);
+		i32Const(ctx, inst.slotCount());
+		arrayNew(ctx);
+		int slotsSlot = ctx.allocTemp();
+		setLocal(ctx, slotsSlot);
+		return slotsSlot;
+	}
+
+	private static void emitInstanceFilling(am.ik.rontolisp.LispInstance inst, int slotsSlot,
+			WasmLispCompiler.Ctx ctx) {
+		for (int i = 0; i < inst.slotCount(); i++) {
+			getBuckets(ctx, slotsSlot);
+			i32Const(ctx, i);
+			compileQuotedVal(inst.slot(i), ctx);
+			arraySet(ctx);
+		}
+	}
+
+	// The TYPE_INSTANCE over the baked layout address and the slots array, left on the
+	// stack.
+	private static void emitInstanceStruct(am.ik.rontolisp.LispInstance inst, int slotsSlot, WasmLispCompiler.Ctx ctx) {
+		i32Const(ctx, java.util.Objects.requireNonNull(ctx.layoutAddresses.get(inst.layout().tag())));
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(slotsSlot);
+		WasmEmitHelper.emitNewInstance(ctx);
+	}
+
+	private static void refNull(WasmLispCompiler.Ctx ctx) {
+		ctx.writer.write(Instruction.REF_NULL);
+		ctx.writer.writeHeapType(Type.EQ.code());
+	}
+
+	private static void i32Const(WasmLispCompiler.Ctx ctx, int value) {
+		ctx.writer.write(Instruction.I32_CONST);
+		ctx.writer.writeSignedLeb128(value);
+	}
+
+	private static void f64Const(WasmLispCompiler.Ctx ctx, double value) {
+		ctx.writer.write(Instruction.F64_CONST);
+		ctx.writer.writeF64(value);
+	}
+
+	private static void setLocal(WasmLispCompiler.Ctx ctx, int slot) {
+		ctx.writer.write(Instruction.SET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(slot);
+	}
+
+	private static void getLocal(WasmLispCompiler.Ctx ctx, int slot) {
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(slot);
+	}
+
+	// Pushes the f64 array stored in slot, cast to TYPE_F64ARR.
+	private static void getF64Arr(WasmLispCompiler.Ctx ctx, int slot) {
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(slot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_F64ARR);
+	}
+
+	private static void f64ArrayNew(WasmLispCompiler.Ctx ctx) {
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_NEW);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_F64ARR);
+	}
+
+	private static void f64ArraySet(WasmLispCompiler.Ctx ctx) {
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_SET);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_F64ARR);
+	}
+
+	// Pushes the f32 array stored in slot, cast to TYPE_F32ARR.
+	private static void getF32Arr(WasmLispCompiler.Ctx ctx, int slot) {
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(slot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_F32ARR);
+	}
+
+	private static void f32ArrayNew(WasmLispCompiler.Ctx ctx) {
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_NEW);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_F32ARR);
+	}
+
+	private static void f32ArraySet(WasmLispCompiler.Ctx ctx) {
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_SET);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_F32ARR);
+	}
+
+	// Pushes an f32 constant: emitted as its widening f64 constant narrowed with
+	// f32.demote_f64 (an exact round-trip), so no f32 immediate encoding is needed.
+	private static void f32Const(WasmLispCompiler.Ctx ctx, float value) {
+		ctx.writer.write(Instruction.F64_CONST);
+		ctx.writer.writeF64(value);
+		ctx.writer.write(Instruction.F32_DEMOTE_F64);
+	}
+
+	// Pushes the bucket array stored in slot, cast to TYPE_HASH_BUCKETS.
+	private static void getBuckets(WasmLispCompiler.Ctx ctx, int slot) {
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(slot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_HASH_BUCKETS);
+	}
+
+	private static void arrayNew(WasmLispCompiler.Ctx ctx) {
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_NEW);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+	}
+
+	private static void arraySet(WasmLispCompiler.Ctx ctx) {
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_SET);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+	}
+
+}

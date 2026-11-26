@@ -1,0 +1,10 @@
+# linalg:randn
+
+`(linalg:randn shape &key element-type)`
+
+Returns an array of standard-normal draws (numpy's `np.random.randn`, but taking a shape designator like [`linalg:zeros`](linalg-zeros.md); double by default, `:element-type 'single-float` for `#f`) `:element-type 'bfloat16` builds a packed bfloat16 (`#bf16`) array instead, on the interpreter and the JVM only ([Single-float precision](../../guides/linear-algebra.md#single-float-precision)).. The Gaussians are built by Irwin-Hall -- the sum of 12 uniforms minus 6 -- rather than Box-Muller, so a sequence seeded with [`linalg:seed`](linalg-seed.md) stays bit-identical across backends (WASM's `log`/`cos` are polynomial approximations); the tails clip at +/- 6 sigma, which is fine for weight initialization but not a distribution-exact `np.random.randn`.
+
+```lisp
+(linalg:seed 42) ; => 42
+(linalg:emap (lambda (x) (truncate (* 1024 x))) (linalg:randn 4)) ; => #d(164.0 -469.0 -1782.0 -1292.0)
+```

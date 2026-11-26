@@ -1,0 +1,388 @@
+# `eval` in all three backends (interpreter, WASM, JVM)
+
+Runtime tree-walking interpreter over the compiled value representation: `null`=nil, `Long`=int,
+`Double`=float, `String`=symbol or `"..."`-prefixed string, `Object[2]`=cons, `Object[]` with
+`Integer` head=function value; interpreted closures use sentinel `funcId == -1`. Supported forms and
+limitations are identical across WASM/JVM -- README "Compiled `eval` limitations". A
+`compile` call the program's own definitions make does not reach it: the macro-time replay
+precompiles those definitions (`.kb/clos.md`, "Precompiled definitions").
+
+**`compile` on all four backends (2026-11-04, agrees with SBCL 2.2.9):** `(compile name
+[definition])` answers the name or the function plus `nil nil` (`passesMultipleValues` lists it).
+`(compile 'name)` keeps the definition and signals what `fdefinition` does; compile-runtime.lisp's
+`%compile-check-name` asks `macro-function` first. compile-runtime is injected after the prelude,
+so a program NAMING `compile` selects `macro-function` by surface fact (`referencedBySurfaceForm`,
+`LibraryDefunPruner.SYNTHESIZED_ENTRIES`, `UserMacroExpander.usesMacroIntrospection`), and one that
+only reaches the runtime through a coerce or a registration gets the variant without the test
+(`CompileRuntime.forms`), which it cannot call. `RuntimeFunctionNames` counts a `compile` site, a
+quoted name included, since its name is computed inside the runtime. A literal `(compile 'name definition)` of a name with a `defun` moves the definition to the
+namespace (`compiler/RedefinedDefuns`, `.kb/symbol-runtime-api.md`), so every reference sees the
+new one; through a computed name, a reference reads the name's cell for it ("A write through a
+computed name" there). A literal
+`(compile 'name definition)` of any other name gets the setf-only forwarder of that file, so the
+name is no undefined
+function to a warning or to `UndefinedWarnings`; every call already worked (2026-11-04, the
+`looked up when the call runs` arm). A computed name or `(funcall 'compile ...)` still warns.
+Pinned by ci-spec `character-and-compile-of-a-name`,
+`RontoLispCliStreamsTest#anUndefinedNameAProgramCanBindAtRunTimeWarnsThatItIsLookedUp`.
+
+## Shape
+
+Interpreter: a `LispFunction` registered in `LispEvaluator`'s constructor (avoids a circular dep).
+WASM (`WasmEvalRuntimeBuilder`/`WasmEvalCompiler`) and JVM (`JvmEvalRuntimeBuilder`/
+`JvmEvalCompiler`) mirror each other: `_lookup`/`_env_lookup`/`_eval`/`_apply`/`_store` + a
+persistent top-level env (`GLOBAL_ENV` wasm global / `_genv` JVM field), with
+`setq`/`setf`/`push`/`pop` delegating to `_store`. Emitted only when `programUsesEval`; WASM keeps
+stubs to hold fixed function indices, JVM needs none.
+
+## What a form that is no call answers, and what no binding answers
+
+**Invariant: `_eval` agrees with the interpreter and SBCL 2.2.9 on the three below (2026-11-05, ci-spec
+`eval-signals-an-unbound-variable-and-an-undefined-function`, `eval-answers-a-value-that-is-no-form`).**
+
+- **Anything but a symbol and a cons is its own value.** The arms enumerated the self-evaluating
+  representations, so each one added later fell through: `(eval (vector 1 2))` was NIL on the JVM and a
+  cast-failure trap on wasm, as were a character, a hash table, a stream and an instance. `_eval` asks
+  the one question now: wasm `ref.test cons`, the JVM `consp`'s shape (`JvmOperandTypeRuntime.ConsShape`:
+  an `Object[2]`, no `BigInteger[]`, no `Integer` or `String[]` head).
+- **`t` and a keyword are their own value; any other symbol no binding holds signals `unbound-variable`**
+  naming it: `_symbol_value`'s text and class, on wasm through the same `UnboundVariableReport` (a trap
+  outside EH mode). The JVM's one case-flipped retry stays and reports the original spelling.
+  Before, it answered the symbol, so `(eval '(+ 1 x))` reported `+: The value X is not of type NUMBER`.
+- **An operator no namespace answers signals `undefined-function`** before evaluating an argument, through
+  `_apply`'s symbol probe, the path fmakunbound's tombstone already took; so does `#'name` and
+  `symbol-function` of one, and of a retired one. Before, each answered NIL, which is why
+  `(eval '(typep 1 'integer))` was NIL. `EvalReferences.UNPROCESSED_DIRECTIVES` (`in-package`,
+  `defpackage`, `declaim`) stay NIL on purpose: a file a runtime `load` reads may hold them, and the
+  doc says they are not processed.
+- **What the corpus relied on (measured 2026-11-05, before signalling).** Baseline jar against the change:
+  every ci-spec case that can reach `_eval`, alone on JVM and P1 and the component; the library E2E classes
+  whose sources call `eval` (Alexandria, clsql, cl-who, esrap, ironclad, iterate, trivia, contextl). The
+  only readers of the old answer were standard variables a form read at run time named, which no gate had
+  seeded (`(eval (read-from-string "pi"))` answered PI), and the operators below. Both are `EvalReferences`.
+
+## The built-in macros (`macro/eval-macros.lisp`, `macro/EvalMacroRows`)
+
+**Invariant: a built-in macro answers through `_eval` what it answers compiled, on all four backends, without an
+arm per macro** (2026-11-05, ci-spec `eval-expands-the-built-in-macros`, agrees with SBCL 2.2.9 but for the text of an
+`ecase` and of a `return-from` no block encloses). `_eval` asks the table where it would report an undefined function:
+
+- `eval-macros.lisp` holds one `%eval-row-NAME (args env)` per operator, answering the form it expands to, and
+  `EvalMacroRows` generates `%eval-expansion (op form env)`, a `%symbol-is` chain the compilers search
+  (`NameDispatch`), answering the form itself for a name no row holds. `_eval` calls it through `_lookup`/`_apply`
+  (no bounce or signature to know about) and evaluates the answer in the form's environment. A form re-expands every
+  time it runs. `%eval-place-NAME (args value)` is the same for `_store`, reached where no place arm matched, and
+  `dotimes` is a row: its arm is gone from both backends.
+- **A row expands to closures, not to arms.** `(block b . body)` is `(%eval-catch tag (lambda () . body))`, so what
+  an arm cannot do in bytecode is an ordinary Lisp helper over the compiled operator: `%eval-handler-case`,
+  `%eval-unwind-protect`, `%eval-values-of`. Temporaries are fixed names (`%eval-cursor`): an inner one shadows the
+  outer only where no outer read happens, and no form of the program names them, so nothing advances `gensym`.
+- **A row reads the lexical environment.** An `env` entry is an ordinary `(name . value)` cons. `(block name)` and
+  `(tagbody tags)` are bound to `%eval-exit`, and `return-from`/`go` walk `env` for the innermost that serves them:
+  their identity is the catch tag, so a nested closure still finds its block. `flet`/`labels` bind the alist
+  `%eval-functions`, which the operator path and `#'name` look a name up in first (only where a row exists).
+- **Selection.** `EvalReferences` counts the rows a program's data spells; a quoted symbol in a selected row brings
+  that row (`EvalMacroRows.walk`), and the gated operators it quotes (`typep`) go through the one reference pass.
+  `%eval-soft-*` definitions are not followed for quoted data, so `(dolist (x l) x)` carries no `block` and stays out of
+  wasm EH mode, which `catch` forces; it blocks only a body spelling `return`, whose row the program then has. `compile`
+  and `coerce` count as evaluating for selection only: they say nothing about a form read at run time. `LibraryDefunPruner`
+  roots the table when `eval`, `compile` or `coerce` is live, so a library's dead `eval` does not keep it.
+- **Specials.** An eval'd `defvar`/`defparameter`/`defconstant` goes through `boundp` and `set`, which answer a
+  compiled special without a value, where `%global-access` throws. A name is special if it is in `%eval-specials%`
+  (the run-time `defvar`s) or `%eval-compiled-special-p` (a name test the compilers generate over the final
+  `specialVars`, `LispMacroExpander.compiledSpecialRuntime`). `_eval`'s `let` asks `%eval-special-let` first, which
+  rewrites a let binding a special into `%eval-progv` over a closure; a compiled `progv` binds a name in no arm in the
+  mirror. Before, `_eval` bound every name lexically, so `(eval '(let ((*x* 2)) (f)))` left `f` reading 1. The hook exists only
+  where a `let` can bind one: a `defvar` row, or data binding an earmuffed name or one the code declares special.
+- **Values** (`.kb/multiple-values.md`). The channel is what a consumer reads of an eval'd form, so `_eval` empties it on
+  entry, after a call's arguments, and on every arm that answers one value after evaluating something else (`if` with
+  no else, `cond`, an `and`/`or` stopping before its last form, `while`, `setq`/`setf`/`push`/`pop`, `+`, a `c[ad]+r`),
+  and `_apply` before a closure's body: `(multiple-value-list (eval '(progn (values 1 2) 3)))` answered `(3 2)`. A call
+  or a tail form publishes for itself. Only where the program runs forms through eval.
+- `setq` and `setf` are one arm: `(setf a 1 b 2)` assigned the first pair and dropped the rest. `let` takes `(x)` and a bare
+  `x`, which threw and trapped. A `throw` and a `return-from` carry their value's values as a list (`%eval-throw-values`).
+- **`loop`'s keyword clauses** (2026-11-05, ci-spec `eval-runs-the-keyword-clauses-of-loop`, agrees with SBCL 2.2.9 where
+  the compiled loop does) are `LoopExpander` ported to the file's `%eval-loop-*`: same parse, same clause order and
+  divergences (`.kb/loop-iteration-heads.md`), the refusals its text, so a change to one is a change to both. Hidden variables
+  are places of one list, `(nth k %eval-loop)`: `make-symbol` collapses same-named symbols on the JVM (`_envLookup` compares
+  strings), and a fixed name per clause has no bound. `across` reads with `elt`, so a loop does not open the `aref` gate. A
+  package walk stays out of every other loop: `%eval-soft-loop-symbols` names its helpers as data, and `EvalReferences.loopWords`
+  spells the row for a word (`EvalMacroRows.loopWordRow`) among a quoted loop's clauses or quoted alone, as `(list 'loop ...)`
+  spells it.
+- **Macros a form binds** (2026-11-05, ci-spec `eval-binds-macros-in-its-environment`, agrees with SBCL 2.2.9). Three arms on
+  each of `_eval` and `_store`, present only with their row (`EvalHooks`, `carries`), none costing a program without one:
+  - `macrolet` binds the alist `%eval-macros` beside `%eval-functions`; the operator path asks it first, applies the expander to
+    the whole form and evaluates the answer in the form's environment. The expander is a closure over `destructuring-bind`,
+    the one place a run-time lambda list has keywords. `flet`/`labels` take a name they bind out of the alist, which is what
+    makes the first-asked order right. Lite: `&environment` is nil.
+  - `symbol-macrolet` is a `let` whose values are `(%eval-symbol-macro . expansion)`, so shadowing is the alist's. A read of a
+    lexical binding tests for the mark and evaluates the expansion where the read stands (`(symbol-macrolet ((a x)) (let ((x 3))
+    a))` is 3); `_store` hands the expansion to itself, a place like any other.
+  - `define-symbol-macro` keeps the alist `%eval-symbol-macros%`, consulted where no variable answers. **Trap: read it through the
+    mirror, as both arms do.** A compiled read of the global from `_store`'s path signals: every global's first mirrored store
+    comes there, before this defvar ran (`(eval (read-from-string "1"))` died on `%EVAL-SYMBOL-MACROS% is unbound`).
+    A program's own top-level definition stays compile-time (`.kb/symbol-macrolet.md`): to carry it, the macro pass would have to
+    know the program evaluates forms, and a library's `eval` would force the runtime into every `cffi:defcvar` program.
+  - `with-slots`/`with-accessors` evaluate the instance into `%eval-instance` and expand a second row, `%eval-instance-macros`,
+    which reads it from `env` and quotes the VALUE into each variable's form: a variable is expanded at its reference, where a
+    nested form's `%eval-instance` would answer.
+- **`(setf name)` functions:** `%eval-setf-form` (`LispMacroExpander.evalSetfRuntime`) answers the call of the function
+  `%eval-setf-function` finds over the final `%setf-` definitions, and `_store` asks it after the place rows, so
+  `with-accessors` and any eval'd `(setf (accessor x) v)` of a `defclass` accessor or a `(defun (setf f) ...)` assign. A
+  structure accessor has no such function and still assigns nothing. The finder is `segmentedNameDispatch`'s (128 arms a
+  segment, `%eval-setf-function-1` ...), each arm only `#'(setf f)`: one chain that built the call form in every arm cost 159
+  bytes an arm on the JVM, and dexador's 451 setf functions made a method past the 64 KB limit, refusing every dexador
+  program on the JVM (2026-11-06; segments of 4.5 KB now). Pinned by
+  `JvmLispCompilerTest#anEvaldSetfFindsItsSetfFunctionThroughSegmentsTheJitCompiles`.
+  An eval'd `(defun (setf name) ...)` binds `%setf-name` (both `defun` arms; wasm's
+  `emitSetfFunctionSymbol` is `%setf-function-symbol`'s build), the symbol a computed `fdefinition` /
+  `fboundp` of the list probes. Until 2026-11-07 it bound the list, which no lookup compares:
+  `(fdefinition (list 'setf n))` signalled undefined-function on the JVM, P1 and the component (typo's
+  `ensure-fdefinition`; ci-spec `eval-defun-then-call`). An eval'd `setf` of such a place still assigns
+  nothing: `%eval-setf-form` knows the compiled definitions only (the doc says so).
+- **Restarts** (2026-11-05, ci-spec `eval-establishes-restarts`, agrees with SBCL 2.2.9 but for printing a restart object:
+  on every backend it prints the record, SBCL its report). `%eval-restart-case` pushes the records the compile-time
+  expansion writes, names computed, through an empty `restart-bind`: its save and restore, and what opens restart mode.
+- **Left out:** `pprint-logical-block` and the definers; the doc page lists them.
+- **The interpreter's `eval` answers what `_eval` does** (2026-11-05, `LispEvaluator.evalDatum`; SBCL 2.2.9's answers). The
+  form's tail is a tail (`spillEscapingMvProducers`): `(multiple-value-list (eval '(gethash 1 h)))` was `(5)`. And an `eval-when`
+  met while it runs, which is at no top level, runs only for `:execute` or `eval` (`expandEvalWhen`, `%eval-row-eval-when`), while
+  a file it loads has top-level forms again ([declarations-type-checks.md](declarations-type-checks.md), "An eval-when's position").
+- **A form's call of a value producer gets both values** (same day): `designatedValueProducers` answers all of them where
+  `runsFormsAtRunTime`, since the form's call reaches the wrapper. `(eval '(read-line s))` was `("hi")` for `("hi" T)` on the
+  compile paths, and `read-from-string`, `intern` and `array-displacement` the same. It pays only in a program with the channel.
+
+## What a form can reach (`compiler/EvalReferences`)
+
+The registry answers the catalog wrappers and the program's own functions; the reference-gated wrappers
+(`BuiltinFunctionWrappers.REFERENCE_GATED_FUNCTIONS`, `COMPLEX_GATED_FUNCTIONS`: `typep`, `subtypep`,
+`coerce`, `aref`, `format`, `error`, `sqrt` ...) and the standard variables exist only where the program
+names them, and a form's data names nothing to a gate. Rather than teach each gate about eval, the pass
+adds at the program's head what every gate already counts, as forms that run nothing: `(function op)` and a
+quoted list of variable names. It runs right after user-macro expansion, before any splice, because a
+wrapper's body reaches the prelude (placed after the pruner, `#'format` called an undefined `%print-cased`).
+
+- A program whose forms are its own data references the gated operators that data spells: the head of a
+  quoted list at any depth, or a quoted symbol (`(list 'typep x ''integer)`). Pinned standalone by ci-spec
+  `eval-reaches-a-gated-operator-its-forms-spell`: the corpus program reads forms, so it would not show it.
+- A program that can evaluate what it reads or builds at run time (`load`, or `eval` beside `read`,
+  `read-from-string` or a `RuntimeNameProducers` symbol builder) references all of them and every standard
+  variable (`PackageRegistry.standardVariableNames`); an ASDF system's forms do not count for this, so a
+  library's feature probe does not grow every program using it. Pinned standalone by
+  `eval-reaches-every-standard-name-from-a-form-read-at-run-time`.
+- Left out: the `rontolisp:` natives, which refuse the compile on the backends without them; `sleep` (on
+  `--component` it switches the whole module to async mode) and `load` (`LibraryDefunPruner` bails on a
+  surviving one, keeping every library definition) unless the program names them; and `--no-gc`, which has
+  no `_eval`.
+- Cost, measured 2026-11-05 on `(print (eval '(+ 1 2)))` (422,425 B JVM / 276,481 B P1) with one more name:
+  `typep` +34 KB / +42 KB, `coerce` +42 / +49, `subtypep` +133 / +95, `aref` +131 / +113, `format` +105 / +81.
+  A program that names none of them is unchanged.
+
+## Gating
+
+- **WASM has an `apply` tier below the full runtime** (`LispMacroExpander.needsApplyRuntime` plus a
+  `referencesApplyingWrapper` clause for injected `#'map*`/`every`/`some`/`#'funcall` bodies). A
+  literal top-level target compiles to a direct call (`Wasm/JvmApplyCompiler`); a computed
+  designator, literal `lambda`, `multiple-value-call`, an apply of a `flet`/`labels` name or an
+  unknown literal target sets `usesApplyRuntime` (`buildApplyBody(usesEval)` without the
+  `$fenv`/closure arms, the spread dispatcher, the `_lookup` registry).
+  `eval`/`load`/`--dynamic`/`boundp`/`symbol-value`/`set`/`fboundp`/`fmakunbound`/
+  `(setf (symbol-value ...))`/`(setf (symbol-function ...))` force the full runtime.
+  `set`, `symbol-value` and `fboundp` count only where taken as a function -- called, `#'`,
+  quoted, a place written (`compiler/FunctionNameUses`, on both backends): until 2026-11-20
+  (k45) any mention did, so `eval/uri.lisp`'s parameter `set` put 54 KB of `_eval`,
+  `_apply` and the spread dispatcher in every wasm program reaching `java.net.URI`.
+- **JVM apply tier** (2026-09-19, `.todo/894`; before it, any `apply`/`multiple-value-call`
+  forced the whole eval runtime): `usesApplyRuntime` = `usesEval` ||
+  `needsApplyRuntime(program, applyGateWrappers)` (the WASM scan; a literal target naming a compiled
+  function is a direct call in `JvmApplyCompiler`) || a reachable applying wrapper ||
+  `GROUP_APPLY` forced. It emits `_apply` (`buildApply(ec, withEval=false)`: no `_fenv` arm, no
+  interpreted-closure arm), the spread dispatcher `_invoke_v`, `_notFn`/`_arityChk` and `_lookup` --
+  not `_eval`/`_store`/`_envLookup`, the `_genv`/`_fenv` fields, or a dispatcher per arity.
+  `gateGroupFor("_apply")` is `GROUP_APPLY`, so a mispredicted apply site costs a re-run with the
+  tier, never the interpreter. `(defun ap (f l) (apply f l))`: 48,251 -> 24,099 B of class.
+- **Applying wrappers.** `BuiltinFunctionWrappers.APPLY_USING_FUNCTIONS` is injected exactly when
+  the program can reach one (`referencesFunctionDesignator`, position-blind on purpose; a name
+  read or built at run time), and that reference is what brings the tier in. **A computed
+  funcall/apply target counts only beside a symbol constant spelling one of the names**
+  (`BuiltinFunctionWrappers.spellsSymbolConstant`: quoted data at any depth, or `#'`): the registry
+  answers only names the program loads as values. Counting every computed target put the eval
+  runtime into every higher-order function -- even `(defun app (f x) (funcall f x))`
+  -- and into every program carrying `%stream-target`, whose synonym arm funcalls a closure.
+  **Trap: inject those bodies unconditionally and the class calls an undeclared `_apply`**; the
+  post-compile self-check (`gateGroupFor`/`GateUnderpredicted`, `.kb/adjustable-arrays.md`) then
+  forces the group on eval-free programs -- a far larger mirror than they need, once one
+  top-level global makes the
+  mirror real, when the group was still `GROUP_EVAL`. `GateUnderpredicted` stays as a backstop;
+  the ARRAY gate had the same problem. Pinned by `JvmLispCompilerTest.
+  aComputedFuncallTargetCarriesNoApplyOrEvalRuntime`,
+  `aComputedTargetBesideAQuotedWrapperNameStillReachesTheWrapper`,
+  `aRuntimeApplyGetsTheApplyTierNotTheInterpreter`,
+  `anApplyOfALiteralCompiledTargetNeedsNoApplyRuntime`.
+- **Name-registry gate.** JVM: `_lookup` when
+  `usesEval || usesRuntimeFunctionDesignator || !indirectCallArities.isEmpty()` -- effectively always
+  true, since injected wrapper bodies take the designator as a PARAMETER (measured:
+  `(print (+ 1 2))` dispatches `__every_pred`, `__reduce_gfn` and a dozen more). Narrowing it wants
+  demand-driven wrapper injection or the WASM scheme. WASM cannot afford an always-true clause
+  (wit-import module bytes are pinned), so **both halves are recorded during EMISSION, not scanned
+  off the source**: `Ctx.runtimeDesignatorDispatch` (set at `WasmDesignatorCall.prepare`,
+  `WasmFunctionCallCompiler.compileFuncall`, `WasmHashTableCompiler.compileMaphash` -- must be
+  emission-time, since `(every f l)` becomes a Pass 2 `do` over `(funcall #pred elem)` that a source
+  scan misses) and `Ctx.userSpelledLiterals` + `nameResolvable` for whether a name can ANSWER. Both
+  halves exclude the INJECTED runtime (`Ctx.injectedRuntimeBody`, `Ctx.injectedRuntimeLambdas`
+  carrying the mark into lambdas those bodies build); unfiltered, the gate is true for
+  `(print (+ 1 2))`.
+- **A literal `boundp` never reaches the gate**: `compiler/CompileTimeBoundp` folds `(boundp 'name)`
+  on both compile paths and in the CLI/playground before the tree-shaker; only `(boundp (intern ...))`
+  opens it (`.kb/compile-time-boundp.md`). Nor does a literal probe of a tracked global
+  (`.kb/dynamic-special-variables.md`, "Bound-ness of a special without a value"): the `boundp` arm is
+  `LispMacroExpander.boundpReachesMirror` over the tracked set read before injection.
+
+## Argument counts
+
+**Invariant: a wrong argument count inside a compiled `eval` is the interpreter's `program-error`,
+with its text, on both backends** (2026-09-26). Pinned by ci-spec
+`eval-wrong-arity-signals-program-error`, `eval-inline-operators-check-their-argument-count`,
+`eval-reports-a-wrong-argument-count-as-the-interpreter-does`,
+`eval-checks-the-count-of-the-operators-it-used-to-inline`, `LispEvaluatorTest.theListAccessorsFuncallAndReduceReportAWrongArgumentCount`.
+
+- **A registered function gets EVERY argument form evaluated** and `_apply` hands the list to the
+  spread dispatcher, whose case guard (`_arityChk` / `_arity_chk`) judges the count and names the
+  operator ([error-handling.md](error-handling.md), "A wrong argument COUNT"). The registry's
+  arity used to be the number of forms `_eval` evaluated, padding with nil and dropping the
+  surplus: `(car 1 2)` raised a type-error on `1`, `(cons 1)` answered `(1)`.
+- **`= < > <= >= /=` have no arm of their own** (2026-09-27; removed `comparisonChain` /
+  `emitComparisonChain`, `WasmEvalRuntimeBuilder.COMPARISON_OPERATORS`). The arm evaluated every
+  argument and tested adjacent pairs (every pair for `/=`) through the wrapper's two-argument call.
+  It was needed while the wrappers took `(a b &rest r)`: the registry path (the first bullet)
+  would have reported their count instead of the interpreter's `(< 1 3 2)` => `T`. They take
+  `(a &optional b &rest r)` since 2026-09-26 ([error-handling.md](error-handling.md), "A built-in's
+  function VALUE"), so the registry path answers every count the chain used to: `a` is still a
+  required parameter, so `(<)` reports `< expects at least 1 argument, got 0` through the same
+  `_arityChk`/`_arity_chk` the registry's spread dispatcher always used, naming the operator from
+  the wrapper's own arity metadata -- no separate shape or funcId tracking needed.
+  `SELF_COUNTED_OPERATORS` is now just `eval`, which no wrapper backs. The change shrinks an
+  eval-using program slightly on the JVM and wasm; a program without `eval` is
+  unchanged.
+- **`apply` is a catalog wrapper** (`BuiltinFunctionWrappers.applyWrapper`, `(f a &rest r)`), so
+  `eval` reaches it through the registry like any name and the report says `APPLY expects at least
+  2 arguments`; it also made `#'apply` compile. It refuses a last argument that is no proper list
+  with the interpreter's `APPLY: last argument must be a list`. `apply` was unknown inside `eval`
+  before, which is why `(eval '(apply #'car '(1 2)))` answered nil.
+- **An interpreted closure checks its count only without a lambda-list keyword** in its list: the
+  runtime `lambda` binds such a list positionally (documented), so its parameter count is no
+  count a call must match. The check is `_arityChk(argList, 2 * params)` in `_apply`'s closure
+  arm; on wasm `_arity_chk` is in every module with `eval`, trapping where no `program-error`
+  is thrown ([error-handling.md](error-handling.md), "Outside the report gate").
+- **Every catalog wrapper takes its call position's keywords** (2026-09-26). `find` / `find-if` /
+  `find-if-not`, `sort` and `make-list` were fixed-arity (`FIND expects 2 arguments, got 4` through
+  `funcall` and inside `eval`); pinned by ci-spec `builtin-function-values-take-their-keywords`.
+  - `find` family: a keyword-less call is the plain scan; a keyword call hands the keywords to the
+    `position` wrapper of its kind and answers `(elt seq i)` -- one copy of the general keyword
+    scan instead of three inlined arms in every program naming `#'find`.
+  - `sort`: `(sort seq (if kw (lambda (x y) (funcall pred (funcall k x) (funcall k y))) pred))` --
+    one sort site, and the shared merge sort is stable ([sort.md](sort.md)), so it answers the
+    permutation of the call position's `stable-sort` decoration without inlining that expansion.
+    The interpreter's `#'sort` routes a keyword call to its `stable-sort`.
+  - `make-list`: `(make-list n :initial-element (getf kw :initial-element))`.
+  - A trap found on the way: `expandSortWithKey` expanded `stable-sort` with arrays assumed, so the
+    wrapper's keyword arm opened the JVM array runtime in EVERY program; it takes the backend's
+    array gate now.
+  - Cost (same method as below): the keyword arms add to an eval-using program, the `position`
+    wrapper now travels with a `#'find` value, and the `apply` properness check
+    ([error-handling.md](error-handling.md))
+    adds to a `&rest`-forwarding `(apply #'list x r)` under `handler-case`.
+    `(print (+ 1 2))` is unchanged.
+- **Size** (2026-09-26): the `eval` arms add a little to an eval-using program, more under
+  `handler-case`. A program without `eval` is unchanged.
+- **The inline operators** (2026-09-26). An `_eval` arm handles only the call shape it is written
+  for and hands any other to the generic application, whose registered wrapper reports the count
+  naming the operator: `funcall` with no argument, `+ - * /` with none (`(+)` is 0 through the
+  wrapper, `(-)` reports). `mapcar`/`mapc`, `reduce`, `first` ... `tenth`, `rest` and `nth` have
+  NO arm any more: the arms walked one list only (`(mapcar #'+ '(1 2) '(10 20))` answered
+  `(1 2)`), took a `:from-end` for the initial value, dropped a surplus argument, and threw a
+  NullPointerException on `(first nil)` / `(reduce #'+ nil)` (a trap on wasm). What that needed:
+  - a `reduce` catalog wrapper (`BuiltinFunctionWrappers.reduceWrapper`, `(f seq &rest kw)` fed
+    back into `expandReduce`), which also made `#'reduce` compile at all; the interpreter's own
+    `REDUCE` function value evaluates a keyword call through the same expansion;
+  - on the JVM, the `funcall` wrapper kept under `usesEval` (`wrapperExcludes` dropped it unless
+    the program spelled `#'funcall`, so `(eval '(funcall))` answered nil);
+  - `eval` counts itself -- `_arityChk` / `_arity_chk` with an operator no callee carries
+    ([error-handling.md](error-handling.md), "Inside a compiled `eval`").
+  The interpreter's `first` ... `tenth`, `rest` and `nth` expand only a call of their own shape
+  (`LispEvaluator`, `properLength`), so any other count reaches the Java built-in and reports
+  (`FIRST expects 1 argument, got 2`); the expansion used to drop the surplus, and `(nth 1)`
+  indexed past the form. `(funcall)` is a `program-error` there too.
+- **Every parameter count answers** (2026-09-26). The JVM `_lookup` filtered out functions of more
+  than `MAX_CALLABLE_ARITY` (7) parameters -- a leftover of the per-arity `_apply`; `_apply` hands
+  every list to the spread dispatcher now -- so `(eval '(f a1 ... a8))` answered nil and
+  `(funcall 'f ...)` was an undefined function. On wasm a defun past 10 parameters is a rest-list
+  defun that counts itself ([wasm-callable-arity.md](wasm-callable-arity.md)).
+- **Size of the above** (2026-09-26, same method): `(print (eval '(+ 1 2)))` 319,302 -> 323,589 JVM,
+  247,775 -> 250,901 wasm; under `handler-case` 428,184 -> 432,840 / 359,713 -> 364,156 -- the
+  reduce wrapper's keyword expansion is most of it. `(print (+ 1 2))` unchanged (6,023 / 348); an
+  11-parameter defun called directly, wasm 1,426 -> 2,284; `(print (mapcar #'- '(1 2)))` 23,931 ->
+  24,118 JVM, 9,673 -> 2,880 wasm.
+
+## Global mirroring
+
+When `usesEval`, a `setq`/`defvar`/`defparameter`/`defconstant` of a name with a
+global backing store (`compiler/GlobalVarCollector`) also calls
+`_store(name, value, genv)` (`Jvm/WasmSetqCompiler.mirrorGlobal`). The other direction exists
+since 2026-10-04 (`.todo/c89`): in a program that runs forms through eval, the runtime's
+`setq`/`setf`/`push`/`pop` of a variable no eval'd binding holds also store through the shared
+accessor `%global-access` into the compiled global, and its variable lookup answers a SPECIAL
+from the variable before trying the mirror (`.kb/dynamic-special-variables.md`, "One home"), so
+the mirror is the value of the non-special globals and the `boundp` witness (but of a special
+declared without a value, whose variable answers), never a special's value. Before, the mirror was write-through one-way: an eval'd `setq` stayed invisible to
+compiled code, and a special read through eval answered the mirror's stale value. Since b78
+(2026-10-02) the store mirrors WHEREVER it stands -- a defun/lambda body included --
+so a runtime `boundp`/`symbol-value` sees what the body assigned; before, only a
+top-level store mirrored and a probe of a lambda-assigned global read stale
+forever. Only a name with a global backing store is mirrored
+(`compiler/GlobalVarCollector`). A top-level LEXICAL is not: CL's `eval` resolves against the null
+lexical environment, and expander temporaries (`__loop_acc0`, the `while` cursor, `__nrev_*`) are
+symbols in no package. `mirrorsGlobal(name, ctx)` is a NAME test, not a scope test, because
+`GlobalVarCollector` is deliberately scope-blind -- and a captured cell is never
+mirrored: the value a closure body stores through it is lexical, not the global
+default. `_store` is an `_envLookup` (linear alist walk), so
+mirroring a loop variable costs one walk per assignment per iteration (7.1x JVM / 3.0x wasm-GC on
+`loop ... sum` to 10^8; measured on a top-level loop, where only the mirror has
+ever run -- a function body assigning a global in an eval-using program pays the
+same per call since b78).
+
+**The compiler's own channels are never mirrored** (`GlobalVarCollector.mirrorsIntoEval`,
+asked by both `mirrorsGlobal`s): `%mv-spill` and the `%handler-clusters%` /
+`%restart-clusters%` stacks. No eval'd form reads them (the runtime has no `values` /
+`handler-bind` / `restart-case`; it calls compiled code, which reads the globals), and
+`%mv-spill` is written by nearly every function return (`.kb/multiple-values.md`), so since
+b78 every call of an eval-using program walked the whole alist, and on the ci-spec program
+`_env_lookup` dominated the P1 leg's samples. Fixed 2026-10-05: the package walk no longer
+scales with the mirrored globals, eval-using programs run several times faster on P1 and the
+component and somewhat faster on the JVM.
+Size: an eval-using program shrinks and no example output
+grew; everything else in size-report, bench-report and examples is byte-identical (P1,
+`--optimize=size`, component, JVM). Pinned by the mirror's own instruction, a call of
+`_store`: `aTopLevelLexicalIsNotMirroredIntoTheEvalGlobalEnv` in `JvmLispCompilerTest` (a
+defun answering `(values 1 2)` calls none, one assigning a global calls one) and
+`WasmLispCompilerTest` (functions answering several values add no `_store` to the module;
+the decision is codegen's, so P1 and the component share it). The wall-clock ratio pins it
+replaced (`aPackageWalkCostsTheSameHoweverManyGlobalsEvalSees`) were removed 2026-10-23.
+A user global assigned in a loop still pays the walk.
+
+## Tests
+
+- `JvmLispCompilerTest.aProgramThatNeverMentionsEvalCarriesNoEvalRuntime`,
+  `namingOneOfTheApplyingWrappersBringsTheEvalRuntimeBack`
+- `WasmLispCompilerTest.onlyAnUnreadableDesignatorPullsInTheNameRegistry`,
+  `WasmLispCompilerIntegrationTest.aComputedSymbolDesignatorResolvesForEveryOperatorThatCallsIt`
+  (+ `--component` twin)
+- `Jvm/WasmLispCompilerTest.aTopLevelLexicalIsNotMirroredIntoTheEvalGlobalEnv`
+- `aSpecialReadByNameAnswersTheActiveBinding` on `LispEvaluatorTest` / `JvmLispCompilerTest` /
+  `WasmLispCompilerIntegrationTest` (`SpecialReadByNameFixture`) and ci-spec
+  `eval-and-symbol-value-read-the-binding` -- eval reads a special's binding, an eval'd `setq`
+  reaches compiled code.
+- `JvmLispCompilerTest.compileAndRunBoundpSeesAnAssignmentMadeInsideALambda`,
+  `WasmLispCompilerIntegrationTest.boundpSeesAnAssignmentMadeInsideALambda` (+ `--component`
+  twin), the `symbol-runtime-api` ci-spec case -- a runtime `boundp` of a
+  lambda-assigned global answers what the body stored (b78).

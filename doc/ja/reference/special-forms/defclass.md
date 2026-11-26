@@ -1,0 +1,79 @@
+# defclass
+
+`(defclass name (superclass*) ((slot slot-option...) ...) class-option...)`
+
+クラスを定義し、クラスオブジェクト ([`find-class`](../functions/find-class.md) が返すもの) を返します。これは **静的な CLOS サブセット**です。すべてのスーパークラスは `defclass` で定義するか、`standard-object`（すべてのクラスがもともと持つ根なので、書いても何も変わりません。別のスーパークラスより前に書くと優先順位の矛盾でエラーです）か、[`defmethod`](defmethod.md) に挙げるメソッドのメタオブジェクトクラスでなければならず、インスタンスは [`make-instance`](../macros/make-instance.md) で生成される第一級のオブジェクトです（[`defstruct`](defstruct.md) のインスタンスと同様にリストではなく、`consp` は `nil`、`print` は `#<NAME :SLOT value ...>` と表示します）。スロットオプション:
+
+- `:initarg name` — スロットを埋める initarg。キーワードでもそれ以外のシンボルでもよく、後者はクォートして渡す（`(make-instance 'arc 'rx 1)`）。省略時はスロット名のキーワード。このオプションは繰り返せる: 指定したどの initarg でもスロットが埋まり、複数渡されたときは最も左のものが勝つ
+- `:initform expr` — スロットが与えられなかったときに生成時に評価されるデフォルト値。**省略するとスロットは未束縛のまま**になります（CL と同じ）: [`slot-boundp`](../macros/slot-boundp.md) は `nil` を返し、読み取りは `unbound-slot` をシグナルします
+- `:reader fn` — `fn` を読み取り関数として定義
+- `:accessor fn` — `:reader` と同様で、さらに `setf` 可能な place になります
+
+サブクラスはスーパークラス群の全スロットを継承し、そのインスタンスは各スーパークラスに対する [`defmethod`](defmethod.md) のクラス specializer にマッチします。**多重継承**をサポートします: 最初のスーパークラスのスロットが先頭に並び、以降のスーパークラスはまだ存在しない名前のスロットを追加します。ダイヤモンド継承では共有スロットは 1 つだけ保持され、メソッドディスパッチと再宣言されたスロットオプションはともに**クラス優先順位リスト**（CLHS 4.3.5 — クラス自身、次にスーパークラスを左から右へ、それぞれが自身のスーパークラスより先。局所順序が矛盾する場合はエラー）に従います。サブクラスは継承したスロットを再宣言できます: 記憶域は継承した 1 つのスロットのままで、サブクラスの `:initform` が継承分を上書きし、initarg と reader/accessor は継承分に追加されます。reader/accessor は通常の defun なので第一級関数です。クラスオプションは `(:documentation "...")`（受理して無視）と `(:default-initargs :initarg value ...)`（[`make-instance`](../macros/make-instance.md) が未指定の initarg に適用するデフォルト）をサポートします。スロットオプションは `:reader`/`:accessor` に加えて `:type`（記録のみ、チェックなし）、`:writer`（シンボルなら新しい値を先頭に取る 2 引数のジェネリック関数、`(setf name)` なら `name` の setf 関数を定義）、`:allocation` をサポートします: `:allocation :class` はスロットの値を、宣言したクラス・そのインスタンス・サブクラスが共有する 1 つのセルに格納します — どのアクセス経路（accessor、[`slot-value`](../macros/slot-value.md)、`make-instance` の initarg）も共有セルを読み書きし、`:initform` はクラス定義時に一度だけ評価され、サブクラスが `:allocation :class` 付きで再宣言すると独自のセルを持ちます（CLHS 7.5.3）。`:metaclass`（後述）がない場合、その他のクラスオプションとその他のスロットオプションはエラーです。コンパイルパスでは、トップレベル以外の位置（条件式、ループ、関数本体の中）の `defclass` もトップレベルのものと同じくコンパイルされ（スロットレイアウト、コンストラクタ、accessor）、実行された時点でクラスを定義します。それまで [`find-class`](../functions/find-class.md) はその名前のクラスを返しません。その `:initform` と `:default-initargs` は、周囲のフォームが束縛する変数を参照できません。[`find-class`](../functions/find-class.md) と [`class-of`](../functions/class-of.md) はクラスメタオブジェクトを返します。実行時のクラス操作のうち存在するのは（対象は計算値でもよい）[`change-class`](../macros/change-class.md) だけです。**既存の名前**に対して `defclass` を評価すると定義は更新され、`:metaclass` 付きクラスは同一メタオブジェクトに対する `reinitialize-instance` 経由でクラス定義プロトコルを再実行します（後述）。コンパイルパスでは静的にコンパイルされる部分（スロットレイアウト、コンストラクタ、accessor）は常に**最後の定義**に従います。`:metaclass` 付きで定義したクラスの既存インスタンスは更新されます（CLHS 4.3.6）。ローカルスロットを追加・削除する再定義、または `make-instances-obsolete` は各インスタンスに対して `update-instance-for-redefined-class` を呼び、そのシステムメソッドは追加されたスロットを `shared-initialize` で初期化します。コンパイルパスで対象となるのはプログラムのトップレベルの再定義であり（`eval` した `defclass` はクラスを定義しません）、`make-instances-obsolete` は何もしません。`:metaclass` なしで定義したクラスのインスタンスは更新されません。
+
+**スーパークラスは後から定義できます**: `b` がまだない時点の `(defclass a (b) ())` は `a` を定義し、メソッドとサブクラスはその時点から `a` も `b` も指定できます。最後のスーパークラスが定義されるまで、`a`、`b`、それらのサブクラスに対する [`make-instance`](../macros/make-instance.md) と [`allocate-instance`](../functions/allocate-instance.md) はエラーをシグナルします。最後のスーパークラスの `defclass` が、それを待っていたクラスを書かれた順にすべて完成させます。それまでの間、インタプリタは `a` のリーダーとアクセサを定義しません。コンパイル経路では、プログラムが定義しないスーパークラスは警告になります。クラス自身を（直接、または待っているクラスを通じて）スーパークラスにすること、[`defstruct`](defstruct.md) の型や組み込み型をスーパークラスにすることはエラーで、[`define-condition`](../macros/define-condition.md) は前方参照を受け付けません。
+
+**メタクラス**（静的な MOP サブセット）: クラスオプション `(:metaclass M)` には、先に `defclass` で定義された `standard-class` を継承するクラスを指定します。クラス定義は**定義時**にクラス定義プロトコルを実行します: メタクラスがインスタンス化され（その `shared-initialize` メソッドは、他の未知のクラスオプションを「オプションの残り部分」を値とする initarg として受け取ります。`(:table-name "users")` なら `("users")` を渡します。オプション名は任意のシンボルでよく、残り部分はドット対でもよいため、`(original-name . t)` は initarg `original-name` で `t` を渡します。`:before` メソッドが宣言済み `:initarg` を持つスロットに書いた値は、その後に供給された initarg で上書きされます — CL の充填順です。下の `table-name` のように `:initarg` 宣言のないスロットは `:before` の書き込みを保持します）、各スロットの非標準オプション（`:col-type` など）は initarg として `closer-mop:direct-slot-definition-class` に渡され、その答えのクラスがそのスロットの direct-slot-definition メタオブジェクトとしてインスタンス化されます。実効スロットは `closer-mop:compute-effective-slot-definition` を通して計算され（デフォルトメソッドは、ユーザーのオーバーライドの `call-next-method` の動的スコープの内側で `closer-mop:effective-slot-definition-class` を選んでインスタンス化します）、`closer-mop:finalize-inheritance` は**即時に**実行されます（CL は遅延ファイナライズですが、入力は静的なので定義時エラーのタイミングだけが異なります）。以後 `find-class` と `class-of` はメタクラスのインスタンスを返し、クラス自体のインスタンスは通常のオブジェクトのままです。定義は `closer-mop:ensure-class-using-class` を経由します — そのユーザー `:around` メソッドは**既存の**クラスメタオブジェクトでディスパッチされるため、同じ名前が再定義されたときに発火し（初回定義では `nil` が渡ります）、再定義は同一メタオブジェクトに対する `reinitialize-instance` パスを取ります。初期化は通常の generic チェーンを通るため、メタクラス（またはスロット定義クラス）上のユーザー `initialize-instance`/`reinitialize-instance` `:around` メソッドは、mito のテーブルクラスが行うように、`(apply #'call-next-method ...)` の前に initarg（`:direct-superclasses` や `:direct-slots` を含む）を書き換えられます。スロット定義メタオブジェクトは `closer-mop:slot-definition-initfunction`（`:initform` を評価する 0 引数関数。`:initform` がなければ `nil`）と `closer-mop:slot-definition-allocation` も保持します。`:allocation` を書いていないスロットでも、direct-slot-definition クラスの `initialize-instance` メソッドが `:class` を既定にするもの（contextl のレイヤースロット）は、`:allocation :class` を書いた場合と同じくクラス割り当てになります。プロトコルは静的です: 定義時に未知のクラスに対するプロトコル呼び出しはエラーをシグナルします。
+
+**実行時に作るクラス**: このようなメタクラス `M` に対する `(make-instance 'M :direct-superclasses (list ...))` は、定義済み(または実行時に作った)スーパークラスの上にクラスメタオブジェクトを実行時に作ります。contextl はレイヤーコンテキストをこうして作ります。クラス優先順位リストは CLHS 4.3.5 に従い、そのインスタンス([`allocate-instance`](../functions/allocate-instance.md) または `closer-mop:class-prototype` で得たもの)は [`class-of`](../functions/class-of.md) にそのクラスを返し、`typep`/`typecase` と `subtypep` は優先順位リストで答え、どの総称関数もメソッドをそのリストの順に並べます(標準メソッド結合。`print-object` を含みます)。このインスタンスは自前のスロットを持ちません。
+
+**スロットアクセスプロトコル**: プログラムが `closer-mop:slot-value-using-class`、`(setf closer-mop:slot-value-using-class)`、`closer-mop:slot-boundp-using-class`、`closer-mop:slot-makunbound-using-class` のいずれかにメソッドを定義するか、いずれかを呼び出すと、`:metaclass` 付きで定義したクラスのインスタンスに対する [`slot-value`](../macros/slot-value.md)（実行時に計算したスロット名を含む）、その `setf`、`slot-boundp`、`slot-makunbound` とアクセサは、クラスメタオブジェクト・インスタンス・実効スロット定義を引数にこれらの総称関数を呼びます（AMOP 5.5）。contextl のスペシャルスロットはこれを必要とします。システムメソッドはインスタンス自身のスロットを読み書きし、未束縛のスロットを読むと `slot-unbound` を呼びます。`make-instance` も initarg と initform を `(setf closer-mop:slot-value-using-class)` で埋めます。ただし `:default-initargs` を持つ(継承を含む)クラスのスロットは直接埋めます。
+
+```lisp
+(defclass animal () ((name :initarg :name :accessor animal-name)))
+(defclass dog (animal) ((breed :initarg :breed :initform "mixed" :reader dog-breed)))
+(setq d (make-instance 'dog :name "Rex"))
+(list (animal-name d) (dog-breed d)) ; => ("Rex" "mixed")
+```
+
+```lisp
+(defclass shape () ((sides :initform 0 :reader sides) (label :initarg :label)))
+(defclass square (shape) ((sides :initform 4 :accessor square-sides)))
+(let ((s (make-instance 'square)))
+  (list (sides s) (square-sides s) (slot-boundp s 'label))) ; => (4 4 NIL)
+```
+
+```lisp
+(defclass fast-stream () ((buffer :initform nil :accessor stream-buffer)))
+(defclass output-mixin () ((pos :initform 0 :accessor stream-pos)))
+(defclass fast-output-stream (fast-stream output-mixin) ())
+(defgeneric stream-kind (s))
+(defmethod stream-kind ((s fast-stream)) :fast)
+(defmethod stream-kind ((s output-mixin)) :output)
+(let ((s (make-instance 'fast-output-stream)))
+  (setf (stream-pos s) 10)
+  (list (stream-kind s) (stream-pos s) (typep s 'output-mixin))) ; => (:FAST 10 T)
+```
+
+```lisp
+(defclass counter () ((n :initform 0 :accessor counter-n)))
+(setq c (make-instance 'counter))
+(incf (counter-n c))
+(setf (counter-n c) (+ (counter-n c) 10))
+(counter-n c) ; => 11
+```
+
+```lisp
+(defclass table-class (standard-class) ((table-name)))
+(defmethod closer-mop:validate-superclass ((c table-class) (s standard-class)) t)
+(defmethod shared-initialize :before ((c table-class) slots &key table-name &allow-other-keys)
+  (if table-name (setf (slot-value c 'table-name) (car table-name)) nil))
+(defclass account () ((id :initarg :id)) (:metaclass table-class) (:table-name "accounts"))
+(list (class-name (find-class 'account))
+      (slot-value (find-class 'account) 'table-name)
+      (typep (find-class 'account) 'table-class)) ; => (ACCOUNT "accounts" T)
+```
+
+```lisp
+(defclass layer-class (standard-class) ())
+(defmethod closer-mop:validate-superclass ((c layer-class) (s standard-class)) t)
+(defclass base-layer () () (:metaclass layer-class))
+(defclass extra-layer () () (:metaclass layer-class))
+(defgeneric greet (layer)
+  (:method ((l base-layer)) (list :base))
+  (:method ((l extra-layer)) (cons :extra (call-next-method))))
+(let* ((c (make-instance 'layer-class
+                         :direct-superclasses (list (find-class 'extra-layer) (find-class 'base-layer))))
+       (p (allocate-instance c)))
+  (list (greet p) (eq (class-of p) c) (typep p 'base-layer))) ; => ((:EXTRA :BASE) T T)
+```

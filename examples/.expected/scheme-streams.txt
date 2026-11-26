@@ -1,0 +1,15 @@
+naturals:          (0 1 2 3 4 5 6 7 8 9)
+triangular:        (0 1 3 6 10 15 21 28 36 45)
+digit sum 7:       (7 16 25 34 43 52 61 70 106 115)
+the 100th one:     3400
+Pascal row 6:      (1 6 15 20 15 6 1)
+middle of row 30:  155117520
+look-and-say:      1
+look-and-say:      11
+look-and-say:      21
+look-and-say:      1211
+look-and-say:      111221
+look-and-say:      312211
+length of term 30: 4462
+steps after two walks to element 5: 5
+[computing] (42 42)

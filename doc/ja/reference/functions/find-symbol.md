@@ -1,0 +1,80 @@
+# find-symbol
+
+`(find-symbol string [package])`
+
+[`intern`](intern.md) と似ていますが新しく作りません。`package`(省略時はカレントパッケージ)がその名前で**アクセス可能**にしているシンボルを返し、なければ nil を返します。アクセス可能とは、パッケージに**存在する**シンボル([`intern`](intern.md)・[`export`](export.md)・[`import`](import.md)・[`shadowing-import`](shadowing-import.md)・[`shadow`](shadow.md) がメンバーテーブルに記録したもの、あるいはそのパッケージの下で行われた定義 -- `defun` はインターンです)、use しているパッケージから**継承した**シンボル(そのパッケージのエクスポート)、`cl` を通じて届く標準名、キーワードのいずれかです。Common Lisp と同じく、シンボルは読まれた時点でインターンされます: ソースがそのパッケージの下で読んだ名前(引数名、クォートされたデータ、別の場所で書かれた `pkg::name`)は、それを読んだフォーム以降そのパッケージに存在します(エクスポートされていなければ `:internal`)。`(find-symbol (string (car form)) pkg)` で分岐するマクロはこれを前提にしています。[`unintern`](unintern.md) が取り除いた名前はもはやパッケージ自身のものではありません。パッケージを指さない指定子(`nil` を含む)は、Common Lisp と同じく [`package-error-package`](package-error-package.md) が指定子である `package-error` を通知します -- オプションのシステムを調べるときは先に [`find-package`](find-package.md) で確かめます。
+
+Common Lisp との差異: コンパイルバックエンド(JVM/WASM)で読み込み/コンパイル時パッケージについて `nil` を返せるのは**リテラル**文字列のときだけです -- 判定はコンパイル時の視界(cl シンボルとプログラム自身の `defun`)に対して畳み込まれるため、実行時に定義された変数やマクロはそこからは見えません(インタプリタはグローバル変数や `defmacro` マクロを含む生きたイメージを調べます)。計算された名前は代わりに intern されるので常にシンボルが返り、そのステータスもイメージではなく生成された綴りから決まります: プログラムの `defpackage` では、エクスポートしていない名前は `PKG::NAME`(`:internal`、ダブルコロンのリテラルと `eq`)になり、エクスポートした名前は `PKG:NAME`(`:external`)を返します。修飾なしの綴りは `:internal` です。パッケージ自身が記録しているもの、および他のパッケージから届くものは、リテラルでも計算された値でもインタプリタと同じ答えになります: インポートしたシンボル(`:import-from`、再エクスポート)、`:use` で継承したシンボル(use しているパッケージのシンボル、`:inherited`)、`defpackage` が記録したメンバー(`:shadow`、`:intern`)です。パッケージが `cl` を通じて届く標準名も、名前やパッケージがリテラルでも計算された値でも `cl` のシンボル(`:inherited`)を返します: そうした探索を持つプログラムは標準名の表を持ちます。生成された答えのままになるのは 2 つの場合です: 計算された指定子が事前登録のシムパッケージ(`uiop`、`bordeaux-threads`、`closer-common-lisp`)を指すときは `PKG:NAME` を作り、1 引数形式で計算された標準名のステータスは、多値フォームがその場で読むか、プログラムが別の理由で表を持つかしない限り `:internal` のままです。プログラムが [`make-package`](make-package.md) で作ったパッケージは例外で、そのメンバーテーブルはすべてのバックエンドで参照されるため、引数が何であれ intern 前は `nil`、後はそのシンボル、が成り立ちます。プログラムが読んだだけの名前は、コンパイルされたプログラムが持つ表には入りません: 実行時にその名前を探すと、ほかの名前と同じく生成された綴りが返ります。マクロ本体での探索はコンパイル中に実行されるので、インタプリタと同じくその名前が見つかります。関数オブジェクト `#'find-symbol` も同じ 2 つの値を返します。コンパイルバックエンドではその引数は計算された値として扱われます。
+
+パッケージに `common-lisp`(または `cl`)を渡した場合、答えは**標準の**名前一覧になります。CLHS 11.1.2.1 によりこのパッケージは 978 個の標準名すべてをエクスポートするので、rontolisp がその演算子を実装しているかどうかに関わらず名前は見つかります。エクスポートされていることと定義されていることは別の話です -- そうした名前に対して `fboundp`・`macro-function`・`special-operator-p` は依然として `nil` を返し、呼び出せば `undefined-function` が通知され、プログラム側で `defun` することもできます。`cl` を use するパッケージはそれらの名前を同じように継承し(`:inherited`)、`t` と `nil` はそれ自身として返ります。
+
+第 2 の値はそのパッケージにおける ANSI のアクセス可能性ステータス — `:external`、`:inherited`、`:internal`、あるいはパッケージがその名前を提供しないときは `nil` — を返します。2 つの値は同時に `nil` になります:
+
+```lisp
+(multiple-value-list (find-symbol "CAR" 'common-lisp)) ; => (CAR :EXTERNAL)
+```
+
+```lisp
+(multiple-value-list (find-symbol "CAR")) ; => (CAR :INHERITED)
+```
+
+```lisp
+(find-symbol "car") ; => NIL
+```
+
+```lisp
+(find-symbol "cond") ; => NIL
+```
+
+```lisp
+(find-symbol "no-such-name") ; => NIL
+```
+
+```lisp
+(defun greet (n) n)
+(find-symbol "greet") ; => NIL
+```
+
+```lisp
+(and (find-package :simple-date) (find-symbol "TIMESTAMP" :simple-date)) ; => NIL
+```
+
+```lisp
+(handler-case (find-symbol "X" "NO-SUCH-PKG")
+  (package-error (e) (package-error-package e))) ; => :NO-SUCH-PKG
+```
+
+```lisp
+(multiple-value-list (find-symbol "FUNCTION-KEYWORDS" 'common-lisp)) ; => (FUNCTION-KEYWORDS :EXTERNAL)
+```
+
+```lisp
+(fboundp 'function-keywords) ; => NIL
+```
+
+```lisp
+(defpackage :fs-demo (:use :cl))
+(multiple-value-list (find-symbol "CAR" :fs-demo)) ; => (CAR :INHERITED)
+(find-symbol "NEVER-INTERNED" :fs-demo) ; => NIL
+(eq (find-symbol "T" :fs-demo) t) ; => T
+```
+
+```lisp
+(defpackage :fs-read (:use :cl))
+(in-package :fs-read)
+(defun op-kind (form) (case (car form) (add :sum) (t :other)))
+(in-package :cl-user)
+(multiple-value-list (find-symbol "ADD" :fs-read)) ; => (FS-READ::ADD :INTERNAL)
+```
+
+```lisp
+(defpackage :fs-std (:use :cl))
+(multiple-value-list (find-symbol (string-upcase "car") :fs-std)) ; => (CAR :INHERITED)
+```
+
+```lisp
+(defpackage :fs-lib (:use) (:export #:helper))
+(defpackage :fs-app (:use :cl :fs-lib))
+(multiple-value-list (find-symbol "HELPER" :fs-app)) ; => (FS-LIB:HELPER :INHERITED)
+(eq (intern (string-upcase "helper") :fs-app) 'fs-lib:helper) ; => T
+```

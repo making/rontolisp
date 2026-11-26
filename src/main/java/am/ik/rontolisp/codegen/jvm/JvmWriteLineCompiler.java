@@ -1,0 +1,42 @@
+package am.ik.rontolisp.codegen.jvm;
+
+import java.lang.classfile.constantpool.MethodRefEntry;
+import java.lang.classfile.constantpool.Utf8Entry;
+import java.util.List;
+
+import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispVal;
+
+/**
+ * Compiles the {@code write-line} built-in. The string and the optional stream handle
+ * (null = standard output) are passed to the {@code _writeLine} runtime helper, which
+ * returns the string.
+ */
+final class JvmWriteLineCompiler {
+
+	private JvmWriteLineCompiler() {
+	}
+
+	static void compile(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() != 2 && parts.size() != 3) {
+			throw new UnsupportedOperationException("write-line expects 1 or 2 arguments, got " + (parts.size() - 1));
+		}
+		JvmExprCompiler.compileExpr(parts.get(1), ctx, className);
+		// The destination, under CL's stream designator rule: an explicit stream, or --
+		// for an omitted argument AND for an explicit nil -- the current
+		// *standard-output* (JvmStringStreamCompiler.streamArg).
+		LispVal stream = JvmStringStreamCompiler.streamArg(ctx, parts.size() == 3 ? parts.get(2) : null);
+		if (stream != null) {
+			JvmExprCompiler.compileExpr(stream, ctx, className);
+		}
+		else {
+			ctx.body.aconst_null();
+		}
+		Utf8Entry nameUtf8 = ctx.cp.utf8Entry(JvmIoRuntimeBuilder.WRITE_LINE_METHOD);
+		Utf8Entry descUtf8 = ctx.cp.utf8Entry(JvmIoRuntimeBuilder.WRITE_LINE_DESC);
+		MethodRefEntry writeLineRef = ctx.cp.methodRef(ctx.cp.classEntry(className), nameUtf8, descUtf8);
+		ctx.body.invokestatic(writeLineRef);
+	}
+
+}

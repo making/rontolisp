@@ -1,0 +1,22 @@
+# Build products and local tool state, for every Worker project here.
+# Every .wasm is produced by the directory's build.sh; dist/ is jco's output.
+*.wasm
+dist/
+node_modules/
+.wrangler/
+package-lock.json
+
+# A Worker entry that is the plain three lines over worker(), written by build.sh
+# (--emit-worker-entry) and never overwritten. A directory whose src/index.js
+# takes something over (httpbin-clack: the client address) checks its own in.
+btc-ticker/src/index.js
+dog-fetcher/src/index.js
+dog-relay/src/index.js
+hello-clack/src/index.js
+hello-clack-one-source/src/index.js
+hello-mvcfn-one-source/src/index.js
+hello-ningle/src/index.js
+hello-servlet-one-source/src/index.js
+hello-session-one-source/src/index.js
+hello-tiny-routes/src/index.js
+ring-hello-one-source/src/index.js

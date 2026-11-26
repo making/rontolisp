@@ -1,0 +1,24 @@
+# resolve
+
+`(resolve sym)`
+
+Answers the var a symbol names in the current namespace, the class a class name spells
+(a record's or deftype's included), or `nil`. A quoted symbol resolves while the program lowers, to the var `#'name` lowers
+to: a program var, a `clojure.core` var this front end implements, a core macro, or a var
+of a library it implements as a lowering (`clojure.string/upper-case`). Any
+other name answers `nil`, a core var this front end lacks included, so a library that
+chooses code by the `clojure.core` it runs on (a `compile-if` over `resolve`) chooses the
+code that lowers here. A computed symbol resolves in a macro body and, on the interpreter,
+when the call runs, in the namespace `*ns*` holds; a compiled program throws an
+`UnsupportedOperationException` at run time. `(resolve env sym)` is
+[ns-resolve](ns-resolve.md) in the current namespace: nil for a symbol the environment (a
+macro's `&env`) holds. Also names a function value.
+
+```clojure
+(defn greet [] "hi")
+(println (resolve 'greet) (resolve 'inc) (resolve 'nowhere))
+```
+
+```
+#'user/greet #'clojure.core/inc nil
+```

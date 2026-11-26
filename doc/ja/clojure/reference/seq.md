@@ -1,0 +1,15 @@
+# seq
+
+`(seq coll)`
+
+`coll` の seq ビューを返します。lazy ラッパーは1レベルだけ realize します（それ以上は辿らないため、無限 seq は無限のままです）。リストはそのまま渡され、ベクタ・文字列は要素ごとに強制され、マップはエントリごとの2要素ベクタ、セットは要素ごとのメンバーを出します（どちらも挿入順で、マップやセットの印字と同じ順です）。`nil` は空です。Java の `Iterable` は要素を、Java の `Map` はエントリごとの2要素ベクタを、`CharSequence` は文字を出し、seq を取った時点ですべて読みます（インタプリタと JVM）。それ以外（キーワード、`false`、数）はオラクルと同様に `IllegalArgumentException` をシグナルします。
+
+各 seq 動詞の空の結果は `nil` です。chunk 化はありません。lazy seq は1要素ずつ realize します。
+
+```clojure
+(println (seq '(1 2)))       ; (1 2)
+(println (seq [1 2]))        ; (1 2)
+(println (seq nil))          ; nil
+(println (first {:a 1}))     ; [:a 1]
+(println (count (seq "ab"))) ; 2
+```

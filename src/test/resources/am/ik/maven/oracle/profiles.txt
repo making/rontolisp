@@ -1,0 +1,40 @@
+# descriptor test.profiles:jdk:1 test.profiles:bydefault:1 test.profiles:props:1 test.profiles:os:1 test.profiles:file:1 test.profiles:combined:1 test.profiles:inherit-child:1 test.profiles:override:1 test.profiles:interp-activation:1 test.profiles:parent-props-child:1
+artifact test.profiles:jdk:jar:1
+dep test.lib:jdk11up:jar::1 scope=compile optional=null
+dep test.lib:notjdk8:jar::1 scope=compile optional=null
+dep test.lib:jdk25prefix:jar::1 scope=compile optional=null
+dep test.lib:jdk2prefix:jar::1 scope=compile optional=null
+dep test.lib:in25:jar::1 scope=compile optional=null
+dep test.lib:upto2504:jar::1 scope=compile optional=null
+artifact test.profiles:bydefault:jar:1
+dep test.lib:first:jar::1 scope=compile optional=null
+dep test.lib:second:jar::1 scope=compile optional=null
+artifact test.profiles:props:jar:1
+dep test.lib:no-flag:jar::1 scope=compile optional=null
+dep test.lib:mode-not-fast:jar::1 scope=compile optional=null
+artifact test.profiles:os:jar:1
+dep test.lib:unix:jar::1 scope=compile optional=null
+dep test.lib:notwindows:jar::1 scope=compile optional=null
+dep test.lib:name:jar::1 scope=compile optional=null
+dep test.lib:arch:jar::1 scope=compile optional=null
+dep test.lib:version:jar::1 scope=compile optional=null
+dep test.lib:regex:jar::1 scope=compile optional=null
+dep test.lib:family-other:jar::1 scope=compile optional=null
+artifact test.profiles:file:jar:1
+dep test.lib:missing:jar::1 scope=compile optional=null
+dep test.lib:root:jar::1 scope=compile optional=null
+dep test.lib:prop:jar::1 scope=compile optional=null
+artifact test.profiles:combined:jar:1
+dep test.lib:jdk-and-unix:jar::1 scope=compile optional=null
+artifact test.profiles:inherit-child:jar:1
+dep test.lib:child-own:jar::2 scope=compile optional=null
+dep test.lib:child-default:jar::1 scope=compile optional=null
+dep test.lib:from-parent-profile:jar::2 scope=compile optional=null
+artifact test.profiles:override:jar:1
+dep test.lib:same:jar::2.0 scope=compile optional=null
+dep test.lib:uses-prop:jar::profile scope=compile optional=null
+dep test.lib:extra:jar::1 scope=compile optional=null
+managed test.lib:m:jar::2.0 scope= optional=null
+artifact test.profiles:interp-activation:jar:1
+dep test.lib:interpolated-jdk:jar::1 scope=compile optional=null
+artifact test.profiles:parent-props-child:jar:1

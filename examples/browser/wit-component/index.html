@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>rontolisp fractal explorer (WebAssembly component)</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --fg: #1a1a1a;
+        --bg: #fafafa;
+        --muted: #555;
+        --card: #fff;
+        --border: #ddd;
+      }
+      body {
+        font-family: system-ui, -apple-system, sans-serif;
+        max-width: 1000px;
+        margin: 2rem auto;
+        padding: 0 1rem;
+        color: var(--fg);
+        background: var(--bg);
+        line-height: 1.5;
+      }
+      h1 {
+        font-size: 1.5rem;
+        margin-bottom: 0.25rem;
+      }
+      p.lead {
+        color: var(--muted);
+      }
+      pre {
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 0.8rem 1rem;
+        overflow-x: auto;
+        font-size: 0.85rem;
+      }
+      .views {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 1rem;
+        margin-top: 1rem;
+      }
+      figure {
+        margin: 0;
+        flex: 1 1 420px;
+      }
+      figcaption {
+        font-size: 0.85rem;
+        color: var(--muted);
+        margin-top: 0.4rem;
+      }
+      canvas {
+        width: 100%;
+        aspect-ratio: 5 / 3;
+        display: block;
+        background: #000;
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        cursor: crosshair;
+      }
+      .controls {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 1.2rem;
+        margin-top: 1.2rem;
+        font-size: 0.9rem;
+        color: var(--muted);
+      }
+      #readout {
+        margin-top: 0.8rem;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 0.85rem;
+        color: var(--muted);
+        white-space: pre-wrap;
+      }
+      #error {
+        margin-top: 1rem;
+        color: #b00020;
+        white-space: pre-wrap;
+        font-size: 0.9rem;
+      }
+      code {
+        background: #00000010;
+        padding: 0.1rem 0.3rem;
+        border-radius: 4px;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>A fractal explorer, compiled from Lisp to a WebAssembly component</h1>
+    <p class="lead">
+      Hover the Mandelbrot set on the left: the Julia set of the point under the
+      cursor is drawn on the right, live. Click to zoom in, shift-click to zoom
+      out. Every pixel of both images is computed by
+      <a
+        href="https://github.com/making/rontolisp/blob/develop/examples/browser/wit-component/fractal.lisp"
+        >fractal.lisp</a
+      >, compiled to a ~2.5 KB WebAssembly <em>component</em> and transpiled with
+      <code>jco</code>.
+    </p>
+
+    <p class="lead">
+      This is what the page does to talk to the module &mdash; all of it:
+    </p>
+    <pre><code>const { mandelbrot, julia, palette, escapeTime, inSet } = await import("./dist/fractal.js");
+const chars = mandelbrot(centerX, centerY, scale, cols, rows, maxIter);</code></pre>
+    <p class="lead">
+      No <code>WebAssembly.instantiate</code>, no import object, no WASI shim, no
+      <code>memory.buffer</code>, no <code>__ronto_alloc</code>, no
+      <code>(ptr, len)</code> pair to decode. The
+      <a href="wit/fractal.wit">WIT world</a> types the five exports, the
+      canonical ABI of the component model moves the strings across and frees
+      them, and <code>jco</code> generated the bindings by reading that world out
+      of the <code>.wasm</code>. Compare with the sibling
+      <a href="../rainbow/rainbow.html">rainbow</a> demo, whose page copies UTF-8
+      bytes into the module's linear memory through its bump allocator and decodes
+      a returned <code>(ptr, len)</code> pair, or with
+      <a href="../webgl-galaxy/">webgl-galaxy</a>, whose page hand-writes an
+      import object of dozens of host functions.
+    </p>
+
+    <div class="views">
+      <figure>
+        <canvas id="mandel" width="240" height="144"></canvas>
+        <figcaption>
+          <code>mandelbrot(center-x, center-y, scale, cols, rows, max-iter)</code>
+          &mdash; hover to pick <em>c</em>, click to zoom.
+        </figcaption>
+      </figure>
+      <figure>
+        <canvas id="juliaCanvas" width="240" height="144"></canvas>
+        <figcaption>
+          <code>julia(cx, cy, scale, cols, rows, max-iter)</code> &mdash; the Julia
+          set of the hovered <em>c</em>, redrawn on every mouse move.
+        </figcaption>
+      </figure>
+    </div>
+
+    <div class="controls">
+      <label
+        >iterations
+        <input id="iter" type="range" min="30" max="400" step="10" value="150" />
+        <span id="iterval">150</span></label
+      >
+      <label
+        >grid
+        <select id="grid">
+          <option value="160">160 x 96</option>
+          <option value="240" selected>240 x 144</option>
+          <option value="320">320 x 192</option>
+        </select></label
+      >
+      <button id="reset">reset view</button>
+    </div>
+
+    <div id="readout">(loading the component...)</div>
+    <div id="error"></div>
+
+    <script type="module">
+      const mandelCanvas = document.getElementById("mandel");
+      const juliaCanvas = document.getElementById("juliaCanvas");
+      const iter = document.getElementById("iter");
+      const iterval = document.getElementById("iterval");
+      const grid = document.getElementById("grid");
+      const reset = document.getElementById("reset");
+      const readout = document.getElementById("readout");
+      const errorBox = document.getElementById("error");
+
+      // The entire interface to the WebAssembly component: five functions, typed
+      // by wit/fractal.wit. jco camelCases the kebab-case names escape-time and
+      // in-set.
+      const { mandelbrot, julia, palette, escapeTime, inSet } = await import(
+        "./dist/fractal.js"
+      );
+
+      // The module declares its own pixel encoding: palette() returns the ordered
+      // characters a rendered frame may contain (index 0 = inside the set). The
+      // page turns an index into a color and knows nothing else about it.
+      const PALETTE = palette();
+      const INDEX_OF = new Int16Array(128).fill(0);
+      for (let i = 0; i < PALETTE.length; i++) {
+        INDEX_OF[PALETTE.charCodeAt(i)] = i;
+      }
+      const clamp = (v) => (v < 0 ? 0 : v > 1 ? 1 : v);
+      const COLORS = new Uint8Array(PALETTE.length * 3);
+      for (let i = 1; i < PALETTE.length; i++) {
+        // Index 0 (inside the set) stays black; the escape-time ramp runs from
+        // deep blue through violet and orange to white. Most pixels escape early,
+        // so the ramp is stretched at the low end to give the outer bands color.
+        const t = Math.pow(i / (PALETTE.length - 1), 0.7);
+        COLORS[i * 3] = 255 * clamp(1.6 * t - 0.2);
+        COLORS[i * 3 + 1] = 255 * clamp(1.9 * t * t - 0.25);
+        COLORS[i * 3 + 2] = 255 * clamp(0.5 + 0.7 * Math.sin(3.1 * t));
+      }
+
+      const HOME = { x: -0.6, y: 0.0, scale: 3.2 };
+      const view = { ...HOME };
+      let c = { x: -0.8, y: 0.156 };
+      let cols = 240;
+      let rows = 144;
+      let maxIter = 150;
+      let pending = false;
+      const timing = { mandel: 0, julia: 0 };
+
+      // Paint one cols x rows grid of palette characters onto a canvas.
+      function paint(canvas, chars) {
+        const ctx = canvas.getContext("2d");
+        const img = ctx.createImageData(cols, rows);
+        for (let p = 0; p < cols * rows; p++) {
+          const idx = INDEX_OF[chars.charCodeAt(p)];
+          const o = p * 4;
+          img.data[o] = COLORS[idx * 3];
+          img.data[o + 1] = COLORS[idx * 3 + 1];
+          img.data[o + 2] = COLORS[idx * 3 + 2];
+          img.data[o + 3] = 255;
+        }
+        ctx.putImageData(img, 0, 0);
+      }
+
+      function drawMandelbrot() {
+        const t0 = performance.now();
+        const chars = mandelbrot(view.x, view.y, view.scale, cols, rows, maxIter);
+        timing.mandel = performance.now() - t0;
+        paint(mandelCanvas, chars);
+      }
+
+      function drawJulia() {
+        const t0 = performance.now();
+        const chars = julia(c.x, c.y, 3.2, cols, rows, maxIter);
+        timing.julia = performance.now() - t0;
+        paint(juliaCanvas, chars);
+      }
+
+      // The pixel under the cursor, in complex-plane coordinates.
+      function pointAt(event) {
+        const rect = mandelCanvas.getBoundingClientRect();
+        const u = (event.clientX - rect.left) / rect.width;
+        const v = (event.clientY - rect.top) / rect.height;
+        const height = (view.scale * rows) / cols;
+        return {
+          x: view.x + (u - 0.5) * view.scale,
+          y: view.y + (v - 0.5) * height,
+        };
+      }
+
+      function showReadout(p) {
+        const sign = p.y < 0 ? "-" : "+";
+        const status = inSet(p.x, p.y, maxIter)
+          ? "inside the set"
+          : `escapes after ${escapeTime(p.x, p.y, maxIter)} iterations`;
+        readout.textContent =
+          `c = ${p.x.toFixed(6)} ${sign} ${Math.abs(p.y).toFixed(6)}i` +
+          `   ${status}   zoom = ${(HOME.scale / view.scale).toFixed(1)}x\n` +
+          `render: mandelbrot ${timing.mandel.toFixed(1)} ms,` +
+          ` julia ${timing.julia.toFixed(1)} ms` +
+          `   (${cols} x ${rows} pixels, ${maxIter} iterations, one call each)`;
+      }
+
+      // Hovering the Mandelbrot picks the Julia constant; redraw at most once per
+      // animation frame.
+      mandelCanvas.addEventListener("mousemove", (event) => {
+        c = pointAt(event);
+        if (pending) return;
+        pending = true;
+        requestAnimationFrame(() => {
+          pending = false;
+          drawJulia();
+          showReadout(c);
+        });
+      });
+
+      mandelCanvas.addEventListener("click", (event) => {
+        const p = pointAt(event);
+        view.x = p.x;
+        view.y = p.y;
+        view.scale *= event.shiftKey ? 2 : 0.5;
+        drawMandelbrot();
+        showReadout(p);
+      });
+
+      iter.addEventListener("input", () => {
+        maxIter = Number(iter.value);
+        iterval.textContent = iter.value;
+        drawAll();
+      });
+
+      grid.addEventListener("change", () => {
+        cols = Number(grid.value);
+        rows = Math.round((cols * 3) / 5);
+        for (const canvas of [mandelCanvas, juliaCanvas]) {
+          canvas.width = cols;
+          canvas.height = rows;
+        }
+        drawAll();
+      });
+
+      reset.addEventListener("click", () => {
+        Object.assign(view, HOME);
+        drawAll();
+      });
+
+      function drawAll() {
+        drawMandelbrot();
+        drawJulia();
+        showReadout(c);
+      }
+
+      try {
+        drawAll();
+        console.log("palette() =", PALETTE);
+        console.log(
+          "escapeTime(0, 0, 150) =",
+          escapeTime(0, 0, 150),
+          "/ inSet(0, 0, 150) =",
+          inSet(0, 0, 150),
+          "(the origin is in the set)",
+        );
+        console.log(
+          "escapeTime(1, 1, 150) =",
+          escapeTime(1, 1, 150),
+          "/ inSet(1, 1, 150) =",
+          inSet(1, 1, 150),
+        );
+        console.log(
+          `mandelbrot() and julia() each returned ${cols * rows} characters:` +
+            ` ${timing.mandel.toFixed(1)} ms and ${timing.julia.toFixed(1)} ms`,
+        );
+      } catch (e) {
+        errorBox.textContent = String(e);
+        throw e;
+      }
+    </script>
+  </body>
+</html>

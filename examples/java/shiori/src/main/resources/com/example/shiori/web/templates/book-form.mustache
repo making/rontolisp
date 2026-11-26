@@ -1,0 +1,89 @@
+{{<layout}}{{$content}}
+<section class="form-page">
+  <p class="crumbs"><a href="/books">本棚</a> ＞ {{heading}}</p>
+  <form class="book-form" method="post" action="{{action}}" data-spine="{{spineJson}}" novalidate>
+    <div class="stand preview" aria-hidden="true">
+      {{#form}}<span class="spine" style="{{spine}}"><span class="spine-title">{{title}}</span><span class="spine-author">{{author}}</span></span>{{/form}}
+    </div>
+
+    <div class="card">
+      <h1 class="card-title">{{heading}}</h1>
+      {{#errors}}
+      <div class="error-summary" role="alert">
+        <p>入力を確かめてください。</p>
+        <ul>{{#errorList}}<li>{{.}}</li>{{/errorList}}</ul>
+      </div>
+      {{/errors}}
+
+      {{! The fields are named as the form sends them: form holds what was
+          sent, or the stored book written back, and errors the message of
+          each field the schema refused. }}
+      <div class="card-rows">
+        {{#form}}
+        <div class="row{{#errors.title}} invalid{{/errors.title}}">
+          <label for="f-title">書名</label>
+          <div><input id="f-title" name="title" value="{{title}}" maxlength="200" required autofocus>
+          {{#errors.title}}<p class="field-error">{{.}}</p>{{/errors.title}}</div>
+        </div>
+        <div class="row{{#errors.author}} invalid{{/errors.author}}">
+          <label for="f-author">著者</label>
+          <div><input id="f-author" name="author" value="{{author}}" maxlength="200" required>
+          {{#errors.author}}<p class="field-error">{{.}}</p>{{/errors.author}}</div>
+        </div>
+        <div class="row{{#errors.pages}} invalid{{/errors.pages}}">
+          <label for="f-pages">頁数</label>
+          <div><input id="f-pages" name="pages" type="number" min="1" value="{{pages}}" inputmode="numeric">
+          {{#errors.pages}}<p class="field-error">{{.}}</p>{{/errors.pages}}</div>
+        </div>
+        <div class="row{{#errors.current_page}} invalid{{/errors.current_page}}">
+          <label for="f-current">読んだ頁</label>
+          <div><input id="f-current" name="current_page" type="number" min="0" value="{{current_page}}" inputmode="numeric">
+          {{#errors.current_page}}<p class="field-error">{{.}}</p>{{/errors.current_page}}</div>
+        </div>
+        {{/form}}
+        <div class="row" role="radiogroup" aria-labelledby="l-status">
+          <span class="label" id="l-status">状態</span>
+          <div class="choices">
+            {{#statusOptions}}<label><input type="radio" name="status" value="{{value}}" {{#checked}}checked{{/checked}}><span>{{label}}</span></label>{{/statusOptions}}
+            {{#errors.status}}<p class="field-error">{{.}}</p>{{/errors.status}}
+          </div>
+        </div>
+        <div class="row" role="radiogroup" aria-labelledby="l-rating">
+          <span class="label" id="l-rating">評価</span>
+          <div class="rating-input">
+            {{#ratingOptions}}<input type="radio" id="r{{n}}" name="rating" value="{{n}}" {{#checked}}checked{{/checked}}><label for="r{{n}}" aria-label="{{n}}つ星">★</label>{{/ratingOptions}}
+            <input type="radio" id="r0" name="rating" value="" class="rating-none"><label for="r0" class="rating-none-label">つけない</label>
+            {{#errors.rating}}<p class="field-error">{{.}}</p>{{/errors.rating}}
+          </div>
+        </div>
+        {{#form}}
+        <div class="row{{#errors.started_on}} invalid{{/errors.started_on}}">
+          <label for="f-started">読み始め</label>
+          <div><input id="f-started" name="started_on" type="date" value="{{started_on}}">
+          {{#errors.started_on}}<p class="field-error">{{.}}</p>{{/errors.started_on}}</div>
+        </div>
+        <div class="row{{#errors.finished_on}} invalid{{/errors.finished_on}}">
+          <label for="f-finished">読み終わり</label>
+          <div><input id="f-finished" name="finished_on" type="date" value="{{finished_on}}">
+          {{#errors.finished_on}}<p class="field-error">{{.}}</p>{{/errors.finished_on}}</div>
+        </div>
+        <div class="row">
+          <label for="f-tags">索引</label>
+          <div><input id="f-tags" name="tags" value="{{tags}}" placeholder="小説, 日本文学">
+          <p class="field-hint">読点ではなくカンマで区切ります。</p></div>
+        </div>
+        <div class="row">
+          <label for="f-summary">感想</label>
+          <div><textarea id="f-summary" name="summary" rows="4">{{summary}}</textarea></div>
+        </div>
+        {{/form}}
+      </div>
+
+      <div class="card-actions">
+        <button class="button primary" type="submit">{{#editing}}変更を保存{{/editing}}{{^editing}}本棚に加える{{/editing}}</button>
+        <a class="button quiet" href="{{cancel}}">やめる</a>
+      </div>
+    </div>
+  </form>
+</section>
+{{/content}}{{/layout}}

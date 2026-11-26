@@ -1,0 +1,35 @@
+# Emit java: call sites as invokedynamic with a guarded inline cache
+
+Difficulty: High
+
+Only start this after a07 (the java: overload cache) has landed and a real
+workload shows the remaining per-call overhead (measured ~100-200 ns: _javaInit
+call, Object[] packing, class/method name substring, key allocation,
+Method.invoke boxing) matters. A constant-MethodHandle call measured at the
+harness floor (~15-20 ns) on 2026-09-26.
+
+Scope note (2026-09-26): sites a13/a14 resolve statically become direct
+bytecode (landed in a14: codegen/jvm/JvmJavaDirectSites), which beats indy and
+suits native-image (MutableCallSite does not).
+Narrow this item to UNRESOLVED sites only, or cancel it once a15 lands. a16
+needed no invokedynamic after all (its interface implementations are classes
+generated at compile time, `.kb/java-interop.md`, "Implementing interfaces"), so
+the am.ik.jvm indy infrastructure is this item's alone.
+
+Plan:
+- am.ik.jvm (rewritten 2026-09-29 after a84, which wrote every class through
+  java.lang.classfile): the master pool is a ConstantPoolBuilder, so it mints
+  MethodHandle / InvokeDynamic / BootstrapMethod entries already, and the writer
+  re-mints an entry in each class it lands in, the BootstrapMethods attribute
+  with it. What is missing is an `invokedynamic` on MethodCode, its replay in
+  CodeReplay (0xBA is refused today), and JvmClassSplitter's closure walk over
+  the new entry kinds (a split class's pool count).
+- Bootstrap in the bridge template: MutableCallSite + guardWithTest on
+  (receiver class, argument kinds), fallback relinks through the shared
+  selection; per-argument marshal filters and a return filter specialized to
+  the chosen method's types; exceptions wrapped exactly as fail() does.
+  No nested classes in the template.
+- Literal class/method names become bootstrap static arguments; fixed arity
+  call-site descriptors replace the Object[] packing.
+- Behavior must stay identical to the interpreter (same tests as a07, plus a
+  megamorphic site).

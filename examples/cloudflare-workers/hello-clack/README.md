@@ -1,0 +1,139 @@
+# hello-clack — a Clack application on Cloudflare Workers
+
+The smallest thing that is still a real
+[Clack](https://github.com/fukamachi/clack) application: `ql:quickload`, one
+`defun`, `clack:clackup`.
+
+```bash
+./build.sh          # worker.lisp -> src/worker.wasm
+npx wrangler dev    # http://localhost:8787
+npx wrangler deploy
+```
+
+```console
+$ curl http://localhost:8787/
+Hello from Clack on Cloudflare Workers!
+GET /
+```
+
+## The whole program
+
+```lisp
+(ql:quickload '("clack" "clack-handler-reactor"))
+
+(defun app (env)
+  (list 200 '(:content-type "text/plain; charset=utf-8")
+        (list
+         (format nil "Hello from Clack on Cloudflare Workers!~%~a ~a~%"
+                 (getf env :request-method) (getf env :path-info)))))
+
+(clack:clackup #'app :server :reactor :use-thread nil)
+```
+
+That is the whole of Clack's API: an application is a **function** of the
+environment plist returning the `(status headers body)` list, and a middleware
+is a function from application to application ([`../httpbin-clack`](../httpbin-clack)
+has one). There is no Worker-specific code here, so `app` runs on hunchentoot,
+on woo, under `wasmtime serve` and on the JVM, unchanged.
+
+`:reactor` is a built-in handler backend that is **host-driven on every
+backend**: its `run` stores the application and returns, and what replaces the
+socket is one WASM export, `handle-request` (a JSON request string in, a JSON
+response string out). You do not declare it: `rontolisp:wasm-export` needs a
+literal name at compile time, which a `clackup` call has none to give, so the
+compiler synthesizes it from a marker the backend leaves behind. The
+[Clack guide](../../../doc/en/guides/clack.md) has the full story.
+
+A Worker does not strictly need this designator — `:server :rontolisp` picks
+each target's own transport, which is how
+[`../httpbin-clack-one-source`](../httpbin-clack-one-source) deploys a socket
+server unchanged. What `:reactor` adds is "host-driven *everywhere*", which is
+what lets [`check.lisp`](check.lisp) drive the whole Worker on the interpreter.
+
+**`:use-thread nil`** is a property of the other backends rather than
+boilerplate: it is already the default on WASM, but the interpreter and the JVM
+have threads and `clackup` would otherwise store the application on one of them,
+racing the next form.
+
+## Developing without Cloudflare
+
+`clack.handler.reactor:dispatch` is an ordinary function of a JSON string, and
+exactly what the synthesized export calls, so the whole Worker runs on every
+backend — which [`examples/examples.yaml`](../../examples.yaml) pins:
+
+```bash
+rontolisp check.lisp
+rontolisp check.lisp -o Check.class && java -cp . Check
+rontolisp check.lisp -o check.wasm && wasmtime run check.wasm
+```
+
+The two lines before the first `-->` are upstream clack's own banner and debug
+notice. On a Worker (`--no-wasi`) standard output is a **sink**, so those bytes
+are discarded rather than trapping the instance; locally they are not. Pass
+`:silent t :debug nil` to quiet them.
+
+## The JavaScript half is not hand-written either
+
+`--emit-worker-entry` (`build.sh`; it implies `--emit-js-glue`) writes
+[`src/worker.js`](src/worker.js) from `worker.lisp`'s own declarations:
+instantiation, the entropy and the clock a `--no-wasi` module cannot draw for
+itself, the `(ptr, len)` staging around the entry point, and the
+`Request -> envelope -> Response` mapping. The same flag writes the Worker's
+entry, `src/index.js`:
+
+```js
+import module from "./worker.wasm";
+import { worker } from "./worker.js";
+
+export default worker(module);
+```
+
+There is no import object in it because there are no imports. On the DEFAULT
+boundary every body rides the envelope's own `body` key, so this module asks the
+host for **nothing at all** — and the mapping around it is transport work, fixed
+by the envelope rather than chosen by the program, which is what makes it
+derivable. [`../httpbin-clack`](../httpbin-clack) is the same application on
+`--host-boundary=streaming`, where the bodies cross as octets through imports of
+their own, and its `src/index.js` is the same call: the glue writes those too.
+
+The generated file is **checked in** and pinned by `HostGlueEmitterTest`, so
+regenerate it with `./build.sh` rather than editing it — and the three
+`hello-*` directories carry the same one, because they declare the same
+boundary. `src/index.js` is not checked in: the build writes it once and never
+overwrites it, so it is yours to edit.
+
+## What's in here
+
+| File | Purpose |
+| --- | --- |
+| [`worker.lisp`](worker.lisp) | The whole program — three forms. This is what `build.sh` compiles. |
+| [`check.lisp`](check.lisp) | Drives it with no Cloudflare in sight, on any backend. |
+| `src/index.js` | Written by `./build.sh` (`--emit-worker-entry`) on the first build: three lines over the generated `worker()`. Yours to edit; a later build never overwrites it. |
+| [`src/worker.js`](src/worker.js) | The boundary, GENERATED by `--emit-js-glue` from `worker.lisp`'s declarations. Do not edit; `./build.sh` rewrites it. |
+| `src/worker.wasm` | A build product — run `./build.sh` first. |
+
+The cost of "it is a real Clack application" is module size
+([size report](../../../size-report/results/cloudflare-workers.md)) and isolate
+startup, both paid once; the per-request cost is the Lisp call plus the string
+boundary. [`../hello`](../hello) is the cheaper shape if a program will only
+ever run on a Worker.
+
+## Limitations
+
+The Worker sandbox and the `--no-wasi` build, exactly as in
+[`../httpbin`](../httpbin/README.md#limitations): no standard input, no
+filesystem, and no `rontolisp:fetch` unless the build asks for `--host-fetch`
+(which is [`../btc-ticker`](../btc-ticker)). Printing is discarded rather than
+trapping, `random` works on a generator the generated `src/worker.js` seeds from
+`crypto`, and the clock is whatever it hands to
+`__ronto_set_time`. A *runtime* `(ql:quickload ...)`
+cannot work: the one at the top of `worker.lisp` is resolved at **compile** time
+and inlined, which is why the first `./build.sh` needs network and later ones do
+not.
+
+## Rebuilding
+
+```bash
+./mvnw clean package -DskipTests   # from the repository root
+examples/cloudflare-workers/hello-clack/build.sh
+```

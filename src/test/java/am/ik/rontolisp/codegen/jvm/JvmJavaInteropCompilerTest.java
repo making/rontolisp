@@ -1,0 +1,1613 @@
+package am.ik.rontolisp.codegen.jvm;
+
+import java.io.ByteArrayOutputStream;
+import java.io.PrintStream;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
+import java.net.URL;
+import java.net.URLClassLoader;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.List;
+
+import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.cli.CompileFrontendAccess;
+import am.ik.rontolisp.reader.Features;
+import am.ik.rontolisp.reader.LispReader;
+import am.ik.rontolisp.testsupport.JavaImplementationPrograms;
+import am.ik.rontolisp.testsupport.JavaInteropPrograms;
+import am.ik.rontolisp.testsupport.JavaLibraryJar;
+import am.ik.rontolisp.testsupport.ThreadStdio;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+/**
+ * Tests for the {@code java:} interop functions compiled to a JVM {@code .class} (the
+ * {@link JavaBridgeTemplate} bridge that travels beside it). Mirrors the interpreter's
+ * {@code JavaInteropTest} cases so the two backends stay behaviorally identical; every
+ * case uses headless, deterministic JDK classes.
+ */
+class JvmJavaInteropCompilerTest {
+
+	@TempDir
+	Path tempDir;
+
+	// Compiles the program, runs its main, and returns the captured stdout. A runtime
+	// exception thrown by the program (e.g. a bridge validation error) is unwrapped and
+	// rethrown so tests can assert on the original message.
+	private String compileAndRun(String lispCode) throws Exception {
+		return compileAndRun(LispReader.readAllFromString(lispCode));
+	}
+
+	// Through the CLI's front end, which splices the library functions (type-of, the
+	// class dispatch) a program's own forms reach.
+	private String compileAndRunThroughFrontEnd(String lispCode) throws Exception {
+		return compileAndRun(CompileFrontendAccess.corpus(lispCode, Features.JVM, false, false));
+	}
+
+	private String compileAndRun(List<LispVal> program) throws Exception {
+		JvmLispCompiler compiler = new JvmLispCompiler("Test");
+		byte[] classBytes = compiler.compile(program);
+		Files.write(this.tempDir.resolve("Test.class"), classBytes);
+		writeBeside(compiler);
+
+		try (URLClassLoader loader = new URLClassLoader(new URL[] { this.tempDir.toUri().toURL() },
+				ClassLoader.getSystemClassLoader())) {
+			Class<?> clazz = loader.loadClass("Test");
+			Method main = clazz.getMethod("main", String[].class);
+
+			ByteArrayOutputStream baos = new ByteArrayOutputStream();
+			PrintStream oldOut = System.out;
+			System.setOut(new PrintStream(baos));
+			try {
+				main.invoke(null, (Object) new String[0]);
+			}
+			catch (InvocationTargetException ex) {
+				if (ex.getCause() instanceof RuntimeException re) {
+					throw re;
+				}
+				throw ex;
+			}
+			finally {
+				System.setOut(oldOut);
+			}
+			return baos.toString().trim();
+		}
+	}
+
+	// Writes the class files that travel beside the program (the java: bridge among
+	// them) into the class path root, as the CLI does for -o X.class.
+	private void writeBeside(JvmLispCompiler compiler) throws Exception {
+		for (var file : compiler.runtimeClassFiles().entrySet()) {
+			Path target = this.tempDir.resolve(file.getKey());
+			Files.createDirectories(target.getParent());
+			Files.write(target, file.getValue());
+		}
+	}
+
+	@Test
+	void newAndInstanceCall() throws Exception {
+		assertThat(compileAndRun("""
+				(setq sb (java:new "java.lang.StringBuilder" "hi"))
+				(java:call sb "append" "!")
+				(print (java:call sb "toString"))
+				""")).isEqualTo("\"hi!\"");
+	}
+
+	@Test
+	void staticCall() throws Exception {
+		assertThat(compileAndRun("(print (java:static \"java.lang.Integer\" \"parseInt\" \"100\"))")).isEqualTo("100");
+		// A class name, a method name and a String argument built by a string producer
+		// are mutable character vectors; the bridge's lispString renders them through
+		// the reflectively bound _strv (.kb/string-write-runtime.md).
+		assertThat(compileAndRun("""
+				(print (java:static (concatenate 'string "java.lang." "Integer")
+				                    (format nil "parse~a" "Int")
+				                    (concatenate 'string "1" "01")))
+				""")).isEqualTo("101");
+	}
+
+	@Test
+	void staticReadsField() throws Exception {
+		assertThat(compileAndRun("(print (java:field \"java.lang.Integer\" \"MAX_VALUE\"))")).isEqualTo("2147483647");
+	}
+
+	@Test
+	void instanceReadsAndWritesField() throws Exception {
+		// java.awt.Point has public int fields x/y, and works headless. A write answers
+		// the value written, narrowed into the int field as the interpreter does.
+		assertThat(compileAndRun(
+				"""
+						(setq p (java:new "java.awt.Point" 3 4))
+						(print (list (java:field p "y") (java:field p "y" 7) (java:field p "y") (java:field p "x" 2.9) (java:field p "x")))
+						"""))
+			.isEqualTo("(4 7 7 2.9 2)");
+	}
+
+	// An integer argument prefers the int overload (returning an integer), not the
+	// long/float/double ones -- the same deterministic overload resolution as the
+	// interpreter.
+	@Test
+	void overloadResolutionPrefersIntForAnInteger() throws Exception {
+		assertThat(compileAndRun("(print (java:static \"java.lang.Math\" \"max\" 3 7))")).isEqualTo("7");
+	}
+
+	@Test
+	void overloadResolutionPrefersDoubleForAFloat() throws Exception {
+		assertThat(compileAndRun("(print (java:static \"java.lang.Math\" \"abs\" -5.5))")).isEqualTo("5.5");
+	}
+
+	@Test
+	void integerConvertsToDoubleWhenNoIntegerOverload() throws Exception {
+		assertThat(compileAndRun("(print (java:static \"java.lang.Math\" \"sqrt\" 16))")).isEqualTo("4.0");
+	}
+
+	// A character argument refuses an int parameter where no char/Character overload
+	// takes it -- mirrors JavaInteropTest#characterRefusesAnIntParameter: the oracle's
+	// cast refusal (Character.charCount takes an int alone).
+	@Test
+	void characterRefusesAnIntParameter() throws Exception {
+		assertThatThrownBy(() -> compileAndRun("(print (java:static \"java.lang.Character\" \"charCount\" #\\a))"))
+			.isInstanceOf(RuntimeException.class)
+			.hasMessage("error calling java.lang.Character.charCount: java.lang.ClassCastException:"
+					+ " class java.lang.Character cannot be cast to class java.lang.Number");
+	}
+
+	// A supplementary code point cannot fit a single Java char, so it falls back to the
+	// int overload (Character.toString(int)) rather than the char one -- mirrors
+	// JavaInteropTest#supplementaryCodePointDoesNotNarrowToChar.
+	@Test
+	void supplementaryCodePointDoesNotNarrowToChar() throws Exception {
+		assertThat(compileAndRun("(print (java:static \"java.lang.Character\" \"toString\" (code-char 128512)))"))
+			.isEqualTo("\"" + new String(Character.toChars(128512)) + "\"");
+	}
+
+	// The symbol t marshals to a boolean parameter (the compiled true is the bare
+	// symbol "T", which is also what a boolean answer comes back as).
+	@Test
+	void trueMarshalsToABooleanParameter() throws Exception {
+		assertThat(compileAndRun("(print (java:static \"java.lang.String\" \"valueOf\" t))")).isEqualTo("\"true\"");
+		assertThat(compileAndRun("(print (java:static \"java.lang.Boolean\" \"logicalAnd\" t t))")).isEqualTo("T");
+	}
+
+	// A boolean Java return (ArrayList.add) surfaces as t.
+	@Test
+	void booleanReturnSurfacesAsTrue() throws Exception {
+		assertThat(compileAndRun("""
+				(setq lst (java:new "java.util.ArrayList"))
+				(print (java:call lst "add" 42))
+				""")).isEqualTo("T");
+	}
+
+	@Test
+	void collectionRoundTrip() throws Exception {
+		assertThat(compileAndRun("""
+				(setq lst (java:new "java.util.ArrayList"))
+				(java:call lst "add" 10)
+				(java:call lst "add" 20)
+				(print (list (java:call lst "size") (java:call lst "get" 1)))
+				""")).isEqualTo("(2 20)");
+	}
+
+	// A rontolisp lambda becomes a Runnable through the embedded bridge's _apply
+	// callback; calling run() runs the lambda (void return).
+	@Test
+	void proxyVoidReturnRunsTheLambda() throws Exception {
+		assertThat(compileAndRun("""
+				(setq fired nil)
+				(setq r (java:proxy "java.lang.Runnable" (lambda (method) (setq fired t))))
+				(java:call r "run")
+				(print fired)
+				""")).isEqualTo("T");
+	}
+
+	@Test
+	void proxyValueReturn() throws Exception {
+		assertThat(compileAndRun("""
+				(setq s (java:proxy "java.util.function.Supplier" (lambda (method) 42)))
+				(print (java:call s "get"))
+				""")).isEqualTo("42");
+	}
+
+	// A proxy that receives arguments: a Comparator drives Collections.sort.
+	@Test
+	void proxyReceivesArguments() throws Exception {
+		assertThat(compileAndRun("""
+				(setq lst (java:new "java.util.ArrayList"))
+				(java:call lst "add" 30)
+				(java:call lst "add" 10)
+				(java:call lst "add" 20)
+				(java:static "java.util.Collections" "sort" lst
+				  (java:proxy "java.util.Comparator" (lambda (method a b) (- a b))))
+				(print (list (java:call lst "get" 0) (java:call lst "get" 2)))
+				""")).isEqualTo("(10 30)");
+	}
+
+	// A defun'd function value is auto-proxied when passed where an interface is
+	// expected.
+	@Test
+	void functionValueAutoProxies() throws Exception {
+		assertThat(compileAndRun("""
+				(defun desc (method a b) (- b a))
+				(setq lst (java:new "java.util.ArrayList"))
+				(java:call lst "add" 10)
+				(java:call lst "add" 30)
+				(java:call lst "add" 20)
+				(java:static "java.util.Collections" "sort" lst #'desc)
+				(print (java:call lst "get" 0))
+				""")).isEqualTo("30");
+	}
+
+	// A proper list marshals to a primitive array parameter; the int elements prefer
+	// the int[] overload of binarySearch.
+	@Test
+	void listMarshalsToPrimitiveArrayParameter() throws Exception {
+		assertThat(compileAndRun("(print (java:static \"java.util.Arrays\" \"binarySearch\" (list 10 20 30 40) 30))"))
+			.isEqualTo("2");
+	}
+
+	@Test
+	void listMarshalsToCollectionParameter() throws Exception {
+		assertThat(compileAndRun("(print (java:static \"java.util.Collections\" \"max\" (list 3 9 4)))"))
+			.isEqualTo("9");
+	}
+
+	@Test
+	void nestedListMarshalsRecursively() throws Exception {
+		assertThat(
+				compileAndRun("(print (java:static \"java.util.Arrays\" \"deepToString\" (list (list 1 2) (list 3))))"))
+			.isEqualTo("\"[[1, 2], [3]]\"");
+	}
+
+	// A rank-1 vector (the runtime ArrayList representation) marshals like a list;
+	// string elements select the CharSequence[] varargs parameter of String.join.
+	@Test
+	void vectorMarshalsToArrayParameter() throws Exception {
+		assertThat(compileAndRun("""
+				(setq v (make-array 2))
+				(setf (aref v 0) "a")
+				(setf (aref v 1) "b")
+				(print (java:static "java.lang.String" "join" "-" v))
+				""")).isEqualTo("\"a-b\"");
+	}
+
+	@Test
+	void fillPointerVectorMarshalsUpToFillPointer() throws Exception {
+		// The fill pointer bounds the marshaled sequence, matching length/printing.
+		assertThat(compileAndRun("""
+				(setq v (make-array 3 :fill-pointer 0))
+				(vector-push "a" v)
+				(vector-push "b" v)
+				(print (java:static "java.lang.String" "join" "-" v))
+				""")).isEqualTo("\"a-b\"");
+	}
+
+	// A dotted (improper) list is not a sequence, so no overload matches.
+	@Test
+	void dottedListDoesNotMarshal() {
+		assertThatThrownBy(() -> compileAndRun("(java:static \"java.util.Collections\" \"max\" (cons 1 2))"))
+			.isInstanceOf(RuntimeException.class)
+			.hasMessageContaining("cannot be cast to class java.util.Collection");
+	}
+
+	@Test
+	void varargsPacksTrailingArguments() throws Exception {
+		assertThat(compileAndRun("(print (java:static \"java.lang.String\" \"format\" \"%s-%s\" 1 \"x\"))"))
+			.isEqualTo("\"1-x\"");
+	}
+
+	// Eleven arguments exceed every fixed-arity List.of overload, forcing the varargs
+	// one; and a varargs method also accepts an empty tail.
+	@Test
+	void varargsAcceptsAnyArity() throws Exception {
+		assertThat(compileAndRun(
+				"(print (java:call (java:static \"java.util.List\" \"of\" 1 2 3 4 5 6 7 8 9 10 11) \"size\"))"))
+			.isEqualTo("11");
+		assertThat(compileAndRun("(print (java:call (java:static \"java.util.List\" \"of\") \"size\"))"))
+			.isEqualTo("0");
+	}
+
+	// The overload chosen for a call is remembered per argument kind. An integer
+	// selects valueOf(long), a string valueOf(String): alternating them keeps each
+	// choice (a shared choice would refuse one).
+	@Test
+	void rememberedOverloadFollowsTheArgumentKind() throws Exception {
+		assertThat(compileAndRun("""
+				(print (mapcar (lambda (x) (java:static "java.lang.String" "valueOf" x)) (list 5 "a" 7)))
+				""")).isEqualTo("(\"5\" \"a\" \"7\")");
+	}
+
+	// The same method name on alternating receiver classes resolves on each class.
+	@Test
+	void rememberedOverloadFollowsTheReceiverClass() throws Exception {
+		assertThat(compileAndRun("""
+				(print (mapcar (lambda (c) (java:call c "add" "x") (java:call c "size"))
+				               (list (java:new "java.util.ArrayList") (java:new "java.util.LinkedList")
+				                     (java:new "java.util.ArrayList"))))
+				""")).isEqualTo("(1 1 1)");
+	}
+
+	// A one-character string may narrow to char (Writer.append(char)); a longer one
+	// cannot and takes append(CharSequence). Alternating the two at one site.
+	@Test
+	void rememberedOverloadSeparatesOneCharacterStrings() throws Exception {
+		assertThat(compileAndRun("""
+				(setq w (java:new "java.io.StringWriter"))
+				(dolist (s (list "a" "bc" "d" "ef")) (java:call w "append" s))
+				(print (java:call w "toString"))
+				""")).isEqualTo("\"abcdef\"");
+	}
+
+	// A list has no remembered kind: after a scalar, String.valueOf still takes the
+	// char[] overload for a list of characters, and the scalar the int one again.
+	@Test
+	void listArgumentAfterAScalarIsResolvedAgain() throws Exception {
+		assertThat(compileAndRun("""
+				(print (mapcar (lambda (x) (java:static "java.lang.String" "valueOf" x)) (list 5 (list #\\a #\\b) 7)))
+				""")).isEqualTo("(\"5\" \"ab\" \"7\")");
+	}
+
+	// A remembered varargs choice packs a tail of its own length on every call.
+	@Test
+	void rememberedVarargsChoicePacksEachTail() throws Exception {
+		assertThat(compileAndRun("""
+				(print (list (java:static "java.lang.String" "format" "%s" 1)
+				             (java:static "java.lang.String" "format" "%s/%s" 1 2)
+				             (java:static "java.lang.String" "format" "%s" 3)))
+				""")).isEqualTo("(\"1\" \"1/2\" \"3\")");
+	}
+
+	// A returned Java array answers the typed array it stands for -- a vector here --
+	// and carries its component, so a list marshals back into an array parameter:
+	// Arrays.copyOf(int[], int) round-trips both directions. A Java method's writes into
+	// a passed array are written back (fill then the array).
+	@Test
+	void arrayRoundTripsThroughCopyOf() throws Exception {
+		assertThat(compileAndRun("(print (java:static \"java.util.Arrays\" \"copyOf\" (list 1 2 3) 2))"))
+			.isEqualTo("#(1 2)");
+		assertThat(compileAndRun("""
+				(let ((a (java:static "java.util.Arrays" "copyOf" (list 1 2) 2)))
+				  (java:static "java.util.Arrays" "fill" a 9)
+				  (print a))
+				""")).isEqualTo("#(9 9)");
+	}
+
+	// A returned primitive array unmarshals element-wise into a vector; the IntStream
+	// implementation class is JDK-internal, so this also exercises the accessible-method
+	// resolution.
+	@Test
+	void returnedPrimitiveArrayUnmarshalsToVector() throws Exception {
+		assertThat(compileAndRun(
+				"(print (java:call (java:call (java:new \"java.lang.StringBuilder\" \"ab\") \"chars\") \"toArray\"))"))
+			.isEqualTo("#(97 98)");
+	}
+
+	// An interface method a non-public class inherits from a non-public superclass
+	// (HashMap's entry iterator gets hasNext from HashMap$HashIterator) is found through
+	// the receiver class's own interfaces, at a site left to run time (the receiver
+	// is a parameter) -- mirrors
+	// JavaInteropTest#anInterfaceMethodOfANonPublicReceiverIsCalled.
+	@Test
+	void anInterfaceMethodOfANonPublicReceiverIsCalled() throws Exception {
+		assertThat(compileAndRun("""
+				(defun probe (m)
+				  (let ((it (java:call (java:call m "entrySet") "iterator")))
+				    (list (java:call it "hasNext")
+				          (java:call (java:call it "next") "getKey")
+				          (java:call it "hasNext")
+				          (java:call (java:call (java:call m "keySet") "iterator") "hasNext"))))
+				(let ((m (java:new "java.util.HashMap")))
+				  (java:call m "put" "a" 1)
+				  (print (probe m)))
+				""")).isEqualTo("(T \"a\" NIL T)");
+	}
+
+	// A parameter tag names the overload the cost would not pick -- mirrors
+	// JavaInteropTest#aParameterTagSelectsTheOverload.
+	@Test
+	void aParameterTagSelectsTheOverload() throws Exception {
+		assertThat(compileAndRun("""
+				(print (java:static "java.lang.String" "valueOf(int)" #\\a))
+				(print (java:static "java.lang.String" "valueOf" #\\a))
+				(print (java:static "java.lang.Math" "max(long,_)" 3 7))
+				(print (java:call (java:new "java.lang.StringBuilder(int)" 16) "capacity"))
+				(setq sb (java:new "java.lang.StringBuilder"))
+				(java:call sb "append(Object)" "x")
+				(print (java:call sb "toString"))
+				""")).isEqualTo("\"97\"\n\"a\"\n7\n16\n\"x\"");
+	}
+
+	@Test
+	void aMalformedParameterTagSignals() {
+		assertThatThrownBy(() -> compileAndRun("(java:static \"java.lang.Math\" \"max(long\" 3 7)"))
+			.isInstanceOf(RuntimeException.class)
+			.hasMessageContaining("malformed parameter tag");
+	}
+
+	// The receiver-subclass difference, identical to the interpreter's -- mirrors
+	// JavaInteropTest#anUpperBoundReceiverResolvesAmongTheBoundsMethods.
+	@Test
+	void anUpperBoundReceiverResolvesAmongTheBoundsMethods() throws Exception {
+		assertThat(compileAndRun("""
+				(defun drop-one (c)
+				  (declare (type (java:object "java.util.Collection") c))
+				  (java:call c "remove" 1))
+				(defun fill-list ()
+				  (let ((lst (java:new "java.util.ArrayList")))
+				    (java:call lst "add" 10)
+				    (java:call lst "add" 20)
+				    (java:call lst "add" 1)
+				    lst))
+				(let ((a (fill-list)) (b (fill-list)) (c (fill-list)))
+				  (print (list (drop-one a) (java:call a "toString")
+				               (java:call b "remove" 1) (java:call b "toString")
+				               (java:call (the (java:object "java.util.Collection") c) "remove" 10)
+				               (java:call c "toString"))))
+				""")).isEqualTo("(T \"[10, 20]\" 20 \"[10, 1]\" T \"[20, 1]\")");
+	}
+
+	@Test
+	void aLetBoundReceiverTakesItsInitializersType() throws Exception {
+		assertThat(compileAndRun("""
+				(defun fill-list ()
+				  (let ((lst (java:new "java.util.ArrayList")))
+				    (java:call lst "add" 10)
+				    (java:call lst "add" 20)
+				    (java:call lst "add" 1)
+				    lst))
+				(let ((c (the (java:object "java.util.Collection") (fill-list)))
+				      (d (the (java:object "java.util.Collection") (fill-list))))
+				  (setq d (fill-list))
+				  (print (list (java:call c "remove" 1) (java:call c "toString")
+				               (java:call d "remove" 1) (java:call d "toString"))))
+				""")).isEqualTo("(T \"[10, 20]\" 20 \"[10, 1]\")");
+	}
+
+	@Test
+	void aProclaimedGlobalTypesTheFormsAfterIt() throws Exception {
+		assertThat(compileAndRun("""
+				(defun fill-list ()
+				  (let ((lst (java:new "java.util.ArrayList")))
+				    (java:call lst "add" 10)
+				    (java:call lst "add" 20)
+				    (java:call lst "add" 1)
+				    lst))
+				(defvar *before* (fill-list))
+				(defun drop-before () (java:call *before* "remove" 1))
+				(declaim (type (java:object "java.util.Collection") *c* *before*))
+				(defvar *c* (fill-list))
+				(print (list (java:call *c* "remove" 1) (java:call *c* "toString")
+				             (drop-before) (java:call *before* "toString")))
+				""")).isEqualTo("(T \"[10, 20]\" 20 \"[10, 1]\")");
+	}
+
+	@Test
+	void aFalseDeclarationSignals() {
+		assertThatThrownBy(() -> compileAndRun("""
+				(defun size-of (c)
+				  (declare (type (java:object "java.util.Collection") c))
+				  (java:call c "size"))
+				(size-of (java:new "java.lang.StringBuilder"))
+				""")).isInstanceOf(RuntimeException.class)
+			.hasMessageContaining(
+					"java:call: the receiver is not a java.util.Collection, got #<java java.lang.StringBuilder>");
+	}
+
+	@Test
+	void aChainResolvesThroughDeclaredReturnTypes() throws Exception {
+		assertThat(compileAndRun("""
+				(print (java:call (java:call (java:call (java:new "java.lang.StringBuilder" "ab") "append" "c")
+				                             "reverse")
+				                  "toString"))
+				""")).isEqualTo("\"cba\"");
+	}
+
+	// A resolved site is a direct call of the member it resolved to -- invokestatic,
+	// new + invokespecial, invokevirtual, getstatic, invokeinterface -- and a class whose
+	// sites all resolved carries no bridge, no reflection and no eval runtime.
+	@Test
+	void aResolvedSiteIsADirectCall() throws Exception {
+		String program = """
+				(print (java:static "java.lang.Math" "max" 3 7))
+				(print (java:call (java:new "java.lang.StringBuilder" "ab") "length"))
+				(print (java:field "java.lang.Integer" "MAX_VALUE"))
+				(print (java:call (java:static "java.util.List" "of" 1 2) "size"))
+				""";
+		assertThat(compileAndRun(program)).isEqualTo("7\n2\n2147483647\n2");
+		JvmLispCompiler compiler = new JvmLispCompiler("Test");
+		compiler.compile(LispReader.readAllFromString(program));
+		assertThat(compiler.runtimeClassFiles()).isEmpty();
+		// A fixnum is a long, so the two literals resolve to max(long,long).
+		assertThat(javap(program)).contains("Method java/lang/Math.max:(JJ)J")
+			.contains("Method java/lang/StringBuilder.\"<init>\":(Ljava/lang/String;)V")
+			.contains("Method java/lang/StringBuilder.length:()I")
+			.contains("Field java/lang/Integer.MAX_VALUE:I")
+			.contains("InterfaceMethod java/util/List.of:(Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/List;")
+			.contains("InterfaceMethod java/util/List.size:()I")
+			.doesNotContain(JvmJavaRuntimeBuilder.BRIDGE_SUFFIX)
+			.doesNotContain(JvmJavaRuntimeBuilder.INIT_METHOD)
+			.doesNotContain("java/lang/reflect/Method")
+			.doesNotContain("_eval");
+	}
+
+	// Object's methods on a receiver whose static class is an interface are its members
+	// (JLS 9.2) and link through it (JVMS 5.4.3.4): each is an invokeinterface, as javac
+	// emits it, and --java-static refuses none. Mirrors
+	// JavaInteropTest#objectsMethodsOnAnInterfaceResolveBeforeTheyRun.
+	@Test
+	void objectsMethodsOnAnInterfaceAreDirectCalls() throws Exception {
+		String program = JavaInteropPrograms.OBJECT_METHODS_ON_AN_INTERFACE;
+		assertThat(compileAndRun(program)).isEqualTo(JavaInteropPrograms.OBJECT_METHODS_ON_AN_INTERFACE_OUTPUT);
+		byte[] classBytes = JvmLispCompiler.builder()
+			.className("Test")
+			.javaStatic(true)
+			.build()
+			.compile(LispReader.readAllFromString(program));
+		assertThat(javap(classBytes)).contains("InterfaceMethod java/util/List.toString:()Ljava/lang/String;")
+			.contains("InterfaceMethod java/util/List.hashCode:()I")
+			.contains("InterfaceMethod java/util/List.equals:(Ljava/lang/Object;)Z")
+			.contains("InterfaceMethod java/util/List.getClass:()Ljava/lang/Class;")
+			.contains("InterfaceMethod java/lang/Runnable.toString:()Ljava/lang/String;")
+			.contains("InterfaceMethod java/lang/Runnable.equals:(Ljava/lang/Object;)Z")
+			.contains("InterfaceMethod java/lang/Runnable.hashCode:()I")
+			.doesNotContain(JvmJavaRuntimeBuilder.BRIDGE_SUFFIX);
+	}
+
+	// A site left to run time keeps the bridge, and only then is it embedded.
+	@Test
+	void aSiteLeftToRunTimeKeepsTheBridge() throws Exception {
+		String program = """
+				(defun len (x) (java:call x "length"))
+				(print (len (java:new "java.lang.StringBuilder" "abc")))
+				""";
+		assertThat(compileAndRun(program)).isEqualTo("3");
+		assertThat(javap(program)).contains(JvmJavaRuntimeBuilder.BRIDGE_SUFFIX)
+			.contains("Method java/lang/StringBuilder.\"<init>\":(Ljava/lang/String;)V");
+	}
+
+	// The class is stamped for the Java release its sites resolved against, so an older
+	// JRE refuses it at load instead of failing at the first call of a newer member; a
+	// program without java: keeps the Java 17 baseline.
+	@Test
+	void theClassIsStampedForTheReleaseItsSitesResolvedAgainst() {
+		List<LispVal> program = LispReader.readAllFromString("(print (java:static \"java.lang.Math\" \"max\" 3 7))");
+		int newest;
+		try (JvmClassFileLookup lookup = JvmClassFileLookup.forJdk(null, List.of())) {
+			newest = lookup.release();
+		}
+		assertThat(majorVersion(JvmLispCompiler.builder().className("Test").build().compile(program)))
+			.isEqualTo(Math.max(61, 44 + newest));
+		assertThat(majorVersion(JvmLispCompiler.builder().className("Test").javaRelease(17).build().compile(program)))
+			.isEqualTo(61);
+		assertThat(majorVersion(JvmLispCompiler.builder()
+			.className("Test")
+			.build()
+			.compile(LispReader.readAllFromString("(print (+ 1 2))")))).isEqualTo(61);
+	}
+
+	private static int majorVersion(byte[] classFile) {
+		return ((classFile[6] & 0xFF) << 8) | (classFile[7] & 0xFF);
+	}
+
+	// A declared type is trusted: an argument a declaration lied about is an error where
+	// it meets the member, with the interpreter's text, never converted for a member it
+	// was not chosen for.
+	@Test
+	void aFalseArgumentDeclarationSignals() throws Exception {
+		String parse = """
+				(defun parse (s)
+				  (declare (type (java:object "java.lang.String") s))
+				  (java:static "java.lang.Integer" "parseInt" s))
+				""";
+		assertThat(compileAndRun(parse + "(print (parse \"42\"))")).isEqualTo("42");
+		assertThatThrownBy(() -> compileAndRun(parse + "(parse 42)")).isInstanceOf(RuntimeException.class)
+			.hasMessage("java:static: argument 1 is not a java.lang.String, got 42");
+	}
+
+	// A site whose class is known but whose argument kinds are not is a dispatch among
+	// the
+	// class's overloads compiled without reflection: the costs of the value each argument
+	// has, the cheapest overload, a direct call of it. It chooses what the interpreter
+	// chooses (JavaInteropTest#aDispatchedSiteChoosesByTheKindsItMeets).
+	@Test
+	void aDispatchedSiteChoosesByTheKindsItMeets() throws Exception {
+		assertThat(compileAndRun(JavaInteropPrograms.DISPATCH_PROGRAM)).isEqualTo(JavaInteropPrograms.DISPATCH_OUTPUT);
+		String program = """
+				(defun mx (x y) (java:static "java.lang.Math" "max" x y))
+				(defun val (x) (java:static "java.lang.String" "valueOf" x))
+				(print (list (mx 1 2) (val (list #\\a #\\b))))
+				""";
+		assertThat(compileAndRun(program)).isEqualTo("(2 \"ab\")");
+		JvmLispCompiler compiler = new JvmLispCompiler("Test");
+		compiler.compile(LispReader.readAllFromString(program));
+		assertThat(compiler.runtimeClassFiles()).isEmpty();
+		assertThat(javap(program)).contains("Method java/lang/Math.max:(II)I")
+			.contains("Method java/lang/Math.max:(DD)D")
+			.contains("Method java/lang/String.valueOf:([C)Ljava/lang/String;")
+			.contains(JvmJavaDirectSites.COST_PREFIX)
+			.doesNotContain(JvmJavaRuntimeBuilder.BRIDGE_SUFFIX)
+			.doesNotContain(JvmJavaRuntimeBuilder.INIT_METHOD)
+			.doesNotContain("java/lang/reflect/Method");
+	}
+
+	// Sequences and functions reach a dispatched site as the run-time resolution passes
+	// them: a list or vector becomes an array or a list of the parameter's type, a
+	// function a proxy of an interface -- the one arm that needs the bridge.
+	@Test
+	void aDispatchedSiteConvertsSequencesAndFunctions() throws Exception {
+		assertThat(compileAndRun(JavaInteropPrograms.SEQUENCE_DISPATCH_PROGRAM))
+			.isEqualTo(JavaInteropPrograms.SEQUENCE_DISPATCH_OUTPUT);
+	}
+
+	// A dispatched call on a receiver of declared class C chooses among C's overloads
+	// (JavaInteropTest#aDispatchedSiteChoosesAmongTheDeclaredClasssOverloads).
+	@Test
+	void aDispatchedSiteChoosesAmongTheDeclaredClasssOverloads() throws Exception {
+		assertThat(compileAndRun(JavaInteropPrograms.UPPER_BOUND_DISPATCH)).isEqualTo("(T \"[10, 20]\")");
+	}
+
+	// JavaInteropTest#aDispatchedSiteChecksWhatItCountedOn, with the same texts.
+	@Test
+	void aDispatchedSiteChecksWhatItCountedOn() throws Exception {
+		String addAll = """
+				(defun add-all (c)
+				  (declare (type (java:object "java.util.Collection") c))
+				  (java:call (java:new "java.util.ArrayList") "addAll" c))
+				""";
+		assertThat(compileAndRun(addAll + "(print (add-all (java:static \"java.util.List\" \"of\" 1)))"))
+			.isEqualTo("T");
+		assertThatThrownBy(() -> compileAndRun(addAll + "(add-all 5)")).isInstanceOf(RuntimeException.class)
+			.hasMessage("java:call: argument 1 is not a java.util.Collection, got 5");
+		assertThatThrownBy(
+				() -> compileAndRun("(defun mx (x y) (java:static \"java.lang.Math\" \"max\" x y)) (mx \"a\" 1)"))
+			.isInstanceOf(RuntimeException.class)
+			.hasMessage(
+					"error calling java.lang.Math.max: java.lang.IllegalArgumentException: No matching method max found taking 2 args");
+	}
+
+	// java:static calls a static method: an instance method of the name, which could only
+	// fail without a receiver, is never chosen.
+	@Test
+	void aStaticCallNeverChoosesAnInstanceMethod() {
+		assertThatThrownBy(() -> compileAndRun("(java:static \"java.lang.String\" \"length\")"))
+			.isInstanceOf(RuntimeException.class)
+			.hasMessage(
+					"error calling java.lang.String.length: java.lang.IllegalArgumentException: No matching method length found taking 0 args");
+	}
+
+	// A class name reaches only a static field; a write refuses a final field and a value
+	// the field's type cannot take, with the interpreter's texts.
+	@Test
+	void aFieldRefusesInTheOraclesWords() {
+		assertThatThrownBy(() -> compileAndRun("(java:field \"java.awt.Point\" \"x\")"))
+			.isInstanceOf(RuntimeException.class)
+			.hasMessage("java:field: field java.awt.Point.x is not static");
+		assertThatThrownBy(() -> compileAndRun("(java:field \"java.awt.Point\" \"x\" 1)"))
+			.isInstanceOf(RuntimeException.class)
+			.hasMessage("java:field: field java.awt.Point.x is not static");
+		assertThatThrownBy(() -> compileAndRun("(java:field \"java.lang.Integer\" \"MAX_VALUE\" 1)"))
+			.isInstanceOf(RuntimeException.class)
+			.hasMessage(
+					"error writing field MAX_VALUE: java.lang.IllegalAccessException: Can not set static final int field java.lang.Integer.MAX_VALUE to java.lang.Integer");
+		assertThatThrownBy(() -> compileAndRun("(java:field (java:new \"java.awt.Point\") \"x\" \"s\")"))
+			.isInstanceOf(RuntimeException.class)
+			.hasMessage(
+					"error writing field x: java.lang.IllegalArgumentException: Unexpected param type, expected: int, given: java.lang.String");
+		assertThatThrownBy(() -> compileAndRun("(java:field (java:new \"java.awt.Point\") \"x\" nil)"))
+			.isInstanceOf(RuntimeException.class)
+			.hasMessage(
+					"error writing field x: java.lang.NullPointerException: Cannot invoke \"Object.getClass()\" because \"arg\" is null");
+		assertThatThrownBy(() -> compileAndRun("(java:field (java:new \"java.awt.Point\") \"z\" 1)"))
+			.isInstanceOf(RuntimeException.class)
+			.hasMessage(
+					"error writing field z: java.lang.IllegalArgumentException: No matching field found: z for class java.awt.Point");
+		assertThatThrownBy(() -> compileAndRun("(java:field (java:new \"java.awt.GridBagConstraints\") \"insets\" 1)"))
+			.isInstanceOf(RuntimeException.class)
+			.hasMessage(
+					"error writing field insets: java.lang.ClassCastException: class java.lang.Long cannot be cast to class java.awt.Insets");
+	}
+
+	// What the member throws is wrapped as the bridge and the interpreter wrap it.
+	@Test
+	void anExceptionFromTheMemberIsWrapped() {
+		assertThatThrownBy(() -> compileAndRun("(java:static \"java.lang.Integer\" \"parseInt\" \"x\")"))
+			.isInstanceOf(RuntimeException.class)
+			.hasMessage("error calling java.lang.Integer.parseInt: java.lang.NumberFormatException:"
+					+ " For input string: \"x\"");
+		assertThatThrownBy(() -> compileAndRun("(java:new \"java.lang.StringBuilder\" -1)"))
+			.isInstanceOf(RuntimeException.class)
+			.hasMessage("error constructing java.lang.StringBuilder: java.lang.NegativeArraySizeException: -1");
+	}
+
+	// What the member throws is caught as a java:java-exception carrying it, and a
+	// caught one passed to a member is that throwable again, as on the interpreter.
+	@Test
+	void aFailedCallSignalsAJavaExceptionCarryingWhatTheMemberThrew() throws Exception {
+		assertThat(compileAndRunThroughFrontEnd(JavaInteropPrograms.HOST_EXCEPTION_PROGRAM))
+			.isEqualTo(JavaInteropPrograms.HOST_EXCEPTION_OUTPUT);
+	}
+
+	// A function value passed where an interface is expected becomes the interface's
+	// generated proxy class, as a java:proxy of it: nothing reflects, and the class
+	// travels beside the program.
+	@Test
+	void aFunctionArgumentOfADirectCallBecomesAProxy() throws Exception {
+		String program = """
+				(java:call (java:static "java.util.List" "of" 1 2 3) "forEach" (lambda (m x) (print x)))
+				""";
+		assertThat(compileAndRun(program)).isEqualTo("1\n2\n3");
+		assertThat(javap(program)).contains("InterfaceMethod java/util/List.forEach:(Ljava/util/function/Consumer;)V")
+			.contains("Method Test$Proxy0.of:([Ljava/lang/Object;)Ljava/lang/Object;")
+			.doesNotContain("javaProxy")
+			.doesNotContain(JvmJavaRuntimeBuilder.BRIDGE_SUFFIX)
+			.doesNotContain("java/lang/reflect/Method");
+		JvmLispCompiler compiler = new JvmLispCompiler("Test");
+		compiler.compile(LispReader.readAllFromString(program));
+		assertThat(compiler.runtimeClassFiles()).containsOnlyKeys("Test$Implementation.class", "Test$Proxy0.class");
+	}
+
+	// java:reify: each function implements the one method its name designates, in a class
+	// generated for it -- the interpreter's output, method for method. Mirrors
+	// JavaInteropTest#aReifyImplementsEachMethodWithItsFunction.
+	@Test
+	void aReifyImplementsEachMethodWithItsFunction() throws Exception {
+		assertThat(compileAndRun(JavaImplementationPrograms.REIFY)).isEqualTo(JavaImplementationPrograms.REIFY_OUTPUT);
+		JvmLispCompiler compiler = new JvmLispCompiler("Test");
+		compiler.compile(LispReader.readAllFromString(JavaImplementationPrograms.REIFY));
+		// A function the program passes where an interface is expected is a proxy of it.
+		assertThat(compiler.runtimeClassFiles().keySet()).contains("Test$Implementation.class", "Test$Reify0.class",
+				"Test$Proxy0.class");
+	}
+
+	// Mirrors JavaInteropTest#whatAReifyCannotDoIsAnError. A form whose methods cannot be
+	// chosen when it is compiled is resolved by the bridge when it runs, with the same
+	// errors.
+	@Test
+	void whatAReifyCannotDoIsAnError() throws Exception {
+		assertThatThrownBy(() -> compileAndRun(
+				"(java:call (java:reify \"java.util.Iterator\" \"hasNext\" (lambda () t)) \"next\")"))
+			.isInstanceOf(RuntimeException.class)
+			.hasMessage("error calling java.util.Iterator.next: java.lang.UnsupportedOperationException:"
+					+ " java:reify: no implementation of java.util.Iterator.next()");
+		assertThatThrownBy(() -> compileAndRun(
+				"(java:call (java:reify \"java.util.function.IntSupplier\" \"getAsInt\" (lambda () \"x\"))"
+						+ " \"getAsInt\")"))
+			.isInstanceOf(RuntimeException.class)
+			.hasMessageContaining(
+					"java:reify: cannot return \"x\" as int from java.util.function.IntSupplier.getAsInt");
+		assertThatThrownBy(() -> compileAndRun("(java:reify \"java.util.Comparator\" \"nope\" #'car)"))
+			.isInstanceOf(RuntimeException.class)
+			.hasMessage("java:reify: interface java.util.Comparator has no method nope");
+		assertThatThrownBy(() -> compileAndRun("(java:reify \"java.lang.Appendable\" \"append\" #'car)"))
+			.isInstanceOf(RuntimeException.class)
+			.hasMessage("java:reify: append names more than one method of java.lang.Appendable: append(char),"
+					+ " append(java.lang.CharSequence), append(java.lang.CharSequence,int,int)");
+		assertThatThrownBy(() -> compileAndRun("(java:reify \"java.util.Iterator\" \"next\" #'car \"next()\" #'cdr)"))
+			.isInstanceOf(RuntimeException.class)
+			.hasMessage("java:reify: java.util.Iterator.next() is implemented twice");
+		assertThatThrownBy(() -> compileAndRun("(java:reify \"java.lang.String\" \"length\" #'car)"))
+			.isInstanceOf(RuntimeException.class)
+			.hasMessage("java:reify expects an interface, got java.lang.String");
+		assertThat(compileAndRun("""
+				(let ((iface "java.util.function.Supplier") (name "get"))
+				  (print (java:call (java:reify iface name (lambda () 7)) "get")))
+				""")).isEqualTo("7");
+	}
+
+	// Mirrors JavaInteropTest#aReifyOfSeveralInterfacesMayStandForAValue: a generated
+	// class implementing every interface -- and runtime/RontoJavaValue for one given
+	// :value, which travels beside the program -- and the bridge's refusals for the forms
+	// it cannot resolve.
+	@Test
+	void aReifyOfSeveralInterfacesMayStandForAValue() throws Exception {
+		assertThat(compileAndRunThroughFrontEnd(JavaImplementationPrograms.REIFY_SEVERAL_STANDING))
+			.isEqualTo(JavaImplementationPrograms.REIFY_SEVERAL_STANDING_OUTPUT);
+		JvmLispCompiler compiler = new JvmLispCompiler("Test");
+		compiler.compile(LispReader.readAllFromString("""
+				(let ((th (java:new "java.lang.Thread"
+				            (java:reify '("java.lang.Runnable" "java.util.function.Supplier")
+				              :value (list 1) :class "my.Pair" "run" (lambda () (print :ran)) "get" (lambda () 2)))))
+				  (java:call th "run"))
+				"""));
+		assertThat(compiler.runtimeClassFiles().keySet())
+			.contains("Test$Implementation.class", "Test$Reify0.class", "am/ik/rontolisp/runtime/RontoJavaValue.class")
+			.doesNotContain("Test$JavaBridge.class");
+	}
+
+	// Mirrors JavaInteropTest#whatACallbackRaisesPassesThroughTheJavaCall: through a
+	// generated class and the bridge's Proxy, at a direct site and one left to run time.
+	@Test
+	void whatACallbackRaisesPassesThroughTheJavaCall() throws Exception {
+		assertThat(compileAndRunThroughFrontEnd(JavaImplementationPrograms.CALLBACK_SIGNALS))
+			.isEqualTo(JavaImplementationPrograms.CALLBACK_SIGNALS_OUTPUT);
+	}
+
+	// Mirrors JavaInteropTest#aProxyRoutesEveryMethodToItsCallable.
+	@Test
+	void aProxyRoutesEveryMethodToItsCallable() throws Exception {
+		assertThat(compileAndRun(JavaImplementationPrograms.PROXY)).isEqualTo(JavaImplementationPrograms.PROXY_OUTPUT);
+	}
+
+	// Mirrors JavaInteropTest#aProxyOfSeveralInterfacesRoutesEachToItsCallable: a
+	// generated class implementing all three, and the bridge's Proxy for the names
+	// computed at run time.
+	@Test
+	void aProxyOfSeveralInterfacesRoutesEachToItsCallable() throws Exception {
+		assertThat(compileAndRun(JavaImplementationPrograms.PROXY_SEVERAL))
+			.isEqualTo(JavaImplementationPrograms.PROXY_SEVERAL_OUTPUT);
+	}
+
+	// Mirrors
+	// JavaInteropTest#aFunctionAtAFunctionalSiteImplementsItsInterfaceByItsArguments:
+	// the resolved and dispatched sites convert through the generated class, the site of
+	// no known receiver through the bridge.
+	@Test
+	void aFunctionAtAFunctionalSiteImplementsItsInterfaceByItsArguments() throws Exception {
+		assertThat(compileAndRun(JavaImplementationPrograms.FUNCTIONAL))
+			.isEqualTo(JavaImplementationPrograms.FUNCTIONAL_OUTPUT);
+	}
+
+	// Passed where one of its interfaces is expected, a java:proxy of several resolves
+	// the call: no bridge, no warning; a declaration of one interface's implementation
+	// holding it is refused as the interpreter refuses it.
+	@Test
+	void aProxyOfSeveralInterfacesResolvesTheCallsItIsPassedTo() throws Exception {
+		assertThat(compileWarnings(JavaImplementationPrograms.PROXY_SEVERAL_PASSED, true)).isEmpty();
+		assertThat(compileAndRun(JavaImplementationPrograms.PROXY_SEVERAL_PASSED))
+			.isEqualTo(JavaImplementationPrograms.PROXY_SEVERAL_PASSED_OUTPUT);
+		assertThat(javap(JavaImplementationPrograms.PROXY_SEVERAL_PASSED))
+			.doesNotContain(JvmJavaRuntimeBuilder.BRIDGE_SUFFIX);
+		assertThatThrownBy(() -> compileAndRun(JavaImplementationPrograms.FALSE_SINGLE_IMPLEMENTATION))
+			.isInstanceOf(RuntimeException.class)
+			.hasMessageStartingWith(JavaImplementationPrograms.FALSE_SINGLE_IMPLEMENTATION_ERROR);
+	}
+
+	// Mirrors JavaInteropTest#aProxyOfSeveralInterfacesRefusesAClassOrARepeat: the
+	// bridge raises what the interpreter raises.
+	@Test
+	void aProxyOfSeveralInterfacesRefusesAClassOrARepeat() {
+		assertThatThrownBy(
+				() -> compileAndRun("(java:proxy \"java.lang.Runnable\" \"java.lang.String\" (lambda (m) nil))"))
+			.isInstanceOf(RuntimeException.class)
+			.hasMessage("java:proxy expects an interface, got java.lang.String");
+		assertThatThrownBy(
+				() -> compileAndRun("(java:proxy \"java.lang.Runnable\" \"java.lang.Runnable\" (lambda (m) nil))"))
+			.isInstanceOf(RuntimeException.class)
+			.hasMessage("java:proxy names interface java.lang.Runnable twice");
+		assertThatThrownBy(() -> compileAndRun("(java:proxy \"java.lang.Runnable\" 1 (lambda (m) nil))"))
+			.isInstanceOf(RuntimeException.class)
+			.hasMessage("java:proxy expects (java:proxy \"interface\"... callable)");
+	}
+
+	// Mirrors JavaInteropTest#aSubclassExtendsItsSuperclass.
+	@Test
+	void aSubclassExtendsItsSuperclass() throws Exception {
+		assertThat(compileAndRun(JavaImplementationPrograms.SUBCLASS))
+			.isEqualTo(JavaImplementationPrograms.SUBCLASS_OUTPUT);
+	}
+
+	// Mirrors JavaInteropTest#aCollectionSubclassIsAHostObject.
+	@Test
+	void aCollectionSubclassIsAHostObject() throws Exception {
+		assertThat(compileAndRun(JavaImplementationPrograms.HOST_COLLECTION_SUBCLASS))
+			.isEqualTo(JavaImplementationPrograms.HOST_COLLECTION_SUBCLASS_OUTPUT);
+	}
+
+	// Mirrors JavaInteropTest#whatASubclassCannotDoIsAnError: what fails when the
+	// resolved form runs raises what the interpreter raises; a form left to run time
+	// is refused by name (the bridge generates no classes), and --java-static refuses
+	// it before it runs.
+	@Test
+	void whatASubclassCannotDoIsAnError() {
+		assertThatThrownBy(() -> compileAndRun(
+				"""
+						(java:call (java:subclass "java.io.File" '() '("lastModified") "x" (lambda (this name &rest args) "s")) "lastModified")
+						"""))
+			.isInstanceOf(RuntimeException.class)
+			.hasMessageContaining("java:subclass: cannot return \"s\" as long from java.io.File");
+		assertThatThrownBy(() -> compileAndRun(
+				"""
+						(java:call (java:subclass "java.io.File" '() '("toString") 1 (lambda (this name &rest args) "s")) "toString")
+						"""))
+			.isInstanceOf(RuntimeException.class)
+			.hasMessage("No matching constructor for java.io.File with 1 argument(s)");
+		assertThatThrownBy(() -> compileAndRun(
+				"""
+						(java:call (java:subclass "java.util.AbstractList" '() '("size") (lambda (this name &rest args) 0)) "get" 0)
+						"""))
+			.isInstanceOf(RuntimeException.class)
+			.hasMessageContaining("java.lang.UnsupportedOperationException: get");
+		// A superclass that is no class, a final one, an unknown method and
+		// constructor arguments no constructor takes leave the form to run time.
+		assertThatThrownBy(() -> compileAndRun(
+				"(java:subclass \"java.util.function.Supplier\" '() '() (lambda (this name &rest args) nil))"))
+			.isInstanceOf(RuntimeException.class)
+			.hasMessageContaining("java:subclass java.util.function.Supplier is left to run time");
+		assertThatThrownBy(() -> compileAndRun(
+				"(java:subclass \"java.io.File\" '() '(\"nope\") \"x\" (lambda (this name &rest args) nil))"))
+			.isInstanceOf(RuntimeException.class)
+			.hasMessageContaining("java:subclass java.io.File is left to run time");
+		assertThatThrownBy(() -> compileAndRun(
+				"(java:subclass \"java.io.File\" '() '() 1 2 3 4 5 (lambda (this name &rest args) nil))"))
+			.isInstanceOf(RuntimeException.class)
+			.hasMessageContaining("java:subclass java.io.File is left to run time");
+		// A superclass computed at run time is refused by name too (the interpreter
+		// resolves it when it runs).
+		assertThatThrownBy(() -> compileAndRun(
+				"""
+						(let ((super "java.io.File"))
+						  (print (java:call (java:subclass super '() '("lastModified") "x" (lambda (this name &rest args) 42)) "lastModified")))
+						"""))
+			.isInstanceOf(RuntimeException.class)
+			.hasMessageContaining("java:subclass java.io.File is left to run time");
+		assertThatThrownBy(() -> JvmLispCompiler.builder()
+			.className("Test")
+			.javaStatic(true)
+			.build()
+			.compile(LispReader.readAllFromString("""
+					(let ((super "java.io.File"))
+					  (java:subclass super '() '("lastModified") "x" (lambda (this name &rest args) 42)))
+					"""))).isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("--java-static: 1 java: call cannot be compiled without reflection:")
+			.hasMessageContaining("java:subclass: it extends its superclass with a generated class:");
+	}
+
+	// A resolved java:subclass needs no bridge and no reflection: its class is
+	// generated, like a java:proxy's. (Calls on the object are resolved by its
+	// class when they run, as for a proxy of several interfaces.)
+	@Test
+	void aResolvedSubclassNeedsNoBridge() throws Exception {
+		byte[] classBytes = JvmLispCompiler.builder()
+			.className("Test")
+			.javaStatic(true)
+			.build()
+			.compile(LispReader.readAllFromString("""
+					(java:subclass "java.io.File" '() '("lastModified") "recent"
+					  (lambda (this name &rest args) 42))
+					"""));
+		assertThat(new String(classBytes, java.nio.charset.StandardCharsets.ISO_8859_1))
+			.doesNotContain(JvmJavaRuntimeBuilder.BRIDGE_SUFFIX)
+			.doesNotContain("java/lang/reflect/Method");
+	}
+
+	// A reify passed where its interface is expected resolves the call before it runs:
+	// the object's kind is its interface's implementation, so the call is direct.
+	@Test
+	void aReifyArgumentResolvesItsCall() throws Exception {
+		String program = """
+				(let ((lst (java:new "java.util.ArrayList")))
+				  (java:call lst "add" 2)
+				  (java:call lst "add" 1)
+				  (java:static "java.util.Collections" "sort" lst
+				    (java:reify "java.util.Comparator" "compare" (lambda (a b) (- a b))))
+				  (print (java:call lst "toString")))
+				""";
+		assertThat(compileAndRun(program)).isEqualTo("\"[1, 2]\"");
+		assertThat(javap(program))
+			.contains("Method java/util/Collections.sort:(Ljava/util/List;Ljava/util/Comparator;)V")
+			.contains("Method Test$Reify0.of:([Ljava/lang/Object;)Ljava/lang/Object;")
+			.doesNotContain(JvmJavaRuntimeBuilder.BRIDGE_SUFFIX);
+	}
+
+	// The generated class declares exactly the chosen slots: a default method it does
+	// not override keeps its body, an abstract one throws, toString answers the
+	// interpreter's text; its superclass is the program's one, a Serializable like a
+	// Proxy.
+	@Test
+	void theGeneratedClassDeclaresTheChosenSlots() throws Exception {
+		JvmLispCompiler compiler = new JvmLispCompiler("Test");
+		compiler.compile(LispReader.readAllFromString("""
+				(print (java:reify "java.util.Iterator" "hasNext" (lambda () nil)))
+				"""));
+		byte[] reify = compiler.runtimeClassFiles().get("Test$Reify0.class");
+		assertThat(reify).isNotNull();
+		Path dir = Files.createTempDirectory(this.tempDir, "reify");
+		Files.write(dir.resolve("Test$Reify0.class"), reify);
+		java.util.spi.ToolProvider javap = java.util.spi.ToolProvider.findFirst("javap").orElseThrow();
+		java.io.StringWriter out = new java.io.StringWriter();
+		javap.run(new java.io.PrintWriter(out), new java.io.PrintWriter(out), "-p", "-c",
+				dir.resolve("Test$Reify0.class").toString());
+		assertThat(out.toString())
+			.contains("final class Test$Reify0 extends Test$Implementation implements java.util.Iterator")
+			.contains("public boolean hasNext()")
+			.contains("public java.lang.Object next()")
+			.contains("java:reify: no implementation of java.util.Iterator.next()")
+			.contains("#<java-reify java.util.Iterator>")
+			.doesNotContain("forEachRemaining")
+			.doesNotContain("remove()");
+	}
+
+	// The value comes back as the bridge's unmarshal makes it, specialized to the
+	// declared
+	// type: a char, a boolean, the boxes, an array.
+	@Test
+	void aDirectCallConvertsTheValueBackAsTheBridgeDoes() throws Exception {
+		assertThat(compileAndRun("""
+				(print (java:call (java:new "java.lang.StringBuilder" "ab") "charAt" 1))
+				(print (java:call (java:new "java.util.ArrayList") "isEmpty"))
+				(print (java:static "java.lang.Character" "valueOf" #\\a))
+				(print (java:static "java.lang.Boolean" "valueOf" t))
+				(print (java:static "java.lang.Float" "valueOf" 1.5))
+				(print (java:static "java.lang.Long" "valueOf" 7))
+				(print (java:call (java:static "java.util.regex.Pattern" "compile" ",") "split" "a,b"))
+				(print (java:call (java:new "java.util.ArrayList") "add" nil))
+				""")).isEqualTo("#\\b\nT\n#\\a\nT\n1.5\n7\n#(\"a\" \"b\")\nT");
+	}
+
+	// A string a program builds is a mutable character vector: it is rendered to the
+	// string it spells before a direct call reads it, as the bridge renders it.
+	@Test
+	void aBuiltStringReachesADirectCallAsTheStringItSpells() throws Exception {
+		assertThat(compileAndRun("""
+				(print (java:static "java.lang.Integer" "parseInt"
+				                    (the (java:object "java.lang.String") (concatenate 'string "4" "2"))))
+				""")).isEqualTo("42");
+	}
+
+	// Past the JVM's parameter-count comfort a site's method takes its values in one
+	// array.
+	@Test
+	void aSiteWithManyArgumentsPassesThemInOneArray() throws Exception {
+		StringBuilder args = new StringBuilder();
+		for (int i = 1; i <= 250; i++) {
+			args.append(' ').append(i);
+		}
+		assertThat(compileAndRun("(print (java:call (java:static \"java.util.List\" \"of\"" + args + ") \"size\"))"))
+			.isEqualTo("250");
+	}
+
+	// --java-static: a program whose sites are all direct compiles to a class with no
+	// reflection; any site that would need the bridge is a compile error naming it. A
+	// java:reify / java:proxy whose interface resolves, a function passed where an
+	// interface is expected and a java:handle of a function whose :through is named by
+	// #' need none: their classes are generated.
+	@Test
+	void javaStaticRefusesEverySiteThatNeedsReflection() throws Exception {
+		JvmLispCompiler direct = JvmLispCompiler.builder().className("Test").javaStatic(true).build();
+		byte[] classBytes = direct.compile(LispReader.readAllFromString("""
+				(print (java:static "java.lang.Math" "max" 3 7))
+				(java:call (java:proxy "java.lang.Runnable" (lambda (m) (print m))) "run")
+				(java:call (java:static "java.util.List" "of" 1) "forEach" (lambda (m x) (print x)))
+				(java:call (java:reify "java.lang.Runnable" "run" (lambda () (print :ran))) "run")
+				(defun through (f kind resolved args) (declare (ignore kind resolved)) (apply f args))
+				(java:static "java.util.Objects" "requireNonNull"
+				             (java:handle (lambda () (print :called)) :functional :java-false :through #'through))
+				"""));
+		assertThat(new String(classBytes, java.nio.charset.StandardCharsets.ISO_8859_1))
+			.doesNotContain(JvmJavaRuntimeBuilder.BRIDGE_SUFFIX)
+			.doesNotContain("java/lang/reflect/Method");
+		assertThat(direct.runtimeClassFiles()).allSatisfy(
+				(name, bytes) -> assertThat(new String(bytes, java.nio.charset.StandardCharsets.ISO_8859_1)).as(name)
+					.doesNotContain("java/lang/reflect/Method"));
+		// A dispatch among overloads needs no reflection either -- one that may pass a
+		// function where an interface (or an array of one) is expected makes it the
+		// interface's generated proxy.
+		byte[] dispatched = JvmLispCompiler.builder()
+			.className("Test")
+			.javaStatic(true)
+			.build()
+			.compile(LispReader.readAllFromString("""
+					(defun mx (x y) (java:static "java.lang.Math" "max" x y))
+					(defun val (x) (java:static "java.lang.String" "valueOf" x))
+					(defun join (xs) (java:static "java.lang.String" "join" "-" xs))
+					(print (list (mx 1 2.5) (val (list #\\a)) (join (list "a" "b"))))
+					"""));
+		assertThat(new String(dispatched, java.nio.charset.StandardCharsets.ISO_8859_1))
+			.doesNotContain(JvmJavaRuntimeBuilder.BRIDGE_SUFFIX);
+		assertThatThrownBy(() -> JvmLispCompiler.builder()
+			.className("Test")
+			.javaStatic(true)
+			.build()
+			.compile(LispReader.readAllFromString("""
+					(defun len (x) (java:call x "length"))
+					(defun proxy-of (iface f) (java:proxy iface f))
+					(java:reify "no.such.Listener" "run" (lambda () nil))
+					(defun object-of (f g) (java:handle f :functional :java-false :through g))
+					"""))).isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("--java-static: 4 java: calls cannot be compiled without reflection:")
+			.hasMessageContaining("java:call \"length\": it is resolved by reflection at run time:"
+					+ " the receiver's class is not known")
+			.hasMessageContaining("java:proxy: it implements its interface with java.lang.reflect.Proxy:"
+					+ " the interface name is not a literal string")
+			.hasMessageContaining("java:reify \"no.such.Listener\": it implements its interface with"
+					+ " java.lang.reflect.Proxy: class no.such.Listener is not found")
+			.hasMessageContaining("java:handle: it implements the object a function is with java.lang.reflect.Proxy:"
+					+ " its :through function is not named by #'");
+	}
+
+	// The class's disassembly, as javap prints it.
+	private static String javap(String program) throws Exception {
+		return javap(new JvmLispCompiler("Test").compile(LispReader.readAllFromString(program)));
+	}
+
+	private static String javap(byte[] classBytes) throws Exception {
+		Path dir = Files.createTempDirectory("javap");
+		try {
+			Path classFile = dir.resolve("Test.class");
+			Files.write(classFile, classBytes);
+			java.util.spi.ToolProvider javap = java.util.spi.ToolProvider.findFirst("javap").orElseThrow();
+			java.io.StringWriter out = new java.io.StringWriter();
+			int code = javap.run(new java.io.PrintWriter(out), new java.io.PrintWriter(out), "-c", "-p", "-v",
+					classFile.toString());
+			assertThat(code).as(out.toString()).isZero();
+			return out.toString();
+		}
+		finally {
+			try (var files = Files.list(dir)) {
+				for (Path file : files.toList()) {
+					Files.delete(file);
+				}
+			}
+			Files.delete(dir);
+		}
+	}
+
+	// --warn-java-reflection reports at compile time, with the site's position, each
+	// site left to run time; so does a top-level (setq java:*warn-on-reflection* t), for
+	// the forms after it -- which is when the interpreter reports the same sites.
+	@Test
+	void warnJavaReflectionReportsTheSitesLeftToRunTime() {
+		String program = """
+				(defun before (x) (java:call x "size"))
+				(defun len (x) (java:call x "length"))
+				(print (java:static "java.lang.Math" "max" 1 2))
+				(let ((sb (java:new "java.lang.StringBuilder"))) (java:call sb "capacity"))
+				""";
+		assertThat(compileWarnings(program, true))
+			.contains("warning: java:call \"size\" is resolved by reflection at run time")
+			.contains("warning: java:call \"length\" is resolved by reflection at run time:"
+					+ " the receiver's class is not known")
+			.doesNotContain("\"max\"")
+			.doesNotContain("\"capacity\"");
+		assertThat(compileWarnings("""
+				(defun before (x) (java:call x "size"))
+				(setq java:*warn-on-reflection* t)
+				(defun len (x) (java:call x "length"))
+				""", false)).contains("\"length\"").doesNotContain("\"size\"");
+		assertThat(compileWarnings(program, false)).isEmpty();
+	}
+
+	// A site rewritten for a typed argument, around another rewritten site, keeps its
+	// source position in the report.
+	@Test
+	void aRewrittenSiteKeepsItsPosition() {
+		ByteArrayOutputStream err = new ByteArrayOutputStream();
+		am.ik.rontolisp.SourceProvenance.startRecording();
+		try (var ignored = ThreadStdio.err(err)) {
+			JvmLispCompiler.builder()
+				.className("Test")
+				.warnJavaReflection(true)
+				.build()
+				.compile(LispReader.readAllFromString("""
+						(let ((sb (java:new "java.lang.StringBuilder")))
+						  (java:call (other) "accept" sb (lambda () (java:call sb "length"))))
+						""", am.ik.rontolisp.reader.Features.JVM, "t.lisp"));
+		}
+		finally {
+			am.ik.rontolisp.SourceProvenance.stopRecording();
+		}
+		assertThat(err.toString()).contains("t.lisp:2:3: warning: java:call \"accept\"");
+	}
+
+	private static String compileWarnings(String program, boolean warn) {
+		ByteArrayOutputStream err = new ByteArrayOutputStream();
+		try (var ignored = ThreadStdio.err(err)) {
+			JvmLispCompiler.builder()
+				.className("Test")
+				.warnJavaReflection(warn)
+				.build()
+				.compile(LispReader.readAllFromString(program));
+		}
+		return err.toString().trim();
+	}
+
+	// A wrapped host object prints opaquely as #<java class>, matching the interpreter.
+	@Test
+	void printsOpaquely() throws Exception {
+		assertThat(compileAndRun("(print (java:new \"java.lang.StringBuilder\"))"))
+			.isEqualTo("#<java java.lang.StringBuilder>");
+	}
+
+	// An ArrayList a Java call answers is a host object, not a Lisp array (whose slot 0
+	// is its Object[] header): it prints as the interpreter prints it, and a message that
+	// shows it (a false declaration's) does too.
+	@Test
+	void aHostArrayListPrintsOpaquely() throws Exception {
+		assertThat(compileAndRun("""
+				(print (java:new "java.util.ArrayList"))
+				(let ((l (java:new "java.util.ArrayList")))
+				  (java:call l "add" 1)
+				  (print l)
+				  (princ l))
+				(print (make-array 2 :initial-element 7))
+				"""))
+			.isEqualTo("#<java java.util.ArrayList>\n#<java java.util.ArrayList>\n#<java java.util.ArrayList>#(7 7)");
+		assertThatThrownBy(() -> compileAndRun("""
+				(defun size-of (sb)
+				  (declare (type (java:object "java.lang.StringBuilder") sb))
+				  (java:call sb "length"))
+				(size-of (java:new "java.util.ArrayList"))
+				""")).isInstanceOf(RuntimeException.class)
+			.hasMessage("java:call: the receiver is not a java.lang.StringBuilder, got #<java java.util.ArrayList>");
+	}
+
+	// A compiled program counts as a host object exactly what the interpreter does --
+	// a Lisp list, float, bignum, ratio, complex, vector or hash table is refused at a
+	// site left to run time, a dispatched site and a declared receiver alike -- shows it
+	// in the message through its own printer, and answers a BigInteger as an integer.
+	@Test
+	void aLispValueIsNeverAHostObject() throws Exception {
+		assertThat(compileAndRun(JavaInteropPrograms.HOST_OBJECT_PROGRAM))
+			.isEqualTo(JavaInteropPrograms.HOST_OBJECT_OUTPUT);
+	}
+
+	// eq/eql on host objects are identity, as Clojure's identical? and every eq/eql
+	// surface (sequence functions, case, getf/remf, catch tags, eq/eql tables) agree;
+	// equal still asks equals. Before, measured 2026-10-04: eq/eql answered the LEFT
+	// operand's equals, so a reify whose equals answers true was eq to T and 1, and
+	// equal on two empty host lists was NIL (the interpreter: T).
+	@Test
+	void eqAndEqlOnHostObjectsAreIdentity() throws Exception {
+		assertThat(compileAndRunThroughFrontEnd(JavaInteropPrograms.HOST_IDENTITY_PROGRAM))
+			.isEqualTo(JavaInteropPrograms.HOST_IDENTITY_OUTPUT);
+	}
+
+	// equal of a host object on the left and a Lisp value asks its equals with the value
+	// as an Object parameter receives it (Clojure's =, which asks the left operand);
+	// a value that converts to no one object is equal to no host object. Before,
+	// measured 2026-10-04: the interpreter answered NIL for every Lisp value (the
+	// wrapper record's equals refused it) and the JVM handed equals the compiled
+	// representation -- a framed string, an int[] character, "T", a symbol's name, a
+	// cons array -- so a reify whose equals answers true was equal to all of them.
+	@Test
+	void equalOfAHostObjectAndALispValueAsksEqualsWithTheValueAsJavaSeesIt() throws Exception {
+		assertThat(compileAndRunThroughFrontEnd(JavaInteropPrograms.HOST_EQUAL_LISP_VALUE_PROGRAM))
+			.isEqualTo(JavaInteropPrograms.HOST_EQUAL_LISP_VALUE_OUTPUT);
+	}
+
+	// A packed float / integer vector -- a bare double[] / float[] / short[] / long[] /
+	// byte[] with its header in the compiled program -- converts element-wise like a
+	// general vector at a dispatched site and at the bridge, and a bignum is a
+	// BigInteger argument, as interpreted (JavaInteropTest has the twin). Before, both
+	// matched no parameter on either backend.
+	@Test
+	void specializedVectorsAndBignumsAreMarshalled() throws Exception {
+		assertThat(compileAndRunThroughFrontEnd(JavaInteropPrograms.SPECIALIZED_AND_BIGNUM_PROGRAM))
+			.isEqualTo(JavaInteropPrograms.SPECIALIZED_AND_BIGNUM_OUTPUT);
+	}
+
+	// A host ArrayList / LinkedHashMap is told from a Lisp array / hash table by the
+	// program's shared header / order-key test, not by its class: every type predicate,
+	// type-of, a method dispatch and every printer entry answer as interpreted. Before,
+	// hash-table-p answered T for a host map and printing one threw a
+	// NullPointerException; vectorp / typep / type-of on a host list threw
+	// IndexOutOfBoundsException, arrayp answered T.
+	@Test
+	void aHostCollectionIsNoLispArrayOrTable() throws Exception {
+		assertThat(compileAndRunThroughFrontEnd(JavaInteropPrograms.HOST_COLLECTION_PROGRAM))
+			.isEqualTo(JavaInteropPrograms.HOST_COLLECTION_OUTPUT);
+	}
+
+	// A host ArrayList / LinkedHashMap reaching an array or hash-table accessor is
+	// refused as interpreted: each accessor runs its operand through the program's
+	// guard, and length asks the shared header test. Before, measured 2026-09-26:
+	// gethash of a key the host map lacks answered NIL, (setf gethash) wrote a bucket
+	// into the host map and then threw a NullPointerException, hash-table-test and the
+	// rehash accessors answered their constants, hash-table-count / clrhash / maphash
+	// threw Java exceptions, and length / coerce / elt / aref / the fill-pointer surface
+	// a ClassCastException or IndexOutOfBoundsException.
+	@Test
+	void anAccessorRefusesAHostCollection() throws Exception {
+		assertThat(compileAndRunThroughFrontEnd(JavaInteropPrograms.HOST_ACCESSOR_PROGRAM))
+			.isEqualTo(JavaInteropPrograms.HOST_ACCESSOR_OUTPUT);
+	}
+
+	// java: interop composes with hash tables: the HashMap-based Lisp hash table keeps
+	// working (and hash-table-p stays t) while host objects print opaquely.
+	@Test
+	void composesWithHashTables() throws Exception {
+		assertThat(compileAndRun("""
+				(setq h (make-hash-table))
+				(setf (gethash 'k h) (java:static "java.lang.Math" "max" 1 2))
+				(print (gethash 'k h))
+				(print (hash-table-p h))
+				""")).isEqualTo("2\nT");
+	}
+
+	@Test
+	void unknownClassSignals() {
+		assertThatThrownBy(() -> compileAndRun("(java:new \"no.such.Class\")")).isInstanceOf(RuntimeException.class)
+			.hasMessageContaining("No such class");
+	}
+
+	@Test
+	void noMatchingMethodSignals() {
+		assertThatThrownBy(() -> compileAndRun("""
+				(setq sb (java:new "java.lang.StringBuilder"))
+				(java:call sb "noSuchMethod" 1 2 3)
+				""")).isInstanceOf(RuntimeException.class).hasMessageContaining("No matching method");
+	}
+
+	@Test
+	void callOnNonObjectSignals() {
+		assertThatThrownBy(() -> compileAndRun("(java:call 'foo \"toString\")")).isInstanceOf(RuntimeException.class)
+			.hasMessageContaining("expects a java object");
+	}
+
+	// Mirrors JavaInteropTest#aLispValueIsCalledAsTheObjectItConvertsTo.
+	@Test
+	void aLispValueIsCalledAsTheObjectItConvertsTo() throws Exception {
+		assertThat(compileAndRun(JavaInteropPrograms.LISP_RECEIVER_PROGRAM))
+			.isEqualTo(JavaInteropPrograms.LISP_RECEIVER_OUTPUT);
+	}
+
+	// Mirrors JavaInteropTest#falseAndAHashTableCrossAsJavasFalseAndAMap.
+	@Test
+	void falseAndAHashTableCrossAsJavasFalseAndAMap() throws Exception {
+		assertThat(compileAndRun(JavaInteropPrograms.FALSE_AND_TABLE_PROGRAM))
+			.isEqualTo(JavaInteropPrograms.FALSE_AND_TABLE_OUTPUT);
+	}
+
+	// Mirrors JavaInteropTest#aSingleCandidateTakesAKindlessArgumentHoweverItConverts:
+	// run-time sites go through the bridge, whose single-candidate choice and forced
+	// conversion match the interpreter's.
+	@Test
+	void aSingleCandidateTakesAKindlessArgumentHoweverItConverts() throws Exception {
+		assertThat(compileAndRun(JavaInteropPrograms.SINGLE_CANDIDATE_FORCED_PROGRAM))
+			.isEqualTo(JavaInteropPrograms.SINGLE_CANDIDATE_FORCED_OUTPUT);
+	}
+
+	// Mirrors JavaInteropTest#aCallEndingInJavaFalseAnswersJavasFalseAsFalse: direct
+	// sites through _junf / _jarf and the boolean arms, the bridge through its own
+	// unmarshal.
+	@Test
+	void aCallEndingInJavaFalseAnswersJavasFalseAsFalse() throws Exception {
+		assertThat(compileAndRun(JavaInteropPrograms.JAVA_FALSE_PROGRAM))
+			.isEqualTo(JavaInteropPrograms.JAVA_FALSE_OUTPUT);
+	}
+
+	// Mirrors
+	// JavaInteropTest#anImplementationMadeAtJavaFalseIsHandedFalseAndReadsAComparison:
+	// the generated classes' callbacks through _junf and _jcmp, the bridge's Proxy
+	// through its own.
+	@Test
+	void anImplementationMadeAtJavaFalseIsHandedFalseAndReadsAComparison() throws Exception {
+		assertThat(compileAndRun(JavaImplementationPrograms.JAVA_FALSE))
+			.isEqualTo(JavaImplementationPrograms.JAVA_FALSE_OUTPUT);
+	}
+
+	// Mirrors
+	// JavaInteropTest#anImplementationMadeAtOctetsIsHandedAByteArrayAsAnOctetVector:
+	// the generated classes' callbacks hand Java's own array through _juno / _jufo, the
+	// bridge's Proxy through its own unmarshal.
+	@Test
+	void anImplementationMadeAtOctetsIsHandedAByteArrayAsAnOctetVector() throws Exception {
+		assertThat(compileAndRun(JavaImplementationPrograms.OCTETS))
+			.isEqualTo(JavaImplementationPrograms.OCTETS_OUTPUT);
+	}
+
+	// Mirrors JavaInteropTest#javaCallsAFunctionThroughTheFunctionAfterThrough: the
+	// generated classes' callbacks through _jthrough$N (and _jcmp$N), the bridge's Proxy
+	// through its own callBack; a Comparator's getter unmarshals the function its
+	// stand-in holds.
+	@Test
+	void javaCallsAFunctionThroughTheFunctionAfterThrough() throws Exception {
+		assertThat(compileAndRun(JavaImplementationPrograms.THROUGH))
+			.isEqualTo(JavaImplementationPrograms.THROUGH_OUTPUT);
+	}
+
+	// Mirrors JavaInteropTest#aFunctionWhereAnObjectIsExpectedIsTheObjectItIs: the direct
+	// sites' and the dispatched sites' function arm for java.lang.Object, the generated
+	// class standing for the function, the refusal at any other call.
+	@Test
+	void aFunctionWhereAnObjectIsExpectedIsTheObjectItIs() throws Exception {
+		assertThat(compileAndRun(JavaImplementationPrograms.FUNCTION_OBJECT))
+			.isEqualTo(JavaImplementationPrograms.FUNCTION_OBJECT_OUTPUT);
+	}
+
+	// Mirrors JavaInteropTest#aHandleOfAFunctionGivenTheMarkersIsTheObjectItIs: the
+	// generated class of the object a function is, made by java:handle, through a
+	// :through
+	// named by #' (_jthrough$N) and a computed one (the bridge).
+	@Test
+	void aHandleOfAFunctionGivenTheMarkersIsTheObjectItIs() throws Exception {
+		assertThat(compileAndRun(JavaImplementationPrograms.FUNCTION_HANDLE))
+			.isEqualTo(JavaImplementationPrograms.FUNCTION_HANDLE_OUTPUT);
+	}
+
+	// Mirrors JavaInteropTest#aHandleIsItsTextToJavaAndItsValueBack:
+	// runtime/RontoJavaHandle
+	// through _jhandle, unwrapped by _junm / _jarr at a direct site and by the bridge's
+	// own
+	// unmarshal.
+	@Test
+	void aHandleIsItsTextToJavaAndItsValueBack() throws Exception {
+		assertThat(compileAndRun(JavaInteropPrograms.JAVA_HANDLE_PROGRAM))
+			.isEqualTo(JavaInteropPrograms.JAVA_HANDLE_OUTPUT);
+	}
+
+	// Mirrors JavaInteropTest#aViewIsAReadOnlyCollectionAndAHandleItsOwnObject: the
+	// runtime/RontoJava* classes made by _jview / _jhandle, called back through the
+	// generated $JavaCalls, a List view's array arms in _jcost$N / _jconv$N and the
+	// bridge's marshalListView.
+	@Test
+	void aViewIsAReadOnlyCollectionAndAHandleItsOwnObject() throws Exception {
+		assertThat(compileAndRun(JavaInteropPrograms.JAVA_VIEW_PROGRAM))
+			.isEqualTo(JavaInteropPrograms.JAVA_VIEW_OUTPUT);
+	}
+
+	// Mirrors JavaInteropTest#aCallEndingInOctetsAnswersAByteArrayAsAnOctetVector: direct
+	// sites through _juno / _jufo (and _jaro / _jafo for an array's elements), the bridge
+	// through its own unmarshal.
+	@Test
+	void aCallEndingInOctetsAnswersAByteArrayAsAnOctetVector() throws Exception {
+		assertThat(compileAndRun(JavaInteropPrograms.OCTETS_PROGRAM)).isEqualTo(JavaInteropPrograms.OCTETS_OUTPUT);
+	}
+
+	// Mirrors JavaInteropTest#aBytesViewIsTheByteArrayJavaStoresInto: _jview's :bytes
+	// arm, the bytes arms of _jkind / _jcost$N / _jconv$N / _jrecv, a dispatched site's
+	// sharing and write-back, and the bridge's.
+	@Test
+	void aBytesViewIsTheByteArrayJavaStoresInto() throws Exception {
+		assertThat(compileAndRun(JavaInteropPrograms.BYTES_VIEW_PROGRAM))
+			.isEqualTo(JavaInteropPrograms.BYTES_VIEW_OUTPUT);
+	}
+
+	@Test
+	void proxyOnNonInterfaceSignals() {
+		assertThatThrownBy(() -> compileAndRun("(java:proxy \"java.lang.String\" (lambda (m) nil))"))
+			.isInstanceOf(RuntimeException.class)
+			.hasMessageContaining("expects an interface");
+	}
+
+	// Arity errors are caught at compile time.
+	@Test
+	void missingArgumentsFailAtCompileTime() {
+		assertThatThrownBy(() -> compileAndRun("(java:new)")).isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("java:new expects");
+		assertThatThrownBy(() -> compileAndRun("(java:call 1)")).isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("java:call expects");
+		assertThatThrownBy(() -> compileAndRun("(java:field \"java.lang.Integer\")"))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("java:field expects");
+	}
+
+	// The bridge travels as an ordinary class file beside the program, never as bytes the
+	// program defines at run time: a GraalVM native image cannot define a class at run
+	// time, so a Lookup.defineClass in _javaInit made every java: program fail under
+	// native-image. Named after the program, because it holds that program's _apply.
+	@Test
+	void theBridgeTravelsAsAClassFileBesideTheProgram() throws Exception {
+		JvmLispCompiler compiler = new JvmLispCompiler("com/example/Test");
+		byte[] classBytes = compiler.compile(LispReader.readAllFromString("""
+				(defun biggest (cls) (java:static cls "max" 3 7))
+				(print (biggest "java.lang.Math"))
+				"""));
+		assertThat(compiler.runtimeClassFiles()).containsKey("com/example/Test$JavaBridge.class");
+		String classText = new String(classBytes, java.nio.charset.StandardCharsets.ISO_8859_1);
+		assertThat(classText).doesNotContain("defineClass").doesNotContain("java/util/Base64");
+		byte[] bridge = compiler.runtimeClassFiles().get("com/example/Test$JavaBridge.class");
+		assertThat(new String(bridge, java.nio.charset.StandardCharsets.ISO_8859_1))
+			.doesNotContain("am/ik/rontolisp/codegen/jvm/JavaBridgeTemplate");
+	}
+
+	// The renamed bridge class stays structurally valid: this is implicitly covered by
+	// every test above, but the rename itself must also leave non-matching classes
+	// untouched.
+	@Test
+	void renameClassLeavesOtherUtf8EntriesIntact() throws Exception {
+		byte[] original;
+		try (var in = JavaBridgeTemplate.class.getResourceAsStream("JavaBridgeTemplate.class")) {
+			original = java.util.Objects.requireNonNull(in).readAllBytes();
+		}
+		byte[] renamed = JvmJavaRuntimeBuilder.renameClass(original, "am/ik/rontolisp/codegen/jvm/JavaBridgeTemplate",
+				"RontoLispJavaBridge");
+		String renamedText = new String(renamed, java.nio.charset.StandardCharsets.ISO_8859_1);
+		assertThat(renamedText).doesNotContain("am/ik/rontolisp/codegen/jvm/JavaBridgeTemplate");
+		assertThat(renamedText).contains("RontoLispJavaBridge");
+		// Renaming back round-trips to the original bytes.
+		byte[] roundTripped = JvmJavaRuntimeBuilder.renameClass(renamed, "RontoLispJavaBridge",
+				"am/ik/rontolisp/codegen/jvm/JavaBridgeTemplate");
+		assertThat(roundTripped).isEqualTo(original);
+	}
+
+	// The bridge's entry points are package-private, so a generated class that HAS a
+	// package must rename the bridge into that package too -- not into the default
+	// package, which is what every other test above compiles into.
+	@Test
+	void theBridgeIsRenamedIntoTheGeneratedClassOwnPackage() throws Exception {
+		// A site left to run time: the bridge travels.
+		List<LispVal> program = LispReader.readAllFromString("""
+				(defun biggest (cls) (java:static cls "max" 3 7))
+				(print (biggest "java.lang.Math"))
+				""");
+		JvmLispCompiler compiler = new JvmLispCompiler("com/example/Test");
+		byte[] classBytes = compiler.compile(program);
+		Path packageDir = this.tempDir.resolve("com").resolve("example");
+		Files.createDirectories(packageDir);
+		Files.write(packageDir.resolve("Test.class"), classBytes);
+		writeBeside(compiler);
+
+		String bridgeName = JvmJavaRuntimeBuilder.bridgeName("com/example/Test");
+		assertThat(bridgeName).isEqualTo("com/example/Test$JavaBridge");
+		assertThat(new String(classBytes, java.nio.charset.StandardCharsets.ISO_8859_1)).contains(bridgeName);
+
+		try (URLClassLoader loader = new URLClassLoader(new URL[] { this.tempDir.toUri().toURL() },
+				ClassLoader.getSystemClassLoader())) {
+			Class<?> clazz = loader.loadClass("com.example.Test");
+			Method main = clazz.getMethod("main", String[].class);
+			ByteArrayOutputStream baos = new ByteArrayOutputStream();
+			PrintStream oldOut = System.out;
+			System.setOut(new PrintStream(baos));
+			try {
+				main.invoke(null, (Object) new String[0]);
+			}
+			finally {
+				System.setOut(oldOut);
+			}
+			assertThat(baos.toString().trim()).isEqualTo("7");
+		}
+	}
+
+	// Mirrors JavaInteropTest#aLetBoundReifyKeepsItsKind: the calls passing the listener
+	// are direct, and a lying declaration is refused as the interpreter refuses it.
+	@Test
+	void aLetBoundReifyKeepsItsKind() throws Exception {
+		assertThat(compileWarnings(JavaImplementationPrograms.LISTENER, true)).isEmpty();
+		assertThat(compileAndRun(JavaImplementationPrograms.LISTENER))
+			.isEqualTo(JavaImplementationPrograms.LISTENER_OUTPUT);
+		assertThat(javap(JavaImplementationPrograms.LISTENER)).doesNotContain(JvmJavaRuntimeBuilder.BRIDGE_SUFFIX);
+		assertThatThrownBy(() -> compileAndRun(JavaImplementationPrograms.FALSE_IMPLEMENTATION))
+			.isInstanceOf(RuntimeException.class)
+			.hasMessage(JavaImplementationPrograms.FALSE_IMPLEMENTATION_ERROR);
+	}
+
+	// Mirrors JavaInteropTest#warnOnReflectionReportsAnInterfaceImplementedByReflection.
+	@Test
+	void warnJavaReflectionReportsAnInterfaceImplementedByReflection() {
+		assertThat(compileWarnings("""
+				(defun proxy-of (iface f) (java:proxy iface f))
+				(defun runnable (f) (java:reify "java.lang.Runnable" "run" f))
+				(defun object-of (f g) (java:handle f :functional :java-false :through g))
+				""", true)).contains(
+				"warning: java:proxy is implemented by reflection at run time: the interface name is not a literal string",
+				"warning: java:handle is implemented by reflection at run time: its :through function is not named by #'")
+			.doesNotContain("java:reify");
+	}
+
+	// A class of the program's Java class path (--java-classpath) is resolved against at
+	// compile time -- a constructor, a static method, a field and a declared receiver
+	// become direct calls, a reify and a subclass generated classes -- and loaded from
+	// the class path the program runs with. Mirrors
+	// JavaInteropTest#aClassOnTheProgramsJavaClassPathIsReachable.
+	@Test
+	void aClassOnTheJavaClassPathIsCalledDirectly() throws Exception {
+		Path jar = JavaLibraryJar.build(Files.createDirectories(this.tempDir.resolve("lib")));
+		JvmLispCompiler compiler = JvmLispCompiler.builder().className("Test").javaClasspath(List.of(jar)).build();
+		byte[] classBytes = compiler.compile(LispReader.readAllFromString(JavaLibraryJar.LIBRARY_PROGRAM));
+		assertThat(javap(classBytes)).contains("Method fixture/lib/Greeter.twice:(I)I")
+			.contains("Field fixture/lib/Greeter.NAME:Ljava/lang/String;");
+		Files.write(this.tempDir.resolve("Test.class"), classBytes);
+		writeBeside(compiler);
+		try (URLClassLoader loader = new URLClassLoader(new URL[] { this.tempDir.toUri().toURL(), jar.toUri().toURL() },
+				ClassLoader.getSystemClassLoader())) {
+			Method main = loader.loadClass("Test").getMethod("main", String[].class);
+			ByteArrayOutputStream baos = new ByteArrayOutputStream();
+			PrintStream oldOut = System.out;
+			System.setOut(new PrintStream(baos));
+			try {
+				main.invoke(null, (Object) new String[0]);
+			}
+			finally {
+				System.setOut(oldOut);
+			}
+			String printed = baos.toString();
+			assertThat(String.join("\n", printed.strip().lines().map(String::strip).toList()))
+				.isEqualTo(JavaLibraryJar.LIBRARY_OUTPUT);
+		}
+	}
+
+}

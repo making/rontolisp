@@ -1,0 +1,661 @@
+# Java 連携 (Java Interop)
+
+`java` パッケージは、リフレクションを使って rontolisp から任意の Java API を操作できるようにします。オブジェクトの生成、インスタンスメソッドや静的メソッドの呼び出し、フィールドの読み取り、そして rontolisp のラムダを Java のインターフェース実装へ変換することができます。`examples/` の Swing デモ (`java-interop.lisp`、`swing.lisp`、`life-gui.lisp`) は、専用の Java グルーコードを一切書かずにこのパッケージだけでウィンドウを画面に表示しています。
+
+> **JVM 専用 (インタプリタとコンパイル済み `.class`)。** 連携で得られる値はホストオブジェクトへの不透明な参照であるため、本物の JVM が必要です。動作するのは **JVM 上のインタプリタ** (`java -jar rontolisp.jar program.lisp`) と **JVM コンパイル済みプログラム** (`-o Prog.class` でコンパイルし `java Prog` で実行) です — コンパイラが解決した呼び出しは生成クラスの中の直接呼び出しに、`java:reify` と `java:proxy` はそのために生成したクラスになり、実行時解決に回る呼び出しのためにだけ、コンパイラは小さなリフレクションブリッジを生成クラスの隣 (`Prog$JavaBridge.class`、`-o prog.jar` ではその中のエントリー) に書き出します。そのときプログラムの実行にはそれがクラスパス上に必要です (必要な JRE は [Java リリースやクラスパスを指定したコンパイル](#compiling-against-a-java-release-or-a-class-path) を参照)。WASM バックエンドはホスト参照を表現できないため、`java:` を `.wasm` にコンパイルすると従来どおり `Cannot compile: java:...` エラーになります。GraalVM ネイティブバイナリ (`rontolisp program.lisp`) は `java:` プログラムを `.class` に**コンパイルする**ことはできますが、**インタプリタ実行**はできません。ネイティブイメージにはビルド時にリフレクション登録されたクラス・メンバーしか含まれず、rontolisp のビルドは連携用に何も登録していないため、`(java:static "java.lang.Math" "max" 3 7)` ですら `No such class` で失敗します。
+
+## 関数
+
+このパッケージは Common Lisp の一部ではないため、関数は `java:` 修飾子付きで参照します (または `(in-package java)` 後は修飾なし)。
+
+| 関数 | 用途 |
+|----------|---------|
+| `java:new` | ホストオブジェクトの生成: `(java:new "fqcn" args...)` |
+| `java:call` | インスタンスメソッドの呼び出し: `(java:call obj "method" args...)` |
+| `java:static` | 静的メソッドの呼び出し: `(java:static "fqcn" "method" args...)` |
+| `java:field` | 静的・インスタンスフィールドの読み取り: `(java:field class-or-obj "name")`、書き込み: `(java:field class-or-obj "name" value)` |
+| `java:proxy` | callable を 1 つ以上のインターフェースへ適合: `(java:proxy "iface"... callable)` |
+| `java:subclass` | callable でクラスを継承: `(java:subclass "super" '("iface"...) '("method"...) args... callable)` |
+| `java:reify` | インターフェース群をメソッドごとに実装: `(java:reify "iface" "method" function ...)` |
+| `java:handle` | Java に値のない Lisp の値の代理: `(java:handle value "text")` |
+| `java:view` | Lisp のコレクションを読み取り専用の Java のコレクションとして代理: `(java:view value items :list)` |
+
+生成・返却されたオブジェクトは `#<java <class-name>>` という不透明な形で表示され、`java:call`/`java:field` に再び渡せます。
+
+```lisp
+(java:call (java:new "java.lang.StringBuilder" "ab") "length")   ; => 2
+```
+
+```lisp
+(java:static "java.lang.Math" "max" 3 7)   ; => 7
+```
+
+```lisp
+(java:field "java.lang.Integer" "MAX_VALUE")   ; => 2147483647
+```
+
+Lisp の値も `java:call` の receiver になり、`Object` 引数に渡したときのオブジェクトとして呼ばれます。文字列は `String`、整数は `Integer`（収まらなければ `Long`）、浮動小数点数は `Double`、bignum は `BigInteger`、文字は `Character`（補助文字はそのコードポイントの `Integer`）、`t` は `Boolean.TRUE`、シンボル `|false|` は `Boolean.FALSE` です。`nil`、関数、その他のシンボル、リスト、配列、ハッシュテーブルは receiver になりません。
+
+```lisp
+(java:call "abc" "codePointAt" 0)   ; => 97
+(java:call 42 "toString")           ; => "42"
+```
+
+## 値のマーシャリング
+
+引数と結果は rontolisp と Java の間で自動変換されます。
+
+| rontolisp | Java (入力) | Java (出力) |
+|-----------|-----------|------------|
+| integer | `long`、収まれば `int`、`Long`、または `Long`/`Integer` の上位型 — それ以外には一切渡りません (`double` にも `BigInteger` にもならない) | `int`/`long`/.../`BigInteger` → integer |
+| bignum | `BigInteger` (またはその上位型: `Number`、`Object` など) | `BigInteger` → integer |
+| float | `double` (`Double` の上位型も可)、`double` のオーバーロードがなければ `float` | `double`/`float` → float |
+| string | `String` (またはその上位型) — 長さ 1 でも決して `char` にはならない | `String` → string |
+| character | `char`/`Character` (`Character` の上位型も可) — `int` にはならない (補助文字は整数として変換される) | `Character` → character |
+| `t` / `nil` | `t` は `boolean`/`Boolean`、`nil` は参照が期待される位置のみ (`null`)、プリミティブには決してならない | `boolean` → `t`/`nil` (`:java-false` の後では `t`/`\|false\|`) |
+| 名前が `false` のシンボル | `boolean` の false、任意の参照には `Boolean.FALSE` | `:java-false` の後では Java の false |
+| `java` オブジェクト | ラップされたホストオブジェクト | その他のオブジェクト → `java` オブジェクト |
+| 関数/ラムダ | 一致するインターフェースに対する `java:proxy`、`:functional` の後ではその抽象メソッドの実装。`Object` が期待される箇所では `:functional :java-false` の後で関数そのものであるオブジェクト (引数に限る) | — |
+| 真リスト / ベクタ (特殊化されたものも含む) | `T[]` (要素ごとに変換、プリミティブ配列も可)、または `List`/`Collection`/`Iterable` | 任意の Java 配列 → 要素のベクタ (要素型を記憶する。`:octets` のない `byte[]` は符号付きバイトのリスト、`:octets` の後では `(unsigned-byte 8)` のベクタ) |
+| ハッシュテーブル | 新しい `java.util.LinkedHashMap` (`Map`、`HashMap`、`Object` など) | — |
+| `java:handle` | Java からはテキストに見えるオブジェクト | 代理する値 |
+| `java:view` | 要素を持つ読み取り専用の `List`・`Set`・`Map` (`List` のビューは、そのまま受け取る引数がないときに限り要素の配列。`:bytes` のビューはオクテットの `byte[]`) | 代理する値 |
+
+Java の `null` (および `void` メソッド) は `nil` として返ります。Java の配列が期待される箇所に真リスト (または `make-array` で作ったランク 1 の配列。`double-float`、`single-float`、`bfloat16`、`(unsigned-byte 8|16|32)` に特殊化された配列も含む) を渡すと、要素ごとに要素型へ変換されます (`int[]` などのプリミティブ配列も含む)。`List`/`Collection`/`Iterable` が期待される箇所では `java.util.List` になり、ネストしたリストは再帰的に変換されます。逆方向では、Java の **配列** の結果は要素のベクタになり、要素型を記憶するので、その配列型として再び渡ります (`:octets` のない `byte[]` は符号付きバイトのリストのまま)。返された `java.util.List` は不透明な `java` オブジェクトのままで、そのメソッドを呼び出して操作します。Java メソッドが配列引数へ書き込んだ値は、メソッドの復帰時にベクタへコピーされます。
+
+```lisp
+;; in: the list becomes a Collection
+(java:static "java.util.Collections" "max" (list 3 9 4))   ; => 9
+```
+
+```lisp
+;; in: (1 2 3) -> int[]; out: the int[] result -> a vector
+(java:static "java.util.Arrays" "copyOf" (list 1 2 3) 2)   ; => #(1 2)
+```
+
+[Clojure の型付き配列](../clojure/reference/int-array.md) は、それが表す配列として渡ります。`object-array` は `Object[]`、`int-array` は `int[]` です。そのため `(java.util.Arrays/copyOf (object-array [1 2]) 3)` は `nil` で埋めた `Object[]` を答え、数のリストが選ぶ `long[]` にはなりません。
+
+bignum は、`java.math.BigInteger` (または `Number`、`Object` などその上位型) が期待される箇所に `BigInteger` として渡り、それより狭い型には渡りません。`long` にも `double` にもならないので、`double` が必要なら先に `float` で変換してください。fixnum は決して `BigInteger` パラメータには渡りません (`int` や `long` のオーバーロードが受けます)。逆方向では、`java.math.BigInteger` の結果は `java` オブジェクトではなく Lisp の整数になるため、`java:call` ではなく Lisp の演算で扱ってください。
+
+```lisp
+;; in: a bignum -> BigInteger
+(java:call (java:new "java.math.BigDecimal" (expt 10 20) 3) "toString")   ; => "100000000000000000.000"
+```
+
+```lisp
+;; in: a specialized vector converts element-wise like any vector
+(java:static "java.util.Arrays" "toString"
+             (make-array 2 :element-type 'double-float :initial-element 0.5d0))   ; => "[0.5, 0.5]"
+```
+
+`nil` は参照が期待される位置では常に Java の `null` です。そのため `Object` 引数に `Boolean.FALSE` を渡すには、Java が false を綴るとおりのシンボル `'|false|` を使います。コールバックが `boolean`・`Boolean` の結果として返すのもこのシンボルです。ハッシュテーブルは挿入順のエントリを持つ新しい `java.util.LinkedHashMap` になり、各キーと値は `Object` 引数と同じく変換されます (`equalp` テーブルのキーは最初に格納した形です)。
+
+```lisp
+(let ((l (java:new "java.util.ArrayList")))
+  (java:call l "add" '|false|)
+  (java:call l "add" nil)
+  (java:call l "toString"))   ; => "[false, null]"
+```
+
+```lisp
+(let ((h (make-hash-table :test 'equal)))
+  (setf (gethash "b" h) 2 (gethash "a" h) (list 1 2))
+  (java:call (java:new "java.util.TreeMap" h) "toString"))   ; => "{a=[1, 2], b=2}"
+```
+
+その他のシンボル、分数、ドット対 (非真リスト)、多次元 (ランク 2 以上) の配列はマーシャリング **されません**。[`java:handle`](#handles-javahandle) で代理させることはできます。
+
+### Java の false を受け取る: `:java-false`
+
+Java の false は Common Lisp 唯一の偽である `nil` として返ります。`:java-false` で終わる `java:new`・`java:call`・`java:static`・`java:field` は、これを `|false|` として返します。`boolean` の結果、`Boolean.FALSE`、配列の要素のいずれもです。マーカーは引数の後ろに置き、`:functional` との前後は問いません。
+
+```lisp
+(let ((l (java:new "java.util.ArrayList")))
+  (java:call l "add" '|false|)
+  (list (java:call l "get" 0) (java:call l "get" 0 :java-false)))   ; => (NIL |false|)
+```
+
+これで終わる `java:proxy`・`java:reify`・`java:subclass` は、関数に Java の false を `|false|` として渡します。これで終わる呼び出しでインターフェースが期待される箇所に渡した関数も同様です。両方のマーカーで終わる呼び出しで `java.util.Comparator` が期待される箇所に渡した関数は、Clojure の `AFunction.compare` が関数を読むとおりに `compare` を返します。`t` は -1、`|false|` は引数 2 つを入れ替えた呼び出しが真なら 1 でなければ 0、浮動小数点数と分数は切り捨て、整数は下位 32 ビットです。`nil` は `AFunction.compare` と同じ `NullPointerException` を、それ以外の値は `ClassCastException` を投げ、呼び出しはこれをメソッドの失敗として報告します。
+
+```lisp
+(let ((l (java:new "java.util.ArrayList")))
+  (dolist (x (list 3 1 2)) (java:call l "add" x))
+  (java:call l "sort" (lambda (a b) (if (< a b) t '|false|)) :functional :java-false)
+  (java:call l "toString"))   ; => "[1, 2, 3]"
+```
+
+この呼び出しで `java.lang.Runnable`・`java.util.concurrent.Callable`・`java.util.Comparator`・`java.lang.Object` が期待される箇所に渡した関数は、関数そのものであるオブジェクトになります。Clojure の fn が 3 つのインターフェースを兼ねる 1 つのオブジェクトであるのと同じく、このオブジェクトは 3 つすべてを関数の引数で実装し (`compare` は上の読み方)、クラス名を `clojure.lang.AFunction` と名乗り (`clojure.lang.AFunction@1b6d3586`)、関数の代理になります。そのため Java から返るとき (`TreeSet` の `comparator`、リストの要素など) は関数そのものであり、同じ関数のオブジェクト同士は `equals` で、このクラスの関数の `java:handle` とも等しくなります。ほかのインターフェースへ変換した関数と、`:java-false` のない呼び出しで変換した関数は、関数とは別のオブジェクトのまま返ります。`:java-false` のない呼び出しでは `Object` に対応するオブジェクトがないため、呼び出しは拒否されます (`java: a function where java.lang.Object is expected needs a java:handle, got ...`)。任意の値のオブジェクトは [`java:handle`](#handles-javahandle) で作れます。
+
+```lisp
+(let* ((by-value (lambda (a b) (- a b)))
+       (s (java:new "java.util.TreeSet" by-value :functional :java-false))
+       (l (java:new "java.util.ArrayList")))
+  (java:call l "add" by-value :functional :java-false)
+  (list (eq by-value (java:call s "comparator")) (eq by-value (java:call l "get" 0))))   ; => (T T)
+```
+
+テキストの位置に呼び出しのマーカーを渡した関数の `java:handle`、`(java:handle f :functional :java-false)` は、呼び出しなしで作った同じオブジェクトです。Lisp が保持でき、コレクションの中や関数の戻り値として Java に渡せます。
+
+### バイト列を受け取る: `:octets`
+
+`:octets` のない `byte[]` は符号付きバイトのリストとして返ります (それ以外の配列はベクタです)。`:octets` で終わる `java:new`・`java:call`・`java:static`・`java:field` は、`byte[]` (結果、フィールドの値、返した配列の要素) を、そのオクテットを持つ `(unsigned-byte 8)` のベクタとして返します。ほかのマーカーとの順序は問いません。このベクタは、インタプリタでもコンパイル済みプログラムでも Java の配列そのものです。そのため Java が後からこの配列へ書き込んだ値 (`ByteBuffer` の `array()` へバッファが書き込む値など) もベクタから読め、同じ配列を 2 度受け取ると 2 つは `eq` になります。Java へ `byte[]` を渡すには [`:bytes` のビュー](#views-javaview)を使います。
+
+```lisp
+(let ((md (java:static "java.security.MessageDigest" "getInstance" "MD5")))
+  (subseq (java:call md "digest" (java:view 'v (make-array 0 :element-type '(unsigned-byte 8)) :bytes) :octets)
+          0 4))   ; => #(212 29 140 217)
+```
+
+呼び出しが変換する関数と、`:octets` で終わる `java:proxy`・`java:reify`・`java:subclass` のすべての関数にも、`byte[]` (引数、またはその要素) は同じベクタとして渡ります。このベクタも Java の配列そのものです。関数がそこへ格納した値は Java から読め、関数の実行中に Java が書き込んだ値は関数から読めます。Java が同じ配列を 2 度渡すと、1 つのベクタになります。
+
+```lisp
+(let ((in (java:subclass "java.io.InputStream" '() '("read")
+            (lambda (this name &optional buf off len)
+              (if (and buf (= off 0)) (progn (setf (aref buf 0) 7) 1) -1))
+            :octets)))
+  (java:call in "readNBytes" 3 :octets))   ; => #(7)
+```
+
+### 関数を別の関数経由で呼ばせる: `:through`
+
+`:through` と関数で終わる形式 (ほかのマーカーとの順序は問いません) では、形式が変換する関数 (インターフェースへの変換と、関数そのものであるオブジェクトへの変換) と、形式が作る `java:reify`・`java:proxy`・`java:subclass` の関数を、Java はすべてその関数経由で呼びます。メソッドは `(f function kind resolved arguments)` を実行します。`arguments` は関数を適用するはずだった引数のリスト (`java:proxy` の callable ならメソッド名が先頭、`java:subclass` ならオブジェクトとメソッド名が先頭) です。`kind` は Java が戻り値をどう受け取るかを表し、メソッドが参照型を返すなら `:object`、プリミティブを返すならその型のキーワード (`:boolean`・`:char`・`:byte`・`:short`・`:int`・`:long`・`:float`・`:double`)、Java が受け取らないなら (`void` のメソッド、`AFunction.compare` として読む `compare`) `nil` です。`resolved` は、関数を変換した呼び出しが実行前にメンバーを選んでいた (1 つのメンバーに解決されていた、または候補のオーバーロードが 1 つだった。[実行前の呼び出し解決](#resolving-calls-before-they-run)を参照) とき `t`、実行時に選んだときと、`java:reify`・`java:proxy`・`java:subclass` の関数では `nil` です。`f` の返した値がメソッドの戻り値になり、関数の戻り値と同じ規則で戻り値の型へ変換されます。そのため値の受け渡し方は `f` が決められます。たとえば Java の引数を関数に渡す前に変換し、戻り値はメソッドがオブジェクトを返すときだけ変換し、プリミティブは自分の言語のキャストの規則で変換して、`void` のメソッドが捨てる戻り値には手を付けずにおけます。Clojure フロントエンドは、fn と `proxy` の本体をすべてこの方法で Java に渡しています。プリミティブの戻り値は、fn なら Clojure の関数型インターフェースのアダプタと同じく (呼び出しが実行前にメンバーを選んでいればコンパイラのもの、そうでなければリフレクションのもの)、`proxy` の本体なら Clojure の proxy クラスと同じくキャストします。
+
+```lisp
+(defun quoted (f kind resolved args)
+  (declare (ignore resolved))
+  (let ((answer (apply f args)))
+    (if (eq kind :object) (prin1-to-string answer) answer)))
+(list (java:call (java:static "java.util.Optional" "empty") "orElseGet" (lambda () :x)
+                 :functional :through #'quoted)
+      (java:call (java:call (java:static "java.util.stream.IntStream" "range" 0 3) "map"
+                            (lambda (x) (* x 10)) :functional :through #'quoted)
+                 "sum"))   ; => (":X" 30)
+```
+
+コンパイル済みプログラムは、リテラルの `#'name` が指す関数を直接呼びます。`:through` の後ろがそれ以外の形式なら、呼び出しは実行時に解決され、形式を評価した値を呼びます。
+
+### ハンドル: java:handle
+
+`(java:handle value "text")` は、Java に値のない Lisp の値を代理する Java オブジェクトを作ります。Java からはテキストがその `toString` に見え、同じテキストのハンドル同士は `equals` で等しくなります。ハンドルはテキストでハッシュされテキストで順序付けられますが、`(java:handle value "text" hash "order")` の形では整数の下位 32 ビットをハッシュとし、order のテキストで順序付けられます。そのためハンドルは、その値が自分の言語でそうなるのと同じく `HashMap` のキーになり、`TreeSet` の中で整列します。Java がハンドルを返すところ (結果、配列の要素、コールバックの引数) ではどこでも、`java:` は代理する値を返します。
+
+```lisp
+(let ((m (java:new "java.util.HashMap")))
+  (java:call m "put" (java:handle 'apple "apple") 1)
+  (list (java:call m "toString")
+        (java:call m "get" (java:handle nil "apple"))
+        (java:call (java:call m "keySet") "toArray")))   ; => ("{apple=1}" 1 #(APPLE))
+```
+
+完全な形は `(java:handle value text hash order class)` で、ほかに関数そのものであるオブジェクトを作る `(java:handle function :functional :java-false ...)` があります ([Java の false を受け取る](#javas-false-back-java-false))。`hash` が nil のハンドルは、同じクラスでまったく同じ値を表すオブジェクト (同様のハンドル、`:value` を付けた `java:reify`、関数そのものであるオブジェクト) とだけ等しくなり、このとき `text` を nil にすると `Object` と同じくクラス名とハッシュで綴られます。関数の `order` は、値と、Java がハンドルと比べるオブジェクトとを比べ、その答えの符号で順序を決めます。`order` が nil のハンドルは何とも順序付けられません。`class` は等価と順序を分けます。クラスの異なるハンドル同士は等しくならず、比べると両方のクラス名を挙げた `ClassCastException` になります。実数のハンドルは、その数の `java.lang.Number` です ([java:handle](../reference/functions/java-handle.md))。値を表しながらインターフェースも実装するオブジェクトは、`:value` を付けた `java:reify` で作ります ([java:reify によるインターフェースの実装](#implementing-interfaces-with-javareify))。
+
+### ビュー: java:view
+
+`(java:view value items shape)` は、Lisp のコレクションを代理する読み取り専用の Java コレクションを作ります。要素は items を `Object` 引数と同じ規則で一度だけ変換したものです。`shape` は `:list`、`:vector` (`RandomAccess` かつ `Comparable` でもある `List`)、`:set`、`:map` (ハッシュテーブルか plist から作る) のいずれかです。Java はこれを `java.util` のインターフェースを通して読みます。`equals` と `hashCode` はそれぞれの規約どおりで、書き込みはすべて `UnsupportedOperationException` になります。`toString` は値に対する printer の答えで、Java がビューを返すところでは代理する値が返ります。
+
+```lisp
+(let* ((items (list 1 "two"))
+       (v (java:view items items :list (lambda (x) (format nil "<~{~A~^ ~}>" x))))
+       (l (java:new "java.util.ArrayList")))
+  (java:call l "add" v)
+  (list (java:call l "toString") (eq (java:call l "get" 0) items)))   ; => ("[<1 two>]" T)
+```
+
+ビューは、クラスが合う箇所にはそのまま渡ります。Java の配列が期待される箇所では `List` のビューは要素の配列になりますが、それはビューをそのまま渡す方法 (可変長引数の配列に一つの要素として詰める方法を含む) がすべて合わないときに限られます。この変換があるのは、呼び出しが返した Java の配列がここではリストになるためで、そのビューは後の呼び出しが期待する配列に戻ります。
+
+`(java:view value octets :bytes)` はコレクションを作りません。`byte[]` が合う箇所 (`Object` を含む) には、`(unsigned-byte 8)` のベクタ自身の格納領域である `byte[]` が渡ります。そのため Java がそこへ書き込んだ値は、呼び出し中のものも、配列を保持したオブジェクト (`ByteBuffer.wrap` など) が後から書き込んだものも、ベクタから読めます。
+
+```lisp
+(let* ((b (make-array 3 :element-type '(unsigned-byte 8)))
+       (v (java:view b b :bytes)))
+  (java:static "java.lang.System" "arraycopy"
+               (java:view 's (make-array 3 :element-type '(unsigned-byte 8) :initial-element 7) :bytes)
+               0 v 1 2)
+  b)   ; => #(0 7 7)
+```
+
+Clojure フロントエンドは、すべての値をこの形で Java に渡します。ベクタ・リスト・セット・マップは Clojure の印字どおりに綴られるビューとして、バイト配列はその `byte[]` として、キーワード・シンボル・分数は Clojure の `Keyword`・`Symbol`・`Ratio` と同じくハッシュし順序付けるハンドルとして、fn は関数そのものであるオブジェクトとして、それ以外の値は自分自身とだけ等しいハンドルとして渡します ([java:view](../reference/functions/java-view.md))。
+
+`java` オブジェクトが `eq`・`eql` になるのは自分自身とだけです。2 回の呼び出しが返した同じオブジェクトは `eq` ですが、`equals` が真になる別々のオブジェクトは `eq` ではありません。`equal` と `equalp` はオブジェクトの `equals` で比較します。そのため `eq`・`eql` のハッシュテーブルは `java` オブジェクトを同一性でキーにし (格納後に変更したキーも見つかります)、`equal`・`equalp` のテーブルは `equals` と `hashCode` でキーにします。
+
+```lisp
+(let ((a (java:new "java.io.File" "x"))
+      (b (java:new "java.io.File" "x")))
+  (list (eq a b) (eql a b) (equal a b) (eq a a)))   ; => (NIL NIL T T)
+```
+
+右辺が Lisp の値のとき、`equal` はその値を Java メソッドの `Object` 引数が受け取る形 (文字列は `String`、文字は `Character`、`nil` は `null`) にしてオブジェクトの `equals` に渡します。シンボル、リスト、ベクタ、分数はどの `java` オブジェクトとも `equal` になりません。左辺が Lisp の値なら `java` オブジェクトと `equal` になることはありません。左オペランドに尋ねる Clojure の `=` と同じです。
+
+## オーバーロード解決
+
+規則は Clojure のリフレクタのものです。値は自分の型が一致するものにしか一致しません。整数は `long` です。`long` に完全一致し、収まれば `int` に縮小変換し (収まらなければエラーで、折り畳みではありません)、`Long` や `Long`/`Integer` の上位型に一致します — 浮動小数点型、`char`、`BigInteger` には一切一致しません。浮動小数点数は `double` です。1 文字の文字列もあくまで文字列で、`char` にはなりません。文字は決して `int` にはなりません。`nil` は、`boolean` を含めどのプリミティブにもなりません。クラスに同名・同アリティのコンストラクタやメソッドが複数ある場合、`java` は引数の変換 **総コストが最小** となるオーバーロードを選びます。完全一致は拡大変換より優先され、拡大変換はロッシー/ボックス化された変換より優先されます。同点は安定したシグネチャ順序で決まります。したがって整数引数は `long` パラメータを好み、リフレクションがメソッドを返す順序に結果が左右されることはありません。
+
+```lisp
+;; Math.max is overloaded for int/long/float/double; an integer picks long.
+(java:static "java.lang.Math" "max" 3 7)   ; => 7
+```
+
+型の異なる引数の組は、Clojure と同じくどのオーバーロードにも一致しません。
+
+```lisp
+(handler-case (java:static "java.lang.Math" "max" 3 7.5)
+  (error (e) (format nil "~a" e)))
+; => "error calling java.lang.Math.max: java.lang.IllegalArgumentException: No matching method max found taking 2 args"
+```
+
+そのアリティの候補が 1 つのみの呼び出しはコスト規則を飛ばし、Clojure のコンパイラが 1 つのメソッドを直接呼ぶのと同じく、チェック付きキャストで引数を変換します。メンバーの選択時に想定していない値は変換時に拒否されます。そのため整数は、唯一の `double` である `sqrt` には届き、型の異なる値は変換に失敗します。
+
+```lisp
+
+```lisp
+(java:static "java.lang.Math" "sqrt" 16)   ; => 4.0
+```
+
+```lisp
+(handler-case (java:static "java.lang.Character" "charCount" #\a)
+  (error (e) (format nil "~a" e)))
+; => "error calling java.lang.Character.charCount: java.lang.ClassCastException: class java.lang.Character cannot be cast to class java.lang.Number"
+```
+
+種類を持たないリスト・ベクター・ハッシュ表の引数は、実行時まで残った呼び出しでは同じ単一候補の経路を通ります。ハッシュ表は `Map` に変換され、それ以外は変換に失敗します。
+
+```lisp
+(defun putall0 (h m) (java:call h "putAll" m))
+(handler-case (putall0 (java:new "java.util.HashMap") '(1 2))
+  (error (e) (format nil "~a" e)))
+; => "error calling java.util.HashMap.putAll: java.lang.ClassCastException: class am.ik.rontolisp.LispCons cannot be cast to class java.util.Map"
+```
+
+関数は、関数型インターフェース (抽象メソッドが 1 つ) に対して `java.lang.Object` より低いコストになり、`Object` に対してはそれ以外のインターフェースより低いコストになります。そのため Java のラムダの変換先と同じく `TreeSet(Collection)` より `TreeSet(Comparator)` が選ばれ、Clojure の fn が `Object` であって `CharSequence` ではないのと同じく `append(CharSequence)` より `StringBuilder.append(Object)` が選ばれます。関数の答えを保持する `java.util.concurrent.Callable` に対するコストが最も低いため、`ExecutorService.submit` は `submit(Runnable)` より `submit(Callable)` を選びます。
+
+```lisp
+(let ((s (java:new "java.util.TreeSet" (lambda (a b) (- b a)) :functional)))
+  (java:call s "add" 1)
+  (java:call s "add" 2)
+  (java:call s "toString"))   ; => "[2, 1]"
+```
+
+## 実行前の呼び出し解決
+
+インタプリタもコンパイル済みクラスも、すべての呼び出しを上の同じ規則で解決します。クラスがプログラムのテキストから分かる呼び出し (`java:new` や `java:static` が名指すクラス、`java:call` のレシーバの型) は、最初に実行される前に一度だけ、そのクラスのメソッドの中から解決されます。引数の種別も分かればただ 1 つのメソッドへ、分からなければ引数が選びうるオーバーロードの集合へ解決され、呼び出しは実行のたびに引数の種別でその中から選びます。手本は Clojure の型ヒント付き連携で、それをインタプリタにも適用しています。レシーバのクラスが分からない呼び出しは、実行時にレシーバのクラスと引数の種別から解決されます。選ばれるメソッドはどちらでも同じです。例外は後述の 1 つだけです。
+
+プログラムのテキストが値について示すもの:
+
+- リテラルの種別: `3`、`2.5`、`"x"`、`#\a`、`t`、`nil`、`lambda`
+- `(java:new "C" ...)` はちょうど `C` である
+- 解決済みの呼び出しの値は、そのメソッドが宣言する型を持つ。`StringBuilder` の `append` は `StringBuilder` を返すので、呼び出しの連鎖は 1 段ずつ解決される。`Object` を返すと宣言されたメソッドは何も示さない
+- `(the (java:object "C") x)` と `(declare (type (java:object "C") v))` は、その値が `C` (または `nil`) であることを示す。`C` は `java:new` と同じくバイナリクラス名 (`java.util.Map$Entry`) で書く。`(java:object "C" :exact)` は、`java:new` の戻り値と同じく、値がちょうど `C` であり `nil` ではないことを示す
+- `let` / `let*` の変数は初期化式の型を持つ。ただし special 変数である場合と、スコープ内のどこか (クロージャ内を含む) で `setq`、`setf`、`incf` などにより代入される場合を除く
+- `(declaim (type (java:object "C") v))` は、それ以降のフォームで大域変数 `v` の型を示す。`defvar` の初期値は型を示さない。どのフォームもその変数に代入しうるため
+- インターフェース名がリテラルの `(java:reify "I" ...)` と `(java:proxy "I" ...)` は、`I` を実装し、プログラムが名前で指せる型はほかに実装しないクラスのオブジェクトを作る。それに対する呼び出しは `I` のメソッドの中から解決され、それを引数として渡す呼び出しも解決される。`let` 変数はこの型を保ち、その表記が `(java:object "I" :exact)` である。インターフェースをちょうどクラスとするオブジェクトは存在しないので、インターフェースに対する `:exact` はこの意味になる。リテラルのインターフェースを複数並べた `(java:proxy "I" "J" ...)` はそのそれぞれを実装する。それを渡す呼び出しは解決され、それに対する呼び出しは実行時にそのクラスで解決され、その型を表す指定子はない
+
+既知のクラスがインターフェースである値に対する呼び出しは、そのインターフェースが宣言していない `Object` の public メソッド（`toString`、`getClass` など）にも解決されます。Java の `list.toString()` と同じです。
+
+文字列・浮動小数点数・文字・bignum・`t` とわかっている値に対する呼び出しは、それが呼ばれるクラス（`String`、`Double` など）のメソッドの中で解決されます。整数のボックスは大きさで決まるため、整数に対する呼び出しは実行時に解決されます。
+
+宣言された型は信頼されます。`C` でない値は、レシーバでも引数でも、呼び出しに渡った時点でエラーになります。選ばれていないメソッドに合わせて変換されることはありません。
+
+```lisp
+(defun total-length (sb)
+  (declare (type (java:object "java.lang.StringBuilder") sb))
+  (java:call sb "length"))
+(total-length (java:new "java.lang.StringBuilder" "abc"))   ; => 3
+```
+
+```console
+(defun parse (s)
+  (declare (type (java:object "java.lang.String") s))
+  (java:static "java.lang.Integer" "parseInt" s))
+(parse 42)   ; error: java:static: argument 1 is not a java.lang.String, got 42
+```
+
+次の 2 つの呼び出しはどちらも実行前に解決されます。`sb` はちょうど `StringBuilder` です。
+
+```lisp
+(let ((sb (java:new "java.lang.StringBuilder" "ab")))
+  (java:call sb "reverse")
+  (java:call sb "toString"))   ; => "ba"
+```
+
+コンパイル済みクラスは、1 つのメソッドへ解決された呼び出しをそのメソッドの直接呼び出しにし、オーバーロードの集合へ解決された呼び出しを、引数の種別の比較とそれが選ぶオーバーロードの直接呼び出しにします (どちらもリフレクションなし)。リフレクションブリッジは実行時解決に回る呼び出しのためにだけ書き出します。インタプリタも解決済みの呼び出しを同じく実行します。選ばれたメソッドを呼び、引数を検査して変換します。
+
+```lisp
+(defun bigger (a b) (java:static "java.lang.Math" "max" a b))
+;; `max(long,long)` による。整数は `long` である。
+(bigger 3 7)   ; => 7
+```
+`a` と `b` は何でもありうるので、`bigger` の呼び出しはそのたびに `max(long,long)`、`max(int,int)`、浮動小数点の各オーバーロードの中からコスト規則で選びます — そして、どのオーバーロードも受けない組は Clojure と同じく拒否します。
+
+```lisp
+(handler-case (bigger 2.5 1)
+  (error (e) (format nil "~a" e)))
+; => "error calling java.lang.Math.max: java.lang.IllegalArgumentException: No matching method max found taking 2 args"
+```
+
+引数が実行前にメソッドを決めるのは、その引数が取りうるすべての種別が同じメソッドを選ぶときだけです。`String` の戻り値は `nil` でありえて、`nil` は参照パラメータにしか一致しないため、`(java:call sb "append" (java:call sb "toString"))` は実行時に `append(String)` などの参照オーバーロードの中から選びます。
+
+### 宣言されたレシーバのクラスが候補を決める
+
+宣言クラス `C` のレシーバに対する呼び出しは、Java と同じく `C` のメソッドの中から解決されます。初期化式の型が `C` である `let` 変数に対する呼び出しも同じです。実行時クラスだけが追加する同名の public オーバーロードは、引数の種別が実行前に分かるか実行時に分かるかによらず候補になりません。実行前の解決と実行時の解決で選択が異なるのはこの場合だけです。
+
+```lisp
+(defun remove-one (c)
+  (declare (type (java:object "java.util.Collection") c))
+  (java:call c "remove" 1))
+(let ((a (java:new "java.util.ArrayList")) (b (java:new "java.util.ArrayList")))
+  (dolist (x (list 10 20 1)) (java:call a "add" x) (java:call b "add" x))
+  (remove-one a)             ; Collection.remove(Object): removes the element 1
+  (java:call b "remove" 1)   ; ArrayList.remove(int): removes the element at index 1
+  (list (java:call a "toString") (java:call b "toString")))
+; => ("[10, 20]" "[10, 1]")
+```
+
+### パラメータタグ
+
+メソッド名、および `java:new` のクラス名にはパラメータ型を付けられます。これはオーバーロードを直接指定します: `"max(long,long)"`、`"java.lang.StringBuilder(int)"`。`_` は任意の型に一致し、そのパラメータはコスト規則に任せます。パッケージのない型名は `java.lang` の型です。`T[]` または `T...` は配列です。
+
+```lisp
+(java:static "java.lang.String" "valueOf(int)" #\a)   ; => "97"
+```
+
+```lisp
+(java:static "java.lang.Math" "max(long,_)" 3 7)   ; => 7
+```
+
+```lisp
+(java:call (java:new "java.lang.StringBuilder(int)" 64) "capacity")   ; => 64
+```
+
+要素が `^C` または `_` のタグは、Clojure の `:tag` と同じく引数のクラスのヒントです。実行前に解決される呼び出しは、ヒントの各クラスを代入できるパラメータを持つオーバーロードだけを残します (プリミティブのパラメータは除外しません)。1 つも残らないときはすべてを残します。実行時に解決される呼び出しはヒントを読みません。`C` はバイナリクラス名です。
+
+```lisp
+(let ((e (java:static "java.util.concurrent.Executors" "newFixedThreadPool" 1)))
+  (java:call (java:call e "submit(^java.lang.Runnable)" (lambda () 42) :functional) "get"))   ; => NIL
+```
+
+### リフレクション警告
+
+`(setq java:*warn-on-reflection* t)` は、それ以降のフォームで実行時解決に回る呼び出しを理由とともに報告します。インタプリタはフォームを読み込むときに (フォームの行番号付きで)、コンパイラはコンパイル時に (呼び出しの位置付きで) 報告します。`--warn-java-reflection` は最初から有効にします。
+
+```console
+$ rontolisp --warn-java-reflection len.lisp -o Len.class
+len.lisp:1:16: warning: java:call "length" is resolved by reflection at run time: the receiver's class is not known
+```
+
+### Java リリースやクラスパスを指定したコンパイル
+
+インタプリタは実行中の JDK とプログラムのクラスパス ([Java ライブラリ](#java-libraries)) に対して解決します。JVM コンパイラは代わりにクラスファイルを読みます。JDK の `lib/ct.sym` (実行中の JDK のもの、なければ `JAVA_HOME` のもの、なければ `PATH` 上の `java` のもの) から、その JDK が持つ最新のリリース、または `--java-release N` のリリースを読み、続いてクラスパスを探します。コンパイル済みクラスはコンパイル時に選ばれたメソッドを呼ぶので、そのリリース向けに刻印されます (クラスバージョン 44 + N、最低でも Java 17 の 61)。そのリリースより古い JRE はクラスの読み込みを拒否します。コンパイル時に見えないクラスを名指す呼び出しは実行時に解決され、その呼び出しが使うリフレクションブリッジには、rontolisp をビルドした JRE と同等以上に新しい JRE が必要です。
+
+```console
+$ rontolisp app.lisp -o app.jar --java-release 21 --java-classpath lib/guava.jar
+```
+
+### リフレクションなしのコンパイル
+
+`--java-static` は、リフレクションを必要とする呼び出しをすべてコンパイルエラーにします。実行時解決に回る呼び出しと、インターフェース名を実行時に与える、またはコンパイル時にインターフェースが見つからない `java:reify` と `java:proxy` (`java.lang.reflect.Proxy` になる) が該当し、コンパイルはそれらを一度にすべて列挙します。`java:reify`、リテラルのインターフェースに対する `java:proxy`、インターフェースが期待される箇所に渡した関数は、コンパイル時に生成するクラスになるので、リフレクションを必要としません。種別が実行時にしか分からない引数も、そこでインターフェースを期待するオーバーロード (`String.join(CharSequence, Iterable)` など) に対しては関数でありうるので同じ扱いになります。コンパイルが通ったものはリフレクションを含まないので、GraalVM の `native-image` はその jar をリーチャビリティメタデータなし (`reflect-config.json` もエージェント実行も不要) で実行ファイルにビルドできます。
+
+```console
+$ rontolisp app.lisp --java-static -o app.jar
+$ native-image --no-fallback -jar app.jar -o app
+$ ./app
+```
+
+```console
+$ rontolisp len.lisp --java-static -o len.jar
+error: --java-static: 1 java: call cannot be compiled without reflection:
+  len.lisp:1:16: java:call "length": it is resolved by reflection at run time: the receiver's class is not known
+```
+
+こうした呼び出しを解決させるのは `(declare (type (java:object "C") v))` や `(the (java:object "C") x)` です。
+
+## 可変長引数 (varargs)
+
+可変長引数メソッド (例: `String.format(String, Object...)`) には任意個の末尾引数を渡せます。末尾引数は自動的に varargs 配列へパックされます。固定アリティのオーバーロードが両方に一致する場合はそちらが優先され、varargs 位置に渡したリスト/ベクタは配列そのものとしても扱えます。
+
+```lisp
+;; 1 and "x" are packed into the Object... array
+(java:static "java.lang.String" "format" "%s-%s" 1 "x")   ; => "1-x"
+```
+
+```lisp
+;; the list is the CharSequence[] varargs array itself
+(java:static "java.lang.String" "join" "-" (list "a" "b" "c"))   ; => "a-b-c"
+```
+
+## java:reify によるインターフェースの実装
+
+`java:reify` はホストインターフェースをメソッドごとに実装します。各メソッド名の後ろに、そのメソッドを実装する関数を置き、関数はメソッドの引数で呼ばれます。作ったオブジェクトはそのインターフェースが期待される箇所ならどこにでも渡せ、Java 側はほかの実装と同じように呼び出します。
+
+```lisp
+(let ((support (java:new "java.beans.PropertyChangeSupport" "bean"))
+      (seen nil))
+  (let ((listener (java:reify "java.beans.PropertyChangeListener" "propertyChange"
+                    (lambda (e) (push (java:call e "getNewValue") seen)))))
+    (java:call support "addPropertyChangeListener" listener)
+    (java:call support "firePropertyChange" "size" 1 2)
+    (java:call support "removePropertyChangeListener" listener)
+    (java:call support "firePropertyChange" "size" 2 3))
+  seen)
+; => (2)
+```
+
+メソッドはフォームの実行前に選ばれ、その規則はインタプリタとコンパイル済みプログラムで共通です。
+
+- 名前は 1 つのメソッドを指す。複数のメソッドが共有する名前には、`java:call` の名前と同じくパラメータ型のタグを付ける (`"append(char)"`)。複数のメソッドに一致する名前や、どのメソッドにも一致しない名前はエラーになる
+- どの名前も指さない抽象メソッドは、呼ぶと `UnsupportedOperationException` を投げる。デフォルトメソッドはインターフェースの本体を保つ。`toString`、`equals`、`hashCode` も指定でき、指定しなければ `#<java-reify I>` と同一性比較になる
+- 関数の値は引数と同じ規則でメソッドの戻り型へ変換される。ただし関数は戻る方向ではプロキシにしないので、インターフェースが期待される戻り値には `java:reify` か `java:proxy` のオブジェクトを返す
+- インターフェース名をクォートしたリストで渡すと (`(java:reify '("I" "J") ...)`)、そのすべてを実装するオブジェクトを 1 つ作る。名前はどのインターフェースのメソッドでも指せる
+- インターフェースの後ろに `:value v` を置くと、オブジェクトは[ハンドル](#handles-javahandle)と同じく `v` を表す。Java はこれを `v` として返し、`equals`・`hashCode`・`toString` は指定しなければ、`:class` が名付けるクラスの、ハッシュが nil のハンドルと同じになる
+
+コンパイル済みプログラムは、名前がリテラル文字列の `java:reify` をそれぞれ専用に生成したクラス (`Prog$Reify0.class`) で実装するので、リフレクションを必要としません。[リフレクションなしのコンパイル](#compiling-without-reflection)を参照してください。[リファレンスページ](../reference/functions/java-reify.md)に例がさらにあります。
+
+## java:proxy によるコールバック
+
+`java:proxy` は rontolisp の callable を背後に持つホストインターフェースのインスタンスを作ります。callable は各インターフェースメソッドに対して `(callable "method-name" arg...)` の形で適用されるため、1 つのラムダでインターフェース全体を実装し、メソッド名で振り分けることができます。戻り値はメソッドの戻り型へマーシャリングされます (`void` メソッドは無視し、返した関数はプロキシにしません)。
+
+```lisp
+;; A java.util.function.Supplier whose get() returns a rontolisp value.
+(java:call (java:proxy "java.util.function.Supplier" (lambda (method) 42)) "get")
+; => 42
+```
+
+インターフェースが期待される箇所に callable を直接渡すと自動的に proxy でラップされます。これにより Swing の `ActionListener` を素のラムダで書けます。
+
+```console
+(java:call button "addActionListener"
+  (lambda (method event) (handle-click)))
+```
+
+引数の後ろを `:functional` で終えた `java:new`・`java:call`・`java:static` (`java:subclass` ではコンストラクタ引数について、callable の後ろ) は、関数を Java がラムダを変換するのと同じ形で変換します。インターフェースの各抽象メソッドはメソッドの引数だけで関数を呼び、default メソッドは本体を保ちます。Clojure フロントエンドは呼び出しをこれで終えるので、Clojure の `fn` はメソッド名を受け取りません。
+
+```lisp
+(let ((lst (java:new "java.util.ArrayList")))
+  (dolist (x (list 3 1 2)) (java:call lst "add" x))
+  (java:static "java.util.Collections" "sort" lst (lambda (a b) (- b a)) :functional)
+  (java:call lst "toString"))
+; => "[3, 2, 1]"
+```
+
+## java:subclass によるクラスの proxy
+
+`java:subclass` は rontolisp の callable を背後に持つホストクラスのインスタンスを作ります。`java.lang.reflect.Proxy` はインターフェースしか実装できないため、`java:proxy` にはできないことです。このフォームはスーパークラス、追加のインターフェース、オーバーライドするメソッド、コンストラクタ引数を指定します。
+
+```lisp
+(java:subclass "java.io.File" '() '("lastModified") "recent"
+  (lambda (this method &rest args) 42))
+```
+
+callable は、名前を挙げた各メソッドに対して `(callable this "method-name" arg...)` の形で適用されます。最初が `this`、次がメソッド名です。コンストラクタ引数は、共有のオーバーロード規則でスーパークラスのコンストラクタを選びます。名前を挙げたメソッドは本体を実行します（`toString`/`equals`/`hashCode` を含みます）。名前を挙げなかったメソッドは、クラスに実装があれば継承し、実装がなければ呼ばれたときにメソッド名とともに `UnsupportedOperationException` を送出します。`proxy-super`（Clojure で書く場合）は、生成した `super$` アクセサーを通常のメソッドとして呼ぶことでスーパークラスの実装に届きます。
+
+```lisp
+(java:call (java:subclass "java.io.File" '() '("toString") "x"
+             (lambda (this method &rest args) "over!"))
+           "super$toString$0")
+; => "x"
+```
+
+名前がリテラル文字列である `java:subclass` はコンパイル時に生成するクラスになるため、構築は `--java-static` でコンパイルできます。実行時まで残るもの（実行時に計算する名前や、コンパイル時に見えないクラス。プロジェクトのクラスには `--java-classpath` が要ります）は名前を上げて拒否されます。インタープリターは実行時に解決します。さらなる例は[リファレンスページ](../reference/functions/java-subclass.md)にあります。
+
+## エラーと非局所脱出
+
+Java のメンバが投げた例外は `java:java-exception` として通知されます。これはメンバと例外を示す `simple-error` で、例外そのものを保持しており、`java:java-exception-cause` がそれを返します。
+
+```lisp
+(handler-case (java:static "java.lang.Integer" "parseInt" "x")
+  (error (e) (format nil "~a" e)))
+; => "error calling java.lang.Integer.parseInt: java.lang.NumberFormatException: For input string: \"x\""
+```
+
+```lisp
+(handler-case (java:static "java.lang.Integer" "parseInt" "x")
+  (java:java-exception (e)
+    (java:call (java:java-exception-cause e) "getMessage")))
+; => "For input string: \"x\""
+```
+
+`java:java-exception` を Java に渡すと、メンバの引数としても、実行前にクラスの分からない `java:call` のレシーバとしても、保持している例外として扱われます。
+
+```lisp
+(handler-case (java:static "java.lang.Integer" "parseInt" "x")
+  (java:java-exception (e)
+    (java:call (java:call (java:new "java.lang.RuntimeException" "wrapped" e) "getCause")
+               "getMessage")))
+; => "For input string: \"x\""
+```
+
+Java からコールバックとして呼ばれた rontolisp の関数が通知したコンディションや、その関数から抜ける `return-from`・`throw`・`go` は、Lisp のフレームを抜けるときと同じく途中の Java のフレームをそのまま伝播し、Java を呼び出したコードに到達します。
+
+```lisp
+(block found
+  (java:call (java:static "java.util.List" "of" 1 2 3) "forEach"
+             (lambda (method x) (when (= x 2) (return-from found x))))
+  nil)
+; => 2
+```
+
+```lisp
+(handler-case
+    (java:call (java:static "java.util.List" "of" 1) "forEach"
+               (lambda (method x) (error "bad element ~a" x)))
+  (error (e) (format nil "~a" e)))
+; => "bad element 1"
+```
+
+途中の Java のコードにとってこれは通常の例外であり、到達するのはそのコードが伝播させたものだけです。捕捉して握りつぶされたものは到達せず、ラップされたものや別スレッドで投げ直されたものは、その Java 呼び出し自体の失敗として到達します (`FutureTask.get` は `ExecutionException` でラップします)。
+
+## Swing の例
+
+`examples/jvm/java-interop.lisp` はこのパッケージだけで小さなウィンドウを構築します (ディスプレイのあるマシンで、インタプリタ実行するか `.class` にコンパイルして実行してください)。
+
+```console
+(defvar *frame* (java:new "javax.swing.JFrame" "java interop"))
+(defvar *label* (java:new "javax.swing.JLabel" "click count: 0"))
+(defvar *button* (java:new "javax.swing.JButton" "Increment"))
+(defvar *panel* (java:new "javax.swing.JPanel" (java:new "java.awt.BorderLayout" 12 12)))
+(defvar *count* 0)
+
+(java:call *button* "addActionListener"
+  (java:proxy "java.awt.event.ActionListener"
+    (lambda (method event)
+      (setq *count* (+ *count* 1))
+      (java:call *label* "setText"
+        (concatenate 'string "click count: " (princ-to-string *count*))))))
+
+(java:call *panel* "add" *label* (java:field "java.awt.BorderLayout" "CENTER"))
+(java:call *panel* "add" *button* (java:field "java.awt.BorderLayout" "SOUTH"))
+
+(java:call *frame* "setContentPane" *panel*)
+(java:call *frame* "setDefaultCloseOperation"
+  (java:field "javax.swing.WindowConstants" "DISPOSE_ON_CLOSE"))
+(java:call *frame* "setSize" 360 180)
+(java:call *frame* "setVisible" t)
+```
+
+`examples/jvm/swing.lisp` はこの 5 つの関数の上に再利用可能なグリッドウィンドウのヘルパーを構築しています。ヘルパーは独自の `swing` [パッケージ](../reference/packages.md)にまとめられており、`(require :swing "swing.lisp")` で取り込みます。`examples/jvm/life-gui.lisp` はこれを使って (`swing:grid-window`、`swing:paint`、...) ライフゲームをアニメーション表示します。
+
+## Java ライブラリ
+
+プログラムの Java クラスパスは、`java:` 呼び出しが JDK の外で使うライブラリを保持します。`--java-classpath` はディレクトリと jar を `java -cp` と同じ区切りで指定し、`--java-dep` はライブラリを Maven 座標 (`groupId:artifactId:version`、繰り返し指定可) で、その依存ごと指定します。インタプリタはクラスパスからクラスを読み込み、JVM コンパイルはクラスパスに対して呼び出しを解決し、Clojure プログラムのホスト形式は JDK のクラスと同じようにクラスパスのクラスを参照します。
+
+```console
+$ rontolisp app.lisp --java-dep com.google.guava:guava:33.4.0-jre
+$ rontolisp app.lisp -o app.jar --java-dep com.google.guava:guava:33.4.0-jre
+$ java -jar app.jar
+```
+
+`--java-dep` は Maven がプロジェクトの依存を解決するのと同じ方法で解決します。同じライブラリの 2 つのバージョンが出会うと、要求した座標に近い方が勝ち、jar は `--java-classpath` のエントリーの後に Maven のクラスパス順で並びます。取得元は Maven Central で、`mvn` と同じローカルリポジトリ (`~/.m2/repository`、または `settings.xml` の `localRepository`) を経由します。SNAPSHOT、`LATEST`、`RELEASE`、バージョン範囲は、指定したものも依存の POM にあるものも、Maven と同じく Central の `maven-metadata.xml` で解決します。そのメタデータはローカルリポジトリに保存し、Central に問い合わせ直すのは 1 日に 1 回です。Central になかったファイルも同じです。Maven と同じく Central は SNAPSHOT を配布しない扱いで、SNAPSHOT は `--java-repository` で指定したリポジトリ、または `--java-snapshots` で加えた Central の snapshot リポジトリだけから探します。
+
+Clojars、社内リポジトリ、`file:` ディレクトリなど、Central にないライブラリは `--java-repository [ID=]URL` (繰り返し指定可。`https:`、`http:`、`file:`) で指定します。これらのリポジトリは Central の後に、指定した順で検索します。`ID` (省略時は `java-repository-N`) は `settings.xml` が照合する名前で、`<server>` がその認証情報を与え、`mirrorOf` がこの ID を指す `<mirror>` は URL を置き換えます。ID を `central` にすると、リポジトリを追加せず Central の URL を置き換えます。
+
+```console
+$ rontolisp app.lisp --java-dep clj-http:clj-http:3.12.3 \
+    --java-repository clojars=https://repo.clojars.org/
+```
+
+`--java-snapshots` は値を取らず、Central の snapshot リポジトリ `https://central.sonatype.com/repository/maven-snapshots/` を加えます。そこに公開された `-SNAPSHOT` ライブラリ（このリポジトリの servlet-httpserver などのサイドモジュールがそうです）を使うときに指定します。`--java-repository central-snapshots=https://central.sonatype.com/repository/maven-snapshots/` を最後に指定したのと同じで、ID は `central-snapshots` なので `settings.xml` から指定できます。この ID の `--java-repository` を同時に指定すると拒否します。`--java-repository` と同じく、`--java-dep` か `--java-source-dep` が必要です。
+
+```console
+$ rontolisp app.lisp --java-source-dep am.ik.servlet:servlet-httpserver:0.1.0-SNAPSHOT \
+    --java-snapshots
+```
+
+ローカルリポジトリにある SNAPSHOT は、そのリポジトリの更新ポリシー（Maven の既定は `daily`）が `maven-metadata.xml` を取り直すまで使い続けるため、その後にデプロイされたものは最長 1 日見えません。`--java-update-snapshots` は Maven の `--update-snapshots`（`mvn -U`）にならった値を取らないフラグで、その実行では全リポジトリに問い合わせ直します。対象は `--java-dep` と `--java-source-dep` の SNAPSHOT、`LATEST`、`RELEASE`、バージョン範囲（Clojure プログラムの `deps.edn` も同じ）で、どのリポジトリが配布していても同じです。`--java-snapshots` は不要です。Maven プラグインは Maven 自身が解決するので、そちらでは `mvn -U` が効きます。
+
+```console
+$ rontolisp app.lisp --java-dep am.ik.servlet:servlet-httpserver:0.1.0-SNAPSHOT \
+    --java-snapshots --java-update-snapshots
+```
+
+`settings.xml` は `mvn` と同じく効きます。読むのは `~/.m2/settings.xml` で、`MAVEN_HOME` が設定されていれば `$MAVEN_HOME/conf/settings.xml` の上に重ねます。`offline` に従い、Central を覆うミラーがあれば Central の代わりにそのミラーへ問い合わせ (`blocked` のミラーなら失敗します)、プロキシがあればそれを経由します。問い合わせ先のリポジトリの `<server>` からは、Basic 認証の認証情報、`httpHeaders`、タイムアウトを使います。`mvn --encrypt-password` で暗号化したパスワードは、`~/.m2/settings-security.xml` のマスターパスワードで復号します。
+
+有効な `settings.xml` のプロファイル（`<activeProfiles>` に挙げたもの、または `<activation>` が成り立つもの。グローバルとユーザーの両ファイルを合わせます）の `<repositories>` は、`mvn` と同じ順で検索します。Central と `--java-repository` で指定したものより前に置き、後に定義したプロファイルを先に、1 つのプロファイル内では記述順です。それらと同じ id のプロファイルのリポジトリは、そのリポジトリを置き換えます。
+
+Clojure プログラムの `deps.edn` の依存のうちクラスを含むものは、これらの後にクラスパスへ加わります ([プロジェクト: deps.edn](../clojure/semantics.md#projects-depsedn))。
+
+出力ごとに持ち運ぶもの:
+
+- プログラム jar (`-o app.jar`) はクラスパスを隣の `app-lib/` にコピーし、マニフェストの `Class-Path` でそのコピーを指します。そのため `java -jar app.jar` と `native-image -jar app.jar` がそれを見つけます。配布するときは jar と `app-lib/` を一緒に配ってください。
+- war (`-o app.war`) は jar を `WEB-INF/lib/` に、ディレクトリのファイルを `WEB-INF/classes/` に格納します。
+- クラス (`-o Prog.class`) は何も持ち運びません。`java -cp .:lib/guava.jar Prog` のようにクラスパスを付けて実行してください。
+- ライブラリ jar (`--no-main`) もクラスパスを持ち運びません。その pom (`--maven-coordinates`、`--emit-pom`) が `--java-dep` の座標を依存として列挙し、利用側の Maven がそれを解決します。`--java-classpath` のエントリーは利用側が用意します。
+
+クラスパスにあるもののリンクできないクラスへの呼び出しは、クラッシュではなく拒否に
+なります。ここにない言語に対してコンパイルされた依存の Java クラス（`clojure.lang`
+に対する Clojure ライブラリ自身のクラス、たとえば `reitit.Trie`）への `java:`
+呼び出しは、不足クラスを名指しする `Cannot link class C: missing class M`
+で失敗します。スーパークラスやインターフェースが不足クラスであるクラス
+（persistent-sorted-set の `clojure.lang.APersistentSet` を継承する `PersistentSortedSet`）も同様です。不足クラスを静的イニシャライザが必要とするクラス（その型の静的
+フィールドを持つもの、たとえば `sci.impl.FISupport`）も同じ拒否になります。その
+`ExceptionInInitializerError` が不足クラスを運ぶため、構築・呼び出し・静的
+フィールド読みのいずれも同じ拒否を答え、本当に壊れたイニシャライザ（一つも不足
+クラスを名指さない失敗）は従来どおり伝播します。この拒否は他の失敗と同様に捕捉できます。インタプリタでも JVM でも
+`(catch Exception e ...)` が受けます。クラスファイルからコンパイルが解決した直接
+呼び出しも、実行時に同じように拒否します。`clojure.lang`
+のブリッジは提供しません。そのようなクラスを必要とするライブラリはポータブルな
+経路も提供しており、リーダーは先に名前があればライブラリの `:rontolisp`
+ブランチを取ります。スーパークラスかインターフェースが不足しているクラスを `ns`
+で import する Clojure の名前空間は、jar がその隣に ClojureScript 版を持っていれば
+そちらから読みます。persistent-sorted-set がその例です
+（[仕様との差異](../clojure/deviations.md)）。jar の `.clj` は実行されません。
+
+GraalVM ネイティブバイナリは実行時にクラスを読み込めないため、そこではクラスパスはコンパイルが呼び出しを解決する対象（Clojure のホスト形式の意味を含む）と、その出力が持ち運ぶものにだけ届きます。
+
+## ネイティブイメージ
+
+コンパイル済みの `java:` プログラムは GraalVM ネイティブイメージにビルドできます。すべての呼び出しが実行前に解決されるプログラムには何も要りません。`--java-static` でコンパイルし ([リフレクションなしのコンパイル](#compiling-without-reflection))、その jar をそのままビルドしてください。そのプログラムの `java:reify` と `java:proxy` のオブジェクト、およびインターフェースが期待される箇所に渡す関数は、コンパイル時に生成するクラスなので、これらにも何も要りません。実行時解決に回る呼び出しはリフレクションを使うので到達可能性メタデータが必要で、トレーシングエージェントが実行から記録します。
+
+```bash
+rontolisp prog.lisp -o prog.jar
+java -agentlib:native-image-agent=config-output-dir=config -jar prog.jar
+native-image -jar prog.jar -H:ConfigurationFileDirectories=config
+```
+
+メタデータがカバーするのはトレースした実行が行った呼び出しだけです。その実行が選ばなかったオーバーロードを選ぶ呼び出しは、イメージ内で `MissingReflectionRegistrationError` になります。たとえばクラスの分からない `sb` に対する `(java:call sb "append" x)` に、整数だけを渡した実行の後で浮動小数点数を渡した場合です。プログラムが使うすべての呼び出しの形を通る実行でトレースするか、型を宣言して呼び出しを解決させてください。
+
+## 制限
+
+- **JVM 専用**。インタプリタ (`java -jar rontolisp.jar`) と JVM コンパイル済みクラス (`java Prog`) で動作します。WASM バックエンドでは動作せず、連携クラスのリフレクションメタデータを持たない GraalVM ネイティブバイナリでのインタプリタ実行もできません (ネイティブバイナリで `java:` プログラムを `.class` に*コンパイルする*ことは可能です)。
+- コンパイル済みクラスでは `java:` の関数は呼び出し位置でのみ使えます。第一級の関数値を持たないため、`#'java:call` や `(funcall 'java:new ...)` はコンパイルエラーになります (代わりに自前の `defun` でラップしてください)。埋め込み `eval` ランタイムもこれらを認識しません。また `java:` を使うコンパイル済みプログラムの実行には、呼び出しを解決したリリースの JRE が必要で、実行時解決に回る呼び出しを含むものには、rontolisp をビルドした JRE と同等以上に新しい JRE が必要です。
+- `|false|` 以外のシンボル、ドット対 (非真リスト)、多次元 (ランク 2 以上) の配列はマーシャリングされません。代わりに `java:new`/`java:call` で構築した Java コレクションか、`java:handle` または `java:view` として渡してください。
+- 返された `java.util.List` は (Java 配列と異なり) 不透明な `java` オブジェクトのままです。同一性と可変性が保たれるため、リスト関数ではなく `java:call` (`"get"`、`"size"` など) で読み取ってください。
+- オーバーロード解決は引数コストによるもので、Java の完全な型推論規則ではありません。曖昧な呼び出しは曖昧性エラーを出さず、最小コスト (次に最小シグネチャ) の候補に解決されます。パラメータタグでオーバーロードを明示できます。
+- これは完全なホストリフレクションブリッジであり任意の Java コードを実行できます。`java:` を使うプログラムは他の JVM プログラムと同じ信頼度で扱ってください。

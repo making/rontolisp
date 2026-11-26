@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <parent><groupId>test.mgmt</groupId><artifactId>inherit-import-parent</artifactId><version>1</version></parent>
+  <groupId>test.mgmt</groupId>
+  <artifactId>inherit-import-child</artifactId>
+  <version>1</version>
+  <properties>
+    <bom.version>2</bom.version>
+  </properties>
+  <dependencies>
+      <dependency><groupId>test.lib</groupId><artifactId>q</artifactId></dependency>
+  </dependencies>
+</project>

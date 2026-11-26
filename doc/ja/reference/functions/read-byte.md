@@ -1,0 +1,21 @@
+# read-byte
+
+`(read-byte stream &optional eof-error-p eof-value)`
+
+バイナリ入力ストリーム（整数の `:element-type` で開いたストリーム）から要素を 1 つ読み込み、整数として返します。`'(unsigned-byte 8)` なら 0 から 255 の 1 バイト、より広い型や符号付きの型なら [`open`](open.md) が説明する要素を、リトルエンディアンのオクテットから組み立てます（`'(signed-byte 16)` は 2 オクテットを読み、-32768 から 32767 を返します）。ファイル終端ではデフォルトで `end-of-file` コンディションを通知します（`end-of-file` としても `error` としても捕捉できます）。`eof-error-p` に `nil` を渡すと、代わりに `eof-value`（デフォルト `nil`）を返します。4 つのバックエンドすべてで動作します。バイトは生のまま通過し、0（NUL）、10（LF）、34（`"`）といった値も解釈されません。
+
+`stream` は他のストリーム操作と同じ指定子を受け取ります。`t` はプロセスの標準入力、`nil` は現在の `*standard-input*`（束縛しない限り `t` を保持します）を表します。したがって `(read-byte *standard-input*)` は標準入力から生のオクテットを読み込みます。バイト指向のフィルタが入力を読む方法です。
+
+ファイルシステムに触れるため、`read-byte` はここでは実行可能な例ではなく静的に示します。
+
+```console
+(with-open-file (in "data.bin" :element-type '(unsigned-byte 8))
+  (read-byte in)         ; => 137
+  (read-byte in nil nil)) ; => nil at end of file
+
+(read-byte *standard-input* nil nil) ; => the next octet of stdin, nil at EOF
+```
+
+最初の呼び出しは `data.bin` の次のバイトを返します。2 番目の形式はエラーを通知せずにファイル終端まで読み進め、バイトが尽きると `nil` を返します。ファイル全体を読むときの一般的なループ終了判定です。
+
+ストリームが扱う要素は1種類です。文字ストリームへの `read-byte` と、バイナリストリームへの `read-line` / `read-char` は `type-error` をシグナルします（[`open`](open.md)）。

@@ -1,0 +1,457 @@
+package am.ik.rontolisp.eval;
+
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.UncheckedIOException;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Set;
+
+import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispNames;
+import am.ik.rontolisp.LispNil;
+import am.ik.rontolisp.LispSymbol;
+import am.ik.rontolisp.LispTrees;
+import am.ik.rontolisp.LispTrue;
+import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.PackageRegistry;
+import am.ik.rontolisp.SourceProvenance;
+import am.ik.rontolisp.macro.IgnoredArgument;
+import am.ik.rontolisp.macro.LispMacroExpander;
+import am.ik.rontolisp.reader.Features;
+import am.ik.rontolisp.reader.LispReader;
+import org.jspecify.annotations.Nullable;
+
+/**
+ * The handle-side pushback of {@code unread-char} on the compile paths
+ * ({@code unread-char.lisp}): the character-reading built-ins have no per-stream pushback
+ * in any runtime -- a WASI fd, a socket and a string input stream can all be read but not
+ * un-read -- so a program that uses {@code unread-char} parks the character in a
+ * Lisp-level cell on the stream value ({@code LispLayout.STREAM_PUSHBACK_CELL}) and has
+ * its {@code read-char} / {@code read-char-no-hang} / {@code peek-char} /
+ * {@code read-line} / {@code unread-char} call sites rewritten onto the defuns that
+ * consult it. The compiled runtimes themselves know nothing; the pushback is ordinary
+ * Lisp, so both compile backends answer identically by construction.
+ *
+ * <p>
+ * A program that never names {@code unread-char} is returned unchanged, so nothing that
+ * compiled before this pass existed moves a byte. The interpreter answers the same
+ * contract in Java ({@code Environment}), because its built-ins are function values
+ * rather than call sites a pre-pass could rewrite.
+ *
+ * <p>
+ * Runs AFTER {@link GrayStreamsLibrary#process(List)}: a Gray dispatch helper's FALLBACK
+ * branch is the handle arm, so its {@code (read-char stream ...)} /
+ * {@code (unread-char character stream)} calls are exactly the call sites that must reach
+ * the cell.
+ */
+public final class UnreadCharLibrary {
+
+	@Nullable private static volatile List<LispVal> forms;
+
+	private UnreadCharLibrary() {
+	}
+
+	/** The pushback defun a rewritten {@code unread-char} call site names. */
+	static final String PUSH = LispNames.UNREAD_CHAR_PUSH_INTERNAL;
+
+	/** The pushback defun a rewritten {@code read-char} call site names. */
+	static final String READ_CHAR = LispNames.UNREAD_READ_CHAR_INTERNAL;
+
+	/** The pushback defun a rewritten {@code peek-char} call site names. */
+	static final String PEEK_CHAR = LispNames.UNREAD_PEEK_CHAR_INTERNAL;
+
+	/** The pushback defun a rewritten {@code read-line} call site names. */
+	static final String READ_LINE = LispNames.UNREAD_READ_LINE_INTERNAL;
+
+	/** The pushback defun a rewritten one-argument {@code file-position} names. */
+	static final String FILE_POSITION = LispNames.UNREAD_FILE_POSITION_INTERNAL;
+
+	/** The pushback defun a rewritten two-argument {@code file-position} names. */
+	static final String FILE_POSITION_SET = LispNames.UNREAD_FILE_POSITION_SET_INTERNAL;
+
+	/** The pushback defun a rewritten {@code listen} call site names. */
+	static final String LISTEN = LispNames.UNREAD_LISTEN_INTERNAL;
+
+	/**
+	 * The library's own defuns, whose bodies call the very built-ins the rewrite targets:
+	 * rewriting those into the pushback defuns again would recurse forever.
+	 */
+	private static final Set<String> LIBRARY_DEFUNS = Set.of(PUSH, READ_CHAR, PEEK_CHAR, READ_LINE, FILE_POSITION,
+			FILE_POSITION_SET, LISTEN, "%UNREAD-KEY", "%UNREAD-PARKED", "%UNREAD-STORE", "%UNREAD-CHAR-TAKE",
+			"%UNREAD-PEEK-STOPS-P");
+
+	/**
+	 * The two {@code file-position} defuns, spliced only for a program that names
+	 * {@code file-position} itself or holds an indexed {@code with-input-from-string}
+	 * (whose expansion asks it): their bodies name it, and a backend gates its position
+	 * runtime on that name, so splicing them into every unread-char program would grow
+	 * each one by a runtime it never calls.
+	 */
+	private static final Set<String> FILE_POSITION_DEFUNS = Set.of(FILE_POSITION, FILE_POSITION_SET);
+
+	/**
+	 * The defun a host holds when it carries the pushback: every rewritten read calls it.
+	 */
+	private static final String HOST_PUSHBACK = PackageRegistry.qualifyInternal(LispNames.RONTOLISP_PKG,
+			"%UNREAD-CHAR-TAKE");
+
+	/**
+	 * Returns the parsed pushback definitions. Parsed once and cached.
+	 * @return the library forms
+	 */
+	public static List<LispVal> forms() {
+		List<LispVal> cached = forms;
+		if (cached == null) {
+			synchronized (UnreadCharLibrary.class) {
+				cached = forms;
+				if (cached == null) {
+					cached = List.copyOf(LispReader.readAllFromString(readSource(), Features.INTERPRETER));
+					forms = cached;
+				}
+			}
+		}
+		return cached;
+	}
+
+	private static String readSource() {
+		try (InputStream in = UnreadCharLibrary.class.getResourceAsStream("unread-char.lisp")) {
+			if (in == null) {
+				throw new IllegalStateException("unread-char.lisp is missing from the classpath");
+			}
+			return new String(in.readAllBytes(), StandardCharsets.UTF_8);
+		}
+		catch (IOException ex) {
+			throw new UncheckedIOException(ex);
+		}
+	}
+
+	/**
+	 * Splices the pushback definitions and rewrites the character-read call sites when
+	 * the program uses {@code unread-char}; returns the program unchanged otherwise.
+	 * @param program the top-level forms (after the Gray-dispatch rewrite)
+	 * @return the program with the pushback spliced and call sites rewritten
+	 */
+	public static List<LispVal> process(List<LispVal> program) {
+		return process(program, null);
+	}
+
+	/**
+	 * {@link #process(List)} for a FRAGMENT ({@link LinkedDefinitions}) as well: where
+	 * the host carries the pushback, a stream it parked a character on may reach any read
+	 * of the fragment, so every read is rewritten whatever the fragment's own forms name
+	 * (the defuns the host holds are called there, {@code cli/JvmRunTimeLowering} drops
+	 * them).
+	 * @param program the top-level forms (after the Gray-dispatch rewrite)
+	 * @param linked what the classes a fragment links against define, or {@code null} for
+	 * a whole program
+	 * @return the program with the pushback spliced and call sites rewritten
+	 */
+	public static List<LispVal> process(List<LispVal> program, @Nullable LinkedDefinitions linked) {
+		boolean hostPushback = linked != null && linked.functions().contains(HOST_PUSHBACK);
+		if (!hostPushback && !usesUnreadChar(program)) {
+			return program;
+		}
+		boolean filePosition = namesFilePosition(program) || LispMacroExpander.indexesStringInput(program);
+		List<LispVal> out = new ArrayList<>();
+		for (LispVal form : forms()) {
+			if (filePosition || !(form instanceof LispCons defun && defun.cdr() instanceof LispCons rest
+					&& rest.car() instanceof LispSymbol name && FILE_POSITION_DEFUNS.contains(member(name.name())))) {
+				out.add(form);
+			}
+		}
+		for (LispVal form : program) {
+			out.add(rewrite(form));
+		}
+		return out;
+	}
+
+	/**
+	 * Whether the program names {@code unread-char} at all -- the one trigger. Quoted
+	 * data counts: over-triggering costs a splice the program does not use, while missing
+	 * a call site costs the character.
+	 * @param program the top-level forms
+	 * @return whether the pushback must be spliced
+	 */
+	public static boolean usesUnreadChar(List<LispVal> program) {
+		for (LispVal form : program) {
+			if (names(form)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private static boolean namesFilePosition(List<LispVal> program) {
+		for (LispVal form : program) {
+			if (namesFilePosition(form)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private static boolean namesFilePosition(LispVal form) {
+		while (form instanceof LispCons cons) {
+			if (namesFilePosition(cons.car())) {
+				return true;
+			}
+			form = cons.cdr();
+		}
+		if (form instanceof LispSymbol sym) {
+			return LispNames.FILE_POSITION.equals(member(sym.name()));
+		}
+		return false;
+	}
+
+	private static boolean names(LispVal form) {
+		while (form instanceof LispCons cons) {
+			if (names(cons.car())) {
+				return true;
+			}
+			form = cons.cdr();
+		}
+		if (form instanceof LispSymbol sym) {
+			return LispNames.UNREAD_CHAR.equals(member(sym.name()));
+		}
+		return false;
+	}
+
+	private static LispVal rewrite(LispVal form) {
+		if (!(form instanceof LispCons cons)) {
+			return form;
+		}
+		if (cons.car() instanceof LispSymbol op) {
+			String opName = member(op.name());
+			// Quoted data is data, and the library's own defuns must keep calling the
+			// built-ins their bodies name.
+			if (LispNames.isQuote(opName) || isLibraryDefun(cons, opName)) {
+				return form;
+			}
+			// An indexed with-input-from-string asks its stream's file-position in an
+			// expansion the expression compilers build after this pass, so it is
+			// expanded here and the query rewritten with the rest: a character parked
+			// on the stream then counts as unread.
+			if (LispMacroExpander.isIndexedWithInputFromString(cons)) {
+				return rewrite(SourceProvenance.inherit(cons, LispMacroExpander.expandWithInputFromString(cons, true)));
+			}
+			// A read passing the recursive-p it ignores is rewritten without it first,
+			// so the shapes below never meet the extra argument.
+			LispVal withoutIgnored = IgnoredArgument.drop(cons, opName);
+			if (withoutIgnored != cons) {
+				return rewrite(withoutIgnored);
+			}
+			LispVal call = rewriteCall(cons, opName);
+			if (call != null) {
+				// A genuine rewrite (a different call replaces this one): the
+				// replacement stands for the same source text, so it inherits the
+				// position (.kb/source-positions.md, Half 2).
+				return SourceProvenance.inherit(cons, call);
+			}
+			LispVal structural = rewriteStructuralForm(cons, opName);
+			if (structural != null) {
+				return structural;
+			}
+		}
+		return rewriteElements(cons);
+	}
+
+	private static boolean isLibraryDefun(LispCons cons, String opName) {
+		return LispNames.DEFUN.equals(opName) && cons.cdr() instanceof LispCons rest
+				&& rest.car() instanceof LispSymbol name && LIBRARY_DEFUNS.contains(member(name.name()));
+	}
+
+	/**
+	 * The pushback rewrite of one call, or null when the form is not one. Absent optional
+	 * arguments become their defaults LITERALLY -- {@code t}/{@code nil} evaluate to
+	 * themselves, so no evaluation order changes -- and {@code read-line}'s eof-error-p
+	 * defaults to nil, the built-in's lite convention.
+	 */
+	@Nullable private static LispVal rewriteCall(LispCons cons, String opName) {
+		List<LispVal> parts = cons.toList();
+		int args = parts.size() - 1;
+		switch (opName) {
+			case LispNames.UNREAD_CHAR -> {
+				if (args == 1 || args == 2) {
+					return listOf(defunSymbol(PUSH), rewrite(parts.get(1)),
+							args >= 2 ? rewrite(parts.get(2)) : LispNil.INSTANCE);
+				}
+			}
+			// read-char-no-hang IS read-char here (no source rontolisp can open reports
+			// "would block" separately), so the two share the pushback defun.
+			case LispNames.READ_CHAR, LispNames.READ_CHAR_NO_HANG -> {
+				if (args <= 3) {
+					return listOf(defunSymbol(READ_CHAR), arg(parts, 1, LispNil.INSTANCE),
+							arg(parts, 2, LispTrue.INSTANCE), arg(parts, 3, LispNil.INSTANCE));
+				}
+			}
+			case LispNames.READ_LINE -> {
+				if (args <= 3) {
+					return listOf(defunSymbol(READ_LINE), arg(parts, 1, LispNil.INSTANCE),
+							arg(parts, 2, LispNil.INSTANCE), arg(parts, 3, LispNil.INSTANCE));
+				}
+			}
+			// A parked character is not consumed yet: the query answers the offset
+			// before it, and a set drops it.
+			case LispNames.FILE_POSITION -> {
+				if (args == 1) {
+					return listOf(defunSymbol(FILE_POSITION), rewrite(parts.get(1)));
+				}
+				if (args == 2) {
+					return listOf(defunSymbol(FILE_POSITION_SET), rewrite(parts.get(1)), rewrite(parts.get(2)));
+				}
+			}
+			case LispNames.PEEK_CHAR -> {
+				if (args <= 4) {
+					return listOf(defunSymbol(PEEK_CHAR), arg(parts, 1, LispNil.INSTANCE),
+							arg(parts, 2, LispNil.INSTANCE), arg(parts, 3, LispTrue.INSTANCE),
+							arg(parts, 4, LispNil.INSTANCE));
+				}
+			}
+			// A parked character counts as one that remains: listen consults the
+			// cell first, then the stream. Only where unread-char is named, like
+			// every other rewrite here.
+			case LispNames.LISTEN -> {
+				if (args <= 1) {
+					return listOf(defunSymbol(LISTEN), arg(parts, 1, LispNil.INSTANCE));
+				}
+			}
+			default -> {
+				return null;
+			}
+		}
+		return null;
+	}
+
+	private static LispVal arg(List<LispVal> parts, int index, LispVal missing) {
+		return index < parts.size() ? rewrite(parts.get(index)) : missing;
+	}
+
+	/**
+	 * The forms whose leading elements are STRUCTURE rather than calls -- a lambda list,
+	 * a binding variable, a class name and its slot specs. Rewriting those would turn a
+	 * parameter named after one of the read built-ins into a call; only the trailing body
+	 * / value positions are rewritten. Returns null when the head is not one of them.
+	 */
+	@Nullable private static LispVal rewriteStructuralForm(LispCons cons, String opName) {
+		List<LispVal> parts = cons.toList();
+		switch (opName) {
+			case LispNames.LAMBDA, LispNames.DESTRUCTURING_BIND -> {
+				return keepThenRewrite(cons, 2);
+			}
+			case LispNames.DEFUN, LispNames.DEFMACRO -> {
+				return keepThenRewrite(cons, 3);
+			}
+			case LispNames.DEFMETHOD -> {
+				// (defmethod name [qualifier] lambda-list body...): the lambda list is
+				// the first list-valued element after the name.
+				int body = 2;
+				while (body < parts.size() && !(parts.get(body) instanceof LispCons)
+						&& !(parts.get(body) instanceof LispNil)) {
+					body++;
+				}
+				return keepThenRewrite(cons, Math.min(body + 1, parts.size()));
+			}
+			case LispNames.LET, LispNames.LET_STAR -> {
+				List<LispVal> out = new ArrayList<>();
+				out.add(parts.get(0));
+				out.add(parts.size() > 1 ? rewriteBindings(parts.get(1)) : LispNil.INSTANCE);
+				for (int i = 2; i < parts.size(); i++) {
+					out.add(rewrite(parts.get(i)));
+				}
+				return rebuilt(cons, out);
+			}
+			case LispNames.FLET, LispNames.LABELS, LispNames.MACROLET -> {
+				List<LispVal> out = new ArrayList<>();
+				out.add(parts.get(0));
+				out.add(parts.size() > 1 ? rewriteLocalFunctions(parts.get(1)) : LispNil.INSTANCE);
+				for (int i = 2; i < parts.size(); i++) {
+					out.add(rewrite(parts.get(i)));
+				}
+				return rebuilt(cons, out);
+			}
+			case LispNames.DEFCLASS, LispNames.DEFINE_CONDITION -> {
+				// name, superclasses and the slot list stay verbatim; the class options
+				// after them are ordinary code (a :report lambda reads and prints).
+				return keepThenRewrite(cons, 4);
+			}
+			case LispNames.DEFSTRUCT -> {
+				return rebuilt(cons, parts);
+			}
+			default -> {
+				return null;
+			}
+		}
+	}
+
+	private static LispVal keepThenRewrite(LispCons cons, int firstRewritten) {
+		List<LispVal> parts = cons.toList();
+		List<LispVal> out = new ArrayList<>(parts.size());
+		for (int i = 0; i < parts.size(); i++) {
+			out.add(i < firstRewritten ? parts.get(i) : rewrite(parts.get(i)));
+		}
+		return rebuilt(cons, out);
+	}
+
+	// ((var init) ...): the variable half is a name, the init half is code.
+	private static LispVal rewriteBindings(LispVal bindings) {
+		if (!(bindings instanceof LispCons bindingsCons)) {
+			return bindings;
+		}
+		List<LispVal> out = new ArrayList<>();
+		for (LispVal binding : bindingsCons.toList()) {
+			out.add(binding instanceof LispCons pair ? keepThenRewrite(pair, 1) : binding);
+		}
+		return rebuilt(bindingsCons, out);
+	}
+
+	// ((name lambda-list body...) ...): only the body is code.
+	private static LispVal rewriteLocalFunctions(LispVal functions) {
+		if (!(functions instanceof LispCons functionsCons)) {
+			return functions;
+		}
+		List<LispVal> out = new ArrayList<>();
+		for (LispVal fn : functionsCons.toList()) {
+			out.add(fn instanceof LispCons local ? keepThenRewrite(local, 2) : fn);
+		}
+		return rebuilt(functionsCons, out);
+	}
+
+	// The generic recursion rewrites list ELEMENTS; a dotted tail is data, never a call.
+	// Identity-preserving via the default rebuild (LispCons::rebuilt): an element that
+	// rewrite() hands back unchanged keeps its cell, so a form with nothing below it to
+	// rewrite is returned exactly as it came in.
+	private static LispVal rewriteElements(LispCons cons) {
+		return LispTrees.rebuildSpine(cons, node -> node instanceof LispCons ? null : node, UnreadCharLibrary::rewrite);
+	}
+
+	/**
+	 * The proper list an element-wise rewrite should return: {@code original} itself when
+	 * {@code elements} is exactly what it already held ({@link LispCons#rebuiltList}), a
+	 * fresh list carrying {@code original}'s source position otherwise
+	 * ({@link SourceProvenance#inherit}) -- the cons-identity rule every AST pass owes
+	 * (.kb/source-positions.md, Half 1 and Half 2).
+	 */
+	private static LispVal rebuilt(LispCons original, List<LispVal> elements) {
+		return SourceProvenance.inherit(original, LispCons.rebuiltList(original, elements));
+	}
+
+	private static LispSymbol defunSymbol(String name) {
+		return new LispSymbol(LispNames.RONTOLISP_PKG + "::" + name);
+	}
+
+	private static String member(String name) {
+		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(name);
+		return qn == null ? name : qn.member();
+	}
+
+	private static LispVal listOf(LispVal... items) {
+		LispVal result = LispNil.INSTANCE;
+		for (int i = items.length - 1; i >= 0; i--) {
+			result = new LispCons(items[i], result);
+		}
+		return result;
+	}
+
+}

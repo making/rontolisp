@@ -1,0 +1,173 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+		 xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+		 xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+	<modelVersion>4.0.0</modelVersion>
+
+	<groupId>com.example</groupId>
+	<artifactId>yavi</artifactId>
+	<version>1.0.0-SNAPSHOT</version>
+
+	<!--
+		Two programs: target/member.wasm and target/booking.wasm (Preview 1),
+		target/member-component.wasm and target/booking-component.wasm for `wasmtime run`;
+		`mvn exec:exec` runs Member on the JDK, `-Drontolisp.mainClass=yavi.Booking` Booking.
+	-->
+
+	<properties>
+		<java.version>25</java.version>
+		<maven.compiler.release>${java.version}</maven.compiler.release>
+		<project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+		<rontolisp.version>0.1.0-SNAPSHOT</rontolisp.version>
+		<rontolisp.mainClass>yavi.Member</rontolisp.mainClass>
+		<yavi.version>0.18.1</yavi.version>
+	</properties>
+
+	<dependencies>
+		<dependency>
+			<groupId>am.ik.yavi</groupId>
+			<artifactId>yavi</artifactId>
+			<version>${yavi.version}</version>
+		</dependency>
+	</dependencies>
+
+	<!-- The SNAPSHOTs: the plugin, the rontolisp it embeds. -->
+	<pluginRepositories>
+		<pluginRepository>
+			<id>central-snapshots</id>
+			<url>https://central.sonatype.com/repository/maven-snapshots/</url>
+			<releases>
+				<enabled>false</enabled>
+			</releases>
+			<snapshots>
+				<enabled>true</enabled>
+			</snapshots>
+		</pluginRepository>
+	</pluginRepositories>
+
+	<build>
+		<!-- target/yavi.wasm, ... -->
+		<finalName>${project.artifactId}</finalName>
+		<plugins>
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-resources-plugin</artifactId>
+				<version>3.4.0</version>
+			</plugin>
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-compiler-plugin</artifactId>
+				<version>3.13.0</version>
+			</plugin>
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-surefire-plugin</artifactId>
+				<version>3.5.2</version>
+			</plugin>
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-jar-plugin</artifactId>
+				<version>3.5.0</version>
+			</plugin>
+			<plugin>
+				<groupId>am.ik.rontolisp</groupId>
+				<artifactId>rontolisp-maven-plugin</artifactId>
+				<version>${rontolisp.version}</version>
+				<executions>
+					<execution>
+						<id>member</id>
+						<goals>
+							<goal>wasm</goal>
+						</goals>
+						<configuration>
+							<mainClass>yavi.Member</mainClass>
+							<outputFile>${project.build.directory}/member.wasm</outputFile>
+						</configuration>
+					</execution>
+					<execution>
+						<id>member-component</id>
+						<goals>
+							<goal>wasm</goal>
+						</goals>
+						<configuration>
+							<component>true</component>
+							<mainClass>yavi.Member</mainClass>
+							<outputFile>${project.build.directory}/member-component.wasm</outputFile>
+						</configuration>
+					</execution>
+					<execution>
+						<id>booking</id>
+						<goals>
+							<goal>wasm</goal>
+						</goals>
+						<configuration>
+							<mainClass>yavi.Booking</mainClass>
+							<outputFile>${project.build.directory}/booking.wasm</outputFile>
+						</configuration>
+					</execution>
+					<execution>
+						<id>booking-component</id>
+						<goals>
+							<goal>wasm</goal>
+						</goals>
+						<configuration>
+							<component>true</component>
+							<mainClass>yavi.Booking</mainClass>
+							<outputFile>${project.build.directory}/booking-component.wasm</outputFile>
+						</configuration>
+					</execution>
+				</executions>
+			</plugin>
+			<!--
+				`mvn exec:exec`: the main class on the JDK running Maven, with the compile
+				class path (a war's `provided` dependencies included, which a servlet container
+				would bring) and the environment Maven has.
+			-->
+			<plugin>
+				<groupId>org.codehaus.mojo</groupId>
+				<artifactId>exec-maven-plugin</artifactId>
+				<version>3.6.3</version>
+				<configuration>
+					<executable>${java.home}/bin/java</executable>
+					<classpathScope>compile</classpathScope>
+					<arguments>
+						<argument>-classpath</argument>
+						<classpath/>
+						<argument>${rontolisp.mainClass}</argument>
+					</arguments>
+				</configuration>
+			</plugin>
+		</plugins>
+	</build>
+
+	<profiles>
+		<!--
+			`mvn -Pnative package` adds a native executable, target/<finalName>. It needs a
+			rontolisp carrying the native toolchain for this machine, which the jar on Maven
+			Central does not: one installed from a checkout after rontolisp-native/build.sh
+			(`./mvnw install -DskipTests`).
+		-->
+		<profile>
+			<id>native</id>
+			<build>
+				<plugins>
+					<plugin>
+						<groupId>am.ik.rontolisp</groupId>
+						<artifactId>rontolisp-maven-plugin</artifactId>
+						<executions>
+							<execution>
+								<id>native</id>
+								<goals>
+									<goal>wasm</goal>
+								</goals>
+								<configuration>
+									<native>true</native>
+								</configuration>
+							</execution>
+						</executions>
+					</plugin>
+				</plugins>
+			</build>
+		</profile>
+	</profiles>
+</project>

@@ -1,0 +1,334 @@
+package am.ik.rontolisp.testsupport;
+
+/**
+ * Three programs pinned identically on the interpreter, the JVM and both WASM backends:
+ * the direction predicates answering a stream's REAL direction, {@code file-position} on
+ * a string stream, and {@code with-input-from-string}'s {@code :index} over a character
+ * {@code unread-char} parked ({@code .kb/read-load-streams.md}, "String streams").
+ *
+ * <p>
+ * One text per program, because the behavior must not differ between backends and a
+ * per-class copy lets one expectation drift. The answers are SBCL's (checked 2026-09-22),
+ * except for the {@code t} designator, which is a designator here rather than a stream
+ * and answers both directions. The last two lines are the standard stream values over
+ * {@code t} a Clojure program's {@code *in*}/{@code *out*} read answers.
+ */
+public final class StringStreamPrograms {
+
+	private StringStreamPrograms() {
+	}
+
+	/**
+	 * The direction program; every {@code %p} is the path of a scratch file the program
+	 * creates.
+	 */
+	public static final String DIRECTION_PROGRAM = """
+			(defun dir-of (s) (list (input-stream-p s) (output-stream-p s)))
+			(print (dir-of (make-string-input-stream "abc")))
+			(print (dir-of (make-string-output-stream)))
+			(with-input-from-string (s "abc") (print (dir-of s)))
+			(print (with-output-to-string (s) (prin1 (dir-of s) s)))
+			(with-open-file (o "%p" :direction :output :if-exists :supersede)
+			  (print (dir-of o))
+			  (write-line "hello" o))
+			(with-open-file (i "%p") (print (dir-of i)))
+			(with-open-file (i "%p" :element-type '(unsigned-byte 8)) (print (dir-of i)))
+			(with-open-file (i "%p" :direction :io :if-exists :overwrite) (print (dir-of i)))
+			(with-open-file (i "%p" :direction :output :if-exists :append) (print (dir-of i)))
+			(with-open-file (i "%p" :direction :output :if-exists :overwrite) (print (dir-of i)))
+			(let ((i (open "%p"))) (close i) (print (dir-of i)))
+			(defvar *dir-in* (make-string-input-stream "a"))
+			(defvar *dir-out* (make-string-output-stream))
+			(print (dir-of (make-synonym-stream '*dir-in*)))
+			(print (dir-of (make-synonym-stream '*dir-out*)))
+			(print (dir-of *error-output*))
+			(print (dir-of t))
+			(print (handler-case (dir-of 3) (type-error () :type-error)))
+			(print (dir-of (%obj-new '%stream t :standard-input)))
+			(print (dir-of (%obj-new '%stream t :standard-output)))
+			""";
+
+	/** What {@link #DIRECTION_PROGRAM} prints. */
+	public static final String DIRECTION_EXPECTED = """
+			(T NIL)
+			(NIL T)
+			(T NIL)
+			"(NIL T)"
+			(NIL T)
+			(T NIL)
+			(T NIL)
+			(T T)
+			(NIL T)
+			(NIL T)
+			(NIL NIL)
+			(T NIL)
+			(NIL T)
+			(NIL T)
+			(T T)
+			:TYPE-ERROR
+			(T NIL)
+			(NIL T)""";
+
+	/**
+	 * The direction program over a concrete scratch path.
+	 * @param path the scratch file
+	 * @return the program text
+	 */
+	public static String directionProgram(String path) {
+		return DIRECTION_PROGRAM.replace("%p", path.replace("\\", "\\\\"));
+	}
+
+	/**
+	 * {@code file-position} on string streams: an input stream's query counts the
+	 * characters consumed from its own start (so a bounded stream starts at 0) and the
+	 * set moves the cursor -- to a character index, {@code :start} or {@code :end}, never
+	 * past the end; a character {@code unread-char} parked is not consumed; an output
+	 * stream counts what was written and cannot be repositioned elsewhere, and
+	 * {@code get-output-stream-string} empties it.
+	 */
+	public static final String POSITION_PROGRAM = """
+			(let ((s (make-string-input-stream "abcdef" 1 5)))
+			  (print (file-position s))
+			  (read-char s)
+			  (read-char s)
+			  (print (file-position s))
+			  (print (file-position s 1))
+			  (print (file-position s))
+			  (print (read-char s))
+			  (print (file-position s :start))
+			  (print (read-char s))
+			  (print (file-position s 9))
+			  (print (file-position s :end))
+			  (print (file-position s))
+			  (print (read-char s nil :eof)))
+			(with-input-from-string (s "héllo")
+			  (read-char s)
+			  (read-char s)
+			  (print (file-position s))
+			  (print (file-position s 1))
+			  (print (read-char s)))
+			(let ((s (make-string-input-stream "xyz")))
+			  (read-char s)
+			  (read-char s)
+			  (unread-char #\\y s)
+			  (print (file-position s))
+			  (print (read-char s)))
+			(let ((s (make-string-output-stream)))
+			  (print (file-position s))
+			  (write-string "abé" s)
+			  (print (file-position s))
+			  (print (file-position s 3))
+			  (print (file-position s 1))
+			  (print (get-output-stream-string s))
+			  (print (file-position s)))
+			(let ((i nil))
+			  (print (list (with-input-from-string (s "abcdef" :index i :start 1) (read-char s) (read-char s)) i)))
+			""";
+
+	/** What {@link #POSITION_PROGRAM} prints. */
+	public static final String POSITION_EXPECTED = """
+			0
+			2
+			T
+			1
+			#\\c
+			T
+			#\\b
+			NIL
+			T
+			4
+			:EOF
+			2
+			T
+			#\\é
+			1
+			#\\y
+			0
+			3
+			T
+			NIL
+			"abé"
+			0
+			(#\\c 3)""";
+
+	/**
+	 * {@code with-input-from-string}'s {@code :index} in a program that uses
+	 * {@code unread-char} and never names {@code file-position}: a character parked on
+	 * the stream counts as unread, and the index counts characters from the string's
+	 * start. The last form leaves its character parked when the body exits, on the stream
+	 * that goes with it.
+	 */
+	public static final String INDEX_PUSHBACK_PROGRAM = """
+			(let ((i nil))
+			  (print (list (with-input-from-string (s "xhéllo wörld" :index i :start 1 :end 9)
+			                 (read-char s) (read-char s) (unread-char (read-char s) s) (read-char s))
+			               i)))
+			(let ((i nil))
+			  (print (list (with-input-from-string (s "αβγδ" :index i :start 1 :end 3) (read-char s)) i)))
+			(let ((i nil))
+			  (with-input-from-string (s "abc" :index i) (read-char s) (unread-char #\\a s) (read-char s) (read-char s))
+			  (print i))
+			(let ((i 0))
+			  (with-input-from-string (s "123  " :index i)
+			    (read-char s) (read-char s) (read-char s)
+			    (unread-char (read-char s) s))
+			  (print i))
+			""";
+
+	/** What {@link #INDEX_PUSHBACK_PROGRAM} prints (SBCL's answers). */
+	public static final String INDEX_PUSHBACK_EXPECTED = """
+			(#\\l 4)
+			(#\\β 2)
+			2
+			3""";
+
+	/**
+	 * The {@code unread-char} pushback belongs to its stream: a stream closed or dropped
+	 * with a character parked leaves no trace on the next one (the closes
+	 * {@code with-input-from-string} synthesizes included), two streams each hold one at
+	 * once, {@code listen} / {@code peek-char} / {@code read-line} see only their own
+	 * stream's, and the parked character is no part of the stream's {@code equal} hash.
+	 */
+	public static final String PER_STREAM_PUSHBACK_PROGRAM = """
+			(with-input-from-string (s "abc") (unread-char (read-char s) s))
+			(print (with-input-from-string (s "xyz") (unread-char (read-char s) s) (read-char s)))
+			(let ((s (make-string-input-stream "pq")))
+			  (unread-char (read-char s) s)
+			  (close s))
+			(let ((s (make-string-input-stream "dropped")))
+			  (unread-char (read-char s) s))
+			(let ((s1 (make-string-input-stream "abc")) (s2 (make-string-input-stream "xyz")))
+			  (unread-char (read-char s1) s1)
+			  (unread-char (read-char s2) s2)
+			  (print (list (listen s1) (read-char s1) (read-char s2) (read-char s1) (peek-char nil s2)
+			               (read-line s2) (listen s2))))
+			(let ((s (make-string-input-stream "mn")) (h (make-hash-table :test 'equal)))
+			  (let ((c (read-char s)))
+			    (setf (gethash s h) :found)
+			    (unread-char c s)
+			    (print (list (gethash s h) (read-char s)))))
+			""";
+
+	/** What {@link #PER_STREAM_PUSHBACK_PROGRAM} prints (SBCL's answers). */
+	public static final String PER_STREAM_PUSHBACK_EXPECTED = """
+			#\\x
+			(T #\\a #\\x #\\b #\\y "yz" NIL)
+			(:FOUND #\\m)""";
+
+	/**
+	 * The {@code unread-char} pushback belongs to the stream a designator DENOTES, not to
+	 * the designator as written: an omitted stream and {@code nil} park on the stream
+	 * {@code *standard-input*} holds, and a synonym stream on its target, so a read
+	 * through any other designator of the same stream sees the character.
+	 */
+	public static final String DESIGNATOR_PUSHBACK_PROGRAM = """
+			(defvar *dpb-x* nil)
+			(print (with-input-from-string (s "abc") (let ((*standard-input* s)) (unread-char (read-char))) (read-char s)))
+			(print (with-input-from-string (s "abc") (let ((*standard-input* s)) (unread-char (read-char s) s) (read-char))))
+			(print (with-input-from-string (s "abc") (let ((*standard-input* s)) (unread-char (read-char nil) nil)) (read-char s)))
+			(print (with-input-from-string (s "abc")
+			         (setq *dpb-x* s)
+			         (let ((y (make-synonym-stream '*dpb-x*))) (unread-char (read-char y) y))
+			         (read-char s)))
+			(print (with-input-from-string (s "abc")
+			         (setq *dpb-x* s)
+			         (let ((y (make-synonym-stream '*dpb-x*))) (unread-char (read-char s) s) (read-char y))))
+			(print (with-input-from-string (s "abc")
+			         (setq *dpb-x* s)
+			         (let ((*standard-input* (make-synonym-stream '*dpb-x*))) (unread-char (read-char)))
+			         (read-char s)))
+			(print (with-input-from-string (s "xyz")
+			         (let ((*standard-input* s))
+			           (unread-char (read-char))
+			           (list (peek-char nil s) (read-line s) (progn (unread-char #\\z s) (listen)) (read-char) (listen)))))
+			(print (with-input-from-string (s "abc")
+			         (setq *dpb-x* s)
+			         (let ((y (make-synonym-stream '*dpb-x*)))
+			           (read-char s)
+			           (unread-char #\\a y)
+			           (list (file-position s) (file-position y) (read-char s)))))
+			(print (with-input-from-string (a "12")
+			         (with-input-from-string (b "34")
+			           (let ((*standard-input* a))
+			             (unread-char (read-char))
+			             (unread-char (read-char b) b)
+			             (list (read-char a) (read-char b))))))
+			""";
+
+	/** What {@link #DESIGNATOR_PUSHBACK_PROGRAM} prints (SBCL's answers). */
+	public static final String DESIGNATOR_PUSHBACK_EXPECTED = """
+			#\\a
+			#\\a
+			#\\a
+			#\\a
+			#\\a
+			#\\a
+			(#\\x "xyz" T #\\z NIL)
+			(0 0 #\\a)
+			(#\\1 #\\3)""";
+
+	/**
+	 * {@code write-char}, {@code write-byte} and {@code unread-char} are FUNCTIONS: taken
+	 * as values ({@code #'op}, a quoted designator, {@code apply}) they write and push
+	 * back as their calls do, and in a program that uses {@code unread-char} the read
+	 * family taken as values consults the pushback too. Every {@code %p} is the path of a
+	 * scratch file the program creates. SBCL's answers.
+	 */
+	public static final String WRITE_AND_UNREAD_VALUE_PROGRAM = """
+			(let ((svh-s (make-string-output-stream)))
+			  (print (list (funcall #'write-char #\\a svh-s) (apply #'write-char #\\b (list svh-s))
+			               (funcall 'write-char #\\c svh-s) (get-output-stream-string svh-s))))
+			(funcall #'write-char #\\x)
+			(funcall #'write-char #\\y nil)
+			(apply #'write-char #\\z t nil)
+			(terpri)
+			(print (with-open-file (svh-o "%p" :direction :output :if-exists :supersede :element-type '(unsigned-byte 8))
+			         (list (funcall #'write-byte 7 svh-o) (apply #'write-byte 200 svh-o nil))))
+			(print (with-open-file (svh-i "%p" :element-type '(unsigned-byte 8))
+			         (list (read-byte svh-i) (read-byte svh-i) (read-byte svh-i nil :eof))))
+			(with-input-from-string (svh-s (format nil "abc~%de"))
+			  (let* ((svh-c1 (funcall #'read-char svh-s))
+			         (svh-u1 (funcall #'unread-char svh-c1 svh-s))
+			         (svh-p (funcall #'peek-char nil svh-s))
+			         (svh-c2 (funcall #'read-char svh-s))
+			         (svh-c3 (read-char svh-s))
+			         (svh-u2 (apply #'unread-char svh-c3 (list svh-s)))
+			         (svh-l1 (funcall #'read-line svh-s))
+			         (svh-c4 (funcall #'read-char-no-hang svh-s))
+			         (svh-u3 (funcall 'unread-char svh-c4 svh-s))
+			         (svh-ls (funcall #'listen svh-s))
+			         (svh-l2 (funcall #'read-line svh-s nil :eof))
+			         (svh-l3 (funcall #'read-line svh-s nil :eof)))
+			    (print (list svh-c1 svh-u1 svh-p svh-c2 svh-c3 svh-u2 svh-l1 svh-c4 svh-u3 svh-ls svh-l2 svh-l3))))
+			(with-input-from-string (svh-s "hello")
+			  (read-char svh-s)
+			  (funcall #'unread-char (read-char svh-s) svh-s)
+			  (print (list (funcall #'file-position svh-s) (read-char svh-s) (funcall #'file-position svh-s))))
+			(let ((*standard-input* (make-string-input-stream "xy")))
+			  (let ((svh-c (read-char)))
+			    (print (list (funcall #'unread-char svh-c) (funcall #'read-char) (funcall #'read-char)))))
+			(print (list (macro-function 'write-char) (not (null (fboundp 'write-char))) (functionp #'write-char)
+			             (functionp #'write-byte) (functionp #'unread-char)))
+			""";
+
+	/** What {@link #WRITE_AND_UNREAD_VALUE_PROGRAM} prints. */
+	public static final String WRITE_AND_UNREAD_VALUE_EXPECTED = """
+			(#\\a #\\b #\\c "abc")
+			xyz
+			(7 200)
+			(7 200 :EOF)
+			(#\\a NIL #\\a #\\a #\\b NIL "bc" #\\d NIL T "de" :EOF)
+			(1 #\\e 2)
+			(NIL #\\x #\\y)
+			(NIL T T T T)""";
+
+	/**
+	 * The write / unread value program over a concrete scratch path.
+	 * @param path the scratch file
+	 * @return the program text
+	 */
+	public static String writeAndUnreadValueProgram(String path) {
+		return WRITE_AND_UNREAD_VALUE_PROGRAM.replace("%p", path.replace("\\", "\\\\"));
+	}
+
+}

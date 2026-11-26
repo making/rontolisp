@@ -1,0 +1,23 @@
+# descriptor test.interp:props:1 test.interp:cycle:1 test.interp:unused-cycle:1 test.interp:self:1
+artifact test.interp:props:jar:1
+dep test.lib:d1:jar::1.0 scope=compile optional=null
+dep test.lib:d2:jar::25.0.4 scope=compile optional=null
+dep test.lib:d3:jar::${env.HOME} scope=compile optional=null
+dep test.lib:d4:jar::jar scope=compile optional=null
+dep test.lib:d5:jar::${unknown.property} scope=compile optional=null
+dep test.lib:d6:jar::Display Name scope=compile optional=null
+dep test.lib:d7:jar::${basedir} scope=compile optional=null
+dep test.lib:d8:jar::${project.basedir} scope=compile optional=null
+dep test.lib:d9:jar::test.interp scope=compile optional=null
+dep test.lib:d10:jar::model scope=compile optional=null
+dep test.lib:d11:jar::1.0-x scope=compile optional=null
+dep test.lib:d12:jar::${only.system} scope=compile optional=null
+dep test.lib:d14:jar::x1.0y1.0z scope=compile optional=null
+dep test.lib:d15:jar::$1.0 scope=compile optional=null
+dep test.lib:d16:jar::test.interp scope=compile optional=null
+artifact test.interp:cycle:jar:1
+warning invalid test.interp:cycle:jar:1: 4 problems were encountered while building the effective model for test.interp:cycle:1 [ERROR] Resolving expression: '${y}': Detected the following recursive expression cycle in 'y': [y, x] @  [ERROR] Resolving expression: '${x}': Detected the following recursive expression cycle in 'x': [x, y] @  [ERROR] Resolving expression: '${x}': Detected the following recursive expression cycle in 'x': [x, y] @  [ERROR] 'dependencies.dependency.version' for test.lib:d:jar is missing. @
+artifact test.interp:unused-cycle:jar:1
+warning invalid test.interp:unused-cycle:jar:1: 2 problems were encountered while building the effective model for test.interp:unused-cycle:1 [ERROR] Resolving expression: '${y}': Detected the following recursive expression cycle in 'y': [y, x] @  [ERROR] Resolving expression: '${x}': Detected the following recursive expression cycle in 'x': [x, y] @
+artifact test.interp:self:jar:1
+warning invalid test.interp:self:jar:1: 1 problem was encountered while building the effective model for test.interp:self:1 [ERROR] Resolving expression: '${x}': Detected the following recursive expression cycle in 'x': [x] @

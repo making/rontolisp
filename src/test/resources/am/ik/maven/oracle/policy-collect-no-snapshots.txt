@@ -1,0 +1,8 @@
+# collect --no-snapshots test.snap:user:1
+test.snap:user:jar::1 scope=compile optional=null
+  test.snap:lib:jar::1.0-SNAPSHOT scope=compile optional=null
+  test.snap:plain:jar::1.0-SNAPSHOT scope=compile optional=null
+  test.snap:missing:jar::1.0-SNAPSHOT scope=compile optional=null
+warning missing test.snap:lib:jar:1.0-SNAPSHOT
+warning missing test.snap:plain:jar:1.0-SNAPSHOT
+warning missing test.snap:missing:jar:1.0-SNAPSHOT

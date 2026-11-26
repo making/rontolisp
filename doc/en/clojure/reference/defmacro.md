@@ -1,0 +1,41 @@
+# defmacro
+
+`(defmacro name doc? attr? [params] body...)` /
+`(defmacro name doc? attr? ([params] body...)+)`
+
+Defines a compile-time macro: each call site expands while lowering, before any
+backend runs, so every backend executes expanded code. Parameters bind the call's
+argument forms unevaluated (`&` the rest as a list, destructuring like `defn`
+parameters); several arities dispatch on the argument count, like `defn`. A docstring
+and an attr map are skipped. The body's implicit `&form` is the call itself and `&env`
+a map of the call site's locals, each local's symbol to itself, or nil where the call sees
+no local (the oracle's values are the compiler's `LocalBinding`s), so a `.cljc` library's
+`(contains? &env :locals)` takes its Clojure branch; a run-time `macroexpand` binds `&form`
+and leaves `&env` nil, like the oracle. A [macroexpand-1](macroexpand-1.md) the body calls
+hands the call's locals on as `&env`. Neither may name a parameter.
+
+The definition answers `nil` and registers a runtime table entry of the same
+expander, so `macroexpand-1` expands the same function at run time. A macro body
+sees the core builtins and the `clojure.lisp` library, not the program's own
+definitions; a call above its definition is an error, and a macro has no function
+value.
+
+A `defmacro` of a core name -- a function like `inc` or a form like `with-out-str` --
+shadows it from its definition on: a call site above the definition keeps the core
+meaning, like the oracle's form-by-form compile, and `clojure.core/name` names the core
+var whatever the program defines. A head the reader spells (`deref`, `with-meta`, `ns`,
+`in-ns`) cannot name a macro. A special form (`def`, `if`, `&`, ...) can, reached only
+through a qualified name (spec.alpha's `clojure.spec.alpha/def`, written `s/def`); the
+bare head stays the special form. So can a syntax-quote head (`syntax-quote`, `unquote`,
+`unquote-splicing`, which the oracle's reader never spells), reached through a qualified
+name (tools.reader's `clojure.tools.reader/syntax-quote`); a backquote stays the reader's.
+
+```clojure
+(defmacro doc-unless [c t] (list 'if c nil t))
+(println (doc-unless false 42)) ; 42
+```
+
+```clojure
+(defmacro with-out-str [& body] `(str "<" (clojure.core/with-out-str ~@body) ">"))
+(println (with-out-str (print 1))) ; <1>
+```

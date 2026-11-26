@@ -1,0 +1,849 @@
+package am.ik.rontolisp.eval;
+
+import java.io.BufferedOutputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.Closeable;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.net.InetAddress;
+import java.net.InetSocketAddress;
+import java.net.ServerSocket;
+import java.net.Socket;
+import java.nio.charset.StandardCharsets;
+import java.io.FileInputStream;
+import java.security.GeneralSecurityException;
+import java.security.KeyStore;
+
+import java.security.cert.X509Certificate;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+
+import javax.net.ssl.KeyManagerFactory;
+import javax.net.ssl.SSLContext;
+import javax.net.ssl.SSLParameters;
+import javax.net.ssl.SSLSocket;
+import javax.net.ssl.TrustManager;
+import javax.net.ssl.X509TrustManager;
+
+import am.ik.rontolisp.LispNames;
+import am.ik.rontolisp.runtime.RontoSocketInput;
+import am.ik.rontolisp.runtime.RontoSockets;
+
+import org.jspecify.annotations.Nullable;
+
+/**
+ * Performs blocking TCP socket operations for the interpreter backend, using the JDK
+ * {@link Socket} / {@link ServerSocket}. A socket is stored directly in the interpreter's
+ * stream table (both types implement {@link Closeable}; {@code close} sends a connected
+ * socket's buffer first, {@link #close}) and the stream built-ins ({@code read-line},
+ * {@code write-line}, {@code write-string}, {@code read-char}, {@code read-byte},
+ * {@code write-byte}) dispatch to the helpers here for socket entries. Reads take from a
+ * buffer of what has come ({@link RontoSocketInput}, the JVM backend's too). Writes go to
+ * a per-socket output buffer ({@link #out}) flushed before every read, {@code listen},
+ * accept and connect on ANY socket ({@link #flushAll}), by
+ * {@code force-output}/{@code finish-output}, by {@code close} and at the program's end:
+ * written through, each piece of a message waited for the peer's delayed ACK of the one
+ * before under the host's Nagle. This is the seam the browser playground substitutes (see
+ * {@code src/web/java/.../eval/Target_SocketSupport.java}), where every operation signals
+ * an error: the browser sandbox provides no host TCP sockets.
+ */
+final class SocketSupport {
+
+	/**
+	 * The size of a connected socket's output buffer: the component's. A write that does
+	 * not fit flushes the buffer first; one of this size or more goes out as it is.
+	 */
+	static final int OUTPUT_BUFFER_SIZE = 8192;
+
+	/**
+	 * Every connected socket's output buffer, made on its first write. A {@code Socket}
+	 * keeps {@code Object}'s identity equality, so a socket is its own key.
+	 */
+	private static final Map<Socket, OutputStream> OUTPUT_BUFFERS = new ConcurrentHashMap<>();
+
+	private SocketSupport() {
+	}
+
+	/**
+	 * The output buffer of a connected socket: every socket write goes through it.
+	 * @param socket the connected socket
+	 * @return its buffer over the socket's output stream
+	 * @throws IOException if the socket is closed
+	 */
+	static OutputStream out(Socket socket) throws IOException {
+		OutputStream buffer = OUTPUT_BUFFERS.get(socket);
+		if (buffer == null) {
+			OutputStream fresh = new BufferedOutputStream(socket.getOutputStream(), OUTPUT_BUFFER_SIZE);
+			buffer = OUTPUT_BUFFERS.putIfAbsent(socket, fresh);
+			if (buffer == null) {
+				buffer = fresh;
+			}
+		}
+		return buffer;
+	}
+
+	/**
+	 * The input of a connected socket: a buffer of what has come, whose every host read
+	 * sends what every socket's output buffer holds first ({@link RontoSocketInput}).
+	 * @param socket the connected socket
+	 * @return the socket's input
+	 * @throws IOException if the socket is closed
+	 */
+	static RontoSocketInput in(Socket socket) throws IOException {
+		return RontoSocketInput.of(socket, OUTPUT_BUFFERS);
+	}
+
+	/**
+	 * Whether a read of a connected socket would answer at once: {@code listen}.
+	 * @param socket the connected socket
+	 * @return whether an octet has come
+	 * @throws IOException if the socket is closed
+	 */
+	static boolean ready(Socket socket) throws IOException {
+		return in(socket).ready();
+	}
+
+	/**
+	 * Sends what every socket's buffer holds -- before a wait on any socket and at the
+	 * program's end. A flush that fails is skipped: its bytes stay buffered, and the
+	 * socket's own next write or flush reports the failure.
+	 */
+	static void flushAll() {
+		for (OutputStream buffer : OUTPUT_BUFFERS.values()) {
+			try {
+				buffer.flush();
+			}
+			catch (IOException ex) {
+				// reported by the socket's own next write or flush
+			}
+		}
+	}
+
+	/**
+	 * Sends what one socket's buffer holds: {@code force-output}/{@code finish-output}.
+	 * @param socket the connected socket
+	 * @throws IOException if the bytes cannot be sent
+	 */
+	static void flush(Socket socket) throws IOException {
+		OutputStream buffer = OUTPUT_BUFFERS.get(socket);
+		if (buffer != null) {
+			buffer.flush();
+		}
+	}
+
+	/**
+	 * Sends what the socket's buffer holds and drops the buffer and its input: before
+	 * {@code close}, and before a TLS upgrade, whose socket writes through its own buffer
+	 * and reads through its own input.
+	 * @param socket the connected socket
+	 * @throws IOException if the bytes cannot be sent
+	 */
+	private static void detach(Socket socket) throws IOException {
+		RontoSocketInput.drop(socket);
+		OutputStream buffer = OUTPUT_BUFFERS.remove(socket);
+		if (buffer != null) {
+			buffer.flush();
+		}
+	}
+
+	/**
+	 * Closes a connected socket after sending what its buffer holds. A flush that fails
+	 * (the peer reset the connection) does not stop the close.
+	 * @param socket the connected socket
+	 * @throws IOException if the close fails
+	 */
+	static void close(Socket socket) throws IOException {
+		try {
+			detach(socket);
+		}
+		catch (IOException ex) {
+			// the connection is gone; the close below still releases it
+		}
+		socket.close();
+	}
+
+	/**
+	 * Opens a blocking TCP connection to the given host and port.
+	 * @param host a hostname or IP literal
+	 * @param port the remote TCP port
+	 * @return the connected socket
+	 * @throws LispEvalException if the connection cannot be established
+	 */
+	static Socket connect(String host, int port) {
+		flushAll();
+		try {
+			return new Socket(host, port);
+		}
+		catch (IOException ex) {
+			throw new LispEvalException("tcp-connect: cannot connect to " + host + ":" + port + ": " + ex.getMessage());
+		}
+	}
+
+	/**
+	 * A socket not connected yet ({@code rontolisp::%tcp-socket}): bound to
+	 * {@code host:port} when {@code port} is not negative -- every interface for a
+	 * {@code null} host -- else not bound.
+	 * @param host an address or a name, or {@code null}
+	 * @param port the local port, or -1 for none
+	 * @return the socket
+	 * @throws LispEvalException if the bind fails
+	 */
+	static Socket open(@Nullable String host, int port) {
+		try {
+			return RontoSockets.open((host == null) ? "" : host, port);
+		}
+		catch (IOException ex) {
+			throw new LispEvalException(LispNames.TCP_SOCKET_INTERNAL.toLowerCase(java.util.Locale.ROOT)
+					+ ": cannot bind to " + ((host == null) ? "*" : host) + ":" + port + ": " + ex.getMessage());
+		}
+	}
+
+	/**
+	 * Connects a socket {@link #open} made ({@code rontolisp::%tcp-connect-socket}),
+	 * waiting {@code millis} at most; a close from another thread ends the wait.
+	 * @param socket the socket
+	 * @param host a hostname or IP literal
+	 * @param port the remote TCP port
+	 * @param millis the time limit in milliseconds, 0 for the host's
+	 * @throws LispEvalException if the connect fails or passes its limit
+	 */
+	static void connect(Socket socket, String host, int port, int millis) {
+		flushAll();
+		try {
+			RontoSockets.connect(socket, host, port, millis);
+		}
+		catch (IOException ex) {
+			throw new LispEvalException("tcp-connect: cannot connect to " + host + ":" + port + ": " + ex.getMessage());
+		}
+	}
+
+	/**
+	 * Ends half of a connected socket ({@code rontolisp::%tcp-shutdown}): its output,
+	 * after what its buffer holds has gone out, or its input.
+	 * @param socket the connected socket
+	 * @param output whether the output half ends, else the input half
+	 * @throws LispEvalException if the host refuses
+	 */
+	static void shutdown(Socket socket, boolean output) {
+		try {
+			RontoSockets.shutdown(socket, output, OUTPUT_BUFFERS);
+		}
+		catch (IOException ex) {
+			throw new LispEvalException(
+					LispNames.TCP_SHUTDOWN_INTERNAL.toLowerCase(java.util.Locale.ROOT) + ": " + ex.getMessage());
+		}
+	}
+
+	/**
+	 * Gives an option of a connected socket to the host, or sends a byte of urgent data
+	 * after what its buffer holds ({@code rontolisp::%tcp-option}).
+	 * @param socket the connected socket
+	 * @param option the option ({@code RontoSockets.option})
+	 * @param value its value
+	 * @throws LispEvalException if the host refuses
+	 */
+	static void option(Socket socket, int option, int value) {
+		try {
+			RontoSockets.option(socket, option, value, OUTPUT_BUFFERS);
+		}
+		catch (IOException ex) {
+			throw new LispEvalException(
+					LispNames.TCP_OPTION_INTERNAL.toLowerCase(java.util.Locale.ROOT) + ": " + ex.getMessage());
+		}
+	}
+
+	/**
+	 * Opens a blocking TCP connection and performs a TLS handshake. By default the server
+	 * certificate is validated against the JDK default trust store and the hostname is
+	 * verified (HTTPS-style endpoint identification); {@code insecure} disables both
+	 * checks (a trust-all manager, no endpoint identification) for development against
+	 * self-signed servers. A fresh {@link SSLContext} is initialized per call so the
+	 * {@code javax.net.ssl.trustStore} system properties are re-read on every connection
+	 * (unlike the process-wide cached {@code SSLSocketFactory.getDefault()}). An
+	 * {@link SSLSocket} is a {@link Socket}, so the returned socket goes into the stream
+	 * table unchanged and every stream built-in works on it as-is.
+	 * <p>
+	 * It is {@code tcp-connect} plus {@link #upgradeTls}'s handshake, run under a read
+	 * deadline of {@link LispNames#TLS_CONNECT_HANDSHAKE_TIMEOUT_MS} (the caller has no
+	 * handle to set one on first), so a peer that accepts and never speaks TLS fails the
+	 * call; the deadline is cleared once the handshake completes, and on a failure the
+	 * connection is closed.
+	 * @param host a hostname or IP literal
+	 * @param port the remote TCP port
+	 * @param insecure whether to skip certificate and hostname verification
+	 * @return the connected socket with the handshake completed
+	 * @throws LispEvalException if the connection or the handshake fails
+	 */
+	static Socket connectTls(String host, int port, boolean insecure) {
+		flushAll();
+		Socket socket = null;
+		try {
+			socket = new Socket(host, port);
+			socket.setSoTimeout(LispNames.TLS_CONNECT_HANDSHAKE_TIMEOUT_MS);
+			Socket tls = handshake(socket, host, insecure);
+			socket.setSoTimeout(0);
+			return tls;
+		}
+		catch (IOException | GeneralSecurityException ex) {
+			if (socket != null) {
+				try {
+					socket.close();
+				}
+				catch (IOException ignored) {
+					// the failure being reported is the handshake's
+				}
+			}
+			throw new LispEvalException("tls-connect: cannot connect to " + host + ":" + port + ": " + ex.getMessage());
+		}
+	}
+
+	/**
+	 * Wraps an ALREADY-CONNECTED socket in TLS as a client -- the
+	 * {@code rontolisp:tls-upgrade} primitive behind the {@code cl+ssl} shim's
+	 * {@code make-ssl-client-stream}. Identical trust policy to {@link #connectTls}
+	 * (fresh {@link SSLContext} per call, JDK default trust store + HTTPS-style endpoint
+	 * identification against {@code host}, both skipped by {@code insecure}); the
+	 * difference is the transport: the handshake runs over the given socket's existing
+	 * connection ({@code SSLSocketFactory.createSocket(socket, host, port, true)})
+	 * instead of opening a new one, which is what an HTTP client that has already
+	 * connected (and possibly issued a proxy CONNECT) needs. The returned
+	 * {@link SSLSocket} closes the underlying socket when closed. The handshake waits as
+	 * long as the socket's read deadline ({@code tcp-set-timeout}) allows.
+	 * @param socket the connected TCP socket to upgrade
+	 * @param host the server name the certificate is verified against (and sent as SNI)
+	 * @param insecure whether to skip certificate and hostname verification
+	 * @return the wrapping socket with the handshake completed
+	 * @throws LispEvalException if the handshake fails
+	 */
+	static Socket upgradeTls(Socket socket, String host, boolean insecure) {
+		try {
+			detach(socket);
+			return handshake(socket, host, insecure);
+		}
+		catch (IOException | GeneralSecurityException ex) {
+			throw new LispEvalException(
+					"tls-upgrade: cannot upgrade the stream to TLS against " + host + ": " + ex.getMessage());
+		}
+	}
+
+	/**
+	 * The client handshake {@link #connectTls} and {@link #upgradeTls} share: wraps the
+	 * connected socket in an {@link SSLSocket} that closes it when closed and runs the
+	 * handshake against {@code host}.
+	 */
+	private static Socket handshake(Socket socket, String host, boolean insecure)
+			throws IOException, GeneralSecurityException {
+		SSLContext context = SSLContext.getInstance("TLS");
+		context.init(null, insecure ? new TrustManager[] { new TrustAllManager() } : null, null);
+		SSLSocket tls = (SSLSocket) context.getSocketFactory().createSocket(socket, host, socket.getPort(), true);
+		if (!insecure) {
+			SSLParameters parameters = tls.getSSLParameters();
+			parameters.setEndpointIdentificationAlgorithm("HTTPS");
+			tls.setSSLParameters(parameters);
+		}
+		tls.startHandshake();
+		return tls;
+	}
+
+	/** Accepts any peer certificate chain; used only by the {@code :insecure} opt-out. */
+	private static final class TrustAllManager implements X509TrustManager {
+
+		@Override
+		public void checkClientTrusted(X509Certificate[] chain, String authType) {
+		}
+
+		@Override
+		public void checkServerTrusted(X509Certificate[] chain, String authType) {
+		}
+
+		@Override
+		public X509Certificate[] getAcceptedIssuers() {
+			return new X509Certificate[0];
+		}
+
+	}
+
+	/**
+	 * Binds a listening TCP socket.
+	 * @param port the local port (0 picks an ephemeral port)
+	 * @param host the local address to bind, or {@code null} for all interfaces
+	 * @return the listening server socket
+	 * @throws LispEvalException if the address cannot be bound
+	 */
+	static ServerSocket listen(int port, @Nullable String host) {
+		try {
+			ServerSocket listener = new ServerSocket();
+			listener.setReuseAddress(true);
+			InetAddress address = (host == null) ? null : InetAddress.getByName(host);
+			listener.bind(new InetSocketAddress(address, port));
+			return listener;
+		}
+		catch (IOException ex) {
+			throw new LispEvalException("tcp-listen: cannot listen on " + ((host == null) ? "*" : host) + ":" + port
+					+ ": " + ex.getMessage());
+		}
+	}
+
+	/**
+	 * Binds a listening TLS socket serving the certificate from a PKCS12 keystore file.
+	 * The listener is a {@code ServerSocket} subclass, so it lives in the stream table
+	 * like a plain listener and {@code tcp-accept}/{@code tcp-local-port}/{@code close}
+	 * work on it unchanged; an accepted {@code SSLSocket} performs its TLS handshake
+	 * lazily on the first read/write.
+	 * @param keyStorePath a PKCS12 keystore file holding the server key and certificate
+	 * @param password the keystore (and key) password
+	 * @param port the local port (0 picks an ephemeral port)
+	 * @param host the local address to bind, or {@code null} for all interfaces
+	 * @return the listening TLS server socket
+	 * @throws LispEvalException if the keystore cannot be loaded or the address cannot be
+	 * bound
+	 */
+	static ServerSocket listenTls(String keyStorePath, String password, int port, @Nullable String host) {
+		try {
+			KeyStore keyStore = KeyStore.getInstance("PKCS12");
+			try (InputStream in = new FileInputStream(keyStorePath)) {
+				keyStore.load(in, password.toCharArray());
+			}
+			KeyManagerFactory kmf = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm());
+			kmf.init(keyStore, password.toCharArray());
+			SSLContext context = SSLContext.getInstance("TLS");
+			context.init(kmf.getKeyManagers(), null, null);
+			InetAddress address = (host == null) ? null : InetAddress.getByName(host);
+			return context.getServerSocketFactory().createServerSocket(port, 50, address);
+		}
+		catch (IOException | GeneralSecurityException ex) {
+			throw new LispEvalException("tls-listen: cannot listen on " + ((host == null) ? "*" : host) + ":" + port
+					+ ": " + ex.getMessage());
+		}
+	}
+
+	/**
+	 * The fixed password of the in-memory PKCS12 keystore built from PEM material
+	 * (package-visible so {@link TlsPemSupport} can serialize the keystore for the
+	 * compile-time inliner with the same password).
+	 */
+	static final char[] PEM_KEYSTORE_PASSWORD = "rontolisp-pem".toCharArray();
+
+	/**
+	 * Builds an in-memory PKCS12 {@link KeyStore} from a PEM certificate chain and an
+	 * unencrypted PKCS#8 private key. Shared by the interpreter ({@link #listenTlsPem})
+	 * and the JVM/WASM compile-time inliner, which serializes the result and embeds it,
+	 * so both backends parse PEM through exactly this one code path.
+	 * @param certPath a PEM file holding one or more {@code CERTIFICATE} blocks (leaf
+	 * first)
+	 * @param keyPath a PEM file holding one unencrypted PKCS#8 {@code PRIVATE KEY} block
+	 * @return a single-entry PKCS12 keystore protected by {@link #PEM_KEYSTORE_PASSWORD}
+	 * @throws IOException if a file cannot be read or the PEM is malformed
+	 * @throws GeneralSecurityException if the certificate or key cannot be parsed
+	 */
+	static KeyStore pemToKeyStore(String certPath, String keyPath) throws IOException, GeneralSecurityException {
+		java.security.cert.CertificateFactory cf = java.security.cert.CertificateFactory.getInstance("X.509");
+		java.util.List<java.security.cert.Certificate> chain = new java.util.ArrayList<>();
+		try (InputStream in = new FileInputStream(certPath)) {
+			for (java.security.cert.Certificate cert : cf.generateCertificates(in)) {
+				chain.add(cert);
+			}
+		}
+		if (chain.isEmpty()) {
+			throw new java.security.cert.CertificateException("no certificate found in " + certPath);
+		}
+		String keyPem = new String(java.nio.file.Files.readAllBytes(java.nio.file.Path.of(keyPath)),
+				StandardCharsets.UTF_8);
+		java.security.PrivateKey privateKey = parsePkcs8PrivateKey(keyPem, keyPath);
+		KeyStore keyStore = KeyStore.getInstance("PKCS12");
+		keyStore.load(null, null);
+		keyStore.setKeyEntry("key", privateKey, PEM_KEYSTORE_PASSWORD,
+				chain.toArray(new java.security.cert.Certificate[0]));
+		return keyStore;
+	}
+
+	/**
+	 * Parses an unencrypted PKCS#8 {@code PRIVATE KEY} PEM block, detecting the key
+	 * algorithm by trying each supported {@code KeyFactory} in turn (the PKCS#8 wrapper
+	 * carries the algorithm, but the JDK offers no single algorithm-agnostic factory).
+	 */
+	private static java.security.PrivateKey parsePkcs8PrivateKey(String keyPem, String keyPath)
+			throws GeneralSecurityException {
+		StringBuilder base64 = new StringBuilder();
+		boolean inBlock = false;
+		for (String line : keyPem.split("\\R")) {
+			String trimmed = line.trim();
+			if (trimmed.startsWith("-----BEGIN") && trimmed.contains("PRIVATE KEY")) {
+				inBlock = true;
+			}
+			else if (trimmed.startsWith("-----END") && trimmed.contains("PRIVATE KEY")) {
+				break;
+			}
+			else if (inBlock) {
+				base64.append(trimmed);
+			}
+		}
+		if (base64.isEmpty()) {
+			throw new java.security.spec.InvalidKeySpecException(
+					"no unencrypted PKCS#8 PRIVATE KEY block found in " + keyPath);
+		}
+		byte[] der = java.util.Base64.getDecoder().decode(base64.toString());
+		java.security.spec.PKCS8EncodedKeySpec spec = new java.security.spec.PKCS8EncodedKeySpec(der);
+		for (String algorithm : new String[] { "RSA", "EC", "DSA", "EdDSA" }) {
+			try {
+				return java.security.KeyFactory.getInstance(algorithm).generatePrivate(spec);
+			}
+			catch (java.security.spec.InvalidKeySpecException ignored) {
+				// try the next algorithm
+			}
+		}
+		throw new java.security.spec.InvalidKeySpecException(
+				"unsupported or encrypted private key in " + keyPath + " (expected unencrypted PKCS#8)");
+	}
+
+	/**
+	 * Binds a listening TLS socket serving a certificate chain and private key read from
+	 * two PEM files. Otherwise identical to {@link #listenTls}: the listener is a
+	 * {@code ServerSocket} subclass, so {@code tcp-accept}/{@code tcp-local-port}/
+	 * {@code close} work on it unchanged and an accepted socket handshakes lazily.
+	 * @param certPath a PEM certificate-chain file (leaf certificate first)
+	 * @param keyPath a PEM file holding the unencrypted PKCS#8 private key
+	 * @param port the local port (0 picks an ephemeral port)
+	 * @param host the local address to bind, or {@code null} for all interfaces
+	 * @return the listening TLS server socket
+	 * @throws LispEvalException if the PEM cannot be parsed or the address cannot be
+	 * bound
+	 */
+	static ServerSocket listenTlsPem(String certPath, String keyPath, int port, @Nullable String host) {
+		try {
+			KeyStore keyStore = pemToKeyStore(certPath, keyPath);
+			KeyManagerFactory kmf = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm());
+			kmf.init(keyStore, PEM_KEYSTORE_PASSWORD);
+			SSLContext context = SSLContext.getInstance("TLS");
+			context.init(kmf.getKeyManagers(), null, null);
+			InetAddress address = (host == null) ? null : InetAddress.getByName(host);
+			return context.getServerSocketFactory().createServerSocket(port, 50, address);
+		}
+		catch (IOException | GeneralSecurityException ex) {
+			throw new LispEvalException("tls-listen-pem: cannot listen on " + ((host == null) ? "*" : host) + ":" + port
+					+ ": " + ex.getMessage());
+		}
+	}
+
+	/**
+	 * Binds a listening TLS socket from an in-memory PKCS12 keystore supplied as a Base64
+	 * string (the shape the {@code tls-listen-pem} compile-time inliner produces: the PEM
+	 * material is parsed and serialized to PKCS12 bytes at compile time, then embedded).
+	 * @param base64KeyStore the Base64-encoded PKCS12 keystore bytes
+	 * @param password the keystore (and key) password
+	 * @param port the local port (0 picks an ephemeral port)
+	 * @param host the local address to bind, or {@code null} for all interfaces
+	 * @return the listening TLS server socket
+	 * @throws LispEvalException if the keystore cannot be loaded or the address cannot be
+	 * bound
+	 */
+	static ServerSocket listenTlsP12(String base64KeyStore, String password, int port, @Nullable String host) {
+		try {
+			byte[] bytes = java.util.Base64.getDecoder().decode(base64KeyStore);
+			KeyStore keyStore = KeyStore.getInstance("PKCS12");
+			try (InputStream in = new java.io.ByteArrayInputStream(bytes)) {
+				keyStore.load(in, password.toCharArray());
+			}
+			KeyManagerFactory kmf = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm());
+			kmf.init(keyStore, password.toCharArray());
+			SSLContext context = SSLContext.getInstance("TLS");
+			context.init(kmf.getKeyManagers(), null, null);
+			InetAddress address = (host == null) ? null : InetAddress.getByName(host);
+			return context.getServerSocketFactory().createServerSocket(port, 50, address);
+		}
+		catch (IOException | GeneralSecurityException ex) {
+			throw new LispEvalException("tls-listen-pem: cannot listen on " + ((host == null) ? "*" : host) + ":" + port
+					+ ": " + ex.getMessage());
+		}
+	}
+
+	/**
+	 * Blocks until a client connects to the given listener.
+	 * @param listener a server socket returned by {@link #listen}
+	 * @return the accepted connection socket
+	 * @throws LispEvalException if accepting fails (e.g. the listener was closed)
+	 */
+	static Socket accept(ServerSocket listener) {
+		flushAll();
+		try {
+			return listener.accept();
+		}
+		catch (IOException ex) {
+			throw new LispEvalException("tcp-accept: " + ex.getMessage());
+		}
+	}
+
+	/**
+	 * Sets the read deadline of a connected socket ({@code SO_TIMEOUT}): every subsequent
+	 * blocking read signals after {@code milliseconds} without data. Zero clears the
+	 * deadline (blocking reads wait indefinitely again). The deadline lives on the raw
+	 * socket, so it keeps governing a connection later upgraded with {@code tls-upgrade}
+	 * (the wrapping {@code SSLSocket} reads through the same transport).
+	 * @param socket the connected socket
+	 * @param milliseconds the deadline in milliseconds, or 0 to clear it
+	 * @throws LispEvalException if the socket rejects the option (e.g. already closed)
+	 */
+	static void setTimeout(Socket socket, int milliseconds) {
+		try {
+			socket.setSoTimeout(milliseconds);
+		}
+		catch (java.net.SocketException ex) {
+			throw new LispEvalException("tcp-set-timeout: " + ex.getMessage());
+		}
+	}
+
+	/**
+	 * Sets the accept deadline of a listener ({@code SO_TIMEOUT}): an accept signals
+	 * {@code tcp-accept: Accept timed out} after {@code milliseconds} without a
+	 * connection. Zero clears it.
+	 * @param listener the listener
+	 * @param milliseconds the deadline, 0 for none
+	 */
+	static void setTimeout(ServerSocket listener, int milliseconds) {
+		try {
+			listener.setSoTimeout(milliseconds);
+		}
+		catch (java.net.SocketException ex) {
+			throw new LispEvalException("tcp-set-timeout: " + ex.getMessage());
+		}
+	}
+
+	/**
+	 * Returns the local port bound to a socket or listener handle, or {@code -1} for any
+	 * other stream entry.
+	 * @param entry a stream-table entry
+	 * @return the local port number, or -1 if the entry is not a TCP handle
+	 */
+	static long localPort(Closeable entry) {
+		if (entry instanceof ServerSocket listener) {
+			return listener.getLocalPort();
+		}
+		if (entry instanceof Socket socket) {
+			return socket.getLocalPort();
+		}
+		return -1;
+	}
+
+	/**
+	 * Returns the local/bound IP address of a socket or listener handle, or {@code null}
+	 * for any other stream entry.
+	 * @param entry a stream-table entry
+	 * @return the local IP address string, or null if the entry is not a TCP handle
+	 */
+	static @Nullable String localAddress(Closeable entry) {
+		if (entry instanceof ServerSocket listener) {
+			InetAddress address = listener.getInetAddress();
+			return (address == null) ? null : address.getHostAddress();
+		}
+		if (entry instanceof Socket socket) {
+			return socket.getLocalAddress().getHostAddress();
+		}
+		return null;
+	}
+
+	/**
+	 * Returns the remote IP address of a connected socket handle, or {@code null} for a
+	 * listener or any other stream entry.
+	 * @param entry a stream-table entry
+	 * @return the peer IP address string, or null if the entry is not a connected socket
+	 */
+	static @Nullable String peerAddress(Closeable entry) {
+		if (entry instanceof Socket socket) {
+			InetAddress address = socket.getInetAddress();
+			return (address == null) ? null : address.getHostAddress();
+		}
+		return null;
+	}
+
+	/**
+	 * Returns the remote port of a connected socket handle, or {@code -1} for a listener
+	 * or any other stream entry.
+	 * @param entry a stream-table entry
+	 * @return the peer port number, or -1 if the entry is not a connected socket
+	 */
+	static long peerPort(Closeable entry) {
+		if (entry instanceof Socket socket) {
+			return socket.getPort();
+		}
+		return -1;
+	}
+
+	/**
+	 * Reads one line from a socket: bytes up to a {@code \n} (exclusive, with one
+	 * trailing {@code \r} stripped for CRLF parity with {@code BufferedReader.readLine}),
+	 * decoded as UTF-8. Takes byte by byte from the socket's input, whose buffer every
+	 * read of the socket shares, so nothing read ahead is lost between calls.
+	 * @param socket the connected socket
+	 * @return the line, or {@code null} when the peer closed before any byte arrived
+	 */
+	static @Nullable String readLine(Socket socket) {
+		TerminatedLine line = readTerminatedLine(socket);
+		return line == null ? null : line.text();
+	}
+
+	/**
+	 * {@link #readLine(Socket)}, saying whether the peer's close -- not a {@code \n} --
+	 * ended the line ({@link TerminatedLine}).
+	 * @param socket the connected socket
+	 * @return the line, or {@code null} when the peer closed before any byte arrived
+	 */
+	static @Nullable TerminatedLine readTerminatedLine(Socket socket) {
+		try {
+			InputStream in = in(socket);
+			ByteArrayOutputStream line = new ByteArrayOutputStream();
+			int b = in.read();
+			if (b < 0) {
+				return null;
+			}
+			while (b >= 0 && b != '\n') {
+				line.write(b);
+				b = in.read();
+			}
+			byte[] bytes = line.toByteArray();
+			int length = (bytes.length > 0 && bytes[bytes.length - 1] == '\r') ? bytes.length - 1 : bytes.length;
+			return new TerminatedLine(new String(bytes, 0, length, StandardCharsets.UTF_8), b < 0);
+		}
+		catch (IOException ex) {
+			throw new LispEvalException("read-line: " + ex.getMessage());
+		}
+	}
+
+	/**
+	 * Writes a line (the string plus {@code \n}, UTF-8) to a socket's output buffer.
+	 * @param socket the connected socket
+	 * @param line the line to send (without the newline)
+	 */
+	static void writeLine(Socket socket, String line) {
+		try {
+			out(socket).write((line + "\n").getBytes(StandardCharsets.UTF_8));
+		}
+		catch (IOException ex) {
+			throw new LispEvalException("write-line: " + ex.getMessage());
+		}
+	}
+
+	/**
+	 * Writes a string (UTF-8) to a socket -- {@link #writeLine} without the newline.
+	 * @param socket the connected socket
+	 * @param text the string to send
+	 */
+	static void writeString(Socket socket, String text) {
+		try {
+			out(socket).write(text.getBytes(StandardCharsets.UTF_8));
+		}
+		catch (IOException ex) {
+			throw new LispEvalException("write-string: " + ex.getMessage());
+		}
+	}
+
+	/**
+	 * Reads ONE character -- a Unicode code point -- from a socket, assembling its UTF-8
+	 * sequence byte-wise off the socket's input. Never through a {@code Reader}: one
+	 * would buffer ahead of the socket's input and swallow bytes a following
+	 * {@code read-byte} / {@code read-line} owes the caller. An invalid lead byte stands
+	 * alone and decodes to whatever the UTF-8 decoder yields for it (U+FFFD), which is
+	 * what the component's byte-wise {@code %sock-read-char-f} answers as well.
+	 * @param socket the connected socket
+	 * @return the code point, or -1 when the peer closed before any byte arrived
+	 */
+	static int readChar(Socket socket) {
+		try {
+			InputStream in = in(socket);
+			int b0 = in.read();
+			if (b0 < 0) {
+				return -1;
+			}
+			if (b0 < 128) {
+				return b0;
+			}
+			int continuations = (b0 < 192) ? 0 : (b0 < 224) ? 1 : (b0 < 240) ? 2 : 3;
+			ByteArrayOutputStream sequence = new ByteArrayOutputStream();
+			sequence.write(b0);
+			for (int i = 0; i < continuations; i++) {
+				int bn = in.read();
+				if (bn < 0) {
+					break;
+				}
+				sequence.write(bn);
+			}
+			return new String(sequence.toByteArray(), StandardCharsets.UTF_8).codePointAt(0);
+		}
+		catch (IOException ex) {
+			throw new LispEvalException("read-char: " + ex.getMessage());
+		}
+	}
+
+	/**
+	 * Reads a single byte from a socket.
+	 * @param socket the connected socket
+	 * @return the byte value (0-255), or -1 at end of stream
+	 */
+	static int readByte(Socket socket) {
+		try {
+			return in(socket).read();
+		}
+		catch (IOException ex) {
+			throw new LispEvalException("read-byte: " + ex.getMessage());
+		}
+	}
+
+	/**
+	 * What has come of a socket, into {@code octets[start, end)}: with {@code wait} at
+	 * least one octet once one has come, then what else has; without, only what has. One
+	 * read of the socket's input ({@code rontolisp::%tcp-read-some}).
+	 * @param socket the connected socket
+	 * @param octets the storage of an {@code (unsigned-byte 8)} vector
+	 * @param start the first index stored
+	 * @param end the index below which octets are stored
+	 * @param wait whether to wait for the first octet
+	 * @return the index past the last octet stored: {@code start} at the end of the
+	 * stream, or without {@code wait} when nothing has come
+	 */
+	static int readSome(Socket socket, byte[] octets, int start, int end, boolean wait) {
+		try {
+			RontoSocketInput in = in(socket);
+			if (end <= start || (!wait && in.available() <= 0)) {
+				return start;
+			}
+			int n = in.read(octets, start, end - start);
+			return (n < 0) ? start : start + n;
+		}
+		catch (IOException ex) {
+			throw new LispEvalException("read-sequence: " + ex.getMessage());
+		}
+	}
+
+	/**
+	 * Fills {@code octets[start, end)} from a socket, or as much of it as comes before
+	 * the end of the stream: {@code read-sequence} of an octet vector.
+	 * @param socket the connected socket
+	 * @param octets the storage of an {@code (unsigned-byte 8)} vector
+	 * @param start the first index filled
+	 * @param end the index below which octets are filled
+	 * @return the index past the last octet stored
+	 */
+	static int readFully(Socket socket, byte[] octets, int start, int end) {
+		try {
+			return start + in(socket).readNBytes(octets, start, end - start);
+		}
+		catch (IOException ex) {
+			throw new LispEvalException("read-sequence: " + ex.getMessage());
+		}
+	}
+
+	/**
+	 * Writes a single byte to a socket's output buffer.
+	 * @param socket the connected socket
+	 * @param value the byte value (0-255)
+	 */
+	static void writeByte(Socket socket, int value) {
+		try {
+			out(socket).write(value);
+		}
+		catch (IOException ex) {
+			throw new LispEvalException("write-byte: " + ex.getMessage());
+		}
+	}
+
+}

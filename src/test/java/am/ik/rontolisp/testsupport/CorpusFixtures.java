@@ -1,0 +1,174 @@
+package am.ik.rontolisp.testsupport;
+
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.Set;
+import java.util.TreeSet;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
+
+/**
+ * The trees the ci-spec corpus needs but no backend can build at run time -- the
+ * wild-pathname walk's and the symbolic links {@code truename} resolves -- plus the
+ * {@code .lnk} fixture in the same position.
+ *
+ * <p>
+ * The {@code wild-pathnames} case walks a pathspec under {@code ./wpc-sub/} with a
+ * {@code **} directory component: a bounded tree anchored to a directory the run owns, so
+ * the walk enters exactly one directory and its answer cannot depend on what else the run
+ * directory holds. A {@code :wild-inferiors} anchored at the run directory itself (a
+ * {@code **} component in a pathspec starting at the working directory) instead reads
+ * EVERY directory below the process working directory -- on a box carrying agent
+ * checkouts under {@code .claude/worktrees/} that is a walk of thousands of directories,
+ * and the case's filter fixed the assertion, not the work.
+ *
+ * <p>
+ * The tree is staged by the driver because neither WASM backend can create a directory
+ * (the same reason {@code WasmLispCompilerIntegrationTest} builds its {@code wt} tree
+ * with {@code mkdir} in the container). <b>Every driver that RUNS the corpus stages it
+ * into a working directory THAT RUN OWNS</b>, because dozens of other cases write scratch
+ * files and even a nested tree (the
+ * {@code filesystem-write-create-rename-delete-and-probe} case's {@code w257/sub/dir/})
+ * at relative paths, and one of them reads a directory listing back. A run directory
+ * shared with anything else -- the second surefire fork, another build on the box, an
+ * orphaned one -- makes the program's OUTPUT depend on that other party
+ * ({@code .kb/test-execution.md}, "A test that runs a program in the project root").
+ * {@code CiSpecE2eTest} runs every leg in its {@code @TempDir};
+ * {@code JvmDeadMethodEliminationCorpusTest} runs the program in a subprocess for the
+ * same reason, one fresh directory per run. Neither has anything to clean up afterwards,
+ * which is why the snapshot-and-delete pair that used to live here is gone.
+ */
+public final class CorpusFixtures {
+
+	/** The directory name the {@code wild-pathnames} case anchors its walk to. */
+	public static final String WILD_PATHNAME_DIR = "wpc-sub";
+
+	/** The directory the {@code truename-resolves-symbolic-links} case reads. */
+	public static final String SYMLINK_DIR = "e95-links";
+
+	private CorpusFixtures() {
+	}
+
+	/**
+	 * Stages every fixture the corpus reads -- the one entry point a driver calls, so a
+	 * fixture added for one driver cannot be missing from another. Idempotent.
+	 * @param runDir the working directory the corpus program runs with
+	 * @throws IOException if a fixture cannot be staged
+	 */
+	public static void stageAll(Path runDir) throws IOException {
+		stageWildPathnameTree(runDir);
+		stageLnkFixture(runDir);
+		stageSymlinkTree(runDir);
+	}
+
+	/**
+	 * Stages the {@code wild-pathnames} tree under the directory the corpus program will
+	 * run in. Idempotent: safe to call for every leg of a driver.
+	 * @param runDir the working directory the corpus program runs with
+	 * @throws IOException if the tree cannot be staged
+	 */
+	public static void stageWildPathnameTree(Path runDir) throws IOException {
+		Path wpc = runDir.resolve(WILD_PATHNAME_DIR);
+		Files.createDirectories(wpc);
+		Files.writeString(wpc.resolve("wpc-a.txt"), "a\n");
+		Files.writeString(wpc.resolve("wpc-b.txt"), "b\n");
+	}
+
+	/**
+	 * The classpath resource holding the {@code .lnk} fixture the uiop/os parsers
+	 * consume.
+	 */
+	private static final String LNK_FIXTURE_RESOURCE = "/lnk/sample.lnk";
+
+	/** The file name the {@code uiop-os-host-identity} ci-spec case parses. */
+	public static final String LNK_FIXTURE_NAME = "x.lnk";
+
+	/**
+	 * The filesystem path of the {@code .lnk} fixture resource, for a unit test that
+	 * passes a pathname straight into {@code uiop:parse-windows-shortcut}.
+	 * @return the fixture's filesystem path
+	 * @throws IOException if the resource cannot be located on the filesystem
+	 */
+	public static Path lnkFixturePath() throws IOException {
+		var url = CorpusFixtures.class.getResource(LNK_FIXTURE_RESOURCE);
+		if (url == null) {
+			throw new IOException("missing .lnk fixture resource " + LNK_FIXTURE_RESOURCE);
+		}
+		try {
+			return Path.of(url.toURI());
+		}
+		catch (java.net.URISyntaxException e) {
+			throw new IOException("bad fixture URI " + url, e);
+		}
+	}
+
+	/**
+	 * Stages the {@code .lnk} fixture under the directory the corpus program runs in,
+	 * named {@link #LNK_FIXTURE_NAME} so the {@code uiop-os-host-identity} case can parse
+	 * it by that relative name. Idempotent.
+	 * @param runDir the working directory the corpus program runs with
+	 * @throws IOException if the fixture cannot be staged
+	 */
+	public static void stageLnkFixture(Path runDir) throws IOException {
+		Files.copy(lnkFixturePath(), runDir.resolve(LNK_FIXTURE_NAME),
+				java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+	}
+
+	/**
+	 * Stages the {@code truename-resolves-symbolic-links} tree: a file, two directories
+	 * and five symbolic links -- one of them dangling -- each target RELATIVE (a WASI
+	 * host follows no absolute one). No backend creates a link, so the driver does.
+	 * Idempotent: an existing tree is left as it is.
+	 * @param runDir the working directory the corpus program runs with
+	 * @throws IOException if the tree cannot be staged
+	 */
+	public static void stageSymlinkTree(Path runDir) throws IOException {
+		Path dir = runDir.resolve(SYMLINK_DIR);
+		if (Files.isDirectory(dir)) {
+			return;
+		}
+		Files.createDirectories(dir.resolve("d/e"));
+		Files.writeString(dir.resolve("a.txt"), "a\n");
+		Files.writeString(dir.resolve("d/f.txt"), "f\n");
+		Files.createSymbolicLink(dir.resolve("in"), Path.of("a.txt"));
+		Files.createSymbolicLink(dir.resolve("dl"), Path.of("d"));
+		Files.createSymbolicLink(dir.resolve("up"), Path.of("../" + SYMLINK_DIR + "/d"));
+		Files.createSymbolicLink(dir.resolve("dang"), Path.of("none"));
+		Files.createSymbolicLink(dir.resolve("de"), Path.of("d/e"));
+	}
+
+	/**
+	 * Writes a file dated 1960-06-01T00:00:00.5Z, 302486399.5 seconds before the Unix
+	 * epoch -- the universal time 1906502401 once truncated toward zero. {@code touch}
+	 * sets it: {@code Files.setLastModifiedTime} reads a time before 1970 as the epoch
+	 * itself on Linux (JDK 25, measured).
+	 * @param file the file to write
+	 * @throws IOException if the file cannot be written or dated
+	 * @throws InterruptedException if the wait for {@code touch} is interrupted
+	 */
+	public static void writePre1970File(Path file) throws IOException, InterruptedException {
+		Files.writeString(file, "old\n");
+		Process touch = new ProcessBuilder("touch", "-d", "1960-06-01T00:00:00.5Z", file.toString())
+			.redirectErrorStream(true)
+			.start();
+		String output = new String(touch.getInputStream().readAllBytes());
+		if (touch.waitFor() != 0) {
+			throw new IOException("touch failed: " + output);
+		}
+	}
+
+	/**
+	 * Records the top-level entry names present under {@code runDir}, for a test that
+	 * asserts a directory it does not own came out as it went in.
+	 * @param runDir the directory to record
+	 * @return its entry names
+	 * @throws IOException if the directory cannot be listed
+	 */
+	public static Set<String> snapshotTopLevel(Path runDir) throws IOException {
+		try (Stream<Path> children = Files.list(runDir)) {
+			return children.map(child -> child.getFileName().toString()).collect(Collectors.toCollection(TreeSet::new));
+		}
+	}
+
+}

@@ -1,0 +1,2077 @@
+package am.ik.rontolisp.reader;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.function.UnaryOperator;
+
+import am.ik.rontolisp.Binary32;
+import am.ik.rontolisp.FloatWidth;
+import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispNames;
+import am.ik.rontolisp.LispNil;
+import am.ik.rontolisp.LispSymbol;
+import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.PackageRegistry;
+import am.ik.rontolisp.SourceLocation;
+import org.jspecify.annotations.Nullable;
+
+/**
+ * Tokenizer for Lisp source code. Besides tokenizing, the lexer resolves the read-time
+ * syntax that never reaches the parser: {@code #| ... |#} block comments (nesting, like
+ * Common Lisp) and the {@code #+}/{@code #-} feature conditionals, evaluated against the
+ * active {@link Features} -- a failing guard skips the following form at the raw
+ * character level, so a skipped form may use syntax the reader does not support.
+ * {@code #.} read-time evaluation is not supported and is a clear error; in the tolerant
+ * mode used for {@code .asd} files the datum is wrapped in a {@code (%read-eval datum)}
+ * marker for the consumer to resolve (or, when it uses syntax the lexer cannot re-lex, in
+ * a {@code (%read-eval-unreadable "RAW TEXT")} marker the consumer decides about).
+ */
+public final class LispLexer {
+
+	/** How a {@code #.} read-time-eval form is handled. */
+	public enum ReadEvalMode {
+
+		/** {@code #.} is a read error (the default). */
+		ERROR,
+		/**
+		 * The datum is wrapped in a {@code (%read-eval datum)} marker; a datum that
+		 * cannot be re-lexed is wrapped in a {@code (%read-eval-unreadable "RAW TEXT")}
+		 * marker instead, for the consumer to accept or reject ({@code .asd} files).
+		 */
+		SKIP_UNREADABLE,
+		/**
+		 * The datum is wrapped in a {@code (%read-eval datum)} marker; an unreadable
+		 * datum is a read error (source files, resolved by the evaluator).
+		 */
+		MARKER
+
+	}
+
+	private final String input;
+
+	private Features features;
+
+	private final ReadEvalMode readEvalMode;
+
+	/** The origin file, or {@code null} when unknown; used to prefix read errors. */
+	private final @Nullable String file;
+
+	/**
+	 * Evaluates the {@code (%read-eval datum)} markers of a feature expression that holds
+	 * a {@code #.}, or {@code null} when this read has no evaluator -- a source read,
+	 * whose guard is then deferred to a {@code %read-time-feature} marker.
+	 */
+	private final @Nullable UnaryOperator<LispVal> readTimeEval;
+
+	private int pos;
+
+	/**
+	 * The readtable this read honors, or {@code null} for the standard syntax: the case a
+	 * token is converted by and the characters whose syntax differs, a reader macro
+	 * function among them ({@code .kb/readtables.md}).
+	 */
+	private @Nullable ReadSyntax syntax;
+
+	/** Set by {@link #readFeatureExpr} when the expression it read holds a {@code #.}. */
+	private boolean featureExprReadsEval;
+
+	/**
+	 * How many backquote templates enclose every datum this read reads: zero, but for a
+	 * reader macro function's recursive read inside a template
+	 * ({@link LispReader.Forms#withinTemplates}).
+	 */
+	private int baseTemplateDepth;
+
+	/**
+	 * How many backquote templates enclose the scan, within the datum
+	 * {@link #tokenizeNextDatum} is reading (CLHS 2.4.6): what a reader macro function
+	 * called here is handed for its own recursive read ({@code .kb/readtables.md}).
+	 */
+	private int templateDepth;
+
+	/**
+	 * The backquotes and commas whose datum is still being read, innermost last: the list
+	 * depth each stands at, doubled, plus one for a backquote.
+	 */
+	private int[] templatePrefixes = new int[8];
+
+	/**
+	 * The offset whose character reads by a standard macro function whatever the
+	 * readtable gives it, or -1: what calling that function reads
+	 * ({@link LispReader.Forms#readingFirstAs}).
+	 */
+	private int standardOffset = -1;
+
+	/** The standard macro character whose function reads at {@link #standardOffset}. */
+	private int standardAs;
+
+	private int templatePrefixCount;
+
+	/**
+	 * Create a new lexer for the given input with the interpreter feature set.
+	 * @param input the source code string
+	 */
+	public LispLexer(String input) {
+		this(input, Features.INTERPRETER, false);
+	}
+
+	/**
+	 * Create a new lexer for the given input.
+	 * @param input the source code string
+	 * @param features the features the {@code #+}/{@code #-} conditionals test
+	 * @param tolerateReadEval whether a {@code #.} form is skipped with a warning instead
+	 * of being an error (used for {@code .asd} files)
+	 */
+	public LispLexer(String input, Features features, boolean tolerateReadEval) {
+		this(input, features, tolerateReadEval ? ReadEvalMode.SKIP_UNREADABLE : ReadEvalMode.ERROR);
+	}
+
+	/**
+	 * Create a new lexer for the given input.
+	 * @param input the source code string
+	 * @param features the features the {@code #+}/{@code #-} conditionals test
+	 * @param readEvalMode how a {@code #.} read-time-eval form is handled
+	 */
+	public LispLexer(String input, Features features, ReadEvalMode readEvalMode) {
+		this(input, features, readEvalMode, null);
+	}
+
+	/**
+	 * Create a new lexer for the given input.
+	 * @param input the source code string
+	 * @param features the features the {@code #+}/{@code #-} conditionals test
+	 * @param readEvalMode how a {@code #.} read-time-eval form is handled
+	 * @param file the origin file, or {@code null} when unknown
+	 */
+	public LispLexer(String input, Features features, ReadEvalMode readEvalMode, @Nullable String file) {
+		this(input, features, readEvalMode, file, null);
+	}
+
+	/**
+	 * Create a new lexer for the given input.
+	 * @param input the source code string
+	 * @param features the features the {@code #+}/{@code #-} conditionals test
+	 * @param readEvalMode how a {@code #.} read-time-eval form is handled
+	 * @param file the origin file, or {@code null} when unknown
+	 * @param readTimeEval replaces the {@code (%read-eval datum)} markers of a feature
+	 * expression by their values, so a {@code #+#.(...)} guard is decided while lexing;
+	 * {@code null} defers such a guard to a {@code %read-time-feature} marker
+	 */
+	public LispLexer(String input, Features features, ReadEvalMode readEvalMode, @Nullable String file,
+			@Nullable UnaryOperator<LispVal> readTimeEval) {
+		this.input = input;
+		this.features = features;
+		this.readEvalMode = readEvalMode;
+		this.file = file;
+		this.readTimeEval = readTimeEval;
+		this.pos = 0;
+	}
+
+	/**
+	 * Reads with a readtable from here on ({@code null}: the standard syntax). An
+	 * incremental read sets it before each top-level datum, since evaluating one may
+	 * change {@code *readtable*} for the next.
+	 * @param syntax the syntax
+	 */
+	void setSyntax(@Nullable ReadSyntax syntax) {
+		this.syntax = syntax;
+	}
+
+	/**
+	 * Widens the features the guards test from here on: an incremental read's forms ran,
+	 * and what they pushed onto {@code *features*} holds for the next.
+	 * @param pushed the feature names, without the leading colon
+	 */
+	void widenFeatures(List<String> pushed) {
+		this.features = this.features.with(pushed);
+	}
+
+	/**
+	 * The features the guards test now.
+	 * @return the features
+	 */
+	Features features() {
+		return this.features;
+	}
+
+	/**
+	 * Reads every datum from here on inside {@code depth} backquote templates: a reader
+	 * macro function's recursive read.
+	 * @param depth how many templates enclose the read
+	 */
+	void withinTemplates(int depth) {
+		this.baseTemplateDepth = depth;
+	}
+
+	/**
+	 * Reads the character at the scan by the standard function of {@code as}, once: what
+	 * a call of that function reads (CLHS 2.4), the readtable's own entry for the
+	 * character notwithstanding. Every datum after it reads with the readtable.
+	 * @param as the standard macro character
+	 */
+	void readingFirstAs(int as) {
+		this.standardOffset = this.pos;
+		this.standardAs = as;
+	}
+
+	/**
+	 * Moves the scan to an offset: a read of one datum out of the middle of a text (a
+	 * string stream's position).
+	 * @param offset the UTF-16 offset
+	 */
+	void seek(int offset) {
+		this.pos = offset;
+	}
+
+	/**
+	 * The offset the scan stands at.
+	 * @return the UTF-16 offset
+	 */
+	int position() {
+		return this.pos;
+	}
+
+	/**
+	 * A {@link LispReadException} whose message is prefixed with the current position in
+	 * this input. The lexer scans character-by-character, so {@code pos} is the failing
+	 * (or last-consumed) offset -- right for every error the scan detects AT the bad
+	 * input. A construct that only fails at end of input uses {@link #errAt} instead.
+	 * @param message the error message
+	 * @return the positioned exception
+	 */
+	private LispReadException err(String message) {
+		return errAt(this.pos, message);
+	}
+
+	/**
+	 * A {@link LispReadException} positioned at an explicit offset rather than at the
+	 * scan position. Used by every construct that fails only once it runs out of input
+	 * (an unterminated string, block comment, {@code |...|} escape or skipped list): the
+	 * scan position is then end-of-file, which in a big spliced library names the last
+	 * line of the file instead of the opening delimiter that actually needs fixing.
+	 * @param offset the character offset to report
+	 * @param message the error message
+	 * @return the positioned exception
+	 */
+	private LispReadException errAt(int offset, String message) {
+		return new LispReadException(message, SourceLocation.at(this.file, offset, this.input));
+	}
+
+	/**
+	 * A {@link LispReadException} for a datum the input ran out in the middle of -- the
+	 * runtime {@code read} family turns it into an {@code end-of-file} condition rather
+	 * than a {@code reader-error}.
+	 * @param message the error message
+	 * @return the positioned exception
+	 */
+	private LispReadException eof(String message) {
+		return eofAt(this.pos, message);
+	}
+
+	/**
+	 * A {@link LispReadException} for an unterminated construct, positioned at its
+	 * opening delimiter rather than at the end of input it ran into.
+	 * @param offset the character offset to report
+	 * @param message the error message
+	 * @return the positioned exception
+	 */
+	private LispReadException eofAt(int offset, String message) {
+		return new LispReadException(message, SourceLocation.at(this.file, offset, this.input), true);
+	}
+
+	private static void add(List<LocatedToken> tokens, Token token, int offset) {
+		tokens.add(new LocatedToken(token, offset));
+	}
+
+	/**
+	 * Tokenize the input into a list of tokens.
+	 * @return the tokens
+	 */
+	public List<Token> tokenize() {
+		return tokenizeWithPositions().stream().map(LocatedToken::token).toList();
+	}
+
+	/**
+	 * Tokenize the input into a list of tokens, each paired with the character offset at
+	 * which it starts in the input -- the position the parser reports on a read error.
+	 * @return the positioned tokens
+	 */
+	public List<LocatedToken> tokenizeWithPositions() {
+		List<LocatedToken> tokens = new ArrayList<>();
+		tokenizeInto(tokens);
+		return tokens;
+	}
+
+	/**
+	 * Tokenizes as far as the input lexes: the tokens before the first lexical error, and
+	 * that error. A token is added only once it is complete, so the tokens are the ones a
+	 * full tokenization would have started with.
+	 * @return the tokens and the error that stopped the scan, or {@code null} when the
+	 * whole input lexed
+	 */
+	Prefix tokenizePrefix() {
+		List<LocatedToken> tokens = new ArrayList<>();
+		try {
+			tokenizeInto(tokens);
+			return new Prefix(tokens, null);
+		}
+		catch (LispReadException ex) {
+			return new Prefix(tokens, ex);
+		}
+	}
+
+	/**
+	 * The tokens before the first lexical error, and that error.
+	 *
+	 * @param tokens the positioned tokens
+	 * @param error the error that stopped the scan, or {@code null} when the whole input
+	 * lexed
+	 */
+	record Prefix(List<LocatedToken> tokens, @Nullable LispReadException error) {
+	}
+
+	private void tokenizeInto(List<LocatedToken> tokens) {
+		while (this.pos < this.input.length()) {
+			lexUnit(tokens);
+		}
+	}
+
+	/** How {@link #tokenizeNextDatum} ended. */
+	enum Next {
+
+		/** The tokens of one whole datum were added. */
+		DATUM,
+		/** The input ended before any token of a datum. */
+		END,
+		/** The stop character stands at the scan, before any token of a datum. */
+		STOPPED
+
+	}
+
+	/**
+	 * Tokenizes ONE top-level datum and stops behind it -- the incremental read a
+	 * form-at-a-time {@code load} needs, since evaluating a form may change the readtable
+	 * the next one is read with, and a reader macro function must run when the read
+	 * reaches it, not before. Whitespace, comments, a failed {@code #+} guard and a
+	 * reader macro answering no value add nothing and the scan goes on.
+	 * @param tokens where the datum's tokens are added
+	 * @param stopAt a character that ends the scan when it stands where a datum would
+	 * start ({@code read-delimited-list}'s), or -1
+	 * @return how the scan ended; the input may end INSIDE a datum, which the parse then
+	 * reports
+	 */
+	Next tokenizeNextDatum(List<LocatedToken> tokens, int stopAt) {
+		int start = tokens.size();
+		int depth = 0;
+		boolean pendingPrefix = false;
+		this.templateDepth = this.baseTemplateDepth;
+		this.templatePrefixCount = 0;
+		while (this.pos < this.input.length()) {
+			if (stopAt >= 0 && tokens.size() == start && this.input.codePointAt(this.pos) == stopAt) {
+				return Next.STOPPED;
+			}
+			int before = tokens.size();
+			lexUnit(tokens);
+			for (int i = before; i < tokens.size(); i++) {
+				Token token = tokens.get(i).token();
+				if (opensDatum(token)) {
+					depth++;
+					pendingPrefix = false;
+				}
+				else if (token instanceof Token.RightParen) {
+					depth = Math.max(0, depth - 1);
+					pendingPrefix = false;
+				}
+				else {
+					pendingPrefix = depth == 0 && isPrefixToken(token);
+				}
+				followTemplateDepth(token, depth);
+			}
+			if (tokens.size() > start && depth == 0 && !pendingPrefix) {
+				return Next.DATUM;
+			}
+		}
+		return tokens.size() > start ? Next.DATUM : Next.END;
+	}
+
+	// Follows the backquote depth across one token of the datum being read (CLHS 2.4.6):
+	// a backquote adds one and a comma takes one away, each for the datum after it,
+	// which ends at an atom -- or at the ')' bringing the list depth back to where the
+	// prefix stood. listDepth is the depth after the token.
+	private void followTemplateDepth(Token token, int listDepth) {
+		boolean backquote = token instanceof Token.Backquote;
+		if (backquote || token instanceof Token.Unquote || token instanceof Token.UnquoteSplicing) {
+			if (this.templatePrefixCount == this.templatePrefixes.length) {
+				this.templatePrefixes = java.util.Arrays.copyOf(this.templatePrefixes, this.templatePrefixCount * 2);
+			}
+			this.templatePrefixes[this.templatePrefixCount++] = listDepth << 1 | (backquote ? 1 : 0);
+			this.templateDepth += backquote ? 1 : -1;
+		}
+		else if (!opensDatum(token) && !isPrefixToken(token)) {
+			while (this.templatePrefixCount > 0
+					&& this.templatePrefixes[this.templatePrefixCount - 1] >> 1 >= listDepth) {
+				this.templateDepth -= (this.templatePrefixes[--this.templatePrefixCount] & 1) == 1 ? 1 : -1;
+			}
+		}
+	}
+
+	// Whether a token opens a datum its own ')' closes.
+	private static boolean opensDatum(Token token) {
+		return token instanceof Token.LeftParen || token instanceof Token.VectorOpen
+				|| token instanceof Token.StructOpen || token instanceof Token.SharpC
+				|| token instanceof Token.ArrayOpen array && array.rank() > 0 || token instanceof Token.FloatArrayOpen
+				|| token instanceof Token.IntVectorOpen;
+	}
+
+	// One lexical unit: a token (or the few a #. or a deferred #+ marker spells), or the
+	// whitespace, comment or failed guard that yields none.
+	private void lexUnit(List<LocatedToken> tokens) {
+		{
+			char c = this.input.charAt(this.pos);
+			if (this.pos == this.standardOffset) {
+				this.standardOffset = -1;
+				int code = this.input.codePointAt(this.pos);
+				lexStandard(tokens, this.standardAs, code, this.pos, this.pos + Character.charCount(code));
+				return;
+			}
+			// A character the readtable gives another syntax reads by it first: a reader
+			// macro function, a remapped standard one, whitespace or a constituent.
+			if (this.syntax != null && lexSyntaxEntry(tokens)) {
+				return;
+			}
+			// Whitespace, comments and feature conditionals produce no token; consuming
+			// them here lets every token branch below start at a real token start.
+			if (Character.isWhitespace(c)) {
+				this.pos++;
+				return;
+			}
+			if (c == ';') {
+				skipComment();
+				return;
+			}
+			if (c == '#' && this.pos + 1 < this.input.length() && this.input.charAt(this.pos + 1) == '|') {
+				skipBlockComment();
+				return;
+			}
+			if (c == '#' && this.pos + 1 < this.input.length()
+					&& (this.input.charAt(this.pos + 1) == '+' || this.input.charAt(this.pos + 1) == '-')) {
+				readFeatureConditional(tokens);
+				return;
+			}
+			int tokenStart = this.pos;
+			if (c == '(') {
+				add(tokens, new Token.LeftParen(), tokenStart);
+				this.pos++;
+			}
+			else if (c == ')') {
+				add(tokens, new Token.RightParen(), tokenStart);
+				this.pos++;
+			}
+			else if (c == '\'') {
+				add(tokens, new Token.Quote(), tokenStart);
+				this.pos++;
+			}
+			else if (c == '`') {
+				add(tokens, new Token.Backquote(), tokenStart);
+				this.pos++;
+			}
+			else if (c == ',') {
+				// A comma between two digits is a grouping separator consumed inside
+				// readNumber (e.g. "1,000"), so a comma reaching here starts a token:
+				// unquote (,x) or unquote-splicing (,@x / ,.x) inside a backquote
+				// template. CLHS 2.4.6 gives ",." the semantics of ",@" plus permission
+				// to destroy the spliced list; splicing non-destructively is conformant,
+				// so both spellings produce one token.
+				if (this.pos + 1 < this.input.length()
+						&& (this.input.charAt(this.pos + 1) == '@' || this.input.charAt(this.pos + 1) == '.')) {
+					add(tokens, new Token.UnquoteSplicing(), tokenStart);
+					this.pos += 2;
+				}
+				else {
+					add(tokens, new Token.Unquote(), tokenStart);
+					this.pos++;
+				}
+			}
+			else if (c == '#' && this.pos + 1 < this.input.length() && this.input.charAt(this.pos + 1) == '\'') {
+				add(tokens, new Token.FunctionQuote(), tokenStart);
+				this.pos += 2;
+			}
+			else if (c == '#' && this.pos + 1 < this.input.length()
+					&& (this.input.charAt(this.pos + 1) == 'L' || this.input.charAt(this.pos + 1) == 'l')) {
+				// #L( -- iterate's SharpL abbreviation, native here for the same reason
+				// #N@( is: a user dispatch macro cannot extend the Java-side reader, and
+				// set-dispatch-macro-character is an accepted no-op. The arity is the
+				// highest !n the datum mentions; the reader does the lowering.
+				add(tokens, new Token.SharpL(-1), tokenStart);
+				this.pos += 2;
+			}
+			else if (c == '#' && this.pos + 1 < this.input.length() && this.input.charAt(this.pos + 1) == '.') {
+				if (this.readEvalMode == ReadEvalMode.ERROR) {
+					throw err("#. read-time evaluation is not supported");
+				}
+				this.pos += 2;
+				int datumStart = this.pos;
+				skipDatum();
+				// Re-lex the skipped datum and wrap it in a (%read-eval datum) marker for
+				// the consumer to resolve: AsdfSystems in the image a .asd file is loaded
+				// into, the evaluator's load against the global environment. In
+				// SKIP_UNREADABLE mode a datum using syntax the lexer does not support
+				// becomes a (%read-eval-unreadable "RAW TEXT") marker instead: it keeps
+				// the surrounding structure (a #. inside a plist/alist must not shift the
+				// remaining key/value pairing) AND leaves the decision "does this value
+				// matter" to the consumer, which is the only layer that knows. Warning
+				// here cannot be right -- most such data sits in metadata nothing reads.
+				List<LocatedToken> datumTokens = tryTokenizeReadEvalDatum(this.input.substring(datumStart, this.pos));
+				if (datumTokens == null) {
+					if (this.readEvalMode == ReadEvalMode.MARKER) {
+						throw err("#. datum could not be read: " + this.input.substring(datumStart, this.pos));
+					}
+					add(tokens, new Token.LeftParen(), tokenStart);
+					add(tokens, new Token.SymbolToken(LispNames.READ_EVAL_UNREADABLE), tokenStart);
+					add(tokens, new Token.StringToken(this.input.substring(datumStart, this.pos).trim()), datumStart);
+					add(tokens, new Token.RightParen(), this.pos);
+				}
+				else {
+					// The marker's tokens all sit at (or just after) the #.; the datum's
+					// own tokens are rebased onto their real offset in this input.
+					add(tokens, new Token.LeftParen(), tokenStart);
+					add(tokens, new Token.SymbolToken(LispNames.READ_EVAL), tokenStart);
+					for (LocatedToken datumToken : datumTokens) {
+						tokens.add(new LocatedToken(datumToken.token(), datumStart + datumToken.offset()));
+					}
+					add(tokens, new Token.RightParen(), this.pos);
+				}
+			}
+			else if (c == '#' && this.pos + 1 < this.input.length() && this.input.charAt(this.pos + 1) == '\\') {
+				add(tokens, readChar(), tokenStart);
+			}
+			else if (c == '#' && this.pos + 1 < this.input.length() && this.input.charAt(this.pos + 1) == '(') {
+				add(tokens, new Token.VectorOpen(), tokenStart);
+				this.pos += 2;
+			}
+			else if (c == '#' && this.pos + 2 < this.input.length()
+					&& (this.input.charAt(this.pos + 1) == 'S' || this.input.charAt(this.pos + 1) == 's')
+					&& this.input.charAt(this.pos + 2) == '(') {
+				// #S( opens a structure literal (e.g., #S(POINT :X 1 :Y 2)); the contents
+				// are read as data and folded into an instance once a registry is
+				// available. #S not followed by '(' falls through to symbol reading
+				// below,
+				// which is what it did before this branch existed.
+				add(tokens, new Token.StructOpen(), tokenStart);
+				this.pos += 3;
+			}
+			else if (c == '#' && this.pos + 2 < this.input.length()
+					&& (this.input.charAt(this.pos + 1) == 'C' || this.input.charAt(this.pos + 1) == 'c')
+					&& this.input.charAt(this.pos + 2) == '(') {
+				// #C( opens a complex literal (e.g., #C(1 2)); the contents are two
+				// real numbers read as data and folded to the canonical value. #C
+				// not followed by '(' falls through to symbol reading below, like
+				// #S.
+				add(tokens, new Token.SharpC(), tokenStart);
+				this.pos += 3;
+			}
+			else if (c == '#' && this.pos + 2 < this.input.length()
+					&& (this.input.charAt(this.pos + 1) == 'P' || this.input.charAt(this.pos + 1) == 'p')
+					&& this.input.charAt(this.pos + 2) == '"') {
+				// #P"foo/bar" is a pathname literal: the string that follows is the
+				// namestring and the reader builds the pathname VALUE (an instance over
+				// the fixed LispLayout.PATHNAME) from the pair. #P not followed by a
+				// string falls through to symbol reading.
+				add(tokens, new Token.PathnameOpen(), tokenStart);
+				this.pos += 2;
+			}
+			else if (c == '#' && this.pos + 1 < this.input.length() && this.input.charAt(this.pos + 1) == '<') {
+				// #< starts printed-unreadable syntax (#<FUNCTION ...>); it is never
+				// readable (CLHS 2.4.8), so refuse it instead of misreading it as a
+				// symbol.
+				throw err("#< is not readable");
+			}
+			else if (c == '#' && this.pos + 1 < this.input.length() && this.input.charAt(this.pos + 1) == '*') {
+				// #*1010 is a bit-vector literal; #* alone is the empty bit vector
+				// (cl-ppcre's charmap slot default #*0). A constituent character
+				// behind the bits (#*012) makes the whole token invalid rather than
+				// a vector followed by a number (the requireRadixTokenEnd rule).
+				int probe = this.pos + 2;
+				while (probe < this.input.length()
+						&& (this.input.charAt(probe) == '0' || this.input.charAt(probe) == '1')) {
+					probe++;
+				}
+				if (probe < this.input.length() && isSymbolChar(this.input.charAt(probe))) {
+					int tokenEnd = probe + 1;
+					while (tokenEnd < this.input.length() && isSymbolChar(this.input.charAt(tokenEnd))) {
+						tokenEnd++;
+					}
+					throw err("Invalid bit in bit-vector literal: " + this.input.substring(this.pos, tokenEnd));
+				}
+				add(tokens, new Token.BitVectorToken(this.input.substring(this.pos + 2, probe)), tokenStart);
+				this.pos = probe;
+			}
+			else if (c == '#' && this.pos + 5 < this.input.length()
+					&& (this.input.charAt(this.pos + 1) == 'b' || this.input.charAt(this.pos + 1) == 'B')
+					&& (this.input.charAt(this.pos + 2) == 'f' || this.input.charAt(this.pos + 2) == 'F')
+					&& this.input.charAt(this.pos + 3) == '1' && this.input.charAt(this.pos + 4) == '6'
+					&& this.input.charAt(this.pos + 5) == '(') {
+				// #bf16( opens a packed bfloat16 array literal. This branch MUST be tried
+				// before the #x/#o/#b radix branch below, which would otherwise claim the
+				// #b: 'f' is not a binary digit, so that reader would only fail rather
+				// than mis-read, but the ordering is the thing that keeps it so.
+				add(tokens, new Token.FloatArrayOpen(FloatWidth.BFLOAT16), tokenStart);
+				this.pos += 6;
+			}
+			else if (c == '#' && this.pos + 2 < this.input.length()
+					&& (this.input.charAt(this.pos + 1) == 'f' || this.input.charAt(this.pos + 1) == 'F')
+					&& this.input.charAt(this.pos + 2) == '(') {
+				// #f( opens a packed-double array literal (e.g., #f(1.0 2.0 3.0)); the
+				// contents are read as a nested-list structure and the rank is inferred
+				// at
+				// read time. #f not followed by '(' falls through to symbol reading
+				// below.
+				add(tokens, new Token.FloatArrayOpen(FloatWidth.SINGLE), tokenStart);
+				this.pos += 3;
+			}
+			else if (c == '#' && this.pos + 2 < this.input.length()
+					&& (this.input.charAt(this.pos + 1) == 'd' || this.input.charAt(this.pos + 1) == 'D')
+					&& this.input.charAt(this.pos + 2) == '(') {
+				// #d( opens a packed double-float array literal (e.g., #d(1.0 2.0 3.0));
+				// same nested-list contents and inferred rank as #f(, but the wider (f64)
+				// backing. #d not followed by '(' falls through to symbol reading below.
+				add(tokens, new Token.FloatArrayOpen(FloatWidth.DOUBLE), tokenStart);
+				this.pos += 3;
+			}
+			else if (c == '#' && this.pos + 1 < this.input.length() && isDigit(this.input.charAt(this.pos + 1))) {
+				// #nA( opens a rank-n array literal (e.g., #2A((1 2) (3 4))), and #0A
+				// opens the rank-0 one, whose single datum follows WITHOUT parens
+				// (#0A5, #0ANIL, #0A(1 2) -- an array holding the list). Anything else
+				// after #<digits> falls through to symbol reading, preserving the
+				// previous tokenization.
+				int probe = this.pos + 1;
+				while (probe < this.input.length() && isDigit(this.input.charAt(probe))) {
+					probe++;
+				}
+				int arrayRank = -1;
+				if (probe < this.input.length()
+						&& (this.input.charAt(probe) == 'A' || this.input.charAt(probe) == 'a')) {
+					try {
+						arrayRank = Integer.parseInt(this.input.substring(this.pos + 1, probe));
+					}
+					catch (NumberFormatException overflow) {
+						throw err("Invalid array rank: " + this.input.substring(this.pos, probe));
+					}
+					// A rank-0 literal is #0A<datum> -- no parens to consume, the reader
+					// takes the next object whole. Every other rank opens with '('.
+					if (arrayRank > 0 && !(probe + 1 < this.input.length() && this.input.charAt(probe + 1) == '(')) {
+						arrayRank = -1;
+					}
+				}
+				if (arrayRank >= 0) {
+					add(tokens, new Token.ArrayOpen(arrayRank), tokenStart);
+					this.pos = arrayRank == 0 ? probe + 1 : probe + 2;
+				}
+				else if (probe + 1 < this.input.length() && this.input.charAt(probe) == '@'
+						&& this.input.charAt(probe + 1) == '(') {
+					// #N@( is ironclad's s-box literal (its array-reader dispatch
+					// macro): a (make-array LEN :element-type '(unsigned-byte N)
+					// :initial-contents '(...)) form. For the packed widths (8/16/32)
+					// it reads into the packed integer-vector representation -- the
+					// same value the ironclad form evaluates to now that make-array
+					// packs those element types; any other width reads as a plain
+					// vector literal.
+					int width;
+					try {
+						width = Integer.parseInt(this.input.substring(this.pos + 1, probe));
+					}
+					catch (NumberFormatException overflow) {
+						throw err("Invalid packed width: " + this.input.substring(this.pos, probe));
+					}
+					add(tokens, width == 8 || width == 16 || width == 32 ? new Token.IntVectorOpen(width)
+							: new Token.VectorOpen(), tokenStart);
+					this.pos = probe + 2;
+				}
+				else if (probe < this.input.length()
+						&& (this.input.charAt(probe) == 'L' || this.input.charAt(probe) == 'l')) {
+					// #nL: iterate's numbered-argument lambda with the arity spelled
+					// out. Lowered by the reader over the datum that follows.
+					int nArgs;
+					try {
+						nArgs = Integer.parseInt(this.input.substring(this.pos + 1, probe));
+					}
+					catch (NumberFormatException overflow) {
+						throw err("Invalid #L argument count: " + this.input.substring(this.pos, probe));
+					}
+					add(tokens, new Token.SharpL(nArgs), tokenStart);
+					this.pos = probe + 1;
+				}
+				else if (probe < this.input.length()
+						&& (this.input.charAt(probe) == 'R' || this.input.charAt(probe) == 'r')) {
+					// #<n>R: a rational in an explicit radix, the general form the fixed
+					// #b/#o/#x spellings abbreviate (CLHS 2.4.8.10). The radix is the
+					// infix argument and must be 2..36 -- an out-of-range one is a read
+					// error rather than a symbol, because no symbol spelling can reach
+					// here.
+					int radix;
+					try {
+						radix = Integer.parseInt(this.input.substring(this.pos + 1, probe));
+					}
+					catch (NumberFormatException overflow) {
+						throw err("Invalid radix: " + this.input.substring(this.pos, probe + 1));
+					}
+					if (radix < 2 || radix > 36) {
+						throw err("Radix must be between 2 and 36: " + this.input.substring(this.pos, probe + 1));
+					}
+					add(tokens, readRadixNumber(radix, probe + 1, this.input.substring(this.pos, probe + 1)),
+							tokenStart);
+				}
+				else if (probe < this.input.length() && this.input.charAt(probe) == '*') {
+					// #n*... is a bit-vector literal of length n (CLHS 2.4.8.4): the
+					// bits behind the '*' are 0/1 (a constituent behind them
+					// invalidates the whole token, the requireRadixTokenEnd rule),
+					// more bits than n is a read error, and fewer than n repeat the
+					// LAST bit to fill (#5*010 is 0 1 0 0 0). Zero bits with n > 0
+					// (#1* X) is a read error -- there is no last bit to repeat;
+					// #0* is the empty vector.
+					int length;
+					try {
+						length = Integer.parseInt(this.input.substring(this.pos + 1, probe));
+					}
+					catch (NumberFormatException overflow) {
+						throw err("Invalid bit-vector length: " + this.input.substring(this.pos, probe + 1));
+					}
+					int bitsStart = probe + 1;
+					int bitsEnd = bitsStart;
+					while (bitsEnd < this.input.length()
+							&& (this.input.charAt(bitsEnd) == '0' || this.input.charAt(bitsEnd) == '1')) {
+						bitsEnd++;
+					}
+					int tokenEnd = bitsEnd;
+					while (tokenEnd < this.input.length() && isSymbolChar(this.input.charAt(tokenEnd))) {
+						tokenEnd++;
+					}
+					String token = this.input.substring(this.pos, tokenEnd);
+					if (tokenEnd > bitsEnd) {
+						throw err("Invalid bit in bit-vector literal: " + token);
+					}
+					int given = bitsEnd - bitsStart;
+					if (given > length) {
+						throw err("Too many bits in bit-vector literal: " + token);
+					}
+					String bits = this.input.substring(bitsStart, bitsEnd);
+					if (given < length) {
+						if (given == 0) {
+							throw err("No bits in bit-vector literal: " + token);
+						}
+						bits = bits + String.valueOf(bits.charAt(bits.length() - 1)).repeat(length - given);
+					}
+					add(tokens, new Token.BitVectorToken(bits), tokenStart);
+					this.pos = bitsEnd;
+				}
+				else if (probe < this.input.length()
+						&& (this.input.charAt(probe) == '=' || this.input.charAt(probe) == '#')) {
+					// #n= labels the next datum, #n# references it. The label is kept as
+					// DIGITS: CLHS 2.4.8.3 bounds neither the value nor the digit count,
+					// and a label wide enough to overflow an int used to be a read error
+					// (the suite writes #123456789123456789=).
+					String label = new java.math.BigInteger(this.input.substring(this.pos + 1, probe)).toString();
+					add(tokens, this.input.charAt(probe) == '=' ? new Token.LabelDef(label) : new Token.LabelRef(label),
+							tokenStart);
+					this.pos = probe + 1;
+				}
+				else {
+					add(tokens, readSymbol(), tokenStart);
+				}
+			}
+			else if (c == '#' && this.pos + 1 < this.input.length() && isRadixMarker(this.input.charAt(this.pos + 1))) {
+				add(tokens, readRadixNumber(), tokenStart);
+			}
+			else if (this.syntax != null && this.syntax.readBase() != 10 && lexRationalInReadBase(tokens)) {
+				return;
+			}
+			else if (c == '.') {
+				if (this.pos + 1 < this.input.length() && isDigit(this.input.charAt(this.pos + 1))) {
+					// ".4" is the float 0.4 (CLHS 2.3.1), not a symbol: a decimal point
+					// followed by a digit always starts a number, so "(a .5)" reads as
+					// (A 0.5) -- a dotted pair must spell the dot bare, "(a . 5)".
+					add(tokens, readNumber(""), tokenStart);
+				}
+				else if (this.pos + 1 < this.input.length() && this.input.charAt(this.pos + 1) == '.') {
+					// A run of dots with nothing else in the token is not a symbol
+					// (CLHS 2.3.1): one Dot token per dot, so the reader refuses it
+					// wherever a datum is expected (.., ...). Dots glued to other
+					// characters (..a, ..4) or to escapes (..||) stay a symbol.
+					int run = this.pos + 1;
+					while (run < this.input.length() && this.input.charAt(run) == '.') {
+						run++;
+					}
+					if (run >= this.input.length() || !isSymbolChar(this.input.charAt(run))) {
+						while (this.pos < run) {
+							add(tokens, new Token.Dot(), this.pos);
+							this.pos++;
+						}
+					}
+					else {
+						add(tokens, readSymbol(), tokenStart);
+					}
+				}
+				else if (this.pos + 1 >= this.input.length() || !isSymbolChar(this.input.charAt(this.pos + 1))) {
+					add(tokens, new Token.Dot(), tokenStart);
+					this.pos++;
+				}
+				else {
+					add(tokens, readSymbol(), tokenStart);
+				}
+			}
+			else if (c == '"') {
+				add(tokens, readString(), tokenStart);
+			}
+			else if (isDigit(c)) {
+				add(tokens, readNumber(""), tokenStart);
+			}
+			else if (c == '-' && this.pos + 1 < this.input.length()
+					&& (isDigit(this.input.charAt(this.pos + 1)) || startsDotNumber(this.pos + 1))) {
+				add(tokens, readNumber(""), tokenStart);
+			}
+			else if (c == '+' && this.pos + 1 < this.input.length()
+					&& (isDigit(this.input.charAt(this.pos + 1)) || startsDotNumber(this.pos + 1))) {
+				// An explicitly positive number literal (+347): the sign is consumed and
+				// the digits parse as usual. A '+' followed by anything else (a symbol
+				// like +limit+ or the function +) stays a symbol.
+				this.pos++;
+				add(tokens, readNumber("+"), tokenStart);
+			}
+			else {
+				add(tokens, readSymbol(), tokenStart);
+			}
+		}
+	}
+
+	// The readtable's own syntax for the character at the scan, when it has one: true
+	// when the unit was read here, false when the character reads as standard after all
+	// (a # whose sub-character the table leaves standard).
+	private boolean lexSyntaxEntry(List<LocatedToken> tokens) {
+		ReadSyntax rs = java.util.Objects.requireNonNull(this.syntax);
+		int c = this.input.codePointAt(this.pos);
+		ReadSyntax.Entry entry = rs.entry(c);
+		if (entry == null) {
+			return false;
+		}
+		int start = this.pos;
+		int after = this.pos + Character.charCount(c);
+		switch (entry) {
+			case ReadSyntax.Whitespace ignored -> this.pos = after;
+			case ReadSyntax.Constituent ignored -> add(tokens, readSymbol(), start);
+			case ReadSyntax.Call call ->
+				callReaderMacro(tokens, rs, call.function(), start, after, List.of(new am.ik.rontolisp.LispChar(c)));
+			case ReadSyntax.Standard standard -> lexStandard(tokens, standard.as(), c, start, after);
+			case ReadSyntax.Sharp sharp -> {
+				int sub = after;
+				while (sub < this.input.length() && isDigit(this.input.charAt(sub))) {
+					sub++;
+				}
+				if (sub >= this.input.length()) {
+					return false;
+				}
+				int subChar = this.input.codePointAt(sub);
+				ReadSyntax.Sub entrySub = sharp.subs().get(Character.toUpperCase(subChar));
+				if (entrySub == null || entrySub.standardAs() == Character.toUpperCase(subChar)) {
+					return false;
+				}
+				if (entrySub.standardAs() >= 0 || entrySub.function() == null) {
+					throw err("the standard function of #" + Character.toString(entrySub.standardAs())
+							+ " is not supported under another sub-character: #" + Character.toString(subChar));
+				}
+				LispVal arg = sub > after
+						? new am.ik.rontolisp.LispInteger(
+								new java.math.BigInteger(this.input.substring(after, sub)).longValueExact())
+						: LispNil.INSTANCE;
+				callReaderMacro(tokens, rs, entrySub.function(), start, sub + Character.charCount(subChar),
+						List.of(new am.ik.rontolisp.LispChar(subChar), arg));
+			}
+		}
+		return true;
+	}
+
+	// The character c at `start` read by the standard function of `as`.
+	private void lexStandard(List<LocatedToken> tokens, int as, int c, int start, int after) {
+		switch (as) {
+			case '(' -> {
+				add(tokens, new Token.LeftParen(), start);
+				this.pos = after;
+			}
+			case ')' -> {
+				add(tokens, new Token.RightParen(), start);
+				this.pos = after;
+			}
+			case '\'' -> {
+				add(tokens, new Token.Quote(), start);
+				this.pos = after;
+			}
+			case '`' -> {
+				add(tokens, new Token.Backquote(), start);
+				this.pos = after;
+			}
+			case ',' -> {
+				if (after < this.input.length()
+						&& (this.input.charAt(after) == '@' || this.input.charAt(after) == '.')) {
+					add(tokens, new Token.UnquoteSplicing(), start);
+					this.pos = after + 1;
+				}
+				else {
+					add(tokens, new Token.Unquote(), start);
+					this.pos = after;
+				}
+			}
+			case ';' -> skipComment();
+			case '"' -> add(tokens, readString(c), start);
+			default -> throw err("the standard function of " + Character.toString(as)
+					+ " is not supported under another character: " + Character.toString(c));
+		}
+	}
+
+	// Calls a reader macro function over the input from `from`: the value it answers is
+	// a Datum token at `start`, none adds nothing (a comment), and the scan goes on where
+	// the function left the input.
+	private void callReaderMacro(List<LocatedToken> tokens, ReadSyntax rs, LispVal function, int start, int from,
+			List<LispVal> arguments) {
+		ReadSyntax.Result result;
+		try {
+			result = rs.call(function, this.input, from, arguments, this.templateDepth);
+		}
+		catch (ReadSyntax.Refusal refusal) {
+			throw errAt(start, String.valueOf(refusal.getMessage()));
+		}
+		this.pos = Math.max(from, Math.min(result.end(), this.input.length()));
+		LispVal value = result.value();
+		if (value != null) {
+			add(tokens, new Token.Datum(value), start);
+		}
+	}
+
+	private void skipComment() {
+		while (this.pos < this.input.length() && this.input.charAt(this.pos) != '\n') {
+			this.pos++;
+		}
+	}
+
+	// A token under a *read-base* other than 10, where the rule differs from the decimal
+	// one the dispatcher goes on to (CLHS 2.3.1): an integer or ratio in the base wins
+	// over
+	// everything (1e5 is 485 in base 16), and a token that would be a decimal integer or
+	// ratio but holds a digit past the base is a symbol (102 in base 2). A trailing dot,
+	// a
+	// float and every other token read as they do in base 10: false, nothing consumed. An
+	// escape makes a token no number.
+	private boolean lexRationalInReadBase(List<LocatedToken> tokens) {
+		int start = this.pos;
+		int end = start;
+		while (end < this.input.length() && isSymbolChar(this.input.charAt(end))) {
+			if (this.input.charAt(end) == '\\' || this.input.charAt(end) == '|') {
+				return false;
+			}
+			end++;
+		}
+		int base = java.util.Objects.requireNonNull(this.syntax).readBase();
+		if (isRational(start, end, base)) {
+			this.pos = end;
+			add(tokens, rationalInBase(this.input.substring(start, end), base), start);
+			return true;
+		}
+		if (isRational(start, end, 10)) {
+			add(tokens, readSymbol(), start);
+			return true;
+		}
+		return false;
+	}
+
+	// Whether [start, end) is [sign] digits [/ digits] in the radix.
+	private boolean isRational(int start, int end, int radix) {
+		int i = start;
+		if (i < end && (this.input.charAt(i) == '+' || this.input.charAt(i) == '-')) {
+			i++;
+		}
+		boolean slashed = false;
+		boolean digits = false;
+		for (; i < end; i++) {
+			char c = this.input.charAt(i);
+			if (c == '/' && !slashed && digits) {
+				slashed = true;
+				digits = false;
+			}
+			else if (c < 128 && Character.digit(c, radix) >= 0) {
+				digits = true;
+			}
+			else {
+				return false;
+			}
+		}
+		return digits;
+	}
+
+	private static Token rationalInBase(String text, int base) {
+		int slash = text.indexOf('/');
+		if (slash >= 0) {
+			return new Token.RatioToken(new java.math.BigInteger(text.substring(0, slash), base),
+					new java.math.BigInteger(text.substring(slash + 1), base));
+		}
+		java.math.BigInteger value = new java.math.BigInteger(text, base);
+		return value.bitLength() < Long.SIZE ? new Token.NumberToken(value.longValue())
+				: new Token.BigIntegerToken(value);
+	}
+
+	// sign is the explicit "+" the dispatcher already consumed, or "": a token that turns
+	// out not to be a number is a symbol spelled WITH it.
+	private Token readNumber(String sign) {
+		int start = this.pos;
+		if (this.input.charAt(this.pos) == '-') {
+			this.pos++;
+		}
+		boolean isFloat = false;
+		if (startsDotNumber(this.pos)) {
+			// ".4": a leading decimal point with digits after it is always a float
+			// (CLHS 2.3.1). The dispatcher only routes here when a digit follows.
+			this.pos++; // consume '.'
+			isFloat = true;
+			while (this.pos < this.input.length() && isDigit(this.input.charAt(this.pos))) {
+				this.pos++;
+			}
+		}
+		else {
+			// Integer digits, allowing ',' as a grouping separator when it sits
+			// between two digits (e.g., "1,000" -> 1000). A comma not followed by a
+			// digit is not consumed, so token boundaries are otherwise unchanged.
+			consumeDigitsWithGrouping();
+			// Fractional part: '.' followed by at least one digit (e.g., "1.5").
+			if (this.pos < this.input.length() && this.input.charAt(this.pos) == '.'
+					&& this.pos + 1 < this.input.length() && isDigit(this.input.charAt(this.pos + 1))) {
+				this.pos++; // consume '.'
+				while (this.pos < this.input.length() && isDigit(this.input.charAt(this.pos))) {
+					this.pos++;
+				}
+				isFloat = true;
+			}
+		}
+		// Exponent part: a Common Lisp float marker e/s/f/d/l (case-insensitive)
+		// followed by an optional sign and at least one digit (e.g., "1d0",
+		// "1e0", "1.5f3", "-2d-3"). rontolisp has a single float type, so every
+		// marker collapses to the same LispDouble (the single/double distinction
+		// of Common Lisp is not preserved).
+		if (consumedExponent()) {
+			isFloat = true;
+		}
+		else if (!isFloat && this.pos < this.input.length() && this.input.charAt(this.pos) == '.'
+				&& exponentEndsAt(this.pos + 1) >= 0) {
+			// "1.e5": an exponent marker may follow the decimal point directly.
+			this.pos++; // consume '.'
+			consumedExponent();
+			isFloat = true;
+		}
+		// Ratio literal: integer digits '/' integer digits (e.g., "1/3", "-1/3").
+		if (!isFloat && this.pos < this.input.length() && this.input.charAt(this.pos) == '/'
+				&& this.pos + 1 < this.input.length() && isDigit(this.input.charAt(this.pos + 1))) {
+			int slash = this.pos;
+			this.pos++; // consume '/'
+			consumeDigitsWithGrouping();
+			// If a symbol character follows the denominator digits (e.g., "1/2x",
+			// "1/2/3"), treat the entire token as a symbol.
+			if (this.pos < this.input.length() && isSymbolChar(this.input.charAt(this.pos))) {
+				while (this.pos < this.input.length() && isSymbolChar(this.input.charAt(this.pos))) {
+					this.pos++;
+				}
+				return numberFallbackSymbol(sign + this.input.substring(start, this.pos));
+			}
+			String numerator = stripGrouping(this.input.substring(start, slash));
+			String denominator = stripGrouping(this.input.substring(slash + 1, this.pos));
+			return new Token.RatioToken(new java.math.BigInteger(numerator), new java.math.BigInteger(denominator));
+		}
+		// Trailing decimal point: "1." is the DECIMAL INTEGER 1 (CLHS 2.3.1) --
+		// the dot is a marker consumed with the token, not part of the value.
+		boolean trailingDot = false;
+		if (!isFloat && this.pos < this.input.length() && this.input.charAt(this.pos) == '.') {
+			trailingDot = true;
+			this.pos++;
+		}
+		// If a symbol character follows, treat the entire token as a symbol
+		// (e.g., "1+" -> Symbol("1+"), "1d0x" -> Symbol("1d0x")). A dot joins the
+		// symbol text once one has been consumed as trailing or the number is
+		// already a float -- "1.." and "1.2.3" are invalid numbers, and the
+		// symbol fallback is this lexer's answer to those ("1+" being the
+		// canonical one), never a silently split token.
+		if (this.pos < this.input.length() && isSymbolChar(this.input.charAt(this.pos))
+				&& (this.input.charAt(this.pos) != '.' || trailingDot || isFloat)) {
+			while (this.pos < this.input.length() && isSymbolChar(this.input.charAt(this.pos))) {
+				this.pos++;
+			}
+			return numberFallbackSymbol(sign + this.input.substring(start, this.pos));
+		}
+		if (isFloat) {
+			String text = this.input.substring(start, this.pos);
+			double value = Double.parseDouble(normalizeExponentMarker(stripGrouping(text)));
+			// An f or s marker asks for a single-float: the binary32 nearest the double
+			// the token reads as, as the runtime readers round it (Binary32).
+			return new Token.DoubleToken(spellsSingle(text) ? Binary32.nearest(value) : value, spellsDouble(text));
+		}
+		String digits = stripGrouping(this.input.substring(start, trailingDot ? this.pos - 1 : this.pos));
+		try {
+			return new Token.NumberToken(Long.parseLong(digits));
+		}
+		catch (NumberFormatException overflow) {
+			// Literal does not fit in a long: promote to an arbitrary-precision integer.
+			return new Token.BigIntegerToken(new java.math.BigInteger(digits));
+		}
+	}
+
+	// True when a '.' at `pos` starts the digit run of a number: ".4", the tail
+	// of "-.5"/"+.25" (the dispatcher checks the char after the sign).
+	private boolean startsDotNumber(int pos) {
+		return pos < this.input.length() && this.input.charAt(pos) == '.' && pos + 1 < this.input.length()
+				&& isDigit(this.input.charAt(pos + 1));
+	}
+
+	private static boolean isRadixMarker(char c) {
+		return c == 'x' || c == 'X' || c == 'o' || c == 'O' || c == 'b' || c == 'B';
+	}
+
+	// Reads a #x/#o/#b radix literal (e.g., #x10000, #o400, #b1010, #x-10), delegating
+	// to the shared scanner below. The infix-argument spelling #<n>R goes through the
+	// same scanner from the #<digits> branch above.
+	private Token readRadixNumber() {
+		char marker = this.input.charAt(this.pos + 1);
+		int radix = switch (Character.toLowerCase(marker)) {
+			case 'x' -> 16;
+			case 'o' -> 8;
+			default -> 2;
+		};
+		return readRadixNumber(radix, this.pos + 2, "#" + marker);
+	}
+
+	// Reads a RATIONAL in an explicit radix: an optional sign, digits, and -- CLHS
+	// 2.3.2.1, which spells the radix syntaxes over "rational" and not over "integer"
+	// -- an optional /denominator, whose digits are in the same radix and carry no sign
+	// of their own (#b-10/11 is -2/3, not -2/-3). The digits must be non-empty and
+	// valid in the radix; a value that does not fit in a long is promoted to an
+	// arbitrary-precision integer, matching decimal literals.
+	//
+	// afterMarker is the index just past the dispatch (#x.., #o.., #b.., #<n>R..), and
+	// marker names it for the error message.
+	private Token readRadixNumber(int radix, int afterMarker, String marker) {
+		int start = afterMarker;
+		this.pos = afterMarker;
+		boolean negative = false;
+		if (this.pos < this.input.length()
+				&& (this.input.charAt(this.pos) == '-' || this.input.charAt(this.pos) == '+')) {
+			negative = this.input.charAt(this.pos) == '-';
+			this.pos++;
+		}
+		java.math.BigInteger numerator = readRadixDigits(radix, marker, start);
+		if (negative) {
+			numerator = numerator.negate();
+		}
+		if (this.pos < this.input.length() && this.input.charAt(this.pos) == '/') {
+			this.pos++;
+			java.math.BigInteger denominator = readRadixDigits(radix, marker, start);
+			requireRadixTokenEnd(marker, start);
+			return new Token.RatioToken(numerator, denominator);
+		}
+		requireRadixTokenEnd(marker, start);
+		try {
+			return new Token.NumberToken(numerator.longValueExact());
+		}
+		catch (ArithmeticException overflow) {
+			return new Token.BigIntegerToken(numerator);
+		}
+	}
+
+	// One non-empty run of digits valid in the radix, as a magnitude (the sign is the
+	// caller's). Advances past the run.
+	private java.math.BigInteger readRadixDigits(int radix, String marker, int start) {
+		int digitsStart = this.pos;
+		while (this.pos < this.input.length() && Character.digit(this.input.charAt(this.pos), radix) >= 0) {
+			this.pos++;
+		}
+		if (this.pos == digitsStart) {
+			throw radixErr(marker, start);
+		}
+		return new java.math.BigInteger(this.input.substring(digitsStart, this.pos), radix);
+	}
+
+	// A radix literal ends at a token terminator like any other number: a constituent
+	// character behind the digits (#b1012, #x1/2/3) makes the whole token invalid
+	// rather than a number followed by a symbol.
+	private void requireRadixTokenEnd(String marker, int start) {
+		if (this.pos < this.input.length() && isSymbolChar(this.input.charAt(this.pos))) {
+			throw radixErr(marker, start);
+		}
+	}
+
+	private LispReadException radixErr(String marker, int start) {
+		int end = this.pos;
+		while (end < this.input.length() && isSymbolChar(this.input.charAt(end))) {
+			end++;
+		}
+		return err("Invalid digits after " + marker + ": " + this.input.substring(start, end));
+	}
+
+	private void consumeDigitsWithGrouping() {
+		while (this.pos < this.input.length()) {
+			char c = this.input.charAt(this.pos);
+			if (isDigit(c)) {
+				this.pos++;
+			}
+			else if (c == ',' && this.pos + 1 < this.input.length() && isDigit(this.input.charAt(this.pos + 1))) {
+				this.pos++; // consume grouping separator between digits
+			}
+			else {
+				break;
+			}
+		}
+	}
+
+	// Consume an exponent suffix (marker + optional sign + digits) if a valid
+	// one starts at the current position, advancing past it and returning true.
+	// On no match, the position is left untouched so the marker can fall through
+	// to symbol handling (e.g. "1d" is the symbol "1d", not a float).
+	private boolean consumedExponent() {
+		int end = exponentEndsAt(this.pos);
+		if (end < 0) {
+			return false;
+		}
+		this.pos = end;
+		return true;
+	}
+
+	// The index just past a valid exponent suffix (marker + optional sign +
+	// digits) starting at `pos`, or -1 when none starts there.
+	private int exponentEndsAt(int pos) {
+		if (pos >= this.input.length() || !isExponentMarker(this.input.charAt(pos))) {
+			return -1;
+		}
+		int probe = pos + 1;
+		if (probe < this.input.length() && (this.input.charAt(probe) == '+' || this.input.charAt(probe) == '-')) {
+			probe++;
+		}
+		if (probe >= this.input.length() || !isDigit(this.input.charAt(probe))) {
+			return -1;
+		}
+		while (probe < this.input.length() && isDigit(this.input.charAt(probe))) {
+			probe++;
+		}
+		return probe;
+	}
+
+	private static boolean spellsDouble(String number) {
+		for (int i = 0; i < number.length(); i++) {
+			char c = number.charAt(i);
+			if (c == 'd' || c == 'D' || c == 'l' || c == 'L') {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	// A float token's f or s exponent marker: a single-float literal. A float token
+	// holds no other letter.
+	private static boolean spellsSingle(String number) {
+		for (int i = 0; i < number.length(); i++) {
+			char c = number.charAt(i);
+			if (c == 'f' || c == 'F' || c == 's' || c == 'S') {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private static boolean isExponentMarker(char c) {
+		return c == 'e' || c == 'E' || c == 's' || c == 'S' || c == 'f' || c == 'F' || c == 'd' || c == 'D' || c == 'l'
+				|| c == 'L';
+	}
+
+	// Rewrite the Common Lisp exponent marker to 'e' so Double.parseDouble (which
+	// only accepts 'e'/'E' as an exponent marker) reads the literal. A valid float
+	// token holds at most one marker, so replacing every marker char is safe.
+	private static String normalizeExponentMarker(String number) {
+		StringBuilder sb = new StringBuilder(number.length());
+		for (int i = 0; i < number.length(); i++) {
+			char c = number.charAt(i);
+			sb.append(isExponentMarker(c) ? 'e' : c);
+		}
+		return sb.toString();
+	}
+
+	private static String stripGrouping(String number) {
+		return number.indexOf(',') < 0 ? number : number.replace(",", "");
+	}
+
+	// Reads a #\ character literal: a single character (#\a, #\(, #\Space-the-glyph)
+	// or, when the first character is a letter and more letters follow, a character
+	// name (#\Space, #\Newline, ...). The first character after #\ is always taken
+	// literally even if it is whitespace or a delimiter.
+	private Token.CharToken readChar() {
+		int literalStart = this.pos;
+		this.pos += 2; // skip "#\"
+		if (this.pos >= this.input.length()) {
+			throw eofAt(literalStart, "Unexpected end of input after #\\");
+		}
+		int start = this.pos;
+		// A code point, not a char: a supplementary-plane literal (#\\U+1F600) is one
+		// surrogate PAIR in the UTF-16 input, and scanning it as a single char would
+		// read only the high surrogate, leaving the low surrogate to be lexed as the
+		// next, unrelated token.
+		int first = this.input.codePointAt(this.pos);
+		this.pos += Character.charCount(first);
+		// A multi-character name only follows an alphabetic first character.
+		if (Character.isLetter(first)) {
+			while (this.pos < this.input.length() && isSymbolChar(this.input.charAt(this.pos))) {
+				this.pos++;
+			}
+		}
+		String token = this.input.substring(start, this.pos);
+		if (token.codePointCount(0, token.length()) == 1) {
+			return new Token.CharToken(first);
+		}
+		return new Token.CharToken(charByName(token, literalStart));
+	}
+
+	private int charByName(String name, int literalStart) {
+		return switch (name.toLowerCase(java.util.Locale.ROOT)) {
+			case "space" -> ' ';
+			case "newline", "linefeed", "lf" -> '\n';
+			case "tab" -> '\t';
+			case "return", "cr" -> '\r';
+			case "page" -> '\f';
+			case "backspace" -> '\b';
+			case "vt", "vertical-tab" -> 11;
+			case "bell", "bel" -> 7;
+			case "nul", "null" -> 0;
+			case "rubout", "delete", "del" -> 127;
+			case "escape", "altmode", "esc" -> 27;
+			default -> unicodeCharByName(name, literalStart);
+		};
+	}
+
+	// The long spelling: a Unicode character NAME, which is how a portable source names
+	// a character with no short name (#\No-break_space, #\Ideographic_space). The name is
+	// written with underscores for the spaces in the UCD name, and matched
+	// case-insensitively. Source is read by this lexer on every backend -- the table is
+	// the host JDK's, and none of it travels into a compiled program -- so a name that
+	// reads here reads on all four.
+	private int unicodeCharByName(String name, int literalStart) {
+		try {
+			return Character.codePointOf(name.replace('_', ' ').toUpperCase(java.util.Locale.ROOT));
+		}
+		catch (IllegalArgumentException ex) {
+			throw errAt(literalStart, "Unknown character name: #\\" + name);
+		}
+	}
+
+	private Token.SymbolToken readSymbol() {
+		// CL single escape: a backslash makes the NEXT character part of the symbol
+		// name verbatim, even a terminating one -- real libraries name locals like
+		// \(-pos (parse-number). The backslash itself is dropped from the name.
+		// CL multiple escape: |...| makes every enclosed character part of the name
+		// verbatim, whitespace and terminating characters included (|when used|);
+		// the pipes themselves are dropped and a backslash still escapes inside.
+		// The reader upcases unescaped characters like CL's :upcase readtable case
+		// -- escaped ones stay verbatim. There is no fold to a lowercase canonical
+		// spelling: the uppercase name IS canonical (foo and FOO both read as FOO).
+		int start = this.pos;
+		// CLHS 2.4.8.5: an uninterned symbol must not name a package -- the check
+		// below watches for an UNESCAPED colon behind the #: prefix, so #:|a:b|
+		// and #:a\:b stay the symbols they are (their colons are escaped).
+		boolean hashColonPrefix = this.pos + 1 < this.input.length() && this.input.charAt(this.pos) == '#'
+				&& this.input.charAt(this.pos + 1) == ':';
+		boolean unescapedColon = false;
+		// CLHS 2.3.5: only an unescaped colon is a package marker. A token with an
+		// escaped one and no other names a member of the current package, colons and all
+		// (|a:b|, a\:b), which the resolver reads through
+		// PackageRegistry.CURRENT_PACKAGE_QUALIFIER.
+		boolean packageMarker = false;
+		boolean escapedColon = false;
+		StringBuilder sb = new StringBuilder();
+		// A readtable case other than :upcase converts the token as a whole (:invert asks
+		// whether ALL its unescaped letters share a case), so the unescaped characters
+		// are
+		// kept as written and the escaped ones marked; the standard case upcases in
+		// place.
+		boolean upcase = this.syntax == null || this.syntax.caseMode() == ReadSyntax.Case.UPCASE;
+		java.util.BitSet escaped = upcase ? null : new java.util.BitSet();
+		while (this.pos < this.input.length()) {
+			char c = this.input.charAt(this.pos);
+			if (c == '\\' && this.pos + 1 < this.input.length()) {
+				if (escaped != null) {
+					escaped.set(sb.length());
+				}
+				escapedColon |= this.input.charAt(this.pos + 1) == ':';
+				sb.append(this.input.charAt(this.pos + 1));
+				this.pos += 2;
+				continue;
+			}
+			if (c == '\\') {
+				// A single escape with nothing behind it: the token is incomplete.
+				throw eof("Unexpected end of input after \\");
+			}
+			if (c == '|') {
+				int escapeStart = this.pos;
+				this.pos++;
+				while (this.pos < this.input.length() && this.input.charAt(this.pos) != '|') {
+					char e = this.input.charAt(this.pos);
+					if (escaped != null) {
+						escaped.set(sb.length());
+					}
+					if (e == '\\' && this.pos + 1 < this.input.length()) {
+						escapedColon |= this.input.charAt(this.pos + 1) == ':';
+						sb.append(this.input.charAt(this.pos + 1));
+						this.pos += 2;
+						continue;
+					}
+					escapedColon |= e == ':';
+					sb.append(e);
+					this.pos++;
+				}
+				if (this.pos >= this.input.length()) {
+					throw eofAt(escapeStart, "Unterminated |...| symbol escape");
+				}
+				this.pos++; // closing |
+				continue;
+			}
+			if (!isSymbolChar(c)) {
+				break;
+			}
+			if (c == ':' && hashColonPrefix && sb.length() >= 2) {
+				unescapedColon = true;
+			}
+			packageMarker |= c == ':';
+			sb.append(upcase ? Character.toUpperCase(c) : c);
+			this.pos++;
+		}
+		if (unescapedColon) {
+			throw err("Package marker in uninterned symbol: " + this.input.substring(start, this.pos));
+		}
+		String name = escaped != null
+				? java.util.Objects.requireNonNull(this.syntax).convertCase(sb.toString(), escaped) : sb.toString();
+		return new Token.SymbolToken(
+				escapedColon && !packageMarker ? PackageRegistry.currentPackageSpelling(name) : name);
+	}
+
+	// A token that started as a number but fell back to a symbol (e.g. "1+"). These
+	// runs come straight from the raw input with no escape processing, so the whole
+	// token upcases like every other symbol.
+	private Token.SymbolToken numberFallbackSymbol(String raw) {
+		if (this.syntax != null && this.syntax.caseMode() != ReadSyntax.Case.UPCASE) {
+			return new Token.SymbolToken(this.syntax.convertCase(raw, null));
+		}
+		return new Token.SymbolToken(raw.toUpperCase(java.util.Locale.ROOT));
+	}
+
+	private Token.StringToken readString() {
+		return readString('"');
+	}
+
+	// A string closed by `delimiter`: '"', or the character a readtable gave the
+	// standard string function to, which then closes what it opens (CLHS 2.4.5).
+	private Token.StringToken readString(int delimiter) {
+		int start = this.pos;
+		this.pos += Character.charCount(delimiter); // skip the opening delimiter
+		StringBuilder sb = new StringBuilder();
+		while (this.pos < this.input.length() && this.input.codePointAt(this.pos) != delimiter) {
+			if (this.input.charAt(this.pos) == '\\' && this.pos + 1 < this.input.length()) {
+				this.pos++;
+				char escaped = this.input.charAt(this.pos);
+				switch (escaped) {
+					case 'n' -> sb.append('\n');
+					case 'r' -> sb.append('\r');
+					case 't' -> sb.append('\t');
+					case '\\' -> sb.append('\\');
+					case '"' -> sb.append('"');
+					default -> {
+						sb.append('\\');
+						sb.append(escaped);
+					}
+				}
+			}
+			else {
+				sb.append(this.input.charAt(this.pos));
+			}
+			this.pos++;
+		}
+		if (this.pos >= this.input.length()) {
+			throw eofAt(start, "Unterminated string literal");
+		}
+		this.pos += Character.charCount(delimiter); // skip the closing delimiter
+		return new Token.StringToken(sb.toString());
+	}
+
+	// --- Feature conditionals (#+ / #-) ------------------------------------------
+	//
+	// The feature expression after #+/#- is parsed here, with a minimal reader over
+	// symbols and lists (a feature expression never uses other syntax), and evaluated
+	// against the active feature set. When the guard fails, the following form is
+	// skipped at the raw character level (skipDatum), NOT tokenized: this is what lets
+	// a guarded form use syntax rontolisp does not support, which is the whole point
+	// of #+/#- in portable libraries.
+
+	private void readFeatureConditional(List<LocatedToken> tokens) {
+		int start = this.pos;
+		boolean negated = this.input.charAt(this.pos + 1) == '-';
+		this.pos += 2; // skip "#+" / "#-"
+		skipInterTokenSpace();
+		int exprStart = this.pos;
+		this.featureExprReadsEval = false;
+		LispVal expr = readFeatureExpr();
+		if (!this.featureExprReadsEval) {
+			if (this.features.isEnabled(expr) == negated) {
+				skipDatum();
+			}
+			return;
+		}
+		String exprText = this.input.substring(exprStart, this.pos);
+		if (this.readTimeEval != null) {
+			if (readTimeFeatureHolds(exprText) == negated) {
+				skipDatum();
+			}
+			return;
+		}
+		if (this.readEvalMode == ReadEvalMode.ERROR) {
+			throw errAt(start, "#. read-time evaluation is not supported");
+		}
+		deferFeatureConditional(tokens, start, negated, exprStart, exprText);
+	}
+
+	// A #+/#- whose feature expression holds a #. and no evaluator to decide it: the
+	// guard becomes a (%read-time-feature "+"|"-" (FEATURES...) EXPR [FORM]) marker,
+	// EXPR carrying its #. as (%read-eval datum) markers and FORM the guarded datum when
+	// it lexes (else a (%read-eval-unreadable "RAW TEXT") marker), resolved -- spliced
+	// in, or dropped -- by the consumer that resolves the #. markers, just before the
+	// top-level form runs. The marker stands where the datum would, so it is refused
+	// where a datum is not simply an element of a list: behind a prefix (', #', `, ,,
+	// ,@, #n=, a dotted '.', #0A) or inside a vector/array/structure literal, whose
+	// elements no marker walk reaches.
+	private void deferFeatureConditional(List<LocatedToken> tokens, int start, boolean negated, int exprStart,
+			String exprText) {
+		if (!tokens.isEmpty() && isPrefixToken(tokens.get(tokens.size() - 1).token()) || !insidePlainLists(tokens)) {
+			throw errAt(start, "a #+/#- guard computed by #. is supported only as a top-level form or a list"
+					+ " element without a prefix");
+		}
+		List<LocatedToken> exprTokens;
+		try {
+			exprTokens = new LispLexer(exprText, this.features, ReadEvalMode.MARKER, this.file).tokenizeWithPositions();
+		}
+		catch (LispReadException ex) {
+			throw errAt(exprStart, "#. feature expression could not be read: " + exprText);
+		}
+		int formStart = this.pos;
+		skipDatum();
+		String formText = this.input.substring(formStart, this.pos);
+		add(tokens, new Token.LeftParen(), start);
+		add(tokens, new Token.SymbolToken(LispNames.READ_TIME_FEATURE), start);
+		add(tokens, new Token.StringToken(negated ? "-" : "+"), start);
+		add(tokens, new Token.LeftParen(), start);
+		for (String spelling : this.features.encode()) {
+			add(tokens, new Token.StringToken(spelling), start);
+		}
+		add(tokens, new Token.RightParen(), start);
+		for (LocatedToken exprToken : exprTokens) {
+			tokens.add(new LocatedToken(exprToken.token(), exprStart + exprToken.offset()));
+		}
+		List<LocatedToken> formTokens = tryTokenizeGuardedForm(formText);
+		if (formTokens == null) {
+			add(tokens, new Token.LeftParen(), formStart);
+			add(tokens, new Token.SymbolToken(LispNames.READ_EVAL_UNREADABLE), formStart);
+			add(tokens, new Token.StringToken(formText.trim()), formStart);
+			add(tokens, new Token.RightParen(), this.pos);
+		}
+		else {
+			for (LocatedToken formToken : formTokens) {
+				tokens.add(new LocatedToken(formToken.token(), formStart + formToken.offset()));
+			}
+		}
+		add(tokens, new Token.RightParen(), this.pos);
+	}
+
+	// The guarded form of a deferred guard, lexed as this read lexes: an empty list when
+	// nested guards suppressed it to nothing, null when it does not lex or parse as one
+	// datum -- parsed as a template element too, since a guarded ,x is one only there.
+	@Nullable private List<LocatedToken> tryTokenizeGuardedForm(String text) {
+		try {
+			List<LocatedToken> formTokens = new LispLexer(text, this.features, this.readEvalMode, this.file)
+				.tokenizeWithPositions();
+			if (formTokens.isEmpty() || LispReader.parsesAsExpressions(formTokens, this.features)) {
+				return formTokens;
+			}
+			List<LocatedToken> inTemplate = new ArrayList<>();
+			inTemplate.add(new LocatedToken(new Token.Backquote(), 0));
+			inTemplate.add(new LocatedToken(new Token.LeftParen(), 0));
+			inTemplate.addAll(formTokens);
+			inTemplate.add(new LocatedToken(new Token.RightParen(), text.length()));
+			if (!LispReader.parsesAsExpressions(inTemplate, this.features)) {
+				return null;
+			}
+			return formTokens;
+		}
+		catch (LispReadException ex) {
+			return null;
+		}
+	}
+
+	// A token that takes the datum after it: #0A among them, which has no parenthesis
+	// of its own.
+	private static boolean isPrefixToken(Token token) {
+		return token instanceof Token.Quote || token instanceof Token.FunctionQuote || token instanceof Token.Backquote
+				|| token instanceof Token.Unquote || token instanceof Token.UnquoteSplicing
+				|| token instanceof Token.LabelDef || token instanceof Token.Dot || token instanceof Token.SharpL
+				|| token instanceof Token.PathnameOpen || token instanceof Token.ArrayOpen array && array.rank() == 0;
+	}
+
+	// Whether every literal still open at the end of the tokens is a plain list. A #0A
+	// closes nothing: it encloses the end only when its datum is the outermost list
+	// still open there.
+	private static boolean insidePlainLists(List<LocatedToken> tokens) {
+		int depth = 0;
+		int outermostOpen = -1;
+		for (int i = tokens.size() - 1; i >= 0; i--) {
+			Token token = tokens.get(i).token();
+			if (token instanceof Token.RightParen) {
+				depth++;
+			}
+			else if (token instanceof Token.ArrayOpen array && array.rank() == 0) {
+				int datum = i + 1;
+				while (datum < tokens.size() && isPrefixToken(tokens.get(datum).token())) {
+					datum++;
+				}
+				if (depth == 0 && datum == outermostOpen) {
+					return false;
+				}
+			}
+			else if (opensDatum(token)) {
+				if (depth > 0) {
+					depth--;
+				}
+				else if (token instanceof Token.LeftParen) {
+					outermostOpen = i;
+				}
+				else {
+					return false;
+				}
+			}
+		}
+		return true;
+	}
+
+	// Decides a feature expression holding a #. with this read's evaluator: the
+	// expression is read with its #. as (%read-eval datum) markers, the evaluator puts
+	// each value in place, and the result is tested like any feature expression.
+	private boolean readTimeFeatureHolds(String exprText) {
+		UnaryOperator<LispVal> evaluator = this.readTimeEval;
+		if (evaluator == null) {
+			throw err("a #+/#- guard computed by #. cannot be decided inside a skipped form");
+		}
+		List<LispVal> read = LispReader.readUnrecorded(
+				new LispLexer(exprText, this.features, ReadEvalMode.MARKER, this.file).tokenizeWithPositions(),
+				this.features);
+		if (read.size() != 1) {
+			throw err("#. feature expression could not be read: " + exprText);
+		}
+		return this.features.isEnabled(evaluator.apply(read.get(0)));
+	}
+
+	private LispVal readFeatureExpr() {
+		skipInterTokenSpace();
+		if (this.pos >= this.input.length()) {
+			throw eof("Unexpected end of input in feature expression");
+		}
+		char c = this.input.charAt(this.pos);
+		if (c == '(') {
+			this.pos++;
+			List<LispVal> items = new ArrayList<>();
+			while (true) {
+				skipInterTokenSpace();
+				if (this.pos >= this.input.length()) {
+					throw eof("Unexpected end of input in feature expression, expected ')'");
+				}
+				if (this.input.charAt(this.pos) == ')') {
+					this.pos++;
+					break;
+				}
+				items.add(readFeatureExpr());
+			}
+			LispVal list = LispNil.INSTANCE;
+			for (int i = items.size() - 1; i >= 0; i--) {
+				list = new LispCons(items.get(i), list);
+			}
+			return list;
+		}
+		if (c == '#' && this.pos + 1 < this.input.length() && this.input.charAt(this.pos + 1) == '.') {
+			// A computed feature expression: only its extent is taken here; the caller
+			// reads it again with an evaluator, or defers it.
+			this.pos += 2;
+			skipDatum();
+			this.featureExprReadsEval = true;
+			return LispNil.INSTANCE;
+		}
+		if (isSymbolChar(c)) {
+			int start = this.pos;
+			while (this.pos < this.input.length() && isSymbolChar(this.input.charAt(this.pos))) {
+				this.pos++;
+			}
+			return new LispSymbol(this.input.substring(start, this.pos));
+		}
+		throw err("Invalid feature expression starting with '" + c + "'");
+	}
+
+	// Skips whitespace and comments (line and block) between tokens.
+	private void skipInterTokenSpace() {
+		while (this.pos < this.input.length()) {
+			char c = this.input.charAt(this.pos);
+			if (Character.isWhitespace(c)) {
+				this.pos++;
+			}
+			else if (c == ';') {
+				skipComment();
+			}
+			else if (c == '#' && this.pos + 1 < this.input.length() && this.input.charAt(this.pos + 1) == '|') {
+				skipBlockComment();
+			}
+			else {
+				return;
+			}
+		}
+	}
+
+	// Skips a #| ... |# block comment, honoring nesting like Common Lisp.
+	private void skipBlockComment() {
+		int start = this.pos;
+		this.pos += 2; // skip "#|"
+		int depth = 1;
+		while (this.pos < this.input.length()) {
+			char c = this.input.charAt(this.pos);
+			if (c == '|' && this.pos + 1 < this.input.length() && this.input.charAt(this.pos + 1) == '#') {
+				this.pos += 2;
+				if (--depth == 0) {
+					return;
+				}
+			}
+			else if (c == '#' && this.pos + 1 < this.input.length() && this.input.charAt(this.pos + 1) == '|') {
+				this.pos += 2;
+				depth++;
+			}
+			else {
+				this.pos++;
+			}
+		}
+		throw eofAt(start, "Unterminated block comment");
+	}
+
+	// Re-lexes a #. datum that was skipped at the raw character level. Returns null when
+	// the datum uses syntax the lexer does not support (the caller falls back to the nil
+	// placeholder) or lexes to nothing (a fully #+/#- suppressed datum).
+	@Nullable private List<LocatedToken> tryTokenizeReadEvalDatum(String datum) {
+		try {
+			List<LocatedToken> datumTokens = new LispLexer(datum, this.features, this.readEvalMode)
+				.tokenizeWithPositions();
+			if (datumTokens.isEmpty() || !LispReader.parsesAsExpressions(datumTokens, this.features)) {
+				return null;
+			}
+			return datumTokens;
+		}
+		catch (LispReadException ex) {
+			return null;
+		}
+	}
+
+	/**
+	 * Answers the index one past the last character a {@code read} of this input would
+	 * consume, starting the scan at offset 0 -- the second value of CL's
+	 * {@code read-from-string}, and the whole answer of a read under a true
+	 * {@code *read-suppress*} (CLHS 2.2: the characters are consumed, the datum is not
+	 * built). The walk is the raw-character {@code skipDatum} the {@code #+}/{@code #-}
+	 * guard uses, so a suppressed read consumes exactly what a real one does without
+	 * parsing -- which is what lets it swallow the tokens a real read would refuse (an
+	 * unknown package, an out-of-range digit, a bogus character name).
+	 * <p>
+	 * CLHS 23.2 says {@code read} CONSUMES a whitespace character that terminates the
+	 * datum and gives a terminating macro character back -- and this holds for ANY datum,
+	 * not just a token: in SBCL, {@code read-from-string} of a list followed by a space
+	 * answers one past that space exactly as it does after a token, so one trailing
+	 * whitespace character joins the count unconditionally.
+	 * @param input the source text
+	 * @param features the features the {@code #+}/{@code #-} conditionals test
+	 * @return the index of the first character the read did not consume
+	 * @throws LispReadException when the input holds no complete datum
+	 */
+	public static int datumEnd(String input, Features features) {
+		return datumEnd(input, features, null);
+	}
+
+	/**
+	 * {@link #datumEnd(String, Features)} deciding a {@code #+}/{@code #-} guard computed
+	 * by {@code #.} with the given evaluator, as the read itself does.
+	 * @param input the source text
+	 * @param features the features the {@code #+}/{@code #-} conditionals test
+	 * @param readTimeEval replaces the {@code (%read-eval datum)} markers of a feature
+	 * expression by their values, or {@code null} to refuse such a guard
+	 * @return the index of the first character the read did not consume
+	 * @throws LispReadException when the input holds no complete datum
+	 */
+	public static int datumEnd(String input, Features features, @Nullable UnaryOperator<LispVal> readTimeEval) {
+		LispLexer lexer = new LispLexer(input, features, ReadEvalMode.SKIP_UNREADABLE, null, readTimeEval);
+		lexer.skipDatum();
+		int end = lexer.pos;
+		if (end < input.length() && Character.isWhitespace(input.charAt(end))) {
+			end++;
+		}
+		return end;
+	}
+
+	// Skips one datum at the raw character level, without tokenizing it, so a form
+	// guarded by a failing #+/#- may use syntax the reader does not support. A nested
+	// #+/#- whose guard fails produces NO datum (it consumes its feature expression and
+	// guarded form and yields nothing), so this keeps skipping until a real datum is
+	// consumed -- that is what makes the two-form guard idiom
+	// (#+feature #+feature A B, which includes both A and B only when the feature is
+	// present) skip both A and B when it is absent.
+	private void skipDatum() {
+		boolean consumedConditional = false;
+		while (true) {
+			skipInterTokenSpace();
+			if (this.pos >= this.input.length()) {
+				if (consumedConditional) {
+					return;
+				}
+				throw eof("Unexpected end of input, expected a form to skip");
+			}
+			if (this.input.charAt(this.pos) == ')') {
+				// A failing conditional guarded the last form(s) before ')': the nested
+				// conditional yielded nothing, so there is nothing more to skip.
+				if (consumedConditional) {
+					return;
+				}
+				throw err("Unexpected ')' where a form to skip was expected");
+			}
+			if (skipDatumOrConditional()) {
+				return;
+			}
+			consumedConditional = true;
+		}
+	}
+
+	// Skips one syntactic unit at the raw character level. Returns true if it consumed a
+	// real datum, false if it consumed only a #+/#- conditional whose guard failed
+	// (which yields no datum). The caller (skipDatum) has already ensured pos is at
+	// a non-space character that is neither EOF nor ')'.
+	private boolean skipDatumOrConditional() {
+		char c = this.input.charAt(this.pos);
+		if (c == '\'' || c == '`') {
+			this.pos++;
+			skipDatum();
+			return true;
+		}
+		if (c == ',') {
+			this.pos++;
+			if (this.pos < this.input.length() && this.input.charAt(this.pos) == '@') {
+				this.pos++;
+			}
+			skipDatum();
+			return true;
+		}
+		if (c == '"') {
+			skipStringRaw();
+			return true;
+		}
+		if (c == '(') {
+			skipDelimitedList();
+			return true;
+		}
+		if (c == '#' && this.pos + 1 < this.input.length()) {
+			char next = this.input.charAt(this.pos + 1);
+			if (next == '\\') {
+				skipCharLiteralRaw(this.pos + 1);
+				return true;
+			}
+			// #<n>\x -- the infix numeric argument the standard allows on every dispatch
+			// macro character. Only #\ needs it spelled out here: the fall-through token
+			// walk below already carries the digits of #0(, #2A( and friends, but a
+			// backslash is a token character, so #0\Space would end at the backslash.
+			int afterArg = this.pos + 1;
+			while (afterArg < this.input.length() && isDigit(this.input.charAt(afterArg))) {
+				afterArg++;
+			}
+			if (afterArg > this.pos + 1 && afterArg < this.input.length() && this.input.charAt(afterArg) == '\\') {
+				skipCharLiteralRaw(afterArg);
+				return true;
+			}
+			if (next == '\'') {
+				this.pos += 2;
+				skipDatum();
+				return true;
+			}
+			if (next == '(') {
+				this.pos++;
+				skipDelimitedList();
+				return true;
+			}
+			if (next == '+' || next == '-') {
+				// The guard is evaluated exactly as a real read evaluates it, inside a
+				// form a failed guard covers too (as SBCL does: the feature expression is
+				// read and tested even under *read-suppress*). When it holds, the form
+				// behind it IS the datum and the scan stops there; when it fails, the
+				// form is skipped and the scan keeps looking. That is the read's own
+				// behavior, the only way read-from-string's second value can answer for
+				// either branch, and what makes the #+f #+f A B idiom skip both forms
+				// when f is absent.
+				boolean negated = next == '-';
+				this.pos += 2;
+				skipInterTokenSpace();
+				int exprStart = this.pos;
+				this.featureExprReadsEval = false;
+				LispVal expr = readFeatureExpr();
+				boolean enabled = this.featureExprReadsEval
+						? readTimeFeatureHolds(this.input.substring(exprStart, this.pos))
+						: this.features.isEnabled(expr);
+				if (enabled == negated) {
+					skipDatum();
+					return false;
+				}
+				skipDatum();
+				return true;
+			}
+			if (next == '.') {
+				this.pos += 2;
+				skipDatum();
+				return true;
+			}
+			// #2A(...) and friends: skip the symbol-shaped prefix, then a directly
+			// following list (a glued '(' only occurs in array literals here) or a
+			// directly following string (#P"..." -- without this the namestring would
+			// surface as a datum of its own).
+			this.pos++;
+			skipTokenRaw();
+			if (this.pos < this.input.length() && this.input.charAt(this.pos) == '(') {
+				skipDelimitedList();
+			}
+			else if (this.pos < this.input.length() && this.input.charAt(this.pos) == '"') {
+				skipStringRaw();
+			}
+			return true;
+		}
+		// A symbol or number token.
+		skipTokenRaw();
+		return true;
+	}
+
+	// Skips the rest of a token, whose escapes (CLHS 2.1.4.6, 2.1.4.7) hold characters
+	// that would end it. Text ending inside one leaves the position at its end: the
+	// read of that text is what reports it.
+	private void skipTokenRaw() {
+		while (this.pos < this.input.length() && isSymbolChar(this.input.charAt(this.pos))) {
+			char c = this.input.charAt(this.pos);
+			boolean standard = this.syntax == null || this.syntax.entry(c) == null;
+			this.pos++;
+			if (standard && c == '\\') {
+				this.pos++;
+			}
+			else if (standard && c == '|') {
+				while (this.pos < this.input.length() && this.input.charAt(this.pos) != '|') {
+					this.pos += this.input.charAt(this.pos) == '\\' ? 2 : 1;
+				}
+				this.pos++;
+			}
+		}
+		this.pos = Math.min(this.pos, this.input.length());
+	}
+
+	// Skips a balanced (...) list at the raw character level, honoring strings,
+	// comments and character literals (so #\( and "..." do not confuse the depth).
+	private void skipDelimitedList() {
+		int start = this.pos;
+		int depth = 0;
+		while (this.pos < this.input.length()) {
+			char c = this.input.charAt(this.pos);
+			if (c == '"') {
+				skipStringRaw();
+			}
+			else if (c == ';') {
+				skipComment();
+			}
+			else if (c == '#' && this.pos + 1 < this.input.length() && this.input.charAt(this.pos + 1) == '|') {
+				skipBlockComment();
+			}
+			else if (c == '#' && this.pos + 1 < this.input.length() && this.input.charAt(this.pos + 1) == '\\') {
+				skipCharLiteralRaw(this.pos + 1);
+			}
+			else if (c == '(') {
+				depth++;
+				this.pos++;
+			}
+			else if (c == ')') {
+				depth--;
+				this.pos++;
+				if (depth == 0) {
+					return;
+				}
+			}
+			else if ((c == '\\' || c == '|') && (this.syntax == null || this.syntax.entry(c) == null)) {
+				skipTokenRaw();
+			}
+			else {
+				this.pos++;
+			}
+		}
+		throw eofAt(start, "Unexpected end of input in a skipped form, expected ')'");
+	}
+
+	private void skipStringRaw() {
+		int start = this.pos;
+		this.pos++; // skip opening "
+		while (this.pos < this.input.length() && this.input.charAt(this.pos) != '"') {
+			if (this.input.charAt(this.pos) == '\\' && this.pos + 1 < this.input.length()) {
+				this.pos++;
+			}
+			this.pos++;
+		}
+		if (this.pos >= this.input.length()) {
+			throw eofAt(start, "Unterminated string literal");
+		}
+		this.pos++; // skip closing "
+	}
+
+	// Skips a #\ character literal at the raw character level. backslashPos is the index
+	// of the '\' (the '#' and any infix numeric argument sit before it). The character
+	// right after the backslash is taken WHATEVER it is -- that is what makes #\( and
+	// #\; single characters rather than an open paren and a comment -- and the token
+	// continues over the constituent characters behind it, so a character NAME (#\Space,
+	// and the bogus #\boguscharname a suppressed read must swallow) is one unit.
+	private void skipCharLiteralRaw(int backslashPos) {
+		int start = this.pos;
+		this.pos = backslashPos + 1;
+		if (this.pos >= this.input.length()) {
+			throw eofAt(start, "Unexpected end of input after #\\");
+		}
+		this.pos++;
+		while (this.pos < this.input.length() && isSymbolChar(this.input.charAt(this.pos))) {
+			this.pos++;
+		}
+	}
+
+	private static boolean isDigit(char c) {
+		return c >= '0' && c <= '9';
+	}
+
+	// Whether a character continues the token it appears in: the readtable's answer for
+	// a character it gives another syntax, the standard one otherwise.
+	private boolean isSymbolChar(char c) {
+		if (this.syntax != null) {
+			ReadSyntax.Entry entry = this.syntax.entry(c);
+			if (entry != null) {
+				return entry.continuesToken();
+			}
+		}
+		return isStandardSymbolChar(c);
+	}
+
+	private static boolean isStandardSymbolChar(char c) {
+		// ',' and '`' terminate a symbol (Common Lisp terminating macro characters)
+		// so `(a ,b) and `(,x ,@xs) tokenize without surrounding whitespace. A comma
+		// used as a digit-grouping separator ("1,000") is consumed inside readNumber
+		// before this predicate is consulted.
+		return !Character.isWhitespace(c) && c != '(' && c != ')' && c != '\'' && c != '"' && c != ';' && c != ','
+				&& c != '`';
+	}
+
+}

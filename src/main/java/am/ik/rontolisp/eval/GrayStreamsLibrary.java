@@ -1,0 +1,1166 @@
+package am.ik.rontolisp.eval;
+
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.UncheckedIOException;
+import java.nio.charset.StandardCharsets;
+import java.util.List;
+
+import am.ik.rontolisp.LispNames;
+import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.ReaderSymbols;
+import am.ik.rontolisp.compiler.BuiltinFunctionWrappers;
+import am.ik.rontolisp.compiler.CallSiteWalk;
+import am.ik.rontolisp.compiler.StreamOperandChecks;
+import am.ik.rontolisp.macro.IgnoredArgument;
+import am.ik.rontolisp.reader.Features;
+import am.ik.rontolisp.reader.LispReader;
+import org.jspecify.annotations.Nullable;
+
+/**
+ * rontolisp's own Gray-stream extension ({@code gray.lisp}): the base classes and generic
+ * functions a user-defined character output stream implements, mirroring how real
+ * implementations expose their native Gray support. The
+ * {@code write-char}/{@code write-string} built-ins dispatch to
+ * {@code rontolisp:stream-write-string} when handed a CLOS instance instead of a stream
+ * handle; the {@code trivial-gray-streams} shim system adapts the portable protocol onto
+ * this one, so no third-party name is known to the core.
+ */
+public final class GrayStreamsLibrary {
+
+	@Nullable private static volatile List<LispVal> forms;
+
+	private GrayStreamsLibrary() {
+	}
+
+	/**
+	 * Returns the parsed protocol definitions (canonical shape, no package resolution
+	 * needed). Parsed once and cached.
+	 * @return the library forms
+	 */
+	public static List<LispVal> forms() {
+		List<LispVal> cached = forms;
+		if (cached == null) {
+			synchronized (GrayStreamsLibrary.class) {
+				cached = forms;
+				if (cached == null) {
+					cached = List.copyOf(LispReader.readAllFromString(readSource(), Features.INTERPRETER));
+					forms = cached;
+				}
+			}
+		}
+		return cached;
+	}
+
+	private static String readSource() {
+		try (InputStream in = GrayStreamsLibrary.class.getResourceAsStream("gray.lisp")) {
+			if (in == null) {
+				throw new IllegalStateException("gray.lisp is missing from the classpath");
+			}
+			return new String(in.readAllBytes(), StandardCharsets.UTF_8);
+		}
+		catch (IOException ex) {
+			throw new UncheckedIOException(ex);
+		}
+	}
+
+	/**
+	 * The protocol names whose presence activates the compile-path pre-pass. All
+	 * UPPERCASE: the reader upcases every unescaped symbol
+	 * ({@code .kb/reader-case-upcase.md}), so a lowercase entry can never match (the
+	 * pre-widening set carried two such dead lowercase class names).
+	 */
+	private static final java.util.Set<String> PROTOCOL_NAMES = java.util.Set.of(LispNames.GRAY_STREAM_WRITE_CHAR,
+			LispNames.GRAY_STREAM_WRITE_STRING, LispNames.GRAY_STREAM_WRITE_BYTE, LispNames.GRAY_STREAM_READ_BYTE,
+			LispNames.GRAY_STREAM_READ_CHAR, LispNames.GRAY_STREAM_UNREAD_CHAR, LispNames.GRAY_STREAM_READ_LINE,
+			LispNames.GRAY_STREAM_READ_CHAR_NO_HANG, LispNames.GRAY_STREAM_PEEK_CHAR, LispNames.GRAY_STREAM_LISTEN,
+			LispNames.GRAY_STREAM_READ_SEQUENCE, LispNames.GRAY_STREAM_WRITE_SEQUENCE,
+			LispNames.GRAY_STREAM_FILE_POSITION, LispNames.GRAY_STREAM_LINE_COLUMN, LispNames.GRAY_STREAM_START_LINE_P,
+			LispNames.GRAY_STREAM_TERPRI, LispNames.GRAY_STREAM_FRESH_LINE, LispNames.GRAY_STREAM_ADVANCE_TO_COLUMN,
+			LispNames.GRAY_STREAM_FORCE_OUTPUT, LispNames.GRAY_STREAM_FINISH_OUTPUT, LispNames.GRAY_STREAM_CLEAR_OUTPUT,
+			LispNames.GRAY_STREAM_CLEAR_INPUT, LispNames.GRAY_CHAR_OUTPUT_STREAM, LispNames.GRAY_CHAR_INPUT_STREAM,
+			LispNames.GRAY_FUNDAMENTAL_STREAM, LispNames.GRAY_INPUT_STREAM, LispNames.GRAY_OUTPUT_STREAM,
+			LispNames.GRAY_BINARY_INPUT_STREAM, LispNames.GRAY_BINARY_OUTPUT_STREAM, LispNames.GRAY_CHARACTER_STREAM,
+			LispNames.GRAY_BINARY_STREAM, LispNames.GRAY_STREAM_MIXIN);
+
+	/** The protocol's base classes, by member name (UPPERCASE, like the set above). */
+	private static final java.util.Set<String> BASE_CLASS_NAMES = java.util.Set.of(LispNames.GRAY_CHAR_OUTPUT_STREAM,
+			LispNames.GRAY_CHAR_INPUT_STREAM, LispNames.GRAY_FUNDAMENTAL_STREAM, LispNames.GRAY_INPUT_STREAM,
+			LispNames.GRAY_OUTPUT_STREAM, LispNames.GRAY_BINARY_INPUT_STREAM, LispNames.GRAY_BINARY_OUTPUT_STREAM,
+			LispNames.GRAY_CHARACTER_STREAM, LispNames.GRAY_BINARY_STREAM);
+
+	/** The class a host's registry knows when the host carries the protocol. */
+	private static final String HOST_PROTOCOL_CLASS = am.ik.rontolisp.PackageRegistry.qualify(LispNames.RONTOLISP_PKG,
+			LispNames.GRAY_FUNDAMENTAL_STREAM);
+
+	static final String WRITE_STRING_DISPATCH = "%GRAY-WRITE-STRING-DISPATCH";
+
+	static final String WRITE_STRING_BOUNDS_DISPATCH = "%GRAY-WRITE-STRING-BOUNDS-DISPATCH";
+
+	static final String WRITE_LINE_BOUNDS_DISPATCH = "%GRAY-WRITE-LINE-BOUNDS-DISPATCH";
+
+	static final String WRITE_CHAR_DISPATCH = "%GRAY-WRITE-CHAR-DISPATCH";
+
+	static final String WRITE_BYTE_DISPATCH = "%GRAY-WRITE-BYTE-DISPATCH";
+
+	static final String READ_BYTE_DISPATCH = "%GRAY-READ-BYTE-DISPATCH";
+
+	static final String READ_CHAR_DISPATCH = "%GRAY-READ-CHAR-DISPATCH";
+
+	static final String READ_CHAR_NO_HANG_DISPATCH = "%GRAY-READ-CHAR-NO-HANG-DISPATCH";
+
+	static final String PEEK_CHAR_DISPATCH = "%GRAY-PEEK-CHAR-DISPATCH";
+
+	static final String UNREAD_CHAR_DISPATCH = "%GRAY-UNREAD-CHAR-DISPATCH";
+
+	static final String OPEN_STREAM_P_DISPATCH = "%GRAY-OPEN-STREAM-P-DISPATCH";
+
+	static final String INPUT_STREAM_P_DISPATCH = "%GRAY-INPUT-STREAM-P-DISPATCH";
+
+	static final String OUTPUT_STREAM_P_DISPATCH = "%GRAY-OUTPUT-STREAM-P-DISPATCH";
+
+	static final String STREAM_ELEMENT_TYPE_DISPATCH = "%GRAY-STREAM-ELEMENT-TYPE-DISPATCH";
+
+	static final String READ_LINE_DISPATCH = "%GRAY-READ-LINE-DISPATCH";
+
+	static final String LISTEN_DISPATCH = "%GRAY-LISTEN-DISPATCH";
+
+	static final String READ_SEQUENCE_DISPATCH = "%GRAY-READ-SEQUENCE-DISPATCH";
+
+	static final String WRITE_SEQUENCE_DISPATCH = "%GRAY-WRITE-SEQUENCE-DISPATCH";
+
+	static final String FILE_POSITION_DISPATCH = "%GRAY-FILE-POSITION-DISPATCH";
+	static final String FILE_POSITION_SET_DISPATCH = "%GRAY-FILE-POSITION-SET-DISPATCH";
+	static final String BROADCAST_FILE_LENGTH_DISPATCH = "%GRAY-BROADCAST-FILE-LENGTH";
+
+	static final String TERPRI_DISPATCH = "%GRAY-TERPRI-DISPATCH";
+
+	static final String FRESH_LINE_DISPATCH = "%GRAY-FRESH-LINE-DISPATCH";
+
+	static final String WRITE_LINE_DISPATCH = "%GRAY-WRITE-LINE-DISPATCH";
+
+	static final String FORCE_OUTPUT_DISPATCH = "%GRAY-FORCE-OUTPUT-DISPATCH";
+
+	static final String FINISH_OUTPUT_DISPATCH = "%GRAY-FINISH-OUTPUT-DISPATCH";
+
+	static final String CLEAR_OUTPUT_DISPATCH = "%GRAY-CLEAR-OUTPUT-DISPATCH";
+
+	static final String PRINC_DISPATCH = "%GRAY-PRINC-DISPATCH";
+
+	static final String PRIN1_DISPATCH = "%GRAY-PRIN1-DISPATCH";
+
+	static final String PRINT_DISPATCH = "%GRAY-PRINT-DISPATCH";
+
+	static final String CLOSE_DISPATCH = "%GRAY-CLOSE-DISPATCH";
+
+	/**
+	 * The gray.lisp defuns whose bodies the rewrite walker must skip: their fallback
+	 * branches call the very built-ins the rewrite targets, and rewriting those into the
+	 * dispatch again would recurse forever. The default element loops are included for
+	 * symmetry (they only call generics today, but they are library internals, not user
+	 * call sites).
+	 */
+	private static final java.util.Set<String> DISPATCH_DEFUNS = java.util.Set.of(WRITE_STRING_DISPATCH,
+			WRITE_STRING_BOUNDS_DISPATCH, WRITE_LINE_BOUNDS_DISPATCH, WRITE_CHAR_DISPATCH, WRITE_BYTE_DISPATCH,
+			READ_BYTE_DISPATCH, READ_CHAR_DISPATCH, READ_CHAR_NO_HANG_DISPATCH, PEEK_CHAR_DISPATCH,
+			UNREAD_CHAR_DISPATCH, OPEN_STREAM_P_DISPATCH, INPUT_STREAM_P_DISPATCH, OUTPUT_STREAM_P_DISPATCH,
+			STREAM_ELEMENT_TYPE_DISPATCH, READ_LINE_DISPATCH, LISTEN_DISPATCH, READ_SEQUENCE_DISPATCH,
+			WRITE_SEQUENCE_DISPATCH, FILE_POSITION_DISPATCH, FILE_POSITION_SET_DISPATCH, BROADCAST_FILE_LENGTH_DISPATCH,
+			TERPRI_DISPATCH, FRESH_LINE_DISPATCH, WRITE_LINE_DISPATCH, FORCE_OUTPUT_DISPATCH, FINISH_OUTPUT_DISPATCH,
+			CLEAR_OUTPUT_DISPATCH, PRINC_DISPATCH, PRIN1_DISPATCH, PRINT_DISPATCH, CLOSE_DISPATCH,
+			LispNames.CLEAR_INPUT, "%GRAY-DEFAULT-READ-LINE", "%GRAY-DEFAULT-READ-SEQUENCE",
+			"%GRAY-DEFAULT-WRITE-SEQUENCE", "%GRAY-DEFAULT-WRITE-STRING", "%GRAY-DEFAULT-WRITE-CHAR",
+			"%GRAY-DEFAULT-TERPRI", "%GRAY-DEFAULT-START-LINE-P", "%GRAY-DEFAULT-FRESH-LINE",
+			"%GRAY-DEFAULT-ADVANCE-TO-COLUMN", "%GRAY-DEFAULT-UNREAD-CHAR", "%GRAY-DEFAULT-PEEK-CHAR",
+			"%GRAY-READ-CHAR-1", "%GRAY-WHITESPACE-CHAR-P");
+
+	/**
+	 * The dispatch defuns spliced only when a rewrite references them (see
+	 * {@link #process}) -- exactly the {@link #DISPATCH_DEFUNS} minus the
+	 * {@code %gray-default-*} element loops, which the protocol's own default methods
+	 * (and the shim's) call and which therefore always travel with the protocol.
+	 */
+	private static final java.util.Set<String> SPLICE_ON_USE = java.util.Set.of(WRITE_STRING_DISPATCH,
+			WRITE_STRING_BOUNDS_DISPATCH, WRITE_LINE_BOUNDS_DISPATCH, WRITE_CHAR_DISPATCH, WRITE_BYTE_DISPATCH,
+			READ_BYTE_DISPATCH, READ_CHAR_DISPATCH, READ_CHAR_NO_HANG_DISPATCH, PEEK_CHAR_DISPATCH,
+			UNREAD_CHAR_DISPATCH, OPEN_STREAM_P_DISPATCH, INPUT_STREAM_P_DISPATCH, OUTPUT_STREAM_P_DISPATCH,
+			STREAM_ELEMENT_TYPE_DISPATCH, READ_LINE_DISPATCH, LISTEN_DISPATCH, READ_SEQUENCE_DISPATCH,
+			WRITE_SEQUENCE_DISPATCH, FILE_POSITION_DISPATCH, FILE_POSITION_SET_DISPATCH, BROADCAST_FILE_LENGTH_DISPATCH,
+			TERPRI_DISPATCH, FRESH_LINE_DISPATCH, WRITE_LINE_DISPATCH, FORCE_OUTPUT_DISPATCH, FINISH_OUTPUT_DISPATCH,
+			CLEAR_OUTPUT_DISPATCH, PRINC_DISPATCH, PRIN1_DISPATCH, PRINT_DISPATCH, CLOSE_DISPATCH,
+			LispNames.CLEAR_INPUT);
+
+	/**
+	 * The compile-path pre-pass (the usocket {@code process()} pattern): when the program
+	 * uses the Gray protocol, splices the gray.lisp protocol definitions unless a load
+	 * already did, and rewrites every stream-taking built-in call with an explicit
+	 * non-literal stream ({@code write-string}/{@code write-char}/{@code format},
+	 * {@code write-byte}, {@code read-byte}/{@code read-char}/{@code read-line},
+	 * {@code listen}, {@code read-sequence}/{@code write-sequence},
+	 * {@code file-position}) onto the {@code rontolisp::%gray-*-dispatch} helpers, so a
+	 * CLOS instance stream reaches the Gray generics in compiled programs like it does on
+	 * the interpreter. In a program that binds {@code *standard-output*} (or
+	 * {@code *standard-input*}), the stream-less and literal-nil spellings of that family
+	 * -- and {@code format t}, through its ordinary lowering -- are rewritten too, since
+	 * the stream they designate is whatever the variable holds when they run. Only the
+	 * dispatch helpers a rewrite actually produced are spliced
+	 * ({@code LibraryDefunPruner} does not cover this splice, and an unused helper is not
+	 * just bloat: {@code %gray-listen-dispatch}'s fallback names the {@code listen}
+	 * built-in, which the Preview 1 WASM backend rejects at compile time -- a Gray
+	 * program that never calls {@code listen} must not inherit that rejection). A program
+	 * that never mentions the protocol is returned unchanged.
+	 *
+	 * <p>
+	 * This pass OWNS where the protocol sits. When a load already spliced it but left it
+	 * behind a form that subclasses it, the protocol forms are hoisted to the front
+	 * ({@link #protocolFormsToHoist}) instead of the splice being declined outright.
+	 * @param program the top-level forms (after load inlining and user-macro expansion)
+	 * @return the program with the Gray protocol spliced and call sites rewritten
+	 */
+	public static List<LispVal> process(List<LispVal> program) {
+		return process(program, null);
+	}
+
+	/**
+	 * {@link #process(List)} for a FRAGMENT ({@link LinkedDefinitions}) as well: where
+	 * the host carries the protocol -- its registry knows the base classes -- a Gray
+	 * instance it made may reach any call site of the fragment, standard streams bound to
+	 * one included, so every call site is rewritten whatever the fragment's own forms
+	 * name, and the protocol is the host's, not spliced again (a generic defined anew
+	 * would hold only the fragment's methods).
+	 * @param program the top-level forms (after load inlining and user-macro expansion)
+	 * @param linked what the classes a fragment links against define, or {@code null} for
+	 * a whole program
+	 * @return the program with the Gray protocol spliced and call sites rewritten
+	 */
+	public static List<LispVal> process(List<LispVal> program, @Nullable LinkedDefinitions linked) {
+		boolean hostProtocol = linked != null && linked.classes().contains(HOST_PROTOCOL_CLASS);
+		if (!hostProtocol && !usesProtocol(program)) {
+			return program;
+		}
+		RewriteContext ctx = new RewriteContext(new java.util.LinkedHashSet<>(), ownedOperators(program),
+				hostProtocol || binds(program, STANDARD_OUTPUT), hostProtocol || binds(program, STANDARD_INPUT),
+				StreamOperandChecks.formatTakesStrings(program));
+		program = takeOverClearInput(program, ctx);
+		java.util.List<LispVal> rewritten = new java.util.ArrayList<>();
+		for (LispVal form : program) {
+			rewritten.add(rewrite(form, ctx));
+		}
+		markFunctionValueHelpers(program, ctx);
+		java.util.Set<String> usedHelpers = ctx.used();
+		java.util.List<LispVal> out = new java.util.ArrayList<>();
+		java.util.List<LispVal> body = rewritten;
+		boolean definesProtocol = program.stream().anyMatch(GrayStreamsLibrary::definesProtocol);
+		// Where the owned operators' default methods go: right behind the protocol's
+		// base classes, which they specialize on -- in front of the body when the
+		// protocol leads the output, else behind the protocol's last form in place.
+		int defaultsAt = -1;
+		if (!definesProtocol && !hostProtocol) {
+			out.addAll(protocolForms());
+		}
+		else if (definesProtocol) {
+			java.util.Set<Integer> hoisted = protocolFormsToHoist(program);
+			if (!hoisted.isEmpty()) {
+				java.util.List<LispVal> rest = new java.util.ArrayList<>();
+				for (int i = 0; i < rewritten.size(); i++) {
+					(hoisted.contains(i) ? out : rest).add(rewritten.get(i));
+				}
+				body = rest;
+			}
+			else {
+				java.util.Set<String> protocolKeys = protocolDefinitionKeys();
+				for (int i = 0; i < program.size(); i++) {
+					String key = definitionKey(program.get(i));
+					if (key != null && protocolKeys.contains(key)) {
+						defaultsAt = i + 1;
+					}
+				}
+			}
+		}
+		boolean ownReadLine = definesOwnReadLineMethod(program);
+		for (String helper : usedHelpers) {
+			LispVal defun = dispatchDefun(helper);
+			out.add(ownReadLine && READ_LINE_DISPATCH.equals(helper) ? consumingMethodValues(defun) : defun);
+		}
+		java.util.List<LispVal> defaults = new java.util.ArrayList<>();
+		if (!hostProtocol) {
+			for (String op : new java.util.TreeSet<>(ctx.owned())) {
+				defaults.add(java.util.Objects.requireNonNull(ownableDefaultMethod(op)));
+			}
+		}
+		if (defaultsAt < 0) {
+			out.addAll(defaults);
+			out.addAll(body);
+		}
+		else {
+			out.addAll(body.subList(0, defaultsAt));
+			out.addAll(defaults);
+			out.addAll(body.subList(defaultsAt, body.size()));
+		}
+		return out;
+	}
+
+	/**
+	 * Replaces the prelude's {@code clear-input}, where this program carries it, with
+	 * gray.lisp's, which reaches {@code stream-clear-input}. The operator is an ordinary
+	 * defun rather than a lowered call, so its one definition is what a call and a
+	 * function value both reach: no call site is rewritten and no wrapper is involved.
+	 * The prelude's own stays free of the protocol, so a program that calls
+	 * {@code clear-input} and names no Gray stream does not carry it.
+	 *
+	 * <p>
+	 * The prelude's form is told by the lambda list both definitions spell: its
+	 * {@code %}-prefixed parameter is no program's own, so a {@code defun} a program
+	 * wrote stays. Asking the prelude instead would close a cycle, since the prelude's
+	 * selection already asks this class ({@link #usesProtocol}).
+	 */
+	private static List<LispVal> takeOverClearInput(List<LispVal> program, RewriteContext ctx) {
+		LispVal lambdaList = defunLambdaList(dispatchDefun(LispNames.CLEAR_INPUT));
+		java.util.List<LispVal> kept = new java.util.ArrayList<>(program);
+		if (!kept.removeIf(form -> LispNames.CLEAR_INPUT.equals(dispatchDefunName(form))
+				&& java.util.Objects.equals(lambdaList, defunLambdaList(form)))) {
+			return program;
+		}
+		ctx.used().add(LispNames.CLEAR_INPUT);
+		return kept;
+	}
+
+	/**
+	 * A {@code defun}'s lambda list, or {@code null} for a form too short to have one.
+	 */
+	private static @Nullable LispVal defunLambdaList(LispVal defun) {
+		return defun instanceof am.ik.rontolisp.LispCons form && form.cdr() instanceof am.ik.rontolisp.LispCons named
+				&& named.cdr() instanceof am.ik.rontolisp.LispCons rest ? rest.car() : null;
+	}
+
+	/**
+	 * The read-line dispatch helper with its {@code %quiet-multiple-value-list} spelled
+	 * {@code multiple-value-list}: a program's own {@code stream-read-line} method may
+	 * end the stream with the standard Gray {@code ("" t)}, which the helper can tell
+	 * from an empty line only by the second value -- so that program needs the
+	 * multiple-value channel whether or not it consumes a value itself.
+	 */
+	private static LispVal consumingMethodValues(LispVal form) {
+		if (form instanceof am.ik.rontolisp.LispCons cons) {
+			LispVal car = cons.car() instanceof am.ik.rontolisp.LispSymbol sym
+					&& LispNames.QUIET_MULTIPLE_VALUE_LIST_INTERNAL.equals(sym.name())
+							? new am.ik.rontolisp.LispSymbol(LispNames.MULTIPLE_VALUE_LIST)
+							: consumingMethodValues(cons.car());
+			return new am.ik.rontolisp.LispCons(car, consumingMethodValues(cons.cdr()));
+		}
+		return form;
+	}
+
+	/**
+	 * Whether the program defines a {@code stream-read-line} method of its own -- on
+	 * either protocol's generic, specialized on a class outside the two library packages
+	 * (gray.lisp's and the trivial-gray-streams shim's defaults, and a bundled library's
+	 * stream, answer {@code :eof} at end of stream).
+	 */
+	private static boolean definesOwnReadLineMethod(List<LispVal> program) {
+		for (LispVal form : program) {
+			if (definesOwnReadLineMethod(form)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private static boolean definesOwnReadLineMethod(LispVal form) {
+		if (!(form instanceof am.ik.rontolisp.LispCons cons)) {
+			return false;
+		}
+		if (cons.car() instanceof am.ik.rontolisp.LispSymbol op && LispNames.DEFMETHOD.equals(member(op.name()))
+				&& cons.cdr() instanceof am.ik.rontolisp.LispCons rest
+				&& rest.car() instanceof am.ik.rontolisp.LispSymbol name
+				&& LispNames.GRAY_STREAM_READ_LINE.equals(member(name.name()))) {
+			for (LispVal part = rest.cdr(); part instanceof am.ik.rontolisp.LispCons cell; part = cell.cdr()) {
+				if (cell.car() instanceof am.ik.rontolisp.LispCons lambdaList) {
+					return lambdaList.car() instanceof am.ik.rontolisp.LispCons specialized
+							&& specialized.cdr() instanceof am.ik.rontolisp.LispCons classCell
+							&& classCell.car() instanceof am.ik.rontolisp.LispSymbol className
+							&& !isLibraryPackage(className.name());
+				}
+			}
+			return false;
+		}
+		for (LispVal part = cons; part instanceof am.ik.rontolisp.LispCons cell; part = cell.cdr()) {
+			if (definesOwnReadLineMethod(cell.car())) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private static boolean isLibraryPackage(String name) {
+		am.ik.rontolisp.PackageRegistry.QualifiedName qn = am.ik.rontolisp.PackageRegistry.splitQualified(name);
+		return qn != null && (LispNames.RONTOLISP_PKG.equals(qn.pkg()) || "TRIVIAL-GRAY-STREAMS".equals(qn.pkg()));
+	}
+
+	/**
+	 * Splices the dispatch helpers of every stream operator the program designates as a
+	 * function value ({@code #'write-string}, {@code 'read-char}), so the backends inject
+	 * that operator's Gray wrapper ({@code BuiltinFunctionWrappers.grayDispatchHelpers}),
+	 * which calls them: a function value has no call site for {@link #rewrite} to see. An
+	 * operator the program owns keeps its own method, as at a call site.
+	 */
+	private static void markFunctionValueHelpers(List<LispVal> program, RewriteContext ctx) {
+		java.util.Set<String> designated = BuiltinFunctionWrappers.functionDesignatorNames(program);
+		for (String op : new java.util.TreeSet<>(designated)) {
+			if (!ctx.owned().contains(op)) {
+				for (String helper : BuiltinFunctionWrappers.grayDispatchHelpers(op)) {
+					ctx.used().add(member(helper));
+				}
+			}
+		}
+	}
+
+	/**
+	 * The indices of the already-present protocol forms that must move to the front,
+	 * empty when nothing has to move.
+	 *
+	 * <p>
+	 * A load splices the protocol at the LOAD's position ({@link ShimLibraries} prepends
+	 * {@link #protocolForms()} to the trivial-gray-streams shim, so it lands wherever the
+	 * {@code ql:quickload} sat), while another pre-pass may prepend a form that
+	 * SUBCLASSES it at index 0 -- {@code HttpServerLibrary}'s buffered {@code :raw-body}
+	 * stream is a {@code rontolisp:fundamental-binary-input-stream}. Placement has one
+	 * owner, this class, and it runs last, so it repairs the order here rather than
+	 * making one library's splice index depend on another's.
+	 *
+	 * <p>
+	 * Deliberately conditional: when the protocol already precedes every subclass --
+	 * which is every program that loads a Gray shim and nothing else -- nothing moves and
+	 * the output is byte-identical.
+	 * @param program the top-level forms, BEFORE the call-site rewrite (indices are
+	 * shared with the rewritten list, which is element-wise the same length)
+	 * @return the indices to hoist, in program order
+	 */
+	private static java.util.Set<Integer> protocolFormsToHoist(List<LispVal> program) {
+		java.util.Set<String> protocolKeys = protocolDefinitionKeys();
+		java.util.Set<String> baseClasses = protocolBaseClassNames();
+		java.util.Set<Integer> protocolAt = new java.util.LinkedHashSet<>();
+		int lastProtocolAt = -1;
+		int firstSubclassAt = -1;
+		for (int i = 0; i < program.size(); i++) {
+			LispVal form = program.get(i);
+			String key = definitionKey(form);
+			if (key != null && protocolKeys.contains(key)) {
+				protocolAt.add(i);
+				lastProtocolAt = i;
+			}
+			else if (firstSubclassAt < 0 && subclassesProtocol(form, baseClasses)) {
+				firstSubclassAt = i;
+			}
+		}
+		if (firstSubclassAt < 0 || lastProtocolAt < firstSubclassAt) {
+			return java.util.Set.of();
+		}
+		return protocolAt;
+	}
+
+	/**
+	 * The definition keys of {@link #protocolForms()}: what makes a top-level form one of
+	 * gray.lisp's OWN definitions rather than a user's. Derived from the source, so a new
+	 * form in gray.lisp needs no update here.
+	 *
+	 * <p>
+	 * The key carries the lambda list / superclass list, not just the name, and that
+	 * discriminator is load-bearing: the trivial-gray-streams shim defines its own
+	 * {@code (defmethod rontolisp:stream-read-line ((stream
+	 * trivial-gray-streams:fundamental-input-stream)) ...)} alongside gray.lisp's method
+	 * on the rontolisp base class, and only the specializer tells them apart. Hoisting
+	 * the shim's method would put it above the class it specializes on.
+	 */
+	private static java.util.Set<String> protocolDefinitionKeys() {
+		java.util.Set<String> keys = new java.util.HashSet<>();
+		for (LispVal form : protocolForms()) {
+			String key = definitionKey(form);
+			if (key != null) {
+				keys.add(key);
+			}
+		}
+		return keys;
+	}
+
+	/**
+	 * The member names of gray.lisp's base classes, read off {@link #protocolForms()}.
+	 */
+	private static java.util.Set<String> protocolBaseClassNames() {
+		java.util.Set<String> names = new java.util.HashSet<>();
+		for (LispVal form : protocolForms()) {
+			if (form instanceof am.ik.rontolisp.LispCons cons && cons.car() instanceof am.ik.rontolisp.LispSymbol op
+					&& LispNames.DEFCLASS.equals(member(op.name()))
+					&& cons.cdr() instanceof am.ik.rontolisp.LispCons rest
+					&& rest.car() instanceof am.ik.rontolisp.LispSymbol name) {
+				names.add(member(name.name()));
+			}
+		}
+		return names;
+	}
+
+	/**
+	 * A {@code defclass} / {@code defgeneric} / {@code defun} / {@code defmethod} form's
+	 * identity: the operator, the defined name and the shape that follows it (the
+	 * superclass list, or the lambda list -- or a {@code defmethod} qualifier, equally
+	 * discriminating). Returns null for anything else.
+	 *
+	 * <p>
+	 * Built from {@code print()}, never {@code display()}: the display text of a symbol
+	 * DROPS its package prefix, which would make the shim's
+	 * {@code trivial-gray-streams:stream-read-line} definitions collide with gray.lisp's
+	 * {@code rontolisp:} ones -- and hoisting the shim's methods above the shim's own
+	 * classes resolved their specializers to the rontolisp base class instead.
+	 */
+	private static @Nullable String definitionKey(LispVal form) {
+		if (!(form instanceof am.ik.rontolisp.LispCons cons) || !(cons.car() instanceof am.ik.rontolisp.LispSymbol op)
+				|| !cons.isProperList()) {
+			return null;
+		}
+		String opName = member(op.name());
+		if (!DEFINITION_OPS.contains(opName)) {
+			return null;
+		}
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 3) {
+			return null;
+		}
+		return opName + " " + parts.get(1).print() + " " + parts.get(2).print();
+	}
+
+	private static final java.util.Set<String> DEFINITION_OPS = java.util.Set.of(LispNames.DEFCLASS,
+			LispNames.DEFGENERIC, LispNames.DEFUN, LispNames.DEFMETHOD);
+
+	/**
+	 * Whether the form is a {@code defclass} naming a Gray base class as a superclass.
+	 */
+	private static boolean subclassesProtocol(LispVal form, java.util.Set<String> baseClasses) {
+		if (!(form instanceof am.ik.rontolisp.LispCons cons) || !(cons.car() instanceof am.ik.rontolisp.LispSymbol op)
+				|| !LispNames.DEFCLASS.equals(member(op.name())) || !cons.isProperList()) {
+			return false;
+		}
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 3 || !(parts.get(2) instanceof am.ik.rontolisp.LispCons supers) || !supers.isProperList()) {
+			return false;
+		}
+		for (LispVal superClass : supers.toList()) {
+			if (superClass instanceof am.ik.rontolisp.LispSymbol name && baseClasses.contains(member(name.name()))) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * The gray.lisp forms minus the on-use dispatch defuns: the classes, generics,
+	 * default methods and their shared element-loop defuns. This is what a load of the
+	 * trivial-gray-streams shim splices ({@link ShimLibraries}); the dispatch defuns are
+	 * added by {@link #process} exactly when a rewrite references them.
+	 * @return the protocol definition forms
+	 */
+	public static List<LispVal> protocolForms() {
+		java.util.List<LispVal> out = new java.util.ArrayList<>();
+		for (LispVal form : forms()) {
+			if (dispatchDefunName(form) == null) {
+				out.add(form);
+			}
+		}
+		return List.copyOf(out);
+	}
+
+	private static LispVal dispatchDefun(String helperName) {
+		for (LispVal form : forms()) {
+			if (helperName.equals(dispatchDefunName(form))) {
+				return form;
+			}
+		}
+		throw new IllegalStateException("gray.lisp does not define " + helperName);
+	}
+
+	/** The on-use dispatch helper this form defines, or {@code null}. */
+	private static @Nullable String dispatchDefunName(LispVal form) {
+		if (form instanceof am.ik.rontolisp.LispCons cons && cons.car() instanceof am.ik.rontolisp.LispSymbol op
+				&& LispNames.DEFUN.equals(member(op.name())) && cons.cdr() instanceof am.ik.rontolisp.LispCons rest
+				&& rest.car() instanceof am.ik.rontolisp.LispSymbol defName) {
+			String memberName = member(defName.name());
+			return SPLICE_ON_USE.contains(memberName) ? memberName : null;
+		}
+		return null;
+	}
+
+	/**
+	 * Whether the program names any Gray protocol generic, i.e. whether {@link #process}
+	 * does anything at all -- and therefore whether a dispatch helper can be spliced.
+	 * {@code LispPreludeLibrary} asks, because those helpers resolve their stream through
+	 * the prelude's {@code %stream-target} and this pass runs after the prelude's
+	 * selection.
+	 * @param program the top-level forms
+	 * @return whether the Gray protocol is in play
+	 */
+	static boolean usesProtocol(List<LispVal> program) {
+		return program.stream().anyMatch(GrayStreamsLibrary::referencesProtocol);
+	}
+
+	/**
+	 * Whether a generic-function name is one of rontolisp's own Gray protocol generics,
+	 * which gray.lisp declares with the lambda list every method must be congruent with.
+	 * @param genericName the name as the registry holds it
+	 * @return whether it is a {@code rontolisp:} protocol generic
+	 */
+	static boolean isProtocolGeneric(String genericName) {
+		am.ik.rontolisp.PackageRegistry.QualifiedName qn = am.ik.rontolisp.PackageRegistry.splitQualified(genericName);
+		return qn != null && LispNames.RONTOLISP_PKG.equals(qn.pkg()) && PROTOCOL_NAMES.contains(qn.member());
+	}
+
+	/**
+	 * Whether a class name spells one of the protocol's base classes. By MEMBER, the test
+	 * {@link #usesProtocol} splices the library on, so the interpreter loads it for a
+	 * class lookup exactly where a compiled program carries the class.
+	 * @param name the class name as spelled
+	 * @return whether its member names a base class
+	 */
+	static boolean namesBaseClass(String name) {
+		return BASE_CLASS_NAMES.contains(member(name));
+	}
+
+	private static boolean referencesProtocol(LispVal form) {
+		while (true) {
+			switch (form) {
+				case am.ik.rontolisp.LispSymbol sym -> {
+					return PROTOCOL_NAMES.contains(member(sym.name()));
+				}
+				case am.ik.rontolisp.LispCons cons -> {
+					if (referencesProtocol(cons.car())) {
+						return true;
+					}
+					form = cons.cdr();
+				}
+				default -> {
+					return false;
+				}
+			}
+		}
+	}
+
+	/** Whether the form is gray.lisp's own base-class defclass (already spliced). */
+	private static boolean definesProtocol(LispVal form) {
+		if (!(form instanceof am.ik.rontolisp.LispCons cons) || !(cons.car() instanceof am.ik.rontolisp.LispSymbol op)
+				|| !LispNames.DEFCLASS.equals(member(op.name()))
+				|| !(cons.cdr() instanceof am.ik.rontolisp.LispCons rest)
+				|| !(rest.car() instanceof am.ik.rontolisp.LispSymbol name)) {
+			return false;
+		}
+		am.ik.rontolisp.PackageRegistry.QualifiedName qn = am.ik.rontolisp.PackageRegistry.splitQualified(name.name());
+		return qn != null && LispNames.RONTOLISP_PKG.equals(qn.pkg())
+				&& "FUNDAMENTAL-CHARACTER-OUTPUT-STREAM".equals(qn.member());
+	}
+
+	/**
+	 * One {@link #process} run's rewrite state: the dispatch helpers the rewrites have
+	 * reached (what gets spliced, {@code SPLICE_ON_USE}) and whether {@code close} may be
+	 * rewritten at all.
+	 *
+	 * @param used the helper names a rewrite has produced
+	 * @param owned the {@link #OWNABLE_OPERATORS} the PROGRAM defines a method on -- the
+	 * rewrite stands down for each of them
+	 * @param standardOutput whether the program binds {@code *standard-output*}: only
+	 * then can the stream a stream-less print designates be a Gray instance, so only then
+	 * are those calls routed through the dispatch helpers
+	 * @param standardInput the same for {@code *standard-input*} and the stream-less
+	 * character reads
+	 * @param formatTakesStrings {@link StreamOperandChecks#formatTakesStrings}
+	 */
+	private record RewriteContext(java.util.Set<String> used, java.util.Set<String> owned, boolean standardOutput,
+			boolean standardInput, boolean formatTakesStrings) implements CallSiteWalk.Rewriter {
+
+		@Override
+		public @Nullable LispVal call(am.ik.rontolisp.LispCons form, am.ik.rontolisp.LispSymbol head) {
+			return rewriteCall(form, head, this);
+		}
+
+	}
+
+	private static final java.util.SequencedSet<String> STANDARD_OUTPUT = java.util.Collections
+		.unmodifiableSequencedSet(new java.util.LinkedHashSet<>(List.of(LispNames.STANDARD_OUTPUT_VAR)));
+
+	private static final java.util.SequencedSet<String> STANDARD_INPUT = java.util.Collections
+		.unmodifiableSequencedSet(new java.util.LinkedHashSet<>(List.of(LispNames.STANDARD_INPUT_VAR)));
+
+	/**
+	 * Whether the program binds the standard stream variable -- the condition the
+	 * backends switch its redirect on with ({@code .kb/standard-output-redirect.md},
+	 * "Activation rule"): a {@code let} or binding macro of it, or a
+	 * {@code rontolisp:make-thread}, whose bindings alist can bind it at run time. A
+	 * program that does neither reads the seeded {@code t}, which is no Gray instance, so
+	 * its stream-less calls keep their own lowering.
+	 */
+	private static boolean binds(List<LispVal> program, java.util.SequencedSet<String> variable) {
+		if (!am.ik.rontolisp.macro.SpecialVarCollector.collectDynamicallyBound(program, variable).isEmpty()) {
+			return true;
+		}
+		String makeThread = am.ik.rontolisp.PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.MAKE_THREAD);
+		return program.stream().anyMatch(form -> namesSymbol(form, makeThread));
+	}
+
+	private static boolean namesSymbol(LispVal form, String name) {
+		while (form instanceof am.ik.rontolisp.LispCons cons) {
+			if (cons.car() instanceof am.ik.rontolisp.LispSymbol sym ? name.equals(sym.name())
+					: namesSymbol(cons.car(), name)) {
+				return true;
+			}
+			form = cons.cdr();
+		}
+		return false;
+	}
+
+	/**
+	 * The built-in names CL itself spells as ordinary functions a stream class may define
+	 * a method on, rather than giving them a {@code stream-*} generic of their own:
+	 * fast-io's {@code (defmethod close ((stream fast-output-stream) &key abort) ...)}
+	 * and dexador's {@code (defmethod open-stream-p ((stream decoding-stream)) ...)} /
+	 * {@code (defmethod stream-element-type ((stream decoding-stream)) ...)} are exactly
+	 * that shape, and such a method already dispatches on every backend through the
+	 * shadowed-built-in machinery ({@code .kb/clos.md}). So this protocol deliberately
+	 * has no competing generic for them, and the Gray default steps aside as soon as the
+	 * program defines one -- into a method on the base class
+	 * ({@link #OWNABLE_DEFAULT_METHODS}).
+	 */
+	private static final java.util.Set<String> OWNABLE_OPERATORS = java.util.Set.of(LispNames.CLOSE,
+			LispNames.OPEN_STREAM_P, LispNames.INPUT_STREAM_P, LispNames.OUTPUT_STREAM_P,
+			LispNames.STREAM_ELEMENT_TYPE);
+
+	/**
+	 * What an owned operator answers for a Gray instance none of the program's methods
+	 * applies to: SBCL's methods on {@code fundamental-stream}, the Gray default the
+	 * dispatch helpers give while nothing is owned. Without them, owning the name for one
+	 * class (chunga's {@code (defmethod close ((stream chunked-stream)) ...)}) sent every
+	 * OTHER Gray instance to the built-in, which rejects it -- drakma closing a
+	 * flexi-streams in-memory stream signalled. Spliced by {@link #process} and evaluated
+	 * by the interpreter ({@link #ownableDefaultMethod}) only for an operator the program
+	 * owns, so a program owning none keeps the unmethoded built-in.
+	 */
+	private static final String OWNABLE_DEFAULT_METHODS = """
+			(defmethod close ((stream rontolisp:fundamental-stream) &key abort)
+			  (declare (ignore abort))
+			  t)
+			(defmethod open-stream-p ((stream rontolisp:fundamental-stream))
+			  t)
+			(defmethod input-stream-p ((stream rontolisp:fundamental-stream))
+			  (if (typep stream 'rontolisp:fundamental-input-stream) t nil))
+			(defmethod output-stream-p ((stream rontolisp:fundamental-stream))
+			  (if (typep stream 'rontolisp:fundamental-output-stream) t nil))
+			(defmethod stream-element-type ((stream rontolisp:fundamental-stream))
+			  (if (typep stream 'rontolisp:fundamental-character-stream)
+			      'character
+			      (if (typep stream 'rontolisp:fundamental-binary-stream)
+			          '(unsigned-byte 8)
+			          'character)))
+			""";
+
+	private static volatile java.util.@Nullable Map<String, LispVal> ownableDefaults;
+
+	/**
+	 * The Gray default method of an {@link #OWNABLE_OPERATORS} member
+	 * ({@link #OWNABLE_DEFAULT_METHODS}), or null for any other name.
+	 * @param operator the operator's bare name
+	 * @return the {@code defmethod} form, or null
+	 */
+	static @Nullable LispVal ownableDefaultMethod(String operator) {
+		java.util.Map<String, LispVal> cached = ownableDefaults;
+		if (cached == null) {
+			java.util.Map<String, LispVal> byName = new java.util.HashMap<>();
+			for (LispVal form : LispReader.readAllFromString(OWNABLE_DEFAULT_METHODS, Features.INTERPRETER)) {
+				byName.put(member(
+						((am.ik.rontolisp.LispSymbol) ((am.ik.rontolisp.LispCons) ((am.ik.rontolisp.LispCons) form)
+							.cdr()).car()).name()),
+						form);
+			}
+			cached = java.util.Map.copyOf(byName);
+			ownableDefaults = cached;
+		}
+		return cached.get(operator);
+	}
+
+	/**
+	 * The {@link #OWNABLE_OPERATORS} the program OWNS: it defines a {@code defmethod} /
+	 * {@code defgeneric} on the name. The Gray default must not get in front of such a
+	 * method, so the rewrite stands down for it -- the same condition the interpreter's
+	 * wraps check against their class registry, which is what keeps the two seams
+	 * answering alike.
+	 */
+	private static java.util.Set<String> ownedOperators(List<LispVal> program) {
+		java.util.Set<String> owned = new java.util.HashSet<>();
+		for (LispVal form : program) {
+			if (form instanceof am.ik.rontolisp.LispCons cons && cons.car() instanceof am.ik.rontolisp.LispSymbol op
+					&& (LispNames.DEFMETHOD.equals(member(op.name())) || LispNames.DEFGENERIC.equals(member(op.name())))
+					&& cons.cdr() instanceof am.ik.rontolisp.LispCons rest
+					&& rest.car() instanceof am.ik.rontolisp.LispSymbol name
+					&& OWNABLE_OPERATORS.contains(member(name.name()))) {
+				owned.add(member(name.name()));
+			}
+		}
+		return owned;
+	}
+
+	// The walk (CallSiteWalk) keeps every position that is not a call: a binding form's
+	// lambda list or binding list can look exactly like one -- cl-postgres'
+	// messages.lisp has (flet ((set-param (format size value) ...))), whose parameter
+	// list is a three-element form headed by FORMAT, and rewriting it produced a `let`
+	// where a parameter belonged ("Parameter must be a symbol"); chipz's (format
+	// :initarg :format ...) slot was read as a format call the same way.
+	private static LispVal rewrite(LispVal form, RewriteContext ctx) {
+		return CallSiteWalk.walk(form, ctx);
+	}
+
+	private static @Nullable LispVal rewriteCall(am.ik.rontolisp.LispCons cons, am.ik.rontolisp.LispSymbol op,
+			RewriteContext ctx) {
+		String opName = member(op.name());
+		// The dispatch defuns' own fallback calls must not rewrite into themselves.
+		if (LispNames.DEFUN.equals(opName) && cons.cdr() instanceof am.ik.rontolisp.LispCons rest
+				&& rest.car() instanceof am.ik.rontolisp.LispSymbol defName
+				&& DISPATCH_DEFUNS.contains(member(defName.name()))) {
+			return cons;
+		}
+		// A read passing the recursive-p it ignores is rewritten without it first,
+		// so the shapes below never meet the extra argument.
+		LispVal withoutIgnored = IgnoredArgument.drop(cons, opName);
+		if (withoutIgnored != cons) {
+			return rewrite(withoutIgnored, ctx);
+		}
+		if (LispNames.WARN.equals(opName)) {
+			// warn writes its report to the current *error-output*, which may hold
+			// a Gray instance (a broadcast stream): the backends' %warn lowering
+			// routes through the write-line dispatch whenever the program has it.
+			dispatchSymbol(WRITE_LINE_DISPATCH, ctx);
+		}
+		List<LispVal> parts = cons.toList();
+		if ((parts.size() == 2 || parts.size() == 3)
+				&& (LispNames.WRITE_STRING.equals(opName) || LispNames.WRITE_CHAR.equals(opName))
+				&& mayDispatch(parts, 2, ctx.standardOutput())) {
+			String helper = LispNames.WRITE_STRING.equals(opName) ? WRITE_STRING_DISPATCH : WRITE_CHAR_DISPATCH;
+			return listOf(dispatchSymbol(helper, ctx), rewrite(parts.get(1), ctx), streamArg(parts, 2, ctx));
+		}
+		// The read family shares the (stream [eof-error-p [eof-value]]) shape; the
+		// dispatch helpers take all three, so an absent argument becomes its
+		// default LITERALLY (t/nil evaluate to themselves -- no evaluation-order
+		// change). read-line's eof-error-p defaults to nil, the built-in's lite
+		// convention.
+		// read-byte's stream is required, so only the character reads have a
+		// stream-less spelling.
+		if ((LispNames.READ_BYTE.equals(opName) || LispNames.READ_CHAR.equals(opName)
+				|| LispNames.READ_LINE.equals(opName)) && parts.size() <= 4
+				&& mayDispatch(parts, 1, !LispNames.READ_BYTE.equals(opName) && ctx.standardInput())) {
+			String helper = LispNames.READ_BYTE.equals(opName) ? READ_BYTE_DISPATCH
+					: LispNames.READ_CHAR.equals(opName) ? READ_CHAR_DISPATCH : READ_LINE_DISPATCH;
+			LispVal eofDefault = LispNames.READ_LINE.equals(opName) ? am.ik.rontolisp.LispNil.INSTANCE
+					: am.ik.rontolisp.LispTrue.INSTANCE;
+			return listOf(dispatchSymbol(helper, ctx), streamArg(parts, 1, ctx),
+					parts.size() >= 3 ? rewrite(parts.get(2), ctx) : eofDefault,
+					parts.size() >= 4 ? rewrite(parts.get(3), ctx) : am.ik.rontolisp.LispNil.INSTANCE);
+		}
+		// read-char-no-hang shares the read family's shape but not its helper: a
+		// class with a genuinely non-blocking source overrides
+		// stream-read-char-no-hang, whose default IS stream-read-char.
+		if (LispNames.READ_CHAR_NO_HANG.equals(opName) && parts.size() <= 4
+				&& mayDispatch(parts, 1, ctx.standardInput())) {
+			return listOf(dispatchSymbol(READ_CHAR_NO_HANG_DISPATCH, ctx), streamArg(parts, 1, ctx),
+					parts.size() >= 3 ? rewrite(parts.get(2), ctx) : am.ik.rontolisp.LispTrue.INSTANCE,
+					parts.size() >= 4 ? rewrite(parts.get(3), ctx) : am.ik.rontolisp.LispNil.INSTANCE);
+		}
+		// (peek-char peek-type stream [eof-error-p [eof-value]]): the stream is
+		// argument TWO, and the peek-type travels with it -- the skipping forms are
+		// looped inside the helper, because LispMacroExpander.expandPeekChar runs
+		// after this pass and its %peek-char/read-char calls would never see the
+		// instance. The stream-LESS (peek-char) / (peek-char t) spellings read
+		// *standard-input*, so they join only when the program binds it.
+		if (LispNames.PEEK_CHAR.equals(opName) && parts.size() <= 5 && mayDispatch(parts, 2, ctx.standardInput())) {
+			return listOf(dispatchSymbol(PEEK_CHAR_DISPATCH, ctx),
+					parts.size() >= 2 ? rewrite(parts.get(1), ctx) : am.ik.rontolisp.LispNil.INSTANCE,
+					streamArg(parts, 2, ctx),
+					parts.size() >= 4 ? rewrite(parts.get(3), ctx) : am.ik.rontolisp.LispTrue.INSTANCE,
+					parts.size() >= 5 ? rewrite(parts.get(4), ctx) : am.ik.rontolisp.LispNil.INSTANCE);
+		}
+		if (LispNames.UNREAD_CHAR.equals(opName) && (parts.size() == 2 || parts.size() == 3)
+				&& mayDispatch(parts, 2, ctx.standardInput())) {
+			return listOf(dispatchSymbol(UNREAD_CHAR_DISPATCH, ctx), rewrite(parts.get(1), ctx),
+					streamArg(parts, 2, ctx));
+		}
+		if (LispNames.WRITE_BYTE.equals(opName) && parts.size() == 3 && streamArgMayBeInstance(parts.get(2))) {
+			return listOf(dispatchSymbol(WRITE_BYTE_DISPATCH, ctx), rewrite(parts.get(1), ctx),
+					rewrite(parts.get(2), ctx));
+		}
+		if (LispNames.LISTEN.equals(opName) && parts.size() <= 2 && mayDispatch(parts, 1, ctx.standardInput())) {
+			return listOf(dispatchSymbol(LISTEN_DISPATCH, ctx), streamArg(parts, 1, ctx));
+		}
+		// The line-oriented, flush and stream-query operators, all (op STREAM) with
+		// an
+		// explicit stream. close / open-stream-p / stream-element-type are the three
+		// a
+		// program may OWN with a defmethod (OWNABLE_OPERATORS); the rewrite stands
+		// down
+		// for each one it does. On the write side the stream-LESS spelling writes to
+		// *standard-output*, which can be an instance only in a program that binds
+		// it; anywhere else it keeps its own lowering (and a program that names no
+		// stream and binds no standard stream stays byte-identical).
+		String unaryStreamHelper = switch (opName) {
+			case LispNames.TERPRI -> TERPRI_DISPATCH;
+			case LispNames.FRESH_LINE -> FRESH_LINE_DISPATCH;
+			case LispNames.FORCE_OUTPUT -> FORCE_OUTPUT_DISPATCH;
+			case LispNames.FINISH_OUTPUT -> FINISH_OUTPUT_DISPATCH;
+			case LispNames.CLEAR_OUTPUT -> CLEAR_OUTPUT_DISPATCH;
+			case LispNames.CLOSE -> ctx.owned().contains(LispNames.CLOSE) ? null : CLOSE_DISPATCH;
+			case LispNames.OPEN_STREAM_P ->
+				ctx.owned().contains(LispNames.OPEN_STREAM_P) ? null : OPEN_STREAM_P_DISPATCH;
+			case LispNames.INPUT_STREAM_P ->
+				ctx.owned().contains(LispNames.INPUT_STREAM_P) ? null : INPUT_STREAM_P_DISPATCH;
+			case LispNames.OUTPUT_STREAM_P ->
+				ctx.owned().contains(LispNames.OUTPUT_STREAM_P) ? null : OUTPUT_STREAM_P_DISPATCH;
+			case LispNames.STREAM_ELEMENT_TYPE ->
+				ctx.owned().contains(LispNames.STREAM_ELEMENT_TYPE) ? null : STREAM_ELEMENT_TYPE_DISPATCH;
+			default -> null;
+		};
+		boolean outputOperator = LispNames.TERPRI.equals(opName) || LispNames.FRESH_LINE.equals(opName)
+				|| LispNames.FORCE_OUTPUT.equals(opName) || LispNames.FINISH_OUTPUT.equals(opName)
+				|| LispNames.CLEAR_OUTPUT.equals(opName);
+		if (unaryStreamHelper != null && parts.size() <= 2
+				&& mayDispatch(parts, 1, outputOperator && ctx.standardOutput())) {
+			return listOf(dispatchSymbol(unaryStreamHelper, ctx), streamArg(parts, 1, ctx));
+		}
+		// (close STREAM :abort V): the built-in accepts and ignores the tail, so the
+		// dispatch does too -- but V still evaluates, and AFTER the stream, which is
+		// what the let/progn preserves.
+		if (CLOSE_DISPATCH.equals(unaryStreamHelper) && parts.size() == 4
+				&& parts.get(2) instanceof am.ik.rontolisp.LispSymbol abortKw
+				&& LispNames.ABORT_KEYWORD.equals(abortKw.name()) && streamArgMayBeInstance(parts.get(1))) {
+			am.ik.rontolisp.LispSymbol temp = new am.ik.rontolisp.LispSymbol("__gray_close_stream");
+			LispVal dispatch = listOf(dispatchSymbol(CLOSE_DISPATCH, ctx), temp);
+			return listOf(ReaderSymbols.LET, listOf(listOf(temp, rewrite(parts.get(1), ctx))),
+					listOf(ReaderSymbols.PROGN, rewrite(parts.get(3), ctx), dispatch));
+		}
+		// (op VALUE STREAM): write-line plus the print family. princ/prin1/print
+		// RENDER to a string in the helper and hand that to stream-write-string, so
+		// the Gray stream sees the same bytes the handle-based built-in would have
+		// written -- without this the compiled backends wrote them PAST the instance,
+		// straight to standard output, while the interpreter got them right.
+		String valueStreamHelper = switch (opName) {
+			case LispNames.WRITE_LINE -> WRITE_LINE_DISPATCH;
+			case LispNames.PRINC -> PRINC_DISPATCH;
+			case LispNames.PRIN1 -> PRIN1_DISPATCH;
+			case LispNames.PRINT -> PRINT_DISPATCH;
+			default -> null;
+		};
+		if (valueStreamHelper != null && (parts.size() == 2 || parts.size() == 3)
+				&& mayDispatch(parts, 2, ctx.standardOutput())) {
+			return listOf(dispatchSymbol(valueStreamHelper, ctx), rewrite(parts.get(1), ctx), streamArg(parts, 2, ctx));
+		}
+		if ((LispNames.WRITE_LINE.equals(opName) || LispNames.WRITE_STRING.equals(opName)) && parts.size() > 3
+				&& mayDispatch(parts, 2, ctx.standardOutput())) {
+			// (write-line|write-string value stream [:start s] [:end e]) -- like the
+			// read/write-sequence precedent below, only the two bounding keywords
+			// ride the dispatch; anything else is left for the lowering (whose
+			// call-site program-error keeps :allow-other-keys working). The FIRST
+			// spelling of a keyword counts (CLHS 3.4.1.4); an unspelled :start is 0
+			// and an unspelled :end nil, which the helper resolves to the length.
+			LispVal start = null;
+			LispVal end = null;
+			boolean literalKeywords = (parts.size() - 3) % 2 == 0;
+			if (literalKeywords) {
+				for (int k = 3; k + 1 < parts.size(); k += 2) {
+					if (parts.get(k) instanceof am.ik.rontolisp.LispSymbol kw && ":START".equals(kw.name())) {
+						start = start == null ? rewrite(parts.get(k + 1), ctx) : start;
+					}
+					else if (parts.get(k) instanceof am.ik.rontolisp.LispSymbol kw && ":END".equals(kw.name())) {
+						end = end == null ? rewrite(parts.get(k + 1), ctx) : end;
+					}
+					else {
+						literalKeywords = false;
+						break;
+					}
+				}
+			}
+			if (literalKeywords) {
+				String helper = LispNames.WRITE_LINE.equals(opName) ? WRITE_LINE_BOUNDS_DISPATCH
+						: WRITE_STRING_BOUNDS_DISPATCH;
+				return listOf(dispatchSymbol(helper, ctx), rewrite(parts.get(1), ctx), streamArg(parts, 2, ctx),
+						start == null ? new am.ik.rontolisp.LispInteger(0) : start,
+						end == null ? am.ik.rontolisp.LispNil.INSTANCE : end);
+			}
+		}
+		if (LispNames.FILE_POSITION.equals(opName) && parts.size() == 2 && streamArgMayBeInstance(parts.get(1))) {
+			return listOf(dispatchSymbol(FILE_POSITION_DISPATCH, ctx), rewrite(parts.get(1), ctx));
+		}
+		// (file-length stream): a broadcast stream answers for its last component
+		// (or 0 with none); anything else falls back to the built-in inside the
+		// helper, so this rewrite is safe for every variable stream.
+		if (LispNames.FILE_LENGTH.equals(opName) && parts.size() == 2 && streamArgMayBeInstance(parts.get(1))) {
+			return listOf(dispatchSymbol(BROADCAST_FILE_LENGTH_DISPATCH, ctx), rewrite(parts.get(1), ctx));
+		}
+		if (LispNames.FILE_POSITION.equals(opName) && parts.size() == 3 && streamArgMayBeInstance(parts.get(1))) {
+			return listOf(dispatchSymbol(FILE_POSITION_SET_DISPATCH, ctx), rewrite(parts.get(1), ctx),
+					rewrite(parts.get(2), ctx));
+		}
+		if ((LispNames.READ_SEQUENCE.equals(opName) || LispNames.WRITE_SEQUENCE.equals(opName)) && parts.size() >= 3
+				&& streamArgMayBeInstance(parts.get(2))) {
+			// (read-sequence seq stream [:start s] [:end e]) -- like the built-in
+			// macro expansion, the keywords must be literal; anything else is left
+			// for the expansion to reject. A missing :end stays nil and the
+			// dispatch helper normalizes it to (length seq) at run time.
+			LispVal start = new am.ik.rontolisp.LispInteger(0);
+			LispVal end = am.ik.rontolisp.LispNil.INSTANCE;
+			boolean literalKeywords = (parts.size() - 3) % 2 == 0;
+			if (literalKeywords) {
+				for (int i = 3; i + 1 < parts.size(); i += 2) {
+					if (parts.get(i) instanceof am.ik.rontolisp.LispSymbol kw && ":START".equals(kw.name())) {
+						start = rewrite(parts.get(i + 1), ctx);
+					}
+					else if (parts.get(i) instanceof am.ik.rontolisp.LispSymbol kw && ":END".equals(kw.name())) {
+						end = rewrite(parts.get(i + 1), ctx);
+					}
+					else {
+						literalKeywords = false;
+					}
+				}
+			}
+			if (literalKeywords) {
+				String helper = LispNames.READ_SEQUENCE.equals(opName) ? READ_SEQUENCE_DISPATCH
+						: WRITE_SEQUENCE_DISPATCH;
+				return listOf(dispatchSymbol(helper, ctx), rewrite(parts.get(1), ctx), rewrite(parts.get(2), ctx),
+						start, end);
+			}
+		}
+		// (format t ...) writes to *standard-output*: in a program that binds it, the
+		// call takes its ordinary lowering here -- princ / terpri / fresh-line, all
+		// stream-less -- and that lowering is rewritten like any other, so each piece
+		// reaches the stream the variable holds when it runs (~& included, which
+		// asks the Gray stream itself). A call the lowering rejects is left for the
+		// backend to report.
+		if (LispNames.FORMAT.equals(opName) && parts.size() >= 3 && parts.get(1) instanceof am.ik.rontolisp.LispTrue
+				&& ctx.standardOutput()) {
+			LispVal lowered;
+			try {
+				lowered = am.ik.rontolisp.macro.LispMacroExpander.expandFormat(cons);
+			}
+			catch (RuntimeException rejected) {
+				lowered = null;
+			}
+			if (lowered != null) {
+				return rewrite(lowered, ctx);
+			}
+		}
+		if (LispNames.FORMAT.equals(opName) && parts.size() >= 3 && streamArgMayBeInstance(parts.get(1))) {
+			// (format STREAM ctrl args...) with a possibly-CLOS destination: render
+			// with (format nil ...) and route the string through the write-string
+			// dispatch (whose fallback handles stream handles and the t designator).
+			// The destination is bound first, preserving CL's evaluation order.
+			//
+			LispVal distributed = am.ik.rontolisp.macro.LispMacroExpander.distributeFormat(cons);
+			if (distributed != null) {
+				return rewrite(distributed, ctx);
+			}
+			// A program that can hold a string with a fill pointer takes that lowering,
+			// whose write this walk sends to the dispatch.
+			if (ctx.formatTakesStrings() && StreamOperandChecks.formatDestinationIsComputed(parts.get(1))) {
+				List<LispVal> walked = new java.util.ArrayList<>();
+				walked.add(parts.get(0));
+				for (LispVal part : parts.subList(1, parts.size())) {
+					walked.add(rewrite(part, ctx));
+				}
+				return StreamOperandChecks.formatThroughDestination(cons, walked);
+			}
+			// The destination is then tested at RUN time, exactly as the ordinary
+			// format lowering does (LispMacroExpander.formatDestinationDispatch):
+			// nil is not a stream but the "return the string" destination, so a
+			// caller forwarding its own &optional stream must get a string back. A
+			// nil destination reaching the dispatch instead printed to standard
+			// output -- and this rewrite runs on the whole program whenever ANY of
+			// it uses the Gray protocol, so that turned an unrelated
+			// (format stream ...) into the wrong answer.
+			List<LispVal> fmtNil = new java.util.ArrayList<>();
+			fmtNil.add(ReaderSymbols.FORMAT);
+			fmtNil.add(am.ik.rontolisp.LispNil.INSTANCE);
+			for (int i = 2; i < parts.size(); i++) {
+				fmtNil.add(rewrite(parts.get(i), ctx));
+			}
+			am.ik.rontolisp.LispSymbol temp = new am.ik.rontolisp.LispSymbol("__gray_fmt_stream");
+			am.ik.rontolisp.LispSymbol result = new am.ik.rontolisp.LispSymbol("__gray_fmt_result");
+			// A computed control is held, so the write can ask about a ~& that opens it
+			// (LispMacroExpander.formatStartsFresh).
+			boolean literalControl = parts.get(2) instanceof am.ik.rontolisp.LispString;
+			LispVal control = literalControl ? parts.get(2) : new am.ik.rontolisp.LispSymbol("__gray_fmt_control");
+			LispVal heldControl = fmtNil.get(2);
+			fmtNil.set(2, control);
+			LispVal startsFresh = am.ik.rontolisp.macro.LispMacroExpander.formatStartsFresh(control);
+			LispVal dispatch = listOf(dispatchSymbol(WRITE_STRING_DISPATCH, ctx), result, temp);
+			LispVal wrote = startsFresh == null
+					? listOf(ReaderSymbols.PROGN, dispatch, am.ik.rontolisp.LispNil.INSTANCE)
+					: listOf(ReaderSymbols.PROGN, listOf(ReaderSymbols.IF, startsFresh,
+							listOf(dispatchSymbol(FRESH_LINE_DISPATCH, ctx), temp), am.ik.rontolisp.LispNil.INSTANCE),
+							dispatch, am.ik.rontolisp.LispNil.INSTANCE);
+			LispVal tested = listOf(ReaderSymbols.IF, temp, wrote, result);
+			LispVal bindResult = listOf(ReaderSymbols.LET,
+					listOf(listOf(result, listOf(fmtNil.toArray(LispVal[]::new)))), tested);
+			if (!literalControl) {
+				bindResult = listOf(ReaderSymbols.LET, listOf(listOf(control, heldControl)), bindResult);
+			}
+			return listOf(ReaderSymbols.LET,
+					listOf(listOf(temp, StreamOperandChecks.checkedFormatDestination(rewrite(parts.get(1), ctx)))),
+					bindResult);
+		}
+		return null;
+	}
+
+	/**
+	 * A literal t/nil/string stream argument can never be a CLOS instance. A lambda-list
+	 * keyword ({@code &rest} and friends) is not a stream argument at all: a lambda list
+	 * the walk does not know as one (the form of a macro left unexpanded) can hold a
+	 * parameter named like an operator (jzon's {@code (defun %raise (type pos format
+	 * &rest args) ...)}).
+	 */
+	private static boolean streamArgMayBeInstance(LispVal streamArg) {
+		if (streamArg instanceof am.ik.rontolisp.LispSymbol sym && sym.isLambdaListKeyword()) {
+			return false;
+		}
+		return !(streamArg instanceof am.ik.rontolisp.LispTrue) && !(streamArg instanceof am.ik.rontolisp.LispNil)
+				&& !(streamArg instanceof am.ik.rontolisp.LispString);
+	}
+
+	/**
+	 * Whether the stream argument at {@code index} may designate a Gray instance: an
+	 * expression that is not a literal non-instance, or -- when {@code standard} says the
+	 * program binds the standard stream nil designates -- an omitted or literal-nil
+	 * argument.
+	 */
+	private static boolean mayDispatch(List<LispVal> parts, int index, boolean standard) {
+		if (index >= parts.size() || parts.get(index) instanceof am.ik.rontolisp.LispNil) {
+			return standard;
+		}
+		return streamArgMayBeInstance(parts.get(index));
+	}
+
+	/**
+	 * The stream argument a dispatch helper receives: the rewritten expression, or nil
+	 * for an omitted one, which the helper resolves to the current standard stream.
+	 */
+	private static LispVal streamArg(List<LispVal> parts, int index, RewriteContext ctx) {
+		return index < parts.size() ? rewrite(parts.get(index), ctx) : am.ik.rontolisp.LispNil.INSTANCE;
+	}
+
+	private static am.ik.rontolisp.LispSymbol dispatchSymbol(String helperName, RewriteContext ctx) {
+		ctx.used().add(helperName);
+		return new am.ik.rontolisp.LispSymbol(LispNames.RONTOLISP_PKG + "::" + helperName);
+	}
+
+	private static String member(String name) {
+		am.ik.rontolisp.PackageRegistry.QualifiedName qn = am.ik.rontolisp.PackageRegistry.splitQualified(name);
+		return qn == null ? name : qn.member();
+	}
+
+	private static LispVal listOf(LispVal... items) {
+		LispVal result = am.ik.rontolisp.LispNil.INSTANCE;
+		for (int i = items.length - 1; i >= 0; i--) {
+			result = new am.ik.rontolisp.LispCons(items[i], result);
+		}
+		return result;
+	}
+
+}
