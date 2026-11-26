@@ -40,7 +40,9 @@ import java.lang.annotation.Target;
  * other list a {@code List}, an option an {@code Optional}, a tuple a record; the
  * integers are the Java ones of their width, an unsigned one holding its bits. A
  * {@code result}'s ok arm is what the method answers, its error arm a
- * {@link WitException} carrying the error.
+ * {@link WitException} carrying the error. An {@code async func} is a method that waits
+ * for its answer, as a call does; a {@code stream<T>} the host answers is a
+ * {@link WitStream}, a {@code future<T>} a {@link WitFuture}.
  *
  * <p>
  * The implementation is a service provider: {@code ServiceLoader.load(Store.class)} finds

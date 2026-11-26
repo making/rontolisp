@@ -1360,6 +1360,28 @@ that `javac` and a JDK build and run. User-facing: `doc/*/java/wit.md`.
 - **A library's interface**: `servlet-httpserver-keyvalue/`
   ([servlet-httpserver.md](servlet-httpserver.md), "Sessions in `wasi:keyvalue`"); a host's own,
   no JDK provider: `jdbc-spin-postgres/` ([jdbc-spin-postgres.md](jdbc-spin-postgres.md)).
+- **What the host answers in pieces** (2026-11-26, m55). Decided from what the Lisp side binds
+  (`.kb/wit.md`): an `async func` is a method that WAITS, as any call -- Java has threads, not
+  futures, so the directive carries `:blocking t` (a synchronous lowering) and the binding is a
+  sync member's. A `stream<T>` of values the host answers is `am.ik.rontolisp.wit.WitStream<T>`
+  (`read(max)`, `close()`), a `future<T>` `WitFuture<T>` (`get()`, `close()`; a
+  `future<result<T, E>>` the ok arm, the error arm a `WitException`; `Void` for no ok value),
+  both in `rontolisp-java-api` with providers' factories (`WitStream.of(Iterator)`,
+  `WitFuture.of`, `.failed`). Rejected: `CompletableFuture` (completing it on a component means
+  Java code run by the scheduler outside any thread, and a `join` with no thread to wait in)
+  and `Iterator` / `java.util.stream.Stream` (no way to ask for so many, no release of the
+  readable end). The binding writes a class per type (`S<n>`, `F<n>`) over the built-ins of an
+  alias the directive adds (`:aliases (("java-stream-0" "stream<row>") ...)`, the spelling
+  `describe` gives); `get()` reads, drops the readable end and keeps its answer; nil from the
+  read is a dropped future. Refused at the method: a stream or a future the program hands the
+  host (the host writes what it is handed), a `stream<u8>` (an `InputStream` would be its
+  type), a stream of resources, a future of a type whose value the boundary spells nil
+  (`bool`, `list`, `option`, `flags`: the read of a dropped future answers nil). A read waits
+  as a sync call does: every thread of a component waits with it. Pins:
+  `JavaWitImportTest.aStreamAndAFutureTheHostAnswersAreReadInPieces` (JDK, interpreter, JVM,
+  the directive, the refusals), `.everyKindOfValueCrossesWasmtimesSocketsAndHttpTypes`
+  (`tcp-socket.connect`, an async func, refused by wasmtime 51 as a blocking call), the Spin
+  leg of `ClPostgresE2eTest` (the example reading its notes in pieces).
 - **Pinned by** `JavaWitImportTest` (a JDK, the interpreter, the JVM, the component, the
   Preview 1 refusal; the WIT's lookup; every kind of value; the checks, the two drafts) and
   `examples.yaml`'s `wit/keyvalue/PageHits.java`.
