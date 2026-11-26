@@ -313,7 +313,7 @@ reference for the SHAPE only.
   `appendReaderOwnedBlobUnaligned` -- UNALIGNED on purpose (the reader loads rows with
   plain `i32.load`s, and an alignment pad here would charge a quoted u16/u8 vector's next element
   for the pad it shifts, breaking the per-element cost pin in
-  `WasmLispCompilerTest#aLiteralLookupTableCostsItsOwnBytesAndNotThreeTimesThem`). The names are
+  `WasmLispCompilerTest#anElementOfALiteralTableOrAVectorCallCostsItsOwnBytes`). The names are
   interned with plain `addString`, and each joins the droppable ranges DECIDED BY THE BLOB'S READER
   (`.kb/optimize-dead-code-elimination.md`): `_fun_name` is their only reader and reaches them through words inside the blob, a citation
   the constant scan cannot follow, so name, blob and `_fun_name` live and fall together. The tag

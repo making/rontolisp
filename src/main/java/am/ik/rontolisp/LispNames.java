@@ -2345,7 +2345,8 @@ public final class LispNames {
 	 * The {@code vector} built-in function (build a fresh rank-1 array from the
 	 * arguments). Expanded by
 	 * {@link am.ik.rontolisp.macro.LispMacroExpander#expandVector} into
-	 * {@code make-array} + {@code %aset}.
+	 * {@code make-array} + {@code %aset} on the interpreter and the JVM; the wasm-GC
+	 * backend makes the storage from the elements at once.
 	 */
 	public static final String VECTOR = "VECTOR";
 

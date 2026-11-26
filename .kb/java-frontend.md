@@ -857,10 +857,10 @@ OpenJDK's source ([java-frontend-provenance.md](java-frontend-provenance.md)).
   analysis of each arm as a function of its own, then splits the arms that can suspend into
   `%jdk-methods-suspending` (wait, a JDBC execute, a lock: a few) from `%jdk-methods-plain`; the
   analysis runs twice (2.2 s of the shiori's). **Trap: dispatch with `cond`, not `case`**: a member
-  that can suspend a thread may not stand under a `case` in a resumable body. **A `vector` call is
-  a store an element on wasm (134 B against a list's 6, `.todo/m52`)**: `%jdk-types` and a class
-  object's interfaces are a list made a vector (`classVector`; the shiori's 528 interfaces 86 KB,
-  mustache 18 KB). Rejected (l64): a member as code (+124 KB in mustache); one vector literal of all
+  that can suspend a thread may not stand under a `case` in a resumable body. `%jdk-types` and a class
+  object's interfaces are `vector` calls: on wasm an element is its own push
+  ([array-literals.md](array-literals.md), "A `vector` call"), cheaper than a list made a vector
+  (shiori component -35 KB, mustache -8 KB against that; the JVM -10 KB / -1 KB). Rejected (l64): a member as code (+124 KB in mustache); one vector literal of all
   classes; a function object a class. Constructors stay code (`Constructor.found`): few, made only
   for the full tables and the constructor of no parameter.
 - **Protected** (both kinds of class), a JDK's answers: a protected member of another package is

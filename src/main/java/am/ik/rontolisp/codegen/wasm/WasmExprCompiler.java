@@ -2527,7 +2527,7 @@ final class WasmExprCompiler {
 			case LispNames.SORT_BY_KEYS -> compileBulkCall(cons, 4, WasmBulkRuntimeBuilder.SORT, ctx);
 			case LispNames.ARRAY_ROW_MAJOR_INDEX ->
 				compileExpansion(LispMacroExpander.expandArrayRowMajorIndex(cons), ctx, tail);
-			case LispNames.VECTOR -> compileExpansion(LispMacroExpander.expandVector(cons), ctx, tail);
+			case LispNames.VECTOR -> WasmArrayCompiler.compileVector(cons, ctx);
 			case LispNames.SVREF -> compileExpansion(LispMacroExpander.expandSvref(cons), ctx, tail);
 			case LispNames.ARRAY_RANK -> compileExpansion(LispMacroExpander.expandArrayRank(cons), ctx, tail);
 			case LispNames.ARRAY_DIMENSION -> compileExpansion(LispMacroExpander.expandArrayDimension(cons), ctx, tail);

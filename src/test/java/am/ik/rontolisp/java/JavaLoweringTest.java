@@ -1088,10 +1088,10 @@ class JavaLoweringTest {
 			.findFirst()
 			.orElseThrow();
 		String types = reflecting.stream()
-			.filter(form -> form.startsWith("(SETQ |%jdk-types| (COERCE (LIST "))
+			.filter(form -> form.startsWith("(SETQ |%jdk-types| (VECTOR "))
 			.findFirst()
 			.orElseThrow();
-		List<String> placed = List.of(types.substring(types.indexOf("(LIST ") + 6, types.indexOf(")")).split(" "));
+		List<String> placed = List.of(types.substring(types.indexOf("(VECTOR ") + 8, types.indexOf(")")).split(" "));
 		String line = text.split("\n")[placed.indexOf("|String%class|")];
 		assertThat(line).startsWith("+0|chars 1a 0 1;")
 			.contains(";describeConstable 1l ", ";isBlank 1a ", ";length 1u1 ")

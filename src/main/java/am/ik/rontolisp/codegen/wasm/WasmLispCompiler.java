@@ -2571,7 +2571,8 @@ public final class WasmLispCompiler implements LispCompiler {
 
 	// The bulk primitives (WasmBulkRuntimeBuilder): _str_split, _str_join and _sort_keys,
 	// the wasm halves of %string-split, %string-join and %sort-by-keys, and _str_cat,
-	// what a chain of %string-concat compiles to (WasmStringConcatCompiler) --
+	// what a chain of %string-concat compiles to (WasmStringConcatCompiler), and
+	// _vec_of and _vec_put, what a vector call compiles to (WasmArrayCompiler) --
 	// WasmBulkRuntimeBuilder.FUNC_COUNT functions at FUNC_BULK_BASE + the builder's
 	// offsets. Each reuses a TYPE_CALLABLE_BASE signature, so no type is added; appended
 	// after the last fixed helper so no index above shifts, and shaken from a module
@@ -7324,7 +7325,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		// is unaligned (appendReaderOwnedBlobUnaligned): an alignment pad here
 		// would charge a quoted u16/u8 vector's next element for the pad it shifts,
 		// breaking the per-element cost pin
-		// (WasmLispCompilerTest#aLiteralLookupTableCostsItsOwnBytesAndNotThreeTimesThem).
+		// (WasmLispCompilerTest#anElementOfALiteralTableOrAVectorCallCostsItsOwnBytes).
 		ByteArrayOutputStream funNameRows = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		Set<Integer> funNameIds = runtimeFunctionBox ? dispatchableFuncIds : valueFuncIds;
 		for (int i = 0; i < defuns.size(); i++) {

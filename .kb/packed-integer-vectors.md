@@ -163,4 +163,4 @@ disambiguation into `writeAbstractHeapType`/`writeTypeIndex`.**
 ## Tests
 - `packedIntVector*` in `LispEvaluatorTest` / `JvmLispCompilerTest` /
   `WasmLispCompilerIntegrationTest`; ci-spec `packed-integer-vectors`;
-  `WasmLispCompilerTest.aLiteralLookupTableCostsItsOwnBytesAndNotThreeTimesThem`.
+  `WasmLispCompilerTest.anElementOfALiteralTableOrAVectorCallCostsItsOwnBytes`.

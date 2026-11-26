@@ -23,7 +23,8 @@ the sort). The block's fourth function, `_str_cat`, is no primitive of its own: 
 what a chain of `%string-concat` compiles to (`.kb/wasm-gc-strings.md`, "A chain of
 concatenations is one string"). The block also holds `_lit_init`, the module's start
 function, whose signature and body are the compiler's (`.kb/wasm-gc-strings.md`, "A
-literal is one object").
+literal is one object"), and `_vec_of` / `_vec_put`, what a `vector` call compiles to
+([array-literals.md](array-literals.md), "A `vector` call").
 
 - **A general vector is read through its cell's fields** (`CELL_STORAGE_FIELD`,
   `CELL_META_FIELD`, `.kb/adjustable-arrays.md`): the storage array, and the fill

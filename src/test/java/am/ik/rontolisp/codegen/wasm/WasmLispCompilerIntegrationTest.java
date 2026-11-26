@@ -16606,9 +16606,11 @@ class WasmLispCompilerIntegrationTest {
 	void componentAsyncLambdaCapturesAndArgumentHoistAcrossSuspension() throws Exception {
 		// An async-lambda's captures live in the frame across a suspension, and an
 		// await in a strict call's argument position rides the let* hoist
-		// (WasmAwaitNormalizer). An async-lambda's parameter is its own inside
-		// another async body, which captures nothing by that name. Preview 1 compiles
-		// the same state machines for a program that settles a future of its own.
+		// (WasmAwaitNormalizer) -- a vector call's too, whose elements are its
+		// array.new_fixed's operands, past a run of them here. An async-lambda's
+		// parameter is its own inside another async body, which captures nothing by
+		// that name. Preview 1 compiles the same state machines for a program that
+		// settles a future of its own.
 		String program = """
 				(defvar *g* (rontolisp::%future-new))
 				(defvar *lam* (let ((n 100)) (rontolisp:async-lambda (x) (+ x n (rontolisp:await *g*)))))
@@ -16617,13 +16619,15 @@ class WasmLispCompilerIntegrationTest {
 				(defvar *nested*
 				  (funcall (rontolisp:async-lambda ()
 				             (rontolisp:await
-				              (funcall (rontolisp:async-lambda (e) (+ e (rontolisp:await *g*))) 2)))))
+				              (funcall (rontolisp:async-lambda (e)
+				                         (vector e e e e e e e e e e e e e e e e e (rontolisp:await *g*) (1+ e)))
+				                       2)))))
 				(rontolisp::%future-settle *g* 10)
 				(print (rontolisp:await *lf*))
 				(print (rontolisp:await *nested*))
 				""";
-		assertThat(compileAndRunComponent(program)).isEqualTo("40\n111\n12");
-		assertThat(compileAndRun(program)).isEqualTo("40\n111\n12");
+		assertThat(compileAndRunComponent(program)).isEqualTo("40\n111\n#(2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 10 3)");
+		assertThat(compileAndRun(program)).isEqualTo("40\n111\n#(2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 10 3)");
 	}
 
 	@Test

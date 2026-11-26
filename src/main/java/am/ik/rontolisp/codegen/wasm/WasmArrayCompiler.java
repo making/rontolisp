@@ -289,6 +289,56 @@ final class WasmArrayCompiler {
 		WasmEmitHelper.emitNewArrayCell(ctx);
 	}
 
+	/**
+	 * {@code (vector e...)}: the general rank-1 array {@link #compileMake} builds for
+	 * {@code (make-array n)}, its storage made by {@code array.new_fixed} over the
+	 * elements rather than stored one {@code aset} at a time, and the array around it by
+	 * the shared {@code _vec_of} ({@link WasmBulkRuntimeBuilder#VEC_OF}), so a site costs
+	 * its elements and some seven bytes. Up to {@link WasmQuoteCompiler#QUOTED_RUN}
+	 * elements are one {@code array.new_fixed}; a longer call's are put into an
+	 * {@code array.new_default} a run at a time ({@code _vec_put}), so the operand stack
+	 * never holds more than a run's elements across their calls (the quoted list's
+	 * reason, {@code .kb/quoted-data.md}). An argument that can suspend never sits on the
+	 * stack: {@link WasmAwaitNormalizer} has hoisted it into a binding.
+	 * @param cons the vector call
+	 * @param ctx the compile context
+	 */
+	static void compileVector(LispCons cons, WasmLispCompiler.Ctx ctx) {
+		List<LispVal> parts = cons.toList();
+		List<LispVal> elements = parts.subList(1, parts.size());
+		int n = elements.size();
+		int run = WasmQuoteCompiler.QUOTED_RUN;
+		if (n <= run) {
+			for (LispVal element : elements) {
+				WasmExprCompiler.compileExpr(element, ctx);
+			}
+			arrayNewFixed(ctx, n);
+		}
+		else {
+			i32Const(ctx, n);
+			ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_NEW_DEFAULT);
+			ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+			for (int start = 0; start < n; start += run) {
+				int k = Math.min(run, n - start);
+				i32Const(ctx, start);
+				boxI31(ctx);
+				for (LispVal element : elements.subList(start, start + k)) {
+					WasmExprCompiler.compileExpr(element, ctx);
+				}
+				arrayNewFixed(ctx, k);
+				callFixed(ctx, WasmLispCompiler.FUNC_BULK_BASE + WasmBulkRuntimeBuilder.VEC_PUT);
+			}
+		}
+		callFixed(ctx, WasmLispCompiler.FUNC_BULK_BASE + WasmBulkRuntimeBuilder.VEC_OF);
+	}
+
+	// array.new_fixed TYPE_HASH_BUCKETS over the top `count` values.
+	private static void arrayNewFixed(WasmLispCompiler.Ctx ctx, int count) {
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_NEW_FIXED);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		ctx.writer.writeUnsignedLeb128(count);
+	}
+
 	// (make-array dims :displaced-to target [:displaced-index-offset off]
 	// [:fill-pointer fp] [:adjustable adj]): a displaced view -- the data slot holds the
 	// TARGET CELL and meta carries the offset alongside the view's OWN fill pointer and

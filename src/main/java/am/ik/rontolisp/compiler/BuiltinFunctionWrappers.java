@@ -1387,8 +1387,8 @@ public final class BuiltinFunctionWrappers {
 	}
 
 	// #'vector: (lambda (&rest r) (coerce r 'vector)). The element COUNT is static in
-	// call position (expandVector emits one %aset per element) and a runtime property
-	// here, so the rest list is converted rather than spliced.
+	// call position and a runtime property here, so the rest list is converted rather
+	// than spliced.
 	private static WrapperDef vectorWrapper() {
 		return new WrapperDef(LispNames.VECTOR, List.of(LispNames.LAMBDA_REST, "r"), List.of(coerceTo("r", "VECTOR")));
 	}
