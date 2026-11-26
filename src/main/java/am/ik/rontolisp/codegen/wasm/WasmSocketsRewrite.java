@@ -37,7 +37,10 @@ import am.ik.rontolisp.macro.LispMacroExpander;
  * {@code %tcp-connect-f}/{@code %tcp-accept-f} async internals (which carry the
  * nil-on-failure convention, so both surfaces behave identically). The inserted
  * {@code rontolisp:await} is counted by {@code WasmAwaitAnalysis} like any user await,
- * which is why this runs BEFORE compilation, right after the async-sugar rewrite.</li>
+ * which is why this runs BEFORE compilation, right after the async-sugar rewrite. Only
+ * where the provider's futures are async bodies: the {@code --native} runner's
+ * ({@code runner-sockets.lisp}) are plain defuns, so there every context is
+ * synchronous.</li>
  * </ul>
  *
  * <p>
@@ -189,12 +192,32 @@ final class WasmSocketsRewrite {
 		if (!spliced(program)) {
 			return program;
 		}
+		// The top level is an asynchronous context (LispAsync.checkTopLevel) -- where
+		// the provider's futures are async bodies. The --native runner's are plain
+		// defuns answering the read itself, and an await of a value that is no future
+		// answers its primary alone (.kb/async-await.md, "Multiple values"): read-line's
+		// missing-newline-p was lost. There nothing is promoted.
+		Context top = promotesReads(program) ? ASYNC : PLAIN;
 		List<LispVal> out = new java.util.ArrayList<>(program.size());
 		for (LispVal form : program) {
-			// The top level is an asynchronous context (LispAsync.checkTopLevel).
-			out.add(CallSiteWalk.walk(form, ASYNC));
+			out.add(CallSiteWalk.walk(form, top));
 		}
 		return out;
+	}
+
+	// Whether the spliced provider's read futures are async bodies: its
+	// %read-line-future is an async-defun (sockets.lisp, stdin-dispatch.lisp), not the
+	// runner's plain defun.
+	private static boolean promotesReads(List<LispVal> program) {
+		String future = PackageRegistry.qualifyInternal(LispNames.RONTOLISP_PKG, "%READ-LINE-FUTURE");
+		for (LispVal form : program) {
+			if (form instanceof LispCons cons && cons.car() instanceof LispSymbol head
+					&& LispNames.ASYNC_DEFUN_QUALIFIED.equals(head.name()) && cons.cdr() instanceof LispCons rest
+					&& rest.car() instanceof LispSymbol name && future.equals(name.name())) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	/**
@@ -216,9 +239,12 @@ final class WasmSocketsRewrite {
 		return false;
 	}
 
-	private static final Context SYNC = new Context(false);
+	private static final Context SYNC = new Context(false, true);
 
-	private static final Context ASYNC = new Context(true);
+	private static final Context ASYNC = new Context(true, true);
+
+	// Every context of a program whose provider promotes nothing (the runner's).
+	private static final Context PLAIN = new Context(false, false);
 
 	/**
 	 * The rewrite in one context. Mirrors LispAsync.check's context rules: async-defun /
@@ -228,7 +254,7 @@ final class WasmSocketsRewrite {
 	 * named {@code close} or {@code read-line}, a {@code case} key -- which this pass
 	 * would otherwise have read as calls and renamed.
 	 */
-	private record Context(boolean async) implements CallSiteWalk.Rewriter {
+	private record Context(boolean async, boolean promotes) implements CallSiteWalk.Rewriter {
 
 		@Override
 		public @org.jspecify.annotations.Nullable LispVal call(LispCons cons, LispSymbol head) {
@@ -241,7 +267,7 @@ final class WasmSocketsRewrite {
 					LispVal arg = parts.get(i);
 					out.add(arg instanceof LispCons argCons && argCons.isProperList()
 							&& argCons.car() instanceof LispSymbol lambda && LispNames.LAMBDA.equals(lambda.name())
-									? CallSiteWalk.lambda(argCons, ASYNC) : CallSiteWalk.walk(arg, ASYNC));
+									? CallSiteWalk.lambda(argCons, asyncBody()) : CallSiteWalk.walk(arg, asyncBody()));
 				}
 				return LispCons.rebuiltList(cons, out);
 			}
@@ -251,24 +277,33 @@ final class WasmSocketsRewrite {
 			if (withoutIgnored != cons) {
 				return CallSiteWalk.walk(withoutIgnored, this);
 			}
-			return substitute(head.name(), cons.toList(), this.async);
+			return substitute(head.name(), cons.toList(), this);
 		}
 
 		@Override
 		public CallSiteWalk.Rewriter body(String definer) {
 			return LispNames.ASYNC_DEFUN_QUALIFIED.equals(definer) || LispNames.ASYNC_LAMBDA_QUALIFIED.equals(definer)
-					? ASYNC : SYNC;
+					? asyncBody() : syncBody();
+		}
+
+		private Context asyncBody() {
+			return this.promotes ? ASYNC : PLAIN;
+		}
+
+		private Context syncBody() {
+			return this.promotes ? SYNC : PLAIN;
 		}
 
 	}
 
-	private static LispVal walk(LispVal form, boolean asyncContext) {
-		return CallSiteWalk.walk(form, asyncContext ? ASYNC : SYNC);
+	private static LispVal walk(LispVal form, Context context) {
+		return CallSiteWalk.walk(form, context);
 	}
 
 	// The call substitution, or null when the head is not a target.
 	private static @org.jspecify.annotations.Nullable LispVal substitute(String head, List<LispVal> parts,
-			boolean asyncContext) {
+			Context context) {
+		boolean asyncContext = context.async();
 		// (close stream :abort expr) normalizes to (close stream) BEFORE the arity
 		// check, so an aborting close on a socket still reaches %io-close.
 		if (LispNames.CLOSE.equals(head) && parts.size() == 4 && parts.get(2) instanceof LispSymbol kw
@@ -281,12 +316,12 @@ final class WasmSocketsRewrite {
 		// the substitution instead of at WasmExprCompiler time, which is after it -- is
 		// what puts them on the socket path at all.
 		if (LispNames.WRITE_CHAR.equals(head) && (parts.size() == 2 || parts.size() == 3)) {
-			return walk(LispMacroExpander.expandWriteChar(consOf(parts)), asyncContext);
+			return walk(LispMacroExpander.expandWriteChar(consOf(parts)), context);
 		}
 		if (LispNames.WRITE_STRING.equals(head) && hasLiteralBounds(parts)) {
 			LispVal bounded = LispMacroExpander.lowerWriteStringBounds(consOf(parts));
 			if (bounded != null) {
-				return walk(bounded, asyncContext);
+				return walk(bounded, context);
 			}
 		}
 		// (terpri [stream]) lowers onto write-string's dispatch: write-string owns the
@@ -303,31 +338,31 @@ final class WasmSocketsRewrite {
 									properList(List.of(new LispSymbol(LispNames.WRITE_STRING),
 											new am.ik.rontolisp.LispString("\n"), stream)),
 									LispNil.INSTANCE)),
-					asyncContext);
+					context);
 		}
 		// The eof-tolerant reads (2-3 args) and the sequence ops (bounded or not) take
 		// their own dispatch targets; reads promote in async context like the 1-arg
 		// reads, writes never do.
 		if (LispNames.READ_BYTE.equals(head) && (parts.size() == 3 || parts.size() == 4)) {
-			return asyncContext ? awaitOf(replaceHead(parts, READ_BYTE_EOF_FUTURE, true))
-					: replaceHead(parts, IO_READ_BYTE_EOF, false);
+			return asyncContext ? awaitOf(replaceHead(parts, READ_BYTE_EOF_FUTURE, context))
+					: replaceHead(parts, IO_READ_BYTE_EOF, context);
 		}
 		if (LispNames.READ_CHAR.equals(head) && (parts.size() == 3 || parts.size() == 4)) {
-			return asyncContext ? awaitOf(replaceHead(parts, READ_CHAR_EOF_FUTURE, true))
-					: replaceHead(parts, IO_READ_CHAR_EOF, false);
+			return asyncContext ? awaitOf(replaceHead(parts, READ_CHAR_EOF_FUTURE, context))
+					: replaceHead(parts, IO_READ_CHAR_EOF, context);
 		}
 		if (LispNames.READ_LINE.equals(head) && (parts.size() == 3 || parts.size() == 4)) {
-			return asyncContext ? awaitOf(replaceHead(parts, READ_LINE_EOF_FUTURE, true))
-					: replaceHead(parts, IO_READ_LINE_EOF, false);
+			return asyncContext ? awaitOf(replaceHead(parts, READ_LINE_EOF_FUTURE, context))
+					: replaceHead(parts, IO_READ_LINE_EOF, context);
 		}
 		if (LispNames.READ_SEQUENCE.equals(head) || LispNames.WRITE_SEQUENCE.equals(head)) {
 			List<LispVal> bounded = boundedSequenceArgs(parts);
 			if (bounded != null) {
 				if (LispNames.WRITE_SEQUENCE.equals(head)) {
-					return replaceHead(bounded, IO_WRITE_SEQUENCE, asyncContext);
+					return replaceHead(bounded, IO_WRITE_SEQUENCE, context);
 				}
-				return asyncContext ? awaitOf(replaceHead(bounded, READ_SEQUENCE_FUTURE, true))
-						: replaceHead(bounded, IO_READ_SEQUENCE, false);
+				return asyncContext ? awaitOf(replaceHead(bounded, READ_SEQUENCE_FUTURE, context))
+						: replaceHead(bounded, IO_READ_SEQUENCE, context);
 			}
 		}
 		int[] arity = ARITIES.get(head);
@@ -340,7 +375,7 @@ final class WasmSocketsRewrite {
 				future = TCP_FUTURES.get(head);
 			}
 			if (future != null) {
-				return awaitOf(replaceHead(parts, future, asyncContext));
+				return awaitOf(replaceHead(parts, future, context));
 			}
 		}
 		String tcpFuture = TCP_FUTURES.get(head);
@@ -367,7 +402,7 @@ final class WasmSocketsRewrite {
 				withDefault.add(new LispSymbol(LispNames.STANDARD_OUTPUT_VAR));
 				parts = withDefault;
 			}
-			return replaceHead(parts, dispatch, asyncContext);
+			return replaceHead(parts, dispatch, context);
 		}
 		return null;
 	}
@@ -419,11 +454,11 @@ final class WasmSocketsRewrite {
 		return List.of(parts.get(0), parts.get(1), parts.get(2), start, end);
 	}
 
-	private static LispVal replaceHead(List<LispVal> parts, String internalName, boolean asyncContext) {
+	private static LispVal replaceHead(List<LispVal> parts, String internalName, Context context) {
 		List<LispVal> out = new java.util.ArrayList<>(parts.size());
 		out.add(new LispSymbol(PackageRegistry.qualifyInternal(LispNames.RONTOLISP_PKG, internalName)));
 		for (int i = 1; i < parts.size(); i++) {
-			out.add(walk(parts.get(i), asyncContext));
+			out.add(walk(parts.get(i), context));
 		}
 		return properList(out);
 	}

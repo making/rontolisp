@@ -27,23 +27,34 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 class WasmSocketsRewriteTest {
 
-	// The rewrite is a no-op unless sockets.lisp is spliced; the splice marker is a
-	// top-level (defun rontolisp::%io-read-line ...).
-	private static final String MARKER = "(defun rontolisp::%io-read-line (&optional s) s)\n";
+	// The rewrite is a no-op unless a provider is spliced; the splice marker is a
+	// top-level (defun rontolisp::%io-read-line ...). sockets.lisp's read futures are
+	// async bodies.
+	private static final String COMPONENT = """
+			(defun rontolisp::%io-read-line (&optional s) s)
+			(rontolisp:async-defun rontolisp::%read-line-future (&optional s) s)
+			""";
+
+	// runner-sockets.lisp's (--native) are plain defuns.
+	private static final String RUNNER = """
+			(defun rontolisp::%io-read-line (&optional s) s)
+			(defun rontolisp::%read-line-future (&optional s) s)
+			""";
 
 	private static String rewriteTopLevel(String source) {
-		return rewritten(source).get(1).print();
+		return rewritten(COMPONENT, source);
 	}
 
 	// The same call inside a plain defun, where the sync dispatch defuns apply instead of
 	// the async promotions.
 	private static String rewriteInDefun(String source) {
-		return rewritten("(defun probe (s seq) " + source + ")").get(1).print();
+		return rewritten(COMPONENT, "(defun probe (s seq) " + source + ")");
 	}
 
-	private static List<LispVal> rewritten(String source) {
-		List<LispVal> program = new PackageResolver().resolveProgram(LispReader.readAllFromString(MARKER + source));
-		return new ArrayList<>(WasmSocketsRewrite.rewrite(program));
+	// The last form of the provider and the source, rewritten.
+	private static String rewritten(String provider, String source) {
+		List<LispVal> program = new PackageResolver().resolveProgram(LispReader.readAllFromString(provider + source));
+		return new ArrayList<>(WasmSocketsRewrite.rewrite(program)).getLast().print();
 	}
 
 	@Test
@@ -77,6 +88,13 @@ class WasmSocketsRewriteTest {
 				"RONTOLISP::%READ-LINE-EOF-FUTURE");
 		assertThat(rewriteTopLevel("(read-char s t nil)")).contains("RONTOLISP:AWAIT",
 				"RONTOLISP::%READ-CHAR-EOF-FUTURE");
+		// The runner promotes nothing: an await of what is no future answers its primary
+		// alone, and read-line's missing-newline-p was lost.
+		assertThat(rewritten(RUNNER, "(read-line s nil nil)")).contains("RONTOLISP::%IO-READ-LINE-EOF")
+			.doesNotContain("RONTOLISP:AWAIT");
+		assertThat(rewritten(RUNNER, "(rontolisp:async-defun probe (s) (read-char s))"))
+			.contains("RONTOLISP::%IO-READ-CHAR")
+			.doesNotContain("RONTOLISP:AWAIT");
 	}
 
 	@Test

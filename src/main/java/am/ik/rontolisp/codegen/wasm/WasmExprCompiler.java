@@ -768,7 +768,8 @@ final class WasmExprCompiler {
 				if (LispNames.STR_BYTE_LENGTH_INTERNAL.equals(qn.member())
 						|| LispNames.STR_BYTE_REF_INTERNAL.equals(qn.member())
 						|| LispNames.STR_FROM_BYTE_INTERNAL.equals(qn.member())
-						|| LispNames.STR_FROM_OCTETS_INTERNAL.equals(qn.member())) {
+						|| LispNames.STR_FROM_OCTETS_INTERNAL.equals(qn.member())
+						|| LispNames.STR_DECODE_RAW_INTERNAL.equals(qn.member())) {
 					// Byte-level string access for the socket providers' chunk
 					// bookkeeping (sockets.lisp, runner-sockets.lisp): a socket chunk's
 					// BYTES are the wire truth, and the character accessors UTF-8-decode

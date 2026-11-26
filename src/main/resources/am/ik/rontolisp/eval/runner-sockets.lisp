@@ -786,7 +786,7 @@
 
 (defun rontolisp::%sock-read-line-f (e op)
   ;; Bytes up to \n (one trailing \r stripped, dropped at EOF too), assembled
-  ;; into a string whose bytes ARE the wire bytes, a RUN of the chunk at a time
+  ;; from the wire bytes a RUN of the chunk at a time, then decoded
   ;; (sockets.lisp's, byte for byte). The second value is read-line's
   ;; missing-newline-p: t when the peer's close ended the line.
   (let ((runs nil) (got nil) (done nil) (cr nil) (newline nil))
@@ -820,7 +820,8 @@
           (if (or (rontolisp::%sock-e-eof e) (not (rontolisp::%sock-fill e op)))
               (setq done t))))
     (if got
-        (%quiet-values (rontolisp::%sock-join-runs (nreverse runs))
+        (%quiet-values (rontolisp::%str-decode-raw
+                        (rontolisp::%sock-join-runs (nreverse runs)))
                        (not newline))
         (%quiet-values nil t))))
 
