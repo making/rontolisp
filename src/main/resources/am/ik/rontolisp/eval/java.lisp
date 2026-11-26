@@ -4585,6 +4585,9 @@
                           (rontolisp::%http-serve-step server 0)
                           got))
                     (rontolisp::%http-serve-step server limit))
+                ;; where the host waits for the program, the start hands on
+                ;; what the threads left, as a call does
+                #+rontolisp-host-timer (rontolisp::%java-hand-on nil)
                 #-rontolisp-native (rontolisp::%http-serve-step server limit)))
             nil))
   nil)
@@ -4768,19 +4771,32 @@
     (if (eq (cdr rontolisp::%java-keeper) exchange)
         (setq rontolisp::%java-keeper nil))))
 
-;; A call that leaves the threads something to do hands it on: a call idling is rung
-;; to take their turns, or the time where no call idling keeps a soon enough one.
+;; What leaves the threads something to do hands it on: a call idling is rung to take
+;; their turns, or the time where no call idling keeps a soon enough one; with none
+;; idling, the host is asked for a turn of the program's own (env.wake: at once, or at
+;; that time). TURNS: this is that turn (__ronto_turn, eval/HostTimerLibrary), and the
+;; threads take their turns first, until none can go on -- so they go on after the
+;; last answer, as a JDK's do.
 #+rontolisp-host-timer
-(defun rontolisp::%java-hand-on ()
+(defun rontolisp::%java-hand-on (turns)
+  (if turns
+      (let ((task (rontolisp::%task-swap nil)) (going t))
+        (unwind-protect (while going
+                          (rontolisp::%java-thread-due)
+                          (if (not (rontolisp::%java-thread-next))
+                              (setq going nil)))
+          (rontolisp::%task-swap task))))
   (let ((soonest (rontolisp::%java-thread-due))
-        (keeper rontolisp::%java-keeper))
-    (if (or rontolisp::%java-ready rontolisp::%java-ready-last
-            (and soonest (or (null keeper) (< soonest (car keeper)))))
+        (keeper rontolisp::%java-keeper)
+        (ready (or rontolisp::%java-ready rontolisp::%java-ready-last)))
+    (if (or ready (and soonest (or (null keeper) (< soonest (car keeper)))))
         (let ((calls rontolisp::%java-calls) (found nil))
           (while (and calls (null found))
             (if (aref (car calls) 7) (setq found (car calls)))
             (setq calls (cdr calls)))
-          (if found (rontolisp::%java-ring found)))))
+          (if found
+              (rontolisp::%java-ring found)
+              (rontolisp::%host-wake (if ready 0 soonest))))))
   nil)
 
 ;; A stop that does not drain cuts the exchanges in hand, as a JDK's closes their
@@ -4841,7 +4857,7 @@
                       (rontolisp::%java-http-serve exchange))
       (setq rontolisp::%java-calls (remove exchange rontolisp::%java-calls))
       (rontolisp::%task-swap task)
-      (rontolisp::%java-hand-on))
+      (rontolisp::%java-hand-on nil))
     (rontolisp::%java-http-failed exchange)))
 
 ;; A component: the host calls the program for a request while others it called for

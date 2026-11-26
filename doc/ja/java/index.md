@@ -971,7 +971,8 @@ export default worker(module);
   Worker が JSPI を通じてプログラムを待ちます。時刻を待つ待機は Worker のタイマーで待ち、どの
   スレッドも進めないリクエストは Worker で待機し、その間 Worker は別のリクエストでプログラムを
   呼べます（非同期サーブレットのタイムアウト、別のリクエストの処理を待つリクエストなど）。
-  スレッドが動くのは、リクエストを処理中の間です。
+  スレッドは最後の応答のあとも動きます。Worker はスレッドに残った仕事のためにプログラムを
+  もう一度呼び、その呼び出しを `ctx.waitUntil` に渡します。
 - プログラムの出力は `--host-output` があれば Worker のログになり（標準出力は `console.log`、標準エラーは
   `console.error`）、インスタンスを終わらせたものの報告もそこに出ます。なければ出力は捨てられ、ホストに見えるのは
   `RuntimeError: unreachable` だけです。`System.getenv` は `null` を返します。
