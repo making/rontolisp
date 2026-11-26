@@ -654,7 +654,16 @@ public final class NoGcWasmCompiler implements LispCompiler {
 				}
 			}
 			else if (WasmExportCompiler.isExportForm(expr)) {
-				exportDecls.add(WasmExportCompiler.parse((LispCons) expr));
+				WasmExportCompiler.Decl decl = WasmExportCompiler.parse((LispCons) expr);
+				WitExportSignature wit = decl.wit();
+				if (wit != null) {
+					// rontolisp:wit-export refuses it at the WIT line; this is what a
+					// form
+					// reaching the backend any other way meets
+					throw new UnsupportedOperationException(wit.at() + ": export '" + decl.exportName()
+							+ "' carries a type the scalar backend has no value for");
+				}
+				exportDecls.add(decl);
 			}
 			else if (am.ik.rontolisp.compiler.JvmExportDirective.isExportForm(expr)) {
 				// rontolisp:jvm-export declares a typed Java entry point for the JVM

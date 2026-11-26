@@ -61,6 +61,14 @@ final class WitCanonicalAbi {
 	}
 
 	/**
+	 * The interface whose scope this calculator's type names resolve in.
+	 * @return the scope
+	 */
+	WitItem.InterfaceDef scope() {
+		return this.scope;
+	}
+
+	/**
 	 * The resolver over the document this calculator's interface is in.
 	 * @return the resolver
 	 */

@@ -569,6 +569,12 @@ public interface Instruction {
 	/** {@code F64_REINTERPRET_I64} (0xBF). */
 	int F64_REINTERPRET_I64 = 0XBF;
 
+	/** {@code I32_EXTEND8_S} (0xC0): sign-extends the low 8 bits of an i32. */
+	int I32_EXTEND8_S = 0xC0;
+
+	/** {@code I32_EXTEND16_S} (0xC1): sign-extends the low 16 bits of an i32. */
+	int I32_EXTEND16_S = 0xC1;
+
 	/** {@code I64_EXTEND8_S} (0xC2): sign-extends the low 8 bits of an i64. */
 	int I64_EXTEND8_S = 0xC2;
 

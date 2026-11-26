@@ -1,0 +1,56 @@
+package example:shapes@0.1.0;
+
+/// Plane geometry over the values a component's export carries beyond numbers and
+/// strings: records, an enum, a variant, lists, an option, a tuple and a result.
+interface geometry {
+  record point {
+    x: s32,
+    y: s32,
+  }
+
+  enum color {
+    red,
+    green,
+    blue,
+  }
+
+  variant shape {
+    circle(f64),
+    rect(point),
+    dot,
+  }
+
+  record tagged {
+    shape: shape,
+    color: color,
+    label: option<string>,
+  }
+
+  /// The point mirrored on the diagonal.
+  flip: func(p: point) -> point;
+
+  /// The first n squares, as the points (i, i * i).
+  squares: func(n: u32) -> list<point>;
+
+  /// The smallest box around the points -- its lower-left and upper-right corners --
+  /// or none for no points.
+  bounds: func(ps: list<point>) -> option<tuple<point, point>>;
+
+  /// The area of a shape; a dot has none.
+  area: func(s: shape) -> result<f64, string>;
+
+  /// One line describing a tagged shape.
+  caption: func(t: tagged) -> string;
+}
+
+world shapes {
+  record summary {
+    count: u32,
+    total: f64,
+  }
+
+  export geometry;
+
+  /// How many areas, and their sum.
+  export summarize: func(areas: list<f64>) -> summary;
+}

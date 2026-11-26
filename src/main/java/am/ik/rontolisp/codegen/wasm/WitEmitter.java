@@ -204,6 +204,16 @@ final class WitEmitter {
 				}
 			}
 			items.addAll(firstExport, importItems);
+			// A canonical export of the world's own function declares the world's named
+			// types (type imports of the component), which the tool prints with the
+			// imports.
+			for (WasmExportCompiler.Decl decl : flat) {
+				WitExportSignature wit = decl.wit();
+				if (wit != null) {
+					items.addAll(firstExport + importItems.size(), WitExportTypes.declared(wit.abi()));
+					break;
+				}
+			}
 			// Flat function exports first (in export order), then one interface reference
 			// per exported interface -- the order the component's export section carries.
 			for (WasmExportCompiler.Decl decl : flat) {
@@ -456,6 +466,15 @@ final class WitEmitter {
 		LinkedHashMap<WitPackageName, List<WitItem>> byPackage = new LinkedHashMap<>();
 		byInterface.forEach((ifaceId, decls) -> {
 			List<WitItem> members = new ArrayList<>();
+			// An interface with a canonical member exports every type it defines, ahead
+			// of its functions.
+			for (WasmExportCompiler.Decl decl : decls) {
+				WitExportSignature wit = decl.wit();
+				if (wit != null) {
+					members.addAll(WitExportTypes.declared(wit.abi()));
+					break;
+				}
+			}
 			for (WasmExportCompiler.Decl decl : decls) {
 				members.add(new WitItem.FuncDef(WitMeta.none(), decl.exportName(), WitItem.FuncKind.PLAIN,
 						witFunc(decl, forceAsync)));
@@ -496,6 +515,11 @@ final class WitEmitter {
 	}
 
 	private static WitFunc witFunc(WasmExportCompiler.Decl decl, boolean forceAsync) {
+		WitExportSignature wit = decl.wit();
+		if (wit != null) {
+			// a canonical export's function is the WIT's own, type names and all
+			return wit.func();
+		}
 		List<WitFunc.Param> params = new ArrayList<>();
 		List<am.ik.rontolisp.compiler.BoundaryType> paramTypes = decl.paramTypes();
 		for (int i = 0; i < paramTypes.size(); i++) {

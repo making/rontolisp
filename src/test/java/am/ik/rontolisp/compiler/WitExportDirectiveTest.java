@@ -219,25 +219,86 @@ class WitExportDirectiveTest {
 	}
 
 	@Test
-	void reportsAWitTypeOutsideTheBoundarySubsetAgainstTheWitLine() {
-		// The representation of every WIT type is settled (WitTypeMapper), but only the
-		// ones with a component-model scalar/string lift can cross the boundary today;
-		// the error says what the value WOULD be rather than just refusing.
-		assertThatThrownBy(() -> lower(world("  export count-vowels: func(s: list<u8>) -> s32;"), Backend.WASM_GC))
+	void lowersATypeBeyondTheFlatSetIntoTheCanonicalFormOrRefusesItAgainstTheWitLine() {
+		// An export whose types the flat designators do not cover is the WIT's own
+		// function: the form names its place -- the world, the label, the line -- and
+		// carries the text, and the backend marshals it through the canonical ABI. A
+		// type alias of a flat type stays flat, the hand-written form.
+		String wit = """
+				package root:component;
+
+				world analyzer {
+				  type count = s32;
+				  record word { text: string, weight: f32 }
+				  flags perms { r, w }
+				  export count-vowels: func(s: list<u8>) -> count;
+				  export longest: func(ws: list<word>) -> result<word, string>;
+				  export size: func(s: string) -> count;
+				}
+				""";
+		Map<String, List<String>> program = Map.of("count-vowels", List.of("s"), "longest", List.of("ws"), "size",
+				List.of("s"));
+		List<LispVal> forms = WitExportDirective.lower(new Directive(WIT, null, null, false, true), wit, WIT,
+				defuns(program), Backend.WASM_COMPONENT);
+		assertThat(forms.stream().map(form -> form.print().replaceAll(":WIT \"[^\"]*\"", ":WIT \"...\"")))
+			.containsExactly(
+					"(RONTOLISP:WASM-EXPORT '|count-vowels| :AS \"count-vowels\" :WIT \"...\" :WIT-WORLD \"analyzer\""
+							+ " :WIT-AT \"world.wit:7\" :OCTETS T :PARAM-NAMES '(|s|))",
+					// a result at the top is the envelope a defun around the function
+					// makes: the ok arm alone here, where nothing can signal the error
+					// arm
+					"(DEFUN |longest%wit-export| (P0) (CONS :OK (|longest| P0)))",
+					"(RONTOLISP:WASM-EXPORT '|longest%wit-export| :AS \"longest\" :WIT \"...\" :WIT-WORLD \"analyzer\""
+							+ " :WIT-AT \"world.wit:8\" :OCTETS T :PARAM-NAMES '(|ws|))",
+					"(RONTOLISP:WASM-EXPORT '|size| :PARAMS '(:STRING) :PARAM-NAMES '(|s|) :RETURNS :S32)");
+		// The text is the whole document, which the backend reads no file for.
+		assertThat(forms.get(0).print()).contains("record word {").contains("world analyzer {");
+		// A program holding the WIT run time may signal rontolisp:wit-error: the error
+		// arm. The interpreter and the JVM compile no export, so no defun is made.
+		Map<String, List<String>> signalling = new java.util.HashMap<>(program);
+		signalling.put("RONTOLISP:WIT-PROVIDE", List.of("INTERFACE", "PROVIDER"));
+		assertThat(printed(lower(wit, Backend.WASM_COMPONENT, signalling))).contains(
+				"(DEFUN |longest%wit-export| (P0) (HANDLER-CASE (CONS :OK (|longest| P0)) (RONTOLISP:WIT-ERROR (E)"
+						+ " (CONS :ERROR (RONTOLISP:WIT-ERROR-PAYLOAD E)))))");
+		assertThat(printed(lower(wit, Backend.OTHER, program))).doesNotContain("DEFUN");
+		// The scalar backend has no value a list could be, and says so at the line.
+		assertThatThrownBy(() -> lower(wit, Backend.WASM_NO_GC_COMPONENT, program))
 			.isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageStartingWith("world.wit:4: export 'count-vowels': the WIT type of s is not supported at the "
-					+ "export boundary yet (supported: s8, s16, s32, s64, u8, u16, u32, u64, f64, bool, string)")
-			// The settled house representation is named, so the error says what the value
-			// WOULD be -- but it must not cite a .todo file, which is deleted the moment
-			// the work lands.
+			.hasMessageStartingWith(
+					"world.wit:7: export 'count-vowels': the WIT type of s is not one --no-gc can carry "
+							+ "(s8, s16, s32, s64, u8, u16, u32, u64, f64, bool, string)")
 			.hasMessageContaining("BYTE_STRING")
+			// a message cites no .todo file, which is deleted the moment the work lands
 			.hasMessageNotContaining(".todo");
-		// The result is checked the same way, and named as such. f32 stays out: rontolisp
-		// has no internal single-precision float (.kb/wasm-export-no-wasi.md).
-		assertThatThrownBy(() -> lower(world("  export count-vowels: func(s: string) -> f32;"), Backend.WASM_GC))
-			.isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageContaining("world.wit:4:")
-			.hasMessageContaining("the WIT type of the result is not supported");
+		// What no export carries is named as it nests, and the result as such.
+		for (var refusal : Map
+			.of("func(p: perms)", "the WIT type of p holds the flags 'perms'", "func() -> list<stream<u8>>",
+					"the WIT type of the result holds a stream", "func(d: option<duration>)",
+					"the WIT type of d holds 'duration', a type of another interface (a use clause)")
+			.entrySet()) {
+			assertThatThrownBy(() -> lower("""
+					package root:component;
+
+					interface clock {
+					  type duration = u64;
+					}
+
+					world analyzer {
+					  use clock.{duration};
+					  flags perms { r, w }
+					  export count-vowels: %s;
+					}
+					""".formatted(refusal.getKey()), Backend.WASM_COMPONENT,
+					Map.of("count-vowels", refusal.getKey().contains("()") ? List.of() : List.of("p"))))
+				.isInstanceOf(UnsupportedOperationException.class)
+				.hasMessageStartingWith("world.wit:10: export 'count-vowels': " + refusal.getValue())
+				.hasMessageContaining("which an export does not carry");
+		}
+		// An async export stays on the flat types.
+		assertThatThrownBy(
+				() -> lower(world("  export count-vowels: async func(s: list<u8>) -> s32;"), Backend.WASM_COMPONENT))
+			.hasMessageStartingWith("world.wit:4: export 'count-vowels' is an async func, and an async export carries "
+					+ "the flat types only");
 	}
 
 	@Test
