@@ -3,10 +3,11 @@
 // (.kb/java-frontend-provenance.md). Lowered with every program that names it.
 package java.util;
 
+import java.io.Serializable;
 import rontolisp.internal.Splits;
 
 // A ring in an array that doubles when it is full: no element is null.
-public class ArrayDeque<E> extends AbstractCollection<E> implements Deque<E>, Cloneable {
+public class ArrayDeque<E> extends AbstractCollection<E> implements Deque<E>, Cloneable, Serializable {
 
     private Object[] ring;
 

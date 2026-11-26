@@ -3,12 +3,13 @@
 // (.kb/java-frontend-provenance.md). Lowered with every program that names it.
 package java.util.concurrent;
 
+import java.io.Serializable;
 import java.util.Collection;
 import java.util.Iterator;
 import java.util.NoSuchElementException;
 
 // A bounded queue read and written at both ends: Bounded's monitor and waits.
-public class LinkedBlockingDeque<E> extends Bounded<E> implements BlockingDeque<E> {
+public class LinkedBlockingDeque<E> extends Bounded<E> implements BlockingDeque<E>, Serializable {
 
     public LinkedBlockingDeque() {
         super(Integer.MAX_VALUE);

@@ -339,13 +339,22 @@ so fetch+tcp and serve+tcp compose in one component.
   first-class use, out of contract) answers nil.
 - **`write-string`/`write-char`/`read-char` on a socket are real on all four backends**, treating
   socket I/O as BYTES -- never through a `Reader`/decoder that would buffer ahead and swallow bytes a
-  following `read-byte`/`read-line` owes the caller; an invalid lead byte stands alone as U+FFFD.
-  Cross-backend pin: one program answering `(65 195 135 66 504 90 121)`.
+  following `read-byte`/`read-line` owes the caller. Cross-backend pin: one program answering
+  `(65 195 135 66 504 90 121)`. **Deviation (measured 2026-11-26)**: `read-char` takes the
+  octets its lead's high bits count whatever they are -- `ff 7a 0a` reads U+FFFD then EOF on the
+  interpreter/JVM, code 2073250 on the WASM targets (the loose character walk); SBCL and a file
+  stream read U+FFFD, `z`, newline.
 - **A bare `(read-char sock)` / `(read-byte sock)` at peer close signals `end-of-file`** (CL's default
   `eof-error-p` t) on both entries a bare shape reaches -- the promoted `%read-{char,byte}-future`
   and the sync `%io-read-{char,byte}`. The nil convention stays BELOW in `%sock-read-{char,byte}-f`,
   because the `-eof-future` forms need the raw nil to apply the CALLER's eof arguments. `read-line`
   answers nil at peer close.
+- **A read is promoted to an await only where the provider's futures are async bodies**
+  (`WasmSocketsRewrite.promotesReads`: `%read-line-future` is an `async-defun`, sockets.lisp and
+  stdin-dispatch.lisp). The runner's (runner-sockets.lisp) are plain defuns, and an `await` of
+  what is no future answers its primary alone ([async-await.md](async-await.md), "Multiple
+  values"): at top level on `--native`, `(multiple-value-list (read-line s nil :eof))` was ONE
+  value. There every context takes the `%io-*` dispatch.
 - **The two rewrites MEET in an async body**: `(write-line (read-line s))` is
   `(%io-write-line (await (%read-line-future s)))`. `WasmAwaitNormalizer` must hoist that await out
   of a `%`-named head's argument; `WasmSocketsRewrite.strictDispatchMembers()` tells it these `%`
@@ -441,11 +450,11 @@ backends.** cl-postgres reads every text value and every message's framing one `
   -> 1,900 / 350 / 190 / 185. Component steps: the sync arm alone 818 -> 310, the remembered entry
   and one walk 136, the declared chunk 84. A program without sockets is byte-identical.
 - **A line is taken a RUN at a time** (`%sock-read-line-f`, component and `--native`): what the
-  chunk holds up to the next `\n` (or its end) becomes ONE string through `%str-from-octets`
-  (`WasmStrByteCompiler`: a `$str_bytes`, the quotes and one `array.copy`, no UTF-8 check, so a
-  sequence split across chunks stays as the wire has it), the runs are joined by pairwise passes
-  once, and a trailing `\r` is held back until the next run shows it is not the one before the
-  `\n`. It was one `%string-concat` per byte, quadratic. **Measured** 2026-11-25 (wasmtime 51,
+  chunk holds up to the next `\n` (or its end) becomes ONE string of raw octets through
+  `%str-from-octets` (`WasmStrByteCompiler`: a `$str_bytes`, the quotes and one `array.copy`, no
+  UTF-8 check, so a sequence split across chunks stays as the wire has it), the runs are joined by
+  pairwise passes once and then decoded by `%str-decode-raw`, and a trailing `\r` is held back
+  until the next run shows it is not the one before the `\n`. It was one `%string-concat` per byte, quadratic. **Measured** 2026-11-25 (wasmtime 51,
   one loopback line, ms, before -> after; component / `--native`): 5,000 octets 14 / 11 -> 0 / 0,
   10,000 21 / 23 -> 0 / 0, 20,000 42 / 49 -> 0 / 1, 40,000 170 / 196 -> 2 / 1, 400,000 15,338 /
   18,869 -> 13 / 10, 4,000,000 -> 137 / 99. Lines with a `\r` at every chunk edge, an empty line,
@@ -456,6 +465,27 @@ backends.** cl-postgres reads every text value and every message's framing one `
 - Pins: `TcpReadSomeFixture` (a byte of three, then `listen` and a read with no wait answering the
   two the buffer holds and the host no longer does) on every socket backend; the byte-wise
   read-char/read-line pins above; `ClPostgresE2eTest`.
+- **A line is decoded once whole** (`%str-decode-raw`, `_str_decode` in
+  `WasmBulkRuntimeBuilder`'s block, shaken from a module with no site): a raw string whose octets
+  are well-formed UTF-8 (the strict walk `_iv_utf8_str` validates with) is answered ITSELF; else a
+  fresh string with each malformed sequence one U+FFFD, as many octets per replacement as the
+  prelude's `%octets-to-string-replacing` takes -- the JDK decoder the interpreter's
+  `SocketSupport.readLine` is. A `$str_bytes` holding malformed octets is not a string: the
+  character walk read `ff` as a 4-octet lead, past the end (trap) or into the next character.
+  Measured 2026-11-26 on the four backends, 14 lines (`c0af`, `e080bf`, `eda080`, `ed9fbf`,
+  `f09f98`, `e28241`, `f4908080`, `f09f9880`, `80bf`, `f888808080`, `e180e18080`, `df`, `efbfbd`,
+  `410d`, then `c3` and the close): identical. SBCL's `:replacement` differs on the overlong and
+  out-of-range forms (`c0af`, `e080bf`, `f4908080`, `80bf` one U+FFFD each, `f888808080`
+  `(32768 65533)`) and keeps the `\r`; the four follow the JDK, as `read-char.md` documents.
+  Cost: the walk takes an ASCII octet in a few instructions (`asciiStep`; `_iv_utf8_str` keeps
+  its bytes): a 4 MB line 11 ms (27 ms through the sequence arms); `read-line` of 4 MB, ms, 3
+  runs, before -> after: component 77-92 -> 89-92, `--native` 74-120 -> 82-95. A component with
+  `read-line` 201,145 -> 202,049 B, the `--native` core +922 B (the executable one 4 KiB page);
+  a program without a socket `read-line` byte-identical on all three WASM outputs except at
+  `--optimize=off` (+905 B, nothing shaken).
+- Pins: `TcpOutputBufferFixture` (an invalid octet before a sequence split across two writes and
+  before ASCII, a last line the peer's half-close ends, the end of input, each with its
+  missing-newline-p, at top level) on every socket backend.
 
 ## Address accessors
 For the usocket shim's `get-local-*`/`get-peer-*`. A wrong-kind entry is the refusal text on

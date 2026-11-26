@@ -4,8 +4,9 @@ Declarations are NOT pure no-ops: on wasm-GC a `(declare (type ...))` (or a `def
 `:type`) drives single-arm array-access EMISSION, and an integer range (or a `the` of one) a raw
 value with no fallback ("Declared integer ranges" below); on the JVM a `(declare (type double-float ...))`
 routes arithmetic onto the unboxed IEEE path
-([jvm-double-arithmetic.md](jvm-double-arithmetic.md)) and an integer range makes a fused leaf a
-cast with no bail ("Declared integer ranges", "On the JVM"). A `special` declaration is semantics on
+([jvm-double-arithmetic.md](jvm-double-arithmetic.md)), an integer range makes a fused leaf a
+cast with no bail and an array type makes a fused read or store take its representation's arm
+("Declared integer ranges", "On the JVM"). A `special` declaration is semantics on
 every backend but `--no-gc`, scoped as CLHS 3.3.4 scopes it
 ([dynamic-special-variables.md](dynamic-special-variables.md)); the interpreter and `--no-gc`
 ignore every other declaration.
@@ -90,7 +91,7 @@ Four sources (`WasmArrayCompiler.arrayKindOfExpr`):
 - **A `GENERAL` site takes the inline arm of an unpinned vector at the speed levels**
   (`.kb/adjustable-arrays.md`, "What an element access costs"), in and out of EH mode; what the
   arm refuses is checked as an unpinned read's is. A general-array move: 66 -> 9 ns (undeclared
-  21-25). The JVM reads no array declaration.
+  21-25). The JVM reads a pin for its fused reads and stores and its string arm ("On the JVM").
 - **The checks before the access.** A packed-kind site tests the ONE type inline and calls
   `_arr_check_rank` only when it fails (`emitKindedCheckRank`; the unconditional call was 9% of an
   ironclad PBKDF2 component). A subscript whose SHAPE answers an integer skips `_idx_chk`
@@ -170,8 +171,13 @@ catchable `type-error`, and so does an integer past `long` an exact local stores
 - **What is trusted** (`JvmIntFusionCompiler.declaredLong`): a variable whose declaration is its
   binding's own -- `Ctx.declaredIntegers` maps the name to the binding it resolved to (`bindingOf`),
   so a binder that shadows it without knowing the map (a handler-case variable) is untrusted. A
-  `(the spec (aref a i))` is an opaque leaf, not the aref leaf: measured and not made
-  (`.kb/jvm-int-fusion.md`, "Packed aref leaves"; `.todo/m28`).
+  `(the spec (aref a i))` is the aref leaf where a declaration pins the array, else an opaque
+  leaf (`.kb/jvm-int-fusion.md`, "Packed aref leaves").
+- **An array type** (`DeclaredArrayTypes.Pin`, `Ctx.declaredArrays` under the same binding
+  rule): a fused read or store takes the pinned representation's arm and bails for anything else
+  (`.kb/jvm-int-fusion.md`, "Declared arrays") -- trusted nowhere, so a false one answers what
+  undeclared code answers. Trusted in one place: `(setf (aref var i) v)` of a pinned variable has
+  no string arm, so a string there fails the store, a catchable error, where wasm traps.
 - **The cast stands behind its own `instanceof`** (`emitTrustedCheck`): a bare `checkcast` made
   `Sieve` 0.8 -> 1.5 s under the Graal JIT (Oracle GraalVM 25's default); C2 runs either alike.
 - Measured: `Zone.class` 271,493 -> 260,065 B, handlers 196 -> 75; times within noise -- C2 and

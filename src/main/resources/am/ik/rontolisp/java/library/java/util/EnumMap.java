@@ -3,11 +3,13 @@
 // (.kb/java-frontend-provenance.md). Lowered with every program that names it.
 package java.util;
 
+import java.io.Serializable;
+
 // A map from the constants of one enum: a slot for each, by its ordinal, so the keys are
 // in their order. An iterator reads the slots as they are when it comes to them and
 // never refuses a change. An entry is its slot: it reads and sets the map's value of
 // its key, and after the iterator that gave it removed it, it is no entry any more.
-public class EnumMap<K extends Enum<K>, V> extends AbstractMap<K, V> implements Cloneable {
+public class EnumMap<K extends Enum<K>, V> extends AbstractMap<K, V> implements Cloneable, Serializable {
 
     private final Class<K> keyType;
 

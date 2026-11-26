@@ -160,7 +160,8 @@ final class JvmExprCompiler {
 	 * @param className the class being generated
 	 */
 	static void compileForEffect(LispVal expr, JvmLispCompiler.Ctx ctx, String className) {
-		if (isInertStatement(expr) || compileStatementSetq(expr, ctx, className)) {
+		if (isInertStatement(expr) || compileStatementSetq(expr, ctx, className)
+				|| compileStatementStore(expr, ctx, className)) {
 			return;
 		}
 		// A special let's binding restore is always a statement (the cleanup of its
@@ -246,6 +247,45 @@ final class JvmExprCompiler {
 		finally {
 			ctx.leaveSite(site);
 		}
+	}
+
+	/**
+	 * {@return true when the form was an array store that stored and stopped there} A
+	 * rank-1 {@code %aset} -- or a {@code setf} of an {@code aref} place reaching one
+	 * ({@link JvmArrayCompiler#nonStringArefStore}) -- of an array a declaration pins,
+	 * whose fused method answers nothing ({@link JvmIntFusionCompiler#tryCompileStore});
+	 * the store of such a {@code setf} it declines is its {@code %aset}, value then pop.
+	 * The statement half of {@link #compileForEffect}, beside
+	 * {@link #compileStatementSetq}.
+	 */
+	static boolean compileStatementStore(LispVal expr, JvmLispCompiler.Ctx ctx, String className) {
+		LispCons store = JvmArrayCompiler.nonStringArefStore(expr, ctx);
+		if (store == null && expr instanceof LispCons cons && cons.car() instanceof LispSymbol head
+				&& LispNames.ASET.equals(head.name())) {
+			store = cons;
+		}
+		if (store == null) {
+			return false;
+		}
+		// Past compileCons, so the form's site and operator are entered here.
+		int site = ctx.enterSite((LispCons) expr);
+		@Nullable String outerOperator = ctx.operator;
+		ctx.operator = LispNames.ASET;
+		try {
+			if (JvmIntFusionCompiler.tryCompileStore(store, ctx, className, true)) {
+				return true;
+			}
+		}
+		finally {
+			ctx.operator = outerOperator;
+			ctx.leaveSite(site);
+		}
+		if (store == expr) {
+			return false;
+		}
+		compileExpr(store, ctx, className);
+		ctx.body.pop();
+		return true;
 	}
 
 	/**
@@ -1829,8 +1869,13 @@ final class JvmExprCompiler {
 			case LispNames.ELT_CELL -> JvmEltCellCompiler.compile(cons, ctx, className);
 			case LispNames.RPLACA -> JvmRplacaCompiler.compile(cons, ctx, className);
 			case LispNames.RPLACD -> JvmRplacdCompiler.compile(cons, ctx, className);
-			case LispNames.SETF -> JvmExprCompiler
-				.compileExpr(LispMacroExpander.expandSetf(cons, ctx.structAccessors, ctx.closRegistry), ctx, className);
+			case LispNames.SETF -> {
+				LispCons store = JvmArrayCompiler.nonStringArefStore(cons, ctx);
+				JvmExprCompiler.compileExpr(
+						store != null ? store
+								: LispMacroExpander.expandSetf(cons, ctx.structAccessors, ctx.closRegistry),
+						ctx, className);
+			}
 			case LispNames.PUSH -> JvmExprCompiler.compileExpr(LispMacroExpander.expandPush(cons), ctx, className);
 			case LispNames.POP -> JvmExprCompiler.compileExpr(LispMacroExpander.expandPop(cons), ctx, className);
 			case LispNames.REMF -> JvmExprCompiler.compileExpr(LispMacroExpander.expandRemf(cons), ctx, className);

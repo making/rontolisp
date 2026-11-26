@@ -3,6 +3,7 @@
 // (.kb/java-frontend-provenance.md). Lowered with every program that names it.
 package java.util.regex;
 
+import java.io.Serializable;
 import java.util.Arrays;
 import java.util.function.Predicate;
 import java.util.stream.Stream;
@@ -12,7 +13,7 @@ import rontolisp.internal.ObjectFlow;
 // from the syntax this class's documentation describes). The native members are the
 // engine's; compile, matches and quote are lowered where they are called, so that a
 // pattern written as a constant brings only the tables its text may need.
-public final class Pattern {
+public final class Pattern implements Serializable {
 
     public static final int UNIX_LINES = 1;
 

@@ -3,6 +3,7 @@ package am.ik.rontolisp;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.OutputStream;
 import java.io.UncheckedIOException;
 import java.net.InetAddress;
 import java.net.ServerSocket;
@@ -20,7 +21,11 @@ import java.util.concurrent.TimeUnit;
  * past the buffer (sent as it is, after the byte), and a line the program never flushes,
  * which its end sends. The peer's answer is followed by a line of a million octets, a
  * multi-byte first character, an inner {@code \r} and a {@code \r\n} end, read in one
- * call: a read-line taking it a byte at a time with a copy each is quadratic.
+ * call: a read-line taking it a byte at a time with a copy each is quadratic. Then lines
+ * read with their missing-newline-p at top level (an await on the WASM targets): an
+ * invalid octet before a sequence the peer splits across two writes and before ASCII,
+ * each one U+FFFD as the JDK's decoder and SBCL's {@code :replacement} answer, a last
+ * line the peer's half-close ends, and the end of input.
  */
 public final class TcpOutputBufferFixture implements AutoCloseable {
 
@@ -29,11 +34,18 @@ public final class TcpOutputBufferFixture implements AutoCloseable {
 			(let ((s (rontolisp:tcp-connect "127.0.0.1" %d)))
 			  (dotimes (i 100) (write-byte 97 s))
 			  (terpri s)
-			  (print (list (read-line s)
-			               (let ((line (read-line s)))
-			                 (list (length line) (char-code (char line 0))
-			                       (char-code (char line (- (length line) 2)))
-			                       (char-code (char line (- (length line) 1)))))))
+			  (flet ((codes (values)
+			           (cons (if (stringp (car values)) (map 'list #'char-code (car values)) (car values))
+			                 (cdr values))))
+			    (print (list (read-line s)
+			                 (let ((line (read-line s)))
+			                   (list (length line) (char-code (char line 0))
+			                         (char-code (char line (- (length line) 2)))
+			                         (char-code (char line (- (length line) 1)))))
+			                 (codes (multiple-value-list (read-line s nil :eof)))
+			                 (codes (multiple-value-list (read-line s nil :eof)))
+			                 (codes (multiple-value-list (read-line s nil :eof)))
+			                 (codes (multiple-value-list (read-line s nil :eof))))))
 			  (write-string "x" s)
 			  (write-string (make-string 20000 :initial-element #\\b) s)
 			  (write-line "bye" s))
@@ -43,10 +55,12 @@ public final class TcpOutputBufferFixture implements AutoCloseable {
 	private static final int LONG_LINE = 1_000_000;
 
 	/**
-	 * What the program prints: the peer's count of reads for the first line, then the
-	 * long line's length and its first and last two characters.
+	 * What the program prints: the peer's count of reads for the first line, the long
+	 * line's length and its first and last two characters, then the codes and
+	 * missing-newline-p of each later line.
 	 */
-	public static final String EXPECTED_OUTPUT = "(\"1\" (" + (LONG_LINE + 3) + " 233 13 99))";
+	public static final String EXPECTED_OUTPUT = "(\"1\" (" + (LONG_LINE + 3)
+			+ " 233 13 99) ((65533 233 122) NIL) ((65533 122) NIL) ((120 121 122) T) (:EOF T))";
 
 	/** What the peer received: the first line's length, then every later byte. */
 	public static final String EXPECTED_RECEIVED = "101:x" + "b".repeat(20000) + "bye\n";
@@ -103,8 +117,13 @@ public final class TcpOutputBufferFixture implements AutoCloseable {
 				line.write(buf, line.size(), n);
 				reads++;
 			}
-			s.getOutputStream().write((reads + "\n").getBytes(StandardCharsets.US_ASCII));
-			s.getOutputStream().write(("\u00e9" + "b".repeat(LONG_LINE) + "\rc\r\n").getBytes(StandardCharsets.UTF_8));
+			OutputStream out = s.getOutputStream();
+			out.write((reads + "\n").getBytes(StandardCharsets.US_ASCII));
+			out.write(("\u00e9" + "b".repeat(LONG_LINE) + "\rc\r\n").getBytes(StandardCharsets.UTF_8));
+			out.write(new byte[] { (byte) 0xff, (byte) 0xc3 });
+			Thread.sleep(200);
+			out.write(new byte[] { (byte) 0xa9, 'z', '\n', (byte) 0xff, 'z', '\n', 'x', 'y', 'z' });
+			s.shutdownOutput();
 			ByteArrayOutputStream rest = new ByteArrayOutputStream();
 			byte[] chunk = new byte[65536];
 			while (!rest.toString(StandardCharsets.US_ASCII).endsWith("bye\n")) {
@@ -118,6 +137,10 @@ public final class TcpOutputBufferFixture implements AutoCloseable {
 		}
 		catch (IOException ex) {
 			throw new UncheckedIOException(ex);
+		}
+		catch (InterruptedException ex) {
+			Thread.currentThread().interrupt();
+			throw new IllegalStateException(ex);
 		}
 	}
 

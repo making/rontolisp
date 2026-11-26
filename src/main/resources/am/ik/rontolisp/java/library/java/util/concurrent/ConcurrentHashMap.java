@@ -15,6 +15,7 @@
 // the table there was when it was made and never refuses.
 package java.util.concurrent;
 
+import java.io.Serializable;
 import java.util.AbstractCollection;
 import java.util.AbstractMap;
 import java.util.AbstractSet;
@@ -32,7 +33,7 @@ import java.util.stream.Stream;
 import rontolisp.internal.ObjectFlow;
 import rontolisp.internal.Splits;
 
-public class ConcurrentHashMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K, V> {
+public class ConcurrentHashMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K, V>, Serializable {
 
     private static final class Node<K, V> {
 
@@ -636,7 +637,7 @@ public class ConcurrentHashMap<K, V> extends AbstractMap<K, V> implements Concur
     }
 
     /** The keys of a map; with a value to put, a set a program adds to. */
-    public static final class KeySetView<K, V> extends AbstractSet<K> {
+    public static final class KeySetView<K, V> extends AbstractSet<K> implements Serializable {
 
         private final ConcurrentHashMap<K, V> map;
 
@@ -706,7 +707,7 @@ public class ConcurrentHashMap<K, V> extends AbstractMap<K, V> implements Concur
         }
     }
 
-    private static final class Values<K, V> extends AbstractCollection<V> {
+    private static final class Values<K, V> extends AbstractCollection<V> implements Serializable {
 
         private final ConcurrentHashMap<K, V> map;
 

@@ -3,6 +3,7 @@
 // (.kb/java-frontend-provenance.md). Lowered with every program that names it.
 package java.util.concurrent;
 
+import java.io.Serializable;
 import java.util.AbstractCollection;
 import java.util.ArrayDeque;
 import java.util.Collection;
@@ -16,7 +17,7 @@ import rontolisp.internal.Splits;
 // A queue with no bound read and written at both ends, under its own monitor; no
 // thread waits on it. No element is null. An iterator walks the elements there were
 // when it was made and takes out of the deque the one it gave (Copied).
-public class ConcurrentLinkedDeque<E> extends AbstractCollection<E> implements Deque<E> {
+public class ConcurrentLinkedDeque<E> extends AbstractCollection<E> implements Deque<E>, Serializable {
 
     private final ArrayDeque<E> held = new ArrayDeque<>();
 

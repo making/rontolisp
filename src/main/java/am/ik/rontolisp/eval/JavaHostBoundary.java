@@ -33,7 +33,7 @@ public final class JavaHostBoundary implements JavaBoundary {
 
 	private final boolean component;
 
-	private final boolean reactorModule;
+	private final boolean reactor;
 
 	private final boolean hostLogs;
 
@@ -45,17 +45,18 @@ public final class JavaHostBoundary implements JavaBoundary {
 	 * @param hostImports whether the target is a WASM backend, whose host provides every
 	 * imported interface
 	 * @param component whether that backend's output is a component
-	 * @param reactorModule whether that output is a core module with no WASI
+	 * @param reactor whether that output is a reactor ({@code --no-wasi} or
+	 * {@code --no-gc}), a component or a core module
 	 * @param hostLogs whether the build hands the program's log records to its host's log
 	 * @param entry the file the program starts at, whose directory every later pass
 	 * resolves a directive's path against, or {@code null} for none
 	 */
-	public JavaHostBoundary(@Nullable SourceLoader loader, boolean hostImports, boolean component,
-			boolean reactorModule, boolean hostLogs, @Nullable String entry) {
+	public JavaHostBoundary(@Nullable SourceLoader loader, boolean hostImports, boolean component, boolean reactor,
+			boolean hostLogs, @Nullable String entry) {
 		this.loader = loader;
 		this.hostImports = hostImports;
 		this.component = component;
-		this.reactorModule = reactorModule;
+		this.reactor = reactor;
 		this.hostLogs = hostLogs;
 		this.entry = entry;
 	}
@@ -72,7 +73,12 @@ public final class JavaHostBoundary implements JavaBoundary {
 
 	@Override
 	public boolean reactorModule() {
-		return this.reactorModule;
+		return this.reactor && !this.component;
+	}
+
+	@Override
+	public boolean reportsUncaught() {
+		return !this.reactor;
 	}
 
 	@Override

@@ -7420,6 +7420,16 @@ public final class LispNames {
 	public static final String STR_FROM_OCTETS_INTERNAL = "%STR-FROM-OCTETS";
 
 	/**
+	 * The internal {@code rontolisp::%str-decode-raw} decoder: a string whose content
+	 * bytes are raw octets ({@link #STR_FROM_OCTETS_INTERNAL} runs joined, a socket line)
+	 * -&gt; the string they decode to: the string itself when they are well-formed UTF-8,
+	 * else a fresh one with each malformed sequence one U+FFFD under
+	 * {@link #OCTETS_TO_STRING_REPLACING_INTERNAL}'s rule (the JDK's decoder). See
+	 * {@link #STR_BYTE_LENGTH_INTERNAL}.
+	 */
+	public static final String STR_DECODE_RAW_INTERNAL = "%STR-DECODE-RAW";
+
+	/**
 	 * The internal {@code rontolisp::%sock-fail} signalling site of the {@code --native}
 	 * runner's socket provider ({@code runner-sockets.lisp}): the one place it signals a
 	 * host failure or a wrong-kind handle from. Its NAME is an exception-handling trigger

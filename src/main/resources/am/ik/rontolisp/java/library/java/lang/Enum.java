@@ -3,7 +3,9 @@
 // (.kb/java-frontend-provenance.md). Lowered with every program that declares an enum.
 package java.lang;
 
-public abstract class Enum<E extends Enum<E>> {
+import java.io.Serializable;
+
+public abstract class Enum<E extends Enum<E>> implements Serializable {
 
     private final String name;
 

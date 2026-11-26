@@ -3,13 +3,14 @@
 // (.kb/java-frontend-provenance.md). Lowered with every program that names it.
 package java.util;
 
+import java.io.Serializable;
 import java.util.function.Predicate;
 import java.util.function.UnaryOperator;
 import rontolisp.internal.Splits;
 
 // Cells linked both ways: a list, and a deque whose elements may be null. An index is
 // walked to from the nearer end.
-public class LinkedList<E> extends AbstractSequentialList<E> implements List<E>, Deque<E>, Cloneable {
+public class LinkedList<E> extends AbstractSequentialList<E> implements List<E>, Deque<E>, Cloneable, Serializable {
 
     static final class Cell<E> {
 

@@ -49,6 +49,11 @@ public interface JavaBoundary {
 		}
 
 		@Override
+		public boolean reportsUncaught() {
+			return true;
+		}
+
+		@Override
 		public boolean hostLogs() {
 			return false;
 		}
@@ -106,6 +111,17 @@ public interface JavaBoundary {
 	 * @return {@code true} for a {@code --no-wasi} module, not a component
 	 */
 	boolean reactorModule();
+
+	/**
+	 * Whether the target's host reads what a program writes of an exception nothing
+	 * caught: a command's or a component's standard error. A reactor's does not: a
+	 * {@code --no-wasi} module's standard error is a sink, and a {@code --no-gc} one has
+	 * no condition to write a line from, its error a trap with nothing written. There the
+	 * uncaught exception is the bare trap, and the exports of a {@code @WitExport} world
+	 * are lowered with no report.
+	 * @return {@code false} for a reactor, a component's included
+	 */
+	boolean reportsUncaught();
 
 	/**
 	 * Whether the build hands a program's log records to its host's log

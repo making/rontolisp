@@ -3,11 +3,12 @@
 // (.kb/java-frontend-provenance.md). Lowered with every program that names it.
 package java.util;
 
+import java.io.Serializable;
 import java.util.function.Consumer;
 import java.util.function.UnaryOperator;
 
 // A list over an array that grows by half when it is full.
-public class ArrayList<E> extends AbstractList<E> implements RandomAccess, Cloneable {
+public class ArrayList<E> extends AbstractList<E> implements RandomAccess, Cloneable, Serializable {
 
     private Object[] items;
 

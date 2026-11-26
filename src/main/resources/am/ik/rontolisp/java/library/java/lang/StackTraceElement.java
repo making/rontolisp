@@ -3,9 +3,11 @@
 // (.kb/java-frontend-provenance.md). Lowered with every program that names it.
 package java.lang;
 
+import java.io.Serializable;
+
 // A frame as a program makes one: the frames of a thrown exception are not kept, so
 // getStackTrace() answers none.
-public final class StackTraceElement {
+public final class StackTraceElement implements Serializable {
 
     private final String declaringClass;
 

@@ -2293,10 +2293,12 @@ final class JavaBridgeTemplate {
 			}
 			if (header.length == 6 && header[5] instanceof long[] packed) {
 				// The PACKED shape: the elements live unboxed in the long[] behind the
-				// length-6 header, with Long.MIN_VALUE as the nil sentinel.
+				// length-6 header, Long.MIN_VALUE standing for what the list holds at its
+				// slot -- nil, or that integer where one was stored.
 				List<@Nullable Object> elements = new ArrayList<>(packed.length);
-				for (long v : packed) {
-					elements.add(v == Long.MIN_VALUE ? null : v);
+				for (int i = 0; i < packed.length; i++) {
+					long v = packed[i];
+					elements.add(v != Long.MIN_VALUE ? (Object) v : list.size() > 1 + i ? list.get(1 + i) : null);
 				}
 				return marshalSequence(elements, target, out, index, functions, through, javaComponentOf(value));
 			}

@@ -3,6 +3,8 @@
 // (.kb/java-frontend-provenance.md). Lowered with every program that names it.
 package java.util;
 
+import java.io.Serializable;
+
 // What every map has once it can enumerate its entries.
 public abstract class AbstractMap<K, V> implements Map<K, V> {
 
@@ -195,7 +197,7 @@ public abstract class AbstractMap<K, V> implements Map<K, V> {
     }
 
     // An entry of its own, whose value can be set.
-    public static class SimpleEntry<K, V> implements Map.Entry<K, V> {
+    public static class SimpleEntry<K, V> implements Map.Entry<K, V>, Serializable {
 
         private final K key;
 
@@ -240,7 +242,7 @@ public abstract class AbstractMap<K, V> implements Map<K, V> {
     }
 
     // An entry of its own nothing changes.
-    public static class SimpleImmutableEntry<K, V> implements Map.Entry<K, V> {
+    public static class SimpleImmutableEntry<K, V> implements Map.Entry<K, V>, Serializable {
 
         private final K key;
 

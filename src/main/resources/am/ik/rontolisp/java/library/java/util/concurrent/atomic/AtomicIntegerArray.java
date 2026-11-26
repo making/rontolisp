@@ -6,10 +6,11 @@
 // on every target, with no compare-and-swap of the host's.
 package java.util.concurrent.atomic;
 
+import java.io.Serializable;
 import java.util.function.IntBinaryOperator;
 import java.util.function.IntUnaryOperator;
 
-public class AtomicIntegerArray {
+public class AtomicIntegerArray implements Serializable {
 
     private final int[] array;
 

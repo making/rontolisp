@@ -1382,30 +1382,9 @@ final class WasmArrayCompiler {
 	 */
 	static Map<String, DeclaredArrayTypes.Pin> functionBodyDeclaredPins(List<LispVal> bodyExprs,
 			WasmLispCompiler.Ctx ctx) {
-		Map<String, DeclaredArrayTypes.Pin> kinds = new java.util.HashMap<>(
-				DeclaredArrayTypes.declared(bodyExprs, ctx.closRegistry));
-		for (int i = 0; i < bodyExprs.size(); i++) {
-			LispVal form = bodyExprs.get(i);
-			if (form instanceof am.ik.rontolisp.LispString || isDeclareForm(form)) {
-				continue;
-			}
-			if (i == bodyExprs.size() - 1 && form instanceof LispCons wrapper && wrapper.isProperList()
-					&& wrapper.car() instanceof LispSymbol head && (LispNames.FN_BLOCK_INTERNAL.equals(head.name())
-							|| LispNames.BLOCK.equals(localName(head.name())))
-					&& wrapper.toList().size() >= 3) {
-				List<LispVal> wrapped = wrapper.toList();
-				DeclaredArrayTypes.declared(wrapped.subList(2, wrapped.size()), ctx.closRegistry)
-					.forEach(kinds::putIfAbsent);
-			}
-			break;
-		}
+		Map<String, DeclaredArrayTypes.Pin> kinds = DeclaredArrayTypes.functionBody(bodyExprs, ctx.closRegistry);
 		kinds.keySet().removeAll(ctx.specialVars);
 		return kinds.isEmpty() ? Map.of() : kinds;
-	}
-
-	private static boolean isDeclareForm(LispVal form) {
-		return form instanceof LispCons cons && cons.isProperList() && cons.car() instanceof LispSymbol head
-				&& LispNames.DECLARE.equals(localName(head.name()));
 	}
 
 	/**

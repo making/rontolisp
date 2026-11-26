@@ -1766,6 +1766,15 @@ cases:
               return a[i] * 3 + 1;
           }
 
+          // Long.MIN_VALUE stored into a long[] and read back, beside its neighbours
+          static long[] held(long v) {
+              long[] a = new long[3];
+              a[0] = v;
+              a[1] = a[0] + 1;
+              a[2] = a[1] - 1;
+              return a;
+          }
+
           static int stored(int[] a, int i) {
               a[i] = next();
               return a.length;
@@ -1826,6 +1835,8 @@ cases:
               attempt("declared long index", () -> System.out.println(scaled(new long[2], args.length + 5)));
               attempt("declared store", () -> System.out.println(stored(xs, 0)));
               System.out.println("indexes evaluated " + counted + " " + scaled(new long[] {1L << 60, 7}, 1));
+              long[] min = held(Long.MIN_VALUE);
+              System.out.println(scaled(min, 0) + " " + scaled(min, 1) + " " + Arrays.toString(min) + " " + Arrays.toString(Arrays.copyOf(min, 2)));
               try {
                   System.out.println(xs[1]);
               } catch (IllegalStateException | NullPointerException e) {
@@ -1874,6 +1885,7 @@ cases:
       declared long index: java.lang.ArrayIndexOutOfBoundsException: Index 5 out of bounds for length 2
       declared store: java.lang.NullPointerException true
       indexes evaluated 3 22
+      -9223372036854775807 -9223372036854775804 [-9223372036854775808, -9223372036854775807, -9223372036854775808] [-9223372036854775808, -9223372036854775807]
       multi-catch NullPointerException
   # try-with-resources is the statement the language specifies: the resources closed in
   # reverse, a null one skipped, an exception of close suppressed by the body's, a
@@ -14967,6 +14979,13 @@ cases:
                   tests.append(thing instanceof Serializable ? 'y' : 'n');
               }
               System.out.println(named + " " + boxed + " " + takes("t") + takes(4) + takes(serial) + " " + tests + " " + (Serializable.class.isAssignableFrom(Integer.class)) + (Serializable.class.isAssignableFrom(String.class)) + (Serializable.class.isAssignableFrom(Object.class)));
+              Serializable list = new ArrayList<String>();
+              Object[] library = {list, new HashMap<String, String>(), new java.math.BigDecimal(1), new RuntimeException(), Kind.ONE, java.time.Duration.ZERO, List.of(1), java.util.Collections.unmodifiableList(new ArrayList<String>()), java.util.Collections.emptyMap(), Comparator.naturalOrder(), Map.entry(1, 2), java.util.Optional.empty()};
+              StringBuilder kinds = new StringBuilder();
+              for (Object thing : library) {
+                  kinds.append(thing instanceof Serializable ? 'y' : 'n');
+              }
+              System.out.println(kinds + " " + takes(list) + " " + Serializable.class.isAssignableFrom(java.util.TreeSet.class) + Serializable.class.isAssignableFrom(Exception.class) + Serializable.class.isAssignableFrom(java.util.AbstractMap.class));
           }
 
           static String takes(Serializable s) {
@@ -14990,6 +15009,7 @@ cases:
       false true
       true true true false 45
       a 3 StringIntegerStringBuilder yyyyyyyyyynn truetruefalse
+      yyyyyyyyyynn ArrayList truetruefalse
   # A collection's clone() holds the same elements in a structure of its own, as a JDK's
   # orders them: a HashMap's table is made for the keys it holds, a Hashtable's is as long
   # as the original's; a LinkedList's clone adds each element with its own add, a
@@ -20415,6 +20435,13 @@ standalone:
               numbers[0] = "first";
               copied[3] = "last";
               System.out.println(numbers[0] + " " + numbers[3] + " " + copied[0] + " " + copied[2] + " " + copied[3]);
+              // Long.MIN_VALUE stored into a long[], copied and read back there
+              long[] words = new long[3];
+              words[1] = Long.MIN_VALUE;
+              long[] moved = new long[3];
+              System.arraycopy(words, 0, moved, 0, 3);
+              words[2] = words[1] + 1;
+              System.out.println(words[1] + " " + moved[1] + " " + words[2] + " " + moved[0] + moved[2]);
               // a thread started and not waited for ends before the program does
               new Thread(() -> System.out.println("last")).start();
           }
@@ -20445,6 +20472,7 @@ standalone:
       TERMINATED false main 2
       rounds stored apart wrong: 0
       first 30 0 20 last
+      -9223372036854775808 -9223372036854775808 -9223372036854775807 00
       last
   # wait gives up the monitor until a notify, a limit or an interrupt; a thread that
   # does not hold the monitor is refused; an interrupt is found where a thread sleeps
@@ -30160,11 +30188,15 @@ standalone:
   # `files:` is a further file of the run. It holds what surefire counts as skipped (an
   # assumption, `abort`, in a test and before all of a class's), the temporary
   # directories of `@TempDir` (the WASI legs preopen `/tmp`) and the arguments closed
-  # after their run.
+  # after their run. `q/LifecycleTest.java` holds what JUnit runs past one instance a
+  # test and the order declared: tests and what runs around them declared by interfaces,
+  # the TestInfo and its tags, a repeated test and its RepetitionInfo, a failure
+  # threshold, the orderers by name and by @Order, and one instance for all the tests.
   - name: a-file-of-tests-is-run-and-reported-as-junit-and-assertj-do
     file: p/SampleTest.java
     tests: [p.SampleTest, p.SecondTest, p.ThirdTest, p.FourthTest, p.FifthTest, q.OtherTest, q.DirectoryTest,
-            q.ClosedTest, q.AbortedTest, q.AfterAnAbortTest]
+            q.ClosedTest, q.AbortedTest, q.AfterAnAbortTest, q.LifecycleTest, q.SharedInstanceTest,
+            q.RepeatedOnlyTest, q.UnmadeTest]
     status: 1
     files:
       q/OtherTest.java: |
@@ -30358,6 +30390,238 @@ standalone:
             @Test
             void aborted() {
                 abort("first");
+            }
+
+        }
+      q/LifecycleTest.java: |
+        package q;
+
+        import java.nio.file.Files;
+        import java.nio.file.Path;
+        import java.util.stream.Stream;
+
+        import org.junit.jupiter.api.AfterAll;
+        import org.junit.jupiter.api.AfterEach;
+        import org.junit.jupiter.api.BeforeAll;
+        import org.junit.jupiter.api.BeforeEach;
+        import org.junit.jupiter.api.DisplayName;
+        import org.junit.jupiter.api.MethodOrderer;
+        import org.junit.jupiter.api.Nested;
+        import org.junit.jupiter.api.Order;
+        import org.junit.jupiter.api.RepeatedTest;
+        import org.junit.jupiter.api.RepetitionInfo;
+        import org.junit.jupiter.api.Tag;
+        import org.junit.jupiter.api.Test;
+        import org.junit.jupiter.api.TestInfo;
+        import org.junit.jupiter.api.TestInstance;
+        import org.junit.jupiter.api.TestMethodOrder;
+        import org.junit.jupiter.api.io.TempDir;
+        import org.junit.jupiter.params.ParameterizedTest;
+        import org.junit.jupiter.params.provider.MethodSource;
+
+        import static org.assertj.core.api.Assertions.assertThat;
+
+        @Tag("labelled")
+        interface Labelled {
+        }
+
+        // What an interface declares runs on the class implementing it: a static @BeforeAll, a
+        // default @BeforeEach and a default @Test, before what the classes declare.
+        @Tag("lifecycled")
+        interface Lifecycled extends Labelled {
+
+            @BeforeAll
+            static void interfaceAll() {
+                System.out.println("interface before all");
+            }
+
+            @BeforeEach
+            default void interfaceEach() {
+                System.out.println("interface before each");
+            }
+
+            @Test
+            default void fromTheInterface(TestInfo info) {
+                System.out.println("from the interface: " + info.getDisplayName());
+            }
+
+        }
+
+        // The tags: the class above's, each interface's, the class's own, trimmed, the invalid
+        // left out; a test's own first.
+        @Tag("above")
+        @Tag(" trimmed ")
+        @Tag("not valid")
+        abstract class Above implements Lifecycled {
+
+            @BeforeEach
+            void aboveEach() {
+                System.out.println("above before each");
+            }
+
+        }
+
+        // Tests ordered by their names; a constructor, what runs around and the tests given
+        // the TestInfo; a repeated test, its runs named and given their RepetitionInfo, one
+        // failing; the runs past a failure threshold skipped, an instance made for each; a
+        // repeated test of no run is an error.
+        @Tag("lifecycle")
+        @TestMethodOrder(MethodOrderer.MethodName.class)
+        class LifecycleTest extends Above implements Labelled {
+
+            LifecycleTest(TestInfo info) {
+                System.out.println("made for " + info.getDisplayName());
+            }
+
+            @BeforeAll
+            static void all(TestInfo info) {
+                System.out.println("all: " + info.getDisplayName() + " " + info.getTags() + " "
+                        + info.getTestClass().map(Class::getName).orElse("-") + " " + info.getTestMethod().isPresent());
+            }
+
+            @AfterEach
+            void after(TestInfo info) {
+                System.out.println("after " + info.getDisplayName() + " of "
+                        + info.getTestMethod().map(method -> method.getName()).orElse("-"));
+            }
+
+            @RepeatedTest(3)
+            @Tag("repeated")
+            void aRepeatedTest(RepetitionInfo repetition, TestInfo info) {
+                System.out.println("repetition " + repetition.getCurrentRepetition() + "/" + repetition.getTotalRepetitions()
+                        + " " + info.getDisplayName() + " " + info.getTags());
+                assertThat(repetition.getCurrentRepetition()).isNotEqualTo(2);
+            }
+
+            @RepeatedTest(value = 2, name = "{displayName} {currentRepetition}/{totalRepetitions}")
+            @DisplayName("named")
+            void bNamedRuns(TestInfo info, @TempDir Path dir) {
+                System.out.println("run " + info.getDisplayName() + " " + Files.isDirectory(dir));
+            }
+
+            @RepeatedTest(value = 4, failureThreshold = 1)
+            void cAThreshold(RepetitionInfo repetition) {
+                System.out.println("threshold " + repetition.getCurrentRepetition() + " of "
+                        + repetition.getFailureThreshold());
+                throw new IllegalStateException("over");
+            }
+
+            @RepeatedTest(0)
+            void dNoRun() {
+            }
+
+            @Test
+            void eLast() {
+                System.out.println("last");
+            }
+
+            @Nested
+            class Inner {
+
+                @Test
+                void inner(TestInfo info) {
+                    System.out.println("inner: " + info.getDisplayName() + " " + info.getTags() + " "
+                            + info.getTestClass().map(Class::getName).orElse("-"));
+                }
+
+            }
+
+        }
+
+        // One instance for all the tests, made before what runs before all, which is no static
+        // method, as what runs after all; tests ordered by their @Order, the others last; a
+        // source of arguments that is no static method; a nested class's tests in that instance.
+        @TestInstance(TestInstance.Lifecycle.PER_CLASS)
+        @TestMethodOrder(MethodOrderer.OrderAnnotation.class)
+        class SharedInstanceTest {
+
+            static int made;
+
+            int count;
+
+            SharedInstanceTest() {
+                made++;
+            }
+
+            @BeforeAll
+            void first(TestInfo info) {
+                System.out.println("first: " + info.getDisplayName() + ", made " + made + ", count " + this.count++);
+            }
+
+            @AfterAll
+            void last() {
+                System.out.println("last: count " + this.count);
+            }
+
+            @Test
+            @Order(3)
+            void c() {
+                System.out.println("c " + this.count++);
+            }
+
+            @Test
+            @Order(1)
+            void a() {
+                System.out.println("a " + this.count++);
+            }
+
+            @Test
+            void z() {
+                System.out.println("z " + this.count++);
+            }
+
+            Stream<String> words() {
+                return Stream.of("x", "y");
+            }
+
+            @ParameterizedTest
+            @Order(2)
+            @MethodSource("words")
+            void p(String word) {
+                System.out.println("p " + word + " " + this.count++);
+            }
+
+            @Nested
+            class Inner {
+
+                @Test
+                void inner() {
+                    System.out.println("inner: made " + made + ", count " + SharedInstanceTest.this.count);
+                }
+
+            }
+
+        }
+
+        // What runs before each repeated test is given its RepetitionInfo.
+        class RepeatedOnlyTest {
+
+            @BeforeEach
+            void each(RepetitionInfo repetition) {
+                System.out.println("before " + repetition.getCurrentRepetition() + " of " + repetition.getTotalRepetitions());
+            }
+
+            @RepeatedTest(2)
+            void repeated() {
+            }
+
+        }
+
+        // An instance for all the tests that cannot be made: nothing of the class runs.
+        @TestInstance(TestInstance.Lifecycle.PER_CLASS)
+        class UnmadeTest {
+
+            UnmadeTest() {
+                throw new IllegalStateException("not made");
+            }
+
+            @AfterAll
+            static void never() {
+                System.out.println("never");
+            }
+
+            @Test
+            void a() {
             }
 
         }
@@ -31029,10 +31293,95 @@ standalone:
       Tests run: 1, Failures: 0, Errors: 1, Skipped: 0 <<< FAILURE! -- in q.AfterAnAbortTest
       q.AfterAnAbortTest.aborted <<< ERROR!
       java.lang.IllegalStateException: after
+      Running q.LifecycleTest
+      interface before all
+      all: LifecycleTest [labelled, lifecycled, above, trimmed, lifecycle] q.LifecycleTest false
+      made for repetition 1 of 3
+      interface before each
+      above before each
+      repetition 1/3 repetition 1 of 3 [repeated, labelled, lifecycled, above, trimmed, lifecycle]
+      after repetition 1 of 3 of aRepeatedTest
+      made for repetition 2 of 3
+      interface before each
+      above before each
+      repetition 2/3 repetition 2 of 3 [repeated, labelled, lifecycled, above, trimmed, lifecycle]
+      after repetition 2 of 3 of aRepeatedTest
+      made for repetition 3 of 3
+      interface before each
+      above before each
+      repetition 3/3 repetition 3 of 3 [repeated, labelled, lifecycled, above, trimmed, lifecycle]
+      after repetition 3 of 3 of aRepeatedTest
+      made for named 1/2
+      interface before each
+      above before each
+      run named 1/2 true
+      after named 1/2 of bNamedRuns
+      made for named 2/2
+      interface before each
+      above before each
+      run named 2/2 true
+      after named 2/2 of bNamedRuns
+      made for repetition 1 of 4
+      interface before each
+      above before each
+      threshold 1 of 1
+      after repetition 1 of 4 of cAThreshold
+      made for repetition 2 of 4
+      made for repetition 3 of 4
+      made for repetition 4 of 4
+      made for eLast()
+      interface before each
+      above before each
+      last
+      after eLast() of eLast
+      made for fromTheInterface(TestInfo)
+      interface before each
+      above before each
+      from the interface: fromTheInterface(TestInfo)
+      after fromTheInterface(TestInfo) of fromTheInterface
+      Running q.LifecycleTest$Inner
+      made for inner(TestInfo)
+      interface before each
+      above before each
+      inner: inner(TestInfo) [labelled, lifecycled, above, trimmed, lifecycle] q.LifecycleTest$Inner
+      after inner(TestInfo) of inner
+      Tests run: 1, Failures: 0, Errors: 0, Skipped: 0 -- in q.LifecycleTest$Inner
+      Tests run: 12, Failures: 1, Errors: 2, Skipped: 3 <<< FAILURE! -- in q.LifecycleTest
+      q.LifecycleTest.aRepeatedTest[2] <<< FAILURE!
+
+      Expecting actual:
+        2
+      not to be equal to:
+        2
+
+      q.LifecycleTest.cAThreshold[1] <<< ERROR!
+      java.lang.IllegalStateException: over
+      q.LifecycleTest.dNoRun <<< ERROR!
+      org.junit.platform.commons.PreconditionViolationException: Configuration error: @RepeatedTest on method [void q.LifecycleTest.dNoRun()] must be declared with a positive 'value'.
+      Running q.SharedInstanceTest
+      first: SharedInstanceTest, made 1, count 0
+      a 1
+      p x 2
+      p y 3
+      c 4
+      z 5
+      Running q.SharedInstanceTest$Inner
+      inner: made 1, count 6
+      Tests run: 1, Failures: 0, Errors: 0, Skipped: 0 -- in q.SharedInstanceTest$Inner
+      last: count 6
+      Tests run: 5, Failures: 0, Errors: 0, Skipped: 0 -- in q.SharedInstanceTest
+      Running q.RepeatedOnlyTest
+      before 1 of 2
+      before 2 of 2
+      Tests run: 2, Failures: 0, Errors: 0, Skipped: 0 -- in q.RepeatedOnlyTest
+      Running q.UnmadeTest
+      Tests run: 1, Failures: 0, Errors: 1, Skipped: 0 <<< FAILURE! -- in q.UnmadeTest
+      q.UnmadeTest <<< ERROR!
+      java.lang.IllegalStateException: not made
 
       Results:
 
-      Tests run: 56, Failures: 12, Errors: 3, Skipped: 7
+      Tests run: 78, Failures: 13, Errors: 6, Skipped: 10
 refused:
   scaffold: |
     class Refused {

@@ -3,10 +3,12 @@
 // (.kb/java-frontend-provenance.md). Lowered with every program that names it.
 package java.util;
 
+import java.io.Serializable;
+
 // A map that tells keys, and values, apart by ==: a table of chains placed by
 // System.identityHashCode, doubled when it is three quarters full. The order it is walked
 // in is the table's, which the specification leaves open.
-public class IdentityHashMap<K, V> extends AbstractMap<K, V> implements Cloneable {
+public class IdentityHashMap<K, V> extends AbstractMap<K, V> implements Cloneable, Serializable {
 
     static final class Node<K, V> implements Map.Entry<K, V> {
 

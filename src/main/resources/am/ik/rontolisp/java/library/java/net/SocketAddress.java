@@ -3,7 +3,9 @@
 // (.kb/java-frontend-provenance.md). Lowered with every program that names it.
 package java.net;
 
-public abstract class SocketAddress {
+import java.io.Serializable;
+
+public abstract class SocketAddress implements Serializable {
 
     public SocketAddress() {
     }

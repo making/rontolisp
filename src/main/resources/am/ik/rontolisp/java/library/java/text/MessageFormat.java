@@ -8,6 +8,7 @@
 // and arguments (.kb/java-frontend.md, "The library").
 package java.text;
 
+import java.io.Serializable;
 import java.util.ArrayList;
 import java.util.Locale;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -15,7 +16,7 @@ import java.util.concurrent.atomic.AtomicLong;
 
 import rontolisp.internal.Exact;
 
-public class MessageFormat implements Cloneable {
+public class MessageFormat implements Cloneable, Serializable {
 
     /** The format types a JDK knows, by their lower-case names: each refused by name. */
     private static final String[] TYPES = {"number", "date", "time", "choice", "list", "dtf_date", "dtf_time",

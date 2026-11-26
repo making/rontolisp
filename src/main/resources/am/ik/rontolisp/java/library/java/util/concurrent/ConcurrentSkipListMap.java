@@ -3,6 +3,7 @@
 // (.kb/java-frontend-provenance.md). Lowered with every program that names it.
 package java.util.concurrent;
 
+import java.io.Serializable;
 import java.util.AbstractCollection;
 import java.util.AbstractSet;
 import java.util.Collection;
@@ -20,7 +21,7 @@ import rontolisp.internal.Splits;
 // A sorted map threads share: a TreeMap under this map's monitor (Ordered). An iterator
 // gives the entry it read ahead and reads the next one by the key it gave, so it never
 // refuses, may give an entry removed since it was read, and sees what was put beyond it.
-public class ConcurrentSkipListMap<K, V> extends Ordered<K, V> implements Cloneable {
+public class ConcurrentSkipListMap<K, V> extends Ordered<K, V> implements Cloneable, Serializable {
 
     public ConcurrentSkipListMap() {
         super(null, new TreeMap<K, V>(), null, true, null, false, true, null, false, false);
@@ -52,7 +53,7 @@ public class ConcurrentSkipListMap<K, V> extends Ordered<K, V> implements Clonea
         }
     }
 
-    static final class SubMap<K, V> extends Ordered<K, V> {
+    static final class SubMap<K, V> extends Ordered<K, V> implements Serializable {
 
         SubMap(Object lock, TreeMap<K, V> tree, NavigableMap<K, V> engine, boolean fromStart, K lo,
                 boolean loInclusive, boolean toEnd, K hi, boolean hiInclusive, boolean descending) {

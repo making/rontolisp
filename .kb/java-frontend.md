@@ -1401,7 +1401,10 @@ exports the component's entry points.** The user's request (2026-11-24): the opp
 - **Uncaught** (`JavaLowering.reportingExports`): the top level is `(%reporting-uncaught
   #'line nil init..)`, so an export call, and the initialization its first call runs, write
   the line a command writes (`Exception in thread "main" ...`) and trap; `after` is nil, a
-  host call ending as a trap. It is what a command pays, on wasm-GC EH mode: measured
+  host call ending as a trap. Not on a reactor (`JavaBoundary.reportsUncaught`): a
+  `--component --no-wasi` component imports nothing, its standard error a sink (the counter
+  7,202 -> 6,748 B without the report, 2026-11-26), and `--no-gc` has no condition to write a
+  line from. It is what a command pays, on wasm-GC EH mode: measured
   2026-11-25, `examples/java/rust-calls-java`'s counter 7,853 -> 15,056 B, gzip 4,006 -> 6,961
   (EH mode and the `%warn` +4.1 KB, `%java-uncaught-line` and the host-report readers +3.1 KB), a counter
   that throws 3,898 -> 43,738 B, the same code as a command 49,226 B. The `--no-wasi`
@@ -1412,7 +1415,7 @@ exports the component's entry points.** The user's request (2026-11-24): the opp
   Lisp one of `examples/wit/rust-calls-lisp` 3,879 B over `(find c "aeiouAEIOU")`.
 - **Pinned by** `JavaWitImportTest.aClassImplementsTheWorldAComponentExports` (each scalar kind,
   an interface, static state, each refusal, no `wasi:cli/exit`; JDK, interpreter, JVM,
-  component) and
+  component, the `--no-gc` component and its bare trap) and
   `examples.yaml`'s `java/rust-calls-java`; by hand, the example's `CounterTest` under
   `rontolisp test`, `MavenBuildE2eTest` with no `<mainClass>`.
 
@@ -1491,9 +1494,14 @@ is a trap", "Exact mode"), so no backend learns a Java name.**
   assigned during a call (the call's memory is given back when it ends). At the innermost form
   the lowering locates, or with the chain of methods that reached a library's function.
 - **A command is refused** (`exports nothing`): a `main` makes one, and the scalar module is a
-  reactor (`.todo/111`). **`--component` is refused by name** (`CompileFrontend.run`): a Java
-  component's exports are a `@WitExport` world, whose uncaught report needs a condition --
-  `.todo/m47-a-java-witexport-world-on-no-gc-component.md`.
+  reactor (`.todo/111`).
+- **`--component`: a `@WitExport` world** ("WIT exports"), the lowering the GC component's but
+  for the report (`JavaBoundary.reportsUncaught`, false on every reactor): the initialization
+  is the top level as is, the start function's, and an uncaught exception the bare trap.
+  Measured 2026-11-26: `rust-calls-java`'s counter with `indexOf(char)` written as `==`s 2,040
+  / 1,075 B gzip against 12,988 / 5,913 as a wasm-GC component (the example as written,
+  15,076, stops at `position` in `%java-index-of-char`: the nil-or-integer of `indexOf`);
+  `JavaWitImportTest`'s `Kinds` with its `StringBuilder` a `String`, 2,226 B.
 - **Pinned by** `JavaReactorTest.aReactorOfScalarValuesCompilesWithNoGcAndWhatLeavesTheSubsetIsRefusedByName`
   (a JDK against the module under node, no glue; the traps; the refusals),
   `RontoLispCliStreamsTest.aJavaFileRunsCompilesAndIsRefusedWhereItCannot` (a command).
@@ -1580,9 +1588,10 @@ JDK in the front end's semantics, the library and the host.
   run: an annotation of a package under `org.junit.` that `JavaTests.RAN` does not hold
   (JUnit 4's included), an element of one it holds that the run does not read, one on an
   annotation type (a composed annotation, whose methods JUnit runs), a parameterized test's
-  parameter of JUnit's type (`ArgumentsAccessor`, `TestInfo`, `Named`), which JUnit makes,
-  and a test or lifecycle method an interface declares (JUnit runs it on the implementing
-  class; the runner walks superclasses only).
+  parameter of JUnit's type (`ArgumentsAccessor`, `TestInfo`, `Named`), which JUnit makes
+  (a `TestInfo`'s display name would show the arguments), an orderer other than
+  `OrderAnnotation`/`MethodName`/`DisplayName`, a `RepetitionInfo` given around a test that
+  is not repeated (JUnit: a `ParameterResolutionException` of that test).
 - **JUnit's rules for a source written twice and a `Named` argument**
   (`doc/en/java/testing.md`), pinned by `p.FifthTest` of the corpus case: measured,
   `@CsvSource("a") @ValueSource("b") @CsvSource("c")` runs a, c, b (javac's container;
@@ -1627,10 +1636,45 @@ JDK in the front end's semantics, the library and the host.
 - **The tree's suites that run** (`JavaSpecE2eTest#theSuitesOfTheTreesModulesRunUnchanged`,
   four backends): `SqlTest`, `ScramTest`, `TargetTest` of `jdbc-postgresql` and
   `UrlCodecTest` of `servlet-httpserver` (65 runs), green as they are, none failing under
-  rontolisp only; the six others need a server, a container or the checks by reflection
-  (`.todo/m33`). A program that is no run of tests holds none of it: the lowering changes
+  rontolisp only. **The six others stop at the library or the host, not the runner**
+  (measured 2026-11-26): `ServletHttpServerTest` at `java.lang.Process` (`ss` for the accept
+  backlog), then `URLClassLoader` and TLS (`SSLContext`, `KeyStore`); `ServletContainerTest`
+  and `DiscoveryTest` at Tomcat's and Jetty's classes (`Container.java`) and `javax.tools`;
+  `PostgresDriverTest` at Testcontainers; `ConformanceTest` (webmvc-fn-lite) at
+  `javax.tools.JavaCompiler`; `KeyValueSessionStoreTest` (with `servlet-httpserver` and
+  `rontolisp-java-api` on the source path) at `KeyValueStore.Bucket` not found from the test
+  file, then the recursive comparison, and on Preview 1 the `@WitImport` store
+  (`.todo/m61`, `.todo/m62`). A program that is no run of tests holds none of it: the lowering changes
   only where `javaTests` is set or a test package of the library's is named
   (`examples/java/shop` 323,921 B, byte-identical across l87).
+- **Past one instance a test and the order declared: measured** (JUnit 6.0.3, 2026-11-26;
+  pinned by the corpus case's `q/LifecycleTest.java`, four backends against the oracle).
+  The class's members are read level by level from the top (`JavaTests.levels`): for each
+  class from the class above all down, its interfaces not yet seen (each after those it
+  extends), then the class -- so an interface's `@BeforeEach` runs before its implementing
+  class's, a superclass's interface's before the superclass's. A method a later class (or
+  a subinterface) redeclares is no test. An interface's static `@BeforeAll` runs.
+  `@TestInstance` and `@TestMethodOrder` are found on the class, then its interfaces in the
+  order named (depth first), then the class above (`inherited`); a `@Nested` class takes the
+  enclosing class's orderer but not its lifecycle. Tags (`TestInfo.getTags`): the method's,
+  then the class's (the class above's, each interface's, own, in the order written), then
+  the enclosing class's, trimmed, invalid ones (`@Tag`'s documented syntax) dropped, first
+  kept. A method's display name is `name(SimpleTypes)`, a class's its simple name. Ordering
+  happens at run time (`TestRun.ordered`): `@Order`'s value is an expression of the holder;
+  `Order.DEFAULT` for none; equal names by the parameters' qualified types (consistent with
+  every probe). `PER_CLASS`: the instance made before `@BeforeAll` (its fields' `@TempDir`
+  still per test); a constructor that throws is the class's error and NO `@AfterAll` runs,
+  static ones neither; a non-static `@MethodSource` runs on it. `@RepeatedTest`: checks in
+  the order value, threshold (`Integer.MAX_VALUE`, the default, or `0 < t < value`), blank
+  name, each a `PreconditionViolationException` of the test naming the method as
+  `Method.toString` does; a run past the threshold still MAKES the instance (its constructor
+  runs, and one that throws is that run's error), then is skipped; an abort is no failure;
+  `{displayName}` is replaced first. Refused instead of matched: a constructor `@TempDir`
+  under `PER_CLASS` or of a repeated test with a threshold (unprobed). Cost (wasm, one test):
+  `TestInfo` +6.0 KB (the tag set made in `getTags`, else a `LinkedHashSet` +49 KB;
+  `getTestMethod` costs only where called), `@RepeatedTest` +11.1 KB; a run with none of it,
+  the two tree suites and `examples/java/shop` byte-identical (`TestRun.repetition` is a
+  method of its own for that).
 - **Skips, `@TempDir`, closed arguments: measured** (JUnit 6.0.3, surefire 3.6.0, 2026-11-25).
   Surefire counts a skipped CLASS as its direct children (each test, a parameterized test
   one, each `@Nested` class one): `@Disabled` on a class of two tests is `Tests run: 2,
@@ -4501,8 +4545,8 @@ names throw). Written from the standards and JDK 25's answers to probes.
   shared by shape) carry. Hoisting SHA-3's 59 round temporaries out of its loop changed
   nothing (389 ms); a declared local read mostly raw is one `long` slot, a tree over such slots
   computed in place (l73, [jvm-int-fusion.md](jvm-int-fusion.md), "Exact locals"): SHA3-256
-  62-112 ms on Graal, 85-203 on C2. SHA-512 is unchanged on Graal, its arrays' reads and
-  stores still boxed (`.todo/m28`).
+  62-112 ms on Graal, 85-203 on C2. Their arrays read and stored raw: SHA-512 Graal 120-132 ->
+  91-106 ms, C2 335-504 -> 138-161 ([jvm-int-fusion.md](jvm-int-fusion.md), "Declared arrays").
 - **Sizes** (Preview 1 / component / JVM class, bytes): a program naming no digest is
   byte-identical: l72 left `NoDigest`, `RandomOnly`, `Constant`, `Computed`, `Login` and
   `RandomText` so in all three forms, `examples/java/shop` on wasm (324,175 / 335,139; its JVM
@@ -4689,9 +4733,10 @@ once.
   enhanced `for` take `(the (simple-array E (*)) (or a (%java-npe)))`. A null array's access
   evaluates its index (and a store its value) before the backends' check raises what
   `%java-exception-of` makes `NullPointerException` (`.kb/declarations-type-checks.md`,
-  "Declaration-driven array emission"). The interpreter and the JVM read no array declaration;
-  the wasm kinds and a general array's integer elements do (`.kb/wasm-int-fusion.md`, "Ranges,
-  and sites with nothing to bail on"). Measured on wasm: a
+  "Declaration-driven array emission"). The interpreter reads no array declaration; the wasm
+  kinds and a general array's integer elements do (`.kb/wasm-int-fusion.md`, "Ranges, and sites
+  with nothing to bail on"), and the JVM's fused reads and stores take the pinned arm
+  (`.kb/jvm-int-fusion.md`, "Declared arrays"). Measured on wasm: a
   `long[1000]` summed 10^5 times 93.8 -> 1.44 s, 2,000,000 zone offsets 4.83 -> 2.59 s. **The
   premise (the dispatch's bytes) held only where nothing had pinned the array**: the type-test
   fold had already cut each undeclared site to the general arm, `make-array` inits made arrays
@@ -4831,10 +4876,27 @@ a class that does not override it reaches an override below.**
   `BigInteger`), `Boolean`, `Character`. Measured (2026-11-26): a program naming no
   `Serializable` is byte-identical on wasm and component (`.class` of a Java program differs
   run to run, 140,778 / 140,782 B from one jar); `instanceof Serializable` over strings and
-  boxes costs 776 B of wasm in a 117 KB program (also holding `ArrayList` and `BigInteger`). The
-  library's Java-source classes (`ArrayList`, ...) do not declare it yet: `.todo/m54`.
-- Pins: java-spec `an-object-is-copied-by-clone-where-its-class-is-cloneable` (the intrinsics'
-  `Serializable`), `the-library-s-collections-clone-what-they-hold`, the `refused:` cases `clone-*`,
+  boxes costs 776 B of wasm in a 117 KB program (also holding `ArrayList` and `BigInteger`).
+  **The library's Java-source classes declare it where a JDK 25 does** (2026-11-26; surveyed by
+  a probe: `Serializable.class.isAssignableFrom` of each library class against the JDK's, the
+  nested public classes through `getClasses()`, the factories' results through `instanceof` in
+  one program run on the JDK and here): the roots (`Throwable`, `Enum`, `Class`, the collections,
+  `Duration`, `Locale`, `Random`, `Pattern`, the atomics, the locks, the
+  `Clock`s ...), the internal classes standing for a JDK's serializable one (`Collections`'s
+  `Few*`, `SetFromMap`, `UnmodifiableCollection`; `ImmutableCollections`' `ListN`, `SetN`,
+  `MapN`, `ListView`, `Entries`, `SequencedView`; `Synchronized`'s `Each`, `MapOf`;
+  `TreeMap.View`, `ConcurrentSkipListMap.SubMap`), and the library's comparator lambdas, cast
+  `(Comparator<T> & Serializable)` (free: `Comparator.comparing(..).reversed()` is
+  byte-identical). **Measured**: a program naming no `Serializable` is byte-identical on wasm
+  with `ArrayList`, `HashMap`, `TreeSet`, `ArrayDeque`, `LinkedList`, enums, exceptions,
+  `Comparator`, `List.of`, `Collections.unmodifiableList`, `Arrays.asList`, `Set.of`, `Map.of`;
+  `Collections.synchronizedList` costs 20 B; naming `Serializable` costs 688 B in a 182 KB
+  program holding a dozen of the classes. **Where the library still differs** (each answers
+  `true` where a JDK 25 answers `false`, from a view class extending a serializable one):
+  `List.of(..).subList`, `Map.of(..).keySet()`, `TreeMap.keySet()`/`navigableKeySet()`,
+  `ConcurrentSkipListMap.keySet()`.
+- Pins: java-spec `an-object-is-copied-by-clone-where-its-class-is-cloneable` (`Serializable` of the
+  intrinsics and of the library's classes), `the-library-s-collections-clone-what-they-hold`, the `refused:` cases `clone-*`,
   `an-override-of-clone-*` and `an-enum-*`, the reflection case's `int[]`; `JavaLoweringTest`
   (`Process`, the final method of a static member class, a weaker access);
   `java-http-server-spec.yaml`'s servlet case

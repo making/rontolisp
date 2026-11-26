@@ -9,10 +9,11 @@
 // thread reads or writes -- and for ever when it reads itself, as the API says.
 package java.util.concurrent.locks;
 
+import java.io.Serializable;
 import java.util.ArrayList;
 import java.util.concurrent.TimeUnit;
 
-public class ReentrantReadWriteLock implements ReadWriteLock {
+public class ReentrantReadWriteLock implements ReadWriteLock, Serializable {
 
     /** How many times one thread holds the read lock. */
     private static final class Reading {
@@ -239,7 +240,7 @@ public class ReentrantReadWriteLock implements ReadWriteLock {
         return identity(this) + "[Write locks = " + this.writes + ", Read locks = " + this.reads + "]";
     }
 
-    public static class ReadLock implements Lock {
+    public static class ReadLock implements Lock, Serializable {
 
         private final ReentrantReadWriteLock lock;
 
@@ -282,7 +283,7 @@ public class ReentrantReadWriteLock implements ReadWriteLock {
         }
     }
 
-    public static class WriteLock implements Lock {
+    public static class WriteLock implements Lock, Serializable {
 
         private final ReentrantReadWriteLock lock;
 

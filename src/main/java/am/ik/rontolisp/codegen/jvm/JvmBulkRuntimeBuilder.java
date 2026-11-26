@@ -762,7 +762,8 @@ final class JvmBulkRuntimeBuilder {
 		// end, 24 = a place, 25 = a long[] of unboxed elements, 26 = a key, 28-29 = the
 		// or of the words, 30-31 = their and, 33 = an array swapped, 34 = j or a run's
 		// start, 35 = the low byte's complement (255 when descending), 36 = out's
-		// list, 37 = the list the answer is read from, 38 = its header.
+		// list, 37 = the list the answer is read from, 38 = its header, 39 = a slot of
+		// that list.
 		ClassEntry intArrayClass = this.cp.classEntry("[I");
 		MethodRefEntry word = this.cp.methodRef(selfClass, WORD, WORD_DESC);
 		MethodRefEntry merge = this.cp.methodRef(selfClass, MERGE, MERGE_DESC);
@@ -985,7 +986,8 @@ final class JvmBulkRuntimeBuilder {
 			a.lload(12).invokestatic(this.longValueOf);
 			a.goto_(put);
 			a.labelBinding(isNil);
-			a.aconst_null();
+			a.aload(16).iload(11).iaload().loadConstant(1).iadd().istore(39);
+			JvmArrayRuntimeBuilder.emitSentinelElement(a, this.listClass, this.listGet, this.listSize, 37, 39);
 			a.labelBinding(put);
 			a.invokevirtual(this.listSet).pop();
 			a.iinc(11, 1);
@@ -1017,7 +1019,7 @@ final class JvmBulkRuntimeBuilder {
 	private MethodCode buildCopy() {
 		// Slots: 0..4 = the arguments, 5 = dst's header, 6 = src's, 7 = dst's list,
 		// 8 = src's, 9 = start1, 10 = start2, 11 = n, 12 = i, 13 = src's long[],
-		// 14-15 = an unboxed element.
+		// 14-15 = an unboxed element, 16 = its slot in src's list.
 		MethodCode a = new MethodCode();
 		MethodCode.Label nil = a.newLabel();
 		MethodCode.Label boxedDst = a.newLabel();
@@ -1036,8 +1038,14 @@ final class JvmBulkRuntimeBuilder {
 		a.aload(0).checkcast(this.listClass).astore(7);
 		a.aload(1).checkcast(this.listClass).astore(8);
 		a.aload(5).arraylength().loadConstant(6).if_icmpne(boxedDst);
-		// both unboxed: one copy of the longs, nil's stand-in among them
+		// both unboxed: one copy of the longs, nil's stand-in among them, where no list
+		// holds the integer a sentinel stands for (emitSentinelElement), which the copy
+		// would lose or a stale one replace
 		a.aload(6).arraylength().loadConstant(6).if_icmpne(nil);
+		if (!this.concurrent) {
+			a.aload(7).invokevirtual(this.listSize).loadConstant(1).if_icmpne(nil);
+			a.aload(8).invokevirtual(this.listSize).loadConstant(1).if_icmpne(nil);
+		}
 		a.aload(6).loadConstant(5).aaload().checkcast(this.longArrayClass).astore(13);
 		a.iload(10).i2l().iload(11).i2l().ladd().aload(13).arraylength().i2l().lcmp().ifgt(nil);
 		a.iload(9).i2l().iload(11).i2l().ladd();
@@ -1079,7 +1087,8 @@ final class JvmBulkRuntimeBuilder {
 			a.lload(14).invokestatic(this.longValueOf);
 			a.goto_(put);
 			a.labelBinding(isNil);
-			a.aconst_null();
+			a.iload(10).iload(12).iadd().loadConstant(1).iadd().istore(16);
+			JvmArrayRuntimeBuilder.emitSentinelElement(a, this.listClass, this.listGet, this.listSize, 8, 16);
 			a.labelBinding(put);
 			a.invokevirtual(this.listSet).pop();
 			a.iinc(12, 1);

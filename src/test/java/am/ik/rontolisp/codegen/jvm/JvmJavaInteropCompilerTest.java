@@ -263,7 +263,9 @@ class JvmJavaInteropCompilerTest {
 	}
 
 	// A rank-1 vector (the runtime ArrayList representation) marshals like a list;
-	// string elements select the CharSequence[] varargs parameter of String.join.
+	// string elements select the CharSequence[] varargs parameter of String.join. A
+	// packed vector's most-negative long is the integer a store put there, beside its
+	// nil (.kb/adjustable-arrays.md).
 	@Test
 	void vectorMarshalsToArrayParameter() throws Exception {
 		assertThat(compileAndRun("""
@@ -271,7 +273,10 @@ class JvmJavaInteropCompilerTest {
 				(setf (aref v 0) "a")
 				(setf (aref v 1) "b")
 				(print (java:static "java.lang.String" "join" "-" v))
-				""")).isEqualTo("\"a-b\"");
+				(setq w (make-array 3))
+				(setf (aref w 1) -9223372036854775808)
+				(print (java:static "java.util.Arrays" "toString" w))
+				""")).isEqualTo("\"a-b\"\n\"[null, -9223372036854775808, null]\"");
 	}
 
 	@Test

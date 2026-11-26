@@ -1166,7 +1166,8 @@ final class JvmArrayRuntimeBuilder {
 		// index). Follows the displacement chain: while the header is a 5-element
 		// {dims, fp, adj, target, offset} with a non-null target, add the offset and
 		// hop to the target list. A length-6 header is the PACKED shape: the element is
-		// read from the long[] in header[5] (the sentinel reads back as nil).
+		// read from the long[] in header[5], the sentinel as what the list holds at idx
+		// -- the integer itself where one was stored, else nil (sentinelElement).
 		// Locals: 0 = list, 1 = idx, 2 = header, 3/4 = v (long), 5 = the string, 6 = a
 		// code point, 7 = the target (the walk's own copy where threads can run).
 		MethodCode rg = new MethodCode();
@@ -1196,7 +1197,7 @@ final class JvmArrayRuntimeBuilder {
 		rg.ldc(nilSentinel);
 		rg.lcmp();
 		rg.ifne(rgBox);
-		rg.aconst_null();
+		emitSentinelElement(rg, arrayListClass, alGet, alSize, 0, 1);
 		rg.areturn();
 		rg.labelBinding(rgBox);
 		rg.lload(3);
@@ -1248,12 +1249,13 @@ final class JvmArrayRuntimeBuilder {
 		methods.add(new ArrayMethod(cp.utf8Entry(RM_GET), cp.utf8Entry(RM_GET_DESC), rg));
 
 		// _rmSet(list, idx, val): the single data-write primitive; returns val. A
-		// PACKED array (length-6 header) stores an in-range Long unboxed; any other
-		// value -- or the sentinel integer itself -- widens the array in place first
-		// and falls through to the boxed store. Where another thread can store into the
-		// array the packed store also stores val into the list's own slot, which
-		// _arrayMake made: the boxed elements are the array the moment a widening's
-		// header lands, whichever thread stored them.
+		// PACKED array (length-6 header) stores a Long unboxed -- the sentinel integer
+		// itself as the sentinel, with the Long in the list's own slot, which grows to
+		// one slot per element the first time (sentinelElement); any other value widens
+		// the array in place first and falls through to the boxed store. Where another
+		// thread can store into the array the packed store also stores val into the
+		// list's own slot, which _arrayMake made: the boxed elements are the array the
+		// moment a widening's header lands, whichever thread stored them.
 		// Locals: 0 = list, 1 = idx, 2 = val, 3 = header, 4/5 = v (long), 6 = the vector
 		// promoted, 7 = the target (the walk's own copy where threads can run), 8.. the
 		// packed-target store's.
@@ -1277,10 +1279,43 @@ final class JvmArrayRuntimeBuilder {
 		rs.checkcast(longClass);
 		rs.invokevirtual(longLongValue);
 		rs.lstore(4);
-		rs.lload(4);
-		rs.ldc(nilSentinel);
-		rs.lcmp();
-		rs.ifeq(rsWiden);
+		if (!concurrent) {
+			// Where the list holds no element of its own, the integer the sentinel
+			// stands for is held by the list at idx: it grows to one slot per element,
+			// nil for the rest, the first time. Where threads can run every store
+			// stores the box there already (below).
+			MethodCode.Label rsRaw = rs.newLabel();
+			MethodCode.Label rsGrow = rs.newLabel();
+			MethodCode.Label rsGrown = rs.newLabel();
+			rs.lload(4);
+			rs.ldc(nilSentinel);
+			rs.lcmp();
+			rs.ifne(rsRaw);
+			rs.labelBinding(rsGrow);
+			rs.aload(0);
+			rs.checkcast(arrayListClass);
+			rs.invokevirtual(alSize);
+			rs.aload(3);
+			rs.loadConstant(5);
+			rs.aaload();
+			rs.checkcast(longArrayClass);
+			rs.arraylength();
+			rs.if_icmpgt(rsGrown);
+			rs.aload(0);
+			rs.checkcast(arrayListClass);
+			rs.aconst_null();
+			rs.invokevirtual(alAdd);
+			rs.pop();
+			rs.goto_(rsGrow);
+			rs.labelBinding(rsGrown);
+			rs.aload(0);
+			rs.checkcast(arrayListClass);
+			rs.iload(1);
+			rs.aload(2);
+			rs.invokevirtual(alSet);
+			rs.pop();
+			rs.labelBinding(rsRaw);
+		}
 		rs.aload(3);
 		rs.loadConstant(5);
 		rs.aaload();
@@ -1466,11 +1501,12 @@ final class JvmArrayRuntimeBuilder {
 
 		// _arrayWiden(list): converts a PACKED array (length-6 header, long[] data) to
 		// the boxed shape IN PLACE -- header replaced by {dims, null, null, null, et},
-		// each long[] element appended boxed (the sentinel as null/nil), or where another
+		// each long[] element stored boxed (the sentinel as what the list holds at its
+		// slot, sentinelElement, in place where the list has one), or where another
 		// thread can store into the array the header alone (below). A non-packed array
 		// passes through untouched; the ArrayList object is the array's identity, so
 		// every alias sees the widened shape.
-		// Locals: 0 = list, 1 = header, 2 = data, 3 = i, 4/5 = v (long).
+		// Locals: 0 = list, 1 = header, 2 = data, 3 = i, 4/5 = v (long), 6 = i + 1.
 		MethodCode wd = new MethodCode();
 		MethodCode.Label wdDone = wd.newLabel();
 		MethodCode.Label wdLoop = wd.newLabel();
@@ -1538,7 +1574,10 @@ final class JvmArrayRuntimeBuilder {
 			wd.aastore();
 			wd.invokevirtual(alSet);
 			wd.pop();
-			// for (i = 0; i < data.length; i++) list.add(box(data[i]))
+			// for (i = 0; i < data.length; i++) the element boxed into list slot i + 1,
+			// set where the list holds one (a sentinel's integer), else added
+			MethodCode.Label wdSet = wd.newLabel();
+			MethodCode.Label wdNext = wd.newLabel();
 			wd.loadConstant(0);
 			wd.istore(3);
 			wd.labelBinding(wdLoop);
@@ -1546,24 +1585,44 @@ final class JvmArrayRuntimeBuilder {
 			wd.aload(2);
 			wd.arraylength();
 			wd.if_icmpge(wdDone);
+			wd.iload(3);
+			wd.loadConstant(1);
+			wd.iadd();
+			wd.istore(6);
 			wd.aload(2);
 			wd.iload(3);
 			wd.laload();
 			wd.lstore(4);
-			wd.aload(0);
-			wd.checkcast(arrayListClass);
 			wd.lload(4);
 			wd.ldc(nilSentinel);
 			wd.lcmp();
 			wd.ifne(wdBox);
-			wd.aconst_null();
+			emitSentinelElement(wd, arrayListClass, alGet, alSize, 0, 6);
 			wd.goto_(wdAdd);
 			wd.labelBinding(wdBox);
 			wd.lload(4);
 			wd.invokestatic(longValueOf);
 			wd.labelBinding(wdAdd);
+			wd.aload(0);
+			wd.checkcast(arrayListClass);
+			wd.invokevirtual(alSize);
+			wd.iload(6);
+			wd.if_icmpgt(wdSet);
+			wd.aload(0);
+			wd.checkcast(arrayListClass);
+			wd.swap();
 			wd.invokevirtual(alAdd);
 			wd.pop();
+			wd.goto_(wdNext);
+			wd.labelBinding(wdSet);
+			wd.aload(0);
+			wd.checkcast(arrayListClass);
+			wd.swap();
+			wd.iload(6);
+			wd.swap();
+			wd.invokevirtual(alSet);
+			wd.pop();
+			wd.labelBinding(wdNext);
 			wd.iinc(3, 1);
 			wd.goto_(wdLoop);
 		}
@@ -3217,6 +3276,33 @@ final class JvmArrayRuntimeBuilder {
 		emitLoadTarget(a, headerSlot, targetSlot);
 		a.astore(listSlot);
 		a.goto_(loop);
+		a.labelBinding(done);
+	}
+
+	/**
+	 * Pushes what a packed general array's sentinel slot holds: the list's own slot
+	 * {@code idx} (1-based) where the list has one -- the integer {@code Long.MIN_VALUE}
+	 * a store left there, or nil -- else nil. The packed shape keeps no element in its
+	 * list but that one (where Lisp code can run on another thread, every element:
+	 * {@link #build}'s {@code concurrent}), so a sentinel is the integer exactly where a
+	 * store of it put it there.
+	 */
+	static void emitSentinelElement(MethodCode a, ClassEntry arrayListClass, MethodRefEntry alGet,
+			MethodRefEntry alSize, int listSlot, int idxSlot) {
+		MethodCode.Label nil = a.newLabel();
+		MethodCode.Label done = a.newLabel();
+		a.aload(listSlot);
+		a.checkcast(arrayListClass);
+		a.invokevirtual(alSize);
+		a.iload(idxSlot);
+		a.if_icmple(nil);
+		a.aload(listSlot);
+		a.checkcast(arrayListClass);
+		a.iload(idxSlot);
+		a.invokevirtual(alGet);
+		a.goto_(done);
+		a.labelBinding(nil);
+		a.aconst_null();
 		a.labelBinding(done);
 	}
 
