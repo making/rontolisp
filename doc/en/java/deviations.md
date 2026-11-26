@@ -468,9 +468,8 @@ bucket of its hash map are in the order declared, where a JDK's is its VM's. Eac
 answers a new object, where a JDK answers one object each time. In a program whose own code
 reads no annotation and lists none -- one whose library reads annotations for its own use,
 as a Servlet container finds its servlets -- `equals` and `hashCode` of an annotation are an
-object's and `toString` is refused where the program runs. An annotation on a declaration
-its type's `@Target` does not name is not refused, where javac refuses it, and is not
-carried.
+object's and `toString` is refused where the program runs. An annotation where its type's
+`@Target` does not let it stand is refused with javac's words.
 
 **A declaration's generic types are the ones it writes.** `getGenericSuperclass`,
 `getGenericInterfaces`, `getTypeParameters`, `getGenericReturnType`,
@@ -487,6 +486,19 @@ accessors and annotations. A parameter (`getParameters()`) has the name javac ke
 `-parameters` -- a record's canonical constructor's, else `arg` and its place -- and the
 modifiers javac records of an inner class's instance around it, of an enum's name and
 ordinal and of the parameter of an enum's `valueOf`.
+
+**A type annotation is read as a JDK reads it.** `getAnnotatedType`,
+`getAnnotatedReturnType`, `getAnnotatedParameterTypes`, `getAnnotatedExceptionTypes`,
+`getAnnotatedReceiverType`, `getAnnotatedSuperclass`, `getAnnotatedInterfaces` and
+`getAnnotatedBounds` answer the use of each type a declaration names, with the annotations
+of runtime retention whose `@Target` names `TYPE_USE` written in it (JLS 9.7.4): an
+`AnnotatedParameterizedType`, `AnnotatedTypeVariable`, `AnnotatedWildcardType`,
+`AnnotatedArrayType` or `AnnotatedType` of the type its generic type is, with the uses of its
+arguments, bounds, component and the type around a member type; written and equal as a JDK's,
+a new object each time. A type variable carries the annotations written on its declaration. A
+class of the JDK has none written. A member type of a generic class named through the raw
+class (`Outer.Inner` in `Outer<T>`) is a JDK's raw class and the subset's parameterized type,
+as its generic type is.
 
 **A program finds a class by a computed name only where an index lists it or reachability
 metadata declares it.** No class file is there to look in, on any target. `Class.forName` of
@@ -1244,9 +1256,7 @@ Each of these is an error naming the construct and its position. In a library on
 path, a statement naming a JDK class or member the subset lacks is a warning instead, and
 throws where it runs ([Using a third-party library](index.md#using-a-third-party-library)).
 
-- Reflection: annotated types (`getAnnotatedType`, `getAnnotatedReturnType`,
-  `getAnnotatedSuperclass` ..) and the annotations of a type variable; of
-  `java.lang.invoke`, what [The JDK classes](classes.md) does not list (`VarHandle`, the
+- Reflection: of `java.lang.invoke`, what [The JDK classes](classes.md) does not list (`VarHandle`, the
   combinators of `MethodHandles`, the handles of a field such as `findGetter`, `Lookup.in`).
 - A `switch` over a `long`, a `float`, a `double` or a `boolean`; a method reference and a
   field through a qualified `super` (`Interface.super::m`, `Outer.super.x`).

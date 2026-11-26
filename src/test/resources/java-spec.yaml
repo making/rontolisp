@@ -19348,6 +19348,107 @@ standalone:
               @Label("on") ON, OFF
           }
 
+          // type annotations: where each is written, what reflection answers of it
+          @Retention(RetentionPolicy.RUNTIME)
+          @Target(ElementType.TYPE_USE)
+          @Repeatable(Uses.class)
+          @interface Use {
+              int value() default 0;
+          }
+
+          @Retention(RetentionPolicy.RUNTIME)
+          @Target(ElementType.TYPE_USE)
+          @interface Uses {
+              Use[] value();
+          }
+
+          @Retention(RetentionPolicy.RUNTIME)
+          @Target({ ElementType.TYPE_USE, ElementType.FIELD, ElementType.METHOD, ElementType.PARAMETER })
+          @interface Twin {
+          }
+
+          @Retention(RetentionPolicy.RUNTIME)
+          @Target(ElementType.TYPE_PARAMETER)
+          @interface Param {
+              String value() default "";
+          }
+
+          @Use(9)
+          static class Typed<E> extends @Use(1) Box<@Use(2) String> implements @Use(3) Comparable<Typed<E>>, Runnable {
+              class Member {
+                  Member(@Use(4) int a, @Twin List<@Use(5) String> b) {
+                  }
+              }
+
+              static class Nest {
+              }
+
+              class Gen<T> {
+                  class Sub<U> {
+                      void call() {
+                      }
+                  }
+              }
+
+              @Use String plain;
+              @Use(1) @Use(2) int twice;
+              List<@Use(3) ? extends @Use(4) Number> bounded;
+              Map<@Use ?, ? super @Use(1) Integer> loose;
+              @Use(1) String @Use(2) [] @Use(3) [] grid;
+              @Use(1) Typed<E>.@Use(2) Member member;
+              Typed.@Use Nest nest;
+              Map.@Use Entry<String, @Use(1) E> entry;
+              java.lang.@Use String qualified;
+              @Twin java.lang.String twin;
+              @Use(1) Typed<E>.Gen<@Use(2) String>.@Use(3) Sub<Integer> deep;
+              @Use E variable;
+              Typed.Nest[] none;
+
+              Typed() {
+                  super(null);
+              }
+
+              public int compareTo(Typed<E> other) {
+                  return 0;
+              }
+
+              public void run() {
+              }
+
+              static <@Param("t") @Use T extends @Use(1) Comparable<@Use(2) T>, S> @Use(3) T pick(@Use(4) T a,
+                      List<? extends @Use(5) S> b, @Use(6) int @Use(7) ... rest) throws @Use(8) IllegalStateException {
+                  return a;
+              }
+
+              @Twin String self(@Use(1) Typed<E> this, @Twin @Use(2) String text) {
+                  return text;
+              }
+
+              String plainSelf(@Twin java.lang.String text) {
+                  return text;
+              }
+          }
+
+          enum Hue {
+              @Use RED;
+
+              Hue() {
+              }
+          }
+
+          enum Shade {
+              DARK("d");
+
+              Shade(@Use(1) String code) {
+              }
+          }
+
+          record Pin(@Use(1) String name, @Use(2) int @Use(3) [] marks) {
+              public @Use(4) String name() {
+                  return name;
+              }
+          }
+
           static void annotated() throws Exception {
               for (Class<?> type : List.of(Annotated.class, Below.class, Both.class, Under.class, Spot.class)) {
                   System.out.println(type.getSimpleName() + " " + Arrays.toString(type.getAnnotations()) + " / "
@@ -19409,6 +19510,100 @@ standalone:
                       + deprecated.equals(Thread.class.getMethod("getId").getAnnotation(Deprecated.class)));
               System.out.println(Classes.class.getPackage() + "|" + Classes.class.getPackage().getName() + " " + String.class.getPackage() + " "
                       + int.class.getPackage() + " " + (Classes.class.getPackage() == Box.class.getPackage()) + " " + Arrays.toString(Classes.class.getPackage().getAnnotations()));
+          }
+
+          static void typed() throws Exception {
+              for (String name : List.of("plain", "twice", "bounded", "loose", "grid", "member", "nest", "entry", "qualified",
+                      "twin", "deep", "variable", "none")) {
+                  Field field = Typed.class.getDeclaredField(name);
+                  System.out.println(name + " " + uses(field.getAnnotatedType()) + " " + Arrays.toString(field.getAnnotations()));
+              }
+              Method pick = Typed.class.getDeclaredMethod("pick", Comparable.class, List.class, int[].class);
+              System.out.println("pick " + uses(pick.getAnnotatedReturnType()) + " / " + uses(pick.getAnnotatedParameterTypes())
+                      + " / " + uses(pick.getAnnotatedExceptionTypes()) + " / " + pick.getAnnotatedReceiverType() + " / "
+                      + uses(pick.getParameters()[2].getAnnotatedType()));
+              for (TypeVariable<Method> variable : pick.getTypeParameters()) {
+                  System.out.println("  " + variable + " " + Arrays.toString(variable.getAnnotations()) + " "
+                          + variable.getAnnotation(Param.class) + " " + variable.isAnnotationPresent(Use.class) + " "
+                          + Arrays.toString(variable.getDeclaredAnnotationsByType(Use.class)) + " "
+                          + uses(variable.getAnnotatedBounds()));
+              }
+              Method self = Typed.class.getDeclaredMethod("self", String.class);
+              System.out.println("self " + uses(self.getAnnotatedReceiverType()) + " / " + uses(self.getAnnotatedReturnType())
+                      + " / " + uses(self.getAnnotatedParameterTypes()) + " / " + Arrays.toString(self.getAnnotations()) + " "
+                      + Arrays.deepToString(self.getParameterAnnotations()) + " / "
+                      + uses(Typed.class.getDeclaredMethod("plainSelf", String.class).getAnnotatedParameterTypes()));
+              System.out.println("call " + uses(Typed.Gen.Sub.class.getDeclaredMethod("call").getAnnotatedReceiverType()));
+              for (Class<?> type : List.of(Typed.class, Typed.Member.class, Typed.Nest.class, Typed.Gen.Sub.class, Hue.class,
+                      Shade.class, Pin.class)) {
+                  for (Constructor<?> constructor : type.getDeclaredConstructors()) {
+                      System.out.println(type.getSimpleName() + " " + uses(constructor.getAnnotatedReturnType()) + " / "
+                              + uses(constructor.getAnnotatedReceiverType()) + " / "
+                              + uses(constructor.getAnnotatedParameterTypes()));
+                  }
+                  System.out.println("  " + uses(type.getAnnotatedSuperclass()) + " / " + uses(type.getAnnotatedInterfaces())
+                          + " " + Arrays.toString(type.getAnnotations()));
+              }
+              System.out.println("Hue.RED " + uses(Hue.class.getField("RED").getAnnotatedType()) + " "
+                      + Arrays.toString(Hue.class.getField("RED").getAnnotations()));
+              for (RecordComponent component : Pin.class.getRecordComponents()) {
+                  System.out.println(component.getName() + " " + uses(component.getAnnotatedType()) + " / "
+                          + uses(component.getAccessor().getAnnotatedReturnType()));
+              }
+              for (Class<?> type : List.of(Object.class, Runnable.class, int.class, int[].class, String.class)) {
+                  System.out.println(type.getSimpleName() + " " + type.getAnnotatedSuperclass() + " "
+                          + Arrays.toString(type.getAnnotatedInterfaces()));
+              }
+              System.out.println(Arrays.toString(Typed.class.getTypeParameters()[0].getAnnotations()) + " "
+                      + uses(Typed.class.getTypeParameters()[0].getAnnotatedBounds()) + " "
+                      + uses(List.class.getMethod("get", int.class).getAnnotatedReturnType()));
+              java.lang.reflect.AnnotatedType plain = Typed.class.getDeclaredField("plain").getAnnotatedType();
+              java.lang.reflect.AnnotatedType twice = Typed.class.getDeclaredField("twice").getAnnotatedType();
+              java.lang.reflect.AnnotatedType text = pick.getAnnotatedParameterTypes()[1];
+              System.out.println(plain.equals(Typed.class.getDeclaredField("plain").getAnnotatedType()) + " "
+                      + (plain.hashCode() == Typed.class.getDeclaredField("plain").getAnnotatedType().hashCode()) + " "
+                      + (plain != Typed.class.getDeclaredField("plain").getAnnotatedType()) + " "
+                      + plain.equals(Typed.class.getDeclaredField("qualified").getAnnotatedType()) + " "
+                      + plain.equals(Typed.class.getDeclaredField("twin").getAnnotatedType()) + " " + plain.equals(String.class)
+                      + " " + text.equals(Typed.class.getDeclaredMethod("pick", Comparable.class, List.class, int[].class)
+                          .getAnnotatedParameterTypes()[1])
+                      + " " + twice.getAnnotation(Use.class) + " " + twice.getAnnotation(Uses.class) + " "
+                      + Arrays.toString(twice.getAnnotationsByType(Use.class)) + " " + plain.getAnnotation(Use.class).value());
+          }
+
+          // a use of a type, its kind and its parts
+          static String uses(java.lang.reflect.AnnotatedType use) {
+              if (use == null) {
+                  return "-";
+              }
+              StringBuilder written = new StringBuilder(use.toString());
+              String kind = use instanceof java.lang.reflect.AnnotatedParameterizedType ? "P"
+                      : use instanceof java.lang.reflect.AnnotatedArrayType ? "A"
+                              : use instanceof java.lang.reflect.AnnotatedWildcardType ? "W"
+                                      : use instanceof java.lang.reflect.AnnotatedTypeVariable ? "V" : "T";
+              written.append(" {").append(kind).append(' ').append(use.getType().getTypeName());
+              if (use.getAnnotatedOwnerType() != null) {
+                  written.append(" owner ").append(uses(use.getAnnotatedOwnerType()));
+              }
+              if (use instanceof java.lang.reflect.AnnotatedParameterizedType parameterized) {
+                  written.append(" args ").append(uses(parameterized.getAnnotatedActualTypeArguments()));
+              }
+              if (use instanceof java.lang.reflect.AnnotatedArrayType array) {
+                  written.append(" of ").append(uses(array.getAnnotatedGenericComponentType()));
+              }
+              if (use instanceof java.lang.reflect.AnnotatedWildcardType wildcard) {
+                  written.append(" upper ").append(uses(wildcard.getAnnotatedUpperBounds())).append(" lower ")
+                      .append(uses(wildcard.getAnnotatedLowerBounds()));
+              }
+              return written.append('}').toString();
+          }
+
+          static String uses(java.lang.reflect.AnnotatedType[] uses) {
+              StringBuilder written = new StringBuilder("[");
+              for (java.lang.reflect.AnnotatedType use : uses) {
+                  written.append(written.length() > 1 ? ", " : "").append(uses(use));
+              }
+              return written.append(']').toString();
           }
 
           public static void main(String[] args) {
@@ -19513,6 +19708,7 @@ standalone:
               try {
                   generics();
                   annotated();
+                  typed();
               }
               catch (Exception e) {
                   throw new IllegalStateException(e);
@@ -19589,7 +19785,7 @@ standalone:
       Loud true 3 text null java.lang.StringBuilder true java.util.Map.Entry null Classes.Point[] truefalsefalse true false [I void
       the enum is initialized
       TWO
-      Classes$Shape[] Classes$Ring[compareTo] Classes$Level[valueOf, values] Classes$Level$1[toString] Classes$Point[equals, hashCode, toString, x, y] Classes[above, annotated, arrays, declared, failing, first, flags, general, generics, handled, handles, jdk, kind, listed, main, many, members, reflect, show, sum, typeKind, typeKinds] [I[] int[] 1 toString true true true true
+      Classes$Shape[] Classes$Ring[compareTo] Classes$Level[valueOf, values] Classes$Level$1[toString] Classes$Point[equals, hashCode, toString, x, y] Classes[above, annotated, arrays, declared, failing, first, flags, general, generics, handled, handles, jdk, kind, listed, main, many, members, reflect, show, sum, typeKind, typeKinds, typed, uses] [I[] int[] 1 toString true true true true
       null: java.lang.NullPointerException
       a null class: java.lang.NullPointerException
       Base.name: name class java.lang.String 1 -> derived (String) (String)
@@ -19818,6 +20014,48 @@ standalone:
       @java.lang.FunctionalInterface() [@java.lang.FunctionalInterface()] [@jdk.internal.ValueBased()] [@java.lang.Deprecated(forRemoval=false, since="9")] 9 true [@java.lang.SafeVarargs()] [@jdk.internal.vm.annotation.IntrinsicCandidate()] [] [@java.lang.annotation.Documented(), @java.lang.annotation.Retention(RUNTIME), @java.lang.annotation.Target({ANNOTATION_TYPE})] [@java.lang.annotation.Retention(RUNTIME), @java.lang.annotation.Repeatable(Classes.Roles.class)]
       interface java.lang.Deprecated false 2011250759 false
       package | package java.lang null true []
+      plain @Classes.Use(0) java.lang.String {T java.lang.String} []
+      twice @Classes.Uses({@Classes.Use(1), @Classes.Use(2)}) int {T int} []
+      bounded java.util.List<@Classes.Use(3) ? extends @Classes.Use(4) java.lang.Number> {P java.util.List<? extends java.lang.Number> args [@Classes.Use(3) ? extends @Classes.Use(4) java.lang.Number {W ? extends java.lang.Number upper [@Classes.Use(4) java.lang.Number {T java.lang.Number}] lower []}]} []
+      loose java.util.Map<@Classes.Use(0) ?, ? super @Classes.Use(1) java.lang.Integer> {P java.util.Map<?, ? super java.lang.Integer> args [@Classes.Use(0) ? {W ? upper [java.lang.Object {T java.lang.Object}] lower []}, ? super @Classes.Use(1) java.lang.Integer {W ? super java.lang.Integer upper [java.lang.Object {T java.lang.Object}] lower [@Classes.Use(1) java.lang.Integer {T java.lang.Integer}]}]} []
+      grid @Classes.Use(1) java.lang.String @Classes.Use(2)[] @Classes.Use(3)[] {A java.lang.String[][] of @Classes.Use(1) java.lang.String @Classes.Use(3)[] {A java.lang.String[] of @Classes.Use(1) java.lang.String {T java.lang.String}}} []
+      member @Classes.Use(2) Classes$Typed$Member {P Classes$Typed<E>$Member owner @Classes.Use(1) Classes$Typed<E> {P Classes$Typed<E> owner Classes {T Classes} args [E {V E}]} args []} []
+      nest @Classes.Use(0) Classes$Typed$Nest {T Classes$Typed$Nest owner Classes$Typed {T Classes$Typed owner Classes {T Classes}}} []
+      entry @Classes.Use(0) java.util.Map$Entry<java.lang.String, @Classes.Use(1) E> {P java.util.Map$Entry<java.lang.String, E> owner java.util.Map {T java.util.Map} args [java.lang.String {T java.lang.String}, @Classes.Use(1) E {V E}]} []
+      qualified @Classes.Use(0) java.lang.String {T java.lang.String} []
+      twin @Classes.Twin() java.lang.String {T java.lang.String} [@Classes.Twin()]
+      deep @Classes.Use(3) Classes$Typed$Gen$Sub<java.lang.Integer> {P Classes$Typed<E>$Gen<java.lang.String>$Sub<java.lang.Integer> owner Classes$Typed$Gen<@Classes.Use(2) java.lang.String> {P Classes$Typed<E>$Gen<java.lang.String> owner @Classes.Use(1) Classes$Typed<E> {P Classes$Typed<E> owner Classes {T Classes} args [E {V E}]} args [@Classes.Use(2) java.lang.String {T java.lang.String}]} args [java.lang.Integer {T java.lang.Integer}]} []
+      variable @Classes.Use(0) E {V E} []
+      none Classes$Typed$Nest[] {A Classes$Typed$Nest[] of Classes$Typed$Nest {T Classes$Typed$Nest owner Classes$Typed {T Classes$Typed owner Classes {T Classes}}}} []
+      pick @Classes.Use(3) T {V T} / [@Classes.Use(4) T {V T}, java.util.List<? extends @Classes.Use(5) S> {P java.util.List<? extends S> args [? extends @Classes.Use(5) S {W ? extends S upper [@Classes.Use(5) S {V S}] lower []}]}, @Classes.Use(6) int @Classes.Use(7)[] {A int[] of @Classes.Use(6) int {T int}}] / [@Classes.Use(8) java.lang.IllegalStateException {T java.lang.IllegalStateException}] / null / @Classes.Use(6) int @Classes.Use(7)[] {A int[] of @Classes.Use(6) int {T int}}
+        T [@Classes.Param("t"), @Classes.Use(0)] @Classes.Param("t") true [@Classes.Use(0)] [@Classes.Use(1) java.lang.Comparable<@Classes.Use(2) T> {P java.lang.Comparable<T> args [@Classes.Use(2) T {V T}]}]
+        S [] null false [] [java.lang.Object {T java.lang.Object}]
+      self @Classes.Use(1) Classes$Typed<E> {P Classes$Typed<E> owner Classes {T Classes} args [E {V E}]} / @Classes.Twin() java.lang.String {T java.lang.String} / [@Classes.Twin() @Classes.Use(2) java.lang.String {T java.lang.String}] / [@Classes.Twin()] [[@Classes.Twin()]] / [@Classes.Twin() java.lang.String {T java.lang.String}]
+      call Classes$Typed$Gen$Sub<U> {P Classes$Typed<E>$Gen<T>$Sub<U> owner Classes$Typed$Gen<T> {P Classes$Typed<E>$Gen<T> owner Classes$Typed<E> {P Classes$Typed<E> owner Classes {T Classes} args [E {V E}]} args [T {V T}]} args [U {V U}]}
+      Typed Classes$Typed {T Classes$Typed owner Classes {T Classes}} / - / []
+        @Classes.Use(1) Classes$Box<@Classes.Use(2) java.lang.String> {P Classes$Box<java.lang.String> owner Classes {T Classes} args [@Classes.Use(2) java.lang.String {T java.lang.String}]} / [@Classes.Use(3) java.lang.Comparable<Classes$Typed<E>> {P java.lang.Comparable<Classes$Typed<E>> args [Classes$Typed<E> {P Classes$Typed<E> owner Classes {T Classes} args [E {V E}]}]}, java.lang.Runnable {T java.lang.Runnable}] [@Classes.Use(9)]
+      Member Classes$Typed$Member {T Classes$Typed$Member owner Classes$Typed {T Classes$Typed owner Classes {T Classes}}} / Classes$Typed<E> {P Classes$Typed<E> owner Classes {T Classes} args [E {V E}]} / [Classes$Typed {T Classes$Typed owner Classes {T Classes}}, @Classes.Use(4) int {T int}, @Classes.Twin() java.util.List<@Classes.Use(5) java.lang.String> {P java.util.List<java.lang.String> args [@Classes.Use(5) java.lang.String {T java.lang.String}]}]
+        java.lang.Object {T java.lang.Object} / [] []
+      Nest Classes$Typed$Nest {T Classes$Typed$Nest owner Classes$Typed {T Classes$Typed owner Classes {T Classes}}} / - / []
+        java.lang.Object {T java.lang.Object} / [] []
+      Sub Classes$Typed$Gen$Sub {T Classes$Typed$Gen$Sub owner Classes$Typed$Gen {T Classes$Typed$Gen owner Classes$Typed {T Classes$Typed owner Classes {T Classes}}}} / Classes$Typed$Gen<T> {P Classes$Typed<E>$Gen<T> owner Classes$Typed<E> {P Classes$Typed<E> owner Classes {T Classes} args [E {V E}]} args [T {V T}]} / [Classes$Typed$Gen {T Classes$Typed$Gen owner Classes$Typed {T Classes$Typed owner Classes {T Classes}}}]
+        java.lang.Object {T java.lang.Object} / [] []
+      Hue Classes$Hue {T Classes$Hue owner Classes {T Classes}} / - / [java.lang.String {T java.lang.String}, int {T int}]
+        java.lang.Enum<Classes$Hue> {P java.lang.Enum<Classes$Hue> args [Classes$Hue {T Classes$Hue owner Classes {T Classes}}]} / [] []
+      Shade Classes$Shade {T Classes$Shade owner Classes {T Classes}} / - / [@Classes.Use(1) java.lang.String {T java.lang.String}, int {T int}, java.lang.String {T java.lang.String}]
+        java.lang.Enum<Classes$Shade> {P java.lang.Enum<Classes$Shade> args [Classes$Shade {T Classes$Shade owner Classes {T Classes}}]} / [] []
+      Pin Classes$Pin {T Classes$Pin owner Classes {T Classes}} / - / [@Classes.Use(1) java.lang.String {T java.lang.String}, @Classes.Use(2) int @Classes.Use(3)[] {A int[] of @Classes.Use(2) int {T int}}]
+        java.lang.Record {T java.lang.Record} / [] []
+      Hue.RED Classes$Hue {T Classes$Hue owner Classes {T Classes}} [@Classes.Use(0)]
+      name @Classes.Use(1) java.lang.String {T java.lang.String} / @Classes.Use(4) java.lang.String {T java.lang.String}
+      marks @Classes.Use(2) int @Classes.Use(3)[] {A int[] of @Classes.Use(2) int {T int}} / @Classes.Use(2) int @Classes.Use(3)[] {A int[] of @Classes.Use(2) int {T int}}
+      Object null []
+      Runnable null []
+      int null []
+      int[] null []
+      String java.lang.Object [java.io.Serializable, java.lang.Comparable<java.lang.String>, java.lang.CharSequence, java.lang.constant.Constable, java.lang.constant.ConstantDesc]
+      [] [java.lang.Object {T java.lang.Object}] E {V E}
+      true true true true false false true null @Classes.Uses({@Classes.Use(1), @Classes.Use(2)}) [@Classes.Use(1), @Classes.Use(2)] 0
   # A method of a class of the JDK the program calls, invoked by reflection where no
   # call of the program gives a method arguments: the object is tested, then the
   # arguments counted, as a JDK does. A file of its own: a call giving arguments
@@ -31439,3 +31677,11 @@ refused:
     - name: an-enum-overriding-clone
       body: 'enum Single { ONE; public Object clone() { return this; } }'
       error: "clone() in Single cannot override clone() in Enum"
+    # An annotation stands where its type's @Target lets it: on a kind of declaration it
+    # names, in a type where it names TYPE_USE.
+    - name: an-annotation-on-a-kind-of-declaration-its-target-does-not-name
+      body: '@FunctionalInterface int x = 1;'
+      error: "annotation interface not applicable to this kind of declaration"
+    - name: an-annotation-in-a-type-its-target-does-not-name
+      body: 'java.util.List<@Deprecated String> held = null;'
+      error: "annotation @Deprecated not applicable in this type context"

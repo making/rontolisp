@@ -2534,6 +2534,10 @@ final class JavaIntrinsics {
 		natives.put("java.lang.reflect.Executable.parameters0(Class,Object)",
 				(lowering, call) -> lowering.classReflection(call, 43));
 		natives.put("java.lang.Package.annotations0(String)", (lowering, call) -> lowering.classReflection(call, 44));
+		natives.put("rontolisp.internal.AnnotatedTypes.annotated0(Class,Object,int)",
+				(lowering, call) -> lowering.classReflection(call, 45));
+		natives.put("java.lang.reflect.Types.variableAnnotations0(Class,Object,int)",
+				(lowering, call) -> lowering.classReflection(call, 46));
 		arrays(natives);
 		String thread = THREAD + ".";
 		natives.put("java.lang.Runtime.halt0(int)", runtime("exit"));

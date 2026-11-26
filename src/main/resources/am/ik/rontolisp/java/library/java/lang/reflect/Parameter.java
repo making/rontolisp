@@ -64,6 +64,10 @@ public final class Parameter implements AnnotatedElement {
         return index < first ? erased[index] : generic[index - first];
     }
 
+    public AnnotatedType getAnnotatedType() {
+        return executable.getAnnotatedParameterTypes()[index];
+    }
+
     public boolean isImplicit() {
         return (modifiers & MANDATED) != 0;
     }

@@ -368,6 +368,7 @@ final class JavaParser {
 			annotations();
 			if (at("package") && classes.isEmpty() && imports.isEmpty()) {
 				packageAnnotations = outermost(annotated, current().offset());
+				sites(packageAnnotations, "PACKAGE", null);
 				this.p++;
 				packageName = qualifiedName();
 				expect(";");
@@ -407,11 +408,13 @@ final class JavaParser {
 					List.of(), List.copyOf(classes), true);
 			return new CompilationUnit(null, imports, List.of(declared), List.copyOf(this.unchecked), annotated(),
 					Map.copyOf(this.elementDefaults), Map.copyOf(this.declarationAnnotations), lambdaNames(),
-					Map.copyOf(this.receivers), List.of());
+					Map.copyOf(this.receivers), List.of(), Map.copyOf(this.typeAnnotations),
+					Map.copyOf(this.annotationSites));
 		}
 		return new CompilationUnit(packageName, imports, classes, List.copyOf(this.unchecked), annotated(),
 				Map.copyOf(this.elementDefaults), Map.copyOf(this.declarationAnnotations), lambdaNames(),
-				Map.copyOf(this.receivers), packageAnnotations);
+				Map.copyOf(this.receivers), packageAnnotations, Map.copyOf(this.typeAnnotations),
+				Map.copyOf(this.annotationSites));
 	}
 
 	/** What a top-level item of a session's buffer is. */
@@ -568,7 +571,8 @@ final class JavaParser {
 		all.addAll(classes);
 		return new SessionTree(new CompilationUnit(null, imports, all, List.copyOf(this.unchecked), annotated(),
 				Map.copyOf(this.elementDefaults), Map.copyOf(this.declarationAnnotations), lambdaNames(),
-				Map.copyOf(this.receivers), List.of()), snippets, echo);
+				Map.copyOf(this.receivers), List.of(), Map.copyOf(this.typeAnnotations),
+				Map.copyOf(this.annotationSites)), snippets, echo);
 	}
 
 	/** Where the item read last ends: where the next token starts. */
@@ -713,11 +717,36 @@ final class JavaParser {
 	 */
 	private List<String> annotations() {
 		List<String> names = new ArrayList<>();
-		while (at("@") && !peekIs(1, "interface")) {
-			String name = annotation().name();
+		for (JavaSyntax.Annotation read : annotationList()) {
+			String name = read.name();
 			names.add(name.startsWith("java.lang.") ? name.substring("java.lang.".length()) : name);
 		}
 		return names;
+	}
+
+	/** Reads annotations: the ones read, in the order written. */
+	private List<JavaSyntax.Annotation> annotationList() {
+		List<JavaSyntax.Annotation> read = new ArrayList<>();
+		while (at("@") && !peekIs(1, "interface")) {
+			read.add(annotation());
+		}
+		return read;
+	}
+
+	/**
+	 * The annotations written inside each type that has some, by the type's position:
+	 * what a type annotation stands on ({@link JavaSyntax.TypeAnnotations}).
+	 */
+	private final Map<Integer, JavaSyntax.TypeAnnotations> typeAnnotations = new java.util.HashMap<>();
+
+	/** The declaration each annotation written on one stands on, by its position. */
+	private final Map<Integer, JavaSyntax.AnnotationSite> annotationSites = new java.util.HashMap<>();
+
+	/** Notes the declaration annotations stand on. */
+	private void sites(List<JavaSyntax.Annotation> written, String kind, @Nullable TypeName type) {
+		for (JavaSyntax.Annotation annotation : written) {
+			this.annotationSites.put(annotation.pos(), new JavaSyntax.AnnotationSite(kind, type));
+		}
 	}
 
 	/** Reads one annotation: its name and what is written for its elements. */
@@ -893,6 +922,7 @@ final class JavaParser {
 			// an annotation type is an interface whose methods are its elements
 			modifiers.add(JavaSyntax.ANNOTATION_TYPE);
 		}
+		sites(annotations, annotation ? "ANNOTATION_TYPE" : "TYPE", null);
 		JavaSyntax.Kind kind = at("enum") ? JavaSyntax.Kind.ENUM : at("record") ? JavaSyntax.Kind.RECORD
 				: at("interface") ? JavaSyntax.Kind.INTERFACE : JavaSyntax.Kind.CLASS;
 		this.p++;
@@ -968,8 +998,12 @@ final class JavaParser {
 		}
 		List<JavaSyntax.TypeParameter> parameters = new ArrayList<>();
 		do {
-			annotations();
+			List<JavaSyntax.Annotation> written = annotationList();
 			int pos = current().offset();
+			sites(written, "TYPE_PARAMETER", null);
+			if (!written.isEmpty()) {
+				this.declarationAnnotations.put(pos, List.copyOf(written));
+			}
 			String name = identifier();
 			List<TypeName> bounds = new ArrayList<>();
 			if (eat("extends")) {
@@ -1012,6 +1046,7 @@ final class JavaParser {
 				if (!written.isEmpty()) {
 					this.declarationAnnotations.put(pos, written);
 				}
+				sites(written, "ENUM_CONSTANT", null);
 				String constant = identifier();
 				List<Expression> arguments = at("(") ? arguments() : List.of();
 				ClassDeclaration constantBody = null;
@@ -1057,20 +1092,31 @@ final class JavaParser {
 		int head = current().offset();
 		int methods = into.methods.size();
 		int fields = into.fields.size();
-		member(className, kind, into, modifiers);
-		List<JavaSyntax.Annotation> annotations = outermost(from, head);
+		List<JavaSyntax.Annotation> annotations = new ArrayList<>(outermost(from, head));
+		member(className, kind, into, modifiers, annotations);
 		if (!annotations.isEmpty()) {
 			for (Method declared : into.methods.subList(methods, into.methods.size())) {
-				this.declarationAnnotations.put(declared.pos(), annotations);
+				this.declarationAnnotations.put(declared.pos(), List.copyOf(annotations));
+				TypeName returned = declared.returnType();
+				sites(annotations, declared.name().equals("<init>") ? "CONSTRUCTOR" : "METHOD",
+						returned == null || returned.name().equals("void") ? null : returned);
 			}
 			for (Field declared : into.fields.subList(fields, into.fields.size())) {
-				this.declarationAnnotations.put(declared.pos(), annotations);
+				this.declarationAnnotations.put(declared.pos(), List.copyOf(annotations));
+				sites(annotations, "FIELD", declared.type());
 			}
 		}
 		suppressed(from, head);
 	}
 
-	private void member(String className, JavaSyntax.Kind kind, Body into, Set<String> modifiers) {
+	/**
+	 * A member, its modifiers read.
+	 * @param annotations the annotations of its modifiers, to which those a method or a
+	 * constructor writes between its type parameters and its type or name are added: its
+	 * modifiers' too (JLS 8.4)
+	 */
+	private void member(String className, JavaSyntax.Kind kind, Body into, Set<String> modifiers,
+			List<JavaSyntax.Annotation> annotations) {
 		boolean inInterface = kind == JavaSyntax.Kind.INTERFACE;
 		if (at("{")) {
 			if (inInterface) {
@@ -1087,6 +1133,13 @@ final class JavaParser {
 			return;
 		}
 		List<JavaSyntax.TypeParameter> typeParameters = typeParameters();
+		if (!typeParameters.isEmpty()) {
+			for (JavaSyntax.Annotation written : annotationList()) {
+				annotations.add(written);
+				String name = written.name();
+				modifiers.add("@" + (name.startsWith("java.lang.") ? name.substring("java.lang.".length()) : name));
+			}
+		}
 		if (atIdentifier() && current().text().equals(className) && (peekIs(1, "(") || peekIs(1, "{"))) {
 			if (inInterface) {
 				throw error("an interface has no constructor");
@@ -1203,19 +1256,32 @@ final class JavaParser {
 				expect(",");
 			}
 			int from = current().offset();
-			boolean isFinal = finalModifier();
+			List<JavaSyntax.Annotation> written = new ArrayList<>();
+			boolean isFinal = finalModifier(written);
 			int head = current().offset();
 			TypeName type = typeName();
 			// an annotation of a variable arity parameter's array type
-			annotations();
+			List<JavaSyntax.Annotation> arity = annotationList();
 			boolean varargs = eat("...");
 			if (varargs) {
+				varargsAnnotated(type, arity);
 				type = type.withDimensions(type.dimensions() + 1);
 			}
 			if (at("this") || (atIdentifier() && peekIs(1, ".") && peekIs(2, "this"))) {
+				// the annotations ahead of a receiver are its type's
+				if (!written.isEmpty()) {
+					JavaSyntax.TypeAnnotations known = this.typeAnnotations.get(type.pos());
+					Map<Integer, List<JavaSyntax.Annotation>> words = new java.util.HashMap<>(
+							known == null ? Map.of() : known.words());
+					List<JavaSyntax.Annotation> first = new ArrayList<>(written);
+					first.addAll(words.getOrDefault(0, List.of()));
+					words.put(0, first);
+					typeAnnotated(type.pos(), type.name(), words, known == null ? List.of() : known.dimensions());
+				}
 				this.receiver = receiver(type, isFinal, varargs, receiving && parameters.isEmpty());
 				continue;
 			}
+			sites(written, receiving ? "PARAMETER" : "RECORD_COMPONENT", type);
 			int pos = current().offset();
 			String name = identifier();
 			if (at("[")) {
@@ -1268,11 +1334,16 @@ final class JavaParser {
 	 * Annotations and {@code final} ahead of a variable: whether {@code final} was there.
 	 */
 	private boolean finalModifier() {
+		return finalModifier(new ArrayList<>());
+	}
+
+	/** {@link #finalModifier()}, the annotations read added to {@code written}. */
+	private boolean finalModifier(List<JavaSyntax.Annotation> written) {
 		boolean isFinal = false;
-		annotations();
+		written.addAll(annotationList());
 		while (eat("final")) {
 			isFinal = true;
-			annotations();
+			written.addAll(annotationList());
 		}
 		return isFinal;
 	}
@@ -1287,12 +1358,14 @@ final class JavaParser {
 
 	/** A type argument: a type, or a wildcard with the bound it has. */
 	private TypeName typeArgument() {
-		annotations();
+		List<JavaSyntax.Annotation> leading = annotationList();
 		if (!at("?")) {
-			return typeName();
+			return typeName(leading);
 		}
 		int pos = this.tokens.get(this.p++).offset();
-		annotations();
+		leading = new ArrayList<>(leading);
+		leading.addAll(annotationList());
+		typeAnnotated(pos, "?", leading, List.of());
 		if (eat("extends")) {
 			return new TypeName(pos, "? extends", List.of(typeName()), false, 0);
 		}
@@ -1300,6 +1373,41 @@ final class JavaParser {
 			return new TypeName(pos, "? super", List.of(typeName()), false, 0);
 		}
 		return new TypeName(pos, "?", List.of(), false, 0);
+	}
+
+	/**
+	 * Notes the annotations written inside a type, of its words (the first's ahead of the
+	 * type) and of its dimensions, where it has some.
+	 */
+	private void typeAnnotated(int pos, String name, List<JavaSyntax.Annotation> leading,
+			List<List<JavaSyntax.Annotation>> dimensions) {
+		typeAnnotated(pos, name, leading.isEmpty() ? Map.of() : Map.of(0, List.copyOf(leading)), dimensions);
+	}
+
+	private void typeAnnotated(int pos, String name, Map<Integer, List<JavaSyntax.Annotation>> words,
+			List<List<JavaSyntax.Annotation>> dimensions) {
+		if (!words.isEmpty() || dimensions.stream().anyMatch(each -> !each.isEmpty())) {
+			this.typeAnnotations.put(pos,
+					new JavaSyntax.TypeAnnotations(name, Map.copyOf(words), List.copyOf(dimensions)));
+		}
+		else {
+			this.typeAnnotations.remove(pos);
+		}
+	}
+
+	/**
+	 * Adds the annotations of a variable arity parameter's {@code ...} to its type's: an
+	 * innermost dimension.
+	 */
+	private void varargsAnnotated(TypeName type, List<JavaSyntax.Annotation> written) {
+		JavaSyntax.TypeAnnotations known = this.typeAnnotations.get(type.pos());
+		List<List<JavaSyntax.Annotation>> dimensions = new ArrayList<>();
+		for (int index = 0; index < type.dimensions(); index++) {
+			dimensions
+				.add(known == null || index >= known.dimensions().size() ? List.of() : known.dimensions().get(index));
+		}
+		dimensions.add(List.copyOf(written));
+		typeAnnotated(type.pos(), type.name(), known == null ? Map.of() : known.words(), dimensions);
 	}
 
 	/** Type arguments written ahead of a method's name, {@code <A, B>}; none without. */
@@ -1317,22 +1425,42 @@ final class JavaParser {
 	}
 
 	private TypeName typeName() {
-		// an annotation of the type itself, dropped as one of a declaration is
-		annotations();
+		return typeName(annotationList());
+	}
+
+	/**
+	 * A type, the annotations ahead of it read: they and the ones written inside it are
+	 * noted ({@link #typeAnnotated}).
+	 */
+	private TypeName typeName(List<JavaSyntax.Annotation> leading) {
+		leading = new ArrayList<>(leading);
+		leading.addAll(annotationList());
 		int pos = current().offset();
+		List<List<JavaSyntax.Annotation>> dimensions = new ArrayList<>();
 		if (current().kind() == Kind.IDENTIFIER && PRIMITIVES.contains(current().text())) {
 			String name = this.tokens.get(this.p++).text();
-			return new TypeName(pos, name, List.of(), false, dimensions());
+			TypeName read = new TypeName(pos, name, List.of(), false, dimensions(dimensions));
+			typeAnnotated(pos, name, leading, dimensions);
+			return read;
 		}
 		// Outer<A>.Inner<B>: the name is the whole dotted name, the prefix written with
 		// arguments its enclosing type
+		Map<Integer, List<JavaSyntax.Annotation>> words = new java.util.HashMap<>();
+		if (!leading.isEmpty()) {
+			words.put(0, List.copyOf(leading));
+		}
+		int word = 0;
 		StringBuilder qualified = new StringBuilder(identifier());
 		TypeName enclosing = null;
 		while (true) {
 			while (at(".")
 					&& (peekIs(1, "@") || (peek(1).kind() == Kind.IDENTIFIER && !RESERVED.contains(peek(1).text())))) {
 				this.p++;
-				annotations();
+				List<JavaSyntax.Annotation> written = annotationList();
+				word++;
+				if (!written.isEmpty()) {
+					words.put(word, List.copyOf(written));
+				}
 				qualified.append('.').append(identifier());
 			}
 			List<TypeName> arguments = new ArrayList<>();
@@ -1349,7 +1477,8 @@ final class JavaParser {
 					while (eat(","));
 					expect(">");
 				}
-				if (at(".") && peek(1).kind() == Kind.IDENTIFIER && !RESERVED.contains(peek(1).text())) {
+				if (at(".") && (peekIs(1, "@")
+						|| (peek(1).kind() == Kind.IDENTIFIER && !RESERVED.contains(peek(1).text())))) {
 					if (diamond) {
 						throw error("illegal start of type");
 					}
@@ -1357,21 +1486,29 @@ final class JavaParser {
 					continue;
 				}
 			}
-			return new TypeName(pos, qualified.toString(), arguments, diamond, dimensions(), enclosing);
+			TypeName read = new TypeName(pos, qualified.toString(), arguments, diamond, dimensions(dimensions),
+					enclosing);
+			typeAnnotated(pos, read.name(), words, dimensions);
+			return read;
 		}
 	}
 
-	private int dimensions() {
+	/**
+	 * Reads the {@code []} after a type: how many, the annotations of each added to
+	 * {@code annotated}.
+	 */
+	private int dimensions(List<List<JavaSyntax.Annotation>> annotated) {
 		int dimensions = 0;
 		while (true) {
 			int save = this.p;
-			annotations();
+			List<JavaSyntax.Annotation> written = annotationList();
 			if (!at("[") || !peekIs(1, "]")) {
 				this.p = save;
 				return dimensions;
 			}
 			this.p += 2;
 			dimensions++;
+			annotated.add(List.copyOf(written));
 		}
 	}
 
@@ -1428,9 +1565,11 @@ final class JavaParser {
 
 	private LocalVariable localVariable() {
 		int from = current().offset();
-		boolean isFinal = finalModifier();
+		List<JavaSyntax.Annotation> written = new ArrayList<>();
+		boolean isFinal = finalModifier(written);
 		int pos = current().offset();
 		TypeName type = typeName();
+		sites(written, "LOCAL_VARIABLE", type.name().equals("var") ? null : type);
 		List<Declarator> declarators = new ArrayList<>();
 		do {
 			int at = current().offset();
@@ -1765,8 +1904,10 @@ final class JavaParser {
 			this.p++;
 			return new JavaSyntax.TypePattern(pos, new TypeName(pos, "var", List.of(), false, 0), "_");
 		}
-		finalModifier();
+		List<JavaSyntax.Annotation> written = new ArrayList<>();
+		finalModifier(written);
 		TypeName type = typeName();
+		sites(written, "LOCAL_VARIABLE", type.name().equals("var") ? null : type);
 		if (at("(")) {
 			this.p++;
 			List<Pattern> components = new ArrayList<>();
@@ -1837,9 +1978,11 @@ final class JavaParser {
 		while (at("catch")) {
 			int at = this.tokens.get(this.p++).offset();
 			expect("(");
-			finalModifier();
+			List<JavaSyntax.Annotation> written = new ArrayList<>();
+			finalModifier(written);
 			List<TypeName> types = new ArrayList<>();
 			types.add(typeName());
+			sites(written, "PARAMETER", types.get(0));
 			while (eat("|")) {
 				types.add(typeName());
 			}
@@ -2108,13 +2251,16 @@ final class JavaParser {
 				if (!parameters.isEmpty()) {
 					expect(",");
 				}
-				finalModifier();
+				List<JavaSyntax.Annotation> written = new ArrayList<>();
+				finalModifier(written);
 				int at = current().offset();
 				if ((atIdentifier() || at("_")) && (peekIs(1, ",") || peekIs(1, ")"))) {
+					sites(written, "PARAMETER", null);
 					parameters.add(new Parameter(at, null, identifierOrUnnamed()));
 				}
 				else {
 					TypeName type = typeName();
+					sites(written, "PARAMETER", type.name().equals("var") ? null : type);
 					at = current().offset();
 					parameters.add(new Parameter(at, type.name().equals("var") ? null : type, identifierOrUnnamed()));
 				}

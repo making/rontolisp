@@ -1116,19 +1116,72 @@ Nobody opened OpenJDK's source ([java-frontend-provenance.md](java-frontend-prov
   `Package[]`). Reading an annotation's elements (`Read.java`) byte-identical; printing one and
   comparing two (`Printed.java`) 87,501 -> 91,016; a super type token (`Token.java`) 133,025;
   the test's part (`Part.java`) 1,250,126.
-- **Not here**: annotated types (`getAnnotatedType` .., `AnnotatedType`) and the annotations of
-  a type variable (refused by name); a type variable of the method around a local class (its
-  declaration `null`); identity -- a JDK answers one annotation object and one type variable
-  each time, this a new one; the members of `Class` and `java.lang.reflect`'s by reflection;
-  `@Target` checked where an annotation is written (javac refuses
-  `annotation interface not applicable to this kind of declaration`, the subset does not and
-  carries none); names under `-parameters`. The annotated types, a type variable's annotations
-  and the check of `@Target`: `.todo/m30`.
+- **Not here**: a type variable of the method around a local class (its declaration `null`);
+  identity -- a JDK answers one annotation object and one type variable each time, this a new
+  one; the members of `Class` and `java.lang.reflect`'s by reflection; names under
+  `-parameters`. Annotated types and a type variable's annotations: next section.
 - Pins: java-spec `a-class-is-a-value` (`generics()`, `annotated()`: each kind of type, element
   and declaration), `a-program-of-several-files-finds-its-classes-by-package` (a
-  `package-info.java`); `JavaJdkMembersTest` (the table);
-  `JavaLoweringTest#aConstructTheSubsetDoesNotHaveIsRefusedByNameAtItsPosition` (an annotated
-  type refused).
+  `package-info.java`); `JavaJdkMembersTest` (the table).
+
+## Annotated types and `@Target` (2026-11-26, m30)
+
+**Invariant: a use of a type a declaration names answers, as a JDK 25's reflection does, the
+type annotations of runtime retention written in it, and an annotation stands only where its
+type's `@Target` lets it, refused with javac's words.** Written from the API documentation
+(`AnnotatedType` and its four kinds, `TypeVariable`, `ElementType`), JLS 9.6.4.1 and 9.7.4 and
+JDK 25's (javac's) answers to probes; nobody opened OpenJDK's source.
+
+- **What the parser keeps** (`JavaSyntax.TypeAnnotations`, by a type's position): the
+  annotations ahead of each word of a type's name (the first's ahead of the type) and of each
+  `[]`, a variable arity's `...` the innermost dimension (`String @A [] @B ...` is
+  `String @A [] @B []`, measured); and where each annotation on a declaration stands
+  (`JavaSyntax.AnnotationSite`). Annotations between a method's type parameters and its type
+  are its modifiers' (JLS 8.4); a receiver's are its type's.
+- **Where a declaration's own stand** (`JavaClasses.placed`): of a `TYPE_USE` type, on the
+  first word of the type a type annotation may stand ahead of (`admissible`: the last word, or
+  a class around it, every class stepped through an inner one), an array's element. Where the
+  word written is a package or a class scoping a static member, javac -- for a type whose
+  `@Target` names the declaration too -- writes it on the type the name names (`@Both
+  java.lang.String`, `@Both W.N`: measured), not nowhere as JLS 9.7.4 reads.
+- **The runtime** (`rontolisp.internal.AnnotatedTypes`): a use is made of the generic type and
+  the paths the lowering answers (`%class-annotated`, `annotated0`: `C` component, `O` owner,
+  `A<n>;`, `U<n>;`, `L<n>;`). Owner of a class: the class it is a member of (`annotated0` 7),
+  none of a local or an anonymous one. Receiver: `Types.self` (a parameterized type where the
+  class or an inner class's outer has type variables); a constructor's of an inner member class
+  alone; a constructor's return type the plain class chain. Texts, equality (type, annotations,
+  owner, parts; a new object each time) as probed; hash codes consistent with equality, not a
+  JDK's numbers (a JDK's start from `Class.hashCode`, an identity hash).
+- **Parameters, measured**: over the generic types where there is one a parameter, else the
+  erased ones; an inner member class's constructor's annotations after the instance around it;
+  an enum's and a local class's on the parameter in the declared one's place, shifted by the
+  name and ordinal or the instance, as a JDK's are.
+- **Which declaration carries a `TYPE_USE` one** (`JavaClasses.appliesTo`, measured): a class,
+  a type parameter and an enum constant (whose field's type then carries none); a field, a
+  method, a constructor, a parameter or a record component not (`declaresOn` is the check's
+  wider rule: a record component takes what its field, accessor or parameter does).
+- **A type variable's annotations** (`%class-variable-annotations`, `variableAnnotations0`):
+  a function of its own -- reached through `AnnotatedElement` by any program holding type
+  variables, it would otherwise make `%class-annotations` take a computed `what` (+7.4 KB of
+  wasm measured on `Classes.java`); arms only for annotated type parameters and refusals for
+  reflected library classes.
+- **The check** (`JavaClasses.applicable`, a program's files alone): `annotation interface not
+  applicable to this kind of declaration`, `annotation @X not applicable in this type context`
+  (a type parameter's too), `type annotation @X is not expected here` (canonical name), as
+  javac 25 writes them; `java.lang`'s targets from their documentation, no file read.
+- **Measured** (2026-11-26; wasm P1 / component / JVM class, B): shop, both YAVI examples'
+  `Member`, mustache and reflection byte-identical; `a-class-is-a-value`'s program before this
+  item's lines 3,784,952 / 3,786,316 / 2,418,617 -> 3,785,352 / 3,786,716 / 2,419,100 (its type
+  variables are `AnnotatedElement`s, as a JDK's: their class's interface list and the
+  dispatchers of `AnnotatedElement`); a program printing one annotated field type 172,552 /
+  174,614 / 236,581, against 135,988 (wasm) printing its generic type.
+- **Not here**: a member type of a generic class named through the raw class (`Outer.Inner` in
+  `Outer<T>`): a JDK's raw class, the subset's parameterized type, as its generic type already
+  was; the annotations of a library class's types (refused, as its annotations are); a JDK
+  class's (none written, `NIL`).
+- Pins: java-spec `a-class-is-a-value` (`typed()`), its two `refused:` `@Target` cases;
+  `JavaLoweringTest#anErrorTheLoweringDependsOnIsReportedAtItsPosition` (the scoping refusal,
+  which needs a `TYPE_USE` type no JDK class is).
 
 ## A session (2026-11-17, j74)
 
@@ -1185,7 +1238,8 @@ Parsed and dropped, on a declaration and on a type, but for what a program reads
 (next section; "Generic types, records and the annotations of members" above). The name must be
 an annotation type the file sees (`java.lang`'s, no file read; `java.lang.annotation`'s; an
 `@interface`, a `java.lang.annotation.Annotation` by JLS 9.6): `cannot find symbol: class X`,
-`incompatible types: X cannot be converted to Annotation` (javac's). An unknown name is refused
+`incompatible types: X cannot be converted to Annotation` (javac's); where its `@Target` does
+not let it stand, javac's refusal ("Annotated types and `@Target`" above). An unknown name is refused
 because a processor or a framework gives it a meaning whose absence would change the program.
 Decided for a dependency by what javac does with a class file: an annotation whose type is
 missing from the class path is dropped silently, so a library's file is not asked

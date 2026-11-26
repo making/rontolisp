@@ -457,8 +457,8 @@ JDK 25 と同じアノテーションを持ちます（`Runnable` の `@Function
 返し、JDK のように毎回同じオブジェクトを返すことはしません。プログラム自身のコードがアノテーションを
 読まず、一覧も取らない場合（Servlet コンテナーがサーブレットを見つけるときのように、ライブラリが
 自分のためにアノテーションを読む場合）には、アノテーションの `equals` と `hashCode` は
-オブジェクト自体を比べ、`toString` は実行時に拒否されます。型の `@Target` が挙げていない種類の
-宣言に付いたアノテーションは、javac と違って拒否せず、実行時にも保持しません。
+オブジェクト自体を比べ、`toString` は実行時に拒否されます。型の `@Target` が許さない場所に
+書かれたアノテーションは、javac と同じ文言で拒否します。
 
 **宣言のジェネリックな型は、宣言に書かれたとおりです。** `getGenericSuperclass`、
 `getGenericInterfaces`、`getTypeParameters`、`getGenericReturnType`、
@@ -474,6 +474,19 @@ JDK 25 と同じアノテーションを持ちます（`Runnable` の `@Function
 付けない javac が残すとおりです。レコードの正規コンストラクタでは書かれた名前、それ以外は `arg`
 と位置です。修飾子も javac が記録するとおりで、内部クラスの外側のインスタンス、列挙型の名前と
 序数、列挙型の `valueOf` の引数に付きます。
+
+**型アノテーションは JDK と同じように読みます。** `getAnnotatedType`、`getAnnotatedReturnType`、
+`getAnnotatedParameterTypes`、`getAnnotatedExceptionTypes`、`getAnnotatedReceiverType`、
+`getAnnotatedSuperclass`、`getAnnotatedInterfaces`、`getAnnotatedBounds` は、宣言が名指す各型の
+使用を返します。その型に書かれたアノテーションのうち、保持ポリシーが実行時で `@Target` が
+`TYPE_USE` を挙げるものを持ちます（JLS 9.7.4）。型はジェネリックな型に応じて
+`AnnotatedParameterizedType`、`AnnotatedTypeVariable`、`AnnotatedWildcardType`、
+`AnnotatedArrayType`、`AnnotatedType` のいずれかで、型引数、境界、要素型、メンバー型を囲む型の使用を
+持ちます。文字列と等価性は JDK と同じで、問い合わせるたびに新しいオブジェクトを返します。型変数は
+その宣言に書かれたアノテーションを持ちます。JDK のクラスには型アノテーションがありません。
+ジェネリックなクラスのメンバー型を raw なクラス経由で書いた場合（`Outer<T>` の中の
+`Outer.Inner`）、JDK は raw なクラスを返しますが、サブセットはジェネリックな型と同じく
+パラメーター化された型を返します。
 
 **プログラムが計算した名前でクラスを見つけられるのは、索引に載っているクラスと、到達可能性
 メタデータが宣言するクラスだけです。** どのターゲットにも、探す先のクラスファイルがないためです。
@@ -1261,8 +1274,7 @@ SLF4J を呼んだフレームが入ります。JDK では、`java.util.logging`
 無い JDK のクラスやメンバーを参照する文はエラーではなく警告になり、実行された時点で例外を
 投げます（[サードパーティのライブラリを使う](index.md#using-a-third-party-library)）。
 
-- リフレクション。注釈付きの型（`getAnnotatedType`、`getAnnotatedReturnType`、
-  `getAnnotatedSuperclass` など）と型変数のアノテーション。`java.lang.invoke` のうち
+- リフレクション。`java.lang.invoke` のうち
   [JDK のクラス](classes.md)にないもの（`VarHandle`、`MethodHandles` のコンビネーター、
   `findGetter` などフィールドのハンドル、`Lookup.in`）。
 - `long`、`float`、`double`、`boolean` に対する `switch`。修飾した `super` を通すメソッド参照と

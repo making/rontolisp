@@ -32,6 +32,39 @@ public abstract sealed class Executable extends AccessibleObject
         return Types.generic(getDeclaringClass(), member(), 3, this, getExceptionTypes());
     }
 
+    public abstract AnnotatedType getAnnotatedReturnType();
+
+    public abstract AnnotatedType getAnnotatedReceiverType();
+
+    // the uses of the types of the parameters, with the type annotations written in them:
+    // over the generic types where there is one a parameter, else (an enum's constructor, a
+    // local class's) over the erased ones, the annotations of each declared parameter on
+    // the one in its place; an inner member class's constructor's after the instance
+    // around it, which has none
+    public AnnotatedType[] getAnnotatedParameterTypes() {
+        Type[] generic = getGenericParameterTypes();
+        int count = getParameterCount();
+        Class<?> declaring = getDeclaringClass();
+        boolean inner = this instanceof Constructor && rontolisp.internal.AnnotatedTypes.inner(declaring);
+        Type[] types = generic;
+        if (generic.length != count) {
+            types = getParameterTypes();
+            if (inner && generic.length == count - 1) {
+                for (int index = 0; index < generic.length; index++) {
+                    types[index + 1] = generic[index];
+                }
+            }
+        }
+        Object placed = rontolisp.internal.AnnotatedTypes.annotated0(declaring, member(), 2);
+        int first = inner && placed != null ? count - ((Object[]) placed).length : 0;
+        return rontolisp.internal.AnnotatedTypes.all(types, placed, first);
+    }
+
+    public AnnotatedType[] getAnnotatedExceptionTypes() {
+        return rontolisp.internal.AnnotatedTypes.all(getGenericExceptionTypes(),
+                rontolisp.internal.AnnotatedTypes.annotated0(getDeclaringClass(), member(), 3), 0);
+    }
+
     public Annotation[] getDeclaredAnnotations() {
         return annotations(annotations0(getDeclaringClass(), member(), 0));
     }
