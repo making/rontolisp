@@ -160,26 +160,42 @@ default メソッドと、static の `@BeforeAll`・`@AfterAll`)。アノテー�
 `org.assertj.core.api.Assertions` には、下の表の種類の `assertThat`、`assertThatThrownBy`、
 `assertThatCode`、`assertThatExceptionOfType` (と `assertThatIllegalArgumentException`、
 `assertThatIllegalStateException`、`assertThatNullPointerException`、
-`assertThatIOException`)、`assertThatNoException`、`catchThrowable`、`fail`、`entry` が
-あります。
+`assertThatIOException`)、`assertThatNoException`、`catchThrowable`、`fail`、`entry`、
+`tuple`、許容差の `within`、`offset`、`withPrecision`、`byLessThan` (`double`、`float`、
+`int`、`long`)、`asInstanceOf` に渡す `InstanceOfAssertFactories` のファクトリ (下の表の種類
+ごとのものと `type`、`list`、`iterable`、`map`、`optional`、`throwable`、`array`、
+`comparable`、`future`、`completableFuture`) があります。
 
 | `assertThat` の対象 | 検査 |
 | --- | --- |
-| 任意の値 | `isEqualTo` (配列どうしは要素で比較)、`isNotEqualTo`、`isNull`、`isNotNull`、`isSameAs`、`isNotSameAs`、`isInstanceOf`、`isNotInstanceOf`、`isExactlyInstanceOf`、`isInstanceOfSatisfying`、`isIn`、`isNotIn`、`hasToString`、`doesNotHaveToString`、`matches`、`satisfies`、および `as`、`describedAs`、`withFailMessage`、`overridingErrorMessage` |
-| オブジェクト | 関数を取る `extracting` |
+| 任意の値 | `isEqualTo` (配列どうしは要素で比較)、`isNotEqualTo`、`isNull`、`isNotNull`、`isSameAs`、`isNotSameAs`、`isInstanceOf`、`isNotInstanceOf`、`isExactlyInstanceOf`、`isInstanceOfSatisfying`、`isIn`、`isNotIn` (値の並びか `Iterable`)、`hasToString`、`doesNotHaveToString`、`matches`、`satisfies`、`asInstanceOf`、および `as`、`describedAs`、`withFailMessage`、`overridingErrorMessage` |
+| オブジェクト | 関数を取る `extracting` とプロパティかフィールドの名前を取る `extracting` (複数の名前ならリスト)、`hasFieldOrProperty`、`hasFieldOrPropertyWithValue`、`usingRecursiveComparison` (`Map`、`Iterable`、オブジェクトの配列、`Optional` にもあります) とその `isEqualTo`、`isNotEqualTo`、`ignoringFields`、`comparingOnlyFields`、`ignoringActualNullFields`、`ignoringExpectedNullFields`、`ignoringCollectionOrder`、`withStrictTypeChecking` |
+| プログラムの `Comparable` (列挙型を含む) | `isGreaterThan`、`isGreaterThanOrEqualTo`、`isLessThan`、`isLessThanOrEqualTo`、`isBetween`、`isStrictlyBetween`、`isEqualByComparingTo`、`isNotEqualByComparingTo` |
 | `String` | `isEmpty`、`isNotEmpty`、`isNullOrEmpty`、`isBlank`、`isNotBlank`、`hasSize` とその 4 つの比較、`contains`、`doesNotContain`、`containsIgnoringCase`、`containsSubsequence`、`startsWith`、`doesNotStartWith`、`endsWith`、`doesNotEndWith`、`isEqualToIgnoringCase`、`matches`、`doesNotMatch` |
-| `int`、`long`、`float`、`double` とそのボックス | `isZero`、`isNotZero`、`isOne`、`isPositive`、`isNegative`、`isNotNegative`、`isNotPositive`、`isGreaterThan`、`isGreaterThanOrEqualTo`、`isLessThan`、`isLessThanOrEqualTo`、`isBetween`、`isStrictlyBetween`、`isEqualByComparingTo`。`double` には `isNaN`、`isNotNaN` |
+| `int`、`long`、`float`、`double` とそのボックス | `isZero`、`isNotZero`、`isOne`、`isPositive`、`isNegative`、`isNotNegative`、`isNotPositive`、`isGreaterThan`、`isGreaterThanOrEqualTo`、`isLessThan`、`isLessThanOrEqualTo`、`isBetween`、`isStrictlyBetween`、`isEqualByComparingTo`、`isCloseTo`、`isNotCloseTo`。`double` と `float` には許容差を取る `isEqualTo`。`double` には `isNaN`、`isNotNaN` |
 | `char`、`boolean` | `isGreaterThan`、`isLessThan`。`isTrue`、`isFalse` |
-| `Iterable`、`List` | `isEmpty`、`isNotEmpty`、`isNullOrEmpty`、`hasSize` とその 4 つの比較、`contains`、`containsAll`、`doesNotContain`、`containsExactly`、`containsExactlyElementsOf`、`containsExactlyInAnyOrder`、`containsExactlyInAnyOrderElementsOf`、`containsOnly`、`containsSequence`、`containsSubsequence`、`anyMatch`、`allMatch`、`noneMatch`、`allSatisfy`、`anySatisfy`、`extracting`、`map`、述語を取る `filteredOn`、`first`、`last`、`element`、`singleElement` |
+| `Iterable`、`List` | `isEmpty`、`isNotEmpty`、`isNullOrEmpty`、`hasSize` とその 4 つの比較、`contains`、`containsAll`、`doesNotContain`、`containsExactly`、`containsExactlyElementsOf`、`containsExactlyInAnyOrder`、`containsExactlyInAnyOrderElementsOf`、`containsOnly`、`containsSequence`、`containsSubsequence`、`anyMatch`、`allMatch`、`noneMatch`、`allSatisfy`、`anySatisfy`、`extracting` (名前を取るものは要素ごとに `Tuple`)、`map`、述語か名前と値を取る `filteredOn`、`first`、`last`、`element`、`singleElement` |
 | オブジェクトの配列と、`byte`、`int`、`long`、`char`、`double` の配列 | `isEmpty`、`isNotEmpty`、`isNullOrEmpty`、`hasSize`、`contains`、`doesNotContain`、`containsExactly`、`containsExactlyInAnyOrder`。オブジェクトの配列には `containsOnly`、プリミティブ型の配列には `startsWith` |
-| `Map` | `isEmpty`、`isNotEmpty`、`isNullOrEmpty`、`hasSize`、`containsKey`、`containsKeys`、`doesNotContainKey`、`doesNotContainKeys`、`containsValue`、`doesNotContainValue`、`containsEntry`、`doesNotContainEntry`、`contains`、`containsAllEntriesOf`、`containsOnly`、`containsOnlyKeys` |
+| `Map` | `isEmpty`、`isNotEmpty`、`isNullOrEmpty`、`hasSize`、`containsKey`、`containsKeys`、`doesNotContainKey`、`doesNotContainKeys`、`containsValue`、`doesNotContainValue`、`containsEntry`、`doesNotContainEntry`、`contains`、`containsAllEntriesOf`、`containsOnly`、`containsOnlyKeys`、`containsExactly` |
 | `Optional` | `isPresent`、`isNotEmpty`、`isEmpty`、`isNotPresent`、`contains`、`hasValue`、`hasValueSatisfying`、`get` |
+| `Class` | `isInterface`、`isNotInterface`、`isAnnotation`、`isNotAnnotation`、`isRecord`、`isNotRecord`、`isAbstract`、`isFinal`、`isNotFinal`、`isPublic`、`isProtected`、`isPrivate`、`isPackagePrivate`、`isStatic`、`isNotStatic`、`isAssignableFrom`、`isAssignableTo`、`hasSuperclass`、`hasNoSuperclass`、`isPrimitive`、`isNotPrimitive`、`hasPackage` |
+| `Path` | `exists`、`doesNotExist`、`isRegularFile`、`isDirectory`、`isAbsolute`、`isRelative`、`hasFileName`、`hasExtension`、`hasNoExtension`、`hasContent`、`hasBinaryContent`、`hasSize`、`isEmptyFile`、`isNotEmptyFile`、`isEmptyDirectory`、`isNotEmptyDirectory`、`content`、`binaryContent`、および `Comparable` の検査 |
+| `File` | `exists`、`doesNotExist`、`isFile`、`isDirectory`、`isAbsolute`、`isRelative`、`canRead`、`hasName`、`hasFileName`、`hasParent`、`hasNoParent`、`hasExtension`、`hasNoExtension`、`hasContent`、`hasBinaryContent`、`hasSize`、`isEmpty`、`isNotEmpty`、`isEmptyDirectory`、`isNotEmptyDirectory`、`content`、`binaryContent` |
+| `LocalDate`、`LocalDateTime`、`LocalTime`、`Instant` | `isBefore`、`isBeforeOrEqualTo`、`isAfter`、`isAfterOrEqualTo`、`isBetween`、`isStrictlyBetween`、そのクラスが解析する文字列を取る `isEqualTo`、`isNotEqualTo`、`isIn`、`isNotIn`、各フィールドの検査 (`hasYear`、`hasMonth`、`hasMonthValue`、`hasDayOfMonth`、`hasHour`、`hasMinute`、`hasSecond`、`hasNano`) |
+| `Duration` | `isZero`、`isPositive`、`isNegative`、`hasNanos`、`hasMillis`、`hasSeconds`、`hasMinutes`、`hasHours`、`hasDays`、`isCloseTo`、および `Comparable` の検査 |
+| `Future`、`CompletableFuture` | `isDone`、`isNotDone`、`isCancelled`、`isNotCancelled`、`succeedsWithin`。`CompletableFuture` には `isCompleted`、`isNotCompleted`、`isCompletedWithValue`、`isCompletedWithValueMatching`、`isCompletedExceptionally`、`isNotCompletedExceptionally`、`hasFailed` |
 | `Throwable` | `hasMessage`、`hasMessageContaining`、`hasMessageNotContaining`、`hasMessageStartingWith`、`hasMessageEndingWith`、`hasMessageMatching`、`hasNoCause`、`hasCauseInstanceOf`、`hasRootCauseInstanceOf`、`hasRootCauseMessage`、`cause`、`rootCause`、`doesNotThrowAnyException`。`isThrownBy` の後では、同じ検査を `withMessage` .. `withRootCauseInstanceOf`、`havingCause`、`havingRootCause` の名前で使えます |
 
 失敗した検査は AssertJ と同じ文言を出し、JUnit と併用したときに AssertJ が投げるのと同じ
 クラスを投げます (2 つの値を比べる検査は `AssertionFailedError`、それ以外は
 `AssertionError`)。AssertJ がスタックトレースのフレームや JDK 内部のクラス名を足す箇所では、
 メッセージにそれらが入りません。
+
+プロパティは AssertJ と同じ順で読みます。ゲッター (`getName`、なければ `isName`) を使い、
+なければクラスかその上位クラスのフィールドを読みます。再帰比較はプログラムのクラスのフィールドを
+たどり、JDK の型は `equals` で比べ (`double` と `float` は AssertJ の精度の範囲で)、
+コレクション・配列・マップ・`Optional` は中身で比べます。プログラムがメンバーを保持しない
+ライブラリのクラスをフィールドごとに比べようとすると拒否します。
 
 ## ないもの
 
@@ -199,9 +215,9 @@ error: src/test/java/shop/SlowTest.java:13:5: the annotation org.junit.jupiter.a
 `classes`、`@TempDir` の `cleanup` と `factory`)、`Class` のパラメータに与える文字列、`@TempDir`
 でも `TestInfo` でもない `@Test` メソッドのパラメータ、型が JUnit のものであるパラメータ化
 テストのパラメータ (`ArgumentsAccessor`、引数を表示名に含む `TestInfo`)、繰り返しでないテストの
-前後で与える `RepetitionInfo`。AssertJ では、リフレクションでクラスのフィールドを読む検査
-(`usingRecursiveComparison`、`hasFieldOrPropertyWithValue`、名前を取る `extracting`)、ソフト
-アサーション、日付・ファイル・フューチャーのアサーション。テストクラスのコンストラクタは 1 つで、
+前後で与える `RepetitionInfo`。AssertJ では、ソフトアサーションと、上の表にない検査 (`Path` の
+`hasParent`、再帰比較の独自のコンパレータとイントロスペクション戦略、`ZonedDateTime`・`URI`・
+`BigDecimal` に固有の検査。これらの値は `Comparable` として扱います)。テストクラスのコンストラクタは 1 つで、
 パラメータは `TestInfo` と `@TempDir` のディレクトリにできます。テストクラスの中の `static` クラスは、ファイル直下のクラスとして
 書いたときだけ実行されます。
 

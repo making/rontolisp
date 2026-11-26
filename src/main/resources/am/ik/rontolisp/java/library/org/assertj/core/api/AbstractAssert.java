@@ -62,6 +62,22 @@ public abstract class AbstractAssert<SELF extends AbstractAssert<SELF, ACTUAL>, 
         return description;
     }
 
+    // Another assertion described as this one is, its failures said as this one's are.
+    <A extends AbstractAssert<?, ?>> A carried(A other) {
+        ((AbstractAssert<?, ?>) other).description = description;
+        ((AbstractAssert<?, ?>) other).overriding = overriding;
+        return other;
+    }
+
+    // An assertion of what was extracted, described as this one or by the names asked.
+    <A extends AbstractAssert<?, ?>> A extracted(A extracted, String names) {
+        carried(extracted);
+        if (description == null) {
+            extracted.as("Extracted: " + names);
+        }
+        return extracted;
+    }
+
     public SELF as(String description, Object... args) {
         this.description = args.length == 0 ? description : String.format(description, args);
         return myself;
@@ -84,7 +100,7 @@ public abstract class AbstractAssert<SELF extends AbstractAssert<SELF, ACTUAL>, 
 
     public SELF isEqualTo(Object expected) {
         if (!Shown.same(actual, expected)) {
-            throw unequal("\nexpected: " + Shown.after(expected) + "\n but was: " + Shown.after(actual), expected, actual);
+            throw unequal(Shown.expected(expected, actual), expected, actual);
         }
         return myself;
     }
@@ -98,7 +114,7 @@ public abstract class AbstractAssert<SELF extends AbstractAssert<SELF, ACTUAL>, 
 
     public void isNull() {
         if (actual != null) {
-            throw unequal("\nexpected: null\n but was: " + Shown.after(actual), null, actual);
+            throw unequal(Shown.expected(null, actual), null, actual);
         }
     }
 
@@ -168,15 +184,25 @@ public abstract class AbstractAssert<SELF extends AbstractAssert<SELF, ACTUAL>, 
     }
 
     public SELF isIn(Object... values) {
-        if (!Shown.holds(List.of(values), actual)) {
-            throw failure("\nExpecting actual:\n" + Shown.under(actual) + "\nto be in:\n" + Shown.under(values) + "\n");
+        return isIn(Shown.elementsOf(values));
+    }
+
+    public SELF isIn(Iterable<?> values) {
+        List<Object> listed = Shown.listOf(values);
+        if (!Shown.holds(listed, actual)) {
+            throw failure("\nExpecting actual:\n" + Shown.under(actual) + "\nto be in:\n" + Shown.under(listed) + "\n");
         }
         return myself;
     }
 
     public SELF isNotIn(Object... values) {
-        if (Shown.holds(List.of(values), actual)) {
-            throw failure("\nExpecting actual:\n" + Shown.under(actual) + "\nnot to be in:\n" + Shown.under(values) + "\n");
+        return isNotIn(Shown.elementsOf(values));
+    }
+
+    public SELF isNotIn(Iterable<?> values) {
+        List<Object> listed = Shown.listOf(values);
+        if (Shown.holds(listed, actual)) {
+            throw failure("\nExpecting actual:\n" + Shown.under(actual) + "\nnot to be in:\n" + Shown.under(listed) + "\n");
         }
         return myself;
     }
@@ -208,6 +234,17 @@ public abstract class AbstractAssert<SELF extends AbstractAssert<SELF, ACTUAL>, 
     public SELF satisfies(Consumer<? super ACTUAL> requirements) {
         requirements.accept(actual);
         return myself;
+    }
+
+    @SuppressWarnings({ "unchecked", "rawtypes" })
+    protected RecursiveComparisonAssert<?> usingRecursiveComparison() {
+        return carried(new RecursiveComparisonAssert(actual));
+    }
+
+    public <ASSERT extends AbstractAssert<?, ?>> ASSERT asInstanceOf(InstanceOfAssertFactory<?, ASSERT> instanceOfAssertFactory) {
+        java.util.Objects.requireNonNull(instanceOfAssertFactory, "instanceOfAssertFactory should not be null");
+        isInstanceOf(instanceOfAssertFactory.getRawClass());
+        return carried(instanceOfAssertFactory.createAssert(actual));
     }
 
     public SELF doesNotHaveToString(String otherToString) {

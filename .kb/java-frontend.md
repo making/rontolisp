@@ -1725,9 +1725,10 @@ JDK in the front end's semantics, the library and the host.
   source path its module's `src/main/java` AND `src/main/resources`, which holds the
   `@WitImport`'s WIT, `servlet-httpserver`'s and `rontolisp-java-api`'s, with
   `--java-source-dep jakarta.servlet:jakarta.servlet-api:6.1.0`): measured 2026-11-26, with
-  no cookie handler, no `usingRecursiveComparison` and no `asInstanceOf` (`.todo/m62`) both
-  tests run on the interpreter and fail only where those edits change them --
-  `KeyValueStore.Bucket` is found. A program that is no run of tests holds none of it: the lowering changes
+  no cookie handler, no `usingRecursiveComparison` and no `asInstanceOf` both tests run on
+  the interpreter and fail only where those edits change them -- `KeyValueStore.Bucket` is
+  found; the recursive comparison and `asInstanceOf` are the library's since (below), the
+  cookie handler `.todo/m78`. A program that is no run of tests holds none of it: the lowering changes
   only where `javaTests` is set or a test package of the library's is named
   (`examples/java/shop` 323,921 B, byte-identical across l87).
 - **Past one instance a test and the order declared: measured** (JUnit 6.0.3, 2026-11-26;
@@ -1823,6 +1824,58 @@ JDK in the front end's semantics, the library and the host.
   test, `JUnitException`): `UrlCodecTest` 231,738 -> 238,354 B wasm, `SqlTest` 295,769 ->
   297,171. Pinned by the corpus case's `q/OtherTest.java` (four backends against the
   oracle).
+- **AssertJ's checks by reflection and of the other kinds: measured** (AssertJ 3.27.7, JDK
+  25, 2026-11-26; pinned by the corpus case's `q/AssertjTest.java`, four backends against
+  the oracle). Every message was asked of AssertJ under a JDK by probes; the signatures are
+  `javap`'s:
+  - **How a value is shown** (`rontolisp.internal.Shown`, every check's): a map's entries in
+    the order of their keys where all compare (keys of two kinds, a `null` key: the map's
+    order); any `CharSequence` quoted; a class by its canonical name; a `Path` as its text
+    (it is an `Iterable` of paths: shown as one it never ended); a `File` by its absolute
+    path; a `Duration` without `PT`; `LocalDate`, `LocalDateTime`, `OffsetDateTime`,
+    `ZonedDateTime` followed by ` (java.time.X)`, `LocalTime` and `Instant` not. An
+    `Iterable` or an array of objects of two or more elements whose one line passes 80
+    characters is one element a line (`",\n    "`, nested ones the same); a map, a tuple
+    and a primitive array never. `Expecting actual:\n  %s` indents no continuation line;
+    `expected:`/` but was:` put BOTH values under their headings where either has several
+    lines. Cost on wasm: `UrlCodecTest` 238,341 -> 240,369 B, `SqlTest` 292,253 ->
+    294,333 (`Arrays.asList` for an `Object[]` alone was +6.3 KB: the elements are copied
+    into an `ArrayList`); `examples/java/shop` byte-identical.
+  - **A property** (`Introspected`): `getX`, then `isX` (public, called `setAccessible`: a
+    package-private class's getter is refused under a JDK too), then a field of the class
+    or above, static and synthetic aside; a dotted name walks, a `null` on the way is the
+    value. `extracting` by name describes the result `Extracted: <names>` unless described.
+  - **The recursive comparison** (`Recursion`): the EXPECTED value's kind decides --
+    an `Optional` (path `.value`), an array, an ordered collection (`List`, `SortedSet`,
+    `LinkedHashSet`: by index; any other actual is `expected field is an ordered collection
+    but actual field is not`), any other `Iterable` or `ignoringCollectionOrder` (each
+    expected element matched by a nested comparison), a map (by key; a sorted one in
+    order). Else a JDK type on either side (`java.` names) by `equals`, with `Compared
+    objects have java types ...`; an enum by `equals`; else the ACTUAL's fields, read as
+    properties (getter first), each of which the expected must declare. A `Double` /
+    `Float` actual compares within 1e-15 / 1e-6 (inclusive; `==` first); any other expected
+    prints AssertJ's `WARNING: Comparator was not suited ...` on standard output.
+    Differences are sorted by their path as a string (`[10]` before `[2]`); a root index is
+    `Top level ... element at index N`; values whose texts are equal get
+    ` (SimpleName@identityhash)`. Not made: the comparators, the introspection strategy,
+    `withEqualsForType` and the rest (refused by name).
+  - **Cost of the field names (measured, decided)**: listing them with `getDeclaredFields`
+    makes `%class-members` (k89's tables) for every class the program makes a class object
+    of -- a test of one recursive comparison 974,834 B of wasm against 183,521 B without
+    it. `Introspected.fieldNames0` is a native (`%class-field-names`, a vector of a program
+    class's instance field names) that makes no table: 351,945 B; the rest is reflection by
+    name (`%class-field`, `%class-method`, `Method.invoke`) and the comparison. A class of
+    a library the program keeps no members of is refused where compared field by field.
+  - `asInstanceOf` of one factory initializes `InstanceOfAssertFactories` whole, every
+    assertion class a constant makes: +62.6 KB on a test of one check. An interface's
+    fields are initialized together; not made lazy.
+  - `isCloseTo` of a finite `double`/`float` measures the difference in decimal
+    (`BigDecimal.valueOf`, `Float.toString`): `1.0` and `1.1` are within `0.1`; an `int`
+    and a `long` with `Math.abs` of the wrapped difference. `hasContent` of a path or a file
+    is a longest common subsequence's runs of lines, each at its line in the EXPECTED text.
+  - Seen differ, not this item's: `List.of(1, 2)` is the library's `ListN` where a JDK has
+    `List12` (`Expecting List12:`); a `File` directory's listing order.
+  - Soft assertions are refused by name (`.todo/m83`).
 
 ## Declarations and statements past the first slice (2026-11-17)
 

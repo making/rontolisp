@@ -4,6 +4,8 @@
 // subset. Notice: THIRD-PARTY-NOTICES.txt, "AssertJ".
 package org.assertj.core.api;
 
+import org.assertj.core.data.Offset;
+
 // The checks of an int: against a number written as it is.
 public abstract class AbstractIntegerAssert<SELF extends AbstractIntegerAssert<SELF>> extends AbstractComparableAssert<SELF, Integer> {
 
@@ -61,5 +63,29 @@ public abstract class AbstractIntegerAssert<SELF extends AbstractIntegerAssert<S
 
     public SELF isLessThanOrEqualTo(int other) {
         return isLessThanOrEqualTo((Integer) other);
+    }
+
+    public SELF isCloseTo(int expected, Offset<Integer> offset) {
+        return isCloseTo((Integer) expected, offset);
+    }
+
+    public SELF isCloseTo(Integer expected, Offset<Integer> offset) {
+        return closeTo(expected, offset, true);
+    }
+
+    public SELF isNotCloseTo(int expected, Offset<Integer> offset) {
+        return isNotCloseTo((Integer) expected, offset);
+    }
+
+    public SELF isNotCloseTo(Integer expected, Offset<Integer> offset) {
+        return closeTo(expected, offset, false);
+    }
+
+    private SELF closeTo(Integer expected, Offset<Integer> offset, boolean wanted) {
+        given(offset);
+        isNotNull();
+        int difference = Math.abs(actual - expected);
+        return closeTo(expected, offset, difference, offset.strict ? difference < offset.value : difference <= offset.value,
+                wanted);
     }
 }

@@ -181,8 +181,8 @@ public abstract class AbstractStringAssert<SELF extends AbstractStringAssert<SEL
 
     public SELF isEqualToIgnoringCase(CharSequence expected) {
         if (actual == null ? expected != null : expected == null || !actual.equalsIgnoreCase(expected.toString())) {
-            throw unequal("\nexpected: " + Shown.after(expected == null ? null : expected.toString()) + "\n but was: "
-                    + Shown.after(actual) + "\nignoring case considerations", expected, actual);
+            throw unequal(Shown.expected(expected == null ? null : expected.toString(), actual)
+                    + "\nignoring case considerations", expected, actual);
         }
         return myself;
     }

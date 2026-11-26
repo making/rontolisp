@@ -4,9 +4,15 @@
 // subset. Notice: THIRD-PARTY-NOTICES.txt, "AssertJ".
 package org.assertj.core.api;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.function.Function;
 
-// The checks of an object: a value taken from it is asserted on in its turn.
+import rontolisp.internal.Introspected;
+import rontolisp.internal.Shown;
+
+// The checks of an object: a value taken from it, by a function or by the name of a
+// property or a field (rontolisp.internal.Introspected), is asserted on in its turn.
 public abstract class AbstractObjectAssert<SELF extends AbstractObjectAssert<SELF, ACTUAL>, ACTUAL>
         extends AbstractAssert<SELF, ACTUAL> {
 
@@ -25,5 +31,44 @@ public abstract class AbstractObjectAssert<SELF extends AbstractObjectAssert<SEL
             extracted.as(descriptionText());
         }
         return extracted;
+    }
+
+    public SELF hasFieldOrProperty(String name) {
+        isNotNull();
+        if (!Introspected.has(actual, name)) {
+            throw failure("\nExpecting\n" + Shown.under(actual) + "\nto have a property or a field named " + Shown.of(name)
+                    + "\n(static and synthetic fields are ignored)");
+        }
+        return myself;
+    }
+
+    public SELF hasFieldOrPropertyWithValue(String name, Object value) {
+        hasFieldOrProperty(name);
+        Object held = Introspected.value(actual, name);
+        if (!Shown.same(held, value)) {
+            throw failure("\nExpecting\n" + Shown.under(actual) + "\nto have a property or a field named " + Shown.of(name)
+                    + " with value\n" + Shown.under(value) + "\nbut value was:\n" + Shown.under(held)
+                    + "\n(static and synthetic fields are ignored)");
+        }
+        return myself;
+    }
+
+    public AbstractObjectAssert<?, ?> extracting(String propertyOrField) {
+        isNotNull();
+        return extracted(new ObjectAssert<>(Introspected.value(actual, propertyOrField)), propertyOrField);
+    }
+
+    public ListAssert<Object> extracting(String... propertiesOrFields) {
+        isNotNull();
+        List<Object> values = new ArrayList<>();
+        for (String name : propertiesOrFields) {
+            values.add(Introspected.value(actual, name));
+        }
+        return extracted(new ListAssert<>(values), String.join(", ", propertiesOrFields));
+    }
+
+    @Override
+    public RecursiveComparisonAssert<?> usingRecursiveComparison() {
+        return super.usingRecursiveComparison();
     }
 }

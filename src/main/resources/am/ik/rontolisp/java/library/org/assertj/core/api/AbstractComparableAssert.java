@@ -4,6 +4,7 @@
 // subset. Notice: THIRD-PARTY-NOTICES.txt, "AssertJ".
 package org.assertj.core.api;
 
+import org.assertj.core.data.Offset;
 import rontolisp.internal.Shown;
 
 // The checks of a value that has an order.
@@ -71,8 +72,34 @@ public abstract class AbstractComparableAssert<SELF extends AbstractComparableAs
     public SELF isEqualByComparingTo(ACTUAL other) {
         isNotNull();
         if (actual.compareTo(other) != 0) {
-            throw unequal("\nexpected: " + Shown.after(other) + "\n but was: " + Shown.after(actual), other, actual);
+            throw unequal(Shown.expected(other, actual), other, actual);
         }
         return myself;
+    }
+
+    public SELF isNotEqualByComparingTo(ACTUAL other) {
+        isNotNull();
+        if (actual.compareTo(other) == 0) {
+            throw failure("\nExpecting actual:\n" + Shown.under(actual) + "\nnot to be equal to:\n" + Shown.under(other) + "\n");
+        }
+        return myself;
+    }
+
+    // A number checked to be close to another, or not, by a difference already measured.
+    SELF closeTo(ACTUAL expected, Offset<?> offset, Number difference, boolean close, boolean wanted) {
+        if (close != wanted) {
+            boolean valid = offset.strict != wanted;
+            String by = Shown.of(offset.value);
+            throw failure("\nExpecting actual:\n" + Shown.under(actual) + (wanted ? "\nto be close to:\n" : "\nnot to be close to:\n")
+                    + Shown.under(expected) + "\nby less than " + by + " but difference was " + Shown.of(difference)
+                    + ".\n(a difference of exactly " + (wanted ? by : "<" + by + ">") + " being considered "
+                    + (valid ? "valid" : "invalid") + ")");
+        }
+        return myself;
+    }
+
+    // The offset a check is given, refused where there is none.
+    static <T extends Number> Offset<T> given(Offset<T> offset) {
+        return java.util.Objects.requireNonNull(offset, "The given offset should not be null");
     }
 }
