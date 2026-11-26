@@ -10,6 +10,7 @@ import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.compiler.BoundaryType;
+import am.ik.rontolisp.compiler.HostTimer;
 import am.ik.wasm.Instruction;
 import am.ik.wasm.Type;
 import org.jspecify.annotations.Nullable;
@@ -188,8 +189,11 @@ final class WasmExportCompiler {
 						+ other.name() + " both name the export '" + name
 						+ "': a module exports a name once; rename one with :as");
 			}
+			// --host-timer's turn is one of the module's own, declared as an export to
+			// take the ordinary wrapper (compiler/HostTimer)
 			if (ownExports && (name.equals("memory") || name.equals("_initialize") || name.equals("_start")
-					|| name.startsWith("__ronto_") || name.startsWith("cabi_"))) {
+					|| name.startsWith("__ronto_") && !HostTimer.turns(decl.name(), name)
+					|| name.startsWith("cabi_"))) {
 				throw new UnsupportedOperationException(
 						"rontolisp:wasm-export of " + decl.name() + " names the export '" + name
 								+ "', which the module exports itself (its memory, its entry and the names starting "

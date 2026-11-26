@@ -4355,18 +4355,32 @@ arena staging.** Without the flag every output is byte-identical (measured: `Ser
 - **One call keeps the time** (`%java-keeper`, `(deadline . exchange)`): an idling call waits
   with a deadline only where it is the soonest; others wait for their ring alone, so a timer
   wakes one call, not every one. A call that returns leaving threads ready, or a time no idle
-  call keeps (`%java-hand-on`), rings an idling call to take them. With none idling they wait
-  for the next request: the threads take their turns while the host has a request in hand
-  (a turn after the last answer: `.todo/m48`).
-  The servlet corpus's stop after the last answer goes on nowhere (its `logDeviates`);
-  `Server.java`'s `stop(1)` after `/stop`'s answer passes in `/short`'s idle call (its log
-  is the JDK's but for the port and `main`'s last line).
+  call keeps (`%java-hand-on`), rings an idling call to take them.
+- **With none idling the program asks its host for a turn of its own**: `env.wake(at)` (0: at
+  once), and the glue calls `__ronto_turn` at that time through the queue, a call like any
+  other (`call`, the arena, `serially` with no state). The turn is `(%java-hand-on t)`: the
+  threads take their turns until none can go on, then hand on again (ring, or wake for the
+  soonest time). The start hands on too where `main` leaves the server serving
+  (`%java-http-turn`'s reactor lambda). So the threads go on after the last answer: the corpus's
+  `servlet` and `server` logs are the JDK's, but for the port. The glue arms one turn, the
+  soonest asked for; `lisp.turning` settles once none is armed, and `worker()` hands it to the
+  request's `ctx.waitUntil` (a Worker is kept for it only as long as the platform allows).
+  - **Who declares it**: `eval/HostTimerLibrary`, after the pruner, where the program names
+    `%host-wake` (only the server's hand-on does): the `env.wake` directive, a bridge
+    `(defun %host-turn () (%java-hand-on t))` and its `rontolisp:wasm-export` as
+    `__ronto_turn` -- an export, not a backend hook, for the ordinary wrapper (re-entry
+    guard, promising). `WasmExportCompiler.checkNames` lets that one `__ronto_` name through;
+    the backend keeps it out of the glue's entry points (`Surface.turn`). A turn defined in
+    `java.lisp` would be pruned: nothing the program reaches names it.
+  - A thread waiting for a socket with no deadline is not a turn's to wait for: it goes on
+    in the next call, as before.
 - **An exchange nothing answers stays open**, as a JDK's (`/short`, `/silent`: no response
   where the reactor answered 500 without the flag), until a stop that does not drain cuts
   it: `close0` is `%http-serve-stop`, which calls the `%http-serve-cutter` the timer variant
   sets (`%java-http-cut-in-hand`: every call in hand ends, `500` and the host's report
   `the server stopped with the exchange in hand`). Cut, `Server.java`'s `/short` and
-  `/silent` leave no call for `main` to go on in after the stop.
+  `/silent` leave no call in hand: `main` goes on after the stop in a turn of the program's
+  own (below).
 - **Rejected: `--reentrant`.** It overlaps calls wherever one parks, a fetch inside a thread's
   body included: another call's scheduler would run while that thread is mid-body
   (`%java-carrier` taken over, its monitors entered by threads whose entry the analysis made
@@ -4392,10 +4406,14 @@ arena staging.** Without the flag every output is byte-identical (measured: `Ser
   corpus's flags; raw / `gzip -9`): `Server.java` 955,440 / 251,935 -> 961,277 / 253,414;
   the servlets 1,942,421 -> 1,948,771; `hello-servlet` (`--optimize=size`, no wait at all)
   763,973 / 195,585 -> 768,070 / 197,172, its glue 10,697 -> 15,555 B. A program of no
-  server imports `env.sleep` alone.
+  server imports `env.sleep` alone. The turn (2026-11-26, the examples' `Server.java`, the
+  corpus's flags, default `--optimize`): 564,753 / 161,321 -> 565,123 / 161,552, glue 22,938 ->
+  25,281 B; a Java program of no server under the flag and every module without it
+  byte-identical.
 - **Pinned by** the corpus's reactor leg (`hostTimer: true` on `server` and `servlet`: `/held`,
-  `/app/later/held`, `/app/later/timeout`, `/short`, `/silent`, and the logs, read once whole),
-  `JavaLoweringTest` (the variant names `sleep`, `%host-idle`, `%host-ring`),
+  `/app/later/held`, `/app/later/timeout`, `/short`, `/silent`, and the logs, read once whole:
+  `servlet`'s the JDK's, `server`'s but for the port),
+  `JavaLoweringTest` (the variant names `sleep`, `%host-idle`, `%host-ring`, `%host-wake`),
   `WasmImportCompilerTest.aSuspendingImportGuardsEveryExportAgainstReentry` (the idle's guard),
   `WasmHostGlueE2eTest.aSleepUnderHostTimerWaitsInTheHostsTimerAtTheTopLevelAndInACall`,
   `RontoLispCliTest` (the refusals).

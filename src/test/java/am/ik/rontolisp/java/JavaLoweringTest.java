@@ -218,7 +218,8 @@ class JavaLoweringTest {
 		assertThat(bound).isNotEmpty().noneMatch(LispPreludeLibrary::isPreludeFunction);
 		// no time passes within a reactor's call: its variant alone names no sleep -- but
 		// where its host waits for it (--host-timer), whose timer the sleep is and where
-		// a request's call idles, the next request's to ring
+		// a request's call idles, the next request's to ring, and what the threads have
+		// left with none idling is a turn the host is asked for
 		assertThat(JavaLibrary.forms(Features.WASM_REACTOR).stream().map(LispVal::print))
 			.noneMatch(form -> form.contains("(SLEEP ") || form.contains("%HOST-IDLE"));
 		assertThat(JavaLibrary.forms(Features.WASM).stream().map(LispVal::print))
@@ -227,7 +228,8 @@ class JavaLoweringTest {
 			.stream()
 			.map(LispVal::print)).anyMatch(form -> form.contains("(SLEEP "))
 			.anyMatch(form -> form.contains("(RONTOLISP::%HOST-IDLE "))
-			.anyMatch(form -> form.contains("(RONTOLISP::%HOST-RING "));
+			.anyMatch(form -> form.contains("(RONTOLISP::%HOST-RING "))
+			.anyMatch(form -> form.contains("(RONTOLISP::%HOST-WAKE "));
 	}
 
 	/**

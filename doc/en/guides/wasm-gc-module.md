@@ -291,7 +291,7 @@ refused with `--component` (whose sockets are `wasi:sockets`), `--no-gc` and
 
 ### Waits in the host (`--host-timer`)
 
-`--host-timer` has the host wait for the module, through up to three imports
+`--host-timer` has the host wait for the module, through up to four imports
 only a host with JSPI answers:
 
 - `env.sleep(ms)` — `sleep`: the host suspends the call
@@ -303,11 +303,14 @@ only a host with JSPI answers:
   (nanoseconds since the Unix epoch); then it takes its turn again. One request
   can wait for another, and a thread waiting for a time is woken through
   whichever request idles ([the Java subset](../java/index.md)).
+- `env.wake(at)` — what the threads have left with no request idling: the host
+  calls the module's `__ronto_turn` export at `at` (0: at once), and the threads
+  take their turns in that call. So they go on after the last answer.
 
 `_initialize` and every export are entered through `WebAssembly.promising`, so
-the top level may wait too. `--emit-js-glue` implements all three:
+the top level may wait too. `--emit-js-glue` implements all four:
 `instantiate` answers a promise, and calls take turns on one queue that a call
-idling hands on.
+idling hands on. `worker()` hands a pending turn to `ctx.waitUntil`.
 
 ```bash
 rontolisp app.lisp --no-wasi --host-timer --emit-js-glue -o app.wasm

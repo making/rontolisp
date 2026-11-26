@@ -620,9 +620,7 @@ programs:
       | a body cut short: java.io.IOException: insufficient bytes written to stream
       | a stop by a handler waits its delay: true
       | main went on once the server stopped: it did
-    # the reactor binds no port; its stop by a handler waits its delay after the call
-    # answered, in a call the host still has in hand (/short's), and cuts those calls:
-    # main goes on in none
+    # the reactor binds no port
     logDeviates:
       reactor: |
         | no executor: null
@@ -675,6 +673,7 @@ programs:
         | credentials: [user] []
         | a body cut short: java.io.IOException: insufficient bytes written to stream
         | a stop by a handler waits its delay: true
+        | main went on once the server stopped: it did
     reactorReports:
       - "HTTP-HANDLER: handler failed: java.io.IOException: after the head"
       - "HTTP-HANDLER: handler failed: the server stopped with the exchange in hand"
@@ -1593,17 +1592,6 @@ programs:
       | destroy hello
       | context /app destroyed
       | stopped
-    # the threads go on while the reactor's host has a request in hand: after the last
-    # answer, the program's stop goes on nowhere
-    logDeviates:
-      reactor: |
-        | context /app initialized, its own event's source true
-        | init hello
-        | session created
-        | session destroyed after 3 visits
-        | session created
-        | async timeout
-        | async error thrown while asynchronous
     reactorReports:
       - "a request failed: jakarta.servlet.ServletException: no answer"
     requests:

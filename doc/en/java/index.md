@@ -969,7 +969,8 @@ calls, not within one:
   Worker waits for the program instead, through JSPI: a wait for a time waits in its timer,
   and a request whose threads cannot go on waits in the Worker, which calls the program for
   other requests meanwhile -- an asynchronous servlet's timeout, a request waiting for what
-  another brings. The threads take their turns while a request is in hand.
+  another brings. The threads go on after the last answer: the Worker calls the program
+  again for what they have left, within `ctx.waitUntil`.
 - What the program prints is the Worker's log with `--host-output` (standard output to
   `console.log`, standard error to `console.error`), the report of what ended an instance
   included; without it the output is discarded and the host sees only

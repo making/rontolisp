@@ -3686,13 +3686,25 @@ public final class WasmLispCompiler implements LispCompiler {
 							+ " promising entered, where a suspension traps"));
 		}
 		if (hostTimer) {
-			CompileWarnings.note("--host-timer: this module imports " + String.join(", ", timerWaits.values())
-					+ (declaresImport(program, HostTimer.RING_FIELD)
-							? " and " + HostTimer.MODULE + "." + HostTimer.RING_FIELD : "")
+			List<String> waits = new ArrayList<>(timerWaits.values());
+			if (declaresImport(program, HostTimer.RING_FIELD)) {
+				waits.add(HostTimer.MODULE + "." + HostTimer.RING_FIELD);
+			}
+			boolean wakes = declaresImport(program, HostTimer.WAKE_FIELD);
+			if (wakes) {
+				waits.add(HostTimer.MODULE + "." + HostTimer.WAKE_FIELD);
+			}
+			String last = waits.remove(waits.size() - 1);
+			CompileWarnings.note("--host-timer: this module imports "
+					+ (waits.isEmpty() ? last : String.join(", ", waits) + " and " + last)
 					+ ", its host's waits: a wait for a time suspends in the host (WebAssembly.Suspending) and the"
 					+ " clock moves before it returns, and a call with nothing to do idles there while the host"
-					+ " calls the module for other requests, until it is rung or its time comes. Every export and"
-					+ " _initialize are entered through WebAssembly.promising; --emit-js-glue writes all of it");
+					+ " calls the module for other requests, until it is rung or its time comes."
+					+ (wakes ? " What the threads have left with no call idling the host takes in a call of "
+							+ HostTimer.TURN_EXPORT + ", at the time " + HostTimer.MODULE + "." + HostTimer.WAKE_FIELD
+							+ " names." : "")
+					+ " Every export and _initialize are entered through WebAssembly.promising; --emit-js-glue"
+					+ " writes all of it");
 		}
 		if (!suspendingImports.isEmpty()) {
 			CompileWarnings.note(":async t: this module imports " + String.join(", ", suspendingImports.values())
@@ -6582,8 +6594,15 @@ public final class WasmLispCompiler implements LispCompiler {
 					HOST_OUTPUT_FIELD, List.of(BoundaryType.S32, BoundaryType.S32, BoundaryType.S32, BoundaryType.S32),
 					BoundaryType.S32) : null;
 			List<HostGlueEmitter.Export> glueExports = new ArrayList<>();
+			// --host-timer's turn of the program's own, which the glue calls where the
+			// module asks for it (env.wake) and offers no host as an entry point.
+			boolean turn = false;
 			for (ExportPlan plan : exportPlans) {
 				WasmExportCompiler.Decl decl = plan.decl();
+				if (hostTimer && HostTimer.turns(decl.name(), decl.exportName())) {
+					turn = true;
+					continue;
+				}
 				// Under --host-timer EVERY entry is: a sleep is lowered to its wait only
 				// in the backend, after the walk that asks which exports reach one.
 				boolean promising = hostMaySuspend && (hostTimer || anySuspendingImportEscapes
@@ -6638,7 +6657,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			}
 			this.hostGlue = new HostGlueEmitter.Surface(glueImports, entropy, output, glueExports, hostArena,
 					seedRandom, setTime, "_initialize", derivedFetch, envelopeExport, this.reentrant,
-					List.copyOf(witImports), List.copyOf(timerImports));
+					List.copyOf(witImports), List.copyOf(timerImports), turn);
 		}
 
 		// Canonical string ABI for --component :string/:s-expr exports:

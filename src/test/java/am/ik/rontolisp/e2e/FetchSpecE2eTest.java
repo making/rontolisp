@@ -1151,10 +1151,10 @@ class FetchSpecE2eTest {
 		return dynamicContainer(leg, tests.stream());
 	}
 
-	// A reactor's host goes on after its last answer -- a thread's wait ends in a call it
-	// still has in hand -- and never ends, so its log and its reports are read once they
-	// have as many lines as the program is to give there, or once ten seconds have
-	// passed.
+	// A reactor's program goes on after its last answer -- in a call its host still has
+	// in hand, or in a turn of its own -- and its host never ends, so its log and its
+	// reports are read once they have as many lines as the program is to give there, or
+	// once ten seconds have passed.
 	private static void loggedOnceWhole(Served program, Path stdout, Path stderr) throws Exception {
 		String log = (program.logDeviates() != null && program.logDeviates().containsKey(REACTOR))
 				? program.logDeviates().get(REACTOR) : program.log();
