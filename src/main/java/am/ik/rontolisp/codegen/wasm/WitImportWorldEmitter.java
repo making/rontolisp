@@ -31,8 +31,8 @@ import am.ik.wit.WitType;
  * The item order mirrors {@link WitComponentTypeEncoder}'s declaration order, which is
  * what the tool reads back: {@code use} clauses, then named definitions (resources,
  * variants, records, enums, flags) in the order the traversal first reaches them, then
- * the freestanding functions. Doc comments and gates are dropped -- a component's type
- * does not carry them.
+ * the freestanding functions; the async-lowered functions follow the sync ones in each.
+ * Doc comments and gates are dropped -- a component's type does not carry them.
  *
  * <p>
  * A type the interface {@code use}s from ANOTHER interface is emitted as a {@code use}
@@ -40,7 +40,11 @@ import am.ik.wit.WitType;
  * {@code resource}), and duplicating the definition into this package block would print a
  * document claiming two unrelated types where the component has one -- see
  * {@link WitComponentTypeEncoder}. Which means the type walk has to track the scope it is
- * in, exactly as the encoder and the layout calculator do.
+ * in, exactly as the encoder and the layout calculator do. The defining interface's block
+ * then defines every type a {@code use} clause names, whether or not its own functions
+ * reach it. A non-resource type whose defining interface is no user import is defined in
+ * place instead, as the encoder inlines it: a {@code use} clause would name an interface
+ * whose block this emitter does not print.
  */
 final class WitImportWorldEmitter {
 
@@ -51,17 +55,24 @@ final class WitImportWorldEmitter {
 	// Discovery-ordered named definitions THIS interface owns: the WIT name -> the item.
 	private final Map<String, WitItem> named = new LinkedHashMap<>();
 
-	// The types this interface uses from others: the defining interface -> the names, in
-	// discovery order. Printed as `use` clauses ahead of the definitions.
-	private final Map<WitItem.InterfaceDef, Set<String>> used = new LinkedHashMap<>();
+	// The types this interface uses from others: the defining interface -> the name it
+	// defines each by -> the name this interface calls it, in discovery order. Printed as
+	// `use` clauses ahead of the definitions.
+	private final Map<WitItem.InterfaceDef, Map<String, String>> used = new LinkedHashMap<>();
 
 	// The bound methods of each resource, in binding order.
 	private final Map<String, List<WitItem>> resourceMembers = new LinkedHashMap<>();
 
 	private final Set<String> visiting = new LinkedHashSet<>();
 
-	private WitImportWorldEmitter(WasmComponentImportCompiler.Import imported) {
+	// The canonical ids of the user imports.
+	private final Set<String> importedIds;
+
+	private final List<WitItem.FuncDef> freestanding = new ArrayList<>();
+
+	private WitImportWorldEmitter(WasmComponentImportCompiler.Import imported, Set<String> importedIds) {
 		this.imported = imported;
+		this.importedIds = importedIds;
 		this.abi = new WitCanonicalAbi(imported.resolver(), imported.iface());
 	}
 
@@ -101,60 +112,108 @@ final class WitImportWorldEmitter {
 				provides.computeIfAbsent(imported.ifaceId(), id -> new LinkedHashSet<>()).add(drop.resource());
 			}
 		}
-		Map<WitPackageName, List<WitItem>> byPackage = new LinkedHashMap<>();
+		Set<String> importedIds = new LinkedHashSet<>();
+		imports.forEach(imported -> importedIds.add(imported.ifaceId()));
+		Map<String, WitImportWorldEmitter> emitters = new LinkedHashMap<>();
 		for (WasmComponentImportCompiler.Import imported : imports) {
-			WitPackageName pkg = packageOf(imported.ifaceId());
-			byPackage.computeIfAbsent(pkg, ignored -> new ArrayList<>())
-				.add(new WitImportWorldEmitter(imported)
-					.iface(provides.getOrDefault(imported.ifaceId(), new LinkedHashSet<>())));
+			WitImportWorldEmitter emitter = new WitImportWorldEmitter(imported, importedIds);
+			emitter.walk(provides.getOrDefault(imported.ifaceId(), new LinkedHashSet<>()));
+			emitters.put(imported.ifaceId(), emitter);
 		}
+		// A `use`d type the defining interface's own functions do not reach still has to
+		// be defined there; defining it may reach further `use`d types, hence the loop.
+		boolean grew = true;
+		while (grew) {
+			grew = false;
+			for (WitImportWorldEmitter emitter : emitters.values()) {
+				for (var entry : List.copyOf(emitter.used.entrySet())) {
+					// null: a resource of an interface the fixed world defines
+					WitImportWorldEmitter owner = emitters.get(emitter.imported.resolver().canonicalId(entry.getKey()));
+					if (owner == null) {
+						continue;
+					}
+					for (String name : List.copyOf(entry.getValue().keySet())) {
+						grew |= owner.provide(name);
+					}
+				}
+			}
+		}
+		Map<WitPackageName, List<WitItem>> byPackage = new LinkedHashMap<>();
+		emitters.forEach((id, emitter) -> byPackage.computeIfAbsent(packageOf(id), ignored -> new ArrayList<>())
+			.add(emitter.iface()));
 		List<WitItem> blocks = new ArrayList<>();
 		byPackage
 			.forEach((pkg, ifaces) -> blocks.add(new WitItem.PackageBlock(WitMeta.none(), pkg, List.copyOf(ifaces))));
 		return blocks;
 	}
 
-	// The pruned interface: the named definitions the bound functions reach, in discovery
-	// order, then the bound freestanding functions.
+	// Walks the bound surface in the encoder's order: the provided resources, the sync
+	// functions, then the async-lowered ones.
 	// `provided` is a SequencedSet, not a plain Set: the resources are discovered in its
 	// iteration order and that becomes the item order of the generated WIT text
 	// (.kb/emitted-output-determinism.md).
-	private WitItem.InterfaceDef iface(SequencedSet<String> provided) {
+	private void walk(SequencedSet<String> provided) {
 		for (String resource : provided) {
 			discoverResource(resource);
 		}
-		List<WitItem.FuncDef> freestanding = new ArrayList<>();
 		for (WasmComponentImportCompiler.Decl decl : this.imported.distinctDecls()) {
-			var func = decl.func();
-			String resource = func.resource();
-			if (resource != null) {
-				discoverResource(resource);
-				Objects.requireNonNull(this.resourceMembers.get(resource)).add(strip(func.def()));
-			}
-			else {
-				freestanding.add(strip(func.def()));
-			}
-			for (var param : func.def().func().params()) {
-				discover(this.abi, param.type());
-			}
-			WitType result = this.abi.resultType(func);
-			if (result != null) {
-				discover(this.abi, result);
-			}
+			walkFunction(decl.func());
 		}
+		for (WasmComponentImportCompiler.AsyncCall call : this.imported.distinctCalls()) {
+			walkFunction(call.func());
+		}
+	}
+
+	private void walkFunction(WitResolver.Func func) {
+		String resource = func.resource();
+		if (resource != null) {
+			discoverResource(resource);
+			Objects.requireNonNull(this.resourceMembers.get(resource)).add(strip(func.def()));
+		}
+		else {
+			this.freestanding.add(strip(func.def()));
+		}
+		for (var param : func.def().func().params()) {
+			discover(this.abi, param.type());
+		}
+		WitType result = this.abi.resultType(func);
+		if (result != null) {
+			discover(this.abi, result);
+		}
+	}
+
+	// Defines a type of this interface another one `use`s; true when it was not yet.
+	private boolean provide(String name) {
+		if (this.named.containsKey(name)) {
+			return false;
+		}
+		discoverNamed(this.abi, new WitType.Named(name));
+		return true;
+	}
+
+	// The pruned interface: `use` clauses, the named definitions in discovery order, then
+	// the bound freestanding functions. A resource with no bound member is `resource x;`.
+	private WitItem.InterfaceDef iface() {
 		List<WitItem> items = new ArrayList<>();
 		this.used.forEach((owner,
 				names) -> items.add(new WitItem.Use(WitMeta.none(),
 						ref(Objects.requireNonNull(this.imported.resolver().canonicalId(owner))),
-						names.stream().map(name -> new WitItem.UseName(name, null)).toList())));
-		this.named
-			.forEach(
-					(name, item) -> items.add(
-							item instanceof WitItem.ResourceDef
-									? new WitItem.ResourceDef(WitMeta.none(), name,
-											List.copyOf(Objects.requireNonNull(this.resourceMembers.get(name))))
-									: item));
-		items.addAll(freestanding);
+						names.entrySet()
+							.stream()
+							.map(name -> new WitItem.UseName(name.getKey(),
+									name.getKey().equals(name.getValue()) ? null : name.getValue()))
+							.toList())));
+		this.named.forEach((name, item) -> {
+			if (item instanceof WitItem.ResourceDef) {
+				List<WitItem> members = Objects.requireNonNull(this.resourceMembers.get(name));
+				items.add(
+						new WitItem.ResourceDef(WitMeta.none(), name, members.isEmpty() ? null : List.copyOf(members)));
+			}
+			else {
+				items.add(item);
+			}
+		});
+		items.addAll(this.freestanding);
 		return new WitItem.InterfaceDef(WitMeta.none(), this.imported.iface().name(), List.copyOf(items));
 	}
 
@@ -174,6 +233,16 @@ final class WitImportWorldEmitter {
 				}
 			}
 			case WitType.TupleOf tuple -> tuple.elements().forEach(element -> discover(abi, element));
+			case WitType.StreamOf stream -> {
+				if (stream.element() != null) {
+					discover(abi, stream.element());
+				}
+			}
+			case WitType.FutureOf future -> {
+				if (future.element() != null) {
+					discover(abi, future.element());
+				}
+			}
 			case WitType.BorrowOf borrow -> discoverNamed(abi, new WitType.Named(borrow.resource()));
 			case WitType.OwnOf own -> discoverNamed(abi, new WitType.Named(own.resource()));
 			case WitType.Named name -> discoverNamed(abi, name);
@@ -188,10 +257,12 @@ final class WitImportWorldEmitter {
 		WitItem definition = owned.item();
 		String name = reference.name();
 		// A type this interface does not define is the OTHER interface's type: say so
-		// with
-		// a `use` clause rather than copying the definition into this package block.
-		if (owned.owner() != this.imported.iface()) {
-			this.used.computeIfAbsent(owned.owner(), ignored -> new LinkedHashSet<>()).add(name);
+		// with a `use` clause rather than copying the definition into this package block
+		// -- unless the component does not import that interface (see the class comment).
+		if (owned.owner() != this.imported.iface() && (definition instanceof WitItem.ResourceDef
+				|| this.importedIds.contains(this.imported.resolver().canonicalId(owned.owner())))) {
+			this.used.computeIfAbsent(owned.owner(), ignored -> new LinkedHashMap<>())
+				.putIfAbsent(WitComponentTypeEncoder.definedNameOf(definition), name);
 			return;
 		}
 		if (definition instanceof WitItem.ResourceDef) {
