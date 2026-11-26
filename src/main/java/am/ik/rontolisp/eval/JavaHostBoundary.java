@@ -129,29 +129,25 @@ public final class JavaHostBoundary implements JavaBoundary {
 		}
 		List<Export> exports = new ArrayList<>();
 		for (WitExportDirective.Export export : described.exports()) {
+			boolean canonical = false;
 			List<Param> params = new ArrayList<>();
 			for (WitTypeMapper.Param param : export.params()) {
-				requireFlat(export, param.shape(), "parameter '" + param.name() + "'");
+				canonical |= !flat(param.shape());
 				params.add(new Param(param.name(), Objects.requireNonNull(type(param.shape()))));
 			}
 			WitTypeMapper.Shape result = export.result();
-			if (result != null) {
-				requireFlat(export, result, "the result");
-			}
-			exports.add(new Export(export.name(), export.iface(), export.key(), List.copyOf(params),
-					type(export.result()), export.async(), export.at()));
+			canonical |= result != null && !flat(result);
+			exports.add(new Export(export.name(), export.iface(), export.key(), List.copyOf(params), type(result),
+					export.async(), export.at(), canonical));
 		}
 		return new WitWorld(described.name(), source.path(), List.copyOf(exports));
 	}
 
-	// The Java subset implements an export of the flat types alone: a compound one is
-	// described whole, which no converter of its reads yet.
-	private static void requireFlat(WitExportDirective.Export export, WitTypeMapper.Shape shape, String what) {
-		if (BoundaryType.forWitName(shape.wit()) == null) {
-			throw new LispReadException(export.at() + ": export '" + export.name() + "': the WIT type of " + what + " ("
-					+ shape.wit() + ") is not supported at the Java subset's export boundary yet (supported: "
-					+ BoundaryType.witNames() + "); a Lisp program's rontolisp:wit-export carries it on a component");
-		}
+	// Whether a described type is one the flat boundary carries: the directive describes
+	// such a one as the primitive it resolves to, and any other whole, as the WIT spells
+	// it -- so an export of a type that is not flat is one its lowering makes canonical.
+	private static boolean flat(WitTypeMapper.Shape shape) {
+		return BoundaryType.forWitName(shape.wit()) != null;
 	}
 
 	/**

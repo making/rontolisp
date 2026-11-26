@@ -793,14 +793,16 @@ class JavaWitImportTest {
 	 * {@code main} is refused there and on a module. The class is checked against its
 	 * world on every target, the interpreter's included. On {@code --no-gc} a class of
 	 * scalar values is the scalar component of the world, an uncaught exception its bare
-	 * trap, an {@code async func} refused.
+	 * trap, an {@code async func} refused. A world of compound types crosses too: a
+	 * record a member record, a variant a sealed interface, a list a {@code List}, a
+	 * result a {@code WitResult} or its ok arm with a {@code WitException} thrown.
 	 */
 	@Test
 	void aClassImplementsTheWorldAComponentExports() throws Exception {
 		write("kinds.wit", KINDS_WIT);
 		Path kinds = write("Kinds.java", KINDS);
 		Path main = write("KindsMain.java", KINDS_MAIN);
-		String expected = "201\ntrue\n9223372036854775807\nHello, Java! seen: Java\n1\n5\n1\n2.5\n";
+		String expected = "201\ntrue\n9223372036854775807\n3\nHello, Java! seen: Java\n1\n5\n1\n2.5\n";
 		assertThat(jdk(main)).isEqualTo(expected);
 		assertThat(HostBoundaryRuns.cli("--java-source-path", API, main.toString())).isEqualTo(expected);
 		assertThat(HostBoundaryRuns.jvm(main, Files.createDirectories(this.dir.resolve("classes")), "KindsMain",
@@ -808,10 +810,11 @@ class JavaWitImportTest {
 			.isEqualTo(expected);
 		assertThat(read(kinds, true).getLast()).isEqualTo("(RONTOLISP:WIT-EXPORT \"kinds.wit\" :WORLD \"kinds\" :NAMES "
 				+ "((\"low-byte\" \"Kinds.lowByte(byte)%wit\") (\"negate\" \"Kinds.negate(boolean)\") (\"signed-wide\" "
-				+ "\"Kinds.signedWide(long)\") (\"greet\" \"Kinds.greet(String)\") (\"touch\" \"Kinds.touch()\") "
-				+ "(\"count\" \"Kinds.count()\") (\"pause\" \"Kinds.pause(int)%wit\") (\"test:kinds/math@0.1.0#add\" \"Kinds.Math.add(int,int)%wit\") "
+				+ "\"Kinds.signedWide(long)\") (\"unsigned-wide\" \"Kinds.unsignedWide(long)\") (\"greet\" "
+				+ "\"Kinds.greet(String)\") (\"touch\" \"Kinds.touch()\") (\"count\" \"Kinds.count()\") (\"pause\" "
+				+ "\"Kinds.pause(int)%wit\") (\"test:kinds/math@0.1.0#add\" \"Kinds.Math.add(int,int)%wit\") "
 				+ "(\"test:kinds/math@0.1.0#half\" \"Kinds.Math.half(double)\") (\"test:kinds/math@0.1.0#count\" "
-				+ "\"Kinds.Math.count()\")) :REACTOR T)");
+				+ "\"Kinds.Math.count()\")) :REACTOR T :OCTETS T :ENVELOPE T)");
 		assertThatThrownBy(() -> HostBoundaryRuns.cli("--java-source-path", API, kinds.toString()))
 			.hasMessageEndingWith("Kinds.java:4:14: no main method found in Kinds: its entry points are the exports of "
 					+ "the @WitExport class Kinds, which a component exports, where a host calls them: compile it with "
@@ -821,7 +824,8 @@ class JavaWitImportTest {
 			.hasMessageEndingWith("compile it with --component, not to a module");
 		String mismatch = "Kinds.java:21:24: signedWide (signed-wide of world kinds, kinds.wit:12): its parameter x is "
 				+ "s64, which is long in Java, not int";
-		exportRefused("public static long signedWide(long x)", "public static long signedWide(int x)", mismatch);
+		exportRefused("Kinds.java", KINDS, "public static long signedWide(long x)",
+				"public static long signedWide(int x)", mismatch);
 		// a command's class is checked too, on the interpreter's target
 		assertThatThrownBy(() -> read(write("CountMain.java", """
 				public class CountMain {
@@ -831,12 +835,12 @@ class JavaWitImportTest {
 				    }
 				}
 				"""), false)).hasMessageEndingWith(mismatch);
-		exportRefused("public static byte lowByte(byte x)", "public byte lowByte(byte x)",
+		exportRefused("Kinds.java", KINDS, "public static byte lowByte(byte x)", "public byte lowByte(byte x)",
 				"Kinds.java:10:17: lowByte (low-byte of world kinds, kinds.wit:10) is a static method in Java, which the "
 						+ "host calls with no instance");
-		exportRefused("public static class Math", "public static class Maths",
+		exportRefused("Kinds.java", KINDS, "public static class Math", "public static class Maths",
 				"Kinds.java:4:14: Kinds declares no member class Math, which is the interface test:kinds/math@0.1.0 the "
-						+ "world kinds exports (kinds.wit:17): a static member class whose static methods are its "
+						+ "world kinds exports (kinds.wit:18): a static member class whose static methods are its "
 						+ "functions");
 		write("Kinds.java", KINDS);
 		Path module = this.dir.resolve("kinds.wasm");
@@ -847,7 +851,7 @@ class JavaWitImportTest {
 		assertThatThrownBy(() -> HostBoundaryRuns.cli("--java-source-path", API, kinds.toString(), "-o",
 				scalar.toString(), "--component", "--no-gc"))
 			.hasMessageContaining(
-					"kinds.wit:16: export 'pause' is an async func, which --no-gc --component cannot lift");
+					"kinds.wit:17: export 'pause' is an async func, which --no-gc --component cannot lift");
 		write("kinds.wit", KINDS_WIT.replace("  export pause: async func(ms: u32) -> u32;\n", ""));
 		write("Kinds.java", KINDS
 			.replace("StringBuilder seen = new StringBuilder(\"seen:\")", "String seen = \"seen: \" + (touched - 1)")
@@ -863,9 +867,66 @@ class JavaWitImportTest {
 		HostBoundaryRuns.cli("--java-source-path", API, kinds.toString(), "-o", exitless.toString(), "--component");
 		assertThat(new String(Files.readAllBytes(exitless), StandardCharsets.ISO_8859_1)).contains("wasi:cli/stdout")
 			.doesNotContain("wasi:cli/exit");
+		// a world of compound types, a program of its own beside its WIT: under a JDK,
+		// on the interpreter and on the JVM ordinary methods over the program's types
+		write("shapes/shapes.wit", SHAPES_WIT);
+		Path shapes = write("shapes/Shapes.java", SHAPES);
+		Path shapesMain = write("shapes/ShapesMain.java", SHAPES_MAIN);
+		String printed = """
+				Point[x=2, y=1]
+				[Point[x=1, y=1], Point[x=2, y=4], Point[x=3, y=9]]
+				Optional[Corners[low=Point[x=1, y=1], high=Point[x=3, y=9]]]
+				12.0
+				a dot has no area
+				Err[error=BLUE]
+				a green dot called spot of 256
+				Summary[count=2, total=4.0, widest=-1, initial=120, mean=2.0]
+				3
+				remembered -5 five
+				-5 five
+				""";
+		assertThat(jdk(shapesMain)).isEqualTo(printed);
+		assertThat(HostBoundaryRuns.cli("--java-source-path", API, shapesMain.toString())).isEqualTo(printed);
+		assertThat(HostBoundaryRuns.jvm(shapesMain, Files.createDirectories(this.dir.resolve("shapes-classes")),
+				"ShapesMain", "--java-source-path", API))
+			.isEqualTo(printed);
+		// an export of a type outside the flat set is a method of generated Java, which
+		// answers a result's envelope itself; a flat one beside it stays the method
+		assertThat(read(shapes, true).getLast())
+			.startsWith("(RONTOLISP:WIT-EXPORT \"shapes.wit\" :WORLD \"shapes\" :NAMES "
+					+ "((\"test:shapes/geometry@0.1.0#flip\" \"Shapes$Geometry$WitExport.flip(Object)\") ")
+			.endsWith("(\"remember\" \"Shapes$WitExport.remember(Object)\") (\"remembered\" \"Shapes.remembered()\")) "
+					+ ":REACTOR T :OCTETS T :ENVELOPE T)");
+		// a named type is the member type of its name, checked against its definition
+		exportRefused("shapes/Shapes.java", SHAPES, "record Point(int x, int y)", "record Point(int x, long y)",
+				"Shapes.java:74:29: Geometry.Point (point of test:shapes/geometry@0.1.0): its field y is s32, which is "
+						+ "int in Java, not long");
+		write("shapes/Shapes.java", SHAPES);
+		write("shapes/shapes.wit", SHAPES_WIT.replace("summary", "totals"));
+		assertThatThrownBy(() -> read(shapes, true)).hasMessageEndingWith(
+				"Shapes.java:20:27: summarize (summarize of world shapes, shapes.wit:47): its result is totals, which is "
+						+ "Shapes.Totals in Java, a record the class Shapes declares; it declares none of that name");
+		// what no export carries is refused at its WIT line, and so is every compound
+		// type by the scalar backend, which has no value for one
+		write("shapes/shapes.wit", SHAPES_WIT.replace("export remembered: func() -> string;",
+				"flags marks { seen }\n  export remembered: func() -> marks;"));
+		assertThatThrownBy(() -> read(shapes, true)).hasMessageEndingWith(
+				"Shapes.java:9:1: @WitExport: shapes.wit:51: export 'remembered': the WIT type of the result holds the "
+						+ "flags 'marks', which an export does not carry (carried: every primitive type, and a list, "
+						+ "an option, a result, a tuple, a record, a variant or an enum of them, defined where the "
+						+ "export is)");
+		write("shapes/shapes.wit", SHAPES_WIT);
+		assertThatThrownBy(() -> HostBoundaryRuns.cli("--java-source-path", API, shapes.toString(), "-o",
+				this.dir.resolve("shapes-scalar.wasm").toString(), "--component", "--no-gc"))
+			.hasMessageContaining("shapes.wit:46: export 'flip': the WIT type of p is not one --no-gc can carry");
+		Path shapesModule = this.dir.resolve("shapes.wasm");
+		HostBoundaryRuns.cli("--java-source-path", API, shapes.toString(), "-o", shapesModule.toString(),
+				"--component");
 		assumeTrue(HostWasmtime.isAvailable(), "no wasmtime " + HostWasmtime.MINIMUM_MAJOR + "+ on PATH");
 		Map<String, String> answers = new LinkedHashMap<>();
 		answers.put("low-byte(200)", "201");
+		// a u64 is the long up to Long.MAX_VALUE, on the scalar component too
+		answers.put("unsigned-wide(5)", "3");
 		answers.put("greet(\"Java\")", "\"Hello, Java! seen: -1\"");
 		answers.put("count()", "0");
 		answers.put("test:kinds/math.count@0.1.0()", "10");
@@ -888,6 +949,40 @@ class JavaWitImportTest {
 		thrown = HostWasmtime.INSTANCE.execInContainer("wasmtime", "run", "--invoke", "low-byte(0)", scalar.toString());
 		assertThat(thrown.exitCode()).isNotZero();
 		assertThat(thrown.stderr()).doesNotContain("Exception").contains("unreachable");
+		// a long below 0 is no u64 the flat boundary carries: the call traps on both
+		for (Path built : List.of(module, scalar)) {
+			thrown = HostWasmtime.INSTANCE.execInContainer("wasmtime", "run", "--invoke", "unsigned-wide(1)",
+					built.toString());
+			assertThat(thrown.exitCode()).as(built.toString()).isNotZero();
+		}
+		// a world of compound types: each crosses as the Java type the mapping gives
+		// it, converted by generated Java around the method
+		invoked(shapesModule, shapesAnswers());
+	}
+
+	/** What each export of {@link #SHAPES} answers a host. */
+	private static Map<String, String> shapesAnswers() {
+		Map<String, String> answers = new LinkedHashMap<>();
+		answers.put("flip({x: 1, y: 2})", "{x: 2, y: 1}");
+		answers.put("squares(3)", "[{x: 1, y: 1}, {x: 2, y: 4}, {x: 3, y: 9}]");
+		answers.put("bounds([{x: 3, y: 1}, {x: 1, y: 9}])", "some(({x: 1, y: 1}, {x: 3, y: 9}))");
+		answers.put("bounds([])", "none");
+		// the ok arm answered and the error arm thrown, or the WitResult of either
+		answers.put("area(circle(2.0))", "ok(12)");
+		answers.put("area(dot)", "err(\"a dot has no area\")");
+		answers.put("checked(rect({x: 2, y: -3}))", "ok(6)");
+		answers.put("checked(dot)", "err(blue)");
+		answers.put("caption({shape: dot, color: green, label: some(\"spot\"), weights: [1, 255]})",
+				"\"a green dot called spot of 256\"");
+		answers.put("settle(ok(7))", "ok");
+		answers.put("settle(err(\"no\"))", "err");
+		// a u64 in a compound answer is the long's bits
+		answers.put("summarize([1.5, 2.5])",
+				"{count: 2, total: 4, widest: 18446744073709551615, initial: 'x', mean: 2}");
+		answers.put("octets([1, 200, 255])", "[255, 200, 1]");
+		answers.put("remember((-5, \"five\"))", "remembered -5 five\n()");
+		answers.put("remembered()", "\"nothing\"");
+		return answers;
 	}
 
 	/** Each export of a component invoked under wasmtime, with the answer it writes. */
@@ -900,10 +995,11 @@ class JavaWitImportTest {
 		}
 	}
 
-	/** The program of the class refused, a declaration of it replaced. */
-	private void exportRefused(String declared, String replaced, String message) throws Exception {
-		Path kinds = write("Kinds.java", KINDS.replace(declared, replaced));
-		assertThatThrownBy(() -> read(kinds, true)).hasMessageEndingWith(message);
+	/** The program of a class refused, a declaration of it replaced. */
+	private void exportRefused(String file, String source, String declared, String replaced, String message)
+			throws Exception {
+		Path program = write(file, source.replace(declared, replaced));
+		assertThatThrownBy(() -> read(program, true)).hasMessageEndingWith(message);
 	}
 
 	private void refused(String member, String message) throws Exception {
@@ -987,6 +1083,7 @@ class JavaWitImportTest {
 			  export low-byte: func(x: u8) -> u8;
 			  export negate: func(b: bool) -> bool;
 			  export signed-wide: func(x: s64) -> s64;
+			  export unsigned-wide: func(x: u64) -> u64;
 			  export greet: func(name: string) -> string;
 			  export touch: func();
 			  export count: func() -> s32;
@@ -1019,6 +1116,10 @@ class JavaWitImportTest {
 
 			    public static long signedWide(long x) {
 			        return -x;
+			    }
+
+			    public static long unsignedWide(long x) {
+			        return x - 2;
 			    }
 
 			    public static String greet(String name) {
@@ -1065,12 +1166,246 @@ class JavaWitImportTest {
 			        System.out.println(Kinds.lowByte((byte) 200) & 0xff);
 			        System.out.println(Kinds.negate(false));
 			        System.out.println(Kinds.signedWide(-9223372036854775807L));
+			        System.out.println(Kinds.unsignedWide(5));
 			        System.out.println(Kinds.greet("Java"));
 			        Kinds.touch();
 			        System.out.println(Kinds.count());
 			        System.out.println(Kinds.pause(5));
 			        System.out.println(Kinds.Math.add(-1, 2));
 			        System.out.println(Kinds.Math.half(5.0));
+			    }
+			}
+			""";
+
+	/**
+	 * A world whose exports carry each kind of compound type: an interface's own types
+	 * and the world's.
+	 */
+	private static final String SHAPES_WIT = """
+			package test:shapes@0.1.0;
+
+			interface geometry {
+			  record point {
+			    x: s32,
+			    y: s32,
+			  }
+
+			  enum color {
+			    red,
+			    green,
+			    blue,
+			  }
+
+			  variant shape {
+			    circle(f64),
+			    rect(point),
+			    dot,
+			  }
+
+			  record tagged {
+			    shape: shape,
+			    color: color,
+			    label: option<string>,
+			    weights: list<u8>,
+			  }
+
+			  flip: func(p: point) -> point;
+			  squares: func(n: u32) -> list<point>;
+			  bounds: func(ps: list<point>) -> option<tuple<point, point>>;
+			  area: func(s: shape) -> result<f64, string>;
+			  checked: func(s: shape) -> result<f64, color>;
+			  caption: func(t: tagged) -> string;
+			  settle: func(r: result<u32, string>) -> result;
+			}
+
+			world shapes {
+			  record summary {
+			    count: u32,
+			    total: f64,
+			    widest: u64,
+			    initial: char,
+			    mean: f32,
+			  }
+
+			  export geometry;
+			  export summarize: func(areas: list<f64>) -> summary;
+			  export octets: func(bytes: list<u8>) -> list<u8>;
+			  export remember: func(noted: tuple<s64, string>);
+			  export remembered: func() -> string;
+			}
+			""";
+
+	/**
+	 * The class implementing {@link #SHAPES_WIT}: the world's types its member types, the
+	 * interface's those of the member class standing for it.
+	 */
+	private static final String SHAPES = """
+			import java.util.ArrayList;
+			import java.util.List;
+			import java.util.Optional;
+
+			import am.ik.rontolisp.wit.WitException;
+			import am.ik.rontolisp.wit.WitExport;
+			import am.ik.rontolisp.wit.WitResult;
+
+			@WitExport(value = "shapes", wit = "shapes.wit")
+			public class Shapes {
+
+			    static String last = "nothing";
+
+			    public record Summary(int count, double total, long widest, int initial, float mean) {
+			    }
+
+			    public record Noted(long number, String name) {
+			    }
+
+			    public static Summary summarize(List<Double> areas) {
+			        double total = 0;
+			        for (double area : areas) {
+			            total += area;
+			        }
+			        return new Summary(areas.size(), total, -1L, 'x', (float) (total / areas.size()));
+			    }
+
+			    public static byte[] octets(byte[] bytes) {
+			        byte[] reversed = new byte[bytes.length];
+			        for (int i = 0; i < bytes.length; i++) {
+			            reversed[i] = bytes[bytes.length - 1 - i];
+			        }
+			        return reversed;
+			    }
+
+			    public static void remember(Noted noted) {
+			        last = noted.number() + " " + noted.name();
+			        System.out.println("remembered " + last);
+			    }
+
+			    public static String remembered() {
+			        return last;
+			    }
+
+			    public static class Geometry {
+
+			        public record Point(int x, int y) {
+			        }
+
+			        public enum Color {
+
+			            RED, GREEN, BLUE
+
+			        }
+
+			        public sealed interface Shape {
+
+			            record Circle(double value) implements Shape {
+			            }
+
+			            record Rect(Point value) implements Shape {
+			            }
+
+			            record Dot() implements Shape {
+			            }
+			        }
+
+			        public record Tagged(Shape shape, Color color, Optional<String> label, byte[] weights) {
+			        }
+
+			        public record Corners(Point low, Point high) {
+			        }
+
+			        public static Point flip(Point p) {
+			            return new Point(p.y(), p.x());
+			        }
+
+			        public static List<Point> squares(int n) {
+			            List<Point> points = new ArrayList<>();
+			            for (int i = 1; i <= n; i++) {
+			                points.add(new Point(i, i * i));
+			            }
+			            return points;
+			        }
+
+			        public static Optional<Corners> bounds(List<Point> ps) {
+			            if (ps.isEmpty()) {
+			                return Optional.empty();
+			            }
+			            int lowX = Integer.MAX_VALUE;
+			            int lowY = Integer.MAX_VALUE;
+			            int highX = Integer.MIN_VALUE;
+			            int highY = Integer.MIN_VALUE;
+			            for (Point p : ps) {
+			                lowX = Math.min(lowX, p.x());
+			                lowY = Math.min(lowY, p.y());
+			                highX = Math.max(highX, p.x());
+			                highY = Math.max(highY, p.y());
+			            }
+			            return Optional.of(new Corners(new Point(lowX, lowY), new Point(highX, highY)));
+			        }
+
+			        // the ok arm answered, the error arm thrown
+			        public static double area(Shape s) {
+			            return switch (s) {
+			                case Shape.Circle circle -> 3 * circle.value() * circle.value();
+			                case Shape.Rect rect -> Math.abs(rect.value().x() * rect.value().y());
+			                case Shape.Dot dot -> throw new WitException("a dot has no area", "a dot has no area");
+			            };
+			        }
+
+			        // the result answered whole
+			        public static WitResult<Double, Color> checked(Shape s) {
+			            if (s instanceof Shape.Dot) {
+			                return new WitResult.Err<>(Color.BLUE);
+			            }
+			            return new WitResult.Ok<>(area(s));
+			        }
+
+			        public static String caption(Tagged t) {
+			            int weight = 0;
+			            for (byte b : t.weights()) {
+			                weight += b & 0xff;
+			            }
+			            return "a " + t.color().name().toLowerCase() + " " + t.shape().getClass().getSimpleName().toLowerCase()
+			                    + t.label().map(label -> " called " + label).orElse("") + " of " + weight;
+			        }
+
+			        public static void settle(WitResult<Integer, String> r) {
+			            if (r instanceof WitResult.Err<Integer, String> err) {
+			                throw new WitException("unsettled: " + err.error(), null);
+			            }
+			        }
+			    }
+			}
+			""";
+
+	/** A program calling {@link #SHAPES}' methods as a host would. */
+	private static final String SHAPES_MAIN = """
+			import java.util.List;
+			import java.util.Optional;
+
+			import am.ik.rontolisp.wit.WitException;
+			import am.ik.rontolisp.wit.WitResult;
+
+			public class ShapesMain {
+
+			    public static void main(String[] args) {
+			        System.out.println(Shapes.Geometry.flip(new Shapes.Geometry.Point(1, 2)));
+			        System.out.println(Shapes.Geometry.squares(3));
+			        System.out.println(Shapes.Geometry.bounds(List.of(new Shapes.Geometry.Point(3, 1), new Shapes.Geometry.Point(1, 9))));
+			        System.out.println(Shapes.Geometry.area(new Shapes.Geometry.Shape.Circle(2.0)));
+			        try {
+			            Shapes.Geometry.area(new Shapes.Geometry.Shape.Dot());
+			        }
+			        catch (WitException e) {
+			            System.out.println(e.error());
+			        }
+			        System.out.println(Shapes.Geometry.checked(new Shapes.Geometry.Shape.Dot()));
+			        System.out.println(Shapes.Geometry.caption(new Shapes.Geometry.Tagged(new Shapes.Geometry.Shape.Dot(),
+			                Shapes.Geometry.Color.GREEN, Optional.of("spot"), new byte[] { 1, (byte) 255 })));
+			        Shapes.Geometry.settle(new WitResult.Ok<>(7));
+			        System.out.println(Shapes.summarize(List.of(1.5, 2.5)));
+			        System.out.println(Shapes.octets(new byte[] { 1, 2, 3 })[0]);
+			        Shapes.remember(new Shapes.Noted(-5, "five"));
+			        System.out.println(Shapes.remembered());
 			    }
 			}
 			""";
