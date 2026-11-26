@@ -164,9 +164,9 @@ public final class WitImportDirective {
 	 * Every other backend lowers as it does without it
 	 * @param blocking whether an {@code async func} member blocks until it returns,
 	 * answering its value as a function does ({@code :blocking t}), rather than a future:
-	 * a component lowers it synchronously, its type the host's own {@code async func}.
-	 * What a front end with no futures binds (the Java subset's threads wait as a call
-	 * does)
+	 * a component lowers it synchronously, its type the host's own {@code async func};
+	 * and a stream's read waits where it is, a read of bytes or of handles too. What a
+	 * front end with no futures binds (the Java subset's threads wait as a call does)
 	 * @param aliases the type aliases the directive adds to the interface
 	 * ({@code :aliases (("rows" "stream<row>") ...)}): each binds the built-ins a
 	 * {@code type} alias of the WIT's own binds, for a stream or a future the WIT writes
@@ -751,7 +751,7 @@ public final class WitImportDirective {
 				validateAsyncAlias(target, witPath, locations, resolver, alias, member, op);
 				boundMembers.add(member);
 				String name = bindingName(directive, member);
-				componentMembers.add(asyncBinding(alias.name(), op, name));
+				componentMembers.add(asyncBinding(alias.name(), op, name, directive.blocking() && "read".equals(op)));
 			}
 		}
 		// A component may import an interface purely for its TYPES: wasi:io/streams' own
@@ -1388,10 +1388,16 @@ public final class WitImportDirective {
 	// (:async "body-stream" "read" "h:body-stream-read") -- an async built-in binding of
 	// a %component-import form. Like :drop it is a distinct emission kind: a canon
 	// stream.*/future.* built-in is a CORE function typed by a component-level
-	// stream/future type, with no instance function behind it.
-	private static LispVal asyncBinding(String alias, String op, String lispName) {
-		return list(
+	// stream/future type, with no instance function behind it. A read of a :blocking t
+	// directive ends in :blocking: it waits where it is, a read of bytes or of handles
+	// included, which in asyncMode otherwise answers a pending future.
+	private static LispVal asyncBinding(String alias, String op, String lispName, boolean blocking) {
+		List<LispVal> items = new ArrayList<>(
 				List.of(new LispSymbol(":ASYNC"), new LispString(alias), new LispString(op), new LispString(lispName)));
+		if (blocking) {
+			items.add(new LispSymbol(":BLOCKING"));
+		}
+		return list(items);
 	}
 
 	// The element/payload contract of a bound async alias: a stream must be a byte
@@ -1625,10 +1631,9 @@ public final class WitImportDirective {
 							}
 						}
 					}
-					case WitItem.FlagsDef ignored -> throw new UnsupportedOperationException(WitSource.at(witPath,
-							locations, anchor) + ": '" + member + "': the WIT type of " + what
-							+ " involves flags, which does not cross the component import boundary yet (its rontolisp "
-							+ "representation is settled: a keyword list)");
+					case WitItem.FlagsDef ignored -> {
+						// a list of keywords -- crosses
+					}
 					case WitItem.EnumDef ignored -> {
 						// a keyword -- crosses
 					}
@@ -1758,11 +1763,9 @@ public final class WitImportDirective {
 							}
 						}
 					}
-					case WitItem.FlagsDef ignored ->
-						throw new UnsupportedOperationException(WitSource.at(witPath, locations, anchor) + ": '"
-								+ member + "': the WIT type of " + what + " involves flags, which does not cross the "
-								+ "component import boundary yet (its rontolisp representation is settled: a keyword "
-								+ "list)");
+					case WitItem.FlagsDef ignored -> {
+						// a list of keywords -- crosses
+					}
 					case WitItem.EnumDef ignored -> {
 						// a keyword -- crosses
 					}

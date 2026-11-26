@@ -286,6 +286,7 @@ final class WitCanonicalAbi {
 					case WitItem.RecordDef record -> in.recordSize(fieldTypes(record));
 					case WitItem.VariantDef variant -> in.variantSize(casePayloads(variant));
 					case WitItem.EnumDef en -> in.variantSize(nCases(en.cases().size()));
+					case WitItem.FlagsDef flags -> flagsSize(flags);
 					case WitItem.ResourceDef ignored -> 4;
 					default -> throw unsupported(named.name());
 				};
@@ -317,6 +318,7 @@ final class WitCanonicalAbi {
 					case WitItem.RecordDef record -> in.recordAlignment(fieldTypes(record));
 					case WitItem.VariantDef variant -> in.variantAlignment(casePayloads(variant));
 					case WitItem.EnumDef en -> in.variantAlignment(nCases(en.cases().size()));
+					case WitItem.FlagsDef flags -> flagsSize(flags);
 					case WitItem.ResourceDef ignored -> 4;
 					default -> throw unsupported(named.name());
 				};
@@ -355,6 +357,7 @@ final class WitCanonicalAbi {
 					case WitItem.RecordDef record -> in.recordFlatTypes(fieldTypes(record));
 					case WitItem.VariantDef variant -> in.variantFlatTypes(casePayloads(variant));
 					case WitItem.EnumDef ignored -> List.of(Type.I32);
+					case WitItem.FlagsDef ignored -> List.of(Type.I32);
 					case WitItem.ResourceDef ignored -> List.of(Type.I32);
 					default -> throw unsupported(named.name());
 				};
@@ -571,6 +574,23 @@ final class WitCanonicalAbi {
 			flats.addAll(flatTypes(t));
 		}
 		return flats;
+	}
+
+	/**
+	 * The bytes a flags value takes in memory, which is its alignment too: one for up to
+	 * 8 labels, two for up to 16, four for up to 32 -- the canonical ABI's
+	 * {@code elem_size_flags}, which allows no more labels. Flattened, it is one
+	 * {@code i32}; label {@code i} is bit {@code i} either way.
+	 * @param flags the flags definition
+	 * @return 1, 2 or 4
+	 */
+	static int flagsSize(WitItem.FlagsDef flags) {
+		int labels = flags.cases().size();
+		if (labels == 0 || labels > 32) {
+			throw new UnsupportedOperationException("the flags '" + flags.name() + "' declare " + labels
+					+ " labels, and the canonical ABI holds 1 to 32");
+		}
+		return labels <= 8 ? 1 : labels <= 16 ? 2 : 4;
 	}
 
 	private static Type join(Type a, Type b) {

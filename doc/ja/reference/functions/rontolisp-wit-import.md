@@ -138,7 +138,9 @@ rontolisp counter.lisp -o Counter.class && java Counter
 - `:blocking` — `t` にすると、すべての `async func` を、future ではなく呼び出しが
   返るのを待って値を返す関数として、`func` と同じように束縛します。コンポーネントは
   同期的に lower し、Preview 1 のモジュールは `:async t` なしでインポートし、
-  インタプリタと JVM はプロバイダを直接呼びます。Java のフロントエンドの
+  インタプリタと JVM はプロバイダを直接呼びます。バイトの stream とリソース
+  ハンドルの stream の読み取りも、非同期のプログラムの中でその場で待ちます(指定しない
+  場合、そこではまだ決着していない future を返します)。Java のフロントエンドの
   バインディングがこれを指定します。
 - `:aliases` — `(("name" "type") ...)`: ディレクティブがインターフェースに加える
   型エイリアスです。それぞれ、WIT がそこで `type name = type;` を宣言したものとして
@@ -334,9 +336,9 @@ cons `(:ok . V)` / `(:error . E)` — これは戻り値の `result` が ok
 の境界では `rontolisp:wasm-import` が運べるフラットな型集合だけが渡ります。コア
 インポートは素のホスト関数であり、より豊かな形をホストに伝えるためのコンポーネント型
 が存在しないからです。**`--component`** では canonical ABI
-が豊かな型をマーシャリングするので、`record`、`variant`、`enum`、`option`、`tuple`、
-`list<T>`、`result` は**両方向で** — 戻り値としてだけでなく引数としても — 渡ります。
-渡らないのは `flags` (どちらの向きでも) だけです。サポートされない型は WIT
+が豊かな型をマーシャリングするので、`record`、`variant`、`enum`、`flags`、`option`、
+`tuple`、`list<T>`、`result` は**両方向で** — 戻り値としてだけでなく引数としても — 渡ります。
+サポートされない型は WIT
 ファイル名と行番号を示すコンパイルエラーになります。
 
 | WIT type | Lisp value | Preview 1 | `--component` |
@@ -355,7 +357,7 @@ cons `(:ok . V)` / `(:error . E)` — これは戻り値の `result` が ok
 | `record` | a keyword plist | no | yes |
 | `enum` | a keyword | no | yes |
 | `variant` | a keyword, or `(keyword . payload)` | no | yes |
-| `flags` | a list of keywords | no | no |
+| `flags` | 立っているラベルのキーワードのリスト。どのラベルでもないキーワードを渡すとトラップする | no | yes |
 | `resource`, `borrow<R>`, `own<R>` | an opaque integer handle | `:int` | yes |
 | `stream<T>`, `future<T>` | an opaque integer handle, read through an alias's built-ins | no | yes |
 
@@ -444,7 +446,8 @@ variant のどの case でもないキーワードを渡すのは**型エラー*
   `wasi:keyvalue` の例はしたがって Preview 1 のプログラムではなく、コンポーネント
   (あるいはインタプリタ／JVM) のプログラムです: その `result`
   アームが Preview 1 の境界から遠ざけています。
-- `--component` では、`flags` は今のところどちらの向きでも渡りません。
+- `flags` が渡るのはコンポーネントだけです。`--no-wasi` のモジュールは、JavaScript の
+  グルーに `flags` の値がないため、`flags` を含むメンバーを拒否します。
 - `--component` では、コンポーネントが**自身の WASI 表面としてすでにインポートしている**
   インターフェースを束縛できません (その表面はプログラムが使う機能に応じて増えます:
   `rontolisp:fetch` は `wasi:http/types` と `wasi:http/client` を、`rontolisp:tcp-*`

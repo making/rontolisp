@@ -6,6 +6,7 @@
 ;;;;
 ;;;;   record           a keyword plist                (:x 1 :y 2)
 ;;;;   enum             a keyword                      :green
+;;;;   flags            a list of keywords             (:filled :bold)
 ;;;;   variant          a keyword, or (keyword . payload)   :dot  (:circle . 2.0d0)
 ;;;;   list<T>          a list
 ;;;;   tuple            a list
@@ -44,10 +45,16 @@
 ;;; WIT: caption: func(t: tagged) -> string
 (defun caption (tagged)
   (let ((shape (getf tagged :shape)))
-    (format nil "a ~a ~a~@[ called ~a~]"
+    (format nil "a ~{~a ~}~a ~a~@[ called ~a~]"
+            (mapcar (lambda (s) (string-downcase (symbol-name s)))
+                    (getf tagged :style))
             (string-downcase (symbol-name (getf tagged :color)))
             (string-downcase (symbol-name (if (consp shape) (car shape) shape)))
             (getf tagged :label))))
+
+;;; WIT: embolden: func(s: style) -> style
+;;; Flags are the list of the labels that are set.
+(defun embolden (s) (if (member :bold s) s (append s '(:bold))))
 
 ;;; WIT: summarize: func(areas: list<f64>) -> summary
 (defun summarize (areas)

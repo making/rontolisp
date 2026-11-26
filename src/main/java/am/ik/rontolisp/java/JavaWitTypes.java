@@ -43,6 +43,9 @@ final class JavaWitTypes {
 	/** The library class of the boundary's values. */
 	static final String VALUES = "rontolisp.internal.Wit";
 
+	/** What a WIT {@code stream<u8>} the host answers is. */
+	static final String INPUT_STREAM = "java.io.InputStream";
+
 	// ---- the check
 
 	/**
@@ -164,9 +167,11 @@ final class JavaWitTypes {
 				case KEYWORD_LIST -> declared instanceof ClassType type
 						&& type.declaration().name.equals("java.util.Set") && type.arguments().size() == 1
 						&& type.arguments().get(0).equals(new ClassType(member(wit, method, what), List.of()));
-				case STREAM_HANDLE -> declared instanceof ClassType type
-						&& type.declaration().name.equals(JavaWitImports.WIT_STREAM) && type.arguments().size() == 1
-						&& matches(Objects.requireNonNull(wit.element()), type.arguments().get(0), true, method, what);
+				case STREAM_HANDLE -> isU8(wit.element()) ? isClass(declared, INPUT_STREAM)
+						: declared instanceof ClassType type
+								&& type.declaration().name.equals(JavaWitImports.WIT_STREAM)
+								&& type.arguments().size() == 1 && matches(Objects.requireNonNull(wit.element()),
+										type.arguments().get(0), true, method, what);
 				case FUTURE_HANDLE -> declared instanceof ClassType type
 						&& type.declaration().name.equals(JavaWitImports.WIT_FUTURE) && type.arguments().size() == 1
 						&& futureMatches(Objects.requireNonNull(wit.element()), type.arguments().get(0), method, what);
@@ -255,15 +260,7 @@ final class JavaWitTypes {
 		 */
 		private @Nullable String refusal(JavaBoundary.Type wit, boolean arm) {
 			String own = switch (wit.rep()) {
-				case STREAM_HANDLE -> {
-					JavaBoundary.Type element = wit.element();
-					yield element == null ? "a bare stream, which carries no value"
-							: element.rep() == Rep.INT && "u8".equals(element.definition())
-									? "a stream<u8>, which the Java subset does not carry yet"
-									: element.rep() == Rep.HANDLE
-											? "a stream of resource handles, which the Java subset does not carry yet"
-											: null;
-				}
+				case STREAM_HANDLE -> wit.element() == null ? "a bare stream, which carries no value" : null;
 				case FUTURE_HANDLE -> {
 					JavaBoundary.Type payload = wit.element();
 					yield payload == null ? "a bare future, which carries no value" : switch (payload.rep()) {
@@ -908,6 +905,11 @@ final class JavaWitTypes {
 		return names;
 	}
 
+	/** Whether a stream's element is a byte: a {@code stream<u8>}. */
+	static boolean isU8(JavaBoundary.@Nullable Type element) {
+		return element != null && element.rep() == Rep.INT && "u8".equals(element.definition());
+	}
+
 	static boolean isClass(JavaType type, String name) {
 		return type instanceof ClassType named && named.declaration().name.equals(name) && named.arguments().isEmpty();
 	}
@@ -973,8 +975,10 @@ final class JavaWitTypes {
 					+ armText(owner, wit.error(), declared, 1, simple) + ">";
 			case KEYWORD_LIST -> (simple ? "Set<" : "java.util.Set<") + memberText(owner, wit, simple) + ">";
 			case PLIST, TAGGED_LIST, KEYWORD, HANDLE -> memberText(owner, wit, simple);
-			case STREAM_HANDLE -> (simple ? "WitStream<" : JavaWitImports.WIT_STREAM + "<")
-					+ javaText(owner, Objects.requireNonNull(wit.element()), true, argument(declared), simple) + ">";
+			case STREAM_HANDLE -> isU8(wit.element()) ? simple ? "InputStream" : INPUT_STREAM
+					: (simple ? "WitStream<" : JavaWitImports.WIT_STREAM + "<")
+							+ javaText(owner, Objects.requireNonNull(wit.element()), true, argument(declared), simple)
+							+ ">";
 			case FUTURE_HANDLE -> {
 				JavaBoundary.Type payload = Objects.requireNonNull(wit.element());
 				JavaBoundary.Type value = payload.rep() == Rep.RESULT ? payload.element() : payload;

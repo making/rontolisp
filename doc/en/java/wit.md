@@ -168,7 +168,9 @@ JDK, where the driver leaves the URL to another one.
 | a resource, `own<R>`, `borrow<R>` | the member interface |
 | `result<T, E>` | `WitResult<T, E>`; as a method's answer, also its ok arm, the error arm a `WitException` |
 | an `async func` | a method that waits for the host's answer, as a call does |
-| `stream<T>` the host answers | `am.ik.rontolisp.wit.WitStream<T>` |
+| `stream<T>` the host answers | `am.ik.rontolisp.wit.WitStream<T>`, of values or of resources |
+| `stream<u8>` the host answers | `java.io.InputStream` |
+| `stream<u8>` the program hands the host | `java.util.function.Consumer<java.io.OutputStream>`, handed the writable end |
 | `future<T>` the host answers | `am.ik.rontolisp.wit.WitFuture<T>`, a `future<result<T, E>>` a `WitFuture<T>` (`Void` for no ok value) |
 
 An unsigned integer is held in the Java type of its width, its bits as Java holds them:
@@ -245,9 +247,33 @@ try (WitStream<List<DbValue>> rows = started.rows(); WitFuture<Void> done = star
 ```
 
 In a component the host writes the values, and what a read holds is that read's values,
-whatever the stream holds. Under a JDK and on the interpreter and the JVM the provider
-answers its own: `WitStream.of(iterator)`, `WitFuture.of(value)`,
+whatever the stream holds. A stream of resources answers one resource a read (the
+connections `wasi:sockets`' `listen` accepts). Under a JDK and on the interpreter and the
+JVM the provider answers its own: `WitStream.of(iterator)`, `WitFuture.of(value)`,
 `WitFuture.failed(exception)`, or a class of its own.
+
+A `stream<u8>` the host answers is an `InputStream`, read as the host writes it; `close()`
+gives the readable end back. A `stream<u8>` the program hands the host is a parameter of
+type `Consumer<OutputStream>`: once the host holds the readable end, the binding hands the
+consumer an `OutputStream` over the writable end, which the program may keep and write
+after the call; a write waits until the host has read it all, and `close()` ends the
+stream. A write after the host has dropped its end throws `IOException`.
+
+```console
+// tcp-socket's send: func(data: stream<u8>) -> future<result<_, error-code>>
+WitFuture<Void> send(Consumer<OutputStream> data);
+
+OutputStream[] writer = new OutputStream[1];
+WitFuture<Void> sent = socket.send(out -> writer[0] = out);
+try (OutputStream out = writer[0]) {
+    out.write(request);
+}
+sent.get();
+```
+
+A read waits where it is, as a call does: every thread of the program waits with it. Under
+a JDK and on the interpreter and the JVM the provider hands the consumer an `OutputStream`
+of its own.
 
 ## Exporting a WIT world
 
@@ -329,10 +355,11 @@ is s32, which is int in Java, not long
 ### The types of an export
 
 The types are those of [the table above](#the-types), but the ones no world's export
-carries, each refused at its WIT line: `flags`, a resource, a `stream`, a `future`, and a
-type another interface defines (`use`). A named type is a member type, as an imported
-interface's is: of the annotated class for a type the world defines, of the interface's
-member class for a type an exported interface defines. A tuple is a record of the
+carries, each refused at its WIT line: a resource, a `stream` and a `future`. A named type
+is a member type, as an imported interface's is: of the annotated class for a type the
+world defines, of the interface's member class for a type an exported interface defines.
+A type the world or the interface takes from another with `use` is a member type too,
+under the name the clause gives it there. A tuple is a record of the
 program's, declared anywhere.
 
 ```console
@@ -434,7 +461,7 @@ public static int pause(int ms) throws InterruptedException {
 
 - A WASM module takes the types `rontolisp:wit-import` takes there: a Preview 1 core module
   the flat set (the integers up to 32 bits, the floats, `bool`, `string`, `list<u8>`,
-  handles), a component and a `--no-wasi` module everything but `flags`. A member of any
+  handles), a component everything, a `--no-wasi` module everything but `flags`. A member of any
   other type is refused at its WIT line where the program calls it, as `wit-import` refuses
   it.
 - A `u64` past `Long.MAX_VALUE` crosses no WASM boundary: the call traps. One exception:
@@ -442,14 +469,19 @@ public static int pause(int ms) throws InterruptedException {
   negative `long` is the `u64` of its bits.
 - A native executable (`--native`) runs a Preview 1 module whose runner provides no WIT
   interface, so a program calling one does not start there.
-- Refused at the declaration: a `stream` or a `future` the program hands the host, a
-  `stream<u8>`, a stream of resources, a `future` of a `bool`, a `list`, `flags` or an
-  `option` (whose value the boundary cannot tell from a future its writer dropped); an
+- Refused at the declaration: a `future` the program hands the host (the binding could
+  write it only after the call, and a host may read it only within a later call the program
+  waits on: wasmtime's HTTP types read a request's trailers within `client.send`); a
+  stream of values or of resources the program hands the host, which the guest cannot
+  write; a `stream<u8>` the program hands an `async func` (the call waits while the host
+  reads what the program writes only after it) or holds in another type; a `future` of a
+  `bool`, a `list`, `flags` or an `option` (whose value the boundary cannot tell from a
+  future its writer dropped); an
   `option` of a `bool`, a `list`, `flags` or an `option`, whose none the boundary cannot
   tell apart; a resource of another interface; a tuple in an error arm thrown as a
   `WitException`, for which no type is written (a `WitResult` answer carries it).
-- A world's export carries no `flags`, resource, `stream` or `future` and no type of
-  another interface; an `async func` export takes `bool`, the integers, `f64` and `string`
+- A world's export carries no resource, `stream` or `future`; an `async func` export
+  takes `bool`, the integers, `f64` and `string`
   alone, and is refused under `--no-gc`. Two exports of one label (a function of the world
   and an interface's, or two interfaces') are two methods, each of its own class.
 - An exception an export leaves uncaught is reported on standard error by the line a JDK

@@ -1392,15 +1392,37 @@ that `javac` and a JDK build and run. User-facing: `doc/*/java/wit.md`.
   `describe` gives); `get()` reads, drops the readable end and keeps its answer, making what
   it throws at each `throw` (made outside one, a `Throwable` gives a loop calling `get()` a
   turn: [jdbc-spin-postgres.md](jdbc-spin-postgres.md), "The streamed path"); nil from the
-  read is a dropped future. Refused at the method: a stream or a future the program hands the
-  host (the host writes what it is handed), a `stream<u8>` (an `InputStream` would be its
-  type), a stream of resources, a future of a type whose value the boundary spells nil
-  (`bool`, `list`, `option`, `flags`: the read of a dropped future answers nil). A read waits
-  as a sync call does: every thread of a component waits with it. Pins:
-  `JavaWitImportTest.aStreamAndAFutureTheHostAnswersAreReadInPieces` (JDK, interpreter, JVM,
-  the directive, the refusals), `.everyKindOfValueCrossesWasmtimesSocketsAndHttpTypes`
-  (`tcp-socket.connect`, an async func, refused by wasmtime 51 as a blocking call), the Spin
-  leg of `ClPostgresE2eTest` (the example reading its notes in pieces).
+  read is a dropped future. A stream of resources is a `WitStream<R>` too, its read answering
+  one handle (the alias's read takes no count). A `stream<u8>` the host answers is an
+  `InputStream` (the binding's `S<n>` extends it, a chunk a read). A read waits as a sync call
+  does: every thread of a component waits with it -- the directive carries `:blocking t`
+  whenever a read is reached, and its reads then wait in asyncMode too (`.kb/wit.md`,
+  `:blocking t`), where a byte or handle read would answer a pending future the binding has no
+  way to await outside a resumable method.
+- **What the program hands the host** (2026-11-26, m68), decided from what the Lisp side
+  binds (`-new`, `-write`, `-drop-writable` of a byte stream and a future; no write of a
+  stream of values or handles). A `stream<u8>` parameter is a `Consumer<OutputStream>`: the
+  binding makes the pair, hands the readable end in the call, then hands the consumer a `W<n>`
+  over the writable end, which the program may keep -- as sockets.lisp keeps `send`'s writer
+  -- a write waiting until the host took all of it (a write the host took none of: the reader
+  has gone, `IOException`), `close()` the drop. Rejected: an `InputStream` parameter the
+  binding copies after the call (`send` is called once, so a request/response exchange could
+  not write its second request); a pipe class in `rontolisp-java-api` (the binding would need
+  a public hook into it). Refused at the method: a future handed over (the binding could write
+  it only after the call; measured 2026-11-26, wasmtime 51: a write of `request.new`'s
+  trailers future after the call never returns, the host reading it within `client.send`,
+  which the subset waits on -- what it needs is `.todo/m89`); a stream of values or handles
+  handed over; a `stream<u8>` handed to an async func (the call waits while the host reads
+  what can be written only after it, as wasi:cli's `write-via-stream`) or held in another
+  type. Measured 2026-11-26: programs using neither byte-identical (`PageHits.java`,
+  m55's rows program, `examples/net/echo-client.lisp`, `page-hits.lisp`); a Lisp program
+  with `:blocking t` reading bytes in asyncMode 61,796 -> 61,418 B (no scheduler entry).
+  Pins: `JavaWitImportTest.aStreamAndAFutureTheHostAnswersAreReadInPieces` (JDK,
+  interpreter, JVM, the directive, the refusals: both byte directions through the
+  program's provider), `.everyKindOfValueCrossesWasmtimesOwnInterfaces` (`tcp-socket.connect`,
+  an async func, refused by wasmtime 51 as a blocking call; `listen`'s connections, `send`
+  written after the call, `receive` read; `wasi:cli/stdin` read in a thread before its bytes
+  arrive), the Spin leg of `ClPostgresE2eTest` (the example reading its notes in pieces).
 - **Pinned by** `JavaWitImportTest` (a JDK, the interpreter, the JVM, the component, the
   Preview 1 refusal; the WIT's lookup; every kind of value; the checks, the two drafts;
   `aResultIsAWitResultWhereverTheWitHasOne`, a `--no-wasi` module under a JavaScript host) and
@@ -1427,6 +1449,12 @@ exports the component's entry points.** The user's request (2026-11-24): the opp
   refuses an instance method (no host has an instance); two exports
   of one label are two methods, keyed apart in `:names` (`.kb/wit.md`). Only the program's own
   classes are checked and exported (`Source.partial`).
+- Flags and a type of another interface (`use`) cross an export since the directive carries
+  them, with nothing added here (measured 2026-11-26, wasmtime 51): flags are the `Set` of a
+  member enum `JavaWitTypes` already converts; a used type is a member type of the using scope's
+  class under the clause's name, since `describe` answers the scope with its clauses written
+  out (`.kb/wit.md`, "A type of another interface"). Pin: `examples/wit/shapes/Shapes.java`
+  (`WitOracleE2eTest.aComponentCallsWhatAnotherExportsOverCompoundTypes`).
 - **The types are `@WitImport`'s, one mapping for both** (`JavaWitTypes`: `Table` the check,
   `Converters` the generated conversions; the import's `Checker` and `Writer` and the export's
   extend them). Decided: a named type is a member type of the class holding the export -- the
@@ -1471,7 +1499,7 @@ exports the component's entry points.** The user's request (2026-11-24): the opp
   `wit-export`'s check at the WIT line. A sleeping export imports `wasi:cli/exit`:
   `Thread.currentThread()` makes a `Thread`, whose id counter is `synchronized`, and the wasm
   monitor entry reaches `%java-unforeseen`. Flat types only: a compound type in an `async func`
-  is refused at its WIT line by `describe` (`.todo/m82`).
+  is refused at its WIT line by `describe` (`.todo/m90`).
 - **The lowering**: a flat export's `u8`, `u16` or `u32` crosses through a `defun`
   `<function>%wit` converting it; a `u64` past `Long.MAX_VALUE` traps (`.kb/wit.md`). An EAGER class is initialized in the
   top level, which the reactor runs in the first export call, a LAZY one at the top of its

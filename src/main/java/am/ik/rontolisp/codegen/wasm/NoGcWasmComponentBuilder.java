@@ -474,6 +474,21 @@ final class NoGcWasmComponentBuilder {
 				}
 			}
 		}
+		// The exports of a world that names types say so (rontolisp:wit-export): the
+		// component declares the types and types each export from the WIT, as the
+		// default backend's does.
+		if (decls.stream().anyMatch(decl -> decl.typing() != null)) {
+			final List<ComponentExportWiring.Lifted> exported = new ArrayList<>();
+			for (WasmExportCompiler.Decl decl : decls) {
+				aliases.add(ComponentWriter.aliasCoreFunc(coreInstance, WasmExportCompiler.componentCoreName(decl)));
+				exported.add(new ComponentExportWiring.Lifted(decl, nextCoreFunc++, WasmExportCompiler.usesMemory(decl)
+						? Objects.requireNonNull(postFuncs.get(postReturnKind(decl))) : -1));
+			}
+			c.rawSection(ComponentWriter.SEC_ALIAS, ComponentWriter.vec(aliases));
+			ComponentExportWiring.append(c, exported, coreMemory, realloc, nextType, nextComponentFunc,
+					nextComponentInstance, printUsed);
+			return c.toByteArray();
+		}
 		// Per export i: alias the core wrapper, declare its function type, lift it and
 		// export it. Types/lifts/exports line up 1:1 with the ordinal; only the core
 		// function index is shifted by the wiring above. A printing program's exports

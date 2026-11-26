@@ -6,6 +6,7 @@ import java.util.Objects;
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * Unit tests for {@link WitResolver}: the name resolution a binder needs on top of the
@@ -453,6 +454,95 @@ class WitResolverTest {
 		// does a bodiless `resource error;` -- the binder reports "declares no
 		// functions".
 		assertThat(WitResolver.functions(iface(resolver(KEYVALUE), "types"))).isEmpty();
+	}
+
+	@Test
+	void writesAUseClauseOutAsTheDefinitionsItNames() {
+		// A value type is structural, so a scope that holds a copy of what its use
+		// clauses name says what the clauses say (WitUses). The clause's name is the
+		// type's name wherever it is reached from; a second name is an alias; an alias
+		// the scope has no name for is written as what it names; a record it has no
+		// name for comes under its own. What holds a resource stays a clause, by its
+		// full id.
+		WitResolver resolver = resolver("""
+				package example:uses@0.1.0;
+
+				interface geometry {
+				  type coord = s32;
+				  record point { x: coord, y: coord }
+				  record line { a: point, b: point, tags: list<tag> }
+				  enum color { red, green }
+				  type tag = string;
+				  type shade = color;
+				  resource canvas;
+				  record stroke { on: borrow<canvas>, l: line }
+				}
+
+				interface shapes {
+				  record mine { p: point }
+				  use geometry.{line, color as tint, point, point as pt, canvas, shade, stroke};
+				  draw: func(l: line) -> tint;
+				}
+
+				interface lines {
+				  use geometry.{line, coord};
+				}
+
+				interface clash {
+				  use geometry.{line};
+				  record point { z: s32 }
+				}
+				""");
+		assertThat(
+				WitPrinter.print(new WitDocument(List.of(WitUses.inline(resolver, iface(resolver, "shapes"), true)))))
+			.isEqualTo("""
+					interface shapes {
+					  record mine {
+					    p: point,
+					  }
+
+					  record point {
+					    x: s32,
+					    y: s32,
+					  }
+
+					  record line {
+					    a: point,
+					    b: point,
+					    tags: list<string>,
+					  }
+
+					  enum tint {
+					    red,
+					    green,
+					  }
+
+					  type pt = point;
+
+					  type shade = tint;
+
+					  use example:uses/geometry@0.1.0.{canvas, stroke};
+
+					  draw: func(l: line) -> tint;
+					}
+					""");
+		// A type a clause's definition mentions comes under its own name where the
+		// scope may add names (an interface's types are its exports), and is refused
+		// where it may not (a world's are imports) or where the name is another type's.
+		WitItem.InterfaceDef lines = iface(resolver, "lines");
+		assertThat(WitPrinter.print(new WitDocument(List.of(WitUses.inline(resolver, lines, true)))))
+			.contains("  type coord = s32;\n\n  record point {\n    x: coord,\n    y: coord,\n  }\n\n  record line {");
+		assertThatThrownBy(() -> WitUses.inline(resolver, lines, false)).isInstanceOfSatisfying(WitUses.Unnamed.class,
+				unnamed -> {
+					assertThat(unnamed.name()).isEqualTo("point");
+					assertThat(unnamed.taken()).isFalse();
+					assertThat(unnamed.use()).isSameAs(lines.items().get(0));
+				});
+		assertThatThrownBy(() -> WitUses.inline(resolver, iface(resolver, "clash"), true))
+			.isInstanceOfSatisfying(WitUses.Unnamed.class, unnamed -> assertThat(unnamed.taken()).isTrue());
+		// A scope with no clause is itself.
+		WitItem.InterfaceDef geometry = iface(resolver, "geometry");
+		assertThat(WitUses.inline(resolver, geometry, true)).isSameAs(geometry);
 	}
 
 }
