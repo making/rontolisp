@@ -1,8 +1,20 @@
 package am.ik.rontolisp.clojure;
 
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
+
+import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispInteger;
+import am.ik.rontolisp.LispString;
+import am.ik.rontolisp.LispSymbol;
+import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.eval.LispEvaluator;
+import am.ik.rontolisp.reader.LispReader;
 
 import org.junit.jupiter.api.Test;
 
@@ -51,6 +63,66 @@ class ClojureClassBasesTest {
 		// beyond the tables, a throwable reflects; any other class is no class keyword
 		assertThat(ClojureClassBases.basesOf("java.io.FileNotFoundException")).containsExactly("java.io.IOException");
 		assertThat(ClojureClassBases.basesOf("java.util.ArrayList")).isNull();
+	}
+
+	/**
+	 * The table {@code supers} and {@code bases} read for a designator
+	 * ({@code clojure.lisp}, {@code %clojure-class-bases-text}): a JDK class's line is
+	 * what reflection says on this host, a {@code clojure.lang} class's what its stub row
+	 * ({@code %clojure-lang-classes}) says, every stub row has a line, and every base a
+	 * line names has a line of its own, so a walk never meets a class it cannot answer.
+	 */
+	@Test
+	void theDesignatorTableIsReflectionsAndTheStubRowsClosedUnderTheirBases() throws Exception {
+		String library;
+		try (InputStream in = LispEvaluator.class.getResourceAsStream("clojure.lisp")) {
+			assertThat(in).isNotNull();
+			library = new String(in.readAllBytes(), StandardCharsets.UTF_8);
+		}
+		Map<String, List<String>> table = new HashMap<>();
+		Map<String, List<String>> stubs = new HashMap<>();
+		for (LispVal form : LispReader.readAllFromString(library)) {
+			if (!(form instanceof LispCons def && def.cdr() instanceof LispCons rest
+					&& rest.car() instanceof LispSymbol name && rest.cdr() instanceof LispCons init)) {
+				continue;
+			}
+			if (name.name().endsWith("%CLOJURE-CLASS-BASES-TEXT")) {
+				for (String line : ((LispString) init.car()).value().split("\n")) {
+					if (!line.isEmpty()) {
+						List<String> words = List.of(line.split(" "));
+						List<String> bases = new ArrayList<>(words.subList(1, words.size()));
+						if (bases.get(0).equals("-")) {
+							bases.remove(0);
+						}
+						table.put(words.get(0), bases);
+					}
+				}
+			}
+			else if (name.name().endsWith("%CLOJURE-LANG-CLASSES")) {
+				for (LispVal row : ((LispCons) ((LispCons) init.car()).cdr()).car() instanceof LispCons rows
+						? rows.toList() : List.<LispVal>of()) {
+					List<LispVal> cells = ((LispCons) row).toList();
+					List<String> bases = new ArrayList<>();
+					if ((((LispInteger) cells.get(1)).value() & 512) == 0) {
+						bases.add(((LispString) cells.get(2)).value());
+					}
+					for (String each : ((LispString) cells.get(3)).value().split(" ")) {
+						if (!each.isEmpty()) {
+							bases.add(each);
+						}
+					}
+					stubs.put(((LispString) cells.get(0)).value(), bases);
+				}
+			}
+		}
+		assertThat(stubs).containsKey("clojure.lang.PersistentVector");
+		assertThat(table).containsAllEntriesOf(stubs).containsKeys("java.lang.Long", "java.util.List");
+		for (Map.Entry<String, List<String>> line : table.entrySet()) {
+			if (!line.getKey().startsWith("clojure.")) {
+				assertThat(line.getValue()).as(line.getKey()).isEqualTo(reflected(line.getKey()));
+			}
+			assertThat(table.keySet()).as(line.getKey()).containsAll(line.getValue());
+		}
 	}
 
 	private static List<String> reflected(String name) throws ClassNotFoundException {

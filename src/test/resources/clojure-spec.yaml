@@ -2890,8 +2890,8 @@ cases:
     # symbol, boolean, map or set refuses with :malli.core/invalid-schema like the
     # oracle, instead of looping through or mistyping under the colliding
     # :function/:keyword/... entry (f96). Metadata and records still answer first.
-    # Every line is the oracle's (clj 1.12.6) but a function's class (the oracle
-    # names each function's own).
+    # Every line is the oracle's (clj 1.12.6) but an anonymous function's class
+    # (the oracle names each one's own, user$eval1$fn__2).
     source: |
       (println (type (fn [x] x)) (type pos-int?) (= (type pos-int?) (type pos-int?)))
       (println (type "s") (type :k) (type 's) (type true) (type nil))
@@ -2900,11 +2900,11 @@ cases:
       (println (class (fn [x] x)) (class "s") (class nil))
       (println (= (type "a") :string) (= (type 1) (class 1)))
     expected: |
-      clojure.lang.AFunction clojure.lang.AFunction true
+      clojure.lang.AFunction$fn clojure.core$pos_int_QMARK_ true
       java.lang.String clojure.lang.Keyword clojure.lang.Symbol java.lang.Boolean nil
       :foo
       clojure.lang.PersistentArrayMap clojure.lang.PersistentArrayMap clojure.lang.PersistentTreeMap clojure.lang.PersistentHashSet clojure.lang.PersistentVector java.lang.Long
-      clojure.lang.AFunction java.lang.String nil
+      clojure.lang.AFunction$fn java.lang.String nil
       false true
   - name: a-type-designator-dispatches-and-instances-as-its-kind
     # A (:C%CLASS name) designator type answers reads back as its kind where a
@@ -3877,6 +3877,11 @@ cases:
     # Empty answers are nil, and descendants of a class is the oracle's refusal. A core
     # kind or a record isa Object (its host classes' interfaces are not modeled). The
     # earlier case's (derive Exception ::xdh-failure) shows through Exception's subclasses.
+    # bases is a class's superclass then its direct interfaces, supers all it reaches (a
+    # set, ordered here: the oracle's hashes Class objects by identity); a fn's class is the
+    # class the oracle compiles it to, what .getClass answers, under AFunction; a record's
+    # or deftype's bases are Object, its body's interfaces (one here: the oracle orders
+    # several by a hash set) and IRecord's or IType's; anything else is no Class.
     source: |
       (defn pa-names [s] (sort (map #(apply str (remove #{\:} (pr-str %))) s)))
       (println (parents NumberFormatException) (parents java.io.Closeable) (parents Object) (ancestors java.lang.AutoCloseable))
@@ -3892,6 +3897,16 @@ cases:
       (defrecord PaR [a])
       (println (isa? (class 1) :pa/o) (isa? java.io.Closeable :pa/o) (contains? (ancestors String) :pa/o) (contains? (ancestors (class "a")) :pa/o) (isa? (class (->PaR 1)) :pa/o) (isa? PaR Object))
       (println (contains? (ancestors Long) Number) (contains? (ancestors String) CharSequence) (contains? (ancestors (class (fn []))) clojure.lang.IFn) (count (parents String)) (some #(= % (keyword "java.lang.String")) (parents String)) (every? #(isa? Long %) (ancestors Long)) (contains? (parents (first (parents NumberFormatException))) RuntimeException))
+      (defn pa-sb [s] (sort (map #(.getName %) s)))
+      (println (bases Long) (pa-sb (supers Long)) (bases Object) (supers Object) (bases Comparable) (bases nil) (supers nil))
+      (println (bases (class [])) (pa-sb (supers (class []))))
+      (defn pa-f [x] x)
+      (defprotocol PaP (pa-p [x]))
+      (defrecord PaS [a] PaP (pa-p [x] 0))
+      (deftype PaT [] PaP (pa-p [x] 0))
+      (println (class pa-f) (= (class pa-f) (.getClass pa-f)) (bases (class pa-f)) (pa-sb (supers (class pa-f))) (isa? (class pa-f) clojure.lang.IFn) (instance? (class pa-f) pa-f))
+      (println (bases PaS) (bases PaT) (bases auto.PaP) (pa-sb (supers PaT)) (map bases [String]))
+      (println (try (bases 1) (catch ClassCastException e :cce)))
     expected: |
       #{java.lang.IllegalArgumentException} #{java.lang.AutoCloseable} nil nil
       (auto/xdh-failure java.io.Serializable java.lang.Exception java.lang.Object java.lang.RuntimeException java.lang.Throwable)
@@ -3903,6 +3918,11 @@ cases:
       (auto/xdh-failure java.io.Serializable java.lang.Exception java.lang.Object java.lang.RuntimeException java.lang.Throwable pa/f)
       true false true true true true
       true true true 6 nil true true
+      (java.lang.Number java.lang.Comparable java.lang.constant.Constable java.lang.constant.ConstantDesc) (java.io.Serializable java.lang.Comparable java.lang.Number java.lang.Object java.lang.constant.Constable java.lang.constant.ConstantDesc) nil nil nil nil nil
+      (clojure.lang.APersistentVector clojure.lang.IObj clojure.lang.IEditableCollection clojure.lang.IReduce clojure.lang.IKVReduce clojure.lang.IDrop) (clojure.lang.AFn clojure.lang.APersistentVector clojure.lang.Associative clojure.lang.Counted clojure.lang.IDrop clojure.lang.IEditableCollection clojure.lang.IFn clojure.lang.IHashEq clojure.lang.IKVReduce clojure.lang.ILookup clojure.lang.IMeta clojure.lang.IObj clojure.lang.IPersistentCollection clojure.lang.IPersistentStack clojure.lang.IPersistentVector clojure.lang.IReduce clojure.lang.IReduceInit clojure.lang.Indexed clojure.lang.Reversible clojure.lang.Seqable clojure.lang.Sequential java.io.Serializable java.lang.Comparable java.lang.Iterable java.lang.Object java.lang.Runnable java.util.Collection java.util.List java.util.RandomAccess java.util.SequencedCollection java.util.concurrent.Callable)
+      auto$pa_f true (clojure.lang.AFunction) (clojure.lang.AFn clojure.lang.AFunction clojure.lang.Fn clojure.lang.IFn clojure.lang.IMeta clojure.lang.IObj java.io.Serializable java.lang.Object java.lang.Runnable java.util.Comparator java.util.concurrent.Callable) true true
+      (java.lang.Object auto.PaP clojure.lang.IRecord clojure.lang.IHashEq clojure.lang.IObj clojure.lang.ILookup clojure.lang.IKeywordLookup clojure.lang.IPersistentMap java.util.Map java.io.Serializable) (java.lang.Object auto.PaP clojure.lang.IType) nil (auto.PaP clojure.lang.IType java.lang.Object) ((java.lang.Object java.io.Serializable java.lang.Comparable java.lang.CharSequence java.lang.constant.Constable java.lang.constant.ConstantDesc))
+      :cce
   - name: memfn-calls-a-method-on-its-target
     # memfn is a function of a target and the named arguments calling the method
     # on it; string receivers take the mapped core operation, like any instance

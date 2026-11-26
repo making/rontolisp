@@ -1556,6 +1556,16 @@
             (cons (rontolisp::%clojure-munge-char (char-code (char s i))) acc)))
     (apply #'concatenate 'string (reverse acc))))
 
+(defun rontolisp::%clojure-munge-string (s)
+  "The string S with every character munged, as munge munges it: a
+   function's class name, which needs neither munge's printer nor its apply
+   of concatenate (some 40 KB of wasm between them)."
+  (let ((out ""))
+    (dotimes (i (length s))
+      (let ((piece (rontolisp::%clojure-munge-char (char-code (char s i)))))
+        (setq out (concatenate 'string out piece))))
+    out))
+
 (defun rontolisp::%clojure-munge-v (&rest args)
   "munge as a value."
   (rontolisp::%clojure-check-arity args 1 1 "munge")
@@ -8676,10 +8686,13 @@
 (defun rontolisp::%clojure-extends-named (name)
   "The methods-table key the resolved class NAME reads: the keyword a
    class spelling stores -- the default marker for java.lang.Object, its
-   own keyword where the lowering keys it so, else the kind keyword."
+   own keyword where the lowering keys it so, the function kind for a
+   function's class (%clojure-fn-class), else the kind keyword."
   (cond ((equal name "java.lang.Object") :default)
         ((member name rontolisp::%clojure-extends-io-names :test #'equal)
          (list :c%keyword name))
+        ((gethash name rontolisp::%clojure-fn-class-names)
+         (list :c%keyword "function"))
         (t
          (let ((kind
                 (or (cdr
@@ -13779,11 +13792,13 @@
    a kind keyword's values have -- a map's by its size (an empty map
    PersistentArrayMap, nine entries up PersistentHashMap, like the oracle's), a
    sorted map's or set's its tree class, a lazy seq LazySeq, any other seq
-   PersistentList -- or of the class a class keyword names; nil for nil; a
+   PersistentList, a function the class the oracle compiles it to
+   (%clojure-fn-class) -- or of the class a class keyword names; nil for nil; a
    record's or deftype's designator and a host class object as they are."
   (if (and (consp k) (eq (car k) :C%KEYWORD))
       (let ((spelling (car (cdr k))))
         (cond ((equal spelling "nil") nil)
+              ((equal spelling "function") (rontolisp::%clojure-fn-class x))
               ((equal spelling "map")
                (rontolisp::%clojure-class-value
                 (if (and (consp x) (eq (car x) :C%SORTED))
@@ -14077,6 +14092,385 @@
    Class/forName answers the stub of where a host is."
   (and (stringp x) (assoc x rontolisp::%clojure-lang-classes :test #'equal) t))
 
+;;;; supers and bases. The oracle's bases is a class's superclass then its
+;;;; direct interfaces (Class#getSuperclass, Class#getInterfaces), nil for
+;;;; none; its supers every class bases reaches from it, as a set, nil for none.
+;;;; A host class answers by the host's reflection -- a clojure.lang stub and a
+;;;; function's stub carry the oracle's supertypes -- and a designator by the
+;;;; rows: a clojure.lang or JDK class's of %clojure-class-bases-text, a
+;;;; function's class AFunction, a record's or deftype's what its definition
+;;;; noted, an interface the program defines none.
+
+(defvar rontolisp::%clojure-class-bases-text
+  "
+clojure.asm.Opcodes -
+clojure.lang.AFn java.lang.Object clojure.lang.IFn
+clojure.lang.AFunction clojure.lang.AFn clojure.lang.IObj java.util.Comparator clojure.lang.Fn java.io.Serializable
+clojure.lang.AMapEntry clojure.lang.APersistentVector clojure.lang.IMapEntry
+clojure.lang.APersistentMap clojure.lang.AFn clojure.lang.IPersistentMap java.util.Map java.lang.Iterable java.io.Serializable clojure.lang.MapEquivalence clojure.lang.IHashEq
+clojure.lang.APersistentSet clojure.lang.AFn clojure.lang.IPersistentSet java.util.Collection java.util.Set java.io.Serializable clojure.lang.IHashEq
+clojure.lang.APersistentVector clojure.lang.AFn clojure.lang.IPersistentVector java.lang.Iterable java.util.List java.util.RandomAccess java.lang.Comparable java.io.Serializable clojure.lang.IHashEq
+clojure.lang.ARef clojure.lang.AReference clojure.lang.IRef
+clojure.lang.AReference java.lang.Object clojure.lang.IReference
+clojure.lang.ASeq clojure.lang.Obj clojure.lang.ISeq clojure.lang.Sequential java.util.List java.io.Serializable clojure.lang.IHashEq
+clojure.lang.ATransientMap clojure.lang.AFn clojure.lang.ITransientMap clojure.lang.ITransientAssociative2
+clojure.lang.ATransientSet clojure.lang.AFn clojure.lang.ITransientSet
+clojure.lang.Agent clojure.lang.ARef
+clojure.lang.ArityException java.lang.IllegalArgumentException
+clojure.lang.Associative - clojure.lang.IPersistentCollection clojure.lang.ILookup
+clojure.lang.Atom clojure.lang.ARef clojure.lang.IAtom2
+clojure.lang.BigInt java.lang.Number clojure.lang.IHashEq
+clojure.lang.Box java.lang.Object
+clojure.lang.Compiler java.lang.Object clojure.asm.Opcodes
+clojure.lang.Compiler$CompilerException java.lang.RuntimeException clojure.lang.IExceptionInfo
+clojure.lang.Cons clojure.lang.ASeq java.io.Serializable
+clojure.lang.Counted -
+clojure.lang.Delay java.lang.Object clojure.lang.IDeref clojure.lang.IPending
+clojure.lang.EdnReader$ReaderException java.lang.RuntimeException
+clojure.lang.ExceptionInfo java.lang.RuntimeException clojure.lang.IExceptionInfo
+clojure.lang.Fn -
+clojure.lang.IAtom -
+clojure.lang.IAtom2 - clojure.lang.IAtom
+clojure.lang.IBlockingDeref -
+clojure.lang.IChunk - clojure.lang.Indexed
+clojure.lang.IChunkedSeq - clojure.lang.ISeq clojure.lang.Sequential
+clojure.lang.IDeref - java.util.function.Supplier java.util.function.BooleanSupplier java.util.function.IntSupplier java.util.function.LongSupplier java.util.function.DoubleSupplier
+clojure.lang.IDrop -
+clojure.lang.IEditableCollection -
+clojure.lang.IExceptionInfo -
+clojure.lang.IFn - java.util.concurrent.Callable java.lang.Runnable
+clojure.lang.IHashEq -
+clojure.lang.IKVReduce -
+clojure.lang.IKeywordLookup -
+clojure.lang.ILookup -
+clojure.lang.IMapEntry - java.util.Map$Entry
+clojure.lang.IMapIterable -
+clojure.lang.IMeta -
+clojure.lang.IObj - clojure.lang.IMeta
+clojure.lang.IPending -
+clojure.lang.IPersistentCollection - clojure.lang.Seqable
+clojure.lang.IPersistentList - clojure.lang.Sequential clojure.lang.IPersistentStack
+clojure.lang.IPersistentMap - java.lang.Iterable clojure.lang.Associative clojure.lang.Counted
+clojure.lang.IPersistentSet - clojure.lang.IPersistentCollection clojure.lang.Counted
+clojure.lang.IPersistentStack - clojure.lang.IPersistentCollection
+clojure.lang.IPersistentVector - clojure.lang.Associative clojure.lang.Sequential clojure.lang.IPersistentStack clojure.lang.Reversible clojure.lang.Indexed
+clojure.lang.IProxy -
+clojure.lang.IRecord -
+clojure.lang.IReduce - clojure.lang.IReduceInit
+clojure.lang.IReduceInit -
+clojure.lang.IRef - clojure.lang.IDeref
+clojure.lang.IReference - clojure.lang.IMeta
+clojure.lang.ISeq - clojure.lang.IPersistentCollection
+clojure.lang.ITransientAssociative - clojure.lang.ITransientCollection clojure.lang.ILookup
+clojure.lang.ITransientAssociative2 - clojure.lang.ITransientAssociative
+clojure.lang.ITransientCollection -
+clojure.lang.ITransientMap - clojure.lang.ITransientAssociative clojure.lang.Counted
+clojure.lang.ITransientSet - clojure.lang.ITransientCollection clojure.lang.Counted
+clojure.lang.ITransientVector - clojure.lang.ITransientAssociative clojure.lang.Indexed
+clojure.lang.IType -
+clojure.lang.Indexed - clojure.lang.Counted
+clojure.lang.Keyword java.lang.Object clojure.lang.IFn java.lang.Comparable clojure.lang.Named java.io.Serializable clojure.lang.IHashEq
+clojure.lang.LazilyPersistentVector java.lang.Object
+clojure.lang.LazySeq clojure.lang.Obj clojure.lang.ISeq clojure.lang.Sequential java.util.List clojure.lang.IPending clojure.lang.IHashEq
+clojure.lang.LineNumberingPushbackReader java.io.PushbackReader
+clojure.lang.LispReader$ReaderException java.lang.RuntimeException clojure.lang.IExceptionInfo
+clojure.lang.MapEntry clojure.lang.AMapEntry
+clojure.lang.MapEquivalence -
+clojure.lang.MultiFn clojure.lang.AFn
+clojure.lang.Named -
+clojure.lang.Namespace clojure.lang.AReference java.io.Serializable
+clojure.lang.Numbers java.lang.Object
+clojure.lang.Obj java.lang.Object clojure.lang.IObj java.io.Serializable
+clojure.lang.PersistentArrayMap clojure.lang.APersistentMap clojure.lang.IObj clojure.lang.IEditableCollection clojure.lang.IMapIterable clojure.lang.IKVReduce clojure.lang.IDrop
+clojure.lang.PersistentArrayMap$TransientArrayMap clojure.lang.ATransientMap
+clojure.lang.PersistentHashMap clojure.lang.APersistentMap clojure.lang.IEditableCollection clojure.lang.IObj clojure.lang.IMapIterable clojure.lang.IKVReduce
+clojure.lang.PersistentHashMap$TransientHashMap clojure.lang.ATransientMap
+clojure.lang.PersistentHashSet clojure.lang.APersistentSet clojure.lang.IObj clojure.lang.IEditableCollection
+clojure.lang.PersistentHashSet$TransientHashSet clojure.lang.ATransientSet
+clojure.lang.PersistentList clojure.lang.ASeq clojure.lang.IPersistentList clojure.lang.IReduce java.util.List clojure.lang.Counted
+clojure.lang.PersistentTreeMap clojure.lang.APersistentMap clojure.lang.IObj clojure.lang.Reversible clojure.lang.Sorted clojure.lang.IKVReduce
+clojure.lang.PersistentTreeSet clojure.lang.APersistentSet clojure.lang.IObj clojure.lang.Reversible clojure.lang.Sorted
+clojure.lang.PersistentVector clojure.lang.APersistentVector clojure.lang.IObj clojure.lang.IEditableCollection clojure.lang.IReduce clojure.lang.IKVReduce clojure.lang.IDrop
+clojure.lang.PersistentVector$TransientVector clojure.lang.AFn clojure.lang.ITransientVector clojure.lang.ITransientAssociative2 clojure.lang.Counted
+clojure.lang.RT java.lang.Object
+clojure.lang.Ratio java.lang.Number java.lang.Comparable
+clojure.lang.ReaderConditional java.lang.Object clojure.lang.ILookup
+clojure.lang.Reduced java.lang.Object clojure.lang.IDeref
+clojure.lang.Ref clojure.lang.ARef clojure.lang.IFn java.lang.Comparable clojure.lang.IRef
+clojure.lang.Reversible -
+clojure.lang.SeqIterator java.lang.Object java.util.Iterator
+clojure.lang.Seqable -
+clojure.lang.Sequential -
+clojure.lang.Settable -
+clojure.lang.Sorted -
+clojure.lang.Symbol clojure.lang.AFn clojure.lang.IObj java.lang.Comparable clojure.lang.Named java.io.Serializable clojure.lang.IHashEq
+clojure.lang.TaggedLiteral java.lang.Object clojure.lang.ILookup
+clojure.lang.Util java.lang.Object
+clojure.lang.Var clojure.lang.ARef clojure.lang.IFn clojure.lang.IRef clojure.lang.Settable java.io.Serializable
+clojure.lang.Var$Unbound clojure.lang.AFn
+clojure.lang.Volatile java.lang.Object clojure.lang.IDeref
+java.io.BufferedInputStream java.io.FilterInputStream
+java.io.BufferedOutputStream java.io.FilterOutputStream
+java.io.BufferedReader java.io.Reader
+java.io.BufferedWriter java.io.Writer
+java.io.ByteArrayInputStream java.io.InputStream
+java.io.ByteArrayOutputStream java.io.OutputStream
+java.io.Closeable - java.lang.AutoCloseable
+java.io.EOFException java.io.IOException
+java.io.File java.lang.Object java.io.Serializable java.lang.Comparable
+java.io.FileNotFoundException java.io.IOException
+java.io.FilterInputStream java.io.InputStream
+java.io.FilterOutputStream java.io.OutputStream
+java.io.FilterReader java.io.Reader
+java.io.Flushable -
+java.io.IOException java.lang.Exception
+java.io.InputStream java.lang.Object java.io.Closeable
+java.io.OutputStream java.lang.Object java.io.Closeable java.io.Flushable
+java.io.OutputStreamWriter java.io.Writer
+java.io.PrintWriter java.io.Writer
+java.io.PushbackReader java.io.FilterReader
+java.io.Reader java.lang.Object java.lang.Readable java.io.Closeable
+java.io.Serializable -
+java.io.StringWriter java.io.Writer
+java.io.UnsupportedEncodingException java.io.IOException
+java.io.Writer java.lang.Object java.lang.Appendable java.io.Closeable java.io.Flushable
+java.lang.AbstractMethodError java.lang.IncompatibleClassChangeError
+java.lang.Appendable -
+java.lang.ArithmeticException java.lang.RuntimeException
+java.lang.ArrayIndexOutOfBoundsException java.lang.IndexOutOfBoundsException
+java.lang.ArrayStoreException java.lang.RuntimeException
+java.lang.AssertionError java.lang.Error
+java.lang.AutoCloseable -
+java.lang.Boolean java.lang.Object java.io.Serializable java.lang.Comparable java.lang.constant.Constable
+java.lang.Byte java.lang.Number java.lang.Comparable java.lang.constant.Constable
+java.lang.CharSequence -
+java.lang.Character java.lang.Object java.io.Serializable java.lang.Comparable java.lang.constant.Constable
+java.lang.ClassCastException java.lang.RuntimeException
+java.lang.ClassCircularityError java.lang.LinkageError
+java.lang.ClassFormatError java.lang.LinkageError
+java.lang.ClassNotFoundException java.lang.ReflectiveOperationException
+java.lang.CloneNotSupportedException java.lang.Exception
+java.lang.Cloneable -
+java.lang.Comparable -
+java.lang.Double java.lang.Number java.lang.Comparable java.lang.constant.Constable java.lang.constant.ConstantDesc
+java.lang.EnumConstantNotPresentException java.lang.RuntimeException
+java.lang.Error java.lang.Throwable
+java.lang.Exception java.lang.Throwable
+java.lang.ExceptionInInitializerError java.lang.LinkageError
+java.lang.Float java.lang.Number java.lang.Comparable java.lang.constant.Constable java.lang.constant.ConstantDesc
+java.lang.IllegalAccessError java.lang.IncompatibleClassChangeError
+java.lang.IllegalAccessException java.lang.ReflectiveOperationException
+java.lang.IllegalArgumentException java.lang.RuntimeException
+java.lang.IllegalMonitorStateException java.lang.RuntimeException
+java.lang.IllegalStateException java.lang.RuntimeException
+java.lang.IllegalThreadStateException java.lang.IllegalArgumentException
+java.lang.IncompatibleClassChangeError java.lang.LinkageError
+java.lang.IndexOutOfBoundsException java.lang.RuntimeException
+java.lang.InstantiationError java.lang.IncompatibleClassChangeError
+java.lang.InstantiationException java.lang.ReflectiveOperationException
+java.lang.Integer java.lang.Number java.lang.Comparable java.lang.constant.Constable java.lang.constant.ConstantDesc
+java.lang.InternalError java.lang.VirtualMachineError
+java.lang.InterruptedException java.lang.Exception
+java.lang.Iterable -
+java.lang.LinkageError java.lang.Error
+java.lang.Long java.lang.Number java.lang.Comparable java.lang.constant.Constable java.lang.constant.ConstantDesc
+java.lang.NegativeArraySizeException java.lang.RuntimeException
+java.lang.NoClassDefFoundError java.lang.LinkageError
+java.lang.NoSuchFieldError java.lang.IncompatibleClassChangeError
+java.lang.NoSuchFieldException java.lang.ReflectiveOperationException
+java.lang.NoSuchMethodError java.lang.IncompatibleClassChangeError
+java.lang.NoSuchMethodException java.lang.ReflectiveOperationException
+java.lang.NullPointerException java.lang.RuntimeException
+java.lang.Number java.lang.Object java.io.Serializable
+java.lang.NumberFormatException java.lang.IllegalArgumentException
+java.lang.Object -
+java.lang.OutOfMemoryError java.lang.VirtualMachineError
+java.lang.Readable -
+java.lang.ReflectiveOperationException java.lang.Exception
+java.lang.Runnable -
+java.lang.RuntimeException java.lang.Exception
+java.lang.SecurityException java.lang.RuntimeException
+java.lang.Short java.lang.Number java.lang.Comparable java.lang.constant.Constable
+java.lang.StackOverflowError java.lang.VirtualMachineError
+java.lang.String java.lang.Object java.io.Serializable java.lang.Comparable java.lang.CharSequence java.lang.constant.Constable java.lang.constant.ConstantDesc
+java.lang.StringIndexOutOfBoundsException java.lang.IndexOutOfBoundsException
+java.lang.ThreadDeath java.lang.Error
+java.lang.Throwable java.lang.Object java.io.Serializable
+java.lang.TypeNotPresentException java.lang.RuntimeException
+java.lang.UnknownError java.lang.VirtualMachineError
+java.lang.UnsatisfiedLinkError java.lang.LinkageError
+java.lang.UnsupportedClassVersionError java.lang.ClassFormatError
+java.lang.UnsupportedOperationException java.lang.RuntimeException
+java.lang.VerifyError java.lang.LinkageError
+java.lang.VirtualMachineError java.lang.Error
+java.lang.constant.Constable -
+java.lang.constant.ConstantDesc -
+java.math.BigDecimal java.lang.Number java.lang.Comparable
+java.math.BigInteger java.lang.Number java.lang.Comparable
+java.net.MalformedURLException java.io.IOException
+java.net.ProtocolException java.io.IOException
+java.net.URI java.lang.Object java.lang.Comparable java.io.Serializable
+java.net.URL java.lang.Object java.io.Serializable
+java.net.http.HttpResponse$BodySubscriber - java.util.concurrent.Flow$Subscriber
+java.nio.charset.Charset java.lang.Object java.lang.Comparable
+java.nio.charset.IllegalCharsetNameException java.lang.IllegalArgumentException
+java.nio.charset.UnsupportedCharsetException java.lang.IllegalArgumentException
+java.sql.Timestamp java.util.Date
+java.util.Calendar java.lang.Object java.io.Serializable java.lang.Cloneable java.lang.Comparable
+java.util.Collection - java.lang.Iterable
+java.util.Comparator -
+java.util.Date java.lang.Object java.io.Serializable java.lang.Cloneable java.lang.Comparable
+java.util.GregorianCalendar java.util.Calendar
+java.util.Iterator -
+java.util.List - java.util.SequencedCollection
+java.util.Map -
+java.util.Map$Entry -
+java.util.NoSuchElementException java.lang.RuntimeException
+java.util.RandomAccess -
+java.util.SequencedCollection - java.util.Collection
+java.util.Set - java.util.Collection
+java.util.UUID java.lang.Object java.io.Serializable java.lang.Comparable
+java.util.concurrent.Callable -
+java.util.concurrent.CompletionException java.lang.RuntimeException
+java.util.concurrent.ExecutionException java.lang.Exception
+java.util.concurrent.Flow$Subscriber -
+java.util.function.BooleanSupplier -
+java.util.function.DoubleSupplier -
+java.util.function.IntSupplier -
+java.util.function.LongSupplier -
+java.util.function.Supplier -
+java.util.regex.MatchResult -
+java.util.regex.Matcher java.lang.Object java.util.regex.MatchResult
+java.util.regex.Pattern java.lang.Object java.io.Serializable
+java.util.zip.GZIPInputStream java.util.zip.InflaterInputStream
+java.util.zip.InflaterInputStream java.io.FilterInputStream
+java.util.zip.ZipException java.io.IOException
+jdk.internal.net.http.ResponseSubscribers$HttpResponseInputStream java.io.InputStream jdk.internal.net.http.ResponseSubscribers$TrustedSubscriber
+jdk.internal.net.http.ResponseSubscribers$TrustedSubscriber - java.net.http.HttpResponse$BodySubscriber
+sun.net.www.protocol.http.HttpURLConnection$HttpInputStream java.io.FilterInputStream
+sun.nio.cs.HistoricallyNamedCharset -
+sun.nio.cs.ISO_8859_1 java.nio.charset.Charset sun.nio.cs.HistoricallyNamedCharset
+sun.nio.cs.US_ASCII java.nio.charset.Charset sun.nio.cs.HistoricallyNamedCharset
+sun.nio.cs.UTF_16 sun.nio.cs.Unicode
+sun.nio.cs.UTF_16BE sun.nio.cs.Unicode
+sun.nio.cs.UTF_16LE sun.nio.cs.Unicode
+sun.nio.cs.UTF_8 sun.nio.cs.Unicode
+sun.nio.cs.Unicode java.nio.charset.Charset sun.nio.cs.HistoricallyNamedCharset
+"
+  "The bases of the classes a designator may name, one line per class: its
+   name, its superclass (- for an interface and Object), then its interfaces
+   in getInterfaces' order, separated by spaces. The clojure.lang classes are
+   %clojure-lang-classes' rows; the JDK classes are their supertypes and the
+   classes of the values class answers (the kinds, the numbers, the
+   throwables, the streams, the instants) and theirs, read off clj 1.12.6 on
+   JDK 25 by reflection (2026-11-26). One string, not a list of rows: a quoted
+   list of some 250 rows is tens of KB of wasm, a string one data segment.")
+
+(defvar rontolisp::%clojure-type-bases
+  (make-hash-table :test 'equal)
+  "A record's or deftype's class designator to the names of its bases: Object,
+   the interfaces its body names, then IRecord's six and java.util.Map and
+   Serializable for a record, IType for a deftype; the name of an interface the
+   program defines (a protocol's, a definterface's) to :none.")
+
+(defun rontolisp::%clojure-note-type-bases (tag bases defined)
+  "A statement: the record or deftype class designator TAG noted with the names
+   of its BASES, and the interfaces among them the program DEFINED with none,
+   which only a program reading supers or bases keeps."
+  (dolist (name defined)
+    (setf (gethash name rontolisp::%clojure-type-bases) :none))
+  (setf (gethash tag rontolisp::%clojure-type-bases) bases))
+
+(defun rontolisp::%clojure-table-bases (name)
+  "The names of the bases of the class NAME by its line of
+   %clojure-class-bases-text, :none where it has none."
+  (let* ((text rontolisp::%clojure-class-bases-text)
+         (key (concatenate 'string (string #\Newline) name " "))
+         (at (search key text)))
+    (if at
+        (let* ((start (+ at (length key)))
+               (end (position #\Newline text :start start))
+               (from start)
+               (out nil))
+          (dotimes (k (+ (- end start) 1))
+            (let ((i (+ start k)))
+              (if (or (= i end) (char= (char text i) #\Space))
+                  (progn
+                    (if (> i from) (setq out (cons (subseq text from i) out)))
+                    (setq from (+ i 1))))))
+          (setq out (reverse out))
+          (if (equal (car out) "-") (cdr out) out))
+        :none)))
+
+(defun rontolisp::%clojure-designator-bases (c)
+  "The names of the bases of the class the designator C names, refused where
+   no row knows them (a JDK class past the tables, a reify's)."
+  (let* ((name (car (cdr c)))
+         (row (rontolisp::%clojure-table-bases name))
+         (noted
+          (or (gethash c rontolisp::%clojure-type-bases)
+              (gethash name rontolisp::%clojure-type-bases))))
+    (cond ((not (eq row :none)) row)
+          ((eq noted :none) nil)
+          (noted noted)
+          ((gethash name rontolisp::%clojure-fn-class-names)
+           (list "clojure.lang.AFunction"))
+          ((gethash name rontolisp::%clojure-protocol-interfaces) nil)
+          (t (error
+              (concatenate 'string
+                           "supers and bases are not supported yet for class "
+                           name ": its supertypes are not known here"))))))
+
+(defun rontolisp::%clojure-bases (c)
+  "bases of the class value C: its superclass then its direct interfaces, as
+   class values, nil for none and for nil; anything else no Class."
+  (cond ((null c) nil)
+        ((rontolisp::%clojure-designator-p c)
+         (mapcar #'rontolisp::%clojure-class-value
+                 (rontolisp::%clojure-designator-bases c)))
+        ((rontolisp::%clojure-host-class-name c)
+         (rontolisp::%clojure-host-class-bases c))
+        (t (rontolisp::%clojure-host-cast-failure c "java.lang.Class"))))
+
+(defun rontolisp::%clojure-bases-v (&rest args)
+  "bases as a value."
+  (rontolisp::%clojure-check-arity args 1 1 "bases")
+  (rontolisp::%clojure-bases (car args)))
+
+(defun rontolisp::%clojure-supers (c)
+  "supers of the class value C: every class bases reaches from it, as a set,
+   nil for none."
+  (let ((seen nil) (todo (rontolisp::%clojure-bases c)))
+    (loop
+      (if (null todo) (return))
+      (let ((x (car todo)))
+        (setq todo (cdr todo))
+        (if (not (member x seen :test #'equal))
+            (progn
+              (setq seen (cons x seen))
+              (setq todo (append (rontolisp::%clojure-bases x) todo))))))
+    (if seen (rontolisp::%clojure-set-of (reverse seen)) nil)))
+
+(defun rontolisp::%clojure-supers-v (&rest args)
+  "supers as a value."
+  (rontolisp::%clojure-check-arity args 1 1 "supers")
+  (rontolisp::%clojure-supers (car args)))
+
+(defun rontolisp::%clojure-host-class-bases (c)
+  "The bases of the host class object C, as host class objects: the host's
+   getSuperclass then getInterfaces; where the host makes no class value (a
+   native image, which registers neither for reflection) the rows' answer for
+   its name, as designators. A host arm like %clojure-host-class: a program
+   with no java: operator gets a body answering NIL, since no host class
+   object exists there."
+  (if (rontolisp::%clojure-host-classes-p)
+      (let ((super (java:call c "getSuperclass")))
+        (append (if super (list super))
+                (coerce (java:call c "getInterfaces") 'list)))
+      (mapcar #'rontolisp::%clojure-class-value
+              (rontolisp::%clojure-designator-bases
+               (list :C%CLASS (java:call c "getName"))))))
+
 (defun rontolisp::%clojure-dispatch-kind (v)
   "The run-time dispatch value V as the method tables key it: a class value of
    a kind's class its kind keyword (%clojure-kind-of-class), anything else V. A
@@ -14096,7 +14490,10 @@
               (rontolisp::%clojure-host-class-name c)))
          (spelling
           (if name
-              (cdr (assoc name rontolisp::%clojure-class-kinds :test #'equal))
+              (or
+               (cdr (assoc name rontolisp::%clojure-class-kinds :test #'equal))
+               (if (gethash name rontolisp::%clojure-fn-class-names)
+                   "function"))
               nil)))
     (if spelling (list :c%keyword spelling) nil)))
 
@@ -14167,11 +14564,47 @@
 
 (defvar rontolisp::%clojure-fn-classes (make-hash-table :test 'eq))
 
+(defvar rontolisp::%clojure-fn-class-names
+  (make-hash-table :test 'equal)
+  "Each class name class answered for a function, so a class value of one
+   reads back as the function kind (%clojure-kind-of-class).")
+
 (defun rontolisp::%clojure-note-fn-class (f name)
   "A statement: the function F registered under the class name NAME (the
    oracle's ns$name of the var it defines); answers F."
   (setf (gethash f rontolisp::%clojure-fn-classes) name)
   f)
+
+(defun rontolisp::%clojure-fn-class (f)
+  "class's answer for the function F, what .getClass answers too: the class
+   value of the class the oracle compiles it to (%clojure-fn-class-name), a
+   subclass of clojure.lang.AFunction -- the host's stub of it where the host
+   makes class values (%clojure-host-fn-class), else its designator."
+  (let ((name (rontolisp::%clojure-fn-class-name f)))
+    (setf (gethash name rontolisp::%clojure-fn-class-names) t)
+    (or (rontolisp::%clojure-host-fn-class name) (list :C%CLASS name))))
+
+(defun rontolisp::%clojure-host-fn-class (name)
+  "The host's class of a function whose oracle class is NAME: a stub of that
+   name extending clojure.lang.AFunction, public and final like the oracle's,
+   one per name; nil where the host makes no class value. A host arm like
+   %clojure-host-class-named: a program with no java: operator gets a body
+   answering nil, so its function classes are designators."
+  (if (rontolisp::%clojure-host-classes-p)
+      (let ((known (gethash name rontolisp::%clojure-host-classes-named)))
+        (cond ((eq known :none) nil)
+              (known known)
+              (t
+               (rontolisp::%clojure-lang-stub
+                (assoc "clojure.lang.AFunction" rontolisp::%clojure-lang-classes
+                       :test #'equal))
+               (let ((c
+                      (rontolisp::%host-stub-class name 17
+                                                   "clojure.lang.AFunction" ""
+                                                   "")))
+                 (setf (gethash name rontolisp::%clojure-host-classes-named)
+                       (or c :none))
+                 c))))))
 
 (defun rontolisp::%clojure-fn-class-name (f)
   "The oracle's class name of the function F: the one its definition
@@ -14191,7 +14624,7 @@
                    rontolisp::%clojure-shared-values)
           (if found
               (concatenate 'string "clojure.core$"
-                           (rontolisp::%clojure-munge found))
+                           (rontolisp::%clojure-munge-string found))
               "clojure.lang.AFunction$fn")))))
 
 ;; clojure.lang.RT/checkSpecAsserts, the static field spec.alpha's check-asserts

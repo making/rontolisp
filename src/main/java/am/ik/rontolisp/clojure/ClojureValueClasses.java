@@ -9,6 +9,7 @@ import java.util.Set;
 
 import org.jspecify.annotations.Nullable;
 
+import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
 
 /**
@@ -430,11 +431,13 @@ final class ClojureValueClasses {
 			return null;
 		}
 		String fqn = ClojureNamespaceLowering.resolveClass(ctx, name);
-		if (isCoreFunctionClass(fqn)) {
-			// the class of a core function's value: what class answers for every
-			// function here (datascript's :tag clojure.core$long)
+		String core = coreFunctionOf(fqn);
+		if (core != null) {
+			// the class of a core function's value: what class answers for it
+			// (datascript's :tag clojure.core$long)
 			ctx.classObjects = true;
-			return ClojureInteropLowering.classValueForm(FUNCTION_CLASS);
+			return ClojureLowerUtil.list(new LispSymbol(ClojureValueMethodLowering.FN_CLASS),
+					ctx.lower(new LispSymbol("clojure.core/" + core)));
 		}
 		if (fqn.indexOf('.') < 0 || ClojureHostClasses.exists(fqn)
 				|| kindsOf(fqn).isEmpty() && !ClojureLangJar.holds(fqn)) {
@@ -443,9 +446,6 @@ final class ClojureValueClasses {
 		ctx.classObjects = true;
 		return ClojureInteropLowering.classValueForm(fqn);
 	}
-
-	/** The class {@code class} answers for a function. */
-	private static final String FUNCTION_CLASS = "clojure.lang.AFunction";
 
 	/** The package of the classes of the {@code clojure.core} functions. */
 	private static final String CORE_FUNCTION_PREFIX = "clojure.core$";
@@ -458,16 +458,26 @@ final class ClojureValueClasses {
 	 * @return {@code true} for one
 	 */
 	static boolean isCoreFunctionClass(String fqn) {
+		return coreFunctionOf(fqn) != null;
+	}
+
+	/**
+	 * The {@code clojure.core} function whose value's class the oracle names so, or null
+	 * ({@link #isCoreFunctionClass}).
+	 * @param fqn the class's binary name
+	 * @return the function's name
+	 */
+	static @Nullable String coreFunctionOf(String fqn) {
 		if (!fqn.startsWith(CORE_FUNCTION_PREFIX)) {
-			return false;
+			return null;
 		}
 		String munged = fqn.substring(CORE_FUNCTION_PREFIX.length());
 		for (String core : ClojureCoreNames.NAMES) {
 			if (!ClojureCoreNames.isMacro(core) && ClojureLowerUtil.munge(core).equals(munged)) {
-				return true;
+				return core;
 			}
 		}
-		return false;
+		return null;
 	}
 
 	/**

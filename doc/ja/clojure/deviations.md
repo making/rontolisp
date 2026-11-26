@@ -446,8 +446,9 @@
   上限で止まります）。レコードやキューの `print-dup` は `pr` と同じ書き方になります（oracle は
   `toString`）。
 - `class` はオラクルのクラスを答えますが、ここでの1つの値がオラクルの複数のクラスを
-  表すところは異なります（[class](reference/class.md)）。関数はすべて `clojure.lang.AFunction`、
-  遅延シーケンスでないシーケンスはすべて `clojure.lang.PersistentList`、2要素のベクタと型付き配列は
+  表すところは異なります（[class](reference/class.md)）。関数のクラスはオラクルがそれをコンパイルする
+  クラスですが、無名 fn はすべて1つのクラス `clojure.lang.AFunction$fn` で、可変長引数の fn も
+  `AFunction` を継承します（オラクルは `RestFn`）。遅延シーケンスでないシーケンスはすべて `clojure.lang.PersistentList`、2要素のベクタと型付き配列は
   `PersistentVector`、`1N`（ふつうの整数として読みます）は `Long` です。インタプリタと、Java 相互運用を
   使う JVM プログラムではクラスは `java.lang.Class` で、`clojure.lang` のクラスはオラクルと同じ名前・
   修飾子・スーパータイプで定義したもの、そのメンバはこのフロントエンドが答える静的メンバです
@@ -503,7 +504,7 @@
   失敗した delay の `:val` は例外のレポートで、オラクルはその `#error` マップを印字します。`str` は
   `clojure.lang.Delay` を返します（オラクルは `clojure.lang.Delay@hash`）。
 - コレクション・キーワード・シンボル・比・atom・fn へのインスタンス呼び出しは core 関数を通して
-  答えるため、その逸脱も引き継ぎます（`.getClass` は `class` と同じ値を返します。ただし fn では
+  答えるため、その逸脱も引き継ぎます（`.getClass` は `class` と同じ値を返します。fn のクラスは
   オラクルがそれをコンパイルするクラスで、その `.getName` は core 関数なら `clojure.core$name`、
   `defn` と fn リテラルを値とする `def` なら `ns$name`、それ以外の fn なら無名 fn の
   `clojure.lang.AFunction$fn` です。オラクルはこの最後の名前に外側の関数と名前付き `fn` の名前を

@@ -71,7 +71,9 @@ public final class ClojureLibrary {
 	 * answering what the host arm answers for a value that is no host object:
 	 * {@code %clojure-host-class} ({@code class} of a value of no Clojure kind) refuses,
 	 * {@code %clojure-host-class-name} (the printer), {@code %clojure-host-class-named}
-	 * (a class value, which is its designator there), {@code %clojure-host-string}
+	 * (a class value, which is its designator there) and {@code %clojure-host-fn-class}
+	 * (a function's class, likewise), {@code %clojure-host-class-bases} ({@code bases} of
+	 * a host class, which exists nowhere there), {@code %clojure-host-string}
 	 * ({@code str}), {@code %clojure-host-instance-p} ({@code inst?}, {@code uuid?},
 	 * {@code uri?}, {@code class?}), {@code %clojure-host-class-instance-p} and
 	 * {@code %clojure-host-class-assignable-p} ({@code instance?} of a class value), and
@@ -106,6 +108,12 @@ public final class ClojureLibrary {
 			  (declare (ignore x))
 			  nil)
 			(defun rontolisp::%clojure-host-class-rows (name)
+			  (declare (ignore name))
+			  nil)
+			(defun rontolisp::%clojure-host-class-bases (c)
+			  (declare (ignore c))
+			  nil)
+			(defun rontolisp::%clojure-host-fn-class (name)
 			  (declare (ignore name))
 			  nil)
 			(defun rontolisp::%clojure-host-print-method (x table)

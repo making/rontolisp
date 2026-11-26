@@ -303,6 +303,8 @@ categories:
       - { slug: instance-p, name: "instance?" }
       - { slug: class, name: "class" }
       - { slug: type, name: "type" }
+      - { slug: supers, name: "supers" }
+      - { slug: bases, name: "bases" }
       - { slug: cast, name: "cast" }
       - { slug: int, name: "int" }
       - { slug: long, name: "long" }

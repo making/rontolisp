@@ -146,8 +146,19 @@ public final class RontoStubClasses {
 		return define(text(name), ((Number) flags).intValue(), text(superName), text(interfaces), text(members));
 	}
 
-	// A rontolisp string value carries its quotes.
+	// A rontolisp string value: a literal carries its quotes; a built one is a character
+	// vector, a list whose slot 0 is its header {dims, fill pointer, adjustable, null}
+	// and whose slots 1.. are one int[]{codePoint} each, up to the fill pointer.
 	private static String text(Object value) {
+		if (value instanceof List<?> vector) {
+			Object[] header = (Object[]) vector.get(0);
+			int end = (header[1] instanceof Number fill) ? fill.intValue() + 1 : vector.size();
+			StringBuilder out = new StringBuilder();
+			for (int i = 1; i < end; i++) {
+				out.appendCodePoint(((int[]) vector.get(i))[0]);
+			}
+			return out.toString();
+		}
 		String quoted = (String) value;
 		return quoted.startsWith("\"") ? quoted.substring(1, quoted.length() - 1) : quoted;
 	}
