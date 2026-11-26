@@ -10,7 +10,10 @@ of rontolisp.
   rontolisp compiles the program. Its implementation is a service provider:
   `ServiceLoader` finds the program's own under a JDK and on rontolisp's interpreter and
   JVM, and the host's in a WebAssembly module or component rontolisp compiles.
-- `am.ik.rontolisp.wit.WitException` is a WIT `result`'s error arm, carrying the error.
+- `am.ik.rontolisp.wit.WitResult` is a WIT `result` wherever the WIT has one: `Ok` or
+  `Err`, an arm carrying nothing `Void`.
+- `am.ik.rontolisp.wit.WitException` is a WIT `result`'s error arm thrown, where a method
+  declares its ok arm as its answer, carrying the error.
 - `am.ik.rontolisp.wit.WitStream` and `am.ik.rontolisp.wit.WitFuture` are a WIT `stream<T>`
   and `future<T>` the host answers: the stream read so many values at a time, the future's
   one value waited for. A provider answers its own (`WitStream.of`, `WitFuture.of`,

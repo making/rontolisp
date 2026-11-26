@@ -132,8 +132,9 @@ class JavaWitImportTest {
 	 * an enum, a variant whose case holds a record holding a tuple (a record of the
 	 * program's), the unsigned integers as Java holds them (a {@code u8} of 200 is the
 	 * byte -56), a result whose error arm is a variant and one whose arm carries nothing,
-	 * a constructor, an own handle handed to another. The WIT is trimmed to the members
-	 * called, each exactly the host's.
+	 * each thrown or a {@code WitResult} as the method declares it, a constructor, an own
+	 * handle handed to another. The WIT is trimmed to the members called, each exactly
+	 * the host's.
 	 */
 	@Test
 	void everyKindOfValueCrossesWasmtimesSocketsAndHttpTypes() throws Exception {
@@ -145,6 +146,7 @@ class JavaWitImportTest {
 						import java.util.ServiceLoader;
 
 						import am.ik.rontolisp.wit.WitException;
+						import am.ik.rontolisp.wit.WitResult;
 
 						public class SocketsMain {
 
@@ -153,11 +155,12 @@ class JavaWitImportTest {
 						        Sockets.TcpSocket socket = types.tcpSocketCreate(Sockets.IpAddressFamily.IPV4);
 						        Sockets.Octets loopback = new Sockets.Octets((byte) 127, (byte) 0, (byte) 0, (byte) 1);
 						        socket.bind(new Sockets.IpSocketAddress.Ipv4(new Sockets.Ipv4SocketAddress((short) 0, loopback)));
-						        if (socket.getLocalAddress() instanceof Sockets.IpSocketAddress.Ipv4(Sockets.Ipv4SocketAddress local)) {
+						        if (socket.getLocalAddress() instanceof WitResult.Ok<Sockets.IpSocketAddress, Sockets.ErrorCode>(
+						                Sockets.IpSocketAddress.Ipv4(Sockets.Ipv4SocketAddress local))) {
 						            System.out.println(socket.getAddressFamily() + " " + local.address() + " "
 						                    + (Short.toUnsignedInt(local.port()) > 0));
 						        }
-						        socket.setHopLimit((byte) 200);
+						        System.out.println(socket.setHopLimit((byte) 0) + " " + socket.setHopLimit((byte) 200));
 						        socket.setKeepAliveCount(7);
 						        socket.setReceiveBufferSize(100000L);
 						        System.out.println(socket.getHopLimit() + " " + socket.getKeepAliveCount() + " "
@@ -171,7 +174,8 @@ class JavaWitImportTest {
 						        // an async func is a call that waits: a socket bound, never listening
 						        Sockets.TcpSocket caller = types.tcpSocketCreate(Sockets.IpAddressFamily.IPV4);
 						        try {
-						            caller.connect(socket.getLocalAddress());
+						            caller.connect(
+						                    ((WitResult.Ok<Sockets.IpSocketAddress, Sockets.ErrorCode>) socket.getLocalAddress()).value());
 						        }
 						        catch (WitException e) {
 						            System.out.println(e.getMessage());
@@ -181,6 +185,7 @@ class JavaWitImportTest {
 						""");
 		assertThat(component(sockets, "-S", "inherit-network=y")).isEqualTo("""
 				IPV4 Octets[a=127, b=0, c=0, d=1] true
+				Err[error=InvalidArgument[]] Ok[value=null]
 				-56 7 true
 				tcp-socket-bind of wasi:sockets/types@0.3.0 answered its error arm: InvalidState[]
 				tcp-socket-connect of wasi:sockets/types@0.3.0 answered its error arm: ConnectionRefused[]
@@ -446,6 +451,67 @@ class JavaWitImportTest {
 				"calc=" + host, module.toString());
 		assertThat(run.exitCode()).as("wasmtime: %s", run.stderr()).isZero();
 		assertThat(run.stdout()).isEqualTo("42 ffff 2.5 true false\n");
+	}
+
+	/**
+	 * A {@code result} is a {@code WitResult} wherever the WIT has one -- a list's
+	 * element, an option's value, a record's field, a variant's payload, a parameter, an
+	 * answer --, an arm carrying nothing {@code Void}, a tuple arm a record of the
+	 * program's; beside it an answer declared as its ok arm throws the error arm. The
+	 * program prints the same under a JDK, on the interpreter and on the JVM against its
+	 * own provider, and as a {@code --no-wasi} module against a JavaScript host answering
+	 * alike; a component is the same binding. A declaration of another arm is refused,
+	 * and so is a tuple in an error arm thrown, as no type is written for it.
+	 */
+	@Test
+	void aResultIsAWitResultWhereverTheWitHasOne() throws Exception {
+		write("results.wit", RESULTS_WIT);
+		write("Checks.java", CHECKS);
+		write("LocalChecks.java", LOCAL_CHECKS);
+		write("META-INF/services/Checks", "LocalChecks\n");
+		Path results = write("Results.java", RESULTS);
+		Path main = write("ResultsMain.java", """
+				public class ResultsMain {
+
+				    public static void main(String[] args) {
+				        System.out.print(Results.run());
+				    }
+				}
+				""");
+		String expected = """
+				[Ok[value=3], Err[error=Empty[]], Err[error=TooLong[value=8]]]
+				Optional[Ok[value=ABCD]] Optional[Err[error=TooLong[value=7]]] Optional.empty
+				Report[name=wit, verdict=Ok[value=3]]
+				Done[value=Ok[value=null]] Done[value=Err[error=broke]] Skipped[]
+				Ok[value=Span[at=1, length=3]] Err[error=Miss[name=ab, length=2]]
+				Ok[value=null] Err[error=null]
+				refused TooLong[value=11]
+				4 measure of test:results/checks@0.1.0 answered its error arm: Empty[] Empty[]
+				""";
+		assertThat(jdk(main)).isEqualTo(expected);
+		assertThat(HostBoundaryRuns.cli("--java-source-path", API, main.toString())).isEqualTo(expected);
+		assertThat(HostBoundaryRuns.jvm(main, Files.createDirectories(this.dir.resolve("classes")), "ResultsMain",
+				"--java-source-path", API))
+			.isEqualTo(expected);
+		HostBoundaryRuns.cli("--java-source-path", API, main.toString(), "-o",
+				this.dir.resolve("results-component.wasm").toString(), "--component");
+		write("Checks.java", CHECKS.replace("List<WitResult<Integer, Problem>> checkAll",
+				"List<WitResult<Long, Problem>> checkAll"));
+		assertThatThrownBy(() -> read(main, false)).hasMessageEndingWith("Checks.java:10:36: checkAll (check-all of "
+				+ "test:results/checks@0.1.0, results.wit:19): its result is list<result<u32, problem>>, which is "
+				+ "List<WitResult<Integer, Checks.Problem>> in Java, not List<WitResult<Long,Problem>>");
+		write("Checks.java", CHECKS.replace("WitResult<Span, Miss> locate", "Span locate"));
+		assertThatThrownBy(() -> read(main, false)).hasMessageEndingWith("Checks.java:18:10: locate (locate of "
+				+ "test:results/checks@0.1.0, results.wit:23): its result's error arm is tuple<string, u32>, a tuple, "
+				+ "which is a record of the program's where a type is written for it, and none is written for an error "
+				+ "arm thrown: the method answers a WitResult of it");
+		write("Checks.java", CHECKS);
+		assumeTrue(HostBoundaryRuns.nodeAvailable(), "no node on PATH");
+		HostBoundaryRuns.cli("--java-source-path", API, results.toString(), "-o",
+				this.dir.resolve("results.wasm").toString(), "--no-wasi", "--emit-js-glue");
+		write("package.json", "{ \"type\": \"module\" }\n");
+		write("host.js", RESULTS_HOST);
+		assertThat(HostBoundaryRuns.node(this.dir, "host.js")).isEqualTo(expected);
 	}
 
 	/**
@@ -788,6 +854,250 @@ class JavaWitImportTest {
 			}
 			""";
 
+	/** An interface of a result in every place the WIT has one. */
+	private static final String RESULTS_WIT = """
+			package test:results@0.1.0;
+
+			interface checks {
+			  variant problem {
+			    empty,
+			    too-long(u32),
+			  }
+
+			  record report {
+			    name: string,
+			    verdict: result<u32, problem>,
+			  }
+
+			  variant step {
+			    done(result<_, string>),
+			    skipped,
+			  }
+
+			  check-all: func(names: list<string>) -> list<result<u32, problem>>;
+			  first-long: func(names: list<string>) -> option<result<string, problem>>;
+			  review: func(name: string) -> report;
+			  settle: func(answers: list<result<u32, string>>) -> step;
+			  locate: func(name: string) -> result<tuple<u32, u32>, tuple<string, u32>>;
+			  confirm: func(ok: bool) -> result;
+			  measure: func(name: string) -> result<u32, problem>;
+			}
+			""";
+
+	/** {@link #RESULTS_WIT} in Java. */
+	private static final String CHECKS = """
+			import java.util.List;
+			import java.util.Optional;
+
+			import am.ik.rontolisp.wit.WitImport;
+			import am.ik.rontolisp.wit.WitResult;
+
+			@WitImport(value = "test:results/checks", wit = "results.wit")
+			public interface Checks {
+
+			    List<WitResult<Integer, Problem>> checkAll(List<String> names);
+
+			    Optional<WitResult<String, Problem>> firstLong(List<String> names);
+
+			    Report review(String name);
+
+			    Step settle(List<WitResult<Integer, String>> answers);
+
+			    WitResult<Span, Miss> locate(String name);
+
+			    WitResult<Void, Void> confirm(boolean ok);
+
+			    int measure(String name);
+
+			    sealed interface Problem {
+			        record Empty() implements Problem {
+			        }
+
+			        record TooLong(int value) implements Problem {
+			        }
+			    }
+
+			    record Report(String name, WitResult<Integer, Problem> verdict) {
+			    }
+
+			    sealed interface Step {
+			        record Done(WitResult<Void, String> value) implements Step {
+			        }
+
+			        record Skipped() implements Step {
+			        }
+			    }
+
+			    record Span(int at, int length) {
+			    }
+
+			    record Miss(String name, int length) {
+			    }
+			}
+			""";
+
+	/** The program's own provider of {@link #CHECKS}. */
+	private static final String LOCAL_CHECKS = """
+			import java.util.ArrayList;
+			import java.util.List;
+			import java.util.Optional;
+
+			import am.ik.rontolisp.wit.WitException;
+			import am.ik.rontolisp.wit.WitResult;
+
+			public class LocalChecks implements Checks {
+
+			    public LocalChecks() {
+			    }
+
+			    static WitResult<Integer, Problem> check(String name) {
+			        if (name.isEmpty()) {
+			            return new WitResult.Err<>(new Problem.Empty());
+			        }
+			        if (name.length() > 5) {
+			            return new WitResult.Err<>(new Problem.TooLong(name.length()));
+			        }
+			        return new WitResult.Ok<>(name.length());
+			    }
+
+			    public List<WitResult<Integer, Problem>> checkAll(List<String> names) {
+			        List<WitResult<Integer, Problem>> out = new ArrayList<>();
+			        for (String name : names) {
+			            out.add(check(name));
+			        }
+			        return out;
+			    }
+
+			    public Optional<WitResult<String, Problem>> firstLong(List<String> names) {
+			        for (String name : names) {
+			            if (name.length() > 3) {
+			                return Optional.of(switch (check(name)) {
+			                    case WitResult.Ok<Integer, Problem> ok -> new WitResult.Ok<>(name.toUpperCase());
+			                    case WitResult.Err<Integer, Problem>(Problem problem) -> new WitResult.Err<>(problem);
+			                });
+			            }
+			        }
+			        return Optional.empty();
+			    }
+
+			    public Report review(String name) {
+			        return new Report(name, check(name));
+			    }
+
+			    public Step settle(List<WitResult<Integer, String>> answers) {
+			        if (answers.isEmpty()) {
+			            return new Step.Skipped();
+			        }
+			        for (WitResult<Integer, String> answer : answers) {
+			            if (answer instanceof WitResult.Err<Integer, String> err) {
+			                return new Step.Done(new WitResult.Err<>(err.error()));
+			            }
+			        }
+			        return new Step.Done(new WitResult.Ok<>(null));
+			    }
+
+			    public WitResult<Span, Miss> locate(String name) {
+			        int at = name.indexOf('-');
+			        return at < 0 ? new WitResult.Err<>(new Miss(name, name.length()))
+			                : new WitResult.Ok<>(new Span(at, name.length()));
+			    }
+
+			    public WitResult<Void, Void> confirm(boolean ok) {
+			        return ok ? new WitResult.Ok<>(null) : new WitResult.Err<>(null);
+			    }
+
+			    public int measure(String name) {
+			        WitResult<Integer, Problem> checked = check(name);
+			        if (checked instanceof WitResult.Err<Integer, Problem>(Problem problem)) {
+			            throw new WitException("measure of test:results/checks@0.1.0 answered its error arm: " + problem,
+			                    problem);
+			        }
+			        return ((WitResult.Ok<Integer, Problem>) checked).value();
+			    }
+			}
+			""";
+
+	/** A reactor calling each member of {@link #CHECKS}. */
+	private static final String RESULTS = """
+			import java.util.List;
+			import java.util.ServiceLoader;
+
+			import am.ik.rontolisp.wit.WitException;
+			import am.ik.rontolisp.wit.WitResult;
+
+			public class Results {
+
+			    public static String run() {
+			        Checks checks = ServiceLoader.load(Checks.class).findFirst().orElseThrow();
+			        StringBuilder out = new StringBuilder();
+			        out.append(checks.checkAll(List.of("abc", "", "abcdefgh"))).append('\\n');
+			        out.append(checks.firstLong(List.of("ab", "abcd"))).append(' ')
+			            .append(checks.firstLong(List.of("ab", "abcdefg"))).append(' ')
+			            .append(checks.firstLong(List.of("ab"))).append('\\n');
+			        out.append(checks.review("wit")).append('\\n');
+			        out.append(checks.settle(List.of(new WitResult.Ok<>(1), new WitResult.Ok<>(2)))).append(' ')
+			            .append(checks.settle(List.of(new WitResult.Ok<>(1), new WitResult.Err<>("broke")))).append(' ')
+			            .append(checks.settle(List.of())).append('\\n');
+			        out.append(checks.locate("a-b")).append(' ').append(checks.locate("ab")).append('\\n');
+			        out.append(checks.confirm(true)).append(' ').append(checks.confirm(false)).append('\\n');
+			        switch (checks.review("toolongname").verdict()) {
+			            case WitResult.Ok<Integer, Checks.Problem>(Integer length) -> out.append("length ").append(length);
+			            case WitResult.Err<Integer, Checks.Problem>(Checks.Problem problem) -> out.append("refused ").append(problem);
+			        }
+			        out.append('\\n').append(checks.measure("four")).append(' ');
+			        try {
+			            checks.measure("");
+			        }
+			        catch (WitException e) {
+			            out.append(e.getMessage()).append(' ').append(e.error());
+			        }
+			        return out.append('\\n').toString();
+			    }
+			}
+			""";
+
+	/** A JavaScript host answering {@link #RESULTS_WIT} as {@link #LOCAL_CHECKS} does. */
+	private static final String RESULTS_HOST = """
+			import { readFile } from "node:fs/promises";
+			import { instantiate, WitError } from "./results.js";
+
+			const check = (name) =>
+			  name.length === 0 ? { tag: "err", val: { tag: "empty" } }
+			  : name.length > 5 ? { tag: "err", val: { tag: "too-long", val: name.length } }
+			  : { tag: "ok", val: name.length };
+			const checks = {
+			  "check-all": (names) => names.map(check),
+			  "first-long": (names) => {
+			    const name = names.find((n) => n.length > 3);
+			    if (name === undefined) return undefined;
+			    const c = check(name);
+			    return c.tag === "ok" ? { tag: "ok", val: name.toUpperCase() } : c;
+			  },
+			  review: (name) => ({ name, verdict: check(name) }),
+			  settle: (answers) => {
+			    if (answers.length === 0) return { tag: "skipped" };
+			    const err = answers.find((a) => a.tag === "err");
+			    return { tag: "done", val: err ? { tag: "err", val: err.val } : { tag: "ok" } };
+			  },
+			  locate: (name) => {
+			    const at = name.indexOf("-");
+			    if (at < 0) throw new WitError([name, name.length]);
+			    return [at, name.length];
+			  },
+			  confirm: (ok) => {
+			    if (!ok) throw new WitError(undefined);
+			  },
+			  measure: (name) => {
+			    const c = check(name);
+			    if (c.tag === "err") throw new WitError(c.val);
+			    return c.val;
+			  },
+			};
+			const results = instantiate(new WebAssembly.Module(await readFile("results.wasm")),
+			  { "test:results/checks@0.1.0": checks });
+			process.stdout.write(await results.run());
+			""";
+
 	/** wasi:keyvalue's store, trimmed to what the declarations below name. */
 	private static final String KEYVALUE_WIT = """
 			package wasi:keyvalue@0.2.0-draft;
@@ -933,6 +1243,7 @@ class JavaWitImportTest {
 			import java.util.Optional;
 
 			import am.ik.rontolisp.wit.WitImport;
+			import am.ik.rontolisp.wit.WitResult;
 
 			@WitImport(value = "wasi:sockets/types@0.3.0", wit = "sockets.wit")
 			public interface Sockets {
@@ -941,12 +1252,12 @@ class JavaWitImportTest {
 
 			    interface TcpSocket {
 			        void bind(IpSocketAddress localAddress);
-			        IpSocketAddress getLocalAddress();
+			        WitResult<IpSocketAddress, ErrorCode> getLocalAddress();
 			        IpAddressFamily getAddressFamily();
 			        int getKeepAliveCount();
 			        void setKeepAliveCount(int value);
 			        byte getHopLimit();
-			        void setHopLimit(byte value);
+			        WitResult<Void, ErrorCode> setHopLimit(byte value);
 			        long getReceiveBufferSize();
 			        void setReceiveBufferSize(long value);
 			        void connect(IpSocketAddress remoteAddress);
