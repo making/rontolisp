@@ -3929,8 +3929,11 @@ class ClojureLoweringTest {
 		// refused-verbs-signal-at-call-time.
 		assertThat(lowered("(let [x 1] (bean x))"))
 			.contains("(ERROR \"bean is not supported yet: host classes are not answered on every backend\")");
-		assertThat(lowered("(let [x 1] (supers x))"))
-			.contains("(ERROR \"supers is not supported yet: host classes are not answered on every backend\")");
+		// supers and bases answer: from the rows where a class is no host's
+		assertThat(lowered("(let [x 1] [(supers x) (bases x) (map bases [x])])"))
+			.contains("(RONTOLISP::%CLOJURE-SUPERS |c%x|)")
+			.contains("(RONTOLISP::%CLOJURE-BASES |c%x|)")
+			.contains("#'RONTOLISP::%CLOJURE-BASES-V");
 		assertThat(lowered("(clojure-version)"))
 			.contains("(ERROR \"clojure-version is not supported yet: no release of Clojure runs here\")");
 		// destructure is the shipped function the core macros' expanders call

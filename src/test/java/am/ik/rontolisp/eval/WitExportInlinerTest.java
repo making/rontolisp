@@ -315,9 +315,9 @@ class WitExportInlinerTest {
 			.isInstanceOf(UnsupportedOperationException.class)
 			.hasMessageContaining("rontolisp:wit-export :reactor t makes the program a reactor, whose entry points "
 					+ "are its world's exports: compile it with --component (a component) or --no-wasi");
-		// A core module's export is a function of core values: a world carrying a type
-		// the flat designators do not cover is a component's, and each core output says
-		// so at the WIT line.
+		// A WASI Preview 1 module's export is a function of core values its host calls
+		// as they are: a world carrying a type the flat designators do not cover says so
+		// at the WIT line. A --no-wasi module's glue lifts and lowers it instead.
 		Files.writeString(this.tempDir.resolve("words.wit"), """
 				package root:component;
 
@@ -327,16 +327,14 @@ class WitExportInlinerTest {
 				""");
 		Path words = this.tempDir.resolve("words.lisp");
 		Files.writeString(words, BODY + "\n(rontolisp:wit-export \"words.wit\")");
-		for (List<String> core : List.of(List.<String>of(), List.of("--no-wasi"))) {
-			List<String> args = new java.util.ArrayList<>(
-					List.of(words.toString(), "-o", this.tempDir.resolve("words.wasm").toString()));
-			args.addAll(core);
-			assertThatThrownBy(() -> cli.run(args.toArray(new String[0]))).as(core.toString())
-				.isInstanceOf(UnsupportedOperationException.class)
-				.hasMessageContaining("words.wit:4: export 'count-vowels' carries a type only a component's export "
-						+ "does (--component); a core module exports the flat types alone (s8, s16, s32, s64, u8, "
-						+ "u16, u32, u64, f64, bool, string)");
-		}
+		String out = this.tempDir.resolve("words.wasm").toString();
+		assertThatThrownBy(() -> cli.run(new String[] { words.toString(), "-o", out }))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("words.wit:4: export 'count-vowels' carries a type only a component's export "
+					+ "does (--component), or a --no-wasi module's through its --emit-js-glue glue; a WASI module "
+					+ "exports the flat types alone (s8, s16, s32, s64, u8, u16, u32, u64, f64, bool, string)");
+		cli.run(new String[] { words.toString(), "-o", out, "--no-wasi", "--emit-js-glue" });
+		assertThat(this.tempDir.resolve("words.js")).content().contains("countVowels: make$countVowels(");
 	}
 
 	@Test

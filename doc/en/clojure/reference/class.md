@@ -7,7 +7,10 @@ Answers the value's class, as the oracle prints and compares it: `java.lang.Stri
 `clojure.lang.Keyword`, `clojure.lang.Symbol`, `clojure.lang.PersistentVector`,
 `clojure.lang.PersistentArrayMap` (past eight entries `clojure.lang.PersistentHashMap`),
 `clojure.lang.PersistentHashSet`, `clojure.lang.PersistentTreeMap`, `clojure.lang.PersistentList`,
-`clojure.lang.LazySeq`, `clojure.lang.AFunction`, `clojure.lang.Atom` ...; nil answers nil.
+`clojure.lang.LazySeq`, `clojure.lang.Atom` ...; nil answers nil. A function answers the class
+the oracle compiles it to, what `.getClass` answers too: a `defn`'s `user$f`, a core function's
+`clojure.core$name`, an anonymous fn's `clojure.lang.AFunction$fn`; each extends
+`clojure.lang.AFunction`, and where the class is a `java.lang.Class` it is one defined so.
 `(= (class "a") String)` and `(class? (class 1))` are `true`.
 
 On the interpreter and in a JVM program that uses Java interop the class is a `java.lang.Class`:
@@ -28,8 +31,8 @@ refusal the class the oracle throws for it, an error naming no class
 (interpreter and JVM). As a value a one-argument lambda.
 
 Deviations: `1N` is a `Long` and a decimal a `Ratio` here; a narrowing cast answers a `Long`;
-every function is a `clojure.lang.AFunction` (the oracle compiles a class per function, extending
-it), every seq that is no lazy seq a `clojure.lang.PersistentList`, a two-member vector a
+every anonymous fn has one class (the oracle compiles one per `fn` form) and a variadic fn's
+extends `AFunction` (the oracle's `RestFn`), every seq that is no lazy seq a `clojure.lang.PersistentList`, a two-member vector a
 `PersistentVector` (the oracle's map entry is a `MapEntry`), a typed array a `PersistentVector`;
 a byte array's class prints as its binary name `[B` (the oracle: `byte/1`).
 

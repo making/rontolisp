@@ -178,6 +178,9 @@ LOWERED as an import's argument is, by the one generator (`WasmComponentImportCo
   nothing and leaves the heap top 8-aligned (an intern leaves it anywhere: "The alignment trap").
   Measured 2026-11-26, wasmtime 51: 9,000,000 calls of list / record / string exports from a
   composed Lisp command under `-W max-memory-size=48MiB`, no growth.
+  A `--no-wasi` module has no `cabi_realloc`: the area comes from `__ronto_alloc` behind the
+  staging prologue's 8-aligned heap top, and the glue's mark/reset bracket pops it after the
+  lift (`exportMarshal(..., -1)`).
 - **A `result` at the top of the answer is the provider's mapping**: the function returns the ok
   arm and signals `rontolisp:wit-error` for the error arm. `lower` writes a defun
   `<f>%wit-export` making the envelope (`handler-case` only in a program that holds wit.lisp, so
@@ -195,13 +198,15 @@ LOWERED as an import's argument is, by the one generator (`WasmComponentImportCo
   are the old ones). An interface with a canonical member is a shim even for its flat members.
 - **Refused at the WIT line** (`requireCanonical`): flags, a resource handle, a stream, a future,
   a type of another interface (`use`), a compound type in an `async func`; `--no-gc`, which has
-  no value a record could be (no cons); a core module (Preview 1, `--no-wasi`), in the compiler,
-  which knows the output's shape (`.todo/m79`). `describe` (the front ends) answers a compound
-  type's whole shape (`WitTypeMapper.shape`, as an import member's) after these refusals --
-  all but `--no-gc`'s and a core module's, which need the output; a flat type keeps its primitive
-  shape, the primitive its `wit` and its `definition`, so a front end tells a canonical export
-  by a `wit` that is no flat primitive's (`JavaHostBoundary.flat`). The refused types and the
-  hosts not measured: `.todo/m82`.
+  no value a record could be (no cons). In the compiler, which knows the output's shape: a WASI
+  Preview 1 module (its host, wasmtime, calls a core export with core values) and `--reentrant`
+  (the answer waits on the bump heap for the glue). A `--no-wasi` module exports them through
+  `--emit-js-glue` ([wasm-import.md](wasm-import.md), "A WIT interface beyond the flat set").
+  `describe` (the front ends) answers a compound type's whole shape (`WitTypeMapper.shape`, as
+  an import member's) after these refusals -- all but `--no-gc`'s and a Preview 1 module's,
+  which need the output; a flat type keeps its primitive shape, the primitive its `wit` and its
+  `definition`, so a front end tells a canonical export by a `wit` that is no flat primitive's
+  (`JavaHostBoundary.flat`). The refused types and the hosts not measured: `.todo/m82`.
 - `:envelope t` on the directive: a top-level `result`'s function answers the envelope itself,
   so `lower` writes no `<f>%wit-export`. The Clojure lowering passes it: its wrapper makes the
   envelope from an `ex-info` (one catch, no wit.lisp; [clojure-frontend.md](clojure-frontend.md),

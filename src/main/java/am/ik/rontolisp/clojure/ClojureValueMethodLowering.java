@@ -61,6 +61,13 @@ final class ClojureValueMethodLowering {
 	static final String FN_CLASS_NAME = "RONTOLISP::%CLOJURE-FN-CLASS-NAME";
 
 	/**
+	 * The class value of a fn ({@code clojure.lisp}), what {@code class} answers for one:
+	 * a core function's class spelled ({@code clojure.core$long}) lowers to it over the
+	 * function's value.
+	 */
+	static final String FN_CLASS = "RONTOLISP::%CLOJURE-FN-CLASS";
+
+	/**
 	 * The statement registering a var's function under the class the oracle compiles it
 	 * to ({@code clojure.lisp}).
 	 */
@@ -478,11 +485,9 @@ final class ClojureValueMethodLowering {
 		for (String truncated : List.of("intValue", "longValue")) {
 			row(truncated, 0, arm(List.of("ratio?"), core("long", R)));
 		}
-		// a fn's own class, the designator of the class the oracle compiles it to (a
-		// core function's clojure.core$name, a defn's ns$name, else an anonymous fn's),
-		// where class answers the one fn kind; any other value's class
-		row("getClass", 0, new Arm(List.of(FUNCTION), ctx -> ClojureLowerUtil.list(ClojureLowerUtil.sym("list"),
-				new LispSymbol(":C%CLASS"), part(ctx, FN_CLASS_NAME))), arm(List.of(), core("class", R)));
+		// the value's class, a fn's the class the oracle compiles it to (a core
+		// function's clojure.core$name, a defn's ns$name, else an anonymous fn's)
+		row("getClass", 0, arm(List.of(), core("class", R)));
 		// .isArray of a class keyword: only a byte array's class ([B) is an array
 		// class here (a char[] is a vector of characters, a host array unmarshals
 		// to a list), so its name decides, like the oracle's Class#isArray. The =

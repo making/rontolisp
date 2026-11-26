@@ -7,7 +7,10 @@
 `clojure.lang.Keyword`・`clojure.lang.Symbol`・`clojure.lang.PersistentVector`・
 `clojure.lang.PersistentArrayMap`（9エントリ以上は `clojure.lang.PersistentHashMap`）・
 `clojure.lang.PersistentHashSet`・`clojure.lang.PersistentTreeMap`・`clojure.lang.PersistentList`・
-`clojure.lang.LazySeq`・`clojure.lang.AFunction`・`clojure.lang.Atom` などです。nil には nil を返します。
+`clojure.lang.LazySeq`・`clojure.lang.Atom` などです。nil には nil を返します。関数はオラクルが
+それをコンパイルするクラスを返し、`.getClass` も同じものを返します。`defn` は `user$f`、core 関数は
+`clojure.core$name`、無名 fn は `clojure.lang.AFunction$fn` で、どれも `clojure.lang.AFunction` を
+継承し、クラスが `java.lang.Class` であるところではそのように定義したものです。
 `(= (class "a") String)` と `(class? (class 1))` は `true` です。
 
 インタプリタと、Java 相互運用を使う JVM プログラムでは、クラスは `java.lang.Class` です。
@@ -27,8 +30,8 @@ record/deftype はそのクラスを返します。これは名前を値とし�
 （インタプリタと JVM）を返します。値としては1引数ラムダです。
 
 逸脱: ここでは `1N` は `Long`、小数は `Ratio` です。縮小キャストは `Long` を返します。
-関数はすべて `clojure.lang.AFunction`（オラクルは関数ごとにそれを継承したクラスを作ります）、
-遅延シーケンスでないシーケンスはすべて `clojure.lang.PersistentList`、2要素のベクタは
+無名 fn はすべて1つのクラス（オラクルは `fn` フォームごとに作ります）で、可変長引数の fn も
+`AFunction` を継承します（オラクルは `RestFn`）。遅延シーケンスでないシーケンスはすべて `clojure.lang.PersistentList`、2要素のベクタは
 `PersistentVector`（オラクルのマップエントリは `MapEntry`）、型付き配列は `PersistentVector` です。
 バイト配列のクラスはバイナリ名 `[B` で印字されます（オラクルは `byte/1`）。
 

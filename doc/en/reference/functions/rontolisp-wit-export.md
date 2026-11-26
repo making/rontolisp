@@ -186,9 +186,29 @@ composes two).
 
 Not carried, each a compile error at the export's WIT line: `flags`, a resource
 handle, a `stream`, a `future`, a type an interface takes from another with
-`use`, and a compound type in an `async func`. A core module (`-o out.wasm`
-alone, `--no-wasi`) and `--no-gc` export the flat types alone and refuse a world
-with any other.
+`use`, and a compound type in an `async func`. A WASI module (`-o out.wasm`
+alone) and `--no-gc` export the flat types alone and refuse a world with any
+other.
+
+A `--no-wasi` module exports them too. Its core export takes the canonical ABI's
+core values, and the [`--emit-js-glue`](../../guides/wasm-host-boundary.md#wit-interfaces-beyond-the-flat-set)
+file lowers and lifts them: each export is an entry point under its label in
+camelCase, called with the JavaScript values a host import is handed (an object
+for a record, `{ tag, val }` for a variant, `undefined` for none, a BigInt for
+64 bits). A `result` answer returns its ok value and throws the error arm as the
+glue's `WitError`. `--reentrant` refuses such an export.
+
+```js
+import { instantiate, WitError } from "./shapes.js";
+
+const lisp = instantiate(new WebAssembly.Module(bytes));
+lisp.flip({ x: 1, y: 2 }); // { x: 2, y: 1 }
+try {
+  lisp.area({ tag: "dot" });
+} catch (error) {
+  if (error instanceof WitError) console.log(error.payload); // a dot has no area
+}
+```
 
 ## What it checks
 
@@ -201,7 +221,7 @@ offending export:
   `wit/greeter.wit:5: export 'greet' declares 1 parameter(s), but (defun greet ...) takes 2`
   (an exported function takes required parameters only: `&optional` / `&rest` /
   `&key` are rejected)
-- a WIT type the export does not carry: beyond the flat types on a core module
+- a WIT type the export does not carry: beyond the flat types on a WASI module
   or under `--no-gc`, and `flags`, a handle, a `stream`, a `future` or a type
   of another interface anywhere
 - an `async func` under `--no-gc --component`, whose adapter-free reactor has no
