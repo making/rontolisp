@@ -40,7 +40,10 @@ into the slice its call lowering lives in, not the hub.
 - A smaller cliff sits at C2's `FreqInlineSize` (325 bytes): a hot call site inlines a callee
   only under it, and a small program's dispatcher is often near it. The search-tree id and the
   funcval keep one-byte slots for that reason
-  ([jvm-tail-bounce.md](jvm-tail-bounce.md), "the count as an argument").
+  ([jvm-tail-bounce.md](jvm-tail-bounce.md), "the count as an argument"). A third is
+  `InlineSmallCode` (2,500 B of machine code): a callee C2 compiled first and larger is not
+  inlined whatever its bytecodes ([jvm-int-fusion.md](jvm-int-fusion.md), "What C2 still
+  leaves").
 - A `tableswitch`/`lookupswitch` is not used: the byte emitters would have had to measure a
   variable-length instruction whose padding depends on its absolute position. Since `MethodCode`
   stores records and the writer lays the code out, that obstacle is gone
