@@ -238,6 +238,20 @@ three-phase: `regen.sh` -> rebuild the jar -> `src/wasm-component/regen-wit.sh` 
 `WasiWitDefinitionsGenerator` + `spring-javaformat:apply`. Pinned by `WasiWitDefinitionsTest`,
 `WitEmitterTest`, `WitOracleE2eTest`, `componentCompileRecordsTheWitText`, `RontoLispCliTest`.
 
+**A user import's world (`WitImportWorldEmitter`) is the component's TYPE, not the tool's text.**
+It keeps `type` aliases and fully-qualified `use` clauses; the tool expands aliases and INLINES
+every non-resource type a user import `use`s, because `WitComponentTypeEncoder` declares it
+structurally (only a resource is aliased in from its owner). Invariants: the walk is the
+encoder's (provided resources, `distinctDecls`, then `distinctCalls` -- an async-lowered
+`connect`/`send`/`resolve-addresses` is a member too), it descends into `stream`/`future`, the
+owner's block defines every type a `use` clause names (fixpoint over the user imports), a
+non-resource type whose owner is no USER import is defined in place (no `use` into the fixed
+template), and a resource with no bound member prints `resource x;`. Pin:
+`WitOracleE2eTest#aUserImportsWorldDescribesTheTypeTheComponentCarries` (per interface: the
+function set and each signature with every type expanded, against the tool's text). Measured
+2026-11-26 (wasm-tools 1.263.0): wasm bytes unchanged everywhere; the WIT of a sockets, TLS or
+`rontolisp:fetch` program changes, of hello, `uiop:getenv`+`uiop:quit` and a served fetch not.
+
 `(rontolisp:wit-export "world.wit" :world w)` makes the world the authoritative export list.
 That does NOT make `--emit-wit` a consistency check of the export side -- re-emitting
 reproduces the input world's exports by construction. What `--emit-wit` uniquely reports is

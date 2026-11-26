@@ -468,9 +468,8 @@ bucket of its hash map are in the order declared, where a JDK's is its VM's. Eac
 answers a new object, where a JDK answers one object each time. In a program whose own code
 reads no annotation and lists none -- one whose library reads annotations for its own use,
 as a Servlet container finds its servlets -- `equals` and `hashCode` of an annotation are an
-object's and `toString` is refused where the program runs. An annotation on a declaration
-its type's `@Target` does not name is not refused, where javac refuses it, and is not
-carried.
+object's and `toString` is refused where the program runs. An annotation where its type's
+`@Target` does not let it stand is refused with javac's words.
 
 **A declaration's generic types are the ones it writes.** `getGenericSuperclass`,
 `getGenericInterfaces`, `getTypeParameters`, `getGenericReturnType`,
@@ -487,6 +486,19 @@ accessors and annotations. A parameter (`getParameters()`) has the name javac ke
 `-parameters` -- a record's canonical constructor's, else `arg` and its place -- and the
 modifiers javac records of an inner class's instance around it, of an enum's name and
 ordinal and of the parameter of an enum's `valueOf`.
+
+**A type annotation is read as a JDK reads it.** `getAnnotatedType`,
+`getAnnotatedReturnType`, `getAnnotatedParameterTypes`, `getAnnotatedExceptionTypes`,
+`getAnnotatedReceiverType`, `getAnnotatedSuperclass`, `getAnnotatedInterfaces` and
+`getAnnotatedBounds` answer the use of each type a declaration names, with the annotations
+of runtime retention whose `@Target` names `TYPE_USE` written in it (JLS 9.7.4): an
+`AnnotatedParameterizedType`, `AnnotatedTypeVariable`, `AnnotatedWildcardType`,
+`AnnotatedArrayType` or `AnnotatedType` of the type its generic type is, with the uses of its
+arguments, bounds, component and the type around a member type; written and equal as a JDK's,
+a new object each time. A type variable carries the annotations written on its declaration. A
+class of the JDK has none written. A member type of a generic class named through the raw
+class (`Outer.Inner` in `Outer<T>`) is a JDK's raw class and the subset's parameterized type,
+as its generic type is.
 
 **A program finds a class by a computed name only where an index lists it or reachability
 metadata declares it.** No class file is there to look in, on any target. `Class.forName` of
@@ -696,19 +708,24 @@ target and `copy` of such a link with `NOFOLLOW_LINKS` are an `AccessDeniedExcep
 `creationTime` is the time of last writing, a JDK's answer on a file system that keeps
 none. A `.wasm` writes no time before 1970: such a time is written as
 `1970-01-01T00:00:00Z`, and on Preview 1 read as it too. `fileKey()` is null on every
-target. The attributes named in a text are the `basic` view's alone: `readAttributes`,
-`getAttribute` and `setAttribute` naming another view are an `UnsupportedOperationException`
-(`View 'posix' not available`), where a JDK on a Unix host has `posix`, `unix`, `owner`,
-`dos` and `user` too. `getFileAttributeView` answers the basic view alone, and null for
+target. The attributes named in a text are those of the `basic` view and, on the
+interpreter and the JVM, of the `posix`, `unix` and `owner` views; a JDK on a Unix host has
+`dos` and `user` too, which are an `UnsupportedOperationException` here (`View 'dos' not
+available`) and which `supportedFileAttributeViews` does not name. `getFileAttributeView`
+answers the basic view, the posix and the owner views where those are there, and null for
 any other.
 
-**Permission bits and the space of a disk are the host's on the interpreter and the JVM,
-and a `.wasm` has neither.** There what may be done with a path is the host's
+**Permission bits, owners and the space of a disk are the host's on the interpreter and the
+JVM, and a `.wasm` has none of them.** There what may be done with a path is the host's
 `access(2)`, the bits are read, written, given to a file made and to a copy (less the
 umask, as a JDK makes one), a temporary file is `rw-------` and a temporary directory
-`rwx------`, and the space is the partition's. WASI has no permission bits, no
-`access` and no `statvfs`, so a `.wasm` answers as a JDK does on a file system with no
-POSIX view, or where it cannot tell: `getPosixFilePermissions` and
+`rwx------`, an owner and a group are named as the host's user database names them, and the
+space is the partition's. WASI has no permission bits, no owners, no `access` and no
+`statvfs`, so a `.wasm` answers as a JDK does on a file system with no POSIX view, or where
+it cannot tell: `getOwner`, `setOwner` and `readAttributes` of `PosixFileAttributes` are an
+`UnsupportedOperationException`, the `posix`, `unix` and `owner` views are not available by
+name, `getFileAttributeView` answers null for them, `supportedFileAttributeViews` names
+`basic` alone, `getPosixFilePermissions` and
 `setPosixFilePermissions` are an `UnsupportedOperationException`, a `posix:permissions`
 attribute to make a file with is refused (`'posix:permissions' not supported as initial
 attribute`), a file and a copy have the host's bits, `canExecute` and `isExecutable` are
@@ -721,9 +738,9 @@ whether it opens, the setters (`setReadable` ..) false, and `getTotalSpace`,
 `DSYNC` and `SPARSE` change nothing. Every `Path` is of one class of the subset's own (what
 `getClass()` answers), and so is the one `FileSystem`. A glob whose bracket expression is
 empty (`[]`, `[!]`) is refused with words of the subset's own. Not there, refused by name:
-`Path.register`; `Files.createLink`, `getOwner`, `setOwner`, the views of
-`java.nio.file.attribute` but the basic one (`PosixFileAttributes`, `PosixFileAttributeView`
-..); `FileDescriptor` and the channels.
+`Path.register`; `Files.createLink`; `FileSystem.getUserPrincipalLookupService`, the
+`dos` and `user` views (`DosFileAttributes`, `UserDefinedFileAttributeView` ..);
+`FileDescriptor` and the channels.
 `FileSystems.newFileSystem` of a file finds no provider (`ProviderNotFoundException`): an
 archive is not read as a file system.
 
@@ -1239,9 +1256,7 @@ Each of these is an error naming the construct and its position. In a library on
 path, a statement naming a JDK class or member the subset lacks is a warning instead, and
 throws where it runs ([Using a third-party library](index.md#using-a-third-party-library)).
 
-- Reflection: annotated types (`getAnnotatedType`, `getAnnotatedReturnType`,
-  `getAnnotatedSuperclass` ..) and the annotations of a type variable; of
-  `java.lang.invoke`, what [The JDK classes](classes.md) does not list (`VarHandle`, the
+- Reflection: of `java.lang.invoke`, what [The JDK classes](classes.md) does not list (`VarHandle`, the
   combinators of `MethodHandles`, the handles of a field such as `findGetter`, `Lookup.in`).
 - A `switch` over a `long`, a `float`, a `double` or a `boolean`; a method reference and a
   field through a qualified `super` (`Interface.super::m`, `Outer.super.x`).

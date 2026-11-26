@@ -154,6 +154,22 @@ public final class Method extends Executable {
         return made != null ? (Type) made : getReturnType();
     }
 
+    // what it returns as its declaration names it, with the type annotations written in it
+    public AnnotatedType getAnnotatedReturnType() {
+        return rontolisp.internal.AnnotatedTypes.of(getGenericReturnType(),
+                rontolisp.internal.AnnotatedTypes.annotated0(declaring, index, 1));
+    }
+
+    // the type of this in it, with the annotations of its receiver parameter; none of a
+    // static method
+    public AnnotatedType getAnnotatedReceiverType() {
+        if (Modifier.isStatic(getModifiers())) {
+            return null;
+        }
+        return rontolisp.internal.AnnotatedTypes.of(Types.self(declaring),
+                rontolisp.internal.AnnotatedTypes.annotated0(declaring, index, 4));
+    }
+
     public TypeVariable<Method>[] getTypeParameters() {
         return Types.variables(Types.generic0(declaring, index, 0, this));
     }

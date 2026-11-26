@@ -5,8 +5,8 @@ the prose below it is [`../notes/cloudflare-workers.md`](../notes/cloudflare-wor
 What each Worker is: [examples/cloudflare-workers/](../../examples/cloudflare-workers/).
 How the report is built and run: [../README.md](../README.md).
 
-- measured: 2026-11-25
-- rontolisp: 0.1.0-SNAPSHOT (`37bdeb7`)
+- measured: 2026-11-26
+- rontolisp: 0.1.0-SNAPSHOT (`c34c0bb`)
 - gzip: `gzip -9 -n` (what Cloudflare counts against the 3 MB compressed bundle limit)
 
 | Worker | Flags | raw (B) | gzip (B) | % of the 3 MB limit |
@@ -30,8 +30,8 @@ How the report is built and run: [../README.md](../README.md).
 | httpbin-component (core module) | `--component --no-wasi --optimize=size` | 203,984 | 67,099 | 2.1% |
 | java http server (no container) | `--no-wasi --optimize=size` | 430,192 | 122,750 | 3.9% |
 | hello-servlet-one-source | `--no-wasi --optimize=size` | 762,388 | 195,253 | 6.2% |
-| hello-mvcfn-one-source | `--no-wasi --optimize=size` | 975,840 | 240,810 | 7.7% |
-| hello-session-one-source | `--no-wasi --host-random --optimize=size` | 915,570 | 231,429 | 7.4% |
+| hello-mvcfn-one-source | `--no-wasi --optimize=size` | 975,864 | 240,808 | 7.7% |
+| hello-session-one-source | `--no-wasi --host-random --optimize=size` | 915,642 | 231,470 | 7.4% |
 
 The component row is the core module alone. Reached through `jco transpile`
 a Worker also imports the generated JavaScript: **101,385 B** of it.

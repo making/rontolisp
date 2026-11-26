@@ -1,0 +1,14 @@
+views: [basic, zip]
+getOwner: java.lang.UnsupportedOperationException
+getOwner missing: java.lang.UnsupportedOperationException
+setOwner: java.lang.UnsupportedOperationException
+setOwner null: java.lang.UnsupportedOperationException
+pfa: java.lang.UnsupportedOperationException: Attributes of type java.nio.file.attribute.PosixFileAttributes not supported
+pfa missing: java.lang.UnsupportedOperationException: Attributes of type java.nio.file.attribute.PosixFileAttributes not supported
+posix view: null
+owner view: null
+posix:*: java.lang.UnsupportedOperationException: view <posix> is not supported
+unix:*: java.lang.UnsupportedOperationException: view <unix> is not supported
+owner:owner: java.lang.UnsupportedOperationException: view <owner> is not supported
+set owner:owner: java.lang.UnsupportedOperationException: view <owner> is not supported
+perms: java.lang.UnsupportedOperationException: Attributes of type java.nio.file.attribute.PosixFileAttributes not supported

@@ -1,7 +1,7 @@
 {
-  "generated": "2026-11-25",
+  "generated": "2026-11-26",
   "rontolisp": "0.1.0-SNAPSHOT",
-  "commit": "37bdeb7",
+  "commit": "c34c0bb",
   "wasmtime": "wasmtime 51.0.0 (32656dc48 2026-11-20)",
   "artifacts": [
     {"family":"wasm","name":"hello_world_plain","flags":"--optimize=off","module":"core (command)","wasi":"Preview 1","bytes":286914},
@@ -41,8 +41,8 @@
     {"family":"workers","name":"httpbin-component (core module)","flags":"--component --no-wasi --optimize=size","bytes":203984,"gzip":67099},
     {"family":"workers","name":"java http server (no container)","flags":"--no-wasi --optimize=size","bytes":430192,"gzip":122750},
     {"family":"workers","name":"hello-servlet-one-source","flags":"--no-wasi --optimize=size","bytes":762388,"gzip":195253},
-    {"family":"workers","name":"hello-mvcfn-one-source","flags":"--no-wasi --optimize=size","bytes":975840,"gzip":240810},
-    {"family":"workers","name":"hello-session-one-source","flags":"--no-wasi --host-random --optimize=size","bytes":915570,"gzip":231429},
+    {"family":"workers","name":"hello-mvcfn-one-source","flags":"--no-wasi --optimize=size","bytes":975864,"gzip":240808},
+    {"family":"workers","name":"hello-session-one-source","flags":"--no-wasi --host-random --optimize=size","bytes":915642,"gzip":231470},
     {"family":"workers","name":"httpbin-component (jco glue, .js)","flags":"jco transpile","bytes":101385}
   ]
 }

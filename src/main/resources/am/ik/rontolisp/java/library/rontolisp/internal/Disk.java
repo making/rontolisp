@@ -126,6 +126,22 @@ public final class Disk {
     // one as it is: 0, or why not (stat's why).
     public static native int setTimes(String path, boolean follow, Long modified, Long accessed);
 
+    // What the host's stat (or lstat) says of a path beyond the basic view: {uid, gid, ino,
+    // dev, rdev, nlink, ctime, mode}, the time its status last changed in nanoseconds since
+    // 1970 and the mode with the bits of its kind; or {why} (stat's). A host without
+    // permission bits keeps none of it and is not asked. (The slots are Files.Unix's: a
+    // static final here would be a global of every program reaching this class.)
+    public static native long[] unix(String path, boolean follow);
+
+    // The names of a path's owner and group as the host's user database has them (the
+    // number where it has none), or null where its stat cannot say.
+    public static native String[] owners(String path, boolean follow);
+
+    // Gives a path an owner and a group by number, -1 leaving one as it is (a link not
+    // followed is given them itself): 0, or why not (stat's, or 5 where the host does not
+    // allow it, EPERM).
+    public static native int setOwner(String path, boolean follow, int uid, int gid);
+
     // What a path names, its links followed.
     public static int kind(String path) {
         return (int) stat(path, true)[KIND];

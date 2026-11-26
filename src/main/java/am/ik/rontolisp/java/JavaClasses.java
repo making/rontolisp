@@ -764,6 +764,7 @@ final class JavaClasses {
 		for (JavaSyntax.Annotation annotation : tree.annotations()) {
 			annotation(annotation, unit, all);
 		}
+		applicable(tree, unit, all);
 		for (Import imported : tree.imports()) {
 			if (imported.isStatic()) {
 				importStatic(imported, unit);
@@ -930,6 +931,169 @@ final class JavaClasses {
 					"incompatible types: " + type.simpleName() + " cannot be converted to Annotation");
 		}
 		accessible(type, unit, written.pos());
+	}
+
+	/**
+	 * Checks that each annotation of a program's file stands where its type's
+	 * {@code @Target} lets it (JLS 9.6.4.1, 9.7.4), with javac's words: on a declaration,
+	 * one that applies to that kind of declaration or, where the declaration has a type,
+	 * to a use of a type the annotation can stand on; in a type, one that applies to a
+	 * use of a type, standing ahead of a type a qualified name names and not of a package
+	 * or a class only scoping a static one. A library's file is not asked: a compiler
+	 * took it.
+	 */
+	private void applicable(CompilationUnit tree, Unit unit, List<JavaClass> all) {
+		if (unit.source().partial()) {
+			return;
+		}
+		Map<Integer, JavaSyntax.Annotation> written = new HashMap<>();
+		for (JavaSyntax.Annotation annotation : tree.annotations()) {
+			written.put(annotation.pos(), annotation);
+		}
+		for (Map.Entry<Integer, JavaSyntax.AnnotationSite> each : new java.util.TreeMap<>(tree.annotationSites())
+			.entrySet()) {
+			JavaSyntax.Annotation annotation = written.get(each.getKey());
+			JavaSyntax.AnnotationSite site = each.getValue();
+			Set<String> targets = annotation == null ? Set.of() : targets(annotation, unit, all);
+			if (annotation == null || targets == null || declaresOn(targets, site.kind())) {
+				continue;
+			}
+			boolean typeUse = targets.contains("TYPE_USE");
+			if (site.kind().equals("TYPE_PARAMETER")) {
+				throw error(unit.source(), annotation.pos(),
+						"annotation @" + annotation.name() + " not applicable in this type context");
+			}
+			JavaSyntax.TypeName type = site.type();
+			if (!typeUse || type == null || !TYPED_SITES.contains(site.kind())) {
+				throw error(unit.source(), annotation.pos(),
+						"annotation interface not applicable to this kind of declaration");
+			}
+			if (!admissible(type.name(), 0, unit, all)) {
+				throw error(unit.source(), annotation.pos(),
+						"type annotation @" + annotationTypeName(annotation, unit, all) + " is not expected here");
+			}
+		}
+		for (JavaSyntax.TypeAnnotations typed : tree.typeAnnotations().values()) {
+			List<Map.Entry<Integer, List<JavaSyntax.Annotation>>> words = new ArrayList<>(typed.words().entrySet());
+			for (List<JavaSyntax.Annotation> dimension : typed.dimensions()) {
+				words.add(Map.entry(-1, dimension));
+			}
+			for (Map.Entry<Integer, List<JavaSyntax.Annotation>> word : words) {
+				for (JavaSyntax.Annotation annotation : word.getValue()) {
+					Set<String> targets = targets(annotation, unit, all);
+					if (targets == null || !targets.contains("TYPE_USE")) {
+						throw error(unit.source(), annotation.pos(),
+								"annotation @" + annotation.name() + " not applicable in this type context");
+					}
+					if (word.getKey() >= 0 && !typed.name().startsWith("?")
+							&& !admissible(typed.name(), word.getKey(), unit, all)) {
+						throw error(unit.source(), annotation.pos(), "type annotation @"
+								+ annotationTypeName(annotation, unit, all) + " is not expected here");
+					}
+				}
+			}
+		}
+	}
+
+	/** The declarations whose type a type annotation written on them stands on. */
+	private static final Set<String> TYPED_SITES = Set.of("FIELD", "METHOD", "PARAMETER", "LOCAL_VARIABLE");
+
+	/**
+	 * Whether an annotation type whose {@code @Target} names these may stand on a kind of
+	 * declaration (JLS 9.6.4.1): a use of a type is a class's and a type parameter's too,
+	 * a record's component takes what its field, its accessor or its constructor's
+	 * parameter does, an enum's constant is a field whose type a type annotation may not
+	 * be read on.
+	 */
+	private static boolean declaresOn(Set<String> targets, String kind) {
+		boolean typeUse = targets.contains("TYPE_USE");
+		return switch (kind) {
+			case "TYPE" -> typeUse || targets.contains("TYPE");
+			case "ANNOTATION_TYPE" -> typeUse || targets.contains("TYPE") || targets.contains("ANNOTATION_TYPE");
+			case "TYPE_PARAMETER", "CONSTRUCTOR" -> typeUse || targets.contains(kind);
+			case "ENUM_CONSTANT" -> typeUse || targets.contains("FIELD");
+			case "RECORD_COMPONENT" -> typeUse || targets.contains(kind) || targets.contains("FIELD")
+					|| targets.contains("METHOD") || targets.contains("PARAMETER");
+			default -> targets.contains(kind);
+		};
+	}
+
+	/**
+	 * The {@code @Target} of an annotation's type: the names of the kinds it names, or
+	 * {@code null} where it has none, which is every kind of declaration and no use of a
+	 * type (JLS 9.6.4.1). {@code java.lang}'s by their documentation, no file read; an
+	 * annotation of a type not found is not asked ({@code null}).
+	 */
+	private @Nullable Set<String> targets(JavaSyntax.Annotation written, Unit unit, List<JavaClass> all) {
+		String name = written.name();
+		Set<String> known = LANG_TARGETS
+			.get(name.startsWith("java.lang.") ? name.substring("java.lang.".length()) : name);
+		if (known != null && !name.contains(".") || known != null && name.startsWith("java.lang.")) {
+			return known;
+		}
+		JavaClass type = writtenType(written, unit, all);
+		return type == null ? null : targets(type);
+	}
+
+	/** The annotation type an annotation of a program's file names, or {@code null}. */
+	private @Nullable JavaClass writtenType(JavaSyntax.Annotation written, Unit unit, List<JavaClass> all) {
+		try {
+			JavaClass type = find(written.name(), null, unit, written.pos());
+			for (int i = 0; type == null && i < all.size(); i++) {
+				type = find(written.name(), all.get(i), unit, written.pos());
+			}
+			return type != null && type.isAnnotation ? type : null;
+		}
+		catch (LispReadException | JavaClass.Absent ex) {
+			return null;
+		}
+	}
+
+	/** An annotation's type as javac names it in a refusal: its canonical name. */
+	private String annotationTypeName(JavaSyntax.Annotation written, Unit unit, List<JavaClass> all) {
+		JavaClass type = writtenType(written, unit, all);
+		return type == null ? written.name() : type.name;
+	}
+
+	/** The {@code @Target} of {@code java.lang}'s annotation types, as documented. */
+	private static final Map<String, Set<String>> LANG_TARGETS = Map.of("Override", Set.of("METHOD"), "Deprecated",
+			Set.of("CONSTRUCTOR", "FIELD", "LOCAL_VARIABLE", "METHOD", "PACKAGE", "MODULE", "PARAMETER", "TYPE"),
+			"SuppressWarnings",
+			Set.of("TYPE", "FIELD", "METHOD", "PARAMETER", "CONSTRUCTOR", "LOCAL_VARIABLE", "MODULE"), "SafeVarargs",
+			Set.of("CONSTRUCTOR", "METHOD"), "FunctionalInterface", Set.of("TYPE"));
+
+	/**
+	 * Whether a type annotation written ahead of a word of a type's name stands on a type
+	 * (JLS 9.7.4): the last word, or a class around the one the name ends with, each
+	 * class from there to it an inner class. Ahead of a package's name, or of a class
+	 * only scoping a static member, it stands on none. A name not found is not refused
+	 * here.
+	 */
+	boolean admissible(String name, int word, Unit unit, List<JavaClass> all) {
+		int steps = name.split("\\.").length - 1 - word;
+		if (steps <= 0) {
+			return true;
+		}
+		JavaClass type;
+		try {
+			type = find(name, null, unit, 0);
+			for (int i = 0; type == null && i < all.size(); i++) {
+				type = find(name, all.get(i), unit, 0);
+			}
+		}
+		catch (LispReadException | JavaClass.Absent ex) {
+			return true;
+		}
+		if (type == null) {
+			return true;
+		}
+		for (int step = 0; step < steps; step++) {
+			if (!type.hasOuterInstance() || type.isLocal) {
+				return false;
+			}
+			type = java.util.Objects.requireNonNull(type.outer);
+		}
+		return true;
 	}
 
 	/**
@@ -3113,27 +3277,59 @@ final class JavaClasses {
 	}
 
 	/**
-	 * Whether an annotation type may stand on a kind of declaration: its {@code @Target}
-	 * names it, or it has none, which is every kind of declaration (JLS 9.6.4.1).
+	 * Whether an annotation of a type written on a kind of declaration is the
+	 * declaration's where the program runs: its {@code @Target} names that kind, or it
+	 * has none, which is every kind of declaration (JLS 9.6.4.1).
 	 */
 	boolean appliesTo(JavaClass type, String context) {
-		List<JavaSyntax.Annotation> targets = meta(type, "Target");
-		if (targets.isEmpty() || targets.get(0).pairs().isEmpty()) {
+		Set<String> targets = targets(type);
+		if (targets == null) {
 			return true;
+		}
+		// one of a use of a type is a type parameter's and an enum constant's too (JDK 25
+		// measured); of a record component, a field, a method, a constructor and a
+		// parameter it is a type's alone
+		boolean typeUse = targets.contains("TYPE_USE");
+		return switch (context) {
+			case "TYPE_PARAMETER" -> typeUse || targets.contains(context);
+			case "ENUM_CONSTANT" -> typeUse || targets.contains("FIELD");
+			default -> targets.contains(context);
+		};
+	}
+
+	/**
+	 * Whether an annotation type is one of a use of a type: its {@code @Target} names
+	 * {@code TYPE_USE}.
+	 */
+	boolean typeUse(JavaClass type) {
+		Set<String> targets = targets(type);
+		return targets != null && targets.contains("TYPE_USE");
+	}
+
+	/**
+	 * The names of the kinds an annotation type's {@code @Target} names, or {@code null}
+	 * where it has none.
+	 */
+	private @Nullable Set<String> targets(JavaClass type) {
+		List<JavaSyntax.Annotation> targets = meta(type, "Target");
+		if (targets.isEmpty()) {
+			return null;
+		}
+		if (targets.get(0).pairs().isEmpty()) {
+			return Set.of();
 		}
 		String text = unit(type).source().text();
 		JavaSyntax.ElementValue value = targets.get(0).pairs().get(0).value();
 		List<JavaSyntax.ElementValue> named = value instanceof JavaSyntax.ElementArray array ? array.values()
 				: List.of(value);
+		Set<String> kinds = new HashSet<>();
 		for (JavaSyntax.ElementValue each : named) {
 			if (each instanceof JavaSyntax.ElementText written) {
 				String kind = text.substring(written.from(), written.to()).strip();
-				if (kind.substring(kind.lastIndexOf('.') + 1).equals(context)) {
-					return true;
-				}
+				kinds.add(kind.substring(kind.lastIndexOf('.') + 1));
 			}
 		}
-		return false;
+		return kinds;
 	}
 
 	/**
@@ -3541,16 +3737,30 @@ final class JavaClasses {
 		this.memberAnnotationClasses.put(declaration, name);
 		StringBuilder members = new StringBuilder();
 		Set<String> made = new HashSet<>();
+		List<Carried> all = new ArrayList<>();
 		for (Integer pos : memberAnnotationPositions(declaration)) {
-			for (Carried carried : runtimeAt(declaration, pos)) {
-				if (made.add(holderMethod(carried))) {
-					String value = annotationValue(carried.written(), carried.type(), unit, members, true);
-					members.append("    public static Object ")
-						.append(holderMethod(carried))
-						.append("() {\n        return ")
-						.append(value)
-						.append(";\n    }\n");
-				}
+			all.addAll(runtimeAt(declaration, pos));
+		}
+		List<TypeName> types = typeNames(declaration);
+		for (JavaSyntax.Method method : java.util.Objects.requireNonNull(declaration.declaration).methods()) {
+			JavaSyntax.Receiver receiver = unit.tree().receivers().get(method.pos());
+			if (receiver != null) {
+				types.add(receiver.type());
+			}
+		}
+		for (TypeName type : types) {
+			for (List<JavaSyntax.Annotation> written : typeAnnotationGroups(unit, type)) {
+				all.addAll(typeCarried(declaration, unit, written));
+			}
+		}
+		for (Carried carried : all) {
+			if (made.add(holderMethod(carried))) {
+				String value = annotationValue(carried.written(), carried.type(), unit, members, true);
+				members.append("    public static Object ")
+					.append(holderMethod(carried))
+					.append("() {\n        return ")
+					.append(value)
+					.append(";\n    }\n");
 			}
 		}
 		declareGenerated(name, simple, JavaAnnotations.header(unit, enclosing(declaration)) + "public final class "
@@ -3582,8 +3792,199 @@ final class JavaClasses {
 			for (JavaSyntax.Parameter parameter : method.parameters()) {
 				positions.add(parameter.pos());
 			}
+			for (JavaSyntax.TypeParameter parameter : method.typeParameters()) {
+				positions.add(parameter.pos());
+			}
+		}
+		for (JavaSyntax.TypeParameter parameter : written.typeParameters()) {
+			positions.add(parameter.pos());
 		}
 		return positions;
+	}
+
+	// ---- type annotations (.kb/java-frontend.md, "Annotated types")
+
+	/**
+	 * The type annotations written in a use of a type, at the path from the use to the
+	 * type each stands on ({@code rontolisp.internal.AnnotatedTypes}): {@code C} an
+	 * array's component, {@code O} the type a member type is a member of, {@code A<n>;} a
+	 * type argument, {@code U<n>;} and {@code L<n>;} a wildcard's bounds.
+	 *
+	 * @param path where they stand
+	 * @param carried those of runtime retention, repeated ones in their container
+	 */
+	record Placed(String path, List<Carried> carried) {
+	}
+
+	/**
+	 * The type annotations of runtime retention written in a type a declaration in a
+	 * class's body names, by where each stands (JLS 9.7.4).
+	 * @param written the type, or {@code null} for none written: a constructor's
+	 * @param leading the declaration's own annotations, those of a use of a type the
+	 * type's when they stand ahead of a type and not of a package or a class scoping a
+	 * static member
+	 */
+	List<Placed> placed(JavaClass declaration, @Nullable TypeName written, List<JavaSyntax.Annotation> leading) {
+		Unit unit = unit(declaration);
+		Map<String, List<JavaSyntax.Annotation>> at = new LinkedHashMap<>();
+		if (written == null) {
+			at.put("", List.copyOf(leading));
+		}
+		else {
+			placeType(declaration, unit, written, "", leading, at);
+		}
+		List<Placed> placed = new ArrayList<>();
+		at.forEach((path, annotations) -> {
+			List<Carried> carried = typeCarried(declaration, unit, annotations);
+			if (!carried.isEmpty()) {
+				placed.add(new Placed(path, carried));
+			}
+		});
+		return placed;
+	}
+
+	private void placeType(JavaClass declaration, Unit unit, TypeName type, String path,
+			List<JavaSyntax.Annotation> leading, Map<String, List<JavaSyntax.Annotation>> at) {
+		JavaSyntax.TypeAnnotations written = unit.tree().typeAnnotations().get(type.pos());
+		for (int dimension = 0; written != null && dimension < written.dimensions().size()
+				&& dimension < type.dimensions(); dimension++) {
+			put(at, path + "C".repeat(dimension), written.dimensions().get(dimension));
+		}
+		String element = path + "C".repeat(type.dimensions());
+		if (type.isWildcard()) {
+			put(at, element, written == null ? List.of() : written.words().getOrDefault(0, List.of()));
+			if (!type.arguments().isEmpty()) {
+				placeType(declaration, unit, type.arguments().get(0),
+						element + (type.name().equals("? super") ? "L0;" : "U0;"), List.of(), at);
+			}
+			return;
+		}
+		int words = type.name().split("\\.").length;
+		if (!leading.isEmpty()) {
+			// a declaration's own stand ahead of the first word a type annotation may
+			// stand ahead of, as javac writes them: the type a qualified name names, not
+			// a
+			// package's name or a class scoping a static member
+			int word = 0;
+			while (word < words - 1 && !admissible(type.name(), word, unit, List.of(declaration))) {
+				word++;
+			}
+			put(at, element + "O".repeat(words - 1 - word), leading);
+		}
+		if (written != null) {
+			written.words().forEach((word, annotations) -> {
+				if (admissible(type.name(), word, unit, List.of(declaration))) {
+					put(at, element + "O".repeat(words - 1 - word), annotations);
+				}
+			});
+		}
+		for (int index = 0; index < type.arguments().size(); index++) {
+			placeType(declaration, unit, type.arguments().get(index), element + "A" + index + ";", List.of(), at);
+		}
+		for (TypeName around = type.enclosing(); around != null; around = around.enclosing()) {
+			String owner = element + "O".repeat(words - around.name().split("\\.").length);
+			for (int index = 0; index < around.arguments().size(); index++) {
+				placeType(declaration, unit, around.arguments().get(index), owner + "A" + index + ";", List.of(), at);
+			}
+		}
+	}
+
+	private static void put(Map<String, List<JavaSyntax.Annotation>> at, String path,
+			List<JavaSyntax.Annotation> annotations) {
+		if (!annotations.isEmpty()) {
+			at.computeIfAbsent(path, key -> new ArrayList<>()).addAll(annotations);
+		}
+	}
+
+	/**
+	 * The annotations of a use of a type among those written: of runtime retention and of
+	 * a type whose {@code @Target} names {@code TYPE_USE}, repeated ones in their
+	 * container.
+	 */
+	private List<Carried> typeCarried(JavaClass declaration, Unit unit, List<JavaSyntax.Annotation> written) {
+		List<Carried> carried = new ArrayList<>();
+		for (JavaSyntax.Annotation annotation : written) {
+			JavaClass type = annotationTypeIn(annotation, declaration, unit);
+			if (type != null && isRuntime(type) && typeUse(type)) {
+				carried.add(new Carried(type, annotation, carried.size()));
+			}
+		}
+		return wrapped(carried);
+	}
+
+	/**
+	 * The groups of annotations written inside a type, its arguments' and bounds' and
+	 * those of the types its qualified name's prefix spells included: a word's or a
+	 * dimension's each.
+	 */
+	private static List<List<JavaSyntax.Annotation>> typeAnnotationGroups(Unit unit, TypeName type) {
+		List<List<JavaSyntax.Annotation>> groups = new ArrayList<>();
+		JavaSyntax.TypeAnnotations written = unit.tree().typeAnnotations().get(type.pos());
+		if (written != null) {
+			groups.addAll(written.words().values());
+			groups.addAll(written.dimensions());
+		}
+		for (TypeName argument : type.arguments()) {
+			groups.addAll(typeAnnotationGroups(unit, argument));
+		}
+		if (type.enclosing() != null) {
+			groups.addAll(typeAnnotationGroups(unit, type.enclosing()));
+		}
+		return groups;
+	}
+
+	/**
+	 * The types a class's declaration and the declarations in its body write: what it
+	 * extends and implements, its type parameters' bounds, its record components', its
+	 * fields', its methods' and constructors' -- returned, taken, thrown, received, their
+	 * type parameters' bounds.
+	 */
+	private static List<TypeName> typeNames(JavaClass declaration) {
+		ClassDeclaration written = java.util.Objects.requireNonNull(declaration.declaration);
+		List<TypeName> types = new ArrayList<>();
+		if (written.superclass() != null) {
+			types.add(written.superclass());
+		}
+		types.addAll(written.interfaces());
+		for (JavaSyntax.TypeParameter parameter : written.typeParameters()) {
+			types.addAll(parameter.bounds());
+		}
+		for (JavaSyntax.Parameter component : written.components()) {
+			if (component.type() != null) {
+				types.add(component.type());
+			}
+		}
+		for (JavaSyntax.Field field : written.fields()) {
+			types.add(field.type());
+		}
+		for (JavaSyntax.Method method : written.methods()) {
+			if (method.returnType() != null) {
+				types.add(method.returnType());
+			}
+			for (JavaSyntax.Parameter parameter : method.parameters()) {
+				if (parameter.type() != null) {
+					types.add(parameter.type());
+				}
+			}
+			types.addAll(method.thrown());
+			for (JavaSyntax.TypeParameter parameter : method.typeParameters()) {
+				types.addAll(parameter.bounds());
+			}
+		}
+		return types;
+	}
+
+	/** The type of the receiver parameter a method or a constructor declares, or null. */
+	@Nullable TypeName receiverType(JavaClass declaration, int pos) {
+		JavaSyntax.Receiver receiver = unit(declaration).tree().receivers().get(pos);
+		return receiver == null ? null : receiver.type();
+	}
+
+	/**
+	 * The annotations written on a declaration in a class's body, by its name's position.
+	 */
+	List<JavaSyntax.Annotation> writtenAt(JavaClass declaration, int pos) {
+		return unit(declaration).tree().declarationAnnotations().getOrDefault(pos, List.of());
 	}
 
 	/**

@@ -1,0 +1,30 @@
+Bits-c.wasm 262785 8837d3f412da
+Bits.wasm 256381 2c75e9558a6a
+ByName-c.wasm 276467 1d0d4ee12bbb
+ByName.wasm 268969 75c4914ebb37
+Coll-c.wasm 168684 b833e91f6b74
+Coll.wasm 166501 de10c888036e
+Hello-c.wasm 23980 d265116770a3
+Hello.wasm 21794 29657aaaa5dd
+OldFile-c.wasm 119018 2c8ab8bdd428
+OldFile.wasm 112347 a0fcafab3b36
+ReadWrite-c.wasm 204319 00cf9324f112
+ReadWrite.wasm 196693 785831272f67
+files-c.wasm 45112 3e2a078f3d08
+files.wasm 38834 3f9bd0f084aa
+shop-c.wasm 333083 4883cf4446e2
+shop.wasm 323921 cb48031cd847
+Bits-cls/Bits.class 408413 857dd52822f7
+Bits-cls/am 0 
+ByName-cls/ByName.class 417115 03e2ddbe1237
+ByName-cls/am 0 
+Coll-cls/Coll.class 209189 5060deabdc1a
+Coll-cls/am 0 
+Hello-cls/Hello.class 32028 42fa94944b65
+OldFile-cls/OldFile.class 176181 864ef82d39a3
+OldFile-cls/am 0 
+ReadWrite-cls/ReadWrite.class 337944 794a22904ad4
+ReadWrite-cls/am 0 
+files-cls/files.class 56678 da015d3cc642
+shop-cls/am 0 
+shop-cls/shop.class 436562 e870ca54db47

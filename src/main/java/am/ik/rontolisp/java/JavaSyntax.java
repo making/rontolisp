@@ -609,11 +609,39 @@ final class JavaSyntax {
 	 * declares one, by the position of the declaration's name
 	 * @param packageAnnotations the annotations of the package declaration, in the order
 	 * written: a {@code package-info.java}'s
+	 * @param typeAnnotations the annotations written inside each type that has some, by
+	 * the type's position
+	 * @param annotationSites the declaration each annotation written on one stands on, by
+	 * the annotation's position
 	 */
 	record CompilationUnit(@Nullable String packageName, List<Import> imports, List<ClassDeclaration> classes,
 			List<Span> unchecked, List<Annotation> annotations, Map<Integer, ElementValue> elementDefaults,
 			Map<Integer, List<Annotation>> declarationAnnotations, Map<Integer, String> lambdaNames,
-			Map<Integer, Receiver> receivers, List<Annotation> packageAnnotations) {
+			Map<Integer, Receiver> receivers, List<Annotation> packageAnnotations,
+			Map<Integer, TypeAnnotations> typeAnnotations, Map<Integer, AnnotationSite> annotationSites) {
+	}
+
+	/**
+	 * The annotations written inside a type (JLS 9.7.4): ahead of a word of its name and
+	 * ahead of each of its dimensions. Those ahead of the whole type are the first
+	 * word's; a declaration's own, which may be the type's too, are the declaration's.
+	 *
+	 * @param name the type's name as written, dotted when qualified
+	 * @param words the annotations ahead of each word of the name that has some, by the
+	 * word's place
+	 * @param dimensions the annotations ahead of each {@code []}, the outermost array's
+	 * first, a variable arity's {@code ...} last
+	 */
+	record TypeAnnotations(String name, Map<Integer, List<Annotation>> words, List<List<Annotation>> dimensions) {
+	}
+
+	/**
+	 * The declaration annotations stand on: what a {@code @Target} names it
+	 * ({@code ElementType}'s names; {@code ENUM_CONSTANT} for an enum's constant), and
+	 * the type it declares, or {@code null} where it declares none a type annotation may
+	 * stand on: a class's, a {@code void} method's, a {@code var} local's.
+	 */
+	record AnnotationSite(String kind, @Nullable TypeName type) {
 	}
 
 	/**

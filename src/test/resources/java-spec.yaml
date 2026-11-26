@@ -19360,6 +19360,107 @@ standalone:
               @Label("on") ON, OFF
           }
 
+          // type annotations: where each is written, what reflection answers of it
+          @Retention(RetentionPolicy.RUNTIME)
+          @Target(ElementType.TYPE_USE)
+          @Repeatable(Uses.class)
+          @interface Use {
+              int value() default 0;
+          }
+
+          @Retention(RetentionPolicy.RUNTIME)
+          @Target(ElementType.TYPE_USE)
+          @interface Uses {
+              Use[] value();
+          }
+
+          @Retention(RetentionPolicy.RUNTIME)
+          @Target({ ElementType.TYPE_USE, ElementType.FIELD, ElementType.METHOD, ElementType.PARAMETER })
+          @interface Twin {
+          }
+
+          @Retention(RetentionPolicy.RUNTIME)
+          @Target(ElementType.TYPE_PARAMETER)
+          @interface Param {
+              String value() default "";
+          }
+
+          @Use(9)
+          static class Typed<E> extends @Use(1) Box<@Use(2) String> implements @Use(3) Comparable<Typed<E>>, Runnable {
+              class Member {
+                  Member(@Use(4) int a, @Twin List<@Use(5) String> b) {
+                  }
+              }
+
+              static class Nest {
+              }
+
+              class Gen<T> {
+                  class Sub<U> {
+                      void call() {
+                      }
+                  }
+              }
+
+              @Use String plain;
+              @Use(1) @Use(2) int twice;
+              List<@Use(3) ? extends @Use(4) Number> bounded;
+              Map<@Use ?, ? super @Use(1) Integer> loose;
+              @Use(1) String @Use(2) [] @Use(3) [] grid;
+              @Use(1) Typed<E>.@Use(2) Member member;
+              Typed.@Use Nest nest;
+              Map.@Use Entry<String, @Use(1) E> entry;
+              java.lang.@Use String qualified;
+              @Twin java.lang.String twin;
+              @Use(1) Typed<E>.Gen<@Use(2) String>.@Use(3) Sub<Integer> deep;
+              @Use E variable;
+              Typed.Nest[] none;
+
+              Typed() {
+                  super(null);
+              }
+
+              public int compareTo(Typed<E> other) {
+                  return 0;
+              }
+
+              public void run() {
+              }
+
+              static <@Param("t") @Use T extends @Use(1) Comparable<@Use(2) T>, S> @Use(3) T pick(@Use(4) T a,
+                      List<? extends @Use(5) S> b, @Use(6) int @Use(7) ... rest) throws @Use(8) IllegalStateException {
+                  return a;
+              }
+
+              @Twin String self(@Use(1) Typed<E> this, @Twin @Use(2) String text) {
+                  return text;
+              }
+
+              String plainSelf(@Twin java.lang.String text) {
+                  return text;
+              }
+          }
+
+          enum Hue {
+              @Use RED;
+
+              Hue() {
+              }
+          }
+
+          enum Shade {
+              DARK("d");
+
+              Shade(@Use(1) String code) {
+              }
+          }
+
+          record Pin(@Use(1) String name, @Use(2) int @Use(3) [] marks) {
+              public @Use(4) String name() {
+                  return name;
+              }
+          }
+
           static void annotated() throws Exception {
               for (Class<?> type : List.of(Annotated.class, Below.class, Both.class, Under.class, Spot.class)) {
                   System.out.println(type.getSimpleName() + " " + Arrays.toString(type.getAnnotations()) + " / "
@@ -19421,6 +19522,100 @@ standalone:
                       + deprecated.equals(Thread.class.getMethod("getId").getAnnotation(Deprecated.class)));
               System.out.println(Classes.class.getPackage() + "|" + Classes.class.getPackage().getName() + " " + String.class.getPackage() + " "
                       + int.class.getPackage() + " " + (Classes.class.getPackage() == Box.class.getPackage()) + " " + Arrays.toString(Classes.class.getPackage().getAnnotations()));
+          }
+
+          static void typed() throws Exception {
+              for (String name : List.of("plain", "twice", "bounded", "loose", "grid", "member", "nest", "entry", "qualified",
+                      "twin", "deep", "variable", "none")) {
+                  Field field = Typed.class.getDeclaredField(name);
+                  System.out.println(name + " " + uses(field.getAnnotatedType()) + " " + Arrays.toString(field.getAnnotations()));
+              }
+              Method pick = Typed.class.getDeclaredMethod("pick", Comparable.class, List.class, int[].class);
+              System.out.println("pick " + uses(pick.getAnnotatedReturnType()) + " / " + uses(pick.getAnnotatedParameterTypes())
+                      + " / " + uses(pick.getAnnotatedExceptionTypes()) + " / " + pick.getAnnotatedReceiverType() + " / "
+                      + uses(pick.getParameters()[2].getAnnotatedType()));
+              for (TypeVariable<Method> variable : pick.getTypeParameters()) {
+                  System.out.println("  " + variable + " " + Arrays.toString(variable.getAnnotations()) + " "
+                          + variable.getAnnotation(Param.class) + " " + variable.isAnnotationPresent(Use.class) + " "
+                          + Arrays.toString(variable.getDeclaredAnnotationsByType(Use.class)) + " "
+                          + uses(variable.getAnnotatedBounds()));
+              }
+              Method self = Typed.class.getDeclaredMethod("self", String.class);
+              System.out.println("self " + uses(self.getAnnotatedReceiverType()) + " / " + uses(self.getAnnotatedReturnType())
+                      + " / " + uses(self.getAnnotatedParameterTypes()) + " / " + Arrays.toString(self.getAnnotations()) + " "
+                      + Arrays.deepToString(self.getParameterAnnotations()) + " / "
+                      + uses(Typed.class.getDeclaredMethod("plainSelf", String.class).getAnnotatedParameterTypes()));
+              System.out.println("call " + uses(Typed.Gen.Sub.class.getDeclaredMethod("call").getAnnotatedReceiverType()));
+              for (Class<?> type : List.of(Typed.class, Typed.Member.class, Typed.Nest.class, Typed.Gen.Sub.class, Hue.class,
+                      Shade.class, Pin.class)) {
+                  for (Constructor<?> constructor : type.getDeclaredConstructors()) {
+                      System.out.println(type.getSimpleName() + " " + uses(constructor.getAnnotatedReturnType()) + " / "
+                              + uses(constructor.getAnnotatedReceiverType()) + " / "
+                              + uses(constructor.getAnnotatedParameterTypes()));
+                  }
+                  System.out.println("  " + uses(type.getAnnotatedSuperclass()) + " / " + uses(type.getAnnotatedInterfaces())
+                          + " " + Arrays.toString(type.getAnnotations()));
+              }
+              System.out.println("Hue.RED " + uses(Hue.class.getField("RED").getAnnotatedType()) + " "
+                      + Arrays.toString(Hue.class.getField("RED").getAnnotations()));
+              for (RecordComponent component : Pin.class.getRecordComponents()) {
+                  System.out.println(component.getName() + " " + uses(component.getAnnotatedType()) + " / "
+                          + uses(component.getAccessor().getAnnotatedReturnType()));
+              }
+              for (Class<?> type : List.of(Object.class, Runnable.class, int.class, int[].class, String.class)) {
+                  System.out.println(type.getSimpleName() + " " + type.getAnnotatedSuperclass() + " "
+                          + Arrays.toString(type.getAnnotatedInterfaces()));
+              }
+              System.out.println(Arrays.toString(Typed.class.getTypeParameters()[0].getAnnotations()) + " "
+                      + uses(Typed.class.getTypeParameters()[0].getAnnotatedBounds()) + " "
+                      + uses(List.class.getMethod("get", int.class).getAnnotatedReturnType()));
+              java.lang.reflect.AnnotatedType plain = Typed.class.getDeclaredField("plain").getAnnotatedType();
+              java.lang.reflect.AnnotatedType twice = Typed.class.getDeclaredField("twice").getAnnotatedType();
+              java.lang.reflect.AnnotatedType text = pick.getAnnotatedParameterTypes()[1];
+              System.out.println(plain.equals(Typed.class.getDeclaredField("plain").getAnnotatedType()) + " "
+                      + (plain.hashCode() == Typed.class.getDeclaredField("plain").getAnnotatedType().hashCode()) + " "
+                      + (plain != Typed.class.getDeclaredField("plain").getAnnotatedType()) + " "
+                      + plain.equals(Typed.class.getDeclaredField("qualified").getAnnotatedType()) + " "
+                      + plain.equals(Typed.class.getDeclaredField("twin").getAnnotatedType()) + " " + plain.equals(String.class)
+                      + " " + text.equals(Typed.class.getDeclaredMethod("pick", Comparable.class, List.class, int[].class)
+                          .getAnnotatedParameterTypes()[1])
+                      + " " + twice.getAnnotation(Use.class) + " " + twice.getAnnotation(Uses.class) + " "
+                      + Arrays.toString(twice.getAnnotationsByType(Use.class)) + " " + plain.getAnnotation(Use.class).value());
+          }
+
+          // a use of a type, its kind and its parts
+          static String uses(java.lang.reflect.AnnotatedType use) {
+              if (use == null) {
+                  return "-";
+              }
+              StringBuilder written = new StringBuilder(use.toString());
+              String kind = use instanceof java.lang.reflect.AnnotatedParameterizedType ? "P"
+                      : use instanceof java.lang.reflect.AnnotatedArrayType ? "A"
+                              : use instanceof java.lang.reflect.AnnotatedWildcardType ? "W"
+                                      : use instanceof java.lang.reflect.AnnotatedTypeVariable ? "V" : "T";
+              written.append(" {").append(kind).append(' ').append(use.getType().getTypeName());
+              if (use.getAnnotatedOwnerType() != null) {
+                  written.append(" owner ").append(uses(use.getAnnotatedOwnerType()));
+              }
+              if (use instanceof java.lang.reflect.AnnotatedParameterizedType parameterized) {
+                  written.append(" args ").append(uses(parameterized.getAnnotatedActualTypeArguments()));
+              }
+              if (use instanceof java.lang.reflect.AnnotatedArrayType array) {
+                  written.append(" of ").append(uses(array.getAnnotatedGenericComponentType()));
+              }
+              if (use instanceof java.lang.reflect.AnnotatedWildcardType wildcard) {
+                  written.append(" upper ").append(uses(wildcard.getAnnotatedUpperBounds())).append(" lower ")
+                      .append(uses(wildcard.getAnnotatedLowerBounds()));
+              }
+              return written.append('}').toString();
+          }
+
+          static String uses(java.lang.reflect.AnnotatedType[] uses) {
+              StringBuilder written = new StringBuilder("[");
+              for (java.lang.reflect.AnnotatedType use : uses) {
+                  written.append(written.length() > 1 ? ", " : "").append(uses(use));
+              }
+              return written.append(']').toString();
           }
 
           public static void main(String[] args) {
@@ -19525,6 +19720,7 @@ standalone:
               try {
                   generics();
                   annotated();
+                  typed();
               }
               catch (Exception e) {
                   throw new IllegalStateException(e);
@@ -19601,7 +19797,7 @@ standalone:
       Loud true 3 text null java.lang.StringBuilder true java.util.Map.Entry null Classes.Point[] truefalsefalse true false [I void
       the enum is initialized
       TWO
-      Classes$Shape[] Classes$Ring[compareTo] Classes$Level[valueOf, values] Classes$Level$1[toString] Classes$Point[equals, hashCode, toString, x, y] Classes[above, annotated, arrays, declared, failing, first, flags, general, generics, handled, handles, jdk, kind, listed, main, many, members, reflect, show, sum, typeKind, typeKinds] [I[] int[] 1 toString true true true true
+      Classes$Shape[] Classes$Ring[compareTo] Classes$Level[valueOf, values] Classes$Level$1[toString] Classes$Point[equals, hashCode, toString, x, y] Classes[above, annotated, arrays, declared, failing, first, flags, general, generics, handled, handles, jdk, kind, listed, main, many, members, reflect, show, sum, typeKind, typeKinds, typed, uses] [I[] int[] 1 toString true true true true
       null: java.lang.NullPointerException
       a null class: java.lang.NullPointerException
       Base.name: name class java.lang.String 1 -> derived (String) (String)
@@ -19830,6 +20026,48 @@ standalone:
       @java.lang.FunctionalInterface() [@java.lang.FunctionalInterface()] [@jdk.internal.ValueBased()] [@java.lang.Deprecated(forRemoval=false, since="9")] 9 true [@java.lang.SafeVarargs()] [@jdk.internal.vm.annotation.IntrinsicCandidate()] [] [@java.lang.annotation.Documented(), @java.lang.annotation.Retention(RUNTIME), @java.lang.annotation.Target({ANNOTATION_TYPE})] [@java.lang.annotation.Retention(RUNTIME), @java.lang.annotation.Repeatable(Classes.Roles.class)]
       interface java.lang.Deprecated false 2011250759 false
       package | package java.lang null true []
+      plain @Classes.Use(0) java.lang.String {T java.lang.String} []
+      twice @Classes.Uses({@Classes.Use(1), @Classes.Use(2)}) int {T int} []
+      bounded java.util.List<@Classes.Use(3) ? extends @Classes.Use(4) java.lang.Number> {P java.util.List<? extends java.lang.Number> args [@Classes.Use(3) ? extends @Classes.Use(4) java.lang.Number {W ? extends java.lang.Number upper [@Classes.Use(4) java.lang.Number {T java.lang.Number}] lower []}]} []
+      loose java.util.Map<@Classes.Use(0) ?, ? super @Classes.Use(1) java.lang.Integer> {P java.util.Map<?, ? super java.lang.Integer> args [@Classes.Use(0) ? {W ? upper [java.lang.Object {T java.lang.Object}] lower []}, ? super @Classes.Use(1) java.lang.Integer {W ? super java.lang.Integer upper [java.lang.Object {T java.lang.Object}] lower [@Classes.Use(1) java.lang.Integer {T java.lang.Integer}]}]} []
+      grid @Classes.Use(1) java.lang.String @Classes.Use(2)[] @Classes.Use(3)[] {A java.lang.String[][] of @Classes.Use(1) java.lang.String @Classes.Use(3)[] {A java.lang.String[] of @Classes.Use(1) java.lang.String {T java.lang.String}}} []
+      member @Classes.Use(2) Classes$Typed$Member {P Classes$Typed<E>$Member owner @Classes.Use(1) Classes$Typed<E> {P Classes$Typed<E> owner Classes {T Classes} args [E {V E}]} args []} []
+      nest @Classes.Use(0) Classes$Typed$Nest {T Classes$Typed$Nest owner Classes$Typed {T Classes$Typed owner Classes {T Classes}}} []
+      entry @Classes.Use(0) java.util.Map$Entry<java.lang.String, @Classes.Use(1) E> {P java.util.Map$Entry<java.lang.String, E> owner java.util.Map {T java.util.Map} args [java.lang.String {T java.lang.String}, @Classes.Use(1) E {V E}]} []
+      qualified @Classes.Use(0) java.lang.String {T java.lang.String} []
+      twin @Classes.Twin() java.lang.String {T java.lang.String} [@Classes.Twin()]
+      deep @Classes.Use(3) Classes$Typed$Gen$Sub<java.lang.Integer> {P Classes$Typed<E>$Gen<java.lang.String>$Sub<java.lang.Integer> owner Classes$Typed$Gen<@Classes.Use(2) java.lang.String> {P Classes$Typed<E>$Gen<java.lang.String> owner @Classes.Use(1) Classes$Typed<E> {P Classes$Typed<E> owner Classes {T Classes} args [E {V E}]} args [@Classes.Use(2) java.lang.String {T java.lang.String}]} args [java.lang.Integer {T java.lang.Integer}]} []
+      variable @Classes.Use(0) E {V E} []
+      none Classes$Typed$Nest[] {A Classes$Typed$Nest[] of Classes$Typed$Nest {T Classes$Typed$Nest owner Classes$Typed {T Classes$Typed owner Classes {T Classes}}}} []
+      pick @Classes.Use(3) T {V T} / [@Classes.Use(4) T {V T}, java.util.List<? extends @Classes.Use(5) S> {P java.util.List<? extends S> args [? extends @Classes.Use(5) S {W ? extends S upper [@Classes.Use(5) S {V S}] lower []}]}, @Classes.Use(6) int @Classes.Use(7)[] {A int[] of @Classes.Use(6) int {T int}}] / [@Classes.Use(8) java.lang.IllegalStateException {T java.lang.IllegalStateException}] / null / @Classes.Use(6) int @Classes.Use(7)[] {A int[] of @Classes.Use(6) int {T int}}
+        T [@Classes.Param("t"), @Classes.Use(0)] @Classes.Param("t") true [@Classes.Use(0)] [@Classes.Use(1) java.lang.Comparable<@Classes.Use(2) T> {P java.lang.Comparable<T> args [@Classes.Use(2) T {V T}]}]
+        S [] null false [] [java.lang.Object {T java.lang.Object}]
+      self @Classes.Use(1) Classes$Typed<E> {P Classes$Typed<E> owner Classes {T Classes} args [E {V E}]} / @Classes.Twin() java.lang.String {T java.lang.String} / [@Classes.Twin() @Classes.Use(2) java.lang.String {T java.lang.String}] / [@Classes.Twin()] [[@Classes.Twin()]] / [@Classes.Twin() java.lang.String {T java.lang.String}]
+      call Classes$Typed$Gen$Sub<U> {P Classes$Typed<E>$Gen<T>$Sub<U> owner Classes$Typed$Gen<T> {P Classes$Typed<E>$Gen<T> owner Classes$Typed<E> {P Classes$Typed<E> owner Classes {T Classes} args [E {V E}]} args [T {V T}]} args [U {V U}]}
+      Typed Classes$Typed {T Classes$Typed owner Classes {T Classes}} / - / []
+        @Classes.Use(1) Classes$Box<@Classes.Use(2) java.lang.String> {P Classes$Box<java.lang.String> owner Classes {T Classes} args [@Classes.Use(2) java.lang.String {T java.lang.String}]} / [@Classes.Use(3) java.lang.Comparable<Classes$Typed<E>> {P java.lang.Comparable<Classes$Typed<E>> args [Classes$Typed<E> {P Classes$Typed<E> owner Classes {T Classes} args [E {V E}]}]}, java.lang.Runnable {T java.lang.Runnable}] [@Classes.Use(9)]
+      Member Classes$Typed$Member {T Classes$Typed$Member owner Classes$Typed {T Classes$Typed owner Classes {T Classes}}} / Classes$Typed<E> {P Classes$Typed<E> owner Classes {T Classes} args [E {V E}]} / [Classes$Typed {T Classes$Typed owner Classes {T Classes}}, @Classes.Use(4) int {T int}, @Classes.Twin() java.util.List<@Classes.Use(5) java.lang.String> {P java.util.List<java.lang.String> args [@Classes.Use(5) java.lang.String {T java.lang.String}]}]
+        java.lang.Object {T java.lang.Object} / [] []
+      Nest Classes$Typed$Nest {T Classes$Typed$Nest owner Classes$Typed {T Classes$Typed owner Classes {T Classes}}} / - / []
+        java.lang.Object {T java.lang.Object} / [] []
+      Sub Classes$Typed$Gen$Sub {T Classes$Typed$Gen$Sub owner Classes$Typed$Gen {T Classes$Typed$Gen owner Classes$Typed {T Classes$Typed owner Classes {T Classes}}}} / Classes$Typed$Gen<T> {P Classes$Typed<E>$Gen<T> owner Classes$Typed<E> {P Classes$Typed<E> owner Classes {T Classes} args [E {V E}]} args [T {V T}]} / [Classes$Typed$Gen {T Classes$Typed$Gen owner Classes$Typed {T Classes$Typed owner Classes {T Classes}}}]
+        java.lang.Object {T java.lang.Object} / [] []
+      Hue Classes$Hue {T Classes$Hue owner Classes {T Classes}} / - / [java.lang.String {T java.lang.String}, int {T int}]
+        java.lang.Enum<Classes$Hue> {P java.lang.Enum<Classes$Hue> args [Classes$Hue {T Classes$Hue owner Classes {T Classes}}]} / [] []
+      Shade Classes$Shade {T Classes$Shade owner Classes {T Classes}} / - / [@Classes.Use(1) java.lang.String {T java.lang.String}, int {T int}, java.lang.String {T java.lang.String}]
+        java.lang.Enum<Classes$Shade> {P java.lang.Enum<Classes$Shade> args [Classes$Shade {T Classes$Shade owner Classes {T Classes}}]} / [] []
+      Pin Classes$Pin {T Classes$Pin owner Classes {T Classes}} / - / [@Classes.Use(1) java.lang.String {T java.lang.String}, @Classes.Use(2) int @Classes.Use(3)[] {A int[] of @Classes.Use(2) int {T int}}]
+        java.lang.Record {T java.lang.Record} / [] []
+      Hue.RED Classes$Hue {T Classes$Hue owner Classes {T Classes}} [@Classes.Use(0)]
+      name @Classes.Use(1) java.lang.String {T java.lang.String} / @Classes.Use(4) java.lang.String {T java.lang.String}
+      marks @Classes.Use(2) int @Classes.Use(3)[] {A int[] of @Classes.Use(2) int {T int}} / @Classes.Use(2) int @Classes.Use(3)[] {A int[] of @Classes.Use(2) int {T int}}
+      Object null []
+      Runnable null []
+      int null []
+      int[] null []
+      String java.lang.Object [java.io.Serializable, java.lang.Comparable<java.lang.String>, java.lang.CharSequence, java.lang.constant.Constable, java.lang.constant.ConstantDesc]
+      [] [java.lang.Object {T java.lang.Object}] E {V E}
+      true true true true false false true null @Classes.Uses({@Classes.Use(1), @Classes.Use(2)}) [@Classes.Use(1), @Classes.Use(2)] 0
   # A method of a class of the JDK the program calls, invoked by reflection where no
   # call of the program gives a method arguments: the object is tested, then the
   # arguments counted, as a JDK does. A file of its own: a call giving arguments
@@ -28902,8 +29140,8 @@ standalone:
     # links told apart where they are not followed and walked into with FOLLOW_LINKS, the
     # times to the nanosecond written and copied, the basic view by name and as a view;
     # links made, read and copied as links, an absolute one made and read where a WASI host
-    # refuses it (links:, wasi:); permission bits read, written, made with and copied, which
-    # a WASI host has none of (wasi:).
+    # refuses it (links:, wasi:); permission bits read, written, made with and copied, and
+    # the owner, posix and unix views, which a WASI host has none of (wasi:).
     file: FilesOfNio.java
     directory: true
     files:
@@ -28946,14 +29184,20 @@ standalone:
       import java.nio.file.attribute.BasicFileAttributes;
       import java.nio.file.attribute.FileAttribute;
       import java.nio.file.attribute.FileAttributeView;
+      import java.nio.file.attribute.FileOwnerAttributeView;
       import java.nio.file.attribute.FileTime;
+      import java.nio.file.attribute.GroupPrincipal;
+      import java.nio.file.attribute.PosixFileAttributeView;
+      import java.nio.file.attribute.PosixFileAttributes;
       import java.nio.file.attribute.PosixFilePermission;
       import java.nio.file.attribute.PosixFilePermissions;
+      import java.nio.file.attribute.UserPrincipal;
       import java.time.Instant;
       import java.util.ArrayList;
       import java.util.Arrays;
       import java.util.EnumSet;
       import java.util.List;
+      import java.util.Map;
       import java.util.Set;
       import java.util.concurrent.TimeUnit;
       import java.util.stream.Collectors;
@@ -29458,6 +29702,89 @@ standalone:
                           + PosixFilePermissions.toString(Files.getPosixFilePermissions(kept)) + " "
                           + Files.readString(copy);
               });
+              // the owner, posix and unix views, which a WASI host has none of; who owns a file
+              // differs from host to host, so the lines print what holds on every one
+              Path x = Path.of("x.sh");
+              show("views", () -> {
+                  Set<String> views = FileSystems.getDefault().supportedFileAttributeViews();
+                  return views.contains("basic") + " " + views.contains("posix") + " " + views.contains("unix") + " "
+                          + views.contains("owner");
+              });
+              show("owner", () -> {
+                  UserPrincipal owner = Files.getOwner(x);
+                  GroupPrincipal group = (GroupPrincipal) Files.getAttribute(x, "posix:group");
+                  return owner.equals(Files.getOwner(Path.of("locked.txt"))) + " " + owner.equals(group) + " "
+                          + (owner instanceof GroupPrincipal) + " " + owner.getName().equals(owner.toString()) + " "
+                          + (owner.hashCode() == (Integer) Files.getAttribute(x, "unix:uid")) + " "
+                          + (group.hashCode() == (Integer) Files.getAttribute(x, "unix:gid")) + " "
+                          + owner.equals(Files.getAttribute(x, "owner:owner")) + " "
+                          + Files.getOwner(Path.of("links/dangling"), LinkOption.NOFOLLOW_LINKS).equals(owner);
+              });
+              show("owner missing", () -> Files.getOwner(Path.of("out/none")));
+              show("view names", () -> Files.readAttributes(x, "posix:*").keySet() + " "
+                      + Files.readAttributes(x, "unix:*").keySet() + " " + Files.readAttributes(x, "owner:*").keySet());
+              show("posix", () -> {
+                  PosixFileAttributes a = Files.readAttributes(x, PosixFileAttributes.class);
+                  Map<String, Object> m = Files.readAttributes(x, "posix:permissions,owner,size");
+                  return PosixFilePermissions.toString(a.permissions()) + " " + a.owner().equals(m.get("owner")) + " "
+                          + a.group().equals(Files.getAttribute(x, "unix:group")) + " " + a.isRegularFile() + " "
+                          + a.size() + " " + m.get("permissions") + " " + m.get("size");
+              });
+              show("posix missing", () -> Files.readAttributes(Path.of("out/none"), PosixFileAttributes.class));
+              show("unix", () -> {
+                  Files.createDirectories(Path.of("out/own/sub"));
+                  Map<String, Object> u = Files.readAttributes(x, "unix:*");
+                  Path ro = Path.of("ro");
+                  return Integer.toOctalString((Integer) u.get("mode")) + " "
+                          + Integer.toOctalString((Integer) Files.getAttribute(ro, "unix:mode")) + " "
+                          + Integer.toOctalString((Integer) Files.getAttribute(Path.of("locked.txt"), "unix:mode")) + " "
+                          + Integer.toOctalString((Integer) Files.getAttribute(Path.of("links/dangling"), "unix:mode",
+                                  LinkOption.NOFOLLOW_LINKS))
+                          + " " + u.get("nlink") + " " + Files.getAttribute(Path.of("out/own"), "unix:nlink") + " "
+                          + u.get("rdev") + " " + u.get("dev").equals(Files.getAttribute(ro, "unix:dev")) + " "
+                          + u.get("ino").equals(Files.getAttribute(ro, "unix:ino")) + " "
+                          + Files.getAttribute(Path.of("links/f.txt"), "unix:ino").equals(Files.getAttribute(lf, "unix:ino"))
+                          + " " + (u.get("ctime") instanceof FileTime) + " " + (u.get("uid") instanceof Integer) + " "
+                          + (u.get("ino") instanceof Long) + " " + (u.get("dev") instanceof Long) + " "
+                          + (u.get("nlink") instanceof Integer);
+              });
+              show("owner views", () -> {
+                  PosixFileAttributeView posix = Files.getFileAttributeView(x, PosixFileAttributeView.class);
+                  FileOwnerAttributeView owner = Files.getFileAttributeView(x, FileOwnerAttributeView.class);
+                  if (posix == null || owner == null) {
+                      return posix + " " + owner;
+                  }
+                  return posix.name() + " " + owner.name() + " " + posix.getOwner().equals(owner.getOwner()) + " "
+                          + PosixFilePermissions.toString(posix.readAttributes().permissions()) + " "
+                          + (owner instanceof PosixFileAttributeView);
+              });
+              show("owner view of a missing file", () -> {
+                  PosixFileAttributeView posix = Files.getFileAttributeView(Path.of("out/none"), PosixFileAttributeView.class);
+                  return posix == null ? null : posix.readAttributes();
+              });
+              show("owners written", () -> {
+                  Path w = Files.writeString(Path.of("out/own.txt"), "o");
+                  UserPrincipal owner = Files.getOwner(w);
+                  GroupPrincipal group = Files.readAttributes(w, PosixFileAttributes.class).group();
+                  Files.setOwner(w, owner);
+                  Files.setAttribute(w, "posix:group", group);
+                  Files.setAttribute(w, "unix:uid", owner.hashCode());
+                  Files.getFileAttributeView(w, PosixFileAttributeView.class).setGroup(group);
+                  Files.getFileAttributeView(Path.of("links/dangling"), FileOwnerAttributeView.class, LinkOption.NOFOLLOW_LINKS)
+                      .setOwner(owner);
+                  Files.setAttribute(w, "unix:mode", 04640);
+                  String moded = Integer.toOctalString((Integer) Files.getAttribute(w, "unix:mode"));
+                  Files.setAttribute(w, "posix:permissions", PosixFilePermissions.fromString("rw-r--r--"));
+                  return Files.getOwner(w).equals(owner) + " " + moded + " "
+                          + Integer.toOctalString((Integer) Files.getAttribute(w, "unix:mode"));
+              });
+              show("owner a group", () -> Files.setOwner(Path.of("out/own.txt"),
+                      (GroupPrincipal) Files.getAttribute(x, "posix:group")));
+              show("owner null", () -> Files.setOwner(Path.of("out/none"), null));
+              show("owner of a missing file", () -> Files.setAttribute(Path.of("out/none"), "owner:owner", Files.getOwner(x)));
+              show("posix name refused", () -> Files.readAttributes(x, "posix:size,uid"));
+              show("owner name refused", () -> Files.readAttributes(x, "owner:owner,size"));
+              show("unix set refused", () -> Files.setAttribute(x, "unix:ino", 1L));
           }
       }
     stdout: |
@@ -29601,6 +29928,22 @@ standalone:
       made with bits: rw------- rwx------ rwx------
       temporary bits: rw------- rwx------
       copied bits: r-xr-x--- r-xr-x--- s
+      views: true true true true
+      owner: true false false true true true true true
+      owner missing: java.nio.file.NoSuchFileException: out/none
+      view names: [owner, lastAccessTime, lastModifiedTime, size, creationTime, isSymbolicLink, permissions, isRegularFile, fileKey, isOther, isDirectory, group] [owner, lastAccessTime, lastModifiedTime, gid, creationTime, isRegularFile, nlink, fileKey, ino, mode, uid, size, dev, isSymbolicLink, permissions, rdev, ctime, isOther, isDirectory, group] [owner]
+      posix: rwxr-xr-x true true true 9 [OWNER_READ, OWNER_WRITE, OWNER_EXECUTE, GROUP_READ, GROUP_EXECUTE, OTHERS_READ, OTHERS_EXECUTE] 9
+      posix missing: java.nio.file.NoSuchFileException: out/none
+      unix: 100755 40555 100000 120777 1 3 0 true false true true true true true true
+      owner views: posix owner true rwxr-xr-x false
+      owner view of a missing file: java.nio.file.NoSuchFileException: out/none
+      owners written: true 104640 100644
+      owner a group: java.io.IOException: 'owner' parameter can't be a group
+      owner null: java.lang.NullPointerException: 'owner' is null
+      owner of a missing file: java.nio.file.NoSuchFileException: out/none
+      posix name refused: java.lang.IllegalArgumentException: 'uid' not recognized
+      owner name refused: java.lang.IllegalArgumentException: 'owner:size' not recognized
+      unix set refused: java.lang.IllegalArgumentException: 'unix:ino' not recognized
     wasi:
       absolute link: "java.nio.file.AccessDeniedException: links/abs"
       absolute link made: "java.nio.file.AccessDeniedException: out/abs false"
@@ -29611,6 +29954,22 @@ standalone:
       made with bits: "java.lang.UnsupportedOperationException: 'posix:permissions' not supported as initial attribute"
       temporary bits: java.lang.UnsupportedOperationException
       copied bits: java.lang.UnsupportedOperationException
+      views: true false false false
+      owner: java.lang.UnsupportedOperationException
+      owner missing: java.lang.UnsupportedOperationException
+      view names: "java.lang.UnsupportedOperationException: View 'posix' not available"
+      posix: java.lang.UnsupportedOperationException
+      posix missing: java.lang.UnsupportedOperationException
+      unix: "java.lang.UnsupportedOperationException: View 'unix' not available"
+      owner views: null null
+      owner view of a missing file: "null"
+      owners written: java.lang.UnsupportedOperationException
+      owner a group: "java.lang.UnsupportedOperationException: View 'posix' not available"
+      owner null: java.lang.UnsupportedOperationException
+      owner of a missing file: java.lang.UnsupportedOperationException
+      posix name refused: "java.lang.UnsupportedOperationException: View 'posix' not available"
+      owner name refused: "java.lang.UnsupportedOperationException: View 'owner' not available"
+      unix set refused: "java.lang.UnsupportedOperationException: View 'unix' not available"
   # A locale of any language (.kb/java-frontend.md, "A locale of any language"): a tag
   # read as far as it is well-formed, the grandfathered tags and the old codes, the
   # parts made into a locale, the builder's refusals, which makings answer one object;
@@ -31017,3 +31376,11 @@ refused:
     - name: an-enum-overriding-clone
       body: 'enum Single { ONE; public Object clone() { return this; } }'
       error: "clone() in Single cannot override clone() in Enum"
+    # An annotation stands where its type's @Target lets it: on a kind of declaration it
+    # names, in a type where it names TYPE_USE.
+    - name: an-annotation-on-a-kind-of-declaration-its-target-does-not-name
+      body: '@FunctionalInterface int x = 1;'
+      error: "annotation interface not applicable to this kind of declaration"
+    - name: an-annotation-in-a-type-its-target-does-not-name
+      body: 'java.util.List<@Deprecated String> held = null;'
+      error: "annotation @Deprecated not applicable in this type context"

@@ -1793,8 +1793,6 @@ class JavaLoweringTest {
 		String[][] refusals = { { "record P(int... xs) {}", "1:17: a variable arity record component" },
 				{ "import module java.desktop; void main() { }", "1:1: the module java.desktop" },
 				{ "void main() { switch (1L) { default -> { } } }", "1:15: a switch over long" },
-				{ "void main() { IO.println(String.class.getAnnotatedSuperclass()); }",
-						"1:39: Class.getAnnotatedSuperclass()" },
 				{ "class A { strictfp void m() { } } void main() { }", "1:11: the modifier strictfp" },
 				{ "import java.util.concurrent.DelayQueue; void main() { DelayQueue<?> q = null; }",
 						"1:55: the class java.util.concurrent.DelayQueue" },
@@ -2004,6 +2002,11 @@ class JavaLoweringTest {
 				{ "class A { void m(final A this) { } }" + WRONG, "1:26: modifier final not allowed here" },
 				{ "class A { void m(A... this) { } }" + WRONG,
 						"1:27: varargs notation not allowed on receiver parameter" },
+				// a type annotation ahead of a class only scoping a static member, which
+				// javac
+				// refuses: one the language has no type of
+				{ "@java.lang.annotation.Target(java.lang.annotation.ElementType.TYPE_USE) @interface U { } class A { static class N { } @U A.N n; }"
+						+ WRONG, "1:119: type annotation @U is not expected here" },
 				// of the flow, the first problem a compiler reports: a class and the
 				// classes
 				// in it typed first; of each kind its own order -- a local class where it
