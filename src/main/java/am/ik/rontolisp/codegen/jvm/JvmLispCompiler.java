@@ -266,8 +266,9 @@ public final class JvmLispCompiler implements LispCompiler {
 
 	/**
 	 * What a host with permission bits answers beside its stat ({@code %file-access},
-	 * {@code %file-space}, {@code %file-set-mode}, {@code %file-make}), in internal form:
-	 * the class {@code JvmExprCompiler} calls them on, which travels with the output.
+	 * {@code %file-space}, {@code %file-set-mode}, {@code %file-make},
+	 * {@code %file-unix}, {@code %file-set-owner}), in internal form: the class
+	 * {@code JvmExprCompiler} calls them on, which travels with the output.
 	 */
 	static final String FILE_MODES_CLASS = "am/ik/rontolisp/runtime/RontoFileModes";
 
@@ -2841,7 +2842,9 @@ public final class JvmLispCompiler implements LispCompiler {
 		this.needsFileModesRuntime = programUsesSymbol(program, LispNames.FILE_ACCESS_INTERNAL)
 				|| programUsesSymbol(program, LispNames.FILE_SPACE_INTERNAL)
 				|| programUsesSymbol(program, LispNames.FILE_SET_MODE_INTERNAL)
-				|| programUsesSymbol(program, LispNames.FILE_MAKE_INTERNAL);
+				|| programUsesSymbol(program, LispNames.FILE_MAKE_INTERNAL)
+				|| programUsesSymbol(program, LispNames.FILE_UNIX_INTERNAL)
+				|| programUsesSymbol(program, LispNames.FILE_SET_OWNER_INTERNAL);
 		// An equalp table folds its keys through RontoHashTable.equalpKey, and every
 		// table's put/remove/count/values helpers call its tombstone machinery, so that
 		// class travels with any hash-using output -- and with nothing else, since no

@@ -3769,8 +3769,59 @@ interpreter and the JVM answer every line a JDK's but its helpful `NullPointerEx
   194,992 (the bits it gives). New: `getPosixFilePermissions` and `setPosixFilePermissions`
   192,406, `getUsableSpace` 52,690. A `static final` of `Disk` is a global in every program
   reaching the class, so the selectors of `access` and `space` are literals.
-- **Left**: the views by name and their attributes (`posix:*` names an owner and a group,
-  `unix:*` numbers, `PosixFileAttributes`, `getOwner`): `.todo/m27`.
+
+### The owner, posix and unix views (2026-11-26)
+
+Written from the API documentation and JDK 25's answers to probes
+(`.todo/artefacts/m27-owner-posix-unix-views/`, its `README.md`): the interpreter
+and the JVM answer every line a JDK's but the helpful `NullPointerException` and
+`ClassCastException` texts and `fileKey`.
+
+- **Two backends answer, a `.wasm` has no such views** (as the permission bits are): WASI has no
+  owner, `getOwner` / `setOwner` / `readAttributes(p, PosixFileAttributes.class)` are an
+  `UnsupportedOperationException` (no message), the views by name `View 'posix' not
+  available`, `getFileAttributeView` null, `supportedFileAttributeViews` `[basic]`. A JDK's
+  zip file system, its one without the views, says `view <posix> is not supported` and
+  `Attributes of type .. not supported`: provider words, not the default provider's.
+  `dos` and `user` are absent on every backend (`supportedFileAttributeViews` names
+  `[owner, basic, posix, unix]` where a JDK on Linux has `[owner, dos, basic, posix, user, unix]`).
+- **The host layer: two primitives of the interpreter and the JVM only**, beside the four of the permission bits in
+  `RontoFileModes`: `%file-unix path follow names` (the unix view read in one call: `uid gid
+  ino dev rdev nlink ctime mode`, the mode WITH the kind's bits, then the owner's and the
+  group's names where asked) and `%file-set-owner path follow uid gid` (`unix:uid` /
+  `unix:gid`, -1 leaving one). Not `%file-stat`: every file program asks a stat, and the
+  numbers and names are asked only by the programs that name a view (Disk.unix / owners /
+  setOwner). A name is the host JDK's `getpwuid` answer (the number where the user database
+  has none), so no backend reads `/etc/passwd`. Why 5 is `EPERM` (`FileSystemException: f:
+  Operation not permitted`, a chown or a chmod of another's file).
+- **What a JDK does, measured**: a principal's hash is its uid or gid, it equals one of the same
+  kind and number (an owner never its group of the same number), `toString` and `getName`
+  the name. `setOwner` refuses null (`NullPointerException: 'owner' is null`, `setGroup` too),
+  then a principal of another class (`ProviderMismatchException`), then a group
+  (`IOException: 'owner' parameter can't be a group`), then the path. chmod follows a link
+  even with `NOFOLLOW_LINKS` (Linux has no lchmod; a dangling link `NoSuchFileException`);
+  chown with it is lchown. `posix:permissions` and the view's `setPermissions` give the nine
+  bits (07000 cleared), `unix:mode` all 07777. Names refused: `'uid' not recognized` for the
+  basic, posix and unix views, `'owner:size' not recognized` for the owner view and every
+  `setAttribute` (`'unix:ino'`). The owner view's map is a plain `HashMap` (a JDK's: `put`
+  works), the others unmodifiable. The maps' iteration is a `HashMap` filled in the order
+  basic, `permissions owner group`, `mode ino dev rdev nlink uid gid ctime`: 3000 random name
+  sets of the three views against a JDK, no difference.
+- **`fileKey` stays null**: a JDK's is `(dev=<hex>,ino=<decimal>)`, its hash `(int) (dev +
+  ino)` (measured with `/proc/self/ns/net`, ino 4026531840); `.todo/m56`.
+- **Measured** (wasm bytes; the artefacts' `sizes/`): byte-identical (wasm, component,
+  class): a program of no file, one of collections, `examples/java/shop`, one reading and
+  writing through `Files`, one of `java.io.File`, a Lisp program of files. The slots of
+  `Disk.unix` and EPERM's why live in `Files.Unix`: as `Disk` static finals they cost every
+  file program 79-87 B of wasm and 2,092 B of class. `getPosixFilePermissions` and
+  `setPosixFilePermissions` 256,381 -> 256,397; with the basic view by name too 329,595 ->
+  343,110 (the views' own code); the basic view by name alone 268,969 -> 340,630, the
+  `EnumSet` a `posix:permissions` value is making the program reach `getEnumConstants`, so
+  every enum's `values()` (`.todo/m57`). `getOwner` alone 175,843.
+- **Pinned by** java-spec
+  `a-program-makes-reads-copies-moves-lists-and-is-refused-its-files-through-java-nio-file`
+  (`views` .. `unix set refused`, each with its `wasi:` line). EPERM and a foreign principal are
+  probes only: the legs run as whoever runs the test.
 
 ### deleteOnExit and shutdown hooks (2026-11-25, l69)
 

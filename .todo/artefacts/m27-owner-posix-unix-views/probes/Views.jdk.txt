@@ -1,0 +1,55 @@
+posix keys: [owner, lastAccessTime, lastModifiedTime, size, creationTime, isSymbolicLink, permissions, isRegularFile, fileKey, isOther, isDirectory, group] java.util.Collections$UnmodifiableMap <java.lang.String>
+posix types: owner=sun.nio.fs.UnixUserPrincipals$User lastAccessTime=java.nio.file.attribute.FileTime lastModifiedTime=java.nio.file.attribute.FileTime size=java.lang.Long creationTime=java.nio.file.attribute.FileTime isSymbolicLink=java.lang.Boolean permissions=java.util.RegularEnumSet isRegularFile=java.lang.Boolean fileKey=sun.nio.fs.UnixFileKey isOther=java.lang.Boolean isDirectory=java.lang.Boolean group=sun.nio.fs.UnixUserPrincipals$Group  <java.lang.String>
+unix keys: [owner, lastAccessTime, lastModifiedTime, gid, creationTime, isRegularFile, nlink, fileKey, ino, mode, uid, size, dev, isSymbolicLink, permissions, rdev, ctime, isOther, isDirectory, group] <java.util.Collections$UnmodifiableSet>
+unix types: owner=sun.nio.fs.UnixUserPrincipals$User lastAccessTime=java.nio.file.attribute.FileTime lastModifiedTime=java.nio.file.attribute.FileTime gid=java.lang.Integer creationTime=java.nio.file.attribute.FileTime isRegularFile=java.lang.Boolean nlink=java.lang.Integer fileKey=sun.nio.fs.UnixFileKey ino=java.lang.Long mode=java.lang.Integer uid=java.lang.Integer size=java.lang.Long dev=java.lang.Long isSymbolicLink=java.lang.Boolean permissions=java.util.RegularEnumSet rdev=java.lang.Long ctime=java.nio.file.attribute.FileTime isOther=java.lang.Boolean isDirectory=java.lang.Boolean group=sun.nio.fs.UnixUserPrincipals$Group  <java.lang.String>
+owner keys: {owner=<user>} <java.util.HashMap>
+posix map: {owner=<user>, lastAccessTime=2026-11-26T05:32:03.637472024Z, lastModifiedTime=2026-11-26T05:32:03.637472024Z, size=2, creationTime=2026-11-26T05:32:03.637472024Z, isSymbolicLink=false, permissions=[OWNER_READ, OWNER_WRITE, GROUP_READ, OTHERS_READ], isRegularFile=true, fileKey=(dev=803,ino=3989832), isOther=false, isDirectory=false, group=<user>} <java.util.Collections$UnmodifiableMap>
+unix map: {owner=<user>, lastAccessTime=2026-11-26T05:32:03.637472024Z, lastModifiedTime=2026-11-26T05:32:03.637472024Z, gid=1000, creationTime=2026-11-26T05:32:03.637472024Z, isRegularFile=true, nlink=1, fileKey=(dev=803,ino=3989832), ino=3989832, mode=33188, uid=1000, size=2, dev=2051, isSymbolicLink=false, permissions=[OWNER_READ, OWNER_WRITE, GROUP_READ, OTHERS_READ], rdev=0, ctime=2026-11-26T05:32:03.637472024Z, isOther=false, isDirectory=false, group=<user>} <java.util.Collections$UnmodifiableMap>
+posix named: {owner=<user>, size=2, permissions=[OWNER_READ, OWNER_WRITE, GROUP_READ, OTHERS_READ]} <java.util.Collections$UnmodifiableMap>
+posix named2: {owner=<user>, group=<user>} <java.util.Collections$UnmodifiableMap>
+unix named: {mode=33188, uid=1000, gid=1000, nlink=1, ino=3989832} <java.util.Collections$UnmodifiableMap>
+unix basic+posix: {owner=<user>, size=2, dev=2051, permissions=[OWNER_READ, OWNER_WRITE, GROUP_READ, OTHERS_READ], rdev=0, ctime=2026-11-26T05:32:03.637472024Z} <java.util.Collections$UnmodifiableMap>
+unix nlink dir: 3 <java.lang.Integer>
+unix mode: 100644 <java.lang.String>
+unix mode dir: 40755 <java.lang.String>
+unix rdev: 0 <java.lang.Long>
+unix dev: 2051 <java.lang.Long>
+unix ino: 3989832 <java.lang.Long>
+unix uid: 1000 <java.lang.Integer>
+unix gid: 1000 <java.lang.Integer>
+unix ctime: 2026-11-26T05:32:03.637472024Z <java.nio.file.attribute.FileTime>
+posix owner: <user> <sun.nio.fs.UnixUserPrincipals$User>
+posix group: <user> <sun.nio.fs.UnixUserPrincipals$Group>
+owner owner: <user> <sun.nio.fs.UnixUserPrincipals$User>
+posix perms: [OWNER_READ, OWNER_WRITE, GROUP_READ, OTHERS_READ] <java.util.RegularEnumSet>
+fileKey: (dev=803,ino=3989832) <sun.nio.fs.UnixFileKey>
+unix fileKey: (dev=803,ino=3989832) <sun.nio.fs.UnixFileKey>
+posix bad: java.lang.IllegalArgumentException: 'foo' not recognized
+posix bad2: java.lang.IllegalArgumentException: 'uid' not recognized
+owner bad: java.lang.IllegalArgumentException: 'owner:size' not recognized
+unix bad: java.lang.IllegalArgumentException: 'foo' not recognized
+owner bad get: java.lang.IllegalArgumentException: 'owner:group' not recognized
+dos: [lastAccessTime, lastModifiedTime, creationTime, hidden, isRegularFile, fileKey, archive, system, size, readonly, isSymbolicLink, isOther, isDirectory] <java.util.Collections$UnmodifiableSet>
+user: {} <java.util.HashMap>
+posix missing: java.nio.file.NoSuchFileException: none
+posix missing bad name: java.lang.IllegalArgumentException: 'foo' not recognized
+getOwner: <user> <sun.nio.fs.UnixUserPrincipals$User>
+getOwner missing: java.nio.file.NoSuchFileException: none
+owner name: <user> <java.lang.String>
+owner eq: true true <java.lang.String>
+owner hash: 1000 -652229939 1000 <java.lang.String>
+group hash: 1000 -652229939 1000 <java.lang.String>
+owner vs group: false false <java.lang.String>
+group is user: true false <java.lang.String>
+root owner: root root <java.lang.String>
+pfa: <user> <user> rw-r--r-- 2 true (dev=803,ino=3989832) sun.nio.fs.UnixFileAttributes <java.lang.String>
+pfa missing: java.nio.file.NoSuchFileException: none
+dosattrs: sun.nio.fs.LinuxDosFileAttributeView$1@2766ca9d <sun.nio.fs.LinuxDosFileAttributeView$1>
+view posix: posix <user> <user> sun.nio.fs.UnixFileAttributeViews$Posix <java.lang.String>
+view owner: owner <user> sun.nio.fs.FileOwnerAttributeViewImpl <java.lang.String>
+view missing: java.nio.file.NoSuchFileException: none
+view owner missing: java.nio.file.NoSuchFileException: none
+view dos: sun.nio.fs.LinuxDosFileAttributeView@b7c4869 <sun.nio.fs.LinuxDosFileAttributeView>
+view user: sun.nio.fs.LinuxUserDefinedFileAttributeView@1c481ff2 <sun.nio.fs.LinuxUserDefinedFileAttributeView>
+views: [owner, dos, basic, posix, user, unix] java.util.Collections$UnmodifiableSet <java.lang.String>
+views2: true <java.lang.Boolean>

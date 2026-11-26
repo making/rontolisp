@@ -4,10 +4,17 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
+import java.util.TreeMap;
 
 import am.ik.rontolisp.compiler.OptimizeLevel;
 import am.ik.rontolisp.reader.LispReader;
+import am.ik.wit.WitItem;
+import am.ik.wit.WitParser;
+import am.ik.wit.WitResolver;
+import am.ik.wit.WitType;
+import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIf;
 import org.junit.jupiter.api.io.TempDir;
@@ -221,47 +228,108 @@ class WitOracleE2eTest {
 	}
 
 	@Test
-	void socketsWorldReParsesAndCarriesItsWasiSocketsImport() {
-		// The rontolisp:tcp-* built-ins are the sockets.lisp library over a
-		// canon-lowered wasi:sockets USER import now (the dedicated sockets blob
-		// variant is gone), so like fetch its world is emitted by the user-import
-		// emitter and checked structurally + by re-parsing rather than byte-for-byte
-		// against wasm-tools (see the fetch test's rationale).
-		WasmLispCompiler sock = WasmLispCompiler.builder().component(true).build();
-		sock.compile(am.ik.rontolisp.eval.WitLibrary.process(am.ik.rontolisp.eval.StdinLibrary.process(
-				am.ik.rontolisp.eval.SocketsLibrary.process(
-						LispReader.readAllFromString("(close (rontolisp:tcp-listen 7777))"),
-						am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT),
-				am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT, false)));
-		String wit = Objects.requireNonNull(sock.componentWit());
-		assertThat(wit).contains("import wasi:sockets/types@0.3.0;");
-		assertThat(am.ik.wit.WitParser.parse(wit)).isNotNull();
+	void aUserImportsWorldDescribesTheTypeTheComponentCarries() throws Exception {
+		// rontolisp:fetch, rontolisp:tcp-* and rontolisp:tls-* are libraries over
+		// canon-lowered USER imports of wasi:http, wasi:sockets and wasi:tls, so their
+		// world is printed by the user-import emitter, which deliberately keeps type
+		// aliases (`type headers = fields`) and fully-qualified `use` clauses where the
+		// tool expands, abbreviates or inlines them. So the pin is the type, not the
+		// text: every interface
+		// declares the same functions with the same expanded types as the tool reads
+		// out of the bytes -- the async-lowered ones (`send`, `connect`,
+		// `resolve-addresses`) included, and every name the text uses defined. The last
+		// program imports `ops` alone: the `point` it uses is defined in place, as the
+		// component declares it, not `use`d from an interface the world lacks.
+		Files.writeString(this.tempDir.resolve("pair.wit"), """
+				package docs:pair@0.1.0;
+
+				interface shapes {
+				    record point { x: s32, y: s32 }
+				}
+
+				interface ops {
+				    use shapes.{point};
+				    norm: func(p: point) -> s32;
+				}
+				""");
+		for (String program : List.of("(print (rontolisp:fetch \"http://127.0.0.1:9/\"))",
+				"(close (rontolisp:tls-connect \"example.com\" 443))", """
+						(rontolisp:wit-import "pair.wit" :interface "docs:pair/ops@0.1.0" :package ops)
+						(print (ops:norm '(:x 1 :y 2)))
+						""")) {
+			byte[] component = compileViaCli(program);
+			String wit = Files.readString(this.tempDir.resolve("prog.wit"));
+			assertThat(surface(wit)).as(program).isEqualTo(surface(oracle(component)));
+			if (program.contains("tls")) {
+				// a resource no bound function is a member of prints as the tool does
+				assertThat(wit).contains("    resource error;\n");
+			}
+		}
 	}
 
-	@Test
-	void fetchWorldReParsesAndCarriesItsWasiHttpImports() {
-		// rontolisp:fetch is now the fetch.lisp library over canon-lowered wasi:http USER
-		// imports, so its world is emitted by the cross-interface user-import emitter,
-		// which
-		// deliberately keeps the WIT structure that lets it re-parse -- type aliases
-		// (`type headers = fields`), fully-qualified `use` clauses. `wasm-tools component
-		// wit` expands the aliases and abbreviates the `use`s when it prints a
-		// component's
-		// raw type, so the two are semantically equal but not byte-identical. Only the
-		// fixed
-		// blob variants (the sockets test above, WasiWitDefinitionsTest) are pinned to
-		// wasm-tools byte-for-byte; the user-import side is checked structurally and by
-		// re-parsing, which is the property that actually has to hold.
-		WasmLispCompiler http = WasmLispCompiler.builder().component(true).build();
-		http.compile(am.ik.rontolisp.eval.WitLibrary.process(am.ik.rontolisp.eval.HttpLibrary.process(
-				LispReader.readAllFromString("(print (rontolisp:fetch \"http://127.0.0.1:9/\"))"),
-				am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT, false)));
-		String wit = Objects.requireNonNull(http.componentWit());
-		assertThat(wit).contains("import wasi:http/types@0.3.0;").contains("import wasi:http/client@0.3.0;");
-		// It re-parses through our own parser -- the deliberate deviation from wasm-tools
-		// is
-		// that ours stays consumable.
-		assertThat(am.ik.wit.WitParser.parse(wit)).isNotNull();
+	// Each interface's functions -> their signatures with every type expanded to its
+	// structure (a resource by its defining interface and name). Throws on a name the
+	// document does not define.
+	private static Map<String, Map<String, String>> surface(String wit) {
+		WitResolver resolver = new WitResolver(WitParser.parse(wit));
+		Map<String, Map<String, String>> surface = new TreeMap<>();
+		for (String id : resolver.interfaceIds()) {
+			WitItem.InterfaceDef iface = Objects.requireNonNull(resolver.findInterface(id));
+			WitCanonicalAbi abi = new WitCanonicalAbi(resolver, iface);
+			Map<String, String> funcs = new TreeMap<>();
+			for (WitResolver.Func func : WitResolver.functions(iface)) {
+				StringBuilder sig = new StringBuilder(func.def().func().async() ? "async (" : "(");
+				for (var param : func.def().func().params()) {
+					sig.append(param.name()).append(": ").append(expand(abi, param.type())).append(", ");
+				}
+				sig.append(") -> ").append(expand(abi, abi.resultType(func)));
+				funcs.put(func.def().kind() + " " + func.resource() + "." + func.def().name(), sig.toString());
+			}
+			surface.put(id, funcs);
+		}
+		return surface;
+	}
+
+	private static String expand(WitCanonicalAbi abi, @Nullable WitType type) {
+		return switch (type) {
+			case null -> "_";
+			case WitType.Prim prim -> prim.name();
+			case WitType.ListOf list -> "list<" + expand(abi, list.element()) + ">";
+			case WitType.OptionOf opt -> "option<" + expand(abi, opt.element()) + ">";
+			case WitType.ResultOf res -> "result<" + expand(abi, res.ok()) + ", " + expand(abi, res.err()) + ">";
+			case WitType.TupleOf tuple ->
+				"tuple<" + String.join(", ", tuple.elements().stream().map(e -> expand(abi, e)).toList()) + ">";
+			case WitType.StreamOf stream -> "stream<" + expand(abi, stream.element()) + ">";
+			case WitType.FutureOf future -> "future<" + expand(abi, future.element()) + ">";
+			case WitType.BorrowOf borrow -> "borrow<" + resource(abi, borrow.resource()) + ">";
+			case WitType.OwnOf own -> "own<" + resource(abi, own.resource()) + ">";
+			case WitType.Named named -> {
+				WitResolver.Owned owned = abi.resolveOwned(named);
+				WitCanonicalAbi in = abi.scopedTo(owned.owner());
+				yield switch (owned.item()) {
+					case WitItem.TypeAlias alias -> expand(in, alias.target());
+					case WitItem.ResourceDef ignored -> "own<" + resource(abi, named.name()) + ">";
+					case WitItem.RecordDef record -> "record{"
+							+ String.join(", ",
+									record.fields().stream().map(f -> f.name() + ": " + expand(in, f.type())).toList())
+							+ "}";
+					case WitItem.VariantDef variant -> "variant{" + String.join(", ",
+							variant.cases().stream().map(c -> c.name() + "(" + expand(in, c.payload()) + ")").toList())
+							+ "}";
+					case WitItem.EnumDef en ->
+						"enum{" + String.join(", ", en.cases().stream().map(WitItem.Case::name).toList()) + "}";
+					case WitItem.FlagsDef flags ->
+						"flags{" + String.join(", ", flags.cases().stream().map(WitItem.Case::name).toList()) + "}";
+					default -> throw new IllegalStateException("not a type: " + owned.item());
+				};
+			}
+		};
+	}
+
+	private static String resource(WitCanonicalAbi abi, String name) {
+		WitResolver.Owned owned = abi.resolveOwned(new WitType.Named(name));
+		return Objects.requireNonNull(abi.resolver().canonicalId(owned.owner())) + "#"
+				+ WitComponentTypeEncoder.definedNameOf(owned.item());
 	}
 
 	@Test

@@ -2418,6 +2418,9 @@ final class JavaIntrinsics {
 		natives.put(disk + "space(String,int)", runtime("file-space"));
 		natives.put(disk + "setMode(String,int)", runtime("file-set-mode"));
 		natives.put(disk + "make(String,int,boolean)", runtime("file-make"));
+		natives.put(disk + "unix(String,boolean)", runtime("file-unix"));
+		natives.put(disk + "owners(String,boolean)", runtime("file-owners"));
+		natives.put(disk + "setOwner(String,boolean,int,int)", runtime("file-set-owner"));
 		natives.put(disk + "open(String,int)", runtime("file-open"));
 		natives.put(disk + "read(Object)", runtime("file-read-byte"));
 		natives.put(disk + "read(Object,byte[],int,int)", runtime("file-read"));

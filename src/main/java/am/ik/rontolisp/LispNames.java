@@ -5513,6 +5513,29 @@ public final class LispNames {
 	public static final String FILE_MAKE_INTERNAL = "%FILE-MAKE";
 
 	/**
+	 * The {@code %file-unix} internal primitive: takes a namestring, whether to follow a
+	 * symbolic link in its last component and whether the owner and the group are named,
+	 * and answers what the host's {@code stat} (or {@code lstat}) says of it beyond
+	 * {@link #FILE_STAT_INTERNAL}'s -- the list {@code (uid gid ino dev rdev nlink ctime
+	 * mode)}, the time its status last changed in nanoseconds since 1970 and the mode
+	 * with the bits of its kind, then the names of its owner and its group where asked
+	 * (the host's user database's, the number where it has none). Where it cannot say,
+	 * {@link #FILE_STAT_INTERNAL}'s fixnum of why. Interpreter and JVM only, as
+	 * {@link #FILE_ACCESS_INTERNAL} is. Never signalling.
+	 */
+	public static final String FILE_UNIX_INTERNAL = "%FILE-UNIX";
+
+	/**
+	 * The {@code %file-set-owner} internal primitive: takes a namestring, whether to
+	 * follow a symbolic link in its last component, and the numbers of the owner and the
+	 * group to give it ({@code chown}, -1 leaving one); answers 0, or
+	 * {@link #FILE_STAT_INTERNAL}'s fixnum of why not, 5 where the host does not allow it
+	 * ({@code EPERM}). Interpreter and JVM only, as {@link #FILE_ACCESS_INTERNAL} is.
+	 * Never signalling.
+	 */
+	public static final String FILE_SET_OWNER_INTERNAL = "%FILE-SET-OWNER";
+
+	/**
 	 * The {@code %terminal-p} internal primitive: takes a process standard stream's
 	 * descriptor (0, 1 or 2) and answers whether it is a terminal -- {@code isatty} on
 	 * the interpreter and the JVM, a character device by WASI's {@code fd_fdstat_get} on

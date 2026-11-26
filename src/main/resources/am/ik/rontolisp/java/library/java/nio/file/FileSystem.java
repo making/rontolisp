@@ -5,6 +5,7 @@ package java.nio.file;
 
 import java.io.Closeable;
 import java.io.IOException;
+import java.util.Set;
 
 // A file system: the subset has the host's alone (rontolisp.internal.LocalFileSystem),
 // and no provider of another (FileSystems.newFileSystem finds none).
@@ -24,6 +25,8 @@ public abstract class FileSystem implements Closeable {
     public abstract Path getPath(String first, String... more);
 
     public abstract PathMatcher getPathMatcher(String syntaxAndPattern);
+
+    public abstract Set<String> supportedFileAttributeViews();
 
     public abstract void close() throws IOException;
 }

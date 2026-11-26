@@ -1,0 +1,22 @@
+setOwner null missing: java.lang.NullPointerException: 'owner' is null
+setOwner group missing: java.io.IOException: 'owner' parameter can't be a group
+set posix:owner group missing: java.io.IOException: 'owner' parameter can't be a group
+set posix:group user missing: java.lang.ClassCastException: class sun.nio.fs.UnixUserPrincipals$User cannot be cast to class java.nio.file.attribute.GroupPrincipal (sun.nio.fs.UnixUserPrincipals$User and java.nio.file.attribute.GroupPrincipal are in module java.base of loader 'bootstrap')
+set unix:uid long missing: java.lang.ClassCastException: class java.lang.Long cannot be cast to class java.lang.Integer (java.lang.Long and java.lang.Integer are in module java.base of loader 'bootstrap')
+set unix:mode long missing: java.lang.ClassCastException: class java.lang.Long cannot be cast to class java.lang.Integer (java.lang.Long and java.lang.Integer are in module java.base of loader 'bootstrap')
+set perms bad missing: java.lang.ClassCastException: class java.lang.String cannot be cast to class java.util.Set (java.lang.String and java.util.Set are in module java.base of loader 'bootstrap')
+view setGroup missing: java.nio.file.NoSuchFileException: none
+view setPerms missing: java.nio.file.NoSuchFileException: none
+view setPerms null missing: java.lang.NullPointerException: Cannot invoke "java.util.Set.iterator()" because "perms" is null
+view getOwner missing: java.nio.file.NoSuchFileException: none
+getOwner null: java.lang.NullPointerException: Cannot invoke "java.nio.file.Path.getFileSystem()" because "path" is null
+getOwner null option: java.lang.NullPointerException
+perm set wrong element: java.lang.ClassCastException: class java.lang.String cannot be cast to class java.nio.file.attribute.PosixFilePermission (java.lang.String and java.nio.file.attribute.PosixFilePermission are in module java.base of loader 'bootstrap')
+perm set null element: java.lang.NullPointerException
+owner setOwner of view on group: java.io.IOException: 'owner' parameter can't be a group
+owner hash eq: 1000 1000 true false false
+views set order: [owner, basic, posix, unix] [owner, dos, basic, posix, user, unix]
+unix map keys order basic: [lastAccessTime, lastModifiedTime, size, creationTime, isSymbolicLink, isRegularFile, fileKey, isOther, isDirectory]
+proc ns key: (dev=4,ino=4026531840) -268435452 4026531840 4
+dev null: {mode=8630, dev=5, rdev=259, nlink=1, isOther=true}
+nobody: {owner=root, group=root}
