@@ -133,7 +133,7 @@ public final class JavaHostBoundary implements JavaBoundary {
 				params.add(new Param(param.name(), Objects.requireNonNull(type(param.shape()))));
 			}
 			exports.add(new Export(export.name(), export.iface(), export.key(), List.copyOf(params),
-					type(export.result()), export.async(), export.at()));
+					type(export.result()), export.async(), export.at(), export.canonical()));
 		}
 		return new WitWorld(described.name(), source.path(), List.copyOf(exports));
 	}

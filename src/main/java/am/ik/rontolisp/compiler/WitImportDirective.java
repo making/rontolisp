@@ -1172,7 +1172,7 @@ public final class WitImportDirective {
 	// interpreter and the JVM, so the member is the front end's to refuse where a program
 	// calls it, never the whole interface's. `path` holds the definitions being
 	// described.
-	private static WitTypeMapper.Shape shapeOf(WitType type, WitResolver resolver, WitItem.InterfaceDef iface,
+	static WitTypeMapper.Shape shapeOf(WitType type, WitResolver resolver, WitItem.InterfaceDef iface,
 			List<WitItem> path) {
 		Scoped scoped = resolveAliases(type, resolver, iface);
 		WitType t = scoped.type();

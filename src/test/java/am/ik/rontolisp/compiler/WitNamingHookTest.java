@@ -353,13 +353,31 @@ class WitNamingHookTest {
 				  export run: func();
 				}
 				""", "w.wit")).hasMessageContaining("w.wit:3: export 'run' collides with the component's wasi:cli/run");
-		assertThatThrownBy(() -> WitExportDirective.describe(new WitExportDirective.Directive("w.wit", null), """
+		// a type outside the flat set is described whole, its export marked as one the
+		// canonical ABI carries; what no export carries is refused in lower's words
+		String compound = """
 				package local:w;
 				world w {
-				  export pts: func() -> list<s32>;
+				  record point { x: s32, y: s32 }
+				  flags marks { seen }
+				  export pts: func(n: u32) -> list<point>;
+				  export %s;
 				}
-				""", "w.wit"))
-			.hasMessageContaining("w.wit:3: export 'pts': the WIT type of the result is not supported");
+				""";
+		List<WitExportDirective.Export> exports = WitExportDirective
+			.describe(new WitExportDirective.Directive("w.wit", null), compound.formatted("size: func() -> u32"),
+					"w.wit")
+			.exports();
+		assertThat(exports.stream().map(WitExportDirective.Export::canonical)).containsExactly(true, false);
+		WitTypeMapper.Shape points = shape(exports.get(0).result());
+		assertThat(points.rep()).isEqualTo(WitTypeMapper.Rep.LIST);
+		assertThat(shape(points.element()).definition()).isEqualTo("point");
+		assertThat(shape(points.element()).parts().stream().map(WitTypeMapper.Part::label)).containsExactly("x", "y");
+		assertThat(exports.get(0).params().get(0).shape().definition()).isEqualTo("u32");
+		assertThatThrownBy(() -> WitExportDirective.describe(new WitExportDirective.Directive("w.wit", null),
+				compound.formatted("seen: func() -> option<marks>"), "w.wit"))
+			.hasMessageContaining("w.wit:6: export 'seen': the WIT type of the result holds the flags 'marks', which "
+					+ "an export does not carry");
 		assertThatThrownBy(() -> WitExportDirective.describe(new WitExportDirective.Directive("w.wit", null), """
 				package local:w;
 				world w {

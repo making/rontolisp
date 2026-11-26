@@ -1078,6 +1078,17 @@ class ClojureWitBoundaryTest {
 		String head = "(ns app (:require [rontolisp.wit :as wit] [rontolisp.wasm :as wasm]))\n";
 		assertRefused(head + "(wit/export \"async.wit\")",
 				"fetch is an async func export, which the Clojure tier does not implement yet (async.wit:4)");
+		// a world the directive describes whole, which the tier converts no value of yet
+		write("points.wit", """
+				package local:points;
+
+				world points {
+				  export squares: func(n: u32) -> list<u32>;
+				}
+				""");
+		assertRefused(head + "(wit/export \"points.wit\")", "points.wit:4: export 'squares' carries a WIT type the "
+				+ "Clojure tier's export boundary does not support yet (supported: s8, s16, s32, s64, u8, u16, u32, "
+				+ "u64, f64, bool, string)");
 		assertRefused(head + "(defn f [] 1)\n(wasm/export f {})\n(wit/export \"greeter.wit\")",
 				"rontolisp.wasm/export cannot be combined with rontolisp.wit/export");
 	}

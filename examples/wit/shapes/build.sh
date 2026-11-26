@@ -7,14 +7,18 @@
 # (cargo install wac-cli) and wasmtime 46+.
 #
 #   RONTOLISP=../../../target/rontolisp ./build.sh
+#   RONTOLISP=../../../target/rontolisp SHAPES=Shapes.java ./build.sh
 #
 set -euo pipefail
 cd "$(dirname "$0")"
 
 RONTOLISP="${RONTOLISP:-rontolisp}"
+# The file implementing the world: shapes.lisp, or Shapes.java.
+SHAPES="${SHAPES:-shapes.lisp}"
 
 echo "== 1. the component that exports the world (a reactor) =="
-"$RONTOLISP" shapes.lisp -o shapes.wasm --component
+"$RONTOLISP" "$SHAPES" --java-source-path ../../../rontolisp-java-api/src/main/java \
+  -o shapes.wasm --component
 
 echo "== 2. the command that imports its interface =="
 "$RONTOLISP" app.lisp -o app.wasm --component

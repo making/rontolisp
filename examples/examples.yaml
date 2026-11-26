@@ -1309,6 +1309,16 @@ examples:
       by type imports); jvm-compile that the same contract check runs on a backend
       exporting nothing. Host-invoked (wasmtime run --invoke 'flip({x: 1, y: 2})'),
       so the harness only compiles
+  - path: wit/shapes/Shapes.java
+    backends: [wasm-component]
+    javaSourcePath: rontolisp-java-api/src/main/java
+    note: >-
+      the same world in Java: a class annotated @WitExport (rontolisp-java-api)
+      whose member class Geometry is the interface, its records, enum and sealed
+      interface the WIT's record, enum and variant. wasm-component pins that the
+      world lowers through the canonical ABI with the conversions the front end
+      writes around each method; no main, so the interpreter and the JVM refuse it.
+      Composed with app.wasm it prints app.lisp's lines (WitOracleE2eTest)
   - path: wit/shapes/app.lisp
     backends: [interpreter, jvm, wasm-component]
     note: >-

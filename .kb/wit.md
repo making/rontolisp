@@ -196,9 +196,17 @@ LOWERED as an import's argument is, by the one generator (`WasmComponentImportCo
 - **Refused at the WIT line** (`requireCanonical`): flags, a resource handle, a stream, a future,
   a type of another interface (`use`), a compound type in an `async func`; `--no-gc`, which has
   no value a record could be (no cons); a core module (Preview 1, `--no-wasi`), in the compiler,
-  which knows the output's shape (`.todo/m79`). `describe` (the Java and Clojure front ends) still
-  answers the flat set alone (`.todo/m80`, `.todo/m81`). The refused types and the hosts not
-  measured: `.todo/m82`.
+  which knows the output's shape (`.todo/m79`). `describe` makes every refusal here but the
+  backend's (it is given none). The refused types and the hosts not measured: `.todo/m82`.
+- **`:envelope t`** (a front end's, like `:names`): each function answers a top-level `result`'s
+  envelope itself and no `<f>%wit-export` is written. The Java lowering's (its wrappers convert a
+  `WitResult` or catch a `WitException`; `.kb/java-frontend.md`, "WIT exports"). Rejected: a
+  condition the defun maps (wit.lisp spliced and a signal made only to be caught one frame up).
+- **A `u64` RESULT past 2^63 - 1 is not exact-or-trap** (measured 2026-11-26, wasmtime 51, flat
+  and canonical alike): the house integer is a float there, so `2^63 + 1` answers
+  9223372036854775808 and `2^64 - 1` traps; a NEGATIVE integer traps flat, and in a canonical
+  compound value (a list's element, a record's field) crosses as its 64 bits (-1 ->
+  18446744073709551615). A `u32` of -1 traps in both.
 - `:octets t` on the directive: a `list<u8>` parameter is the `(unsigned-byte 8)` vector, not
   text. A `list<u8>` answered is a string or a packed vector, anything else traps (`reverse` of a
   packed vector is a general one).
@@ -386,7 +394,9 @@ the Lisp side only.
   `:as "label"`.
 - **`describe`** (`WitImportDirective.describe`, `WitExportDirective.describe`): the members / exports
   each typed as a `WitTypeMapper.Shape` with its line, after the same checks as `lower` but before
-  any program exists, so a front end binds its names first. A shape is the whole type, aliases
+  any program exists, so a front end binds its names first. An export says whether it is
+  `canonical` (a type outside the flat set), by the test `lower` chooses the form with; the
+  Clojure boundary refuses such a one until its tier converts (`.todo/m81`). A shape is the whole type, aliases
   followed and nested types resolved in the interface that writes them (`use` crossed). A NESTED
   type naming no definition, or a self-containing one, describes as `UNSUPPORTED` (the
   interpreter's `lower` never looks inside a record, so only the member reaching it is the front
