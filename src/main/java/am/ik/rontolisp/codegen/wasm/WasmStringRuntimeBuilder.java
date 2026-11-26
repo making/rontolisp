@@ -4284,83 +4284,7 @@ final class WasmStringRuntimeBuilder {
 		// The two landing pads: br 2 out of the loop is "valid", br 1 is "not UTF-8".
 		w.write(Instruction.BLOCK, 0x40); // A: valid
 		w.write(Instruction.BLOCK, 0x40); // B: invalid
-		w.write(Instruction.LOOP, 0x40);
-		get(w, i);
-		get(w, n);
-		w.write(Instruction.I32_GE_U);
-		w.write(Instruction.BR_IF, 2);
-		get(w, arr);
-		get(w, i);
-		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET_U);
-		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_I8ARR);
-		set(w, b);
-		// k = continuation-byte count; lo/hi = the range the FIRST one must be in.
-		i32(w, 0);
-		set(w, k);
-		i32(w, 0x80);
-		set(w, lo);
-		i32(w, 0xBF);
-		set(w, hi);
-		get(w, b);
-		i32(w, 0x80);
-		w.write(Instruction.I32_GE_U);
-		w.write(Instruction.IF, 0x40);
-		// 80..C1 leads nothing (a stray continuation byte, or an overlong 2-byte form)
-		// and F5.. is past U+10FFFF.
-		get(w, b);
-		i32(w, 0xC2);
-		w.write(Instruction.I32_LT_U);
-		w.write(Instruction.BR_IF, 2);
-		get(w, b);
-		i32(w, 0xF5);
-		w.write(Instruction.I32_GE_U);
-		w.write(Instruction.BR_IF, 2);
-		get(w, b);
-		i32(w, 0xE0);
-		w.write(Instruction.I32_GE_U);
-		get(w, b);
-		i32(w, 0xF0);
-		w.write(Instruction.I32_GE_U);
-		w.write(Instruction.I32_ADD);
-		i32(w, 1);
-		w.write(Instruction.I32_ADD);
-		set(w, k);
-		emitFirstContinuationBound(w, b, 0xE0, lo, 0xA0);
-		emitFirstContinuationBound(w, b, 0xED, hi, 0x9F);
-		emitFirstContinuationBound(w, b, 0xF0, lo, 0x90);
-		emitFirstContinuationBound(w, b, 0xF4, hi, 0x8F);
-		w.write(Instruction.END);
-		// A sequence the vector truncates is not valid UTF-8 either.
-		get(w, i);
-		get(w, k);
-		w.write(Instruction.I32_ADD);
-		get(w, n);
-		w.write(Instruction.I32_GE_U);
-		w.write(Instruction.BR_IF, 1);
-		// The first continuation carries the range that rules out an overlong form, a
-		// surrogate and the past-U+10FFFF tail; the rest only have to be 10xxxxxx.
-		get(w, k);
-		w.write(Instruction.IF, 0x40);
-		emitContinuationByte(w, arr, i, 1, c);
-		get(w, c);
-		get(w, lo);
-		w.write(Instruction.I32_LT_U);
-		w.write(Instruction.BR_IF, 2);
-		get(w, c);
-		get(w, hi);
-		w.write(Instruction.I32_GT_U);
-		w.write(Instruction.BR_IF, 2);
-		w.write(Instruction.END);
-		emitTrailingContinuation(w, arr, i, k, c, 2);
-		emitTrailingContinuation(w, arr, i, k, c, 3);
-		get(w, i);
-		get(w, k);
-		w.write(Instruction.I32_ADD);
-		i32(w, 1);
-		w.write(Instruction.I32_ADD);
-		set(w, i);
-		w.write(Instruction.BR, 0);
-		w.write(Instruction.END); // loop
+		emitStrictUtf8Walk(w, WasmLispCompiler.TYPE_I8ARR, false, arr, i, n, b, c, k, lo, hi);
 		w.write(Instruction.END); // B: invalid
 		emitLenientTranscode(w, arr, out, n, i, b, c, id, m, cp, adv, j);
 		w.write(Instruction.RETURN);
@@ -4413,6 +4337,326 @@ final class WasmStringRuntimeBuilder {
 		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STRING);
 		w.write(Instruction.END); // function
 		return body.toByteArray();
+	}
+
+	/**
+	 * Builds {@code _str_decode} ({@code WasmBulkRuntimeBuilder.STR_DECODE}), what
+	 * {@code rontolisp::%str-decode-raw} compiles to: a {@code TYPE_STRING} whose
+	 * {@code $str_bytes} hold raw octets ({@code %str-from-octets} runs, a socket line)
+	 * -&gt; the string they decode to. Well-formed UTF-8 under
+	 * {@link #buildIvUtf8StrBody()}'s strict walk -- every real line -- is the string
+	 * itself, one pass and no copy; anything else is transcoded with each malformed
+	 * sequence one U+FFFD, as many octets per replacement as the prelude's
+	 * {@code %octets-to-string-replacing} takes (the Unicode standard's maximal subpart,
+	 * an encoded surrogate whole: the JDK decoder's answer, which the interpreter's
+	 * socket {@code read-line} is). A {@code $str_bytes} must hold UTF-8: the character
+	 * walk reads a malformed lead past the string or into the next character. Any other
+	 * value answers itself.
+	 * @return the function body (signature {@code ((ref null eq)) -> (ref null eq)},
+	 * TYPE_CALLABLE_BASE + 0)
+	 */
+	static byte[] buildStrDecodeBody() {
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+		// param: v = 0. locals: arr = 1, out = 2, tmp = 3 ($str_bytes); n = 4, i = 5,
+		// b = 6, c = 7, k = 8, lo = 9, hi = 10, from = 11, len = 12, id = 13, j = 14,
+		// s = 15 (i32).
+		w.write(2);
+		w.write(3);
+		w.writeRefType(true, WasmLispCompiler.TYPE_STR_BYTES);
+		w.write(12);
+		w.write(Type.I32);
+		int v = 0, arr = 1, out = 2, tmp = 3, n = 4, i = 5, b = 6, c = 7, k = 8, lo = 9, hi = 10, from = 11;
+		int len = 12, id = 13, j = 14, s = 15;
+		get(w, v);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_STRING);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.IF, 0x40);
+		get(w, v);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+		// the content is arr[1, framed length - 1)
+		get(w, v);
+		WasmEmitHelper.emitStrBytesArray(w);
+		set(w, arr);
+		get(w, v);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_STRING);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STRING);
+		w.writeUnsignedLeb128(1);
+		i32(w, 1);
+		w.write(Instruction.I32_SUB);
+		set(w, n);
+		i32(w, 1);
+		w.write(Instruction.TEE_LOCAL);
+		w.writeUnsignedLeb128(from);
+		set(w, i);
+		w.write(Instruction.BLOCK, 0x40); // A: well-formed
+		w.write(Instruction.BLOCK, 0x40); // B: malformed
+		emitStrictUtf8Walk(w, WasmLispCompiler.TYPE_STR_BYTES, true, arr, i, n, b, c, k, lo, hi);
+		w.write(Instruction.END); // B: malformed
+		emitReplacingTranscode(w, arr, tmp, out, n, i, b, c, k, lo, hi, from, len, j, s);
+		// the frame quotes
+		get(w, out);
+		i32(w, 0);
+		i32(w, QUOTE);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_SET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
+		get(w, out);
+		get(w, len);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		i32(w, QUOTE);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_SET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
+		// id = STRING_ID_CTR++, as _iv_utf8_str stamps its string
+		i32(w, WasmLispCompiler.STRING_ID_CTR_ADDR);
+		w.write(Instruction.I32_LOAD, 0x02, 0x00);
+		set(w, id);
+		i32(w, WasmLispCompiler.STRING_ID_CTR_ADDR);
+		get(w, id);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		get(w, id);
+		get(w, len);
+		i32(w, 2);
+		w.write(Instruction.I32_ADD);
+		get(w, out);
+		emitSeedCursor(w);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STRING);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END); // A: well-formed
+		get(w, v);
+		w.write(Instruction.END); // function
+		return body.toByteArray();
+	}
+
+	// arr[from, n) ($str_bytes), which the strict walk refused, transcoded into out
+	// ($str_bytes of len + 2 bytes, the content from 1): a well-formed sequence as it is,
+	// each malformed
+	// one as U+FFFD (EF BF BD). The malformed sequence at i is the longest run from i
+	// that
+	// begins a sequence of Table 3-7 (its first continuation narrowed as the walk narrows
+	// it, but after ED through BF -- an encoded surrogate is one replacement), the octet
+	// at i alone when none does, n cutting it like any other octet: the prelude's
+	// %utf-8-malformed-length. Written into tmp, three bytes an octet at most, then
+	// copied
+	// to its size.
+	private static void emitReplacingTranscode(WasmWriter w, int arr, int tmp, int out, int n, int i, int b, int c,
+			int k, int lo, int hi, int from, int len, int j, int s) {
+		get(w, n);
+		get(w, from);
+		w.write(Instruction.I32_SUB);
+		i32(w, 3);
+		w.write(Instruction.I32_MUL);
+		i32(w, 2);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_NEW_DEFAULT);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
+		set(w, tmp);
+		i32(w, 1);
+		set(w, j);
+		get(w, from);
+		set(w, i);
+		w.write(Instruction.BLOCK, 0x40); // E: every octet taken
+		w.write(Instruction.LOOP, 0x40);
+		get(w, i);
+		get(w, n);
+		w.write(Instruction.I32_GE_U);
+		w.write(Instruction.BR_IF, 1);
+		get(w, arr);
+		get(w, i);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET_U);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
+		set(w, b);
+		// ASCII: as it is
+		get(w, b);
+		i32(w, 0x80);
+		w.write(Instruction.I32_LT_U);
+		w.write(Instruction.IF, 0x40);
+		get(w, tmp);
+		get(w, j);
+		get(w, b);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_SET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
+		addTo(w, j, 1);
+		addTo(w, i, 1);
+		w.write(Instruction.BR, 1); // next octet
+		w.write(Instruction.END);
+		// s = the octets of the sequence b leads (C2..DF 2, E0..EF 3, F0..F4 4), else 0
+		i32(w, 0);
+		set(w, s);
+		get(w, b);
+		i32(w, 0xC2);
+		w.write(Instruction.I32_GE_U);
+		get(w, b);
+		i32(w, 0xF5);
+		w.write(Instruction.I32_LT_U);
+		w.write(Instruction.I32_AND);
+		w.write(Instruction.IF, 0x40);
+		get(w, b);
+		i32(w, 0xE0);
+		w.write(Instruction.I32_GE_U);
+		get(w, b);
+		i32(w, 0xF0);
+		w.write(Instruction.I32_GE_U);
+		w.write(Instruction.I32_ADD);
+		i32(w, 2);
+		w.write(Instruction.I32_ADD);
+		set(w, s);
+		w.write(Instruction.END);
+		i32(w, 0x80);
+		set(w, lo);
+		i32(w, 0xBF);
+		set(w, hi);
+		emitFirstContinuationBound(w, b, 0xE0, lo, 0xA0);
+		emitFirstContinuationBound(w, b, 0xED, hi, 0x9F);
+		emitFirstContinuationBound(w, b, 0xF0, lo, 0x90);
+		emitFirstContinuationBound(w, b, 0xF4, hi, 0x8F);
+		// A well-formed sequence is copied as it is; k = its continuation octets.
+		get(w, s);
+		i32(w, 1);
+		w.write(Instruction.I32_SUB);
+		set(w, k);
+		w.write(Instruction.BLOCK, 0x40); // F: not well-formed
+		get(w, s);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.BR_IF, 0);
+		get(w, i);
+		get(w, s);
+		w.write(Instruction.I32_ADD);
+		get(w, n);
+		w.write(Instruction.I32_GT_U);
+		w.write(Instruction.BR_IF, 0);
+		emitContinuationByte(w, WasmLispCompiler.TYPE_STR_BYTES, arr, i, 1, c);
+		get(w, c);
+		get(w, lo);
+		w.write(Instruction.I32_LT_U);
+		w.write(Instruction.BR_IF, 0);
+		get(w, c);
+		get(w, hi);
+		w.write(Instruction.I32_GT_U);
+		w.write(Instruction.BR_IF, 0);
+		emitTrailingContinuation(w, WasmLispCompiler.TYPE_STR_BYTES, arr, i, k, c, 2, 1);
+		emitTrailingContinuation(w, WasmLispCompiler.TYPE_STR_BYTES, arr, i, k, c, 3, 1);
+		get(w, tmp);
+		get(w, j);
+		get(w, arr);
+		get(w, i);
+		get(w, s);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_COPY);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
+		get(w, j);
+		get(w, s);
+		w.write(Instruction.I32_ADD);
+		set(w, j);
+		get(w, i);
+		get(w, s);
+		w.write(Instruction.I32_ADD);
+		set(w, i);
+		w.write(Instruction.BR, 1); // next octet
+		w.write(Instruction.END); // F
+		// k = the octets one U+FFFD stands for
+		i32(w, 1);
+		set(w, k);
+		emitFirstContinuationBound(w, b, 0xED, hi, 0xBF);
+		get(w, s);
+		w.write(Instruction.IF, 0x40);
+		get(w, i);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		get(w, n);
+		w.write(Instruction.I32_LT_U);
+		w.write(Instruction.IF, 0x40);
+		emitContinuationByte(w, WasmLispCompiler.TYPE_STR_BYTES, arr, i, 1, c);
+		get(w, c);
+		get(w, lo);
+		w.write(Instruction.I32_GE_U);
+		get(w, c);
+		get(w, hi);
+		w.write(Instruction.I32_LE_U);
+		w.write(Instruction.I32_AND);
+		w.write(Instruction.IF, 0x40);
+		i32(w, 2);
+		set(w, k);
+		w.write(Instruction.BLOCK, 0x40);
+		w.write(Instruction.LOOP, 0x40);
+		get(w, k);
+		get(w, s);
+		w.write(Instruction.I32_GE_U);
+		w.write(Instruction.BR_IF, 1);
+		get(w, i);
+		get(w, k);
+		w.write(Instruction.I32_ADD);
+		get(w, n);
+		w.write(Instruction.I32_GE_U);
+		w.write(Instruction.BR_IF, 1);
+		get(w, arr);
+		get(w, i);
+		get(w, k);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET_U);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
+		i32(w, 0xC0);
+		w.write(Instruction.I32_AND);
+		i32(w, 0x80);
+		w.write(Instruction.I32_NE);
+		w.write(Instruction.BR_IF, 1);
+		addTo(w, k, 1);
+		w.write(Instruction.BR, 0);
+		w.write(Instruction.END); // loop
+		w.write(Instruction.END); // block
+		w.write(Instruction.END); // second octet admitted
+		w.write(Instruction.END); // a second octet
+		w.write(Instruction.END); // a lead
+		for (int[] put : new int[][] { { 0, 0xEF }, { 1, 0xBF }, { 2, 0xBD } }) {
+			get(w, tmp);
+			get(w, j);
+			i32(w, put[0]);
+			w.write(Instruction.I32_ADD);
+			i32(w, put[1]);
+			w.write(Instruction.GC_PREFIX, Instruction.ARRAY_SET);
+			w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
+		}
+		addTo(w, j, 3);
+		get(w, i);
+		get(w, k);
+		w.write(Instruction.I32_ADD);
+		set(w, i);
+		w.write(Instruction.BR, 0); // next octet
+		w.write(Instruction.END); // loop
+		w.write(Instruction.END); // E
+		// out = the j - 1 bytes written, at their size
+		get(w, j);
+		i32(w, 1);
+		w.write(Instruction.I32_SUB);
+		set(w, len);
+		get(w, len);
+		i32(w, 2);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_NEW_DEFAULT);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
+		set(w, out);
+		get(w, out);
+		i32(w, 1);
+		get(w, tmp);
+		i32(w, 1);
+		get(w, len);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_COPY);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
+	}
+
+	private static void addTo(WasmWriter w, int local, int value) {
+		get(w, local);
+		i32(w, value);
+		w.write(Instruction.I32_ADD);
+		set(w, local);
 	}
 
 	// Pushes the TYPE_STRING the prelude's lenient rule decodes the TYPE_I8ARR in arr
@@ -4647,6 +4891,106 @@ final class WasmStringRuntimeBuilder {
 		}
 	}
 
+	// The strict walk of arr[i, n) (an array of arrType): a LOOP that branches 2 out
+	// (past the block around the invalid pad) once i reaches n, every sequence
+	// well-formed, and 1 out (to the invalid pad) at the first octet no well-formed
+	// sequence holds -- the Unicode standard's Table 3-7, as buildIvUtf8StrBody
+	// documents. i is advanced in place. asciiStep takes an ASCII octet in a few
+	// instructions instead of the sequence arms' (_iv_utf8_str keeps its bytes).
+	private static void emitStrictUtf8Walk(WasmWriter w, int arrType, boolean asciiStep, int arr, int i, int n, int b,
+			int c, int k, int lo, int hi) {
+		w.write(Instruction.LOOP, 0x40);
+		get(w, i);
+		get(w, n);
+		w.write(Instruction.I32_GE_U);
+		w.write(Instruction.BR_IF, 2);
+		get(w, arr);
+		get(w, i);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET_U);
+		w.writeUnsignedLeb128(arrType);
+		set(w, b);
+		if (asciiStep) {
+			// an ASCII octet is taken before the sequence arms below: most of a line
+			get(w, b);
+			i32(w, 0x80);
+			w.write(Instruction.I32_LT_U);
+			w.write(Instruction.IF, 0x40);
+			get(w, i);
+			i32(w, 1);
+			w.write(Instruction.I32_ADD);
+			set(w, i);
+			w.write(Instruction.BR, 1);
+			w.write(Instruction.END);
+		}
+		// k = continuation-byte count; lo/hi = the range the FIRST one must be in.
+		i32(w, 0);
+		set(w, k);
+		i32(w, 0x80);
+		set(w, lo);
+		i32(w, 0xBF);
+		set(w, hi);
+		get(w, b);
+		i32(w, 0x80);
+		w.write(Instruction.I32_GE_U);
+		w.write(Instruction.IF, 0x40);
+		// 80..C1 leads nothing (a stray continuation byte, or an overlong 2-byte form)
+		// and F5.. is past U+10FFFF.
+		get(w, b);
+		i32(w, 0xC2);
+		w.write(Instruction.I32_LT_U);
+		w.write(Instruction.BR_IF, 2);
+		get(w, b);
+		i32(w, 0xF5);
+		w.write(Instruction.I32_GE_U);
+		w.write(Instruction.BR_IF, 2);
+		get(w, b);
+		i32(w, 0xE0);
+		w.write(Instruction.I32_GE_U);
+		get(w, b);
+		i32(w, 0xF0);
+		w.write(Instruction.I32_GE_U);
+		w.write(Instruction.I32_ADD);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		set(w, k);
+		emitFirstContinuationBound(w, b, 0xE0, lo, 0xA0);
+		emitFirstContinuationBound(w, b, 0xED, hi, 0x9F);
+		emitFirstContinuationBound(w, b, 0xF0, lo, 0x90);
+		emitFirstContinuationBound(w, b, 0xF4, hi, 0x8F);
+		w.write(Instruction.END);
+		// A sequence the vector truncates is not valid UTF-8 either.
+		get(w, i);
+		get(w, k);
+		w.write(Instruction.I32_ADD);
+		get(w, n);
+		w.write(Instruction.I32_GE_U);
+		w.write(Instruction.BR_IF, 1);
+		// The first continuation carries the range that rules out an overlong form, a
+		// surrogate and the past-U+10FFFF tail; the rest only have to be 10xxxxxx.
+		get(w, k);
+		w.write(Instruction.IF, 0x40);
+		emitContinuationByte(w, arrType, arr, i, 1, c);
+		get(w, c);
+		get(w, lo);
+		w.write(Instruction.I32_LT_U);
+		w.write(Instruction.BR_IF, 2);
+		get(w, c);
+		get(w, hi);
+		w.write(Instruction.I32_GT_U);
+		w.write(Instruction.BR_IF, 2);
+		w.write(Instruction.END);
+		emitTrailingContinuation(w, arrType, arr, i, k, c, 2, 2);
+		emitTrailingContinuation(w, arrType, arr, i, k, c, 3, 2);
+		get(w, i);
+		get(w, k);
+		w.write(Instruction.I32_ADD);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		set(w, i);
+		w.write(Instruction.BR, 0);
+		w.write(Instruction.END); // loop
+	}
+
 	// "if the lead byte is exactly `lead`, the first continuation's bound `boundLocal`
 	// becomes `value`" -- the four narrowings that turn a byte-count walk into a
 	// validator (overlong 3- and 4-byte forms, surrogates, the U+10FFFF ceiling).
@@ -4661,32 +5005,33 @@ final class WasmStringRuntimeBuilder {
 	}
 
 	// "when the sequence is at least `offset` + 1 bytes long, byte i + offset must be a
-	// 10xxxxxx continuation" -- branching to the invalid landing pad when it is not.
-	// Emitted at the loop-body level, so the pad is two blocks out from inside the if.
-	private static void emitTrailingContinuation(WasmWriter w, int arrLocal, int iLocal, int kLocal, int cLocal,
-			int offset) {
+	// 10xxxxxx continuation" -- branching `depth` out from inside the if, to the invalid
+	// landing pad, when it is not (2 from the strict walk's loop body).
+	private static void emitTrailingContinuation(WasmWriter w, int arrType, int arrLocal, int iLocal, int kLocal,
+			int cLocal, int offset, int depth) {
 		get(w, kLocal);
 		i32(w, offset);
 		w.write(Instruction.I32_GE_U);
 		w.write(Instruction.IF, 0x40);
-		emitContinuationByte(w, arrLocal, iLocal, offset, cLocal);
+		emitContinuationByte(w, arrType, arrLocal, iLocal, offset, cLocal);
 		get(w, cLocal);
 		i32(w, 0xC0);
 		w.write(Instruction.I32_AND);
 		i32(w, 0x80);
 		w.write(Instruction.I32_NE);
-		w.write(Instruction.BR_IF, 2);
+		w.write(Instruction.BR_IF, depth);
 		w.write(Instruction.END);
 	}
 
-	// cLocal = arr[i + offset].
-	private static void emitContinuationByte(WasmWriter w, int arrLocal, int iLocal, int offset, int cLocal) {
+	// cLocal = arr[i + offset], arr an array of arrType.
+	private static void emitContinuationByte(WasmWriter w, int arrType, int arrLocal, int iLocal, int offset,
+			int cLocal) {
 		get(w, arrLocal);
 		get(w, iLocal);
 		i32(w, offset);
 		w.write(Instruction.I32_ADD);
 		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET_U);
-		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_I8ARR);
+		w.writeUnsignedLeb128(arrType);
 		set(w, cLocal);
 	}
 

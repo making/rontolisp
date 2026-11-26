@@ -13,7 +13,8 @@ import am.ik.wasm.Instruction;
  * {@code rontolisp::%str-byte-ref} (the i-th content byte, 0-255) and
  * {@code rontolisp::%str-from-byte} (a one-byte-content string carrying an arbitrary
  * byte) and {@code rontolisp::%str-from-octets} (the same for a run of a packed octet
- * vector). A {@code TYPE_STRING}'s {@code $str_bytes} array holds UTF-8 bytes and the
+ * vector), and {@code rontolisp::%str-decode-raw} (such a string as the text its octets
+ * decode to). A {@code TYPE_STRING}'s {@code $str_bytes} array holds UTF-8 bytes and the
  * character accessors ({@code length}/{@code char}) decode them, so a BINARY chunk read
  * off a socket cannot be walked character-wise -- bytes that happen to form a valid
  * multi-byte sequence would collapse into one character and shift everything after them.
@@ -167,6 +168,13 @@ final class WasmStrByteCompiler {
 				ctx.writer.writeSignedLeb128(0);
 				ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
 				ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_STRING);
+			}
+			case LispNames.STR_DECODE_RAW_INTERNAL -> {
+				expectArgs(member, args, 1);
+				// the string the raw octets decode to (_str_decode)
+				WasmExprCompiler.compileExpr(args.get(1), ctx);
+				ctx.writer.write(Instruction.CALL);
+				ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_BULK_BASE + WasmBulkRuntimeBuilder.STR_DECODE);
 			}
 			default -> throw new IllegalArgumentException("unknown string byte internal: " + member);
 		}

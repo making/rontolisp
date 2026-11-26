@@ -699,10 +699,11 @@
   ;; into a string whose bytes ARE the wire bytes -- so a UTF-8 line decodes
   ;; exactly like the interpreter's byte-collecting readLine, chunk boundaries
   ;; included. The line is taken a RUN at a time: what the chunk holds up to the
-  ;; next \n (or its end) becomes one string, and the runs are joined once at the
-  ;; end -- bytes mid-UTF-8-sequence, or not UTF-8 at all, stay as they are. The
-  ;; pending-cr flag holds a trailing \r back until the next run shows it is not
-  ;; the one before the terminating \n. The second value is read-line's
+  ;; next \n (or its end) becomes one string of raw octets, and the runs are
+  ;; joined once at the end, then decoded (%str-decode-raw): a sequence split
+  ;; across chunks decodes whole, a malformed one is U+FFFD. The pending-cr flag
+  ;; holds a trailing \r back until the next run shows it is not the one before
+  ;; the terminating \n. The second value is read-line's
   ;; missing-newline-p: t when the peer's close, not a \n, ended the line.
   (let ((runs nil) (got nil) (done nil) (cr nil) (newline nil))
     (while (not done)
@@ -736,7 +737,8 @@
                   (not (rontolisp:await (rontolisp::%sock-fill e op))))
               (setq done t))))
     (if got
-        (%quiet-values (rontolisp::%sock-join-runs (nreverse runs))
+        (%quiet-values (rontolisp::%str-decode-raw
+                        (rontolisp::%sock-join-runs (nreverse runs)))
                        (not newline))
         (%quiet-values nil t))))
 

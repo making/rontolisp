@@ -51,7 +51,13 @@ final class WasmBulkRuntimeBuilder {
 
 	static final int LIT_INIT_PARTS = 8;
 
-	static final int FUNC_COUNT = LIT_INIT_MORE + LIT_INIT_PARTS - 1;
+	/**
+	 * {@code _str_decode (string) -> string}: a string holding raw octets as the string
+	 * they decode to ({@link WasmStringRuntimeBuilder#buildStrDecodeBody}).
+	 */
+	static final int STR_DECODE = LIT_INIT_MORE + LIT_INIT_PARTS - 1;
+
+	static final int FUNC_COUNT = STR_DECODE + 1;
 
 	/**
 	 * Which of {@code _lit_init}'s parts the block's function at an offset is.
@@ -62,7 +68,7 @@ final class WasmBulkRuntimeBuilder {
 		if (i == LIT_INIT) {
 			return 0;
 		}
-		return i >= LIT_INIT_MORE && i < FUNC_COUNT ? i - LIT_INIT_MORE + 1 : -1;
+		return i >= LIT_INIT_MORE && i < STR_DECODE ? i - LIT_INIT_MORE + 1 : -1;
 	}
 
 	private static final int BYTES = WasmLispCompiler.TYPE_STR_BYTES;
@@ -111,6 +117,7 @@ final class WasmBulkRuntimeBuilder {
 	static int typeIndexOf(int i) {
 		return switch (i) {
 			case SPLIT -> WasmLispCompiler.TYPE_CALLABLE_BASE + 2;
+			case STR_DECODE -> WasmLispCompiler.TYPE_CALLABLE_BASE;
 			case JOIN -> WasmLispCompiler.TYPE_CALLABLE_BASE + 1;
 			case SORT, CAT, COUNT -> WasmLispCompiler.TYPE_CALLABLE_BASE + 3;
 			default -> throw new IllegalArgumentException("no bulk runtime function " + i);
@@ -130,6 +137,7 @@ final class WasmBulkRuntimeBuilder {
 			case SORT -> buildSort();
 			case CAT -> buildCat(flags.pairsJoined());
 			case COUNT -> buildCount();
+			case STR_DECODE -> WasmStringRuntimeBuilder.buildStrDecodeBody();
 			default -> throw new IllegalArgumentException("no bulk runtime function " + i);
 		};
 	}
