@@ -417,9 +417,16 @@ final class JavaClasses {
 
 	/**
 	 * Whether the program reaches {@code Class.getEnumConstants()}: what holds an enum's
-	 * class object then initializes the enum as a call of its {@code values()} does.
+	 * class object then initializes the enum as a call of its {@code values()} does. Set
+	 * too by a set or a map of enum constants made over an enum no call names.
 	 */
 	boolean enumConstants;
+
+	/**
+	 * The enums a call making an {@code EnumSet} or an {@code EnumMap} names: their class
+	 * objects hold their constants where only those calls ask for them.
+	 */
+	final Set<JavaClass> universes = new HashSet<>();
 
 	/**
 	 * Whether a call looks a method or a constructor up by parameter types

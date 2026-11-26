@@ -20,6 +20,7 @@ import am.ik.rontolisp.LispSingleFloatArray;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.compiler.ArgumentOrder;
 import am.ik.rontolisp.compiler.DeclaredArrayTypes;
 import am.ik.rontolisp.compiler.OperandTypes;
 import am.ik.rontolisp.macro.LispMacroExpander;
@@ -1051,7 +1052,8 @@ final class WasmArrayCompiler {
 		List<LispVal> args = cons.toList();
 		// Every argument form runs before anything is checked, as CL evaluates a call's
 		// arguments: the array expression once into a temp, then each subscript, its type
-		// checked where it is evaluated. Only then the array and its rank
+		// checked once the last of them is evaluated (subscriptChecksWait). Only then the
+		// array and its rank
 		// (emitArefCheckRank, or _idx_ref's own call), and then the bounds -- the
 		// interpreter's order (.kb/error-handling.md, "A rank mismatch").
 		// subscriptCount is the ORIGINAL number of subscripts at this call site (0 for a
@@ -1126,7 +1128,10 @@ final class WasmArrayCompiler {
 			return;
 		}
 		// The subscripts once, for whichever arm reads: each checked as an integer.
-		int[] subs = compileSubscripts(ctx, args, 2, subscriptCount);
+		List<LispVal> subscripts = args.subList(2, args.size());
+		boolean wait = subscriptChecksWait(subscripts, null, ctx);
+		int[] subs = compileSubscripts(ctx, subscripts, wait);
+		checkWaitingSubscripts(ctx, subscripts, subs, wait);
 		emitArefCheckRank(ctx, arrSlot, subscriptCount);
 		testFarray(ctx, arrSlot);
 		emitIfEq(ctx);
@@ -1842,6 +1847,7 @@ final class WasmArrayCompiler {
 		int arrSlot = setTemp(ctx);
 		emitArrayCheck(ctx, arrSlot);
 		boolean reports = reportsBounds(ctx);
+		boolean wait = subscriptChecksWait(args.subList(2, 3), args.get(3), ctx);
 		testFarray(ctx, arrSlot);
 		emitIfEq(ctx);
 		// packed: coerce value -> f64 (narrowing to f32 for a single-float array), store
@@ -1849,13 +1855,22 @@ final class WasmArrayCompiler {
 		// the interpreter/JVM across widths. Each arm checks its subscript
 		// (compileSubscript), a wrong-type one reported as (SETF ROW-MAJOR-AREF)'s, and
 		// -- once the value is coerced -- its bound, the total size.
-		compileSubscript(args.get(2), ctx);
-		if (!reports && !ctx.simd) {
+		compileSubscript(args.get(2), ctx, wait);
+		if (!wait && !reports && !ctx.simd) {
 			WasmEmitHelper.castI31GetS(ctx);
 			boxI31(ctx);
 		}
 		int pIdxSlot = setTemp(ctx);
 		WasmExprCompiler.compileExpr(args.get(3), ctx);
+		if (wait) {
+			getLocal(ctx, pIdxSlot);
+			emitSubscriptCheck(args.get(2), ctx);
+			if (!reports && !ctx.simd) {
+				WasmEmitHelper.castI31GetS(ctx);
+				boxI31(ctx);
+			}
+			setLocal(ctx, pIdxSlot);
+		}
 		WasmEmitHelper.castFloatGetF64(ctx);
 		boxFloat(ctx);
 		int pBoxSlot = setTemp(ctx);
@@ -1865,15 +1880,16 @@ final class WasmArrayCompiler {
 		// packed integer vector: raw mask-store, returning the value AS STORED.
 		testIntVector(ctx, arrSlot);
 		emitIfEq(ctx);
-		emitPackedIntStore(ctx, arrSlot, args.get(2), args.get(3), true);
+		emitPackedIntStore(ctx, arrSlot, args.get(2), args.get(3), true, wait);
 		ctx.writer.write(Instruction.ELSE);
 		// general: resolve the displacement chain, store, and leave the value.
-		if (reports) {
+		if (reports || wait) {
 			// The subscript and the value before the bound, as every store checks them.
-			compileSubscript(args.get(2), ctx);
+			compileSubscript(args.get(2), ctx, wait);
 			int idxSlot = setTemp(ctx);
 			WasmExprCompiler.compileExpr(args.get(3), ctx);
 			int valSlot = setTemp(ctx);
+			checkWaitingSubscript(ctx, args.get(2), idxSlot, wait);
 			emitFlatCheck(ctx, arrSlot, idxSlot, false);
 			getLocal(ctx, arrSlot);
 			castCellGet0(ctx);
@@ -2037,6 +2053,9 @@ final class WasmArrayCompiler {
 		// in a module that reports them every store; the checks follow the value's
 		// evaluation and coercion, as every store orders them.
 		boolean checked = reportsBounds(ctx) || subscriptCount >= 2;
+		List<LispVal> subscripts = args.subList(2, args.size() - 1);
+		LispVal valueExpr = args.get(args.size() - 1);
+		boolean wait = subscriptChecksWait(subscripts, valueExpr, ctx);
 		testFarray(ctx, arrSlot);
 		emitIfEq(ctx);
 		// Each arm evaluates the subscripts and the value itself, so an exit one of them
@@ -2048,9 +2067,10 @@ final class WasmArrayCompiler {
 		// subscripts, then value.
 		int pIdxSlot;
 		int pBoxSlot;
-		if (checked || ctx.simd) {
-			int[] pSubs = compileSubscripts(ctx, args, 2, subscriptCount);
-			WasmExprCompiler.compileExpr(args.get(args.size() - 1), ctx);
+		if (checked || ctx.simd || wait) {
+			int[] pSubs = compileSubscripts(ctx, subscripts, wait);
+			WasmExprCompiler.compileExpr(valueExpr, ctx);
+			checkWaitingSubscripts(ctx, subscripts, pSubs, wait);
 			emitArefCheckRank(ctx, arrSlot, subscriptCount);
 			WasmEmitHelper.castFloatGetF64(ctx);
 			boxFloat(ctx);
@@ -2089,7 +2109,7 @@ final class WasmArrayCompiler {
 			testIntVector(ctx, arrSlot);
 			emitIfEq(ctx);
 			ctx.wasmCtrlDepth++;
-			emitPackedIntStore(ctx, arrSlot, args.get(2), args.get(args.size() - 1), resultNeeded);
+			emitPackedIntStore(ctx, arrSlot, args.get(2), valueExpr, resultNeeded, wait);
 			ctx.writer.write(Instruction.ELSE);
 		}
 		// general: data[flat] = val, leaving val as the result -- the shared _arr_set
@@ -2097,10 +2117,11 @@ final class WasmArrayCompiler {
 		if (subscriptCount == 1) {
 			// One subscript: a simple vector stores inline, anything else through the
 			// checks and the shared store.
-			compileSubscript(args.get(2), ctx);
+			compileSubscript(args.get(2), ctx, wait);
 			int idxSlot = setTemp(ctx);
-			WasmExprCompiler.compileExpr(args.get(args.size() - 1), ctx);
+			WasmExprCompiler.compileExpr(valueExpr, ctx);
 			int valSlot = setTemp(ctx);
+			checkWaitingSubscript(ctx, args.get(2), idxSlot, wait);
 			emitSimpleVectorAccess(ctx, arrSlot, idxSlot, valSlot, () -> {
 				emitArefCheckRank(ctx, arrSlot, subscriptCount);
 				if (checked) {
@@ -2116,9 +2137,10 @@ final class WasmArrayCompiler {
 			});
 		}
 		else if (checked) {
-			int[] gSubs = compileSubscripts(ctx, args, 2, subscriptCount);
-			WasmExprCompiler.compileExpr(args.get(args.size() - 1), ctx);
+			int[] gSubs = compileSubscripts(ctx, subscripts, wait);
+			WasmExprCompiler.compileExpr(valueExpr, ctx);
 			int valSlot = setTemp(ctx);
+			checkWaitingSubscripts(ctx, subscripts, gSubs, wait);
 			emitArefCheckRank(ctx, arrSlot, subscriptCount);
 			getLocal(ctx, arrSlot);
 			castCellGet0(ctx);
@@ -2161,6 +2183,7 @@ final class WasmArrayCompiler {
 		DeclaredArrayTypes.Kind kind = pin.kind();
 		boolean checksFirst = reportsBounds(ctx) || pin.orNull();
 		LispVal valueExpr = args.get(args.size() - 1);
+		boolean wait = given == 1 && subscriptChecksWait(List.of(idxExpr), valueExpr, ctx);
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
 		int arrSlot = setTemp(ctx);
 		switch (kind) {
@@ -2169,13 +2192,14 @@ final class WasmArrayCompiler {
 				if (given == 1 && !resultNeeded && emitRawSubscriptAset1(idxExpr, valueExpr, pin, arrSlot, ctx)) {
 					return;
 				}
-				compileSubscript(idxExpr, ctx);
+				compileSubscript(idxExpr, ctx, wait);
 				int idxSlot = setTemp(ctx);
-				if (checksFirst) {
+				if (checksFirst || wait) {
 					// The value before the bound: evaluated into a raw temp first, stored
 					// once the subscript passed.
 					int savedI64 = ctx.nextI64Local;
 					Runnable raw = compileIntStoreValue(valueExpr, ctx);
+					checkWaitingSubscript(ctx, idxExpr, idxSlot, wait);
 					emitKindedCheckRank(ctx, kind, arrSlot, given);
 					emitFlatCheck(ctx, arrSlot, idxSlot, false, () -> {
 						getLocal(ctx, arrSlot);
@@ -2208,9 +2232,10 @@ final class WasmArrayCompiler {
 				}
 			}
 			case FLOAT -> {
-				compileSubscript(idxExpr, ctx);
+				compileSubscript(idxExpr, ctx, wait);
 				int idxSlot = setTemp(ctx);
 				WasmExprCompiler.compileExpr(valueExpr, ctx);
+				checkWaitingSubscript(ctx, idxExpr, idxSlot, wait);
 				emitArefCheckRank(ctx, arrSlot, given);
 				WasmEmitHelper.castFloatGetF64(ctx);
 				boxFloat(ctx);
@@ -2258,10 +2283,11 @@ final class WasmArrayCompiler {
 				}
 				else if (checksFirst || WasmIntFusionCompiler.speedTradesEnabled(ctx)) {
 					// at the speed levels the inline arm, as an unpinned vector's store
-					compileSubscript(idxExpr, ctx);
+					compileSubscript(idxExpr, ctx, wait);
 					int idxSlot = setTemp(ctx);
 					WasmExprCompiler.compileExpr(valueExpr, ctx);
 					int valSlot = setTemp(ctx);
+					checkWaitingSubscript(ctx, idxExpr, idxSlot, wait);
 					Runnable store = () -> {
 						// the rank and the bound: the subscript's type passed where it
 						// was evaluated, which _idx_ref asks again
@@ -2279,6 +2305,20 @@ final class WasmArrayCompiler {
 					else {
 						store.run();
 					}
+				}
+				else if (wait) {
+					compileSubscript(idxExpr, ctx, true);
+					int idxSlot = setTemp(ctx);
+					WasmExprCompiler.compileExpr(valueExpr, ctx);
+					int valSlot = setTemp(ctx);
+					checkWaitingSubscript(ctx, idxExpr, idxSlot, true);
+					getLocal(ctx, arrSlot);
+					castCellGet0(ctx);
+					getLocal(ctx, idxSlot);
+					WasmEmitHelper.castI31GetS(ctx);
+					getLocal(ctx, valSlot);
+					emitArefCheckRank(ctx, arrSlot, given);
+					callArrSet(ctx);
 				}
 				else {
 					getLocal(ctx, arrSlot);
@@ -2402,12 +2442,15 @@ final class WasmArrayCompiler {
 	// the legacy emission.
 	private static void emitHoistedAset1(List<LispVal> args, LispVal idxExpr, WasmLispCompiler.Ctx ctx,
 			boolean resultNeeded, int given) {
+		LispVal valueExpr = args.get(args.size() - 1);
+		boolean wait = given == 1 && subscriptChecksWait(List.of(idxExpr), valueExpr, ctx);
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
 		int arrSlot = setTemp(ctx);
-		compileSubscript(idxExpr, ctx);
+		compileSubscript(idxExpr, ctx, wait);
 		int idxSlot = setTemp(ctx);
-		WasmExprCompiler.compileExpr(args.get(args.size() - 1), ctx);
+		WasmExprCompiler.compileExpr(valueExpr, ctx);
 		int valSlot = setTemp(ctx);
+		checkWaitingSubscript(ctx, idxExpr, idxSlot, wait);
 		emitArefCheckRank(ctx, arrSlot, given);
 		// The sole subscript's bound, the total size, is checked in each arm once the
 		// value is evaluated and coerced.
@@ -2462,16 +2505,18 @@ final class WasmArrayCompiler {
 	// integer operation tree (WasmIntFusionCompiler.tryCompileRaw -- no _int_new box at
 	// all on the fast path); otherwise it evaluates boxed and unboxes with the store
 	// semantics. The result -- the value AS STORED, read back unsigned -- boxes only
-	// when the caller consumes it; a statement-position store allocates nothing.
+	// when the caller consumes it; a statement-position store allocates nothing. With
+	// `wait` the subscript's type is checked after the value is evaluated.
 	private static void emitPackedIntStore(WasmLispCompiler.Ctx ctx, int arrSlot, LispVal idxExpr, LispVal valueExpr,
-			boolean resultNeeded) {
-		compileSubscript(idxExpr, ctx);
+			boolean resultNeeded, boolean wait) {
+		compileSubscript(idxExpr, ctx, wait);
 		int idxSlot = setTemp(ctx);
-		if (reportsBounds(ctx)) {
+		if (reportsBounds(ctx) || wait) {
 			// The value before the bound: evaluated into a raw temp first, stored
 			// once the subscript passed.
 			int savedI64 = ctx.nextI64Local;
 			Runnable raw = compileIntStoreValue(valueExpr, ctx);
+			checkWaitingSubscript(ctx, idxExpr, idxSlot, wait);
 			emitFlatCheck(ctx, arrSlot, idxSlot, false, () -> emitPackedIntLen(ctx, arrSlot));
 			getLocal(ctx, arrSlot);
 			getLocal(ctx, idxSlot);
@@ -2517,8 +2562,17 @@ final class WasmArrayCompiler {
 	 */
 	private static void compileSubscript(LispVal subscript, WasmLispCompiler.Ctx ctx, boolean unchecked) {
 		WasmExprCompiler.compileExpr(subscript, ctx);
-		if (unchecked || !WasmEmitHelper.checksConsFields(ctx)
-				|| WasmIntFusionCompiler.answersInteger(subscript, ctx)) {
+		if (!unchecked) {
+			emitSubscriptCheck(subscript, ctx);
+		}
+	}
+
+	/**
+	 * Checks the boxed value of {@code subscript} on the stack, leaving it there: as
+	 * {@link #compileSubscript(LispVal, WasmLispCompiler.Ctx)} checks it.
+	 */
+	private static void emitSubscriptCheck(LispVal subscript, WasmLispCompiler.Ctx ctx) {
+		if (!WasmEmitHelper.checksConsFields(ctx) || WasmIntFusionCompiler.answersInteger(subscript, ctx)) {
 			return;
 		}
 		if (!WasmIntFusionCompiler.speedTradesEnabled(ctx)) {
@@ -2891,16 +2945,54 @@ final class WasmArrayCompiler {
 	}
 
 	/**
-	 * Evaluates the subscripts {@code args[firstSub .. firstSub + rank)} in order into
-	 * temps, each checked as an integer ({@link #compileSubscript}).
+	 * Evaluates the subscripts in order into temps, each checked as an integer
+	 * ({@link #compileSubscript}) -- or, with {@code wait}, left for
+	 * {@link #checkWaitingSubscripts}.
 	 */
-	private static int[] compileSubscripts(WasmLispCompiler.Ctx ctx, List<LispVal> args, int firstSub, int rank) {
-		int[] slots = new int[rank];
-		for (int k = 0; k < rank; k++) {
-			compileSubscript(args.get(firstSub + k), ctx);
+	private static int[] compileSubscripts(WasmLispCompiler.Ctx ctx, List<LispVal> subscripts, boolean wait) {
+		int[] slots = new int[subscripts.size()];
+		for (int k = 0; k < slots.length; k++) {
+			compileSubscript(subscripts.get(k), ctx, wait);
 			slots[k] = setTemp(ctx);
 		}
 		return slots;
+	}
+
+	/**
+	 * Whether an access checks its subscripts' types only once its last argument form is
+	 * evaluated ({@link ArgumentOrder#subscriptChecksWait}): a module that checks them,
+	 * and a later form that could tell. Elsewhere each is checked where it is evaluated.
+	 * @param subscripts the subscript forms
+	 * @param value the store's value form, or null for a read
+	 * @param ctx the compile context
+	 * @return whether the checks wait
+	 */
+	private static boolean subscriptChecksWait(List<LispVal> subscripts, @Nullable LispVal value,
+			WasmLispCompiler.Ctx ctx) {
+		return WasmEmitHelper.checksConsFields(ctx) && ArgumentOrder.subscriptChecksWait(subscripts, value,
+				subscript -> !WasmIntFusionCompiler.answersInteger(subscript, ctx),
+				name -> WasmArithCompiler.isQuietVariable(name, ctx));
+	}
+
+	/**
+	 * With {@code wait}, checks the subscripts {@link #compileSubscripts} left in
+	 * {@code slots}, in order; otherwise nothing.
+	 */
+	private static void checkWaitingSubscripts(WasmLispCompiler.Ctx ctx, List<LispVal> subscripts, int[] slots,
+			boolean wait) {
+		for (int k = 0; k < slots.length; k++) {
+			checkWaitingSubscript(ctx, subscripts.get(k), slots[k], wait);
+		}
+	}
+
+	/** With {@code wait}, checks the subscript left unchecked in {@code slot}. */
+	private static void checkWaitingSubscript(WasmLispCompiler.Ctx ctx, LispVal subscript, int slot, boolean wait) {
+		if (!wait || !WasmEmitHelper.checksConsFields(ctx) || WasmIntFusionCompiler.answersInteger(subscript, ctx)) {
+			return;
+		}
+		getLocal(ctx, slot);
+		emitSubscriptCheck(subscript, ctx);
+		setLocal(ctx, slot);
 	}
 
 	/**

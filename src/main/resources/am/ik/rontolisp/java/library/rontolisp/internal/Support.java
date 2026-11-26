@@ -393,6 +393,10 @@ public final class Support {
 
     public static native byte[] utf8(String s);
 
+    // The constants of the enum an EnumSet or an EnumMap is made over, as getEnumConstants
+    // answers them, read off its class object without the program reaching that method.
+    public static native <T> T[] universe(Class<T> type);
+
     public static native String utf8String(byte[] b, int offset, int count);
 
     // String.getBytes(Charset) and new String(byte[], .., Charset): the charset's codec.

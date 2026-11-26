@@ -703,7 +703,7 @@ public final class Files {
 
     // A file's key: its device and inode, equal for two names of one file, written as a
     // JDK on a Unix host writes one (measured: the device in hexadecimal, the inode in
-    // decimal; the hash their sum).
+    // unsigned decimal; the hash their sum).
     private static final class Key {
         private final long device;
 
@@ -731,7 +731,10 @@ public final class Files {
                 hex = "0123456789abcdef".charAt((int) rest & 15) + hex;
                 rest >>>= 4;
             } while (rest != 0);
-            return "(dev=" + hex + ",ino=" + inode + ")";
+            // The inode unsigned: a WASI host's is a 64-bit hash, a JDK's never negative.
+            long tenths = (inode >>> 1) / 5;
+            String ino = inode >= 0 ? Long.toString(inode) : tenths + Long.toString(inode - tenths * 10);
+            return "(dev=" + hex + ",ino=" + ino + ")";
         }
     }
 
