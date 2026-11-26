@@ -16,7 +16,9 @@ publish() {
 	exit 0
 }
 
-current=$(gh api "repos/$repo/git/ref/tags/$tag" --jq .object.sha 2>/dev/null || true)
+# On a refusal (404 for a missing tag) gh api prints the error body on stdout, so only a
+# successful lookup counts.
+current=$(gh api "repos/$repo/git/ref/tags/$tag" --jq .object.sha 2>/dev/null) || current=""
 if [[ "$current" == "$sha" ]]; then
 	publish true
 fi
