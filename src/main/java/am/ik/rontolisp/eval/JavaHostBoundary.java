@@ -7,6 +7,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
 
+import am.ik.rontolisp.compiler.BoundaryType;
 import am.ik.rontolisp.compiler.WitExportDirective;
 import am.ik.rontolisp.compiler.WitImportDirective;
 import am.ik.rontolisp.compiler.WitSource;
@@ -130,12 +131,27 @@ public final class JavaHostBoundary implements JavaBoundary {
 		for (WitExportDirective.Export export : described.exports()) {
 			List<Param> params = new ArrayList<>();
 			for (WitTypeMapper.Param param : export.params()) {
+				requireFlat(export, param.shape(), "parameter '" + param.name() + "'");
 				params.add(new Param(param.name(), Objects.requireNonNull(type(param.shape()))));
+			}
+			WitTypeMapper.Shape result = export.result();
+			if (result != null) {
+				requireFlat(export, result, "the result");
 			}
 			exports.add(new Export(export.name(), export.iface(), export.key(), List.copyOf(params),
 					type(export.result()), export.async(), export.at()));
 		}
 		return new WitWorld(described.name(), source.path(), List.copyOf(exports));
+	}
+
+	// The Java subset implements an export of the flat types alone: a compound one is
+	// described whole, which no converter of its reads yet.
+	private static void requireFlat(WitExportDirective.Export export, WitTypeMapper.Shape shape, String what) {
+		if (BoundaryType.forWitName(shape.wit()) == null) {
+			throw new LispReadException(export.at() + ": export '" + export.name() + "': the WIT type of " + what + " ("
+					+ shape.wit() + ") is not supported at the Java subset's export boundary yet (supported: "
+					+ BoundaryType.witNames() + "); a Lisp program's rontolisp:wit-export carries it on a component");
+		}
 	}
 
 	/**

@@ -9,4 +9,11 @@ world greeter {
   export shout: func(name: string, excited: bool) -> string;
   /// Whether the name has fewer than five characters.
   export is-short: func(name: string) -> bool;
+  /// Each card's greeting, shouted as the card says.
+  export greet-all: func(cards: list<card>) -> list<string>;
+  /// The name's length; the error arm for an empty name.
+  export measure: func(name: string) -> result<u32, string>;
+
+  /// Whom a card greets, and how.
+  record card { name: string, excited: bool }
 }

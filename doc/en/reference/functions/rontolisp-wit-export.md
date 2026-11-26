@@ -68,6 +68,11 @@ wasmtime run --invoke 'greet("world")' greet.wasm
   `(unsigned-byte 8)` vector, instead of the string they decode to as UTF-8
   ([`rontolisp:wit-import`](rontolisp-wit-import.md#arguments)'s option, for the
   other direction).
+- `:envelope` — `t` says a function whose WIT result is a `result` answers it as
+  `(:ok . value)` or `(:error . value)` itself, instead of the ok value with
+  `rontolisp:wit-error` signalled for the error arm
+  ([Compound types](#compound-types)). The Clojure front end's `rontolisp.wit/export`
+  passes it.
 
 Everything else comes from the world: `rontolisp:wasm-export`'s `:params`,
 `:param-names`, `:returns` and `:async` are all filled in from it, so the

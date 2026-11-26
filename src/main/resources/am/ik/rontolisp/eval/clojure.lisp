@@ -25507,9 +25507,9 @@
                                       (string (char-upcase (char s i)))
                                       (subseq s (+ i 1)))))))))))
 
-;;;; rontolisp.wit: a WIT value's Clojure spelling. An import's wrapper and a
-;;;; provider's adapter (clojure/ClojureWitLowering) convert each value the two
-;;;; languages spell differently by a descriptor of its WIT type:
+;;;; rontolisp.wit: a WIT value's Clojure spelling. An import's and an export's
+;;;; wrapper and a provider's adapter (clojure/ClojureWitLowering) convert each
+;;;; value the two languages spell differently by a descriptor of its WIT type:
 ;;;;
 ;;;;   NIL                           spelled alike: a number, a character, a
 ;;;;                                 string, a byte string, a handle
@@ -25726,6 +25726,13 @@
         (rontolisp::%clojure-wit-out (car (cdr (cdr (cdr row))))
          (gethash (car table) (rontolisp::%clojure-ex-data c)))
         (rontolisp::%clojure-throw c))))
+
+(defun rontolisp::%clojure-wit-arm-value (spec c)
+  "The error arm C a Clojure export threw (%clojure-wit-arm-p) as the
+   boundary's value: its data's value under SPEC's key converted by SPEC's
+   descriptor, SPEC (key . d)."
+  (rontolisp::%clojure-wit-out (cdr spec)
+   (gethash (car spec) (rontolisp::%clojure-ex-data c))))
 
 (defun rontolisp::%clojure-wit-arm-message (c)
   "The message of the error arm C a Clojure provider threw, as the WIT
