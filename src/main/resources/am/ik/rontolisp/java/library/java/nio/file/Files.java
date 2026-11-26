@@ -19,14 +19,20 @@ import java.nio.file.attribute.BasicFileAttributeView;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.nio.file.attribute.FileAttribute;
 import java.nio.file.attribute.FileAttributeView;
+import java.nio.file.attribute.FileOwnerAttributeView;
 import java.nio.file.attribute.FileTime;
+import java.nio.file.attribute.GroupPrincipal;
+import java.nio.file.attribute.PosixFileAttributeView;
+import java.nio.file.attribute.PosixFileAttributes;
 import java.nio.file.attribute.PosixFilePermission;
+import java.nio.file.attribute.UserPrincipal;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Deque;
 import java.util.EnumSet;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
@@ -406,16 +412,160 @@ public final class Files {
         if (!Disk.modes()) {
             throw new UnsupportedOperationException();
         }
-        int mode = mode(perms);
+        chmod(path, mode(perms));
+        return path;
+    }
+
+    // Gives what a path names the permission bits (07777): a JDK follows a link even where
+    // told not to.
+    private static void chmod(Path path, int mode) throws IOException {
         long[] stat = stat(path);
         if (stat[Disk.KIND] == Disk.NONE) {
             throw unstated(path, stat[Disk.WHY]);
         }
         int why = Disk.setMode(host(path), mode);
         if (why != 0) {
-            throw unstated(path, why);
+            throw unchanged(path, why);
         }
+    }
+
+    // The exception a JDK throws where the host would not change a path's bits or owner.
+    private static IOException unchanged(Path path, long why) {
+        return why == Unix.NOT_PERMITTED ? new FileSystemException(path.toString(), null, "Operation not permitted")
+                : unstated(path, why);
+    }
+
+    // ---- owners: a host without permission bits (a .wasm) has no owner view either
+
+    // The slots of Disk.unix, and why a change of an owner or bits is refused where the
+    // host does not allow it (EPERM). Here, not in Disk, whose static finals every program
+    // reaching it carries.
+    private static final class Unix {
+        static final int UID = 0;
+
+        static final int GID = 1;
+
+        static final int INO = 2;
+
+        static final int DEV = 3;
+
+        static final int RDEV = 4;
+
+        static final int NLINK = 5;
+
+        static final int CTIME = 6;
+
+        static final int UNIX_MODE = 7;
+
+        static final int NOT_PERMITTED = 5;
+    }
+
+    public static UserPrincipal getOwner(Path path, LinkOption... options) throws IOException {
+        Objects.requireNonNull(path);
+        boolean follow = follows(options);
+        if (!Disk.modes()) {
+            throw new UnsupportedOperationException();
+        }
+        return owner(path, follow);
+    }
+
+    public static Path setOwner(Path path, UserPrincipal owner) throws IOException {
+        Objects.requireNonNull(path);
+        if (!Disk.modes()) {
+            throw new UnsupportedOperationException();
+        }
+        owned(path, true, owner, false);
         return path;
+    }
+
+    // What the host numbers a path's owner and group by, its inode and the rest (Disk.unix's
+    // slots).
+    private static long[] numbers(Path path, boolean follow) throws IOException {
+        long[] unix = Disk.unix(host(path), follow);
+        if (unix.length == 1) {
+            throw unstated(path, unix[0]);
+        }
+        return unix;
+    }
+
+    // The names of a path's owner and group.
+    private static String[] named(Path path, boolean follow) throws IOException {
+        String[] names = Disk.owners(host(path), follow);
+        if (names == null) {
+            numbers(path, follow);
+            throw new FileSystemException(path.toString());
+        }
+        return names;
+    }
+
+    private static UserPrincipal owner(Path path, boolean follow) throws IOException {
+        long[] unix = numbers(path, follow);
+        return new Owner((int) unix[Unix.UID], named(path, follow)[0]);
+    }
+
+    // Gives a path an owner, or a group: refused in a JDK's words and order, a principal
+    // of another class before a group given as an owner, before the path.
+    private static void owned(Path path, boolean follow, UserPrincipal owner, boolean group) throws IOException {
+        if (owner == null) {
+            throw new NullPointerException("'owner' is null");
+        }
+        if (!(owner instanceof Owner)) {
+            throw new ProviderMismatchException();
+        }
+        if (!group && owner instanceof GroupPrincipal) {
+            throw new IOException("'owner' parameter can't be a group");
+        }
+        numbered(path, follow, group, ((Owner) owner).id);
+    }
+
+    private static void numbered(Path path, boolean follow, boolean group, int id) throws IOException {
+        int why = Disk.setOwner(host(path), follow, group ? -1 : id, group ? id : -1);
+        if (why != 0) {
+            throw unchanged(path, why);
+        }
+    }
+
+    // An owner or a group as the host numbers and names it: equal to one of the same kind
+    // and number, which is its hash (a JDK's, measured).
+    private static class Owner implements UserPrincipal {
+        final int id;
+
+        private final String name;
+
+        Owner(int id, String name) {
+            this.id = id;
+            this.name = name;
+        }
+
+        boolean group() {
+            return false;
+        }
+
+        public String getName() {
+            return name;
+        }
+
+        public String toString() {
+            return name;
+        }
+
+        public int hashCode() {
+            return id;
+        }
+
+        public boolean equals(Object other) {
+            return other instanceof Owner that && that.id == id && that.group() == group();
+        }
+    }
+
+    private static final class Group extends Owner implements GroupPrincipal {
+        Group(int id, String name) {
+            super(id, name);
+        }
+
+        boolean group() {
+            return true;
+        }
     }
 
     public static boolean isHidden(Path path) throws IOException {
@@ -472,7 +622,7 @@ public final class Files {
     }
 
     // What a stat said, as attributes. A file's key the subset does not have.
-    private static final class Described implements BasicFileAttributes {
+    private static class Described implements BasicFileAttributes {
         private final long[] stat;
 
         Described(long[] stat) {
@@ -519,31 +669,129 @@ public final class Files {
     @SuppressWarnings("unchecked")
     public static <A extends BasicFileAttributes> A readAttributes(Path path, Class<A> type, LinkOption... options)
             throws IOException {
+        Objects.requireNonNull(type);
+        if (type == PosixFileAttributes.class && Disk.modes()) {
+            return (A) posix(path, follows(options));
+        }
         if (type != BasicFileAttributes.class) {
             throw new UnsupportedOperationException();
         }
         return (A) attributes(path, options);
     }
 
+    private static PosixFileAttributes posix(Path path, boolean follow) throws IOException {
+        long[] stat = Disk.stat(host(path), follow);
+        if (stat[Disk.KIND] == Disk.NONE) {
+            throw unstated(path, stat[Disk.WHY]);
+        }
+        return new Posix(stat, numbers(path, follow), named(path, follow));
+    }
+
+    // What a stat said with the owner, the group and the permission bits.
+    private static final class Posix extends Described implements PosixFileAttributes {
+        private final long[] unix;
+
+        private final String[] names;
+
+        Posix(long[] stat, long[] unix, String[] names) {
+            super(stat);
+            this.unix = unix;
+            this.names = names;
+        }
+
+        public UserPrincipal owner() {
+            return new Owner((int) unix[Unix.UID], names[0]);
+        }
+
+        public GroupPrincipal group() {
+            return new Group((int) unix[Unix.GID], names[1]);
+        }
+
+        public Set<PosixFilePermission> permissions() {
+            return Files.permissions((int) unix[Unix.UNIX_MODE]);
+        }
+    }
+
     public static FileTime getLastModifiedTime(Path path, LinkOption... options) throws IOException {
         return attributes(path, options).lastModifiedTime();
     }
 
-    // The basic view alone, of any path: what it says and writes is asked when it is
-    // used. A JDK on a Unix host has more, which the subset does not.
+    // The basic view of any path, the posix and the owner views where the host has
+    // permission bits: what one says and writes is asked when it is used. A JDK on a Unix
+    // host has more, which the subset does not.
     @SuppressWarnings("unchecked")
     public static <V extends FileAttributeView> V getFileAttributeView(Path path, Class<V> type,
             LinkOption... options) {
         Objects.requireNonNull(path);
         Objects.requireNonNull(type);
         boolean follow = follows(options);
-        return type == BasicFileAttributeView.class ? (V) new View(path, follow) : null;
+        if (type == BasicFileAttributeView.class) {
+            return (V) new View(path, follow);
+        }
+        if (!Disk.modes()) {
+            return null;
+        }
+        return type == PosixFileAttributeView.class ? (V) new PosixView(path, follow)
+                : type == FileOwnerAttributeView.class ? (V) new OwnerView(path, follow) : null;
     }
 
-    private static final class View implements BasicFileAttributeView {
+    private static final class OwnerView implements FileOwnerAttributeView {
         private final Path path;
 
         private final boolean follow;
+
+        OwnerView(Path path, boolean follow) {
+            this.path = path;
+            this.follow = follow;
+        }
+
+        public String name() {
+            return "owner";
+        }
+
+        public UserPrincipal getOwner() throws IOException {
+            return owner(path, follow);
+        }
+
+        public void setOwner(UserPrincipal owner) throws IOException {
+            owned(path, follow, owner, false);
+        }
+    }
+
+    private static final class PosixView extends View implements PosixFileAttributeView {
+        PosixView(Path path, boolean follow) {
+            super(path, follow);
+        }
+
+        public String name() {
+            return "posix";
+        }
+
+        public PosixFileAttributes readAttributes() throws IOException {
+            return posix(path, follow);
+        }
+
+        public void setPermissions(Set<PosixFilePermission> perms) throws IOException {
+            chmod(path, mode(perms));
+        }
+
+        public void setGroup(GroupPrincipal group) throws IOException {
+            owned(path, follow, group, true);
+        }
+
+        public UserPrincipal getOwner() throws IOException {
+            return owner(path, follow);
+        }
+
+        public void setOwner(UserPrincipal owner) throws IOException {
+            owned(path, follow, owner, false);
+        }
+    }
+
+    private static class View implements BasicFileAttributeView {
+        final Path path;
+
+        final boolean follow;
 
         View(Path path, boolean follow) {
             this.path = path;
@@ -576,23 +824,49 @@ public final class Files {
     private static final String[] BASIC = { "lastAccessTime", "lastModifiedTime", "size", "creationTime",
             "isRegularFile", "isDirectory", "isSymbolicLink", "isOther", "fileKey" };
 
-    // The names a text of attributes asks of the basic view: [view:]name,name.. or *,
-    // refused in a JDK's words and order, the view first.
-    private static Set<String> asked(String attributes) {
+    // The names of the posix view (the basic view's and three) and the unix view's (eight
+    // more), in the order a JDK fills its map.
+    private static String[] unixNames() {
+        return new String[] { "lastAccessTime", "lastModifiedTime", "size", "creationTime", "isRegularFile",
+                "isDirectory", "isSymbolicLink", "isOther", "fileKey", "permissions", "owner", "group", "mode", "ino",
+                "dev", "rdev", "nlink", "uid", "gid", "ctime" };
+    }
+
+    // The view a text of attributes names, [view:]name,name..: the basic view's where it
+    // names none, refused in a JDK's words where the host has no such view.
+    private static String view(String attributes) {
         int colon = attributes.indexOf(':');
         if (colon == 0) {
             throw new IllegalArgumentException(attributes);
         }
         String view = colon < 0 ? "basic" : attributes.substring(0, colon);
-        if (!view.equals("basic")) {
+        if (!view.equals("basic") && (!Disk.modes()
+                || !(view.equals("posix") || view.equals("unix") || view.equals("owner")))) {
             throw new UnsupportedOperationException("View '" + view + "' not available");
         }
-        Set<String> names = new java.util.HashSet<>();
-        for (String name : attributes.substring(colon + 1).split(",")) {
-            if (name.equals("*")) {
-                Collections.addAll(names, BASIC);
+        return view;
+    }
+
+    // The names a text of attributes asks of its view, or * for them all, refused in a
+    // JDK's words and order: the view first, the owner view's names with it.
+    private static Set<String> asked(String attributes) {
+        String view = view(attributes);
+        String[] all = view.equals("basic") ? BASIC : unixNames();
+        int known = view.equals("basic") ? BASIC.length : view.equals("posix") ? 12 : 20;
+        Set<String> names = new HashSet<>();
+        for (String name : attributes.substring(attributes.indexOf(':') + 1).split(",")) {
+            if (view.equals("owner")) {
+                if (!name.equals("*") && !name.equals("owner")) {
+                    throw new IllegalArgumentException("'owner:" + name + "' not recognized");
+                }
+                names.add("owner");
             }
-            else if (basic(name)) {
+            else if (name.equals("*")) {
+                for (int i = 0; i < known; i++) {
+                    names.add(all[i]);
+                }
+            }
+            else if (index(all, name) < known) {
                 names.add(name);
             }
             else {
@@ -602,13 +876,13 @@ public final class Files {
         return names;
     }
 
-    private static boolean basic(String name) {
-        for (String known : BASIC) {
-            if (known.equals(name)) {
-                return true;
+    private static int index(String[] names, String name) {
+        for (int i = 0; i < names.length; i++) {
+            if (names[i].equals(name)) {
+                return i;
             }
         }
-        return false;
+        return names.length;
     }
 
     private static Object value(BasicFileAttributes attrs, String name) {
@@ -625,18 +899,48 @@ public final class Files {
         };
     }
 
-    // The basic view's attributes by name; a JDK's other views are not available.
+    // The attributes of a view by name: the basic view's, and where the host has
+    // permission bits the posix, unix and owner views'. The owner view's map is a JDK's
+    // that may be changed.
     public static Map<String, Object> readAttributes(Path path, String attributes, LinkOption... options)
             throws IOException {
         Set<String> names = asked(attributes);
         BasicFileAttributes attrs = attributes(path, options);
         Map<String, Object> map = new HashMap<>();
-        for (String name : BASIC) {
+        if (attributes.indexOf(':') < 0 || attributes.startsWith("basic:")) {
+            for (String name : BASIC) {
+                if (names.contains(name)) {
+                    map.put(name, value(attrs, name));
+                }
+            }
+            return Collections.unmodifiableMap(map);
+        }
+        boolean follow = follows(options);
+        long[] unix = numbers(path, follow);
+        String[] owners = names.contains("owner") || names.contains("group") ? named(path, follow) : null;
+        for (String name : unixNames()) {
             if (names.contains(name)) {
-                map.put(name, value(attrs, name));
+                map.put(name, unixValue(attrs, unix, owners, name));
             }
         }
-        return Collections.unmodifiableMap(map);
+        return attributes.startsWith("owner:") ? map : Collections.unmodifiableMap(map);
+    }
+
+    private static Object unixValue(BasicFileAttributes attrs, long[] unix, String[] owners, String name) {
+        return switch (name) {
+            case "permissions" -> permissions((int) unix[Unix.UNIX_MODE]);
+            case "owner" -> new Owner((int) unix[Unix.UID], owners[0]);
+            case "group" -> new Group((int) unix[Unix.GID], owners[1]);
+            case "mode" -> Integer.valueOf((int) unix[Unix.UNIX_MODE]);
+            case "ino" -> Long.valueOf(unix[Unix.INO]);
+            case "dev" -> Long.valueOf(unix[Unix.DEV]);
+            case "rdev" -> Long.valueOf(unix[Unix.RDEV]);
+            case "nlink" -> Integer.valueOf((int) unix[Unix.NLINK]);
+            case "uid" -> Integer.valueOf((int) unix[Unix.UID]);
+            case "gid" -> Integer.valueOf((int) unix[Unix.GID]);
+            case "ctime" -> FileTime.from(unix[Unix.CTIME], TimeUnit.NANOSECONDS);
+            default -> value(attrs, name);
+        };
     }
 
     // One attribute: a text naming several is refused before it is read.
@@ -648,21 +952,40 @@ public final class Files {
         return map.get(attribute.substring(attribute.indexOf(':') + 1));
     }
 
-    // A time of the basic view by name; the time of making is not written (a JDK on a
-    // Unix host writes none).
+    // A time of the basic view by name, through the posix and unix views too; the time of
+    // making is not written (a JDK on a Unix host writes none). The posix and unix views
+    // give the permission bits, which follow a link as chmod does, and the owner and the
+    // group, as the owner view gives the owner; the unix view the mode and the numbers of
+    // the owner and the group.
+    @SuppressWarnings("unchecked")
     public static Path setAttribute(Path path, String attribute, Object value, LinkOption... options)
             throws IOException {
-        int colon = attribute.indexOf(':');
-        if (colon == 0) {
-            throw new IllegalArgumentException(attribute);
-        }
-        String view = colon < 0 ? "basic" : attribute.substring(0, colon);
-        if (!view.equals("basic")) {
-            throw new UnsupportedOperationException("View '" + view + "' not available");
-        }
-        String name = attribute.substring(colon + 1);
-        if (!name.equals("lastModifiedTime") && !name.equals("lastAccessTime") && !name.equals("creationTime")) {
-            throw new IllegalArgumentException("'basic:" + name + "' not recognized");
+        String view = view(attribute);
+        String name = attribute.substring(attribute.indexOf(':') + 1);
+        boolean posix = view.equals("posix") || view.equals("unix");
+        boolean unix = view.equals("unix");
+        boolean timed = name.equals("lastModifiedTime") || name.equals("lastAccessTime")
+                || name.equals("creationTime");
+        if (!timed || view.equals("owner")) {
+            if (posix && name.equals("permissions")) {
+                chmod(path, mode((Set<PosixFilePermission>) value));
+            }
+            else if ((posix || view.equals("owner")) && name.equals("owner")) {
+                owned(path, follows(options), (UserPrincipal) value, false);
+            }
+            else if (posix && name.equals("group")) {
+                owned(path, follows(options), (GroupPrincipal) value, true);
+            }
+            else if (unix && name.equals("mode")) {
+                chmod(path, ((Integer) value).intValue() & 07777);
+            }
+            else if (unix && (name.equals("uid") || name.equals("gid"))) {
+                numbered(path, follows(options), name.equals("gid"), ((Integer) value).intValue());
+            }
+            else {
+                throw new IllegalArgumentException("'" + view + ":" + name + "' not recognized");
+            }
+            return path;
         }
         FileTime time = (FileTime) value;
         boolean follow = follows(options);

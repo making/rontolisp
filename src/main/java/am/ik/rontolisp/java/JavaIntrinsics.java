@@ -2418,6 +2418,9 @@ final class JavaIntrinsics {
 		natives.put(disk + "space(String,int)", runtime("file-space"));
 		natives.put(disk + "setMode(String,int)", runtime("file-set-mode"));
 		natives.put(disk + "make(String,int,boolean)", runtime("file-make"));
+		natives.put(disk + "unix(String,boolean)", runtime("file-unix"));
+		natives.put(disk + "owners(String,boolean)", runtime("file-owners"));
+		natives.put(disk + "setOwner(String,boolean,int,int)", runtime("file-set-owner"));
 		natives.put(disk + "open(String,int)", runtime("file-open"));
 		natives.put(disk + "read(Object)", runtime("file-read-byte"));
 		natives.put(disk + "read(Object,byte[],int,int)", runtime("file-read"));
@@ -2531,6 +2534,10 @@ final class JavaIntrinsics {
 		natives.put("java.lang.reflect.Executable.parameters0(Class,Object)",
 				(lowering, call) -> lowering.classReflection(call, 43));
 		natives.put("java.lang.Package.annotations0(String)", (lowering, call) -> lowering.classReflection(call, 44));
+		natives.put("rontolisp.internal.AnnotatedTypes.annotated0(Class,Object,int)",
+				(lowering, call) -> lowering.classReflection(call, 45));
+		natives.put("java.lang.reflect.Types.variableAnnotations0(Class,Object,int)",
+				(lowering, call) -> lowering.classReflection(call, 46));
 		arrays(natives);
 		String thread = THREAD + ".";
 		natives.put("java.lang.Runtime.halt0(int)", runtime("exit"));

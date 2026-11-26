@@ -1,0 +1,8 @@
+setOwner foreign: java.nio.file.ProviderMismatchException
+setOwner foreign missing: java.nio.file.ProviderMismatchException
+setOwner foreign group: java.nio.file.ProviderMismatchException
+set group foreign: java.nio.file.ProviderMismatchException
+eq foreign: false
+set group null: java.lang.NullPointerException: 'owner' is null
+set uid null: java.lang.NullPointerException
+set size,: {size=1}

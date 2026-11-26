@@ -1541,7 +1541,7 @@ final class JvmExprCompiler {
 					LispNames.MAKE_LINK_INTERNAL ->
 				JvmFileMetaCompiler.compile(cons, ctx, className, sym.name());
 			case LispNames.FILE_ACCESS_INTERNAL, LispNames.FILE_SPACE_INTERNAL, LispNames.FILE_SET_MODE_INTERNAL,
-					LispNames.FILE_MAKE_INTERNAL ->
+					LispNames.FILE_MAKE_INTERNAL, LispNames.FILE_UNIX_INTERNAL, LispNames.FILE_SET_OWNER_INTERNAL ->
 				compileFileModes(sym.name(), cons, ctx, className);
 			case LispNames.TERMINAL_P_INTERNAL -> {
 				// isatty through runtime/RontoTerminal, which travels with the class.
@@ -2728,13 +2728,17 @@ final class JvmExprCompiler {
 
 	/**
 	 * Compiles a permission primitive -- {@code %file-access}, {@code %file-space},
-	 * {@code %file-set-mode}, {@code %file-make} -- onto its
-	 * {@code runtime/RontoFileModes} method, which travels with the class. The path is
-	 * the first argument.
+	 * {@code %file-set-mode}, {@code %file-make}, {@code %file-unix},
+	 * {@code %file-set-owner} -- onto its {@code runtime/RontoFileModes} method, which
+	 * travels with the class. The path is the first argument.
 	 */
 	private static void compileFileModes(String name, LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		List<LispVal> items = cons.toList();
-		int arity = LispNames.FILE_MAKE_INTERNAL.equals(name) ? 3 : 2;
+		int arity = switch (name) {
+			case LispNames.FILE_MAKE_INTERNAL, LispNames.FILE_UNIX_INTERNAL -> 3;
+			case LispNames.FILE_SET_OWNER_INTERNAL -> 4;
+			default -> 2;
+		};
 		if (items.size() != arity + 1) {
 			throw new UnsupportedOperationException(name.toLowerCase(java.util.Locale.ROOT) + " expects " + arity
 					+ " arguments, got " + (items.size() - 1));
@@ -2749,6 +2753,8 @@ final class JvmExprCompiler {
 			case LispNames.FILE_ACCESS_INTERNAL -> "fileAccess";
 			case LispNames.FILE_SPACE_INTERNAL -> "fileSpace";
 			case LispNames.FILE_SET_MODE_INTERNAL -> "fileSetMode";
+			case LispNames.FILE_UNIX_INTERNAL -> "fileUnix";
+			case LispNames.FILE_SET_OWNER_INTERNAL -> "fileSetOwner";
 			default -> "fileMake";
 		};
 		ctx.body.invokestatic(ctx.cp.methodRef(ctx.cp.classEntry(JvmLispCompiler.FILE_MODES_CLASS), method,

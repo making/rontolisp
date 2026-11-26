@@ -6,6 +6,7 @@ package java.lang;
 import java.io.InputStream;
 import java.lang.annotation.Annotation;
 import java.lang.reflect.AnnotatedElement;
+import java.lang.reflect.AnnotatedType;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.lang.reflect.GenericDeclaration;
@@ -595,6 +596,22 @@ public final class Class<T> implements GenericDeclaration, Type, AnnotatedElemen
             taken[index] = (Type) all[index];
         }
         return taken;
+    }
+
+    // the use of the class it extends, with the type annotations written in it; none of an
+    // interface, an array or a primitive type or Object
+    public AnnotatedType getAnnotatedSuperclass() {
+        Type above = (kind & 2) != 0 ? null : getGenericSuperclass();
+        return above == null ? null
+                : rontolisp.internal.AnnotatedTypes.of(above, rontolisp.internal.AnnotatedTypes.annotated0(this, null, 1));
+    }
+
+    // the uses of the interfaces it implements or extends; none of an array or a primitive
+    // type
+    public AnnotatedType[] getAnnotatedInterfaces() {
+        Type[] implemented = (kind & 6) != 0 ? new Type[0] : getGenericInterfaces();
+        return rontolisp.internal.AnnotatedTypes.all(implemented,
+                (kind & 6) != 0 ? null : rontolisp.internal.AnnotatedTypes.annotated0(this, null, 2), 0);
     }
 
     // its modifiers, its kind, its name and its type parameters with their bounds

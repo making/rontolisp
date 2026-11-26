@@ -3264,6 +3264,9 @@ m 17 trySetAccessible boolean - -
 A @jdk.internal.reflect.CallerSensitive()
 k 4 - -
 A @java.lang.Deprecated(forRemoval=false, since="17")
+C java.lang.reflect.AnnotatedArrayType 1537 java.base - java.lang.reflect.AnnotatedType
+m 1025 getAnnotatedGenericComponentType java.lang.reflect.AnnotatedType - -
+m 1025 getAnnotatedOwnerType java.lang.reflect.AnnotatedType - -
 C java.lang.reflect.AnnotatedElement 1537 java.base - -
 m 1025 getAnnotation java.lang.annotation.Annotation java.lang.Class -
 g <T:Ljava/lang/annotation/Annotation;>(Ljava/lang/Class<TT;>;)TT;
@@ -3277,6 +3280,23 @@ m 1 getDeclaredAnnotationsByType [Ljava.lang.annotation.Annotation; java.lang.Cl
 g <T:Ljava/lang/annotation/Annotation;>(Ljava/lang/Class<TT;>;)[TT;
 m 1 isAnnotationPresent boolean java.lang.Class -
 g (Ljava/lang/Class<+Ljava/lang/annotation/Annotation;>;)Z
+C java.lang.reflect.AnnotatedParameterizedType 1537 java.base - java.lang.reflect.AnnotatedType
+m 1025 getAnnotatedActualTypeArguments [Ljava.lang.reflect.AnnotatedType; - -
+m 1025 getAnnotatedOwnerType java.lang.reflect.AnnotatedType - -
+C java.lang.reflect.AnnotatedType 1537 java.base - java.lang.reflect.AnnotatedElement
+m 1 getAnnotatedOwnerType java.lang.reflect.AnnotatedType - -
+m 1025 getAnnotation java.lang.annotation.Annotation java.lang.Class -
+g <T:Ljava/lang/annotation/Annotation;>(Ljava/lang/Class<TT;>;)TT;
+m 1025 getAnnotations [Ljava.lang.annotation.Annotation; - -
+m 1025 getDeclaredAnnotations [Ljava.lang.annotation.Annotation; - -
+m 1025 getType java.lang.reflect.Type - -
+C java.lang.reflect.AnnotatedTypeVariable 1537 java.base - java.lang.reflect.AnnotatedType
+m 1025 getAnnotatedBounds [Ljava.lang.reflect.AnnotatedType; - -
+m 1025 getAnnotatedOwnerType java.lang.reflect.AnnotatedType - -
+C java.lang.reflect.AnnotatedWildcardType 1537 java.base - java.lang.reflect.AnnotatedType
+m 1025 getAnnotatedLowerBounds [Ljava.lang.reflect.AnnotatedType; - -
+m 1025 getAnnotatedOwnerType java.lang.reflect.AnnotatedType - -
+m 1025 getAnnotatedUpperBounds [Ljava.lang.reflect.AnnotatedType; - -
 C java.lang.reflect.Array 17 java.base java.lang.Object -
 m 265 get java.lang.Object java.lang.Object,int java.lang.IllegalArgumentException,java.lang.ArrayIndexOutOfBoundsException
 m 265 getBoolean boolean java.lang.Object,int java.lang.IllegalArgumentException,java.lang.ArrayIndexOutOfBoundsException
@@ -5199,6 +5219,9 @@ m 1025 matches boolean java.nio.file.Path -
 C java.nio.file.Paths 17 java.base java.lang.Object -
 m 137 get java.nio.file.Path java.lang.String,[Ljava.lang.String; -
 m 9 get java.nio.file.Path java.net.URI -
+C java.nio.file.ProviderMismatchException 1 java.base java.lang.IllegalArgumentException -
+k 1 - -
+k 1 java.lang.String -
 C java.nio.file.ProviderNotFoundException 1 java.base java.lang.RuntimeException -
 k 1 - -
 k 1 java.lang.String -
@@ -5261,6 +5284,10 @@ m 1025 name java.lang.String - -
 m 1025 value java.lang.Object - -
 g ()TT;
 C java.nio.file.attribute.FileAttributeView 1537 java.base - java.nio.file.attribute.AttributeView
+C java.nio.file.attribute.FileOwnerAttributeView 1537 java.base - java.nio.file.attribute.FileAttributeView
+m 1025 getOwner java.nio.file.attribute.UserPrincipal - java.io.IOException
+m 1025 name java.lang.String - -
+m 1025 setOwner void java.nio.file.attribute.UserPrincipal java.io.IOException
 C java.nio.file.attribute.FileTime 17 java.base java.lang.Object java.lang.Comparable
 G Ljava/lang/Object;Ljava/lang/Comparable<Ljava/nio/file/attribute/FileTime;>;
 m 4161 compareTo int java.lang.Object -
@@ -5274,6 +5301,19 @@ m 1 to long java.util.concurrent.TimeUnit -
 m 1 toInstant java.time.Instant - -
 m 1 toMillis long - -
 m 1 toString java.lang.String - -
+C java.nio.file.attribute.GroupPrincipal 1537 java.base - java.nio.file.attribute.UserPrincipal
+C java.nio.file.attribute.PosixFileAttributeView 1537 java.base - java.nio.file.attribute.BasicFileAttributeView,java.nio.file.attribute.FileOwnerAttributeView
+m 1025 name java.lang.String - -
+m 4161 readAttributes java.nio.file.attribute.BasicFileAttributes - java.io.IOException
+m 1025 readAttributes java.nio.file.attribute.PosixFileAttributes - java.io.IOException
+m 1025 setGroup void java.nio.file.attribute.GroupPrincipal java.io.IOException
+m 1025 setPermissions void java.util.Set java.io.IOException
+g (Ljava/util/Set<Ljava/nio/file/attribute/PosixFilePermission;>;)V^Ljava/io/IOException;
+C java.nio.file.attribute.PosixFileAttributes 1537 java.base - java.nio.file.attribute.BasicFileAttributes
+m 1025 group java.nio.file.attribute.GroupPrincipal - -
+m 1025 owner java.nio.file.attribute.UserPrincipal - -
+m 1025 permissions java.util.Set - -
+g ()Ljava/util/Set<Ljava/nio/file/attribute/PosixFilePermission;>;
 C java.nio.file.attribute.PosixFilePermission 16401 java.base java.lang.Enum -
 G Ljava/lang/Enum<Ljava/nio/file/attribute/PosixFilePermission;>;
 m 9 valueOf java.nio.file.attribute.PosixFilePermission java.lang.String -
@@ -5294,6 +5334,7 @@ m 9 fromString java.util.Set java.lang.String -
 g (Ljava/lang/String;)Ljava/util/Set<Ljava/nio/file/attribute/PosixFilePermission;>;
 m 9 toString java.lang.String java.util.Set -
 g (Ljava/util/Set<Ljava/nio/file/attribute/PosixFilePermission;>;)Ljava/lang/String;
+C java.nio.file.attribute.UserPrincipal 1537 java.base - java.security.Principal
 C java.security.AccessController 17 java.base java.lang.Object -
 A @java.lang.Deprecated(forRemoval=true, since="17")
 m 9 checkPermission void java.security.Permission java.security.AccessControlException
@@ -15855,7 +15896,6 @@ N java.lang.invoke.VarHandle 1025 java.base
 N java.lang.invoke.VarHandle$AccessMode 16409 java.base
 N java.lang.module.ModuleDescriptor 17 java.base
 N java.lang.reflect.AccessFlag 16401 java.base
-N java.lang.reflect.AnnotatedType 1537 java.base
 N java.net.Authenticator 1025 java.base
 N java.net.ContentHandlerFactory 1537 java.base
 N java.net.CookieHandler 1025 java.base
@@ -15881,7 +15921,6 @@ N java.nio.file.WatchEvent$Kind 1545 java.base
 N java.nio.file.WatchEvent$Modifier 1545 java.base
 N java.nio.file.WatchKey 1537 java.base
 N java.nio.file.WatchService 1537 java.base
-N java.nio.file.attribute.UserPrincipal 1537 java.base
 N java.nio.file.attribute.UserPrincipalLookupService 1025 java.base
 N java.nio.file.spi.FileSystemProvider 1025 java.base
 N java.security.AccessControlContext 17 java.base

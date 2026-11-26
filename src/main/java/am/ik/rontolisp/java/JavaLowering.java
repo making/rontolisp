@@ -9686,6 +9686,12 @@ final class JavaLowering implements JavaEmitter.Context {
 			if (reached.contains("parameters0")) {
 				generated.add(classParametersFunction(making));
 			}
+			if (reached.contains("annotated0")) {
+				generated.add(classAnnotatedFunction(making));
+			}
+			if (reached.contains("variableAnnotations0")) {
+				generated.add(classVariableAnnotationsFunction(making));
+			}
 		}
 		while (made.size() != before);
 		if (reached.contains("packageAnnotations0")) {
@@ -9955,7 +9961,7 @@ final class JavaLowering implements JavaEmitter.Context {
 			"getDeclaredAnnotation", "getDeclaredConstructor", "getDeclaredMethod", "getMethod", "getDeclaredField",
 			"getField", "getInterfaces", "getMethods", "getDeclaredFields", "getFields", "getDeclaredConstructors",
 			"getConstructors", "getConstructor", "getModifiers", "newInstance", "generic0", "annotations0",
-			"components0", "parameters0");
+			"components0", "parameters0", "annotated0", "variableAnnotations0");
 
 	/**
 	 * The function {@code Class.getModifiers()} asks: for each class object made of a
@@ -10228,6 +10234,12 @@ final class JavaLowering implements JavaEmitter.Context {
 			case 44:
 				asks("packageAnnotations0");
 				return list(PACKAGE_ANNOTATIONS, call.argument(0));
+			case 45:
+				asks("annotated0");
+				return list(CLASS_ANNOTATED, call.argument(0), call.argument(1), call.argument(2));
+			case 46:
+				asks("variableAnnotations0");
+				return list(CLASS_VARIABLE_ANNOTATIONS, call.argument(0), call.argument(1), call.argument(2));
 			case 3:
 				break;
 			default:
@@ -10453,6 +10465,10 @@ final class JavaLowering implements JavaEmitter.Context {
 	private static final LispSymbol CLASS_PARAMETERS = new LispSymbol("%class-parameters");
 
 	private static final LispSymbol PACKAGE_ANNOTATIONS = new LispSymbol("%package-annotations");
+
+	private static final LispSymbol CLASS_ANNOTATED = new LispSymbol("%class-annotated");
+
+	private static final LispSymbol CLASS_VARIABLE_ANNOTATIONS = new LispSymbol("%class-variable-annotations");
 
 	/**
 	 * Where the forms making class objects go while a function over them is made: the
@@ -10857,7 +10873,7 @@ final class JavaLowering implements JavaEmitter.Context {
 		for (Field field : reflectedFields(declaration)) {
 			List<LispVal> answers = new ArrayList<>();
 			JavaSyntax.Parameter component = field.isStatic ? null : components.get(field.name);
-			addAnnotations(answers, 0, declaration, field.pos, "FIELD");
+			addAnnotations(answers, 0, declaration, field.pos, field.isConstant ? "ENUM_CONSTANT" : "FIELD");
 			if (component != null) {
 				addAnnotations(answers, 3, declaration, component.pos(), "RECORD_COMPONENT");
 			}
@@ -10933,6 +10949,332 @@ final class JavaLowering implements JavaEmitter.Context {
 			answers.add(list(integer(2), list(parameters)));
 		}
 		return answers;
+	}
+
+	/**
+	 * The function {@code Types.variableAnnotations0} asks: for each class object made of
+	 * a class of the program, by the declaration ({@link #classGenericFunction}) and a
+	 * type parameter's place, a new vector of the new annotations written on the type
+	 * parameter that may stand on one; {@code NIL} where there is none and of a class of
+	 * the JDK, which writes none. A class whose annotations are not kept is refused where
+	 * the program runs. A function of its own beside {@code %class-annotations}, whose
+	 * calls all ask a constant: a program holding type variables and asking a
+	 * declaration's annotations through {@code AnnotatedElement} reaches a type
+	 * variable's, and has arms for its classes' annotated type parameters alone.
+	 */
+	private LispVal classVariableAnnotationsFunction(Making making) {
+		LispSymbol member = new LispSymbol("%m");
+		LispSymbol index = new LispSymbol("%i");
+		List<LispVal> arms = new ArrayList<>(List.of(cl("cond")));
+		List<LispVal> unknown = new ArrayList<>(List.of(cl("or")));
+		for (Map.Entry<JavaType, LispVal> object : List.copyOf(making.made().entrySet())) {
+			if (!(object.getKey() instanceof ClassType named)) {
+				continue;
+			}
+			JavaClass declaration = named.declaration();
+			LispVal test = call("eq", RECEIVER, object.getValue());
+			if (declaration.intrinsic || declaration.declaration == null || declaration.source == null
+					|| declaration.source.library()) {
+				// a type variable is of a class whose generic signatures are answered: of
+				// any other class there is none to ask
+				if (jdkRow(declaration) == null && reflected(declaration)) {
+					unknown.add(test);
+				}
+				continue;
+			}
+			JavaSyntax.ClassDeclaration source = declaration.declaration;
+			List<LispVal> byMember = new ArrayList<>(List.of(cl("cond")));
+			List<LispVal> own = typeParameterAnnotations(declaration, source.typeParameters());
+			if (!own.isEmpty()) {
+				byMember.add(list(call("null", member), caseOf(index, own)));
+			}
+			List<LispVal> places = new ArrayList<>(List.of(cl("case"), member));
+			if (!declaration.isInterface) {
+				List<Method> declared = constructors(declaration);
+				for (int at = 0; at < declared.size(); at++) {
+					JavaSyntax.Method written = declared.get(at).declaration;
+					List<LispVal> answers = written == null || !source.methods().contains(written) ? List.of()
+							: typeParameterAnnotations(declaration, written.typeParameters());
+					if (!answers.isEmpty()) {
+						places.add(list(integer(-1 - at), caseOf(index, answers)));
+					}
+				}
+			}
+			List<Method> listed = declaredMethodList(declaration);
+			for (int at = 0; at < listed.size(); at++) {
+				JavaSyntax.Method written = listed.get(at) == null ? null : listed.get(at).declaration;
+				List<LispVal> answers = written == null || !source.methods().contains(written) ? List.of()
+						: typeParameterAnnotations(declaration, written.typeParameters());
+				if (!answers.isEmpty()) {
+					places.add(list(integer(at), caseOf(index, answers)));
+				}
+			}
+			if (places.size() > 2) {
+				byMember.add(list(call("integerp", member), list(places)));
+			}
+			if (byMember.size() > 1) {
+				arms.add(list(test, list(byMember)));
+			}
+		}
+		if (unknown.size() > 1) {
+			arms.add(list(list(unknown), library(TYPES, "unknownAnnotations", List.of(RECEIVER))));
+		}
+		return list(cl("defun"), CLASS_VARIABLE_ANNOTATIONS, list(RECEIVER, member, index), list(arms));
+	}
+
+	/** The answers of each type parameter's annotations that has some, by its place. */
+	private List<LispVal> typeParameterAnnotations(JavaClass declaration, List<JavaSyntax.TypeParameter> parameters) {
+		List<LispVal> answers = new ArrayList<>();
+		for (int index = 0; index < parameters.size(); index++) {
+			addAnnotations(answers, index, declaration, parameters.get(index).pos(), "TYPE_PARAMETER");
+		}
+		return answers;
+	}
+
+	/**
+	 * The function {@code AnnotatedTypes.annotated0} asks: for each class object made of
+	 * a class of the program, by the declaration ({@link #classGenericFunction}) and what
+	 * is asked -- 1 the use of its generic type (a class's superclass, a method's or a
+	 * constructor's return type, a field's or a record component's type), 2 of each
+	 * declared parameter (a class's interfaces), 3 of each type thrown, 4 of the
+	 * receiver, 10 and on of each bound of a type parameter -- the type annotations
+	 * written there, a vector of paths each followed by a new vector of new annotations
+	 * ({@link JavaClasses#placed}), {@code NIL} where none is; of a class of the JDK
+	 * {@code NIL}, which writes none. And of every class object, 7 the class object of
+	 * the class a member class is declared in, 8 whether it is an inner one. Any other
+	 * class is refused where the program runs, as its annotations are.
+	 */
+	private LispVal classAnnotatedFunction(Making making) {
+		LispSymbol member = new LispSymbol("%m");
+		LispSymbol what = new LispSymbol("%w");
+		List<LispVal> owners = new ArrayList<>(List.of(cl("cond")));
+		List<LispVal> inners = new ArrayList<>(List.of(cl("or")));
+		List<LispVal> arms = new ArrayList<>(List.of(cl("cond")));
+		List<LispVal> none = new ArrayList<>(List.of(cl("or")));
+		Set<JavaType> answered = new HashSet<>();
+		boolean more = true;
+		while (more) {
+			more = false;
+			for (Map.Entry<JavaType, LispVal> object : List.copyOf(making.made().entrySet())) {
+				if (!answered.add(object.getKey())) {
+					continue;
+				}
+				more = true;
+				if (!(object.getKey() instanceof ClassType named)) {
+					continue;
+				}
+				JavaClass declaration = named.declaration();
+				LispVal test = call("eq", RECEIVER, object.getValue());
+				JavaClass outer = declaration.outer;
+				if (outer != null && !declaration.isLocal) {
+					owners.add(list(test, classObject(raw(outer), making)));
+					if (declaration.hasOuterInstance()) {
+						inners.add(test);
+					}
+				}
+				LispVal answer;
+				if (declaration.intrinsic || declaration.declaration == null || declaration.source == null
+						|| declaration.source.library()) {
+					if (jdkRow(declaration) == null) {
+						// any other class is the last arm's
+						continue;
+					}
+					answer = NIL;
+				}
+				else {
+					answer = declaredAnnotated(declaration, member, what);
+				}
+				if (answer == NIL) {
+					none.add(test);
+				}
+				else {
+					arms.add(list(test, answer));
+				}
+			}
+		}
+		if (none.size() > 1) {
+			arms.add(list(list(none), NIL));
+		}
+		arms.add(list(T, library(TYPES, "unknownAnnotations", List.of(RECEIVER))));
+		return list(cl("defun"), CLASS_ANNOTATED, list(RECEIVER, member, what),
+				list(cl("cond"), list(call("eql", what, integer(7)), list(owners)),
+						list(call("eql", what, integer(8)), list(inners)), list(T, list(arms))));
+	}
+
+	/**
+	 * What a class of the program answers of the type annotations written in the types
+	 * its declarations name ({@link #classAnnotatedFunction}), or {@code NIL} where none
+	 * is written.
+	 */
+	private LispVal declaredAnnotated(JavaClass declaration, LispSymbol member, LispSymbol what) {
+		JavaSyntax.ClassDeclaration source = Objects.requireNonNull(declaration.declaration);
+		List<LispVal> byMember = new ArrayList<>(List.of(cl("cond")));
+		List<LispVal> own = new ArrayList<>();
+		addPlaced(own, 1, declaration, source.superclass(), List.of());
+		addPlacedAll(own, 2, declaration, source.interfaces(), List.of());
+		boundsPlaced(own, declaration, source.typeParameters());
+		if (!own.isEmpty()) {
+			byMember.add(list(call("null", member), caseOf(what, own)));
+		}
+		if (!reflected(declaration)) {
+			return byMember.size() == 1 ? NIL : list(byMember);
+		}
+		Map<String, JavaSyntax.Parameter> components = new HashMap<>();
+		for (JavaSyntax.Parameter component : source.components()) {
+			components.put(component.name(), component);
+		}
+		Map<Integer, JavaSyntax.Field> written = new HashMap<>();
+		for (JavaSyntax.Field field : source.fields()) {
+			written.put(field.pos(), field);
+		}
+		List<LispVal> fields = new ArrayList<>(List.of(cl("cond")));
+		for (Field field : reflectedFields(declaration)) {
+			JavaSyntax.Parameter component = field.isStatic ? null : components.get(field.name);
+			JavaSyntax.Field declared = written.get(field.pos);
+			List<LispVal> answers = new ArrayList<>();
+			if (component != null) {
+				addPlaced(answers, 1, declaration, component.type(),
+						this.classes.writtenAt(declaration, component.pos()));
+			}
+			else if (declared != null && !field.isConstant) {
+				addPlaced(answers, 1, declaration, declared.type(), this.classes.writtenAt(declaration, field.pos));
+			}
+			if (!answers.isEmpty()) {
+				fields.add(list(call("equal", member, string(field.name)), caseOf(what, answers)));
+			}
+		}
+		if (fields.size() > 1) {
+			byMember.add(list(call("stringp", member), list(fields)));
+		}
+		List<LispVal> places = new ArrayList<>(List.of(cl("case"), member));
+		if (!declaration.isInterface) {
+			List<Method> declared = constructors(declaration);
+			for (int index = 0; index < declared.size(); index++) {
+				List<LispVal> answers = executablePlaced(declaration, declared.get(index), components);
+				if (!answers.isEmpty()) {
+					places.add(list(integer(-1 - index), caseOf(what, answers)));
+				}
+			}
+		}
+		List<Method> listed = declaredMethodList(declaration);
+		for (int index = 0; index < listed.size(); index++) {
+			Method method = listed.get(index);
+			List<LispVal> answers = method == null ? List.of() : executablePlaced(declaration, method, components);
+			if (!answers.isEmpty()) {
+				places.add(list(integer(index), caseOf(what, answers)));
+			}
+		}
+		if (places.size() > 2) {
+			byMember.add(list(call("integerp", member), list(places)));
+		}
+		return byMember.size() == 1 ? NIL : list(byMember);
+	}
+
+	/**
+	 * The type annotations of a method or a constructor: of what it returns (a
+	 * constructor's those written on it), of each declared parameter, each type thrown,
+	 * its receiver and its type parameters' bounds. A record's accessor the record does
+	 * not declare has its component's, its canonical constructor the record declares no
+	 * parameter of its components' on its parameters, as javac writes them.
+	 */
+	private List<LispVal> executablePlaced(JavaClass declaration, Method executable,
+			Map<String, JavaSyntax.Parameter> components) {
+		List<LispVal> answers = new ArrayList<>();
+		JavaSyntax.Method written = executable.declaration;
+		JavaSyntax.ClassDeclaration source = Objects.requireNonNull(declaration.declaration);
+		if (written == null) {
+			return answers;
+		}
+		boolean own = source.methods().stream().anyMatch(method -> method == written);
+		boolean canonical = written.parameters() == source.components();
+		List<JavaSyntax.Annotation> on = this.classes.writtenAt(declaration, written.pos());
+		if (own || (canonical && written.pos() != source.pos())) {
+			addPlaced(answers, 1, declaration, written.returnType(), on);
+		}
+		else if (!canonical && written.parameters().isEmpty() && components.containsKey(executable.name)) {
+			JavaSyntax.Parameter component = components.get(executable.name);
+			addPlaced(answers, 1, declaration, component.type(), this.classes.writtenAt(declaration, component.pos()));
+		}
+		if (!own && !canonical) {
+			return answers;
+		}
+		List<LispVal> parameters = new ArrayList<>(List.of(cl("vector")));
+		boolean any = false;
+		for (JavaSyntax.Parameter parameter : written.parameters()) {
+			LispVal made = placedForm(declaration, parameter.type(),
+					this.classes.writtenAt(declaration, parameter.pos()));
+			any |= made != NIL;
+			parameters.add(made);
+		}
+		if (any) {
+			answers.add(list(integer(2), list(parameters)));
+		}
+		if (own) {
+			addPlacedAll(answers, 3, declaration, written.thrown(), List.of());
+			addPlaced(answers, 4, declaration, this.classes.receiverType(declaration, written.pos()), List.of());
+			boundsPlaced(answers, declaration, written.typeParameters());
+		}
+		return answers;
+	}
+
+	/** Adds the answers 10 and on: the uses of each type parameter's bounds. */
+	private void boundsPlaced(List<LispVal> answers, JavaClass declaration, List<JavaSyntax.TypeParameter> parameters) {
+		for (int index = 0; index < parameters.size(); index++) {
+			addPlacedAll(answers, 10 + index, declaration, parameters.get(index).bounds(), List.of());
+		}
+	}
+
+	/** Adds the answer {@code what} of the uses of several types, if any is annotated. */
+	private void addPlacedAll(List<LispVal> answers, int what, JavaClass declaration, List<JavaSyntax.TypeName> types,
+			List<JavaSyntax.Annotation> leading) {
+		List<LispVal> made = new ArrayList<>(List.of(cl("vector")));
+		boolean any = false;
+		for (JavaSyntax.TypeName type : types) {
+			LispVal placed = placedForm(declaration, type, leading);
+			any |= placed != NIL;
+			made.add(placed);
+		}
+		if (any) {
+			answers.add(list(integer(what), list(made)));
+		}
+	}
+
+	/** Adds the answer {@code what} of the use of a type, if it is annotated. */
+	private void addPlaced(List<LispVal> answers, int what, JavaClass declaration, JavaSyntax.@Nullable TypeName type,
+			List<JavaSyntax.Annotation> leading) {
+		if (type == null && what != 1) {
+			return;
+		}
+		if (type != null && type.name().equals("void")) {
+			return;
+		}
+		LispVal placed = placedForm(declaration, type, leading);
+		if (placed != NIL) {
+			answers.add(list(integer(what), placed));
+		}
+	}
+
+	/**
+	 * The form of the type annotations written in a use of a type: a new vector of each
+	 * path followed by a new vector of new annotations, or {@code NIL} for none.
+	 */
+	private LispVal placedForm(JavaClass declaration, JavaSyntax.@Nullable TypeName type,
+			List<JavaSyntax.Annotation> leading) {
+		List<JavaClasses.Placed> placed = this.classes.placed(declaration, type, leading);
+		if (placed.isEmpty()) {
+			return NIL;
+		}
+		String holder = this.classes.memberAnnotationHolder(declaration);
+		List<LispVal> made = new ArrayList<>(List.of(cl("vector")));
+		for (JavaClasses.Placed each : placed) {
+			made.add(string(each.path()));
+			List<LispVal> annotations = new ArrayList<>(List.of(cl("vector")));
+			for (JavaClasses.Carried carried : each.carried()) {
+				annotations.add(library(holder, JavaClasses.holderMethod(carried), List.of()));
+			}
+			made.add(list(annotations));
+		}
+		return list(made);
 	}
 
 	/** Adds the answer {@code what} of the annotations written at a position, if any. */
@@ -13706,7 +14048,8 @@ final class JavaLowering implements JavaEmitter.Context {
 		}
 		Set<String> asked = this.classes.nativeReflection;
 		if (asked.contains("generic0") || asked.contains("annotations0") || asked.contains("components0")
-				|| asked.contains("parameters0") || this.classes.reflectionInterfacesNamed) {
+				|| asked.contains("parameters0") || asked.contains("annotated0")
+				|| asked.contains("variableAnnotations0") || this.classes.reflectionInterfacesNamed) {
 			return true;
 		}
 		for (JavaType held : this.classes.classValues) {

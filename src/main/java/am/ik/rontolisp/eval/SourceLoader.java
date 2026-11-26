@@ -209,6 +209,33 @@ public interface SourceLoader {
 	}
 
 	/**
+	 * What the host's {@code stat} or {@code lstat} says of a path beyond {@link #stat}'s
+	 * -- what {@code %file-unix} answers. Never throws.
+	 * @param path the path
+	 * @param follow whether a link in the last component is followed
+	 * @param names whether the owner and the group are named
+	 * @return {@code RontoFileModes.unix}'s answer: the values, or the {@code Integer}
+	 * reason ({@link FileStat#MISSING} .. {@link FileStat#OTHER})
+	 */
+	default Object unix(String path, boolean follow, boolean names) {
+		return FileStat.MISSING;
+	}
+
+	/**
+	 * Gives a path an owner and a group by number -- what {@code %file-set-owner} does.
+	 * Never throws.
+	 * @param path the path
+	 * @param follow whether a link in the last component is followed
+	 * @param uid the owner, -1 to leave it
+	 * @param gid the group, -1 to leave it
+	 * @return 0 when given, else why not ({@link FileStat#MISSING} ..
+	 * {@link FileStat#OTHER}, 5 where the host does not allow it)
+	 */
+	default int setOwner(String path, boolean follow, int uid, int gid) {
+		return FileStat.MISSING;
+	}
+
+	/**
 	 * What the host's {@code stat} or {@code lstat} said of a path: its {@code type} (1 a
 	 * regular file, 2 a directory, 3 a symbolic link, 4 anything else), size, times in
 	 * nanoseconds since 1970 ({@code made} {@code null} where the host does not say) and
@@ -595,6 +622,16 @@ public interface SourceLoader {
 			@Override
 			public int make(String path, int mode, boolean directory) {
 				return RontoFileModes.make(path, mode, directory);
+			}
+
+			@Override
+			public Object unix(String path, boolean follow, boolean names) {
+				return RontoFileModes.unix(path, follow, names);
+			}
+
+			@Override
+			public int setOwner(String path, boolean follow, int uid, int gid) {
+				return RontoFileModes.setOwner(path, follow, uid, gid);
 			}
 
 			@Override
