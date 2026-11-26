@@ -39,4 +39,6 @@ those calls, so their classes have to exist for pgjdbc to compile.
   read must hand what the buffer holds to the upgraded socket, or take none (pgjdbc reads
   one byte, `S`, then upgrades).
 
-On a `--no-wasi` module (`--host-sockets`, m44) the transport under it is `.todo/m49`.
+On a `--no-wasi` module (`--host-sockets`) the transport under it is the host's `startTls()`, which
+`tls-upgrade` already reaches (`.kb/tcp-sockets.md`, "A reactor's sockets"); the Java test host is
+`TcpLinePeer.NODE_CONNECT` against its `starttls` line.

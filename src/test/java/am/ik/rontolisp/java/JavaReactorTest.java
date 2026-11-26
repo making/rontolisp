@@ -169,7 +169,10 @@ class JavaReactorTest {
 	 * A reactor of scalar values -- primitives, strings, static state, {@code Math}, a
 	 * {@code double[]}, a {@code throw} -- which {@code --no-gc} compiles: a static
 	 * initializer that calls code, an {@code int} and a {@code long} that wrap, a
-	 * {@code break} and a {@code continue}, a string of each kind of value.
+	 * {@code break} and a {@code continue}, a string of each kind of value, and the
+	 * library members the run time writes over a value that is an index or nil:
+	 * {@code substring}, {@code compareTo}, {@code indexOf} and {@code lastIndexOf},
+	 * {@code Integer.parseInt}, a {@code double}'s text.
 	 */
 	private static final String TALLY = """
 			public class Tally {
@@ -254,6 +257,26 @@ class JavaReactorTest {
 			        }
 			        return a[at];
 			    }
+
+			    public static String cut(String s, int at) {
+			        return s.substring(at, at + 1) + s.substring(at + 1);
+			    }
+
+			    public static int order(String a, String b) {
+			        return a.compareTo(b);
+			    }
+
+			    public static String find(String s, String part) {
+			        return s.indexOf(part) + " " + s.indexOf(part.charAt(0), 1) + " " + s.lastIndexOf(part);
+			    }
+
+			    public static int parse(String text) {
+			        return Integer.parseInt(text);
+			    }
+
+			    public static String text(double d) {
+			        return "" + d;
+			    }
 			}
 			""";
 
@@ -269,6 +292,9 @@ class JavaReactorTest {
 			        System.out.println(Tally.check(3) + " " + Tally.greet("Wasm ☃", -7, true, 0x263A) + " "
 			                + Tally.at("a☃c", 1) + " " + Tally.same("ab", "ab") + " " + Tally.same("ab", "abc") + " "
 			                + Tally.sum(4, 3));
+			        System.out.println(Tally.cut("Wasm ☃ text", 5) + " " + Tally.order("a☃", "ab") + " "
+			                + Tally.order("ab", "abc") + " " + Tally.find("banana", "ba") + " " + Tally.parse("-٤٢") + " "
+			                + Tally.text(1.0E-5));
 			    }
 			}
 			""";
@@ -297,8 +323,11 @@ class JavaReactorTest {
 			console.log(t.check(3) + " " + read(t.greet(...text("Wasm ☃"), -7, 1, 0x263a)) + " "
 			    + t.at(...text("a☃c"), 1) + " " + Boolean(t.same(...text("ab"), ...text("ab"))) + " "
 			    + Boolean(t.same(...text("ab"), ...text("abc"))) + " " + double(t.sum(4, 3)));
+			console.log(read(t.cut(...text("Wasm ☃ text"), 5)) + " " + t.order(...text("a☃"), ...text("ab")) + " "
+			    + t.order(...text("ab"), ...text("abc")) + " " + read(t.find(...text("banana"), ...text("ba"))) + " "
+			    + t.parse(...text("-٤٢")) + " " + read(t.text(1.0e-5)));
 			for (const call of [() => t.check(-1), () => t.at(...text("abc"), 5), () => t.sum(2, 2),
-			    () => t.divide(1n, 0n)]) {
+			    () => t.divide(1n, 0n), () => t.cut(...text("abc"), 3), () => t.parse(...text("4x"))]) {
 			  try {
 			    call();
 			    console.log("returned");
@@ -379,18 +408,18 @@ class JavaReactorTest {
 	/**
 	 * {@code --no-gc} compiles a reactor of scalar values to a plain module with no
 	 * import, whose exports answer what a JDK answers: an {@code int} and a {@code long}
-	 * wrap, a static initializer that calls code runs once at instantiation, and an
-	 * exception ends the call in a trap. Where the program leaves the subset it is
-	 * refused by name, at the Java position: a read of an object, a test of a number for
-	 * nil (a {@code substring} of the run time), a command, a component of no
-	 * {@code @WitExport} world.
+	 * wrap, a static initializer that calls code runs once at instantiation, an exception
+	 * ends the call in a trap, and the run time's index or nil is nil apart from the
+	 * index 0. Where the program leaves the subset it is refused by name, at the Java
+	 * position: a read of an object, a {@code float}'s text (a ratio), a command, a
+	 * component of no {@code @WitExport} world.
 	 */
 	@Test
 	void aReactorOfScalarValuesCompilesWithNoGcAndWhatLeavesTheSubsetIsRefusedByName() throws Exception {
 		Path tally = write("Tally.java", TALLY);
 		Path main = write("TallyMain.java", TALLY_MAIN);
 		String expected = "-2147483648 -9223372036854775808 15 -128\n1.4142135623730951 1 2 12 16\n"
-				+ "3 Hello, Wasm ☃ -7 true ☺ 9731 true false 1.5\n";
+				+ "3 Hello, Wasm ☃ -7 true ☺ 9731 true false 1.5\n☃ text 9633 -1 0 -1 0 -42 1.0E-5\n";
 		assertThat(jdk(main)).isEqualTo(expected);
 		scalarRefused("Point.java", """
 				public class Point {
@@ -403,13 +432,14 @@ class JavaReactorTest {
 				    }
 				}
 				""", "Point.java:7:9: --no-gc: 'Point.x' in function 'Point.make(int)' reads a structure (Point)");
-		scalarRefused("Cut.java", """
-				public class Cut {
-				    public static String cut(String s, int to) {
-				        return s.substring(0, to);
+		scalarRefused("Single.java", """
+				public class Single {
+				    public static String show(double d) {
+				        return "" + (float) d;
 				    }
 				}
-				""", "Cut.java:3:18: --no-gc: 'RONTOLISP::%JAVA-SUBSTRING' tests a number for nil");
+				""", "Single.java:3:9: --no-gc: rational numbers are not supported in function "
+				+ "'RONTOLISP::%JAVA-FLOAT-STRING'");
 		scalarRefused("Run.java", """
 				public class Run {
 				    public static void main(String[] args) {
@@ -427,8 +457,8 @@ class JavaReactorTest {
 		write("package.json", "{ \"type\": \"module\" }\n");
 		write("tally-host.js", TALLY_HOST);
 		assertThat(HostBoundaryRuns.node(this.dir, "tally-host.js"))
-			.isEqualTo(expected + "RuntimeError\nRuntimeError\nRuntimeError\nRuntimeError\n"
-					+ "0 add at check count divide greet memory next odds root same sum tally unsigned\n");
+			.isEqualTo(expected + "RuntimeError\n".repeat(6) + "0 add at check count cut divide find greet memory next"
+					+ " odds order parse root same sum tally text unsigned\n");
 	}
 
 	/** A program --no-gc refuses, with where and why. */

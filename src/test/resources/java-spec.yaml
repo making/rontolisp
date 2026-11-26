@@ -4051,6 +4051,12 @@ cases:
           record Pair(String left, int right) {
           }
 
+          // a type parameter only the target and its declared bound speak of is the
+          // greatest type under both (JLS 18.4): a Number for an Object
+          static <V extends Number> V none(Class<V> type) {
+              return null;
+          }
+
           static <X, R1, R2> Written<X> written(Function<? super X, ? extends R1> first, Function<? super X, ? extends R2> second) {
               return Written.of(List.of(Part.of("first", first), Part.of("second", second)));
           }
@@ -4106,7 +4112,9 @@ cases:
               // most specific of those whose parameter it can extend
               System.out.println(size(new ArrayList<>() {{ add("a"); }}) + " " + size(pick(new ArrayList<>() {{ add("b"); add(get(0) + "c"); }}, null)) + " " + order(new Comparator<>() { public int compare(String x, String y) { return x.length() - y.length(); } }) + " " + filter(squares, new Predicate<>() { public boolean test(Integer x) { return x > 4; } }) + " " + total(new ArrayList<>() {{ add(1); add(get(0) * 2); }}));
               Written<Pair> pairs = written(Pair::left, Pair::right);
-              System.out.println(pairs.writer.write(new Pair("l", 2), "&") + " " + pairs.parts.size());
+              Object nothing = none(null);
+              Supplier<Object> later = () -> none(null);
+              System.out.println(pairs.writer.write(new Pair("l", 2), "&") + " " + pairs.parts.size() + " " + nothing + " " + later.get());
               // called through the interface it extends, a lambda of the narrower one
               // runs its default, beside a lambda of the wider one
               Loose wider = value -> "wide " + value;
@@ -4129,7 +4137,7 @@ cases:
       [nested] again 8 [held] [made!] held lazy! text!
       x! 3 {c=1}
       1 2 order 1 [9, 16] total 3
-      [first=l&second=2] 2
+      [first=l&second=2] 2 null null
       strict 5 chars | [wide ab, strict 2 chars]
   # ? extends T is read as T and written with nothing but null, ? super T written with a
   # T and read as Object; a method taking List<T> takes a List<?>. A raw type reads its

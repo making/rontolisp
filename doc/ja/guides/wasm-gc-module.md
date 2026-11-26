@@ -129,20 +129,22 @@ rontolisp app.lisp --no-wasi --host-output --emit-js-glue -o app.wasm
 rontolisp app.lisp --no-wasi --host-sockets --emit-js-glue -o app.wasm
 ```
 
-- **ホストにできるのは接続だけです。** `tcp-listen` と `tcp-accept` は、その旨のエラーをシグナルします。TLS にはまだ対応していません。`tls-connect` と `tls-upgrade` はシグナルします。
+- **ホストにできるのは接続だけです。** `tcp-listen` と `tcp-accept` は、その旨のエラーをシグナルします。
+- **TLS はホストのものです。** `tls-upgrade` は接続をその場で TLS に切り替え、渡されたストリームをそのまま返します(インタプリタと JVM は新しいストリームを返します)。`tls-connect` は `tcp-connect` の後に `tls-upgrade` を行います。証明書はホストが自分の信頼アンカーで名前に対して検証するので、`:insecure` はシグナルします。ハンドシェイクの失敗はプラットフォームの言葉で伝わります。Worker では `internal error; reference = ...` で、理由はログにあります。
 - **待つのはホストの中です。** 読むものがまだ届いていない読み込み、接続、`force-output` は、モジュールをホストの中でサスペンドします(JSPI)。そのため、すべてのエクスポートは `WebAssembly.promising` を通して呼ばれ、呼び出しは直列化されます。モジュールのロード中はソケットを待てません(`--host-timer` も付けたビルドでは待てます)。`tcp-set-timeout` は読み込みに期限を与えます。モジュールの時計は、サスペンドから戻るたびに書き直されます。
 - **`worker()` の下では、ソケットはリクエストと一緒に終わります。** Worker のソケットは、それを開いたリクエストより長くは使えません。そのため、呼び出しが開いたままにしたソケットは呼び出しの終わりに閉じられ、次に使うと `Socket closed: the request that opened it has ended` をシグナルします。接続は、それを使うリクエストの中で開いてください。
 
-`worker(module, { connect })` には、同じ形(`({ hostname, port }) => { opened, readable, writable, close() }`)の別の `connect` を渡せます。Worker 以外のホストは、これでソケットを用意します。`instantiate` を自分で呼ぶホストは `defaultHost(hostSockets(connect))` を渡します。このフラグは `--no-wasi` を必要とし、`--component`(ソケットは `wasi:sockets`)、`--no-gc`、`--reentrant` とは組み合わせられません。
+`worker(module, { connect })` には、同じ形(`({ hostname, port }, options) => { opened, readable, writable, close(), startTls() }`。ソケットはすべて `secureTransport: "starttls"` で求めます)の別の `connect` を渡せます。Worker 以外のホストは、これでソケットを用意します。`instantiate` を自分で呼ぶホストは `defaultHost(hostSockets(connect))` を渡します。このフラグは `--no-wasi` を必要とし、`--component`(ソケットは `wasi:sockets`)、`--no-gc`、`--reentrant` とは組み合わせられません。
 
 ### ホストでの待機(`--host-timer`)
 
-`--host-timer` はモジュールの待機をホストに任せます。インポートは最大 3 つで、JSPI を持つホストだけが応えられます。
+`--host-timer` はモジュールの待機をホストに任せます。インポートは最大 4 つで、JSPI を持つホストだけが応えられます。
 
 - `env.sleep(ms)` — `sleep`。ホストは呼び出しを中断し(`WebAssembly.Suspending`)、タイマーが発火したら時計(`__ronto_set_time`)を進めて戻ります。その間もモジュールはこの呼び出しのものです。
 - `env.idle(token, at)` と `env.ring(token)` — Java サーバーのリクエストで、どのスレッドも進めないとき。呼び出しはホストで待機し、その間ホストは別のリクエストでモジュールを呼べます。`env.ring(token)` か、`at` が 0 でなければその時刻(Unix エポックからのナノ秒)まで待ち、それから順番を取り直します。あるリクエストが別のリクエストを待てます。時刻を待つスレッドは、待機中のリクエストを通して起こされます([Java サブセット](../java/index.md))。
+- `env.wake(at)` — 待機中のリクエストがないときに、スレッドに仕事が残っている場合。ホストは `at`(0 なら即座)にモジュールのエクスポート `__ronto_turn` を呼び、その呼び出しの中でスレッドが動きます。そのため、スレッドは最後の応答のあとも動きます。
 
-`_initialize` とすべてのエクスポートは `WebAssembly.promising` 経由で入るので、トップレベルも待てます。`--emit-js-glue` は 3 つとも実装します。`instantiate` は promise を返し、呼び出しは 1 つのキューで順番を取ります。待機に入った呼び出しは順番を次へ譲ります。
+`_initialize` とすべてのエクスポートは `WebAssembly.promising` 経由で入るので、トップレベルも待てます。`--emit-js-glue` は 4 つとも実装します。`instantiate` は promise を返し、呼び出しは 1 つのキューで順番を取ります。待機に入った呼び出しは順番を次へ譲ります。`worker()` は、待っているターンを `ctx.waitUntil` に渡します。
 
 ```bash
 rontolisp app.lisp --no-wasi --host-timer --emit-js-glue -o app.wasm

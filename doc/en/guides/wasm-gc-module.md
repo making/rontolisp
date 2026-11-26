@@ -270,8 +270,13 @@ and `--emit-js-glue` answers them over `connect()` of `cloudflare:sockets`, so
 rontolisp app.lisp --no-wasi --host-sockets --emit-js-glue -o app.wasm
 ```
 
-- **The host only connects.** `tcp-listen` and `tcp-accept` signal, by name. TLS is
-  not there yet: `tls-connect` and `tls-upgrade` signal.
+- **The host only connects.** `tcp-listen` and `tcp-accept` signal, by name.
+- **TLS is the host's.** `tls-upgrade` makes the connection speak TLS where it is
+  and answers the stream it was given (the interpreter and the JVM answer a new
+  one); `tls-connect` is `tcp-connect` then `tls-upgrade`. The host verifies the
+  certificate against the name with its own trust anchors, so `:insecure` signals.
+  A failed handshake says what the platform says: a Worker's `internal error;
+  reference = ...`, with the reason in its log.
 - **A wait is the host's.** A read with nothing to take, a connect and
   `force-output` suspend the module in the host (JSPI), so every export is entered
   through `WebAssembly.promising` and calls are serialised; no socket can be waited
@@ -283,7 +288,8 @@ rontolisp app.lisp --no-wasi --host-sockets --emit-js-glue -o app.wasm
   ended`. Open the connection in the request that uses it.
 
 `worker(module, { connect })` takes another `connect` of the same shape
-(`({ hostname, port }) => { opened, readable, writable, close() }`), which is how a
+(`({ hostname, port }, options) => { opened, readable, writable, close(), startTls() }`;
+every socket is asked for with `secureTransport: "starttls"`), which is how a
 host that is no Worker supplies the sockets; a host driving `instantiate` itself
 passes `defaultHost(hostSockets(connect))`. The flag requires `--no-wasi` and is
 refused with `--component` (whose sockets are `wasi:sockets`), `--no-gc` and
@@ -291,7 +297,7 @@ refused with `--component` (whose sockets are `wasi:sockets`), `--no-gc` and
 
 ### Waits in the host (`--host-timer`)
 
-`--host-timer` has the host wait for the module, through up to three imports
+`--host-timer` has the host wait for the module, through up to four imports
 only a host with JSPI answers:
 
 - `env.sleep(ms)` — `sleep`: the host suspends the call
@@ -303,11 +309,14 @@ only a host with JSPI answers:
   (nanoseconds since the Unix epoch); then it takes its turn again. One request
   can wait for another, and a thread waiting for a time is woken through
   whichever request idles ([the Java subset](../java/index.md)).
+- `env.wake(at)` — what the threads have left with no request idling: the host
+  calls the module's `__ronto_turn` export at `at` (0: at once), and the threads
+  take their turns in that call. So they go on after the last answer.
 
 `_initialize` and every export are entered through `WebAssembly.promising`, so
-the top level may wait too. `--emit-js-glue` implements all three:
+the top level may wait too. `--emit-js-glue` implements all four:
 `instantiate` answers a promise, and calls take turns on one queue that a call
-idling hands on.
+idling hands on. `worker()` hands a pending turn to `ctx.waitUntil`.
 
 ```bash
 rontolisp app.lisp --no-wasi --host-timer --emit-js-glue -o app.wasm

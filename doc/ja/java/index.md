@@ -192,8 +192,7 @@ console.log(new TextDecoder().decode(new Uint8Array(calc.memory.buffer, at, leng
 - このバックエンドにないものは、ソース上の位置で名前を挙げて拒否されます。対象は、オブジェクトの
   読み出し、ほかの型の配列、ラムダ、ボックス、`StringBuilder`、`try`、初期化が例外を投げうるクラス、
   呼び出しの中で代入される static の `String`、このバックエンドがコンパイルできないライブラリの
-  メンバーです。最後のものには、`null` と `0` を区別できる前提で書かれた `substring(int, int)`、
-  `compareTo`、`Integer.parseInt` と、`indexOf`、`toUpperCase`、`+` の `double` と `float` があります。
+  メンバーです。最後のものには、`toUpperCase` と `+` の `float` があります。
   `main` のあるプログラムはコマンドで、`--no-gc` はコマンドを作りません。`--component` では、
   エクスポートは `@WitExport` の world のものです（[WIT world をエクスポートする](wit.md#exporting-a-wit-world)）。
 
@@ -971,7 +970,8 @@ export default worker(module);
   Worker が JSPI を通じてプログラムを待ちます。時刻を待つ待機は Worker のタイマーで待ち、どの
   スレッドも進めないリクエストは Worker で待機し、その間 Worker は別のリクエストでプログラムを
   呼べます（非同期サーブレットのタイムアウト、別のリクエストの処理を待つリクエストなど）。
-  スレッドが動くのは、リクエストを処理中の間です。
+  スレッドは最後の応答のあとも動きます。Worker はスレッドに残った仕事のためにプログラムを
+  もう一度呼び、その呼び出しを `ctx.waitUntil` に渡します。
 - プログラムの出力は `--host-output` があれば Worker のログになり（標準出力は `console.log`、標準エラーは
   `console.error`）、インスタンスを終わらせたものの報告もそこに出ます。なければ出力は捨てられ、ホストに見えるのは
   `RuntimeError: unreachable` だけです。`System.getenv` は `null` を返します。

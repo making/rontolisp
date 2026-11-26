@@ -180,10 +180,14 @@ public final class HostGlueEmitter {
 	 * empty, the file waits for the module through JSPI -- {@code instantiate} answers a
 	 * promise, {@code _initialize} and every entry point are entered through
 	 * {@code WebAssembly.promising}, and a call that idles lets the next one in
+	 * @param turn whether it exports {@link HostTimer#TURN_EXPORT}, the program's own
+	 * turn, which the file calls where the module asks for it ({@code env.wake}) rather
+	 * than offers as an entry point
 	 */
 	public record Surface(List<Import> imports, @Nullable Import entropy, @Nullable Import output, List<Export> exports,
 			boolean arena, boolean seedRandom, boolean setTime, @Nullable String initExport, boolean derivedFetch,
-			@Nullable String envelopeExport, boolean reentrant, List<WitImport> witImports, List<Import> timer) {
+			@Nullable String envelopeExport, boolean reentrant, List<WitImport> witImports, List<Import> timer,
+			boolean turn) {
 
 		/**
 		 * A surface with no import through the canonical ABI.
@@ -203,7 +207,7 @@ public final class HostGlueEmitter {
 				boolean arena, boolean seedRandom, boolean setTime, @Nullable String initExport, boolean derivedFetch,
 				@Nullable String envelopeExport, boolean reentrant) {
 			this(imports, entropy, output, exports, arena, seedRandom, setTime, initExport, derivedFetch,
-					envelopeExport, reentrant, List.of(), List.of());
+					envelopeExport, reentrant, List.of(), List.of(), false);
 		}
 
 		/**
@@ -247,7 +251,7 @@ public final class HostGlueEmitter {
 			return new Surface(this.imports, this.entropy, this.output, this.exports, this.arena,
 					this.seedRandom && exportNames.contains(SEED_RANDOM_EXPORT),
 					this.setTime && exportNames.contains(SET_TIME_EXPORT), this.initExport, this.derivedFetch,
-					this.envelopeExport, this.reentrant, this.witImports, this.timer);
+					this.envelopeExport, this.reentrant, this.witImports, this.timer, this.turn);
 		}
 
 		/**
@@ -541,6 +545,15 @@ public final class HostGlueEmitter {
 					""");
 			String first = jsName(surface.exports().get(0).exportName());
 			out.append("//\n//   await lisp.serially((entry) => entry.").append(first).append("(...), state);\n");
+			if (surface.turn()) {
+				out.append("""
+						//
+						// What the program's threads have left with no call idling goes on in turns of
+						// its own (env.wake), each a call on the same queue; `lisp.turning` is a
+						// promise that settles once none is armed, for a host that has to be kept
+						// alive meanwhile.
+						""");
+			}
 		}
 		else if (canSuspend(surface)) {
 			out.append("""
@@ -769,8 +782,10 @@ public final class HostGlueEmitter {
 				 * The module's sockets (--host-sockets): outbound TCP connections made by
 				 * `connect` -- connect() of cloudflare:sockets where none is given, or anything
 				 * shaped like it: `({ hostname, port }, options)` in; `opened`, `readable`,
-				 * `writable` and `close()` out. The host only connects: the module refuses a
-				 * bind, a listen and an accept itself.
+				 * `writable`, `close()` and `startTls({ expectedServerHostname })` out. The
+				 * host only connects: the module refuses a bind, a listen and an accept itself.
+				 * Every socket is made `secureTransport: "starttls"`, the one way a connection
+				 * can be made to speak TLS later, and `upgrade` makes it so.
 				 *
 				 * What comes of a socket comes while the module is suspended, so every wait of
 				 * the module's is `wait` below -- for the octets of a read, the peer's close, a
@@ -829,9 +844,12 @@ public final class HostGlueEmitter {
 				    if (entry.reading || entry.chunks.length > 0 || entry.eof || entry.failed !== null) return;
 				    entry.reading = true;
 				    // A socket that is over -- closed, or ended with its request -- wakes
-				    // nobody: what comes of it then comes to a call that is not its own.
-				    entry.reader.read().then(
+				    // nobody: what comes of it then comes to a call that is not its own. A
+				    // read of a connection upgraded since is nobody's either.
+				    const reader = entry.reader;
+				    reader.read().then(
 				      ({ value, done }) => {
+				        if (entry.reader !== reader) return;
 				        entry.reading = false;
 				        if (entry.over) return;
 				        if (done) entry.eof = true;
@@ -840,12 +858,29 @@ public final class HostGlueEmitter {
 				        rang();
 				      },
 				      (error) => {
+				        if (entry.reader !== reader) return;
 				        entry.reading = false;
 				        if (entry.over) return;
 				        entry.failed ??= words(error);
 				        rang();
 				      },
 				    );
+				  };
+				  // The streams of a socket the module can use, once it is open or upgraded.
+				  const ready = async (entry, socket) => {
+				    entry.socket = socket;
+				    entry.info = await socket.opened;
+				    // over meanwhile: nobody is left to use it
+				    if (entry.over) return socket.close();
+				    entry.reader = socket.readable.getReader();
+				    entry.writer = socket.writable.getWriter();
+				    entry.state = "connected";
+				    rang();
+				  };
+				  const failed = (entry) => (error) => {
+				    if (entry.over) return;
+				    entry.failed ??= words(error);
+				    rang();
 				  };
 				  // The connected socket a call is about, or null with the reason said.
 				  const open = (h) => {
@@ -891,21 +926,31 @@ public final class HostGlueEmitter {
 				        // a socket's does everywhere else.
 				        const socket = (await connector())(
 				          { hostname, port },
-				          { secureTransport: "off", allowHalfOpen: true },
+				          { secureTransport: "starttls", allowHalfOpen: true },
 				        );
-				        entry.socket = socket;
-				        entry.info = await socket.opened;
-				        // over meanwhile: nobody is left to use it
-				        if (entry.over) return socket.close();
-				        entry.reader = socket.readable.getReader();
-				        entry.writer = socket.writable.getWriter();
-				        entry.state = "connected";
-				        rang();
-				      })().catch((error) => {
-				        if (entry.over) return;
-				        entry.failed ??= words(error);
-				        rang();
-				      });
+				        await ready(entry, socket);
+				      })().catch(failed(entry));
+				      return 0;
+				    },
+				    // The handshake only BEGINS here, as a connect does, and `end` says how it
+				    // ended. startTls() wants both streams let go of, and a reader cannot be
+				    // while a read is in flight: the read ahead is cancelled, which leaves the
+				    // connection. What came in the clear and was not read is dropped.
+				    upgrade: (h, hostname) => {
+				      const entry = open(h);
+				      if (entry === null) return -1;
+				      const { socket, reader, writer, reading } = entry;
+				      entry.state = "upgrading";
+				      entry.reader = entry.writer = undefined;
+				      entry.reading = false;
+				      entry.chunks.length = 0;
+				      (async () => {
+				        await entry.sent;
+				        if (reading) await reader.cancel().catch(() => {});
+				        reader.releaseLock();
+				        writer.releaseLock();
+				        await ready(entry, socket.startTls({ expectedServerHostname: hostname }));
+				      })().catch(failed(entry));
 				      return 0;
 				    },
 				    end: (h) => {
@@ -1729,6 +1774,13 @@ public final class HostGlueEmitter {
 				out.append("            return inside.").append(entry).append("(input);\n");
 			}
 			out.append(bodies || sockets ? "          }, call),\n        );\n" : "          }),\n        );\n");
+			if (surface.turn()) {
+				out.append("""
+						        // What the threads have left after the answer goes on in turns of the
+						        // program's own, which the platform keeps the Worker for.
+						        if (lisp.turning) ctx?.waitUntil?.(lisp.turning);
+						""");
+			}
 		}
 		else if (suspends && surface.reentrant()) {
 			// No queue to take: the module owns its per-call state, so the call enters
@@ -3016,6 +3068,34 @@ public final class HostGlueEmitter {
 				      setTimeout(resolve, Math.min(Math.max(ms, 0), 2147483647)),
 				    );
 				""");
+		if (surface.turn()) {
+			out.append("""
+					  // The program's own turns (env.wake): what its threads have left with no call
+					  // idling is taken in a call of __ronto_turn at the time the module names (0n:
+					  // at once), behind whatever call is in the module then. One is armed, the
+					  // soonest asked for; `turning` settles once none is.
+					  let armed = null;
+					  let alarm;
+					  let turning = null;
+					  let turned;
+					  // Set once the entry points are: a turn is asked for in _initialize at the
+					  // earliest, and its timer fires after instantiate has gone on to set it.
+					  let turn;
+					  const wake = (at) => {
+					    if (discarded || (armed !== null && armed <= at)) return;
+					    clearTimeout(alarm);
+					    armed = at;
+					    turning ??= new Promise((resolve) => (turned = resolve));
+					    alarm = setTimeout(
+					      () => {
+					        armed = null;
+					        turn();
+					      },
+					      Math.min(Math.max(Number((at + 999999n) / 1000000n) - Date.now(), 0), 2147483647),
+					    );
+					  };
+					""");
+		}
 		out.append(surface.setTime() ? """
 				  // The module's clock moves when a wait is over, as it does per call.
 				  const clock = () => exports.__ronto_set_time(BigInt(Date.now()) * 1000000n);
@@ -3069,6 +3149,10 @@ public final class HostGlueEmitter {
 			case HostTimer.RING_FIELD -> out.append("""
 					 -- --host-timer's ring, implemented here
 					      ring: (token) => bells.get(token)?.(),
+					""");
+			case HostTimer.WAKE_FIELD -> out.append("""
+					 -- --host-timer's ask for a turn, implemented here
+					      wake: (at) => wake(at),
 					""");
 			default -> throw new IllegalStateException("--host-timer imports no env." + imp.field());
 		}
@@ -3586,6 +3670,43 @@ public final class HostGlueEmitter {
 				      context = state;
 				      return work(inside);
 				    });
+				""");
+		if (surface.turn()) {
+			out.append("""
+					  // Retires the instance: a call idling in it wakes to a refusal, and no turn
+					  // is taken in it.
+					  const discard = () => {
+					    discarded = true;
+					    for (const ring of bells.values()) ring();
+					    clearTimeout(alarm);
+					    armed = null;
+					    if (turning) {
+					      turning = null;
+					      turned();
+					    }
+					  };
+					  // The program's own turn: a call as any other, with nothing to hand over;
+					  // one that traps retires the instance, as a request's does.
+					  const turnEntry = WebAssembly.promising(exports.__ronto_turn);
+					  turn = async () => {
+					    try {
+					      await serially(() =>
+					        call((work) => work(), turnEntry, () => [], () => undefined),
+					      );
+					    } catch (error) {
+					      if (!discarded) {
+					        console.error("__ronto_turn failed:", error);
+					        discard();
+					      }
+					    }
+					    if (armed === null && turning) {
+					      turning = null;
+					      turned();
+					    }
+					  };
+					""");
+		}
+		out.append("""
 
 				  return {
 				    exports,
@@ -3608,13 +3729,28 @@ public final class HostGlueEmitter {
 				    get discarded() {
 				      return discarded;
 				    },
-				    // Retires the instance: a call idling in it wakes to a refusal.
-				    discard() {
-				      discarded = true;
-				      for (const ring of bells.values()) ring();
-				    },
-				  };
 				""");
+		if (surface.turn()) {
+			out.append("""
+					    // Whether the program has a turn of its own armed: a promise that settles
+					    // once none is, or null.
+					    get turning() {
+					      return turning;
+					    },
+					    discard,
+					  };
+					""");
+		}
+		else {
+			out.append("""
+					    // Retires the instance: a call idling in it wakes to a refusal.
+					    discard() {
+					      discarded = true;
+					      for (const ring of bells.values()) ring();
+					    },
+					  };
+					""");
+		}
 	}
 
 	private static void waitedCall(StringBuilder out, Surface surface) {

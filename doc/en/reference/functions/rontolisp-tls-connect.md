@@ -74,6 +74,13 @@ TLS-wrapped protocols:
   call answer `nil` instead of blocking, and the returned handle carries no
   read deadline. Its writes are buffered, as
   [`tls-upgrade`](rontolisp-tls-upgrade.md#backend-support)'s are.
+- **WASM `--no-wasi --host-sockets`**: supported over the host's sockets, a
+  Cloudflare Worker's `connect()` and its `startTls()`
+  ([Sockets from the host](../../guides/wasm-gc-module.md#sockets-from-the-host---host-sockets)).
+  Failures signal, with the interpreter's texts and the platform's words. The
+  host verifies the certificate with its own trust anchors, so a non-`nil`
+  `:insecure` value signals.
+  The handshake has the same 10-second bound.
 - **WASM Preview 1**, a [native executable](../../compiling/native.md#tcp-sockets)
   included: not supported — the call **signals an error when it runs** (no TLS
   host API exists for Preview 1), so a program that never reaches it still

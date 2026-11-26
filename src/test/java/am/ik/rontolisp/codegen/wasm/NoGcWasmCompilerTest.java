@@ -1072,6 +1072,47 @@ class NoGcWasmCompilerTest {
 	}
 
 	@Test
+	void anExactModuleHoldsANilOrIntegerOnlyWhereItsValueIsRead() {
+		// A statement's if, a void function's last if, a statement block, a branch that
+		// throws and (or flag n) of a boolean read no value that is nil or an integer, so
+		// an exact module of them is the dialect's byte for byte.
+		List<LispVal> plain = LispReader.readAllFromString("""
+				(defvar *top* 0)
+				(defun note (n) (if (> n *top*) (setq *top* n)))
+				(defun scan (n)
+				  (block nil (dotimes (i n) (if (= (* i i) n) (return i))))
+				  (note n)
+				  (if (< n 0) (setq *top* 0))
+				  (if (> n 1000) (error "too large") (+ n *top*)))
+				(defun pick (flag n) (or flag n))
+				(rontolisp:wasm-export 'note :params '(:long) :returns :void)
+				(rontolisp:wasm-export 'scan :params '(:long) :returns :long)
+				(rontolisp:wasm-export 'pick :params '(:bool :long) :returns :long)
+				""");
+		assertThat(NoGcWasmCompiler.builder().exact(true).build().compile(plain))
+			.isEqualTo(NoGcWasmCompiler.builder().build().compile(plain));
+		// A loop's index or nil that a test reads holds nil apart from 0: the test is
+		// the nil's own (Long.MIN_VALUE rotated left by one is 1), the dialect's 0's.
+		String read = """
+				(defun root (n) (block nil (dotimes (i (+ n 1)) (if (= (* i i) n) (return i)))))
+				(defun probe (n) (let ((r (root n))) (if r r -1)))
+				(rontolisp:wasm-export 'probe :params '(:long) :returns :long)
+				""";
+		int[] nilTest = { 0x42, 0x01, 0x89, 0x42, 0x01 };
+		assertThat(containsSequence(localFunctionBody(NoGcWasmCompiler.builder()
+			.exact(true)
+			.optimize(OptimizeLevel.NONE)
+			.build()
+			.compile(LispReader.readAllFromString(read)), "probe"), nilTest)).isTrue();
+		assertThat(containsSequence(localFunctionBody(compilePlainUnoptimized(read), "probe"), nilTest)).isFalse();
+		// A float's nil is its 0.0 in both, so an exact module refuses to test one.
+		assertThatThrownBy(() -> NoGcWasmCompiler.builder().exact(true).build().compile(LispReader.readAllFromString("""
+				(defun half (n) (let ((x (if (> n 0) (/ n 2.0)))) (if x 1 0)))
+				(rontolisp:wasm-export 'half :params '(:long) :returns :long)
+				"""))).hasMessageContaining("'HALF' tests a number for nil");
+	}
+
+	@Test
 	void aComparisonFeedsTheBranchWithoutBeingWidenedFirst() {
 		// `if` consumes an i32 condition and a comparison produces exactly that, so the
 		// widening into the i64 value domain (and the `!= 0` that would undo it) is not

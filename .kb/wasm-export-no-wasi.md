@@ -260,11 +260,13 @@ sequence, which is inside the CL contract. The entropy API is deliberately NOT s
   (`WasmExprCompiler`: `(* seconds 1000.0)`), the call keeping the module; and for the Java
   run time `env.idle(token: :s32, at: :s64)`, `:async t`, a call that gives the module up
   until `env.ring(token)` or `at` (ns since the epoch, 0 for none), its wrapper lowering the
-  re-entry guard around the host call. The host moves the clock before each returns. Every
+  re-entry guard around the host call; `env.wake(at: :s64)`, the host to call the
+  `__ronto_turn` export at `at` (0: at once) where the run time's threads have something left
+  with no call idling. The host moves the clock before each returns. Every
   export and `_initialize` are entered through `WebAssembly.promising`, so a top-level sleep
   is no load-path refusal there (`NoWasiLoadPathRefusals.warn` drops the `SLEEP` line under
   the flag) and the two are no `:async t` obligation either (the build prints the flag's own
-  line). `--emit-js-glue` implements the three (`.kb/wasm-import.md`). Refused without
+  line). `--emit-js-glue` implements the four (`.kb/wasm-import.md`). Refused without
   `--no-wasi`, with `--component`, `--no-gc`, `--native`, `--reentrant`, and without `-o`. A
   module without the flag is byte-identical. The Java design: [java-frontend.md](java-frontend.md),
   "A server's waits through its host".

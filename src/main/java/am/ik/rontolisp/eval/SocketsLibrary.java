@@ -141,7 +141,10 @@ public final class SocketsLibrary {
 		}
 		boolean referenced = false;
 		for (LispVal form : program) {
-			if (references(form)) {
+			// The host's provider carries the client tls built-ins too, so a program
+			// naming only them needs it (the component's tls.lisp names tcp-connect
+			// for the same effect).
+			if (references(form) || (host && TlsLibrary.references(form))) {
 				referenced = true;
 				break;
 			}

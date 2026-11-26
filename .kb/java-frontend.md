@@ -1480,27 +1480,29 @@ is a trap", "Exact mode"), so no backend learns a Java name.**
   hello-java`'s `Worker` 1,103 / 699 B against 3,956 / 2,089 on `--no-wasi` (`../hello`'s Lisp is
   465 B); `JavaReactorTest`'s `Tally` 3,770 / 1,956 against 11,102 / 5,297; a 44-method probe of
   the subset 13,552 against 28,328 (`Math.pow`/`sin` pull the fdlibm runtime into both).
-- **Exact** (the module's `Builder.exact`, set for a lowered program): a test of a number is
-  refused, an index outside a `double[]` traps, a null `String` result traps. What that refuses
-  of the run time, by name: `java.lisp`'s nil-or-integer idioms -- `substring` (its optional
-  `end`), `compareTo`, a `double` in a `+` (`position` in `%java-double-string`),
-  `Integer.parseInt` (`digit-char-p`) -- `.todo/m46-nil-or-integer-values-in-an-exact-scalar-module.md`.
-  A `float` computes (`%single-float`: demote and promote, as on wasm-GC); its text refuses
-  (`rational` in `%java-float-string`).
+- **Exact** (the module's `Builder.exact`, set for a lowered program): the run time's index or
+  nil is nil apart from 0 (`.kb/no-gc-scalar-wasm.md`, "Exact mode", with the sizes), so
+  `substring` (both), `compareTo`, `indexOf` and `lastIndexOf` of a `String` and of a `char`,
+  `contains`, `Integer.parseInt`, `Long.parseLong`, `Character.digit` and a `double` in a `+`
+  answer as a JDK; a test of a float is refused, an index outside a `double[]` traps, a null
+  `String` result traps. A `float` computes (`%single-float`: demote and promote, as on wasm-GC);
+  its text refuses (`rational` in `%java-float-string`).
+- **`%java-unicode-digit`'s zeros are a string** (2026-11-26), read with `char`: a quoted list is
+  conses, which `--no-gc` has none of ("`Character.digit`" below, with what it measured).
 - **Outside the subset, refused where the backend meets it**: a read of an object (`reads a
   structure (Point)`), an array of another element type, a lambda, a box (its null test), a
   `StringBuilder`, `try` (`handler-case`), a lazy class (its `<clinit>` catches to wrap in an
-  `ExceptionInInitializerError`), `toUpperCase`, `indexOf` (`search`'s `&key`), a static `String`
-  assigned during a call (the call's memory is given back when it ends). At the innermost form
-  the lowering locates, or with the chain of methods that reached a library's function.
+  `ExceptionInInitializerError`), `toUpperCase`, a static `String` assigned during a call (the
+  call's memory is given back when it ends). At the innermost form the lowering locates, or
+  with the chain of methods that reached a library's function.
 - **A command is refused** (`exports nothing`): a `main` makes one, and the scalar module is a
   reactor (`.todo/111`).
 - **`--component`: a `@WitExport` world** ("WIT exports"), the lowering the GC component's but
   for the report (`JavaBoundary.reportsUncaught`, false on every reactor): the initialization
   is the top level as is, the start function's, and an uncaught exception the bare trap.
-  Measured 2026-11-26: `rust-calls-java`'s counter with `indexOf(char)` written as `==`s 2,040
-  / 1,075 B gzip against 12,988 / 5,913 as a wasm-GC component (the example as written,
-  15,076, stops at `position` in `%java-index-of-char`: the nil-or-integer of `indexOf`);
+  Measured 2026-11-26: `rust-calls-java`'s counter as written 2,345 / 1,282 B gzip against
+  15,076 / 6,984 as a wasm-GC component, its `indexOf(char)` a `position` ("Exact" above);
+  with the `indexOf` written as `==`s 2,040 / 1,075 against 12,988 / 5,913;
   `JavaWitImportTest`'s `Kinds` with its `StringBuilder` a `String`, 2,226 B.
 - **Pinned by** `JavaReactorTest.aReactorOfScalarValuesCompilesWithNoGcAndWhatLeavesTheSubsetIsRefusedByName`
   (a JDK against the module under node, no glue; the traps; the refusals),
@@ -1808,7 +1810,11 @@ first error is all that is reported.
 
 One `JavaTypes.Inference` per candidate: what each type parameter IS (`exact`), is ABOVE
 (`lower`: an argument's type) and is UNDER (`upper`: the target); resolved exact, else the
-lub of the lowers, else an upper, else OPEN.
+lub of the lowers, else the one upper under every other and under the declared bounds that
+name no variable of the call (JLS 18.1.3, 18.4: `Object a = f(null)` for
+`<V extends Number> V f(Class<V>)` makes `V` a `Number`, not an `Object` out of its bound;
+java-spec `a-type-argument-is-found-from-the-arguments-the-target-and-the-lambdas`), else an
+upper, else OPEN.
 
 - **Order** (`resolve`): the arguments that are no lambda, each lowered ONCE with no target;
   the phases; the most specific; then the lambdas and method references, once the types
@@ -2272,16 +2278,21 @@ answers to probes ([java-frontend-provenance.md](java-frontend-provenance.md)).
   `java.base`), so `Flow.listed(Object[])` is a `native` member calling
   `ImmutableCollections.listed`: no member a program could name.
 - **`Character.digit`** (`%java-digit`): ASCII and the fullwidth Latin letters by base 36, a
-  Unicode decimal digit (Nd) by its distance from its zero, the 75 zeros above ASCII a quoted
-  list (`%java-unicode-digit`, pinned to the running JDK by
+  Unicode decimal digit (Nd) by its distance from its zero, the 75 zeros above ASCII the
+  characters of a string (`%java-unicode-digit`, pinned to the running JDK by
   `JavaLoweringTest#theLoweringTable`); the host's `digit-char-p` knows Unicode's digits on the
   interpreter and the JVM, none on wasm. A number's text and a format's control read ASCII
   digits only, as a JDK. `Sweep.java` of every code point gives a JDK's `digit` and
-  `toTitleCase` on the JVM and wasm. Measured: the list 670 B of wasm and its scan 590 (+1,538
-  in a program parsing an int), where a string of bounds decoded into a vector was 3,166, a
-  vector literal +3.8 KB, the zeros as a string +2.6 KB. **Not made**: `getNumericValue` of the
-  numbers that are no digit (`Ⅷ`, `²`, `½`; 4 KB as text) -- in every program calling it, and
-  programs call it for ASCII digits.
+  `toTitleCase` on the JVM and wasm. Measured at first (k71): the zeros a quoted list, 670 B of
+  wasm and its scan 590 (+1,538 in a program parsing an int), where a string of bounds decoded
+  into a vector was 3,166, a vector literal +3.8 KB, the zeros as a string +2.6 KB. **Measured
+  again 2026-11-26, the string against the list** (the list conses 75 cells at each call, and
+  `--no-gc` has none): a command parsing ints, longs and a double -1,604 B of JVM classes, -215
+  of wasm, -171 of component; one whose only string work is `Character.digit` -1,274 JVM, -294
+  wasm, +271 component; a `--no-wasi` reactor of `parseInt` 12,083 -> 11,789, of
+  `Character.digit` alone 3,982 -> 4,529 (the string's indexing is its only one). **Not
+  made**: `getNumericValue` of the numbers that are no digit (`Ⅷ`, `²`, `½`; 4 KB as text) --
+  in every program calling it, and programs call it for ASCII digits.
 - **Members** (`Strip.java`, `Title.java`): `translateEscapes`' refusal is a JDK's (U+0000
   named after a final backslash); `toTitleCase` is the uppercase but for the digraphs `Ǆ` ..
   `ǌ`, `Ǳ` .. `ǳ` and Georgian's Mkhedruli, which has none.
@@ -4348,18 +4359,32 @@ arena staging.** Without the flag every output is byte-identical (measured: `Ser
 - **One call keeps the time** (`%java-keeper`, `(deadline . exchange)`): an idling call waits
   with a deadline only where it is the soonest; others wait for their ring alone, so a timer
   wakes one call, not every one. A call that returns leaving threads ready, or a time no idle
-  call keeps (`%java-hand-on`), rings an idling call to take them. With none idling they wait
-  for the next request: the threads take their turns while the host has a request in hand
-  (a turn after the last answer: `.todo/m48`).
-  The servlet corpus's stop after the last answer goes on nowhere (its `logDeviates`);
-  `Server.java`'s `stop(1)` after `/stop`'s answer passes in `/short`'s idle call (its log
-  is the JDK's but for the port and `main`'s last line).
+  call keeps (`%java-hand-on`), rings an idling call to take them.
+- **With none idling the program asks its host for a turn of its own**: `env.wake(at)` (0: at
+  once), and the glue calls `__ronto_turn` at that time through the queue, a call like any
+  other (`call`, the arena, `serially` with no state). The turn is `(%java-hand-on t)`: the
+  threads take their turns until none can go on, then hand on again (ring, or wake for the
+  soonest time). The start hands on too where `main` leaves the server serving
+  (`%java-http-turn`'s reactor lambda). So the threads go on after the last answer: the corpus's
+  `servlet` and `server` logs are the JDK's, but for the port. The glue arms one turn, the
+  soonest asked for; `lisp.turning` settles once none is armed, and `worker()` hands it to the
+  request's `ctx.waitUntil` (a Worker is kept for it only as long as the platform allows).
+  - **Who declares it**: `eval/HostTimerLibrary`, after the pruner, where the program names
+    `%host-wake` (only the server's hand-on does): the `env.wake` directive, a bridge
+    `(defun %host-turn () (%java-hand-on t))` and its `rontolisp:wasm-export` as
+    `__ronto_turn` -- an export, not a backend hook, for the ordinary wrapper (re-entry
+    guard, promising). `WasmExportCompiler.checkNames` lets that one `__ronto_` name through;
+    the backend keeps it out of the glue's entry points (`Surface.turn`). A turn defined in
+    `java.lisp` would be pruned: nothing the program reaches names it.
+  - A thread waiting for a socket with no deadline is not a turn's to wait for: it goes on
+    in the next call, as before.
 - **An exchange nothing answers stays open**, as a JDK's (`/short`, `/silent`: no response
   where the reactor answered 500 without the flag), until a stop that does not drain cuts
   it: `close0` is `%http-serve-stop`, which calls the `%http-serve-cutter` the timer variant
   sets (`%java-http-cut-in-hand`: every call in hand ends, `500` and the host's report
   `the server stopped with the exchange in hand`). Cut, `Server.java`'s `/short` and
-  `/silent` leave no call for `main` to go on in after the stop.
+  `/silent` leave no call in hand: `main` goes on after the stop in a turn of the program's
+  own (below).
 - **Rejected: `--reentrant`.** It overlaps calls wherever one parks, a fetch inside a thread's
   body included: another call's scheduler would run while that thread is mid-body
   (`%java-carrier` taken over, its monitors entered by threads whose entry the analysis made
@@ -4385,10 +4410,14 @@ arena staging.** Without the flag every output is byte-identical (measured: `Ser
   corpus's flags; raw / `gzip -9`): `Server.java` 955,440 / 251,935 -> 961,277 / 253,414;
   the servlets 1,942,421 -> 1,948,771; `hello-servlet` (`--optimize=size`, no wait at all)
   763,973 / 195,585 -> 768,070 / 197,172, its glue 10,697 -> 15,555 B. A program of no
-  server imports `env.sleep` alone.
+  server imports `env.sleep` alone. The turn (2026-11-26, the examples' `Server.java`, the
+  corpus's flags, default `--optimize`): 564,753 / 161,321 -> 565,123 / 161,552, glue 22,938 ->
+  25,281 B; a Java program of no server under the flag and every module without it
+  byte-identical.
 - **Pinned by** the corpus's reactor leg (`hostTimer: true` on `server` and `servlet`: `/held`,
-  `/app/later/held`, `/app/later/timeout`, `/short`, `/silent`, and the logs, read once whole),
-  `JavaLoweringTest` (the variant names `sleep`, `%host-idle`, `%host-ring`),
+  `/app/later/held`, `/app/later/timeout`, `/short`, `/silent`, and the logs, read once whole:
+  `servlet`'s the JDK's, `server`'s but for the port),
+  `JavaLoweringTest` (the variant names `sleep`, `%host-idle`, `%host-ring`, `%host-wake`),
   `WasmImportCompilerTest.aSuspendingImportGuardsEveryExportAgainstReentry` (the idle's guard),
   `WasmHostGlueE2eTest.aSleepUnderHostTimerWaitsInTheHostsTimerAtTheTopLevelAndInACall`,
   `RontoLispCliTest` (the refusals).
