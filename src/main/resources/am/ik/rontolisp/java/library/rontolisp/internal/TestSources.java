@@ -11,22 +11,33 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
+import java.util.function.Supplier;
+import java.util.regex.Pattern;
+import java.util.regex.PatternSyntaxException;
+import java.util.stream.BaseStream;
 import java.util.stream.DoubleStream;
 import java.util.stream.IntStream;
 import java.util.stream.LongStream;
 import java.util.stream.Stream;
 
 import org.junit.jupiter.api.Named;
+import org.junit.jupiter.api.extension.ParameterResolutionException;
+import org.junit.jupiter.params.converter.ArgumentConversionException;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.junit.platform.commons.JUnitException;
+import org.junit.platform.commons.PreconditionViolationException;
+import org.junit.platform.commons.support.conversion.ConversionException;
 
 // The arguments of a parameterized test: the rows its sources give, and each argument
-// as the type of its parameter. A named argument is its payload; a text is converted to
-// a number, a boolean, a character or an enum constant; a number widens. The sources and
-// the arguments are JUnit Jupiter's own classes, which the program's source path holds.
+// as the type of its parameter, as JUnit Jupiter 6 converts it (measured): a named
+// argument is its payload; a text is converted to a number, a boolean, a character, or
+// by a conversion of its parameter's type the generated code hands over; a number widens
+// to a primitive type; what is not converted throws what JUnit throws. The sources, the
+// arguments and the exceptions are JUnit Jupiter's own classes, which the program's
+// source path holds.
 // Also what a test is given and what is closed after it: its temporary directories and
 // the arguments that are AutoCloseable.
 public final class TestSources {
@@ -150,19 +161,56 @@ public final class TestSources {
         return columns.toArray();
     }
 
-    public static <E extends Enum<E>> void constants(List<Object[]> rows, E[] all, String[] names, EnumSource.Mode mode) {
+    // The constants of an enum an @EnumSource gives: those from `from` to `to` (each the
+    // first or the last where empty), then those its names pick by its mode. value: the
+    // canonical name of the class its value names; canonical: the enum's.
+    public static <E extends Enum<E>> void constants(List<Object[]> rows, E[] all, String[] names, EnumSource.Mode mode,
+            String from, String to, String value, String canonical) {
+        StringBuilder written = new StringBuilder();
+        for (String name : names) {
+            written.append(written.isEmpty() ? "" : ", ").append(quoted(name));
+        }
+        // the annotation as a JDK's Annotation.toString writes it (measured)
+        String shown = "@org.junit.jupiter.params.provider.EnumSource(mode=" + mode + ", from=" + quoted(from) + ", to="
+                + quoted(to) + ", names={" + written + "}, value=" + value + ".class)";
+        int first = from.isEmpty() ? 0 : ordinal(all, from, canonical);
+        int last = to.isEmpty() ? all.length - 1 : ordinal(all, to, canonical);
+        if (first > last) {
+            throw new PreconditionViolationException("Invalid enum range: 'from' (" + from + ") must come before 'to' ("
+                    + to + ") in the natural order of enum constants.");
+        }
         if (mode == EnumSource.Mode.INCLUDE || mode == EnumSource.Mode.EXCLUDE) {
             for (String name : names) {
                 boolean known = false;
-                for (E each : all) {
-                    known |= each.name().equals(name);
+                for (int i = first; i <= last; i++) {
+                    known |= all[i].name().equals(name);
                 }
                 if (!known) {
-                    throw new IllegalArgumentException("Invalid enum constant name(s) in @EnumSource: " + name);
+                    // in the order declared: JUnit writes a HashSet of them, in a JDK's
+                    // order, which the library's HashSet does not keep
+                    StringBuilder valid = new StringBuilder();
+                    for (int i = first; i <= last; i++) {
+                        valid.append(i == first ? "" : ", ").append(all[i].name());
+                    }
+                    throw new PreconditionViolationException(
+                            "Invalid enum constant name(s) in " + shown + ". Valid names include: [" + valid + "]");
                 }
             }
         }
-        for (E each : all) {
+        List<Pattern> patterns = new ArrayList<>();
+        if (mode != EnumSource.Mode.INCLUDE && mode != EnumSource.Mode.EXCLUDE) {
+            for (String name : names) {
+                try {
+                    patterns.add(Pattern.compile(name));
+                }
+                catch (PatternSyntaxException ex) {
+                    throw new PreconditionViolationException(
+                            "Pattern compilation failed for a regular expression supplied in " + shown, ex);
+                }
+            }
+        }
+        for (int i = first; i <= last; i++) {
+            E each = all[i];
             boolean picked;
             if (names.length == 0) {
                 picked = true;
@@ -176,8 +224,8 @@ public final class TestSources {
             }
             else {
                 int matched = 0;
-                for (String name : names) {
-                    if (each.name().matches(name)) {
+                for (Pattern pattern : patterns) {
+                    if (pattern.matcher(each.name()).matches()) {
                         matched++;
                     }
                 }
@@ -188,6 +236,25 @@ public final class TestSources {
                 rows.add(new Object[] { each });
             }
         }
+    }
+
+    private static String quoted(String text) {
+        StringBuilder quoted = new StringBuilder("\"");
+        for (int i = 0; i < text.length(); i++) {
+            char c = text.charAt(i);
+            quoted.append(c == '"' ? "\\\"" : c == '\\' ? "\\\\" : c == '\n' ? "\\n" : c == '\t' ? "\\t" : String.valueOf(c));
+        }
+        return quoted.append('"').toString();
+    }
+
+    // Where a constant of an enum is among its constants, as Enum.valueOf finds it.
+    private static <E extends Enum<E>> int ordinal(E[] all, String name, String canonical) {
+        for (int i = 0; i < all.length; i++) {
+            if (all[i].name().equals(name)) {
+                return i;
+            }
+        }
+        throw new IllegalArgumentException("No enum constant " + canonical + "." + name);
     }
 
     // ---- what a method gives
@@ -241,7 +308,121 @@ public final class TestSources {
         }
     }
 
-    // ---- an argument as its parameter's type
+    // ---- what a field gives
+
+    // The rows of a @FieldSource field's value: a collection or another Iterable, an
+    // array of objects or of a primitive type, or a Supplier of one of them or of a
+    // stream, each element a row. A stream or an iterator, which a run would use up, is
+    // refused, as JUnit refuses it. An overload for each type a field is declared of,
+    // so that a program reaches only what its fields' types need.
+    public static void field(List<Object[]> rows, Iterable<?> value, String field, String type) {
+        rows(rows, (Iterable<?>) present(value, field, type));
+    }
+
+    public static void field(List<Object[]> rows, Object[] value, String field, String type) {
+        rows(rows, (Object[]) present(value, field, type));
+    }
+
+    public static void field(List<Object[]> rows, Supplier<?> value, String field, String type) {
+        Object supplied = ((Supplier<?>) present(value, field, type)).get();
+        if (supplied == null) {
+            throw new PreconditionViolationException("Object must not be null");
+        }
+        if (supplied instanceof Stream<?> stream) {
+            rows(rows, stream);
+        }
+        else if (supplied instanceof IntStream stream) {
+            rows(rows, stream);
+        }
+        else if (supplied instanceof LongStream stream) {
+            rows(rows, stream);
+        }
+        else if (supplied instanceof DoubleStream stream) {
+            rows(rows, stream);
+        }
+        else {
+            elements(rows, supplied, field, type);
+        }
+    }
+
+    // A field of any other type: what its value is decides.
+    public static void field(List<Object[]> rows, Object value, String field, String type) {
+        if (present(value, field, type) instanceof Supplier<?> supplier) {
+            field(rows, supplier, field, type);
+            return;
+        }
+        String of = "The value of field [" + field + "] in class [" + type + "] must ";
+        if (value instanceof BaseStream<?, ?>) {
+            throw new PreconditionViolationException(of + "not be a stream");
+        }
+        if (value instanceof Iterator<?>) {
+            throw new PreconditionViolationException(of + "not be an Iterator");
+        }
+        elements(rows, value, field, type);
+    }
+
+    private static void elements(List<Object[]> rows, Object value, String field, String type) {
+        if (value instanceof Iterable<?> iterable) {
+            rows(rows, iterable);
+        }
+        else if (value instanceof Object[] array) {
+            rows(rows, array);
+        }
+        else if (value instanceof int[] array) {
+            for (int each : array) {
+                rows.add(new Object[] { each });
+            }
+        }
+        else if (value instanceof long[] array) {
+            for (long each : array) {
+                rows.add(new Object[] { each });
+            }
+        }
+        else if (value instanceof double[] array) {
+            for (double each : array) {
+                rows.add(new Object[] { each });
+            }
+        }
+        else if (value instanceof char[] array) {
+            for (char each : array) {
+                rows.add(new Object[] { each });
+            }
+        }
+        else if (value instanceof boolean[] array) {
+            for (boolean each : array) {
+                rows.add(new Object[] { each });
+            }
+        }
+        else if (value instanceof byte[] array) {
+            for (byte each : array) {
+                rows.add(new Object[] { each });
+            }
+        }
+        else if (value instanceof short[] array) {
+            for (short each : array) {
+                rows.add(new Object[] { each });
+            }
+        }
+        else if (value instanceof float[] array) {
+            for (float each : array) {
+                rows.add(new Object[] { each });
+            }
+        }
+        else {
+            throw new PreconditionViolationException(
+                    "The value of field [" + field + "] in class [" + type + "] must be convertible to a Stream");
+        }
+    }
+
+    private static Object present(Object value, String field, String type) {
+        if (value == null) {
+            throw new PreconditionViolationException(
+                    "The value of field [" + field + "] in class [" + type + "] must not be null");
+        }
+        return value;
+    }
+
+    // ---- an argument as its parameter's type, as JUnit converts it
 
     public static Object object(Object[] row, int index) {
         if (index >= row.length) {
@@ -251,23 +432,53 @@ public final class TestSources {
         return row[index] instanceof Named<?> named ? named.getPayload() : row[index];
     }
 
-    public static boolean isNull(Object[] row, int index) {
-        return object(row, index) == null;
+    // What JUnit throws where an argument is not converted: the parameter is not
+    // resolved, as the conversion failed for the reason given.
+    private static ParameterResolutionException unconverted(int index, String message, Throwable cause) {
+        return new ParameterResolutionException("Error converting parameter at index " + index + ": " + message,
+                new ArgumentConversionException(message, cause));
     }
 
-    private static Object primitive(Object[] row, int index, String type) {
+    // A text a conversion of its type failed to convert, for the reason given.
+    private static ParameterResolutionException failed(int index, String text, String type, Throwable cause) {
+        String message = "Failed to convert String \"" + text + "\" to type " + type;
+        return unconverted(index, message, new ConversionException(message, cause));
+    }
+
+    // A value no conversion to a type takes. An array's class by its name (`[C`) where
+    // JUnit writes its type's (`char[]`): Class.getTypeName would cost every parameterized
+    // test 10 KB of wasm.
+    private static ParameterResolutionException unconvertible(int index, Object value, String type) {
+        String message = "No built-in converter for source type " + value.getClass().getName()
+                + " and target type " + type;
+        return unconverted(index, message, value instanceof String ? new ConversionException(message) : null);
+    }
+
+    // A conversion of a text to a type: its factory, constructor or parsing method.
+    @FunctionalInterface
+    public interface Conversion {
+
+        Object from(String text) throws Throwable;
+    }
+
+    // An argument as a parameter of a class type: the argument itself where it is one
+    // (given: whether it is an instance of the type) or null, else what the type's
+    // conversion makes of a text, where it has one. type: its name, as JUnit's messages
+    // write it.
+    public static Object converted(Object[] row, int index, boolean given, String type, Conversion conversion) {
         Object value = object(row, index);
-        if (value == null) {
-            throw new IllegalArgumentException(
-                    "The argument at index " + index + " is null, which a parameter of the primitive type " + type
-                            + " cannot take");
+        if (value == null || given) {
+            return value;
         }
-        return value;
-    }
-
-    private static IllegalArgumentException unconvertible(Object value, String type) {
-        return new IllegalArgumentException("No implicit conversion to convert object of type " + value.getClass().getName()
-                + " to type " + type);
+        if (value instanceof String text && conversion != null) {
+            try {
+                return conversion.from(text);
+            }
+            catch (Throwable thrown) {
+                throw failed(index, text, type, thrown);
+            }
+        }
+        throw unconvertible(index, value, type);
     }
 
     public static String string(Object[] row, int index) {
@@ -275,38 +486,29 @@ public final class TestSources {
         if (value == null || value instanceof String) {
             return (String) value;
         }
-        throw unconvertible(value, "java.lang.String");
+        throw unconvertible(index, value, "java.lang.String");
     }
 
-    public static int toInt(Object[] row, int index) {
-        Object value = primitive(row, index, "int");
-        if (value instanceof Integer number) {
-            return number;
+    // The primitive types: their own box, a box of a type that widens to them (byte to
+    // short, short and char to int, int to long, long to float, float to double), or a
+    // text, whose underscores a number drops; never null.
+    private static Object primitive(Object[] row, int index, String type) {
+        Object value = object(row, index);
+        if (value == null) {
+            throw unconverted(index, "Cannot convert null to primitive value of type " + type, null);
         }
-        if (value instanceof Short number) {
-            return number;
-        }
+        return value;
+    }
+
+    public static byte toByte(Object[] row, int index) {
+        Object value = primitive(row, index, "byte");
         if (value instanceof Byte number) {
             return number;
         }
-        if (value instanceof Character character) {
-            return character;
-        }
         if (value instanceof String text) {
-            return Integer.decode(text);
+            return parseByte(index, text, "byte");
         }
-        throw unconvertible(value, "int");
-    }
-
-    public static long toLong(Object[] row, int index) {
-        Object value = primitive(row, index, "long");
-        if (value instanceof Long number) {
-            return number;
-        }
-        if (value instanceof String text) {
-            return Long.decode(text);
-        }
-        return toInt(row, index);
+        throw unconvertible(index, value, "byte");
     }
 
     public static short toShort(Object[] row, int index) {
@@ -318,45 +520,9 @@ public final class TestSources {
             return number;
         }
         if (value instanceof String text) {
-            return Short.decode(text);
+            return parseShort(index, text, "short");
         }
-        throw unconvertible(value, "short");
-    }
-
-    public static byte toByte(Object[] row, int index) {
-        Object value = primitive(row, index, "byte");
-        if (value instanceof Byte number) {
-            return number;
-        }
-        if (value instanceof String text) {
-            return Byte.decode(text);
-        }
-        throw unconvertible(value, "byte");
-    }
-
-    public static double toDouble(Object[] row, int index) {
-        Object value = primitive(row, index, "double");
-        if (value instanceof Double number) {
-            return number;
-        }
-        if (value instanceof Float number) {
-            return number;
-        }
-        if (value instanceof String text) {
-            return Double.parseDouble(text);
-        }
-        return toLong(row, index);
-    }
-
-    public static float toFloat(Object[] row, int index) {
-        Object value = primitive(row, index, "float");
-        if (value instanceof Float number) {
-            return number;
-        }
-        if (value instanceof String text) {
-            return Float.parseFloat(text);
-        }
-        return toLong(row, index);
+        throw unconvertible(index, value, "short");
     }
 
     public static char toChar(Object[] row, int index) {
@@ -364,10 +530,91 @@ public final class TestSources {
         if (value instanceof Character character) {
             return character;
         }
-        if (value instanceof String text && text.length() == 1) {
-            return text.charAt(0);
+        if (value instanceof String text) {
+            return parseChar(index, text, "char");
         }
-        throw unconvertible(value, "char");
+        throw unconvertible(index, value, "char");
+    }
+
+    public static int toInt(Object[] row, int index) {
+        Object value = primitive(row, index, "int");
+        if (value instanceof String text) {
+            return parseInt(index, text, "int");
+        }
+        Integer widened = widenedInt(value);
+        if (widened != null) {
+            return widened;
+        }
+        throw unconvertible(index, value, "int");
+    }
+
+    private static Integer widenedInt(Object value) {
+        if (value instanceof Integer number) {
+            return number;
+        }
+        if (value instanceof Short number) {
+            return (int) number;
+        }
+        if (value instanceof Byte number) {
+            return (int) number;
+        }
+        if (value instanceof Character character) {
+            return (int) character;
+        }
+        return null;
+    }
+
+    public static long toLong(Object[] row, int index) {
+        Object value = primitive(row, index, "long");
+        if (value instanceof String text) {
+            return parseLong(index, text, "long");
+        }
+        Long widened = widenedLong(value);
+        if (widened != null) {
+            return widened;
+        }
+        throw unconvertible(index, value, "long");
+    }
+
+    private static Long widenedLong(Object value) {
+        if (value instanceof Long number) {
+            return number;
+        }
+        Integer widened = widenedInt(value);
+        return widened == null ? null : (long) widened;
+    }
+
+    public static float toFloat(Object[] row, int index) {
+        Object value = primitive(row, index, "float");
+        if (value instanceof String text) {
+            return parseFloat(index, text, "float");
+        }
+        if (value instanceof Float number) {
+            return number;
+        }
+        Long widened = widenedLong(value);
+        if (widened != null) {
+            return widened;
+        }
+        throw unconvertible(index, value, "float");
+    }
+
+    public static double toDouble(Object[] row, int index) {
+        Object value = primitive(row, index, "double");
+        if (value instanceof String text) {
+            return parseDouble(index, text, "double");
+        }
+        if (value instanceof Double number) {
+            return number;
+        }
+        if (value instanceof Float number) {
+            return number;
+        }
+        Long widened = widenedLong(value);
+        if (widened != null) {
+            return widened;
+        }
+        throw unconvertible(index, value, "double");
     }
 
     public static boolean toBoolean(Object[] row, int index) {
@@ -375,25 +622,170 @@ public final class TestSources {
         if (value instanceof Boolean flag) {
             return flag;
         }
-        if (value instanceof String text && (text.equalsIgnoreCase("true") || text.equalsIgnoreCase("false"))) {
-            return text.equalsIgnoreCase("true");
+        if (value instanceof String text) {
+            return parseBoolean(index, text, "boolean");
         }
-        throw unconvertible(value, "boolean");
+        throw unconvertible(index, value, "boolean");
     }
 
-    // An enum constant: the argument itself, or the constant a text names.
-    @SuppressWarnings("unchecked")
-    public static <E extends Enum<E>> E constant(Object[] row, int index, E[] all) {
+    // The boxes: the box itself, null or a text, never a box of another type.
+    public static Byte byteBox(Object[] row, int index) {
         Object value = object(row, index);
-        if (value instanceof String text) {
-            for (E each : all) {
-                if (each.name().equals(text)) {
-                    return each;
-                }
-            }
-            throw new IllegalArgumentException("No enum constant " + text);
+        if (value == null || value instanceof Byte) {
+            return (Byte) value;
         }
-        return (E) value;
+        if (value instanceof String text) {
+            return parseByte(index, text, "java.lang.Byte");
+        }
+        throw unconvertible(index, value, "java.lang.Byte");
+    }
+
+    public static Short shortBox(Object[] row, int index) {
+        Object value = object(row, index);
+        if (value == null || value instanceof Short) {
+            return (Short) value;
+        }
+        if (value instanceof String text) {
+            return parseShort(index, text, "java.lang.Short");
+        }
+        throw unconvertible(index, value, "java.lang.Short");
+    }
+
+    public static Character charBox(Object[] row, int index) {
+        Object value = object(row, index);
+        if (value == null || value instanceof Character) {
+            return (Character) value;
+        }
+        if (value instanceof String text) {
+            return parseChar(index, text, "java.lang.Character");
+        }
+        throw unconvertible(index, value, "java.lang.Character");
+    }
+
+    public static Integer intBox(Object[] row, int index) {
+        Object value = object(row, index);
+        if (value == null || value instanceof Integer) {
+            return (Integer) value;
+        }
+        if (value instanceof String text) {
+            return parseInt(index, text, "java.lang.Integer");
+        }
+        throw unconvertible(index, value, "java.lang.Integer");
+    }
+
+    public static Long longBox(Object[] row, int index) {
+        Object value = object(row, index);
+        if (value == null || value instanceof Long) {
+            return (Long) value;
+        }
+        if (value instanceof String text) {
+            return parseLong(index, text, "java.lang.Long");
+        }
+        throw unconvertible(index, value, "java.lang.Long");
+    }
+
+    public static Float floatBox(Object[] row, int index) {
+        Object value = object(row, index);
+        if (value == null || value instanceof Float) {
+            return (Float) value;
+        }
+        if (value instanceof String text) {
+            return parseFloat(index, text, "java.lang.Float");
+        }
+        throw unconvertible(index, value, "java.lang.Float");
+    }
+
+    public static Double doubleBox(Object[] row, int index) {
+        Object value = object(row, index);
+        if (value == null || value instanceof Double) {
+            return (Double) value;
+        }
+        if (value instanceof String text) {
+            return parseDouble(index, text, "java.lang.Double");
+        }
+        throw unconvertible(index, value, "java.lang.Double");
+    }
+
+    public static Boolean booleanBox(Object[] row, int index) {
+        Object value = object(row, index);
+        if (value == null || value instanceof Boolean) {
+            return (Boolean) value;
+        }
+        if (value instanceof String text) {
+            return parseBoolean(index, text, "java.lang.Boolean");
+        }
+        throw unconvertible(index, value, "java.lang.Boolean");
+    }
+
+    // ---- a text as a number, a character or a boolean
+
+    private static byte parseByte(int index, String text, String type) {
+        try {
+            return Byte.decode(text.replace("_", ""));
+        }
+        catch (RuntimeException ex) {
+            throw failed(index, text, type, ex);
+        }
+    }
+
+    private static short parseShort(int index, String text, String type) {
+        try {
+            return Short.decode(text.replace("_", ""));
+        }
+        catch (RuntimeException ex) {
+            throw failed(index, text, type, ex);
+        }
+    }
+
+    private static int parseInt(int index, String text, String type) {
+        try {
+            return Integer.decode(text.replace("_", ""));
+        }
+        catch (RuntimeException ex) {
+            throw failed(index, text, type, ex);
+        }
+    }
+
+    private static long parseLong(int index, String text, String type) {
+        try {
+            return Long.decode(text.replace("_", ""));
+        }
+        catch (RuntimeException ex) {
+            throw failed(index, text, type, ex);
+        }
+    }
+
+    private static float parseFloat(int index, String text, String type) {
+        try {
+            return Float.parseFloat(text.replace("_", ""));
+        }
+        catch (RuntimeException ex) {
+            throw failed(index, text, type, ex);
+        }
+    }
+
+    private static double parseDouble(int index, String text, String type) {
+        try {
+            return Double.parseDouble(text.replace("_", ""));
+        }
+        catch (RuntimeException ex) {
+            throw failed(index, text, type, ex);
+        }
+    }
+
+    private static char parseChar(int index, String text, String type) {
+        if (text.length() != 1) {
+            throw failed(index, text, type, new PreconditionViolationException("String must have length of 1: " + text));
+        }
+        return text.charAt(0);
+    }
+
+    private static boolean parseBoolean(int index, String text, String type) {
+        if (!text.equalsIgnoreCase("true") && !text.equalsIgnoreCase("false")) {
+            throw failed(index, text, type,
+                    new PreconditionViolationException("String must be 'true' or 'false' (ignoring case): " + text));
+        }
+        return text.equalsIgnoreCase("true");
     }
 
     // ---- what is made for a test and closed after it

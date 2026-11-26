@@ -666,7 +666,7 @@ class JavaSpecE2eTest {
 	 * an orderer of tests other than JUnit's by order, name or display name; a
 	 * RepetitionInfo given around a test that is not repeated; a parameter of a
 	 * parameterized test that JUnit would make of its own, or whose TestInfo would name
-	 * its arguments.
+	 * its arguments; a text a parameterized test's source gives to a class parameter.
 	 */
 	@TestFactory
 	Stream<DynamicNode> whatARunOfTestsDoesNotRunIsRefusedByName() {
@@ -690,6 +690,9 @@ class JavaSpecE2eTest {
 				{ "import org.junit.jupiter.params.ParameterizedTest; import org.junit.jupiter.params.provider.ValueSource; "
 						+ "class T { @ParameterizedTest @ValueSource(classes = String.class) void t(Class<?> c) { } }",
 						"@ValueSource", "the element classes of @ValueSource" },
+				{ "import org.junit.jupiter.params.ParameterizedTest; import org.junit.jupiter.params.provider.ValueSource; "
+						+ "class T { @ParameterizedTest @ValueSource(strings = \"java.lang.String\") void t(Class<?> c) { } }",
+						"c)", "the conversion of a text to a java.lang.Class" },
 				{ "import org.junit.jupiter.api.Test; @Test @interface Fast { } class T { @Fast void t() { } }",
 						"@Test", "the annotation org.junit.jupiter.api.Test on an annotation type" },
 				{ "import org.junit.jupiter.params.ParameterizedTest; import org.junit.jupiter.params.aggregator."

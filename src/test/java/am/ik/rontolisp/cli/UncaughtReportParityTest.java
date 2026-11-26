@@ -396,9 +396,10 @@ class UncaughtReportParityTest {
 	@Test
 	void aFusedArithmeticTreeReportsTheOperationThatFailedAndItsFunction() throws Exception {
 		// Integer trees compile into one outlined _fx$N method (.kb/jvm-int-fusion.md):
-		// a tree spanning lines, and a small defun inlined into its caller's tree -- here
-		// into the top-level call, where F's own frame never exists -- still report the
-		// failing operation's line and the function that wrote it.
+		// a tree spanning lines -- long enough that its fallback is the method _fxb$N,
+		// whose frame then holds the line -- and a small defun inlined into its caller's
+		// tree -- here into the top-level call, where F's own frame never exists -- still
+		// report the failing operation's line and the function that wrote it.
 		Path inlined = write("fused-inline.lisp", """
 				(defun sq (x)
 				  (* x x))
@@ -414,7 +415,9 @@ class UncaughtReportParityTest {
 		Path multiline = write("fused-lines.lisp", """
 				(defun f (a b)
 				  (+ (* a 2)
-				     (* b 3)))
+				     (* b 3)
+				     (* a 5) (- a 7) (* a 11)
+				     (- a 13) (* a a) (- a 17)))
 
 				(print (f 1 "x"))
 				""");

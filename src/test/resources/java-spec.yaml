@@ -30309,6 +30309,8 @@ standalone:
   # test and the order declared: tests and what runs around them declared by interfaces,
   # the TestInfo and its tags, a repeated test and its RepetitionInfo, a failure
   # threshold, the orderers by name and by @Order, and one instance for all the tests.
+  # `q/ConvertedTest.java` holds a text converted to a parameter's type, a number widened,
+  # what JUnit cannot convert in its words, the rows of fields and a range of constants.
   # `q/AssertjTest.java` holds what AssertJ checks by reflection (the recursive
   # comparison, a property or a field by its name), `asInstanceOf`, the offsets, a map's
   # `containsExactly`, how a value is shown, and the assertions of a path, a file, a
@@ -30317,7 +30319,7 @@ standalone:
     file: p/SampleTest.java
     tests: [p.SampleTest, p.SecondTest, p.ThirdTest, p.FourthTest, p.FifthTest, q.OtherTest, q.DirectoryTest,
             q.ClosedTest, q.AbortedTest, q.AfterAnAbortTest, q.LifecycleTest, q.SharedInstanceTest,
-            q.RepeatedOnlyTest, q.UnmadeTest, q.AssertjTest]
+            q.RepeatedOnlyTest, q.UnmadeTest, q.ConvertedTest, q.AssertjTest]
     status: 1
     files:
       q/OtherTest.java: |
@@ -30743,6 +30745,266 @@ standalone:
 
             @Test
             void a() {
+            }
+
+        }
+      q/ConvertedTest.java: |
+        package q;
+
+        import java.io.File;
+        import java.math.BigDecimal;
+        import java.math.BigInteger;
+        import java.net.URI;
+        import java.net.URL;
+        import java.nio.charset.Charset;
+        import java.nio.file.Path;
+        import java.time.Duration;
+        import java.time.Instant;
+        import java.time.LocalDate;
+        import java.time.LocalDateTime;
+        import java.time.LocalTime;
+        import java.time.MonthDay;
+        import java.time.OffsetDateTime;
+        import java.time.OffsetTime;
+        import java.time.Period;
+        import java.time.Year;
+        import java.time.YearMonth;
+        import java.time.ZoneId;
+        import java.time.ZoneOffset;
+        import java.time.ZonedDateTime;
+        import java.util.List;
+        import java.util.Locale;
+        import java.util.UUID;
+        import java.util.function.Supplier;
+        import java.util.stream.Stream;
+
+        import org.junit.jupiter.api.MethodOrderer;
+        import org.junit.jupiter.api.Nested;
+        import org.junit.jupiter.api.TestMethodOrder;
+        import org.junit.jupiter.params.ParameterizedTest;
+        import org.junit.jupiter.params.provider.Arguments;
+        import org.junit.jupiter.params.provider.CsvSource;
+        import org.junit.jupiter.params.provider.EnumSource;
+        import org.junit.jupiter.params.provider.FieldSource;
+        import org.junit.jupiter.params.provider.MethodSource;
+        import org.junit.jupiter.params.provider.ValueSource;
+
+        import static org.assertj.core.api.Assertions.assertThat;
+
+        // A text converted to a parameter's type as JUnit converts it: by JUnit's conversion of a
+        // type of the JDK's, an enum's constant, a type's own factory method or constructor; a
+        // number widened to a primitive type; what JUnit cannot convert an error of the run, in
+        // JUnit's words. The rows of fields, and the constants of an enum from one to another.
+        @TestMethodOrder(MethodOrderer.MethodName.class)
+        class ConvertedTest {
+
+            enum Size {
+
+                S, M, L, XL
+
+            }
+
+            static class Money {
+
+                final String text;
+
+                private Money(String text) {
+                    this.text = text;
+                }
+
+                static Money of(String text) {
+                    return new Money("of " + text);
+                }
+
+            }
+
+            record Title(String text) {
+            }
+
+            static class Twice {
+
+                final String text;
+
+                Twice(String text) {
+                    this.text = "made " + text;
+                }
+
+                static Twice a(String text) {
+                    return new Twice("a");
+                }
+
+                static Twice b(String text) {
+                    return new Twice("b");
+                }
+
+            }
+
+            static class Refused {
+
+                Refused(String text) {
+                    throw new IllegalStateException("no " + text);
+                }
+
+            }
+
+            static class Plain {
+
+            }
+
+            @ParameterizedTest
+            @CsvSource({ "a/b, http://h/x?y#z, 123e4567-e89b-12d3-a456-426614174000, 1_000.50, 0x10, UTF-8, en-US" })
+            void aTheJdksTypes(Path path, URI uri, UUID uuid, BigDecimal decimal, String hex, Charset charset, Locale locale) {
+                System.out.println(path + " " + path.getFileName() + " " + uri.getFragment() + " " + uuid + " " + decimal + " "
+                        + hex + " " + charset + " " + locale.getCountry());
+            }
+
+            @ParameterizedTest
+            @CsvSource({ "a/b, http://h/x, 123_456, 2017-03-14, 2017-03-14T12:34:56.789, 12:34:56.789, 1970-01-01T00:00:00Z" })
+            void bMore(File file, URL url, BigInteger integer, LocalDate date, LocalDateTime dateTime, LocalTime time,
+                    Instant instant) {
+                System.out.println(file + " " + url.getHost() + " " + integer + " " + date + " " + dateTime + " " + time + " "
+                        + instant);
+            }
+
+            @ParameterizedTest
+            @CsvSource({ "PT1H30M, --03-14, 2017-03-14T12:34:56.789Z, 12:34:56.789Z, P2M6D, 2017, 2017-03, Europe/Berlin, +02:30" })
+            void cTheDates(Duration duration, MonthDay monthDay, OffsetDateTime offsetDateTime, OffsetTime offsetTime,
+                    Period period, Year year, YearMonth yearMonth, ZoneId zone, ZoneOffset offset) {
+                System.out.println(duration + " " + monthDay + " " + offsetDateTime + " " + offsetTime + " " + period + " "
+                        + year + " " + yearMonth + " " + zone + " " + offset);
+            }
+
+            @ParameterizedTest
+            @CsvSource({ "2017-03-14T12:34:56.789Z, x, x, x, M" })
+            void dAZonedDateTimeAndTheProgramsTypes(ZonedDateTime zoned, Money money, Title title, Twice twice, Size size) {
+                System.out.println(zoned + " " + money.text + " " + title.text() + " " + twice.text + " " + size);
+            }
+
+            @ParameterizedTest
+            @CsvSource({ "1_000, 1_000, 1_000.5, 1_000", "-0x1F, -0x1F, 1d, -0x1F", "#1F, #1F, 0x1p3, #1F", "010, 010, 010, 010",
+                    "+5, +5, +5, +5" })
+            void eNumbers(int number, long wide, double real, Integer boxed) {
+                System.out.println(number + " " + wide + " " + real + " " + boxed);
+            }
+
+            static Stream<Arguments> widened() {
+                return Stream.of(Arguments.of((byte) 1, (short) 2, 'c', 4, 5L, 6.5f));
+            }
+
+            @ParameterizedTest
+            @MethodSource("widened")
+            void fWidened(double a, double b, int c, long d, float e, double f) {
+                System.out.println(a + " " + b + " " + c + " " + d + " " + e + " " + f);
+            }
+
+            @ParameterizedTest
+            @ValueSource(strings = { "x", "" })
+            void gANumberThatIsNone(int number) {
+            }
+
+            @ParameterizedTest
+            @ValueSource(strings = "x")
+            void hADateThatIsNone(LocalDate date) {
+            }
+
+            @ParameterizedTest
+            @ValueSource(strings = "yes")
+            void iABooleanThatIsNone(boolean flag) {
+            }
+
+            @ParameterizedTest
+            @ValueSource(strings = "XXL")
+            void jASizeThatIsNone(Size size) {
+            }
+
+            @ParameterizedTest
+            @ValueSource(strings = "x")
+            void kAConstructorThatThrows(Refused refused) {
+            }
+
+            @ParameterizedTest
+            @ValueSource(strings = "x")
+            void lNoConversion(Plain plain) {
+            }
+
+            @ParameterizedTest
+            @ValueSource(ints = 1)
+            void mABoxOfAnotherType(Long number) {
+            }
+
+            @ParameterizedTest
+            @ValueSource(ints = 1)
+            void nNoTextToConvert(UUID uuid) {
+            }
+
+            @ParameterizedTest
+            @MethodSource("widened")
+            void oNotWidened(Integer a) {
+            }
+
+            static List<String> words = List.of("a", "b");
+
+            static final int[] numbers = { 1, 2 };
+
+            static Supplier<Stream<Arguments>> pairs = () -> Stream.of(Arguments.of("x", 1));
+
+            static Object[][] matrix = { { "m", 3 } };
+
+            static Stream<String> stream = Stream.of("never");
+
+            @ParameterizedTest
+            @FieldSource({ "words", "numbers" })
+            void pFields(Object value) {
+                System.out.println("field " + value);
+            }
+
+            @ParameterizedTest
+            @FieldSource("pairs")
+            @FieldSource("matrix")
+            void qRows(String text, int number) {
+                System.out.println("row " + text + number);
+            }
+
+            static List<Integer> rSameName = List.of(7);
+
+            @ParameterizedTest
+            @FieldSource
+            void rSameName(int number) {
+                System.out.println("same " + number);
+            }
+
+            @ParameterizedTest
+            @FieldSource("stream")
+            void sAStream(String text) {
+            }
+
+            @ParameterizedTest
+            @EnumSource(from = "M", to = "L")
+            void tARange(Size size) {
+                System.out.println("range " + size);
+            }
+
+            @ParameterizedTest
+            @EnumSource(value = Size.class, from = "XL", names = "S")
+            void uANameOutOfTheRange(Size size) {
+            }
+
+            @ParameterizedTest
+            @EnumSource(from = "L", to = "M")
+            void vABackwardRange(Size size) {
+            }
+
+            @Nested
+            class Inner {
+
+                static List<String> innerWords = List.of("w");
+
+                @ParameterizedTest
+                @FieldSource("innerWords")
+                void inner(String word) {
+                    System.out.println("inner " + word);
+                }
+
             }
 
         }
@@ -31791,6 +32053,79 @@ standalone:
       Tests run: 1, Failures: 0, Errors: 1, Skipped: 0 <<< FAILURE! -- in q.UnmadeTest
       q.UnmadeTest <<< ERROR!
       java.lang.IllegalStateException: not made
+      Running q.ConvertedTest
+      a/b b z 123e4567-e89b-12d3-a456-426614174000 1000.50 0x10 UTF-8 US
+      a/b h 123456 2017-03-14 2017-03-14T12:34:56.789 12:34:56.789 1970-01-01T00:00:00Z
+      PT1H30M --03-14 2017-03-14T12:34:56.789Z 12:34:56.789Z P2M6D 2017 2017-03 Europe/Berlin +02:30
+      2017-03-14T12:34:56.789Z of x x made x M
+      1000 1000 1000.5 1000
+      -31 -31 1.0 -31
+      31 31 8.0 31
+      8 8 10.0 8
+      5 5 5.0 5
+      1.0 2.0 99 4 5.0 6.5
+      field a
+      field b
+      field 1
+      field 2
+      row x1
+      row m3
+      same 7
+      range M
+      range L
+      Running q.ConvertedTest$Inner
+      inner w
+      Tests run: 1, Failures: 0, Errors: 0, Skipped: 0 -- in q.ConvertedTest$Inner
+      Tests run: 32, Failures: 0, Errors: 13, Skipped: 0 <<< FAILURE! -- in q.ConvertedTest
+      q.ConvertedTest.gANumberThatIsNone[1] <<< ERROR!
+      org.junit.jupiter.api.extension.ParameterResolutionException: Error converting parameter at index 0: Failed to convert String "x" to type int
+      Caused by: org.junit.jupiter.params.converter.ArgumentConversionException: Failed to convert String "x" to type int
+      Caused by: org.junit.platform.commons.support.conversion.ConversionException: Failed to convert String "x" to type int
+      Caused by: java.lang.NumberFormatException: For input string: "x"
+      q.ConvertedTest.gANumberThatIsNone[2] <<< ERROR!
+      org.junit.jupiter.api.extension.ParameterResolutionException: Error converting parameter at index 0: Failed to convert String "" to type int
+      Caused by: org.junit.jupiter.params.converter.ArgumentConversionException: Failed to convert String "" to type int
+      Caused by: org.junit.platform.commons.support.conversion.ConversionException: Failed to convert String "" to type int
+      Caused by: java.lang.NumberFormatException: Zero length string
+      q.ConvertedTest.hADateThatIsNone[1] <<< ERROR!
+      org.junit.jupiter.api.extension.ParameterResolutionException: Error converting parameter at index 0: Failed to convert String "x" to type java.time.LocalDate
+      Caused by: org.junit.jupiter.params.converter.ArgumentConversionException: Failed to convert String "x" to type java.time.LocalDate
+      Caused by: org.junit.platform.commons.support.conversion.ConversionException: Failed to convert String "x" to type java.time.LocalDate
+      Caused by: java.time.format.DateTimeParseException: Text 'x' could not be parsed at index 0
+      q.ConvertedTest.iABooleanThatIsNone[1] <<< ERROR!
+      org.junit.jupiter.api.extension.ParameterResolutionException: Error converting parameter at index 0: Failed to convert String "yes" to type boolean
+      Caused by: org.junit.jupiter.params.converter.ArgumentConversionException: Failed to convert String "yes" to type boolean
+      Caused by: org.junit.platform.commons.support.conversion.ConversionException: Failed to convert String "yes" to type boolean
+      Caused by: org.junit.platform.commons.PreconditionViolationException: String must be 'true' or 'false' (ignoring case): yes
+      q.ConvertedTest.jASizeThatIsNone[1] <<< ERROR!
+      org.junit.jupiter.api.extension.ParameterResolutionException: Error converting parameter at index 0: Failed to convert String "XXL" to type q.ConvertedTest$Size
+      Caused by: org.junit.jupiter.params.converter.ArgumentConversionException: Failed to convert String "XXL" to type q.ConvertedTest$Size
+      Caused by: org.junit.platform.commons.support.conversion.ConversionException: Failed to convert String "XXL" to type q.ConvertedTest$Size
+      Caused by: java.lang.IllegalArgumentException: No enum constant q.ConvertedTest.Size.XXL
+      q.ConvertedTest.kAConstructorThatThrows[1] <<< ERROR!
+      org.junit.jupiter.api.extension.ParameterResolutionException: Error converting parameter at index 0: Failed to convert String "x" to type q.ConvertedTest$Refused
+      Caused by: org.junit.jupiter.params.converter.ArgumentConversionException: Failed to convert String "x" to type q.ConvertedTest$Refused
+      Caused by: org.junit.platform.commons.support.conversion.ConversionException: Failed to convert String "x" to type q.ConvertedTest$Refused
+      Caused by: java.lang.IllegalStateException: no x
+      q.ConvertedTest.lNoConversion[1] <<< ERROR!
+      org.junit.jupiter.api.extension.ParameterResolutionException: Error converting parameter at index 0: No built-in converter for source type java.lang.String and target type q.ConvertedTest$Plain
+      Caused by: org.junit.jupiter.params.converter.ArgumentConversionException: No built-in converter for source type java.lang.String and target type q.ConvertedTest$Plain
+      Caused by: org.junit.platform.commons.support.conversion.ConversionException: No built-in converter for source type java.lang.String and target type q.ConvertedTest$Plain
+      q.ConvertedTest.mABoxOfAnotherType[1] <<< ERROR!
+      org.junit.jupiter.api.extension.ParameterResolutionException: Error converting parameter at index 0: No built-in converter for source type java.lang.Integer and target type java.lang.Long
+      Caused by: org.junit.jupiter.params.converter.ArgumentConversionException: No built-in converter for source type java.lang.Integer and target type java.lang.Long
+      q.ConvertedTest.nNoTextToConvert[1] <<< ERROR!
+      org.junit.jupiter.api.extension.ParameterResolutionException: Error converting parameter at index 0: No built-in converter for source type java.lang.Integer and target type java.util.UUID
+      Caused by: org.junit.jupiter.params.converter.ArgumentConversionException: No built-in converter for source type java.lang.Integer and target type java.util.UUID
+      q.ConvertedTest.oNotWidened[1] <<< ERROR!
+      org.junit.jupiter.api.extension.ParameterResolutionException: Error converting parameter at index 0: No built-in converter for source type java.lang.Byte and target type java.lang.Integer
+      Caused by: org.junit.jupiter.params.converter.ArgumentConversionException: No built-in converter for source type java.lang.Byte and target type java.lang.Integer
+      q.ConvertedTest.sAStream <<< ERROR!
+      org.junit.platform.commons.PreconditionViolationException: The value of field [stream] in class [q.ConvertedTest] must not be a stream
+      q.ConvertedTest.uANameOutOfTheRange <<< ERROR!
+      org.junit.platform.commons.PreconditionViolationException: Invalid enum constant name(s) in @org.junit.jupiter.params.provider.EnumSource(mode=INCLUDE, from="XL", to="", names={"S"}, value=q.ConvertedTest.Size.class). Valid names include: [XL]
+      q.ConvertedTest.vABackwardRange <<< ERROR!
+      org.junit.platform.commons.PreconditionViolationException: Invalid enum range: 'from' (L) must come before 'to' (M) in the natural order of enum constants.
       Running q.AssertjTest
       java.lang.AssertionError:
       Expecting actual:
@@ -32408,7 +32743,7 @@ standalone:
 
       Results:
 
-      Tests run: 84, Failures: 14, Errors: 6, Skipped: 10
+      Tests run: 117, Failures: 14, Errors: 19, Skipped: 10
 refused:
   scaffold: |
     class Refused {

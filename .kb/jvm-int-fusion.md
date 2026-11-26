@@ -15,6 +15,7 @@ TWICE (fast + fallback), so inlining would cross the 8000-byte `HugeMethodLimit`
 unless an operation reports a source site other than the call's (multi-line tree, inlined defun
 body): then the key carries the sites and the fallback marks each operation's (and a `random`
 draw's), so the uncaught report names the right line ([error-handling.md](error-handling.md)).
+A fallback past 35 bytecodes is the method `_fxb$N` ("The fallback is a method of its own").
 Inside the method the operand stack is the tree's own, so the `ArithmeticException` bail (which
 discards the stack) cannot disturb an enclosing expression's operands. A tree over exact locals
 that cannot throw is emitted in place ("Exact locals").
@@ -27,7 +28,8 @@ that cannot throw is emitted in place ("Exact locals").
   the JVM").
 - **Per-operation overflow check**: `Math.*Exact`, `Math.floorMod` (`mod`), `LREM` (`rem`),
   `_fxAsh(JJ)J` (`ash`); the fast path sits in an `ArithmeticException` region whose handler IS
-  the bail.
+  the bail -- no region and no handler where none of its operations throws
+  (`throwsArithmetic`).
 - **The fallback recomputes the WHOLE tree from the SAME parameters** through the generic helpers
   -- identical bit for bit incl. `BigInteger` promotion; leaf side effects ran once at the call.
 - Exact strength reductions: `(mod x 2^k)` -> mask; `(ash x -k)` -> arithmetic shift clamped at 63.
@@ -237,8 +239,55 @@ other array form ([java-frontend.md](java-frontend.md), "Numbers").
   [adjustable-arrays.md](adjustable-arrays.md)), whose fallback wraps each `long` through the
   2^64 - 1 bignum: SHA-512's padding word of a message a multiple of 8 bytes long. A digest reused
   for 64-byte messages: ~45% of JFR samples in `BigInteger` under `Sha512.block`.
-- **What C2 leaves**: it inlines no method past 325 bytecodes, which the round's fused method
-  (877 B, most of it the fallback) is.
+- **What C2 leaves**: "The fallback is a method of its own", "What C2 still leaves".
+
+## The fallback is a method of its own (2026-11-26)
+**A fallback past 35 bytecodes (`FALLBACK_INLINE_LIMIT`) is `_fxb$N`, which the bail calls with
+the fused method's own arguments; a fast path none of whose operations throws
+(`throwsArithmetic`: the tree's, a computed subscript's, a stored value's) has no handler.**
+
+- **Why: one bail slowed a fused method for the life of the process.** C2 recompiles a method
+  whose bail it has seen taken with the fallback's helper calls inlined. SHA-512's round
+  (888 bytecodes, 607 of them the fallback) was 2,888 B of machine code before its first bail
+  and 13,072 after, the schedule's store 4,520 -> 8,112, the block's load 5,240 -> 17,592; with
+  the fallback a call 2,992 / 4,272 / 5,224 (`-XX:+LogCompilation`, an `nmethod`'s
+  `stub_offset - insts_offset`). Every message whose length is a multiple of 8 bytes bails
+  there: its padding word is `Long.MIN_VALUE`, the packed shape's nil. 4 MiB plus one byte,
+  which never bails, ran at 102-104 ms in either layout; 4 MiB at 137-144 in the old one.
+- **The limit is C2's `MaxInlineSize` (35)**: a callee that small it inlines wherever a call has
+  run, so outlining one moves nothing. Measured (C2, five digests in one JVM, ms): limit 100
+  MD5 45-47, SHA-256 117-120; limit 35 42-45, 106-111; every fallback outlined 46-61, 106-115,
+  with the five digests' class 159,842 / 161,578 / 166,845 B (160,158 before).
+- **The fallback is emitted first, as the method** (`emitMethods`): its size decides. A small
+  one is emitted again in place, `forgetFallback` clearing what the first emission left on the
+  tree's celled calls.
+- **A draw is the prologue's**: `_fxb$N` takes each `RandomLeaf`'s slots as arguments after the
+  method's own. A dual local's raw half may hold its shadow's value by the bail; the fallback
+  reads the half the flag names, as it did in place.
+- **The all-Double path stays in the fused method**: it is a program of doubles' fast path, and
+  as `_fxb$N`'s head it would be a call per site wherever the two together pass 325 bytecodes.
+- **No handler**: the exception table entry and its frame were 1.8% of the five digests' class
+  (160,158 -> 157,219 B with the handlers alone gone), and SHA-512 after the four others ran at
+  106-116 ms against 143-149 with nothing else changed.
+- **Measured** (Xeon E5-2697A v4, Oracle GraalVM 25.0.5.1, C2 by `-XX:-UseJVMCICompiler`; the
+  box at load 30-60, so each figure is the MINIMUM of one launch's steady rounds and a range is
+  over launches; both arms built from one tree and alternated; a fresh digest each round, 4 MiB
+  in 64 KiB pieces). SHA-512 alone (rounds 6-29, five launches): C2 137-138 -> 93-110 ms, Graal
+  90-93 -> 83-85. After MD5, SHA-1, SHA-256 and SHA3-256 in one JVM (rounds 6-15): C2 MD5 55-74
+  -> 42-45, SHA-1 108-166 -> 88-91, SHA-256 132-148 -> 106-111, SHA-512 143-149 -> 99-108;
+  Graal MD5 32-33, SHA-1 54-56, SHA-256 76-79 either way, SHA-512 90-91 -> 82; SHA3-256
+  (computed in place) within noise on both. Classes: SHA-512's program 147,811 -> 147,754 B,
+  the five digests' 160,158 -> 161,578 (compiled in 5.6-6.7 s either way), the ten
+  `bench-report` programs -62 .. +31 B. A program with no fused site is byte-identical.
+- **What C2 still leaves** (SHA-512 alone, 83 ms with everything inlined: `-XX:InlineSmallCode=6000`
+  on this layout, `-XX:FreqInlineSize=1000 -XX:InlineSmallCode=30000` on the old one). C2 does
+  not inline a callee it has already compiled to more than `InlineSmallCode` (2,500 B of
+  machine code with C2 the top tier) -- "already compiled into a big method" -- and a fused
+  method is called far more often than its caller, so it is compiled first: the round, now 298
+  bytecodes and under `FreqInlineSize` (325), is 2,840-2,992 B and is inlined only when the
+  block's compile wins the race (93-95 ms; 107-110 when it loses). A general array's read is
+  928-944 B of it by itself (`_fxLongs`, 88 bytecodes inlined, 608 B), the schedule's store
+  with three of them 4,272-4,384; the block's load is 718 bytecodes of fast path.
 
 ## When fusion does NOT trigger (and must keep not triggering)
 - `--optimize=size` (`Ctx.intFusion`, the `!prefersSizeOverSpeed()` gate) and `--dynamic`;
@@ -269,7 +318,8 @@ limit (`.kb/jvm-method-size-limits.md`): past 255 slots `astore 256` truncates t
 reproduces with fusion off.
 
 ## Pinning tests
-`JvmLispCompilerTest.fusedIntegerExpressionTreesMatchTheGenericPath`,
+`JvmLispCompilerTest.fusedIntegerExpressionTreesMatchTheGenericPath` (the fallback's method and
+the handler too: `wide` and its siblings bail into `_fxb$N` from every kind of fused method),
 `.aDeclaredIntegerLeafIsCastAndAMethodWithNothingElseToBailOnHasNoFallback` (exact locals too:
 `DeclaredIntegerProgram`'s `rho` calls no `_fx$` method and no `_ubRead`, `lanes`' first fused
 method answers `J`; declared arrays: `sched` calls its stores' `V` methods and one comparison,
