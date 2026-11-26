@@ -1766,6 +1766,15 @@ cases:
               return a[i] * 3 + 1;
           }
 
+          // Long.MIN_VALUE stored into a long[] and read back, beside its neighbours
+          static long[] held(long v) {
+              long[] a = new long[3];
+              a[0] = v;
+              a[1] = a[0] + 1;
+              a[2] = a[1] - 1;
+              return a;
+          }
+
           static int stored(int[] a, int i) {
               a[i] = next();
               return a.length;
@@ -1826,6 +1835,8 @@ cases:
               attempt("declared long index", () -> System.out.println(scaled(new long[2], args.length + 5)));
               attempt("declared store", () -> System.out.println(stored(xs, 0)));
               System.out.println("indexes evaluated " + counted + " " + scaled(new long[] {1L << 60, 7}, 1));
+              long[] min = held(Long.MIN_VALUE);
+              System.out.println(scaled(min, 0) + " " + scaled(min, 1) + " " + Arrays.toString(min) + " " + Arrays.toString(Arrays.copyOf(min, 2)));
               try {
                   System.out.println(xs[1]);
               } catch (IllegalStateException | NullPointerException e) {
@@ -1874,6 +1885,7 @@ cases:
       declared long index: java.lang.ArrayIndexOutOfBoundsException: Index 5 out of bounds for length 2
       declared store: java.lang.NullPointerException true
       indexes evaluated 3 22
+      -9223372036854775807 -9223372036854775804 [-9223372036854775808, -9223372036854775807, -9223372036854775808] [-9223372036854775808, -9223372036854775807]
       multi-catch NullPointerException
   # try-with-resources is the statement the language specifies: the resources closed in
   # reverse, a null one skipped, an exception of close suppressed by the body's, a
@@ -20423,6 +20435,13 @@ standalone:
               numbers[0] = "first";
               copied[3] = "last";
               System.out.println(numbers[0] + " " + numbers[3] + " " + copied[0] + " " + copied[2] + " " + copied[3]);
+              // Long.MIN_VALUE stored into a long[], copied and read back there
+              long[] words = new long[3];
+              words[1] = Long.MIN_VALUE;
+              long[] moved = new long[3];
+              System.arraycopy(words, 0, moved, 0, 3);
+              words[2] = words[1] + 1;
+              System.out.println(words[1] + " " + moved[1] + " " + words[2] + " " + moved[0] + moved[2]);
               // a thread started and not waited for ends before the program does
               new Thread(() -> System.out.println("last")).start();
           }
@@ -20453,6 +20472,7 @@ standalone:
       TERMINATED false main 2
       rounds stored apart wrong: 0
       first 30 0 20 last
+      -9223372036854775808 -9223372036854775808 -9223372036854775807 00
       last
   # wait gives up the monitor until a notify, a limit or an interrupt; a thread that
   # does not hold the monitor is refused; an interrupt is found where a thread sleeps

@@ -17,7 +17,9 @@ public final class FastPathEvaluationOrderFixture {
 
 	/**
 	 * A program that cannot observe a complex, under handlers (WASM compiles it in EH
-	 * mode): each line prints what ran before the report, then the report.
+	 * mode): each line prints what ran before the report, then the report. The last rows
+	 * read and store arrays a declaration pins: a store's index signals before its value
+	 * runs, its bound after, and a declared element read before a later leaf.
 	 */
 	public static final String SIGNALS_SOURCE = """
 			(defvar *eo-a* 'a)
@@ -41,6 +43,13 @@ public final class FastPathEvaluationOrderFixture {
 			(defun eo-fx-exit (a) (block nil (+ (* 2 a) (return 5))))
 			(defun eo-cmp-exit (a) (block nil (< (* 2 a) (return :exited))))
 			(defun eo-pair (v i j) (logior (ash (aref v i) 8) (aref v (+ j 1))))
+			(defun eo-dstore (v i k)
+			  (declare (type (simple-array (unsigned-byte 8) (*)) v) (type (signed-byte 32) i k))
+			  (setf (aref v (mod i k)) (eo-mark "s " 1))
+			  :stored)
+			(defun eo-dread (w i)
+			  (declare (type (simple-array (signed-byte 64) (*)) w) (type (signed-byte 32) i))
+			  (+ (the (signed-byte 64) (aref w i)) (eo-mark "g " 1)))
 			(eo-report (+ *eo-a* (eo-mark "z " 1.5)))
 			(eo-report (eo-stmt *eo-a*))
 			(eo-report (eo-let *eo-a*))
@@ -101,7 +110,10 @@ public final class FastPathEvaluationOrderFixture {
 			(eo-report (logior (ash (aref *eo-u8* 1) 8) (aref *eo-u8* (+ *eo-ten* 1))))
 			(eo-report (+ (aref *eo-u8* 0) (aref *eo-u8* (+ (eo-mark "k " 1) *eo-a*))))
 			(eo-report (+ 1 (aref *eo-u8* (aref *eo-v* (- *eo-ten* 8)))))
-			(eo-report (* 2 (aref *eo-u8* (ash *eo-ten* 62))))""";
+			(eo-report (* 2 (aref *eo-u8* (ash *eo-ten* 62))))
+			(eo-report (eo-dstore *eo-u8* 1 *eo-zero*))
+			(eo-report (eo-dstore *eo-u8* 10 11))
+			(eo-report (eo-dread *eo-v* *eo-ten*))""";
 
 	/** What every backend prints for {@link #SIGNALS_SOURCE}. */
 	public static final String SIGNALS_EXPECTED = """
@@ -165,7 +177,10 @@ public final class FastPathEvaluationOrderFixture {
 			AREF: The value 11 is not of type (INTEGER 0 (3))
 			k +: The value A is not of type NUMBER
 			AREF: The value 3 is not of type (INTEGER 0 (3))
-			AREF: The value 46116860184273879040 is not of type (INTEGER 0 (3))""";
+			AREF: The value 46116860184273879040 is not of type (INTEGER 0 (3))
+			Division by zero
+			s (SETF AREF): The value 10 is not of type (INTEGER 0 (3))
+			AREF: The value 10 is not of type (INTEGER 0 (3))""";
 
 	/**
 	 * The answers, with no handler anywhere (WASM compiles it outside EH mode): an aref

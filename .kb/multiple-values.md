@@ -97,7 +97,8 @@ consumer, a function tail, `#'read-line`, every stream kind, a parked `unread-ch
 - A Gray method's `("" t)` (SBCL's end of file) needs the second value in the dispatch, so
   `GrayStreamsLibrary` splices it with a REAL `multiple-value-list` when the program defines its own
   `stream-read-line` method (else such a method loops forever on `""`).
-- Pinned by `ReadLineValuesFixture` in the three backend suites (P1 and component).
+- Pinned by `ReadLineValuesFixture` in the three backend suites (P1 and component); on a socket
+  by `TcpOutputBufferFixture` on all four ([tcp-sockets.md](tcp-sockets.md)).
 
 ## Quiet operators in library source
 `(%quiet-values form...)` / `(%quiet-multiple-value-list form)`: for library source whose extra

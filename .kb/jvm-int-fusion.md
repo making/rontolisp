@@ -108,12 +108,10 @@ programs: 159,287 fused sites, 4,737 with an application pending before an obser
   not the read helper alone (which reads rank-2 storage as rank 1). The rank guard is one
   `arraylength` on the header already loaded; a rank-1-only header tag was rejected (it would move
   every consumer of the tag, [adjustable-arrays.md](adjustable-arrays.md)).
-  **A typed read `(the <integer range> (aref a i))` is NOT this leaf -- measured, not made**
-  (`.todo/m28`): the Java front end asserts every array read so
-  ([java-frontend.md](java-frontend.md), "Numbers"), a boxed `_ivAref1` read that makes the
-  tree's other reads opaque too. As the leaf, SHA-512 on C2 went 398-639 -> 203-243 ms but
-  Graal's steady state 113-125 -> 152-177 (the fused method 592 -> 1,323 B, no longer inlined),
-  classes +0.3-5%.
+  **A typed read `(the <integer range> (aref a i))` is this leaf only of an array a
+  declaration pins** ("Declared arrays"): with all three arms SHA-512 on C2 went 398-639 ->
+  203-243 ms but Graal's steady state 113-125 -> 152-177 (the fused method 592 -> 1,323 B, no
+  longer inlined), classes +0.3-5%; an unpinned one stays a trusted opaque leaf.
   **The INDEX is an operand of the tree** (`arefLeaf`): its operations apply before the read, so
   `(aref v (+ i 1))` puts no check between reads; the prologue computes it raw inside the checked
   region. JVM steady state unchanged (C2 already scalar-replaced the index box), first round
@@ -185,10 +183,48 @@ wasm's declared exact flavour ([wasm-unboxed-locals.md](wasm-unboxed-locals.md))
 - **Measured** (Xeon E5-2697A v4, Oracle GraalVM 25.0.5.1; SHA3-256 of 4 MiB in 64 KiB pieces,
   steady runs): base 370-733 ms Graal / 786-1,467 C2; outlined `J` methods alone 78-114 / 229-391;
   in place 62-112 / 85-203 (the JDK 14-15); first run 213-408 vs 1,168-1,406. SHA-512 C2
-  697-1,585 -> 398-1,006, Graal the same; MD5, SHA-1, SHA-256, MD2 unchanged. What SHA-512 and
-  SHA-3 still box is their arrays' (`.todo/m28`). Classes shrink (l18's `Computed` 261,454 ->
+  697-1,585 -> 398-1,006, Graal the same; MD5, SHA-1, SHA-256, MD2 unchanged. Their arrays:
+  "Declared arrays". Classes shrink (l18's `Computed` 261,454 ->
   203,936 B, the `java-spec.yaml` corpus 8,211,494 -> 8,113,471); ironclad's largest method
   unchanged (6,192). A program declaring no integer is byte-identical.
+
+## Declared arrays (2026-11-26)
+**A rank-1 read or store of an array a declaration pins (`DeclaredArrayTypes.Pin`) takes that
+representation's one arm in the fused method: an `(unsigned-byte 8)` vector's `byte[]`, an
+`(unsigned-byte 16|32)` vector's `long[]`, a general array's packed `long[]` (`_fxLongs`,
+inline) and its other shapes (`_fxElt`, `_fxPut`, out of line); every other value bails to the
+generic access.** What the Java front end declares of every array variable and asserts of every
+other array form ([java-frontend.md](java-frontend.md), "Numbers").
+
+- **The pin** (`arrayPinOfExpr`): a variable whose declaration is its binding's own
+  (`Ctx.declaredArrays`, `declaredLong`'s rule) or a `(the spec form)`. No packed float kind,
+  and no packed integer kind without `Ctx.usesIntArray`.
+- **Reads** (`emitPinnedRead`): the arm alone; nil, an index out of range and the sentinel bail
+  as unpinned. A pinned `(the <integer range> (aref a i))` is the leaf, so the order plan no
+  longer makes the tree's other reads opaque.
+- **Stores** (`tryCompileStore`): a rank-1 `%aset` of a pinned array is a fused method rooted at
+  the store -- index and value raw, the arm's checks, one write, `V` in statement position
+  (`JvmExprCompiler.compileStatementStore`); the fallback is the generic store over the same
+  arguments, in its order. An index that may be no integer (an untrusted leaf, an aref read, a
+  draw, a celled call) is checked before the value runs, so the store fuses only where the value's
+  leaves cannot be observed. Where threads run, `_fxPut` stores the box too.
+- **No string arm**: `(setf (aref var i) v)` of a pinned variable is its `%aset` at every level
+  (`JvmArrayCompiler.nonStringArefStore`, wasm's twin); a string there is the false declaration's
+  catchable error.
+- **The packed arm stays inline**: a shared helper's profile is every site's -- `_fxElt` reading
+  every shape kept the boxed path in each inlined copy once one array was boxed (Graal's SHA-512
+  95 -> 134 ms).
+- **Measured** (Xeon E5-2697A v4, Oracle GraalVM 25.0.5.1, SHA-512 of 4 MiB in 64 KiB pieces, a
+  fresh digest each round, median of rounds 6-11, five alternated pairs at load 45-60): Graal
+  120-132 -> 91-106 ms, C2 335-504 -> 138-161; the first round 921-1,099 -> 178-231 (C2 774-1,045
+  -> 189-252). After MD5, SHA-1, SHA-256 and SHA3-256 in one JVM: SHA-512 Graal 222-532 -> 95-193,
+  C2 424-653 -> 223-241; SHA3-256 Graal 102-208 -> 40-73, C2 172-202 -> 83-124; the others within
+  noise. Classes shrink: the `java-spec.yaml` corpus 8,258,946 -> 8,230,665 B, the SHA-512
+  program 310,720 -> 297,337. A digest reused for 20,000 messages of 64 bytes is within noise
+  (Graal 330-560 ms either way): `Sha512.output`'s `>>>` by a variable count goes through a
+  2^64 - 1 bignum mask.
+- **What C2 leaves**: it inlines no method past 325 bytecodes, which the round's fused method
+  (877 B, most of it the fallback) is.
 
 ## When fusion does NOT trigger (and must keep not triggering)
 - `--optimize=size` (`Ctx.intFusion`, the `!prefersSizeOverSpeed()` gate) and `--dynamic`;
@@ -222,7 +258,8 @@ reproduces with fusion off.
 `JvmLispCompilerTest.fusedIntegerExpressionTreesMatchTheGenericPath`,
 `.aDeclaredIntegerLeafIsCastAndAMethodWithNothingElseToBailOnHasNoFallback` (exact locals too:
 `DeclaredIntegerProgram`'s `rho` calls no `_fx$` method and no `_ubRead`, `lanes`' first fused
-method answers `J`; the program on both wasm backends in
+method answers `J`; declared arrays: `sched` calls its stores' `V` methods and one comparison,
+nothing else; the program on both wasm backends in
 `WasmLispCompilerIntegrationTest.fusedLocalFunctionsAndUnboxedLocalsMatchTheGenericPath`),
 `.fusedArefLeavesReadTheGeneralArraysPackedShapeAndBailForEveryOther`,
 `.anArithmeticArefIndexIsComputedInsideTheFusedTree` (one `_fx$` call and no probe per site),
@@ -234,8 +271,9 @@ of the `_gr$` field too), `.theSizeLevelChangesNothingWithoutASpeedForSizeTrade`
 `JvmLibraryMethodSizeTest`; ci-spec `fused-integer-expression-trees`,
 `flet-fusion-and-unboxed-locals`, `fused-comparisons-and-raw-leaf-stores`,
 `fused-random-and-aref-leaves`. The order: `FastPathEvaluationOrderFixture`
-(`.compileAndRunFastPathsKeepTheInterpretersEvaluationOrder`, both levels) and ci-spec
-`fast-paths-keep-the-evaluation-order`.
+(`.compileAndRunFastPathsKeepTheInterpretersEvaluationOrder`, both levels; its `eo-dstore` and
+`eo-dread` rows a declared array's) and ci-spec `fast-paths-keep-the-evaluation-order`; a
+declared array's reports: `ArefRankAndSubscriptChecksFixture.ORDER_SOURCE`'s last rows.
 
 ## Unfinished
 - An UNDECLARED dual local's store re-boxes its fast-path value at every assignment (a declared
@@ -244,7 +282,5 @@ of the `_gr$` field too), `.theSizeLevelChangesNothingWithoutASpeedForSizeTrade`
 - Params are not eligible for the dual representation (they arrive boxed by signature), nor for
   the exact one: a declared parameter allocates nothing (its raw reads unbox), and the unboxing at
   the entry wasm does (`unboxDeclaredParameters`) was not measured here.
-- `%aset` values fuse boxed (`_ivAset1` takes a boxed operand and index): what is left of
-  SHA-512's block's boxes, and of SHA-3's lane stores.
 - A program touching `eval`, threads, an http handler, async or sockets keeps the boxed static
   field for EVERY global; the concurrency half is a conservative reading, not a measured problem.
