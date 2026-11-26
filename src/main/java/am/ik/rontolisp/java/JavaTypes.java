@@ -1057,8 +1057,16 @@ final class JavaTypes implements JavaClasses.Relations {
 			}
 			List<JavaType> upper = this.upper.get(parameter);
 			if (upper != null) {
-				for (JavaType candidate : upper) {
-					if (!isVariable(candidate) && upper.stream().allMatch(other -> isSubtype(candidate, other))) {
+				// the bounds it is declared with are upper bounds too (JLS 18.1.3): under
+				// an Object and its declared Number, it is a Number (JLS 18.4)
+				List<JavaType> above = new ArrayList<>(upper);
+				for (JavaType bound : parameter.bounds) {
+					if (!mentions(bound, this.variables)) {
+						above.add(bound);
+					}
+				}
+				for (JavaType candidate : above) {
+					if (!isVariable(candidate) && above.stream().allMatch(other -> isSubtype(candidate, other))) {
 						return candidate;
 					}
 				}
