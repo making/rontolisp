@@ -10,7 +10,10 @@ of rontolisp.
   rontolisp compiles the program. Its implementation is a service provider:
   `ServiceLoader` finds the program's own under a JDK and on rontolisp's interpreter and
   JVM, and the host's in a WebAssembly module or component rontolisp compiles.
-- `am.ik.rontolisp.wit.WitException` is a WIT `result`'s error arm, carrying the error.
+- `am.ik.rontolisp.wit.WitResult` is a WIT `result` wherever the WIT has one: `Ok` or
+  `Err`, an arm carrying nothing `Void`.
+- `am.ik.rontolisp.wit.WitException` is a WIT `result`'s error arm thrown, where a method
+  declares its ok arm as its answer, carrying the error.
 - `am.ik.rontolisp.wit.WitExport` declares that a class implements a WIT world the program
   exports: each function of the world is a static method, an interface of it a static
   member class, checked against the WIT when rontolisp compiles the program. Under a JDK and

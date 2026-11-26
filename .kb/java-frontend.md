@@ -1329,10 +1329,27 @@ that `javac` and a JDK build and run. User-facing: `doc/*/java/wit.md`.
   declaring what two drafts of `wasi:keyvalue` share checks against either (`list-keys`' cursor
   is `option<u64>` in draft, `option<string>` in draft2). Of that page's refusals, an `option`
   of `bool`, `list`, flags or `option` is refused because the boundary's none is nil, as is each
-  of their values, a tuple in an error arm because no type is written for it.
+  of their values, a tuple in an error arm thrown because no type is written for it.
+- **A `result` is `WitResult<T, E>` wherever the WIT has one** (the user's decision, 2026-11-26):
+  a sealed interface of `Ok(T value)` / `Err(E error)` in the library, an arm carrying nothing
+  `Void` (`null`). Decided: `WitResult`, not `Result`, as the library's names are `Wit*` and a
+  program's own `Result` is common; no helper (`map`, `orElseThrow` ...): the records and a
+  `switch` cover access, and a helper is surface the library keeps for good while nothing of
+  rontolisp needs it. A method's answer takes either spelling, the binding following the
+  declaration (`JavaWitImports.thrown`): the `WitResult` of the whole when the declared
+  `WitResult`s nest as deep along the ok arms as the WIT's `result`s, else the ok arm with a
+  `WitException` -- so `result<result<A, B>, E>` is `WitResult<WitResult<A, B>, E>` or
+  `WitResult<A, B>` thrown.
 - **The binding** (`JavaWitImports.Writer`): `%raw` for a result's envelope, so wit.lisp is not
   spliced for the arm; `:octets t`, a `byte[]` being already the vector a component lifts
-  (measured: no conversion).
+  (measured: no conversion). A nested `result` is the same envelope, `(:ok . v)` /
+  `(:error . v)` both ways (the lift always conses; the lowering takes the cons), converted to
+  `WitResult` by a converter like a variant's. Measured 2026-11-26: the test's program of a
+  `result` in every place printed the JDK's lines as a component composed (`wasm-tools compose`)
+  with a Rust provider (wit-bindgen 0.62), by hand: no provider component runs in CI, where the
+  `--no-wasi` module under node is the canonical-ABI leg. That program: a component of
+  195,146 B, a `--no-wasi` module of 187,829 B; `PageHits.java`'s component, which names no
+  `WitResult`, byte-identical before and after.
 - **Where the WIT is: a resource of the interface's class** (l75, so a library's WIT can live in
   `src/main/resources`), of a directory or a jar of the source path (a sources jar of
   `--java-source-dep`). Decided: `.` and `..` are resolved in EVERY place, a jar's included,
@@ -1361,7 +1378,8 @@ that `javac` and a JDK build and run. User-facing: `doc/*/java/wit.md`.
   ([servlet-httpserver.md](servlet-httpserver.md), "Sessions in `wasi:keyvalue`"); a host's own,
   no JDK provider: `jdbc-spin-postgres/` ([jdbc-spin-postgres.md](jdbc-spin-postgres.md)).
 - **Pinned by** `JavaWitImportTest` (a JDK, the interpreter, the JVM, the component, the
-  Preview 1 refusal; the WIT's lookup; every kind of value; the checks, the two drafts) and
+  Preview 1 refusal; the WIT's lookup; every kind of value; the checks, the two drafts;
+  `aResultIsAWitResultWhereverTheWitHasOne`, a `--no-wasi` module under a JavaScript host) and
   `examples.yaml`'s `wit/keyvalue/PageHits.java`.
 
 ## WIT exports (2026-11-24, l85)

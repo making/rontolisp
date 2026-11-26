@@ -166,17 +166,41 @@ JDK, where the driver leaves the URL to another one.
 | `enum` | a member enum |
 | `flags` | a `Set` of a member enum |
 | a resource, `own<R>`, `borrow<R>` | the member interface |
-| `result<T, E>` | what the method answers, the error arm a `WitException` |
+| `result<T, E>` | `WitResult<T, E>`; as a method's answer, also its ok arm, the error arm a `WitException` |
 
 An unsigned integer is held in the Java type of its width, its bits as Java holds them:
 the `u8` 200 is the `byte` -56 (`Byte.toUnsignedInt` gives 200 back).
 
-`result<T, E>` is what a method answers: its ok arm is the method's value (`void` for none),
-and its error arm is thrown as an `am.ik.rontolisp.wit.WitException`, whose `error()` is the
-error of its Java type (a case record, an enum constant, a string; `null` for none). The
-host's binding words the message `<function> of <interface> answered its error arm: `
-followed by the error's `toString()` (just the first part for `null`), so an uncaught arm
-names its error in the log. A provider of the program's throws it for its own error arm.
+`result<T, E>` is an `am.ik.rontolisp.wit.WitResult<T, E>` wherever the WIT has one: a
+parameter, a list's element, an option's value, a record's field, a variant's payload, an
+answer. It is a sealed interface of two records, `WitResult.Ok(T value)` and
+`WitResult.Err(E error)`; an arm carrying nothing is `Void`, its value `null`, so
+`result<_, E>` is `WitResult<Void, E>`. A tuple in an arm is a record of the program's, as
+anywhere else.
+
+```console
+// check-all: func(names: list<string>) -> list<result<u32, problem>>;
+List<WitResult<Integer, Problem>> checkAll(List<String> names);
+
+// record report { name: string, verdict: result<u32, problem> }
+record Report(String name, WitResult<Integer, Problem> verdict) {
+}
+```
+
+```console
+switch (report.verdict()) {
+    case WitResult.Ok<Integer, Problem>(Integer length) -> System.out.println(length);
+    case WitResult.Err<Integer, Problem>(Problem problem) -> System.out.println(problem);
+}
+```
+
+A method's answer may instead be declared as its ok arm (`void` for none): the error arm
+is then thrown as an `am.ik.rontolisp.wit.WitException`, whose `error()` is the error of
+its Java type (a case record, an enum constant, a string; `null` for none). The binding
+follows the declaration, so `open` above answers a `Bucket` and throws. The host's binding
+words the message `<function> of <interface> answered its error arm: ` followed by the
+error's `toString()` (just the first part for `null`), so an uncaught arm names its error
+in the log. A provider of the program's throws it for its own error arm.
 
 ```console
 try {
@@ -285,10 +309,10 @@ export answers for a `u32` is 4294967295.
 - A `u64` past `Long.MAX_VALUE` crosses no WASM boundary.
 - A native executable (`--native`) runs a Preview 1 module whose runner provides no WIT
   interface, so a program calling one does not start there.
-- Refused at the declaration: a `stream`, a `future`, an `async func`; a `result` anywhere
-  but a method's answer; an `option` of a `bool`, a `list`, `flags` or an `option`, whose
-  none the boundary cannot tell apart; a resource of another interface; a tuple in an error
-  arm.
+- Refused at the declaration: a `stream`, a `future`, an `async func`; an `option` of a
+  `bool`, a `list`, `flags` or an `option`, whose none the boundary cannot tell apart; a
+  resource of another interface; a tuple in an error arm thrown as a `WitException`, for
+  which no type is written (a `WitResult` answer carries it).
 - A world's export takes the types `rontolisp:wit-export` takes; an `async func` export is
   refused. Two exports of one label (a function of the world and an interface's, or two
   interfaces') are two methods, each of its own class.

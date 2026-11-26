@@ -6,7 +6,8 @@
 
 	<!--
 		The names a Java program compiled by rontolisp's Java compiler takes from rontolisp:
-		@WitImport, the WitException a WIT result's error arm is thrown as, and @WitExport. Plain Java
+		@WitImport, the WitResult a WIT result is, the WitException its error arm is thrown as, and
+		@WitExport. Plain Java
 		with no dependency, so a program naming them compiles with javac and runs on a JDK
 		as well; rontolisp gives them their meaning when it compiles the program. It depends
 		on nothing of rontolisp and is outside the root reactor. Built separately:

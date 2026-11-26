@@ -40,9 +40,10 @@ import org.jspecify.annotations.Nullable;
  * source, the BINDING, lowered as far as the program reaches it like an annotation's
  * class: each method converts its arguments to the boundary's values (the settled Common
  * Lisp tier, {@code rontolisp.internal.Wit}), calls the member the directive binds
- * through a native of its own, and converts the answer back -- a {@code result}'s error
- * arm a {@code WitException}. The directive names the members the program's last pass
- * reached, so a component imports what the program calls.
+ * through a native of its own, and converts the answer back -- a {@code result} a
+ * {@code WitResult}, or, answered by a method declaring its ok arm, the error arm a
+ * {@code WitException}. The directive names the members the program's last pass reached,
+ * so a component imports what the program calls.
  */
 final class JavaWitImports {
 
@@ -51,6 +52,13 @@ final class JavaWitImports {
 
 	/** The exception a {@code result}'s error arm is thrown as. */
 	static final String WIT_EXCEPTION = "am.ik.rontolisp.wit.WitException";
+
+	/** The type a {@code result} is as a value. */
+	static final String WIT_RESULT = "am.ik.rontolisp.wit.WitResult";
+
+	/** Why a tuple is refused in an error arm a {@code WitException} carries. */
+	private static final String TUPLE_ARM = "a tuple, which is a record of the program's where a type is written "
+			+ "for it, and none is written for an error arm thrown: the method answers a WitResult of it";
 
 	/** The library class of the boundary's values. */
 	private static final String VALUES = "rontolisp.internal.Wit";
@@ -353,17 +361,13 @@ final class JavaWitImports {
 			}
 			for (int i = 0; i < params.size(); i++) {
 				JavaBoundary.Param param = params.get(i);
-				if (param.type().rep() == Rep.RESULT) {
-					throw at(method, what + ": its parameter " + param.name() + " is a result, which the Java subset "
-							+ "carries only as a function's answer");
-				}
 				expect(param.type(), method.parameters.get(i), false, method, what + ": its parameter " + param.name());
 			}
 			JavaBoundary.Type result = member.result();
 			if (result == null) {
 				expectVoid(method, what);
 			}
-			else if (result.rep() == Rep.RESULT) {
+			else if (thrown(result, method.returnType)) {
 				JavaBoundary.Type ok = result.element();
 				if (ok == null) {
 					expectVoid(method, what);
@@ -434,6 +438,9 @@ final class JavaWitImports {
 					}
 					yield all;
 				}
+				case RESULT -> declared instanceof ClassType type && type.declaration().name.equals(WIT_RESULT)
+						&& type.arguments().size() == 2 && arm(wit.element(), type.arguments().get(0), method, what)
+						&& arm(wit.error(), type.arguments().get(1), method, what);
 				case KEYWORD_LIST -> declared instanceof ClassType type
 						&& type.declaration().name.equals("java.util.Set") && type.arguments().size() == 1
 						&& type.arguments().get(0).equals(new ClassType(member(wit, method, what), List.of()));
@@ -441,6 +448,14 @@ final class JavaWitImports {
 					declared.equals(new ClassType(member(wit, method, what), List.of()));
 				default -> false;
 			};
+		}
+
+		/**
+		 * Whether a type argument is a result's arm: {@code Void} for one carrying
+		 * nothing.
+		 */
+		private boolean arm(JavaBoundary.@Nullable Type wit, JavaType declared, JavaClass.Method method, String what) {
+			return wit == null ? isClass(declared, "java.lang.Void") : matches(wit, declared, true, method, what);
 		}
 
 		/**
@@ -453,10 +468,17 @@ final class JavaWitImports {
 			switch (wit.rep()) {
 				case LIST, NIL_OR_VALUE ->
 					definitions(Objects.requireNonNull(wit.element()), argument(declared), method, what);
+				case RESULT -> {
+					if (wit.element() != null) {
+						definitions(wit.element(), argument(declared, 0), method, what);
+					}
+					if (wit.error() != null) {
+						definitions(wit.error(), argument(declared, 1), method, what);
+					}
+				}
 				case TUPLE_LIST -> {
 					if (declared == null) {
-						throw at(method, what + " is " + wit.wit() + ", a tuple, which is a record of the program's "
-								+ "where a type is written for it, and none is written for a result's error arm");
+						throw at(method, what + " is " + wit.wit() + ", " + TUPLE_ARM);
 					}
 					List<JavaClass.Field> components = components(((ClassType) declared).declaration());
 					for (int i = 0; i < components.size(); i++) {
@@ -481,9 +503,7 @@ final class JavaWitImports {
 				case STREAM_HANDLE -> "a stream, which the Java subset does not carry yet";
 				case FUTURE_HANDLE -> "a future, which the Java subset does not carry yet";
 				case UNSUPPORTED -> "a type with no rontolisp value";
-				case RESULT -> "a result, which the Java subset carries only as a function's answer";
-				case TUPLE_LIST -> arm ? "a tuple, which is a record of the program's where a type is written for it,"
-						+ " and none is written for a result's error arm" : null;
+				case TUPLE_LIST -> arm ? TUPLE_ARM : null;
 				// the boundary spells none as nil, so an element whose value can be nil
 				// cannot be told from it
 				case NIL_OR_VALUE -> switch (Objects.requireNonNull(wit.element()).rep()) {
@@ -502,6 +522,10 @@ final class JavaWitImports {
 			}
 			if (wit.rep() == Rep.TUPLE_LIST) {
 				wit.parts().forEach(part -> held.add(Objects.requireNonNull(part.type())));
+			}
+			if (wit.rep() == Rep.RESULT) {
+				Optional.ofNullable(wit.element()).ifPresent(held::add);
+				Optional.ofNullable(wit.error()).ifPresent(held::add);
 			}
 			for (JavaBoundary.Type inner : held) {
 				String refused = refusal(inner, arm);
@@ -711,6 +735,30 @@ final class JavaWitImports {
 		return names;
 	}
 
+	/**
+	 * Whether a method answering a {@code result} declares its ok arm, the error arm
+	 * thrown as a {@code WitException}, rather than the {@code WitResult} of the whole:
+	 * the binding follows the declaration. Told by how deep the declared
+	 * {@code WitResult}s nest along the ok arms against the WIT's {@code result}s, so a
+	 * {@code result<result<A, B>, E>} is either {@code WitResult<WitResult<A, B>, E>} or
+	 * {@code WitResult<A, B>} thrown.
+	 */
+	static boolean thrown(JavaBoundary.Type result, JavaType declared) {
+		if (result.rep() != Rep.RESULT) {
+			return false;
+		}
+		int wit = 0;
+		for (JavaBoundary.Type arm = result; arm != null && arm.rep() == Rep.RESULT; arm = arm.element()) {
+			wit++;
+		}
+		int written = 0;
+		for (JavaType arm = declared; arm instanceof ClassType type && type.declaration().name.equals(WIT_RESULT)
+				&& type.arguments().size() == 2; arm = type.arguments().get(0)) {
+			written++;
+		}
+		return written != wit;
+	}
+
 	private static boolean isClass(JavaType type, String name) {
 		return type instanceof ClassType named && named.declaration().name.equals(name) && named.arguments().isEmpty();
 	}
@@ -771,14 +819,29 @@ final class JavaWitImports {
 					+ javaText(owner, Objects.requireNonNull(wit.element()), true, argument(declared), simple) + ">";
 			case TUPLE_LIST -> declared == null ? "a record of " + wit.parts().size() + " components"
 					: simple ? declared.toString() : JavaAnnotations.typeText(declared);
+			case RESULT ->
+				(simple ? "WitResult<" : WIT_RESULT + "<") + armText(owner, wit.element(), declared, 0, simple) + ", "
+						+ armText(owner, wit.error(), declared, 1, simple) + ">";
 			case KEYWORD_LIST -> (simple ? "Set<" : "java.util.Set<") + memberText(owner, wit, simple) + ">";
 			case PLIST, TAGGED_LIST, KEYWORD, HANDLE -> memberText(owner, wit, simple);
 			default -> wit.wit();
 		};
 	}
 
+	/** A result's arm as Java source names it: {@code Void} for one carrying nothing. */
+	private static String armText(JavaClass owner, JavaBoundary.@Nullable Type arm, @Nullable JavaType declared,
+			int index, boolean simple) {
+		return arm == null ? simple ? "Void" : "java.lang.Void"
+				: javaText(owner, arm, true, argument(declared, index), simple);
+	}
+
 	private static @Nullable JavaType argument(@Nullable JavaType declared) {
 		return declared instanceof ClassType type && type.arguments().size() == 1 ? type.arguments().get(0) : null;
+	}
+
+	private static @Nullable JavaType argument(@Nullable JavaType declared, int index) {
+		return declared instanceof ClassType type && type.arguments().size() > index ? type.arguments().get(index)
+				: null;
 	}
 
 	/** The name of the member class a named type is. */
@@ -983,7 +1046,7 @@ final class JavaWitImports {
 			if (result == null) {
 				out.append(body).append(call).append(";\n");
 			}
-			else if (raw) {
+			else if (thrown(result, method.returnType)) {
 				out.append(body)
 					.append("Object answer = ")
 					.append(call)
@@ -1281,6 +1344,48 @@ final class JavaWitImports {
 					}
 					body.append(in ? "        throw new IllegalStateException(\"no case of " + wit.definition() + " of "
 							+ this.imported.id() + "\");\n" : "        throw new NullPointerException();\n");
+				}
+				case RESULT -> {
+					// the envelope (:ok . value) or (:error . value), the value of an arm
+					// carrying nothing nil
+					String arguments = javaType.substring(WIT_RESULT.length());
+					String ok = WIT_RESULT + ".Ok" + arguments;
+					String err = WIT_RESULT + ".Err" + arguments;
+					JavaBoundary.Type okArm = wit.element();
+					JavaBoundary.Type errorArm = wit.error();
+					if (in) {
+						String payload = v + ".payload(v)";
+						body.append("        if (")
+							.append(v)
+							.append(".failed(v)) {\n            return new ")
+							.append(err)
+							.append('(')
+							.append(errorArm == null ? "null" : in(errorArm, argument(declared, 1), payload))
+							.append(");\n        }\n        return new ")
+							.append(ok)
+							.append('(')
+							.append(okArm == null ? "null" : in(okArm, argument(declared, 0), payload))
+							.append(");\n");
+					}
+					else {
+						body.append("        if (v instanceof ")
+							.append(WIT_RESULT)
+							.append(".Ok) {\n            return ")
+							.append(v)
+							.append(".cons(")
+							.append(v)
+							.append(".label(\"ok\"), ")
+							.append(okArm == null ? "null"
+									: out(okArm, argument(declared, 0), "((" + ok + ") v).value()"))
+							.append(");\n        }\n        return ")
+							.append(v)
+							.append(".cons(")
+							.append(v)
+							.append(".label(\"error\"), ")
+							.append(errorArm == null ? "null"
+									: out(errorArm, argument(declared, 1), "((" + err + ") v).error()"))
+							.append(");\n");
+					}
 				}
 				case KEYWORD -> {
 					JavaClass named = memberClass(wit);
