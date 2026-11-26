@@ -2879,10 +2879,14 @@ class ClojureLoweringTest {
 			.contains(classOf)
 			.doesNotContain("JAVA:");
 		// a program making no class value folds the dispatcher's read of one
-		assertThat(lowered("(defmulti m :k) (defmethod m :a [s] s)"))
-			.doesNotContain(ClojureDispatchLowering.DISPATCH_KIND);
-		assertThat(lowered("(defmulti m identity) (defmethod m String [s] s) (m (class \"s\"))"))
-			.contains(ClojureDispatchLowering.DISPATCH_KIND);
+		List<LispVal> keywordDispatch = Clojure.read("(defmulti m :k) (defmethod m :a [s] s)", null);
+		assertThat(ClojureArms.scan(keywordDispatch, ClojureArms.Family.CLASS_DESIGNATOR).builds()).isFalse();
+		assertThat(ClojureArms.strip(keywordDispatch, ClojureArms.Family.CLASS_DESIGNATOR))
+			.noneMatch(form -> form.print().contains(ClojureDispatchLowering.DISPATCH_KIND));
+		assertThat(ClojureArms
+			.scan(Clojure.read("(defmulti m identity) (defmethod m String [s] s) (m (class \"s\"))", null),
+					ClojureArms.Family.CLASS_DESIGNATOR)
+			.builds()).isTrue();
 	}
 
 	@Test
