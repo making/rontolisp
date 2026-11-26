@@ -26,6 +26,6 @@ them in the order a program asks.
   alias of a flat type, exports no type a consumer could name. Decide whether a component
   target lowers such a scope canonically (conformance to the world) or stays byte-identical.
 - **Hosts not measured**: jco (transpile and call; `.kb/wasi-component.md` on its export-lift
-  reading), a `bindgen` host, a Rust importer (wit-bindgen 0.62 in `~/.cargo`, `wasm-tools
-  component new`, `wasm-tools compose app.wasm -d provider.wasm`). Measured so far: wasmtime
-  51's WAVE `--invoke` and a composed Lisp importer.
+  reading) and a `bindgen` host. Measured so far: wasmtime 51's WAVE `--invoke`, a composed
+  Lisp importer and, by hand, a Rust importer (`.kb/wit.md`, "Compound types across an
+  export").

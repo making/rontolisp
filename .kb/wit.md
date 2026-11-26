@@ -212,8 +212,11 @@ LOWERED as an import's argument is, by the one generator (`WasmComponentImportCo
   26,645 (its `format` and `loop`). Byte-identical before and after, 34 outputs: hello, string and
   interface exports, the `examples/wit` and count-vowels worlds, mandelbrot, the Java counter and
   `PageHits`, two Clojure worlds, each on the shapes it compiles to.
-- Hosts measured: wasmtime 51's WAVE `--invoke` (every type, both shapes of component) and a
-  composed Lisp importer. Not measured: jco, a `bindgen` host, a Rust importer.
+- Hosts measured (2026-11-26): wasmtime 51's WAVE `--invoke` (every type, both shapes of
+  component); a composed Lisp importer; by hand, a Rust importer of `examples/wit/shapes`'
+  interface (wit-bindgen 0.62, `wasm-tools component new`, `wasm-tools compose`), every function
+  and 600,000 calls under `-W max-memory-size=48MiB` -- its import type matched the shim's
+  exports, type names included. Not measured: jco, a `bindgen` host.
 - Pins: `WasmLispCompilerIntegrationTest.aWorldsCompoundTypesCrossItsExportsThroughTheCanonicalAbi`,
   `WitOracleE2eTest.gcMixedFlatAndInterfaceExportsMatchWasmToolsByteForByte` /
   `.aComponentCallsWhatAnotherExportsOverCompoundTypes`,
