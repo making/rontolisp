@@ -253,7 +253,7 @@ the fused method's own arguments; a fast path none of whose operations throws
   the fallback a call 2,992 / 4,272 / 5,224 (`-XX:+LogCompilation`, an `nmethod`'s
   `stub_offset - insts_offset`). Every message whose length is a multiple of 8 bytes bails
   there: its padding word is `Long.MIN_VALUE`, the packed shape's nil. 4 MiB plus one byte,
-  which never bails, ran at 102-104 ms in either layout where 4 MiB ran at 137-144.
+  which never bails, ran at 102-104 ms in either layout; 4 MiB at 137-144 in the old one.
 - **The limit is C2's `MaxInlineSize` (35)**: a callee that small it inlines wherever a call has
   run, so outlining one moves nothing. Measured (C2, five digests in one JVM, ms): limit 100
   MD5 45-47, SHA-256 117-120; limit 35 42-45, 106-111; every fallback outlined 46-61, 106-115,
@@ -271,14 +271,14 @@ the fused method's own arguments; a fast path none of whose operations throws
   106-116 ms against 143-149 with nothing else changed.
 - **Measured** (Xeon E5-2697A v4, Oracle GraalVM 25.0.5.1, C2 by `-XX:-UseJVMCICompiler`; the
   box at load 30-60, so each figure is the MINIMUM of one launch's steady rounds and a range is
-  over launches; a fresh digest each round, 4 MiB in 64 KiB pieces). SHA-512 alone (rounds
-  6-29, five launches): C2 137-138 -> 93-110 ms, Graal 90-93 -> 83-85. After MD5, SHA-1,
-  SHA-256 and SHA3-256 in one JVM (rounds 6-15): C2 MD5 55-74 -> 42-45, SHA-1 108-166 ->
-  88-91, SHA-256 132-148 -> 106-111, SHA-512 143-149 -> 99-108; Graal MD5 32-33, SHA-1 54-56,
-  SHA-256 76-79 either way, SHA-512 90-91 -> 82; SHA3-256 (computed in place) within noise on
-  both. Classes: SHA-512's program 147,811 -> 147,754 B, the five digests' 160,158 -> 161,578;
-  the ten `bench-report` programs -62 .. +31 B. A program whose fused methods all throw and
-  keep a fallback of at most 35 bytecodes is byte-identical.
+  over launches; both arms built from one tree and alternated; a fresh digest each round, 4 MiB
+  in 64 KiB pieces). SHA-512 alone (rounds 6-29, five launches): C2 137-138 -> 93-110 ms, Graal
+  90-93 -> 83-85. After MD5, SHA-1, SHA-256 and SHA3-256 in one JVM (rounds 6-15): C2 MD5 55-74
+  -> 42-45, SHA-1 108-166 -> 88-91, SHA-256 132-148 -> 106-111, SHA-512 143-149 -> 99-108;
+  Graal MD5 32-33, SHA-1 54-56, SHA-256 76-79 either way, SHA-512 90-91 -> 82; SHA3-256
+  (computed in place) within noise on both. Classes: SHA-512's program 147,811 -> 147,754 B,
+  the five digests' 160,158 -> 161,578 (compiled in 5.6-6.7 s either way), the ten
+  `bench-report` programs -62 .. +31 B. A program with no fused site is byte-identical.
 - **What C2 still leaves** (SHA-512 alone, 83 ms with everything inlined: `-XX:InlineSmallCode=6000`
   on this layout, `-XX:FreqInlineSize=1000 -XX:InlineSmallCode=30000` on the old one). C2 does
   not inline a callee it has already compiled to more than `InlineSmallCode` (2,500 B of
