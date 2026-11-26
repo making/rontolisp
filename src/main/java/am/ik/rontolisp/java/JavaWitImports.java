@@ -46,11 +46,15 @@ import org.jspecify.annotations.Nullable;
  *
  * <p>
  * An {@code async func} is a method that waits for the host's answer, as a call does: the
- * directive blocks on it ({@code :blocking t}). A {@code stream<T>} of values the host
- * answers is a {@code WitStream<T>}, a {@code future<T>} a {@code WitFuture<T>}
- * ({@code rontolisp-java-api}), each a class of the binding reading through the built-ins
- * of an alias of its type the directive adds ({@code :aliases}).
+ * directive blocks on it ({@code :blocking t}), and a read waits as it does. A
+ * {@code stream<T>} the host answers is a {@code WitStream<T>}, of values or of
+ * resources, a {@code stream<u8>} an {@code InputStream}, a {@code future<T>} a
+ * {@code WitFuture<T>} ({@code rontolisp-java-api}), each a class of the binding reading
+ * through the built-ins of an alias of its type the directive adds ({@code :aliases}). A
+ * {@code stream<u8>} the program hands the host is a {@code Consumer<OutputStream>},
+ * handed the writable end once the call has returned.
  */
+
 final class JavaWitImports {
 
 	/** The annotation, in the library a program names it from. */
@@ -67,6 +71,14 @@ final class JavaWitImports {
 
 	/** What a WIT {@code future<T>} the host answers is. */
 	static final String WIT_FUTURE = "am.ik.rontolisp.wit.WitFuture";
+
+	/**
+	 * What a WIT {@code stream<u8>} the program hands the host is: what is handed the
+	 * writable end once the host holds the readable one.
+	 */
+	private static final String CONSUMER = "java.util.function.Consumer";
+
+	private static final String OUTPUT_STREAM = "java.io.OutputStream";
 
 	/** The library class of the boundary's values. */
 	private static final String VALUES = JavaWitTypes.VALUES;
@@ -376,15 +388,60 @@ final class JavaWitImports {
 			}
 			for (int i = 0; i < params.size(); i++) {
 				JavaBoundary.Param param = params.get(i);
-				String async = asyncIn(param.type());
-				if (async != null) {
-					throw at(method, what + ": its parameter " + param.name() + " carries " + async
-							+ ", which the Java subset carries only where the host answers one");
+				String parameter = what + ": its parameter " + param.name();
+				if (asyncIn(param.type()) != null) {
+					handed(param.type(), method.parameters.get(i), member, method, parameter);
+					continue;
 				}
-				expect(param.type(), method.parameters.get(i), false, method, what + ": its parameter " + param.name());
+				expect(param.type(), method.parameters.get(i), false, method, parameter);
 			}
 			expectAnswer(member.result(), method, what);
 			return new Bound(method, member);
+		}
+
+		/**
+		 * Checks a parameter carrying a stream or a future the program hands the host: a
+		 * {@code stream<u8>} of its own, a {@code Consumer<OutputStream>} the binding
+		 * hands the writable end once the call has handed the host the readable one, as
+		 * the Lisp side writes a byte stream after the call it hands over. The rest is
+		 * refused: no write of a stream of values or of handles is bound; a future would
+		 * be written after the call, and wasmtime's HTTP types read the one a request
+		 * takes only within {@code client.send}, which the program waits on; an
+		 * {@code async func} is waited on while the host reads what the program writes
+		 * only after it.
+		 */
+		private void handed(JavaBoundary.Type wit, JavaType declared, JavaBoundary.Function member,
+				JavaClass.Method method, String what) {
+			String refusal;
+			if (wit.rep() == Rep.FUTURE_HANDLE) {
+				refusal = "a future the program hands the host, which the binding could write only once the call has "
+						+ "returned, where a host may read it only within a later call the program waits on "
+						+ "(wasmtime's HTTP types read the one a request takes within client.send)";
+			}
+			else if (wit.rep() != Rep.STREAM_HANDLE) {
+				refusal = "carrying " + Objects.requireNonNull(asyncIn(wit))
+						+ ", which the binding hands the host only as a parameter of its own";
+			}
+			else if (!JavaWitTypes.isU8(wit.element())) {
+				refusal = "a stream the program hands the host, of values the program cannot write: the guest only "
+						+ "reads a stream of other than bytes";
+			}
+			else if (member.async()) {
+				refusal = "a stream the program hands an async func, which the call waits on while the host reads "
+						+ "what the program can write only after it";
+			}
+			else {
+				refusal = null;
+			}
+			if (refusal != null) {
+				throw at(method, what + " is " + wit.wit() + ", " + refusal);
+			}
+			if (!(declared instanceof ClassType type && type.declaration().name.equals(CONSUMER)
+					&& type.arguments().size() == 1 && JavaWitTypes.isClass(type.arguments().get(0), OUTPUT_STREAM))) {
+				throw at(method, what + " is " + wit.wit()
+						+ ", which the program writes: Consumer<OutputStream> in Java, handed the writable end, not "
+						+ declared);
+			}
 		}
 
 		/** A resource's interface checked: each abstract method a method of it. */
@@ -454,8 +511,8 @@ final class JavaWitImports {
 	}
 
 	/**
-	 * The first stream or future a type carries, as WIT spells it, or {@code null}: what
-	 * a program cannot hand the host, which writes the values of what it hands over.
+	 * The first stream or future a type carries, as WIT spells it, or {@code null}: in a
+	 * parameter, what the program writes and hands the host.
 	 */
 	private static @Nullable String asyncIn(JavaBoundary.Type wit) {
 		if (wit.rep() == Rep.STREAM_HANDLE || wit.rep() == Rep.FUTURE_HANDLE) {
@@ -545,9 +602,9 @@ final class JavaWitImports {
 	 * module the interface crosses through the canonical ABI whatever members are reached
 	 * ({@code :canonical t}), as on a component: the binding is written before the pass
 	 * knows which, and it converts a {@code u32} the way that boundary takes it. An async
-	 * func reached is blocked on ({@code :blocking t}), and a stream or a future read is
-	 * read through an alias the directive adds ({@code :aliases}), its built-ins in the
-	 * table.
+	 * func reached is blocked on ({@code :blocking t}), and a stream or a future is read,
+	 * or written, through an alias the directive adds ({@code :aliases}), its built-ins
+	 * in the table, each read waiting where it is ({@code :blocking t}).
 	 */
 	List<LispVal> directives() {
 		List<LispVal> forms = new ArrayList<>();
@@ -566,7 +623,7 @@ final class JavaWitImports {
 			List<LispVal> aliases = new ArrayList<>();
 			for (Map.Entry<String, String> alias : this.aliases.getOrDefault(entry.getKey(), Map.of()).entrySet()) {
 				boolean used = false;
-				for (String op : List.of("read", "drop-readable")) {
+				for (String op : List.of("new", "read", "write", "drop-readable", "drop-writable")) {
 					String bound = reachedMembers.get(alias.getKey() + "-" + op);
 					if (bound != null) {
 						table.add(JavaForms.list(LispString.literal(alias.getKey() + "-" + op),
@@ -587,8 +644,10 @@ final class JavaWitImports {
 				directive.add(new LispSymbol(":CANONICAL"));
 				directive.add(JavaForms.T);
 			}
-			// an async func is a call that waits for its answer
-			if (reachesAsync(imported, reachedMembers)) {
+			// an async func is a call that waits for its answer, and a read waits for
+			// what
+			// it reads
+			if (reachesAsync(imported, reachedMembers) || !aliases.isEmpty()) {
 				directive.add(new LispSymbol(":BLOCKING"));
 				directive.add(JavaForms.T);
 			}
@@ -744,14 +803,45 @@ final class JavaWitImports {
 				arguments.add(VALUES + ".outHandle(this.live())");
 				first = 1;
 			}
+			String body = indent + "    ";
+			// a stream<u8> the program hands the host: the pair made, its readable end
+			// handed over, its writable end handed the program's Consumer once the call
+			// has returned
+			StringBuilder writers = new StringBuilder();
 			for (int i = first; i < params.size(); i++) {
-				arguments.add(out(params.get(i).type(), method.parameters.get(i - first), "p" + (i - first)));
+				JavaBoundary.Type type = params.get(i).type();
+				String argument = "p" + (i - first);
+				if (type.rep() != Rep.STREAM_HANDLE) {
+					arguments.add(out(type, method.parameters.get(i - first), argument));
+					continue;
+				}
+				String[] ends = writer(type);
+				out.append(body).append("Object w").append(i - first).append(" = ").append(ends[0]).append("();\n");
+				arguments.add(VALUES + ".first(w" + (i - first) + ")");
+				writers.append(body)
+					.append(argument)
+					.append(".accept(new ")
+					.append(ends[1])
+					.append('(')
+					.append(VALUES)
+					.append(".inHandle(")
+					.append(VALUES)
+					.append(".rest(w")
+					.append(i - first)
+					.append("))));\n");
 			}
 			JavaBoundary.Type result = member.result();
 			boolean raw = result != null && result.rep() == Rep.RESULT;
 			String call = this.binding + "." + nativeFor(member, params.size(), raw) + "("
 					+ String.join(", ", arguments) + ")";
-			String body = indent + "    ";
+			if (!writers.isEmpty()) {
+				if (result == null) {
+					out.append(body).append(call).append(";\n").append(writers).append(indent).append("}\n");
+					return;
+				}
+				out.append(body).append("Object called = ").append(call).append(";\n").append(writers);
+				call = "called";
+			}
 			if (result == null) {
 				out.append(body).append(call).append(";\n");
 			}
@@ -841,19 +931,12 @@ final class JavaWitImports {
 			String simpleName = (stream ? "S" : "F") + this.asyncClassOf.size();
 			String name = this.binding + "." + simpleName;
 			this.asyncClassOf.put(key, name);
-			Map<String, String> aliases = JavaWitImports.this.aliases.computeIfAbsent(this.imported.declaration(),
-					declaration -> new LinkedHashMap<>());
-			String alias = aliases.entrySet()
-				.stream()
-				.filter(entry -> entry.getValue().equals(wit.wit()))
-				.map(Map.Entry::getKey)
-				.findFirst()
-				.orElse(null);
-			if (alias == null) {
-				alias = (stream ? "java-stream-" : "java-future-") + aliases.size();
-				aliases.put(alias, wit.wit());
-			}
-			String read = this.binding + "." + nativeFor(alias + "-read", stream ? 2 : 1, false);
+			String alias = alias(wit);
+			JavaBoundary.Type payload = Objects.requireNonNull(wit.element());
+			// a read of bytes, or of handles, takes no count: it answers a chunk, or one
+			// handle
+			boolean counted = stream && !JavaWitTypes.isU8(payload) && payload.rep() != Rep.HANDLE;
+			String read = this.binding + "." + nativeFor(alias + "-read", counted ? 2 : 1, false);
 			String drop = this.binding + "." + nativeFor(alias + "-drop-readable", 1, false);
 			String javaType = JavaWitTypes.javaText(this.imported.declaration(), wit, false, declared, false);
 			String what = wit.wit() + " of " + this.imported.id();
@@ -862,10 +945,9 @@ final class JavaWitImports {
 			StringBuilder text = new StringBuilder();
 			text.append("    public static final class ")
 				.append(simpleName)
-				.append(" implements ")
+				.append(JavaWitTypes.isU8(payload) ? " extends " : " implements ")
 				.append(javaType)
 				.append(" {\n        int handle;\n");
-			JavaBoundary.Type payload = Objects.requireNonNull(wit.element());
 			JavaBoundary.Type value = stream || payload.rep() != Rep.RESULT ? payload : payload.element();
 			String valueText = value == null ? "java.lang.Void"
 					: JavaWitTypes.javaText(this.imported.declaration(), value, true, argument, false);
@@ -880,7 +962,62 @@ final class JavaWitImports {
 			text.append("        ")
 				.append(simpleName)
 				.append("(int handle) {\n            this.handle = handle;\n        }\n");
-			if (stream) {
+			if (JavaWitTypes.isU8(payload)) {
+				// a chunk read at a time, handed over as the program reads it
+				text.append("        byte[] chunk;\n        int at;\n        boolean ended;\n")
+					.append("        public int read() throws java.io.IOException {\n")
+					.append("            return this.fill() ? this.chunk[this.at++] & 0xff : -1;\n        }\n")
+					.append("        public int read(byte[] b, int off, int len) throws java.io.IOException {\n")
+					.append("            if (off < 0 || len < 0 || len > b.length - off) {\n")
+					.append("                throw new IndexOutOfBoundsException(\"Range [\" + off + \", \" + off + \" + \" + len")
+					.append(" + \") out of bounds for length \" + b.length);\n            }\n")
+					.append("            if (len == 0) {\n                return 0;\n            }\n")
+					.append("            if (!this.fill()) {\n                return -1;\n            }\n")
+					.append("            int n = Math.min(len, this.chunk.length - this.at);\n")
+					.append("            System.arraycopy(this.chunk, this.at, b, off, n);\n")
+					.append("            this.at += n;\n            return n;\n        }\n")
+					.append("        public int available() throws java.io.IOException {\n")
+					.append("            this.live();\n")
+					.append("            return this.chunk == null ? 0 : this.chunk.length - this.at;\n        }\n")
+					.append("        void live() throws java.io.IOException {\n            if (this.handle < 0) {\n")
+					.append("                throw new java.io.IOException(\"")
+					.append(what)
+					.append(" is closed\");\n            }\n        }\n")
+					// whether a byte is there to read, a chunk read when none is left
+					.append("        boolean fill() throws java.io.IOException {\n            this.live();\n")
+					.append("            while (this.chunk == null || this.at == this.chunk.length) {\n")
+					.append("                if (this.ended) {\n                    return false;\n                }\n")
+					.append("                Object read = ")
+					.append(read)
+					.append('(')
+					.append(v)
+					.append(".outHandle(this.handle));\n                if (read == null) {\n")
+					.append("                    this.ended = true;\n                    this.chunk = null;\n")
+					.append("                    return false;\n                }\n                this.chunk = ")
+					.append(v)
+					.append(".inBytes(read);\n                this.at = 0;\n            }\n")
+					.append("            return true;\n        }\n");
+			}
+			else if (stream && !counted) {
+				// one handle a read
+				text.append("        public java.util.List<")
+					.append(valueText)
+					.append("> read(int max) {\n            if (max < 1) {\n")
+					.append("                throw new IllegalArgumentException(\"A read of \" + max + \" values\");\n")
+					.append("            }\n            if (this.handle < 0) {\n")
+					.append("                throw new IllegalStateException(\"")
+					.append(what)
+					.append(" is closed\");\n            }\n            java.util.ArrayList<")
+					.append(valueText)
+					.append("> out = new java.util.ArrayList<>();\n            Object read = ")
+					.append(read)
+					.append('(')
+					.append(v)
+					.append(".outHandle(this.handle));\n            if (read != null) {\n                out.add(")
+					.append(in(payload, argument, "read"))
+					.append(");\n            }\n            return out;\n        }\n");
+			}
+			else if (stream) {
 				text.append("        public java.util.List<")
 					.append(valueText)
 					.append("> read(int max) {\n            if (max < 1) {\n")
@@ -961,6 +1098,83 @@ final class JavaWitImports {
 				.append(".outHandle(held));\n            }\n        }\n    }\n");
 			this.asyncClasses.append(text);
 			return name;
+		}
+
+		/**
+		 * The alias of a stream's or a future's type the directive adds, whose built-ins
+		 * the binding calls: one a type.
+		 */
+		private String alias(JavaBoundary.Type wit) {
+			Map<String, String> aliases = JavaWitImports.this.aliases.computeIfAbsent(this.imported.declaration(),
+					declaration -> new LinkedHashMap<>());
+			for (Map.Entry<String, String> entry : aliases.entrySet()) {
+				if (entry.getValue().equals(wit.wit())) {
+					return entry.getKey();
+				}
+			}
+			String alias = (wit.rep() == Rep.STREAM_HANDLE ? "java-stream-" : "java-future-") + aliases.size();
+			aliases.put(alias, wit.wit());
+			return alias;
+		}
+
+		/**
+		 * A {@code stream<u8>} the program hands the host: the expression making the pair
+		 * of its ends, and the class of the writable end the program writes, an
+		 * {@code OutputStream} written once. A write waits until the host has read it, as
+		 * the Lisp side's does, and goes on until the host has read all of it; the close
+		 * ends the stream.
+		 */
+		private String[] writer(JavaBoundary.Type wit) {
+			String alias = alias(wit);
+			String make = this.binding + "." + nativeFor(alias + "-new", 0, false);
+			String key = "writer " + wit;
+			String known = this.asyncClassOf.get(key);
+			if (known != null) {
+				return new String[] { make, known };
+			}
+			String simpleName = "W" + this.asyncClassOf.size();
+			String name = this.binding + "." + simpleName;
+			this.asyncClassOf.put(key, name);
+			String write = this.binding + "." + nativeFor(alias + "-write", 2, false);
+			String drop = this.binding + "." + nativeFor(alias + "-drop-writable", 1, false);
+			String what = wit.wit() + " of " + this.imported.id();
+			String v = VALUES;
+			this.asyncClasses.append("    public static final class ")
+				.append(simpleName)
+				.append(" extends java.io.OutputStream {\n        int handle;\n        ")
+				.append(simpleName)
+				.append("(int handle) {\n            this.handle = handle;\n        }\n")
+				.append("        public void write(int b) throws java.io.IOException {\n")
+				.append("            this.write(new byte[] { (byte) b }, 0, 1);\n        }\n")
+				.append("        public void write(byte[] b, int off, int len) throws java.io.IOException {\n")
+				.append("            if (off < 0 || len < 0 || len > b.length - off) {\n")
+				.append("                throw new IndexOutOfBoundsException(\"Range [\" + off + \", \" + off + \" + \" + len")
+				.append(" + \") out of bounds for length \" + b.length);\n            }\n")
+				.append("            if (this.handle < 0) {\n                throw new java.io.IOException(\"")
+				.append(what)
+				.append(" is closed\");\n            }\n")
+				.append("            byte[] left = java.util.Arrays.copyOfRange(b, off, off + len);\n")
+				.append("            while (left.length > 0) {\n                int n = (int) ")
+				.append(v)
+				.append(".inLong(")
+				.append(write)
+				.append('(')
+				.append(v)
+				.append(".outHandle(this.handle), ")
+				.append(v)
+				.append(".outBytes(left)));\n")
+				// a write the host took none of: the reader has gone
+				.append("                if (n == 0) {\n                    throw new java.io.IOException(\"The reader of ")
+				.append(what)
+				.append(" has gone\");\n                }\n")
+				.append("                left = java.util.Arrays.copyOfRange(left, n, left.length);\n            }\n")
+				.append("        }\n        public void close() {\n            if (this.handle >= 0) {\n")
+				.append("                int held = this.handle;\n                this.handle = -1;\n                ")
+				.append(drop)
+				.append('(')
+				.append(v)
+				.append(".outHandle(held));\n            }\n        }\n    }\n");
+			return new String[] { make, name };
 		}
 
 	}
