@@ -3834,15 +3834,16 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		return withLocals(b.toByteArray(), List.of(Ty.STRING, Ty.STRING));
 	}
 
-	// __search(needle i32, hay i32, start i64, end i64, from-end i32) -> i64: the index of
-	// the character the first match of the needle's bytes in the hay's starts at, the last
-	// one's where from-end is not 0, between the characters start and end (a nil end, the
-	// nil-or-integer's, is the hay's) -- nil where there is none (NoGcInternalForms
-	// STRING_SEARCH). A bound outside the hay, or a start past the end, traps: the error
-	// every other backend signals. Bytes match where characters do: a needle's first byte
-	// is no continuation byte, so a match starts at a character, and the count of lead
-	// bytes before it is its index. Locals: 5 = count, 6 = needle length, 7 = start byte,
-	// 8 = end byte, 9 = byte, 10 = k, 11 = found, 12 = index.
+	// __search(needle i32, hay i32, start i64, end i64, from-end i32) -> i64: the
+	// index of the character the first match of the needle's bytes in the hay's starts
+	// at, the last one's where from-end is not 0, between the characters start and end
+	// (a nil end, the nil-or-integer's, is the hay's) -- nil where there is none
+	// (NoGcInternalForms STRING_SEARCH). A bound outside the hay, or a start past the
+	// end, traps: the error every other backend signals. Bytes match where characters
+	// do: a needle's first byte is no continuation byte, so a match starts at a
+	// character, and the count of lead bytes before it is its index. Locals: 5 = count,
+	// 6 = needle length, 7 = start byte, 8 = end byte, 9 = byte, 10 = k, 11 = found,
+	// 12 = index.
 	private static byte[] searchBody(int strlenIndex, int byteOffsetIndex) {
 		ByteArrayOutputStream b = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(b);
@@ -5625,8 +5626,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			return;
 		}
 		if (target == Ty.NINT && (expr instanceof LispNil || expr instanceof LispTrue)) {
-			// a literal's nil-or-integer is a constant: nil's, or t's 1 (as an INT reads
-			// it)
+			// a literal is a constant: nil the nil's, t the 1 an INT reads it as
 			if (expr instanceof LispNil) {
 				pushNil(fn.writer, Ty.NINT);
 			}

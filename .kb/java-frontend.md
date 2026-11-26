@@ -1500,9 +1500,9 @@ is a trap", "Exact mode"), so no backend learns a Java name.**
 - **`--component`: a `@WitExport` world** ("WIT exports"), the lowering the GC component's but
   for the report (`JavaBoundary.reportsUncaught`, false on every reactor): the initialization
   is the top level as is, the start function's, and an uncaught exception the bare trap.
-  Measured 2026-11-26: `rust-calls-java`'s counter with `indexOf(char)` written as `==`s 2,040
-  / 1,075 B gzip against 12,988 / 5,913 as a wasm-GC component (the example as written,
-  15,076, stops at `position` in `%java-index-of-char`: the nil-or-integer of `indexOf`);
+  Measured 2026-11-26: `rust-calls-java`'s counter as written 2,345 / 1,282 B gzip against
+  15,076 / 6,984 as a wasm-GC component, its `indexOf(char)` a `position` ("Exact" above);
+  with the `indexOf` written as `==`s 2,040 / 1,075 against 12,988 / 5,913;
   `JavaWitImportTest`'s `Kinds` with its `StringBuilder` a `String`, 2,226 B.
 - **Pinned by** `JavaReactorTest.aReactorOfScalarValuesCompilesWithNoGcAndWhatLeavesTheSubsetIsRefusedByName`
   (a JDK against the module under node, no glue; the traps; the refusals),

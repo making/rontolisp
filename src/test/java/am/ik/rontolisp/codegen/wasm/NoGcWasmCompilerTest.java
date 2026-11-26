@@ -1091,24 +1091,20 @@ class NoGcWasmCompilerTest {
 				""");
 		assertThat(NoGcWasmCompiler.builder().exact(true).build().compile(plain))
 			.isEqualTo(NoGcWasmCompiler.builder().build().compile(plain));
-		// A loop's index or nil that a test reads holds nil apart from 0: the test is the
-		// nil's own (Long.MIN_VALUE rotated left by one is 1), where the dialect's is
-		// 0's.
-		List<LispVal> read = LispReader.readAllFromString("""
+		// A loop's index or nil that a test reads holds nil apart from 0: the test is
+		// the nil's own (Long.MIN_VALUE rotated left by one is 1), the dialect's 0's.
+		String read = """
 				(defun root (n) (block nil (dotimes (i (+ n 1)) (if (= (* i i) n) (return i)))))
 				(defun probe (n) (let ((r (root n))) (if r r -1)))
 				(rontolisp:wasm-export 'probe :params '(:long) :returns :long)
-				""");
+				""";
 		int[] nilTest = { 0x42, 0x01, 0x89, 0x42, 0x01 };
-		assertThat(containsSequence(localFunctionBody(
-				NoGcWasmCompiler.builder().exact(true).optimize(OptimizeLevel.NONE).build().compile(read), "probe"),
-				nilTest))
-			.isTrue();
-		assertThat(containsSequence(localFunctionBody(compilePlainUnoptimized("""
-				(defun root (n) (block nil (dotimes (i (+ n 1)) (if (= (* i i) n) (return i)))))
-				(defun probe (n) (let ((r (root n))) (if r r -1)))
-				(rontolisp:wasm-export 'probe :params '(:long) :returns :long)
-				"""), "probe"), nilTest)).isFalse();
+		assertThat(containsSequence(localFunctionBody(NoGcWasmCompiler.builder()
+			.exact(true)
+			.optimize(OptimizeLevel.NONE)
+			.build()
+			.compile(LispReader.readAllFromString(read)), "probe"), nilTest)).isTrue();
+		assertThat(containsSequence(localFunctionBody(compilePlainUnoptimized(read), "probe"), nilTest)).isFalse();
 		// A float's nil is its 0.0 in both, so an exact module refuses to test one.
 		assertThatThrownBy(() -> NoGcWasmCompiler.builder().exact(true).build().compile(LispReader.readAllFromString("""
 				(defun half (n) (let ((x (if (> n 0) (/ n 2.0)))) (if x 1 0)))
