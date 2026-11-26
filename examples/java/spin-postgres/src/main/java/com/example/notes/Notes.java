@@ -72,6 +72,9 @@ final class Notes {
                         order by id""")) {
             select.setString(1, word.orElse(null));
             select.setString(2, word.orElse(null));
+            // The rows in pieces of 50, as the host reads them from the server: no more
+            // of them held at once, whatever the table holds.
+            select.setFetchSize(50);
             List<Note> notes = new ArrayList<>();
             try (ResultSet rows = select.executeQuery()) {
                 while (rows.next()) {

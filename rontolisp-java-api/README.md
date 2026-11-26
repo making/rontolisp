@@ -14,6 +14,10 @@ of rontolisp.
   `Err`, an arm carrying nothing `Void`.
 - `am.ik.rontolisp.wit.WitException` is a WIT `result`'s error arm thrown, where a method
   declares its ok arm as its answer, carrying the error.
+- `am.ik.rontolisp.wit.WitStream` and `am.ik.rontolisp.wit.WitFuture` are a WIT `stream<T>`
+  and `future<T>` the host answers: the stream read so many values at a time, the future's
+  one value waited for. A provider answers its own (`WitStream.of`, `WitFuture.of`,
+  `WitFuture.failed`).
 - `am.ik.rontolisp.wit.WitExport` declares that a class implements a WIT world the program
   exports: each function of the world is a static method, an interface of it a static
   member class, checked against the WIT when rontolisp compiles the program. Under a JDK and

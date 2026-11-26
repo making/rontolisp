@@ -162,9 +162,36 @@ public final class WitImportDirective {
 	 * ({@code :canonical t}): its import names and its values are then a component's
 	 * whatever members a program reaches, which the Java front end's bindings ask for.
 	 * Every other backend lowers as it does without it
+	 * @param blocking whether an {@code async func} member blocks until it returns,
+	 * answering its value as a function does ({@code :blocking t}), rather than a future:
+	 * a component lowers it synchronously, its type the host's own {@code async func}.
+	 * What a front end with no futures binds (the Java subset's threads wait as a call
+	 * does)
+	 * @param aliases the type aliases the directive adds to the interface
+	 * ({@code :aliases (("rows" "stream<row>") ...)}): each binds the built-ins a
+	 * {@code type} alias of the WIT's own binds, for a stream or a future the WIT writes
+	 * where it is used, so a WIT read as published needs no alias of rontolisp's
 	 */
 	public record Directive(String path, String iface, @Nullable String pkg, @Nullable String module,
-			FieldStyle fieldStyle, @Nullable Map<String, String> names, boolean octets, boolean canonical) {
+			FieldStyle fieldStyle, @Nullable Map<String, String> names, boolean octets, boolean canonical,
+			boolean blocking, List<Alias> aliases) {
+
+		/**
+		 * A directive that blocks on no {@code async func} and adds no alias.
+		 * @param path the WIT file path as written
+		 * @param iface the interface to bind
+		 * @param pkg the Lisp package the bindings land in, or {@code null}
+		 * @param module the WASM Preview 1 import module, or {@code null}
+		 * @param fieldStyle how a WIT label is spelled as a Preview 1 import field
+		 * @param names the naming hook, or {@code null}
+		 * @param octets whether a {@code list<u8>} result lifts as octets
+		 * @param canonical whether a {@code --no-wasi} core module imports the interface
+		 * through the canonical ABI
+		 */
+		public Directive(String path, String iface, @Nullable String pkg, @Nullable String module,
+				FieldStyle fieldStyle, @Nullable Map<String, String> names, boolean octets, boolean canonical) {
+			this(path, iface, pkg, module, fieldStyle, names, octets, canonical, false, List.of());
+		}
 
 		/**
 		 * A directive the flat set decides the core-module lowering of.
@@ -212,6 +239,17 @@ public final class WitImportDirective {
 	}
 
 	/**
+	 * A type alias a directive adds to the interface it binds.
+	 *
+	 * @param name the alias's WIT name, which its built-ins are named after
+	 * ({@code rows-read})
+	 * @param type the type it names, as WIT writes it in the interface
+	 * ({@code stream<row>})
+	 */
+	public record Alias(String name, String type) {
+	}
+
+	/**
 	 * Returns whether the given form is a {@code (rontolisp:wit-import ...)} directive.
 	 * @param form the top-level form
 	 * @return {@code true} if it is a rontolisp:wit-import directive
@@ -244,6 +282,8 @@ public final class WitImportDirective {
 		Map<String, String> names = null;
 		boolean octets = false;
 		boolean canonical = false;
+		boolean blocking = false;
+		List<Alias> aliases = List.of();
 		int i = 2;
 		while (i < items.size()) {
 			if (!(items.get(i) instanceof LispSymbol keyword) || !keyword.isKeyword()) {
@@ -267,6 +307,9 @@ public final class WitImportDirective {
 					octets = WasmImportDirective.booleanValue(value, "rontolisp:wit-import", ":octets", form);
 				case ":CANONICAL" ->
 					canonical = WasmImportDirective.booleanValue(value, "rontolisp:wit-import", ":canonical", form);
+				case ":BLOCKING" ->
+					blocking = WasmImportDirective.booleanValue(value, "rontolisp:wit-import", ":blocking", form);
+				case ":ALIASES" -> aliases = aliases(value, form);
 				default -> throw new UnsupportedOperationException(
 						"Unknown rontolisp:wit-import option " + keyword.name() + " in " + form.print());
 			}
@@ -281,7 +324,23 @@ public final class WitImportDirective {
 					"rontolisp:wit-import :names spells every binding itself, so it takes no :package, in "
 							+ form.print());
 		}
-		return new Directive(path.value(), iface, pkg, module, fieldStyle, names, octets, canonical);
+		return new Directive(path.value(), iface, pkg, module, fieldStyle, names, octets, canonical, blocking, aliases);
+	}
+
+	// :aliases (("rows" "stream<row>") ...): a list of two strings each, the alias's name
+	// and the type it names.
+	private static List<Alias> aliases(LispVal value, LispCons form) {
+		List<Alias> aliases = new ArrayList<>();
+		for (LispVal entry = value; entry != LispNil.INSTANCE; entry = ((LispCons) entry).cdr()) {
+			if (!(entry instanceof LispCons cons) || !(cons.car() instanceof LispCons pair)
+					|| !(pair.car() instanceof LispString name) || !(pair.cdr() instanceof LispCons rest)
+					|| !(rest.car() instanceof LispString type) || rest.cdr() != LispNil.INSTANCE) {
+				throw new UnsupportedOperationException("rontolisp:wit-import :aliases expects a list of "
+						+ "(\"name\" \"type\") pairs in " + form.print() + ", got: " + value.print());
+			}
+			aliases.add(new Alias(name.value(), type.value()));
+		}
+		return List.copyOf(aliases);
 	}
 
 	// A string, or a bare symbol written in the WIT's own spelling.
@@ -490,7 +549,7 @@ public final class WitImportDirective {
 				}
 				List<Param> params = parameters(func, witPath, locations, resolver, iface, member, false, true, false,
 						false);
-				if (func.def().func().async()) {
+				if (func.def().func().async() && !directive.blocking()) {
 					// An `async func` member async-lowers: the call starts as a subtask
 					// (%member-start, returning a (packed . retptr) token cons), which
 					// rontolisp::%subtask-future turns into a FIRST-CLASS FUTURE --
@@ -551,7 +610,7 @@ public final class WitImportDirective {
 			if (noGc && directive.octets()) {
 				refuseOctets(func, witPath, locations, resolver, iface, member);
 			}
-			if (!wasm && func.def().func().async()) {
+			if (!wasm && func.def().func().async() && !directive.blocking()) {
 				// An `async func` member on the interpreter / the JVM: the provider call
 				// is synchronous, but the binding is an async-defun so callers get a
 				// FUTURE on every backend that has one -- settled with the provider's
@@ -568,8 +627,10 @@ public final class WitImportDirective {
 				bindings.add(wasmImportForm(name, ifaceId, func.def().name(), params, returns, false, true));
 				continue;
 			}
-			bindings.add(wasm ? wasmImportForm(name, module, directive.fieldStyle().apply(member), params, returns,
-					func.def().func().async(), false) : providerDefun(name, ifaceId, member, params));
+			bindings.add(wasm
+					? wasmImportForm(name, module, directive.fieldStyle().apply(member), params, returns,
+							func.def().func().async() && !directive.blocking(), false)
+					: providerDefun(name, ifaceId, member, params));
 		}
 		// A resource is released by its own interface's `drop`, which WIT declares no
 		// function for -- see the lower() javadoc for the name and why it is bound only
@@ -716,8 +777,7 @@ public final class WitImportDirective {
 		// A core module imports no interface for its types alone (it has no types to
 		// import), so a canonical lowering binding nothing leaves no form behind.
 		if (component || (canonicalImports && !componentMembers.isEmpty())) {
-			forms
-				.add(componentImportForm(ifaceId, source.text(named.document()), directive.octets(), componentMembers));
+			forms.add(componentImportForm(ifaceId, named.text(), directive.octets(), componentMembers));
 		}
 		forms.addAll(bindings);
 		return forms;
@@ -830,8 +890,10 @@ public final class WitImportDirective {
 	 * The interface a directive names, parsed and resolved: what {@link #lower} and
 	 * {@link #describe} both start from.
 	 */
+	// The interface a directive binds, read: with the directive's aliases after its own
+	// items, and the WIT text the lowering carries, which then holds them.
 	private record Target(WitDocument document, WitLocations locations, WitResolver resolver,
-			WitItem.InterfaceDef iface, List<WitResolver.Func> funcs) {
+			WitItem.InterfaceDef iface, List<WitResolver.Func> funcs, String text) {
 	}
 
 	private static Target target(Directive directive, WitSource source) {
@@ -849,7 +911,48 @@ public final class WitImportDirective {
 			throw new UnsupportedOperationException(WitSource.at(witPath, locations, iface) + ": interface '"
 					+ iface.name() + "' declares no functions");
 		}
-		return new Target(parsed.document(), locations, resolver, iface, funcs);
+		if (directive.aliases().isEmpty()) {
+			return new Target(parsed.document(), locations, resolver, iface, funcs, source.text(parsed.document()));
+		}
+		List<WitItem> items = new ArrayList<>(iface.items());
+		for (Alias alias : directive.aliases()) {
+			if (resolver.resolveOwned(iface, alias.name()) != null || funcs.stream()
+				.anyMatch(func -> func.resource() == null && func.def().name().equals(alias.name()))) {
+				throw new UnsupportedOperationException(witPath + ": rontolisp:wit-import :aliases names '"
+						+ alias.name() + "', which interface '" + iface.name() + "' already declares");
+			}
+			items.add(new WitItem.TypeAlias(am.ik.wit.WitMeta.none(), alias.name(), aliasType(alias, witPath)));
+		}
+		// the items keep their identity, so a member's position is still the file's
+		WitItem.InterfaceDef aliased = new WitItem.InterfaceDef(iface.meta(), iface.name(), List.copyOf(items));
+		WitDocument document = new WitDocument(replaced(parsed.document().items(), iface, aliased));
+		WitResolver withAliases = new WitResolver(document);
+		return new Target(document, locations, withAliases, aliased, WitResolver.functions(aliased),
+				am.ik.wit.WitPrinter.print(document));
+	}
+
+	// An alias's type, as WIT spells it in an interface's body.
+	private static WitType aliasType(Alias alias, String witPath) {
+		try {
+			WitDocument parsed = am.ik.wit.WitParser.parse("package rontolisp:aliases;\ninterface aliases {\n  type "
+					+ alias.name() + " = " + alias.type() + ";\n}\n");
+			WitItem.InterfaceDef body = (WitItem.InterfaceDef) parsed.items().getLast();
+			return ((WitItem.TypeAlias) body.items().getFirst()).target();
+		}
+		catch (am.ik.wit.WitParseException | ClassCastException | java.util.NoSuchElementException ex) {
+			throw new UnsupportedOperationException(witPath + ": rontolisp:wit-import :aliases (\"" + alias.name()
+					+ "\" \"" + alias.type() + "\") names no type of WIT's: " + ex.getMessage());
+		}
+	}
+
+	// Items with one interface replaced, wherever a package block holds it.
+	private static List<WitItem> replaced(List<WitItem> items, WitItem.InterfaceDef old, WitItem.InterfaceDef with) {
+		List<WitItem> out = new ArrayList<>(items.size());
+		for (WitItem item : items) {
+			out.add(item == old ? with : item instanceof WitItem.PackageBlock block
+					? new WitItem.PackageBlock(block.meta(), block.name(), replaced(block.items(), old, with)) : item);
+		}
+		return List.copyOf(out);
 	}
 
 	/**
@@ -1152,6 +1255,14 @@ public final class WitImportDirective {
 				}
 				return new WitTypeMapper.Shape(WitTypeMapper.Rep.TUPLE_LIST, null, wit, null, List.copyOf(parts));
 			}
+			case WitType.StreamOf stream -> {
+				return new WitTypeMapper.Shape(WitTypeMapper.Rep.STREAM_HANDLE,
+						stream.element() == null ? null : shapeOf(stream.element(), resolver, in, path), wit);
+			}
+			case WitType.FutureOf future -> {
+				return new WitTypeMapper.Shape(WitTypeMapper.Rep.FUTURE_HANDLE,
+						future.element() == null ? null : shapeOf(future.element(), resolver, in, path), wit);
+			}
 			default -> {
 				return new WitTypeMapper.Shape(WitTypeMapper.rep(t), null, wit, null, List.of(),
 						t instanceof WitType.Prim prim ? prim.name() : null, false);
@@ -1425,19 +1536,26 @@ public final class WitImportDirective {
 			WitItem.TypeAlias alias, String member, String op) {
 		if (target.type() instanceof WitType.StreamOf stream) {
 			WitType element = stream.element();
-			if (element != null && isResourceHandle(element, resolver, target.iface())) {
-				if (!"read".equals(op) && !"cancel-read".equals(op) && !"drop-readable".equals(op)) {
-					throw new UnsupportedOperationException(WitSource.at(witPath, locations, alias) + ": '" + member
-							+ "': the alias '" + alias.name() + "' names a stream of resource handles, which is "
-							+ "read-only for the guest -- only the -read, -cancel-read and -drop-readable built-ins "
-							+ "bind");
-				}
+			if (element == null) {
+				throw new UnsupportedOperationException(WitSource.at(witPath, locations, alias) + ": '" + member
+						+ "': the alias '" + alias.name() + "' names a bare stream with no element type; only a "
+						+ "stream<T> carries values to read");
+			}
+			if (isU8(element, resolver, target.iface())) {
 				return;
 			}
-			if (element == null || !isU8(element, resolver, target.iface())) {
+			boolean handles = isResourceHandle(element, resolver, target.iface());
+			if (!"read".equals(op) && !"cancel-read".equals(op) && !"drop-readable".equals(op)) {
 				throw new UnsupportedOperationException(WitSource.at(witPath, locations, alias) + ": '" + member
-						+ "': the alias '" + alias.name() + "' names a stream whose element is not u8; only stream<u8> "
-						+ "(a byte stream) and a stream of resource handles have async built-ins");
+						+ "': the alias '" + alias.name() + "' names a stream of "
+						+ (handles ? "resource handles" : am.ik.wit.WitPrinter.type(element))
+						+ ", which is read-only for the guest -- only the -read, -cancel-read and -drop-readable "
+						+ "built-ins bind");
+			}
+			if (!handles) {
+				// read in chunks of values, each lifted as a function's result is
+				validateComponentResult(element, witPath, locations, resolver, target.iface(), alias, member,
+						"the stream's element");
 			}
 			return;
 		}
@@ -1698,10 +1816,13 @@ public final class WitImportDirective {
 			WitItem.InterfaceDef in, WitItem anchor, String member, String what) {
 		if (t instanceof WitType.StreamOf stream) {
 			WitType elem = stream.element();
-			if (elem == null || (!isU8(elem, resolver, in) && !isResourceHandle(elem, resolver, in))) {
-				throw new UnsupportedOperationException(WitSource.at(witPath, locations, anchor) + ": '" + member
-						+ "': the WIT type of " + what + " is a stream whose element is not u8; only stream<u8> "
-						+ "(a byte stream) and a stream of resource handles cross the component boundary");
+			if (elem == null) {
+				throw new UnsupportedOperationException(
+						WitSource.at(witPath, locations, anchor) + ": '" + member + "': the WIT type of " + what
+								+ " is a bare stream with no element type; only a stream<T> " + "can be read");
+			}
+			if (!isU8(elem, resolver, in) && !isResourceHandle(elem, resolver, in)) {
+				validateComponentResult(elem, witPath, locations, resolver, in, anchor, member, what);
 			}
 		}
 		else if (t instanceof WitType.FutureOf fut) {

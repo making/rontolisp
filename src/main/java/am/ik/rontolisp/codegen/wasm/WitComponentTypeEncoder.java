@@ -107,8 +107,10 @@ final class WitComponentTypeEncoder {
 		for (String resource : provided) {
 			encoder.resourceIndex(encoder.abi, resource);
 		}
+		// A member lowered synchronously keeps the type the host gives it: an async func
+		// a directive blocks on (:blocking t) is the async function type (tag 0x43) too.
 		for (WasmComponentImportCompiler.Decl decl : imported.distinctDecls()) {
-			encoder.declareFunction(decl.func(), decl.field(), false);
+			encoder.declareFunction(decl.func(), decl.field(), decl.func().def().func().async());
 		}
 		// Async func members follow the sync ones; their instance-type declaration is the
 		// async function type (tag 0x43) -- the host's real instance declares them async,

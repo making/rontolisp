@@ -1426,16 +1426,17 @@ public final class WasmComponentBuilder {
 
 	// The canon entry of one async built-in, typed by the derived component-level type.
 	// Memory options mirror the hand-assembled base block: reads and writes stage
-	// through the shared memory (core memory 0); a future.read whose payload carries a
-	// string/list<u8> additionally needs realloc (the shared memory's cabi_realloc =
-	// core func 0) for the host-staged bytes.
+	// through the shared memory (core memory 0); a future.read whose payload, or a
+	// stream.read whose values, carry a string or a list additionally needs realloc (the
+	// shared memory's cabi_realloc = core func 0) for the host-staged bytes.
 	static byte[] asyncCanon(WasmComponentImportCompiler.Async async, int type) {
 		return switch (async.op()) {
 			case NEW -> async.stream() ? ComponentWriter.canonStreamNew(type) : ComponentWriter.canonFutureNew(type);
 			// reads/writes are the ASYNC (non-blocking) built-in variants of base
 			// component-model-async: the generated wrapper parks on the interface's
 			// waitable-set when one reports BLOCKED (no gated feature involved)
-			case READ -> async.stream() ? ComponentWriter.canonStreamReadAsync(type, 0)
+			case READ -> async.stream() ? (WasmComponentImportCompiler.asyncReadNeedsRealloc(async)
+					? ComponentWriter.canonStreamReadAsync(type, 0, 0) : ComponentWriter.canonStreamReadAsync(type, 0))
 					: (WasmComponentImportCompiler.asyncReadNeedsRealloc(async)
 							? ComponentWriter.canonFutureReadAsync(type, 0, 0)
 							: ComponentWriter.canonFutureReadAsync(type, 0));
@@ -1928,18 +1929,18 @@ public final class WasmComponentBuilder {
 	}
 
 	/**
-	 * A memory module sized for the core module it serves: {@code mem} itself when its
-	 * memory already declares at least the pages the core's {@code "mem"/"memory"} import
-	 * asks for, otherwise a copy with the minimum raised to that. Every component whose
-	 * core imports its memory from such a module needs this -- the core's minimum grows
+	 * The memory module of a served component: {@link #MEM_MODULE}, whose
+	 * {@code cabi_realloc} bumps the core's own HEAP_PTR as a non-serve component's does,
+	 * sized to at least {@code pages} -- what the serve preview1 bridge imports -- and to
+	 * what the core's {@code "mem"/"memory"} import asks for: the core's minimum grows
 	 * with its static data ({@code WasmLispCompiler.memoryMinPages}), and a module
 	 * declaring less fails instantiation with "mismatch in memory limits".
-	 * @param mem the memory module's bytes
+	 * @param pages the bridge's memory-import minimum
 	 * @param coreModule the rontolisp core module importing the memory
 	 * @return the memory module to embed
 	 */
-	static byte[] memModuleFor(byte[] mem, byte[] coreModule) {
-		return memModuleAtLeast(mem, requiredMemPagesFromCore(coreModule));
+	static byte[] memModuleFor(int pages, byte[] coreModule) {
+		return memModuleAtLeast(MEM_MODULE, Math.max(pages, requiredMemPagesFromCore(coreModule)));
 	}
 
 	private static byte[] memModuleAtLeast(byte[] mem, int pages) {

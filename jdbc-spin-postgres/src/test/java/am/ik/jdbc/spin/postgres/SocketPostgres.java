@@ -26,6 +26,8 @@ import java.util.Set;
 
 import am.ik.jdbc.postgresql.PostgresDriver;
 import am.ik.rontolisp.wit.WitException;
+import am.ik.rontolisp.wit.WitFuture;
+import am.ik.rontolisp.wit.WitStream;
 
 /**
  * A stand-in for the host under a JDK: {@code spin:postgres/postgres} answered over a
@@ -46,6 +48,11 @@ import am.ik.rontolisp.wit.WitException;
  * whole query.</li>
  * <li>A statement the server refuses while its rows are read is handed over as text; any
  * other refusal with its fields.</li>
+ * <li>{@code query-async} answers the columns, the rows and an end: a statement the
+ * server refuses while its rows are read ends them, its refusal the end's with its
+ * fields; a value the host cannot convert ends them too, the end its text. The stand-in
+ * reads a result whole, so the rows before either are not handed over, where Spin hands
+ * them over.</li>
  * </ul>
  */
 public final class SocketPostgres implements Postgres {
@@ -174,6 +181,37 @@ public final class SocketPostgres implements Postgres {
 			}
 			catch (SQLException ex) {
 				throw refused("query", ex);
+			}
+		}
+
+		@Override
+		public QueryAsync queryAsync(String statement, List<ParameterValue> params) {
+			try (PreparedStatement prepared = prepare(statement, params)) {
+				ResultSetMetaData described = prepared.getMetaData();
+				List<Column> columns = described == null ? List.of() : columns(described);
+				boolean rows;
+				try {
+					rows = prepared.execute();
+				}
+				catch (SQLException ex) {
+					return new QueryAsync(columns, WitStream.of(List.<List<DbValue>>of().iterator()),
+							WitFuture.failed(refused("query-async", ex)));
+				}
+				if (!rows) {
+					return new QueryAsync(List.of(), WitStream.of(List.<List<DbValue>>of().iterator()),
+							WitFuture.of(null));
+				}
+				try {
+					RowSet set = rows(prepared.getResultSet());
+					return new QueryAsync(set.columns(), WitStream.of(set.rows().iterator()), WitFuture.of(null));
+				}
+				catch (WitException ex) {
+					return new QueryAsync(columns, WitStream.of(List.<List<DbValue>>of().iterator()),
+							WitFuture.failed(ex));
+				}
+			}
+			catch (SQLException ex) {
+				throw refused("query-async", ex);
 			}
 		}
 
@@ -333,15 +371,22 @@ public final class SocketPostgres implements Postgres {
 		return text.append('}').toString();
 	}
 
+	private static List<Column> columns(ResultSetMetaData described) throws SQLException {
+		List<Column> columns = new ArrayList<>();
+		for (int i = 0; i < described.getColumnCount(); i++) {
+			columns.add(new Column(described.getColumnLabel(i + 1), type(described.getColumnTypeName(i + 1))));
+		}
+		return columns;
+	}
+
 	private static RowSet rows(ResultSet result) throws SQLException {
 		try (result) {
 			ResultSetMetaData described = result.getMetaData();
 			int width = described.getColumnCount();
-			List<Column> columns = new ArrayList<>();
+			List<Column> columns = columns(described);
 			String[] types = new String[width];
 			for (int i = 0; i < width; i++) {
 				types[i] = described.getColumnTypeName(i + 1);
-				columns.add(new Column(described.getColumnLabel(i + 1), type(types[i])));
 			}
 			List<List<DbValue>> rows = new ArrayList<>();
 			while (result.next()) {

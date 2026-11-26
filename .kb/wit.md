@@ -74,6 +74,32 @@ boundary").
 - **A stream alias binds `-cancel-read` too, a future alias does not** (`WitImportDirective
   .asyncOps`): it withdraws a read the async scheduler left in flight, and no future read is ever
   left so. Bound only when named; [async-await.md](async-await.md).
+- **A stream of values** (neither `u8` nor a resource handle: `stream<directory-entry>`,
+  `stream<row>`) crosses as its handle; its alias's `-read` takes `(handle max)` and answers a
+  list of at most `max` values lifted as results are (`emitValueStreamRead`), nil at the end;
+  read-only for the guest. The read WAITS inside its wrapper's bracket, in asyncMode too (its own
+  waitable-set, as a future read): the host lowers each value's strings and lists through
+  `cabi_realloc` when the copy completes, and only a bracket's pop reclaims bump-heap memory, so
+  a read left to the scheduler would leave every chunk's lowering behind. A reader holds one
+  read's values. Measured 2026-11-26: wasmtime 51 hands a directory's entries over together (a
+  read of 2 answers 2); Spin 4.3.0 and 4.4.0-pre0 write `query-async`'s rows one a write, so
+  every read answers one row ([jdbc-spin-postgres.md](jdbc-spin-postgres.md)). Pins:
+  `WasmLispCompilerIntegrationTest#httpHandlerReadsADirectoryAsAStreamOfValuesUnderWasmtimeServe`,
+  `WitImportDirectiveTest.aStreamOfValuesCrossesAsAHandleItsAliasReadsAndNoGuestWrites`.
+- **`:aliases (("rows" "stream<row>"))`**: aliases added to the interface's model, as if the WIT
+  declared them (the items keep their identity, so positions hold); the lowering carries the
+  printed document (`Target.text`). A WIT as a host publishes it writes `stream<row>` where it
+  is used, and an alias is what names a stream's or a future's built-ins. A name the interface
+  has (a type or a function) is refused.
+- **`:blocking t`**: an `async func` binds as a call answering its value -- a component
+  lowers it SYNCHRONOUSLY (a `Decl`, the instance type still declaring it `async`: Spin 4.3.0
+  refuses a plain function type, "satisfied with `func_new_concurrent`, which is only for
+  `async func`-typed imports"), Preview 1 without `:async t`, the interpreter and the JVM a
+  plain provider call. Measured: Spin 4.3.0 and wasmtime 51 run a synchronous lowering of an
+  async func, the task waiting; its wrapper pops what was lowered, where an async-lowered
+  call's start keeps its staging. What a front end with no futures binds (the Java subset).
+- Trap: a value type's type index is an s33 (`ComponentWriter.definedFuture` wrote it unsigned
+  until 2026-11-26, so a future whose payload type sat past index 63 failed validation).
 
 ## `rontolisp:wit-export` — implementing a world
 `(rontolisp:wit-export "count_vowels_component.wit" :world root)`; the path resolves against the
