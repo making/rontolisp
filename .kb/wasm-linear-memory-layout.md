@@ -28,9 +28,10 @@ constant chosen when the compiler was written. Layout low to high (`WasmLispComp
   `%host-getenv` or `%host-environ` off `--component`; anything else keeps `SCRATCH_UNUSED_BASE` (0x30000) and is
   emitted byte-for-byte as before, staying on the four-page floor
   `WasmLinearMemoryHeadroomTest` pins.
-- Two regions are still fixed and still correct, both `--component`-only (static data starts at
-  0x60000, so the block lands above them): `CABI_HP_CELL_ADDR` / `CABI_HP_BASE` (0x10000) and
-  `SOCK_FD_ADDR` (0x40018).
+- One region is still fixed and still correct, `--component`-only (static data starts at
+  0x60000, so the block lands above it): `SOCK_FD_ADDR` (0x40018). The served component's
+  canonical-ABI window at 0x10000 is gone (2026-11-26, `.kb/wasi-component.md`, "Shared-memory
+  map").
 - Trap when writing a test for this class: assert through the VARIABLE
   `uiop:*command-line-arguments*`, not `(uiop:command-line-arguments)` — the defvar seeds at
   LOAD time, and a later read sees GC-array copies the clobber can no longer reach.

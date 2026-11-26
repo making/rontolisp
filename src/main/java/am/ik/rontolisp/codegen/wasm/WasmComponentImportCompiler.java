@@ -181,27 +181,58 @@ final class WasmComponentImportCompiler {
 	record Async(String lispName, String module, String field, String alias, AsyncOp op, WitCanonicalAbi abi,
 			WitType type, boolean octets) {
 
-		/** Whether a future read's payload lift calls {@code _bytes_from_mem}. */
+		/**
+		 * Whether a read's lift calls {@code _bytes_from_mem}: a future's payload, or a
+		 * stream's values, carrying a {@code list<u8>} under {@code :octets t}.
+		 */
 		boolean liftsOctets() {
-			return octets() && op() == AsyncOp.READ && liftsListU8(payload(), abi());
+			return octets() && op() == AsyncOp.READ
+					&& liftsListU8(valueElement() ? Objects.requireNonNull(element()) : payload(), abi());
 		}
 
 		boolean stream() {
 			return type() instanceof WitType.StreamOf;
 		}
 
+		/** The stream's element ({@code null} for a future and a bare stream). */
+		@Nullable WitType element() {
+			return type() instanceof WitType.StreamOf s ? s.element() : null;
+		}
+
 		/**
 		 * Whether the stream's element is a resource handle (wasi:sockets' accept
 		 * {@code stream<tcp-socket>}): 4-byte i32 elements read one at a time and lifted
 		 * as opaque integer handles, where a byte stream reads a chunk and lifts a packed
-		 * {@code (unsigned-byte 8)} vector. The directive's alias validation admits only
-		 * u8 and resource elements, so non-prim means resource here.
+		 * {@code (unsigned-byte 8)} vector.
 		 */
 		boolean handleElement() {
-			if (!(type() instanceof WitType.StreamOf s) || s.element() == null) {
+			WitType element = element();
+			if (element == null) {
 				return false;
 			}
-			return !(abi().resolveAliases(s.element()).type() instanceof WitType.Prim);
+			WitCanonicalAbi.Scoped scoped = abi().resolveAliases(element);
+			return switch (scoped.type()) {
+				case WitType.OwnOf ignored -> true;
+				case WitType.BorrowOf ignored -> true;
+				case WitType.Named named -> scoped.abi().resolveNamed(named) instanceof WitItem.ResourceDef;
+				default -> false;
+			};
+		}
+
+		/**
+		 * Whether the stream's element is a value of another type than a byte or a handle
+		 * ({@code stream<directory-entry>}): a read asks for at most so many, waits for
+		 * them where it is, and lifts each as a function's result is lifted, into a list.
+		 */
+		boolean valueElement() {
+			WitType element = element();
+			return element != null && !abi().isU8(element) && !handleElement();
+		}
+
+		/** Whether the stream's element is a byte. */
+		boolean byteElement() {
+			WitType element = element();
+			return element != null && abi().isU8(element);
 		}
 
 		/** The future's payload type ({@code null} for a stream). */
@@ -911,25 +942,30 @@ final class WasmComponentImportCompiler {
 		};
 	}
 
-	/** Returns the Lisp parameter count of an async built-in's synthetic defun. */
+	/**
+	 * Returns the Lisp parameter count of an async built-in's synthetic defun: a read of
+	 * a stream of values takes the most it reads beside the handle.
+	 */
 	static int lispArity(Async async) {
 		return switch (async.op()) {
 			case NEW -> 0;
 			case WRITE -> 2;
-			case READ, DROP_READABLE, DROP_WRITABLE, CANCEL_READ -> 1;
+			case READ -> async.valueElement() ? 2 : 1;
+			case DROP_READABLE, DROP_WRITABLE, CANCEL_READ -> 1;
 		};
 	}
 
 	/**
-	 * Whether a {@code future.read} of this built-in's type needs the canonical realloc
-	 * option: the host stages a string/{@code list<u8>} payload through it (the fixed
-	 * adapter's filesystem future precedent).
+	 * Whether a {@code future.read} or a {@code stream.read} of this built-in's type
+	 * needs the canonical realloc option: the host stages a string or a list a future's
+	 * payload or a stream's value carries through it (the fixed adapter's filesystem
+	 * future and directory-entry stream precedents).
 	 * @param async the bound built-in
 	 * @return {@code true} when the read's {@code canon} needs realloc
 	 */
 	static boolean asyncReadNeedsRealloc(Async async) {
-		WitType payload = async.payload();
-		return payload != null && stagesMemory(payload, async.abi());
+		WitType carried = async.valueElement() ? async.element() : async.payload();
+		return carried != null && stagesMemory(carried, async.abi());
 	}
 
 	/**
@@ -1406,7 +1442,10 @@ final class WasmComponentImportCompiler {
 				case DROP_READABLE, DROP_WRITABLE ->
 					emitAsyncDrop(async.op() == AsyncOp.DROP_READABLE && async.stream());
 				case READ -> {
-					if (async.stream()) {
+					if (async.valueElement()) {
+						emitValueStreamRead(async);
+					}
+					else if (async.stream()) {
 						emitStreamRead(async.handleElement());
 					}
 					else {
@@ -1611,6 +1650,68 @@ final class WasmComponentImportCompiler {
 			globalSet(wiring.readFreeGlobal());
 			this.w.write(Instruction.END);
 			this.w.write(Instruction.END);
+		}
+
+		// stream.read of a stream of values (stream<directory-entry>, stream<row>): at
+		// most
+		// the count parameter 2 asks for, into a buffer of that many elements staged
+		// above
+		// the mark, the host lowering what each element carries through cabi_realloc. The
+		// read WAITS where it is, a BLOCKED one parked on a waitable-set of its own as a
+		// future read is, in asyncMode too, so everything the host lowered for it lies
+		// above the mark when the elements are lifted -- a list, nil at the end -- and
+		// the
+		// epilogue pops it all: a reader's memory is one chunk, whatever the stream
+		// holds.
+		// A DROPPED completion latches the handle as the byte read's does.
+		private void emitValueStreamRead(Async async) {
+			WitType element = Objects.requireNonNull(async.element(), "stream element");
+			if (this.streamEndedGlobal >= 0) {
+				emitEndedReadReturnsNil();
+			}
+			emitStagingPrologue();
+			int handle = allocI32();
+			int max = allocI32();
+			int buf = allocI32();
+			int ret = allocI32();
+			int n = allocI32();
+			getLocal(1);
+			WasmEmitHelper.castI31GetS(this.ctx);
+			setLocal(handle);
+			// max = the count asked for, at least one: a read of none is no read
+			getLocal(2);
+			WasmEmitHelper.castI31GetS(this.ctx);
+			this.w.write(Instruction.TEE_LOCAL);
+			this.w.writeUnsignedLeb128(max);
+			i32Const(1);
+			this.w.write(Instruction.I32_LT_S);
+			this.w.write(Instruction.IF, 0x40);
+			i32Const(1);
+			setLocal(max);
+			this.w.write(Instruction.END);
+			getLocal(max);
+			i32Const(async.abi().size(element));
+			this.w.write(Instruction.I32_MUL);
+			this.w.write(Instruction.CALL);
+			this.w.writeUnsignedLeb128(this.allocFuncIndex);
+			setLocal(buf);
+			getLocal(handle);
+			getLocal(buf);
+			getLocal(max);
+			callImport();
+			emitBlockedWait(handle);
+			setLocal(ret);
+			if (this.streamEndedGlobal >= 0) {
+				emitLatchIfDropped(ret, handle);
+			}
+			getLocal(ret);
+			i32Const(4);
+			this.w.write(Instruction.I32_SHR_U);
+			setLocal(n);
+			emitLiftElements(async.abi(), element, buf, n);
+			int resultTmp = this.ctx.allocTemp();
+			setLocal(resultTmp);
+			emitStagingEpilogue(resultTmp);
 		}
 
 		// stream.cancel-read: withdraws the read an asyncMode stream.read above left in
@@ -3209,14 +3310,22 @@ final class WasmComponentImportCompiler {
 		private void emitLiftList(WitCanonicalAbi abi, WitType element, int base, int offset) {
 			int save = this.i32Cursor;
 			int elems = allocI32();
-			int idx = allocI32();
-			int elemBase = allocI32();
-			int acc = this.ctx.allocTemp();
-			int elemSize = abi.size(element);
+			int count = allocI32();
 			load(base, offset, Instruction.I32_LOAD, 2);
 			setLocal(elems);
 			load(base, offset + 4, Instruction.I32_LOAD, 2);
-			setLocal(idx);
+			setLocal(count);
+			emitLiftElements(abi, element, elems, count);
+			this.i32Cursor = save;
+		}
+
+		// The count elements at the address in the elems local, lifted into a list in
+		// order; the count local is spent.
+		private void emitLiftElements(WitCanonicalAbi abi, WitType element, int elems, int idx) {
+			int save = this.i32Cursor;
+			int elemBase = allocI32();
+			int acc = this.ctx.allocTemp();
+			int elemSize = abi.size(element);
 			refNullEq();
 			setLocal(acc);
 			this.w.write(Instruction.BLOCK, 0x40);

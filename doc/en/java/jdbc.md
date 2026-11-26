@@ -161,5 +161,14 @@ The catalog (`getTables`, `getColumns`, the keys and the indexes) answers what
 columns, every statement's parameters), and an array of `int4`, `int8`, `numeric` or
 `text` is read by `getArray`; `createArrayOf` and `setArray` take any element type.
 
+A query's rows are handed over together. With `setFetchSize(n)` (`n > 0`) on a statement
+whose result sets move forward only, they are read in pieces of at most `n` as the host
+reads them from the server, so the program holds one piece, however many rows the query
+answers, and its first row comes early: a statement the server refuses while its rows are
+read throws where they run out, and a result set closed early leaves the rest to the host.
+The pieces are the host's to size: Spin 4.3.0 hands a row a read over, so 10,000 rows came
+in 2-3.4 ms instead of 35-50 ms to the first, and in 165-211 ms instead of 46-71 ms to the
+last, and 100,000 rows took Spin 11 MB of memory against 110 MB.
+
 The rest is in the driver's
 [README](https://github.com/making/rontolisp/blob/develop/jdbc-spin-postgres/README.md).

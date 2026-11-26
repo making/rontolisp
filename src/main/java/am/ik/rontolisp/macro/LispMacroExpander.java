@@ -50185,6 +50185,57 @@ public final class LispMacroExpander {
 	}
 
 	/**
+	 * An unsigned right shift of a 64-bit field, the operand of a
+	 * {@code (%mask-signed-field 64 ..)} a Java {@code long >>>} lowers to.
+	 *
+	 * @param masked the {@code (logand x 2^64-1)} form
+	 * @param operand {@code x}
+	 * @param count the shift's distance from 0 to 63: a literal, or a
+	 * {@code (logand c k)} with a literal {@code k} from 0 to 63
+	 */
+	public record UnsignedShift(LispCons masked, LispVal operand, LispVal count) {
+	}
+
+	/**
+	 * The parts of {@code (ash (logand x 2^64-1) (- n))} with {@code n} a
+	 * {@code (logand c k)} of a literal {@code k} from 0 to 63, or of
+	 * {@code (ash (logand x 2^64-1) -n)} with a literal {@code n} from 0 to 63; null for
+	 * any other form. Under a 64-bit field it is the machine's logical right shift by
+	 * {@code n}, the 2^64-1 no 64-bit value, the count never past 63.
+	 * @param form a form
+	 * @return the parts, or null
+	 */
+	public static @Nullable UnsignedShift unsignedShift(LispVal form) {
+		if (!(form instanceof LispCons ash && ash.car() instanceof LispSymbol head && LispNames.ASH.equals(head.name())
+				&& ash.isProperList())) {
+			return null;
+		}
+		List<LispVal> parts = ash.toList();
+		if (parts.size() != 3 || !(parts.get(1) instanceof LispCons masked && masked.isProperList()
+				&& masked.car() instanceof LispSymbol and && LispNames.LOGAND.equals(and.name()))) {
+			return null;
+		}
+		List<LispVal> field = masked.toList();
+		if (field.size() != 3 || !(field.get(2) instanceof LispBigInteger mask)
+				|| !mask.value().equals(java.math.BigInteger.ONE.shiftLeft(64).subtract(java.math.BigInteger.ONE))) {
+			return null;
+		}
+		LispVal count = parts.get(2);
+		if (count instanceof LispInteger literal && literal.value() <= 0 && literal.value() >= -63) {
+			return new UnsignedShift(masked, field.get(1), new LispInteger(-literal.value()));
+		}
+		if (count instanceof LispCons negated && negated.isProperList() && negated.toList().size() == 2
+				&& negated.car() instanceof LispSymbol minus && LispNames.SUB.equals(minus.name())
+				&& negated.toList().get(1) instanceof LispCons bounded && bounded.isProperList()
+				&& bounded.toList().size() == 3 && bounded.car() instanceof LispSymbol band
+				&& LispNames.LOGAND.equals(band.name()) && bounded.toList().get(2) instanceof LispInteger limit
+				&& limit.value() >= 0 && limit.value() <= 63) {
+			return new UnsignedShift(masked, field.get(1), bounded);
+		}
+		return null;
+	}
+
+	/**
 	 * Expands {@code (dpb newbyte bytespec integer)} (deposit byte) over the bit
 	 * primitives: the low {@code size} bits of {@code newbyte} replace the byte
 	 * specifier's field of the integer, the other bits unchanged.

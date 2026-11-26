@@ -43,6 +43,13 @@ import org.jspecify.annotations.Nullable;
  * through a native of its own, and converts the answer back -- a {@code result}'s error
  * arm a {@code WitException}. The directive names the members the program's last pass
  * reached, so a component imports what the program calls.
+ *
+ * <p>
+ * An {@code async func} is a method that waits for the host's answer, as a call does: the
+ * directive blocks on it ({@code :blocking t}). A {@code stream<T>} of values the host
+ * answers is a {@code WitStream<T>}, a {@code future<T>} a {@code WitFuture<T>}
+ * ({@code rontolisp-java-api}), each a class of the binding reading through the built-ins
+ * of an alias of its type the directive adds ({@code :aliases}).
  */
 final class JavaWitImports {
 
@@ -51,6 +58,12 @@ final class JavaWitImports {
 
 	/** The exception a {@code result}'s error arm is thrown as. */
 	static final String WIT_EXCEPTION = "am.ik.rontolisp.wit.WitException";
+
+	/** What a WIT {@code stream<T>} the host answers is. */
+	static final String WIT_STREAM = "am.ik.rontolisp.wit.WitStream";
+
+	/** What a WIT {@code future<T>} the host answers is. */
+	static final String WIT_FUTURE = "am.ik.rontolisp.wit.WitFuture";
 
 	/** The library class of the boundary's values. */
 	private static final String VALUES = "rontolisp.internal.Wit";
@@ -79,6 +92,13 @@ final class JavaWitImports {
 
 	/** The natives of the bindings, by member ({@code p.Store$Wit.m0(Object)}). */
 	final Map<String, JavaEmitter> natives = new HashMap<>();
+
+	/**
+	 * The type aliases each binding reads a stream or a future through, by interface:
+	 * each alias's name and the type it names, which the directive adds
+	 * ({@code :aliases}).
+	 */
+	private final Map<JavaClass, Map<String, String>> aliases = new IdentityHashMap<>();
 
 	/**
 	 * The members the pass being lowered reached: by interface, each member's bound name.
@@ -342,9 +362,8 @@ final class JavaWitImports {
 		/** A method checked against the member it is. */
 		private Bound bind(JavaClass.Method method, JavaBoundary.Function member) {
 			String what = method.name + " (" + member.name() + " of " + this.wit.id() + ", " + member.at() + ")";
-			if (member.async()) {
-				throw at(method, what + " is an async func, whose future the Java subset does not carry yet");
-			}
+			// an async func is a call that waits for the host's answer, as any call does
+			// (the directive blocks on it)
 			List<JavaBoundary.Param> params = member.kind() == Kind.METHOD
 					? member.params().subList(1, member.params().size()) : member.params();
 			if (method.parameters.size() != params.size()) {
@@ -356,6 +375,11 @@ final class JavaWitImports {
 				if (param.type().rep() == Rep.RESULT) {
 					throw at(method, what + ": its parameter " + param.name() + " is a result, which the Java subset "
 							+ "carries only as a function's answer");
+				}
+				String async = asyncIn(param.type());
+				if (async != null) {
+					throw at(method, what + ": its parameter " + param.name() + " carries " + async
+							+ ", which the Java subset carries only where the host answers one");
 				}
 				expect(param.type(), method.parameters.get(i), false, method, what + ": its parameter " + param.name());
 			}
@@ -437,10 +461,29 @@ final class JavaWitImports {
 				case KEYWORD_LIST -> declared instanceof ClassType type
 						&& type.declaration().name.equals("java.util.Set") && type.arguments().size() == 1
 						&& type.arguments().get(0).equals(new ClassType(member(wit, method, what), List.of()));
+				case STREAM_HANDLE -> declared instanceof ClassType type && type.declaration().name.equals(WIT_STREAM)
+						&& type.arguments().size() == 1
+						&& matches(Objects.requireNonNull(wit.element()), type.arguments().get(0), true, method, what);
+				case FUTURE_HANDLE -> declared instanceof ClassType type && type.declaration().name.equals(WIT_FUTURE)
+						&& type.arguments().size() == 1
+						&& futureMatches(Objects.requireNonNull(wit.element()), type.arguments().get(0), method, what);
 				case PLIST, TAGGED_LIST, KEYWORD, HANDLE ->
 					declared.equals(new ClassType(member(wit, method, what), List.of()));
 				default -> false;
 			};
+		}
+
+		/**
+		 * Whether a future's value type is what its payload maps onto: a result's ok arm
+		 * ({@code Void} for none), or the payload.
+		 */
+		private boolean futureMatches(JavaBoundary.Type payload, JavaType declared, JavaClass.Method method,
+				String what) {
+			if (payload.rep() != Rep.RESULT) {
+				return matches(payload, declared, true, method, what);
+			}
+			JavaBoundary.Type ok = payload.element();
+			return ok == null ? isClass(declared, "java.lang.Void") : matches(ok, declared, true, method, what);
 		}
 
 		/**
@@ -451,8 +494,23 @@ final class JavaWitImports {
 		private void definitions(JavaBoundary.Type wit, @Nullable JavaType declared, JavaClass.Method method,
 				String what) {
 			switch (wit.rep()) {
-				case LIST, NIL_OR_VALUE ->
+				case LIST, NIL_OR_VALUE, STREAM_HANDLE ->
 					definitions(Objects.requireNonNull(wit.element()), argument(declared), method, what);
+				case FUTURE_HANDLE -> {
+					JavaBoundary.Type payload = Objects.requireNonNull(wit.element());
+					if (payload.rep() != Rep.RESULT) {
+						definitions(payload, argument(declared), method, what);
+						break;
+					}
+					if (payload.element() != null) {
+						definitions(payload.element(), argument(declared), method, what);
+					}
+					if (payload.error() != null) {
+						// thrown by get() as a WitException's value, as a result's error
+						// arm is
+						expect(payload.error(), null, true, method, what + ": its future's error arm");
+					}
+				}
 				case TUPLE_LIST -> {
 					if (declared == null) {
 						throw at(method, what + " is " + wit.wit() + ", a tuple, which is a record of the program's "
@@ -478,8 +536,26 @@ final class JavaWitImports {
 		 */
 		private @Nullable String refusal(JavaBoundary.Type wit, boolean arm) {
 			String own = switch (wit.rep()) {
-				case STREAM_HANDLE -> "a stream, which the Java subset does not carry yet";
-				case FUTURE_HANDLE -> "a future, which the Java subset does not carry yet";
+				case STREAM_HANDLE -> {
+					JavaBoundary.Type element = wit.element();
+					yield element == null ? "a bare stream, which carries no value"
+							: element.rep() == Rep.INT && "u8".equals(element.definition())
+									? "a stream<u8>, which the Java subset does not carry yet"
+									: element.rep() == Rep.HANDLE
+											? "a stream of resource handles, which the Java subset does not carry yet"
+											: null;
+				}
+				case FUTURE_HANDLE -> {
+					JavaBoundary.Type payload = wit.element();
+					yield payload == null ? "a bare future, which carries no value" : switch (payload.rep()) {
+						// the read of a future its writer dropped answers nil, so a
+						// value the boundary spells nil cannot be told from it
+						case BOOLEAN, LIST, NIL_OR_VALUE, KEYWORD_LIST ->
+							"a future of a type one of whose values the boundary cannot tell from a future its "
+									+ "writer dropped";
+						default -> null;
+					};
+				}
 				case UNSUPPORTED -> "a type with no rontolisp value";
 				case RESULT -> "a result, which the Java subset carries only as a function's answer";
 				case TUPLE_LIST -> arm ? "a tuple, which is a record of the program's where a type is written for it,"
@@ -497,8 +573,18 @@ final class JavaWitImports {
 				return own;
 			}
 			List<JavaBoundary.Type> held = new ArrayList<>();
-			if (wit.rep() == Rep.LIST || wit.rep() == Rep.NIL_OR_VALUE) {
+			if (wit.rep() == Rep.LIST || wit.rep() == Rep.NIL_OR_VALUE || wit.rep() == Rep.STREAM_HANDLE) {
 				held.add(Objects.requireNonNull(wit.element()));
+			}
+			if (wit.rep() == Rep.FUTURE_HANDLE) {
+				JavaBoundary.Type payload = Objects.requireNonNull(wit.element());
+				if (payload.rep() != Rep.RESULT) {
+					held.add(payload);
+				}
+				else if (payload.element() != null) {
+					// the error arm is checked as a result's is (definitions)
+					held.add(payload.element());
+				}
 			}
 			if (wit.rep() == Rep.TUPLE_LIST) {
 				wit.parts().forEach(part -> held.add(Objects.requireNonNull(part.type())));
@@ -705,6 +791,35 @@ final class JavaWitImports {
 		return components;
 	}
 
+	/**
+	 * The first stream or future a type carries, as WIT spells it, or {@code null}: what
+	 * a program cannot hand the host, which writes the values of what it hands over.
+	 */
+	private static @Nullable String asyncIn(JavaBoundary.Type wit) {
+		if (wit.rep() == Rep.STREAM_HANDLE || wit.rep() == Rep.FUTURE_HANDLE) {
+			return wit.wit();
+		}
+		List<JavaBoundary.Type> held = new ArrayList<>();
+		if (wit.element() != null) {
+			held.add(wit.element());
+		}
+		if (wit.error() != null) {
+			held.add(wit.error());
+		}
+		for (JavaBoundary.Part part : wit.parts()) {
+			if (part.type() != null) {
+				held.add(part.type());
+			}
+		}
+		for (JavaBoundary.Type inner : held) {
+			String found = asyncIn(inner);
+			if (found != null) {
+				return found;
+			}
+		}
+		return null;
+	}
+
 	private static Set<String> names(List<JavaClass.Field> fields) {
 		Set<String> names = new LinkedHashSet<>();
 		fields.forEach(field -> names.add(field.name));
@@ -773,6 +888,14 @@ final class JavaWitImports {
 					: simple ? declared.toString() : JavaAnnotations.typeText(declared);
 			case KEYWORD_LIST -> (simple ? "Set<" : "java.util.Set<") + memberText(owner, wit, simple) + ">";
 			case PLIST, TAGGED_LIST, KEYWORD, HANDLE -> memberText(owner, wit, simple);
+			case STREAM_HANDLE -> (simple ? "WitStream<" : WIT_STREAM + "<")
+					+ javaText(owner, Objects.requireNonNull(wit.element()), true, argument(declared), simple) + ">";
+			case FUTURE_HANDLE -> {
+				JavaBoundary.Type payload = Objects.requireNonNull(wit.element());
+				JavaBoundary.Type value = payload.rep() == Rep.RESULT ? payload.element() : payload;
+				yield (simple ? "WitFuture<" : WIT_FUTURE + "<") + (value == null ? (simple ? "Void" : "java.lang.Void")
+						: javaText(owner, value, true, argument(declared), simple)) + ">";
+			}
 			default -> wit.wit();
 		};
 	}
@@ -824,17 +947,39 @@ final class JavaWitImports {
 	 * octets crossing as a {@code byte[]} ({@code :octets t}). On a {@code --no-wasi}
 	 * module the interface crosses through the canonical ABI whatever members are reached
 	 * ({@code :canonical t}), as on a component: the binding is written before the pass
-	 * knows which, and it converts a {@code u32} the way that boundary takes it.
+	 * knows which, and it converts a {@code u32} the way that boundary takes it. An async
+	 * func reached is blocked on ({@code :blocking t}), and a stream or a future read is
+	 * read through an alias the directive adds ({@code :aliases}), its built-ins in the
+	 * table.
 	 */
 	List<LispVal> directives() {
 		List<LispVal> forms = new ArrayList<>();
 		for (Map.Entry<JavaClass, Map<String, String>> entry : this.reached.entrySet()) {
 			Import imported = Objects.requireNonNull(of(entry.getKey()));
+			Map<String, String> reachedMembers = entry.getValue();
 			List<LispVal> table = new ArrayList<>();
 			for (String member : imported.members()) {
-				String bound = entry.getValue().get(member);
+				String bound = reachedMembers.get(member);
 				if (bound != null) {
 					table.add(JavaForms.list(LispString.literal(member), LispString.literal(bound)));
+				}
+			}
+			// the streams and futures the host answers, read through the built-ins of an
+			// alias of their type
+			List<LispVal> aliases = new ArrayList<>();
+			for (Map.Entry<String, String> alias : this.aliases.getOrDefault(entry.getKey(), Map.of()).entrySet()) {
+				boolean used = false;
+				for (String op : List.of("read", "drop-readable")) {
+					String bound = reachedMembers.get(alias.getKey() + "-" + op);
+					if (bound != null) {
+						table.add(JavaForms.list(LispString.literal(alias.getKey() + "-" + op),
+								LispString.literal(bound)));
+						used = true;
+					}
+				}
+				if (used) {
+					aliases
+						.add(JavaForms.list(LispString.literal(alias.getKey()), LispString.literal(alias.getValue())));
 				}
 			}
 			List<LispVal> directive = new ArrayList<>(
@@ -845,9 +990,26 @@ final class JavaWitImports {
 				directive.add(new LispSymbol(":CANONICAL"));
 				directive.add(JavaForms.T);
 			}
+			// an async func is a call that waits for its answer
+			if (reachesAsync(imported, reachedMembers)) {
+				directive.add(new LispSymbol(":BLOCKING"));
+				directive.add(JavaForms.T);
+			}
+			if (!aliases.isEmpty()) {
+				directive.add(new LispSymbol(":ALIASES"));
+				directive.add(JavaForms.list(aliases));
+			}
 			forms.add(JavaForms.list(directive));
 		}
 		return forms;
+	}
+
+	// Whether the pass reached an async func of the interface, a resource's method
+	// included.
+	private static boolean reachesAsync(Import imported, Map<String, String> reached) {
+		List<Bound> bound = new ArrayList<>(imported.functions());
+		imported.resources().values().forEach(resource -> bound.addAll(resource.methods()));
+		return bound.stream().anyMatch(each -> each.function().async() && reached.containsKey(each.function().name()));
 	}
 
 	/** Writes the Java source of one interface's binding. */
@@ -873,6 +1035,14 @@ final class JavaWitImports {
 
 		/** The class each resource's handle is, by WIT name. */
 		private final Map<String, String> handles = new LinkedHashMap<>();
+
+		/**
+		 * The classes of the streams and futures the host answers, read through the
+		 * aliases the directive adds: their text, and each class by what it reads.
+		 */
+		private final StringBuilder asyncClasses = new StringBuilder();
+
+		private final Map<String, String> asyncClassOf = new HashMap<>();
 
 		Writer(Import imported, String binding, String simple, @Nullable String packageName) {
 			this.imported = imported;
@@ -939,7 +1109,12 @@ final class JavaWitImports {
 				}
 				resources.append(members).append("    }\n");
 			}
-			text.append(this.methods).append(resources).append(this.natives).append(this.converters).append("}\n");
+			text.append(this.methods)
+				.append(resources)
+				.append(this.asyncClasses)
+				.append(this.natives)
+				.append(this.converters)
+				.append("}\n");
 			return text.toString();
 		}
 
@@ -1025,6 +1200,10 @@ final class JavaWitImports {
 		 * of a result), which the pass reaching it records.
 		 */
 		private String nativeFor(JavaBoundary.Function member, int arity, boolean raw) {
+			return nativeFor(member.name(), arity, raw);
+		}
+
+		private String nativeFor(String member, int arity, boolean raw) {
 			String name = "m" + this.nativeCount++;
 			StringBuilder parameters = new StringBuilder();
 			StringBuilder erased = new StringBuilder();
@@ -1033,12 +1212,12 @@ final class JavaWitImports {
 				erased.append(i > 0 ? "," : "").append("Object");
 			}
 			this.natives.append("    static native Object ").append(name).append('(').append(parameters).append(");\n");
-			String bound = this.binding + "." + member.name();
+			String bound = this.binding + "." + member;
 			LispSymbol function = new LispSymbol(raw ? bound + "%raw" : bound);
 			JavaClass declaration = this.imported.declaration();
 			JavaWitImports.this.natives.put(this.binding + "." + name + "(" + erased + ")", (lowering, call) -> {
 				JavaWitImports.this.reached.computeIfAbsent(declaration, key -> new LinkedHashMap<>())
-					.put(member.name(), bound);
+					.put(member, bound);
 				List<LispVal> operands = new ArrayList<>();
 				for (JavaEmitter.Typed argument : call.arguments()) {
 					operands.add(argument.form());
@@ -1383,11 +1562,157 @@ final class JavaWitImports {
 						body.append("        return ").append(v).append(".outHandle(held);\n");
 					}
 				}
+				case STREAM_HANDLE, FUTURE_HANDLE -> {
+					if (!in) {
+						throw new IllegalStateException(wit.wit() + " is no value the program hands the host");
+					}
+					body.append("        return new ")
+						.append(asyncClass(wit, declared))
+						.append('(')
+						.append(v)
+						.append(".inHandle(v));\n");
+				}
 				default -> throw new IllegalStateException(wit.rep() + " has no converter");
 			}
 			body.append("    }\n");
 			this.converters.append(body);
 			return this.binding + "." + name;
+		}
+
+		/**
+		 * The class of a stream or a future the host answers, written once: its reads and
+		 * its release the built-ins of an alias the directive adds for its type.
+		 */
+		private String asyncClass(JavaBoundary.Type wit, @Nullable JavaType declared) {
+			boolean stream = wit.rep() == Rep.STREAM_HANDLE;
+			String key = wit.rep() + " " + wit + " " + declared;
+			String known = this.asyncClassOf.get(key);
+			if (known != null) {
+				return known;
+			}
+			String simpleName = (stream ? "S" : "F") + this.asyncClassOf.size();
+			String name = this.binding + "." + simpleName;
+			this.asyncClassOf.put(key, name);
+			Map<String, String> aliases = JavaWitImports.this.aliases.computeIfAbsent(this.imported.declaration(),
+					declaration -> new LinkedHashMap<>());
+			String alias = aliases.entrySet()
+				.stream()
+				.filter(entry -> entry.getValue().equals(wit.wit()))
+				.map(Map.Entry::getKey)
+				.findFirst()
+				.orElse(null);
+			if (alias == null) {
+				alias = (stream ? "java-stream-" : "java-future-") + aliases.size();
+				aliases.put(alias, wit.wit());
+			}
+			String read = this.binding + "." + nativeFor(alias + "-read", stream ? 2 : 1, false);
+			String drop = this.binding + "." + nativeFor(alias + "-drop-readable", 1, false);
+			String javaType = javaText(this.imported.declaration(), wit, false, declared, false);
+			String what = wit.wit() + " of " + this.imported.id();
+			String v = VALUES;
+			JavaType argument = argument(declared);
+			StringBuilder text = new StringBuilder();
+			text.append("    public static final class ")
+				.append(simpleName)
+				.append(" implements ")
+				.append(javaType)
+				.append(" {\n        int handle;\n");
+			JavaBoundary.Type payload = Objects.requireNonNull(wit.element());
+			JavaBoundary.Type value = stream || payload.rep() != Rep.RESULT ? payload : payload.element();
+			String valueText = value == null ? "java.lang.Void"
+					: javaText(this.imported.declaration(), value, true, argument, false);
+			if (!stream) {
+				// what get() throws is made where it throws: the making of what a throw
+				// throws decides no loop's turn (JavaResumable)
+				text.append(
+						"        boolean read;\n        boolean gone;\n        boolean failed;\n        Object error;\n        ")
+					.append(valueText)
+					.append(" value;\n");
+			}
+			text.append("        ")
+				.append(simpleName)
+				.append("(int handle) {\n            this.handle = handle;\n        }\n");
+			if (stream) {
+				text.append("        public java.util.List<")
+					.append(valueText)
+					.append("> read(int max) {\n            if (max < 1) {\n")
+					.append("                throw new IllegalArgumentException(\"A read of \" + max + \" values\");\n")
+					.append("            }\n            if (this.handle < 0) {\n")
+					.append("                throw new IllegalStateException(\"")
+					.append(what)
+					.append(" is closed\");\n            }\n            java.util.ArrayList<")
+					.append(valueText)
+					.append("> out = new java.util.ArrayList<>();\n            for (Object p = ")
+					.append(read)
+					.append('(')
+					.append(v)
+					.append(".outHandle(this.handle), ")
+					.append(v)
+					.append(".outSigned(max)); p != null; p = ")
+					.append(v)
+					.append(".rest(p)) {\n                out.add(")
+					.append(in(payload, argument, v + ".first(p)"))
+					.append(");\n            }\n            return out;\n        }\n");
+			}
+			else {
+				boolean result = payload.rep() == Rep.RESULT;
+				text.append("        public ")
+					.append(valueText)
+					.append(" get() {\n            if (!this.read) {\n                if (this.handle < 0) {\n")
+					.append("                    throw new IllegalStateException(\"")
+					.append(what)
+					.append(" is closed\");\n                }\n                int held = this.handle;\n")
+					.append("                this.handle = -1;\n                Object answer = ")
+					.append(read)
+					.append('(')
+					.append(v)
+					.append(".outHandle(held));\n                ")
+					.append(drop)
+					.append('(')
+					.append(v)
+					.append(".outHandle(held));\n                this.read = true;\n");
+				// the read of a future its writer dropped answers nil, which no result's
+				// envelope is and no value the checker lets a future carry
+				text.append("                if (answer == null) {\n                    this.gone = true;\n")
+					.append("                }\n");
+				if (result) {
+					JavaBoundary.Type error = payload.error();
+					text.append("                else if (")
+						.append(v)
+						.append(".failed(answer)) {\n                    this.failed = true;\n")
+						.append("                    this.error = ")
+						.append(error == null ? "null" : in(error, null, v + ".payload(answer)"))
+						.append(";\n                }\n");
+					if (value != null) {
+						text.append("                else {\n                    this.value = ")
+							.append(in(value, argument, v + ".payload(answer)"))
+							.append(";\n                }\n");
+					}
+				}
+				else {
+					text.append("                else {\n                    this.value = ")
+						.append(in(payload, argument, "answer"))
+						.append(";\n                }\n");
+				}
+				text.append("            }\n            if (this.gone) {\n")
+					.append("                throw new IllegalStateException(\"The writer of ")
+					.append(what)
+					.append(" went without sending a value\");\n            }\n            if (this.failed) {\n")
+					.append("                throw new ")
+					.append(WIT_EXCEPTION)
+					.append("(\"")
+					.append(what)
+					.append(" answered its error arm\" + (this.error == null ? \"\" : \": \" + this.error), ")
+					.append("this.error);\n            }\n            return this.value;\n        }\n");
+			}
+			text.append("        public void close() {\n            if (this.handle >= 0) {\n")
+				.append("                int held = this.handle;\n                this.handle = -1;\n                ")
+				.append(drop)
+				.append('(')
+				.append(v)
+				.append(".outHandle(held));\n            }\n        }\n    }\n");
+			this.asyncClasses.append(text);
+			return name;
 		}
 
 		/** The interface's member class a named type is. */

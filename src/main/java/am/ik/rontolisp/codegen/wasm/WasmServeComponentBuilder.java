@@ -58,8 +58,8 @@ final class WasmServeComponentBuilder {
 
 	private static final String RES = "component/";
 
-	/** The shared 16-page memory module (the canonical scratch reaches page 8). */
-	private static final byte[] MEM_MODULE = resource("mem-http-client.wasm");
+	/** The memory pages the preview1 bridge imports. */
+	private static final int BRIDGE_MEMORY_PAGES = 16;
 
 	/**
 	 * The preview1 bridge: implements the core's {@code wasi_snapshot_preview1} imports
@@ -153,7 +153,8 @@ final class WasmServeComponentBuilder {
 		// Core modules: 0 = shared memory, 1 = preview1 bridge, 2 = rontolisp core (serve
 		// mode). The handler function IS the core's `handle` wasm-export (http.lisp),
 		// lifted directly.
-		c.rawSection(ComponentWriter.SEC_CORE_MODULE, WasmComponentBuilder.memModuleFor(MEM_MODULE, coreModule));
+		c.rawSection(ComponentWriter.SEC_CORE_MODULE,
+				WasmComponentBuilder.memModuleFor(BRIDGE_MEMORY_PAGES, coreModule));
 		c.rawSection(ComponentWriter.SEC_CORE_MODULE, ADAPTER_HTTP_SERVER_P1);
 		c.rawSection(ComponentWriter.SEC_CORE_MODULE, coreModule);
 		// Instantiate the shared memory module (core instance 0).

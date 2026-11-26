@@ -1360,6 +1360,30 @@ that `javac` and a JDK build and run. User-facing: `doc/*/java/wit.md`.
 - **A library's interface**: `servlet-httpserver-keyvalue/`
   ([servlet-httpserver.md](servlet-httpserver.md), "Sessions in `wasi:keyvalue`"); a host's own,
   no JDK provider: `jdbc-spin-postgres/` ([jdbc-spin-postgres.md](jdbc-spin-postgres.md)).
+- **What the host answers in pieces** (2026-11-26, m55). Decided from what the Lisp side binds
+  (`.kb/wit.md`): an `async func` is a method that WAITS, as any call -- Java has threads, not
+  futures, so the directive carries `:blocking t` (a synchronous lowering) and the binding is a
+  sync member's. A `stream<T>` of values the host answers is `am.ik.rontolisp.wit.WitStream<T>`
+  (`read(max)`, `close()`), a `future<T>` `WitFuture<T>` (`get()`, `close()`; a
+  `future<result<T, E>>` the ok arm, the error arm a `WitException`; `Void` for no ok value),
+  both in `rontolisp-java-api` with providers' factories (`WitStream.of(Iterator)`,
+  `WitFuture.of`, `.failed`). Rejected: `CompletableFuture` (completing it on a component means
+  Java code run by the scheduler outside any thread, and a `join` with no thread to wait in)
+  and `Iterator` / `java.util.stream.Stream` (no way to ask for so many, no release of the
+  readable end). The binding writes a class per type (`S<n>`, `F<n>`) over the built-ins of an
+  alias the directive adds (`:aliases (("java-stream-0" "stream<row>") ...)`, the spelling
+  `describe` gives); `get()` reads, drops the readable end and keeps its answer, making what
+  it throws at each `throw` (made outside one, a `Throwable` gives a loop calling `get()` a
+  turn: [jdbc-spin-postgres.md](jdbc-spin-postgres.md), "The streamed path"); nil from the
+  read is a dropped future. Refused at the method: a stream or a future the program hands the
+  host (the host writes what it is handed), a `stream<u8>` (an `InputStream` would be its
+  type), a stream of resources, a future of a type whose value the boundary spells nil
+  (`bool`, `list`, `option`, `flags`: the read of a dropped future answers nil). A read waits
+  as a sync call does: every thread of a component waits with it. Pins:
+  `JavaWitImportTest.aStreamAndAFutureTheHostAnswersAreReadInPieces` (JDK, interpreter, JVM,
+  the directive, the refusals), `.everyKindOfValueCrossesWasmtimesSocketsAndHttpTypes`
+  (`tcp-socket.connect`, an async func, refused by wasmtime 51 as a blocking call), the Spin
+  leg of `ClPostgresE2eTest` (the example reading its notes in pieces).
 - **Pinned by** `JavaWitImportTest` (a JDK, the interpreter, the JVM, the component, the
   Preview 1 refusal; the WIT's lookup; every kind of value; the checks, the two drafts) and
   `examples.yaml`'s `wit/keyvalue/PageHits.java`.
@@ -3936,6 +3960,9 @@ and the JVM answer every line a JDK's but the helpful `NullPointerException` and
   sets of the three views against a JDK, no difference.
 - **`fileKey`**: a JDK's is `(dev=<hex>,ino=<decimal>)`, its hash `(int) (dev + ino)`
   (measured with `/proc/self/ns/net`, ino 4026531840); "Hard links and a file's key" below.
+  The inode is written unsigned: a WASI host's is a 64-bit hash, negative for about half the
+  files (measured 2026-11-26, wasmtime 51.0.0, both wasm legs); the java-spec case's `hard
+  link key` stats forty fresh files so that a signed print fails on every run.
 - **Measured** (wasm bytes; the artefacts' `sizes/`): byte-identical (wasm, component,
   class): a program of no file, one of collections, `examples/java/shop`, one reading and
   writing through `Files`, one of `java.io.File`, a Lisp program of files. The slots of

@@ -222,12 +222,11 @@ What stays from the old 0.2-era set:
 
 ```
 src/wasm-component/
-  mem-http-client.wat            (16-page memory source; the serve variant reuses it)
   deps/http                      (the vendored wasi:http@0.3.0 WIT; serve regen source)
-
-src/main/resources/.../component/
-  mem-http-client.wasm           (16-page memory module; kept for serve)
 ```
+
+The serve variant's memory module is `mem.wasm`, raised to the sixteen pages its preview1
+bridge imports.
 
 The `deps/clocks-0.2`, `deps/random-0.2`, `deps/io-0.2` and `deps/cli-0.2` packages are
 all deleted — since the `--no-gc` print micro-adapter moved to 0.3 (below), the repo

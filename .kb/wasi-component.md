@@ -125,7 +125,7 @@ Lisp component byte-identical; a Java `Files.copy` 214,052 -> 214,494, its link 
   adapter is compensating for the host; a host making an empty preopen list impossible retires
   the guard. Only visible WITHOUT `--dir`.
 
-## Shared-memory map (fixed for non-serve)
+## Shared-memory map
 One linear memory, three writers: the canonical-ABI allocator, the adapter's fixed scratch
 (page 5: env/preopen buffers, stream/future handle cells, the 64-slot fd table), the core's
 static data / intern table / heap.
@@ -134,16 +134,28 @@ static data / intern table / heap.
   0x60000, component only; Preview 1 keeps 256, byte-identical). Otherwise interned data grows
   across the adapter's page-5 cells and the first blocking wait dies with "unknown handle
   index" inside `fd_write`.
-- **The non-serve `cabi_realloc` (mem.wat) bumps the core's own HEAP_PTR cell (address 84)**
-  -- one shared monotonic allocator, so there is no fixed ABI window to outgrow. A ringed
-  fixed window was tried and reverted: "every canonical-ABI allocation is per-call transient"
-  is false (the free-listed 8 KB socket/stdin read buffers are retained).
-- **Serve is NOT unified**: `mem-http-client.wat` keeps its per-request-reset cabi cell/window
-  at 0x10000 (`CABI_HP_CELL_ADDR`); it can still collide with the core's page-3/4 scratch past
-  ~128 KB of per-request ABI traffic (open residual).
-- **Every memory module is sized for its core** (`WasmComponentBuilder.memModuleFor(mem,
-  core)`): raised to the core's `"mem"/"memory"` import minimum when that is larger, never
-  shrunk below the module's own (the bridges import it at that). The core's minimum grows with
+- **`cabi_realloc` (mem.wat) bumps the core's own HEAP_PTR cell (address 84)** and grows the
+  memory -- one shared monotonic allocator, so there is no fixed ABI window to outgrow; what a
+  `%component-import` wrapper's call had lowered is popped with its staging. A ringed fixed
+  window was tried and reverted: "every canonical-ABI allocation is per-call transient" is false
+  (the free-listed 8 KB socket/stdin read buffers are retained).
+- **A served component has the same module** (2026-11-26), raised to the 16 pages its preview1
+  bridge imports (`WasmComponentBuilder.memModuleFor(pages, core)`). It had a window of its own
+  from 0x10008, never grown, reset at the top of every `handle`: what one request lowered past
+  ~320 KB overwrote static data (0x60000) and past 1 MiB trapped. Measured under Spin 4.3.0, a
+  `spin:postgres` `query` of `generate_series` (int4, md5 text): 2,000 rows answered, 4,000 and
+  6,000 read a garbled error text (an interned string overwritten), 8,000 and more trapped
+  `realloc return: beyond end of memory`; after, 10,000 rows in 34-52 ms, 100,000 in 413 ms.
+  The reset was also wrong under concurrent requests on one instance (wasmtime serve 51 reuses
+  a p3 instance for 128 requests, 16 at once). Per-request growth: 3,000 requests each reading
+  200 KB back (`wasi:keyvalue`) on one instance under `-W max-memory-size=4MiB` (the cap counts
+  the GC heap too) hit no linear-memory trap. Pinned by
+  `WasmLispCompilerIntegrationTest#httpHandlerCallsAUserWitImportUnderWasmtimeServe` (a 1.5 MB
+  value read back). Not measured: whether a wrapper's pop can free what was lowered for another
+  task or another subtask while the wrapper waited (`.todo/178-component-shared-memory-map-collision.md`).
+- **Every memory module is sized for its core** (`WasmComponentBuilder.memModuleFor`): raised to
+  the core's `"mem"/"memory"` import minimum when that is larger, never shrunk below the
+  module's own (the serve bridge imports 16 pages). The core's minimum grows with
   its static data (`WasmLispCompiler.memoryMinPages`, since `1db4ba176`, 2026-08-28), and the
   serve builder embedded its 16-page module as shipped, so a served program past 16 pages --
   tiny-routes over lack-request asks 20 -- failed to load ("mismatch in memory limits") and

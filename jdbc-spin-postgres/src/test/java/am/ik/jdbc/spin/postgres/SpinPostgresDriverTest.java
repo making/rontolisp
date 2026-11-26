@@ -195,7 +195,42 @@ class SpinPostgresDriverTest {
 				assertThat(two.next() && two.next()).isTrue();
 				assertThat(two.next()).isFalse();
 			}
+			// A fetch size reads the rows in pieces as the host reads them from the
+			// server
+			// (query-async): forward only, a row read ahead to tell the last, the most
+			// rows ending the reads, a statement refused while its rows are read thrown
+			// where they run out, and the rest of a result closed early the host's to
+			// drop.
+			statement.setFetchSize(2);
+			try (ResultSet two = statement.executeQuery("select id from note order by id")) {
+				assertThat(two.next() && two.next()).isTrue();
+				assertThat(two.next()).isFalse();
+			}
 			statement.setMaxRows(0);
+			try (ResultSet rows = statement.executeQuery("select id, title from note order by id")) {
+				assertThat(rows.getFetchSize()).isEqualTo(2);
+				assertThat(rows.isBeforeFirst()).isTrue();
+				assertThat(rows.next() && rows.isFirst()).isTrue();
+				assertThat(rows.next() && rows.getRow() == 2 && !rows.isLast()).isTrue();
+				assertThat(rows.next()).isTrue();
+				assertThat(rows.getString("title")).isEqualTo("お茶を淹れる🍵");
+				assertThat(rows.isLast()).isTrue();
+				assertThat(rows.next()).isFalse();
+				assertThat(rows.isAfterLast()).isTrue();
+				assertThatThrownBy(rows::first).hasMessageContaining("forward only");
+			}
+			try (ResultSet refused = statement.executeQuery("select 1 / (id - 3) from note order by id")) {
+				assertThatThrownBy(() -> {
+					while (refused.next()) {
+						refused.getInt(1);
+					}
+				}).isInstanceOfSatisfying(SQLException.class, ex -> assertThat(ex.getSQLState()).isEqualTo("22012"));
+			}
+			try (ResultSet early = statement.executeQuery("select id from note order by id")) {
+				assertThat(early.next()).isTrue();
+			}
+			assertThat(one(connection, "select count(*) from note")).isEqualTo("3");
+			statement.setFetchSize(0);
 			// A result set that scrolls, of a statement made for one.
 			try (Statement scrolling = connection.createStatement(ResultSet.TYPE_SCROLL_INSENSITIVE,
 					ResultSet.CONCUR_READ_ONLY);
@@ -609,6 +644,18 @@ class SpinPostgresDriverTest {
 			connection.commit();
 			assertThat(one(connection, "select count(*) from tx")).isEqualTo("3");
 			connection.commit();
+			// Refused while its rows are read in pieces, a statement aborts the
+			// transaction where the rows run out.
+			statement.setFetchSize(1);
+			try (ResultSet refused = statement.executeQuery("select 1 / (id - 4) from tx order by id")) {
+				assertThatThrownBy(() -> {
+					while (refused.next()) {
+						refused.getInt(1);
+					}
+				}).isInstanceOfSatisfying(SQLException.class, ex -> assertThat(ex.getSQLState()).isEqualTo("22012"));
+			}
+			statement.setFetchSize(0);
+			assertThatThrownBy(connection::commit).isInstanceOf(SQLTransactionRollbackException.class);
 			// A transaction the server aborted is rolled back by its commit, which
 			// throws; a
 			// refusal of the host's own leaves the transaction as it was.

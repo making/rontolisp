@@ -167,6 +167,9 @@ JDK, where the driver leaves the URL to another one.
 | `flags` | a `Set` of a member enum |
 | a resource, `own<R>`, `borrow<R>` | the member interface |
 | `result<T, E>` | what the method answers, the error arm a `WitException` |
+| an `async func` | a method that waits for the host's answer, as a call does |
+| `stream<T>` the host answers | `am.ik.rontolisp.wit.WitStream<T>` |
+| `future<T>` the host answers | `am.ik.rontolisp.wit.WitFuture<T>`, a `future<result<T, E>>` a `WitFuture<T>` (`Void` for no ok value) |
 
 An unsigned integer is held in the Java type of its width, its bits as Java holds them:
 the `u8` 200 is the `byte` -56 (`Byte.toUnsignedInt` gives 200 back).
@@ -192,6 +195,35 @@ catch (WitException e) {
 A resource is released by `close()`: the handle goes back to the host, and the store stays.
 A closed resource throws `IllegalStateException`, and a second `close()` does nothing. An
 `own` handle given to a function passes to it, and the object is closed.
+
+### What the host answers in pieces
+
+An `async func` is a method like any other: the call waits for the host's answer. A
+`stream<T>` of values the host answers is a `WitStream<T>`, whose `read(max)` waits until
+the host has written a value or has gone and answers at most `max` of them, an empty list
+at the end; a `future<T>` is a `WitFuture<T>`, whose `get()` waits for its one value. A
+`future<result<T, E>>` answers its ok arm and throws a `WitException` for its error arm,
+as a method answering a `result` does. Both are `AutoCloseable`: `close()` gives the
+readable end back, and the host drops what was not read.
+
+```console
+// spin:postgres's query-async: the columns, the rows as the server sends them, the end
+record QueryAsync(List<Column> columns, WitStream<List<DbValue>> rows, WitFuture<Void> done) {
+}
+
+QueryAsync started = connection.queryAsync("select id, title from note", List.of());
+try (WitStream<List<DbValue>> rows = started.rows(); WitFuture<Void> done = started.done()) {
+    for (List<List<DbValue>> chunk = rows.read(50); !chunk.isEmpty(); chunk = rows.read(50)) {
+        ...
+    }
+    done.get();                                // the statement's refusal, if any
+}
+```
+
+In a component the host writes the values, and what a read holds is that read's values,
+whatever the stream holds. Under a JDK and on the interpreter and the JVM the provider
+answers its own: `WitStream.of(iterator)`, `WitFuture.of(value)`,
+`WitFuture.failed(exception)`, or a class of its own.
 
 ## Exporting a WIT world
 
@@ -285,10 +317,12 @@ export answers for a `u32` is 4294967295.
 - A `u64` past `Long.MAX_VALUE` crosses no WASM boundary.
 - A native executable (`--native`) runs a Preview 1 module whose runner provides no WIT
   interface, so a program calling one does not start there.
-- Refused at the declaration: a `stream`, a `future`, an `async func`; a `result` anywhere
-  but a method's answer; an `option` of a `bool`, a `list`, `flags` or an `option`, whose
-  none the boundary cannot tell apart; a resource of another interface; a tuple in an error
-  arm.
+- Refused at the declaration: a `stream` or a `future` the program hands the host, a
+  `stream<u8>`, a stream of resources, a `future` of a `bool`, a `list`, `flags` or an
+  `option` (whose value the boundary cannot tell from a future its writer dropped); a
+  `result` anywhere but a method's answer and a future's value; an `option` of a `bool`, a
+  `list`, `flags` or an `option`, whose none the boundary cannot tell apart; a resource of
+  another interface; a tuple in an error arm.
 - A world's export takes the types `rontolisp:wit-export` takes; an `async func` export is
   refused. Two exports of one label (a function of the world and an interface's, or two
   interfaces') are two methods, each of its own class.

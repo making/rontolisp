@@ -233,9 +233,12 @@ class ComponentWriterTest {
 	@Test
 	void definedStreamFutureResultTypeEncodings() {
 		// stream<u8> = 66 01 7d ; future<type 4> = 65 01 04 ; result<_, type 1> = 6a 00
-		// 01 01
+		// 01 01. A type index where a value type goes is an s33: index 69 is c5 00, and a
+		// lone 45 would be a negative number (wasm-tools: "invalid leading byte (0x45)").
 		assertThat(hex(ComponentWriter.definedStream(ComponentWriter.VT_U8))).isEqualTo("66017d");
 		assertThat(hex(ComponentWriter.definedFuture(4))).isEqualTo("650104");
+		assertThat(hex(ComponentWriter.definedFuture(69))).isEqualTo("6501c500");
+		assertThat(hex(ComponentWriter.definedStreamOfType(69))).isEqualTo("6601c500");
 		assertThat(hex(ComponentWriter.definedResultErr(1))).isEqualTo("6a000101");
 	}
 

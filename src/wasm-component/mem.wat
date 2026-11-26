@@ -1,5 +1,6 @@
 (module
-  ;; Shared memory + the canonical-ABI allocator of a (non-serve) rontolisp component.
+  ;; Shared memory + the canonical-ABI allocator of a rontolisp component -- a served one's
+  ;; too, raised to the sixteen pages its preview1 bridge imports.
   ;;
   ;; cabi_realloc bumps the rontolisp core's OWN heap pointer (the HEAP_PTR cell at
   ;; linear address 84) instead of keeping a private bump region: the component's one

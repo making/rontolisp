@@ -18008,6 +18008,9 @@ class JvmLispCompilerTest {
 			.build()
 			.compile(program);
 		assertThat(fusedMethodsUsing(fast, java.lang.classfile.Opcode.LMUL)).isNotEmpty();
+		// A Java long >>> by a computed count, whose 2^64 - 1 mask no long holds, is one
+		// LUSHR.
+		assertThat(fusedMethodsUsing(fast, java.lang.classfile.Opcode.LUSHR)).isNotEmpty();
 		assertThat(declaredMethodNames(small)).noneMatch(name -> name.startsWith("_fx$"));
 		assertThat(runClass(fast)).isEqualTo(MaskSignedFieldProgram.EXPECTED);
 		assertThat(runClass(small)).isEqualTo(MaskSignedFieldProgram.EXPECTED);
