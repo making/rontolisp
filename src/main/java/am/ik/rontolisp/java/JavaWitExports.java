@@ -41,8 +41,10 @@ import org.jspecify.annotations.Nullable;
  * back -- a {@code result} at the top the envelope, which the directive says its
  * functions answer ({@code :envelope t}), whether the method answers a {@code WitResult}
  * or its ok arm with a {@code WitException} thrown. Everywhere else such a program is
- * refused. A program with a {@code main} is a command: its {@code @WitExport} classes are
- * checked, and exported nowhere.
+ * refused. An {@code async func} is a method answering its value, as any other: the
+ * directive lifts it async, so its call's task may wait where the method blocks. A
+ * program with a {@code main} is a command: its {@code @WitExport} classes are checked,
+ * and exported nowhere.
  */
 final class JavaWitExports {
 
@@ -212,10 +214,6 @@ final class JavaWitExports {
 		World check() {
 			List<Bound> bound = new ArrayList<>();
 			for (JavaBoundary.Export export : this.world.exports()) {
-				if (export.async()) {
-					throw at(this.declaration, "@WitExport: " + shown(export) + " (" + export.at()
-							+ ") is an async func, which the Java subset does not implement yet");
-				}
 				bound.add(new Bound(export, method(holder(export), export)));
 			}
 			return new World(this.declaration, this.world.name(), this.world.path(), List.copyOf(bound));

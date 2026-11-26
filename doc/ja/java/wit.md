@@ -415,6 +415,24 @@ ok 側の型（値がなければ `void`）を宣言します。ok 側の型を�
 `u32` の 4294967295 は `int` の -1 になり、`u32` を返すエクスポートが `int` の -1 を返すと
 4294967295 になります。
 
+`async func` のエクスポートも、ほかと同じく値を返す static メソッドです。コンポーネントはこれを
+async で lift するので、`Thread.sleep` や、インポートした `async func` の呼び出しのように
+メソッドがブロックする箇所で、呼び出しは待てます。同期のエクスポートがブロックするとトラップに
+なります（`cannot block a synchronous task`）。使える型は `bool`、整数、`f64`、`string` だけで
+（`async func` にそれ以外の型があると WIT の行で拒否されます）、`--no-gc` では拒否されます
+（[`rontolisp:wit-export`](../reference/functions/rontolisp-wit-export.md)）。
+
+```console
+export pause: async func(ms: u32) -> u32;
+```
+
+```console
+public static int pause(int ms) throws InterruptedException {
+    Thread.sleep(ms);
+    return ms;
+}
+```
+
 ## 制限
 
 - WASM のモジュールで使える型は、そのモジュールで `rontolisp:wit-import` が使える型と
@@ -434,9 +452,9 @@ ok 側の型（値がなければ `void`）を宣言します。ok 側の型を�
   （境界がその none を見分けられないため）。ほかのインタフェースのリソース。`WitException` として
   投げるエラーの型にある tuple（型を書く場所がないため。`WitResult` の戻り値なら書けます）。
 - world のエクスポートは、`flags`、リソース、`stream`、`future`、ほかのインタフェースの型を
-  受け渡せません。`async func` のエクスポートは拒否されます。同じラベルのエクスポート 2 つ
-  （world の関数とインタフェースの関数、または 2 つのインタフェースの関数）は、それぞれの
-  クラスの 2 つのメソッドです。
+  受け渡せません。`async func` のエクスポートで使える型は `bool`、整数、`f64`、`string` だけで、
+  `--no-gc` では拒否されます。同じラベルのエクスポート 2 つ（world の関数とインタフェースの
+  関数、または 2 つのインタフェースの関数）は、それぞれのクラスの 2 つのメソッドです。
 - エクスポートが捕まえなかった例外は、JDK が書く行（`Exception in thread "main"
   java.lang.IllegalStateException: ...`）を標準エラー出力に書いてからトラップになります。
   最初の呼び出しが実行する static 初期化が捕まえなかった例外も同じです。標準エラー出力を

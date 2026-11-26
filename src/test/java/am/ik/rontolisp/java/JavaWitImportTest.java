@@ -584,22 +584,23 @@ class JavaWitImportTest {
 	 * A program with no {@code main} starts at its {@code @WitExport} class: a reactor
 	 * component exporting the world, each export the static method of its name, an
 	 * interface's of the member class of its name, an unsigned integer crossing as Java
-	 * holds its bits, the class's static initialization run by the first call. Under a
-	 * JDK, on the interpreter and on the JVM the class is an ordinary one a program with
-	 * a {@code main} calls, which prints what the component answers; the program with no
+	 * holds its bits, the class's static initialization run by the first call, an
+	 * {@code async func} a method answering its value, which may wait. Under a JDK, on
+	 * the interpreter and on the JVM the class is an ordinary one a program with a
+	 * {@code main} calls, which prints what the component answers; the program with no
 	 * {@code main} is refused there and on a module. The class is checked against its
 	 * world on every target, the interpreter's included. On {@code --no-gc} a class of
 	 * scalar values is the scalar component of the world, an uncaught exception its bare
-	 * trap. A world of compound types crosses too: a record a member record, a variant a
-	 * sealed interface, a list a {@code List}, a result a {@code WitResult} or its ok arm
-	 * with a {@code WitException} thrown.
+	 * trap, an {@code async func} refused. A world of compound types crosses too: a
+	 * record a member record, a variant a sealed interface, a list a {@code List}, a
+	 * result a {@code WitResult} or its ok arm with a {@code WitException} thrown.
 	 */
 	@Test
 	void aClassImplementsTheWorldAComponentExports() throws Exception {
 		write("kinds.wit", KINDS_WIT);
 		Path kinds = write("Kinds.java", KINDS);
 		Path main = write("KindsMain.java", KINDS_MAIN);
-		String expected = "201\ntrue\n9223372036854775807\n3\nHello, Java! seen: Java\n1\n1\n2.5\n";
+		String expected = "201\ntrue\n9223372036854775807\n3\nHello, Java! seen: Java\n1\n5\n1\n2.5\n";
 		assertThat(jdk(main)).isEqualTo(expected);
 		assertThat(HostBoundaryRuns.cli("--java-source-path", API, main.toString())).isEqualTo(expected);
 		assertThat(HostBoundaryRuns.jvm(main, Files.createDirectories(this.dir.resolve("classes")), "KindsMain",
@@ -608,10 +609,10 @@ class JavaWitImportTest {
 		assertThat(read(kinds, true).getLast()).isEqualTo("(RONTOLISP:WIT-EXPORT \"kinds.wit\" :WORLD \"kinds\" :NAMES "
 				+ "((\"low-byte\" \"Kinds.lowByte(byte)%wit\") (\"negate\" \"Kinds.negate(boolean)\") (\"signed-wide\" "
 				+ "\"Kinds.signedWide(long)\") (\"unsigned-wide\" \"Kinds.unsignedWide(long)\") (\"greet\" "
-				+ "\"Kinds.greet(String)\") (\"touch\" \"Kinds.touch()\") (\"count\" \"Kinds.count()\") "
-				+ "(\"test:kinds/math@0.1.0#add\" \"Kinds.Math.add(int,int)%wit\") (\"test:kinds/math@0.1.0#half\" "
-				+ "\"Kinds.Math.half(double)\") (\"test:kinds/math@0.1.0#count\" \"Kinds.Math.count()\")) :REACTOR T "
-				+ ":OCTETS T :ENVELOPE T)");
+				+ "\"Kinds.greet(String)\") (\"touch\" \"Kinds.touch()\") (\"count\" \"Kinds.count()\") (\"pause\" "
+				+ "\"Kinds.pause(int)%wit\") (\"test:kinds/math@0.1.0#add\" \"Kinds.Math.add(int,int)%wit\") "
+				+ "(\"test:kinds/math@0.1.0#half\" \"Kinds.Math.half(double)\") (\"test:kinds/math@0.1.0#count\" "
+				+ "\"Kinds.Math.count()\")) :REACTOR T :OCTETS T :ENVELOPE T)");
 		assertThatThrownBy(() -> HostBoundaryRuns.cli("--java-source-path", API, kinds.toString()))
 			.hasMessageEndingWith("Kinds.java:4:14: no main method found in Kinds: its entry points are the exports of "
 					+ "the @WitExport class Kinds, which a component exports, where a host calls them: compile it with "
@@ -637,25 +638,33 @@ class JavaWitImportTest {
 						+ "host calls with no instance");
 		exportRefused("Kinds.java", KINDS, "public static class Math", "public static class Maths",
 				"Kinds.java:4:14: Kinds declares no member class Math, which is the interface test:kinds/math@0.1.0 the "
-						+ "world kinds exports (kinds.wit:17): a static member class whose static methods are its "
+						+ "world kinds exports (kinds.wit:18): a static member class whose static methods are its "
 						+ "functions");
 		write("Kinds.java", KINDS);
 		Path module = this.dir.resolve("kinds.wasm");
 		HostBoundaryRuns.cli("--java-source-path", API, kinds.toString(), "-o", module.toString(), "--component");
-		// java.lisp's System.exit and thread ends, which no export reaches, import no
-		// wasi:cli/exit
-		assertThat(new String(Files.readAllBytes(module), StandardCharsets.ISO_8859_1)).contains("wasi:cli/stdout")
-			.doesNotContain("wasi:cli/exit");
-		// --no-gc: the scalar component of the world, the static String the start
-		// function initializes
+		// --no-gc: no async lift, then the scalar component of the world, the static
+		// String the start function initializes
 		Path scalar = this.dir.resolve("scalar.wasm");
-		write("Kinds.java",
-				KINDS
-					.replace("StringBuilder seen = new StringBuilder(\"seen:\")",
-							"String seen = \"seen: \" + (touched - 1)")
-					.replace("seen.append(' ').append(name);", ""));
+		assertThatThrownBy(() -> HostBoundaryRuns.cli("--java-source-path", API, kinds.toString(), "-o",
+				scalar.toString(), "--component", "--no-gc"))
+			.hasMessageContaining(
+					"kinds.wit:17: export 'pause' is an async func, which --no-gc --component cannot lift");
+		write("kinds.wit", KINDS_WIT.replace("  export pause: async func(ms: u32) -> u32;\n", ""));
+		write("Kinds.java", KINDS
+			.replace("StringBuilder seen = new StringBuilder(\"seen:\")", "String seen = \"seen: \" + (touched - 1)")
+			.replace("seen.append(' ').append(name);", "")
+			.replace(KINDS.substring(KINDS.indexOf("    public static int pause"),
+					KINDS.indexOf("    public static class Math")), ""));
 		HostBoundaryRuns.cli("--java-source-path", API, kinds.toString(), "-o", scalar.toString(), "--component",
 				"--no-gc");
+		// java.lisp's System.exit and thread ends, which no export of this world
+		// reaches, import no wasi:cli/exit (a sleep does: the refusal of a monitor
+		// held, Thread's id counter's)
+		Path exitless = this.dir.resolve("exitless.wasm");
+		HostBoundaryRuns.cli("--java-source-path", API, kinds.toString(), "-o", exitless.toString(), "--component");
+		assertThat(new String(Files.readAllBytes(exitless), StandardCharsets.ISO_8859_1)).contains("wasi:cli/stdout")
+			.doesNotContain("wasi:cli/exit");
 		// a world of compound types, a program of its own beside its WIT: under a JDK,
 		// on the interpreter and on the JVM ordinary methods over the program's types
 		write("shapes/shapes.wit", SHAPES_WIT);
@@ -716,14 +725,16 @@ class JavaWitImportTest {
 		answers.put("low-byte(200)", "201");
 		// a u64 is the long up to Long.MAX_VALUE, on the scalar component too
 		answers.put("unsigned-wide(5)", "3");
-		answers.put("greet(\"Java\")", "\"Hello, Java! seen: Java\"");
+		answers.put("greet(\"Java\")", "\"Hello, Java! seen: -1\"");
 		answers.put("count()", "0");
 		answers.put("test:kinds/math.count@0.1.0()", "10");
 		answers.put("add(4294967295, 2)", "1");
 		answers.put("half(5.0)", "2.5");
-		invoked(module, answers);
-		answers.put("greet(\"Java\")", "\"Hello, Java! seen: -1\"");
 		invoked(scalar, answers);
+		answers.put("greet(\"Java\")", "\"Hello, Java! seen: Java\"");
+		// an async func lifts async: its call's task waits where the method sleeps
+		answers.put("pause(5)", "5");
+		invoked(module, answers);
 		// what an export leaves uncaught is reported by the line a JDK writes, then
 		// traps;
 		// the scalar component has no condition to write it from: the bare trap
@@ -874,6 +885,7 @@ class JavaWitImportTest {
 			  export greet: func(name: string) -> string;
 			  export touch: func();
 			  export count: func() -> s32;
+			  export pause: async func(ms: u32) -> u32;
 			  export math;
 			}
 			""";
@@ -921,6 +933,12 @@ class JavaWitImportTest {
 			        return touched;
 			    }
 
+			    public static int pause(int ms) throws InterruptedException {
+			        long start = System.nanoTime();
+			        Thread.sleep(ms);
+			        return System.nanoTime() - start >= ms * 1_000_000L ? ms : -1;
+			    }
+
 			    public static class Math {
 
 			        public static int add(int a, int b) {
@@ -942,7 +960,7 @@ class JavaWitImportTest {
 	private static final String KINDS_MAIN = """
 			public class KindsMain {
 
-			    public static void main(String[] args) {
+			    public static void main(String[] args) throws InterruptedException {
 			        System.out.println(Kinds.lowByte((byte) 200) & 0xff);
 			        System.out.println(Kinds.negate(false));
 			        System.out.println(Kinds.signedWide(-9223372036854775807L));
@@ -950,6 +968,7 @@ class JavaWitImportTest {
 			        System.out.println(Kinds.greet("Java"));
 			        Kinds.touch();
 			        System.out.println(Kinds.count());
+			        System.out.println(Kinds.pause(5));
 			        System.out.println(Kinds.Math.add(-1, 2));
 			        System.out.println(Kinds.Math.half(5.0));
 			    }
