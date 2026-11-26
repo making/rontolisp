@@ -274,13 +274,23 @@ of memory`. After it:
 |---|---|---|---|
 | Lisp, `query` (whole), 10,000 | 34-52 ms | 35-52 ms | +63 MB, 356 ms |
 | Lisp, `query-async`, 10,000, reads of 100 | 2.4-3.4 ms | 148-158 ms | +5 MB, 1,989 ms |
-| JDBC, whole, 10,000 | 43-77 ms | 62-100 ms | +105 MB, 1,053 ms |
-| JDBC, fetch size 100, 10,000 | 3.6-3.8 ms | 262-305 ms | +11 MB, 2,521 ms |
+| JDBC, whole, 10,000 | 35-50 ms | 46-71 ms | +110 MB, 1,172 ms |
+| JDBC, fetch size 100, 10,000 | 1.9-3.4 ms | 165-211 ms | +11 MB, 1,911 ms |
 
-A read costs ~15 us on Lisp, ~27 us through JDBC (the binding's classes and the driver's
-values), against ~4 and ~6-10 us a row whole: the host's one row a write makes every read a
+A read costs ~15 us on Lisp, ~17-21 us through JDBC (the binding's classes and the driver's
+values), against ~4 and ~5-7 us a row whole: the host's one row a write makes every read a
 round trip, so the pieces trade the whole result's time for its memory and its first row.
 Measured per read (`%nano-time` around each): every one of 9,999 waited on the host.
+
+**The streamed path costs every program of the driver** (`fetchSize` is no constant):
+the example 1,483,042 -> 1,490,391 B. Trap: a first cut cost 1,521,545 B -- its
+`next()` reached a monitor through two calls whose receiver the resumable analysis reads as
+every collection, which gave the program's `while (rows.next())` a turn (27 functions
+resumable, resume bodies +19.5 KB, the JDBC row 262-305 ms to the last). The chunk's
+`isEmpty()` is `AbstractCollection`'s for an `ImmutableCollections.ListN`, one function for
+every collection (`size() == 0` instead), and the binding's future made its `WitException`
+outside the `throw` (it is made at the throw now, which decides no turn). Check with
+`-Drontolisp.java.resumable=<file>`: 6 of 2,234 resumable, no `a loop's turn`.
 
 ## Tests
 

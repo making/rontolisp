@@ -1372,7 +1372,9 @@ that `javac` and a JDK build and run. User-facing: `doc/*/java/wit.md`.
   and `Iterator` / `java.util.stream.Stream` (no way to ask for so many, no release of the
   readable end). The binding writes a class per type (`S<n>`, `F<n>`) over the built-ins of an
   alias the directive adds (`:aliases (("java-stream-0" "stream<row>") ...)`, the spelling
-  `describe` gives); `get()` reads, drops the readable end and keeps its answer; nil from the
+  `describe` gives); `get()` reads, drops the readable end and keeps its answer, making what
+  it throws at each `throw` (made outside one, a `Throwable` gives a loop calling `get()` a
+  turn: [jdbc-spin-postgres.md](jdbc-spin-postgres.md), "The streamed path"); nil from the
   read is a dropped future. Refused at the method: a stream or a future the program hands the
   host (the host writes what it is handed), a `stream<u8>` (an `InputStream` would be its
   type), a stream of resources, a future of a type whose value the boundary spells nil

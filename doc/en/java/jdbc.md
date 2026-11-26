@@ -167,8 +167,8 @@ reads them from the server, so the program holds one piece, however many rows th
 answers, and its first row comes early: a statement the server refuses while its rows are
 read throws where they run out, and a result set closed early leaves the rest to the host.
 The pieces are the host's to size: Spin 4.3.0 hands a row a read over, so 10,000 rows came
-in 3.7 ms instead of 43-77 ms to the first, and in 260-300 ms instead of 60-100 ms to the
-last, and 100,000 rows took Spin 11 MB of memory against 105 MB.
+in 2-3.4 ms instead of 35-50 ms to the first, and in 165-211 ms instead of 46-71 ms to the
+last, and 100,000 rows took Spin 11 MB of memory against 110 MB.
 
 The rest is in the driver's
 [README](https://github.com/making/rontolisp/blob/develop/jdbc-spin-postgres/README.md).

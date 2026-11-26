@@ -1622,9 +1622,12 @@ final class JavaWitImports {
 			String valueText = value == null ? "java.lang.Void"
 					: javaText(this.imported.declaration(), value, true, argument, false);
 			if (!stream) {
-				text.append("        boolean read;\n        ")
+				// what get() throws is made where it throws: the making of what a throw
+				// throws decides no loop's turn (JavaResumable)
+				text.append(
+						"        boolean read;\n        boolean gone;\n        boolean failed;\n        Object error;\n        ")
 					.append(valueText)
-					.append(" value;\n        RuntimeException failure;\n");
+					.append(" value;\n");
 			}
 			text.append("        ")
 				.append(simpleName)
@@ -1668,23 +1671,18 @@ final class JavaWitImports {
 					.append('(')
 					.append(v)
 					.append(".outHandle(held));\n                this.read = true;\n");
+				// the read of a future its writer dropped answers nil, which no result's
+				// envelope is and no value the checker lets a future carry
+				text.append("                if (answer == null) {\n                    this.gone = true;\n")
+					.append("                }\n");
 				if (result) {
-					// the read of a future its writer dropped answers nil, which no
-					// result's envelope is
 					JavaBoundary.Type error = payload.error();
-					text.append("                if (answer == null) {\n")
-						.append("                    this.failure = new IllegalStateException(\"The writer of ")
-						.append(what)
-						.append(" went without sending a value\");\n                }\n                else if (")
+					text.append("                else if (")
 						.append(v)
-						.append(".failed(answer)) {\n                    Object error = ")
+						.append(".failed(answer)) {\n                    this.failed = true;\n")
+						.append("                    this.error = ")
 						.append(error == null ? "null" : in(error, null, v + ".payload(answer)"))
-						.append(";\n                    this.failure = new ")
-						.append(WIT_EXCEPTION)
-						.append("(\"")
-						.append(what)
-						.append(" answered its error arm\" + (error == null ? \"\" : \": \" + error), error);\n")
-						.append("                }\n");
+						.append(";\n                }\n");
 					if (value != null) {
 						text.append("                else {\n                    this.value = ")
 							.append(in(value, argument, v + ".payload(answer)"))
@@ -1692,17 +1690,20 @@ final class JavaWitImports {
 					}
 				}
 				else {
-					text.append("                if (answer == null) {\n")
-						.append("                    this.failure = new IllegalStateException(\"The writer of ")
-						.append(what)
-						.append(" went without sending a value\");\n                }\n")
-						.append("                else {\n                    this.value = ")
+					text.append("                else {\n                    this.value = ")
 						.append(in(payload, argument, "answer"))
 						.append(";\n                }\n");
 				}
-				text.append("            }\n            if (this.failure != null) {\n")
-					.append("                throw this.failure;\n            }\n            return this.value;\n")
-					.append("        }\n");
+				text.append("            }\n            if (this.gone) {\n")
+					.append("                throw new IllegalStateException(\"The writer of ")
+					.append(what)
+					.append(" went without sending a value\");\n            }\n            if (this.failed) {\n")
+					.append("                throw new ")
+					.append(WIT_EXCEPTION)
+					.append("(\"")
+					.append(what)
+					.append(" answered its error arm\" + (this.error == null ? \"\" : \": \" + this.error), ")
+					.append("this.error);\n            }\n            return this.value;\n        }\n");
 			}
 			text.append("        public void close() {\n            if (this.handle >= 0) {\n")
 				.append("                int held = this.handle;\n                this.handle = -1;\n                ")

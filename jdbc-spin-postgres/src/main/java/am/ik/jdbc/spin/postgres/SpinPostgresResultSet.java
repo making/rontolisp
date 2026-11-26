@@ -21,7 +21,6 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.Objects;
 
 import am.ik.rontolisp.wit.WitException;
 import org.jspecify.annotations.Nullable;
@@ -108,8 +107,10 @@ final class SpinPostgresResultSet extends UnsupportedResultSet {
 		if (this.source == null || this.at + 1 < this.rows.size() || this.at >= this.rows.size()) {
 			return move(Math.min(this.at + 1, this.rows.size()));
 		}
+		// size, not isEmpty: a list's isEmpty is every collection's, some of which take
+		// a monitor, which would give the program's loop over next() a turn
 		List<List<Postgres.DbValue>> next = more();
-		if (next.isEmpty()) {
+		if (next.size() == 0) {
 			return move(this.rows.size());
 		}
 		this.before += this.rows.size();
@@ -128,7 +129,10 @@ final class SpinPostgresResultSet extends UnsupportedResultSet {
 		if (this.ended) {
 			return List.of();
 		}
-		Postgres.QueryAsync read = Objects.requireNonNull(this.source);
+		Postgres.QueryAsync read = this.source;
+		if (read == null) {
+			return List.of();
+		}
 		long most = this.fetchSize;
 		if (this.limit > 0) {
 			most = Math.min(most, this.limit - this.before - this.rows.size());
@@ -139,7 +143,7 @@ final class SpinPostgresResultSet extends UnsupportedResultSet {
 			}
 		}
 		next = read.rows().read((int) most);
-		if (next.isEmpty()) {
+		if (next.size() == 0) {
 			end(true);
 		}
 		return next;
@@ -149,14 +153,18 @@ final class SpinPostgresResultSet extends UnsupportedResultSet {
 	// error arm is the statement's refusal. An end not read is the host's to drop.
 	private void end(boolean read) throws SQLException {
 		this.ended = true;
-		Postgres.QueryAsync streamed = Objects.requireNonNull(this.source);
+		Postgres.QueryAsync streamed = this.source;
+		SpinPostgresStatement owner = this.statement;
+		if (streamed == null || owner == null) {
+			return;
+		}
 		try {
 			if (read) {
 				streamed.done().get();
 			}
 		}
 		catch (WitException ex) {
-			throw Objects.requireNonNull(this.statement).connection.refused(ex, this.timed);
+			throw owner.connection.refused(ex, this.timed);
 		}
 		finally {
 			streamed.rows().close();
@@ -171,7 +179,7 @@ final class SpinPostgresResultSet extends UnsupportedResultSet {
 		}
 		if (this.ahead == null && !this.ended) {
 			List<List<Postgres.DbValue>> next = more();
-			this.ahead = next.isEmpty() ? null : next;
+			this.ahead = next.size() == 0 ? null : next;
 		}
 		return this.ahead == null;
 	}

@@ -11,6 +11,6 @@ measure it against what `SocketPostgres` models:
   of the rows, after none);
 - a session given back inside a transaction (4.3.0 hands it out again inside it);
 - how many rows a read of `query-async`'s stream answers: 4.3.0 writes one a write, so a
-  fetch size reads a row a round trip (10,000 rows: 262-305 ms to the last through JDBC,
-  against 62-100 ms whole). A host that writes rows together makes the pieces as fast as
+  fetch size reads a row a round trip (10,000 rows: 165-211 ms to the last through JDBC,
+  against 46-71 ms whole). A host that writes rows together makes the pieces as fast as
   the whole; then the driver's default (whole) is worth measuring again.
