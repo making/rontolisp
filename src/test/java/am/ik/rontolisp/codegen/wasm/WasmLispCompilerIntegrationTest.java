@@ -990,6 +990,141 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void aWorldsCompoundTypesCrossItsExportsThroughTheCanonicalAbi() throws Exception {
+		// A world's export carries every WIT type but flags, a handle, a stream and a
+		// future: wasmtime lowers each argument and lifts each answer by the canonical
+		// ABI, so what it prints is what crossed. The world holds the places a value
+		// can lie: flat values and joined variant flats (an s64, an f64, an f32 and a
+		// string in one position), a tuple of parameters past sixteen flats (in memory),
+		// a result in memory, lists of lists, an interface's types (a shim component
+		// names them) beside the world's own (type imports), a flat member among them,
+		// a string in and an s64 out (whose post-return takes an i64).
+		java.nio.file.Path dir = java.nio.file.Files.createTempDirectory("wit-export-canonical");
+		java.nio.file.Files.writeString(dir.resolve("world.wit"), """
+				package example:crossing@0.1.0;
+
+				interface geo {
+				  record line { a: point, b: point, tag: id }
+				  type id = u32;
+				  enum color { red, green, blue }
+				  record point { x: s32, y: s32 }
+				  variant shape { circle(f64), rect(point), none }
+				  len: func(l: line) -> id;
+				  next: func(c: color) -> color;
+				  area: func(s: shape) -> result<f64, string>;
+				  top: func(ps: list<point>) -> option<point>;
+				  twice: func(x: s32) -> s32;
+				}
+
+				world crossing {
+				  type age = u8;
+				  record person { name: string, age: age, tags: list<string>, nick: option<string> }
+				  variant num { i(s64), f(f64), small(f32), text(string), none }
+				  record big { a: u64, b: u64, c: u64, d: u64, e: u64, f: u64, g: u64, h: u64, i: u64 }
+				  record wide { p: big, q: big }
+				  export geo;
+				  export older: func(p: person, by: age) -> person;
+				  export echo-num: func(n: num) -> num;
+				  export sum-wide: func(w: wide) -> u64;
+				  export nested: func(xs: list<list<u32>>) -> list<tuple<u32, bool>>;
+				  export chars: func(c: char, f: f32) -> tuple<char, f32>;
+				  export verdict: func(r: result<u32, string>) -> result<string, num>;
+				  export octets: func(b: list<u8>) -> list<u8>;
+				  export narrow: func(x: s32) -> tuple<s8, u16>;
+				  export wide-ints: func(x: s32, y: u32, z: u64) -> tuple<s32, u32, u64>;
+				  export size: func(s: string) -> s64;
+				}
+				""");
+		java.nio.file.Path lisp = dir.resolve("prog.lisp");
+		java.nio.file.Files.writeString(lisp, """
+				(defun len (l) (+ (getf l :tag) (abs (- (getf (getf l :a) :x) (getf (getf l :b) :x)))))
+				(defun next (c) (case c (:red :green) (:green :blue) (t :red)))
+				(defun area (s)
+				  (cond ((eq s :none) (error 'rontolisp:wit-error :payload "no shape"))
+				        ((eq (car s) :circle) (* 3.0d0 (cdr s) (cdr s)))
+				        (t (float (* (getf (cdr s) :x) (getf (cdr s) :y)) 1.0d0))))
+				(defun top (ps) (car ps))
+				(defun twice (x) (* 2 x))
+				(defun older (p by)
+				  (list :name (string-upcase (getf p :name)) :age (+ (getf p :age) by)
+				        :tags (reverse (getf p :tags)) :nick (getf p :nick)))
+				(defun echo-num (n) n)
+				(defun sum-wide (w)
+				  (let ((sum 0))
+				    (dolist (half '(:p :q) sum)
+				      (dolist (field '(:a :b :c :d :e :f :g :h :i))
+				        (incf sum (getf (getf w half) field))))))
+				(defun nested (xs) (mapcar (lambda (x) (list (reduce #'+ x) (evenp (length x)))) xs))
+				(defun chars (c f) (list (char-upcase c) (* 2 f)))
+				(defun verdict (r)
+				  (cond ((eq (car r) :error) (format nil "error ~a" (cdr r)))
+				        ((> (cdr r) 10) (error 'rontolisp:wit-error :payload (cons :i (cdr r))))
+				        (t (format nil "ok ~a" (cdr r)))))
+				(defun octets (b)
+				  (let ((out (make-array (length b) :element-type '(unsigned-byte 8))))
+				    (dotimes (i (length b) out)
+				      (setf (aref out i) (aref b (- (length b) 1 i))))))
+				(defun narrow (x) (list x x))
+				(defun wide-ints (x y z) (list x y (+ z 1)))
+				(defun size (s) (length s))
+				(rontolisp:wit-export "world.wit" :octets t)
+				""");
+		// What an export answers, or "trap": a value the declared type cannot state
+		// stops the call, as the flat boundary's does.
+		java.util.Map<String, String> answers = new java.util.LinkedHashMap<>();
+		answers.put("len({a: {x: 1, y: 2}, b: {x: 10, y: 0}, tag: 100})", "109");
+		answers.put("next(blue)", "red");
+		answers.put("area(circle(2.0))", "ok(12)");
+		answers.put("area(rect({x: 3, y: 4}))", "ok(12)");
+		answers.put("area(%none)", "err(\"no shape\")");
+		answers.put("top([{x: 7, y: 8}, {x: 1, y: 1}])", "some({x: 7, y: 8})");
+		answers.put("top([])", "none");
+		answers.put("twice(21)", "42");
+		answers.put("older({name: \"ann\", age: 41, tags: [\"a\", \"bb\"], nick: some(\"an\")}, 1)",
+				"{name: \"ANN\", age: 42, tags: [\"bb\", \"a\"], nick: some(\"an\")}");
+		answers.put("older({name: \"bob\", age: 250, tags: [], nick: none}, 10)", "trap");
+		answers.put("echo-num(i(9007199254740993))", "i(9007199254740993)");
+		answers.put("echo-num(f(1.5))", "f(1.5)");
+		answers.put("echo-num(small(0.25))", "small(0.25)");
+		answers.put("echo-num(text(\"h\u00e9llo\"))", "text(\"h\u00e9llo\")");
+		answers.put("echo-num(%none)", "%none");
+		answers.put("sum-wide({p: {a: 1, b: 2, c: 3, d: 4, e: 5, f: 6, g: 7, h: 8, i: 9},"
+				+ " q: {a: 10, b: 20, c: 30, d: 40, e: 50, f: 60, g: 70, h: 80, i: 90}})", "495");
+		answers.put("nested([[1, 2], [3], [], [4000000000, 5]])",
+				"[(3, true), (3, false), (0, true), (4000000005, true)]");
+		answers.put("chars('a', 1.25)", "('A', 2.5)");
+		answers.put("verdict(ok(3))", "ok(\"ok 3\")");
+		answers.put("verdict(ok(30))", "err(i(30))");
+		answers.put("verdict(err(\"boom\"))", "ok(\"error boom\")");
+		answers.put("octets([255, 0, 65])", "[65, 0, 255]");
+		answers.put("narrow(5)", "(5, 5)");
+		answers.put("narrow(300)", "trap");
+		answers.put("narrow(-5)", "trap");
+		answers.put("wide-ints(-2147483648, 4294967295, 9223372036854775806)",
+				"(-2147483648, 4294967295, 9223372036854775807)");
+		answers.put("wide-ints(0, 0, 18446744073709551615)", "trap");
+		answers.put("size(\"h\u00e9llo\")", "5");
+		// A command beside wasi:cli/run, and the reactor that imports nothing.
+		for (List<String> shape : List.of(List.of("--component"), List.of("--component", "--no-wasi"))) {
+			java.nio.file.Path wasm = dir.resolve("prog.wasm");
+			List<String> args = new ArrayList<>(List.of(lisp.toString(), "-o", wasm.toString()));
+			args.addAll(shape);
+			new am.ik.rontolisp.cli.RontoLispCli(new java.io.ByteArrayInputStream(new byte[0]),
+					new java.io.PrintStream(java.io.OutputStream.nullOutputStream()))
+				.run(args.toArray(new String[0]));
+			wasmtime.copyFileToContainer(Transferable.of(java.nio.file.Files.readAllBytes(wasm)), path("test.wasm"));
+			java.util.Map<String, String> answered = new java.util.LinkedHashMap<>();
+			for (String invocation : answers.keySet()) {
+				ExecResult result = wasmtime.execInContainer("wasmtime", "run", "--invoke", invocation,
+						path("test.wasm"));
+				answered.put(invocation, result.getExitCode() == 0 ? result.getStdout().trim()
+						: result.getStderr().contains("`unreachable` instruction") ? "trap" : result.getStderr());
+			}
+			assertThat(answered).as(shape.toString()).isEqualTo(answers);
+		}
+	}
+
+	@Test
 	void exportVoidFunctionRunsForItsSideEffect() throws Exception {
 		// An omitted :returns makes a side-effecting export with no WASM result; invoking
 		// it

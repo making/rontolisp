@@ -626,30 +626,54 @@ Files:
   src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/AbstractByteArrayAssert.java
   src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/AbstractCharArrayAssert.java
   src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/AbstractCharacterAssert.java
+  src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/AbstractClassAssert.java
   src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/AbstractComparableAssert.java
+  src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/AbstractCompletableFutureAssert.java
   src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/AbstractDoubleArrayAssert.java
   src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/AbstractDoubleAssert.java
+  src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/AbstractDurationAssert.java
+  src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/AbstractFileAssert.java
   src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/AbstractFloatAssert.java
+  src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/AbstractFutureAssert.java
+  src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/AbstractInstantAssert.java
   src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/AbstractIntArrayAssert.java
   src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/AbstractIntegerAssert.java
   src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/AbstractIterableAssert.java
+  src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/AbstractLocalDateAssert.java
+  src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/AbstractLocalDateTimeAssert.java
+  src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/AbstractLocalTimeAssert.java
   src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/AbstractLongArrayAssert.java
   src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/AbstractLongAssert.java
   src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/AbstractObjectAssert.java
+  src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/AbstractPathAssert.java
   src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/AbstractStringAssert.java
+  src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/AbstractTemporalAssert.java
   src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/AbstractThrowableAssert.java
+  src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/AssertFactory.java
   src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/Assertions.java
   src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/BooleanAssert.java
   src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/ByteArrayAssert.java
   src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/CharArrayAssert.java
   src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/CharacterAssert.java
+  src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/ClassAssert.java
+  src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/CompletableFutureAssert.java
   src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/DoubleArrayAssert.java
   src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/DoubleAssert.java
+  src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/DurationAssert.java
+  src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/FileAssert.java
   src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/FloatAssert.java
+  src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/FutureAssert.java
+  src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/GenericComparableAssert.java
+  src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/InstanceOfAssertFactories.java
+  src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/InstanceOfAssertFactory.java
+  src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/InstantAssert.java
   src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/IntArrayAssert.java
   src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/IntegerAssert.java
   src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/IterableAssert.java
   src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/ListAssert.java
+  src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/LocalDateAssert.java
+  src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/LocalDateTimeAssert.java
+  src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/LocalTimeAssert.java
   src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/LongArrayAssert.java
   src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/LongAssert.java
   src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/MapAssert.java
@@ -657,11 +681,16 @@ Files:
   src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/ObjectArrayAssert.java
   src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/ObjectAssert.java
   src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/OptionalAssert.java
+  src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/PathAssert.java
+  src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/RecursiveComparisonAssert.java
   src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/StringAssert.java
   src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/ThrowableAssert.java
   src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/ThrowableAssertAlternative.java
   src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/api/ThrowableTypeAssert.java
   src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/data/MapEntry.java
+  src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/data/Offset.java
+  src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/groups/Tuple.java
+  src/main/resources/am/ik/rontolisp/java/library/org/assertj/core/util/introspection/IntrospectionError.java
 Use: The part of AssertJ's assertions the Java subset has, which `rontolisp test` runs a Java
   file's tests against, under the names and the signatures of AssertJ's classes, so that a test
   written against AssertJ is compiled unchanged. The classes were written here, from the API and

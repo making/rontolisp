@@ -763,6 +763,82 @@ public final class ComponentWriter {
 	}
 
 	/**
+	 * Encode a component import of a type equal to one already declared (externdesc
+	 * {@code type} with an {@code eq} bound): how a world's own named type is declared.
+	 * The import appends one entry to the type index space, the named type.
+	 * @param importName the type's name
+	 * @param typeIndex the component type index of its definition
+	 * @return the encoded import entry
+	 */
+	public static byte[] importTypeEq(String importName, int typeIndex) {
+		return enc(w -> {
+			declName(w, importName);
+			w.write(0x03).write(0x00).writeUnsignedLeb128(typeIndex);
+		});
+	}
+
+	/**
+	 * Encode a component export of a type under a name. The export appends one entry to
+	 * the type index space, the named type a function type exported beside it refers to.
+	 * @param exportName the type's name
+	 * @param typeIndex the component type index of its definition
+	 * @return the encoded export entry
+	 */
+	public static byte[] exportType(String exportName, int typeIndex) {
+		return enc(w -> {
+			declName(w, exportName);
+			w.write(0x03).writeUnsignedLeb128(typeIndex); // sortidx: type
+			w.write(0x00); // no type ascription
+		});
+	}
+
+	/**
+	 * Encode a component export of a function ascribed a function type -- the type
+	 * written over the named types exported beside it, where the function's own type
+	 * names their definitions.
+	 * @param exportName the export name
+	 * @param funcIndex the component function index
+	 * @param funcTypeIndex the component type index of the ascribed function type
+	 * @return the encoded export entry
+	 */
+	public static byte[] exportFuncAs(String exportName, int funcIndex, int funcTypeIndex) {
+		return enc(w -> {
+			declName(w, exportName);
+			w.write(0x01).writeUnsignedLeb128(funcIndex); // sortidx: func
+			w.write(0x01).write(0x01).writeUnsignedLeb128(funcTypeIndex); // externdesc:
+																			// func
+		});
+	}
+
+	/** The component sort of a function, in an instantiation argument. */
+	public static final int SORT_FUNC = 0x01;
+
+	/** The component sort of a type, in an instantiation argument. */
+	public static final int SORT_TYPE = 0x03;
+
+	/**
+	 * Encode a component instance produced by instantiating a nested component with named
+	 * arguments of any sort -- the general form of {@link #componentInstantiate}.
+	 * @param componentIndex the nested component index
+	 * @param argNames the import names to satisfy (in order)
+	 * @param argSorts the sort of each argument ({@link #SORT_FUNC}, {@link #SORT_TYPE})
+	 * @param argIndices the index supplied for each argument, in its sort's index space
+	 * @return the encoded instance entry
+	 */
+	public static byte[] componentInstantiateWith(int componentIndex, List<String> argNames, List<Integer> argSorts,
+			List<Integer> argIndices) {
+		return enc(w -> {
+			w.write(0x00); // instantiate
+			w.writeUnsignedLeb128(componentIndex);
+			w.writeUnsignedLeb128(argNames.size());
+			for (int i = 0; i < argNames.size(); i++) {
+				plainName(w, argNames.get(i));
+				w.write(argSorts.get(i)).writeUnsignedLeb128(argIndices.get(i));
+			}
+		});
+	}
+
+	/**
 	 * Encode a component export of an instance (e.g. the {@code wasi:cli/run@0.3.0}
 	 * interface).
 	 * @param exportName the export name

@@ -596,8 +596,14 @@ public final class WasmComponentBuilder {
 			return;
 		}
 		final List<byte[]> aliases = new java.util.ArrayList<>();
-		final List<byte[]> types = new java.util.ArrayList<>();
+		// The type declarations, each with its section: a canonical export of a world's
+		// own function declares the world's named types as type IMPORTS between them
+		// (WitExportTypes); a flat export declares one function type, as ever.
+		final List<java.util.Map.Entry<Integer, byte[]>> typeEntries = new java.util.ArrayList<>();
+		final WitExportTypes.Space space = new WitExportTypes.Space(
+				(section, entry) -> typeEntries.add(java.util.Map.entry(section, entry)), nextType);
 		final List<byte[]> lifts = new java.util.ArrayList<>();
+		final List<byte[]> shims = new java.util.ArrayList<>();
 		final List<byte[]> instances = new java.util.ArrayList<>();
 		final List<byte[]> exports = new java.util.ArrayList<>();
 		// Exports that name a WIT interface (`export docs:adder/add;`) are bundled into
@@ -606,7 +612,7 @@ public final class WasmComponentBuilder {
 		// (interface-less) export is exported as a top-level function, as before.
 		// Insertion
 		// order is world order, so the emitted exports keep it.
-		final java.util.LinkedHashMap<String, List<java.util.Map.Entry<String, Integer>>> ifaceGroups = new java.util.LinkedHashMap<>();
+		final java.util.LinkedHashMap<String, List<IfaceMember>> ifaceGroups = new java.util.LinkedHashMap<>();
 		// The canonical string ABI aliases (cabi_realloc, the cabi_post_* post-returns)
 		// come first in the core function index space; they exist only when a
 		// :string/:s-expr boundary is present, so a scalar-only component keeps the
@@ -630,7 +636,6 @@ public final class WasmComponentBuilder {
 		}
 		for (int i = 0; i < decls.size(); i++) {
 			WasmExportCompiler.Decl decl = decls.get(i);
-			FuncExport e = WasmExportCompiler.componentExport(decl);
 			// Alias the core wrapper export out of the rontolisp instance; a
 			// :string/:s-expr-returning export's core export is its retptr shim.
 			aliases.add(ComponentWriter.aliasCoreFunc(rontolispInstance, WasmExportCompiler.componentCoreName(decl)));
@@ -640,49 +645,106 @@ public final class WasmComponentBuilder {
 			// counterpart (tag 0x43), which turns the lift below into a stackful
 			// async export (the run shape) with the same flat core signature -- the ONLY
 			// byte difference an :async export introduces.
-			final List<String> paramNames = e.paramNames();
-			types.add(e.async() ? ComponentWriter.asyncFuncTypeScalars(paramNames, e.paramValTypes(), e.resultValType())
-					: ComponentWriter.funcTypeScalars(paramNames, e.paramValTypes(), e.resultValType()));
+			WitExportSignature wit = decl.wit();
+			byte[] flatType = null;
+			int funcType;
+			if (wit == null) {
+				FuncExport e = WasmExportCompiler.componentExport(decl);
+				final List<String> paramNames = e.paramNames();
+				flatType = e.async()
+						? ComponentWriter.asyncFuncTypeScalars(paramNames, e.paramValTypes(), e.resultValType())
+						: ComponentWriter.funcTypeScalars(paramNames, e.paramValTypes(), e.resultValType());
+				funcType = space.type(flatType);
+			}
+			else {
+				// A canonical export: its scope's types first -- a world's as type
+				// imports, an interface's bare, which its shim names below --, then the
+				// function type over them.
+				WitExportTypes.Naming naming = wit.ofWorld() ? WitExportTypes.Naming.WORLD_IMPORT
+						: WitExportTypes.Naming.BARE;
+				WitExportTypes.declareScope(space, naming, wit);
+				funcType = WitExportTypes.funcType(space, naming, wit);
+			}
 			if (WasmExportCompiler.usesMemory(decl)) {
 				// String-involving export: lift with the canonical string options over
 				// the shared memory (core memory 0).
 				int postFunc = java.util.Objects
 					.requireNonNull(postFuncs.get(WasmExportCompiler.componentPostReturnKind(decl)));
-				lifts.add(
-						ComponentWriter.canonLiftMemoryReallocUtf8PostReturn(func, nextType + i, 0, realloc, postFunc));
+				lifts.add(ComponentWriter.canonLiftMemoryReallocUtf8PostReturn(func, funcType, 0, realloc, postFunc));
 			}
 			else {
 				// Sync lift with no canonical options: flat scalars need no
 				// memory/realloc.
-				lifts.add(ComponentWriter.canonLift(func, nextType + i));
+				lifts.add(ComponentWriter.canonLift(func, funcType));
 			}
-			if (e.iface() == null) {
+			if (decl.iface() == null) {
 				// Flat export: export the lifted component func directly under its name.
-				exports.add(ComponentWriter.exportFunc(e.name(), nextComponentFunc + i));
+				exports.add(ComponentWriter.exportFunc(decl.exportName(), nextComponentFunc + i));
 			}
 			else {
 				// Interface member: defer to a per-interface instance built below.
-				ifaceGroups.computeIfAbsent(e.iface(), k -> new java.util.ArrayList<>())
-					.add(java.util.Map.entry(e.name(), nextComponentFunc + i));
+				ifaceGroups.computeIfAbsent(decl.iface(), k -> new java.util.ArrayList<>())
+					.add(new IfaceMember(decl.exportName(), nextComponentFunc + i, wit, flatType));
 			}
 		}
 		// One synthesized instance per exported interface, exported under the interface's
 		// fully-qualified id (`export docs:adder/add@0.1.0`). The instances come after
 		// the
 		// run instance and the user-import instances in the component instance index
-		// space.
+		// space. An interface with a canonical member is instantiated from its shim, the
+		// nested component that gives the interface's types their names.
 		int componentInstance = nextComponentInstance;
-		for (java.util.Map.Entry<String, List<java.util.Map.Entry<String, Integer>>> group : ifaceGroups.entrySet()) {
-			instances.add(ComponentWriter.componentInstanceFromFuncs(group.getValue()));
+		for (java.util.Map.Entry<String, List<IfaceMember>> group : ifaceGroups.entrySet()) {
+			List<IfaceMember> members = group.getValue();
+			WitExportSignature canonical = members.stream()
+				.map(IfaceMember::wit)
+				.filter(java.util.Objects::nonNull)
+				.findFirst()
+				.orElse(null);
+			if (canonical == null) {
+				instances.add(ComponentWriter.componentInstanceFromFuncs(
+						members.stream().map(member -> java.util.Map.entry(member.name(), member.func())).toList()));
+			}
+			else {
+				WitExportTypes.Shim shim = WitExportTypes.shim(members.stream()
+					.map(member -> new WitExportTypes.Member(member.name(), member.wit(), member.flatType()))
+					.toList());
+				List<String> argNames = new java.util.ArrayList<>();
+				List<Integer> argSorts = new java.util.ArrayList<>();
+				List<Integer> argIndices = new java.util.ArrayList<>();
+				for (IfaceMember member : members) {
+					argNames.add("import-func-" + member.name());
+					argSorts.add(ComponentWriter.SORT_FUNC);
+					argIndices.add(member.func());
+				}
+				for (String type : shim.importedTypes()) {
+					argNames.add("import-type-" + type);
+					argSorts.add(ComponentWriter.SORT_TYPE);
+					argIndices.add(space.named(canonical.scopeName(), type));
+				}
+				instances.add(ComponentWriter.componentInstantiateWith(shims.size(), argNames, argSorts, argIndices));
+				shims.add(shim.component());
+			}
 			exports.add(ComponentWriter.exportInstance(group.getKey(), componentInstance++));
 		}
 		c.rawSection(ComponentWriter.SEC_ALIAS, ComponentWriter.vec(aliases));
-		c.rawSection(ComponentWriter.SEC_TYPE, ComponentWriter.vec(types));
+		for (java.util.Map.Entry<Integer, byte[]> entry : typeEntries) {
+			c.rawSection(entry.getKey(), ComponentWriter.vec(List.of(entry.getValue())));
+		}
 		c.rawSection(ComponentWriter.SEC_CANON, ComponentWriter.vec(lifts));
+		for (byte[] shim : shims) {
+			c.rawSection(ComponentWriter.SEC_COMPONENT, shim);
+		}
 		if (!instances.isEmpty()) {
 			c.rawSection(ComponentWriter.SEC_INSTANCE, ComponentWriter.vec(instances));
 		}
 		c.rawSection(ComponentWriter.SEC_EXPORT, ComponentWriter.vec(exports));
+	}
+
+	// One function of an exported interface: its label, its lifted component function,
+	// and either its WIT function (a canonical export) or its function type over
+	// primitives (a flat one).
+	private record IfaceMember(String name, int func, @Nullable WitExportSignature wit, byte @Nullable [] flatType) {
 	}
 
 	/**

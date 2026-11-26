@@ -326,7 +326,8 @@ is s32, which is int in Java, not long
 ```
 
 型は、[上の表](#the-types)のうち world のエクスポートで使える `bool`、整数、`f64`、`string`
-です。それ以外の型は、`rontolisp:wit-export` と同じく WIT の行で拒否されます。
+です。それ以外の型は WIT の行で拒否されます。Lisp のプログラムの `rontolisp:wit-export` は
+レコード、リスト、バリアントを受け渡せますが、Java の world のエクスポートはまだ受け渡せません。
 符号なし整数は、同じ幅の Java の型にビットのまま入ります。これはどちらの向きでも同じです。
 `u32` の 4294967295 は `int` の -1 になり、`u32` を返すエクスポートが `int` の -1 を返すと
 4294967295 になります。
@@ -347,7 +348,7 @@ is s32, which is int in Java, not long
   future と境界が見分けられないため）。`bool`、`list`、`flags`、`option` を要素とする `option`
   （境界がその none を見分けられないため）。ほかのインタフェースのリソース。`WitException` として
   投げるエラーの型にある tuple（型を書く場所がないため。`WitResult` の戻り値なら書けます）。
-- world のエクスポートで使える型は、`rontolisp:wit-export` で使える型です。`async func` の
+- world のエクスポートで使える型は、`bool`、整数、`f64`、`string` です。`async func` の
   エクスポートは拒否されます。同じラベルのエクスポート 2 つ（world の関数とインタフェースの
   関数、または 2 つのインタフェースの関数）は、それぞれのクラスの 2 つのメソッドです。
 - エクスポートが捕まえなかった例外は、JDK が書く行（`Exception in thread "main"

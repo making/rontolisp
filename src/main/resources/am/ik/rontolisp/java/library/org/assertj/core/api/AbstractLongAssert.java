@@ -4,6 +4,8 @@
 // subset. Notice: THIRD-PARTY-NOTICES.txt, "AssertJ".
 package org.assertj.core.api;
 
+import org.assertj.core.data.Offset;
+
 // The checks of a long: against a number written as it is.
 public abstract class AbstractLongAssert<SELF extends AbstractLongAssert<SELF>> extends AbstractComparableAssert<SELF, Long> {
 
@@ -61,5 +63,29 @@ public abstract class AbstractLongAssert<SELF extends AbstractLongAssert<SELF>> 
 
     public SELF isLessThanOrEqualTo(long other) {
         return isLessThanOrEqualTo((Long) other);
+    }
+
+    public SELF isCloseTo(long expected, Offset<Long> offset) {
+        return isCloseTo((Long) expected, offset);
+    }
+
+    public SELF isCloseTo(Long expected, Offset<Long> offset) {
+        return closeTo(expected, offset, true);
+    }
+
+    public SELF isNotCloseTo(long expected, Offset<Long> offset) {
+        return isNotCloseTo((Long) expected, offset);
+    }
+
+    public SELF isNotCloseTo(Long expected, Offset<Long> offset) {
+        return closeTo(expected, offset, false);
+    }
+
+    private SELF closeTo(Long expected, Offset<Long> offset, boolean wanted) {
+        given(offset);
+        isNotNull();
+        long difference = Math.abs(actual - expected);
+        return closeTo(expected, offset, difference, offset.strict ? difference < offset.value : difference <= offset.value,
+                wanted);
     }
 }

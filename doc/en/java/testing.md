@@ -158,25 +158,43 @@ the order declared, where JUnit runs them in an order of its own.
 `org.assertj.core.api.Assertions` has `assertThat` of the kinds below, `assertThatThrownBy`,
 `assertThatCode`, `assertThatExceptionOfType` (with `assertThatIllegalArgumentException`,
 `assertThatIllegalStateException`, `assertThatNullPointerException`,
-`assertThatIOException`), `assertThatNoException`, `catchThrowable`, `fail` and `entry`.
+`assertThatIOException`), `assertThatNoException`, `catchThrowable`, `fail`, `entry`,
+`tuple`, the offsets `within`, `offset`, `withPrecision` and `byLessThan` (of a `double`,
+`float`, `int` and `long`), and the factories of `InstanceOfAssertFactories` that
+`asInstanceOf` takes (one for each kind below, `type`, `list`, `iterable`, `map`, `optional`,
+`throwable`, `array`, `comparable`, `future`, `completableFuture`).
 
 | `assertThat` of | Checks |
 | --- | --- |
-| any value | `isEqualTo` (two arrays by their elements), `isNotEqualTo`, `isNull`, `isNotNull`, `isSameAs`, `isNotSameAs`, `isInstanceOf`, `isNotInstanceOf`, `isExactlyInstanceOf`, `isInstanceOfSatisfying`, `isIn`, `isNotIn`, `hasToString`, `doesNotHaveToString`, `matches`, `satisfies`, and `as`, `describedAs`, `withFailMessage`, `overridingErrorMessage` |
-| an object | `extracting` with a function |
+| any value | `isEqualTo` (two arrays by their elements), `isNotEqualTo`, `isNull`, `isNotNull`, `isSameAs`, `isNotSameAs`, `isInstanceOf`, `isNotInstanceOf`, `isExactlyInstanceOf`, `isInstanceOfSatisfying`, `isIn`, `isNotIn` (of values or an `Iterable`), `hasToString`, `doesNotHaveToString`, `matches`, `satisfies`, `asInstanceOf`, and `as`, `describedAs`, `withFailMessage`, `overridingErrorMessage` |
+| an object | `extracting` with a function or by the names of properties or fields (several make a list), `hasFieldOrProperty`, `hasFieldOrPropertyWithValue`, `usingRecursiveComparison` (also of a `Map`, an `Iterable`, an array of objects, an `Optional`) and on it `isEqualTo`, `isNotEqualTo`, `ignoringFields`, `comparingOnlyFields`, `ignoringActualNullFields`, `ignoringExpectedNullFields`, `ignoringCollectionOrder`, `withStrictTypeChecking` |
+| a `Comparable` of the program's (an enum too) | `isGreaterThan`, `isGreaterThanOrEqualTo`, `isLessThan`, `isLessThanOrEqualTo`, `isBetween`, `isStrictlyBetween`, `isEqualByComparingTo`, `isNotEqualByComparingTo` |
 | a `String` | `isEmpty`, `isNotEmpty`, `isNullOrEmpty`, `isBlank`, `isNotBlank`, `hasSize` and its four comparisons, `contains`, `doesNotContain`, `containsIgnoringCase`, `containsSubsequence`, `startsWith`, `doesNotStartWith`, `endsWith`, `doesNotEndWith`, `isEqualToIgnoringCase`, `matches`, `doesNotMatch` |
-| an `int`, `long`, `float`, `double` or its box | `isZero`, `isNotZero`, `isOne`, `isPositive`, `isNegative`, `isNotNegative`, `isNotPositive`, `isGreaterThan`, `isGreaterThanOrEqualTo`, `isLessThan`, `isLessThanOrEqualTo`, `isBetween`, `isStrictlyBetween`, `isEqualByComparingTo`; of a `double` `isNaN`, `isNotNaN` |
+| an `int`, `long`, `float`, `double` or its box | `isZero`, `isNotZero`, `isOne`, `isPositive`, `isNegative`, `isNotNegative`, `isNotPositive`, `isGreaterThan`, `isGreaterThanOrEqualTo`, `isLessThan`, `isLessThanOrEqualTo`, `isBetween`, `isStrictlyBetween`, `isEqualByComparingTo`, `isCloseTo`, `isNotCloseTo`; of a `double` and a `float` `isEqualTo` with an offset; of a `double` `isNaN`, `isNotNaN` |
 | a `char`, a `boolean` | `isGreaterThan`, `isLessThan`; `isTrue`, `isFalse` |
-| an `Iterable`, a `List` | `isEmpty`, `isNotEmpty`, `isNullOrEmpty`, `hasSize` and its four comparisons, `contains`, `containsAll`, `doesNotContain`, `containsExactly`, `containsExactlyElementsOf`, `containsExactlyInAnyOrder`, `containsExactlyInAnyOrderElementsOf`, `containsOnly`, `containsSequence`, `containsSubsequence`, `anyMatch`, `allMatch`, `noneMatch`, `allSatisfy`, `anySatisfy`, `extracting`, `map`, `filteredOn` with a predicate, `first`, `last`, `element`, `singleElement` |
+| an `Iterable`, a `List` | `isEmpty`, `isNotEmpty`, `isNullOrEmpty`, `hasSize` and its four comparisons, `contains`, `containsAll`, `doesNotContain`, `containsExactly`, `containsExactlyElementsOf`, `containsExactlyInAnyOrder`, `containsExactlyInAnyOrderElementsOf`, `containsOnly`, `containsSequence`, `containsSubsequence`, `anyMatch`, `allMatch`, `noneMatch`, `allSatisfy`, `anySatisfy`, `extracting` (by names, a `Tuple` an element), `map`, `filteredOn` with a predicate or a name and a value, `first`, `last`, `element`, `singleElement` |
 | an array of objects, of `byte`, `int`, `long`, `char` or `double` | `isEmpty`, `isNotEmpty`, `isNullOrEmpty`, `hasSize`, `contains`, `doesNotContain`, `containsExactly`, `containsExactlyInAnyOrder`; of objects `containsOnly`, of a primitive type `startsWith` |
-| a `Map` | `isEmpty`, `isNotEmpty`, `isNullOrEmpty`, `hasSize`, `containsKey`, `containsKeys`, `doesNotContainKey`, `doesNotContainKeys`, `containsValue`, `doesNotContainValue`, `containsEntry`, `doesNotContainEntry`, `contains`, `containsAllEntriesOf`, `containsOnly`, `containsOnlyKeys` |
+| a `Map` | `isEmpty`, `isNotEmpty`, `isNullOrEmpty`, `hasSize`, `containsKey`, `containsKeys`, `doesNotContainKey`, `doesNotContainKeys`, `containsValue`, `doesNotContainValue`, `containsEntry`, `doesNotContainEntry`, `contains`, `containsAllEntriesOf`, `containsOnly`, `containsOnlyKeys`, `containsExactly` |
 | an `Optional` | `isPresent`, `isNotEmpty`, `isEmpty`, `isNotPresent`, `contains`, `hasValue`, `hasValueSatisfying`, `get` |
+| a `Class` | `isInterface`, `isNotInterface`, `isAnnotation`, `isNotAnnotation`, `isRecord`, `isNotRecord`, `isAbstract`, `isFinal`, `isNotFinal`, `isPublic`, `isProtected`, `isPrivate`, `isPackagePrivate`, `isStatic`, `isNotStatic`, `isAssignableFrom`, `isAssignableTo`, `hasSuperclass`, `hasNoSuperclass`, `isPrimitive`, `isNotPrimitive`, `hasPackage` |
+| a `Path` | `exists`, `doesNotExist`, `isRegularFile`, `isDirectory`, `isAbsolute`, `isRelative`, `hasFileName`, `hasExtension`, `hasNoExtension`, `hasContent`, `hasBinaryContent`, `hasSize`, `isEmptyFile`, `isNotEmptyFile`, `isEmptyDirectory`, `isNotEmptyDirectory`, `content`, `binaryContent`, and those of a `Comparable` |
+| a `File` | `exists`, `doesNotExist`, `isFile`, `isDirectory`, `isAbsolute`, `isRelative`, `canRead`, `hasName`, `hasFileName`, `hasParent`, `hasNoParent`, `hasExtension`, `hasNoExtension`, `hasContent`, `hasBinaryContent`, `hasSize`, `isEmpty`, `isNotEmpty`, `isEmptyDirectory`, `isNotEmptyDirectory`, `content`, `binaryContent` |
+| a `LocalDate`, `LocalDateTime`, `LocalTime`, `Instant` | `isBefore`, `isBeforeOrEqualTo`, `isAfter`, `isAfterOrEqualTo`, `isBetween`, `isStrictlyBetween`, and `isEqualTo`, `isNotEqualTo`, `isIn`, `isNotIn` of the text the class parses; their fields (`hasYear`, `hasMonth`, `hasMonthValue`, `hasDayOfMonth`, `hasHour`, `hasMinute`, `hasSecond`, `hasNano`) |
+| a `Duration` | `isZero`, `isPositive`, `isNegative`, `hasNanos`, `hasMillis`, `hasSeconds`, `hasMinutes`, `hasHours`, `hasDays`, `isCloseTo`, and those of a `Comparable` |
+| a `Future`, a `CompletableFuture` | `isDone`, `isNotDone`, `isCancelled`, `isNotCancelled`, `succeedsWithin`; of a `CompletableFuture` `isCompleted`, `isNotCompleted`, `isCompletedWithValue`, `isCompletedWithValueMatching`, `isCompletedExceptionally`, `isNotCompletedExceptionally`, `hasFailed` |
 | a `Throwable` | `hasMessage`, `hasMessageContaining`, `hasMessageNotContaining`, `hasMessageStartingWith`, `hasMessageEndingWith`, `hasMessageMatching`, `hasNoCause`, `hasCauseInstanceOf`, `hasRootCauseInstanceOf`, `hasRootCauseMessage`, `cause`, `rootCause`, `doesNotThrowAnyException`, and after `isThrownBy` the same under `withMessage` .. `withRootCauseInstanceOf`, `havingCause`, `havingRootCause` |
 
 A failed check says what AssertJ says, and throws the class AssertJ throws beside JUnit
 (`AssertionFailedError` where two values are compared, `AssertionError` otherwise). Where
 AssertJ adds the frames of a stack trace or the name of a JDK's own class, the message has
 none.
+
+A property is read as AssertJ reads it: by its getter (`getName`, else `isName`), else by a
+field of the class or of a class above it. The recursive comparison walks the fields of the
+program's classes; a JDK's type is compared with `equals` (a `double` and a `float` within
+AssertJ's precisions), a collection, an array, a map and an `Optional` by what they hold. A
+class of a library whose members the program does not keep is refused where it is compared
+field by field.
 
 ## What is not there
 
@@ -197,10 +215,10 @@ annotation), the elements the table above does not name (`classes` of
 parameter of a `@Test` method that is no `@TempDir` or `TestInfo`, a parameter of a
 parameterized test whose type is JUnit's (`ArgumentsAccessor`, `TestInfo`, whose display
 name would show the arguments), a `RepetitionInfo` given around a test that is not repeated;
-the checks
-of AssertJ that read a class's fields by reflection (`usingRecursiveComparison`,
-`hasFieldOrPropertyWithValue`, `extracting` by a name), soft assertions and the
-assertions of dates, files and futures. A test class has one constructor, whose parameters
-may be the `TestInfo` and `@TempDir` directories, and a `static` class in a test class is run only as a file's own class is.
+of AssertJ, soft assertions and the checks the table above does not name (`hasParent` of a
+`Path`, the recursive comparison's own comparators and introspection strategy, the checks
+of its own of a `ZonedDateTime`, a `URI` or a `BigDecimal`, which are a `Comparable`'s). A
+test class has one constructor, whose parameters may be the `TestInfo` and `@TempDir`
+directories, and a `static` class in a test class is run only as a file's own class is.
 
 `rontolisp format` refuses a `.java` file: it re-indents S-expressions.

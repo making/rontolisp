@@ -34,11 +34,11 @@ wasmtime run --invoke 'greet("world")' greet.wasm
 どこにも `:params '(:string) :returns :string` はありません — 型は world から来ます。これこそが要点です: 手書きの境界型は、別途生成される `.wit` の隣に置かれ、両者は乖離していき、最終的に `wasmtime --invoke` が実行時に失敗して初めて気づきます。`wit-export` では **WIT が唯一の真実の源**です:
 
 - world がプログラムのエクスポート一覧であるため、同じプログラム内の手書きの `rontolisp:wasm-export` はコンパイルエラーです。
-- すべてのエクスポートには正しいアリティの `defun` が必要で、すべての WIT 型は境界が運べるもの(`s8` 〜 `u64` の固定幅整数すべてと `f64`、`bool`、`string`)でなければならず、world 中の `async func` はそのエクスポートを `:async t` としてリフトします(I/O を行うエクスポートは推測されるのではなく WIT によって非同期と宣言されます)。各不一致は WIT ファイル名と行番号を示すコンパイルエラーになります:
+- すべてのエクスポートには正しいアリティの `defun` が必要で、すべての WIT 型はエクスポートで受け渡せるもの(整数 `s8` 〜 `u64`、`f64`、`bool`、`string` はどの出力でも。[レコード、バリアント、リスト](#records-variants-and-lists)はコンポーネントで)でなければならず、world 中の `async func` はそのエクスポートを `:async t` としてリフトします(I/O を行うエクスポートは推測されるのではなく WIT によって非同期と宣言されます)。各不一致は WIT ファイル名と行番号を示すコンパイルエラーになります:
   `wit/greeter.wit:5: export 'greet' declares 1 parameter(s), but (defun greet ...) takes 2`。
 - 契約は**すべての**バックエンドで検査されます: 素の `rontolisp greet.lisp` 実行(や `-o Greet.class` ビルド)は world を検証するだけでエクスポートは行いません。したがって乖離は WASM ビルドよりずっと手前で捕まります。
 
-このディレクティブは前節までの機構のフロントエンドであって、第 2 のエクスポート経路ではありません: 手書きの実装が持つのとまったく同じ `rontolisp:wasm-export` ディレクティブへローワリングされるため、**生成されるコンポーネントはそれとバイト単位で同一**です — GC パスでも [`--no-gc --component`](wasm-nogc.md#compact-component-output---no-gc---component) でも同様です(`s64`/`u64` を使う world は両者で動作します。GC バックエンドはボックス化された正確な整数で 64 ビット型を運びます)。
+このディレクティブは前節までの機構のフロントエンドであって、第 2 のエクスポート経路ではありません: 手書きの実装が持つのとまったく同じ `rontolisp:wasm-export` ディレクティブへローワリングされるため、これらのフラットな型だけの world では**生成されるコンポーネントはそれとバイト単位で同一**です — GC パスでも [`--no-gc --component`](wasm-nogc.md#compact-component-output---no-gc---component) でも同様です(`s64`/`u64` を使う world は両者で動作します。GC バックエンドはボックス化された正確な整数で 64 ビット型を運びます)。
 
 ビルドに [`--emit-wit`](#emitting-the-wit-world---emit-wit) を追加するとコンポーネントの実際の型が書き出され、そのエクスポート行は書いたとおりに戻ってきます。引数名も含めてです — WIT の名前はコンポーネントの関数型まで運ばれます(手書きのエクスポートは、自分で `:param-names '(who)` と宣言しない限り引数を `p0`、`p1`、... と名づけます)。
 
@@ -85,6 +85,56 @@ wasmtime run --invoke 'add(20, 22)' adder.wasm
 ```
 
 インライン `export ops: interface { ... }` も同じように、その素の名前をキーとして動作します。`--emit-wit` はインターフェースを復元します — `export docs:adder/add@0.1.0;` とその `interface` 定義を、`wasm-tools` が印字するのとバイト単位で同じ形で。
+
+### レコード、バリアント、リスト
+
+コンポーネントのエクスポートでは、WIT の複合型も受け渡せます。プログラムに境界のコードは要りません。それぞれの値は、型に対応する Lisp の値で届きます。これは [`wit-import`](#importing-a-wit-interface-wit-import) が呼び出し側に渡す値と同じです。
+
+```console
+// wit/shapes.wit
+package example:shapes@0.1.0;
+
+interface geometry {
+  record point { x: s32, y: s32 }
+  variant shape { circle(f64), rect(point), dot }
+
+  flip: func(p: point) -> point;
+  squares: func(n: u32) -> list<point>;
+  area: func(s: shape) -> result<f64, string>;
+}
+
+world shapes {
+  export geometry;
+}
+```
+
+```console
+;;; shapes.lisp
+(defun flip (p) (list :x (getf p :y) :y (getf p :x)))
+
+(defun squares (n) (loop for i from 1 to n collect (list :x i :y (* i i))))
+
+(defun area (s)
+  (cond ((eq s :dot) (error 'rontolisp:wit-error :payload "a dot has no area"))
+        ((eq (car s) :circle) (* 3.0d0 (cdr s) (cdr s)))
+        (t (float (* (getf (cdr s) :x) (getf (cdr s) :y)) 1.0d0))))
+
+(rontolisp:wit-export "wit/shapes.wit" :reactor t)
+```
+
+```bash
+rontolisp shapes.lisp --component -o shapes.wasm
+wasmtime run --invoke 'squares(2)' shapes.wasm
+# [{x: 1, y: 1}, {x: 2, y: 4}]
+wasmtime run --invoke 'area(rect({x: 3, y: 4}))' shapes.wasm
+# ok(12)
+wasmtime run --invoke 'area(dot)' shapes.wasm
+# err("a dot has no area")
+```
+
+レコードはキーワードの plist、バリアントはケース名のキーワード(ペイロードがあればドット対)、リストはリスト、option は値か `nil` です。WIT の結果が `result` の関数は、ok 側の値を返し、error 側では `rontolisp:wit-error` を通知します。これは[プロバイダ](#importing-a-wit-interface-wit-import)の書き方と同じなので、`shapes.lisp` の関数は、インタプリタと JVM ではこのインターフェースの `wit-import` に応えるプロバイダにもなります。対応の全体と、受け渡せないもの(`flags`、ハンドル、ストリーム、別のインターフェースの型)は[リファレンス](../reference/functions/rontolisp-wit-export.md#compound-types)にあります。[`examples/wit/shapes`](https://github.com/making/rontolisp/tree/develop/examples/wit/shapes) は、この world と、それを呼び出す 2 つ目のコンポーネントの例です。
+
+コアモジュール(`-o out.wasm` だけ、`--no-wasi`)と `--no-gc` がエクスポートできるのは、フラットな型だけです。コアの値を受け渡す関数にはレコードを表す型がなく、スカラバックエンドにはレコードを保持する値がないためです。
 
 現在の制限:
 

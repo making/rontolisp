@@ -210,4 +210,49 @@ public class MapAssert<KEY, VALUE> extends AbstractAssert<MapAssert<KEY, VALUE>,
         }
         return myself;
     }
+
+    @SafeVarargs
+    public final MapAssert<KEY, VALUE> containsExactly(Map.Entry<? extends KEY, ? extends VALUE>... entries) {
+        isNotNull();
+        List<Object> expected = new ArrayList<>();
+        for (Map.Entry<? extends KEY, ? extends VALUE> entry : entries) {
+            expected.add(MapEntry.entry(entry.getKey(), entry.getValue()));
+        }
+        List<Object> held = new ArrayList<>();
+        for (Map.Entry<KEY, VALUE> entry : actual.entrySet()) {
+            held.add(MapEntry.entry(entry.getKey(), entry.getValue()));
+        }
+        if (held.size() != expected.size()) {
+            throw failure("\nActual and expected should have same size but actual size is:\n  " + held.size()
+                    + "\nwhile expected size is:\n  " + expected.size() + "\nActual was:\n" + Shown.under(actual)
+                    + "\nExpected was:\n" + Shown.under(expected));
+        }
+        String heading = "\nExpecting actual:\n" + Shown.under(actual) + "\nto contain exactly (and in same order):\n"
+                + Shown.under(expected) + "\n";
+        List<Object> absent = Shown.without(expected, held);
+        List<Object> unexpected = Shown.without(held, expected);
+        if (!absent.isEmpty() && !unexpected.isEmpty()) {
+            throw failure(heading + "but some elements were not found:\n" + Shown.under(absent)
+                    + "\nand others were not expected:\n" + Shown.under(unexpected) + "\n");
+        }
+        if (!absent.isEmpty()) {
+            throw failure(heading + "but could not find the following elements:\n" + Shown.under(absent) + "\n");
+        }
+        if (!unexpected.isEmpty()) {
+            throw failure(heading + "but some elements were not expected:\n" + Shown.under(unexpected) + "\n");
+        }
+        for (int i = 0; i < held.size(); i++) {
+            if (!Shown.same(held.get(i), expected.get(i))) {
+                throw failure("\nActual and expected have the same elements but not in the same order, at index " + i
+                        + " actual element was:\n" + Shown.under(held.get(i)) + "\nwhereas expected element was:\n"
+                        + Shown.under(expected.get(i)) + "\n");
+            }
+        }
+        return myself;
+    }
+
+    @Override
+    public RecursiveComparisonAssert<?> usingRecursiveComparison() {
+        return super.usingRecursiveComparison();
+    }
 }

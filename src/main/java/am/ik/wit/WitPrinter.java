@@ -90,7 +90,8 @@ public final class WitPrinter {
 				sb.append(ind).append("world ").append(id(world.name())).append(" {\n");
 				WitItem previous = null;
 				for (WitItem member : world.items()) {
-					if (previous != null && worldGroup(previous) != worldGroup(member)) {
+					if (previous != null
+							&& (worldGroup(previous) != worldGroup(member) || worldGroup(member) == OWN_GROUP)) {
 						sb.append('\n');
 					}
 					printItem(sb, member, depth + 1);
@@ -313,9 +314,12 @@ public final class WitPrinter {
 			case WitItem.ExportNamed ignored -> 2;
 			case WitItem.Include ignored -> 3;
 			case WitItem.Use ignored -> 4;
-			default -> 5;
+			default -> OWN_GROUP;
 		};
 	}
+
+	// A type definition of a world: a group by itself, a blank line on either side.
+	private static final int OWN_GROUP = 5;
 
 	// The source spelling of an identifier: %-escaped iff it collides with a WIT keyword
 	// (the model holds the bare name; see WitIdentifiers).

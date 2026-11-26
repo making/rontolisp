@@ -326,8 +326,9 @@ is s32, which is int in Java, not long
 ```
 
 The types are those of [the table above](#the-types) that a world's export carries:
-`bool`, the integers, `f64` and `string`. Any other is refused at its WIT line, as
-`rontolisp:wit-export` refuses it. An unsigned integer is the Java type of its width
+`bool`, the integers, `f64` and `string`. Any other is refused at its WIT line: a Java
+world's export carries no record, list or variant yet, where a Lisp program's
+`rontolisp:wit-export` does. An unsigned integer is the Java type of its width
 holding its bits both ways: a `u32` of 4294967295 is the `int` -1, and the `int` -1 an
 export answers for a `u32` is 4294967295.
 
@@ -347,7 +348,7 @@ export answers for a `u32` is 4294967295.
   `option` of a `bool`, a `list`, `flags` or an `option`, whose none the boundary cannot
   tell apart; a resource of another interface; a tuple in an error arm thrown as a
   `WitException`, for which no type is written (a `WitResult` answer carries it).
-- A world's export takes the types `rontolisp:wit-export` takes; an `async func` export is
+- A world's export takes `bool`, the integers, `f64` and `string`; an `async func` export is
   refused. Two exports of one label (a function of the world and an interface's, or two
   interfaces') are two methods, each of its own class.
 - An exception an export leaves uncaught is reported on standard error by the line a JDK

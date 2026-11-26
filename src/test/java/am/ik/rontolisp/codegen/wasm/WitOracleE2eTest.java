@@ -225,6 +225,49 @@ class WitOracleE2eTest {
 		WasmLispCompiler reactor = WasmLispCompiler.builder().component(true).reactor(true).build();
 		byte[] reactorComponent = reactor.compile(LispReader.readAllFromString(program));
 		assertThat(reactor.componentWit()).isEqualTo(oracle(reactorComponent)).doesNotContain("wasi:cli/run");
+		// A world whose exports carry compound types declares them: an exported
+		// interface's through a shim component that names them, the world's own as type
+		// imports, every type the scope defines, in the tool's order. The world emitted
+		// is the tool's reading of the component, and the WIT's own definitions.
+		Path shapes = Path.of("examples/wit/shapes");
+		for (List<String> shape : List.of(List.of("--component"), List.of("--component", "--no-wasi"))) {
+			byte[] exporting = compileFileViaCli(shapes.resolve("shapes.lisp"), "shapes", shape);
+			String wit = Files.readString(this.tempDir.resolve("shapes.wit"));
+			assertThat(wit).as(shape.toString())
+				.isEqualTo(oracle(exporting))
+				.contains("  record summary {\n    count: u32,\n    total: f64,\n  }\n\n  export summarize: "
+						+ "func(areas: list<f64>) -> summary;\n  export example:shapes/geometry@0.1.0;")
+				.contains("    bounds: func(ps: list<point>) -> option<tuple<point, point>>;");
+		}
+	}
+
+	@Test
+	@EnabledIf("am.ik.rontolisp.testsupport.HostWasmtime#isAvailable")
+	void aComponentCallsWhatAnotherExportsOverCompoundTypes() throws Exception {
+		// The two directions meet: what a wit-import lowers a wit-export lifts, and
+		// back. The example's command, composed with the component that exports the
+		// interface, prints what it prints on the interpreter, where the exporting
+		// file's functions answer in process.
+		Path shapes = Path.of("examples/wit/shapes");
+		java.io.ByteArrayOutputStream interpreted = new java.io.ByteArrayOutputStream();
+		new am.ik.rontolisp.cli.RontoLispCli(new java.io.ByteArrayInputStream(new byte[0]),
+				new java.io.PrintStream(interpreted, true, StandardCharsets.UTF_8))
+			.run(new String[] { shapes.resolve("app.lisp").toString() });
+		compileFileViaCli(shapes.resolve("shapes.lisp"), "shapes", List.of("--component"));
+		compileFileViaCli(shapes.resolve("app.lisp"), "app", List.of("--component"));
+		Path composed = this.tempDir.resolve("composed.wasm");
+		Process compose = new ProcessBuilder("wasm-tools", "compose", this.tempDir.resolve("app.wasm").toString(), "-d",
+				this.tempDir.resolve("shapes.wasm").toString(), "-o", composed.toString())
+			.redirectErrorStream(true)
+			.start();
+		String composing = new String(compose.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+		assertThat(compose.waitFor()).as(composing).isZero();
+		Process run = new ProcessBuilder("wasmtime", "run", composed.toString()).redirectErrorStream(true).start();
+		String printed = new String(run.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+		assertThat(run.waitFor()).as(printed).isZero();
+		assertThat(printed).isEqualTo(interpreted.toString(StandardCharsets.UTF_8))
+			.contains("bounds   ((:X 1 :Y 1) (:X 3 :Y 9))")
+			.contains("area     \"a dot has no area\"");
 	}
 
 	@Test
@@ -455,6 +498,18 @@ class WitOracleE2eTest {
 		String wit = Files.readString(this.tempDir.resolve("prog.wit"));
 		assertThat(wit).contains("  import wasi:keyvalue/store@0.2.0-draft;");
 		assertThat(wit.replace(restored, "  interface handler {\n")).isEqualTo(oracle(component));
+	}
+
+	// Compiles a file of the checkout through the real CLI into the temporary directory,
+	// its world beside it (--emit-wit).
+	private byte[] compileFileViaCli(Path source, String name, List<String> shape) throws Exception {
+		Path wasm = this.tempDir.resolve(name + ".wasm");
+		List<String> args = new java.util.ArrayList<>(List.of(source.toString(), "-o", wasm.toString(), "--emit-wit"));
+		args.addAll(shape);
+		new am.ik.rontolisp.cli.RontoLispCli(new java.io.ByteArrayInputStream(new byte[0]),
+				new java.io.PrintStream(java.io.OutputStream.nullOutputStream()))
+			.run(args.toArray(new String[0]));
+		return Files.readAllBytes(wasm);
 	}
 
 	// Compiles source to a --component component through the REAL CLI (writing

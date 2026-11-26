@@ -113,9 +113,24 @@ final class WasmExportCompiler {
 	 * that id, instead of a flat top-level function export. Only meaningful on the
 	 * {@code --component} paths; ignored on Preview 1 / {@code --no-wasi} (a core module
 	 * has no instances)
+	 * @param wit the WIT function of a <strong>canonical</strong> export ({@code :wit}),
+	 * or {@code null} for a flat one. A canonical export's types are the WIT's own -- a
+	 * record, a list, a variant, ... -- which the canonical ABI lifts and lowers; it has
+	 * no {@code paramTypes} and no {@code returnType} (empty and void here), and every
+	 * reader of those asks {@link #wit()} first. {@code rontolisp:wit-export} writes it
+	 * for an export the flat designators do not cover, on a component
 	 */
 	record Decl(String name, String exportName, List<BoundaryType> paramTypes, List<String> paramNames,
-			BoundaryType returnType, boolean async, @Nullable String iface) {
+			BoundaryType returnType, boolean async, @Nullable String iface, @Nullable WitExportSignature wit) {
+
+		/**
+		 * {@return the number of arguments the exported function takes}
+		 */
+		int arity() {
+			WitExportSignature signature = this.wit;
+			return signature == null ? this.paramTypes.size() : signature.arity();
+		}
+
 	}
 
 	/**
@@ -224,6 +239,10 @@ final class WasmExportCompiler {
 		BoundaryType returns = null;
 		boolean async = false;
 		String iface = null;
+		String wit = null;
+		String witWorld = null;
+		String witAt = null;
+		boolean octets = false;
 		int i = 2;
 		while (i < items.size()) {
 			String keyword = keywordName(items.get(i), form);
@@ -238,10 +257,26 @@ final class WasmExportCompiler {
 				case ":RETURNS" -> returns = returnDesignator(value, form);
 				case ":ASYNC" -> async = booleanOption(value, form);
 				case ":INTERFACE" -> iface = interfaceId(value, form);
+				case ":WIT" -> wit = stringOption(value, keyword, form);
+				case ":WIT-WORLD" -> witWorld = stringOption(value, keyword, form);
+				case ":WIT-AT" -> witAt = stringOption(value, keyword, form);
+				case ":OCTETS" -> octets = booleanOption(value, form);
 				default -> throw new UnsupportedOperationException(
 						"Unknown rontolisp:wasm-export option " + keyword + " in " + form.print());
 			}
 			i += 2;
+		}
+		if (wit != null) {
+			// A canonical export: the function's types are the WIT's, found by the world,
+			// the interface and the label.
+			if (witWorld == null || witAt == null || params != null || returns != null) {
+				throw new UnsupportedOperationException(
+						"rontolisp:wasm-export :wit names a world (:wit-world) and a line (:wit-at) and takes no "
+								+ ":params or :returns: " + form.print());
+			}
+			String label = exportName == null ? unqualifiedMember(name) : exportName;
+			WitExportSignature signature = WitExportSignature.of(wit, witWorld, iface, label, witAt, octets);
+			return new Decl(name, label, List.of(), signature.paramNames(), BoundaryType.VOID, async, iface, signature);
 		}
 		List<BoundaryType> types = params == null ? List.of() : params;
 		if (paramNames != null && paramNames.size() != types.size()) {
@@ -251,7 +286,15 @@ final class WasmExportCompiler {
 		// Omitted :returns (like nil / '() / :void) means a void result.
 		return new Decl(name, exportName == null ? unqualifiedMember(name) : exportName, types,
 				paramNames == null ? defaultParamNames(types.size()) : paramNames,
-				returns == null ? BoundaryType.VOID : returns, async, iface);
+				returns == null ? BoundaryType.VOID : returns, async, iface, null);
+	}
+
+	private static String stringOption(LispVal value, String keyword, LispCons form) {
+		if (value instanceof am.ik.rontolisp.LispString str) {
+			return str.value();
+		}
+		throw new UnsupportedOperationException(
+				"rontolisp:wasm-export " + keyword.toLowerCase(java.util.Locale.ROOT) + " expects a string");
 	}
 
 	// The :interface value is a string naming the WIT interface the export belongs to
@@ -351,6 +394,10 @@ final class WasmExportCompiler {
 
 	/** Returns the number of WASM parameter slots a declaration occupies. */
 	static int paramSlotCount(Decl decl) {
+		WitExportSignature wit = decl.wit();
+		if (wit != null) {
+			return wit.coreParams().length;
+		}
 		int slots = 0;
 		for (BoundaryType t : decl.paramTypes()) {
 			slots += slotsForType(t);
@@ -388,6 +435,10 @@ final class WasmExportCompiler {
 	 * ({@code :string}/{@code :s-expr}).
 	 */
 	static boolean usesMemory(Decl decl) {
+		WitExportSignature wit = decl.wit();
+		if (wit != null) {
+			return wit.usesMemory();
+		}
 		if (isMemoryType(decl.returnType())) {
 			return true;
 		}
@@ -401,6 +452,10 @@ final class WasmExportCompiler {
 
 	/** Returns the WASM parameter types for the wrapper signature. */
 	static Type[] paramWasmTypes(Decl decl) {
+		WitExportSignature wit = decl.wit();
+		if (wit != null) {
+			return wit.coreParams();
+		}
 		List<Type> types = new ArrayList<>();
 		for (BoundaryType t : decl.paramTypes()) {
 			appendWasmTypes(types, t);
@@ -419,6 +474,10 @@ final class WasmExportCompiler {
 	 * Returns the WASM result types for the wrapper signature (empty for a void result).
 	 */
 	static Type[] resultWasmTypes(Decl decl) {
+		WitExportSignature wit = decl.wit();
+		if (wit != null) {
+			return wit.coreResults();
+		}
 		if (decl.returnType() == BoundaryType.VOID) {
 			return new Type[0];
 		}
@@ -471,9 +530,12 @@ final class WasmExportCompiler {
 	 * helper (or {@code -1} when no {@code :bytes} type is present)
 	 * @param bytesCopyFuncIndex the function index of the {@code _bytes_copy} helper (or
 	 * {@code -1} when no {@code :bytes} type is present)
+	 * @param marshal the canonical ABI's lift of the parameters and lowering of the
+	 * result, for a canonical export ({@link Decl#wit}); {@code null} for a flat one
 	 */
 	static void emitBody(WasmLispCompiler.Ctx ctx, Decl decl, int targetFuncIndex, int strFromMemFuncIndex,
-			int bytesFromMemFuncIndex, int bytesCopyFuncIndex) {
+			int bytesFromMemFuncIndex, int bytesCopyFuncIndex,
+			WasmComponentImportCompiler.@Nullable ExportMarshal marshal) {
 		// A module with a suspending host import (wasm-import :async t / --host-fetch)
 		// can be RE-ENTERED while a call is parked: JSPI returns control to the host's
 		// event loop mid-call. Nothing per call owns the allocator bracket (its marks
@@ -585,6 +647,9 @@ final class WasmExportCompiler {
 		ctx.writer.write(Instruction.REF_NULL);
 		ctx.writer.writeHeapType(Type.EQ.code());
 		// Box each parameter from its wasm slot(s) into the internal (ref null eq) value.
+		if (marshal != null) {
+			marshal.liftParams();
+		}
 		int slot = 0;
 		for (BoundaryType t : decl.paramTypes()) {
 			emitBoxParam(ctx, t, slot, strFromMemFuncIndex, bytesFromMemFuncIndex);
@@ -605,7 +670,7 @@ final class WasmExportCompiler {
 		// call covers both and costs no branch. A module with no future producer at all
 		// keeps byte-identical wrappers (Ctx.p1Futures), and a :void export skips it --
 		// the body has already run, and the value is dropped.
-		if (ctx.p1Futures && decl.returnType() != BoundaryType.VOID) {
+		if (ctx.p1Futures && (decl.returnType() != BoundaryType.VOID || marshal != null)) {
 			ctx.writer.write(Instruction.CALL);
 			ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_P1_FUTURE_AWAIT);
 		}
@@ -684,7 +749,12 @@ final class WasmExportCompiler {
 		// The scratch locals sit right after the parameter slots (see scratchTypes).
 		// (A callback-lifted export cannot reach here: it exists only under asyncMode,
 		// where the callbackDriven branch above returned.)
-		emitUnboxResult(ctx, decl.returnType(), paramSlotCount(decl), bytesCopyFuncIndex);
+		if (marshal != null) {
+			marshal.lowerResult();
+		}
+		else {
+			emitUnboxResult(ctx, decl.returnType(), paramSlotCount(decl), bytesCopyFuncIndex);
+		}
 		if (ctx.reentryGuardGlobalIndex >= 0) {
 			emitReentryGuardStore(ctx, 0);
 		}
@@ -1136,6 +1206,11 @@ final class WasmExportCompiler {
 	 * @return the signature key ({@code "i32"}/{@code "f64"}/{@code "void"})
 	 */
 	static String componentPostReturnKind(Decl decl) {
+		WitExportSignature wit = decl.wit();
+		if (wit != null) {
+			Type[] results = wit.coreResults();
+			return results.length == 0 ? "void" : postReturnKind(results[0]);
+		}
 		return switch (decl.returnType()) {
 			case STRING, S_EXPR, S8, S16, S32, U8, U16, U32, BOOL -> "i32";
 			case S64, U64 -> "i64";
@@ -1149,6 +1224,33 @@ final class WasmExportCompiler {
 			case FLOAT_VECTOR, FLOAT_MATRIX -> throw new IllegalStateException(
 					"a JVM-only boundary type reached the WASM component lift: " + decl.returnType().designator());
 			case VOID -> "void";
+		};
+	}
+
+	// The signature key of a post-return whose one parameter is the given core type.
+	private static String postReturnKind(Type flat) {
+		if (flat == Type.I64) {
+			return "i64";
+		}
+		if (flat == Type.F64) {
+			return "f64";
+		}
+		return flat == Type.F32 ? "f32" : "i32";
+	}
+
+	/**
+	 * The one parameter of the post-return a signature key names: the lifted function's
+	 * flat result, which the canonical ABI hands back to it.
+	 * @param kind the signature key from {@link #componentPostReturnKind}
+	 * @return the core type, or {@code null} for a function with no result
+	 */
+	static @Nullable Type postReturnParam(String kind) {
+		return switch (kind) {
+			case "void" -> null;
+			case "i64" -> Type.I64;
+			case "f64" -> Type.F64;
+			case "f32" -> Type.F32;
+			default -> Type.I32;
 		};
 	}
 

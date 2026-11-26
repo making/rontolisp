@@ -86,4 +86,9 @@ public class ObjectArrayAssert<ELEMENT> extends AbstractAssert<ObjectArrayAssert
         listed().containsOnly(values);
         return myself;
     }
+
+    @Override
+    public RecursiveComparisonAssert<?> usingRecursiveComparison() {
+        return super.usingRecursiveComparison();
+    }
 }
