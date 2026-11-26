@@ -3359,6 +3359,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			funcDeclaredDoubles.removeAll(specialVars);
 			funcCtx.declaredDoubles = funcDeclaredDoubles.isEmpty() ? Set.of() : funcDeclaredDoubles;
 			funcCtx.declaredIntegers = JvmIntFusionCompiler.functionBodyDeclaredIntegers(defun.bodyExprs, funcCtx);
+			funcCtx.declaredArrays = JvmIntFusionCompiler.functionBodyDeclaredArrays(defun.bodyExprs, funcCtx);
 			// The head a self tail call jumps back to, ahead of the boxing below so each
 			// round boxes its own cells; it costs nothing unless one does
 			// (JvmSelfTailCall).
@@ -3694,6 +3695,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			lambdaDeclaredDoubles.removeAll(specialVars);
 			lambdaCtx.declaredDoubles = lambdaDeclaredDoubles.isEmpty() ? Set.of() : lambdaDeclaredDoubles;
 			lambdaCtx.declaredIntegers = JvmIntFusionCompiler.functionBodyDeclaredIntegers(lambda.bodyExprs, lambdaCtx);
+			lambdaCtx.declaredArrays = JvmIntFusionCompiler.functionBodyDeclaredArrays(lambda.bodyExprs, lambdaCtx);
 			if (lambda.selfVar() != null) {
 				// A labels function: its calls through its own variable are self calls,
 				// and the tail ones jump back here, ahead of the boxing below
@@ -4969,13 +4971,23 @@ public final class JvmLispCompiler implements LispCompiler {
 
 		// The fusion helpers, built HERE (before assembly) because their bodies mint
 		// constant-pool entries: _ubRead whenever a raw local exists, _fxAsh whenever a
-		// fused fast path shifts.
+		// fused fast path shifts, _fxLongs, _fxElt and _fxPut whenever a pinned access
+		// takes a general array.
 		final List<JvmNumericRuntimeBuilder.NumericMethod> fusedHelperMethods = new ArrayList<>();
 		if (fusedState.usesUbRead) {
 			fusedHelperMethods.add(JvmIntFusionCompiler.buildUbRead(cp, longValueOf));
 		}
 		if (fusedState.usesFxAsh) {
 			fusedHelperMethods.add(JvmIntFusionCompiler.buildFxAsh(cp));
+		}
+		if (fusedState.usesLongs) {
+			fusedHelperMethods.add(JvmIntFusionCompiler.buildLongs(cp));
+		}
+		if (fusedState.usesElement) {
+			fusedHelperMethods.add(JvmIntFusionCompiler.buildElement(cp));
+		}
+		if (fusedState.usesPut) {
+			fusedHelperMethods.add(JvmIntFusionCompiler.buildPut(cp, lispOnOtherThreads));
 		}
 
 		// The java: sites' failure helpers, made now that every body is compiled: whether
@@ -9103,6 +9115,16 @@ public final class JvmLispCompiler implements LispCompiler {
 		 * {@link #declaredDoubles}.
 		 */
 		Map<String, Object> declaredIntegers = Map.of();
+
+		/**
+		 * The variables in scope a declaration pins to one array representation
+		 * ({@link am.ik.rontolisp.compiler.DeclaredArrayTypes}): a fused read takes that
+		 * representation's arm alone, a rank-1 store of an integer tree stores raw, and a
+		 * variable place takes no string arm ({@code .kb/declarations-type-checks.md},
+		 * "On the JVM"). Each name maps to the binding it was declared over, as
+		 * {@link #declaredIntegers}; scoped the same way.
+		 */
+		Map<String, JvmIntFusionCompiler.DeclaredArray> declaredArrays = Map.of();
 
 		/**
 		 * The declared-float locals kept in a raw {@code double} slot pair, keyed by name

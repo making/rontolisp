@@ -3973,8 +3973,10 @@ final class JvmJavaDirectSites {
 	// _jseq(Object)Object[]: the bridge's element list of a cons or a Lisp array (the
 	// value is one: _jkind said so), or null when it is not a sequence -- a dotted list,
 	// a list ending in a function value, an array of rank other than 1, a quantized
-	// matrix. A packed fixnum vector's Long.MIN_VALUE is nil; a fill pointer bounds the
-	// elements; a specialized vector's are the values aref reads (emitPackedElements).
+	// matrix. A packed fixnum vector's Long.MIN_VALUE is what its list holds at the
+	// slot -- nil, or that integer (JvmArrayRuntimeBuilder.emitSentinelElement); a fill
+	// pointer bounds the elements; a specialized vector's are the values aref reads
+	// (emitPackedElements).
 	private Method buildSequence(Utf8Entry name, Utf8Entry desc) {
 		MethodCode a = new MethodCode();
 		ClassEntry objects = cls("[Ljava/lang/Object;");
@@ -4125,7 +4127,14 @@ final class JvmJavaDirectSites {
 		a.invokestatic(method("java/lang/Long", "valueOf", "(J)Ljava/lang/Long;"));
 		a.goto_(stored);
 		a.labelBinding(nil);
-		a.aconst_null();
+		// what the sentinel stands for: nil, or the integer its list slot holds
+		a.iload(4);
+		a.loadConstant(1);
+		a.iadd();
+		a.istore(7);
+		JvmArrayRuntimeBuilder.emitSentinelElement(a, cls("java/util/ArrayList"),
+				method("java/util/ArrayList", "get", "(I)Ljava/lang/Object;"),
+				method("java/util/ArrayList", "size", "()I"), 0, 7);
 		a.labelBinding(stored);
 		a.aastore();
 		a.iinc(4, 1);

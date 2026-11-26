@@ -93,6 +93,7 @@ final class JvmLetCompiler {
 		Map<String, Integer> savedRawDoubleLocals = new HashMap<>(ctx.rawDoubleLocals);
 		Set<String> savedDeclaredDoubles = ctx.declaredDoubles;
 		Map<String, Object> savedDeclaredIntegers = ctx.declaredIntegers;
+		Map<String, JvmIntFusionCompiler.DeclaredArray> savedDeclaredArrays = ctx.declaredArrays;
 		Map<String, JvmIntFusionCompiler.LocalIntLambda> savedLocalIntLambdas = new HashMap<>(ctx.localIntLambdas);
 		int savedNextLocal = ctx.nextLocal;
 		// The body-head float declarations (.kb/declarations-type-checks.md): a BOUND
@@ -292,6 +293,8 @@ final class JvmLetCompiler {
 		ctx.declaredDoubles = bodyDeclaredDoubles;
 		ctx.declaredIntegers = JvmIntFusionCompiler.bodyDeclaredIntegers(savedDeclaredIntegers, letVarNames,
 				parts.subList(2, parts.size()), ctx);
+		ctx.declaredArrays = JvmIntFusionCompiler.bodyDeclaredArrays(savedDeclaredArrays, letVarNames,
+				parts.subList(2, parts.size()), ctx);
 		// A body under dynamic bindings is a PROTECTED REGION whose cleanups restore
 		// each special to its saved state (the previous value, or the previous cell --
 		// possibly null = no binding on this thread), innermost first: the unwind-protect
@@ -320,6 +323,7 @@ final class JvmLetCompiler {
 			ctx.rawDoubleLocals = savedRawDoubleLocals;
 			ctx.declaredDoubles = savedDeclaredDoubles;
 			ctx.declaredIntegers = savedDeclaredIntegers;
+			ctx.declaredArrays = savedDeclaredArrays;
 			ctx.localIntLambdas = savedLocalIntLambdas;
 			ctx.nextLocal = savedNextLocal;
 		};

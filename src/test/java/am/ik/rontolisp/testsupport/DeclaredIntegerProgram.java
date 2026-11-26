@@ -18,8 +18,11 @@ public final class DeclaredIntegerProgram {
 	 * declared n. Java's quotients: an int's, a long's under its mask and the exact one,
 	 * each over MIN_VALUE / -1, and a zero divisor; qf's undeclared dividend takes the
 	 * generic quotient. Rho's locals are a Keccak step's: c and d bound once, a, b and i
-	 * reassigned, every tree over them alone. The values are the interpreter's, and a
-	 * JDK's for the hash, the shifts, the masked quotients and rho.
+	 * reassigned, every tree over them alone. Sched is a message schedule over the arrays
+	 * Java declares, its long[] read and stored as an int[] and a byte[] are; put64's
+	 * last store finds the array widened by the one before (Long.MIN_VALUE is its packed
+	 * shape's nil). The values are the interpreter's, and a JDK's for the hash, the
+	 * shifts, the masked quotients, rho and sched.
 	 */
 	public static final String PROGRAM = """
 			(deftype int32 () '(signed-byte 32))
@@ -76,6 +79,27 @@ public final class DeclaredIntegerProgram {
 			                   (setq b (%mask-signed-field 64 (+ b d)))))
 			               (setq i (%mask-signed-field 32 (+ i 1)))))
 			    (list a b (< a b))))
+			(defun sched (w data k n)
+			  (declare (type (or null (simple-array (signed-byte 64) (*))) w)
+			           (type (or null (simple-array (unsigned-byte 8) (*))) data)
+			           (type (or null (simple-array (unsigned-byte 32) (*))) k) (type (signed-byte 32) n))
+			  (let ((i 0))
+			    (declare (type (signed-byte 32) i))
+			    (loop while (< i 4)
+			          do (setf (aref w i) (logior (%mask-signed-field 64 (ash (%mask-signed-field 8 (aref data (* 2 i))) 56))
+			                                      (logand (%mask-signed-field 8 (aref data (+ (* 2 i) 1))) 255)))
+			             (setq i (%mask-signed-field 32 (+ i 1))))
+			    (loop while (< i n)
+			          do (setf (aref w i) (%mask-signed-field 64 (+ (the (signed-byte 64) (aref w (- i 4)))
+			                                                         (* (the (signed-byte 64) (aref w (- i 1)))
+			                                                            6364136223846793005))))
+			             (setf (aref k (- i 4)) (%mask-signed-field 32 (the (signed-byte 64) (aref w i))))
+			             (setq i (%mask-signed-field 32 (+ i 1))))
+			    (list w k)))
+			(defun put64 (w i x)
+			  (declare (type (simple-array (signed-byte 64) (*)) w) (type (signed-byte 32) i) (type (signed-byte 64) x))
+			  (setf (aref w i) x)
+			  (+ (the (signed-byte 64) (aref w i)) 1))
 			(print (hash32 "the quick brown fox jumps over the lazy dog"))
 			(print (lanes 9223372036854775807 3))
 			(print (lanes -9223372036854775808 63))
@@ -89,6 +113,11 @@ public final class DeclaredIntegerProgram {
 			(print (list (qf 7.5) (qf 7/2) (qf (expt 2 70))))
 			(print (rho (list 1 2) 0))
 			(print (rho (list 6364136223846793005 -9223372036854775807) 24))
+			(print (sched (make-array 8 :initial-element 0)
+			              (make-array 8 :element-type '(unsigned-byte 8) :initial-contents '(1 255 128 7 0 0 254 9))
+			              (make-array 4 :element-type '(unsigned-byte 32)) 8))
+			(print (let ((w (make-array 2 :initial-element 0)))
+			         (list (put64 w 0 9223372036854775806) (put64 w 1 -9223372036854775808) (put64 w 0 3) w)))
 			""";
 
 	/** What {@link #PROGRAM} prints. */
@@ -105,6 +134,8 @@ public final class DeclaredIntegerProgram {
 			:ZERO
 			(9 7 590295810358705651718)
 			(1 2 T)
-			(-4678252771848532188 -4437309255459745240 T)""";
+			(-4678252771848532188 -4437309255459745240 T)
+			(#(72057594037928191 -9223372036854775801 0 -144115188075855863 -4476132075883103852 9222974912752700171 4872450367180449263 -380189227759289332) #(2973858196 1459014411 696460783 1677343756))
+			(9223372036854775807 -9223372036854775807 4 #(3 -9223372036854775808))""";
 
 }

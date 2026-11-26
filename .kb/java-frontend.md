@@ -4396,8 +4396,8 @@ names throw). Written from the standards and JDK 25's answers to probes.
   shared by shape) carry. Hoisting SHA-3's 59 round temporaries out of its loop changed
   nothing (389 ms); a declared local read mostly raw is one `long` slot, a tree over such slots
   computed in place (l73, [jvm-int-fusion.md](jvm-int-fusion.md), "Exact locals"): SHA3-256
-  62-112 ms on Graal, 85-203 on C2. SHA-512 is unchanged on Graal, its arrays' reads and
-  stores still boxed (`.todo/m28`).
+  62-112 ms on Graal, 85-203 on C2. Their arrays read and stored raw: SHA-512 Graal 120-132 ->
+  91-106 ms, C2 335-504 -> 138-161 ([jvm-int-fusion.md](jvm-int-fusion.md), "Declared arrays").
 - **Sizes** (Preview 1 / component / JVM class, bytes): a program naming no digest is
   byte-identical: l72 left `NoDigest`, `RandomOnly`, `Constant`, `Computed`, `Login` and
   `RandomText` so in all three forms, `examples/java/shop` on wasm (324,175 / 335,139; its JVM
@@ -4584,9 +4584,10 @@ once.
   enhanced `for` take `(the (simple-array E (*)) (or a (%java-npe)))`. A null array's access
   evaluates its index (and a store its value) before the backends' check raises what
   `%java-exception-of` makes `NullPointerException` (`.kb/declarations-type-checks.md`,
-  "Declaration-driven array emission"). The interpreter and the JVM read no array declaration;
-  the wasm kinds and a general array's integer elements do (`.kb/wasm-int-fusion.md`, "Ranges,
-  and sites with nothing to bail on"). Measured on wasm: a
+  "Declaration-driven array emission"). The interpreter reads no array declaration; the wasm
+  kinds and a general array's integer elements do (`.kb/wasm-int-fusion.md`, "Ranges, and sites
+  with nothing to bail on"), and the JVM's fused reads and stores take the pinned arm
+  (`.kb/jvm-int-fusion.md`, "Declared arrays"). Measured on wasm: a
   `long[1000]` summed 10^5 times 93.8 -> 1.44 s, 2,000,000 zone offsets 4.83 -> 2.59 s. **The
   premise (the dispatch's bytes) held only where nothing had pinned the array**: the type-test
   fold had already cut each undeclared site to the general arm, `make-array` inits made arrays

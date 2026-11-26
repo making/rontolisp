@@ -718,6 +718,9 @@ final class JvmArrayCompiler {
 
 	static void compileAset(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		// (%aset array subscript... value)
+		if (JvmIntFusionCompiler.tryCompileStore(cons, ctx, className, false)) {
+			return;
+		}
 		List<LispVal> args = cons.toList();
 		// The order compileAref above evaluates and checks in, the value evaluated with
 		// the other arguments before the rank check; the store helper then coerces the
@@ -740,10 +743,7 @@ final class JvmArrayCompiler {
 		else if (subscriptCount == 1) {
 			compileSubscript(args.get(2), ctx, className);
 			JvmExprCompiler.compileExpr(value, ctx, className);
-			emitRankCheck(ctx, className, arrSlot, LispNames.ASET, subscriptCount);
-			invokeNamedHelper(ctx, className, ivOr(ctx, JvmIntArrayRuntimeBuilder.ASET1,
-					JvmFloatArrayRuntimeBuilder.ASET1, JvmArrayRuntimeBuilder.ASET1),
-					JvmArrayRuntimeBuilder.ASET1_DESC);
+			emitStore1(ctx, className, arrSlot);
 		}
 		else if (subscriptCount == 2) {
 			compileSubscript(args.get(2), ctx, className);
@@ -762,6 +762,54 @@ final class JvmArrayCompiler {
 					fvOr(ctx, JvmFloatArrayRuntimeBuilder.ASETN, JvmArrayRuntimeBuilder.ASETN),
 					JvmArrayRuntimeBuilder.ASETN_DESC);
 		}
+	}
+
+	/**
+	 * A rank-1 store's checks and write, over the array, the checked subscript and the
+	 * value on the stack: the array (reloaded from {@code arrSlot}) is checked of rank 1,
+	 * then the store helper coerces the value and checks the bound, answering the value
+	 * as stored. Also the fallback of a fused store ({@code JvmIntFusionCompiler}).
+	 * @param ctx the compile context, its operator the store's
+	 * @param className the class the helpers live in
+	 * @param arrSlot the local holding the array
+	 */
+	static void emitStore1(JvmLispCompiler.Ctx ctx, String className, int arrSlot) {
+		emitRankCheck(ctx, className, arrSlot, LispNames.ASET, 1);
+		invokeNamedHelper(ctx, className, ivOr(ctx, JvmIntArrayRuntimeBuilder.ASET1, JvmFloatArrayRuntimeBuilder.ASET1,
+				JvmArrayRuntimeBuilder.ASET1), JvmArrayRuntimeBuilder.ASET1_DESC);
+	}
+
+	/**
+	 * A single-pair {@code (setf (aref var idx) value)} or {@code (setf (svref var idx)
+	 * value)} whose variable a declaration pins to an array representation
+	 * ({@code JvmIntFusionCompiler.declaredArray}), as the {@code (%aset var idx value)}
+	 * its expansion reaches without the {@code stringp}/{@code schar-set} branch the
+	 * expansion wraps around a variable place: no array a declaration pins is a string
+	 * ({@code DeclaredArrayTypes} maps no character element type). Null for every other
+	 * form, which keeps the ordinary expansion. The wasm twin is
+	 * {@code WasmArrayCompiler.nonStringArefStore}.
+	 * @param form the form
+	 * @param ctx the compile context
+	 * @return the store, located where the setf is, or null
+	 */
+	static @Nullable LispCons nonStringArefStore(LispVal form, JvmLispCompiler.Ctx ctx) {
+		if (!(form instanceof LispCons setfCons) || !setfCons.isProperList()
+				|| !(setfCons.car() instanceof LispSymbol setf) || !LispNames.SETF.equals(setf.name())) {
+			return null;
+		}
+		List<LispVal> parts = setfCons.toList();
+		if (parts.size() != 3 || !(parts.get(1) instanceof LispCons place) || !place.isProperList()
+				|| !(place.car() instanceof LispSymbol head)
+				|| !LispNames.AREF.equals(head.name()) && !LispNames.SVREF.equals(head.name())) {
+			return null;
+		}
+		List<LispVal> placeParts = place.toList();
+		if (placeParts.size() != 3 || !(placeParts.get(1) instanceof LispSymbol arrayVar)
+				|| JvmIntFusionCompiler.declaredArray(arrayVar.name(), ctx) == null) {
+			return null;
+		}
+		return am.ik.rontolisp.SourceProvenance.inherit(setfCons, new LispCons(new LispSymbol(LispNames.ASET),
+				new LispCons(arrayVar, new LispCons(placeParts.get(2), new LispCons(parts.get(2), LispNil.INSTANCE)))));
 	}
 
 	// Packages the rank subscript expressions starting at args[firstSub] into an

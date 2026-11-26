@@ -23,6 +23,7 @@ import am.ik.rontolisp.PackageRegistry;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.SourceProvenance;
 import am.ik.rontolisp.compiler.ArgumentOrder;
+import am.ik.rontolisp.compiler.DeclaredArrayTypes;
 import am.ik.rontolisp.compiler.DeclaredIntegerTypes;
 import am.ik.rontolisp.macro.LispMacroExpander;
 import org.jspecify.annotations.Nullable;
@@ -186,6 +187,23 @@ final class JvmIntFusionCompiler {
 		int arrParam = -1;
 
 		int longSlot = -1;
+
+		/**
+		 * The representation a declaration pins the array to ({@link #arrayPinOfExpr}):
+		 * the read takes that arm alone, and anything else bails as an unpinned read's
+		 * other shapes do. Null: every packed arm.
+		 */
+		DeclaredArrayTypes.@Nullable Pin pin;
+
+		/**
+		 * Whether this is a store's array ({@link #tryCompileStore}): evaluated first,
+		 * its index an operand of the tree, read never; {@link #storeIndexSlot} then
+		 * holds the index as an {@code int}, which the store takes once the value is
+		 * computed.
+		 */
+		boolean store;
+
+		int storeIndexSlot = -1;
 
 		ArefLeaf(LispVal arrayExpr, int site) {
 			this.arrayExpr = arrayExpr;
@@ -458,6 +476,96 @@ final class JvmIntFusionCompiler {
 	}
 
 	/**
+	 * A variable an array declaration pins ({@link DeclaredArrayTypes.Pin}), with the
+	 * binding the declaration was made over ({@link #declaredLong}'s rule).
+	 *
+	 * @param binding what a read of the name resolved to where the declaration was read
+	 * @param pin the representation the declaration proves
+	 */
+	record DeclaredArray(Object binding, DeclaredArrayTypes.Pin pin) {
+	}
+
+	/**
+	 * The pin of a variable whose array declaration is its binding's own, or null: a
+	 * binder that shadows the name without telling
+	 * {@link JvmLispCompiler.Ctx#declaredArrays} changes what the name resolves to, and
+	 * the declaration stops answering.
+	 */
+	static DeclaredArrayTypes.@Nullable Pin declaredArray(String name, JvmLispCompiler.Ctx ctx) {
+		DeclaredArray declared = ctx.declaredArrays.get(name);
+		return declared != null && !ctx.specialVars.contains(name) && declared.binding().equals(bindingOf(name, ctx))
+				? declared.pin() : null;
+	}
+
+	/**
+	 * The declared arrays of a defun's or lambda's body head ({@link #declaredArray}).
+	 */
+	static Map<String, DeclaredArray> functionBodyDeclaredArrays(List<LispVal> bodyExprs, JvmLispCompiler.Ctx ctx) {
+		return declaredArraysOver(Map.of(), List.of(), DeclaredArrayTypes.functionBody(bodyExprs, ctx.closRegistry),
+				ctx);
+	}
+
+	/**
+	 * The declared arrays of a body that binds {@code bound}, as
+	 * {@link #bodyDeclaredIntegers}.
+	 */
+	static Map<String, DeclaredArray> bodyDeclaredArrays(Map<String, DeclaredArray> outer,
+			java.util.Collection<String> bound, List<LispVal> bodyExprs, JvmLispCompiler.Ctx ctx) {
+		return declaredArraysOver(outer, bound, DeclaredArrayTypes.declared(bodyExprs, ctx.closRegistry), ctx);
+	}
+
+	private static Map<String, DeclaredArray> declaredArraysOver(Map<String, DeclaredArray> outer,
+			java.util.Collection<String> bound, Map<String, DeclaredArrayTypes.Pin> declared, JvmLispCompiler.Ctx ctx) {
+		if (declared.isEmpty() && (outer.isEmpty() || bound.stream().noneMatch(outer::containsKey))) {
+			return outer;
+		}
+		Map<String, DeclaredArray> names = new HashMap<>(outer);
+		bound.forEach(names::remove);
+		declared.forEach((name, pin) -> {
+			if (!ctx.specialVars.contains(name)) {
+				names.put(name, new DeclaredArray(bindingOf(name, ctx), pin));
+			}
+		});
+		return names.isEmpty() ? Map.of() : names;
+	}
+
+	/**
+	 * The representation a declaration pins the array an access names to, where this
+	 * compile holds that representation and a fused site reads it raw: a declared
+	 * variable ({@link #declaredArray}), or a {@code (the spec form)} whose spec, with
+	 * what its form proves, pins one. A packed integer vector's kind needs the packed
+	 * vectors ({@code Ctx.usesIntArray}); a packed float array's is no integer's and is
+	 * not answered.
+	 * @param expr the access's array form
+	 * @param ctx the compile context
+	 * @return the pin, or null when nothing pins one the fused read can take
+	 */
+	static DeclaredArrayTypes.@Nullable Pin arrayPinOfExpr(LispVal expr, JvmLispCompiler.Ctx ctx) {
+		DeclaredArrayTypes.Pin pin = pinOfExpr(expr, ctx);
+		if (pin == null || !ctx.usesArrays) {
+			return null;
+		}
+		return switch (pin.kind()) {
+			case U8, U16, U32 -> ctx.usesIntArray ? pin : null;
+			case GENERAL -> pin;
+			case FLOAT -> null;
+		};
+	}
+
+	private static DeclaredArrayTypes.@Nullable Pin pinOfExpr(LispVal expr, JvmLispCompiler.Ctx ctx) {
+		if (expr instanceof LispSymbol sym) {
+			return declaredArray(sym.name(), ctx);
+		}
+		if (expr instanceof LispCons cons && cons.isProperList() && cons.car() instanceof LispSymbol head
+				&& LispNames.THE.equals(head.name()) && cons.toList().size() == 3) {
+			DeclaredArrayTypes.Pin pin = DeclaredArrayTypes.pinOfSpec(cons.toList().get(1), ctx.closRegistry);
+			DeclaredArrayTypes.Pin inner = pinOfExpr(cons.toList().get(2), ctx);
+			return pin == null ? inner : pin.and(inner);
+		}
+		return null;
+	}
+
+	/**
 	 * Resolves a bare symbol to the dual representation that reads it HERE, in the same
 	 * order {@link JvmExprCompiler#compileSymbolRef} does: an unboxed {@code let} local
 	 * first, then -- only when no lexical binding of the name is in scope -- an unboxed
@@ -550,6 +658,18 @@ final class JvmIntFusionCompiler {
 		/** Set when a fused fast path shifts: the {@code _fxAsh} helper is emitted. */
 		boolean usesFxAsh;
 
+		/**
+		 * Set when a pinned read or store takes a general array: {@code _fxLongs} is
+		 * emitted.
+		 */
+		boolean usesLongs;
+
+		/** Set when a pinned read takes a general array: {@code _fxElt} is emitted. */
+		boolean usesElement;
+
+		/** Set when a pinned store takes a general array: {@code _fxPut} is emitted. */
+		boolean usesPut;
+
 		State(String className) {
 			this.className = className;
 		}
@@ -575,6 +695,11 @@ final class JvmIntFusionCompiler {
 		/** Whether this is a site's probe ({@link #probeFor}), not its fused method. */
 		boolean isProbe() {
 			return this.cmpMask == PROBE;
+		}
+
+		/** Whether this is an array store's method ({@link #tryCompileStore}). */
+		boolean isStore() {
+			return this.cmpMask == STORE_EFFECT || this.cmpMask == STORE_VALUE;
 		}
 
 	}
@@ -917,6 +1042,124 @@ final class JvmIntFusionCompiler {
 	static boolean tryCompileDefunCall(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		return cons.car() instanceof LispSymbol name && ctx.inlinableDefuns.containsKey(name.name())
 				&& tryCompile(cons, ctx, className, true);
+	}
+
+	/** The synthetic root of a store method: the store's array leaf and the value. */
+	private static final String STORE_ROOT = "%store";
+
+	/** The {@link Pending#cmpMask} of a store method in statement position: no value. */
+	private static final int STORE_EFFECT = -3;
+
+	/** The {@link Pending#cmpMask} of a store method whose value is read. */
+	private static final int STORE_VALUE = -4;
+
+	/**
+	 * Compiles a rank-1 {@code (%aset array index value)} of an array a declaration pins
+	 * ({@link #arrayPinOfExpr}) as one outlined method over the store's leaves: the
+	 * array, the index and the value are operands of one tree, the index and the value
+	 * computed raw, the representation's one arm checked and written -- an
+	 * {@code (unsigned-byte 8)} vector's byte, an {@code (unsigned-byte 16|32)} vector's
+	 * masked word once its width is the declared one, a general array's word
+	 * ({@link #emitFastStore}) -- and the value boxed only where it is read
+	 * ({@code forEffect} false). Anything else -- another shape, an index out of range,
+	 * an overflow, a value no integer -- falls back to the generic store from the same
+	 * arguments, which checks and reports as the unfused {@code %aset} does
+	 * ({@link #emitStoreFallback}). Returns {@code false}, emitting nothing, where the
+	 * form does not qualify.
+	 * @param cons the {@code %aset} form
+	 * @param ctx the compile context
+	 * @param className the class being generated
+	 * @param forEffect whether the store's value is dropped
+	 * @return whether the store was compiled
+	 */
+	static boolean tryCompileStore(LispCons cons, JvmLispCompiler.Ctx ctx, String className, boolean forEffect) {
+		if (!enabled(ctx) || !cons.isProperList()) {
+			return false;
+		}
+		List<LispVal> parts = cons.toList();
+		if (parts.size() != 4) {
+			return false;
+		}
+		DeclaredArrayTypes.Pin pin = arrayPinOfExpr(parts.get(1), ctx);
+		if (pin == null || LispMacroExpander.containsComplex(parts.get(2))
+				|| LispMacroExpander.containsComplex(parts.get(3))) {
+			// A complex voids every integer proof, as in tryCompile.
+			return false;
+		}
+		Classified classified = classifyOrdered(cons, ctx, site -> classifyStore(cons, pin, ctx, site));
+		if (!(classified.root() instanceof OpNode root)) {
+			return false;
+		}
+		Site site = classified.site();
+		if (countOps(root) > MAX_OPS || site.leaves.size() > MAX_EXPR_LEAVES) {
+			return false;
+		}
+		boolean lineFree = reportsOnlyCallerSite(root, ctx.siteCurrent);
+		MethodRefEntry ref = methodFor(root, site.leaves, forEffect ? STORE_EFFECT : STORE_VALUE, false, false, ctx);
+		pushLeaves(classified, lineFree, ctx, className);
+		ctx.body.invokestatic(ref);
+		return true;
+	}
+
+	/**
+	 * A store's tree: the array's leaf first, as the generic store evaluates it, its
+	 * index under it, then the value; null where a part does not classify, or where the
+	 * index may not be an integer -- which the generic store reports as soon as it is
+	 * evaluated -- while a value leaf after it can be observed.
+	 */
+	private static @Nullable Node classifyStore(LispCons cons, DeclaredArrayTypes.Pin pin, JvmLispCompiler.Ctx ctx,
+			Site site) {
+		List<LispVal> parts = cons.toList();
+		ArefLeaf target = new ArefLeaf(parts.get(1), sourceSite(cons, ctx, site));
+		target.pin = pin;
+		target.store = true;
+		registerLeaf(target, site);
+		int indexLeaves = site.leaves.size();
+		Node index = classify(parts.get(2), ctx, Map.of(), site, 0);
+		if (index == null) {
+			return null;
+		}
+		target.indexNode = index;
+		int valueLeaves = site.leaves.size();
+		Node value = classify(parts.get(3), ctx, Map.of(), site, 0);
+		if (value == null) {
+			return null;
+		}
+		if (!subscriptChecked(index, site.leaves.subList(indexLeaves, valueLeaves))) {
+			for (Node leaf : site.leaves.subList(valueLeaves, site.leaves.size())) {
+				LispVal evaluated = evaluatedForm(leaf);
+				if (evaluated != null
+						&& !ArgumentOrder.isQuiet(evaluated, name -> JvmArithCompiler.isQuietVariable(name, ctx))) {
+					return null;
+				}
+			}
+		}
+		return new OpNode(STORE_ROOT, List.of(target, value), target.site);
+	}
+
+	/**
+	 * Whether a store's index is an integer by what its leaves are -- constants, declared
+	 * and exact variables -- and its operations, which answer an integer or signal in
+	 * their order ({@link #planOrder}): no aref read, draw or call through a cell, whose
+	 * value may be anything.
+	 */
+	private static boolean subscriptChecked(Node index, List<Node> indexLeaves) {
+		for (Node leaf : indexLeaves) {
+			boolean integer = switch (leaf) {
+				case ExprLeaf l -> l.trusted;
+				case RawLeaf l -> l.trusted || l.src.isExact();
+				default -> false;
+			};
+			if (!integer) {
+				return false;
+			}
+		}
+		for (Node node : inTreeOrder(List.of(index))) {
+			if (node instanceof CelledCall) {
+				return false;
+			}
+		}
+		return true;
 	}
 
 	/**
@@ -1500,8 +1743,11 @@ final class JvmIntFusionCompiler {
 		}
 		if (site.ordering.opaque.contains(expr)) {
 			// A form whose application must happen where it stands (OrderPlan): the
-			// caller evaluates it, in order, like any other leaf.
-			return registerLeaf(new ExprLeaf(expr), site);
+			// caller evaluates it, in order, like any other leaf -- a (the <integer
+			// range> (aref ..)) read the leaf its spec trusts.
+			ExprLeaf leaf = new ExprLeaf(expr);
+			leaf.trusted = integerThe(expr, ctx) != null;
+			return registerLeaf(leaf, site);
 		}
 		@Nullable LispVal outerTop = site.top;
 		site.top = expr;
@@ -1574,6 +1820,15 @@ final class JvmIntFusionCompiler {
 					leaf.trusted = true;
 				}
 				return read;
+			}
+			if (env.isEmpty() && ctx.usesArrays && parts.get(2) instanceof LispCons read && read.isProperList()
+					&& read.car() instanceof LispSymbol readHead && LispNames.AREF.equals(readHead.name())
+					&& read.toList().size() == 3 && arrayPinOfExpr(read.toList().get(1), ctx) != null) {
+				// The element of an array a declaration pins: the aref leaf its bare read
+				// is, which reads that one representation raw. The spec asks nothing the
+				// read's bail does not already answer.
+				return arefLeaf(read.toList().get(1), read.toList().get(2), sourceSite(read, ctx, site), ctx, site,
+						depth);
 			}
 			if (env.isEmpty()) {
 				ExprLeaf leaf = new ExprLeaf(expr);
@@ -1682,6 +1937,19 @@ final class JvmIntFusionCompiler {
 			case LispNames.ONE_MINUS -> makeOp(LispNames.SUB, List.of(args.get(0), new ConstLeaf(1)), sourceSite);
 			default -> makeOp(op, args, sourceSite);
 		}, site);
+	}
+
+	/**
+	 * The interval a {@code (the spec form)} gives its value, where the spec is an
+	 * integer range within {@code long} ({@link DeclaredIntegerTypes#of}); null for any
+	 * other form.
+	 */
+	private static DeclaredIntegerTypes.@Nullable Interval integerThe(LispVal expr, JvmLispCompiler.Ctx ctx) {
+		if (!(expr instanceof LispCons cons) || !cons.isProperList() || !(cons.car() instanceof LispSymbol head)
+				|| !LispNames.THE.equals(head.name()) || cons.toList().size() != 3) {
+			return null;
+		}
+		return DeclaredIntegerTypes.of(cons.toList().get(1), ctx.closRegistry);
 	}
 
 	/**
@@ -1886,6 +2154,7 @@ final class JvmIntFusionCompiler {
 	@Nullable private static Node arefLeaf(LispVal arrayExpr, LispVal indexExpr, int sourceSite, JvmLispCompiler.Ctx ctx,
 			Site site, int depth) {
 		ArefLeaf leaf = new ArefLeaf(arrayExpr, sourceSite);
+		leaf.pin = arrayPinOfExpr(arrayExpr, ctx);
 		registerLeaf(leaf, site);
 		Node index = classify(indexExpr, ctx, Map.of(), site, depth);
 		if (index == null) {
@@ -2023,7 +2292,8 @@ final class JvmIntFusionCompiler {
 				default -> throw new IllegalStateException("not a registered leaf: " + leaf);
 			}
 		}
-		desc.append(")").append(cmpMask >= 0 ? "I" : rawReturn ? "J" : "Ljava/lang/Object;");
+		desc.append(")")
+			.append(cmpMask >= 0 ? "I" : cmpMask == STORE_EFFECT ? "V" : rawReturn ? "J" : "Ljava/lang/Object;");
 		String key = cmpMask + (clearsChannel ? "c" : "") + "|" + desc + "|" + structureKey(root, leaves);
 		MethodRefEntry existing = state.byKey.get(key);
 		if (existing != null) {
@@ -2119,7 +2389,11 @@ final class JvmIntFusionCompiler {
 			}
 			case ExprLeaf leaf -> sb.append(leaf.trusted ? 'E' : 'e').append(leafIndex(leaf, leaves));
 			case ArefLeaf leaf -> {
-				sb.append('a').append(leafIndex(leaf, leaves));
+				sb.append(leaf.store ? 's' : 'a').append(leafIndex(leaf, leaves));
+				if (leaf.pin != null) {
+					// One representation's arm is another method than every arm.
+					sb.append(':').append(leaf.pin.kind().name());
+				}
 				if (leaf.site != 0) {
 					sb.append('@').append(leaf.site);
 				}
@@ -2905,6 +3179,9 @@ final class JvmIntFusionCompiler {
 			ctx.body.lcmp();
 			emitCompareResult(branchForMask(pending.cmpMask()), ctx);
 		}
+		else if (pending.isStore()) {
+			emitFastStore(pending, ctx, state, bails, longArrayClass, java.util.Objects.requireNonNull(arefScratch));
+		}
 		else {
 			emitFast(pending.root(), ctx, state);
 			if (!pending.rawReturn()) {
@@ -2932,7 +3209,7 @@ final class JvmIntFusionCompiler {
 		// not the doubles. A method answering a declared local's raw long has none: a
 		// Double is the false declaration the fallback's cast reports.
 		MethodCode.Label fallbackBails = bails;
-		if (!pending.rawReturn() && doubleEligible(pending.root(), pending.leaves())
+		if (!pending.rawReturn() && !pending.isStore() && doubleEligible(pending.root(), pending.leaves())
 				&& ctx.nextLocal + 2 * pending.leaves().size() <= 250) {
 			ctx.body.labelBinding(bails);
 			MethodCode.Label doubleBails = ctx.body.newLabel();
@@ -3126,8 +3403,13 @@ final class JvmIntFusionCompiler {
 	private static void emitArefRead(ArefLeaf leaf, JvmLispCompiler.Ctx ctx, State state, MethodCode.Label bails,
 			ClassEntry longArrayClass, ArefScratch scratch) {
 		// idx = (int) <index>, an index past the int range bailing: _aref1 checks the
-		// whole value against the bound, so no truncation may read an element.
-		int idxSlot = scratch.idxSlot();
+		// whole value against the bound, so no truncation may read an element. A store's
+		// index stays in a slot of its own until the value is computed, its reads
+		// reusing the scratch.
+		if (leaf.store) {
+			leaf.storeIndexSlot = ctx.allocTemp();
+		}
+		int idxSlot = leaf.store ? leaf.storeIndexSlot : scratch.idxSlot();
 		Node index = java.util.Objects.requireNonNull(leaf.indexNode);
 		if (index instanceof ConstLeaf c) {
 			if (c.value() != (int) c.value()) {
@@ -3149,8 +3431,15 @@ final class JvmIntFusionCompiler {
 			emitLongLoad(rawSlotOf(index), ctx);
 			ctx.body.iload(idxSlot).i2l().lcmp().ifne(bails);
 		}
+		if (leaf.store) {
+			return;
+		}
 		leaf.longSlot = ctx.allocTemp();
 		ctx.allocTemp();
+		if (leaf.pin != null) {
+			emitPinnedRead(leaf, idxSlot, ctx, state, bails, longArrayClass, scratch);
+			return;
+		}
 		MethodCode.Label done = ctx.body.newLabel();
 		if (ctx.usesIntArray) {
 			// An (unsigned-byte 8) vector, the bare byte[]: element b[idx] & 0xFF.
@@ -3212,6 +3501,245 @@ final class JvmIntFusionCompiler {
 			ctx.body.goto_(bails);
 		}
 		ctx.body.labelBinding(done);
+	}
+
+	/**
+	 * A read of an array a declaration pins ({@link ArefLeaf#pin}): the one arm of its
+	 * representation, every other value bailing as an unpinned read's other shapes do --
+	 * {@code nil}, an index out of range, and the value a false declaration names. The
+	 * elements of an {@code (unsigned-byte 16)} and an {@code (unsigned-byte 32)} vector
+	 * are read alike, stored masked. A general array's element is
+	 * {@link #buildElement}'s, from the packed shape or the boxed one.
+	 */
+	private static void emitPinnedRead(ArefLeaf leaf, int idxSlot, JvmLispCompiler.Ctx ctx, State state,
+			MethodCode.Label bails, ClassEntry longArrayClass, ArefScratch scratch) {
+		switch (java.util.Objects.requireNonNull(leaf.pin).kind()) {
+			case U8 -> {
+				int octets = emitPackedVector(leaf.arrParam, idxSlot, ctx, bails, ctx.cp.classEntry("[B"),
+						scratch.headerSlot(), 0);
+				ctx.body.aload(octets).iload(idxSlot).baload();
+				JvmEmitHelper.emitIntConst(ctx, 0xFF);
+				ctx.body.iand().i2l().lstore(leaf.longSlot);
+			}
+			case U16, U32 -> {
+				int longs = emitPackedVector(leaf.arrParam, idxSlot, ctx, bails, longArrayClass, scratch.dataSlot(), 1);
+				ctx.body.aload(longs).iload(idxSlot).iconst_1().iadd().laload().lstore(leaf.longSlot);
+			}
+			default -> {
+				// The packed shape inline, its element read raw; any other shape through
+				// _fxElt, out of line so that its profile is the other shapes' alone.
+				// Long.MIN_VALUE is the packed shape's sentinel and the helper's "no
+				// integer here": the fallback answers what it stands for.
+				MethodCode.Label boxed = ctx.body.newLabel();
+				MethodCode.Label read = ctx.body.newLabel();
+				int data = scratch.dataSlot();
+				ctx.body.aload(leaf.arrParam).invokestatic(longsRef(ctx, state)).astore(data);
+				ctx.body.aload(data).ifnull(boxed);
+				emitBound(idxSlot, data, 0, ctx, bails);
+				ctx.body.aload(data).iload(idxSlot).laload().goto_(read);
+				ctx.body.labelBinding(boxed);
+				ctx.body.aload(leaf.arrParam).iload(idxSlot).invokestatic(elementRef(ctx, state));
+				ctx.body.labelBinding(read);
+				ctx.body.lstore(leaf.longSlot).lload(leaf.longSlot);
+				JvmEmitHelper.emitRawLong(JvmArrayRuntimeBuilder.NIL_SENTINEL, ctx);
+				ctx.body.lcmp().ifeq(bails);
+			}
+		}
+	}
+
+	/**
+	 * A packed integer vector's arm: the array in {@code arrSlot} cast into {@code slot}
+	 * when it is one, the index checked against its elements (its length less
+	 * {@code header}, the width slot of a {@code long[]} vector); anything else bails.
+	 * @return {@code slot}
+	 */
+	private static int emitPackedVector(int arrSlot, int idxSlot, JvmLispCompiler.Ctx ctx, MethodCode.Label bails,
+			ClassEntry arrayClass, int slot, int header) {
+		ctx.body.aload(arrSlot).instanceOf(arrayClass).ifeq(bails);
+		ctx.body.aload(arrSlot).checkcast(arrayClass).astore(slot);
+		emitBound(idxSlot, slot, header, ctx, bails);
+		return slot;
+	}
+
+	/**
+	 * Bails unless {@code 0 <= idx < length - header} of the array in {@code arraySlot}.
+	 */
+	private static void emitBound(int idxSlot, int arraySlot, int header, JvmLispCompiler.Ctx ctx,
+			MethodCode.Label bails) {
+		ctx.body.iload(idxSlot).iflt(bails);
+		ctx.body.iload(idxSlot).aload(arraySlot).arraylength();
+		if (header != 0) {
+			JvmEmitHelper.emitIntConst(ctx, header);
+			ctx.body.isub();
+		}
+		ctx.body.if_icmpge(bails);
+	}
+
+	private static MethodRefEntry longsRef(JvmLispCompiler.Ctx ctx, State state) {
+		state.usesLongs = true;
+		return JvmEmitHelper.selfMethod(ctx, state.className, LONGS, LONGS_DESC);
+	}
+
+	private static MethodRefEntry elementRef(JvmLispCompiler.Ctx ctx, State state) {
+		state.usesElement = true;
+		return JvmEmitHelper.selfMethod(ctx, state.className, ELEMENT, ELEMENT_DESC);
+	}
+
+	private static MethodRefEntry putRef(JvmLispCompiler.Ctx ctx, State state) {
+		state.usesPut = true;
+		return JvmEmitHelper.selfMethod(ctx, state.className, PUT, PUT_DESC);
+	}
+
+	/** {@code _fxLongs}: a general array's packed storage ({@link #buildLongs}). */
+	static final String LONGS = "_fxLongs";
+
+	static final String LONGS_DESC = "(Ljava/lang/Object;)[J";
+
+	/** {@code _fxElt}: a general array's integer element ({@link #buildElement}). */
+	static final String ELEMENT = "_fxElt";
+
+	static final String ELEMENT_DESC = "(Ljava/lang/Object;I)J";
+
+	/** {@code _fxPut}: a general array's raw store ({@link #buildPut}). */
+	static final String PUT = "_fxPut";
+
+	static final String PUT_DESC = "(Ljava/lang/Object;IJ)Z";
+
+	/**
+	 * {@code _fxLongs(Object a)}: the flat {@code long[]} of a rank-1 general array in
+	 * its packed shape ({@code .kb/adjustable-arrays.md}, "Representation"), else
+	 * {@code null}: {@link #emitRank1Shape}'s test, the one the unpinned read makes
+	 * inline ({@link #emitArefRead}). Every pinned read and store of a general array asks
+	 * it first and reads or writes the packed shape at its own site; a JIT inlines it.
+	 */
+	static JvmNumericRuntimeBuilder.NumericMethod buildLongs(ConstantPool cp) {
+		MethodCode a = new MethodCode();
+		MethodCode.Label none = a.newLabel();
+		// locals: 0 = a, 1 = the list, 2 = its header
+		emitRank1Shape(a, cp, 1, 2, none, none);
+		a.aload(2).loadConstant(5).aaload().checkcast(cp.classEntry("[J")).areturn();
+		a.labelBinding(none);
+		a.aconst_null().areturn();
+		return new JvmNumericRuntimeBuilder.NumericMethod(cp.utf8Entry(LONGS), cp.utf8Entry(LONGS_DESC), a);
+	}
+
+	/**
+	 * {@code _fxElt(Object a, int i)}: element {@code i} of a rank-1 general array as a
+	 * raw {@code long}, from either shape it has ({@code .kb/adjustable-arrays.md},
+	 * "Representation") -- the packed one's {@code long[]}, or the boxed one's
+	 * {@code Long} past the header (a length-3 header, or a length-5 one remembering an
+	 * element type, its slot 3 null) -- and {@code Long.MIN_VALUE} for anything else: an
+	 * index out of range, the packed shape's sentinel, an element no {@code Long},
+	 * another rank, a character vector, a view, no general array. That value is the fused
+	 * read's bail ({@link #emitPinnedRead}): the fallback reads the element as the
+	 * unfused {@code aref} does, that integer itself included. The shape test is the one
+	 * the unpinned read makes inline ({@link #emitArefRead}). What a pinned read of a
+	 * general array calls where {@link #buildLongs} answers no packed shape.
+	 */
+	static JvmNumericRuntimeBuilder.NumericMethod buildElement(ConstantPool cp) {
+		ClassEntry longClass = cp.classEntry("java/lang/Long");
+		MethodCode a = new MethodCode();
+		MethodCode.Label none = a.newLabel();
+		MethodCode.Label boxed = a.newLabel();
+		// locals: 0 = a, 1 = i, 2 = the list, 3 = its header, 4 = the long[] or element
+		emitRank1Shape(a, cp, 2, 3, boxed, none);
+		a.aload(3).loadConstant(5).aaload().checkcast(cp.classEntry("[J")).astore(4);
+		a.iload(1).iflt(none);
+		a.iload(1).aload(4).arraylength().if_icmpge(none);
+		a.aload(4).iload(1).laload().lreturn();
+		a.labelBinding(boxed);
+		emitBoxedBound(a, cp, 2, none);
+		a.aload(2).iload(1).loadConstant(1).iadd();
+		a.invokevirtual(cp.methodRef(cp.classEntry("java/util/ArrayList"), "get", "(I)Ljava/lang/Object;"));
+		a.astore(4);
+		a.aload(4).instanceOf(longClass).ifeq(none);
+		a.aload(4).checkcast(longClass).invokevirtual(cp.methodRef(longClass, "longValue", "()J")).lreturn();
+		a.labelBinding(none);
+		a.ldc(cp.entries().longEntry(JvmArrayRuntimeBuilder.NIL_SENTINEL)).lreturn();
+		return new JvmNumericRuntimeBuilder.NumericMethod(cp.utf8Entry(ELEMENT), cp.utf8Entry(ELEMENT_DESC), a);
+	}
+
+	/**
+	 * {@code _fxPut(Object a, int i, long v)}: {@code v} stored as element {@code i} of a
+	 * rank-1 general array, answering whether it was: raw into the packed shape's
+	 * {@code long[]} (but {@code Long.MIN_VALUE}, its sentinel, whose store is the
+	 * generic one), boxed into the boxed shape's slot; nothing for every value
+	 * {@link #buildElement} answers nothing for. Where Lisp code can run on another
+	 * thread ({@code concurrent}) the packed shape's list holds every element boxed as
+	 * well, and the store stores the box too, as {@code _rmSet} does
+	 * ({@code .kb/adjustable-arrays.md}, "Where another thread can run the program's
+	 * Lisp"). A store answered false wrote nothing: the fused store's fallback stores
+	 * through the generic helpers.
+	 */
+	static JvmNumericRuntimeBuilder.NumericMethod buildPut(ConstantPool cp, boolean concurrent) {
+		ClassEntry arrayListClass = cp.classEntry("java/util/ArrayList");
+		MethodRefEntry alSet = cp.methodRef(arrayListClass, "set", "(ILjava/lang/Object;)Ljava/lang/Object;");
+		MethodRefEntry longValueOf = cp.methodRef(cp.classEntry("java/lang/Long"), "valueOf", "(J)Ljava/lang/Long;");
+		MethodCode a = new MethodCode();
+		MethodCode.Label none = a.newLabel();
+		MethodCode.Label boxed = a.newLabel();
+		// locals: 0 = a, 1 = i, 2-3 = v, 4 = the list, 5 = its header, 6 = the long[]
+		emitRank1Shape(a, cp, 4, 5, boxed, none);
+		a.lload(2).ldc(cp.entries().longEntry(JvmArrayRuntimeBuilder.NIL_SENTINEL)).lcmp().ifeq(none);
+		a.aload(5).loadConstant(5).aaload().checkcast(cp.classEntry("[J")).astore(6);
+		a.iload(1).iflt(none);
+		a.iload(1).aload(6).arraylength().if_icmpge(none);
+		a.aload(6).iload(1).lload(2).lastore();
+		if (concurrent) {
+			a.aload(4).iload(1).loadConstant(1).iadd().lload(2).invokestatic(longValueOf);
+			a.invokevirtual(alSet).pop();
+		}
+		a.loadConstant(1).ireturn();
+		a.labelBinding(boxed);
+		emitBoxedBound(a, cp, 4, none);
+		a.aload(4).iload(1).loadConstant(1).iadd().lload(2).invokestatic(longValueOf);
+		a.invokevirtual(alSet).pop();
+		a.loadConstant(1).ireturn();
+		a.labelBinding(none);
+		a.loadConstant(0).ireturn();
+		return new JvmNumericRuntimeBuilder.NumericMethod(cp.utf8Entry(PUT), cp.utf8Entry(PUT_DESC), a);
+	}
+
+	/**
+	 * The shape test of {@link #buildElement} and {@link #buildPut} over the value in
+	 * local 0: an {@code ArrayList} (into {@code listSlot}) whose slot 0 is a header
+	 * (into {@code headerSlot}) of rank 1; falls through for the packed shape (length 6),
+	 * branches to {@code boxed} for a length-3 header or a length-5 one with no
+	 * displacement target, to {@code none} for anything else.
+	 */
+	private static void emitRank1Shape(MethodCode a, ConstantPool cp, int listSlot, int headerSlot,
+			MethodCode.Label boxed, MethodCode.Label none) {
+		ClassEntry arrayListClass = cp.classEntry("java/util/ArrayList");
+		ClassEntry objectArrayClass = cp.classEntry("[Ljava/lang/Object;");
+		MethodCode.Label notPacked = a.newLabel();
+		a.aload(0).instanceOf(arrayListClass).ifeq(none);
+		a.aload(0).checkcast(arrayListClass).astore(listSlot);
+		a.aload(listSlot).invokevirtual(cp.methodRef(arrayListClass, "size", "()I")).ifeq(none);
+		a.aload(listSlot).loadConstant(0);
+		a.invokevirtual(cp.methodRef(arrayListClass, "get", "(I)Ljava/lang/Object;")).astore(headerSlot);
+		a.aload(headerSlot).instanceOf(objectArrayClass).ifeq(none);
+		a.aload(headerSlot).checkcast(objectArrayClass).astore(headerSlot);
+		a.aload(headerSlot).loadConstant(0).aaload().checkcast(objectArrayClass).arraylength();
+		a.loadConstant(1).if_icmpne(none);
+		a.aload(headerSlot).arraylength().loadConstant(6).if_icmpne(notPacked);
+		MethodCode.Label packed = a.newLabel();
+		a.goto_(packed);
+		a.labelBinding(notPacked);
+		a.aload(headerSlot).arraylength().loadConstant(3).if_icmpeq(boxed);
+		a.aload(headerSlot).arraylength().loadConstant(5).if_icmpne(none);
+		a.aload(headerSlot).loadConstant(3).aaload().ifnull(boxed);
+		a.goto_(none);
+		a.labelBinding(packed);
+	}
+
+	/**
+	 * Branches to {@code none} unless {@code 0 <= i < size - 1} of the list in
+	 * {@code listSlot}: the boxed shape's elements follow its header.
+	 */
+	private static void emitBoxedBound(MethodCode a, ConstantPool cp, int listSlot, MethodCode.Label none) {
+		a.iload(1).iflt(none);
+		a.iload(1).aload(listSlot).invokevirtual(cp.methodRef(cp.classEntry("java/util/ArrayList"), "size", "()I"));
+		a.loadConstant(1).isub().if_icmpge(none);
 	}
 
 	/**
@@ -3439,6 +3967,9 @@ final class JvmIntFusionCompiler {
 			JvmEmitHelper.emitIntConst(ctx, pending.cmpMask());
 			ctx.body.iand().ireturn();
 		}
+		else if (pending.isStore()) {
+			emitStoreFallback(pending, ctx, className);
+		}
 		else if (pending.rawReturn()) {
 			// What the generic helpers answered, as the declared local holds it: anything
 			// but a Long -- a bignum, a float, nil -- is the false declaration, whose
@@ -3453,6 +3984,117 @@ final class JvmIntFusionCompiler {
 		}
 		ClassEntry arithEx = ctx.cp.classEntry("java/lang/ArithmeticException");
 		ctx.body.exceptionCatch(tryStart, tryEnd, handler, arithEx);
+	}
+
+	/**
+	 * A store method's fast path ({@link #tryCompileStore}), its index already in the
+	 * target's slot ({@link #emitArefRead}): the value raw, then the representation's
+	 * checks -- each failing one bails before anything is written -- and the one raw
+	 * write, answering nothing or the element as stored, boxed.
+	 */
+	private static void emitFastStore(Pending pending, JvmLispCompiler.Ctx ctx, State state, MethodCode.Label bails,
+			ClassEntry longArrayClass, ArefScratch scratch) {
+		OpNode root = (OpNode) pending.root();
+		ArefLeaf target = (ArefLeaf) root.args().get(0);
+		int idxSlot = target.storeIndexSlot;
+		emitFast(root.args().get(1), ctx, state);
+		int value = ctx.allocTemp();
+		ctx.allocTemp();
+		ctx.body.lstore(value);
+		DeclaredArrayTypes.Kind kind = java.util.Objects.requireNonNull(target.pin).kind();
+		switch (kind) {
+			case U8 -> {
+				// The narrowing store is the mask.
+				int octets = emitPackedVector(target.arrParam, idxSlot, ctx, bails, ctx.cp.classEntry("[B"),
+						scratch.headerSlot(), 0);
+				ctx.body.aload(octets).iload(idxSlot).lload(value).l2i().bastore();
+				if (pending.cmpMask() == STORE_VALUE) {
+					ctx.body.lload(value);
+					JvmEmitHelper.emitRawLong(0xFF, ctx);
+					ctx.body.land().lstore(value);
+				}
+			}
+			case U16, U32 -> {
+				int longs = emitPackedVector(target.arrParam, idxSlot, ctx, bails, longArrayClass, scratch.dataSlot(),
+						1);
+				// The width the vector was made at (its slot 0) masks the store: another
+				// than the declared one bails.
+				ctx.body.aload(longs).iconst_0().laload();
+				JvmEmitHelper.emitRawLong(kind.packedIntWidth(), ctx);
+				ctx.body.lcmp().ifne(bails);
+				ctx.body.lload(value);
+				JvmEmitHelper.emitRawLong((1L << kind.packedIntWidth()) - 1, ctx);
+				ctx.body.land().lstore(value);
+				ctx.body.aload(longs).iload(idxSlot).iconst_1().iadd().lload(value).lastore();
+			}
+			default -> {
+				// The packed shape inline where no other thread stores into it, any
+				// other shape and every one where one can through _fxPut. Long.MIN_VALUE
+				// is the packed shape's sentinel, its store the generic one, which puts
+				// the integer in the list as well.
+				ctx.body.lload(value);
+				JvmEmitHelper.emitRawLong(JvmArrayRuntimeBuilder.NIL_SENTINEL, ctx);
+				ctx.body.lcmp().ifeq(bails);
+				MethodCode.Label stored = ctx.body.newLabel();
+				if (!ctx.threadScopedSpecials) {
+					MethodCode.Label boxed = ctx.body.newLabel();
+					int data = scratch.dataSlot();
+					ctx.body.aload(target.arrParam).invokestatic(longsRef(ctx, state)).astore(data);
+					ctx.body.aload(data).ifnull(boxed);
+					emitBound(idxSlot, data, 0, ctx, bails);
+					ctx.body.aload(data).iload(idxSlot).lload(value).lastore().goto_(stored);
+					ctx.body.labelBinding(boxed);
+				}
+				ctx.body.aload(target.arrParam).iload(idxSlot).lload(value).invokestatic(putRef(ctx, state));
+				ctx.body.ifeq(bails);
+				ctx.body.labelBinding(stored);
+			}
+		}
+		if (pending.cmpMask() == STORE_EFFECT) {
+			ctx.body.return_();
+		}
+		else {
+			ctx.body.lload(value);
+			JvmEmitHelper.boxLong(ctx);
+			ctx.body.areturn();
+		}
+	}
+
+	/**
+	 * A store method's fallback: the unfused {@code %aset} from the same arguments, in
+	 * its order -- the index computed and checked an integer, the value computed, the
+	 * array checked of rank 1, the store helper coercing the value and checking the bound
+	 * -- under the store's operator, so each reports as the generic store does.
+	 */
+	private static void emitStoreFallback(Pending pending, JvmLispCompiler.Ctx ctx, String className) {
+		OpNode root = (OpNode) pending.root();
+		ArefLeaf target = (ArefLeaf) root.args().get(0);
+		ctx.body.aload(target.arrParam);
+		emitFallback(java.util.Objects.requireNonNull(target.indexNode), ctx, className);
+		@Nullable String outer = ctx.operator;
+		ctx.restoreSite(target.site);
+		ctx.operator = LispNames.ASET;
+		try {
+			JvmArrayCompiler.emitSubscriptCheck(ctx);
+		}
+		finally {
+			ctx.operator = outer;
+		}
+		emitFallback(root.args().get(1), ctx, className);
+		ctx.restoreSite(target.site);
+		ctx.operator = LispNames.ASET;
+		try {
+			JvmArrayCompiler.emitStore1(ctx, className, target.arrParam);
+		}
+		finally {
+			ctx.operator = outer;
+		}
+		if (pending.cmpMask() == STORE_EFFECT) {
+			ctx.body.pop().return_();
+		}
+		else {
+			ctx.body.areturn();
+		}
 	}
 
 	private static MethodRefEntry longIntValue(JvmLispCompiler.Ctx ctx) {
