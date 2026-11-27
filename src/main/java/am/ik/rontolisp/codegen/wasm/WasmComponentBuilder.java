@@ -1387,8 +1387,10 @@ public final class WasmComponentBuilder {
 					: (WasmComponentImportCompiler.asyncReadNeedsRealloc(async)
 							? ComponentWriter.canonFutureReadAsync(type, 0, 0)
 							: ComponentWriter.canonFutureReadAsync(type, 0));
-			case WRITE -> async.stream() ? ComponentWriter.canonStreamWriteAsync(type, 0)
+			case WRITE, WRITE_START -> async.stream() ? ComponentWriter.canonStreamWriteAsync(type, 0)
 					: ComponentWriter.canonFutureWriteAsync(type, 0);
+			// the SYNCHRONOUS variant: what the write completed with, or its withdrawal
+			case WRITE_SETTLE -> ComponentWriter.canonFutureCancelWrite(type);
 			case DROP_READABLE -> async.stream() ? ComponentWriter.canonStreamDropReadable(type)
 					: ComponentWriter.canonFutureDropReadable(type);
 			case DROP_WRITABLE -> async.stream() ? ComponentWriter.canonStreamDropWritable(type)

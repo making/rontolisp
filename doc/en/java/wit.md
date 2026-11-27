@@ -166,12 +166,15 @@ JDK, where the driver leaves the URL to another one.
 | `enum` | a member enum |
 | `flags` | a `Set` of a member enum |
 | a resource, `own<R>`, `borrow<R>` | the member interface |
+| a resource the interface takes from another with `use` | the member interface of the `@WitImport` interface standing for that other one |
 | `result<T, E>` | `WitResult<T, E>`; as a method's answer, also its ok arm, the error arm a `WitException` |
 | an `async func` | a method that waits for the host's answer, as a call does |
 | `stream<T>` the host answers | `am.ik.rontolisp.wit.WitStream<T>`, of values or of resources |
 | `stream<u8>` the host answers | `java.io.InputStream` |
 | `stream<u8>` the program hands the host | `java.util.function.Consumer<java.io.OutputStream>`, handed the writable end |
+| `option<stream<u8>>` the program hands the host | `Optional<Consumer<OutputStream>>`, empty for no stream |
 | `future<T>` the host answers | `am.ik.rontolisp.wit.WitFuture<T>`, a `future<result<T, E>>` a `WitFuture<T>` (`Void` for no ok value) |
+| `future<T>` the program hands the host | a `WitFuture<T>` the program made, of the same type |
 
 An unsigned integer is held in the Java type of its width, its bits as Java holds them:
 the `u8` 200 is the `byte` -56 (`Byte.toUnsignedInt` gives 200 back).
@@ -221,6 +224,25 @@ catch (WitException e) {
 A resource is released by `close()`: the handle goes back to the host, and the store stays.
 A closed resource throws `IllegalStateException`, and a second `close()` does nothing. An
 `own` handle given to a function passes to it, and the object is closed.
+
+A resource an interface takes from another with `use` is declared once, in the
+`@WitImport` interface standing for the interface that defines it, and named from there:
+`wasi:http/client`'s `send` takes the `request` and answers the `response` of
+`wasi:http/types`. That interface declares the member interface whether or not a function
+of its own takes or answers the resource. A record, a variant, an enum or flags taken
+with `use` is a member type of the interface taking it, declared there again.
+
+```console
+// interface client { use types.{request, response, error-code};
+//                    send: async func(request: request) -> result<response, error-code>; }
+@WitImport(value = "wasi:http/client@0.3.0", wit = "wit/http.wit")
+public interface Client {
+
+    Types.Response send(Types.Request request);
+
+    sealed interface ErrorCode { ... }
+}
+```
 
 ### What the host answers in pieces
 
@@ -274,6 +296,50 @@ sent.get();
 A read waits where it is, as a call does: every thread of the program waits with it. Under
 a JDK and on the interpreter and the JVM the provider hands the consumer an `OutputStream`
 of its own.
+
+An `option<stream<u8>>` parameter is an `Optional<Consumer<OutputStream>>`:
+`Optional.empty()` hands the host no stream, and a consumer is handed the writable end as
+above.
+
+### A future the program hands the host
+
+A `future<T>` parameter is a `WitFuture<T>` the program made: `WitFuture.of(value)`,
+`WitFuture.failed(exception)` for the error arm of a `future<result<T, E>>` (a
+`WitException` whose `error()` is the error of its Java type), or a class of its own. In
+a component the binding calls its `get()` once, before the call, and leaves the value
+where the host finds it whenever it reads the future: within that call or within a later
+one. The call does not wait for the host to read it, and nothing is left for the program
+to release. Under a JDK and on the interpreter and the JVM the provider is handed the
+object and calls `get()` when it reads.
+
+```console
+// request.new: static func(headers: headers, contents: option<stream<u8>>,
+//     trailers: future<result<option<trailers>, error-code>>, options: option<request-options>)
+//     -> tuple<request, future<result<_, error-code>>>;
+Sent requestNew(Fields headers, Optional<Consumer<OutputStream>> contents,
+        WitFuture<Optional<Fields>> trailers, Optional<RequestOptions> options);
+
+record Sent(Request request, WitFuture<Void> transmission) {
+}
+```
+
+```console
+Types.Sent sent = types.requestNew(types.fieldsNew(), Optional.empty(),
+        WitFuture.of(Optional.empty()), Optional.empty());      // no body, no trailers
+sent.request().setAuthority(Optional.of("example.com"));
+Types.Response response = client.send(sent.request());          // waits for the response
+Types.Body body = types.responseConsumeBody(response, WitFuture.of(null));
+try (InputStream in = body.contents()) {
+    System.out.println(new String(in.readAllBytes(), StandardCharsets.UTF_8));
+}
+```
+
+So a program is an HTTP client over `wasi:http@0.3.0` under `wasmtime run -S http=y`: it
+sends a request with no body and reads the response. A request's body is the limit: a
+write to the `OutputStream` waits until the host has read it, and wasmtime reads a
+request's body within `client.send`, which the program is waiting on. A body that ends
+at once (the consumer closes the stream) is sent, and its trailers are then read from
+the future.
 
 ## Exporting a WIT world
 
@@ -475,17 +541,21 @@ public static int pause(int ms) throws InterruptedException {
   negative `long` is the `u64` of its bits.
 - A native executable (`--native`) runs a Preview 1 module whose runner provides no WIT
   interface, so a program calling one does not start there.
-- Refused at the declaration: a `future` the program hands the host (the binding could
-  write it only after the call, and a host may read it only within a later call the program
-  waits on: wasmtime's HTTP types read a request's trailers within `client.send`); a
-  stream of values or of resources the program hands the host, which the guest cannot
-  write; a `stream<u8>` the program hands an `async func` (the call waits while the host
-  reads what the program writes only after it) or holds in another type; a `future` of a
-  `bool`, a `list`, `flags` or an `option` (whose value the boundary cannot tell from a
-  future its writer dropped); an
+- Refused at the declaration: a stream of values or of resources the program hands the
+  host, which the guest cannot write; a `stream<u8>` the program hands an `async func`
+  (the call waits while the host reads what the program writes only after it); a
+  `stream<u8>` the program hands over in another type than an `option` of its own, and a
+  `future` it hands over in any other type (a record's field, a list's element); a
+  `future` the host answers of a `bool`, a `list`, `flags` or an `option` (whose value the
+  boundary cannot tell from a future its writer dropped; one the program hands over may be
+  of any of them); an
   `option` of a `bool`, a `list`, `flags` or an `option`, whose none the boundary cannot
-  tell apart; a resource of another interface; a tuple in an error arm thrown as a
+  tell apart; a resource of another interface declared anywhere but in the `@WitImport`
+  interface standing for that interface; a tuple in an error arm thrown as a
   `WitException`, for which no type is written (a `WitResult` answer carries it).
+- A stream the program writes is read by the host when the host chooses: a write that
+  waits for a read the host makes only within a later call never returns. So a
+  `wasi:http` request carries no body under wasmtime, which reads it within `client.send`.
 - A world's export carries no resource, `stream` or `future`; an `async func` export
   takes `bool`, the integers, `f64` and `string`
   alone, as does every export under `--no-gc --component`, an `async func` among them. Two

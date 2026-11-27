@@ -111,7 +111,7 @@ public final class JavaHostBoundary implements JavaBoundary {
 			members.add(new Function(member.name(), kind(member), member.resource(), member.function(),
 					List.copyOf(params), type(member.result()), member.async(), member.at()));
 		}
-		return new WitInterface(described.id(), path, List.copyOf(members));
+		return new WitInterface(described.id(), path, List.copyOf(members), described.used());
 	}
 
 	@Override

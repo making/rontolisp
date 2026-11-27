@@ -25181,6 +25181,9 @@ class WasmLispCompilerIntegrationTest {
 
 							(rontolisp:async-defun get-url (authority path)
 							  (let* ((trailers (http:trailers-future-new))
+							         ;; the request-side trailers (ok none), resolved before the host
+							         ;; holds the readable end: -resolve does not wait for the reader.
+							         (resolved (http:trailers-future-resolve (cdr trailers) (cons :ok nil)))
 							         (reqpair (http:request-new (http:fields-new) nil (car trailers) nil))
 							         (req (car reqpair)))
 							    (http:request-set-method req :get)
@@ -25192,9 +25195,6 @@ class WasmLispCompilerIntegrationTest {
 							    ;; send is an `async func`: the generated binding starts the subtask and
 							    ;; returns an ordinary promise whose await drives the waitable-set.
 							    (let ((promise (client:send req)))
-							      ;; resolve the request-side trailers (ok none) so the host can finish
-							      ;; sending.
-							      (http:trailers-future-write (cdr trailers) (cons :ok nil))
 							      (let* ((response (rontolisp:await promise))
 							             (status (http:response-get-status-code response))
 							             (res (http:transmit-future-new))
@@ -25209,11 +25209,12 @@ class WasmLispCompilerIntegrationTest {
 							        ;; the transmission-result future goes unread, but only once the
 							        ;; body is in: wasmtime aborts the connection when its reader drops.
 							        (http:transmit-future-drop-readable (car (cdr reqpair)))
-							        (list :status status :body text)))))
+							        (list :status status :body text :resolved resolved)))))
 
 							(let ((r (rontolisp:await (get-url "127.0.0.1:%d" "/hello"))))
 							  (print (getf r :status))
-							  (print (getf r :body)))
+							  (print (getf r :body))
+							  (print (getf r :resolved)))
 							"""
 						.formatted(port));
 			wasmtime.copyFileToContainer(Transferable.of(backendBytes), path("wit-fetch-backend.wasm"));
@@ -25234,7 +25235,7 @@ class WasmLispCompilerIntegrationTest {
 					+ path("wit-fetch.component.wasm"));
 		});
 		assertThat(result.getExitCode()).as("stderr: %s", result.getStderr()).isZero();
-		assertThat(result.getStdout().trim()).isEqualTo("200\n\"backend /hello\"");
+		assertThat(result.getStdout().trim()).isEqualTo("200\n\"backend /hello\"\nNIL");
 	}
 
 	@Test

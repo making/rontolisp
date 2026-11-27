@@ -1408,21 +1408,53 @@ that `javac` and a JDK build and run. User-facing: `doc/*/java/wit.md`.
   has gone, `IOException`), `close()` the drop. Rejected: an `InputStream` parameter the
   binding copies after the call (`send` is called once, so a request/response exchange could
   not write its second request); a pipe class in `rontolisp-java-api` (the binding would need
-  a public hook into it). Refused at the method: a future handed over (the binding could write
-  it only after the call; measured 2026-11-26, wasmtime 51: a write of `request.new`'s
-  trailers future after the call never returns, the host reading it within `client.send`,
-  which the subset waits on -- what it needs is `.todo/m89`); a stream of values or handles
-  handed over; a `stream<u8>` handed to an async func (the call waits while the host reads
-  what can be written only after it, as wasi:cli's `write-via-stream`) or held in another
-  type. Measured 2026-11-26: programs using neither byte-identical (`PageHits.java`,
+  a public hook into it). An `option<stream<u8>>` parameter is an
+  `Optional<Consumer<OutputStream>>`, no pair made for none. Refused at the method: a stream
+  of values or handles handed over; a `stream<u8>` handed to an async func (the call waits
+  while the host reads what can be written only after it, as wasi:cli's `write-via-stream`)
+  or held in another type than that option. Measured 2026-11-26: programs using neither byte-identical (`PageHits.java`,
   m55's rows program, `examples/net/echo-client.lisp`, `page-hits.lisp`); a Lisp program
   with `:blocking t` reading bytes in asyncMode 61,796 -> 61,418 B (no scheduler entry).
   Pins: `JavaWitImportTest.aStreamAndAFutureTheHostAnswersAreReadInPieces` (JDK,
-  interpreter, JVM, the directive, the refusals: both byte directions through the
-  program's provider), `.everyKindOfValueCrossesWasmtimesOwnInterfaces` (`tcp-socket.connect`,
+  interpreter, JVM, the directive, the refusals: both byte directions and the futures handed
+  over through the program's provider), `.everyKindOfValueCrossesWasmtimesOwnInterfaces`
+  (the HTTP client: trailers read after a withdrawal, a region reused, a request never sent;
+  `tcp-socket.connect`,
   an async func, refused by wasmtime 51 as a blocking call; `listen`'s connections, `send`
   written after the call, `receive` read; `wasi:cli/stdin` read in a thread before its bytes
   arrive), the Spin leg of `ClPostgresE2eTest` (the example reading its notes in pieces).
+- **A future the program hands the host** (2026-11-27, m89): a `future<T>` parameter is a
+  `WitFuture<T>` the program made (`WitFuture.of`, `.failed`, a class of its own), the mapping
+  of the one a host answers. Decided from what a program knows between `request.new`,
+  `client.send` and `consume-body`: a request's trailers and a body reader's `res` are known
+  where they are handed over, and the host reads them within a later call the subset waits
+  on (`.kb/wit.md`, "`<alias>-resolve`"). So the binding calls `get()` once BEFORE the call --
+  a result's arm by what it answers or throws, the error cast to the mapping's type -- then
+  makes the pair and resolves it (`Writer.resolved`): a host reading within that very call
+  finds the value, an async func's included, and a `get()` that throws leaves no end. Under a
+  JDK, the interpreter and the JVM the provider is handed the object. Rejected: a type the
+  program completes later (nothing between those calls needs it while a body cannot be
+  written during `client.send`; a class of the program's implementing `WitFuture` leaves the
+  way open); `CompletableFuture` (m55's reasons, and a class every binding would carry). One
+  the program hands over may be of a `bool`, a list or an option: the nil a dropped writer
+  reads as is a reader's ambiguity. Held in another type it is refused, as a stream is.
+- **A resource of another interface** (`use`; 2026-11-27, m89): the member interface of the
+  `@WitImport` interface standing for the interface defining it, told by the type written
+  (`Checker.matches`: its outer class is checked, its id the one `Description.used` names),
+  its handle the class THAT interface's binding makes (`Writer.handleClass`,
+  `<Home>$Wit.R<n>`). `wasi:http/client`'s `send` needs it. So an import's `resources` holds
+  every member interface named after a resource of its WIT, reached by its own methods or
+  not (checked, a class written; unreached it is not lowered: the eight outputs below
+  byte-identical). A value type taken with `use` stays a member type of the using interface
+  (`.todo/n01`).
+- **An HTTP client over `wasi:http@0.3.0`** (measured 2026-11-27, wasmtime 51, against
+  `wasmtime serve`): a GET of a Java program 304,488 B / 91,644 gzip; in a thread (asyncMode)
+  too. A request BODY is not sent: a write to the handed `OutputStream` waits for a read
+  wasmtime makes within `client.send` (the program hangs at the write; `.todo/n00`). A body
+  that ends at once is, and its trailers are then read. wasmtime answers `other("PATCH")` as
+  `patch`. Byte-identical before and after, 8 outputs: `PageHits` (component, class), the
+  Lisp `page-hits`, `echo-client.lisp`, `http-hello.lisp`, and m68's sockets, rows and stdin
+  programs.
 - **Pinned by** `JavaWitImportTest` (a JDK, the interpreter, the JVM, the component, the
   Preview 1 refusal; the WIT's lookup; every kind of value; the checks, the two drafts;
   `aResultIsAWitResultWhereverTheWitHasOne`, a `--no-wasi` module under a JavaScript host) and

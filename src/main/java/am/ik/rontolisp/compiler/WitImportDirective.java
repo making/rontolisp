@@ -756,6 +756,19 @@ public final class WitImportDirective {
 				validateAsyncAlias(target, witPath, locations, resolver, alias, member, op);
 				boundMembers.add(member);
 				String name = bindingName(directive, member);
+				if ("resolve".equals(op)) {
+					// a write that does not wait for its reader: Lisp over the two
+					// halves of the write and the drop, each a built-in of its own name
+					String start = internalName(directive, member, "-start");
+					String settle = internalName(directive, member, "-settle");
+					String drop = internalName(directive, member, "-drop");
+					componentMembers.add(asyncBinding(alias.name(), "write-start", start, false));
+					componentMembers.add(asyncBinding(alias.name(), "write-settle", settle, false));
+					componentMembers.add(asyncBinding(alias.name(), "drop-writable", drop, false));
+					bindings.addAll(resolveForms(name, start, settle, drop, internalName(directive, member, "-pending"),
+							internalName(directive, member, "-free")));
+					continue;
+				}
 				componentMembers.add(asyncBinding(alias.name(), op, name, directive.blocking() && "read".equals(op)));
 			}
 		}
@@ -1038,8 +1051,10 @@ public final class WitImportDirective {
 	 *
 	 * @param id the interface's canonical id (the provider registry's key)
 	 * @param members every member a lowering may bind, in the lowering's order
+	 * @param used the resources the interface takes from another with {@code use}: each
+	 * by the name its definition has, with the canonical id of the interface defining it
 	 */
-	public record Description(String id, List<Member> members) {
+	public record Description(String id, List<Member> members, Map<String, String> used) {
 	}
 
 	/**
@@ -1148,7 +1163,21 @@ public final class WitImportDirective {
 								false, WitSource.at(witPath, locations, item)));
 			}
 		}
-		return new Description(ifaceId, List.copyOf(members));
+		Map<String, String> used = new java.util.LinkedHashMap<>();
+		for (WitItem item : iface.items()) {
+			if (!(item instanceof WitItem.Use use)) {
+				continue;
+			}
+			for (WitItem.UseName taken : use.names()) {
+				WitResolver.Owned owned = resolver.resolveOwned(iface,
+						taken.alias() == null ? taken.name() : taken.alias());
+				String owner = owned == null ? null : resolver.canonicalId(owned.owner());
+				if (owned != null && owned.item() instanceof WitItem.ResourceDef resource && owner != null) {
+					used.put(resource.name(), owner);
+				}
+			}
+		}
+		return new Description(ifaceId, List.copyOf(members), java.util.Collections.unmodifiableMap(used));
 	}
 
 	// The shape of a resource handle: the `self` a method borrows, the one a constructor
@@ -1381,7 +1410,9 @@ public final class WitImportDirective {
 	// both kinds -- a future is a one-shot stream as far as its handle lifecycle goes --
 	// but for `cancel-read`, a stream's alone: it withdraws a read the async scheduler
 	// left in flight, and only a stream read is ever left so.
-	private static final List<String> ASYNC_OPS = List.of("new", "read", "write", "drop-readable", "drop-writable");
+	// A future's alone too: `resolve`, the write that does not wait for its reader.
+	private static final List<String> ASYNC_OPS = List.of("new", "read", "write", "drop-readable", "drop-writable",
+			"resolve");
 
 	private static final List<String> STREAM_ASYNC_OPS = List.of("new", "read", "write", "drop-readable",
 			"drop-writable", "cancel-read");
@@ -1403,6 +1434,89 @@ public final class WitImportDirective {
 			items.add(new LispSymbol(":BLOCKING"));
 		}
 		return list(items);
+	}
+
+	// <alias>-resolve: the future's value written for whenever its reader takes it. A
+	// write the reader has not taken stays pending, what was lowered for it kept in a
+	// region of linear memory, and the writable end can be dropped only once the write
+	// has completed, which nothing tells the guest of unasked. So each call first asks
+	// after the writes the earlier ones left: a settled one's end is dropped and its
+	// region freed, and the new value is lowered into the largest free region where it
+	// fits. What is outstanding is what the readers have not taken yet, plus the writes
+	// settled since the last call.
+	private static final String RESOLVE = """
+			(defvar $pending nil)
+			(defvar $free nil)
+			(defun $resolve (writable value)
+			  (let ((kept nil))
+			    (dolist (entry $pending)
+			      (if ($settle (car entry) (car (cdr entry)))
+			          (progn ($drop (car entry)) (setq $free (cons (cdr entry) $free)))
+			          (setq kept (cons entry kept))))
+			    (setq $pending kept))
+			  (let ((region nil))
+			    (dolist (each $free)
+			      (if (or (null region) (> (cdr each) (cdr region)))
+			          (setq region each)))
+			    (let ((started ($start writable value (car region) (cdr region))))
+			      (cond ((null started) ($drop writable))
+			            ((consp started) (setq $pending (cons (cons writable started) $pending)))
+			            (t (let ((left nil))
+			                 (dolist (each $free)
+			                   (if (eq each region) nil (setq left (cons each left))))
+			                 (setq $free left))
+			               (setq $pending (cons (cons writable region) $pending))))))
+			  nil)
+			""";
+
+	private static List<LispVal> resolveForms(String name, String start, String settle, String drop, String pending,
+			String free) {
+		Map<String, String> names = Map.of("$resolve", name, "$start", start, "$settle", settle, "$drop", drop,
+				"$pending", pending, "$free", free);
+		List<LispVal> forms = new ArrayList<>();
+		int[] at = { 0 };
+		while (true) {
+			LispVal form = templateForm(RESOLVE, at, names);
+			if (form == null) {
+				return forms;
+			}
+			forms.add(form);
+		}
+	}
+
+	// One form of a template of lists and symbols: a `$name` is the symbol the table
+	// names, spelled as it is; any other is the reader's spelling of it.
+	private static @Nullable LispVal templateForm(String text, int[] at, Map<String, String> names) {
+		while (at[0] < text.length() && Character.isWhitespace(text.charAt(at[0]))) {
+			at[0]++;
+		}
+		if (at[0] == text.length()) {
+			return null;
+		}
+		if (text.charAt(at[0]) == '(') {
+			at[0]++;
+			List<LispVal> elements = new ArrayList<>();
+			while (true) {
+				while (Character.isWhitespace(text.charAt(at[0]))) {
+					at[0]++;
+				}
+				if (text.charAt(at[0]) == ')') {
+					at[0]++;
+					return list(elements);
+				}
+				elements.add(Objects.requireNonNull(templateForm(text, at, names)));
+			}
+		}
+		int from = at[0];
+		while (at[0] < text.length() && !Character.isWhitespace(text.charAt(at[0])) && text.charAt(at[0]) != '('
+				&& text.charAt(at[0]) != ')') {
+			at[0]++;
+		}
+		String word = text.substring(from, at[0]);
+		if (word.startsWith("$")) {
+			return new LispSymbol(Objects.requireNonNull(names.get(word), word));
+		}
+		return word.equals("nil") ? LispNil.INSTANCE : new LispSymbol(readerSpelling(word));
 	}
 
 	// The element/payload contract of a bound async alias: a stream must be a byte

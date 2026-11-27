@@ -316,8 +316,20 @@ final class JavaWitTypes {
 			return null;
 		}
 
+		/**
+		 * The class standing for a named type the scope takes from another, or
+		 * {@code null} for a type of the scope's own, its owner's member type.
+		 */
+		@Nullable JavaClass used(JavaBoundary.Type wit, JavaClass.Method method, String what) {
+			return null;
+		}
+
 		/** The class a named type is: the interface's member type of its name. */
 		private JavaClass member(JavaBoundary.Type wit, JavaClass.Method method, String what) {
+			JavaClass used = used(wit, method, what);
+			if (used != null) {
+				return used;
+			}
 			String definition = Objects.requireNonNull(wit.definition());
 			String name = JavaWitImports.upperCamel(definition);
 			JavaClass named = this.owner.members.get(name);
@@ -974,7 +986,10 @@ final class JavaWitTypes {
 					+ armText(owner, wit.element(), declared, 0, simple) + ", "
 					+ armText(owner, wit.error(), declared, 1, simple) + ">";
 			case KEYWORD_LIST -> (simple ? "Set<" : "java.util.Set<") + memberText(owner, wit, simple) + ">";
-			case PLIST, TAGGED_LIST, KEYWORD, HANDLE -> memberText(owner, wit, simple);
+			case PLIST, TAGGED_LIST, KEYWORD -> memberText(owner, wit, simple);
+			// a resource may be another interface's, which the type written for it names
+			case HANDLE -> !simple && declared instanceof ClassType written && written.arguments().isEmpty()
+					? JavaAnnotations.typeText(written) : memberText(owner, wit, simple);
 			case STREAM_HANDLE -> isU8(wit.element()) ? simple ? "InputStream" : INPUT_STREAM
 					: (simple ? "WitStream<" : JavaWitImports.WIT_STREAM + "<")
 							+ javaText(owner, Objects.requireNonNull(wit.element()), true, argument(declared), simple)

@@ -222,7 +222,7 @@ final class WitComponentTypeEncoder {
 			});
 			// A stream<u8> inlines its u8 element (definedStream), matching the base
 			// adapter's own stream<u8>; a stream over a defined element references it by
-			// index. A future references its payload by index (definedFuture). The
+			// index. A future references its payload by index, a primitive inlined. The
 			// encode-first discipline of `memoized` claims the element/payload's index
 			// before the stream/future's own, so the forward reference is valid.
 			case WitType.StreamOf stream -> memoized(key(abi, stream), () -> {
@@ -242,7 +242,8 @@ final class WitComponentTypeEncoder {
 					throw new UnsupportedOperationException(
 							"a bare future (no payload type) cannot be encoded as a component import type");
 				}
-				return ComponentWriter.definedFuture(definedIndexOf(abi, payload));
+				// a primitive payload is inlined, as a stream's element is
+				return ComponentWriter.definedFutureOf(valType(abi, payload));
 			});
 			case WitType.BorrowOf borrow -> borrowIndex(abi, borrow.resource());
 			case WitType.OwnOf own -> ownIndex(abi, own.resource());

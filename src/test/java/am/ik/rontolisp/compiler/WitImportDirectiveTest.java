@@ -826,14 +826,24 @@ class WitImportDirectiveTest {
 		// program references it, which is what keeps every artifact that existed before
 		// async built-ins byte-identical. Referenced ops become (:async alias op name)
 		// members of the %component-import form.
+		Set<String> named = Set.of("probe", "body-stream-read", "trailers-future-read", "trailers-future-resolve");
 		List<LispVal> forms = WitImportDirective.lower(new Directive(WIT, API, null, null, FieldStyle.CAMEL),
-				iface(ASYNC_ALIAS_BODY), WIT, Backend.WASM_COMPONENT,
-				Set.of("probe", "body-stream-read", "trailers-future-read"),
-				Set.of("probe", "body-stream-read", "trailers-future-read"));
+				iface(ASYNC_ALIAS_BODY), WIT, Backend.WASM_COMPONENT, named, named);
 		String printed = printed(forms);
 		assertThat(printed).contains("(:ASYNC \"body-stream\" \"read\" \"BODY-STREAM-READ\")")
 			.contains("(:ASYNC \"trailers-future\" \"read\" \"TRAILERS-FUTURE-READ\")");
 		assertThat(printed).doesNotContain("body-stream-write").doesNotContain("drop-readable");
+		// A future's -resolve, the write that does not wait, is Lisp over built-ins of
+		// its own names: the two halves of the write and the drop of the writable end,
+		// the writes still unread and the memory the read ones left kept in two
+		// variables.
+		assertThat(printed).contains("(:ASYNC \"trailers-future\" \"write-start\" \"%TRAILERS-FUTURE-RESOLVE-START\")")
+			.contains("(:ASYNC \"trailers-future\" \"write-settle\" \"%TRAILERS-FUTURE-RESOLVE-SETTLE\")")
+			.contains("(:ASYNC \"trailers-future\" \"drop-writable\" \"%TRAILERS-FUTURE-RESOLVE-DROP\")")
+			.contains("(DEFVAR %TRAILERS-FUTURE-RESOLVE-PENDING NIL)")
+			.contains("(DEFVAR %TRAILERS-FUTURE-RESOLVE-FREE NIL)")
+			.contains("(DEFUN TRAILERS-FUTURE-RESOLVE (WRITABLE VALUE) ")
+			.doesNotContain("\"TRAILERS-FUTURE-WRITE\"");
 	}
 
 	@Test

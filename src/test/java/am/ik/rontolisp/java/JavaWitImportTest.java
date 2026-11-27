@@ -137,6 +137,16 @@ class JavaWitImportTest {
 	 * a {@code stream<u8>} the program writes after the call and one it reads, standard
 	 * input read in a thread before its bytes are there. The WIT is trimmed to the
 	 * members called, each exactly the host's.
+	 *
+	 * <p>
+	 * And an HTTP client over {@code wasi:http@0.3.0}, against a {@code wasmtime serve}
+	 * backend: {@code client.send} takes the request and answers the response
+	 * {@code wasi:http/types} defines, each the member interface of the
+	 * {@code @WitImport} interface standing for that one; the futures a request and a
+	 * body's reader take are the program's {@code WitFuture}s, written before the call
+	 * with no reader yet -- wasmtime reads a request's trailers within
+	 * {@code client.send}, once its body has ended, and the error arm one was made of is
+	 * what the send answers --, and no request's body is {@code Optional.empty()}.
 	 */
 	@Test
 	void everyKindOfValueCrossesWasmtimesOwnInterfaces() throws Exception {
@@ -229,38 +239,151 @@ class JavaWitImportTest {
 				hello, world -1 null
 				stream<u8> of wasi:sockets/types@0.3.0 is closed
 				""");
-		write("http.wit", HTTP_WIT);
-		write("Http.java", HTTP);
-		Path http = write("HttpMain.java", """
-				import java.util.ServiceLoader;
+		write("http.wit", wasiHttpWit());
+		write("Types.java", HTTP_TYPES.replace("ERROR_CODE", HTTP_ERROR_CODE));
+		write("Client.java", HTTP_CLIENT.replace("ERROR_CODE", HTTP_ERROR_CODE));
+		Path http = write("HttpMain.java",
+				"""
+						import java.io.IOException;
+						import java.io.InputStream;
+						import java.io.OutputStream;
+						import java.io.UncheckedIOException;
+						import java.nio.charset.StandardCharsets;
+						import java.util.Optional;
+						import java.util.ServiceLoader;
+						import java.util.function.Consumer;
 
-				import am.ik.rontolisp.wit.WitException;
+						import am.ik.rontolisp.wit.WitException;
+						import am.ik.rontolisp.wit.WitFuture;
 
-				public class HttpMain {
+						public class HttpMain {
 
-				    public static void main(String[] args) {
-				        Http types = ServiceLoader.load(Http.class).findFirst().orElseThrow();
-				        Http.OutgoingRequest request = types.outgoingRequestNew(types.fieldsNew());
-				        System.out.println(request.method());
-				        request.setMethod(new Http.Method.Post());
-				        System.out.println(request.method());
-				        request.setMethod(new Http.Method.Other("PATCH"));
-				        System.out.println(request.method());
-				        try {
-				            request.setMethod(new Http.Method.Other("bad method"));
-				        }
-				        catch (WitException e) {
-				            System.out.println(e.getMessage());
-				        }
-				    }
-				}
+						    static final Types TYPES = ServiceLoader.load(Types.class).findFirst().orElseThrow();
+
+						    static final Client CLIENT = ServiceLoader.load(Client.class).findFirst().orElseThrow();
+
+						    // a body that ends at once: wasmtime then reads the trailers
+						    static final Consumer<OutputStream> ENDED = out -> {
+						        try {
+						            out.close();
+						        }
+						        catch (IOException e) {
+						            throw new UncheckedIOException(e);
+						        }
+						    };
+
+						    static Types.Sent request(Types.Method method, String path, Optional<Consumer<OutputStream>> contents,
+						            WitFuture<Optional<Types.Fields>> trailers) {
+						        Types.Fields headers = TYPES.fieldsNew();
+						        headers.append("x-asked-by", "java".getBytes(StandardCharsets.UTF_8));
+						        Types.Sent sent = TYPES.requestNew(headers, contents, trailers, Optional.empty());
+						        sent.request().setMethod(method);
+						        sent.request().setScheme(Optional.of(new Types.Scheme.HTTP()));
+						        sent.request().setAuthority(Optional.of("127.0.0.1:" + System.getenv("PORT")));
+						        sent.request().setPathWithQuery(Optional.of(path));
+						        return sent;
+						    }
+
+						    static String exchange(Types.Sent sent) throws IOException {
+						        String answer;
+						        try {
+						            Types.Response response = CLIENT.send(sent.request());
+						            answer = Short.toUnsignedInt(response.getStatusCode()) + " ";
+						            try (Types.Fields headers = response.getHeaders()) {
+						                answer += new String(headers.get("x-probe").get(0), StandardCharsets.UTF_8) + " ";
+						            }
+						            Types.Body body = TYPES.responseConsumeBody(response, WitFuture.of(null));
+						            try (InputStream in = body.contents()) {
+						                answer += new String(in.readAllBytes(), StandardCharsets.UTF_8);
+						            }
+						            answer += " " + body.trailers().get().isPresent();
+						        }
+						        catch (WitException e) {
+						            answer = e.getMessage();
+						        }
+						        try {
+						            sent.transmission().get();
+						            return answer + ", sent";
+						        }
+						        catch (WitException e) {
+						            return answer + ", not sent: " + e.error();
+						        }
+						    }
+
+						    static WitFuture<Optional<Types.Fields>> refused(String why) {
+						        return WitFuture.failed(new WitException(why, new Types.ErrorCode.InternalError(Optional.of(why))));
+						    }
+
+						    public static void main(String[] args) throws IOException {
+						        Types.Sent first = request(new Types.Method.Get(), "/first", Optional.empty(),
+						                WitFuture.of(Optional.empty()));
+						        System.out.println(first.request().getMethod());
+						        first.request().setMethod(new Types.Method.Other("PURGE"));
+						        System.out.println(first.request().getMethod());
+						        try {
+						            first.request().setMethod(new Types.Method.Other("bad method"));
+						        }
+						        catch (WitException e) {
+						            System.out.println(e.getMessage());
+						        }
+						        System.out.println(exchange(first));
+						        // two requests made before either is sent: the first one's trailers are
+						        // still unread when the second's are written
+						        Types.Sent refused = request(new Types.Method.Post(), "/refused", Optional.of(ENDED),
+						                refused("the first trailers"));
+						        Types.Sent plain = request(new Types.Method.Post(), "/plain", Optional.of(ENDED),
+						                WitFuture.of(Optional.empty()));
+						        System.out.println(exchange(plain));
+						        System.out.println(exchange(refused));
+						        // a request never sent: its reader goes with it
+						        Types.Sent unsent = request(new Types.Method.Get(), "/unsent", Optional.empty(),
+						                WitFuture.of(Optional.empty()));
+						        unsent.transmission().close();
+						        unsent.request().close();
+						        System.out.println(exchange(request(new Types.Method.Put(), "/again", Optional.of(ENDED),
+						                refused("other trailers, longer than the first ones were"))));
+						        for (int i = 0; i < 20; i++) {
+						            exchange(request(new Types.Method.Get(), "/loop", Optional.empty(), WitFuture.of(Optional.empty())));
+						        }
+						        System.out.println(exchange(request(new Types.Method.Get(), "/last", Optional.empty(),
+						                WitFuture.of(Optional.empty()))));
+						    }
+						}
+						""");
+		Path backend = write("backend.lisp", """
+				(rontolisp:async-defun handle (env)
+				  (let ((body (rontolisp:await (rontolisp:read-all (getf env :raw-body)))))
+				    (list 200 '(:x-probe "probed")
+				          (list (format nil "~A ~A~A" (getf env :request-method) (getf env :path-info) body)))))
+				(rontolisp:http-handler 'handle)
 				""");
-		assertThat(component(http, "-S", "http=y")).isEqualTo("""
-				Get[]
-				Post[]
-				Other[value=PATCH]
-				outgoing-request-set-method of wasi:http/types@0.2.0 answered its error arm
-				""");
+		Path served = this.dir.resolve("backend.wasm");
+		Path client = this.dir.resolve("http.wasm");
+		HostBoundaryRuns.cli(backend.toString(), "-o", served.toString(), "--component");
+		HostBoundaryRuns.cli("--java-source-path", API, http.toString(), "-o", client.toString(), "--component");
+		Path log = this.dir.resolve("serve.log");
+		HostWasmtime.ExecResult exchanged = HostWasmtime.INSTANCE.execInContainer("bash", "-c",
+				"wasmtime serve --addr 127.0.0.1:0 " + served + " >" + log + " 2>&1 & pid=$!;"
+						+ " trap 'kill $pid 2>/dev/null' EXIT; port=; for i in $(seq 1 120); do"
+						+ " port=$(sed -n 's|.*127\\.0\\.0\\.1:\\([0-9][0-9]*\\)/.*|\\1|p' " + log + ");"
+						+ " [ -n \"$port\" ] && break; sleep 0.25; done;"
+						+ " [ -n \"$port\" ] || { echo 'wasmtime serve never reported its port' 1>&2; cat " + log
+						+ " 1>&2; exit 1; }; wasmtime run -S http=y --env PORT=$port " + client);
+		assertThat(exchanged.exitCode()).as("wasmtime: %s", exchanged.stderr()).isZero();
+		assertThat(exchanged.stdout()).isEqualTo(
+				"""
+						Get[]
+						Other[value=PURGE]
+						request-set-method of wasi:http/types@0.3.0 answered its error arm
+						200 probed PURGE /first false, sent
+						200 probed POST /plain false, sent
+						send of wasi:http/client@0.3.0 answered its error arm: InternalError[value=Optional[the first trailers]], \
+						not sent: InternalError[value=Optional[the first trailers]]
+						send of wasi:http/client@0.3.0 answered its error arm: InternalError[value=Optional[other trailers, \
+						longer than the first ones were]], not sent: InternalError[value=Optional[other trailers, longer than \
+						the first ones were]]
+						200 probed GET /last false, sent
+						""");
 		// standard input as an InputStream, read in a thread (which puts the component's
 		// bodies in asyncMode) before the bytes are there: the read waits where it is
 		write("stdin.wit", STDIN_WIT);
@@ -342,12 +465,14 @@ class JavaWitImportTest {
 	 * answer, a {@code stream<T>} of values a {@code WitStream<T>} read so many at a
 	 * time, a {@code stream<u8>} an {@code InputStream}, a {@code future<result<_, E>>} a
 	 * {@code WitFuture<Void>} whose error arm {@code get()} throws; a {@code stream<u8>}
-	 * the program hands the host is a {@code Consumer<OutputStream>} handed the writable
-	 * end, which the program may write after the call. Under a JDK, on the interpreter
-	 * and on the JVM the program's provider answers them; on a component the directive
-	 * blocks on the async func and reads and writes the streams and the future through
-	 * aliases it adds to the WIT. What the binding cannot read or write is refused at the
-	 * method.
+	 * the program hands the host, or an option of one, is a
+	 * {@code Consumer<OutputStream>} handed the writable end, which the program may write
+	 * after the call; a {@code future<T>} it hands the host is a {@code WitFuture<T>} of
+	 * its own, a result's error arm the {@code WitException} its {@code get()} throws.
+	 * Under a JDK, on the interpreter and on the JVM the program's provider answers them;
+	 * on a component the directive blocks on the async func and reads, writes and
+	 * resolves the streams and the futures through aliases it adds to the WIT. What the
+	 * binding cannot read or write is refused at the method.
 	 */
 	@Test
 	void aStreamAndAFutureTheHostAnswersAreReadInPieces() throws Exception {
@@ -361,6 +486,7 @@ class JavaWitImportTest {
 						import java.io.OutputStream;
 						import java.nio.charset.StandardCharsets;
 						import java.util.List;
+						import java.util.Optional;
 						import java.util.function.Consumer;
 
 						import am.ik.rontolisp.wit.WitException;
@@ -368,6 +494,23 @@ class JavaWitImportTest {
 						import am.ik.rontolisp.wit.WitStream;
 
 						public class MemoryRows implements Rows {
+
+						    private long settled;
+
+						    // read when the provider wants its value
+						    public void settle(WitFuture<Boolean> done) {
+						        this.settled = done.get() ? 4 : 0;
+						    }
+
+						    public String confirm(Optional<Consumer<OutputStream>> note, WitFuture<String> done) {
+						        note.ifPresent(written -> written.accept(new ByteArrayOutputStream()));
+						        try {
+						            return done.get() + " " + note.isPresent();
+						        }
+						        catch (WitException e) {
+						            return "refused " + e.error() + " " + note.isPresent();
+						        }
+						    }
 
 						    public InputStream dump(String sql) {
 						        return new ByteArrayInputStream("1,one\\n2,two\\n3,three\\n".getBytes(StandardCharsets.UTF_8));
@@ -402,7 +545,7 @@ class JavaWitImportTest {
 						    }
 
 						    public long total() {
-						        return 3L;
+						        return 3L + this.settled;
 						    }
 						}
 						""");
@@ -412,6 +555,7 @@ class JavaWitImportTest {
 				import java.io.OutputStream;
 				import java.nio.charset.StandardCharsets;
 				import java.util.List;
+				import java.util.Optional;
 				import java.util.ServiceLoader;
 
 				import am.ik.rontolisp.wit.WitException;
@@ -434,6 +578,13 @@ class JavaWitImportTest {
 				            out.write("ive\\n".getBytes(StandardCharsets.UTF_8));
 				        }
 				        System.out.println(loaded.get());
+				        // futures the program hands over: a value, a result's arms; no stream and one
+				        host.settle(WitFuture.of(true));
+				        System.out.println(host.total());
+				        System.out.println(host.confirm(Optional.empty(), WitFuture.of("kept")));
+				        System.out.println(host.confirm(Optional.of(out -> writer[0] = out),
+				                WitFuture.failed(new WitException("no", new Rows.Error.Refused("not kept")))));
+				        writer[0].close();
 				        for (String sql : List.of("select", "broken", "")) {
 				            try {
 				                Rows.Query query = host.query(sql);
@@ -458,6 +609,9 @@ class JavaWitImportTest {
 				2,two
 				3,three
 				2
+				7
+				kept false
+				refused Refused[value=not kept] true
 				[Column[name=id, width=4], Column[name=name, width=16]]
 				[[1, one], [2, two]]
 				[[3, three]]
@@ -476,18 +630,22 @@ class JavaWitImportTest {
 		// a component: the directive blocks on the async funcs and adds an alias for
 		// each type it reads or writes, naming its built-ins in the table
 		assertThat(read(main, true).get(0)).isEqualTo("(RONTOLISP:WIT-IMPORT \"rows.wit\" :INTERFACE "
-				+ "\"test:rows/rows@0.1.0\" :NAMES ((\"query\" \"Rows$Wit.query\") (\"total\" \"Rows$Wit.total\") "
-				+ "(\"dump\" \"Rows$Wit.dump\") (\"load\" \"Rows$Wit.load\") (\"java-stream-0-read\" "
-				+ "\"Rows$Wit.java-stream-0-read\") (\"java-future-1-read\" \"Rows$Wit.java-future-1-read\") "
-				+ "(\"java-future-1-drop-readable\" \"Rows$Wit.java-future-1-drop-readable\") (\"java-stream-2-new\" "
-				+ "\"Rows$Wit.java-stream-2-new\") (\"java-stream-2-read\" \"Rows$Wit.java-stream-2-read\") "
-				+ "(\"java-stream-2-write\" \"Rows$Wit.java-stream-2-write\") (\"java-stream-2-drop-readable\" "
+				+ "\"test:rows/rows@0.1.0\" :NAMES ((\"settle\" \"Rows$Wit.settle\") (\"query\" \"Rows$Wit.query\") "
+				+ "(\"total\" \"Rows$Wit.total\") (\"dump\" \"Rows$Wit.dump\") (\"load\" \"Rows$Wit.load\") "
+				+ "(\"confirm\" \"Rows$Wit.confirm\") (\"java-stream-0-read\" \"Rows$Wit.java-stream-0-read\") "
+				+ "(\"java-future-1-read\" \"Rows$Wit.java-future-1-read\") (\"java-future-1-drop-readable\" "
+				+ "\"Rows$Wit.java-future-1-drop-readable\") (\"java-stream-2-new\" \"Rows$Wit.java-stream-2-new\") "
+				+ "(\"java-stream-2-read\" \"Rows$Wit.java-stream-2-read\") (\"java-stream-2-write\" "
+				+ "\"Rows$Wit.java-stream-2-write\") (\"java-stream-2-drop-readable\" "
 				+ "\"Rows$Wit.java-stream-2-drop-readable\") (\"java-stream-2-drop-writable\" "
 				+ "\"Rows$Wit.java-stream-2-drop-writable\") (\"java-future-3-read\" \"Rows$Wit.java-future-3-read\") "
-				+ "(\"java-future-3-drop-readable\" \"Rows$Wit.java-future-3-drop-readable\")) :OCTETS T :BLOCKING T "
-				+ ":ALIASES ((\"java-stream-0\" \"stream<list<string>>\") (\"java-future-1\" "
-				+ "\"future<result<_, error>>\") (\"java-stream-2\" \"stream<u8>\") (\"java-future-3\" "
-				+ "\"future<result<u64, error>>\")))");
+				+ "(\"java-future-3-drop-readable\" \"Rows$Wit.java-future-3-drop-readable\") (\"java-future-4-new\" "
+				+ "\"Rows$Wit.java-future-4-new\") (\"java-future-4-resolve\" \"Rows$Wit.java-future-4-resolve\") "
+				+ "(\"java-future-5-new\" \"Rows$Wit.java-future-5-new\") (\"java-future-5-resolve\" "
+				+ "\"Rows$Wit.java-future-5-resolve\")) :OCTETS T :BLOCKING T :ALIASES ((\"java-stream-0\" "
+				+ "\"stream<list<string>>\") (\"java-future-1\" \"future<result<_, error>>\") (\"java-stream-2\" "
+				+ "\"stream<u8>\") (\"java-future-3\" \"future<result<u64, error>>\") (\"java-future-4\" "
+				+ "\"future<bool>\") (\"java-future-5\" \"future<result<string, error>>\")))");
 		HostBoundaryRuns.cli("--java-source-path", API, main.toString(), "-o", this.dir.resolve("rows.wasm").toString(),
 				"--component");
 		write("refused/rows.wit", ROWS_WIT);
@@ -507,11 +665,14 @@ class JavaWitImportTest {
 		refusals.put("WitFuture<Boolean> ready();",
 				"ready (ready of test:rows/rows@0.1.0, rows.wit:14): its result is future<bool>, a future of a type one "
 						+ "of whose values the boundary cannot tell from a future its writer dropped");
-		refusals.put("void settle(WitFuture<Integer> done);",
-				"settle (settle of test:rows/rows@0.1.0, rows.wit:15): its parameter done is future<u32>, a future "
-						+ "the program hands the host, which the binding could write only once the call has returned, "
-						+ "where a host may read it only within a later call the program waits on (wasmtime's HTTP "
-						+ "types read the one a request takes within client.send)");
+		refusals.put("void settle(Boolean done);",
+				"settle (settle of test:rows/rows@0.1.0, rows.wit:15): its parameter done is future<bool>, which the "
+						+ "program hands the host: WitFuture<Boolean> in Java, whose get() answers the value the host "
+						+ "reads, not Boolean");
+		refusals.put("String confirm(Consumer<OutputStream> note, WitFuture<String> done);",
+				"confirm (confirm of test:rows/rows@0.1.0, rows.wit:22): its parameter note is option<stream<u8>>, "
+						+ "which the program writes: Optional<Consumer<OutputStream>> in Java, handed the writable "
+						+ "end, not Consumer<OutputStream>");
 		refusals.put("long upload(Consumer<OutputStream> data);",
 				"upload (upload of test:rows/rows@0.1.0, rows.wit:16): its parameter data is stream<u8>, a stream "
 						+ "the program hands an async func, which the call waits on while the host reads what the "
@@ -548,13 +709,14 @@ class JavaWitImportTest {
 
 			  feed: func(rows: stream<list<string>>);
 			  ready: func() -> future<bool>;
-			  settle: func(done: future<u32>);
+			  settle: func(done: future<bool>);
 			  upload: async func(data: stream<u8>) -> u64;
 			  batch: func(parts: list<stream<u8>>);
 			  query: async func(sql: string) -> result<tuple<list<column>, stream<list<string>>, future<result<_, error>>>, error>;
 			  total: async func() -> u64;
 			  dump: func(sql: string) -> stream<u8>;
 			  load: func(data: stream<u8>) -> future<result<u64, error>>;
+			  confirm: func(note: option<stream<u8>>, done: future<result<string, error>>) -> string;
 			}
 			""";
 
@@ -563,6 +725,7 @@ class JavaWitImportTest {
 			import java.io.InputStream;
 			import java.io.OutputStream;
 			import java.util.List;
+			import java.util.Optional;
 			import java.util.function.Consumer;
 
 			import am.ik.rontolisp.wit.WitFuture;
@@ -579,6 +742,10 @@ class JavaWitImportTest {
 			    InputStream dump(String sql);
 
 			    WitFuture<Long> load(Consumer<OutputStream> data);
+
+			    void settle(WitFuture<Boolean> done);
+
+			    String confirm(Optional<Consumer<OutputStream>> note, WitFuture<String> done);
 
 			    record Query(List<Column> columns, WitStream<List<String>> rows, WitFuture<Void> done) {
 			    }
@@ -1876,57 +2043,86 @@ class JavaWitImportTest {
 			}
 			""";
 
-	private static final String HTTP_WIT = """
-			package wasi:http@0.2.0;
+	/**
+	 * {@code wasi:http@0.3.0} as the compiler vendors it, in one file: wasmtime's own
+	 * interfaces, which a component's are checked against structurally.
+	 */
+	private static String wasiHttpWit() throws Exception {
+		StringBuilder text = new StringBuilder(
+				"package test:http;\n\npackage wasi:clocks@0.3.0 {\n  interface types {\n    type duration = u64;\n"
+						+ "  }\n}\n\npackage wasi:http@0.3.0 {\n");
+		for (String file : List.of("types.wit", "handler.wit")) {
+			String wit = Files.readString(Path.of("src/wasm-component/deps/http", file));
+			wit.substring(wit.indexOf(';') + 1)
+				.lines()
+				.filter(line -> !line.strip().startsWith("@since"))
+				.forEach(line -> text.append(line).append('\n'));
+		}
+		return text.append("}\n").toString();
+	}
 
-			interface types {
-			  variant method {
-			    get,
-			    head,
-			    post,
-			    put,
-			    delete,
-			    connect,
-			    options,
-			    trace,
-			    patch,
-			    other(string)
-			  }
+	/** The members of {@code wasi:http/types@0.3.0} an HTTP client calls. */
+	private static final String HTTP_TYPES = """
+			import java.io.InputStream;
+			import java.io.OutputStream;
+			import java.util.List;
+			import java.util.Optional;
+			import java.util.function.Consumer;
 
-			  resource fields {
-			    constructor();
-			  }
-
-			  type headers = fields;
-
-			  resource outgoing-request {
-			    constructor(headers: headers);
-
-			    method: func() -> method;
-
-			    set-method: func(method: method) -> result;
-			  }
-			}
-			""";
-
-	private static final String HTTP = """
+			import am.ik.rontolisp.wit.WitFuture;
 			import am.ik.rontolisp.wit.WitImport;
 
-			@WitImport(value = "wasi:http/types", wit = "http.wit")
-			public interface Http {
+			@WitImport(value = "wasi:http/types@0.3.0", wit = "http.wit")
+			public interface Types {
 
 			    Fields fieldsNew();
 
-			    OutgoingRequest outgoingRequestNew(Fields headers);
+			    Sent requestNew(Fields headers, Optional<Consumer<OutputStream>> contents,
+			            WitFuture<Optional<Fields>> trailers, Optional<RequestOptions> options);
 
-			    interface Fields {
+			    Body responseConsumeBody(Response response, WitFuture<Void> res);
+
+			    interface Fields extends AutoCloseable {
+
+			        void append(String name, byte[] value);
+
+			        List<byte[]> get(String name);
+
+			        @Override
+			        void close();
 			    }
 
-			    interface OutgoingRequest {
+			    interface Request extends AutoCloseable {
 
-			        Method method();
+			        Method getMethod();
 
 			        void setMethod(Method method);
+
+			        void setScheme(Optional<Scheme> scheme);
+
+			        void setAuthority(Optional<String> authority);
+
+			        void setPathWithQuery(Optional<String> pathWithQuery);
+
+			        @Override
+			        void close();
+			    }
+
+			    interface RequestOptions {
+			    }
+
+			    // reached by no function of this interface but through client.send
+			    interface Response {
+
+			        short getStatusCode();
+
+			        Fields getHeaders();
+			    }
+
+			    record Sent(Request request, WitFuture<Void> transmission) {
+			    }
+
+			    record Body(InputStream contents, WitFuture<Optional<Fields>> trailers) {
 			    }
 
 			    sealed interface Method {
@@ -1941,7 +2137,96 @@ class JavaWitImportTest {
 			        record Patch() implements Method {}
 			        record Other(String value) implements Method {}
 			    }
+
+			    sealed interface Scheme {
+			        record HTTP() implements Scheme {}
+			        record HTTPS() implements Scheme {}
+			        record Other(String value) implements Scheme {}
+			    }
+
+			    sealed interface HeaderError {
+			        record InvalidSyntax() implements HeaderError {}
+			        record Forbidden() implements HeaderError {}
+			        record Immutable() implements HeaderError {}
+			        record SizeExceeded() implements HeaderError {}
+			        record Other(Optional<String> value) implements HeaderError {}
+			    }
+
+			ERROR_CODE
 			}
+			""";
+
+	/**
+	 * {@code wasi:http/client@0.3.0}, whose request and response are
+	 * {@code wasi:http/types}' resources; a value type it takes is a member type of its
+	 * own.
+	 */
+	private static final String HTTP_CLIENT = """
+			import java.util.Optional;
+
+			import am.ik.rontolisp.wit.WitImport;
+
+			@WitImport(value = "wasi:http/client@0.3.0", wit = "http.wit")
+			public interface Client {
+
+			    Types.Response send(Types.Request request);
+
+			ERROR_CODE
+			}
+			""";
+
+	/** {@code error-code} of {@code wasi:http/types@0.3.0} and the records it holds. */
+	private static final String HTTP_ERROR_CODE = """
+			    sealed interface ErrorCode {
+			        record DNSTimeout() implements ErrorCode {}
+			        record DNSError(DNSErrorPayload value) implements ErrorCode {}
+			        record DestinationNotFound() implements ErrorCode {}
+			        record DestinationUnavailable() implements ErrorCode {}
+			        record DestinationIPProhibited() implements ErrorCode {}
+			        record DestinationIPUnroutable() implements ErrorCode {}
+			        record ConnectionRefused() implements ErrorCode {}
+			        record ConnectionTerminated() implements ErrorCode {}
+			        record ConnectionTimeout() implements ErrorCode {}
+			        record ConnectionReadTimeout() implements ErrorCode {}
+			        record ConnectionWriteTimeout() implements ErrorCode {}
+			        record ConnectionLimitReached() implements ErrorCode {}
+			        record TLSProtocolError() implements ErrorCode {}
+			        record TLSCertificateError() implements ErrorCode {}
+			        record TLSAlertReceived(TLSAlertReceivedPayload value) implements ErrorCode {}
+			        record HTTPRequestDenied() implements ErrorCode {}
+			        record HTTPRequestLengthRequired() implements ErrorCode {}
+			        record HTTPRequestBodySize(Optional<Long> value) implements ErrorCode {}
+			        record HTTPRequestMethodInvalid() implements ErrorCode {}
+			        record HTTPRequestURIInvalid() implements ErrorCode {}
+			        record HTTPRequestURITooLong() implements ErrorCode {}
+			        record HTTPRequestHeaderSectionSize(Optional<Integer> value) implements ErrorCode {}
+			        record HTTPRequestHeaderSize(Optional<FieldSizePayload> value) implements ErrorCode {}
+			        record HTTPRequestTrailerSectionSize(Optional<Integer> value) implements ErrorCode {}
+			        record HTTPRequestTrailerSize(FieldSizePayload value) implements ErrorCode {}
+			        record HTTPResponseIncomplete() implements ErrorCode {}
+			        record HTTPResponseHeaderSectionSize(Optional<Integer> value) implements ErrorCode {}
+			        record HTTPResponseHeaderSize(FieldSizePayload value) implements ErrorCode {}
+			        record HTTPResponseBodySize(Optional<Long> value) implements ErrorCode {}
+			        record HTTPResponseTrailerSectionSize(Optional<Integer> value) implements ErrorCode {}
+			        record HTTPResponseTrailerSize(FieldSizePayload value) implements ErrorCode {}
+			        record HTTPResponseTransferCoding(Optional<String> value) implements ErrorCode {}
+			        record HTTPResponseContentCoding(Optional<String> value) implements ErrorCode {}
+			        record HTTPResponseTimeout() implements ErrorCode {}
+			        record HTTPUpgradeFailed() implements ErrorCode {}
+			        record HTTPProtocolError() implements ErrorCode {}
+			        record LoopDetected() implements ErrorCode {}
+			        record ConfigurationError() implements ErrorCode {}
+			        record InternalError(Optional<String> value) implements ErrorCode {}
+			    }
+
+			    record DNSErrorPayload(Optional<String> rcode, Optional<Short> infoCode) {
+			    }
+
+			    record TLSAlertReceivedPayload(Optional<Byte> alertId, Optional<String> alertMessage) {
+			    }
+
+			    record FieldSizePayload(Optional<String> fieldName, Optional<Integer> fieldSize) {
+			    }
 			""";
 
 }

@@ -1322,6 +1322,17 @@ public final class ComponentWriter {
 	}
 
 	/**
+	 * Encode the defined value type {@code future<T>} over the encoded valtype of its
+	 * payload: a primitive inlined ({@link #valTypePrim}), or a defined type by index
+	 * ({@link #valTypeIndex}), which is {@link #definedFuture}'s bytes.
+	 * @param payloadType the encoded valtype of the payload
+	 * @return the encoded defined value type
+	 */
+	public static byte[] definedFutureOf(byte[] payloadType) {
+		return enc(w -> w.write(0x65).write(0x01).write((Object) payloadType));
+	}
+
+	/**
 	 * Encode the defined value type {@code result<_, errType>} (no ok payload, an error
 	 * payload referenced by index), as used by the WASI 0.3 stream/future error channel.
 	 * @param errTypeIndex the component type index of the error type (e.g. an
@@ -1694,6 +1705,17 @@ public final class ComponentWriter {
 	 */
 	public static byte[] canonFutureCancelRead(int futureTypeIndex) {
 		return enc(w -> w.write(0x18).writeUnsignedLeb128(futureTypeIndex).write(0x00));
+	}
+
+	/**
+	 * Encode {@code canon future.cancel-write} (opcode {@code 0x19}, synchronous
+	 * variant): a core function {@code (handle) -> i32} withdrawing a pending write, or
+	 * answering what it completed with. Golden bytes: {@code 19 <ty> 00}.
+	 * @param futureTypeIndex the component type index of the {@code future<T>} type
+	 * @return the encoded canonical entry
+	 */
+	public static byte[] canonFutureCancelWrite(int futureTypeIndex) {
+		return enc(w -> w.write(0x19).writeUnsignedLeb128(futureTypeIndex).write(0x00));
 	}
 
 	/**

@@ -379,6 +379,11 @@ stream 型や future 型の `type` エイリアス (WIT 自身のもの、また
 | `future<T>` の `<alias>-read` | `(done-read h)` | 値。`future<result<...>>` なら `(:ok . V)` / `(:error . E)` のエンベロープ。書き手が書かずに去ったときは `nil` |
 | `<alias>-drop-readable` | `(rows-drop-readable h)` | `nil`。読み取り側の端をホストに返します |
 | `<alias>-cancel-read` (stream のもの) | `(body-cancel-read h)` | まだ進行中の読み取りを取り下げます |
+| `<alias>-new` | `(body-new)` | `(readable . writable)`。新しい stream または future の 2 つの端で、片方を引数としてホストに渡します |
+| `stream<u8>` の `<alias>-write` | `(body-write w "hello")` | 読み手が受け取った数。受け取るまで待ちます。値は文字列か `(unsigned-byte 8)` ベクタ |
+| `future<T>` の `<alias>-write` | `(done-write w :ok)` | 読み手が値を受け取ると `t`、読み手が去っていたら `nil`。読み手を待ちます |
+| `<alias>-resolve` (future のもの) | `(done-resolve w :ok)` | すぐに `nil`。値は読み手が受け取るときまで置かれ、書き込み側の端は以後バインディングのものです |
+| `<alias>-drop-writable` | `(body-drop-writable w)` | `nil`。stream が終わります。future の書き込み側の端を捨てられるのは、書いた後だけです |
 
 値の stream の読み取りは、書き手が 1 つ送るか去るまでその場で待ちます(サーブされる
 コンポーネントでも同じです)。値を持ち上げたあと、ホストがその読み取りのために lower
@@ -386,6 +391,22 @@ stream 型や future 型の `type` エイリアス (WIT 自身のもの、また
 どれだけ保持していても、1 回の読み取りの値だけです。このような stream はゲストにとって
 読み取り専用です (`-new` も `-write` も束縛されません)。終わった stream は、ホストに
 問い合わせずに再び `nil` を返します。
+
+future の `-write` は読み手が値を受け取ってから戻るので、すでに読んでいる読み手に向いて
+います。ホストが、プログラムが後で行う呼び出しの中でしか読まない場合があります
+(`wasi:http` の `request.new` が受け取る trailers の future は、`client.send` が読みます)。
+その場合は `-resolve` を使います。`-resolve` は待たずに値を書くので、続く呼び出しで読み取り側の
+端を渡せ、ホストは必要になったときに値を読みます。プログラムはそれを待たず、書き込み側の端も
+捨てません。同じエイリアスの後の `-resolve` が、読み手が受け取ったか捨てた以前の future の端を
+捨て、その値が占めていた線形メモリに新しい値を lower します。したがって future を次々に
+resolve するプログラムが持ち続けるのは、まだ読まれていない分のメモリだけです。
+
+```console
+(let* ((trailers (http:trailers-future-new))
+       (made (http:request-new (http:fields-new) nil (car trailers) nil)))
+  (http:trailers-future-resolve (cdr trailers) '(:ok))   ; client:send の中で読まれる
+  (client:send (car made)))
+```
 
 ```console
 ;;; spin:postgres の query-async は、列と stream<row>、それを終わらせる

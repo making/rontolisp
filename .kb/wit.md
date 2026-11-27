@@ -106,6 +106,35 @@ boundary").
   `async func` (`.kb/no-gc-scalar-wasm.md`, "An `async func`").
 - Trap: a value type's type index is an s33 (`ComponentWriter.definedFuture` wrote it unsigned
   until 2026-11-26, so a future whose payload type sat past index 63 failed validation).
+- **`<alias>-resolve`, a future's write that does not wait** (`WitImportDirective.RESOLVE`:
+  Lisp over three `(:async ...)` entries of its own names, `write-start`, `write-settle` and a
+  `drop-writable`; two `defvar`s, the pending writes and the free regions). Decided from when a
+  host reads what a guest hands it: within a LATER call the guest waits on, or never. Measured
+  2026-11-27, wasmtime 51: `request.new`'s trailers are read within `client.send` once the body
+  has ended (an error arm resolved there is what `send` and the transmission future answer) and
+  not at all for `contents: none`, the readable end going with the request; `-write` there never
+  returns. So the async `future.write` is left BLOCKED, what was lowered KEPT (the wrapper
+  returns before its epilogue), the end in no waitable-set. A writable end drops only after its
+  write completed, and nothing tells the guest of that unasked, so each later `-resolve` of the
+  alias asks with the SYNC `future.cancel-write`: it answers what the write completed with
+  (taken, or the reader gone: the end is dropped, the region freed) or withdraws it
+  (CANCELLED), and the wrapper writes it again from where it lies. A value is lowered above
+  the mark first -- that is what measures it, strings and lists staging above the fixed area
+  -- and a second time into the largest free region where it fits, the first staging popped.
+  Outstanding: the writes unread, plus those settled since the last call. Measured: 22 GETs
+  keep one 40 B region an alias (`result<option<trailers>, error-code>`), 64 B with a
+  22-character string; a write started before the readable end is handed over is legal;
+  pending writes at exit are no error; within one component a `future<u32>` resolved, withdrawn,
+  rewritten and read answers its value. A module of one such alias 8,265 B. Rejected:
+  `waitable-set.poll` (in `WAITABLE_FIELDS` it changes every async component's imports); never
+  dropping the end (a table entry and a region a future for good).
+  Traps: `WRITE_START` imports `WRITE`'s field (`AsyncOp.builtin`, one canon a FIELD), and the
+  settle wrapper calls that import beside its own (`writeOrdinal`); a `future<bool>` in a
+  function's signature inlines its payload in the instance type
+  (`ComponentWriter.definedFutureOf`; `definedIndexOf` refused a primitive there). Pins:
+  `WitImportDirectiveTest.anAsyncAliasBindsItsBuiltInsOnlyWhenTheProgramNamesThem`,
+  `WasmLispCompilerIntegrationTest#componentImportLetsLispDriveWasiHttpAcrossSeparatelyImportedInterfaces`,
+  `JavaWitImportTest.everyKindOfValueCrossesWasmtimesOwnInterfaces`.
 
 ## `rontolisp:wit-export` — implementing a world
 `(rontolisp:wit-export "count_vowels_component.wit" :world root)`; the path resolves against the

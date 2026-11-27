@@ -369,6 +369,11 @@ named after the alias, when the program names them:
 | `<alias>-read` of a `future<T>` | `(done-read h)` | the value; a `future<result<...>>` the `(:ok . V)` / `(:error . E)` envelope; `nil` when the writer went without writing |
 | `<alias>-drop-readable` | `(rows-drop-readable h)` | `nil`; the readable end goes back to the host |
 | `<alias>-cancel-read` (a stream's) | `(body-cancel-read h)` | withdraws a read still in flight |
+| `<alias>-new` | `(body-new)` | `(readable . writable)`, the two ends of a new stream or future; one end is handed to the host as an argument |
+| `<alias>-write` of a `stream<u8>` | `(body-write w "hello")` | the count the reader took, having waited for it; the value is a string or an `(unsigned-byte 8)` vector |
+| `<alias>-write` of a `future<T>` | `(done-write w :ok)` | `t` once the reader has taken the value, `nil` when the reader had gone; it waits for the reader |
+| `<alias>-resolve` (a future's) | `(done-resolve w :ok)` | `nil` at once: the value is there for whenever the reader takes it, and the writable end is the binding's from then on |
+| `<alias>-drop-writable` | `(body-drop-writable w)` | `nil`; a stream ends. A future's writable end is dropped only after its write |
 
 A read of a stream of values waits where it is until the writer has sent one or
 has gone, in a served component too, and everything the host lowered for it is
@@ -376,6 +381,23 @@ popped once the values are lifted: what a reader keeps in linear memory is one
 read's values, whatever the stream holds. Such a stream is read-only for the
 guest (no `-new` or `-write` binds). A stream that ended is answered `nil` again
 without asking the host.
+
+A future's `-write` returns once the reader has the value, so it suits a reader that is
+already reading. Where the host reads only within a later call the program makes --
+`wasi:http`'s `request.new` takes a trailers future its `client.send` reads --
+`-resolve` writes the value without waiting: the call after it may hand the readable end
+over, and the host reads the value when it comes to it. The program neither waits for
+that nor drops the writable end: each later `-resolve` of the alias drops the ends of
+the earlier ones the reader has taken or left, and lowers its value into the linear
+memory theirs occupied, so a program resolving futures one after another keeps the
+memory of those still unread.
+
+```console
+(let* ((trailers (http:trailers-future-new))
+       (made (http:request-new (http:fields-new) nil (car trailers) nil)))
+  (http:trailers-future-resolve (cdr trailers) '(:ok))   ; read within client:send
+  (client:send (car made)))
+```
 
 ```console
 ;;; spin:postgres's query-async answers the columns, a stream<row> and a

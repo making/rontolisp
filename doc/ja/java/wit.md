@@ -166,12 +166,15 @@ PostgreSQL への接続を開き、プールし、`sslmode=require` なら TLS �
 | `enum` | メンバーの enum |
 | `flags` | メンバーの enum の `Set` |
 | リソース、`own<R>`、`borrow<R>` | メンバーインタフェース |
+| インタフェースが `use` でほかのインタフェースから取るリソース | そのインタフェースを表す `@WitImport` インタフェースのメンバーインタフェース |
 | `result<T, E>` | `WitResult<T, E>`。メソッドの戻り値では ok の値にもでき、そのときエラーは `WitException` |
 | `async func` | ホストの応答を待つメソッド（ほかの呼び出しと同じ） |
 | ホストが返す `stream<T>` | `am.ik.rontolisp.wit.WitStream<T>`（値の stream もリソースの stream も） |
 | ホストが返す `stream<u8>` | `java.io.InputStream` |
 | プログラムがホストに渡す `stream<u8>` | `java.util.function.Consumer<java.io.OutputStream>`（書き込み側の端を受け取る） |
+| プログラムがホストに渡す `option<stream<u8>>` | `Optional<Consumer<OutputStream>>`。stream がなければ空 |
 | ホストが返す `future<T>` | `am.ik.rontolisp.wit.WitFuture<T>`。`future<result<T, E>>` は `WitFuture<T>`（ok の値がなければ `Void`） |
+| プログラムがホストに渡す `future<T>` | プログラムが作った、同じ型の `WitFuture<T>` |
 
 符号なし整数は同じ幅の Java の型に、そのビットのまま入ります。`u8` の 200 は `byte` の -56
 です（`Byte.toUnsignedInt` で 200 に戻ります）。
@@ -221,6 +224,25 @@ catch (WitException e) {
 リソースは `close()` で解放します。ハンドルはホストに返り、ストアはそのまま残ります。閉じた
 リソースは `IllegalStateException` を投げ、2 度目の `close()` は何もしません。関数に渡した `own`
 のハンドルは関数のものになり、オブジェクトは閉じられます。
+
+インタフェースが `use` でほかのインタフェースから取るリソースは、それを定義するインタフェースを
+表す `@WitImport` インタフェースに 1 度だけ宣言し、そこから名前で参照します。`wasi:http/client`
+の `send` は、`wasi:http/types` の `request` を受け取り、`response` を返します。定義する側の
+インタフェースは、自分の関数がそのリソースを受け渡すかどうかにかかわらず、メンバーインタフェースを
+宣言します。`use` で取るレコード、variant、enum、flags は、取る側のインタフェースのメンバー型で、
+そこにもう 1 度宣言します。
+
+```console
+// interface client { use types.{request, response, error-code};
+//                    send: async func(request: request) -> result<response, error-code>; }
+@WitImport(value = "wasi:http/client@0.3.0", wit = "wit/http.wit")
+public interface Client {
+
+    Types.Response send(Types.Request request);
+
+    sealed interface ErrorCode { ... }
+}
+```
 
 ### ホストが少しずつ返すもの
 
@@ -272,6 +294,47 @@ sent.get();
 
 読み取りは呼び出しと同じくその場で待ち、プログラムのすべてのスレッドが一緒に待ちます。JDK、
 インタプリタ、JVM では、プロバイダが自分の `OutputStream` を consumer に渡します。
+
+`option<stream<u8>>` の引数は `Optional<Consumer<OutputStream>>` です。`Optional.empty()` なら
+ホストに stream を渡さず、consumer なら上と同じく書き込み側の端を受け取ります。
+
+### プログラムがホストに渡す future
+
+`future<T>` の引数は、プログラムが作った `WitFuture<T>` です。`WitFuture.of(value)`、
+`future<result<T, E>>` のエラーの側なら `WitFuture.failed(exception)`（`error()` がその Java の型の
+エラーである `WitException`）、または自分のクラスです。コンポーネントでは、バインディングが
+呼び出しの前に `get()` を 1 度呼び、その値を、ホストが future を読むときに見つかる場所に置きます。
+ホストが読むのは、その呼び出しの中でも後の呼び出しの中でも構いません。呼び出しはホストが読むのを
+待たず、プログラムが後で解放するものもありません。JDK、インタプリタ、JVM では、プロバイダが
+オブジェクトを受け取り、読むときに `get()` を呼びます。
+
+```console
+// request.new: static func(headers: headers, contents: option<stream<u8>>,
+//     trailers: future<result<option<trailers>, error-code>>, options: option<request-options>)
+//     -> tuple<request, future<result<_, error-code>>>;
+Sent requestNew(Fields headers, Optional<Consumer<OutputStream>> contents,
+        WitFuture<Optional<Fields>> trailers, Optional<RequestOptions> options);
+
+record Sent(Request request, WitFuture<Void> transmission) {
+}
+```
+
+```console
+Types.Sent sent = types.requestNew(types.fieldsNew(), Optional.empty(),
+        WitFuture.of(Optional.empty()), Optional.empty());      // ボディも trailers もなし
+sent.request().setAuthority(Optional.of("example.com"));
+Types.Response response = client.send(sent.request());          // レスポンスを待つ
+Types.Body body = types.responseConsumeBody(response, WitFuture.of(null));
+try (InputStream in = body.contents()) {
+    System.out.println(new String(in.readAllBytes(), StandardCharsets.UTF_8));
+}
+```
+
+これで、プログラムは `wasmtime run -S http=y` の下で `wasi:http@0.3.0` の HTTP クライアントに
+なります。ボディのないリクエストを送り、レスポンスを読めます。制限はリクエストのボディです。
+`OutputStream` への書き込みはホストが読むまで待ちますが、wasmtime がリクエストのボディを読むのは、
+プログラムが待っている `client.send` の中です。すぐに終わるボディ（consumer が stream を閉じる）は
+送られ、その後で trailers が future から読まれます。
 
 ## WIT world をエクスポートする
 
@@ -480,15 +543,19 @@ public static int pause(int ms) throws InterruptedException {
   負の `long` が同じビットの `u64` になります。
 - ネイティブ実行ファイル（`--native`）は Preview 1 のモジュールを動かしますが、そのランナーは
   WIT インタフェースを提供しません。そのため、WIT インタフェースを呼ぶプログラムはそこでは起動しません。
-- 宣言の位置で拒否されるもの: プログラムがホストに渡す `future`（バインディングが書けるのは
-  呼び出しの後で、ホストはそれを、プログラムが待つ後の呼び出しの中でしか読まないことがあるため。
-  wasmtime の HTTP の型は、リクエストの trailers を `client.send` の中で読みます）。プログラムが
-  ホストに渡す値の stream とリソースの stream（ゲストは書けないため）。`async func` に渡す
-  `stream<u8>`（呼び出しが待つ間に、ホストはプログラムが呼び出しの後でしか書けないものを読むため）と、
-  ほかの型の中にある `stream<u8>`。`bool`・`list`・`flags`・`option` の `future`（その値を、書き手が
-  捨てた future と境界が見分けられないため）。`bool`、`list`、`flags`、`option` を要素とする `option`
-  （境界がその none を見分けられないため）。ほかのインタフェースのリソース。`WitException` として
-  投げるエラーの型にある tuple（型を書く場所がないため。`WitResult` の戻り値なら書けます）。
+- 宣言の位置で拒否されるもの: プログラムがホストに渡す値の stream とリソースの stream（ゲストは
+  書けないため）。`async func` に渡す `stream<u8>`（呼び出しが待つ間に、ホストはプログラムが
+  呼び出しの後でしか書けないものを読むため）。引数そのものでも引数の `option` でもない位置で
+  渡す `stream<u8>` と、引数そのものでない位置で渡す `future`（レコードのフィールド、リストの
+  要素）。ホストが返す、`bool`・`list`・`flags`・`option` の `future`（その値を、書き手が捨てた
+  future と境界が見分けられないため。プログラムが渡す future はどれでも構いません）。`bool`、
+  `list`、`flags`、`option` を要素とする `option`（境界がその none を見分けられないため）。
+  ほかのインタフェースのリソースを、そのインタフェースを表す `@WitImport` インタフェース以外の
+  場所に宣言したもの。`WitException` として投げるエラーの型にある tuple（型を書く場所がないため。
+  `WitResult` の戻り値なら書けます）。
+- プログラムが書く stream をホストがいつ読むかは、ホストが決めます。ホストが後の呼び出しの中で
+  しか読まない場合、その読み取りを待つ書き込みは戻りません。そのため wasmtime の下では、
+  `wasi:http` のリクエストはボディを持てません（wasmtime はボディを `client.send` の中で読みます）。
 - world のエクスポートは、リソース、`stream`、`future` を受け渡せません。`async func` のエクスポートで使える型は `bool`、整数、`f64`、`string` だけ
   です。`--no-gc --component` では、`async func` を含むすべてのエクスポートで、使える型が
   この 4 種類だけになります。同じラベルのエクスポート 2 つ（world の関数とインタフェースの

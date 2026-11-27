@@ -132,17 +132,28 @@ final class WasmComponentImportCompiler {
 	/**
 	 * The async built-in operations a stream/future type alias binds. {@code CANCEL_READ}
 	 * is a stream's alone: it withdraws a read an asyncMode {@code READ} left in flight,
-	 * and a future read is never left in flight.
+	 * and a future read is never left in flight. {@code WRITE_START} and
+	 * {@code WRITE_SETTLE} are a future's alone, the two halves of a write that does not
+	 * wait for its reader ({@code <alias>-resolve}): the first is another wrapper of the
+	 * {@code future.write} built-in {@code WRITE} calls, so it imports that field.
 	 */
 	enum AsyncOp {
 
 		NEW("new"), READ("read"), WRITE("write"), DROP_READABLE("drop-readable"), DROP_WRITABLE("drop-writable"),
-		CANCEL_READ("cancel-read");
+		CANCEL_READ("cancel-read"), WRITE_START("write-start", "write"), WRITE_SETTLE("write-settle", "cancel-write");
 
 		final String suffix;
 
+		/** The built-in the wrapper imports, as its field names it. */
+		final String builtin;
+
 		AsyncOp(String suffix) {
+			this(suffix, suffix);
+		}
+
+		AsyncOp(String suffix, String builtin) {
 			this.suffix = suffix;
+			this.builtin = builtin;
 		}
 
 		static AsyncOp of(String suffix) {
@@ -293,6 +304,11 @@ final class WasmComponentImportCompiler {
 	 * @param type the resolved target type (the task's declared result type)
 	 */
 	record TaskReturn(String lispName, String module, String field, String alias, WitCanonicalAbi abi, WitType type) {
+	}
+
+	/** The import field of an async built-in of an alias. */
+	static String asyncField(AsyncOp op, String alias) {
+		return "[async-" + op.builtin + "]" + alias;
 	}
 
 	// The waitable-set built-ins an interface with async calls imports alongside them
@@ -640,9 +656,9 @@ final class WasmComponentImportCompiler {
 								+ "neither a stream nor a future: " + alias.value());
 					}
 					AsyncOp asyncOp = AsyncOp.of(op.value());
-					asyncs.add(new Async(asyncName.value(), ifaceId.value(),
-							"[async-" + asyncOp.suffix + "]" + alias.value(), alias.value(), asyncOp, target.abi(),
-							target.type(), octets, nameCons.cdr() instanceof LispCons));
+					asyncs.add(new Async(asyncName.value(), ifaceId.value(), asyncField(asyncOp, alias.value()),
+							alias.value(), asyncOp, target.abi(), target.type(), octets,
+							nameCons.cdr() instanceof LispCons));
 					continue;
 				}
 				if (!":DROP".equals(keyword.name()) || !(rest.car() instanceof LispString resource)
@@ -934,9 +950,9 @@ final class WasmComponentImportCompiler {
 	static Type[] asyncParamTypes(Async async) {
 		return switch (async.op()) {
 			case NEW -> new Type[0];
-			case READ, WRITE ->
+			case READ, WRITE, WRITE_START ->
 				async.stream() ? new Type[] { Type.I32, Type.I32, Type.I32 } : new Type[] { Type.I32, Type.I32 };
-			case DROP_READABLE, DROP_WRITABLE, CANCEL_READ -> new Type[] { Type.I32 };
+			case DROP_READABLE, DROP_WRITABLE, CANCEL_READ, WRITE_SETTLE -> new Type[] { Type.I32 };
 		};
 	}
 
@@ -944,7 +960,7 @@ final class WasmComponentImportCompiler {
 	static Type[] asyncResultTypes(Async async) {
 		return switch (async.op()) {
 			case NEW -> new Type[] { Type.I64 };
-			case READ, WRITE, CANCEL_READ -> new Type[] { Type.I32 };
+			case READ, WRITE, CANCEL_READ, WRITE_START, WRITE_SETTLE -> new Type[] { Type.I32 };
 			case DROP_READABLE, DROP_WRITABLE -> new Type[0];
 		};
 	}
@@ -956,9 +972,10 @@ final class WasmComponentImportCompiler {
 	static int lispArity(Async async) {
 		return switch (async.op()) {
 			case NEW -> 0;
-			case WRITE -> 2;
+			case WRITE, WRITE_SETTLE -> 2;
 			case READ -> async.valueElement() ? 2 : 1;
 			case DROP_READABLE, DROP_WRITABLE, CANCEL_READ -> 1;
+			case WRITE_START -> 4;
 		};
 	}
 
@@ -990,16 +1007,18 @@ final class WasmComponentImportCompiler {
 	 * @param streamEndedGlobal the global index of the ended-stream latch (a cons list of
 	 * the i31 readable-end handles whose read completed DROPPED), or -1 when the module
 	 * reads no stream
+	 * @param writeOrdinal the ordinal of the alias's {@code future.write} import, which a
+	 * {@code WRITE_SETTLE} wrapper calls beside its own; -1 for every other
 	 * @return the code entry bytes
 	 */
 	static byte[] buildAsyncBody(WasmLispCompiler.Ctx.Builder ctxBuilder, Async async, int ordinal,
 			WaitOrdinals waitOrdinals, int allocFuncIndex, int strFromMemFuncIndex, int bytesFromMemFuncIndex,
-			WasmFutureRuntimeBuilder.@Nullable Sched sched, int streamEndedGlobal) {
+			WasmFutureRuntimeBuilder.@Nullable Sched sched, int streamEndedGlobal, int writeOrdinal) {
 		int numParams = lispArity(async);
 		Body probe = emitAsync(ctxBuilder, async, numParams, ordinal, waitOrdinals, allocFuncIndex, strFromMemFuncIndex,
-				bytesFromMemFuncIndex, sched, streamEndedGlobal, MAX_SCRATCH, MAX_SCRATCH);
+				bytesFromMemFuncIndex, sched, streamEndedGlobal, writeOrdinal, MAX_SCRATCH, MAX_SCRATCH);
 		Body body = emitAsync(ctxBuilder, async, numParams, ordinal, waitOrdinals, allocFuncIndex, strFromMemFuncIndex,
-				bytesFromMemFuncIndex, sched, streamEndedGlobal, probe.i32Pool(), probe.i64Pool());
+				bytesFromMemFuncIndex, sched, streamEndedGlobal, writeOrdinal, probe.i32Pool(), probe.i64Pool());
 		return wrapEntry(body);
 	}
 
@@ -1021,6 +1040,9 @@ final class WasmComponentImportCompiler {
 	 * COMPLETED, so a stream read can report items AND the end together.
 	 */
 	static final int COPY_RESULT_DROPPED = 1;
+
+	/** The CANCELLED status of a copy a {@code cancel-*} built-in withdrew. */
+	static final int COPY_RESULT_CANCELLED = 2;
 
 	static final int SUBTASK_STATE_RETURNED = 2;
 
@@ -1134,13 +1156,15 @@ final class WasmComponentImportCompiler {
 
 	private static Body emitAsync(WasmLispCompiler.Ctx.Builder ctxBuilder, Async async, int numParams, int ordinal,
 			WaitOrdinals waitOrdinals, int allocFuncIndex, int strFromMemFuncIndex, int bytesFromMemFuncIndex,
-			WasmFutureRuntimeBuilder.@Nullable Sched sched, int streamEndedGlobal, int i32Pool, int i64Pool) {
+			WasmFutureRuntimeBuilder.@Nullable Sched sched, int streamEndedGlobal, int writeOrdinal, int i32Pool,
+			int i64Pool) {
 		ByteArrayOutputStream bodyStream = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		am.ik.wasm.WasmWriter writer = new am.ik.wasm.WasmWriter(bodyStream);
 		WasmLispCompiler.Ctx ctx = ctxBuilder.writer(writer).bodyStream(bodyStream).build();
 		Gen gen = new Gen(ctx, async.lispName(), numParams, ordinal, allocFuncIndex, strFromMemFuncIndex, i32Pool,
 				i64Pool);
 		gen.waitOrdinals = waitOrdinals;
+		gen.writeOrdinal = writeOrdinal;
 		gen.sched = sched;
 		gen.bytesFromMemFuncIndex = bytesFromMemFuncIndex;
 		gen.octetsFromMemFuncIndex = octetsLift(async.liftsOctets(), bytesFromMemFuncIndex, async.lispName());
@@ -1342,6 +1366,10 @@ final class WasmComponentImportCompiler {
 		// read completed DROPPED); set for the async built-in wrappers of a module that
 		// reads a stream, -1 elsewhere.
 		private int streamEndedGlobal = -1;
+
+		// The alias's future.write import, which a WRITE_SETTLE wrapper calls beside the
+		// cancel-write it imports; -1 elsewhere.
+		private int writeOrdinal = -1;
 
 		// An import's wrapper: a defun, whose slot 0 is the closure environment.
 		Gen(WasmLispCompiler.Ctx ctx, String lispName, int numParams, int ordinal, int allocFuncIndex,
@@ -1785,6 +1813,8 @@ final class WasmComponentImportCompiler {
 					}
 				}
 				case CANCEL_READ -> emitStreamCancelRead(async.handleElement());
+				case WRITE_START -> emitFutureWriteStart(async);
+				case WRITE_SETTLE -> emitFutureWriteSettle();
 			}
 		}
 
@@ -2399,6 +2429,129 @@ final class WasmComponentImportCompiler {
 			int resultTmp = this.ctx.allocTemp();
 			setLocal(resultTmp);
 			emitStagingEpilogue(resultTmp);
+		}
+
+		// future.write that does not wait: (writable value region capacity). The value
+		// is lowered above the mark and written; a write the reader has not taken yet
+		// (BLOCKED) stays pending, what was lowered KEPT past this wrapper -- the host
+		// copies it whenever it reads -- and the wrapper answers (address . size), a
+		// region the caller owns until the write has settled (WRITE_SETTLE). A caller
+		// holding a region a settled write left passes it with its capacity (nil for
+		// none): where the value fits, it is lowered a second time there, what the first
+		// pass staged is popped, and the wrapper answers t, so writes one after another
+		// reuse one region. The first pass is what measures the value: a payload's
+		// strings and lists are staged above its fixed area, so its size is known only
+		// once it is lowered. A write that completed at once -- the reader took the
+		// value, or had gone -- answers nil with nothing kept.
+		private void emitFutureWriteStart(Async async) {
+			WitType payload = Objects.requireNonNull(async.payload(), "future payload");
+			emitStagingPrologue();
+			int handle = allocI32();
+			int second = allocI32();
+			int size = allocI32();
+			int ret = allocI32();
+			getLocal(1);
+			WasmEmitHelper.castI31GetS(this.ctx);
+			setLocal(handle);
+			this.w.write(Instruction.LOOP, 0x40); // $lower
+			int rp = allocRetArea(async.abi().size(payload));
+			emitLowerAt(async.abi(), payload, 2, rp, 0);
+			getLocal(second);
+			this.w.write(Instruction.I32_EQZ);
+			this.w.write(Instruction.IF, 0x40);
+			loadCell(WasmLispCompiler.HEAP_PTR_ADDR);
+			getLocal(this.mark);
+			this.w.write(Instruction.I32_SUB);
+			setLocal(size);
+			getLocal(3);
+			this.w.write(Instruction.REF_IS_NULL);
+			this.w.write(Instruction.I32_EQZ);
+			this.w.write(Instruction.IF, 0x40);
+			getLocal(size);
+			getLocal(4);
+			WasmEmitHelper.castI31GetS(this.ctx);
+			this.w.write(Instruction.I32_LE_U);
+			this.w.write(Instruction.IF, 0x40);
+			i32Const(WasmLispCompiler.HEAP_PTR_ADDR);
+			getLocal(3);
+			WasmEmitHelper.castI31GetS(this.ctx);
+			this.w.write(Instruction.I32_STORE, 0x02, 0x00);
+			i32Const(1);
+			setLocal(second);
+			this.w.write(Instruction.BR);
+			this.w.writeUnsignedLeb128(3); // -> $lower
+			this.w.write(Instruction.END);
+			this.w.write(Instruction.END);
+			this.w.write(Instruction.END);
+			this.w.write(Instruction.END); // loop $lower
+			// the value lies in the caller's region: what the first pass staged goes
+			getLocal(second);
+			this.w.write(Instruction.IF, 0x40);
+			i32Const(WasmLispCompiler.HEAP_PTR_ADDR);
+			getLocal(this.mark);
+			this.w.write(Instruction.I32_STORE, 0x02, 0x00);
+			this.w.write(Instruction.END);
+			getLocal(handle);
+			getLocal(rp);
+			callImport();
+			setLocal(ret);
+			getLocal(ret);
+			i32Const(-1);
+			this.w.write(Instruction.I32_EQ);
+			getLocal(second);
+			this.w.write(Instruction.I32_EQZ);
+			this.w.write(Instruction.I32_AND);
+			this.w.write(Instruction.IF, 0x40);
+			// pending in what this call staged: kept, the staging not popped
+			getLocal(rp);
+			boxI31();
+			getLocal(size);
+			boxI31();
+			newCons();
+			this.w.write(Instruction.RETURN);
+			this.w.write(Instruction.END);
+			getLocal(ret);
+			i32Const(-1);
+			this.w.write(Instruction.I32_EQ);
+			WasmEmitHelper.emitBoolFromI32(this.ctx);
+			int resultTmp = this.ctx.allocTemp();
+			setLocal(resultTmp);
+			emitStagingEpilogue(resultTmp);
+		}
+
+		// What became of a write WRITE_START left pending: (writable address). The
+		// synchronous future.cancel-write answers what the write completed with -- the
+		// reader took the value, or dropped its end -- and the wrapper answers t: the
+		// writable end may be dropped, the region reused. A write still pending is
+		// withdrawn by it (CANCELLED), since the built-in has no way to ask without
+		// withdrawing, so it is written again from where it lies; nil while the reader
+		// has still not come. The end is in no waitable-set, which a synchronous
+		// built-in needs.
+		private void emitFutureWriteSettle() {
+			int handle = allocI32();
+			getLocal(1);
+			WasmEmitHelper.castI31GetS(this.ctx);
+			setLocal(handle);
+			getLocal(handle);
+			callImport();
+			i32Const(0xF);
+			this.w.write(Instruction.I32_AND);
+			i32Const(COPY_RESULT_CANCELLED);
+			this.w.write(Instruction.I32_EQ);
+			this.w.write(Instruction.IF);
+			this.w.writeRefType(true, Type.EQ.code());
+			getLocal(handle);
+			getLocal(2);
+			WasmEmitHelper.castI31GetS(this.ctx);
+			callOrdinal(this.writeOrdinal);
+			i32Const(-1);
+			this.w.write(Instruction.I32_NE);
+			WasmEmitHelper.emitBoolFromI32(this.ctx);
+			this.w.write(Instruction.ELSE);
+			i32Const(1);
+			WasmEmitHelper.emitBoolFromI32(this.ctx);
+			this.w.write(Instruction.END);
+			this.w.write(Instruction.END);
 		}
 
 		// The BLOCKED (-1) park shared by the four async built-in wrappers: with the
