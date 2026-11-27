@@ -305,10 +305,22 @@ final class ClojureHierarchyLowering {
 				ClojureCollectionLowering.tableFromPlist(hfn("LIST", hkey("parents"),
 						ClojureCollectionLowering.makeTable(), hkey("ancestors"), ClojureCollectionLowering.makeTable(),
 						hkey("descendants"), ClojureCollectionLowering.makeTable()))));
+		// (defun c%h-pref-key (v) ...): the spelling a preference keeps V under, so a
+		// class spelling, a class keyword and the class value read alike -- a
+		// prefer-method of a name and a defmethod a library stores under the class
+		// itself meet
+		runtime.add(hdefun("C%H-PREF-KEY", List.of(x),
+				hfn("IF", hfn("KEYWORDP", x),
+						hfn("IF", hfn("POSITION", new LispChar('.'), hfn("NAME", x)), hfn("NAME", x), x),
+						hfn("OR", hfn("RONTOLISP::%CLOJURE-EXTENDS-CLASS-NAME", x), x))));
 		// (defun c%h-preferred? (x y prefers) ...)
-		runtime.add(hdefun("C%H-PREFERRED?", List.of(x, y, prefers),
-				hlet(List.of(hmiss(miss)), hfn("IF", hfn("EQ", hfn("GETHASH", hfn("CONS", x, y), prefers, miss), miss),
-						ClojureLowering.NIL_CONST, ClojureLowering.TRUE_CONST))));
+		runtime.add(
+				hdefun("C%H-PREFERRED?", List.of(x, y, prefers),
+						hlet(List.of(hmiss(miss)),
+								hfn("IF", hfn("EQ",
+										hfn("GETHASH", hfn("CONS", hfn("C%H-PREF-KEY", x), hfn("C%H-PREF-KEY", y)),
+												prefers, miss),
+										miss), ClojureLowering.NIL_CONST, ClojureLowering.TRUE_CONST))));
 		// (defun c%h-more-specific? (c d hier) ...): c descends from d, not vice versa
 		runtime.add(hdefun("C%H-MORE-SPECIFIC?", List.of(c, d, hier),
 				hfn("IF", hfn("C%H-ISA?", hier, c, d),
@@ -326,10 +338,24 @@ final class ClojureHierarchyLowering {
 				hfn("IF", hfn("BAD?", hfn("CAR", cs), cands), acc, hfn("CONS", hfn("CAR", cs), acc)))));
 		runtime.add(hdefun("C%H-SURVIVORS", List.of(cands, hier, prefers),
 				hlabels(List.of(badFn, keepFn), hfn("KEEP", cands, ClojureLowering.NIL_CONST))));
+		// (defun c%h-kind-row-ok? (dv k) ...): whether a kind keyword's method row K
+		// answers the dispatch value DV. A record's, deftype's or reify site's class
+		// reaches every kind its interfaces stand for, and the oracle's class takes the
+		// interface's row, not the kind's: it takes K only when its own kind answers it
+		runtime.add(hdefun("C%H-KIND-ROW-OK?", List.of(x, y), hfn("IF",
+				hfn("AND", hfn("CONSP", y), hfn("EQ", hfn("CAR", y), new LispSymbol(":C%KEYWORD")),
+						hfn("NOT", hfn("POSITION", new LispChar('.'), hfn("CAR", hfn("CDR", y))))),
+				hfn("IF", hfn("RONTOLISP::%CLOJURE-TYPE-CLASS-P", x),
+						hfn("EQUAL", hfn("RONTOLISP::%CLOJURE-KIND-OF-CLASS", x), y), ClojureLowering.TRUE_CONST),
+				ClojureLowering.TRUE_CONST)));
 		// (defun c%h-candidates (methods hier dv) ...): methods the value descends from
 		LispVal candWalk = hfnDef("WALK", List.of(p, acc),
-				hfn("IF", hfn("NULL", p), acc, hfn("WALK", hfn("CDR", hfn("CDR", p)),
-						hfn("IF", hfn("C%H-ISA?", hier, dv, hfn("CAR", p)), hfn("CONS", hfn("CAR", p), acc), acc))));
+				hfn("IF", hfn("NULL", p), acc,
+						hfn("WALK", hfn("CDR", hfn("CDR", p)),
+								hfn("IF",
+										hfn("AND", hfn("C%H-KIND-ROW-OK?", dv, hfn("CAR", p)),
+												hfn("C%H-ISA?", hier, dv, hfn("CAR", p))),
+										hfn("CONS", hfn("CAR", p), acc), acc))));
 		runtime.add(hdefun("C%H-CANDIDATES", List.of(methods, hier, dv),
 				hlet(List.of(ClojureLowerUtil.list(pl, ClojureCollectionLowering.tablePlist(methods))),
 						hlabels(List.of(candWalk), hfn("WALK", pl, ClojureLowering.NIL_CONST)))));
@@ -936,15 +962,48 @@ final class ClojureHierarchyLowering {
 		String key = ClojureDispatchLowering.multimethodKey(ctx, name);
 		LispSymbol prefers = ClojureDispatchLowering.tableGlobal(key, "%prefers");
 		ctx.usedHierarchy = true;
-		return ClojureLowerUtil.list(ClojureLowerUtil.sym("progn"),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("setf"),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"),
-								ClojureLowerUtil.list(ClojureLowerUtil.sym("cons"),
-										ClojureDispatchLowering.dispatchKeyForm(ctx, items.get(2)),
-										ClojureDispatchLowering.dispatchKeyForm(ctx, items.get(3))),
-								prefers),
-						ClojureLowering.TRUE_CONST),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), ClojureLowering.varSym(key)));
+		List<LispVal> forms = new ArrayList<>();
+		forms.add(ClojureLowerUtil.sym("progn"));
+		for (LispVal x : preferKeys(ctx, items.get(2))) {
+			for (LispVal y : preferKeys(ctx, items.get(3))) {
+				forms
+					.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("setf"),
+							ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"), ClojureLowerUtil
+								.list(ClojureLowerUtil.sym("cons"), preferKeyForm(x), preferKeyForm(y)), prefers),
+							ClojureLowering.TRUE_CONST));
+			}
+		}
+		forms.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), ClojureLowering.varSym(key)));
+		return ClojureLowerUtil.list(forms);
+	}
+
+	/**
+	 * The shapes a {@code prefer-method} dispatch value's key may have in a method table:
+	 * the lowered key ({@link ClojureDispatchLowering#dispatchKeyForm}) and, for a class
+	 * spelling, the class value itself -- a library's {@code defmethod} stores the class
+	 * where a lowered one stores the keyword {@code class} answers. Each is kept under
+	 * its spelling ({@link #preferKeyForm}), so the two meet.
+	 */
+	private static List<LispVal> preferKeys(ClojureLowering ctx, LispVal datum) {
+		LispVal lowered = ClojureDispatchLowering.dispatchKeyForm(ctx, datum);
+		List<LispVal> keys = new ArrayList<>();
+		keys.add(lowered);
+		if (datum instanceof LispSymbol s && !s.name().startsWith(":") && !ctx.isLocal(s.name())
+				&& ctx.lookupVar(s.name()) == null && ctx.typeDefOf(s.name()) == null
+				&& ClojureNamespaceLowering.isClasslike(ctx, s.name())) {
+			keys.add(ctx.lower(datum));
+		}
+		return keys;
+	}
+
+	/**
+	 * A {@code prefer-method} dispatch value as the preference table keeps it
+	 * ({@link #hierarchyRuntime}'s {@code C%H-PREF-KEY}), so it meets the method table's
+	 * key whatever shape that one has: a class spelling, a class keyword and the class
+	 * value itself read alike.
+	 */
+	private static LispVal preferKeyForm(LispVal key) {
+		return hfn("C%H-PREF-KEY", key);
 	}
 
 	// platform: Java interop over the java: surface

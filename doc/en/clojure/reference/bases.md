@@ -14,10 +14,14 @@ and the JDK classes' a value or a supertype of one may have. A function's class 
 included), then `IRecord`, `IHashEq`, `IObj`, `ILookup`, `IKeywordLookup`, `IPersistentMap`,
 `java.util.Map` and `Serializable`; a deftype's `Object`, its body's interfaces, then `IType`.
 
+A `reify`'s class answers its body's interfaces and `clojure.lang.IObj`, and a
+`definterface`'s name nil, where the host is; where it is not (the wasm backends) those two
+are refused.
+
 Deviations: the answer is a list (`PersistentList`; the oracle's a `Cons`). A record's or
 deftype's body interfaces come in the order the body names them, where the oracle orders
 several by a hash set. A JDK class no value here has (a class literal of `java.util.HashMap`
-on wasm), a `reify`'s class and a `definterface` name are refused.
+on wasm) is refused.
 
 ```clojure
 (println (bases Long)) ; (java.lang.Number java.lang.Comparable java.lang.constant.Constable java.lang.constant.ConstantDesc)

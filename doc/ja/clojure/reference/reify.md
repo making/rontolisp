@@ -84,7 +84,7 @@ Clojure から呼ぶと拒否されます（オラクルはインタフェース
 （`Runnable`、`Comparable`、`java.util.Comparator`、`Iterable`、`java.util` のコレクション、上記のホストのインタフェース）と上書きした `Object` の
 メソッドは、Java から見た値にも及びます。値は Java のメンバへ、それらを実装したオブジェクト
 として渡ります（[Java interop](interop.md)）。仕様との差異:`toString` を上書きした値は
-`#object[user$reify "text"]` と印字され、オラクルのクラス番号と同一性ハッシュを持ちません。
+`#object[user$reify<N> "text"]` と印字され、オラクルのクラス番号と同一性ハッシュを持ちません。
 `CharSequence` に対する `re-matcher` と `re-find` は、読む範囲を先頭の 16、32、64 ... 文字と
 広げていくので、オラクルのマッチャが止まる位置より先まで `charAt` を呼ぶことがあります。ほかの
 正規表現の関数と `clojure.string` は `CharSequence` を呼び出しごとに `length` と `charAt` で

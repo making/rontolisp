@@ -23,7 +23,13 @@ JDK のクラスはホスト自身のもの、`clojure.lang` のクラスはオ�
 印字・比較・ハッシュ・`class?` が同じクラス値です。
 
 record/deftype はそのクラスを返します。これは名前を値として評価したものと同じです（`user.R`、
-`str` は `"class user.R"`）。例外と実行時エラーはそのクラス（`clojure.lang.ExceptionInfo`・
+`str` は `"class user.R"`）。ホストがあるところではそのクラスはそのために定義されたもので、
+オラクルのスーパークラスとインタフェース（本体のもの、`IRecord` または `IType` のもの、
+`clojure.lang` のものも定義されます）を持つので、それに対する
+`.isAssignableFrom clojure.lang.IRecord`、その名前の `Class/forName`、`Class` を取る Java の
+メソッドはオラクルと同じに答えます。`(bases (class r))` もオラクルと同じです。`reify` はその
+フォームのクラスを、`definterface` の名前はそのインタフェースを返します（`class?`・
+`.isInterface`・`(bases I)` は nil で、オラクルと同じに答えます）。例外と実行時エラーはそのクラス（`clojure.lang.ExceptionInfo`・
 `java.lang.IllegalArgumentException`。実行時エラーと拒否はオラクルがその箇所で投げるクラス、
 クラスを示さないエラーは `java.lang.RuntimeException`）、ストリームはプリンタが示すクラス
 （`java.io.OutputStreamWriter`・`java.io.StringWriter` など）、ホストオブジェクトはホストクラス

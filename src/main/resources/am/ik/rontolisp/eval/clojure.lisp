@@ -2930,14 +2930,20 @@
   "ROWS when they hold the row of the class keyword or designator K (a
    record's or deftype's, by its class name), the host's rows of K's
    Throwable class ahead of them when they do not, NIL when K names no class."
-  (if (or (and (consp k) (eq (car k) :c%keyword))
-          ;; an arm of the class-designator family
-          (rontolisp::%clojure-designator-p k))
-      (let ((name (car (cdr k))))
+  (let ((name (rontolisp::%clojure-class-value-name k)))
+    (if name
         (if (rontolisp::%clojure-class-row name rows)
             rows
             (let ((host (rontolisp::%clojure-host-class-rows name)))
               (if host (append host rows)))))))
+
+(defun rontolisp::%clojure-class-value-name (k)
+  "The binary name of the class value K: a class keyword's, a designator's, or a
+   host class object's name; NIL for anything else."
+  (cond ((and (consp k) (eq (car k) :c%keyword)) (car (cdr k)))
+        ;; an arm of the class-designator family
+        ((rontolisp::%clojure-designator-p k) (car (cdr k)))
+        (t (rontolisp::%clojure-host-class-name k))))
 
 (defun rontolisp::%clojure-class-row (name rows)
   "The row of the class NAME among ROWS, NIL when they hold none."
@@ -2955,7 +2961,10 @@
 (defun rontolisp::%clojure-class-bases (k rows object)
   "The bases of the class keyword K as keywords, ROWS holding its row; a class
    whose bases are unknown answers java.lang.Object when OBJECT, else none."
-  (let ((bases (cdr (rontolisp::%clojure-class-row (car (cdr k)) rows))))
+  (let ((bases
+         (cdr
+          (rontolisp::%clojure-class-row
+           (rontolisp::%clojure-class-value-name k) rows))))
     (rontolisp::%clojure-class-keywords
      (if (eq bases t) (if object '("java.lang.Object")) bases))))
 
@@ -3068,7 +3077,15 @@
                           (rontolisp::%clojure-host-class-supers child nil)))
                    (found nil))
                (dolist (c classes)
-                 (dolist (k (rontolisp::%clojure-host-class-keys c kinds))
+                 ;; a record's, deftype's or reify site's class stands only under its
+                 ;; own keys: the kinds its interfaces stand for are the core kinds'
+                 ;; own (the oracle's class isa a record's class no keyword)
+                 (dolist (k
+                          (rontolisp::%clojure-host-class-keys c
+                           (if (gethash (java:call c "getName")
+                                        rontolisp::%clojure-type-classes)
+                               nil
+                               kinds)))
                    (if (equal k parent) (setq found t))))
                (or found
                    (c%h-mem? parent
@@ -9036,6 +9053,10 @@
                   (if (or (equal name "java.lang.Object")
                        (and kind (equal (c%protocol-tag x) kind))
                        (and kind (equal (car (cdr kind)) "number") (numberp x))
+                       ;; a record's, deftype's or reify site's class takes its own
+                       ;; values, which are no host object
+                       (and (gethash name rontolisp::%clojure-type-classes)
+                            (equal (c%protocol-tag x) c))
                        (and (null kind)
                             (rontolisp::%clojure-host-class-instance-p c x)))
                       x
@@ -13827,6 +13848,71 @@
    the host and the host has or makes the class (%clojure-host-class-named), else
    the (:C%CLASS name) designator."
   (or (rontolisp::%clojure-host-class-named name) (list :C%CLASS name)))
+
+;;;; A type's class value: the tag a record, deftype or reify site dispatches on.
+;;
+;; A record's, deftype's or reify site's dispatch tag is its class value
+;; (%clojure-type-class), one object per name: the host's stub class over Object
+;; and the interfaces its body names where the host makes class values, else the
+;; (:C%CLASS name) designator. Its definition's rows key it, so a computed class
+;; value reaches them as the name does, and Java takes the host object where the
+;; oracle has a Class (.isAssignableFrom clojure.lang.IRecord (class r)).
+
+(defvar rontolisp::%clojure-type-classes
+  (make-hash-table :test 'equal)
+  "Each record's, deftype's or reify site's class NAME to the class value its tag
+   form made: the host's stub class where the host makes one, else its
+   (:C%CLASS name) designator.")
+
+(defun rontolisp::%clojure-type-class (name flags interfaces)
+  "The class value of the record, deftype or reify site NAME, its dispatch tag: the
+   host's stub class with FLAGS over Object and the INTERFACES its body names
+   (their binary names, stubbed first where the host lacks them), else the
+   (:C%CLASS name) designator. One object per name, so every row keyed by the tag
+   reads the same key."
+  (or (gethash name rontolisp::%clojure-type-classes)
+      (let ((class
+             (or (rontolisp::%clojure-host-type-class name flags interfaces)
+                 (list :C%CLASS name))))
+        (setf (gethash name rontolisp::%clojure-type-classes) class)
+        class)))
+
+(defun rontolisp::%clojure-type-class-of-name (name)
+  "The class value the type NAME's tag form made (%clojure-type-class), else its
+   (:C%CLASS name) designator: what a record literal's class reads."
+  (or (gethash name rontolisp::%clojure-type-classes) (list :C%CLASS name)))
+
+(defun rontolisp::%clojure-type-class-p (x)
+  "Whether X is a record's, deftype's or reify site's class value: the class one
+   of their tag forms made (%clojure-type-class)."
+  (let ((name
+         (or (rontolisp::%clojure-host-class-name x)
+             (if (rontolisp::%clojure-designator-p x) (car (cdr x))))))
+    (if (and name (gethash name rontolisp::%clojure-type-classes)) t nil)))
+
+(defun rontolisp::%clojure-host-type-class (name flags interfaces)
+  "The host's stub class of the record, deftype or reify site NAME with FLAGS over
+   Object and the INTERFACES its body names, each interface the host has neither
+   stubbed first as an interface with no member; nil where the host makes no class
+   value (a native image defines none). A host arm like %clojure-host-class-named:
+   a program with no java: operator gets a body answering nil, so its tag is its
+   designator."
+  (if (rontolisp::%clojure-host-classes-p)
+      (progn
+        (dolist (each interfaces)
+          (if (not (rontolisp::%clojure-host-class-named each))
+              (rontolisp::%host-stub-class each 1537 "java.lang.Object" "" "")))
+        (rontolisp::%host-stub-class name flags "java.lang.Object"
+         (rontolisp::%clojure-space-joined interfaces) ""))
+      nil))
+
+(defun rontolisp::%clojure-space-joined (names)
+  "NAMES, the binary names of a type's interfaces, as the one space-separated
+   string %host-stub-class takes them in."
+  (let ((out ""))
+    (dolist (each names)
+      (setq out (concatenate 'string out (if (equal out "") "" " ") each)))
+    out))
 
 (defvar rontolisp::%clojure-host-classes-named
   (make-hash-table :test 'equal)
@@ -21363,7 +21449,8 @@ sun.nio.cs.Unicode java.nio.charset.Charset sun.nio.cs.HistoricallyNamedCharset
             (do ((k keys (cdr k)) (v items (cdr v)))
                 ((null k))
               (setf (gethash (car k) table) (car v)))))
-      (list :C%RECORD (list :C%CLASS (car entry)) keys table (car entry)))))
+      (list :C%RECORD (rontolisp::%clojure-type-class-of-name (car entry)) keys
+            table (car entry)))))
 
 (defun rontolisp::%clojure-rd-index (s c start)
   "The index of the first character C in S at or after START, or -1."

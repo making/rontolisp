@@ -120,8 +120,8 @@ class ClojureSessionTest {
 				"(eval '(deftype SE [] SP (sp [_] :se)))",
 				"(prn (sp? (ST.)) (sp? 1) (sp-call (ST.)) (sp? (eval '(SE.))) (sp-call (eval '(SE.))))"))
 			.isEqualTo("true false :st true :se\n");
-		assertThat(forms(new ClojureSession().read("(deftype Task [] Runnable (run [_] nil))")))
-			.anyMatch(form -> form.contains("(RONTOLISP::%CLOJURE-JAVA-FACE-TAG (LIST :C%CLASS \"user.Task\")"));
+		assertThat(forms(new ClojureSession().read("(deftype Task [] Runnable (run [_] nil))"))).anyMatch(form -> form
+			.contains("(RONTOLISP::%CLOJURE-JAVA-FACE-TAG (RONTOLISP::%CLOJURE-TYPE-CLASS \"user.Task\""));
 	}
 
 	@Test

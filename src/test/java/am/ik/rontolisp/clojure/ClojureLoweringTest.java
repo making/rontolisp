@@ -725,7 +725,7 @@ class ClojureLoweringTest {
 		// the body is data: built in place over the quoted values (no constructor
 		// call), the declared fields first, nil until named
 		String map = lowered("(defrecord R [a b]) #user.R{:b x :c (f 1)}");
-		assertThat(map).contains("(LIST :C%RECORD (LIST :C%CLASS \"user.R\")")
+		assertThat(map).contains("(LIST :C%RECORD (RONTOLISP::%CLOJURE-TYPE-CLASS \"user.R\"")
 			.contains("'|c%x|")
 			.contains("'(|c%f| 1)")
 			.contains("\"user.R\"")
@@ -1495,7 +1495,7 @@ class ClojureLoweringTest {
 		String reify = lowered("(defprotocol P (foo [x])) (defn f [] (reify P (foo [_] 1)))");
 		assertThat(reify).contains("(SETF (GETHASH (LIST :C%KEYWORD \"foo\") ")
 			.contains("(FUNCALL (AREF (CADDR ")
-			.contains("(LIST :C%REIFY (LIST :C%KEYWORD \"reify ")
+			.contains("(LIST :C%REIFY (RONTOLISP::%CLOJURE-TYPE-CLASS \"user$reify")
 			.contains("(VECTOR (LAMBDA (|c%_|) 1))")
 			.doesNotContain("GENSYM");
 		assertThat(reify.indexOf("(FUNCALL (AREF (CADDR ")).isLessThan(reify.indexOf("(DEFUN |c%f|"));
@@ -1521,9 +1521,9 @@ class ClojureLoweringTest {
 		// a record or deftype name in value position is its dispatch tag, its class
 		// designator
 		assertThat(lowered("(defrecord R [a]) (prn R)"))
-			.contains("(RONTOLISP::%CLOJURE-WRITE-DATUM (LIST :C%CLASS \"user.R\")");
+			.contains("(RONTOLISP::%CLOJURE-WRITE-DATUM (RONTOLISP::%CLOJURE-TYPE-CLASS \"user.R\"");
 		assertThat(lowered("(deftype T []) (prn T)"))
-			.contains("(RONTOLISP::%CLOJURE-WRITE-DATUM (LIST :C%CLASS \"user.T\")");
+			.contains("(RONTOLISP::%CLOJURE-WRITE-DATUM (RONTOLISP::%CLOJURE-TYPE-CLASS \"user.T\"");
 		// the protocol's value is the oracle's map, its registry beside the method table
 		assertThat(lowered("(defprotocol P (foo [x] [x y]))")).contains("%CLOJURE-REGISTER-PROTOCOL")
 			.contains(":C%KEYWORD \"sigs\"")
@@ -1660,11 +1660,11 @@ class ClojureLoweringTest {
 		String reify = lowered("(require '[clojure.core.protocols :as p])"
 				+ " (def r (reify p/CollReduce (coll-reduce [_ f init] init)))");
 		assertThat(reify).contains("(RONTOLISP::%CLOJURE-COLL-REDUCER-ROW |c%clojure.core.protocols/CollReduce%methods|"
-				+ " (LIST :C%KEYWORD \"reify ");
+				+ " (RONTOLISP::%CLOJURE-TYPE-CLASS \"user$reify");
 		String record = lowered("(require '[clojure.core.protocols :as p]) (defrecord R [a])"
 				+ " (extend-protocol p/IKVReduce R (kv-reduce [r f init] init))");
 		assertThat(record).contains(
-				"(RONTOLISP::%CLOJURE-KV-REDUCER-ROW |c%clojure.core.protocols/IKVReduce%methods| (LIST :C%CLASS \"user.R\")");
+				"(RONTOLISP::%CLOJURE-KV-REDUCER-ROW |c%clojure.core.protocols/IKVReduce%methods| (RONTOLISP::%CLOJURE-TYPE-CLASS \"user.R\"");
 		// the namespace's own nil and Object rows, a core kind and any other protocol
 		// store without the writer (the defprotocol registration carries the
 		// reducing method's keyword, never the row writer, so a program
@@ -1708,13 +1708,11 @@ class ClojureLoweringTest {
 		// (supers included) and a lambda per method, the body's or the oracle's
 		// AbstractMethodError for one it leaves out
 		String reify = lowered("(def r (reify clojure.lang.Counted (count [_] 3)))");
-		assertThat(reify).contains("(RONTOLISP::%CLOJURE-COUNTED-ROW (LIST :C%KEYWORD \"reify ")
+		assertThat(reify).contains("(RONTOLISP::%CLOJURE-COUNTED-ROW (RONTOLISP::%CLOJURE-TYPE-CLASS \"user$reify")
 			.contains("'(\"clojure.lang.Counted\") (LIST \"count\" (LAMBDA (");
 		String indexed = lowered("(deftype T [n] clojure.lang.Indexed (nth [_ i] i))");
-		assertThat(indexed).contains(
-				"(RONTOLISP::%CLOJURE-INDEXED-ROW (LIST :C%CLASS \"user.T\") '(\"clojure.lang.Indexed\") (LIST \"nth\"")
-			.contains(
-					"(RONTOLISP::%CLOJURE-COUNTED-ROW (LIST :C%CLASS \"user.T\") '(\"clojure.lang.Counted\") (LIST \"count\"")
+		assertThat(indexed).contains("(RONTOLISP::%CLOJURE-INDEXED-ROW (RONTOLISP::%CLOJURE-TYPE-CLASS \"user.T\"")
+			.contains("(RONTOLISP::%CLOJURE-COUNTED-ROW (RONTOLISP::%CLOJURE-TYPE-CLASS \"user.T\"")
 			.contains("(RONTOLISP::%CLOJURE-ABSTRACT-METHOD-ERROR \"does not define or inherit an implementation of"
 					+ " the resolved method count of interface clojure.lang.Counted\")")
 			.contains("(RONTOLISP::%CLOJURE-ABSTRACT-METHOD-ERROR \"does not define or inherit an implementation of"
@@ -1723,22 +1721,21 @@ class ClojureLoweringTest {
 		// out stay Java's) and its toString in the Object row
 		String chars = lowered("(deftype S [s] CharSequence (length [_] 1) (charAt [_ i] \\a)"
 				+ " (subSequence [_ a b] nil) (toString [_] \"a\"))");
-		assertThat(chars)
-			.contains("(RONTOLISP::%CLOJURE-CHAR-SEQUENCE-ROW (LIST :C%CLASS \"user.S\") '(\"java.lang.CharSequence\")"
-					+ " (LIST \"length\" (LAMBDA (")
+		assertThat(chars).contains("(RONTOLISP::%CLOJURE-CHAR-SEQUENCE-ROW (RONTOLISP::%CLOJURE-TYPE-CLASS \"user.S\"")
 			.contains("\"charAt\" (LAMBDA (")
 			.contains("\"subSequence\" (LAMBDA (")
-			.contains("(RONTOLISP::%CLOJURE-OBJECT-ROW (LIST :C%CLASS \"user.S\") NIL (LIST \"toString\" (LAMBDA (")
+			.contains("(RONTOLISP::%CLOJURE-OBJECT-ROW (RONTOLISP::%CLOJURE-TYPE-CLASS \"user.S\"")
 			.doesNotContain("\"isEmpty\"");
 		// a Comparator stores its compare through the Comparable row's family (the
 		// defaults its body leaves out stay Java's)
 		String comparator = lowered("(reify java.util.Comparator (compare [_ a b] (compare b a)))");
-		assertThat(comparator).contains("(RONTOLISP::%CLOJURE-COMPARABLE-ROW (LIST :C%KEYWORD \"reify ")
+		assertThat(comparator)
+			.contains("(RONTOLISP::%CLOJURE-COMPARABLE-ROW (RONTOLISP::%CLOJURE-TYPE-CLASS \"user$reify")
 			.contains("'(\"java.util.Comparator\") (LIST \"compare\" (LAMBDA (")
 			.doesNotContain("\"reversed\"");
 		// an Object override needs no group of its own, and a reify's names its class
 		String object = lowered("(defprotocol P (m [x])) (reify P (m [_] 1) (toString [_] \"r\"))");
-		assertThat(object).contains("(RONTOLISP::%CLOJURE-OBJECT-ROW (LIST :C%KEYWORD \"reify ")
+		assertThat(object).contains("(RONTOLISP::%CLOJURE-OBJECT-ROW (RONTOLISP::%CLOJURE-TYPE-CLASS \"user$reify")
 			.contains(" NIL (LIST \"toString\" (LAMBDA (")
 			.contains("\"class\" \"user$reify\")");
 		// a protocol-only body stores no interface row
@@ -1751,12 +1748,12 @@ class ClojureLoweringTest {
 		// under its binary name, its reflected supers with it (Comparable, which a verb
 		// reads, through its own family)
 		assertThat(lowered("(def r (reify java.util.concurrent.ThreadFactory (newThread [_ x] x)))"))
-			.contains("(RONTOLISP::%CLOJURE-HOST-INTERFACE-ROW (LIST :C%KEYWORD \"reify ")
+			.contains("(RONTOLISP::%CLOJURE-HOST-INTERFACE-ROW (RONTOLISP::%CLOJURE-TYPE-CLASS \"user$reify")
 			.contains("'(\"java.util.concurrent.ThreadFactory\") (LIST \"newThread\" (LAMBDA (");
 		assertThat(lowered("(deftype D [] java.util.concurrent.ScheduledFuture (isDone [_] true))"))
 			.contains("'(\"java.util.concurrent.ScheduledFuture\" \"java.util.concurrent.Delayed\""
 					+ " \"java.util.concurrent.Future\")")
-			.contains("(RONTOLISP::%CLOJURE-COMPARABLE-ROW (LIST :C%CLASS \"user.D\") '(\"java.lang.Comparable\")");
+			.contains("(RONTOLISP::%CLOJURE-COMPARABLE-ROW (RONTOLISP::%CLOJURE-TYPE-CLASS \"user.D\"");
 		for (String[] refused : new String[][] {
 				{ "(reify IFn (invoke [_] 1))", "Unable to resolve symbol: IFn in this context" },
 				{ "(reify clojure.lang.IChunkedSeq (first [_] 1))",
@@ -1790,10 +1787,11 @@ class ClojureLoweringTest {
 		String defined = lowered("(definterface PBR (^int readChar []) (^long readChars [b s l]))");
 		assertThat(defined).contains("\"user.PBR\"").doesNotContain("-ROW (");
 		String type = lowered("(definterface PBR (^int readChar [])) (deftype R [n] PBR (readChar [_] n))");
-		assertThat(type).contains("(RONTOLISP::%CLOJURE-DEFINED-INTERFACE-ROW (LIST :C%CLASS \"user.R\")"
-				+ " '(\"user.PBR\") (LIST \"readChar\" (LAMBDA (");
+		assertThat(type)
+			.contains("(RONTOLISP::%CLOJURE-DEFINED-INTERFACE-ROW (RONTOLISP::%CLOJURE-TYPE-CLASS \"user.R\"");
 		String reified = lowered("(definterface PBR (^int readChar [])) (def r (reify PBR (readChar [_] 1)))");
-		assertThat(reified).contains("(RONTOLISP::%CLOJURE-DEFINED-INTERFACE-ROW (LIST :C%KEYWORD \"reify ")
+		assertThat(reified)
+			.contains("(RONTOLISP::%CLOJURE-DEFINED-INTERFACE-ROW (RONTOLISP::%CLOJURE-TYPE-CLASS \"user$reify")
 			.contains("'(\"user.PBR\") (LIST \"readChar\"");
 		// instance? of the interface reads the row under its binary name, and a call
 		// of its method the row's entry
@@ -1844,8 +1842,7 @@ class ClojureLoweringTest {
 		String task = "(deftype Task [] Runnable (run [_] (println \"ran\")))";
 		String faced = lowered(task + " (Thread. (Task.))");
 		assertThat(faced).contains(
-				"(RONTOLISP::%CLOJURE-INVOKABLE-ROW (RONTOLISP::%CLOJURE-JAVA-FACE-TAG (LIST :C%CLASS \"user.Task\")"
-						+ " (LAMBDA (")
+				"(RONTOLISP::%CLOJURE-INVOKABLE-ROW (RONTOLISP::%CLOJURE-JAVA-FACE-TAG (RONTOLISP::%CLOJURE-TYPE-CLASS \"user.Task\"")
 			.contains("(JAVA:REIFY '(\"java.lang.Runnable\" \"java.lang.Comparable\") :VALUE ")
 			.contains(" :CLASS \"user.Task\" \"compareTo(java.lang.Object)\" (LAMBDA (")
 			.contains("(RONTOLISP::%CLOJURE-CLASS-CAST-EXCEPTION"
@@ -1882,8 +1879,8 @@ class ClojureLoweringTest {
 		// an Object override alone shows a face; a reify's registers once per site,
 		// under its class; a boolean answer by its truth, an Iterator as Java's
 		String reify = lowered("(str (java.util.ArrayList. [(reify Object (toString [_] \"r\") (equals [_ o] 1))]))");
-		assertThat(reify)
-			.contains("(RONTOLISP::%CLOJURE-OBJECT-ROW (RONTOLISP::%CLOJURE-JAVA-FACE-TAG (LIST :C%KEYWORD \"reify ")
+		assertThat(reify).contains(
+				"(RONTOLISP::%CLOJURE-OBJECT-ROW (RONTOLISP::%CLOJURE-JAVA-FACE-TAG (RONTOLISP::%CLOJURE-TYPE-CLASS \"user$reify")
 			.contains("(JAVA:REIFY '(\"java.lang.Comparable\") :VALUE ")
 			.contains(" :CLASS \"user$reify\" ")
 			.contains("\"equals(java.lang.Object)\" (LAMBDA (")
@@ -1905,14 +1902,13 @@ class ClojureLoweringTest {
 		// IPersistentMap extends Iterable, Associative (IPersistentCollection, Seqable,
 		// ILookup) and Counted: one store per family of the closure
 		String map = lowered("(deftype M [m] clojure.lang.IPersistentMap (count [_] 0) (without [_ k] nil))");
-		assertThat(map).contains(
-				"(RONTOLISP::%CLOJURE-PERSISTENT-MAP-ROW (LIST :C%CLASS \"user.M\") '(\"clojure.lang.IPersistentMap\")")
-			.contains("(RONTOLISP::%CLOJURE-ITERABLE-ROW (LIST :C%CLASS \"user.M\") '(\"java.lang.Iterable\")")
-			.contains("(RONTOLISP::%CLOJURE-ASSOCIATIVE-ROW (LIST :C%CLASS \"user.M\")")
-			.contains("(RONTOLISP::%CLOJURE-COLLECTION-ROW (LIST :C%CLASS \"user.M\")")
-			.contains("(RONTOLISP::%CLOJURE-SEQABLE-ROW (LIST :C%CLASS \"user.M\")")
-			.contains("(RONTOLISP::%CLOJURE-LOOKUP-ROW (LIST :C%CLASS \"user.M\")")
-			.contains("(RONTOLISP::%CLOJURE-COUNTED-ROW (LIST :C%CLASS \"user.M\")")
+		assertThat(map).contains("(RONTOLISP::%CLOJURE-PERSISTENT-MAP-ROW (RONTOLISP::%CLOJURE-TYPE-CLASS \"user.M\"")
+			.contains("(RONTOLISP::%CLOJURE-ITERABLE-ROW (RONTOLISP::%CLOJURE-TYPE-CLASS \"user.M\"")
+			.contains("(RONTOLISP::%CLOJURE-ASSOCIATIVE-ROW (RONTOLISP::%CLOJURE-TYPE-CLASS \"user.M\"")
+			.contains("(RONTOLISP::%CLOJURE-COLLECTION-ROW (RONTOLISP::%CLOJURE-TYPE-CLASS \"user.M\"")
+			.contains("(RONTOLISP::%CLOJURE-SEQABLE-ROW (RONTOLISP::%CLOJURE-TYPE-CLASS \"user.M\"")
+			.contains("(RONTOLISP::%CLOJURE-LOOKUP-ROW (RONTOLISP::%CLOJURE-TYPE-CLASS \"user.M\"")
+			.contains("(RONTOLISP::%CLOJURE-COUNTED-ROW (RONTOLISP::%CLOJURE-TYPE-CLASS \"user.M\"")
 			// an abstract method the body leaves out is the oracle's AbstractMethodError
 			// ...
 			.contains("the resolved method iterator of interface java.lang.Iterable\")")
@@ -1921,12 +1917,11 @@ class ClojureLoweringTest {
 			.doesNotContain("\"spliterator\"");
 		// a java.util interface's equals and hashCode are Object's
 		assertThat(lowered("(deftype S [] java.util.Set (equals [_ o] true))"))
-			.contains("(RONTOLISP::%CLOJURE-OBJECT-ROW (LIST :C%CLASS \"user.S\") NIL (LIST \"equals\" (LAMBDA (")
+			.contains("(RONTOLISP::%CLOJURE-OBJECT-ROW (RONTOLISP::%CLOJURE-TYPE-CLASS \"user.S\"")
 			.doesNotContain("the resolved method equals");
 		// a type hint on a method's name is metadata, like the oracle's
 		assertThat(lowered("(deftype V [] clojure.lang.Counted (^long count [_] 1))"))
-			.contains("(RONTOLISP::%CLOJURE-COUNTED-ROW (LIST :C%CLASS \"user.V\") '(\"clojure.lang.Counted\")"
-					+ " (LIST \"count\" (LAMBDA (");
+			.contains("(RONTOLISP::%CLOJURE-COUNTED-ROW (RONTOLISP::%CLOJURE-TYPE-CLASS \"user.V\"");
 		assertThat(lowered("(defprotocol G (^String g [x])) (deftype W [] G (^String g [_] \"w\")) (g (W.))"))
 			.contains("(|c%g| (|c%->W|))");
 		// an instance call of a method several interfaces declare asks each one's test
@@ -4951,7 +4946,7 @@ class ClojureLoweringTest {
 			.hasMessageContaining("Wrong number of args (2) passed to: clojure.core/hash-ordered-coll");
 		// hash reads an IHashEq row, so it is a family of its own, not a marker
 		assertThat(lowered("(deftype H [] clojure.lang.IHashEq (hasheq [_] 1))"))
-			.contains("(RONTOLISP::%CLOJURE-HASHEQ-ROW (LIST :C%CLASS \"user.H\") '(\"clojure.lang.IHashEq\")")
+			.contains("(RONTOLISP::%CLOJURE-HASHEQ-ROW (RONTOLISP::%CLOJURE-TYPE-CLASS \"user.H\"")
 			.doesNotContain("%CLOJURE-MARKER-ROW");
 		// .hashCode of a receiver of no known class is the hashCode of any value, on
 		// every backend; a known host class keeps the host's

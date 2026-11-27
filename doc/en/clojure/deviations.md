@@ -309,7 +309,7 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   as its wrapper list (`(:C%TYPE ...)`), a reify as `(:C%REIFY ...)`; only the entry
   maps print deterministically. One whose body overrides `toString` prints as the oracle's
   `#object[user.T "text"]` without the identity hash, a reify's class spelled
-  `user$reify` without the oracle's number.
+  `user$reify<N>` (the oracle's `user$evalN$reify__M`).
 - A deftype's `^:volatile-mutable` field is the same plain slot as an
   `^:unsynchronized-mutable` one (no cross-thread ordering).
 - `split`/`replace` leave a plain string literal (only
@@ -662,14 +662,16 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
 - `Long/MAX_VALUE` (and `MIN_VALUE`, the `Integer`/`Short`/`Byte` pairs) is itself on
   the wasm backends, so a load-time constant reads; any other member stays the host
   field.
-- A bare class name is its `(:C%CLASS name)` designator on the wasm backends, so a
-  class-keyed map builds at load; two literals of one class are equal, like two
-  `forName` answers. A designator prints as the class's name and answers `class?`,
-  `.getName` and `.getSimpleName` like the oracle's class object, but `str` of one spells
-  `class` ahead of the name for an interface too (the oracle: `interface`). A record's or
-  deftype's class and what `type` answers are designators on every backend, so on the
-  interpreter and the JVM, where a class literal is the host's class object,
-  `(= (type "a") String)` is `false`.
+- A bare class name is its `(:C%CLASS name)` designator on the wasm backends and in a JVM
+  program that uses no Java interop, so a class-keyed map builds at load; two literals of one
+  class are equal, like two `forName` answers. A designator prints as the class's name and
+  answers `class?`, `.getName` and `.getSimpleName` like the oracle's class object, but `str`
+  of one spells `class` ahead of the name for an interface too (the oracle: `interface`). A
+  record's, deftype's, `reify` site's or `definterface`'s class value is a `java.lang.Class`
+  where the host is (the interpreter, a JVM program using Java interop) and a designator
+  elsewhere, so there `(= (type "a") String)` is `true` and here `false`; on the interpreter
+  and the JVM `(.isAssignableFrom clojure.lang.IRecord (class r))`, `(bases (class (reify)))`
+  and `(class? I)` of a `definterface` answer the oracle's.
 - A `DateTimeFormatterBuilder` chain evaluates on the wasm backends (each builder call
   threads a marker, `toFormatter` the formatter, `ofPattern` and `ZoneId/of` their
   own), so a load-time formatter builds; parsing or formatting with one is rejected in
@@ -725,13 +727,14 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   take a type implementing `Seqable` alone through its seq, where the oracle refuses both.
 - A program-defined interface (`definterface`) joins the same rows under its own
   binary name, which `instance?` tests and a `.method` call dispatches on
-  ([reify](reference/reify.md#host-interfaces)). Deviations: the name's value is the
-  binary-name string (the oracle's class object), so `resolve` answers its var and
-  `str` spells the name bare; redefining the interface replaces it, and instances
-  made before the redefinition still satisfy it, where the oracle's are instances of
-  the old class only; a wrong-count call on a `reify` names `java.lang.Object` (a
-  reify's class is no host class here), and the abstract refusal of a method the body
-  leaves out names the method and the interface but no receiver class.
+  ([reify](reference/reify.md#host-interfaces)). Deviations: where the host makes class
+  values the name's value is its interface stub (the oracle's class object), and on the wasm
+  backends the binary-name string, so `str` spells the name bare; redefining the interface
+  replaces it, and instances made before the redefinition still satisfy it, where the oracle's
+  are instances of the old class only; a wrong-count call on a `reify` names
+  `java.lang.Object` on the wasm backends (a designator is no host class there), and the
+  abstract refusal of a method the body leaves out names the method and the interface but no
+  receiver class.
 - `clojure.core.reducers` folds on the calling thread, its parts one after the other, and
   `cat` of two non-empty collections answers one accumulator (a vector) holding both, where
   the oracle answers a `Cat` tree whose fold combines its halves' folds.
@@ -979,7 +982,7 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   (`clojure.lang.Atom@1b6d3586`). Java hands each back as the value itself. What differs: the
   class Java sees (`getClass`, and the JDK's `ClassCastException` messages naming it; the
   front end's own cast failures name the oracle's class but lack the module tail; a reify's
-  class is its namespace's `ns$reify`, where the oracle numbers each); the members are
+  class is its namespace's `ns$reify<N>`, where the oracle spells `ns$evalN$reify__M`); the members are
   converted once, when the value crosses, a lazy seq realized to its end; the `toString` is
   what `str` answers here (a lazy seq and a record spell their contents); a value whose
   oracle class is no `Comparable` is one here whose `compareTo` throws the oracle's

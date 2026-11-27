@@ -13,10 +13,12 @@
 続いて `IRecord`・`IHashEq`・`IObj`・`ILookup`・`IKeywordLookup`・`IPersistentMap`・`java.util.Map`・
 `Serializable` を、deftype は `Object`、本体のインタフェース、続いて `IType` を返します。
 
+`reify` のクラスは本体のインタフェースと `clojure.lang.IObj` を、`definterface` の名前は nil を、
+ホストがあるところでは返します。ホストがないところ（wasm バックエンド）ではこの2つは拒否します。
+
 逸脱: 答えはリスト（`PersistentList`。オラクルは `Cons`）です。record と deftype の本体の
 インタフェースは本体が挙げた順で、オラクルは複数あるとハッシュセットの順にします。ここでどの値も
-持たない JDK のクラス（wasm での `java.util.HashMap` のクラスリテラル）、`reify` のクラス、
-`definterface` の名前は拒否します。
+持たない JDK のクラス（wasm での `java.util.HashMap` のクラスリテラル）は拒否します。
 
 ```clojure
 (println (bases Long)) ; (java.lang.Number java.lang.Comparable java.lang.constant.Constable java.lang.constant.ConstantDesc)

@@ -332,7 +332,7 @@ final class ClojureDispatchLowering {
 			ctx.usedProtocols = true;
 			return answer.apply(ClojureLowerUtil.list(ClojureLowerUtil.sym("equal"),
 					ClojureLowerUtil.list(new LispSymbol(ClojureProtocolLowering.PROTOCOL_TAG), lowered),
-					ClojureProtocolLowering.typeTagForm(known)));
+					ClojureProtocolLowering.typeTagForm(ctx, known)));
 		}
 		ClojureLowering.DefinedInterface defined = ClojureProtocolLowering.definedInterfaceOf(ctx, name);
 		if (defined != null) {
@@ -659,15 +659,14 @@ final class ClojureDispatchLowering {
 	static LispVal classTagForm(ClojureLowering ctx, LispVal lowered) {
 		LispSymbol one = ctx.freshTemp();
 		List<LispVal> branches = new ArrayList<>();
-		// a record or deftype answers its tag, the (:C%CLASS "ns.Name") designator its
-		// name evaluates to, which prints as the oracle's class; a reify answers a
-		// constant keyword
+		// a record, deftype or reify answers its tag: its class value, which prints as
+		// the oracle's class and is one object per name
 		branches.add(ClojureLowerUtil.list(ClojureProtocolLowering.isRecordForm(one),
 				ClojureProtocolLowering.typedTagOf(one)));
 		branches.add(ClojureLowerUtil.list(ClojureProtocolLowering.isDeftypeForm(one),
 				ClojureProtocolLowering.typedTagOf(one)));
 		branches.add(ClojureLowerUtil.list(ClojureProtocolLowering.isReifyForm(one),
-				ClojureCollectionLowering.keywordForm("reify")));
+				ClojureProtocolLowering.typedTagOf(one)));
 		// a clojure.java.io value -- a File, a URL, a byte stream, a stream the
 		// namespace made over one -- answers its class's keyword: an arm a program making
 		// none sheds (ClojureArms.Family.IO)
@@ -961,7 +960,7 @@ final class ClojureDispatchLowering {
 	static @Nullable LispVal classKey(ClojureLowering ctx, String name) {
 		ClojureLowering.TypeDef type = ctx.typeDefOf(name);
 		if (type != null) {
-			return ClojureProtocolLowering.typeTagForm(type);
+			return ClojureProtocolLowering.typeTagForm(ctx, type);
 		}
 		String fqn = ClojureNamespaceLowering.resolveClass(ctx, name);
 		String kind = DISPATCH_CLASS_KEYWORDS.get(fqn.substring(fqn.lastIndexOf('.') + 1));
@@ -1557,7 +1556,7 @@ final class ClojureDispatchLowering {
 	private static LispVal printMethodTag(ClojureLowering ctx, LispVal keyDatum, String verb) {
 		ClojureLowering.TypeDef type = keyDatum instanceof LispSymbol s ? ctx.typeDefOf(s.name()) : null;
 		if (type != null) {
-			return ClojureProtocolLowering.typeTagForm(type);
+			return ClojureProtocolLowering.typeTagForm(ctx, type);
 		}
 		if (keyDatum instanceof LispSymbol s && s.name().startsWith(":")) {
 			return ClojureCollectionLowering

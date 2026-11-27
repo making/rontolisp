@@ -71,11 +71,13 @@ public final class ClojureLibrary {
 	 * answering what the host arm answers for a value that is no host object:
 	 * {@code %clojure-host-class} ({@code class} of a value of no Clojure kind) refuses,
 	 * {@code %clojure-host-class-name} (the printer), {@code %clojure-host-class-named}
-	 * (a class value, which is its designator there) and {@code %clojure-host-fn-class}
-	 * (a function's class, likewise), {@code %clojure-host-class-bases} ({@code bases} of
-	 * a host class, which exists nowhere there), {@code %clojure-host-string}
-	 * ({@code str}), {@code %clojure-host-instance-p} ({@code inst?}, {@code uuid?},
-	 * {@code uri?}, {@code class?}), {@code %clojure-host-class-instance-p} and
+	 * (a class value, which is its designator there), {@code %clojure-host-type-class} (a
+	 * record's, deftype's or reify site's tag, likewise) and
+	 * {@code %clojure-host-fn-class} (a function's class, likewise),
+	 * {@code %clojure-host-class-bases} ({@code bases} of a host class, which exists
+	 * nowhere there), {@code %clojure-host-string} ({@code str}),
+	 * {@code %clojure-host-instance-p} ({@code inst?}, {@code uuid?}, {@code uri?},
+	 * {@code class?}), {@code %clojure-host-class-instance-p} and
 	 * {@code %clojure-host-class-assignable-p} ({@code instance?} of a class value), and
 	 * {@code %clojure-host-throwable} (an exception's view of a value) answer NIL,
 	 * {@code %clojure-host-method} ({@code .getMessage} of a value that is no exception)
@@ -91,6 +93,9 @@ public final class ClojureLibrary {
 			  nil)
 			(defun rontolisp::%clojure-host-class-named (name)
 			  (declare (ignore name))
+			  nil)
+			(defun rontolisp::%clojure-host-type-class (name flags interfaces)
+			  (declare (ignore name flags interfaces))
 			  nil)
 			(defun rontolisp::%clojure-host-string (x)
 			  (declare (ignore x))

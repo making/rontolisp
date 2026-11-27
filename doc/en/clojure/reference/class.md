@@ -23,7 +23,13 @@ Elsewhere (the wasm backends, a JVM program without interop, the native binary) 
 value that prints, compares, hashes and answers `class?` the same way.
 
 A record or deftype answers its class, the value its name evaluates to (`user.R`, `str`
-`"class user.R"`). An exception or a runtime error answers its class
+`"class user.R"`), and where the host is that class is one defined for it: the oracle's
+superclass and interfaces (its body's, `IRecord`'s or `IType`'s, the `clojure.lang` ones
+defined too), so `.isAssignableFrom clojure.lang.IRecord` of it, `Class/forName` of its name
+and a Java method taking a `Class` answer the oracle's, and `(bases (class r))` is the
+oracle's. A `reify` answers its form's class, and a `definterface`'s name its interface
+(`class?`, `.isInterface` and `(bases I)` -- nil -- answer the oracle's). An exception or a
+runtime error answers its class
 (`clojure.lang.ExceptionInfo`, `java.lang.IllegalArgumentException`; a runtime error or a
 refusal the class the oracle throws for it, an error naming no class
 `java.lang.RuntimeException`), a stream the class its printer names

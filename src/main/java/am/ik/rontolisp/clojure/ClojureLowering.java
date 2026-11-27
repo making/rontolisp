@@ -1426,16 +1426,20 @@ public final class ClojureLowering {
 	 * class, which an instance call reaches ({@code (.m r)}), where an
 	 * {@code extend-type} row is none. {@code protocols} are the var keys of the
 	 * protocols its body names, with methods or none: the interfaces of its host class,
-	 * which {@code instance?} tests. {@code starDrops} is -1 for a type a
-	 * {@code defrecord} or {@code deftype} row defines, whose constructions call its
-	 * {@code ->Name}; a type the special form {@code deftype*} defines
-	 * ({@link ClojureTypeSpecials}) has its own constructor over every field and counts
-	 * here its trailing {@code __meta}/{@code __extmap}/{@code __hash}/{@code __hasheq}
-	 * fields, which the oracle's shorter constructors fill and whose presence gives the
-	 * class its static {@code create}.
+	 * which {@code instance?} tests. {@code interfaces} are the binary names of the
+	 * interfaces its class implements directly, in the order first named: the host
+	 * interfaces and the program-defined ones its body names, which the class value's
+	 * stub declares ({@link ClojureProtocolLowering#typeTagForm}). {@code starDrops} is
+	 * -1 for a type a {@code defrecord} or {@code deftype} row defines, whose
+	 * constructions call its {@code ->Name}; a type the special form {@code deftype*}
+	 * defines ({@link ClojureTypeSpecials}) has its own constructor over every field and
+	 * counts here its trailing
+	 * {@code __meta}/{@code __extmap}/{@code __hash}/{@code __hasheq} fields, which the
+	 * oracle's shorter constructors fill and whose presence gives the class its static
+	 * {@code create}.
 	 */
 	record TypeDef(boolean record, List<String> fields, String simpleName, String className, List<String> mutableFields,
-			Set<String> inlineMethods, Set<String> protocols, int starDrops) {
+			Set<String> inlineMethods, Set<String> protocols, List<String> interfaces, int starDrops) {
 
 		/** Whether the special form {@code deftype*} defined the type. */
 		boolean star() {

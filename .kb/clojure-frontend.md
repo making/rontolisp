@@ -65,7 +65,7 @@ with `deviating(...)`, never globally, so the row fails if either side moves. It
 | `[..]` | a CL vector | so is a string, so `vector?`/`coll?` exclude strings |
 | list, seq | a CL list; lazy `(:C%LAZY cell)` | "Laziness" |
 | atom, volatile, ref, agent | `(:C%ATOM #(value))`, a volatile `#(value :C%VOLATILE)`; `#(value nil validator state watches)` for a validated ref, an agent, and every atom and ref of a program that may give a reference a validator or watch | one cell shape, so STM verbs accept atoms; `volatile?` reads the length 2, so slot 1 of the longer cells stays nil ("State") |
-| record / deftype / reify | `(:C%RECORD tag fields table class)` / `(:C%TYPE ...)` / a fresh `:C%REIFY` tag | "Dispatch", "Host interfaces"; a record's or deftype's tag is its class value ("Record and deftype class values") |
+| record / deftype / reify | `(:C%RECORD tag fields table class)` / `(:C%TYPE ...)` / a fresh `:C%REIFY` tag | "Dispatch", "Host interfaces"; a record's or deftype's tag is its class value ("Record and deftype class values"): a host stub class where the host is, else `(:C%CLASS name)` (a reify site's, a keyword) |
 | class value (`class`, a class literal) | the host's `java.lang.Class` (a `clojure.lang` class a stub class) where the program reaches the host, else `(:C%CLASS name)` | "Class values"; the kind keywords stay the dispatch tags |
 | `#"re"` | `(:C%PATTERN stamp ...)` | the stamp is a gensym, so `=` is identity like the oracle |
 | byte array (`byte-array`, `.getBytes`) | `(:C%BYTES octets)` | "Byte arrays" |
@@ -272,10 +272,12 @@ page lacks.
   over a cell of its own, which a `def`'s direct calls never see.
 - In a file, a body defined above a `defn` redefinition still calls the older one (only
   `^:dynamic` names see the newest); a session re-points it.
-- Dispatch: a record's, deftype's or `reify`'s class chain is `Object` and the protocol
-  interfaces its body implements, not its host class's other supers (`IRecord`, `java.util.Map`:
-  a `class` method on `java.util.Map` misses a record); a core class's chain is the oracle's
-  ("Class chains").
+- Dispatch: where the class value is a designator (a program naming no `java:`) a record's,
+  deftype's or `reify`'s class chain is `Object` and the protocol interfaces its body
+  implements, not its host class's other supers (`IRecord`, `java.util.Map`: a `class` method
+  on `java.util.Map` misses a record); where it is the host's stub the chain is the oracle's
+  (the interfaces the stub declares, "Record and deftype class values"). A core class's chain
+  is the oracle's ("Class chains").
 - Metadata: `assoc` keeps it like the oracle (integrant's `build` relies on that for
   `::origin`); a symbol takes none; the side table keeps every object for the program's
   lifetime.
@@ -2141,8 +2143,10 @@ refused, so load-time `def`s need these:
 **`class`, `type`, a class literal, `Class/forName` and `ns-map`'s imports answer ONE class value
 per class and program: the host's `java.lang.Class` where the program reaches the host (the
 interpreter; a JVM program naming a `java:` operator), the `(:C%CLASS name)` designator
-elsewhere (wasm; a JVM program naming none, where no Java API can tell them apart).** The
-dispatch tags stay keywords: `class` is `%clojure-class-of` over the tag `classTagForm` answers
+elsewhere (wasm; a JVM program naming none, where no Java API can tell them apart).** A core
+kind's dispatch tag stays a keyword; a record's, deftype's or reify site's is its class value
+("Record and deftype class values"). `class` is `%clojure-class-of` over the tag `classTagForm`
+answers
 (inside a `defmulti` dispatch function the tag itself), and a class value reads back as its tag
 where a table is keyed (`%clojure-dispatch-kind`, `%clojure-kind-of-class`,
 `%clojure-class-designator-key`). Why one value per program: a JVM program's reflection answers
@@ -2196,8 +2200,10 @@ real `Class` objects, so a class value of another shape would be unequal to them
   `ClojureClassBasesTest#theDesignatorTableIsReflectionsAndTheStubRowsClosedUnderTheirBases`.
   One string, not a quoted list: as the two row lists `(println (bases Long))` was 63,275 B of
   wasm P1, as the string 56,374 (the printer of class values is 20 KB of it). A fn class
-  `AFunction`, a record's or deftype's what its definition noted, a program-defined interface
-  none; any other designator (a JDK class past the rows on wasm, a `reify`'s) is refused by name.
+  `AFunction`, a record's or deftype's what its definition noted (a host class's its
+  interfaces, the stub's reflection), a `reify` site's the `IObj` and its body's interfaces,
+  a program-defined interface none; any other designator (a JDK class past the rows on wasm)
+  is refused by name.
   The note (`%clojure-note-type-bases`: `Object`, the body's interfaces in body order -- the
   oracle's are hash-set ordered -- then `IRecord`'s eight or `IType`) is a statement of
   `Family.TYPE_BASES`, kept only where `supers`/`bases` is read.
@@ -2208,13 +2214,21 @@ real `Class` objects, so a class value of another shape would be unequal to them
   `%clojure-fn-class-name`; munging through `munge`'s printer and `apply` of `concatenate` was
   +40 KB more, hence `%clojure-munge-string`); `java-interop.clj` +5,308 / +4,331 / +5,226 /
   +7,572; `(.getName (.getClass inc))` 103,558 -> 61,143 P1.
+- **A program-defined type's class** is a stub class of its own
+  (`%clojure-type-class`, "Record and deftype class values"): a record's, deftype's or reify
+  site's superclass `Object`, the interfaces its body names, `IRecord`'s or `IType`'s
+  (`clojure.lang` and program interface names stubbed first where the host lacks them), so
+  `.isAssignableFrom`, `Class/forName` of its name and its place in the class chain answer
+  the oracle's; a `definterface`'s its `flags 1537` interface stub. Where the host makes no
+  class value (wasm, a native image) the tag is the designator it always was, and the
+  interface names travel in the tag form so a use above the definition reads the class.
 - Deviations (user doc `reference/class.md`, `reference/bases.md`): one class per kind's value --
   every anonymous fn `AFunction$fn`, a variadic fn under `AFunction` (the oracle's `RestFn`),
-  every strict seq `PersistentList`, a two-member vector `PersistentVector`; records and
-  deftypes keep their designators on every backend, so Java sees no class of theirs (a
-  handle); a stub's `getMethods` lists the answered statics alone; a designator of an
-  interface `str`s as `class X` (the oracle's `interface X`); a `definterface` name evaluates
-  to its name string (`.todo/m87`).
+  every strict seq `PersistentList`, a two-member vector `PersistentVector`; a reify site's
+  class name is `ns$reify<N>` (the oracle numbers each `ns$evalN$reify__M`); a stub declares no
+  method but the statics it answers, so `getMethods` of a record's class lists its
+  interfaces' alone; a designator of an interface `str`s as `class X` (the oracle's
+  `interface X`).
 - Measured 2026-11-26 (oracle `clj` 1.12.6): tools.analyzer.jvm 1.2.3 analyzes all 18 forms of
   "core.async and tools.analyzer.jvm"'s list to the oracle's op and tag (interpreter, run-time
   `analyze` over the copy with `RT`/`Compiler/LOADER` patched); core.match 1.1.1 and schema
@@ -2239,21 +2253,39 @@ real `Class` objects, so a class value of another shape would be unequal to them
 
 ## Record and deftype class values
 
-- **The decision**: a record's or deftype's dispatch tag is the `(:C%CLASS "ns.Name")` designator
-  (`ClojureProtocolLowering.typeTagForm`), and that tag is its class value: what `class`, `type`,
-  the name in value position (after a local and a var of the name), `resolve`, `Class/forName`
-  and the definition answer. It prints `user.R` like the oracle's (so does `PersistentQueue`'s
-  class). Not the simple name's keyword `:R`: `=` to a user keyword, one tag for two namespaces'
-  `R`s.
+- **The decision**: a record's or deftype's dispatch tag is its class value
+  (`ClojureProtocolLowering.typeTagForm`), which is what `class`, `type`, the name in value
+  position (after a local and a var of the name), `resolve`, `Class/forName` and the definition
+  answer. Where the target has the host (`ctx.hostTarget`: the interpreter, the JVM) the tag is
+  `(%clojure-type-class "ns.Name" 17 'interfaces)` (`clojure.lisp`), which answers the host's
+  stub class over `Object`, the interfaces its body names (`clojure.lang` and program interface
+  names stubbed first where the host lacks them) and `IRecord`'s or `IType`'s, so
+  `.isAssignableFrom clojure.lang.IRecord` and a Java method taking a `Class` answer the
+  oracle's, and one object per name (the stub's first definition) makes every row keyed by the
+  tag read the same key. Elsewhere (wasm, a native image) it is the `(:C%CLASS "ns.Name")`
+  designator, emitted at lowering time so the target's bytes do not move. It prints `user.R`
+  like the oracle's (so does `PersistentQueue`'s class). Not the simple name's keyword `:R`:
+  `=` to a user keyword, one tag for two namespaces' `R`s.
 - **Why the tag itself, not a class value beside a keyword tag**: every row a type has (protocol,
   inline, interface, multimethod, hierarchy, `print-method`, registry) is keyed by the tag through
   `equal` tables, so a computed class reaches each row as the name does, with no mapping per
   consumer (`[(class a) (class b)]` would need one per element). `%clojure-dispatch-value` and
-  `%clojure-extends-key` keep a registered tag as itself, not a kind keyword. A record's class
-  stays the designator where the core kinds' classes are host classes ("Class values"); a
-  generated class per record would replace it at `typeTagForm`.
-- **Across the `java:` boundary** (interpreter, JVM): one `java:handle` per class name
-  (`%clojure-designator-handles`), class `java.lang.Class`, so a Java map -- schema's
+  `%clojure-extends-key` keep a registered tag as itself, not a kind keyword.
+- **A reify site's tag** is a class value too: `(%clojure-type-class "ns$reify<N>" 17 '(...))` over
+  its body's interfaces and `IObj`, so `(bases (class (reify)))` answers `Object` and `IObj` like
+  the oracle's. A `definterface`'s name answers `(%clojure-type-class "ns.I" 1537 '())`, its
+  member-less interface stub, so `class?`, `.isInterface` and `bases` answer the oracle's.
+- **Rows the new class value meets**: `isa?` of a record's class on a host class now walks the
+  stub's interfaces ("Class values"), and `%clojure-class-rows`/`%clojure-class-bases` read a
+  host class object's name too, so a session whose library keeps the host arms
+  (`LispEvaluator.loadClojureLibrary`) answers `parents` of a record's class rather than nil. A
+  kind keyword's method row is taken by a program type's class only when its own kind answers
+  it (`C%H-KIND-ROW-OK?`), which keeps a `:map`/`:list` row off a record that merely implements
+  the interfaces; `prefer-method` keeps its keys by class name (`C%H-PREF-KEY`), so a preference
+  over a class spelling meets a library's row stored under the class.
+- **Across the `java:` boundary** (interpreter, JVM): where the class value is the host's stub it
+  crosses as itself; a designator (a program naming no `java:`) crosses as one `java:handle` per
+  class name (`%clojure-designator-handles`), class `java.lang.Class`, so a Java map -- schema's
   `WeakHashMap` registry too -- keys a record's class like the oracle's one `Class` object; Java
   hands it back as the designator.
 - **`R/create`** (schema's `s/record` expansion) is `map->R`, like `R/new` is `->R`
@@ -2266,9 +2298,11 @@ real `Class` objects, so a class value of another shape would be unequal to them
   probe the oracle on the verbatim jars; with rewrite-clj's `make-printable!` or schema's
   `register-schema-print-as-explain` patched out it prints records, not `(maybe Int)`.
 - **Pins**: clojure-spec `a-record-or-deftype-name-is-its-class-value` (all four,
-  oracle-identical), `type-answers-a-host-class-designator-where-the-oracle-answers-a-class`
+  oracle-identical), `a-types-class-value-is-a-host-class-where-the-host-is` (the interpreter
+  and the JVM, oracle-identical: `.isAssignableFrom`, `bases` of a reify site's and a
+  `definterface`'s class, `Class/forName`), `type-answers-a-host-class-designator-where-the-oracle-answers-a-class`
   (printing the class names);
-  `ClojureLoweringTest#protocolsRecordsAndTypesLowerToTables` (the name's designator),
+  `ClojureLoweringTest#protocolsRecordsAndTypesLowerToTables` (the name's tag),
   `ClojureWasmInteropRefusalTest#classValueAnswersTheDesignator*`,
   `ClojureInteropTest#aSetAKeywordAndARecordCrossTheJavaBoundaryAsTheOraclesDo` (a record's class
   as a `WeakHashMap` key).
@@ -3243,11 +3277,12 @@ oracle; the user-facing table: `doc/en/clojure/reference/reify.md`).
 
 ## Defined interfaces
 
-**A `definterface` defines an interface with no host class: the name is bound to
-the binary name, and a `deftype` or `reify` body naming it stores its methods in
-the type's row under that name, which `instance?` tests and a `.method` call
-dispatches on** (`ClojureProtocolLowering.parseInterface`). The rows join the "Host
-interfaces" machinery under the interface's own name.
+**A `definterface` defines an interface: a `deftype` or `reify` body naming it stores its
+methods in the type's row under its binary name, which `instance?` tests and a `.method` call
+dispatches on, and its name evaluates to its class value -- the host's member-less interface
+stub where the host makes class values, else the binary name**
+(`ClojureProtocolLowering.parseInterface`, "Record and deftype class values"). The rows join
+the "Host interfaces" machinery under the interface's own name.
 - The pre-scan registers it with the var, like a protocol, and an ordinary `def` binds the
   name, so `resolve`, redefinition and a later session buffer see it; the short name, the
   binary name (`my.p.I`) and an imported short name resolve alike (`definedInterfaceOf`). A

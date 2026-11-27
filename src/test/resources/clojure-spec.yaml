@@ -18579,3 +18579,35 @@ cases:
       (user.J13R) true user.J13R
       #user.J13R{:a 3, :z 4} (#user.J13R{:a nil})
       j13_other.J13R false #j13_other.J13R{:b 1}
+  - name: a-types-class-value-is-a-host-class-where-the-host-is
+    # A record's, deftype's, reify site's or definterface's class value is the
+    # host's stub class over the interfaces its body names where the host makes
+    # class values (the interpreter, a JVM program naming a java: operator), so
+    # Java takes it where the oracle's Class is one: .isAssignableFrom, .isInterface,
+    # bases and a Class/forName agree, and a bare reify's class answers its bases.
+    # A program naming no java: keeps the designator (the WASM legs). Oracle-identical
+    # (clj 1.12.6, 2026-11-27) where the two legs run.
+    skip:
+      wasm: a wasm module makes no host class, so a class value is its designator
+      wasm_component: a wasm module makes no host class, so a class value is its designator
+    source: |
+      (ns spec.hostclass)
+      (defrecord HR [a])
+      (deftype HT [])
+      (definterface HI (hi []))
+      (def r (->HR 1))
+      (def t (HT.))
+      (println (.isAssignableFrom clojure.lang.IRecord (class r)) (.isAssignableFrom java.util.Map (class r)) (.isAssignableFrom clojure.lang.IType (class t)))
+      (println (class? HI) (bases HI) (.isInterface HI) (.getName HI))
+      (println (bases (class (reify))) (bases (class (reify HI (hi [_] 1)))))
+      (println (bases (class r)) (bases (class t)))
+      (println (class r) (class t) (= HR (class r)) (instance? HR r) (instance? HR t))
+      (println (Class/forName "spec.hostclass.HR") (= (Class/forName "spec.hostclass.HR") HR) (bases HR))
+      (in-ns 'auto)
+    expected: |
+      true true true
+      true nil true spec.hostclass.HI
+      (java.lang.Object clojure.lang.IObj) (java.lang.Object spec.hostclass.HI clojure.lang.IObj)
+      (java.lang.Object clojure.lang.IRecord clojure.lang.IHashEq clojure.lang.IObj clojure.lang.ILookup clojure.lang.IKeywordLookup clojure.lang.IPersistentMap java.util.Map java.io.Serializable) (java.lang.Object clojure.lang.IType)
+      spec.hostclass.HR spec.hostclass.HT true true false
+      spec.hostclass.HR true (java.lang.Object clojure.lang.IRecord clojure.lang.IHashEq clojure.lang.IObj clojure.lang.ILookup clojure.lang.IKeywordLookup clojure.lang.IPersistentMap java.util.Map java.io.Serializable)
