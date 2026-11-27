@@ -1320,13 +1320,27 @@ class JavaSpecE2eTest {
 	 */
 	private static Path compileWasm(Path file, String program, boolean component, String name,
 			SourceStandards standards, boolean wasiLogging) throws IOException {
-		CompileFrontendAccess.Program frontend = CompileFrontendAccess.file(program, file.toString(), true, component,
-				standards, wasiLogging);
-		byte[] module = WasmLispCompiler.builder()
-			.component(component)
-			.runtimeFeatures(frontend.features().names())
-			.build()
-			.compile(frontend.forms());
+		// on the CLI's stack, as `rontolisp -o` compiles: a JUnit worker's 1 MiB
+		// overflows
+		// on a deep program when the class runs concurrently (CliStack)
+		byte[] module;
+		try {
+			module = CliStack.call("java-spec-wasm", () -> {
+				CompileFrontendAccess.Program frontend = CompileFrontendAccess.file(program, file.toString(), true,
+						component, standards, wasiLogging);
+				return WasmLispCompiler.builder()
+					.component(component)
+					.runtimeFeatures(frontend.features().names())
+					.build()
+					.compile(frontend.forms());
+			});
+		}
+		catch (IOException | RuntimeException ex) {
+			throw ex;
+		}
+		catch (Exception ex) {
+			throw new IllegalStateException(ex);
+		}
 		Path path = workDir.resolve(name + (component ? ".component.wasm" : ".wasm"));
 		Files.write(path, module);
 		return path;
