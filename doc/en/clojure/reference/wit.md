@@ -32,6 +32,26 @@ Both refer to their WIT file relative to the file that names it, like `load`. Th
 WIT package directory as it is published: its `*.wit` files are one package, and each entry of its
 `deps/` a package its `use` clauses may name.
 
+An export reads the program's top level -- a `def` it closes over, the decimal-digit table
+`Integer/parseInt` and `parse-long` read. A command component runs no top level when a host calls
+an export directly (`wasmtime run --invoke`, a composed component), so such an export traps there.
+`(export "num.wit" {:reactor true})` makes the exports the entry points instead: the top level runs
+once at the first export call, and no `wasi:cli/run` is lifted. The default stays the command,
+which is what a program that also prints from its top level needs; a WASM command module refuses
+the option.
+
+```console
+$ cat num.clj
+(ns num (:require [rontolisp.wit :as wit]))
+
+(wit/export "num.wit" {:reactor true})
+
+(defn parse [text] (Integer/parseInt text))
+$ rontolisp num.clj -o num.wasm --component
+$ wasmtime run --invoke 'parse("42")' num.wasm
+42
+```
+
 ## Where it runs
 
 | Target | `import` | `export` |

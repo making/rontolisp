@@ -163,8 +163,9 @@ items are IGNORED.
 **`:reactor t`**: the exports are the program's entry points -- no `wasi:cli/run`, the first export
 call runs the top level once; a WASI command module refuses it
 ([wasm-export-no-wasi.md](wasm-export-no-wasi.md), "`wit-export :reactor t`"). The Java front end's
-`@WitExport` program lowers to it ([java-frontend.md](java-frontend.md), "WIT exports"); Lisp's
-default stays the command.
+`@WitExport` program lowers to it ([java-frontend.md](java-frontend.md), "WIT exports"), and so does
+`rontolisp.wit/export`'s `{:reactor true}` ([clojure-frontend.md](clojure-frontend.md), "Host
+boundary"); Lisp's default stays the command.
 
 **Two exports of one label** (two interfaces' `get`, or one beside the world's own): inside a
 component the core module exports an interface member as `<iface>#<label>`

@@ -521,7 +521,8 @@ class ClojureWitBoundaryTest {
 	 * option, a tuple and a {@code list<u8>} in the import tier's spelling, a
 	 * {@code result}'s error arm the {@code ex-info} the var throws -- and
 	 * {@code --emit-wit} answers the world it was handed, parameter names included; then
-	 * {@code examples/clojure/greeter}.
+	 * {@code examples/clojure/greeter}, and a world whose export reads the program's top
+	 * level, which a reactor runs and a command component does not.
 	 */
 	@Test
 	void aWorldIsImplementedAsAComponent() throws Exception {
@@ -547,6 +548,43 @@ class ClojureWitBoundaryTest {
 		assertThat(invoked(example, "shout(\"Ada\", true)", "is-short(\"Grace\")",
 				"greet-all([{name: \"Ada\", excited: true}, {name: \"Bob\", excited: false}])", "measure(\"\")"))
 			.isEqualTo("\"HELLO, ADA!!!\"\nfalse\n[\"HELLO, ADA!!!\", \"HELLO, BOB!\"]\nerr(\"the name is empty\")\n");
+		// An export reads the program's top level: a `def` it closes over, the
+		// decimal-digit table Integer/parseInt reads. A command component runs none of
+		// it under --invoke, so the export traps. {:reactor true} runs the top level at
+		// the first export call instead, and the world lifts no run.
+		write("num.wit", """
+				package local:num;
+
+				world num {
+				  export parse: func(text: string) -> u32;
+				}
+				""");
+		String num = """
+				(ns num
+				  (:require [rontolisp.wit :as wit]))
+
+				(wit/export "num.wit"%s)
+
+				(def base 40)
+
+				(defn parse [text] (+ base (Integer/parseInt text)))
+				""";
+		Path command = this.dir.resolve("out/num-command.wasm");
+		HostBoundaryRuns.cli(write("num-command.clj", num.formatted("")).toString(), "-o", command.toString(),
+				"--component");
+		assertThat(
+				HostWasmtime.INSTANCE.execInContainer("wasmtime", "run", "--invoke", "parse(\"2\")", command.toString())
+					.exitCode())
+			.isNotZero();
+		Path reactor = this.dir.resolve("out/num.wasm");
+		HostBoundaryRuns.cli(write("num.clj", num.formatted(" {:reactor true}")).toString(), "-o", reactor.toString(),
+				"--component", "--emit-wit");
+		assertThat(Files.readString(this.dir.resolve("out/num.wit"))).doesNotContain("wasi:cli/run");
+		assertThat(invoked(reactor, "parse(\"2\")")).isEqualTo("42\n");
+		// a WASI command module has one entry, which ends the instance
+		assertThatThrownBy(() -> HostBoundaryRuns.cli(this.dir.resolve("num.clj").toString(), "-o",
+				this.dir.resolve("out/num-core.wasm").toString()))
+			.hasMessageContaining("rontolisp:wit-export :reactor t makes the program a reactor");
 	}
 
 	// What wasmtime answers each call of a component's exports, a line each.

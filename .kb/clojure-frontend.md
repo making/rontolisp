@@ -1587,9 +1587,14 @@ Clojure cannot name a CL function and a directive must be a top-level form. User
   `flip: func(point) -> point` 104,711 / 35,734. Byte-identical before and after: the old
   greeter (P1, component), host-boundary, page-hits, macros, text, `examples/wit` shapes, app and
   counter, the Java counter.
-- Trap, measured: an export of a command component calling `Integer/parseInt` traps under
-  `wasmtime --invoke` (no top level ran) while the same program's `run` answers; `wit/export`
-  takes no `:reactor` yet (`.todo/m85`).
+- A world's export reads the program's top level, so a command component traps under
+  `wasmtime --invoke` (no top level ran) while the same program's `run` answers (measured
+  2026-11-27): `Integer/parseInt` through `%clojure-decimal-digit-starts`, a `(defvar)` list the
+  top level assigns, and a top-level `def` a `defn` closes over. `wit/export` takes
+  `{:reactor true}` (`exportCall`, `PendingWorld.reactor`), which passes `:reactor t` to the
+  directive; a WASM command module refuses it there. The default stays the command: a program
+  that also works from its top level is a script, and the hand-written block a world's bytes
+  equal is a command.
 - WIT paths resolve against the naming file (`ClojureFiles`); the entry file's directive keeps
   the path as written, so the CL inliner, resolving against the entry's directory, reads the
   same file; a dependency jar's namespace names `<jar>!/<entry>` (`WitFiles.read`).
@@ -1601,7 +1606,8 @@ Clojure cannot name a CL function and a directive must be a top-level form. User
   `aPreview1ModuleRefusesARichMemberOnlyWhereTheProgramCallsIt`), `WitNamingHookTest`,
   `ClojureHostBoundaryTest`, `WitImportInlinerTest.aNamesTableBindsOnPreview1TheMembersTheProgramNames`;
   `ClojureWitBoundaryTest.aWorldIsImplementedAsAComponent` (every compound kind, the error arm,
-  the greeter example invoked),
+  the greeter example invoked, a reactor world's top-level read under `--invoke` and the command
+  module's refusal),
   `ExamplesE2eTest` over `examples/clojure/host-boundary/`, `examples/clojure/greeter/`,
   `examples/wit/keyvalue/page-hits.clj` (a record answer, an error arm).
 

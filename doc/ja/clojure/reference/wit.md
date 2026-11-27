@@ -32,6 +32,27 @@ $ wasmtime run -S keyvalue=y hits.wasm
 公開されている形の WIT パッケージのディレクトリも指定できます。その `*.wit` ファイル群が 1 つの
 パッケージで、`deps/` の各エントリは `use` 節が参照できるパッケージです。
 
+エクスポートはプログラムのトップレベルを読むので、その中には閉じ込めた `def` や、
+`Integer/parseInt` と `parse-long` が読む 10 進数字の表もあります。コマンドコンポーネントでは、
+ホストがエクスポートを直接呼ぶとき（`wasmtime run --invoke`、合成したコンポーネント）に
+トップレベルが走らないため、そうしたエクスポートはそこでトラップします。
+`(export "num.wit" {:reactor true})` は、代わりにエクスポートをエントリーポイントにします。
+トップレベルは最初のエクスポート呼び出しで 1 度だけ走り、`wasi:cli/run` はリフトされません。
+既定はコマンドのままで、トップレベルからも出力するプログラムはこちらを必要とします。
+WASM コマンドモジュールはこのオプションを拒否します。
+
+```console
+$ cat num.clj
+(ns num (:require [rontolisp.wit :as wit]))
+
+(wit/export "num.wit" {:reactor true})
+
+(defn parse [text] (Integer/parseInt text))
+$ rontolisp num.clj -o num.wasm --component
+$ wasmtime run --invoke 'parse("42")' num.wasm
+42
+```
+
 ## 動くターゲット
 
 | ターゲット | `import` | `export` |

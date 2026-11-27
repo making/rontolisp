@@ -142,11 +142,13 @@ final class ClojureWitLowering {
 	 * var of
 	 * @param path the WIT path the directive names
 	 * @param world the world the declaration names, or null for the file's only one
+	 * @param reactor whether the exports are the program's entry points
+	 * ({@code :reactor true}): the top level runs at the first export call
 	 * @param exports the world's exports
 	 * @param at where the declaration sits, for a refusal
 	 */
-	record PendingWorld(String ns, String path, @Nullable String world, List<ClojureBoundary.Function> exports,
-			@Nullable SourceLocation at) {
+	record PendingWorld(String ns, String path, @Nullable String world, boolean reactor,
+			List<ClojureBoundary.Function> exports, @Nullable SourceLocation at) {
 	}
 
 	/** The WIT state one lowering keeps (a session: across its buffers). */
@@ -884,8 +886,8 @@ final class ClojureWitLowering {
 	}
 
 	/**
-	 * {@code (export "path.wit" {:world "name"})}: the world read and checked now, its
-	 * exports resolved and emitted once the program has lowered.
+	 * {@code (export "path.wit" {:world "name" :reactor true})}: the world read and
+	 * checked now, its exports resolved and emitted once the program has lowered.
 	 */
 	private static LispVal exportCall(ClojureLowering ctx, List<LispVal> items, @Nullable LispVal form) {
 		String what = NAMESPACE + "/export";
@@ -898,8 +900,10 @@ final class ClojureWitLowering {
 					what + " takes a WIT file path string, not " + ClojureWasmLowering.shown(items.get(1)));
 		}
 		String world = null;
+		boolean reactor = false;
 		if (n == 2) {
-			Map<String, LispVal> options = ClojureWasmLowering.options(items.get(2), what, List.of(":world"));
+			Map<String, LispVal> options = ClojureWasmLowering.options(items.get(2), what,
+					List.of(":world", ":reactor"));
 			LispVal named = options.get(":world");
 			if (named instanceof LispString string) {
 				world = string.value();
@@ -911,6 +915,7 @@ final class ClojureWitLowering {
 				throw new LispReadException(
 						what + ": :world takes a world name, not " + ClojureWasmLowering.shown(named));
 			}
+			reactor = booleanOption(options, ":reactor", what);
 		}
 		@Nullable String file = ctx.reader == null ? null : ctx.reader.file();
 		String readPath = ctx.files.resolve(file == null ? null : ctx.files.parent(file), path.value());
@@ -926,10 +931,24 @@ final class ClojureWitLowering {
 						+ "Clojure tier does not implement yet (" + export.at() + ")");
 			}
 		}
-		ctx.wit.worlds.add(new PendingWorld(ctx.currentNs, directivePath, world, described.exports(),
+		ctx.wit.worlds.add(new PendingWorld(ctx.currentNs, directivePath, world, reactor, described.exports(),
 				ClojureWasmLowering.locate(ctx, form)));
 		ctx.wit.implemented = true;
 		return ClojureLowering.NIL_CONST;
+	}
+
+	/** A boolean option's value: {@code true}, or {@code false} / {@code nil}. */
+	private static boolean booleanOption(Map<String, LispVal> options, String key, String what) {
+		LispVal value = options.get(key);
+		if (value == null || ClojureLowerUtil.isSymbolNamed(value, "false")
+				|| ClojureLowerUtil.isSymbolNamed(value, "nil")) {
+			return false;
+		}
+		if (ClojureLowerUtil.isSymbolNamed(value, "true")) {
+			return true;
+		}
+		throw new LispReadException(
+				what + ": " + key + " takes true or false, not " + ClojureWasmLowering.shown(value));
 	}
 
 	/**
@@ -981,6 +1000,10 @@ final class ClojureWitLowering {
 			}
 			directive.add(new LispSymbol(":NAMES"));
 			directive.add(ClojureLowerUtil.list(table));
+			if (world.reactor()) {
+				directive.add(new LispSymbol(":REACTOR"));
+				directive.add(new LispSymbol("T"));
+			}
 			// a list<u8> parameter is a byte array here, so it arrives as its octets;
 			// a result at the top of an answer is the envelope the wrapper makes
 			directive.add(new LispSymbol(":OCTETS"));
