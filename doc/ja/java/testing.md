@@ -118,6 +118,10 @@ $T -o cart-tests-comp.wasm --component && \
 `@TempDir` のディレクトリは `/tmp` に作ります。`.wasm` から使うには `/tmp` をプリオープン
 します (`wasmtime run --dir /tmp cart-tests.wasm`)。
 
+`@Timeout` は、待機しているテストにはどのバックエンドでも割り込みます。`.wasm` ではスレッドが
+交代で実行されるため、待機しないテストには実行中に割り込みません。そのテストは終了した時点で
+同じ `TimeoutException` で失敗します。
+
 ## Maven プロジェクト
 
 [Maven プラグイン](../compiling/maven-plugin.md#junit-jupiter-tests-srctestjava)の `test`
@@ -131,10 +135,13 @@ $T -o cart-tests-comp.wasm --component && \
 | `@Test` | `@TempDir` と `TestInfo` 以外のパラメータのないメソッド |
 | `@RepeatedTest` | メソッドを `value` 回実行します。各回には `RepetitionInfo` を与え、`name` (`{displayName}`、`{currentRepetition}`、`{totalRepetitions}`) で名前を付けます。失敗が `failureThreshold` 回に達すると残りはスキップします。JUnit と同じく、スキップする回にもインスタンスは作ります。`value` が正でない、しきい値が範囲外、名前が空白のときはテストのエラーです |
 | `@ParameterizedTest` | ソースが与える行ごとに 1 回ずつメソッドを実行し、そのあと `AutoCloseable` である引数を最後のものから閉じます (`autoCloseArguments = false` なら閉じません)。ソースは `@ValueSource` (`classes` 以外の全要素)、`@CsvSource` (`value`、`textBlock`、`delimiter`、`delimiterString`、`quoteCharacter`、`emptyValue`、`nullValues`、`ignoreLeadingAndTrailingWhitespace`)、`@MethodSource` (文字列リテラルで名前を書いたそのクラスの static メソッドか、`@TestInstance(PER_CLASS)` なら共有インスタンスのメソッド、または名前を省いてテストと同名のもの。戻り値は `Arguments`・配列・単一の引数の、`Stream`、`Iterable`、配列、`IntStream`、`LongStream`、`DoubleStream`)、`@FieldSource` (文字列リテラルで名前を書いたそのクラスのフィールドか、名前を省いてテストと同名のもの。static か、`@TestInstance(PER_CLASS)` なら共有インスタンスのもの。値は `Iterable`、配列、またはストリームかそのどちらかを返す `Supplier`)、`@EnumSource` (`value`、`names`、`mode`、`from`、`to`)、`@NullSource`、`@EmptySource`、`@NullAndEmptySource` です。引数は JUnit と同じように変換します。文字列はプリミティブ型とそのボックス (数値の `_` は除く)、enum、JUnit が変換する JDK の型 (`File`、`Path`、`URI`、`URL`、`UUID`、`BigDecimal`、`BigInteger`、`Charset`、言語タグによる `Locale`、`java.time` の型)、`String` を取る static ファクトリメソッドかコンストラクタを持つクラスに変換します。数値はプリミティブ型には拡大変換し、ボックスにはしません。JUnit が変換できない値は、JUnit と同じ文言でその実行のエラーになります |
+| `@TestFactory` | メソッドが作るテストを実行します。戻り値は `DynamicNode`、その配列、または `DynamicNode` の `Stream`・`Iterable`・`Iterator` です。`DynamicTest` はそれぞれ 1 つのテストとして数え、順番で名前を付け (`prices[2]`。`DynamicContainer` の中なら `prices[2][1]`)、表示名とともに報告します。`@BeforeEach` と `@AfterEach` は各テストの前後ではなく、ファクトリの前後で 1 回実行します。ストリームはテストの後で閉じます。テストを作る途中でファクトリやコンテナが投げた例外は、それ自身のエラーです。それまでに作られたテストは実行済みです |
+| `@Timeout` | テスト、ファクトリ (ファクトリが作るテストは対象外)、テストの前後で実行するメソッドの制限時間です。クラスに付けると、そのクラスと `@Nested` クラスの各テストの制限時間になり、上位クラスとインタフェースから継承します。時間を過ぎるとテストのスレッドに 1 回割り込みます。待機は `InterruptedException` で終わり、メソッドはその後に何をしても何を投げても `TimeoutException` で失敗します。待機しないメソッドは最後まで実行されます。正でない値はエラーです。読む要素は `value`、`unit`、`threadMode` (`SEPARATE_THREAD` 以外) です |
 | `@BeforeEach`、`@AfterEach` | 各テストの前後に、そのインスタンスで実行します。テストの `TestInfo` を与え、前後で実行するテストがすべて繰り返しテストなら `RepetitionInfo` も与えます。インタフェースと上位クラスのものはテストの前では先に、後では最後に実行し、`@Nested` クラスを囲むクラスのものは内側のクラスのものの外側で実行します |
 | `@BeforeAll`、`@AfterAll` | static メソッド (`@TestInstance(PER_CLASS)` なら任意のメソッド) で、クラスの `TestInfo` を与え、そのクラスとその `@Nested` クラスのテスト全体の前後に実行します。例外を投げるとクラスのエラーになり、そのクラスのテストは実行されません |
 | `@TestInstance` | `PER_CLASS` なら、クラスのテスト全体で 1 つのインスタンスを使います。`@BeforeAll` の前に作り、作れなければそのクラスは何も実行しません |
-| `@TestMethodOrder`、`@Order` | クラスのテストを `MethodOrderer.OrderAnnotation` (`@Order` の順。付いていないテストは `Order.DEFAULT`)、`MethodName`、`DisplayName` (名前が同じならパラメータの型の順) の順序で実行します |
+| `@TestMethodOrder`、`@Order` | クラスのテストを `MethodOrderer.OrderAnnotation` (`@Order` の順。付いていないテストは `Order.DEFAULT`)、`MethodName`、`DisplayName` (名前が同じならパラメータの型の順)、`Random`、またはプログラム自身の `MethodOrderer` の順序で実行します。プログラムの `MethodOrderer` には、テストがそのメソッド・表示名・アノテーションとともに渡されます。`MethodOrderer.Default` は宣言順です |
+| `@TestClassOrder` | クラスの `@Nested` クラスと、その中の `@Nested` クラスを、`ClassOrderer.OrderAnnotation`、`ClassName`、`DisplayName`、`Random`、またはプログラム自身の `ClassOrderer` の順序で実行します |
 | `@Tag`、`@Tags` | `TestInfo.getTags()` が返すタグ。テストのもの、次にクラスのもの (上位クラス、各インタフェース、自身の順)、次に囲むクラスのもので、前後の空白を除き、不正なタグは除きます。タグでテストを選ぶ実行はありません |
 | `@Nested` | 内部クラスのテスト。テストごとに、囲むクラスのインスタンスの中に作ったインスタンスで実行します |
 | `@Disabled` | テストをスキップとして数えます。クラスなら、そのテストと `@Nested` クラスをそれぞれ数えます |
@@ -154,6 +161,10 @@ default メソッドと、static の `@BeforeAll`・`@AfterAll`)。アノテー�
 したメソッドはテストではありません。`@TestInstance` と `@TestMethodOrder` は、クラス、その
 インタフェース、上位クラスの順に探し、`@Nested` クラスは囲むクラスの順序付けを引き継ぎます。
 順序付けがなければクラスのテストは宣言順に実行されます。JUnit は独自の順序で実行します。
+プログラム自身の順序付けは、クラスを実行するときにそのクラスのテストを並べます。JUnit は
+最初のテストより前にすべてのクラスを並べます。順序付けがリストから外したテストも、ほかの
+テストの後で実行されます。実行に構成パラメータはないので、ランダムな順序を再現するシードは
+指定できません。
 
 ## AssertJ のうちあるもの
 
@@ -205,15 +216,16 @@ JUnit のアノテーションのうちテストの実行が扱わないもの�
 
 ```console
 $ rontolisp test --java-source-dep org.junit.jupiter:junit-jupiter-api:6.0.3 \
-    src/test/java/shop/SlowTest.java
-error: src/test/java/shop/SlowTest.java:13:5: the annotation org.junit.jupiter.api.Timeout is not supported by the experimental Java subset yet
+    src/test/java/shop/PrinterTest.java
+error: src/test/java/shop/PrinterTest.java:13:5: the annotation org.junit.jupiter.api.condition.EnabledOnOs is not supported by the experimental Java subset yet
 ```
 
-ないものの例は次のとおりです。`@TestFactory`、`@Timeout`、`@TestClassOrder`、
-`MethodOrderer.Random` と独自の順序付け、エクステンション、アノテーション型に付けた JUnit の
-アノテーション (合成アノテーション)、上の表にない要素 (`@ValueSource` の
+ないものの例は次のとおりです。条件 (`@EnabledOnOs`、`@EnabledIf`)、`@TestTemplate`、
+エクステンション、別スレッドで実行する `@Timeout` (`threadMode = SEPARATE_THREAD`)、
+アノテーション型に付けた JUnit のアノテーション (合成アノテーション)、上の表にない要素 (`@ValueSource` の
 `classes`、`@TempDir` の `cleanup` と `factory`)、`Class` のパラメータに与える文字列、`@TempDir`
-でも `TestInfo` でもない `@Test` メソッドのパラメータ、型が JUnit のものであるパラメータ化
+でも `TestInfo` でもない `@Test` メソッドや `@TestFactory` メソッドのパラメータ、戻り値の型が
+`DynamicNode` を示さない `@TestFactory` メソッド (`Object`、型引数のない `Stream`)、型が JUnit のものであるパラメータ化
 テストのパラメータ (`ArgumentsAccessor`、引数を表示名に含む `TestInfo`)、繰り返しでないテストの
 前後で与える `RepetitionInfo`。AssertJ では、ソフトアサーションと、上の表にない検査 (`Path` の
 `hasParent`、再帰比較の独自のコンパレータとイントロスペクション戦略、`ZonedDateTime`・`URI`・

@@ -1767,8 +1767,8 @@ JDK in the front end's semantics, the library and the host.
   (JUnit 4's included), an element of one it holds that the run does not read, one on an
   annotation type (a composed annotation, whose methods JUnit runs), a parameterized test's
   parameter of JUnit's type (`ArgumentsAccessor`, `TestInfo`, `Named`), which JUnit makes
-  (a `TestInfo`'s display name would show the arguments), an orderer other than
-  `OrderAnnotation`/`MethodName`/`DisplayName`, a `RepetitionInfo` given around a test that
+  (a `TestInfo`'s display name would show the arguments), a `@Timeout` whose `threadMode` is
+  `SEPARATE_THREAD`, a `RepetitionInfo` given around a test that
   is not repeated (JUnit: a `ParameterResolutionException` of that test), a text a
   `@ValueSource(strings)` or `@CsvSource` gives a `Class` parameter (JUnit's `Class.forName`
   of a computed name, which finds a class only through reachability metadata here).
@@ -1924,6 +1924,74 @@ JDK in the front end's semantics, the library and the host.
   test, `JUnitException`): `UrlCodecTest` 231,738 -> 238,354 B wasm, `SqlTest` 295,769 ->
   297,171. Pinned by the corpus case's `q/OtherTest.java` (four backends against the
   oracle).
+- **A factory's tests, the orderers, a test's time: measured** (JUnit 6.0.3, surefire 3.6.0,
+  2026-11-27; pinned by the corpus case's `q/FactoryTest.java` and, the time, by the case
+  `a-test-is-given-its-time-and-interrupted-when-it-is-over`, four backends against the
+  oracle):
+  - **`@TestFactory`** (`TestDynamic`): the factory is a container -- the instance,
+    `@BeforeEach`, the method, each node as its stream makes it, the stream closed,
+    `@AfterEach`, all once, the `TestInfo` the factory's. surefire names a dynamic test by its
+    legacy name (`f()[1][2]`), the report `f[1][2] -- display name`, as a parameterized run is
+    `m[2]`. Counted: each `DynamicTest`; nothing for a factory or a container whose nodes were
+    made; one error for one that threw, the tests made before it having run; nothing for one
+    whose assumption did not hold (no `testcase` in surefire's XML for a factory; a container
+    by the same rule, not probed under surefire). `null` returned is `JUnitException:
+    @TestFactory method must not return null`; a blank display name is JUnit's own check.
+    **A compile error here, a discovery warning and no run under JUnit**: a static or private
+    factory, one declared `void` or `List<Object>`. **Refused the same way, validated at run
+    time by JUnit**: `Object`, a raw `Stream` (`Cannot convert instance of java.lang.String
+    into a Stream`), an "iterator provider". A `null` node is a JDK's
+    `NullPointerException` with its helpful text, here one with none. Cost on wasm (two
+    tests, 139,663 B): `DynamicTest.dynamicTest` called by a test with no factory 458,881
+    (JUnit's own classes), a factory 467,831.
+  - **Orderers**: `@TestMethodOrder` of a program's orderer is inherited by the `@Nested`
+    classes; `MethodOrderer.Default` and `ClassOrderer.Default` are the order declared again;
+    an orderer is handed the tests only of a class that has some; `@TestClassOrder` orders
+    the `@Nested` classes of its class and of those inside. `JavaTests.Orderer`: a key the run
+    sorts by (`TestRun.ordered`, `shuffled`) or a class made where the class runs (`new X()`,
+    `TestMethods`, `TestClasses`), whose descriptors reflect the method and its annotations
+    only where asked. **`Random` is a key, not JUnit's class**: `Collections.shuffle` seeded
+    by `System.nanoTime()`, the default its documentation states; JUnit's own, compiled,
+    reaches its `LoggerFactory` and `java.util.logging` (459,577 B against 160,054, and a
+    warning of `LogRecord.setResourceBundleName`). **Differences kept**: JUnit orders every
+    class at discovery with one instance of an orderer, here each class where it runs; an
+    orderer that throws is JUnit's critical discovery issue (no test runs), here uncaught
+    where its class runs; a descriptor dropped from the list runs after the others (JUnit:
+    "retained with arbitrary ordering", seen before them), one added does not run; no
+    configuration parameter (`Optional.empty`), so no seed; equal `@Order`s of classes in
+    the order declared. Sizes (wasm, two tests): `OrderAnnotation` 165,081, of two nested
+    classes 165,809 (140,645 with none), `Random` 160,054, an orderer of its own by display
+    name 178,578, by `getMethod().getName()` 225,368; the corpus's `OrderedTest` alone
+    1,717,137 B (its orderers reflect the methods and annotations of its classes).
+  - **`@Timeout`** (`TestTimeout`): the method runs on the run's thread and a watcher thread
+    interrupts it ONCE when the time is over (a second sleep goes on; the flag is set in a
+    test that never waits). Then, whatever the method did: `TimeoutException: m(T, U) timed
+    out after N unit`, the types as `Class.getName()` (`[I`, `t.Sig$Size`), the unit the
+    `TimeUnit`'s name in lower case, singular for 1 (probed: nanoseconds to seconds; minutes
+    and above by the same rule, unprobed), with what the method threw SUPPRESSED in it -- an
+    `AssertionError`, a `TestAbortedException` too, so a timed-out abort is an error --, and
+    the thread no longer interrupted when `@AfterEach` runs. On a class: each test, each run
+    of a parameterized or repeated one, a factory's method (not its dynamic tests), never
+    what runs around tests, which takes only its own; found as `inherited` finds it, then on
+    the class around (a class above's 20 ms beat the 5 s of the class around). Not positive:
+    `PreconditionViolationException: timeout duration must be a positive number: 0` -- of a
+    test once its instance is made, with no `@BeforeEach` and no `@AfterEach`
+    (`TestTimeout.positive`, emitted only for a value that is no positive literal); of a
+    class the class's error, nothing of it run; of what runs around tests where it is
+    called. `SEPARATE_THREAD` (thread `junit-timeout-thread-N`, left running when the time
+    is over, the cause an `ExecutionTimeoutException`) is refused: what it leaves running
+    would never get a turn on wasm. **Where threads take turns** a test that never waits
+    gives the watcher none: the time is read when the call returns, so the report is the
+    same and only the flag inside the test differs (stated in `testing.md`). Cost: wasm
+    139,663 -> 202,418 B for one `@Timeout` (a program of threads); hence a case of its own,
+    the corpus case's program starting no thread. A run with none of the three is
+    byte-identical (a file of `@Order`, `@Nested` and `@CsvSource`: wasm, component, class).
+  - **The oracle** sorts a class's problems by method, stably -- what a factory made in the
+    order it ran -- and a class's own problem last, as it is known when its tests are over.
+- **A failure has no line** (`.todo/n04`). Measured 2026-11-27: the uncaught report's
+  location line is the program's line for a check of AssertJ and JUnit's own source for
+  an assertion of JUnit's (`AssertionFailureBuilder.java:139`), the innermost located form;
+  a caught exception has a position on no backend.
 - **AssertJ's checks by reflection and of the other kinds: measured** (AssertJ 3.27.7, JDK
   25, 2026-11-26; pinned by the corpus case's `q/AssertjTest.java`, four backends against
   the oracle). Every message was asked of AssertJ under a JDK by probes; the signatures are

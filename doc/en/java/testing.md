@@ -115,6 +115,10 @@ $T -o cart-tests-comp.wasm --component && \
 A `@TempDir` is made in `/tmp`, which a `.wasm` reaches only where it is preopened:
 `wasmtime run --dir /tmp cart-tests.wasm`.
 
+A `@Timeout` interrupts a test that waits on every backend. In a `.wasm` threads take
+turns, so a test that never waits is not interrupted while it runs: it fails with the same
+`TimeoutException` when it ends.
+
 ## A Maven project
 
 The `test` goal of the [Maven plugin](../compiling/maven-plugin.md#junit-jupiter-tests-srctestjava)
@@ -128,10 +132,13 @@ names, and fails the build with the name of a failed test.
 | `@Test` | A method of no parameter but a `@TempDir` and the `TestInfo` |
 | `@RepeatedTest` | The method `value` times, each run given its `RepetitionInfo` and named by `name` (`{displayName}`, `{currentRepetition}`, `{totalRepetitions}`); once `failureThreshold` runs failed, the rest are skipped, an instance still made for each as JUnit does. A `value` that is not positive, a threshold out of range or a blank name is an error of the test |
 | `@ParameterizedTest` | The method once for each row of its sources, then each argument that is `AutoCloseable` closed, the last first (not with `autoCloseArguments = false`): `@ValueSource` (every element but `classes`), `@CsvSource` (`value`, `textBlock`, `delimiter`, `delimiterString`, `quoteCharacter`, `emptyValue`, `nullValues`, `ignoreLeadingAndTrailingWhitespace`), `@MethodSource` (static methods of the class named by string literals, or methods of its shared instance under `@TestInstance(PER_CLASS)`, or the one named as the test: a `Stream`, an `Iterable`, an array, an `IntStream`, a `LongStream` or a `DoubleStream`, of `Arguments`, of arrays or of single arguments), `@FieldSource` (fields of the class named by string literals, or the one named as the test, static or of its shared instance under `@TestInstance(PER_CLASS)`: an `Iterable`, an array, or a `Supplier` of a stream or of either), `@EnumSource` (`value`, `names`, `mode`, `from`, `to`), `@NullSource`, `@EmptySource`, `@NullAndEmptySource`. An argument is converted as JUnit converts it: a text to a primitive type or its box (a number's underscores dropped), an enum, a type of the JDK's JUnit converts (`File`, `Path`, `URI`, `URL`, `UUID`, `BigDecimal`, `BigInteger`, `Charset`, `Locale` by its language tag, the `java.time` types), or a class with a static factory method or a constructor taking a `String`; a number widens to a primitive type, not to a box. What JUnit cannot convert is an error of the run, in JUnit's words |
+| `@TestFactory` | The tests a method makes: a `DynamicNode`, an array of them, or a `Stream`, an `Iterable` or an `Iterator` declared of them. Each `DynamicTest` is a test, counted, named by its place (`prices[2]`; in a `DynamicContainer`, `prices[2][1]`) and reported with its display name; `@BeforeEach` and `@AfterEach` run once around the factory, not around each of its tests, and a stream is closed after them. What the factory or a container throws while its tests are made is an error of its own, the tests made before it having run |
+| `@Timeout` | The time of a test, of a factory (not of the tests it makes) or of a method that runs around tests; on a class, of each test of the class and of its `@Nested` classes, inherited from a class above and from an interface. When the time is over the test's thread is interrupted once, so a wait ends with an `InterruptedException`, and the method fails with a `TimeoutException` whatever it then does or throws; a method that never waits runs to its end. A value that is not positive is an error. `value`, `unit`, and `threadMode` unless it is `SEPARATE_THREAD` |
 | `@BeforeEach`, `@AfterEach` | Around each test, on its instance, given its `TestInfo`, and its `RepetitionInfo` where every test they run around is repeated: those of an interface and of a class above first before a test and last after it, those of the class around a `@Nested` class outside its own |
 | `@BeforeAll`, `@AfterAll` | Static methods, or any method under `@TestInstance(PER_CLASS)`, given the class's `TestInfo`, around the tests of the class and of its `@Nested` classes. One that throws is an error of the class, whose tests then do not run |
 | `@TestInstance` | `PER_CLASS`: one instance for all the tests of the class, made before its `@BeforeAll`; where it cannot be made, nothing of the class runs |
-| `@TestMethodOrder`, `@Order` | The tests of the class in the order of `MethodOrderer.OrderAnnotation` (by `@Order`, a test without one `Order.DEFAULT`), `MethodName` or `DisplayName` (equal names by their parameters' types) |
+| `@TestMethodOrder`, `@Order` | The tests of the class in the order of `MethodOrderer.OrderAnnotation` (by `@Order`, a test without one `Order.DEFAULT`), `MethodName` or `DisplayName` (equal names by their parameters' types), `Random`, or a `MethodOrderer` of the program's, which is handed the tests with their methods, display names and annotations. `MethodOrderer.Default` is the order declared |
+| `@TestClassOrder` | The `@Nested` classes of the class, and of those inside them, in the order of `ClassOrderer.OrderAnnotation`, `ClassName`, `DisplayName`, `Random`, or a `ClassOrderer` of the program's |
 | `@Tag`, `@Tags` | The tags `TestInfo.getTags()` answers: the test's, then its class's (the class above's, each interface's, its own), then the class around's, trimmed, an invalid one left out. No run selects tests by tag |
 | `@Nested` | The tests of an inner class, each on an instance made in an instance of the class around it |
 | `@Disabled` | A test counted as skipped, or a class: each of its tests and `@Nested` classes |
@@ -151,7 +158,10 @@ implements (their default methods, and an interface's static `@BeforeAll` and `@
 a method overridden with no annotation is no test. `@TestInstance` and `@TestMethodOrder`
 are found on the class, then on its interfaces, then on the classes above, and a `@Nested`
 class takes the orderer of the class around it. With no orderer the tests of a class run in
-the order declared, where JUnit runs them in an order of its own.
+the order declared, where JUnit runs them in an order of its own. An orderer of the
+program's orders the tests of a class when the class runs, where JUnit orders every class
+before the first test; a test it drops from the list still runs, after the others, and no
+run has a configuration parameter, so a random order has no seed to repeat it with.
 
 ## What there is of AssertJ
 
@@ -204,15 +214,17 @@ compiled, never skipped:
 
 ```console
 $ rontolisp test --java-source-dep org.junit.jupiter:junit-jupiter-api:6.0.3 \
-    src/test/java/shop/SlowTest.java
-error: src/test/java/shop/SlowTest.java:13:5: the annotation org.junit.jupiter.api.Timeout is not supported by the experimental Java subset yet
+    src/test/java/shop/PrinterTest.java
+error: src/test/java/shop/PrinterTest.java:13:5: the annotation org.junit.jupiter.api.condition.EnabledOnOs is not supported by the experimental Java subset yet
 ```
 
-Among them: `@TestFactory`, `@Timeout`, `@TestClassOrder`, `MethodOrderer.Random` and an
-orderer of one's own, extensions, an annotation of JUnit's on an annotation type (a composed
-annotation), the elements the table above does not name (`classes` of
+Among them: the conditions (`@EnabledOnOs`, `@EnabledIf`), `@TestTemplate`, extensions, a
+`@Timeout` in a thread of its own (`threadMode = SEPARATE_THREAD`), an annotation of JUnit's
+on an annotation type (a composed annotation), the elements the table above does not name (`classes` of
 `@ValueSource`, `cleanup` and `factory` of `@TempDir`), a text given to a `Class` parameter, a
-parameter of a `@Test` method that is no `@TempDir` or `TestInfo`, a parameter of a
+parameter of a `@Test` or a `@TestFactory` method that is no `@TempDir` or `TestInfo`, a
+`@TestFactory` method declared to return what names no `DynamicNode` (`Object`, a raw
+`Stream`), a parameter of a
 parameterized test whose type is JUnit's (`ArgumentsAccessor`, `TestInfo`, whose display
 name would show the arguments), a `RepetitionInfo` given around a test that is not repeated;
 of AssertJ, soft assertions and the checks the table above does not name (`hasParent` of a

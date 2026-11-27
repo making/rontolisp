@@ -4577,7 +4577,7 @@ final class JavaClasses {
 		return List.of();
 	}
 
-	private Relations types() {
+	Relations types() {
 		Relations relations = this.relations;
 		if (relations == null) {
 			relations = this.relationsMaker.apply(this);

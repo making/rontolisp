@@ -58,6 +58,16 @@ final class JavaTests {
 
 	private static final String REPETITION = "rontolisp.internal.TestRepetition";
 
+	private static final String DYNAMIC = "rontolisp.internal.TestDynamic";
+
+	private static final String METHODS = "rontolisp.internal.TestMethods";
+
+	private static final String CLASSES = "rontolisp.internal.TestClasses";
+
+	private static final String TIMEOUT = "rontolisp.internal.TestTimeout";
+
+	private static final String NODE = API + "DynamicNode";
+
 	/**
 	 * The annotations of JUnit's that a run of tests runs, each with the elements of it
 	 * that the run reads; {@code name} of a parameterized test only names its runs. Any
@@ -72,7 +82,8 @@ final class JavaTests {
 			Map.entry(API + "RepeatedTest", Set.of("value", "name", "failureThreshold")),
 			Map.entry(API + "Tag", Set.of("value")), Map.entry(API + "Tags", Set.of("value")),
 			Map.entry(API + "TestInstance", Set.of("value")), Map.entry(API + "TestMethodOrder", Set.of("value")),
-			Map.entry(API + "Order", Set.of("value")),
+			Map.entry(API + "TestClassOrder", Set.of("value")), Map.entry(API + "Order", Set.of("value")),
+			Map.entry(API + "TestFactory", Set.of()), Map.entry(API + "Timeout", Set.of("value", "unit", "threadMode")),
 			Map.entry(PARAMS + "ParameterizedTest", Set.of("name", "autoCloseArguments")),
 			Map.entry(PROVIDER + "ValueSource",
 					Set.of("shorts", "bytes", "ints", "longs", "floats", "doubles", "chars", "booleans", "strings")),
@@ -160,6 +171,28 @@ final class JavaTests {
 
 	/** An annotation a class inherits, and the class it is written on. */
 	private record Inherited(JavaClass type, Annotation annotation) {
+
+	}
+
+	/**
+	 * How the tests of a class or its {@code @Nested} classes are ordered: by a key of
+	 * JUnit's own orderers, which the run sorts or shuffles by, or by an orderer of the
+	 * program's, made where the class runs.
+	 *
+	 * @param key {@code OrderAnnotation}, {@code Name}, {@code DisplayName} or
+	 * {@code Random}, or {@code null} for an orderer that is made
+	 * @param type the orderer's class, by its qualified name
+	 */
+	private record Orderer(@Nullable String key, String type) {
+
+	}
+
+	/**
+	 * A {@code @Timeout}: its value and its unit, as expressions.
+	 *
+	 * @param checked whether the value may be none JUnit takes, which is not positive
+	 */
+	private record Timed(String value, String unit, boolean checked) {
 
 	}
 
@@ -285,11 +318,20 @@ final class JavaTests {
 		/** Whether one instance of the class runs all its tests: PER_CLASS. */
 		boolean perClass;
 
+		/** How the tests are ordered: {@code null} as declared. */
+		@Nullable Orderer orderer;
+
+		/** How the {@code @Nested} classes are ordered: {@code null} as declared. */
+		@Nullable Orderer classOrderer;
+
 		/**
-		 * How the tests are ordered: {@code null} as declared, else the name of a
-		 * {@code MethodOrderer} of JUnit's.
+		 * The time each test of the class has, or {@code null} for no limit: the
+		 * {@code @Timeout} the class inherits, else the class around it's.
 		 */
-		@Nullable String orderer;
+		@Nullable Timed timeout;
+
+		/** Whether {@link #timeout} is the class's own or one it inherits. */
+		boolean timeoutOwn;
 
 		/**
 		 * What runs around each test and is given its RepetitionInfo, or {@code null}.
@@ -557,7 +599,14 @@ final class JavaTests {
 			List<String> value = texts(lifecycle.annotation(), "value", this.classes.unit(lifecycle.type()));
 			suite.perClass = !value.isEmpty() && value.get(0).endsWith("PER_CLASS");
 		}
-		suite.orderer = orderer(type, around);
+		suite.orderer = orderer(type, API + "TestMethodOrder", API + "MethodOrderer.", "MethodName",
+				around == null ? null : around.orderer);
+		suite.classOrderer = orderer(type, API + "TestClassOrder", API + "ClassOrderer.", "ClassName",
+				around == null ? null : around.classOrderer);
+		Inherited timed = inherited(type, API + "Timeout");
+		suite.timeoutOwn = timed != null;
+		suite.timeout = timed != null ? timed(timed.annotation(), this.classes.unit(timed.type()))
+				: around == null ? null : around.timeout;
 		tags(type, suite.tags);
 		if (around != null) {
 			suite.tags.addAll(around.tags);
@@ -593,14 +642,23 @@ final class JavaTests {
 				Annotated annotated = new Annotated(method, annotations(declaring, declaration.pos()));
 				JavaClass.Source source = this.classes.unit(declaring).source();
 				boolean repeated = annotated.is(API + "RepeatedTest");
-				if (annotated.is(API + "Test") || annotated.is(PARAMS + "ParameterizedTest") || repeated) {
-					if (method.isPrivate || method.isStatic || method.returnType != Primitive.VOID) {
+				boolean factory = annotated.is(API + "TestFactory");
+				if (annotated.is(API + "Test") || annotated.is(PARAMS + "ParameterizedTest") || repeated || factory) {
+					if (method.isPrivate || method.isStatic || !factory && method.returnType != Primitive.VOID) {
 						throw JavaClasses.error(source, declaration.pos(),
 								"the test method " + method.name + " must not be " + (method.isPrivate ? "private"
 										: method.isStatic ? "static" : "one that returns a value"));
 					}
+					if (factory && !isNodes(method.returnType)) {
+						throw JavaClasses.error(source, declaration.pos(),
+								"the @TestFactory method " + method.name + " must return a single " + NODE
+										+ " or a Stream, Collection, Iterable, Iterator or array of " + NODE);
+					}
 					if (annotated.is(PARAMS + "ParameterizedTest")) {
 						givens(declaring, method, null);
+					}
+					else if (factory) {
+						givens(declaring, method, "a @TestFactory method", Given.DIRECTORY, Given.INFO);
 					}
 					else {
 						givens(declaring, method, repeated ? "a @RepeatedTest method" : "a @Test method",
@@ -636,14 +694,20 @@ final class JavaTests {
 	}
 
 	/**
-	 * The {@code MethodOrderer} of JUnit's a class's tests run in, inherited as
-	 * {@link #inherited} finds it, else the class around it's (measured), or {@code null}
-	 * for the order declared.
+	 * How a class's tests, or its {@code @Nested} classes, are ordered: by the orderer of
+	 * an annotation inherited as {@link #inherited} finds it, else as the class around it
+	 * orders its own (measured), or {@code null} for the order declared, which JUnit's
+	 * {@code Default} orderer names too.
+	 * @param annotation {@code @TestMethodOrder} or {@code @TestClassOrder}
+	 * @param orderers what the names of JUnit's own orderers of the kind start with
+	 * @param byName the simple name of JUnit's orderer by name
+	 * @param around how the class around orders its own, or {@code null}
 	 */
-	private @Nullable String orderer(JavaClass type, @Nullable Suite around) {
-		Inherited found = inherited(type, API + "TestMethodOrder");
+	private @Nullable Orderer orderer(JavaClass type, String annotation, String orderers, String byName,
+			@Nullable Orderer around) {
+		Inherited found = inherited(type, annotation);
 		if (found == null) {
-			return around == null ? null : around.orderer;
+			return around;
 		}
 		Unit unit = this.classes.unit(found.type());
 		List<String> value = texts(found.annotation(), "value", unit);
@@ -656,13 +720,118 @@ final class JavaTests {
 		catch (LispReadException | JavaClass.Absent ex) {
 			orderer = null;
 		}
-		String name = orderer == null ? named : orderer.name;
-		return switch (name) {
-			case API + "MethodOrderer.OrderAnnotation" -> "OrderAnnotation";
-			case API + "MethodOrderer.MethodName" -> "MethodName";
-			case API + "MethodOrderer.DisplayName" -> "DisplayName";
-			default ->
-				throw JavaClasses.unsupported(unit.source(), found.annotation().pos(), "the method orderer " + name);
+		if (orderer == null) {
+			throw JavaClasses.error(unit.source(), found.annotation().pos(), "cannot find symbol: class " + named);
+		}
+		String name = orderer.name;
+		if (name.equals(orderers + "Default")) {
+			return null;
+		}
+		if (name.equals(orderers + "OrderAnnotation") || name.equals(orderers + "DisplayName")
+				|| name.equals(orderers + "Random")) {
+			return new Orderer(name.substring(orderers.length()), name);
+		}
+		return name.equals(orderers + byName) ? new Orderer("Name", name) : new Orderer(null, name);
+	}
+
+	/**
+	 * A {@code @Timeout} as written. A test run in a thread of its own is refused: the
+	 * thread it leaves running when its time is over would run on where the target has
+	 * threads and never get a turn where it has one stack.
+	 */
+	private Timed timed(Annotation written, Unit unit) {
+		for (String mode : texts(written, "threadMode", unit)) {
+			if (!mode.endsWith("SAME_THREAD") && !mode.endsWith("INFERRED")) {
+				throw JavaClasses.unsupported(unit.source(), written.pos(),
+						"the thread mode " + mode.substring(mode.lastIndexOf('.') + 1) + " of @Timeout");
+			}
+		}
+		List<String> value = texts(written, "value", unit);
+		List<String> given = texts(written, "unit", unit);
+		if (value.isEmpty()) {
+			throw JavaClasses.error(unit.source(), written.pos(),
+					"annotation @Timeout is missing a default value for the element 'value'");
+		}
+		return new Timed(value.get(0), given.isEmpty() ? "java.util.concurrent.TimeUnit.SECONDS" : given.get(0),
+				!value.get(0).matches("[1-9][0-9_]*[lL]?"));
+	}
+
+	/** The {@code @Timeout} written on a method, or {@code null}. */
+	private @Nullable Timed timed(Method method) {
+		JavaSyntax.Method declaration = java.util.Objects.requireNonNull(method.declaration);
+		List<Annotation> written = annotations(method.owner, declaration.pos()).get(API + "Timeout");
+		return written == null ? null : timed(written.get(0), this.classes.unit(method.owner));
+	}
+
+	/**
+	 * A call with a time for it, the method named as JUnit names it where the time is
+	 * over (measured): its name and its parameters' types as a class names itself.
+	 */
+	private static String timed(@Nullable Timed timeout, Method method, String call) {
+		return timeout == null ? call : TIMEOUT + ".timed(" + limit(timeout, method) + ", () -> " + call + ")";
+	}
+
+	/** The first arguments of a call with a time for it: the time and the method. */
+	private static String limit(Timed timeout, Method method) {
+		StringBuilder signature = new StringBuilder(method.name).append('(');
+		for (int i = 0; i < method.parameters.size(); i++) {
+			signature.append(i == 0 ? "" : ", ").append(className(method.parameters.get(i)));
+		}
+		return "(" + timeout.value() + "), " + timeout.unit() + ", " + literal(signature.append(')').toString());
+	}
+
+	/** A type as its class names itself: an array's by its descriptor. */
+	private static String className(JavaType type) {
+		if (!(type instanceof ArrayType array)) {
+			return typeName(type);
+		}
+		JavaType element = array.element();
+		String dimensions = "[";
+		while (element instanceof ArrayType inner) {
+			element = inner.element();
+			dimensions += "[";
+		}
+		return dimensions + (element instanceof Primitive primitive ? switch (primitive) {
+			case BOOLEAN -> "Z";
+			case BYTE -> "B";
+			case SHORT -> "S";
+			case CHAR -> "C";
+			case INT -> "I";
+			case LONG -> "J";
+			case FLOAT -> "F";
+			default -> "D";
+		} : "L" + typeName(element) + ";");
+	}
+
+	/**
+	 * Whether a type is what a {@code @TestFactory} method returns: a node, an array of
+	 * nodes, or a stream, an {@code Iterable} or an iterator declared of nodes.
+	 */
+	private boolean isNodes(JavaType type) {
+		if (type instanceof ArrayType array) {
+			return isNode(array.element());
+		}
+		if (isNode(type)) {
+			return true;
+		}
+		for (String holder : List.of("java.util.stream.Stream", "java.lang.Iterable", "java.util.Iterator")) {
+			JavaClass above = this.classes.qualified(holder);
+			ClassType held = above == null ? null : this.classes.types().asSuper(type, above);
+			if (held != null) {
+				return held.arguments().size() == 1 && isNode(held.arguments().get(0));
+			}
+		}
+		return false;
+	}
+
+	private boolean isNode(@Nullable JavaType type) {
+		JavaClass node = this.classes.qualified(NODE);
+		return switch (type) {
+			case ClassType named -> node != null && named.declaration().isSubclassOf(node);
+			case JavaType.Wildcard wildcard -> isNode(wildcard.upper());
+			case JavaType.Variable variable ->
+				!variable.parameter().bounds.isEmpty() && isNode(variable.parameter().bounds.get(0));
+			case null, default -> false;
 		};
 	}
 
@@ -841,34 +1010,46 @@ final class JavaTests {
 			body.append("        run.skipped(").append(suite.skipped()).append(");\n");
 		}
 		else {
+			int checked = body.length();
 			StringBuilder tests = new StringBuilder();
 			List<String> each = new ArrayList<>();
 			for (Annotated test : suite.tests) {
 				each.add(test(suite, test));
 			}
-			if (suite.orderer == null) {
+			// an orderer is handed the tests of a class that has some (measured)
+			Orderer orderer = suite.tests.isEmpty() ? null : suite.orderer;
+			if (orderer == null) {
 				each.forEach(tests::append);
+			}
+			else if (orderer.key() == null) {
+				tests.append("        java.util.List<" + METHODS + ".Test> ordered = new java.util.ArrayList<>();\n");
+				for (int i = 0; i < suite.tests.size(); i++) {
+					tests.append("        ordered.add(new " + METHODS + ".Test(")
+						.append(reflected(suite.tests.get(i).method()))
+						.append(", ")
+						.append(displayName(suite.tests.get(i)))
+						.append(", () -> {\n")
+						.append(each.get(i))
+						.append("        }));\n");
+				}
+				tests.append("        " + METHODS + ".ordered(new ")
+					.append(orderer.type())
+					.append("(), ")
+					.append(suite.type.name)
+					.append(".class, ordered);\n");
 			}
 			else {
 				tests.append("        java.util.List<" + RUN + ".Ordered> ordered = new java.util.ArrayList<>();\n");
 				for (int i = 0; i < suite.tests.size(); i++) {
 					tests.append("        ordered.add(new " + RUN + ".Ordered(")
-						.append(orderKeys(suite, suite.tests.get(i)))
+						.append(orderer.key().equals("Random") ? "0, \"\", \"\"" : orderKeys(suite, suite.tests.get(i)))
 						.append(", () -> {\n")
 						.append(each.get(i))
 						.append("        }));\n");
 				}
-				tests.append("        " + RUN + ".ordered(ordered, ")
-					.append(suite.orderer.equals("OrderAnnotation"))
-					.append(");\n");
+				tests.append("        ").append(sorted(orderer, "ordered")).append(";\n");
 			}
-			for (Suite nested : suite.nested) {
-				tests.append("        ")
-					.append(run(nested))
-					.append("(run")
-					.append(sharedArguments(nested, false))
-					.append(");\n");
-			}
+			tests.append(nested(suite));
 			boolean classInfo = false;
 			if (suite.perClass) {
 				for (Suite level : suite.nest()) {
@@ -952,6 +1133,14 @@ final class JavaTests {
 			else {
 				body.append(tests);
 			}
+			Timed timeout = suite.timeout;
+			if (timeout != null && suite.timeoutOwn && timeout.checked()) {
+				// a class whose tests are given no time JUnit takes runs nothing: its
+				// error
+				body.insert(checked, "        if (run.around(() -> " + TIMEOUT + ".positive(" + timeout.value() + "), "
+						+ suite.skipped() + ")) {\n")
+					.append("        }\n");
+			}
 		}
 		body.append("        run.finished();\n");
 		this.members.append("    private static void ")
@@ -962,6 +1151,71 @@ final class JavaTests {
 			.append(body)
 			.append("    }\n");
 		return name;
+	}
+
+	/**
+	 * The statements running the {@code @Nested} classes of a class, in the order
+	 * declared or in the one its orderer of classes gives.
+	 */
+	private String nested(Suite suite) {
+		List<String> runs = new ArrayList<>();
+		for (Suite nested : suite.nested) {
+			runs.add(run(nested) + "(run" + sharedArguments(nested, false) + ")");
+		}
+		StringBuilder classes = new StringBuilder();
+		Orderer orderer = suite.classOrderer;
+		if (orderer == null || runs.isEmpty()) {
+			runs.forEach(run -> classes.append("        ").append(run).append(";\n"));
+			return classes.toString();
+		}
+		String list = orderer.key() == null ? CLASSES + ".Nested" : RUN + ".Ordered";
+		classes.append("        java.util.List<" + list + "> classes = new java.util.ArrayList<>();\n");
+		for (int i = 0; i < runs.size(); i++) {
+			Suite nested = suite.nested.get(i);
+			String keys;
+			if (orderer.key() == null) {
+				keys = nested.type.name + ".class, " + nested.displayName;
+			}
+			else if (orderer.key().equals("Random")) {
+				keys = "0, \"\", \"\"";
+			}
+			else {
+				List<Annotation> ordered = annotations(nested.type).getOrDefault(API + "Order", List.of());
+				keys = (ordered.isEmpty() ? API + "Order.DEFAULT"
+						: "(" + texts(ordered.get(0), "value", this.classes.unit(nested.type)).get(0) + ")") + ", "
+						+ (orderer.key().equals("DisplayName") ? nested.displayName : literal(nested.type.binaryName))
+						+ ", \"\"";
+			}
+			classes.append("        classes.add(new " + list + "(")
+				.append(keys)
+				.append(", () -> ")
+				.append(runs.get(i))
+				.append("));\n");
+		}
+		return classes
+			.append(orderer.key() == null ? "        " + CLASSES + ".ordered(new " + orderer.type() + "(), classes);\n"
+					: "        " + sorted(orderer, "classes") + ";\n")
+			.toString();
+	}
+
+	/** The call running what a list holds in the order of a key of JUnit's orderers. */
+	private static String sorted(Orderer orderer, String list) {
+		return "Random".equals(orderer.key()) ? RUN + ".shuffled(" + list + ")"
+				: RUN + ".ordered(" + list + ", " + "OrderAnnotation".equals(orderer.key()) + ")";
+	}
+
+	/**
+	 * The arguments a method is reflected by: the class declaring it, its name and its
+	 * parameters' types.
+	 */
+	private static String reflected(Method method) {
+		StringBuilder made = new StringBuilder(method.owner.name).append(".class, ")
+			.append(literal(method.name))
+			.append(", new Class<?>[] {");
+		for (int i = 0; i < method.parameters.size(); i++) {
+			made.append(i == 0 ? "" : ", ").append(classLiteral(method.parameters.get(i))).append(".class");
+		}
+		return made.append('}').toString();
 	}
 
 	/** Whether JUnit gives one of a method's parameters something of a kind. */
@@ -991,7 +1245,8 @@ final class JavaTests {
 		for (JavaType each : method.parameters) {
 			parameters.append(parameters.isEmpty() ? "" : ", ").append(typeName(each));
 		}
-		String name = java.util.Objects.equals(suite.orderer, "DisplayName") ? displayName(test) : literal(method.name);
+		String name = suite.orderer != null && "DisplayName".equals(suite.orderer.key()) ? displayName(test)
+				: literal(method.name);
 		return order + ", " + name + ", " + literal(parameters.toString());
 	}
 
@@ -1076,12 +1331,7 @@ final class JavaTests {
 		if (test == null) {
 			return made.append("null, null, null)").toString();
 		}
-		Method method = test.method();
-		made.append(method.owner.name).append(".class, ").append(literal(method.name)).append(", new Class<?>[] {");
-		for (int i = 0; i < method.parameters.size(); i++) {
-			made.append(i == 0 ? "" : ", ").append(classLiteral(method.parameters.get(i))).append(".class");
-		}
-		return made.append("})").toString();
+		return made.append(reflected(test.method())).append(')').toString();
 	}
 
 	private String information(Suite suite, @Nullable Annotated test) {
@@ -1111,7 +1361,7 @@ final class JavaTests {
 	private String call(String target, Method method, Slots slots, String info) {
 		StringBuilder call = new StringBuilder(target).append('.').append(method.name).append('(');
 		call.append(arguments(method, slots, info, null));
-		return call.append(')').toString();
+		return timed(timed(method), method, call.append(')').toString());
 	}
 
 	/**
@@ -1158,6 +1408,7 @@ final class JavaTests {
 		}
 		boolean parameterized = test.is(PARAMS + "ParameterizedTest");
 		boolean repeated = test.is(API + "RepeatedTest");
+		boolean factory = test.is(API + "TestFactory");
 		boolean closing = parameterized;
 		for (Annotation written : test.annotations().getOrDefault(PARAMS + "ParameterizedTest", List.of())) {
 			for (String text : texts(written, "autoCloseArguments", unit)) {
@@ -1173,6 +1424,7 @@ final class JavaTests {
 		this.members.append("    private static void ")
 			.append(invoked)
 			.append("(")
+			.append(factory ? RUN + " run" + (shared.isEmpty() ? "" : ", ") : "")
 			.append(sharedParameters(suite, true).replaceFirst("^, ", ""))
 			.append(parameterized ? (shared.isEmpty() ? "" : ", ") + "Object[] row"
 					: repeated ? (shared.isEmpty() ? "" : ", ") + REPETITION + " repetition" : "")
@@ -1180,6 +1432,10 @@ final class JavaTests {
 			.append(invocation(suite, test, closing))
 			.append("    }\n");
 		String named = literal(method.name);
+		if (factory) {
+			return "        " + DYNAMIC + ".factory(run, " + named + ", " + shown + ", () -> " + invoked + "(run"
+					+ shared + "));\n";
+		}
 		if (repeated) {
 			Annotation written = test.annotations().getOrDefault(API + "RepeatedTest", List.of()).get(0);
 			List<String> value = texts(written, "value", unit);
@@ -1415,7 +1671,28 @@ final class JavaTests {
 				after.add(0, call(variable, each, slots, "info"));
 			}
 		}
-		String call = "instance." + method.name + "(" + arguments(method, slots, "info", "row") + ")";
+		Timed timeout = timed(method);
+		if (timeout == null) {
+			timeout = suite.timeout;
+		}
+		if (timeout != null && timeout.checked()) {
+			// no time JUnit takes: the test's error once its instance is made (measured)
+			body.append("        " + TIMEOUT + ".positive(").append(timeout.value()).append(");\n");
+		}
+		String called = "instance." + method.name + "(" + arguments(method, slots, "info", "row") + ")";
+		String call;
+		if (!test.is(API + "TestFactory")) {
+			call = timed(timeout, method, called);
+		}
+		else if (timeout == null) {
+			call = DYNAMIC + ".run(run, " + literal(method.name) + ", " + called + ")";
+		}
+		else {
+			// the time is the factory's, not that of the tests it makes (measured)
+			call = JavaAnnotations.typeText(method.returnType) + " made = " + TIMEOUT + ".called("
+					+ limit(timeout, method) + ", () -> " + called + ");\n            " + DYNAMIC + ".run(run, "
+					+ literal(method.name) + ", made)";
+		}
 		if (before.isEmpty() && after.isEmpty() && slots.count == 0 && !closing) {
 			return body.append("        ").append(call).append(";\n").toString();
 		}

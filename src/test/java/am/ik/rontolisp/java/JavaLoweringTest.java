@@ -1353,7 +1353,9 @@ class JavaLoweringTest {
 		for (Map<String, Object> program : (List<Map<String, Object>>) Objects.requireNonNull(spec.get("standalone"))) {
 			String file = (String) Objects.requireNonNull(program.get("file"));
 			String source = (String) Objects.requireNonNull(program.get("source"));
-			if (!file.endsWith(".java") || program.containsKey("files") || program.containsKey("library")) {
+			if (!file.endsWith(".java") || program.containsKey("files") || program.containsKey("library")
+					|| program.containsKey("tests")) {
+				// a run of tests is a program of JUnit's sources too, which are not here
 				continue;
 			}
 			String name = file.substring(0, file.length() - ".java".length());

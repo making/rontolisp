@@ -663,10 +663,11 @@ class JavaSpecE2eTest {
 	 * never skipped, with JUnit Jupiter itself on the source path: an annotation of
 	 * JUnit's the runner has not, wherever it is written; an element of one it has that
 	 * it does not read; one written on an annotation type, whose methods JUnit would run;
-	 * an orderer of tests other than JUnit's by order, name or display name; a
-	 * RepetitionInfo given around a test that is not repeated; a parameter of a
-	 * parameterized test that JUnit would make of its own, or whose TestInfo would name
-	 * its arguments; a text a parameterized test's source gives to a class parameter.
+	 * a test given its time in a thread of its own; a RepetitionInfo given around a test
+	 * that is not repeated; a parameter of a parameterized test that JUnit would make of
+	 * its own, or whose TestInfo would name its arguments; a text a parameterized test's
+	 * source gives to a class parameter. A test factory JUnit would not run -- one
+	 * declared to return what holds no test -- is an error where it is declared.
 	 */
 	@TestFactory
 	Stream<DynamicNode> whatARunOfTestsDoesNotRunIsRefusedByName() {
@@ -674,15 +675,20 @@ class JavaSpecE2eTest {
 				{ "import java.nio.file.Path; import org.junit.jupiter.api.Test; import org.junit.jupiter.api.io.*; "
 						+ "class T { @TempDir(cleanup = CleanupMode.NEVER) Path dir; @Test void t() { } }", "@TempDir",
 						"the element cleanup of @TempDir" },
-				{ "import org.junit.jupiter.api.*; @TestMethodOrder(MethodOrderer.Random.class) class T { "
-						+ "@Test void t() { } }", "@TestMethodOrder",
-						"the method orderer org.junit.jupiter.api.MethodOrderer.Random" },
+				{ "import org.junit.jupiter.api.*; class T { @Test @Timeout(value = 1, threadMode = "
+						+ "Timeout.ThreadMode.SEPARATE_THREAD) void t() { } }", "@Timeout",
+						"the thread mode SEPARATE_THREAD of @Timeout" },
+				{ "import org.junit.jupiter.api.*; class T { @TestFactory java.util.List<Object> t() { return "
+						+ "java.util.List.of(); } }", "t()",
+						"the @TestFactory method t must return a single org.junit.jupiter.api.DynamicNode or a Stream, "
+								+ "Collection, Iterable, Iterator or array of org.junit.jupiter.api.DynamicNode",
+						"" },
 				{ "import org.junit.jupiter.api.*; class T { @BeforeEach void b(RepetitionInfo r) { } "
 						+ "@Test void t() { } }", "b(",
 						"a RepetitionInfo given to what runs around a test that is not a @RepeatedTest" },
-				{ "import org.junit.jupiter.api.Timeout; import org.junit.jupiter.api.Test; class T { "
-						+ "@Test @Timeout(1) void t() { } }", "@Timeout",
-						"the annotation org.junit.jupiter.api.Timeout" },
+				{ "import org.junit.jupiter.api.condition.*; import org.junit.jupiter.api.Test; class T { "
+						+ "@Test @EnabledOnOs(OS.LINUX) void t() { } }", "@EnabledOnOs",
+						"the annotation org.junit.jupiter.api.condition.EnabledOnOs" },
 				{ "import org.junit.jupiter.api.TestInfo; import org.junit.jupiter.params.ParameterizedTest; "
 						+ "import org.junit.jupiter.params.provider.ValueSource; class T { @ParameterizedTest "
 						+ "@ValueSource(ints = 1) void t(int i, TestInfo info) { } }", "info)",
@@ -715,8 +721,9 @@ class JavaSpecE2eTest {
 						return ex.getMessage();
 					}
 				}, Duration.ofSeconds(PROCESS_SECONDS))).as("%s", refusal[0])
-					.contains("T.java:1:" + (refusal[0].indexOf(refusal[1]) + 1) + ": " + refusal[2]
-							+ " is not supported by the experimental Java subset yet");
+					.contains(
+							"T.java:1:" + (refusal[0].indexOf(refusal[1]) + 1) + ": " + refusal[2] + (refusal.length > 3
+									? refusal[3] : " is not supported by the experimental Java subset yet"));
 			}));
 		}
 		return legs.stream();

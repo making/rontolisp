@@ -30315,11 +30315,15 @@ standalone:
   # comparison, a property or a field by its name), `asInstanceOf`, the offsets, a map's
   # `containsExactly`, how a value is shown, and the assertions of a path, a file, a
   # class, a date and a time, a duration, a future and a comparable of the program's.
+  # `q/FactoryTest.java` holds what a `@TestFactory` method makes, tests and containers
+  # named by their places, and the orderers of tests and of `@Nested` classes, JUnit's
+  # and the program's own.
   - name: a-file-of-tests-is-run-and-reported-as-junit-and-assertj-do
     file: p/SampleTest.java
     tests: [p.SampleTest, p.SecondTest, p.ThirdTest, p.FourthTest, p.FifthTest, q.OtherTest, q.DirectoryTest,
             q.ClosedTest, q.AbortedTest, q.AfterAnAbortTest, q.LifecycleTest, q.SharedInstanceTest,
-            q.RepeatedOnlyTest, q.UnmadeTest, q.ConvertedTest, q.AssertjTest]
+            q.RepeatedOnlyTest, q.UnmadeTest, q.ConvertedTest, q.AssertjTest, q.FactoryTest,
+            q.OrderedTest]
     status: 1
     files:
       q/OtherTest.java: |
@@ -31297,6 +31301,579 @@ standalone:
             void fARecursiveFailure() {
                 assertThat(new Box("b", List.of(new Point(1, 2)))).usingRecursiveComparison()
                     .isEqualTo(new Box("c", List.of(new Point(1, 3))));
+            }
+
+        }
+      q/FactoryTest.java: |
+        package q;
+
+        import java.lang.annotation.Retention;
+        import java.lang.annotation.RetentionPolicy;
+        import java.util.Collection;
+        import java.util.Comparator;
+        import java.util.Iterator;
+        import java.util.List;
+        import java.util.stream.Stream;
+
+        import org.junit.jupiter.api.AfterEach;
+        import org.junit.jupiter.api.Assumptions;
+        import org.junit.jupiter.api.BeforeEach;
+        import org.junit.jupiter.api.ClassDescriptor;
+        import org.junit.jupiter.api.ClassOrderer;
+        import org.junit.jupiter.api.ClassOrdererContext;
+        import org.junit.jupiter.api.Disabled;
+        import org.junit.jupiter.api.DisplayName;
+        import org.junit.jupiter.api.DynamicContainer;
+        import org.junit.jupiter.api.DynamicNode;
+        import org.junit.jupiter.api.DynamicTest;
+        import org.junit.jupiter.api.MethodDescriptor;
+        import org.junit.jupiter.api.MethodOrderer;
+        import org.junit.jupiter.api.MethodOrdererContext;
+        import org.junit.jupiter.api.Named;
+        import org.junit.jupiter.api.Nested;
+        import org.junit.jupiter.api.Order;
+        import org.junit.jupiter.api.RepeatedTest;
+        import org.junit.jupiter.api.Tag;
+        import org.junit.jupiter.api.Test;
+        import org.junit.jupiter.api.TestClassOrder;
+        import org.junit.jupiter.api.TestFactory;
+        import org.junit.jupiter.api.TestInfo;
+        import org.junit.jupiter.api.TestMethodOrder;
+
+        import static org.assertj.core.api.Assertions.assertThat;
+        import static org.junit.jupiter.api.DynamicContainer.dynamicContainer;
+        import static org.junit.jupiter.api.DynamicTest.dynamicTest;
+
+        // What a @TestFactory method makes: each test counted and named by its place, a
+        // container's inside it, what the factory or a container throws its own error.
+        @TestMethodOrder(MethodOrderer.MethodName.class)
+        class FactoryTest {
+
+            static final StringBuilder log = new StringBuilder();
+
+            @BeforeEach
+            void before(TestInfo info) {
+                log.append("before ").append(info.getDisplayName()).append(' ');
+            }
+
+            @AfterEach
+            void after(TestInfo info) {
+                System.out.println(log.append("after ").append(info.getDisplayName()));
+                log.setLength(0);
+            }
+
+            @TestFactory
+            DynamicNode f01single() {
+                return dynamicTest("single", () -> log.append("single "));
+            }
+
+            @TestFactory
+            Stream<DynamicTest> f02stream() {
+                return Stream.of("a", "b").map(s -> dynamicTest("s " + s, () -> {
+                    log.append(s).append(' ');
+                    assertThat(s).isEqualTo("a");
+                }));
+            }
+
+            @TestFactory
+            Collection<DynamicNode> f03collection() {
+                return List.of(dynamicTest("c1", () -> {
+                    throw new IllegalStateException("c1 errors");
+                }), dynamicTest("c2", () -> Assumptions.abort("c2 aborts")));
+            }
+
+            @TestFactory
+            Iterable<DynamicNode> f04iterable() {
+                return () -> List.<DynamicNode>of(dynamicTest("i1", () -> log.append("i1 "))).iterator();
+            }
+
+            @TestFactory
+            Iterator<DynamicNode> f05iterator() {
+                return List.<DynamicNode>of(dynamicTest("it1", () -> log.append("it1 "))).iterator();
+            }
+
+            @TestFactory
+            DynamicNode[] f06array() {
+                return new DynamicNode[] { dynamicTest("ar1", () -> log.append("ar1 ")), dynamicTest("ar2", () -> {
+                    throw new AssertionError("ar2 fails");
+                }) };
+            }
+
+            @TestFactory
+            Stream<DynamicNode> f07containers() {
+                return Stream.of(
+                        dynamicContainer("outer", Stream.of(dynamicTest("o1", () -> {
+                            throw new AssertionError("o1 fails");
+                        }), dynamicContainer("inner",
+                                List.of(dynamicTest("in1", () -> log.append("in1 ")), dynamicTest("in2", () -> {
+                                    throw new AssertionError("in2 fails");
+                                }))),
+                                dynamicContainer("empty", List.of()))),
+                        dynamicTest("top", () -> {
+                            throw new AssertionError("top fails");
+                        }));
+            }
+
+            @TestFactory
+            Stream<DynamicNode> f08throws() {
+                throw new IllegalStateException("factory throws");
+            }
+
+            @TestFactory
+            Stream<DynamicNode> f09lazyThrows() {
+                return Stream.of(1, 2, 3).map(i -> {
+                    if (i == 2) {
+                        throw new IllegalStateException("stream throws at 2");
+                    }
+                    return dynamicTest("lazy " + i, () -> log.append("lazy ").append(i).append(' '));
+                });
+            }
+
+            @TestFactory
+            Stream<DynamicNode> f10null() {
+                return null;
+            }
+
+            @TestFactory
+            @DisplayName("shown factory")
+            Stream<DynamicNode> f13named() {
+                return Stream.of(dynamicTest("n1", () -> {
+                    throw new AssertionError("n1 fails");
+                }));
+            }
+
+            @TestFactory
+            @Disabled
+            Stream<DynamicNode> f14disabled() {
+                return Stream.of(dynamicTest("d1", () -> {
+                }));
+            }
+
+            @TestFactory
+            Stream<DynamicNode> f15empty() {
+                return Stream.empty();
+            }
+
+            @TestFactory
+            Stream<DynamicTest> f16generated() {
+                return DynamicTest.stream(Stream.of(1, 2, 3), i -> "gen " + i, i -> assertThat(i).isNotEqualTo(2));
+            }
+
+            @TestFactory
+            Stream<DynamicTest> f17named() {
+                return DynamicTest.stream(Stream.of(Named.of("first", 1), Named.of("second", 2)),
+                        i -> assertThat(i).isEqualTo(1));
+            }
+
+            @TestFactory
+            Stream<DynamicNode> f18aborted() {
+                Assumptions.abort("factory aborts");
+                return null;
+            }
+
+            @TestFactory
+            Stream<DynamicNode> f19closed() {
+                return Stream.<DynamicNode>of(dynamicTest("cl1", () -> log.append("cl1 ")))
+                    .onClose(() -> log.append("closed "));
+            }
+
+            @TestFactory
+            Stream<DynamicNode> f20info(TestInfo info) {
+                log.append("factory of ").append(info.getDisplayName()).append(' ');
+                return Stream.of(dynamicTest("x", () -> log.append("x ")));
+            }
+
+            @TestFactory
+            Stream<DynamicNode> f22containerLazy() {
+                return Stream.of(dynamicContainer("lazy", Stream.of(1, 2).map(i -> {
+                    if (i == 2) {
+                        throw new IllegalStateException("container stream throws");
+                    }
+                    return dynamicTest("cl " + i, () -> log.append("cl ").append(i).append(' '));
+                })), dynamicContainer("gone", Stream.of(1).map(i -> {
+                    Assumptions.abort("container aborts");
+                    return dynamicTest("never", () -> log.append("never "));
+                })), dynamicTest("afterLazy", () -> log.append("afterLazy ")));
+            }
+
+            @TestFactory
+            Stream<DynamicNode> f23blank() {
+                return Stream.of(dynamicTest(" ", () -> {
+                }));
+            }
+
+            @TestFactory
+            List<DynamicContainer> f24containers() {
+                return List.of(dynamicContainer("only", List.of(dynamicTest("held", () -> assertThat(1).isEqualTo(2)))));
+            }
+
+        }
+
+        // The orderers of tests and of @Nested classes: JUnit's own and the program's, which
+        // are handed the tests and the classes with their methods and annotations.
+        @TestClassOrder(ClassOrderer.OrderAnnotation.class)
+        @TestMethodOrder(OrderedTest.Reversed.class)
+        class OrderedTest {
+
+            @Retention(RetentionPolicy.RUNTIME)
+            @interface Rank {
+
+                int value();
+
+            }
+
+            static class Reversed implements MethodOrderer {
+
+                @Override
+                public void orderMethods(MethodOrdererContext context) {
+                    StringBuilder seen = new StringBuilder(context.getTestClass().getName());
+                    for (MethodDescriptor each : context.getMethodDescriptors()) {
+                        seen.append(' ')
+                            .append(each.getMethod().getName())
+                            .append('/')
+                            .append(each.getDisplayName())
+                            .append('/')
+                            .append(each.isAnnotated(Rank.class))
+                            .append('/')
+                            .append(each.findAnnotation(Rank.class).map(Rank::value).orElse(-1))
+                            .append('/')
+                            .append(each.findRepeatableAnnotations(Tag.class).stream().map(Tag::value).toList());
+                    }
+                    seenMethods.add(seen.append(' ').append(context.getConfigurationParameter("x.y")).toString());
+                    context.getMethodDescriptors()
+                        .sort(Comparator.comparing((MethodDescriptor each) -> each.getMethod().getName()).reversed());
+                }
+
+            }
+
+            static class ByRank implements MethodOrderer {
+
+                @Override
+                public void orderMethods(MethodOrdererContext context) {
+                    context.getMethodDescriptors()
+                        .sort(Comparator.comparingInt(
+                                (MethodDescriptor each) -> each.findAnnotation(Rank.class).map(Rank::value).orElse(0)));
+                }
+
+            }
+
+            static class Dropping implements MethodOrderer {
+
+                @Override
+                public void orderMethods(MethodOrdererContext context) {
+                    context.getMethodDescriptors().removeIf(each -> each.getMethod().getName().equals("x"));
+                }
+
+            }
+
+            static class ClassesReversed implements ClassOrderer {
+
+                @Override
+                public void orderClasses(ClassOrdererContext context) {
+                    StringBuilder seen = new StringBuilder("classes");
+                    for (ClassDescriptor each : context.getClassDescriptors()) {
+                        seen.append(' ')
+                            .append(each.getTestClass().getName())
+                            .append('/')
+                            .append(each.getDisplayName())
+                            .append('/')
+                            .append(each.isAnnotated(Order.class))
+                            .append('/')
+                            .append(each.findAnnotation(Order.class).map(Order::value).orElse(-1));
+                    }
+                    seenClasses = seen.append(' ').append(context.getConfigurationParameter("x.y")).toString();
+                    context.getClassDescriptors()
+                        .sort(Comparator.comparing((ClassDescriptor each) -> each.getTestClass().getSimpleName()).reversed());
+                }
+
+            }
+
+            static final java.util.Set<String> seenMethods = new java.util.TreeSet<>();
+
+            static String seenClasses;
+
+            @Test
+            void a() {
+                System.out.println("a " + seenMethods.stream().filter(seen -> seen.startsWith("q.OrderedTest ")).toList());
+            }
+
+            @Test
+            @DisplayName("bee")
+            @Rank(3)
+            @Tag("x")
+            @Tag("y")
+            void b() {
+                System.out.println("b");
+            }
+
+            @Test
+            void c(TestInfo info) {
+                System.out.println("c");
+            }
+
+            @RepeatedTest(2)
+            void d() {
+                System.out.println("d");
+            }
+
+            @TestFactory
+            Stream<DynamicNode> e() {
+                return Stream.of(DynamicTest.dynamicTest("e1", () -> System.out.println("e1")));
+            }
+
+            @Nested
+            @Order(3)
+            class Inherits {
+
+                @Test
+                void x() {
+                    System.out.println("Inherits.x");
+                }
+
+                @Test
+                void y() {
+                    System.out.println("Inherits.y");
+                }
+
+            }
+
+            @Nested
+            @Order(1)
+            @TestMethodOrder(ByRank.class)
+            class Ranked {
+
+                @Test
+                @Rank(2)
+                void x() {
+                    System.out.println("Ranked.x");
+                }
+
+                @Test
+                @Rank(1)
+                void y() {
+                    System.out.println("Ranked.y");
+                }
+
+                @Test
+                @Rank(-1)
+                void z() {
+                    System.out.println("Ranked.z");
+                }
+
+            }
+
+            @Nested
+            class Last {
+
+                @Test
+                void x() {
+                    System.out.println("Last.x");
+                }
+
+                @Nested
+                @Order(2)
+                class Deep1 {
+
+                    @Test
+                    void t() {
+                        System.out.println("Deep1.t");
+                    }
+
+                }
+
+                @Nested
+                @Order(1)
+                class Deep2 {
+
+                    @Test
+                    void t() {
+                        System.out.println("Deep2.t");
+                    }
+
+                }
+
+            }
+
+            @Nested
+            @Order(2)
+            @TestClassOrder(ClassesReversed.class)
+            @TestMethodOrder(MethodOrderer.Default.class)
+            class Own {
+
+                @Test
+                void x() {
+                    System.out.println("Own.x");
+                }
+
+                @Nested
+                @DisplayName("first")
+                class A {
+
+                    @Test
+                    void t() {
+                        System.out.println("Own.A.t " + seenClasses);
+                    }
+
+                }
+
+                @Nested
+                @Order(7)
+                class B {
+
+                    @Test
+                    void t() {
+                        System.out.println("Own.B.t");
+                    }
+
+                }
+
+            }
+
+            @Nested
+            @Order(0)
+            @TestClassOrder(ClassOrderer.ClassName.class)
+            class Named {
+
+                @Nested
+                class Zed {
+
+                    @Test
+                    void t() {
+                        System.out.println("Named.Zed.t");
+                    }
+
+                }
+
+                @Nested
+                class Abc {
+
+                    @Test
+                    void t() {
+                        System.out.println("Named.Abc.t");
+                    }
+
+                }
+
+            }
+
+            @Nested
+            @Order(-1)
+            @TestClassOrder(ClassOrderer.DisplayName.class)
+            class Displayed {
+
+                @Nested
+                @DisplayName("b")
+                class Zed {
+
+                    @Test
+                    void t() {
+                        System.out.println("Displayed.Zed.t");
+                    }
+
+                }
+
+                @Nested
+                @DisplayName("c")
+                class Abc {
+
+                    @Test
+                    void t() {
+                        System.out.println("Displayed.Abc.t");
+                    }
+
+                }
+
+                @Nested
+                class a {
+
+                    @Test
+                    void t() {
+                        System.out.println("Displayed.a.t");
+                    }
+
+                }
+
+            }
+
+            @Nested
+            @Order(-2)
+            @TestMethodOrder(Dropping.class)
+            class Dropped {
+
+                static int ran;
+
+                @Test
+                void x() {
+                    ran++;
+                }
+
+                @Test
+                void y() {
+                    ran++;
+                }
+
+                @Nested
+                class Counted {
+
+                    @Test
+                    void t() {
+                        System.out.println("Dropped.Counted.t after " + ran);
+                    }
+
+                }
+
+            }
+
+            @Nested
+            @Order(-4)
+            @TestMethodOrder(MethodOrderer.Random.class)
+            @TestClassOrder(ClassOrderer.Random.class)
+            class Shuffled {
+
+                static int ran;
+
+                @Test
+                void x() {
+                    ran++;
+                }
+
+                @Test
+                void y() {
+                    ran++;
+                }
+
+                @Test
+                void z() {
+                    ran++;
+                }
+
+                @Nested
+                class Only {
+
+                    @Test
+                    void t() {
+                        System.out.println("Shuffled.Only.t after " + ran);
+                    }
+
+                }
+
+            }
+
+            @Nested
+            @Order(-5)
+            @TestClassOrder(ClassOrderer.Default.class)
+            class Reset {
+
+                @Nested
+                class Only {
+
+                    @Test
+                    void t() {
+                        System.out.println("Reset.Only.t");
+                    }
+
+                }
+
             }
 
         }
@@ -32740,10 +33317,594 @@ standalone:
       - actual and expected objects and their fields were compared field by field recursively even if they were not of the same type, this allows for example to compare a Person to a PersonDto (call strictTypeChecking(true) to change that behavior).
       - the introspection strategy used was: DefaultRecursiveComparisonIntrospectionStrategy
 
+      Running q.FactoryTest
+      before f01single() single after f01single()
+      before f02stream() a b after f02stream()
+      before f03collection() after f03collection()
+      before f04iterable() i1 after f04iterable()
+      before f05iterator() it1 after f05iterator()
+      before f06array() ar1 after f06array()
+      before f07containers() in1 after f07containers()
+      before f08throws() after f08throws()
+      before f09lazyThrows() lazy 1 after f09lazyThrows()
+      before f10null() after f10null()
+      before shown factory after shown factory
+      before f15empty() after f15empty()
+      before f16generated() after f16generated()
+      before f17named() after f17named()
+      before f18aborted() after f18aborted()
+      before f19closed() cl1 closed after f19closed()
+      before f20info(TestInfo) factory of f20info(TestInfo) x after f20info(TestInfo)
+      before f22containerLazy() cl 1 afterLazy after f22containerLazy()
+      before f23blank() after f23blank()
+      before f24containers() after f24containers()
+      Tests run: 31, Failures: 9, Errors: 6, Skipped: 2 <<< FAILURE! -- in q.FactoryTest
+      q.FactoryTest.f02stream[2] -- s b <<< FAILURE!
+
+      expected: "a"
+       but was: "b"
+      q.FactoryTest.f03collection[1] -- c1 <<< ERROR!
+      java.lang.IllegalStateException: c1 errors
+      q.FactoryTest.f06array[2] -- ar2 <<< FAILURE!
+      ar2 fails
+      q.FactoryTest.f07containers[1][1] -- o1 <<< FAILURE!
+      o1 fails
+      q.FactoryTest.f07containers[1][2][2] -- in2 <<< FAILURE!
+      in2 fails
+      q.FactoryTest.f07containers[2] -- top <<< FAILURE!
+      top fails
+      q.FactoryTest.f08throws <<< ERROR!
+      java.lang.IllegalStateException: factory throws
+      q.FactoryTest.f09lazyThrows <<< ERROR!
+      java.lang.IllegalStateException: stream throws at 2
+      q.FactoryTest.f10null <<< ERROR!
+      org.junit.platform.commons.JUnitException: @TestFactory method must not return null
+      q.FactoryTest.f13named[1] -- n1 <<< FAILURE!
+      n1 fails
+      q.FactoryTest.f16generated[2] -- gen 2 <<< FAILURE!
+
+      Expecting actual:
+        2
+      not to be equal to:
+        2
+
+      q.FactoryTest.f17named[2] -- second <<< FAILURE!
+
+      expected: 1
+       but was: 2
+      q.FactoryTest.f22containerLazy[1] -- lazy <<< ERROR!
+      java.lang.IllegalStateException: container stream throws
+      q.FactoryTest.f23blank <<< ERROR!
+      org.junit.platform.commons.PreconditionViolationException: displayName must not be null or blank
+      q.FactoryTest.f24containers[1][1] -- held <<< FAILURE!
+
+      expected: 2
+       but was: 1
+      Running q.OrderedTest
+      e1
+      d
+      d
+      c
+      b
+      a [q.OrderedTest a/a()/false/-1/[] b/bee/true/3/[x, y] c/c(TestInfo)/false/-1/[] d/d()/false/-1/[] e/e()/false/-1/[] Optional.empty]
+      Running q.OrderedTest$Reset$Only
+      Reset.Only.t
+      Tests run: 1, Failures: 0, Errors: 0, Skipped: 0 -- in q.OrderedTest$Reset$Only
+      Running q.OrderedTest$Shuffled
+      Running q.OrderedTest$Shuffled$Only
+      Shuffled.Only.t after 3
+      Tests run: 1, Failures: 0, Errors: 0, Skipped: 0 -- in q.OrderedTest$Shuffled$Only
+      Tests run: 3, Failures: 0, Errors: 0, Skipped: 0 -- in q.OrderedTest$Shuffled
+      Running q.OrderedTest$Dropped
+      Running q.OrderedTest$Dropped$Counted
+      Dropped.Counted.t after 2
+      Tests run: 1, Failures: 0, Errors: 0, Skipped: 0 -- in q.OrderedTest$Dropped$Counted
+      Tests run: 2, Failures: 0, Errors: 0, Skipped: 0 -- in q.OrderedTest$Dropped
+      Running q.OrderedTest$Displayed$a
+      Displayed.a.t
+      Tests run: 1, Failures: 0, Errors: 0, Skipped: 0 -- in q.OrderedTest$Displayed$a
+      Running q.OrderedTest$Displayed$Zed
+      Displayed.Zed.t
+      Tests run: 1, Failures: 0, Errors: 0, Skipped: 0 -- in q.OrderedTest$Displayed$Zed
+      Running q.OrderedTest$Displayed$Abc
+      Displayed.Abc.t
+      Tests run: 1, Failures: 0, Errors: 0, Skipped: 0 -- in q.OrderedTest$Displayed$Abc
+      Running q.OrderedTest$Named$Abc
+      Named.Abc.t
+      Tests run: 1, Failures: 0, Errors: 0, Skipped: 0 -- in q.OrderedTest$Named$Abc
+      Running q.OrderedTest$Named$Zed
+      Named.Zed.t
+      Tests run: 1, Failures: 0, Errors: 0, Skipped: 0 -- in q.OrderedTest$Named$Zed
+      Running q.OrderedTest$Ranked
+      Ranked.z
+      Ranked.y
+      Ranked.x
+      Tests run: 3, Failures: 0, Errors: 0, Skipped: 0 -- in q.OrderedTest$Ranked
+      Running q.OrderedTest$Own
+      Own.x
+      Running q.OrderedTest$Own$B
+      Own.B.t
+      Tests run: 1, Failures: 0, Errors: 0, Skipped: 0 -- in q.OrderedTest$Own$B
+      Running q.OrderedTest$Own$A
+      Own.A.t classes q.OrderedTest$Own$A/first/false/-1 q.OrderedTest$Own$B/B/true/7 Optional.empty
+      Tests run: 1, Failures: 0, Errors: 0, Skipped: 0 -- in q.OrderedTest$Own$A
+      Tests run: 1, Failures: 0, Errors: 0, Skipped: 0 -- in q.OrderedTest$Own
+      Running q.OrderedTest$Inherits
+      Inherits.y
+      Inherits.x
+      Tests run: 2, Failures: 0, Errors: 0, Skipped: 0 -- in q.OrderedTest$Inherits
+      Running q.OrderedTest$Last
+      Last.x
+      Running q.OrderedTest$Last$Deep2
+      Deep2.t
+      Tests run: 1, Failures: 0, Errors: 0, Skipped: 0 -- in q.OrderedTest$Last$Deep2
+      Running q.OrderedTest$Last$Deep1
+      Deep1.t
+      Tests run: 1, Failures: 0, Errors: 0, Skipped: 0 -- in q.OrderedTest$Last$Deep1
+      Tests run: 1, Failures: 0, Errors: 0, Skipped: 0 -- in q.OrderedTest$Last
+      Tests run: 6, Failures: 0, Errors: 0, Skipped: 0 -- in q.OrderedTest
 
       Results:
 
-      Tests run: 117, Failures: 14, Errors: 19, Skipped: 10
+      Tests run: 178, Failures: 23, Errors: 25, Skipped: 12
+  # A test given its time by `@Timeout`, in a program of its own: the thread that
+  # interrupts the test when its time is over makes the run a program of threads, which
+  # the tests above are not on a `.wasm`. The time a class gives its tests, inherited
+  # from a class above, an interface and the class around; the time of a factory, which
+  # is not its tests'; that of what runs around tests; and a time that is none.
+  - name: a-test-is-given-its-time-and-interrupted-when-it-is-over
+    file: q/TimedTest.java
+    tests: [q.TimedTest]
+    status: 1
+    source: |
+      package q;
+
+      import java.util.concurrent.TimeUnit;
+      import java.util.stream.Stream;
+
+      import org.junit.jupiter.api.AfterAll;
+      import org.junit.jupiter.api.AfterEach;
+      import org.junit.jupiter.api.Assumptions;
+      import org.junit.jupiter.api.BeforeEach;
+      import org.junit.jupiter.api.ClassOrderer;
+      import org.junit.jupiter.api.DisplayName;
+      import org.junit.jupiter.api.DynamicNode;
+      import org.junit.jupiter.api.DynamicTest;
+      import org.junit.jupiter.api.MethodOrderer;
+      import org.junit.jupiter.api.Nested;
+      import org.junit.jupiter.api.RepeatedTest;
+      import org.junit.jupiter.api.RepetitionInfo;
+      import org.junit.jupiter.api.Test;
+      import org.junit.jupiter.api.TestClassOrder;
+      import org.junit.jupiter.api.TestFactory;
+      import org.junit.jupiter.api.TestInfo;
+      import org.junit.jupiter.api.TestMethodOrder;
+      import org.junit.jupiter.api.Timeout;
+      import org.junit.jupiter.params.ParameterizedTest;
+      import org.junit.jupiter.params.provider.Arguments;
+      import org.junit.jupiter.params.provider.MethodSource;
+      import org.junit.jupiter.params.provider.ValueSource;
+
+      // What @Timeout gives a test, a factory and what runs around tests: a wait interrupted
+      // when the time is over, a test that never waits run to its end, either one a
+      // TimeoutException with what it threw suppressed.
+      @TestMethodOrder(MethodOrderer.MethodName.class)
+      @TestClassOrder(ClassOrderer.ClassName.class)
+      class TimedTest {
+
+          static void spin(long millis) {
+              long end = System.nanoTime() + millis * 1_000_000L;
+              while (System.nanoTime() < end) {
+              }
+          }
+
+          @AfterEach
+          void after() {
+              System.out.println("interrupted after it: " + Thread.currentThread().isInterrupted());
+          }
+
+          @Test
+          @Timeout(value = 20, unit = TimeUnit.MILLISECONDS)
+          void a01sleeps() throws Exception {
+              Thread.sleep(5000);
+          }
+
+          @Test
+          @Timeout(value = 20, unit = TimeUnit.MILLISECONDS)
+          void a02spins() {
+              spin(200);
+          }
+
+          @Test
+          @Timeout(value = 20, unit = TimeUnit.MILLISECONDS)
+          void a03spinsThenFails() {
+              spin(200);
+              throw new AssertionError("late");
+          }
+
+          @Test
+          @Timeout(value = 20, unit = TimeUnit.MILLISECONDS)
+          void a04swallows() {
+              try {
+                  Thread.sleep(5000);
+              }
+              catch (InterruptedException e) {
+                  System.out.println("swallowed " + e.getMessage() + ", interrupted " + Thread.currentThread().isInterrupted());
+              }
+          }
+
+          @Test
+          @Timeout(5)
+          void a05fast() {
+          }
+
+          @Test
+          @Timeout(5)
+          void a06fastFails() {
+              throw new IllegalStateException("fast");
+          }
+
+          @Test
+          @Timeout(0)
+          void a07zero() {
+          }
+
+          @Test
+          @Timeout(value = 1, unit = TimeUnit.MILLISECONDS)
+          void a08one() throws Exception {
+              Thread.sleep(5000);
+          }
+
+          @Test
+          @Timeout(value = 1, unit = TimeUnit.NANOSECONDS)
+          void a09nano() throws Exception {
+              Thread.sleep(5000);
+          }
+
+          @Test
+          @Timeout(value = 3, unit = TimeUnit.MICROSECONDS)
+          void a10micros() throws Exception {
+              Thread.sleep(5000);
+          }
+
+          static java.util.List<Arguments> arrays() {
+              return java.util.List.of(Arguments.of(new int[0], new String[0][0], Thread.State.NEW));
+          }
+
+          @ParameterizedTest
+          @MethodSource("arrays")
+          @Timeout(value = 2, unit = TimeUnit.MILLISECONDS)
+          void a11arrays(int[] numbers, String[][] names, Thread.State state) throws Exception {
+              Thread.sleep(5000);
+          }
+
+          @ParameterizedTest
+          @ValueSource(ints = { 1, 2 })
+          @Timeout(value = 20, unit = TimeUnit.MILLISECONDS)
+          void a12row(int i) throws Exception {
+              Thread.sleep(5000);
+          }
+
+          @RepeatedTest(2)
+          @Timeout(value = 20, unit = TimeUnit.MILLISECONDS)
+          void a13repeated(RepetitionInfo repetition) throws Exception {
+              Thread.sleep(5000);
+          }
+
+          @Test
+          @DisplayName("shown")
+          @Timeout(value = 20, unit = TimeUnit.MILLISECONDS)
+          void a14named(TestInfo info) throws Exception {
+              Thread.sleep(5000);
+          }
+
+          @Test
+          @Timeout(value = 20, unit = TimeUnit.MILLISECONDS)
+          void a15waits() throws Exception {
+              Object lock = new Object();
+              synchronized (lock) {
+                  lock.wait();
+              }
+          }
+
+          @Test
+          @Timeout(value = 20, unit = TimeUnit.MILLISECONDS)
+          void a16aborts() {
+              spin(200);
+              Assumptions.abort("gone");
+          }
+
+          @Test
+          @Timeout(value = 20, unit = TimeUnit.MILLISECONDS, threadMode = Timeout.ThreadMode.SAME_THREAD)
+          void a17sleepsAgain() throws Exception {
+              try {
+                  Thread.sleep(5000);
+              }
+              catch (InterruptedException e) {
+              }
+              Thread.sleep(50);
+              System.out.println("slept again");
+          }
+
+          static final DynamicNode SLOW = DynamicTest.dynamicTest("slow", () -> {
+              Thread.sleep(1100);
+              System.out.println("the factory's time is not its tests'");
+          });
+
+          @TestFactory
+          @Timeout(1)
+          Stream<DynamicNode> a18factory() {
+              return Stream.of(SLOW);
+          }
+
+          @TestFactory
+          @Timeout(value = 20, unit = TimeUnit.MILLISECONDS)
+          Stream<DynamicNode> a19slowFactory() throws Exception {
+              Thread.sleep(5000);
+              return Stream.empty();
+          }
+
+          @Timeout(value = 20, unit = TimeUnit.MILLISECONDS)
+          interface Timed {
+
+          }
+
+          @Timeout(value = 20, unit = TimeUnit.MILLISECONDS)
+          static class Base {
+
+          }
+
+          @Nested
+          @Timeout(value = 20, unit = TimeUnit.MILLISECONDS)
+          class Limited {
+
+              @BeforeEach
+              void before() throws Exception {
+                  Thread.sleep(50);
+              }
+
+              @Test
+              void b1() throws Exception {
+                  Thread.sleep(5000);
+              }
+
+              @Test
+              @Timeout(5)
+              void b2() throws Exception {
+                  Thread.sleep(50);
+              }
+
+              @Nested
+              class Inner {
+
+                  @Test
+                  void n1() throws Exception {
+                      Thread.sleep(5000);
+                  }
+
+              }
+
+              @Nested
+              @Timeout(5)
+              class Own {
+
+                  @Test
+                  void o1() throws Exception {
+                      Thread.sleep(50);
+                  }
+
+              }
+
+              @Nested
+              class FromInterface implements Timed {
+
+                  @Test
+                  void i1() throws Exception {
+                      Thread.sleep(5000);
+                  }
+
+              }
+
+          }
+
+          @Nested
+          @Timeout(5)
+          class Wide {
+
+              @Nested
+              class Inherited extends Base {
+
+                  @Test
+                  void s1() throws Exception {
+                      Thread.sleep(5000);
+                  }
+
+              }
+
+          }
+
+          @Nested
+          class ZeroAround {
+
+              @BeforeEach
+              @Timeout(0)
+              void before() {
+              }
+
+              @Test
+              void z1() {
+              }
+
+          }
+
+          @Nested
+          @Timeout(0)
+          class Zero {
+
+              @Test
+              void z1() {
+              }
+
+              @Test
+              @Timeout(5)
+              void z2() {
+              }
+
+          }
+
+          @Nested
+          class Before {
+
+              @BeforeEach
+              @Timeout(value = 20, unit = TimeUnit.MILLISECONDS)
+              void beforeEach(TestInfo info) throws Exception {
+                  Thread.sleep(5000);
+              }
+
+              @Test
+              void c1() {
+                  System.out.println("c1 ran");
+              }
+
+          }
+
+          @Nested
+          class After {
+
+              @AfterEach
+              @Timeout(value = 20, unit = TimeUnit.MILLISECONDS)
+              void afterEach(TestInfo info) throws Exception {
+                  Thread.sleep(5000);
+              }
+
+              @AfterAll
+              @Timeout(value = 20, unit = TimeUnit.MILLISECONDS)
+              static void afterAll() throws Exception {
+                  Thread.sleep(5000);
+              }
+
+              @Test
+              void c2() {
+                  System.out.println("c2 ran");
+              }
+
+          }
+
+      }
+    stdout: |
+      Running q.TimedTest
+      interrupted after it: false
+      interrupted after it: false
+      interrupted after it: false
+      swallowed sleep interrupted, interrupted false
+      interrupted after it: false
+      interrupted after it: false
+      interrupted after it: false
+      interrupted after it: false
+      interrupted after it: false
+      interrupted after it: false
+      interrupted after it: false
+      interrupted after it: false
+      interrupted after it: false
+      interrupted after it: false
+      interrupted after it: false
+      interrupted after it: false
+      interrupted after it: false
+      interrupted after it: false
+      slept again
+      interrupted after it: false
+      the factory's time is not its tests'
+      interrupted after it: false
+      interrupted after it: false
+      Running q.TimedTest$After
+      c2 ran
+      interrupted after it: false
+      Tests run: 2, Failures: 0, Errors: 2, Skipped: 0 <<< FAILURE! -- in q.TimedTest$After
+      q.TimedTest$After.c2 <<< ERROR!
+      java.util.concurrent.TimeoutException: afterEach(org.junit.jupiter.api.TestInfo) timed out after 20 milliseconds
+      q.TimedTest$After <<< ERROR!
+      java.util.concurrent.TimeoutException: afterAll() timed out after 20 milliseconds
+      Running q.TimedTest$Before
+      interrupted after it: false
+      Tests run: 1, Failures: 0, Errors: 1, Skipped: 0 <<< FAILURE! -- in q.TimedTest$Before
+      q.TimedTest$Before.c1 <<< ERROR!
+      java.util.concurrent.TimeoutException: beforeEach(org.junit.jupiter.api.TestInfo) timed out after 20 milliseconds
+      Running q.TimedTest$Limited
+      interrupted after it: false
+      interrupted after it: false
+      Running q.TimedTest$Limited$FromInterface
+      interrupted after it: false
+      Tests run: 1, Failures: 0, Errors: 1, Skipped: 0 <<< FAILURE! -- in q.TimedTest$Limited$FromInterface
+      q.TimedTest$Limited$FromInterface.i1 <<< ERROR!
+      java.util.concurrent.TimeoutException: i1() timed out after 20 milliseconds
+      Running q.TimedTest$Limited$Inner
+      interrupted after it: false
+      Tests run: 1, Failures: 0, Errors: 1, Skipped: 0 <<< FAILURE! -- in q.TimedTest$Limited$Inner
+      q.TimedTest$Limited$Inner.n1 <<< ERROR!
+      java.util.concurrent.TimeoutException: n1() timed out after 20 milliseconds
+      Running q.TimedTest$Limited$Own
+      interrupted after it: false
+      Tests run: 1, Failures: 0, Errors: 0, Skipped: 0 -- in q.TimedTest$Limited$Own
+      Tests run: 2, Failures: 0, Errors: 1, Skipped: 0 <<< FAILURE! -- in q.TimedTest$Limited
+      q.TimedTest$Limited.b1 <<< ERROR!
+      java.util.concurrent.TimeoutException: b1() timed out after 20 milliseconds
+      Running q.TimedTest$Wide$Inherited
+      interrupted after it: false
+      Tests run: 1, Failures: 0, Errors: 1, Skipped: 0 <<< FAILURE! -- in q.TimedTest$Wide$Inherited
+      q.TimedTest$Wide$Inherited.s1 <<< ERROR!
+      java.util.concurrent.TimeoutException: s1() timed out after 20 milliseconds
+      Running q.TimedTest$Zero
+      Tests run: 1, Failures: 0, Errors: 1, Skipped: 0 <<< FAILURE! -- in q.TimedTest$Zero
+      q.TimedTest$Zero <<< ERROR!
+      org.junit.platform.commons.PreconditionViolationException: timeout duration must be a positive number: 0
+      Running q.TimedTest$ZeroAround
+      interrupted after it: false
+      Tests run: 1, Failures: 0, Errors: 1, Skipped: 0 <<< FAILURE! -- in q.TimedTest$ZeroAround
+      q.TimedTest$ZeroAround.z1 <<< ERROR!
+      org.junit.platform.commons.PreconditionViolationException: timeout duration must be a positive number: 0
+      Tests run: 21, Failures: 0, Errors: 19, Skipped: 0 <<< FAILURE! -- in q.TimedTest
+      q.TimedTest.a01sleeps <<< ERROR!
+      java.util.concurrent.TimeoutException: a01sleeps() timed out after 20 milliseconds
+      q.TimedTest.a02spins <<< ERROR!
+      java.util.concurrent.TimeoutException: a02spins() timed out after 20 milliseconds
+      q.TimedTest.a03spinsThenFails <<< ERROR!
+      java.util.concurrent.TimeoutException: a03spinsThenFails() timed out after 20 milliseconds
+      q.TimedTest.a04swallows <<< ERROR!
+      java.util.concurrent.TimeoutException: a04swallows() timed out after 20 milliseconds
+      q.TimedTest.a06fastFails <<< ERROR!
+      java.lang.IllegalStateException: fast
+      q.TimedTest.a07zero <<< ERROR!
+      org.junit.platform.commons.PreconditionViolationException: timeout duration must be a positive number: 0
+      q.TimedTest.a08one <<< ERROR!
+      java.util.concurrent.TimeoutException: a08one() timed out after 1 millisecond
+      q.TimedTest.a09nano <<< ERROR!
+      java.util.concurrent.TimeoutException: a09nano() timed out after 1 nanosecond
+      q.TimedTest.a10micros <<< ERROR!
+      java.util.concurrent.TimeoutException: a10micros() timed out after 3 microseconds
+      q.TimedTest.a11arrays[1] <<< ERROR!
+      java.util.concurrent.TimeoutException: a11arrays([I, [[Ljava.lang.String;, java.lang.Thread$State) timed out after 2 milliseconds
+      q.TimedTest.a12row[1] <<< ERROR!
+      java.util.concurrent.TimeoutException: a12row(int) timed out after 20 milliseconds
+      q.TimedTest.a12row[2] <<< ERROR!
+      java.util.concurrent.TimeoutException: a12row(int) timed out after 20 milliseconds
+      q.TimedTest.a13repeated[1] <<< ERROR!
+      java.util.concurrent.TimeoutException: a13repeated(org.junit.jupiter.api.RepetitionInfo) timed out after 20 milliseconds
+      q.TimedTest.a13repeated[2] <<< ERROR!
+      java.util.concurrent.TimeoutException: a13repeated(org.junit.jupiter.api.RepetitionInfo) timed out after 20 milliseconds
+      q.TimedTest.a14named -- shown <<< ERROR!
+      java.util.concurrent.TimeoutException: a14named(org.junit.jupiter.api.TestInfo) timed out after 20 milliseconds
+      q.TimedTest.a15waits <<< ERROR!
+      java.util.concurrent.TimeoutException: a15waits() timed out after 20 milliseconds
+      q.TimedTest.a16aborts <<< ERROR!
+      java.util.concurrent.TimeoutException: a16aborts() timed out after 20 milliseconds
+      q.TimedTest.a17sleepsAgain <<< ERROR!
+      java.util.concurrent.TimeoutException: a17sleepsAgain() timed out after 20 milliseconds
+      q.TimedTest.a19slowFactory <<< ERROR!
+      java.util.concurrent.TimeoutException: a19slowFactory() timed out after 20 milliseconds
+
+      Results:
+
+      Tests run: 32, Failures: 0, Errors: 28, Skipped: 0
 refused:
   scaffold: |
     class Refused {

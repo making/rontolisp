@@ -92,6 +92,10 @@ public final class JavaTestOracle {
 				return java.util.Objects.requireNonNull(this.plan);
 			}
 
+			private boolean aborted(TestExecutionResult result) {
+				return result.getStatus() == TestExecutionResult.Status.ABORTED;
+			}
+
 			private boolean isClass(TestIdentifier id) {
 				return id.getSource().filter(ClassSource.class::isInstance).isPresent();
 			}
@@ -176,14 +180,20 @@ public final class JavaTestOracle {
 				TestIdentifier declared = id;
 				String name = method.getMethodName();
 				TestIdentifier parent = plan().getParent(id).orElseThrow();
+				String kind = id.getUniqueIdObject().getLastSegment().getType();
+				boolean dynamic = kind.startsWith("dynamic-");
 				if (!isClass(parent)) {
-					// one run of a parameterized test: its place among the runs
-					declared = parent;
+					// one run of a parameterized test: its place among the runs; a test
+					// or a container a factory made: its place in each container around
+					declared = dynamic ? id : parent;
 					String legacy = id.getLegacyReportingName();
-					name += legacy.substring(legacy.lastIndexOf('['));
+					name += legacy.substring(legacy.lastIndexOf(')') + 1);
 				}
-				else if (id.isContainer() && thrown.isEmpty()) {
-					// a parameterized test whose runs were counted one by one
+				if (id.isContainer()
+						&& (thrown.isEmpty() || (dynamic || kind.equals("test-factory")) && aborted(result))) {
+					// a parameterized test or a factory whose tests were counted one by
+					// one; a factory or one of its containers whose assumption did not
+					// hold counts nothing, as surefire counts it
 					return;
 				}
 				String displayed = declared.getDisplayName().equals(declared.getLegacyReportingName()) ? null
@@ -234,11 +244,11 @@ public final class JavaTestOracle {
 				said.append("\nCaused by: ").append(cause);
 			}
 		}
-		// sorted by the method, then by the place of a run among a parameterized test's
-		String method = name == null ? "" : name.replaceFirst("\\[\\d+]$", "");
-		String place = name == null || name.equals(method) ? ""
-				: "%09d".formatted(Integer.parseInt(name.substring(method.length() + 1, name.length() - 1)));
-		counted.problems.add(new String[] { method + " " + place, said.append('\n').toString() });
+		// sorted by the method: the runs of a parameterized test and what a factory made
+		// are in the order they ran in, and what the class itself threw is last, as it is
+		// known when its tests are over
+		String method = name == null ? "\uffff" : name.replaceFirst("\\[.*$", "");
+		counted.problems.add(new String[] { method, said.append('\n').toString() });
 	}
 
 	private static void report(String className, Running counted, boolean own) {

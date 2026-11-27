@@ -90,8 +90,8 @@ public final class TestRun {
         }
     }
 
-    // A test of a class whose tests run in an order of its own: what it is sorted by, and
-    // what runs it.
+    // A test of a class whose tests run in an order of its own, or a @Nested class of
+    // one whose classes do: what it is sorted by, and what runs it.
     public static final class Ordered {
 
         final int order;
@@ -113,9 +113,10 @@ public final class TestRun {
         }
     }
 
-    // Runs the tests of a class in the order a MethodOrderer of JUnit's gives: by their
-    // @Order, equal ones in the order declared, or by their names, then by their
-    // parameters. byOrder: whether by their @Order.
+    // Runs the tests of a class in the order a MethodOrderer of JUnit's gives, or its
+    // @Nested classes in the order of a ClassOrderer: by their @Order, equal ones in the
+    // order declared, or by their names, then by their parameters. byOrder: whether by
+    // their @Order.
     public static void ordered(java.util.List<Ordered> tests, boolean byOrder) {
         java.util.List<Ordered> sorted = new java.util.ArrayList<>(tests);
         sorted.sort(byOrder ? (a, b) -> Integer.compare(a.order, b.order) : (a, b) -> {
@@ -123,6 +124,17 @@ public final class TestRun {
             return names != 0 ? names : a.parameters.compareTo(b.parameters);
         });
         for (Ordered each : sorted) {
+            each.body.run();
+        }
+    }
+
+    // Runs the tests of a class, or its @Nested classes, in the pseudo-random order of
+    // JUnit's Random orderers, whose seed is the clock's where a run configures none, as
+    // their documentation states.
+    public static void shuffled(java.util.List<Ordered> tests) {
+        java.util.List<Ordered> shuffled = new java.util.ArrayList<>(tests);
+        java.util.Collections.shuffle(shuffled, new java.util.Random(System.nanoTime()));
+        for (Ordered each : shuffled) {
             each.body.run();
         }
     }
