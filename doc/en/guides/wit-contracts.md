@@ -697,7 +697,6 @@ Current limitations:
   `async func` under `:blocking t` only, as a
   [call that waits](wasm-nogc.md#calls-that-wait-async-func): the future its
   binding answers elsewhere has no value there.
-- `flags` crosses a component, not a `--no-wasi` module.
 - The directive binds an **interface**. A world's `import` items are still
   not read.
 - It must appear at top level **before** the code that calls the interface —

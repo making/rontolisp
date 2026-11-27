@@ -168,6 +168,27 @@ public sealed interface CanonicalLayout {
 	}
 
 	/**
+	 * A {@code flags}: one bit a label, the first label the lowest bit; flattened, one
+	 * {@code i32}.
+	 *
+	 * @param names the labels, in order
+	 * @param size the byte size, which is its alignment too: 1, 2 or 4
+	 */
+	record Flags(List<String> names, int size) implements CanonicalLayout {
+
+		@Override
+		public List<String> flat() {
+			return List.of("i32");
+		}
+
+		@Override
+		public int align() {
+			return this.size;
+		}
+
+	}
+
+	/**
 	 * A resource handle: an index into the table of the resource's values the host keeps.
 	 *
 	 * @param resource the resource, as its defining interface's canonical id, {@code #},

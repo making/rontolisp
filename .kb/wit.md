@@ -213,8 +213,8 @@ LOWERED as an import's argument is, by the one generator (`WasmComponentImportCo
   twice is set once; a lift answers label order (so a function that conses a label onto the
   front answers another order in process than through the boundary -- `examples/wit/shapes`'
   `embolden` appends). The Clojure and Java tiers convert already (a set, a `Set` of a member
-  enum) and cross a component with nothing added. Not a `--no-wasi` core module, either way:
-  its JavaScript glue has no value (`WitGlueLayouts.layout` refuses, `.todo/m92`).
+  enum) and cross a component with nothing added. A `--no-wasi` core module's glue holds them
+  as jco does, an object of booleans ([wasm-import.md](wasm-import.md), "The JS side").
 - **An `async func`** is the same form with `:async t`, and nothing else: its lift is the
   synchronous one over an async function type, so parameters, result area and post-return are
   a sync export's ([wasi-component.md](wasi-component.md), "`:async t` I/O exports", with what

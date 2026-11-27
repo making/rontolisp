@@ -2589,7 +2589,7 @@ public final class HostGlueEmitter {
 	// `s` and `a` its size and alignment; a list's element `of`; a value of cases its
 	// discriminant's width `d`, its payload's offset `o`, the case names `c` and their
 	// payloads `of`, its flattening `fl`; a record's keys `f`, its fields `of` at `at`;
-	// a handle's resource `r`.
+	// flags' keys `f`, one bit each from the lowest; a handle's resource `r`.
 	private static String descriptor(CanonicalLayout layout, Map<CanonicalLayout, String> names) {
 		String head = "{ k: \"" + kind(layout) + "\", s: " + layout.size() + ", a: " + layout.align();
 		return head + switch (layout) {
@@ -2617,6 +2617,8 @@ public final class HostGlueEmitter {
 				yield keys + ", of: [" + String.join(", ", types) + "], at: ["
 						+ String.join(", ", fields.offsets().stream().map(String::valueOf).toList()) + "]";
 			}
+			case CanonicalLayout.Flags flags ->
+				", f: [" + String.join(", ", flags.names().stream().map(name -> quoted(jsName(name))).toList()) + "]";
 			case CanonicalLayout.Handle handle -> ", r: " + quoted(handle.resource());
 			default -> "";
 		} + " }";
@@ -2630,6 +2632,7 @@ public final class HostGlueEmitter {
 			case CanonicalLayout.ListOf ignored -> "list";
 			case CanonicalLayout.Cases cases -> cases.kind();
 			case CanonicalLayout.Fields fields -> fields.kind();
+			case CanonicalLayout.Flags ignored -> "flags";
 			case CanonicalLayout.Handle handle -> handle.own() ? "own" : "borrow";
 		};
 	}
@@ -2743,6 +2746,13 @@ public final class HostGlueEmitter {
 						    if (index < 0) throw new TypeError(String(value?.tag ?? value) + " is no case of " + t.c);
 						    return index;
 						  };
+						  // Flags as JavaScript holds them: an object of booleans, every label in one
+						  // lifted, a label left out of one lowered (or the whole of it, null) false.
+						  const flagsValue = (t, bits) => Object.fromEntries(t.f.map((key, i) => [key, ((bits >>> i) & 1) === 1]));
+						  const flagsBits = (t, value) => {
+						    if (value != null && typeof value !== "object") throw new TypeError(String(value) + " is no flags of " + t.f);
+						    return t.f.reduce((bits, key, i) => (value?.[key] ? bits | (1 << i) : bits), 0);
+						  };
 
 						  const loadAs = {
 						    bool: (m, p) => m.getUint8(p) !== 0,
@@ -2836,6 +2846,10 @@ public final class HostGlueEmitter {
 						        const index = t.d === 1 ? m.getUint8(ptr) : t.d === 2 ? m.getUint16(ptr, true) : m.getUint32(ptr, true);
 						        return caseValue(t, index, t.of[index] === null ? undefined : load(t.of[index], ptr + t.o));
 						      }
+						      case "flags": {
+						        const m = view();
+						        return flagsValue(t, t.s === 1 ? m.getUint8(ptr) : t.s === 2 ? m.getUint16(ptr, true) : m.getUint32(ptr, true));
+						      }
 						      default:
 						        return loadAs[t.k](view(), ptr);
 						    }
@@ -2880,6 +2894,14 @@ public final class HostGlueEmitter {
 						        else if (t.d === 2) m.setUint16(ptr, index, true);
 						        else m.setUint32(ptr, index, true);
 						        if (t.of[index] !== null) store(t.of[index], t.k === "option" ? value : value.val, ptr + t.o);
+						        return;
+						      }
+						      case "flags": {
+						        const bits = flagsBits(t, value);
+						        const m = view();
+						        if (t.s === 1) m.setUint8(ptr, bits);
+						        else if (t.s === 2) m.setUint16(ptr, bits, true);
+						        else m.setUint32(ptr, bits >>> 0, true);
 						        return;
 						      }
 						      default:
@@ -2937,13 +2959,15 @@ public final class HostGlueEmitter {
 						        };
 						        return caseValue(t, index, t.of[index] === null ? undefined : liftFlat(t.of[index], inner));
 						      }
+						      case "flags":
+						        return flagsValue(t, next("i32"));
 						      default:
 						        return fromCore[t.k](next(coreOf[t.k] ?? "i32"));
 						    }
 						  };
 						  // An answer that is one core value -- the result of a function whose result
-						  // flattens to one: a scalar, a handle, a value of cases with no payload, a
-						  // record or a tuple of one such.
+						  // flattens to one: a scalar, a handle, a value of cases with no payload,
+						  // flags, a record or a tuple of one such.
 						  const lowerFlat = (t, value) => {
 						    switch (t.k) {
 						      case "own":
@@ -2957,6 +2981,8 @@ public final class HostGlueEmitter {
 						      case "result":
 						      case "variant":
 						        return caseIndex(t, value);
+						      case "flags":
+						        return flagsBits(t, value);
 						      default:
 						        return (toCore[t.k] ?? ((v) => Number(v) | 0))(value);
 						    }

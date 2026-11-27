@@ -221,6 +221,26 @@ Not carried, each a compile error at the export's WIT line: a `stream`, a
 module (`-o out.wasm` alone) and `--no-gc` export the flat types alone and
 refuse a world with any other.
 
+A `--no-wasi` module exports them too. Its core export takes the canonical ABI's
+core values, and the [`--emit-js-glue`](../../guides/wasm-host-boundary.md#wit-interfaces-beyond-the-flat-set)
+file lowers and lifts them: each export is an entry point under its label in
+camelCase, called with the JavaScript values a host import is handed (an object
+for a record, `{ tag, val }` for a variant, `undefined` for none, an object of
+booleans for flags, a BigInt for 64 bits). A `result` answer returns its ok value and throws the error arm as the
+glue's `WitError`. `--reentrant` refuses such an export.
+
+```js
+import { instantiate, WitError } from "./shapes.js";
+
+const lisp = instantiate(new WebAssembly.Module(bytes));
+lisp.flip({ x: 1, y: 2 }); // { x: 2, y: 1 }
+try {
+  lisp.area({ tag: "dot" });
+} catch (error) {
+  if (error instanceof WitError) console.log(error.payload); // a dot has no area
+}
+```
+
 ### Resources
 
 A `resource` an exported interface declares is exported by a component
@@ -307,26 +327,6 @@ runs one program both ways.
 A core module (`-o out.wasm` alone, `--no-wasi` without `--component`) and
 `--no-gc` refuse an interface that declares a resource, and so do the Clojure
 and the Java front ends.
-
-A `--no-wasi` module exports them too, all but `flags`. Its core export takes the canonical ABI's
-core values, and the [`--emit-js-glue`](../../guides/wasm-host-boundary.md#wit-interfaces-beyond-the-flat-set)
-file lowers and lifts them: each export is an entry point under its label in
-camelCase, called with the JavaScript values a host import is handed (an object
-for a record, `{ tag, val }` for a variant, `undefined` for none, a BigInt for
-64 bits). A `result` answer returns its ok value and throws the error arm as the
-glue's `WitError`. `--reentrant` refuses such an export.
-
-```js
-import { instantiate, WitError } from "./shapes.js";
-
-const lisp = instantiate(new WebAssembly.Module(bytes));
-lisp.flip({ x: 1, y: 2 }); // { x: 2, y: 1 }
-try {
-  lisp.area({ tag: "dot" });
-} catch (error) {
-  if (error instanceof WitError) console.log(error.payload); // a dot has no area
-}
-```
 
 ## What it checks
 

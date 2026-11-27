@@ -438,8 +438,6 @@ decides what to make of it.
   even though `--component`, the interpreter and the JVM all bind it. The
   `wasi:keyvalue` example above is therefore a component (or an interpreter/JVM)
   program, not a Preview 1 one: its `result` arms keep it off that boundary.
-- `flags` crosses a component alone: a `--no-wasi` module, whose JavaScript glue
-  has no value for it, refuses a member that carries one.
 - Under `--component` the interface must not be one the component **already
   imports for its own WASI surface** (which grows with what the program uses:
   `rontolisp:fetch` adds `wasi:http/types` and `wasi:http/client`, the

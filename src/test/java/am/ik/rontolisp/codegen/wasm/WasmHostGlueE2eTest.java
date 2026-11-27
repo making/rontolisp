@@ -481,6 +481,7 @@ class WasmHostGlueE2eTest {
 			  record point { x: s32, y: s32, label: string }
 			  record wrapped { inner: u32 }
 			  variant shape { circle(f32), square(u64), named(string), nothing }
+			  flags access { read-only, can-write, exec }
 			  resource counter {
 			    constructor(start: s32);
 			    bump: func(by: s32) -> s32;
@@ -497,6 +498,8 @@ class WasmHostGlueE2eTest {
 			  wrap: func(n: u32) -> wrapped;
 			  big: func(n: u64) -> u64;
 			  done: func(ok: bool) -> result;
+			  perms: func(a: access) -> access;
+			  granted: func(as: list<access>) -> list<access>;
 			}
 			""";
 
@@ -542,6 +545,8 @@ class WasmHostGlueE2eTest {
 			          (sh:wrap 4294967295) (sh:big 9007199254740993))
 			  (format out "~s ~s~%" (sh:done t)
 			          (handler-case (sh:done nil) (rontolisp:wit-error (e) (list :caught (rontolisp:wit-error-payload e)))))
+			  (format out "~s ~s~%" (sh:perms '(:read-only :exec))
+			          (sh:granted (list nil '(:can-write) '(:read-only :can-write :exec))))
 			  (let ((c (sh:counter-new 10)))
 			    (format out "~s ~s~%" (sh:counter-bump c 5) (sh:counter-bump c 1))
 			    (sh:counter-drop c)))
@@ -618,6 +623,9 @@ class WasmHostGlueE2eTest {
 			  done: (ok) => {
 			    if (!ok) throw new WitError(undefined);
 			  },
+			  // every label present in what the host is handed; one left out of an answer is false
+			  perms: (a) => ({ canWrite: Object.keys(a).join() === "readOnly,canWrite,exec", exec: !a.exec }),
+			  granted: (as) => as.map((a) => ({ ...a, readOnly: !a.readOnly })),
 			};
 			const served = worker(module, {
 			  host: { "example:shapes/echo@0.1.0": echo },
@@ -649,7 +657,8 @@ class WasmHostGlueE2eTest {
 				"((:X 2 :Y 1 :LABEL \"a!\") (:X 4 :Y -3 :LABEL \"bé!\"))",
 				":BLUE (:CIRCLE . 2.5) (:SQUARE . 12345678901) (:NAMED . \"x\") :NOTHING",
 				"NIL \"none\" (\"x1\" \"yy2\" \"0\")", "14 \"negative\"",
-				"(#(0 255 65) \"k3\") (:INNER 4294967295) 9007199254740993", "NIL (:CAUGHT NIL)", "15 16", "",
+				"(#(0 255 65) \"k3\") (:INNER 4294967295) 9007199254740993", "NIL (:CAUGHT NIL)",
+				"(:CAN-WRITE) ((:READ-ONLY) (:READ-ONLY :CAN-WRITE) (:CAN-WRITE :EXEC))", "15 16", "",
 				// The store: a call reads back its own writes, which wait until it is
 				// over -- one put a key, the last value -- and a key list follows its
 				// cursor; a store the host has not got, and a KV call that fails.
@@ -676,8 +685,10 @@ class WasmHostGlueE2eTest {
 				"\"blue\" {\"tag\":\"circle\",\"val\":2.5} {\"tag\":\"square\",\"val\":\"12345678901n\"} "
 						+ "{\"tag\":\"named\",\"val\":\"x\"} {\"tag\":\"nothing\"}",
 				"undefined \"none\" [\"x1\",\"yy2\",\"0\"]", "14 {\"thrown\":\"negative\"}",
-				"[[0,255,65],\"k3\"] {\"inner\":4294967295} \"9007199254740993n\"", "undefined {\"thrown\":null}", "91",
-				"the arena is where it was: true");
+				"[[0,255,65],\"k3\"] {\"inner\":4294967295} \"9007199254740993n\"", "undefined {\"thrown\":null}",
+				"{\"readOnly\":false,\"canWrite\":true,\"exec\":true} [{\"readOnly\":false,\"canWrite\":false,\"exec\":true},"
+						+ "{\"readOnly\":false,\"canWrite\":true,\"exec\":false},{\"readOnly\":false,\"canWrite\":false,\"exec\":true}]",
+				"91", "the arena is where it was: true");
 	}
 
 	// A world whose interface carries every kind of value an export lifts and lowers
@@ -690,6 +701,7 @@ class WasmHostGlueE2eTest {
 			  record point { x: s32, y: s32, label: string }
 			  record wrapped { inner: u32 }
 			  variant shape { circle(f32), square(u64), named(string), nothing }
+			  flags access { read-only, can-write, exec }
 			  small: func(a: bool, b: s8, c: u8, d: s16, e: u16, f: s32) -> tuple<bool, s8, u8, s16, u16, s32>;
 			  wide: func(g: u32, h: s64, i: u64, j: f32, k: f64, l: char) -> tuple<u32, s64, u64, f32, f64, char>;
 			  points: func(ps: list<point>) -> list<point>;
@@ -702,6 +714,8 @@ class WasmHostGlueE2eTest {
 			  wrap: func(n: u32) -> wrapped;
 			  big: func(n: u64) -> u64;
 			  done: func(ok: bool) -> result;
+			  perms: func(a: access) -> access;
+			  granted: func(as: list<access>) -> list<access>;
 			  spread-out: func(a: point, b: point, c: point, d: point, e: point, f: point) -> s32;
 			}
 
@@ -726,6 +740,8 @@ class WasmHostGlueE2eTest {
 			(defun wrap (n) (list :inner n))
 			(defun big (n) n)
 			(defun done (ok) (unless ok (error 'rontolisp:wit-error :payload nil)))
+			(defun perms (a) (remove-if (lambda (k) (member k a)) '(:read-only :can-write :exec)))
+			(defun granted (as) (mapcar (lambda (a) (if (member :exec a) (remove :exec a) (cons :exec a))) as))
 			(defun spread-out (a b c d e f)
 			  (reduce #'+ (mapcar (lambda (p) (* (getf p :x) (length (getf p :label)))) (list a b c d e f))))
 			(rontolisp:wit-export "mirror.wit" :octets t)
@@ -773,6 +789,9 @@ class WasmHostGlueE2eTest {
 			    .join(" "),
 			);
 			console.log([lisp.done(true), raised(() => lisp.done(false))].map(show).join(" "));
+			console.log(
+			  [lisp.perms({ readOnly: true }), lisp.granted([{}, { canWrite: true, exec: true }, null])].map(show).join(" "),
+			);
 			const at = (x, label) => ({ x, y: 0, label });
 			console.log(show(lisp.spreadOut(at(1, "a"), at(2, "bb"), at(3, "ccc"), at(4, "dddd"), at(5, "eeeee"), at(6, "ffffff"))));
 			console.log("the arena is where it was:", lisp.exports.__ronto_alloc_mark() === mark);
