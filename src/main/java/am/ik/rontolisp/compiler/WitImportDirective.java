@@ -1794,14 +1794,7 @@ public final class WitImportDirective {
 	 * @return the bare Lisp function name
 	 */
 	public static String memberName(WitResolver.Func func) {
-		String resource = func.resource();
-		if (resource == null) {
-			return func.def().name();
-		}
-		return switch (func.def().kind()) {
-			case CONSTRUCTOR -> resource + "-new";
-			case PLAIN, STATIC -> resource + "-" + func.def().name();
-		};
+		return WitNamingHook.memberName(func);
 	}
 
 	// The lambda list of a binding. A resource method takes the handle as its leading

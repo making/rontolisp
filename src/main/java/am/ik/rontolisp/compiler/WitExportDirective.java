@@ -350,10 +350,12 @@ public final class WitExportDirective {
 		boolean typed = (backend == Backend.WASM_COMPONENT || backend == Backend.WASM_NO_GC_COMPONENT)
 				&& namesTypes(implemented, witPath);
 		Set<String> destructors = new java.util.HashSet<>();
+		boolean[] exports = new boolean[1];
 		walk(implemented, witPath, true, new ExportVisitor() {
 			@Override
 			public void visit(String name, String defun, WitFunc func, WitItem item, @Nullable String ifaceId,
 					WitItem.InterfaceDef scope) {
+				exports[0] = true;
 				forms.addAll(exportForms(name, defun, func, witPath, locations, item, defuns, backend, ifaceId,
 						directive, implemented, scope, document, typed));
 			}
@@ -364,7 +366,9 @@ public final class WitExportDirective {
 						destructors));
 			}
 		});
-		if (forms.isEmpty()) {
+		// A function is what says the world to the backend: types alone -- a resource
+		// with no function among them, whose destructor is no function -- export nothing.
+		if (!exports[0]) {
 			throw new UnsupportedOperationException(WitSource.at(witPath, locations, implemented.world()) + ": world '"
 					+ implemented.world().name() + "' declares no exports");
 		}
@@ -382,11 +386,11 @@ public final class WitExportDirective {
 
 		// `defun` is the function the program implements the export by: the label
 		// itself, or the member name a resource's function binds on the import side
-		// too (`counter-new`, `counter-add`: WitImportDirective.memberName).
+		// too (`counter-new`, `counter-add`: WitNamingHook.memberName).
 		void visit(String name, String defun, WitFunc func, WitItem item, @Nullable String ifaceId,
 				WitItem.InterfaceDef scope);
 
-		// A resource of an exported interface, after its functions.
+		// A resource of an exported interface, ahead of its functions.
 		default void resource(String ifaceId, WitItem.ResourceDef resource, WitItem item) {
 		}
 
@@ -569,7 +573,7 @@ public final class WitExportDirective {
 			return new WitTypeMapper.Shape(WitTypeMapper.rep(new WitType.Prim(wit)), null, wit, null, List.of(), wit,
 					false);
 		}
-		requireCanonical(type, exportName, what, witPath, locations, item, Backend.OTHER, implemented, scope);
+		requireCanonical(type, exportName, what, witPath, locations, item, Backend.OTHER, implemented, scope, false);
 		if (func.async()) {
 			throw error(witPath, locations, item,
 					"export '" + exportName + "' is an async func, and an async export carries the flat types only ("
@@ -720,11 +724,11 @@ public final class WitExportDirective {
 	// such a world declares the types of every scope, so every export form carries the
 	// WIT; a world of flat functions over primitives is the hand-written export list.
 	private static boolean namesTypes(Implemented implemented, String witPath) {
-		if (definesTypes(implemented.worldScope())) {
+		if (definesTypes(implemented.worldScope(), false)) {
 			return true;
 		}
 		for (InterfaceExport export : interfaceExports(implemented)) {
-			if (definesTypes(export.scope())) {
+			if (definesTypes(export.scope(), true)) {
 				return true;
 			}
 		}
@@ -739,11 +743,13 @@ public final class WitExportDirective {
 		return compound[0];
 	}
 
-	private static boolean definesTypes(WitItem.InterfaceDef scope) {
+	// `exported`: whether the scope is an exported interface's, whose resource the
+	// component defines; a world's own resource is an import it leaves out.
+	private static boolean definesTypes(WitItem.InterfaceDef scope, boolean exported) {
 		for (WitItem item : scope.items()) {
 			if (item instanceof WitItem.TypeAlias || item instanceof WitItem.RecordDef
 					|| item instanceof WitItem.VariantDef || item instanceof WitItem.EnumDef
-					|| item instanceof WitItem.FlagsDef || item instanceof WitItem.ResourceDef) {
+					|| item instanceof WitItem.FlagsDef || exported && item instanceof WitItem.ResourceDef) {
 				return true;
 			}
 		}
@@ -936,7 +942,7 @@ public final class WitExportDirective {
 				for (WitItem inner : body == null ? List.<WitItem>of() : body) {
 					if (inner instanceof WitItem.FuncDef func) {
 						String label = resourceLabel(resource.name(), func);
-						String defun = WitImportDirective.memberName(new WitResolver.Func(resource.name(), func));
+						String defun = WitNamingHook.memberName(new WitResolver.Func(resource.name(), func));
 						implementedOnce(implementing, defun, label, ifaceId, witPath, locations, item);
 						visitor.visit(label, defun, resourceFunc(resource, func, label, witPath, locations, item), item,
 								ifaceId, scope);
@@ -954,7 +960,7 @@ public final class WitExportDirective {
 			}
 		}
 		// An interface of types alone exports those, which a component declares.
-		if (!any && !definesTypes(scope)) {
+		if (!any && !definesTypes(scope, true)) {
 			throw error(witPath, locations, item, "interface '" + ifaceId + "' declares no functions to export");
 		}
 	}
@@ -1115,8 +1121,8 @@ public final class WitExportDirective {
 			BoundaryType boundary = flatDesignator(param.type(), resolver, scope);
 			if (boundary == null) {
 				flat = false;
-				requireCanonical(param.type(), name, param.name(), witPath, locations, item, backend, implemented,
-						scope);
+				requireCanonical(param.type(), name, param.name(), witPath, locations, item, backend, implemented, scope,
+						true);
 			}
 			else {
 				params.add(new LispSymbol(boundary.designator()));
@@ -1129,7 +1135,7 @@ public final class WitExportDirective {
 			BoundaryType boundary = flatDesignator(result, resolver, scope);
 			if (boundary == null) {
 				flat = false;
-				requireCanonical(result, name, "the result", witPath, locations, item, backend, implemented, scope);
+				requireCanonical(result, name, "the result", witPath, locations, item, backend, implemented, scope, true);
 			}
 			else {
 				returns = boundary.designator();
@@ -1397,9 +1403,11 @@ public final class WitExportDirective {
 	// canonical export: the scalar backend holds no value a record, a list or a variant
 	// could be. What is carried is everything but a resource handle, a stream and a
 	// future, wherever it nests.
+	// `resources`: whether the program is one that exports a resource (walk), which
+	// the list of what is carried then names.
 	private static void requireCanonical(WitType type, String exportName, String what, String witPath,
 			WitLocations locations, WitItem item, Backend backend, Implemented implemented,
-			WitItem.InterfaceDef scope) {
+			WitItem.InterfaceDef scope, boolean resources) {
 		WitResolver resolver = implemented.resolver();
 		if (backend.isNoGc()) {
 			throw error(witPath, locations, item,
@@ -1413,9 +1421,10 @@ public final class WitExportDirective {
 		if (refused != null) {
 			throw error(witPath, locations, item,
 					"export '" + exportName + "': the WIT type of " + what + " holds " + refused
-							+ ", which an export does not carry (carried: every primitive type, a handle of a "
-							+ "resource the world exports, and a list, an option, a result, a tuple, a record, a "
-							+ "variant, an enum or flags of them)");
+							+ ", which an export does not carry (carried: every primitive type, "
+							+ (resources ? "a handle of a resource the world exports, " : "")
+							+ "and a list, an option, a result, a tuple, a record, a variant, an enum or flags "
+							+ "of them)");
 		}
 	}
 

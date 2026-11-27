@@ -485,8 +485,8 @@ final class WitEmitter {
 				for (WitItem declared : WitExportTypes.declared(scope.abi(), true)) {
 					// a clause naming an interface of the block's own package names it
 					// bare, as the tool prints it
-					members.add(declared instanceof WitItem.Use use && pkg.equals(use.path().pkg())
-							? new WitItem.Use(use.meta(), WitRef.local(use.path().name()), use.names())
+					members.add(declared instanceof WitItem.Use use ? new WitItem.Use(WitMeta.none(),
+							pkg.equals(use.path().pkg()) ? WitRef.local(use.path().name()) : use.path(), use.names())
 							: declared instanceof WitItem.ResourceDef resource ? undocumented(resource) : declared);
 				}
 			}

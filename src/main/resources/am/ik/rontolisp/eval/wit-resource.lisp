@@ -36,7 +36,8 @@
         ;; thread the others as the free list
         (let* ((reps rontolisp::*wit-reps*)
                (size (if reps (length reps) 0))
-               (grown (make-array (if reps (+ size size) 8) :initial-element nil)))
+               (grown
+                (make-array (if reps (+ size size) 8) :initial-element nil)))
           (dotimes (i size) (setf (svref grown i) (svref reps i)))
           (do ((i (+ size 1) (+ i 1)))
               ((>= i (- (length grown) 1)))

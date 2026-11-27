@@ -219,7 +219,8 @@ final class WitExportTypes {
 	 * declared (the earliest-defined type that can go, goes). A {@code use} clause an
 	 * exported interface still holds names resources of another exported interface: it is
 	 * declared where it stands, once, and gives the scope each of its names. A world's
-	 * own clause is an import of the component, which declares none.
+	 * own clause, and a resource the world declares, are imports of the component, which
+	 * declares none.
 	 * @param abi the calculator scoped to the scope
 	 * @param exported whether the scope is an exported interface's, not the world's
 	 * @return the definitions, and the clauses
@@ -234,7 +235,7 @@ final class WitExportTypes {
 				case WitItem.VariantDef variant -> candidates.put(variant.name(), item);
 				case WitItem.EnumDef en -> candidates.put(en.name(), item);
 				case WitItem.FlagsDef flags -> candidates.put(flags.name(), item);
-				case WitItem.ResourceDef resource -> candidates.put(resource.name(), item);
+				case WitItem.ResourceDef resource when exported -> candidates.put(resource.name(), item);
 				default -> {
 				}
 			}

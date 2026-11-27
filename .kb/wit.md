@@ -339,7 +339,7 @@ nests anywhere a value does, and the program's functions never see an integer.**
 Interpreter / JVM: the directive checks the functions and exports nothing; bound as a
 `wit-provide` provider they take the value as the import side's handle.
 
-- **Names** are the import side's (`WitImportDirective.memberName`): `counter-new`,
+- **Names** are the import side's (`WitNamingHook.memberName`): `counter-new`,
   `counter-add` (self first), `counter-merge`; optional `counter-drop` (one parameter). Export
   labels are the canonical ABI's (`[constructor]r`, `[method]r.m`, `[static]r.f`:
   `WitExportDirective.resourceLabel`); a `:names` table keys a resource's function by its

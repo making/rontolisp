@@ -486,6 +486,17 @@ class WitExportDirectiveTest {
 				Backend.WASM_COMPONENT, Map.of("count-vowels", List.of("d"))))
 			.hasMessageStartingWith("world.wit:20: export 'count-vowels': the WIT type of d holds a handle of the "
 					+ "resource 'thing' (no interface the world exports declares it), which an export does not carry");
+		// A world that exports types alone exports nothing, a resource of no function
+		// among them.
+		assertThatThrownBy(
+				() -> lower("package root:component;\n\ninterface tokens {\n  resource token;\n}\n\nworld analyzer {\n"
+						+ "  export tokens;\n}\n", Backend.WASM_COMPONENT))
+			.hasMessage("world.wit:7: world 'analyzer' declares no exports");
+		// Named by no export it is left out, and the world of flat functions is the
+		// hand-written export list.
+		assertThat(printed(lower(world("  resource thing;\n  export count-vowels: func(s: string) -> s32;"),
+				Backend.WASM_COMPONENT)))
+			.isEqualTo("(RONTOLISP:WASM-EXPORT '|count-vowels| :PARAMS '(:STRING) :PARAM-NAMES '(|s|) :RETURNS :S32)");
 		// An async export stays on the flat types.
 		assertThatThrownBy(
 				() -> lower(world("  export count-vowels: async func(s: list<u8>) -> s32;"), Backend.WASM_COMPONENT))
