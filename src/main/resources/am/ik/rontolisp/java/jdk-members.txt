@@ -3815,6 +3815,71 @@ k 1 java.lang.String -
 C java.net.ConnectException 1 java.base java.net.SocketException -
 k 1 - -
 k 1 java.lang.String -
+C java.net.CookieHandler 1025 java.base java.lang.Object -
+m 1025 get java.util.Map java.net.URI,java.util.Map java.io.IOException
+g (Ljava/net/URI;Ljava/util/Map<Ljava/lang/String;Ljava/util/List<Ljava/lang/String;>;>;)Ljava/util/Map<Ljava/lang/String;Ljava/util/List<Ljava/lang/String;>;>;^Ljava/io/IOException;
+m 41 getDefault java.net.CookieHandler - -
+m 1025 put void java.net.URI,java.util.Map java.io.IOException
+g (Ljava/net/URI;Ljava/util/Map<Ljava/lang/String;Ljava/util/List<Ljava/lang/String;>;>;)V^Ljava/io/IOException;
+m 41 setDefault void java.net.CookieHandler -
+k 1 - -
+C java.net.CookieManager 1 java.base java.net.CookieHandler -
+m 1 get java.util.Map java.net.URI,java.util.Map java.io.IOException
+g (Ljava/net/URI;Ljava/util/Map<Ljava/lang/String;Ljava/util/List<Ljava/lang/String;>;>;)Ljava/util/Map<Ljava/lang/String;Ljava/util/List<Ljava/lang/String;>;>;^Ljava/io/IOException;
+m 1 getCookieStore java.net.CookieStore - -
+m 1 put void java.net.URI,java.util.Map java.io.IOException
+g (Ljava/net/URI;Ljava/util/Map<Ljava/lang/String;Ljava/util/List<Ljava/lang/String;>;>;)V^Ljava/io/IOException;
+m 1 setCookiePolicy void java.net.CookiePolicy -
+k 1 - -
+k 1 java.net.CookieStore,java.net.CookiePolicy -
+C java.net.CookiePolicy 1537 java.base - -
+m 1025 shouldAccept boolean java.net.URI,java.net.HttpCookie -
+f 25 ACCEPT_ALL java.net.CookiePolicy
+f 25 ACCEPT_NONE java.net.CookiePolicy
+f 25 ACCEPT_ORIGINAL_SERVER java.net.CookiePolicy
+C java.net.CookieStore 1537 java.base - -
+m 1025 add void java.net.URI,java.net.HttpCookie -
+m 1025 get java.util.List java.net.URI -
+g (Ljava/net/URI;)Ljava/util/List<Ljava/net/HttpCookie;>;
+m 1025 getCookies java.util.List - -
+g ()Ljava/util/List<Ljava/net/HttpCookie;>;
+m 1025 getURIs java.util.List - -
+g ()Ljava/util/List<Ljava/net/URI;>;
+m 1025 remove boolean java.net.URI,java.net.HttpCookie -
+m 1025 removeAll boolean - -
+C java.net.HttpCookie 17 java.base java.lang.Object java.lang.Cloneable
+m 1 clone java.lang.Object - -
+m 9 domainMatches boolean java.lang.String,java.lang.String -
+m 1 equals boolean java.lang.Object -
+m 1 getComment java.lang.String - -
+m 1 getCommentURL java.lang.String - -
+m 1 getDiscard boolean - -
+m 1 getDomain java.lang.String - -
+m 1 getMaxAge long - -
+m 1 getName java.lang.String - -
+m 1 getPath java.lang.String - -
+m 1 getPortlist java.lang.String - -
+m 1 getSecure boolean - -
+m 1 getValue java.lang.String - -
+m 1 getVersion int - -
+m 1 hasExpired boolean - -
+m 1 hashCode int - -
+m 1 isHttpOnly boolean - -
+m 9 parse java.util.List java.lang.String -
+g (Ljava/lang/String;)Ljava/util/List<Ljava/net/HttpCookie;>;
+m 1 setComment void java.lang.String -
+m 1 setCommentURL void java.lang.String -
+m 1 setDiscard void boolean -
+m 1 setDomain void java.lang.String -
+m 1 setHttpOnly void boolean -
+m 1 setMaxAge void long -
+m 1 setPath void java.lang.String -
+m 1 setPortlist void java.lang.String -
+m 1 setSecure void boolean -
+m 1 setValue void java.lang.String -
+m 1 setVersion void int -
+m 1 toString java.lang.String - -
+k 1 java.lang.String,java.lang.String -
 C java.net.InetAddress 1 java.base java.lang.Object java.io.Serializable
 m 1 equals boolean java.lang.Object -
 m 1 getAddress [B - -
@@ -15898,7 +15963,6 @@ N java.lang.module.ModuleDescriptor 17 java.base
 N java.lang.reflect.AccessFlag 16401 java.base
 N java.net.Authenticator 1025 java.base
 N java.net.ContentHandlerFactory 1537 java.base
-N java.net.CookieHandler 1025 java.base
 N java.net.FileNameMap 1537 java.base
 N java.net.NetworkInterface 17 java.base
 N java.net.Proxy 1 java.base

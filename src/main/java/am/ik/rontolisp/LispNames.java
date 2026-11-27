@@ -7264,6 +7264,9 @@ public final class LispNames {
 	/** See {@link #READ_LINE_RAW_INTERNAL}. */
 	public static final String READ_BYTE_RAW_INTERNAL = "%READ-BYTE-RAW";
 
+	/** See {@link #READ_LINE_RAW_INTERNAL}: the native {@link #PEEK_CHAR_INTERNAL}. */
+	public static final String PEEK_CHAR_RAW_INTERNAL = "%PEEK-CHAR-RAW";
+
 	/** See {@link #READ_LINE_RAW_INTERNAL}. */
 	public static final String WRITE_LINE_RAW_INTERNAL = "%WRITE-LINE-RAW";
 

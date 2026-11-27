@@ -873,8 +873,7 @@ it. The hooks are started in the order they were added, which a JDK does not pro
 
 **A request is sent by the transport of the target**
 ([`rontolisp:fetch`](../guides/http-fetch.md)), so what belongs to a connection is the
-transport's and has no member: a proxy, an authenticator, a cookie handler, an
-`SSLContext`, WebSocket. `version(..)` is kept and answered, and no transport reads it; a
+transport's and has no member: a proxy, an authenticator, an `SSLContext`, WebSocket. `version(..)` is kept and answered, and no transport reads it; a
 reply's `version()` is `HTTP_1_1` whatever was spoken. A request with no `User-Agent` of
 its own carries rontolisp's.
 
@@ -911,6 +910,15 @@ waiting for a reply leaves the others their turns, as one waiting in `sleep` doe
 `--native` executable it lets the threads that can go on take a turn first, and then no
 other thread goes on until the reply is in -- a thread asleep included, and a request of
 the program's own server: a `main` asking its own server waits for ever there.
+
+**Cookies** are the client's own: one given a cookie handler asks it before each request
+it sends, a redirect's too, and hands it each reply, as a JDK's does. The store of a
+`CookieManager` made with none sends the cookies of one path length in the order it kept
+them, those whose domain matches the host first; a JDK may send them in another order, and
+answers `getURIs` in an order of its own. A `Set-Cookie` field `put` cannot read is passed
+over with nothing logged; a JDK logs it. `CookieHandler.setDefault` is kept and answered, and
+nothing asks it, as a JDK's `HttpClient` does not. A handler's `get` answering `null` is an
+`IOException` whose message is not a JDK's.
 
 **A `URI`** is checked as a JDK checks one, with its messages, but for an address in
 brackets, of which only the characters are checked. `hashCode` is not a JDK's number, and

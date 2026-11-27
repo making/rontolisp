@@ -854,8 +854,10 @@ void main() throws IOException, InterruptedException {
 場合は `ConnectException` になります。`HttpRequest.Builder.timeout` は応答が届き始めるまでの
 時間を、`HttpClient.Builder.connectTimeout` は接続にかけてよい時間を制限します。どちらも
 `java.time.Duration` を取り、制限を過ぎたリクエストは `HttpTimeoutException` または
-`HttpConnectTimeoutException` になります。トランスポートが提供できないものと、用意していない
-メンバーは[言語との差異](deviations.md#the-http-client)にあります。
+`HttpConnectTimeoutException` になります。`HttpClient.Builder.cookieHandler` には
+`java.net.CookieManager` かプログラム独自のハンドラーを渡せます。クライアントはハンドラーが
+返すクッキーを送り、各応答のクッキーをハンドラーに渡します。トランスポートが提供できないものと、
+用意していないメンバーは[言語との差異](deviations.md#the-http-client)にあります。
 
 `com.sun.net.httpserver` には HTTP サーバーがあります。`HttpServer` にコンテキストを登録し、
 `HttpHandler` が `HttpExchange` に応答します。サーバーはターゲットのトランスポートを通して

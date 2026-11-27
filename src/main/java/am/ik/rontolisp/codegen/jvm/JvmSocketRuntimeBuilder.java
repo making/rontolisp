@@ -71,7 +71,8 @@ final class JvmSocketRuntimeBuilder {
 			MethodRefEntry sockIn, MethodRefEntry sockOut, MethodRefEntry sockClose, MethodRefEntry serverSocketClose,
 			MethodRefEntry sockReadLine, MethodRefEntry sockWriteLine, MethodRefEntry sockWriteString,
 			MethodRefEntry sockReadChar, MethodRefEntry sockReadByte, MethodRefEntry sockWriteByte,
-			MethodRefEntry sockReadSeq, @Nullable MethodRefEntry sockReadLinePair) {
+			MethodRefEntry sockReadSeq, @Nullable MethodRefEntry sockReadLinePair,
+			@Nullable MethodRefEntry sockPeekChar) {
 	}
 
 	static final String TCP_CONNECT_METHOD = "_tcpConnect";
@@ -171,6 +172,8 @@ final class JvmSocketRuntimeBuilder {
 	private static final String SOCK_READ_CHAR_METHOD = "_sockReadChar";
 
 	private static final String SOCK_READ_CHAR_DESC = "(Ljava/lang/Object;)Ljava/lang/Object;";
+
+	private static final String SOCK_PEEK_CHAR_METHOD = "_sockPeekChar";
 
 	private static final String SOCK_ENTRY_METHOD = "_sockEntry";
 
@@ -541,7 +544,8 @@ final class JvmSocketRuntimeBuilder {
 
 	static SocketRuntime build(ConstantPool cp, ClassEntry thisClass, ClassEntry stringClass, ClassEntry longClass,
 			MethodRefEntry longValueOf, MethodRefEntry longValue, MethodRefEntry stringLength,
-			MethodRefEntry stringSubstring, MethodRefEntry stringConcat, boolean arrayRuntime, boolean readLinePairs) {
+			MethodRefEntry stringSubstring, MethodRefEntry stringConcat, boolean arrayRuntime, boolean readLinePairs,
+			boolean peekChars) {
 		JvmSocketRuntimeBuilder builder = new JvmSocketRuntimeBuilder(cp, thisClass, stringClass, longClass,
 				longValueOf, longValue, stringLength, stringSubstring, stringConcat, arrayRuntime);
 		List<SocketMethod> methods = new ArrayList<>();
@@ -608,7 +612,7 @@ final class JvmSocketRuntimeBuilder {
 		methods.add(new SocketMethod(cp.utf8Entry(SOCK_WRITE_STRING_METHOD), cp.utf8Entry(SOCK_WRITE_STRING_DESC),
 				builder.buildSockWriteString()));
 		methods.add(new SocketMethod(cp.utf8Entry(SOCK_READ_CHAR_METHOD), cp.utf8Entry(SOCK_READ_CHAR_DESC),
-				builder.buildSockReadChar()));
+				builder.buildSockReadChar(false)));
 		methods.add(new SocketMethod(cp.utf8Entry(SOCK_READ_BYTE_METHOD), cp.utf8Entry(SOCK_READ_BYTE_DESC),
 				builder.buildSockReadByte()));
 		methods.add(new SocketMethod(cp.utf8Entry(SOCK_WRITE_BYTE_METHOD), cp.utf8Entry(SOCK_WRITE_BYTE_DESC),
@@ -620,12 +624,19 @@ final class JvmSocketRuntimeBuilder {
 					builder.buildSockReadLine(true)));
 			sockReadLinePair = cp.methodRef(thisClass, SOCK_READ_LINE_PAIR_METHOD, SOCK_READ_LINE_DESC);
 		}
+		// _peekChar's socket arm, only where the program can peek.
+		MethodRefEntry sockPeekChar = null;
+		if (peekChars) {
+			methods.add(new SocketMethod(cp.utf8Entry(SOCK_PEEK_CHAR_METHOD), cp.utf8Entry(SOCK_READ_CHAR_DESC),
+					builder.buildSockReadChar(true)));
+			sockPeekChar = cp.methodRef(thisClass, SOCK_PEEK_CHAR_METHOD, SOCK_READ_CHAR_DESC);
+		}
 		return new SocketRuntime(methods, builder.socketClass, builder.serverSocketClass, builder.sockInRef,
 				builder.sockOutRef, builder.sockCloseRef, builder.serverSocketClose, builder.sockReadLineRef,
 				builder.sockWriteLineRef, builder.sockWriteStringRef, builder.sockReadCharRef,
 				cp.methodRef(thisClass, SOCK_READ_BYTE_METHOD, SOCK_READ_BYTE_DESC),
 				cp.methodRef(thisClass, SOCK_WRITE_BYTE_METHOD, SOCK_WRITE_BYTE_DESC),
-				cp.methodRef(thisClass, SOCK_READ_SEQ_METHOD, SOCK_READ_SEQ_DESC), sockReadLinePair);
+				cp.methodRef(thisClass, SOCK_READ_SEQ_METHOD, SOCK_READ_SEQ_DESC), sockReadLinePair, sockPeekChar);
 	}
 
 	/**
@@ -1839,9 +1850,10 @@ final class JvmSocketRuntimeBuilder {
 	 * (nil) when the peer closed before any byte arrived, which {@code _readChar} turns
 	 * into its eof contract. Never a {@code Reader}: one wrapped around the socket would
 	 * read ahead and swallow bytes a following {@code read-byte}/{@code read-line} owes
-	 * the caller.
+	 * the caller. With {@code peek}, {@code _sockPeekChar}: the same character by
+	 * {@code peekCodePoint}, its octets left for the next read.
 	 */
-	private MethodCode buildSockReadChar() {
+	private MethodCode buildSockReadChar(boolean peek) {
 		// Slots: 0=socket, 1=code point (int)
 		MethodCode code = new MethodCode();
 		MethodCode.Label tryStart = code.newBoundLabel();
@@ -1851,7 +1863,7 @@ final class JvmSocketRuntimeBuilder {
 		code.invokestatic(this.sockInRef);
 		ClassEntry inputClass = this.cp.classEntry(SOCKET_INPUT_CLASS);
 		code.checkcast(inputClass);
-		code.invokevirtual(this.cp.methodRef(inputClass, "readCodePoint", "()I"));
+		code.invokevirtual(this.cp.methodRef(inputClass, peek ? "peekCodePoint" : "readCodePoint", "()I"));
 		code.istore(1);
 		// if (cp < 0) return null; return int[1]{cp};
 		code.iload(1);
@@ -1861,7 +1873,7 @@ final class JvmSocketRuntimeBuilder {
 		code.areturn();
 		code.labelBinding(ifData);
 		emitBoxCodePoint(code, 1);
-		emitStreamFailure(code, tryStart, 2, "read-char: ");
+		emitStreamFailure(code, tryStart, 2, peek ? "peek-char: " : "read-char: ");
 		return code;
 	}
 

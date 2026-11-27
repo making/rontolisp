@@ -389,8 +389,42 @@ so fetch+tcp and serve+tcp compose in one component.
   `--native` executable with `read-char` +8,464; a program without them identical on every
   output. Pin: `TcpOutputBufferFixture` (the last cut short by an octet the peer sends only
   after the program's flushed `!`, so across a fill) and
-  `componentAsyncStdinBareReadCharSignalsTheEndOfFileClass` (`c3 41 e9`). `peek-char` on a
-  socket is no stream on any backend (an error, a trap on the component).
+  `componentAsyncStdinBareReadCharSignalsTheEndOfFileClass` (`c3 41 e9`).
+- **`peek-char` on a socket is real on all four**: the character `read-char` would read, its OCTETS
+  left in the buffer, so every read after it takes them -- `read-byte` and `read-sequence` included.
+  That is CL's "read plus unread" at the octet level; `unread-char`'s character cell, which a byte
+  read does not see, is not involved. **The look waits for exactly the octets the read waits for**
+  (a continuation out of its range ends it), so a peer that sends `e0 41` and waits gets its answer;
+  waiting for the lead's whole count would hang there.
+  - Interpreter / JVM: `RontoSocketInput.peekCodePoint` is `readCodePoint` behind a mark its `fill`
+    keeps (the unread tail moved to the front, the host read behind it). The JVM's `_sockPeekChar`
+    and `_peekChar`'s socket arm exist only where the program names `peek-char` / `%peek-char` or
+    runs forms at run time (`JvmLispCompiler`'s `usesPeekChars`).
+  - WASM: `WasmSocketsRewrite` lowers `peek-char` (`expandPeekChar`) and sends its `%peek-char`, every
+    argument filled in, to `%io-peek-char` / `(await (%peek-char-future ...))`; anything but a socket
+    falls to `%peek-char-raw`, the native peek under its alias. Both providers decode in place
+    (`%sock-peek-octets`, the read's decoder over the chunk; its declarations halve it, 3.7 -> 2 KB on
+    the component) and refill KEEPING the unread octets: the component joins them to the fresh chunk
+    (`%sock-keep`), the runner has the host fill a vector of the room behind them, swapped into the
+    entry under `unwind-protect` (`%sock-fill-keeping`), and copies with loops: `replace` there cost
+    the `--native` core 6 KB and the executable 70 KB of machine code (on the component the loops
+    were 1 KB larger than `replace`). Only the wait is an async body
+    (`%sock-peek-wait-f`); `%peek-char-future` is plain and answers a future only when it must wait.
+  - **The rewrite drops the peek defuns no peek reached** (`WasmSocketsRewrite.PEEK_DEFUNS`): a
+    spliced defun the binary shaker removes still takes a symbol and its strings' room -- a component
+    socket program without a peek was 18 B larger with them.
+  - Sizes, B (2026-11-27; connect, peek, read-char, read-byte, read-line): component 215,053 ->
+    219,829, JVM `.class` 40,741 -> 41,009, `--native` core 57,203 -> 62,567 and executable 3,876,656 ->
+    3,909,800; `RontoSocketInput.class`
+    (travels with every socket program) 4,369 -> 4,707. A socket program without a peek identical on
+    every output but that class; a program without sockets identical.
+  - Standard input where stdin.lisp is spliced (an async component, a component socket program)
+    still peeks through the native `_peek_char`, which reads the adapter's stdin, not stdin.lisp's
+    chunk: `(peek-char) (read-char)` on `abc` answers `#\a #\b` there.
+  - Pins: `TcpOutputBufferFixture` (each of the twelve characters peeked first, the last across a
+    fill; a `t` peek-type; a non-literal character one; a `read-byte` after a peek of `c3 a9` answers
+    195), `WasmSocketsRewriteTest#writeCharBoundedWriteStringAndPeekCharLowerOntoTheDispatch`,
+    `StdinLibraryTest`.
 - **A bare `(read-char sock)` / `(read-byte sock)` at peer close signals `end-of-file`** (CL's default
   `eof-error-p` t) on both entries a bare shape reaches -- the promoted `%read-{char,byte}-future`
   and the sync `%io-read-{char,byte}`. The nil convention stays BELOW in `%sock-read-{char,byte}-f`,

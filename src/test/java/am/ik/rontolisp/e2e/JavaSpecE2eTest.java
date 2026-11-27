@@ -2,6 +2,7 @@ package am.ik.rontolisp.e2e;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -747,24 +748,38 @@ class JavaSpecE2eTest {
 	}
 
 	/**
-	 * The suites of the tree's own modules that test no server and need no container run
-	 * under {@code rontolisp test} as they are: the files surefire runs under a JDK,
-	 * their module's sources the source path and JUnit Jupiter a dependency, every test
-	 * green on the four backends. Through the command line, in a process of its own: what
-	 * is run is {@code rontolisp test FILE.java [-o OUT]}.
+	 * The suites of the tree's own modules that need no container run under
+	 * {@code rontolisp test} as they are: the files surefire runs under a JDK, their
+	 * module's sources the source path and JUnit Jupiter a dependency, every test green
+	 * on the four backends -- on the interpreter and the JVM only for a suite whose
+	 * program imports a WIT interface no Preview 1 module carries and plain
+	 * {@code wasmtime run} hosts no component of ({@code wasi:keyvalue}). Through the
+	 * command line, in a process of its own: what is run is
+	 * {@code rontolisp test FILE.java [-o OUT]}.
 	 */
 	@TestFactory
 	Stream<DynamicNode> theSuitesOfTheTreesModulesRunUnchanged() {
-		record Suite(String module, String file, int tests) {
+		record Suite(String module, String file, int tests, List<String> sourcePath, List<String> dependencies,
+				List<String> legs) {
+			Suite(String module, String file, int tests) {
+				this(module, file, tests, List.of(module + "/src/main/java"), List.of(),
+						List.of("INTERPRETER", "JVM", "WASM", "WASM_COMPONENT"));
+			}
 		}
 		String jdbc = "src/test/java/am/ik/jdbc/postgresql/";
+		String keyvalue = "servlet-httpserver-keyvalue";
 		List<DynamicNode> legs = new ArrayList<>();
 		for (Suite suite : List.of(new Suite("jdbc-postgresql", jdbc + "SqlTest.java", 2),
 				new Suite("jdbc-postgresql", jdbc + "ScramTest.java", 3),
 				new Suite("jdbc-postgresql", jdbc + "TargetTest.java", 3),
-				new Suite("servlet-httpserver", "src/test/java/am/ik/servlet/httpserver/UrlCodecTest.java", 65))) {
+				new Suite("servlet-httpserver", "src/test/java/am/ik/servlet/httpserver/UrlCodecTest.java", 65),
+				// the @WitImport's WIT is in the module's resources
+				new Suite(keyvalue, "src/test/java/am/ik/servlet/httpserver/keyvalue/KeyValueSessionStoreTest.java", 2,
+						List.of(keyvalue + "/src/main/java", keyvalue + "/src/main/resources",
+								"servlet-httpserver/src/main/java", "rontolisp-java-api/src/main/java"),
+						List.of("jakarta.servlet:jakarta.servlet-api:6.1.0"), List.of("INTERPRETER", "JVM")))) {
 			String name = suite.file().substring(suite.file().lastIndexOf('/') + 1).replace(".java", "");
-			for (String leg : List.of("INTERPRETER", "JVM", "WASM", "WASM_COMPONENT")) {
+			for (String leg : suite.legs()) {
 				legs.add(dynamicTest(name + " " + leg, () -> {
 					if (leg.startsWith("WASM") && !HostWasmtime.isAvailable()) {
 						abort("no usable wasmtime on PATH");
@@ -773,10 +788,17 @@ class JavaSpecE2eTest {
 					junitSources();
 					String java = Path.of(System.getProperty("java.home"), "bin", "java").toString();
 					Path module = Path.of(suite.module()).toAbsolutePath();
+					List<String> sourcePath = new ArrayList<>();
+					for (String directory : suite.sourcePath()) {
+						sourcePath.add(Path.of(directory).toAbsolutePath().toString());
+					}
 					List<String> command = new ArrayList<>(List.of(java, "-cp", System.getProperty("java.class.path"),
 							"am.ik.rontolisp.cli.RontoLispCli", "test", "--java-source-path",
-							module.resolve("src/main/java").toString(), "--java-source-dep", junitCoordinate(),
-							module.resolve(suite.file()).toString()));
+							String.join(File.pathSeparator, sourcePath), "--java-source-dep", junitCoordinate()));
+					for (String dependency : suite.dependencies()) {
+						command.addAll(List.of("--java-source-dep", dependency));
+					}
+					command.add(module.resolve(suite.file()).toString());
 					Path dir = workDir.resolve("Module-" + name + "-" + leg);
 					Files.createDirectories(dir);
 					Ended ended;

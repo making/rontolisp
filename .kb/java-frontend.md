@@ -1816,19 +1816,18 @@ JDK in the front end's semantics, the library and the host.
 - **The tree's suites that run** (`JavaSpecE2eTest#theSuitesOfTheTreesModulesRunUnchanged`,
   four backends): `SqlTest`, `ScramTest`, `TargetTest` of `jdbc-postgresql` and
   `UrlCodecTest` of `servlet-httpserver` (65 runs), green as they are, none failing under
-  rontolisp only. **The six others stop at the library or the host, not the runner**
+  rontolisp only; `KeyValueSessionStoreTest` of `servlet-httpserver-keyvalue` (2 runs) on
+  the interpreter and the JVM, its source path its module's `src/main/java` AND
+  `src/main/resources` (the `@WitImport`'s WIT), `servlet-httpserver`'s and
+  `rontolisp-java-api`'s, with `--java-source-dep jakarta.servlet:jakarta.servlet-api:6.1.0`.
+  Its wasm legs cannot run (2026-11-27): Preview 1 refuses `open`'s `result` at the WIT
+  boundary at compile time, and `wasmtime run` 51.0.0 links no `wasi:keyvalue/store` for
+  the component. **The five others stop at the library or the host, not the runner**
   (measured 2026-11-26): `ServletHttpServerTest` at `java.lang.Process` (`ss` for the accept
   backlog), then `URLClassLoader` and TLS (`SSLContext`, `KeyStore`); `ServletContainerTest`
   and `DiscoveryTest` at Tomcat's and Jetty's classes (`Container.java`) and `javax.tools`;
   `PostgresDriverTest` at Testcontainers; `ConformanceTest` (webmvc-fn-lite) at
-  `javax.tools.JavaCompiler`; `KeyValueSessionStoreTest` at `java.net.CookieManager` (the
-  source path its module's `src/main/java` AND `src/main/resources`, which holds the
-  `@WitImport`'s WIT, `servlet-httpserver`'s and `rontolisp-java-api`'s, with
-  `--java-source-dep jakarta.servlet:jakarta.servlet-api:6.1.0`): measured 2026-11-26, with
-  no cookie handler, no `usingRecursiveComparison` and no `asInstanceOf` both tests run on
-  the interpreter and fail only where those edits change them -- `KeyValueStore.Bucket` is
-  found; the recursive comparison and `asInstanceOf` are the library's since (below), the
-  cookie handler `.todo/m78`. A program that is no run of tests holds none of it: the lowering changes
+  `javax.tools.JavaCompiler`. A program that is no run of tests holds none of it: the lowering changes
   only where `javaTests` is set or a test package of the library's is named
   (`examples/java/shop` 323,921 B, byte-identical across l87).
 - **Past one instance a test and the order declared: measured** (JUnit 6.0.3, 2026-11-26;
@@ -4571,6 +4570,32 @@ member) or is refused where the request is sent (`deviations.md`, "The HTTP clie
   `RontoLispCliStreamsTest#aJavaFileRunsCompilesAndIsRefusedWhereItCannot` (the Preview 1
   refusal), `NativeFetchTest` (the deferred future), the `doc/*/java/index.md` example
   (`DocExamplesTest`).
+- **A cookie handler is the client's own jar** (`Http.Jar`): a client given none sends the
+  request's fields and keeps nothing (`Jar.NONE`); `cookieHandler(h)` makes a `HandledJar`,
+  which a program giving no handler never makes, so no dispatcher of its holds the handler's
+  calls. As JDK 25 answered (`java-http-spec.yaml` `client` and `async`): `get` before each
+  request a send makes, redirects too, with the request's URI (its fragment kept) and fields;
+  its `Cookie` values (any case) ahead of the request's own in ONE field joined by `"; "`, its
+  `Cookie2` values a field each unless the request has its own, other names not sent; `put`
+  with each reply's URI and fields, before the redirect is decided. What the handler throws
+  is the cause of an `IOException` of its message from a blocking `send` and what the future
+  of `sendAsync` fails with (`Http.Refusal`). Sizes (2026-11-27): a blocking GET's component
+  452,660 -> 454,197 B, its JVM class 437,839 -> 442,725 (the three `Refusal` catches 672 /
+  2,849 of it); with a `CookieManager` 519,081 / 529,120; a program reaching no client
+  (`examples/java/shop`, 321,439 B) byte-identical.
+- **`java.net`'s cookies** (`HttpCookie`, `CookieManager`, `InMemoryCookieStore`, the name a
+  JDK 25's `getClass()` answered): every rule the Javadoc leaves open is a JDK 25 answer, the
+  corpus case `cookies-are-read-kept-and-sent-as-a-jdk-does` (`java-spec.yaml`) asking it
+  again. **Traps**: a header's version is guessed from its whole text (`expires=` 0, else
+  `version=` or `max-age` 1, else a `set-cookie2:` prefix) and a `Version` attribute is only
+  checked; `put` parses each value WITHOUT its field's name, so a `Set-Cookie2` value of two
+  cookies is one of version 0; a version 0 cookie's domain is matched by the host ending in
+  it (`a.example.com` reaches `xa.example.com`), a version 1 cookie's by `domainMatches`;
+  `domainMatches` takes a dotless host as `host.local` for the suffix but not for a leading
+  dot (`.foo.local` / `foo` false). **Not matched** (`deviations.md`): a JDK orders the
+  cookies of one path length by its store's own structure (one `.example.com` cookie came
+  second among the host's in one probe, third in another), ours by the order kept, domain matches first; its
+  `getURIs` order; its log of a field `put` cannot read.
 - **Not made** (`.todo/k95`): bodies as they arrive, the `--host-fetch` reactor as a leg,
   `URI`'s constructors of several parts.
 

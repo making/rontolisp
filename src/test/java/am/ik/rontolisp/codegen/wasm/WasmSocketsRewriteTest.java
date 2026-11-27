@@ -57,6 +57,16 @@ class WasmSocketsRewriteTest {
 		return new ArrayList<>(WasmSocketsRewrite.rewrite(program)).getLast().print();
 	}
 
+	// Every form of the program, rewritten.
+	private static String rewrittenProgram(String source) {
+		List<LispVal> program = new PackageResolver().resolveProgram(LispReader.readAllFromString(source));
+		StringBuilder out = new StringBuilder();
+		for (LispVal form : WasmSocketsRewrite.rewrite(program)) {
+			out.append(form.print()).append('\n');
+		}
+		return out.toString();
+	}
+
 	@Test
 	void grayStreamsSequenceFallThroughReachesTheSocketDispatch() {
 		// (write-sequence bytes socket) in cl-postgres becomes THIS after the Gray
@@ -98,15 +108,28 @@ class WasmSocketsRewriteTest {
 	}
 
 	@Test
-	void writeCharAndBoundedWriteStringLowerOntoTheWriteStringDispatch() {
-		// Both have a shared lowering onto the plain write-string this pass covers; doing
-		// it HERE (instead of at WasmExprCompiler time, which is after this pass) is what
-		// puts them on the socket path at all.
+	void writeCharBoundedWriteStringAndPeekCharLowerOntoTheDispatch() {
+		// Each has a shared lowering onto calls this pass covers; doing it HERE (instead
+		// of at WasmExprCompiler time, which is after this pass) is what puts them on the
+		// socket path at all.
 		assertThat(rewriteInDefun("(write-char #\\Z s)")).contains("RONTOLISP::%IO-WRITE-STRING")
 			.doesNotContain("(WRITE-STRING ");
 		assertThat(rewriteInDefun("(write-string \"0123456789\" s :start 2 :end 5)"))
 			.contains("RONTOLISP::%IO-WRITE-STRING", "SUBSEQ")
 			.doesNotContain(":START");
+		// peek-char's skipping loop: its look at the next character, every argument
+		// filled in, and the read-char that skips.
+		assertThat(rewriteInDefun("(peek-char t s)")).contains("(RONTOLISP::%IO-PEEK-CHAR |__pc_stream| |__pc_errp|",
+				"RONTOLISP::%IO-READ-CHAR-EOF");
+		assertThat(rewriteInDefun("(peek-char)")).contains("(RONTOLISP::%IO-PEEK-CHAR NIL T NIL)");
+		assertThat(rewriteTopLevel("(peek-char nil s nil :eof)"))
+			.contains("(RONTOLISP:AWAIT (RONTOLISP::%PEEK-CHAR-FUTURE S NIL :EOF))");
+		// The provider's peek defuns go when no peek reached them: a defun the binary
+		// shaker removes still takes a symbol, and its strings their room.
+		String peekDefun = "(defun rontolisp::%io-peek-char (s e &optional v) s)";
+		assertThat(rewrittenProgram(COMPONENT + peekDefun + "(print 1)")).doesNotContain("%IO-PEEK-CHAR");
+		assertThat(rewrittenProgram(COMPONENT + peekDefun + "(peek-char nil s)"))
+			.contains("(DEFUN RONTOLISP::%IO-PEEK-CHAR");
 	}
 
 	@Test

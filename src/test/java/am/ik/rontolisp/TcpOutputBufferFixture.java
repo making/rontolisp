@@ -28,8 +28,10 @@ import java.util.concurrent.TimeUnit;
  * characters read one at a time, where a malformed sequence is one U+FFFD and the octet
  * that cut it short is left to start the next character -- the last cut short by an octet
  * the peer sends only after the program's {@code !}, which the program's read flushes
- * once the octets before it are spent; then a last line the peer's half-close ends, and
- * the end of input.
+ * once the octets before it are spent -- each peeked first, which leaves its octets in
+ * place; then a skipping peek past whitespace and one up to a character, whose first
+ * octet a byte read takes; then a last line the peer's half-close ends, and the end of
+ * input.
  */
 public final class TcpOutputBufferFixture implements AutoCloseable {
 
@@ -52,9 +54,11 @@ public final class TcpOutputBufferFixture implements AutoCloseable {
 			                   (write-char #\\! s)
 			                   (let ((chars nil))
 			                     (dotimes (i 12)
-			                       (let ((c (read-char s nil :eof)))
-			                         (push (if (characterp c) (char-code c) c) chars)))
+			                       (let* ((p (peek-char nil s nil :eof)) (c (read-char s nil :eof)))
+			                         (push (if (eql p c) (if (characterp c) (char-code c) c) (list p c)) chars)))
 			                     (nreverse chars)))
+			                 (list (char-code (peek-char t s)) (char-code (peek-char (code-char 233) s))
+			                       (read-byte s))
 			                 (codes (multiple-value-list (read-line s nil :eof)))
 			                 (codes (multiple-value-list (read-line s nil :eof))))))
 			  (write-string "x" s)
@@ -72,7 +76,7 @@ public final class TcpOutputBufferFixture implements AutoCloseable {
 	 * the last.
 	 */
 	public static final String EXPECTED_OUTPUT = "(\"1\" (" + (LONG_LINE + 3)
-			+ " 233 13 99) ((65533 233 122) NIL) ((65533 122) NIL) (65533 122 10 65533 65 10 65 65533 66 10 65533 66) ((120 121 122) T) (:EOF T))";
+			+ " 233 13 99) ((65533 233 122) NIL) ((65533 122) NIL) (65533 122 10 65533 65 10 65 65533 66 10 65533 66) (120 233 195) ((65533 122) T) (:EOF T))";
 
 	/** What the peer received: the first line's length, then every later byte. */
 	public static final String EXPECTED_RECEIVED = "101:x" + "b".repeat(20000) + "bye\n";
@@ -139,7 +143,7 @@ public final class TcpOutputBufferFixture implements AutoCloseable {
 			if (in.read() != '!') {
 				throw new IllegalStateException("expected the program's ! before the rest");
 			}
-			out.write(new byte[] { 'B', 'x', 'y', 'z' });
+			out.write(new byte[] { 'B', ' ', 'x', (byte) 0xc3, (byte) 0xa9, 'z' });
 			s.shutdownOutput();
 			ByteArrayOutputStream rest = new ByteArrayOutputStream();
 			byte[] chunk = new byte[65536];

@@ -125,6 +125,10 @@ final class WasmSocketsRewrite {
 
 	private static final String READ_LINE_EOF_FUTURE = "%READ-LINE-EOF-FUTURE";
 
+	private static final String IO_PEEK_CHAR = "%IO-PEEK-CHAR";
+
+	private static final String PEEK_CHAR_FUTURE = "%PEEK-CHAR-FUTURE";
+
 	private static final String IO_READ_SEQUENCE = "%IO-READ-SEQUENCE";
 
 	private static final String READ_SEQUENCE_FUTURE = "%READ-SEQUENCE-FUTURE";
@@ -151,6 +155,7 @@ final class WasmSocketsRewrite {
 		members.add(IO_READ_BYTE_EOF);
 		members.add(IO_READ_CHAR_EOF);
 		members.add(IO_READ_LINE_EOF);
+		members.add(IO_PEEK_CHAR);
 		members.add(IO_READ_SEQUENCE);
 		members.add(IO_WRITE_SEQUENCE);
 		return Set.copyOf(members);
@@ -202,7 +207,58 @@ final class WasmSocketsRewrite {
 		for (LispVal form : program) {
 			out.add(CallSiteWalk.walk(form, top));
 		}
+		return withoutUnreachedPeek(out);
+	}
+
+	// The provider's peek defuns, which only the peek-char rewrite reaches: a program
+	// whose rewrite reached none drops them, so its module is the one it was before
+	// they existed -- a defun the binary shaker removes still takes a symbol and its
+	// strings' room.
+	private static final Set<String> PEEK_DEFUNS = Set.of(
+			PackageRegistry.qualifyInternal(LispNames.RONTOLISP_PKG, IO_PEEK_CHAR),
+			PackageRegistry.qualifyInternal(LispNames.RONTOLISP_PKG, PEEK_CHAR_FUTURE),
+			PackageRegistry.qualifyInternal(LispNames.RONTOLISP_PKG, "%SOCK-PEEK-DECODE"),
+			PackageRegistry.qualifyInternal(LispNames.RONTOLISP_PKG, "%SOCK-PEEK-OCTETS"),
+			PackageRegistry.qualifyInternal(LispNames.RONTOLISP_PKG, "%SOCK-PEEK-WAIT-F"),
+			PackageRegistry.qualifyInternal(LispNames.RONTOLISP_PKG, "%SOCK-KEEP"),
+			PackageRegistry.qualifyInternal(LispNames.RONTOLISP_PKG, "%SOCK-FILL-KEEPING"));
+
+	private static List<LispVal> withoutUnreachedPeek(List<LispVal> program) {
+		String io = PackageRegistry.qualifyInternal(LispNames.RONTOLISP_PKG, IO_PEEK_CHAR);
+		String future = PackageRegistry.qualifyInternal(LispNames.RONTOLISP_PKG, PEEK_CHAR_FUTURE);
+		for (LispVal form : program) {
+			if (peekDefun(form) == null && (names(form, io) || names(form, future))) {
+				return program;
+			}
+		}
+		List<LispVal> out = new java.util.ArrayList<>(program.size());
+		for (LispVal form : program) {
+			if (peekDefun(form) == null) {
+				out.add(form);
+			}
+		}
 		return out;
+	}
+
+	// The peek defun a top-level form defines, or null.
+	private static @org.jspecify.annotations.Nullable String peekDefun(LispVal form) {
+		if (form instanceof LispCons cons && cons.car() instanceof LispSymbol head
+				&& (LispNames.DEFUN.equals(head.name()) || LispNames.ASYNC_DEFUN_QUALIFIED.equals(head.name()))
+				&& cons.cdr() instanceof LispCons rest && rest.car() instanceof LispSymbol name
+				&& PEEK_DEFUNS.contains(name.name())) {
+			return name.name();
+		}
+		return null;
+	}
+
+	private static boolean names(LispVal form, String name) {
+		while (form instanceof LispCons cons) {
+			if (names(cons.car(), name)) {
+				return true;
+			}
+			form = cons.cdr();
+		}
+		return form instanceof LispSymbol sym && name.equals(sym.name());
 	}
 
 	// Whether the spliced provider's read futures are async bodies: its
@@ -339,6 +395,20 @@ final class WasmSocketsRewrite {
 											new am.ik.rontolisp.LispString("\n"), stream)),
 									LispNil.INSTANCE)),
 					context);
+		}
+		// (peek-char ...) has no dispatch defun of its own either: its peek-type loop
+		// (LispMacroExpander.expandPeekChar) is lowered HERE, as write-char's is, and the
+		// look at the next character it is built of, %peek-char, takes the one target
+		// below with every argument filled in.
+		if (LispNames.PEEK_CHAR.equals(head) && parts.size() <= 5) {
+			return walk(LispMacroExpander.expandPeekChar(consOf(parts)), context);
+		}
+		if (LispNames.PEEK_CHAR_INTERNAL.equals(head) && parts.size() <= 4) {
+			List<LispVal> full = List.of(parts.get(0), parts.size() > 1 ? parts.get(1) : LispNil.INSTANCE,
+					parts.size() > 2 ? parts.get(2) : am.ik.rontolisp.LispTrue.INSTANCE,
+					parts.size() > 3 ? parts.get(3) : LispNil.INSTANCE);
+			return asyncContext ? awaitOf(replaceHead(full, PEEK_CHAR_FUTURE, context))
+					: replaceHead(full, IO_PEEK_CHAR, context);
 		}
 		// The eof-tolerant reads (2-3 args) and the sequence ops (bounded or not) take
 		// their own dispatch targets; reads promote in async context like the 1-arg

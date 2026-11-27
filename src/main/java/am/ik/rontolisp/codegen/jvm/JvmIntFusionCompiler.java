@@ -213,6 +213,16 @@ final class JvmIntFusionCompiler {
 
 		int storeIndexSlot = -1;
 
+		/**
+		 * The storage its caller resolved for the array ({@link #bindArrayStorage}),
+		 * which the method takes after its leaves and asks {@code _fxFresh} of once;
+		 * {@link #storageParam} then holds the packed {@code long[]}, or null. Null: the
+		 * access asks {@code _fxLongs} itself.
+		 */
+		@Nullable Storage storage;
+
+		int storageParam = -1;
+
 		ArefLeaf(LispVal arrayExpr, int site) {
 			this.arrayExpr = arrayExpr;
 			this.site = site;
@@ -498,8 +508,25 @@ final class JvmIntFusionCompiler {
 	 *
 	 * @param binding what a read of the name resolved to where the declaration was read
 	 * @param pin the representation the declaration proves
+	 * @param storage the slots holding its storage, resolved where it was bound
+	 * ({@link #bindArrayStorage}), or null
 	 */
-	record DeclaredArray(Object binding, DeclaredArrayTypes.Pin pin) {
+	record DeclaredArray(Object binding, DeclaredArrayTypes.Pin pin, @Nullable Storage storage) {
+	}
+
+	/**
+	 * A general array's storage as the method that binds the variable resolved it: the
+	 * header its list held ({@code _fxHeader}) and that header's packed {@code long[]}
+	 * ({@code _fxStorage}), null where it has none. The pair names one header, whose
+	 * {@code long[]} never changes, so a fused method that finds the list still holding
+	 * the header ({@code _fxFresh}) reads and writes the array's elements through it; any
+	 * other pair -- the array widened, written back from Java, or another array's -- is
+	 * resolved again there.
+	 *
+	 * @param headerSlot the local holding the header
+	 * @param longsSlot the local holding its {@code long[]}
+	 */
+	record Storage(int headerSlot, int longsSlot) {
 	}
 
 	/**
@@ -540,11 +567,167 @@ final class JvmIntFusionCompiler {
 		bound.forEach(names::remove);
 		declared.forEach((name, pin) -> {
 			if (!ctx.specialVars.contains(name)) {
-				names.put(name, new DeclaredArray(bindingOf(name, ctx), pin));
+				// A free declaration of a variable an outer scope resolved the storage
+				// of: the same binding keeps it, so an assignment here resolves it again.
+				Object binding = bindingOf(name, ctx);
+				DeclaredArray held = bound.contains(name) ? null : outer.get(name);
+				names.put(name, new DeclaredArray(binding, pin,
+						held != null && held.binding().equals(binding) ? held.storage() : null));
 			}
 		});
 		return names.isEmpty() ? Map.of() : names;
 	}
+
+	/**
+	 * Resolves the storage of each general array the scope just bound and declared
+	 * ({@code .kb/jvm-int-fusion.md}, "Storage resolved once"): a plain local the body
+	 * reads or stores by a subscript in a loop, or at least
+	 * {@link #MIN_STRAIGHT_ACCESSES} times. Its fused accesses then take the pair
+	 * ({@link Storage}) instead of asking the list for its header, its rank and its
+	 * {@code long[]} each time; an assignment of the variable resolves its new value's
+	 * ({@link #rebindArrayStorage}). Called once
+	 * {@link JvmLispCompiler.Ctx#declaredArrays} holds the scope's declarations, behind a
+	 * function's entry label: a tail call that jumps back resolves its new arguments.
+	 * @param bound the names the scope binds, in order
+	 * @param bodyForms the scope's body
+	 * @param ctx the compile context
+	 */
+	static void bindArrayStorage(List<String> bound, List<LispVal> bodyForms, JvmLispCompiler.Ctx ctx) {
+		if (!enabled(ctx) || !ctx.usesArrays || ctx.declaredArrays.isEmpty()) {
+			return;
+		}
+		Map<String, DeclaredArray> names = null;
+		for (String name : bound) {
+			DeclaredArray declared = (names != null ? names : ctx.declaredArrays).get(name);
+			Integer slot = ctx.locals.get(name);
+			if (declared == null || declared.storage() != null
+					|| declared.pin().kind() != DeclaredArrayTypes.Kind.GENERAL || slot == null
+					|| ctx.boxedVars.contains(name) || !declared.binding().equals(bindingOf(name, ctx))
+					|| ctx.nextLocal + 2 > 250) {
+				continue;
+			}
+			int[] uses = new int[2];
+			for (LispVal form : bodyForms) {
+				scanArrayUses(form, name, false, uses);
+			}
+			if (uses[1] == 0 && uses[0] < MIN_STRAIGHT_ACCESSES) {
+				continue;
+			}
+			Storage storage = new Storage(ctx.allocTemp(), ctx.allocTemp());
+			emitResolveStorage(slot, storage, ctx);
+			if (names == null) {
+				names = new HashMap<>(ctx.declaredArrays);
+			}
+			names.put(name, new DeclaredArray(declared.binding(), declared.pin(), storage));
+		}
+		if (names != null) {
+			ctx.declaredArrays = names;
+		}
+	}
+
+	/**
+	 * Resolves again the storage of the variable an assignment just stored into, where
+	 * its scope resolved one ({@link #bindArrayStorage}); leaves the operand stack as it
+	 * found it.
+	 * @param name the assigned local
+	 * @param ctx the compile context
+	 */
+	static void rebindArrayStorage(String name, JvmLispCompiler.Ctx ctx) {
+		DeclaredArray declared = ctx.declaredArrays.get(name);
+		Integer slot = ctx.locals.get(name);
+		if (declared != null && declared.storage() != null && slot != null && declaredArray(name, ctx) != null) {
+			emitResolveStorage(slot, declared.storage(), ctx);
+		}
+	}
+
+	/**
+	 * The pair of the array in {@code slot} into {@code storage}'s locals: the header,
+	 * then its {@code long[]}, both stored once both are known -- nothing between the two
+	 * stores can throw, so no exit leaves one array's header beside another's
+	 * {@code long[]}.
+	 */
+	private static void emitResolveStorage(int slot, Storage storage, JvmLispCompiler.Ctx ctx) {
+		State state = java.util.Objects.requireNonNull(ctx.fusedState);
+		state.usesStorage = true;
+		ctx.body.aload(slot);
+		ctx.body.invokestatic(JvmEmitHelper.selfMethod(ctx, state.className, HEADER, HEADER_DESC)).dup();
+		ctx.body.invokestatic(JvmEmitHelper.selfMethod(ctx, state.className, STORAGE, STORAGE_DESC));
+		ctx.body.astore(storage.longsSlot()).astore(storage.headerSlot());
+	}
+
+	/**
+	 * The accesses outside a loop from which resolving an array's storage once costs less
+	 * than each access asking for it: the resolution is one such question, and each fused
+	 * method asks whether it still holds.
+	 */
+	private static final int MIN_STRAIGHT_ACCESSES = 3;
+
+	/**
+	 * Counts in {@code form}, blind to shadowing, the {@code aref} and {@code %aset}
+	 * forms over {@code name} ({@code out[0]}) and those of them inside a loop
+	 * ({@code out[1]}).
+	 */
+	private static void scanArrayUses(LispVal form, String name, boolean inLoop, int[] out) {
+		if (!(form instanceof LispCons cons)) {
+			return;
+		}
+		if (cons.car() instanceof LispSymbol head) {
+			if (LispNames.isQuote(head.name())) {
+				return;
+			}
+			switch (head.name()) {
+				case LispNames.AREF, LispNames.ASET -> {
+					if (cons.cdr() instanceof LispCons rest && rest.car() instanceof LispSymbol array
+							&& name.equals(array.name())) {
+						out[0]++;
+						if (inLoop) {
+							out[1]++;
+						}
+					}
+				}
+				case LispNames.WHILE, LispNames.TAGBODY, LispNames.DOTIMES, LispNames.DOLIST, LispNames.DO,
+						LispNames.DO_STAR, LispNames.LOOP ->
+					inLoop = true;
+				default -> {
+				}
+			}
+		}
+		for (LispVal cur = cons; cur instanceof LispCons cell; cur = cell.cdr()) {
+			scanArrayUses(cell.car(), name, inLoop, out);
+		}
+	}
+
+	/**
+	 * The storage resolved for the array an access names ({@link #bindArrayStorage}), or
+	 * null: the array is no variable holding one, or the access asks nothing of it -- a
+	 * store where another thread can run, which {@code _fxPut} makes.
+	 */
+	private static @Nullable Storage storageOf(LispVal arrayExpr, DeclaredArrayTypes.@Nullable Pin pin, boolean store,
+			JvmLispCompiler.Ctx ctx) {
+		if (pin == null || pin.kind() != DeclaredArrayTypes.Kind.GENERAL || !(arrayExpr instanceof LispSymbol sym)
+				|| (store && ctx.threadScopedSpecials)) {
+			return null;
+		}
+		DeclaredArray declared = ctx.declaredArrays.get(sym.name());
+		return declared != null && declaredArray(sym.name(), ctx) != null ? declared.storage() : null;
+	}
+
+	/**
+	 * The storages the leaves take, each once, in the order the leaves first name them:
+	 * the fused method's parameters after its leaves', a pair each.
+	 */
+	private static List<Storage> storagesOf(List<Node> leaves) {
+		List<Storage> storages = new ArrayList<>();
+		for (Node leaf : leaves) {
+			if (leaf instanceof ArefLeaf l && l.storage != null && !storages.contains(l.storage)) {
+				storages.add(l.storage);
+			}
+		}
+		return storages;
+	}
+
+	/** The descriptor of one storage's parameters: its {@code long[]}, its header. */
+	private static final String STORAGE_PARAMS = "[JLjava/lang/Object;";
 
 	/**
 	 * The representation a declaration pins the array an access names to, where this
@@ -683,6 +866,15 @@ final class JvmIntFusionCompiler {
 
 		/** Set when a pinned read takes a general array: {@code _fxElt} is emitted. */
 		boolean usesElement;
+
+		/**
+		 * Set when a scope resolves an array's storage ({@link #bindArrayStorage}):
+		 * {@code _fxHeader} and {@code _fxStorage} are emitted.
+		 */
+		boolean usesStorage;
+
+		/** Set when a fused method takes a storage: {@code _fxFresh} is emitted. */
+		boolean usesFresh;
 
 		/** Set when a pinned store takes a general array: {@code _fxPut} is emitted. */
 		boolean usesPut;
@@ -1139,6 +1331,7 @@ final class JvmIntFusionCompiler {
 		ArefLeaf target = new ArefLeaf(parts.get(1), sourceSite(cons, ctx, site));
 		target.pin = pin;
 		target.store = true;
+		target.storage = storageOf(parts.get(1), pin, true, ctx);
 		registerLeaf(target, site);
 		int indexLeaves = site.leaves.size();
 		Node index = classify(parts.get(2), ctx, Map.of(), site, 0);
@@ -2199,6 +2392,7 @@ final class JvmIntFusionCompiler {
 			Site site, int depth) {
 		ArefLeaf leaf = new ArefLeaf(arrayExpr, sourceSite);
 		leaf.pin = arrayPinOfExpr(arrayExpr, ctx);
+		leaf.storage = storageOf(arrayExpr, leaf.pin, false, ctx);
 		registerLeaf(leaf, site);
 		Node index = classify(indexExpr, ctx, Map.of(), site, depth);
 		if (index == null) {
@@ -2336,9 +2530,19 @@ final class JvmIntFusionCompiler {
 				default -> throw new IllegalStateException("not a registered leaf: " + leaf);
 			}
 		}
-		desc.append(")")
+		desc.append(STORAGE_PARAMS.repeat(storagesOf(leaves).size()))
+			.append(")")
 			.append(cmpMask >= 0 ? "I" : cmpMask == STORE_EFFECT ? "V" : rawReturn ? "J" : "Ljava/lang/Object;");
-		String key = cmpMask + (clearsChannel ? "c" : "") + "|" + desc + "|" + structureKey(root, leaves);
+		// Which storage each array leaf reads through, by ordinal: its parameters follow
+		// the leaves', so the descriptor alone does not say whose they are.
+		StringBuilder taken = new StringBuilder();
+		List<Storage> storages = storagesOf(leaves);
+		for (Node leaf : leaves) {
+			if (!storages.isEmpty() && leaf instanceof ArefLeaf l) {
+				taken.append('^').append(storages.indexOf(l.storage));
+			}
+		}
+		String key = cmpMask + (clearsChannel ? "c" : "") + "|" + desc + taken + "|" + structureKey(root, leaves);
 		MethodRefEntry existing = state.byKey.get(key);
 		if (existing != null) {
 			return existing;
@@ -2861,17 +3065,23 @@ final class JvmIntFusionCompiler {
 		Map<Node, Boundary> boundaries = classified.plan().boundaries();
 		if (boundaries.isEmpty()) {
 			pushLeaves(leaves, ctx, className);
-			return;
 		}
-		for (Node leaf : leaves) {
-			Boundary boundary = boundaries.get(leaf);
-			if (boundary != null) {
-				emitBoundary(boundary, leaves, lineFree, ctx, className);
+		else {
+			for (Node leaf : leaves) {
+				Boundary boundary = boundaries.get(leaf);
+				if (boundary != null) {
+					emitBoundary(boundary, leaves, lineFree, ctx, className);
+				}
+				evaluateLeaf(leaf, ctx, className);
 			}
-			evaluateLeaf(leaf, ctx, className);
+			for (Node leaf : leaves) {
+				pushLeafTemps(leaf, ctx);
+			}
 		}
-		for (Node leaf : leaves) {
-			pushLeafTemps(leaf, ctx);
+		// The storage its scope resolved for each array, after the leaves: the method
+		// asks whether the pair is still the array's (Storage).
+		for (Storage storage : storagesOf(leaves)) {
+			ctx.body.aload(storage.longsSlot()).aload(storage.headerSlot());
 		}
 	}
 
@@ -3133,12 +3343,16 @@ final class JvmIntFusionCompiler {
 			return List.of(fused);
 		}
 		if (!canBail(pending)) {
-			emitMethodBody(pending, ctx, className, null, false);
+			emitMethodBody(pending, ctx, className, null, false, false);
 			return List.of(fused);
 		}
 		// The fallback first, as the method it would be: its size decides where it goes.
 		JvmLispCompiler.Ctx fallback = fresh.get();
+		// The fallback takes the leaves alone: it asks the generic helpers, not a
+		// storage.
 		StringBuilder desc = new StringBuilder(pending.descUtf8().stringValue());
+		int storageParams = STORAGE_PARAMS.length() * storagesOf(pending.leaves()).size();
+		desc.delete(desc.indexOf(")") - storageParams, desc.indexOf(")"));
 		int slot = assignParameters(pending.leaves());
 		for (Node leaf : pending.leaves()) {
 			// A draw is the prologue's (RandomLeaf): the fallback takes what it decided.
@@ -3173,18 +3387,18 @@ final class JvmIntFusionCompiler {
 			if (inPlace) {
 				forgetFallback(pending.root());
 			}
-			emitMethodBody(pending, twin, className, fallbackRef, true);
+			emitMethodBody(pending, twin, className, fallbackRef, true, false);
 			Utf8Entry nameUtf8 = ctx.cp.utf8Entry("_fxs$" + number);
 			emitted.add(new Emitted(twin, nameUtf8, pending.descUtf8()));
 			forgetFallback(pending.root());
 			emitMethodBody(pending, ctx, className,
-					ctx.cp.methodRef(ctx.cp.classEntry(className), nameUtf8, pending.descUtf8()), false);
+					ctx.cp.methodRef(ctx.cp.classEntry(className), nameUtf8, pending.descUtf8()), false, true);
 			return emitted;
 		}
 		if (inPlace) {
 			forgetFallback(pending.root());
 		}
-		emitMethodBody(pending, ctx, className, fallbackRef, false);
+		emitMethodBody(pending, ctx, className, fallbackRef, false, false);
 		return emitted;
 	}
 
@@ -3237,15 +3451,35 @@ final class JvmIntFusionCompiler {
 
 	/**
 	 * The fused method's body; its bail runs the fallback in place, or calls
-	 * {@code outlined} when the fallback (or the twin) is that method. The twin's
-	 * ({@code answersSentinel}) has no double path: the fused method tried it before.
+	 * {@code outlined} when the fallback (or the twin, {@code outlinedTwin}) is that
+	 * method. The twin's ({@code answersSentinel}) has no double path: the fused method
+	 * tried it before.
 	 */
 	private static void emitMethodBody(Pending pending, JvmLispCompiler.Ctx ctx, String className,
-			@Nullable MethodRefEntry outlined, boolean answersSentinel) {
+			@Nullable MethodRefEntry outlined, boolean answersSentinel, boolean outlinedTwin) {
 		State state = java.util.Objects.requireNonNull(ctx.fusedState);
 		int slot = assignParameters(pending.leaves());
+		List<Storage> storages = storagesOf(pending.leaves());
+		int storageBase = slot;
+		slot += 2 * storages.size();
 		ctx.nextLocal = slot;
 		ctx.maxLocals = Math.max(ctx.maxLocals, slot);
+		// Each storage its caller resolved is asked once, of its first leaf's array,
+		// whether that array's list still holds its header; nothing the fast path runs
+		// replaces one, so the answer holds for every access below. Otherwise the long[]
+		// is the one the list names now.
+		for (int i = 0; i < storages.size(); i++) {
+			int longs = storageBase + 2 * i;
+			int array = -1;
+			for (Node leaf : pending.leaves()) {
+				if (leaf instanceof ArefLeaf l && storages.get(i).equals(l.storage)) {
+					l.storageParam = longs;
+					array = array < 0 ? l.arrParam : array;
+				}
+			}
+			ctx.body.aload(array).aload(longs + 1).aload(longs);
+			ctx.body.invokestatic(freshRef(ctx, state)).astore(longs);
+		}
 		MethodCode.Label bails = ctx.body.newLabel();
 		ClassEntry longArrayClass = ctx.cp.classEntry("[J");
 		// Every random leaf draws ONCE, here, before any guard and without any bail of
@@ -3293,6 +3527,22 @@ final class JvmIntFusionCompiler {
 			ctx.body.iload(bailFlag).ifne(bails);
 		}
 		emitCellChecks(pending.root(), ctx, bails);
+		// One storage serves every leaf naming its variable, read once per leaf: one
+		// array, unless a leaf between two of them assigned the variable -- a subscript
+		// may -- which bails.
+		for (Storage storage : storages) {
+			ArefLeaf first = null;
+			for (Node leaf : pending.leaves()) {
+				if (leaf instanceof ArefLeaf l && storage.equals(l.storage)) {
+					if (first == null) {
+						first = l;
+					}
+					else {
+						ctx.body.aload(first.arrParam).aload(l.arrParam).if_acmpne(bails);
+					}
+				}
+			}
+		}
 		for (Node leaf : pending.leaves()) {
 			switch (leaf) {
 				case ExprLeaf l -> {
@@ -3429,7 +3679,8 @@ final class JvmIntFusionCompiler {
 			}
 			fallbackBails = doubleBails;
 		}
-		emitBailAndFallback(pending, ctx, fallbackBails, tryStart, tryEnd, className, outlined);
+		emitBailAndFallback(pending, ctx, fallbackBails, tryStart, tryEnd, className, outlined,
+				outlinedTwin ? storageBase : -1);
 	}
 
 	/**
@@ -3724,8 +3975,10 @@ final class JvmIntFusionCompiler {
 				// integer here": in the twin the list tells the integer from nil.
 				MethodCode.Label boxed = ctx.body.newLabel();
 				MethodCode.Label read = ctx.body.newLabel();
-				int data = scratch.dataSlot();
-				ctx.body.aload(leaf.arrParam).invokestatic(longsRef(ctx, state)).astore(data);
+				int data = leaf.storage != null ? leaf.storageParam : scratch.dataSlot();
+				if (leaf.storage == null) {
+					ctx.body.aload(leaf.arrParam).invokestatic(longsRef(ctx, state)).astore(data);
+				}
 				ctx.body.aload(data).ifnull(boxed);
 				emitBound(idxSlot, data, 0, ctx, bails);
 				ctx.body.aload(data).iload(idxSlot).laload().goto_(read);
@@ -3838,6 +4091,91 @@ final class JvmIntFusionCompiler {
 	private static MethodRefEntry putRef(JvmLispCompiler.Ctx ctx, State state) {
 		state.usesPut = true;
 		return JvmEmitHelper.selfMethod(ctx, state.className, PUT, PUT_DESC);
+	}
+
+	private static MethodRefEntry freshRef(JvmLispCompiler.Ctx ctx, State state) {
+		// _fxFresh asks _fxLongs where the storage is no longer the array's.
+		state.usesFresh = true;
+		state.usesLongs = true;
+		return JvmEmitHelper.selfMethod(ctx, state.className, FRESH, FRESH_DESC);
+	}
+
+	/** {@code _fxHeader}: what an array's list holds first ({@link #buildHeader}). */
+	static final String HEADER = "_fxHeader";
+
+	static final String HEADER_DESC = "(Ljava/lang/Object;)Ljava/lang/Object;";
+
+	/** {@code _fxStorage}: a header's packed storage ({@link #buildStorage}). */
+	static final String STORAGE = "_fxStorage";
+
+	static final String STORAGE_DESC = "(Ljava/lang/Object;)[J";
+
+	/** {@code _fxFresh}: a resolved storage, asked again ({@link #buildFresh}). */
+	static final String FRESH = "_fxFresh";
+
+	static final String FRESH_DESC = "(Ljava/lang/Object;Ljava/lang/Object;[J)[J";
+
+	/**
+	 * {@code _fxHeader(Object a)}: slot 0 of the list {@code a} is, else null -- a
+	 * general array's header ({@code .kb/adjustable-arrays.md}, "Representation"), which
+	 * every change of its shape replaces. The first half of {@link Storage}.
+	 */
+	static JvmNumericRuntimeBuilder.NumericMethod buildHeader(ConstantPool cp) {
+		ClassEntry arrayListClass = cp.classEntry("java/util/ArrayList");
+		MethodCode a = new MethodCode();
+		MethodCode.Label none = a.newLabel();
+		a.aload(0).instanceOf(arrayListClass).ifeq(none);
+		a.aload(0).checkcast(arrayListClass).invokevirtual(cp.methodRef(arrayListClass, "size", "()I")).ifeq(none);
+		a.aload(0).checkcast(arrayListClass).loadConstant(0);
+		a.invokevirtual(cp.methodRef(arrayListClass, "get", "(I)Ljava/lang/Object;")).areturn();
+		a.labelBinding(none);
+		a.aconst_null().areturn();
+		return new JvmNumericRuntimeBuilder.NumericMethod(cp.utf8Entry(HEADER), cp.utf8Entry(HEADER_DESC), a);
+	}
+
+	/**
+	 * {@code _fxStorage(Object header)}: the flat {@code long[]} of a rank-1 packed
+	 * header, else null -- what {@link #buildLongs} answers of the array holding it. The
+	 * second half of {@link Storage}, read from the first so that the two name one header
+	 * whatever another thread does to the array between them.
+	 */
+	static JvmNumericRuntimeBuilder.NumericMethod buildStorage(ConstantPool cp) {
+		ClassEntry objectArrayClass = cp.classEntry("[Ljava/lang/Object;");
+		MethodCode a = new MethodCode();
+		MethodCode.Label none = a.newLabel();
+		// locals: 0 = the header, 1 = it as an array
+		a.aload(0).instanceOf(objectArrayClass).ifeq(none);
+		a.aload(0).checkcast(objectArrayClass).astore(1);
+		a.aload(1).arraylength().loadConstant(6).if_icmpne(none);
+		a.aload(1).loadConstant(0).aaload().checkcast(objectArrayClass).arraylength();
+		a.loadConstant(1).if_icmpne(none);
+		a.aload(1).loadConstant(5).aaload().checkcast(cp.classEntry("[J")).areturn();
+		a.labelBinding(none);
+		a.aconst_null().areturn();
+		return new JvmNumericRuntimeBuilder.NumericMethod(cp.utf8Entry(STORAGE), cp.utf8Entry(STORAGE_DESC), a);
+	}
+
+	/**
+	 * {@code _fxFresh(Object a, Object header, long[] longs)}: {@code longs} where the
+	 * list {@code a} is still holds {@code header} first -- the pair its scope resolved
+	 * ({@link Storage}) is then the array's own, since a header's {@code long[]} is never
+	 * replaced -- else what {@link #buildLongs} answers of {@code a} now. What a fused
+	 * method asks once of each storage it takes.
+	 */
+	static JvmNumericRuntimeBuilder.NumericMethod buildFresh(ConstantPool cp, ClassEntry thisClass) {
+		ClassEntry arrayListClass = cp.classEntry("java/util/ArrayList");
+		MethodCode a = new MethodCode();
+		MethodCode.Label stale = a.newLabel();
+		// locals: 0 = a, 1 = the header, 2 = its long[], 3 = the list
+		a.aload(0).instanceOf(arrayListClass).ifeq(stale);
+		a.aload(0).checkcast(arrayListClass).astore(3);
+		a.aload(3).invokevirtual(cp.methodRef(arrayListClass, "size", "()I")).ifeq(stale);
+		a.aload(3).loadConstant(0).invokevirtual(cp.methodRef(arrayListClass, "get", "(I)Ljava/lang/Object;"));
+		a.aload(1).if_acmpne(stale);
+		a.aload(2).areturn();
+		a.labelBinding(stale);
+		a.aload(0).invokestatic(cp.methodRef(thisClass, LONGS, LONGS_DESC)).areturn();
+		return new JvmNumericRuntimeBuilder.NumericMethod(cp.utf8Entry(FRESH), cp.utf8Entry(FRESH_DESC), a);
 	}
 
 	/** {@code _fxLongs}: a general array's packed storage ({@link #buildLongs}). */
@@ -4201,7 +4539,8 @@ final class JvmIntFusionCompiler {
 	 * method's arguments and what the prologue drew.
 	 */
 	private static void emitBailAndFallback(Pending pending, JvmLispCompiler.Ctx ctx, MethodCode.Label bails,
-			MethodCode.Label tryStart, MethodCode.Label tryEnd, String className, @Nullable MethodRefEntry outlined) {
+			MethodCode.Label tryStart, MethodCode.Label tryEnd, String className, @Nullable MethodRefEntry outlined,
+			int twinStorageBase) {
 		if (!throwsArithmetic(pending)) {
 			ctx.body.labelBinding(bails);
 		}
@@ -4242,6 +4581,13 @@ final class JvmIntFusionCompiler {
 				if (l.limitExpr != null) {
 					ctx.body.iload(l.flagSlot).aload(l.boxSlot);
 				}
+			}
+		}
+		if (twinStorageBase >= 0) {
+			// The twin is the fast path again and takes the storages as this method
+			// holds them; the fallback takes none.
+			for (int i = 0; i < storagesOf(pending.leaves()).size(); i++) {
+				ctx.body.aload(twinStorageBase + 2 * i).aload(twinStorageBase + 2 * i + 1);
 			}
 		}
 		ctx.body.invokestatic(outlined);
@@ -4382,8 +4728,10 @@ final class JvmIntFusionCompiler {
 				}
 				if (inline) {
 					MethodCode.Label boxed = ctx.body.newLabel();
-					int data = scratch.dataSlot();
-					ctx.body.aload(target.arrParam).invokestatic(longsRef(ctx, state)).astore(data);
+					int data = target.storage != null ? target.storageParam : scratch.dataSlot();
+					if (target.storage == null) {
+						ctx.body.aload(target.arrParam).invokestatic(longsRef(ctx, state)).astore(data);
+					}
 					ctx.body.aload(data).ifnull(boxed);
 					emitBound(idxSlot, data, 0, ctx, bails);
 					if (integer) {

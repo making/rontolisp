@@ -7870,6 +7870,13 @@ public final class Environment implements Scope {
 				int cp = bufferedBody.peekCodePoint();
 				return (cp < 0) ? charEof.apply(args) : new LispChar(cp);
 			}
+			// A socket looks at its octets without taking them, so a byte read after the
+			// peek still reads them.
+			Socket socket = socketEntry.apply(resolveInputSrc.apply(args.isEmpty() ? null : args.get(0)));
+			if (socket != null) {
+				int cp = SocketSupport.peekChar(socket);
+				return (cp < 0) ? charEof.apply(args) : new LispChar(cp);
+			}
 			try {
 				RontoIoFileStream ioSource = ioStreamArg.apply(args);
 				if (ioSource != null) {

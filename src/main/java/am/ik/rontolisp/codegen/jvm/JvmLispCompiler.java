@@ -3403,6 +3403,9 @@ public final class JvmLispCompiler implements LispCompiler {
 					}
 				}
 			}
+			// The storage of each general array a parameter is declared to hold, behind
+			// the head: each round of a tail-recursive loop resolves its own arguments'.
+			JvmIntFusionCompiler.bindArrayStorage(defun.paramNames, defun.bodyExprs, funcCtx);
 			try {
 				if (defun.bodyExprs.isEmpty()) {
 					// (defun f ()) -- an empty body answers nil, per CL (dissect's
@@ -3743,6 +3746,8 @@ public final class JvmLispCompiler implements LispCompiler {
 					}
 				}
 			}
+			// As a defun's parameters (Pass 2a).
+			JvmIntFusionCompiler.bindArrayStorage(lambda.paramNames, lambda.bodyExprs, lambdaCtx);
 			try {
 				JvmBodyOutliner.compileFunctionBody(lambda.bodyExprs, lambdaCtx, this.className);
 			}
@@ -4623,9 +4628,13 @@ public final class JvmLispCompiler implements LispCompiler {
 				|| (LispMacroExpander.declaresMvSpill(program) && (programUsesSymbol(program, LispNames.READ_LINE)
 						|| LispMacroExpander.runsFormsAtRunTime(program)));
 		this.needsSocketRuntime = usesSockets;
+		// _peekChar's socket arm, where a peek can be compiled or run.
+		final boolean usesPeekChars = usesSockets && (programUsesSymbol(program, LispNames.PEEK_CHAR)
+				|| programUsesSymbol(program, LispNames.PEEK_CHAR_INTERNAL)
+				|| LispMacroExpander.runsFormsAtRunTime(program));
 		final JvmSocketRuntimeBuilder.@Nullable SocketRuntime socketRuntime = usesSockets
 				? JvmSocketRuntimeBuilder.build(cp, thisClass, stringClass, longClass, longValueOf, longValue,
-						stringLengthForIo, stringSubstring, stringConcat, usesArrays, usesReadLinePairs)
+						stringLengthForIo, stringSubstring, stringConcat, usesArrays, usesReadLinePairs, usesPeekChars)
 				: null;
 		// _freshLine, and the line start every character write owes it, exist only where
 		// a stream can be asked, read off forms some of whose expansions are built after
@@ -4996,7 +5005,8 @@ public final class JvmLispCompiler implements LispCompiler {
 		// The fusion helpers, built HERE (before assembly) because their bodies mint
 		// constant-pool entries: _ubRead whenever a raw local exists, _fxAsh whenever a
 		// fused fast path shifts, _fxLongs, _fxElt and _fxPut whenever a pinned access
-		// takes a general array.
+		// takes a general array, _fxHeader, _fxStorage and _fxFresh whenever a scope
+		// resolves one's storage.
 		final List<JvmNumericRuntimeBuilder.NumericMethod> fusedHelperMethods = new ArrayList<>();
 		if (fusedState.usesUbRead) {
 			fusedHelperMethods.add(JvmIntFusionCompiler.buildUbRead(cp, longValueOf));
@@ -5006,6 +5016,13 @@ public final class JvmLispCompiler implements LispCompiler {
 		}
 		if (fusedState.usesLongs) {
 			fusedHelperMethods.add(JvmIntFusionCompiler.buildLongs(cp));
+		}
+		if (fusedState.usesStorage) {
+			fusedHelperMethods.add(JvmIntFusionCompiler.buildHeader(cp));
+			fusedHelperMethods.add(JvmIntFusionCompiler.buildStorage(cp));
+		}
+		if (fusedState.usesFresh) {
+			fusedHelperMethods.add(JvmIntFusionCompiler.buildFresh(cp, thisClass));
 		}
 		if (fusedState.usesElement) {
 			fusedHelperMethods.add(JvmIntFusionCompiler.buildElement(cp));

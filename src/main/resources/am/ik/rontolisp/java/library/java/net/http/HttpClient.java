@@ -5,10 +5,12 @@
 // The one client there is makes its requests through the host's fetch
 // (rontolisp.internal.Http): a connection, its version and its pool are the
 // transport's, so what configures them has no member here but the time a connection
-// may take, which fetch hands every transport.
+// may take, which fetch hands every transport, and the cookie handler, which the
+// client asks itself.
 package java.net.http;
 
 import java.io.IOException;
+import java.net.CookieHandler;
 import java.time.Duration;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
@@ -35,6 +37,8 @@ public abstract class HttpClient implements AutoCloseable {
 
         Builder executor(Executor executor);
 
+        Builder cookieHandler(CookieHandler cookieHandler);
+
         HttpClient build();
     }
 
@@ -48,6 +52,8 @@ public abstract class HttpClient implements AutoCloseable {
     public static Builder newBuilder() {
         return Http.client();
     }
+
+    public abstract Optional<CookieHandler> cookieHandler();
 
     public abstract Optional<Duration> connectTimeout();
 

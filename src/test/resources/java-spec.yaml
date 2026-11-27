@@ -14833,6 +14833,582 @@ cases:
   # class, and refuses any other by its binary name; a call reaching it through a class
   # that does not override it reaches an override below. finalize() does nothing. Every
   # array is Cloneable and Serializable.
+  - name: cookies-are-read-kept-and-sent-as-a-jdk-does
+    main: Cookies
+    source: |
+      class Cookies {
+          static String shown(java.net.HttpCookie c) {
+              long age = c.getMaxAge();
+              return c.getName() + "|" + c.getValue() + "|d=" + c.getDomain() + "|p=" + c.getPath() + "|age="
+                      + (age > 1_000_000_000L ? "far" : String.valueOf(age)) + "|v=" + c.getVersion() + "|s=" + c.getSecure()
+                      + "|h=" + c.isHttpOnly() + "|port=" + c.getPortlist() + "|discard=" + c.getDiscard() + "|"
+                      + c.getComment() + "|" + c.getCommentURL() + "|expired=" + c.hasExpired() + " [" + c + "]";
+          }
+
+          static void parsed(String header) {
+              try {
+                  java.util.List<java.net.HttpCookie> cookies = java.net.HttpCookie.parse(header);
+                  System.out.println("[" + header + "] " + cookies.size());
+                  for (java.net.HttpCookie c : cookies) {
+                      System.out.println("  " + shown(c));
+                  }
+              }
+              catch (IllegalArgumentException ex) {
+                  System.out.println("[" + header + "] " + ex);
+              }
+          }
+
+          static String kept(java.net.CookieStore store) {
+              StringBuilder text = new StringBuilder();
+              for (java.net.HttpCookie c : store.getCookies()) {
+                  text.append(' ').append(c.getName()).append('=').append(c.getValue()).append('@').append(c.getDomain())
+                      .append(c.getPath()).append(c.getPortlist() == null ? "" : ":" + c.getPortlist());
+              }
+              return text.toString();
+          }
+
+          static void put(java.net.CookieManager manager, String uri, String... values) throws java.io.IOException {
+              manager.put(java.net.URI.create(uri), java.util.Map.of("Set-Cookie", java.util.List.of(values)));
+          }
+
+          static void get(java.net.CookieManager manager, String uri) throws java.io.IOException {
+              System.out.println("get " + uri + " " + manager.get(java.net.URI.create(uri), java.util.Map.of()));
+          }
+
+          public static void main(String[] args) {
+              try {
+                  cookies();
+                  kept();
+                  policies();
+                  store();
+              }
+              catch (java.io.IOException ex) {
+                  throw new IllegalStateException(ex);
+              }
+          }
+
+          static void cookies() {
+              String[] headers = { "a=1", "Set-Cookie: a=1", "set-cookie2: a=1, b=2", "SET-COOKIE2:a=1;Version=1, b=\"2\";Path=/x",
+                      "a=1, b=2", "a=1; Version=1, b=2", "a=1; Max-Age=100, b=2", "Set-Cookie2: a=1; Expires=x, b=2",
+                      "a=1; Expires=Wed, 09 Jun 2021 10:18:14 GMT", "a=1; expires=Tue, 09 Jun 2099 10:18:14 GMT",
+                      "a=1; Expires=Tue, 09-Jun-2099 10:18:14 GMT", "a=1; Expires=Tuesday, 9-JUNE-2099  10: 18:14 GMT+01:00",
+                      "a=1; Expires=Mon, 09 Jun 2099 10:18:14 GMT", "a=1; Expires=Tue,09 Jun 2099 10:18:14 GMT",
+                      "a=1; Expires=Tue, 09 Jun 2099 10:18:14 UTC", "a=1; Expires=Tue, 31 Jun 2099 10:18:14 GMT",
+                      "a=1; Expires=Tue, 09 Jun 2099 24:00:00 GMT", "a=1; Expires=Tue, 09  Jun 2099 10:18:14 GMT",
+                      "a=1; Expires=Tue, 09 Jun-2099 10:18:14 GMT", "a=1; Expires=Fri, 31 Dec 9999 23:59:59 GMT",
+                      "a=1; Expires", "a=1; Max-Age=0", "a=1; Max-Age=-5", "a=1; Max-Age=+7", "a=1; Max-Age=\"8\"",
+                      "a=1; Max-Age=abc", "a=1; Max-Age", "a=1; Max-Age=5; Max-Age=x", "a=1; Max-Age=-1; Max-Age=6",
+                      "a=1; Max-Age=5; Expires=Wed, 09 Jun 2021 10:18:14 GMT", "a=1; Expires=Wed, 09 Jun 2021 10:18:14 GMT; Max-Age=5",
+                      "a=1; Version=0", "a=1; Version =1", "a=1; Version=2", "a=1; Version=x", "a=1; Version=1; Expires=x",
+                      "a=1; Domain=X.COM; Path=/p; Port=\"80,8080\"; Comment=c; CommentURL=u; Discard; Secure; HttpOnly",
+                      "a=1;Path=\"/q\";Domain=\".E.COM\";Max-Age=3", "a=\"q\"", "a=\"\"", "a=\"x\"y\"", " a = 1 ; path = /p ",
+                      "a=1; path=/x; path=/y", "a=1; Domain=a.com; Domain=b.com", "a=1; Path", "a=1; Path=", "a=1; Port",
+                      "a=1; Secure=no; HttpOnly=x", "a=b=c", "a=1; Comment=hello, world", "a=1; Foo=bar; =x;;",
+                      "Set-Cookie2: a=\"1,2\", b=3", "Set-Cookie2: a=1; Comment=\"x, y\", b=3", "Domain=x", "version=1",
+                      "a", "=1", "", " ", "$a=1", "a b=1", "x: a=1", "Set-Cookie:", "Set-Cookie2: a=1,", "Set-Cookie2:,a=1",
+                      "Set-Cookie2: ,a=1", "Set-Cookie2: a=1,,b=2", "Set-Cookie2: a=1, ,b=2", "Set-Cookie2: a=\"1\\\",2\",b=3",
+                      "JSESSIONID=abc123; Path=/; HttpOnly" };
+              for (String header : headers) {
+                  parsed(header);
+              }
+              String[] names = { "a", " a\t", "", "a b", "$a", "a,b", "a;b", "a=b", "Domain", "a\u007f", "aé", "a!#%&'*+^`|~(\"/:?@[{\\" };
+              for (int i = 0; i < names.length; i++) {
+                  try {
+                      System.out.println("new " + i + " " + shown(new java.net.HttpCookie(names[i], "v")));
+                  }
+                  catch (IllegalArgumentException ex) {
+                      System.out.println("new " + i + " " + ex);
+                  }
+              }
+              java.net.HttpCookie c = new java.net.HttpCookie("n", "v");
+              c.setDomain("Example.COM");
+              c.setPath("/p");
+              System.out.println(c + " " + c.getDomain());
+              c.setPortlist("80,8080");
+              System.out.println(c);
+              c.setVersion(0);
+              System.out.println(c);
+              c.setVersion(1);
+              c.setValue(null);
+              c.setPortlist("");
+              System.out.println(c + " " + c.getValue());
+              c.setDomain(null);
+              c.setPath(null);
+              c.setPortlist(null);
+              c.setComment("x");
+              c.setCommentURL("y");
+              c.setDiscard(true);
+              c.setSecure(true);
+              c.setHttpOnly(true);
+              System.out.println(shown(c));
+              for (int v : new int[] { 2, -1 }) {
+                  try {
+                      c.setVersion(v);
+                  }
+                  catch (IllegalArgumentException ex) {
+                      System.out.println("setVersion(" + v + ") " + ex);
+                  }
+              }
+              for (long age : new long[] { 0, -1, -7, 1000 }) {
+                  c.setMaxAge(age);
+                  System.out.println("max-age " + age + " expired " + c.hasExpired());
+              }
+              java.net.HttpCookie x = new java.net.HttpCookie("N", "1");
+              java.net.HttpCookie y = new java.net.HttpCookie("n", "2");
+              System.out.println(x.equals(y) + " " + x.hashCode() + " " + y.hashCode());
+              x.setDomain("A.com");
+              System.out.println(x.equals(y) + " " + y.equals(x) + " " + x.hashCode());
+              y.setDomain("a.COM");
+              System.out.println(x.equals(y) + " " + y.hashCode());
+              x.setPath("/P");
+              y.setPath("/p");
+              System.out.println(x.equals(y) + " " + x.hashCode() + " " + y.hashCode());
+              y.setPath("/P");
+              y.setVersion(0);
+              System.out.println(x.equals(y) + " " + x.equals("n") + " " + x.equals(null));
+              y.setDomain("");
+              System.out.println(x.equals(y) + " " + y.hashCode());
+              java.net.HttpCookie copy = (java.net.HttpCookie) x.clone();
+              System.out.println((copy != x) + " " + copy.equals(x) + " " + shown(copy));
+              String[][] matches = { { "example.com", "a.example.com" }, { ".example.com", "a.example.com" },
+                      { ".example.com", "a.b.example.com" }, { ".example.com", "example.com" }, { ".EXAMPLE.com", "example.com" },
+                      { "xample.com", "example.com" }, { ".ample.com", "example.com" }, { "A.COM", "a.com" }, { ".com", "a.com" },
+                      { ".com.", "a.com" }, { "localhost", "localhost" }, { ".local", "example" }, { ".local", "local" },
+                      { "local", "x" }, { "foo.local", "foo" }, { ".foo.local", "foo" }, { "x.b.c", "x.b.c.local" },
+                      { "127.0.0.1", "127.0.0.1" }, { ".0.0.1", "127.0.0.1" }, { "0.0.1", "127.0.0.1" }, { ".0.1", "127.0.0.1" },
+                      { "a.b.", "a.b." }, { ".b.", "a.b." }, { "e.com", ".e.com" }, { "", "a" }, { "a", "" }, { null, "a" },
+                      { "a.b", null } };
+              StringBuilder matched = new StringBuilder("domainMatches");
+              for (String[] m : matches) {
+                  matched.append(' ').append(m[0]).append('/').append(m[1]).append('=')
+                      .append(java.net.HttpCookie.domainMatches(m[0], m[1]));
+              }
+              System.out.println(matched);
+          }
+
+          static void kept() throws java.io.IOException {
+              java.net.CookieManager m = new java.net.CookieManager();
+              for (int i = 0; i < 4; i++) {
+                  try {
+                      if (i < 2) {
+                          m.get(i == 0 ? null : java.net.URI.create("http://h.example.com/"), i == 0 ? java.util.Map.of() : null);
+                      }
+                      else {
+                          m.put(i == 2 ? null : java.net.URI.create("http://h.example.com/"), i == 2 ? java.util.Map.of() : null);
+                      }
+                  }
+                  catch (IllegalArgumentException ex) {
+                      System.out.println(ex);
+                  }
+              }
+              get(m, "http://a.example.com/");
+              put(m, "http://a.example.com/x/y", "a=1", "b=2; Path=/", "c=3; Domain=example.com",
+                      "e=5; Domain=other.com", "f=6; Max-Age=0", "g=7; Secure", "h=8; Path=/x/y/z", "i=9; Path=/x", "j=10; HttpOnly",
+                      "bad name=1", "k=11; Expires=Wed, 09 Jun 2021 10:18:14 GMT", "l=12; Expires=Tue, 09 Jun 2099 10:18:14 GMT",
+                      "n=14; Path=/X", "p=16; Domain=a.example.com", "r=18; Domain=x.a.example.com", "Set-Cookie: s=19",
+                      "z=26; Port=80", "aa=27; Port=8080", "ab=28; Port", "ae=31; Path=/x/y", "af=32; Path=/q");
+              m.put(java.net.URI.create("http://a.example.com:8080/x/y"), java.util.Map.of("set-cookie", java.util.List.of("ac=29; Port")));
+              m.put(java.net.URI.create("http://a.example.com/x/y"), java.util.Map.of("X-Cookie", java.util.List.of("y=25")));
+              System.out.println("kept" + kept(m.getCookieStore()) + " " + m.getCookieStore().getURIs());
+              for (String uri : new String[] { "http://a.example.com/x/y", "http://a.example.com/", "http://a.example.com",
+                      "http://b.example.com/x/y", "https://a.example.com/x/yz", "http://example.com/x/", "http://a.example.com/x/y/z/w",
+                      "http://A.EXAMPLE.COM:8080/x/y", "http://x.a.example.com/x/y", "http://a.example.com/X/y", "http://a.example.com/x",
+                      "ftp://a.example.com/x/y", "http://a.example.com/q" }) {
+                  get(m, uri);
+              }
+              put(m, "http://a.example.com/x/y", "a=one", "b=gone; Path=/; Max-Age=0", "i=gone; Path=/x; Expires=Wed, 09 Jun 2021 10:18:14 GMT");
+              System.out.println("kept" + kept(m.getCookieStore()));
+              get(m, "http://a.example.com/x/");
+              java.net.CookieManager v = new java.net.CookieManager();
+              put(v, "http://h.example.com/p/q", "d=4", "c=3; Max-Age=100", "e=5; Path=/p/q");
+              get(v, "http://h.example.com/p/q");
+              put(v, "http://h.example.com/p/q", "f=6; Version=1; Path=/p/q/");
+              get(v, "http://h.example.com/p/q/");
+              java.net.CookieManager o = new java.net.CookieManager();
+              put(o, "http://o.example.com/a/b/c", "n=root; Path=/", "n=ab; Path=/a/b", "n=a; Path=/a", "m=abc; Path=/a/b/c", "z=1",
+                      "y=2; Path=/a/b/c", "x=3; Path=/a/b/");
+              get(o, "http://o.example.com/a/b/c");
+              java.net.CookieManager ports = new java.net.CookieManager();
+              put(ports, "http://h.example.com/", "a=1; Port=\"80, 8080\"", "b=2; Port=\" 80\"", "c=3; Port=\"8080,80\"",
+                      "d=4; Port=\"x,80\"", "e=5; Port=\"80x\"", "f=6; Port=\"0080\"", "g=7; Port=\",80\"", "h=8; Port=\"80,\"");
+              put(ports, "https://h.example.com/", "s=1; Port");
+              put(ports, "HTTP://h.example.com:443/", "u=1; Port");
+              System.out.println("kept" + kept(ports.getCookieStore()));
+              get(ports, "https://h.example.com/");
+              get(ports, "http://h.example.com:8080/");
+              get(ports, "http://h.example.com/");
+              java.net.CookieManager ip = new java.net.CookieManager();
+              put(ip, "http://127.0.0.1:8080/s", "JSESSIONID=abc; Path=/; HttpOnly", "w=1", "d=2; Domain=127.0.0.1", "e=3; Domain=.0.0.1");
+              get(ip, "http://127.0.0.1:9090/");
+              get(ip, "http://localhost:8080/");
+              System.out.println(ip.getCookieStore().getURIs());
+              java.net.CookieManager local = new java.net.CookieManager();
+              put(local, "http://intranet/", "a=1", "b=2; Domain=intranet.local", "c=3; Domain=localhost", "e=5; Path=/x");
+              System.out.println("kept" + kept(local.getCookieStore()));
+              get(local, "http://intranet/");
+              get(local, "http://intranet.local/");
+              java.net.CookieManager none = new java.net.CookieManager();
+              get(none, "/relative");
+              put(none, "/relative", "r=1");
+              put(none, "http://n.example.com", "np=1");
+              put(none, "http://n.example.com/a/b?q=1#f", "qp=1");
+              System.out.println("kept" + kept(none.getCookieStore()) + " " + none.get(java.net.URI.create("http://n.example.com/a/"),
+                      java.util.Map.of("Cookie", java.util.List.of("own=1"))));
+          }
+
+          static void policies() throws java.io.IOException {
+              java.net.CookieManager all = new java.net.CookieManager(null, java.net.CookiePolicy.ACCEPT_ALL);
+              put(all, "http://a.example.com/", "e=5; Domain=other.com", "f=6; Domain=.com", "h=8; Domain=com", "i=9; Domain=a.b.",
+                      "m=13; Domain=.x.y", "b=2; Domain=b.com", "x=4; Domain=X.example.COM");
+              System.out.println("kept" + kept(all.getCookieStore()));
+              for (String host : new String[] { "a.example.com", "other.com", "x.other.com", "x.com", "com", "x.a.b.", "q.x.y", "x.y",
+                      "ab.com", "a.b.com", "c.com", "y.x.example.com" }) {
+                  get(all, "http://" + host + "/");
+              }
+              java.net.CookieManager none = new java.net.CookieManager(null, java.net.CookiePolicy.ACCEPT_NONE);
+              put(none, "http://a.example.com/", "g=7");
+              none.setCookiePolicy(null);
+              put(none, "http://a.example.com/", "g=8");
+              none.setCookiePolicy(java.net.CookiePolicy.ACCEPT_ORIGINAL_SERVER);
+              put(none, "http://a.example.com/", "g=9");
+              System.out.println("kept" + kept(none.getCookieStore()));
+              java.net.URI u = java.net.URI.create("http://a.example.com/");
+              String[] domains = { null, "a.example.com", ".example.com", "example.com", ".a.example.com", "b.example.com" };
+              for (java.net.CookiePolicy p : new java.net.CookiePolicy[] { java.net.CookiePolicy.ACCEPT_ORIGINAL_SERVER,
+                      java.net.CookiePolicy.ACCEPT_ALL, java.net.CookiePolicy.ACCEPT_NONE }) {
+                  StringBuilder text = new StringBuilder("policy");
+                  for (String d : domains) {
+                      java.net.HttpCookie cookie = new java.net.HttpCookie("k", "v");
+                      cookie.setDomain(d);
+                      text.append(' ').append(d).append('=').append(p.shouldAccept(u, cookie));
+                  }
+                  System.out.println(text + " " + p.shouldAccept(null, new java.net.HttpCookie("k", "v")) + " " + p.shouldAccept(u, null));
+              }
+              java.net.CookieManager v1 = new java.net.CookieManager(null, java.net.CookiePolicy.ACCEPT_ALL);
+              put(v1, "http://a.example.com/", "b=2; Version=1; Domain=.example.com");
+              for (String host : new String[] { "example.com", "x.example.com", "y.x.example.com", "a.example.com" }) {
+                  get(v1, "http://" + host + "/");
+              }
+              System.out.println(java.net.CookieHandler.getDefault());
+              java.net.CookieManager installed = new java.net.CookieManager();
+              java.net.CookieHandler.setDefault(installed);
+              System.out.println((java.net.CookieHandler.getDefault() == installed) + " "
+                      + (installed.getCookieStore() == installed.getCookieStore()));
+              java.net.CookieHandler.setDefault(null);
+              System.out.println(java.net.CookieHandler.getDefault());
+          }
+
+          static void store() throws java.io.IOException {
+              java.net.CookieStore s = new java.net.CookieManager().getCookieStore();
+              for (int i = 0; i < 3; i++) {
+                  try {
+                      if (i == 0) {
+                          s.add(java.net.URI.create("http://s.example.com/x"), null);
+                      }
+                      else if (i == 1) {
+                          s.get(null);
+                      }
+                      else {
+                          s.remove(null, null);
+                      }
+                  }
+                  catch (NullPointerException ex) {
+                      System.out.println(ex);
+                  }
+              }
+              System.out.println("removeAll " + s.removeAll());
+              java.net.HttpCookie a = new java.net.HttpCookie("a", "1");
+              s.add(java.net.URI.create("http://s.example.com/x/y"), a);
+              java.net.HttpCookie b = new java.net.HttpCookie("b", "2");
+              b.setDomain(".example.com");
+              b.setPath("/");
+              s.add(null, b);
+              java.net.HttpCookie c = new java.net.HttpCookie("c", "3");
+              c.setDomain("other.org");
+              s.add(java.net.URI.create("https://S.example.com:99/"), c);
+              System.out.println("kept" + kept(s) + " " + s.getURIs() + " " + a.getDomain());
+              for (String uri : new String[] { "http://s.example.com/x/y", "http://x.example.com/", "http://other.org/",
+                      "https://S.EXAMPLE.COM:99/q", "http://t.example.com/", "/relative" }) {
+                  System.out.println("store " + uri + " " + s.get(java.net.URI.create(uri)));
+              }
+              try {
+                  s.getCookies().add(a);
+              }
+              catch (UnsupportedOperationException ex) {
+                  System.out.println("getCookies " + ex);
+              }
+              try {
+                  s.get(java.net.URI.create("http://s.example.com/")).clear();
+              }
+              catch (UnsupportedOperationException ex) {
+                  System.out.println("get " + ex);
+              }
+              try {
+                  s.getURIs().clear();
+              }
+              catch (UnsupportedOperationException ex) {
+                  System.out.println("getURIs " + ex);
+              }
+              s.add(java.net.URI.create("http://s.example.com/"), new java.net.HttpCookie("A", "again"));
+              System.out.println("kept" + kept(s));
+              System.out.println("remove " + s.remove(java.net.URI.create("http://nowhere.example.com/"), b) + kept(s));
+              System.out.println("remove " + s.remove(null, b) + " " + s.remove(java.net.URI.create("http://s.example.com/"), c)
+                      + kept(s));
+              java.net.HttpCookie gone = new java.net.HttpCookie("g", "1");
+              gone.setMaxAge(0);
+              s.add(java.net.URI.create("http://g.example.com/"), gone);
+              System.out.println("kept" + kept(s) + " " + s.getURIs());
+              System.out.println("removeAll " + s.removeAll() + " " + s.getCookies() + " " + s.getURIs() + " " + s.removeAll());
+              java.net.HttpCookie mine = new java.net.HttpCookie("m", "1");
+              s.add(java.net.URI.create("http://m.example.com/"), mine);
+              mine.setValue("changed");
+              java.net.CookieManager own = new java.net.CookieManager(s, null);
+              put(own, "http://m.example.com/", "n=2");
+              System.out.println((s.getCookies().get(0) == mine) + " " + (own.getCookieStore() == s) + kept(s));
+              get(own, "http://m.example.com/");
+          }
+      }
+    expected: |
+      [a=1] 1
+        a|1|d=null|p=null|age=-1|v=0|s=false|h=false|port=null|discard=false|null|null|expired=false [a=1]
+      [Set-Cookie: a=1] 1
+        a|1|d=null|p=null|age=-1|v=0|s=false|h=false|port=null|discard=false|null|null|expired=false [a=1]
+      [set-cookie2: a=1, b=2] 2
+        a|1|d=null|p=null|age=-1|v=1|s=false|h=false|port=null|discard=false|null|null|expired=false [a="1"]
+        b|2|d=null|p=null|age=-1|v=1|s=false|h=false|port=null|discard=false|null|null|expired=false [b="2"]
+      [SET-COOKIE2:a=1;Version=1, b="2";Path=/x] 2
+        a|1|d=null|p=null|age=-1|v=1|s=false|h=false|port=null|discard=false|null|null|expired=false [a="1"]
+        b|2|d=null|p=/x|age=-1|v=1|s=false|h=false|port=null|discard=false|null|null|expired=false [b="2";$Path="/x"]
+      [a=1, b=2] 1
+        a|1, b=2|d=null|p=null|age=-1|v=0|s=false|h=false|port=null|discard=false|null|null|expired=false [a=1, b=2]
+      [a=1; Version=1, b=2] 2
+        a|1|d=null|p=null|age=-1|v=1|s=false|h=false|port=null|discard=false|null|null|expired=false [a="1"]
+        b|2|d=null|p=null|age=-1|v=1|s=false|h=false|port=null|discard=false|null|null|expired=false [b="2"]
+      [a=1; Max-Age=100, b=2] 2
+        a|1|d=null|p=null|age=100|v=1|s=false|h=false|port=null|discard=false|null|null|expired=false [a="1"]
+        b|2|d=null|p=null|age=-1|v=1|s=false|h=false|port=null|discard=false|null|null|expired=false [b="2"]
+      [Set-Cookie2: a=1; Expires=x, b=2] 1
+        a|1|d=null|p=null|age=0|v=0|s=false|h=false|port=null|discard=false|null|null|expired=true [a=1]
+      [a=1; Expires=Wed, 09 Jun 2021 10:18:14 GMT] 1
+        a|1|d=null|p=null|age=0|v=0|s=false|h=false|port=null|discard=false|null|null|expired=true [a=1]
+      [a=1; expires=Tue, 09 Jun 2099 10:18:14 GMT] 1
+        a|1|d=null|p=null|age=far|v=0|s=false|h=false|port=null|discard=false|null|null|expired=false [a=1]
+      [a=1; Expires=Tue, 09-Jun-2099 10:18:14 GMT] 1
+        a|1|d=null|p=null|age=far|v=0|s=false|h=false|port=null|discard=false|null|null|expired=false [a=1]
+      [a=1; Expires=Tuesday, 9-JUNE-2099  10: 18:14 GMT+01:00] 1
+        a|1|d=null|p=null|age=far|v=0|s=false|h=false|port=null|discard=false|null|null|expired=false [a=1]
+      [a=1; Expires=Mon, 09 Jun 2099 10:18:14 GMT] 1
+        a|1|d=null|p=null|age=0|v=0|s=false|h=false|port=null|discard=false|null|null|expired=true [a=1]
+      [a=1; Expires=Tue,09 Jun 2099 10:18:14 GMT] 1
+        a|1|d=null|p=null|age=0|v=0|s=false|h=false|port=null|discard=false|null|null|expired=true [a=1]
+      [a=1; Expires=Tue, 09 Jun 2099 10:18:14 UTC] 1
+        a|1|d=null|p=null|age=0|v=0|s=false|h=false|port=null|discard=false|null|null|expired=true [a=1]
+      [a=1; Expires=Tue, 31 Jun 2099 10:18:14 GMT] 1
+        a|1|d=null|p=null|age=0|v=0|s=false|h=false|port=null|discard=false|null|null|expired=true [a=1]
+      [a=1; Expires=Tue, 09 Jun 2099 24:00:00 GMT] 1
+        a|1|d=null|p=null|age=0|v=0|s=false|h=false|port=null|discard=false|null|null|expired=true [a=1]
+      [a=1; Expires=Tue, 09  Jun 2099 10:18:14 GMT] 1
+        a|1|d=null|p=null|age=0|v=0|s=false|h=false|port=null|discard=false|null|null|expired=true [a=1]
+      [a=1; Expires=Tue, 09 Jun-2099 10:18:14 GMT] 1
+        a|1|d=null|p=null|age=0|v=0|s=false|h=false|port=null|discard=false|null|null|expired=true [a=1]
+      [a=1; Expires=Fri, 31 Dec 9999 23:59:59 GMT] 1
+        a|1|d=null|p=null|age=far|v=0|s=false|h=false|port=null|discard=false|null|null|expired=false [a=1]
+      [a=1; Expires] 1
+        a|1|d=null|p=null|age=0|v=0|s=false|h=false|port=null|discard=false|null|null|expired=true [a=1]
+      [a=1; Max-Age=0] 1
+        a|1|d=null|p=null|age=0|v=1|s=false|h=false|port=null|discard=false|null|null|expired=true [a="1"]
+      [a=1; Max-Age=-5] 1
+        a|1|d=null|p=null|age=-5|v=1|s=false|h=false|port=null|discard=false|null|null|expired=false [a="1"]
+      [a=1; Max-Age=+7] 1
+        a|1|d=null|p=null|age=7|v=1|s=false|h=false|port=null|discard=false|null|null|expired=false [a="1"]
+      [a=1; Max-Age="8"] 1
+        a|1|d=null|p=null|age=8|v=1|s=false|h=false|port=null|discard=false|null|null|expired=false [a="1"]
+      [a=1; Max-Age=abc] java.lang.IllegalArgumentException: Illegal cookie max-age attribute
+      [a=1; Max-Age] java.lang.IllegalArgumentException: Illegal cookie max-age attribute
+      [a=1; Max-Age=5; Max-Age=x] java.lang.IllegalArgumentException: Illegal cookie max-age attribute
+      [a=1; Max-Age=-1; Max-Age=6] 1
+        a|1|d=null|p=null|age=6|v=1|s=false|h=false|port=null|discard=false|null|null|expired=false [a="1"]
+      [a=1; Max-Age=5; Expires=Wed, 09 Jun 2021 10:18:14 GMT] 1
+        a|1|d=null|p=null|age=5|v=0|s=false|h=false|port=null|discard=false|null|null|expired=false [a=1]
+      [a=1; Expires=Wed, 09 Jun 2021 10:18:14 GMT; Max-Age=5] 1
+        a|1|d=null|p=null|age=0|v=0|s=false|h=false|port=null|discard=false|null|null|expired=true [a=1]
+      [a=1; Version=0] 1
+        a|1|d=null|p=null|age=-1|v=1|s=false|h=false|port=null|discard=false|null|null|expired=false [a="1"]
+      [a=1; Version =1] 1
+        a|1|d=null|p=null|age=-1|v=0|s=false|h=false|port=null|discard=false|null|null|expired=false [a=1]
+      [a=1; Version=2] java.lang.IllegalArgumentException: cookie version should be 0 or 1
+      [a=1; Version=x] 1
+        a|1|d=null|p=null|age=-1|v=1|s=false|h=false|port=null|discard=false|null|null|expired=false [a="1"]
+      [a=1; Version=1; Expires=x] 1
+        a|1|d=null|p=null|age=0|v=0|s=false|h=false|port=null|discard=false|null|null|expired=true [a=1]
+      [a=1; Domain=X.COM; Path=/p; Port="80,8080"; Comment=c; CommentURL=u; Discard; Secure; HttpOnly] 1
+        a|1|d=x.com|p=/p|age=-1|v=0|s=true|h=true|port=80,8080|discard=true|c|u|expired=false [a=1]
+      [a=1;Path="/q";Domain=".E.COM";Max-Age=3] 1
+        a|1|d=.e.com|p=/q|age=3|v=1|s=false|h=false|port=null|discard=false|null|null|expired=false [a="1";$Path="/q";$Domain=".e.com"]
+      [a="q"] 1
+        a|q|d=null|p=null|age=-1|v=0|s=false|h=false|port=null|discard=false|null|null|expired=false [a=q]
+      [a=""] 1
+        a|""|d=null|p=null|age=-1|v=0|s=false|h=false|port=null|discard=false|null|null|expired=false [a=""]
+      [a="x"y"] 1
+        a|x"y|d=null|p=null|age=-1|v=0|s=false|h=false|port=null|discard=false|null|null|expired=false [a=x"y]
+      [ a = 1 ; path = /p ] 1
+        a|1|d=null|p=/p|age=-1|v=0|s=false|h=false|port=null|discard=false|null|null|expired=false [a=1]
+      [a=1; path=/x; path=/y] 1
+        a|1|d=null|p=/x|age=-1|v=0|s=false|h=false|port=null|discard=false|null|null|expired=false [a=1]
+      [a=1; Domain=a.com; Domain=b.com] 1
+        a|1|d=a.com|p=null|age=-1|v=0|s=false|h=false|port=null|discard=false|null|null|expired=false [a=1]
+      [a=1; Path] 1
+        a|1|d=null|p=null|age=-1|v=0|s=false|h=false|port=null|discard=false|null|null|expired=false [a=1]
+      [a=1; Path=] 1
+        a|1|d=null|p=|age=-1|v=0|s=false|h=false|port=null|discard=false|null|null|expired=false [a=1]
+      [a=1; Port] 1
+        a|1|d=null|p=null|age=-1|v=0|s=false|h=false|port=|discard=false|null|null|expired=false [a=1]
+      [a=1; Secure=no; HttpOnly=x] 1
+        a|1|d=null|p=null|age=-1|v=0|s=true|h=true|port=null|discard=false|null|null|expired=false [a=1]
+      [a=b=c] 1
+        a|b=c|d=null|p=null|age=-1|v=0|s=false|h=false|port=null|discard=false|null|null|expired=false [a=b=c]
+      [a=1; Comment=hello, world] 1
+        a|1|d=null|p=null|age=-1|v=0|s=false|h=false|port=null|discard=false|hello, world|null|expired=false [a=1]
+      [a=1; Foo=bar; =x;;] 1
+        a|1|d=null|p=null|age=-1|v=0|s=false|h=false|port=null|discard=false|null|null|expired=false [a=1]
+      [Set-Cookie2: a="1,2", b=3] 2
+        a|1,2|d=null|p=null|age=-1|v=1|s=false|h=false|port=null|discard=false|null|null|expired=false [a="1,2"]
+        b|3|d=null|p=null|age=-1|v=1|s=false|h=false|port=null|discard=false|null|null|expired=false [b="3"]
+      [Set-Cookie2: a=1; Comment="x, y", b=3] 2
+        a|1|d=null|p=null|age=-1|v=1|s=false|h=false|port=null|discard=false|x, y|null|expired=false [a="1"]
+        b|3|d=null|p=null|age=-1|v=1|s=false|h=false|port=null|discard=false|null|null|expired=false [b="3"]
+      [Domain=x] 1
+        Domain|x|d=null|p=null|age=-1|v=0|s=false|h=false|port=null|discard=false|null|null|expired=false [Domain=x]
+      [version=1] 1
+        version|1|d=null|p=null|age=-1|v=1|s=false|h=false|port=null|discard=false|null|null|expired=false [version="1"]
+      [a] java.lang.IllegalArgumentException: Invalid cookie name-value pair
+      [=1] java.lang.IllegalArgumentException: Illegal cookie name
+      [] java.lang.IllegalArgumentException: Empty cookie header string
+      [ ] java.lang.IllegalArgumentException: Invalid cookie name-value pair
+      [$a=1] java.lang.IllegalArgumentException: Illegal cookie name
+      [a b=1] java.lang.IllegalArgumentException: Illegal cookie name
+      [x: a=1] java.lang.IllegalArgumentException: Illegal cookie name
+      [Set-Cookie:] java.lang.IllegalArgumentException: Empty cookie header string
+      [Set-Cookie2: a=1,] java.lang.IllegalArgumentException: Empty cookie header string
+      [Set-Cookie2:,a=1] java.lang.IllegalArgumentException: Empty cookie header string
+      [Set-Cookie2: ,a=1] java.lang.IllegalArgumentException: Invalid cookie name-value pair
+      [Set-Cookie2: a=1,,b=2] java.lang.IllegalArgumentException: Empty cookie header string
+      [Set-Cookie2: a=1, ,b=2] java.lang.IllegalArgumentException: Invalid cookie name-value pair
+      [Set-Cookie2: a="1\",2",b=3] java.lang.IllegalArgumentException: Illegal cookie name
+      [JSESSIONID=abc123; Path=/; HttpOnly] 1
+        JSESSIONID|abc123|d=null|p=/|age=-1|v=0|s=false|h=true|port=null|discard=false|null|null|expired=false [JSESSIONID=abc123]
+      new 0 a|v|d=null|p=null|age=-1|v=1|s=false|h=false|port=null|discard=false|null|null|expired=false [a="v"]
+      new 1 a|v|d=null|p=null|age=-1|v=1|s=false|h=false|port=null|discard=false|null|null|expired=false [a="v"]
+      new 2 java.lang.IllegalArgumentException: Illegal cookie name
+      new 3 java.lang.IllegalArgumentException: Illegal cookie name
+      new 4 java.lang.IllegalArgumentException: Illegal cookie name
+      new 5 java.lang.IllegalArgumentException: Illegal cookie name
+      new 6 java.lang.IllegalArgumentException: Illegal cookie name
+      new 7 a=b|v|d=null|p=null|age=-1|v=1|s=false|h=false|port=null|discard=false|null|null|expired=false [a=b="v"]
+      new 8 Domain|v|d=null|p=null|age=-1|v=1|s=false|h=false|port=null|discard=false|null|null|expired=false [Domain="v"]
+      new 9 java.lang.IllegalArgumentException: Illegal cookie name
+      new 10 java.lang.IllegalArgumentException: Illegal cookie name
+      new 11 a!#%&'*+^`|~("/:?@[{\|v|d=null|p=null|age=-1|v=1|s=false|h=false|port=null|discard=false|null|null|expired=false [a!#%&'*+^`|~("/:?@[{\="v"]
+      n="v";$Path="/p";$Domain="example.com" example.com
+      n="v";$Path="/p";$Domain="example.com";$Port="80,8080"
+      n=v
+      n="null";$Path="/p";$Domain="example.com";$Port="" null
+      n|null|d=null|p=null|age=-1|v=1|s=true|h=true|port=null|discard=true|x|y|expired=false [n="null"]
+      setVersion(2) java.lang.IllegalArgumentException: cookie version should be 0 or 1
+      setVersion(-1) java.lang.IllegalArgumentException: cookie version should be 0 or 1
+      max-age 0 expired true
+      max-age -1 expired false
+      max-age -7 expired false
+      max-age 1000 expired false
+      true 110 110
+      false false 91050722
+      true 91050722
+      false 91052259 91052291
+      true false false
+      false 1647
+      true true N|1|d=a.com|p=/P|age=-1|v=1|s=false|h=false|port=null|discard=false|null|null|expired=false [N="1";$Path="/P";$Domain="a.com"]
+      domainMatches example.com/a.example.com=false .example.com/a.example.com=true .example.com/a.b.example.com=false .example.com/example.com=true .EXAMPLE.com/example.com=true xample.com/example.com=true .ample.com/example.com=false A.COM/a.com=true .com/a.com=false .com./a.com=false localhost/localhost=false .local/example=true .local/local=true local/x=false foo.local/foo=true .foo.local/foo=false x.b.c/x.b.c.local=false 127.0.0.1/127.0.0.1=true .0.0.1/127.0.0.1=true 0.0.1/127.0.0.1=false .0.1/127.0.0.1=false a.b./a.b.=true .b./a.b.=false e.com/.e.com=false /a=false a/=false null/a=false a.b/null=false
+      java.lang.IllegalArgumentException: Argument is null
+      java.lang.IllegalArgumentException: Argument is null
+      java.lang.IllegalArgumentException: Argument is null
+      java.lang.IllegalArgumentException: Argument is null
+      get http://a.example.com/ {Cookie=[]}
+      kept a=1@a.example.com/x/ b=2@a.example.com/ g=7@a.example.com/x/ h=8@a.example.com/x/y/z i=9@a.example.com/x j=10@a.example.com/x/ l=12@a.example.com/x/ n=14@a.example.com/X p=16@a.example.com/x/ s=19@a.example.com/x/ z=26@a.example.com/x/:80 ab=28@a.example.com/x/:80 ae=31@a.example.com/x/y af=32@a.example.com/q ac=29@a.example.com/x/:8080 [http://a.example.com]
+      get http://a.example.com/x/y {Cookie=[ae=31, a=1, j=10, l=12, p=16, s=19, z=26, ab=28, i=9, b=2]}
+      get http://a.example.com/ {Cookie=[b=2]}
+      get http://a.example.com {Cookie=[b=2]}
+      get http://b.example.com/x/y {Cookie=[]}
+      get https://a.example.com/x/yz {Cookie=[ae=31, a=1, g=7, j=10, l=12, p=16, s=19, i=9, b=2]}
+      get http://example.com/x/ {Cookie=[]}
+      get http://a.example.com/x/y/z/w {Cookie=[h=8, ae=31, a=1, j=10, l=12, p=16, s=19, z=26, ab=28, i=9, b=2]}
+      get http://A.EXAMPLE.COM:8080/x/y {Cookie=[ae=31, a=1, j=10, l=12, p=16, s=19, ac=29, i=9, b=2]}
+      get http://x.a.example.com/x/y {Cookie=[ae=31, a=1, j=10, l=12, p=16, s=19, z=26, ab=28, i=9, b=2]}
+      get http://a.example.com/X/y {Cookie=[n=14, b=2]}
+      get http://a.example.com/x {Cookie=[i=9, b=2]}
+      get ftp://a.example.com/x/y {Cookie=[ae=31, a=1, l=12, p=16, s=19, z=26, ab=28, i=9, b=2]}
+      get http://a.example.com/q {Cookie=[af=32, b=2]}
+      kept g=7@a.example.com/x/ h=8@a.example.com/x/y/z j=10@a.example.com/x/ l=12@a.example.com/x/ n=14@a.example.com/X p=16@a.example.com/x/ s=19@a.example.com/x/ z=26@a.example.com/x/:80 ab=28@a.example.com/x/:80 ae=31@a.example.com/x/y af=32@a.example.com/q ac=29@a.example.com/x/:8080 a=one@a.example.com/x/
+      get http://a.example.com/x/ {Cookie=[j=10, l=12, p=16, s=19, z=26, ab=28, a=one]}
+      get http://h.example.com/p/q {Cookie=[e=5, d=4, c="3";$Path="/p/";$Domain="h.example.com"]}
+      get http://h.example.com/p/q/ {Cookie=[$Version="1", f="6";$Path="/p/q/";$Domain="h.example.com", e=5, d=4, c="3";$Path="/p/";$Domain="h.example.com"]}
+      get http://o.example.com/a/b/c {Cookie=[m=abc, y=2, z=1, x=3, n=ab, n=a, n=root]}
+      kept a=1@h.example.com/:80, 8080 c=3@h.example.com/:8080,80 d=4@h.example.com/:x,80 f=6@h.example.com/:0080 h=8@h.example.com/:80, s=1@h.example.com/:443 u=1@h.example.com/:443
+      get https://h.example.com/ {Cookie=[s=1, u=1]}
+      get http://h.example.com:8080/ {Cookie=[c=3]}
+      get http://h.example.com/ {Cookie=[a=1, c=3, d=4, f=6, h=8]}
+      get http://127.0.0.1:9090/ {Cookie=[JSESSIONID=abc, w=1, d=2, e=3]}
+      get http://localhost:8080/ {Cookie=[]}
+      [http://127.0.0.1]
+      kept a=1@intranet.local/ b=2@intranet.local/ e=5@intranet.local/x
+      get http://intranet/ {Cookie=[a=1, b=2]}
+      get http://intranet.local/ {Cookie=[a=1, b=2]}
+      get /relative {Cookie=[]}
+      kept np=1@n.example.com/ qp=1@n.example.com/a/ {Cookie=[qp=1, np=1]}
+      kept e=5@other.com/ f=6@.com/ h=8@com/ i=9@a.b./ m=13@.x.y/ b=2@b.com/ x=4@x.example.com/
+      get http://a.example.com/ {Cookie=[e=5, f=6, h=8, i=9, m=13, b=2, x=4]}
+      get http://other.com/ {Cookie=[e=5]}
+      get http://x.other.com/ {Cookie=[e=5]}
+      get http://x.com/ {Cookie=[]}
+      get http://com/ {Cookie=[]}
+      get http://x.a.b./ {Cookie=[i=9]}
+      get http://q.x.y/ {Cookie=[m=13]}
+      get http://x.y/ {Cookie=[m=13]}
+      get http://ab.com/ {Cookie=[b=2]}
+      get http://a.b.com/ {Cookie=[b=2]}
+      get http://c.com/ {Cookie=[]}
+      get http://y.x.example.com/ {Cookie=[x=4]}
+      kept g=9@a.example.com/
+      policy null=false a.example.com=true .example.com=true example.com=false .a.example.com=true b.example.com=false false false
+      policy null=true a.example.com=true .example.com=true example.com=true .a.example.com=true b.example.com=true true true
+      policy null=false a.example.com=false .example.com=false example.com=false .a.example.com=false b.example.com=false false false
+      get http://example.com/ {Cookie=[$Version="1", b="2";$Path="/";$Domain=".example.com"]}
+      get http://x.example.com/ {Cookie=[$Version="1", b="2";$Path="/";$Domain=".example.com"]}
+      get http://y.x.example.com/ {Cookie=[]}
+      get http://a.example.com/ {Cookie=[$Version="1", b="2";$Path="/";$Domain=".example.com"]}
+      null
+      true true
+      null
+      java.lang.NullPointerException: cookie is null
+      java.lang.NullPointerException: uri is null
+      java.lang.NullPointerException: cookie is null
+      removeAll false
+      kept a=1@nullnull b=2@.example.com/ c=3@other.orgnull [http://s.example.com] null
+      store http://s.example.com/x/y [b="2";$Path="/";$Domain=".example.com", a="1", c="3";$Domain="other.org"]
+      store http://x.example.com/ [b="2";$Path="/";$Domain=".example.com"]
+      store http://other.org/ [c="3";$Domain="other.org"]
+      store https://S.EXAMPLE.COM:99/q [b="2";$Path="/";$Domain=".example.com", a="1", c="3";$Domain="other.org"]
+      store http://t.example.com/ [b="2";$Path="/";$Domain=".example.com"]
+      store /relative []
+      getCookies java.lang.UnsupportedOperationException
+      get java.lang.UnsupportedOperationException
+      getURIs java.lang.UnsupportedOperationException
+      kept b=2@.example.com/ c=3@other.orgnull A=again@nullnull
+      remove true c=3@other.orgnull A=again@nullnull
+      remove false true A=again@nullnull
+      kept A=again@nullnull [http://s.example.com]
+      removeAll true [] [] false
+      true true m=changed@nullnull n=2@m.example.com/
+      get http://m.example.com/ {Cookie=[n=2]}
   - name: an-object-is-copied-by-clone-where-its-class-is-cloneable
     main: CloneCopies
     source: |

@@ -6,8 +6,8 @@ are **not part of Common Lisp**; reference them with the `rontolisp:`
 qualifier (see [Packages](../reference/packages.md)). A connected socket is a
 **bidirectional stream handle** in the same handle space as file streams, so
 the standard stream functions work on it directly: `read-line`, `write-line`,
-`write-string`, `write-char`, `read-char`, `read-byte`, `write-byte` and
-`close`. A connected socket **buffers its writes** on every backend: they go
+`write-string`, `write-char`, `read-char`, `peek-char`, `read-byte`,
+`write-byte` and `close`. A connected socket **buffers its writes** on every backend: they go
 out when the program waits on any socket (a read, `listen`, `tcp-accept`,
 `tcp-connect`), calls `force-output` or `finish-output`, closes the socket, has
 written 8 KiB, or ends. A write followed by a wait on anything else (`sleep`,
@@ -18,7 +18,8 @@ under the kernel's Nagle algorithm.) `read-line`
 returns `nil` once the peer has closed the connection. A socket carries BYTES:
 `write-string` puts the string's UTF-8 bytes on the wire and `read-char` reads
 one character back out of them, so `read-byte` and `read-char` can be mixed on
-the same handle. At end of stream the reads follow their own Common Lisp
+the same handle; `peek-char` leaves the character's bytes for the next read,
+`read-byte` included. At end of stream the reads follow their own Common Lisp
 defaults: `read-char` and `read-byte` signal `end-of-file` unless you pass the
 eof arguments — `(read-char sock nil :eof)` yields `:eof` — while `read-line`
 answers `nil`, as it does on a file. The printing functions (`print`, `princ`, `format`) do not

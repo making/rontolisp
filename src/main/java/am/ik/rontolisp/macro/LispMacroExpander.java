@@ -26071,7 +26071,8 @@ public final class LispMacroExpander {
 				return expandReadEofSignal(form, true) != null;
 			case LispNames.READ_LINE:
 				return expandReadEofSignal(form, false) != null;
-			case "RONTOLISP::" + LispNames.READ_CHAR_RAW_INTERNAL, "RONTOLISP::" + LispNames.READ_BYTE_RAW_INTERNAL:
+			case "RONTOLISP::" + LispNames.READ_CHAR_RAW_INTERNAL, "RONTOLISP::" + LispNames.READ_BYTE_RAW_INTERNAL,
+					"RONTOLISP::" + LispNames.PEEK_CHAR_RAW_INTERNAL:
 				// Same, under the internal alias sockets.lisp's %io-* dispatchers fall
 				// back through on the --component path.
 				return expandReadEofSignal(form, true) != null;
@@ -41020,7 +41021,7 @@ public final class LispMacroExpander {
 	public static final java.util.Set<String> END_OF_FILE_SITES = java.util.Set.of(LispNames.READ_CHAR,
 			LispNames.READ_CHAR_NO_HANG, LispNames.READ_BYTE, LispNames.READ_LINE, LispNames.PEEK_CHAR,
 			LispNames.PEEK_CHAR_INTERNAL, LispNames.READ_CHAR_RAW_INTERNAL, LispNames.READ_BYTE_RAW_INTERNAL,
-			LispNames.READ_LINE_RAW_INTERNAL);
+			LispNames.READ_LINE_RAW_INTERNAL, LispNames.PEEK_CHAR_RAW_INTERNAL);
 
 	/**
 	 * The sequence operators whose compiled form can construct a {@code type-error}

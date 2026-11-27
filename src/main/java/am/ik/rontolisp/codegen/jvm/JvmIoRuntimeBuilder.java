@@ -3894,12 +3894,44 @@ final class JvmIoRuntimeBuilder {
 	 * a {@code reset()} after it put the position back, and the budget of 2 covers a
 	 * surrogate pair, so a supplementary code point peeks whole. Matches
 	 * {@code Environment}'s {@code %peek-char} on the interpreter and
-	 * {@code _peek_char}'s pushback cell on WASM.
+	 * {@code _peek_char}'s pushback cell on WASM. A socket looks at its octets without
+	 * taking them ({@code _sockPeekChar}), where the program can peek.
 	 */
 	private MethodCode buildPeekChar() {
 		// Slots: 0=handle, 1=eofErrorP, 2=eofValue, 3=r (BufferedReader), 4=c (int),
-		// 5=low (int)
+		// 5=low (int), 6=entry/char (a socket arm only)
 		MethodCode code = new MethodCode();
+		MethodCode.@Nullable Label ifSocketEof = null;
+		MethodRefEntry sockPeekChar = this.sockets != null ? this.sockets.sockPeekChar() : null;
+		if (sockPeekChar != null) {
+			// if (handle instanceof Long && _streams[idx] instanceof Socket) {
+			// c = _sockPeekChar(entry); if (c != null) return c; goto SOCKET_EOF; }
+			code.aload(0);
+			code.instanceOf(this.longClass);
+			MethodCode.Label ifNotHandle = code.newLabel();
+			code.ifeq(ifNotHandle);
+			code.getstatic(this.streamsField);
+			code.aload(0);
+			code.checkcast(this.longClass);
+			code.invokevirtual(this.longValue);
+			code.l2i();
+			code.aaload();
+			code.astore(6);
+			code.aload(6);
+			code.instanceOf(Objects.requireNonNull(this.sockets).socketClass());
+			MethodCode.Label ifNotSocket = code.newLabel();
+			code.ifeq(ifNotSocket);
+			code.aload(6);
+			code.invokestatic(sockPeekChar);
+			code.astore(6);
+			code.aload(6);
+			ifSocketEof = code.newLabel();
+			code.ifnull(ifSocketEof);
+			code.aload(6);
+			code.areturn();
+			code.labelBinding(ifNotHandle);
+			code.labelBinding(ifNotSocket);
+		}
 		emitIoCharArm(code, true, 4);
 		emitResolveReader(code);
 		// r.mark(2);
@@ -3953,6 +3985,10 @@ final class JvmIoRuntimeBuilder {
 		code.aload(3);
 		code.invokevirtual(this.bufferedReaderReset);
 		emitCharEof(code);
+		if (ifSocketEof != null) {
+			code.labelBinding(ifSocketEof);
+			emitCharEof(code);
+		}
 		return code;
 	}
 

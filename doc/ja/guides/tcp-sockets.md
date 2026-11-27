@@ -6,7 +6,7 @@
 ([パッケージ](../reference/packages.md)を参照)。接続されたソケットはファイル
 ストリームと同じハンドル空間の **双方向ストリームハンドル** なので、標準の
 ストリーム関数がそのまま使えます: `read-line`、`write-line`、`write-string`、
-`write-char`、`read-char`、`read-byte`、`write-byte`、`close`。接続されたソケットは
+`write-char`、`read-char`、`peek-char`、`read-byte`、`write-byte`、`close`。接続されたソケットは
 どのバックエンドでも **書き込みをバッファします**。送られるのは、プログラムが
 いずれかのソケットを待つとき (読み込み、`listen`、`tcp-accept`、`tcp-connect`)、
 `force-output` か `finish-output` を呼んだとき、ソケットをクローズしたとき、
@@ -18,7 +18,8 @@
 閉じると `read-line` は `nil` を返します。ソケットが運ぶのはバイトです:
 `write-string` は文字列のUTF-8バイトをワイヤーに書き出し、`read-char` はそこから
 1文字を読み戻すため、同じハンドルに対して `read-byte` と `read-char` を混在
-させられます。ストリーム終端での挙動はそれぞれのCommon Lispの既定に従います:
+させられます。`peek-char` は文字のバイトを次の読み込みに残し、`read-byte` も
+そのバイトを読みます。ストリーム終端での挙動はそれぞれのCommon Lispの既定に従います:
 `read-char` と `read-byte` はeof引数を渡さない限り `end-of-file` をシグナルし
 (`(read-char sock nil :eof)` なら `:eof` を返します)、`read-line` はファイルの
 場合と同じく `nil` を返します。出力関数 (`print`、`princ`、`format`) はソケットを受け取りません。

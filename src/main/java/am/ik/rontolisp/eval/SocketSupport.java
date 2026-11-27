@@ -755,6 +755,21 @@ final class SocketSupport {
 	}
 
 	/**
+	 * The character {@link #readChar} would read, its octets left for the next read
+	 * ({@code RontoSocketInput.peekCodePoint}).
+	 * @param socket the connected socket
+	 * @return the code point, or -1 when the peer closed before any byte arrived
+	 */
+	static int peekChar(Socket socket) {
+		try {
+			return in(socket).peekCodePoint();
+		}
+		catch (IOException ex) {
+			throw new LispEvalException("peek-char: " + ex.getMessage());
+		}
+	}
+
+	/**
 	 * Reads a single byte from a socket.
 	 * @param socket the connected socket
 	 * @return the byte value (0-255), or -1 at end of stream
