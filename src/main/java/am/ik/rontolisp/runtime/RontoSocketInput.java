@@ -43,6 +43,9 @@ public final class RontoSocketInput extends InputStream {
 
 	private int limit;
 
+	/** Where a peek began, which a fill keeps in front of what comes; -1 otherwise. */
+	private int mark = -1;
+
 	private RontoSocketInput(InputStream in, Map<?, ? extends OutputStream> outputs) {
 		this.in = in;
 		this.outputs = outputs;
@@ -93,15 +96,25 @@ public final class RontoSocketInput extends InputStream {
 		}
 	}
 
-	/** Waits for what comes next; false at the peer's close. */
+	/**
+	 * Waits for what comes next, behind what a peek has looked at, moved to the front;
+	 * false at the peer's close.
+	 */
 	private boolean fill() throws IOException {
 		flushOutputs();
-		int n = this.in.read(this.buffer, 0, SIZE);
+		int kept = 0;
+		if (this.mark >= 0) {
+			kept = this.limit - this.mark;
+			System.arraycopy(this.buffer, this.mark, this.buffer, 0, kept);
+			this.mark = 0;
+		}
+		this.position = kept;
+		this.limit = kept;
+		int n = this.in.read(this.buffer, kept, SIZE - kept);
 		if (n <= 0) {
 			return false;
 		}
-		this.position = 0;
-		this.limit = n;
+		this.limit = kept + n;
 		return true;
 	}
 
@@ -152,6 +165,25 @@ public final class RontoSocketInput extends InputStream {
 			hi = 0xBF;
 		}
 		return (cp >= 0xD800 && cp <= 0xDFFF) ? 0xFFFD : cp;
+	}
+
+	/**
+	 * The character {@link #readCodePoint} would read, its octets left in the buffer
+	 * ({@code peek-char}), so every read after it -- a byte read included -- takes them:
+	 * the read itself, behind a mark its fills keep, so it waits for exactly the octets
+	 * it would wait for.
+	 * @return the code point, or -1 when the peer closed before any octet
+	 * @throws IOException if the socket is closed
+	 */
+	public int peekCodePoint() throws IOException {
+		this.mark = this.position;
+		try {
+			return readCodePoint();
+		}
+		finally {
+			this.position = this.mark;
+			this.mark = -1;
+		}
 	}
 
 	/**

@@ -914,6 +914,104 @@
                (rontolisp::%read-byte-eof-future s eof-error-p eof-value))))
         (rontolisp::%read-byte-raw s eof-error-p eof-value))))
 
+;; The character %sock-read-char-f would read from CHUNK's octets at AT, which
+;; stay there: t when END comes before an octet that read looks at and MORE may
+;; come, MORE at the end of the chunk. The decoding is that read's, a look at
+;; each octet before it is taken.
+(defun rontolisp::%sock-peek-octets (chunk at end more)
+  (declare (type (simple-array (unsigned-byte 8) (*)) chunk) (fixnum at end))
+  (if (< at end)
+      (let ((b0 (aref chunk at)))
+        (declare (fixnum b0))
+        (if (or (< b0 194) (> b0 244))
+            (code-char (if (< b0 128) b0 65533))
+            (let ((n (if (< b0 224) 1 (if (< b0 240) 2 3)))
+                  (cp (- b0 (if (< b0 224) 192 (if (< b0 240) 224 240))))
+                  (lo (if (= b0 224) 160 (if (= b0 240) 144 128)))
+                  (hi (if (= b0 244) 143 191)))
+              (declare (fixnum n cp lo hi))
+              (setq at (+ at 1))
+              (while (> n 0)
+                (if (< at end)
+                    (let ((b (aref chunk at)))
+                      (declare (fixnum b))
+                      (if (and (>= b lo) (<= b hi))
+                          (progn
+                            (setq cp (+ (* cp 64) (- b 128)))
+                            (setq n (- n 1))
+                            (setq at (+ at 1))
+                            (setq lo 128)
+                            (setq hi 191))
+                          (setq n -1)))
+                    (setq n (if more -2 -1))))
+              (if (= n -2)
+                  t
+                  (code-char
+                   (if (and (= n 0) (or (< cp 55296) (> cp 57343)))
+                       cp
+                       65533))))))
+      more))
+
+;; The peek at the cursor: a character, t when the chunk must hold more first,
+;; nil at the end of input.
+(defun rontolisp::%sock-peek-decode (e)
+  (let ((buf (rontolisp::%sock-e-buf e))
+        (more (not (rontolisp::%sock-e-eof e))))
+    (if buf
+        (rontolisp::%sock-peek-octets buf (rontolisp::%sock-e-cursor e)
+                                      (length buf) more)
+        more)))
+
+;; Puts the octets BUF held from CURSOR, which a refill dropped, in front of the
+;; chunk it brought.
+(defun rontolisp::%sock-keep (e buf cursor)
+  (if (and buf (< cursor (length buf)))
+      (let* ((chunk (rontolisp::%sock-e-buf e))
+             (kept (- (length buf) cursor))
+             (joined
+              (make-array (+ kept (length chunk))
+                          :element-type '(unsigned-byte 8))))
+        (replace joined buf :start2 cursor)
+        (replace joined chunk :start1 kept)
+        (rontolisp::%sock-set-buf e joined 0))))
+
+;;; peek-char's look at the next character, every argument filled in by the
+;;; rewrite: a socket's octets stay at the cursor, so every read after the peek
+;;; takes them, a byte read included; anything else is the native built-in,
+;;; given the designator as the caller wrote it. When the chunk ends before an
+;;; octet the read would look at, it is refilled, keeping what it holds, until it
+;;; holds them all -- exactly the octets the read would wait for. Only that wait
+;;; is an async body: its state machine is what one costs the component.
+(rontolisp:async-defun rontolisp::%sock-peek-wait-f (e eof-error-p eof-value)
+  (let ((c t))
+    (while (eq c t)
+      (let ((buf (rontolisp::%sock-e-buf e))
+            (cursor (rontolisp::%sock-e-cursor e)))
+        (if (rontolisp:await (rontolisp::%sock-fill e "peek-char"))
+            (rontolisp::%sock-keep e buf cursor)))
+      (setq c (rontolisp::%sock-peek-decode e)))
+    (if c c (if eof-error-p (error 'end-of-file) eof-value))))
+
+;; A future only when the peek must wait; await passes a plain value through.
+(defun rontolisp::%peek-char-future (s eof-error-p &optional eof-value)
+  (let ((e (rontolisp::%sock-entry (or s *standard-input*))))
+    (if e
+        (let ((c (rontolisp::%sock-peek-decode e)))
+          (if (eq c t)
+              (rontolisp::%sock-peek-wait-f e eof-error-p eof-value)
+              (if c c (if eof-error-p (error 'end-of-file) eof-value))))
+        (rontolisp::%peek-char-raw s eof-error-p eof-value))))
+
+(defun rontolisp::%io-peek-char (s eof-error-p &optional eof-value)
+  (let ((e (rontolisp::%sock-entry (or s *standard-input*))))
+    (if e
+        (let ((c (rontolisp::%sock-peek-decode e)))
+          (if (eq c t)
+              (rontolisp::%future-force
+               (rontolisp::%sock-peek-wait-f e eof-error-p eof-value))
+              (if c c (if eof-error-p (error 'end-of-file) eof-value))))
+        (rontolisp::%peek-char-raw s eof-error-p eof-value))))
+
 ;;; read-char / read-line with the eof parameters, the %io-read-byte-eof shape: the
 ;;; socket reads answer nil at EOF, so the eof contract is one test on top of them.
 ;;; The signalled condition is the SAME end-of-file class the native lowering uses

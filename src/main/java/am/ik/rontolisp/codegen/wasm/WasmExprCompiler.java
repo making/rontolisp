@@ -675,6 +675,7 @@ final class WasmExprCompiler {
 				}
 				if (LispNames.READ_LINE_RAW_INTERNAL.equals(qn.member())
 						|| LispNames.READ_CHAR_RAW_INTERNAL.equals(qn.member())
+						|| LispNames.PEEK_CHAR_RAW_INTERNAL.equals(qn.member())
 						|| LispNames.READ_BYTE_RAW_INTERNAL.equals(qn.member())
 						|| LispNames.WRITE_LINE_RAW_INTERNAL.equals(qn.member())
 						|| LispNames.WRITE_BYTE_RAW_INTERNAL.equals(qn.member())
@@ -713,7 +714,8 @@ final class WasmExprCompiler {
 						return;
 					}
 					LispVal typedRaw = switch (qn.member()) {
-						case LispNames.READ_CHAR_RAW_INTERNAL, LispNames.READ_BYTE_RAW_INTERNAL ->
+						case LispNames.READ_CHAR_RAW_INTERNAL, LispNames.READ_BYTE_RAW_INTERNAL,
+								LispNames.PEEK_CHAR_RAW_INTERNAL ->
 							LispMacroExpander.expandReadEofSignal(cons, true);
 						case LispNames.READ_LINE_RAW_INTERNAL -> LispMacroExpander.expandReadEofSignal(cons, false);
 						default -> null;
@@ -739,6 +741,7 @@ final class WasmExprCompiler {
 							}
 						}
 						case LispNames.READ_CHAR_RAW_INTERNAL -> WasmReadCharCompiler.compile(cons, ctx);
+						case LispNames.PEEK_CHAR_RAW_INTERNAL -> WasmPeekCharCompiler.compile(cons, ctx);
 						case LispNames.LISTEN_RAW_INTERNAL -> WasmListenCompiler.compile(cons, ctx);
 						case LispNames.FORCE_OUTPUT_RAW_INTERNAL -> compileForceOutput(cons, ctx);
 						case LispNames.READ_BYTE_RAW_INTERNAL -> WasmReadByteCompiler.compile(cons, ctx);

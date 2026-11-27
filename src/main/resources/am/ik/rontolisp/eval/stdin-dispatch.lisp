@@ -114,6 +114,12 @@
   (rontolisp:await
    (rontolisp::%stdin-read-line-eof-or-raw-f s eof-error-p eof-value)))
 
+(defun rontolisp::%io-peek-char (s eof-error-p &optional eof-value)
+  (rontolisp::%peek-char-raw s eof-error-p eof-value))
+
+(defun rontolisp::%peek-char-future (s eof-error-p &optional eof-value)
+  (rontolisp::%peek-char-raw s eof-error-p eof-value))
+
 ;; :end stays nil for the native built-in: it takes nil as "the whole buffer",
 ;; and a rank-2 packed float array has no length (.kb/binary-sequence-io.md).
 (defun rontolisp::%io-read-sequence (seq s &optional start end)

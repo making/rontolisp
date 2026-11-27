@@ -4623,9 +4623,13 @@ public final class JvmLispCompiler implements LispCompiler {
 				|| (LispMacroExpander.declaresMvSpill(program) && (programUsesSymbol(program, LispNames.READ_LINE)
 						|| LispMacroExpander.runsFormsAtRunTime(program)));
 		this.needsSocketRuntime = usesSockets;
+		// _peekChar's socket arm, where a peek can be compiled or run.
+		final boolean usesPeekChars = usesSockets && (programUsesSymbol(program, LispNames.PEEK_CHAR)
+				|| programUsesSymbol(program, LispNames.PEEK_CHAR_INTERNAL)
+				|| LispMacroExpander.runsFormsAtRunTime(program));
 		final JvmSocketRuntimeBuilder.@Nullable SocketRuntime socketRuntime = usesSockets
 				? JvmSocketRuntimeBuilder.build(cp, thisClass, stringClass, longClass, longValueOf, longValue,
-						stringLengthForIo, stringSubstring, stringConcat, usesArrays, usesReadLinePairs)
+						stringLengthForIo, stringSubstring, stringConcat, usesArrays, usesReadLinePairs, usesPeekChars)
 				: null;
 		// _freshLine, and the line start every character write owes it, exist only where
 		// a stream can be asked, read off forms some of whose expansions are built after

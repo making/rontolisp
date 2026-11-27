@@ -845,6 +845,37 @@
                (code-char
                 (if (and (= n 0) (or (< cp 55296) (> cp 57343))) cp 65533)))))))
 
+;; A refill that keeps what the chunk holds from the cursor in front of what
+;; comes (a peek's octets, which %sock-fill would overwrite): the host reads into
+;; a vector of the room behind them, the entry's for the while, and that is
+;; copied in after them. nil, the chunk as it was, at the peer's close.
+(defun rontolisp::%sock-fill-keeping (e op)
+  (let* ((at (cdr (cdr e)))
+         (buf (car at))
+         (cursor (rontolisp::%sock-e-cursor e))
+         (kept (- (rontolisp::%sock-e-limit e) cursor)))
+    (declare (type (simple-array (unsigned-byte 8) (*)) buf)
+             (fixnum cursor kept))
+    (if (= kept 0)
+        (rontolisp::%sock-fill e op)
+        (let ((room
+               (make-array (- (length buf) kept)
+                           :element-type '(unsigned-byte 8)))
+              (got nil))
+          (declare (type (simple-array (unsigned-byte 8) (*)) room))
+          (rplaca at room)
+          (unwind-protect (setq got (rontolisp::%sock-fill e op))
+            (rplaca at buf))
+          (when got
+            ;; Loops, not replace: its general runtime cost the module 6 KB and
+            ;; the executable 70 KB.
+            (let ((n (rontolisp::%sock-e-limit e)))
+              (declare (fixnum n))
+              (dotimes (i kept) (setf (aref buf i) (aref buf (+ cursor i))))
+              (dotimes (i n) (setf (aref buf (+ kept i)) (aref room i)))
+              (rontolisp::%sock-set-buf e 0 (+ kept n))))
+          got))))
+
 (defun rontolisp::%sock-find-newline (chunk from limit)
   ;; The index of the first \n in chunk[from,limit), or nil.
   (declare (type (simple-array (unsigned-byte 8) (*)) chunk)
@@ -1031,6 +1062,63 @@
 
 (defun rontolisp::%io-read-char-eof (s eof-error-p &optional eof-value)
   (rontolisp::%read-char-eof-future s eof-error-p eof-value))
+
+;; The character %sock-read-char-f would read from CHUNK's octets at AT, which
+;; stay there: t when END comes before an octet that read looks at and MORE may
+;; come, MORE at the end of the chunk -- sockets.lisp's, the decoding that read's.
+(defun rontolisp::%sock-peek-octets (chunk at end more)
+  (declare (type (simple-array (unsigned-byte 8) (*)) chunk) (fixnum at end))
+  (if (< at end)
+      (let ((b0 (aref chunk at)))
+        (declare (fixnum b0))
+        (if (or (< b0 194) (> b0 244))
+            (code-char (if (< b0 128) b0 65533))
+            (let ((n (if (< b0 224) 1 (if (< b0 240) 2 3)))
+                  (cp (- b0 (if (< b0 224) 192 (if (< b0 240) 224 240))))
+                  (lo (if (= b0 224) 160 (if (= b0 240) 144 128)))
+                  (hi (if (= b0 244) 143 191)))
+              (declare (fixnum n cp lo hi))
+              (setq at (+ at 1))
+              (while (> n 0)
+                (if (< at end)
+                    (let ((b (aref chunk at)))
+                      (declare (fixnum b))
+                      (if (and (>= b lo) (<= b hi))
+                          (progn
+                            (setq cp (+ (* cp 64) (- b 128)))
+                            (setq n (- n 1))
+                            (setq at (+ at 1))
+                            (setq lo 128)
+                            (setq hi 191))
+                          (setq n -1)))
+                    (setq n (if more -2 -1))))
+              (if (= n -2)
+                  t
+                  (code-char
+                   (if (and (= n 0) (or (< cp 55296) (> cp 57343)))
+                       cp
+                       65533))))))
+      more))
+
+;; peek-char's look at the next character, every argument filled in by the
+;; rewrite, sockets.lisp's: a socket's octets stay at the cursor, the chunk
+;; refilled, keeping what it holds, until it holds each octet the read would look
+;; at; the raw arm gets the designator as the caller wrote it.
+(defun rontolisp::%peek-char-future (s eof-error-p &optional eof-value)
+  (let ((e (rontolisp::%sock-entry (or s *standard-input*))))
+    (if e
+        (let ((c t))
+          (while (eq c t)
+            (setq c
+                  (rontolisp::%sock-peek-octets (rontolisp::%sock-e-buf e)
+                   (rontolisp::%sock-e-cursor e) (rontolisp::%sock-e-limit e)
+                   (not (rontolisp::%sock-e-eof e))))
+            (if (eq c t) (rontolisp::%sock-fill-keeping e "peek-char")))
+          (if c c (if eof-error-p (error 'end-of-file) eof-value)))
+        (rontolisp::%peek-char-raw s eof-error-p eof-value))))
+
+(defun rontolisp::%io-peek-char (s eof-error-p &optional eof-value)
+  (rontolisp::%peek-char-future s eof-error-p eof-value))
 
 (defun rontolisp::%read-line-eof-future (s eof-error-p &optional eof-value)
   (let ((e (rontolisp::%sock-entry (or s *standard-input*))))
